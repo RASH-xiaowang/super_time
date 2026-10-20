@@ -28,6 +28,7 @@ const EXPECTED: Readonly<Record<string, readonly string[]>> = {
     'saveLlmProfile', 'deleteLlmProfile', 'backendState', 'onEvent',
   ],
   RemoteAccessBridge: ['state', 'apply', 'rotate', 'toggle'],
+  WebHandoffBridge: ['open', 'restore', 'state'],
   LicenseBridge: ['status', 'exportRequest', 'importFile', 'importText', 'remove'],
   DiagBridge: ['logInfo', 'exportLog', 'previewLog', 'copyLogPath', 'revealLog'],
   UpdateBridge: ['state', 'check', 'install', 'skip', 'retry', 'onEvent'],
@@ -52,6 +53,11 @@ function interfaceBlock(source: string, name: string): string {
 describe('Electron bridge 类型面与 preload 对齐', () => {
   it('preload 仍暴露在 electronAPI 这个全局名上', () => {
     expect(PRELOAD).toContain("exposeInMainWorld('electronAPI'")
+  })
+
+  it('桥面在 expose 前被递归冻结（single frozen bridge）', () => {
+    expect(PRELOAD).toContain('const electronAPI = deepFreeze({')
+    expect(PRELOAD).toContain("exposeInMainWorld('electronAPI', electronAPI)")
   })
 
   it('每个 namespace 的方法都同时存在于类型面与 preload', () => {

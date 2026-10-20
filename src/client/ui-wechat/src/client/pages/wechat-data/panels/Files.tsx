@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useWechatDataUpdated } from './hooks.tsx'
 import { useGridColumns } from './use-grid-columns.ts'
-import { FileCell } from './files-cell.tsx'
+import { AssetKpiBar, AssetMoreMenu, FileCell } from './files-cell.tsx'
 import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.ts'
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { rememberThumb } from '../utils/thumb-cache.ts'
@@ -17,19 +17,20 @@ import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } 
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { Drawer, EmptyMaybeSyncing, PanelHeader, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { ListFilter, PanelAction } from './asset-ui.tsx'
 
 /**
  * 文件面板的「导出」动作（W3-11.1）。
  *
- * 抽成模块函数而不是留在组件里：结果经 `useActionNotice` 的一行回执给出（不再是阻塞式
- * `window.alert`），而这panel的函数体受 `function-size-ratchet.spec.ts` 的棘轮管着 ——
- * 长一点点的组件函数都过不去，动作本身又没有组件状态可依赖，放模块里最合适。
- * @param flash - 回执写入（由 `useActionNotice()` 给出）。
+ * 抽成模块函数而不是留在组件里：结果经 `useActionNotice` 的一行回调给出（不再是阻塞式
+ * `window.alert`），而这 panel 的函数体受 `function-size-ratchet.spec.ts` 的棘轮管着 ——
+ * 长一点的组件函数都过不去，动作本身又没有组件状态可依赖，放模块里最合适。
+ * @param flash - 回调写入（由 `useActionNotice()` 给出）。
  */
 async function exportFilesCsv(flash: (text: string) => void): Promise<void> {
   try {
@@ -64,9 +65,9 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   // 视频/文件没有预览（后端只提供图片解码），点开的是**详情抽屉**而不是死点击。
   const [detail, setDetail] = useState<FileItem | null>(null)
   const [dupOpen, setDupOpen] = useState(false)
-  // 手写灯箱的 Esc 关闭（kit 的 Drawer/Dialog 由 Radix 提供）
+  // 手写灯箱的 Esc 关闭（kit 的 Drawer/Dialog 用 Radix 提供）
   useEscapeToClose(preview !== null, () => { setPreview(null) })
-  // 焦点管理：进入移入、Tab 循环、关闭还原
+  // 焦点管理：进入移入、Tab 循环、关闭还原。
   useDialogFocus(preview !== null, '[data-st-dialog="files-lightbox"]')
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -75,9 +76,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const imgFetched = useRef(new Set<string>())
   const imgOrder = useRef<string[]>([])
   const gridRef = useRef<HTMLDivElement | null>(null)
-
   const resetView = (): void => { setZoom(1); setPan({ x: 0, y: 0 }) }
-
 
   // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
   // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
@@ -142,7 +141,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   // 关键词已在服务端过滤；这里只保留「类目由后端过滤」的结论（不再做客户端关键字过滤）。
   //
   // 此前这行是 `(f.fileName || f.md5)`：`||` 短路让 md5 **永远不参与比较**，
-  // 所以「按 MD5 搜」在这个面板从来没生效过 —— 现在由后端 `file_name LIKE ? OR md5 LIKE ?` 承担。
+  // 所以「按 MD5 搜」在这个面板从来没有生效过 —— 现在由后端 `file_name LIKE ? OR md5 LIKE ?` 承担。
   const searched = files
 
   // 第 83 轮：不再在客户端硬过滤成 image —— 类目过滤由后端完成，
@@ -153,11 +152,9 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const countAll = countOf('image') + countOf('file') + countOf('video')
 
   /**
-   * 网格虚拟化（#22 第三处）。列数**现测**（`repeat(auto-fill, minmax(200px,1fr))` 随容器宽度变，
+   * 网格虚拟化（#22 第三处）。列数**现测**（`repeat(auto-fill, minmax(200px,1fr))` 随容器宽度变）
    * 写死就会"最后一行被截掉"或"格子重叠"），而虚拟器数的是**行**；一行用内联
-   * `repeat(cols, 1fr)` 复原网格排布，间距与外层 `.grid` 的 `gap: 10px` 同值。
-   * 为什么原来的不够：渐进窗口是首屏 30 格、滚到底再加、**只增不减** —— 文件面板的量级是
-   * 上万格（一格三层元素 + 一段文本），滚一遍整张格子墙就常驻 DOM。
+   * `repeat(cols, 1fr)` 还原网格排列，间距与数据外层的 `.grid` 相同。
    */
   const fileCols = useGridColumns(gridRef, FILE_MIN_COL_PX)
   const fileVirtualizer = useVirtualizer({
@@ -169,8 +166,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   /** 缩略图缓存的当前快照（异步回调要读最新值）；渲染用的是 `fileImgs` 那份 state。 */
   const fileThumbsRef = useRef<Record<string, string>>({})
   /**
-   * 一格挂载 ⇒ 解码它那张图（原来是给整段格子墙挂 IntersectionObserver 观察 `data-media-key`）。
-   * 口径与搬出前一致：**拿 `fileKey` 当 md5**（微信附件名本来就是 32 位哈希；非哈希名按设计跳过、
+   * 一格挂载 → 解码它那张图（原来是给整段格子墙挂 IntersectionObserver 观察 `data-media-key`）。
+   * 口径与搬出前一致：**拿 `fileKey` 当 md5**（微信附件名本来就是 32 位哈希；非哈希名按设计跳过，
    * 留扩展名图标占位），淘汰走 `rememberThumb`（写值 / 记顺序 / 淘汰时连请求标记一起清）。
    */
   const decodeThumb = useCallback((key: string): void => {
@@ -206,7 +203,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
     return m
   }, [visible])
 
-  const dupGroups = useMemo(() => {    const byKey = new Map<string, FileItem[]>()
+  const dupGroups = useMemo(() => {
+    const byKey = new Map<string, FileItem[]>()
     for (const f of visible) {
       const k = fileKey(f)
       const arr = byKey.get(k) ?? []
@@ -225,46 +223,44 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
 
   return (
     <div className={css.panel}>
-      {/* 首屏加载期间**不能**把计数写成 0：实测（真实 4305 个文件）进入本页后前 3–6 秒
+      {/* 首屏加载期间**不能**把计数写成 0：实测（真实 4305 个文件）进入本页后前 3–5 秒
           头部会显示「共 0 项 · 图片 0 / 视频 0 / 文件 0」，用户会以为自己的文件不见了。
-          加载中就明确说"正在统计"，计数等到了再显示；分类标签同理不写 (0)。 */}
+          加载中就明确说「正在统计」，计数等到了再显示；分类标签同理不写 (0)。 */}
       <PanelHeader
-        title="文件管理"
-        desc={loading && total === 0
-          ? '正在统计本机文件索引…'
-          : `共 ${total} 项 · 图片 ${countOf('image')} / 视频 ${countOf('video')} / 文件 ${countOf('file')}`}
+        title="文件"
+        desc={loading && total === 0 ? '正在统计本机文件索引…' : undefined}
         actions={(
           <>
-            <button type="button" className={css.catBtn} onClick={refresh}>刷新</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} {...desktopActionProps()}>{desktopAction() ? '导出（仅电脑）' : '导出'}</button>
-            <button type="button" className={css.catBtn} data-active={dupOpen || undefined} onClick={() => { setDupOpen(v => !v) }}>查找重复 ({dupTotal > 0 ? dupTotal : dupGroups.length})</button>
+            <PanelAction onClick={refresh}>刷新</PanelAction>
+            <AssetMoreMenu items={[
+              { key: 'export', label: desktopAction() ? '导出（仅电脑）' : '导出', onSelect: () => { void doExport() }, ...desktopActionProps() },
+              { key: 'dup', label: `查找重复 (${dupTotal > 0 ? dupTotal : dupGroups.length})`, onSelect: () => { setDupOpen(v => !v) } },
+            ]} />
           </>
         )}
       />
       <ActionNoticeLine notice={exportNotice} />
-      <Toolbar
-        left={(
-          <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索文件名 / MD5" ariaLabel="搜索文件" />
-        )}
-        right={(
-          <Segmented
-            options={[
-              { value: 'all', label: `全部 (${countAll})` },
-              { value: 'image', label: `图片 (${countOf('image')})` },
-              { value: 'video', label: `视频 (${countOf('video')})` },
-              { value: 'file', label: `文件 (${countOf('file')})` },
-            ].map((o) => (loading && countAll === 0 ? { ...o, label: o.label.replace(/\s*\(\d+\)$/, '') } : o))}
-            value={cat}
-            onChange={(v) => { setCat(v) }}
-            ariaLabel="文件分类"
-          />
-        )}
+      <FilesKpis total={total} counts={counts} loading={loading} />
+      <ListFilter
+        searchValue={search}
+        onSearch={setSearch}
+        searchPlaceholder="搜索文件名 / MD5"
+        searchAriaLabel="搜索文件"
+        segments={[
+          { value: 'all', label: `全部 (${countAll})` },
+          { value: 'image', label: `图片 (${countOf('image')})` },
+          { value: 'video', label: `视频 (${countOf('video')})` },
+          { value: 'file', label: `文件 (${countOf('file')})` },
+        ].map((o) => (loading && countAll === 0 ? { ...o, label: o.label.replace(/\s*\(\d+\)$/, '') } : o))}
+        value={cat}
+        onChange={setCat}
+        ariaLabel="文件分类"
       />
       <div className={`${css.grid} ${css.fileGrid}`} ref={gridRef}>
         {/* 骨架的列宽与真实 .fileGrid 一致（200px）：120px 的默认值会排成 10 列，
             数据到了之后突然变成 6 列，像是"布局跳了一下"。 */}
         {loading && <ListSkeleton rows={10} grid minCol={200} />}
-        {error && <div className={kitCss.error} role="alert">⚠️ 文件数据接口尚未就绪（{error}）</div>}
+        {error && <div className={kitCss.error} role="alert">文件数据接口尚未就绪（{error}）</div>}
         {/* 0 项要能自证：说明索引来自哪、以及"没配好数据源"这种情况该去哪配。
             否则用户看到"暂无文件"没法判断是"真没有"还是"没配对"。 */}
         {!loading && !error && visible.length === 0 && (
@@ -276,7 +272,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         {!loading && !error && visible.length > 0 && (
           /*
            * 外层这一格用 `gridColumn: 1 / -1` 横跨整个网格容器（容器仍是 `.grid`，
-           * 所以骨架与空态的排布一个字没动），行在里面按测到的列数排。
+           * 所以骨架与空态的排列一个字没动），行在里面按测到的列数排。
            */
           <div style={{ gridColumn: '1 / -1', position: 'relative', height: fileVirtualizer.getTotalSize() }}>
             {fileVirtualizer.getVirtualItems().map((vi) => {
@@ -311,7 +307,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         {!loading && !error && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
       <Drawer open={dupOpen} onClose={() => { setDupOpen(false) }} title="重复文件预览">
-        <div className={kitCss.textCaption}>“去重”为只读建议，不在本机删除数据。下列为<strong>全库</strong>按内容（md5）归并的重复组，取前 {dupGroupsServer.length} 组（共 {dupTotal} 个重复文件、可回收约 {fmtBytes(dupReclaim)}）。</div>
+        <div className={kitCss.textCaption}>「去重」为只读建议，不在本机删除数据。下列为<strong>全库</strong>按内容（md5）归并的重复组，取前 {dupGroupsServer.length} 组（共 {dupTotal} 个重复文件、可回收约 {fmtBytes(dupReclaim)}）。</div>
         {dupGroupsServer.length === 0 && <div className={css.empty}>未发现重复文件</div>}
         {dupGroupsServer.map(g => (
           <div key={g.md5} className={css.dupRow}>
@@ -351,7 +347,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
                   {fileSource(preview) ? ` · 来源 ${fileSource(preview)}` : ''}
                 </span>
               </div>
-              <span className={css.lightboxBadge}>JPG</span>
+              {/* 类型标签并入标题行（按真实扩展名显示），不再写死 JPG 徽标装饰 */}
               <button type="button" className={css.lightboxClose} aria-label="关闭预览" onClick={() => { setPreview(null) }}>×</button>
             </header>
             <div className={css.lightboxBody}>
@@ -413,5 +409,29 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * 文件页的内联 KPI 条：首屏统计中不显示 0，避免被误读成「文件不见了」。
+ * @param props.total - 全库文件数。
+ * @param props.counts - 按类目的计数（来自服务端）。
+ * @param props.loading - 首屏是否仍在统计。
+ * @returns KPI 条（统计中不渲染）。
+ */
+function FilesKpis({ total, counts, loading }: {
+  total: number
+  counts: Record<string, number>
+  loading: boolean
+}): React.JSX.Element | null {
+  if (loading && total === 0) return null
+  const countOf = (c: string): number => counts[c] ?? 0
+  return (
+    <AssetKpiBar items={[
+      { label: '文件总数', value: total.toLocaleString() },
+      { label: '图片', value: countOf('image').toLocaleString() },
+      { label: '视频', value: countOf('video').toLocaleString() },
+      { label: '文件', value: countOf('file').toLocaleString() },
+    ]} />
   )
 }

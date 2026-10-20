@@ -86,14 +86,22 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
   const [typed, setTyped] = useState('')
   const resolveRef = useRef<((v: boolean) => void) | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  /** 打开前的焦点元素；settle 后还给它（键盘用户不该被扔回 body）。 */
+  const restoreFocusRef = useRef<HTMLElement | null>(null)
 
   /** 结束当前请求：先置空再 resolve，避免 resolve 触发的重渲染期间又被当成同一次。 */
   const settle = useCallback((value: boolean): void => {
     const resolve = resolveRef.current
+    const restore = restoreFocusRef.current
     resolveRef.current = null
+    restoreFocusRef.current = null
     setReq(null)
     setTyped('')
     if (resolve) resolve(value)
+    if (restore && restore.isConnected) {
+      window.setTimeout(() => { restore.focus() }, 0)
+    }
   }, [])
 
   const confirm = useCallback<ConfirmFn>((options) => {
@@ -104,6 +112,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
       resolveRef.current = null
       prev(false)
     }
+    const active = document.activeElement
+    restoreFocusRef.current = active instanceof HTMLElement ? active : null
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve
       setTyped('')
@@ -114,13 +124,41 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
   useEscapeToClose(req !== null, () => { settle(false) })
 
   // 打开时聚焦：有 requireText 就聚焦输入框，否则聚焦确认按钮（键盘可直接回车确认）。
+  // 同时把 Tab 关在 alertdialog 内，关闭后由 settle 把焦点还给触发元素。
   useEffect(() => {
     if (!req) return
     const t = window.setTimeout(() => {
       if (req.requireText) inputRef.current?.focus()
-      else document.querySelector<HTMLElement>('[data-confirm-primary]')?.focus()
+      else boxRef.current?.querySelector<HTMLElement>('[data-confirm-primary]')?.focus()
     }, 0)
-    return () => { window.clearTimeout(t) }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return
+      const box = boxRef.current
+      if (!box) return
+      const focusables = [...box.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )]
+      if (focusables.length === 0) {
+        event.preventDefault()
+        box.focus()
+        return
+      }
+      const first = focusables[0]!
+      const last = focusables[focusables.length - 1]!
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !box.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !box.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
   }, [req])
 
   const value = useMemo(() => confirm, [confirm])
@@ -134,9 +172,11 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
       {req && (
         <div className={css.overlay} role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) settle(false) }}>
           <div
+            ref={boxRef}
             className={css.box}
             role="alertdialog"
             aria-modal="true"
+            tabIndex={-1}
             aria-labelledby="confirm-title"
             aria-describedby={req.message ? 'confirm-message' : undefined}
             data-tone={tone}

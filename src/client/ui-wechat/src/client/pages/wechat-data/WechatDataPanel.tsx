@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
  * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings`，可路由页签共 **38**（其余 20 项 `hidden`，
+ * 侧栏可见 **15** 项 + 底栏独立渲染的 `settings`，可路由页签共 **39**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -28,7 +28,6 @@ import {
   ChatsPanel,
   ClawBotPanel,
   ContactsPanel,
-  DailySummaryPanel,
   EmoticonsPanel,
   FavoritesPanel,
   FilesPanel,
@@ -43,26 +42,31 @@ import {
   OfficialAssetsPanel,
   OperationLogPanel,
   OverviewPanel,
-  PeriodSummaryPanel,
-  PrivacyPanel,
   RecordsPanel,
   RevokedPanel,
   SettingsPanelGate,
   StoragePanel,
+  SummaryWorkbench,
+  TaskCenterPanel,
   TasksPanel,
 } from './panel-loaders.tsx'
 import { NoticeBanner } from './panels/NoticeBanner.tsx'
 import { SetupGuide } from './panels/SetupGuide.tsx'
-import { SidebarBalance } from './panels/SidebarBalance.tsx'
 import { MergedSections } from './panels/MergedSections.tsx'
 import { setActiveKb } from './panels/kb-scope.ts'
+import { useKeepAlivePanel } from './panels/keep-alive.tsx'
 import css from './wechat-data.module.css'
 import kitCss from './ui/kit.module.css'
+/* Wave D1（docs/UI-DENSITY.md §3 A 层）：全局「紧凑 chrome」覆盖层。
+ * 本文件只有「标签 + 属性子串」选择器（不依赖加载顺序），在 shell 挂载时就位，
+ * 覆盖 144 个面板视图里的页头/卡片/统计卡/表格/空态。
+ * ⚠️ 必须用「具名导入 + 根节点挂标记类」而不是裸副作用导入：Vite 会把没有导出引用的
+ * CSS Modules 当成无副作用导入摇掉（实测 0 条规则进产物）。见该文件头部说明。 */
+import compactCss from './ui/compact-chrome.module.css'
 import './scifi-theme.css'
 import './light-theme.css'
 import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
-import { toggleThemeMode, useThemeMode, type ThemeMode } from './theme.ts'
-import { Dialog, Tooltip } from './ui/kit.tsx'
+import { Dialog } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
 import { MobileNavHost } from './ui/mobile-nav.tsx'
 import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
@@ -190,30 +194,6 @@ function IconSearch(): React.JSX.Element {
   )
 }
 
-/** 太阳图标（浅色主题激活）。 */
-function IconSun(): React.JSX.Element {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-    </svg>
-  )
-}
-
-/** 月亮图标（深色主题激活）。 */
-function IconMoon(): React.JSX.Element {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
-    </svg>
-  )
-}
-
-/** 状态圆点。 */
-function StatusDot(): React.JSX.Element {
-  return <span className={css.statusDot} aria-hidden="true" />
-}
-
 /**
  * 全局搜索的命中落到某个页签时，把关键词一起带过去。
  *
@@ -247,23 +227,28 @@ function renderTab(
   switch (tab) {
     case 'overview': return <OverviewPanel onNavigate={(tab) =>{  onNavigate(tab as WechatTab) }} onOpenChat={onOpenChat} onOpenMoments={onOpenMoments} />
     case 'ask': return <AskPanel onOpenChat={onOpenChat} onOpenKbFile={onOpenKbFile} />
+    // 通话记录 2026-10-17 并入「聊天会话」：微信里通话本就发生在会话中
+    // （`CallsPanel` 的每条记录都带 `onOpenChat` 跳回对应会话），它是消息的一种。
+    // 因此 `calls` 不再占侧栏条目，由「聊天会话」面板顶部的段条切换。
     case 'chats':
     case 'bizchats':
     case 'servicechats':
     case 'kefu':
-    case 'revoked': return (
+    case 'revoked':
+    case 'calls': return (
       <MergedSections
         ariaLabel="消息视图"
-        initial={tab === 'revoked' ? 'revoked' : 'chats'}
+        initial={tab === 'revoked' ? 'revoked' : tab === 'calls' ? 'calls' : 'chats'}
         sections={[
-          { key: 'chats', label: '聊天消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} /> },
-          { key: 'revoked', label: '撤回消息', render: () => <RevokedPanel onOpenSettings={onOpenSettings} /> },
+          { key: 'chats', label: '消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} /> },
+          { key: 'calls', label: '通话', render: () => <CallsPanel onOpenChat={onOpenChat} /> },
+          { key: 'revoked', label: '撤回', render: () => <RevokedPanel onOpenSettings={onOpenSettings} /> },
         ]}
       />
     )
     // 通讯录与社交图谱是**同一批人的两种看法**（联系人列表 / 关系图）：2026-09-17 起
-    // 收进同一个导航项，由面板顶部段条切换。目前**共 8 组**合并视图走同一个外壳
-    // （MergedSections：本文件 7 处 + KbShell.tsx 1 处 = 8）。
+    // 收进同一个导航项，由面板顶部段条切换。目前**共 9 组**合并视图走同一个外壳
+    // （MergedSections：本文件 8 处 + KbShell.tsx 1 处 = 9）。
     // ⚠️ 组数以 `grep -c "<MergedSections"` 为准 —— 这里曾写「六组」，与实际差两组；
     // 由 panels/merged-sections.wiring.spec.ts 守着，改组数会在这里转红。
     // 两个 tab 必须都列全：深链 #contacts / #graph 要落到正确分段，
@@ -302,7 +287,22 @@ function renderTab(
         focusNonce={kbFocus?.nonce ?? 0}
       />
     )
-    case 'moments': return <MomentsPanel author={momentAuthor} onClearAuthor={clearMomentAuthor} />
+    // 朋友圈与朋友圈洞察是**同一批朋友圈数据的两种看法**（浏览 / 分析）：
+    // 2026-10-17 起收进同一个导航项，由面板顶部段条切换 —— 与「通讯录/社交图谱」
+    // 「知识库/知识图谱」等其余组走同一个外壳（MergedSections）。
+    // 两个 tab 必须都列全：深链 #moments / #momentsinsights 要落到正确分段，
+    // MergedSections 内部也是靠 `initial={tab}` 的变化来同步（它的 useState 只在首次生效）。
+    case 'moments':
+    case 'momentsinsights': return (
+      <MergedSections
+        ariaLabel="朋友圈视图"
+        initial={tab}
+        sections={[
+          { key: 'moments', label: '朋友圈', render: () => <MomentsPanel author={momentAuthor} onClearAuthor={clearMomentAuthor} /> },
+          { key: 'momentsinsights', label: '洞察', render: () => <MomentsInsightsPanel /> },
+        ]}
+      />
+    )
     // ── 合并面板：同一主题的多个视图收进一个导航项，顶部分段切换。
     //    每个 case 都列全被合并的 tab，保证深链（#assetinsights 等）仍落到正确分段。
     case 'favorites':
@@ -312,9 +312,9 @@ function renderTab(
         ariaLabel="收藏与表情视图"
         initial={tab}
         sections={[
-          { key: 'favorites', label: '我的收藏', render: () => <FavoritesPanel seedQuery={seed?.tab === 'favorites' ? seed : undefined} /> },
-          { key: 'emoticons', label: '表情包', render: () => <EmoticonsPanel /> },
-          { key: 'assetinsights', label: '收藏/表情统计', render: () => <AssetInsightsPanel /> },
+          { key: 'favorites', label: '收藏', render: () => <FavoritesPanel seedQuery={seed?.tab === 'favorites' ? seed : undefined} /> },
+          { key: 'emoticons', label: '表情', render: () => <EmoticonsPanel /> },
+          { key: 'assetinsights', label: '统计', render: () => <AssetInsightsPanel /> },
         ]}
       />
     )
@@ -326,10 +326,10 @@ function renderTab(
         ariaLabel="文件与存储视图"
         initial={tab}
         sections={[
-          { key: 'files', label: '文件资产', render: () => <FilesPanel seedQuery={seed?.tab === 'files' ? seed : undefined} /> },
-          { key: 'mediaassets', label: '媒体资产', render: () => <MediaAssetsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
-          { key: 'storage', label: '存储分析', render: () => <StoragePanel onOpenChat={onOpenChat} /> },
-          { key: 'officialassets', label: '公众号文章', render: () => <OfficialAssetsPanel onOpenChat={onOpenChat} /> },
+          { key: 'files', label: '文件', render: () => <FilesPanel seedQuery={seed?.tab === 'files' ? seed : undefined} /> },
+          { key: 'mediaassets', label: '媒体', render: () => <MediaAssetsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
+          { key: 'storage', label: '存储', render: () => <StoragePanel onOpenChat={onOpenChat} /> },
+          { key: 'officialassets', label: '公众号', render: () => <OfficialAssetsPanel onOpenChat={onOpenChat} /> },
         ]}
       />
     )
@@ -339,12 +339,15 @@ function renderTab(
         ariaLabel="资金往来视图"
         initial={tab}
         sections={[
-          { key: 'ledger', label: '月度汇总', render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
-          { key: 'records', label: '转账红包明细', render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
+          { key: 'ledger', label: '汇总', render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
+          { key: 'records', label: '明细', render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
         ]}
       />
     )
     case 'tasks': return <TasksPanel onOpenChat={onOpenChat} />
+    // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录（双栏）。与「待办日程」是两件事：
+    // 待办从聊天文本里提取 TODO，这里的任务是用户显式创建的监听任务（命中关键词 → 记录 → 回调）。
+    case 'taskinfo': return <TaskCenterPanel />
     case 'clawbot': return <ClawBotPanel />
     case 'groupinsights':
     case 'monitor': return (
@@ -352,16 +355,13 @@ function renderTab(
         ariaLabel="群聊分析视图"
         initial={tab}
         sections={[
-          { key: 'groupinsights', label: '离线洞察', render: () => <GroupInsightsPanel onOpenChat={onOpenChat} onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
-          { key: 'monitor', label: '活跃监控', render: () => <MonitorPanel onOpenChat={onOpenChat} /> },
+          { key: 'groupinsights', label: '洞察', render: () => <GroupInsightsPanel onOpenChat={onOpenChat} onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
+          { key: 'monitor', label: '监控', render: () => <MonitorPanel onOpenChat={onOpenChat} /> },
         ]}
       />
     )
-    case 'momentsinsights': return <MomentsInsightsPanel />
-    case 'calls': return <CallsPanel onOpenChat={onOpenChat} />
-    // 只读数据视图留在主内容区：隐私体检（扫描结果与风险 TOP10，命中样本可跳回会话）
-    // 与操作日志（审计长表）。配置与维护动作仍收在「设置」弹窗里（见 DIALOG_SECTION_OF）。
-    case 'privacy': return <PrivacyPanel onOpenChat={onOpenChat} />
+    // 只读数据视图留在主内容区：操作日志（审计长表）。
+    // ⚠️ 隐私体检 2026-10-17 已迁回「设置」弹窗（见 DIALOG_SECTION_OF 与 Settings.tsx）。
     case 'oplog': return <OperationLogPanel />
     // 「数据边界与出网 / 备份恢复 / 数据健康（数据库健康、原图链路自检）」在「设置」弹窗里
     // （见 DIALOG_SECTION_OF），这里没有对应的主内容区页面。
@@ -370,10 +370,15 @@ function renderTab(
     case 'period': return (
       <MergedSections
         ariaLabel="总结与报告视图"
-        initial={tab}
+        // 2026-10-17：每日总结与周期总结**合并成一个「总结」工作台**。
+        // 改前是两个面板，而每日总结内部还有 3 个 tab —— 用户要在 5 个视图间跳
+        // 才能完成"生成一份总结并回看"。两者本质是同一件事（按时间范围总结聊天），
+        // 只是粒度不同，所以用一个时间范围选择器驱动。
+        // ⚠️ 分段 key 必须是**真实可路由的 tab**（`merged-sections.wiring.spec.ts` 会咬住）：
+        // 深链 `#dailysummary` / `#period` 都落到 `dailysummary` 这个 key 上。
+        initial={tab === 'annual' ? 'annual' : 'dailysummary'}
         sections={[
-          { key: 'dailysummary', label: '每日总结与任务', render: () => <DailySummaryPanel onOpenSettings={onOpenSettings} /> },
-          { key: 'period', label: '周期总结', render: () => <PeriodSummaryPanel onOpenSettings={onOpenSettings} /> },
+          { key: 'dailysummary', label: '总结', render: () => <SummaryWorkbench onOpenSettings={onOpenSettings} /> },
           { key: 'annual', label: '年度报告', render: () => <AnnualPanel /> },
         ]}
       />
@@ -396,83 +401,61 @@ function renderTab(
  * 但深链（#privacytrust / #health …）与跨页跳转（数据总览的风险提示、各面板的
  * 「前往设置 / 文件资产」按钮）仍走这几个 tab id，所以这里做一次改道。
  *
- * **不在这张表里的页签就是留在主界面的**：`privacy`（隐私体检）与 `oplog`（操作日志）
- * 2026-09 一度也进过弹窗，现按「只读数据视图回主界面、配置与维护动作留设置」迁回 ——
- * 前者是扫描结果 + 风险 TOP10（命中样本还要跳回会话），后者是审计长表。
+ * **不在这张表里的页签就是留在主界面的**：`oplog`（操作日志）2026-09 一度也进过弹窗，
+ * 现按「只读数据视图回主界面、配置与维护动作留设置」迁回 —— 它是审计长表。
+ * ⚠️ 2026-10-17：`privacy`（隐私体检）**又迁回弹窗**（用户要求）—— 它与「数据边界与出网」
+ * 同属隐私主题，放一起才是一条完整的「隐私」叙事。迁回后**保留了「跳转 ›」**
+ * （`onOpenChat` 由宿主传入，会先关弹窗再切主内容区）。
  */
 const DIALOG_SECTION_OF: Readonly<Record<string, string>> = {
   settings: 'detect',
   privacytrust: 'boundary',
+  privacy: 'privacy',
   backup: 'backup',
   health: 'health',
   hook: 'hook',
 }
 
 /**
- * 侧栏底部固定区：**设置**按钮 → **模型余额** → 主题切换与数据状态。
+ * 侧栏底部固定区：**设置**按钮。
  *
  * 为什么拆成独立组件（2026-09-30）：本文件的主组件有行数棘轮（只能变小），
- * 而「模型余额」是新加的一行。把这一整块（设置按钮 + 余额 + 主题/状态）提出来，
- * 主组件反而比原来少 30 行；顺带让「底部固定区」有了一个明确的名字。
- * @param props - 侧栏展开态、设置弹窗状态与两个全局动作。
+ * 而「模型余额」是新加的一行。把这一整块提出来，主组件反而比原来少 30 行；
+ * 顺带让「底部固定区」有了一个明确的名字。
+ *
+ * ⚠️ 2026-10-17 三块**全部迁到标题栏右上角**（窗口控制按钮前）：
+ * · 主题切换 —— 与最小化/全屏/关闭同属「全局动作」；
+ * · 模型余额 + 数据就绪 —— 描述的是**整个应用**的状态（模型能不能用、数据读不读得到），
+ *   而不是当前页签的内容。侧栏是「导航」，不该兼当「状态栏」。
+ * 所以这里只剩「设置」一个按钮。
+ * @param props - 设置弹窗状态与打开动作。
  * @returns 底部固定区元素。
  */
 function SidebarFooter({
-  navOpen,
   settingsOpen,
   onOpenSettings,
-  themeMode,
-  apiStatus,
 }: {
-  navOpen: boolean
   settingsOpen: boolean
   onOpenSettings: () => void
-  themeMode: ThemeMode
-  apiStatus: ApiStatus
 }): React.JSX.Element {
-  const themeHint = themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'
   return (
-    <>
+    <div className={css.sidebarFooter}>
       {/* 底部固定区域：设置始终可见（点击弹出弹窗，不切换主内容区） */}
-      <div className={css.sidebarFooter}>
-        <button
-          type="button"
-          className={css.navItem}
-          data-active={settingsOpen || undefined}
-          onClick={onOpenSettings}
-          title="设置"
-          aria-haspopup="dialog"
-          aria-expanded={settingsOpen}
-        >
-          <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <g dangerouslySetInnerHTML={{ __html: NAV_GROUPS.flatMap(g => g.items).find(it => it.tab === 'settings')?.icon ?? '' }} />
-          </svg>
-          <span className={css.navLabel}>设置</span>
-        </button>
-        {/* 模型余额（2026-09-30 用户要求：主界面左下角、设置按钮下方）。
-            它自己读配置、自己按 5 分钟刷；未配置模型时返回 null（不留空行）。 */}
-        <SidebarBalance collapsed={!navOpen} />
-      </div>
-      {/* 主题切换与数据状态（原顶栏右侧）：与「设置」同属全局动作，放底部固定区 */}
-      <div className={css.navFooterRow}>
-        <Tooltip content={themeHint}>
-          <button
-            type="button"
-            data-theme-toggle
-            className={css.themeToggle}
-            onClick={toggleThemeMode}
-            title={themeHint}
-            aria-label={themeHint}
-          >
-            {themeMode === 'light' ? <IconMoon /> : <IconSun />}
-          </button>
-        </Tooltip>
-        <span className={css.apiTag} data-status={apiStatus} title="本地解密数据的可读状态">
-          <StatusDot />
-          <span className={css.apiTagText}>{apiStatus === 'online' ? '数据就绪' : apiStatus === 'offline' ? '数据不可用' : '检测中…'}</span>
-        </span>
-      </div>
-    </>
+      <button
+        type="button"
+        className={css.navItem}
+        data-active={settingsOpen || undefined}
+        onClick={() => { onOpenSettings() }}
+        title="设置"
+        aria-haspopup="dialog"
+        aria-expanded={settingsOpen}
+      >
+        <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <g dangerouslySetInnerHTML={{ __html: NAV_GROUPS.flatMap(g => g.items).find(it => it.tab === 'settings')?.icon ?? '' }} />
+        </svg>
+        <span className={css.navLabel}>设置</span>
+      </button>
+    </div>
   )
 }
 
@@ -494,7 +477,6 @@ export function WechatDataPanel(): React.JSX.Element {
     try { if (typeof location !== 'undefined') location.hash = t } catch { /* hash 写入失败可忽略 */ }
   }, [])
   const apiStatus = useSyncExternalStore(subscribeApiStatus, getApiStatus)
-  const themeMode = useThemeMode()
   /** 导航栏展开态：开关按钮切换，**默认展开**（2026-09-30 起；理由见文件头，无持久化）。 */
   const [navOpen, setNavOpen] = useState(true)
   /** 导航轨滚动感知：滚动条已隐藏（scrollbar-width:none），改用「边缘渐隐 + 箭头」
@@ -600,6 +582,17 @@ export function WechatDataPanel(): React.JSX.Element {
   }, [navigate])
 
   /**
+   * 弹窗里的「跳转 ›」（2026-10-17 隐私体检迁进弹窗后新增）：**先关弹窗再跳会话**。
+   *
+   * 为什么不能直接用 `openChat`：它只切主内容区，弹窗还开着会盖住刚跳过去的会话 ——
+   * 用户看到的是「点了没反应」。与 `navigateFromDialog` 同款打法（先关再跳）。
+   */
+  const openChatFromDialog = useCallback((username: string, localId?: number): void => {
+    setSettingsOpen(false)
+    openChat(username, localId)
+  }, [openChat])
+
+  /**
    * 全局搜索命中 → 切到目标页签并把关键词种进去（面板靠 `nonce` 变化重新种入）。
    * 刻意保留全局搜索框里已输入的内容（不清空）：用户可能还想看下一组命中。
    */
@@ -699,11 +692,11 @@ export function WechatDataPanel(): React.JSX.Element {
     if (!navOpen) setSearchOpen(false)
   }, [navOpen])
 
-  // 只渲染活动标签；用 useMemo 避免搜索/数据库状态等无关状态变化时重建面板元素。
   const activePanel = useMemo(
     () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus),
     [active, navigate, openChat, chatTarget, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus],
   )
+  const keepAlivePanel = useKeepAlivePanel(active, activePanel)
 
   const noSearchResults = !searchLoading
     && searchResults.sessions.length === 0
@@ -718,7 +711,7 @@ export function WechatDataPanel(): React.JSX.Element {
     /* ConfirmProvider 包在最外层：全应用共用一个应用内确认框实例。
        不用原生 window.confirm（系统白框、不跟主题、阻塞渲染进程）。 */
     <ConfirmProvider>
-    <div className={css.panel}>
+    <div className={`${css.panel} ${compactCss.compactChrome}`}>
       {/* 顶栏已整体迁入左侧导航栏（2026-09）：品牌 / 全局搜索 / 主题 / 数据状态
           原先各占顶栏一段，那条 54px 的横条只服务这四件事，却永久占掉首屏高度；
           迁进常驻的导航栏后不再需要 `FoldableBar` 的展开/自动收起（以及它带来的
@@ -902,18 +895,16 @@ export function WechatDataPanel(): React.JSX.Element {
               </span>
             )}
           </div>
-          {/* 底部固定区（设置 / 模型余额 / 主题与数据状态）：见 `SidebarFooter`。 */}
+          {/* 底部固定区（只剩「设置」）：见 `SidebarFooter`。
+              模型余额 / 数据就绪 / 主题切换 2026-10-17 全部迁到标题栏右上角。 */}
           <SidebarFooter
-            navOpen={navOpen}
             settingsOpen={settingsOpen}
             onOpenSettings={openSettings}
-            themeMode={themeMode}
-            apiStatus={apiStatus}
           />
         </aside>
         <main className={css.content}>
           <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>
-            {activePanel}
+            {keepAlivePanel}
           </Suspense>
         </main>
       </div>
@@ -927,7 +918,7 @@ export function WechatDataPanel(): React.JSX.Element {
         title={(
           <span className={css.settingsDialogTitle}>
             设置
-            <span className={css.settingsDialogDesc}>{runtimeCapabilities().isBrowser ? '手机这一侧能看的只有数据边界 · 其余各节要在电脑上完成' : '配置向导 · 智能与隐私 · 授权与更新 · 维护与自检'}</span>
+            <span className={css.settingsDialogDesc}>{runtimeCapabilities().isBrowser && runtimeCapabilities().desktopEquivalent !== true ? '手机这一侧能看的只有数据边界 · 其余各节要在电脑上完成' : '配置向导 · 智能与隐私 · 授权与更新 · 维护与自检 · 高级'}</span>
           </span>
         )}
       >
@@ -936,6 +927,7 @@ export function WechatDataPanel(): React.JSX.Element {
             inDialog
             initialSection={settingsSection}
             onNavigateOut={navigateFromDialog}
+            onOpenChat={openChatFromDialog}
           />
         </div>
       </Dialog>

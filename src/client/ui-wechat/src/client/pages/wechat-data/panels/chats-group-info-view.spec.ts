@@ -18,7 +18,8 @@ import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 
 const mem = (i: number): GroupMember => ({ username: `wxid_${i}`, name: `成员${i}` } as GroupMember)
 const MEMBERS: GroupMember[] = Array.from({ length: 100 }, (_, i) => mem(i))
-// D1 后视图会读 settings / owner / totalMembers（只读开关行与群主标）—— 夹具给一份合法 GroupInfo。
+// D1 后视图会读 settings / owner / totalMembers（群主标）—— 夹具给一份合法 GroupInfo。
+// 2026-10-19：区③ 四条只读开关行已按用户要求删除，`settings` 只是后端仍会回的形状。
 const INFO = {
   name: '测试群',
   announcement: '公告正文',
@@ -317,18 +318,68 @@ describe('群公告', () => {
 })
 
 describe('微信对齐（D1）：无公告时抽屉仍被官方区填满', () => {
-  it('没有公告 ⇒ 四条只读开关行与底部导出槽仍在（空半屏的复发位）', () => {
+  it('没有公告 ⇒ 资料行与底部导出槽仍在（空半屏的复发位）', () => {
     show({ groupInfo: { ...INFO, announcement: '' } as GroupInfo })
-    expect(host.querySelectorAll('[role="switch"]').length, '开关行少了 ⇒ 抽屉又空半屏（D1 复发）').toBe(4)
+    expect(textOf('[class*="groupInfoRows"]'), '资料行少了 ⇒ 抽屉又空半屏').toContain('群成员数')
     const exp = [...host.querySelectorAll('button')].find((b) => b.textContent === '导出聊天记录')
     expect(exp, '底部动作位没了（D7）').not.toBeUndefined()
   })
 
-  it('开关是只读的：aria-disabled 且不是 input（L13 死控件纪律）', () => {
+  /**
+   * 2026-10-19 用户报「导出按钮压住成员名 / 查看更多」的回归位。
+   *
+   * 根因不是按钮样式，而是**归属**：导出槽原先和内容包一起放在滚动区里，滚动区的
+   * `margin-top:auto` 只在内容不足一屏时把按钮推到底；内容一高，按钮就压住资料行。
+   * 现在导出槽是抽屉外壳的直接子元素（固定 footer），滚动区只包内容：
+   *
+   *   groupInfo（外壳）
+   *     ├─ groupInfoHeader
+   *     ├─ groupInfoBody（唯一滚动区）
+   *     │    └─ groupZones
+   *     └─ groupExport（固定 footer）
+   *
+   * jsdom 不做布局，所以这里钉 DOM 归属；CSS 的 `flex:0 0 auto` 与视觉上的
+   * 「不重叠」由 wiring 那侧的几何断言和真实探针接手。
+   */
+  it('导出槽在滚动区外、作为抽屉固定 footer（不再和内容包挤在滚动区里）', () => {
     show()
-    const sw = need(host.querySelector('[role="switch"]'), '开关')
-    expect(sw.getAttribute('aria-disabled'), '只读开关丢了 aria-disabled ⇒ 假可用').toBe('true')
-    expect(sw.tagName, '开关变成了 input ⇒ 承诺了写回能力').not.toBe('INPUT')
+    const drawer = need(q('[data-st-dialog="chats-groupinfo"]'), '抽屉')
+    const body = need(q('[class*="groupInfoBody"]'), '抽屉滚动区')
+    const zones = need(q('[class*="groupZones"]'), '内容包')
+    // `class*=` 是子串匹配（`groupExport` 也会命中按钮的 `groupExportBtn`），所以取
+    // 含导出按钮的那个**外壳直接子元素**作为槽本身。
+    const slot = need(
+      [...drawer.children].find((el) => el.querySelector('[class*="groupExportBtn"]') !== null),
+      '导出槽',
+    )
+
+    expect(body.contains(zones), '内容包不在滚动区内').toBe(true)
+    expect(drawer.contains(slot), '导出槽不在抽屉里').toBe(true)
+    expect(body.contains(slot), '导出槽又回到滚动区里了 ⇒ 内容一高就会压住成员名/查看更多').toBe(false)
+
+    // 位置：滚动区在前、固定 footer 在后。
+    const order = [...drawer.children]
+    expect(order.indexOf(body), '滚动区不是抽屉的直接子元素').toBeGreaterThan(-1)
+    expect(order.indexOf(slot), '导出槽不是抽屉的直接子元素').toBeGreaterThan(-1)
+    expect(order.indexOf(body), '固定 footer 跑到了滚动区前面').toBeLessThan(order.indexOf(slot))
+
+    // 反例自证：把导出槽塞回滚动区，上面的核心断言必须红（否则这道闸是恒真的）。
+    body.appendChild(slot)
+    expect(body.contains(slot), '合成违例没能把导出槽塞回滚动区 ⇒ 这道闸抓不住坏形状').toBe(true)
+  })
+
+  /**
+   * 2026-10-19 用户要求删除区③ 四条只读开关行（免打扰 / 置顶 / 存通讯录 / 显成员昵称）。
+   * 它们全是 L13 死控件：给不了动作也给不了真相，四行只占抽屉半屏。
+   * 这一格钉的是「不许再长回来」—— 尤其是「为了填满抽屉」而把它们复活。
+   */
+  it('区③ 四条只读开关行已删除：一个 switch 都不许有', () => {
+    show()
+    expect(host.querySelectorAll('[role="switch"]').length, '只读开关行又回来了（用户已要求删除）').toBe(0)
+    const rows = textOf('[class*="groupInfoRows"]')
+    for (const label of ['消息免打扰', '置顶聊天', '保存到通讯录', '显示群成员昵称']) {
+      expect(rows, `「${label}」那一行又回来了`).not.toContain(label)
+    }
   })
 
   it('群主标落在 owner 那颗 tile 上，且只有一颗', () => {

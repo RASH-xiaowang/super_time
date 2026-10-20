@@ -1,6 +1,4 @@
-/* Privacy & trust — NEON MATRIX 科技风（与隐私体检共用令牌）。
-   本页现在是「微信数据配置」弹窗里的一节（左导航「数据边界与出网」），
-   独立页签的形态已下线。 */
+/* Privacy & trust — 微信风格：卡片/标签一律走令牌，无渐变、无发光。 */
 .lead { padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--nm-text-1); margin: 0; }
 
 /* 嵌进弹窗时：不自建 height:100% 的滚动容器，滚动交给弹窗右区（.mainScroll）。 */
@@ -35,12 +33,12 @@
 .risk { padding: 0 14px 12px; }
 .riskTitle { font-size: 12px; font-weight: 700; color: var(--nm-warning); margin-bottom: 8px; }
 .riskChip {
-  border: 1px solid rgba(255, 200, 87, 0.25);
-  border-radius: var(--nm-r-pill);
+  border: 1px solid color-mix(in srgb, var(--nm-warning) 30%, transparent);
+  border-radius: var(--nm-r-sm);
   padding: 3px 10px;
   font-size: 11px;
   color: var(--nm-warning);
-  background: rgba(255, 200, 87, 0.06);
+  background: color-mix(in srgb, var(--nm-warning) 8%, transparent);
   corner-shape: round;
 }
 
@@ -55,6 +53,11 @@
   text-align: left;
   cursor: pointer;
   transition: all 0.15s;
+  /* 被挤压时文字会逐字换行成竖排（实测 375px 手机上 58×210）。
+     开关项是**整行**的，让它占满宽度、文字不换行。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .toggle:hover { border-color: var(--nm-border-hover); }
 .toggle[data-active='true'] { border-color: color-mix(in srgb, var(--nm-success) 40%, transparent); color: var(--nm-success); }
@@ -65,6 +68,6 @@
 .auditRow { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
 .auditName { color: var(--nm-text-1); }
 .auditCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
-.auditActions { display: flex; gap: 8px; padding: 0 14px 12px; }
+.auditActions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px; }
 
 .footnote { font-size: 11px; color: var(--nm-text-2); margin: 0; padding: 0 2px; }

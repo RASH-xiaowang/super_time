@@ -5,6 +5,7 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
+import { contactMeta } from './meta.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -109,6 +110,67 @@ function isHumanText(text: string): boolean {
   return true
 }
 
+/**
+ * 群消息正文里的发送者前缀：`wxid_xxx: 内容` / `123@chatroom: 内容` / `xxx@openim: 内容`。
+ *
+ * 微信把群消息的发送者拼在正文最前面。原样喂给模型时，prompt 里会是一堆
+ * `wxid_k4jo82dn63mf12: 一汽精品 预订 广西 19167291020` —— 模型既读不懂 wxid，
+ * 也分不清哪句是谁说的（2026-10-17 实测：一天 79 个会话的素材里大半是这种行）。
+ */
+const SENDER_PREFIX_RE = /^([A-Za-z0-9_@.\-]{4,64}):\s*/
+
+/**
+ * 剥掉群消息的发送者前缀，并把 wxid 换成可读名字。
+ *
+ * 为什么必须做：模型看到 `wxid_k4jo82dn63mf12:` 只会当成噪声；换成「张三：」之后
+ * 它才能写出"张三提到…"这种有主语的总结。拿不到显示名时退回 `某人`，
+ * 而不是把 wxid 原样留着（那等于没清洗）。
+ * @param text - 已 stripXml 的正文。
+ * @param names - username → 显示名（来自 `contactMeta`）。
+ * @returns 清洗后的正文（无前缀时原样返回）。
+ */
+function cleanSenderPrefix(text: string, names: ReadonlyMap<string, string>): string {
+  const m = SENDER_PREFIX_RE.exec(text)
+  if (!m) return text
+  const who = m[1] ?? ''
+  // 只认「像 username 的前缀」：纯中文的 `注意: 明天开会` 不是发送者前缀，别误剥。
+  if (!/^[A-Za-z0-9_@.\-]+$/.test(who)) return text
+  const rest = text.slice(m[0].length).trim()
+  if (!rest) return text
+  const display = names.get(who) ?? (who.includes('@chatroom') ? '群成员' : '某人')
+  return display + '：' + rest
+}
+
+/**
+ * 机器人 / 自动回复 / 群发广告的识别。
+ *
+ * 实测（2026-10-17，本机一天 79 个会话）素材里占比最高的是这几类：
+ *   · `@openim` 客服机器人：「@车猫咨询录单-春丽 预订任务进行中，请稍候。。。」
+ *   · 业务机器人：「收到请求，已为您创建任务」「【丰金合同】客户名字: 吴海波 金额:20000」
+ *   · 群发广告：「一汽精品 预订 广西 19167291020 贷 2.4W 60 期」
+ *   · 系统播报：「XX 撤回了一条消息」「XX 邀请 YY 加入了群聊」
+ * 它们对"今天聊了什么"没有信息量，却会挤掉真实对话（每会话 cap 30 条）。
+ * @param text - 清洗后的正文。
+ * @returns 是否应丢弃。
+ */
+function isNoiseMessage(text: string): boolean {
+  const t = text.trim()
+  if (!t) return true
+  // 系统播报（微信自己生成的，不是人说的）
+  if (/^(你|「.+?」|".+?")?(撤回了一条消息|邀请.+?加入了群聊|加入了群聊|移出了群聊|修改群名为)/.test(t)) return true
+  // 机器人固定话术：以「请稍候」「正在处理」「任务进行中」结尾的短句
+  if (t.length <= 40 && /(请稍候|正在处理|任务进行中|已收到您的|自动回复|机器人)/.test(t)) return true
+  // 业务机器人回执：「收到请求，已为您创建任务」「已为您…」「任务已创建」
+  if (/^(收到请求|已为您|任务已|已提交|已受理|处理完成|操作成功)/.test(t)) return true
+  // 结构化业务模板：`【XX合同】字段: 值 字段: 值` —— 这是系统生成的表单，不是对话
+  if (/^【[^】]{2,12}】/.test(t) && /[:：]/.test(t) && /(金额|客户|车牌|车架|发动机|订单|编号|状态)/.test(t)) return true
+  // 纯广告：手机号 + 金额/期数 这类推销模板
+  if (/\b1[3-9]\d{9}\b/.test(t) && /(贷|预订|首付|月供|优惠|特价|包邮|加微)/.test(t)) return true
+  // 纯表情/符号
+  if (/^[\p{Emoji}\s]+$/u.test(t)) return true
+  return false
+}
+
 /** Human label for a normalized message type. */
 function typeLabel(t: number): string {
   if (t === 1) return '文本'
@@ -181,6 +243,9 @@ function* collectRangeSteps(
   const types = new Map<string, number>()
   const perSession = new Map<string, number>()
   const sessionUsernames = loadSessionUsernames(decryptedDir)
+  // 2026-10-17：显示名映射 —— 素材里的 `【wxid_xxx】` 与 `wxid_xxx:` 前缀都要换成可读名字，
+  // 否则模型面对一堆 wxid 写不出有主语的总结。
+  const names = contactMeta(decryptedDir).names
   const tableToUser = new Map<string, string>()
   for (const username of sessionUsernames) tableToUser.set(msgTableName(username), username)
   // File-first pass: open each shard once, map its Msg_* tables to sessions.
@@ -237,14 +302,18 @@ function* collectRangeSteps(
             const raw = decodeCell(r['message_content'])
             const text = stripXml(raw)
             if (isHumanText(text)) {
-              picked.push({ t, text })
+              // 2026-10-17：清洗后再入素材 —— 剥掉 `wxid_xxx:` 前缀换成可读名字，
+              // 并丢掉机器人/广告/系统播报（它们会挤掉真实对话，且对"今天聊了什么"零信息量）。
+              const cleaned = cleanSenderPrefix(text, names)
+              if (isNoiseMessage(cleaned)) continue
+              picked.push({ t, text: cleaned })
               if (collectSources) {
                 sources.push({
                   index: sources.length,
                   username,
                   localId: hasLocal ? Number(r['local_id'] ?? 0) : 0,
                   time: t,
-                  text,
+                  text: cleaned,
                 })
               }
             }
@@ -253,7 +322,8 @@ function* collectRangeSteps(
         if (picked.length >= cap) break
         if (picked.length > 0) {
           sessions += 1
-          lines.push('【' + username + '】')
+          // 会话标题也用显示名（`【wxid_xxx】` 对模型毫无意义）。
+          lines.push('【' + (names.get(username) ?? username) + '】')
           for (const p of picked) lines.push(p.text)
         }
       }
@@ -263,8 +333,7 @@ function* collectRangeSteps(
     .map(([username, count]) => ({ username, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 8)
-  return { lines, count: lines.length, sessions, total, types: Object.fromEntries(types), hourly, topSessions, sources }
-}
+  return { lines, count: lines.length, sessions, total, types: Object.fromEntries(types), hourly, topSessions, sources }}
 
 /** 同步驱动：检查点直接跳过（不让出），行为与改造前逐字段等价。 */
 function collectRange(

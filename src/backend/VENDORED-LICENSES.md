@@ -35,3 +35,18 @@ Super Time 中脱离 pnpm workspace 直接运行：
 根 `package.json` 通过 `file:` 依赖引用，`.npmrc` 设置 `install-links=true`
 使 `npm install` 将其复制到 `node_modules`（而非符号链接），以便 electron-builder
 打包。完整上游 LICENSE 文本随各包保留在 `deps/<pkg>/LICENSE*` 中。
+
+## 原生组件：img_helper.dll（原图自动下载，实验；默认关闭）
+
+| 组件 | 来源 | 路径 | 许可证 |
+|---|---|---|---|
+| `img_helper.dll`（x64，23,040 B） | 上游 WeFlow-X（`github.com/hicccc77/weflow-x`） | `wechat-data/native/img_helper/win32-x64/img_helper.dll` | MIT（Copyright (c) 2026 cc） |
+
+- 逐字节副本（未修改）：SHA-256 `79596be6f0da84f25a763973f6d1a439bcd8df2c0300891f6d419984f16cfc91`，
+  后端在 `koffi.load()` 之前复核；不一致直接拒绝加载。
+- 打包态随 `asarUnpack`（`src/backend/wechat-data/native/**`）落到 `app.asar.unpacked`。
+- 导出、运行边界与上游 PDB 行号见
+  [`wechat-data/native/img_helper/PROVENANCE.md`](wechat-data/native/img_helper/PROVENANCE.md)；
+  MIT 许可证全文在同目录 [`LICENSE`](wechat-data/native/img_helper/LICENSE)。
+- ⚠️ 该组件**只在你显式打开**「设置 → 图片解码 → 微信原图自动下载」时才会被加载；
+  默认不 `koffi.load()`、不注入。

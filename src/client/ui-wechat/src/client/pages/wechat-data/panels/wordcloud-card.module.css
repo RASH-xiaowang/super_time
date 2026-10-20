@@ -1,22 +1,13 @@
-/* 词云卡片（界面优化阶段 4；2026-09-30 重做：真正排成词云）。
+/* 词云卡片（微信化：灰阶 + 单一主色，无渐变/辉光/网格底纹）。
  *
- * 视觉目标：参考「DATA SYNC ACTIVE」科技风词云 —— 中心大词 + 霓虹多色 + 微弱辉光。
- * 约束（与本仓既有纪律一致）：
- *   · 全令牌起步，圆角/间距走 --nm-*（不放字面量圆角）；
- *   · 颜色走主题令牌（含 color-mix），不引入裸 hex（深浅主题都要能跟）。
- *
- * ── 布局口径（2026-09-30 改）──────────────────────────────────────────────
- * 旧注释写着「布局仍是 flex-wrap，不做绝对定位撒点」，理由是「撒点会让点击命中区与视觉
- * 位置脱钩、窄容器里叠字」。那个顾虑针对的是**随机撒点**；现在的落点由
- * `wordcloud-layout.ts` 算出：每个词带完整 `width/height`，渲染按同一组数字绝对定位，
- * 命中区与看到的字严丝合缝，且盒子之间保证 4px 不重叠。因此：
+ * 布局口径（未变）：
  *   · `.cloud[data-laid]` = 撒点态（宽高由 JS 给出，词绝对定位）；
- *   · 不带 `data-laid` = 回落态（SSR / 首帧还没量到宽度时仍是 flex 排布，只是不好看，不会坏）。
+ *   · 不带 `data-laid` = 回落态（SSR / 首帧还没量到宽度时仍是 flex 排布）。
+ * 色彩口径（本次改）：词的颜色只表达**权重层级**，不再用霓虹六色；
+ * 低权重灰 → 高权重正文色 → 最高两档用微信绿（唯一的强调色）。
  */
 
-/* 舞台：中心词云的主容器。
- * 相对定位是为了放两层装饰（网格底纹 / 中心辉光）；两层都是 pointer-events:none，
- * 不会截走词元素的点击 —— 这是本卡片唯一的交互，不能让装饰挡了。 */
+/* 舞台：中心词云的主容器。 */
 .cloud {
   position: relative;
   display: flex;
@@ -29,36 +20,30 @@
   isolation: isolate;
 }
 
-/* 中心辉光：椭圆渐隐，给整片词云托一层「从中心亮起来」的底。
- * 用 --nm-cyan / --nm-purple 混合，深浅主题各自成立。 */
-.cloud::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 58% 64% at 50% 52%, color-mix(in srgb, var(--nm-purple) 12%, transparent), transparent 70%),
-    radial-gradient(ellipse 70% 60% at 50% 46%, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 72%);
+/* ── 填满卡片（`fill` 模式）────────────────────────────────────────────
+ * 高度链：`.fillCard`（Card 根）→ 卡身 → `.cloud`。卡身是 Card 内部 div，
+ * 类名带 hash ⇒ 用属性子串选择器（本仓既有做法）。 */
+.fillCard {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-/* 网格底纹：科技感来源之一。用 mask 让它向边缘淡出，避免出现生硬的方块边界。 */
-.cloud::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -2;
-  pointer-events: none;
-  background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--nm-border) 60%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--nm-border) 60%, transparent) 1px, transparent 1px);
-  background-size: 26px 26px;
-  mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, #000 12%, transparent 78%);
+.fillCard > [class*='cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* ── 撒点态：宽高由 `wordcloud-layout.ts` 给出，词按坐标绝对定位 ──────────────
- * `overflow: hidden` 是兜底：估算宽度若略小于真实字宽，宁可切掉一丝也不让它越出卡片。
- * 落点已含 6px 内边距，正常不会碰到这条边界。 */
+/* 撒点态下舞台高度由 JS 写死（与布局坐标同源），这里只保证它吃满卡身。 */
+.fillCard .cloud[data-laid] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── 撒点态：宽高由 `wordcloud-layout.ts` 给出，词按坐标绝对定位 ──────────
+ * `overflow: hidden` 是兜底：估算宽度若略小于真实字宽，宁可切掉一丝也不让它越出卡片。 */
 .cloud[data-laid] {
   display: block;
   padding: 0;
@@ -86,18 +71,12 @@
   background: none;
   padding: 0;
   cursor: pointer;
-  transition: var(--nm-t-ui);
+  transition: color var(--nm-t-fast), opacity var(--nm-t-fast);
   user-select: none;
   letter-spacing: 0.01em;
-  /* 文本辉光随当前字色走 —— 霓虹观感的主要来源，深浅主题都自适应。
-   * 强度压得很低（30% / 6px），60 个词同时发光时不至于糊成一片。 */
-  text-shadow: 0 0 6px color-mix(in srgb, currentColor 30%, transparent);
 }
 
-.cloud > button:hover {
-  filter: brightness(1.2);
-  text-shadow: 0 0 12px color-mix(in srgb, currentColor 60%, transparent);
-}
+.cloud > button:hover { opacity: 0.72; }
 
 .cloud > button:focus-visible {
   outline: 2px solid var(--nm-cyan);
@@ -105,37 +84,29 @@
   border-radius: var(--nm-r-sm);
 }
 
-/* 权重六阶：低 → 高依次是 次级文本 / 蓝 / 青 / 紫 / 洋红 / 琥珀。
+/* 权重六阶：低 → 高依次是 辅助灰 / 次级灰 / 正文 / 正文加粗 / 主色 / 主色加粗。
  *
- * 为什么是六阶：参考稿的词云是「多色霓虹」，三阶（灰/蓝/青）观感偏单调，大词与小词的颜色
- * 区分度也不够。扩到六阶后：
- *   · 最大的两档（pink / amber）只落在最长那几个词上，天然形成视觉焦点；
- *   · 中间四档（blue/cyan/purple/amber）在色相上拉开距离，密集区不会糊。
- *
- * 映射有两层（见 `wordcloud-layout.ts` 的 `cloudTone`）：先按字号档给基色，
- * 再让**同档相邻的第 4 个词沿色环挪一格** —— 否则中段那一大片同尺寸的词会连成一条
- * 同色带，反而更像列表。两处都用常量表，不含随机数（布局必须确定性可测）。
- *
- * 色值全部走既有令牌（`--nm-pink` / `--nm-amber` 在深浅两套主题里都有定义），
- * 本文件不自己写 hex。
+ * 六阶必须保留（`wordcloud-layout.ts` 的 `cloudTone()` 按字号档 + 相邻错位给类），
+ * 但色相收敛成「灰阶 + 微信绿」：小词灰、大词正文色、最大的两档绿——
+ * 既保留「越大越醒目」的层级，又不再出现六种霓虹色。
  */
-.low { color: var(--nm-text-2); }
+.low { color: var(--nm-text-3); }
 
-.mid { color: var(--nm-blue); }
+.mid { color: var(--nm-text-2); }
 
-.high { color: var(--nm-cyan); font-weight: 600; }
+.high { color: var(--nm-text-1); font-weight: 500; }
 
 .top {
-  color: var(--nm-purple);
+  color: var(--nm-text-1);
   font-weight: 600;
 }
 
 .peak {
-  color: var(--nm-pink);
-  font-weight: 700;
+  color: var(--nm-cyan);
+  font-weight: 600;
 }
 
 .hot {
-  color: var(--nm-amber);
+  color: var(--nm-cyan);
   font-weight: 700;
 }

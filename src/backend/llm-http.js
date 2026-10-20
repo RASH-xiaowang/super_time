@@ -144,10 +144,60 @@ async function llmRequest(url, options = {}) {
   });
 }
 
+/**
+ * 把「基础 URL」与「端点路径」拼成一个完整 URL，并**容忍用户把完整端点填进基础 URL**。
+ *
+ * ## 为什么需要容错（2026-10-16 实测踩到）
+ *
+ * 用户把 `embeddingApiUrl` 填成了 `https://api.siliconflow.cn/v1/embeddings`（**完整端点**），
+ * 而 `embedPath` 仍是默认的 `/embeddings` ⇒ 拼出 `.../v1/embeddings/embeddings` ⇒ **404**。
+ * 后果不是报错弹窗，而是**稠密检索整条通道静默失效**（`dense:0(off)`）——
+ * 用户看到的是「搜索不准确」，而不是「配置错了」。
+ *
+ * 填完整端点是最自然的做法（厂商文档给的就是完整 URL），所以这里做归一：
+ * 若 base 的路径已经以 `path` 结尾，就不再重复拼一次。
+ *
+ * ## 第二种填错：把**别的**端点填进来（2026-10-16 第二次实测）
+ *
+ * 同一个用户把 `rerankApiUrl` 也填成了 `https://api.siliconflow.cn/v1/embeddings`
+ * （复制粘贴 embedding 那行忘了改），而 `rerankPath` 是 `/rerank` ⇒ 拼出
+ * `.../v1/embeddings/rerank` ⇒ **404**，精排整条通道失效（界面显示「精排这次没跑成」）。
+ * 尾段不同，上面那条「完全相同才去重」拦不住。
+ *
+ * 所以再加一条：若 base 的尾段是**已知端点名**（`embeddings` / `rerank` / `chat/completions` …）
+ * 且与目标 `path` 不同，就把那个尾段**剥掉**再拼 —— 用户填的是「某个端点」，
+ * 我们要的是「它的 base + 正确的端点」。
+ *
+ * 仍然不做模糊匹配：只认白名单里的端点名，猜错会把请求发到别的端点，比 404 更难排查。
+ */
+const KNOWN_ENDPOINT_TAILS = ['/embeddings', '/rerank', '/chat/completions', '/completions', '/models'];
+
+/**
+ * @param {string} baseUrl - 用户填的基础 URL（可能已含端点路径）。
+ * @param {string} path - 端点路径（如 `/embeddings`）。
+ * @returns {string} 完整 URL。
+ */
+function joinLlmEndpoint(baseUrl, path) {
+  const base = parseLlmBaseUrl(baseUrl).base;
+  const seg = String(path ?? '').trim();
+  if (!seg) return base;
+  const norm = seg.startsWith('/') ? seg : '/' + seg;
+  const lower = base.toLowerCase();
+  // ① base 已以该路径结尾（忽略大小写与尾斜杠）⇒ 用户填的就是完整端点，直接用。
+  if (lower.endsWith(norm.toLowerCase())) return base;
+  // ② base 的尾段是**别的**已知端点 ⇒ 剥掉它，换成目标端点。
+  for (const tail of KNOWN_ENDPOINT_TAILS) {
+    if (tail === norm.toLowerCase()) continue;
+    if (lower.endsWith(tail)) return base.slice(0, base.length - tail.length) + norm;
+  }
+  return base + norm;
+}
+
 module.exports = {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_TIMEOUT_MS,
   parseLlmBaseUrl,
+  joinLlmEndpoint,
   headersFor,
   llmRequest,
 };

@@ -199,7 +199,6 @@
 
 .statCard:hover {
   border-color: var(--nm-border-hover);
-  transform: translateY(-1px);
 }
 
 .statIcon {
@@ -321,7 +320,7 @@
 
 .progressFill {
   height: 100%;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-cyan);
   border-radius: var(--nm-r-pill);
   transition: width var(--nm-t-normal);
 }
@@ -371,8 +370,8 @@
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--nm-panel-pad);
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
 /*
@@ -421,6 +420,7 @@
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ── EmptyState ───────────────────────────── */
@@ -544,7 +544,19 @@
 .dateField[data-empty='true'] { color: var(--nm-text-3); }
 
 .dateRange { display: inline-flex; flex-direction: column; gap: 6px; }
-.dateRangeRow { display: inline-flex; align-items: center; gap: 6px; }
+/*
+ * 并排变体（2026-10-17）：预设与日期区间同一行 —— 放进一行式筛选条时不再撑成两行。
+ *
+ * ⚠️ **必须 `flex-wrap: wrap` 而不是 `nowrap`**（2026-10-17 真机实测踩到）：
+ * `nowrap` 下这个组件**不会收缩**（宽度由内容决定），窄容器里它自己溢出父容器 ——
+ * 而父容器（筛选条）在换行档是 `overflow: visible` ⇒ 溢出的部分**被裁掉且不可滚**，
+ * 用户看不到「近30天」与日期框（实测 1280/1100/760/640px 四档都中招）。
+ * 用 `wrap` 后：宽容器里内容放得下 ⇒ 自然是一行；窄容器里自动折成两行，**没有控件被藏起来**。
+ * 预设行同理（它自己也要能折）。
+ */
+.dateRangeInline { flex-direction: row; align-items: center; flex-wrap: wrap; }
+.dateRangeInline .dateRangePresets { flex-wrap: wrap; }
+.dateRangeRow { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dateRangeSep { color: var(--nm-text-3); font-size: var(--nm-fs-sm); flex-shrink: 0; }
 
 .dateRangePresets { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -657,7 +669,6 @@
 .batchCheck[data-checked='true'] {
   background: var(--nm-cyan);
   border-color: var(--nm-cyan);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
 }
 
 /* ────────────────────────────────────────────
@@ -753,6 +764,22 @@
   color: var(--nm-text-3);
   max-width: 42ch;
   line-height: 1.55;
+}
+/* 旋转指示：2026-10-18 用户要求「用正常的加载样式」，取代原来的骨架条（头像+占位线）。 */
+.spinner {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--nm-text-2) 20%, transparent);
+  border-top-color: var(--nm-cyan);
+  animation: spinnerTurn 0.8s linear infinite;
+}
+@keyframes spinnerTurn {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2s; }
 }
 
 /* ── 文字工具类 ─────────────────────────────────────────
@@ -896,4 +923,42 @@
 .searchClear:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
+}
+
+/* ────────────────────────────────────────────
+ * 手机档（≤560px）：面板头与工具栏重排
+ *
+ * 断点与 `ui/use-media-query.ts#PHONE_QUERY` 同一个数（`mobile-shell.spec.ts` 钉住）。
+ *
+ * 为什么需要：面板头是「标题 + 说明」在左、「动作按钮组」在右的横排（`flex-wrap: wrap`）。
+ * 375px 下标题（18px）与动作组挤在一行时，动作组会被压到很窄、按钮文字换行；
+ * 换行后动作组又贴着标题，缺少层次。这里在手机档把面板头改成**竖排**：
+ * 标题在上、动作组在下并左对齐，动作组内部允许横向滚动（按钮多时不会撑破版面）。
+ * ──────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .panelHeader {
+    align-items: stretch;
+    gap: var(--nm-s-2);
+  }
+  .panelTitleWrap { gap: 2px; }
+  .panelTitle { font-size: var(--nm-fs-lg); }
+  .panelActions {
+    width: 100%;
+    justify-content: flex-start;
+    /* 动作按钮多时横向滚动，而不是换行把面板头顶得很高 */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .panelActions::-webkit-scrollbar { height: 0; }
+  .panelActions > * { flex-shrink: 0; }
+
+  /* 搜索框在手机档收到 36px（基础档 32px）。它是**密集筛选控件**，不是主要操作按钮 ——
+     44px 会让「段条 + 搜索行 + 分类条」三行合计 222px，吃掉 718px 内容区的 31%
+     （用户报「筛选区占比太大」）。36px 仍高于 WCAG 2.5.8 的 24px AA 下限。
+     全局 44px 规则已用 `data-search-input` 属性放过它（见 `mobile-viewport.css`），
+     所以这里不必再拼特异性。 */
+  .searchInput { height: 36px; }
 }

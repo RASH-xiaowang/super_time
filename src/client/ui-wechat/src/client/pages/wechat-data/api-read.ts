@@ -195,6 +195,16 @@ export async function apiGetMessages(options: { talker: string; limit?: number; 
 export async function apiGetNewMessages(options: { talker: string; after: number; limit?: number }): Promise<MessagesSnapshot> {
   return unwrap(await remote().getNewMessages(options))
 }
+
+/**
+ * 「聊天素材收集任务」的客户端包装已在 2026-10-19 移除：聊天侧「新建任务」改为
+ * 【任务信息】的触发式任务（`api-task-center.ts`），旧收集弹窗连同它的调用点一起删了。
+ * 后端 `createChatCollectTask` / `listChatCollectTasks` 两个 @Remote 仍保留（`WechatRemote`
+ * 镜像必须与后端方法面对齐），但界面不再有入口 —— 留着这两个 UI 层包装只会让
+ * `read-error-visibility.spec.ts` 找不到调用方（它要求「谁调谁读 readError」）。
+ * 若将来恢复素材收集面板，从 `remote().listChatCollectTasks()` 重新包一层即可。
+ */
+
 /**
  * Fetch the moments feed (paging + author filter).
  * @param options - Query options: offset, limit, author filter.

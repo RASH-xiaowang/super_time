@@ -22,7 +22,6 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'url'
 import { describe, expect, it } from 'vitest'
-import { atRuleBlock } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
@@ -81,22 +80,39 @@ describe('消息板面 · 微信桌面端官方几何', () => {
     expect(ROWS, '宽度扣减要引用头像令牌').toContain('calc(100% - var(--wx-avatar) - var(--wx-gap))')
   })
 
-  it('④ 头部：宽列「会话名居中 + 右侧动作」（微信），窄列退回在流不重叠；底色与消息流同一个来源', () => {
+  it('④ 头部：会话名**始终左对齐**、动作排贴右；底色与消息流同一个来源', () => {
     // 2026-10-14 改判据口径：原写法无条件要求标题绝对居中，而那是**量过不成立**的几何 ——
     // 动作排约 350px，1280px 窗口下消息列约 740px，居中标题与动作排必然重叠约 57px
     // （那版选择器此前还是死规则，判据读源码所以一直绿、真机上从来没生效过）。
-    // 现在钉的是「门槛以下在流、门槛以上居中 + 动作靠右」这个**带可行性门槛**的形态。
+    // 于是改成「门槛以下在流、门槛以上居中 + 动作靠右」这个**带可行性门槛**的形态。
+    //
+    // 2026-10-16 门槛 960 → 1200：960 那版**漏算了轮询状态**（`✓ 时间 · N 条新消息`，实测 112px）。
+    // 绝对居中的标题两侧必须对称，右侧**所有**内容都要计入：
+    //   2 × (动作排 351 + gap 10 + 轮询 112) + 标题 240 = 1186 ⇒ 取 1200。
+    // 真机逐档实测：列宽 1382 余量 97px ✅ / 列宽 1062 **重叠 63px** ❌（旧门槛放它进来了）。
+    //
+    // 2026-10-16 用户要求**彻底去掉居中**：绝对居中要求两侧完全对称，任何右侧元素增删都要
+    // 重算门槛，且窄窗口下标题会突然从居中跳到左侧、观感割裂。现在统一左对齐 ——
+    // 标题紧贴左缘、动作排与轮询状态贴右缘，**任何列宽下都不重叠**，也不再按宽度切换布局。
     const info = blockOf(SHELL, 'msgHeaderInfo')
-    expect(info, '基础档标题必须**在流**（无条件绝对居中在中宽窗口会压到动作排上）')
+    expect(info, '标题必须**在流**（绝对居中会压到动作排上，且要求两侧对称）')
       .not.toContain('position: absolute')
-    expect(info, '基础档标题要吃掉中间、把动作排推到右边').toContain('flex: 1')
-    const wide = atRuleBlock(strip(SHELL), '@container (min-width: 960px)', '消息列宽档（960 是量出来的可行性门槛：2×350 动作排 + 240 标题上界）')
-    expect(wide, '宽列档没有把标题切成绝对居中（微信桌面端的识别点）').toContain('left: 50%')
-    expect(wide, '宽列档标题没有垂直居中').toContain('translate(-50%, -50%)')
-    expect(wide, '宽列档标题没有水平居中').toContain('align-items: center')
-    expect(wide, '宽列档标题没有宽度上界 ⇒ 长会话名会顶到动作排上').toContain('max-width:')
-    expect(wide, '宽列档动作排没有靠右（「右侧动作」是这条例子的另一半，原先根本没守）')
+    expect(info, '标题要吃掉中间、把动作排推到右边').toContain('flex: 1')
+    expect(info, '标题不许再居中（用户要求左对齐）').not.toContain('text-align: center')
+    expect(info, '标题不许再居中（用户要求左对齐）').not.toContain('align-items: center')
+    // 整个文件里都不该再有「宽列切绝对居中」的容器查询
+    expect(strip(SHELL), '不该再有把标题切成绝对居中的容器查询（用户要求始终左对齐）')
+      .not.toContain('left: 50%')
+    expect(strip(SHELL), '不该再有把标题切成绝对居中的容器查询（用户要求始终左对齐）')
+      .not.toContain('translate(-50%, -50%)')
+    // 动作排无条件贴右（原先只在宽列档里，现在提到基础档）
+    expect(blockOf(SHELL, 'msgHeaderActions'), '动作排必须贴右（「右侧动作」是这条例子的另一半）')
       .toContain('margin-left: auto')
+    // 轮询状态**不许**再自己吃 `margin-left: auto`：两个 auto 会平分剩余空间，
+    // 把动作排从右缘推到中间，于是与标题重叠（2026-10-16 用户截图报的那一版）。
+    const poll = blockOf(read('chats-cards.module.css'), 'msgHeaderPoll')
+    expect(poll, '轮询状态不许再吃 margin-left: auto（会与动作排平分剩余空间、把动作排推到标题上）')
+      .not.toContain('margin-left: auto')
     // 聊天底色只能有一个来源：同一个文件里深色值一份、浅色值一份。
     // （不能按「行首」数：深浅两块都写在各个规则的声明区里，行首匹配会两边都数上。）
     const darkDefs = (ROWS.match(/--wx-chat-bg:\s*#191919;/g) ?? []).length

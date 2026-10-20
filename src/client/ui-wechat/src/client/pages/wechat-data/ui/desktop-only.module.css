@@ -15,7 +15,7 @@
   gap: 12px;
   padding: 16px;
   box-sizing: border-box;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.12));
   border-radius: var(--nm-r-lg, 16px);
   background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
 }
@@ -36,8 +36,8 @@
   font-size: 14px;
   line-height: 1;
   border-radius: var(--nm-r-md, 10px);
-  background: color-mix(in srgb, var(--nm-cyan, #00f0ff) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan, #00f0ff) 30%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan, #07c160) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan, #07c160) 30%, transparent);
 }
 
 .title {
@@ -61,7 +61,7 @@
   line-height: 1.7;
   color: var(--nm-text-2, #94a3b8);
   background: var(--nm-bg-0, rgba(5, 10, 24, 0.55));
-  border-left: 2px solid color-mix(in srgb, var(--nm-cyan, #00f0ff) 45%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--nm-cyan, #07c160) 45%, transparent);
   border-radius: var(--nm-r-sm, 8px);
 }
 
@@ -80,7 +80,7 @@
   flex-direction: column;
   gap: 2px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  border-bottom: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
 }
 
 .listItem:last-child {

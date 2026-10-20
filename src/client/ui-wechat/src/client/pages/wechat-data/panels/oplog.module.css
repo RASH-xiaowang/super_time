@@ -1,16 +1,45 @@
 /* 操作日志板块 —— 独立样式（跟随主题令牌） */
+/* 2026-10-18 用户报「其他面板的卡片要撑满屏幕」：面板主体撑满可用高度，
+   页头/统计/筛选固定，表格卡吃掉剩余高度并在卡内滚动。 */
 .root {
-
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   box-sizing: border-box;
   font-family: var(--nm-font-sans, inherit);
 }
-.hdIcon { color: var(--nm-cyan); font-size: 14px; }
-.hdBadge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--nm-text-2); font-weight: 500; }
-/* 统计标签：这里只保留**排版**（块级 + 1px 间距），文字样式走 kit 的 .textMeta。
- * 原先是两条同名规则叠加（本行 11px + 下面 12px 覆盖），实际生效是「12px + text-2 +
- * display:block + margin-top:1px」；第 35 轮的文字工具类收敛因此跳过了它（同名多定义
- * 迁移会丢声明）。本轮把两条合并成一条纯排版规则，字号/颜色交给 .textMeta —— 计算样式不变。 */
-.statLabel { display: block; margin-top: 1px; }
+.root > :not(.tableCard) { flex: 0 0 auto; }
+.root > .tableCard {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+}
+.root > .tableCard > [class*='_cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+/* 表格本体也吃满卡身（2026-10-18 大屏复查）：kit DataTable 的 `.tableWrap` 自带
+   `max-height: 62vh`，大窗口下会把表身截在 62vh、卡内余下空白。这里解除上限并交给
+   `.tableWrap` 自己的 `overflow-y:auto` 滚动。 */
+.root > .tableCard > [class*='_cardBd'] > [class*='tableWrap'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+/* 筛选区（微信化）：不再套 Card 外壳，直接两行控件；统计是筛选行右侧的灰字。 */
+.filterWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
 .notice { margin: 8px 0 0; padding: 6px 10px; border-radius: var(--nm-r-sm); font-size: 12px; }
 .noticeOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 8%, transparent); }
 .noticeErr { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }
@@ -43,45 +72,18 @@
   corner-shape: round;
 }
 
-/* 新布局：状态卡 + 筛选卡 + 表格卡 */
-.statRow {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px 0 0;
-}
-.statCard {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 88px;
-  padding: 12px 14px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: var(--nm-bg-card);
-  min-width: 0;
-}
-.statValue {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--nm-text-1);
-  font-family: var(--nm-font-mono, monospace);
-}
-.statHint {
-  font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-text-2);
-  opacity: 0.75;
-}
-.statOk .statValue { color: var(--nm-success); }
-.statFail .statValue { color: var(--nm-danger); }
-.statSkip .statValue { color: var(--nm-amber); }
-.filterCard {
-  margin: 12px 0 0;
+/* 新布局：筛选区 + 表格卡（统计已并为筛选行右侧灰字） */
+.statText {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--nm-text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .filterRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 /* 搜索框吃掉剩余空间。必须两条类选择器压过 kit 的 `.searchBox`（`flex: 0 1 320px` +
@@ -90,9 +92,84 @@
   flex: 1 1 180px;
   min-width: 132px;
 }
+
+/* Wave D2：页头「更多 ▾」菜单（替代原先平铺在筛选行里的 4 个动作按钮）。
+   筛选行因此回到单行（32px 控件 + 内边距 ⇒ 卡片 46px ≤ 48 单行目标）。
+   菜单面板是**条件渲染**（关闭时不进 DOM）——用 <details> 会把隐藏内容留在 DOM 里，
+   响应式审计会判「业务文本被隐藏」。 */
+.moreMenu { position: relative; }
+
+.moreBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.moreBtn:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
+
+.moreBtn[aria-expanded='true'] {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+}
+
+.morePanel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  min-width: 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
+}
+
+/* 菜单项铺满一行、左对齐（kit Button 默认居中） */
+.morePanel > button { justify-content: flex-start; width: 100%; }
+
+/* Wave D2：筛选区第二行（搜索框独占一行）。两行合计 32+32=64px ≤ 88（docs §2.2 两行上限）。 */
+.filterSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.filterSearchRow .searchFlex {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .tableCard {
   margin: 12px 0 14px;
   overflow: hidden;
+}
+
+/*
+ * 「已加载最近 N 条」提示条。
+ *
+ * 位置在表格**下方**（`DataTable` 之后）：它是「为什么下面没有了」的解释，
+ * 放在表格上方会先于内容出现，读起来像一条错误。用 `--nm-text-2` 而不是警示色 ——
+ * 触顶是**设计行为**（DOM 上界），不是故障。
+ */
+.capNote {
+  padding: 8px 12px;
+  border-top: 1px solid var(--nm-border);
+  font-size: 12px;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-hover);
 }
 .tdTime { width: 150px; }
 .tdType { width: 72px; }
@@ -103,6 +180,3 @@
   max-width: 90px;
 }
 .tdStatus { width: 76px; }
-@media (max-width: 900px) {
-  .statRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}

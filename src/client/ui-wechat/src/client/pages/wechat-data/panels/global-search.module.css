@@ -17,7 +17,7 @@
 .box:focus-within {
   border-color: var(--nm-cyan);
   color: var(--nm-cyan);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
 }
 
 .icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -64,12 +64,10 @@
   z-index: 61;
   overflow: auto;
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
-  border-radius: var(--nm-r-md);
-  background: rgba(8, 14, 32, 0.94);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 30px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 /* 下面这几个类由调用方（WechatDataPanel）用在 children 里，所以也放在本模块，
@@ -77,9 +75,7 @@
 .group {
   padding: 6px 8px 3px;
   font-size: var(--nm-fs-xs, 11px);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-weight: 400;
   color: var(--nm-text-3);
 }
 
@@ -111,4 +107,18 @@
   text-align: center;
   font-size: 12px;
   color: var(--nm-text-3);
+}
+
+/* ── 手机档（≤560）：搜索框收窄 ──
+   桌面档 `.box` 是 6px 上下内边距 + 12px 字号的自然高（约 30px），在 176px 的侧栏里正合适。
+   手机档它变成**整条搜索条**（`wechat-data.module.css` 把侧栏塌成 56px 高、只留 `.navSearch`），
+   而 `mobile-viewport.css` 的全局 44px 触摸下限会把里面的 input 抬到 44px ⇒ `.box` 变成
+   44 + 6×2 + 1×2 = 58px，**比 56px 的搜索条还高 2px**（用户报的「搜索框太大」）。
+   两处一起收：input 40px（`wechat-data.module.css` 里给，要压过元素级规则）+ 这里把上下内边距
+   收到 0 ⇒ `.box` 正好 40px，上下各留 8px 呼吸。触摸目标由整条 56px 的搜索条保证。 */
+@media (max-width: 560px) {
+  .box {
+    padding: 0 10px;
+    border-radius: var(--nm-r-sm, 6px);
+  }
 }

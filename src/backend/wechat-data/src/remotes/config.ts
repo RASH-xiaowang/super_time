@@ -57,6 +57,8 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         whisper_threads: Number(cfg['whisper_threads'] ?? 0),
         whisper_models_dir: cellStr(cfg['whisper_models_dir'] ?? ''),
         whisper_bin: cellStr(cfg['whisper_bin'] ?? ''),
+        // 默认关闭：第三方服务不是腾讯官方，且要把本机配置发给它（与 defaultConfig 同口径）
+        wxcdn_original_enabled: Boolean(cfg['wxcdn_original_enabled'] ?? false),
         // W2-12.3：告诉界面「密钥搬家」这件事还等着做没有（纯读，不动文件）。
         secret_migration: secretMigrationPending(rc.dirs().decrypted),
         resolved,

@@ -180,7 +180,7 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
     /**
      * 改某实例的行为配置（**部分更新**：只覆盖传进来的字段，缺省保持原值）。
      * @param options.slot - 实例编号。
-     * @param options.autoReply / kbEnabled / kbId - 要改的字段。
+     * @param options.autoReply / kbEnabled / kbId / systemPrompt / splitReply - 要改的字段。
      * @returns 落库后的完整配置（含归一后的 kbId）。
      */
     setClawbotInstanceConfig(options: {
@@ -188,6 +188,8 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
         autoReply?: boolean;
         kbEnabled?: boolean;
         kbId?: number | null;
+        systemPrompt?: string;
+        splitReply?: boolean;
     }): ClawbotInstanceConfig;
     /**
      * **内部**（不加 `@Remote`）：见 {@link createBindFlow} 的 `bindClawbotWechat`。
@@ -211,6 +213,21 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
      * @returns 会话页快照。
      */
     listClawbotMessages(options?: ClawbotMessageQuery): ClawbotMessageSnapshot;
+    /**
+     * 清空某实例的**接入会话**（2026-10-17 用户要求「增加对话历史清除按钮，可以删除对话历史
+     * 以防止污染回复」）。
+     *
+     * 只删消息，**不动绑定与配置**（那是另一回事）；返回删掉的条数与最新快照
+     * （界面据此立刻刷新，不用再发一次 list）。
+     * @param options.slot - 实例编号（缺省 = 第一个实例）。
+     * @returns 删掉的条数 + 最新会话页快照。
+     */
+    clearClawbotMessages(options?: {
+        slot?: number;
+    }): {
+        removed: number;
+        messages: ClawbotMessageSnapshot;
+    };
     /**
      * 环境自检（M-C 精简版，只查 3 项）—— 第 ② 项读**该实例**通道的真实运行态。
      * @param options.slot - 实例编号（缺省 = 第一个实例）。
@@ -277,5 +294,18 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
      */
     unbindClawbot(options?: {
         slot?: number;
+    }): ClawbotBindingSnapshot;
+    /**
+     * 给实例起别名（「工作号」「客服号」；2026-10-16）。
+     *
+     * 与绑定状态机**无关**：只动 `label` 一列，所以别名活过重新绑定与解绑。
+     * 空串 = 清除别名（界面回落到昵称，再回落到「实例 N」）。
+     * @param options.slot - 实例编号。
+     * @param options.label - 新别名（空串 = 清除）。
+     * @returns 落库后的绑定卡片快照（界面据此立刻更新轨上的名字）。
+     */
+    renameClawbotInstance(options: {
+        slot: number;
+        label: string;
     }): ClawbotBindingSnapshot;
 };

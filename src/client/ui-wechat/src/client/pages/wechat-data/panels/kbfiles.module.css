@@ -40,9 +40,33 @@
   container-name: kbfiles;
 }
 
+/* 正文展开时，**两栏各自滚**（2026-10-17 用户要求）。
+ *
+ * 改前 `.bodyWrap` 是整个面板唯一的滚动区，文件列表和详情栏都在里面 ——
+ * 正文很长时，滚正文会把左边的文件列表一起滚走，用户想换文件得先滚回去。
+ *
+ * 现在：`.bodyWrap` 不再滚（`overflow: hidden`），滚动落到两栏自己身上。
+ * 这样滚正文只动正文，列表原地不动。
+ *
+ * ⚠️ 只在正文展开时这样（`.bodyWrap:has(.reader)`）：没展开时详情区可能比列表短，
+ * 让 `.bodyWrap` 统一滚更自然（否则详情栏里会出现一条没内容的滚动条）。
+ * `:has()` 在 Electron 44（Chromium 130+）里可用。 */
+.bodyWrap:has(.reader) {
+  overflow: hidden;
+}
+
 .body {
   display: grid;
-  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  /* 列表栏 200–260px（2026-10-17 从 240–340 收窄）。
+   *
+   * 为什么收窄：列表每行只有「文件名 + 状态徽标 + 大小/块数」，
+   * 340px 时右侧空出一大片，而详情栏（正文阅读区）被挤到 856px ——
+   * 正文再分两栏就只剩 600px 出头，读起来太窄。
+   * 260px 够放下 20 个汉字文件名（超出用省略号），把省下的 80px 让给正文。
+   *
+   * 下限 200px 而不是更小：再窄文件名就只剩 12 个字，`探迹智能销售云-销售知识库.md`
+   * 这种名字会被截成「探迹智能销售云-销…」，用户分不清是哪一份。 */
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
   gap: var(--nm-dense-g5);
   /* 与笔记库同一处修复：`start` 让卡片按内容收缩，视口下半截留成一片死空白。
      改成至少铺满滚动区，内容更长时由 .bodyWrap 整块滚。 */
@@ -51,8 +75,68 @@
   min-width: 0;
 }
 
+/* 正文展开时，`.body` 必须**恰好**占满 `.bodyWrap` 的高度（不能更高），
+   否则两栏的 `overflow-y: auto` 没有可滚的边界 —— 内容会把 `.body` 撑高，
+   滚动条又跑回 `.bodyWrap` 上，等于没改。
+   ⚠️ 用 `height: 100%` 而不是 `max-height: 100%`：`.bodyWrap` 是 flex 子项，
+   它的高度由 `flex: 1 1 auto` 决定，`max-height: 100%` 的百分比基准是**内容高度**
+   （内容多高就多高），等于没封顶 —— 真机实测两栏都被撑到 6577px。
+   `height: 100%` 直接取父容器的**已解析高度**，才是真正的封顶。 */
+.bodyWrap:has(.reader) .body {
+  height: 100%;
+  min-height: 0;
+}
+
 .listPane { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
-.detailPane { min-width: 0; }
+
+/* 铺满（2026-10-18）：`.body` 已经把行高铺到滚动区，卡片解除全局 598px 上界后自然拉伸；
+   卡身与空态再跟着吃满，内容居中而不是挤在卡顶。 */
+.fillCard { min-height: 0; }
+.fillCard > [class*='_cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fillCard [class*='_empty_'] { flex: 1 1 auto; justify-content: center; }
+.listPaneWide [class*='_empty_'] { flex: 1 1 auto; justify-content: center; }
+
+/* 正文展开时列表自己滚。
+   ⚠️ 滚动容器必须落在 **.list 自己** 身上，不能给 .listPane：.listPane 用的是 kit 的
+   Card（.card 是 overflow: hidden），在它上面写 max-height 只会把列表裁掉 ——
+   下半截连滚动条都没有，滚都滚不到。max-height 与 overflow 必须是同一个元素。 */
+.bodyWrap:has(.reader) .list {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+/* 详情栏自己也是一个容器查询的锚点（2026-10-17）。
+ *
+ * 为什么不能只靠 `.bodyWrap` 那个：`.bodyWrap` 是**整个面板**的宽度（约 1200px），
+ * 而正文阅读区实际可用宽度是**详情栏**的宽度（约 856px，扣掉列表 340px 之后）。
+ * 拿面板宽度去判「两栏放不放得下」永远判成「放得下」，于是 900px 断点形同虚设 ——
+ * 真机实测 `splitCols: "562px 240px"`，正文栏只有 562px，读起来太窄。
+ *
+ * 加 `container-type: inline-size` 之后，`.readerSplit` 的 `@container` 查的是
+ * **最近的**容器（详情栏），而不是外层 `.bodyWrap`。 */
+.detailPane {
+  min-width: 0;
+  container-type: inline-size;
+  container-name: kbfilesdetail;
+}
+
+/* 正文展开时详情栏自己滚 —— 与列表互不影响。
+   `min-height: 0` 是 flex/grid 子项能收缩的前提（默认 `min-height: auto` 会撑住内容高度）。
+   ⚠️ 必须写 `overflow-y: auto` 而不是只写 `overflow: auto`：kit 的 `.card` 有
+   `overflow: hidden`，同优先级下后加载的会赢 —— 这里靠 `.bodyWrap:has(.reader) .detailPane`
+   的两级选择器（0,3,0）压过 `.card`（0,1,0），否则滚动条根本出不来。 */
+.bodyWrap:has(.reader) .detailPane {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
 
 /* 列表为空（还没传文件 / 过滤无结果 / 读不到库）时只保留**一个**空态：
    左栏跨满两格、右栏整块隐藏。否则同一件「没有文件」会被左右两栏各说一遍。
@@ -99,7 +183,29 @@
 
 .chipCount { font-size: var(--nm-dense-fs-xs); opacity: 0.75; }
 
-.meta { flex: 0 0 auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; }
+/* ── 标题行：标题 + 已登记数 + 索引状态（2026-10-17 压缩页头）──────
+ *
+ * 改前这三样分居两处：标题在左、统计和索引徽标在工具栏右侧 ——
+ * 于是页头占「标题行 + 描述行 + 工具栏行」三行，把列表挤到很下面。
+ * 现在并进标题行，描述收进 `title` 悬停提示，页头只剩两行。
+ *
+ * `align-items: baseline` 让「文件」和后面的小字坐在同一条基线上 ——
+ * 用 `center` 时小字会浮在大字的中腰，看起来像没对齐。 */
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g3);
+  min-width: 0;
+  cursor: help;
+}
+
+/* 「已登记 N / M」：比标题小一号，弱化但不至于看不见。 */
+.titleMeta {
+  font-size: var(--nm-dense-fs-sm);
+  font-weight: 400;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+}
 
 /* 向量索引状态徽标。三种色调走 data-tone，而不是三套类名 ——
    状态是数据，样式表里不该为它准备并行的三份。 */
@@ -213,7 +319,7 @@
 }
 .row:last-child { border-bottom: 0; }
 .row:hover { background: var(--nm-bg-hover); }
-.row[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-cyan); }
+.row[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-brand); }
 .row:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
 
 .rowMain { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g1); }
@@ -457,16 +563,25 @@
 }
 
 .readerMeta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g2);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
   text-transform: none;
 }
 
-.readerNote {
-  margin: 0;
+/* 「解析文本，非原稿」—— 从独立一段收进栏头（2026-10-17）。
+   改前那段说明占两行，把正文推下去；而用户点「查看正文」就是要读原文。
+   收成一个小标签：一眼能看见「这不是原稿」，又不占版面。
+   全文在 `title` 上，悬停即见。 */
+.readerHint {
+  padding: 0 var(--nm-dense-g1);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xs);
   font-size: var(--nm-dense-fs-xs);
-  line-height: 1.55;
-  color: var(--nm-text-2);
+  color: var(--nm-text-3);
+  cursor: help;
 }
 
 .readerEmpty {
@@ -479,39 +594,248 @@
 /* 正文随内容自然长高，由 .bodyWrap 整块滚。
    这里**不再套一层 max-height + overflow**：外层已经是滚动容器，里面再来一层
    就是「滚动条里套滚动条」，滚轮落在哪一层全看指针位置，比单层难用得多。
-   长度由「继续加载」按钮控制（一次 60 块），不靠裁切。 */
+   长度由自动循环拉取控制（每轮 200 块，直到取完），不靠裁切。 */
 .readerBody {
   display: flex;
   flex-direction: column;
   gap: var(--nm-dense-g3);
 }
 
-.chunk {
+/* ── 左右两栏：左「分块目录」/ 右「原文」（2026-10-17 重做）──────
+ *
+ * ## 顺序：目录在左、原文在右
+ *
+ * 目录是**导航**，导航在左、内容在右是阅读器的通行布局（文件树 / 大纲 / 书签都在左）。
+ * 改前目录在右，用户的眼睛要先跳到最右边才能定位，再跳回左边读 ——
+ * 每换一块都要横跨整个屏幕。
+ *
+ * ## 两栏各自独立滚动（2026-10-17 用户要求）
+ *
+ * 改前两栏都不设 `overflow`，整块随内容长高由 `.bodyWrap` 统一滚 ——
+ * 于是滚原文会把左边的目录一起滚走，用户想换一块得先滚回去找目录。
+ *
+ * 现在：两栏各自 `overflow-y: auto`，高度由 `.readerSplit` 的 `max-height` 封顶。
+ * 滚原文只动原文，目录原地不动。
+ *
+ * ⚠️ 高度必须封在 `.readerSplit` 上（不是两栏各自 `max-height: 52vh`）：
+ * 封在栏上时两栏高度各算各的，内容少的那栏会短一截，看起来像没对齐。
+ * 封在父容器上，两栏 `height: 100%` 自然等高。
+ *
+ * ⚠️ 窄容器退成上下两段用**容器查询**而不是窗口媒体查询：侧栏折叠会改变本区域
+ * 的可用宽度而窗口尺寸不变，窗口媒体查询在那种情况下不触发。
+ *
+ * 查的是 **`.detailPane`**（`container-name: kbfilesdetail`），不是 `.bodyWrap`：
+ * 正文阅读区的可用宽度是详情栏的宽度（约 856px），而 `.bodyWrap` 是整个面板
+ * （约 1200px）。拿面板宽度判「两栏放不放得下」永远判成放得下 —— 真机实测
+ * 正文栏只剩 562px，读起来太窄。
+ *
+ * 断点 760px：详情栏在 1600px 窗口下约 856px，扣掉目录 200px 后正文还有 640px ——
+ * 够读（一行约 42 字）。再窄就退成上下两段，两栏各占一半高度。
+ *
+ * 目录栏 200px（不是 240px）：它只放序号 + 一行摘要 + 页码/字数，
+ * 200px 够放下 14 个汉字，再多就是浪费正文的宽度。 */
+.readerSplit {
+  display: grid;
+  /* 目录在左（窄栏），原文在右（占满剩余）。 */
+  grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
+  /* ⚠️ 行高必须显式封顶（`minmax(0, 1fr)`），不能留给 `auto`：
+     `auto` 行会被内容撑到 5867px，于是子项的 `height: 100%` 也变成 5867px，
+     `max-height` 形同虚设（真机实测）。`minmax(0, 1fr)` 让行高等于容器高度。 */
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--nm-dense-g3);
+  /* 两栏等高：`stretch` 让它们都撑满 `.readerSplit` 的高度，
+     配合下面的 `height: 100%` 才能让两栏的滚动区一样高。 */
+  align-items: stretch;
+  /* 高度封顶在这里，两栏各自在里面滚。
+     `60vh` 而不是 `52vh`：52vh 在 1000px 高的窗口里只有 520px，
+     正文下方留一大片死空白（真机截图实测）。60vh 给到 600px，
+     同时仍留出上方文件标题的位置。 */
+  max-height: 60vh;
+}
+@container kbfilesdetail (max-width: 760px) {
+  .readerSplit {
+    grid-template-columns: minmax(0, 1fr);
+    /* 上下堆叠时两栏各占一半高度 —— 否则目录会把原文挤到看不见。 */
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* 左栏：分块目录。栏头固定、内容自己滚，与原文互不影响。
+   ⚠️ 滚动**不能**落在这一层：它同时装着栏头和内容，一滚栏头就跟着走。
+   滚动落在 `.paneBody` 上（见下），栏头留在外面当固定的一行。 */
+.readerToc {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-card);
+}
+
+/* 右栏：原文。同样栏头固定、内容自己滚。 */
+.readerMain {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-card);
+}
+
+/* 栏头：固定的一行，不参与滚动。
+   改前它用 `position: sticky` 贴在滚动区里，而滚动区有 `padding` ——
+   sticky 的 `top: 0` 是相对**内容区**的，于是滚动时正文从 padding 区域穿过去，
+   把栏头压掉半截（用户截图实测：只露出「分块（195）」「原文」的下半截）。
+   现在栏头在滚动区外面，物理上不可能被压住。 */
+.paneLabel {
+  flex: 0 0 auto;
+  padding: var(--nm-dense-g2) var(--nm-dense-g3);
+  border-bottom: 1px solid var(--nm-border);
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+  background: var(--nm-bg-card);
+}
+
+/* 栏内容：**这里**才是滚动区。`min-height: 0` 是 flex 子项能收缩的前提
+   （默认 `min-height: auto` 会撑住内容高度，滚不动）。 */
+.paneBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: var(--nm-dense-g2) var(--nm-dense-g3) var(--nm-dense-g3);
+}
+
+/* 目录项之间留一点缝（`.paneBody` 的 padding 只管四周）。 */
+.readerToc .paneBody {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-bottom: var(--nm-dense-g2);
-  border-bottom: 1px solid var(--nm-border);
-}
-.chunk:last-child { border-bottom: 0; padding-bottom: 0; }
-
-.chunkMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--nm-dense-g2);
-  font-size: var(--nm-dense-fs-xs);
-  color: var(--nm-text-3);
 }
 
-/* 正文保留换行与缩进：log / json / yaml / csv 的**可读性全在换行上**，
-   折成一段就等于把内容毁掉一半。长串（URL、指纹）必须能断，否则会横向撑破。 */
-.chunkText {
-  margin: 0;
+/* 原文：连续文本，保留换行与缩进（log / json / yaml 的可读性全在换行上）。 */
+.rawText {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: var(--nm-dense-fs-sm);
-  line-height: 1.7;
+  line-height: 1.75;
   color: var(--nm-text-1);
+}
+
+/* 原文里的**一块**。块之间用虚线标出「切在哪」——
+   虚线而不是卡片：卡片会把一份文档切成一堆碎片，读起来像列表不像文章。
+   高亮用左侧色条 + 淡底，不用边框：边框会改变行高，悬停时整段文字上下跳。
+   左侧留白是给 `#N` 角标的：序号列 34px + 间距 `--nm-dense-g3`，
+   两者相加才是正文起点。真机实测：26px 放不下三位数序号（`#100`），
+   两位数时就已经贴到正文上了（截图里 `#10 ---` 挤在一起）。 */
+.rawBlock {
+  position: relative;
+  padding: 2px var(--nm-dense-g2) 2px calc(34px + var(--nm-dense-g3));
+  border-left: 2px solid transparent;
+  border-radius: var(--nm-r-sm);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.rawBlock + .rawBlock {
+  margin-top: var(--nm-dense-g2);
+  padding-top: var(--nm-dense-g2);
+  border-top: 1px dashed var(--nm-border-hover);
+}
+.rawBlock[data-active='true'] {
+  border-left-color: var(--nm-cyan);
+  background: var(--nm-bg-hover);
+}
+
+/* 块序号角标：与目录一一对应。绝对定位在左侧留白里，
+   不参与文本流 —— 否则它会挤进正文第一行，把「> **用途**」推歪。
+   固定 34px + 右对齐：序号位数会变（#1 / #100 / #195），右对齐才能让
+   所有序号贴着正文左边缘排齐。34px 是按三位数 + 等宽字体算的。 */
+.rawNo {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 34px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-dense-fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.75;
+  color: var(--nm-text-3);
+  text-align: right;
+  user-select: none;
+}
+.rawBlock[data-active='true'] .rawNo { color: var(--nm-cyan); }
+
+/* 目录项：一行一条，序号 + 首行摘要 + 页码/字数。
+   用 `<button>` 而不是 `<div>`：它真的会跳转，键盘用户也要能按到。
+   固定两行高度（`min-height`）：目录是**扫描**用的，高度参差不齐时
+   眼睛没法沿着一列往下扫（真机截图里 `#2` 只有一行、`#1` 三行，很乱）。 */
+.tocItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 1px var(--nm-dense-g2);
+  width: 100%;
+  min-height: 34px;
+  padding: 3px var(--nm-dense-g2);
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.tocItem:hover,
+.tocItem[data-active='true'] {
+  border-left-color: var(--nm-cyan);
+  background: var(--nm-bg-hover);
+}
+.tocItem:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: -2px;
+}
+
+/* 块序号：与左栏原文对照时的锚点，用等宽字体保证对齐。 */
+.tocNo {
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-cyan);
+  font-weight: 700;
+}
+
+/* 首行摘要：单行截断。目录是索引不是内容，多行会把窄栏撑成一堵墙。
+   `min-height` 与 `line-height` 相等：预览为空（分隔线块）时这一行仍占位，
+   否则目录项高度参差不齐，眼睛没法沿着一列往下扫。 */
+.tocPreview {
+  overflow: hidden;
+  min-height: 1.5em;
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.5;
+  color: var(--nm-text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 页码 / 标题 / 字数：第二行，弱化。同样给最小高度，保证每条目录项等高。 */
+.tocMeta {
+  grid-column: 2;
+  overflow: hidden;
+  min-height: 1.4em;
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.4;
+  color: var(--nm-text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 默认展开时首帧的等待态：正文还没回来，先给一句话而不是留一块空白，
@@ -567,4 +891,21 @@
   margin: 0;
   font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-2);
+}
+
+/* ============================================================
+ * Wave D1（docs/UI-DENSITY.md §3 C 层）：搜索 + 状态筛选并成一行。
+ *
+ * 实测（1440）：.toolbarLeft 的 max-content 只按 468.6px 收缩，而搜索框固定
+ *  lex: 0 1 320px + 5 个状态胶囊 469px ⇒ 320+469 刚好放不进它，胶囊被挤到第二行，
+ * 工具栏 64px（审计 toolbarH 目标 48）。把 toolbarLeft 拉满可用宽、搜索框略收，
+ * 整条回到 36px 一行；窄窗口仍由 flex-wrap 折行。
+ * ============================================================ */
+.head [class*='_toolbarLeft_'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.head [class*='_searchBox_'] {
+  flex: 0 1 280px;
 }

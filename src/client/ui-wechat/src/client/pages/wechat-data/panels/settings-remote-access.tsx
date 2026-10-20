@@ -1,5 +1,5 @@
 /**
- * 设置 → 远程访问（手机）：开关、局域网地址、二维码、凭据轮换。
+ * 设置 → 维护与自检 → 局域网访问（手机）：开关、局域网地址、二维码、凭据轮换。
  *
  * ## 这一节为什么必须存在
  *
@@ -35,7 +35,7 @@ import type { RemoteAccessRotation, RemoteAccessState } from '../../../contracts
 /** 宿主桥（只有桌面端有；浏览器态这一节整块不渲染）。 */
 function bridge(): {
   state: () => Promise<{ ok: boolean, value?: RemoteAccessState }>
-  rotate: () => Promise<{ ok: boolean, value?: RemoteAccessRotation, error?: { message?: string } }>
+  rotate: (options?: { fullAccess?: boolean }) => Promise<{ ok: boolean, value?: RemoteAccessRotation, error?: { message?: string } }>
   toggle: (enabled: boolean) => Promise<{ ok: boolean, value?: RemoteAccessState, error?: { message?: string } }>
 } | null {
   if (typeof window === 'undefined') return null
@@ -54,13 +54,17 @@ interface OneTimeQr {
 /**
  * 把地址 + 端口 + 配对码拼成手机要打开的链接，并顺手把二维码画出来。
  *
+ * `mode=desktop` 不是“仅桌面”的意思，而是交接态标记：浏览器端 `handoff-boot` 会在
+ * capabilities 求值前装好原生桥，界面能力因此与桌面端一致。配对码本身也必须是
+ * fullAccess（见 rotate({ fullAccess: true })），两者缺一都会退回“半权限”。
+ *
  * 二维码画不出来不是致命错误（还可以手输链接），所以失败只记一句原因。
  * @param address - 绑定到的局域网 IPv4。
  * @param port - 实际端口（可能被顺移过，所以用状态里的实际值而不是配置值）。
  * @param pairingCode - 刚生成的短命配对码。
  */
 function buildQr(address: string, port: number, pairingCode: string): OneTimeQr {
-  const url = `http://${address}:${String(port)}/?t=${pairingCode}`
+  const url = `http://${address}:${String(port)}/?t=${pairingCode}&mode=desktop`
   try {
     return { url, pairingCode, path: qrSvgPath(encodeQr(url)), error: '' }
   } catch (e) {
@@ -70,9 +74,16 @@ function buildQr(address: string, port: number, pairingCode: string): OneTimeQr 
   }
 }
 
-/** 设置 → 远程访问（手机）。 */
+/** 设置 → 维护与自检 → 局域网访问（手机）。 */
 export function SettingsRemoteAccess(): React.JSX.Element {
-  const blocked = desktopOnlyGate('remote'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定**必须放在所有 hooks 之后**（见文件末尾的 `blocked` 分支）。
+  //
+  // 这里曾经写成「函数体第一行 `if (blocked !== null) return blocked`」—— 那是 React Hooks
+  // 规则违反：`runtimeCapabilities()` 读的是**注入**的能力表，注入时机（`installRemote()`）
+  // 与 HMR 都可能让它在两次渲染之间从 `isBrowser:true` 变成 `false`（或反过来）。
+  // 一旦变化，这个组件就会「上一次渲染跑了 7 个 hook、这一次 0 个」，
+  // React 抛 "Rendered more hooks than during the previous render" ⇒ **整棵根树被卸载** ⇒
+  // 用户看到的是「设置弹窗还在、内容区全黑」。把判定挪到 hooks 之后，hook 数量恒定。
   const api = bridge()
   const [state, setState] = useState<RemoteAccessState | null>(null)
   const [qr, setQr] = useState<OneTimeQr | null>(null)
@@ -98,7 +109,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
     setBusy(true)
     setError('')
     try {
-      const r = await api.rotate()
+      const r = await api.rotate({ fullAccess: true })
       if (!r.ok || !r.value) {
         setError(r.error?.message ?? '生成访问凭据失败')
         return
@@ -147,40 +158,32 @@ export function SettingsRemoteAccess(): React.JSX.Element {
     setError('复制失败，请手动选择文本复制')
   }, [])
 
-  // 浏览器态没有这一节（它本身就是「配置桌面端怎么被手机访问」，在手机上没有意义）
+  // 浏览器态没有这一节（它本身就是「配置桌面端怎么被手机访问」，在手机上没有意义）。
+  // 降级卡与「没有桥」都在 hooks 之后判定，hook 数量因此恒定（见函数开头的说明）。
+  const blocked = desktopOnlyGate('remote')
+  if (blocked !== null) return blocked
   if (!api) return <React.Fragment />
 
   const running = state?.running ?? false
-  const url = running && state ? `http://${state.address}:${String(state.port)}/` : ''
   const firewallPort = state?.running && state.port > 0 ? state.port : (state?.configuredPort ?? 5032)
 
   return (
     <section className={css.card} data-settings-section="remote">
       <header className={css.hd}>
-        <h3 className={css.title}>远程访问（手机）</h3>
-        <label className={css.switch} data-on={running || undefined}>
-          <input
-            type="checkbox"
-            checked={state?.enabled ?? false}
-            disabled={busy}
-            onChange={(e) => { void toggle(e.target.checked) }}
-          />
-          <span className={css.track} aria-hidden="true"><span className={css.knob} /></span>
-          <span className={css.switchText}>{(state?.enabled ?? false) ? '已打开' : '已关闭'}</span>
-        </label>
+        <h3 className={css.title}>局域网访问（手机）</h3>
       </header>
 
       <p className={css.lede}>
         打开后本机在局域网里起一个 HTTP 服务，<b>你自己的手机</b>可以用浏览器访问同一套界面。
-        <b>默认关闭</b>；打开后同一 Wi-Fi 下的设备<b>持配对码</b>即可读到微信数据，
-        且只开放一份方法白名单（模型 API Key、许可证、诊断、备份还原、配置写入一律不开放）。
+        <b>默认关闭</b>；扫码会话与桌面端<b>同权限</b>（包括设置、模型 API Key、许可证、
+        诊断、备份还原与原生文件能力）。只在自己的可信局域网里打开，别把二维码给别人。
       </p>
 
       <div className={css.status} data-on={running || undefined}>
         <span className={css.dot} aria-hidden="true" />
         {running
           ? `正在监听 http://${state?.address ?? ''}:${String(state?.port ?? '')}`
-          : (state?.enabled ? '已打开但没有监听（缺长期令牌，或端口不可用）' : '未监听（任何设备都连不进来）')}
+          : '未监听（点下方「生成扫码连接」开始）'}
       </div>
 
       {error !== '' && <p className={css.err} role="alert">{error}</p>}
@@ -197,7 +200,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
               : <div className={css.err}>二维码生成失败：{qr.error}</div>}
           </div>
           <div className={css.qrSide}>
-            <p className={css.qrHint}>用手机相机扫这个码即可打开（配对码已附在链接里，不用手输）。</p>
+            <p className={css.qrHint}>用手机相机扫这个码即可打开；此码等同桌面端本人，勿给他人。</p>
             <code className={css.url}>{qr.url}</code>
             <div className={css.btnRow}>
               <button type="button" className={css.btn} onClick={() => { void copy(qr.url, 'link') }}>
@@ -208,18 +211,14 @@ export function SettingsRemoteAccess(): React.JSX.Element {
               </button>
             </div>
             <p className={css.once}>
-              配对码与二维码<b>只在这次生成后显示</b>；关掉这一节就只剩掩码。
-              想再看一次请点「轮换令牌」（旧令牌、旧配对码与已连上的手机会立即失效）。
+              二维码与配对码<b>只在这次生成后显示</b>；关闭监听或重新生成后立即失效。
+              需要再扫时点「重新生成二维码」（旧配对码与已连上的手机会一起失效）。
             </p>
           </div>
         </div>
       )}
 
       <dl className={css.facts}>
-        <div className={css.fact}>
-          <dt>长期令牌</dt>
-          <dd>{state?.hasToken ? (state.tokenMasked || '（已生成）') : '尚未生成'}</dd>
-        </div>
         <div className={css.fact}>
           <dt>局域网地址</dt>
           <dd>
@@ -228,17 +227,6 @@ export function SettingsRemoteAccess(): React.JSX.Element {
               : '未检测到（电脑没连网？）'}
           </dd>
         </div>
-        {running && url !== '' && (
-          <div className={css.fact}>
-            <dt>当前地址</dt>
-            <dd>
-              <code className={css.addr}>{url}</code>
-              <button type="button" className={css.btnMini} onClick={() => { void copy(url, 'cur') }}>
-                {copied === 'cur' ? '✓' : '复制'}
-              </button>
-            </dd>
-          </div>
-        )}
         <div className={css.fact}>
           <dt>在连设备</dt>
           <dd>{String(state?.sessions ?? 0)} 个会话</dd>
@@ -247,15 +235,20 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
       <div className={css.btnRow}>
         <button type="button" className={css.btn} disabled={busy} onClick={() => { void rotate() }}>
-          {busy ? '处理中…' : (state?.hasToken ? '轮换令牌' : '启用并生成访问凭据')}
+          {busy ? '处理中…' : (qr ? '重新生成二维码' : '生成扫码连接')}
         </button>
+        {running && (
+          <button type="button" className={css.btnGhost} disabled={busy} onClick={() => { void toggle(false) }}>
+            关闭监听
+          </button>
+        )}
         <button type="button" className={css.btnGhost} disabled={busy} onClick={() => { void refresh() }}>
           刷新状态
         </button>
       </div>
 
-      <div className={css.warn}>
-        <p className={css.warnT}>连不上？按这个顺序查</p>
+      <details className={css.warn}>
+        <summary className={css.warnT}>连不上？按这个顺序查</summary>
         <ol className={css.warnList}>
           <li>手机与电脑在<b>同一个 Wi-Fi</b>（手机用流量、或连了访客网络都不行）；</li>
           <li>Windows 防火墙：首次监听时会弹「是否允许访问」，<b>当时点了「取消」就连不上</b>。
@@ -270,7 +263,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
           能嗅探到配对码与你查阅的内容。<b>只在你信任的局域网里打开，用完就关。</b>
           逐条口径见 <code className={css.code}>docs/PRIVACY.md</code> 第四节 H。
         </p>
-      </div>
+      </details>
     </section>
   )
 }

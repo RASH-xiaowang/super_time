@@ -22,6 +22,7 @@ import { ImageViewer } from './chats-media.tsx'
 import { ChatView, IconPin, buildMsgMenu, isEnterpriseChat } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
+import cssnewmsg from './chats-new-msg.module.css'
 import csscards from './chats-cards.module.css'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import cssshell from './chats-shell.module.css'
@@ -37,11 +38,11 @@ import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
-import { RainWindow } from './rain-window.tsx'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import type { ViewerImage } from './chats-media.tsx'
 import { usePagedList } from './hooks.tsx'
+import { focusListRow } from './list-keyboard.ts'
 import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
@@ -110,6 +111,8 @@ export interface ChatsViewProps {
       groupInfoOpen: boolean
       hasMore: boolean
       indexBuilding: boolean
+      /** 点「N 条新消息」浮标：跳回最新并恢复自动跟随。 */
+      jumpToLatest: () => void
       loadMore: () => Promise<void>
       loading: boolean
       memberLimit: number
@@ -128,6 +131,8 @@ export interface ChatsViewProps {
       msgSearchLoading: boolean
       msgSearched: boolean
       msgVirtualizer: Virtualizer<HTMLDivElement, Element>
+      /** 用户正在翻历史时收到、还没看的新消息条数（0 = 不显示浮标）。 */
+      newMsgCount: number
       normalList: readonly WechatSession[]
       onSearchInput: (q: string) => void
       openCalendar: () => Promise<void>
@@ -177,9 +182,42 @@ export interface ChatsViewProps {
   }
 }
 
+/** 「已加载最近 N 个会话」提示条（触到 `usePagedList` 的 `maxItems` 上界时显示）。 */
+function CapNote({ loaded, total }: { loaded: number; total: number }): React.JSX.Element {
+  return <div className={cssshell.capNote} role="status">已加载最近 {loaded} 个会话（共 {total} 个）。要找更早的请用搜索。</div>
+}
+
+/**
+ * 消息区外壳：滚动容器 + 「N 条新消息」浮标（2026-10-18）。
+ * 浮标只在用户翻历史且轮询追加了新消息时出现；点击跳回最新，不抢正常阅读的滚动。
+ */
+function MsgScrollArea({ scrollRef, newMsgCount, onJump, children }: {
+  scrollRef: React.MutableRefObject<HTMLDivElement | null>
+  newMsgCount: number
+  onJump: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div className={cssnewmsg.msgWrap}>
+      <div className={cssrows.msgBody} ref={scrollRef}>{children}</div>
+      {newMsgCount > 0 && (
+        <button
+          type="button"
+          className={cssnewmsg.newMsgPill}
+          onClick={onJump}
+          title="跳到最新消息"
+          aria-label={`${newMsgCount} 条新消息，跳到最新`}
+        >
+          ↓ {newMsgCount} 条新消息
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
   const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText,
-  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
+  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
   // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
   // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
   const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
@@ -242,27 +280,27 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                 onChange={(v) => { changeView(v as ChatView) }}
                 ariaLabel="会话分类"
               />
+              <div className={csscards.stats}>
+                {batchMode ? (
+                  <>
+                    <button type="button" className={csscards.batchBtn} onClick={() => { setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
+                    <button type="button" className={csscards.batchBtn} onClick={() =>{  setSelected(new Set()) }}>清空</button>
+                    <span className={cssshell.statUnread}>已选 {selected.size}</span>
+                    <button type="button" className={csscards.batchBtn} onClick={() => { void exportBatch() }} disabled={batchExporting || selected.size === 0}>
+                      {batchExporting ? '导出中…' : '导出所选'}
+                    </button>
+                    {batchMsg && <span className={cssshell.batchMsg}>{batchMsg}</span>}
+                  </>
+                ) : (
+                  <>
+                    <span>好友 {stats.friends}</span>
+                    <span>群聊 {stats.groups}</span>
+                    {stats.unread > 0 && <span className={cssshell.statUnread}>未读 {stats.unread}</span>}
+                  </>
+                )}
+              </div>
             </div>
-            <div className={csscards.stats}>
-              {batchMode ? (
-                <>
-                  <button type="button" className={csscards.batchBtn} onClick={() => { setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
-                  <button type="button" className={csscards.batchBtn} onClick={() =>{  setSelected(new Set()) }}>清空</button>
-                  <span className={cssshell.statUnread}>已选 {selected.size}</span>
-                  <button type="button" className={csscards.batchBtn} onClick={() => { void exportBatch() }} disabled={batchExporting || selected.size === 0}>
-                    {batchExporting ? '导出中…' : '导出所选'}
-                  </button>
-                  {batchMsg && <span className={cssshell.batchMsg}>{batchMsg}</span>}
-                </>
-              ) : (
-                <>
-                  <span>好友 {stats.friends}</span>
-                  <span>群聊 {stats.groups}</span>
-                  {stats.unread > 0 && <span className={cssshell.statUnread}>未读 {stats.unread}</span>}
-                </>
-              )}
-            </div>
-            <div ref={sessionListRef} className={cssshell.list}>
+            <div ref={sessionListRef} className={cssshell.list} onKeyDown={(event) => { focusListRow(event, sessionListRef.current, '[data-session-row]') }}>
               {loading && <ListSkeleton rows={10} />}
               {error && <div className={kitCss.error} role="alert">{error}</div>}
               {!loading && !error && filtered.length === 0 && <EmptyMaybeSyncing text={view === 'chats' ? '暂无会话' : '暂无' + (view === 'kefu' ? '客服会话' : '订阅会话')} />}
@@ -277,7 +315,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
               )}
               {!loading && !error && normalList.slice(0, sessCount).map(s => renderSession(s))}
               {!loading && !error && normalList.length > sessCount && <ListSentinel refFn={sessSentinel} />}
-              {!loading && !error && !sessionSearching && sessionsPager.hasMore && <ListSentinel refFn={sessionsLoadMoreRef} />}
+              {!loading && !error && !sessionSearching && (sessionsPager.capped ? <CapNote loaded={normalList.length} total={sessionsPager.total} /> : sessionsPager.hasMore && <ListSentinel refFn={sessionsLoadMoreRef} />)}
             </div>
           </>
         ) : (
@@ -287,8 +325,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                 <span>消息搜索索引尚未构建（当前为全表扫描）</span>
                 {indexBuilding ? (
                   // W3-11.5：秒级起步的构建不该只有一个禁用的「构建中…」——
-                  // 说清跑到哪个分片、已入库多少条，并且给一条退路（取消只在分片边界
-                  // 与分片内的让出点生效，旧索引原样保留，所以随时可以停）。
+                  // 说清跑到哪个分片、已入库多少条，并给一条退路。
                   <>
                     <span className={csscards.searchIndexProgress}>
                       正在构建{indexProgress && indexProgress.total > 0
@@ -326,14 +363,9 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
 
       {/* right: message stream */}
       <div className={cssrows.messages}>
-        <div className={cssshell.starWrap} data-hidden={curSession !== null || undefined}>
-          <RainWindow className={cssshell.starfield} label="" active={curSession === null} />
-        </div>
         {curSession === null && (
           <div className={csscards.msgEmptyState}>
-            <div className={cssshell.msgEmptyIcon}>💬</div>
             <div className={csscards.msgEmptyTitle}>从左侧选择一个会话</div>
-            <div className={cssshell.msgEmptyText}>点击会话即可查看聊天记录与文件，数据仅在本机只读预览。</div>
             {filtered.length > 0 && (
               <button type="button" className={csscards.msgEmptyAction} onClick={() => { const first = filtered[0]; if (first !== undefined) void openSession(first) }}>
                 查看最近会话
@@ -349,7 +381,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                   {curSession.displayName || curSession.username}
                   {isEnterpriseChat(curSession.username) && <span className={csscards.entBadge} title="企业微信">企业微信</span>}
                 </div>
-                <div className={csscards.msgHeaderUser}>{curSession.username}{messages.length > 0 ? ` · 共 ${messages.length} 条` : ''}</div>
+                <div className={csscards.msgHeaderUser}>{curSession.username}</div>
                 {(exportMsg || notice) && <div className={csscards.msgHeaderExport} role={notice && !exportMsg ? 'status' : undefined} title={exportMsg ?? undefined}>{exportMsg ?? notice}</div>}
               </div>
               <ChatsHeadActions
@@ -393,7 +425,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                 )}
               </div>
             )}
-            <div className={cssrows.msgBody} ref={msgScrollRef}>
+            <MsgScrollArea scrollRef={msgScrollRef} newMsgCount={newMsgCount} onJump={jumpToLatest}>
               {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
               {!messagesMatchSession && <ListSkeleton rows={8} />}
               {messagesMatchSession && hasMore && (
@@ -430,7 +462,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
               )}
               {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
               <div ref={msgEndRef} />
-            </div>
+            </MsgScrollArea>
           </>
         )}
       </div>

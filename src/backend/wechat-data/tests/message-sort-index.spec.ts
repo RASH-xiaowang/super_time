@@ -99,13 +99,13 @@ describe('W2-3.5 排序覆盖索引', () => {
     expect(r.skipped.length).toBeGreaterThan(0)
   })
 
-  it('读路径自动补：queryMessages 第一次就把索引建上', () => {
+  it('读路径不再往快照里补索引（2026-10-18：索引页会被增量补丁覆盖坏）', () => {
     const decrypted = makeShard({ rows: 60 })
     const file = join(decrypted, 'message', 'message_0.db')
     expect(missingSortIndexTables(file)).toEqual([TABLE])
     const snap = queryMessages(decrypted, TALKER, 10)
     expect(snap.messages.length).toBe(10)
-    expect(missingSortIndexTables(file), 'getMessages 走过一遍就该把索引补上').toEqual([])
+    expect(missingSortIndexTables(file), 'queryMessages 不许再改快照（同步会把它写坏）').toEqual([TABLE])
   })
 
   it('补索引不改变分页结果（同样 100 条、同样的顺序）', () => {

@@ -374,6 +374,23 @@ describe('列表 · 作用域与分页', () => {
     expect(DEFAULT_FILE_PAGE).toBeGreaterThan(0)
   })
 
+  /**
+   * `opts` 可能是 **null**，不只是 undefined（2026-10-16 真机实测）。
+   *
+   * 前端 `apiGetKbFiles(kbId)` 不传第二参时，参数经 IPC / HTTP 的 **JSON 序列化**后
+   * `undefined` 会变成 `null`，而 TS 的默认参数（`opts = {}`）**只对 undefined 生效**。
+   * 症状：知识库「文件」页整页报 `Cannot read properties of null (reading 'limit')`。
+   *
+   * 这条判据直接传 `null`（用 `as never` 绕过类型，因为类型上它不该是 null ——
+   * 但**运行时**它就是会来），钉住「后端必须容忍」。
+   */
+  it('opts 传 null 也不抛错（JSON 序列化会把 undefined 变成 null）', () => {
+    register('一.txt', '一')
+    expect(() => listKbFiles(decrypted, 1, null as never)).not.toThrow()
+    expect(listKbFiles(decrypted, 1, null as never).items.length).toBe(1)
+    expect(() => listKbFileChunks(decrypted, 1, 1, null as never)).not.toThrow()
+  })
+
   it('库读不到时给 readError，而不是把空列表伪装成「一个文件都没有」', () => {
     const brokenRoot = mkdtempSync(join(tmpdir(), 'kb-files-broken-'))
     const brokenDir = join(brokenRoot, 'decrypted')

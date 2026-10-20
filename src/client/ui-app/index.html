@@ -1,8 +1,11 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="theme-light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- viewport-fit=cover：让 iPhone 刘海/手势区通过 env(safe-area-inset-*) 生效
+       （mobile-viewport.css / mobile-browser.css 已按此留白；桌面 Electron 无影响）。
+       Wave 3 手机浏览器实测建议（working/team/lan-mobile-report.md §8），2026-10-18 由 Lead 补上。 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <!-- 空 icon 声明：浏览器（只有浏览器，含手机）会默认去要 `/favicon.ico`，而 ui-dist 里没有这个文件
        ⇒ 每次进应用都留一条 404 在控制台里。桌面端从 file:// 加载，本来就不发这个请求，所以这条
        对 Electron 是惰性的。写 `data:,` 而不是删掉请求：这是标准做法，且不需要新增任何文件产物。 -->
@@ -11,7 +14,7 @@
        由 query/remote-image.ts / query/map-geo.ts 取回 data URL 或 JSON；渲染层不直接 fetch 任意 https。
        `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file:" />
+    content="default-src 'self'; img-src 'self' data: blob: file: wechat-media:; media-src 'self' data: blob: wechat-media:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file:" />
   <title>Super Time</title>
 </head>
 <body>
@@ -28,11 +31,27 @@
       <span class="tb-title">Super Time</span>
     </div>
     <div class="tb-controls">
+      <!-- 状态区（2026-10-17 从主面板左下角迁来）：模型余额 + 数据就绪。
+           它们描述的是**整个应用**的状态（模型能不能用、数据读不读得到），
+           与窗口控制同属「全局动作」，放右上角比压在侧栏底部更符合直觉。
+           内容由 ui-entry.tsx 挂一个独立 React root 渲染（余额要轮询、状态要订阅）。 -->
+      <div id="tb-status"></div>
+      <!-- 主题切换（2026-10-17 从主面板左下角迁来）：与窗口控制同属「全局动作」，
+           放右上角更符合直觉。图标由 ui-entry.tsx 按当前主题切换（两种都在 DOM 里）。 -->
+      <button id="tb-theme" class="tb-btn tb-theme" title="切换主题" aria-label="切换主题">
+        <svg class="tb-ico-sun" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6" />
+        </svg>
+        <svg class="tb-ico-moon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1Z" />
+        </svg>
+      </button>
       <button id="tb-min" class="tb-btn" title="最小化" aria-label="最小化">
         <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2" /></svg>
       </button>
-      <!-- 全屏：两种图标都在 DOM 里，由 data-on 切换（进入全屏后换成「退出」图标） -->
-      <button id="tb-full" class="tb-btn" title="全屏" aria-label="切换全屏">
+      <!-- 全屏 = 铺满当前显示器工作区（任务栏保持可见）；两种图标都在 DOM 里，由 data-on 切换 -->
+      <button id="tb-full" class="tb-btn" title="全屏（保留任务栏）" aria-label="切换全屏">
         <svg class="tb-ico-enter" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
           <path d="M1.5 4.5V1.5h3M7.5 1.5h3v3M10.5 7.5v3h-3M4.5 10.5h-3v-3" />
         </svg>
@@ -46,7 +65,9 @@
     </div>
   </div>
   <div id="root">
-    <div style="display:flex;align-items:center;justify-content:center;height:100%;background:#050a18;color:#00f0ff;font-family:sans-serif">
+    <!-- 首帧占位（React 挂载后即被替换）：微信灰底 + 系统字体，避免一闪而过的青蓝屏。
+         这里只能写内联样式 —— 此刻主题 CSS 还没加载（`titlebar.css` 等由 ui-entry 引入）。 -->
+    <div style="display:flex;align-items:center;justify-content:center;height:100%;background:#ededed;color:#7f7f7f;font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px">
       正在加载 Super Time 界面…
     </div>
   </div>

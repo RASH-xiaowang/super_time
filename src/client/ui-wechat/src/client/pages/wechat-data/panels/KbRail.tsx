@@ -277,7 +277,6 @@ export function KbRail(): React.JSX.Element {
         onClick={() => { setModelOpen(true) }}
         title="本库用哪个语言 / 嵌入 / 重排序模型" {...desktopActionProps()}
       >
-        <span className={css.modelIcon} aria-hidden="true">🧠</span>
         <span className={css.modelText}>
           {(active?.modelOverrides ?? 0) > 0 ? `模型 · ${active?.modelOverrides} 项自定义` : '模型 · 继承全局'}
         </span>

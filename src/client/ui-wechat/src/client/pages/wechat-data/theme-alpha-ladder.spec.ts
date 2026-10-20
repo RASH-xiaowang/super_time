@@ -2,7 +2,7 @@
  * R1 令牌层守卫：alpha 阶梯 + 中性色阶第四档 + 品牌身份色。
  *
  * 背景 A。R1 加了一批令牌，
- * 目的是把散落的裸色（`rgba(0, 240, 255, 0.1)` 裸写 22+ 处、`#94a3b8`、
+ * 目的是把散落的裸色（`rgba(7, 193, 96, 0.1)` 裸写 22+ 处、`#8c8c8c`、
  * `#64748b` 等）收敛到有名字的档位上，供 R2 的前置门改造使用。
  *
  * 本文件**不重复** `theme.spec.ts` 的双向登记守卫（那条已经保证「新增颜色令牌
@@ -72,7 +72,7 @@ describe('R1/R2 令牌层：alpha 阶梯', () => {
   it('哨兵：两套主题都读到了（否则下面几条会恒绿）', () => {
     expect(dark.length).toBeGreaterThan(3000)
     expect(light.length).toBeGreaterThan(1000)
-    expect(darkValue('--nm-cyan')).toBe('#00f0ff')
+    expect(darkValue('--nm-cyan')).toBe('#07c160')
   })
 
   it('阶梯完整（十七档一个不缺）', () => {
@@ -80,17 +80,17 @@ describe('R1/R2 令牌层：alpha 阶梯', () => {
     expect(missing, '缺档 ⇒ R2 找不到落点，只能回退写裸色：' + missing.join(', ')).toEqual([])
   })
 
-  it('每个档的深色值就是 rgba(0,240,255,α)，与档位名严格对应', () => {
+  it('每个档的深色值就是微信绿 rgba(7,193,96,α)，与档位名严格对应', () => {
     for (const [name, alpha] of LADDER) {
       const v = darkValue(name)
       expect(v, `${name} 未定义`).not.toBeNull()
-      expect(v, `${name} 的值与档位不符`).toBe(`rgba(0, 240, 255, ${alpha.toFixed(2)})`)
+      expect(v, `${name} 的值与档位不符`).toBe(`rgba(7, 193, 96, ${alpha.toFixed(2)})`)
     }
   })
 
   it('阶梯严格单调递增（档位名的大小顺序 = 不透明度顺序）', () => {
     const alphas = LADDER.map(([n]) => {
-      const m = /rgba\(0, 240, 255, ([\d.]+)\)/.exec(darkValue(n) ?? '')
+      const m = /rgba\(7, 193, 96, ([\d.]+)\)/.exec(darkValue(n) ?? '')
       return m ? Number(m[1]) : NaN
     })
     for (let i = 1; i < alphas.length; i++) {
@@ -98,11 +98,11 @@ describe('R1/R2 令牌层：alpha 阶梯', () => {
     }
   })
 
-  it('浅色主题对每一档都有覆盖，且色相压暗为 rgba(8,145,178,·)', () => {
+  it('浅色主题对每一档都有覆盖，且色相压暗为 rgba(14,122,60,·)', () => {
     for (const [name] of LADDER) {
       const v = lightValue(name)
       expect(v, `浅色缺 ${name} 覆盖 ⇒ 浅色下会用深色值，过亮`).not.toBeNull()
-      expect(v, `${name} 浅色值色相不对`).toMatch(/^rgba\(8, 145, 178, [\d.]+\)$/)
+      expect(v, `${name} 浅色值色相不对`).toMatch(/^rgba\(14, 122, 60, [\d.]+\)$/)
     }
   })
 })
@@ -111,12 +111,12 @@ describe('R1 令牌层：中性色阶第四档 + 品牌身份色', () => {
   it('--nm-text-4 深浅两套都在，且是「比 text-3 更淡/更弱」的第四档', () => {
     const d = darkValue('--nm-text-4')
     const l = lightValue('--nm-text-4')
-    expect(d).toBe('#4a5575')
-    expect(l).toBe('#94a3b8')
+    expect(d).toBe('#5e5e5e')
+    expect(l).toBe('#8c8c8c')
     /**
      * 2026-09-28（R3）反转了这条断言。
      *
-     * 原断言是 `darkValue('--nm-text-3')` **包含** `#4a5575` —— 即「text-3 与 text-4 同值，
+     * 原断言是 `darkValue('--nm-text-3')` **包含** `#5e5e5e` —— 即「text-3 与 text-4 同值，
      * 同属最暗一档」。R3 把 text-3 对齐到 dsw 的 `label-tertiary`（`#64748b`）后，
      * 两档分开了，原断言不再成立。
      *
@@ -144,8 +144,8 @@ describe('R1 令牌层：中性色阶第四档 + 品牌身份色', () => {
   })
 
   it('--nm-brand 深浅两套都在，浅色压暗（沿用 light-theme 的保色相口径）', () => {
-    expect(darkValue('--nm-brand')).toBe('#00f0ff')
-    expect(lightValue('--nm-brand')).toBe('#0369a1')
+    expect(darkValue('--nm-brand')).toBe('#07c160')
+    expect(lightValue('--nm-brand')).toBe('#0e7a3c')
   })
 })
 
@@ -164,13 +164,13 @@ describe('R2 令牌层：purple alpha 阶梯 + 面 / 罩 / 中性 hover', () => 
     for (const [name, alpha] of PURPLE) {
       const v = darkValue(name)
       expect(v, `${name} 未定义（缺档 ⇒ 引导页只能回退写裸色）`).not.toBeNull()
-      expect(v, `${name} 的值与档位不符`).toBe(`rgba(168, 85, 247, ${alpha.toFixed(2)})`)
+      expect(v, `${name} 的值与档位不符`).toBe(`rgba(125, 144, 169, ${alpha.toFixed(2)})`)
     }
   })
 
   it('purple 阶梯严格单调递增', () => {
     const alphas = PURPLE.map(([n]) => {
-      const m = /rgba\(168, 85, 247, ([\d.]+)\)/.exec(darkValue(n) ?? '')
+      const m = /rgba\(125, 144, 169, ([\d.]+)\)/.exec(darkValue(n) ?? '')
       return m ? Number(m[1]) : NaN
     })
     for (let i = 1; i < alphas.length; i++) {
@@ -178,20 +178,20 @@ describe('R2 令牌层：purple alpha 阶梯 + 面 / 罩 / 中性 hover', () => 
     }
   })
 
-  it('purple 每一档在浅色下都有覆盖，且色相压暗为 rgba(124,58,237,·)', () => {
+  it('purple 每一档在浅色下都有覆盖，且色相压暗为 rgba(87,107,149,·)', () => {
     for (const [name] of PURPLE) {
       const v = lightValue(name)
       expect(v, `浅色缺 ${name} 覆盖`).not.toBeNull()
-      expect(v, `${name} 浅色值色相不对`).toMatch(/^rgba\(124, 58, 237, [\d.]+\)$/)
+      expect(v, `${name} 浅色值色相不对`).toMatch(/^rgba\(87, 107, 149, [\d.]+\)$/)
     }
   })
 
   /** 面 / 罩 / 中性 hover：三档都是「深浅各自不同语义」的令牌，必须两套都在。 */
   const SURFACES: ReadonlyArray<readonly [string, string, string]> = [
     // [令牌名, 深色值, 浅色值]
-    ['--nm-panel-solid', 'rgba(13, 21, 40, 0.72)', 'rgba(255, 255, 255, 0.85)'],
-    ['--nm-veil-55', 'rgba(5, 10, 24, 0.55)', 'rgba(255, 255, 255, 0.80)'],
-    ['--nm-hover-neutral', 'rgba(127, 127, 127, 0.16)', 'rgba(15, 23, 42, 0.05)'],
+    ['--nm-panel-solid', 'rgba(23, 23, 23, 0.92)', 'rgba(255, 255, 255, 0.94)'],
+    ['--nm-veil-55', 'rgba(17, 17, 17, 0.85)', 'rgba(247, 247, 247, 0.88)'],
+    ['--nm-hover-neutral', 'rgba(255, 255, 255, 0.08)', 'rgba(0, 0, 0, 0.05)'],
   ]
 
   it.each(SURFACES)('%s 深浅两套都在且取值正确', (name, darkExpect, lightExpect) => {
@@ -201,9 +201,9 @@ describe('R2 令牌层：purple alpha 阶梯 + 面 / 罩 / 中性 hover', () => 
 
   /** 第二批：罩 / 天空 / 琥珀。 */
   const EXTRA: ReadonlyArray<readonly [string, string, string]> = [
-    ['--nm-scrim-50', 'rgba(5, 10, 24, 0.50)', 'rgba(15, 23, 42, 0.40)'],
-    ['--nm-sky', '#38bdf8', '#0284c7'],
-    ['--nm-amber-45', 'rgba(245, 158, 11, 0.45)', 'rgba(180, 83, 9, 0.40)'],
+    ['--nm-scrim-50', 'rgba(0, 0, 0, 0.55)', 'rgba(0, 0, 0, 0.40)'],
+    ['--nm-sky', '#7d90a9', '#576b95'],
+    ['--nm-amber-45', 'rgba(250, 157, 59, 0.45)', 'rgba(250, 157, 59, 0.40)'],
   ]
 
   it.each(EXTRA)('%s 深浅两套都在且取值正确', (name, darkExpect, lightExpect) => {
@@ -216,7 +216,7 @@ describe('R2 令牌层：purple alpha 阶梯 + 面 / 罩 / 中性 hover', () => 
     // 若有人把浅色值抄成深色值，上面 it.each 会红；这里额外钉住「不许两边相同」。
     for (const [name, darkExpect, lightExpect] of SURFACES.slice(0, 2)) {
       expect(lightValue(name), `${name} 浅色值不应等于深色值`).not.toBe(darkExpect)
-      expect(lightValue(name), `${name} 浅色值应为白色系`).toContain('255, 255, 255')
+      expect(lightValue(name), `${name} 浅色值应为浅色面`).toMatch(/rgba\((2[4-5][0-9]), (2[4-5][0-9]), (2[4-5][0-9]),/)
       void lightExpect
     }
   })

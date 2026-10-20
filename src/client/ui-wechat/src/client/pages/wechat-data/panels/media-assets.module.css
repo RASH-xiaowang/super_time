@@ -1,19 +1,72 @@
-/* Media assets — NEON MATRIX 科技风。 */
+/* Media assets — 微信灰阶 + 绿色主操作（去渐变 / 发光 / 毛玻璃）。 */
 
-.dupList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.dupRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
-.dupCount { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); flex-shrink: 0; }
-.footnote { font-size: 11px; color: var(--nm-text-2); margin: 0; padding: 0 2px; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.actionBtn {
-  padding: 6px 14px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-  corner-shape: round;
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  min-width: 0;
 }
-.actionBtn:hover { border-color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+
+.dupList {
+  display: grid;
+  gap: 1px;
+  background: var(--nm-border);
+  border-radius: 0 0 var(--nm-r-lg) var(--nm-r-lg);
+  overflow: hidden;
+}
+
+.dupRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+  min-height: 40px;
+  padding: var(--nm-dense-pad-y) var(--nm-s-4);
+  background: var(--nm-bg-card);
+  font-size: var(--nm-fs-sm);
+}
+
+.dupRow:hover {
+  background: var(--nm-bg-hover);
+}
+
+.dupHash {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-2);
+}
+
+.dupCount {
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dupReclaim {
+  color: var(--nm-success-text);
+  font-family: var(--nm-font-mono, monospace);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.footnote {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  margin: 0;
+  padding: 0 2px;
+}
+
+@media (max-width: 560px) {
+  .dupRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--nm-s-1);
+  }
+
+  .dupHash {
+    max-width: 100%;
+  }
+}

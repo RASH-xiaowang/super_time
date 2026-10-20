@@ -4,19 +4,13 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
+  /* 微信桌面端：会话列不是卡片，是**纯白平面**（与会话区之间只留 `.messages` 左侧那条发丝线）。 */
+  border: none;
+  border-radius: 0;
   background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   overflow: hidden;
 }
-/* ── 会话左栏顶部这一块（搜索行 / 分类 chips / 统计行）的统一节奏 ──
-   实测前的问题：左右内边距 12/12/**14**（统计行 14，文字比上面两行右移 2px）、
-   行间垂直间距 **14 / 19**（不一致）；且 .searchBox 的 min-width:220px 在 302px 宽的
-   左栏里挤不下两个按钮 —— 「批量」整颗被顶到行外（x 382..428，越出左栏 46px）。
-   现在：侧内边距一律 12px、行间一律 14px（= 下内边距 10 + 1px 分隔线 + chips 在
-   Segmented 里自带的 3px 内缩；两处都有这 3px，所以两段间距天然相等）。 */
+/* 会话左栏顶部（搜索行 / 分类 / 统计行）统一节奏：侧内边距 12px、行间 14px，避免按钮被顶出 304px 窄列。 */
 .search {
   padding: 12px 12px 10px;
   border-bottom: 1px solid var(--nm-border);
@@ -24,10 +18,7 @@
   align-items: center;
   gap: 6px;
 }
-/* 让搜索框随行宽收缩，而不是把同行的按钮顶出去。
-   选择器写成 `.search .searchField`（0,2,0）是为了**显式压过** kit 里
-   `.searchBox { min-width: 220px; flex: 0 1 320px }` —— 单类选择器同权重时只看
-   样式表顺序，那种赢法太脆。 */
+/* 搜索框随行宽收缩，显式压过 kit 的 .searchBox 最小宽度，避免同行的按钮被顶出窄列。 */
 .search .searchField {
   flex: 1 1 auto;
   min-width: 0;
@@ -35,15 +26,10 @@
 .stats {
   display: flex;
   gap: 12px;
-  /* 左右 12px 与上面两行同一套节奏。
-     上方 9px 是**光学补偿**：与它相邻的是分段控件（有边框的盒子），而这一行是
-     **没有底色的文字**，行盒上下各有约 3px leading —— 9 + 3 = 12，与
-     「分隔线 → 分段控件」那 12px 的观感一致。
-     下方 11px 之后是列表自己的内边距，不再与上面比。 */
-  padding: 8px 12px 11px;
+  /* 统计行左右内边距由容器 .typeFilter 给；上下留白与分段控件的光学节奏对齐（偶数刻度）。 */
+  padding: 8px 0 10px;
   font-size: 11px;
   color: var(--nm-text-2);
-  border-bottom: 1px solid var(--nm-border);
   align-items: center;
   font-variant-numeric: tabular-nums;
 }
@@ -102,14 +88,9 @@
 }
 .msgHeader {
   position: relative;
-  /* 微信官方的消息区头部就是**一块和消息流同一个底色**的平板，下面一条发丝线；
-     没有外边框、没有圆角、不糊毛玻璃。底色令牌跟着 .messages 走（见那里的 --wx-chat-bg）。 */
+  /* 消息区头部与消息流同一底色的一块平板，下缘一条发丝线；无边框、无圆角、无毛玻璃。 */
   background: var(--wx-chat-bg);
-  /* 必须高于 .msgBody（后者也是 z-index:1 且在 DOM 里更靠后）：
-     同值 + 后者靠后 = 消息流整块盖在头部之上，于是头部「更多」的下拉
-     只有第一项露出一点点，其余被消息区吃掉（用户截图）。
-     头部内的下拉自身 z-index 更高也没用 —— 它被关在 .msgHeader 的层叠上下文里，
-     能盖到多高由本行决定。模态/抽屉走 1000+，仍在头部之上，不受影响。 */
+  /* 必须高于 .msgBody（后者也是 z-index:1 且 DOM 更靠后），否则头部的「更多」下拉会被消息流吃掉。 */
   z-index: 20;
   padding: 10px 14px;
   border-bottom: 1px solid var(--nm-border);
@@ -131,7 +112,6 @@
 .msgHeaderUser {
   font-size: 11px;
   color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   margin-top: 2px;
   white-space: nowrap;
@@ -144,13 +124,15 @@
   right: 0;
   z-index: 40;
   min-width: 190px;
+  max-height: min(420px, calc(100vh - 120px));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   padding: 4px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: var(--nm-bg-card);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--nm-shadow-popup);
 }
 .msgHeaderMoreItem {
   display: flex;
@@ -171,7 +153,7 @@
 .msgHeaderMoreItem:hover { background: var(--nm-bg-hover); }
 .msgHeaderMoreItem:active { background: var(--nm-bg-active); }
 .msgHeaderMoreItem:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 浅色主题：微信官方精确值（CSS Modules 内用 :global 命中 theme-light） */
+/* 浅色主题：微信官方精确值（CSS Modules 内用 :global 命中 theme-light）。 */
 :global(.theme-light) .groupInfo {
   /* 浅色端的搜索框填充：微信是浅灰底 #f0f0f0（底色是纯白，描边式输入框在这里几乎不可见） */
   --wx-search-bg: #f0f0f0;
@@ -187,15 +169,9 @@
   text-overflow: ellipsis;
 }
 /*
- * 轮询状态（`✓ 时间 · N 条新消息`）：推到头部最右端。
- *
- * 头部是 `display:flex` + 默认 `justify-content:flex-start`，动作区收窄后剩余空间
- * 全留在右侧空白处，状态只贴跟在「更多」后面（不是用户以为的「最右边」）。
- * `margin-left:auto` 吃掉这段剩余空间即把它压到右缘；换行（窄列）时同样贴在末行右端。
- * `margin-left` 与上面的 .msgHeaderExport 同为单类选择器 —— 本规则写在后面所以胜出。
- */
-.msgHeaderPoll { margin-left: auto; }
-/* 类型统计条：从头部移出后的独立条（头部回到单行；窄列下整条收起，见上方 @container） */
+/* 轮询状态（✓ 时间 · N 条新消息）：跟在动作排后，不能吃 margin-left:auto —— 两个 auto 会平分剩余空间把动作排推到标题上（2026-10-16 真机实测）。 */
+.msgHeaderPoll { margin-left: 8px; }
+/* 类型统计条：从头部移出的独立条；窄列下整条收起（见上方 @container）。 */
 .msgTypeChips {
   display: flex;
   gap: 6px;
@@ -223,6 +199,17 @@
   padding: 6px 2px;
   border-bottom: 1px solid var(--nm-border);
 }
+/* 已编辑消息行内的「恢复原文」：文字链（低频动作，不做成按钮抢主色）。 */
+.editRowAction {
+  border: none;
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
 .loadMore {
   align-self: center;
   border: 1px solid var(--nm-border);
@@ -238,10 +225,9 @@
 .loadMore:hover {
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  color: var(--nm-text-1);
 }
-/* 文本内链接：微信官方用 #245FBD（深色端 #6F9BEA），悬停下划线加深，无发光描边。 */
+/* 文本内链接：微信官方蓝灰 #245FBD（深色端 #6F9BEA），悬停下划线加深。 */
 .msgTextLink {
   color: var(--wx-link);
   text-decoration: none;
@@ -269,42 +255,31 @@
 }
 .msgEmptyTitle {
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
 }
+/* 空态唯一主操作：微信绿实心，无渐变 / 发光 / 彩色描边。 */
 .msgEmptyAction {
   pointer-events: auto;
   margin-top: 6px;
   padding: 8px 16px;
   border-radius: var(--nm-dense-r);
-  border: 1px solid var(--nm-cyan);
-  background: var(--nm-cyan-10);
-  color: var(--nm-cyan);
+  border: 1px solid var(--nm-brand);
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
   font-size: 12px;
   cursor: pointer;
   transition: var(--nm-t-ui);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
-.msgEmptyAction:hover {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-text-1);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-}
+.msgEmptyAction:hover { background: color-mix(in srgb, var(--nm-brand) 88%, #000); }
 .chatlogDialog {
-  width: 420px;
+  width: 560px;
   max-width: 94vw;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
+  border-radius: var(--nm-r-xl, 12px);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  box-shadow: var(--nm-shadow-popup);
   display: flex;
   flex-direction: column;
   max-height: 70vh;
@@ -361,16 +336,14 @@
   color: var(--nm-cyan);
   border-color: var(--nm-cyan);
   font-weight: 600;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
 }
-/* ── 会话类型分段切换（聊天会话内 全部/公众号/服务号/客服） ─────── */
+/* 会话类型分段（全部 / 公众号 / 服务号 / 客服）：桌面档允许换行，手机档 nowrap 并成一行。 */
 .typeFilter {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  /* 上方 12px 是**可见的那条缝**：上一行底部的分隔线 → 分段控件自己的上边框。
-     之前这里写的是上下 0（把间距全交给相邻两行的内边距），结果分隔线**紧贴**
-     分段控件的上边框（实测间距 0px），看上去就是「按钮上方的间隙没弄好」。
-     下面不再留内边距：与统计行的间距由统计行自己的上内边距给。 */
+  /* 上方 12px 是分隔线与分段控件之间可见的那条缝；下方间距由统计行自己的上内边距给。 */
   padding: 12px 12px 0;
 }
 .searchIndexHint {
@@ -382,8 +355,7 @@
   color: var(--nm-text-2);
   border-bottom: 1px solid var(--nm-border);
 }
-/* W3-11.5：构建中的那行进度（「第 3/12 个分片 · 已入库 5.2 万条」）。
-   与上面那句提示同级但更弱一档 —— 它是**变化中**的读数，不是要用户去做的事。 */
+/* W3-11.5：索引构建进度：变化中的读数，比上方提示更弱一档。 */
 .searchIndexProgress {
   color: var(--nm-text-3);
   font-variant-numeric: tabular-nums;
@@ -405,34 +377,25 @@
 .calOverlay {
   position: fixed; inset: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: center;
-  /* 窗口比弹窗矮时（小屏、系统缩放、CI runner）覆盖层必须自己可滚：原先只居中 + 子元素
-     `overflow:hidden`，「导出/中止」那颗按钮被推到视口之外且无处可滚（真机实测点不到）。
-     子元素用 `margin:auto` 而不是 align-items 居中 —— 溢出时顶部才滚得到，kit 的 Dialog 同款。 */
+  /* 覆盖层自己可滚：窗口比弹窗矮时（小屏 / 缩放 / CI）按钮不会被推到视口外；子元素用 margin:auto 居中。 */
   overflow: auto; overscroll-behavior: contain; padding: 16px;
-  background: rgba(3, 6, 14, 0.55);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  /* 微信化：纯 40% 黑遮罩，无毛玻璃（PLAN §1.3 弹窗口径）。 */
+  background: rgba(0, 0, 0, 0.4);
 }
 .calOverlay > * { margin: auto; }
 .calDialog {
   width: 420px;
   max-width: 92vw;
-  border-radius: var(--nm-r-lg);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--nm-r-xl, 12px);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--nm-border);
   overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  box-shadow: var(--nm-shadow-popup);
 }
-.calTitle {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.calTitle { font-size: 14px; font-weight: 600; color: var(--nm-text-1); }
 .calClose {
   border: none;
   background: transparent;
@@ -445,7 +408,7 @@
   transition: var(--nm-t-ui);
 }
 .calClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.calBody { padding: 14px 16px; }
+.calBody { padding: 14px 16px; flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .calMonthTitle {
   font-size: 13px;
   font-weight: 600;
@@ -478,7 +441,7 @@
   padding: 0;
   transition: var(--nm-t-ui);
 }
-.calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
 .calDayCnt {
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-cyan);
@@ -489,15 +452,16 @@
 }
 /* ── 消息导出弹窗 ─────────────────────────────────────────────── */
 .exportDialog {
-  width: 480px;
+  width: 560px;
   max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
+  border-radius: var(--nm-r-xl, 12px);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  box-shadow: var(--nm-shadow-popup);
 }
 .exportInput {
   flex: 1;
@@ -531,21 +495,17 @@
   border-color: var(--nm-border-hover);
   color: var(--nm-cyan);
 }
+/* 导出主按钮：微信绿实心，无渐变、无发光。 */
 .exportBtnPrimary {
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-brand);
   border-color: transparent;
   color: var(--nm-on-accent);
   font-weight: 600;
-  box-shadow: 0 0 18px color-mix(in srgb, var(--nm-cyan) 28%, transparent);
 }
-.exportBtnPrimary:hover { box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+.exportBtnPrimary:hover:enabled { background: color-mix(in srgb, var(--nm-brand) 88%, #000); }
 .exportBtn:disabled,
-.exportBtnPrimary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
-/* ── 编辑消息副本对话框 ─────────────────────────────────────────
-   原先用 window.prompt 取新内容，而 Electron 渲染进程不支持 prompt，
-   右键菜单点了只会抛错（见 Chats.tsx doEdit 注释）。这里按导出弹窗同一套
-   按钮/输入框语言补一个应用内多行编辑器：正文 14px（与消息流同档）、
-   等宽断行交给 textarea 自己，失焦与聚焦用主题描边反馈。 */
+.exportBtnPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
+/* ── 编辑消息副本对话框 ── 应用内多行编辑器（Electron 不支持 window.prompt）；正文 14px，与消息流同档。 */
 .editHint {
   margin: 0 0 10px;
   font-size: 12px;
@@ -572,15 +532,7 @@
   border-color: var(--nm-cyan);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 22%, transparent);
 }
-.exportSectionTitle {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.exportSectionTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
 .exportCountBadge {
   font-size: 11px;
   color: var(--nm-success);
@@ -629,7 +581,6 @@
   inset: 2px;
   border-radius: 50%;
   background: var(--nm-cyan);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
   corner-shape: round;
 }
 .exportChipCheck {
@@ -670,7 +621,6 @@
   background: var(--nm-cyan);
   border-color: var(--nm-cyan);
   color: var(--nm-on-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
 }
 .exportDirBox {
   display: flex;
@@ -689,16 +639,13 @@
 }
 /* ── 群聊信息侧栏 ─────────────────────────────────────────────── */
 .groupInfo {
-  /* 本抽屉的字号阶梯（对齐微信聊天信息；消息流正文已是 14px，这里取同一档）。
-     原先一个 300px 抽屉里挤了 13/12/11/10.5 四种字号、且标题与正文同号（审计 P1-8）。 */
+  /* 本抽屉字号阶梯（对齐微信聊天信息）：标题 16 / 正文 14 / 元信息 12，与消息流正文同档。 */
   --wx-info-title: 16px;
   --wx-info-text: 14px;
   --wx-info-meta: 12px;
-  /* D1：成员/联系人网格头像尺寸（官方 ⚠️ 48px；消息流头像仍是 --wx-avatar 40px，两者语义不同）。 */
+  /* D1：成员 / 联系人网格头像 48px（与消息流 --wx-avatar 40px 语义不同）。 */
   --wx-info-avatar: 48px;
-  /* 搜索框：微信是**填充式灰底**、无描边。此前用 --nm-bg-input，
-     而它在深浅两端的值与抽屉底色完全相同（#0f172a / #ffffff）→ 只剩一根 1px 描边，
-     看起来不像输入框（审计 P1-2）。 */
+  /* 搜索框：微信是填充式灰底、无描边；深色端 #2e2e2e，浅色端见下方覆盖。 */
   --wx-search-bg: #2e2e2e;
   --wx-search-ph: var(--nm-text-2);
 
@@ -707,7 +654,7 @@
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--nm-border);
-  /* 底色不透明，backdrop-filter 不会产生任何可见效果，只是一层多余的合成（审计 P2-3） */
+  /* 底色不透明，不需要 backdrop-filter（那会多一层无可见效果的合成，审计 P2-3）。 */
   background: var(--nm-bg-card);
   overflow: hidden;
 }
@@ -715,7 +662,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* 上下 8px：配 32px 的关闭按钮命中区，总高仍是 48px（原先 12px + 23px 按钮） */
+  /* 上下 8px：配 32px 关闭按钮命中区，总高 48px。 */
   padding: 8px 14px;
   border-bottom: 1px solid var(--nm-border);
   color: var(--nm-text-1);
@@ -728,7 +675,7 @@
   background: transparent;
   color: var(--nm-text-2);
   cursor: pointer;
-  /* 命中区 ≥32×32（原先 15px 图标 + 4px 内边距 = 23×23，低于可点下限，审计 P1-7） */
+  /* 命中区 ≥32×32：padding 8 + 图标 15（原 23×23 低于可点下限，审计 P1-7）。 */
   padding: 8px;
   min-width: 32px;
   min-height: 32px;
@@ -750,7 +697,7 @@
 }
 .memberMore:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
 .memberMore:active { background: var(--nm-bg-active); }
-/* 成员搜索无结果（审计 P0-3） */
+/* 成员搜索无结果（审计 P0-3）。 */
 .memberEmpty {
   display: flex;
   flex-direction: column;
@@ -788,7 +735,7 @@
   word-break: break-word;
   white-space: pre-wrap;
 }
-/* 折叠态：3 行 + 显式「展开」入口。原先是静默 -webkit-line-clamp:3，没有入口（审计 P1-5） */
+/* 折叠态 3 行 + 显式「展开」入口（原静默 clamp 没有入口，审计 P1-5）。 */
 .groupInfoAnn[data-clamp='true'] {
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -816,10 +763,8 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35), 0 0 20px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  box-shadow: var(--nm-shadow-popup);
 }
 .memberProfileItem {
   width: 100%;
@@ -832,24 +777,21 @@
   border-top: 1px solid var(--nm-border);
   padding-top: 10px;
 }
-/* D2：长文本行改「标签一行、值占满下一行」（签名）。 */
+/* D2：长文本（签名）改「标签一行、值占满下一行」。 */
 .memberProfileStack {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
 }
 /* ══════════════════════════════════════════════════════════════════
-   消息右键菜单 —— 微信在消息上右键弹出的同款菜单。
-   覆盖层透明、只负责吃掉外部点击与滚动关闭；菜单本体是定宽卡片，
-   定位到光标处（坐标由 JS 夹到视口内）。
-   ══════════════════════════════════════════════════════════════════ */
+/* 消息右键菜单：覆盖层吃掉外部点击与滚动关闭，菜单定位到光标处。 */
 .msgCtxOverlay {
   position: fixed;
   inset: 0;
   z-index: 2147483000;
 }
 .msgCtxMenu {
-  /* 菜单是 portal 出去的，拿不到 .msgBody 上的令牌，故自带一套（深浅各一份） */
+  /* 菜单是 portal 出去的，拿不到 .msgBody 令牌，故自带一套（深浅各一份）。 */
   position: fixed;
   min-width: 156px;
   max-height: calc(100vh - 16px);
@@ -890,8 +832,8 @@
 .msgCtxItem:hover { background: var(--wx-ctx-hover); }
 .msgCtxItem:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* D0/D1（2026-10-13 微信对齐）：六区骨架的内容包与底部动作位。 */
-.groupZones { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+/* 群信息六区骨架的内容包与固定底部动作位（导出槽在滚动区外）。 */
+.groupZones { display: flex; flex-direction: column; }
 .memberCount {
   margin: 2px 0 6px;
   font-size: var(--wx-info-meta, 12px);
@@ -903,11 +845,6 @@
   margin-top: 2px;
   font-size: var(--wx-info-meta, 12px);
   color: var(--nm-text-3);
-}
-.groupExport {
-  margin-top: auto;
-  padding-top: var(--nm-s-3, 12px);
-  border-top: 1px solid var(--nm-border);
 }
 .groupExportBtn {
   width: 100%;
@@ -921,20 +858,22 @@
   transition: var(--nm-t-ui);
 }
 .groupExportBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+/* 底部动作位的主操作（新建任务）：微信绿实心；导出保持次按钮。 */
+.groupExportPrimary {
+  border-color: transparent;
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
+}
+.groupExportPrimary:hover { background: color-mix(in srgb, var(--nm-brand) 88%, #000); border-color: transparent; }
+.groupExportPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ── 手机档（≤560）：会话列表占满整栏，开会话后整块让位给消息流 ────────────────
-   `[data-has-session]` 用纯属性选择器的理由写在 chats-rows.module.css 末尾那段
-   （`.panel` 住在那一份里，在这份里写它会拿到另一个 hash ⇒ 选不中）。 */
+/* 手机档（≤560）：会话列表占满整栏，开会话后让位给消息流；跨份选择器只能用纯属性选择器（见 chats-rows 末尾说明）。 */
 @media (max-width: 560px) {
   .sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border: none; border-radius: 0; }
   [data-has-session] .sidebar { display: none; }
-  /* 头部让出返回按钮的位置（那枚按钮绝对定位在左上角，样式在 chats-shell）。 */
+  /* 头部让出返回按钮的位置（按钮绝对定位在左上角，样式在 chats-shell）。 */
   .msgHeader { padding: 8px 10px; min-height: 48px; }
-  /* 长按菜单转底部 sheet。`left` / `top` 是内联 style（桌面端「点哪儿出哪儿」），
-     手机上必须 !important 才压得住；而按坐标出菜单在触摸上还有一笔算不清的账：
-     面板按 34px/项估高度，手机档每项 44px（触摸目标下限）⇒ 估少了，
-     菜单会溢出屏幕底部、最后几项点不到。贴底 + dvh 上界之后这两个问题一起没了
-     （不认 dvh 的老内核会丢掉这一条，落回基础规则里的 100vh 版本）。 */
+  /* 长按菜单转底部 sheet：内联 left/top 要用 !important 压掉；贴底 + dvh 上界避免溢出。 */
   .msgCtxMenu {
     left: 8px !important;
     right: 8px;
@@ -945,6 +884,35 @@
     max-height: calc(100dvh - 16px);
     border-radius: var(--nm-r-lg);
   }
-  /* 触摸目标下限 44px（与底部标签栏同口径）；改成 flex 才能把文字垂直居中。 */
+  /* 触摸目标下限 44px（与底部标签栏同口径）。 */
   .msgCtxItem { display: flex; align-items: center; min-height: 44px; }
+
+  /* 筛选区紧凑化：段条 48 + 搜索 53 + 分类 50 + 统计 32 = 183px 吃掉内容区 25% 高度；
+     收内边距、控件 36px、统计与分类并成一行，合计约 110px。 */
+  .search { padding: 6px 10px; }
+  .typeFilter {
+    flex-wrap: nowrap;
+    padding: 6px 10px 0;
+    /* 分类 chips 多时横向滚动，而不是换行把筛选区顶高 */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .typeFilter::-webkit-scrollbar { height: 0; }
+  /* 分段控件自身 nowrap（基础档允许换行）；空间不足时让 chips 先缩，不挤掉右侧统计。 */
+  .typeFilter [class*='_seg_'] {
+    flex-wrap: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  /* 统计行贴右、不参与横向滚动；手机档只留「未读」这一个有 class 的纯文字 span。 */
+  .stats {
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 0;
+    gap: 8px;
+  }
+  .stats > span:not([class]) { display: none; }
+  /* 搜索行动作按钮 36px（全局规则会抬到 44px，min-height 必须一起写）。 */
+  .searchActionBtn { height: 36px; min-height: 36px; }
 }

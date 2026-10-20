@@ -1,470 +1,515 @@
 /* ============================================================
- * 隐私与数据边界（H14 首启同意屏）
+ * 隐私与数据边界（H14 首启同意屏）— 2026-10-19 微信化改版
  *
- * 设计取向：把它当成一份「数据流合约」来排版，而不是一屏宣传语。
- *   · 编号分节（01–04）+ 左栏标签/右栏说明，长句拆成可扫的行；
- *   · 全页只用三类颜色：中性石板（底色/正文）、青（信息与可控制项）、
- *     琥珀（**关不掉的出网点** —— 全页唯一的警示色，只给这一处用）；
- *   · 「圈起来」的落点：顶部一句话结论、每节的关键句、以及 2 条无开关的出网点。
+ * 版式：**单列单滚动**（内容列 max-width 760）+ 顶部 3 条 TL;DR + 可展开小节 +
+ * 容器底部的同意条（文档流里的 flex 子项，不是 sticky/fixed 浮层）。
  *
- * 颜色全部走 --nm-* 令牌，因此深浅两套主题都自动成立（浅色端在
- * light-theme.css 里把 cyan/amber 压暗，无需在本文件里再写覆盖）。
+ * 微信定调：灰底画布、白卡 + 1px 边框、4/6/8px 圆角；正文 13px；
+ * 主按钮微信绿、次按钮白底灰边；全页唯一的警示色是琥珀（「关不掉的出网点」）；
+ * 不做渐变、发光、毛玻璃与彩色底（颜色全部走 `--nm-*` 令牌）。
+ *
+ * ⚠️ `consent.spec.ts` 钉着两件事：`.p` 的正文 13px（与启动页同刻度）、
+ * 以及 `.consentBar` 不许带 position: sticky/fixed 或 `background:` 简写
+ * （那会让它变成一个压住正文的浮条）。改版保留这两条口径。
  * ============================================================ */
 
+/* ── 外壳：两条渲染路径共用，高度各拿各的确定值 ───────────
+ *   · `[data-embedded]`：父级 `.consentPage` 是 `height:100%` 的 flex 列 ⇒ `flex:1`；
+ *   · `[data-standalone]`：`#root` 是 `flex:1`、`position:relative` 的确定高度容器 ⇒ `height:100%`。
+ * 竖排：页头（仅独立模式）/ 单列滚动区 / 同意条。
+ * 背景交给外壳（启动页舞台 / 主窗口），本屏不画背景。
+ */
 .shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-sans);
+}
+
+.shell[data-embedded] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.shell[data-standalone] {
+  box-sizing: border-box;
   height: 100%;
+  min-height: 0;
+  padding: 16px 20px 12px;
+}
+
+/* ── 独立模式的页头（内嵌模式由 StageHead 提供，不渲染这一段） ── */
+.pageHead {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+  padding: 0 2px;
+}
+
+.pageHeadCopy {
+  min-width: 0;
+}
+
+.pageEyebrow {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--nm-text-3);
+}
+
+.pageTitle {
+  margin: 4px 0 6px;
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.pageLead {
+  max-width: 780px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--nm-text-2);
+}
+
+.pageVersion {
+  display: inline-block;
+  margin: 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--nm-text-2);
+}
+
+.pageCode {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--nm-text-2);
+}
+
+/* ── 单列滚动区：整页只有这一处滚动条 ─────────────────── */
+.scroll {
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   display: flex;
-  justify-content: center;
-  padding: 40px 24px 56px;
-  color: var(--nm-text-1, #e2e8f0);
-  font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
-  background:
-    radial-gradient(1100px 520px at 50% -12%, color-mix(in srgb, var(--nm-cyan) 7%, transparent), transparent 62%),
-    var(--nm-black, #050a18);
-}
-
-.doc {
-  width: 100%;
-  max-width: 1200px;
-  display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--nm-border-hover) transparent;
 }
 
-/* ── 左右两栏，小节按序流下 ───────────────────────────────
- * 左栏（一句话结论 / 01 / 02）讲「我们怎么处理」，右栏（03 / 04）讲「哪里会出网、你能改什么」。
- * 两栏各自满高、互不拉伸（align-items: start），页面总高由较高的右栏决定 —— 所以结论块
- * 放在左栏正好吃掉左栏的空档，不额外占高度。 */
-.grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-}
-/* 窗口不够宽时退回单列，读起来才不至于两栏都挤 */
-@media (max-width: 1100px) {
-  .grid { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* ── 页头 ───────────────────────────────────────────────── */
-.head { display: flex; flex-direction: column; gap: 8px; }
-.kicker {
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  color: var(--nm-cyan, #00f0ff);
-}
-.title {
-  margin: 0;
-  font-size: 27px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--nm-text-1, #e2e8f0);
-}
-.sub {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.85;
-  color: var(--nm-text-2, #94a3b8);
-}
-.code {
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 12px;
-  color: var(--nm-cyan, #00f0ff);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  border-radius: var(--nm-r-sm, 6px);
-  padding: 1px 6px;
-}
-
-/* ── 一句话结论：顶部被「圈起来」的头条 ─────────────────── */
+/* ── 一句话结论 = 顶部 3 条 TL;DR ─────────────────────── */
 .verdict {
-  position: relative;
-  padding: 16px 20px 16px 22px;
-  border-radius: var(--nm-r-lg, 14px);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
-  background: linear-gradient(
-    135deg,
-    var(--nm-cyan-10, rgba(0, 240, 255, 0.1)),
-    color-mix(in srgb, var(--nm-purple) 7%, transparent)
-  );
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
 }
-.verdict::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 3px;
-  border-radius: var(--nm-r-xs, 4px);
-  background: var(--nm-cyan, #00f0ff);
-}
+
 .verdictTag {
   display: block;
-  margin-bottom: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--nm-cyan, #00f0ff);
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--nm-cyan);
 }
+
 .verdictList {
   margin: 0;
-  padding: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.verdictList li {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--nm-text-1);
+}
+
+.verdictList b {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+/* ── 可展开小节（原生 details，无 JS） ────────────────── */
+.sec {
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.secTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  cursor: pointer;
   list-style: none;
+}
+
+.secTitle::-webkit-details-marker {
+  display: none;
+}
+
+/* 展开 / 收起是**可读的状态文字**，不是装饰性箭头 */
+.secTitle::after {
+  content: '展开';
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--nm-text-3);
+}
+
+.sec[open] > .secTitle::after {
+  content: '收起';
+}
+
+.secTitle:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: -2px;
+}
+
+.secBody {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 0 14px 12px;
 }
-.verdictList li {
-  position: relative;
-  padding-left: 15px;
-  font-size: 13.5px;
-  line-height: 1.75;
-  color: var(--nm-text-1, #e2e8f0);
-}
-.verdictList li::before {
-  content: '▸';
-  position: absolute;
-  left: 0;
-  color: var(--nm-cyan, #00f0ff);
-}
-.verdictList b { color: var(--nm-cyan, #00f0ff); font-weight: 700; }
 
-/* ── 编号分节 ───────────────────────────────────────────── */
-.sec {
-  padding: 16px 20px;
-  border-radius: var(--nm-r-lg, 14px);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  background: var(--nm-bg-card, #0f172a);
-  /* 出网点的行布局按**卡片自身宽度**适配（见文末 @container），
-     所以两栏布局下窄栏自动折行，窗口拉宽退回单列后又自动恢复三栏。 */
-  container-type: inline-size;
-}
-/* 去掉编号后这里只剩标题，不再需要 flex 对齐 */
-.secHd { margin-bottom: 10px; }
-.secTitle {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: var(--nm-text-1, #e2e8f0);
-}
+/* ── 正文与关键句 ─────────────────────────────────────── */
 .p {
   margin: 0;
-  font-size: 13.5px;
-  line-height: 1.8;
-  color: var(--nm-text-2, #94a3b8);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--nm-text-2);
 }
-.p + .p { margin-top: 8px; }
 
-/* 关键句：本节的「圈起来」落点 */
-.keyBox {
-  margin: 11px 0 0;
-  padding: 11px 14px;
-  border-radius: var(--nm-r-md, 10px);
-  font-size: 13.5px;
+.p b {
+  color: var(--nm-text-1);
   font-weight: 600;
-  line-height: 1.75;
-  color: var(--nm-text-1, #e2e8f0);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+
+/* 关键句：本节的「圈起来」落点 —— 浅灰实底 + 1px 边框，不用彩色底 */
+.keyBox {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.65;
+  color: var(--nm-text-1);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+}
+
+.keyBox b {
+  font-weight: 600;
 }
 
 /* 保证条款：逐条独立成格，便于数清「做了/没做」 */
-.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
-.pill {
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 4px 11px;
-  border-radius: 999px;
-  color: var(--nm-text-1, #e2e8f0);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-/* ── 出网点逐条：标签 / 说明 / 标记 三栏 ─────────────────── */
+.pill {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--nm-r-sm);
+  color: var(--nm-text-1);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+}
+
+/* ── 统计行（共 N 个出网点） ───────────────────────────── */
 .stat {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 10px;
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 11.5px;
-  /* 用 text-2 而不是 text-3：kit.module.css 的对比度审计实测 text-3(#64748b) 压在深色底上
-     只有 ~4.2:1，低于小字号正文所需的 4.5:1；text-2 深色 ~7.5、浅色 ~6.0。 */
-  color: var(--nm-text-2, #94a3b8);
-}
-.statChip {
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
-}
-.statChipWarn {
-  color: var(--nm-amber, #f59e0b);
-  border-color: color-mix(in srgb, var(--nm-amber) 40%, transparent);
-  background: color-mix(in srgb, var(--nm-amber) 12%, transparent);
+  font-size: 11px;
+  color: var(--nm-text-2);
 }
 
-.rows { display: flex; flex-direction: column; gap: 8px; margin-top: 11px; }
+.statChip {
+  padding: 2px 8px;
+  border-radius: var(--nm-r-sm);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+}
+
+.statChipWarn {
+  color: var(--nm-amber);
+  border: 1px solid var(--nm-amber-45);
+  border-radius: var(--nm-r-sm);
+  padding: 2px 8px;
+  background: var(--nm-bg-1);
+}
+
+/* ── 逐条行：标签 / 说明 / 标记 三栏 ───────────────────── */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .row {
   display: grid;
-  grid-template-columns: 170px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 128px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: start;
-  padding: 10px 12px;
-  border-radius: var(--nm-r-md, 10px);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
 }
+
+/* 「你的控制」行没有右侧标记列：两列，标签窄一点，说明拿到更多宽度。 */
+.rowSimple {
+  grid-template-columns: 112px minmax(0, 1fr);
+}
+
 .rowLabel {
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.55;
-  color: var(--nm-text-1, #e2e8f0);
-}
-.rowText {
   font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--nm-text-2, #94a3b8);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--nm-text-1);
 }
+
+.rowText {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--nm-text-2);
+}
+
 .rowHost {
   display: block;
-  margin-top: 3px;
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 11.5px;
+  margin-top: 2px;
+  font-size: 11px;
   line-height: 1.5;
-  /* 同 .stat：小字号不用 text-3（实测对比度不足 4.5:1） */
-  color: var(--nm-text-2, #94a3b8);
+  color: var(--nm-text-2);
   word-break: break-word;
 }
+
 .rowNote {
   display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--nm-amber, #f59e0b);
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--nm-amber);
 }
 
 .chip {
-  font-size: 11.5px;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--nm-r-sm);
   white-space: nowrap;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  color: var(--nm-text-2, #94a3b8);
+  border: 1px solid var(--nm-border);
+  color: var(--nm-text-2);
 }
-.chipToggle {
-  color: var(--nm-cyan, #00f0ff);
-  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
-}
-.chipManual { color: var(--nm-text-2, #94a3b8); }
 
-/* 无内置开关的行 —— 全页唯一的琥珀色实心框，即「圈起来」的重点 */
+/* 有真开关的一条（入站）：绿色标记 */
+.chipToggle {
+  color: var(--nm-cyan);
+  border-color: var(--nm-cyan-35);
+}
+
+.chipManual {
+  color: var(--nm-text-2);
+}
+
+/* 无内置开关的行 —— 全页唯一的警示色（琥珀），提示「关不掉」 */
 .rowNone {
-  position: relative;
-  border-color: color-mix(in srgb, var(--nm-amber) 50%, transparent);
-  background: color-mix(in srgb, var(--nm-amber) 9%, transparent);
+  border-color: var(--nm-amber-45);
+  background: var(--nm-bg-1);
 }
-.rowNone::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 3px;
-  border-radius: var(--nm-r-xs, 4px);
-  background: var(--nm-amber, #f59e0b);
+
+.rowNone .rowLabel {
+  color: var(--nm-amber);
 }
-.rowNone .rowLabel { color: var(--nm-amber, #f59e0b); }
+
 .chipNone {
-  color: var(--nm-amber, #f59e0b);
-  border-color: color-mix(in srgb, var(--nm-amber) 45%, transparent);
-  background: color-mix(in srgb, var(--nm-amber) 15%, transparent);
+  color: var(--nm-amber);
+  border-color: var(--nm-amber-45);
 }
 
 /* 诚实说明：别让人以为关掉开关就等于完全离线 */
 .caveat {
-  margin: 12px 0 0;
-  padding: 11px 14px;
-  border-radius: var(--nm-r-md, 10px);
-  font-size: 12.5px;
-  line-height: 1.75;
-  color: var(--nm-text-2, #94a3b8);
-  border: 1px dashed color-mix(in srgb, var(--nm-amber) 45%, transparent);
-  background: color-mix(in srgb, var(--nm-amber) 6%, transparent);
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--nm-text-2);
+  border: 1px dashed var(--nm-amber-45);
 }
-.caveat b { color: var(--nm-amber, #f59e0b); font-weight: 700; }
 
-/* ── 同意与动作 ─────────────────────────────────────────── */
-.consent {
+.caveat b {
+  color: var(--nm-amber);
+  font-weight: 600;
+}
+
+/* ── 同意区：文档流末尾的固定一格（不是 sticky / fixed 浮层） ──
+ *
+ * `.consentBar` 只允许 flex 布局的「钉住」：它是 `.shell` 的最后一个 flex 子项，
+ * 滚动区自己滚，它不压正文。`consent.spec.ts` 明确禁止 position / z-index /
+ * `background:` 简写（那三条都是「浮条」的形状）。
+ */
+.consentBar {
+  flex: 0 0 auto;
   display: flex;
+  align-items: stretch;
   gap: 12px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  border-radius: var(--nm-r-lg, 14px);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--nm-border);
+}
+
+.consent {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
   cursor: pointer;
-  border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
-  background: var(--nm-bg-card, #0f172a);
+  border: 1px solid var(--nm-border);
+  background-color: var(--nm-bg-1);
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.consent[data-on] {
-  border-color: color-mix(in srgb, var(--nm-cyan) 55%, transparent);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+
+.consent:hover {
+  border-color: var(--nm-border-hover);
 }
+
+.consent:focus-within {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+
+.consent[data-on] {
+  border-color: var(--nm-cyan-35);
+  background-color: var(--nm-cyan-10);
+}
+
 .consentBox {
   flex: 0 0 auto;
-  margin-top: 3px;
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
   cursor: pointer;
-  accent-color: var(--nm-cyan, #00f0ff);
+  accent-color: var(--nm-cyan);
 }
+
 .consentText {
-  font-size: 13px;
-  line-height: 1.78;
-  color: var(--nm-text-1, #e2e8f0);
-}
-
-/* 同意区**在文档流内**（2026-09-30 用户要求：「这块不要弄成悬浮式的」）。
- *
- * 它的上一版是 `position: sticky; bottom: 0` 的吸底条（2026-09-29 重设计 A 第一步，理由是
- * 「界面很长，勾选与两个按钮必须始终可见」）。悬浮条压在正文上有两个副作用：滚到中段时
- * 它盖住最后一行内容、且**看起来像一层面板浮在页面之上**而不是文档的一部分。现在它跟着
- * 文档流排在两栏之后作为最后一段出现：`.shell` 底部本来就有 56px 内边距，滚到底即可
- * 勾选并点按钮；`OnboardingShell` 底栏也会提示「请阅读后勾选，再点「同意并继续」」。
- *
- * 保留一条 `border-top` 作分隔（它现在是排版元素，不再是遮挡层的边界）。 */
-.consentBar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--nm-border, rgba(255, 255, 255, 0.12));
-}
-/* ── 出网点「表格化」+ 小结提权（2026-09-29 重设计 A 第二步）────────────────────
- *
- * 目标：让用户一眼看清「什么会出去 / 去哪 / 能不能关」。
- *
- * 为什么用 `[data-switch]` 作为作用域：本界面左右两栏都用 `.row`（左栏的「你的控制」也是），
- * 直接改 `.row` 会连带左栏；而出网行都带 `data-switch` 属性 ⇒ 用它精确勾住这一节，
- * **零 JSX 改动**（也就不影响复用同一界面的 `privacy-consent-ssr.tsx`）。
- */
-/* ⚠️ 这里原先我加过一条 `.rows > [data-switch] { grid-template-columns: minmax(88px,132px) … }`，
-   想"表格化"出网点。**2026-09-29 撤掉**：`.row` 本来就是 `170px minmax(0,1fr) auto`，
-   而 `.sec` 文末还有 `@container` 按**卡片自身宽度**自适应（窄栏自动折行、拉宽恢复三栏）。
-   我那条固定窄列覆盖了它 ⇒ 右栏标题被断成"远程图片 / 视频 / 公众 号封面"。
-   结论：**既有布局已经是对的，不该覆盖**——需要调宽度时改 `.row` 的列定义或那段 @container。 */
-
-/* 小结提权：这是整个界面里决策价值最高的一行，之前是四枚小字 chip，太容易被略过 */
-.stat {
-  margin-bottom: 10px;
-}
-
-/* （2026-09-29 曾在此加过 `<details>` 折叠节的 ▸/▾ 指示与 `::marker` 清除规则。
-   用户要求**移除折叠、内容全部展开**后，这些规则已无用，一并删除，避免留下"看着像折叠、
-   其实没有折叠"的误导性样式。内容现在由 `<section>` 常显。） */
-
-.statChip,
-.statChipWarn {
   font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--nm-text-2);
+}
+
+.consentText b {
+  color: var(--nm-text-1);
   font-weight: 600;
-  padding: 4px 10px;
 }
 
-/* ═══ 全新布局（2026-09-29）：决策优先的单列流 ═══════════════════════════════════
- *
- * 为什么要重排：原两栏下，折叠后的左栏只到约 640px、右栏到约 1100px ⇒ 左下角一大片空白；
- * 而"你要决策的内容"（出网点清单）与"我们怎么做"的说明并列，视觉权重相当，抓不到重点。
- *
- * 做法（**零 JSX 改动** ⇒ 不影响复用同一界面的 `privacy-consent-ssr.tsx`）：
- *   · `.col { display: contents }` 消掉两栏，所有卡片成为 `.grid` 的直接子项；
- *   · `.grid` 改成单列；
- *   · 用 `order` 重排成：① 一句话结论 → ② 出网点清单 → ③ 三节折叠说明。
- *
- * 收益：出网点拿到**整行宽度**（`.row` 原本的 170px 标签列终于有地方用，不再断行），
- * 且不再存在两栏高度不平衡 ⇒ 左下空白消失。
- */
-.grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
+.actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
-.col {
-  display: contents;
-}
-
-.verdict {
-  order: 1;
-}
-
-/* 「会出网的地方」那一节：小结行（.stat）是它独有的特征 */
-.sec:has(.stat) {
-  order: 2;
-}
-
-/* 三节说明（现已全部常显）排到决策内容之后。
-   注意：这里必须用 `.sec`（不是 previous 的 `details.sec`）—— 展开后它们是 `<section>`，
-   若沿用 `details.sec` 选择器，这三节会因"没有 order"而排到 `.verdict`（order:1）**前面**。 */
-.sec {
-  order: 3;
-}
-
-.actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
-
+/* 按钮与启动页底栏同刻度（13px / 6px 圆角 / 32–36px 高） */
 .btn {
-  padding: 10px 20px;
-  border-radius: var(--nm-r-md, 10px);
+  min-height: 34px;
+  padding: 8px 16px;
+  border-radius: var(--nm-r-md);
   font-family: inherit;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.btnGhost {
-  border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
-  background: transparent;
-  color: var(--nm-text-2, #94a3b8);
-}
-.btnGhost:hover {
-  color: var(--nm-text-1, #e2e8f0);
-  background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
-}
-.btnPrimary {
-  font-weight: 700;
-  color: var(--nm-cyan, #00f0ff);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 50%, transparent);
-  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
-}
-.btnPrimary:hover:not(:disabled) {
-  background: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
-}
-.btnPrimary:disabled {
-  cursor: not-allowed;
-  color: var(--nm-text-3, #64748b);
-  border-color: var(--nm-border, rgba(0, 240, 255, 0.1));
-  background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
+
+.btn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
 }
 
-/* 窄卡片：出网点折成上下两块 —— 「标签 + 标记」一行，说明与主机名另起。
- * 用容器查询而不是视口查询：两栏布局下卡片只有 ~580px，而视口有 1400px，
- * 按视口判断会让窄栏里的行误判成「够宽」而被挤扁。 */
-@container (max-width: 660px) {
-  .row { grid-template-columns: minmax(0, 1fr) auto; }
-  .rowLabel { grid-column: 1; }
-  .rowText { grid-column: 1 / -1; }
-  .chip { grid-row: 1; grid-column: 2; }
+.btnGhost {
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+}
+
+.btnGhost:hover {
+  background: var(--nm-bg-hover);
+}
+
+.btnPrimary {
+  min-width: 120px;
+  font-weight: 600;
+  color: var(--nm-on-accent);
+  border: none;
+  background: var(--nm-cyan);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.btnPrimary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: none;
+}
+
+/* ── 窄屏：三栏行折成上下（单列滚动不变） ─────────────── */
+@media (max-width: 900px) {
+  .shell[data-standalone] {
+    padding: 14px 14px 10px;
+  }
+}
+
+@media (max-width: 720px) {
+  .row,
+  .rowSimple {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .chip {
+    justify-self: start;
+  }
+
+  .consentBar {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .actions {
+    justify-content: flex-end;
+  }
+
+  .btnPrimary {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }

@@ -81,14 +81,14 @@ describe('clawbot 库迁移：老库缺列时补齐、既有行不丢', () => {
     insertClawbotMessage(dir, { ts: 7, direction: 'in', content: '同 id 重发', msgId: 66 })
     insertClawbotMessage(dir, {
       ts: 8, direction: 'in', msgType: 'image', content: '[图片]',
-      media: { kind: 'image', ref: 'enc-mig', key: 'k-mig', name: null, size: 9 },
+      media: { kind: 'image', ref: 'enc-mig', key: 'k-mig', name: null, size: 9, duration: null },
     })
     const msgs = listClawbotMessages(dir)
     expect(msgs.total).toBe(3)
     expect(msgs.items.map(m => m.content).sort()).toEqual(['[图片]', '新消息', '老消息'].sort())
     expect(msgs.items.find(m => m.content === '新消息')?.msgType).toBe('text')
     const img = msgs.items.find(m => m.content === '[图片]')
-    expect(img?.media).toEqual({ kind: 'image', name: null, size: 9 })
+    expect(img?.media).toEqual({ kind: 'image', name: null, size: 9, duration: null })
     expect(readClawbotMessageInternal(dir, img?.id ?? 0)?.media?.ref).toBe('enc-mig')
   })
 

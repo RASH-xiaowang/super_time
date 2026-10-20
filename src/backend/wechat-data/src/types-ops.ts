@@ -163,6 +163,13 @@ export interface ClawbotBinding {
   wxid: string | null
   /** 微信昵称。 */
   userName: string | null
+  /**
+   * 用户给这个实例起的**别名**（「工作号」「客服号」；2026-10-16）。
+   *
+   * 与 `userName` 分开：昵称是绑定回写的（重新绑定会变），别名是用户偏好（活过重新绑定）。
+   * `null` / 空串都表示「没起别名」⇒ 界面回落到昵称，再回落到「实例 N」。
+   */
+  label: string | null
   /** 头像（本地路径或 URL）。 */
   avatar: string | null
   boundAt: number | null
@@ -209,6 +216,24 @@ export interface ClawbotInstanceConfig {
   kbEnabled: boolean
   /** 知识库作用域（`kbEnabled` 为真且非空才生效；无从「所有库」这种模式）。 */
   kbId: number | null
+  /**
+   * 该实例的**系统提示词**（人设 / 语气 / 回复风格；2026-10-17）。
+   *
+   * 空串 = 用内置的拟人化默认提示词（`DEFAULT_CLAWBOT_SYSTEM_PROMPT`）——
+   * 不是「没有提示词」：没有系统提示词时模型会写成报告腔（「综上所述」「根据数据分析」），
+   * 而这是微信聊天，用户要的是「像个人在回话」。
+   *
+   * 与 `autoReply` 分开存：提示词是**用户偏好**，关掉自动回复不该把它清掉
+   * （下次打开还是自己写的那套）。
+   */
+  systemPrompt: string
+  /**
+   * 长回复是否**分段发送**（2026-10-17）。
+   *
+   * 微信里一条几千字的消息读起来很累，且容易被折叠。开启后按段落切成多条依次发出
+   * （每条不超过 {@link CLAWBOT_REPLY_CHUNK_CHARS} 字），像人连发几条那样。
+   */
+  splitReply: boolean
 }
 
 /**
@@ -222,13 +247,39 @@ export interface ClawbotInstance {
   status: ClawbotBindingStatus
   wxid: string | null
   userName: string | null
+  /**
+   * 用户给这个实例起的**别名**（「工作号」「客服号」；2026-10-16）。
+   *
+   * 与 `userName` 分开：昵称是绑定回写的（重新绑定会变），别名是用户偏好（活过重新绑定）。
+   * `null` / 空串都表示「没起别名」⇒ 界面回落到昵称，再回落到「实例 N」。
+   */
+  label: string | null
   avatar: string | null
+  /**
+   * iLink 机器人 id（`ilink_bot_id`；2026-10-17 补全实例信息）。
+   *
+   * **公开标识，不是凭证** —— 它标识「这个实例挂在哪个 bot 上」，多实例下用来区分
+   * 「哪个号是哪个 bot」。真正的密钥是 `bot_token`，那个**永远不进渲染层**。
+   * 未绑定 / 老库无此列时为 null。
+   */
+  botId: string | null
   boundAt: number | null
   unboundAt: number | null
   config: ClawbotInstanceConfig
   /** 该实例的接入会话条数（今日 / 累计）。 */
   todayMessages: number
   totalMessages: number
+  /** 今日自动回复消耗的模型 token（供应商未返回 usage 时不累计，显示 0）。 */
+  todayTokens: number
+  /** 该实例累计 token 消耗。 */
+  totalTokens: number
+  /**
+   * 最后一条消息的**接收时间**（0 = 还没有消息；2026-10-17 补全实例信息）。
+   *
+   * 用 `MAX(ts)` 而不是「最后一行的 id」：`ts` 是接收时间，`id` 是插入顺序 ——
+   * 补扫历史时两者会不同序，而实例卡要回答的是「这个号最近什么时候有动静」。
+   */
+  lastMessageAt: number
   /** iLink 接收通道状态（该实例自己的长轮询）。 */
   channel: ClawbotChannelInfo
 }
@@ -306,7 +357,7 @@ export interface ClawbotBindQr {
   state: 'wait' | 'scaned' | 'confirmed' | 'expired'
 }
 
-/** 附件的展示元数据（公开：渲染层只知道「有附件 / 类型 / 名字 / 体积」；取数引用与密钥不出渲染层）。 */
+/** 附件的展示元数据（公开：渲染层只知道「有附件 / 类型 / 名字 / 体积 / 时长」；取数引用与密钥不出渲染层）。 */
 export interface ClawbotMediaInfo {
   /** image | voice | video | file（与 msgType 同源）。 */
   kind: string
@@ -314,6 +365,8 @@ export interface ClawbotMediaInfo {
   name: string | null
   /** 体积提示（字节；未知为 null）。 */
   size: number | null
+  /** 时长（毫秒；**只有语音有**，协议 `voice_item.playtime`；其余为 null）。 */
+  duration: number | null
 }
 
 /** 接入会话消息（无 instance_id —— 单绑定）。 */

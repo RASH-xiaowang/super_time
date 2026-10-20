@@ -24,6 +24,7 @@ import {
   apiCheckClawbotEnv,
   apiCreateClawbotBindQr,
   apiDeleteClawbotInstance,
+  apiGetClawbotDefaultPrompt,
   apiGetKbs,
   apiListClawbotInstances,
   apiSetClawbotInstanceConfig,
@@ -56,14 +57,77 @@ const FAQ: ReadonlyArray<{ q: string, a: string }> = [
 /** 知识库下拉的选项（只取展示需要的两列）。 */
 interface KbOption { id: number, name: string }
 
+/**
+ * 卡内**分区**（2026-10-17 重设计）：一张卡里的一个语义块，用**标题 + 上分隔线**划分，
+ * 而不是各自一张带边框的卡片。
+ *
+ * 为什么要有它：设置视图原先三张独立卡（绑定 / 自动回复 / 常见问题），每张都有自己的
+ * 边框、圆角与标题栏 —— 视觉上像三个互不相干的板块，而它们其实是**同一个实例的设置**。
+ * 合并成一张卡 + 内部分区后，读起来是「一个实例」而不是「三件事」。
+ *
+ * `collapsible` 用于低频内容（环境自检 / 常见问题）：默认收起，需要时才展开 ——
+ * 它们占的纵向空间不小，但日常操作根本用不到。
+ * @param props.title - 分区标题。
+ * @param props.hint - 标题右侧的补充说明（弱化色）。
+ * @param props.collapsible - 是否可折叠（默认展开）。
+ * @param props.defaultOpen - 可折叠时的初始展开态。
+ * @param props.children - 分区内容。
+ */
+function Section({ title, hint, collapsible = false, defaultOpen = true, children }: {
+  title: string
+  hint?: string
+  collapsible?: boolean
+  defaultOpen?: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  if (!collapsible) {
+    return (
+      <div className={css.section}>
+        <div className={css.sectionHd}>
+          <span className={css.sectionTitle}>{title}</span>
+          {hint !== undefined && <span className={css.sectionHint}>{hint}</span>}
+        </div>
+        <div className={css.sectionBd}>{children}</div>
+      </div>
+    )
+  }
+  return (
+    <details className={css.section} open={defaultOpen}>
+      <summary className={css.sectionHd}>
+        <span className={css.sectionTitle}>{title}</span>
+        {hint !== undefined && <span className={css.sectionHint}>{hint}</span>}
+      </summary>
+      <div className={css.sectionBd}>{children}</div>
+    </details>
+  )
+}
+
 function stamp(ms: number | null): string {
   if (!ms) return '—'
   return new Date(ms).toLocaleString('zh-CN', { hour12: false })
 }
 
 /**
- * 行为卡（P4）：会替你给微信联系人发消息的开关，视觉重量与说明要配得上它的后果。
+ * 归一提示词草稿（2026-10-17）：与默认值**逐字相同**时存空串。
+ *
+ * 为什么：输入框预填了默认提示词，用户可能只是点进去又点出来（没改）。
+ * 若把整份默认值存进库，以后**改了默认值**这个实例会停在旧的那份 ——
+ * 而用户以为自己「用的就是默认」。存空串保持「用默认」语义。
+ * @param draft - 输入框内容。
+ * @param defaultPrompt - 内置默认提示词。
+ * @returns 要落库的值（空串 = 用默认）。
+ */
+function normalizePrompt(draft: string, defaultPrompt: string): string {
+  return draft.trim() === defaultPrompt.trim() ? '' : draft
+}
+
+/**
+ * 行为分区（P4）：会替你给微信联系人发消息的开关，视觉重量与说明要配得上它的后果。
  * switch 形态（非裸 checkbox）+ 两行说明（走哪条管道 / 在哪审计）；读失败不冒充配置。
+ *
+ * 2026-10-17 重设计：从**独立卡片**改成**同一张卡里的分区**（`Section`）——
+ * 设置视图原先三张卡（绑定 / 自动回复 / 常见问题）各自带边框与标题栏，
+ * 视觉上像三个互不相干的板块；合并成一张卡 + 内部分区后，读起来是「一个实例的设置」。
  * 模块级组件：让 `ClawbotSettingsView` 留在 function-size-ratchet 的 250 行线内。
  * @param props.cfg - 当前实例的行为配置（null = 读不到 / 读失败）。
  * @param props.kbs - 知识库下拉选项。
@@ -71,15 +135,32 @@ function stamp(ms: number | null): string {
  * @param props.readError - 实例列表读失败原因（非空时明说，开关保持原状）。
  * @param props.onPatch - 部分更新配置（只覆盖传进来的字段）。
  */
-function AutoReplyCard({ cfg, kbs, cfgBusy, readError, onPatch }: {
+function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch }: {
   cfg: ClawbotInstanceConfig | null
   kbs: readonly KbOption[]
   cfgBusy: boolean
   readError: string
-  onPatch: (p: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }) => Promise<void>
+  /** 内置的拟人化默认提示词（2026-10-17）：输入框为空时**预填**它，让用户看得到默认值。 */
+  defaultPrompt: string
+  onPatch: (p: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }) => Promise<void>
 }): React.JSX.Element {
+  /*
+   * 提示词草稿（2026-10-17）：受控输入 + **失焦/点保存才提交**。
+   * 为什么不做「每次按键都保存」：提示词是长文本，逐键写库既浪费又会让
+   * 「保存中」状态一直闪；而用户改到一半切走时，失焦提交能兜住。
+   *
+   * ⚠️ **空配置预填默认提示词**（2026-10-17 用户要求「将默认提示词在输入框中显示出来」）：
+   * 用户此前面对一个空框，看不到默认值长什么样、也不知道从哪改起。
+   * 预填后可直接在默认值上改；保存时若内容与默认值**逐字相同**则存空串
+   * （保持「用默认」语义 —— 否则以后改了默认值，这个实例会停在旧的那份）。
+   */
+  const saved = cfg?.systemPrompt ?? ''
+  const [draft, setDraft] = useState(saved !== '' ? saved : defaultPrompt)
+  // 配置从外部变化（切实例 / 重新读）时同步草稿 —— 否则会显示上一个实例的提示词。
+  useEffect(() => { setDraft(saved !== '' ? saved : defaultPrompt) }, [saved, defaultPrompt, cfg?.slot])
+  const dirty = draft !== (saved !== '' ? saved : defaultPrompt)
   return (
-    <Card title="自动回复（会替你发消息，请确认）">
+    <Section title="自动回复" hint="会替你发消息，请确认">
       {readError !== '' && (
         <div className={css.instReadError} role="alert">
           实例配置读取失败：{readError}
@@ -130,8 +211,162 @@ function AutoReplyCard({ cfg, kbs, cfgBusy, readError, onPatch }: {
       {cfg?.autoReply === true && cfg?.kbEnabled === true && cfg?.kbId === null && (
         <span className={css.instWarn}>开了知识库增强但没选库 —— 不会检索任何内容</span>
       )}
-    </Card>
+
+      {/* 系统提示词（2026-10-17）：人设 / 语气 / 回复风格。留空 = 用内置拟人化默认值。 */}
+      <div className={css.promptBlock}>
+        <div className={css.promptHd}>
+          <span className={css.autoTitle}>系统提示词</span>
+          <span className={css.promptHint}>
+            决定它怎么说话（人设 / 语气 / 风格）。留空则用内置的拟人化默认值 —— 不是「没有提示词」。
+          </span>
+        </div>
+        <textarea
+          className={css.promptInput}
+          value={draft}
+          rows={16}
+          disabled={cfgBusy || cfg === null} {...desktopActionProps()}
+          placeholder="（默认提示词加载中…）"
+          aria-label="实例的系统提示词"
+          onChange={(e) => { setDraft(e.target.value) }}
+          onBlur={() => { if (dirty) void onPatch({ systemPrompt: normalizePrompt(draft, defaultPrompt) }) }}
+        />
+        <div className={css.promptFoot}>
+          <span className={css.muted}>
+            {saved === '' ? '当前：内置默认提示词（可直接在上面改）' : `当前：自定义（${String(saved.length)} 字）`}
+            {dirty ? ' · 有未保存的修改' : ''}
+          </span>
+          <Button
+            size="sm" variant="outline"
+            disabled={cfgBusy || cfg === null || !dirty}
+            onClick={() => { void onPatch({ systemPrompt: normalizePrompt(draft, defaultPrompt) }) }}
+            {...desktopActionProps()}
+          >保存提示词</Button>
+          <Button
+            size="sm" variant="outline"
+            disabled={cfgBusy || cfg === null || saved === ''}
+            onClick={() => { setDraft(defaultPrompt); void onPatch({ systemPrompt: '' }) }}
+            {...desktopActionProps()}
+          >恢复默认</Button>
+        </div>
+      </div>
+
+      {/* 分段发送（2026-10-17）：微信里一条几千字读起来很累，且容易被折叠。 */}
+      <label className={css.autoRow}>
+        <input
+          type="checkbox"
+          role="switch"
+          checked={cfg?.splitReply ?? true}
+          disabled={cfgBusy || cfg === null} {...desktopActionProps()}
+          onChange={(e) => { void onPatch({ splitReply: e.target.checked }) }}
+        />
+        <span className={css.autoText}>
+          <span className={css.autoTitle}>长回复分段发送</span>
+          <span className={css.autoDesc}>
+            回复较长时按语义切成几条依次发出（每条不超过 300 字），像人连发几条那样；
+            关闭则整条一次发出。
+          </span>
+        </span>
+      </label>
+    </Section>
   )
+}
+
+/**
+ * 当前实例分区（2026-10-17 布局重设计）：头像 + 状态 + 绑定动作 + 键值对。
+ *
+ * 为什么抽成模块级组件：布局重设计后主视图要同时管两栏与四个分区，
+ * 留在 `ClawbotSettingsView` 里会撞 function-size-ratchet 的 250 行线。
+ *
+ * 键值对在**宽栏**里是「键左值右」的两列网格，在**窄栏**（两栏布局的左栏）里
+ * 退成单列 —— 左栏只有 ~340px，两列会把值挤成一条缝。
+ * @param props.snapshot - 绑定快照（通道状态 / 今日与累计消息）。
+ * @param props.inst - 当前实例行（botId / lastMessageAt）。
+ * @param props.slot - 当前实例编号。
+ * @param props.busy - 绑定/解绑/移除进行中。
+ * @param props.onBind - 发起绑定（取码）。
+ * @param props.onUnbind - 解绑。
+ */
+function InstanceSection({ snapshot, inst, slot, busy, onBind, onUnbind }: {
+  snapshot: ClawbotBindingSnapshot | null
+  inst: ClawbotInstance | null
+  slot: number | null
+  busy: boolean
+  onBind: () => void
+  onUnbind: () => void
+}): React.JSX.Element {
+  const binding = snapshot?.binding ?? null
+  const status = binding?.status ?? 'unbound'
+  return (
+    <Section title={`当前实例 · 实例 ${slot ?? '—'}`} hint="扫码即可绑定，无需 App ID / App Secret">
+      <div className={css.bindRow}>
+        <div className={css.bindAvatar} aria-hidden="true">{'🦞'}</div>
+        <div className={css.bindGrow}>
+          <div className={css.bindStatus}>
+            <StateDot state={statusDot(status)} />
+            <span className={statusClass(status)}>{CLAWBOT_STATUS_LABEL[status]}</span>
+            {binding?.wxid && <span className={css.mono} title={binding.wxid}>{binding.wxid}</span>}
+          </div>
+        </div>
+        {(status === 'unbound' || status === 'unbound-by-user') && (
+          <Button size="sm" variant="primary" disabled={busy} onClick={onBind} {...desktopActionProps()}>
+            {status === 'unbound' ? '绑定微信' : '重新绑定'}
+          </Button>
+        )}
+        {status === 'binding' && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={onBind} {...desktopActionProps()}>重新生成</Button>
+        )}
+        {status === 'bound' && (
+          <Button size="sm" variant="danger" disabled={busy} onClick={onUnbind} {...desktopActionProps()}>解绑</Button>
+        )}
+      </div>
+
+      <div className={css.kvGrid}>
+        {status === 'bound' && (
+          <>
+            <div className={css.kvItem}><span className={css.kvKey}>绑定时间</span><span className={css.kvVal}>{stamp(binding?.boundAt ?? null)}</span></div>
+            <div className={css.kvItem}>
+              <span className={css.kvKey}>接收通道</span>
+              <span className={css.kvVal} title={snapshot?.channel.error ?? undefined}>
+                {(snapshot?.channel.running ?? false) ? '运行中（长轮询）' : (snapshot?.channel.error ?? '') !== '' ? '异常（见下方自检）' : '未运行'}
+              </span>
+            </div>
+            <div className={css.kvItem}><span className={css.kvKey}>今日消息</span><span className={css.kvVal}>{snapshot?.todayMessages ?? 0}</span></div>
+            <div className={css.kvItem}><span className={css.kvKey}>累计消息</span><span className={css.kvVal}>{snapshot?.totalMessages ?? 0}</span></div>
+            {/* 2026-10-17 补全实例信息：机器人 id（公开标识，非凭证）与最后活跃时间。 */}
+            {inst?.botId != null && (
+              <div className={css.kvItem}><span className={css.kvKey}>机器人 id</span><span className={css.kvVal} title={inst.botId}>{inst.botId}</span></div>
+            )}
+            <div className={css.kvItem}>
+              <span className={css.kvKey}>最后消息</span>
+              <span className={css.kvVal}>{(inst?.lastMessageAt ?? 0) > 0 ? stamp(inst?.lastMessageAt ?? null) : '还没有消息'}</span>
+            </div>
+          </>
+        )}
+        {status === 'unbound-by-user' && (
+          <>
+            <div className={css.kvItem}><span className={css.kvKey}>上次绑定</span><span className={css.kvVal}>{binding?.userName ?? binding?.wxid ?? '—'}</span></div>
+            <div className={css.kvItem}><span className={css.kvKey}>解绑时间</span><span className={css.kvVal}>{stamp(binding?.unboundAt ?? null)}</span></div>
+          </>
+        )}
+      </div>
+    </Section>
+  )
+}
+
+/**
+ * 取内置的拟人化默认提示词（2026-10-17）。
+ *
+ * 为什么单独抽一个 hook：它是**常量**（内置在 worker 里），不随实例/绑定变化 ——
+ * 放进 `loadInst` 会让每次切实例都白跑一次 IPC。取不到就留空串（输入框显示
+ * placeholder），不影响其余功能。
+ * @returns 默认提示词全文（未取到时为空串）。
+ */
+function useDefaultPrompt(): string {
+  const [prompt, setPrompt] = useState('')
+  useEffect(() => {
+    void apiGetClawbotDefaultPrompt().then(setPrompt).catch(() => { /* 取不到就留空 */ })
+  }, [])
+  return prompt
 }
 
 export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
@@ -147,6 +382,8 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
   const [inst, setInst] = useState<ClawbotInstance | null>(null)
   const [instReadError, setInstReadError] = useState('')
   const [kbs, setKbs] = useState<KbOption[]>([])
+  /** 内置的拟人化默认提示词（2026-10-17）：输入框为空时预填它。 */
+  const defaultPrompt = useDefaultPrompt()
   const [busy, setBusy] = useState(false)
   const [cfgBusy, setCfgBusy] = useState(false)
   /** 进行中的扫码弹窗（取码成功后打开；确认/取消后置空）。 */
@@ -163,7 +400,12 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
 
   const loadInst = useCallback(async (): Promise<void> => {
     try {
-      const s = await apiListClawbotInstances()
+      // 实例列表与知识库列表**并行**取：两者互不依赖，串行只是白等一个往返
+      // （切实例时这一对会跟着 `snapshot` 重跑，串行的代价直接落在点击响应上）。
+      const [s, kb] = await Promise.all([
+        apiListClawbotInstances(),
+        apiGetKbs().catch(() => null),
+      ])
       if (s.readError !== undefined) {
         // 读失败 ≠ 没有配置：开关保持原状（这里即清空展示并明说），不冒充「全关」。
         setInst(null)
@@ -172,10 +414,7 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
       }
       setInstReadError('')
       setInst(slot === null ? null : (s.instances.find((i) => i.slot === slot) ?? null))
-      try {
-        const r = await apiGetKbs()
-        if (r.readError === undefined) setKbs(r.items.map((k) => ({ id: k.id, name: k.name })))
-      } catch { /* 库列表拿不到不影响开关本身，只是选择项空着 */ }
+      if (kb !== null && kb.readError === undefined) setKbs(kb.items.map((k) => ({ id: k.id, name: k.name })))
     } catch (e) {
       setInst(null)
       setInstReadError((e as Error).message)
@@ -225,7 +464,7 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
     }
   }
 
-  const patch = async (p: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }): Promise<void> => {
+  const patch = async (p: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): Promise<void> => {
     if (slot === null) return
     setCfgBusy(true)
     try {
@@ -264,88 +503,64 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
   }
 
   const cfg = inst?.config ?? null
+  /** 自检有异常项时默认展开（用户打开设置多半就是来排障的）。 */
+  const envHasIssue = env !== null && env.items.some((it) => it.state !== 'ok')
 
   return (
     <>
+      {/*
+        2026-10-17 布局重设计（第二次）：**宽面板两栏 / 窄面板单列**。
+        上一稿是「一张卡 + 五个分区单列通栏」—— 在 1016px 宽的面板里，
+        键值对横跨 700px 拉散、提示词框占满整宽但内容行很短、右半边大片空白。
+        本稿把「实例信息 + 危险区」放左栏（窄、稳定），「自动回复 + 提示词 + 自检 + FAQ」放右栏
+        （宽、弹性）—— 两栏信息密度均衡，键值对不再横跨整宽。
+        ⚠️ 两栏只在 ≥1201px 生效（与 `.shell` 的实例轨断点同档）；窄面板塌成单列，
+        顺序仍是「实例 → 自动回复 → 提示词 → 自检 → FAQ → 危险区」（阅读顺序不变）。
+      */}
       <div className={css.settingsCol}>
-        <Card>
-          <div className={css.bindRow}>
-            <div className={css.bindAvatar} aria-hidden="true">{'🦞'}</div>
-            <div className={css.bindGrow}>
-              <div className={css.bindTitle}>当前实例 · 实例 {slot ?? '—'}</div>
-              <div className={css.bindDesc}>扫码即可绑定，无需 App ID / App Secret</div>
-            </div>
-            <div className={css.bindStatus}>
-              <StateDot state={statusDot(status)} />
-              <span className={statusClass(status)}>{CLAWBOT_STATUS_LABEL[status]}</span>
-              {binding?.wxid && <span className={css.mono} title={binding.wxid}>{binding.wxid}</span>}
-            </div>
-            {(status === 'unbound' || status === 'unbound-by-user') && (
-              <Button size="sm" variant="primary" disabled={busy} onClick={() => { void startBind() }} {...desktopActionProps()}>
-                {status === 'unbound' ? '绑定微信' : '重新绑定'}
-              </Button>
-            )}
-            {status === 'binding' && (
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => { void startBind() }} {...desktopActionProps()}>重新生成</Button>
-            )}
-            {status === 'bound' && (
-              <Button size="sm" variant="danger" disabled={busy} onClick={() => { void doUnbind() }} {...desktopActionProps()}>解绑</Button>
-            )}
-          </div>
-
-          <div className={css.kvGrid}>
-            {status === 'bound' && (
-              <>
-                <div className={css.kvItem}><span className={css.kvKey}>绑定时间</span><span className={css.kvVal}>{stamp(binding?.boundAt ?? null)}</span></div>
-                <div className={css.kvItem}>
-                  <span className={css.kvKey}>接收通道</span>
-                  <span className={css.kvVal} title={snapshot?.channel.error ?? undefined}>
-                    {(snapshot?.channel.running ?? false) ? '运行中（长轮询）' : (snapshot?.channel.error ?? '') !== '' ? '异常（见下方自检）' : '未运行'}
-                  </span>
-                </div>
-                <div className={css.kvItem}><span className={css.kvKey}>今日消息</span><span className={css.kvVal}>{snapshot?.todayMessages ?? 0}</span></div>
-                <div className={css.kvItem}><span className={css.kvKey}>累计消息</span><span className={css.kvVal}>{snapshot?.totalMessages ?? 0}</span></div>
-              </>
-            )}
-            {status === 'unbound-by-user' && (
-              <>
-                <div className={css.kvItem}><span className={css.kvKey}>上次绑定</span><span className={css.kvVal}>{binding?.userName ?? binding?.wxid ?? '—'}</span></div>
-                <div className={css.kvItem}><span className={css.kvKey}>解绑时间</span><span className={css.kvVal}>{stamp(binding?.unboundAt ?? null)}</span></div>
-              </>
-            )}
-          </div>
-
-          <div className={css.envHead}>环境自检</div>
-          {env === null
-            ? <div className={css.muted}>自检信息暂不可用。</div>
-            : (
-              <div>
-                {env.items.map((it) => (
-                  <div key={it.key} className={css.chk}>
-                    <span className={it.state === 'ok' ? css.tickOk : css.tickBad} aria-hidden="true">{it.state === 'ok' ? '✓' : '!'}</span>
-                    <span className={css.chkLabel}>{it.label}</span>
-                    <span className={css.chkDetail} title={it.detail}>{it.detail}</span>
-                  </div>
-                ))}
+        <Card className={css.fillCard}>
+          <div className={css.settingsGrid}>
+            <div className={css.settingsAside}>
+              <InstanceSection
+                snapshot={snapshot} inst={inst} slot={slot} busy={busy}
+                onBind={() => { void startBind() }} onUnbind={() => { void doUnbind() }}
+              />
+              <div className={css.dangerZone}>
+                <Button size="sm" variant="danger" disabled={busy || inst === null} onClick={() => { void doRemove() }} {...desktopActionProps()}>移除该实例</Button>
+                <span className={css.muted}>连带删除它的绑定、行为配置与全部接入会话（不可恢复）。其余实例不受影响。</span>
               </div>
-              )}
+            </div>
 
-          <div className={css.dangerZone}>
-            <Button size="sm" variant="danger" disabled={busy || inst === null} onClick={() => { void doRemove() }} {...desktopActionProps()}>移除该实例</Button>
-            <span className={css.muted}>连带删除它的绑定、行为配置与全部接入会话（不可恢复）。其余实例不受影响。</span>
+            <div className={css.settingsMain}>
+              <AutoReplySection cfg={cfg} kbs={kbs} cfgBusy={cfgBusy} readError={instReadError} defaultPrompt={defaultPrompt} onPatch={patch} />
+
+              <Section title="环境自检" hint={envHasIssue ? '有异常项' : '全部正常'} collapsible defaultOpen={envHasIssue}>
+                {env === null
+                  ? <div className={css.muted}>自检信息暂不可用。</div>
+                  : (
+                    <div>
+                      {env.items.map((it) => (
+                        <div key={it.key} className={css.chk}>
+                          <span className={it.state === 'ok' ? css.tickOk : css.tickBad} aria-hidden="true">{it.state === 'ok' ? '✓' : '!'}</span>
+                          <span className={css.chkLabel}>{it.label}</span>
+                          <span className={css.chkDetail} title={it.detail}>{it.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </Section>
+
+              <Section title="常见问题" collapsible defaultOpen={false}>
+                {FAQ.map((f) => (
+                  <details key={f.q} className={css.faq}>
+                    <summary className={css.faqQ}>{f.q}</summary>
+                    <div className={css.faqA}>{f.a}</div>
+                  </details>
+                ))}
+              </Section>
+            </div>
           </div>
           {notice.notice && <div className={css.noticeOk}>{notice.notice}</div>}
-        </Card>
-
-        <AutoReplyCard cfg={cfg} kbs={kbs} cfgBusy={cfgBusy} readError={instReadError} onPatch={patch} />
-
-        <Card title="常见问题">
-          {FAQ.map((f) => (
-            <details key={f.q} className={css.faq}>
-              <summary className={css.faqQ}>{f.q}</summary>
-              <div className={css.faqA}>{f.a}</div>
-            </details>
-          ))}
         </Card>
       </div>
 

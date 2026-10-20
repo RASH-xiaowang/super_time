@@ -65,56 +65,66 @@ export interface GraphTheme {
   bubbleSub: string
 }
 
-/** 深/浅两套主题。数值来自参考实现的深色规格（#0f0f1a 底 / 灰蓝连线）+ 本面板既有的浅色档。 */
+/**
+ * 深/浅两套主题：微信灰阶 + 单一强调色（绿）。
+ *
+ * 去掉旧版的青/紫霓虹线与发光选中环 —— 画布属于「内容」，颜色只用来区分
+ * 关系层级（观测 / 推断 / 事实），不再用色相做装饰：
+ *   · 共同群 / 沉淀来源 / [[链接]] = 中性灰，靠 alpha 与线宽分层；
+ *   · 与我亲密度 = 灰蓝实线（图例「蓝实线」，--nm-blue #576B95 同族）；
+ *   · 推断层 = 虚线：同备注编号琥珀、首字相同灰蓝（图例「金/蓝虚线」，与文字一致）；
+ *   · 唯一的品牌强调色是微信绿：只给「我」节点与选中环，面积很小。
+ * 深色值对齐 --nm-text-* / --nm-border 的取值，浅色值对齐浅色令牌（画布是位图，
+ * 不能用 var()，这份常量就是 canvas 侧的主题映射）。
+ */
 export function graphTheme(dark: boolean): GraphTheme {
   return dark
     ? {
-        bg: '#0a1025',
-        edgeCommon: 'rgba(148,163,184,0.42)',
-        edgeIntimacy: 'rgba(86,170,240,0.66)',
-        edgeWiki: 'rgba(169,155,255,0.62)',
-        edgeSource: 'rgba(120,200,180,0.5)',
-        edgeClass: 'rgba(240,178,74,0.6)',
-        // 首字层是**蓝虚线**：蓝与「与我亲密度」同色系，靠**虚线 + 更亮的sky蓝**区分。
-        // 图例同时写明「蓝虚线 = 首字相同 / 蓝实线 = 与我亲密度」，颜色不是唯一线索。
-        edgeInitial: 'rgba(96,204,255,0.72)',
-        disc: '#2a3a4a',
-        ring: 'rgba(140,150,170,0.6)',
-        ringDim: 'rgba(90,100,120,0.45)',
-        ringHover: '#ffffff',
-        ringSelected: '#22d3ee',
-        selectGlow: 'rgba(34,211,238,0.35)',
-        ringPinned: 'rgba(250,204,21,0.85)',
-        ringStub: 'rgba(150,160,180,0.9)',
-        label: 'rgba(232,240,250,0.95)',
-        labelHalo: 'rgba(6,10,22,0.9)',
-        bubbleBg: 'rgba(16,22,38,0.94)',
-        bubbleBorder: 'rgba(140,170,220,0.35)',
-        bubbleText: '#e8eef7',
-        bubbleSub: '#8aa0c0',
+        bg: '#111111',
+        edgeCommon: 'rgba(160,168,180,0.30)',
+        edgeIntimacy: 'rgba(125,144,169,0.85)',
+        edgeWiki: 'rgba(200,204,210,0.36)',
+        edgeSource: 'rgba(140,148,160,0.40)',
+        edgeClass: 'rgba(250,157,59,0.55)',
+        // 首字层是**灰蓝虚线**：与实线靠「虚线」区分（图例同时写明「虚线 = 首字相同」）。
+        edgeInitial: 'rgba(125,144,169,0.60)',
+        disc: '#2a2a2a',
+        ring: 'rgba(140,148,160,0.55)',
+        ringDim: 'rgba(90,98,110,0.40)',
+        ringHover: '#ededed',
+        ringSelected: '#07c160',
+        selectGlow: 'rgba(7,193,96,0.28)',
+        ringPinned: 'rgba(250,157,59,0.80)',
+        ringStub: 'rgba(150,158,170,0.75)',
+        label: 'rgba(237,237,237,0.95)',
+        labelHalo: 'rgba(17,17,17,0.90)',
+        bubbleBg: '#1f1f1f',
+        bubbleBorder: 'rgba(255,255,255,0.14)',
+        bubbleText: '#ededed',
+        bubbleSub: '#b5b5b5',
       }
     : {
-        bg: '#fafafa',
-        edgeCommon: 'rgba(120,130,145,0.5)',
-        edgeIntimacy: 'rgba(44,130,210,0.66)',
-        edgeWiki: 'rgba(109,91,208,0.6)',
-        edgeSource: 'rgba(60,150,130,0.5)',
-        edgeClass: 'rgba(176,112,16,0.62)',
-        edgeInitial: 'rgba(0,138,196,0.62)',
-        disc: '#e2e6ec',
-        ring: 'rgba(90,100,115,0.5)',
-        ringDim: 'rgba(140,150,165,0.4)',
-        ringHover: '#ffffff',
-        ringSelected: '#0891b2',
-        selectGlow: 'rgba(8,145,178,0.3)',
-        ringPinned: 'rgba(202,138,4,0.9)',
-        ringStub: 'rgba(110,120,135,0.9)',
-        label: 'rgba(28,38,50,0.95)',
+        bg: '#ededed',
+        edgeCommon: 'rgba(140,146,156,0.36)',
+        edgeIntimacy: 'rgba(87,107,149,0.80)',
+        edgeWiki: 'rgba(120,128,140,0.42)',
+        edgeSource: 'rgba(150,156,166,0.40)',
+        edgeClass: 'rgba(217,130,43,0.60)',
+        edgeInitial: 'rgba(87,107,149,0.55)',
+        disc: '#e2e2e2',
+        ring: 'rgba(120,128,140,0.50)',
+        ringDim: 'rgba(160,166,176,0.40)',
+        ringHover: '#191919',
+        ringSelected: '#07c160',
+        selectGlow: 'rgba(7,193,96,0.25)',
+        ringPinned: 'rgba(250,157,59,0.85)',
+        ringStub: 'rgba(130,138,150,0.80)',
+        label: 'rgba(25,25,25,0.92)',
         labelHalo: 'rgba(255,255,255,0.92)',
-        bubbleBg: 'rgba(255,255,255,0.96)',
-        bubbleBorder: 'rgba(28,38,50,0.16)',
-        bubbleText: '#1b2233',
-        bubbleSub: '#6b7594',
+        bubbleBg: '#ffffff',
+        bubbleBorder: 'rgba(0,0,0,0.12)',
+        bubbleText: '#191919',
+        bubbleSub: '#7f7f7f',
       }
 }
 
@@ -144,10 +154,12 @@ export function nodeRadius(node: GNode, settings: GraphSettings, nodeCount: numb
  * 改前是「权重最高的 60 个」（每个节点一次 `apiGetAvatar`，并发 6）；换成批量接口
  * （一次 RPC 拿到全部）之后预算放大到「小图全覆盖、大图取前 N」。
  *
- * 上限为什么是 320 而不是原来的 240：默认「节点上限」是 250，而 240 的预算意味着
+ * 上限为什么是 320 而不是原来的 240：旧默认「节点上限」是 250，240 的预算意味着
  * **默认配置下就有 10 个节点永远拿不到头像** —— 真机上就是「有几个是字母」（实测
- * 251 个节点只画出 240 个头像）。上限仍然要留：节点上限能拉到 2000+，全量请求是
- * 20MB 级 IPC 载荷加几百个远端请求；320 以内约 3MB，仍然轻。
+ * 251 个节点只画出 240 个头像）。2026-10-18 起默认改为「总人数 × 30%」（常见 284
+ * 好友 → 85 个，远低于 320；大图超预算部分按 `avatarBudget` 降级为圆盘，节点数不变）。
+ * 上限仍然要留：节点上限能拉到 2000+，全量请求是 20MB 级 IPC 载荷加几百个远端请求；
+ * 320 以内约 3MB，仍然轻。
  * @param nodeCount - 节点总数。
  * @returns 头像节点数上限。
  */
@@ -317,8 +329,8 @@ export interface EdgeStroke {
 
 /**
  * 边的线型：按类型分色/分粗细，指向 stub 的 wiki 边画虚线（「这篇笔记还不存在」）。
- * 数值与改前 ECharts 版逐项一致 —— 图例（灰线=共同群数 / 蓝线=亲密度 / 紫线=[[链接]]）
- * 就是按这套颜色写的，改色等于把图例变成谎话。
+ * 数值与改前 ECharts 版逐项一致 —— 图例（灰线=共同群数 / 灰蓝实线=亲密度 /
+ * 琥珀虚线=同备注编号 / 灰蓝虚线=首字相同）就是按这套颜色写的，改色等于把图例变成谎话。
  *
  * 两种**推断层**边都画虚线（`class` 金虚线 / `initial` 蓝虚线）：它们是「从备注/名字结构
  * 推出来的」，不是微信数据里观测到的共处，虚线让它们在画面上自解释，不必只靠颜色区分。
@@ -333,18 +345,18 @@ export interface EdgeStroke {
  *
  * 为什么收成函数而不是两处各写一遍字面量：导出那条分支以前就是「抄一份」，
  * 靠注释说「逐字节一致」—— 而注释不会阻止第三类节点只加在其中一处。
- * 身份靠颜色区分：
- *   文件=青（与主题强调色同族，读作「资料」）；
- *   章节=灰蓝（介于笔记紫与待补灰之间，读作「结构」）；
- *   实体=琥珀（与「推断」的虚线边同一族语言：这是模型说的，不是文档里写着的）。
+ * 身份靠颜色区分（微信灰阶 + 主色 + 语义琥珀，不再用霓虹紫/青）：
+ *   文件=绿（微信主色，「资料」）；
+ *   章节=中性灰（「结构」）；
+ *   实体=琥珀（「模型说的」，与警示同族 —— 不是文档里写着的）。
  * @param kind - 节点类别（file / section / entity）。
  * @param dark - 是否深色主题。
  * @returns `{ fill, stroke }`。
  */
 export function docColors(kind: string, dark: boolean): { fill: string; stroke: string } {
-  if (kind === 'file') return { fill: dark ? '#12707f' : '#0e7490', stroke: dark ? '#3fd8ee' : '#0f7c92' }
-  if (kind === 'entity') return { fill: dark ? '#8a5a12' : '#b45309', stroke: dark ? '#f0b35a' : '#8a4b08' }
-  return { fill: dark ? '#41506b' : '#7d8797', stroke: dark ? '#8b9bb4' : '#5b6472' }
+  if (kind === 'file') return { fill: dark ? '#0f6b46' : '#0c7a4e', stroke: dark ? '#3eb575' : '#07c160' }
+  if (kind === 'entity') return { fill: dark ? '#8a5a12' : '#b45309', stroke: dark ? '#fa9d3b' : '#d9822b' }
+  return { fill: dark ? '#3f4652' : '#9aa0a6', stroke: dark ? '#8b94a2' : '#6b7480' }
 }
 
 export function edgeStroke(

@@ -258,7 +258,7 @@ export async function apiDeleteBackup(options: { name: string }): Promise<Backup
  * @param options - Query options: the date (YYYY-MM-DD).
  * @returns DailySummaryResult.
  */
-export async function apiGenerateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<DailySummaryResult> {
+export async function apiGenerateDailySummary(options: { date: string; provider?: string; model?: string; format?: string }): Promise<DailySummaryResult> {
   return unwrap(await remote().generateDailySummary(options))
 }
 /**
@@ -271,6 +271,7 @@ export async function apiGeneratePeriodSummary(options: {
   to: string
   provider?: string
   model?: string
+  format?: string
 }): Promise<PeriodSummaryResult> {
   return unwrap(await remote().generatePeriodSummary(options))
 }

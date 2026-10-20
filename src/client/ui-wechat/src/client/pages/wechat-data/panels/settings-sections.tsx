@@ -29,7 +29,9 @@ const LICENSE_STATE_LABEL: Record<string, string> = {
  * 软件授权区块：状态 / 导出激活请求 / 导入许可证 / 解除绑定。
  */
 export function LicenseSection(): React.JSX.Element {
-  const blocked = desktopOnlyGate('license'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定必须在所有 hooks 之后（见函数末尾的 `blocked` 分支）。
+  // 放在 hooks 之前会让 hook 数量随能力表变化而变，React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
   const [st, setSt] = useState<LicenseStatus | null>(null)
@@ -118,6 +120,10 @@ export function LicenseSection(): React.JSX.Element {
   const expires = st?.payload?.expiresAt
     ? new Date(st.payload.expiresAt).toLocaleDateString('zh-CN')
     : st?.state === 'licensed' ? '永久' : '—'
+
+  // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
+  const blocked = desktopOnlyGate('license')
+  if (blocked !== null) return blocked
 
   return (
     <section className={css.card} aria-label="软件授权">
@@ -255,7 +261,9 @@ export function retryCountdown(iso: string): string {
  * 自动检查由主进程排在启动 30s 后，这里的按钮是手动那一路（`manual: true`）。
  */
 export function UpdateSection(): React.JSX.Element {
-  const blocked = desktopOnlyGate('update'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定必须在所有 hooks 之后（见函数末尾的 `blocked` 分支）。
+  // 放在 hooks 之前会让 hook 数量随能力表变化而变，React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   const [st, setSt] = useState<UpdateState | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -366,6 +374,10 @@ export function UpdateSection(): React.JSX.Element {
   const targetVersion = st?.version
     ? `v${st.version}`
     : phase === 'up-to-date' ? '已是最新' : '—'
+
+  // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
+  const blocked = desktopOnlyGate('update')
+  if (blocked !== null) return blocked
 
   return (
     <section className={css.card} aria-label="软件更新">

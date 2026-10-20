@@ -10,6 +10,12 @@
  *
  * 网络请求已收口到后端 `getMapGeoJson`：本文件只保留候选地址、名称匹配与首份选择，
  * 不再直接 `fetch`。
+ *
+ * 底图是**本地优先**的：后端拿到候选地址后先读随包的 `resources/geo/world.zh.json`
+ * （见 `src/backend/wechat-data/src/query/map-geo.ts`），只有本地缺失才回退 CDN。
+ * 但「本地优先」仍要经过主进程的全局调用闸：应用刚启动时首屏请求会把队列打满，
+ * 这次静态文件读取也会被 `REMOTE_BUSY` 拒绝，界面于是误报「底图不可用」。
+ * 所以这里对**队列繁忙**做退避重试（400/1200/3000ms），其余错误立即失败。
  */
 import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import { apiGetMapGeoJson } from '../api-media.ts'
@@ -103,14 +109,57 @@ export function worldUnmatchedChildren(children: readonly RegionNode[], features
 }
 
 /**
+ * 已取到的 GeoJSON，按 URL 列表的拼接键缓存。
+ *
+ * 为什么需要：`ChinaMap` / `ProvinceMap` 都不传 `geo`，每次挂载都要 `fetchFirstJson`。
+ * 而底图是**静态资源**（同一份 GeoJSON 永远一样），重复出网既慢又给了「网络抖动 ⇒
+ * 地图空白」的机会（实测下钻中国层偶发空白，就是这一次 fetch 失败触发了 `onFallback`）。
+ * 缓存后：同一层反复进出**同步命中**，不再有空白窗口。
+ *
+ * ⚠️ 只缓存**成功**结果。失败不写缓存 —— 否则一次抖动会让该层永久空白。
+ */
+const GEO_CACHE = new Map<string, unknown>()
+
+/**
+ * 是否为「队列繁忙」这类**可重试**的临时失败。
+ *
+ * 主进程调用闸（`src/backend/http-queue.js`）在并发 2 / 排队 32 打满时直接拒绝，
+ * 错误码 `REMOTE_BUSY`、文案「远程调用太密集…」。IPC 包一层后只剩 message，
+ * 所以按文案与错误码一起判。
+ * @param message - 后端/remote 返回的错误信息。
+ * @returns 值得退避重试时为 true。
+ */
+function isBusyError(message: string): boolean {
+  return /远程调用太密集|排队已满|REMOTE_BUSY/.test(message)
+}
+
+/**
  * Fetch the first GeoJSON candidate that answers with a 2xx response.
- * 实际出网由后端代理完成；这里只负责把失败原因转成可捕获异常。
+ * 实际出网由后端代理完成（本地优先，见文件头注释）；这里只负责把失败原因转成可捕获异常。
  * @param urls - candidate URLs in preference order.
  * @returns the parsed JSON body.
  * @throws when every candidate fails (network, non-2xx or parse error).
  */
 export async function fetchFirstJson(urls: readonly string[]): Promise<unknown> {
-  const result = await apiGetMapGeoJson(urls)
-  if (!result.ok) throw new Error(result.error)
-  return result.data
+  const key = urls.join('\n')
+  const hit = GEO_CACHE.get(key)
+  if (hit !== undefined) return hit
+  const retryDelays = [400, 1200, 3000]
+  let lastError = ''
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await apiGetMapGeoJson(urls)
+      if (result.ok) {
+        GEO_CACHE.set(key, result.data)
+        return result.data
+      }
+      lastError = result.error
+    } catch (e) {
+      // `unwrap` 会把 `{ok:false}` 转成异常抛出（REMOTE_BUSY 也在其中），必须一起接住。
+      lastError = e instanceof Error ? e.message : String(e)
+    }
+    if (attempt >= retryDelays.length || !isBusyError(lastError)) break
+    await new Promise<void>((resolve) => setTimeout(resolve, retryDelays[attempt]))
+  }
+  throw new Error(lastError)
 }

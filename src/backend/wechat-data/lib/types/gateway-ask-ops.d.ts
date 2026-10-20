@@ -364,6 +364,17 @@ export declare abstract class GatewayAskOps extends GatewayRead {
          * `cancelAsk({ jobId })` 才能找到这一轮的 AbortController；不传 = 不可取消。
          */
         jobId?: string;
+        /**
+         * 随问题一起送模型的图片（2026-10-18，ClawBot 自动回复的「识别图中内容」）：
+         * canonical base64 + MIME，最多 2 张。ask 管道按当前对话模型是否声明 `image`
+         * 输入模态决定是否真的发送；不支持时会改为一句「看不到图片内容」的说明，
+         * 绝不让模型以为「对方没发过图」。
+         */
+        images?: Array<{
+            data: string;
+            mediaType: string;
+            name?: string;
+        }>;
     }): Promise<AskResult>;
     /**
      * 取消一轮正在生成的问答（W3-6.1）。
@@ -484,6 +495,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         date: string;
         provider?: string;
         model?: string;
+        format?: string;
     }): Promise<DailySummaryResult>;
     /**
      * 生成 AI 年报叙述（W2-8.6）：**分段**取材 → 逐段 LLM → 逐段进度。
@@ -577,5 +589,6 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         to: string;
         provider?: string;
         model?: string;
+        format?: string;
     }): Promise<PeriodSummaryResult>;
 }

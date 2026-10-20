@@ -145,7 +145,7 @@ describe('sync.ts 的尾部接线（源码锚点）', () => {
 
   it('尾部计划必须真参与判定：可行才走 tail、不可行才吃冷却；quick_check 是发布前的安全网', () => {
     expect(SRC, '尾部计划计算被摘掉（退化成永远全量）').toContain('tailAppendPlan(prev.main, sig.main)')
-    expect(SRC, '冷却闸必须只在无尾部计划、无差分计划时才关全量').toContain('tailPlan === null && diffIndexes === undefined && !fullDecryptDue(f)')
+    expect(SRC, '冷却闸必须只在无尾部计划、无差分计划、且 page-diff 未被自适应抑制时才关全量').toContain('tailPlan === null && diffIndexes === undefined && !diffSuppressed && !fullDecryptDue(f)')
     expect(SRC, '尾部路径必须过 quick_check 才发布').toContain('tailQuickCheckOk(stagingDb)')
     expect(SRC, '增量路径失败必须退回整库重解').toContain('patch rejected, falling back to full decrypt')
   })

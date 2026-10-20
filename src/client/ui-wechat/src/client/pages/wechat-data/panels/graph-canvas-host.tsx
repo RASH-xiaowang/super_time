@@ -48,7 +48,7 @@ import {
   syncPositionsToPhysics,
   type PhysicsWorld,
 } from './graph-physics.ts'
-import { buildPoster, posterToDataUrl, type PosterCommunity, type PosterInput, type PosterRatio, type PosterRelation, type PosterStatItem, type PosterStyle } from './graph-poster.ts'
+import { buildPoster, getPosterLayout, posterToDataUrl, type PosterCommunity, type PosterInput, type PosterLegendItem, type PosterRatio, type PosterRelation, type PosterStatItem, type PosterStyle } from './graph-poster.ts'
 import css from './graph.module.css'
 import { DragSimState, DragState, EMPTY_SET, EXPORT_BG, EXPORT_SIZES, GraphCanvasHandle, GraphCanvasProps, MiniTransform, PERSIST_SETTLE_MS, POSITION_CACHE_MAX, RELAYOUT_SETTLE_MS, REST_STEP, SETTLE_MS, avatarAssets, forceKeyOf, styleIsDark } from './graph-canvas-support.ts'
 import { disposeLayoutWorker } from './graph-layout.ts'
@@ -60,7 +60,7 @@ import { disposeLayoutWorker } from './graph-layout.ts'
  * @returns 画布 + 小地图。
  */
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas(props, ref): React.JSX.Element {
-  const { graph, dark = false, selectedId, settings, selfUsername, pinnedIds, focusCommunity, hoverCommunity, hoverNodeId, positionScope } = props
+  const { graph, dark = false, selectedId, settings, selfUsername, pinnedIds, focusCommunity, hoverCommunity, hoverNodeId, positionScope, hideMinimap = false } = props
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
@@ -836,8 +836,20 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         { label: '连线', value: String(g.edges.length) },
         { label: '圈子', value: String(g.communityCount) },
       ]
-      // 海报里的图谱层按 16:9 的图谱框尺寸渲染（内部再乘 2 倍抗锯齿）
-      const layer = renderOffscreen({ w: 1184, h: 360, style })
+      // 海报里的图谱层按**目标框比例**渲染（内部再乘 2 倍抗锯齿）。
+      // 旧版固定 16:9（1184×360）再 contain 进竖版框，宽高比不一致会把左右裁掉。
+      const layout = getPosterLayout(ratio)
+      const layer = renderOffscreen({ w: layout.graphArea.w, h: layout.graphArea.h, style })
+      /** 图谱卡标题行的元信息：口径一眼可见。横版卡片窄，省略「中心：我」避免被图例挤成省略号。 */
+      const graphMeta = ratio === '16:9'
+        ? `${p.settings.friendsOnly ? '仅好友' : '全部联系人'} · 共同群 ≥ ${String(p.settings.minCommon)}`
+        : `中心：我 · ${p.settings.friendsOnly ? '仅好友' : '全部联系人'} · 共同群 ≥ ${String(p.settings.minCommon)}`
+      const legendItems: PosterLegendItem[] = [
+        { kind: 'dot', color: '#36c08f', label: '颜色 = 圈子' },
+        { kind: 'line', color: '#8a94a8', label: '灰线 = 共同群数' },
+        { kind: 'line', color: '#3b82f6', label: '蓝线 = 亲密度' },
+        { kind: 'dot', color: '#c9a227', label: '半径 = 消息量' },
+      ]
       const input: PosterInput = {
         graphLayer: layer,
         ratio,
@@ -845,9 +857,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         tag: '社交关系图谱',
         title: '我的微信社交圈',
         subtitle: '基于本地消息数据 · 圈子洞察',
+        graphMeta,
         stats,
         topRelations,
         communities,
+        legendItems,
         blurNodes: p.settings.blurNodes,
         legend: '颜色 = 圈子 · 灰线 = 共同群数 · 蓝线 = 与我亲密度 · 半径 = 消息量',
         footer: `由 DSH 本地生成 · ${new Date().toLocaleDateString()}`,
@@ -888,6 +902,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       <canvas
         ref={miniRef}
         className={css.minimap}
+        data-hidden={hideMinimap || undefined}
         aria-label="图谱小地图"
         onPointerDown={onMiniClick}
         onContextMenu={(ev) => { ev.preventDefault() }}

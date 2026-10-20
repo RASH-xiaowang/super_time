@@ -114,6 +114,12 @@ export interface EffectiveParams {
     policy: RetrievalPolicy;
     /** 权重 = 意图策略覆盖后的最终值。 */
     weights: RerankWeights;
+    /**
+     * 每通道召回上限（**已补齐默认值**，消费方不必处理 undefined）。
+     *
+     * 策略表里写的是 `Partial`（`agg` 通道不走 topK，列了也没人读），
+     * 这里统一补 0 —— 0 表示「该通道不按 topK 取」，与「未配置」是同一件事。
+     */
     channelTopK: Record<ChannelName, number>;
 }
 /** 合成一次查询的有效参数（意图策略覆盖配置默认）。 */

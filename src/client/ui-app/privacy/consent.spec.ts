@@ -198,3 +198,88 @@ describe('H14：同意区不许再做成悬浮 / 吸底', () => {
     expect(block, '.consentBar 又铺了不透明底色 ⇒ 那是悬浮层的样子').not.toMatch(/background(?!-color):/)
   })
 })
+
+/**
+ * 2026-10-17 重设计：用户报「布局不合理，与其他启动页的字体大小不合适」。
+ * 2026-10-19 微信化改版：版式从「两栏各自滚动」改成「单列单滚动 + 底部同意条常驻」。
+ *
+ * 四条不变量：
+ *   ① **字号与启动页对齐**（标题 26 / 导语 13 / 正文 13 / 小字 11.5 / 标签 11）；
+ *   ② **单列单滚动 + 底部同意条常驻**（整页只有一个滚动容器；同意条是文档流里的最后一格，
+ *      不是 sticky/fixed 浮层，也不随正文滚走 —— 否则长声明会看不到勾选框）；
+ *   ③ **页头交给 `StageHead`**（不再自己写一套 `.kicker / .title / .sub`）；
+ *   ④ **不再自带背景**（它渲染在启动页外壳内部，两层背景叠在一起）。
+ */
+describe('H14：同意屏排版与启动页对齐（2026-10-17 重设计 / 2026-10-19 单列化）', () => {
+  const css = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.module.css'), 'utf8')
+  const gateSrc = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
+  const shellSrc = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'OnboardingShell.tsx'), 'utf8')
+  const stagesCss = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'onboarding-stages.module.css'), 'utf8')
+
+  /** 取某个类名的声明块（到第一个右花括号）。 */
+  function block(sel: string): string {
+    const at = css.indexOf(`${sel} {`)
+    expect(at, `CSS 里找不到 ${sel} 规则`).toBeGreaterThan(-1)
+    return css.slice(at, css.indexOf('}', at) + 1)
+  }
+
+  it('① 正文字号与启动页一致（13px，不是 13.5 / 12.5）', () => {
+    // 启动页的 .stageLead / .stepBody 都是 13px
+    expect(stagesCss, '启动页导语基准变了，本判据要跟着改').toMatch(/\.stageLead\s*\{[^}]*font-size:\s*13px/)
+    expect(block('.p'), '同意屏正文必须与启动页同刻度 13px').toMatch(/font-size:\s*13px/)
+    expect(block('.p'), '同意屏正文不许再是 13.5px').not.toMatch(/font-size:\s*13\.5px/)
+  })
+
+  it('② 单列单滚动 + 底部同意条常驻（非 sticky/fixed）', () => {
+    // 外壳是单列 flex 列，内容宽 760 上限（与启动页内容列同刻度）。
+    const shell = block('.shell')
+    expect(shell, '同意屏外壳必须是单列（flex column）').toMatch(/flex-direction:\s*column/)
+    expect(shell, '内容列宽度上限必须与启动页一致（760px）').toMatch(/max-width:\s*760px/)
+
+    // 整页只允许一个滚动容器：正文区自己滚，底部的同意条不动。
+    // （旧版是两栏各自滚动，长卷问题解决了，但产生了两个滚动条；新口径是单列单滚动。）
+    const scrollers = css.match(/overflow-y:\s*auto/g) ?? []
+    expect(scrollers.length, '整页只允许一个滚动容器（单列单滚动）').toBe(1)
+    const scroll = block('.scroll')
+    expect(scroll, '滚动区必须能滚').toMatch(/overflow-y:\s*auto/)
+    expect(scroll, '滚动区必须能收缩（否则内容把父级撑开，滚动永不触发）').toMatch(/min-height:\s*0/)
+    expect(scroll, '滚动区必须吃掉页头与同意条之间的剩余高度').toMatch(/flex:\s*1 1 0/)
+
+    // 反向：旧的两栏网格/列规则不许回潮（回潮 = 又出现两个滚动条 / 两截长卷）。
+    expect(css, '两栏网格/列规则又回来了').not.toMatch(/\.(?:grid|col)\s*\{/)
+
+    // 同意条是文档流里的最后一格：flex 子项 + 上方分隔线；不是浮层。
+    const bar = block('.consentBar')
+    expect(bar, '同意条必须是文档流里的 flex 子项（常驻底部，不随正文滚走）').toMatch(/flex:\s*0 0 auto/)
+    expect(bar, '同意条不许变成 sticky / fixed 浮层').not.toMatch(/position:\s*(sticky|fixed)/)
+    expect(bar, '同意条不许用 z-index 压住正文').not.toMatch(/z-index/)
+    expect(bar, '同意条必须与正文用一条分隔线分开').toMatch(/border-top:\s*1px solid/)
+
+    // DOM 顺序：滚动区之后才是同意条（否则勾选框会跟着正文滚走）。
+    const scrollAt = gateSrc.indexOf('css.scroll')
+    const barAt = gateSrc.indexOf('css.consentBar')
+    expect(scrollAt, '组件里找不到滚动区（css.scroll）').toBeGreaterThan(-1)
+    expect(barAt, '组件里找不到同意条（css.consentBar）').toBeGreaterThan(-1)
+    expect(barAt, '同意条必须在滚动区之后渲染').toBeGreaterThan(scrollAt)
+  })
+
+  it('③ 页头交给 StageHead（不再自己写一套 kicker / title / sub）', () => {
+    // ⚠️ 不能用 `onConsentStage[\s\S]{0,600}<StageHead`：`onConsentStage` 在文件里出现多次
+    // （`const onConsentStage = page === CONSENT_STAGE` 在很前面），正则会从那里开始跨过整个文件。
+    // 改成先切出 `{onConsentStage ? (` 那一段，再在段内找 `<StageHead`。
+    const at = shellSrc.indexOf('{onConsentStage ? (')
+    expect(at, '找不到同意站的分支').toBeGreaterThan(-1)
+    const branch = shellSrc.slice(at, at + 1200)
+    expect(branch, '同意站必须用统一的 StageHead').toContain('<StageHead')
+    // ⚠️ 只断言「有 StageHead」咬不住「又加了一个自己的标题」的变异（M685 第一次没咬住）：
+    // 必须同时断言**同意站分支里没有别的标题元素**。
+    expect(branch, '同意站不许在 StageHead 之外再写一个标题').not.toMatch(/className=\{css\.pageTitle\}/)
+    expect(branch, '同意站不许在 StageHead 之外再写一个 h1').not.toMatch(/<h1[\s>]/)
+    expect(gateSrc, '同意屏不许再自己写页头').not.toMatch(/className=\{css\.title\}/)
+    expect(gateSrc, '同意屏不许再自己写 kicker').not.toMatch(/className=\{css\.kicker\}/)
+  })
+
+  it('④ 不再自带背景（它渲染在启动页外壳内部，两层背景叠在一起）', () => {
+    expect(block('.shell'), '同意屏外壳不许再画背景').not.toMatch(/background(?!-color):/)
+  })
+})

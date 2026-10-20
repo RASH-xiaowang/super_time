@@ -73,9 +73,9 @@ function fakeNet(body: Buffer, opts: { contentLength?: string } = {}): FakeNet {
   return { fetchImpl, urls }
 }
 
-/** 落库一条带附件的消息，返回行 id。 */
-function seedMedia(dir: string, media: ClawbotMediaRef): number {
-  const id = insertClawbotMessage(dir, { ts: 1, direction: 'in', msgType: media.kind, content: '[附件]', media })
+/** 落库一条带附件的消息，返回行 id。`duration` 可省（只有语音用得上）。 */
+function seedMedia(dir: string, media: Omit<ClawbotMediaRef, 'duration'> & { duration?: number | null }): number {
+  const id = insertClawbotMessage(dir, { ts: 1, direction: 'in', msgType: media.kind, content: '[附件]', media: { duration: null, ...media } })
   if (id === null) throw new Error('seed 落库失败')
   return id
 }

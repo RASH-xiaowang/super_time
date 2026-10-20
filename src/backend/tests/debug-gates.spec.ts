@@ -172,7 +172,9 @@ describe('N2：接线守卫（主进程 / preload / 渲染层 / 验收脚本）'
     //   ② 顺序不变量落在 gatedWechatCall 里 —— 豁免分支必须在 authorizeCall 之前。
     const at = ipcSrc.indexOf("handleIpc('wechat:call'")
     expect(at, 'ipc-wechat.js 里没有注册 wechat:call').toBeGreaterThan(0)
-    const handler = ipcSrc.slice(at, at + 400)
+    // 2026-10-19：`wechat:call` 外面多了一层 mutation gate 的 try/run 包装，
+    // 400 字符会切在 `gatedWechatCall` 之前；放宽到 1000，判据仍是“handler 委托给共用闸门”。
+    const handler = ipcSrc.slice(at, at + 1000)
     expect(handler, 'wechat:call 不再委托给共用的闸门实现（是绕开了还是自己又写了一份？）')
       .toContain('gatedWechatCall(')
 

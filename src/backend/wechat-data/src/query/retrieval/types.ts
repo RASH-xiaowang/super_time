@@ -32,7 +32,7 @@ export type IntentKind =
  *     前四条召回的都是聊天消息，这一条返回的是文件块，因此下游的融合/重排/压缩
  *     都对它按 `RetrievedDoc.source === 'kb'` 做了分支（见 compress.ts）。
  */
-export type ChannelName = 'sparse' | 'dense' | 'structured' | 'time' | 'kb'
+export type ChannelName = 'sparse' | 'dense' | 'structured' | 'time' | 'kb' | 'agg'
 
 /**
  * 意图对应的检索策略（由 intent.ts 产出，pipeline 消费）。
@@ -44,8 +44,13 @@ export interface RetrievalPolicy {
   intent: IntentKind
   /** 启用的召回通道。 */
   channels: ChannelName[]
-  /** 每通道召回条数上限。 */
-  channelTopK: Record<ChannelName, number>
+  /**
+   * 每通道召回条数上限。
+   *
+   * `Partial` 是因为 `agg`（聚合通道）**不走 topK** —— 它的条数由 `runAggregate`
+   * 自己限（每个维度最多 15 行），列在这里只会是一个没人读的数字。
+   */
+  channelTopK: Partial<Record<ChannelName, number>>
   /** 重排特征权重（覆盖 config 的默认权重）。 */
   weights: Partial<RerankWeights>
   /** 是否强制结果按时间新→旧（recency 类问题）。 */
@@ -123,8 +128,14 @@ export interface RetrievedDoc {
   text: string
   snippet: string
   sender?: string
-  /** 来源域：`'msg'`（缺省）或 `'kb'`。下游靠它分支，不靠 username 是否为空去猜。 */
-  source?: 'msg' | 'kb'
+  /**
+   * 来源域：`'msg'`（缺省）/ `'kb'` / `'agg'`。
+   *
+   * 下游靠它分支，不靠 username 是否为空去猜。
+   * `'agg'` 是 2026-10-16 新增的**聚合事实**（`COUNT(*)` / `GROUP BY` 的结果）——
+   * 它没有「发生时间」也没有会话，压缩阶段必须像 `kb` 一样跳过窗口展开。
+   */
+  source?: 'msg' | 'kb' | 'agg'
   /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */
   kb?: {
     kbId: number
@@ -192,8 +203,8 @@ export interface CompressedChunk {
     username: string
     local_id: number
     sender?: string
-    /** 与 `RetrievedDoc.source` 一致：KB 块的锚点没有任何消息字段，必须靠它判别。 */
-    source?: 'msg' | 'kb'
+    /** 与 `RetrievedDoc.source` 一致：KB / 聚合块的锚点没有任何消息字段，必须靠它判别。 */
+    source?: 'msg' | 'kb' | 'agg'
     /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */
     kb?: RetrievedDoc['kb']
   }

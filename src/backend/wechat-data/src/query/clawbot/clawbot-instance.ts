@@ -30,13 +30,14 @@
  */
 import type { ClawbotBinding, ClawbotChannelInfo, ClawbotInstance, ClawbotInstanceConfig, ClawbotInstancesSnapshot } from '../../types.ts'
 import { DEFAULT_CLAWBOT_SLOT, clawbotDbExists, clawbotDbPath, ensureClawbotSchema } from './clawbot-db.ts'
-import { readBindings } from './clawbot-binding.ts'
+import { readBindings, readBotIds } from './clawbot-binding.ts'
 import { clawbotMessageCounts } from './clawbot-message.ts'
+import { clawbotDayKey, clawbotTokenStats } from './clawbot-token.ts'
 import { withDb, withWritableDb } from '../db-open.ts'
 
-/** 未配置过的实例的默认行为：自动回复**关**、知识库**关**（默认不出网、不检索，需用户显式打开）。 */
+/** 未配置过的实例的默认行为：自动回复**关**、知识库**关**、提示词用内置默认、长回复分段。 */
 export function defaultInstanceConfig(slot: number = DEFAULT_CLAWBOT_SLOT): ClawbotInstanceConfig {
-  return { slot, autoReply: false, kbEnabled: false, kbId: null }
+  return { slot, autoReply: false, kbEnabled: false, kbId: null, systemPrompt: '', splitReply: true }
 }
 
 /** 拆成两半：配置 + （可选）读失败原因。 */
@@ -53,6 +54,9 @@ function toConfig(r: Record<string, unknown>, slot: number): ClawbotInstanceConf
     autoReply: Number(r['auto_reply'] ?? 0) === 1,
     kbEnabled: Number(r['kb_enabled'] ?? 0) === 1,
     kbId: Number.isFinite(kbId) && kbId > 0 ? Math.floor(kbId) : null,
+    systemPrompt: typeof r['system_prompt'] === 'string' ? r['system_prompt'] : '',
+    // 缺列（老库）时给 `true`：分段是**更好的默认**，老库升级后应当享受到。
+    splitReply: Number(r['split_reply'] ?? 1) === 1,
   }
 }
 
@@ -67,7 +71,7 @@ export function readInstanceConfig(decryptedDir: string, slot: number = DEFAULT_
   if (!clawbotDbExists(decryptedDir)) return { config: defaultInstanceConfig(s) }
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => {
-      const row = db.prepare('SELECT auto_reply, kb_enabled, kb_id FROM clawbot_instance_config WHERE slot = ?').get(s) as Record<string, unknown> | undefined
+      const row = db.prepare('SELECT auto_reply, kb_enabled, kb_id, system_prompt, split_reply FROM clawbot_instance_config WHERE slot = ?').get(s) as Record<string, unknown> | undefined
       return { config: row ? toConfig(row, s) : defaultInstanceConfig(s) }
     })
   } catch (e) {
@@ -98,7 +102,7 @@ export function saveInstanceConfig(
     ensureClawbotSchema(db)
     const exists = db.prepare('SELECT 1 AS x FROM clawbot_binding WHERE slot = ? LIMIT 1').get(s)
     if (!exists) throw new Error(`实例 ${s} 不存在（配置只能挂在已建的实例上）`)
-    const row = db.prepare('SELECT auto_reply, kb_enabled, kb_id FROM clawbot_instance_config WHERE slot = ?').get(s) as Record<string, unknown> | undefined
+    const row = db.prepare('SELECT auto_reply, kb_enabled, kb_id, system_prompt, split_reply FROM clawbot_instance_config WHERE slot = ?').get(s) as Record<string, unknown> | undefined
     const cur = row ? toConfig(row, s) : defaultInstanceConfig(s)
     // kbId 在这里也归一（与读路径 `toConfig` 同一口径）：0 / 负数 / NaN 都是「没有库」，
     // 不是「第 0 号库」—— 写进去再读出来会变成另一个值的东西不该落盘。
@@ -109,13 +113,18 @@ export function saveInstanceConfig(
       autoReply: patch.autoReply ?? cur.autoReply,
       kbEnabled: patch.kbEnabled ?? cur.kbEnabled,
       kbId,
+      // 提示词归一：首尾空白去掉；上限 4000 字（超出截断而不是抛错 —— 提示词是展示/偏好，
+      // 截断比拒绝更友好；4000 字已远超任何合理的人设描述）。
+      systemPrompt: (patch.systemPrompt ?? cur.systemPrompt).trim().slice(0, 4000),
+      splitReply: patch.splitReply ?? cur.splitReply,
     }
     const now = Date.now()
-    db.prepare(`INSERT INTO clawbot_instance_config(slot, auto_reply, kb_enabled, kb_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+    db.prepare(`INSERT INTO clawbot_instance_config(slot, auto_reply, kb_enabled, kb_id, system_prompt, split_reply, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(slot) DO UPDATE SET auto_reply = excluded.auto_reply, kb_enabled = excluded.kb_enabled,
-        kb_id = excluded.kb_id, updated_at = excluded.updated_at`)
-      .run(s, next.autoReply ? 1 : 0, next.kbEnabled ? 1 : 0, next.kbId, now, now)
+        kb_id = excluded.kb_id, system_prompt = excluded.system_prompt, split_reply = excluded.split_reply,
+        updated_at = excluded.updated_at`)
+      .run(s, next.autoReply ? 1 : 0, next.kbEnabled ? 1 : 0, next.kbId, next.systemPrompt, next.splitReply ? 1 : 0, now, now)
     return next
   })
 }
@@ -141,8 +150,8 @@ export function createClawbotInstance(decryptedDir: string): ClawbotBinding {
     return {
       id, slot: id,
       status: 'unbound',
-      qrToken: null, qrExpiresAt: null, wxid: null, userName: null, avatar: null,
-      boundAt: null, unboundAt: null, createdAt: now, updatedAt: now,
+      qrToken: null, qrExpiresAt: null, wxid: null, userName: null, label: null, avatar: null,
+      botId: null, boundAt: null, unboundAt: null, createdAt: now, updatedAt: now,
     }
   })
 }
@@ -164,6 +173,7 @@ export function deleteClawbotInstance(decryptedDir: string, slot: number): { rem
     const before = Number((db.prepare('SELECT COUNT(*) AS n FROM clawbot_message WHERE slot = ?').get(s) as { n?: number } | undefined)?.n ?? 0)
     db.prepare('DELETE FROM clawbot_message WHERE slot = ?').run(s)
     db.prepare('DELETE FROM clawbot_instance_config WHERE slot = ?').run(s)
+    db.prepare('DELETE FROM clawbot_token_usage WHERE slot = ?').run(s)
     db.prepare('DELETE FROM clawbot_binding WHERE slot = ?').run(s)
     return { removedMessages: before }
   })
@@ -186,20 +196,30 @@ export function listClawbotInstances(
   const { bindings, readError } = readBindings(decryptedDir)
   if (readError !== undefined) return { instances: [], readError }
   const idle: ClawbotChannelInfo = { running: false, error: null }
+  // 机器人 id 一次读全（每个实例一条 SQL 会随实例数线性增长；它是展示增强，读失败给空映射）。
+  const botIds = readBotIds(decryptedDir)
+  // token 统计同样一次读全（两段 GROUP BY），避免每个实例各开一次库。
+  const tokenStats = clawbotTokenStats(decryptedDir, clawbotDayKey(opts.since))
   const instances: ClawbotInstance[] = bindings.map((b) => {
     const cfg = readInstanceConfig(decryptedDir, b.slot)
     const counts = clawbotMessageCounts(decryptedDir, { since: opts.since, slot: b.slot })
+    const tokens = tokenStats.get(b.slot)
     return {
       slot: b.slot,
       status: b.status,
       wxid: b.wxid,
       userName: b.userName,
+      label: b.label,
       avatar: b.avatar,
+      botId: botIds[b.slot] ?? null,
       boundAt: b.boundAt,
       unboundAt: b.unboundAt,
       config: cfg.config,
       todayMessages: counts.today,
       totalMessages: counts.total,
+      todayTokens: tokens?.todayTokens ?? 0,
+      totalTokens: tokens?.totalTokens ?? 0,
+      lastMessageAt: counts.lastTs,
       channel: opts.channelState ? opts.channelState(b.slot) : idle,
     }
   })

@@ -15,14 +15,177 @@ import { EmbedFn, buildVectorIndex, vectorIndexStatus } from '../query/retrieval
 import { loadAdaptedWeights } from '../query/retrieval/feedback.ts'
 import { citationDocKey } from '../query/retrieval/kb-channel.ts'
 import { runRetrievalPipeline, type PipelineOutput } from '../query/retrieval/pipeline.ts'
+import { askRetrievalCompat, runAskRetrieval } from './ask-retrieval.ts'
 import { IntentKind, RerankWeights } from '../query/retrieval/types.ts'
 import { ensureSearchIndex } from '../query/search.ts'
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts'
 import { VectorBuildResult } from '../types-retrieval.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
+import { createAskRunChat } from './ask-run-chat.ts'
+import type { RunChatFn } from './ask-run-chat.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, ImageBlock, TokenUsage } from '@deepseek-ai/dsh-llm'
+
+/** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
+interface AskImageInput {
+  data: string
+  mediaType: string
+  name?: string
+}
+
+/**
+ * 自动回复的检索范围（会话 / 起始 / 截止必须真的参与检索）。
+ * @param options - askWechat 的会话与时间范围字段。
+ * @returns 只保留非空字段的 scope。
+ */
+function buildAskScope(options: { username?: string, from?: string, to?: string }): { username?: string, from?: string, to?: string } {
+  return {
+    username: typeof options.username === 'string' && options.username ? options.username : undefined,
+    from: typeof options.from === 'string' && options.from ? options.from : undefined,
+    to: typeof options.to === 'string' && options.to ? options.to : undefined,
+  }
+}
+
+/**
+ * 多轮上下文：最多最近 16 条（8 轮），并按**总字数预算**截断 ——
+ * 单条截断不够：8 轮长回答各 2000 字会把 prompt 撑到 1.6 万字，把检索结果挤到末尾。
+ * @param historyRaw - 调用方传入的历史（可能非法/超长）。
+ * @returns 过滤并截断后的历史（user/assistant 交替按原顺序）。
+ */
+function trimAskHistory(historyRaw: ReadonlyArray<{ role: 'user' | 'assistant', content: string }> | undefined): Array<{ role: 'user' | 'assistant', content: string }> {
+  const history = (Array.isArray(historyRaw) ? historyRaw : [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0)
+    .slice(-16)
+  const budget = 4000
+  let used = 0
+  const trimmed: Array<{ role: 'user' | 'assistant', content: string }> = []
+  for (const m of [...history].reverse()) {
+    const room = budget - used
+    if (room <= 80) break
+    const text = m.content.trim().slice(0, Math.min(m.role === 'assistant' ? 1200 : 400, room))
+    trimmed.unshift({ role: m.role, content: text })
+    used += text.length
+  }
+  return trimmed
+}
+
+/** 图片能否送给模型：由宿主附件服务或 mini 桥接层各自决定；这里只产出要放进消息的块。 */
+interface PreparedAskImages {
+  blocks: ImageBlock[]
+  note: string
+  audit: string
+}
+
+/**
+ * 把自动回复的图片准备成消息内容块：完整 harness 走附件服务（按模型 `image` 模态决定是否发送），
+ * Super Time 的 mini 宿主没有附件服务，直接放 base64 让 `llm-bridge.js` 投影成 OpenAI `image_url`。
+ * @param ctx - 宿主 Context。
+ * @param llm - LLM 服务（完整 runtime 才有 `resolveModelInfo`）。
+ * @param provider - 当前模型 provider。
+ * @param model - 当前模型 id。
+ * @param images - canonical base64 图片（最多 2 张）。
+ * @returns 消息块 + 给模型的说明 + 审计文案（空串 = 不记）。
+ */
+async function prepareAskImages(
+  ctx: Context,
+  llm: { resolveModelInfo?: (provider: string, model: string) => Promise<{ inputModalities?: readonly string[] }> } | undefined,
+  provider: string,
+  model: string,
+  images: readonly AskImageInput[],
+): Promise<PreparedAskImages> {
+  if (images.length === 0) return { blocks: [], note: '', audit: '' }
+  const attachments = (ctx as unknown as { attachments?: { admitPromptContent?: unknown } }).attachments
+  if (typeof attachments?.admitPromptContent !== 'function') {
+    // mini 宿主：没有附件服务；运行时块形状由 llm-bridge 识别。
+    const blocks = images.map((im) => ({
+      type: 'image',
+      data: im.data,
+      mediaType: im.mediaType,
+      ...(im.name === undefined ? {} : { name: im.name }),
+    } as unknown as ImageBlock))
+    return { blocks, note: '', audit: `随问题发送图片 ${String(blocks.length)} 张（OpenAI 兼容 image_url）` }
+  }
+  let vision = false
+  try {
+    const info = llm?.resolveModelInfo === undefined ? undefined : await llm.resolveModelInfo(provider, model)
+    vision = info?.inputModalities?.includes('image') === true
+  } catch { vision = false }
+  if (!vision) {
+    return { blocks: [], note: '（对方发来图片，但当前对话模型不支持读图，无法识别图片内容；请如实告诉对方看不到图片内容，不要说「没收到图片」。）', audit: '' }
+  }
+  const got = await admitAskImages(ctx, images)
+  return { blocks: got.blocks, note: got.note, audit: got.blocks.length > 0 ? `随问题发送图片 ${String(got.blocks.length)} 张` : '' }
+}
+
+/** 图片被供应商拒绝时的说明（重试纯文本时拼到 user 消息末尾）。 */
+const IMAGE_UNSUPPORTED_NOTE = '\n\n（注意：当前模型看不到随消息附的图片，无法识别图片内容；请如实告诉对方看不到图片内容，不要说「没收到图片」。）'
+
+/**
+ * 把一次模型调用的 usage 累加进本轮总计（字段口径见 dsh-llm `TokenUsage`）。
+ * @param acc - 已有累计（可能为空）。
+ * @param next - 本次调用的 usage。
+ * @returns 新的累计值；`next` 为空时原样返回。
+ */
+function addTokenUsage(acc: TokenUsage | undefined, next: TokenUsage | undefined): TokenUsage | undefined {
+  if (next === undefined) return acc
+  const base: TokenUsage = acc ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+  const sum = (a: number | undefined, b: number | undefined): number => (a ?? 0) + (b ?? 0)
+  return {
+    inputTokens: sum(base.inputTokens, next.inputTokens),
+    outputTokens: sum(base.outputTokens, next.outputTokens),
+    totalTokens: sum(base.totalTokens, next.totalTokens),
+    ...(sum(base.cacheReadTokens, next.cacheReadTokens) > 0 ? { cacheReadTokens: sum(base.cacheReadTokens, next.cacheReadTokens) } : {}),
+    ...(sum(base.cacheWriteTokens, next.cacheWriteTokens) > 0 ? { cacheWriteTokens: sum(base.cacheWriteTokens, next.cacheWriteTokens) } : {}),
+    ...(sum(base.reasoningTokens, next.reasoningTokens) > 0 ? { reasoningTokens: sum(base.reasoningTokens, next.reasoningTokens) } : {}),
+  }
+}
+
+/**
+ * 带图片的一次对话：图片被供应商拒绝时记一行审计，然后用纯文本 +「看不到图片内容」重试。
+ * 这是 mini 宿主（无模型模态元数据）下能给出的最诚实降级。
+ */
+async function runChatWithImagesFallback(
+  runChat: RunChatFn,
+  op: (category: 'task', action: string, status: 'fail', target: string, detail: string) => void,
+  system: string,
+  userText: string,
+  maxTokens: number,
+  onDelta?: (text: string) => void,
+  onReasoning?: (text: string) => void,
+  images?: readonly ImageBlock[],
+): Promise<string> {
+  if (images === undefined || images.length === 0) return runChat(system, userText, maxTokens, onDelta, onReasoning)
+  try {
+    return await runChat(system, userText, maxTokens, onDelta, onReasoning, images)
+  } catch (e) {
+    op('task', 'ask_wechat', 'fail', 'image_send', '图片未能送模型，已按纯文本重试：' + (e instanceof Error ? e.message : String(e)))
+    return runChat(system, userText + IMAGE_UNSUPPORTED_NOTE, maxTokens, onDelta, onReasoning)
+  }
+}
+
+async function admitAskImages(ctx: Context, images: readonly AskImageInput[]): Promise<{ blocks: ImageBlock[], note: string }> {
+  if (images.length === 0) return { blocks: [], note: '' }
+  const attachments = (ctx as unknown as {
+    attachments?: { admitPromptContent?: (parts: unknown[]) => Promise<Array<{ type?: string }>> }
+  }).attachments
+  if (attachments?.admitPromptContent === undefined) {
+    return { blocks: [], note: '（对方发来图片，但当前运行环境没有可用的附件服务，无法识别图片内容。）' }
+  }
+  try {
+    const parts: unknown[] = [
+      { type: 'text', text: '（以下是对方在微信里发来的图片）' },
+      ...images.slice(0, 2).map((i) => ({ type: 'image', data: i.data, mediaType: i.mediaType, ...(i.name === undefined ? {} : { name: i.name }) })),
+    ]
+    const admitted = await attachments.admitPromptContent(parts)
+    const blocks = admitted.filter((b): b is ImageBlock => b !== null && typeof b === 'object' && b.type === 'image')
+    return blocks.length > 0
+      ? { blocks, note: '' }
+      : { blocks: [], note: '（图片读取失败，无法识别图片内容。）' }
+  } catch {
+    return { blocks: [], note: '（图片读取失败，无法识别图片内容。）' }
+  }
+}
 
 /**
  * 回答的**数据来源说明**：条数 / 会话数 / 时间跨度。
@@ -40,7 +203,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 function askBasisLine(citations: ReadonlyArray<{
   time?: string
   username?: string
-  source?: 'msg' | 'kb'
+  source?: 'msg' | 'kb' | 'agg'
   kb?: { fileId?: number; fileName?: string }
   snippet?: string
 }>): string {
@@ -69,6 +232,10 @@ export interface createAskDeepRemotesInputs {
   makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined
   makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined
   makeDeltaEmitter: (streamId?: string) => ((text: string) => void) | undefined
+  /** 思考过程发射器（2026-10-16）：与可见正文分开推，界面单独折叠展示。 */
+  makeReasoningEmitter: (streamId?: string) => ((text: string) => void) | undefined
+  /** 阶段事件发射器（2026-10-16）：把「规划 / 检索 / 生成」的进度推给界面。 */
+  makeStageEmitter: (streamId?: string) => ((stage: { key: string; label: string; status: 'running' | 'done' | 'skipped'; detail?: string }) => void) | undefined
   kbModel: (kbId: number, role: KbModelRole) => ResolvedModel
   askKnownEntities: () => string[]
   saveAskHistory: (options: { question: string; username?: string; from?: string; to?: string; source?: string; usernameName?: string }, result: AskResult, elapsedMs: number, model: string) => void
@@ -77,6 +244,228 @@ export interface createAskDeepRemotesInputs {
   /** W3-6.1：取消一轮问答；找不到在跑的那一轮时返回 false。 */
   cancelAskJob: (jobId?: string) => boolean
 }
+
+/**
+ * 解析本次问答要用的**系统提示词**（模块级：让 `createAskDeepRemotes` 留在棘轮线内）。
+ * 自动回复传了 `systemPromptOverride` 就用它（拟人化人设），否则用检索问答那套
+ * （要求标 `[n]` 角标 —— 界面上可点、可核对）。两者**刻意分开**：微信里没有角标 UI。
+ * @param override - 调用方传的系统提示词（空串/未传 = 用缺省）。
+ * @returns 系统提示词。
+ */
+function resolveSystemPrompt(override: string | undefined): string {
+  if (override !== undefined && override.trim() !== '') return override
+  return '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。'
+}
+
+/**
+ * 归一知识库作用域：只有**合法正数**才开 kb 通道（非法值当「没传」，调用方另记日志）。
+ * @param kbId - 调用方传的知识库 id（不可信）。
+ * @returns 合法的整数 id；非法时为 undefined。
+ */
+function normalizeKbId(kbId: number | undefined): number | undefined {
+  return Number.isFinite(kbId) && (kbId ?? 0) > 0 ? Math.trunc(kbId as number) : undefined
+}
+
+/**
+ * 构造**用户消息里的回答规则**（模块级：让 `createAskDeepRemotes` 留在棘轮线内）。
+ *
+ * ## 为什么必须按 `dataScope` 分叉（2026-10-17 真机实测）
+ *
+ * 规则写在**用户消息**里，比 system 更「近」，模型会优先遵守。此前只有一套规则，
+ * 第 3 条硬性要求「每条事实后面标 [n]」—— 于是自动回复（`kb-only`）即使换了拟人化
+ * system，**回复里仍然带 `[1]` `[2]` 角标**（微信里没有可点的角标，看着像乱码），
+ * 而且模型为了「标全来源」会把话说长、说成报告腔。
+ *
+ * 分叉后：
+ *   · `kb-only`（自动回复）→ **聊天版**：不标角标、**每条不超过 30 字**、要求分段；
+ *   · 缺省（手动问答）→ **检索版**：保留 `[n]` 角标（界面上可点、可核对）。
+ *
+ * @param dataScope - 本次问答的数据面（`kb-only` = 自动回复）。
+ * @param timeGuardRule - 时间线索护栏（由调用方按检索结果拼好，两版共用）。
+ * @returns 拼好的规则段（含前导换行）。
+ */
+function buildSynthRules(dataScope: 'wechat' | 'kb-only' | undefined, timeGuardRule: string): string {
+  if (dataScope === 'kb-only') {
+    return `
+  请按以下要求回答（你在**微信里跟人聊天**，不是在写报告）：
+  1. **只用材料里的事实**：材料里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期。宁可少说，也不要编。
+  2. **像真人发微信那样说话**：口语、简短、自然。不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），不要复述检索过程，不要罗列来源。
+  3. **每条不超过 30 字**：这是硬要求。一句话说不完就**分成几条**，每条独立成段（用空行隔开），像人连发几条微信那样。宁可分 3 条短的，也不要写 1 条长的。
+  4. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字（如「小何说」）。
+  5. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
+  6. **找不到就直说**：材料不足以回答时，直接说「这个我这边没查到」，再问一句要不要换个说法。不要用推测填空。${timeGuardRule}`
+  }
+  return `
+  请按以下要求回答：
+  1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。金额、日期、电话/卡号这类值**只能原样照抄**材料里的写法 —— 要说合计就写明由哪几条相加（如「3500+3500=7000」），不要自行换算单位或推算日期。
+  2. **像微信里跟人说话那样自然**：口语化中文，直接把事情讲清楚，不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），也不要复述检索过程。要罗列多条时可以分点，但每条都要像在转述聊天内容。
+  3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
+  4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
+  5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
+  6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}`
+}
+
+/**
+ * 「没检索到原文」时的回答文案（模块级：让 `createAskDeepRemotes` 留在棘轮线内）。
+ * ⚠️ 按**数据面**分（2026-10-17）：`kb-only`（自动回复）时不能说「本机记录里没有检索到」
+ * —— 那条链路**根本没查本机记录**，说成「查了没有」是假话。
+ *
+ * ⚠️ 这个文案只在**手动问答**（`wechat`）时用。自动回复（`kb-only`）**不再走它** ——
+ * 见 {@link buildEmptyChatPrompt}：硬编码文案会让「你好」「谢谢」这类日常寒暄
+ * 永远只回一句「知识库里没有检索到…」，那是自动回复最致命的体验问题。
+ * @param dataScope - 本次问答的数据面。
+ * @returns 给用户看的回答。
+ */
+function emptyAnswerText(dataScope: 'wechat' | 'kb-only' | undefined): string {
+  if (dataScope === 'kb-only') {
+    return '知识库里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词，或在实例设置里换一个知识库。'
+  }
+  return '本机记录里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词、收窄时间范围，或指定某个会话再问。'
+}
+
+/**
+ * 自动回复在**检索 0 命中**时的兜底提示词（2026-10-17 真机实测新增）。
+ *
+ * ## 为什么需要它
+ *
+ * 真机实测：开了自动回复但没配知识库时，8 个场景（「你好」「在吗」「谢谢」…）
+ * **全部**返回同一句硬编码文案「知识库里没有检索到与这个问题相关的原文…」——
+ * 因为 `citations.length === 0` 时直接短路、**根本不调模型**。
+ *
+ * 那条短路对**手动问答**是对的（防止模型凭常识编造聊天记录）。但对**自动回复**是灾难：
+ * 微信里绝大多数消息是寒暄与闲聊，它们**本来就不该命中知识库** ——
+ * 用户看到的是「AI 只会复读一句话」，而不是「AI 在跟我聊天」。
+ *
+ * ## 它怎么工作
+ *
+ * 仍然调模型，但把「材料为空」这件事**明说**，并要求：
+ *   · 用自然的话回一句（寒暄就寒暄、问事就说没查到）；
+ *   · **不许编造**具体事实（金额/日期/人名/承诺）；
+ *   · 需要本人决定的事（借钱、签约）就说「这个我得问下本人」。
+ *
+ * ⚠️ 它是**用户消息**，比 system 更「近」—— 所以「禁角标 / 禁万能开场 / 先回应内容」
+ * 这些规则必须**在这里也写一遍**，只在 system 里写不够（真机实测：3 次里 1 次冒出 `[1]`）。
+ *
+ * @param question - 用户发来的消息正文。
+ * @param history - 最近对话（2026-10-18：自动回复要能关联上下文）。
+ * @param imageNote - 有图但看不到时的说明（空串 = 没有图或图片已随消息送出）。
+ * @returns 兜底提示词（作为用户消息）。
+ */
+function buildEmptyChatPrompt(question: string, history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }> = [], imageNote = ''): string {
+  const historyBlock = history.length > 0
+    ? '\n\n此前对话（保持连贯，别把上一轮说过的事当没发生）：\n'
+      + history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content).join('\n')
+    : ''
+  const imageBlock = imageNote !== '' ? '\n\n关于图片：' + imageNote : ''
+  return `用户发来一条微信消息：${question}${historyBlock}${imageBlock}
+
+  你**没有**任何可参考的材料（知识库里没检索到相关内容）。请按以下要求回一句：
+  1. **像真人发微信那样**：口语、简短、自然，每条不超过 30 字。寒暄就正常寒暄（「在的」「嗯嗯」），问事就说没查到。
+  2. **开场跟着对方的话走**：「在的」只在对方问「在吗 / 在不在」时用；对方说别的就直接接话，不要用万能开场。
+  3. **先回应对方说的内容，再说别的**：对方说「我明天去北京」，先接「出差啊」再往下；不要一上来就说「我这边没查到」。
+  4. **闲聊就闲聊**：对方在开玩笑、发牢骚、说天气，就顺着聊，不要硬往「查资料」上引。不是每句话都需要回答。
+  5. **绝对不要编造**具体事实：金额、日期、人名、地址、承诺一律不许猜。不知道就说不知道。
+  6. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字。
+  7. **不要提「知识库」「检索」「材料」这类词** —— 对方不知道你在查什么，说了很奇怪。
+  8. **不要解释你自己**：不要写「注：」「说明：」「（不编号了）」这类元信息，也不要提引用、编号、来源。你就是在聊天，不是在写文档。
+  9. 需要本人决定的事（借钱、签约、敏感话题），回一句「这个我得问下本人」比硬答更好。
+  10. 内容确实长时按语义分段（段间空一行），像人连发几条那样。`
+}
+
+/**
+ * 构造「没有检索到原文」时的问答结果（模块级：让 `createAskDeepRemotes` 留在棘轮线内）。
+ *
+ * 两条链路共用它（自动回复的兜底对话 / 手动问答的短路），差别只在 `answer` 怎么来。
+ * @param answer - 给用户看的回答正文。
+ * @param plan - 意图规划结果（写进历史，供回看时判断当时怎么理解的）。
+ * @param terms - 本次用到的检索词。
+ * @param stats - 检索统计（通道命中数等）。
+ * @param indexNote - 索引状态说明（空串 = 不写）。
+ * @returns 问答结果（`insufficient: true`、无引用）。
+ */
+function buildEmptyResult(
+  answer: string,
+  plan: { intent: string, subQueries: string[], from?: string, to?: string, person?: string },
+  terms: string[],
+  stats: { candidates: number, kept: number, scope: string, recency: boolean, chunks: number, windowMessages: number },
+  indexNote: string,
+): AskResult {
+  return {
+    answer,
+    citations: [],
+    plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
+    citedIndexes: [],
+    basis: '',
+    insufficient: true,
+    retrieval: {
+      candidates: stats.candidates, kept: stats.kept, scope: stats.scope,
+      recency: stats.recency, chunks: stats.chunks, windowMessages: stats.windowMessages,
+      ...(indexNote === '' ? {} : { indexNote }),
+    },
+  }
+}
+
+/**
+ * 处理「检索 0 命中」这一分支（模块级：让 `createAskDeepRemotes` 留在棘轮线内）。
+ *
+ * ## 两条链路刻意分叉（2026-10-17 真机实测新增）
+ *
+ * · **自动回复（`kb-only`）仍然调模型**：微信里绝大多数消息是寒暄与闲聊
+ *   （「你好」「在吗」「谢谢」），它们**本来就不该命中知识库**。若沿用「0 命中就短路」，
+ *   用户看到的是「AI 只会复读一句『知识库里没有检索到…』」—— 那不是聊天，是报错。
+ *   真机实测：8 个场景（含「你好」「谢谢」）**全部**返回同一句硬编码文案。
+ * · **手动问答（`wechat`）保持短路**：那条链路用户明确在问「我的聊天记录里有没有」，
+ *   没有原文就不该让模型凭常识编一段（这是「不编造」的硬底线）。
+ *
+ * @param deps - 调模型与记账所需的依赖（由调用方注入，避免本函数碰闭包）。
+ * @returns 问答结果（`insufficient: true`、无引用）。
+ */
+async function resolveEmptyAnswer(deps: {
+  dataScope: 'wechat' | 'kb-only' | undefined
+  question: string
+  systemPromptOverride: string | undefined
+  plan: { intent: string, subQueries: string[], from?: string, to?: string, person?: string }
+  terms: string[]
+  stats: { candidates: number, kept: number, scope: string, recency: boolean, chunks: number, windowMessages: number }
+  indexNote: string
+  history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>
+  imageBlocks: readonly ImageBlock[]
+  imageNote: string
+  runChat: (system: string, userText: string, maxTokens: number, onDelta?: (t: string) => void, onReasoning?: (t: string) => void, images?: readonly ImageBlock[]) => Promise<string>
+  onReasoning: (t: string) => void
+  privacyGate: (feature: string, counts: { sessions: number, messages: number }, texts: string[]) => string[]
+  op: (category: 'task', action: string, status: 'skip' | 'fail', target: string, detail: string) => void
+  emitStage?: (s: { key: string, label: string, status: 'running', detail: string }) => void
+}): Promise<AskResult> {
+  if (deps.dataScope !== 'kb-only') {
+    deps.op('task', 'ask_wechat', 'skip', '', '未检索到任何原文，未调用模型')
+    return buildEmptyResult(emptyAnswerText(deps.dataScope), deps.plan, deps.terms, deps.stats, deps.indexNote)
+  }
+  deps.op('task', 'ask_wechat', 'skip', '', '未检索到原文，自动回复走兜底对话（不引用）')
+  const chatPrompt = buildEmptyChatPrompt(deps.question, deps.history, deps.imageNote)
+  const [chatGated] = deps.privacyGate('ask_wechat', { sessions: 0, messages: 0 }, [chatPrompt])
+  deps.emitStage?.({ key: 'synthesize', label: '综合生成回答', status: 'running', detail: '无检索材料，按聊天兜底' })
+  let chatAnswer = ''
+  try {
+    chatAnswer = await deps.runChat(
+      resolveSystemPrompt(deps.systemPromptOverride),
+      chatGated ?? chatPrompt,
+      400,
+      undefined,
+      deps.onReasoning,
+      deps.imageBlocks,
+    )
+  } catch (e) {
+    // 兜底也失败：退回硬编码文案（至少让用户看到一句人话，而不是空回复）。
+    deps.op('task', 'ask_wechat', 'fail', 'empty_chat', (e as Error).message)
+    chatAnswer = ''
+  }
+  return buildEmptyResult(
+    chatAnswer.trim() !== '' ? chatAnswer.trim() : emptyAnswerText(deps.dataScope),
+    deps.plan, deps.terms, deps.stats, deps.indexNote,
+  )
+}
+
 export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
   return {
     async askWechat(options: {
@@ -103,6 +492,25 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
        */
       kbId?: number
       jobId?: string
+      /**
+       * 数据面（2026-10-17）：`wechat`（缺省）= 可检索本机微信数据；
+       * `kb-only` = **只检索知识库**，不碰本机微信数据。
+       *
+       * 自动回复（无人值守出网）传 `kb-only` —— 微信里随便一个人发一句话，
+       * 不该让本机把全部聊天记录检索一遍并送去模型。
+       */
+      dataScope?: 'wechat' | 'kb-only'
+      /**
+       * 随问题一起送模型的图片（2026-10-18，ClawBot 自动回复「识别图中内容」）：
+       * canonical base64 + MIME，最多 2 张。是否真的送模型由当前模型是否声明
+       * `image` 输入模态决定；不支持时改成一句「看不到图片内容」的说明。
+       */
+      images?: AskImageInput[]
+      /**
+       * 系统提示词覆盖（2026-10-17）：传了就用它当 system，**用户消息里的检索材料与规则照旧**
+       * （那部分保证「不编造」的底线）。自动回复用它注入实例的拟人化人设。
+       */
+      systemPromptOverride?: string
     }): Promise<AskResult> {
       // W3-6.1：取消整块在 remotes/ask-cancel.ts（令牌 / 阶段检查 / 槽位归还 / cancelAsk）。
       // 没有 jobId（旧客户端）时不可取消，行为与改动前逐字一致。
@@ -110,8 +518,8 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       //   于是 run() 用的是第一枚、throwIfCanceled 读的是第二枚 —— 取消看似生效、槽位却永不归还
       //   （ask-cancel.spec.ts 第 ⑤ 条「对已结束轮次取消必须返回 false」钉的正是这个）。
       const askCtl = beginAskCancel(rc, options.jobId)
-      const throwIfCanceled = askCtl.throwIfCanceled
-      return await askCtl.run(async (): Promise<AskResult> => {
+      let usageAcc: TokenUsage | undefined
+      const result = await askCtl.run(async (): Promise<AskResult> => {
         const ctx = rc.ctx()
         /** 端到端耗时基准（提问 → 回答生成结束），写进历史记录供用户回看时判断快慢。 */
         const askStartedAt = Date.now()
@@ -125,65 +533,40 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       }
       /** 写进历史的回答模型标签（与面板底部「片段会发给谁」同一口径）。 */
       const modelLabel = `${sel.provider} · ${sel.model}`
-      // 检索范围：会话范围 / 时间范围必须真的参与检索。
-      // 从前这里只传 question，用户选了「会话范围」也仍然全库检索（本次修复）。
-      const scope: { username?: string; from?: string; to?: string } = {
-        username: typeof options.username === 'string' && options.username ? options.username : undefined,
-        from: typeof options.from === 'string' && options.from ? options.from : undefined,
-        to: typeof options.to === 'string' && options.to ? options.to : undefined,
-      }
-      // 多轮：最多携带最近 16 条（8 轮），并按**总字数预算**截断 ——
-      // 单条截断不够：8 轮长回答各 2000 字会把 prompt 撑到 1.6 万字，把检索结果挤到末尾。
-      const history = (Array.isArray(options.history) ? options.history : [])
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0)
-        .slice(-16)
-      const HISTORY_BUDGET = 4000
-      let historyUsed = 0
-      const trimmedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
-      for (const m of [...history].reverse()) {
-        const room = HISTORY_BUDGET - historyUsed
-        if (room <= 80) break
-        const text = m.content.trim().slice(0, Math.min(m.role === 'assistant' ? 1200 : 400, room))
-        trimmedHistory.unshift({ role: m.role, content: text })
-        historyUsed += text.length
-      }
+      // 检索范围与多轮上下文（实现见模块级 `buildAskScope` / `trimAskHistory`）。
+      const scope = buildAskScope(options)
+      const trimmedHistory = trimAskHistory(options.history)
       const llm = ctx.llm
+      const askImages = Array.isArray(options.images) ? options.images.slice(0, 2) : []
+      const prepared = await prepareAskImages(ctx, llm, sel.provider, sel.model, askImages)
+      const imageBlocks = prepared.blocks
+      const imageNote = prepared.note
+      if (prepared.audit !== '') rc.op('task', 'ask_wechat', 'ok', '', prepared.audit)
+      /**
+       * 思考过程（2026-10-16）：与可见正文分开推，界面单独折叠展示。
+       * 非推理模型不吐 `reasoning-delta`，这里就一次都不会被调用（不是错误）。
+       */
+      const emitReasoning = rc.makeReasoningEmitter(options.streamId)
+      let reasoningAcc = ''
+      const onReasoning = (text: string): void => {
+        reasoningAcc = text
+        emitReasoning?.(text)
+      }
+      /** 阶段事件（2026-10-16）：把「规划 / 检索 / 生成」的进度推给界面。 */
+      const emitStage = rc.makeStageEmitter(options.streamId)
       /**
        * 跑一次对话。`onDelta` 存在时，把**已生成的全文**在生成过程中回传 ——
        * 传全文而不是增量片段：渲染进程只需整体替换，丢一两个事件也不会串行错乱。
+       * `onReasoning`（2026-10-16）：思考过程单独推，界面折叠展示（与可见正文分开）。
+       * `images`（2026-10-18）：需要模型「看图」时把图片块附在同一条用户消息里。
        */
-      const runChat = async (system: string, userText: string, maxTokens: number, onDelta?: (text: string) => void): Promise<string> => {
-        const assembler = new BlockAssembler()
-        const opts: GenerateOptions = {
-          provider: sel.provider,
-          model: sel.model,
-          messages: [createUserMessage({
-            content: [{ type: 'text', text: userText }],
-            source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-          })],
-          system,
-          maxTokens,
-        }
-        let acc = ''
-        let emitted = false
-        for await (const chunk of llm.stream(opts)) {
-          throwIfCanceled()
-          assembler.push(chunk)
-          const c = chunk as { type?: string; text?: string }
-          if (onDelta && c.type === 'text-delta' && typeof c.text === 'string') {
-            acc += c.text
-            emitted = true
-            onDelta(acc)
-          }
-        }
-        // 厂商不支持 SSE 时 stream() 只 yield 一次完整 text-delta，上面已覆盖；
-        // 若一个 delta 都没拿到（极端情况），最后补发一次完整文本，保证界面不会空着。
-        if (onDelta && !emitted) {
-          const finalText = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-          if (finalText) onDelta(finalText)
-        }
-        return assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-      }
+      const runChat = createAskRunChat({ llm, provider: sel.provider, model: sel.model, throwIfCanceled: askCtl.throwIfCanceled, onUsage: (usage) => { usageAcc = addTokenUsage(usageAcc, usage) } })
+      const runChatImages: RunChatFn = (system, userText, maxTokens, onDelta, onReasoning, images = imageBlocks) =>
+        runChatWithImagesFallback(
+          runChat,
+          (category, action, status, target, detail) => { rc.op(category, action, status, target, detail) },
+          system, userText, maxTokens, onDelta, onReasoning, images,
+        )
 
       // ── 第 1 步：意图分析与拆解（LLM → JSON 规划） ──
       // 规划器同时负责**把相对时间换算成绝对日期**（「上周三」→ 2026-09-02）与
@@ -193,7 +576,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
       const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][today.getDay()]
       const scopeDesc = `会话=${scope.username ?? '全部'}${scope.from ? `，起始=${scope.from}` : ''}${scope.to ? `，截止=${scope.to}` : ''}`
-      const historyBrief = history.length > 0
+      const historyBrief = trimmedHistory.length > 0
         ? '\n对话历史（最近）：\n' + trimmedHistory.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content.slice(0, 300)).join('\n')
         : ''
       const planPrompt = `今天是 ${todayStr}（${weekday}）。\n用户问题：${options.question}\n当前筛选范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
@@ -218,7 +601,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         rc.op('task', 'ask_wechat', 'fail', 'intent_plan', (e as Error).message)
       }
       // W3-6.1：规划走 runChat（循环里已查取消），这里只补「规划之后」这个阶段边界。
-      throwIfCanceled()
+      askCtl.throwIfCanceled()
 
       // W2-6.4：全量构建挪到后台（实测 13.5 万条 5.4s，不该让这一问干等）；
       // 落后于分片的增量同步**照旧等**（实测最坏 25.6ms，而不等就会用旧索引作答，
@@ -240,170 +623,38 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         // 索引不可用不阻断提问：退回 LIKE 召回（准确率低但可用）
         rc.op('task', 'ask_wechat', 'fail', 'build_index', (e as Error).message)
       }
-      throwIfCanceled()
+      askCtl.throwIfCanceled()
       // ── 第 2 步：多阶段检索 ──
       // 顺序：意图路由 → 查询改写 → 混合召回（稀疏 BM25 + 稠密向量 + 结构化）→
       //       RRF 融合去重 → 交叉特征重排 → 上下文压缩。
       // config.enabled=false 时退回旧的单通道检索（灰度/回滚开关）。
-      const retrConfig = loadRetrievalConfig(rc.dirs().decrypted)
+      // 检索阶段整块在 `ask-retrieval.ts`（2026-10-16 抽出）：这一段（向量索引补齐 →
+      // 知识库向量 → 跑流水线 → 降级回退）语义独立 —— 它只回答「这次提问该拿哪些原文」。
       const scopeDescText = [
         scope.username ? '会话限定' : '',
         scope.from ? `起 ${scope.from}` : '',
         scope.to ? `止 ${scope.to}` : '',
       ].filter(Boolean).join(' ') || '全库'
-      // 这五个都在这段下方的两条路径里被赋值（legacyRetrieve 闭包 / 流水线分支），
-      // 而 TS 的确定性赋值分析看不穿闭包调用，会报 50 条 TS2454。这里给**真实默认值**
-      // 而不是用 `!` 断言：万一哪条路径漏了赋值，宁可退化成「没有原文 → 不调模型」
-      // （硬约束一），也不要带着未定义值继续往下跑。
-      let citations: ReturnType<typeof retrieveAskCitations>['citations'] = []
-      let chunks: ReturnType<typeof retrieveAskCitations>['chunks'] = []
-      let terms: string[] = []
-      let statsCompat: {
-        candidates: number; kept: number; scope: string; recency: boolean
-        timeHint: string; hintHits: number; chunks: number; windowMessages: number
-        intent?: string; denseActive?: boolean; elapsedMs?: number
-        channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
-        funnel?: { recalled: number; fused: number; ranked: number }
-        // W3-6.3精排是否真的用上（独立字段，前端不必再 parse basis 文本）。
-        rerank?: { used: boolean; candidates: number; kept: number; model?: string; note?: string }
-  indexNote?: string
-      } = {
-        candidates: 0, kept: 0, scope: scopeDescText, recency: false,
-        timeHint: '', hintHits: 0, chunks: 0, windowMessages: 0,
-      }
-      let rankedFeatures: Array<{ docKey: string; features: RerankWeights }> = []
-      let retrievalId = ''
-
-      /** 旧单通道检索：灰度对照 / 回滚 / 流水线异常时的降级路径。 */
-      const legacyRetrieve = (): void => {
-        const legacy = retrieveAskCitations(
-          rc.dirs().decrypted,
-          options.question,
-          { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
-          scope,
-          24,
-        )
-        citations = legacy.citations
-        chunks = legacy.chunks
-        terms = legacy.terms
-        statsCompat = { ...legacy.stats }
-        rankedFeatures = []
-        retrievalId = ''
-      }
-
-      // 依据行里那句「精排用了什么」：管道跑完才有值，而 `basisLine` 在 if 之外拼装，
-      // 所以在外层占位。走不到管道（检索被关闭）时它保持空串，那句话也就不出现 ——
-      // 比硬写一句「没精排」诚实：那次确实没有排序这回事，是**没检索**。
-      let rerankLine = ''
-      if (retrConfig.enabled) {
-        try {
-        // 稠密通道是**新增的出网点**：embedding 调用统一过隐私闸门（见 makeEmbedFn），
-        // 未配置向量模型时抛错，流水线自动降级为纯稀疏，不影响问答可用性。
-        // 模型名只解析**一次**并复用：`makeEmbedFn` 发出去的是它，向量库记的也是它。
-        // （此前两边各算一遍，这边算出 `'default'`、那边发的是 llm.json 的值 —— 见 §7 F1。）
-        const embedModel = rc.embedModelName(retrConfig.embedding.model)
-        const embedFn = rc.makeEmbedFn(embedModel)
-        // 向量索引：首次（或增量）在提问时补齐；失败只记录，不阻断（退化为纯稀疏）。
-        if (embedFn && retrConfig.embedding.enabled) {
-          const vst = vectorIndexStatus(rc.dirs().decrypted)
-          if (!vst.ready) {
-            try {
-              const built = await buildVectorIndex(rc.dirs().decrypted, embedFn, {
-                model: embedModel,
-                batchSize: retrConfig.embedding.batchSize,
-                concurrency: retrConfig.embedding.concurrency,
-                maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
-                maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild,
-              })
-              rc.op('task', 'ask_wechat', 'ok', 'build_vectors', `向量索引 ${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms`)
-            } catch (e) {
-              rc.op('task', 'ask_wechat', 'fail', 'build_vectors', (e as Error).message)
-            }
-          }
-        }
-        const adapted = loadAdaptedWeights(rc.dirs().decrypted)
-        // 已知实体名：让「点名识别」走本地确定性名单，而不是只靠规划器这一跳。
-        const known = rc.askKnownEntities()
-        // 知识库作用域：只有传了合法 id 才开 kb 通道。非法值（0 / 负数 / NaN）当「没传」
-        // 处理并留一条操作日志 —— 静默变成「搜了整个库」才是危险的，变成「没搜文件」不是。
-        const kbId = Number.isFinite(options.kbId) && (options.kbId ?? 0) > 0 ? Math.trunc(options.kbId as number) : undefined
-        if (options.kbId !== undefined && kbId === undefined) {
-          rc.op('task', 'ask_wechat', 'fail', 'kb_scope', `忽略非法的知识库标识：${String(options.kbId)}`)
-        }
-        // 知识库向量索引：与消息侧同款「提问时按需补齐」，但**按库**建。
-        // 为什么要按库而不是一次建全库：出网范围必须与用户此刻的意图一致 —— 用户在这个库里
-        // 提问，就只把这个库的正文送去 embedding；一次建全库会把**别的库**的正文也发出去，
-        // 而「文件级 RAG 开关」只表达得了文件意愿、表达不了库意愿（见 kb-vectors.ts 头注）。
-        // 失败只记录、不阻断：稠密不可用时通道如实降级为纯关键词，问答照常可用。
-        // 库级覆盖**只作用于知识库这一路**：消息域的向量不属于任何库，跟着全局走。
-        const kbEmbedModel = kbId === undefined ? embedModel : rc.kbModel(kbId, 'embed').model
-        // 精排只构造一次：`makeRerankFn` 里含一次 SQLite 读（库级覆盖），调两遍就是白读一次，
-        // 而且两次结果理论上可以不一致（中间正好有人改了设置）。
-        const rerankModelName = rc.kbModel(kbId ?? 0, 'rerank').model
-        const rerankFn = rc.makeRerankFn(kbId ?? 0)
-        if (kbId !== undefined && retrConfig.embedding.enabled) {
-          const kbSt = kbVectorIndexStatus(rc.dirs().decrypted, kbId, kbEmbedModel)
-          if (!kbSt.ready) {
-            try {
-              const kbEmbed = rc.makeEmbedFn(kbEmbedModel, 'kb_embed')
-              if (kbEmbed) {
-                const built = await buildKbVectorIndex(rc.dirs().decrypted, kbId, kbEmbed, {
-                  model: kbEmbedModel,
-                  batchSize: retrConfig.embedding.batchSize,
-                  concurrency: retrConfig.embedding.concurrency,
-                  maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
-                  maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild,
-                })
-                rc.op('task', 'ask_wechat', 'ok', 'build_kb_vectors',
-                  `知识库向量 ${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms`)
-              }
-            } catch (e) {
-              rc.op('task', 'ask_wechat', 'fail', 'build_kb_vectors', (e as Error).message)
-            }
-          }
-        }
-        const out = await runRetrievalPipeline({
-          decryptedDir: rc.dirs().decrypted,
-          question: options.question,
-          subQueries: plan.subQueries,
-          entity: plan.person,
-          from: plan.from,
-          to: plan.to,
-          scope,
-          limit: 24,
-          config: retrConfig,
-          ...(embedFn ? { embedFn } : {}),
-          // 与 embedFn 同一个解析出来的模型名：稠密召回靠它判「库里那批向量是不是本次模型算的」。
-          // 传 kbEmbedModel 而不是 embedModel —— 知识库这一路可能被库级覆盖改过名字。
-          embedModel: kbEmbedModel,
-          // 精排：没配 rerank 模型时这里就是 undefined，管道整段跳过并按本地加权排序。
-          ...(rerankFn ? { rerank: rerankFn } : {}),
-          rerankModel: rerankModelName,
-          // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
-          knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
-          ...(adapted ? { weightsOverride: adapted } : {}),
-          ...(kbId !== undefined ? { kbId } : {}),
-        })
-        rerankLine = out.rerankInfo.used
-          ? ` · 精排：${out.rerankInfo.model || '未知模型'}（候选 ${out.rerankInfo.candidates} → 取 ${out.rerankInfo.kept}）`
-          : ` · 精排：${out.rerankInfo.note}`
-        citations = out.citations
-        chunks = out.chunks
-        terms = out.terms
-        rankedFeatures = out.rankedFeatures
-        retrievalId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-        // W3-6.3：组装整块搪去模块级函数（工厂受函数体椚轮管，只许变小）。
-        statsCompat = askRetrievalCompat(out, scopeDescText, indexNote)
-        rc.op('task', 'ask_wechat', 'ok', 'route',
-          `意图 ${out.stats.intent} · 通道[${out.stats.channels.map(c => `${c.channel}:${c.count}${c.active ? '' : '(off)'}`).join(' ')}] · 召回 ${out.stats.recalled} → 融合 ${out.stats.fused} → 重排 ${out.stats.ranked} → 窗口 ${out.stats.compressed} · ${out.stats.elapsedMs}ms`)
-        } catch (e) {
-          // 流水线自身异常（非通道降级）→ 回退旧检索，绝不让问答整体不可用。
-          rc.op('task', 'ask_wechat', 'fail', 'retrieval_pipeline', (e as Error).message)
-          legacyRetrieve()
-        }
-      } else {
-        legacyRetrieve()
-      }
+      const retr = await runAskRetrieval({
+        decryptedDir: rc.dirs().decrypted,
+        question: options.question,
+        plan: { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
+        scope,
+        ...(normalizeKbId(options.kbId) !== undefined ? { kbId: normalizeKbId(options.kbId) } : {}),
+        // 数据面限定（2026-10-17）：自动回复传 `kb-only` ⇒ 关掉微信侧四通道 + 不建消息向量索引。
+        ...(options.dataScope === 'kb-only' ? { wechatDataEnabled: false } : {}),
+        indexNote,
+        scopeDescText,
+        op: (category, action, status, target, detail) => { rc.op(category, action, status, target, detail) },
+        makeEmbedFn: (model, feature) => rc.makeEmbedFn(model, feature),
+        embedModelName: (override) => rc.embedModelName(override),
+        makeRerankFn: (id) => rc.makeRerankFn(id),
+        kbModel: (id, role) => rc.kbModel(id, role),
+        askKnownEntities: () => rc.askKnownEntities(),
+        ...(emitStage ? { emitStage } : {}),
+      })
+      const { citations, chunks, terms, rankedFeatures, retrievalId, rerankLine, timeBrowse } = retr
+      const statsCompat = retr.stats
 
       // ── 硬约束一：没有任何原文就**不调模型** ──
       // 提示词里写「没找到就说明没找到」只是软约束；模型完全有可能凭常识编一段。
@@ -413,22 +664,20 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       // 不写出来，用户就会把「没配模型」读成「模型认为这些最相关」。
       const basisLine = askBasisLine(citations) + rerankLine
       if (citations.length === 0) {
-        rc.op('task', 'ask_wechat', 'skip', '', '未检索到任何原文，未调用模型')
-        // 「没检索到」也是一次问答（用户确实问了、也确实拿到了回答），必须进历史 ——
-        // 否则回看历史时这一段是空的，用户会以为当时根本没问过。
-        const emptyResult: AskResult = {
-          answer: '本机记录里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词、收窄时间范围，或指定某个会话再问。',
-          citations: [],
-          plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
-          citedIndexes: [],
-          basis: '',
-          insufficient: true,
-          retrieval: {
-            candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
-            recency: statsCompat.recency, chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
-            ...(indexNote === '' ? {} : { indexNote }),
-          },
-        }
+        // 0 命中分支整块抽到模块级 `resolveEmptyAnswer`（自动回复调模型兜底 / 手动问答短路）。
+        const emptyResult = await resolveEmptyAnswer({
+          dataScope: options.dataScope,
+          question: options.question,
+          systemPromptOverride: options.systemPromptOverride,
+          plan, terms, stats: statsCompat, indexNote,
+          history: trimmedHistory,
+          imageBlocks,
+          imageNote,
+          runChat: runChatImages, onReasoning,
+          privacyGate: (feature, counts, texts) => rc.privacyGate(feature, counts, texts),
+          op: (category, action, status, target, detail) => { rc.op(category, action, status, target, detail) },
+          ...(emitStage ? { emitStage } : {}),
+        })
         rc.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel)
         return emptyResult
       }
@@ -461,30 +710,32 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           ? `\n7. **时间范围**：材料都落在 ${statsCompat.timeHint} 内，可以按该范围陈述。`
           : `\n7. **时间范围（重要）**：检索在 ${statsCompat.timeHint} 内**一条都没找到**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${statsCompat.timeHint} 这段时间没有找到相关聊天记录」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`)
         : ''
+      const imageHint = imageBlocks.length > 0 ? '（本轮用户消息里附了图片，请直接看图回答。）' : imageNote
       const synthPrompt = `${historyBlock}用户本次问题：${options.question}
+${imageHint !== '' ? '\n关于图片：' + imageHint : ''}
 
   ${contextBlock}
-
-  请按以下要求回答：
-  1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。金额、日期、电话/卡号这类值**只能原样照抄**材料里的写法 —— 要说合计就写明由哪几条相加（如「3500+3500=7000」），不要自行换算单位或推算日期。
-  2. **像微信里跟人说话那样自然**：口语化中文，直接把事情讲清楚，不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），也不要复述检索过程。要罗列多条时可以分点，但每条都要像在转述聊天内容。
-  3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
-  4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
-  5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
-  6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}`
+${buildSynthRules(options.dataScope, timeGuardRule)}`
       const [synthGated] = rc.privacyGate(
         'ask_wechat',
         { sessions: new Set(citations.map(c => c.username)).size, messages: citations.length },
         [synthPrompt],
       )
-      const answer = await runChat(
-        '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。',
+      emitStage?.({ key: 'synthesize', label: '综合生成回答', status: 'running', detail: `依据 ${citations.length} 条原文` })
+      const answer = await runChatImages(
+        resolveSystemPrompt(options.systemPromptOverride),
         synthGated ?? synthPrompt,
-        1600,
+        // 自动回复（kb-only）要短：单条 ≤30 字、总长 ≤300 字 ⇒ 400 tokens 足够，
+        // 且能压住模型「写长」的倾向（生成时长与输出长度成正比）。
+        options.dataScope === 'kb-only' ? 400 : 1200,
         // 必须走 this.：makeDeltaEmitter 是实例方法。裸调用会抛
         // 「ReferenceError: makeDeltaEmitter is not defined」—— 它出现在**综合生成那一刻**，
         // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
         rc.makeDeltaEmitter(options.streamId),
+        // 思考过程（2026-10-16）：与可见正文分开推，界面单独折叠展示。
+        onReasoning,
+        // 图片（2026-10-18）：视觉模型直接看图；文本模型在 prompt 里已有「看不到图片」说明。
+        imageBlocks.length > 0 ? imageBlocks : undefined,
       )
       /** 回答「自己引用的」那些来源的正文：优先窗口全文，退化用引用卡片里的片段。
        *  接地审计必须拿**同一条证据**去核对 —— 用窗口全文而不是列表里的 120 字摘要，
@@ -611,6 +862,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       rc.saveAskHistory(options, result, Date.now() - askStartedAt, modelLabel)
       return result
       })
+      return usageAcc === undefined ? result : { ...result, usage: usageAcc }
     },
 
     cancelAsk: (options: { jobId: string }): { ok: boolean; message?: string } => cancelAskIn(rc, options),
@@ -652,7 +904,6 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
   }
 }
 
-
 /**
  * 提问优化（W3-6.1 从 createAskDeepRemotes 里搬出）。
  *
@@ -660,54 +911,6 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
  * 只许变小）—— 而它恰好是整个工厂里最独立的一件：不依赖任何闭包，只用 `rc`。
  * 与 `remotes/ask-cancel.ts` 同属「给工厂腾地方」的结构刀。
  */
-/**
- * 把流水线的统计结果组装成对外 `retrieval` 的形状（W3-6.3 从 createAskDeepRemotes 里搪出）。
- *
- * 搪家原因与 `optimizeAskQuestionIn` 同族：工厂受函数体椚轮管着（只许变小）。
- * 组装本身不依赖任何闭包，抽出来还能被用例直接验（不必造一个完整问答）。
- *
- * 两个口径写在这里而不是散在调用点：
- *  · `rerankInfo` 是**判别联合**：`used:false` 那一支没有 candidates/kept（根本没跑精排，
- *    没有「候选」可数）。读的时候给 0 —— 否则界面会显示成「候选 undefined → 取 undefined」，
- *    而 `model`/`note` 两个键也必须按分支取。
- *  · 通道名称直接向外（UI 按这个字段选标签），不在这里翻译。
- */
-function askRetrievalCompat(
-  out: PipelineOutput,
-  scopeDescText: string,  indexNote = '',
-
-): {
-  candidates: number; kept: number; scope: string; recency: boolean
-  timeHint: string; hintHits: number; chunks: number; windowMessages: number
-  intent?: string; denseActive?: boolean; elapsedMs?: number
-  channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
-  funnel?: { recalled: number; fused: number; ranked: number }
-  rerank?: { used: boolean; candidates: number; kept: number; model?: string; note?: string }
-} {
-  return {
-    candidates: out.stats.recalled,
-    kept: out.stats.kept,
-    scope: scopeDescText,
-    recency: out.stats.recency,
-    timeHint: out.stats.timeHint,
-    hintHits: out.stats.hintHits,
-    chunks: out.stats.compressed,
-    windowMessages: out.stats.windowMessages,
-    intent: out.stats.intent,
-    denseActive: out.stats.denseActive,
-    elapsedMs: out.stats.elapsedMs,
-    channels: out.stats.channels.map(c => ({ channel: c.channel, count: c.count, active: c.active, ...(c.note ? { note: c.note } : {}) })),
-    funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked },
-    rerank: {
-      used: out.rerankInfo.used,
-      candidates: out.rerankInfo.used ? out.rerankInfo.candidates : 0,
-      kept: out.rerankInfo.used ? out.rerankInfo.kept : 0,
-      ...(out.rerankInfo.used && out.rerankInfo.model ? { model: out.rerankInfo.model } : {}),
-      ...(!out.rerankInfo.used && out.rerankInfo.note ? { note: out.rerankInfo.note } : {}),
-    },
-  }
-}
-
 async function optimizeAskQuestionIn(rc: createAskDeepRemotesInputs, options: {
 question: string
 username?: string

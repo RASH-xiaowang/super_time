@@ -30,7 +30,11 @@ describe('图片加载流程', () => {
     // 「图片加载中…」这几个字，裸词匹配会把注释算进去（本轮的守卫在别处已栽过两次）。
     expect(MEDIA, '文字占位不该再渲染出来（用户报的就是它）').not.toContain('图片加载中…</span>')
     expect(MEDIA, '占位换成骨架').toContain('css.msgImageSkeleton')
-    expect(CSS, '骨架要有呼吸动画（表达「在取」，所以不需要文字）').toContain('@keyframes wxImgPulse')
+    // 2026-10-17：**呼吸动画已去掉**（用户要求「这样的加载样式全部修改」）。
+    // 改前这里断言 `@keyframes wxImgPulse` 存在 —— 一屏几十张图同时呼吸，
+    // 视觉噪音极大而信息量是零。现在只留静态底色，判据反过来：不许再有那个动画。
+    expect(CSS, '骨架不许再有呼吸动画（一屏几十张同时呼吸，噪音极大）').not.toContain('@keyframes wxImgPulse')
+    expect(CSS, '骨架必须保留定尺寸占位（否则图片到达时布局跳变）').toMatch(/\.msgImageSkeleton\s*\{[^}]*width:\s*160px/)
   })
 
   it('② 首帧同步查缓存（lazy 初值）——命中时这一帧就是图片', () => {

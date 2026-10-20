@@ -33,6 +33,7 @@ const APP = join(HERE, '..', '..', '..', '..', '..', 'ui-app')
 const FILES = {
   'titlebar.css': join(APP, 'titlebar.css'),
   'onboarding.module.css': join(APP, 'onboarding', 'onboarding.module.css'),
+  'onboarding-stage.module.css': join(APP, 'onboarding', 'onboarding-stage.module.css'),
   'onboarding-stages.module.css': join(APP, 'onboarding', 'onboarding-stages.module.css'),
   'privacy/PrivacyConsentGate.module.css': join(APP, 'privacy', 'PrivacyConsentGate.module.css'),
   'license/license-gate.module.css': join(APP, 'license', 'license-gate.module.css'),
@@ -41,13 +42,19 @@ const FILES = {
 /**
  * 真裸硬编码基线（R2 完成时的实测值，**含豁免项**）。**只许减不许增。**
  * 实际值与基线必须**严格相等**：低于基线说明有尸体没清，高于基线说明新增了裸色。
+ *
+ * 2026-10-17 启动页重设计：`onboarding.module.css` 从 5 降到 **1**（只剩纯黑阴影），
+ * 舞台外壳拆到新文件 `onboarding-stage.module.css`（0 处裸色，全部走 `--nm-*` 令牌）。
+ * 2026-10-19 微信化改版：装饰层（背景图 / 网格遮罩 / 霓虹阴影）整层删除，三份文件都收敛到
+ * **0 处裸色**；基线随实际值同步下调（严格相等仍保留，仍能抓「新增裸色」与「尸体没清」两个方向）。
  */
 const BARE_BASELINE: Record<keyof typeof FILES, number> = {
   'titlebar.css': 2, // #e81123（Windows 关闭键平台红）+ #fff（其上文字）
-  'onboarding.module.css': 5, // 4x mask 的 #000 + 1x 纯黑阴影
+  'onboarding.module.css': 0, // 2026-10-19：纯黑阴影随装饰层删除
+  'onboarding-stage.module.css': 0, // 2026-10-19：网格遮罩的 4x #000 随背景层删除
   'onboarding-stages.module.css': 0,
   'privacy/PrivacyConsentGate.module.css': 0,
-  'license/license-gate.module.css': 1, // 纯黑阴影 rgba(0,0,0,.35)
+  'license/license-gate.module.css': 0, // 2026-10-19：纯黑阴影随装饰层删除
 }
 
 /**

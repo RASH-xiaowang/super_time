@@ -113,6 +113,7 @@ export const ENTITY_KIND_LABEL: Record<string, string> = {
 export interface GraphSettings {
   /** `knowledge` = 知识网络（节点全部来自笔记库）；没有「融合」档 —— 见文件头注释。 */
   mode: 'people' | 'groups' | 'knowledge'
+  /** 节点上限：**初始默认 = 社交候选总人数 × 30%**（见 `defaultNodeLimit`）；用户拖过滑杆后以用户值为准。 */
   nodeLimit: number
   minCommon: number
   friendsOnly: boolean
@@ -127,7 +128,7 @@ export interface GraphSettings {
   showArrows: boolean
   showLabels: boolean
   showGrid: boolean
-  /** 节点模糊强度(px,0=关闭):对全部节点(头像/名字/圆点)做高斯模糊,连线保持清晰 */
+  /** 头像模糊强度(px,0=关闭):只对**头像位图**做高斯模糊;名字/圆点/描边环/连线保持清晰 */
   blurNodes: number
   /** 深度过滤:0=全部;>0=围绕选中节点的 hop 局部图 */
   depth: number
@@ -146,8 +147,9 @@ export interface GraphSettings {
 
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
   mode: 'people',
-  // 性能优先:默认最多渲染 250 个节点(约好友数×3/5 量级),力导向与头像加载流畅;
-  // 需要更多可在「节点上限」调大。
+  // `250` 是「自动」哨兵：载入数据后由 Graph.tsx 替换为「候选总人数 × 30%」
+  // （见 defaultNodeLimit；用户拖动滑杆后不再覆盖）。保留 250 而不是 0 是为了
+  // 兼容已持久化的旧设置与 `nodeLimit === DEFAULT_GRAPH_SETTINGS.nodeLimit` 判断。
   nodeLimit: 250,
   // 共同群阈值 =1:同一个群的人彼此有边,力导向直接聚团(参考实现默认)
   minCommon: 1,
@@ -178,10 +180,16 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
 /** 「我」节点 id(与 host 一致) */
 export const SELF_ID = 'self'
 
-/** 社区色盘(10 色,参考 st_control COMMUNITY_COLORS) */
+/**
+ * 社区色盘（10 色）：微信灰阶为主 + 微信绿/灰蓝少量强调。
+ *
+ * 为什么不再用霓虹盘：图谱节点属于「内容」，颜色只承担「区分圈子」这一件事；
+ * 旧盘是蓝/紫/粉高饱和色，整张图看起来像霓虹灯。现在 8 档中性灰 + 2 个品牌色，
+ * 相邻档刻意留出可辨识的明度差。未分组（-1）仍回落到中性灰 `#9aa0a6`。
+ */
 export const COMMUNITY_COLORS = [
-  '#0099ff', '#36c08f', '#f6a23c', '#ef6f6c', '#9b6dff',
-  '#2bb6d6', '#e072b8', '#7e8bd9', '#5bbf6a', '#d98c4a',
+  '#07c160', '#576b95', '#9aa0a6', '#7f8794', '#b2b6bd',
+  '#6b7280', '#8c939d', '#a5abb3', '#767e8a', '#98a0aa',
 ]
 
 /** 社区色:未分组(-1)→ 中性灰 */
@@ -362,6 +370,49 @@ export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
   return k
 }
 
+/**
+ * 「总人数」口径：当前模式 + 过滤条件下**真正可能进图**的节点（不含群与「我」）。
+ *
+ * 必须与 `buildGraph` 的筛选完全一致（同一份实现），否则「节点上限默认 = 30%」
+ * 会按「通讯录全量」算（3002）而不是「当前过滤下能显示的人」（如仅好友时 289），
+ * 默认值恒大于可用节点数 ⇒ 等于没限制。默认值取它的 30%，见 `defaultNodeLimit`。
+ */
+export function rawCandidateNodes<T extends { kind: string; is_friend?: boolean }>(
+  env: { nodes: ReadonlyArray<T> } | null | undefined,
+  s: Pick<GraphSettings, 'mode' | 'friendsOnly'>,
+): T[] {
+  if (!env) return []
+  return env.nodes.filter((n) => {
+    if (s.mode === 'people') {
+      // 「仅显示好友」:排除群、公众号与未标记好友的联系人
+      if (n.kind === 'group' || n.kind === 'self') return false
+      if (s.friendsOnly) return n.kind !== 'official' && n.is_friend === true
+      return true
+    }
+    return n.kind === 'group'
+  })
+}
+
+/** 「总人数」= `rawCandidateNodes` 的长度（群模式则是群数）。 */
+export function eligibleCandidateCount(
+  env: { nodes: ReadonlyArray<{ kind: string; is_friend?: boolean }> } | null | undefined,
+  s: Pick<GraphSettings, 'mode' | 'friendsOnly'>,
+): number {
+  return rawCandidateNodes(env, s).length
+}
+
+/**
+ * 默认「节点上限」：总人数 × 30%（四舍五入，至少 1 个）。
+ *
+ * 产品要求（2026-10-18）：初始只显示三成的人，先看清最密的核心圈，再按需拖大；
+ * 之前是 `min(250, 全部)`，小图等于全量、大图恒为 250。30% 之下常见规模
+ * （仅好友 289 人 → 87 个）力导向与头像加载都轻；超过头像预算 320 的部分
+ * 按既有的 `avatarBudget` 降级为圆盘，不改变节点数。
+ */
+export function defaultNodeLimit(totalPeople: number): number {
+  return Math.max(1, Math.round(Math.max(0, totalPeople) * 0.3))
+}
+
 /** GraphSnapshot → 筛选后的图(people/groups 两模式;社区检测;亲密度拉力)。 */
 export function buildGraph(env: {
   nodes: Array<{
@@ -381,15 +432,8 @@ export function buildGraph(env: {
 } | null, s: GraphSettings): BuiltGraph {
   if (!env) return { nodes: [], edges: [], communityCount: 0, kindCounts: {} }
   const selfNode = env.nodes.find(n => n.kind === 'self' && n.id === 'self')
-  const rawNodes = env.nodes.filter((n) => {
-    if (s.mode === 'people') {
-      // 「仅显示好友」:排除群、公众号与未标记好友的联系人
-      if (n.kind === 'group' || n.kind === 'self') return false
-      if (s.friendsOnly) return n.kind !== 'official' && n.is_friend === true
-      return true
-    }
-    return n.kind === 'group'
-  })
+  // 筛选口径与「默认节点上限 = 30%」共用 rawCandidateNodes（两处各写一份必然漂移）。
+  const rawNodes = rawCandidateNodes(env, s)
   // 排序:好友优先(内部按共同群数),其后群友;再整体截前 nodeLimit(参考实现语义)
   const weightOf = (n: {
     msg_count?: number

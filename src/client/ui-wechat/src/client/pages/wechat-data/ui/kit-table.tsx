@@ -17,7 +17,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { EmptyState } from './kit-fields.tsx'
+import { EmptyState, LoadingState } from './kit-fields.tsx'
 import tableCss from './kit-table.module.css'
 
 /** 数据表格列定义（headless：渲染完全由面板提供）。 */
@@ -43,14 +43,14 @@ export interface DataColumn<T> {
  * @param columns - 列定义（header/cell/sortValue/align）。
  * @param rows - 当前页行数据。
  * @param getRowId - 稳定行 id。
- * @param loading - 显示骨架行。
+ * @param loading - 显示统一加载态（旋转指示 + 加载中…，2026-10-18 起不再画骨架行）。
  * @param emptyTitle - 空态标题。
  * @param onRowClick - 行点击回调（有值时整行可点）。
  * @param scroll - 本包装是否自建滚动（默认 true = 既有 62vh 行为；false = 调用方自当滚动容器）。
  * @param minWidth - 表格最小宽度 px（默认 640 = .table 的 CSS 值；0 = 不设下限）。
  * @returns 表格元素。
  */
-export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, skeletonRows = 8, scroll = true, minWidth = 640 }: {
+export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, scroll = true, minWidth = 640 }: {
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
   getRowId: (row: T, index: number) => string
@@ -58,8 +58,8 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   emptyTitle?: string
   emptyDesc?: string
   onRowClick?: (row: T) => void
-  skeletonRows?: number
-  /**
+  /** @deprecated 2026-10-18 起加载态统一为旋转指示，本参数不再生效（仅为兼容旧调用保留）。 */
+  skeletonRows?: number  /**
    * 本包装是否自建滚动（默认 true = 既有行为：.tableWrap 带 62vh 上限）。
    * 传 false = 调用方自己当唯一滚动容器（clawbot B0：面板内只准一个滚动容器，
    * 嵌套滚动会双滚动条 + 滚动手感断裂），包装退成静态。
@@ -74,6 +74,15 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   const tableStyle = minWidth !== 640 ? { minWidth: `${minWidth}px` } : undefined
   /** 有任一列显式宽度时才渲染 colgroup（table-layout: fixed 只认 col/首行，类名不兑现宽度）。 */
   const hasWidths = columns.some((c) => c.width !== undefined)
+  /**
+   * 列定义按 id 建索引。
+   *
+   * 为什么：表头与每个单元格原先都写 `columns.find(c => c.id === …)` —— 100 行 × 13 列
+   * 就是**每次渲染 1300 次线性查找**，而表格每次排序/翻页/父组件重渲都会整表重渲。
+   * 真机实测「操作日志」滚动 p99 达 115ms、单帧最长 161ms（CDP 滚动探针），
+   * 这一项是其中可确定的一部分。Map 之后是 O(1)，且 `columns` 不变时索引不重建。
+   */
+  const colById = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns])
   const colDefs = useMemo<Array<ColumnDef<T>>>(
     () => columns.map((col): ColumnDef<T> => {
       const base: ColumnDef<T> = {
@@ -120,13 +129,11 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
             <tr>{columns.map(col => <th key={col.id}>{col.header}</th>)}</tr>
           </thead>
           <tbody>
-            {Array.from({ length: skeletonRows }).map((_, i) => (
-              <tr key={i}>
-                {columns.map(col => (
-                  <td key={col.id}><span className={`nm-skel ${tableCss.skelTdLine}`} /></td>
-                ))}
-              </tr>
-            ))}
+            <tr>
+              <td colSpan={columns.length}>
+                <LoadingState variant="compact" label="加载中…" />
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -147,7 +154,7 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
           {table.getHeaderGroups().map(hg => (
             <tr key={hg.id}>
               {hg.headers.map((header) => {
-                const col = columns.find(c => c.id === header.column.id)
+                const col = colById.get(header.column.id)
                 const sortable = Boolean(col?.sortValue)
                 const dir = header.column.getIsSorted()
                 const thStyle = col?.align === 'right' ? { textAlign: 'right' as const } : col?.align === 'center' ? { textAlign: 'center' as const } : undefined
@@ -197,7 +204,7 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
               } : undefined}
             >
               {row.getVisibleCells().map((cell) => {
-                const col = columns.find(c => c.id === cell.column.id)
+                const col = colById.get(cell.column.id)
                 return (
                   <td key={cell.id} className={clsx(col?.className)} style={col?.align === 'right' ? { textAlign: 'right' } : col?.align === 'center' ? { textAlign: 'center' } : undefined}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

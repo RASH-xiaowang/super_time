@@ -102,11 +102,11 @@ describe('state 袋按消费方分组', () => {
 
   /**
    * 反退化 + 棘轮：分过组的成员不许再以平铺字段的形式回到袋里；
-   * 平铺那一截只许变短（现在是 96 件），并且不许短到"整袋被搬空"那种误删。
+   * 平铺那一截只许变短（现在是 98 件：+ 2026-10-18 的 newMsgCount / jumpToLatest），并且不许短到"整袋被搬空"那种误删。
    */
   it('平铺字段不许重新长回来（只许变小），且成员不许有两份出处', () => {
     const flat = flatOf(bag)
-    expect(flat.length, '读到的平铺字段数').toBeLessThanOrEqual(96)
+    expect(flat.length, '读到的平铺字段数').toBeLessThanOrEqual(98)
     expect(flat.length, '平铺字段少得太离谱 —— 多半是整块被误删').toBeGreaterThanOrEqual(60)
     const twice = flat.filter((n) => grouped.has(n))
     expect(twice, `这些成员既在袋里平铺、又在某一组里（两份出处）：${twice.join(' ')}`).toEqual([])

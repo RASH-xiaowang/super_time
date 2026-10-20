@@ -1,9 +1,12 @@
 /**
  * 启动页 / 门禁共用的授权面板：状态展示 + 导入许可证 / 粘贴 JSON / 导出激活请求。
  *
- * 2026-09-30 内容重排：把「三步走」提到按钮之前（原来只在最底下写一句流程，
- * 而按钮在上 —— 第一次来的人得先读完底部才知道该点哪个），并在最后补三条常见问题。
- * 按钮文案与动作一字未动（用户与真机 e2e 都按这些名字找它）。
+ * 2026-10-19 微信化改版：
+ *   · 两栏保留（用户 2026-10-17 要求「分为两列」），但去掉渐变标题/发光按钮/玻璃卡；
+ *   · 合并重复文案：底栏那句「授权成功前无法进入主界面」删掉（左栏导语与常见问题
+ *     已经把同一件事说清楚），右栏只留「导入许可证 + 常见问题」；
+ *   · 粘贴框默认折叠（高级路径），主路径是「选择 license.json 导入」；
+ *   · 按钮文案一字未动（用户与真机 e2e 都按这些名字找它）。
  */
 import React, { useCallback, useState } from 'react'
 import gateCss from './license-gate.module.css'
@@ -142,107 +145,116 @@ export function LicenseAuthPanel({
 
   return (
     <div className={wrap} data-usable={usable ? '1' : '0'}>
-      <div className={gateCss.brand}>LICENSE · 授权验证</div>
-      <h2 className={compact ? gateCss.embedTitle : gateCss.title}>{title}</h2>
-      <p className={gateCss.lead}>
-        {usable
-          ? '授权有效，可以直接进入系统主界面。'
-          : status?.state === 'unlicensed'
-            ? '还没有导入许可证。按下面三步拿到并导入厂商签发的许可证；授权成功前无法进入主界面。'
-            : '当前的授权无效或已过期。按下面三步重新签发并导入；授权成功前无法进入主界面。'}
-      </p>
+      <div className={gateCss.cols}>
+        <div className={gateCss.col}>
+          {/* 嵌入启动页时页头已由壳的 `StageHead` 给（「License 授权验证」），
+              这里不再重复一行 brand —— 两行同名标题叠在一起只是噪音。 */}
+          {compact ? null : <div className={gateCss.brand}>LICENSE · 授权验证</div>}
+          <h2 className={compact ? gateCss.embedTitle : gateCss.title}>{title}</h2>
+          <p className={gateCss.lead}>
+            {usable
+              ? '授权有效，可以直接进入系统主界面。'
+              : status?.state === 'unlicensed'
+                ? '还没有导入许可证。按下面三步拿到并导入厂商签发的许可证；授权成功前无法进入主界面。'
+                : '当前的授权无效或已过期。按下面三步重新签发并导入；授权成功前无法进入主界面。'}
+          </p>
 
-      <ol className={gateCss.flow}>
-        {FLOW.map((text, i) => (
-          <li key={text} className={gateCss.flowItem}>
-            <span className={gateCss.flowNo} aria-hidden="true">{String(i + 1)}</span>
-            <span>{text}</span>
-          </li>
-        ))}
-      </ol>
+          <ol className={gateCss.flow}>
+            {FLOW.map((text, i) => (
+              <li key={text} className={gateCss.flowItem}>
+                <span className={gateCss.flowNo} aria-hidden="true">{String(i + 1)}</span>
+                <span>{text}</span>
+              </li>
+            ))}
+          </ol>
 
-      <dl className={gateCss.meta}>
-        <div><dt>状态</dt><dd>{status?.state ?? '—'}</dd></div>
-        <div><dt>错误码</dt><dd>{status?.code || '—'}</dd></div>
-        <div><dt>原因</dt><dd>{status?.reason || '—'}</dd></div>
-        <div><dt>客户</dt><dd>{status?.payload?.issuedTo?.name || status?.payload?.issuedTo?.company || '—'}</dd></div>
-        <div><dt>到期</dt><dd>{expires}</dd></div>
-        {status?.device?.fingerprintShort ? (
-          <div>
-            <dt>设备</dt>
-            <dd className={gateCss.mono}>
-              {status.device.fingerprintShort}… {status.device.hostname ?? ''}
-            </dd>
-          </div>
-        ) : null}
-      </dl>
+          <dl className={gateCss.meta}>
+            <div><dt>状态</dt><dd>{status?.state ?? '—'}</dd></div>
+            <div><dt>错误码</dt><dd>{status?.code || '—'}</dd></div>
+            <div><dt>原因</dt><dd>{status?.reason || '—'}</dd></div>
+            <div><dt>客户</dt><dd>{status?.payload?.issuedTo?.name || status?.payload?.issuedTo?.company || '—'}</dd></div>
+            <div><dt>到期</dt><dd>{expires}</dd></div>
+            {status?.device?.fingerprintShort ? (
+              <div>
+                <dt>设备</dt>
+                <dd className={gateCss.mono}>
+                  {status.device.fingerprintShort}… {status.device.hostname ?? ''}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
 
-      {/* W3-11.7：快到期时**在面板里出声**。
-          只挂在这一处是有意的：它是「授权」这件事回执的一部分，用户此刻正在看授权；
-          过期那一档由上面标题（「许可证已过期」）说，这里不再重复报一遍。 */}
-      {expiry !== null && (
-        <div className={gateCss.expiry} role="status">
-          ⏳ {expiry.text}
+          {/* W3-11.7：快到期时**在面板里出声**。
+              只挂在这一处是有意的：它是「授权」这件事回执的一部分，用户此刻正在看授权；
+              过期那一档由上面标题（「许可证已过期」）说，这里不再重复报一遍。 */}
+          {expiry !== null && (
+            <div className={gateCss.expiry} role="status">
+              {expiry.text}
+            </div>
+          )}
         </div>
-      )}
 
-      <div className={gateCss.actions}>
-        <button
-          type="button"
-          className={gateCss.primary}
-          disabled={busy !== null}
-          onClick={() => { void onImportFile() }}
-        >
-          {busy === 'file' ? '导入中…' : '选择 license.json 导入'}
-        </button>
-        <button
-          type="button"
-          className={gateCss.ghost}
-          disabled={busy !== null}
-          onClick={() => { void onExportReq() }}
-        >
-          {busy === 'export' ? '导出中…' : '导出激活请求'}
-        </button>
-      </div>
+        <div className={gateCss.col}>
+          <div className={gateCss.actHd}>导入许可证</div>
 
-      <div className={gateCss.pasteBox}>
-        <label className={gateCss.pasteLabel} htmlFor="lic-paste">或粘贴许可证 JSON</label>
-        <textarea
-          id="lic-paste"
-          className={gateCss.paste}
-          value={paste}
-          onChange={(e) => setPaste(e.target.value)}
-          placeholder='{"payload":{...},"signature":"..."}'
-          spellCheck={false}
-        />
-        <button
-          type="button"
-          className={gateCss.ghost}
-          disabled={busy !== null || !paste.trim()}
-          onClick={() => { void onImportPaste() }}
-        >
-          {busy === 'paste' ? '校验中…' : '校验并导入'}
-        </button>
-      </div>
-
-      {msg ? (
-        <p className={msg.kind === 'ok' ? gateCss.msgOk : gateCss.msgErr} role="status">
-          {msg.text}
-        </p>
-      ) : null}
-
-      <div className={gateCss.faqList}>
-        {FAQ.map((f) => (
-          <div key={f.q}>
-            <div className={gateCss.faqTitle}>{f.q}</div>
-            <div className={gateCss.faqBody}>{f.a}</div>
+          <div className={gateCss.actions}>
+            <button
+              type="button"
+              className={gateCss.primary}
+              disabled={busy !== null}
+              onClick={() => { void onImportFile() }}
+            >
+              {busy === 'file' ? '导入中…' : '选择 license.json 导入'}
+            </button>
+            <button
+              type="button"
+              className={gateCss.ghost}
+              disabled={busy !== null}
+              onClick={() => { void onExportReq() }}
+            >
+              {busy === 'export' ? '导出中…' : '导出激活请求'}
+            </button>
           </div>
-        ))}
-      </div>
 
-      <p className={gateCss.hint}>
-        授权成功前无法进入主界面；已授权用户可在启动页直接点「进入系统」跳过本页。
-      </p>
+          {/* 粘贴框是高级路径：默认折叠，主路径是上面的「选择 license.json 导入」。 */}
+          <details className={gateCss.pasteBox}>
+            <summary className={gateCss.pasteLabel}>或粘贴许可证 JSON（高级）</summary>
+            <textarea
+              id="lic-paste"
+              className={gateCss.paste}
+              value={paste}
+              onChange={(e) => setPaste(e.target.value)}
+              placeholder={'{"payload":{...},"signature":"..."}'}
+              spellCheck={false}
+              aria-label="粘贴许可证 JSON"
+            />
+            <button
+              type="button"
+              className={gateCss.ghost}
+              disabled={busy !== null || !paste.trim()}
+              onClick={() => { void onImportPaste() }}
+            >
+              {busy === 'paste' ? '校验中…' : '校验并导入'}
+            </button>
+          </details>
+
+          {msg ? (
+            <p className={msg.kind === 'ok' ? gateCss.msgOk : gateCss.msgErr} role="status">
+              {msg.text}
+            </p>
+          ) : null}
+
+          <div className={gateCss.faqHd}>常见问题</div>
+          <div className={gateCss.faqList}>
+            {FAQ.map((f) => (
+              <div key={f.q}>
+                <div className={gateCss.faqTitle}>{f.q}</div>
+                <div className={gateCss.faqBody}>{f.a}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

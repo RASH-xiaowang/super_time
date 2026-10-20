@@ -1,4 +1,10 @@
-/* 社交图谱 — Obsidian 风格重设计:白底极简、头像节点、右侧折叠控制面板 */
+/* 社交 / 知识图谱 — 微信桌面端风格：白/浅灰画布、中性灰连线、绿主色强调。
+   本文件只负责布局与控件皮肤；画布内的取色在 graph-canvas-theme.ts。
+   约束（由 spec 钉住，改动前先读）：
+   · .rail 是绝对定位浮层（不占布局宽度），width: min(300px, calc(100% - 20px))；
+   · .railToggle[data-open] / .minimap[data-hidden] 的 display:none 形状；
+   · 手机档统计条 auto-fit / 去掉边框底色 / .statRow 隐藏；
+   · 图例里两条虚线（同备注编号 / 首字相同）必须是 repeating-linear-gradient。 */
 
 .panel {
 
@@ -11,40 +17,102 @@
   min-height: 0;
   box-sizing: border-box;
 }
+
+/* ── 工具行按钮 ────────────────────────────────────────────────────────── */
 .chip {
   padding: 4px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: transparent;
+  background: var(--nm-bg-card);
   color: var(--nm-text-2);
   font-size: var(--nm-fs-sm);
   cursor: pointer;
-  transition: all 0.15s;
-  corner-shape: round;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
-.chip:hover { border-color: var(--nm-cyan); color: var(--nm-text-1); }
-.chip[data-on] { background: rgba(22, 163, 235, 0.10); border-color: var(--nm-cyan); color: var(--nm-cyan); }
+.chip:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.chip[data-on] { background: var(--nm-cyan-10); border-color: var(--nm-cyan); color: var(--nm-cyan); }
+.chip:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
-/* 搜索 */
-.searchWrap { position: relative; }
-.searchInput {
-  width: 170px;
-  padding: 6px 12px;
+/* ── 「导出」下拉 ──────────────────────────────────────────────────────── */
+.menuWrap { position: relative; }
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  box-shadow: var(--nm-shadow-popup);
+}
+
+.menuLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.menuRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.menuChip {
+  padding: 4px 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: rgba(128, 138, 156, 0.08);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  font-family: var(--nm-font-mono, monospace);
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  corner-shape: round;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
-.searchInput::placeholder { color: var(--nm-text-2); }
+.menuChip:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.menuChip[data-on] { background: var(--nm-cyan-10); border-color: var(--nm-cyan); color: var(--nm-cyan); }
+
+.menuItem {
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--nm-t-fast);
+}
+.menuItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
+.menuItem:disabled { opacity: 0.5; cursor: default; }
+.menuItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+/* ── 搜索 ──────────────────────────────────────────────────────────────── */
+.searchWrap { position: relative; }
+
+.searchInput {
+  width: 170px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--nm-t-fast);
+}
+.searchInput::placeholder { color: var(--nm-text-3); }
 .searchInput:focus { border-color: var(--nm-cyan); }
+
 .searchDrop {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 4px);
   right: 0;
   z-index: 30;
   min-width: 220px;
@@ -54,11 +122,10 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px;
-  border: 1px solid var(--nm-border);
+  border: 1px solid var(--nm-border-hover);
   border-radius: var(--nm-r-md);
-  background: var(--nm-bg-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--nm-bg-2);
+  box-shadow: var(--nm-shadow-popup);
 }
 .searchHit {
   display: flex;
@@ -68,25 +135,25 @@
   width: 100%;
   padding: 8px 10px;
   border: none;
-  border-radius: var(--nm-dense-r);
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
   text-align: left;
 }
-.searchHit:hover { background: rgba(22, 163, 235, 0.12); }
-.searchHitId { color: rgba(140, 150, 170, 0.7); font-size: var(--nm-fs-xs, 11px); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.searchEmpty { padding: 8px 10px; color: var(--nm-text-2); font-size: 12px; }
+.searchHit:hover { background: var(--nm-bg-hover); }
+.searchHitId { color: var(--nm-text-3); font-size: var(--nm-fs-xs); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.searchEmpty { padding: 8px 10px; color: var(--nm-text-2); font-size: var(--nm-fs-sm); }
 
-/* ── 主体 ── */
+/* ── 主体：画布独占整宽（控制栏是浮层，不参与布局）────────────────────── */
 .body { flex: 1; min-height: 0; display: flex; gap: 10px; }
 .stage {
   flex: 1;
   min-width: 0;
   position: relative;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
+  border-radius: var(--nm-r-lg);
   overflow: hidden;
   background: var(--nm-bg-0);
   display: flex;
@@ -94,7 +161,7 @@
   min-height: 0;
 }
 
-/* ── 图谱加载画面(太空舱:旋转光环 + 脉动核心 + 环绕节点) ── */
+/* ── 加载画面：一行旋转指示 + 文案（旧版的光环/脉动/环绕节点装饰已删除）── */
 .graphLoading {
   flex: 1 1 auto;
   min-height: 0;
@@ -102,78 +169,41 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 12px;
   padding: 24px;
   box-sizing: border-box;
 }
-.graphLoadingOrbit { position: relative; width: 104px; height: 104px; }
-.graphLoadingRing {
-  position: absolute;
-  inset: 0;
+.graphLoadingSpinner {
+  display: block;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 2px solid transparent;
+  border: 2px solid var(--nm-border-hover);
   border-top-color: var(--nm-cyan);
-  border-right-color: rgba(22, 163, 235, 0.35);
-  animation: gp-spin 1s linear infinite;
-  filter: drop-shadow(0 0 10px rgba(22, 163, 235, 0.5));
-  corner-shape: round;
+  animation: graphSpin 0.8s linear infinite;
 }
-.graphLoadingCore {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  background: var(--nm-cyan);
-  box-shadow: 0 0 18px rgba(22, 163, 235, 0.85);
-  animation: gp-pulse 1.5s ease-in-out infinite;
-  corner-shape: round;
+@keyframes graphSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .graphLoadingSpinner { animation-duration: 2s; }
 }
-.graphLoadingNodes { position: absolute; inset: 0; }
-.graphLoadingNode {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--nm-cyan);
-  box-shadow: 0 0 8px rgba(22, 163, 235, 0.7);
-  transform: translate(-50%, -50%);
-  animation: gp-node 1.8s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 0.12s);
-  corner-shape: round;
-}
-.graphLoadingLabel { font-size: 14px; font-weight: 600; color: var(--nm-text-1); letter-spacing: 0.02em; }
-.graphLoadingSub { font-size: 12px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
-@keyframes gp-spin { to { transform: rotate(360deg); } }
-@keyframes gp-pulse {
-  0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  50% { opacity: 0.55; transform: translate(-50%, -50%) scale(1.3); }
-}
-@keyframes gp-node {
-  0%, 100% { transform: translate(-50%, -50%) rotate(var(--a)) translateX(38px) scale(1); opacity: 0.3; }
-  50% { transform: translate(-50%, -50%) rotate(calc(var(--a) + 26deg)) translateX(47px) scale(1.3); opacity: 1; }
-}
+.graphLoadingLabel { font-size: var(--nm-fs-md); font-weight: 600; color: var(--nm-text-1); }
+.graphLoadingSub { font-size: var(--nm-fs-sm); color: var(--nm-text-2); }
 
-/* ── 画布 ────────────────────────────────────────────────────────────
-   画布是位图：它的 CSS 尺寸必须等于绘制时的逻辑坐标系尺寸（不等比会被拉伸糊掉），
-   而 backing store 由组件按 devicePixelRatio 单独设置。因此这里只声明布局尺寸，
-   宽度/高度属性一律由 ResizeObserver 写。 */
+/* ── 画布（位图：尺寸由宿主按 dpr 写行内 style，这里只声明布局）────────── */
 .graphCanvas {
   flex: 1 1 0%;
   display: block;
   width: 100%;
   min-height: 0;
-  /* 触控与触控板上，画布内的拖拽必须归我们处理，否则会被浏览器当成滚动/缩放手势 */
   touch-action: none;
   cursor: grab;
 }
-/* 拖不动（锁定布局）与拖拽中：光标要如实反映当前能做什么 */
 .graphCanvas[data-locked] { cursor: default; }
 .graphCanvas:active { cursor: grabbing; }
+
+/* ── 图例（画布左下浮层）────────────────────────────────────────────────
+   实色底 + 1px 边框，不再用毛玻璃。只有两条虚线是**语义**（推断层），
+   其余都画成与画布一致的实线。 */
 .legend {
   position: absolute;
   left: 12px;
@@ -182,86 +212,125 @@
   gap: 12px;
   padding: 6px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: var(--nm-bg-glass);
-  font-size: 11px;
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   align-items: center;
-  corner-shape: round;
+  flex-wrap: wrap;
 }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
-/* 第 94 轮：图例行（原来写在 Graph.tsx 的行内 style 里）。 */
 .legendRow { display: flex; gap: 6px; align-items: center; }
-.legendDot { width: 8px; height: 8px; border-radius: 50%; background: rgba(55, 66, 82, 0.8);
-  corner-shape: round;
-}
-/* 知识图谱的笔记节点图例：紫色实心圆，与画布上的笔记节点同色系、同形状。
-   原先复用 .legendDot（深灰圆）+ 文案「紫方块」—— 形状和颜色都是错的。 */
-.legendDotNote { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-purple);
-  corner-shape: round;
-}
-.legendLine { width: 18px; height: 2px; border-radius: var(--nm-r-xs); background: rgba(125, 135, 155, 0.6); }
-.legendLineBlue { width: 18px; height: 2px; border-radius: var(--nm-r-xs); background: rgba(22, 140, 220, 0.6); }
+.legendDot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; }
+/* 知识图谱的笔记节点图例：与画布上的笔记节点同色（画布侧是字面色值）。 */
+.legendDotNote { width: 8px; height: 8px; border-radius: 50%; background: #8b7ff0; }
+.legendLine { width: 18px; height: 2px; background: rgba(120, 128, 140, 0.8); }
+.legendLineBlue { width: 18px; height: 2px; background: var(--nm-blue); }
 /* 金虚线 = 同备注编号（与画布的 edgeClass 虚线同义，图例本身也画成虚线） */
-.legendLineGold { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
-  background: repeating-linear-gradient(90deg, rgba(214, 148, 24, 0.9) 0 4px, transparent 4px 7px);
+.legendLineGold {
+  width: 18px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--nm-amber) 0 4px, transparent 4px 7px);
 }
 /* 蓝虚线 = 首字相同（与画布的 edgeInitial 同义）。
    与「蓝实线 = 与我亲密度」同色系，靠**虚线**区分 —— 图例的措辞也必须写出「实线/虚线」。 */
-.legendLineBlueDash { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
-  background: repeating-linear-gradient(90deg, rgba(30, 150, 230, 0.95) 0 4px, transparent 4px 7px);
+.legendLineBlueDash {
+  width: 18px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--nm-blue) 0 4px, transparent 4px 7px);
 }
-.legendBar { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(55, 66, 82, 0.7);
-  corner-shape: round;
-}
-/* 文档实体层三类的图例色。刻意用**字面色值**而不是 `docColors()` 的那套：图例只有一套
-   （画布按主题切换取深/浅两支），这里给的是浅色档 —— 与 `.legendDotNote` 用 `--nm-purple`
-   同一处理方式（那个 token 也正是浅色档）。改动 `docColors` 时记得同步这里。 */
-.legendDotFile { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-cyan);
-  corner-shape: round;
-}
-.legendDotSection { width: 8px; height: 8px; border-radius: 50%; background: #7d8797;
-  corner-shape: round;
-}
+.legendBar { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(120, 128, 140, 0.8); }
+/* 文档实体层三类：与 docColors() 的浅色档一致（画布按主题切深/浅两支）。 */
+.legendDotFile { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-cyan); }
+.legendDotSection { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; }
 /* 琥珀 = 「这是模型说的」。与虚线边同一族语言：图上凡是琥珀的都不可当原文引用。 */
-.legendDotEntity { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-amber);
-  corner-shape: round;
-}
-.legendLineAmberDash { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
+.legendDotEntity { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-amber); }
+.legendLineAmberDash {
+  width: 18px;
+  height: 2px;
   background: repeating-linear-gradient(90deg, var(--nm-amber) 0 4px, transparent 4px 7px);
 }
 
-/* ── 右侧控制面板 ── */
+/* ── 右侧控制面板（悬浮弹层）────────────────────────────────────────────
+ * 绝对定位在 `.stage` 右侧、**不参与布局**：画布永远独占整宽，
+ * 收起时只剩右上角一个按钮，展开时浮层盖在画布上。
+ * top/right/bottom 留 10px；max-height + overflow-y 自滚；z-index 高于图例/小地图。 */
 .rail {
-  width: 252px;
-  flex-shrink: 0;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 20;
+  width: min(300px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-glass);
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-2);
   box-sizing: border-box;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--nm-shadow-popup);
 }
-.railSection { display: flex; flex-direction: column; gap: 10px; }
-.railTitle {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--nm-text-2);
-  padding-bottom: 6px;
+
+/* 折叠/展开按钮：**始终可见**（收起时它是唯一的入口）。 */
+.railToggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 21;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-2);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+  transition: border-color var(--nm-t-fast), color var(--nm-t-fast);
+}
+.railToggle:hover { color: var(--nm-cyan); border-color: var(--nm-border-active); }
+/* 展开时按钮让位给浮层标题栏（浮层自己有「收起」），避免两个按钮叠在一起 */
+.railToggle[data-open] { display: none; }
+
+/* 浮层标题栏：标题 + 收起按钮 */
+.railHd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--nm-border);
 }
-.railHint { font-size: 11px; color: var(--nm-text-2); line-height: 1.7; padding: 4px 2px; }
+.railHdTitle { font-size: var(--nm-fs-sm); font-weight: 600; color: var(--nm-text-1); }
+.railClose {
+  border: none;
+  background: transparent;
+  color: var(--nm-text-2);
+  cursor: pointer;
+  font-size: var(--nm-fs-lg);
+  line-height: 1;
+  padding: 2px 4px;
+}
+.railClose:hover { color: var(--nm-text-1); }
+.railClose:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
-/* 选中详情 */
+/* 分区收紧：标题贴着内容、间距统一 6px，减少「每个滑杆一张卡」的松散感。 */
+.railSection { display: flex; flex-direction: column; gap: 6px; }
+.railTitle {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.railHint { font-size: var(--nm-fs-xs); color: var(--nm-text-2); line-height: 1.6; padding: 2px; }
+
+/* 选中详情（kit 抽屉式卡片：实色底 + 1px 边框，无彩色底） */
 .detail {
   display: flex;
   flex-direction: column;
@@ -269,12 +338,27 @@
   padding: 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: rgba(22, 163, 235, 0.05);
+  background: var(--nm-bg-card);
 }
-.detailHd { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.detailName { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
-.detailClose { border: none; background: transparent; color: var(--nm-text-2); cursor: pointer; font-size: 16px; line-height: 1; }
-.detailSub { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--nm-text-2); text-transform: uppercase; }
+.detailHd { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.detailAvatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: var(--nm-fs-lg);
+  border: 1px solid var(--nm-border);
+}
+.detailTitles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.detailName { font-size: var(--nm-fs-md); font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detailClose { border: none; background: transparent; color: var(--nm-text-2); cursor: pointer; font-size: var(--nm-fs-lg); line-height: 1; }
+.detailSub { font-size: var(--nm-fs-xs); font-weight: 600; color: var(--nm-text-2); }
 .detailChips { display: flex; flex-wrap: wrap; gap: 4px; }
 .detailChip {
   max-width: 150px;
@@ -283,48 +367,49 @@
   white-space: nowrap;
   font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-1);
-  background: rgba(128, 138, 156, 0.12);
-  border: none;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   padding: 3px 8px;
   cursor: pointer;
-  corner-shape: round;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
-.detailChip:hover { background: rgba(22, 163, 235, 0.15); color: var(--nm-cyan); }
+.detailChip:hover { background: var(--nm-bg-active); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 /* 同班级名册里「被挡在图外」的成员：不可点，压暗提示它没参与连边 */
 .detailChip[data-dim] { opacity: 0.45; cursor: default; }
-.detailChip[data-dim]:hover { background: none; color: inherit; }
+.detailChip[data-dim]:hover { background: var(--nm-bg-hover); color: inherit; }
+.detailBtns { display: flex; gap: 6px; flex-wrap: wrap; }
 
-/* 最亲近排行 */
+/* 排行（最亲近 / 圈子） */
 .rank {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 8px;
+  padding: 6px 8px;
   border: none;
-  border-radius: var(--nm-r-md);
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s;
+  transition: background-color var(--nm-t-fast);
 }
-.rank:hover { background: rgba(128, 138, 156, 0.10); }
-.rankNum { width: 18px; text-align: center; font-weight: 800; color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+.rank:hover { background: var(--nm-bg-hover); }
+.rank[data-on] { background: var(--nm-cyan-10); }
+.rankNum { width: 18px; text-align: center; font-weight: 600; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 .rankName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rankW { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+.rankW { color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 
 /* 控件 */
 .seg {
   display: flex;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  padding: 3px;
+  padding: 2px;
   gap: 2px;
-  background: rgba(128, 138, 156, 0.06);
-  corner-shape: round;
+  background: var(--nm-bg-input);
 }
 .segBtn {
   flex: 1;
@@ -338,10 +423,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  corner-shape: round;
+  transition: background-color var(--nm-t-fast), color var(--nm-t-fast);
 }
-.segBtn[data-on] { background: rgba(22, 163, 235, 0.12); color: var(--nm-cyan-text); font-weight: 600; }
-.ctlRow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--nm-text-1); min-width: 0; }
+.segBtn[data-on] { background: var(--nm-cyan-10); color: var(--nm-cyan); font-weight: 600; }
+.ctlRow { display: flex; align-items: center; gap: 8px; font-size: var(--nm-fs-sm); color: var(--nm-text-1); min-width: 0; }
 .ctlRow[data-disabled] { opacity: 0.45; }
 .ctlRow[data-disabled] .ctlRange { cursor: not-allowed; }
 .ctlLabel {
@@ -352,7 +437,7 @@
   text-overflow: ellipsis;
 }
 .ctlRange { flex: 1; min-width: 0; accent-color: var(--nm-cyan); }
-.ctlValue { width: 46px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); flex-shrink: 0; }
+.ctlValue { width: 46px; text-align: right; color: var(--nm-text-2); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .ctlToggle {
   display: flex;
   align-items: center;
@@ -360,35 +445,30 @@
   border: none;
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
   padding: 2px 0;
   /* WCAG 2.2 SC 2.5.8：实测该开关行仅 20px 高，补到 24px 达标（宽度本就有 216px）。 */
   min-height: 24px;
 }
-.ctlTrack { width: 30px; height: 16px; border-radius: var(--nm-r-pill); background: rgba(128, 138, 156, 0.25); position: relative; transition: background 0.15s;
-  corner-shape: round;
-}
+.ctlTrack { width: 30px; height: 16px; border-radius: var(--nm-r-pill); background: var(--nm-bg-active); position: relative; transition: background-color var(--nm-t-fast); }
 .ctlToggle[data-on] .ctlTrack { background: var(--nm-cyan); }
-.ctlKnob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left 0.15s;
-  corner-shape: round;
-}
+.ctlKnob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left var(--nm-t-fast); }
 .ctlToggle[data-on] .ctlKnob { left: 16px; }
 .animBtn {
-  padding: 8px 10px;
-  border: none;
+  padding: 6px 10px;
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: linear-gradient(135deg, rgba(22, 163, 235, 0.25), color-mix(in srgb, var(--nm-purple) 22%, transparent));
+  background: var(--nm-bg-card);
   color: var(--nm-text-1);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast);
 }
-.animBtn:hover { transform: translateY(-1px); box-shadow: 0 0 14px rgba(22, 163, 235, 0.25); }
-.animBtn:active { transform: translateY(0); }
+.animBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.animBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
-/* ── 统计条 ── */
+/* ── 统计条：一行「数值 + 标签」的轻量分组 ───────────────────────────── */
 .statRow { display: flex; gap: 6px; flex-wrap: wrap; }
 .statChip {
   flex: 1;
@@ -396,65 +476,43 @@
   padding: 6px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: rgba(128, 138, 156, 0.06);
+  background: var(--nm-bg-card);
   color: var(--nm-text-1);
-  font-size: 11px;
+  font-size: var(--nm-fs-xs);
   font-weight: 600;
   text-align: center;
-  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* ── 选中详情(头像 + 操作按钮) ── */
-.detailHd { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.detailAvatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  object-fit: cover;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 15px;
-  border: 1.5px solid rgba(22, 163, 235, 0.35);
-  corner-shape: round;
-}
-.detailTitles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.detailName { font-size: 13px; font-weight: 700; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.detailBtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .miniBtn {
   padding: 4px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
-  background: rgba(128, 138, 156, 0.08);
+  background: var(--nm-bg-card);
   color: var(--nm-text-1);
-  font-size: 11px;
+  font-size: var(--nm-fs-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
   white-space: nowrap;
 }
-.miniBtn:hover { border-color: var(--nm-cyan); color: var(--nm-cyan); }
-.miniBtn[data-on] { background: rgba(22, 163, 235, 0.12); border-color: var(--nm-cyan); color: var(--nm-cyan); }
+.miniBtn:hover { border-color: var(--nm-border-hover); }
+.miniBtn[data-on] { background: var(--nm-cyan-10); border-color: var(--nm-cyan); color: var(--nm-cyan); }
 .miniBtn:disabled { opacity: 0.5; cursor: default; }
 .rowBtns { display: flex; gap: 6px; }
 .rowBtns .miniBtn { flex: 1; }
 .clearChip {
   margin-left: auto;
   padding: 2px 8px;
-  border: 1px solid var(--nm-cyan);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: rgba(22, 163, 235, 0.10);
+  background: var(--nm-bg-card);
   color: var(--nm-cyan);
-  font-size: var(--nm-fs-xs, 11px);
+  font-size: var(--nm-fs-xs);
   cursor: pointer;
-  corner-shape: round;
 }
-.rank[data-on] { background: rgba(22, 163, 235, 0.10); }
 
-/* ── 画布内浮层:小地图 ── */
+/* ── 画布内浮层：小地图 ────────────────────────────────────────────────── */
 .minimap {
   position: absolute;
   right: 12px;
@@ -463,19 +521,20 @@
   height: 96px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: var(--nm-bg-glass);
+  background: var(--nm-bg-2);
   cursor: crosshair;
   z-index: 5;
   touch-action: none;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--nm-shadow-card);
 }
+/* 参数浮层展开时收起小地图：浮层（z-index 20）正好盖住它（z-index 5）。 */
+.minimap[data-hidden] { display: none; }
 
-/* 顶部统计条 */
+/* ── 顶部统计条 ─────────────────────────────────────────────────────────
+ * 列数必须跟着格子数走：社交模式 5 格、知识模式 8 格。`auto-fit` 让每行都填满。 */
 .statBar {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 10px;
   padding: 0 14px 10px;
 }
@@ -491,56 +550,68 @@
 }
 .statNum {
   font-size: 20px;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--nm-text-1);
-  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
-@media (max-width: 1100px) {
-  .statBar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 
-/*
- * 窄窗口 / 小屏（2026-09-17 社交图谱并入「通讯录」时补）。
- *
- * 为什么现在要补：图谱主体是「画布 + 固定 252px 右侧控制栏」的横向两栏，
- * 控制栏 `flex-shrink: 0` 意味着窗口再窄它也不让位 —— 画布被一路压到没有可用宽度，
- * 而节点半径是**与画布尺寸无关的绝对值**，于是节点全挤成一团（不是缩小，是重叠）。
- * 之前它占满整个内容区、且用户可手动收起控制栏，问题不容易暴露；并入通讯录后
- * 上方多了一条分段条、内容区更矮，这条规则就必须显式写出来。
- *
- * 处理取向与其它合并组在窄屏下的做法一致：宁可让用户纵向滚一下，
- * 也不把主视图（这里是画布）压成一条缝。
- *   · `.stage` 的 min-height 是画布的地板 —— 纵向堆叠后若不给下限，
- *     `flex: 1` 会被控制栏的内容高度挤到接近 0；
- *   · `.rail` 原本 `flex-shrink: 0`（横向布局里那是「固定 252px」的意思），
- *     纵向堆叠后必须允许收缩，否则它按内容高度把画布顶出容器。
- */
-@media (max-width: 900px) {
-  .body { flex-direction: column; }
-  .stage { min-height: 260px; }
-  .rail {
-    width: auto;
-    flex-shrink: 1;
-    max-height: 45%;
+/* 宽屏（>560px）：统计条压成一行紧凑横条（40px），数字与标签并排。 */
+@media (min-width: 561px) {
+  .statBar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0;
+    padding: 0 14px 8px;
   }
+  .statBox {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 14px;
+    border: none;
+    border-left: 1px solid var(--nm-border);
+    border-radius: 0;
+    background: transparent;
+  }
+  .statBox:first-child { border-left: none; padding-left: 0; }
+  .statNum { font-size: 16px; }
+}
+/* 中屏（≤1100px）：列数交给 auto-fit，只收紧间距。 */
+@media (max-width: 1100px) {
+  .statBar { gap: 8px; }
 }
 
-/*
- * 画布内两个底部浮层（图例 / 小地图）的避让 —— 同样是并入时补的。
- *
- * 画布宽度掉到 800px 以下后，底部两个浮层必然撞在一起：
- *   · `.legend` 是**单行胶囊**（`display:flex` 且没有 `flex-wrap`），宽度不受约束 ——
- *     空间不够时 flex 会去压每个 `<span>` 的文字，中文于是变成**一个字一行**的竖条，
- *     图例既读不了、又变成一堵盖住画布左下的墙；
- *   · `.minimap` 是固定 148px 且 `z-index: 5`，正好压在图例右端上。
- * 单独把控制栏改纵排（上面那条 900px）**解决不了**这个：那是 `.body` 的布局，
- * 而这两个浮层是 `.stage` 的绝对定位子元素，与两栏/一栏无关。
- *
- * 取向：图例改成占满画布宽度 + 允许换行（**必须同时给 `right`** ——
- * 只给 `flex-wrap` 而不约束宽度，flex 行仍会被无限压缩，文字继续逐字折行）；
- * 小地图移到右上角空处，底部整条留给图例。两者都保留，不隐藏任何信息。
- */
+/* 手机档（≤560px）：统计条压成一行紧凑横条。 */
+@media (max-width: 560px) {
+  .statBar {
+    grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+    gap: 6px;
+    padding: 0 10px 8px;
+  }
+  .statBox {
+    gap: 1px;
+    padding: 6px 4px;
+    border: none;
+    background: transparent;
+    align-items: center;
+    text-align: center;
+  }
+  .statNum { font-size: 15px; }
+
+  /* 右侧控制栏的「节点 / 连线 / 圈子」与顶部统计条**完全重复**。 */
+  .statRow { display: none; }
+}
+
+/* 窄屏：画布高度地板。 */
+@media (max-width: 900px) {
+  .stage { min-height: 260px; }
+}
+
+/* 窄屏浮层避让：图例换行占满宽、小地图挪到左上（右上被折叠按钮占）。
+   小地图尺寸由 JS 行内样式决定，这里只改位置。 */
 @media (max-width: 820px) {
   .legend {
     left: 8px;
@@ -550,25 +621,15 @@
     padding: 6px 10px;
     border-radius: var(--nm-r-md);
   }
-  /*
-   * 小地图只改**位置**，不改尺寸 —— 尺寸写在这里是死代码：
-   * `GraphCanvas.tsx` 在 resize 时把 148×96（与 dpr 后的位图一起）直接写成**行内样式**
-   * （`mini.style.width = '148px'`），行内样式优先于任何选择器。
-   * 实测过：本块里写 `width: 104px; height: 68px` 完全不生效（量到仍是 148×96），
-   * 而 `top`/`bottom`/`right` 因为 JS 没碰、能正常生效。
-   * 而且真要缩小也**不该只改 CSS**：位图尺寸是 JS 按 148×96×dpr 分配的，
-   * 只用 CSS 缩会让小地图变糊 —— 那属于改 JS，不在这次并入的范围内。
-   */
   .minimap {
     top: 8px;
-    right: 8px;
+    left: 8px;
+    right: auto;
     bottom: auto;
   }
 }
 
-/* ── 知识笔记：侧栏列表 + 编辑器弹层 ───────────────────────────────
-   配色刻意避开社区色盘：知识节点用紫系（--nm-purple），与「人/群」的社区色
-   在视觉上分属两套，避免看图谱时把笔记误认成某个圈子。 */
+/* ── 知识笔记：侧栏列表 ───────────────────────────────────────────────── */
 .noteRow {
   display: flex;
   align-items: center;
@@ -582,23 +643,23 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 3px 0;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   text-align: left;
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.noteTitle:hover { color: var(--nm-purple); }
+.noteTitle:hover { color: var(--nm-cyan); }
 .noteMetric {
   flex: none;
   color: var(--nm-text-2);
-  font-size: var(--nm-fs-xs, 11px);
-  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  font-variant-numeric: tabular-nums;
 }
 .noteEdit,
 .noteDel {
@@ -609,14 +670,9 @@
   border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-2);
-  font-size: 11px;
+  font-size: var(--nm-fs-xs);
   line-height: 1;
   cursor: pointer;
 }
-.noteEdit:hover { color: var(--nm-purple); background: rgba(155, 109, 255, 0.14); }
-.noteDel:hover { color: #ef6f6c; background: rgba(239, 111, 108, 0.14); }
-
-/* 笔记编辑器（原 .noteBackdrop / .noteCard / .noteInput / …）已于 2026-09-19 搬去
-   `note-editor.module.css`：它原先借用这张图谱样式表，而两者除了都叫「知识」毫无关系；
-   搬走之后编辑器的弹层骨架交给 kit 的 Dialog，这里只留图谱自己的东西。 */
-
+.noteEdit:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+.noteDel:hover { color: var(--nm-danger); background: var(--nm-bg-hover); }

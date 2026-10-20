@@ -206,6 +206,19 @@ export interface EmoticonsSnapshot {
    * 前端据此说明「顺序与微信一致」只在确有其事时才显示，避免无依据的文案。
    */
   orderedBy?: 'wechat' | 'builtin'
+  /**
+   * **其他表情包**（2026-10-17 新增）：从消息库里扫出的、**不在 `custom` 里**的表情。
+   *
+   * 口径：扫全部 `message_*.db` 的 `Msg_*` 表，取 `local_type & 0xFFFFFFFF === 47`（表情）
+   * 的行，从 `message_content` 的 XML 里抽 `md5`，按出现次数降序。
+   * 再**减去** `custom` 里已有的 md5 —— 用户自己收藏过的表情不该出现在「其他」里。
+   *
+   * 为什么需要：用户要求「其他表情包请收集其他群聊或个人发送的任何表情包」。
+   * 这些表情只存在于消息记录里，`emoticon.db` 的 `kNonStoreEmoticonTable` 里没有。
+   */
+  others?: EmoticonItem[]
+  /** `others` 的总数（去重后的 md5 个数，可能大于 `others.length` 的返回条数）。 */
+  othersTotal?: number
 }
 
 /** Storage snapshot. */

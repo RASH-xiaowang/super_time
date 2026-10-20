@@ -42,8 +42,9 @@ interface AuthModule {
   parseCookies: (header: string | undefined) => Record<string, string>
   sessionCookie: (id: string, maxAgeSec: number) => string
   createSessionStore: (opts?: { ttlMs?: number, now?: () => number }) => {
-    create: () => { id: string, cookie: string }
+    create: (meta?: { fullAccess?: boolean }) => { id: string, cookie: string }
     verify: (id: unknown) => boolean
+    isFull: (id: unknown) => boolean
     revokeAll: () => void
     count: () => number
     expireCookie: () => string
@@ -54,8 +55,8 @@ interface AuthModule {
     maxPending?: number
     now?: () => number
   }) => {
-    issue: () => string
-    verify: (provided: unknown) => { ok: boolean, attemptsLeft: number }
+    issue: (meta?: { fullAccess?: boolean }) => string
+    verify: (provided: unknown) => { ok: boolean, attemptsLeft: number, fullAccess?: boolean }
     revokeAll: () => void
     count: () => number
   }
@@ -279,5 +280,27 @@ describe('配对码：短命、唯一、一次性、可限次、只在内存', (
     expect(store.count()).toBe(0)
     expect(store.verify(a).ok).toBe(false)
     expect(store.verify(b).ok).toBe(false)
+  })
+})
+
+describe('「打开网页」交接码：只有它换来的会话拥有桌面同权限', () => {
+  it('普通配对码不带 fullAccess；交接码成功时带', () => {
+    const store = auth.createPairingStore()
+    const normal = store.issue()
+    expect(store.verify(normal)).toEqual({ ok: true, attemptsLeft: 0 })
+    const full = store.issue({ fullAccess: true })
+    expect(store.verify(full)).toEqual({ ok: true, attemptsLeft: 0, fullAccess: true })
+  })
+
+  it('会话表能区分 fullAccess（普通登录不放开桌面方法）', () => {
+    const sessions = auth.createSessionStore()
+    const normal = sessions.create()
+    const full = sessions.create({ fullAccess: true })
+    expect(sessions.verify(normal.id)).toBe(true)
+    expect(sessions.isFull(normal.id)).toBe(false)
+    expect(sessions.isFull(full.id)).toBe(true)
+    // 过期后 isFull 也必须为 false（不能拿过期 id 继续越权）
+    sessions.revokeAll()
+    expect(sessions.isFull(full.id)).toBe(false)
   })
 })

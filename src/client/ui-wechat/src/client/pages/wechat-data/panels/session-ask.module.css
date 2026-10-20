@@ -1,23 +1,35 @@
 /* 「新对话」会话级 AI 面板。
-   作为 Chats 面板 `.panel` 的第三栏（左：会话列表 / 中：消息流 / 右：本面板），
-   默认固定宽度，全屏态由 data-full + chats.module.css 的规则接管。 */
+   2026-10-19 微信化：从「并排第三栏（384px，会把消息区挤到约 460px）」改成
+   **覆盖式沉浸抽屉**（宽 400，默认关、可关闭）。抽屉相对 `.panel` 定位，
+   消息列始终占满剩余宽度；全屏态（data-full）铺满整个会话区。 */
 
 .panel {
-  /* 可收缩：窗口变窄时本面板按比例收窄，而不是把消息列挤到 0 之后整行溢出。
-     下限 300px —— 引用网格在这个宽度下已切成单列（见 ask.module.css 的 @container），
-     输入区/头部都是弹性布局，300px 仍然放得下。
-     宽窗口下 basis 384 + 不增长 → 宽度仍是 384px，观感与原先完全一致。 */
-  flex: 0 1 384px;
-  min-width: 300px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  width: 400px;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
+  border: 0;
+  border-left: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
   overflow: hidden;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
 }
-/* 全屏：占满消息区让出的空间 */
-.panel[data-full] { flex: 1 1 auto; }
+/* 全屏：铺满整个会话区（含左侧会话列之外的画面） */
+.panel[data-full] {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  max-width: none;
+  border-radius: 0;
+  box-shadow: none;
+}
 
 /* ── 头 ── */
 .head {
@@ -70,11 +82,11 @@
 .body::-webkit-scrollbar { width: 6px; height: 6px; }
 .body::-webkit-scrollbar-track { background: transparent; border: none; }
 .body::-webkit-scrollbar-thumb {
-  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 240, 255, 0.10));
+  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 0, 0, 0.18));
   border: none;
   border-radius: var(--nm-r-xs);
 }
-.body::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 240, 255, 0.22)); }
+.body::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 0, 0, 0.28)); }
 .body::-webkit-scrollbar-corner { background: transparent; }
 
 /* 空态 */
@@ -106,8 +118,8 @@
 .userBubble {
   max-width: 88%; padding: 8px 11px;
   font-size: 13px; line-height: 1.6; color: var(--nm-text-1);
-  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
-  border: 0.5px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
   border-radius: 12px 12px 3px 12px;
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere;
@@ -121,12 +133,11 @@
   overflow-wrap: anywhere;
 }
 .aiAnswer[data-streaming] { color: var(--nm-text-1); }
+/* 流式光标：静态方块（去掉闪烁动画，微信化「克制动效」）。 */
 .caret {
   display: inline-block; width: 6px; height: 14px; margin-left: 2px;
   vertical-align: text-bottom; background: var(--nm-cyan);
-  animation: sa-blink 1s steps(2) infinite;
 }
-@keyframes sa-blink { 50% { opacity: 0; } }
 .pending {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 12px; color: var(--nm-text-3);
@@ -150,12 +161,11 @@
   color: var(--nm-text-1);
   border-color: color-mix(in srgb, var(--nm-text-3) 60%, transparent);
 }
+/* 等待点：静态小圆点（去掉脉冲动画）。 */
 .dots {
   width: 8px; height: 8px; border-radius: 50%;
-  background: var(--nm-cyan);
-  animation: sa-pulse 1.1s ease-in-out infinite;
+  background: var(--nm-text-3);
 }
-@keyframes sa-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
 
 /* ── 输入区 ──
@@ -203,22 +213,19 @@ textarea.input:focus-visible { outline: none; }
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
   color: color-mix(in srgb, var(--nm-text-1) 55%, transparent);
   cursor: pointer;
-  transition: background 0.18s, box-shadow 0.18s, border-color 0.18s, transform 0.12s, color 0.18s;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
+/* 可发送态：纯微信绿实心，无渐变 / 发光 / 位移（微信化）。 */
 .send:enabled {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-brand);
   color: var(--nm-on-accent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 38%, transparent);
 }
-.send:enabled:hover { transform: translateY(-1px); box-shadow: 0 0 18px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
-.send:enabled:active { transform: translateY(0); }
+.send:enabled:hover { background: color-mix(in srgb, var(--nm-brand) 88%, #000); }
 .send:disabled { cursor: default; }
 .send[data-busy] {
   border-color: transparent;
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 45%, transparent),
-    color-mix(in srgb, var(--nm-purple) 45%, transparent));
+  background: color-mix(in srgb, var(--nm-brand) 45%, transparent);
   color: var(--nm-on-accent);
 }
 .spinner {
@@ -236,4 +243,99 @@ textarea.input:focus-visible { outline: none; }
   padding: 8px 12px 10px;
   text-align: center;
   font-size: 11px; color: var(--nm-text-3);
+}
+
+/* ── 回答脚注行：依据 + 反馈 + 沉淀合成一行（与「微信问答」同一布局）──
+   旧实现只有一行依据；补上反馈与沉淀后仍压成一行（依据占满剩余、按钮靠右），
+   窄屏由 `flex-wrap` 自动折行。 */
+.answerFoot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  width: 100%;
+  min-width: 0;
+}
+.footActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+/* 沉淀为笔记：比赞/踩反馈更低调（反馈高频、沉淀偶尔为之），但同高同胶囊形。 */
+.distillBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: var(--nm-dense-fs-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.distillBtn:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+
+/* ── 优化提问（与「微信问答」同一件）── */
+.optBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: var(--nm-dense-fs-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.optBtn:hover:enabled { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.optBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* 优化结果条：紧贴输入框上方（不进入滚动区）。 */
+.optStrip {
+  flex-shrink: 0;
+  margin: 0 12px 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.optTitle { font-size: 11px; color: var(--nm-text-3); }
+.optText { font-size: 12.5px; color: var(--nm-text-1); line-height: 1.6; }
+.optList { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--nm-text-2); }
+.optActions { display: flex; gap: 8px; margin-top: 2px; }
+.optApply {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  color: var(--nm-cyan);
+  font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.optDismiss {
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.optError {
+  flex-shrink: 0;
+  margin: 0 12px 6px;
+  font-size: 12px;
+  color: var(--nm-danger);
 }

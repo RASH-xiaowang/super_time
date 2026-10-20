@@ -6,7 +6,7 @@
  * wxgf → ffmpeg 兜底再 await 子进程，尽量不让 worker 事件循环做磁盘/进程等待。
  */
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { isMd5 } from '../md5.ts'
 import { normalizeAesKey } from '../keys/image-key.ts'
 import { emoticonIndexFor, emoticonMissFresh, findEmoticonDats, noteEmoticonMiss } from './emoticon-index.ts'
@@ -25,7 +25,14 @@ import {
 } from './media-image.ts'
 import { transcodeWxgfAsync, type WxgfTranscoderAsync } from './wxam-image.ts'
 
-export type AsyncImageResult = { url?: string; format?: string; thumb?: boolean; error?: string }
+export type AsyncImageResult = {
+  url?: string
+  format?: string
+  thumb?: boolean
+  /** 相对 decoded_images 的落盘路径（如 `wxid_x/ab12.jpg`）：桌面端拼 wechat-media://，手机端忽略。 */
+  file?: string
+  error?: string
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -40,7 +47,7 @@ async function pathExists(path: string): Promise<boolean> {
 async function cachedImageAsync(
   dir: string,
   md5: string,
-): Promise<{ url?: string; format?: string; thumb?: boolean } | null> {
+): Promise<{ url?: string; format?: string; thumb?: boolean; file?: string } | null> {
   for (const thumb of [false, true]) {
     for (const ext of RENDERABLE_EXTS) {
       const p = join(dir, md5 + (thumb ? '.t.' : '.') + ext)
@@ -48,7 +55,7 @@ async function cachedImageAsync(
       try {
         const bytes = await readFile(p)
         const fmt = ext === 'jpeg' ? 'jpg' : ext
-        return { url: toDataUrl(fmt, new Uint8Array(bytes)), format: fmt, ...(thumb ? { thumb: true } : {}) }
+        return { url: toDataUrl(fmt, new Uint8Array(bytes)), format: fmt, ...(thumb ? { thumb: true } : {}), file: p }
       } catch {
         // 与同步入口一致：坏缓存落到 .dat 重解，而不是把读失败当成答案。
         return null
@@ -134,10 +141,13 @@ export async function decodeImageDataUrlAsync(
 ): Promise<AsyncImageResult> {
   const hint = resolveImageResourceHint(decryptedDir, username, localId)
   const md5 = hint.md5
+  // 桌面临时路径：落盘成功才回填，失败时留给 data URL 兜底（不能把不存在的路径发给渲染层）。
+  let writtenFile = ''
+  const relFile = (abs: string): string => relative(decodedDir, abs).split('\\').join('/')
   if (!md5 && !hint.dataIndex) return { error: '无法找到图片 MD5' }
   if (md5) {
     const hit = await cachedImageAsync(decodedDir, md5) ?? await cachedImageAsync(join(decodedDir, username), md5)
-    if (hit) return hit
+    if (hit) return hit.file === undefined ? hit : { ...hit, file: relFile(hit.file) }
   }
   // 老缓存里的 `.hevc` 占位只在所有可重解路径都失败后用于给出一致的降级文案；
   // 这里不调同步能力探测（首次探测会加载 DLL，反而先卡住 worker）。
@@ -148,25 +158,31 @@ export async function decodeImageDataUrlAsync(
     if (dats.length > 0) {
       const aesBytes = normalizeAesKey(aesKey)
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
+      writtenFile = ''
       const r = await decodeDatToResultAsync(ordered, aesBytes, xorKey ?? 0xff, (f, dec) => {
         const dir = join(decodedDir, username)
-        return mkdir(dir, { recursive: true }).then(() =>
-          writeFile(join(dir, md5 + (isThumbTier(f) ? '.t.' : '.') + dec.format), Buffer.from(dec.bytes)))
+        const out = join(dir, md5 + (isThumbTier(f) ? '.t.' : '.') + dec.format)
+        return mkdir(dir, { recursive: true })
+          .then(() => writeFile(out, Buffer.from(dec.bytes)))
+          .then(() => { writtenFile = out })
       })
-      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}), ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }) }
       return { error: 'hevc-unsupported' }
     }
   }
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? '', hint.dataIndex)
     if (hd) {
+      writtenFile = ''
       const r = await decodeDatToResultAsync([hd], normalizeAesKey(aesKey), xorKey ?? 0xff, (f, dec) => {
         const key = md5 || 'data-' + hint.dataIndex
         const dir = join(decodedDir, username)
-        return mkdir(dir, { recursive: true }).then(() =>
-          writeFile(join(dir, key + (isThumbTier(f) ? '.t.' : '.') + dec.format), Buffer.from(dec.bytes)))
+        const out = join(dir, key + (isThumbTier(f) ? '.t.' : '.') + dec.format)
+        return mkdir(dir, { recursive: true })
+          .then(() => writeFile(out, Buffer.from(dec.bytes)))
+          .then(() => { writtenFile = out })
       })
-      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}), ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }) }
     }
   }
   if (hasHevc) return { error: 'hevc-unsupported' }

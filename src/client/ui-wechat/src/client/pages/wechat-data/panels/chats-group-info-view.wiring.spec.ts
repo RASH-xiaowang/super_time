@@ -146,10 +146,11 @@ describe('实时刷新接线（2026-10-13）', () => {
   })
 })
 
-describe('微信对齐（D0–D2）：行语法、只读纪律与六区骨架', () => {
+describe('微信对齐（D0–D2）：行语法、箭头纪律与六区骨架', () => {
   const ROWS_CSS = readStripped(join(HERE, 'chats-rows.module.css'))
   const INFO_CSS = readStripped(join(HERE, 'chats-info.module.css'))
   const CARDS_CSS = readStripped(join(HERE, 'chats-cards.module.css'))
+  const SHELL_CSS = readStripped(join(HERE, 'chats-shell.module.css'))
   const CONTACT_CSS = readStripped(join(HERE, 'chats-contact-info.module.css'))
   const CONTACT_VIEW = readStripped(join(HERE, 'chats-contact-info-view.tsx'))
   const ROWS_TSX = readStripped(join(HERE, 'chats-info-rows.tsx'))
@@ -169,15 +170,85 @@ describe('微信对齐（D0–D2）：行语法、只读纪律与六区骨架', 
     expect(CARDS_CSS, '群抽屉没定义 --wx-info-avatar: 48px').toMatch(/--wx-info-avatar:\s*48px/)
   })
 
-  it('只读开关是死控件纪律（L13）：role=switch + aria-disabled，且不挂 onChange', () => {
-    expect(ROWS_TSX, '开关没有 switch 语义').toContain('role="switch"')
-    expect(ROWS_TSX, '只读开关没了 aria-disabled ⇒ 变成假可用控件').toContain('aria-disabled="true"')
-    expect(ROWS_TSX, '只读开关挂上了 onChange ⇒ 承诺了本应用没有的写回能力').not.toContain('onChange')
+  /**
+   * 2026-10-19：区③ 四条只读开关行按用户要求删除，`ReadOnlySwitch` 与 `.infoSwitch*`
+   * 一族随之清空（没有消费者还留着一套 ⇒ 下一个人会为了「填满抽屉」把它复活）。
+   * 这一格钉的是「不许复活」：组件、CSS 规则、行内开关三处都不许回来。
+   */
+  it('只读开关一族已随区③ 删除：组件、CSS、开关行三处都不许复活', () => {
+    expect(ROWS_TSX, 'ReadOnlySwitch 又回来了（用户已要求删除区③ 四行）').not.toContain('ReadOnlySwitch')
+    expect(ROWS_TSX, 'InfoRow 又在接 switchOn ⇒ 又承诺了本应用没有的写回能力').not.toContain('switchOn')
+    expect(ROWS_TSX, '行语法三件套变回四件 ⇒ 那份没有消费者的开关又长出来了').not.toContain('三件套')
+    expect(INFO_CSS, '.infoSwitch 一族又回来了').not.toMatch(/\.infoSwitch/)
+    expect(VIEW, '抽屉里又出现开关行（switchOn 是画开关的唯一入口）').not.toContain('switchOn')
+    for (const label of ['消息免打扰', '置顶聊天', '保存到通讯录', '显示群成员昵称']) {
+      expect(VIEW, `「${label}」那一行又回来了（用户已要求删除区③）`).not.toContain(`label="${label}"`)
+    }
   })
 
-  it('底部动作位贴底（D7）：两抽屉的导出槽都 margin-top:auto', () => {
-    expect(CARDS_CSS, '群抽屉导出槽没贴底').toMatch(/\.groupExport \{[^}]*margin-top:\s*auto/)
+  it('底部动作位（D7 / 2026-10-19 重排）：群抽屉是滚动区外的固定 footer，单聊抽屉仍贴底', () => {
+    // 群抽屉：导出槽是 `groupInfo` 的固定 footer，不参与滚动 —— 这才是用户要的「不挡住内容」。
+    expect(SHELL_CSS, '群抽屉导出槽没固定为 footer').toMatch(/\.groupExport \{[^}]*flex:\s*0 0 auto/)
+    expect(SHELL_CSS, '群抽屉导出槽又用 margin-top:auto 挤在滚动区里 ⇒ 内容一高就会压住资料行').not.toMatch(
+      /\.groupExport \{[^}]*margin-top:\s*auto/,
+    )
+    // 单聊抽屉的空间分配与群抽屉不同，仍是内容内贴底。
     expect(CONTACT_CSS, '单聊抽屉导出槽没贴底').toMatch(/\.exportRow \{[^}]*margin-top:\s*auto/)
+  })
+
+  /**
+   * 2026-10-19 重排后：滚动区（`.groupInfoBody`）自己吃剩余高度并滚动；内容包
+   * （`.groupZones`）**不再** flex-grow / min-height:0 —— 那个旧写法会让内容溢出
+   * body，导出槽再高的 z-index 也挡不住它压住成员名。
+   */
+  it('滚动区只负责滚动，内容包不再抢剩余高度（旧 flex:1 写法会让内容溢出 body）', () => {
+    expect(SHELL_CSS, '群抽屉滚动区没有 flex:1 1 auto').toMatch(/\.groupInfoBody \{[^}]*flex:\s*1 1 auto/)
+    expect(SHELL_CSS, '群抽屉滚动区没有 min-height:0 ⇒ 压不下去').toMatch(/\.groupInfoBody \{[^}]*min-height:\s*0/)
+    expect(SHELL_CSS, '群抽屉滚动区没有可滚动声明').toMatch(/\.groupInfoBody \{[^}]*overflow-y:\s*auto/)
+    expect(CARDS_CSS, '内容包又在抢剩余高度 ⇒ 会溢出滚动区盖住 footer').not.toMatch(
+      /\.groupZones \{[^}]*flex:\s*1 1 auto/,
+    )
+    expect(CARDS_CSS, '内容包又写 min-height:0 ⇒ 旧布局复活').not.toMatch(
+      /\.groupZones \{[^}]*min-height:\s*0/,
+    )
+  })
+
+  /**
+   * 2026-10-19 用户截图「导出聊天记录压住成员名/查看更多」的回归位。
+   *
+   * 旧布局把导出槽放在 `.groupInfoBody` **内部**、内容包之后；滚动区里的
+   * `margin-top:auto` 只在内容不足一屏时生效，内容一高就变成压在资料行上。
+   * 新布局把它移到滚动区**之外**，作为 `groupInfo` 的第三个直接子元素：
+   * `header` → `groupInfoBody` → `groupExport`。
+   */
+  it('群抽屉导出槽在滚动区外、且排在滚动区之后（不能又挪回 body 里）', () => {
+    const bodyAt = VIEW.indexOf('cssshell.groupInfoBody')
+    const zonesAt = VIEW.indexOf('csscards.groupZones')
+    const exportAt = VIEW.indexOf('cssshell.groupExport')
+    expect(bodyAt, '抽屉滚动区 groupInfoBody 没找到').toBeGreaterThan(-1)
+    expect(zonesAt, '内容包 groupZones 没找到').toBeGreaterThan(-1)
+    expect(exportAt, '导出槽 groupExport 没找到').toBeGreaterThan(-1)
+    expect(exportAt, '导出槽不在内容包之后').toBeGreaterThan(zonesAt)
+    // 滚动区必须以 `\n      </div>` 收尾（组件里的缩进层级）；导出槽必须在这之后。
+    const bodyEnd = VIEW.indexOf('\n      </div>', bodyAt)
+    expect(bodyEnd, '滚动区的收尾没找到').toBeGreaterThan(bodyAt)
+    expect(exportAt, '导出槽又跑回滚动区内部了 ⇒ margin-top:auto 失效、按钮压住内容').toBeGreaterThan(bodyEnd)
+    // 抽屉外壳的收尾之前：它是 groupInfo 的直接子元素，不是外壳外的孤儿。
+    const shellEnd = VIEW.indexOf('\n    </div>', exportAt)
+    expect(shellEnd, '抽屉外壳的收尾没找到').toBeGreaterThan(exportAt)
+
+    // 反例自证：把导出槽块挪回 body 内，上面的位置断言必须红。
+    const slotRe = /^[ \t]*<div className=\{cssshell\.groupExport\}>[\s\S]*?^[ \t]*<\/div>\n/m
+    const m = slotRe.exec(VIEW)
+    expect(m, '这份文件里没有导出槽块（形状变了？）').not.toBeNull()
+    const at = m?.index ?? 0
+    const slotText = m?.[0] ?? ''
+    const without = VIEW.slice(0, at) + VIEW.slice(at + slotText.length)
+    const badBodyEnd = without.indexOf('\n      </div>', without.indexOf('cssshell.groupInfoBody'))
+    const broken = without.slice(0, badBodyEnd) + slotText + without.slice(badBodyEnd)
+    const bExport = broken.indexOf('cssshell.groupExport')
+    const bBodyEnd = broken.indexOf('\n      </div>', broken.indexOf('cssshell.groupInfoBody'))
+    expect(bExport, '合成违例没有把导出槽挪回滚动区内部 ⇒ 这道闸抓不住坏形状').toBeLessThan(bBodyEnd)
   })
 
   it('单聊六区：单 tile 网格 + 本机统计分组；profile 横排块退役（D5/D6）', () => {
@@ -186,11 +257,14 @@ describe('微信对齐（D0–D2）：行语法、只读纪律与六区骨架', 
     expect(CONTACT_VIEW, 'profile 横排块又回来了（D5 复发）').not.toContain('css.profile')
   })
 
-  it('群抽屉补官方区（D1/D4）：群主标 + 成员数 + 四条只读开关行', () => {
+  it('群抽屉补官方区（D1/D4）：群主标 + 成员数；区③ 四条开关行已按用户要求删除', () => {
     expect(VIEW, '群主标没了（官方在群主头像下标群主）').toContain('memberBadge')
     expect(VIEW, '成员数没进网格右下（D10）').toContain('共 {memberTotal} 位成员')
-    expect(VIEW, '免打扰开关行没了（D1 复发：抽屉又空半屏）').toContain('switchOn={groupInfo.settings.muted}')
-    expect(VIEW, '显示群成员昵称开关行没了').toContain('switchOn={groupInfo.settings.showMemberNickname}')
+    // 2026-10-19：免打扰 / 置顶 / 存通讯录 / 显成员昵称 四行删除位 —— 不许再长回来。
+    // 尤其是"为了填满抽屉"而复活它们：那是 D1 当年的理由，今天已被用户否决。
+    for (const label of ['消息免打扰', '置顶聊天', '保存到通讯录', '显示群成员昵称']) {
+      expect(VIEW, `「${label}」那一行又回来了（用户已要求删除区③）`).not.toContain(`label="${label}"`)
+    }
   })
 
   it('成员卡：头像居左 + 签名值占满行宽（D9）', () => {

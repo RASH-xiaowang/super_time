@@ -21,6 +21,7 @@ export declare function createSummaryRecordRemotes(rc: createSummaryRecordRemote
         date: string;
         provider?: string;
         model?: string;
+        format?: string;
     }): Promise<DailySummaryResult>;
     deleteSummaryRecord(options: {
         id: number;
@@ -30,6 +31,7 @@ export declare function createSummaryRecordRemotes(rc: createSummaryRecordRemote
         to: string;
         provider?: string;
         model?: string;
+        format?: string;
     }): Promise<PeriodSummaryResult>;
     suggestReplies(options: {
         username?: string;

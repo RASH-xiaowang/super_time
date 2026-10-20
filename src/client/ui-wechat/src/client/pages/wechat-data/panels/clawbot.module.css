@@ -40,17 +40,26 @@
 @container (min-width: 801px) { .shell { grid-template-columns: 168px minmax(0, 1fr); } }
 @container (min-width: 1201px) { .shell { grid-template-columns: 208px minmax(0, 1fr); } }
 .workChat { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.workChat > *:not(.tableCard) { flex-shrink: 0; }
-.workSettings { min-height: 0; overflow-y: auto; }
+/* 会话视图只有一张卡（`.chatCard`），它吃全部剩余高度；其余块（提示条等）不参与压缩。 */
+.workChat > *:not(.chatCard) { flex-shrink: 0; }
+.workSettings { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 
-/* 实例轨：一个微信号一行；当前行高亮边 + 「当前」标（继承实例卡的诚实纪律，升级为常驻导航）。 */
+/*
+ * 实例轨：一个微信号一行；当前行高亮边 + 「当前」标（继承实例卡的诚实纪律，升级为常驻导航）。
+ *
+ * 2026-10-17 视觉统一：轨与工作区（`Card`）用**同一套视觉语言** —— 同背景、同圆角
+ * （`--nm-r-lg`）、同阴影（`--nm-shadow-card`）。原先轨只有 `--nm-r-md` 圆角且**没有阴影**，
+ * 而工作区是带阴影的卡片 ⇒ 两栏看起来像「一个卡片 + 一块裸区域」，不像同一层级的两个面板。
+ * 背景不用改：`--nm-bg-2` 与 `--nm-bg-card` 在深浅两套主题里本来就同值。
+ */
 .rail {
   display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px);
   min-height: 0; min-width: 0;
   padding: var(--nm-s-2, 8px);
-  background: var(--nm-bg-2, transparent);
+  background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md, 10px);
+  border-radius: var(--nm-r-lg);
+  box-shadow: var(--nm-shadow-card);
   overflow-y: auto;
 }
 @container (max-width: 800px) {
@@ -60,24 +69,84 @@
   .railAdd { flex: 0 0 auto; }
 }
 .railList { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); min-width: 0; flex: 1 1 auto; min-height: 0; }
+/*
+ * 实例行（2026-10-16 视觉重做；2026-10-17 扩大点击范围）。
+ *
+ * 当前行用**左侧色条 + 淡底**表达，而不是只换边框色 —— 边框色在深色主题下与普通行
+ * 只差一点点，多实例时「我在哪个号上」要眯眼找。色条用 ::before 绝对定位
+ * （不占布局宽度 ⇒ 行内文字起点不因当前态而跳动）。
+ *
+ * ⚠️ **整行是点击目标**（2026-10-17 修「有时候点击没反应」）：点击处理挂在 `.railRow`
+ * 上，所以行内任何位置（除按钮与输入框）都算「切到这个实例」。原先只有第一行可点，
+ * 而整行有 `cursor: pointer` + hover 底色 ⇒ 用户点第二行或空白处毫无反应。
+ * `min-height` 保证触摸目标 ≥ 44px（手机上的可点下限）。
+ */
 .railRow {
+  position: relative;
   display: flex; flex-direction: column; gap: 2px;
   min-width: 0;
-  padding: 6px 8px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 8px 10px 8px 12px;
   text-align: left;
   background: var(--nm-bg-1, transparent);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-sm, 6px);
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
-.railRow[data-current] { border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent); }
+.railRow:hover { background: color-mix(in srgb, var(--nm-cyan) 6%, var(--nm-bg-1, transparent)); }
+.railRow:focus-visible { outline: 2px solid color-mix(in srgb, var(--nm-cyan) 60%, transparent); outline-offset: 1px; }
+.railRow[data-current] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-1, transparent));
+}
+.railRow[data-current]::before {
+  content: '';
+  position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: var(--nm-r-xs, 4px);
+  background: var(--nm-cyan);
+}
 .railRowHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .railName {
   font-size: 12px; font-weight: 600; color: var(--nm-text-1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  cursor: text;
+}
+/* 改名按钮：默认隐身，行 hover / 键盘聚焦时才出现（常驻会让轨看起来很吵）。
+   ⚠️ 触摸设备没有 hover ⇒ 必须给 @media (hover: none) 出口，否则手机上这个按钮
+   **永远不出现**（改名入口在手机上等于不存在）。 */
+.railRenameBtn {
+  flex: 0 0 auto; margin-left: auto;
+  padding: 0 4px; font-size: 12px; line-height: 1.4;
+  color: var(--nm-text-3); background: none; border: none; cursor: pointer;
+  opacity: 0; transition: opacity 120ms ease, color 120ms ease;
+}
+.railRow:hover .railRenameBtn, .railRenameBtn:focus-visible { opacity: 1; }
+.railRenameBtn:hover { color: var(--nm-cyan-text); }
+@media (hover: none) { .railRenameBtn { opacity: 1; } }
+/* 行内改名输入框：与 .railName 同字号同字重，切换时不跳版。 */
+.railRename {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 12px; font-weight: 600; font-family: inherit;
+  padding: 1px 4px;
+  color: var(--nm-text-1);
+  background: var(--nm-bg-2, var(--nm-bg-1));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+  border-radius: var(--nm-r-xs, 4px);
+  outline: none;
 }
 .railMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); white-space: nowrap; }
-.railBind { flex: 0 0 auto; }
+/* 实例 token 统计：一行内 今日 / 累计，数字用强调色，过长时省略而不是撑破实例轨。 */
+.railTokens {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.railTokens b { color: var(--nm-cyan-text); font-weight: 600; }
+.railBind { flex: 0 0 auto; margin-left: auto; }
 .railAdd {
   padding: 4px 8px;
   font-size: 12px; font-family: inherit;
@@ -86,7 +155,9 @@
   border: 1px dashed var(--nm-border);
   border-radius: var(--nm-r-sm, 6px);
   cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
 }
+.railAdd:hover { border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent); color: var(--nm-cyan-text); }
 .hdIcon { color: var(--nm-cyan); font-size: 14px; }
 
 /* B2：指挥条常驻绑定态 pill（两个视图都看得见四态，修 P7）。
@@ -96,7 +167,6 @@
 .stUnknown { color: var(--nm-text-3); }
 
 /* ── 通用卡片内段 ─────────────────────────────────────────── */
-.card { margin: 0; }
 .mono { font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
 .muted { color: var(--nm-text-3); font-size: 12px; }
 
@@ -117,7 +187,7 @@
   background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
 }
 
-/* ── 绑定卡片 ────────────────────────────────────────────── */
+/* ── 绑定分区 ────────────────────────────────────────────── */
 .bindRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .bindAvatar {
   width: 42px; height: 42px; flex: 0 0 42px;
@@ -128,9 +198,16 @@
   background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
 .bindGrow { flex: 1; min-width: 0; }
-.bindTitle { font-size: 14px; font-weight: 500; color: var(--nm-text-1); }
-.bindDesc { font-size: 12px; color: var(--nm-text-3); margin-top: 1px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.bindStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.bindStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; max-width: 100%; }
+/*
+ * 状态行里的 wxid 必须**可截断**（2026-10-17 两栏布局实测）：
+ * 左栏只有 320px，而 wxid 是 40+ 字符的长串 —— 不截断时它把 `.bindStatus` 撑爆，
+ * 「已绑定」被挤成竖排（每个字一行），整行高度暴涨。
+ * `min-width: 0` + `text-overflow: ellipsis` 让它自己缩，而不是挤别人。
+ * ⚠️ 状态文字（`.stBound` 等）要 `flex-shrink: 0` —— 否则它也会被压成竖排。
+ */
+.bindStatus > span:not(.mono) { flex-shrink: 0; white-space: nowrap; }
+.bindStatus .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stUnbound { color: var(--nm-cyan); }
 .stBinding { color: var(--nm-amber, #f59e0b); }
 .stBound { color: var(--nm-success); }
@@ -147,28 +224,162 @@
  * C3（R3 反转，2026-10-13）：设置视图单列通栏。上一稿的 W/XW 双列（绑定卡 | 自检卡 + FAQ 通栏）
  * 退役 —— 实例轨吃掉左栏宽度后双列的动机（两张矮卡并排填空）不存在，且绑定卡与自检已合并成
  * 一张卡（右列四成空白与 kvGrid 孤儿格随之消失，P6）。
+ *
+ * 2026-10-17 补：**撑满容器高度**。`.workSettings` 是 `overflow-y: auto` 的滚动容器，
+ * 而 `.settingsCol` 原先只有内容高 ⇒ 卡片下方留 89px 空白（实测容器 771px、卡片 670px）。
+ * ⚠️ 用 `flex: 1` 而不是 `min-height: 100%` —— 百分比高度在 flex item 上会退化成 `auto`
+ * （本仓已知的坑，见「CSS 高度链在 flex 容器里会塌」），所以 `.workSettings` 要改成
+ * flex 列容器，`.settingsCol` 用 `flex: 1` 吃满。
  */
-.settingsCol { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); }
-.envHead {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--nm-border);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--nm-text-1);
+.settingsCol { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); flex: 1 1 auto; min-height: 0; flex-shrink: 0; }
+/*
+ * Wave 1（2026-10-18 响应式审计）：设置列**只涨不缩**。
+ *
+ * `.workSettings` 是定高滚动容器（B0 的单一滚动容器契约），`.settingsCol` 作为它的 flex 子项
+ * 默认 `flex-shrink: 1` —— 内容比容器高时，flex 先把这一列压进容器高度，列里的卡片再被压，
+ * 而 kit `.card` 自带 `overflow: hidden` ⇒ 卡片内容被静默裁掉且**没有任何滚动条**。
+ * 基线实测（5 个视口）：390×844 裁 772px、1024×768 裁 355px（内容 992 / 卡片 637）。
+ * `flex-shrink: 0` 让设置列保持内容高度，超出部分交给 `.workSettings` 自己滚（滚动可达）。
+ */
+/*
+ * 卡片吃满 `.settingsCol`（`.card` 本身已是 flex column，只需给 flex 增长）。
+ * ⚠️ 用**属性子串选择器**而不是 `.card` —— CSS Modules 给每个文件独立哈希，
+ * `kit.module.css` 的 `.card` 是 `._card_xxx`，在 `clawbot.module.css` 里写 `.card`
+ * 会编译成另一个哈希，**匹配不到**（本仓已知的坑）。
+ */
+.settingsCol > [class*='card'] { flex: 1 1 auto; }
+/* 卡身（`Card` 内部那层 body div）也要吃满，否则两栏容器拿不到剩余高度。 */
+.settingsCol > [class*='card'] > [class*='cardBd'] { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+
+/* 铺满（2026-10-18 大屏复查）：设置卡解除全局卡高上界（大窗口下原被 860px 截住，
+   卡下方留 400px+ 空白），由 `.settingsCol` / `.workSettings` 分配整列高度。 */
+.fillCard { min-height: 0; }
+
+/*
+ * 设置视图**两栏**（2026-10-17 第二次布局重设计）。
+ *
+ * 为什么又回到两栏：上一稿「一张卡 + 五个分区单列通栏」在 1016px 宽的面板里暴露三个问题 ——
+ *   ① 键值对（`.kvGrid` 两列）横跨 700px，键在最左、值在最右，中间大片空白；
+ *   ② 系统提示词 textarea 占满整宽，但每行文字很短，右侧全是空；
+ *   ③ 右半边整体没有内容，纵向被拉得很长（实测 860px）。
+ * 本稿把「实例信息 + 危险区」放**左栏**（窄、稳定），「自动回复 + 提示词 + 自检 + FAQ」放**右栏**
+ * （宽、弹性）—— 两栏信息密度均衡，键值对不再横跨整宽。
+ *
+ * ⚠️ 只在 ≥1000px（**面板自身宽度**）生效；窄面板塌成单列，
+ * 顺序仍是「实例 → 自动回复 → 提示词 → 自检 → FAQ → 危险区」（阅读顺序不变）。
+ *
+ * 断点取 1000px 而不是 1201px（2026-10-17 真机实测）：`@container` 的基准是**面板宽度**，
+ * 而 1400px 视口下面板只有 982px（侧栏 208 + 实例轨 208 + 内边距）—— 用 1201px 时
+ * 1400px 视口会落到单列，而它其实完全放得下两栏（左 320 + 间距 24 + 右 638）。
+ */
+.settingsGrid { display: flex; flex-direction: column; gap: 0; flex: 1 1 auto; min-height: 0; }
+.settingsAside { display: flex; flex-direction: column; }
+.settingsMain { display: flex; flex-direction: column; }
+/* 单列时左栏与右栏之间要有分隔线（两栏时靠栏间距，不需要）。 */
+.settingsAside { border-bottom: 1px dashed var(--nm-border); padding-bottom: 12px; margin-bottom: 12px; }
+@container (min-width: 1000px) {
+  /* `align-items: stretch`（默认）让左右栏**等高** —— 用 `flex-start` 时左栏只有内容高，
+     底部会留 144px 空白（实测左栏 492px vs 右栏 636px）。 */
+  .settingsGrid { flex-direction: row; gap: 24px; align-items: stretch; }
+  /* 左栏固定 320px（键值对单列刚好放得下），右栏吃剩余宽度。 */
+  .settingsAside { flex: 0 0 320px; border-bottom: 0; padding-bottom: 0; margin-bottom: 0; }
+  .settingsMain { flex: 1 1 auto; min-width: 0; }
+  /* 两栏时左栏的键值对退成单列 —— 320px 里两列会把值挤成一条缝。 */
+  .settingsAside .kvGrid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  /*
+   * 两栏时左栏的键值行改**键上值下**（2026-10-17 实测）：320px 里 `space-between`
+   * 仍会把键与值拉到两端（「接收通道」在左、「运行中（长轮询）」在右，中间 200px 空白），
+   * 读起来像两列无关的数据。键上值下后每行是一个紧凑的「标签 + 值」块。
+   */
+  .settingsAside .kvItem { flex-direction: column; gap: 2px; align-items: flex-start; }
+  .settingsAside .kvVal { text-align: left; }
+  /* 两栏时右栏第一个分区（自动回复）去掉顶部留白（左栏顶部是实例信息，对齐即可）。 */
+  .settingsMain > .section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
 }
+
+/*
+ * 卡内**分区**（2026-10-17 重设计）：一张卡里的一个语义块，用**标题 + 上分隔线**划分。
+ *
+ * 为什么不是独立卡片：设置视图原先三张卡（绑定 / 自动回复 / 常见问题）各自带边框、圆角与
+ * 标题栏 —— 视觉上像三个互不相干的板块，而它们其实是**同一个实例的设置**。
+ * 合并成一张卡 + 内部分区后，读起来是「一个实例」而不是「三件事」。
+ *
+ * 分隔线用 `border-top` 而不是 `border`：分区之间是**同一张卡内部**的关系，
+ * 用整圈边框会重新变成「多张卡」的观感。
+ */
+.section { border-top: 1px dashed var(--nm-border); padding-top: 10px; margin-top: 12px; }
+.section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.sectionHd {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; font-weight: 600; color: var(--nm-text-1);
+}
+/* 可折叠分区的标题行：`<summary>` 要吃掉默认 marker 并给出可点提示。 */
+details.section > .sectionHd { cursor: pointer; list-style: none; }
+details.section > .sectionHd::-webkit-details-marker { display: none; }
+details.section > .sectionHd::before {
+  content: '▸';
+  font-size: 10px; color: var(--nm-text-3);
+  transition: transform 120ms ease;
+}
+details.section[open] > .sectionHd::before { transform: rotate(90deg); }
+.sectionTitle { color: var(--nm-text-1); }
+.sectionHint { font-size: var(--nm-fs-xs, 11px); font-weight: 400; color: var(--nm-text-3); }
+.sectionBd { margin-top: 8px; }
+
 .dangerZone {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px dashed var(--nm-border);
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
-/* 行为卡：switch + 标题 + 说明（P4：会替你发消息的开关，视觉重量要配得上后果）。 */
+/* 两栏时危险区在**左栏**（320px）：按钮与说明竖排，说明换行不挤成一条缝。 */
+@container (min-width: 1000px) {
+  /* 按钮**不拉伸**（`align-items: stretch` 会让红色按钮占满 320px，视觉过重）。 */
+  .settingsAside .dangerZone { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .settingsAside .dangerZone .muted { line-height: 1.7; }
+  /*
+   * 危险区**沉到左栏底部**（2026-10-17）：左栏与右栏等高后，实例信息只占上半部分，
+   * 危险区若紧跟其后会在中间留一大块空白。`margin-top: auto` 把它推到栏底 ——
+   * 破坏性操作本来就该离日常操作远一点。
+   */
+  .settingsAside .dangerZone { margin-top: auto; }
+}
+/* 行为分区：switch + 标题 + 说明（P4：会替你发消息的开关，视觉重量要配得上后果）。 */
 .autoRow { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
 .autoRow input { accent-color: var(--nm-accent, currentColor); margin-top: 2px; }
 .autoText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .autoTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
 .autoDesc { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); line-height: 1.7; }
+/* 系统提示词输入块（2026-10-17）：标题 + 说明 + 多行输入 + 底部状态/按钮。 */
+.promptBlock { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 4px; }
+.promptHd { display: flex; flex-direction: column; gap: 2px; }
+.promptHint { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); line-height: 1.7; }
+.promptInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--nm-text-1);
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm, 6px);
+  resize: vertical;
+  min-height: 96px;
+  /*
+   * 两栏时右栏 638px 宽，默认提示词有 20+ 行 —— 给足高度（400px ≈ 17 行），
+   * 超出部分内部滚动。⚠️ 只写 `max-height` 不写 `overflow` 会让内容被**裁掉**，
+   * 显式写 `overflow: auto`。
+   */
+  max-height: 400px;
+  overflow: auto;
+}
+.promptInput:focus { border-color: var(--nm-cyan); outline: none; }
+.promptInput:disabled { opacity: 0.55; }
+.promptInput::placeholder { color: var(--nm-text-3); }
+.promptFoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.promptFoot .muted { flex: 1 1 auto; min-width: 0; }
 .kvItem {
   display: flex; justify-content: space-between; gap: 10px;
   padding: 6px 0;
@@ -224,11 +435,101 @@
 .faqA { padding: 0 0 10px 23px; font-size: 12px; color: var(--nm-text-2); line-height: 1.75; }
 
 /* ── 筛选条（B1：工具卡与页脚卡合并成一条）───────────────── */
-.filterRow { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; }
-.filterLeft { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; min-width: 0; }
-.filterRight { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; margin-left: auto; }
+/*
+ * 筛选条（2026-10-17 **第四次**调整：**最多两行**）。
+ *
+ * 演进记录（**四次**反转，都写在这里免得下一个人重走）：
+ *   · 初版 `flex-wrap: wrap` —— 宽屏下时间预设与日期区间**上下两行**（`.dateRange` 是 column），
+ *     筛选条高度随容器宽度跳，下面的消息列表跟着抖。
+ *   · 第二版 `nowrap` + 横滚 —— 高度恒定了，但**窄屏要横滑**才能看到搜索框与导出按钮，
+ *     用户找不到它们（横滚条被藏掉了，没有任何「右边还有东西」的提示）。
+ *   · 第三版「宽档 nowrap + 横滚 / 窄档 wrap」—— 宽档**仍然藏控件**：实测容器 1054px 时
+ *     `scrollWidth 1138 > clientWidth 1054`，「共 22 条 · 已加载 22 条」与「● 实时」被裁掉
+ *     41 / 84px，而滚动条被 `scrollbar-width: none` 藏了 ⇒ 用户看到的就是「被遮挡住了」。
+ *   · 第四版（本版）：**一律 `wrap` + 去掉两层容器**。原先分 `.filterLeft` / `.filterRight`
+ *     两个 flex 容器，各自 `wrap` —— 两个容器**各自折行再叠加**，实测 1280px 就 3 行、640px 到 6 行。
+ *     现在所有控件是 `.filterRow` 的**直接子元素** ⇒ **只有一个 flex 流**，行数由「控件总宽度」
+ *     决定，最少（实测 1480px 2 行、1920px 1 行）。
+ *
+ * 断点用**容器查询**（面板自身宽度）而不是视口宽度：面板宽 = 窗宽 − 侧栏 − 32，
+ * 按窗口宽度设断点会在侧栏开合时误判（与 `.shell` 的三档栅格同一口径）。
+ *
+ * ⚠️ **不许再出现 `overflow-x: auto` / `flex-wrap: nowrap`** —— 那两样合起来 = 控件静默消失
+ * （见上面第二、三版的记录）。可见性优先于高度恒定。
+ */
+.filterRow {
+  display: flex; align-items: center; gap: var(--nm-dense-g3, 6px);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/*
+ * 「右端成组」的起点：`margin-left: auto` 挂在**读法那一件**上（不是包一层容器）。
+ * 宽屏放得下时它被推到行尾（右对齐），放不下时自然折行 —— **不会强制独占一行**
+ * （那正是上一版 3 行的成因：`.filterRight` 的 `margin-left: auto` 把它整组推到下一行）。
+ */
+.filterRightStart { display: inline-flex; align-items: center; margin-left: auto; min-width: 0; }
+/* 窄档：不再右对齐（折行后靠左更整齐）。 */
+@container (max-width: 1200px) {
+  .filterRightStart { margin-left: 0; }
+  /*
+   * ⚠️ 窄档下 `DateRangeField` **不许独占整行**（2026-10-17 实测）：
+   * 它宽 582px（预设 5 个 chip + 日期区间），而容器 714px 时「714 − 582 = 132」放不下
+   * 收/发那组（118px）⇒ 它独占一行、其余控件挤在第二行，**白白多出一行**。
+   *
+   * ⚠️ 但**不能靠压缩它**（实测踩到）：压到 320px 后它内部折成 3 行、压到 420px 折成 2 行，
+   * 而**它自己占的行数就是筛选条的行数** ⇒ 总行数反而从 2 涨到 4。
+   * 正确做法是**让它变短但保持单行**：窄档只留 3 个预设 chip（今天/本周/本月），
+   * 藏掉「近7天」「近30天」（`:nth-child(n+4)`）—— 省约 130px，它就能与收/发并排。
+   */
+  .filterRow > [class*='dateRange'] { flex: 0 1 auto; min-width: 0; }
+  .filterRow [class*='dateRangePresets'] > :nth-child(n + 4) { display: none; }
+}
+/*
+ * 极窄档（≤800px）：容器只有 ~548px，`DateRangeField` 光预设 chip 就占 300px ⇒ 必然 3 行。
+ * 这里**把预设 chip 全部藏掉**，只留日期区间（约 270px）—— 它就能与收/发（118px）并排，
+ * 第 1 行放得下；第 2 行放搜索框 + 读法 + 导出 + 统计 + 实时。**两行达成**。
+ * 预设 chip 只是快捷方式，日期区间本身仍可自由选，功能不丢。
+ *
+ * ⚠️ 640px 时容器只剩 428px，而「日期区间 314 + 收/发 118 + gap 6 = 438」**差 10px** 放不下
+ * ⇒ 又变 3 行。这里把 `gap` 收到 4px、日期框内边距收到 4px（省约 20px）刚好补上。
+ */
+@container (max-width: 800px) {
+  .filterRow { gap: 4px; }
+  .filterRow [class*='dateRangePresets'] { display: none; }
+  /*
+   * ⚠️ 极窄档必须**把日期框本身缩小**（2026-10-17 实测）：`DateRangeField` 的 max-content
+   * 是 314px（两个 `YYYY-MM-DD` 输入框 + 「至」+ 清除按钮），而 314 + 收/发 118 + gap 4 = 436
+   * > 428（640px 视口下的容器宽）⇒ 收/发被挤到第 2 行、筛选条变 3 行。
+   * 缩小字号与内边距后 max-content 降到约 280px ⇒ 280 + 118 + 4 = 402 < 428，**两行达成**。
+   *
+   * ⚠️ 试过给 `flex-basis: min(100%, 290px)` —— **更糟**：它把组件压到 290px 后内部折行，
+   * 而**它自己占的行数就是筛选条的行数** ⇒ 900/760/560/480px 全变 3 行。
+   */
+  .filterRow [class*='dateField'] { padding: 0 3px; font-size: 11px; }
+  /* 导出按钮文案缩短（「导出 TXT」→「TXT」）—— 两个按钮省约 40px，是 640px 两行的关键。 */
+  .exportFull { display: none; }
+  .exportShort { display: inline; }
+}
+/*
+ * 宽档：**只保证叶子控件不被压扁**，不再收紧成一行。
+ * ⚠️ 这里**刻意不写** `flex-wrap: nowrap` / `overflow-x: auto` —— 那正是第二、三版藏控件的成因。
+ * 叶子 `flex-shrink: 0` 是必要的（否则日期框被挤成一条缝）。
+ */
+@container (min-width: 1201px) {
+  .filterRow > * { flex-shrink: 0; }
+}
 .stats { font-size: var(--nm-dense-fs, 12px); color: var(--nm-text-3); white-space: nowrap; }
 .live { color: var(--nm-success); white-space: nowrap; }
+/* 宽档显示完整统计文案，窄档（≤1200px）换成「22/22」短文案。
+   ⚠️ 窄档规则必须写在**这里之后**（同优先级后写的赢），否则被 `display: none` 覆盖。 */
+.statsShort { display: none; }
+/* 导出按钮文案：宽档「导出 TXT」/「导出 CSV」，极窄档（≤800px）缩成「TXT」/「CSV」。 */
+.exportShort { display: none; }
+@container (max-width: 1200px) {
+  /* 窄档统计文字缩短（「共 22 条 · 已加载 22 条」→「22/22」）—— 省 60px，是两行放得下的关键。 */
+  .statsFull { display: none; }
+  .statsShort { display: inline; }
+}
 
 /* ── 发送坞（B1：发送器从表格上方下沉为底部 dock；C3：实例标签 + 提示换行）── */
 .composerCol { display: flex; flex-direction: column; gap: 4px; }
@@ -260,17 +561,40 @@
 .composerInput::placeholder { color: var(--nm-text-3); }
 .composerInput:focus { border-color: var(--nm-cyan); outline: none; }
 .composerInput:disabled { opacity: 0.55; }
-.searchFlex { flex: 1 1 200px; min-width: 160px; }
-.tableCard { display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1 1 auto; }
+/* 搜索框：宽档是**唯一**可伸缩的控件（容器宽时它吃掉余量，把右端那组推到行尾）。
+   ⚠️ 必须写在 `.filterRow > *` 的 `flex-shrink: 0` **之后**（同优先级后写的赢），
+   否则会被钉死、宽档一行里没人吃余量。 */
+.searchFlex { flex: 1 1 160px; min-width: 120px; }
 /*
- * P10（2026-10-13 真机实测抓到，C1 之前就存在）：kit Card 会在 children 外再包一层 body div
- * （flush 态 = .cardBdFlush），它插在 .tableCard 与 .msgList 之间 —— body 是 block、高度随内容，
- * 于是 .msgList 的 flex 收缩无从谈起：实测 body/msgList 高 1839px 被 .tableCard 的
- * overflow:hidden 裁成 183px，**裁掉的部分任何地方都没有滚动条（内容不可达）**。
- * 让 body 透传成 flex 列容器，高度链才通到 .msgList（唯一滚动容器）。
- * 选择器只认 .tableCard 的直接 div 子（无 title/footer 时 body 是唯一的直接 div）。
+ * ⚠️ 窄档搜索框**不许独占整行**（2026-10-17 实测）：`flex: 1 1 100%` 会让它吃掉一整行，
+ * 后面的导出按钮 / 统计 / 实时全被挤到第 3 行 ⇒ 筛选条 3 行。
+ * 改成 `flex: 1 1 160px`：它仍能伸展填满剩余空间，但**允许与别的控件同行**。
+ * ⚠️ 必须写在上面 `.searchFlex` **之后**（同优先级后写的赢），否则被覆盖。
  */
-.tableCard > div { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+@container (max-width: 1200px) {
+  .searchFlex { flex: 1 1 160px; }
+}
+
+/*
+ * 会话视图的**一张卡 + 三段**（2026-10-17 重设计）。
+ *
+ * 原先三张独立卡（筛选条 / 消息列表 / 发送坞）各自带边框、圆角与阴影 ⇒ 视觉上像三个
+ * 互不相干的板块，而它们其实是**同一个会话视图的三个部分**（筛选 → 读 → 发）。
+ * 合并成一张卡后读起来是一个整体；段之间用 `border-top` / `border-bottom` 分隔线。
+ *
+ * 高度链（P10 的教训，别改坏）：`Card` 在 children 外还包一层 body div（`flush` 态 =
+ * `.cardBdFlush`），它必须是 flex 列容器且 `min-height: 0`，否则 `.msgList` 的 flex 收缩
+ * 无从谈起 —— 实测 body/msgList 高 1839px 被裁成 183px，**裁掉的部分任何地方都没有滚动条**。
+ * 所以 `.chatCard > div` 透传成 flex 列容器，高度链才通到 `.msgList`（唯一滚动容器）。
+ */
+.chatCard { display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1 1 auto; }
+.chatCard > div { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+/* 筛选条段：与消息列表之间一条分隔线（不是整圈边框）。 */
+.chatCard .filterRow { padding: var(--nm-s-3) var(--nm-s-4); border-bottom: 1px solid var(--nm-border); }
+/* 发送坞段：与消息列表之间一条分隔线。 */
+.chatCard .composerCol { padding: var(--nm-s-3) var(--nm-s-4); border-top: 1px solid var(--nm-border); }
+/* 提示条（notice / readError）夹在筛选条与列表之间：贴边、不额外撑高。 */
+.chatCard .noticeOk, .chatCard .noticeErr { margin: 0; border-radius: 0; }
 /* B0：消息列表是面板内唯一的滚动容器（旧写法用视口单位猜高度，已退役）。 */
 .msgList { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
@@ -418,8 +742,8 @@
   margin: 0 auto 8px;
   padding: 10px;
   background: #ffffff;
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md, 10px);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
 }
 .qrSvg { width: 100%; height: 100%; display: block; }
 .qrSvg path { fill: #0b1220; }

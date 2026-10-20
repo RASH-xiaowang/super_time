@@ -16,6 +16,8 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** panels → wechat-data */
 const WD = join(HERE, '..')
+/** 仓库根（`HERE` = src/client/ui-wechat/src/client/pages/wechat-data/panels，上 8 层）。 */
+const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..', '..')
 const read = (...p: string[]): string => readFileSync(join(...p), 'utf8')
 /** 剥注释：本仓既有做法（注释里提到旧写法不该让断言误判）。 */
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
@@ -78,12 +80,21 @@ describe('面板：三类端点各走各的接口（向量 / 精排的地址·Ke
   })
 })
 
-describe('左下角余额条：挂载位置、刷新口径、失败不吵', () => {
-  it('挂在侧栏底部固定区里、**设置按钮之后**（用户要求：设置按钮下方）', () => {
+describe('余额条：挂载位置、刷新口径、失败不吵', () => {
+  /**
+   * ⚠️ 2026-10-17：余额条从**侧栏底部固定区**迁到**标题栏右上角**（`#tb-status`）——
+   * 它描述的是整个应用的状态（模型能不能用），与窗口控制同属「全局动作」。
+   * 判据跟着搬：宿主 `titlebar-status.tsx` 里必须渲染它，且侧栏里**不许**再有。
+   */
+  it('挂在标题栏状态区里（`#tb-status`），且**不在**侧栏底部固定区', () => {
     const footer = shell.slice(shell.indexOf('function SidebarFooter('), shell.indexOf('export function WechatDataPanel'))
     expect(footer).toContain('css.sidebarFooter')
     expect(footer.indexOf('设置</span>'), '找不到设置按钮').toBeGreaterThan(-1)
-    expect(footer.indexOf('<SidebarBalance collapsed={!navOpen} />'), '余额条没挂在设置下方').toBeGreaterThan(footer.indexOf('设置</span>'))
+    expect(footer, '余额条又回到侧栏了（已迁到标题栏右上角）').not.toContain('<SidebarBalance')
+    // 宿主侧：状态区组件里渲染余额，并挂到 `#tb-status`。
+    const status = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'titlebar-status.tsx'), 'utf8')
+    expect(status, '标题栏状态区没渲染余额条').toContain('<SidebarBalance')
+    expect(status, '标题栏状态区没挂到 #tb-status').toContain("getElementById('tb-status')")
   })
 
   it('挂载后查一次 + 每 5 分钟一次 + 点击立刻刷新', () => {

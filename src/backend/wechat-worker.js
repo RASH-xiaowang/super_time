@@ -126,8 +126,7 @@ async function handle(msg) {
         activeCalls.clear();
         post({ id, value: { ok: true } });
         return;
-      }
-      default:
+      }      default:
         throw new Error(`未知消息类型: ${type}`);
     }
   } catch (e) {
@@ -157,3 +156,26 @@ function reportFatal(kind, err) {
 
 process.on('uncaughtException', (err) => reportFatal('uncaughtException', err));
 process.on('unhandledRejection', (reason) => reportFatal('unhandledRejection', reason));
+
+// ── 退出兜底：尽力还原「原图自动下载」的进程注入 ────────────────────────
+// 正常路径是主进程发 dispose → `case 'dispose'` 里 backend.dispose() → 宿主调
+// `imageAutoDownload.stop()` → `UninstallImgHelper()`（见 wechat-host.js 与
+// query/wechat-image-autodownload.ts）。
+//
+// 但那条路**只保证消息被收到**：`backend-rpc.js` 的 dispose 握手超时、或 worker
+// 被 SIGTERM/SIGKILL 直接打掉时，`case 'dispose'` 不会被执行，注入就留在微信进程里。
+// 微信会一直按原图下载新图片，而用户以为已经关掉了 —— 这正是界面里
+// 「上次退出未确认清理：请先重启微信」那条警告的由来。
+//
+// 这里在进程级 exit 上再兜一层：`createWechatBackend` 里装的 `process.once('exit')`
+// 钩子会调 uninstall + 清 marker。`exit` 阶段只能做同步操作，而 uninstall 是 koffi
+// 同步调用，正好够用；SIGKILL 救不回来（内核不给机会），那种情况由 marker 如实回报。
+process.once('exit', () => {
+  if (backend === null) return; // 已 dispose 过，别重复还原
+  try {
+    backend.dispose();
+    console.log('[wechat-worker] 退出兜底：已还原后端（含原图自动下载注入）');
+  } catch (e) {
+    console.error('[wechat-worker] 退出兜底失败:', e?.message ?? e);
+  }
+});

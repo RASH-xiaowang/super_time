@@ -54,8 +54,10 @@ describe('首字连边：图例 / 开关 / 依赖三处都在', () => {
   })
 
   it('设置里有独立开关，且它是「结构参数」要进 useMemo 依赖', () => {
-    expect(panel).toContain('首字相同连边')
-    expect(panel).toMatch(/patch\(\{\s*firstChar:\s*v\s*\}\)/)
+    // 开关本体 2026-10-16 随参数面板搬进 `GraphRail.tsx`；`useMemo` 依赖仍在 `Graph.tsx`。
+    const rail = readFileSync(join(HERE, 'GraphRail.tsx'), 'utf8')
+    expect(rail).toContain('首字相同连边')
+    expect(rail).toMatch(/patch\(\{\s*firstChar:\s*v\s*\}\)/)
     expect(model).toMatch(/firstChar:\s*true/)
     const deps = panel.match(/const graph = useMemo<BuiltGraph>\([\s\S]*?\n {4}\[[^\]]*\]/)
     expect(deps, '找不到 graph 的 useMemo').not.toBeNull()

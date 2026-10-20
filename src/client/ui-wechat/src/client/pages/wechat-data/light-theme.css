@@ -1,136 +1,141 @@
 /* ============================================================
- * 浅色主题（Light Theme）
+ * 浅色主题（WeChat Light）
  *
- * 与 NEON MATRIX 深色主题共用同一份 CSS Modules，仅切换令牌。
+ * 与深色主题共用同一份 CSS Modules，仅切换令牌。
  * 顶层通过 <html class="theme-light"> 触发（theme.ts 管理）。
+ *
+ * 视觉口径：微信桌面端浅色 —— #EDEDED 画布、#F7F7F7 次级面、纯白卡片、
+ * 微信绿 #07C160 主操作、灰蓝 #576B95 链接/次强调、1px 浅灰分隔线、几乎无阴影。
+ *
+ * ⚠️ 只改值、不删令牌名：主题过渡（@property 清单）、alpha 阶梯、ds w 别名
+ * 都按令牌名登记，删名会让守卫与主题切换静默失效。
  * ============================================================ */
 
 :root.theme-light {
   color-scheme: light;
 
-  /* 基础色板 */
-  --nm-bg-0: #f6f8fb;
-  --nm-bg-1: #eef1f6;
+  /* ── 基础色板：微信浅色灰阶 ───────────────────────────────── */
+  --nm-bg-0: #ededed;
+  --nm-bg-1: #f7f7f7;
   --nm-bg-2: #ffffff;
   --nm-bg-card: #ffffff;
-  --nm-bg-glass: rgba(255, 255, 255, 0.78);
-  --nm-bg-hover: rgba(15, 23, 42, 0.05);
-  --nm-bg-active: rgba(15, 23, 42, 0.08);
-  --nm-bg-input: #ffffff;
-  --nm-black: #f6f8fb;
+  --nm-bg-glass: #ffffff;
+  --nm-bg-hover: rgba(0, 0, 0, 0.04);
+  --nm-bg-active: rgba(0, 0, 0, 0.06);
+  --nm-bg-input: #f7f7f7;
+  --nm-black: #ededed;
 
-  /* 霓虹色（浅色下必须压暗：深色主题的 #00ff88 / #00f0ff 之类在白色背景上
-   * 对比度不足且刺眼。这里保留同一色相，只调整明度/饱和度，维持科技感身份。
-   * 原先这些令牌在浅色下完全没有覆盖，是浅色主题观感差的主要原因。） */
-  --nm-cyan: #0e7490;
-  --nm-cyan-50: rgba(8, 145, 178, 0.50);
-  --nm-cyan-20: rgba(8, 145, 178, 0.14);
-  --nm-cyan-10: rgba(8, 145, 178, 0.08);
-  --nm-cyan-4: rgba(8, 145, 178, 0.04);
-  --nm-cyan-6: rgba(8, 145, 178, 0.05);
-  --nm-cyan-8: rgba(8, 145, 178, 0.06);
-  --nm-cyan-14: rgba(8, 145, 178, 0.10);
-  --nm-cyan-35: rgba(8, 145, 178, 0.30);
-  --nm-cyan-12: rgba(8, 145, 178, 0.10);
-  --nm-cyan-16: rgba(8, 145, 178, 0.13);
-  --nm-cyan-18: rgba(8, 145, 178, 0.14);
-  --nm-cyan-25: rgba(8, 145, 178, 0.20);
-  --nm-cyan-42: rgba(8, 145, 178, 0.34);
-  --nm-cyan-45: rgba(8, 145, 178, 0.36);
-  --nm-cyan-40: rgba(8, 145, 178, 0.32);
-  --nm-cyan-60: rgba(8, 145, 178, 0.48);
-  --nm-cyan-70: rgba(8, 145, 178, 0.55);
-  --nm-purple: #7c3aed;
-  --nm-purple-20: rgba(124, 58, 237, 0.14);
-  --nm-purple-8: rgba(124, 58, 237, 0.06);
-  --nm-purple-10: rgba(124, 58, 237, 0.08);
-  --nm-purple-14: rgba(124, 58, 237, 0.11);
-  --nm-purple-18: rgba(124, 58, 237, 0.14);
-  --nm-purple-50: rgba(124, 58, 237, 0.40);
-  --nm-purple-30: rgba(124, 58, 237, 0.24);
-  --nm-purple-40: rgba(124, 58, 237, 0.32);
-  --nm-purple-70: rgba(124, 58, 237, 0.55);
-  --nm-blue: #2563eb;
-  --nm-blue-20: rgba(37, 99, 235, 0.14);
-  --nm-pink: #db2777;
-  --nm-green: #047857;
-  --nm-green-20: rgba(5, 150, 105, 0.14);
-  --nm-red: #b91c1c;
-  --nm-amber: #b45309;
+  /* ── 品牌色：微信绿 ───────────────────────────────────────── */
+  --nm-cyan: #0e7a3c;
+  --nm-cyan-4: rgba(14, 122, 60, 0.04);
+  --nm-cyan-6: rgba(14, 122, 60, 0.06);
+  --nm-cyan-8: rgba(14, 122, 60, 0.08);
+  --nm-cyan-10: rgba(14, 122, 60, 0.10);
+  --nm-cyan-12: rgba(14, 122, 60, 0.12);
+  --nm-cyan-14: rgba(14, 122, 60, 0.14);
+  --nm-cyan-16: rgba(14, 122, 60, 0.16);
+  --nm-cyan-18: rgba(14, 122, 60, 0.18);
+  --nm-cyan-20: rgba(14, 122, 60, 0.20);
+  --nm-cyan-25: rgba(14, 122, 60, 0.25);
+  --nm-cyan-35: rgba(14, 122, 60, 0.35);
+  --nm-cyan-40: rgba(14, 122, 60, 0.40);
+  --nm-cyan-42: rgba(14, 122, 60, 0.42);
+  --nm-cyan-45: rgba(14, 122, 60, 0.45);
+  --nm-cyan-50: rgba(14, 122, 60, 0.50);
+  --nm-cyan-60: rgba(14, 122, 60, 0.60);
+  --nm-cyan-70: rgba(14, 122, 60, 0.70);
+  --nm-brand: #0e7a3c;
 
-  /* 语义色（同样只在深色下定义过，浅色下沿用会偏亮） */
-  --nm-success: #047857;
-  --nm-success-15: rgba(5, 150, 105, 0.12);
+  /* ── 链接 / 次强调：微信灰蓝 ──────────────────────────────── */
+  --nm-purple: #576b95;
+  --nm-purple-8: rgba(87, 107, 149, 0.08);
+  --nm-purple-10: rgba(87, 107, 149, 0.10);
+  --nm-purple-14: rgba(87, 107, 149, 0.14);
+  --nm-purple-18: rgba(87, 107, 149, 0.18);
+  --nm-purple-20: rgba(87, 107, 149, 0.20);
+  --nm-purple-30: rgba(87, 107, 149, 0.30);
+  --nm-purple-40: rgba(87, 107, 149, 0.40);
+  --nm-purple-50: rgba(87, 107, 149, 0.50);
+  --nm-purple-70: rgba(87, 107, 149, 0.70);
+  --nm-sky: #576b95;
+  --nm-blue: #576b95;
+  --nm-blue-20: rgba(87, 107, 149, 0.20);
+
+  /* ── 语义色（只染小面积，不铺整卡） ───────────────────────── */
+  --nm-green: #0e7a3c;
+  --nm-green-20: rgba(14, 122, 60, 0.20);
+  --nm-red: #fa5151;
+  --nm-pink: #fa5151;
+  --nm-amber: #fa9d3b;
+  --nm-amber-45: rgba(250, 157, 59, 0.40);
+  --nm-success: #0e7a3c;
+  --nm-success-15: rgba(14, 122, 60, 0.12);
   --nm-warning: #b45309;
-  --nm-warning-15: rgba(217, 119, 6, 0.12);
-  --nm-danger: #b91c1c;
-  --nm-danger-15: rgba(220, 38, 38, 0.12);
-  --nm-info: #2563eb;
-  --nm-info-15: rgba(37, 99, 235, 0.12);
+  --nm-warning-15: rgba(180, 83, 9, 0.14);
+  --nm-danger: #b02e2e;
+  --nm-danger-15: rgba(176, 46, 46, 0.12);
+  --nm-info: #576b95;
+  --nm-info-15: rgba(87, 107, 149, 0.12);
 
-  /* 文字 */
-  --nm-text-1: #0f172a;
-  --nm-text-2: #475569;
-  --nm-text-3: #5f6b7a;
-  --nm-text-4: #94a3b8;
-  /* 品牌渐变(cyan→purple)上的文字色：浅色下渐变偏暗，配白字。 */
+  /* ── 文字：四档灰阶（对比度均高于旧浅色实测下限） ─────────── */
+  --nm-text-1: #0a0a0a;
+  --nm-text-2: #464646;
+  --nm-text-3: #606060;
+  --nm-text-4: #8c8c8c;
   --nm-on-accent: #ffffff;
-  --nm-brand: #0369a1;
 
-  /* 面 / 罩 / 中性 hover（R2） */
-  --nm-panel-solid: rgba(255, 255, 255, 0.85);
-  --nm-veil-55: rgba(255, 255, 255, 0.80);
-  --nm-hover-neutral: rgba(15, 23, 42, 0.05);
+  /* ── 面 / 罩 / 中性 hover ─────────────────────────────────── */
+  --nm-panel-solid: rgba(255, 255, 255, 0.94);
+  --nm-veil-55: rgba(247, 247, 247, 0.88);
+  --nm-hover-neutral: rgba(0, 0, 0, 0.05);
   --nm-paper-85: rgba(255, 255, 255, 0.85);
   --nm-paper-55: rgba(255, 255, 255, 0.55);
   --nm-paper-35: rgba(255, 255, 255, 0.35);
-  --nm-ink-8: rgba(15, 23, 42, 0.08);
-  --nm-ink-10: rgba(15, 23, 42, 0.10);
-  --nm-paperfill-82: rgba(247, 249, 252, 0.82);
-  --nm-paperfill-45: rgba(247, 249, 252, 0.45);
-  --nm-paperfill-88: rgba(247, 249, 252, 0.88);
-  --nm-paperfill-50: rgba(247, 249, 252, 0.50);
-  --nm-veil-25: rgba(15, 23, 42, 0.10);
-  --nm-scrim-50: rgba(15, 23, 42, 0.40);
-  --nm-sky: #0284c7;
-  --nm-amber-45: rgba(180, 83, 9, 0.40);
+  --nm-ink-8: rgba(0, 0, 0, 0.08);
+  --nm-ink-10: rgba(0, 0, 0, 0.10);
+  --nm-paperfill-82: rgba(247, 247, 247, 0.82);
+  --nm-paperfill-45: rgba(247, 247, 247, 0.45);
+  --nm-paperfill-88: rgba(247, 247, 247, 0.88);
+  --nm-paperfill-50: rgba(247, 247, 247, 0.50);
+  --nm-veil-25: rgba(0, 0, 0, 0.10);
+  --nm-scrim-50: rgba(0, 0, 0, 0.40);
 
-  /* 边框 */
-  --nm-border: rgba(15, 23, 42, 0.12);
-  --nm-border-hover: rgba(56, 189, 248, 0.35);
-  --nm-border-active: rgba(56, 189, 248, 0.55);
+  /* ── 边框：1px 浅灰，选中用主色 ───────────────────────────── */
+  --nm-border: rgba(0, 0, 0, 0.08);
+  --nm-border-hover: rgba(0, 0, 0, 0.16);
+  --nm-border-active: #07c160;
 
-  /* 阴影 / 发光 */
-  --nm-glow-sm: 0 0 8px rgba(56, 189, 248, 0.16);
-  --nm-glow-md: 0 0 20px rgba(56, 189, 248, 0.18);
-  --nm-glow-lg: 0 0 40px rgba(56, 189, 248, 0.10), 0 0 80px rgba(168, 85, 247, 0.05);
-  --nm-shadow-card: 0 4px 24px rgba(15, 23, 42, 0.08);
-  --nm-shadow-popup: 0 16px 40px rgba(15, 23, 42, 0.14);
+  /* ── 阴影：几乎不可见，不做发光 ───────────────────────────── */
+  --nm-glow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --nm-glow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --nm-glow-lg: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --nm-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --nm-shadow-popup: 0 8px 28px rgba(0, 0, 0, 0.12);
 
-  /* 表格 */
-  --nm-table-header-bg: rgba(15, 23, 42, 0.04);
-  --nm-table-row-hover: rgba(56, 189, 248, 0.06);
-  --nm-table-row-stripe: rgba(15, 23, 42, 0.02);
+  /* ── 表格：去斑马纹，仅 hover 浅灰 ────────────────────────── */
+  --nm-table-header-bg: rgba(0, 0, 0, 0.03);
+  --nm-table-row-hover: rgba(0, 0, 0, 0.03);
+  --nm-table-row-stripe: transparent;
 
-  /* 地图板块底色（深色主题为深海军蓝，浅色主题改为浅石板灰） */
-  --nm-map-land: #cbd5e1;
+  /* 地图板块底色（JS 侧经 tokenColor() 解析给 canvas） */
+  --nm-map-land: #e5e5e5;
 
-  /* dsw alias tokens */
-  --dsw-alias-bg-mask-1: rgba(15, 23, 42, 0.45);
-  --dsw-alias-bg-overlay: rgba(255, 255, 255, 0.80);
-  --dsw-alias-button-primary-fill: #0369a1;
-  --dsw-alias-interactive-bg-hover-danger: rgba(220, 38, 38, 0.10);
-  --dsw-alias-markdown-code-block: #eef2f7;
-  --dsw-alias-markdown-code-block-banner: #e2e8f0;
-  --dsw-alias-markdown-inline-code: #eef2f7;
-  --dsw-alias-scrollbar-bg-l2: rgba(15, 23, 42, 0.18);
+  /* ── dsw alias tokens：跟随微信浅色 ─────────────────────────── */
+  --dsw-alias-bg-mask-1: rgba(0, 0, 0, 0.40);
+  --dsw-alias-bg-overlay: rgba(255, 255, 255, 0.94);
+  --dsw-alias-button-primary-fill: #07c160;
+  --dsw-alias-interactive-bg-hover-danger: rgba(250, 81, 81, 0.10);
+  --dsw-alias-markdown-code-block: #f2f2f2;
+  --dsw-alias-markdown-code-block-banner: #e8e8e8;
+  --dsw-alias-markdown-inline-code: #f2f2f2;
+  --dsw-alias-scrollbar-bg-l2: rgba(0, 0, 0, 0.18);
   --dsw-alias-tooltip-bg: #ffffff;
-  --dsw-hovercard-bg: rgba(255, 255, 255, 0.96);
-  --dsw-mask-blur: blur(6px);
-  --dsw-shadow-lv3: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --dsw-hovercard-bg: rgba(255, 255, 255, 0.98);
+  --dsw-mask-blur: blur(4px);
+  --dsw-shadow-lv3: 0 8px 24px rgba(0, 0, 0, 0.12);
   --dsw-specific-menu: rgba(255, 255, 255, 0.98);
-  --dsw-static-deepseek-450: #f1f5f9;
-  --dsw-static-neutral-bluish-00: #0f172a;
+  --dsw-static-deepseek-450: #f2f2f2;
+  --dsw-static-neutral-bluish-00: #0a0a0a;
 }
 
 /* 全局背景与文字跟随浅色令牌 */

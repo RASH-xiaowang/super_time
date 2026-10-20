@@ -33,12 +33,12 @@ describe('文件与存储：加载期不许把计数写成 0', () => {
     expect(files, '分类标签缺少去掉 (0) 的处理').toMatch(/loading && countAll === 0 \? \{ \.\.\.o, label: o\.label\.replace/)
   })
 
-  it('加载中必须有骨架，且骨架的列宽与真实 fileGrid 一致（否则数据到了会"跳一下"）', () => {
+  it('加载中显示统一加载态（旋转指示 + 加载中…），不再画骨架条，也不把计数写成 0', () => {
     expect(files).toContain('{loading && <ListSkeleton rows={10} grid minCol={200} />}')
-    // 真实网格是 minmax(200px)，骨架必须用同一个下限
-    const listCss = readText(join(HERE, 'list-panel.module.css'))
-    expect(listCss).toMatch(/\.fileGrid\s*\{\s*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px/)
-    expect(readText(join(HERE, 'hooks.tsx')), 'ListSkeleton 不支持自定义列宽').toMatch(/ListSkeleton\(\{ rows = 8, grid = false, minCol = 120 \}/)
+    // 2026-10-18：`ListSkeleton` 已统一到 `LoadingState`（旋转指示 + 文案），旧参数仅为兼容保留
+    const hooks = readText(join(HERE, 'hooks.tsx'))
+    expect(hooks, 'ListSkeleton 没接统一加载态').toMatch(/return <LoadingState variant="compact" label="加载中…" \/>/)
+    expect(hooks, 'ListSkeleton 还在渲染骨架条').not.toMatch(/className=\{`nm-skel|className="nm-skel/)
     // 只有真加载完、且确实没有文件时，才允许出现空状态（且要能自证"为什么是 0"）
     expect(files).toMatch(/!loading && !error && visible\.length === 0 && \(/)
     expect(files).toMatch(/<EmptyMaybeSyncing[\s\S]{0,400}note="文件索引来自本机解密库的 hardlink 记录/)

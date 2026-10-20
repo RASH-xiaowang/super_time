@@ -167,23 +167,27 @@ function sessionCookie(id, maxAgeSec) {
 function createSessionStore(opts = {}) {
   const ttlMs = typeof opts.ttlMs === 'number' && opts.ttlMs > 0 ? opts.ttlMs : SESSION_TTL_MS;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
-  /** @type {Map<string, number>} id → 过期时刻（ms） */
+  /** @type {Map<string, { exp: number, fullAccess: boolean }>} id → 过期时刻与权限级别 */
   const sessions = new Map();
 
   /** 顺手清掉过期的：表很小（一台手机一两条），不需要定时器。 */
   function sweep() {
     const t = now();
-    for (const [id, exp] of sessions) {
-      if (exp <= t) sessions.delete(id);
+    for (const [id, entry] of sessions) {
+      if (entry.exp <= t) sessions.delete(id);
     }
   }
 
   return {
-    /** 新建一个会话。@returns `{ id, cookie }`（cookie 是可直接塞进 `Set-Cookie` 的值）。 */
-    create() {
+    /**
+     * 新建一个会话。
+     * @param {{ fullAccess?: boolean }} [meta] - `fullAccess:true` 只由「打开网页」交接的配对码授予。
+     * @returns `{ id, cookie }`（cookie 是可直接塞进 `Set-Cookie` 的值）。
+     */
+    create(meta = {}) {
       sweep();
       const id = generateSessionId();
-      sessions.set(id, now() + ttlMs);
+      sessions.set(id, { exp: now() + ttlMs, fullAccess: meta.fullAccess === true });
       return { id, cookie: sessionCookie(id, ttlMs / 1000) };
     },
     /**
@@ -193,13 +197,28 @@ function createSessionStore(opts = {}) {
      */
     verify(id) {
       if (typeof id !== 'string' || id === '') return false;
-      const exp = sessions.get(id);
-      if (exp === undefined) return false;
-      if (exp <= now()) {
+      const entry = sessions.get(id);
+      if (entry === undefined) return false;
+      if (entry.exp <= now()) {
         sessions.delete(id);
         return false;
       }
       return true;
+    },
+    /**
+     * 该会话是不是「桌面交接」级会话（浏览器与桌面端同权限）。
+     * @param {unknown} id - Cookie 里解出来的值。
+     * @returns 持有有效 fullAccess 会话时为 true。
+     */
+    isFull(id) {
+      if (typeof id !== 'string' || id === '') return false;
+      const entry = sessions.get(id);
+      if (entry === undefined) return false;
+      if (entry.exp <= now()) {
+        sessions.delete(id);
+        return false;
+      }
+      return entry.fullAccess === true;
     },
     /** 作废全部会话（轮换令牌时调用：旧令牌换来的会话必须一起死）。 */
     revokeAll() {
@@ -245,7 +264,7 @@ function createPairingStore(opts = {}) {
     ? opts.maxPending
     : PAIRING_MAX_PENDING;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
-  /** @type {Map<string, { expiresAt: number, attemptsLeft: number }>} */
+  /** @type {Map<string, { expiresAt: number, attemptsLeft: number, fullAccess: boolean }>} */
   const entries = new Map();
 
   function sweep() {
@@ -256,11 +275,14 @@ function createPairingStore(opts = {}) {
   }
 
   return {
-    /** 发一个新配对码。 */
-    issue() {
+    /**
+     * 发一个新配对码。
+     * @param {{ fullAccess?: boolean }} [meta] - `fullAccess:true` = 「打开网页」交接码。
+     */
+    issue(meta = {}) {
       sweep();
       const code = generatePairingCode();
-      entries.set(code, { expiresAt: now() + ttlMs, attemptsLeft: maxAttempts });
+      entries.set(code, { expiresAt: now() + ttlMs, attemptsLeft: maxAttempts, fullAccess: meta.fullAccess === true });
       while (entries.size > maxPending) {
         const oldest = entries.keys().next();
         if (oldest.done) break;
@@ -272,6 +294,7 @@ function createPairingStore(opts = {}) {
      * 校验并消费一个配对码。
      * @param {unknown} provided - 浏览器提交的值。
      * @returns `{ ok: true }` 表示成功并已作废；否则 `{ ok: false, attemptsLeft }`。
+     *   交接码成功时额外带 `fullAccess: true`（普通手机码没有这个字段）。
      */
     verify(provided) {
       sweep();
@@ -295,7 +318,11 @@ function createPairingStore(opts = {}) {
         return { ok: false, attemptsLeft: entries.size === 0 ? 0 : lowest };
       }
       entries.delete(hit.code);
-      return { ok: true, attemptsLeft: 0 };
+      return {
+        ok: true,
+        attemptsLeft: 0,
+        ...(hit.entry.fullAccess === true ? { fullAccess: true } : {}),
+      };
     },
     /** 全部作废（停服、轮换、关闭开关时）。 */
     revokeAll() {

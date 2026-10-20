@@ -106,20 +106,24 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
     expect(src).toContain('去数据配置')
   })
 
-  it('周期报告：未生成时给出三步与"会得到什么"（含模型状态）', () => {
-    const src = read('PeriodSummary.tsx')
-    expect(src).toContain('psLand')
-    expect(src).toContain('还没有这一段的总结')
-    expect(src).toContain('会得到什么')
+  it('总结工作台：未生成时给出三步与"会得到什么"（含模型状态）', () => {
+    // 2026-10-17：`PeriodSummary.tsx` 与 `DailySummary.tsx` 已合并成 `SummaryWorkbench.tsx`，
+    // 空态 / 统计卡 / 历史列表又拆到 `SummaryParts.tsx`（单函数 250 行棘轮）。
+    // 空态口径不变（三步 + 模型状态 + 去配置出口），只是换了文件。
+    const src = read('SummaryWorkbench.tsx')
+    const parts = read('SummaryParts.tsx')
+    expect(parts).toContain('emptySteps')
+    expect(parts).toContain('还没有这一段的总结')
     expect(src, '没有读模型配置').toMatch(/await apiGetLlmConfig\(\)/)
     // 与每日总结同一口径：跳「设置 → AI 大模型」
-    expect(src).toMatch(/onOpenSettings\?\.\('ai'\)/)
+    expect(parts).toMatch(/onOpenSettings\?\.\('ai'\)/)
   })
 
   it('这两处的设置跳转都要真的接上（renderTab 里传进去）', () => {
     const shell = readText(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx'))
     expect(shell).toContain('<RevokedPanel onOpenSettings={onOpenSettings} />')
-    expect(shell).toContain('<PeriodSummaryPanel onOpenSettings={onOpenSettings} />')
+    // 2026-10-17：周期总结并入 `SummaryWorkbench`，跳转出口跟着搬过去。
+    expect(shell).toContain('<SummaryWorkbench onOpenSettings={onOpenSettings} />')
   })
 
   it('群聊公告：空态要说明"为什么可能为空"（公告本来就不是每个群都有）', () => {

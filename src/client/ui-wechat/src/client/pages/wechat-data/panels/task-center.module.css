@@ -1,0 +1,734 @@
+/*
+ * 「任务信息 · 任务触发记录」双栏面板的样式（2026-10-19）。
+ *
+ * 口径（与仓库既有面板一致，改前先读）：
+ *  · 颜色/圆角/间距**只吃** `--nm-*` 设计令牌（`scifi-theme.css`），不写裸色值 ——
+ *    浅色主题的覆盖走同一套令牌，硬编码颜色在浅色下会读不清；
+ *  · 圆角只允许 `--nm-r-*` / `--nm-dense-r` / `0`（`theme-geometry.spec.ts` 机检）；
+ *  · 间距不写 5/7/9/18px（同一判据的奇数值棘轮）；
+ *  · 断点：≥900px 左右并排；<900px 上下堆叠、整块可滚动（弹窗自己在 max-height 内滚）。
+ *
+ * 双栏的高度语义：`.root` 撑满页签内容区（父级 `.content` 已经是 `overflow:auto`），
+ * `.board` 吃掉剩余高度，两个 `.pane` 各自内部滚动 —— 这样右栏翻记录时左栏与页头不会滚走。
+ */
+
+.root {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── 页头下方的提示条（刷新/扫描结果、选中项失效等一次性反馈） ─────────────── */
+.notice {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+}
+
+/* ── 双栏：左 3 / 右 7 ─────────────────────────────────────────────────
+ *
+ * 左栏是任务配置的**索引**（名称/状态/关键词/触发统计 + 行内编辑），信息密度低；
+ * 右栏是触发记录的**正文**（时间/会话/对象/命中词/文本摘要/图片数），需要更多横向空间
+ * 才不至于每条都折成两三行。所以是 3:7 而不是均分。
+ *
+ * 左栏给 `minmax(300px, 3fr)`：窗口刚好在并排断点附近时（内容区 ~700px），纯 3fr
+ * 会把左栏压到 210px —— 任务名、关键词与行内编辑表单都会被挤成一条缝。
+ * 300px 是「任务名 + 状态徽标 + 一行关键词 + 编辑按钮」仍能读的下限；窗口更窄时
+ * 走下面的 ≤900px 堆叠断点。常见窗口（内容区 ≥1000px）下 300px 小于 30%，
+ * 比例仍然是严格 3:7（1440 视口实测左 365 / 右 850）。
+ */
+.board {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 3fr) minmax(0, 7fr);
+  gap: 12px;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-card);
+  overflow: hidden;
+}
+
+.paneHd {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.paneTitle {
+  min-width: 0;
+  font-size: var(--nm-fs-md);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paneMeta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.paneBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 读错误条 / 首屏加载态也是 paneBody 的直接子项：不要被 flex 压扁。 */
+.paneBody > * {
+  flex-shrink: 0;
+}
+
+/* 空态：吃满这一栏并把内容居中（双栏定高时贴顶会像「内容被裁掉」）。 */
+.paneBody > [class*='_empty_'] {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+/* ── 左栏：任务行 ───────────────────────────────────────────────────── */
+.taskRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+  cursor: pointer;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast);
+}
+
+.taskRow:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}
+
+.taskRow[data-active] {
+  border-color: var(--nm-border-active);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+}
+
+.taskRow:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 1px;
+}
+
+/* 展开编辑时把整行压暗一档，让表单成为这一行的主角。 */
+.taskRow[data-expanded] {
+  background: var(--nm-bg-2);
+}
+
+.taskTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.taskName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--nm-fs-md);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskTags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.taskMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.taskScope {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskStat {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 关键词 chips（只读展示）：超出 3 个由纯逻辑折成「+N」。 */
+.kwRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kwChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 150px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  color: var(--nm-cyan-text);
+  font-size: var(--nm-fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kwMore {
+  flex-shrink: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+/* 行尾操作区：编辑按钮与（展开时的）收起。 */
+.taskActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── 右栏：触发记录行 ───────────────────────────────────────────────── */
+.triggerRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-purple) 3%, transparent);
+  cursor: pointer;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast);
+}
+
+.triggerRow:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}
+
+.triggerRow:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 1px;
+}
+
+.triggerTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.triggerTime {
+  flex-shrink: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.triggerTaskName {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.triggerPeople {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.triggerKw {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-cyan-text);
+}
+
+.triggerText {
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.triggerFoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+/* ── 编辑表单（左栏行内展开） ──────────────────────────────────────── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+  /* 行本身是 cursor:pointer（整行可选任务）；表单里要恢复文本/控件的默认光标。 */
+  cursor: default;
+}
+
+.formRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.input {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-family: inherit;
+  outline: none;
+  cursor: text;
+  transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
+}
+
+.input::placeholder {
+  color: var(--nm-text-3);
+}
+
+.input:focus {
+  border-color: var(--nm-border-active);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--nm-danger);
+}
+
+.errorText {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger-text);
+}
+
+/* 关键词编辑 chips：每个 chip 带一个「×」删除键。 */
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+}
+
+/* 关键词输入框跟在 chips 后面：吃掉剩余宽度，但保一个下限（窄栏里会换行）。 */
+.chipInput {
+  flex: 1 1 140px;
+  min-width: 120px;
+  height: 28px;
+}
+
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chipRemove:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+/* 照片数量：2026-10-19 起从「0/1/3/6/9 chip 选择器」改为**可直接输入**的数字框。 */
+.photoRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.photoInput {
+  width: 88px;
+  flex: 0 0 88px;
+  text-align: center;
+}
+
+.photoUnit {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.formHint {
+  flex: 1 1 100%;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+/* ── 触发记录弹窗（手写覆盖层：role=dialog + escStack + 焦点环） ────────── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--nm-scrim-50);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 94vw);
+  max-height: min(86vh, 820px);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xl);
+  background: var(--nm-bg-1);
+  box-shadow: var(--nm-shadow-popup);
+  overflow: hidden;
+  outline: none;
+}
+
+.modalHd {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.modalTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modalClose {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-lg);
+  cursor: pointer;
+}
+
+.modalClose:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.modalBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 弹窗页脚：只放「关闭」（Esc / 遮罩 / 右上角 × 也都能关）。 */
+.modalFt {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--nm-border);
+}
+
+.modalSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modalSectionLabel {
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--nm-text-3);
+}
+
+.modalValue {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.modalText {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  font-family: var(--nm-font-sans);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.modalGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+/* 图片网格：多张时按 120px 起排，窄屏自动折。 */
+.imageGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.imageCell {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.imageCell:hover {
+  border-color: var(--nm-border-hover);
+}
+
+.imageCell:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 1px;
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.imageFail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.imageLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+/* 回调区（弹窗底部）：状态徽标 + 时间 + 错误 + 重新投递。 */
+.callbackBar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+}
+
+.callbackRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.callbackError {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger-text);
+  overflow-wrap: anywhere;
+}
+
+/* 图片放大：盖在记录弹窗之上的一层（escStack 只让最上层响应 Esc）。 */
+.zoomOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--nm-scrim-50);
+}
+
+.zoomImg {
+  max-width: 94vw;
+  max-height: 88vh;
+  object-fit: contain;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
+}
+
+.zoomClose {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-1);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-lg);
+  cursor: pointer;
+}
+
+.zoomClose:hover {
+  border-color: var(--nm-border-hover);
+}
+
+/* ── 窄屏（≤900px）：上下堆叠，整块可滚 ───────────────────────────── */
+@media (max-width: 900px) {
+  .board {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+  }
+
+  .paneBody {
+    overflow: visible;
+  }
+
+  .pane {
+    overflow: visible;
+  }
+
+  .modalOverlay {
+    padding: 8px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+  }
+}

@@ -89,7 +89,7 @@ export function readableOn(background: string): string {
  * @param fallback - 令牌读不到或无法解析时使用的颜色。
  * @returns `rgba(...)` 或 `rgb(...)` 字符串，可直接交给 ECharts。
  */
-export function tokenColor(name: string, alpha = 1, fallback = '#00f0ff'): string {
+export function tokenColor(name: string, alpha = 1, fallback = '#07c160'): string {
   const key = `${name}|${alpha}`
   const hit = cache.get(key)
   if (hit !== undefined) return hit

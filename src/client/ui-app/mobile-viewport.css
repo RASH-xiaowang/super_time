@@ -32,6 +32,19 @@
  *      用**元素选择器**而不是类名：CSS Modules 按文件打 hash，这些类分散在五份 module.css 里，
  *      在全局文件写类名会静默不生效（M5 刚为这件事写过一条守卫）。复选/单选框不抬 ——
  *      它们靠点 label 用，抬到 44px 会把行撑破。
+ *
+ *      **2026-10-16 修正：全局搜索框排除在外**（用户报「手机端搜索框太大」）。它是唯一一个
+ *      **自己就是整条搜索条**的输入框 —— 抬到 44px 后 `.box`（44 + 6×2 padding + 1×2 border）
+ *      变成 58px，**比它所在的 56px 搜索条还高 2px**，视觉上顶满整条、笨重且溢出。
+ *      它的触摸目标由 `.box` 自己保证（手机档给 40px 高 + 整条 56px 可点），不需要这条兜底。
+ *      用 `data-global-search` 属性排除：类名有 hash 选不中，而 `aria-label` 是中文长串、
+ *      写进选择器太脆；`data-` 属性是本仓已有的跨文件约定（见 `data-has-session` 等）。
+ *
+ *      **2026-10-16 再修正：面板内的搜索框（`SearchInput`）也排除**（用户报「筛选区占比太大」）。
+ *      它们是**密集筛选控件**，不是主要操作按钮 —— 44px 是「主要操作」的标准（Apple HIG 的
+ *      44pt 针对主按钮），套在筛选条上会让「段条 + 搜索行 + 分类条」三行合计 222px，
+ *      吃掉 718px 内容区的 31%。排除后由各面板的手机档给 36px（仍 > WCAG 2.5.8 的 24px AA）。
+ *      用 `data-search-input` 属性排除，理由同上。
  */
 
 @supports (height: 100dvh) {
@@ -57,10 +70,11 @@
     overscroll-behavior: none;
   }
 
-  /* ④ 触摸目标下限 44px（理由见文件头）。 */
+  /* ④ 触摸目标下限 44px（理由见文件头）。两类搜索框除外 —— 它们自己就是整条搜索条 /
+     密集筛选控件，抬到 44px 会让容器比搜索条还高、或让筛选区膨胀（见文件头那两条）。 */
   button,
   [role="button"],
-  input:not([type="checkbox"]):not([type="radio"]),
+  input:not([type="checkbox"]):not([type="radio"]):not([data-global-search]):not([data-search-input]),
   select,
   summary {
     min-height: 44px;

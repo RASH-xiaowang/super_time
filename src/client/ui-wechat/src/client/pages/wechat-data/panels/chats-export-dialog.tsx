@@ -150,7 +150,6 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
               <span className={csscards.exportSectionTitle}>保存目录</span>
             </div>
             <div className={csscards.exportDirBox} data-chosen={(!!expDir.trim()) || undefined}>
-              <span className={cssshell.exportDirIcon}>📁</span>
               <div className={cssshell.exportDirInfo}>
                 <span className={cssshell.exportDirTitle}>{expDir.trim() ? '已选择保存目录' : '尚未选择保存目录'}</span>
                 <span className={kitCss.textCaptionTrunc}>{expDir.trim() ? expDir.trim() : '留空时导出到默认目录 ~/.dsh/wechat-data/exports'}</span>
@@ -170,15 +169,16 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
               </span>
             </div>
           ) : null}
-          <div className={cssshell.exportActions}>
-            <button type="button" className={csscards.exportBtnGhost} onClick={() => { setExportOpen(false) }}>取消</button>
-            {exporting ? (
-              <button type="button" className={csscards.exportBtnGhost} onClick={cancelExport}>中止导出</button>
-            ) : null}
-            <button type="button" className={csscards.exportBtnPrimary} onClick={() => { void exportSession() }} disabled={exporting}>
-              {exporting ? '导出中…' : '导出'}
-            </button>
-          </div>
+        </div>
+        {/* 底部动作固定（不随正文滚动）：微信化弹窗统一「头部 / 单滚动正文 / 固定底栏」。 */}
+        <div className={cssshell.exportActions}>
+          <button type="button" className={csscards.exportBtnGhost} onClick={() => { setExportOpen(false) }}>取消</button>
+          {exporting ? (
+            <button type="button" className={csscards.exportBtnGhost} onClick={cancelExport}>中止导出</button>
+          ) : null}
+          <button type="button" className={csscards.exportBtnPrimary} onClick={() => { void exportSession() }} disabled={exporting}>
+            {exporting ? '导出中…' : '导出'}
+          </button>
         </div>
       </div>
     </div>

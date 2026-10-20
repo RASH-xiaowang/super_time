@@ -1,156 +1,354 @@
-/* 群活跃监控面板 — NEON MATRIX 科技风重设计
-   深空黑底 · 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple) · 毛玻璃卡片 · 发光悬停 */
+/* 群聊分析 · 监控 — 微信灰阶 + 绿色主操作。
+ *
+ * 2026-10-19 微信化：页头收成与「洞察」共用的 36px 工具行（群选择器 + 自动刷新开关 + 刷新）；
+ * 群选择器从「左栏大列表」收进工具行下拉；热力格改微信绿**单色阶**（去渐变/发光）；
+ * 指标带与资产类 KPI 条同一视觉。
+ *
+ * ⚠️ 高度链（真机踩过）：`.panelShell`（flex 列）→ `.cols` → `.col` → 卡片 → 卡身 → 列表。
+ *    每一层都要 `min-height: 0`，否则 flex 子项的默认 `min-height: auto` 会按内容高撑开 ——
+ *    实测「近期消息」卡被消息撑到 1176px，而列表自己的 `max-height` 只是上限。 */
 
-/*
- * ── 面板根 ────────────────────────────────────────────────────────
- * 第 80 轮：这里原本有一个自己的 `.panel`（border + radius 14 + 背景 + padding 12px），
- * 于是两个问题同时存在：
- *   1. **双重边框 / 双重内边距** —— shell 的内容区已经内缩 16px，这里再画一层卡片，
- *      卡片内的标题就落到了 242px，而其余面板标题在 229px（切页签横向跳 13px）；
- *   2. 它还把全局字体令牌 `--nm-font-mono` 在面板内改写成另一套字体。
- * 两处都被第 3 节的审计点过名。现在直接复用共享的 `kitCss.panelShell`
- * （见 `ui/kit.module.css`），面板外形与其余 15 个面板完全一致，本模块不再定义面板根。
- */
-
-/* ── 群组筛选 / 状态标签 ──────────────────────────────────────── */
-.chipRow { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip {
-  padding: 4px 12px;
+/* ── 指标带 ───────────────────────────────────────────────────── */
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
-  font-size: var(--nm-fs-sm);
-  color: var(--nm-text-1);
-  cursor: pointer;
-  transition: all 0.15s;
-  corner-shape: round;
+  overflow: hidden;
+  min-height: 44px;
 }
-.chip:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-.chip[data-on='true'] {
-  color: var(--nm-cyan);
-  border-color: var(--nm-cyan);
-  font-weight: 600;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
-}
-.note { font-size: 12px; color: var(--nm-text-2); padding: 6px 2px; }
 
-/* ── 消息热力条 ───────────────────────────────────────────────── */
-.heatWrap {
-  flex: 1;
+.metric {
+  flex: 1 1 0;
+  min-width: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 14px;
+  border-left: 1px solid var(--nm-border);
+}
+
+.metric:first-child { border-left: 0; }
+
+.metricLabel {
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: 1.35;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metricValue {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 两栏 ─────────────────────────────────────────────────────── */
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  /* 行高必须显式 `minmax(0, 1fr)`：`auto` 行会被内容撑开，子项 `height: 100%` 也跟着变。 */
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--nm-s-4);
+  align-items: stretch;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+@media (max-width: 1000px) {
+  .cols { grid-template-columns: 1fr; }
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-4);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 右栏只有一张卡，让它吃满整栏高度（否则消息下方留白）。
+   `flex: 1 1 0` 而不是 `1 1 auto`：`auto` 会先按内容高参与布局，剩余空间为负时
+   `flex-shrink` 无从谈起（本仓既有教训）。 */
+.col > :last-child { flex: 1 1 0; min-height: 0; }
+
+/* 铺满（2026-10-18 用户要求）：右栏「近期消息」卡解除全局卡高上界后填满整列；
+   消息列表去掉 520px 上限，跟着卡身一起长并在卡内滚动。 */
+.fillCard { min-height: 0; }
+.fillCard .msgList { max-height: none; }
+
+/* 卡身与列表跟着长：卡高了、列表也要能占满，否则消息挤在顶上、下方一大片空。 */
+.col > :last-child > [class*='cardBd'] {
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  padding: 4px 0;
+  flex-direction: column;
 }
-.heatCol {
-  flex: 1;
+
+/* 左栏只有热力卡：吃满剩余高度（2026-10-19 群选择器移进工具行后不再有第二张卡）。 */
+.col:first-child > :last-child { flex: 1 0 auto; min-height: 266px; }
+
+/* 热力卡的卡身也要成为 flex 列容器，日历才能用 `flex: 1 1 0` 吃满剩余高度。 */
+.col:first-child > :last-child > [class*='cardBd'] {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 工具行里的自动刷新开关（开关 chip，纯文字 + 选中态）────────────── */
+.autoChip {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--nm-t-fast), border-color var(--nm-t-fast), background var(--nm-t-fast);
+}
+.autoChip:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
+.autoChip[data-on='true'] {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+
+/* ── 卡片头小按钮（「打开完整会话」）──────────────────────────────── */
+.headBtn {
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--nm-t-fast), color var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.headBtn:hover:not(:disabled) {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}
+
+.headBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── 热力日历（近 30 天，微信绿单色阶）────────────────────────────
+ * 30 天用**日历网格**（7 列 × 5 行）而不是 30 根横条：横条要 30 行、左栏放不下；
+ * 网格 5 行，而且「哪几天没说话」一眼就能看出来（空格子）。
+ * 色阶 0 = 空底，1~4 逐级加深；今天加描边。
+ *
+ * ⚠️ 行高用 `minmax(30px, 1fr)` 而不是固定 30px：卡片被 `flex: 1 0 auto` 拉高后，
+ * 固定 30px 会让日历只占 166px、下方空 200px。`1fr` 让 5 行均分剩余高度。 */
+.heatGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(30px, 1fr);
+  gap: 4px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.heatWeek {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  text-align: center;
+  line-height: 1;
+  padding-bottom: 2px;
+  align-self: end;
+}
+
+/* 首格前的空位（让第一天的星期对齐）。 */
+.heatPad {
+  min-height: 30px;
+}
+
+.heatCell {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 0;
-}
-.heatValue {
-  font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-text-2);
-  min-height: 11px;
-  font-family: var(--nm-font-mono, monospace);
-  font-variant-numeric: tabular-nums;
-}
-.heatTrack {
-  flex: 1;
-  width: 100%;
-  display: flex;
-  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  border-radius: var(--nm-r-sm);
   background: var(--nm-bg-hover);
-  border-radius: var(--nm-r-xs);
-}
-.heatBar {
-  width: 100%;
-  border-radius: 4px 4px 0 0;
-  min-height: 3px;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  opacity: 0.55;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
-  transition: all 0.15s;
-}
-.heatBar[data-today='true'] {
-  opacity: 1;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 45%, transparent), 0 0 4px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
-}
-.heatLabel {
-  font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
-  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  transition: border-color var(--nm-t-fast), background var(--nm-t-fast);
 }
 
-/* ── 近期消息列表 ─────────────────────────────────────────────── */
+.heatCell:hover { border-color: var(--nm-border-hover); }
+
+/* 单色阶：同一支微信绿，只改浓度（0 = 空底，4 = 最深）。
+ * 最深档封顶 52%：再深会让深色主题下的正文色对比降到 4.5 以下。 */
+.heatCell[data-level='1'] { background: color-mix(in srgb, var(--nm-cyan) 12%, var(--nm-bg-hover)); }
+.heatCell[data-level='2'] { background: color-mix(in srgb, var(--nm-cyan) 26%, var(--nm-bg-hover)); }
+.heatCell[data-level='3'] { background: color-mix(in srgb, var(--nm-cyan) 40%, var(--nm-bg-hover)); }
+.heatCell[data-level='4'] { background: color-mix(in srgb, var(--nm-cyan) 52%, var(--nm-bg-hover)); }
+
+/* 今天：描边强调（不靠颜色，因为今天可能恰好是 0 条）。 */
+.heatCell[data-today='true'] {
+  border-color: var(--nm-cyan);
+}
+
+/* 上个月的日子：整体压暗，与本月区分。 */
+.heatCell[data-other-month='1'] { opacity: 0.55; }
+
+.heatDay {
+  font-size: var(--nm-fs-xs, 11px);
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-2);
+  line-height: 1;
+}
+
+.heatCell[data-level='3'] .heatDay,
+.heatCell[data-level='4'] .heatDay { color: var(--nm-text-1); }
+
+.heatNum {
+  font-size: 10px;
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  line-height: 1;
+}
+
+/* ── 消息流 ───────────────────────────────────────────────────── */
+/* 列表吃满卡身剩余高度并内滚（`max-height` 只是兜底上限，真正的高度由 flex 分配）。 */
 .msgList {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 520px;
+  overflow-y: auto;
 }
+
 .msgList::-webkit-scrollbar { width: 6px; }
-.msgList::-webkit-scrollbar-track { background: transparent; }
 .msgList::-webkit-scrollbar-thumb {
   background: var(--nm-border);
   border-radius: var(--nm-r-xs);
-  transition: all 0.15s;
 }
-.msgList::-webkit-scrollbar-thumb:hover { background: var(--nm-border-hover); }
+
 .msgRow {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  border-bottom: 1px solid var(--nm-border);
-  padding-bottom: 5px;
-  border-radius: var(--nm-r-sm);
-  transition: all 0.15s;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name time'
+    'text text';
+  gap: 2px 10px;
   width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
   background: transparent;
-  border-top: none;
-  border-left: none;
-  border-right: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background var(--nm-t-fast);
 }
+
+.msgRow:hover:not(:disabled) { background: var(--nm-bg-hover); }
 .msgRow:disabled { cursor: default; }
-.msgRow:hover:not(:disabled) {
-  border-bottom-color: var(--nm-border-hover);
-  background: var(--nm-bg-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
+
 .msgName {
-  font-size: 12px;
+  grid-area: name;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
-  color: var(--nm-text-1);
+  color: var(--nm-text-2);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
+
 .msgTime {
+  grid-area: time;
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
-  white-space: nowrap;
-  font-family: var(--nm-font-mono, monospace);
+  font-family: var(--nm-font-mono);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+
 .msgText {
-  font-size: 12px;
-  color: var(--nm-text-2);
+  grid-area: text;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
+/* ── 空态 ─────────────────────────────────────────────────────── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 2px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: 1.7;
+}
+
+.emptyHint {
+  font-size: var(--nm-fs-xs, 11px);
+  opacity: 0.75;
+}
+
+/* ============================================================
+ * Wave 2（2026-10-18 响应式审计，38 tab × 6 视口）
+ *
+ * ① 两栏档（>1000px）：左栏「群 · 近 30 天」热力卡是 `flex: 1 1 0`，剩余空间不足时
+ *    被压到 152px/184px，而内容需要 264px（卡头 48 + 日历 5×30 + 内边距），
+ *    kit Card 的 `overflow: hidden` 把日历裁掉 114px/82px（审计 1024/1280 各 1 条
+ *    high）。改成 `flex: 1 0 auto` 并钉一个内容下限，空间不够时由 `.panelShell` 滚动。
+ * ② 单栏档（≤1000px）：`.cols` 仍是定高网格，两个 `.col` 抢同一行 1fr，第二行塌成
+ *    2px（实测 clientHeight = 0）。单栏档改成自然流：卡片按内容高，
+ *    `.panelShell` 成为唯一滚动容器。
+ * ============================================================ */
+
+/* `panelShell` 变可滚（内容高于容器）后，flex 会先压缩它的非卡片子项：
+ *   · `.cols` 是 `flex: 1 1 0` 的高度分配器，被压会让两栏整体变矮 —— 禁止压缩；
+ *   · `.metrics` 是自定义 div（kit 的「卡片类子项不可压」规则不覆盖它），
+ *     被压成 2px、指标带整条不可见（390/1024 实测 clientHeight = 0）。
+ * 两者都改成不参与压缩，溢出交给 `.panelShell` 滚动。 */
+.cols { flex-shrink: 0; }
+.metrics { flex-shrink: 0; }
+
+/* ② 单栏（≤1000，与上方既有断点一致）：自然流 + 面板滚动 */
+@media (max-width: 1000px) {
+  .cols {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    flex: 0 0 auto;
+  }
+  .col { min-height: auto; }
+  .col > :last-child,
+  .col:first-child > :last-child { flex: 0 0 auto; }
+  .col > :last-child > [class*='cardBd'],
+  .col:first-child > :last-child > [class*='cardBd'] { flex: 0 0 auto; }
+  /* 热力日历：auto 高的卡身里 `flex: 1 1 0` 会塌成 0；改成按内容（行高最小 30px）。 */
+  .heatGrid { flex: 0 0 auto; grid-auto-rows: minmax(30px, auto); }
+  /* 消息列表：按内容高，高度上限与内滚沿用上方既有规则。 */
+  .msgList { flex: 0 0 auto; }
+}

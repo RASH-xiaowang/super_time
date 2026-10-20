@@ -67,6 +67,21 @@ const LEDGER: LedgerEntry[] = [
     why: '按消息自带的免登录直链取聊天图片原图，不发聊天内容；主机不在白名单内一个字节都不发。',
   },
   {
+    site: 'src/backend/wechat-data/src/query/wxcdn-original.ts#ensureToken',
+    control: '用户显式开关（`wxcdn_enabled`，默认 false）',
+    anchor: 'src/backend/wechat-data/src/query/wxcdn-original.ts', marker: 'TOKEN_URL',
+    why: '第三方原图服务换 token：把本机 `all_users/config/global_config` 发给 `wxcdn.c3o.re`。'
+      + '该服务不是腾讯官方，所以**默认关闭**，只有用户显式打开 `wxcdn_enabled` 才会走到这里'
+      + '（判据在 `image-auto-upgrade.ts` 的 `isWxcdnEnabled`）。',
+  },
+  {
+    site: 'src/backend/wechat-data/src/query/wxcdn-original.ts#downloadOriginalByFileid',
+    control: '用户显式开关（`wxcdn_enabled`，默认 false）+ 额度检查',
+    anchor: 'src/backend/wechat-data/src/query/wxcdn-original.ts', marker: 'DOWNLOAD_URL',
+    why: '按 `cdnbigimgurl` 的 fileid 取原图（服务端解密）。按流量计费（Free 50 MB/天），'
+      + '所以发请求前先查剩余额度；这是本机数据上唯一能覆盖那 81.6% 的通路。',
+  },
+  {
     site: 'src/backend/wechat-data/src/query/media-image.ts#fetchEmoticonRemote',
     control: '腾讯系主机白名单 + 仅 http(s)（2026-09-30 补齐）',
     anchor: 'src/backend/wechat-data/src/query/media-image.ts', marker: 'wechatCdnHostAllowed(',
@@ -124,6 +139,16 @@ const LEDGER: LedgerEntry[] = [
       + '单份上限 32MB；逐条口径见 docs/PRIVACY.md 的 G2 节。',
   },
   {
+    site: 'src/backend/wechat-data/src/query/task-center-callback.ts#postTaskCallback',
+    control: '用户显式配置的回调地址；仅已完善任务投递',
+    anchor: 'src/backend/wechat-data/src/query/task-center-callback.ts', marker: 'fetchWithRetry(',
+    why: '任务触发回调（2026-10-19）：用户在「任务信息」里为每个任务逐条填写回调地址，'
+      + '任务标记「已完善」后，后台在每次微信新消息同步落地时立即扫描（另有每 10 秒兜底）；命中关键词就把**这一条**触发记录'
+      + '（触发时间 / 会话 / 触发对象 / 关键词 / 文本 / 该对象最近 N 张图片）以 JSON POST 到该地址。'
+      + '地址只允许 http/https；未完善任务不扫描、不投递，失败只记状态（2 次尝试 / 15s 超时）。'
+      + '逐条口径见 docs/PRIVACY.md 的 G3 节。',
+  },
+  {
     site: 'src/backend/wechat-data/src/query/map-geo.ts#fetchMapGeoJson',
     control: '固定 GeoJSON 主机 + 路径/参数白名单', anchor: 'ANY', marker: 'isAllowedMapGeoUrl',
     why: '不含你的数据；渲染层只传候选地址，后端按固定主机与路径形状过滤后才发请求。',
@@ -162,6 +187,13 @@ const LEDGER: LedgerEntry[] = [
     why: '探测当前会话：`GET /api/status`，回三态 ok / gone / unreachable。令牌门用它决定「直接进」还是'
       + '「先要令牌」，SSE 断线时用它区分「服务没在跑」与「没权限」—— 把后者当成前者会把用户'
       + '关进一个此刻走不通的令牌门（2026-10-14 真机反例）。不带任何数据。',
+  },
+  {
+    site: 'src/client/ui-app/handoff-boot.ts#native',
+    control: '同源相对路径 + 交接会话 Cookie（不是出网点）',
+    anchor: 'src/client/ui-app/handoff-boot.ts', marker: "'/api/native/'",
+    why: '「打开网页」交接态的原生能力代理：`POST /api/native/<action>`，同源相对路径、没有主机名。'
+      + '服务端只对 fullAccess 会话放行；交接结束（停服）后这些端点连同 Cookie 一起失效。',
   },
 ]
 

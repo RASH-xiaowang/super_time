@@ -120,8 +120,8 @@ export const MUTATIONS_BATCH3E = [
     id: "M454-clawbot-nav-icon-unfilled",
     why: "把导航图标的 filled() 包装去掉 ⇒ 外层 svg 的 fill:none / stroke:currentColor 生效到没有描边的 path 上，图标变成一块空白（静默失效，typecheck 与冒烟都看不见）。判据：clawbot-nav.wiring.spec.ts 的图标形态断言。",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/nav-config.ts",
-    from: '      { tab: \'clawbot\', label: \'ClawBot\', icon: filled(\'<path fill-rule="evenodd" d="M5.2 3.4a2.2 2.2 0 1 1 0 4.4',
-    to: '      { tab: \'clawbot\', label: \'ClawBot\', icon: (\'<path fill-rule="evenodd" d="M5.2 3.4a2.2 2.2 0 1 1 0 4.4',
+    from: '      { tab: \'clawbot\', label: \'ClawBot集群\', icon: filled(\'<path fill-rule="evenodd" d="M5.2 3.4a2.2 2.2 0 1 1 0 4.4',
+    to: '      { tab: \'clawbot\', label: \'ClawBot集群\', icon: (\'<path fill-rule="evenodd" d="M5.2 3.4a2.2 2.2 0 1 1 0 4.4',
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-nav.wiring.spec.ts",
   },
   {

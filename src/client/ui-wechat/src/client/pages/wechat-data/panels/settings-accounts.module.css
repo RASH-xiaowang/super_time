@@ -41,12 +41,10 @@
 .acct:hover {
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .acctCurrent {
-  border-color: var(--nm-cyan);
-  background: var(--nm-cyan-10);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 8%, transparent);
 }
 .acctMain {
   flex: 1;
@@ -71,8 +69,8 @@
   font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   color: var(--nm-on-accent);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  border-radius: var(--nm-r-pill);
+  background: var(--nm-brand);
+  border-radius: var(--nm-r-sm);
   padding: 1px 8px;
   flex-shrink: 0;
   corner-shape: round;
@@ -98,7 +96,6 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--nm-border-hover);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 15%, transparent);
   corner-shape: round;
 }
 .acctAvatarImg {
@@ -112,13 +109,16 @@
   corner-shape: round;
 }
 
-/* footer save bar */
+/* footer save bar — 微信底部动作栏：白底 + 0.5px 上边线，固定在面板底部 */
 .saveBar {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
-  padding-top: 2px;
+  margin-top: 8px;
+  padding: 10px 16px;
+  background: var(--nm-bg-card);
+  border-top: 0.5px solid var(--nm-border);
 }
 .saveMeta {
   font-size: 11px;

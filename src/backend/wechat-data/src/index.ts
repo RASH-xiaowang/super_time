@@ -8,6 +8,11 @@ export type * from './types.ts'
 export { WechatDataGateway } from './gateway.ts'
 export { fetchWithRetry } from './net/fetch-retry.ts'
 export { configureSqliteCachePolicy } from './query/db-open.ts'
+/**
+ * 原图自动下载（实验）的后端启动钩子：宿主在 `createWechatBackend` 建好 gateway 后调用，
+ * 上次开关是打开的就在后台恢复注入；宿主 dispose 时调用返回的 `stop()` 还原微信进程。
+ */
+export { startWechatImageAutoDownloadOnBoot } from './query/wechat-image-autodownload.ts'
 
 /**
  * H2（2026-09-28）：把「慢调用的耗时」落进审计表的能力单独导出给宿主层。

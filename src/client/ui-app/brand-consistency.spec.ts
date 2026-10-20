@@ -25,9 +25,11 @@ const ROOT = join(HERE, '..', '..', '..')
  *   · `docs/RELEASE-PLAN.md` —— 历史评审记录，里面的旧名是当时的原话引用
  *     （用来佐证 main.js 当时的报错文案），改写它会篡改历史；
  *   · 本文件自身 —— 守卫的说明与断言描述里必然要提到旧名；
- *   · 构建产物与依赖 —— 由源码生成/第三方，不承载我方口径。
+ *   · 构建产物与依赖 —— 由源码生成/第三方，不承载我方口径；
+ *   · `working/` —— `.gitignore` 明确忽略的本机调试残留（日志/截图/团队分析报告）。
+ *     2026-10-18 实际踩到：团队分析报告把旧名当作"分析对象"引用，导致本地绿/CI 绿不一致。
  */
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'ui-dist', 'output', '.worktrees', '.workbuddy'])
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'ui-dist', 'output', '.worktrees', '.workbuddy', 'working'])
 const SELF = 'src/client/ui-app/brand-consistency.spec.ts'
 const SKIP_FILES = new Set(['docs/RELEASE-PLAN.md', SELF])
 const TEXT_EXT = /\.(ts|tsx|js|mjs|cjs|jsx|json|css|html|md|yml|yaml)$/i

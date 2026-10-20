@@ -104,7 +104,7 @@
 
 ## Remote 方法
 
-> **完整清单以自动生成的 `docs/API.md` 为准（当前 195 个）** —— 下面只是分组概览，
+> **完整清单以自动生成的 `docs/API.md` 为准（当前 212 个）** —— 下面只是分组概览，
 > 历史上一度在这里手抄全表，结果漏了一大半还不断过期。改接口请跑 `npm run docs:api`，
 > 不要再往这里加方法名。
 
@@ -145,7 +145,11 @@ npm run build:ui        # 前端产物
 
 - 语音 silk→wav：Node 无 ffmpeg/WASM 解码器 → 返回时长 + 降级提示
 - 视频/HEVC（wxgf）：需系统解码器 → 封面或占位（**图片**的 wxgf 已可解，见下一条）
-- 高清原图（wxgf）：**已实现**——调微信安装目录的解码库（`VoipEngine.dll`，`query/wxam-image.ts`）转成 JPEG，解码库缺失/转码失败时退回 `_t` 缩略图。仍然**无进程注入、无 Hook**（DLL 加载进本进程，不碰微信进程）。
+- 高清原图（wxgf）：**已实现**——调微信安装目录的解码库（`VoipEngine.dll`，`query/wxam-image.ts`）转成 JPEG，解码库缺失/转码失败时退回 `_t` 缩略图。这条路径**无进程注入、无 Hook**（DLL 加载进本进程，不碰微信进程）。
+  > 另有一个**默认关闭**的实验功能「微信原图自动下载」（`query/wechat-image-autodownload.ts`）：
+  > 用户显式打开后会把上游 WeFlow-X（MIT）的 `img_helper.dll` 注入正在运行的微信，让微信
+  > 在接收新图片时自己下载原图。它只影响打开之后收到的图片，关闭/退出时请求还原；
+  > 来源与边界见 `native/img_helper/PROVENANCE.md` 与 `docs/PRIVACY.md` §一.5。
 - 备份：目录快照 / AES-256 加密 `.wcb`（本包实现加密与恢复）
 
 
@@ -167,11 +171,11 @@ No KV cache is written or read by this package; the provider adapter owns any ca
 
 ## Known Limitations and Deferred Work
 
-- **数据同步与解密**：本包通过 `sync.ts` 在本地监视原始分片并解密（SQLCipher 4，PBKDF2-HMAC-SHA512 + AES-256），注入自有数据根，不依赖 st_control 进程。
+- **数据同步与解密**：本包通过 `sync.ts` 在本地监视原始分片并解密（SQLCipher 4，PBKDF2-HMAC-SHA512 + AES-256），注入自有数据根，不依赖 st_control 进程；WAL 监听触发经合并器排一拍（tick 运行期间的触发不丢），每拍发布内存修订 `getDataRevision` 供渲染层判断是否拉消息增量。
 - **语音/视频降级**：silk→wav 与 HEVC 需系统解码器，Node 侧返回时长/封面或占位。
 - **图片 wxgf 转码**：`VoipEngine.dll` 的 `wxam_dec_wxam2pic_5`（第 5 参必须传全零的 ≥0x20 字节结构，传 NULL 会崩进程；输出截断到最后一个 `FF D9`）。开关 `DSH_WECHAT_WXGF=0`、路径覆盖 `DSH_WECHAT_VOIP_ENGINE`。
 - **朋友圈媒体**：图片走 `cache/<月>/Sns/Img` 本地 V2 解密（密钥优先 config.json，回退 keys.json 自动获取结果）；视频展示本地 `Sns/Video` 封面（`msg/video` 缩略图兜底），视频本体暂不播放。
-- **监控与原图**：监控为本地轮询仪表盘；原图走本地缓存与解码（wxgf 可转码），解码库不可用时以缩略图兜底；无进程注入/无 Hook。
+- **监控与原图**：监控为本地轮询仪表盘；原图走本地缓存与解码（wxgf 可转码），解码库不可用时以缩略图兜底；默认无进程注入/无 Hook —— 例外是用户显式打开「微信原图自动下载」实验功能（默认关闭，见上一条）。
 - **备份**：目录快照与 AES-256 加密 `.wcb` 均为本包实现；`.wcb` 为自包含格式，非外部加密 ZIP。
 
 

@@ -9,7 +9,7 @@
  */
 
 const wechatPaths = require('./wechat-paths');
-const { llmRequest, parseLlmBaseUrl, headersFor } = require('./llm-http');
+const { llmRequest, parseLlmBaseUrl, joinLlmEndpoint, headersFor } = require('./llm-http');
 const { resolveLlmConfig } = require('./llm-config-store');
 
 /** 每次重试打一条日志：重试过程不上界面（成功的重试应当无感），但诊断日志里要留痕。 */
@@ -46,12 +46,49 @@ function resolveEmbedModel(cfg, override = '') {
   return String(override || cfg.embeddingModel || cfg.model || '');
 }
 
+/**
+ * 把 dsh-llm 的 Message 内容块投影成 OpenAI 聊天消息。
+ *
+ * 纯文本仍是一个字符串（保持旧行为）；一旦内容里带图片，就投影成 OpenAI 的
+ * `content` parts 数组：`{ type:'text' }` + `{ type:'image_url', image_url:{ url } }`。
+ * 图片有两种来源，本层都认：
+ *   · `part.image_url.url` —— 调用方已给出 data URL / 远端 URL；
+ *   · `part.data` + `part.mediaType` —— ClawBot 自动回复从本机媒体缓存读出的
+ *     canonical base64（Super Time 的 mini 宿主没有附件服务，只能直接带字节）。
+ * 不认识的块一律按旧口径取 `text`（不静默丢内容）。
+ * @param {object} message - dsh-llm 形状的消息。
+ * @returns {string|Array<object>} OpenAI 的 content。
+ */
+function toOpenAiContent(message) {
+  const parts = Array.isArray(message.content)
+    ? message.content
+    : [{ type: 'text', text: String(message.content ?? '') }];
+  const texts = [];
+  const images = [];
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'image') {
+      const remote = part.image_url && typeof part.image_url.url === 'string' ? part.image_url.url : '';
+      const dataUrl = typeof part.data === 'string' && part.data !== ''
+        ? `data:${typeof part.mediaType === 'string' && part.mediaType !== '' ? part.mediaType : 'image/jpeg'};base64,${part.data}`
+        : '';
+      const url = remote !== '' ? remote : dataUrl;
+      if (url !== '') images.push({ type: 'image_url', image_url: { url } });
+      continue;
+    }
+    texts.push(String(part.text ?? ''));
+  }
+  if (images.length === 0) return texts.join('');
+  const content = [];
+  const text = texts.join('');
+  if (text !== '') content.push({ type: 'text', text });
+  content.push(...images);
+  return content;
+}
+
 /** 把 dsh-llm 的 Message 内容块转成 OpenAI 聊天消息。 */
 function toOpenAiMessage(message) {
-  const content = Array.isArray(message.content)
-    ? message.content.map((part) => part.text ?? '').join('')
-    : String(message.content ?? '');
-  return { role: message.role ?? 'user', content };
+  return { role: message.role ?? 'user', content: toOpenAiContent(message) };
 }
 
 /**
@@ -62,10 +99,43 @@ function toOpenAiMessage(message) {
  * 调用方（gateway）因此可以在生成过程中把增量推给界面。
  * 厂商不支持 SSE 时自动退化为整段返回 —— 一次 yield 完整 text。
  */
+/**
+ * 把 OpenAI 兼容的 `usage` 归一成 `dsh-llm` 的 {@link TokenUsage} 口径。
+ *
+ * 两者计数口径不同：dsh-llm 的 `inputTokens` 是**未命中缓存**的输入，缓存命中单独记
+ * `cacheReadTokens`；而 OpenAI/DeepSeek 的 `prompt_tokens` 通常把缓存算在里面
+ * （DeepSeek 另有 `prompt_cache_hit_tokens`）。这里统一减掉缓存，避免「统计里 input 虚高」。
+ * @param {unknown} raw - 供应商返回的 usage 对象。
+ * @returns {object|null} TokenUsage；没有可用计数时返回 null（不伪造 0）。
+ */
+function toTokenUsage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const n = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) && x >= 0 ? Math.round(x) : 0;
+  };
+  const prompt = n(raw.prompt_tokens ?? raw.input_tokens);
+  const completion = n(raw.completion_tokens ?? raw.output_tokens);
+  const cached = n(raw.prompt_tokens_details?.cached_tokens
+    ?? raw.cache_read_input_tokens
+    ?? raw.prompt_cache_hit_tokens);
+  const reasoning = n(raw.completion_tokens_details?.reasoning_tokens ?? raw.reasoning_tokens);
+  const total = n(raw.total_tokens) || (prompt + completion);
+  if (prompt === 0 && completion === 0 && total === 0) return null;
+  const usage = {
+    inputTokens: Math.max(0, prompt - cached),
+    outputTokens: completion,
+    totalTokens: total,
+  };
+  if (cached > 0) usage.cacheReadTokens = cached;
+  if (reasoning > 0) usage.reasoningTokens = reasoning;
+  return usage;
+}
+
 /** chat/stream 的请求组装与出网逻辑；重试只在握手阶段进行。 */
 function createChatTransport(configOverrides) {
   /** 组装一次请求所需的 URL / headers / body。 */
-  function buildRequest(opts, streamMode) {
+  function buildRequest(opts, streamMode, includeUsage = false) {
     const cfg = llmConfigFromEnv(configOverrides);
     const configured = Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
     if (!configured) {
@@ -90,6 +160,9 @@ function createChatTransport(configOverrides) {
         messages,
         max_tokens: opts.maxTokens ?? 2048,
         stream: streamMode,
+        // 只有流式请求需要显式要 usage：OpenAI / DeepSeek 在最后一个 SSE 块里回。
+        // 不支持的供应商会在下面按 4xx 文案回退一次（不带这个字段重发）。
+        ...(streamMode && includeUsage ? { stream_options: { include_usage: true } } : {}),
       },
     };
   }
@@ -114,10 +187,10 @@ function createChatTransport(configOverrides) {
   }
 
   async function* stream(opts) {
-    const req = buildRequest(opts, true);
-    let res;
+    let includeUsage = true;
+    let req = buildRequest(opts, true, includeUsage);
     // 只对握手做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
-    res = await llmRequest(req.url, {
+    let res = await llmRequest(req.url, {
       method: 'POST',
       headers: req.headers,
       body: req.body,
@@ -126,8 +199,27 @@ function createChatTransport(configOverrides) {
       onRetry: logRetry('chat(stream)'),
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
+      let text = await res.text().catch(() => '');
+      // 兼容性回退：部分 OpenAI 兼容端点不认 `stream_options`（400/422）。
+      // 只在文案明确指向该字段时才重发，避免把真正的鉴权/参数错误吞成第二次请求。
+      const retryable = (res.status === 400 || res.status === 422) && includeUsage
+        && /stream_options|include_usage|unknown|unsupported|invalid/i.test(text);
+      if (retryable) {
+        includeUsage = false;
+        req = buildRequest(opts, true, false);
+        res = await llmRequest(req.url, {
+          method: 'POST',
+          headers: req.headers,
+          body: req.body,
+          timeoutMs: req.cfg.timeoutMs,
+          maxAttempts: 3,
+          onRetry: logRetry('chat(stream)'),
+        });
+        if (!res.ok) text = await res.text().catch(() => '');
+      }
+      if (!res.ok) {
+        throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
+      }
     }
     yield { type: 'block-start', index: 0, blockType: 'text' };
     const contentType = String(res.headers.get('content-type') || '');
@@ -135,6 +227,8 @@ function createChatTransport(configOverrides) {
     if (!res.body || !contentType.includes('event-stream')) {
       const payload = await res.json();
       const text = payload?.choices?.[0]?.message?.content ?? '';
+      const usage = toTokenUsage(payload?.usage);
+      if (usage) yield { type: 'usage', usage };
       yield { type: 'text-delta', index: 0, text };
       yield { type: 'block-end', index: 0, block: { type: 'text', text } };
       yield { type: 'finish', reason: 'stop' };
@@ -155,15 +249,18 @@ function createChatTransport(configOverrides) {
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (!data || data === '[DONE]') continue;
-        let delta = '';
+        let parsed;
         try {
-          const parsed = JSON.parse(data);
-          delta = parsed?.choices?.[0]?.delta?.content
-            ?? parsed?.choices?.[0]?.message?.content
-            ?? '';
+          parsed = JSON.parse(data);
         } catch {
           continue; // 心跳/非 JSON 行忽略
         }
+        // usage 块通常 choices 为空，必须在取 delta 之前处理。
+        const usage = toTokenUsage(parsed?.usage);
+        if (usage) yield { type: 'usage', usage };
+        const delta = parsed?.choices?.[0]?.delta?.content
+          ?? parsed?.choices?.[0]?.message?.content
+          ?? '';
         if (!delta) continue;
         full += delta;
         yield { type: 'text-delta', index: 0, text: delta };
@@ -187,7 +284,9 @@ async function embedTexts(configOverrides, texts, opts = {}) {
   }
   const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? ''));
   if (list.length === 0) return [];
-  const url = parseLlmBaseUrl(baseUrl).base + (cfg.embedPath.startsWith('/') ? cfg.embedPath : '/' + cfg.embedPath);
+  // 容错拼接：用户把完整端点填进 `embeddingApiUrl` 时不再重复拼 `/embeddings`
+  // （重复会 404，而后果是稠密通道**静默失效** —— 见 joinLlmEndpoint 的说明）。
+  const url = joinLlmEndpoint(baseUrl, cfg.embedPath);
   const res = await llmRequest(url, {
     method: 'POST',
     apiKey,
@@ -218,7 +317,8 @@ async function rerankDocuments(configOverrides, query, documents, opts = {}) {
   }
   const docs = (Array.isArray(documents) ? documents : []).map((d) => String(d ?? ''));
   if (docs.length === 0) return [];
-  const url = parseLlmBaseUrl(baseUrl).base + (cfg.rerankPath.startsWith('/') ? cfg.rerankPath : '/' + cfg.rerankPath);
+  // 同上：`rerankApiUrl` 填完整端点时不再重复拼 `/rerank`。
+  const url = joinLlmEndpoint(baseUrl, cfg.rerankPath);
   const body = { model, query: String(query ?? ''), documents: docs, return_documents: false };
   if (Number.isFinite(Number(opts.topN)) && Number(opts.topN) > 0) body.top_n = Number(opts.topN);
   const res = await llmRequest(url, {
@@ -299,5 +399,7 @@ module.exports = {
   createLlmBridge,
   llmConfigFromEnv,
   resolveEmbedModel,
+  toOpenAiContent,
   toOpenAiMessage,
+  toTokenUsage,
 };

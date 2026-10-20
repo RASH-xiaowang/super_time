@@ -129,6 +129,34 @@ export function compressContext(
       continue
     }
 
+    // ── 聚合事实（2026-10-16）：与 kb 同理，**必须绕开窗口展开与同会话去重** ──
+    // 聚合结果没有「发生时间」（create_time = 0）、没有会话（username = ''），
+    // 走下面的窗口展开会得到空窗口（`loadMessageWindow` 按 `!username` 短路），
+    // 而 `chosen` 去重会让第二条聚合事实被当成「这段对话已经进上下文了」而跳过。
+    if (d.source === 'agg') {
+      const text = d.text || d.snippet
+      const cost = text.length + 8
+      if (usedChars + cost > opts.maxChars && chunks.length > 0) break
+      usedChars += cost
+      chunks.push({
+        username: '',
+        name: d.name,
+        anchor: {
+          name: d.name,
+          time: '',
+          snippet: d.snippet || text.slice(0, 90),
+          username: '',
+          local_id: 0,
+          source: 'agg',
+        },
+        lines: [{ time: '', sender: '', text }],
+        score: r.score,
+        pref: r.timePref,
+        createTime: 0,
+      })
+      continue
+    }
+
     // 与已选窗口重叠 → 跳过（这段对话已经进上下文了）。
     if (chosen.some(c => c.username === d.username && d.create_time >= c.start && d.create_time <= c.end)) continue
 

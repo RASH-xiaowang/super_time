@@ -30,16 +30,68 @@ import css from './mobile-nav.module.css'
 /** 底部栏的 4 个高频位（第 5 格固定是「更多」）。 */
 const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
 
+/**
+ * 手机端「更多」sheet 里**保留**的条目（2026-10-16 手机端重设计）。
+ *
+ * ## 为什么要有白名单，而不是「列全部可见条目」
+ *
+ * 桌面侧栏有 16 个可见条目，那是**桌面**的信息架构：屏幕宽、鼠标精确、可以并排看。
+ * 手机上照搬会得到一张 16 格的 sheet，其中一半是**在手机上读不动或没意义**的：
+ *
+ *   · `oplog`（操作日志）—— 审计长表，手机上横向溢出 104 处（实测 640px 表格塞进 556px 视口），
+ *     而且「翻查审计记录」本来就是坐在电脑前做的事；
+ *   · `annual` / `period`（年度 / 周期报告）—— 长报告，手机上读不动（它们本来就是 hidden，
+ *     由「总结」页内的分段条到达，手机沿用同一口径）。
+ *
+ * 保留的 9 条都是**手机上真的会看**的：朋友圈、收藏与表情、文件与存储、资金往来、
+ * 群聊分析、知识库、总结、待办日程、ClawBot。
+ *
+ * ⚠️ 2026-10-17：`momentsinsights`（并入朋友圈）、`privacy`（并入设置）、`calls`（并入聊天会话）
+ * 三块已转 hidden —— 它们不再占任何导航条目，由父项的分段条到达，所以从白名单里去掉。
+ * 手机端沿用同一口径（hidden 项不进 sheet）。
+ *
+ * ## 与桌面侧栏的关系
+ *
+ * 白名单是**手机端专属的收窄**，不是另立一份导航表：条目本身仍从 `NAV_GROUPS` 取
+ * （图标、标签、分组名都不重写），只是**过滤**掉手机上不显示的那几条。
+ * `mobile-nav.wiring.spec.ts` 钉住「白名单里的每一条都必须在 NAV_GROUPS 里存在」——
+ * 写错 tab 名会静默少一格，那条判据就是防这个的。
+ */
+const PHONE_KEEP: readonly WechatTab[] = [
+  'moments', 'favorites', 'files', 'ledger', 'groupinsights',
+  'kb', 'dailysummary', 'tasks', 'clawbot',
+]
+
+/**
+ * 手机端**刻意移除**的桌面可见条目，以及每一条的理由。
+ *
+ * 写成「tab → 理由」而不是一个裸数组：守卫要能断言「移除的每一条都写了理由」，
+ * 而理由本身是给下一个人看的 —— 没有理由的移除看起来就像漏了。
+ */
+const PHONE_HIDDEN: Readonly<Record<string, string>> = Object.freeze({
+  oplog: '审计长表：手机上横向溢出 104 处（640px 表格塞进 556px 视口），且翻查审计本就是坐在电脑前做的事',
+  // 2026-10-19：任务信息的价值在「配置 + 触发回调」，而写侧（建/改/删/扫描/回调投递）
+  // 与旧「聊天素材收集任务」同为仅桌面端方法（见 `backend/http-remote-policy.js` 的 B/D 族）。
+  // 放进手机端只会得到一个「能看列表却点不动编辑/检查」的半死界面，故整项留在桌面。
+  taskinfo: '任务信息的写侧（新建/编辑/扫描/回调投递）只允许桌面端（本机任务库 + 用户配置的回调出网）；手机端只能看不能改，故整项不进手机导航',
+})
+
 /** 把 NAV_GROUPS 压平成 tab → 条目 的查找表（图标与标签都从这里取，不另写一份）。 */
 const ITEM_BY_TAB: ReadonlyMap<WechatTab, NavItem> = new Map(
   NAV_GROUPS.flatMap((g) => [...g.items]).map((it) => [it.tab, it] as const),
 )
 
-/** 「更多」sheet 里要列的分组与条目（沿用桌面侧栏的过滤口径：跳过 hidden 与 settings）。 */
+/**
+ * 「更多」sheet 里要列的分组与条目。
+ *
+ * 过滤口径：跳过 hidden、跳过 settings（它单独一组）、**只留 {@link PHONE_KEEP} 里的**。
+ * 分组名沿用桌面侧栏那套（`NAV_GROUPS` 的 label），两边找东西的路径一致。
+ */
 function sheetGroups(): ReadonlyArray<{ label: string, items: ReadonlyArray<NavItem> }> {
+  const keep = new Set<WechatTab>(PHONE_KEEP)
   const out: Array<{ label: string, items: ReadonlyArray<NavItem> }> = []
   for (const g of NAV_GROUPS) {
-    const items = g.items.filter((it) => !it.hidden && it.tab !== 'settings')
+    const items = g.items.filter((it) => !it.hidden && it.tab !== 'settings' && keep.has(it.tab))
     if (items.length > 0) out.push({ label: g.label, items })
   }
   return out
@@ -122,6 +174,7 @@ export function MobileNav({
         <div className={css.sheet} role="dialog" aria-modal="true" aria-label="全部功能">
           <div className={css.sheetScrim} onClick={() => setMoreOpen(false)} aria-hidden="true" />
           <div className={css.sheetPanel}>
+            <span className={css.sheetGrip} aria-hidden="true" />
             <header className={css.sheetHd}>
               <span className={css.sheetTitle}>全部功能</span>
               <button type="button" className={css.sheetClose} onClick={() => setMoreOpen(false)} aria-label="关闭">
@@ -141,7 +194,7 @@ export function MobileNav({
                         data-active={active === it.tab || undefined}
                         onClick={() => pick(it.tab)}
                       >
-                        <NavIcon fragment={it.icon} size={20} />
+                        <NavIcon fragment={it.icon} size={22} />
                         <span className={css.sheetItemLabel}>{it.label}</span>
                       </button>
                     ))}
@@ -177,7 +230,7 @@ export function MobileNav({
               onClick={() => onSelect(tab)}
               aria-current={active === tab ? 'page' : undefined}
             >
-              <NavIcon fragment={it.icon} />
+              <span className={css.barIcon}><NavIcon fragment={it.icon} /></span>
               <span className={css.barLabel}>{it.label}</span>
             </button>
           )
@@ -190,7 +243,7 @@ export function MobileNav({
           aria-expanded={moreOpen}
           aria-label="更多功能"
         >
-          <MoreIcon />
+          <span className={css.barIcon}><MoreIcon /></span>
           <span className={css.barLabel}>更多</span>
         </button>
       </nav>
@@ -198,8 +251,14 @@ export function MobileNav({
   )
 }
 
-/** 底部栏的高频位（导出给接线判据用：它必须与 sheet 一起覆盖桌面侧栏的全部条目）。 */
+/** 底部栏的高频位（导出给接线判据用：它必须与 sheet 一起覆盖手机端保留的全部条目）。 */
 export const MOBILE_PRIMARY_TABS = PRIMARY
+
+/** 手机端「更多」sheet 保留的条目（导出给判据：白名单里的每一条都必须在 NAV_GROUPS 里存在）。 */
+export const MOBILE_KEEP_TABS = PHONE_KEEP
+
+/** 手机端刻意移除的条目 → 理由（导出给判据：移除的每一条都必须写了理由）。 */
+export const MOBILE_HIDDEN_TABS = PHONE_HIDDEN
 
 /**
  * 自带断点判定的挂载点：窄视口渲染底部栏，其余情况**什么都不渲染**。

@@ -55,15 +55,18 @@ function clientSources(): string[] {
   return out
 }
 
-describe('事件映射表：7 条，逐条钉住', () => {
-  it('哨兵：表非空，且就是那 7 条（多一条少一条都要在这里过一遍脑子）', () => {
-    expect(EVENT_MAP.length).toBe(7)
+describe('事件映射表：10 条，逐条钉住', () => {
+  it('哨兵：表非空，且就是那 10 条（多一条少一条都要在这里过一遍脑子）', () => {
+    expect(EVENT_MAP.length).toBe(10)
     expect(EVENT_MAP.map((e) => e.from).sort()).toEqual([
       'clawbot/binding-changed',
       'clawbot/message',
       'laya-analysis/progress',
       'search-index/progress',
+      'task-center/updated',
       'wechat-ask/delta',
+      'wechat-ask/reasoning',
+      'wechat-ask/stage',
       'wechat-data/updated',
       'wechat-export/progress',
     ])
@@ -73,11 +76,14 @@ describe('事件映射表：7 条，逐条钉住', () => {
     const expected: ReadonlyArray<readonly [string, string, boolean]> = [
       ['wechat-data/updated', 'dsh-wechat-data-updated', false],
       ['wechat-ask/delta', 'dsh-wechat-ask-delta', true],
+      ['wechat-ask/reasoning', 'dsh-wechat-ask-reasoning', true],
+      ['wechat-ask/stage', 'dsh-wechat-ask-stage', true],
       ['wechat-export/progress', 'dsh-wechat-export-progress', true],
       ['laya-analysis/progress', 'dsh-laya-analysis-progress', true],
       ['search-index/progress', 'dsh-search-index-progress', true],
       ['clawbot/message', 'dsh-clawbot-message', true],
       ['clawbot/binding-changed', 'dsh-clawbot-binding-changed', true],
+      ['task-center/updated', 'dsh-wechat-task-center-updated', true],
     ]
     for (const [from, to, detail] of expected) {
       const entry = EVENT_MAP.find((e) => e.from === from)

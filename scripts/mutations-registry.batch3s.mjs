@@ -49,7 +49,7 @@ export const MUTATIONS_BATCH3S = [
     id: 'M530-remote-whitelist-bypassed',
     why: '白名单判定失效 ⇒ 194 个 @Remote 方法全部对远程开放，含模型 API Key、许可证、备份还原、配置写入与「以用户身份给联系人发消息」。判据：http-server.spec.ts 的「白名单外的方法 → METHOD_NOT_ALLOWED_REMOTE，且根本没进后端」。',
     file: 'src/backend/http-server.js',
-    from: '    if (!isRemoteSafe(method)) {',
+    from: '    if (!fullAccess && !isRemoteSafe(method)) {',
     to: '    if (false) {',
     spec: 'src/backend/tests/http-server.spec.ts',
   },

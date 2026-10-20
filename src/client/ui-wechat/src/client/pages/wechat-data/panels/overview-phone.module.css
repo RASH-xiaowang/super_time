@@ -1,0 +1,93 @@
+/**
+ * 「微信数据总览」的**手机档**（≤560px）版式覆盖。
+ *
+ * ## 为什么单独成文件
+ *
+ * `overview.module.css` 贴着 M21 的 1000 行文件上限（`m21-file-size-ratchet.spec.ts`），
+ * 手机档这一整段（约 120 行）塞进去会直接顶穿。拆出来还有个好处：手机版式是**一整套**
+ * 独立决策（栅格塌成单列、统计块 2 列、固定宽度改弹性），集中在一处比散在 900 行里好审。
+ *
+ * ## ⚠️ 为什么全部用属性子串选择器（`[class*='xxx']`）而不是类名
+ *
+ * CSS Modules 给**每个文件**的类名生成**独立哈希**：`overview.module.css` 的 `.ovGrid`
+ * 编译成 `._ovGrid_11hx2_469`，而本文件的 `.ovGrid` 会编译成 `._ovGrid_18jiq_469` ——
+ * **两个不同的类名**，本文件的规则**匹配不到** JSX 上的 `css.ovGrid`（实测：手机上仍是 12 栅格）。
+ *
+ * 跨模块覆盖只有两条路：`:global(.xxx)`（发出裸类名，但会丢掉哈希隔离）或
+ * **属性子串选择器** `[class*='xxx']`（匹配任何含该子串的类名，与哈希无关）。
+ * 本仓既有先例用的是后者（见 `overview.module.css` 的 `.worldMapBox [class*='toolbar']`、
+ * `wechat-data.module.css` 的 `.settingsDialog [class*='dialogBd']`），这里沿用同一口径。
+ *
+ * ## 断点
+ *
+ * 560 与 `ui/use-media-query.ts` 的 `PHONE_QUERY`、`wechat-data.module.css` 的手机档
+ * 是同一个数，三处必须一起改（`mobile-shell.spec.ts` 钉住这件事）。
+ *
+ * ## 为什么必须重排（实测数据，437px 视口）
+ *
+ * 桌面版是 **12 栅格**（`.ovGrid` 的 `repeat(12, …)`），手机档此前**没有**覆盖它，
+ * 于是 `.ovSpan5` 只剩 **131px** 宽、`.ovTrend .trendGrid` 只剩 **105px** ——
+ * 卡片被压成一条，数字与标签互相挤。这不是「不够好看」，是**读不出来**。
+ *
+ * ## 三条硬口径（`theme-geometry.spec.ts` 守着，新文件零容忍）
+ *
+ * 圆角只用令牌或 0；间距避开 5 / 7 / 9 / 18px；`nm` 令牌引用一律带兜底。
+ *
+ * ## ⚠️ 覆盖既有规则时的优先级陷阱（实测踩过两次）
+ *
+ * 选择器必须**不弱于**被覆盖的那条，否则写了也不生效：
+ *   · `[class*='ovGrid'] > [class*='ovSpan']` —— 用属性子串覆盖**所有** span 类。
+ *     逐个列举会漏（实测漏了 `.ovSpan4` / `.ovSpan8`），漏掉的那个会在 1 列网格里创建
+ *     **隐式轨道**，表现为「明明写了单列，实际还是 8 列、卡片被压成 61px」。
+ *   · `[class*='ovTrend'] [class*='trendGrid']` / `[class*='ovTall'] [class*='metricGrid']`
+ *     —— 必须写成**两段**，因为 `overview.module.css` 里已有同形状的规则，
+ *     单段选择器的优先级低于它们。
+ */
+
+@media (max-width: 560px) {
+  /* ① 12 栅格 → 单列。分组标题的 `1 / -1` 在单列下仍然正确（跨满整行）。 */
+  [class*='ovGrid'] {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    row-gap: 12px;
+  }
+  [class*='ovGrid'] > [class*='ovSpan'],
+  [class*='ovGrid'] > [class*='regionSpan'] {
+    grid-column: span 1;
+  }
+  /* 单列下不再需要「同行等高」的补偿，卡片高度交给内容 */
+  [class*='ovGrid'] > [class*='ovCard'] { max-height: none; }
+
+  /* ② 统计块 2 列（桌面 8 列 → 手机 2 列） */
+  [class*='heroStats'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* ③ 趋势格子吃满宽度（两段，压过 overview.module.css 里的同形状规则） */
+  [class*='ovTrend'] [class*='trendGrid'] { grid-template-columns: minmax(0, 1fr); }
+
+  /* ④ 固定宽度改弹性：`.topName` 的 130px 在 387px 的卡身里占掉 1/3 */
+  [class*='topName'] { width: auto; flex: 1 1 auto; }
+  [class*='topCount'] { width: auto; flex: 0 0 auto; }
+
+  /* 卡片内边距与字号：桌面档的 10px/12px 在手机上偏松，收紧一档 */
+  [class*='ovCardHd'] { padding: 8px 10px; }
+  [class*='ovCardBd'] { padding: 10px; }
+  [class*='ovTitle'] { font-size: 12px; }
+
+  /* 24 根小时柱挤在 387px 里：每根只剩约 12px，柱间 4px 的间隙占比过大。
+     收窄间隙、给柱子更多宽度，柱形才看得出高低差。 */
+  [class*='hourBars'] { gap: 2px; }
+  [class*='hourLabel'] { font-size: 10px; }
+
+  /* 指标格：桌面 `minmax(118px, 1fr)` 在 387px 下是 3 列（每格 118px），
+     手机上 2 列更宽松（每格约 185px），长数字不会被截断。 */
+  [class*='ovTall'] [class*='metricGrid'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* 资产格 / 健康格：桌面 2 列在手机上仍可读，但内边距收紧 */
+  [class*='assetGrid'],
+  [class*='healthGrid'] { gap: 8px; }
+
+  /* 长列表（Top 榜）在手机上不再限高滚动 —— 页面本身就是滚动的，
+     卡内再套一层滚动区会让「滑到底」变成两段式，手感很怪。 */
+  [class*='topList'],
+  [class*='catList'] { max-height: none; overflow-y: visible; }
+}

@@ -1,6 +1,22 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('electronAPI', {
+/**
+ * 递归冻结桥面（Alpha 的 single frozen bridge 做法）。
+ * contextBridge 会把对象代理到隔离世界，但冻结后渲染层连“在本地副本上改方法”都做不到；
+ * 这不是权限边界（权限仍在主进程 sender 校验），只是减少误改/被同页脚本篡改的窗口。
+ * @param {unknown} value - 要冻结的值。
+ * @returns {unknown} 原值。
+ */
+function deepFreeze(value) {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function') || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  // 函数只冻结自身，不遍历 length/name/caller 等内建属性（某些属性是受限访问器）。
+  if (typeof value === 'function') return value;
+  for (const key of Reflect.ownKeys(value)) deepFreeze(value[key]);
+  return value;
+}
+
+const electronAPI = deepFreeze({
   getVersions: () => ipcRenderer.invoke('app:versions'),
   /** 是否验收测试模式（自动化窗口）。⚠️ 它**不等于**「回答来自 mock 模型」，后者见 runMode。 */
   isTestMode: () => ipcRenderer.invoke('app:test-mode'),
@@ -99,9 +115,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * `token` 不进入 UI。之后所有状态查询都只给掩码 —— 否则任何能看到这块屏幕的人
      * （投屏、截图、远程协助）就等于拿到了完整凭据。
      */
-    rotate: () => ipcRenderer.invoke('remote-access:rotate'),
+    rotate: (options) => ipcRenderer.invoke('remote-access:rotate', options),
     /** 打开 / 关闭监听。关闭会立刻断开所有在连的手机（令牌保留，下次打开还是同一个）。 */
     toggle: (enabled) => ipcRenderer.invoke('remote-access:toggle', enabled === true),
+  },
+  /**
+   * 浏览器交接（2026-10-19）：标题栏「打开网页」把操作权交给默认浏览器，桌面端缩成卡片。
+   * 卡片窗口的返回按钮走独立 preload（`src/backend/handoff-preload.js`），不经过这里。
+   */
+  webHandoff: {
+    open: () => ipcRenderer.invoke('browser-handoff:open'),
+    restore: () => ipcRenderer.invoke('browser-handoff:restore'),
+    state: () => ipcRenderer.invoke('browser-handoff:state'),
   },
   license: {
     status: () => ipcRenderer.invoke('license:status'),
@@ -150,3 +175,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   }
 });
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);

@@ -132,7 +132,17 @@ export declare function parseSnsLikesComments(xml: string): {
     comments: MomentComment[];
 };
 /**
- * Read moments page (XML parsed; likes/comments resolved from SnsMessage_tmp3).
+ * 把线上表同步进归档库（只解析 `content_hash` 变了的行）。
+ *
+ * 节流 1.5s：分页 `load` / 增量刷新会在同一秒连调多次，全表 `SELECT` 没必要重复；
+ * 但**新动态**仍在下一次 `getMoments`（≤1.5s 后）进来，不会像定时器那样等 30s。
+ * @param decryptedDir - 解密数据根。
+ * @param force - 跳过 1.5s 节流（测试/需要立即合并时）。
+ * @returns 本次解析并写入的条数（0 = 没有变化/无线上表）。
+ */
+export declare function ensureMomentsArchiveFresh(decryptedDir: string, force?: boolean): number;
+/**
+ * 读一页朋友圈（归档优先；归档不可用时回退线上表）。
  * @param decryptedDir - decrypted data root.
  * @param offset - page offset.
  * @param limit - page size.
@@ -146,8 +156,8 @@ authorUsername?: string, selfUsername?: string): {
     total: number;
 };
 /**
- * Author-activity counts across the FULL moments table (SQL GROUP BY, no XML
- * parse), mapped to display names, ranked by count descending.
+ * Author-activity counts across the FULL moments archive (deleted posts included),
+ * mapped to display names, ranked by count descending.
  * @param decryptedDir - decrypted data root.
  * @returns author name + moment count, highest first.
  */

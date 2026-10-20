@@ -1,40 +1,125 @@
-/* Official account assets — NEON MATRIX 科技风。 */
+/* Official account assets — 微信灰阶 + 绿色主操作（无渐变 / 阴影 / 毛玻璃）。 */
 
+/* 官方账号明细卡：铺满剩余高度，表格在卡内滚动（2026-10-18 用户要求「没有铺满屏幕的请修复」）。 */
+.fillCard {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Card 是 flush：表格实际在卡身（`_cardBdFlush`）里，卡身先吃满，表格再吃满卡身。 */
+.fillCard > [class*='_cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fillCard .table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 .table {
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: var(--nm-bg-card);
+  border-radius: 0 0 var(--nm-r-lg) var(--nm-r-lg);
   overflow: hidden;
 }
-.head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px 72px 112px;
-  gap: 8px;
-  padding: 10px 14px;
-  font-size: 12px;
-  color: var(--nm-text-2);
-  border-bottom: 1px solid var(--nm-border);
-}
+
+.head,
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px 72px 112px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 76px 76px 112px;
+  gap: var(--nm-s-2);
   align-items: center;
+}
+
+/* 表头 30px / 行 32px（微信灰阶表格口径；无斑马纹，仅 hover 浅灰）。 */
+.head {
+  min-height: 30px;
+  padding: 6px var(--nm-s-4);
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  background: var(--nm-table-header-bg);
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.row {
   width: 100%;
-  padding: 10px 14px;
+  min-height: 32px;
+  padding: 4px var(--nm-s-4);
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--nm-border);
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s;
+  transition: background var(--nm-t-fast);
 }
-.row:last-child { border-bottom: none; }
-.row:hover { background: var(--nm-bg-hover); }
-.colName { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rowUser { font-size: 11px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
-.colNum { text-align: right; color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
-.colTime { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:hover {
+  background: var(--nm-bg-hover);
+}
+
+.colName {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 名称与账号同一行：行高才能压到 32px；账号悬次要灰色，名称永不省略到看不见。 */
+.colName > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.rowUser {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  flex: 0 1 auto;
+}
+
+.colNum {
+  text-align: right;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.colTime {
+  text-align: right;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+  .head,
+  .row {
+    grid-template-columns: minmax(0, 1fr) 52px 52px 86px;
+    gap: var(--nm-s-1);
+    padding-right: var(--nm-s-3);
+    padding-left: var(--nm-s-3);
+  }
+
+  .colNum,
+  .colTime {
+    font-size: var(--nm-fs-xs, 11px);
+  }
+}

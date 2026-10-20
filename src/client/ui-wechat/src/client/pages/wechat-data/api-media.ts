@@ -69,6 +69,10 @@ import type {
   OfficialAssetsSnapshot,
   OriginalBatchResult,
   OriginalFetchPlan,
+  HarvestResult,
+  HarvestStatus,
+  WxcdnQuota,
+  WechatImageAutoDownloadStatus,
   OverviewInsights,
   OverviewSnapshot,
   RegionMapSnapshot,
@@ -122,6 +126,17 @@ import {
   writeRenderCache,
 } from './cache.ts'
 import { createImageLoadQueue } from './image-batch.ts'
+import { preferMediaUrl } from './wechat-media.ts'
+
+/**
+ * 浏览器页面（http/https）没有 `wechat-media://` 协议，图片走同源 `/api/media`。
+ * 本文件是宿主环境接缝（已在 `capabilities.wiring.spec` 的 TRANSPORT_FILES 白名单里），
+ * 页面协议是事实、不是能力猜测；桌面端 `file:` 仍走自定义协议。
+ */
+function useHttpMedia(): boolean {
+  return typeof window !== 'undefined'
+    && (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+}
 import { ImageDataUrlBatchItem, remote, unwrap } from './api-core.ts'
 // 类型单独一行：`isolatedModules` 下 esbuild 不会替我们从混合行里删掉类型（M21 踩过，见 RELEASE-PLAN）
 import type { RemoteImageItem } from './api-core.ts'
@@ -277,6 +292,58 @@ export async function apiFetchOriginalImagesBatch(options?: { limit?: number; co
 }
 
 /**
+ * 原图自动收割：监控微信 `msg/attach`，微信一落盘 `_h.dat` 就解进解码缓存。
+ *
+ * 这是**拿到高清原图唯一不越界的通路**：微信负责下载（用户点「查看原图」时落盘），
+ * 我们负责收割 —— 不联网、不碰凭据、不注入进程。
+ * 故意**不走 `cachedGet`**：它会改变本机状态（往解码缓存写原图）。
+ * @param action - `start` 启动监控 / `stop` 停止监控 / `now` 手动收割一次。
+ * @returns `start`/`now` 回 `HarvestResult`，`stop` 回 `HarvestStatus`。
+ */
+export async function apiOriginalHarvest(action: 'start' | 'stop' | 'now'): Promise<HarvestResult | HarvestStatus> {
+  return unwrap(await remote().originalHarvest({ action }))
+}
+
+/**
+ * 读原图自动收割状态（纯内存，毫秒级）。
+ *
+ * **单独一个接口而不是 `apiOriginalHarvest('status')`**：后者会被归成重任务，
+ * 而收割本身占着唯一的重任务槽 —— 收割期间读进度会被队列拒掉。
+ * @returns 是否在监控、累计收割/失败张数、手动收割的实时进度。
+ */
+export async function apiGetOriginalHarvestStatus(): Promise<HarvestStatus> {
+  return unwrap(await remote().getOriginalHarvestStatus())
+}
+
+/**
+ * 读「第三方原图服务」的额度（`wxcdn.c3o.re`）。
+ *
+ * 这是本机数据上**唯一能覆盖那 81.6%** 的通路：用 `cdnbigimgurl` 的 fileid 换原图。
+ * 按流量计费（Free 套餐 50 MB/天），所以界面要显示剩余额度。
+ * @returns 套餐名、总量、已用、剩余、重置时间；失败时 `{ error }`。
+ */
+export async function apiGetWxcdnQuota(): Promise<{ quota?: WxcdnQuota; error?: string }> {
+  return unwrap(await remote().getWxcdnQuota())
+}
+
+/**
+ * 微信原图自动下载（实验）：让微信在**接收新图片**时自己下载高清原图。
+ *
+ * 与上面两条「收割 / 第三方服务」的区别：这条是**写进程**的 —— 它把上游 WeFlow-X（MIT）的
+ * `img_helper.dll` 注入正在运行的微信，让微信按原图策略下载。只影响开启之后新收到的图片；
+ * 历史图片仍需在微信里点开原图（由「原图自动收割」接住）。
+ *
+ * 仅桌面端：`http-remote-policy.js` 把它归到「凭据/配置」A 族（手机态没有本机微信进程）。
+ * @param action - `start` 打开并接入 / `stop` 关闭并还原 / `status` 只读状态。
+ * @returns 最新状态快照（含错误码、组件校验结果与 cleanupUnconfirmed 提示）。
+ */
+export async function apiWechatImageAutoDownload(
+  action: 'start' | 'stop' | 'status',
+): Promise<WechatImageAutoDownloadStatus> {
+  return unwrap(await remote().wechatImageAutoDownload({ action }))
+}
+
+/**
  * 远程图片代理（M23）：一次问一批「只在微信 CDN 上」的图片地址，拿回按 url 建键的 Map。
  *
  * 为什么要走后端而不是让 `<img>` 直接吃那个 https 地址：那等于把「渲染层可以向任意主机发请求」
@@ -367,8 +434,17 @@ export async function apiGetSnsVideoCoversBatch(options: {
   return out
 }
 
-/** 进程内 `源地址 → data URL` 的上限：来回滚动不该反复 RPC + 重新 base64。 */
+/** 进程内 `源地址 → data URL` 的条数上限：来回滚动不该反复 RPC + 重新 base64。 */
 const REMOTE_IMAGE_MEM_MAX = 600
+/**
+ * 同一份缓存的**字节预算**（按 JS 字符串长度近似，1 字符 ≈ 2B）。
+ *
+ * 只按条数限不住：600 张 200KB 的远程图就是 120MB 级 base64，而 600 张头像只有几 MB。
+ * 超出时按插入顺序淘汰最老的，至少保留刚写入的那张（单张超预算也允许它先落一下）。
+ */
+const REMOTE_IMAGE_MEM_MAX_CHARS = 3_000_000
+/** 「后端整个没答上」的地址表条数上限：列表反复重渲染不能把 Map 撑爆。 */
+const REMOTE_IMAGE_FAILED_MAX = 500
 
 /**
  * 攒批窗口（毫秒）：同一屏里**先后**挂出来的远程图并成一次 `getRemoteImages`。
@@ -395,6 +471,45 @@ const REMOTE_IMAGE_SETTLE_MS = 80
 const REMOTE_IMAGE_FAIL_COOLDOWN_MS = 60_000
 const remoteImageUrlCache = new Map<string, string>()
 const remoteImageFailedAt = new Map<string, number>()
+/** 当前缓存里 data URL 的总字符数（与 remoteImageUrlCache 同步维护）。 */
+let remoteImageUrlChars = 0
+
+/** 某个地址的「后端整个没答上」记录是否仍有效；过期顺手清掉。 */
+function remoteImageFailureActive(url: string, now: number): boolean {
+  const at = remoteImageFailedAt.get(url)
+  if (at === undefined) return false
+  if (now - at < REMOTE_IMAGE_FAIL_COOLDOWN_MS) return true
+  remoteImageFailedAt.delete(url)
+  return false
+}
+
+/** 记一次失败；超过条数上限时按插入顺序淘汰最老的。 */
+function noteRemoteImageFailure(url: string, now: number): void {
+  remoteImageFailedAt.set(url, now)
+  while (remoteImageFailedAt.size > REMOTE_IMAGE_FAILED_MAX) {
+    const oldest = remoteImageFailedAt.keys().next().value
+    if (oldest === undefined) break
+    remoteImageFailedAt.delete(oldest)
+  }
+}
+
+/** 写缓存并按「条数 + 字节」双上限淘汰最老条目（保留刚写入的那张）。 */
+function cacheRemoteImage(url: string, dataUrl: string): void {
+  const existing = remoteImageUrlCache.get(url)
+  if (existing !== undefined) remoteImageUrlChars -= existing.length
+  remoteImageUrlCache.set(url, dataUrl)
+  remoteImageUrlChars += dataUrl.length
+  while (
+    remoteImageUrlCache.size > 1
+    && (remoteImageUrlCache.size > REMOTE_IMAGE_MEM_MAX || remoteImageUrlChars > REMOTE_IMAGE_MEM_MAX_CHARS)
+  ) {
+    const oldest = remoteImageUrlCache.keys().next().value
+    if (oldest === undefined) break
+    const evicted = remoteImageUrlCache.get(oldest)
+    remoteImageUrlCache.delete(oldest)
+    if (evicted !== undefined) remoteImageUrlChars -= evicted.length
+  }
+}
 
 /**
  * 攒批队列：同一 tick 里挂出来的 N 张远程图合成**一次** `getRemoteImages`。
@@ -431,8 +546,7 @@ export async function apiGetRemoteImageUrl(source: string): Promise<string> {
   if (url === '') return ''
   const hit = remoteImageUrlCache.get(url)
   if (hit !== undefined) return hit
-  const failedAt = remoteImageFailedAt.get(url)
-  if (failedAt !== undefined && Date.now() - failedAt < REMOTE_IMAGE_FAIL_COOLDOWN_MS) return ''
+  if (remoteImageFailureActive(url, Date.now())) return ''
   let item: RemoteImageItem
   try {
     item = await remoteImageQueue.enqueue(url)
@@ -441,16 +555,12 @@ export async function apiGetRemoteImageUrl(source: string): Promise<string> {
     // 都会把同一批地址再送一遍。**后端明确回了失败原因**（开关关掉 / 主机不在清单 / CDN 失败）
     // 时不在这里冷却 —— 后端自己有 60 秒冷却，而开关随时可能被用户打开，这里再拦一道
     // 就会变成「重新开启开关后有一分钟图片还是不出来」那种莫名延迟。
-    remoteImageFailedAt.set(url, Date.now())
+    noteRemoteImageFailure(url, Date.now())
     return ''
   }
   const dataUrl = item.dataUrl ?? ''
   if (dataUrl === '') return ''
-  if (remoteImageUrlCache.size >= REMOTE_IMAGE_MEM_MAX) {
-    const oldest = remoteImageUrlCache.keys().next().value
-    if (oldest !== undefined) remoteImageUrlCache.delete(oldest)
-  }
-  remoteImageUrlCache.set(url, dataUrl)
+  cacheRemoteImage(url, dataUrl)
   return dataUrl
 }
 /**
@@ -611,9 +721,10 @@ export const imageLoadQueue = createImageLoadQueue<{ username: string; localId: 
   chunkSize: IMAGE_BATCH_CHUNK,
   onMissing: () => ({ error: '批量取图未返回该条目' }),
   flush: async (keys) => {
-    const r = unwrap(await remote().getImageDataUrlsBatch({ items: keys.map(k => ({ username: k.username, localId: k.localId })) }))
+    // fileOnly：有本地落盘文件时后端不再回传 base64，渲染层用 wechat-media://（见 wechat-media.ts）。
+    const r = unwrap(await remote().getImageDataUrlsBatch({ items: keys.map(k => ({ username: k.username, localId: k.localId })), fileOnly: true }))
     const got = Array.isArray(r?.items) ? r.items : []
-    return got.map(toImageResult)
+    return got.map((item) => toImageResult(preferMediaUrl(item, useHttpMedia())))
   },
 })
 
@@ -639,6 +750,7 @@ export function apiGetImageDataUrl(options: { username: string; localId: number 
  * @returns 与传入顺序一一对应的条目。
  */
 export async function apiGetImageDataUrlsBatch(items: Array<{ username: string; localId: number }>): Promise<ImageDataUrlBatchItem[]> {
-  const r = unwrap(await remote().getImageDataUrlsBatch({ items }))
-  return Array.isArray(r?.items) ? r.items : []
+  const r = unwrap(await remote().getImageDataUrlsBatch({ items, fileOnly: true }))
+  const rows = Array.isArray(r?.items) ? r.items : []
+  return rows.map((row) => preferMediaUrl(row, useHttpMedia()))
 }

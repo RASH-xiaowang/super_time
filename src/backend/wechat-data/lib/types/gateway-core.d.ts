@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 195 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 212 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -162,6 +162,14 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * （体在 `gateway-clawbot.ts`；默认实现什么都不做 —— ClawBot 组装在更派生的层）。
      */
     protected bootClawbotChannel(): void;
+    /**
+     * 子类钩子：任务触发扫描的一拍（体在 `gateway-taskcenter.ts`；默认实现什么都不做 ——
+     * 任务信息域的组装在更派生的层）。
+     *
+     * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。与 `bootClawbotChannel` 分开的理由：那个是「拉起长轮询」，
+     * 这个是「周期扫描」，生命周期与失败语义都不同（前者启动一次，后者每拍都可能失败）。
+     */
+    protected scanTaskTriggersBackground(): void;
     constructor(ctx: Context);
     /**
      * Append one operation-log row. Metadata only — never message bodies or
@@ -416,6 +424,38 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @returns 增量回调（text 为**已生成的全文**）。
      */
     protected makeDeltaEmitter(streamId?: string): ((text: string) => void) | undefined;
+    /**
+     * 构造「思考过程增量」事件推送器（2026-10-16 新增）。
+     *
+     * 与 {@link makeDeltaEmitter} 同一套节流与「推全文」约定，只是走另一条事件名 ——
+     * 思考内容与可见正文是**两条独立的流**（模型可能先吐一大段 reasoning 再吐正文），
+     * 混在一条里前端就没法把它们分开展示。
+     *
+     * 为什么需要：问答产品里「思考过程」是可折叠的一块，用户据此判断模型有没有跑偏。
+     * 后端此前把 `reasoning-delta` 直接丢掉（`runChat` 只认 `text-delta`），
+     * 于是界面上永远看不到思考 —— 不是没生成，是没接。
+     * @param streamId - 客户端生成的流式标识；为空表示不推送。
+     * @returns 增量回调（text 为**已生成的思考全文**）。
+     */
+    protected makeReasoningEmitter(streamId?: string): ((text: string) => void) | undefined;
+    /**
+     * 构造「阶段」事件推送器（2026-10-16 新增）。
+     *
+     * 问答是一条多阶段流水线（规划 → 检索 → 精排 → 生成 → 接地核对），
+     * 每个阶段都有可展示的结果（意图、召回条数、精排模型、引用条数…）。
+     * 把这些**在发生的那一刻**推给前端，界面才能像问答产品那样显示
+     * 「🔍 检索本机记录 · 召回 128 条」这样的过程行，而不是等全部跑完再一次性平铺。
+     *
+     * 不节流：阶段是离散事件（一轮最多 6 条），节流只会让「进行中」的状态跳帧。
+     * @param streamId - 客户端生成的流式标识；为空表示不推送。
+     * @returns 阶段回调。
+     */
+    protected makeStageEmitter(streamId?: string): ((stage: {
+        key: string;
+        label: string;
+        status: 'running' | 'done' | 'skipped';
+        detail?: string;
+    }) => void) | undefined;
     /**
      * 把一次问答落进「历史记录」。
      *

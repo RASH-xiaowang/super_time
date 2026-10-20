@@ -12,6 +12,8 @@ import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
 import { queryContacts } from './query/contacts.ts'
 import { queryRegionMap } from './query/region-map.ts'
+import { createChatCollectTask, listChatCollectTasks } from './query/chat-collect.ts'
+import type { ChatCollectTaskResult, ChatCollectTaskSnapshot } from './types.ts'
 import { queryMessageByServerId, queryMessages, queryNewMessages } from './query/messages.ts'
 import { queryMoments, queryMomentsAuthors } from './query/moments.ts'
 import { deleteFavoriteItems, queryFavorites } from './query/favorites.ts'
@@ -227,6 +229,31 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   /**
+   * 新建「聊天素材收集任务」：保留某会话最近 N 条文本 + M 张图片到任务目录。
+   *
+   * 图片解码密钥与账号根目录只在这一层解析（query 层不 import gateway-support，
+   * 避免 query → gateway 的反向依赖）。
+   */
+  @Remote('createChatCollectTask')
+  async createChatCollectTask(options: { username: string; displayName?: string; textLimit?: number; imageLimit?: number }): Promise<ChatCollectTaskResult> {
+    const base = rawWechatBase(this._dirs.decrypted) || undefined
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
+    return createChatCollectTask(this._dirs.decrypted, this._dirs.decoded, {
+      ...options,
+      selfUsername: this.selfUsername(),
+      ...(base === undefined ? {} : { wechatBaseDir: base }),
+      ...(aesKey === undefined ? {} : { aesKey }),
+      xorKey,
+    })
+  }
+
+  /** 收集任务列表（最新在前；`readError` 与「确实没有任务」区分）。 */
+  @Remote('listChatCollectTasks')
+  listChatCollectTasks(): ChatCollectTaskSnapshot {
+    return listChatCollectTasks(this._dirs.decrypted)
+  }
+
+  /**
    * Search index status.
    * @returns SearchIndexStatus: whether the FTS5 index exists and its row count.
    */
@@ -430,7 +457,21 @@ export abstract class GatewayRead extends GatewayCore {
   async openPath(options: { path: string }, signal: AbortSignal = new AbortController().signal): Promise<{ ok: boolean; path: string; error?: string }> {
     const p = options.path
     const dataRoot = join(this._dirs.decrypted, '..')
-    const denial = openDenialReason(p, dataRoot)
+    /*
+     * ⚠️ 2026-10-17：应用有**两个**自己的数据目录，它们是兄弟关系：
+     *   · `<userData>/wechat-data/` —— 解密快照、导出、缓存（= `dataRoot`）；
+     *   · `<userData>/wechat/` —— `config.json` / `llm.json` / `logs/`（配置与日志）。
+     * 设置弹窗底部那个「配置: wechat/config.json ↗」要打开的是**后者** ——
+     * 它不在 `dataRoot` 之下，于是被路径政策拒掉，用户看到的就是「点了没反应」
+     * （真机实测：`openPath` 返回 `ok:false` + 「只能打开应用自己数据目录内的文件」）。
+     *
+     * 只放行**这两个**兄弟目录，不放行整个 `<userData>/` —— 那里还有 Electron 自己的
+     * 缓存（`Cache` / `GPUCache` / `Local Storage` …）与 `license.json`，
+     * 它们不是「用户该去手动编辑的东西」。
+     */
+    const userData = join(dataRoot, '..')
+    const extraRoots = [join(userData, 'wechat'), join(userData, 'wechat-data')]
+    const denial = openDenialReason(p, dataRoot, extraRoots)
     if (denial !== null) return { ok: false, path: p, error: denial }
     try {
       await openNativePath(p, signal)

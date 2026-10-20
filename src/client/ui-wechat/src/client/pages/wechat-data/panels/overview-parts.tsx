@@ -7,7 +7,7 @@
  * @module overview-partsx
  */
 
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import {
   apiExportAllSessions,
   apiGetLedger,
@@ -18,10 +18,9 @@ import {
 } from '../api.ts'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
-import { Card, LoadingState, PanelHeader, StatCard } from '../ui/kit.tsx'
+import { Card, LoadingState } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
-import neon from './overview-neon.module.css'
 import { CalendarHeatmapPanel } from './overview-export.ts'
 
 /** 给总览里的日历热力一个独立 Suspense，主面板不必为懒加载多包一层 JSX。 */
@@ -77,16 +76,17 @@ export function writeCache(key: string, value: unknown): void {
   }
 }
 
-/** Cards with icon, value, label, and target tab. */
-export const CARDS: ReadonlyArray<{ key: string; label: string; en: string; icon: string; tab: string }> = [
-  { key: 'sessions', label: '会话', en: 'WeChat Msg', icon: '💬', tab: 'chats' },
-  { key: 'groups', label: '群聊', en: 'Group Chat', icon: '👥', tab: 'contacts' },
-  { key: 'contacts', label: '好友', en: 'Contacts', icon: '👤', tab: 'contacts' },
-  { key: 'official', label: '公众号/服务号', en: 'Official', icon: '📢', tab: 'bizchats' },
-  { key: 'moments', label: '朋友圈', en: 'Moments', icon: '🖼️', tab: 'moments' },
-  { key: 'favorites', label: '收藏', en: 'Favorites', icon: '⭐', tab: 'favorites' },
-  { key: 'emoticons', label: '自定义表情', en: 'Emoticons', icon: '😀', tab: 'emoticons' },
-  { key: 'storage', label: '媒体占用', en: 'Storage', icon: '💾', tab: 'storage' },
+/**
+ * KPI 条只保留 4 项（2026-10-19 微信化改版）：
+ * 会话 / 消息 / 好友 / 群聊 —— 其余指标（公众号、朋友圈、收藏、表情、媒体占用）
+ * 已经分别落在「内容构成」与「存储构成」卡里，不再在页头重复一遍。
+ * 图标走 `OvIcon`（单色描边），不再用 emoji。
+ */
+export const CARDS: ReadonlyArray<{ key: string; label: string; icon: string; tab: string }> = [
+  { key: 'sessions', label: '会话', icon: 'chat', tab: 'chats' },
+  { key: 'messages', label: '消息', icon: 'message', tab: 'chats' },
+  { key: 'contacts', label: '好友', icon: 'relation', tab: 'contacts' },
+  { key: 'groups', label: '群聊', icon: 'group', tab: 'contacts' },
 ]
 
 /** 消息类型分布（战术三）的展示顺序。 */
@@ -132,168 +132,78 @@ export function SkBar({ label, width = '80%' }: { label: string; width?: string 
   )
 }
 
-/** 骨架屏：保留总览的真实标题/栏目/标签，仅数值与内容用骨架占位。 */
+/** 骨架屏：保留总览的真实栏目/标签，仅数值与内容用骨架占位。
+ *
+ * 2026-10-19 起与「4 KPI + 6 卡 + 更多分析」的新结构保持一致：
+ * 不再画 14 张卡片的占位墙（加载完布局会整体跳变）。
+ */
 export function SkeletonOverview(): React.JSX.Element {
   return (
     <div className={css.skeleton} aria-label="正在加载微信数据总览" aria-busy="true">
-      {/* Hero：核心资产 */}
-      <Card title="核心资产">
-        <div className={css.heroStats}>
-          {CARDS.slice(0, 4).map(card => (
-            <div key={card.key} className={css.skeletonStat}>
-              <span className={css.quickIcon}>{card.icon}</span>
+      {/* KPI 条：4 格 */}
+      <div className="row g-2">
+        {CARDS.map(card => (
+          <div key={card.key} className="col-6 col-sm-3">
+            <div className={css.skeletonStat}>
               <SkLine width="52%" height={18} />
               <span className={kitCss.textCaption}>{card.label}</span>
             </div>
-          ))}
-        </div>
-      </Card>
+          </div>
+        ))}
+      </div>
 
-      {/* 世界板块 */}
-      <Card title="世界板块 · 好友地区">
-        <div className={css.skeletonMap} />
-      </Card>
-
-      {/* 轨道趋势 + 消息热度 */}
-      <div className={css.cols}>
-        <Card title="轨道趋势">
-          <div className={css.trendGrid}>
-            {['近 7 天消息', '近 30 天消息', '近 30 天活跃好友', '近 30 天活跃群', '近 30 天新增媒体'].map(label => (
-              <div key={label} className={css.trendCell}>
+      {/* 趋势 + 热力 */}
+      <div className={css.skeletonRows}>
+        <div className={css.skeletonCard}>
+          <SkLine width="36%" height={12} />
+          <div className={css.skeletonGrid}>
+            {['近 7 天消息', '近 30 天消息', '近 30 天活跃好友', '近 30 天活跃群'].map(label => (
+              <div key={label} className={css.skeletonCell}>
                 <SkLine width="48%" height={16} />
                 <span className={kitCss.textCaption}>{label}</span>
               </div>
             ))}
           </div>
-        </Card>
-        <Card title="消息热度 · 近 90 天">
-          <div className={css.heatmapSkeleton}>
-            {Array.from({ length: 90 }).map((_, i) => <i key={i} />)}
-          </div>
-        </Card>
+        </div>
+        <div className={css.skeletonCard}>
+          <SkLine width="30%" height={12} />
+          <div className={css.skeletonMap} />
+        </div>
       </div>
 
-      {/* 存储构成 + 撤回 */}
-      <div className={kitCss.cardGrid}>
-        <Card title="存储构成 Top 4" extra={<span className={css.panelGo}>详情 →</span>}>
+      {/* 关系 + 内容 */}
+      <div className={css.skeletonRows}>
+        <div className={css.skeletonCard}>
+          <SkLine width="32%" height={12} />
+          <div className={css.skeletonMap} />
+        </div>
+        <div className={css.skeletonCard}>
+          <SkLine width="28%" height={12} />
+          <div className={css.skeletonGrid}>
+            {['文本', '图片', '视频', '链接/文件', '系统消息'].map(label => (
+              <SkBar key={label} label={label} width="60%" />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 存储 + 资金 */}
+      <div className={css.skeletonRows}>
+        <div className={css.skeletonCard}>
+          <SkLine width="34%" height={12} />
           <div className={css.skStack}>
             <SkBar label="图片" width="72%" />
             <SkBar label="视频" width="58%" />
             <SkBar label="语音" width="42%" />
-            <SkBar label="文件" width="30%" />
           </div>
-        </Card>
-        <Card title="撤回消息痕迹" extra={<span className={css.panelGo}>详情 →</span>}>
-          <div className={css.revoke}>
-            <SkLine width="120px" height={28} />
-            <span className={kitCss.textMeta}>条被撤回消息的元数据痕迹（发送者/时间/类型可查）</span>
-          </div>
-        </Card>
-      </div>
-
-      {/* 资金快照 + 存储清理建议 */}
-      <div className={kitCss.cardGrid}>
-        <Card title="资金快照" extra={<span className={css.panelGo}>详情 →</span>}>
+        </div>
+        <div className={css.skeletonCard}>
+          <SkLine width="30%" height={12} />
           <div className={css.metricGrid}>
             <SkMetric label="收入" />
             <SkMetric label="支出" />
             <SkMetric label="转账次数" />
-            <SkMetric label="红包收/发" />
           </div>
-        </Card>
-        <Card title="存储清理建议" extra={<span className={css.panelGo}>详情 →</span>}>
-          <div className={css.metricGrid}>
-            <SkMetric label="媒体占用" />
-            <SkMetric label="媒体项" />
-            <SkMetric label="超大文件" />
-          </div>
-        </Card>
-      </div>
-
-      {/* 交互画像 + 关系浓度 */}
-      <div className={css.cols}>
-        <Card title="交互画像 · 基于消息时间与类型">
-          <div className={css.metricGrid}>
-            <SkMetric label="消息总数" />
-            <SkMetric label="活跃天数" />
-            <SkMetric label="时间跨度(天)" />
-            <SkMetric label="最忙时段" />
-            <SkMetric label="深夜(23-6点)占比" />
-            <SkMetric label="周末占比" />
-          </div>
-          <div className={css.hourBars}>
-            {Array.from({ length: 24 }).map((_, h) => (
-              <div key={h} className={css.hourCol}>
-                <div className={`${css.skBarFill} ${css.hourSk}`} style={{ height: `${((h % 5) + 2) * 12}%` }} />
-                <span className={css.hourLabel}>{h}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card title="关系浓度 · 好友活跃与对话 Top">
-          <div className={css.metricGrid}>
-            <SkMetric label="好友总数" />
-            <SkMetric label="有消息往来" />
-            <SkMetric label="沉默好友(无消息)" />
-            <SkMetric label="有消息的群" />
-          </div>
-          <div className={css.topList}>
-            {[70, 55, 42, 32, 24].map((w, i) => (
-              <div key={i} className={css.topRow} aria-hidden="true">
-                <span className={css.topRank}>{i + 1}</span>
-                <SkLine width="90px" height={11} />
-                <div className={css.topTrack}><div className={css.skBarFill} style={{ width: `${w}%` }} /></div>
-                <SkLine width="40px" height={11} />
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* 朋友圈活跃 Top 20 + 内容构成/风险/健康 */}
-      <div className={css.cols}>
-        <Card title="朋友圈活跃 Top 20" extra={<span className={css.panelGo}>详情 →</span>}>
-          <div className={css.authors}>
-            {Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className={css.author} aria-hidden="true">
-                <span className={css.authorRank}>{i + 1}</span>
-                <span className={css.authorAvatarFallback}>?</span>
-                <SkLine width="86px" height={10} />
-                <SkLine width="34px" height={10} />
-              </div>
-            ))}
-          </div>
-        </Card>
-        <div className={css.colStack}>
-          <Card title="内容构成与资产">
-            <div className={css.skStack}>
-              <SkBar label="文本" width="86%" />
-              <SkBar label="图片" width="64%" />
-              <SkBar label="视频" width="44%" />
-              <SkBar label="链接/文件/卡片" width="32%" />
-              <SkBar label="系统消息" width="24%" />
-            </div>
-            <div className={`${css.catRow} ${css.catRowSpaced}`}>
-              <span className={css.catLabel}>资产</span>
-              <SkLine width="260px" height={9} />
-            </div>
-          </Card>
-          <Card title="风险与隐私提示" extra={<span className={css.panelGo}>详情 →</span>}>
-            <div className={css.riskRow}>
-              <span className={css.riskItem}>撤回消息 <SkLine width="36px" height={10} /></span>
-              <span className={css.riskItem}>转账/红包异常 <SkLine width="36px" height={10} /></span>
-              <span className={css.riskItem}>建议定期运行「隐私体检」扫描</span>
-            </div>
-          </Card>
-          <Card title="数据健康">
-            <div className={css.metricGrid}>
-              <SkMetric label="数据库文件" />
-              <SkMetric label="解密数据体积" />
-              <SkMetric label="数据可读性" />
-              <SkMetric label="最近活跃" />
-              <SkMetric label="WAL 待落库" />
-            </div>
-          </Card>
         </div>
       </div>
 
@@ -306,6 +216,9 @@ export function SkeletonOverview(): React.JSX.Element {
 export function OvIcon({ name }: { name: string }): React.JSX.Element {
   const p = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
   switch (name) {
+    case 'chat': return <svg {...p}><path d="M21 12a8.5 8.5 0 0 1-12.3 7.6L4 21l1.4-4.7A8.5 8.5 0 1 1 21 12Z" /></svg>
+    case 'message': return <svg {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
+    case 'group': return <svg {...p}><circle cx="9" cy="8" r="3.2" /><circle cx="17" cy="9" r="2.4" /><path d="M3 20c0-3.4 2.6-5.8 6-5.8s6 2.4 6 5.8M14.5 16.8c2.2-.4 4.7.7 5.5 3.2" /></svg>
     case 'world': return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3.5 3 14 0 18-3-4-3-14.5 0-18Z" /></svg>
     case 'trend': return <svg {...p}><path d="M3 20h18M4 15l4-4 4 3 5-6" /></svg>
     case 'heat': return <svg {...p}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M8 2v4M16 2v4M3 9h18" /></svg>
@@ -322,15 +235,13 @@ export function OvIcon({ name }: { name: string }): React.JSX.Element {
   }
 }
 
-/** 新总览统一卡片：图标 + 标题 + 操作 + 内容。 */
-export function OvSection({ icon, title, action, children, span, className }: {
+/** 新总览统一卡片：图标 + 标题 + 操作 + 内容（基于 kit `Card`，与其他页签同一套卡片外观）。 */
+export function OvSection({ icon, title, action, children, className }: {
   icon: string
   title: React.ReactNode
   action?: React.ReactNode
   children: React.ReactNode
-  /** 版式类名（`ovSpan*`）—— CSS Modules 的按键取值在类型上就是 `string | undefined`，
-   *  与 React 自己允许 `className` 为 undefined 是同一件事，所以这里不强求必有。 */
-  span?: string
+  /** 版式类名（Bootstrap `col-*`）—— 由调用点决定这张卡在栅格行里的位置 */
   className?: string
 }): React.JSX.Element {
   // 「折叠」按**标题**记进 localStorage：同一张卡在刷新/切页签之后仍是用户放下的样子。
@@ -348,24 +259,27 @@ export function OvSection({ icon, title, action, children, span, className }: {
     })
   }
   return (
-    // 用 filter+join 而不是模板串：模板串会把 undefined 拼成一个字面量 "undefined" 类名。
-    // `neon.card*` 是 2026-09-27 的玻璃拟态皮肤（另一份 CSS 模块，骨架仍由 css.ovCard* 决定）。
-    <section className={[css.ovCard, neon.card, span, className].filter(Boolean).join(' ')}>
-      <header className={css.ovCardHd + ' ' + neon.cardHd}>
-        <span className={css.ovIcon + ' ' + neon.cardIcon}><OvIcon name={icon} /></span>
-        <h3 className={css.ovTitle + ' ' + neon.cardTitle}>{title}</h3>
-        {action && <div className={css.ovAction}>{action}</div>}
-        <button
-          type="button"
-          className={neon.cardToggle}
-          aria-expanded={!collapsed}
-          onClick={toggle}
-          title={collapsed ? `展开「${key}」` : `折叠「${key}」`}
-        >
-          {collapsed ? '展开 +' : '折叠 —'}
-        </button>
-      </header>
-      <div className={css.ovCardBd + ' ' + neon.cardBd} hidden={collapsed}>{children}</div>
-    </section>
+    <div className={[css.ovCol, className].filter(Boolean).join(' ')}>
+      <Card
+        className={css.ovSectionCard}
+        title={<><span className={css.ovIcon}><OvIcon name={icon} /></span>{title}</>}
+        extra={(
+          <>
+            {action}
+            <button
+              type="button"
+              className={css.ovCollapse}
+              aria-expanded={!collapsed}
+              onClick={toggle}
+              title={collapsed ? `展开「${key}」` : `折叠「${key}」`}
+            >
+              {collapsed ? '展开 +' : '折叠 —'}
+            </button>
+          </>
+        )}
+      >
+        <div className={css.ovSectionBd} hidden={collapsed}>{children}</div>
+      </Card>
+    </div>
   )
 }

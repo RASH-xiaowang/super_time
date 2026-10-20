@@ -1,5 +1,6 @@
 
-import type { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import type { HarvestResult, HarvestStatus, ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WhisperStatus, WxcdnQuota } from '@deepseek-ai/dsh-wechat-data/types'
+import type { HarvestAction } from './use-original-harvest.ts'
 import { Select } from '../ui/kit.tsx'
 /**
  * 设置面板的五张流程卡片：检测账号 / 数据库密钥 / 图片密钥 / 图片解码 / 语音转写
@@ -16,6 +17,7 @@ import { AccountAvatar, MsgSlot, StatusSlot, WHISPER_MODEL_FALLBACK, fmtActive }
 import { acctCss, css, modelCss } from './settings-css.ts'
 import { Button, IconGlobeOutline14, IconPersonalizationOutline16, IconSparkle16, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clsx } from 'clsx'
+import { ImageAutoDownloadCard } from './image-autodownload-card.tsx'
 
 /** 检测账号 卡片（面板里的第 1 节）。 */
 export interface SettingsDetectSectionProps {
@@ -275,6 +277,19 @@ export interface SettingsImgDecodeSectionProps {
   setImgConcurrency: React.Dispatch<React.SetStateAction<number>>
   setImgDetailOpen: React.Dispatch<React.SetStateAction<boolean>>
   upgradeImgs: () => Promise<void>
+  /** 「原图自动收割」：监控微信 msg/attach，落盘即收。 */
+  harvestBusy: HarvestAction | null
+  harvestResult: HarvestResult | null
+  harvestStatus: HarvestStatus | null
+  originalHarvest: (action: HarvestAction) => Promise<void>
+  /** 「第三方原图服务」开关与额度（打包成一个对象，省调用点的行数）。 */
+  wxcdn: {
+    thirdPartyOriginal: boolean
+    wxcdnBusy: boolean
+    wxcdnQuota: { quota?: WxcdnQuota; error?: string } | null
+    toggleWxcdn: () => Promise<void>
+    refreshWxcdnQuota: () => Promise<void>
+  }
 }
 
 export function SettingsImgDecodeSection({
@@ -283,7 +298,9 @@ export function SettingsImgDecodeSection({
   imgUpgrading, setImgConcurrency,
   setImgDetailOpen, upgradeImgs,
   fetchOriginals, origBusy, origLimit, origPlan, origProgress, origResult, scanOriginals, setOrigLimit,
+  harvestBusy, harvestResult, harvestStatus, originalHarvest, wxcdn,
 }: SettingsImgDecodeSectionProps): React.JSX.Element {
+  const { thirdPartyOriginal, wxcdnBusy, wxcdnQuota, toggleWxcdn, refreshWxcdnQuota } = wxcdn
   /** 盘点报告里的「预计下载量」（XML 声明的下界）。 */
   const planMb = origPlan === null ? 0 : Math.round(origPlan.declaredBytes / 1024 / 1024)
   return (
@@ -379,6 +396,64 @@ export function SettingsImgDecodeSection({
               : undefined}
           />
           <div className={css.row}>
+            <span className={css.rowName}>第三方原图服务</span>
+            <span className={css.rowMeta} title="用消息里的 cdnbigimgurl 向 wxcdn.c3o.re 换原图（实测 6/6 成功，拿到真原图）。⚠️ 该服务不是腾讯官方，需要把本机的 all_users/config/global_config 发给它；按流量计费（Free 套餐 50 MB/天）。默认关闭。">按流量计费，默认关闭</span>
+            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={wxcdnBusy ? <span className={css.spin} /> : undefined} onClick={() => { void refreshWxcdnQuota() }} disabled={wxcdnBusy}>
+              {wxcdnBusy ? '查询中…' : '查额度'}
+            </Button>
+            <Button size="sm" variant={thirdPartyOriginal ? 'outline' : 'primary'} className={clsx(css.btnFx, css.btnFixed)} onClick={() => { void toggleWxcdn() }} disabled={wxcdnBusy}>
+              {thirdPartyOriginal ? '关闭' : '开启'}
+            </Button>
+          </div>
+          <div className={css.row}>
+            <span className={css.rowNote}>
+              {wxcdnQuota === null
+                ? (thirdPartyOriginal ? '已开启 · 点「查额度」看剩余流量' : '未开启 · 开启后本机没有原图的图片会自动向第三方服务请求')
+                : wxcdnQuota.error !== undefined
+                  ? `⚠️ ${wxcdnQuota.error}`
+                  : `套餐 ${wxcdnQuota.quota?.plan ?? '?'} · 剩余 ${String(Math.round((wxcdnQuota.quota?.remainingBytes ?? 0) / 1024 / 1024))} MB / ${String(Math.round((wxcdnQuota.quota?.limitBytes ?? 0) / 1024 / 1024))} MB`
+                    + (wxcdnQuota.quota?.resetsAt ? ` · ${new Date(wxcdnQuota.quota.resetsAt * 1000).toLocaleString('zh-CN')} 重置` : '')}
+            </span>
+          </div>
+          <div className={css.row}>
+            <span className={css.rowName}>自动收割原图</span>
+            <span className={css.rowMeta} title="监控微信的 msg/attach 目录：你在微信里点「查看原图」后，微信会把原图落盘成 _h.dat，这里立刻自动解进缓存。不联网、不碰凭据、不注入进程。没在微信里点开过的图，微信磁盘上本来就没有原图，这里也变不出来。">微信落盘即收，不联网</span>
+            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={harvestBusy === 'now' ? <span className={css.spin} /> : undefined} onClick={() => { void originalHarvest('now') }} disabled={harvestBusy !== null}>
+              {harvestBusy === 'now' ? '收割中…' : '立即收割'}
+            </Button>
+            {harvestStatus?.watching === true
+              ? <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={harvestBusy === 'stop' ? <span className={css.spin} /> : undefined} onClick={() => { void originalHarvest('stop') }} disabled={harvestBusy !== null}>
+                  {harvestBusy === 'stop' ? '停止中…' : '停止监控'}
+                </Button>
+              : <Button size="sm" variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={harvestBusy === 'start' ? <span className={css.spin} /> : undefined} onClick={() => { void originalHarvest('start') }} disabled={harvestBusy !== null}>
+                  {harvestBusy === 'start' ? '启动中…' : '开启自动收割'}
+                </Button>}
+          </div>
+          <div className={css.row}>
+            <span className={css.rowNote}>
+              {harvestStatus?.progress !== null && harvestStatus?.progress !== undefined
+                ? `⏳ 正在收割 ${String(harvestStatus.progress.done)}/${String(harvestStatus.progress.total)}`
+                  + ` · 成功 ${String(harvestStatus.progress.harvested)}`
+                  + (harvestStatus.progress.failed > 0 ? ` · 失败 ${String(harvestStatus.progress.failed)}` : '')
+                  + '（本机原图多时约需一分钟，可以离开这个页面，收割在后端继续）'
+                : harvestStatus === null
+                  ? '点「开启自动收割」后，你在微信里点开原图，这里会自动收进来。'
+                  : harvestStatus.watching
+                    ? `✅ 正在监控 · 本次已自动收割 ${String(harvestStatus.harvested)} 张`
+                      + (harvestStatus.failed > 0 ? ` · 失败 ${String(harvestStatus.failed)} 张` : '')
+                      + (harvestStatus.lastAt > 0
+                        ? ` · 最近一次 ${new Date(harvestStatus.lastAt).toLocaleTimeString('zh-CN')}（${harvestStatus.lastFile}）`
+                        : '')
+                    : `未开启监控 · 本次累计收割 ${String(harvestStatus.harvested)} 张`
+                      + (harvestStatus.failed > 0 ? ` · 失败 ${String(harvestStatus.failed)} 张` : '')
+                      + '（「立即收割」只扫一次，不持续监控）'}
+              {harvestResult !== null && harvestResult.harvested > 0
+                ? ` · 上次操作收进 ${String(harvestResult.harvested)} 张`
+                : ''}
+            </span>
+          </div>
+          <ImageAutoDownloadCard />
+          <div className={css.row}>
             <span className={css.rowNote}>✅ 朋友圈/聊天图片离线解码已支持（本地缓存 .dat 解密），wxgf 原图档会调本机微信解码库转码成可渲染图片；视频格式自动跳过。</span>
           </div>
         </div>
@@ -402,6 +477,8 @@ export interface SettingsVoiceSectionProps {
   voiceOpMsg: { kind: 'ok' | 'err'; text: string } | null
   whisperDevice: 'cpu' | 'gpu'
   whisperDirMsg: { kind: 'ok' | 'err'; text: string } | null
+  /** 写模型目录提示（「打开」按钮失败时报错用）。 */
+  setWhisperDirMsg: React.Dispatch<React.SetStateAction<{ kind: 'ok' | 'err'; text: string } | null>>
   whisperDownload: (m: { id: string; name: string }) => Promise<void>
   whisperDownloading: { model: string; file: string; received: number; total: number } | null
   whisperModel: string
@@ -417,7 +494,7 @@ export function SettingsVoiceSection({
   pickWhisperDir, refreshWhisper, setWhisperDevice,
   setWhisperModel, setWhisperModelsDir, setWhisperThreads,
   skipTranscribe, voiceOpMsg, whisperDevice,
-  whisperDirMsg, whisperDownload, whisperDownloading,
+  whisperDirMsg, setWhisperDirMsg, whisperDownload, whisperDownloading,
   whisperModel, whisperModelsDir, whisperStatus,
   whisperStatusLoading, whisperThreads, whisperTranscribing,
 }: SettingsVoiceSectionProps): React.JSX.Element {
@@ -476,7 +553,7 @@ export function SettingsVoiceSection({
             <span className={css.rowName}>模型目录</span>
             <Input className={css.input} value={whisperModelsDir} onChange={(e) => { setWhisperModelsDir(e.target.value) }} placeholder="留空使用默认目录（<项目>/wechat/whisper）" />
             <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void pickWhisperDir() }}>选择…</Button>
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { const d = whisperModelsDir.trim(); if (d) void apiOpenPath(d) }}>打开</Button>
+            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { const d = whisperModelsDir.trim(); if (d) void apiOpenPath(d).then((r) => { if (!r.ok) setWhisperDirMsg({ kind: 'err', text: '✗ ' + (r.error ?? '无法打开该目录') }) }).catch(() => { setWhisperDirMsg({ kind: 'err', text: '✗ 无法打开该目录' }) }) }}>打开</Button>
           </div>
           <MsgSlot
             placeholder="点击「选择…/下载」后，结果实时显示在这里"

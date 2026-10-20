@@ -182,6 +182,13 @@ export interface MomentsGeoPoint {
     lng: number;
     city: string;
     poi: string;
+    /**
+     * 国家 / 地区（XML 的 `<location country>`，原样保留，可能是英文如 `Thailand`）。
+     *
+     * 2026-10-17 新增：足迹地图改用 ECharts 世界地图渲染（与「数据总览」同一套），
+     * 需要把点聚成「国家 → 城市」的 `RegionNode` 树才能着色。没有它就只能按城市猜国家。
+     */
+    country: string;
 }
 /** Moments insights snapshot for an author (usually self). */
 export interface MomentsInsightsSnapshot {

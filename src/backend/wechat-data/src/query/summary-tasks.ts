@@ -264,13 +264,18 @@ export function listSummaryRecords(decryptedDir: string, taskId?: number): { ite
     if (taskId) {
       rows = db.prepare('SELECT * FROM summary_records WHERE task_id = ? ORDER BY created_at DESC LIMIT 50').all(taskId)
     } else {
-      rows = db.prepare('SELECT * FROM summary_records ORDER BY created_at DESC LIMIT 100').all()
+      // 2026-10-17：100 → 200。周期总结现在也落库（`taskId=0`），会和每日总结共用这张表；
+      // 100 条在"每天一份 + 每周/每月各一份"的节奏下只够看三个月。
+      rows = db.prepare('SELECT * FROM summary_records ORDER BY created_at DESC LIMIT 200').all()
     }
     db.close()
     const items = rows.map(r => ({
       id: Number(r['id'] ?? 0),
       taskId: Number(r['task_id'] ?? 0),
       groupUsername: cellStr(r['group_username'] ?? ''),
+      // 2026-10-17：`group_name` 之前漏读了 —— 类型里有这个字段，但映射时没取，
+      // 于是「总结阅览」里永远显示 username 而不是群名。
+      groupName: cellStr(r['group_name'] ?? ''),
       summaryDate: cellStr(r['summary_date'] ?? ''),
       summary: cellStr(r['summary'] ?? ''),
       messageCount: Number(r['message_count'] ?? 0),

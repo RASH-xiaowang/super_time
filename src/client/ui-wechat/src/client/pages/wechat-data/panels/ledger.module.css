@@ -1,19 +1,17 @@
-/* Funds ledger — NEON MATRIX 科技风（与总览/记录面板共用令牌）。 */
-.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
-
-.link {
-  background: none;
-  border: none;
-  color: var(--nm-cyan);
+/* 资金往来（月度汇总）— 微信灰阶 + 绿色主操作。
+ *
+ * 2026-10-18 布局重设计：把「固定内容」压到最小，把高度留给排行表。
+ * 2026-10-19 微信化：汇总数字收成「收入 / 支出 / 净额」3 项内联 KPI 条（共用 list-panel 的
+ * `.kpiBar`）；页头动作收成「月份选择 + 更多」；去渐变 / 玻璃 / 发光阴影。 */
+.notice {
   font-size: 12px;
-  cursor: pointer;
-  /* WCAG 2.2 SC 2.5.8：原 padding:0 使命中区只有 16px 高。该按钮无背景无边框，
-     因此加 padding/min-width 是**纯命中区扩展**，文字位置与观感不变。 */
-  padding: 4px 3px;
-  min-width: 24px;
-  text-align: left;
+  color: var(--nm-text-1);
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
 }
-.link:hover { text-decoration: underline; }
+
 .dirBadge {
   display: inline-block;
   padding: 2px 8px;
@@ -26,29 +24,175 @@
 .dirBadge[data-kind='in'] { color: var(--nm-success-text); border: 1px solid color-mix(in srgb, var(--nm-success) 30%, transparent); }
 .dirBadge[data-kind='out'] { color: var(--nm-danger-text); border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, transparent); }
 
-.rpStats { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.rpRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--nm-text-2); }
-.rpRow b { color: var(--nm-text-1); font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
-.warnList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+/* ── 根容器：固定高度 + 内部滚动，不再整页滚 ──────────────────────────
+ * 合并外壳（MergedSections）已把子面板包在确定高度的容器里（`.body > *` 是 flex:1），
+ * 这里只要 `height:100% + min-height:0` 就能拿到真实可用高度；`overflow:hidden` 让
+ * 「固定区 + 剩余区」的划分是封闭的 —— 页面不再出现「统计卡把表格顶出首屏」。 */
+.root {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--nm-panel-pad);
+  overflow: hidden;
+  color: var(--nm-text-1);
+}
+
+/* 页头紧凑化：页头是 `.root` 的第一个子元素（kit PanelHeader 根 div）。
+ * 只在本面板作用域内收 h2/p 的 UA 外边距与对齐，不动 kit 全局口径。 */
+.root > div:first-child { flex: 0 0 auto; align-items: center; }
+.root > div:first-child h2 { margin: 0; font-size: var(--nm-fs-lg); line-height: 1.35; }
+.root > div:first-child p { margin: 0; font-size: 11.5px; line-height: 1.45; }
+
+/* ── 主体：排行表（吃满剩余）+ 右栏（红包手气 / 异常提醒） ──────────── */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 284px;
+  gap: 8px;
+}
+/* 本地卡片：与 kit `.card` 同观感，但允许「表体自己滚」（kit Card 的 body 不接 flex 高度）。 */
+.rankCard,
+.miniCard {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  overflow: hidden;
+}
+.rankCard { min-height: 0; }
+.cardHd {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--nm-border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.cardMeta {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.rankScroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* 排行表行高：全局紧凑层把单元格收到 6px 10px 后，排行表仍因「方向徽标」撑到 36px
+   （density-final 里唯一未达 28–34 的两格）。这里只对排行榜单收纵向 padding 到 4px，
+   行高回到 32–33px；徽标/金额字号不动（可读性优先）。选择器含 .rankScroll 前缀以稳定
+   压过全局 `table[class*='_table_'] tbody tr td`（(0,1,3) → (0,2,3)）。 */
+.rankScroll :global(table[class*='_table_']) tbody tr td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.rail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+.miniCard { flex: 0 0 auto; }
+/* 红包手气：六项收成 3×2 小格（原先是 6 行、每行左右各一，占掉整张卡）。 */
+.rpGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 8px;
+  padding: 8px 10px 10px;
+}
+.rpItem { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.rpItem span {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rpItem b {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 异常提醒：吃掉右栏剩余高度，条目多时自己滚。 */
+.warnCard { flex: 1 1 auto; min-height: 88px; }
+.warnList {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+}
 .warn {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: flex-start;
-  border: 1px solid rgba(255, 200, 87, 0.25);
-  border-radius: var(--nm-r-md);
-  background: rgba(255, 200, 87, 0.06);
-  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-warning) 28%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-warning) 8%, transparent);
+  padding: 4px 8px;
 }
-.warnIcon { color: var(--nm-warning); }
-.warnBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.warnTitle { font-size: 12px; color: var(--nm-text-1); }
-.warnMeta { font-size: 11px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+/* 语义色只用一个小圆点，不再用 ⚠️ emoji 图标。 */
+.warnDot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--nm-warning);
+}
+.warnBody { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.warnTitle {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.warnMeta { font-size: 10.5px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+
+/* 窄窗：右栏落到排行下面，整体交给 body 自己滚（排行给最小高度，不再被压成一条）。 */
+@media (max-width: 1080px) {
+  .body { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .rankCard { min-height: 320px; }
+  .rail { overflow: visible; }
+}
 
 /* ── 首次统计的加载条 ────────────────────────────────────────────────
    只写一句"正在统计资金账本…"时，用户没法判断是卡住了还是在跑
    （后端是同步 SQLite，本页查询要排在总览的全量统计后面）。
-   这里给出：走秒 + 为什么可能偏慢 + 与真实布局同形的骨架。 */
+   这里给出：走秒 + 为什么可能偏慢；旋转指示由共用 ListSkeleton 提供。 */
+.loadingWrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .loadingBar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -60,16 +204,27 @@
   font-size: 12px;
   color: var(--nm-text-1);
 }
-.loadingSpin {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-  border-top-color: var(--nm-cyan);
-  animation: ledger-spin 0.9s linear infinite;
-}
-@keyframes ledger-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loadingSpin { animation: none; } }
 .loadingText { font-weight: 600; font-variant-numeric: tabular-nums; }
 .loadingHint { flex: 1 1 260px; min-width: 0; font-size: 11.5px; color: var(--nm-text-2); }
+
+/* ============================================================
+ * Wave 2（2026-10-18 响应式审计，38 tab × 6 视口）
+ *
+ * ① 单列档（≤1080）原用 `grid` + 定高：两个隐式行抢高度，`.rankCard`（min-height 320）
+ *    之后的行只剩 24.5px —— `.rail` 被压成一条缝，里面「红包手气」卡（内容 218px）
+ *    溢出后被祖先裁掉。改成 flex 列：排行卡 `flex: 1 1 0` + min-height 320（空间够就长高，
+ *    不够保持 320 且表格内滚），右栏按内容高；整体交给 `.body`（overflow-y:auto）滚动。
+ * ② 手机档（≤560）把「红包手气 / 异常提醒」摘要排到联系人排行**之前**：
+ *    它们是先扫一眼的汇总，手机阅读顺序应排在长表前。
+ * ============================================================ */
+@media (max-width: 1080px) {
+  .body { display: flex; flex-direction: column; }
+  .rankCard { flex: 1 1 0; min-height: 320px; }
+  .rail { flex: 0 0 auto; }
+  /* 右栏改成内容高后，「异常提醒」卡里的几十条警告会把整栏拉得很长（原桌面上它是
+     被定高 rail 约束、内部滚动）。单列档给它一个上限，警告多时仍自己内滚。 */
+  .warnCard { max-height: 320px; }
+}
+@media (max-width: 560px) {
+  .rail { order: -1; }
+}

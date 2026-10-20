@@ -4,28 +4,33 @@
  * 六区骨架（docs/CHATS-INFO-WECHAT-ALIGN.html §3）：
  *  区⓪ 头部（标题 16/600 + 关闭 ≥32×32，保持）→ 区① 成员网格（头像 48 · 名单行省略 · 群主标 ·
  *  ＋ 死控件）→ 区② 资料行（群聊名称 / 群公告 / 群主 / 群成员数，标签 12 值 14 · 1px 分隔 · 48px 行）
- *  → 区③ 只读开关行（免打扰 / 置顶 / 存通讯录 / 显成员昵称）→ 区⑥ 底部动作位（导出贴底）。
+ *  → 区⑥ 底部动作位（导出贴底）。
  *
  * 切这一屏的原始理由不变：只在群聊且打开时才存在、加载中/失败/有数据三态互斥、搜索无结果必须有空态
  * （审计 P0-3）、成员头像懒挂载（P2-4）、行结构「标签左 / 值右」（P1-8）。
  * 那颗**故意的死控件**也不变：网格末尾「＋ 添加」方块为布局保真保留，刻意不是 <button>、
- * 不挂 onClick、aria-disabled + title 说明（L13）；只读开关同一条纪律（chats-info-rows.tsx）。
+ * 不挂 onClick、aria-disabled + title 说明（L13）。
+ * 原区③ 四条只读开关行（免打扰 / 置顶 / 存通讯录 / 显成员昵称）已按用户要求移除：它们全是
+ * 「本机只读」的死控件，四行排在一起既不给动作也不给真相，只占抽屉半屏。
  *
  * 「查看更多 / 收起」口径收在 `chats-member-view.ts#hasMoreMembers`（搜索态拿过滤结果比上限，
  * 不再出现「展开后按钮消失、收不回来」的洞）。
  */
+import { useEffect, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
 import { ErrorState, LoadingState } from '../ui/kit.tsx'
 import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { LazyMount } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
-import { InfoRow, ReadOnlySwitch } from './chats-info-rows.tsx'
+import { InfoRow } from './chats-info-rows.tsx'
 import { hasMoreMembers, memberMoreLabel, showsAddTile } from './chats-member-view.ts'
+import { TaskCreateDialog } from './task-create-dialog.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
+import taskCss from './task-create.module.css'
 
 export interface ChatsGroupInfoViewProps {
   annCanExpand: boolean
@@ -88,6 +93,10 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
     open, onExport, setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember,
     showMemberProfile, shownMembers,
   } = props
+  /** 底部动作位「新建任务」的弹窗开关（只在点开时渲染，抽屉本身不关心它）。 */
+  const [taskOpen, setTaskOpen] = useState(false)
+  // 抽屉关掉时顺手收掉弹窗：本组件常驻在渲染树里，不重置的话下次开抽屉会直接弹出旧弹窗。
+  useEffect(() => { if (!open) setTaskOpen(false) }, [open])
   if (!open || !isGroup) return null
   return (
     <div
@@ -201,21 +210,38 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
                 <InfoRow label="群主" value={ownerName(groupInfo)} />
               )}
               <InfoRow label="群成员数" value={String(memberTotal)} />
-              {/* 区③ 只读开关行：状态取自微信本地库镜像；本应用不写回（L13 同款纪律）。 */}
-              <InfoRow label="消息免打扰" switchOn={groupInfo.settings.muted} />
-              <InfoRow label="置顶聊天" switchOn={groupInfo.settings.pinned} />
-              <InfoRow label="保存到通讯录" switchOn={groupInfo.settings.savedToContacts} />
-              <InfoRow label="显示群成员昵称" switchOn={groupInfo.settings.showMemberNickname} />
             </div>
           </div>
         )}
-        {/* 区⑥ 底部动作位：全宽贴底（官方底部按钮槽；D7） */}
-        <div className={csscards.groupExport}>
+      </div>
+      {/* 区⑥ 底部动作位：固定在抽屉底部的独立 footer，**不再放进滚动内容区**。
+          2026-10-19 用户截图显示它压在成员名/「查看更多」上：滚动区里 auto 边距只在
+          内容不足一屏时才把按钮推到底，内容一高就失效。现在它是 `groupInfo` 的第三个
+          直接子元素（header / 滚动 body / footer），任何内容高度下都不与资料行重叠。 */}
+      <div className={cssshell.groupExport}>
+        {/* 2026-10-19：动作位从「只有导出」变成「新建任务 + 导出」。新建任务依赖群成员表，
+            所以群信息还没读到时禁用（而不是弹一个选不了人的弹窗）。 */}
+        <div className={taskCss.drawerActions}>
+          <button
+            type="button"
+            className={`${csscards.groupExportBtn} ${csscards.groupExportPrimary}`}
+            disabled={groupInfo === null}
+            title={groupInfo === null ? '群信息加载中，暂不能新建任务' : '新建任务：关键词命中时记录并回调'}
+            onClick={() => { setTaskOpen(true) }}
+          >
+            新建任务
+          </button>
           <button type="button" className={csscards.groupExportBtn} onClick={onExport}>
             导出聊天记录
           </button>
         </div>
       </div>
+      {taskOpen && groupInfo !== null && (
+        <TaskCreateDialog
+          session={{ username: groupInfo.username, displayName: groupInfo.name, type: 'group' }}
+          onClose={() => { setTaskOpen(false) }}
+        />
+      )}
     </div>
   )
 }

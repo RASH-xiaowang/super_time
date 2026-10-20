@@ -3,7 +3,7 @@
  *
  * 现场日志 `getRemoteImages` 127 次 / 均 14s / 峰值 86.5s，与「最坏 40 张 ÷ 6 并发 × 12s 超时 ≈ 80s」
  * 吻合 —— 单次请求要背 40 张的**最坏超时**，任何一张慢就把整批拖到分钟级。降到 20 后最坏值砍半，
- * 而调用方（`drainMedia` 的 `MEDIA_BATCH = 8`）本来就在分批，单次 20 张仍有 2 批余量。
+ * 而调用方（`drainMedia` 的 `MEDIA_BATCH`，2026-10-16 起为 4）本来就在分批，单次 20 张仍有 5 批余量。
  */
 export declare const MAX_IMAGES_PER_CALL = 20;
 /**

@@ -33,6 +33,16 @@ function bridge(): ElectronApi | null {
 const b = bridge()
 export const isDesktop: boolean = typeof b?.wechat?.call === 'function'
 
+/**
+ * 是不是「打开网页」交接态（2026-10-19）。
+ *
+ * 交接态由 `handoff-boot.ts` 在 capabilities 求值前立标记并装原生代理桥；它**不是**桌面端
+ * （`isDesktop` 仍为 false，业务调用照旧走 HTTP + SSE），但界面的权限判据要与桌面端一致：
+ * 选目录、导出、截图、ClawBot 写侧等全部放开。
+ */
+export const desktopEquivalent: boolean = typeof window !== 'undefined'
+  && window.__SUPERTIME_FULL__ === true
+
 /** 是不是手机/浏览器会话（走 HTTP + SSE，而不是 IPC）。 */
 export const isBrowser: boolean = !isDesktop
 
@@ -48,28 +58,31 @@ export const capabilities = Object.freeze({
   isDesktop,
   /** 浏览器 / 手机端。 */
   isBrowser,
+  /** 交接态（浏览器里临时拥有桌面端权限；标题栏/窗口控制仍归浏览器）。 */
+  desktopEquivalent,
   /** 自绘标题栏（拖拽 + 最小化 / 全屏 / 关闭）。浏览器有自己的标签页与地址栏。 */
   titlebar: isDesktop,
   /** 窗口控制（最小化 / 全屏切换 / 关闭）。 */
   windowControls: isDesktop,
-  /** 原生目录选择对话框。手机上没有「本机目录」这个概念（数据在电脑上）。 */
-  dirPicker: isDesktop && typeof b?.pickDirectory === 'function',
+  /** 原生目录选择对话框。交接态由主进程代为弹出（服务端 `/api/native/*`）。 */
+  dirPicker: (isDesktop || desktopEquivalent) && typeof b?.pickDirectory === 'function',
   /** 面板截图（`window:capture-panel`）。 */
-  capturePanel: isDesktop && typeof b?.capturePanel === 'function',
+  capturePanel: (isDesktop || desktopEquivalent) && typeof b?.capturePanel === 'function',
   /** 在资源管理器中显示（`shell:show-item`）。 */
-  shellOpen: isDesktop && typeof b?.showInFolder === 'function',
+  shellOpen: (isDesktop || desktopEquivalent) && typeof b?.showInFolder === 'function',
   /**
    * 许可证界面。
    *
-   * 浏览器态为 false：授权是**绑机器**的，由服务端在每次调用时把关
+   * 普通浏览器态为 false：授权是**绑机器**的，由服务端在每次调用时把关
    * （`call-gates.js` 的 `authorizeCall`），手机侧再查一次既查不到也没意义 ——
    * 查到的是「手机这台设备没有许可证」，那会把一个已经授权过的会话挡在门外。
+   * 交接态例外：浏览器就是那台机器的操作面，许可证状态与桌面端同一份。
    */
-  license: isDesktop && typeof b?.license?.status === 'function',
-  /** 诊断面板（`diag:*`）：导出的是本机日志与配置，远程端不该拿。 */
-  diag: isDesktop && typeof b?.diag?.logInfo === 'function',
-  /** 检查更新（`update:*`）：更新的是电脑上那个安装，手机点了没用。 */
-  update: isDesktop && typeof b?.update?.state === 'function',
+  license: (isDesktop || desktopEquivalent) && typeof b?.license?.status === 'function',
+  /** 诊断面板（`diag:*`）：交接态导出的是这台电脑的日志与配置。 */
+  diag: (isDesktop || desktopEquivalent) && typeof b?.diag?.logInfo === 'function',
+  /** 检查更新（`update:*`）：交接态更新的是这台电脑上的安装。 */
+  update: (isDesktop || desktopEquivalent) && typeof b?.update?.state === 'function',
 })
 
 /**

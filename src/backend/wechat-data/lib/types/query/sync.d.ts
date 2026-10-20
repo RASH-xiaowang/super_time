@@ -1,6 +1,7 @@
 export { decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts';
-/**
- * Cached raw-dir entries; refreshed when the directory signature changes.
+import { fullDecryptFile } from './sync-decrypt.ts';
+export { fullDecryptFile };
+/** Cached raw-dir entries; refreshed when the directory signature changes.
  *
  * P1-1：这里原先 `catch { return [] }` —— 目录读不动（被占用 / 权限 / 网络盘断了 / 它是
  * 个文件）与「目录真的是空的」压成同一个值。后果不是少几行日志：`syncChangedShards`
@@ -11,7 +12,6 @@ export interface DirListing {
     files: string[];
     error?: string;
 }
-export declare function fullDecryptFile(dbPath: string, outPath: string, encKey: Buffer): Promise<number>;
 /** Per-shard state: raw mtimes of the main db and its wal. */
 /**
  * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
@@ -125,6 +125,8 @@ export declare function syncMessageShard(rawMsgDir: string, decMsgDir: string, f
     fullPages: number;
     walPages: number;
     via: 'wal' | 'full' | 'tail' | 'diff';
+    rejected?: 'wal' | 'tail' | 'page-diff';
+    rejectReason?: string;
 }>;
 /**
  * Scan raw shards and sync every changed one. The main file changing forces a

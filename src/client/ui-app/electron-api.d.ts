@@ -10,6 +10,8 @@ import type { ElectronApi } from '@deepseek-ai/dsh-client-ui-wechat/host'
 declare global {
   interface Window {
     electronAPI?: ElectronApi
+    /** 交接态标记（由 handoff-boot 在 capabilities 求值前设置；普通页面恒 undefined）。 */
+    __SUPERTIME_FULL__?: boolean
   }
 }
 

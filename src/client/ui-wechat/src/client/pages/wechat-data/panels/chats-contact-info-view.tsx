@@ -24,10 +24,12 @@ import { ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
 import { infoRefreshApplies } from './chats-info-live.ts'
 import { Avatar } from './chats-support.tsx'
 import { InfoRow, SectionTitle } from './chats-info-rows.tsx'
+import { TaskCreateDialog } from './task-create-dialog.tsx'
 import { fmtDateSec } from '../utils/format.ts'
 import css from './chats-contact-info.module.css'
 import cssrows from './chats-rows.module.css'
 import cssshell from './chats-shell.module.css'
+import taskCss from './task-create.module.css'
 
 export interface ChatsContactInfoViewProps {
   /** 抽屉是否打开。 */
@@ -48,7 +50,10 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   const [data, setData] = useState<Contact360Snapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [taskOpen, setTaskOpen] = useState(false)
   const titleId = useId()
+  // 抽屉关掉时收掉弹窗：本组件常驻渲染树，不重置的话下次开抽屉会直接弹出旧弹窗。
+  useEffect(() => { if (!open) setTaskOpen(false) }, [open])
 
   /*
    * Esc 关闭 + 焦点陷阱（R7 补齐，审计 P1-7 的同族缺口）。
@@ -151,11 +156,16 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
               )}
             </div>
 
-            {/* 区⑥ 底部动作位：全宽贴底（官方底部按钮槽；D7） */}
+            {/* 区⑥ 底部动作位：全宽贴底（官方底部按钮槽；D7）。2026-10-19 起并排「新建任务」。 */}
             <div className={css.exportRow}>
-              <button type="button" className={css.exportAction} onClick={onExport}>
-                导出聊天记录
-              </button>
+              <div className={taskCss.drawerActions}>
+                <button type="button" className={`${css.exportAction} ${css.exportActionPrimary}`} onClick={() => { setTaskOpen(true) }}>
+                  新建任务
+                </button>
+                <button type="button" className={css.exportAction} onClick={onExport}>
+                  导出聊天记录
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -169,6 +179,7 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
           </div>
         )}
       </div>
+      {taskOpen && <TaskCreateDialog session={session} onClose={() => { setTaskOpen(false) }} />}
     </div>
   )
 }

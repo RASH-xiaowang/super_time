@@ -87,7 +87,7 @@ function RankList({ hint, rows, max }: {
 }
 
 function RankCard({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
-  return <OvSection span={css.regionSpan} icon="world" title={title}>{children}</OvSection>
+  return <OvSection className="col-12" icon="world" title={title}>{children}</OvSection>
 }
 
 /**

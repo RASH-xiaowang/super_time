@@ -4,6 +4,8 @@ export type AsyncImageResult = {
     url?: string;
     format?: string;
     thumb?: boolean;
+    /** 相对 decoded_images 的落盘路径（如 `wxid_x/ab12.jpg`）：桌面端拼 wechat-media://，手机端忽略。 */
+    file?: string;
     error?: string;
 };
 /**

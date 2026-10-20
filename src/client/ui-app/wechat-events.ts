@@ -43,6 +43,15 @@ export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boole
   // 微信问答的**流式回答增量**：payload 是 { id, text }，text 是「已生成的全文」
   // （不是片段），渲染端整体替换即可。
   { from: 'wechat-ask/delta', to: 'dsh-wechat-ask-delta', detail: true },
+  // 微信问答的**思考过程增量**（2026-10-16）：payload 是 { id, text }，text 是
+  // 「已生成的思考全文」。与 delta 分开两条流 —— 模型可能先吐一大段 reasoning
+  // 再吐正文，混在一条里前端就没法把「思考过程」单独折叠展示。
+  { from: 'wechat-ask/reasoning', to: 'dsh-wechat-ask-reasoning', detail: true },
+  // 微信问答的**阶段事件**（2026-10-16）：payload 是
+  // { id, key, label, status: 'running'|'done'|'skipped', detail? }。
+  // 界面据此显示「🔍 检索本机记录 · 召回 128 条」这样的过程行 ——
+  // 没有它就只能等全部跑完再一次性平铺，没有「过程感」。
+  { from: 'wechat-ask/stage', to: 'dsh-wechat-ask-stage', detail: true },
   // 长任务（导出 / 加密备份）进度：{ jobId, phase, done, total }。
   // 回调与 AbortSignal 都过不了传输层，所以进度只能这样推 —— 少中继这一条，
   // 界面上就只有一个「导出中…」的按钮在空转。
@@ -55,6 +64,9 @@ export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boole
   { from: 'clawbot/message', to: 'dsh-clawbot-message', detail: true },
   // ClawBot 绑定状态迁移（申请二维码 / 绑定成功 / 解绑）
   { from: 'clawbot/binding-changed', to: 'dsh-clawbot-binding-changed', detail: true },
+  // 任务触发扫描新建了记录 / 投递了回调（2026-10-19 提速）：payload { created, dispatched }。
+  // 面板靠它回源；没有这一条就只能等下一次微信同步事件（约 10s）才看到新记录。
+  { from: 'task-center/updated', to: 'dsh-wechat-task-center-updated', detail: true },
 ]
 
 /** 按名字查表（表很小，线性查即可；不做 Map 是为了让它保持可读的字面量）。 */

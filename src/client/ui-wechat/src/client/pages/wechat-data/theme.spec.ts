@@ -78,7 +78,7 @@ const rule = ruleText(rawCss, `:root.${THEME_TRANSITION_CLASS} {`)
 
 /** 模块级主题状态是全局的，用例之间要复位（node 下不碰 localStorage，无磁盘副作用）。 */
 beforeEach(() => {
-  if (getThemeMode() !== 'dark') setThemeMode('dark')
+  if (getThemeMode() !== 'light') setThemeMode('light')
 })
 
 describe('时长 / 缓动 / 触发条件：观感契约', () => {
@@ -106,8 +106,8 @@ describe('时长 / 缓动 / 触发条件：观感契约', () => {
 })
 
 describe('无 DOM 环境（node / SSR）下的切换：同步生效、不留异步尾巴', () => {
-  it('默认深色', () => {
-    expect(getThemeMode()).toBe('dark')
+  it('默认浅色（2026-10-18 用户要求启动默认浅色）', () => {
+    expect(getThemeMode()).toBe('light')
   })
 
   it('切换会同步生效并通知订阅者', () => {
@@ -115,8 +115,8 @@ describe('无 DOM 环境（node / SSR）下的切换：同步生效、不留异�
     const off = subscribeThemeMode(() => { seen.push(getThemeMode()) })
     toggleThemeMode()
     // 同步：调用返回时订阅者已经收到新值（没有等动画的地方）
-    expect(getThemeMode()).toBe('light')
-    expect(seen).toEqual(['light'])
+    expect(getThemeMode()).toBe('dark')
+    expect(seen).toEqual(['dark'])
     off()
   })
 
@@ -131,14 +131,14 @@ describe('无 DOM 环境（node / SSR）下的切换：同步生效、不留异�
   it('同一个模式重复设置不会重复通知（一次点击只触发一次过渡）', () => {
     const fn = vi.fn()
     const off = subscribeThemeMode(fn)
-    setThemeMode('dark')
+    setThemeMode(getThemeMode())
     expect(fn).not.toHaveBeenCalled()
     off()
   })
 
   it('非法模式被忽略', () => {
     setThemeMode('sepia' as unknown as 'dark')
-    expect(getThemeMode()).toBe('dark')
+    expect(getThemeMode()).toBe('light')
   })
 
   it('没有 document 时不会残留「稍后再提交」的异步副作用', async () => {
@@ -437,16 +437,25 @@ describe('不许把 View Transitions 那套再加回来（静默退化成「没�
   })
 })
 
-describe('三处主题按钮的接线', () => {
+describe('主题按钮的接线', () => {
   const onboarding = readFileSync(
     join(HERE, '..', '..', '..', '..', '..', 'ui-app', 'onboarding', 'OnboardingShell.tsx'),
     'utf8',
   )
 
-  it('侧栏那枚', () => {
-    const src = codeOf('WechatDataPanel.tsx')
-    expect(src).toContain('toggleThemeMode')
-    expect(src).not.toContain('revealOriginFromEvent')
+  /**
+   * ⚠️ 2026-10-17：**侧栏那枚迁到了标题栏右上角**（窗口控制按钮前）。
+   * 判据跟着搬：侧栏里**不许**再有它（两处会分叉），改断言宿主标题栏接线。
+   */
+  it('标题栏那枚（原侧栏，2026-10-17 迁来）', () => {
+    const panel = codeOf('WechatDataPanel.tsx')
+    expect(panel, '主题按钮又回到侧栏了（已迁到标题栏右上角）').not.toContain('toggleThemeMode')
+    expect(panel).not.toContain('revealOriginFromEvent')
+    // 宿主侧：静态 HTML 放按钮 + ui-entry 接线（只放按钮不接线 = 死控件）。
+    const entry = readFileSync(join(HERE, '..', '..', '..', '..', '..', 'ui-app', 'ui-entry.tsx'), 'utf8')
+    expect(entry, '宿主没给标题栏主题按钮接线').toContain('toggleThemeMode')
+    expect(entry, '宿主没订阅主题变化（别处改了图标不同步）').toContain('subscribeThemeMode')
+    expect(entry).not.toContain('revealOriginFromEvent')
   })
 
   it('图谱控制栏那枚', () => {

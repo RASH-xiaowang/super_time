@@ -8,6 +8,7 @@
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, OriginalBatchResult, OriginalFetchPlan, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts'
 import { GatewayVoiceOps } from './gateway-voice-ops.ts'
+import { readDataRevision, type DataRevision } from './query/sync-status.ts'
 
 export abstract class GatewayConfigOps extends GatewayVoiceOps {
 
@@ -52,6 +53,10 @@ export abstract class GatewayConfigOps extends GatewayVoiceOps {
    * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
    * is the join point with the social graph: the panel draws an edge from the
    * note to its source chat instead of leaving knowledge nodes floating.
+   *
+   * `sourceKind: 'file'`（2026-10-17 新增）marks a note distilled from a knowledge-base
+   * file's summary/body. 改前文件摘要只存在文件元数据里、不会变成笔记 ——
+   * 「文件 → 笔记 → 图谱」这条链路是断的（导入并解析了 195 块，笔记库却永远是空的）。
    * @param kbId - owning knowledge base for a new note / expected owner for an update.
    *   Title uniqueness is checked **within** that kb, not across the whole store.
    * @param options - Note fields; title is required and unique in that kb (case-insensitive).
@@ -63,9 +68,11 @@ export abstract class GatewayConfigOps extends GatewayVoiceOps {
     title: string
     body?: string
     tags?: string[] | string
-    sourceKind?: 'manual' | 'ask'
+    sourceKind?: 'manual' | 'ask' | 'file'
     sourceUsername?: string
     sourceQuestion?: string
+    /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+    sourceFileId?: number
   }): NoteMutationResult {
     return this.tasksRemotes().saveNote(kbId, options)
   }
@@ -229,6 +236,19 @@ export abstract class GatewayConfigOps extends GatewayVoiceOps {
   @Remote('getDbStatus')
   getDbStatus(): DbStatusSnapshot {
     return this.configRemotes().getDbStatus()
+  }
+
+
+  /**
+   * 实时同步修订（纯内存读，1s 级轮询可用）。
+   *
+   * 聊天面板的轮询用 `revision` 判断「这一秒有没有新数据落地」，用 `messageChanged`
+   * 判断「值不值得真去查一次消息增量」—— 把每秒一次消息 SQL 降成每秒一次内存读。
+   * @returns DataRevision: revision / updatedAt / shards / messageChanged。
+   */
+  @Remote('getDataRevision')
+  getDataRevision(): DataRevision {
+    return readDataRevision()
   }
 
 

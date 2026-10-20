@@ -1,20 +1,28 @@
 /**
- * 存储空间分析 — 仪表盘版：总占用 Hero + 指标卡 + 分类环形图 + 会话/发送者
- * 排行 + 大文件清单。数据经 DSH 后端 Remote（message_resource.db 联表）。
+ * 存储 — 只读盘点：媒体资源总占用、分类分布、会话/发送者排行与大文件清单。
+ * 数据经 DSH 后端 Remote（message_resource.db 联表）。与「媒体」分段共用页头语言
+ * （标题 + ≤2 动作）与内联 KPI 条；环形图用微信绿单色阶。
  */
 import { useEffect, useState } from 'react'
 import { apiGetStorageStats, readRenderCache, writeRenderCache } from '../api.ts'
 import css from './storage.module.css'
 import type { StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, CellPrimary, clickableKey, DataTable, LinkButton, Mono, PanelHeader } from '../ui/kit.tsx'
+import { Card, CellPrimary, clickableKey, DataTable, LinkButton, LoadingState, Mono, PanelHeader } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
+import { AssetKpiBar } from './files-cell.tsx'
+import { PanelAction } from './asset-ui.tsx'
 import { fmtBytes, fmtSharePct } from '../utils/format.ts'
 import { useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
 
 type StorageStats = StorageSnapshot
 
-const DONUT_COLORS = ['#22d3ee', '#60a5fa', '#4ade80', '#fbbf24', '#f87171', '#c084fc', '#f472b6', '#2dd4bf', '#94a3b8']
+/**
+ * 环形图色阶：微信绿单色由深到浅（取主题里已有的 alpha 档）。
+ * 不再用多色霓虹 —— 分类之间靠图例文字区分，颜色只表达「占比大小」。
+ */
+const DONUT_ALPHA = [70, 50, 40, 35, 25, 20, 16, 14, 12, 10] as const
+const catColor = (i: number): string => `var(--nm-cyan-${String(DONUT_ALPHA[i % DONUT_ALPHA.length] ?? 70)})`
 
 /**
  * Render the storage panel.
@@ -51,8 +59,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
   useEffect(() => { void load() }, [])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
-  // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
-  // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
+  // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费。
   useWechatDataUpdated(() => { if (!stats) void load() })
 
   const cats = (stats?.categories ?? []).slice().sort((a, b) => b.size - a.size)
@@ -63,16 +70,14 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
   const totalCount = stats?.total_count ?? 0
   const maxChat = Math.max(1, ...chats.map(c => c.size))
   const maxSender = Math.max(1, ...senders.map(c => c.size))
-  const topCat = cats[0]
   const topChat = chats[0]
 
-  // 环形图 conic-gradient（按分类大小占比）
+  // 环形图 conic-gradient（按分类大小占比；单色阶，由大到小）
   let acc = 0
   const stops = cats.map((c, i) => {
     const start = acc
     acc += total > 0 ? (c.size / total) * 100 : 0
-    const color = DONUT_COLORS[i % DONUT_COLORS.length] ?? '#22d3ee'
-    return `${color} ${start}% ${acc}%`
+    return `${catColor(i)} ${String(start)}% ${String(acc)}%`
   }).join(', ')
 
   /** 大文件清单列定义（闭包持有 total 与跳转回调）。 */
@@ -116,65 +121,30 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
   return (
     <div className={css.panel}>
       <PanelHeader
-        title="存储空间分析"
+        title="存储"
         desc="来自消息资源库的只读统计（不含本地数据库本身）"
         actions={(
-          <button type="button" className={css.btn} onClick={() => { void load() }} disabled={loading}>
-            {loading ? '统计中…' : '刷新'}
-          </button>
+          <PanelAction onClick={() => { void load() }} disabled={loading}>{loading ? '统计中…' : '刷新'}</PanelAction>
         )}
       />
 
       {loading && stats === null && (
-        <div className={css.skeletonWrap}>
-          <div className={kitCss.emptyInline}>
-            {`正在统计存储占用…已用 ${elapsed}s · 首次统计要汇总 message_resource 全表，若刚启动可能偏慢，请稍候`}
-          </div>
-          <div className={css.skelHero}><div className={css.skelBlock} /><div className={css.skelBlock} /></div>
-          <div className={css.grid}>
-            <section className={css.card}>
-              <h3 className={css.cardTitle}>分类分布</h3>
-              <div className={css.skelLine} /><div className={css.skelLine} /><div className={css.skelLine} />
-            </section>
-            <section className={css.card}>
-              <h3 className={css.cardTitle}>会话占用排行</h3>
-              <div className={css.skelLine} /><div className={css.skelLine} /><div className={css.skelLine} />
-            </section>
-            <section className={css.card}>
-              <h3 className={css.cardTitle}>发送者排行</h3>
-              <div className={css.skelLine} /><div className={css.skelLine} />
-            </section>
-          </div>
-        </div>
+        <LoadingState
+          variant="timed"
+          since={elapsed}
+          label="正在统计存储占用…"
+          hint="首次统计要汇总 message_resource 全表，若刚启动可能偏慢，请稍候"
+        />
       )}
-      {error && <div className={kitCss.error} role="alert">⚠️ 存储数据读取失败（{error}）</div>}
+      {error && <div className={kitCss.error} role="alert">存储数据读取失败（{error}）</div>}
       {!error && stats !== null && (
         <>
-          {/* Hero 总览卡 */}
-          <div className={css.hero}>
-            <div className={css.heroMain}>
-              <span className={css.heroValue}>{fmtBytes(total)}</span>
-              <span className={kitCss.textMeta}>媒体资源总占用</span>
-            </div>
-            <div className={css.heroStats}>
-              <div className={css.heroStat}>
-                <span className={css.heroStatValue}>{totalCount.toLocaleString()}</span>
-                <span className={kitCss.textCaptionTrunc}>资源总数</span>
-              </div>
-              <div className={css.heroStat}>
-                <span className={css.heroStatValue}>{fmtBytes(totalCount > 0 ? total / totalCount : 0)}</span>
-                <span className={kitCss.textCaptionTrunc}>平均单项</span>
-              </div>
-              <div className={css.heroStat}>
-                <span className={css.heroStatValue}>{topCat ? fmtSharePct(topCat.size, total) : 0}%</span>
-                <span className={kitCss.textCaptionTrunc}>{topCat?.label ?? '—'}</span>
-              </div>
-              <div className={css.heroStat}>
-                <span className={css.heroStatValue}>{topChat ? fmtSharePct(topChat.size, total) : 0}%</span>
-                <span className={kitCss.textCaptionTrunc}>最多会话 · {topChat?.name || topChat?.username || '—'}</span>
-              </div>
-            </div>
-          </div>
+          <AssetKpiBar items={[
+            { label: '媒体资源总占用', value: fmtBytes(total) },
+            { label: '资源总数', value: totalCount.toLocaleString() },
+            { label: '平均单项', value: fmtBytes(totalCount > 0 ? total / totalCount : 0) },
+            { label: '最多会话', value: topChat ? `${fmtSharePct(topChat.size, total)}% · ${topChat.name || topChat.username || '—'}` : '—' },
+          ]} />
 
           <div className={kitCss.cardGrid}>
             {/* 分类环形图 */}
@@ -184,7 +154,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
                 <div className={css.donutLegend}>
                   {cats.map((c, i) => (
                     <div key={c.label} className={css.legendRow}>
-                      <span className={css.legendDot} style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] ?? '#22d3ee' }} />
+                      <span className={css.legendDot} style={{ background: catColor(i) }} />
                       <span className={css.legendLabel}>{c.label}</span>
                       <span className={css.legendMeta}>{c.count.toLocaleString()} 项 · {fmtBytes(c.size)} · {fmtSharePct(c.size, total)}%</span>
                     </div>
@@ -204,7 +174,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
                     {...(onOpenChat ? clickableKey(() => { onOpenChat(c.username) }) : {})}
                     title={`${name}\n点击打开会话`}>
                     <span className={css.barLabel}>{name}</span>
-                    <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.size / maxChat) * 100}%` }} /></div>
+                    <div className={css.barTrack}><div className={css.barFill} style={{ width: `${String((c.size / maxChat) * 100)}%` }} /></div>
                     <span className={css.barValue}>{fmtBytes(c.size)} · {fmtSharePct(c.size, total)}%</span>
                   </div>
                 )
@@ -217,7 +187,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
               {senders.map(c => (
                 <div key={`${c.username}_${c.name}_${c.count}`} className={css.barRow} title={c.name || c.username || '(未知)'}>
                   <span className={css.barLabel}>{c.name || c.username || '(未知)'}</span>
-                  <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.size / maxSender) * 100}%` }} /></div>
+                  <div className={css.barTrack}><div className={css.barFill} style={{ width: `${String((c.size / maxSender) * 100)}%` }} /></div>
                   <span className={css.barValue}>{fmtBytes(c.size)} · {fmtSharePct(c.size, total)}%</span>
                 </div>
               ))}

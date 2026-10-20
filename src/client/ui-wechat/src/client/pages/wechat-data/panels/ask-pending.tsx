@@ -10,12 +10,30 @@
  * 已经有增量时就展示正在写的正文（尾部光标表示还在写），那句「正在分析」在这时已经过时；
  * 而「停止生成」在两种情况下都要在，否则用户只能等它跑完。
  */
+import { AskProcess } from './AskProcess.tsx'
+import type { AskStage } from './use-ask.ts'
 import css from './ask.module.css'
 
-/** 生成中的展示：流式正文 / 兜底说明 + 「停止生成」。 */
-export function AskPending({ streamText, onStop }: { streamText: string; onStop: () => void }): React.JSX.Element {
+/** 生成中的展示：过程时间线 + 流式正文 / 兜底说明 + 「停止生成」。 */
+export function AskPending({ streamText, streamReasoning, streamStages, onStop }: {
+  streamText: string
+  /** 生成中的思考全文（2026-10-16）。 */
+  streamReasoning?: string
+  /** 生成中的阶段列表（2026-10-16）：过程时间线的实时数据源。 */
+  streamStages?: AskStage[]
+  onStop: () => void
+}): React.JSX.Element {
+  const hasProcess = (streamStages?.length ?? 0) > 0 || (streamReasoning ?? '').trim() !== ''
   return (
     <>
+      {/* 过程时间线（2026-10-16）：**实时**反映后端跑到哪一步。
+          改造前这里是一句静态文案「正在分析问题意图 → 检索本机记录 → 综合生成回答…」，
+          它不随实际进度变化 —— 后端跑到哪一步它都一样，用户看不出卡在哪。 */}
+      {hasProcess && (
+        <div className={css.chatAi}>
+          <AskProcess stages={streamStages} reasoning={streamReasoning} streaming />
+        </div>
+      )}
       {streamText
         ? (
           <div className={css.chatAi}>
@@ -28,7 +46,7 @@ export function AskPending({ streamText, onStop }: { streamText: string; onStop:
         : (
           <div className={css.chatPending}>
             <span className={css.chatDots} />
-            正在分析问题意图 → 检索本机记录 → 综合生成回答…
+            {hasProcess ? '正在生成回答…' : '正在分析问题意图 → 检索本机记录 → 综合生成回答…'}
           </div>
         )}
       {/* 停止生成：取消走后端 Remote cancelAsk（jobId 就是本轮的 streamId），

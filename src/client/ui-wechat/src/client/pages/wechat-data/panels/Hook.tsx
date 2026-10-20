@@ -23,7 +23,9 @@ export function HookPanel({ onNavigate, embedded = false }: {
   onNavigate?: (tab: string) => void
   embedded?: boolean
 } = {}): React.JSX.Element {
-  const blocked = desktopOnlyGate('hook'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定必须在所有 hooks 之后（见函数末尾的 `blocked` 分支）。
+  // 放在 hooks 之前会让 hook 数量随能力表变化而变，React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   /* 2026-10-03 推广批次 3：cfg 改用共用 useFreshData —— 打开即查最新（不再预填缓存），
      成功写回缓存；失败才回退缓存并由 hook 在 error 里标注「以下为本地缓存（可能不是最新）」。 */
   const fetchCfg = useCallback(() => apiGetWechatConfig(), [])
@@ -51,9 +53,15 @@ export function HookPanel({ onNavigate, embedded = false }: {
 
   const hasKeys = Boolean(cfg && (cfg.key_format || cfg.db_dir))
 
+  // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
+  const blocked = desktopOnlyGate('hook')
+  if (blocked !== null) return blocked
+
   return (
     <div className={embedded ? css.panelEmbedded : css.panel}>
-      <PanelHeader title="原图能力自检" desc="本地解码 · 无注入 / 无桥接" />
+      {/* 微信化：嵌进设置弹窗时不再画页头 —— 节名由左导航表达。 */}
+      {!embedded && <PanelHeader title="原图能力自检" desc="本地解码 · 无注入 / 无桥接" />}
+      {embedded && <div className={kitCss.textCaption}>本地解码 · 无注入 / 无桥接</div>}
       <div className={css.scroll}>
         {/* 2026-09-30 精简：原来这里是「图片如何本地解码？」整段科普 + 三步流程图，
             用户要求砍掉科普类内容 —— 压成一行结论，链路细节留在 docs/ 与代码注释里。 */}

@@ -26,7 +26,7 @@ import { withDb, withWritableDb } from '../db-open.ts'
 export function defaultBinding(slot: number = DEFAULT_CLAWBOT_SLOT): ClawbotBinding {
   return {
     id: 0, slot, status: 'unbound', qrToken: null, qrExpiresAt: null,
-    wxid: null, userName: null, avatar: null, boundAt: null, unboundAt: null,
+    wxid: null, userName: null, label: null, avatar: null, boundAt: null, unboundAt: null,
     createdAt: 0, updatedAt: 0,
   }
 }
@@ -54,6 +54,7 @@ function toBinding(r: Record<string, unknown>): ClawbotBinding {
     qrExpiresAt: num(r['qr_expires_at']),
     wxid: str(r['wxid']),
     userName: str(r['user_name']),
+    label: str(r['label']),
     avatar: str(r['avatar']),
     boundAt: num(r['bound_at']),
     unboundAt: num(r['unbound_at']),
@@ -62,7 +63,29 @@ function toBinding(r: Record<string, unknown>): ClawbotBinding {
   }
 }
 
-const SELECT_COLUMNS = 'id, slot, status, qr_token, qr_expires_at, wxid, user_name, avatar, bound_at, unbound_at, created_at, updated_at'
+const SELECT_COLUMNS = 'id, slot, status, qr_token, qr_expires_at, wxid, user_name, label, avatar, bound_at, unbound_at, created_at, updated_at'
+
+/**
+ * 读路径的**列自愈**：库已存在时先补一次列（幂等），再读。
+ *
+ * 为什么读路径也要补（2026-10-16 真机踩到）：`ensureClawbotSchema` 原先只在**写路径**调用，
+ * 而 `SELECT_COLUMNS` 是写死的列名 —— 老库（升级前建的）缺 `label` 列时，
+ * `SELECT … label …` 直接抛 `no such column: label`，界面显示成
+ * 「实例列表读取失败：绑定列表读取失败：no such column: label」。
+ * 用户什么都没做错，只是升级了版本 —— 而**读**是打开面板的第一件事，写路径的自愈根本轮不到。
+ *
+ * 代价可忽略：`ensureColumns` 先 `PRAGMA table_info` 查一遍，列齐了就一行 SQL 都不发。
+ * 失败**不抛**（读路径的纪律：读不到要如实说，但不能因为补列失败就整个读不了）——
+ * 补列失败时照常往下读，让真正的 SELECT 错误自己浮上来。
+ * @param decryptedDir - 解密数据根。
+ */
+function healColumns(decryptedDir: string): void {
+  try {
+    withWritableDb(clawbotDbPath(decryptedDir), (db) => { ensureClawbotSchema(db) })
+  } catch (e) {
+    console.warn('[clawbot] 读路径补列失败（继续尝试读）：' + (e instanceof Error ? e.message : String(e)))
+  }
+}
 
 /** 读某个 slot 的最新一行（一 slot 一行；万一被手工清空则回落到该 slot 的默认行，不抛）。 */
 function readLatest(db: DatabaseSync, slot: number): ClawbotBinding {
@@ -100,6 +123,7 @@ export interface BindingRead {
  */
 export function readBinding(decryptedDir: string, slot: number = DEFAULT_CLAWBOT_SLOT): BindingRead {
   if (!clawbotDbExists(decryptedDir)) return { binding: defaultBinding(slot) }
+  healColumns(decryptedDir)
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => ({ binding: readLatest(db, slot) }))
   } catch (e) {
@@ -119,6 +143,7 @@ export function readBinding(decryptedDir: string, slot: number = DEFAULT_CLAWBOT
  */
 export function readBindings(decryptedDir: string): { bindings: ClawbotBinding[], readError?: string } {
   if (!clawbotDbExists(decryptedDir)) return { bindings: [] }
+  healColumns(decryptedDir)
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => ({
       bindings: (db.prepare(`SELECT ${SELECT_COLUMNS} FROM clawbot_binding ORDER BY slot ASC, id ASC`).all() as Array<Record<string, unknown>>).map(toBinding),
@@ -221,6 +246,34 @@ export function unbindBinding(decryptedDir: string, slot: number = DEFAULT_CLAWB
   })
 }
 
+/**
+ * 给实例起别名（`label`；2026-10-16）。
+ *
+ * 与 `completeBinding` / `unbindBinding` **刻意分开**：那两条是绑定状态机的一部分
+ * （会清凭证、改 status），而别名是纯用户偏好 —— 它必须活过重新绑定，也不该因为
+ * 解绑而消失。所以这里只动 `label` 与 `updated_at` 两列。
+ *
+ * 归一：首尾空白去掉；空串 / 全空白 ⇒ 存 `NULL`（=「没起别名」，界面回落到昵称）。
+ * 长度上限 40 字符（超出截断而不是抛错 —— 别名是展示用的，截断比拒绝更友好）。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @param label - 新别名（空串 = 清除别名）。
+ * @returns 落库后的绑定行。
+ * @throws 实例不存在时抛可读中文（调用方按 message 展示）。
+ */
+export function renameBinding(decryptedDir: string, slot: number, label: string): ClawbotBinding {
+  const s = Math.max(Math.floor(slot), 1)
+  const trimmed = label.trim().slice(0, 40)
+  return withWritableDb(clawbotDbPath(decryptedDir), (db) => {
+    ensureClawbotSchema(db)
+    const exists = db.prepare('SELECT 1 AS x FROM clawbot_binding WHERE slot = ? LIMIT 1').get(s)
+    if (!exists) throw new Error(`实例 ${s} 不存在（别名只能挂在已建的实例上）`)
+    db.prepare('UPDATE clawbot_binding SET label = ?, updated_at = ? WHERE slot = ?')
+      .run(trimmed === '' ? null : trimmed, Date.now(), s)
+    return readLatest(db, s)
+  })
+}
+
 /** 会话凭证（iLink 绑定确认后由服务端下发；只进 worker 内部）。 */
 export interface BindingCredentials {
   botToken: string
@@ -252,6 +305,7 @@ export interface BindingInternalRead {
 export function readBindingInternal(decryptedDir: string, slot: number = DEFAULT_CLAWBOT_SLOT): BindingInternalRead {
   const none = { binding: defaultBinding(slot), credentials: null, syncBuf: '', sendContextToken: '' }
   if (!clawbotDbExists(decryptedDir)) return none
+  healColumns(decryptedDir)
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => toInternal(readLatestRow(db, slot)))
   } catch (e) {
@@ -296,6 +350,38 @@ export function saveSendContextToken(decryptedDir: string, token: string, slot: 
 function readLatestRow(db: DatabaseSync, slot: number): Record<string, unknown> {
   const row = db.prepare('SELECT ' + SELECT_COLUMNS + ', bot_token, ilink_bot_id, ilink_user_id, base_url, sync_buf, send_context_token FROM clawbot_binding WHERE slot = ? ORDER BY id DESC LIMIT 1').get(slot) as Record<string, unknown> | undefined
   return row ?? {}
+}
+
+/**
+ * 读**全部** slot 的 iLink 机器人 id（`ilink_bot_id`；2026-10-17 补全实例信息）。
+ *
+ * 为什么单独开一个函数而不是并进 {@link readBindings}：`ilink_bot_id` 住在**凭证列组**里，
+ * 而 `SELECT_COLUMNS` 是「公开列」白名单 —— 把凭证列并进去等于把 `bot_token` 也一起
+ * 带进渲染层快照（那正是本仓反复强调不许发生的事）。这里只挑**一个非敏感列**出来，
+ * 让实例卡能显示「这个实例挂在哪个 bot 上」。
+ *
+ * `ilink_bot_id` 是**公开标识**（bot 的编号），不是密钥：真正的密钥是 `bot_token`，
+ * 它仍然只走 {@link readBindingInternal}。未绑定 / 老库无此列 ⇒ 该 slot 不出现在结果里。
+ * @param decryptedDir - 解密数据根。
+ * @returns `slot → botId` 映射（读失败返回空映射，不抛 —— 它是展示增强，不该拖垮实例列表）。
+ */
+export function readBotIds(decryptedDir: string): Record<number, string> {
+  if (!clawbotDbExists(decryptedDir)) return {}
+  try {
+    return withDb(clawbotDbPath(decryptedDir), (db) => {
+      const rows = db.prepare('SELECT slot, ilink_bot_id FROM clawbot_binding WHERE ilink_bot_id IS NOT NULL').all() as Array<{ slot?: number, ilink_bot_id?: string }>
+      const out: Record<number, string> = {}
+      for (const r of rows) {
+        const slot = Number(r.slot ?? 0)
+        const id = typeof r.ilink_bot_id === 'string' ? r.ilink_bot_id : ''
+        if (slot > 0 && id !== '') out[slot] = id
+      }
+      return out
+    })
+  } catch (e) {
+    console.warn('[clawbot] 机器人 id 读取失败（实例卡少显示一项）：' + (e instanceof Error ? e.message : String(e)))
+    return {}
+  }
 }
 
 /** 原始记录 → 内部读结果（脏值收敛：身份三项缺一即 null；baseurl 允许空串 = 缺省主机）。 */

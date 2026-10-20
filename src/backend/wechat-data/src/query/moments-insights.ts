@@ -7,7 +7,8 @@ import { withDb, withDbAsync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MomentsGeo, MomentsGeoPoint, MomentsInsightsSnapshot, MomentsInteractorRow, MomentsTopItems } from '../types.ts'
-import { parseSnsLikesComments, parseSnsXml } from './moments.ts'
+import { parseSnsLikesComments, parseSnsXml, type MomentEntry } from './moments.ts'
+import { momentsArchivePath, readArchivedInsightRows } from './moments-archive.ts'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 
@@ -187,7 +188,7 @@ async function computeGeo(db: DatabaseSync): Promise<MomentsGeo> {
       }
       if (usable) {
         points += 1
-        pointList.push({ lat, lng, city, poi })
+        pointList.push({ lat, lng, city, poi, country })
       }
     }
     return {
@@ -199,6 +200,92 @@ async function computeGeo(db: DatabaseSync): Promise<MomentsGeo> {
     }
   } catch {
     return empty
+  }
+}
+
+/**
+ * 从归档 payload 算洞察（含已经被删除的帖子）。
+ *
+ * 为什么不是复用 `computeGeo`：那条路重新解析线上 XML；归档 payload 里已经带
+ * `city/country/location/lat/lng`，直接聚合即可，也不需要再开一次 sns.db。
+ * @param rows - 归档明细。
+ * @param topItems - 提醒清单（只能来自线上表）。
+ * @param author - 作者过滤（回填快照）。
+ * @returns 洞察快照。
+ */
+function computeArchiveInsights(
+  rows: ReturnType<typeof readArchivedInsightRows>,
+  topItems: MomentsTopItems,
+  author?: string,
+): MomentsInsightsSnapshot {
+  let posts = 0
+  let likes = 0
+  let comments = 0
+  const likers = new Map<string, { username: string; nickname: string; count: number }>()
+  const commenters = new Map<string, { username: string; nickname: string; count: number }>()
+  const monthly = new Map<string, number>()
+  const now = new Date()
+  const today: Array<{ tid: string; text: string; ts: number; author: string }> = []
+  const cityCount = new Map<string, number>()
+  const countryCount = new Map<string, number>()
+  const placeCount = new Map<string, { count: number; city: string; lat: number; lng: number }>()
+  let points = 0
+  const pointList: MomentsGeoPoint[] = []
+  for (const row of rows) {
+    let entry: MomentEntry
+    try { entry = JSON.parse(row.payload) as MomentEntry } catch { continue }
+    posts += 1
+    likes += entry.likes?.length ?? 0
+    comments += entry.comments?.length ?? 0
+    for (const like of entry.likes ?? []) addInteractor(likers, like.username, like.nickname)
+    for (const cm of entry.comments ?? []) addInteractor(commenters, cm.username, cm.nickname)
+    const ts = entry.ts || row.ts
+    if (ts > 0) {
+      const d = new Date(ts * 1000)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      monthly.set(key, (monthly.get(key) ?? 0) + 1)
+      if (d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+        today.push({ tid: row.tid, text: entry.text, ts, author: row.username })
+      }
+    }
+    const city = entry.city ?? ''
+    const country = entry.country ?? ''
+    const poi = entry.location ?? ''
+    const lat = Number(entry.lat ?? 0)
+    const lng = Number(entry.lng ?? 0)
+    const usable = (lat !== 0 || lng !== 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180
+    if (city) cityCount.set(city, (cityCount.get(city) ?? 0) + 1)
+    if (country) countryCount.set(country, (countryCount.get(country) ?? 0) + 1)
+    if (poi) {
+      const cur = placeCount.get(poi) ?? { count: 0, city, lat: usable ? lat : 0, lng: usable ? lng : 0 }
+      cur.count += 1
+      placeCount.set(poi, cur)
+    }
+    if (usable) {
+      points += 1
+      pointList.push({ lat, lng, city, poi, country })
+    }
+  }
+  return {
+    author: author ?? '',
+    posts,
+    likes,
+    comments,
+    likedBy: sortedTop(likers, 10),
+    commenters: sortedTop(commenters, 10),
+    monthly: Array.from(monthly.entries())
+      .map(([month, count]) => ({ month, count }))
+      .sort((a, b) => a.month.localeCompare(b.month)),
+    today: today.slice(0, 20).sort((a, b) => b.ts - a.ts),
+    topItems,
+    geo: {
+      points,
+      cities: [...cityCount.entries()].map(([city, count]) => ({ city, count })).sort((a, b) => b.count - a.count || a.city.localeCompare(b.city)),
+      countries: [...countryCount.entries()].map(([country, count]) => ({ country, count })).sort((a, b) => b.count - a.count || a.country.localeCompare(b.country)),
+      places: [...placeCount.entries()].map(([name, v]) => ({ name, city: v.city, count: v.count, lat: v.lat, lng: v.lng })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 10),
+      pointList,
+    },
+    updatedAt: Math.floor(Date.now() / 1000),
   }
 }
 
@@ -215,6 +302,8 @@ export async function queryMomentsInsights(decryptedDir: string, author?: string
   const sig = [
     dbPath === null ? '' : fileSigOf(dbPath),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    // 2026-10-19：洞察改为「归档优先」，归档库变了（新帖/合并互动）要失效缓存。
+    fileSigOf(momentsArchivePath(decryptedDir)),
   ].join('|')
   // 2026-09-28：同步 `cachedBySig` → async 版。冷算实测 228ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
@@ -229,6 +318,22 @@ async function computeMomentsInsights(decryptedDir: string, author?: string): Pr
     updatedAt: Math.floor(Date.now() / 1000),
   }
   const dbPath = snsDb(decryptedDir)
+  // 归档优先（2026-10-19）：好友删掉的动态仍要计入发布/互动/月度/地理。
+  // 提醒清单只能来自线上表，所以这里单独算它；即使 sns.db 整个不在，归档仍能出洞察。
+  const archivedRows = readArchivedInsightRows(decryptedDir, author)
+  if (archivedRows.length > 0) {
+    let topItems: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
+    if (dbPath !== null) {
+      try {
+        topItems = await withDbAsync(dbPath, async (db) => {
+          const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
+          const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
+          return tidCol === '' ? topItems : computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
+        })
+      } catch { /* 提醒清单失败不影响归档洞察 */ }
+    }
+    return computeArchiveInsights(archivedRows, topItems, author)
+  }
   if (dbPath === null) return empty
   let posts = 0
   let likes = 0

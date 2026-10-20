@@ -1,306 +1,51 @@
-/* WeChat data overview — NEON MATRIX redesign.
-   Glass cards on a deep-space backdrop, neon cyan/purple gradients,
-   glowing hover states, mono digits for data. */
+/* 数据总览 —— 微信官方定调（2026-10-19）
+ *
+ * 原则（见 docs/UI-WECHAT-REDESIGN-PLAN.md §1）：
+ *   · 白底卡片 + 1px 边框 + 8px 圆角；无渐变、无发光、无毛玻璃、无装饰动画
+ *   · 主色（--nm-cyan，已由 Lead 改为微信绿）只用于数值/选中/主按钮
+ *   · 数字层级统一：KPI 18px / 卡内主数字 16px / 辅助 11–12px
+ *
+ * 版式由 Bootstrap `row g-2` / `col-*` 承担（Wave D3 起），本文件只放
+ * ① 卡片头部/正文的微调 ② 内容类（图表/列表/热力/地图/骨架）。
+ */
 
-.root {
-
-  --dsh-scrollbar-thumb:       var(--dsw-alias-scrollbar-bg-l2);
-  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
-
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 100%;
-  height: auto;
-  overflow-y: auto;
-  padding: var(--nm-panel-pad);
-  box-sizing: border-box;
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
-}
-/* flex 容器中卡片默认会因 overflow:hidden 被压缩为 0 高度，
-   这里禁止子元素收缩，保证世界地图等大卡片始终完整可见。 */
-.root > * {
-  flex-shrink: 0;
-  min-height: auto;
-}
-.root > [class*='panelHeader'],
-.root > [class*='panelBody'] {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 1480px;
-  margin-inline: auto;
-}
+/* ── 页头动作 ─────────────────────────────────────────────── */
 .refresh {
-  padding: 6px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  background: var(--nm-bg-card);
   font-size: 12px;
   cursor: pointer;
   color: var(--nm-text-2);
-  transition: all 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 .refresh:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
-}
-.refresh:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
-/* R4 删除：本份的 `.error` —— 唯二调用点已收编（错误提示 → kit 的 ErrorState；
-   `notice` 提示 → kit 的 .emptyInline，它本就不是错误语义）。全仓零引用后删除。 */
-/* 第 97 轮删除：旧「快捷入口」区块的遗留类（`.quickGrid` / `.quickCard` / `.quickCard:hover` /
-   `.quickBody` / `.quickTitle` / `.quickArrow`）—— 该区块已被 `.ovHero*` 取代，全仓零引用、
-   也没有动态拼类名；`.quickIcon` 仍被骨架屏使用，保留。 */
-.quickIcon { font-size: 16px; flex-shrink: 0; }
-
-/* ── 双栏面板 ── */
-.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.panelGo {
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--nm-cyan);
-  font-size: 12px;
-  cursor: pointer;
-  opacity: 0.8;
-  transition: opacity 0.15s;
-}
-.panelGo:hover { opacity: 1; text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 40%, transparent); }
-
-/* ── 分类柱状图 ── */
-.catList { display: flex; flex-direction: column; gap: 10px; }
-/* 单个分类项：标签行 + 条形轨道。
-   此前 Overview.tsx 三处引用了 css.cat，但本模块只定义了 .catList/.catRow ——
-   undefined 的 className 让"标签行"与下方条形之间失去间距（两者直接贴在一起）。
-   注意 .cat 是 .catList 的【子项】，不是容器本身，故不能改成 .catList。 */
-.cat { display: flex; flex-direction: column; gap: 6px; }
-.catRow { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
-/* 第 95 轮：骨架屏里竖排若干 SkBar（原来写在 Overview.tsx 的行内 style 里）。 */
-.skStack { display: flex; flex-direction: column; gap: 12px; }
-.catRowSpaced { margin-top: 10px; }
-.catLabel { font-weight: 600; color: var(--nm-text-1); }
-.catMeta { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
-.bar {
-  height: 8px;
-  border-radius: var(--nm-r-xs);
-  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
-  overflow: hidden;
-  margin-top: 4px;
-}
-.barFill {
-  height: 100%;
-  border-radius: var(--nm-r-xs);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  transition: width 0.4s;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
-}
-
-/* ── 撤回统计 ── */
-.revoke { display: flex; flex-direction: column; gap: 4px; }
-.revokeValue {
-  font-size: 26px;
-  font-weight: 800;
   color: var(--nm-text-1);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--nm-font-mono, monospace);
 }
-.revokeNote { font-size: 11px; color: var(--nm-text-2); margin: 4px 0 0; line-height: 1.5; }
+.refresh:disabled { opacity: 0.5; cursor: default; }
 
-/* ── 活跃作者（垂直列表） ── */
-.authors { display: flex; flex-direction: column; gap: 8px; }
-.author {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-  color: var(--nm-text-1);
-  cursor: pointer;
-  font-size: 12px;
-  text-align: left;
-  transition: all 0.15s;
-}
-.author:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border-color: var(--nm-border-hover);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-.authorRank { font-weight: 800; color: var(--nm-cyan); width: 18px; flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.authorName { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.authorPosts { color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-
-/* ── 洞察数据（metric/hours/top） ── */
-.metricGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-bottom: 12px; }
-.metric {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border-radius: var(--nm-r-md);
-}
-.metricValue {
-  font-size: 20px;
-  font-weight: 800;
-  color: var(--nm-text-1);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--nm-font-mono, monospace);
-}
-.hourBars { display: flex; align-items: flex-end; gap: 4px; height: auto; min-height: 92px; margin-top: 6px; }
-.hourCol { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; height: 100%; justify-content: flex-end; }
-.hourFill {
-  width: 100%;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--nm-cyan) 60%, transparent), color-mix(in srgb, var(--nm-purple) 35%, transparent));
-  border-radius: 4px 3px 0 0;
-  transition: height 0.3s;
-}
-.hourFill[data-hot] { background: linear-gradient(180deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
-.hourLabel { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
-
-.topList { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.topRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.topRank { width: 18px; font-weight: 800; color: var(--nm-cyan); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.topName { width: 130px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
-.topTrack { flex: 1; height: 6px; border-radius: var(--nm-r-xs); background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); overflow: hidden; }
-.topFill { height: 100%; border-radius: var(--nm-r-xs); background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
-.topCount { width: 72px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
-
-/* ── 响应式 ── */
-@media (max-width: 900px) {
-  /* 第 97 轮删除：`.quickGrid` 的窄屏覆盖 —— 该区块已被 `.ovHero*` 取代（快捷入口网格没了）。 */
-  .cols { grid-template-columns: 1fr; }
-  /* `.authors` 的窄屏覆盖已移除：它原先把列数钉成 2 列，而现在是
-     `repeat(auto-fill, minmax(190px, 1fr))` —— 窄屏下 auto-fill 自己就会降列，
-     钉死 2 列反而会在 300px 宽时把每格压到 150px，名字被截断。 */
-}
-
-/* ── 太空舱 / capsule ── */
-
-.trendGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-}
-.trendCell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-}
-.deltaUp { color: var(--nm-success); font-size: 11px; font-weight: 700; }
-.deltaDown { color: var(--nm-danger); font-size: 11px; font-weight: 700; }
-.calendarHeatmap {
-  width: 100%;
-  height: auto;
-  min-height: 200px;
-  max-height: 400px;
-  margin-top: 4px;
-}
-
-.riskRow { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--nm-text-2); }
-.riskItem b { color: var(--nm-danger); font-family: var(--nm-font-mono, monospace); }
-
-/* topRow / author rows are now buttons for deep links */
-.topRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  width: 100%;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: var(--nm-dense-r);
-  background: transparent;
-  cursor: pointer;
-  color: inherit;
-  text-align: left;
-}
-.topRow:hover { background: color-mix(in srgb, var(--nm-cyan) 7%, transparent); }
-.author {
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-  padding: 6px 8px;
-}
-.author:hover { background: color-mix(in srgb, var(--nm-cyan) 8%, transparent); border-color: var(--nm-border-hover); }
-
-@media (max-width: 900px) {
-  .trendGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .calendarHeatmap { height: 220px; }
-}
-
-/* ── 刷新反馈 ── */
-.refresh { display: inline-flex; align-items: center; gap: 6px; }
+/* 加载指示器：保留旋转（功能性反馈），颜色走灰阶 */
 .spinner {
   display: inline-block;
   width: 12px;
   height: 12px;
-  border: 2px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-  border-top-color: var(--nm-cyan);
+  border: 2px solid var(--nm-border-hover);
+  border-top-color: var(--nm-text-2);
   border-radius: 50%;
   animation: ov-rotate 0.7s linear infinite;
   vertical-align: -2px;
   flex-shrink: 0;
-  corner-shape: round;
 }
 @keyframes ov-rotate { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
-/* 顶部扫描线必须是「覆盖层」而非流内元素：
-   .root 是 flex column + gap:14px，scanbar 若留在流内（原 position:sticky），
-   refreshing 切换时会插入 2px 高度 + 14px gap，把下方内容整体向下推 16px
-   —— 表现为点击「刷新」后面板突然向下抖一下。改为 absolute 后插入/移除
-   不参与布局，且 .root 已是 position:relative 的定位上下文。 */
-.scanbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  z-index: 5;
-  border-radius: var(--nm-r-xs);
-  background: linear-gradient(90deg, transparent, var(--nm-cyan), var(--nm-purple), transparent);
-  animation: ov-scan 1.4s ease-in-out infinite;
-}
-@keyframes ov-scan {
-  0% { transform: translateX(-100%); opacity: 0.2; }
-  50% { transform: translateX(0); opacity: 0.9; }
-  100% { transform: translateX(100%); opacity: 0.2; }
-}
-
-/* 刷新中的「呼吸」提示。
-   原先写作 .updating .card / .panel / .pod —— 这三个类来自已被取代的旧卡片设计，
-   在 Overview.tsx 中零使用（实测全文件没有 css.card/css.panel/css.pod），
-   因此刷新时动画永远不生效，用户得不到任何反馈。现改为真实存活的三个承载块：
-   `.ovCard`（OvSection 卡片）、`.metric`（指标格）。
-   第 98 轮：原先还列了 `.ovHeroStat` —— 指标条换成霓虹牌之后它也成了死选择器，
-   于是刷新动画在首屏那一块又失效一次（**同一个缺陷第三次被"换皮"引进**：改视觉时
-   忘了同步这份"存活类名"清单）。现在只留真活着的两个，并在下方补了一条判据性的注释。 */
-.updating .ovCard,
-.updating .metric {
-  animation: ov-update 1.8s ease-in-out infinite;
-}
-@keyframes ov-update {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.82; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .updating .ovCard,
-  .updating .metric { animation: none; }
-}
-
-/* ── 导出下拉 ── */
+/* ── 「更多 ▾」菜单（原导出菜单）──────────────────────────── */
 .exportWrap { position: relative; }
 .exportBackdrop { position: fixed; inset: 0; z-index: 40; }
 .exportMenu {
@@ -308,494 +53,210 @@
   right: 0;
   top: calc(100% + 6px);
   z-index: 41;
-  min-width: 150px;
-  padding: 6px;
-  border: 1px solid var(--nm-border-hover);
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--nm-shadow-card);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .exportItem {
   display: block;
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: var(--nm-dense-r);
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
 }
-.exportItem:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  color: var(--nm-cyan);
-}
+.exportItem:hover { background: var(--nm-bg-hover); }
+.exportItem:disabled { opacity: 0.5; cursor: default; }
 
-/* 朋友圈活跃作者头像（26px：紧凑化后与行高、两列网格匹配；
-   fallback 必须同尺寸，否则懒加载前后行高会跳） */
-.authorAvatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  border: 1px solid var(--nm-border-hover);
-  background: var(--nm-bg-card);
-  corner-shape: round;
-}
-.authorAvatarFallback {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 800;
-  color: var(--nm-cyan);
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border: 1px solid var(--nm-border-hover);
-  corner-shape: round;
-}
-
-/* ── Hero 布局 ── */
-.heroStats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-/* 第 97 轮删除：`.heroLeft` / `.heroRight`（旧 hero 两栏布局的遗留，已被 `.ovHero*` 取代、零引用）。 */
-.colStack { display: flex; flex-direction: column; gap: 12px; }
-
-/* ── 骨架屏 ── */
-.skeleton {
+/* ── 卡片外壳（kit Card + Bootstrap 栅格列分离）─────────────── */
+.ovCol {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  animation: ov-skeleton-in 0.25s ease;
-}
-.skLine {
-  display: block;
-  height: 12px;
-  border-radius: var(--nm-r-sm);
-  background-color: var(--nm-bg-hover);
-  background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 25%, color-mix(in srgb, var(--nm-cyan) 12%, transparent) 37%, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 63%);
-  background-size: 200% 100%;
-  animation: ov-shimmer 1.4s ease-in-out infinite;
-}
-.skeletonStat {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: var(--nm-bg-card);
-  overflow: hidden;
-}
-.skeletonMap {
-  height: 220px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: var(--nm-bg-card);
-  position: relative;
-  overflow: hidden;
-}
-.skeletonMap::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 25%, color-mix(in srgb, var(--nm-cyan) 10%, transparent) 37%, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 63%);
-  background-size: 200% 100%;
-  animation: ov-shimmer 1.4s ease-in-out infinite;
-}
-.heatmapSkeleton {
-  display: grid;
-  grid-template-columns: repeat(30, 1fr);
-  gap: 4px;
-}
-.heatmapSkeleton i {
-  display: block;
-  aspect-ratio: 1;
-  border-radius: var(--nm-r-xs);
-  background: var(--nm-bg-hover);
-  animation: ov-pulse-block 2s ease-in-out infinite;
-}
-.skBarFill {
-  display: block;
-  height: 100%;
-  border-radius: var(--nm-r-pill);
-  background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 16%, transparent), color-mix(in srgb, var(--nm-cyan) 10%, transparent));
-  background-size: 200% 100%;
-  animation: ov-shimmer 1.4s ease-in-out infinite;
-}
-.hourSk {
-  width: 100%;
-  border-radius: 6px 6px 0 0;
-}
-@keyframes ov-pulse-block {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.85; }
-}
-.skLoadingText {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--nm-text-2);
-  font-size: 12px;
-}
-@keyframes ov-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-@keyframes ov-skeleton-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
-}
-
-/* 新版总览：统一大小卡片式 dashboard */
-/* 第 98 轮删除：「资产指标条」整套 `.ovHero*`（约 90 行）—— 那条指标条已由
-   `overview-neon.module.css` 的等距霓虹牌（`.hero* / .plate*`）接管，全仓零引用。
-   删它不只是洁癖：这份文件贴着 1000 行硬闸门（只剩 30 行余量），留两套指标条样式
-   只会让下一个人不知道该改哪一套。 */
-.ovGrid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 12px;
-  width: 100%;
   min-width: 0;
 }
-.ovGroupTitle {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  margin: 6px 2px -2px;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-.ovGroupTitle::before {
-  content: '';
-  flex: 0 0 3px;
-  height: 14px;
-  border-radius: var(--nm-r-xs);
-  background: var(--nm-cyan);
-}
-.ovGroupTitle::after {
-  content: '';
+.ovSectionCard {
   flex: 1 1 auto;
-  height: 1px;
-  background: color-mix(in srgb, var(--nm-border) 82%, transparent);
-}
-.ovSpan12 { grid-column: span 12; }
-.regionSpan { grid-column: span 4; }
-.ovSpan7 { grid-column: span 7; }
-.ovSpan6 { grid-column: span 6; }
-.ovSpan5 {
-  grid-column: span 5;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.ovSpan5 > .ovCard { flex: none; }
-
-.ovCard {
-  display: flex;
-  flex-direction: column;
+  width: 100%;
   min-width: 0;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  overflow: hidden;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
-}
-.ovCardHd {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--nm-border);
+  flex-direction: column;
 }
+/* 卡片头压到 36px：微信风格卡头是「一行标题」，不堆 padding */
+.ovSectionCard > [class*='_cardHd_'] {
+  min-height: 36px;
+  padding: 4px 12px;
+}
+.ovSectionCard > [class*='_cardHd_'] [class*='_cardTitle_'] {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ovSectionCard > [class*='_cardBd_'] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 12px;
+}
+/* 卡头图标：16px 单色描边，不再用彩色发光块 */
 .ovIcon {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--nm-dense-r);
-  color: var(--nm-cyan);
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, transparent);
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  color: var(--nm-text-3);
+  vertical-align: -3px;
 }
-.ovTitle {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
+/* 折叠按钮：文字按钮（灰），展开态才用主色 —— 与全站 kit 一致 */
+.ovCollapse {
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-3);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.ovAction { flex-shrink: 0; }
-.ovCardBd {
-  padding: 14px 16px;
+.ovCollapse:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
+.ovCollapse[aria-expanded='true'] { color: var(--nm-text-2); }
+
+/* 卡片体：统一竖向排布；hidden 必须压回 display:none（行为判据见 spec） */
+.ovSectionBd {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  flex: 1 1 auto;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
 }
-/* 交互画像 / 关系浓度：**不设固定最小高度**。
-   这里原来写的是 min-height: 420px —— 内容只有约 250px 时，那 170px 直接变成卡片底部的空白。
-   同行两张卡由 .ovGrid 的默认 stretch 拉平，高度需要多少由内容决定。 */
-.ovTall {
-  min-height: 0;
-}
-.ovTall .metricGrid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.ovTall .hourBars {
-  flex: 1;
-  min-height: 220px;
-  height: auto;
-}
+.ovSectionBd[hidden] { display: none; }
+.ovSectionBd > * { min-width: 0; max-width: 100%; flex-shrink: 0; }
+.ovSectionBd canvas,
+.ovSectionBd img,
+.ovSectionBd svg,
+.ovSectionBd video { max-width: 100%; }
 
-/* 内容构成与资产：资产卡片网格 */
-.assetGrid {
+/* 「更多分析」折叠条 */
+.moreAnalysis { display: flex; flex-direction: column; gap: 8px; }
+.moreToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px dashed var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.moreToggle:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+.moreChevron { color: var(--nm-text-3); font-size: 11px; }
+
+/* ── 通用指标格 ──────────────────────────────────────────── */
+.metricGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
-.assetItem {
+.metric {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  background: var(--nm-bg-0);
   min-width: 0;
 }
-.assetLabel {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  min-width: 52px;
-}
-.assetValue {
+.metricValue {
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--nm-text-1);
-  font-family: var(--nm-font-mono, monospace);
-  margin-left: auto;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-.assetHint {
-  flex-basis: 100%;
-  font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-text-2);
-  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--nm-font-mono, monospace);
 }
 
-/* 数据健康：完整可读的指标网格 */
-.healthGrid {
+/* ── 趋势 ────────────────────────────────────────────────── */
+.trendGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  flex: 1 1 auto;
+  align-content: stretch;
 }
-.healthItem {
+.trendCell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-height: 76px;
-  padding: 10px 12px;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  background: var(--nm-bg-0);
   min-width: 0;
 }
-.healthItem:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
-}
-.healthValue {
-  font-size: 15px;
-  font-weight: 800;
-  color: var(--nm-text-1);
-  font-family: var(--nm-font-mono, monospace);
-  word-break: break-all;
-  line-height: 1.3;
-}
-/* 轨道趋势 / 消息热度：不再强制同一最小高度。
-   两卡片同在 5+7 一行，`.ovGrid` 的默认 stretch 已经让它们等高，再各写 320px 只会在
-   内容不足时凭空留白。 */
-.ovTrend,
-.ovHeat {
-  min-height: 0;
-}
-/* 图表需要随时可绘制/导出，禁用 content-visibility 延迟 */
-.ovHeat {
-  content-visibility: visible;
-  contain: none;
-}
-.ovTrend .trendCell {
-  min-height: 96px;
-  justify-content: space-between;
-  padding: 10px;
-}
-.ovTrend .metricValue {
-  font-size: 20px;
-}
-/* 热力图的容器高度只在文件末尾的「重设计」段里定一次（172px）。
-   这里曾写过 260px/230px、后面又写过 auto —— 三层互相覆盖，最终哪条生效全靠行序，
-   而 `.ovTrend` / `.ovHeat` 两个类当时还没接上 JSX，等于白写。 */
+.deltaUp { color: var(--nm-success); font-size: 11px; font-weight: 600; }
+.deltaDown { color: var(--nm-danger); font-size: 11px; font-weight: 600; }
 
-@media (max-width: 1100px) {
-  .ovSpan12, .regionSpan, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
-}
-
-/* ══════════════════════════════════════════════════════════════════════
-   紧凑化（本模块末尾的统一覆盖层）
-   ──────────────────────────────────────────────────────────────────────
-   上面是既有规则，这一段**只做压缩**：统一收紧内边距、间距、字号与固定高度，
-   内容一项不减。集中成一段而不是散改各处，是为了让「哪里为了紧凑而让步」可被
-   一次性审阅与回退。
-
-   两处不只是「收紧」，而是修掉真实的空白来源：
-     · `.ovTall { min-height: 420px }` —— 「交互画像」的内容只有约 250px，
-       那段固定高度在卡片底部留下一大块空白；改为由内容决定。
-     · `.authors` 单列 + 卡片横跨整行 —— 只用掉约 1/3 宽度、10 行高度全浪费在
-       右侧空白上；改成两列后 10 条只占 5 行。
-   ══════════════════════════════════════════════════════════════════════ */
-
-/* 面板外层与网格：12px → 10px */
-.root { gap: 12px; }
-.ovGrid {
-  gap: 10px;
-  row-gap: 14px;
-  /* **不要** align-items: start —— 那会让短卡片自身不拉伸，同行最高的卡片有多高，
-     短卡片下面就空多少（实测就是「留白太多」的主因）。默认的 stretch 让同行卡片等高，
-     空白改为落在卡片**内部**，再由各卡片自己的弹性内容（如 .ovTall .hourBars 的
-     flex:1）吸收。 */
-}
-.ovSpan5 { gap: 10px; }
-
-/* 卡片：头部/正文内边距与图标收小 */
-.ovCard { border-radius: var(--nm-r-lg); }
-.ovCardHd { gap: 8px; padding: 8px 12px; }
-.ovCardBd { padding: 10px 12px; gap: 8px; }
-.ovTitle { font-size: 12.5px; }
-.ovIcon { width: 24px; height: 24px; border-radius: var(--nm-dense-r); }
-
-/* 固定高度里的空白：交给内容决定（原 420px + 下面的 hourBars 220px 合计把这一格
-   撑到约 700px，而内容只有约 250px —— 那一格下面全是空的） */
-.ovTall { min-height: 0; }
-.ovTall .hourBars { min-height: 96px; }
-
-/* 第 98 轮：紧档下的「指标条收紧」四条（.ovHeroIcon/.ovHeroValue/.ovHeroLabel/.ovHeroMix）
-   随霓虹牌一起删 —— 牌面的紧档规则现在写在 overview-neon.module.css 自己的媒体查询里。 */
-
-/* 朋友圈活跃作者：单列 → 两列（10 条从 10 行压到 5 行） */
-/* 朋友圈活跃作者：占满整行宽度（卡片 span 12），所以列数要跟着宽度走。
-   固定两列时右侧会空掉一大片；auto-fill 让它在宽屏排到 4–5 列，10 条只占 2–3 行。 */
-.authors {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 6px 10px;
-}
-.author { padding: 6px 8px; font-size: 11.5px; }
-/* 头像尺寸已在上面 .authorAvatar / .authorAvatarFallback 的原始规则里改为 26px
-   （在这里再覆盖一份实测不生效：CSS Modules 会把同类名的声明合并，反而看不出哪份在赢） */
-
-/* 各类列表的间距 */
-.catList { gap: 6px; }
-/* 分类行收紧凑：标题写「Top N」就要把 N 条都列出来（此前写 Top 7 只渲染 4 条 —— 标题与内容不符）。
-   收紧后 7 条正好填满与「存储清理建议」等高的那一格。 */
-.cat { gap: 3px; }
-.catRow { font-size: 11.5px; }
-.bar { height: 6px; margin-top: 2px; }
-/* 指标网格：118px 时宽卡片会把 4 格摊得很稀；提到 150px 让每格更饱满、行数更少 */
-.metricGrid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
-/* 关系浓度 Top 8：让行均分卡片高度，而不是把 8 行堆在顶部、下面留一片白 */
-.topList { gap: 4px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
-.assetGrid { gap: 6px; }
-.healthGrid { gap: 8px; }
-.hourBars { min-height: 78px; margin-top: 4px; }
-
-/* 趋势网格的列数只在本文件末尾的「重设计」段里定一次（auto-fit 72px），
-   这里不再另写一份 —— 曾同时存在 repeat(3) 与 auto-fit 150px 两份互相打架的规则，
-   而它们依赖的 `.ovTrend` 类从未出现在 JSX 上，两份都是死的。 */
-
-/* 交互画像的小时柱：拉伸填满卡片剩余高度（原来被 `min-height: 220px` 顶出空洞） */
-.ovTall .hourBars {
+/* ── 日历热力 ────────────────────────────────────────────── */
+.ovHeatBody {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
-  min-height: 96px;
+  min-height: 220px;
+}
+.ovHeatBody .calendarHeatmap {
+  flex: 1 1 auto;
+  min-height: 220px;
+  max-height: none;
+}
+.calendarHeatmap {
+  width: 100%;
+  height: auto;
+  min-height: 200px;
+  margin-top: 2px;
 }
 
-/* ── 轨道趋势 + 消息热度：5 格指标 + 90 天热力图 ─────────────────────
-   热力图（calHeatmap）不受宽度驱动，自身固定约 220px 高；所以给「轨道趋势」4 栅格
-   （5 个指标用 auto-fit 正好一行排满），把余下的 8 栅格留给热力图，
-   这样热力图在宽处不空、趋势卡也不被摊薄。 */
-.ovSpan4 { grid-column: span 4; }
-.ovSpan8 { grid-column: span 8; }
-
-/* 轨道趋势：span 4 时内宽约 370px，5 项要排成一行需要下限 ≈72px。
-   用 auto-fit + 72px：能一行放下就一行（宽度均分不留空），窄屏再自动降列。 */
-.ovTrend .trendGrid {
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
-}
-/* 趋势格按 5 项一行所需的最小高度收紧 */
-.ovSpan4 .trendCell {
-  min-height: 78px;
-  padding: 8px;
-}
-.ovSpan4 .trendCell > span:first-child,
-.ovSpan4 .metricValue { font-size: 16px; }
-/* 热力图高度见文件末尾「重设计」段（此处原有一条 flex/auto 覆盖，已并入那一段） */
-
-/* ══════════════════════════════════════════════════════════════════════
-   世界板块 · 好友地区：地图 + 省份/城市榜单（重设计）
-   ──────────────────────────────────────────────────────────────────────
-   这一块此前是"总览里最大的一处空白"，两个原因都实测过：
-
-   ① **跨模块覆盖写错了选择器**。地图与头像栏的类名来自另外两个 CSS Module，
-      会被哈希成 `_stage_xxxx` / `_avatarRailLeft_xxxx`。用 `:global(.stage)` 只会
-      在产物里发出**裸类名** `.stage`，永远匹配不到带哈希的元素 —— 于是
-      「限高 340px」和「隐藏两侧头像栏」两条规则写了等于没写：
-      实测画布仍是 520px，两条头像栏各 240px×520px 照旧显示。
-      改用属性子串选择器 `[class*='stage']` 才能真正命中（这也是本文件里
-      唯一能跨模块覆盖的写法）。
-
-   ② **地图本身信息量配不上它的面积**。228 位有地区好友里绝大多数在同一个国家，
-      世界地图上除了一小块高亮，其余全是空白海洋。所以右侧补两栏真实榜单
-      （省份 Top 10 / 城市 Top 12，数据与地图同源），把面积换成信息。
-   ══════════════════════════════════════════════════════════════════════ */
+/* ── 世界地图（并入「关系与地区」卡）────────────────────────── */
 .worldMapBox {
   position: relative;
   min-width: 0;
   width: 100%;
-  height: clamp(220px, 28vw, 310px);
-  max-height: 310px;
+  height: clamp(220px, 26vw, 300px);
+  max-height: 300px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   overflow: hidden;
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+  background: var(--nm-bg-0);
 }
-/* 地图自身的 520px 画布让位给卡片高度。
-   高度是一条链：LazyMount 包裹层 → .wrap → .stage → .mapFrame → .china3d → <canvas>，
-   中间任何一环是 auto，百分比就退化成 auto、520px 又会顶出来（实测就是这么被裁掉 1/3 的）。
-   前三者与 .china3d 都是另一个 CSS Module 的哈希类名，只能用属性子串选择器命中；
-   canvas 没有类名，用元素选择器。GeoEchartsMap 自带 ResizeObserver，改高度会自己 resize。 */
+/* 让地图吃掉「关系与地区」卡里的剩余高度，同时给一个上界避免把卡撑得过长 */
+.worldMapFlex {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 220px;
+  max-height: 340px;
+}
 .worldMapBox > * { height: 100%; }
 .worldMapBox [class*='wrap'],
 .worldMapBox [class*='stage'],
@@ -813,16 +274,12 @@
   width: 100%;
   height: 100%;
 }
-/* 地图自带的工具栏标题与卡片标题重复（都是「好友地区分布」），收成一行说明 */
 .worldMapBox [class*='toolbar'] {
   padding: 4px 8px 0;
 }
 .worldMapBox [class*='toolbar'] [class*='title'] {
   display: none;
 }
-/* 交互提示：原样是一条 `position:absolute; top:10px` 的胶囊，但在被压缩后的盒子里
-   它的高度会涨到 254px（几乎铺满整张地图），渲染成一大块深色方块。
-   这里把尺寸钉回"一行胶囊"。 */
 .worldMapBox [class*='mapHint'] {
   top: 6px;
   bottom: auto;
@@ -831,114 +288,329 @@
   height: auto;
   max-height: none;
   padding: 3px 8px;
-  font-size: var(--nm-fs-xs, 11px);
+  font-size: 11px;
   white-space: nowrap;
 }
-/* 两侧头像栏：各 240px 宽、内容是一列读不清的名字，与"地区分布"无关 —— 去掉 */
 .worldMapBox [class*='avatarRail'] {
   display: none;
 }
-
-
-/* ── 让"指标格网格"吃掉同行卡片之间的高度差 ────────────────────────────
-   同行两张卡片默认等高（grid stretch）。较矮的那张若内容固定，差额就变成
-   卡片底部的一片空白（实测「存储清理建议」「资金快照」各约 70px）。
-   这里让只有指标网格的卡身把网格拉满、内部按行均分，差额落进每格高度里，
-   视觉上仍是"填满的"。 */
-.ovCardBd > .metricGrid:only-child,
-.ovCardBd > .metricGrid:first-child:last-child {
-  flex: 1 1 auto;
-  align-content: space-evenly;
-  margin-bottom: 0;
+@media (max-width: 560px) {
+  .worldMapBox, .worldMapFlex { height: 300px; max-height: 300px; }
 }
-/* 指标格/健康格自身也要居中：格子被拉伸到 110px 时，数字+标签若贴顶，
-   下方就留出约 70px 的空白（实测「数据健康」六格就是这样）。
-   居中之后空白变成上下对称的留白，不再像"没填满"。 */
-.metric,
-.healthItem,
+
+/* ── 关系 Top（行内条形）─────────────────────────────────── */
+.topList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+.topRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+.topRow:hover { background: var(--nm-bg-hover); }
+.topRank { width: 16px; font-weight: 600; color: var(--nm-text-3); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
+.topName { width: 120px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
+.topTrack { flex: 1; height: 4px; border-radius: var(--nm-r-pill); background: var(--nm-bg-active); overflow: hidden; }
+.topFill { height: 100%; border-radius: var(--nm-r-pill); background: var(--nm-text-3); }
+.topCount { width: 64px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
+.topRow:hover .topFill { background: var(--nm-text-2); }
+
+/* ── 消息构成（内容卡里的唯一一处收发/类型统计）────────────── */
+.mixLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--nm-text-2);
+}
+.mixLine b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mixTrack {
+  display: flex;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  overflow: hidden;
+  background: var(--nm-bg-active);
+}
+.mixSent { background: var(--nm-cyan); }
+.mixRecv { background: var(--nm-border-hover); }
+
+/* ── 内容/存储构成条 ─────────────────────────────────────── */
+.catList { display: flex; flex-direction: column; gap: 6px; }
+.cat { display: flex; flex-direction: column; gap: 3px; }
+.catRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.catLabel { color: var(--nm-text-1); }
+.catMeta { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); font-size: 11px; }
+.bar {
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-active);
+  overflow: hidden;
+}
+.barFill {
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-text-3);
+  transition: width 0.2s;
+}
+
+/* ── 内容资产 2×2 ────────────────────────────────────────── */
+.assetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
 .assetItem {
-  justify-content: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-0);
+  min-width: 0;
+  align-content: center;
 }
-.assetItem { align-content: center; }
-/* 资产/健康网格同理 */
-.ovCardBd > .healthGrid:only-child {
-  flex: 1 1 auto;
-  align-content: space-evenly;
+.assetLabel { font-size: 11px; color: var(--nm-text-2); min-width: 60px; }
+.assetValue {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+  margin-left: auto;
+  white-space: nowrap;
 }
-/* 「撤回痕迹 · 风险提示」的卡身是三段（大数字块 / 指标格 / 建议行），
-   让它按卡高均分，同行卡片更高时不会在底部留一块空白（实测那一块是 80px）。 */
-.ovCardBd:has(> .revoke) {
-  justify-content: space-between;
-}
-/* 轨道趋势：5 格指标拉满卡片高度（同行是热力图，高度由它决定）。
-   格子拉高后内容居中，而不是用 space-between 把数字与标签顶到两端 —— 那样中间会空一块。 */
-.ovTrend .trendGrid {
-  flex: 1 1 auto;
-  align-content: stretch;
-  grid-auto-rows: 1fr;
-}
-.ovTrend .trendCell {
-  min-height: 0;
-  /* space-evenly：格子被同行的热力图拉高时，数字/标签/增减三行均匀铺开 ——
-     比居中更像"填满"，比 space-between 又不会在中间空出一整块。 */
-  justify-content: space-evenly;
-  gap: 2px;
-  padding: 8px 6px;
-}
-/* 热力图给一个确定高度：它决定这一行的高度，不能让 ECharts 容器塌成 auto */
-.ovHeat .calendarHeatmap {
-  flex: 0 0 auto;
-  height: 150px;
-  min-height: 150px;
-  max-height: 150px;
+.assetHint {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--nm-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 组件边界：内容宽度由栅格决定，卡身和可滚动列表各自设上限，避免单项撑大整页。 */
-.ovGrid > .ovCard {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  min-height: 0;
-  max-height: 576px;
-}
-.ovCardBd {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  min-height: 0;
+/* ── 朋友圈作者 ──────────────────────────────────────────── */
+.authors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 4px 8px;
+  align-content: start;
+  max-height: 240px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
-.ovCardBd > * {
-  min-width: 0;
-  max-width: 100%;
+.author {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
 }
-.ovCardBd canvas,
-.ovCardBd img,
-.ovCardBd svg,
-.ovCardBd video {
-  max-width: 100%;
+.author:hover { background: var(--nm-bg-hover); border-color: var(--nm-border); }
+.authorRank { font-weight: 600; color: var(--nm-text-3); width: 16px; flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
+.authorName { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.authorPosts { color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: 11px; }
+.authorAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
 }
-.authors,
-.topList,
-.catList {
-  max-width: 100%;
-  overscroll-behavior: contain;
+.authorAvatarFallback {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-active);
+  border: 1px solid var(--nm-border);
 }
-.authors { max-height: 240px; overflow-y: auto; align-content: start; }
-.topList { max-height: 224px; overflow-y: auto; }
-.catList { max-height: 300px; overflow-y: auto; }
+
+/* ── 24 小时分布（更多分析 · 交互画像）───────────────────── */
 .hourBars {
-  flex: 0 1 136px;
-  height: clamp(96px, 10vw, 136px);
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 96px;
   min-height: 96px;
   max-height: 136px;
+  flex: 0 1 136px;
+  margin-top: 2px;
+}
+.hourCol { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; height: 100%; justify-content: flex-end; }
+.hourFill {
+  width: 100%;
+  background: var(--nm-text-3);
+  border-radius: var(--nm-r-xs) var(--nm-r-xs) 0 0;
+  transition: background-color 0.15s;
+}
+.hourFill[data-hot] { background: var(--nm-cyan); }
+.hourCol:hover .hourFill { background: var(--nm-text-2); }
+.hourLabel { font-size: 11px; color: var(--nm-text-3); }
+
+/* ── 数据健康 ────────────────────────────────────────────── */
+.healthGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.healthItem {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-0);
+  min-width: 0;
+}
+.healthValue {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+  word-break: break-all;
+  line-height: 1.3;
 }
 
-@media (max-width: 1100px) {
-  .ovGrid { row-gap: 12px; }
-  .ovGrid > .ovCard { max-height: 520px; }
+/* ── 文字按钮（详情 → / 隐私体检）────────────────────────── */
+.panelGo {
+  border: none;
+  background: none;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.panelGo:hover { color: var(--nm-text-1); }
+
+/* 撤回提示行 */
+.revokeNote { font-size: 11px; color: var(--nm-text-2); margin: 0; line-height: 1.6; }
+
+/* ── KPI 条（仅总览指标条内生效）────────────────────────── */
+[data-st-ov-hero] [class*='_statCard_'] {
+  padding: 10px 12px;
+  gap: 4px;
+}
+[data-st-ov-hero] [class*='_statIcon_'] {
+  width: 18px;
+  height: 18px;
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+}
+[data-st-ov-hero] [class*='_statValue_'] {
+  font-size: 18px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+[data-st-ov-hero] [class*='_statLabel_'] {
+  font-size: 11px;
+  color: var(--nm-text-2);
 }
 
-/* 窄屏：作者两列在很窄时仍可读，不需要额外改动；网格已由上面的媒体查询统一成单列 */
+/* ── 骨架屏 ──────────────────────────────────────────────── */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skLine {
+  display: block;
+  height: 12px;
+  border-radius: var(--nm-r-sm);
+  background-color: var(--nm-bg-active);
+}
+.skeletonStat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+}
+.skeletonRows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.skeletonCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  min-height: 120px;
+}
+.skeletonGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.skeletonCell { display: flex; flex-direction: column; gap: 4px; }
+.skeletonMap {
+  flex: 1 1 auto;
+  min-height: 120px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-0);
+}
+.skStack { display: flex; flex-direction: column; gap: 8px; }
+.skBarFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-active);
+}
+.skLoadingText {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+}
+
+/* ── 响应式 ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .metricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trendGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skeletonRows { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .assetGrid { gap: 6px; }
+  .hourBars { gap: 2px; }
+  .hourLabel { font-size: 10px; }
+  .skeletonRows { grid-template-columns: minmax(0, 1fr); }
+}

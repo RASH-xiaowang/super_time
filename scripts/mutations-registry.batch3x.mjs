@@ -15,7 +15,7 @@
 export const MUTATIONS_BATCH3X = [
   {
     id: 'M559-phone-touch-floor-gone',
-    why: '手机档的元素级 44px 下限被去掉 ⇒ 通讯录/朋友圈/文件与存储上的分类按钮(26px)、作者芯片(26px)、日期预设(24px)、搜索框(32px) 全部退回桌面尺寸，手指点不准；触摸上没有 :hover 可以补救，桌面尺寸的量测也永远看不见。判据：mobile-shell.spec.ts 的「触摸目标下限：全局元素级 44px + 段条在手机档覆盖回 44px」。',
+    why: '手机档的元素级 44px 下限被去掉 ⇒ 通讯录/朋友圈/文件与存储上的分类按钮(26px)、作者芯片(26px)、日期预设(24px)、搜索框(32px) 全部退回桌面尺寸，手指点不准；触摸上没有 :hover 可以补救，桌面尺寸的量测也永远看不见。判据：mobile-shell.spec.ts 的「触摸目标下限：全局元素级 44px + 段条在手机档覆盖回 36px」。',
     file: 'src/client/ui-app/mobile-viewport.css',
     from: '    min-height: 44px;',
     to: '    min-height: 24px;',
@@ -23,9 +23,9 @@ export const MUTATIONS_BATCH3X = [
   },
   {
     id: 'M560-seg-item-phone-override-gone',
-    why: '分段条（8 组合并视图的主导航）手机档覆盖退回 24px：元素级 `button{min-height:44px}` 被 `.segItem` 的类特异性盖住，所以这一处**只有**那份覆盖有效 —— 删掉它，通讯录/朋友圈/文件与存储顶部的段条就还是 24px 高（实测 11 个）。判据：mobile-shell.spec.ts 的同一条。',
+    why: '分段条（8 组合并视图的主导航）手机档覆盖退回 24px：元素级 `button{min-height:44px}` 被 `.segItem` 的类特异性盖住，所以这一处**只有**那份覆盖有效 —— 删掉它，通讯录/朋友圈/文件与存储顶部的段条就还是 24px 高（实测 11 个）。⚠️ 2026-10-16 覆盖值从 44px 收到 36px（用户报「筛选区占比太大」：分段条是密集筛选控件，不是主要操作按钮，44px 会让「段条+搜索行+分类条」三行合计 222px、占 718px 内容区的 31%）。判据：mobile-shell.spec.ts 的同一条。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/ui/kit-overlay.module.css',
-    from: '  .segItem { min-height: 44px; }',
+    from: '  .segItem { min-height: 36px; }',
     to: '  .segItem { min-height: 24px; }',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/ui/mobile-shell.spec.ts',
   },

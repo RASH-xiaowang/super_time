@@ -21,22 +21,29 @@ import { atLeast, readStripped } from '../../../test-helpers/wiring-kit.ts'
 const HERE = import.meta.dirname
 
 /** 四个会排队的重查询面板：文件 + 它的走秒文案特征。 */
-const SLOW_PANELS: ReadonlyArray<{ panel: string; tsx: string; text: string }> = [
+const SLOW_PANELS: ReadonlyArray<{ panel: string; tsx: string; text: string; timed?: boolean }> = [
   { panel: '资金往来', tsx: 'Ledger.tsx', text: '正在统计资金账本…已用' },
   { panel: '媒体资产', tsx: 'MediaAssets.tsx', text: '正在盘点本机媒体资产…已用' },
-  { panel: '存储分析', tsx: 'Storage.tsx', text: '正在统计存储占用…已用' },
+  // 2026-10-18：存储分析改用统一 `LoadingState variant="timed"`（走秒由组件按 since 渲染）
+  { panel: '存储分析', tsx: 'Storage.tsx', text: '正在统计存储占用…', timed: true },
   { panel: '群聊分析', tsx: 'GroupInsights.tsx', text: '正在统计群聊洞察…已用' },
 ]
 
 describe('U2 · 慢查询的加载态要有秒数，不能只有一行「统计中…」', () => {
-  for (const { panel, tsx, text } of SLOW_PANELS) {
+  for (const { panel, tsx, text, timed } of SLOW_PANELS) {
     it(`${panel}：加载态给出「在做什么 + 已用几秒」`, () => {
       const src = readStripped(join(HERE, tsx))
       expect(src, `${panel} 没有用共用的走秒 hook`).toContain('useElapsedSeconds(')
       expect(src, `${panel} 的加载文案里没有秒数`).toContain(text)
-      // 两种都是合法的 React 插值：JSX 里直接 `{elapsed}`，模板串里 `${elapsed}`
-      // （资金账本是 R3 写的前者，另外三个是后加的后者，不强行统一以免动已验证代码）。
-      expect(src, `${panel} 的秒数没有插值到界面上`).toMatch(/已用 (?:\{elapsed\}|\$\{elapsed\})s/)
+      if (timed === true) {
+        // 统一加载态组件把 `since` 渲染成「（已等待 Ns）」
+        expect(src, '没有接统一加载态的 timed 档').toMatch(/variant="timed"/)
+        expect(src, 'timed 档没有把走秒传进去').toMatch(/since=\{elapsed\}/)
+      } else {
+        // 两种都是合法的 React 插值：JSX 里直接 `{elapsed}`，模板串里 `${elapsed}`
+        // （资金账本是 R3 写的前者，另外三个是后加的后者，不强行统一以免动已验证代码）。
+        expect(src, `${panel} 的秒数没有插值到界面上`).toMatch(/已用 (?:\{elapsed\}|\$\{elapsed\})s/)
+      }
     })
   }
 

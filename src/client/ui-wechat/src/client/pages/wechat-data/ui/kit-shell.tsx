@@ -119,6 +119,11 @@ export function SearchInput({ value, onChange, placeholder = '搜索…', ariaLa
         value={value}
         placeholder={placeholder}
         aria-label={ariaLabel ?? placeholder}
+        /* 手机档的全局 44px 触摸目标下限要放过它：搜索框是**密集筛选控件**，不是主要操作按钮。
+           抬到 44px 会让「段条 + 搜索行 + 分类条」三行合计 222px，吃掉 718px 内容区的 31%
+           （用户报「筛选区占比太大」）。排除后由各面板的手机档给 36px（> WCAG 2.5.8 的 24px AA）。
+           类名有 CSS Modules hash、全局文件选不中，所以用 data- 属性（见 mobile-viewport.css）。 */
+        data-search-input=""
         onChange={(e) => { onChange(e.target.value) }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') onEnter?.()

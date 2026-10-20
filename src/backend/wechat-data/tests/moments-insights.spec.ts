@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { queryMomentsInsights } from '../src/query/moments-insights.ts'
+import { queryMoments } from '../src/query/moments.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -54,5 +55,26 @@ describe('queryMomentsInsights', () => {
     expect(snap.commenters[0]?.count).toBe(2)
     expect(snap.today).toHaveLength(1)
     expect(snap.today[0]?.text).toContain('今天发布')
+  })
+
+  it('好友删帖后，洞察仍从归档计入（删掉整张 sns.db 也成立）', async () => {
+    const root = tempRoot()
+    const now = new Date()
+    const ts = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTime() / 1000)
+    makeDb(join(root, 'sns', 'db_sns', 'sns.db'), (db) => {
+      db.exec('CREATE TABLE SnsTimeLine (tid INTEGER, user_name TEXT, content TEXT)')
+      db.prepare('INSERT INTO SnsTimeLine VALUES (?, ?, ?)').run(1, 'wxid_a', postXml(ts))
+    })
+    // 先让归档库收下这条（真实链路就是 queryMoments 触发归档）。
+    expect(queryMoments(root, 0, 50, 'wxid_a').total).toBe(1)
+    rmSync(join(root, 'sns'), { recursive: true, force: true })
+
+    const snap = await queryMomentsInsights(root, 'wxid_a')
+    expect(snap.posts, '删帖后洞察不该退回 0').toBe(1)
+    expect(snap.likes).toBe(1)
+    expect(snap.comments).toBe(1)
+    expect(snap.likedBy[0]?.nickname).toBe('李四')
+    expect(snap.monthly[0]?.count).toBe(1)
+    expect(snap.today).toHaveLength(1)
   })
 })

@@ -72,9 +72,9 @@ import type {
   OperationStatus,
 } from '../types.ts'
 import type { BindingCredentials } from '../query/clawbot/clawbot-binding.ts'
-import { completeBinding, markBindingQr, readBinding, readBindingInternal, readBindings, saveSendContextToken, saveSyncBuf, unbindBinding } from '../query/clawbot/clawbot-binding.ts'
+import { completeBinding, markBindingQr, readBinding, readBindingInternal, readBindings, renameBinding, saveSendContextToken, saveSyncBuf, unbindBinding } from '../query/clawbot/clawbot-binding.ts'
 import type { ClawbotMessageInput } from '../query/clawbot/clawbot-message.ts'
-import { clawbotMessageCounts, insertClawbotMessage, listClawbotMediaPending, listClawbotMessages as queryClawbotMessages } from '../query/clawbot/clawbot-message.ts'
+import { clearClawbotMessages, clawbotMessageCounts, insertClawbotMessage, listClawbotMediaPending, listClawbotMessages as queryClawbotMessages } from '../query/clawbot/clawbot-message.ts'
 import { createClawbotChannel, type ClawbotChannel } from '../query/clawbot/clawbot-channel.ts'
 import { DEFAULT_CLAWBOT_SLOT } from '../query/clawbot/clawbot-db.ts'
 import { createAutoReplyRunner, type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts'
@@ -320,12 +320,63 @@ export function insertClawbotMessages(decryptedDir: string, slot: number, msgs: 
     if (id !== null) {
       lastId = id
       delta += 1
-      inbound.push({ direction: input.direction, msgType: input.msgType ?? null, content: input.content })
+      inbound.push({ direction: input.direction, msgType: input.msgType ?? null, content: input.content, id })
       if (input.media !== null && input.media !== undefined) mediaIds.push(id)
     }
   }
   if (latestToken !== '') saveSendContextToken(decryptedDir, latestToken, slot)
   return delta > 0 ? { lastId, delta, mediaIds, inbound } : null
+}
+
+/**
+ * 自动回复的**上下文**（2026-10-18 用户报「不能关联上下文和识别图中内容」）：
+ * 取目标消息之前的最近 20 条（含 bot 自己的回复），按库里方向映射成 user/assistant。
+ * 只读同一个 ClawBot 会话的库，不碰本机微信数据 —— 与 `dataScope: 'kb-only'` 的纪律一致。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @param beforeId - 目标消息行 id（取它之前的消息）。
+ * @returns user/assistant 对话（读失败 = 空数组，不阻断自动回复）。
+ */
+function readAutoReplyHistory(decryptedDir: string, slot: number, beforeId: number): Array<{ role: 'user' | 'assistant', content: string }> {
+  try {
+    const snap = queryClawbotMessages(decryptedDir, { slot, limit: 20 })
+    return snap.items
+      .filter((m) => m.id < beforeId)
+      .sort((a, b) => a.id - b.id)
+      .map((m) => ({
+        role: m.direction === 'in' ? ('user' as const) : ('assistant' as const),
+        content: (m.content.trim() !== '' ? m.content : m.msgType === 'image' ? '[图片]' : m.msgType === 'voice' ? '[语音]' : '').trim(),
+      }))
+      .filter((m) => m.content !== '')
+  } catch { return [] }
+}
+
+/**
+ * 目标消息之前最近的 2 张入站图片（媒体缓存命中才送；未下载/超 8MB 跳过）。
+ * 图片字节交给 ask 管道按模型能力决定是否真的送模型，本层不做模型判断。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @param beforeId - 目标消息行 id。
+ * @returns canonical base64 图片（读失败 = 空数组）。
+ */
+async function readAutoReplyImages(decryptedDir: string, slot: number, beforeId: number): Promise<Array<{ data: string, mediaType: string, name?: string }>> {
+  const out: Array<{ data: string, mediaType: string, name?: string }> = []
+  try {
+    const snap = queryClawbotMessages(decryptedDir, { slot, limit: 40 })
+    const rows = snap.items
+      .filter((m) => m.id < beforeId && m.direction === 'in' && m.msgType === 'image')
+      .sort((a, b) => b.id - a.id)
+      .slice(0, 2)
+      .reverse()
+    for (const m of rows) {
+      const got = await ensureClawbotMedia(decryptedDir, m.id)
+      if (!got.ok) continue
+      const bytes = readClawbotMediaBytes(got.path)
+      if (bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) continue
+      out.push({ data: bytes.toString('base64'), mediaType: imageMimeOf(bytes), name: `wx-image-${String(m.id)}` })
+    }
+  } catch { return [] }
+  return out
 }
 
 /**
@@ -500,6 +551,26 @@ function createBindingOps(deps: {
       safeEmit(rc, { name: 'clawbot/binding-changed', args: { from: before.status, to: after.status, wxid: after.wxid } })
       return bindingSnapshot(slot)
     },
+
+    /**
+     * 给实例起别名（「工作号」「客服号」；2026-10-16）。
+     *
+     * 与绑定状态机**无关**：只动 `label` 一列，所以别名活过重新绑定与解绑。
+     * 空串 = 清除别名（界面回落到昵称，再回落到「实例 N」）。
+     * @param options.slot - 实例编号。
+     * @param options.label - 新别名（空串 = 清除）。
+     * @returns 落库后的绑定卡片快照（界面据此立刻更新轨上的名字）。
+     */
+    renameClawbotInstance(options: { slot: number, label: string }): ClawbotBindingSnapshot {
+      const d = dir()
+      const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
+      const before = readBinding(d, slot).binding
+      const after = renameBinding(d, slot, options?.label ?? '')
+      const shown = after.label ?? after.userName ?? after.wxid ?? ''
+      rc.op('clawbot', 'clawbot_instance_rename', 'ok', `slot=${slot}`,
+        after.label === null ? `已清除别名（原「${before.label ?? ''}」）` : `别名改为「${after.label}」`)
+      return bindingSnapshot(slot)
+    },
   }
 }
 
@@ -528,6 +599,22 @@ function createSessionOps(deps: {
      */
     listClawbotMessages(options?: ClawbotMessageQuery): ClawbotMessageSnapshot {
       return queryClawbotMessages(dir(), { ...options, slot: slotOf(options) })
+    },
+
+    /**
+     * 清空某实例的**接入会话**（2026-10-17 用户要求「增加对话历史清除按钮，可以删除对话历史
+     * 以防止污染回复」）。
+     *
+     * 只删消息，**不动绑定与配置**（那是另一回事）；返回删掉的条数与最新快照
+     * （界面据此立刻刷新，不用再发一次 list）。
+     * @param options.slot - 实例编号（缺省 = 第一个实例）。
+     * @returns 删掉的条数 + 最新会话页快照。
+     */
+    clearClawbotMessages(options?: { slot?: number }): { removed: number, messages: ClawbotMessageSnapshot } {
+      const slot = slotOf(options)
+      const { removed } = clearClawbotMessages(dir(), slot)
+      rc.op('clawbot', 'clawbot_messages_clear', 'ok', `slot=${slot}`, `已清空接入会话 ${String(removed)} 条`)
+      return { removed, messages: queryClawbotMessages(dir(), { slot }) }
     },
 
     /**
@@ -638,6 +725,8 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     send: (slot: number, text: string) => sendClawbotText(decrypted(), ilink, { text }, slot),
     op: rc.op,
     onReplied: ({ slot, id }) => { safeEmit(rc, { name: 'clawbot/message', args: { lastId: id, delta: 1, slot } }) },
+    history: (slot, target) => (target.id === undefined ? [] : readAutoReplyHistory(decrypted(), slot, target.id)),
+    images: (slot, target) => (target.id === undefined ? Promise.resolve([]) : readAutoReplyImages(decrypted(), slot, target.id)),
   })
 
   /**
@@ -803,12 +892,12 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     /**
      * 改某实例的行为配置（**部分更新**：只覆盖传进来的字段，缺省保持原值）。
      * @param options.slot - 实例编号。
-     * @param options.autoReply / kbEnabled / kbId - 要改的字段。
+     * @param options.autoReply / kbEnabled / kbId / systemPrompt / splitReply - 要改的字段。
      * @returns 落库后的完整配置（含归一后的 kbId）。
      */
-    setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }): ClawbotInstanceConfig {
+    setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): ClawbotInstanceConfig {
       const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
-      const patch: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null } = {}
+      const patch: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean } = {}
       if (options.autoReply !== undefined) patch.autoReply = options.autoReply
       if (options.kbEnabled !== undefined) patch.kbEnabled = options.kbEnabled
       // 非正数 / 非有限值 = 「没有库」，一律归 null；**不许夹到 1** —— 那等于
@@ -818,9 +907,14 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
           ? null
           : Math.floor(options.kbId)
       }
+      // 提示词：只接受字符串（非字符串当「没传」，不把 undefined 写进去覆盖原值）。
+      if (typeof options.systemPrompt === 'string') patch.systemPrompt = options.systemPrompt
+      if (options.splitReply !== undefined) patch.splitReply = options.splitReply
       const cfg = saveInstanceConfig(decrypted(), slot, patch)
       rc.op('clawbot', 'clawbot_instance_config', 'ok', `slot=${slot}`,
-        `自动回复 ${cfg.autoReply ? '开' : '关'} / 知识库 ${cfg.kbEnabled ? '开' : '关'}`)
+        `自动回复 ${cfg.autoReply ? '开' : '关'} / 知识库 ${cfg.kbEnabled ? '开' : '关'}` +
+        ` / 提示词 ${cfg.systemPrompt === '' ? '默认' : `${String(cfg.systemPrompt.length)} 字`}` +
+        ` / 分段 ${cfg.splitReply ? '开' : '关'}`)
       return cfg
     },
 

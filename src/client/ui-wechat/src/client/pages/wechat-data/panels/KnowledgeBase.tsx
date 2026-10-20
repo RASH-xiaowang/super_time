@@ -103,11 +103,53 @@ function renderBody(
 }
 
 /**
+ * 笔记库空态 —— 从 `KnowledgeBasePanel` 拆出（单函数行数棘轮）。
+ *
+ * 2026-10-17：空态必须给出「从文件沉淀」这条路。改前只说「新建第一条」，
+ * 而用户刚导入并解析了文件、也生成了摘要，却不知道摘要能变成笔记 ——
+ * 「文件 → 笔记 → 图谱」这条链路在界面上完全没有入口
+ * （实测：文件 195 块已就绪，笔记库 0 条）。
+ * @param props - 筛选态、库名与三个出口。
+ * @returns 空态元素。
+ */
+function KbEmptyState({ filtering, filterDesc, kbLabel, onClearFilter, onCreate, onGoFiles }: {
+  filtering: boolean
+  filterDesc: string
+  kbLabel: string
+  onClearFilter: () => void
+  onCreate: () => void
+  onGoFiles?: () => void
+}): React.JSX.Element {
+  if (filtering) {
+    return (
+      <EmptyState
+        title="没有匹配的条目"
+        desc={`当前条件：${filterDesc}。换个词，或清除筛选看全部。`}
+        action={<Button variant="pill" onClick={onClearFilter}>清除筛选</Button>}
+      />
+    )
+  }
+  return (
+    <EmptyState
+      title="知识库还是空的"
+      desc={`${kbLabel || '这个库'}里还没有条目。手写笔记与「微信问答」的沉淀都进这个库，正文里可以用 [[目标]] 互相链接。`}
+      action={(
+        <div className={css.emptyActions}>
+          <Button variant="pill" onClick={onCreate}>＋ 新建第一条</Button>
+          <Button variant="ghost" onClick={() => { onGoFiles?.() }}>从文件沉淀 →</Button>
+        </div>
+      )}
+    />
+  )
+}
+
+/**
  * Knowledge base panel.
  * @param props.onOpenChat - 打开来源会话（问答沉淀的笔记才有来源）。
+ * @param props.onGoFiles - 跳到「文件」分段（空态里「从文件沉淀」的出口）。
  * @returns the knowledge-base element tree.
  */
-export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
+export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (username: string, localId?: number) => void; onGoFiles?: () => void } = {}): React.JSX.Element {
   // 「当前是哪个库」由分段条右侧的切换器决定，而切换器在合并外壳里 —— 不是本组件的父级，
   // 所以走订阅（`useKbScope`）而不是 props。
   const { kbId, kbs } = useKbScope()
@@ -257,7 +299,7 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
       <div className={css.head}>
         <PanelHeader
           title="笔记库"
-          desc="本地知识条目：列表 / 详情 / 新建 / 编辑 / 标签 / 关键词搜索 · 存储于 wechat_notes.db（notes 表）"
+          desc="本地笔记：新建 / 编辑 / 标签 / 关键词搜索"
           actions={(
             <>
               <Button variant="primary" onClick={() => { openCreate() }}>＋ 新建条目</Button>
@@ -320,19 +362,17 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
       <div className={css.bodyWrap}>
         <div className={css.body}>
           {/* 左：条目列表 */}
-          <Card flush className={clsx(css.listPane, visible.length === 0 && css.listPaneWide)}>
+          <Card flush className={clsx(css.listPane, css.fillCard, visible.length === 0 && css.listPaneWide)}>
             {loading && notes.length === 0 ? (
               <ListSkeleton rows={6} />
             ) : visible.length === 0 ? (
-              <EmptyState
-                icon={filtering ? '🔍' : '📚'}
-                title={filtering ? '没有匹配的条目' : '知识库还是空的'}
-                desc={filtering
-                  ? `当前条件：${filterDesc}。换个词，或清除筛选看全部。`
-                  : `${kbLabel || '这个库'}里还没有条目。手写笔记与「微信问答」的沉淀都进这个库，正文里可以用 [[目标]] 互相链接。`}
-                action={filtering
-                  ? <Button variant="pill" onClick={() => { setQuery(''); setTag(null) }}>清除筛选</Button>
-                  : <Button variant="pill" onClick={() => { openCreate() }}>＋ 新建第一条</Button>}
+              <KbEmptyState
+                filtering={filtering}
+                filterDesc={filterDesc}
+                kbLabel={kbLabel}
+                onClearFilter={() => { setQuery(''); setTag(null) }}
+                onCreate={() => { openCreate() }}
+                onGoFiles={onGoFiles}
               />
             ) : (
               <div className={css.list}>
@@ -472,7 +512,6 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
               </div>
             ) : loading ? null : (
               <EmptyState
-                icon="🗒️"
                 title="选一条看正文"
                 desc="点左侧任意条目的标题，正文、标签与链接会显示在这里。"
               />

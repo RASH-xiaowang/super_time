@@ -68,6 +68,43 @@ export function indexLabel(view: KbVectorIndexView | null): { text: string; tone
 /** Badge 支持的色调（与 kit.tsx 的 Tone 一致；那份类型没有 export，这里就地声明）。 */
 export type BadgeTone = 'default' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue'
 
+/**
+ * 页头标题行：标题 + 已登记数 + 索引状态（2026-10-17 压缩页头）。
+ *
+ * ## 为什么并成一行
+ *
+ * 改前这三样分居两处：标题在左、统计和索引徽标在工具栏右侧 ——
+ * 于是页头占「标题行 + 描述行 + 工具栏行」三行，把文件列表挤到很下面。
+ * 现在并进标题行，描述收进 `title` 悬停提示，页头只剩两行。
+ *
+ * ## 为什么单独一个组件
+ *
+ * `KbFilesPanel` 受单函数行数棘轮管着（只许变小），一行 JSX 都加不得；
+ * 而这段是自洽的（只要三个值，不碰面板的任何 state）。
+ * @param props.visible - 当前筛选下可见的文件数。
+ * @param props.total - 本库文件总数。
+ * @param props.index - 索引状态文案与色调（`indexLabel` 的返回）。
+ * @returns 标题行元素。
+ */
+export function KbTitleRow({ visible, total, index }: {
+  visible: number
+  total: number
+  index: { text: string; tone: 'ok' | 'warn' | 'muted' }
+}): React.JSX.Element {
+  return (
+    <span
+      className={css.titleRow}
+      title="当前知识库里的本地文件：登记 / 解析状态 / 分块 / 是否参与语义检索 · 存储于 wechat_kb_files.db（kb_files 表）"
+    >
+      文件
+      <span className={css.titleMeta}>已登记 {visible} / {total}</span>
+      <span className={css.indexChip} data-tone={index.tone} title="本库的向量索引状态；语义检索与问答的向量召回都依赖它">
+        {index.text}
+      </span>
+    </span>
+  )
+}
+
 /** 一个解析状态在界面上的三层表达：徽标文案 / 色调 / 「这意味着什么」。 */
 export interface ParseLook {
   label: string
@@ -127,13 +164,16 @@ export const PARSE_LOOK: Record<KbFileParseState, ParseLook> = {
 /** 解析进行中时的轮询间隔：对本地库的一次查询很轻，也够让状态变化看起来是即时的。 */
 export const PARSE_POLL_MS = 1500
 /**
- * 就地展开时一次读多少个正文块。
+ * 就地展开时**每一轮**读多少个正文块。
  *
- * 后端上限是 200（`MAX_CHUNK_PAGE`），这里取 60：一屏读得完、首屏不至于卡，
- * 剩下的靠「继续加载」往后接。单文件上限是两万块，所以**必须**分页 ——
- * 一次全取会把几十万字塞进 DOM，面板当场失去响应。
+ * 取后端上限 200（`MAX_CHUNK_PAGE`）：正文现在会**自动循环拉完**（2026-10-17 用户要求
+ * 「不要手动点继续加载」），所以每轮取满能少跑几趟 IPC。
+ *
+ * ⚠️ 仍然要分轮，不能一次全取：单文件上限是两万块，一次全取会把几十万字塞进
+ * 一次 IPC 响应，主进程序列化 + 渲染进程反序列化会卡住整个面板。
+ * 分轮之后用户看到的是「一次加载」，底层仍是分页 —— 每轮之间让出一次事件循环。
  */
-export const CHUNK_PAGE = 60
+export const MAX_CHUNK_PAGE = 200
 
 /**
  * 这一块的章节标题要不要显示。

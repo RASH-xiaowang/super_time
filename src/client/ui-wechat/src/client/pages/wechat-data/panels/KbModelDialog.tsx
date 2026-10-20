@@ -157,9 +157,7 @@ export function KbModelDialog({ kbId, kbName, onClose }: {
       )}
     >
       <p className={css.lead}>
-        这里只改「本库用哪个模型名」。端点与 API Key 仍在
-        <strong> 数据配置 → AI 大模型 </strong>
-        里统一管理 —— 按库各存一份凭据会拼出「A 家地址 + B 家 Key」那种必然 401 的组合。
+        只改「本库用哪个模型名」；端点与 API Key 仍在 <strong>数据配置 → AI 大模型</strong> 里统一管理。
       </p>
 
       {cfg === null && !err && <div className={css.loading}>读取中…</div>}

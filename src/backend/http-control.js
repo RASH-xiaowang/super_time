@@ -59,9 +59,10 @@ function createRemoteAccessControl(deps) {
      *
      * 令牌原文只在这一次的返回值里出现（界面用它拼二维码与可复制的链接），
      * 之后的所有状态查询都只给掩码 —— 见 `http-auth.js` 的 `maskToken`。
-     * @returns `{ ok, token?, state?, error? }`。
+     * @param {{ fullAccess?: boolean }} [options] - `fullAccess:true` = 与桌面同权（打开网页交接 / 局域网扫码）。
+     * @returns `{ ok, token?, pairingCode?, state?, error? }`。
      */
-    async rotate() {
+    async rotate(options = {}) {
       const token = generateAccessToken();
       const saved = await savePatch(deps, { api_token: token, api_enabled: true });
       if (!saved.ok) return { ok: false, error: saved.error };
@@ -73,7 +74,7 @@ function createRemoteAccessControl(deps) {
       const state = await deps.remoteAccess.syncWithConfig();
       // 配对码必须在 stop()/syncWithConfig() 之后签发：停服会先作废内存里的旧码，
       // 顺序反了会把刚刚发出的这个码一起清掉。
-      const pairingCode = deps.remoteAccess.issuePairingCode();
+      const pairingCode = deps.remoteAccess.issuePairingCode(options);
       return { ok: true, token, pairingCode, state };
     },
 

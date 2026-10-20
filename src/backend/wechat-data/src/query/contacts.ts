@@ -205,7 +205,16 @@ function computeContacts(
     const roomOwners = new Map<number, string>()
     const roomUsernames = new Map<number, string>()
     const memberCounts = new Map<number, number>()
-    const memberRooms = new Map<number, number>()
+    /**
+     * member_id → **它所在的全部群**（room_id 列表）。
+     *
+     * ⚠️ 2026-10-17 修：原先是 `Map<member_id, room_id>`（一对一），
+     * 但**一个人可以在多个群里** —— 后写入的会覆盖前面的，于是
+     * `groupUsername` 只保留"最后一个群"，其余群查成员时一个都拿不到。
+     * 实测本机：`wxid_umyqa86if3lm22` 在 426 群，但 `memberRooms.get(99)` 返回 3061
+     * （它在 3061 群也出现过）—— 用户选 426 群时「关注成员」永远是空的。
+     */
+    const memberRooms = new Map<number, number[]>()
     try {
       const crCols = tableColumns(db, 'chat_room')
       const crSel = (c: string, dft: string): string => (crCols.has(c) ? c : dft)
@@ -220,7 +229,9 @@ function computeContacts(
         for (const m of members) {
           const rid = m.room_id
           memberCounts.set(rid, (memberCounts.get(rid) ?? 0) + 1)
-          memberRooms.set(m.member_id, rid)
+          const list = memberRooms.get(m.member_id)
+          if (list) list.push(rid)
+          else memberRooms.set(m.member_id, [rid])
         }
       }
     } catch { /* no group tables */ }
@@ -284,12 +295,30 @@ function computeContacts(
         if (mc !== undefined) contact.memberCount = mc
         const owner = roomOwners.get(id)
         if (owner) contact.owner = owner
-      } else if (category === 'member') {
-        const rid = memberRooms.get(id)
-        if (rid !== undefined) {
-          const gname = roomUsernames.get(rid) ?? ''
-          if (gname) contact.groupUsername = gname
-          if (gname) contact.groupName = gname
+      } else {
+        // 2026-10-17 修：**不再限定 `category === 'member'`**。
+        //
+        // 原写法只在 `member` 类别里填 `groupUsername`，于是：
+        //   · 加过好友的群成员（`localType === 1` → `friend`）拿不到归属；
+        //   · 企业微信成员（`@openim` → `enterprise`）也拿不到。
+        // 后果：定时任务的「关注成员」按 `groupUsername` 筛时，这些群一个成员都选不到
+        // （用户报障：选「智能回复机器人·ai-3群」显示「未读取到群成员」，
+        //  实测该群 3 个成员全是 friend / enterprise）。
+        //
+        // `groupUsername` 与 `category` 是**正交**的两件事：一个人可以既是好友、
+        // 又是某个群的成员。归属只由 `chatroom_member` 表决定，与联系人类型无关。
+        //
+        // ⚠️ 一个人可以在**多个群**里：`groupUsername` 只留第一个（兼容旧字段），
+        // 完整列表放 `groupUsernames` —— 前端筛群成员必须用后者，否则多群成员
+        // 只在其中一个群可见。
+        const rids = memberRooms.get(id)
+        if (rids && rids.length > 0) {
+          const names = rids.map((rid) => roomUsernames.get(rid) ?? '').filter((n) => n !== '')
+          if (names.length > 0) {
+            contact.groupUsername = names[0]
+            contact.groupName = names[0]
+            contact.groupUsernames = names
+          }
         }
       }
       contacts.push(contact)

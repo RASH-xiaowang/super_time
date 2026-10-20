@@ -7,7 +7,7 @@
   justify-content: center;
   gap: 4px;
   border: none;
-  border-radius: var(--nm-r-pill, 999px);
+  border-radius: var(--nm-r-md, 6px);
   cursor: pointer;
   font-size: 14px;
   line-height: 22px;
@@ -39,7 +39,7 @@
   font-size: 12px;
   line-height: 18px;
   padding: 0 10px;
-  border-radius: var(--nm-r-pill, 999px);
+  border-radius: var(--nm-r-sm, 4px);
 }
 
 /* 纯图标按钮：正方形、无内边距。面板里有大量裸图标按钮，统一到这里。 */

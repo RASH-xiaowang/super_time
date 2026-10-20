@@ -26,7 +26,6 @@ import { decompress } from 'fzstd'
 import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
 import { cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
-import { ensureSortIndexIfMissing } from './message-sort-index.ts'
 import { yieldToLoop } from './search-build.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
@@ -330,11 +329,13 @@ function withShards<T>(decryptedDir: string, table: string, fn: (shards: MsgShar
     for (const shard of shardCatalog(decryptedDir)) {
       const meta = shard.tables.get(table)
       if (!meta) continue
-      // W2-3.5：补 (sort_seq, local_id) 覆盖索引。
-      // **必须在开只读连接之前**：Windows 上库被打开时再建索引会 EBUSY，
-      // 而后台补索引恰好会被紧接着的只读连接顶掉 —— 于是每次都建不成，
-      // 页面照旧慢，而且没有任何错误会冒到用户面前。
-      ensureSortIndexIfMissing(shard.file)
+      // 2026-10-18 停用「读路径往解密快照里补 dsh_sort_* 索引」（W2-3.5 的优化）。
+      // 原因不是它没用，而是它**把快照写脏了**：索引页不在微信原始主库的页表里，
+      // 增量同步（WAL / 页级补丁）一拷原始页就会把索引页覆盖成 invalid rootpage。
+      // 实测把 message_0.db 写成 malformed（quick_check 直接报 schema 坏），之后每轮
+      // 检查点都只能整库重解密（~0.7s）+ 全量页指纹（~0.4s），聊天窗口肉眼可见地卡。
+      // 单表索引收益是 1.2ms vs 15ms@5 万行量级，换不来一次秒级停顿；要索引应放
+      // 独立索引库，绝不能写进会被同步覆盖的快照。
       try {
         const db = new DatabaseSync(shard.file, { readOnly: true })
         out.push({ db, file: shard.file, cols: meta.cols, name2id: meta.name2id })

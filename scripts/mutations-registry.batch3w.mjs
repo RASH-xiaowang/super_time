@@ -16,7 +16,8 @@
  *        （**这一条是真出过的**：2026-10-12 写的「会话名居中」到 2026-10-14 才发现从来没生效过，
  *        因为类名照样导出、成品 CSS 里字面量照样在，既有守卫一条都看不见）；
  *   M552 返回按钮的基础态不再隐藏 ⇒ 桌面端三栏并排时也画出一枚「返回会话列表」；
- *   M553 头部居中的可行性门槛（消息列 ≥960px）被删 ⇒ 中宽窗口标题压动作排（重叠量过约 57px）。
+ *   M553 头部动作排不再贴右（`margin-left: auto` 被删）⇒ 动作排紧跟在标题后面，
+ *        标题与按钮挤在左半边、右侧留一大片空白（2026-10-16 去掉居中后，这条成了新的守点）。
  *
  * @module mutations-registry/batch3w
  */
@@ -70,19 +71,19 @@ export const MUTATIONS_BATCH3W = [
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-mobile.wiring.spec.ts',
   },
   {
-    id: 'M553-centering-gate-removed',
-    why: '把「标题绝对居中」的可行性门槛（消息列 ≥960px）删掉 ⇒ 居中回到无条件：中宽窗口（如 1280px，消息列约 740px）下居中标题与约 350px 宽的动作排**必然重叠约 57px**，标题 z-index 更高、压在按钮上。门槛的数是量出来的（2×350 动作排 + 240 标题上界 ≈ 940），改它必须是有意识的动作。判据：chats-wx-geometry.wiring.spec.ts 的 ④（atRuleBlock 找不到这个门槛头会直接红）。',
+    id: 'M553-header-actions-lose-their-right-anchor',
+    why: '头部动作排不再贴右（`margin-left: auto` 被删）⇒ 动作排紧跟在标题后面，标题与按钮挤在左半边、右侧留一大片空白。2026-10-16 之前这条 auto 住在「宽列档」的容器查询里（那时标题绝对居中，靠它把动作排推到右缘）；用户要求标题**始终左对齐**后，容器查询整个删掉、auto 提到基础档，于是这条成了新的守点。判据：chats-wx-geometry.wiring.spec.ts 的 ④（读 `.msgHeaderActions` 基础档，要求含 `margin-left: auto`）。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css',
-    from: '@container (min-width: 960px) {',
-    to: '@container (min-width: 0px) {',
+    from: '.msgHeaderActions { margin-left: auto; }',
+    to: '.msgHeaderActions { margin-left: 0; }',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-wx-geometry.wiring.spec.ts',
   },
   {
     id: 'M554-overview-bar-denominator-back-to-first-item',
     why: '存储构成长条的分母变回「原数组第 0 项」：后端按条数排序、渲染前重排的只是副本，分母读的原数组第 0 项未必最大 —— 真实数据里实测填充宽度算到 1297%（4216px 塞进 325px 的槽被裁掉），界面上只是「每条都顶满」、比例信息整个丢失，且不报任何错。打桩数据第 0 项恰是最大，永远看不见。判据：overview-bars-max-denominator.wiring.spec.ts。',
-    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-panel.tsx',
-    from: 'Math.max(1, ...data.storage.categories.map(x => x.size))',
-    to: 'Math.max(1, data.storage.categories[0]?.size ?? 1)',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-sections.tsx',
+    from: 'Math.max(1, ...categories.map(x => x.size))',
+    to: 'Math.max(1, categories[0]?.size ?? 1)',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-bars-max-denominator.wiring.spec.ts',
   },
   {

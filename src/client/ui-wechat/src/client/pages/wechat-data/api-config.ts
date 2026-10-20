@@ -40,6 +40,7 @@ import type {
   DbIntegrityResult,
   DbRepairResult,
   DbStatusSnapshot,
+  DataRevision,
   DecryptAllResult,
   DecryptImagesResult,
   DecryptStatus,
@@ -454,6 +455,17 @@ export async function apiUpgradeDecodedImages(): Promise<ImageUpgradeResult> {
  */
 export async function apiGetDecryptStatus(): Promise<DecryptStatus> {
   return unwrap(await remote().getDecryptStatus())
+}
+/**
+ * Read the realtime-sync revision (pure in-memory snapshot on the backend).
+ *
+ * 聊天面板的轮询用它做闸门：`revision` 没变就什么都不查；变了但
+ * `messageChanged=false` 就只跳过消息增量（会话/通讯录/朋友圈等库的变化由各自的
+ * 推送处理）。把每秒一次消息 SQL 降成每秒一次内存读。
+ * @returns DataRevision: revision / updatedAt / shards / messageChanged.
+ */
+export async function apiGetDataRevision(): Promise<DataRevision> {
+  return unwrap(await remote().getDataRevision())
 }
 /**
  * Read Whisper transcription configuration status.

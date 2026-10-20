@@ -168,6 +168,36 @@ describe('网关那条路真的走了政策（不是只有政策函数存在）'
     expect(nativeCalls).toEqual([f])
   })
 
+  /**
+   * 2026-10-17：应用有**两个**自己的数据目录，它们是兄弟：
+   *   · `<userData>/wechat-data/` —— 数据根（`dataRoot`）；
+   *   · `<userData>/wechat/` —— `config.json` / `llm.json` / `logs/`。
+   * 设置弹窗底部那个「配置: wechat/config.json ↗」要打开的是后者。
+   * 修复前它被政策拒掉，用户看到的就是「点了没反应」。
+   */
+  it('配置目录（`<userData>/wechat/`）里的文件：放行（设置里那个「配置: …」链接）', async () => {
+    const cfgDir = join(dataRoot, '..', 'wechat')
+    mkdirSync(cfgDir, { recursive: true })
+    const f = join(cfgDir, 'config.json')
+    writeFileSync(f, '{}')
+    const gw = makeGateway()
+    const r = await gw.openPath({ path: f }, new AbortController().signal)
+    expect(r.ok, `配置目录里的文件被拒了：${r.error ?? ''}`).toBe(true)
+    expect(nativeCalls).toEqual([f])
+  })
+
+  it('但 `<userData>/` 下的**其它**目录仍被拒（不放行整个 userData）', async () => {
+    // Electron 自己的缓存目录不是「用户该去手动编辑的东西」。
+    const cacheDir = join(dataRoot, '..', 'Cache')
+    mkdirSync(cacheDir, { recursive: true })
+    const f = join(cacheDir, 'data_0')
+    writeFileSync(f, 'x')
+    const gw = makeGateway()
+    const r = await gw.openPath({ path: f }, new AbortController().signal)
+    expect(r.ok, 'Electron 缓存目录不该被放行').toBe(false)
+    expect(nativeCalls).toEqual([])
+  })
+
   it('空路径也要给出理由（不许「点了没反应」）', async () => {
     const gw = makeGateway()
     const r = await gw.openPath({ path: '   ' }, new AbortController().signal)
@@ -182,7 +212,16 @@ describe('网关那条路真的走了政策（不是只有政策函数存在）'
       .toBeGreaterThanOrEqual(2)
     expect((src.match(/grantRoot\(/g) ?? []).length).toBeGreaterThanOrEqual(2)
     const read = readFileSyncSafe(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'gateway-read.ts'))
-    expect(read).toContain('openDenialReason(p, dataRoot)')
+    /*
+     * ⚠️ 2026-10-17：`openPath` 现在多传一个 `extraRoots`（应用自己的**配置目录**
+     * `<userData>/wechat/`，与数据根 `<userData>/wechat-data/` 是兄弟）。
+     * 不传的话设置弹窗底部那个「配置: wechat/config.json ↗」会被政策拒掉 ——
+     * 真机实测就是「点了没反应」（`ok:false` + 「只能打开应用自己数据目录内的文件」）。
+     */
+    expect(read, 'openPath 没把配置目录作为额外允许根传进去').toContain('openDenialReason(p, dataRoot, extraRoots)')
+    expect(read, '额外允许根里没有配置目录 wechat/').toContain("join(userData, 'wechat')")
+    // 反向：不许把整个 `<userData>/` 放行（那里还有 Electron 缓存与 license.json）。
+    expect(read, '不许把整个 userData 目录放行').not.toContain('openDenialReason(p, userData')
   })
 })
 

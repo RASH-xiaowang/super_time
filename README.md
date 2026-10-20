@@ -11,6 +11,12 @@
 它**不是**微信客户端替代品：不登录、不发送消息、不修改微信的任何数据，也不连接微信服务器
 同步你的聊天记录。它读的是本机已经存在的微信数据文件。
 
+> **实验功能（默认关闭）：微信原图自动下载。** 设置 → 图片解码里显式打开后，应用会复用
+> 上游 WeFlow-X（MIT）的 `img_helper.dll` 注入正在运行的微信，让微信在**接收新图片时**
+> 自己下载高清原图（本应用不发请求、不碰凭据；只影响打开之后收到的图片）。
+> 会修改微信进程内存，关闭/退出时还原；来源、许可与边界见
+> [`docs/PRIVACY.md`](docs/PRIVACY.md) §一.5 与 [`src/backend/VENDORED-LICENSES.md`](src/backend/VENDORED-LICENSES.md)。
+
 ---
 
 ## 系统要求
@@ -158,7 +164,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 127 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 149 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
@@ -168,15 +174,15 @@ vendor-keys/             许可证**公钥**（私钥不在仓库里；本目录
 tools/                   laya 模型导出与验证脚本、许可签发 GUI（license-studio）、视觉审计脚本
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本、CI 分档表（ci-tiers.mjs）、变异登记表
 website/                 官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
-docs/                    九份当前有效的文档（见下方索引）
+docs/                    十三份当前有效的文档（见下方索引）
 .github/workflows/       CI（ci.yml）、夜间（nightly.yml）、发版（release.yml）、官网（pages.yml）
 ```
 
 ## 文档索引
 
-`docs/` 下只保留**十份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
+`docs/` 下只保留**十三份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
 代码审计报告、覆盖矩阵等）已随 2026-10-08 的文档精简删除，**原文都在 git 历史里**（见本节末尾的取回方法）。
-正在实施的重设计提案按「当届有效」保留一份（当前：聊天信息微信对齐）；已落地收口的提案（ClawBot 指挥台 v2）
+正在实施的重设计提案按「当届有效」保留一份（当前：全站微信主题改版）；已落地收口的提案（ClawBot 指挥台 v2）
 保留为已交付设计记录，上一届之前的原文在 git 历史里。
 
 | 文档 | 内容 |
@@ -187,6 +193,12 @@ docs/                    九份当前有效的文档（见下方索引）
 | [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
+| [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md) | 响应式与 Bootstrap 适配：npm 引入方式、栅格/断点规约、五类组件策略、验收清单与审计门禁 |
+| [`docs/UI-DENSITY.md`](docs/UI-DENSITY.md) | UI 密度规范：固定内容/空白率指标与目标、卡片与组件紧凑化规则、实施分层与验收清单 |
+| [`docs/CARD-SIZE.md`](docs/CARD-SIZE.md) | 卡片尺寸规范：每张卡的宽高上界、卡内滚动、视觉卡例外与全站卡片审计工具 |
+| [`docs/UI-WECHAT-REDESIGN-PLAN.md`](docs/UI-WECHAT-REDESIGN-PLAN.md) | 全站 UI 改版方案：微信官方主题定调、设计令牌、界面清单、逐屏改造与验收口径 |
+| [`docs/UI-WECHAT-REDESIGN-INVENTORY.md`](docs/UI-WECHAT-REDESIGN-INVENTORY.md) | 全量界面清单：外壳/闸门/侧栏 5 组 15 项与合并分段/主要弹层的逐屏现状与改造建议 |
+| [`docs/UI-WECHAT-REDESIGN-CONSTRAINTS.md`](docs/UI-WECHAT-REDESIGN-CONSTRAINTS.md) | 改版约束与门禁：主题令牌、对比度、几何棘轮、聊天皮肤 `--wx-*` 与验证命令序列 |
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
 | [`src/backend/wechat-data/README.md`](src/backend/wechat-data/README.md) | 后端包：子目录职责、Remote 方法面的分组、派生库与缓存 |

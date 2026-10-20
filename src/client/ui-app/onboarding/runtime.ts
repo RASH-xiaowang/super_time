@@ -5,6 +5,10 @@
  * 住在 `OnboardingShell.tsx` 里 —— 页一旦拆成自己的模块，就会变成
  * 「壳 → 页 → 壳」的循环导入。这类循环在 ESM 里不一定炸，只会让某个常量在某个
  * 时刻取到 `undefined`（症状是「关于页的版本偶尔是空的」），所以先把公共面提出来。
+ *
+ * 2026-10-19 微信化改版：删掉了**固定舞台尺寸**（`STAGE_W/STAGE_H` 与等比缩放）
+ * 与四张全屏背景图（`STAGE_BGS`）。舞台改成自适应单列（内容列 max-width 760、
+ * 上下滚动），所以这两个常量不再有消费者 —— 留着它们只会让人以为还有另一套缩放。
  */
 
 /**
@@ -32,22 +36,7 @@ export interface RuntimeVersions {
  * （`src/backend/tests/version-consistency.spec.ts`）要求它**始终等于** package.json
  * 的版本 —— 那层保证兜底值不会静默漂移。
  */
-export const APP_VERSION = '1.0.8'
-
-/**
- * 启动页四张阶段背景图（`public/onboarding` → 构建后 `ui-dist/onboarding`）。
- *
- * 2026-10-12：PNG → WebP。四张 1536×1024 的 PNG 合计 **11.25 MB**，而 WebP（q82）
- * 只要 **0.59 MB** —— **省 94.8%**，直接还回 asar 预算（`MAX_ASAR_BYTES = 64MB`、
- * 基线 53.9MB，这一下多出 10.7MB 余量）。Chromium 132（Electron 44）原生支持 WebP，
- * 没有兼容问题。**别改回 PNG**：这四张是启动页的全部图片，从 PNG 退回就是退回 11.25MB。
- */
-export const STAGE_BGS = [
-  'onboarding/bg-stage-0.webp',
-  'onboarding/bg-stage-1.webp',
-  'onboarding/bg-stage-2.webp',
-  'onboarding/bg-stage-3.webp',
-] as const
+export const APP_VERSION = '1.0.9'
 
 /** 启动页阶段 = 4 个介绍页 + 两道闸门（隐私同意 → 授权验证）。 */
 export const CONSENT_STAGE = 'consent' as const

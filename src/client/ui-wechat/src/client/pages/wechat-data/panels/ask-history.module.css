@@ -15,9 +15,10 @@
       （避免用户筛着筛着顺手点掉全库历史）。
    ════════════════════════════════════════════════════════════════════════ */
 
-/* 双类名提权：稳过 kit 的 `.dialog { width: min(520px, 92vw) }`。 */
+/* 双类名提权：稳过 kit 的 `.dialog { width: min(520px, 92vw) }`。
+   2026-10-19 微信化：940 → 880（DL-14）。 */
 .dialogWide.dialogWide {
-  width: min(940px, 94vw);
+  width: min(880px, 94vw);
 }
 
 /* ── 顶部工具条（sticky）─────────────────────────────────────
@@ -32,7 +33,7 @@
   gap: var(--nm-s-2);
   padding-bottom: var(--nm-s-3);
   margin: calc(-1 * var(--nm-s-1)) 0 0;
-  background: var(--nm-bg-1);
+  background: var(--nm-bg-card);
   border-bottom: 1px solid var(--nm-border);
 }
 
@@ -86,7 +87,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
+  min-height: 72px;
+  padding: 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
@@ -95,7 +97,7 @@
 }
 .item:hover { border-color: var(--nm-border-hover); }
 .item[data-open] {
-  border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  border-color: var(--nm-border-hover);
   background: var(--nm-bg-hover);
 }
 

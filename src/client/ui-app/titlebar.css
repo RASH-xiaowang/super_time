@@ -16,6 +16,14 @@ body {
 #root {
   flex: 1;
   min-height: 0;
+  /*
+   * 定位祖先（2026-10-17 补）：启动页的舞台是 `position: absolute; inset: 0`，
+   * 而 `#root` 原先没有定位 ⇒ 它一路往上找到**视口**，于是舞台从 y=0 开始，
+   * 把 38px 高的自绘标题栏整个盖住（用户报「全屏按钮那些也不见了」），
+   * 并且舞台铺满整个窗口而 shell 只有 1180×760 ⇒ 四周多出「黑边」。
+   * 加上这一行之后，`inset: 0` 相对的是 `#root`（标题栏下方那块），两处症状一起消失。
+   */
+  position: relative;
 }
 
 #titlebar {
@@ -24,9 +32,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--dsw-alias-bg-layer-1, #0b1220);
-  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 240, 255, 0.10));
-  color: var(--dsw-alias-label-primary, #e2e8f0);
+  background: var(--nm-bg-1, #f7f7f7);
+  border-bottom: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
+  color: var(--nm-text-1, #0a0a0a);
   -webkit-app-region: drag;
 }
 
@@ -44,16 +52,15 @@ body {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: var(--nm-r-sm, 6px);
-  color: var(--dsw-alias-brand-primary, var(--nm-brand, #00f0ff));
-  background: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
-  border: 1px solid var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
+  border-radius: var(--nm-r-sm, 4px);
+  color: var(--nm-cyan, #07c160);
+  background: transparent;
+  border: none;
 }
 
 .tb-title {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -80,13 +87,25 @@ body {
 }
 
 .tb-btn:hover {
-  background: var(--nm-hover-neutral, rgba(127, 127, 127, 0.16));
+  background: var(--nm-bg-hover, rgba(0, 0, 0, 0.05));
 }
 
 /* 全屏按钮：默认是「进入全屏」的四角外扩图标，进入后换成内收图标 */
 .tb-ico-exit { display: none; }
 .tb-btn[data-on] .tb-ico-enter { display: none; }
 .tb-btn[data-on] .tb-ico-exit { display: block; }
+
+/*
+ * 主题切换按钮（2026-10-17 从主面板左下角迁来）。
+ *
+ * 图标按**当前主题**切换：浅色时显示月亮（点它得到深色），深色时显示太阳。
+ * 两种图标都在 DOM 里，用 `data-theme` 切 —— 与全屏按钮同款打法。
+ * 宽度比窗口控制按钮窄一点（40 vs 46）：它不是窗口控制，视觉上要能区分开。
+ */
+.tb-theme { width: 40px; }
+.tb-ico-moon { display: none; }
+.tb-theme[data-theme='light'] .tb-ico-sun { display: none; }
+.tb-theme[data-theme='light'] .tb-ico-moon { display: block; }
 
 /* 关闭键 hover 用 Windows 原生红（#e81123）—— 这是平台语义色，不随主题变，
  * 所以刻意保留字面量，不走 --nm-* 令牌。 */

@@ -420,22 +420,28 @@ function seedChatData(): void {
 }
 
 /** 只提供 askWechat 真正用到的表面（`llm.stream` + 默认模型）。 */
-function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>): { ctx: Context; prompts: string[] } {
+function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> } {
   const prompts: string[] = []
+  /** 每次「综合生成」用户消息的完整 content（2026-10-18：断言图片块真的进消息）。 */
+  const contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> = []
   let synth = 0
   const llm = {
     // 只有显式传入时才挂 `embed`：缺省时 `makeEmbedFn` 返回 undefined ⇒ 稠密通道整体降级。
     // 这很重要 —— 否则 C3 引入的出网点会改变本文件其它用例的运行环境（它们都在纯稀疏下断言）。
     ...(embed ? { embed } : {}),
-    async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }) {
+    async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ type?: string, text?: string, data?: string, mediaType?: string }> }> }) {
       if (String(opts.system ?? '').includes('检索规划器')) {
         yield { type: 'text-delta', index: 0, text: JSON.stringify({ intent: '查合同条款', subQueries: ['蓝鲸协议', '合同'], from: '', to: '', person: '' }) }
+        if (usage) yield { type: 'usage', usage }
         return
       }
-      prompts.push(opts.messages?.[0]?.content?.[0]?.text ?? '')
+      const content = opts.messages?.[0]?.content ?? []
+      contents.push(content)
+      prompts.push(content[0]?.text ?? '')
       const text = replies[Math.min(synth, replies.length - 1)] ?? ''
       synth += 1
       yield { type: 'text-delta', index: 0, text }
+      if (usage) yield { type: 'usage', usage }
     },
   }
   const ctx = {
@@ -445,7 +451,7 @@ function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[
     llm,
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock' }) },
   }
-  return { ctx: ctx as unknown as Context, prompts }
+  return { ctx: ctx as unknown as Context, prompts, contents }
 }
 
 /** 引用的值都能在材料里找到 ⇒ 不触发回炉（只调一次模型，便于断言模型看到的上下文）。 */
@@ -456,16 +462,59 @@ async function gatewayWith(
   kb1File: string,
   reply = ANSWER,
   embed?: (texts: string[]) => Promise<number[][]>,
-): Promise<{ gw: WechatDataGateway; prompts: string[] }> {
+  usage?: { inputTokens: number, outputTokens: number, totalTokens?: number },
+): Promise<{ gw: WechatDataGateway; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> }> {
   seedChatData()
   await buildSearchIndex(decrypted, true)
   register('蓝鲸合同.md', kb1File, 1)
   register('玄武纪要.md', '内部纪要：' + OTHER + '。', 2)
   vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
   vi.stubEnv('DSH_WECHAT_DECODED_DIR', join(decrypted, 'decoded_images'))
-  const m = makeCtx([reply], embed)
-  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts }
+  const m = makeCtx([reply], embed, usage)
+  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts, contents: m.contents }
 }
+
+describe('端到端：模型 usage 记账（2026-10-19）', () => {
+  it('同一轮问答的多次模型调用累加后随 AskResult 返回', async () => {
+    const { gw } = await gatewayWith(contractText(), ANSWER, undefined, {
+      inputTokens: 10, outputTokens: 5, totalTokens: 15,
+    })
+    const r = await gw.askWechat({ question: '蓝鲸协议第七附则里的验收款是多少', kbId: 1 })
+    // 该路径实际调用模型 3 次（检索规划 + 生成 + 生成后处理），每次 10/5/15。
+    expect(r.usage).toEqual({ inputTokens: 30, outputTokens: 15, totalTokens: 45 })
+  })
+})
+
+describe('端到端：自动回复的图片（2026-10-18）', () => {
+  it('mini 宿主没有附件服务：图片块直接进用户消息，由 llm-bridge 投影成 image_url', async () => {
+    const { gw, contents } = await gatewayWith(contractText())
+    // 网关类的公开类型只暴露客户端会传的字段；`dataScope`/`source` 是 ClawBot 自动回复
+    // 直接走 `askDeep.askWechat` 的内部参数，这里用同一形状做白盒断言。
+    const ask = gw.askWechat.bind(gw) as unknown as (o: {
+      question: string
+      dataScope?: 'wechat' | 'kb-only'
+      source?: string
+      history?: Array<{ role: 'user' | 'assistant', content: string }>
+      images?: Array<{ data: string, mediaType: string, name?: string }>
+    }) => Promise<unknown>
+    // dataScope kb-only + 一句「看这张图」：这是 ClawBot 自动回复的真实入口参数形状。
+    await ask({
+      question: '分析一下图中右边那辆车是什么车？',
+      dataScope: 'kb-only',
+      source: 'auto',
+      history: [
+        { role: 'user', content: '[图片]' },
+        { role: 'assistant', content: '你好呀，有事吗' },
+      ],
+      images: [{ data: 'aGVsbG8=', mediaType: 'image/png', name: 'wx-image-7' }],
+    })
+    // 至少有一次「综合生成」的用户消息带图片块（规划那一轮只有文本）。
+    const imageParts = contents.flat().filter((p) => p.type === 'image')
+    expect(imageParts.length).toBeGreaterThan(0)
+    expect(imageParts[0]?.data).toBe('aGVsbG8=')
+    expect(imageParts[0]?.mediaType).toBe('image/png')
+  })
+})
 
 describe('端到端：问答接入知识库（kbId 透传 / 依据行口径 / 库隔离）', () => {
   it('消息与文件同时被引用；依据行只把消息算会话，文件另按文件数单列', async () => {

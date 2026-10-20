@@ -133,6 +133,8 @@ describe('backend-supervisor', () => {
     const result = await h.supervisor.bootstrap('D:\\userData')
     expect(result.ok).toBe(false)
     expect(h.handles[0]!.handle.dispose).toHaveBeenCalledTimes(1)
+    // init 失败的收尾同样按握手 dispose（worker 可能已经起来了，注入要还原）
+    expect(h.handles[0]!.handle.dispose).toHaveBeenCalledWith(expect.any(Function))
     expect(h.supervisor.status.state).toBe('restarting')
 
     await vi.waitFor(() => {
@@ -201,6 +203,9 @@ describe('backend-supervisor', () => {
 
     h.supervisor.stop()
     expect(h.handles[1]!.handle.dispose).toHaveBeenCalledTimes(1)
+    // dispose 是握手：必须带回调，等 worker 收尾（还原注入/清 marker）完成才 kill。
+    // 「发完就 kill」会让 worker 的 case 'dispose' 与 exit 兜底都来不及跑。
+    expect(h.handles[1]!.handle.dispose).toHaveBeenCalledWith(expect.any(Function))
     expect(h.supervisor.backend).toBeNull()
     expect(h.supervisor.isStopping).toBe(true)
 

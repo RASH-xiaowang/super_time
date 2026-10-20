@@ -1,0 +1,261 @@
+/**
+ * 引用角标 + 引用详情面板的样式（2026-10-16 新增）。
+ *
+ * 单独一份文件而不是塞进 `ask.module.css`：后者已 974 行，贴着 1000 行上限
+ * （`m21-file-size-ratchet.spec.ts`）。这两块是**语义独立**的一层
+ * （「引用怎么显示」），拆出来也让 `ask.module.css` 继续只放对话主结构。
+ *
+ * 几何口径与 `ask.module.css` 一致：圆角只用令牌、间距避开 5/7/9/18px、
+ * 胶囊用 `var(--nm-r-pill, 999px)`（`theme-geometry.spec.ts` 钉着）。
+ */
+
+/* ── 正文里的引用角标 ────────────────────────────────────────
+   上标数字，不是 `[1]` 方括号 —— 方括号在中文正文里很扎眼，而上标才是引用
+   该有的样子。用 `vertical-align: super` + 缩小字号，行高不变（不撑开行距）。 */
+/* 正文容器：只负责让角标与文字在同一行内正确对齐（`white-space: pre-wrap`
+   由外层 `.chatAnswer` 提供，这里不重复设 —— 重复设会让换行行为有两处真源）。 */
+.answerBody { display: inline; }
+.citeMark {
+  display: inline-block;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  margin: 0 1px;
+  border: 0;
+  border-radius: var(--nm-r-pill, 999px);
+  background: color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+  color: var(--nm-cyan);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  vertical-align: super;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.citeMark:hover { background: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
+/* 正在看的那条：实心高亮，让用户知道「右侧面板显示的就是它」。 */
+.citeMark[data-active] {
+  background: var(--nm-cyan);
+  color: var(--nm-bg-1);
+}
+/* 模型标了不存在的编号（超出来源数）：不可点，但**仍然显示** ——
+   隐藏会让用户以为模型没标引用，而实际是标错了。 */
+.citeMark:disabled {
+  background: color-mix(in srgb, var(--nm-danger) 14%, transparent);
+  color: var(--nm-danger);
+  cursor: default;
+  text-decoration: line-through;
+}
+
+/* ── 引用详情抽屉（右侧，默认关）──────────────────────────────
+   2026-10-19 微信化（NV-02 / DL-12）：从「并排 320px 常驻栏」改成**右侧覆盖式抽屉**
+   —— 正文因此始终满宽（打开引用不再挤压回答列）。
+   默认关闭（item === null 时不渲染），点正文角标才滑出、点关闭/同一条角标收起。
+   定位祖先是 `.askLayout`（position:relative）；会话内问答则是 384→400 的抽屉
+   `.panel`（`.citeDetail[data-overlay]` 的定位祖先）。 */
+.citeDetail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: calc(100% - 24px);
+  z-index: 30;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  overflow-y: auto;
+  box-shadow: var(--nm-shadow-popup);
+}
+
+.citeDetailHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.citeDetailIdx {
+  color: var(--nm-cyan);
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.citeDetailTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.citeDetailClose {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.citeDetailClose:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+
+.citeDetailMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+.citeDetailTag {
+  padding: 1px 6px;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  color: var(--nm-cyan);
+  font-size: 10px;
+}
+.citeDetailTag[data-src='kb'] {
+  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+  color: var(--nm-purple);
+}
+.citeDetailTime { font-variant-numeric: tabular-nums; }
+
+/* 被引用的原文：这是「精准跳转」的落点，给足空间与对比度。 */
+.citeDetailBody {
+  padding: 10px 12px;
+  border-left: 2px solid var(--nm-cyan);
+  border-radius: 0 var(--nm-r-sm) var(--nm-r-sm) 0;
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--nm-text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 上下文（前后几条消息）──────────────────────────────────
+   单条消息常常看不懂（「收到转账120.00元」—— 谁转的？前后说了什么？），
+   给前后几条让用户不用跳走就能判断「是不是这条」。 */
+.citeDetailCtx { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.citeDetailCtxHead {
+  font-size: 11px;
+  color: var(--nm-text-3);
+  letter-spacing: 0.04em;
+}
+.citeDetailCtxList { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.citeDetailCtxRow {
+  display: grid;
+  /* `minmax(0, 1fr)` 而不是 `1fr`：`1fr` 的最小宽度是 `auto`（内容最小宽），
+     长消息会把整行撑开、进而把面板撑宽（实测 427px）。 */
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: var(--nm-r-sm);
+  font-size: 11.5px;
+  color: var(--nm-text-2);
+  min-width: 0;
+}
+/* 被引用的那一条：描边 + 提亮，一眼看出「上下文里的哪条是它」。 */
+.citeDetailCtxRow[data-focus] {
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  color: var(--nm-text-1);
+}
+.citeDetailCtxWho { font-weight: 600; flex-shrink: 0; }
+.citeDetailCtxTime { color: var(--nm-text-3); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.citeDetailCtxText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 动作行 ──────────────────────────────────────────────────
+   「归档」是主位（把这条留下），「打开会话原文」是次位（离开问答）。 */
+.citeDetailActions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+/* 「归档」是**次按钮**（DL-12：临时查看为主，不为归档抢主色）；两个动作同一套描边。 */
+.citeDetailPrimary {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  /* 文字允许换行：按钮在 320px 面板里只有 ~270px，而「归档到历史记录」
+     不换行时最小宽 401px（实测）—— 不换行会把面板撑宽。 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.citeDetailPrimary:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.citeDetailGhost {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.citeDetailGhost:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+
+/* ── 窄屏：详情面板改为**覆盖式**（不挤压对话列）──────────────
+   手机/平板档（≤820px）对话列本身就只有 ~350px，再切 320px 给详情会把正文
+   压到不可读。改成绝对定位覆盖在右侧 —— 此时「不离开问答」由**关闭按钮**
+   保证（关掉就回到原样），而不是由并排布局保证。 */
+@media (max-width: 820px) {
+  .citeDetail {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, calc(100% - 24px));
+    z-index: 30;
+    box-shadow: -8px 0 24px color-mix(in srgb, #000 45%, transparent);
+  }
+}
+
+/* ── 强制覆盖式（`data-overlay`）──────────────────────────────
+   会话内问答的面板**恒为 384px**（`session-ask.module.css` 的 `.panel`），
+   与窗口宽度无关 —— 所以上面那条媒体查询在宽窗口下不命中，而 384px 里
+   切 320px 给详情会把正文压到不可读。这里用属性强制覆盖，不依赖窗口宽度。
+   定位祖先是 `SessionAsk` 的 `.panel`（它有 `position: relative`）。 */
+.citeDetail[data-overlay] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(320px, calc(100% - 24px));
+  z-index: 30;
+  margin-left: 0;
+  box-shadow: -8px 0 24px color-mix(in srgb, #000 45%, transparent);
+}

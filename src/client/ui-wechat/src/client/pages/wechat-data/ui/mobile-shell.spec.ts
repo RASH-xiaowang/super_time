@@ -39,6 +39,11 @@ const guide = read(WD, 'panels', 'setup-guide.module.css')
 const notice = read(WD, 'panels', 'notice.module.css')
 const panel = read(WD, 'WechatDataPanel.tsx')
 const hook = read(WD, 'ui', 'use-media-query.ts')
+/** 全局搜索框组件：手机档要把它排除在 44px 触摸下限之外（见下面那条用例）。 */
+const search = read(WD, 'panels', 'global-search.tsx')
+/** kit 的搜索框组件与样式：面板内的搜索框同样要排除（见下面那条用例）。 */
+const kitShell = read(WD, 'ui', 'kit-shell.tsx')
+const kit = read(WD, 'ui', 'kit.module.css')
 
 /**
  * 取某个文件里手机档那一段的内容。
@@ -90,19 +95,67 @@ describe('外壳各处在 560 下做了什么', () => {
     expect(b, '.body 没有改成竖排（搜索条与内容会并排）').toContain('flex-direction: column')
   })
 
-  it('触摸目标下限：全局元素级 44px + 段条在手机档覆盖回 44px', () => {
+  it('设置页在手机档改成上下两段（左右两栏会把内容区压到 124px）', () => {
+    // 2026-10-16 真机实测：`.layout` 是左右两栏、`.navRail` 固定 `flex: 0 0 220px`，
+    // 375px 手机上右侧 `.mainScroll` 只剩 **124px** —— `.panelHead`（AI 模型卡片标题）
+    // 被压到 80px 宽、309px 高，文字逐字换行成竖排；`.toggle` 58×210、`.btn` 40×96 同因。
+    const s = read(WD, 'panels', 'settings.module.css')
+    const b = phoneBlock(s)
+    expect(b, '设置页没有手机档 ⇒ 左右两栏把内容区压到 124px（用户报的「组件大小不对」）')
+      .toContain('.layout')
+    expect(b, '设置页的 .layout 没有改成竖排（左右两栏会继续挤压内容区）')
+      .toMatch(/\.layout \{[^}]*flex-direction:\s*column/)
+    expect(b, '导航轨没有改成横向滚动条（竖列会继续占 220px）')
+      .toMatch(/\.navRail \{[^}]*flex-direction:\s*row/)
+    expect(b, '导航轨没有开横向滚动（15 个导航项会溢出）')
+      .toMatch(/\.navRail \{[^}]*overflow-x:\s*auto/)
+    // 基础档的固定宽必须被手机档解除，否则横向条里每个分组还是 220px
+    expect(b, '导航轨的固定宽没有被解除').toMatch(/\.navRail \{[^}]*flex:\s*0 0 auto/)
+  })
+
+  it('设置弹窗在手机档整宽 + 底部留白（基础档的 padding:0 会吃掉安全区）', () => {
+    // 2026-10-16 真机实测：基础档 `width: min(1080px, 96vw)` 在 375px 上算出 360px
+    // （右边缺 15px）；`padding: 0` 又把 kit 手机档的 `padding-bottom: env(safe-area-inset-bottom)`
+    // 一起覆盖掉 —— 「保存配置」按钮距屏幕底边只剩 7px。
+    const b = phoneBlock(shell)
+    expect(b, '设置弹窗没有在手机档整宽（基础档 96vw 会留出 15px 空隙）')
+      .toMatch(/\.settingsDialog\.settingsDialog \{[^}]*width:\s*100%/)
+    expect(b, '设置弹窗没有补回底部安全区（保存按钮会贴到屏幕底边）')
+      .toMatch(/\.settingsDialog\.settingsDialog \{[^}]*padding-bottom:\s*calc\(/)
+  })
+
+  it('触摸目标下限：全局元素级 44px + 段条在手机档覆盖回 36px', () => {
     // 2026-10-14 在 375px × 真实数据上量的：段条 24px（8 组合并视图的主导航）、
     // 分类按钮/作者芯片 26px、日期预设 24px、搜索框 32px —— 手指点不准，触摸上也没有 :hover 补救。
     const b = phoneBlock(viewport)
     expect(b, '手机档没有元素级的 44px 下限').toMatch(/min-height:\s*44px/)
     expect(b, '下限不该把复选/单选框也抬（会把行撑破）').toContain('input:not([type="checkbox"]):not([type="radio"])')
+    // 2026-10-16 用户报「手机端搜索框太大」：全局搜索框是唯一一个**自己就是整条搜索条**的输入框，
+    // 抬到 44px 后 `.box`（44 + 6×2 padding + 1×2 border = 58px）比 56px 的搜索条还高 2px。
+    // 它必须被排除，且排除方式要能穿过 CSS Modules 的 hash（类名选不中）。
+    expect(b, '全局搜索框没有被排除在 44px 下限之外 ⇒ 容器会比搜索条还高（用户报的「搜索框太大」）')
+      .toContain(':not([data-global-search])')
+    expect(search, '搜索框没有 data-global-search 属性 ⇒ 上面那条排除选择器选不中它')
+      .toContain('data-global-search')
+    // 2026-10-16 用户报「筛选区占比太大」：面板内的搜索框（SearchInput）也是**密集筛选控件**，
+    // 抬到 44px 会让「段条 + 搜索行 + 分类条」三行合计 222px（占 718px 内容区的 31%）。
+    expect(b, '面板内搜索框没有被排除在 44px 下限之外 ⇒ 筛选区会膨胀（用户报的「占比太大」）')
+      .toContain(':not([data-search-input])')
+    expect(kitShell, 'SearchInput 没有 data-search-input 属性 ⇒ 上面那条排除选择器选不中它')
+      .toContain('data-search-input')
+    // 手机档还要显式给搜索框一个收窄的高度
+    expect(phoneBlock(kit), '手机档没有把搜索框收窄 ⇒ 仍是 44px，撑高筛选区')
+      .toMatch(/\.searchInput \{\s*height:\s*\d+px/)
     // 段条基础档是刻意的 24px（WCAG 2.5.8 AA，merged-compact 钉着），元素级规则被它的类特异性盖住
     // ⇒ 必须在 kit-overlay 的手机档里覆盖；两边都要在，少一边就是 24px。
+    // 2026-10-16 从 44px 收到 36px：分段条是**密集筛选控件**，不是主要操作按钮 ——
+    // 44px 是「主要操作」的标准（Apple HIG 的 44pt 针对主按钮），套在筛选条上会让筛选区膨胀。
+    // 36px 仍高于 WCAG 2.5.8 的 24px AA 下限。
     const ob = phoneBlock(overlay)
-    expect(ob, '段条在手机档没有抬到 44px ⇒ 元素级规则被 .segItem 的类特异性盖住，实际仍是 24px')
-      .toContain('.segItem { min-height: 44px; }')
-    expect(overlay.slice(0, overlay.indexOf(PHONE)), '段条基础档被顺手改成 44px ⇒ 桌面档也变高，且 merged-compact 的 24px 判据会红')
-      .not.toContain('.segItem { min-height: 44px; }')
+    expect(ob, '段条在手机档没有抬到 36px ⇒ 元素级规则被 .segItem 的类特异性盖住，实际仍是 24px')
+      .toContain('.segItem { min-height: 36px; }')
+    expect(overlay.slice(0, overlay.indexOf(PHONE)), '段条基础档被顺手改成 36px ⇒ 桌面档也变高，且 merged-compact 的 24px 判据会红')
+      .not.toContain('.segItem { min-height: 36px; }')
   })
 
   it('抽屉与弹窗转全屏底部 sheet，且宽度覆盖带 !important（宽度是内联 style）', () => {
@@ -154,7 +207,7 @@ describe('接线：外壳真的挂上了', () => {
     const nav = read(WD, 'ui', 'mobile-nav.module.css')
     expect(nav).toContain('position: fixed')
     expect(nav).toContain('env(safe-area-inset-bottom')
-    // 触摸目标下限 44px
-    expect(nav, '底部栏格子高度低于 44px 的触摸目标下限').toContain('min-height: 48px')
+    // 触摸目标下限 44px；2026-10-16 全新设计把格子抬到 56px（图标 24px + 标签 11px 之间留呼吸）
+    expect(nav, '底部栏格子高度低于 44px 的触摸目标下限').toContain('min-height: 56px')
   })
 })

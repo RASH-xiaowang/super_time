@@ -20,6 +20,7 @@ const {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_TIMEOUT_MS,
   parseLlmBaseUrl,
+  joinLlmEndpoint,
   headersFor,
   llmRequest,
 } = require('../llm-http.js')
@@ -42,6 +43,59 @@ describe('LLM base URL 卫生', () => {
     expect(() => parseLlmBaseUrl('https://user:secret@api.example.com/v1')).toThrow(/用户名或密码/)
     expect(() => parseLlmBaseUrl('https://api.example.com/v1?model=m')).toThrow(/查询参数/)
     expect(() => parseLlmBaseUrl('https://api.example.com/v1#fragment')).toThrow(/查询参数或片段/)
+  })
+})
+
+/**
+ * 端点拼接的容错（2026-10-16 实测踩到）。
+ *
+ * 用户把 `embeddingApiUrl` 填成**完整端点**（`.../v1/embeddings`）而 `embedPath` 仍是
+ * 默认 `/embeddings` ⇒ 拼出 `.../v1/embeddings/embeddings` ⇒ **404**。
+ * 后果不是报错弹窗，而是**稠密检索整条通道静默失效**（`dense:0(off)`）——
+ * 用户看到的是「搜索不准确」，而不是「配置错了」。
+ */
+describe('端点拼接容错（用户填完整端点也不重复拼路径）', () => {
+  it('base 不含端点路径时正常拼接', () => {
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1', '/embeddings'))
+      .toBe('https://api.siliconflow.cn/v1/embeddings')
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1', '/rerank'))
+      .toBe('https://api.siliconflow.cn/v1/rerank')
+  })
+
+  it('base 已含端点路径时不再重复拼（本轮修的那个 404）', () => {
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1/embeddings', '/embeddings'))
+      .toBe('https://api.siliconflow.cn/v1/embeddings')
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1/rerank', '/rerank'))
+      .toBe('https://api.siliconflow.cn/v1/rerank')
+    // 尾斜杠也要能识别
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1/embeddings/', '/embeddings'))
+      .toBe('https://api.siliconflow.cn/v1/embeddings')
+  })
+
+  it('base 的尾段是**别的**已知端点时剥掉它（本轮修的第二个 404）', () => {
+    // 用户把 `rerankApiUrl` 也填成了 embedding 端点（复制粘贴忘了改）⇒
+    // 拼出 `.../v1/embeddings/rerank` ⇒ 404，精排整条通道失效。
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1/embeddings', '/rerank'))
+      .toBe('https://api.siliconflow.cn/v1/rerank')
+    expect(joinLlmEndpoint('https://api.siliconflow.cn/v1/rerank', '/embeddings'))
+      .toBe('https://api.siliconflow.cn/v1/embeddings')
+    expect(joinLlmEndpoint('https://api.deepseek.com/v1/chat/completions', '/embeddings'))
+      .toBe('https://api.deepseek.com/v1/embeddings')
+  })
+
+  it('只认白名单里的端点名，不做模糊匹配（猜错会把请求发到别的端点）', () => {
+    // `/v1/embed` 不在白名单里 ⇒ 照常拼
+    expect(joinLlmEndpoint('https://api.example.com/v1/embed', '/embeddings'))
+      .toBe('https://api.example.com/v1/embed/embeddings')
+    // 自定义路径（不是已知端点名）⇒ 照常拼
+    expect(joinLlmEndpoint('https://api.example.com/v1/my-embed', '/embeddings'))
+      .toBe('https://api.example.com/v1/my-embed/embeddings')
+  })
+
+  it('path 为空时直接用 base；path 不带前导斜杠也能拼', () => {
+    expect(joinLlmEndpoint('https://api.example.com/v1', '')).toBe('https://api.example.com/v1')
+    expect(joinLlmEndpoint('https://api.example.com/v1', 'embeddings'))
+      .toBe('https://api.example.com/v1/embeddings')
   })
 })
 

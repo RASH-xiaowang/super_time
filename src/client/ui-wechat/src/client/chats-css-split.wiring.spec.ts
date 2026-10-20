@@ -23,7 +23,7 @@ const PANELS = join(HERE, 'pages', 'wechat-data', 'panels')
 const LIMIT = 1000
 
 /** 拆出来的那几份（含原文件）。新增一份要登记在这里。 */
-const PARTS = ['chats.module.css', 'chats-rows.module.css', 'chats-cards.module.css', 'chats-shell.module.css', 'chats-contact-info.module.css', 'chats-info.module.css']
+const PARTS = ['chats.module.css', 'chats-rows.module.css', 'chats-cards.module.css', 'chats-shell.module.css', 'chats-contact-info.module.css', 'chats-info.module.css', 'chats-new-msg.module.css']
 /** 引用它们的消费者（第 49 刀改前缀的那批）。 */
 const CONSUMERS = [
   'pages/wechat-data/panels/Chats.tsx',

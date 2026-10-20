@@ -115,52 +115,35 @@ export function ErrorState({ message, detail, onRetry }: {
  *   · `PrivacyTrust.tsx:162/187` 更糟：加载中和空态**共用 `.emptyInline`** ——
  *     两个语义完全不同的分支同一套视觉，用户分不清「在跑」和「没有」。
  *
- * 三档形态，按场景挑：
- *   · `skeleton` —— 列表/网格类，复用 `ListSkeleton` 的微光骨架（形状贴近真实行）；
- *   · `compact`  —— 放不进骨架的窄区（图表面板、弹窗），一行紧凑；
- *   · `timed`    —— 慢查询（后端是同步 SQLite，单队列会排队十几秒），带上「已等 Ns」，
- *                  让等待有进度感（此前 `useElapsedSeconds` 只接了 6 处、其余手写）。
+ * 2026-10-18 用户要求「用正常的加载样式」：**不再画骨架条**（头像 + 占位线那套），
+ * 统一改成「旋转指示 + 文案」。`skeleton` 档仅为兼容旧调用保留（视觉与 compact 相同），
+ * 三档只差文案与附加信息：
+ *   · `skeleton` / `compact` —— 一行紧凑的加载提示；
+ *   · `timed` —— 慢查询带「已等待 Ns」，让等待有进度感。
  *
  * **不变量**：任何一档都**不得**复用空态视觉（`.empty` / `.emptyInline`）——
  * 否则又回到「加载 = 没数据」的老毛病。由 `state-components.wiring.spec.ts` 钉住。
  * @param props.label - 主文案。
- * @param props.variant - 三档之一，默认 `skeleton`。
- * @param props.rows - skeleton 档的行数。
- * @param props.grid - skeleton 档是否网格（卡片格子）。
+ * @param props.variant - 三档之一（视觉已统一为旋转指示 + 文案）。
+ * @param props.rows - 旧骨架行数参数，仅为兼容保留，加载态不再渲染骨架。
+ * @param props.grid - 旧骨架网格参数，仅为兼容保留。
  * @param props.since - timed 档的已用秒数（调用方传 `useElapsedSeconds(x)`）。
  * @param props.hint - 可选的补充说明（如「首次同步约 1–2 分钟」）。
  */
-export function LoadingState({ label = '加载中…', variant = 'skeleton', rows, grid, since, hint }: {
+export function LoadingState({ label = '加载中…', variant = 'compact', since, hint }: {
   label?: React.ReactNode
   variant?: 'skeleton' | 'compact' | 'timed'
+  /** 兼容旧调用（骨架行数）；加载态已不再渲染骨架。 */
   rows?: number
+  /** 兼容旧调用（骨架网格）；加载态已不再渲染骨架。 */
   grid?: boolean
   since?: number
   hint?: React.ReactNode
 }): React.JSX.Element {
-  if (variant === 'skeleton') {
-    // 直接复用 kit 自己的骨架类（`ListSkeleton` 用的也是这几个）——不 import `panels/hooks.tsx`，
-    // 否则 `ui/ → panels/ → ui/` 成环。骨架形状与 `ListSkeleton` 完全一致。
-    return (
-      <div className={css.skelGrid} data-st-loading="skeleton" aria-hidden="true"
-        style={{ gridTemplateColumns: grid ? 'repeat(auto-fill, minmax(120px, 1fr))' : '1fr' }}>
-        {Array.from({ length: rows ?? 8 }).map((_, i) => (
-          <div key={i} className={`nm-skel ${grid ? css.skelCard : css.skelRow}`}>
-            {!grid && (
-              <>
-                <span className={`nm-skel ${css.skelAvatar}`} />
-                <span className={`nm-skel ${css.skelLine}`} />
-                <span className={`nm-skel ${css.skelMeta}`} />
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-    )
-  }
   const suffix = variant === 'timed' && since !== undefined ? `（已等待 ${since}s）` : ''
   return (
     <div className={css.loadingState} data-st-loading={variant}>
+      <span className={css.spinner} aria-hidden="true" />
       <div className={css.loadingLabel} role="status">{label}{suffix}</div>
       {hint && <div className={css.loadingHint}>{hint}</div>}
     </div>
@@ -371,7 +354,7 @@ export function TimeField({ value, onChange, ariaLabel, id, className }: {
  * @param props - 起止值、变更回调、预设键列表与清除回调。
  * @returns 区间控件元素。
  */
-export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaLabel = '日期区间', idFrom, idTo, className }: {
+export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaLabel = '日期区间', idFrom, idTo, className, inline = false }: {
   from: string
   to: string
   onFrom: (value: string) => void
@@ -384,6 +367,14 @@ export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaL
   idFrom?: string
   idTo?: string
   className?: string
+  /**
+   * 预设与日期区间**并排一行**（默认上下两行）。
+   *
+   * 默认的上下堆叠在「筛选条只有这一件工具」时没问题，但放进**一行式筛选条**
+   * （ClawBot 接入会话）就会把整条撑成两行 —— 那里预设与区间是同一件事的两半，
+   * 并排才读得通（2026-10-17）。
+   */
+  inline?: boolean
 }): React.JSX.Element {
   /** 起止都填了且颠倒时对调，再一次性写回两端。 */
   const commit = (nextFrom: string, nextTo: string): void => {
@@ -397,7 +388,7 @@ export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaL
     onTo(r.to)
   }
   return (
-    <div className={clsx(css.dateRange, className)} role="group" aria-label={ariaLabel}>
+    <div className={clsx(css.dateRange, inline && css.dateRangeInline, className)} role="group" aria-label={ariaLabel}>
       {presets && presets.length > 0 && (
         <div className={css.dateRangePresets}>
           {presets.map((key) => {

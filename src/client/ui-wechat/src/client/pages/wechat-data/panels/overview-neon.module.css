@@ -1,3 +1,6 @@
+/* Wave D3（2026-10-18）：本文件已**不再被任何 TSX import**（总览改成 kit Card + Bootstrap 栅格）。
+   保留原因：m6-phone.wiring.spec.ts / light-theme-coverage.wiring.spec.ts 仍按文本读它做守卫；
+   产物里不会出现（无 import 即被 tree-shake）。待这两个 spec 迁移后一并删除。 */
 /* ============================================================
  * 「微信数据总览」霓虹仪表盘皮肤（2026-09-27）
  *
@@ -130,7 +133,9 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* 内容水平居中（2026-10-16 用户要求）：八边形牌面里靠左的内容看起来"没摆正"，
+     居中后图标/数字/标签共用一条中轴，与牌面本身的对称形状一致。 */
+  align-items: center;
   justify-content: center;
   gap: 2px;
   min-width: 0;
@@ -145,7 +150,7 @@
   border: 0;
   background: transparent;
   color: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: transform 0.18s ease, filter 0.18s ease;
   /* 外发光只能靠 drop-shadow：板面是 clip-path 切的，box-shadow 会被一起裁掉 */
@@ -203,11 +208,13 @@
 .plate[data-tone='blue'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-info) 85%, transparent), color-mix(in srgb, var(--nm-purple) 68%, transparent) 62%, color-mix(in srgb, var(--nm-purple) 38%, transparent)); }
 .plate[data-tone='green'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-success) 85%, transparent), color-mix(in srgb, var(--nm-cyan) 68%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 38%, transparent)); }
 
-/* 牌面内容：竖排（图标 → 数字 → 标签），字号跟设计稿的层级走。 */
+/* 牌面内容：竖排（图标 → 数字 → 标签），字号跟设计稿的层级走。
+   `align-items: center` 让图标/数字/标签共用一条中轴（与 `.plate` 的居中一致）。 */
 .plateBody {
   position: relative;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 3px;
   min-width: 0;
   width: 100%;
@@ -533,7 +540,24 @@
 @media (max-width: 1100px) {
   .heroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .plateValue { font-size: 18px; }
-  .mixSub { display: none; }
+  /*
+   * Wave 1（2026-10-18 响应式审计）：「收发构成」副文案（文本/图片/视频/链接卡片/系统条数）
+   * 原先在这一档 `display: none` —— 窄屏凭空丢掉一组业务数据（方案 §2.1 明令禁止：
+   * 响应式只允许换行/变列/进抽屉，不允许"小屏看不见"；基线 390/768/1024 三个视口命中）。
+   * 改法：`mixBar` 允许换行、副文案整条落到第二行并按行折（字号收一档），**不隐藏**。
+   * 不用横滚：`.hero` 是 `overflow: hidden` 的牌面容器，横滚会被裁掉且没有提示。
+   */
+  .mixBar.mixBar { flex-wrap: wrap; }
+  .mixSub {
+    flex: 1 1 100%;
+    margin-left: 0;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    font-size: 11px;
+    line-height: 1.5;
+  }
 }
 
 /* ── 手机档（≤560）：牌面再收一档到两列 ────────────────────────────────
@@ -543,4 +567,16 @@
    （同特异性、后写者赢），否则会被它盖回四列。 */
 @media (max-width: 560px) {
   .heroStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* 手机档：2 列时每格约 200px，桌面那套 146px 最小高度 + 16/20px 内边距偏松。
+     收紧一档让 8 张牌从 600px 高降到约 480px，一屏能多看两行。
+     内边距左右仍留 16px（躲开六边形斜边；12px 会让图标压到斜边上，见 .plate 的注释）。 */
+  .plate {
+    min-height: 118px;
+    max-height: 148px;
+    padding: 12px 16px;
+  }
+  .plateValue { font-size: 17px; }
+  .plateIcon { width: 20px; height: 20px; font-size: 11px; }
+  .mixBar.mixBar { padding: 8px 12px; font-size: 11px; }
 }

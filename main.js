@@ -3,11 +3,19 @@
 // SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
 if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
 
-const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, shell, utilityProcess, protocol, nativeTheme } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
+const { WECHAT_MEDIA_SCHEME, mediaResponse } = require('./src/backend/media-protocol');
+
+// 桌面媒体协议（2026-10-18）：聊天图片改为 wechat-media:// 流式读取 decoded_images，
+// 不再把 base64 经「后端 → main → 渲染进程」送两遍。scheme 必须在 app ready 前注册。
+protocol.registerSchemesAsPrivileged([{
+  scheme: WECHAT_MEDIA_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+}]);
 
 /**
  * 启动自检：**必须先于任何 `app.*` 用法**。
@@ -93,6 +101,9 @@ const { createUpdateService } = require('./src/backend/update');
 const { registerMiscIpc } = require('./src/backend/ipc-misc');
 const { registerWechatIpc } = require('./src/backend/ipc-wechat');
 const { registerRemoteAccessIpc } = require('./src/backend/ipc-remote-access');
+const { createBrowserHandoff } = require('./src/backend/browser-handoff');
+const { createRemoteAccessControl } = require('./src/backend/http-control');
+const { createHandoffNative } = require('./src/backend/handoff-native');
 const { registerUpdateIpc } = require('./src/backend/ipc-update');
 const { createIpcTrust } = require('./src/backend/ipc-trust');
 // 局域网远程访问（手机端）：HTTP 服务 + 与 IPC 共用的那道闸门。
@@ -214,6 +225,10 @@ let updateService = null;
  * 不该让端口在用户没点过任何新开关时就打开）。
  */
 let remoteAccess = null;
+/** 交接会话的原生能力代理；等 updateService 建好后再赋值（服务先用闭包取它）。 */
+let handoffNativeCall = null;
+/** 浏览器交接（「打开网页」）：把主窗口换成右下角卡片；未创建时为 null。 */
+let browserHandoff = null;
 
 // ── 调用超时 ─────────────────────────────────────────────────────────
 // 实际逻辑在 src/backend/backend-rpc.js（那里可被单测覆盖）；这里只决定窗口大小。
@@ -318,6 +333,9 @@ function installWebContentsGuards(contents) {
 app.whenReady().then(async () => {
   // 未获单实例锁的重复实例不做任何初始化（app.quit 已在上面调用）。
   if (!singleInstanceLock) return;
+  // 读取根由后端 init 解析（用户可能把 decoded_image_dir 配到非默认位置）；未就绪时 404。
+  protocol.handle(WECHAT_MEDIA_SCHEME, (request) =>
+    mediaResponse(String(backendSupervisor.boot?.info?.decoded ?? ''), request.url));
   // 入口路径只解析一次：IPC 信任与窗口 loadFile 必须用同一份路径。
   // 若两处各自再调 uiEntryHtml，构建产物恰好出现/消失时会出现「信任旧入口、
   // 却加载回退入口」的竞态。
@@ -332,7 +350,7 @@ app.whenReady().then(async () => {
   // 诊断日志（M6）：界面上的「导出诊断日志」走这三个。
   // 正常情况下日志落在 STATE_DIR/logs，用户报障时把它交出来即可。
   registerMiscIpc({
-    ipcMain, ipcTrust, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
+    ipcMain, ipcTrust, app, screen, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
     clipboard, getMainWindow: () => mainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards,
   });
 
@@ -369,7 +387,13 @@ app.whenReady().then(async () => {
   remoteAccess = createRemoteAccessServer({
     getDataRoot: () => String(backendSupervisor.boot?.info?.root ?? ''),
     getUiDistDir: () => path.join(__dirname, 'src', 'client', 'ui-dist'),
+    getDecodedRoot: () => String(backendSupervisor.boot?.info?.decoded ?? ''),
     gatedCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+    // 交接会话（「打开网页」）的原生能力代理；普通手机配对码的会话会被 403。
+    nativeCall: (action, payload) => {
+      if (handoffNativeCall === null) throw new Error('原生能力代理尚未就绪');
+      return handoffNativeCall(action, payload);
+    },
     callQueue: backendCallQueue,
     appVersion: APP_VERSION,
     ...(process.env.SUPERTIME_REMOTE_ACCESS_LOOPBACK_TEST === '1' ? { bindHost: '127.0.0.1' } : {}),
@@ -380,12 +404,55 @@ app.whenReady().then(async () => {
     remoteAccess,
     backendCall: (method, args) => gatedWechatCall(gateCtx, method, args),
   });
+  // 「打开网页」：复用上面这个 HTTP 服务，把操作权交给默认浏览器，桌面端缩成右下角卡片。
+  // 卡片是独立窗口、独立 preload（只有一个返回按钮），与主窗口的 IPC 桥完全隔离。
+  browserHandoff = createBrowserHandoff({
+    ipcMain,
+    ipcTrust,
+    BrowserWindow,
+    screen,
+    nativeTheme,
+    rootDir: __dirname,
+    remoteAccess,
+    backendCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+    openExternal: (url) => shell.openExternal(url),
+    getMainWindow: () => mainWindow,
+  });
 
   // ── 自动更新（electron-updater + GitHub Releases）──────────────────────
   // 五条控制通道已收敛到 ipc-update.js；update:event 仍由本文件的广播函数发出。
   // 更新源与安装包同源（build.publish → 打包时写进 resources/app-update.yml），
   // 状态机与各事件的收敛规则见 src/backend/update.js。
   updateService = createUpdateServiceSafe();
+  // 交接会话的原生能力代理（对话框/截图/许可证/诊断/更新/远程访问设置）。
+  // updateService 在这里才建好，所以代理也必须在这里赋值；HTTP 服务先拿到的是闭包。
+  const handoffControl = createRemoteAccessControl({
+    remoteAccess,
+    backendCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+  });
+  handoffNativeCall = createHandoffNative({
+    app,
+    dialog,
+    shell,
+    clipboard,
+    getMainWindow: () => mainWindow,
+    licenseService,
+    diagLog,
+    APP_VERSION,
+    buildDiagnosticPreview,
+    buildDiagnosticReport,
+    updateService,
+    remoteAccess,
+    control: handoffControl,
+    getWechatBoot: () => backendSupervisor.boot,
+    findModelCatalog,
+    loadLlmConfig,
+    saveLlmConfig,
+    loadLlmStore,
+    activateLlmProfile,
+    upsertLlmProfile,
+    deleteLlmProfile,
+  });
   // 一行正向留痕。没有它的话，日志里只有「加载失败」这一种证据 —— 用户报障说
   // 「升不了级」时，我们无法区分「服务就绪但检查失败」与「整个模块没装进包」。
   // package:smoke / 诊断日志导出都会带上这一行。
@@ -464,14 +531,9 @@ app.whenReady().then(async () => {
   if (bootResult.ok) {
     console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
-    // 远程访问（手机端）在**后端就绪之后**才决定要不要监听：数据根这时才解析出来，
-    // 而 `api_enabled` / `api_port` 与令牌都住在数据根下。默认不监听（见 http-server.js 文件头）。
-    try {
-      const ra = await remoteAccess.syncWithConfig();
-      if (ra.running) console.log('[remote-access] 手机访问地址: http://%s:%d', ra.address, ra.port);
-    } catch (e) {
-      console.warn('[remote-access] 启动失败（不影响桌面端）:', e?.message ?? e);
-    }
+    // 入站监听有两种显式入口（2026-10-19 v22）：标题栏「打开网页」交接，和设置里的「局域网访问（手机）」扫码。
+    // 启动时**不再**按 config.json 里的旧 api_enabled 自动监听；旧配置留着也无害。
+    // 只有点「打开网页」时由 browser-handoff 临时启动，点卡片返回即停。
   }
 
   // 自动更新（延迟 30s，见 update.js）：刻意放在后端 try/catch **之外** —— 更新能不能
@@ -494,6 +556,8 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
   backendSupervisor.stop();
+  // 浏览器交接态的卡片窗口先关掉；HTTP 服务由下面那行统一停。
+  if (browserHandoff) { browserHandoff.dispose(); browserHandoff = null; }
   // 远程访问先停：它是唯一**对外**的入口，退出时应当立刻不再接受连接（而不是等进程销毁
   // socket）。stop() 是异步的，这里不 await —— 退出路径上不能挂住，端口随进程一起释放。
   if (remoteAccess) { void remoteAccess.stop(); remoteAccess = null; }

@@ -203,7 +203,8 @@ describe('R4 全仓：加载态不得复用空态视觉', () => {
     // 带旋转图标的生成中提示：形态比 compact 更丰富（有 spinner），收编会倒退。
     'DailySummary.tsx|正在收集当日消息并生成总结',
     // `LazyMount` 的 placeholder（「进入可视区后加载」）—— 是**懒挂载占位**，不是正在加载。
-    'overview-panel.tsx|地图进入可视区后加载',
+    // M22 把地图卡拆进 `overview-sections.tsx#WorldMapSection`，白名单跟着搬家。
+    'overview-sections.tsx|地图进入可视区后加载',
   ])
 
   const LOADING_RE = /加载|正在|统计中|搜索中|检查中/

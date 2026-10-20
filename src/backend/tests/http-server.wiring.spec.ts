@@ -175,15 +175,11 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
       .toContain('pushEvent(name, args)')
   })
 
-  it('后端就绪之后才按配置启动监听', () => {
-    // ready 快照现在由监管器的 setStatus 广播；组合根必须在其后调用 syncWithConfig。
-    // 启动监听读的是数据根下的配置，而数据根要等后端 init 完才解析得出来，排早了就读不到。
-    const readyAt = firstCallAt(startupSf, 'setStatus', 'ready')
-    const syncAt = firstCallAt(startupSf, 'syncWithConfig')
-    expect(readyAt, '启动链里没有 setStatus("ready") 这一处').toBeGreaterThan(-1)
-    expect(syncAt, 'main.js 没有调用 syncWithConfig —— 服务永远不会启动').toBeGreaterThan(-1)
-    expect(syncAt, '监听排在了后端就绪之前（那时数据根还没解析出来，配置读不到）')
-      .toBeGreaterThan(readyAt)
+  it('启动时不自动监听（局域网入口必须由用户显式打开）', () => {
+    // 2026-10-19：入站有两个显式入口（打开网页 / 设置里的局域网扫码），但都不许启动自启。
+    expect(firstCallAt(startupSf, 'syncWithConfig'), 'main.js 仍在启动时 syncWithConfig')
+      .toBe(-1)
+    expect(mainSrc, 'main.js 里找不到交接入口的创建').toContain('createBrowserHandoff')
   })
 
   it('退出时停止监听（它是唯一对外的入口，退出就该立刻不再接受连接）', () => {
@@ -298,7 +294,7 @@ describe('闸门只有一份实现：IPC 与 HTTP 共用 call-gates', () => {
   it('服务句柄暴露配对码签发能力，且停服会作废内存里的配对码', () => {
     const src = readFileSync(SERVER, 'utf8')
     expect(src, '控制面拿不到 issuePairingCode，轮换后无法签发新配对码')
-      .toContain('issuePairingCode: () => pairings.issue()')
+      .toContain('issuePairingCode: (options) => pairings.issue(options)')
     const stop = bodyOf(parse(SERVER), 'stopNow')
     expect(stop, '找不到 stopNow 的实现').not.toBe('')
     expect(stop, '停服没有清掉会话表').toContain('sessions.revokeAll()')

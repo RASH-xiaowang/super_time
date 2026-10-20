@@ -5,16 +5,16 @@
  * 多层壳，往其中一层加方法的代价不是这一处好看，是下一次任何改动都要先和结构边界
  * 打交道。而「体检 + 修复」本来就是自成一家的一族：两条方法、一个
  * 协作者槽（{@link GatewayDbHealth}）、消费方只有「数据健康中心」一个面板。
- * 本文件插在 `GatewayLayaOps` 与 `GatewayClawbot` 之间，对外方法面逐名不变
- * （`gateway-remote-surface.spec.ts` 守）。
+ * 本文件插在 `GatewayTaskCenter`（2026-10-19 新增的任务信息域）与 `GatewayClawbot` 之间，
+ * 对外方法面逐名不变（`gateway-remote-surface.spec.ts` 守）。
  *
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；处理器体在
  * `remotes/config.ts`（体检，纯读）与 `remotes/keysdec.ts`（修复，解密族）。
  */
 import type { DbIntegrityResult, DbRepairResult } from './types.ts';
-import { GatewayLayaOps } from './gateway-laya-ops.ts';
+import { GatewayTaskCenter } from './gateway-taskcenter.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export declare abstract class GatewayDbHealth extends GatewayLayaOps {
+export declare abstract class GatewayDbHealth extends GatewayTaskCenter {
     /**
      * 逐库完整性体检（`PRAGMA integrity_check`）—— 「库文件已损坏」那条处方
      * （`wechat-host.js` 的 READABLE_ERRORS）指向的检查。与 `getDbHealth` 的

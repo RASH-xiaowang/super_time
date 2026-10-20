@@ -138,4 +138,22 @@ describe('表格手机档：首列钉住且底色不透明', () => {
     expect(phone, '偶数行的斑马纹没叠回来').toContain('linear-gradient(var(--nm-table-row-stripe)')
     expect(phone, '表体首列的 z-index 必须低于表头首列（交叉处会穿帮）').toMatch(/td:first-child \{ z-index: 2; \}/)
   })
+
+  /**
+   * 手机档必须**收掉 640px 的最小宽度**（2026-10-16 实测）。
+   *
+   * 640px 是**桌面窄窗口**的校准值（第 89 轮：窄窗口下每列才都可达），
+   * 而手机滚动容器只有约 350–510px ⇒ 表格横向溢出（实测操作日志 104 处、资金往来 18 处），
+   * 用户要横滚 291px 才知道这一行是谁的。手机上「横滚看表」是很差的手感。
+   *
+   * 收掉之后列按 `table-layout: fixed` 均分、长文本靠已有的 `text-overflow: ellipsis` 截断，
+   * 首列仍钉住 —— 表格**不横滚**。代价是长内容被截断，但手机上「一眼看到结构」比
+   * 「横滚看全」更重要（完整内容点进详情页看）。
+   */
+  it('手机档收掉 640px 最小宽度（否则表格横向溢出，要横滚才看得全）', () => {
+    expect(phone, '手机档没有收掉 .table 的 min-width ⇒ 表格仍按 640px 撑开、横向溢出')
+      .toMatch(/\.table \{ min-width: 0; \}/)
+    expect(phone, '单元格内边距没收紧 ⇒ 350px 宽的表里 8/12px 占掉太多')
+      .toMatch(/\.table thead th,\s*\.table tbody td \{ padding: 6px 8px; \}/)
+  })
 })

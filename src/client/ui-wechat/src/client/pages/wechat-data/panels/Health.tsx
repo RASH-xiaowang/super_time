@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBuildSearchIndex, apiCheckDbIntegrity, apiGetDbHealth, apiGetDbStatus, apiGetDecryptStatus, apiDecryptAllDatabases, apiRepairCorruptDbs, readRenderCache, writeRenderCache } from '../api.ts'
 import type { DbHealthSnapshot, DbIntegrityResult, DbStatusSnapshot, DecryptStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, LoadingState, PanelHeader, StatCard, StatGrid, Toolbar } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 import { HealthIntegrityCards } from './health-integrity.tsx'
@@ -29,7 +29,9 @@ import { desktopOnlyGate } from '../ui/desktop-only.tsx'
 export function HealthPanel({ embedded = false }: {
   embedded?: boolean
 } = {}): React.JSX.Element {
-  const blocked = desktopOnlyGate('health'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定必须在所有 hooks 之后（见函数末尾的 `blocked` 分支）。
+  // 放在 hooks 之前会让 hook 数量随能力表变化而变，React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   const [snap, setSnap] = useState<DbHealthSnapshot | null>(() => readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')?.snap ?? null)
   const [status, setStatus] = useState<DbStatusSnapshot | null>(() => readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')?.status ?? null)
   const [loading, setLoading] = useState(false)
@@ -150,28 +152,51 @@ export function HealthPanel({ embedded = false }: {
   // WAL 增量推送：同步在跑时健康/解密状态跟着变（缓存先上屏，不闪骨架）。
   useWechatDataUpdated(() => { void load() })
 
+  // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
+  const blocked = desktopOnlyGate('health')
+  if (blocked !== null) return blocked
+
   return (
     <div className={embedded ? kitCss.panelEmbed : kitCss.panelShell}>
-      <PanelHeader
-        title="数据健康中心"
-        desc={`解密库/索引/插件存储/解码缓存占用 · 本地检查${snap ? ` · 快照 ${new Date(snap.updatedAt * 1000).toLocaleString('zh-CN')}` : ''}`}
-        actions={(
-          <>
-            <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>{loading ? '检查中…' : '重新检查'}</Button>
-            <Button variant="outline" size="sm" onClick={() => { void rebuild() }} disabled={building}>{building ? '重建中…' : '重建搜索索引'}</Button>
-            {/* W3-2.5：只在**确有失败明细**时出现 —— 没有失败却挂一个「重试解密」
-             会让用户以为解密常态是坏的。 */}
-            {(decrypt?.failures.length ?? 0) > 0 && (
-              <Button variant="outline" size="sm" onClick={() => { void retryDecrypt() }} disabled={retrying}>{retrying ? '重试中…' : '重试解密'}</Button>
-            )}
-            {/* W3-11.7：只在体检发现损坏时出现 —— 没有损坏时挂个「修复」按钮，
-              用户会以为这里的库常态是坏的。 */}
-            {corruptedCount > 0 && (
-              <Button variant="outline" size="sm" onClick={() => { void repair() }} disabled={repairing}>{repairing ? '修复中…' : '修复损坏的库'}</Button>
-            )}
-          </>
-        )}
-      />
+      {/* 微信化：嵌进设置弹窗时不再画页头（节名由左导航表达），只留一行节内工具行。 */}
+      {embedded ? (
+        <Toolbar
+          left={<span className={kitCss.textCaption}>本地检查{snap ? ` · 快照 ${new Date(snap.updatedAt * 1000).toLocaleString('zh-CN')}` : ''}</span>}
+          right={(
+            <>
+              <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>{loading ? '检查中…' : '重新检查'}</Button>
+              <Button variant="outline" size="sm" onClick={() => { void rebuild() }} disabled={building}>{building ? '重建中…' : '重建索引'}</Button>
+              {(decrypt?.failures.length ?? 0) > 0 && (
+                <Button variant="outline" size="sm" onClick={() => { void retryDecrypt() }} disabled={retrying}>{retrying ? '重试中…' : '重试解密'}</Button>
+              )}
+              {corruptedCount > 0 && (
+                <Button variant="outline" size="sm" onClick={() => { void repair() }} disabled={repairing}>{repairing ? '修复中…' : '修复损坏的库'}</Button>
+              )}
+            </>
+          )}
+        />
+      ) : (
+        <PanelHeader
+          title="数据健康中心"
+          desc={`解密库/索引/插件存储/解码缓存占用 · 本地检查${snap ? ` · 快照 ${new Date(snap.updatedAt * 1000).toLocaleString('zh-CN')}` : ''}`}
+          actions={(
+            <>
+              <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>{loading ? '检查中…' : '重新检查'}</Button>
+              <Button variant="outline" size="sm" onClick={() => { void rebuild() }} disabled={building}>{building ? '重建中…' : '重建搜索索引'}</Button>
+              {/* W3-2.5：只在**确有失败明细**时出现 —— 没有失败却挂一个「重试解密」
+               会让用户以为解密常态是坏的。 */}
+              {(decrypt?.failures.length ?? 0) > 0 && (
+                <Button variant="outline" size="sm" onClick={() => { void retryDecrypt() }} disabled={retrying}>{retrying ? '重试中…' : '重试解密'}</Button>
+              )}
+              {/* W3-11.7：只在体检发现损坏时出现 —— 没有损坏时挂个「修复」按钮，
+                用户会以为这里的库常态是坏的。 */}
+              {corruptedCount > 0 && (
+                <Button variant="outline" size="sm" onClick={() => { void repair() }} disabled={repairing}>{repairing ? '修复中…' : '修复损坏的库'}</Button>
+              )}
+            </>
+          )}
+        />
+      )}
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}

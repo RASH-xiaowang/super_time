@@ -19,8 +19,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ClawbotBindingSnapshot, ClawbotMessage, ClawbotMessageQuery } from '@deepseek-ai/dsh-wechat-data/types'
-import { apiGetPrivacyState, apiListClawbotMessages, apiSendClawbotMessage } from '../api.ts'
+import { apiClearClawbotMessages, apiGetPrivacyState, apiListClawbotMessages, apiSendClawbotMessage } from '../api.ts'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import { Badge, Card, DataTable, DateRangeField, Dialog, EmptyState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import { ListSentinel, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
@@ -156,6 +157,130 @@ function stamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
+/**
+ * 两个导出按钮（模块级：让 `ClawbotChatView` 留在 250 行棘轮线内）。
+ *
+ * 文案分长短两档（`exportFull` / `exportShort`）：宽档「导出 TXT」/「导出 CSV」，
+ * 极窄档（≤800px）缩成「TXT」/「CSV」—— 两个按钮省约 40px，是 640px 视口下
+ * 筛选条**两行**放得下的关键（2026-10-17）。
+ * @param props.onExport - 按格式导出（`txt` / `csv`）。
+ * @param props.disabled - 列表为空时禁用。
+ * @returns 两个按钮。
+ */
+function ExportButtons({ onExport, disabled }: {
+  onExport: (kind: 'txt' | 'csv') => void
+  disabled: boolean
+}): React.JSX.Element {
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => { onExport('txt') }} disabled={disabled}>
+        <span className={css.exportFull}>导出 TXT</span>
+        <span className={css.exportShort}>TXT</span>
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => { onExport('csv') }} disabled={disabled}>
+        <span className={css.exportFull}>导出 CSV</span>
+        <span className={css.exportShort}>CSV</span>
+      </Button>
+    </>
+  )
+}
+
+/**
+ * 统计文案（模块级：让 `ClawbotChatView` 留在 250 行棘轮线内）。
+ *
+ * 分长短两档：宽档「共 22 条 · 已加载 22 条」（120px），窄档（≤1200px）「22/22」（31px）
+ * —— 省 90px，是 1280px 视口下筛选条**两行**放得下的关键（2026-10-17）。
+ * @param props.total - 服务端报的总条数。
+ * @param props.loaded - 当前已加载条数。
+ * @returns 统计元素。
+ */
+function StatsText({ total, loaded }: { total: number; loaded: number }): React.JSX.Element {
+  return (
+    <span className={css.stats}>
+      <span className={css.statsFull}>共 {total} 条 · 已加载 {loaded} 条</span>
+      <span className={css.statsShort}>{total}/{loaded}</span>
+    </span>
+  )
+}
+
+/**
+ * 清除对话历史的确认与执行（模块级：让 `ClearHistoryButton` 与 `ClawbotChatView` 都留在棘轮线内）。
+ *
+ * ⚠️ 反馈（`notice.flash`）**必须紧跟在调用点之后**（`panel-feedback-matrix.spec.ts` 按
+ * 「调用点后 40 行内出现反馈令牌」判定）—— 隔一层回调（`onCleared`）会被判成「没有反馈」。
+ * @param slot - 实例编号。
+ * @param total - 当前条数（写进确认框）。
+ * @param confirm - 确认框。
+ * @param notice - 瞬时提示出口（成功/失败都如实回报）。
+ * @param onCleared - 成功后的收尾（刷新列表）。
+ */
+async function runClearHistory(
+  slot: number,
+  total: number,
+  confirm: ReturnType<typeof useConfirm>,
+  notice: { flash: (text: string) => void },
+  onCleared: () => void,
+): Promise<void> {
+  const ok = await confirm({
+    title: `确认清除实例 ${String(slot)} 的对话历史？`,
+    message: `将删除该实例的 ${String(total)} 条接入会话（不可恢复）。绑定关系与行为配置不受影响；清空后自动回复不再看到这些旧消息。`,
+    tone: 'danger',
+    confirmText: '确认清除',
+  })
+  if (!ok) return
+  try {
+    const r = await apiClearClawbotMessages({ slot })
+    notice.flash(`✓ 已清除 ${String(r.removed)} 条对话历史`)
+    onCleared()
+  } catch (e) {
+    notice.flash('✗ 清除失败（详见操作日志）')
+    console.warn('[clawbot] 清除对话历史失败：' + (e as Error).message)
+  }
+}
+
+/**
+ * 「清除对话历史」按钮（模块级：让 `ClawbotChatView` 留在 250 行棘轮线内）。
+ *
+ * 2026-10-17 用户要求：「增加对话历史清除按钮，可以删除对话历史以防止污染回复」。
+ * 接入会话是**累积**的（永久保留、无自动清理），而它同时是「对话读法」的展示内容
+ * 与「自动回复」的上下文来源 —— 换话题或 bot 之前回错了一堆时，清空是唯一的
+ * 「重新开始」手段。⚠️ 不可恢复（走确认框说清条数）；只删消息，不动绑定与配置。
+ * @param props.slot - 当前实例编号（null = 未选实例，按钮禁用）。
+ * @param props.total - 当前实例的会话总条数（0 时禁用）。
+ * @param props.notice - 瞬时提示出口（成功/失败都如实回报）。
+ * @param props.onCleared - 成功后的收尾（刷新列表）。
+ * @returns 按钮元素。
+ */
+function ClearHistoryButton({ slot, total, notice, onCleared }: {
+  slot: number | null
+  total: number
+  notice: { flash: (text: string) => void }
+  onCleared: () => void
+}): React.JSX.Element {
+  const confirm = useConfirm()
+  const [busy, setBusy] = useState(false)
+  const onClick = async (): Promise<void> => {
+    if (slot === null || busy) return
+    setBusy(true)
+    try {
+      await runClearHistory(slot, total, confirm, notice, onCleared)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Button
+      size="sm" variant="outline"
+      disabled={slot === null || total === 0 || busy}
+      onClick={() => { void onClick() }}
+      title="删除该实例的全部接入会话（不可恢复）"
+      {...desktopActionProps()}
+    >
+      <span className={css.exportFull}>清除历史</span>
+      <span className={css.exportShort}>清除</span>
+    </Button>
+  )
+}
 export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
   /** 当前实例的绑定卡片快照（未绑定/未选实例时为 null）。 */
   snapshot: ClawbotBindingSnapshot | null
@@ -279,49 +404,63 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
     notice.flash(exportMessages(rows, kind))
   }, [rows, notice])
 
+  const onCleared = useCallback((): void => { pager.reset() }, [pager.reset])
+
   const cols: ReadonlyArray<DataColumn<ClawbotMessage>> = useMemo(() => buildColumns(show, media), [show, media])
 
   return (
     <>
-      <Card className={css.card}>
+      {/*
+        2026-10-17 重设计：**一张卡 + 三段**（原先三张独立卡：筛选条 / 消息列表 / 发送坞）。
+        三张卡各自带边框、圆角与阴影 ⇒ 视觉上像三个互不相干的板块，而它们其实是
+        **同一个会话视图的三个部分**（筛选 → 读 → 发）。合并成一张卡后读起来是一个整体。
+        段之间用 `border-top` / `border-bottom` 分隔线，不是整圈边框。
+      */}
+      <Card className={`${css.chatCard} ${css.fillCard}`} flush>
+        {/*
+          筛选条（2026-10-17 第四次调整：**最多两行**）。
+          原先分 `.filterLeft` / `.filterRight` 两个 flex 容器，各自 `wrap` —— 两个容器**各自折行再叠加**，
+          实测 1280px 就 3 行、640px 到 6 行。现在**去掉两层容器**，所有控件是 `.filterRow` 的
+          直接子元素 ⇒ **只有一个 flex 流**，行数由「控件总宽度」决定，最少。
+          「右端成组」的视觉靠 `.filterRightStart`（`margin-left: auto`）挂在读法那一件上：
+          宽屏放得下时它被推到行尾（右对齐），放不下时自然折行（不会强制独占一行）。
+        */}
         <div className={css.filterRow}>
-          <div className={css.filterLeft}>
-            <DateRangeField
-              from={from}
-              to={to}
-              onFrom={setFrom}
-              onTo={setTo}
-              onClear={() => { setFrom(''); setTo('') }}
-              presets={['today', 'week', 'month', 'last-7', 'last-30']}
-              ariaLabel="接入会话时间筛选"
-            />
-            <Segmented
-              options={DIR_FILTERS.map(f => ({ value: f.value, label: f.label }))}
-              value={dir}
-              onChange={(v) => { setDir(v as '' | 'in' | 'out') }}
-              ariaLabel="收 / 发筛选"
-            />
-            <SearchInput className={css.searchFlex} value={search} onChange={setSearch} placeholder="搜索消息正文…" ariaLabel="搜索接入会话" />
-          </div>
-          <div className={css.filterRight}>
+          <DateRangeField
+            from={from}
+            to={to}
+            onFrom={setFrom}
+            onTo={setTo}
+            onClear={() => { setFrom(''); setTo('') }}
+            presets={['today', 'week', 'month', 'last-7', 'last-30']}
+            ariaLabel="接入会话时间筛选"
+            inline
+          />
+          <Segmented
+            options={DIR_FILTERS.map(f => ({ value: f.value, label: f.label }))}
+            value={dir}
+            onChange={(v) => { setDir(v as '' | 'in' | 'out') }}
+            ariaLabel="收 / 发筛选"
+          />
+          <SearchInput className={css.searchFlex} value={search} onChange={setSearch} placeholder="搜索消息正文…" ariaLabel="搜索接入会话" />
+          {/* 「右端成组」的起点：`margin-left: auto` 挂在包裹层上（`Segmented` 不收 className）。
+              宽屏放得下时它被推到行尾（右对齐），放不下时自然折行（不强制独占一行）。 */}
+          <span className={css.filterRightStart}>
             <Segmented
               options={[{ value: 'thread', label: '对话' }, { value: 'detail', label: '明细' }]}
               value={reading}
               onChange={(v) => { setReading(v === 'detail' ? 'detail' : 'thread') }}
               ariaLabel="会话读法（对话 / 明细）"
             />
-            <Button size="sm" variant="outline" onClick={() => { exportRows('txt') }} disabled={rows.length === 0}>导出 TXT</Button>
-            <Button size="sm" variant="outline" onClick={() => { exportRows('csv') }} disabled={rows.length === 0}>导出 CSV</Button>
-            <span className={css.stats}>共 {pager.total} 条 · 已加载 {rows.length} 条</span>
-            <span className={css.live}>● 实时</span>
-          </div>
+          </span>
+          <ExportButtons onExport={exportRows} disabled={rows.length === 0} />
+          <ClearHistoryButton slot={slot} total={pager.total} notice={notice} onCleared={onCleared} />
+          <StatsText total={pager.total} loaded={rows.length} />
+          <span className={css.live}>● 实时</span>
         </div>
         {notice.notice && <div className={css.noticeOk}>{notice.notice}</div>}
-      </Card>
+        {readError !== '' && <div className={css.noticeErr} role="alert">⚠️ {readError}</div>}
 
-      {readError !== '' && <div className={css.noticeErr} role="alert">⚠️ {readError}</div>}
-
-      <Card className={css.tableCard} flush>
         <div ref={scroll.scrollRef} className={css.msgList} onScroll={scroll.onScroll}>
           {/* 对话读法下更旧的页在顶部 ⇒ 哨兵摆最前；明细读法（倒序表）更旧的在底部 ⇒ 摆最后。 */}
           {reading === 'thread' && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
@@ -358,9 +497,7 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
             </button>
           )}
         </div>
-      </Card>
 
-      <Card className={css.card}>
         <div className={css.composerCol}>
           <div className={css.composerRow}>
             {/* P9：多实例下发送坞必须明说「以哪个号发送」，否则用户可能以为在 A 号回复、实际发到 B 号。 */}

@@ -1,10 +1,10 @@
-.sessionTypeBadge { flex-shrink: 0; font-size: 11px; line-height: 1; }
 .sessionItem {
   position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
+  min-height: 64px;
   padding: 10px 12px;
   border: 1px solid transparent;
   /* 官方直列小圆角（微信 4.x 会话列表的 hover 块约 8px，不是卡片 10px）——UI-GEOMETRY-SPEC §1 dense 档 */
@@ -75,15 +75,15 @@
 .sessionNameWrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .hiddenBadge {
   font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-purple);
-  background: color-mix(in srgb, var(--nm-purple) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-purple) 30%, transparent);
+  color: var(--nm-text-2);
+  background: var(--nm-bg-active);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-xs);
   padding: 1px 4px;
   flex-shrink: 0;
 }
 .sessionTimeGroup { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.pinMark { display: inline-flex; color: var(--nm-cyan); }
+.pinMark { display: inline-flex; color: var(--nm-text-2); }
 /* ── 消息流 / 气泡（对齐微信官方桌面端几何） ───────────────────── */
 .msgRow { display: flex; gap: var(--wx-gap); align-items: flex-start; }
 .msgRowSelf { flex-direction: row-reverse; }
@@ -231,19 +231,18 @@
 
 /* 图片骨架：等解码时的定尺寸占位。
    为什么是骨架而不是「图标 + 图片加载中…」：文字占位每张图都要闪一次，图片密集的会话里
-   整屏都是那句话（用户报的就是这个）。尺寸取 `.msgImage` 区间（96–240）里的常见值，
-   尽量少跳；呼吸动画负责表达「在取」，所以不需要文字。 */
+   整屏都是那句话（用户报的就是这个）。尺寸取 `.msgImage` 区间（96–240）里的常见值，尽量少跳。
+
+   2026-10-17：**去掉呼吸动画**（用户要求「这样的加载样式全部修改」）。
+   改前它 1.4s 一轮在 0.5↔0.85 透明度之间来回，一屏几十张图同时呼吸 ——
+   视觉噪音极大，而它传达的信息量是零（占位块本身已经说了「这里会有图」）。
+   现在只留静态底色；图片就绪后的淡入（`.msgImage[data-loaded]`）保留，
+   那一条是有用的：它抹平「骨架 → 图片」的突变。 */
 .msgImageSkeleton {
   width: 160px;
   height: 120px;
   border-radius: var(--wx-radius);
   background: var(--wx-card-bg);
-  animation: wxImgPulse 1.4s ease-in-out infinite;
-}
-@keyframes wxImgPulse {
-  0%,
-  100% { opacity: 0.5; }
-  50% { opacity: 0.85; }
 }
 
 /* 图片就绪后淡入：抹平「骨架 → 图片」的突变（150ms 足够，长了对滚动是负担）。 */

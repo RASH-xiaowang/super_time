@@ -30,13 +30,12 @@
   cursor: not-allowed;
 }
 .deviceSegOn {
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-brand);
   color: var(--nm-on-accent);
   font-weight: 600;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
 }
 
-/* 语音转写 —— 横幅说明 */
+/* 语音转写 —— 横幅说明（微信风格：浅灰底 + 1px 边框，无渐变） */
 .whisperBanner {
   display: flex;
   align-items: center;
@@ -44,9 +43,9 @@
   margin: 10px 4px 2px;
   padding: 10px 12px;
   border-radius: var(--nm-r-md);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 6%, transparent));
+  background: var(--nm-bg-hover);
   border: 1px solid var(--nm-border);
-  transition: all 0.2s;
+  transition: border-color 0.15s;
 }
 .whisperBanner:hover {
   border-color: var(--nm-border-hover);
@@ -60,12 +59,8 @@
 }
 .whisperBannerTitle {
   font-size: 13px;
-  font-weight: 700;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  font-weight: 600;
+  color: var(--nm-text-1);
 }
 .whisperBannerDesc {
   font-size: 11px;
@@ -85,7 +80,6 @@
 }
 .whisperRefresh:hover:not(:disabled) {
   text-decoration: underline;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
 }
 .whisperRefresh:disabled {
   opacity: 0.5;
@@ -105,11 +99,7 @@
 .gridHdTitle {
   font-size: 12px;
   font-weight: 600;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  color: var(--nm-text-1);
 }
 /* 原为 `repeat(3, 1fr)` 的固定三列：弹窗宽度随窗口变（`min(1080px, 96vw)`），窄下来三列会被挤扁；
    模型档位以后增删也只会多出不满的行、右侧空一格。改成 flex 自动换行 + 每张卡 `flex: 1 1 180px`：
@@ -137,24 +127,21 @@
   color: var(--nm-text-1);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 .modelCard:hover {
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .modelCard:active {
-  transform: translateY(1px) scale(0.985);
+  background: var(--nm-bg-active);
 }
 .modelSelected {
-  border-color: var(--nm-cyan);
-  background: var(--nm-cyan-10);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 8%, transparent);
 }
 .modelDownloadingCard {
-  border-color: var(--nm-cyan);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+  border-color: var(--nm-brand);
 }
 .modelName {
   font-size: 13px;
@@ -169,8 +156,8 @@
   font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   color: var(--nm-on-accent);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  border-radius: var(--nm-r-pill);
+  background: var(--nm-brand);
+  border-radius: var(--nm-r-sm);
   padding: 0 6px;
   corner-shape: round;
 }
@@ -212,8 +199,7 @@
 .modelProgressFill {
   height: 100%;
   border-radius: var(--nm-r-pill);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  background: var(--nm-brand);
   transition: width 0.3s ease;
   corner-shape: round;
 }
@@ -245,10 +231,10 @@
   position: absolute;
   bottom: 9px;
   right: 10px;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-brand);
   color: var(--nm-on-accent);
   border: none;
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-sm);
   font-size: 11px;
   font-weight: 600;
   /* 本轮该元素从 <span> 变成真 <button>（原来嵌在按钮里是无效 HTML）：
@@ -260,8 +246,7 @@
   corner-shape: round;
 }
 .modelDownload:hover {
-  filter: brightness(1.08);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  filter: brightness(0.96);
 }
 .modelDownloadDone {
   background: var(--nm-bg-hover);
@@ -305,6 +290,5 @@
   transition: all 0.15s;
 }
 .whisperSkip:hover {
-  color: var(--nm-cyan);
-  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+  color: var(--nm-sky);
 }

@@ -1,0 +1,105 @@
+/*
+ * 标题栏右上角的状态区（2026-10-17 从主面板左下角迁来）。
+ *
+ * 两块（模型余额 / 数据就绪）都是**胶囊**：圆角 + 细边框 + 11px 等宽字。
+ * 与窗口控制按钮（方形、无边框）刻意区分开 —— 它们是「状态」，不是「动作」。
+ *
+ * 颜色一律走主题令牌，与侧栏那套口径一致（`ok` 用青色、`offline` 用危险色）。
+ */
+.tb-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 6px;
+  /* 状态区不参与拖拽（点它要能刷新余额），但两侧留白仍可拖窗口。 */
+  -webkit-app-region: no-drag;
+}
+
+/* 「打开网页」：把操作权交给默认浏览器；与状态胶囊同尺寸，但它是动作，描边更亮。 */
+.tb-webBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  border-radius: var(--nm-r-pill, 999px);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  color: var(--nm-cyan-text, var(--nm-cyan));
+  font-size: 11px;
+  font-family: var(--nm-font-mono, monospace);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+.tb-webBtn:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+}
+.tb-webBtn:active { filter: brightness(0.92); }
+.tb-webBtn:disabled { opacity: 0.55; cursor: default; }
+.tb-webBtn[data-error='true'] {
+  color: var(--nm-danger);
+  border-color: color-mix(in srgb, var(--nm-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+}
+
+/* 数据状态胶囊（原 `.apiTag`，从 wechat-data.module.css 搬来并改名加前缀）。 */
+.tb-apiTag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--nm-r-pill, 999px);
+  font-family: var(--nm-font-mono, monospace);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  color: var(--nm-text-2);
+  border: 1px solid var(--nm-border);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.tb-statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nm-text-2);
+  flex-shrink: 0;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.tb-apiTag[data-status='online'] {
+  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
+  color: var(--nm-success);
+  border-color: color-mix(in srgb, var(--nm-success) 22%, transparent);
+}
+
+.tb-apiTag[data-status='online'] .tb-statusDot {
+  background: var(--nm-success);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-success) 70%, transparent);
+  animation: nm-pulse-glow 2.2s ease-in-out infinite;
+}
+
+.tb-apiTag[data-status='offline'] {
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger);
+  border-color: color-mix(in srgb, var(--nm-danger) 22%, transparent);
+}
+
+.tb-apiTag[data-status='offline'] .tb-statusDot {
+  background: var(--nm-danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-danger) 50%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-apiTag .tb-statusDot { animation: none !important; }
+}
+
+/* 窄窗口：状态区先让位（窗口控制按钮永远要能点到）。
+   标题栏总宽 = 品牌 + 状态区 + 4 个按钮；状态区是唯一可牺牲的。 */
+@media (max-width: 720px) {
+  .tb-status { display: none; }
+}

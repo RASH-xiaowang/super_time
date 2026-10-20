@@ -70,6 +70,22 @@ export function ClawBotPanel(): React.JSX.Element {
     }
   }, [])
 
+  /**
+   * 切实例（轨上点行）。
+   *
+   * 与 {@link refresh} 的差别只有一处：**先乐观切 `slot`**，再取数。
+   * 轨上的高亮、会话视图的实例标签、发送坞的归属都读 `slot` —— 等两次 RPC 回来才切，
+   * 用户点一下要愣一下（实测 `listClawbotInstances` + `getClawbotBinding` 串行 ≈ 200ms+，
+   * 后端忙时更久）。乐观切之后界面**立刻**响应，数据到了再补。
+   *
+   * ⚠️ 乐观值必须能被真实结果纠正：`refresh` 里 `resolved` 仍以列表为准
+   * （目标实例被删掉时会回落到缺省实例），所以这里只是「提前显示」，不是「抢先决定」。
+   */
+  const pickSlot = useCallback((target: number): void => {
+    setSlot(target)
+    void refresh(target)
+  }, [refresh])
+
   useEffect(() => { void refresh() }, [refresh])
 
   useEffect(() => {
@@ -95,13 +111,8 @@ export function ClawBotPanel(): React.JSX.Element {
   return (
     <section className={css.root}>
       <PanelHeader
-        title={(
-          <>
-            <span className={css.hdIcon}>{'🦞'}</span>
-            ClawBot
-          </>
-        )}
-        desc="把 Super Time 接入微信，之后可在微信里直接指挥它执行任务"
+        title="ClawBot集群"
+        desc="在微信里直接指挥它执行任务"
         actions={(
           <Segmented
             options={[{ value: 'settings', label: '集成设置' }, { value: 'chat', label: '接入会话' }]}
@@ -131,7 +142,7 @@ export function ClawBotPanel(): React.JSX.Element {
           snapshot={snap}
           readError={readError}
           loadError={loadError}
-          onPick={(target) => { void refresh(target) }}
+          onPick={pickSlot}
           onChanged={refresh}
         />
         <div className={active === 'settings' ? css.workSettings : css.workChat}>

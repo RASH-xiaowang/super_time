@@ -146,6 +146,28 @@ export function resolveRelativeDate(text: string, now: Date = new Date()): { fro
   if (/今年|本年度/.test(q)) {
     return { from: `${now.getFullYear()}-01-01`, to: ymd(now) }
   }
+  /**
+   * 「最近」这类**无明确日期**的泛问（2026-10-16 修「检索不出数据」）。
+   *
+   * 实测：会话内问「最近聊了什么」→ `召回 0`。根因是它**两条路都走不通**：
+   *   · `from`/`to` 为空 ⇒ `timeBrowse` 为 false（它要求 `Boolean(from || to)`）
+   *     ⇒ 不走时间通道；
+   *   · 走内容通道时词项是「最近聊了什么」的 bigram，而消息正文里没有这些字
+   *     ⇒ BM25 一条都命中不了。
+   * 于是「最近」这个**最常用的问法**反而答不出任何东西。
+   *
+   * 这里给它一个**默认窗口**（最近 7 天）：它让 `timeBrowse` 成立、时间通道打开，
+   * 从而按日期段枚举出最近的聊天内容 —— 这正是用户问「最近聊了什么」想要的。
+   *
+   * 为什么是 7 天而不是 30 天：`timeChannel` 在摊开模式下最多取 600 条并按桶摊开，
+   * 窗口越大越容易把「最近」稀释成「这个月」。7 天是「最近」的常见语义，
+   * 且用户想放宽时可以直接说「最近一个月」（那条分支在上面，优先级更高）。
+   */
+  if (/最近|近期|近来/.test(q)) {
+    const hi = ymd(now)
+    const lo = ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6))
+    return { from: lo, to: hi }
+  }
   return { from: '', to: '' }
 }
 
@@ -250,10 +272,15 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
   for (const s of input.subQueries ?? []) pushVariant(normalizeQuestion(s))
   if (synonyms.length > 0) pushVariant(synonyms.slice(0, 4).join(' '))
 
-  // 纯时间问法：有日期范围，但剥掉时间表达与泛问骨架后不剩任何内容。
+  // 纯时间问法：剥掉时间表达与泛问骨架后不剩任何内容。
   // 它只能靠「按日期段枚举」来回答（见 pipeline 的 timeChannel）——
   // 交给 BM25 只会召回正文里写着「今天」的错日期消息。
-  const timeBrowse = Boolean(from || to) && contentResidue(contentText).length === 0
+  //
+  // ⚠️ 2026-10-16 修：**不再要求 `Boolean(from || to)`**。旧条件让「最近聊了什么」
+  // 这类**无明确日期**的泛问落进内容通道，而它的词项（「最近聊了什么」的 bigram）
+  // 在消息正文里一条都匹配不到 ⇒ `召回 0`。现在只要「剥完时间词没剩内容」就算
+  // 纯时间问法，日期由 `resolveRelativeDate` 的「最近」分支兜底（默认最近 7 天）。
+  const timeBrowse = contentResidue(contentText).length === 0
 
   return { original: input.question, normalized, terms, variants, entity, from, to, timeHard, recency, timeBrowse }
 }

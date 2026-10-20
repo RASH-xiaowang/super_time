@@ -21,6 +21,407 @@
 
 ## [Unreleased]
 
+### 待归类
+
+- 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。
+
+## [1.0.9] - 2026-10-20
+
+### 布局与滚动（2026-10-19 用户要求「合理使用滚动条，能撑满屏幕就撑满屏幕」）
+
+- **恢复可见滚动条**（反转 2026-09-29 的「全局隐藏滚动条」）：桌面端统一 8px 细条、
+  透明轨道、正文次级色拇指、hover 加深；触摸屏/窄档（≤560px）仍隐藏绘制并保留滚动。
+  设置右区、长列表、聊天记录、公众号表格等此前「能滚但没有任何提示」的区域，现在都有
+  明确的可滚提示。
+- **桌面档一条主滚动**：解除卡片内容区 60vh/526px 的全局高度预算（窄档保留，防 390 裁切），
+  卡片随内容自然长高、由页面级容器统一滚 —— 不再出现「页面滚 + 卡内再滚」两层。
+  通话记录三个列表、存储页卡内表格同时去掉二级滚动；列表页（通讯录/收藏/文件/消息等）
+  保持「工具行固定 + 列表内滚」的单滚动契约。
+- **铺满屏幕**：总结主区、收藏统计双卡、朋友圈洞察两排卡按剩余高度分配；总览「近 30 天
+  趋势」指标格改为自适应列（1440 两行、1920 一行且数值不截断）；任务信息/KB 空态在定高
+  区里垂直居中；页头/正文/面板统一 `overflow-x: hidden`，横条不再出现。
+- **守卫同步**：`calls-layout.wiring` 的「列表限高 + 内滚」契约改为「单页面滚动 + 全局滚动条」；
+  新增全局 `scrollbars.css` 契约（8px / 令牌拇指 / 窄档隐藏）。其余 246 个客户端测试文件
+  与主题/几何/密度守卫保持全绿。
+
+### 会话
+
+- **「更多」新增「新建任务」**（2026-10-19）：从当前会话保留最近 N 条文本 + M 张图片，
+  数量可各自选择（文本 10/20/50/100 条，图片 0/3/6/12/24 张）。
+  - 创建后在 `<数据根>/collect-tasks/<时间戳>_<会话名>/` 落 `texts.json`、`images/`、`task.json`；
+    弹窗内可直接打开任务文件夹，并列出最近任务（数量来自实际落盘，不虚报）。
+  - 图片按需解码，解不出的只记引用、不计入张数；空会话也能建任务。
+  - 纯本地：只读本机已解密聊天数据，不新增任何出网点。
+
+### 桌面 / 浏览器
+
+- **群聊信息抽屉重新布局**（2026-10-19 用户截图：导出按钮压住成员名/「查看更多」）：
+  - 「导出聊天记录」从滚动内容区里的浮动动作改为抽屉底部的**固定 footer**，与
+    `groupInfoBody` 并列；内容再长也只让中间区域滚动，按钮不再覆盖成员、资料行。
+  - footer 上方保留 1px 分隔与轻阴影，按钮左右留 14px 内边距；单聊信息抽屉不受影响。
+
+- **修复浏览器交接态聊天图片裂图**（2026-10-19）：图片结果里的 `wechat-media://`
+  是 Electron 自定义协议，浏览器没有注册它，`<img>` 全部显示成占位。
+  - 浏览器端改走同源 `GET /api/media/decoded/<路径>`；服务端复用桌面媒体协议的同一套
+    「decoded 根内 + 只读图片扩展名 + 拒绝路径穿越」校验后流式返回。
+  - 桌面端仍是 `wechat-media://`（零拷贝），浏览器端不再需要把 base64 塞进页面。
+  - 普通手机/交接会话都可读；越界路径与不存在文件一律 404。
+
+- **退出全屏后窗口缩到合适尺寸**（2026-10-19 用户报「点了退出全屏还是全屏」）：
+  - 进入全屏前窗口若已接近铺满（系统/Win32 最大化、旧版本残留的大尺寸），退出时不再原样还原，
+    而是回到启动基准 **1440×900**（按当前显示器工作区留 10% 边距并居中，最小 960×640）。
+  - 用户自己拖出来的正常尺寸仍按原样恢复；多屏按窗口所在显示器计算。
+
+- **移除「设置 → 远程访问（手机）」**（2026-10-19）：标题栏「打开网页」已覆盖同一需求，
+  设置里不再显示开关、二维码、令牌轮换与局域网地址。
+  - 应用启动与日常运行时**不再监听任何端口**；旧 `config.json` 里的 `api_enabled`
+    不再驱动启动。
+  - 只有点击「打开网页」时临时启动 HTTP 服务供默认浏览器连接，点右下角卡片返回即停。
+  - 普通手机配对码的界面入口一并移除；交接会话与桌面端同权限（见下）。
+
+- **标题栏新增「打开网页」**（2026-10-19）：点击后在系统默认浏览器里打开同一份应用，
+  桌面端立即隐藏成一个**右下角可拖动的小卡片**（卡片只有「返回桌面应用」一个动作）。
+  - **浏览器拥有与桌面端完全相同的权限**：交接码换来的会话在服务端带 `fullAccess`，
+    不再走手机白名单（模型配置/API Key、许可证、诊断、更新、备份还原、ClawBot 写侧、
+    配置写入全部可用）；本机目录/文件对话框、截图导出、在资源管理器中显示等原生动作
+    由 `/api/native/*` 代理到主进程执行，浏览器侧 `handoff-boot.ts` 把它们装成与 preload
+    同形的桥。普通手机配对码仍严格受白名单限制，伪造 `mode=desktop` 无效。
+  - 浏览器与桌面端共用同一份 `ui-dist` 构建、同一个后端 worker 与同一道
+    `gatedWechatCall` 权限闸门；浏览器只是换了一条 HTTP/SSE 传输，面板代码不复制。
+  - 点卡片返回时先停掉 HTTP 服务并作废全部浏览器会话（页面下一次请求即 401），
+    再显示主窗口 —— 操作权完整交回桌面端。
+  - 使用既有「远程访问（手机）」链路：需要时自动轮换凭据并签发一次性交接码；
+    不新增对外服务类型，也没有新的数据出网点。
+  - 隐私：浏览器可见桌面端可见的全部内容（含密钥类配置），且原生动作在本机执行；
+    `PRIVACY_VERSION` 由 19 升至 20，`docs/PRIVACY.md` 第四节 H 已逐条登记。
+
+### ClawBot
+
+- **自动回复现在带上最近对话与图片**（2026-10-18 用户报「为什么不能关联上下文和识别图中内容」）。
+  - 触发：仍只回文本消息；回复时取该会话**目标消息之前最近 20 条**（含 bot 自己的回复）作为
+    `history`，并取**最近 2 张入站图片**（ClawBot 媒体缓存命中才送；单张 ≤8MB）随问题发给模型。
+  - 图片通道：`askWechat` 新增 `images`。Super Time 的 mini 宿主由 `llm-bridge.js` 投影成
+    OpenAI `image_url` data URL；完整 harness 走附件服务并按模型的 `image` 输入模态判断是否发送。
+    模型不支持读图时自动重试纯文本，并明确告知「看不到图片内容」——不再出现「我这边没看到图呀」
+    这种把上下文当没发生的回复。
+  - 隐私：新增出网内容类别（会话上下文 + 图片），`PRIVACY_VERSION` 由 18 升至 19，
+    下次启动要求重新同意；`docs/PRIVACY.md` 第四节 G2 已逐条登记（`ask_wechat` 审计 + 上下文 + 图片）。
+  - 守卫：`clawbot-auto-reply.spec.ts`（上下文/图片注入、读失败不阻断）、
+    `llm-bridge-image.spec.ts`（content parts 投影）、`clawbot-privacy.spec.ts` /
+    `privacy-statement.spec.ts`（版本与口径）。
+
+- **实例轨显示 token 消耗**（2026-10-19）：自动回复每次模型调用都会读取供应商返回的
+  `usage`（规划 / 生成 / 回炉累加），按「实例 + 本地日期」记入 `clawbot.db` 的
+  `clawbot_token_usage`，实例卡显示「Token 今日 / 累计」。供应商不返回 usage 时不落 0 行，
+  统计显示 0 表示确实没记到；删除实例时一并清除。守卫：`clawbot-token.spec.ts`
+  （累加 / 实例隔离 / 无 usage / total 兜底）、`kb-ask-channel.spec.ts`（usage 随 AskResult 返回）。
+
+### 实时同步
+
+- **修掉「WAL 已经写了、界面还要等下一拍」的空窗**（2026-10-18）：`sync.ts` 原实现里
+  tick 运行期间到达的 WAL 触发会被直接丢弃，之后只能等 10s 兜底轮询。现在触发先过
+  `query/sync-trigger.ts` 合并器：在跑就记 pending、跑完立刻补一拍，不并发、不叠加、可停止。
+- **兜底轮询按「监听是否真的挂上」分档**：`fs.watch` 正常时仍 10s；挂载失败/报错被摘掉
+  （网络盘等）时改用 3s（`sync-pacing.ts#SYNC_FALLBACK_FAST_MS`）—— 那种场合轮询是唯一
+  的新鲜度来源，监听正常时它只是兜底。
+- **聊天面板轮询改「修订闸门」**：新增 `@Remote('getDataRevision')`（纯内存读：
+  `revision` / `updatedAt` / `shards` / `messageChanged`）。`chats-polling` 的定时器与宿主推送
+  先读修订，只有 `revision` 变了且这一拍动了消息分片（`message_<n>.db` / `biz_message_<n>.db`）
+  才拉 `getNewMessages` + 最近 50 条对账；非消息库变化不再触发消息查询。
+- 验证：新增 `sync-trigger` 5 条 / `sync-status` 6 条行为用例；`chats-polling` 19 条用例新增
+  「同一修订重复到达不重复拉」「非消息库变化不拉消息」；`check:backend` / `check:types` /
+  `docs:api`（203 个方法）/ `typecheck` / 方法面与策略门禁全绿。
+- **根治「每次检查点必整库重解密」**（2026-10-18，用户二次反馈「消息和会话列表还是慢」）：
+  应用日志与真机快照定位到根因——读路径曾把 `dsh_sort_*` 排序索引写进**解密快照**，而增量同步
+  （WAL / 页级补丁）会按原始主库页号覆盖这些页，实测把 `message_0.db` 写成
+  `malformed database schema (...) - invalid rootpage`；于是每轮检查点 `page-diff`/`tail` 的
+  `quick_check` 必然失败，退回整库重解密（~0.7s）+ 全量页指纹（~0.43s），界面每次卡 1.5s 级。
+  - 停用「读路径往快照补索引」：解密快照必须与微信原始主库**同构**，索引不进快照；
+  - `pageHashesOf` / `pageHashesRange` 改 1MiB 大块读（真机 92MB：**428ms → 88ms**）；
+  - 同步前与 WAL 补丁后都做 `schemaIntact` 自检：坏快照直接整库重解自愈，绝不发布坏快照；
+  - 事件先发，撤回归档 / SNS 预热排在事件之后；WAL 防抖/限频 250/600 → **120/250**；
+  - 聊天面板对账（`getMessages(50)` + 统计）限频 2s，新消息显示不再被它挡。
+  - 真机验证（真实 92MB 分片拷贝）：full 904ms（一次性）→ **WAL 增量 127ms**；快照
+    `quick_check=ok` 且不含 `dsh_sort` 索引；backend 325 文件/3238 用例、client 235 文件/2563 用例全绿。
+- **page-diff 自适应止损 + 诊断**（2026-10-18 真机复查）：启动日志显示检查点的 `page-diff` 仍会被
+  `quick_check` 拒绝、随后整库重解，每次白花页指纹扫描（92MB 实测 88ms）+ staging 拷贝/补丁/校验。
+  现在连续失败 2 次后 5 分钟内不再尝试该路径，并停掉 full 之后的全量页指纹重扫（同一条 88ms 级开销）；
+  到期再探一次。拒绝日志补上 `patched=…p/wal=…f` 诊断；`syncMessageShard` 返回
+  `rejected/rejectReason` 供上层记账与用例断言。顺带把 `fullDecryptFile` / 自适应状态挪到
+  `sync-decrypt.ts`、`sync-diff-adaptive.ts`，`sync.ts` 回到 980 行（m21 的 1000 行硬上限内）。
+
+### 媒体（内存）
+
+- **聊天图片改走 `wechat-media://` 本地流式协议，base64 不再走 IPC**（2026-10-18，内存优化）：
+  后端图片结果新增 `file`（相对 `decoded_images` 的落盘路径）；渲染层把它拼成
+  `wechat-media://decoded/<rel>`，由 main 校验根目录/扩展名后**流式**返回磁盘文件。
+  - 收益：图片不再以 base64 经「后端 → main → 渲染进程」两次 IPC，也不进图片内存缓存
+    （缓存里只剩几十字节 URL）；远端表情/朋友圈等没有本地文件的仍走原 data URL，行为不变。
+  - 安全：只认 `decoded` host，只读后端解析出的 decoded 根；图片扩展名白名单；`..`、绝对路径、
+    反斜杠、空段、NUL 全拒；CSP 仅给 `img-src` / `media-src` 增加 `wechat-media:`。
+  - 验证：`media-protocol` 6 条 + `wechat-media` 4 条单测；独立 Electron 冒烟用真实 237KB PNG
+    经协议加载成功（naturalWidth=2630）、越界 URL `img onerror`、无 CSP 拒绝日志；
+    backend 326 文件/3244 用例、image/media 相关 287 用例、client 相关 86 用例全绿。
+- **`fileOnly`：首载也不再回传 base64**（2026-10-18，续上一条）：`getImageDataUrl` /
+  `getImageDataUrlsBatch` 增加可选 `fileOnly`（默认关；手机 HTTP 远程访问不传、契约不变）。
+  有落盘 `file` 时不再把 `url` 回给渲染层，没有 `file`（远端 CDN / 老快照）仍回 data URL 兜底。
+  桌面取图队列与预取批量都传 `fileOnly:true`，配合上一条的 `wechat-media://`，从首载起就不再
+  有 base64 经 IPC。
+  - 验证：`withoutDataUrlWhenFile` 单测；client 批量用例断言 `fileOnly` 下发与
+    `file → wechat-media://`；`docs/API` 重新生成（203 方法不变）；backend 327 文件/3246 用例全绿。
+- **远端图片缓存纪律**（2026-10-18）：`源地址 → data URL` 除 600 条上限外增加 3M 字符字节预算
+  （防 600 张 200KB 图 = 百 MB 级 base64），「后端整个没答上」失败表增加 60s 过期清理与 500 条上限，
+  列表反复重渲染/滚动不再把 Map 撑大。验证：`api-remote-image` / 远端图接线 spec 全绿。
+
+### 原图（实验）
+
+- **新增「微信原图自动下载」（默认关闭）**：复用上游 WeFlow-X（MIT）的 `img_helper.dll` 注入正在运行的微信，
+  让微信在接收新图片时自己下载高清原图，补上「本机只有缩略图、消息里只有 `cdnbigimgurl`」这一段的最后通路。
+  - 新增 `@Remote('wechatImageAutoDownload')`（`start` / `stop` / `status`，归「仅桌面」A 族）；
+    设置 → 图片解码里的开关 + 状态行（`settings-steps.tsx` + 新组件 `image-autodownload-card.tsx`）。
+  - 组件入仓于 `src/backend/wechat-data/native/img_helper/`（MIT；SHA-256 钉死并在 `koffi.load()` 前复核，
+    来源、导出与边界见同目录 `PROVENANCE.md` / `LICENSE`；`asarUnpack` 已覆盖 `native/**`）。
+  - 生命周期：打开后落盘开关并注入；30s 轮询在微信重启后恢复；关闭/退出调用 `UninstallImgHelper` 还原；
+    崩溃后以 marker 如实回报 `cleanupUnconfirmed`，并在微信未重启时拒绝重复注入。
+  - 边界：只影响打开之后**新收到**的图片（历史图片仍需在微信里点开，由「原图自动收割」接住）；仅 win32-x64；
+    会修改微信进程内存，`PRIVACY_VERSION` 17 → 18 要求重新同意（`docs/PRIVACY.md` §一.5）。
+  - 验证：单测 11 条（状态机 / 白名单编码 / 崩溃拒绝重复注入 / 退出清 marker）、宿主端到端 `status` 冒烟
+    （202 个 Remote 方法、组件路径与 SHA 解析成功、默认 `enabled=false`）、koffi 绑定冒烟；
+    `typecheck` / `check:backend` / `check:types` / `docs:api` / 方法面与策略门禁全绿。
+
+### 前端
+
+- **最大化窗口（2560×1400）下仍空白的 4 个视图修复**（2026-10-18 用户发截图「请好好修复」）。
+  - 前两轮体检按 1456×908，窗口最大化后暴露：群聊分析·离线洞察的「成员发言排行」卡被全局 598px 上界截住；
+    ClawBot 集群设置卡命中「视觉类卡」860px 上界；ClawBot **会话视图**的 `.chatCard` 同样被全局 598px 截住
+    （消息列表只到卡的一半、下方 500px+ 空白）；操作日志的卡身虽已铺满，但 kit `DataTable`
+    的 `.tableWrap` 仍受 `max-height:62vh` 限制，表格只占卡的上半截、下方留 300px+。
+  - 修复：前三个卡接 `fillCard` 契约（解除卡/卡身 `max-height`，由 `.col` / `.settingsCol` / `.workChat`
+    分配到整列）；操作日志在 `oplog.module.css` 把 `.tableWrap` 改为 `flex:1 1 auto + max-height:none`
+    （滚动仍由它自己承担，「已加载最近 N 条」提示落到卡底）。
+  - 复测：2556×1400 下 14 个主面板 + 6 组子页签 + ClawBot 会话视图全部铺满（卡底距面板底 0–12px），
+    1456×908 回归不变；截图 `working/team/density/shots/tall/`。client 2491 用例、M21/函数棘轮、
+    响应式 quick gate 全绿。
+
+- **面板铺满高度普查与修复（第二轮）**（2026-10-18 用户报「看一下其他面板，没有铺满屏幕的请修复」）。
+  - 体检 14 个主面板 + 6 组内部页签（27 个视图，1456×908），量「最外层可视卡底 → 面板底」的空白。
+  - 根因：全局 `compact-chrome.module.css` 给带标准卡身的卡加了
+    `max-height: calc(min(60vh, 526px) + 72px)`（≈598px）的「防分辨率依赖」上界；
+    单卡铺满布局（知识库 / 公众号文章 / 活跃监控 / 收藏统计）被这条上界截住，
+    卡底距面板底留 88~300px 空白。
+  - 修复：新增 `fillCard` 契约 —— 铺满卡标 `className={css.fillCard}`，全局层用
+    `[class*='_fillCard_'][class*='_fillCard_']` 提升特异度后解除「卡 + 卡身」两条 `max-height`；
+    各面板再让父网格/弹性布局分配高度、空态居中、表格/消息列表在**卡内**滚动。涉及 5 个视图：
+    知识库·文件、知识库·笔记库、文件与存储·公众号文章、群聊分析·活跃监控、收藏与表情·收藏/表情统计。
+  - 结果：复测所有主面板与子页签，卡底距面板底只剩 8~12px（面板 padding），无 88px+ 空白；
+    知识库/笔记库空态在卡内垂直居中。`docs/CARD-SIZE.md` 记录 `fillCard` 例外与「长内容仍须卡内滚动」纪律。
+  - 验证：client 全量 **2491 用例通过**、M21/函数行数棘轮、响应式 quick gate 全绿；
+    修复后联系表 `working/team/density/shots/panels-fill/sheet/fixed.png`。
+
+- **总结工作台空态卡铺满高度**（2026-10-18 用户报「请铺满高度」）。
+  - 根因：`summary-workbench.module.css` 的 `.card` 上有 `max-height: min(60vh, 526px)`（给结果卡加的尺寸上界），
+    空态/加载态那张唯一的卡也被同一上界截住；1456×908 实测卡片止于 673px、下方留 188px 空白。
+  - 修复：`.main > .card:only-child { max-height: none; flex: 1 0 auto; }` 让单卡吃满主区高度；
+    并在同一选择器上重声明 `justify-content: center`，压过 `compact-chrome.module.css` 的
+    `div[class*='_empty_'] { justify-content: flex-start }`，空态内容在卡内垂直居中。
+    结果卡仍保留 60vh / 526px 上界，长总结在卡内滚动，不影响既有尺寸约束。
+  - 验证：1456×908 实测空态卡 189→883（692px，与主区 694px 等高）、内容居中；summary 守卫 43 用例、
+    M21/函数棘轮、响应式 quick gate 全绿；截图 `working/team/density/shots/summary/summary-empty-fill-1456x908.jpg`。
+
+- **全站加载态统一为「旋转指示 + 加载中…」，清掉骨架加载条**（2026-10-18 用户报截图里的「一排骨架条」并要求正常加载样式）。
+  - 根因：通用 `ListSkeleton`、`LoadingState` 的默认 skeleton 档、`DataTable` 的加载骨架行，都是
+    「头像方块 + 占位线 + 右侧元信息」的骨架条；浅色主题下看起来像一排坏掉的卡片。
+  - 修复：`LoadingState` 重写为旋转指示 + 文案（`skeleton` 档仅为兼容保留、视觉与 compact 相同，
+    保留 `timed` 的已等待秒数）；`ListSkeleton` 改为直接返回统一加载态，所有调用点（聊天/文件/收藏/
+    通讯录/朋友圈/资金/记录/知识库…）一次性换代；`DataTable` loading 改为整行加载态；
+    存储分析的自定义骨架块也换成 `LoadingState variant="timed"`；骨架 CSS 保留给整页/卡片专用骨架
+    （总览、年度报告、图片占位），但不再有列表骨架条。
+  - 配套：响应式审计的加载检测补 `[data-st-loading]`；`prefers-reduced-motion` 下旋转放慢到 2s。
+  - 验证：client 全量 **2491 用例通过**（含 ledger/state-components/files-loading 等加载态守卫更新）；
+    M21/函数行数棘轮、响应式 quick gate 全绿；构建产物预览截图
+    `working/team/density/shots/loading/loading-style-preview.jpg`。
+
+- **启动默认为浅色主题**（2026-10-18 用户报「启动后默认为浅色主题」）。
+  - `theme.ts` 的兜底从 `'dark'` 改为 `'light'`（`storedMode() ?? 'light'`）：首次启动 / 未手动切换过时用浅色；
+    用户手动切换后仍写 localStorage、此后以持久化值为准。
+  - `index.html` 首帧即挂 `<html class="theme-light">`，加载占位从深色改为浅色背景，避免启动时先闪深色。
+  - `theme.spec.ts` 的默认/切换/非法值用例同步改判；`src/client/README.md` 主题说明同步。
+  - 验证：真实 Electron 启动后 `html.class=theme-light`、`data-theme=light`、body 背景 `rgb(246,248,251)`、
+    标题栏 `rgb(238,241,246)`、卡片白底；theme 30 用例、typecheck、build 全绿。
+
+- **聊天窗口：进入会话后最新消息被窗口裁掉 + 浏览历史时新消息提示**（2026-10-18 用户报「进入聊天消息窗口后最新消息看不到、被遮挡」并追加新功能）。
+  - 根因：打开会话后只在 50ms 时执行一次 `scrollIntoView`；而虚拟列表的行高逐帧回填、图片异步载入，
+    内容随后继续长高 150px+（实测 `scrollTop 9249 / max 9399`，最后一行 bottom 1005 > 消息区 bottom 887），
+    最新一条停在窗口下沿被裁。
+  - 修复：`chats-polling.ts` 新增 `isNearBottom` / `pinScrollToBottom`，用「多帧钉底 + ResizeObserver 监听
+    虚拟容器高度变化」持续贴底；打开会话 / 翻页 / 消息到达共用同一判据。实测进入会话即 `atBottom=true`，
+    最后一条（含图片）完整可见。
+  - 新功能：轮询或宿主推送追加消息时，用户**在底部附近**仍自动跟随；**正在翻历史**（离底 > 80px）则不抢滚动，
+    消息区底部浮出「↓ N 条新消息」按钮，点击跳回最新并恢复跟随；滚回底部自动清除提示。
+    浮标样式独立成 `chats-new-msg.module.css`（避免 M21 行数超限，也避开 shell 几何守卫的 `left:50%` 扫描）。
+  - 验证：chats 全量 spec **311 用例通过**（含新增「翻历史只提示 / 在底部自动跟随」行为用例）；
+    typecheck、M21/函数行数棘轮、响应式 quick gate 全绿。
+
+- **列表/表格/待办面板的主卡片撑满屏幕**（2026-10-18 用户报「其他面板的卡片要撑满屏幕」）。
+  - 操作日志：`.root` 撑满面板高度、`.tableCard` 吃掉剩余高度（`max-height:none`），表格在卡内滚；
+    900 高窗口下卡底空白 ~170px → 只剩面板 padding。
+  - 转账红包明细：`.recordsCard` 从 `flex-shrink:0` 改为 `flex:1 + max-height:none`，
+    `.tableScroll` 跟随长高（长表仍在自己那一格里滚，不裁切）。
+  - 待办：空态移进卡片并垂直居中，卡片撑满面板剩余高度（此前空态直接摊在页面上，下半屏是一整片裸空）。
+  - 全局卡高上限只对这三类「撑满」卡显式解除，其余卡片仍保留原高度预算。
+  - 验证：1456×908 实测三张卡底部留白 200+ → 31/25/12px（只剩面板 padding）；
+    `panel-clip` / `read-error-and-notice` 等 spec 已随新行为更新；响应式 quick gate PASS。
+
+- **卡片间距统一为 8px：修掉横向「卡片贴卡片」**（2026-10-18 用户报「卡片与卡片之间的间隙要设计好」）。
+  - 根因：总览把 Bootstrap `col-*` 直接挂在 kit Card 上，gutter 变成卡片**内部** padding，
+    卡片背景铺满整列 ⇒ 实测横向卡片间距 **0px**（卡边贴卡边），纵向却是 8px，间距不一致。
+  - 修复：`OvSection` 改为输出「栅格列 wrapper + 卡片」两层（`.ovCol` / `.ovSectionCard`）：
+    `col-*` 与 gutter 落在外层，卡片铺满列的内容盒 —— 横向/纵向统一 **8px**（Bootstrap `g-2`，
+    与 KPI 卡、卡内间距同一刻度）；`RegionBoard` 的省份/城市卡复用同一结构。
+  - 回归判据：`overview-layout.spec.ts` 新增「列与卡片本体分离、横纵间距由 g-2 提供」用例。
+  - 实测 1440：所有相邻卡片水平/垂直 gap 均为 8px（修复前 h=0 / v=8）；地图卡高度链、折叠、
+    响应式均不受影响。
+
+- **「世界」地图卡空间适配：xl 档让地图吃满卡片剩余高度**（2026-10-18 用户报「左边的地图做好适配，不要浪费空间」）。
+  - 现象：≥1200px 时「世界」卡与右列「省份 Top 10 + 城市 Top 12」同一行、被行高拉齐到 ~580px，
+    但地图盒固定 `clamp(220px,28vw,310px)`，卡底空出 200px+。
+  - 修复：`overview.module.css` 对**含 `.worldMapBox` 的卡**加高度链（`cardBd` / `ovSectionBd` /
+    `worldMapBox` 逐层 `flex:1; min-height:0`），地图由 ECharts ResizeObserver 自动 resize 铺满：
+    1440/2560 档地图盒 310 → **519px**，卡底空白 200+ → **13px**（只剩卡内 padding）。
+  - 只在 `@media (min-width:1200px)` 生效；1024 档保持 287px、手机档保持 300px 的原有固定高度，
+    避免 `height:auto` 时内层 `height:100%` 链把地图压成 0。其他视觉卡不受影响。
+
+- **修复「世界」地图底图加载：本地随包 GeoJSON 其实读到了，但被启动队列与一段未闭合注释挡掉**（2026-10-18 用户报「不是使用本地加载了吗？」）。
+  - 根因 1：`getMapGeoJson` 走全局调用闸，应用启动瞬间队列打满（并发 2 / 排队 32）返回
+    `REMOTE_BUSY`「远程调用太密集」；同一时刻直连该 remote 明明返回 `FeatureCollection`（239 国）。
+    渲染层把它判成「底图不可用」，于是显示「当前无法从镜像源取到…」。
+  - 根因 2：`overview.module.css` 里一段说明「窄屏媒体查询要放文件末尾」的注释**缺少闭合 `*/`**，
+    把随后的 `.ovTitle` / `.authors` / **`.worldMapBox` 基础高度规则** 等 30 多行 CSS 整段注释掉。
+    编译产物因此没有 `.worldMapBox { height: clamp(220px,28vw,310px) }`，地图容器高度 0，
+    ECharts 初始化时 `Cannot read properties of null (reading '0')` 直接崩 → fallback。
+  - 修复：① `getMapGeoJson` / `getRegionMap` 加入 `QUEUE_BYPASS_METHODS`（免排队，但仍过许可 /
+    后端就绪闸；两者都是毫秒级静态/只读请求）；② 渲染层 `fetchFirstJson` 对 `REMOTE_BUSY` 做
+    400/1200/3000ms 退避重试；③ 补上注释闭合，恢复被吞的 `.ovTitle` / `.authors` / `.worldMapBox`
+    等规则；④ fallback 文案改为「随包底图读取失败（或启动时请求队列繁忙，已自动重试）」。
+  - 验证：真实 Electron 下「世界」卡 canvas 已出现、无 fallback、控制台 0 错误；本地 GeoJSON
+    239 个 feature（首个「津巴布韦」）由后端读文件直接返回；密度/响应式 gate 均 PASS
+    （emptyRatio 64.4% → 0.0%）。样张 `working/team/density/shots/card-size/worldmap-fixed.jpg`。
+
+- **恢复全宽布局：撤掉卡片尺寸收口里的「内容画布 1480px 居中」限定**（2026-10-18 二次反馈「不要居中，弄回之前的布局」）。
+  - 移除 `ui/compact-chrome.module.css` §8 对 `panelShell` / `panelEmbed` / 自定义 `.panel` 的
+    `max-width:1480px; margin-inline:auto`，内容区恢复原来紧跟侧边栏、铺满可用宽度的排版；
+    `storage.module.css` / `daily-summary.module.css` 里为配合居中而加的 `max-width` 同步移除。
+  - 保留高度约束（内容卡 ≤598px、视觉卡 ≤860px、卡内滚动、网格 `align-items:start`）——
+    这次只回退宽度/居中，不回退「限制卡片大小」。
+
+- **全站卡片尺寸收口：限制卡片高度，分辨率只影响列数**（2026-10-18 用户报）。
+  - 新增全局卡片尺寸层（`ui/compact-chrome.module.css` §8）：内容卡卡身 ≤ **min(60vh, 526px)**、
+    视觉卡（canvas/svg/地图/图谱/热力/日历/图表/词云/舞台/编辑器）≤ **min(82vh, 788px)**，
+    超出走**卡内滚动**（不裁切、不无限长高）；卡片网格统一 `align-items:start`，不再被行内最高卡拉高。
+  - 修掉典型失控卡：公众号明细 5290px、重复资产 3997px、monitor/groupinsights 列表 1200/1050px。
+  - 高度预算落在**卡身**而非整卡：避免外卡 `overflow:hidden` 裁内容（实测 6 个面板被 y-clip）。
+  - 规范/例外/审计工具见 [`docs/CARD-SIZE.md`](docs/CARD-SIZE.md)；卡片尺寸审计
+    （`working/team/card-size-audit.mjs`，200 个卡片实例）从 **87 条可疑降到 11 条**：
+    内容卡最高 **598px**、视觉卡最高 **860px**；11 条全部是视觉卡/内容随分辨率的自然高度差，
+    **0 卡片级裁切、0 卡身不可达溢出**；朋友圈长文卡、总结工作台卡、设置分节卡另在各自模块
+    给同样的上界（卡内滚动）。响应式 gate 无阻塞新增，密度 gate 无恶化；
+    typecheck / 相关 spec / 棘轮 / `check:shim` / `build:ui` 全绿。
+
+- **「微信数据总览」重设计：改为 Bootstrap 栅格 + kit 卡片，与其他页签统一**（2026-10-18 用户报）。
+  - 删除全站唯一的「太空舱霓虹皮」：不再渲染 `NeonBackdrop`（粒子/极光/等距网格背景）与 `NeonHero`
+    等距指标牌；页面回归标准 `panelShell` / `panelHeader` / `panelBody`。
+  - KPI 条改 8× kit `StatCard`，Bootstrap `row g-2` + `col-6 col-sm-4 col-xl-3`（手机 2 列 / ≥sm 3 列 /
+    ≥xl 4 列两行），保留跳转、图标、「N 项」副标与 `data-st-ov-hero` 探针；消息构成压成一条 32px 紧凑横条。
+  - 卡片区全部改 Bootstrap 栅格行（`row g-2` + `col-12 col-md-6 col-xl-*`），外层 `d-flex flex-column gap-2`；
+    手机档用 `order-*` 把「好友分布（世界地图）」排到「轨道趋势」之前，删除原 JS `phone` 分支重排。
+  - 区块容器 `OvSection` 改 kit `Card`（图标+标题、操作+折叠按钮）；折叠语义完整保留（`hidden`、
+    `aria-expanded`、按标题写 localStorage、坏记录当全展开）；旧 `ovGrid/ovSpan*/ovCard*/ovGroupTitle`
+    等 12 栅格与霓虹皮肤规则整体删除。
+  - 实测：KPI 区 135px → **91.8px（2×45.9）**、`cardHdH` 41 → **35**、空置率 58.3%/64.4% → **2.3%/2.6%**；
+    响应式 6 档 0 溢出/0 越界/0 遮挡。门禁配套：密度审计为 `overview` 登记 `statH ≤96px` 例外
+    （8 张 KPI × 2 行的栅格高度，`fixedRatio/cardHdH/emptyRatio` 仍按全局口径，见 `docs/UI-DENSITY.md`）；
+    响应式接受清单里「词云裁切 / 地图工具栏标题」两条选择器改为门禁实际使用的**去哈希稳定名**
+    （`*_cloud*`、`*_toolbar > span._title`），否则已接受项会被误判为新增。
+    `typecheck:client`、overview 8 文件/47 用例、M21/函数行数棘轮、`check:shim`、`build:ui` 全绿；
+    改前/改后 6 档截图见 `working/team/density/shots/overview-redesign/`。
+
+- **图谱参数修复：节点上限默认 30% + 「头像模糊」只糊头像**（2026-10-18 用户报）。
+  - **节点上限**：初始默认从「`min(250, 快照人数)`」改为「**当前过滤条件下可显示人数 × 30%**」
+    （仅好友时按好友数；四舍五入、至少 1）。同时修掉首屏 `data=null` 时先把默认值算成 1 并锁死的旧缺陷；
+    滑杆下限 20→1、步进 1，恢复默认参数也走同一规则。
+  - **头像模糊**：滑杆从「节点模糊」更名「头像模糊」，渲染从「整个节点加 `shadowBlur`」改为
+    **只对头像位图设 `ctx.filter: blur()` 并在画完后复位**；名字 / 圆点 / 描边环 / 连线保持清晰，
+    海报导出（`graph-poster.ts`）同口径。
+  - 验证：真机探针（影子 profile）读数 289 名可显示好友 → 默认 **87**（=289×30%）、画布共 88 节点；
+    「头像模糊=8」截图确认头像糊、名字/描边环清晰；graph 相关 spec 15 文件/319 用例、
+    `typecheck:client`、M21/函数行数/主题几何棘轮全绿。
+  - **图谱侧栏分栏：图谱参数 / 节点详情**（同日用户反馈）：原先点选节点后的详情卡被塞在
+    「图谱参数」抽屉的同一个列表里，调参与看节点信息混在一起。现在抽屉顶部是**两个明确页签**——
+    选中节点自动切到「节点详情」，点「图谱参数」页签可随时回到调参；详情页签未选中时禁用并给空态引导；
+    抽屉标题随页签切换（节点详情 / 图谱参数），两者不再同屏混排。
+  - **社交图谱导出海报重设计**（同日）：重排为「刊头（品牌条 + 标题/副标题 + 右侧 KPI 胶囊）+
+    图谱卡（内嵌标题行：口径元信息 + 图例 chips）+ 最亲近 TOP / 圈子概览双卡 + 页脚」；三套风格各配强调色，
+    1:1 / 3:4 / 16:9 三种画幅分别适配版式（**16:9 为左图谱 + 右洞察双栏**，图例移到图谱卡下方）。同时
+    **修掉竖版图谱左右被裁的 bug**（旧版图层固定按 1184×360 渲染再 contain 进竖框）；修复长昵称压住排行柱条、
+    16:9 底部卡/页脚重叠两处排版问题。真机导出 5 张样张（深空 1:1/3:4/16:9、浅日 1:1、霓虹 16:9）逐张目检；
+    新增 `graph-poster.spec.ts` 版式断言（区块不越界/不重叠、图层按目标框比例渲染）。
+
+- **响应式改造：Bootstrap 栅格/实用类 + 全页签多分辨率审计与修复**（2026-10-18）。
+  - **引入**：`bootstrap@5.3.8` 只取官方 `bootstrap-grid` + `bootstrap-utilities`（**不含 reboot / 组件样式 / JS**；
+    渲染页 CSP 只放行 `'self'` 且产品要求离线，因此**不走 CDN**），由 Vite 打包进本地资源；另加
+    `bootstrap-bridge.css` 用 `--nm-*` 令牌桥接 table/card/form/modal/navbar 五类组件类。
+  - **审计工具**：`npm run ui:responsive-audit`（真实 Electron，38 页签 × 6 视口，5 类检测：文档横向溢出 /
+    元素越界 / 裁切 / 固定层遮挡 / 有文本不可见；含 `--selftest` 与「滚动视口外内容不得判遮挡」负向护栏）；
+    手机浏览器路径 `node scripts/responsive-audit-browser.mjs`（影子 profile 起真实 LAN 服务 + system Chrome
+    登录，4 档手机视口）。
+  - **结果**：桌面基线 151 → **90** 条（①文档横向溢出 / ②元素越界 / ④固定层遮挡 = **0**；剩余 90 条全部为
+    有意响应式并登记在 `docs/BOOTSTRAP-RESPONSIVE.md` §5.1）；手机浏览器 96 → **57** 条稳定、逐格零新增，
+    修复浏览器独有的设置弹窗内容裁切（6 个设置类页签 × 4 档、258–510px）、`90dvh` 动态视口、
+    横屏触摸目标，并补 `viewport-fit=cover` 让安全区生效。
+  - **门禁**：`npm run ui:responsive-gate`（问题身份键剥 CSS Modules 哈希、不含 rect/顺序，新增问题 exit 2，
+    `--selftest` 9/9）；推荐改面板后 `--run --only=<面板> --quick` 对比上一版再提交。
+  - 详见 [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md)。
+
+- **全站 UI 密度改造：卡片与组件紧凑化**（2026-10-18，用户要求「固定内容尽量少占空间、别浪费」）。
+  - 新增**全局紧凑 chrome 层** `src/client/ui-wechat/src/client/pages/wechat-data/ui/compact-chrome.module.css`
+    （208 行，一次覆盖 144 个面板视图）：页头标题 15px/说明 11px 并排（页头 51.1px → **20–36px**）；
+    `StatCard` 改**单行内联 KPI**（统计区 118–316px → **34–46px**）；卡片头 8/12 + 标题 13px（48–79px → **34px**）；
+    表格行高 37.1 → **33.1px**；空态收紧、面板骨架间距 12→8。
+  - 首批重塑 8 个最差页签（calls / mediaassets / health / backup / oplog / officialassets /
+    momentsinsights / assetinsights）：固定区占比 53%/45%/44%/35%… → **全部 ≤16.6%**；
+    calls 修掉卡片头被拉伸 bug 并让图表吃满卡片、oplog 4 张状态卡→内联 KPI + 筛选压行、
+    mediaassets 快捷入口收进页头、kb 工具栏 66→32px、health/backup 6 卡并一排。
+  - 新增密度审计 `npm run ui:density-audit`（38 页签 × 1440/1280：固定区占比/页头/筛选/统计区/卡片头/
+    表格行高/空白率/空洞卡，含 `--selftest`）。改造前 68/76 格超目标 → 改造后：
+    `fixedRatio` 超标 **14→0**、`headerH` 58→2、`statH` 16→0、空洞卡 3→0。
+  - 验证：响应式全量 228 格 0 文档溢出/0 遮挡（与既有 accepted 同批）；typecheck、受影响 spec
+    20 文件/327 用例、主题几何/行数棘轮、build 全绿；6 档截图 54 张。详见 `docs/UI-DENSITY.md` §6。
+  - **Wave D2 收口**（同日）：剩余 `cardHdH` 10 格全部 ≤36（settings 67→31、privacy 47→31、hook 50.6→32.4、
+    overview 41→35、monitor 39.2→35.7）；`toolbarH` 3 格全部单行 ≤48（contacts 70→32、oplog 66/70→32/32，
+    动作按钮进页头「更多 ▾」）；新增**密度差异门禁** `npm run ui:density-gate`；空白口径修正为「卡片内大块空白」
+    并与视口求交、豁免 CSS 图表背景。累计：固定区占比超标 14→0、统计区超标 16→0、页头超标 58→2、
+    卡片头超标 30→0、筛选超标 8→0、空洞卡 3→0。
+  - **最终验收**：密度审计 **76 格 0 超目标**（7 项指标全部 0/76，含 `ledger` 行高 36→32px）；
+    密度门禁 `density-d2 → density-final` **PASS（0 阻塞 / 30 改善）**；响应式 `round-final` 228 格
+    **0 文档溢出 / 0 越界 / 0 遮挡**、`ui:responsive-gate` **PASS（0 新增）**；
+    `typecheck`、受影响 spec、主题几何/行数棘轮、`build` 全绿。详见 `docs/UI-DENSITY.md` §6。
+
+### 修复
+
+- **「全屏」按钮不再盖住 Windows 任务栏**（2026-10-18 用户报）。
+  - **原因**：按钮走 `setFullScreen(true)`，Windows 上那是真全屏 —— 本机实测（2560×1440 屏，
+    工作区 2560×1400）窗口 bounds 变成 `0,0,2560,1440`，把底部 40px 任务栏整个盖住。
+    无边框窗口的 `maximize()` 也不是出路：实测 bounds `-8,-8,2576,1416`（Windows 把不可见的
+    窗口缩放边框算在外面），右/下各越界 8px、仍压任务栏上沿；而且这两种状态之后再 `setBounds`
+    都会被 Electron 忽略，没法事后修正。
+  - **修复**：按钮改为「铺满当前显示器工作区」——按窗口**所在**显示器取 `workArea`
+    （多屏不是主屏）再 `setBounds`；进入前记下 bounds、退出时原样还原；状态经
+    `window:fullscreen-changed` 回传，标题栏图标与提示同步。系统最大化一并关掉
+    （`maximizable: false`），否则 Win+↑ 仍会复现同一 8px 越界。
+  - **验证**：`ipc-misc.spec.ts` 新增 3 条行为判据（几何等于工作区、不许调用 `setFullScreen`、
+    二次点击还原、多屏取所在屏、窗口销毁静默）+ 变异 M689 咬红；真机 Playwright 探针实测
+    进入后 bounds = `0,0,2560,1400`（任务栏可见）、退出还原到进入前尺寸。
+
 ## [1.0.8] - 2026-10-15
 
 ### 修复

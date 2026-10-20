@@ -5,6 +5,7 @@
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
 import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ArticleCoversResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlySnapshot, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
+import type { ChatCollectTaskResult, ChatCollectTaskSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
 import { type AnnualReview } from './query/annual-review.ts';
@@ -149,6 +150,20 @@ export declare abstract class GatewayRead extends GatewayCore {
         after: number;
         limit?: number;
     }): MessagesSnapshot;
+    /**
+     * 新建「聊天素材收集任务」：保留某会话最近 N 条文本 + M 张图片到任务目录。
+     *
+     * 图片解码密钥与账号根目录只在这一层解析（query 层不 import gateway-support，
+     * 避免 query → gateway 的反向依赖）。
+     */
+    createChatCollectTask(options: {
+        username: string;
+        displayName?: string;
+        textLimit?: number;
+        imageLimit?: number;
+    }): Promise<ChatCollectTaskResult>;
+    /** 收集任务列表（最新在前；`readError` 与「确实没有任务」区分）。 */
+    listChatCollectTasks(): ChatCollectTaskSnapshot;
     /**
      * Search index status.
      * @returns SearchIndexStatus: whether the FTS5 index exists and its row count.

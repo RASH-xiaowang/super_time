@@ -20,7 +20,6 @@ import {
   IconFullscreenOutline16, IconLinkOutline14,
   IconPlayOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { RainWindow } from './rain-window.tsx'
 import { ChatsView } from './chats-view.tsx'
 import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
 import { useChatsThread } from './chats-thread.tsx'
@@ -266,7 +265,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   ]
 
   const sessionsPager = usePagedList<WechatSession>({
-    pageSize: 120, refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS, refreshDebounceMs: 50,
+    pageSize: 120, maxItems: 600, refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS, refreshDebounceMs: 50,
     fetchPage: async (offset, limit) => {
       const env = await apiGetSessions({ limit, offset })
       return { items: env.sessions, total: env.total }
@@ -461,7 +460,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [])
 
   /** 菜单项分发：把「声明式条目」落到具体的面板动作上。 */
-  const { changeView, loadMore, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgEndRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef })
+  const { changeView, jumpToLatest, loadMore, newMsgCount, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef })
 const {
     calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calTop, calTotal, calYear,
     jumpToDay, openCalendar, refreshCurrentMonth, switchCalMonth,
@@ -494,25 +493,11 @@ const {
     }
   }, [msgMenu])
 
-  const lastTypeIcon = (t: number | undefined): string => {
-    switch (t) {
-      case 3: return '🖼️'
-      case 34: return '🎤'
-      case 43: return '🎬'
-      case 47: return '😀'
-      case 49: return '🔗'
-      case 50: return '📞'
-      case 10000: return '📢'
-      case 10002: return '↩️'
-      default: return ''
-    }
-  }
-
   const renderSession = (s: WechatSession): React.JSX.Element => (
-    // 会话名与摘要都会被省略号截断（实测名 135<230、摘要 187<829），title 给全文
     <button
       key={s.username}
       type="button"
+      data-session-row={s.username}
       className={css.sessionItem}
       data-active={!batchMode && curSession?.username === s.username || undefined}
       title={`${s.displayName || s.username}\n${s.username}`}
@@ -524,7 +509,7 @@ const {
         </span>
       )}
       <LazyMount placeholder={<span className={css.avatarStub} />} rootMargin="400px 0px">
-        <Avatar name={s.displayName} username={s.username} />
+        <Avatar name={s.displayName} username={s.username} size={40} />
       </LazyMount>
       <div className={css.sessionInfo}>
         <div className={css.sessionTop}>
@@ -539,9 +524,6 @@ const {
           </span>
         </div>
         <div className={css.sessionBottom}>
-          {lastTypeIcon(s.lastMsgType) && (
-            <span className={css.sessionTypeBadge} title="最后消息类型图标">{lastTypeIcon(s.lastMsgType)}</span>
-          )}
           {/* 会话摘要实测最长 829px 而格位 187px（4.4 倍），必须给出全文入口 */}
           <span className={css.sessionSummary} title={s.summary || (s.draft ? `[草稿] ${s.draft}` : '')}>{s.summary || (s.draft ? `[草稿] ${s.draft}` : '')}</span>
           {/*
@@ -572,7 +554,7 @@ const {
     edited: { doReset, editedOpen, editing, edits, setEditedOpen },
     exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportProgress, exportSession, exporting, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
     groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, onExport: () => setExportOpen(true), setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
-    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
   }
 
   // 编辑/草稿与复制/打开文件共用一条回执（同一时刻不会同时做两件事；都有值时编辑优先）。

@@ -86,3 +86,39 @@ export function changedFilesSince(ref, cwd) {
     return { files: [], ok: false, detail: (e && e.message ? e.message : String(e)).split('\n')[0] }
   }
 }
+
+/**
+ * 取 `ref...HEAD` + **工作树脏改动/未跟踪文件** 的并集。
+ *
+ * `--diff` 在 CI 上通常干净，但本地/预推送时代码常常还没提交；只用 `ref...HEAD`
+ * 会把“正在改的守卫”排除在变异增量之外，看起来绿、实际没验。这个函数只给
+ * mutation-check 的增量口径用；`changedFilesSince` 保持原语义不动（已有用例依赖）。
+ *
+ * 任何一条 git 命令失败 ⇒ `ok:false`，调用方必须退化成全量，绝不静默跳过。
+ *
+ * @param {string} ref - 任意可解析的 git 引用。
+ * @param {string} cwd - 仓库目录。
+ * @returns {{ files: string[]; ok: boolean; detail: string }}
+ */
+export function changedFilesForGate(ref, cwd) {
+  const run = (args) => execFileSync('git', args, { cwd, encoding: 'utf8' })
+  const files = new Set()
+  let detail = ''
+  try {
+    const committed = run(['diff', '--name-only', ref + '...HEAD'])
+    const unstaged = run(['diff', '--name-only'])
+    const staged = run(['diff', '--cached', '--name-only'])
+    const untracked = run(['ls-files', '--others', '--exclude-standard'])
+    for (const blob of [committed, unstaged, staged, untracked]) {
+      for (const line of blob.split('\n')) {
+        const path = line.trim()
+        if (path !== '') files.add(path.replace(/\\/g, '/'))
+      }
+    }
+    detail = String(files.size) + ' 个文件（含工作树）'
+    return { files: [...files], ok: true, detail }
+  } catch (e) {
+    return { files: [], ok: false, detail: (e && e.message ? e.message : String(e)).split('\n')[0] }
+  }
+}
+

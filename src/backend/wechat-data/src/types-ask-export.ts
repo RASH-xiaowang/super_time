@@ -6,6 +6,8 @@
  *
  * @module types-ask-export
  */
+import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+
 /** 语音消息的可播放音频（16kHz 单声道 wav 的 data URL）。 */
 export interface VoiceDataUrlResult {
   url?: string
@@ -145,13 +147,14 @@ export interface AskCitation {
   /** 群聊里这条消息的发送者显示名（单聊为空）。 */
   sender?: string
   /**
-   * 来源域：`'msg'` = 聊天消息（缺省，向后兼容）；`'kb'` = 知识库文件块。
+   * 来源域：`'msg'` = 聊天消息（缺省，向后兼容）；`'kb'` = 知识库文件块；
+   * `'agg'` = **聚合事实**（2026-10-16 新增，`COUNT(*)` / `GROUP BY` 的结果）。
    *
    * 判别字段的取舍：不用「`local_id === 0` 判 KB」这种隐式约定 ——
    * 消息域里 `local_id` 为 0 是否有含义取决于上游，靠它判来源会在上游变化时
    * 悄悄失效，而且失效时**不报错**（只是统计与归因开始说谎）。
    */
-  source?: 'msg' | 'kb'
+  source?: 'msg' | 'kb' | 'agg'
   /**
    * 知识库来源专有信息（`source === 'kb'` 时存在）。
    *
@@ -216,6 +219,16 @@ export interface AskResult {
   citations: AskCitation[]
   /** Retrieval plan used for this answer (multi-turn pipeline). */
   plan?: AskPlan
+  /**
+   * 模型的**思考过程**（2026-10-16 新增）。
+   *
+   * 为什么单独一个字段而不是拼进 `answer`：思考与可见正文是两条独立的流
+   * （模型可能先吐一大段 reasoning 再吐正文），界面上要能**分开折叠展示** ——
+   * 拼在一起就没法只收起思考、也没法只复制正文。
+   *
+   * 只在模型真的产出 reasoning 时才有值（多数非推理模型没有）。
+   */
+  reasoning?: string
   /** 回答正文里真正引用到的来源序号（1 基，对应 citations 的下标 +1）。 */
   citedIndexes?: number[]
   /**
@@ -244,6 +257,14 @@ export interface AskResult {
   }
   /** 本轮检索的追踪 id：反馈时回传它，才能把「哪条引用有用」归因到检索特征。 */
   retrievalId?: string
+  /**
+   * 本轮模型调用的 token 用量（2026-10-19）。
+   *
+   * 一次问答可能调用模型多次（检索规划 / 生成 / 接地回炉），这里是**累加值**；
+   * 供应商不返回 usage（或全部没有）时缺省为 undefined —— 不伪造 0。
+   * ClawBot 自动回复用它按实例记账（`clawbot_token_usage`）。
+   */
+  usage?: TokenUsage
   /** 检索统计（命中候选数 / 保留数 / 范围），用于解释「为什么只有这些来源」。 */
   retrieval?: {
     candidates: number

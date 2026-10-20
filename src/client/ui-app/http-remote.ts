@@ -157,7 +157,7 @@ export function createHttpRemote(): WechatRemote {
 /**
  * 用一次性配对码换会话。
  *
- * @param token - 桌面端「设置 → 远程访问（手机）」里生成/显示的配对码。
+ * @param token - 桌面端「打开网页」交接时生成的一次性配对码（不再有设置入口）。
  * @returns 成功为 `{ ok: true }`；失败给一句能直接显示给用户的原因。
  */
 export async function authenticate(token: string): Promise<{ ok: boolean, error?: string }> {

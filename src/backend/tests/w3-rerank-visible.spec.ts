@@ -23,6 +23,13 @@ const read = (p: string): string => readFileSync(p, 'utf8')
 const TYPES = 'src/backend/wechat-data/src/types-ask-export.ts'
 const ASK = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx'
 const DEEP = 'src/backend/wechat-data/src/remotes/askdeep.ts'
+/**
+ * 检索阶段的实现（2026-10-16 从 `askdeep.ts` 抽出）。
+ *
+ * `rerank` 的组装随检索阶段一起搬到了这里 —— 守卫要读**实现所在的那个文件**，
+ * 而不是「它原来在的那个文件」（后者会在搬家后变成一条永远为真的空断言）。
+ */
+const RETR = 'src/backend/wechat-data/src/remotes/ask-retrieval.ts'
 
 describe('W3-6.3：精排状态进字段、进界面', () => {
   it('① 类型上有独立字段', () => {
@@ -31,14 +38,16 @@ describe('W3-6.3：精排状态进字段、进界面', () => {
   })
 
   it('② 后端填它，且 used=false 那一支给 0 而不是 undefined', () => {
-    const d = read(DEEP)
-    expect(d, 'askdeep 没把 rerank 写进 retrieval').toContain('rerank: {')
+    const d = read(RETR)
+    expect(d, '检索阶段没把 rerank 写进 retrieval').toContain('rerank: {')
     // 判别联合：used=false 时没有 candidates/kept，读的时候必须兜底。
     expect(d, 'used=false 时把 undefined 流出去了').toMatch(/candidates: out\.rerankInfo\.used \? out\.rerankInfo\.candidates : 0/)
     expect(d).toMatch(/kept: out\.rerankInfo\.used \? out\.rerankInfo\.kept : 0/)
     // model / note 也要按判别联合的分支取，否则 TS 上都过不去（这条防的是「以后有人把它改回去」）。
     expect(d).toMatch(/out\.rerankInfo\.used && out\.rerankInfo\.model/)
     expect(d).toMatch(/!out\.rerankInfo\.used && out\.rerankInfo\.note/)
+    // 反向：`askdeep.ts` 不该再自己组装一份（两份必然分叉）。
+    expect(read(DEEP), 'askdeep 里又出现了一份 rerank 组装').not.toContain('rerank: {')
   })
 
   it('③ 前端渲染它，且未启用时用告警色调', () => {

@@ -32,14 +32,21 @@ type BalanceState =
 export interface SidebarBalanceProps {
   /** 侧栏是否收起：收起时只留图标（与导航标签同款行为）。 */
   collapsed: boolean
+  /**
+   * 呈现变体（2026-10-17）：
+   * · `sidebar`（缺省）—— 侧栏底部固定区里的整行按钮（左对齐、占满宽度）；
+   * · `titlebar` —— 标题栏右上角的胶囊（与「数据就绪」同款视觉，图标 + 数字）。
+   * 两者共用同一套取数与轮询逻辑，只是外观不同。
+   */
+  variant?: 'sidebar' | 'titlebar'
 }
 
 /**
  * 渲染余额行。
- * @param props - 侧栏收起态。
+ * @param props - 侧栏收起态与呈现变体。
  * @returns 余额按钮；未配置模型时不渲染（返回 null）。
  */
-export function SidebarBalance({ collapsed }: SidebarBalanceProps): React.JSX.Element | null {
+export function SidebarBalance({ collapsed, variant = 'sidebar' }: SidebarBalanceProps): React.JSX.Element | null {
   const [state, setState] = useState<BalanceState>({ kind: 'loading' })
   /** 单飞：定时与点击叠在一起时只跑一次（两个并发请求对余额没有任何好处）。 */
   const busy = useRef(false)
@@ -87,6 +94,7 @@ export function SidebarBalance({ collapsed }: SidebarBalanceProps): React.JSX.El
       type="button"
       className={css.row}
       data-status={state.kind}
+      data-variant={variant}
       data-collapsed={collapsed || undefined}
       onClick={() => { void refresh() }}
       title={title}

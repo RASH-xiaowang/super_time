@@ -1,12 +1,330 @@
-/* Offline group insights — NEON MATRIX 科技风（与总览共用令牌）。 */
+/* 群聊分析 · 洞察 — 微信灰阶 + 绿色主操作。
+ *
+ * 2026-10-19 微信化：页头收成 36px 工具行（与「监控」视图共用，见 GroupToolRow），
+ * 指标带改中性数值、排行条改微信绿单色、去阴影 / 多色语义值。
+ *
+ * ⚠️ 高度链（真机踩过两次）：
+ *   `.panelShell`（flex 列，`overflow-y: auto`）→ 工具行 / `.metrics` / 公告卡 / `.cols`。
+ *   前几者 `flex: 0 0 auto`（按内容高），`.cols` 用 `flex: 1 1 auto` + `min-height: 0`
+ *   吃掉剩余高度。**`.cols` 少了 `min-height: 0` 就会按内容高撑开**（grid 的隐式行高
+ *   是 `auto`），页面溢出 179px、词云底部被裁掉。
+ */
 
+/* ── 两视图共用工具行（36px）─────────────────────────────────────── */
+.toolRow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-height: 36px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.toolTitle {
+  font-size: var(--nm-fs-md);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+}
+.toolSpacer { flex: 1 1 auto; min-width: 0; }
+.toolBtn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast);
+}
+.toolBtn:hover:not(:disabled) { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.toolBtn:disabled { opacity: 0.5; cursor: default; }
 
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* ── 指标带（与资产类页面的 KPI 条同一视觉：44px、标签上数值下）──── */
+.metrics {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+  min-height: 44px;
+}
 
-.bars { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.barRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.barName { width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); flex-shrink: 0; }
-.barTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: var(--nm-r-sm); overflow: hidden; }
-.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-sm); }
-.barCount { width: 48px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
-.announcement { padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; }
+.metric {
+  flex: 1 1 0;
+  min-width: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 12px;
+  border-left: 1px solid var(--nm-border);
+}
+
+.metric:first-child { border-left: 0; }
+
+.metricLabel {
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: 1.35;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metricValue {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 两栏 ─────────────────────────────────────────────────────── */
+/* `align-items: stretch` + 两栏都 `flex: 1 1 auto`：左栏（排行）与右栏（热词）等高，
+   热词卡吃掉剩余高度 —— 否则热词卡只有 397px 而左栏 397px，下方留 300px 空白。
+   ⚠️ `min-height: 0` 必须给：`.cols` 是 `.panelShell`（flex 列）的子项，
+   默认 `min-height: auto` 会按内容高撑开 ⇒ 页面溢出（真机实测 179px）。 */
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* ⚠️ 行高必须显式 `minmax(0, 1fr)`：`auto` 行会被内容撑到 477px，
+     子项 `height: 100%` 也跟着变成 477px，`flex: 1 1 auto` 形同虚设
+     （本仓既有教训，见 kb-files 的 `.readerSplit`）。 */
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--nm-s-4);
+  align-items: stretch;
+  min-height: 0;
+  /* ⚠️ `flex: 1 1 0` 而不是 `1 1 auto`：`flex-basis: auto` 会先按**内容高**（477px）
+     参与布局，剩余空间为负 ⇒ `flex-shrink` 无从谈起，页面溢出 179px（真机实测）。
+     从 0 开始按 grow 分配，高度才真正由容器剩余空间决定。 */
+  flex: 1 1 0;
+}
+
+@media (max-width: 900px) {
+  .cols { grid-template-columns: 1fr; }
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-4);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 两栏都吃满整栏高度：右栏是词云（`fill` 模式自己会量高度），左栏是成员排行。
+   ⚠️ 左栏的排行卡必须 `flex: 1 1 0` + `min-height: 0`：`flex: 0 0 auto` 会让它按内容高
+   （10 行 × 44px = 440px）撑开 `.col`，进而把 `.cols` 撑到 460px、页面溢出 179px
+   （真机实测）。列表自己内滚，卡本身吃满栏高。 */
+.col > :last-child { flex: 1 1 0; min-height: 0; }
+
+/* 铺满（2026-10-18 大屏复查）：排行卡解除全局卡高上界后由 `.col` 分配整列高度，
+   卡身 / 排行列表继续吃满（见下一条规则）。 */
+.fillCard { min-height: 0; }
+
+/* 排行卡被拉高后，卡身与列表要能跟着长（否则卡高了、行还挤在顶上）。 */
+.col > :last-child > [class*='cardBd'] {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* ── 成员排行 ─────────────────────────────────────────────────── */
+/* 列表吃满卡片剩余高度（`flex: 1 1 0`），行数少时不会在下方留一大片空白
+   （用户截图：6 行排行占 460px 卡，下方空 200px）。
+   `max-height` 只是兜底上限，真正的高度由 flex 分配；超出时内滚。 */
+.rankList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.rankList::-webkit-scrollbar { width: 6px; }
+.rankList::-webkit-scrollbar-thumb {
+  background: var(--nm-border);
+  border-radius: var(--nm-r-xs);
+}
+
+.rankRow {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--nm-r-sm);
+  transition: background var(--nm-t-fast);
+  /* 行按内容高（`flex: 0 0 auto`），**不**均分剩余高度 ——
+     均分会让 8 行摊在 460px 里、每行 57px，行间距大得像列表断了（真机截图）。 */
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
+.rankRow:hover { background: var(--nm-bg-hover); }
+
+.rankNo {
+  font-size: var(--nm-fs-xs, 11px);
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-2);
+  text-align: center;
+}
+
+/* 前三名只加粗名次，不加彩色/奖牌图标（颜色留给绿色数据条）。 */
+.rankRow[data-top='true'] .rankNo { color: var(--nm-text-1); font-weight: 700; }
+
+.rankBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rankHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rankName {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.rankCount {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--nm-fs-xs, 11px);
+  font-family: var(--nm-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-2);
+  flex-shrink: 0;
+}
+
+/* 百分比是这一行的主数字（条数是副信息）：给主文本色 + 稍大字号。 */
+.rankPct {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.rankTrack {
+  height: 4px;
+  background: var(--nm-bg-hover);
+  border-radius: var(--nm-r-pill);
+  overflow: hidden;
+}
+
+/* 单色条：绿色只表达「相对大小」，不再青紫渐变。 */
+.rankFill {
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+/* ── 群公告（横跨整行，在排行与热词上方）───────────────────────────
+ * 2026-10-17 用户要求「群公告放在成员发言排行和群聊热词的上方」。
+ * 公告是「这个群现在在做什么」的背景信息，先读它再看谁在说话、在说什么。
+ *
+ * ⚠️ 高度必须封顶：公告可以很长（实测有 2,000+ 字的），不封顶会把下面两栏
+ * 整个推出可视区。`max-height: 120px` + 内滚，约 4 行 —— 再高就把词云挤没了
+ * （真机实测 200px 时页面溢出 181px）。 */
+.announcement {
+  font-size: var(--nm-fs-sm);
+  line-height: 1.75;
+  color: var(--nm-text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.announcement::-webkit-scrollbar { width: 6px; }
+.announcement::-webkit-scrollbar-thumb {
+  background: var(--nm-border);
+  border-radius: var(--nm-r-xs);
+}
+
+/* ── 空态 ─────────────────────────────────────────────────────── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 2px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: 1.7;
+}
+
+.emptyHint {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  opacity: 0.75;
+}
+
+/* ============================================================
+ * Wave 2（2026-10-18 响应式审计，38 tab × 6 视口）
+ *
+ * ① 单栏档（≤900，与上方既有断点一致）：`.cols` 的 `grid-template-rows: minmax(0,1fr)`
+ *    在单列 + 定高（`flex: 1 1 0`）下让第二个 `.col`（词云卡）塌成 2px ——
+ *    实测 390/768 词云卡 clientHeight = 0，卡头文字被 Card 的 overflow:hidden 裁掉。
+ *    单栏档改成自然流：卡片按内容高、`.panelShell` 成为唯一滚动容器。
+ *
+ * ② 指标带：6 格等宽数字在 558px 宽下会 5 格换行、第 5 格顶出容器。窄档改成
+ *    3 列 / 2 列网格，数值完整显示。
+ * ============================================================ */
+/* `panelShell` 变可滚后，flex 会先压缩非卡片子项：`.metrics` 是自定义 div
+ * （kit 的「卡片类子项不可压」规则不覆盖它），实测被压成 2px。禁止压缩，
+ * 溢出交给 `.panelShell` 滚动。 */
+.metrics { flex-shrink: 0; }
+.toolRow { flex-shrink: 0; }
+
+@media (max-width: 900px) {
+  .cols {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    flex: 0 0 auto;
+  }
+  .col { min-height: auto; }
+  .col > :last-child { flex: 0 0 auto; }
+  /* 第一栏（成员发言排行）的卡身按内容高：卡片不再内滚，行全部展开（见 .rankList）。 */
+  .col:first-child > :last-child > [class*='cardBd'] { flex: 0 0 auto; }
+  .rankList { flex: 0 0 auto; max-height: none; }
+  /* 词云卡（`fill` 模式）必须给**确定高度**：舞台高度 = 卡片实测高 − 卡头 − 内边距，
+     而卡高又由舞台内联高度撑起 —— 卡高 auto 时这是一个「任意值都是不动点」的反馈环，
+     实测 768 档一路滚到 8441px（ResizeObserver 反复放大）。
+     382 = 卡头 48 + 卡身 334（JS 量得舞台 300 + 内边距 32 + 舍入）。 */
+  .col:last-child > :last-child { height: 382px; }
+  .col:last-child > :last-child > [class*='cardBd'] { flex: 1 1 auto; min-height: 0; }
+  .col:last-child > :last-child > [class*='cardBd'] > [class*='_cloud_'] { overflow-y: auto; }
+
+  .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric { border-left: 0; border-top: 1px solid var(--nm-border); }
+  .metric:nth-child(-n + 3) { border-top: 0; }
+}
+@media (max-width: 560px) {
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric:nth-child(-n + 2) { border-top: 0; }
+  .metric:nth-child(n + 3) { border-top: 1px solid var(--nm-border); }
+}

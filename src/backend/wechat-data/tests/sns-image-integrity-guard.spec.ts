@@ -131,19 +131,8 @@ const mediaRemotes = code(read('src/remotes/media.ts'))
 const mediaCache = code(read('../../client/ui-wechat/src/client/pages/wechat-data/media-cache.ts'))
 const momentsMedia = code(read('../../client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts'))
 
-describe('先网后本：有网只走网络，无网只用本地（顺序不许被调换）', () => {
-  // 用位置而不是切片段：同一文件里有两处 `} else {`（`hasCdn` 那个在前），
-  // 靠字符串切容易切错区间，而切错了断言会变成恒真。
-  //
-  // ⚠️ 2026-10-09 加限定：封面那路（`getSnsVideoCoverDataUrl`，在**前面**）也写着
-  // `if (!offline)`，不加函数起点限定的话 `indexOf` 会抓到**封面**那个分支，
-  // 于是「CDN 必须在 else 之前」变成拿图片函数的位置和封面函数的位置比 —— 恒假。
-  // 这正是本 describe 开头警告过的那类坑，所以这里把限定条件本身也钉成一条断言。
+describe('本地优先：长期归档 → 解码缓存 → 本机原图 → CDN（顺序不许被调换）', () => {
   const iImgFn = mediaRemotes.indexOf('async function snsImageWithCdnFirst')
-  // 切片到这个函数**自己**结束（下一个顶格 `}`）为止，而不是「到文件末尾」。
-  // 早先写的是「到文件末尾 + 断言它是最后一个顶层函数」，2026-10-09 加了
-  // `snsVideoCoverWithCdnFirst` 之后那条自证立刻变红 —— 它确实抓住了限定条件失效，
-  // 但正确的修法是让切片本身带边界，而不是禁止后面再加函数。
   const endOfImgFn = iImgFn < 0 ? null : /\n\}\r?\n/.exec(mediaRemotes.slice(iImgFn))
   const afterImgFn = iImgFn < 0 ? '' : mediaRemotes.slice(iImgFn, iImgFn + (endOfImgFn?.index ?? 0))
   /** 在**这个函数内**找，但返回整文件里的绝对下标 —— 下面的 `.slice(iCdn, …)` 还要用它。 */
@@ -151,8 +140,7 @@ describe('先网后本：有网只走网络，无网只用本地（顺序不许�
     const i = afterImgFn.indexOf(needle, fromInImg)
     return i < 0 ? -1 : i + iImgFn
   }
-  const iBranch = findInImg('if (!offline) {')
-  const iOfflineElse = iBranch < 0 ? -1 : findInImg('} else {', iBranch - iImgFn)
+  const iArchived = findInImg('lookupArchivedOriginal(decoded, options.md5)')
   const iStore = findInImg('lookupOriginal(decoded, options.md5)')
   const iCdn = findInImg('fetchSnsCdnImage(')
   const iLocalOriginal = findInImg('local(false)')
@@ -161,34 +149,32 @@ describe('先网后本：有网只走网络，无网只用本地（顺序不许�
   it('切片带边界：取到的正好是 snsImageWithCdnFirst 这个函数，不含后面的顶层函数', () => {
     expect(iImgFn, 'snsImageWithCdnFirst 不见了').toBeGreaterThan(-1)
     expect(afterImgFn.startsWith('async function snsImageWithCdnFirst')).toBe(true)
-    // 切片里必须含这个函数**特有**的东西，且不含紧随其后的那个函数名
     expect(afterImgFn).toContain('fetchSnsCdnImage(')
     expect(afterImgFn, '切片越界吃进了别的顶层函数').not.toContain('snsVideoCoverWithCdnFirst')
   })
 
-  it('两条分支都在：有网走 CDN，无网走已下载的原图缓存', () => {
-    expect(mediaRemotes).toMatch(/const offline = options\.offline === true/)
-    for (const [name, i] of [['有网分支', iBranch], ['无网分支', iOfflineElse], ['已下载原图缓存', iStore], ['CDN', iCdn]] as Array<[string, number]>) {
+  it('四路顺序：长期归档 → 解码缓存 → 本机原图 → CDN；缩略图永远最后', () => {
+    for (const [name, i] of [
+      ['长期归档', iArchived], ['解码缓存', iStore], ['本机原图', iLocalOriginal],
+      ['CDN', iCdn], ['本机缩略图', iLocalThumb],
+    ] as Array<[string, number]>) {
       expect(i, name + ' 那一步不见了').toBeGreaterThan(-1)
     }
-    // 结构上：无网那段的 else 之后紧跟的就是查已下载原图 ⇒ 它在 else 里，不在有网分支里
-    expect(iOfflineElse).toBeLessThan(iStore)
+    expect(iArchived).toBeLessThan(iStore)
+    expect(iStore).toBeLessThan(iLocalOriginal)
+    expect(iLocalOriginal).toBeLessThan(iCdn)
+    expect(iCdn).toBeLessThan(iLocalThumb)
   })
 
-  it('有网分支里只有 CDN，不经过任何本地判断', () => {
-    expect(iCdn).toBeGreaterThan(iBranch)
-    expect(iCdn, 'CDN 调用必须落在无网分支之前，也就是有网分支里').toBeLessThan(iOfflineElse)
-    expect(iStore, '已下载原图缓存只能落在无网分支里').toBeGreaterThan(iOfflineElse)
-    expect(iLocalOriginal, '本机原图只能落在两条分支之后（网络失败时回落）').toBeGreaterThan(iOfflineElse)
-  })
-
-  it('无网分支不发任何网络请求', () => {
-    // iCdn 在 iOfflineElse 之前 ⇒ 无网那段里没有第二次 CDN 调用
-    expect(afterImgFn.slice(1).slice(iOfflineElse - iImgFn).indexOf('fetchSnsCdnImage(')).toBe(-1)
+  it('CDN 只在本地两路都没有且在线时才调（离线/缺三件套都不出网）', () => {
+    expect(afterImgFn).toMatch(/if \(!offline && hasCdn\) \{/)
+    // CDN 之前必须已经查过归档/缓存/本机原图（否则又会「有网先网」）
+    expect(iCdn).toBeGreaterThan(iArchived)
+    expect(iCdn).toBeGreaterThan(iStore)
+    expect(iCdn).toBeGreaterThan(iLocalOriginal)
   })
 
   it('本机两档仍必须显式区分 allowThumb（漏传就退回旧行为：缩略图赢过原图）', () => {
-    // local(allowThumb) 是唯一的前端封装；它必须把参数透传下去
     expect(mediaRemotes).toMatch(/const local = async \(allowThumb: boolean\) =>/)
     expect(mediaRemotes).toMatch(/resolveSnsImageDataUrl\(base, aesKey, xorKey, options\.md5, options\.timelineId, options\.mediaId, allowThumb\)/)
     const calls = [...mediaRemotes.matchAll(/\blocal\((true|false)\)/g)].map((m) => m[1])
@@ -196,8 +182,9 @@ describe('先网后本：有网只走网络，无网只用本地（顺序不许�
     expect(iLocalOriginal).toBeLessThan(iLocalThumb)
   })
 
-  it('CDN 取回的原图要写穿落盘缓存（下次无网时才有本地可用）', () => {
-    const after = mediaRemotes.slice(iCdn, iLocalOriginal)
+  it('CDN 取回的原图要写穿两处缓存（解码缓存 + 长期归档）', () => {
+    // CDN 调用之后紧跟 CDN 分支的落盘；此时 iLocalOriginal 已经在前，不能再拿它当右边界。
+    const after = mediaRemotes.slice(iCdn, iCdn + 700)
     expect(after).toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, cdn\.dataUrl\)/)
   })
 
@@ -219,20 +206,21 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
     expect(branch).toContain('thumb: true')
   })
 
-  it('后端：只有原图那两路写穿落盘', () => {
+  it('后端：原图两路 + 视频封面写穿落盘；缩略图不写', () => {
     const writes = [...mediaRemotes.matchAll(/saveOriginalFromDataUrl\(/g)].length
-    // 加上函数自身的定义那一处，正好 3（定义 + 本机原图 + CDN）
-    expect(writes).toBe(3)
+    // 定义一处 + 本机原图 + CDN + 视频封面（rememberCover）。缩略图那一路刻意不在里面。
+    expect(writes).toBe(4)
   })
 
-  it('前端：进面板恢复与单张查询都要遵守「先网后本」', () => {
-    // 有网时不查本地缓存：产品规则是「有网直接取原图，不用经过本地判断」
-    expect(momentsMedia).toMatch(/const cached = offline \? await snsMediaCacheGet\(it\.key, true\) : null/)
-    // 批量恢复整段只在无网时做
-    expect(momentsMedia).toMatch(/useEffect\(\(\) => \{\s*if \(!isOffline\(\)\) return/)
+  it('前端：进面板恢复与单张查询都遵守「本地优先」', () => {
+    // 单张先查 IndexedDB 原图（命中就不再出网）
+    expect(momentsMedia).toMatch(/const cached = await snsMediaCacheGet\(it\.key, true\)/)
+    // 批量恢复不再分有网/无网
+    expect(momentsMedia).not.toMatch(/if \(!isOffline\(\)\) return/)
+    expect(momentsMedia).toMatch(/snsMediaCacheGetMany\(keys, true\)/)
     // 网络状态由界面读同一个信号（navigator.onLine），不在后端另造一套探网
     expect(momentsMedia).toMatch(/navigator\.onLine === false/)
-    // 并且把它传给后端，由后端决定走网络还是走本地
+    // 并且把它传给后端：后端仍要靠它决定「本地都没有时能不能出网」
     expect(momentsMedia).toMatch(/opts\.offline = offline/)
     expect(mediaRemotes).toMatch(/offline\?: boolean/)
   })

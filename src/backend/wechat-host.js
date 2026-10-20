@@ -273,7 +273,7 @@ async function loadBackendRuntime(options) {
 
   const context = createMiniContext(options);
   const gateway = new mod.WechatDataGateway(context);
-  return { userHome, protocol, argSchemas, context, gateway, recordSlowCall, SLOW_CALL_MS, SLOW_LOG_MS };
+  return { userHome, protocol, argSchemas, context, gateway, mod, recordSlowCall, SLOW_CALL_MS, SLOW_LOG_MS };
 }
 
 /**
@@ -494,12 +494,28 @@ async function createWechatBackend(options = {}) {
     argSchemas,
     context,
     gateway,
+    mod,
     recordSlowCall,
     SLOW_LOG_MS,
   } = await loadBackendRuntime(options);
   const decodeInputSig = createDecodeInputSig(gateway);
   const methodMap = buildMethodMap(protocol, gateway);
   const cancel = createBackendCancel(gateway);
+  /**
+   * 原图自动下载（实验）的启动/收尾钩子。
+   *
+   * 为什么放在宿主而不是 gateway：注入是**进程级副作用**，必须跟着后端进程的
+   * 生命周期走 —— 进程退出/宿主 dispose 时要调 `UninstallImgHelper` 还原微信进程
+   * （见 `query/wechat-image-autodownload.ts`）。开关持久在数据根 config.json 里，
+   * 上次打开过就在这里恢复；未打开时返回 null，连 koffi 都不会加载。
+   */
+  const imageAutoDownload = (() => {
+    try {
+      return mod.startWechatImageAutoDownloadOnBoot?.(gateway._dirs.decrypted) ?? null;
+    } catch {
+      return null;
+    }
+  })();
 
   return {
     gateway,
@@ -518,6 +534,11 @@ async function createWechatBackend(options = {}) {
     }),
     ...cancel,
     dispose() {
+      try {
+        imageAutoDownload?.stop?.();
+      } catch {
+        /* 尽力还原微信进程 */
+      }
       try {
         context.dispose();
       } catch {

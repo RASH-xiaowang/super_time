@@ -46,7 +46,7 @@ export function ChatsEditedDialog(props: ChatsEditedDialogProps): React.JSX.Elem
             edits.map(rec => (
               <div key={`${rec.sessionId}:${rec.localId}`} className={csscards.editRow}>
                 <span className={cssshell.editRowInfo}>{editedRowLabel(rec)}</span>
-                <button type="button" className={csscards.loadMore} onClick={() => { void doReset(rec) }} disabled={editing}>恢复原文</button>
+                <button type="button" className={csscards.editRowAction} onClick={() => { void doReset(rec) }} disabled={editing}>恢复原文</button>
               </div>
             ))
           )}

@@ -1,12 +1,14 @@
 /**
- * 手机令牌门的样式。
+ * 手机令牌门的样式（微信化：白卡 + 1px 边框 + 绿主按钮）。
  *
  * 只有手机/桌面浏览器会渲染这一屏（Electron 窗口走 IPC，永远看不到它），所以**直接按
- * 手机排**：满高单列、大点击目标、`dvh` + 安全区内边距。
+ * 手机排**：满高单列、大点击目标（≥44px）、`dvh` + 安全区内边距。
+ *
+ * 这一屏本来就没有渐变/发光/毛玻璃（是全仓最接近微信克制风格的一屏），
+ * 2026-10-19 只做三件事：按钮换微信绿、说明压两行、把「连不上怎么办」收进可展开块。
  *
  * 两个刻意的写法：
- *   · `100dvh` 前面先给一份 `100vh` —— 老浏览器不认 dvh 时退到 vh（会被移动端地址栏
- *     遮掉一截，但至少可用）；认 dvh 的浏览器后者覆盖前者。
+ *   · `100dvh` 前面先给一份 `100vh` —— 老浏览器不认 dvh 时退到 vh；
  *   · 颜色一律 `var(--nm-*, <fallback>)`：本屏在 `WechatDataPanel` 之前渲染，
  *     主题 CSS 可能还没挂上，没有 fallback 就会是一屏黑底黑字。
  */
@@ -23,8 +25,8 @@
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
   box-sizing: border-box;
-  background: var(--nm-bg-0, #050a18);
-  color: var(--nm-text-2, #94a3b8);
+  background: var(--nm-bg-0, #ededed);
+  color: var(--nm-text-2, #464646);
   font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
 }
 
@@ -33,57 +35,56 @@
   max-width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 24px 20px;
+  gap: 12px;
+  padding: 22px 16px;
   box-sizing: border-box;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
-  border-radius: var(--nm-r-lg, 16px);
-  background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card, #ffffff);
 }
 
 .title {
   margin: 0;
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--nm-text-1, #e2e8f0);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--nm-text-1, #0a0a0a);
 }
 
 .sub {
   margin: 0;
   font-size: 13px;
-  line-height: 1.75;
+  line-height: 1.65;
 }
 
 .sub b {
-  color: var(--nm-cyan, #00f0ff);
+  color: var(--nm-text-1, #0a0a0a);
   font-weight: 600;
 }
 
 .label {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   font-size: 12px;
-  letter-spacing: 0.02em;
+  color: var(--nm-text-2, #464646);
 }
 
 .input {
   /* 触摸目标 ≥44px：手机上点不准的输入框等于没有输入框 */
   min-height: 46px;
-  padding: 0 13px;
+  padding: 0 12px;
   box-sizing: border-box;
   font: inherit;
   font-size: 15px;
-  color: var(--nm-text-1, #e2e8f0);
-  background: var(--nm-bg-0, #050a18);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.18));
-  border-radius: var(--nm-r-md, 10px);
+  color: var(--nm-text-1, #0a0a0a);
+  background: var(--nm-bg-input, #f7f7f7);
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--nm-r-md);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--nm-cyan, #00f0ff);
+  border-color: var(--nm-cyan, #07c160);
 }
 
 .input:disabled {
@@ -94,14 +95,18 @@
   min-height: 46px;
   margin-top: 2px;
   font: inherit;
-  font-size: 14.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--nm-bg-0, #050a18);
-  background: var(--nm-cyan, #00f0ff);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-on-accent, #ffffff);
+  background: var(--nm-cyan, #07c160);
   border: none;
-  border-radius: var(--nm-r-md, 10px);
+  border-radius: var(--nm-r-md);
   cursor: pointer;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--nm-cyan, #07c160);
+  outline-offset: 2px;
 }
 
 .btn:disabled {
@@ -111,40 +116,62 @@
 
 .error {
   margin: 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   font-size: 12.5px;
   line-height: 1.6;
-  color: var(--nm-amber, #f59e0b);
-  background: color-mix(in srgb, var(--nm-amber, #f59e0b) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-amber, #f59e0b) 40%, transparent);
-  border-radius: var(--nm-r-sm, 8px);
+  color: var(--nm-amber, #fa9d3b);
+  background: var(--nm-bg-1, #f7f7f7);
+  border: 1px solid var(--nm-amber-45, rgba(250, 157, 59, 0.45));
+  border-radius: var(--nm-r-md);
 }
 
-.note {
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.8;
-  color: var(--nm-text-3, #64748b);
+/* 「连不上怎么办」：默认折叠，展开后是排查步骤（说明压两行，细节在这里） */
+.help {
+  border-top: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
+  padding-top: 8px;
 }
 
-.note b {
-  color: var(--nm-text-2, #94a3b8);
+.helpSummary {
+  font-size: 12px;
+  color: var(--nm-text-2, #464646);
+  cursor: pointer;
+  list-style: none;
+}
+
+.helpSummary::-webkit-details-marker {
+  display: none;
+}
+
+.helpSummary:focus-visible {
+  outline: 2px solid var(--nm-cyan, #07c160);
+  outline-offset: 2px;
+}
+
+.helpBody {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--nm-text-3, #606060);
+}
+
+.helpBody b {
+  color: var(--nm-text-2, #464646);
   font-weight: 600;
 }
 
 .hint {
   margin: 0;
   font-size: 13px;
-  letter-spacing: 0.02em;
   text-align: center;
+  color: var(--nm-text-2, #464646);
 }
 
 .spin {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   margin: 0 auto;
-  border: 2px solid var(--nm-border, rgba(0, 240, 255, 0.2));
-  border-top-color: var(--nm-cyan, #00f0ff);
+  border: 2px solid var(--nm-border, rgba(0, 0, 0, 0.08));
+  border-top-color: var(--nm-cyan, #07c160);
   border-radius: 50%;
   animation: ra-spin 0.9s linear infinite;
 }
@@ -153,12 +180,12 @@
   to { transform: rotate(360deg); }
 }
 
-/* 尊重「减少动效」：转圈换成静态圆环（与 kit-foldable / particles 同一口径） */
+/* 尊重「减少动效」：转圈换成静态圆环 */
 @media (prefers-reduced-motion: reduce) {
   .spin { animation: none; }
 }
 
-/* 连不上那个服务时的横幅：贴在顶部，不挡操作（手机上顶部正好是空出来的安全区下方）。 */
+/* 连不上那个服务时的横幅：贴在顶部，不挡操作。 */
 .offline {
   position: sticky;
   top: 0;
@@ -166,7 +193,7 @@
   padding: 10px 14px;
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--nm-amber, #f59e0b);
-  background: color-mix(in srgb, var(--nm-amber, #f59e0b) 14%, var(--nm-bg-0, #050a18));
-  border-bottom: 1px solid color-mix(in srgb, var(--nm-amber, #f59e0b) 40%, transparent);
+  color: var(--nm-amber, #fa9d3b);
+  background: var(--nm-bg-1, #f7f7f7);
+  border-bottom: 1px solid var(--nm-amber-45, rgba(250, 157, 59, 0.45));
 }

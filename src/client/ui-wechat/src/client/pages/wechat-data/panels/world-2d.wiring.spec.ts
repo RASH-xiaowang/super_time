@@ -53,7 +53,10 @@ describe('世界层：2D 平面渲染器接得对', () => {
     expect(MAP, '世界层没接 GeoEchartsMap（2D 渲染器）').toContain('<GeoEchartsMap')
     expect(MAP, '世界层还在用自绘的 3D 渲染器').not.toContain('<WorldIsoMap')
     expect(MAP, '没给 world 这个 registerMap key（ECharts 会找不到地图）').toContain('mapName="world"')
-    expect(MAP, '缺空世界节点兜底（先渲染地图那条口径）').toContain('node={map?.world ?? EMPTY_WORLD}')
+    // 2026-10-16：`node` 改成三元 —— 世界层传世界节点、国家层传该国节点
+    // （下钻后地图不再切成 treemap，见 `worldEchartsReady` 的说明）。
+    // 空值兜底仍在：世界层 `world ?? EMPTY_WORLD`（`world` 是 `map?.world` 的入参）。
+    expect(MAP, '缺空世界节点兜底（先渲染地图那条口径）').toContain('world ?? EMPTY_WORLD')
     expect(MAP, '底图失败的回退没了（应走 fallbackWorldEcharts）').toContain('onFallback={fallbackWorldEcharts}')
     expect(MAP, '国家名解析没接上（下钻会失联）').toContain('featureName={worldFeatureName}')
   })
@@ -87,7 +90,8 @@ describe('世界层：2D 平面渲染器接得对', () => {
   it('底图只从取数口拿，且经后端代理（不再判任何闸门、不再裸 fetch）', () => {
     expect(DATA, 'fetchFirstJson 不在原来的文件里了？').toContain('export async function fetchFirstJson')
     // 2026-09-30：mapTilesBlocked() 随底图开关一起删除；随后渲染层裸 fetch 也收口到后端。
-    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,240}await apiGetMapGeoJson\(urls\)/)
+    // 2026-10-18：取数口加了对 REMOTE_BUSY 的退避重试（try/catch 包住调用），窗口放宽到 700。
+    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,700}await apiGetMapGeoJson\(urls\)/)
     expect(DATA, '渲染层又直接 fetch 地图地址').not.toMatch(/\bawait fetch\(/)
     expect(DATA, 'mapTilesBlocked 已删除，fetchFirstJson 里不该再有闸门').not.toContain('mapTilesBlocked')
   })

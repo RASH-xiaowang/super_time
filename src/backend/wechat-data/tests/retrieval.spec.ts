@@ -24,6 +24,7 @@ import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig, loadRetrieva
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
+import { pickDimension, resolveWindow, factsToDocs, runAggregate, directionTerms } from '../src/query/retrieval/aggregate.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -59,6 +60,21 @@ describe('intent 分类路由', () => {
   it('聚合词路由到 aggregation（且优先于「最近」）', () => {
     expect(classifyIntent('我一共转了多少笔账', entities).intent).toBe('aggregation')
     expect(classifyIntent('最近一共转了多少', entities).intent).toBe('aggregation')
+  })
+
+  /**
+   * 排名问法也是聚合（2026-10-16 补）。
+   *
+   * 实测（真实数据）：「哪个群聊消息最多？」此前不含任何 AGG_RE 词 ⇒ 判成 `open_qa`
+   * ⇒ 聚合通道不跑 ⇒ 模型只能从片段里数，答「判断不了」。而它的答案需要
+   * `GROUP BY username ORDER BY COUNT(*) DESC`，与「一共多少」是同一类。
+   */
+  it('排名问法（哪个最多/最少、排行）也路由到 aggregation', () => {
+    expect(classifyIntent('哪个群聊消息最多？', entities).intent).toBe('aggregation')
+    expect(classifyIntent('谁跟我聊得最少', entities).intent).toBe('aggregation')
+    expect(classifyIntent('消息量排行前十的群', entities).intent).toBe('aggregation')
+    // 「最近 7 天哪个群最多」含「最近」但仍是聚合（AGG_RE 优先于 recency）
+    expect(classifyIntent('最近7天哪个群聊消息最多？', entities).intent).toBe('aggregation')
   })
 
   it('开放问法（怎么样）优先于实体短问法，避免窄化召回', () => {
@@ -391,7 +407,7 @@ describe('config 意图策略', () => {
   it('聚合意图放大召回、recency 意图时间优先', () => {
     expect(defaultPolicyFor('aggregation').wideRecall).toBe(true)
     expect(defaultPolicyFor('recency_lookup').recencyFirst).toBe(true)
-    expect(defaultPolicyFor('aggregation').channelTopK.sparse).toBeGreaterThan(defaultPolicyFor('open_qa').channelTopK.sparse)
+    expect(defaultPolicyFor('aggregation').channelTopK.sparse ?? 0).toBeGreaterThan(defaultPolicyFor('open_qa').channelTopK.sparse ?? 0)
   })
 
   it('意图策略权重覆盖配置默认权重', () => {
@@ -432,7 +448,10 @@ describe('产品默认值契约（与检索层的内置默认一致）', () => {
   })
 
   it('上下文预算与去重阈值', () => {
-    expect(cfg.compress.maxChars).toBe(6000)
+    // 2026-10-16 提速：6000 → 4500（首字延迟 9.9s，几乎全是模型处理 prompt 的时间）。
+    // 减的是**相关度最低的那两段窗口**，对回答质量影响远小于对延迟的影响。
+    expect(cfg.compress.maxChars).toBe(4500)
+    expect(cfg.compress.maxChunks).toBe(8)
     expect(cfg.compress.dedupThreshold).toBe(0.85)
   })
 
@@ -619,4 +638,75 @@ describe('真值级：稠密检索端到端（M9）', () => {
       expect(texts).toContain(d.text)
     }
   }, 60_000)
+})
+
+/**
+ * 聚合通道（2026-10-16 新增）。
+ *
+ * ## 为什么必须有
+ *
+ * 用户报「搜索微信数据时根本不准确」。实测（真实数据 18.5 万条消息）：
+ *   · 「我一共收到多少笔转账？」→ 答「14 条」（只召回了 14 条片段，真实 282 条）；
+ *   · 「哪个群聊消息最多？」→ 答「判断不了」；
+ *   · 「我总共跟多少人聊过天？」→ 答「没法数」。
+ *
+ * 根因：检索管线只做**片段召回**，`aggregation` 意图只是放大 topK，
+ * **没有任何真正的聚合执行**。而这类问题的答案**不在任何一条消息里** ——
+ * 它需要 `COUNT(*)` / `GROUP BY`。
+ */
+describe('聚合通道：维度判定与时间窗', () => {
+  it('维度判定：去重计数 > 排名 > 按天 > 关键词', () => {
+    // 「跟多少人」问的是**去重后的会话数**，不是「哪个会话最多」—— 必须先判 distinct
+    expect(pickDimension('我总共跟多少人聊过天？')).toBe('distinct')
+    expect(pickDimension('我一共有多少个会话')).toBe('distinct')
+    expect(pickDimension('哪个群聊消息最多？')).toBe('session')
+    expect(pickDimension('谁跟我聊得最少')).toBe('session')
+    expect(pickDimension('哪天消息最多')).toBe('day')
+    expect(pickDimension('我一共收到多少笔转账？')).toBe('keyword')
+  })
+
+  it('时间窗：显式范围 > 规划器日期 > 相对时间词 > 不限', () => {
+    const now = new Date('2026-10-16T12:00:00')
+    // 显式范围优先
+    expect(resolveWindow({ decryptedDir: '', question: '最近7天哪个群最多', scope: { from: '2026-01-01', to: '2026-01-31' }, now }))
+      .toEqual({ lo: Math.floor(new Date(2026, 0, 1).getTime() / 1000), hi: Math.floor(new Date(2026, 0, 31, 23, 59, 59).getTime() / 1000) })
+    // 相对时间词「最近 N 天」必须换算 —— 否则「最近 7 天哪个群最多」会统计全库
+    const w = resolveWindow({ decryptedDir: '', question: '最近7天哪个群聊消息最多？', now })
+    expect(w.hi - w.lo).toBe(7 * 86400)
+    // 不限
+    expect(resolveWindow({ decryptedDir: '', question: '哪个群最多', now })).toEqual({ lo: 0, hi: 0 })
+  })
+
+  it('聚合事实转成文档时带 source=agg（压缩阶段靠它跳过窗口展开）', () => {
+    const docs = factsToDocs([{ title: '按会话统计', body: '1. a：10 条', total: 10 }])
+    expect(docs).toHaveLength(1)
+    expect(docs[0]?.source).toBe('agg')
+    // 没有会话、没有发生时间 —— 走窗口展开会得到空窗口
+    expect(docs[0]?.username).toBe('')
+    expect(docs[0]?.create_time).toBe(0)
+  })
+
+  it('库不存在时返回空数组（不抛错，问答照常可用）', () => {
+    expect(runAggregate({ decryptedDir: join(tmpdir(), 'no-such-dir-' + String(Date.now())), question: '哪个群最多' })).toEqual([])
+  })
+
+  /**
+   * 方向词组合（2026-10-16 实测踩到）。
+   *
+   * 用户问「我一共**收到**多少笔转账」，规划器把关键词拆成了「转账」——
+   * 聚合通道于是统计出「含「转账」：282 条」，而**真实答案是 240 条**
+   * （含「收到转账」）。282 里混着付出，模型看出这一点后只能说
+   * 「没找到你收到转账的记录」—— 聚合跑了，但答的还是错的。
+   */
+  it('方向词组合：只认问题里字面出现的「方向+名词」（允许中间隔量词）', () => {
+    expect(directionTerms('我一共收到多少笔转账？')).toEqual(['收到转账'])
+    expect(directionTerms('我付出去了多少金额')).toEqual(['付出金额'])
+    expect(directionTerms('收到转账和转出金额各多少')).toEqual(['收到转账', '转出金额'])
+    // 没有方向词 ⇒ 空（不能凭空造组合）
+    expect(directionTerms('我一共多少笔转账')).toEqual([])
+    // 并列连词「和」不算间隔 ⇒ 只认出紧邻的「收到红包」，不造出「收到转账」
+    expect(directionTerms('我收到红包和转账')).toEqual(['收到红包'])
+    // 方向词与名词都在，但组合没出现 ⇒ 空
+    expect(directionTerms('我收到过哪些金额')).toEqual([])
+  })
 })

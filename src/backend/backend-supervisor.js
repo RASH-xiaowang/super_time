@@ -199,7 +199,8 @@ function createBackendSupervisor(deps) {
       return handle;
     } catch (e) {
       if (handle === currentHandle) {
-        try { handle.dispose(); } catch { /* 已退出 */ }
+        // init 失败：worker 可能已起来（只是 init 这步失败），同样按握手 dispose。
+        try { handle.dispose(() => {}); } catch { /* 已退出 */ }
       }
       throw e;
     }
@@ -316,8 +317,10 @@ function createBackendSupervisor(deps) {
       restartTimer = null;
     }
     if (backend) {
+      // dispose 是握手：等 worker 收尾（还原注入/清 marker/关句柄）完成才 kill。
+      // 同步等：`before-quit` 之后 app 马上要退，异步回调用不上（超时上限见 backend-rpc.js）。
       try {
-        backend.dispose();
+        backend.dispose(() => { log.log('[wechat] 后端已收尾（注入已还原）'); });
       } catch { /* 退出时尽力释放 */ }
     }
     backend = null;

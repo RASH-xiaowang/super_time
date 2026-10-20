@@ -1,14 +1,15 @@
 /**
- * 资金账本面板 — 转账/红包按月汇总：收入/支出/净额、联系人排行、红包手气、
- * 异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
+ * 资金往来（月度汇总）— 转账/红包按月汇总：收入/支出/净额、联系人排行、
+ * 红包手气、异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, CellPrimary, DataTable, LinkButton, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { CellPrimary, DataTable, LinkButton, Mono, MonthField, PanelHeader } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import { CACHE_LEDGER } from './overview-cache-keys.ts'
+import { AssetKpiBar, AssetMoreMenu } from './files-cell.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
 
@@ -89,7 +90,7 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `微信资金账本_${data.month || '全部'}.csv`
+    a.download = `微信资金往来_${data.month || '全部'}.csv`
     a.click()
     URL.revokeObjectURL(a.href)
     flash('已导出 CSV')
@@ -130,11 +131,18 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
     },
   ]
 
+  /*
+   * 2026-10-18 布局重设计（用户：「固定的内容不要占用太多空间」）。
+   * 2026-10-19 微信化：汇总数字从「6 项」收成「收入 / 支出 / 净额」3 项内联 KPI 条；
+   * 转账笔数移到「红包手气」卡头；页头动作只留月份选择 + 更多（全部月份 / 导出 CSV）。
+   */
   return (
-    <div className={kitCss.panelShell}>
+    <div className={css.root}>
+      {/* 页头紧凑化：选择器见 ledger.module.css 的 `.root > div:first-child`，
+          不额外包一层（作用域内收 h2/p 外边距）。 */}
       <PanelHeader
-        title="资金账本"
-        desc="转账/红包按月汇总 · 金额来自本机消息解析 · 仅本地计算"
+        title="资金往来"
+        desc="转账 / 红包按月汇总 · 金额来自本机消息解析 · 仅本地计算"
         actions={(
           <>
             <MonthField
@@ -142,20 +150,20 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
               onChange={setMonth}
               ariaLabel="账本月份"
             />
-            <Button variant="pill" onClick={() => { setMonth('') }} data-active={month === '' || undefined}>全部</Button>
-            <Button variant="pill" onClick={exportCsv} disabled={!data}>导出 CSV</Button>
+            <AssetMoreMenu items={[
+              { key: 'all', label: '全部月份', onSelect: () => { setMonth('') }, disabled: month === '' },
+              { key: 'export', label: '导出 CSV', onSelect: exportCsv },
+            ]} />
           </>
         )}
       />
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {/* 首次统计：给出阶段、已用时间和"为什么可能偏慢"，并用与真实布局同形的骨架占位
-          （6 张指标卡 + 两张卡片的行）。此前这里只有一行字，实测在 802px 的内容区里留 608px 空白。 */}
+      {/* 首次统计：给出阶段、已用时间和"为什么可能偏慢"。 */}
       {loading && !data && (
-        <div className={kitCss.panelShell}>
+        <div className={css.loadingWrap}>
           <div className={css.loadingBar}>
-            <span className={css.loadingSpin} aria-hidden="true" />
             <span className={css.loadingText}>正在统计资金账本…已用 {elapsed}s</span>
             <span className={css.loadingHint}>
               首次统计要解析本机全部消息里的转账/红包记录；若刚打开总览，后台可能仍在统计，请稍候。
@@ -168,60 +176,75 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
 
       {data && (
         <>
-          <StatGrid>
-            <StatCard icon="💰" value={`¥ ${fmtMoney(data.summary.totalAmountIn)}`} label="总收入" tone="green" />
-            <StatCard icon="💸" value={`¥ ${fmtMoney(data.summary.totalAmountOut)}`} label="总支出" tone="red" />
-            <StatCard icon="🧮" value={`¥ ${fmtMoney(net)}`} label="净额" tone={net >= 0 ? 'green' : 'red'} />
-            <StatCard icon="🔁" value={`${data.summary.transfers} 笔`} label="转账" />
-            <StatCard icon="🧧" value={`${data.summary.redpacketsReceived} 个 · ¥ ${fmtMoney(data.summary.redpacketAmountReceived)}`} label="红包收到" tone="purple" />
-            <StatCard icon="📤" value={`${data.summary.redpacketsSent} 个 · ¥ ${fmtMoney(data.summary.redpacketAmountSent)}`} label="红包发出" tone="blue" />
-          </StatGrid>
+          {/* 收入 / 支出 / 净额：语义色只染小面积数值。 */}
+          <AssetKpiBar items={[
+            { label: '总收入', value: `¥ ${fmtMoney(data.summary.totalAmountIn)}`, tone: 'success' },
+            { label: '总支出', value: `¥ ${fmtMoney(data.summary.totalAmountOut)}`, tone: 'danger' },
+            { label: '净额', value: `¥ ${fmtMoney(net)}`, tone: net >= 0 ? 'success' : 'danger' },
+          ]} />
 
-          <div className={kitCss.cardGrid}>
-            <Card title={`联系人资金排行 Top ${data.byContact.length}`} flush>
+          <div className={css.body}>
+            <section className={css.rankCard}>
+              <div className={css.cardHd}>
+                <span>联系人资金排行</span>
+                <span className={css.cardMeta}>Top {data.byContact.length}</span>
+              </div>
               {data.byContact.length === 0 ? (
                 <div className={kitCss.emptyInline}>暂无转账/红包资金往来</div>
               ) : (
-                <>
+                <div className={css.rankScroll}>
                   <DataTable
                     columns={contactCols}
                     rows={data.byContact.slice(0, contactCount)}
                     getRowId={(r, i) => `${r.username}:${r.direction}:${i}`}
+                    /* 单一滚动容器：本卡片自己滚，表格不再套 62vh 的第二层滚动条。 */
+                    scroll={false}
+                    minWidth={520}
                   />
                   {data.byContact.length > contactCount && <ListSentinel refFn={sentinelRef} />}
-                </>
+                </div>
               )}
-            </Card>
+            </section>
 
-            <Card title="红包手气">
-              <div className={css.rpStats}>
-                <div className={css.rpRow}><span>收到</span><b>{data.redpacket.receivedCount} 个</b></div>
-                <div className={css.rpRow}><span>收到金额</span><b>¥ {fmtMoney(data.redpacket.receivedAmount)}</b></div>
-                <div className={css.rpRow}><span>最佳手气</span><b>¥ {fmtMoney(data.redpacket.bestAmount)}</b></div>
-                <div className={css.rpRow}><span>平均每个</span><b>¥ {fmtMoney(data.redpacket.avgAmount)}</b></div>
-                <div className={css.rpRow}><span>发出</span><b>{data.redpacket.sentCount} 个</b></div>
-                <div className={css.rpRow}><span>发出金额</span><b>¥ {fmtMoney(data.redpacket.sentAmount)}</b></div>
-              </div>
-            </Card>
-          </div>
+            <div className={css.rail}>
+              <section className={css.miniCard}>
+                <div className={css.cardHd}>
+                  <span>红包手气</span>
+                  <span className={css.cardMeta}>转账 {data.summary.transfers} 笔</span>
+                </div>
+                <div className={css.rpGrid}>
+                  <div className={css.rpItem}><span>收到</span><b>{data.redpacket.receivedCount} 个</b></div>
+                  <div className={css.rpItem}><span>收到金额</span><b>¥ {fmtMoney(data.redpacket.receivedAmount)}</b></div>
+                  <div className={css.rpItem}><span>最佳手气</span><b>¥ {fmtMoney(data.redpacket.bestAmount)}</b></div>
+                  <div className={css.rpItem}><span>平均每个</span><b>¥ {fmtMoney(data.redpacket.avgAmount)}</b></div>
+                  <div className={css.rpItem}><span>发出</span><b>{data.redpacket.sentCount} 个</b></div>
+                  <div className={css.rpItem}><span>发出金额</span><b>¥ {fmtMoney(data.redpacket.sentAmount)}</b></div>
+                </div>
+              </section>
 
-          <Card title="异常提醒">
-            {data.warnings.length === 0 ? (
-              <div className={kitCss.emptyInline}>暂无异常（转账超时/红包退回）</div>
-            ) : (
-              <div className={css.warnList}>
-                {data.warnings.map((w, i) => (
-                  <div key={`${w.kind}:${i}`} className={css.warn}>
-                    <span className={css.warnIcon}>⚠️</span>
-                    <div className={css.warnBody}>
-                      <div className={css.warnTitle}>{w.label} · {w.name || w.username || '—'}</div>
-                      <div className={css.warnMeta}>¥ {fmtMoney(w.amount ?? 0)}</div>
-                    </div>
+              <section className={`${css.miniCard} ${css.warnCard}`}>
+                <div className={css.cardHd}>
+                  <span>异常提醒</span>
+                  <span className={css.cardMeta}>{data.warnings.length}</span>
+                </div>
+                {data.warnings.length === 0 ? (
+                  <div className={kitCss.emptyInline}>暂无异常（转账超时/红包退回）</div>
+                ) : (
+                  <div className={css.warnList}>
+                    {data.warnings.map((w, i) => (
+                      <div key={`${w.kind}:${i}`} className={css.warn}>
+                        <span className={css.warnDot} aria-hidden="true" />
+                        <div className={css.warnBody}>
+                          <div className={css.warnTitle}>{w.label} · {w.name || w.username || '—'}</div>
+                          <div className={css.warnMeta}>¥ {fmtMoney(w.amount ?? 0)}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </Card>
+                )}
+              </section>
+            </div>
+          </div>
         </>
       )}
     </div>

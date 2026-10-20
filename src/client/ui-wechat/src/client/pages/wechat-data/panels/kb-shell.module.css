@@ -1,5 +1,6 @@
 /* 知识库外壳：左库 rail、右「分段条 + 面板体」。
-   rail 的窄容器退化写在 kb-rail.module.css（类名定义处），这里只管容器与两栏骨架。 */
+   rail 的窄容器退化写在 kb-rail.module.css（类名定义处），这里只管容器与两栏骨架。
+   微信化（2026-10-19）：两栏间距收到一档、库 rail 变为紧凑一列（见 kb-rail 的 156px）。 */
 
 /* 容器查询的**承接层**。为什么要有这么一层壳而不是把 container-type 直接写在 .shell 上：
    容器查询只能作用于容器的**后代** —— 而窄屏下要改的恰恰是 `.shell` 自己的
@@ -19,7 +20,7 @@
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap: var(--nm-dense-g4);
+  gap: var(--nm-dense-g2);
   box-sizing: border-box;
 }
 

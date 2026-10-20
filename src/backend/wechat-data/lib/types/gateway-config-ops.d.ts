@@ -6,6 +6,7 @@
  */
 import type { AutoDbKeyResult, AutoImageKeyResult, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, GenerateKeysResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, WechatConfigFull, WechatConfigPatch, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
 import { GatewayVoiceOps } from './gateway-voice-ops.ts';
+import { type DataRevision } from './query/sync-status.ts';
 export declare abstract class GatewayConfigOps extends GatewayVoiceOps {
     /**
      * WeChat config summary.
@@ -36,6 +37,10 @@ export declare abstract class GatewayConfigOps extends GatewayVoiceOps {
      * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
      * is the join point with the social graph: the panel draws an edge from the
      * note to its source chat instead of leaving knowledge nodes floating.
+     *
+     * `sourceKind: 'file'`（2026-10-17 新增）marks a note distilled from a knowledge-base
+     * file's summary/body. 改前文件摘要只存在文件元数据里、不会变成笔记 ——
+     * 「文件 → 笔记 → 图谱」这条链路是断的（导入并解析了 195 块，笔记库却永远是空的）。
      * @param kbId - owning knowledge base for a new note / expected owner for an update.
      *   Title uniqueness is checked **within** that kb, not across the whole store.
      * @param options - Note fields; title is required and unique in that kb (case-insensitive).
@@ -46,9 +51,11 @@ export declare abstract class GatewayConfigOps extends GatewayVoiceOps {
         title: string;
         body?: string;
         tags?: string[] | string;
-        sourceKind?: 'manual' | 'ask';
+        sourceKind?: 'manual' | 'ask' | 'file';
         sourceUsername?: string;
         sourceQuestion?: string;
+        /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+        sourceFileId?: number;
     }): NoteMutationResult;
     /**
      * Delete one knowledge note.
@@ -161,6 +168,14 @@ export declare abstract class GatewayConfigOps extends GatewayVoiceOps {
      * @returns DbStatusSnapshot: per-database status summary.
      */
     getDbStatus(): DbStatusSnapshot;
+    /**
+     * 实时同步修订（纯内存读，1s 级轮询可用）。
+     *
+     * 聊天面板的轮询用 `revision` 判断「这一秒有没有新数据落地」，用 `messageChanged`
+     * 判断「值不值得真去查一次消息增量」—— 把每秒一次消息 SQL 降成每秒一次内存读。
+     * @returns DataRevision: revision / updatedAt / shards / messageChanged。
+     */
+    getDataRevision(): DataRevision;
     /**
      * Add a WeChat task.
      * @param options - title + optional dueAt.

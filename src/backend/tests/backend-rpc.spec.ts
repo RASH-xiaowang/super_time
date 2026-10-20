@@ -50,6 +50,9 @@ function makeChannel(timeoutMs = 30, extra: Record<string, unknown> = {}) {
   return { child, channel }
 }
 
+/** 跑完 dispose 握手（含回包/超时）的辅助等待。 */
+const settle = (ms = 10): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
 const heavyLedger = HEAVY_CALL_LEDGER as ReadonlyArray<{ why: string; methods: readonly string[] }>
 
 describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
@@ -258,10 +261,58 @@ describe('createWorkerChannel · 进程死亡', () => {
     expect(channel.pendingCount).toBe(0)
   })
 
-  it('dispose 先发 dispose 消息再 kill', () => {
-    const { child, channel } = makeChannel()
-    channel.dispose()
+  it('dispose 先等 worker 回包再 kill（收尾不能被信号截断）', async () => {
+    const { child, channel } = makeChannel(5000)
+    let disposed = false
+    channel.dispose(() => { disposed = true })
+    // 发出去了，但还没回包：此时绝不能 kill
     expect(child.posted.some((m) => m.type === 'dispose')).toBe(true)
+    expect(child.killed).toBe(false)
+    expect(disposed).toBe(false)
+    expect(channel.pendingCount).toBe(1)
+    // worker 做完收尾回包，才允许 kill + 通知调用方
+    child.reply(child.posted[0]!.id, { ok: true })
+    await new Promise((r) => setTimeout(r, 10))
     expect(child.killed).toBe(true)
+    expect(disposed).toBe(true)
+    expect(channel.pendingCount).toBe(0)
+  })
+
+  it('dispose 回包晚到/不到时按超时上限兜底 kill（退出路径不能挂住）', async () => {
+    const { child, channel } = makeChannel(5000, { disposeTimeoutMs: 30 })
+    let disposed = false
+    channel.dispose(() => { disposed = true })
+    expect(child.killed).toBe(false)
+    await new Promise((r) => setTimeout(r, 60))
+    expect(child.killed).toBe(true)
+    expect(disposed).toBe(true)
+    expect(channel.pendingCount).toBe(0)
+  })
+
+  it('dispose 时 worker 已死（postMessage 抛错）也立刻收摊', () => {
+    const { child, channel } = makeChannel(5000)
+    child.throwOnPost = true
+    let disposed = false
+    channel.dispose(() => { disposed = true })
+    expect(child.killed).toBe(true)
+    expect(disposed).toBe(true)
+    expect(channel.pendingCount).toBe(0)
+  })
+
+  it('dispose 需要回调：漏传直接抛错（防止静默退回「发完就 kill」）', () => {
+    const { channel } = makeChannel(5000)
+    // backend-rpc.js 是 CommonJS 无类型声明，这里直接验证运行期参数契约。
+    expect(() => channel.dispose()).toThrow(TypeError)
+  })
+
+  it('dispose 在 worker 回包前就 exit，也不会二次 kill 或漏通知', async () => {
+    const { child, channel } = makeChannel(5000)
+    let disposed = 0
+    channel.dispose(() => { disposed += 1 })
+    child.exit(0)
+    await new Promise((r) => setTimeout(r, 10))
+    // 死亡路径 failAll 已 reject 掉在途请求（含 dispose），回调仍然只跑一次
+    expect(disposed).toBe(1)
+    expect(channel.pendingCount).toBe(0)
   })
 })

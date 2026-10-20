@@ -22,6 +22,20 @@ const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 /** 已知分钟级任务的窗口（导出、全量解密、批量转写、建索引、备份恢复）。 */
 const DEFAULT_LONG_CALL_TIMEOUT_MS = 10 * 60_000;
 /**
+ * dispose 握手窗口：等 worker 回 `{ id, value: { ok: true } }` 才 kill 的**上限**。
+ *
+ * 为什么不是「发了 dispose 就立刻 kill」：实测（真实 Electron `utilityProcess`）里
+ * `postMessage({type:'dispose'})` 之后紧跟 `child.kill()`，worker 的 `case 'dispose'`
+ * 分支与 `process.once('exit')` 兜底**都不会执行**，进程以 code=0 静默消失 ——
+ * IPC 消息还排在系统调用队列里，信号已经到了。于是「退出前还原微信进程注入」这类
+ * 必须做完的收尾被整体跳过，只留下一个事后才能发现的残留 marker。
+ *
+ * 设成 5 秒而不是「一直等」：worker 的 dispose 是同步的（还原注入 + 关句柄），
+ * 正常毫秒级完成；只有 worker 已经卡死时才需要这个上限兜底 —— 那时 kill 本来就是
+ * 唯一出路，等下去只会让窗口关不掉。
+ */
+const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000;
+/**
  * 保留多少条「已超时但尚未看到迟回包/取消回执」的幽灵调用。
  *
  * 幽灵调用没有回包上限：永不回包的调试注入就是故意不回来。用有界 Map 防长跑诊断
@@ -59,6 +73,7 @@ function createWorkerChannel(child, options = {}) {
     callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS,
     longTimeoutMs = DEFAULT_LONG_CALL_TIMEOUT_MS,
     longMethods = LONG_CALL_METHODS,
+    disposeTimeoutMs = DEFAULT_DISPOSE_TIMEOUT_MS,
     logger = console,
   } = options;
 
@@ -186,9 +201,35 @@ function createWorkerChannel(child, options = {}) {
     /** 初始化。会加载 bundle、解析数据根，首次还可能触发 bootstrap，故按长任务给窗口。 */
     init: () => request('init', { userDataPath: options.userDataPath }, longTimeoutMs),
     call: (method, args) => request('call', { method, args }, callTimeoutFor(method, { callTimeoutMs, longTimeoutMs, longMethods })),
-    dispose: () => {
-      try { child.postMessage({ id: ++seq, type: 'dispose', payload: {} }); } catch { /* 可能已退出 */ }
-      try { child.kill(); } catch { /* 尽力而为 */ }
+    dispose: (onDisposeDone) => {
+      if (typeof onDisposeDone !== 'function') {
+        throw new TypeError('createWorkerChannel: dispose 需要回调（用于等 worker 收尾完成）');
+      }
+      let settled = false;
+      const id = ++seq;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        pending.delete(id);
+        try { child.kill(); } catch { /* 已退出 */ }
+        onDisposeDone();
+      };
+      // 超时兜底：worker 卡死时不能把退出路径无限挂住。此时 worker 自己没做完收尾，
+      // marker 会在下次启动时如实报 cleanupUnconfirmed（见 query/wechat-image-autodownload.ts）。
+      const timer = setTimeout(() => {
+        logger.warn('[backend-rpc] dispose 等待超时，直接结束 worker（收尾可能未完成）');
+        finish();
+      }, disposeTimeoutMs);
+      // 回包 = worker 侧收尾（还原注入、清 marker）已做完。
+      pending.set(id, { resolve: finish, reject: finish, timer });
+      try {
+        child.postMessage({ id, type: 'dispose', payload: {} });
+      } catch (e) {
+        // 进程刚好死了：没有收尾可等，直接收摊。
+        logger.warn('[backend-rpc] 发送 dispose 失败（worker 可能已退出）：', e?.message ?? e);
+        finish();
+      }
     },
     /** 是否已判定死亡（含被动收到 exit）。 */
     get isDead() { return deadReason !== null; },
@@ -227,5 +268,6 @@ module.exports = {
   LONG_CALL_METHODS,
   DEFAULT_CALL_TIMEOUT_MS,
   DEFAULT_LONG_CALL_TIMEOUT_MS,
+  DEFAULT_DISPOSE_TIMEOUT_MS,
   ORPHAN_TRACK_MAX,
 };

@@ -396,7 +396,7 @@ describe('空态去重：列表为空时只渲染一个空态', () => {
    * 下一次有人把 CSS 规则删掉后仍然全绿，界面却又变回两个空态。
    */
   it('左右两个 Card 都用 className 组合表达「空」，判据是 visible.length（不是 notes.length）', () => {
-    expect(panel).toMatch(/clsx\(css\.listPane,\s*visible\.length === 0 && css\.listPaneWide\)/)
+    expect(panel).toMatch(/clsx\(css\.listPane,\s*(?:css\.fillCard,\s*)?visible\.length === 0 && css\.listPaneWide\)/)
     expect(panel).toMatch(/clsx\(css\.detailPane,\s*visible\.length === 0 && css\.detailPaneHidden\)/)
   })
 

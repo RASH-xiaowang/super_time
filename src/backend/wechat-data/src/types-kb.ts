@@ -87,12 +87,27 @@ export interface KnowledgeNote {
   /** Markdown-ish body; `[[target]]` / `[[target|display]]` are wiki links. */
   body: string
   tags: string[]
-  /** 'manual' = user-authored; 'ask' = distilled from a WeChat Q&A answer. */
-  sourceKind: 'manual' | 'ask'
+  /**
+   * 笔记来源：
+   *   · `manual` —— 用户手写；
+   *   · `ask`    —— 从「微信问答」的回答沉淀而来；
+   *   · `file`   —— 从知识库文件的摘要/正文沉淀而来（2026-10-17 新增）。
+   *
+   * 为什么需要 `file`：改前文件详情里的「生成摘要」只把摘要存在文件元数据里，
+   * **不会变成笔记** —— 于是「文件 → 笔记 → 图谱」这条链路是断的：
+   * 用户导入并解析了 195 块内容，笔记库却永远是空的、图谱里只有文件章节节点。
+   */
+  sourceKind: 'manual' | 'ask' | 'file'
   /** Chat the note was distilled from (used by the「跳回来源聊天」entry; not a graph node). */
   sourceUsername?: string
   /** Question that produced the note (details panel). */
   sourceQuestion?: string
+  /**
+   * 来源文件 id（`sourceKind === 'file'` 时才有）。
+   *
+   * 用途：笔记详情里能「回到源文件」；同一文件重复沉淀时能识别出来（避免刷出一堆同名笔记）。
+   */
+  sourceFileId?: number
   /** Unique `[[target]]` values found in the body, unresolved ones included. */
   links: string[]
   createdAt: number
@@ -445,7 +460,8 @@ export interface KnowledgeSnapshot {
     title: string
     excerpt: string
     tags: string[]
-    sourceKind: 'manual' | 'ask'
+    /** 与 `KnowledgeNote.sourceKind` 同口径（含 2026-10-17 新增的 `file`）。 */
+    sourceKind: 'manual' | 'ask' | 'file'
     sourceUsername?: string
     sourceQuestion?: string
     createdAt: number

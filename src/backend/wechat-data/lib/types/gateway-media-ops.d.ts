@@ -5,7 +5,10 @@
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：gateway-remote-surface.spec.ts）。
  */
 import type { AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
-import type { ImageBatchItem, SnsVideoCoverBatchOptions, SnsVideoCoverBatchResult } from './remotes/media.ts';
+import { type ImageBatchItem, type SnsVideoCoverBatchOptions, type SnsVideoCoverBatchResult } from './remotes/media.ts';
+import type { HarvestResult, HarvestStatus } from './query/original-harvester.ts';
+import type { WxcdnQuota } from './query/wxcdn-original.ts';
+import { type WechatImageAutoDownloadAction, type WechatImageAutoDownloadStatus } from './query/wechat-image-autodownload.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
 export declare abstract class GatewayMediaOps extends GatewayAskOps {
     /**
@@ -82,6 +85,7 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     getImageDataUrl(options: {
         username: string;
         localId: number;
+        fileOnly?: boolean;
     }): Promise<ImageDataUrlResult>;
     /**
      * Decode a whole batch of message images to base64 data URLs (N16)。
@@ -97,20 +101,21 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
             username: string;
             localId: number;
         }>;
+        fileOnly?: boolean;
     }): Promise<{
         items: ImageBatchItem[];
     }>;
     /**
-     * Resolve one SNS (朋友圈) media to a base64 data URL —— **先网后本**。
+     * Resolve one SNS (朋友圈) media to a base64 data URL —— **本地优先、CDN 兜底**。
      *
-     * 有网（`offline` 非真）：直接向微信 CDN 要 `/0` 那份**原图**，取回即落盘到
-     * `decoded_images/sns-media/`；**不做任何本地判断在前**。只有 CDN 这一趟失败才回落本机。
-     * 无网：全程不发网络请求，依次用「已下载的原图 → `cache/<month>/Sns/Img` → 缩略图」。
+     * 顺序：`<数据根>/moments-media` 长期归档 → `decoded_images/sns-media` →
+     * 微信原始目录原图 → 仅在线且都没有时向 CDN 要 `/0` → 最后才是缩略图。
+     * 长期归档跨重启/换密钥保留；本地命中时不再出网（用户 2026-10-19 口径）。
      *
      * 顺序与理由见 `remotes/media.ts` 的 `snsImageWithCdnFirst`。
      *
      * @param options - `md5` 来自朋友圈 XML；`url`/`token`/`seed` 是 CDN 三件套；
-     *   `offline` 由界面按 `navigator.onLine` 判定，缺省按有网处理。
+     *   `offline` 由界面按 `navigator.onLine` 判定，缺省按有网处理（仅影响「本地都没有时能否出网」）。
      * @returns ImageDataUrlResult: base64 data URL（`thumb: true` = 只能给缩略图）或 error。
      */
     getSnsImageDataUrl(options: {
@@ -218,6 +223,47 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         concurrency?: number;
     }): Promise<OriginalBatchResult>;
     /**
+     * 原图自动收割：监控微信 `msg/attach`，微信一落盘 `_h.dat` 就解进解码缓存。
+     *
+     * 这是**拿到高清原图唯一不越界的通路**。2026-10-17 实测确认了三条死路：
+     * ① 消息 XML 的 `tphdurl`/`tpurl` 本机 20,431 条全部指向企业微信 `wwfile` 端点，匿名 GET 一律 403；
+     * ② 进程内存里确实有 `tpauthkey`（806 处），但拼进 URL 的 5 种变体**全部 403** ——
+     *    它是给 mmtls 私有协议用的，不是 HTTP 凭据；
+     * ③ 进程内存里有 225 个完整 JPEG，但与数据库 48,882 个图片 md5 **交集为 0** ——
+     *    那是界面渲染缓存，不是聊天原图。
+     *
+     * 结论：聊天图片走 mmtls 私有 RPC，不是 HTTP 直链。但微信**自己**会下载原图
+     * （用户点「查看原图」时落盘 `<md5>_h.dat`，实测本机 1,459 个且仍在新增）。
+     * 本接口就盯住这个落盘动作：**微信负责下载，我们负责收割**，不联网、不碰凭据、不注入进程。
+     * @param options - `action`：`start` 启动监控 / `stop` 停止监控 / `now` 手动收割一次。
+     * @returns `start`/`now` 回 `HarvestResult`，`stop` 回 `HarvestStatus`。
+     */
+    originalHarvest(options: {
+        action: 'start' | 'stop' | 'now';
+    }): Promise<HarvestResult | HarvestStatus>;
+    /**
+     * 读原图自动收割的状态（纯内存，毫秒级）。
+     *
+     * **单独一个 Remote 而不是 `originalHarvest('status')`**：后者会被归成重任务，
+     * 而收割本身占着唯一的重任务槽 —— 收割期间读进度会被「重任务队列已满」拒掉，
+     * 界面只能干等（2026-10-17 实测：1,459 个文件要 69 秒）。
+     * @returns 是否在监控、累计收割/失败张数、手动收割的实时进度。
+     */
+    getOriginalHarvestStatus(): Promise<HarvestStatus>;
+    /**
+     * 读「第三方原图服务」的额度（`wxcdn.c3o.re`）。
+     *
+     * 这是本机数据上**唯一能覆盖那 81.6%** 的通路：用 `cdnbigimgurl` 的 fileid 换原图
+     * （实测 6/6 成功，拿到 2,751 KB 的真原图）。按流量计费，Free 套餐 50 MB/天。
+     * 开关是 `wxcdn_enabled`（默认 **false**）—— 该服务不是腾讯官方，且需要把本机的
+     * `all_users/config/global_config` 发给它，所以必须由用户显式打开。
+     * @returns 套餐名、总量、已用、剩余、重置时间；失败时 `{ error }`。
+     */
+    getWxcdnQuota(): Promise<{
+        quota?: WxcdnQuota;
+        error?: string;
+    }>;
+    /**
      * 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。
      *
      * 存在的原因：卡片缩略图 / 朋友圈远程图 / 视频号封面此前由**渲染层直接向消息里的地址发请求**，
@@ -312,4 +358,18 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         source?: string;
         error?: string;
     }>;
+    /**
+     * 微信原图自动下载（实验）：`start` 打开开关并让微信开始下载新图片的原图 /
+     * `stop` 关闭并还原微信进程 / `status` 只读状态（界面轮询用）。
+     *
+     * 这是仓库里唯一会**修改微信进程内存**的入口：复用上游 WeFlow-X（MIT）的
+     * `img_helper.dll`，把注入/还原/落 marker 的生命周期放在
+     * `query/wechat-image-autodownload.ts`；本方法只做转发。
+     * 仅桌面端可调（`http-remote-policy.js` 的 A 族）——手机/浏览器态没有本机微信进程。
+     * @param options - 动作（默认 `status`）。
+     * @returns 最新状态快照（含错误码与清理提示）。
+     */
+    wechatImageAutoDownload(options?: {
+        action?: WechatImageAutoDownloadAction;
+    }): Promise<WechatImageAutoDownloadStatus>;
 }

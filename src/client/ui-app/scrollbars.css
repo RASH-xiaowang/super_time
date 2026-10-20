@@ -1,41 +1,65 @@
 /**
- * 全局隐藏滚动条（2026-09-29 用户要求：所有界面都不要显示滚动条，但滚动功能照常）。
+ * 全局滚动条：统一为「细、中性、跟随主题」的可见滚动条。
  *
- * ## 为什么不去逐个删面板里的滚动条样式
+ * ## 演进（2026-10-19 反转前一版）
  *
- * 本仓的滚动条是一套**契约**：主题侧在 `pages/wechat-data/scifi-theme.css` 里声明了全局
- * `::-webkit-scrollbar` 基础样式，各面板再各自声明 6px 细条（例：`panels/calls.module.css`、
- * `panels/session-ask.module.css`、`panels/monitor.module.css`），而且有 wiring 用例
- * **断言这些声明存在**（`panels/calls-layout.wiring.spec.ts`、
- * `panels/chat-analysis-panel.wiring.spec.ts`）。逐处删除既会打红那些守卫，
- * 也挡不住以后新面板再声明一条。所以这里在**最外一层全局**统一压掉"绘制"，
- * 面板里的声明原样保留（只是被覆盖、不再可见）。
+ * 2026-09-29 曾按「所有界面都不要显示滚动条」的要求在全局把滚动条绘制归零。
+ * 实测副作用是：长列表、设置右区、聊天记录等能滚的区域**没有任何提示**，
+ * 用户看到的是「内容被截断 / 右边还有东西但不知道」—— 与「合理使用滚动条、
+ * 能撑满屏幕就撑满屏幕」的目标相反。本版恢复绘制：
  *
- * ## 为什么"看不见"不等于"不能滚"
+ *   · 宽度 8px（比旧面板各自声明的 6px 略宽，便于鼠标命中）；
+ *   · 拇指用正文次级色（`--nm-text-2`）压透明，浅色/深色自动换色；
+ *   · 轨道透明、圆角、hover 加深 —— 微信桌面端的细灰条观感；
+ *   · 只影响绘制，滚动行为不变；各面板已有的 `::-webkit-scrollbar` 声明保留
+ *     （6px 的局部声明仍生效，属于可接受的局部细化）。
+ *   · 手机/窄档（≤560px）隐藏绘制，触摸屏不需要常驻滚动条。
  *
- * `scrollbar-width` / `-ms-overflow-style` / `::-webkit-scrollbar` 只影响**滚动条的绘制**，
- * 与 `overflow` 和滚动行为无关：滚轮、触摸板、键盘（PageUp/PageDown、Home/End、方向键）、
- * 拖拽、`scrollIntoView`、`scrollTo` 全部照常可用。
- * 面板里已有的 `scrollbar-gutter: stable` 继续预留宽度 —— 那是为了**布局稳定**
- * （避免"出现/消失滚动条"导致内容宽度跳动），与隐藏绘制不冲突，故保留。
+ * ## 为什么用 `::-webkit-scrollbar` 而不是标准属性
  *
- * ## 覆盖范围
+ * Electron 只跑 Chromium；若同时写 `scrollbar-width`，标准属性会接管绘制并
+ * 压过 `::-webkit-scrollbar` 的圆角/透明轨道，反而做不出细灰条。因此这里只用
+ * WebKit 伪元素，Firefox 不参与本应用。
  *
- * 本文件由渲染进程入口 `ui-entry.tsx` 引入 ⇒ 主界面、各面板、弹窗、引导页、授权页、
- * 隐私同意页**一并生效**；两条规则都不含颜色，因此**深浅主题同样生效**。
+ * 覆盖范围：本文件由渲染进程入口 `ui-entry.tsx` 引入 ⇒ 主界面、面板、弹窗、
+ * 首启引导、授权与隐私同意页一并生效。
  */
 
-/* 标准属性：Firefox / Chromium 121+；旧 Edge 的私有属性一并写上，成本可忽略。 */
-* {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-/* Chromium / Electron：宽度归零 + 不绘制。
- * `!important` 是必需的 —— 面板里的 `.xxx::-webkit-scrollbar { width: 6px }` 在优先级上赢过
- * `*::-webkit-scrollbar`，只有 important 才能让"全局隐藏"真正覆盖到每一处。 */
-*::-webkit-scrollbar {
-  width: 0 !important;
-  height: 0 !important;
-  display: none !important;
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* 透明边框 + background-clip：拇指比滚动槽窄，视觉上是细条。 */
+  background-color: color-mix(in srgb, var(--nm-text-2, #464646) 38%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: var(--nm-r-lg, 8px);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--nm-text-2, #464646) 60%, transparent);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in srgb, var(--nm-text-2, #464646) 60%, transparent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 手机/窄档（浏览器直连、375–560px）：触摸屏不需要常驻滚动条，
+   隐藏绘制但保留滚动能力（与桌面端「可见细条」分开）。 */
+@media (max-width: 560px) {
+  ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
 }

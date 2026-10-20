@@ -31,6 +31,9 @@ worker → 主进程（backend-rpc）→  throw 被包成 msg.error.message，�
 | `EXPIRED` / `DEVICE_MISMATCH` / `NOT_BEFORE` | [`../src/license/schema.js`](../src/license/schema.js) | 有效期外 / 设备指纹不符 / 尚未生效 | 重新签发对应设备与日期的许可证 |
 | `BAD_SIGNATURE` / `INVALID_PAYLOAD` | [`../src/license/service.js`](../src/license/service.js) | 签名校验失败 / 载荷不合 schema | 许可证被改动过；重发一份 |
 | `FEATURE_DENIED` | 同上 | 许可证的功能位不含这个方法所属功能（`details.feature` 说明是哪个） | 升级到含该功能的版本 |
+| `REMOTE_BUSY` | [`../src/backend/http-queue.js`](../src/backend/http-queue.js) | 并发闸已满（普通 32 / 重活 4），或交互请求挤出了低优先级等待项 | 稍后重试或降低批量；这是背压，不是坏库 |
+| `QUEUE_WAIT_TIMEOUT` | 同上 | 请求在队列里等待超过等待上限（默认 240s）—— 说明队列长期不排空 | 稍后重试；持续出现查 `wechat:backend-state.callQueue` 的 `queued`/`active`，并按方法拆分积压 |
+| `MUTATION_DISPATCH_REVOKED` | [`../src/backend/mutation-gate.js`](../src/backend/mutation-gate.js) | 写请求在队列里跨过了后端重启（旧 epoch），派发前被撤销；默认 shadow 只记录，`SUPERTIME_MUTATION_GATE=enforce` 才拒绝 | 重试该保存/删除操作；这是防“旧代际写落到新 worker”，不是数据损坏 |
 | ~~`PRIVACY_BLOCKED`~~ | — | **已于 2026-09-30 随出网开关一起移除**：`wechat:llm-models` 不再做隐私拦截，因此不再产生这个码 | — |
 | 调用超时 | [`../src/backend/backend-rpc.js`](../src/backend/backend-rpc.js) | 文本形如 `调用超时（60 秒未返回）：method`；窗口按方法分级 | 不是失败宣告：worker 仍在跑。要区分"慢"和"死"，看随后有没有 `Super Time 后端进程已退出` |
 | worker 死亡 | 同上 | `Super Time 后端进程已退出 (code=N)`，在途请求一并摘除 | 主进程会重建；反复出现就抓 `logs/` 与退出码 |

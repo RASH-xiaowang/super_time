@@ -1,3 +1,5 @@
+import { type WxcdnQuota } from '../query/wxcdn-original.ts';
+import { type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts';
 import type { RemoteImageResult } from '../query/remote-image.ts';
 import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
@@ -35,6 +37,8 @@ export interface ImageBatchItem {
      * 提示就会在命中缓存时凭空消失。
      */
     thumb?: boolean;
+    /** 相对 decoded_images 的落盘路径（与单张入口同义）；前端据此拼 wechat-media:// 省 base64。 */
+    file?: string;
     error?: string;
 }
 export declare function createMediaRemotes(rc: MediaRemoteCtx): {
@@ -67,10 +71,17 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     getAvatarsLocal(options: {
         usernames: string[];
     }): Record<string, string>;
+    /**
+     * 取一条消息的图片（data URL），**自动取原图**：解出来是缩略图时会自己再试一次升级
+     * （本机重解 → CDN 直链），不需要用户点按钮。算法体在 `imageWithAutoUpgrade`。
+     * @param options - `username` 会话；`localId` 消息 id。
+     * @returns data URL + 格式；`thumb: true` 表示这次仍是缩略图（升级没成功）。
+     */
     getImageDataUrl(options: {
         username: string;
         localId: number;
     }): Promise<ImageDataUrlResult>;
+    /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
     getImageDataUrlsBatch(options: {
         items: Array<{
             username: string;
@@ -146,6 +157,17 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         limit?: number;
         concurrency?: number;
     }): Promise<OriginalBatchResult>;
+    /**
+     * 原图自动收割：`start` 挂监控 / `stop` 停止 / `now` 手动扫一遍。
+     * 这是拿到高清原图唯一不越界的通路（`tpurl` 全 403、内存 JPEG 与 md5 交集为 0）：
+     * 微信负责下载，我们负责收割 —— 不联网、不碰凭据、不注入进程。
+     */
+    originalHarvest(action: "start" | "stop" | "now"): Promise<HarvestResult | HarvestStatus>;
+    getOriginalHarvestStatus: () => Promise<HarvestStatus>;
+    getWxcdnQuota: () => Promise<{
+        quota?: WxcdnQuota;
+        error?: string;
+    }>;
     getRemoteImages(options: {
         urls?: string[];
     }): Promise<{
@@ -190,6 +212,18 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         error?: string;
     }>;
 };
+/**
+ * `fileOnly` 模式的返回整形：有落盘文件就不再回传 base64（桌面端用 wechat-media:// 流式显示）。
+ *
+ * 没有 `file` 的情况（远端 CDN 取回、解码失败、老快照没写缓存）原样保留 `url`，
+ * 调用方不需要再发一次请求；所以这是「能省则省」，不是另一个错误分支。
+ * @param result - 单张/批量条目；不修改入参。
+ * @returns 同形状结果；file 存在时删掉 url。
+ */
+export declare function withoutDataUrlWhenFile<T extends {
+    file?: string;
+    url?: string;
+}>(result: T): T;
 /** `getSnsImageDataUrl` 的入参：`md5` 等为旧口径，`url`/`token`/`seed` 为 CDN 通路（可选）。 */
 interface SnsImageOptions {
     md5: string;
@@ -212,12 +246,9 @@ interface SnsImageOptions {
 /**
  * 取一条朋友圈视频的封面。
  *
- * 口径与图片那路（{@link snsImageWithCdnFirst}）一致，都是**先网后本**：有网时先去 CDN 取
- * 原封面，CDN 失败才回落本机那份；无网时只用本机。
- *
- * ⚠️ 原来是「本机优先、无网与否都先看本机」，与图片那路 2026-10-08 定的口径相反；而且
- * 「本机优先」在无网时并不能省掉任何等待 —— 本机没有就还是要去 CDN，而无网时那次请求
- * 必然超时，等于白等一个超时窗口。
+ * ⚠️ 图片那路已在 2026-10-19 改为**本地优先**（见 `snsImageWithCdnFirst`）；封面这条仍
+ * 保留原来的「先网后本」：本机封面命中时先本机也能省一次出网，但封面不是原图归档的
+ * 对象，先不改它的判据，避免把视频封面的缓存语义与图片原图混在一起。
  *
  * ⚠️ 封面地址（XML 里的 `<thumb>`）**自带 `token` 与 `idx=1`**，不像图片那样要再拼一次，
  * 所以这里不做 `snsCdnUrl` 归一，只过白名单（M23：只判协议等于「谁给后端一个地址，后端

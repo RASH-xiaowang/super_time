@@ -281,7 +281,7 @@ export function kbEvalRetrieve(
 ): KbEvalRetrieval {
   const decision = classifyIntent(c.question, opts.knownEntities ?? [])
   const policy = defaultPolicyFor(decision.intent)
-  const topK = Number.isFinite(opts.topK) && (opts.topK ?? 0) > 0 ? (opts.topK as number) : policy.channelTopK.kb
+  const topK = Number.isFinite(opts.topK) && (opts.topK ?? 0) > 0 ? (opts.topK as number) : (policy.channelTopK.kb ?? 0)
   const plan = buildQueryPlan({ question: c.question, subQueries: c.subQueries, now: opts.now })
   // ★ 与 pipeline.ts 的知识库通道调用点**逐字一致**（含 12 这个截断位置）。
   const query = plan.terms.slice(0, 12).join(' ')

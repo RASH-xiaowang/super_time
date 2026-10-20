@@ -37,6 +37,28 @@ export interface AskTurn {
   marks?: Record<number, 'useful' | 'useless'>
   /** 这一轮被用户主动停止（不是错误，也不该显示成错误）。 */
   stopped?: boolean
+  /**
+   * 模型的**思考过程**（2026-10-16 新增）。
+   *
+   * 与 `text`（可见正文）分开存：界面上要能**只收起思考**、只复制正文。
+   * 只在模型真的产出 reasoning 时才有值（多数非推理模型没有）。
+   */
+  reasoning?: string
+  /**
+   * 流水线各阶段的执行记录（2026-10-16 新增）。
+   *
+   * 这是「工具调用过程」的数据源：规划 → 检索 → 精排 → 生成 → 核对，
+   * 每步有状态（running/done/skipped）与结果摘要。生成中实时更新，完成后定格。
+   */
+  stages?: AskStage[]
+}
+
+/** 流水线的一个阶段（与后端 `wechat-ask/stage` 事件的 payload 同形）。 */
+export interface AskStage {
+  key: string
+  label: string
+  status: 'running' | 'done' | 'skipped'
+  detail?: string
 }
 
 /** hook 选项。 */
@@ -73,6 +95,10 @@ export interface UseAskSessionResult {
   asking: boolean
   /** 生成中的**全文**（后端按 80ms 节流推送，渲染端整体替换）。 */
   streamText: string
+  /** 生成中的**思考全文**（2026-10-16；与 streamText 分开的一条流）。 */
+  streamReasoning: string
+  /** 生成中的**阶段列表**（2026-10-16；「工具调用过程」的实时数据源）。 */
+  streamStages: AskStage[]
   error: string | null
   ask: (question: string) => Promise<void>
   /** 停止当前这一轮的生成（W3-6.1）。幂等，没有在跑的轮次时点它也只是空取消。 */
@@ -95,9 +121,24 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
   const [threads, setThreads] = useState<Record<string, AskTurn[]>>({})
   const [asking, setAsking] = useState(false)
   const [streamText, setStreamText] = useState('')
+  /** 生成中的思考全文（2026-10-16）：与 streamText 分开的一条流。 */
+  const [streamReasoning, setStreamReasoning] = useState('')
+  /** 生成中的阶段列表（2026-10-16）：按 key 就地更新，保持后端推送顺序。 */
+  const [streamStages, setStreamStages] = useState<AskStage[]>([])
   const [error, setError] = useState<string | null>(null)
   /** 当前这一轮的流式标识：只有 id 匹配的增量才采纳（避免上一轮的迟到事件串进新一轮）。 */
   const streamIdRef = useRef('')
+  /**
+   * 生成中的思考 / 阶段的最新快照（2026-10-16）。
+   *
+   * 为什么用 ref 而不是直接读 state：`ask()` 是 `useCallback`，闭包里的 state 是**发起那一刻**
+   * 的值 —— 等 `await apiAskWechat` 返回时，思考与阶段早已被事件更新过好几轮，
+   * 读闭包只会拿到空数组（思考过程就丢了）。ref 每次渲染同步，读到的才是最新的。
+   */
+  const streamReasoningRef = useRef('')
+  streamReasoningRef.current = streamReasoning
+  const streamStagesRef = useRef<AskStage[]>([])
+  streamStagesRef.current = streamStages
   /** 单飞闸（同步、不受渲染时机影响）—— 见 ask 里的说明。 */
   const gateRef = useRef<AskGate | null>(null)
 
@@ -116,6 +157,46 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     }
     window.addEventListener('dsh-wechat-ask-delta', onDelta)
     return () => { window.removeEventListener('dsh-wechat-ask-delta', onDelta) }
+  }, [])
+
+  /**
+   * 思考过程增量（2026-10-16）：与回答增量同一套「推全文 + id 防串台」约定，
+   * 只是走另一条事件名。分开订阅的理由见 `AskTurn.reasoning`。
+   */
+  useEffect(() => {
+    const onReasoning = (e: Event): void => {
+      const d = (e as CustomEvent).detail as { id?: string; text?: string } | null
+      if (!d || !d.id || d.id !== streamIdRef.current) return
+      if (typeof d.text === 'string') setStreamReasoning(d.text)
+    }
+    window.addEventListener('dsh-wechat-ask-reasoning', onReasoning)
+    return () => { window.removeEventListener('dsh-wechat-ask-reasoning', onReasoning) }
+  }, [])
+
+  /**
+   * 阶段事件（2026-10-16）：这是「工具调用过程」的实时数据源。
+   *
+   * 按 `key` **就地更新**而不是追加：同一个阶段会先推 `running` 再推 `done`
+   * （带结果摘要），追加会让「检索本机记录」出现两行。顺序由**首次出现**决定，
+   * 与后端流水线的实际顺序一致。
+   */
+  useEffect(() => {
+    const onStage = (e: Event): void => {
+      const d = (e as CustomEvent).detail as ({ id?: string } & Partial<AskStage>) | null
+      if (!d || !d.id || d.id !== streamIdRef.current) return
+      if (typeof d.key !== 'string' || typeof d.label !== 'string') return
+      const status = d.status === 'running' || d.status === 'done' || d.status === 'skipped' ? d.status : 'running'
+      const next: AskStage = { key: d.key, label: d.label, status, ...(typeof d.detail === 'string' ? { detail: d.detail } : {}) }
+      setStreamStages(prev => {
+        const at = prev.findIndex(s => s.key === next.key)
+        if (at < 0) return [...prev, next]
+        const copy = prev.slice()
+        copy[at] = next
+        return copy
+      })
+    }
+    window.addEventListener('dsh-wechat-ask-stage', onStage)
+    return () => { window.removeEventListener('dsh-wechat-ask-stage', onStage) }
   }, [])
 
   const setTurnList = useCallback((k: string, updater: (prev: AskTurn[]) => AskTurn[]): void => {
@@ -141,6 +222,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     setAsking(true)
     setError(null)
     setStreamText('')
+    setStreamReasoning('')
+    setStreamStages([])
     streamIdRef.current = streamId
     const prevTurns = threadsRef.current[k] ?? []
     const history = prevTurns.map(t => ({ role: t.role, content: t.text }))
@@ -174,6 +257,11 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         withheld: r.withheld,
         retrieval: r.retrieval,
         retrievalId: r.retrievalId,
+        // 思考过程（2026-10-16）：优先用后端返回的完整版（事件是节流的，末尾可能缺一截），
+        // 后端没给（非推理模型）时退回流式累积的那份。
+        ...(r.reasoning ?? streamReasoningRef.current.trim() ? { reasoning: r.reasoning ?? streamReasoningRef.current.trim() } : {}),
+        // 阶段记录（2026-10-16）：定格成这一轮的过程时间线，历史回看也能展开。
+        ...(streamStagesRef.current.length > 0 ? { stages: streamStagesRef.current } : {}),
       }])
     } catch (e) {
       // W3-6.1：用户主动停止**不是错误**。把它显示成红色错误会让「停止生成」这个功能
@@ -193,6 +281,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
       if (gate.finish(streamId)) {
         streamIdRef.current = ''
         setStreamText('')
+        setStreamReasoning('')
+        setStreamStages([])
         setAsking(false)
       }
     }
@@ -226,6 +316,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     turns: threads[key] ?? [],
     asking,
     streamText,
+    streamReasoning,
+    streamStages,
     error,
     ask,
     cancel,

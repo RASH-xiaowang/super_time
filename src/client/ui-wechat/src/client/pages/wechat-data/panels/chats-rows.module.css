@@ -5,11 +5,9 @@
    ========================================================================= */
 .panel {
 
-  /* 深空黑底 + 顶部青色氛围光 */
+  /* 微信灰阶底：去掉顶部径向氛围光与纵向渐变（NV-07）。 */
   background-color: var(--nm-bg-0);
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%),
-    linear-gradient(180deg, var(--nm-bg-0) 0%, var(--nm-bg-1) 100%);
+  background-image: none;
 
   /* 滚动容器继承本面板的滚动条配色（见 ui-theme styles/scrollbar.css 绑定契约） */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
@@ -29,11 +27,14 @@
 
   height: 100%;
   display: flex;
-  gap: 16px;
+  gap: 0;
   min-height: 0;
   box-sizing: border-box;
-  padding: 4px;
+  padding: 0;
   color: var(--nm-text-1);
+  /* AI / 推荐·分析面板作为**覆盖式抽屉**（宽 400）的定位祖先：
+     右栏不再并排占宽，1280px 下消息区不再被 304+384 挤到 ~460px（NV-07 / DL-11）。 */
+  position: relative;
 }
 .searchIcon {
   position: absolute;
@@ -184,13 +185,11 @@
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
   color: var(--nm-text-1);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .calBtn[data-active='true'] {
   background: var(--nm-cyan-10);
   border-color: var(--nm-cyan);
   color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
 }
 .calBtn:active { background: var(--nm-bg-active); }
 .calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -375,9 +374,8 @@
   position: fixed;
   inset: 0;
   z-index: 2147483000;
-  background: rgba(3, 6, 14, 0.88);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* DL-13：遮罩纯 90% 黑、无模糊。 */
+  background: rgba(0, 0, 0, 0.9);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -389,6 +387,8 @@
   top: 70px;
   left: 50%;
   transform: translateX(-50%);
+  /* 双保险：即使 stage 的 padding 被改小，工具栏也永远压在图片之上。 */
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -396,7 +396,7 @@
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border-hover);
   border-radius: var(--nm-r-pill);
-  box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+  box-shadow: var(--nm-shadow-popup);
   corner-shape: round;
 }
 .viewerCount {
@@ -418,15 +418,27 @@
   transition: var(--nm-t-ui);
 }
 .viewerBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 12%, transparent); color: var(--nm-cyan); }
-.viewerStage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+/* 舞台必须给顶部工具栏让出空间：此前是 100% 高的居中容器，图片接近 86vh 时会盖住
+   `.viewerBar`（2026-10-17 修复）。用 padding-top 而非 margin —— stage 是 overflow:hidden
+   的居中容器，padding 会把可用高度一起压小，图片自然缩到工具栏下方。 */
+.viewerStage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding-top: 122px; /* 工具栏 top:70 + 高约 40 + 12 呼吸 */
+  box-sizing: border-box;
+}
 .viewerImg {
   max-width: 92vw;
-  max-height: 86vh;
+  /* 用 100% 而不是 86vh：stage 已被 padding 压小，按视口算会顶出 stage 盖住工具栏。 */
+  max-height: 100%;
   object-fit: contain;
   cursor: grab;
   transition: transform 0.08s linear;
   border-radius: var(--nm-dense-r);
-  box-shadow: 0 0 40px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
 }
 .viewerMsg { color: var(--nm-text-2); font-size: 14px; padding: 20px; }
 .msgTransferMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-self: center; }
@@ -658,7 +670,6 @@
   color: var(--nm-cyan);
   border-color: var(--nm-cyan);
   font-weight: 600;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
 }
 .memberSearchBox {
   position: relative;
@@ -703,7 +714,7 @@
   border-radius: var(--nm-r-sm);
   transition: var(--nm-t-ui);
 }
-.memberTile:hover { background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
+.memberTile:hover { background: var(--nm-bg-hover); }
 .memberTile:active { background: var(--nm-bg-active); }
 .memberName {
   max-width: 100%;
@@ -750,7 +761,9 @@
   justify-content: center;
   corner-shape: round;
 }
-.viewerBtnClose:hover { background: var(--nm-danger) !important; color: #fff !important; }
+/* 白字压在实心红上对比度不足（深色端实测约 3.0）。压暗 30% 后 ≥6.9，
+   并保留危险语义与微信红的色相。 */
+.viewerBtnClose:hover { background: color-mix(in srgb, var(--nm-danger) 70%, #000) !important; color: #fff !important; }
 /* ── 系统提示行：撤回 / 置顶 / 通知 / 空内容 ───────────────────────
    微信里这几类都是同一款居中灰字，靠文案区分；本项目保留行首小字形
    （↩ / 📌）让「动作 vs 通知」仍可快速扫读，其余分色与胶囊底已去掉。 */

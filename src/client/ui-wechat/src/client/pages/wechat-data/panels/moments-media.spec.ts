@@ -11,7 +11,7 @@
  *
  * 所以这里的判据都是「数 RPC 次数 / 数谁被调用」，而不是读源码：
  *  · 兜底路径（没有 IntersectionObserver 时）必须把登记过的键**逐个**解一遍，且**不重复**；
- *  · 先问 IndexedDB，命中就不许再调解密 RPC（否则进面板就打爆后端）；
+ *  · 先问 IndexedDB 原图，命中就不许再调解密 RPC（否则进面板就打爆后端）；
  *  · 一批 8 个之外剩下的也必须排空（`while` 而不是只 splice 一次）；
  *  · 封面兜底最多试 3 次（否则一个永久失败的链接会一直打网络）；
  *  · 灯箱那张缺图的按需解析只发生一次。
@@ -65,9 +65,9 @@ function mk(over: Partial<MomentItem> & { tid: string }): MomentItem {
 /**
  * 设定「有网 / 无网」。
  *
- * 为什么用例必须能切这个：取图口径是**先网后本**（有网直接取 CDN 原图、无网才用本地缓存），
- * 而这个判据来自 `navigator.onLine`。jsdom 默认 `onLine === true`，所以「无网」那几条
- * 用例不显式设成 false 就会全部走有网分支 —— 断言会变成恒真。
+ * 为什么用例必须能切这个：取图口径是**本地优先**（先 IndexedDB 原图，没有才 RPC；
+ * 后端本地也没有才 CDN），有网/无网只决定「本地都没有时能否出网」。jsdom 默认
+ * `onLine === true`，所以「无网」那几条用例不显式设成 false 就会全部走有网分支 —— 断言会变成恒真。
  */
 function setOnline(online: boolean): void {
   Object.defineProperty(window.navigator, 'onLine', { value: online, configurable: true })
@@ -200,14 +200,22 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
   })
 
-  it('有网：不查 IndexedDB，直接走后端（原图由后端从 CDN 取并落盘）', async () => {
+  it('有网：也先查 IndexedDB 原图，命中就直接显示、不再出网', async () => {
     setOnline(true)
-    mocks.snsMediaCacheGet.mockResolvedValue('data:旧的缩略图')
+    mocks.snsMediaCacheGet.mockResolvedValue('data:本地原图')
     render({ specs: [img('k1')] })
     await flush()
-    expect(mocks.snsMediaCacheGet, '有网时不许先查本地缓存').not.toHaveBeenCalled()
+    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1', true)
+    expect(mocks.apiGetSnsImageDataUrl, '本地已有原图时不该再出网').not.toHaveBeenCalled()
+    expect(imgs()).toEqual(['k1'])
+  })
+
+  it('有网但本地没有原图：走后端（后端自己按长期归档 → 本机 → CDN）', async () => {
+    setOnline(true)
+    mocks.snsMediaCacheGet.mockResolvedValue(null)
+    render({ specs: [img('k1')] })
+    await flush()
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
-    // 网络状态要传给后端，由它决定走网络还是走本地
     const opts = mocks.apiGetSnsImageDataUrl.mock.calls[0]?.[0] as { offline?: boolean } | undefined
     expect(opts?.offline, '有网时 offline 必须是 false').toBe(false)
   })
@@ -224,6 +232,51 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     const opts = mocks.apiGetSnsImageDataUrl.mock.calls[0]?.[0] as { offline?: boolean } | undefined
     expect(opts?.offline, '无网时 offline 必须是 true').toBe(true)
     expect(imgs()).toEqual(expect.arrayContaining(['k1', 'k2']))
+  })
+
+  it('批量恢复最多 80 个键，首屏最先的图不许被后面的键挤掉（cap 淘汰顺序的坑）', async () => {
+    const moments = Array.from({ length: 120 }, (_, i) => mk({
+      tid: String(i),
+      images: [{ md5: 'm' + String(i), url: '', thumb: '', key: '' }],
+    }))
+    mocks.snsMediaCacheGetMany.mockImplementation(async (keys: readonly string[]) => (
+      Object.fromEntries(keys.map((k) => [k, 'data:' + k]))
+    ))
+    render({ moments })
+    await flush()
+    const keys = mocks.snsMediaCacheGetMany.mock.calls[0]?.[0] as readonly string[] | undefined
+    expect(keys?.length, '一次恢复的键数没有上限').toBe(80)
+    expect(keys?.[0]).toBe('m0')
+    expect(imgs(), '首屏第一张被后面的键挤掉了').toContain('m0')
+  })
+
+  it('同批里一张 RPC 卡住时，已命中的本地原图也必须立刻上屏（不能等整批 Promise.all）', async () => {
+    let releaseSlow: (() => void) | null = null
+    mocks.snsMediaCacheGet.mockImplementation(async (key: string) => (key === 'cached' ? 'data:cached' : null))
+    mocks.apiGetSnsImageDataUrl.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseSlow = () => { resolve({ url: 'data:slow' }) }
+    }))
+    render({ specs: [img('cached'), img('slow')] })
+    await flush()
+    expect(imgs(), '慢图还没回来，缓存图不该一起被压住').toContain('cached')
+    releaseSlow!()
+    await flush()
+    await flush()
+  })
+
+  it('缺 CDN 三件套的图片 RPC 串行：同一时刻只发一个，避免后端重活队列 REMOTE_BUSY', async () => {
+    let releaseFirst: (() => void) | null = null
+    mocks.apiGetSnsImageDataUrl.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseFirst = () => { resolve({ url: 'data:k1' }) }
+    }))
+    render({ specs: [img('k1'), img('k2'), img('k3')] })
+    await flush()
+    expect(mocks.apiGetSnsImageDataUrl.mock.calls.length, '第一张还没回话就发了第二个重活 RPC').toBe(1)
+    releaseFirst!()
+    await flush()
+    await flush()
+    await flush()
+    expect(mocks.apiGetSnsImageDataUrl.mock.calls.length).toBe(3)
   })
 
   it('一批 8 个，剩下的一定要排空（把 while 改成一次 splice 就会漏）', async () => {
@@ -256,13 +309,14 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:thumb', true)
   })
 
-  it('有网时不走 IDB 批量恢复（否则用户看到的还是上一次那张）', async () => {
+  it('进面板时无论有网无网都先做 IDB 原图批量恢复（本地优先）', async () => {
     setOnline(true)
     const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
     mocks.snsMediaCacheGetMany.mockResolvedValue({ cached: 'data:cached' })
     render({ moments: [m] })
     await flush()
-    expect(mocks.snsMediaCacheGetMany).not.toHaveBeenCalled()
+    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'], true)
+    expect(imgs()).toContain('cached')
   })
 
   it('视频键走视频封那个 RPC，而不是图片那个', async () => {
@@ -276,7 +330,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl).not.toHaveBeenCalled()
   })
 
-  it('IDB 批量恢复**只在无网时**做（有网时不该先拿旧缓存顶上）', async () => {
+  it('IDB 批量恢复命中后，兜底路径不再重复解同一条（有网/无网都成立）', async () => {
     const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
     mocks.snsMediaCacheGetMany.mockResolvedValueOnce({ cached: 'data:cached' })
     // 先只给列表、不给 spec：这就是「卡片还没渲染到那一格」时 IDB 恢复要独立起作用的形状

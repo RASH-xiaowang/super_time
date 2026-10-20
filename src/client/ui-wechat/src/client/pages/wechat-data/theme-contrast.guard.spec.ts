@@ -486,8 +486,8 @@ describe('主题对比度门禁（令牌算出来的，不依赖截图）', () =
     // 那个令牌自身带 α=0.15，再叠一次 0.15 会变成等效 2.25% ⇒ 算出 3.45 的假红
     // （第一版就是这么错的 —— 复合 alpha 不能乘两遍）。
     { label: 'danger on danger 15%', fg: '--nm-danger', bg: '--nm-danger', bgAlpha: 0.15, src: 'Button.module.css:93 (--nm-danger-15)' },
-    // 近实心红底 + 白字（chat 查看器关闭键）。
-    { label: '#fff on danger 85%', fg: '#ffffff', bg: '--nm-danger', bgAlpha: 0.85, src: 'chats-rows.module.css:731' },
+    // 原「近实心红底 + 白字（chat 查看器关闭键）」已修复：该按钮悬停改为
+    // color-mix(--nm-danger 70%, #000)，白字对比度 ≥6，不再属于低对比组合。
   ]
 
   /**

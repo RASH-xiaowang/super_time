@@ -8,7 +8,7 @@
  */
 
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
+import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatarBatched, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
 import css from './moments.module.css'
@@ -82,7 +82,11 @@ export function MomentsAvatar({ username, name }: { username: string; name: stri
     let cancelled = false
     const opts: { username: string; nickname?: string } = { username }
     if (name) opts.nickname = name
-    apiGetAvatar(opts)
+    // 走攒批队列（W2-10.2）：一屏 N 条动态的作者头像合成一次 `getAvatarsLocal`，
+    // 而不是 N 次 `getAvatar`（实测 200 个头像 5.6×，且少 199 次 IPC 往返）。
+    // 朋友圈一屏 30 条动态就是 30 次 RPC，而每次 RPC 内部都要扫一遍
+    // `image_hardlink_info_v4`（实测 20 万行 17.27ms/次）。
+    apiGetAvatarBatched(opts)
       .then((r) => {
         const v = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, username, v ?? '', AVATAR_CACHE_MAX)
@@ -94,7 +98,7 @@ export function MomentsAvatar({ username, name }: { username: string; name: stri
       })
     return () => { cancelled = true }
   }, [username, name, src])
-  if (src) return <img src={src} alt="" className={css.avatarImg} loading="lazy" referrerPolicy="no-referrer" />
+  if (src) return <img src={src} alt="" className={css.avatarImg} loading="lazy" decoding="async" referrerPolicy="no-referrer" />
   return <div className={css.avatar}>{(name || '?').slice(0, 1).toUpperCase()}</div>
 }
 
@@ -104,14 +108,15 @@ export function MomentsMiniAvatar({ username, name }: { username: string; name: 
   useEffect(() => {
     if (src !== null) return
     let cancelled = false
-    apiGetAvatar({ username, nickname: name }).then((r) => {
+    // 同 `MomentsAvatar`：攒批。点赞/评论的 mini 头像一屏可达几十个，逐张发就是几十次 RPC。
+    apiGetAvatarBatched({ username, nickname: name }).then((r) => {
       const v = r.kind === 'data' ? (r.data ?? null) : null
       cacheBounded(avatarCache, username, v ?? '', AVATAR_CACHE_MAX)
       if (!cancelled) setSrc(v)
     }).catch(() => { cacheBounded(avatarCache, username, '', AVATAR_CACHE_MAX); if (!cancelled) setSrc(null) })
     return () => { cancelled = true }
   }, [username, name, src])
-  if (src) return <img src={src} alt="" className={css.miniAvatar} loading="lazy" referrerPolicy="no-referrer" />
+  if (src) return <img src={src} alt="" className={css.miniAvatar} loading="lazy" decoding="async" referrerPolicy="no-referrer" />
   return <span className={css.miniAvatarFallback}>{(name || '?').slice(0, 1).toUpperCase()}</span>
 }
 

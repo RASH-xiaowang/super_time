@@ -5,7 +5,7 @@
  * 一样接受 `host-decl-alignment.spec.ts` 的导出双向差集校验。写这份声明是为了让
  * 直接调用桥接层的测试与消费方得到真实类型，而不是整块 `any`。
  */
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { ResolvedLlmConfig } from './llm-config-store'
 
 /** `llmConfigFromEnv()` 的返回形状（键名与 `wechat-paths.d.ts` 的 LlmConfig 对应）。 */
@@ -18,9 +18,23 @@ export type LlmBridgeConfig = ResolvedLlmConfig
  */
 export type LlmBridgeConfigOverrides = Partial<LlmBridgeConfig> & { apiUrl?: string }
 
+export type LlmBridgeContentPart = {
+  text?: string
+  type?: string
+  /** 图片块：canonical base64（ClawBot 自动回复从本机媒体缓存读出）。 */
+  data?: string
+  /** 图片块：MIME（`image/jpeg` 等）。 */
+  mediaType?: string
+  /** 图片块：调用方已拼好的远端 URL / data URL。 */
+  image_url?: { url?: string }
+}
+
+/** OpenAI 兼容消息的 content：纯文本是 string，带图时是 parts 数组。 */
+export type LlmBridgeOpenAiContent = string | Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string } }>
+
 export interface LlmBridgeMessage {
   role?: string
-  content?: string | ReadonlyArray<{ text?: string }>
+  content?: string | ReadonlyArray<LlmBridgeContentPart>
 }
 
 export interface LlmBridgeGenerateOptions extends Partial<GenerateOptions> {
@@ -46,4 +60,7 @@ export interface LlmBridge {
 export function createLlmBridge(configOverrides?: LlmBridgeConfigOverrides): LlmBridge
 export function llmConfigFromEnv(overrides?: LlmBridgeConfigOverrides): LlmBridgeConfig
 export function resolveEmbedModel(cfg: LlmBridgeConfig, override?: string): string
-export function toOpenAiMessage(message: LlmBridgeMessage): { role: string, content: string }
+export function toOpenAiContent(message: LlmBridgeMessage): LlmBridgeOpenAiContent
+export function toOpenAiMessage(message: LlmBridgeMessage): { role: string, content: LlmBridgeOpenAiContent }
+/** 把 OpenAI 兼容的 usage 归一成 dsh-llm 口径（无可用计数时返回 null）。 */
+export function toTokenUsage(raw: unknown): TokenUsage | null

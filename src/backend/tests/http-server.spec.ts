@@ -44,6 +44,8 @@ const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostA
     getDataRoot: () => string
     getUiDistDir: () => string
     gatedCall: (method: string, args: unknown[]) => Promise<unknown>
+    nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>
+    getDecodedRoot?: () => string
     appVersion: string
     bindHost?: string
     authLimiter?: {
@@ -61,7 +63,7 @@ const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostA
     syncWithConfig: () => Promise<State>
     pushEvent: (name: string, args: unknown[]) => void
     isRunning: () => boolean
-    issuePairingCode: () => string
+    issuePairingCode: (options?: { fullAccess?: boolean }) => string
   }
   REQUEST_TIMEOUT_MS: number
   isHostAllowed: (authority: string | undefined, expectedAddress: string, expectedPort: number) => boolean
@@ -94,7 +96,7 @@ afterEach(async () => {
 })
 
 /** 搭一份「数据根 + 静态目录」的夹具。@returns 建服务所需的 deps 与目录。 */
-function fixture(opts: { enabled?: boolean, token?: string, port?: number, authLimiter?: {
+function fixture(opts: { enabled?: boolean, token?: string, port?: number, nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>, authLimiter?: {
   ok: (ip: string) => boolean
   fail: (ip: string) => void
   succeed: (ip: string) => void
@@ -104,6 +106,9 @@ function fixture(opts: { enabled?: boolean, token?: string, port?: number, authL
   scratch.push(dir)
   const dataRoot = join(dir, 'wechat-data')
   const uiDist = join(dir, 'ui-dist')
+  const decodedDir = join(dataRoot, 'decoded_images')
+  mkdirSync(join(decodedDir, 'wxid_a'), { recursive: true })
+  writeFileSync(join(decodedDir, 'wxid_a', 'x.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
   mkdirSync(dataRoot, { recursive: true })
   mkdirSync(join(uiDist, 'assets'), { recursive: true })
   writeFileSync(join(dataRoot, 'config.json'), JSON.stringify({
@@ -121,7 +126,9 @@ function fixture(opts: { enabled?: boolean, token?: string, port?: number, authL
   const srv = createRemoteAccessServer({
     getDataRoot: () => dataRoot,
     getUiDistDir: () => uiDist,
+    getDecodedRoot: () => decodedDir,
     gatedCall: async (method, args) => { calls.push(method); return { ok: true, value: { method, args } } },
+    ...(opts.nativeCall ? { nativeCall: opts.nativeCall } : {}),
     appVersion: 'spec',
     bindHost: '127.0.0.1',
     authLimiter: opts.authLimiter,
@@ -760,5 +767,84 @@ describe('令牌原文不出现在任何响应里', () => {
     const cookie = await login(base)
     const st = (await (await fetch(`${base}/api/status`, { headers: { cookie } })).json()).value as State
     expect(st.tokenMasked).toBe(`${TOKEN.slice(0, 4)}…${TOKEN.slice(-4)}`)
+  })
+})
+
+describe('「打开网页」交接会话：浏览器与桌面端同权限', () => {
+  /** 用交接码换会话（普通登录用的是长期令牌，拿不到 fullAccess）。 */
+  async function loginFull(base: string, f: ReturnType<typeof fixture>): Promise<string> {
+    const code = f.srv.issuePairingCode({ fullAccess: true })
+    const r = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: code }),
+    })
+    expect(r.status).toBe(200)
+    const j = await r.json() as { value?: { fullAccess?: boolean } }
+    expect(j.value?.fullAccess, '交接码换来的会话必须带 fullAccess 标记').toBe(true)
+    return (r.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+  }
+
+  it('交接会话能调用仅桌面端方法；普通手机会话仍然被拒', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const full = await loginFull(base, f)
+    const r = await fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: full },
+      body: JSON.stringify({ method: 'getWechatConfigFull', args: [] }),
+    })
+    const j = await r.json() as { ok?: boolean }
+    expect(j.ok).toBe(true)
+    expect(f.calls).toContain('getWechatConfigFull')
+
+    // 同一台服务上的普通配对码会话不能借这条路由越权
+    f.calls.length = 0
+    const normal = await login(base)
+    const denied = await fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: normal },
+      body: JSON.stringify({ method: 'getWechatConfigFull', args: [] }),
+    })
+    expect((await denied.json() as { error?: { code?: string } }).error?.code).toBe('METHOD_NOT_ALLOWED_REMOTE')
+    expect(f.calls).toEqual([])
+  })
+
+  it('浏览器端聊天图片走同源 HTTP 流式出口，路径穿越被拒', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const cookie = await login(base)
+    const ok = await fetch(`${base}/api/media/decoded/wxid_a/x.jpg`, { headers: { cookie } })
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toBe('image/jpeg')
+    expect(Buffer.from(await ok.arrayBuffer())).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+
+    const traversal = await fetch(`${base}/api/media/decoded/../config.json`, { headers: { cookie } })
+    expect(traversal.status).toBe(404)
+    const outside = await fetch(`${base}/api/media/decoded/wxid_a/../../outside.txt`, { headers: { cookie } })
+    expect(outside.status).toBe(404)
+  })
+
+  it('原生能力端点：交接会话可用，普通会话 403', async () => {
+    const seen: string[] = []
+    const f = fixture({ nativeCall: async (action, payload) => { seen.push(`${action}:${String(payload.path ?? '')}`); return { echoed: action } } })
+    const base = await up(f)
+    const full = await loginFull(base, f)
+    const ok = await fetch(`${base}/api/native/show-in-folder`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: full },
+      body: JSON.stringify({ path: 'C:/tmp/a.txt' }),
+    })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ ok: true, value: { echoed: 'show-in-folder' } })
+    expect(seen).toEqual(['show-in-folder:C:/tmp/a.txt'])
+
+    const normal = await login(base)
+    const denied = await fetch(`${base}/api/native/show-in-folder`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: normal },
+      body: JSON.stringify({ path: 'C:/tmp/a.txt' }),
+    })
+    expect(denied.status).toBe(403)
   })
 })

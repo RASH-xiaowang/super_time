@@ -7,7 +7,7 @@ import { ListSkeleton } from './hooks.tsx'
 import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { Dialog, EmptyState, PanelHeader, ProgressBar, Toolbar } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
@@ -20,7 +20,9 @@ import { desktopOnlyGate } from '../ui/desktop-only.tsx'
  * @returns the backup element tree.
  */
 export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
-  const blocked = desktopOnlyGate('backup'); if (blocked !== null) return blocked
+  // ⚠️ 降级判定必须在所有 hooks 之后（见函数末尾的 `blocked` 分支）。
+  // 放在 hooks 之前会让 hook 数量随能力表变化而变，React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   /** 应用内确认框（替代原生 window.confirm —— 系统白框不跟主题）。 */
   const confirm = useConfirm()
   /* 2026-10-03 推广批次 3：items 改用共用 useFreshData —— 打开即查最新（不再预填缓存），
@@ -171,23 +173,45 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     }
   }
 
+  // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
+  const blocked = desktopOnlyGate('backup')
+  if (blocked !== null) return blocked
+
   return (
     <div className={embedded ? css.panelEmbedded : css.panel}>
-      <PanelHeader
-        title="备份管家"
-        desc="本地快照（目录拷贝 / AES-256 加密 WCB）"
-        actions={(
-          <>
-            <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
-            <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busy}>
-              {busy ? '处理中…' : '创建备份'}
-            </button>
-            <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busy}>
-              加密备份
-            </button>
-          </>
-        )}
-      />
+      {/* 微信化：嵌进设置弹窗时不再画页头，只留一行节内工具行（输入 + 两个动作）。 */}
+      {embedded ? (
+        <Toolbar
+          left={<span className={kitCss.textCaption}>本地快照 · 只写本机</span>}
+          right={(
+            <>
+              <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busy}>
+                {busy ? '处理中…' : '创建备份'}
+              </button>
+              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busy}>
+                加密备份
+              </button>
+            </>
+          )}
+        />
+      ) : (
+        <PanelHeader
+          title="备份管家"
+          desc="本地快照（目录拷贝 / AES-256 加密 WCB）"
+          actions={(
+            <>
+              <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busy}>
+                {busy ? '处理中…' : '创建备份'}
+              </button>
+              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busy}>
+                加密备份
+              </button>
+            </>
+          )}
+        />
+      )}
       {encProgress ? (
         <div className={css.backupProgress}>
           <span className={css.backupProgressBar}>

@@ -44,6 +44,15 @@ export interface WordCloudCardProps {
   limit?: number
   /** 舞台高度上限（px）；缺省按宽度自适应。年度那两块用小舞台。 */
   height?: number
+  /**
+   * 填满卡片剩余高度（2026-10-17）。
+   *
+   * 为什么需要：`cloudStageHeight` 的上限是 420px，而卡片在「离线洞察」右栏被
+   * `flex: 1 1 auto` 拉到 592px ⇒ 舞台下方空出 170px（用户截图「下面没有内容」）。
+   * 打开这个开关后，舞台高度改由**实测的卡片剩余高度**决定，撒点也按那个高度重算 ——
+   * 词会铺满整张卡，而不是挤在顶上一条。
+   */
+  fill?: boolean
 }
 
 /**
@@ -51,9 +60,11 @@ export interface WordCloudCardProps {
  * @param props - 作用域与可选上限。
  * @returns 词云卡片元素。
  */
-export function WordCloudCard({ scope, username, year, title, limit, height }: WordCloudCardProps): React.JSX.Element {
+export function WordCloudCard({ scope, username, year, title, limit, height, fill = false }: WordCloudCardProps): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [stageW, setStageW] = useState(0)
+  /** `fill` 模式下量到的舞台可用高度（0 = 还没量到，退回 `cloudStageHeight`）。 */
+  const [stageH, setStageH] = useState(0)
   // 首屏瞬时渲染：上次成功渲染过的词表从 localStorage 取回。全库统计首跑要 ~3 秒，
   // 没有它每次切回本页都要再等一遍。
   // ⚠️ key 里**不含词数/宽度**：含了就会在改窗口尺寸时换一份缓存 ⇒ 白等一次统计。
@@ -108,17 +119,41 @@ export function WordCloudCard({ scope, username, year, title, limit, height }: W
     if (!el) return
     let raf = 0
     let last = 0
+    let lastH = 0
     const apply = (): void => {
       const w = Math.max(0, Math.round(el.clientWidth))
       if (Math.abs(w - last) >= 8) { last = w; setStageW(w) }
       else if (last === 0) { last = w; setStageW(w) }
+      /*
+       * `fill` 模式：量**卡片剩余高度** = 卡片根高度 − 卡头高度 − 卡身内边距。
+       *
+       * ⚠️ 不能量 `el.parentElement`（卡身）：卡身是 `flex: 1 1 auto`，它的高度**依赖**
+       * 舞台高度，而舞台高度又由这里写死 ⇒ 循环依赖，实测 `clientHeight` 恒为 0
+       * （真机：右栏词云整块空白）。量卡片根（高度由外层 grid 决定，与舞台无关）才收敛。
+       */
+      if (fill) {
+        const card = el.closest('[class*="card"]')
+        const head = card?.querySelector('[class*="cardHd"]')
+        const cardH = card === null || card === undefined ? 0 : card.clientHeight
+        const headH = head === null || head === undefined ? 0 : head.clientHeight
+        // 卡身内边距（`--nm-s-4` = 16px，上下各一份）；用计算样式读，别写死。
+        const bd = el.parentElement
+        const cs = bd === null ? null : getComputedStyle(bd)
+        const padY = cs === null ? 32 : (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+        const h = Math.max(0, Math.round(cardH - headH - padY))
+        if (Math.abs(h - lastH) >= 8) { lastH = h; setStageH(h) }
+        else if (lastH === 0) { lastH = h; setStageH(h) }
+      }
     }
     apply()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => { raf = requestAnimationFrame(() => { raf = 0; apply() }) })
     ro.observe(el)
+    // 观察卡片根（不是卡身）：卡身高度依赖舞台，观察它会形成反馈环。
+    const cardEl = fill ? el.closest('[class*="card"]') : null
+    if (cardEl !== null) ro.observe(cardEl)
     return () => { if (raf) cancelAnimationFrame(raf); ro.disconnect() }
-  }, [snap.words.length])
+  }, [snap.words.length, fill])
 
   /**
    * 显示几个词：**宽度与面积取小**（`cloudLimitForStage`）。
@@ -127,7 +162,12 @@ export function WordCloudCard({ scope, username, year, title, limit, height }: W
    * 会超订 —— 420×200 要 60 个而实测只装得下 35，丢掉的 25 个就变成「内容少」。
    * 高度用**和布局同一个**（`height ?? cloudStageHeight(stageW)`），否则请求数与画布又不一致。
    */
-  const showLimit = cloudLimitForStage(stageW, height ?? cloudStageHeight(stageW), limit)
+  /**
+   * 舞台高度：`fill` 模式优先用实测的卡片剩余高度，否则按宽度推。
+   * 三处（取词数 / 撒点 / 字号上限）必须用**同一个**高度，否则请求数与画布又不一致。
+   */
+  const stageHeight = fill && stageH > 0 ? stageH : (height ?? cloudStageHeight(stageW))
+  const showLimit = cloudLimitForStage(stageW, stageHeight, limit)
   type CloudWord = CloudWordInput & { tone: CloudTone }
 
   /**
@@ -147,8 +187,8 @@ export function WordCloudCard({ scope, username, year, title, limit, height }: W
 
   /** 撒点结果：宽度还不知道就是 null（走 flex 回落）。 */
   const layout = useMemo(() => (stageW > 0 && cloudWords.length > 0
-    ? layoutWordCloud(cloudWords, { width: stageW, height: height ?? cloudStageHeight(stageW) })
-    : null), [cloudWords, stageW, height])
+    ? layoutWordCloud(cloudWords, { width: stageW, height: stageHeight })
+    : null), [cloudWords, stageW, stageHeight])
   /** 撒点结果（没有几何信息时为 null ⇒ 走 flex 回落）。 */
   const placed = layout?.placed ?? null
   /**
@@ -169,7 +209,11 @@ export function WordCloudCard({ scope, username, year, title, limit, height }: W
   const heading = title ?? (scope === 'chat' ? '群聊热词' : scope === 'moments' ? '朋友圈热词' : '全部热词')
 
   return (
-    <Card title={heading} extra={snap.scanned > 0 ? `${snap.scanned.toLocaleString('en-US')} 条正文` : undefined}>
+    <Card
+      title={heading}
+      extra={snap.scanned > 0 ? `${snap.scanned.toLocaleString('en-US')} 条正文` : undefined}
+      className={fill ? css.fillCard : undefined}
+    >
       <div
         ref={stageRef}
         className={css.cloud}
@@ -185,7 +229,7 @@ export function WordCloudCard({ scope, username, year, title, limit, height }: W
         {words.length > 0 && (
         <>
           {words.map((w) => {
-            const step = Math.min(cloudFontCap(height ?? cloudStageHeight(stageW)), Math.max(CLOUD_FONT_MIN, Math.round(w.size)))
+            const step = Math.min(cloudFontCap(stageHeight), Math.max(CLOUD_FONT_MIN, Math.round(w.size)))
             return (
               <button
                 key={w.text}

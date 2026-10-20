@@ -41,7 +41,11 @@ const html = renderToStaticMarkup(h(PrivacyConsentGate, { onAccepted: () => {}, 
 console.log('隐私同意闸门 SSR 冒烟')
 
 check('渲染出标题与声明版本', () => {
+  // 默认（无 `embedded`）= 声明升版后的**独立整屏**：页头由组件自己给
+  // （内嵌启动页那条路径的页头仍由 `StageHead` 提供，见 OnboardingShell 的 consent 站）。
   ok(html.includes('隐私与数据边界'), '缺少标题')
+  ok(html.includes('一句话结论'), '缺少两栏布局的标题锚点「一句话结论」')
+  ok(html.includes('会出网的地方（逐条）'), '缺少出网清单一节的标题')
   ok(html.includes(`v${PRIVACY_VERSION}`), `缺少声明版本 v${PRIVACY_VERSION}`)
 })
 

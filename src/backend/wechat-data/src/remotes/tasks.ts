@@ -29,9 +29,10 @@ export function createTasksRemotes(rc: createTasksRemotesInputs) {
       title: string
       body?: string
       tags?: string[] | string
-      sourceKind?: 'manual' | 'ask'
+      sourceKind?: 'manual' | 'ask' | 'file'
       sourceUsername?: string
       sourceQuestion?: string
+      sourceFileId?: number
     }): NoteMutationResult {
       const r = saveNoteRow(rc.dirs().decrypted, kbId, options)
       // 只用于留痕，因此必须容错：kbId 变成独立参数后，漏传 options 会让 `options.title`

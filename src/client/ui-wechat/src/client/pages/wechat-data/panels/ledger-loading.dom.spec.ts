@@ -52,8 +52,9 @@ describe('资金账本：首次统计的加载态是有结构的，不是一行�
     expect(text, '加载文案里没有走秒').toMatch(/已用\s*\d+s/)
     // ② 解释为什么可能偏慢（后端同步、会排在总览统计后面）
     expect(text, '没有解释耗时原因').toContain('首次统计要解析本机全部消息')
-    // ③ 与真实布局同形的骨架（ListSkeleton 用的是 .nm-skel 占位条）
-    expect(host.querySelectorAll('.nm-skel').length, '没有骨架占位').toBeGreaterThan(6)
+    // ③ 统一的加载态（2026-10-18：不再画骨架条，改为旋转指示 + 加载中…）
+    expect(host.querySelector('[data-st-loading]'), '没有统一加载态').toBeTruthy()
+    expect(host.querySelector('[class*="spinner"]'), '没有旋转指示').toBeTruthy()
     // ④ 加载条这一结构本身存在（用属性子串匹配哈希后的类名）
     expect(host.querySelector('[class*="loadingBar"]'), '缺少加载条容器').toBeTruthy()
   })

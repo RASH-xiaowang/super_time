@@ -63,6 +63,16 @@ interface ChinaMapProps {
   onFallback: () => void
   /** Optional overlay rendered inside the map container (e.g. back button). */
   overlay?: React.JSX.Element | null
+  /**
+   * 用对数刻度给省份着色，默认 `false`（线性）。
+   *
+   * 足迹地图传 `true`：本机广西 457 次、其他省 1~28 次，线性映射下
+   * 除广西外全部落在最低档，整张图只有两种颜色（真机截图）。
+   * 数据总览的好友分布相对均匀，保持线性。
+   */
+  logScale?: boolean
+  /** 悬停提示里数量的单位，默认 `位好友`。足迹地图传 `次打卡`。 */
+  unit?: string
 }
 
 /**
@@ -70,7 +80,7 @@ interface ChinaMapProps {
  * @param props - component props.
  * @returns the map container element.
  */
-export function ChinaMap({ node, onDrill, onFallback, overlay }: ChinaMapProps): React.JSX.Element {
+export function ChinaMap({ node, onDrill, onFallback, overlay, logScale, unit }: ChinaMapProps): React.JSX.Element {
   return (
     <GeoEchartsMap
       node={node}
@@ -82,6 +92,8 @@ export function ChinaMap({ node, onDrill, onFallback, overlay }: ChinaMapProps):
       onDrill={onDrill}
       onFallback={onFallback}
       overlay={overlay ?? null}
+      logScale={logScale}
+      unit={unit}
     />
   )
 }

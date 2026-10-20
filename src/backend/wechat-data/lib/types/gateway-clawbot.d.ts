@@ -34,7 +34,22 @@ export declare abstract class GatewayClawbot extends GatewayDbHealth {
         autoReply?: boolean;
         kbEnabled?: boolean;
         kbId?: number | null;
+        systemPrompt?: string;
+        splitReply?: boolean;
     }): ClawbotInstanceConfig;
+    /**
+     * 给实例起别名（「工作号」「客服号」；2026-10-16）。
+     *
+     * 与绑定状态机无关（只动 `label` 一列）⇒ 别名活过重新绑定与解绑。
+     * 空串 = 清除别名（界面回落到昵称，再回落到「实例 N」）。
+     * @param options.slot - 实例编号。
+     * @param options.label - 新别名（空串 = 清除）。
+     * @returns 落库后的绑定卡片快照。
+     */
+    renameClawbotInstance(options: {
+        slot: number;
+        label: string;
+    }): ClawbotBindingSnapshot;
     /**
      * 当前绑定行（设置卡片首屏）。
      * @param options.slot - 实例编号（缺省 = 第一个实例）。
@@ -73,6 +88,28 @@ export declare abstract class GatewayClawbot extends GatewayDbHealth {
      * @returns 会话页快照。
      */
     listClawbotMessages(options?: ClawbotMessageQuery): ClawbotMessageSnapshot;
+    /**
+     * 清空某实例的**接入会话**（2026-10-17）：只删消息，不动绑定与配置。
+     * @param options.slot - 实例编号（缺省 = 第一个实例）。
+     * @returns 删掉的条数 + 最新会话页快照（界面据此立刻刷新）。
+     */
+    clearClawbotMessages(options?: {
+        slot?: number;
+    }): {
+        removed: number;
+        messages: ClawbotMessageSnapshot;
+    };
+    /**
+     * 取**内置的拟人化默认系统提示词**（2026-10-17）。
+     *
+     * 为什么要有它：设置视图的输入框此前是空的（「留空 = 用默认值」），用户**看不到**
+     * 默认值长什么样 —— 想改也不知道从哪改起。把它暴露给界面，输入框就能预填，
+     * 用户可以直接在默认值上改（而不是从零写）。
+     * @returns 默认提示词全文。
+     */
+    getClawbotDefaultPrompt(): {
+        prompt: string;
+    };
     /**
      * 环境自检（精简 3 项：应用运行 / 绑定通道 / 集成状态）—— 第 ② 项读的是该实例的通道。
      * @param options.slot - 实例编号（缺省 = 第一个实例）。

@@ -32,23 +32,41 @@
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  /* 窄屏时引用详情面板改成 absolute 覆盖（见 ask-cite-detail.module.css）——
+     它需要这里当定位祖先，否则会一路找到视口。 */
+  position: relative;
+  /* 居中用 `justify-content` 而不是子项的 `margin: auto`：
+     `margin: auto` 会**先吃掉剩余空间**，导致 `flex-shrink` 不再触发
+     （实测：详情面板打开后对话列仍宽 1080，与面板重叠 320px）。 */
+  justify-content: center;
 }
 
 /* ── 统一内容列 ───────────────────────────────────────────────
    头部、上下文条、对话正文、输入面全部落在这一个列里 —— 四者的左右边界
    完全对齐（上一版 panelBody/dock 是 1080px 居中、面板头却是整个 1572px 通栏，
-   输入框比标题右移了 246px）。 */
+   输入框比标题右移了 246px）。
+
+   ⚠️ 这里**不能写 `width: 100%`**：`width` 会覆盖 flex-basis，让本列在
+   「对话列 + 引用详情」并排时**不收缩**（实测 1080 + 12 + 320 = 1412 > 容器 1230
+   ⇒ 溢出，详情面板被挤进对话列内部、视觉上重叠）。用 `flex: 1 1 auto` 让它
+   按剩余空间收缩，`max-width` 仍保证宽窗口下不超过阅读宽度。 */
 .askPage {
-  width: 100%;
+  /* `flex-basis: 0`（不是 `auto`）：`auto` 会解析成 `max-content`（内容宽），
+     而 `max-width: 1080px` 把它钉在 1080 —— 此时 `flex-shrink` 虽然按比例分配，
+     但**基准值本身**就是 1080，收缩后仍可能大于可用空间（实测：容器 1230、
+     详情 320、间距 12 ⇒ 可用 898，而本列仍是 1080，与详情重叠 320px）。
+     `basis: 0` 让本列从 0 开始按 `flex-grow` 分配，`max-width` 只当上限。 */
+  flex: 1 1 0;
   max-width: 1080px;
-  margin: 0 auto;
-  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
+
+/* 引用详情是右侧**覆盖式抽屉**（见 ask-cite-detail.module.css），不占本行布局 ⇒
+   引用打开时对话列不再左移，正文始终满宽。 */
 
 /* ── ② 检索上下文条 ──────────────────────────────────────────
    三个限定条件（会话 / 时间 / 模型）同形态：32px 胶囊、1px 描边、13px 线性图标、
@@ -153,14 +171,14 @@
   padding: 0 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+  background: transparent;
   color: var(--nm-text-2);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .scopeHost:hover,
 .scopeHost:focus-within {
-  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
-  background: var(--nm-cyan-10);
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
   color: var(--nm-text-1);
 }
 /* 触发器自身的 outline 被清零，焦点指示改由胶囊外壳给出（键盘用户必须看得见焦点）。 */
@@ -240,13 +258,9 @@
   display: grid;
   place-items: center;
   border-radius: var(--nm-r-lg);
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 18%, transparent),
-    color-mix(in srgb, var(--nm-purple) 16%, transparent));
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
-  color: var(--nm-cyan);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
   font-size: 18px;
-  box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
 }
 .emptyTitle { font-size: 15px; font-weight: 600; color: var(--nm-text-1); margin-top: 2px; }
 .emptySub { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; }
@@ -291,19 +305,18 @@
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  background: transparent;
   color: var(--nm-text-1);
   font-size: 13px;
   line-height: 1.5;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.12s;
+  transition: background 0.15s, border-color 0.15s;
 }
 .emptyExCard:hover {
-  border-color: color-mix(in srgb, var(--nm-cyan) 50%, transparent);
-  background: var(--nm-cyan-10);
-  transform: translateY(-1px);
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
 }
 .emptyExIcon {
   display: grid;
@@ -366,8 +379,8 @@
   max-width: min(78%, 620px);
   padding: 8px 14px;
   border-radius: 14px 14px 4px 14px;
-  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
   color: var(--nm-text-1);
   font-size: 13px;
   line-height: 1.7;
@@ -375,6 +388,116 @@
   word-break: break-word;
 }
 .chatAi { display: flex; flex-direction: column; gap: 8px; min-width: 0; align-items: flex-start; }
+
+/* ── 过程时间线（2026-10-16）─────────────────────────────────────────
+   把「思考 + 工具调用步骤」渲染成一条可折叠的时间线。改造前这些信息是两行平铺的
+   chip（PlanLine + RetrMeta），看不出先后、看不出哪一步在跑 —— 没有「过程感」。 */
+.process {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+}
+/* 生成中：描边提亮，与已落定的过程区分开 */
+.process[data-streaming] { border-color: var(--nm-border-hover); }
+.processHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.processHead:hover { color: var(--nm-text-1); }
+.processChevron { flex-shrink: 0; transition: transform 0.15s; }
+.processHead[aria-expanded='true'] .processChevron { transform: rotate(90deg); }
+.processTitle { font-weight: 600; }
+
+.processBody { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stageList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.stageRow {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--nm-text-2);
+}
+.stageLabel { color: var(--nm-text-1); white-space: nowrap; }
+.stageMark {
+  padding: 0 6px;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 8%, transparent);
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+/* 进行中：青色高亮 + 呼吸；跳过：整体压暗（如实说明「这一步没跑」） */
+.stageRow[data-status='running'] .stageMark { background: var(--nm-cyan-20); color: var(--nm-cyan-text); }
+.stageRow[data-status='skipped'] { opacity: 0.6; }
+.stageDetail {
+  min-width: 0;
+  color: var(--nm-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 思考过程：单独一块，默认收起（思考通常很长，展开会淹没答案） */
+.think {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--nm-text-1) 12%, transparent);
+}
+.thinkHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.thinkHead:hover { color: var(--nm-text-1); }
+.thinkTitle { font-weight: 600; }
+.thinkToggle { color: var(--nm-text-3); font-size: 10.5px; }
+.thinkBody {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
+  color: var(--nm-text-2);
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* 检索规划行：默认收起一行（意图），点击展开检索词 —— 保留检索管线的可见证据但不平铺噪音 */
 .planLine {
   display: inline-flex;
@@ -414,7 +537,7 @@
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
   border-radius: 4px 14px 14px 14px;
-  background: color-mix(in srgb, var(--nm-purple) 4%, transparent);
+  background: var(--nm-bg-card);
   font-size: 13px;
   line-height: 1.75;
   color: var(--nm-text-1);
@@ -423,7 +546,7 @@
 }
 /* 流式生成中的正文：描边提亮一点，和后落定的回答区分开 */
 .chatAnswer[data-streaming] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
-/* 流式光标：细竖条闪烁（生成中）。尊重 prefers-reduced-motion。 */
+/* 流式光标：静态细竖条（去掉闪烁动画，微信化「克制动效」）。 */
 .streamCaret {
   display: inline-block;
   width: 2px;
@@ -431,13 +554,7 @@
   margin-left: 2px;
   vertical-align: -2px;
   background: var(--nm-cyan);
-  animation: stream-blink 1s steps(2, start) infinite;
 }
-@keyframes stream-blink {
-  0%, 50% { opacity: 1; }
-  50.01%, 100% { opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) { .streamCaret { animation: none; } }
 /* 引用来源块：2 列网格 + 默认前 4 条折叠（20 条单列平铺会吞没整屏） */
 /* 宽窄按**本块自己的宽度**判定，而不是窗口宽度：会话内 AI 面板（「新对话」）只有
    384px，它在窗口里往往并排着一个很宽的消息列 —— 窗口媒体查询永远不命中，
@@ -453,12 +570,16 @@
 }
 .citeHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .citeHeadTitle { font-size: 12px; color: var(--nm-text-2); min-width: 0; }
-/* 数据来源说明（由后端按检索结果算出）：小字、不抢眼，但一定在回答正下方。 */
+/* 数据来源说明（由后端按检索结果算出）：小字、不抢眼。
+   它是 `.answerFoot` 的第一个 flex 子项（占满剩余宽度），不再是独立一行。
+   `.answerFoot` / `.footActions` / `.distillBtn` 都在 `retrieval.module.css`
+   （与 `fbBar` 同属「回答附属信息」，且本文件已贴 1000 行上限）。 */
 .answerBasis {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--nm-text-3);
   line-height: 1.5;
-  margin-top: 6px;
   font-variant-numeric: tabular-nums;
   /* 依据行里可能出现路径/标识串等不带空格的长内容，允许在任意位置断行。 */
   overflow-wrap: anywhere;
@@ -516,7 +637,7 @@
   text-align: left;
   transition: all 0.15s;
 }
-.citeBtn:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.citeBtn:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
 /* 被回答真正引用过的来源：描边与序号提亮，和未引用来源一眼可分
    （否则「来源 20 条」里哪些被用到只能靠用户逐个对 [n]） */
 .citeBtn[data-cited] {
@@ -534,7 +655,6 @@
 .citeBtn[data-src='kb'] .citeIdx { color: var(--nm-purple); }
 .citeBtn[data-src='kb']:hover {
   border-color: color-mix(in srgb, var(--nm-purple) 55%, transparent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-purple) 10%, transparent);
 }
 .citeBtn[data-src='kb'][data-cited] {
   border-color: color-mix(in srgb, var(--nm-purple) 60%, transparent);
@@ -593,16 +713,8 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--nm-cyan);
+  background: var(--nm-text-3);
   flex-shrink: 0;
-  animation: chat-pulse 1s ease-in-out infinite;
-}
-@keyframes chat-pulse {
-  0%, 100% { opacity: 0.25; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .chatDots { animation: none; }
 }
 
 /* ── ④ 提问面 ────────────────────────────────────────────────
@@ -656,7 +768,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .composerInput::placeholder { color: color-mix(in srgb, var(--nm-text-1) 58%, transparent); }
 
 /* 发送按钮（主操作，44×44 触控目标）：空输入＝描边 + 淡底（主操作必须始终看得见）；
-   可发送＝青紫渐变 + 辉光；生成中＝半透明渐变底 + 旋转环。 */
+   可发送＝微信绿实心（无渐变 / 发光 / 位移）；生成中＝半透明绿底 + 旋转环。 */
 .send {
   display: grid;
   place-items: center;
@@ -669,22 +781,18 @@ textarea.composerInput:focus-visible { outline: none; }
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
   color: color-mix(in srgb, var(--nm-text-1) 55%, transparent);
   cursor: pointer;
-  transition: background 0.18s, box-shadow 0.18s, border-color 0.18s, transform 0.12s;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
 .send:enabled {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple));
+  background: var(--nm-brand);
   color: var(--nm-on-accent);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 38%, transparent);
 }
-.send:enabled:hover { transform: translateY(-1px); box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
-.send:enabled:active { transform: translateY(0); }
+.send:enabled:hover { background: color-mix(in srgb, var(--nm-brand) 88%, #000); }
 .send:disabled { cursor: default; }
 .send[data-busy] {
   border-color: transparent;
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 55%, transparent),
-    color-mix(in srgb, var(--nm-purple) 50%, transparent));
+  background: color-mix(in srgb, var(--nm-brand) 55%, transparent);
   color: var(--nm-on-accent);
 }
 .sendSpinner {
@@ -722,8 +830,8 @@ textarea.composerInput:focus-visible { outline: none; }
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .optBtn:hover:enabled {
-  border-color: color-mix(in srgb, var(--nm-purple) 50%, transparent);
-  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
   color: var(--nm-text-1);
 }
 .optBtn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -802,7 +910,11 @@ textarea.composerInput:focus-visible { outline: none; }
 /* ── 响应式 ─────────────────────────────────────────────────
    ≤900：上下文条换行堆叠（去掉弹性间隔，让「已限定范围」提示随范围胶囊走）
    ≤760：空态示例单列
-   ≤680：触屏尺寸（胶囊 40、优化按钮 36）、隐藏快捷键提示、引用单列、抽屉表单单列 */
+   ≤680：触屏尺寸（胶囊 40、优化按钮 36）、引用单列、抽屉表单单列。
+         2026-10-18 Wave 2：这一档原本还隐藏「范围」领标与「Enter 发送 · Shift+Enter
+         换行」提示，审计记 hidden（「范围」low、快捷键提示 medium）。两者都是可读的
+         业务/操作信息，按方案 §2.1 改成可见的窄屏形态：领标缩一档字号；提示允许在
+         页脚换行（页脚 flex-wrap，提示落到第二行也不裁）。 */
 @media (max-width: 900px) {
   .contextBar { row-gap: 6px; }
   .ctxSpacer { display: none; }
@@ -813,38 +925,22 @@ textarea.composerInput:focus-visible { outline: none; }
   .emptyExCard { min-height: 0; flex-direction: row; align-items: center; }
 }
 @media (max-width: 680px) {
-  /* 「范围」二字在窄屏让位：三个胶囊自身已带语义（全部会话 / 全部时间 / 模型），
-     去掉领标后 480px 宽度即可单行排下，不再换行吃掉两行高度。 */
-  .ctxLabel { display: none; }
+  /* 「范围」领标保留（只缩一档字号）：三个胶囊的语义仍靠它串起来。 */
+  .ctxLabel { font-size: 11px; }
   /* 触屏/窄屏：胶囊抬到 40px（WCAG 2.2 SC 2.5.8 要求 ≥24，这里给足手指余量） */
   .ctxChip, .scopeHost { height: 40px; }
   .ctxChip { padding: 0 14px; }
   .scopeHost { max-width: 100%; }
   .optBtn { height: 36px; }
-  .actionHint { display: none; }
+  /* 快捷键提示：页脚允许换行，提示掉到第二行也不隐藏（窄屏最多折成两行）。 */
+  .composerFooter { flex-wrap: wrap; row-gap: 4px; }
+  .actionHint { white-space: normal; font-size: 11px; line-height: 1.4; text-align: right; }
   .input { width: 100%; }
   .citeGrid { grid-template-columns: 1fr; }
   .modelActions { grid-template-columns: 1fr; }
   .chatUserBubble { max-width: 88%; }
 }
 
-/* ── 沉淀为笔记：回答下方的次要动作 ──
-   刻意做得比赞/踩反馈行更低调：反馈是高频动作，沉淀是偶尔为之，
-   两者若同等醒目会让每轮回答底部堆两排按钮。 */
-.turnActions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 2px 0 0;
-}
-.distillBtn {
-  padding: 3px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 11px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.distillBtn:hover { border-color: var(--nm-purple); color: var(--nm-purple); }
+/* ── 沉淀为笔记：回答脚注行里的次要动作 ──
+   比赞/踩反馈更低调（反馈高频、沉淀偶尔为之），但同高（24px）同胶囊形。
+   样式在 `retrieval.module.css`（与 `.fbBtn` 同处，便于对照两者的主次关系）。 */

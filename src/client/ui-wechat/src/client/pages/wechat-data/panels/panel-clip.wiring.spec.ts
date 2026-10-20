@@ -91,12 +91,15 @@ describe('卡片：不许被 flex 压缩后再被自己的 overflow 切掉', () 
     expect(panel).toMatch(/overflow-y:\s*auto/)
   })
 
-  it('卡片声明了 `flex-shrink: 0`，并且真的接到了 JSX 上', () => {
-    expect(classBlock(RECORDS_CSS, 'recordsCard'), '卡片没有禁止收缩 ⇒ 内容超高时先压它、再被 overflow 切掉')
-      .toMatch(/flex-shrink:\s*0/)
+  it('卡片改为「撑满面板 + 卡内滚动」，不再被 flex 压切（2026-10-18 用户报：其他面板卡片要撑满屏幕）', () => {
+    const card = classBlock(RECORDS_CSS, 'recordsCard')
+    expect(card, '卡片没撑满面板剩余高度').toMatch(/flex:\s*1 1 auto/)
+    expect(card, '卡片仍受全局高度上限约束，撑不满屏幕').toMatch(/max-height:\s*none/)
     expect(RECORDS_TSX, '样式写了却没接到卡片上（这类"写了但从未生效"在本仓出现过）')
       .toContain('<Card flush className={css.recordsCard}>')
-    // 反例：内层滚动区的自身约束保持不变（长表仍在自己那一格里滚）
-    expect(classBlock(RECORDS_CSS, 'tableScroll')).toMatch(/overflow-y:\s*auto/)
+    // 反过来：卡片撑满后必须由内层滚动区接住溢出，长表仍能在自己那一格里滚（U4：不切一半）
+    const scroll = classBlock(RECORDS_CSS, 'tableScroll')
+    expect(scroll).toMatch(/overflow-y:\s*auto/)
+    expect(scroll, '卡片高了但表内滚动区没跟着长高').toMatch(/flex:\s*1 1 auto/)
   })
 })

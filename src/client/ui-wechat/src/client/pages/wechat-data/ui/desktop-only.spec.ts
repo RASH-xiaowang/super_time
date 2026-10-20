@@ -21,10 +21,14 @@ import type { RuntimeCapabilities } from '../api-core.ts'
 import { DESKTOP_ONLY_KEYS, DESKTOP_ACTION_WHY, desktopAction, desktopActionProps, desktopOnlyGate, desktopOnlyListCard } from './desktop-only.tsx'
 
 const BROWSER: RuntimeCapabilities = {
-  isDesktop: false, isBrowser: true, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false,
+  isDesktop: false, isBrowser: true, desktopEquivalent: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false,
 }
 const DESKTOP: RuntimeCapabilities = {
-  isDesktop: true, isBrowser: false, dirPicker: true, capturePanel: true, shellOpen: true, license: true, diag: true, update: true,
+  isDesktop: true, isBrowser: false, desktopEquivalent: false, dirPicker: true, capturePanel: true, shellOpen: true, license: true, diag: true, update: true,
+}
+/** 「打开网页」交接态：浏览器传输 + 桌面权限。 */
+const HANDOFF: RuntimeCapabilities = {
+  isDesktop: false, isBrowser: true, desktopEquivalent: true, dirPicker: true, capturePanel: true, shellOpen: true, license: true, diag: true, update: true,
 }
 
 let root: Root | null = null
@@ -138,5 +142,96 @@ describe('desktopOnlyGate / desktopOnlyListCard', (): void => {
     setCapabilities(null as unknown as RuntimeCapabilities)
     expect(desktopAction()).toBe(true)
     expect(desktopOnlyGate('backup')).not.toBeNull()
+  })
+})
+
+/**
+ * 「降级判定必须在 hooks 之后」的**行为**判据。
+ *
+ * ## 为什么必须有这一条
+ *
+ * 2026-10-16 实测：`SettingsRemoteAccess` / `BackupPanel` / `HealthPanel` / `HookPanel` /
+ * `LicenseSection` / `UpdateSection` / `SetupGuide` 七处都写成「函数体第一行
+ * `if (desktopOnlyGate(...) !== null) return ...`」—— 那是 React Hooks 规则违反。
+ * 能力表是**注入**的（`setCapabilities`），注入时机与 HMR 都可能让它在两次渲染之间翻转；
+ * 一旦翻转，组件就会「上一次渲染跑了 N 个 hook、这一次 0 个」，React 抛
+ * "Rendered more hooks than during the previous render" ⇒ **整棵根树被卸载** ⇒
+ * 用户看到的是「设置弹窗还在、内容区全黑」。
+ *
+ * 这一条把「翻转能力表后重新渲染」跑一遍：修复前必抛，修复后必须安静通过。
+ * 用 `SettingsRemoteAccess` 当样本 —— 它是用户报障的那一节，且 hooks 最多（7 个）。
+ */
+describe('降级判定在 hooks 之后（能力表翻转不崩）', (): void => {
+  it('桌面态 → 浏览器态翻转后重新渲染，不抛 hooks 数量错误', async (): Promise<void> => {
+    // 这一节要读 `window.electronAPI.remoteAccess`；给一个最小桥，让桌面态能真的渲染出卡片。
+    const calls: string[] = []
+    const bridge = {
+      state: async () => { calls.push('state'); return { ok: true, value: { running: false, port: 0, configuredPort: 5032, address: '', addresses: [], enabled: false, hasToken: false, tokenMasked: '', sessions: 0 } } },
+      rotate: async () => { calls.push('rotate'); return { ok: true, value: { token: 't', pairingCode: 'p', state: { running: false, port: 0, configuredPort: 5032, address: '', addresses: [], enabled: true, hasToken: true, tokenMasked: 't…t', sessions: 0 } } } },
+      toggle: async () => { calls.push('toggle'); return { ok: true, value: { running: false, port: 0, configuredPort: 5032, address: '', addresses: [], enabled: false, hasToken: true, tokenMasked: 't…t', sessions: 0 } } },
+    }
+    const w = window as unknown as { electronAPI?: unknown }
+    const prev = w.electronAPI
+    w.electronAPI = { remoteAccess: bridge }
+
+    try {
+      const { SettingsRemoteAccess } = await import('../panels/settings-remote-access.tsx')
+      const { BackupPanel } = await import('../panels/Backup.tsx')
+
+      // ① 桌面态：卡片必须真的渲染出来（否则下面的翻转测不到 hooks）。
+      setCapabilities(DESKTOP)
+      const box = document.createElement('div')
+      document.body.appendChild(box)
+      const r = createRoot(box)
+      await act(async () => { r.render(createElement(SettingsRemoteAccess)) })
+      expect(box.querySelector('[data-settings-section="remote"]'), '桌面态没渲染出远程访问卡片').not.toBeNull()
+
+      // ② 翻转成浏览器态后重新渲染：修复前这里抛 "Rendered more hooks…"。
+      // React 的 hooks 数量错误在 render 阶段抛出，`act` 会把它包成 rejected promise ——
+      // 必须显式接住，否则测试会静默通过（这正是这条判据第一版没抓到 bug 的原因）。
+      setCapabilities(BROWSER)
+      let flipError: unknown = null
+      try {
+        await act(async () => { r.render(createElement(SettingsRemoteAccess)) })
+      } catch (e) {
+        flipError = e
+      }
+      expect(flipError, `能力表翻转后渲染抛错：${String(flipError)}`).toBeNull()
+      expect(box.querySelector('[data-desktop-only="remote"]'), '浏览器态没换成降级卡').not.toBeNull()
+
+      // ③ 再翻回桌面态：hook 数量必须仍然恒定。
+      setCapabilities(DESKTOP)
+      let backError: unknown = null
+      try {
+        await act(async () => { r.render(createElement(SettingsRemoteAccess)) })
+      } catch (e) {
+        backError = e
+      }
+      expect(backError, `翻回桌面态后渲染抛错：${String(backError)}`).toBeNull()
+      expect(box.querySelector('[data-settings-section="remote"]'), '翻回桌面态后卡片没回来').not.toBeNull()
+
+      // ④ 同一套翻转对 `BackupPanel` 再跑一遍 —— 它**必须**也过。
+      // 这一节比远程访问更危险：它的正常渲染与降级卡**都是 `<div>`**，元素类型相同 ⇒
+      // React 会复用组件实例 ⇒ hooks 数量变化**真的**会抛错（远程访问那节因为
+      // section↔div 类型不同，React 直接重建实例，反而掩盖了问题）。
+      setCapabilities(DESKTOP)
+      await act(async () => { r.render(createElement(BackupPanel)) })
+      expect(box.querySelector('[class*="panel"]'), '桌面态没渲染出备份面板').not.toBeNull()
+      setCapabilities(BROWSER)
+      let backupFlipError: unknown = null
+      try {
+        await act(async () => { r.render(createElement(BackupPanel)) })
+      } catch (e) {
+        backupFlipError = e
+      }
+      expect(backupFlipError, `备份面板翻转后渲染抛错：${String(backupFlipError)}`).toBeNull()
+      expect(box.querySelector('[data-desktop-only="backup"]'), '浏览器态没换成备份降级卡').not.toBeNull()
+
+      await act(async () => { r.unmount() })
+      box.remove()
+    } finally {
+      if (prev === undefined) delete w.electronAPI
+      else w.electronAPI = prev
+    }
   })
 })

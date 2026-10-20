@@ -66,6 +66,12 @@ function migrate(db: DatabaseSync): void {
     db.exec('ALTER TABLE notes ADD COLUMN kb_id INTEGER NOT NULL DEFAULT 1')
   }
   db.exec('UPDATE notes SET kb_id = ' + DEFAULT_KB_ID + ' WHERE kb_id IS NULL')
+  // 2026-10-17：`source_file_id` —— 从知识库文件沉淀的笔记记下来源文件 id。
+  // 用途：① 笔记详情能「回到源文件」；② 同一文件重复沉淀时能识别（避免刷出一堆同名笔记）。
+  // 老库没有这一列，按 `ADD COLUMN` 补（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
+  if (!columnNames(db, 'notes').includes('source_file_id')) {
+    db.exec('ALTER TABLE notes ADD COLUMN source_file_id INTEGER NOT NULL DEFAULT 0')
+  }
   // 列表按 (库, 更新时间) 取；建图也是同一个键。
   db.exec('CREATE INDEX IF NOT EXISTS idx_notes_kb ON notes(kb_id, updated_at DESC)')
   if (db.prepare('SELECT id FROM kbs WHERE id = ?').get(DEFAULT_KB_ID) === undefined) {
@@ -246,13 +252,16 @@ function parseTags(raw: string): string[] {
 
 function rowToNote(r: Record<string, unknown>): KnowledgeNote {
   const body = cellStr(r['body'] ?? '')
+  const rawKind = cellStr(r['source_kind'] ?? 'manual')
   const note: KnowledgeNote = {
     id: Number(r['id'] ?? 0),
     kbId: Number(r['kb_id'] ?? DEFAULT_KB_ID),
     title: cellStr(r['title'] ?? ''),
     body,
     tags: parseTags(cellStr(r['tags'] ?? '')),
-    sourceKind: cellStr(r['source_kind'] ?? 'manual') === 'ask' ? 'ask' : 'manual',
+    // 2026-10-17：新增 `file`（从知识库文件沉淀）。未知值一律退回 `manual`，
+    // 免得老库里的脏值让类型断言炸掉。
+    sourceKind: rawKind === 'ask' ? 'ask' : rawKind === 'file' ? 'file' : 'manual',
     links: uniqueTargets(body),
     createdAt: Number(r['created_at'] ?? 0),
     updatedAt: Number(r['updated_at'] ?? 0),
@@ -261,6 +270,8 @@ function rowToNote(r: Record<string, unknown>): KnowledgeNote {
   if (username) note.sourceUsername = username
   const question = cellStr(r['source_question'] ?? '')
   if (question) note.sourceQuestion = question
+  const fileId = Number(r['source_file_id'] ?? 0)
+  if (fileId > 0) note.sourceFileId = fileId
   return note
 }
 
@@ -554,9 +565,11 @@ export function saveNote(
     title: string
     body?: string
     tags?: string[] | string
-    sourceKind?: 'manual' | 'ask'
+    sourceKind?: 'manual' | 'ask' | 'file'
     sourceUsername?: string
     sourceQuestion?: string
+    /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+    sourceFileId?: number
   },
 ): NoteMutationResult {
   const id = normalizeKbId(kbId)
@@ -565,7 +578,8 @@ export function saveNote(
   if (!title) return { ok: false, error: '标题不能为空' }
   const body = String(input.body ?? '')
   const tags = Array.isArray(input.tags) ? parseTags(input.tags.join(',')) : parseTags(String(input.tags ?? ''))
-  const sourceKind = input.sourceKind === 'ask' ? 'ask' : 'manual'
+  const sourceKind = input.sourceKind === 'ask' ? 'ask' : input.sourceKind === 'file' ? 'file' : 'manual'
+  const sourceFileId = Math.max(0, Math.trunc(Number(input.sourceFileId ?? 0)))
   const noteId = input.id === undefined ? undefined : Math.trunc(Number(input.id))
   try {
     return withNotesStore(decryptedDir, (db) => {
@@ -587,7 +601,7 @@ export function saveNote(
         const raw = db.prepare('SELECT * FROM notes WHERE id = ? AND kb_id = ?').get(noteId, id) as Record<string, unknown> | undefined
         if (raw === undefined) return { ok: false, error: '笔记不存在' }
         const prev = rowToNote(raw)
-        const r = db.prepare('UPDATE notes SET title = ?, body = ?, tags = ?, source_kind = ?, source_username = ?, source_question = ?, updated_at = ? WHERE id = ? AND kb_id = ?')
+        const r = db.prepare('UPDATE notes SET title = ?, body = ?, tags = ?, source_kind = ?, source_username = ?, source_question = ?, source_file_id = ?, updated_at = ? WHERE id = ? AND kb_id = ?')
           .run(
             title,
             input.body === undefined ? prev.body : body,
@@ -595,6 +609,7 @@ export function saveNote(
             input.sourceKind === undefined ? prev.sourceKind : sourceKind,
             input.sourceUsername === undefined ? (prev.sourceUsername ?? '') : String(input.sourceUsername),
             input.sourceQuestion === undefined ? (prev.sourceQuestion ?? '') : String(input.sourceQuestion),
+            input.sourceFileId === undefined ? (prev.sourceFileId ?? 0) : sourceFileId,
             ts,
             noteId,
             id,
@@ -602,8 +617,8 @@ export function saveNote(
         if (r.changes === 0) return { ok: false, error: '笔记不存在' }
         return { ok: true, id: noteId }
       }
-      const r = db.prepare('INSERT INTO notes(kb_id, title, body, tags, source_kind, source_username, source_question, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, title, body, tags.join(','), sourceKind, input.sourceUsername ?? '', input.sourceQuestion ?? '', ts, ts)
+      const r = db.prepare('INSERT INTO notes(kb_id, title, body, tags, source_kind, source_username, source_question, source_file_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, title, body, tags.join(','), sourceKind, input.sourceUsername ?? '', input.sourceQuestion ?? '', sourceFileId, ts, ts)
       return { ok: true, id: Number(r.lastInsertRowid) }
     })
   } catch (e) {

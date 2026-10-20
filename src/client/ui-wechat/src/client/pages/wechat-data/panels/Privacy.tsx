@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiExportCsv, apiGetPrivacyScan, readRenderCache, writeRenderCache } from '../api.ts'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { PrivacySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, clickableKey, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { Card, clickableKey, EmptyState, PanelHeader, ProgressBar, Toolbar } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { useElapsedSeconds } from './hooks.tsx'
 import { CACHE_BASE, CACHE_INSIGHTS } from './overview-cache-keys.ts'
@@ -191,18 +191,33 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
 
   return (
     <div className={embedded ? css.panelEmbedded : css.panel}>
-      <PanelHeader
-        title="隐私体检"
-        desc={data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : '扫描手机号 / 身份证 / 银行卡 / 邮箱 / 密码 / 地址等敏感信息'}
-        actions={(
-          <>
-            <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
-              {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
-            </button>
-            {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
-          </>
-        )}
-      />
+      {/* 微信化：嵌进设置弹窗时不再画页头，只留一行节内工具行（范围 + 扫描/导出）。 */}
+      {embedded ? (
+        <Toolbar
+          left={<span className={kitCss.textCaption}>{data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : '本地扫描 6 类敏感信息'}</span>}
+          right={(
+            <>
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
+                {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
+              </button>
+              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
+            </>
+          )}
+        />
+      ) : (
+        <PanelHeader
+          title="隐私体检"
+          desc={data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : '扫描手机号 / 身份证 / 银行卡 / 邮箱 / 密码 / 地址等敏感信息'}
+          actions={(
+            <>
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
+                {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
+              </button>
+              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
+            </>
+          )}
+        />
+      )}
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
       {/* 导出回执（W3-11.1）：与 `error`（扫描没跑成）分开——一个是「这次导出成没成」，
           一个是「这个面板的整体扫描读不到」。混在一行会把导出失败说成扫描失败。 */}

@@ -19,17 +19,24 @@
  *
  * @vitest-environment node
  */
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStripped } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
-const panel = readStripped(join(HERE, 'overview-panel.tsx'))
+// M22 把三处长条拆进 `overview-sections.tsx`（StorageCompositionSection / ContentAssetsSection /
+// RelationSection）。断言本身不变，读取面改成**全部 overview* 源码的联合** —— 文件再搬家也不会误报。
+const panel = readdirSync(HERE)
+  .filter((f) => /^overview(-[a-z]+)?\.(ts|tsx)$/.test(f))
+  .sort()
+  .map((f) => readStripped(join(HERE, f)))
+  .join('\n')
 
 describe('总览长条的分母是真最大值，不是「第 0 项」', () => {
   it('存储构成：分母取全部类别体积的最大值（渲染前重排的副本不算数，分母读的是原数组）', () => {
     expect(panel, '存储构成的分母又变回第 0 项 ⇒ 后端顺序一旦不是体积降序，长条就溢出被裁、比例全丢')
-      .toContain('Math.max(1, ...data.storage.categories.map(x => x.size))')
+      .toContain('Math.max(1, ...categories.map(x => x.size))')
     expect(panel, '不允许再按「第 0 项」当最大值').not.toContain('categories[0]?.size')
   })
 

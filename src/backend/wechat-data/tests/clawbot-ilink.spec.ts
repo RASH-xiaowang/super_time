@@ -210,23 +210,35 @@ describe('mapWeixinMessage', () => {
   it('附件引用：图片明文 URL 与 CDN 加密参数两种形态都抽得到（含文件名与体积提示）', () => {
     // 图片：明文 URL（key 为空 ⇒ 取数直接 GET）。
     const byUrl = mapWeixinMessage({ message_id: 7, message_type: 1, item_list: [{ type: 2, image_item: { url: 'https://example.invalid/a.png', mid_size: 123 } }] }, now)
-    expect(byUrl?.media).toEqual({ kind: 'image', ref: 'https://example.invalid/a.png', key: '', name: null, size: 123 })
+    expect(byUrl?.media).toEqual({ kind: 'image', ref: 'https://example.invalid/a.png', key: '', name: null, size: 123, duration: null })
 
     // 图片：加密参数（取数走 CDN + 解密）。
     const byParam = mapWeixinMessage({ message_id: 8, message_type: 1, item_list: [{ type: 2, image_item: { media: { encrypt_query_param: 'p1', aes_key: 'k1' }, mid_size: 456 } }] }, now)
-    expect(byParam?.media).toEqual({ kind: 'image', ref: 'p1', key: 'k1', name: null, size: 456 })
+    expect(byParam?.media).toEqual({ kind: 'image', ref: 'p1', key: 'k1', name: null, size: 456, duration: null })
 
     // 文件：名字与 len（字符串）都带上；len 不是数字时体积归 null。
     const file = mapWeixinMessage({ message_id: 9, message_type: 1, item_list: [{ type: 4, file_item: { file_name: '报表.xlsx', len: '2048', media: { encrypt_query_param: 'p2', aes_key: 'k2' } } }] }, now)
-    expect(file?.media).toEqual({ kind: 'file', ref: 'p2', key: 'k2', name: '报表.xlsx', size: 2048 })
+    expect(file?.media).toEqual({ kind: 'file', ref: 'p2', key: 'k2', name: '报表.xlsx', size: 2048, duration: null })
     const fileOdd = mapWeixinMessage({ message_id: 10, message_type: 1, item_list: [{ type: 4, file_item: { file_name: 'x', len: 'abc', media: { encrypt_query_param: 'p3' } } }] }, now)
     expect(fileOdd?.media?.size).toBeNull()
 
     // 语音 / 视频：各自取对的字段（voice_size / video_size）。
     const voice = mapWeixinMessage({ message_id: 11, message_type: 1, item_list: [{ type: 3, voice_item: { media: { encrypt_query_param: 'p4', aes_key: 'k4' }, voice_size: 900 } }] }, now)
-    expect(voice?.media).toEqual({ kind: 'voice', ref: 'p4', key: 'k4', name: null, size: 900 })
+    expect(voice?.media).toEqual({ kind: 'voice', ref: 'p4', key: 'k4', name: null, size: 900, duration: null })
     const video = mapWeixinMessage({ message_id: 12, message_type: 1, item_list: [{ type: 5, video_item: { media: { encrypt_query_param: 'p5', aes_key: 'k5' }, video_size: 4096 } }] }, now)
-    expect(video?.media).toEqual({ kind: 'video', ref: 'p5', key: 'k5', name: null, size: 4096 })
+    expect(video?.media).toEqual({ kind: 'video', ref: 'p5', key: 'k5', name: null, size: 4096, duration: null })
+  })
+
+  it('语音时长：`voice_item.playtime`（毫秒）抽进 duration；其余类型恒为 null', () => {
+    // 2026-10-17 补全：协议给了时长，之前没落库。
+    const voice = mapWeixinMessage({ message_id: 20, message_type: 1, item_list: [{ type: 3, voice_item: { media: { encrypt_query_param: 'p9' }, playtime: 3200 } }] }, now)
+    expect(voice?.media?.duration).toBe(3200)
+    // 没给 playtime ⇒ null（不编造 0）。
+    const noDur = mapWeixinMessage({ message_id: 21, message_type: 1, item_list: [{ type: 3, voice_item: { media: { encrypt_query_param: 'p10' } } }] }, now)
+    expect(noDur?.media?.duration).toBeNull()
+    // 图片/视频/文件即使带了 playtime 也不该被当成时长（只有语音有这一项）。
+    const img = mapWeixinMessage({ message_id: 22, message_type: 1, item_list: [{ type: 2, image_item: { media: { encrypt_query_param: 'p11' }, mid_size: 5 } }] }, now)
+    expect(img?.media?.duration).toBeNull()
   })
 
   it('跳过空文本条目继续找下一个；一无所获 ⇒ null（不落空行）', () => {

@@ -1,11 +1,13 @@
-/* 总览 · 地区分布榜：省份与城市独立卡片中的行内条形对比。 */
+/* 总览 · 地区分布榜：省份与城市独立卡片中的行内条形对比。
+ * 微信化（2026-10-19）：去青紫渐变与发光，条形改中性灰（数据用长度表达，不用颜色）。
+ */
 .regionRank {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  height: clamp(220px, 28vw, 310px);
-  max-height: 310px;
+  height: clamp(200px, 26vw, 280px);
+  max-height: 280px;
 }
 .regionRankHd {
   display: flex;
@@ -22,20 +24,20 @@
   /* 行数固定（省份 10 / 城市 12），用 space-between 把卡片高度均分给各行，
      条数少时也不会在底部堆出一片空白 */
   justify-content: space-between;
-  gap: 3px;
+  gap: 4px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
-/* R4：rows 为空时的占位（此前是空 div，整块塌成 0 高度，像渲染失败）。 */
+/* 行数为空时的占位（避免整块塌成 0 高度，看起来像渲染失败）。 */
 .regionEmpty {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 1 1 auto;
   color: var(--nm-text-3);
-  font-size: var(--nm-empty-fs);
-  padding: var(--nm-s-3) 0;
+  font-size: 11px;
+  padding: 8px 0;
 }
 .regionRow {
   display: grid;
@@ -46,21 +48,19 @@
   font-size: 11px;
   line-height: 1.15;
 }
-.regionRankNo { color: var(--nm-cyan); font-weight: 800; font-family: var(--nm-font-mono, monospace); font-size: var(--nm-fs-xs, 11px); }
+.regionRankNo { color: var(--nm-text-3); font-weight: 600; font-family: var(--nm-font-mono, monospace); font-size: 11px; }
 .regionName { color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .regionCount { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 .regionBar {
   grid-column: 2 / 4;
   height: 3px;
   border-radius: var(--nm-r-xs);
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  background: var(--nm-bg-active);
   overflow: hidden;
 }
 .regionBarFill {
   display: block;
   height: 100%;
   border-radius: var(--nm-r-xs);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
+  background: var(--nm-text-3);
 }
-.regionEmpty { color: var(--nm-text-2); font-size: 11.5px; padding: 6px 2px; }

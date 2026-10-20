@@ -8,8 +8,8 @@
  * 一个 checkbox 都没有）。顺序改了，只有真点一次才知道它现在到底排在哪儿。
  *
  * 五件事都在这里量（`check` 逐条打勾）：
- *   ① 走「下一页」把流程走完：同意屏出现在授权屏**之前**；
- *   ② 同意屏上有复选框，未勾选时「同意并继续」点不动，且这一站**没有**「下一页」（只有一个出口）；
+ *   ① 走「下一步」把流程走完：同意屏出现在授权屏**之前**；
+ *   ② 同意屏上有复选框，未勾选时「同意并继续」点不动，且这一站**没有**「下一步」（只有一个出口）；
  *   ③ 点「授权验证」标签跳不过去（顺序是闸门，不是建议）；
  *   ④「不同意并退出」真的退出（窗口关闭 + 主进程结束），而且没有偷偷记下同意；
  *   ⑤ 同意之后落到授权站；换一份进程重启不再问第二次（这条只有真重启能证，SSR 证不了）。
@@ -94,14 +94,20 @@ const consentBox = (win) => win.getByRole('checkbox')
 const shot = (win, name) => win.screenshot({ path: join(SHOT_DIR, name + '.png') }).catch(() => {})
 const readConsent = (win) => win.evaluate((k) => localStorage.getItem(k), CONSENT_KEY)
 
-/** 按「下一页」往前走，最多 N 步；返回走到哪一屏（每步都记下来，供顺序断言用）。 */
+/** 底栏进度文案：`第 X 步 / 共 N 步`（2026-10-19 微信化改版替换了旧的 `STAGE 05 / CONSENT REQUIRED` 文案）。 */
+function parseProgress(text) {
+  const m = /第\s*(\d+)\s*步\s*\/\s*共\s*(\d+)\s*步/.exec(String(text))
+  return m ? { step: Number(m[1]), total: Number(m[2]) } : null
+}
+
+/** 按「下一步」往前走，最多 N 步；返回走到哪一屏（每步都记下来，供顺序断言用）。 */
 async function walkNext(win, maxSteps) {
   const path = []
   for (let i = 0; i < maxSteps; i += 1) {
     const stage = await stageOf(win)
     path.push(stage)
     if (stage) break
-    const next = win.getByRole('button', { name: '下一页' })
+    const next = win.getByRole('button', { name: '下一步' })
     if ((await next.count()) === 0) break
     await next.first().click()
     await sleep(260)
@@ -129,7 +135,7 @@ try {
   const path = await walkNext(win, 6)
   const atConsent = await stageOf(win)
   check(atConsent === 'consent',
-    '按「下一页」走到的是同意屏，不是授权屏', `path=${JSON.stringify(path)} stage=${atConsent}`)
+    '按「下一步」走到的是同意屏，不是授权屏', `path=${JSON.stringify(path)} stage=${atConsent}`)
   check(!path.includes('license'), '走到同意屏之前没有任何一步是授权屏', JSON.stringify(path))
 
   // ── ② 同意屏自己：显式同意才有出口 ──────────────────────────────────────
@@ -139,11 +145,13 @@ try {
   check(await agree.first().isDisabled(), '没勾选时「同意并继续」是点不动的')
   check((await win.getByRole('button', { name: '不同意并退出' }).count()) === 1,
     '给了「不同意并退出」，不是只有「同意」一条路')
-  check((await win.getByRole('button', { name: '下一页' }).count()) === 0,
-    '这一站没有「下一页」：往前走的唯一出口就是同意')
+  check((await win.getByRole('button', { name: '下一步' }).count()) === 0,
+    '这一站没有「下一步」：往前走的唯一出口就是同意')
   check((await win.locator(`text=${LICENSE_TITLE}`).count()) === 0, '同意屏上没有混进授权内容')
   const stText = String(await win.locator('[class*="progressText"]').first().innerText().catch(() => ''))
-  check(/CONSENT REQUIRED/.test(stText), '底栏自报这一站缺的是同意', stText)
+  const stProgress = parseProgress(stText)
+  check(stProgress !== null && stProgress.step < stProgress.total,
+    '底栏进度是「第 X 步 / 共 N 步」，且同意站后面还有授权站', stText)
   await shot(win, 'a-consent')
 
   // ── ③ 点标签也跳不过去 ─────────────────────────────────────────────────
@@ -207,7 +215,9 @@ try {
   check(rec && rec.version === PRIVACY_VERSION, '同意记录写进 localStorage，版本对得上声明', JSON.stringify(rec))
   check(typeof rec?.acceptedAt === 'string' && rec.acceptedAt.length > 0, '记录带时间（可审计）', String(rec?.acceptedAt))
   const stB = String(await win.locator('[class*="progressText"]').first().innerText().catch(() => ''))
-  check(/LICENSE/.test(stB) && /STAGE 05/.test(stB), '底栏改口说授权缺什么，页码也从 05 起', stB)
+  const stBProgress = parseProgress(stB)
+  check(stBProgress !== null && stBProgress.step === stBProgress.total,
+    '底栏进度显示授权已是最后一站（第 N 步 / 共 N 步）', stB)
   await shot(win, 'b-license')
   await closeApp(launched)
   launched = null

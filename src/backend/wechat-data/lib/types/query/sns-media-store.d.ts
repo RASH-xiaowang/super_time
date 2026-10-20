@@ -58,5 +58,54 @@ export declare function originalAsDataUrl(hit: {
     bytes: Buffer;
     ext: string;
 }): string;
+/**
+ * 朋友圈原图**长期归档**目录（2026-10-19 用户：「CDN 原图落盘后请保留在本地」）。
+ *
+ * 与 `decoded_images/sns-media` 的区别：后者是「解码缓存」，`wechat-config.ts` 在密钥
+ * 变更时会整体清空；这里放在**数据根**下（`<数据根>/moments-media/`），不随解码缓存
+ * 失效 —— 只要原图被我们拿到过一次，换密钥/重新解密后仍可直接用，不必再向 CDN 要。
+ *
+ * 目录布局仍是 `md5 前两位分 shard`（与主缓存同构），按 md5 内容寻址：
+ * 同名必同内容，重复写入无害，也不存在「任务/朋友圈之间串图」。
+ */
+export declare const MOMENTS_MEDIA_SUBDIR = "moments-media";
+/** 长期归档容量（字节）。默认 8 GB；`SUPERTIME_MOMENTS_MEDIA_BYTES` 可覆盖。 */
+export declare const MOMENTS_MEDIA_BUDGET_BYTES: number;
+/** 长期归档条数上限。默认 50000；`SUPERTIME_MOMENTS_MEDIA_FILES` 可覆盖。 */
+export declare const MOMENTS_MEDIA_BUDGET_FILES: number;
+/** 长期归档根（数据根下，与 `decoded_images` 同级）。 */
+export declare function momentsMediaArchiveRoot(decodedDir: string): string;
+/**
+ * 查**长期归档**里的原图（进入朋友圈的第一判断）。
+ * @param decodedDir - `decoded_images` 目录（用它定位数据根）。
+ * @param md5 - 32 位媒体 md5。
+ * @returns 命中的字节与格式；没有则 `null`。
+ */
+export declare function lookupArchivedOriginal(decodedDir: string, md5: string): {
+    bytes: Buffer;
+    ext: string;
+} | null;
+/**
+ * 把原图写入**长期归档**。
+ *
+ * 与主缓存同一套纪律：先 `.part` 再 rename（半截文件会被当原图永久缓存）；写失败只是
+ * 「这次没存上」，不影响本次展示。容量超了按 mtime 淘汰最旧的（默认 8GB/5 万张，
+ * 远高于普通用户朋友圈总量；淘汰是最后手段，不是常态）。
+ * @param decodedDir - `decoded_images` 目录。
+ * @param md5 - 32 位媒体 md5。
+ * @param bytes - 原图字节。
+ * @returns 落盘扩展名；不是图片/写失败为 `null`。
+ */
+export declare function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null;
+/**
+ * 按容量回收长期归档（按 mtime 从旧到新删，直到低于预算）。
+ * @param decodedDir - `decoded_images` 目录。
+ * @param budgetBytes - 字节预算。
+ * @param budgetFiles - 条数预算。
+ * @returns 删除的条数。
+ */
+export declare function sweepMomentsMediaArchive(decodedDir: string, budgetBytes?: number, budgetFiles?: number): number;
+/** 测试用：清掉长期归档的淘汰节流状态。 */
+export declare function forgetMomentsArchiveSweepStateForTest(): void;
 /** 测试用：清掉淘汰节流的状态（否则两条用例之间会互相吞掉）。 */
 export declare function forgetSweepStateForTest(): void;

@@ -11,6 +11,9 @@
  * 所以手机上能看到什么，完全由两件事决定：**令牌**（是不是主人给的）与
  * **方法白名单**（`http-remote-policy.js` 的 `REMOTE_SAFE_METHODS`）。
  *
+ * 例外：标题栏「打开网页」交接码换来的会话带 `fullAccess`，与桌面端同权限
+ * （全部方法 + `/api/native/*`）；普通手机配对码仍严格走白名单。
+ *
  * ## 默认关闭，且需要两个条件同时成立
  *
  * 启动监听要求 `api_enabled === true` **并且** `api_token` 非空。
@@ -46,7 +49,9 @@ const {
   safeEquals,
 } = require('./http-auth.js');
 const { createCallQueue, HEAVY_PRIORITY } = require('./http-queue.js');
+const { downgradeHeavyByArgs, shouldBypassCallQueue } = require('./call-priority.js');
 const { NATIVE_CAPABILITIES, REMOTE_DENIED_CODE, isRemoteHeavy, isRemoteSafe } = require('./http-remote-policy.js');
+const { MIME_BY_EXT, resolveDecodedFile } = require('./media-protocol.js');
 const { resolveStaticFile, sendFile } = require('./http-static.js');
 
 /** 默认端口（配置键 `api_port` 的缺省值，与 `config/wechat-config.ts` 同口径）。 */
@@ -377,11 +382,14 @@ function createAuthHandler(deps, ctx) {
     }
     // 只清当前 IP 的失败窗口。任意一次登录成功都不该抹掉其他来源 IP 的限速记录。
     ctx.limiter.succeed(ip);
-    const session = ctx.sessions.create();
+    // 交接码（「打开网页」）换来的会话是**桌面同权限**；普通手机配对码不是。
+    // 这个标记只存在于内存里的会话表：重启、轮换或点卡片返回都会随 stop() 一起清空。
+    const fullAccess = pairing.fullAccess === true;
+    const session = ctx.sessions.create({ fullAccess });
     res.setHeader('Set-Cookie', session.cookie);
     sendJson(res, 200, {
       ok: true,
-      value: { version: deps.appVersion, native: NATIVE_CAPABILITIES, tokenMasked: maskToken(cfg.token) },
+      value: { version: deps.appVersion, native: NATIVE_CAPABILITIES, tokenMasked: maskToken(cfg.token), fullAccess },
     });
   }
   return { handleAuth };
@@ -406,6 +414,82 @@ function createCapabilitiesHandler(deps, ctx) {
   return { handleCapabilities };
 }
 
+/**
+ * 桌面交接会话的原生能力代理（`POST /api/native/<action>`）。
+ *
+ * 只有 **fullAccess 会话**能进：目录/文件对话框、截图、许可证、诊断、更新、远程访问设置
+ * 都是「这台电脑上的动作」。普通手机配对码仍然拿不到这些（403），所以交接结束后
+ * 浏览器里残留的 Cookie 再也调不动它们。
+ * @param {object} deps - `nativeCall` 由 main.js 注入。
+ * @param {object} ctx - 服务上下文（会话表）。
+ */
+function createNativeHandler(deps, ctx) {
+  async function handleNative(req, res, action) {
+    const cookie = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    if (!ctx.sessions.isFull(cookie)) {
+      sendJson(res, 403, { ok: false, error: { message: '该操作只对桌面交接会话开放', code: 'FULL_ACCESS_REQUIRED' } });
+      return;
+    }
+    if (typeof deps.nativeCall !== 'function') {
+      sendJson(res, 501, { ok: false, error: { message: '当前版本没有原生能力代理', code: 'NATIVE_UNAVAILABLE' } });
+      return;
+    }
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
+      return;
+    }
+    try {
+      const value = await deps.nativeCall(action, body ?? {});
+      sendJson(res, 200, { ok: true, value });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: { message: e?.message ?? String(e), code: 'NATIVE_CALL_FAILED' } });
+    }
+  }
+  return { handleNative };
+}
+
+/**
+ * 聊天图片的 HTTP 流式出口（`GET /api/media/decoded/<relative-path>`）。
+ *
+ * 桌面端用 `wechat-media://` 自定义协议；浏览器没有这个协议，`<img>` 会直接裂图。
+ * 交接态（以及任何已授权会话）改为同源 `/api/media/...`：服务端复用
+ * `media-protocol.js` 的同一套「decoded 根内 + 只读图片扩展名 + 拒绝 ..」校验后流式返回。
+ * 不返回目录列表、不新增出网点；路径越界/不存在一律 404。
+ * @param {object} deps - `getDecodedRoot` 由 main.js 注入（后端解析出的 decoded_images）。
+ * @returns {{handleMedia: Function}} 路由处理器。
+ */
+function createMediaHandler(deps) {
+  function handleMedia(req, res, rel) {
+    const root = typeof deps.getDecodedRoot === 'function' ? String(deps.getDecodedRoot() ?? '') : '';
+    const abs = resolveDecodedFile(root, rel);
+    if (abs === null) {
+      sendJson(res, 404, { ok: false, error: { message: '图片不存在', code: 'MEDIA_NOT_FOUND' } });
+      return;
+    }
+    const mime = MIME_BY_EXT[path.extname(abs).toLowerCase()] || 'application/octet-stream';
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      sendJson(res, 404, { ok: false, error: { message: '图片不存在', code: 'MEDIA_NOT_FOUND' } });
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': stat.size,
+      'Cache-Control': 'private, max-age=60',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    const stream = fs.createReadStream(abs);
+    stream.on('error', () => { try { res.destroy(); } catch { /* 忽略 */ } });
+    stream.pipe(res);
+  }
+  return { handleMedia };
+}
+
 /** 白名单 → 排队 → 过闸 → 原样回信封的 `/api/wechat/call` 处理器。 */
 function createCallHandler(deps, ctx) {
   async function handleCall(req, res) {
@@ -418,8 +502,12 @@ function createCallHandler(deps, ctx) {
     }
     const method = typeof body.method === 'string' ? body.method : '';
     const args = Array.isArray(body.args) ? body.args : [];
+    // 「打开网页」交接会话与桌面端同权限：允许全部 Remote 方法（不再过手机白名单）。
+    // 普通手机会话仍走白名单 —— 这条分支只看服务端内存里的会话标记，浏览器伪造 URL 无效。
+    const sessionCookie = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const fullAccess = ctx.sessions.isFull(sessionCookie);
     // 白名单在过闸之前：不在名单里的方法连许可证校验都不该走到。
-    if (!isRemoteSafe(method)) {
+    if (!fullAccess && !isRemoteSafe(method)) {
       sendJson(res, 200, {
         ok: false,
         error: {
@@ -431,12 +519,22 @@ function createCallHandler(deps, ctx) {
       return;
     }
     try {
-      const meta = { channel: 'remote', method };
-      if (isRemoteHeavy(method)) meta.priority = HEAVY_PRIORITY;
-      const result = await ctx.queue.run(
-        () => deps.gatedCall(method, args),
-        meta,
-      );
+      // `args` 一并传给队列：朋友圈取图有网时是纯网络 IO，不该占重活名额
+      // （判据见 `call-priority.js` 的 `downgradeHeavyByArgs`）。
+      //
+      // ⚠️ 这里**不能**无条件写 `meta.priority = HEAVY_PRIORITY` —— 显式 priority 会
+      // 短路掉队列里的按入参降级（`priorityOf` 先看显式值）。所以只在「确实是重活、
+      // 且不满足降级条件」时才钉死它。
+      const meta = { channel: 'remote', method, args };
+      if (isRemoteHeavy(method) && !downgradeHeavyByArgs(method, args)) meta.priority = HEAVY_PRIORITY;
+      // 静态本地读（世界地图底图 / 地区快照）不排队，与桌面 IPC 用同一份清单；
+      // 许可/后端就绪闸仍由 deps.gatedCall 走完整流程（见 call-priority.js 的
+      // QUEUE_BYPASS_METHODS）。先定义排队执行体，保证「queue.run 包住真实调用」的
+      // 结构仍是可静态核对的（http-server.wiring.spec 会查顺序）。
+      const viaQueue = () => ctx.queue.run(() => deps.gatedCall(method, args), meta);
+      const result = shouldBypassCallQueue(method)
+        ? await deps.gatedCall(method, args)
+        : await viaQueue();
       sendJson(res, 200, result);
     } catch (e) {
       sendJson(res, 200, {
@@ -510,6 +608,8 @@ function createRequestRouter(deps, ctx, handlers) {
         return;
       }
       if (urlPath === '/api/capabilities' && req.method === 'GET') { handlers.handleCapabilities(req, res); return; }
+      if (urlPath.startsWith('/api/media/decoded/') && req.method === 'GET') { handlers.handleMedia(req, res, urlPath.slice('/api/media/decoded/'.length)); return; }
+      if (urlPath.startsWith('/api/native/') && req.method === 'POST') { await handlers.handleNative(req, res, urlPath.slice('/api/native/'.length)); return; }
       if (urlPath === '/api/wechat/call' && req.method === 'POST') { await handlers.handleCall(req, res); return; }
       if (urlPath === '/api/wechat/events' && req.method === 'GET') { handlers.handleEvents(req, res); return; }
       if (urlPath === '/api/status' && req.method === 'GET') { sendJson(res, 200, { ok: true, value: snapshotRemoteState(deps, ctx) }); return; }
@@ -733,6 +833,8 @@ function createRemoteAccessServer(deps) {
   const routes = createRequestRouter(deps, ctx, {
     handleAuth: createAuthHandler(deps, ctx).handleAuth,
     handleCapabilities: createCapabilitiesHandler(deps, ctx).handleCapabilities,
+    handleMedia: createMediaHandler(deps).handleMedia,
+    handleNative: createNativeHandler(deps, ctx).handleNative,
     handleCall: createCallHandler(deps, ctx).handleCall,
     handleEvents: createEventsHandler(ctx).handleEvents,
   });
@@ -745,7 +847,7 @@ function createRemoteAccessServer(deps) {
     syncWithConfig: lifecycle.syncWithConfig,
     refreshBinding: lifecycle.refreshBinding,
     isRunning: lifecycle.isRunning,
-    issuePairingCode: () => pairings.issue(),
+    issuePairingCode: (options) => pairings.issue(options),
   };
 }
 

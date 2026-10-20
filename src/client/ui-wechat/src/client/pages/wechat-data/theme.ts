@@ -1,10 +1,11 @@
 /**
  * Super Time 主题管理：深色 / 浅色。
  *
- * - 默认深色：NEON MATRIX 本身就是深色设计，不再跟随系统 prefers-color-scheme
- *   （系统处于浅色时会让「默认」变成浅色，与默认深色的预期相反）。
+ * - 默认浅色（2026-10-18 用户要求「启动后默认为浅色主题」）：首次启动 / 未手动切换过时用浅色，
+ *   不再跟随系统 prefers-color-scheme。
  * - 用户手动切换后写入 localStorage（super-time-wechat-theme），此后以它为准。
- * - 通过 <html class="theme-light"> 切换 light-theme.css 覆盖层。
+ * - 通过 <html class="theme-light"> 切换 light-theme.css 覆盖层；index.html 首帧也预先挂
+ *   `theme-light`，避免启动时先闪一下深色背景。
  *
  * ## 切换动效：全页颜色过渡（theme color transition）
  *
@@ -129,7 +130,7 @@ function notifyListeners(): void {
   for (const fn of _listeners) { try { fn() } catch { /* 单个订阅者报错不影响其它订阅者 */ } }
 }
 
-let _mode: ThemeMode = storedMode() ?? 'dark'
+let _mode: ThemeMode = storedMode() ?? 'light'
 apply(_mode)
 
 /** 当前主题模式。 */

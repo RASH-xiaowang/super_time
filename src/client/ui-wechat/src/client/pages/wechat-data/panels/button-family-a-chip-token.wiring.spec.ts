@@ -2,12 +2,12 @@
  * P2 族 A（胶囊 chip）令牌化守卫（2026-09-28）。
  *
  * ── 这份守卫钉什么 ────────────────────────────────────────────────
- * 族 A = 「可选中/可清除的筛选标签」，共 **15 个**真 chip。它们的共同几何特征：
+ * 族 A = 「可选中/可清除的筛选标签」，共 **14 个**真 chip。它们的共同几何特征：
  *   border-radius: var(--nm-r-pill)（**已 100% 统一**，R2 完成）
  *   同一容器内多个并排 / 高度由内容撑开 / 字号统一
  *
  * ── 为什么只钉 font-size，不钉 padding ───────────────────────────
- * 实测 15 个真 chip 的 padding 有 **9 种签名**（`4px 12px`×6 / `2px 8px`×2 /
+ * 实测 14 个真 chip 的 padding 有 **9 种签名**（`4px 12px`×6 / `2px 8px`×2 /
  * `0 12px` / `3px 8px` / `4px 6px` / `6px var(--nm-dense-g3)` / `4px 13px` /
  * `4px 14px` / `0 8px`）。它们**不是随手写的**——是按各自内容与容器调的：
  *   · `2px 8px` 用于标签小片（`tagChip`/`kbfiles.chip`）
@@ -38,7 +38,7 @@ const stripComments = (s: string): string =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
 /**
- * 族 A 真 chip 点名表（15 个）。
+ * 族 A 真 chip 点名表（14 个）。
  * 判据：**有选中态**（`[data-active]` / `[data-on]` / `[data-dim]` / `[data-set]` /
  * `[data-custom]`）—— 这是「可选中筛选标签」与「普通按钮」的硬分界。
  *
@@ -65,7 +65,6 @@ const CHIPS = [
   { file: 'list-panel.module.css', cls: 'catBtn' },
   { file: 'moments.module.css', cls: 'authorChip' },
   { file: 'moments.module.css', cls: 'segChip' },
-  { file: 'monitor.module.css', cls: 'chip' },
   { file: 'retrieval.module.css', cls: 'fbBtn' },
 ] as const
 
@@ -101,8 +100,8 @@ describe('P2 族 A 胶囊 chip：font-size 必须是令牌（零视觉变化的�
     return cache.get(file)!
   }
 
-  it('哨兵：15 个真 chip 都真实存在，且都真的是 pill 圆角', () => {
-    expect(CHIPS.length, '点名表被删空').toBe(15)
+  it('哨兵：14 个真 chip 都真实存在，且都真的是 pill 圆角', () => {
+    expect(CHIPS.length, '点名表被删空').toBe(14)
     const missing: string[] = []
     const notPill: string[] = []
     for (const { file, cls } of CHIPS) {

@@ -51,7 +51,7 @@ describe('N18：消息流虚拟化的接线', () => {
     expect(chatsSrc, '跳转能力没了').toContain('scrollToIndex')
     expect(chatsSrc, '末尾哨兵没了（回到底部会失效）').toContain('ref={msgEndRef}')
     expect(chatsSrc, '加载更多的锚定逻辑没了（会跳位）').toContain('prependAnchorRef')
-    expect(chatsSrc, '滚动容器没有 ref（虚拟化拿不到滚动元素）').toContain('ref={msgScrollRef}')
+    expect(chatsSrc, '滚动容器没有 ref（虚拟化拿不到滚动元素）').toMatch(/ref=\{msgScrollRef\}|scrollRef=\{msgScrollRef\}/)
   })
 
   it('行为侧的验收台在册，且量的是「硬上界」', () => {

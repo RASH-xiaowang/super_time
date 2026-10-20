@@ -125,7 +125,20 @@ export function defaultRetrievalConfig(): RetrievalConfig {
     },
     fusion: { k: 60, keep: 120 },
     rerank: { weights: { ...DEFAULT_RERANK_WEIGHTS }, minScore: 0 },
-    compress: { maxChars: 6000, maxChunks: 10, linesPerChunk: 6, dedupThreshold: 0.85 },
+    /**
+     * 压缩预算（2026-10-16 提速）。
+     *
+     * `maxChars` 6000 → 4500、`maxChunks` 10 → 8：实测**首字延迟 9.9s**，
+     * 而它几乎全部是「模型处理 prompt」的时间（与 `maxTokens` 无关）——
+     * prompt 里 10 段窗口 × 每段最多 14 条消息，很容易顶到 6000 字上限。
+     * 减到 4500/8 后 prompt 短约 1/4，首字延迟随之下降。
+     *
+     * 为什么敢减：压缩阶段本来就是**按相关度排序后取前 N**，第 9、10 段窗口
+     * 是相关度最低的那两段 —— 它们对回答的贡献远小于它们对延迟的贡献。
+     * 而 `linesPerChunk: 6` 不动：那是「一段对话要能看懂」的下限
+     * （「收到转账120元」需要前后文才知道是谁转的）。
+     */
+    compress: { maxChars: 4500, maxChunks: 8, linesPerChunk: 6, dedupThreshold: 0.85 },
     intent: { llmAssist: false },
     feedback: { enabled: true, learningRate: 0.08, maxRecords: 500 },
   }
@@ -222,7 +235,18 @@ export interface EffectiveParams {
   policy: RetrievalPolicy
   /** 权重 = 意图策略覆盖后的最终值。 */
   weights: RerankWeights
+  /**
+   * 每通道召回上限（**已补齐默认值**，消费方不必处理 undefined）。
+   *
+   * 策略表里写的是 `Partial`（`agg` 通道不走 topK，列了也没人读），
+   * 这里统一补 0 —— 0 表示「该通道不按 topK 取」，与「未配置」是同一件事。
+   */
   channelTopK: Record<ChannelName, number>
+}
+
+/** 通道 topK 的兜底值（策略表没写时用 0 = 不按 topK 取）。 */
+const CHANNEL_TOP_K_FALLBACK: Record<ChannelName, number> = {
+  sparse: 0, dense: 0, structured: 0, time: 0, kb: 0, agg: 0,
 }
 
 /** 合成一次查询的有效参数（意图策略覆盖配置默认）。 */
@@ -231,7 +255,7 @@ export function effectiveParams(config: RetrievalConfig, policy: RetrievalPolicy
     config,
     policy,
     weights: { ...config.rerank.weights, ...policy.weights },
-    channelTopK: policy.channelTopK,
+    channelTopK: { ...CHANNEL_TOP_K_FALLBACK, ...policy.channelTopK },
   }
 }
 

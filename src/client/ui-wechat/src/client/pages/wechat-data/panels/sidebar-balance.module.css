@@ -2,8 +2,8 @@
  *
  * 位置：`aside.sidebar` 的底部固定区里、「设置」按钮的正下方。
  * 收起态（`data-collapsed`）只留钱包图标 —— 与导航标签同款处理，不另发明一套。
- * 颜色一律走主题令牌：`ok` 用次级文本、`error` 用琥珀（弱提醒，不是报错红 —— 余额查不到
- * 不影响任何功能，别让它看着比「数据不可用」还严重）。
+ * 微信化（2026-10-19）：去青色描边/底色与发光；余额是灰阶里的一行附带信息，
+ * 只有 `error` 用琥珀做弱提醒（余额查不到不影响任何功能）。
  */
 .row {
   display: flex;
@@ -26,18 +26,16 @@
 
 .row:hover {
   color: var(--nm-text-1);
-  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
-  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+  background: var(--nm-bg-hover);
 }
 
 .row:focus-visible {
-  outline: 2px solid var(--nm-cyan);
+  outline: 2px solid var(--nm-brand);
   outline-offset: 2px;
 }
 
 .row[data-status='ok'] .label {
-  color: var(--nm-cyan);
-  font-weight: 700;
+  color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
 }
 
@@ -68,4 +66,31 @@
 
 .row[data-collapsed] .label {
   display: none;
+}
+
+/* ── 标题栏变体（2026-10-17 从侧栏迁来） ──
+   微信化后与「数据就绪」同款：无胶囊底、无描边，灰字 + 图标；宽度由内容决定。 */
+.row[data-variant='titlebar'] {
+  width: auto;
+  margin-top: 0;
+  gap: 6px;
+  padding: 2px 4px;
+  border-color: transparent;
+  background: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.row[data-variant='titlebar']:hover {
+  background: var(--nm-bg-hover);
+}
+
+.row[data-variant='titlebar'] .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.row[data-variant='titlebar'][data-status='ok'] .label {
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
 }

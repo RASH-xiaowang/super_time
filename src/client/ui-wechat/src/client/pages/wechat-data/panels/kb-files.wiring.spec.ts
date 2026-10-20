@@ -63,6 +63,11 @@ const BACKEND_SRC = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
  */
 const panel = ['KbFiles.tsx', 'kb-files-support.tsx', 'kb-files-panel.tsx', 'kb-files-detail.tsx']
   .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
+/**
+ * 摘要/存笔记的 hook 单独读一份：`useFileErrors` 的 Map 语义在 hook 里，
+ * 而「面板不许退回全局字符串」的断言在面板里 —— 两边都要看，所以分开读。
+ */
+const hookCode = stripComments(readFileSync(join(HERE, 'kb-save-note.ts'), 'utf8'))
 const panelCss = readFileSync(join(HERE, 'kbfiles.module.css'), 'utf8')
 const panelShell = readFileSync(join(SHELL_DIR, 'WechatDataPanel.tsx'), 'utf8')
 const kbShellSrc = readFileSync(join(HERE, 'KbShell.tsx'), 'utf8')
@@ -117,10 +122,12 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
     expect(item('kbfiles')?.hidden, 'kbfiles 必须标 hidden，否则侧栏会多出一个「文件」入口').toBe(true)
     const visible = ALL.filter(it => !it.hidden).map(it => it.tab)
     expect(visible, 'kbfiles 不该出现在侧栏可见项里').not.toContain('kbfiles')
-    // 侧栏入口数仍应是 17（口径 = 未标 hidden 且非 settings；2026-10-12 起含 ClawBot）。
+    // 侧栏入口数仍应是 15（口径 = 未标 hidden 且非 settings；2026-10-12 起含 ClawBot）。
+    // ⚠️ 2026-10-17：17 → 14（朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口）；
+    //    2026-10-19：新增「任务信息」可见入口（14 → 15）。
     // 精确钉住而不是 `<= 18`：范围断言正是这个数字上次能长期漂着的原因。
     const renderedInGroups = NAV_GROUPS.flatMap(g => g.items).filter(it => !it.hidden && it.tab !== 'settings')
-    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(17)
+    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(15)
   })
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
@@ -565,7 +572,9 @@ describe('布局：两栏用容器查询退化，不用窗口媒体查询', () =
 describe('2026-09-19 三栏重排：吸顶骨架与「定位原文件」', () => {
   it('页头与工具栏被吸住，滚动区是「回执 + 检索结果 + 主从两栏」那一层', () => {
     expect(panelCode).toMatch(/<div className=\{clsx\(kitCss\.panelShell, css\.shell\)\}>/)
-    expect(panelCode).toMatch(/<div className=\{css\.head\}>\s*<PanelHeader/)
+    // 2026-10-17：`.head` 与 `<PanelHeader` 之间现在夹着一段注释（压缩页头的说明），
+    // 判据放宽到「中间只允许注释/空白」—— 结构关系不变，仍是 head 里第一个子元素。
+    expect(panelCode).toMatch(/<div className=\{css\.head\}>[\s\S]{0,600}?<PanelHeader/)
     // 双类名提权：与笔记库同一个理由 —— 单类名会随 CSS 注入顺序翻转。
     expect(panelCss).toMatch(/\.shell\.shell\s*\{[^}]*overflow:\s*hidden/)
     expect(panelCss).toMatch(/\.head\s*\{[^}]*flex:\s*0 0 auto/)
@@ -597,8 +606,13 @@ describe('2026-09-19 正文默认展开', () => {
     expect(panelCode).toMatch(/useEffect\(\(\) => \{[\s\S]{0,200}?void loadChunks\(selectedId\)[\s\S]{0,120}?\[selectedId, loadChunks\]\)/)
     expect(panelCode).not.toMatch(/\[selected, loadChunks\]/)
     expect(panelCode).not.toMatch(/\[selectedId, selected, /)
-    // 取数回来必须核对还是不是当前这个文件：路上那次请求可能已经换了选中甚至换了库
-    expect(panelCode).toMatch(/prev && prev\.fileId === fileId/)
+    // 取数回来必须核对还是不是当前这个文件：路上那次请求可能已经换了选中甚至换了库。
+    // 2026-10-17：循环拉取的实现搬到了 `kb-save-note.ts` 的 `useLoadAllChunks`
+    // （单函数行数棘轮），判据跟着去那边看。
+    const hookSrc = stripComments(readFileSync(join(HERE, 'kb-save-note.ts'), 'utf8'))
+    expect(hookSrc).toMatch(/prev && prev\.fileId === fileId/)
+    // 每轮都要核对「用户是不是已经切走了」，切走了就立刻停（不再继续拉）。
+    expect(hookSrc).toMatch(/if \(readerRef\.current\?\.fileId !== fileId\) return/)
   })
 
   it('收起按钮不设 disabled：读取途中也要能关掉', () => {
@@ -621,13 +635,6 @@ describe('2026-09-19 布局：文件面板两栏铺满滚动区', () => {
     const block = panelCss.slice(panelCss.indexOf('@container kbfiles'))
     expect(block).toMatch(/\.body\s*\{[^}]*align-content:\s*start/)
   })
-
-  it('正文区不再套第二层滚动（外层已经是滚动容器，嵌套滚轮会抢）', () => {
-    const reader = /\.readerBody\s*\{([^}]*)\}/.exec(panelCss)
-    expect(reader, '找不到 .readerBody').toBeTruthy()
-    expect(stripComments(reader?.[1] ?? '')).not.toMatch(/max-height/)
-    expect(stripComments(reader?.[1] ?? '')).not.toMatch(/overflow-y:\s*auto/)
-  })
 })
 
 /**
@@ -636,14 +643,41 @@ describe('2026-09-19 布局：文件面板两栏铺满滚动区', () => {
  * 后端侧的出网闸门由 `src/backend/wechat-data/tests/kb-summary.spec.ts` 在真实调用上守；
  * 这里守的是**界面有没有把覆盖范围说出口**：一段只喂了前 8,000 字的局部概括，
  * 若界面上顶着「摘要」两个字，就会被当成整份文件的结论引用出去。
+ *
+ * ⚠️ 正文阅读区（两栏滚动 / 顺序 / 目录 / 联动）的判据已搬到
+ * `kb-reader.wiring.spec.ts` —— 本文件撞了 1000 行上限，断言一条没删。
  */
 describe('模型摘要：界面必须说清这段摘要覆盖了什么', () => {
   it('入口接的是 apiSummarizeKbFile，摘要块排在正文块之前（先看结论再看原文）', () => {
     expect(panelCode).toContain('apiSummarizeKbFile')
     const s = panelCode.indexOf('<div className={css.summary}>')
-    const r = panelCode.indexOf('<div className={css.reader}>')
+    // 2026-10-17：正文区已拆到 `kb-file-reader.tsx`（单函数 250 行棘轮），
+    // 详情面板里只剩 `<KbFileReader ... />` 这个调用点 —— 判据跟着改。
+    // ⚠️ 必须匹配**带换行的 JSX 用法**（`<KbFileReader\n`），不能只匹配 `<KbFileReader`：
+    // import 语句 `import { KbFileReader } from …` 里也有这个串，会先被 indexOf 命中。
+    const r = panelCode.search(/<KbFileReader\s*\n/)
     expect(s, '详情区没有摘要块').toBeGreaterThan(0)
     expect(r, '摘要块跑到了正文块后面').toBeGreaterThan(s)
+  })
+
+  /**
+   * 正文展开时摘要块**整块不渲染**（2026-10-17 用户要求）。
+   *
+   * 用户点「查看正文」就是要读原文，摘要占着上面一大块把正文推下去，
+   * 还得先滚过它才能看到内容。收起正文后摘要自然回来 ——
+   * 它没有丢，只是让位给用户此刻真正要看的东西。
+   *
+   * ⚠️ 判据必须是「摘要块被 `!readerOpen` 包住」，不能只判「有 readerOpen 变量」：
+   * 变量存在但没用在摘要块上，等于没改。
+   */
+  it('正文展开时不显示摘要块（收起后自然回来）', () => {
+    const detail = stripComments(readFileSync(join(HERE, 'kb-files-detail.tsx'), 'utf8'))
+    // readerOpen 必须真的被算出来（依赖 reader 与 selected 的 fileId 一致）
+    expect(detail).toMatch(/const readerOpen = reader !== null && selected !== null && reader\.fileId === selected\.id/)
+    // 摘要块必须被 `{!readerOpen && (` 包住
+    expect(detail, '摘要块没有被 !readerOpen 包住').toMatch(/\{!readerOpen && \(\s*\n\s*<div className=\{css\.summary\}>/)
+    // 不许退回无条件渲染（那正是要防的写法）
+    expect(detail, '摘要块不许无条件渲染').not.toMatch(/\n\s{10}<div className=\{css\.summary\}>/)
   })
 
   it('被截断时标「基于前 N 字（全文 M 字）」，覆盖全文时改标「覆盖全文」', () => {
@@ -674,6 +708,40 @@ describe('模型摘要：界面必须说清这段摘要覆盖了什么', () => {
 
   it('失败时说的是「内容没有被改动过」，不是含糊的一句生成失败', () => {
     expect(panelCode).toContain('这份文件的内容没有被改动过。')
+  })
+
+  /**
+   * 2026-10-17 用户实测：点了「生成摘要」、模型返回空，界面上**什么都不显示**。
+   *
+   * 两个原因叠在一起：
+   *   ① 摘要区只在 `summaryText !== '' || summaryError !== null` 时渲染 —— 空摘要 + 无错误 = 整块消失；
+   *   ② 错误是面板级一个字符串，而 `useEffect([selectedId, loadChunks])` 里会清它，
+   *      `runSummary` 成功后调 `reload` 重建 snapshot → 刚设好的错误被紧随其后的 effect 清掉。
+   *
+   * 这条守卫锁两件事：摘要区**无条件渲染**、错误**按文件 id 存**。
+   */
+  it('摘要区无条件渲染：没摘要也要有引导，不能整块消失', () => {
+    // 不许再拿「有摘要或有错误」当渲染闸门
+    expect(panelCode).not.toMatch(/\{\(summaryText !== '' \|\| summaryError !== null\) &&/)
+    // 摘要区必须直接挂在 JSX 里（不是条件渲染的产物）
+    expect(panelCode).toMatch(/<div className=\{css\.summary\}>/)
+    // 没摘要且没错误 → 引导文案；有错误 → 安抚文案。两条都要在。
+    expect(panelCode).toContain('还没有摘要。点右上角「生成摘要」')
+    expect(panelCode).toContain('这份文件的内容没有被改动过。')
+  })
+
+  it('摘要错误按文件 id 存：全局一个字符串会被后续 effect 清掉', () => {
+    // 面板里不许再有全局一个字符串
+    expect(panelCode).not.toMatch(/const \[summaryError, setSummaryError\] = useState<string \| null>/)
+    // 那个会清错误的 effect 里不许再出现 setSummaryError(null)
+    expect(panelCode).not.toMatch(/setSummaryError\(null\)/)
+    // 错误容器来自 useFileActionState（按 id 存的 Map），不是面板自己 useState 一个字符串
+    expect(panelCode).toContain('errors: summaryErrors, setError: setSummaryError } = useFileActionState()')
+    // 传给详情区的必须是「当前选中文件」的那一条
+    expect(panelCode).toMatch(/summaryError=\{selectedId === null \? null : \(summaryErrors\.get\(selectedId\) \?\? null\)\}/)
+    // hook 本体：Map<number, string>，null 表示删掉该文件的错误
+    expect(hookCode).toMatch(/useState<ReadonlyMap<number, string>>\(new Map\(\)\)/)
+    expect(hookCode).toMatch(/if \(msg === null\) next\.delete\(fileId\)/)
   })
 
   it('摘要进行中只锁摘要按钮：删除仍只看 busyId，两件事不互相牵连', () => {

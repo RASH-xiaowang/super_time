@@ -152,7 +152,7 @@ export async function runSyncSearchIndex(decryptedDir: string): Promise<SyncResu
     try { db.exec('PRAGMA synchronous = NORMAL') } catch { /* 个别构建不支持，忽略 */ }
     ensureMetaIndexes(db)
     const wm = readWatermarks(db)
-    const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)')
+    const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id, sender) VALUES(?, ?, ?, ?, ?, ?)')
     const insFts = db.prepare('INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)')
     const insKv = db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)')
     let added = 0
@@ -199,7 +199,10 @@ export async function runSyncSearchIndex(decryptedDir: string): Promise<SyncResu
               const who = sender
                 ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
                 : sessionWho
-              const res = insMeta.run(text, username, Number(r['create_time'] ?? 0), seq, Number(r['local_id'] ?? 0))
+              // `sender` 存**原始 wxid**（不是显示名）：显示名会随备注变化，
+              // 而索引是增量构建的 —— 存显示名会让「改了备注」与「旧行」不一致。
+              // 显示名在读取时用 `names` 现查（见 `searchIndexBatch`）。
+              const res = insMeta.run(text, username, Number(r['create_time'] ?? 0), seq, Number(r['local_id'] ?? 0), sender)
               insFts.run(Number(res.lastInsertRowid), bigramTokens(text), who)
               added += 1
             }
@@ -262,7 +265,7 @@ export function listMessagesInRange(
   const cap = Math.min(Math.max(limit ?? 120, 1), 600)
   try {
     const rows = withDb(searchIndexPath(decryptedDir), (db) => {
-      const sql = 'SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?'
+      const sql = 'SELECT text, username, create_time, local_id, sender FROM message_meta WHERE create_time BETWEEN ? AND ?'
         + (username ? ' AND username = ?' : '')
         + ' ORDER BY create_time DESC LIMIT ?'
       const args: Array<string | number> = username ? [lo, hi, username, cap] : [lo, hi, cap]
@@ -273,7 +276,8 @@ export function listMessagesInRange(
       const text = decodeCell(r['text'])
       const uname = decodeCell(r['username'])
       const ts = Number(r['create_time'] ?? 0)
-      const { sender, body } = splitGroupPrefix(text, uname)
+      // `sender` 列存原始 wxid（构建时切出）；显示名现查 `names`。
+      const sender = decodeCell(r['sender'])
       return {
         text,
         username: uname,
@@ -281,7 +285,7 @@ export function listMessagesInRange(
         local_id: Number(r['local_id'] ?? 0),
         name: names.get(uname) ?? uname,
         time: fmtDateTimeSec(ts),
-        snippet: body.replace(/\s+/g, ' ').slice(0, 120),
+        snippet: text.replace(/\s+/g, ' ').slice(0, 120),
         sender: senderLabel(sender, names),
       }
     })
@@ -449,7 +453,7 @@ export async function runBuildSearchIndex(
     // （拿不到，只查得到 MATCH / bm25 / rowid）；② 不许对它发 `DELETE`（重建走的是事务里的
     // `DROP TABLE` + 重建，本来就不是 DELETE）。由 `search-fts-contentless.spec.ts` 钉住。
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61', content='')")
-    db.exec('CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)')
+    db.exec('CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0, sender TEXT NOT NULL DEFAULT \'\')')
     // 时间范围索引：纯时间问法（「今天聊了啥」）要按 create_time 直取一个日期段。
     ensureMetaIndexes(db)
   }
@@ -485,7 +489,7 @@ export async function runBuildSearchIndex(
     // 距上次让出的事件循环用量（行数与字符数，任一超限即让出）。
     let rowsSinceYield = 0
     let charsSinceYield = 0
-    let batch: Array<[string, string, string, string, number, number, number]> = []
+    let batch: Array<[string, string, string, string, number, number, number, string]> = []
     let batchChars = 0
     // 分片 → 本次读到过的最大 sort_seq。构建完成后写进 meta，供增量同步当水位线。
     // 必须按**读过的全部行**推进（包括没有可读文本、被跳过的图片/系统消息），
@@ -523,10 +527,10 @@ export async function runBuildSearchIndex(
     }
     const flush = (): void => {
       if (batch.length === 0) return
-      const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)')
+      const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id, sender) VALUES(?, ?, ?, ?, ?, ?)')
       const insFts = db.prepare('INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)')
-      for (const [text, tokens, who, username, createTime, sortSeq, localId] of batch) {
-        const r = insMeta.run(text, username, createTime, sortSeq, localId)
+      for (const [text, tokens, who, username, createTime, sortSeq, localId, sender] of batch) {
+        const r = insMeta.run(text, username, createTime, sortSeq, localId, sender)
         insFts.run(Number(r.lastInsertRowid), tokens, who)
         inserted += 1
       }
@@ -596,7 +600,7 @@ export async function runBuildSearchIndex(
                 const who = sender
                   ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
                   : sessionWho
-                batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
+                batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId, sender])
                 batchChars += text.length
               }
               // 批量写入也纳入预算：行长很大时单次 flush 自己就能跑几十秒（见 FLUSH_EVERY_CHARS）。

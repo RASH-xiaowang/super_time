@@ -26,4 +26,14 @@ export declare function decryptTailAppend(rawDb: string, stagingDb: string, offs
  * @param stagingDb - staging 快照路径。
  * @returns 自检通过为 true；任何异常（打不开 / 缺表 / 结构坏）为 false。
  */
+/**
+ * 快照的 schema 还能不能被 SQLite 正常加载（2026-10-18，增量补丁的前置自愈判据）。
+ *
+ * `quick_check` 只有在目标还能打开时才有意义；快照坏到 `sqlite_master` 都读不出时，
+ * 补丁只会一路报错、最后还是整库重解密。同步循环先用这个便宜判据：目标 schema 坏 ⇒
+ * 直接走整库重解（自愈），不要在一块坏快照上继续打补丁。
+ * @param file - 快照分片路径。
+ * @returns 能读到 `sqlite_master` 首行即 true；打不开/结构坏都 false。
+ */
+export declare function schemaIntact(file: string): boolean;
 export declare function tailQuickCheckOk(stagingDb: string): boolean;

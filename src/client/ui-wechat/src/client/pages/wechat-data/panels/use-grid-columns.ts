@@ -20,12 +20,17 @@ export function useGridColumns(ref: RefObject<HTMLElement | null>, minColPx: num
     const el = ref.current
     if (!el) return
     const read = (): void => {
-      const template = typeof getComputedStyle === 'function' ? getComputedStyle(el).gridTemplateColumns : ''
-      setCols(resolveGridColumns(template, el.clientWidth, minColPx))
+      if (typeof getComputedStyle !== 'function') {
+        setCols((current) => (current > 0 ? current : 1))
+        return
+      }
+      const template = getComputedStyle(el).gridTemplateColumns
+      const resolved = resolveGridColumns(template, el.clientWidth, minColPx)
+      setCols(resolved > 0 ? resolved : 1)
     }
     read()
-    // 没有 ResizeObserver 的环境（jsdom、老引擎）退化成"挂载时读一次"：
-    // 列数仍按宽度算出来，只是窗口再拉宽不会跟着变 —— 那时宁可少几列，也不要算成 0。
+    // 没有 ResizeObserver 的环境（jsdom、老引擎）退化成"挂载时读一次"；
+    // 若连宽度也拿不到，则保留 1 列，避免把 0 当作合法列数。
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(read)
     ro.observe(el)

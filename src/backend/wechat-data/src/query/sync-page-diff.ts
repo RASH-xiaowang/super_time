@@ -25,6 +25,13 @@ import { PAGE_SZ, decryptPage } from './sqlcipher-page.ts'
 
 /** 每扫描/补丁这么多页让出一次事件循环（与 query-yield-discipline 同一口径）。 */
 export const PAGE_DIFF_YIELD_PAGES = 512
+
+/**
+ * 每块读多少页（1 MiB）。**逐页 `await fh.read` 的开销才是大头**：
+ * 2.2 万页 = 2.2 万次异步读，实测 428ms；整块读后同样的哈希只要 ~60ms，
+ * 而页指纹是每次「主库变了」的必经前置。
+ */
+const READ_CHUNK_PAGES = 256
 /** 变化页占比超过它就退回全量。 */
 export const DIFF_MAX_CHANGED_RATIO = 0.2
 
@@ -40,14 +47,15 @@ function pageHash(page: Buffer): Buffer {
  */
 export async function pageHashesOf(path: string): Promise<Buffer[]> {
   const fh = await open(path, 'r')
-  const buf = Buffer.alloc(PAGE_SZ)
   const hashes: Buffer[] = []
   try {
     for (;;) {
-      const { bytesRead } = await fh.read(buf, 0, PAGE_SZ, hashes.length * PAGE_SZ)
-      if (bytesRead < PAGE_SZ) break
-      hashes.push(pageHash(buf))
-      if (hashes.length % PAGE_DIFF_YIELD_PAGES === 0) await yieldToLoop()
+      const chunk = Buffer.alloc(PAGE_SZ * READ_CHUNK_PAGES)
+      const { bytesRead } = await fh.read(chunk, 0, chunk.length, hashes.length * PAGE_SZ)
+      const pages = Math.floor(bytesRead / PAGE_SZ)
+      for (let i = 0; i < pages; i += 1) hashes.push(pageHash(chunk.subarray(i * PAGE_SZ, (i + 1) * PAGE_SZ)))
+      if (pages < READ_CHUNK_PAGES) break
+      await yieldToLoop()
     }
   } finally {
     await fh.close()
@@ -61,13 +69,18 @@ export async function pageHashesOf(path: string): Promise<Buffer[]> {
 export async function pageHashesRange(path: string, startPage: number, count: number): Promise<Buffer[]> {
   if (count <= 0) return []
   const fh = await open(path, 'r')
-  const buf = Buffer.alloc(PAGE_SZ)
   const hashes: Buffer[] = []
   try {
-    for (let i = 0; i < count; i += 1) {
-      const { bytesRead } = await fh.read(buf, 0, PAGE_SZ, (startPage + i) * PAGE_SZ)
-      if (bytesRead < PAGE_SZ) break
-      hashes.push(pageHash(buf))
+    let done = 0
+    while (done < count) {
+      const pages = Math.min(READ_CHUNK_PAGES, count - done)
+      const chunk = Buffer.alloc(PAGE_SZ * pages)
+      const { bytesRead } = await fh.read(chunk, 0, chunk.length, (startPage + done) * PAGE_SZ)
+      const got = Math.floor(bytesRead / PAGE_SZ)
+      for (let i = 0; i < got; i += 1) hashes.push(pageHash(chunk.subarray(i * PAGE_SZ, (i + 1) * PAGE_SZ)))
+      done += got
+      if (got < pages) break
+      await yieldToLoop()
     }
   } finally {
     await fh.close()

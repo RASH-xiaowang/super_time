@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
+import { LoadingState } from '../ui/kit-fields.tsx'
 import { REFRESH_MIN_INTERVAL_MS, computeHasMore, refreshGate, refreshPagesFor } from './paged-list.ts'
 import { collectPageRange } from './load-page-range.ts'
 import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
@@ -117,25 +118,19 @@ export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px',
 }
 
 /**
- * 骨架屏:数据未到时先渲染框架占位(微光动画),不让整页被"加载中…"卡住。
- * 行模式用于列表,网格模式用于卡片格子。
+ * 列表/网格加载态：统一为「旋转指示 + 加载中…」（2026-10-18）。
+ *
+ * 历史：原来是「头像方块 + 占位线 + 右侧元信息」的骨架条（`.nm-skel` / `.skelRow`），
+ * 用户要求「请检查看看哪里还有这样的加载条，请全部修复，用一个正常的加载样式」——
+ * 骨架条观感像一排坏掉的卡片，浅色主题下更像异常块。
+ *
+ * 现在所有调用点（聊天、文件、收藏、通讯录、朋友圈、资金、记录、知识库…）渲染同一个
+ * 旋转指示 + 文案；`rows / grid / minCol` 仅为兼容既有调用保留，不再影响视觉。
+ * @param props - 旧骨架参数（已无视觉效果，仅为兼容保留）。
+ * @returns 统一加载态。
  */
-export function ListSkeleton({ rows = 8, grid = false, minCol = 120 }: { rows?: number; grid?: boolean; minCol?: number }): React.JSX.Element {
-  return (
-    <div className={kitCss.skelGrid} style={{ gridTemplateColumns: grid ? `repeat(auto-fill, minmax(${minCol}px, 1fr))` : '1fr' }} aria-hidden="true">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className={`nm-skel ${grid ? kitCss.skelCard : kitCss.skelRow}`}>
-          {!grid && (
-            <>
-              <span className={`nm-skel ${kitCss.skelAvatar}`} />
-              <span className={`nm-skel ${kitCss.skelLine}`} />
-              <span className={`nm-skel ${kitCss.skelMeta}`} />
-            </>
-          )}
-        </div>
-      ))}
-    </div>
-  )
+export function ListSkeleton(_props: { rows?: number; grid?: boolean; minCol?: number } = {}): React.JSX.Element {
+  return <LoadingState variant="compact" label="加载中…" />
 }
 
 /**
@@ -243,6 +238,19 @@ export function useTransientNotice<T = string>(durationMs: number = DEFAULT_NOTI
 /**
  * 懒挂载容器：子元素进入可视区附近时才渲染。用于地图、重型图表或统计区块，
  * 避免打开页签时把不可见的重资源一次性加载/渲染。
+ *
+ * ## ⚠️ `root` 必须指向**滚动容器**，不能留 `null`（2026-10-16 修「手机端看不到地图」）
+ *
+ * 原先写的是 `{ root: null, rootMargin }` —— `root: null` 表示「以视口为根」。
+ * 但本应用的内容区是 `.content`（`overflow-y: auto`）这个**滚动容器**，
+ * 元素在它内部滚动。Chromium 对「元素在滚动容器内、且滚动容器在视口内」的情形
+ * 会**额外按滚动容器的裁剪框判定**：实测元素在 `top: 874`（视口 812）、
+ * `rootMargin: 1200px` 把 rootBounds 扩到 `-1200 ~ 2012`，元素明明落在里面，
+ * `isIntersecting` 仍是 **false** —— 于是地图永远停在「地图进入可视区后加载…」，
+ * 用户滚到那里才加载（体感就是「看不到地图」）。
+ *
+ * 修法：向上找最近的滚动祖先当 `root`。找不到（或它不可滚动）时退回 `null`，
+ * 行为与原先一致。
  */
 export function LazyMount({ children, rootMargin = '600px 0px', placeholder = null, onShow }: {
   children: React.ReactNode
@@ -267,12 +275,27 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
       reveal()
       return
     }
+    // 最近的**滚动容器**祖先：`overflow-y` 为 auto/scroll。
+    //
+    // ⚠️ 这里**不能**再要求 `scrollHeight > clientHeight`（2026-10-16 第二次修正）：
+    // 本 effect 在首次渲染后立刻运行，而那时面板数据往往还在加载 —— 内容还没撑开，
+    // 滚动容器的 `scrollHeight === clientHeight`，于是「可滚」判断为假、一路退到
+    // `document.body`，最终退回 `root: null` ⇒ 又踩回「Chromium 按滚动容器裁剪框判定、
+    // 元素在容器可视区外就永远不触发」那个坑（实测地图停在占位符）。
+    // 只要 `overflow-y` 是 auto/scroll，它就是 IO 该用的 root —— 裁剪框由它决定，
+    // 与「此刻能不能滚」无关。
+    let root: Element | null = ref.current.parentElement
+    while (root && root !== document.body) {
+      const oy = getComputedStyle(root).overflowY
+      if (oy === 'auto' || oy === 'scroll') break
+      root = root.parentElement
+    }
     const ob = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) {
         reveal()
         ob.disconnect()
       }
-    }, { root: null, rootMargin })
+    }, { root: root && root !== document.body ? root : null, rootMargin })
     ob.observe(ref.current)
     return () => { ob.disconnect() }
   }, [rootMargin])
@@ -301,6 +324,20 @@ export function usePagedList<T>(options: {
   refreshMinIntervalMs?: number
   /** 推送合并窗（缺省 300ms）。后端推送已自带限频，需要最快响应的小列表传更小值。 */
   refreshDebounceMs?: number
+  /**
+   * 已加载条数的**硬上限**（缺省 0 = 不限制）。
+   *
+   * 为什么需要：`useLazySentinel` 的 `watch` 机制会在哨兵**一直待在视口里**时反复
+   * 触发 `loadMore`（见 `useLazySentinel` 的注释），而 `loadMore` 是**无上限追加**的。
+   * 真机实测：操作日志在连续滚动下累积到 **91,028 个节点 / scrollHeight 260,017px**，
+   * 此时滚动 p50 85ms、p90 837ms、单帧最长 941ms（CDP 滚动探针）——
+   * 界面基本卡死。这不是「滚动优化」能救的，是 DOM 本身没有上界。
+   *
+   * 达到上限后 `hasMore` 变 false，哨兵不再触发加载；**已加载的内容一条不丢**，
+   * 滚动位置也不动（与「丢弃头部」相比，那种做法会让 scrollTop 跳）。
+   * 调用方应当在上限处给出提示，引导用户用筛选缩小范围。
+   */
+  maxItems?: number
 }): {
   items: readonly T[]
   total: number
@@ -308,11 +345,13 @@ export function usePagedList<T>(options: {
   loadingMore: boolean
   error: string | null
   hasMore: boolean
+  /** 是否因为触到 {@link maxItems} 而停止加载（调用方据此提示用户）。 */
+  capped: boolean
   loadMore: () => void
   reset: () => void
   refresh: () => void
 } {
-  const { pageSize, refreshDebounceMs, refreshMinIntervalMs } = options
+  const { pageSize, refreshDebounceMs, refreshMinIntervalMs, maxItems = 0 } = options
   const fetchPageRef = useRef(options.fetchPage)
   fetchPageRef.current = options.fetchPage
   const [items, setItems] = useState<readonly T[]>([])
@@ -345,7 +384,13 @@ export function usePagedList<T>(options: {
       const r = await fetchPageRef.current(offset, pageSize)
       if (seq !== seqRef.current) return
       const list = r.items
-      setItems(prev => append ? [...prev, ...list] : list)
+      setItems(prev => {
+        if (!append) return list
+        const merged = [...prev, ...list]
+        // 触到上限就**截断尾部**（保留已加载的前 N 条），而不是丢弃头部 ——
+        // 丢头部会让 scrollTop 跳，用户正在看的那一行会跑掉。
+        return maxItems > 0 && merged.length > maxItems ? merged.slice(0, maxItems) : merged
+      })
       setTotal(r.total)
       setLastCount(list.length)
       offsetRef.current = offset + list.length
@@ -358,7 +403,7 @@ export function usePagedList<T>(options: {
         busyRef.current = false
       }
     }
-  }, [pageSize])
+  }, [pageSize, maxItems])
 
   const loadMore = useCallback((): void => { void load(true) }, [load])
   const reset = useCallback((): void => {
@@ -481,6 +526,9 @@ export function usePagedList<T>(options: {
     maybeBackgroundRefresh()
   }, 'dsh-wechat-data-updated', refreshDebounceMs ?? 300)
 
+  /** 是否已触到 {@link maxItems} 上界（`maxItems` 为 0 时恒 false）。 */
+  const capped = maxItems > 0 && items.length >= maxItems
+
   return {
     items,
     total,
@@ -490,7 +538,12 @@ export function usePagedList<T>(options: {
     // 判定逻辑抽到 paged-list.ts：纯逻辑才能测（本仓库没有 hook/DOM 测试环境），
     // 而且旧判据（`items.length < total && lastCount === pageSize`）会在 total 不可信
     // 或整页末页时静默截断数据 —— 详见该模块头部注释（L7）。
-    hasMore: computeHasMore({ loaded: items.length, total, lastPageCount: lastCount, pageSize }),
+    //
+    // 触到 `maxItems` 时**强制 false**：这是 DOM 上界，不是数据到底。
+    // 不这么做的话哨兵会一直触发 `loadMore`，而每次追加都被 `slice` 截掉 ——
+    // 白跑请求、白重渲，界面还是卡（真机实测过 91,028 节点那一版）。
+    hasMore: !capped && computeHasMore({ loaded: items.length, total, lastPageCount: lastCount, pageSize }),
+    capped,
     loadMore,
     reset,
     refresh,

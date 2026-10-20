@@ -5,6 +5,28 @@
  * Electron 渲染进程；Remote 通过 preload 暴露的 window.electronAPI.wechat
  * 转发到主进程后端（wechat:call）。
  */
+// ── Bootstrap 响应式基建（Wave 0，方案见 docs/BOOTSTRAP-RESPONSIVE.md 第 0/1 节）──
+// 只取**类**：栅格（.row/.col-*/.g-*/.container*）与实用类（d-*/flex-*/gap-*/w-100 等），
+// **不引** bootstrap.css 全量包（无 reboot、无组件外观），也**不引** Bootstrap JS。
+//
+// 为什么这三个 import 必须排在本文件最前面（早于 ./titlebar.css 等本地样式，
+// 也早于下面 `@deepseek-ai/dsh-client-ui-wechat/host` 带进来的 scifi-theme.css /
+// light-theme.css 主题导入）：
+//   1) CSS 级联按 import 顺序决定同特异度规则的胜负。栅格类（.row/.col-*）与
+//      bootstrap-bridge.css 的组件桥接都**不带** !important，靠「先加载」把优先级让给
+//      --nm-* 令牌、主题与各面板 CSS Modules；排到最后会把面板已有外观反向盖掉
+//      （等于给 144 个面板换一层默认皮）。（utilities 里的工具类是 Bootstrap 5
+//      默认带 !important 的「显式开关」，只在面板真的写了 d-*/flex-*/gap-* 时才生效；
+//      当前零引用，回归面为零。）
+//   2) 被引入的子文件是编译后的**纯类**产物（grid 仅 :root 的 --bs-breakpoint-* 变量
+//      与 .row>* 的 box-sizing；utilities 仅类 + :root 的 --bs-* 变量），
+//      不含 body/html/标题/按钮这些 reboot 基线，所以提前加载不会污染全局。
+//   3) CSP 只放行 'self'：npm 包由 Vite 打进本地产物，运行期零网络请求（方案第 0 节）。
+import 'bootstrap/dist/css/bootstrap-grid.min.css'
+import 'bootstrap/dist/css/bootstrap-utilities.min.css'
+// 组件类最小桥接：.table/.card/.form-*/.modal*/.navbar* 的外观，全部取 --nm-* 令牌，
+// 不含 reboot、不抄 Bootstrap 组件样式（见该文件头注释）。
+import './bootstrap-bridge.css'
 import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './titlebar.css'
@@ -12,8 +34,14 @@ import './titlebar.css'
 import './scrollbars.css'
 // 手机浏览器的视口口径（dvh / 安全区 / 可选中文字）。桌面端不受影响，理由见该文件头注。
 import './mobile-viewport.css'
+// 手机浏览器的壳层补丁（设置弹窗滚动 / dvh 弹窗高度 / 横屏触摸目标）。理由见该文件头注。
+import './mobile-browser.css'
+// 交接态引导必须排在 capabilities.ts 之前：后者在模块加载时读 window.electronAPI。
+import './handoff-boot.ts'
 import { getOpen, openWechat, setCapabilities, setDirectoryPicker, setWechatRemote, subscribeOpen, WechatDataPanel } from '@deepseek-ai/dsh-client-ui-wechat/host'
+import { getThemeMode, subscribeThemeMode, toggleThemeMode } from '@deepseek-ai/dsh-client-ui-wechat/host'
 import type { ElectronApi, WechatRemote } from '@deepseek-ai/dsh-client-ui-wechat/host'
+import { mountTitlebarStatus } from './titlebar-status.tsx'
 import { OnboardingShell } from './onboarding/OnboardingShell.tsx'
 import { loadOnboardingState, resetOnboarding } from './onboarding/store.ts'
 import { shouldSkipGates } from './debug-gates.ts'
@@ -77,10 +105,14 @@ function installRemote(): void {
   // 浏览器态：HTTP Remote。SSE 事件流**不在这里起** —— 由 BrowserSession 在令牌门
   // 放行之后启动（未授权时它只会不停收到 401，既没用也刷噪声）。
   setWechatRemote(createHttpRemote())
-  // 手机上没有「本机目录」可选（数据在电脑上）。返回 null 而不是抛：
-  // 依赖它的控件由 capabilities.dirPicker=false 隐藏（见 settings 面板），
-  // 万一还有漏网的调用点，它拿到的也只是一次「用户取消」。
-  setDirectoryPicker(async () => null)
+  // 交接态（「打开网页」）有原生代理桥：目录选择走服务端 `/api/native/<action>`；
+  // 普通手机没有本机目录可选，返回 null（依赖它的控件已由 capabilities.dirPicker 隐藏）。
+  setDirectoryPicker(async () => {
+    const pick = window.electronAPI?.pickDirectory
+    if (capabilities.desktopEquivalent !== true || typeof pick !== 'function') return null
+    const r = await pick()
+    return r?.path ?? null
+  })
   // 浏览器有自己的标签页与地址栏：自绘标题栏在这里只是一条 38px 高的死控件
   // （拖拽区拖不动窗口、三个按钮点了没反应）。body 是 flex column、#root 是 flex:1，
   // 所以直接把这个元素摘掉，#root 会自动占满高度 —— 不需要改任何 CSS。
@@ -88,7 +120,7 @@ function installRemote(): void {
 }
 installRemote()
 
-/** 自绘标题栏：拖拽区域 + 最小化/全屏/关闭。 */
+/** 自绘标题栏：拖拽区域 + 主题切换 + 最小化/全屏/关闭。 */
 function initTitlebar(): void {
   const api = window.electronAPI?.windowControls
   if (!api) return
@@ -96,19 +128,53 @@ function initTitlebar(): void {
   byId('tb-min')?.addEventListener('click', () => api.minimize())
   byId('tb-close')?.addEventListener('click', () => api.close())
 
-  // 全屏按钮：图标与提示随状态切换（两种图标都在 DOM 里，用 data-on 切）
+  /*
+   * 主题切换（2026-10-17 从主面板左下角迁来）。
+   *
+   * 为什么放在这里而不是 React 里：按钮在**静态 HTML**（`index.html` 的 `#titlebar`），
+   * 与窗口控制按钮同一处；而主题状态在 `theme.ts` 的模块级单例里 ——
+   * 直接调 `toggleThemeMode()` 即可，不需要 React 参与。
+   * 图标用 `data-theme` 属性切换（两种图标都在 DOM 里，与全屏按钮同款打法）。
+   */
+  const themeBtn = byId('tb-theme')
+  const syncTheme = (): void => {
+    if (!themeBtn) return
+    const light = getThemeMode() === 'light'
+    // 当前是浅色 ⇒ 按钮提示「切到深色」，图标显示月亮（点它得到深色）。
+    themeBtn.setAttribute('data-theme', light ? 'light' : 'dark')
+    const hint = light ? '切换到深色主题' : '切换到浅色主题'
+    themeBtn.setAttribute('title', hint)
+    themeBtn.setAttribute('aria-label', hint)
+  }
+  themeBtn?.addEventListener('click', () => { toggleThemeMode(); syncTheme() })
+  syncTheme()
+  // 主题也可能被别处改（设置弹窗 / 启动页），订阅一次保持图标同步。
+  subscribeThemeMode(syncTheme)
+
+  // 全屏按钮：图标与提示随状态切换（两种图标都在 DOM 里，用 data-on 切）。
+  // 2026-10-18：按钮语义是「铺满当前显示器工作区」——任务栏保持可见，不是 OS 全屏。
+  // 实现与实测原因见 src/backend/ipc-misc.js 的 window:fullscreen-toggle。
   const fullBtn = byId('tb-full')
   const syncFull = (on: boolean): void => {
     if (!fullBtn) return
     if (on) fullBtn.setAttribute('data-on', '')
     else fullBtn.removeAttribute('data-on')
-    fullBtn.setAttribute('title', on ? '退出全屏' : '全屏')
+    const hint = on ? '退出全屏（还原窗口）' : '全屏（保留任务栏）'
+    fullBtn.setAttribute('title', hint)
+    fullBtn.setAttribute('aria-label', hint)
   }
   fullBtn?.addEventListener('click', () => api.toggleFullscreen())
   Promise.resolve(api.isFullscreen?.()).then(syncFull).catch(() => { /* 拿不到就当未全屏 */ })
   api.onFullscreenChange?.(syncFull)
 }
 initTitlebar()
+
+/*
+ * 标题栏状态区（2026-10-17 从主面板左下角迁来）：模型余额 + 数据就绪。
+ * 挂一个**独立 React root**（主树在 `#root`，会随导航/弹窗重渲染；
+ * 标题栏状态不该跟着重渲染）。容器不存在时静默返回（浏览器里标题栏整个被摘掉）。
+ */
+mountTitlebarStatus()
 
 /**
  * 自动化窗口的横幅（2026-09-29 改写：把"自动化"与"mock 模型"分开说）。
@@ -364,7 +430,7 @@ function WechatApp(): React.JSX.Element {
           fontFamily: 'var(--nm-font-sans, sans-serif)',
         }}
       >
-        <span style={{ color: 'var(--nm-cyan, #00f0ff)' }} aria-hidden="true">
+        <span style={{ color: 'var(--nm-cyan, #07c160)' }} aria-hidden="true">
           <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
             <path d="M9.5 3.5C4.8 3.5 1 6.8 1 10.9c0 2.3 1.2 4.4 3.2 5.8L3 20l3.7-1.6c.9.3 1.8.4 2.8.4 4.7 0 8.5-3.3 8.5-7.9S14.2 3.5 9.5 3.5Z" />
             <circle cx="6.2" cy="10.8" r="1" fill="currentColor" stroke="none" />
@@ -424,7 +490,7 @@ function WechatApp(): React.JSX.Element {
           fontFamily: 'var(--nm-font-sans, sans-serif)', padding: 24,
         }}
       >
-        <span style={{ color: 'var(--nm-cyan, #00f0ff)' }} aria-hidden="true">
+        <span style={{ color: 'var(--nm-cyan, #07c160)' }} aria-hidden="true">
           <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
             <path d="M9.5 3.5C4.8 3.5 1 6.8 1 10.9c0 2.3 1.2 4.4 3.2 5.8L3 20l3.7-1.6c.9.3 1.8.4 2.8.4 4.7 0 8.5-3.3 8.5-7.9S14.2 3.5 9.5 3.5Z" />
             <circle cx="6.2" cy="10.8" r="1" fill="currentColor" stroke="none" />
@@ -441,11 +507,11 @@ function WechatApp(): React.JSX.Element {
         </div>
         <button type="button" onClick={openWechat}
           style={{
-            padding: '10px 20px', borderRadius: 'var(--nm-r-md, 10px)',
-            border: '1px solid var(--nm-cyan-35, rgba(0, 240, 255, .35))',
-            background: 'var(--nm-cyan-10, rgba(0, 240, 255, .1))',
-            color: 'var(--nm-cyan, #00f0ff)', cursor: 'pointer',
-            font: 'inherit', fontSize: 13, fontWeight: 600, letterSpacing: '.02em',
+            padding: '9px 20px', borderRadius: 'var(--nm-r-sm, 6px)',
+            border: 'none',
+            background: 'var(--nm-cyan, #07c160)',
+            color: 'var(--nm-on-accent, #ffffff)', cursor: 'pointer',
+            font: 'inherit', fontSize: 13, fontWeight: 600,
           }}>
           打开 Super Time
         </button>

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { apiGetRevoked } from '../api.ts'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Card, clickableKey, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { clickableKey, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -121,15 +121,16 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   return (
     <div className={css.panel}>
       <PanelHeader
-        title="撤回消息记录"
-        desc="微信 4.x 防撤回机制在本机保留的删除缓存 · 只读展示"
+        title="撤回"
+        desc="本机删除缓存 · 只读"
         actions={(
           <button type="button" className={css.catBtn} onClick={refresh} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
         )}
       />
-      <div className={`${css.notice} ${css.rvNoticeText}`}>🛡️ 数据仅来自本机微信数据库的解密副本，不联网、不上传。缓存内容与撤回时间由微信客户端写入。</div>
-      {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
-      {readError && <div className={kitCss.error} role="alert">⚠️ {readError}</div>}
+      {/* 隐私口径降为一行灰字（NV-09）：不再是一块与全站多处重复的横幅。 */}
+      <div className={`${kitCss.textMeta} ${css.rvNoticeText}`}>数据仅来自本机解密副本，不联网、不上传。</div>
+      {error && <div className={kitCss.error} role="alert">{error}</div>}
+      {readError && <div className={kitCss.error} role="alert">{readError}</div>}
       {!error && !readError && loading && items.length === 0 && <ListSkeleton rows={8} />}
       {!error && !readError && !loading && items.length === 0 && (
         <div className={css.rvLand}>
@@ -165,14 +166,12 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
               />
             ) : undefined}
           />
-          <div className={css.hd}><span className={kitCss.textMeta}>共 {total} 条被撤回消息（已加载 {items.length}）</span></div>
-          {senderTop.length > 0 && (
-            <Card title="撤回最多">
-              <div className={css.rvFilters}>
-                {senderTop.map(([k, n]) => <Badge key={k} tone="cyan" title={`${k} 撤回 ${n} 条`}>{k} {n}</Badge>)}
-              </div>
-            </Card>
-          )}
+          <div className={css.hd}>
+            <span className={kitCss.textMeta}>共 {total} 条被撤回消息（已加载 {items.length}）</span>
+            {senderTop.length > 0 && (
+              <span className={kitCss.textMeta}>撤回最多：{senderTop.map(([k, n]) => `${k} ${n}`).join(' · ')}</span>
+            )}
+          </div>
           <div ref={revokedScrollRef} className={`${css.scroll} ${css.rvScroll}`}>
             {filtered.length === 0 && <div className={css.empty}>无匹配记录</div>}
             {filtered.slice(0, rvCount).map((it, idx) => {
@@ -183,7 +182,7 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
                   <div className={css.rvRowHd}>
                     <span style={{ width: 28, height: 28, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: avatar.color, background: avatar.background }}>{(it.sender || '?').slice(0, 1)}</span>
                     <span className={css.rowName}>{it.sender}</span>
-                    <span className={`${css.cite} ${css.rvTypeBadge}`}>{it.type_label}</span>
+                    <span className={css.cite}>{it.type_label}</span>
                     <span className={`${css.rowTime} ${css.rvTimePush}`}>{fmtDateTimeSec(it.create_time)}</span>
                     <span className={css.rowTime}>{open ? '▾' : '▸'}</span>
                   </div>

@@ -208,9 +208,13 @@ export interface KbFileListOptions {
  */
 export function listKbFiles(decryptedDir: string, kbId: number, opts: KbFileListOptions = {}): KbFileListSnapshot {
   const kb = normalizePositive(kbId) ?? 0
-  const rawLimit = Math.trunc(Number(opts.limit ?? DEFAULT_FILE_PAGE))
+  // ⚠️ `opts` 可能是 **null**，不只是 undefined：前端 `apiGetKbFiles(kbId)` 不传第二参时，
+  // 参数经 IPC / HTTP 的 JSON 序列化后 `undefined` 会变成 `null`（默认参数**不**对 null 生效）。
+  // 实测症状：知识库「文件」页整页报 `Cannot read properties of null (reading 'limit')`。
+  const o = opts ?? {}
+  const rawLimit = Math.trunc(Number(o.limit ?? DEFAULT_FILE_PAGE))
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : DEFAULT_FILE_PAGE, 1), MAX_FILES_PER_KB)
-  const rawOffset = Math.trunc(Number(opts.offset ?? 0))
+  const rawOffset = Math.trunc(Number(o.offset ?? 0))
   const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
   try {
     const db = openStore(decryptedDir)
@@ -269,9 +273,11 @@ export function listKbFileChunks(
   const file = normalizePositive(fileId) ?? 0
   const empty: KbFileChunkPage = { kbId: kb, fileId: file, items: [], total: 0, totalChars: 0 }
   if (kb === 0 || file === 0) return { ...empty, readError: '参数无效：kbId 与 fileId 都必须是正整数' }
-  const rawLimit = Math.trunc(Number(opts.limit ?? DEFAULT_CHUNK_PAGE))
+  // 同 `listKbFiles`：`opts` 经 JSON 序列化后可能是 null（默认参数不对 null 生效）。
+  const o = opts ?? {}
+  const rawLimit = Math.trunc(Number(o.limit ?? DEFAULT_CHUNK_PAGE))
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : DEFAULT_CHUNK_PAGE, 1), MAX_CHUNK_PAGE)
-  const rawOffset = Math.trunc(Number(opts.offset ?? 0))
+  const rawOffset = Math.trunc(Number(o.offset ?? 0))
   const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
   try {
     const db = openStore(decryptedDir)

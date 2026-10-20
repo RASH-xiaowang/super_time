@@ -14,7 +14,7 @@ import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import type { ChatTarget } from './Chats.tsx'
 import { ChatView } from './chats-support.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
-import { useChatsPolling } from './chats-polling.ts'
+import { pinScrollToBottom, useChatsPolling } from './chats-polling.ts'
 import { makeMsgRow } from './chats-msg-row.tsx'
 import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
 import type { GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -43,11 +43,9 @@ export interface useChatsThreadInputs {
   messages: readonly WechatMessage[]
   messagesTalkerRef: React.MutableRefObject<string | null>
   moreOpen: boolean
-  /** 只读的消息尾部锚点：调用方给的是 `useRef<HTMLDivElement>(null)`，那是 `RefObject`（current 只读），
-   *  本模块只 `msgEndRef.current` 读它、从不赋值 ⇒ 不许声明成 `MutableRefObject`。 */
-  msgEndRef: React.RefObject<HTMLDivElement>
-  msgLoading: boolean
+  /** 消息区滚动容器：新消息到达时判断用户是否在看最新消息（浮标/自动跟随共用）。 */
   msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
+  msgLoading: boolean
   openMsgMenu: (ev: MsgMenuAnchor, m: WechatMessage, kind: RenderKind) => void
   openViewer: (m: WechatMessage) => void
   selfWxid: string
@@ -82,7 +80,7 @@ export interface useChatsThreadInputs {
 }
 
 export function useChatsThread(inputs: useChatsThreadInputs) {
-  const { annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgEndRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef } = inputs
+  const { annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef } = inputs
 /**
  * 开始一个会话：令牌自增（作废所有在途请求）并声明 `messages` 将归属该 talker。
  * @param talker - 会话 username。
@@ -119,7 +117,7 @@ useLayoutEffect(() => {
 }, [messages.length])
 
 
-useChatsPolling({ curSession, inFlightRef, msgEndRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef })
+const polling = useChatsPolling({ curSession, inFlightRef, messagesLen: messages.length, msgScrollRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef })
 
 
 // Close the group-info drawer and drop the in-chat search scope on session switch.
@@ -210,10 +208,8 @@ const openSession = useCallback(async (s: WechatSession): Promise<void> => {
     setCursorLocalId(env.cursorLocalId)
     setTypeStats(env.typeStats ?? [])
     writeRenderCache('chat-msgs:v2:' + s.username, list)
-    setTimeout(() => {
-      if (!sessionAlive(epoch, s.username)) return
-      msgEndRef.current?.scrollIntoView({ block: 'end' })
-    }, 50)
+    // 虚拟列表行高逐帧测：50ms 后多帧钉底，避免最后一条停在窗口下沿。
+    setTimeout(() => { if (sessionAlive(epoch, s.username)) pinScrollToBottom(msgScrollRef.current, 8) }, 50)
   } catch (e) {
     if (sessionAlive(epoch, s.username)) setMsgError((e as Error).message)
   } finally {
@@ -303,7 +299,7 @@ const openSessionAndLocate = useCallback(async (username: string, localId?: numb
         const m = list[hit]
         if (m) locateMessage(m.localId)
       } else {
-        msgEndRef.current?.scrollIntoView({ block: 'end' })
+        pinScrollToBottom(msgScrollRef.current, 8)
       }
     }, 80)
   } catch (e) {
@@ -348,5 +344,5 @@ const openChatlog = useCallback((rich: MessageRich): void => {
 // 在调用时才解析；换成工厂就是把依赖当参数传进去，写在这里会直接踩 TDZ（typecheck 报的）。
 const renderMsgItem = makeMsgRow({ curSession, editedIds, openChatlog, openMsgMenu, openViewer, selfWxid })
 
-  return { changeView, loadMore, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem }
+  return { changeView, jumpToLatest: polling.jumpToLatest, loadMore, newMsgCount: polling.newMsgCount, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem }
 }

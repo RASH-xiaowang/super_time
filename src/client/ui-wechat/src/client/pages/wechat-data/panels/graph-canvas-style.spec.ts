@@ -245,7 +245,7 @@ describe('节点形状：笔记也是圆盘，描边环才贴得住', () => {
   it('导出 SVG 里笔记节点本体是 <circle>，不是圆角方块', () => {
     const svg = sceneToSvg(sceneOf([note()]), () => '')
     // 世界 (0,0) 在 800×600 视口正中 → 屏幕 (400,300)；k=1、radius=30 → sr=30
-    expect(svg).toContain('<circle cx="400.00" cy="300.00" r="30.00" fill="#6d5bd0"')
+    expect(svg).toContain('<circle cx="400.00" cy="300.00" r="30.00" fill="#3eb575"')
     // 方块形态必须消失：只允许背景那一块 <rect width=...>
     expect(svg).not.toContain('<rect x=')
   })
@@ -255,10 +255,10 @@ describe('节点形状：笔记也是圆盘，描边环才贴得住', () => {
     expect(svg).toContain('cx="400.00" cy="300.00" r="30.75"')
   })
 
-  it('浅色主题换浅紫，形状不变', () => {
+  it('浅色主题换深绿，形状不变', () => {
     const sc = sceneOf([note()])
     const svg = sceneToSvg({ ...sc, dark: false }, () => '')
-    expect(svg).toContain('fill="#8b7ff0"')
+    expect(svg).toContain('fill="#0e7a3c"')
     expect(svg).not.toContain('<rect x=')
   })
 

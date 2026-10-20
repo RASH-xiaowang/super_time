@@ -36,11 +36,11 @@ interface Deps {
     stop: () => Promise<unknown>
     syncWithConfig: () => Promise<unknown>
     getState: () => object
-    issuePairingCode: () => string
+    issuePairingCode: (opts?: { fullAccess?: boolean }) => string
   }
 }
 interface Control {
-  rotate: () => Promise<{ ok: boolean, token?: string, pairingCode?: string, state?: unknown, error?: string }>
+  rotate: (opts?: { fullAccess?: boolean }) => Promise<{ ok: boolean, token?: string, pairingCode?: string, state?: unknown, error?: string }>
   setEnabled: (enabled: boolean) => Promise<{ ok: boolean, state?: unknown, error?: string }>
   state: () => unknown
 }
@@ -49,6 +49,7 @@ interface Control {
 function fake(opts: { saveOk?: boolean, saveThrows?: boolean } = {}) {
   const log: string[] = []
   let patches: Array<Record<string, unknown>> = []
+  let pairingOptions: { fullAccess?: boolean } | undefined
   const deps: Deps = {
     backendCall: async (method, args) => {
       log.push(`call:${method}`)
@@ -62,10 +63,10 @@ function fake(opts: { saveOk?: boolean, saveThrows?: boolean } = {}) {
       stop: async () => { log.push('stop'); return {} },
       syncWithConfig: async () => { log.push('sync'); return { running: true, port: 5032 } },
       getState: () => ({ running: false }),
-      issuePairingCode: () => { log.push('issue'); return 'spec-pairing-code' },
+      issuePairingCode: (opts) => { log.push('issue'); pairingOptions = opts; return 'spec-pairing-code' },
     },
   }
-  return { deps, log, patches: () => patches }
+  return { deps, log, patches: () => patches, pairingOptions: () => pairingOptions }
 }
 
 describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
@@ -80,6 +81,12 @@ describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
     expect((r.token ?? '').length).toBeGreaterThanOrEqual(32)
     expect(r.pairingCode).toBe('spec-pairing-code')
     expect(r.state).toEqual({ running: true, port: 5032 })
+  })
+
+  it('fullAccess 选项透传给配对码（局域网扫码要与桌面同权）', async () => {
+    const f = fake()
+    await createRemoteAccessControl(f.deps).rotate({ fullAccess: true })
+    expect(f.pairingOptions()).toEqual({ fullAccess: true })
   })
 
   it('每次轮换的令牌都不同（否则「轮换」只是重放同一个凭据）', async () => {

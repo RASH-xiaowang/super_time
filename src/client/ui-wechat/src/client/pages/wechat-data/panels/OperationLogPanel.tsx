@@ -4,11 +4,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useLazySentinel, usePagedList, ListSentinel } from './hooks.tsx'
 import { apiClearOperationLog, apiGetOperationLog } from '../api.ts'
 import type { OperationCategory, OperationLogEntry, OperationLogQuery, OperationStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
@@ -48,6 +48,29 @@ function opDownload(name: string, mime: string, content: string): void {
 }
 function opCsvCell(v: string): string {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+}
+
+/**
+ * 导出为制表符分隔的 TXT。
+ *
+ * 为什么放在模块级而不是面板函数里：`OperationLogPanel` 在函数行数棘轮上（上限 250 行），
+ * 而这两段是**纯函数**（输入行数据、输出文件），不碰任何状态，没有理由占它的行数。
+ * @param rows - 当前已加载的日志行。
+ */
+function exportOpLogTxt(rows: readonly OperationLogEntry[]): void {
+  const header = '微信数据面板 · 操作日志\n时间\t类型\t操作\t对象\t结果\t上下文\n'
+  const lines = rows.map(r => [opTime(r.ts), OP_CATEGORY_LABEL[r.category], r.action, r.target || '—', OP_STATUS_LABEL[r.status], r.detail || '—'].join('\t'))
+  opDownload(`操作日志_${opStamp()}.txt`, 'text/plain;charset=utf-8', header + lines.join('\n'))
+}
+
+/**
+ * 导出为 CSV（带 BOM，Excel 打开不乱码）。
+ * @param rows - 当前已加载的日志行。
+ */
+function exportOpLogCsv(rows: readonly OperationLogEntry[]): void {
+  const header = '时间,类型,操作,对象,结果,上下文\n'
+  const lines = rows.map(r => [opTime(r.ts), OP_CATEGORY_LABEL[r.category], r.action, r.target || '—', OP_STATUS_LABEL[r.status], r.detail || '—'].map(opCsvCell).join(','))
+  opDownload(`操作日志_${opStamp()}.csv`, 'text/csv;charset=utf-8', '\ufeff' + header + lines.join('\n'))
 }
 
 /** 状态徽标颜色。 */
@@ -90,6 +113,10 @@ export function OperationLogPanel(): React.JSX.Element {
 
   const pager = usePagedList<OperationLogEntry>({
     pageSize: 100,
+    // 500 条 ≈ 3000 个单元格。上限的理由与实测数据见 `usePagedList` 的 `maxItems` 注释：
+    // 无上限时哨兵会反复触发 loadMore，实测累积到 91,028 个节点、滚动 p90 837ms。
+    // 审计要翻更早的记录用时间/分类/关键词筛选 —— 那本来也比滚 900 页更快。
+    maxItems: 500,
     fetchPage: async (offset, limit) => {
       const snap = await apiGetOperationLog(buildQuery(offset, limit))
       // W3-11.4：「审计库打不开」与「没有操作记录」分开说。
@@ -127,16 +154,6 @@ export function OperationLogPanel(): React.JSX.Element {
   // 本端过滤只会作用在「已加载的那一页」上，是此前覆盖率只有 23% 的根因。
   const rows = opRows
 
-  const exportOpTxt = (): void => {
-    const header = '微信数据面板 · 操作日志\n时间\t类型\t操作\t对象\t结果\t上下文\n'
-    const lines = rows.map(r => [opTime(r.ts), OP_CATEGORY_LABEL[r.category], r.action, r.target || '—', OP_STATUS_LABEL[r.status], r.detail || '—'].join('\t'))
-    opDownload(`操作日志_${opStamp()}.txt`, 'text/plain;charset=utf-8', header + lines.join('\n'))
-  }
-  const exportOpCsv = (): void => {
-    const header = '时间,类型,操作,对象,结果,上下文\n'
-    const lines = rows.map(r => [opTime(r.ts), OP_CATEGORY_LABEL[r.category], r.action, r.target || '—', OP_STATUS_LABEL[r.status], r.detail || '—'].map(opCsvCell).join(','))
-    opDownload(`操作日志_${opStamp()}.csv`, 'text/csv;charset=utf-8', '\ufeff' + header + lines.join('\n'))
-  }
   const clearOpLog = async (): Promise<void> => {
     const ok = await confirm({
       title: '清空全部操作日志？',
@@ -204,54 +221,23 @@ export function OperationLogPanel(): React.JSX.Element {
   return (
     <section className={css.root}>
       <PanelHeader
-        title={(
-          <>
-            <span className={css.hdIcon}>{'⚙'}</span>
-            操作日志
-            <span className={css.hdBadge}>
-              <StateDot state={opTotal > 0 ? 'done' : 'warning'} />
-              {opTotal} 条
-            </span>
-          </>
-        )}
-        desc="仅记录操作元数据（时间/类型/动作/对象/结果/上下文），永不保存会话内容；最多显示 500 条。"
+        title="操作日志"
+        desc="仅记录操作元数据（时间/类型/动作/对象/结果/上下文），不保存会话内容 · 最多 500 条"
         actions={(
-          <>
-            <Badge tone="green">成功 {summary.ok}</Badge>
-            <Badge tone="red">失败 {summary.fail}</Badge>
-            <Badge tone="amber">跳过 {summary.skip}</Badge>
-          </>
+          <ActionMenu
+            busy={opLoading}
+            canExport={rows.length > 0}
+            canClear={!opLoading && opTotal > 0}
+            onRefresh={refresh}
+            onExportTxt={() => { exportOpLogTxt(rows) }}
+            onExportCsv={() => { exportOpLogCsv(rows) }}
+            onClear={() => { void clearOpLog() }}
+          />
         )}
       />
 
-      <div className={css.statRow}>
-        <div className={`${css.statCard} ${css.statOk}`}>
-          <span className={css.statValue}>{summary.ok}</span>
-          <span className={clsx(kitCss.textMeta, css.statLabel)}>成功</span>
-          <span className={css.statHint}>正常完成的日志</span>
-        </div>
-        <div className={`${css.statCard} ${css.statFail}`}>
-          <span className={css.statValue}>{summary.fail}</span>
-          <span className={clsx(kitCss.textMeta, css.statLabel)}>失败</span>
-          <span className={css.statHint}>需要关注的异常</span>
-        </div>
-        <div className={`${css.statCard} ${css.statSkip}`}>
-          <span className={css.statValue}>{summary.skip}</span>
-          <span className={clsx(kitCss.textMeta, css.statLabel)}>跳过</span>
-          <span className={css.statHint}>自动跳过或无意义</span>
-        </div>
-        <div className={css.statCard}>
-          <span className={css.statValue}>{opTotal}</span>
-          <span className={clsx(kitCss.textMeta, css.statLabel)}>总记录</span>
-          <span className={css.statHint}>最多保留 500 条</span>
-        </div>
-      </div>
-
-      <Card className={css.filterCard}>
-        {/* 整条筛选栏排成一行：日期区间 / 分类 / 状态 / 搜索 / 动作按钮。
-            搜索框（kit 的 .searchBox）原本 flex-basis 320px 且 min-width 220px，不参与收缩，
-            于是它后面的按钮一定被挤到第二行 —— 这里给它挂 .searchFlex 改成「吃掉剩余空间」。
-            窗口窄到装不下时仍会按 flex-wrap 折行（不硬挤坏控件）。 */}
+      {/* 微信化：筛选区不再套 Card 外壳（一层容器包一层）；统计改筛选行右侧的灰字。 */}
+      <div className={css.filterWrap}>
         <div className={css.filterRow}>
           <DateRangeField
             from={opFrom}
@@ -261,6 +247,9 @@ export function OperationLogPanel(): React.JSX.Element {
             onClear={() => { setOpFrom(''); setOpTo('') }}
             presets={['today', 'week', 'month', 'last-7', 'last-30']}
             ariaLabel="操作日志时间筛选"
+            /* Wave D1：inline = 预设与起止日期同一行（原来默认是上下两行 62px，
+               把筛选区从 62 压到 36 → toolbarH 进 ≤48 目标）。窄窗口仍由 flex-wrap 折行。 */
+            inline
           />
           <Select
             value={opCat}
@@ -274,13 +263,14 @@ export function OperationLogPanel(): React.JSX.Element {
             onChange={(v) => { setOpStatus(v as '' | OperationStatus) }}
             ariaLabel="结果筛选"
           />
-          <SearchInput className={css.searchFlex} value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
-          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={opLoading ? <span className={css.spin} /> : undefined} onClick={refresh} disabled={opLoading}>{opLoading ? '加载中…' : '刷新'}</Button>
-          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpTxt} disabled={rows.length === 0}>导出 TXT</Button>
-          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpCsv} disabled={rows.length === 0}>导出 CSV</Button>
-          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void clearOpLog() }} disabled={opLoading || opTotal === 0} {...desktopActionProps()}>清空</Button>
+          <span className={css.statText}>
+            成功 {summary.ok} · 失败 {summary.fail} · 跳过 {summary.skip} · 共 {opTotal} 条
+          </span>
         </div>
-      </Card>
+        <div className={css.filterSearchRow}>
+          <SearchInput className={css.searchFlex} value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
+        </div>
+      </div>
 
       {opMsg && <div className={clsx(css.notice, opMsg.kind === 'ok' ? css.noticeOk : css.noticeErr)}>{opMsg.text}</div>}
 
@@ -293,8 +283,57 @@ export function OperationLogPanel(): React.JSX.Element {
           loading={opLoading && rows.length === 0}
           emptyTitle={opLoading ? '加载中…' : opReadError ? '操作日志读不出来' : '暂无操作日志，点击「刷新」后分页显示'}
         />
+        {/* 触到 500 条上界时明说，而不是让用户以为「下面没有了」。 */}
+        {pager.capped && (
+          <div className={css.capNote} role="status">
+            已加载最近 {rows.length} 条（共 {opTotal} 条）。要查更早的记录，请用上方的时间 / 分类 / 关键词筛选缩小范围。
+          </div>
+        )}
         {pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </Card>
     </section>
+  )
+}
+
+/**
+ * 页头「更多 ▾」动作菜单（Wave D2）。
+ *
+ * 为什么单独成组件、而不是塞在 `OperationLogPanel` 里：
+ *   ① 面板函数在**函数行数棘轮（≤250 行）**上，动作菜单的开关态与 4 个按钮会把它顶过线；
+ *   ② 菜单开合用**条件渲染**而不是 `<details>`：关闭的 `<details>` 内容仍在 DOM 里，
+ *      会被响应式审计判成「业务文本被隐藏」（实测 `_morePanel_` 6 条 × 70 格），
+ *      也违反「别用隐藏元素装内容」的纪律。
+ * 动作一个不少：刷新 / 导出 TXT / 导出 CSV / 清空（清空仍受桌面动作门控）。
+ */
+function ActionMenu({ busy, canExport, canClear, onRefresh, onExportTxt, onExportCsv, onClear }: {
+  busy: boolean
+  canExport: boolean
+  canClear: boolean
+  onRefresh: () => void
+  onExportTxt: () => void
+  onExportCsv: () => void
+  onClear: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className={css.moreMenu}>
+      <button
+        type="button"
+        className={css.moreBtn}
+        aria-label="更多操作"
+        aria-expanded={open}
+        onClick={() => { setOpen(v => !v) }}
+      >
+        更多 ▾
+      </button>
+      {open && (
+        <div className={css.morePanel} onMouseLeave={() => { setOpen(false) }}>
+          <Button size="sm" variant="outline" icon={busy ? <span className={css.spin} /> : undefined} onClick={() => { setOpen(false); onRefresh() }} disabled={busy}>{busy ? '加载中…' : '刷新'}</Button>
+          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onExportTxt() }} disabled={!canExport}>导出 TXT</Button>
+          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onExportCsv() }} disabled={!canExport}>导出 CSV</Button>
+          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onClear() }} disabled={!canClear} {...desktopActionProps()}>清空</Button>
+        </div>
+      )}
+    </div>
   )
 }

@@ -27,18 +27,31 @@
   pointer-events: none;
 }
 
+/**
+ * 文档流版本（隐私同意屏用）：那一屏底部就是「同意并继续」主按钮，
+ * 右下角固定卡（bottom: 76）会直接盖住它。这里去掉 fixed / z-index / 固定宽度，
+ * 让卡片成为页面的一段；没有提醒时组件返回 null，不占任何高度。
+ */
+.stackInline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 640px;
+  margin-bottom: 10px;
+  pointer-events: none;
+}
+
 .card {
   position: relative;
   pointer-events: auto;
   padding: 12px 12px 12px 16px;
   border-radius: var(--nm-r-lg);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  border: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 16px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--nm-shadow-popup);
 }
-/* 强度靠左色条 + 描边区分，不把整卡铺满彩色：悬浮卡片本来就压在内容上，
+/* 强度只靠左侧 3px 状态条区分，不把整卡铺满彩色：悬浮卡片本来就压在内容上，
    再铺满高饱和底色会更抢眼、还会挡住下面的字 */
 .card::before {
   content: '';
@@ -48,11 +61,9 @@
   bottom: 10px;
   width: 3px;
   border-radius: var(--nm-r-xs);
-  background: var(--nm-cyan);
+  background: var(--nm-brand);
 }
-.card[data-tone='warn'] { border-color: color-mix(in srgb, var(--nm-amber) 40%, transparent); }
 .card[data-tone='warn']::before { background: var(--nm-amber); }
-.card[data-tone='danger'] { border-color: color-mix(in srgb, var(--nm-danger) 45%, transparent); }
 .card[data-tone='danger']::before { background: var(--nm-danger); }
 
 .cardHd {
@@ -60,16 +71,6 @@
   align-items: flex-start;
   gap: 8px;
 }
-.dot {
-  flex: 0 0 auto;
-  margin-top: 6px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--nm-cyan);
-}
-.card[data-tone='warn'] .dot { background: var(--nm-amber); }
-.card[data-tone='danger'] .dot { background: var(--nm-danger); }
 
 .title {
   flex: 1;

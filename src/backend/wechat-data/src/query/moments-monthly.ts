@@ -7,7 +7,8 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MomentsMonthlySnapshot } from '../types.ts'
 import { withDbAsync } from './db-open.ts'
-import { parseSnsXml } from './moments.ts'
+import { ensureMomentsArchiveFresh, parseSnsXml } from './moments.ts'
+import { readArchivedMonthly, momentsArchivePath } from './moments-archive.ts'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 
@@ -45,12 +46,27 @@ export async function queryMomentsMonthly(decryptedDir: string, author?: string,
   const sig = [
     dbPath === null ? '' : fileSigOf(dbPath),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    fileSigOf(momentsArchivePath(decryptedDir)),
   ].join('|')
   // 2026-09-28：同步 `cachedBySig` → async 版（游标要让出，见 computeMomentsMonthly 内注释）。
   return cachedBySigAsync('moments-monthly:' + decryptedDir + ':' + (author ?? '') + ':' + (authorName ?? ''), sig, () => computeMomentsMonthly(decryptedDir, author, authorName), INSIGHTS_TTL_MS)
 }
 
 async function computeMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): Promise<MomentsMonthlySnapshot> {
+  // 归档优先：删掉的帖子也要算进月度分布，否则「列表里有、月度里没有」自相矛盾。
+  try {
+    ensureMomentsArchiveFresh(decryptedDir)
+    const archived = readArchivedMonthly(decryptedDir, {
+      ...(author !== undefined ? { authorUsername: author } : {}),
+      ...(authorName !== undefined ? { authorName } : {}),
+      ...(authorName !== undefined ? { names: contactMeta(decryptedDir).names } : {}),
+    })
+    if (archived !== null && archived.length > 0) return { months: archived }
+    // archived 为空时继续走线上表：可能是「真的没有动态」，也可能是归档写失败（只读/磁盘满）；
+    // 两种情况都让下面的线上路径给出最终答案，避免把「写不进去」显示成「月度一条都没有」。
+  } catch (e) {
+    console.warn('[moments-monthly] 归档读取失败，回退线上表：' + (e instanceof Error ? e.message : String(e)))
+  }
   const dbPath = snsDb(decryptedDir)
   // 压根没有 sns.db = 这台机器从没拉过朋友圈：**确认空**，不是读失败（别拿它吓用户）。
   if (dbPath === null) return { months: [] }

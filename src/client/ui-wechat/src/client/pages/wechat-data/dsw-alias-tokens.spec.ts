@@ -109,7 +109,7 @@ const BARE_ALLOW = new Map<string, string>([
   ['--dsw-alias-interactive-bg-hover-danger', '危险态 hover，nm 无对口（nm-danger 是对应色但非此 alpha）'],
   ['--dsw-static-deepseek-450', '外部库静态色阶，字面携带库身份，不该被主题改写'],
   ['--dsw-static-neutral-bluish-00', '外部库静态色阶，同上'],
-  ['--dsw-alias-button-primary-fill', '外部库主按钮填充（#00c2d4），与 nm-brand 的 #00f0ff 是刻意区分的两档'],
+  ['--dsw-alias-button-primary-fill', '外部库主按钮填充：与 nm-brand 同色相但独立一档，避免按钮 hover/active 反推品牌色'],
 ])
 
 /** 真正的违规：dsw 里还是**颜色字面量**，且不在例外清单里。 */
@@ -127,7 +127,7 @@ const bareViolations = dswColorLiterals
 const EXPECTED_FORWARD = new Map<string, string>([
   ['--dsw-alias-brand-primary', '--nm-brand'],
   ['--dsw-alias-link', '--nm-sky'],
-  ['--dsw-alias-button-primary-hover', '--nm-sky'],
+  ['--dsw-alias-button-primary-hover', '--nm-green'],
   ['--dsw-alias-border-l1', '--nm-cyan-8'],
   ['--dsw-alias-border-l2', '--nm-cyan-12'],
   ['--dsw-alias-border-l3', '--nm-cyan-25'],
@@ -164,7 +164,7 @@ const EXPECTED_FORWARD = new Map<string, string>([
 describe('R3 守卫：dsw 别名层不得自带色值（必须转发到 nm）', () => {
   it('哨兵：两套令牌都读到了（否则下面几条会恒绿）', () => {
     expect(dswNames.length).toBeGreaterThan(50)
-    expect(D.get('--nm-cyan-8')).toBe('rgba(0, 240, 255, 0.08)')
+    expect(D.get('--nm-cyan-8')).toBe('rgba(7, 193, 96, 0.08)')
     expect(L.size).toBeGreaterThan(80)
   })
 

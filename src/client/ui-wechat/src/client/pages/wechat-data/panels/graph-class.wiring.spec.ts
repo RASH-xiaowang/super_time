@@ -18,6 +18,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { atLeast, atRuleBlock } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -37,18 +38,31 @@ const model = readFileSync(join(HERE, 'graph-model.ts'), 'utf8')
 const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const backendGraph = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'graph.ts'), 'utf8')
 
+/**
+ * 「图谱面板」的**全部源码**：`Graph.tsx` + 2026-10-16 抽出的两个子件。
+ *
+ * 这些守卫问的是「这个功能还在不在」，不是「它在哪个文件里」—— 拆文件（`GraphPanel` 撞
+ * 250 行函数棘轮）不该让它们变红。所以按**语义**合并：`GraphRail.tsx`（参数面板）与
+ * `GraphSelectionDetail.tsx`（选中详情卡）都是图谱面板的一部分。
+ */
+const panelAll = [
+  panel,
+  readFileSync(join(HERE, 'GraphRail.tsx'), 'utf8'),
+  readFileSync(join(HERE, 'GraphSelectionDetail.tsx'), 'utf8'),
+].join('\n')
+
 describe('同备注编号边：图例 / 开关 / 名册三处都在', () => {
   it('图例里给这类线一个名字（金虚线 = 同备注编号）', () => {
-    expect(panel).toContain('css.legendLineGold')
-    expect(panel).toContain('金虚线 = 同备注编号')
+    expect(panelAll).toContain('css.legendLineGold')
+    expect(panelAll).toContain('金虚线 = 同备注编号')
     expect(css, '.legendLineGold 没定义').toMatch(/\.legendLineGold\s*\{/)
     // 图例本身也画成虚线，否则「设成实线的图例 + 虚线画布」对不上
     expect(css).toMatch(/\.legendLineGold\s*\{[^}]*repeating-linear-gradient/)
   })
 
   it('设置里有独立的开关，并且它是「结构参数」要进 useMemo 依赖', () => {
-    expect(panel).toContain('同备注编号连边')
-    expect(panel).toMatch(/patch\(\{\s*remarkClass:\s*v\s*\}\)/)
+    expect(panelAll).toContain('同备注编号连边')
+    expect(panelAll).toMatch(/patch\(\{\s*remarkClass:\s*v\s*\}\)/)
     expect(model).toMatch(/remarkClass:\s*true/)
     // 依赖漏了 → 开关点了不重建图（静默失效）
     const deps = panel.match(/const graph = useMemo<BuiltGraph>\([\s\S]*?\n {4}\[[^\]]*\]/)
@@ -57,12 +71,12 @@ describe('同备注编号边：图例 / 开关 / 名册三处都在', () => {
   })
 
   it('详情面板列出同班名册，并标出「被挡在图外」的人', () => {
-    expect(panel).toContain('remark_groups')
-    expect(panel).toContain('同班级 · ')
+    expect(panelAll).toContain('remark_groups')
+    expect(panelAll).toContain('同班级 · ')
     // 「全库 N 人 · 本视图 M 人」——这句正是「同前缀却没有连线」的答案
-    expect(panel).toMatch(/全库 \$\{selectedClass\.total\} 人 · 本视图 \$\{selectedClass\.visibleCount\} 人/)
+    expect(panelAll).toMatch(/全库 \$\{selectedClass\.total\} 人 · 本视图 \$\{selectedClass\.visibleCount\} 人/)
     // 挡在图外的人渲染成不可点（点了跳不到节点，会让人以为是坏了）
-    expect(panel).toMatch(/disabled=\{!m\.visible\}/)
+    expect(panelAll).toMatch(/disabled=\{!m\.visible\}/)
     expect(css, '.detailChip[data-dim] 没定义').toMatch(/\.detailChip\[data-dim\]/)
   })
 })
@@ -99,9 +113,46 @@ describe('同备注编号边：画布与数据源接线', () => {
 describe('Graph.tsx 引用的 CSS 类都能在 graph.module.css 找到', () => {
   it('没有「拼错类名 → 静默无样式」的形状', () => {
     const used = new Set<string>()
-    for (const m of panel.matchAll(/css\.([A-Za-z_][A-Za-z0-9_]*)/g)) used.add(m[1] as string)
+    for (const m of panelAll.matchAll(/css\.([A-Za-z_][A-Za-z0-9_]*)/g)) used.add(m[1] as string)
     const missing = [...used].filter(c => !new RegExp('\\.' + c + '(?![A-Za-z0-9_-])').test(css))
     expect(missing, `graph.module.css 里缺少：${missing.join(', ')}`).toEqual([])
+  })
+})
+
+/**
+ * 手机档：统计条压成一行 + 右侧控制栏的重复统计隐藏（2026-10-16 实测）。
+ *
+ * ## 为什么必须有
+ *
+ * `.statBar` 在 `≤1100px` 档是 **2 列**，而手机档此前**没有**覆盖它 ⇒
+ * 5 个计数排成「2 列 × 3 行、每格 247×83px」，整条占 **249px 高**（实测），
+ * 而它们只是「节点 / 连线 / 圈子 / 联系人 / 群聊」五个数字 —— 信息密度极低，
+ * 把图谱画布挤到屏幕外。用户报「这块里面的组件太大了」。
+ *
+ * 另外右侧控制栏的 `.statRow`（节点/连线/圈子）与顶部 `.statBar` **完全重复**
+ * （同一份 `graph.nodes.length` / `edges.length` / `communityCount`），手机上白占 30px。
+ */
+describe('手机档：统计条压成一行、重复统计隐藏', () => {
+  const phone = atRuleBlock(css, '@media (max-width: 560px)')
+
+  it('统计条在手机上是自适应多列（不是 1100px 档的 2 列）', () => {
+    atLeast(phone.length, 50, 'graph.module.css 的手机档')
+    // 2026-10-17：从「写死 5 列」改成 `auto-fit` —— 知识图谱模式有 **8 格**
+    // （多出 笔记/待补笔记/文件/章节/模型实体），写死 5 列会折成 5+3 两行、
+    // 第二行右边空一大片（用户截图实测）。`auto-fit` 让每行都填满。
+    expect(phone, '手机档没有把 .statBar 改成自适应列 ⇒ 仍是 2 列 × 3 行、占 249px 高')
+      .toMatch(/\.statBar \{[^}]*grid-template-columns: repeat\(auto-fit, minmax\(\d+px, 1fr\)\)/)
+  })
+
+  it('统计格去掉边框与卡片底、字号收一档（一行小格不需要每格一个框）', () => {
+    expect(phone, '统计格仍带边框 ⇒ 一行 5 个框看起来像 5 张卡片').toMatch(/\.statBox \{[^}]*border: none/)
+    expect(phone, '统计格仍有卡片底色').toMatch(/\.statBox \{[^}]*background: transparent/)
+    expect(phone, '数字字号没收 ⇒ 15px 以上在 97px 宽的格子里会挤').toMatch(/\.statNum \{ font-size: 15px; \}/)
+  })
+
+  it('右侧控制栏的重复统计在手机上隐藏（与顶部同一份数据）', () => {
+    expect(phone, '右侧 .statRow 没隐藏 ⇒ 与顶部统计条重复显示同一份数据')
+      .toMatch(/\.statRow \{ display: none; \}/)
   })
 })
 
@@ -117,7 +168,7 @@ describe('模型实体层：图例 / 统计 / 详情 / 头像挡位', () => {
     .split(/\r?\n/)
     .map(l => l.replace(/\/\/.*$/, ''))
     .join('\n')
-  const panelCode = code(panel)
+  const panelCode = code(panelAll)
   const modelCode = code(model)
 
   it('知识侧五类节点收进一份名单，两处判定共用（加一类不会只改一处）', () => {
@@ -171,5 +222,69 @@ describe('模型实体层：图例 / 统计 / 详情 / 头像挡位', () => {
     // 而那个区间的差异是「哪条推断边活下来」，没有产品含义。分类本身才是纪律。
     expect(modelCode).toMatch(/const observed = edges\.filter\(e => e\.kind !== 'mention' && e\.kind !== 'suggest'\)/)
     expect(modelCode).toMatch(/const inferred = edges\.filter\(e => e\.kind === 'mention' \|\| e\.kind === 'suggest'\)/)
+  })
+})
+
+/**
+ * 参数面板改成**悬浮弹层**（2026-10-16）。
+ *
+ * ## 为什么必须有
+ *
+ * 原先 `.rail` 是 `flex-shrink: 0` 的**固定 252px 右栏**：窗口一窄就把画布压成一条缝，
+ * 而节点半径是绝对值 ⇒ 全挤成一团。改成 `position: absolute` 后它**不占布局宽度**，
+ * 画布永远独占整宽。代价是「面板会盖住画布」，所以必须有一个**始终可见**的折叠按钮 ——
+ * 收起时它是唯一入口，漏渲染就等于功能消失（本轮真机实测踩到过：面板能收起、但收不回来）。
+ */
+describe('参数面板：悬浮弹层 + 折叠按钮', () => {
+  const rail = readFileSync(join(HERE, 'GraphRail.tsx'), 'utf8')
+
+  it('.rail 是绝对定位的浮层（不占布局宽度 ⇒ 画布不被压窄）', () => {
+    expect(css, '.rail 不是绝对定位 ⇒ 又变回占宽度的固定右栏').toMatch(/\.rail \{[^}]*position: absolute/)
+    expect(css, '浮层缺 z-index ⇒ 会被画布内的图例/小地图盖住').toMatch(/\.rail \{[^}]*z-index: 20/)
+    // 宽度必须带 `min(...)` 兜底：窄屏上 300px 固定宽会溢出容器
+    expect(css, '浮层宽度没有窄屏兜底').toMatch(/\.rail \{[^}]*width: min\(300px, calc\(100% - 20px\)\)/)
+  })
+
+  it('折叠按钮始终渲染，且展开时由 CSS 让位（不是条件渲染）', () => {
+    // 条件渲染 `{!railOpen && <button>}` 也能跑，但「展开时按钮消失」会让位置跳动；
+    // 这里钉的是「按钮在 DOM 里恒在、靠 data-open 隐藏」这个形状。
+    expect(panel, '折叠按钮没渲染 ⇒ 面板收起后收不回来').toContain('css.railToggle')
+    expect(panel, '折叠按钮缺 aria-label ⇒ 读屏与自动化都找不到它').toMatch(/aria-label=\{railOpen \? '收起参数面板' : '展开参数面板'\}/)
+    expect(css, '展开时按钮没让位 ⇒ 与浮层标题栏的「收起」叠在一起').toMatch(/\.railToggle\[data-open\] \{ display: none; \}/)
+  })
+
+  it('手机端默认收起（浮层会盖住画布，小屏上必须让用户主动打开）', () => {
+    expect(panel, '手机端没有默认收起 ⇒ 一进图谱就被浮层盖住').toMatch(/useState\(\(\) => !isPhone\)/)
+    expect(panel, '没有用手机断点判定').toContain('useMediaQuery(PHONE_QUERY)')
+  })
+
+  it('浮层有标题栏与收起按钮（否则只能靠点画布外关闭，手机上很难点准）', () => {
+    expect(rail).toContain('css.railHd')
+    expect(rail).toContain('css.railClose')
+    expect(rail).toMatch(/aria-label="收起参数面板"/)
+  })
+
+  it('折叠按钮与浮层都在 .stage 内（否则 absolute 会一路找到视口、飘到屏幕顶部）', () => {
+    // 2026-10-16 实测踩到：`.railToggle` 原先放在 `.stage` **外面**（`.body` 的直接子元素），
+    // 而 `.body` / `.panel` 都没有 `position: relative` ⇒ `position: absolute` 一路往上找到
+    // 视口 ⇒ 按钮落在 `top:10px`（屏幕顶部），正好压住手机档的全局搜索条（用户报「这一块放在
+    // 这里合理吗？」）。`.stage` 是最近的定位祖先，两者都必须挂在它下面。
+    const stageAt = panel.indexOf('<div className={css.stage}>')
+    expect(stageAt, '找不到 .stage 的开标签').toBeGreaterThan(-1)
+    const toggleAt = panel.indexOf('css.railToggle')
+    const railAt = panel.indexOf('<GraphRail')
+    expect(toggleAt, '找不到折叠按钮').toBeGreaterThan(-1)
+    expect(railAt, '找不到 <GraphRail>').toBeGreaterThan(-1)
+    expect(toggleAt, '折叠按钮必须在 .stage 之后（即挂在它里面）').toBeGreaterThan(stageAt)
+    expect(railAt, '浮层必须在 .stage 之后（即挂在它里面）').toBeGreaterThan(stageAt)
+    // 反向：`.stage` 的闭合 `</div>` 必须在两者之后 —— 否则它们其实还在外面
+    const stageClose = panel.indexOf('</div>\n      </div>', railAt)
+    expect(stageClose, '.stage 的闭合标签找不到（结构变了）').toBeGreaterThan(railAt)
+  })
+
+  it('跨断点时同步展开态（桌面缩到手机宽不该继续展开、盖住画布）', () => {
+    // `useState` 的惰性初值只在首次挂载求值 ⇒ 桌面打开图谱后缩窗口，浮层会继续展开。
+    expect(panel, '没有跨断点同步 ⇒ 桌面缩到手机宽后浮层仍展开').toMatch(/prevPhoneRef\.current === isPhone/)
+    expect(panel, '跨断点同步没把 railOpen 设成 !isPhone').toMatch(/setRailOpen\(!isPhone\)/)
   })
 })

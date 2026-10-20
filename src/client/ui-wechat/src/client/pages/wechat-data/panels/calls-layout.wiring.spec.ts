@@ -8,9 +8,9 @@
  *
  * 本次三条要求与对应契约：
  *  ① **精简条目数**：`topPeers: 12` / `recentLimit: 30`；
- *  ② **长列表可滚动**：三个列表（排行 / 逐月 / 最近通话）都限高 + 内层 `overflow-y: auto`；
- *  ③ **内容不足时不影响布局**：必须用 `max-height` 而**不是** `height` —— 条目少时列表
- *     保持自然高度，不会拖出一条空滚动区；
+ *  ② **单页面滚动（2026-10-19 修订，用户要求「合理使用滚动条」）**：三个列表不再各自
+ *     限高 + 内滚，长内容统一交给 `.panelBody` 的页面级滚动 —— 一屏只留一条滚动条；
+ *  ③ **窄档不裁切**：桌面档解除卡片高度预算（compact-chrome），390 档仍由页面/卡身滚动兜底；
  *  ④ **长列表独占一行**：`最近通话` 不许再与矮卡片配对（那是留白的直接来源）。
  */
 import { join } from 'node:path'
@@ -32,41 +32,27 @@ describe('① 精简条目数', () => {
   })
 })
 
-describe('②③ 长列表限高 + 内层滚动，且用 max-height', () => {
+describe('②③ 单页面滚动：列表不再各自限高/嵌套滚动', () => {
   for (const name of SCROLL_LISTS) {
-    it(`.${name} 有 max-height 与 overflow-y: auto`, () => {
+    it(`.${name} 不再写 max-height / overflow-y: auto`, () => {
       const block = classBlock(CSS, name)
-      expect(block, `.${name} 缺少限高 —— 长列表会重新撑长整行`).toMatch(/max-height:\s*\d+px/)
-      expect(block, `.${name} 缺少内层滚动`).toMatch(/overflow-y:\s*auto/)
-      // 反例：写成固定 height ⇒ 条目少时会拖出一条空滚动区
-      expect(/(?<!max-)\bheight:\s*\d+px/.test(block), `.${name} 不许用固定 height`).toBe(false)
+      expect(block, `.${name} 又出现 max-height —— 页面会变成「页面滚 + 卡内滚」两层`).not.toMatch(/max-height:/)
+      expect(block, `.${name} 又出现内层滚动`).not.toMatch(/overflow-y:\s*auto/)
     })
   }
 
-  it('滚动条**显式**声明，不依赖全局主题规则（全局那条只在主题 CSS 加载时生效）', () => {
-    // 三条规则是**合并选择器**写的（一份声明管三个列表），所以断言要落在那个块里，
-    // 而不是逐条去匹配 `.x::-webkit-scrollbar { … }` 这种「单选择器 + 单声明」的形状。
-    const bar = CSS.slice(CSS.indexOf('/* 上面三个列表的滚动条'))
-    atLeast(bar.length, 300, '滚动条声明块')
-    for (const name of SCROLL_LISTS) {
-      expect(bar, `.${name} 没有显式声明滚动条`).toContain(`.${name}::-webkit-scrollbar`)
-      expect(bar, `.${name} 的轨道没设透明`).toContain(`.${name}::-webkit-scrollbar-track`)
-    }
-    expect(bar, '滚动条宽度应为 6px（细条，不带轨道底色）').toContain('width: 6px; height: 6px;')
-    expect(bar, '轨道必须透明且无边框').toContain('background: transparent; border: none;')
-    expect(bar, 'corner 也要透明（横竖条交界处不该有一块底色）').toContain('::-webkit-scrollbar-corner')
+  it('滚动条统一由全局 ui-app/scrollbars.css 提供（可见细条 + 窄档隐藏）', () => {
+    const bar = readText(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'scrollbars.css'))
+    expect(bar, '全局滚动条宽度必须显式声明（8px 细条）').toContain('width: 8px;')
+    expect(bar, '拇指必须用正文次级色 mix（跟随深浅主题）').toContain('color-mix(in srgb, var(--nm-text-2')
+    expect(bar, '窄档（≤560）隐藏触摸屏滚动条').toContain('@media (max-width: 560px)')
+    expect(CSS, 'calls 列表还留着旧的独立滚动条声明（死 CSS）').not.toContain('.rankList::-webkit-scrollbar')
   })
 
-  it('滚动条 thumb 走令牌（圆角用 --nm-r-xs，6px 宽的条上正好是圆头）', () => {
-    const thumb = CSS.slice(CSS.indexOf('.rankList::-webkit-scrollbar-thumb,'), CSS.indexOf('.rankList::-webkit-scrollbar-corner'))
-    expect(thumb, 'thumb 背景要用滚动条令牌（带兜底）').toContain('var(--dsw-alias-scrollbar-bg-l2,')
-    expect(thumb, 'thumb 不许有边框').toContain('border: none;')
-    expect(thumb, '圆角必须用令牌，写字面量会被几何守卫咬').toContain('border-radius: var(--nm-r-xs);')
-  })
-
-  it('防空转：真的读到了两个文件', () => {
+  it('防空转：真的读到了三个文件', () => {
     atLeast(TSX.length, 6000, 'Calls.tsx 源码')
     atLeast(CSS.length, 6000, 'calls.module.css 源码')
+    atLeast(readText(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'scrollbars.css')).length, 800, 'scrollbars.css 源码')
   })
 })
 

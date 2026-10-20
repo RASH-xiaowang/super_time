@@ -25,6 +25,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const { registerWechatIpc } = require(join(HERE, '..', 'ipc-wechat.js'))
+const mutationGate = require(join(HERE, '..', 'mutation-gate.js')) as {
+  resetMutationGate: () => void
+  setMutationGateMode: (mode: string) => void
+  observeBackendStatus: (status: unknown) => boolean
+}
 
 const CHANNELS = [
   'wechat:list-methods', 'wechat:info', 'wechat:call', 'wechat:backend-state',
@@ -132,12 +137,15 @@ describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西
     const llm = await handled.get('wechat:llm-get')?.({}, undefined)
     expect(llm, 'wechat:llm-get 返回了 undefined').toBeTruthy()
     const backendState = await handled.get('wechat:backend-state')?.({}, undefined) as
-      { ok: boolean, value: { callQueue: { active: number, queued: number }, rpc: { timedOut: number } } }
+      { ok: boolean, value: { callQueue: { active: number, queued: number }, rpc: { timedOut: number }, mutation: { epoch: number, mode: string, revoked: number } } }
     expect(backendState.value.callQueue).toMatchObject({ active: 0, queued: 0 })
     expect(backendState.value.rpc).toMatchObject({ timedOut: 1 })
+    expect(backendState.value.mutation, 'backend-state 没暴露 mutation shadow 观测面').toMatchObject({
+      epoch: expect.any(Number), mode: expect.any(String), revoked: expect.any(Number),
+    })
   })
 
-  it('wechat:call 走共享调度器，并把 desktop/method 交给诊断记账', async () => {
+  it('wechat:call 走共享调度器，并把 desktop/method/args 交给诊断记账', async () => {
     const probe = backendProbe()
     const { ctx, handled, scheduled } = makeCtx(probe.stub)
     registerWechatIpc(ctx)
@@ -148,7 +156,63 @@ describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西
     )
     expect(r).toEqual({ ok: true, value: { redactSensitive: false } })
     expect(probe.called).toEqual(['getSessions'])
-    expect(scheduled).toEqual([{ channel: 'desktop', method: 'getSessions' }])
+    // `args` 必须一起交给队列：`call-priority.js` 的 `downgradeHeavyByArgs` 靠它判断
+    // 「这次取图是有网（纯网络 IO）还是无网（本机解密）」—— 少了它，朋友圈取图会
+    // 一直占着重活名额（那个车道只有 1 个并发）。
+    expect(scheduled).toEqual([{ channel: 'desktop', method: 'getSessions', args: [] }])
+  })
+
+  it('队列/超时 rejection 也要包成 {ok:false,error} 并保留 code（否则跨 IPC 只剩 message）', async () => {
+    const { ctx, handled } = makeCtx()
+    const busy = Object.assign(new Error('重任务排队已满'), {
+      code: 'REMOTE_BUSY',
+      details: { method: 'getSnsImageDataUrl' },
+    })
+    ;(ctx as { scheduleWechatCall?: unknown }).scheduleWechatCall = () => Promise.reject(busy)
+    registerWechatIpc(ctx)
+    const fn = handled.get('wechat:call')
+    expect(fn, 'wechat:call 没注册').toBeTruthy()
+    const r = await (fn as (e: unknown, method: string, args: unknown[]) => Promise<unknown>)(
+      {}, 'getSnsImageDataUrl', [],
+    )
+    expect(r).toEqual({
+      ok: false,
+      error: {
+        message: '重任务排队已满',
+        code: 'REMOTE_BUSY',
+        details: { method: 'getSnsImageDataUrl' },
+      },
+    })
+  })
+
+  it('enforce 模式下，排队跨过后端重启的写请求在派发前被撤销', async () => {
+    mutationGate.resetMutationGate()
+    mutationGate.observeBackendStatus({ restarts: 0 })
+    mutationGate.setMutationGateMode('enforce')
+    try {
+      const { ctx, handled } = makeCtx()
+      let restarts = 0
+      ;(ctx as { getBackendStatus?: unknown }).getBackendStatus = () => ({ state: 'running', restarts })
+      let release: (() => void) | null = null
+      ;(ctx as { scheduleWechatCall?: unknown }).scheduleWechatCall = (task: () => unknown) => new Promise((resolve, reject) => {
+        release = () => {
+          try { resolve(task()) } catch (e) { reject(e) }
+        }
+      })
+      registerWechatIpc(ctx)
+      const fn = handled.get('wechat:call')
+      const pending = (fn as (e: unknown, method: string, args: unknown[]) => Promise<unknown>)(
+        {}, 'saveTaskInfo', [{ title: 'x' }],
+      )
+      await Promise.resolve()
+      restarts = 1 // 请求还在队列里时后端重启了一次
+      release!()
+      const r = await pending as { ok: boolean, error?: { code?: string } }
+      expect(r.ok).toBe(false)
+      expect(r.error?.code).toBe('MUTATION_DISPATCH_REVOKED')
+    } finally {
+      mutationGate.resetMutationGate()
+    }
   })
 })
 

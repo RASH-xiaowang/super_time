@@ -40,3 +40,28 @@ describe('wechat-worker：RPC 超时取消接线', () => {
     expect(body).toContain('activeCalls.delete(id)')
   })
 })
+
+describe('wechat-worker：退出兜底（还原原图自动下载的注入）', () => {
+  it('进程 exit 时兜底 dispose，避免注入留在微信进程里', () => {
+    // 正常路径是主进程 dispose 握手；兜底是进程自己被杀时（SIGTERM/握手超时）。
+    // 少了这一条，worker 被信号打掉后注入无人还原，用户界面只能提示「重启微信」。
+    expect(worker).toContain("process.once('exit'")
+    const at = worker.indexOf("process.once('exit'")
+    const body = worker.slice(at, at + 700)
+    expect(body).toContain('backend === null')
+    expect(body).toContain('backend.dispose()')
+  })
+
+  it('兜底只在还没 dispose 过时动手（不重复还原）', () => {
+    const at = worker.indexOf("process.once('exit'")
+    const body = worker.slice(at, at + 400)
+    expect(body).toContain('if (backend === null) return')
+  })
+
+  it('dispose 分支把 backend 置 null —— 这样兜底才知道「已经还原过」', () => {
+    const at = worker.indexOf("case 'dispose'")
+    const body = worker.slice(at, at + 400)
+    expect(body).toContain('backend?.dispose()')
+    expect(body).toContain('backend = null')
+  })
+})

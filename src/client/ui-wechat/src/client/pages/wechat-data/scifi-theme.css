@@ -17,20 +17,20 @@
  * ──────────────────────────────────────────── */
 :root {
   /* 基础色板 */
-  --nm-black:         #050a18;
-  --nm-bg-0:          #050a18;
-  --nm-bg-1:          #0b1220;
-  --nm-bg-2:          #0f172a;
-  --nm-bg-glass:      var(--dsw-alias-bg-overlay, rgba(12, 20, 48, 0.55));
-  --nm-bg-hover:      var(--dsw-alias-interactive-bg-hover, rgba(0, 240, 255, 0.06));
-  --nm-bg-active:     var(--dsw-alias-interactive-bg-active, rgba(0, 240, 255, 0.10));
-  --nm-bg-input:      #0f172a;
-  --nm-bg-card:       #0f172a;
+  --nm-black: #111111;
+  --nm-bg-0: #111111;
+  --nm-bg-1: #171717;
+  --nm-bg-2: #181818;
+  --nm-bg-glass: #181818;
+  --nm-bg-hover: rgba(255, 255, 255, 0.06);
+  --nm-bg-active: rgba(255, 255, 255, 0.10);
+  --nm-bg-input: #181818;
+  --nm-bg-card: #181818;
 
   /* 面 / 罩 / 中性 hover（R2）：首见表面（标题栏 / 授权 / 引导）专用 */
-  --nm-panel-solid:    rgba(13, 21, 40, 0.72);
-  --nm-veil-55:        rgba(5, 10, 24, 0.55);
-  --nm-hover-neutral:  rgba(127, 127, 127, 0.16);
+  --nm-panel-solid: rgba(23, 23, 23, 0.92);
+  --nm-veil-55: rgba(17, 17, 17, 0.85);
+  --nm-hover-neutral: rgba(255, 255, 255, 0.08);
   --nm-paper-85:        rgba(255, 255, 255, 0.85);
   --nm-paper-55:        rgba(255, 255, 255, 0.55);
   --nm-paper-35:        rgba(255, 255, 255, 0.35);
@@ -40,82 +40,82 @@
   --nm-paperfill-45:    rgba(247, 249, 252, 0.45);
   --nm-paperfill-88:    rgba(247, 249, 252, 0.88);
   --nm-paperfill-50:    rgba(247, 249, 252, 0.50);
-  --nm-veil-25:         rgba(5, 10, 24, 0.25);
+  --nm-veil-25: rgba(0, 0, 0, 0.35);
 
   /* 罩 / 天空 / 琥珀（R2 第二批） */
-  --nm-scrim-50:       rgba(5, 10, 24, 0.50);
-  --nm-sky:            #38bdf8;
-  --nm-amber-45:       rgba(245, 158, 11, 0.45);
+  --nm-scrim-50: rgba(0, 0, 0, 0.55);
+  --nm-sky: #7d90a9;
+  --nm-amber-45: rgba(250, 157, 59, 0.45);
 
   /* 霓虹色（浅色主题在 light-theme.css 中压暗，保证可读性与对比度） */
-  --nm-cyan:          #00f0ff;
-  --nm-cyan-50:       rgba(0, 240, 255, 0.50);
-  --nm-cyan-20:       rgba(0, 240, 255, 0.20);
-  --nm-cyan-10:       rgba(0, 240, 255, 0.10);
-  --nm-cyan-4:        rgba(0, 240, 255, 0.04);
-  --nm-cyan-6:        rgba(0, 240, 255, 0.06);
-  --nm-cyan-8:        rgba(0, 240, 255, 0.08);
-  --nm-cyan-14:       rgba(0, 240, 255, 0.14);
-  --nm-cyan-35:       rgba(0, 240, 255, 0.35);
-  --nm-cyan-12:        rgba(0, 240, 255, 0.12);
-  --nm-cyan-16:        rgba(0, 240, 255, 0.16);
-  --nm-cyan-18:        rgba(0, 240, 255, 0.18);
-  --nm-cyan-25:        rgba(0, 240, 255, 0.25);
-  --nm-cyan-42:        rgba(0, 240, 255, 0.42);
-  --nm-cyan-45:        rgba(0, 240, 255, 0.45);
-  --nm-cyan-40:        rgba(0, 240, 255, 0.40);
-  --nm-cyan-60:        rgba(0, 240, 255, 0.60);
-  --nm-cyan-70:        rgba(0, 240, 255, 0.70);
-  --nm-purple:        #a855f7;
-  --nm-purple-20:     rgba(168, 85, 247, 0.20);
-  --nm-purple-8:       rgba(168, 85, 247, 0.08);
-  --nm-purple-10:      rgba(168, 85, 247, 0.10);
-  --nm-purple-14:      rgba(168, 85, 247, 0.14);
-  --nm-purple-18:      rgba(168, 85, 247, 0.18);
-  --nm-purple-50:      rgba(168, 85, 247, 0.50);
-  --nm-purple-30:      rgba(168, 85, 247, 0.30);
-  --nm-purple-40:      rgba(168, 85, 247, 0.40);
-  --nm-purple-70:      rgba(168, 85, 247, 0.70);
-  --nm-blue:          #3b82f6;
-  --nm-blue-20:       rgba(59, 130, 246, 0.20);
-  --nm-pink:          #ec4899;
-  --nm-green:         #00ff88;
-  --nm-green-20:      rgba(0, 255, 136, 0.20);
-  --nm-red:           #ff3b5c;
-  --nm-amber:         #f59e0b;
+  --nm-cyan: #07c160;
+  --nm-cyan-50: rgba(7, 193, 96, 0.50);
+  --nm-cyan-20: rgba(7, 193, 96, 0.20);
+  --nm-cyan-10: rgba(7, 193, 96, 0.10);
+  --nm-cyan-4: rgba(7, 193, 96, 0.04);
+  --nm-cyan-6: rgba(7, 193, 96, 0.06);
+  --nm-cyan-8: rgba(7, 193, 96, 0.08);
+  --nm-cyan-14: rgba(7, 193, 96, 0.14);
+  --nm-cyan-35: rgba(7, 193, 96, 0.35);
+  --nm-cyan-12: rgba(7, 193, 96, 0.12);
+  --nm-cyan-16: rgba(7, 193, 96, 0.16);
+  --nm-cyan-18: rgba(7, 193, 96, 0.18);
+  --nm-cyan-25: rgba(7, 193, 96, 0.25);
+  --nm-cyan-42: rgba(7, 193, 96, 0.42);
+  --nm-cyan-45: rgba(7, 193, 96, 0.45);
+  --nm-cyan-40: rgba(7, 193, 96, 0.40);
+  --nm-cyan-60: rgba(7, 193, 96, 0.60);
+  --nm-cyan-70: rgba(7, 193, 96, 0.70);
+  --nm-purple: #7d90a9;
+  --nm-purple-20: rgba(125, 144, 169, 0.20);
+  --nm-purple-8: rgba(125, 144, 169, 0.08);
+  --nm-purple-10: rgba(125, 144, 169, 0.10);
+  --nm-purple-14: rgba(125, 144, 169, 0.14);
+  --nm-purple-18: rgba(125, 144, 169, 0.18);
+  --nm-purple-50: rgba(125, 144, 169, 0.50);
+  --nm-purple-30: rgba(125, 144, 169, 0.30);
+  --nm-purple-40: rgba(125, 144, 169, 0.40);
+  --nm-purple-70: rgba(125, 144, 169, 0.70);
+  --nm-blue: #7d90a9;
+  --nm-blue-20: rgba(125, 144, 169, 0.20);
+  --nm-pink: #fa5151;
+  --nm-green: #07c160;
+  --nm-green-20: rgba(7, 193, 96, 0.20);
+  --nm-red: #fa5151;
+  --nm-amber: #fa9d3b;
 
   /* 文字色阶 */
-  --nm-text-1:        #e2e8f0;
-  --nm-text-2:        #94a3b8;
-  --nm-text-3:        #64748b;
-  --nm-text-4:        #4a5575;   /* 占位 / 禁用（第四档中性色） */
+  --nm-text-1: #ededed;
+  --nm-text-2: #b5b5b5;
+  --nm-text-3: #828282;
+  --nm-text-4: #5e5e5e;   /* 占位 / 禁用（第四档中性色） */
   /* 品牌色填充上的文字色：深色下品牌色为霓虹亮色，配近黑字 */
-  --nm-on-accent: #050a18;
+  --nm-on-accent: #111111;
   /* 品牌身份色（R1）：与 --nm-cyan 同值起步；语义收窄为「交互态专用」在使用层做 */
-  --nm-brand:         #00f0ff;
+  --nm-brand: #07c160;
 
   /* 边框 */
-  --nm-border:        var(--dsw-alias-border-l2, rgba(0, 240, 255, 0.10));
-  --nm-border-hover:  var(--dsw-alias-border-l3, rgba(0, 240, 255, 0.25));
-  --nm-border-active: var(--dsw-alias-border-l4, rgba(0, 240, 255, 0.40));
+  --nm-border: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+  --nm-border-hover: var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.20));
+  --nm-border-active: #07c160;
 
   /* 阴影 / 发光 */
-  --nm-glow-sm:       0 0 8px rgba(0, 240, 255, 0.20);
-  --nm-glow-md:       0 0 20px rgba(0, 240, 255, 0.25);
-  --nm-glow-lg:       0 0 40px rgba(0, 240, 255, 0.15), 0 0 80px rgba(168, 85, 247, 0.08);
-  --nm-shadow-card:   0 4px 32px rgba(0, 0, 0, 0.50);
-  --nm-shadow-popup:  0 16px 48px rgba(0, 0, 0, 0.60);
+  --nm-glow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --nm-glow-md: 0 2px 8px rgba(0, 0, 0, 0.40);
+  --nm-glow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --nm-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --nm-shadow-popup: 0 12px 36px rgba(0, 0, 0, 0.55);
 
   /* 排版 */
-  --nm-font-sans:     'Inter', 'SF Pro Display', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --nm-font-sans: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
   --nm-font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
 
   /* 圆角 */
-  --nm-r-xs:          4px;
-  --nm-r-sm:          6px;
-  --nm-r-md:          10px;
-  --nm-r-lg:          14px;
-  --nm-r-xl:          20px;
+  --nm-r-xs: 2px;
+  --nm-r-sm: 4px;
+  --nm-r-md: 6px;
+  --nm-r-lg: 8px;
+  --nm-r-xl: 12px;
   --nm-r-pill:        999px;
 
   /* 过渡 */
@@ -175,11 +175,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 240, 255, 0.10));
+  background: var(--dsw-alias-scrollbar-bg-l2, rgba(255, 255, 255, 0.18));
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 240, 255, 0.22));
+  background: var(--dsw-alias-scrollbar-hover-l2, rgba(255, 255, 255, 0.28));
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
@@ -356,14 +356,14 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --nm-dense-r: 8px;        /* 紧凑行/小按钮的圆角 */
 
   /* 语义色 */
-  --nm-success: #00ff88;
-  --nm-success-15: rgba(0, 255, 136, 0.15);
-  --nm-warning: #f59e0b;
-  --nm-warning-15: rgba(245, 158, 11, 0.15);
-  --nm-danger: #ff3b5c;
-  --nm-danger-15: rgba(255, 59, 92, 0.15);
-  --nm-info: #3b82f6;
-  --nm-info-15: rgba(59, 130, 246, 0.15);
+  --nm-success: #07c160;
+  --nm-success-15: rgba(7, 193, 96, 0.15);
+  --nm-warning: #fa9d3b;
+  --nm-warning-15: rgba(250, 157, 59, 0.15);
+  --nm-danger: #fa5151;
+  --nm-danger-15: rgba(250, 81, 81, 0.15);
+  --nm-info: #7d90a9;
+  --nm-info-15: rgba(125, 144, 169, 0.15);
 
   /**
    * 色调色**文字**版本（第 82 轮）。
@@ -433,14 +433,14 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --nm-empty-fs: 12.5px;
 
   /* 表格 */
-  --nm-table-header-bg: rgba(0, 240, 255, 0.04);
-  --nm-table-row-hover: rgba(0, 240, 255, 0.05);
-  --nm-table-row-stripe: rgba(255, 255, 255, 0.015);
+  --nm-table-header-bg: rgba(255, 255, 255, 0.04);
+  --nm-table-row-hover: rgba(255, 255, 255, 0.05);
+  --nm-table-row-stripe: rgba(255, 255, 255, 0.02);
 
   /* 地图板块底色。ECharts 画在 canvas 上不能用 var()，由
      utils/theme-color.ts 的 tokenColor() 在 JS 侧解析成具体颜色，
      所以深浅主题必须各给一份。 */
-  --nm-map-land: rgba(8, 40, 60, 0.90);
+  --nm-map-land: #2a2a2a;
 }
 
 /* ────────────────────────────────────────────
@@ -473,55 +473,55 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --dsw-font-markdown-table: 12px/1.6 var(--nm-font-sans, sans-serif);
   --dsw-font-markdown-table-head: 12px/1.6 var(--nm-font-sans, sans-serif);
 
-  --dsw-alias-bg-base: var(--nm-bg-0, #050a18);
-  --dsw-alias-bg-layer-0: var(--nm-bg-0, #050a18);
-  --dsw-alias-bg-layer-1: var(--nm-bg-1, #0b1220);
-  --dsw-alias-bg-layer-2: var(--nm-bg-2, #0f172a);
+  --dsw-alias-bg-base: var(--nm-bg-0, #111111);
+  --dsw-alias-bg-layer-0: var(--nm-bg-0, #111111);
+  --dsw-alias-bg-layer-1: var(--nm-bg-1, #171717);
+  --dsw-alias-bg-layer-2: var(--nm-bg-2, #1b1b1b);
   --dsw-alias-bg-mask-1: rgba(0, 0, 0, 0.55);
-  --dsw-alias-bg-overlay: rgba(12, 20, 48, 0.72);
-  --dsw-alias-border-l1: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
-  --dsw-alias-border-l2: var(--nm-cyan-12, rgba(0, 240, 255, 0.12));
-  --dsw-alias-border-l3: var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
-  --dsw-alias-border-l4: var(--nm-cyan-40, rgba(0, 240, 255, 0.40));
-  --dsw-alias-brand-primary: var(--nm-brand, #00f0ff);
-  --dsw-alias-button-contrast-fill: var(--nm-on-accent, #050a18);
-  --dsw-alias-button-ghost-active-border: var(--nm-cyan-45, rgba(0, 240, 255, 0.45));
-  --dsw-alias-button-ghost-active-fill: var(--nm-cyan-12, rgba(0, 240, 255, 0.12));
-  --dsw-alias-button-primary-fill: #00c2d4;
-  --dsw-alias-button-primary-hover: var(--nm-sky, #38bdf8);
-  --dsw-alias-button-tool-bar-fill: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
-  --dsw-alias-button-tool-bar-hover: var(--nm-cyan-14, rgba(0, 240, 255, 0.14));
-  --dsw-alias-interactive-bg-active: var(--nm-cyan-10, rgba(0, 240, 255, 0.10));
-  --dsw-alias-interactive-bg-hover: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
-  --dsw-alias-interactive-bg-hover-danger: rgba(255, 59, 92, 0.12);
-  --dsw-alias-label-caption: var(--nm-text-2, #94a3b8);
-  --dsw-alias-label-dimmed: var(--nm-text-3, #64748b);
-  --dsw-alias-label-primary: var(--nm-text-1, #e2e8f0);
-  --dsw-alias-label-primary-foreground: var(--nm-on-accent, #050a18);
-  --dsw-alias-label-primary-inverted: var(--nm-text-1, #e2e8f0);
-  --dsw-alias-label-secondary: var(--nm-text-2, #94a3b8);
-  --dsw-alias-label-tertiary: var(--nm-text-3, #64748b);
-  --dsw-alias-link: var(--nm-sky, #38bdf8);
-  --dsw-alias-markdown-code-block: #0b1220;
-  --dsw-alias-markdown-code-block-banner: #132033;
-  --dsw-alias-markdown-inline-code: #16213a;
-  --dsw-alias-scrollbar-bg-l2: rgba(0, 240, 255, 0.15);
-  --dsw-alias-scrollbar-hover-l2: var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
-  --dsw-alias-state-business-primary: var(--nm-blue, #3b82f6);
-  --dsw-alias-state-error-primary: var(--nm-red, #ff3b5c);
-  --dsw-alias-state-success-primary: var(--nm-green, #00ff88);
-  --dsw-alias-state-success-tertiary: var(--nm-success-15, rgba(0, 255, 136, 0.15));
-  --dsw-alias-state-warn-label: var(--nm-amber, #f59e0b);
-  --dsw-alias-state-warn-primary: var(--nm-amber, #f59e0b);
-  --dsw-alias-state-warn-tertiary: var(--nm-warning-15, rgba(245, 158, 11, 0.15));
-  --dsw-alias-tooltip-bg: #132033;
-  --dsw-hovercard-bg: rgba(15, 26, 54, 0.95);
-  --dsw-mask-blur: blur(6px);
-  --dsw-shadow-lv3: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --dsw-elevation-prominent: var(--nm-shadow-popup, 0 16px 48px rgba(0, 0, 0, 0.60));
-  --dsw-specific-menu: rgba(15, 26, 54, 0.98);
-  --dsw-static-deepseek-450: #1e293b;
-  --dsw-static-neutral-bluish-00: #e2e8f0;
+  --dsw-alias-bg-overlay: rgba(27, 27, 27, 0.92);
+  --dsw-alias-border-l1: var(--nm-cyan-8, rgba(255, 255, 255, 0.08));
+  --dsw-alias-border-l2: var(--nm-cyan-12, rgba(255, 255, 255, 0.12));
+  --dsw-alias-border-l3: var(--nm-cyan-25, rgba(255, 255, 255, 0.25));
+  --dsw-alias-border-l4: var(--nm-cyan-40, rgba(255, 255, 255, 0.40));
+  --dsw-alias-brand-primary: var(--nm-brand, #07c160);
+  --dsw-alias-button-contrast-fill: var(--nm-on-accent, #ffffff);
+  --dsw-alias-button-ghost-active-border: var(--nm-cyan-45, rgba(7, 193, 96, 0.45));
+  --dsw-alias-button-ghost-active-fill: var(--nm-cyan-12, rgba(7, 193, 96, 0.12));
+  --dsw-alias-button-primary-fill: #07c160;
+  --dsw-alias-button-primary-hover: var(--nm-green, #07c160);
+  --dsw-alias-button-tool-bar-fill: var(--nm-cyan-8, rgba(7, 193, 96, 0.08));
+  --dsw-alias-button-tool-bar-hover: var(--nm-cyan-14, rgba(7, 193, 96, 0.14));
+  --dsw-alias-interactive-bg-active: var(--nm-cyan-10, rgba(7, 193, 96, 0.10));
+  --dsw-alias-interactive-bg-hover: var(--nm-cyan-6, rgba(7, 193, 96, 0.06));
+  --dsw-alias-interactive-bg-hover-danger: rgba(250, 81, 81, 0.12);
+  --dsw-alias-label-caption: var(--nm-text-2, #b5b5b5);
+  --dsw-alias-label-dimmed: var(--nm-text-3, #828282);
+  --dsw-alias-label-primary: var(--nm-text-1, #ededed);
+  --dsw-alias-label-primary-foreground: var(--nm-on-accent, #ffffff);
+  --dsw-alias-label-primary-inverted: var(--nm-text-1, #ededed);
+  --dsw-alias-label-secondary: var(--nm-text-2, #b5b5b5);
+  --dsw-alias-label-tertiary: var(--nm-text-3, #828282);
+  --dsw-alias-link: var(--nm-sky, #7d90a9);
+  --dsw-alias-markdown-code-block: #1b1b1b;
+  --dsw-alias-markdown-code-block-banner: #242424;
+  --dsw-alias-markdown-inline-code: #242424;
+  --dsw-alias-scrollbar-bg-l2: var(--nm-cyan-18, rgba(7, 193, 96, 0.18));
+  --dsw-alias-scrollbar-hover-l2: var(--nm-cyan-25, rgba(255, 255, 255, 0.25));
+  --dsw-alias-state-business-primary: var(--nm-blue, #7d90a9);
+  --dsw-alias-state-error-primary: var(--nm-red, #fa5151);
+  --dsw-alias-state-success-primary: var(--nm-green, #07c160);
+  --dsw-alias-state-success-tertiary: var(--nm-success-15, rgba(7, 193, 96, 0.15));
+  --dsw-alias-state-warn-label: var(--nm-amber, #fa9d3b);
+  --dsw-alias-state-warn-primary: var(--nm-amber, #fa9d3b);
+  --dsw-alias-state-warn-tertiary: var(--nm-warning-15, rgba(250, 157, 59, 0.15));
+  --dsw-alias-tooltip-bg: #2c2c2c;
+  --dsw-hovercard-bg: rgba(44, 44, 44, 0.98);
+  --dsw-mask-blur: blur(4px);
+  --dsw-shadow-lv3: 0 12px 36px rgba(0, 0, 0, 0.55);
+  --dsw-elevation-prominent: var(--nm-shadow-popup, 0 12px 36px rgba(0, 0, 0, 0.55));
+  --dsw-specific-menu: rgba(44, 44, 44, 0.98);
+  --dsw-static-deepseek-450: #2c2c2c;
+  --dsw-static-neutral-bluish-00: #ededed;
 }
 
 /* ── 骨架屏基元（第 94 轮）───────────────────────────────────────────────
@@ -552,16 +552,26 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   border-radius: 6px;
   background: var(--nm-bg-hover);
 }
+/* 2026-10-17：**去掉扫过去的微光**（用户要求「这样的加载样式全部修改」）。
+ *
+ * 改前这里有一条 `nmSkelSweep` 微光从左扫到右，1.4s 一轮无限循环。
+ * 三个问题：
+ *   ① 本机数据加载通常只有几百毫秒，微光还没扫完内容就出来了 ——
+ *      用户看到的是「闪一下」，比静态占位更像卡顿；
+ *   ② 一屏 6–10 行同时扫光，视觉噪音很大，而它传达的信息量是零
+ *      （「正在加载」这件事，占位块本身已经说了）；
+ *   ③ 无限循环动画在低端机上持续触发合成层重绘，白耗电。
+ *
+ * 现在只留静态底色。骨架的职责是**占住布局**（避免内容出现时跳变），
+ * 不是表演「我在加载」。真要表达进度，用 `LoadingState` 的 `timed` 档
+ * （带秒数），那才是有信息量的。
+ *
+ * ⚠️ 保留 `.nm-skel::after` 这个伪元素但清空内容：`panel-clip.wiring.spec.ts`
+ * 等守卫按「有没有 ::after」判断过一些事，直接删掉会让它们静默失效。
+ * 现在它只是一个空的、不占位的壳。 */
 .nm-skel::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nm-text-1) 9%, transparent), transparent);
-  transform: translateX(-100%);
-  animation: nmSkelSweep 1.4s ease-in-out infinite;
+  content: none;
 }
-@keyframes nmSkelSweep { to { transform: translateX(100%); } }
-@media (prefers-reduced-motion: reduce) { .nm-skel::after { animation: none; } }
 
 
 /* ── 主题切换：颜色令牌级过渡 ─────────────────────────────────────────────
@@ -619,112 +629,112 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
  * THEME_TRANSITION_REDUCED_DURATION 一致（theme.spec.ts 会读本文件比对）。
  */
 
-@property --dsw-alias-bg-base { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --dsw-alias-bg-layer-0 { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --dsw-alias-bg-layer-1 { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
-@property --dsw-alias-bg-layer-2 { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
+@property --dsw-alias-bg-base { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --dsw-alias-bg-layer-0 { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --dsw-alias-bg-layer-1 { syntax: '<color>'; inherits: true; initial-value: #171717; }
+@property --dsw-alias-bg-layer-2 { syntax: '<color>'; inherits: true; initial-value: #181818; }
 @property --dsw-alias-bg-mask-1 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 0, 0, 0.55); }
-@property --dsw-alias-bg-overlay { syntax: '<color>'; inherits: true; initial-value: rgba(12, 20, 48, 0.72); }
-@property --dsw-alias-border-l1 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
-@property --dsw-alias-border-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
-@property --dsw-alias-border-l3 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
-@property --dsw-alias-border-l4 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
-@property --dsw-alias-brand-primary { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
-@property --dsw-alias-button-contrast-fill { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --dsw-alias-button-ghost-active-border { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.45); }
-@property --dsw-alias-button-ghost-active-fill { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
-@property --dsw-alias-button-primary-fill { syntax: '<color>'; inherits: true; initial-value: #00c2d4; }
-@property --dsw-alias-button-primary-hover { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
-@property --dsw-alias-button-tool-bar-fill { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
-@property --dsw-alias-button-tool-bar-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.14); }
-@property --dsw-alias-interactive-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
-@property --dsw-alias-interactive-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
-@property --dsw-alias-interactive-bg-hover-danger { syntax: '<color>'; inherits: true; initial-value: rgba(255, 59, 92, 0.12); }
-@property --dsw-alias-label-caption { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
-@property --dsw-alias-label-dimmed { syntax: '<color>'; inherits: true; initial-value: #64748b; }
-@property --dsw-alias-label-primary { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
-@property --dsw-alias-label-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --dsw-alias-label-primary-inverted { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
-@property --dsw-alias-label-secondary { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
-@property --dsw-alias-label-tertiary { syntax: '<color>'; inherits: true; initial-value: #64748b; }
-@property --dsw-alias-link { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
-@property --dsw-alias-markdown-code-block { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
-@property --dsw-alias-markdown-code-block-banner { syntax: '<color>'; inherits: true; initial-value: #132033; }
-@property --dsw-alias-markdown-inline-code { syntax: '<color>'; inherits: true; initial-value: #16213a; }
-@property --dsw-alias-scrollbar-bg-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.15); }
-@property --dsw-alias-scrollbar-hover-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
-@property --dsw-alias-state-business-primary { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
-@property --dsw-alias-state-error-primary { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
-@property --dsw-alias-state-success-primary { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
-@property --dsw-alias-state-success-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.15); }
-@property --dsw-alias-state-warn-label { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --dsw-alias-state-warn-primary { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --dsw-alias-state-warn-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.15); }
-@property --dsw-alias-tooltip-bg { syntax: '<color>'; inherits: true; initial-value: #132033; }
-@property --dsw-hovercard-bg { syntax: '<color>'; inherits: true; initial-value: rgba(15, 26, 54, 0.95); }
-@property --dsw-specific-menu { syntax: '<color>'; inherits: true; initial-value: rgba(15, 26, 54, 0.98); }
-@property --dsw-static-deepseek-450 { syntax: '<color>'; inherits: true; initial-value: #1e293b; }
-@property --dsw-static-neutral-bluish-00 { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
-@property --nm-amber { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --nm-bg-0 { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --nm-bg-1 { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
-@property --nm-bg-2 { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
-@property --nm-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
-@property --nm-bg-card { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
-@property --nm-bg-glass { syntax: '<color>'; inherits: true; initial-value: rgba(12, 20, 48, 0.72); }
-@property --nm-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
-@property --nm-bg-input { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
-@property --nm-black { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --nm-blue { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
-@property --nm-blue-20 { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.20); }
-@property --nm-border { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
-@property --nm-border-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
-@property --nm-border-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
-@property --nm-cyan { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
-@property --nm-cyan-10 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
-@property --nm-cyan-4 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.04); }
-@property --nm-cyan-6 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
-@property --nm-cyan-8 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
-@property --nm-cyan-14 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.14); }
-@property --nm-cyan-35 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.35); }
-@property --nm-cyan-12 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
-@property --nm-cyan-16 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.16); }
-@property --nm-cyan-18 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.18); }
-@property --nm-cyan-25 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
-@property --nm-cyan-42 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.42); }
-@property --nm-cyan-40 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
-@property --nm-cyan-60 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.60); }
-@property --nm-cyan-70 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.70); }
-@property --nm-cyan-45 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.45); }
-@property --nm-text-4 { syntax: '<color>'; inherits: true; initial-value: #4a5575; }
-@property --nm-brand { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
-@property --nm-cyan-20 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.20); }
-@property --nm-cyan-50 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.50); }
-@property --nm-cyan-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #00f0ff 70%, #e2e8f0); }
-@property --nm-danger { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
-@property --nm-danger-15 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 59, 92, 0.15); }
-@property --nm-danger-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #ff3b5c 70%, #e2e8f0); }
-@property --nm-green { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
-@property --nm-green-20 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.20); }
-@property --nm-info { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
-@property --nm-info-15 { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.15); }
-@property --nm-info-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #3b82f6 70%, #e2e8f0); }
-@property --nm-map-land { syntax: '<color>'; inherits: true; initial-value: rgba(8, 40, 60, 0.90); }
-@property --nm-on-accent { syntax: '<color>'; inherits: true; initial-value: #050a18; }
-@property --nm-pink { syntax: '<color>'; inherits: true; initial-value: #ec4899; }
-@property --nm-purple { syntax: '<color>'; inherits: true; initial-value: #a855f7; }
-@property --nm-purple-20 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.20); }
-@property --nm-purple-8 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.08); }
-@property --nm-purple-10 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.10); }
-@property --nm-purple-14 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.14); }
-@property --nm-purple-18 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.18); }
-@property --nm-purple-50 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.50); }
-@property --nm-purple-30 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.30); }
-@property --nm-purple-40 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.40); }
-@property --nm-purple-70 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.70); }
-@property --nm-panel-solid { syntax: '<color>'; inherits: true; initial-value: rgba(13, 21, 40, 0.72); }
-@property --nm-veil-55 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.55); }
-@property --nm-hover-neutral { syntax: '<color>'; inherits: true; initial-value: rgba(127, 127, 127, 0.16); }
+@property --dsw-alias-bg-overlay { syntax: '<color>'; inherits: true; initial-value: rgba(27, 27, 27, 0.92); }
+@property --dsw-alias-border-l1 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.08); }
+@property --dsw-alias-border-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.12); }
+@property --dsw-alias-border-l3 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.25); }
+@property --dsw-alias-border-l4 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.40); }
+@property --dsw-alias-brand-primary { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --dsw-alias-button-contrast-fill { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --dsw-alias-button-ghost-active-border { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.45); }
+@property --dsw-alias-button-ghost-active-fill { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.12); }
+@property --dsw-alias-button-primary-fill { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --dsw-alias-button-primary-hover { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --dsw-alias-button-tool-bar-fill { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.08); }
+@property --dsw-alias-button-tool-bar-hover { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.14); }
+@property --dsw-alias-interactive-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.10); }
+@property --dsw-alias-interactive-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.06); }
+@property --dsw-alias-interactive-bg-hover-danger { syntax: '<color>'; inherits: true; initial-value: rgba(250, 81, 81, 0.12); }
+@property --dsw-alias-label-caption { syntax: '<color>'; inherits: true; initial-value: #b5b5b5; }
+@property --dsw-alias-label-dimmed { syntax: '<color>'; inherits: true; initial-value: #828282; }
+@property --dsw-alias-label-primary { syntax: '<color>'; inherits: true; initial-value: #ededed; }
+@property --dsw-alias-label-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --dsw-alias-label-primary-inverted { syntax: '<color>'; inherits: true; initial-value: #ededed; }
+@property --dsw-alias-label-secondary { syntax: '<color>'; inherits: true; initial-value: #b5b5b5; }
+@property --dsw-alias-label-tertiary { syntax: '<color>'; inherits: true; initial-value: #828282; }
+@property --dsw-alias-link { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --dsw-alias-markdown-code-block { syntax: '<color>'; inherits: true; initial-value: #181818; }
+@property --dsw-alias-markdown-code-block-banner { syntax: '<color>'; inherits: true; initial-value: #242424; }
+@property --dsw-alias-markdown-inline-code { syntax: '<color>'; inherits: true; initial-value: #242424; }
+@property --dsw-alias-scrollbar-bg-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.18); }
+@property --dsw-alias-scrollbar-hover-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.25); }
+@property --dsw-alias-state-business-primary { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --dsw-alias-state-error-primary { syntax: '<color>'; inherits: true; initial-value: #fa5151; }
+@property --dsw-alias-state-success-primary { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --dsw-alias-state-success-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.15); }
+@property --dsw-alias-state-warn-label { syntax: '<color>'; inherits: true; initial-value: #fa9d3b; }
+@property --dsw-alias-state-warn-primary { syntax: '<color>'; inherits: true; initial-value: #fa9d3b; }
+@property --dsw-alias-state-warn-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(250, 157, 59, 0.15); }
+@property --dsw-alias-tooltip-bg { syntax: '<color>'; inherits: true; initial-value: #2c2c2c; }
+@property --dsw-hovercard-bg { syntax: '<color>'; inherits: true; initial-value: rgba(44, 44, 44, 0.98); }
+@property --dsw-specific-menu { syntax: '<color>'; inherits: true; initial-value: rgba(44, 44, 44, 0.98); }
+@property --dsw-static-deepseek-450 { syntax: '<color>'; inherits: true; initial-value: #2c2c2c; }
+@property --dsw-static-neutral-bluish-00 { syntax: '<color>'; inherits: true; initial-value: #ededed; }
+@property --nm-amber { syntax: '<color>'; inherits: true; initial-value: #fa9d3b; }
+@property --nm-bg-0 { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --nm-bg-1 { syntax: '<color>'; inherits: true; initial-value: #171717; }
+@property --nm-bg-2 { syntax: '<color>'; inherits: true; initial-value: #181818; }
+@property --nm-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.10); }
+@property --nm-bg-card { syntax: '<color>'; inherits: true; initial-value: #181818; }
+@property --nm-bg-glass { syntax: '<color>'; inherits: true; initial-value: #181818; }
+@property --nm-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.06); }
+@property --nm-bg-input { syntax: '<color>'; inherits: true; initial-value: #181818; }
+@property --nm-black { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --nm-blue { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --nm-blue-20 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.20); }
+@property --nm-border { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.10); }
+@property --nm-border-active { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-border-hover { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.20); }
+@property --nm-cyan { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-cyan-10 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.10); }
+@property --nm-cyan-4 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.04); }
+@property --nm-cyan-6 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.06); }
+@property --nm-cyan-8 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.08); }
+@property --nm-cyan-14 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.14); }
+@property --nm-cyan-35 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.35); }
+@property --nm-cyan-12 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.12); }
+@property --nm-cyan-16 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.16); }
+@property --nm-cyan-18 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.18); }
+@property --nm-cyan-25 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.25); }
+@property --nm-cyan-42 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.42); }
+@property --nm-cyan-40 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.40); }
+@property --nm-cyan-60 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.60); }
+@property --nm-cyan-70 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.70); }
+@property --nm-cyan-45 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.45); }
+@property --nm-text-4 { syntax: '<color>'; inherits: true; initial-value: #5e5e5e; }
+@property --nm-brand { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-cyan-20 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.20); }
+@property --nm-cyan-50 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.50); }
+@property --nm-cyan-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #07c160 70%, #ededed); }
+@property --nm-danger { syntax: '<color>'; inherits: true; initial-value: #fa5151; }
+@property --nm-danger-15 { syntax: '<color>'; inherits: true; initial-value: rgba(250, 81, 81, 0.15); }
+@property --nm-danger-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #fa5151 70%, #ededed); }
+@property --nm-green { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-green-20 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.20); }
+@property --nm-info { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --nm-info-15 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.15); }
+@property --nm-info-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #7d90a9 70%, #ededed); }
+@property --nm-map-land { syntax: '<color>'; inherits: true; initial-value: #2a2a2a; }
+@property --nm-on-accent { syntax: '<color>'; inherits: true; initial-value: #111111; }
+@property --nm-pink { syntax: '<color>'; inherits: true; initial-value: #fa5151; }
+@property --nm-purple { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --nm-purple-20 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.20); }
+@property --nm-purple-8 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.08); }
+@property --nm-purple-10 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.10); }
+@property --nm-purple-14 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.14); }
+@property --nm-purple-18 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.18); }
+@property --nm-purple-50 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.50); }
+@property --nm-purple-30 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.30); }
+@property --nm-purple-40 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.40); }
+@property --nm-purple-70 { syntax: '<color>'; inherits: true; initial-value: rgba(125, 144, 169, 0.70); }
+@property --nm-panel-solid { syntax: '<color>'; inherits: true; initial-value: rgba(23, 23, 23, 0.92); }
+@property --nm-veil-55 { syntax: '<color>'; inherits: true; initial-value: rgba(17, 17, 17, 0.85); }
+@property --nm-hover-neutral { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.08); }
 @property --nm-paper-85 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.85); }
 @property --nm-paper-55 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.55); }
 @property --nm-paper-35 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.35); }
@@ -734,24 +744,24 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 @property --nm-paperfill-45 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.45); }
 @property --nm-paperfill-88 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.88); }
 @property --nm-paperfill-50 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.50); }
-@property --nm-veil-25 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.25); }
-@property --nm-scrim-50 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.50); }
-@property --nm-sky { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
-@property --nm-amber-45 { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.45); }
-@property --nm-purple-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #a855f7 70%, #e2e8f0); }
-@property --nm-red { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
-@property --nm-success { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
-@property --nm-success-15 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.15); }
-@property --nm-success-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #00ff88 70%, #e2e8f0); }
-@property --nm-table-header-bg { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.04); }
-@property --nm-table-row-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.05); }
-@property --nm-table-row-stripe { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.015); }
-@property --nm-text-1 { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
-@property --nm-text-2 { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
-@property --nm-text-3 { syntax: '<color>'; inherits: true; initial-value: #64748b; }
-@property --nm-warning { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --nm-warning-15 { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.15); }
-@property --nm-warning-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #f59e0b 70%, #e2e8f0); }
+@property --nm-veil-25 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 0, 0, 0.35); }
+@property --nm-scrim-50 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 0, 0, 0.55); }
+@property --nm-sky { syntax: '<color>'; inherits: true; initial-value: #7d90a9; }
+@property --nm-amber-45 { syntax: '<color>'; inherits: true; initial-value: rgba(250, 157, 59, 0.45); }
+@property --nm-purple-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #7d90a9 70%, #ededed); }
+@property --nm-red { syntax: '<color>'; inherits: true; initial-value: #fa5151; }
+@property --nm-success { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-success-15 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.15); }
+@property --nm-success-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #07c160 70%, #ededed); }
+@property --nm-table-header-bg { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.04); }
+@property --nm-table-row-hover { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.05); }
+@property --nm-table-row-stripe { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.02); }
+@property --nm-text-1 { syntax: '<color>'; inherits: true; initial-value: #ededed; }
+@property --nm-text-2 { syntax: '<color>'; inherits: true; initial-value: #b5b5b5; }
+@property --nm-text-3 { syntax: '<color>'; inherits: true; initial-value: #828282; }
+@property --nm-warning { syntax: '<color>'; inherits: true; initial-value: #fa9d3b; }
+@property --nm-warning-15 { syntax: '<color>'; inherits: true; initial-value: rgba(250, 157, 59, 0.15); }
+@property --nm-warning-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #fa9d3b 70%, #ededed); }
 
 :root.theme-transition {
   transition-property:

@@ -214,6 +214,12 @@ export interface ImageDataUrlResult {
   format?: string
   /** true = 这次给的是缩略/中图那一份（本机还没有更大的）。界面据此说明「点取原图试试」。 */
   thumb?: boolean
+  /**
+   * 相对 `decoded_images` 的落盘路径（如 `wxid_x/ab12.jpg`）。
+   * 桌面端据此拼 `wechat-media://` 流式显示（避免 base64 走 IPC / 占渲染堆）；
+   * HTTP 远程访问忽略此字段，继续用 `url` 的 data URL。
+   */
+  file?: string
   error?: string
 }
 

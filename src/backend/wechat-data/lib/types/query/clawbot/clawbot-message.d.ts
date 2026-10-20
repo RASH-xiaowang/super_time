@@ -38,6 +38,8 @@ export interface ClawbotMediaRef {
     name: string | null;
     /** 密文/明文体积提示（字节；未知为 null）。 */
     size: number | null;
+    /** 时长（毫秒；**只有语音有**，协议 `voice_item.playtime`；其余为 null）。 */
+    duration: number | null;
 }
 /** 一条待落库的消息（服务端收/发时构造；`createdAt` 缺省取当前时间）。 */
 export interface ClawbotMessageInput {
@@ -113,13 +115,32 @@ export interface ClawbotMessageInternal {
  */
 export declare function listClawbotMessages(decryptedDir: string, query?: ClawbotMessageQuery): ClawbotMessageSnapshot;
 /**
- * 计数（设置卡片的「今日消息 / 累计消息」）—— 一条连接里同时取两个数。
+/**
+ * 清空某实例的**接入会话**（2026-10-17 用户要求「增加对话历史清除按钮，可以删除对话历史
+ * 以防止污染回复」）。
+ *
+ * 为什么需要它：接入会话是**累积**的（永久保留、无自动清理），而它同时是
+ * 「对话读法」的展示内容与「自动回复」的上下文来源。用户换话题、或 bot 之前回错了一堆，
+ * 旧消息会一直留在那里 —— 清空是唯一的「重新开始」手段。
+ *
+ * ⚠️ **只删消息，不动绑定与配置**：绑定（`clawbot_binding`）与行为偏好
+ * （`clawbot_instance_config`）是另一回事，清历史不该把它们一起清掉。
+ * ⚠️ **不可恢复**：调用方必须在确认框里说清条数（与「移除实例」同一纪律）。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @returns 删掉的条数（供界面如实回报）。
+ */
+export declare function clearClawbotMessages(decryptedDir: string, slot?: number): {
+    removed: number;
+};
+/**
+ * 计数（设置卡片的「今日消息 / 累计消息」）—— 一条连接里同时取三个数。
  *
  * 读失败时返回全 0 并留一行 warn：这张卡片是状态展示，库级失败已由绑定行的
  * `readError` 覆盖（同一个库，两者几乎必然同时失败），不在这里再造一个错误通道。
  * @param decryptedDir - 解密数据根。
  * @param opts.since - 「今日」的起点（本地时区当天 0 点的时间戳）。
- * @returns `{ today, total }`。
+ * @returns `{ today, total, lastTs }`（`lastTs` = 最后一条消息的接收时间，0 = 还没有消息）。
  */
 export declare function clawbotMessageCounts(decryptedDir: string, opts: {
     since: number;
@@ -127,4 +148,5 @@ export declare function clawbotMessageCounts(decryptedDir: string, opts: {
 }): {
     today: number;
     total: number;
+    lastTs: number;
 };

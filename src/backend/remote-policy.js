@@ -26,6 +26,14 @@ const HEAVY_CALL_LEDGER = Object.freeze([
   { why: '批量取图：一次 200 张，每张都可能退化成读+解密+哈希', methods: Object.freeze(['getImageDataUrlsBatch']) },
   { why: '批量取原图：几千张 × 15s 超时 + 4 并发，远超 60s', methods: Object.freeze(['fetchOriginalImagesBatch']) },
   {
+    why: '原图自动收割：手动收割要遍历 msg/attach（数万文件）+ 逐条解密，实测 69 秒',
+    methods: Object.freeze(['originalHarvest']),
+  },
+  {
+    why: '第三方原图服务：换 token 要上传配置（30s 超时）+ 下载原图可达几 MB（120s 超时）',
+    methods: Object.freeze(['getWxcdnQuota']),
+  },
+  {
     why: 'whisper：模型/引擎下载解压与本地转写都可能超过普通窗口',
     methods: Object.freeze(['transcribeVoiceBatch', 'transcribeVoiceMessage', 'downloadWhisperModel', 'installWhisperEngine']),
   },

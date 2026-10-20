@@ -9,35 +9,18 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransient
 import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, EmptyState, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { Dialog, EmptyState, PanelHeader, useDebouncedValue } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
 import { favTypeLabel, parseFavItem } from './favorites-parse.ts'
 import { FavCard } from './favorites-card.tsx'
+import { ListFilter, PanelAction } from './asset-ui.tsx'
 import { rememberThumb } from '../utils/thumb-cache.ts'
 
 /** 卡片高度的初值（真实高度由 `measureElement` 回灌）：摘要最多三行，88 是"标题 + 一行摘要 + 落款"的量级。 */
 const FAV_CARD_ESTIMATE_PX = 88
-
-/*
- * 虚拟化（#22 推广：把消息流那一套搬到第二处长列表）—— 两处口径记在这里，函数里只留一行注释。
- *
- * **为什么原来那套不够**：`useProgressiveList` 是"渐进窗口"，首屏 120 条、滚到底再增，**只增不减**。
- * 把五千条收藏滚一遍，DOM 里就留下五千张卡片（每张三层 div 加一段文本），内存与重排成本都跟着
- * 历史长度走。虚拟化之后只挂载视口 + `overscan`，节点数与长度解耦 —— 消息流那侧实测：
- * 一万条从 9,700 个节点降到几十个（`scripts/longlist-virtualization-e2e.mjs` 量的）。
- *
- * **缩略图为什么改成"挂载即解码"**：原来是给整段列表挂 IntersectionObserver、观察 `data-media-key`。
- * 虚拟化之后行会不断挂载/卸载，观察器每帧都要重挂一遍元素，反而更贵、也更容易漏；而"这一行挂上了"
- * 本来就等价于"它接近视口"。淘汰那半边收在 `../utils/thumb-cache.ts#rememberThumb` 里（写值、记顺序、
- * 淘汰时连"已请求过"的标记一起清 —— 少清一半就是「滚远再滚回来，图永远是个占位」那种不报错的坏法）。
- * 解码回调要跨异步读最新状态，所以缓存与顺序用 ref 兜着、`useCallback(…, [])` 保持稳定，
- * 不然每次渲染都会重新发起一轮请求。
- */
-
-
 
 /**
  * Render the favorites panel.
@@ -82,7 +65,6 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
   const notify = (text: string): void => {
     flash(text)
   }
-
 
   // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
   // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
@@ -206,33 +188,30 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         desc={`${filtered.length} 项 · 共 ${total}`}
         actions={(
           <>
-            <button type="button" className={css.catBtn} data-active={selectMode || undefined} onClick={() => { setSelectMode(v => !v); setSelected(new Set()) }}>{selectMode ? '退出批量' : '批量'}</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出（仅电脑）' : '导出'}</button>
-            {selectMode && <button type="button" className={css.catBtn} data-active="true" onClick={() => { void doDelete() }} disabled={selected.size === 0}>删除所选 ({selected.size})</button>}
+            <PanelAction active={selectMode} onClick={() => { setSelectMode(v => !v); setSelected(new Set()) }}>{selectMode ? '退出批量' : '批量'}</PanelAction>
+            <PanelAction onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出（仅电脑）' : '导出'}</PanelAction>
+            {selectMode && <PanelAction active onClick={() => { void doDelete() }} disabled={selected.size === 0}>删除所选 ({selected.size})</PanelAction>}
           </>
         )}
       />
-      <Toolbar
-        left={(
-          <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索标题 / 描述 / 来源" ariaLabel="搜索收藏" />
-        )}
-        right={(
-          <Segmented
-            options={[{ value: 'all', label: `全部 (${items.length})` }, ...types.map(t => ({ value: t.type, label: `${t.label} (${t.count})` }))]}
-            value={type}
-            onChange={(v) => { setType(v) }}
-            ariaLabel="收藏分类"
-          />
-        )}
+      <ListFilter
+        searchValue={search}
+        onSearch={setSearch}
+        searchPlaceholder="搜索标题 / 描述 / 来源"
+        searchAriaLabel="搜索收藏"
+        segments={[{ value: 'all', label: `全部 (${items.length})` }, ...types.map(t => ({ value: t.type, label: `${t.label} (${t.count})` }))]}
+        value={type}
+        onChange={setType}
+        ariaLabel="收藏分类"
       />
       {notice && <div className={css.notice}>{notice}</div>}
       <div className={css.scroll} ref={scrollRef}>
         {loading && <ListSkeleton rows={8} />}
-        {error && <div className={kitCss.error} role="alert">⚠️ 收藏数据接口尚未就绪（{error}）</div>}
+        {error && <div className={kitCss.error} role="alert">收藏数据接口尚未就绪（{error}）</div>}
         {!loading && !error && filtered.length === 0 && (
           <div className={css.empty}>
             <EmptyState
-              icon="⭐"
+              icon={null}
               title={search || type !== 'all' ? '没有匹配的收藏' : '暂无收藏'}
               desc={search || type !== 'all'
                 ? '换个关键词，或把类型筛选切回「全部」再试。'

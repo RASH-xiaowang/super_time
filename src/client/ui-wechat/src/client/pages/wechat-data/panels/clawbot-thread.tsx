@@ -194,9 +194,13 @@ export function useClawbotMediaAccess(notice: { flash: (text: string, ms?: numbe
     if (r === null || !r.ok) return // load 已提示失败
     if (r.path === undefined) { notice.flash('✗ 附件没有落盘路径'); return }
     try {
-      await apiOpenPath(r.path)
-    } catch {
-      notice.flash('✗ 无法打开文件（可用资源管理器到缓存目录查看）')
+      // ⚠️ 必须检查返回值（2026-10-17 实测踩到）：`openPath` 失败时**不抛异常**，
+      // 而是返回 `{ ok: false, error }`（路径政策拒绝 / 文件不存在 / 系统调用失败）。
+      // 原先只 `await` 不检查 ⇒ 后端拒绝时界面**毫无反应**，用户看到的就是「点了没反应」。
+      const res = await apiOpenPath(r.path)
+      if (!res.ok) notice.flash('✗ ' + (res.error ?? '无法打开文件（可用资源管理器到缓存目录查看）'))
+    } catch (e) {
+      notice.flash('✗ 无法打开文件：' + (e as Error).message)
     }
   }, [load, notice])
 
@@ -234,7 +238,13 @@ export function MediaCell({ row, media, text }: {
   }, [info.kind, got, isBusy, media, row])
 
   const sizeHint = info.size !== null ? approxBytes(info.size) : ''
-  const meta = [KIND_LABEL[info.kind] ?? info.kind, sizeHint].filter((s) => s !== '').join(' · ')
+  /*
+   * 语音时长（2026-10-17 补全）：协议 `voice_item.playtime` 是毫秒，展示成 `12″`。
+   * 只有语音有这一项 —— 其余类型 `duration` 恒为 null，`filter` 会把它滤掉。
+   * 不足 1 秒的按 1 秒显示（`0″` 看着像没录上）。
+   */
+  const durHint = info.duration !== null && info.duration > 0 ? `${String(Math.max(1, Math.round(info.duration / 1000)))}″` : ''
+  const meta = [KIND_LABEL[info.kind] ?? info.kind, durHint, sizeHint].filter((s) => s !== '').join(' · ')
 
   if (info.kind === 'image') {
     return (

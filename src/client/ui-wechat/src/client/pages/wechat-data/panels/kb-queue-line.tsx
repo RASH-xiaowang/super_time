@@ -39,10 +39,18 @@ export function KbParseQueueLine({ files }: KbParseQueueLineProps): React.JSX.El
     }
   }
   if (files.length === 0) return null
+  /**
+   * 队列空且没有需要处理的行 ⇒ **整行不渲染**（2026-10-17 用户要求「不要占用太多空间」）。
+   *
+   * 改前这里会显示「解析队列：空的」—— 一句没有信息量的话，却占掉页头下面一整行，
+   * 把文件列表往下推。用户看到「空的」也不会因此做什么，它只是把「一切正常」
+   * 用一行字说了出来。真正需要它出现的时刻是**有活干**的时候。
+   */
+  if (pending === 0 && attention === 0) return null
   return (
     <div className="queueLine">
       <span>
-        {pending > 0 ? `解析队列：${pending} 个在处理/排队` : '解析队列：空的'}
+        {pending > 0 ? `解析队列：${pending} 个在处理/排队` : '解析队列：空闲'}
         {attention > 0 ? ` · 需要你处理 ${attention} 个` : ''}
       </span>
       {bad.length > 0 && (

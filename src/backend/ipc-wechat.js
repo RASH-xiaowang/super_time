@@ -22,6 +22,11 @@ const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js');
 // 「一次后端调用要过哪几道闸」的唯一出处：HTTP 那条路（局域网远程访问）也调它，
 // 两边不许各写一份 —— 最可能的漂法是少抄那个 catch，于是许可校验一抛异常就变成放行。
 const { gatedWechatCall } = require('./call-gates.js');
+// 少数「静态本地读」走免排队通道（仍过同一道许可/就绪闸）：世界地图底图在应用启动
+// 瞬间会和首屏请求一起撞上队列上限，排队拒绝会让界面误报「底图不可用」。
+// 清单与判据见 call-priority.js 的 QUEUE_BYPASS_METHODS。
+const { shouldBypassCallQueue } = require('./call-priority.js');
+const { observeBackendStatus, beginMutation, checkMutation, bumpMutationEpoch, mutationGateStats } = require('./mutation-gate.js');
 
 function registerWechatIpc(ctx) {
   // 闸门相关的那几个字段（app / licenseService / debugGates / awaitBackendReady /
@@ -46,11 +51,50 @@ function registerWechatIpc(ctx) {
 
   // 桌面与手机共用同一个单线程 worker，所以这里也进同一把调用闸。测试 ctx 不传
   // scheduleWechatCall 时退回直接调用，保持各 IPC 判据的轻量夹具可用。
+  //
+  // `args` 一并传给队列：朋友圈取图有网时是纯网络 IO（实测 1.0–1.4s），
+  // 不该占重活名额（那个车道只有 1 个并发）。判据见 `call-priority.js` 的
+  // `downgradeHeavyByArgs`。
   const scheduleCall = scheduleWechatCall || ((task) => task());
-  handleIpc('wechat:call', (_event, method, args) => scheduleCall(
-    () => gatedWechatCall(ctx, method, args),
-    { channel: 'desktop', method: String(method ?? '') },
-  ));
+  handleIpc('wechat:call', async (_event, method, args) => {
+    try {
+      observeBackendStatus(getBackendStatus());
+      const mutationToken = beginMutation(method);
+      const run = () => {
+        // 真正派发前再观察一次：如果请求在队列里等过了后端重启，这一代就不再执行。
+        observeBackendStatus(getBackendStatus());
+        const revoked = checkMutation(mutationToken);
+        if (revoked) throw revoked;
+        return gatedWechatCall(ctx, method, args);
+      };
+      // 静态本地读不排队（清单见 call-priority.js）：启动瞬间队列满时不再误杀底图，
+      // 但许可校验、后端就绪等待等闸门一个不少。
+      const result = shouldBypassCallQueue(method)
+        ? await run()
+        : await scheduleCall(run, { channel: 'desktop', method: String(method ?? ''), args });
+      // 配置保存会改变后续读写的语义（数据根/引擎/转写路径），成功后开新代际；
+      // 已在队列里的旧写会在派发前被 checkMutation 拦下（enforce 模式）。
+      if (method === 'saveWechatConfig' && result && typeof result === 'object' && result.ok === true) {
+        bumpMutationEpoch('wechat-config-saved');
+      }
+      return result;
+    } catch (e) {
+      // 队列拒绝（REMOTE_BUSY / QUEUE_WAIT_TIMEOUT）与 RPC 超时原本是裸 rejection，
+      // 跨 IPC 后自定义 `code` 会丢；渲染层的 `unwrap()` 只认 `{ok:false,error}` 信封，
+      // 于是用户只能看到一句 message、没法做针对性重试或提示（Alpha 每层都保留 code）。
+      const error = e instanceof Error ? e : new Error(String(e));
+      const code = typeof error.code === 'string' ? error.code : undefined;
+      const details = error.details;
+      return {
+        ok: false,
+        error: {
+          message: error.message || '微信数据调用失败',
+          ...(code === undefined ? {} : { code }),
+          ...(details === undefined ? {} : { details }),
+        },
+      };
+    }
+  });
 
 
   /**
@@ -66,6 +110,8 @@ function registerWechatIpc(ctx) {
       ...getBackendStatus(),
       callQueue: typeof getCallQueueStats === 'function' ? getCallQueueStats() : undefined,
       rpc: typeof getRpcStats === 'function' ? getRpcStats() : undefined,
+      // shadow 观测面：epoch / revoked / lastBumpReason，便于判断是否可进入 enforce。
+      mutation: mutationGateStats(),
     },
   }));
 

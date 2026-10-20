@@ -464,7 +464,11 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   const durText = durSec > 0 ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}` : ''
   const openVideo = (): void => {
     if (!videoPath) return
-    void apiOpenPath(videoPath).catch(() => { /* 打不开就保持原样，用户可用右键菜单里的「显示所在位置」 */ })
+    // ⚠️ 必须检查返回值（2026-10-17）：`openPath` 失败时**不抛异常**，返回 `{ ok: false, error }`。
+    // 原先只 `.catch()` ⇒ 后端拒绝时静默无反应（用户可用右键菜单里的「显示所在位置」兜底）。
+    void apiOpenPath(videoPath).then((r) => {
+      if (!r.ok) setVErr(r.error ?? '无法用系统播放器打开（可用右键菜单「显示所在位置」）')
+    }).catch(() => { /* 打不开就保持原样，用户可用右键菜单里的「显示所在位置」 */ })
   }
   // 没有封面但有实体：给一行可点的入口，而不是报「不在本地」
   if (vErr && videoPath) {

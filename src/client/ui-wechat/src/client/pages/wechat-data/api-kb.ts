@@ -53,7 +53,8 @@ import { apiSaveFileDialog } from './api-media.ts'
  * @returns NotesSnapshot（读不到库时带 `readError`，与「确无笔记」可区分）。
  */
 export async function apiGetNotes(kbId: number, options?: { query?: string; limit?: number }): Promise<NotesSnapshotRead> {
-  return unwrap(await remote().getNotes(kbId, options))
+  // ⚠️ 显式给 `{}`：`undefined` 经 JSON 序列化会变 `null`，而后端默认参数不对 null 生效。
+  return unwrap(await remote().getNotes(kbId, options ?? {}))
 }
 
 /**
@@ -67,9 +68,11 @@ export async function apiSaveNote(kbId: number, input: {
   title: string
   body?: string
   tags?: string[] | string
-  sourceKind?: 'manual' | 'ask'
+  sourceKind?: 'manual' | 'ask' | 'file'
   sourceUsername?: string
   sourceQuestion?: string
+  /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+  sourceFileId?: number
 }): Promise<NoteMutationResult> {
   const result = unwrap(await remote().saveNote(kbId, input))
   invalidateKnowledgeCaches()
@@ -157,7 +160,11 @@ export async function apiDeleteKb(id: number, action: KbDeleteAction): Promise<K
  * @returns 文件列表快照；读不到库时带 `readError`（与「还没有文件」可区分）。
  */
 export async function apiGetKbFiles(kbId: number, options?: { limit?: number; offset?: number }): Promise<KbFileListSnapshot> {
-  return unwrap(await remote().getKbFiles(kbId, options))
+  // ⚠️ 必须显式给 `{}`，不能把 `undefined` 递过去：参数经 IPC / HTTP 的 **JSON 序列化**后
+  // `undefined` 会变成 `null`，而后端的默认参数（`opts = {}`）**不对 null 生效** ⇒
+  // 后端读 `opts.limit` 直接抛 `Cannot read properties of null`。
+  // 实测症状：知识库「文件」页整页报错（2026-10-16）。
+  return unwrap(await remote().getKbFiles(kbId, options ?? {}))
 }
 
 /**
@@ -177,7 +184,7 @@ export async function apiGetKbFiles(kbId: number, options?: { limit?: number; of
 export async function apiGetKbFileChunks(
   kbId: number, fileId: number, options?: { limit?: number; offset?: number },
 ): Promise<KbFileChunkPage> {
-  return unwrap(await remote().getKbFileChunks(kbId, fileId, options))
+  return unwrap(await remote().getKbFileChunks(kbId, fileId, options ?? {}))
 }
 
 /**

@@ -72,9 +72,12 @@ function createMainWindow(ctx) {
     minHeight: MIN_H,
     useContentSize: true,
     resizable: true,
-    // 标题栏是自绘的（frame:false），最大化/全屏都由自绘按钮触发，所以这里要放开，
-    // 否则那两个按钮点了没反应。
-    maximizable: true,
+    // 标题栏是自绘的（frame:false），铺满屏幕由自绘「全屏」按钮显式
+    // setBounds(当前显示器工作区) 完成（见 ipc-misc.js 的 window:fullscreen-toggle）。
+    // 这里**关掉系统最大化**：无边框窗口 maximize() 的 bounds 会溢出 8px
+    // （实测 2560×1440 屏上变成 -8,-8,2576,1416），右/下越界 8px 反而压住任务栏 ——
+    // 用户 2026-10-18 报的「全屏挡住任务栏」正是这一类。铺满只由自绘按钮触发。
+    maximizable: false,
     fullscreenable: true,
     show: false,
     frame: false,
@@ -95,7 +98,9 @@ function createMainWindow(ctx) {
     }
   });
 
-  // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）
+  // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）。
+  // 2026-10-18：按钮改走「铺满工作区」，状态由 ipc-misc.js 主动发 window:fullscreen-changed；
+  // 这两条只兜 OS 级全屏（例如页面内视频 requestFullscreen）引起的窗口状态变化。
   win.on('enter-full-screen', () => win?.webContents.send('window:fullscreen-changed', true));
   win.on('leave-full-screen', () => win?.webContents.send('window:fullscreen-changed', false));
 

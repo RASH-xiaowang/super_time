@@ -3,11 +3,11 @@
  *
  * ## 为什么是「两份显式清单」而不是一份黑名单
  *
- * 后端有 195 个 `@Remote` 方法，且这个数字只会涨。黑名单的问题不是今天漏了哪一条，
- * 而是**第 195 条出现时会静默获得远程访问权** —— 没人会记得回来改一份「禁止清单」，
+ * 后端有 212 个 `@Remote` 方法，且这个数字只会涨。黑名单的问题不是今天漏了哪一条，
+ * 而是**第 212 条出现时会静默获得远程访问权** —— 没人会记得回来改一份「禁止清单」，
  * 而症状是「手机上某个新功能突然能改了桌面端的配置」，这类问题不会被任何测试发现。
  *
- * 所以这里把 195 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
+ * 所以这里把 212 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
  * （拒绝，按族给出理由）。两份清单由 `http-remote-policy.spec.ts` 对着 gateway 源码里
  * 真实解析出的 `@Remote` 注册表校验三件事：
  *   ① 两者**不相交**（同一条方法不能既允许又拒绝）；
@@ -16,6 +16,14 @@
  *      那会让「白名单 ⊆ 注册表」变成假的安全感）。
  *
  * ② 是这份文件的**全部价值所在**：它把「默认拒绝」从一句口号变成一个会红的判据。
+ *
+ * ## 例外：「打开网页」桌面交接会话（2026-10-19）
+ *
+ * 用户在桌面端亲手点「打开网页」时，发出的配对码带 `fullAccess` 标记；它换来的会话
+ * **不查这份白名单**，并与桌面端一样走 `/api/native/*` 原生能力代理。原因：浏览器就在
+ * 同一台电脑上，是用户把桌面操作面临时交给默认浏览器，权限必须与桌面端一致。
+ * 这条例外**只认服务端内存里的会话标记**：普通手机配对码、伪造 URL 的 `mode=desktop`、
+ * 旧 Cookie 都拿不到 fullAccess；停服/轮换/点卡片返回都会清空会话表。
  *
  * ## 分类口径（判「拒」的四条理由，满足任一条即拒）
  *
@@ -76,6 +84,12 @@ const REMOTE_SAFE_BY_FAMILY = {
     'listSummaryTasks', 'saveSummaryTask', 'toggleSummaryTask', 'deleteSummaryTask',
     'runSummaryTask', 'listSummaryRecords', 'deleteSummaryRecord',
     'listTasks', 'addTask', 'setTaskStatus', 'deleteTask', 'extractTasks',
+    // 2026-10-19：收集任务列表是纯读本机库；创建任务会落文件，见 B 族。
+    'listChatCollectTasks',
+    // 2026-10-19：任务信息 / 触发记录的**只读**视图。列表本身是纯读自建库，
+    // 与「手机上看看有哪些任务、触发过什么」的语义一致；写侧（建/改/删/扫描/投递）
+    // 全部落在下面的 B / D 两族（扫描会写库、投递会按用户配置的地址把内容发出去）。
+    'listTaskInfos', 'listTaskTriggers',
   ],
   '知识库': [
     'getKbs', 'getKbFiles', 'getKbFileChunks', 'getNotes', 'saveNote', 'deleteNote',
@@ -94,13 +108,16 @@ const REMOTE_SAFE_BY_FAMILY = {
   ],
   '账本与记录': ['getLedger', 'getRecords'],
   '关系图谱': ['getGraph'],
-  '健康与状态（只读）': ['getDbHealth', 'getDbStatus', 'getDecryptStatus'],
+  '健康与状态（只读）': ['getDbHealth', 'getDbStatus', 'getDecryptStatus', 'getDataRevision'],
   '隐私体检（只读）': ['getPrivacyState', 'getPrivacyScan', 'getPrivacyAuditRows'],
   '操作日志（只读）': ['getOperationLog'],
   '本地决策分析': ['analyzeMessages', 'analyzeVisibleMessages', 'cancelLayaAnalysis'],
   'ClawBot（只读）': [
     'listClawbotInstances', 'listClawbotMessages', 'getClawbotBinding',
     'getClawbotBindState', 'checkClawbotEnv', 'getClawbotMedia',
+    // 2026-10-17：内置的拟人化默认提示词是**常量**（不读库、不碰微信数据、无副作用）。
+    // 手机上要能看得到默认值长什么样 —— 否则设置面板的输入框永远是空的。
+    'getClawbotDefaultPrompt',
   ],
 }
 
@@ -118,12 +135,18 @@ const LOCAL_ONLY_BY_FAMILY = {
     'verifyDatabaseKey', 'verifyImageKey', 'detectWechatAccounts',
     'listLlmModels', 'listLlmProviders', 'getKbModelConfig', 'setKbModelConfig',
     'setPrivacyState',
+    // 原图自动下载（实验）会向本机微信进程注入组件并改变其内存行为 —— 只允许桌面端触发，
+    // 手机/浏览器态没有「本机微信进程」这个概念，不该有这个入口。
+    'wechatImageAutoDownload',
   ],
   'B 导出：在本机磁盘上落文件': [
     'exportCsv', 'exportAllSessions', 'exportSessionMessages', 'exportMoments',
     'exportSnsVideo', 'exportAnnualReport',
     'getExportHistory', 'getExportProgress', 'cancelExportJob',
     'deleteExportHistory', 'pruneExportHistory',
+    // 2026-10-19：新建聊天素材收集任务会在数据根写 texts.json / images/ / task.json ——
+    // 与导出一族同属「本机落文件」，手机端没有对应的文件概念。
+    'createChatCollectTask',
   ],
   'B 备份与还原：读本机任意路径、还原会覆盖数据': [
     'listBackups', 'previewBackup', 'createBackup', 'createEncryptedBackup',
@@ -140,14 +163,29 @@ const LOCAL_ONLY_BY_FAMILY = {
     'buildSearchIndex', 'cancelSearchIndexBuild', 'buildKbVectorIndex', 'buildRagVectorIndex',
     'cancelKbIndexBuild', 'evaluateRetrieval', 'resetRetrievalWeights', 'saveRetrievalConfig',
     'fetchOriginalImagesBatch', 'planOriginalFetch', 'transcribeVoiceBatch',
+    'originalHarvest', 'getOriginalHarvestStatus', 'getWxcdnQuota',
   ],
   'B 本机 shell / 窗口（远程端没有桌面可开）': ['openPath'],
+  'B 任务信息写侧：写本机任务库 / 扫描会生成触发记录': [
+    // 2026-10-19：任务信息是「用户显式创建 + 本机落库」的配置，与待办/摘要任务同族；
+    // 扫描会把命中记录写进本机库（并且可能触发下一族的回调投递），远程端不该驱动它。
+    'saveTaskInfo', 'deleteTaskInfo', 'setTaskInfoStatus', 'scanTaskTriggers',
+  ],
+  'D 任务回调投递：按用户配置的地址把触发内容发到外部平台': [
+    // 与 ClawBot 发消息同属「以用户身份对外产生后果」：一条调用就会把触发文本与图片
+    // POST 到用户填的回调地址。远程端（手机/普通浏览器会话）不该有能力触发这次出网；
+    // 桌面「打开网页」交接会话走 fullAccess，与桌面端同权（见文件头例外）。
+    'dispatchTaskCallback',
+  ],
   'D ClawBot 写侧：能以用户身份发消息、能改绑定与实例配置': [
     'createClawbotBindQr', 'unbindClawbot', 'createClawbotInstance',
-    'deleteClawbotInstance', 'setClawbotInstanceConfig', 'sendClawbotMessage',
+    'deleteClawbotInstance', 'setClawbotInstanceConfig', 'renameClawbotInstance', 'sendClawbotMessage',
   ],
   'D 审计留痕的破坏性清理（问责记录不许被远程端抹掉）': [
     'clearOperationLog', 'clearPrivacyAudit',
+    // 2026-10-17：清除对话历史也是**不可恢复的破坏性清理**（删掉接入会话正文），
+    // 与上面两条同族 —— 远程端（手机浏览器）不该能抹掉本机的对话记录。
+    'clearClawbotMessages',
   ],
   'A 跨设备交接：语义未定，先拒（拿不准一律拒）': ['getHandoffReminds', 'syncHandoffTasks'],
 }

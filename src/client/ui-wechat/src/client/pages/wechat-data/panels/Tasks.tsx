@@ -6,7 +6,7 @@ import { useCallback, useState } from 'react'
 import { apiAddTask, apiDeleteTask, apiExtractTasks, apiListTasks, apiSetTaskStatus, apiSyncHandoffTasks } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { WechatTask } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Button, Card, EmptyState, LinkButton, LoadingState, PanelHeader, Toolbar } from '../ui/kit.tsx'
+import { Button, Card, EmptyState, LinkButton, LoadingState, PanelHeader, Toolbar } from '../ui/kit.tsx'
 import { useTransientNotice } from './hooks.tsx'
 import css from './tasks.module.css'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
@@ -118,16 +118,27 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   return (
     <div className={kitCss.panelShell}>
       <PanelHeader
-        title="待办提取"
-        desc="最近 7 天聊天 → LLM 提取待办/提醒 · 本地存储"
+        title="待办日程"
+        desc="从最近 7 天聊天提取待办（本地关键词匹配，不调用模型）"
         actions={(
           <>
-            <Button variant="pill" onClick={() => { void extract() }} disabled={extracting}>
-              {extracting ? '提取中…' : '提取最近 7 天待办'}
+            <Button variant="primary" onClick={() => { void extract() }} disabled={extracting}>
+              {extracting ? '提取中…' : '提取待办'}
             </Button>
-            <Button variant="pill" onClick={() => { void syncHandoff() }} disabled={syncing} {...desktopActionProps()}>
-              {syncing ? '导入中…' : '导入微信原生提醒'}
-            </Button>
+            <details className={css.more}>
+              <summary className={css.moreSummary}>更多</summary>
+              <div className={css.moreMenu}>
+                <button
+                  type="button"
+                  className={css.moreItem}
+                  disabled={syncing}
+                  onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open'); void syncHandoff() }}
+                  {...desktopActionProps()}
+                >
+                  {syncing ? '导入中…' : '导入微信原生提醒'}
+                </button>
+              </div>
+            </details>
           </>
         )}
       />
@@ -159,30 +170,32 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       )}
       {loading && <LoadingState variant="compact" label="加载中…" />}
 
-      {!loading && tasks.length === 0 && !error && !readError && <EmptyState icon="✅" title="暂无待办" desc="点击右上角「提取最近 7 天待办」自动生成" />}
-
-      <Card flush>
-        <div className={css.list}>
-          {tasks.map(t => (
-            <div key={t.id} className={css.taskRow} data-status={t.status}>
-              <div className={css.taskInfo}>
-                <div className={css.taskTitle}>{t.title}</div>
-                <div className={css.taskMeta}>
-                  {fmtDue(t.dueAt) ? `到期 ${fmtDue(t.dueAt)}` : '未设置到期'}
-                  {t.sourceUsername ? (
-                    <LinkButton onClick={() => { onOpenChat?.(t.sourceUsername ?? '', t.sourceLocalId) }}>来源会话</LinkButton>
-                  ) : null}
+      {/* 卡片撑满面板剩余高度（2026-10-18「其他面板的卡片要撑满屏幕」）：
+          空态也放进卡里，不再让页面下半截裸空。 */}
+      <div className={css.fill}>
+        <Card flush>
+          {!loading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" desc="点右上角「提取待办」从最近 7 天聊天里找，或在下面手动添加一条" />}
+          <div className={css.list}>
+            {tasks.map(t => (
+              <div key={t.id} className={css.taskRow} data-status={t.status}>
+                <div className={css.taskInfo}>
+                  <div className={css.taskTitle}>{t.title}</div>
+                  <div className={css.taskMeta}>
+                    {fmtDue(t.dueAt) ? `到期 ${fmtDue(t.dueAt)}` : '未设置到期'}
+                    {t.sourceUsername ? (
+                      <LinkButton onClick={() => { onOpenChat?.(t.sourceUsername ?? '', t.sourceLocalId) }}>来源会话</LinkButton>
+                    ) : null}
+                  </div>
+                </div>
+                <div className={css.taskActions}>
+                  <Button variant="ghost" onClick={() => { void toggle(t) }}>{t.status === 'open' ? '完成' : '重开'}</Button>
+                  <Button variant="ghost" onClick={() => { void remove(t.id) }}>删除</Button>
                 </div>
               </div>
-              <div className={css.taskActions}>
-                <Badge tone={t.status === 'open' ? 'cyan' : 'green'}>{t.status === 'open' ? '待办' : '已完成'}</Badge>
-                <Button variant="pill" onClick={() => { void toggle(t) }}>{t.status === 'open' ? '完成' : '重开'}</Button>
-                <Button variant="pill" onClick={() => { void remove(t.id) }}>删除</Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+            ))}
+          </div>
+        </Card>
+      </div>
     </div>
   )
 }

@@ -20,6 +20,7 @@ import { compressContext } from './compress.ts'
 import { defaultPolicyFor, effectiveParams, type RetrievalConfig } from './config.ts'
 import { searchDense, vectorIndexStatus, type EmbedFn } from './embedding.ts'
 import { kbChannel } from './kb-channel.ts'
+import { runAggregate, factsToDocs } from './aggregate.ts'
 
 /** 流水线输入。 */
 export interface PipelineInput {
@@ -67,6 +68,12 @@ export interface PipelineInput {
    * 而不是「搜所有库」。与 `kbId` 在其余知识库接口上的纪律一致 —— 没有「所有库」这种模式。
    */
   kbId?: number
+  /**
+   * 是否允许检索**本机微信数据**（消息 / 联系人 / 朋友圈 / 收藏 / 文件 / 账单）。
+   * 缺省 `true`（手动问答逐字节不变）。**自动回复传 `false`**（无人值守出网，数据面只限
+   * 「知识库 + 上下文 + 模型」，2026-10-17）：只关微信侧四通道，**知识库照常**。
+   */
+  wechatDataEnabled?: boolean
   /** 现在时刻（可注入，便于测试）。 */
   now?: Date
 }
@@ -189,6 +196,22 @@ function dayStartMs(day: string): number {
 /** 某天的本地 23:59:59.999（毫秒）；非法日期返回 NaN。 */
 function dayEndMs(day: string): number {
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(day + 'T23:59:59').getTime() + 999 : NaN
+}
+
+/**
+ * `now` 往前 `n` 天的 `YYYY-MM-DD`（本地时区）。
+ *
+ * 用途：纯时间问法**没有日期线索**时给时间通道一个默认窗口（见调用点）。
+ * 与 `rewrite.ts#resolveRelativeDate` 的「最近」分支同一口径（都是本地日期）。
+ * @param now - 基准时刻。
+ * @param n - 往前几天（0 = 今天）。
+ * @returns `YYYY-MM-DD`。
+ */
+function ymdDaysAgo(now: Date, n: number): string {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - n)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${String(d.getFullYear())}-${mm}-${dd}`
 }
 
 /** 纯时间浏览的摊开粒度：30 分钟。刻意等于 compressContext 的窗口跨度（±15 分钟），
@@ -349,7 +372,7 @@ async function denseChannel(
   if (!st.ready) return { channel: 'dense', hits: [], active: false, note: '向量索引未就绪' }
   try {
     const res = await searchDense(decryptedDir, plan.normalized, embedFn, {
-      topK: policy.channelTopK.dense,
+      topK: policy.channelTopK.dense ?? 0,
       minSimilarity: config.channels.dense.minSimilarity,
       candidatePool: config.channels.dense.candidatePool,
       ...(username ? { username } : {}),
@@ -407,25 +430,23 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
   // （正文里写着「今天」的别日期消息），并触发一次全表 LIKE 兜底扫描。
   // 见 rewrite.ts 的 contentResidue / QueryPlan.timeBrowse。
   const pureTime = plan.timeBrowse
-  if (!pureTime && config.channels.sparse.enabled && policy.channels.includes('sparse')) {
+  // 微信数据面开关（2026-10-17，自动回复专用）：`false` 只关微信侧四通道，知识库照常。
+  const wechatOk = input.wechatDataEnabled !== false
+  if (wechatOk && !pureTime && config.channels.sparse.enabled && policy.channels.includes('sparse')) {
     channels.push(sparseChannel(input.decryptedDir, plan.terms.slice(0, 12), params.channelTopK.sparse, scopeUsername))
   }
-  if (!pureTime && config.channels.dense.enabled && policy.channels.includes('dense')) {
+  if (wechatOk && !pureTime && config.channels.dense.enabled && policy.channels.includes('dense')) {
     channels.push(await denseChannel(input.decryptedDir, plan, config, policy, input.embedFn, scopeUsername))
   }
-  if (config.channels.structured.enabled && policy.channels.includes('structured')) {
+  if (wechatOk && config.channels.structured.enabled && policy.channels.includes('structured')) {
     channels.push(structuredChannel(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? '', input.scope?.to ?? '', scopeUsername))
   }
-  // 知识库通道：与 sparse 用**同一份词项**，且必须是 `plan.terms` 而不是原问题 ——
-  // `kb-search` 用 `ftsPhrase` 把每个词编成「连续 bigram 短语」，把整句问题当一个词传进去
-  // 就成了要求文件里逐字出现这一整句，正常提问必然 0 命中。`plan.terms` 正是为此产出的
-  // （规划器关键词原样保留 + 问题 bigram 补齐，见 rewrite.ts）。
+  // 知识库通道：与 sparse 用**同一份词项**（`plan.terms` 而非原问题 —— `kb-search` 用
+  // `ftsPhrase` 把每个词编成「连续 bigram 短语」，整句传进去必然 0 命中）。
   // 纯时间问法跳过：那类问题问的是「这一天聊了啥」，文件没有时间轴，不存在正确答案。
   if (!pureTime && config.channels.kb.enabled && policy.channels.includes('kb')) {
-    // 知识库的稠密子路径复用「稠密能力」的两道门：
-    //   ① `config.embedding.enabled && config.channels.dense.enabled` —— 这套能力此刻**能不能用**；
-    //   ② `policy.channels.includes('dense')` —— 这次提问**要不要**在向量空间里找。
-    // 缺任何一道就退回纯关键词；降级说明由 kb 通道按「稠密没跑」如实给出。
+    // 知识库的稠密子路径复用「稠密能力」的两道门：① 这套能力此刻**能不能用**；
+    // ② 这次提问**要不要**在向量空间里找。缺任何一道就退回纯关键词。
     const kbDenseEnabled = config.embedding.enabled && config.channels.dense.enabled && policy.channels.includes('dense')
     channels.push(await kbChannel(
       input.decryptedDir,
@@ -445,9 +466,13 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
   // 时间通道：只要有日期线索就开（与意图无关）。纯时间问法给它满额（它此时是**唯一**
   // 召回来源，需要覆盖一整天；compressContext 会对 ±15 分钟内的命中去重叠，自动把锚点
   // 摊开到全天）；带内容词的问法只给它小额度，起「同日内容补充」的作用，不抢词法召回名额。
-  if (policy.channels.includes('time') && (plan.from || plan.to)) {
+  // ⚠️ 2026-10-16 修：`pureTime` 时**即使没有日期也开**（旧条件让「最近聊了什么」一个通道都不开 ⇒ 召回 0）。
+  if (wechatOk && policy.channels.includes('time') && (plan.from || plan.to || pureTime)) {
     const timeTopK = pureTime ? params.channelTopK.time : Math.min(params.channelTopK.time, 24)
-    channels.push(timeChannel(input.decryptedDir, plan, timeTopK, scopeUsername, now, pureTime))
+    const planForTime = (plan.from || plan.to || !pureTime)
+      ? plan
+      : { ...plan, from: ymdDaysAgo(now, 6), to: ymdDaysAgo(now, 0) }
+    channels.push(timeChannel(input.decryptedDir, planForTime, timeTopK, scopeUsername, now, pureTime))
   }
 
   // 词项权重（IDF 近似）：命中越少越稀有。用稀疏通道的样本估计。
@@ -463,6 +488,33 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
 
   const recalled = channels.reduce((a, c) => a + c.hits.length, 0)
   void sparse
+
+  // ── 2.5 聚合通道（2026-10-16 新增）──
+  // 「一共多少笔」「哪个群最多」这类问题的答案**不在任何一条消息里** ——
+  // 它需要 `COUNT(*)` / `GROUP BY`。此前只做片段召回，于是模型从 10 条片段里
+  // 「数出」一个数（实测答「14 条」，而真实远不止），或者干脆说「判断不了」。
+  //
+  // 只在聚合意图下跑：其余意图的答案确实在片段里，跑聚合是白花一次全表扫描。
+  // 结果作为**独立文档**（`source: 'agg'`）注入，走与其余通道相同的融合/压缩路径。
+  const aggFacts = decision.intent === 'aggregation'
+    ? runAggregate({
+      decryptedDir: input.decryptedDir,
+      question: input.question,
+      terms: plan.terms,
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(plan.from ? { from: plan.from } : {}),
+      ...(plan.to ? { to: plan.to } : {}),
+      now,
+    })
+    : []
+  const aggDocs = factsToDocs(aggFacts)
+  if (aggDocs.length > 0) {
+    channels.push({
+      channel: 'agg',
+      hits: aggDocs.map((doc, i) => ({ doc, score: 1, rank: i + 1 })),
+      active: true,
+    })
+  }
 
   // ── 3. 融合 + 去重 ──
   const fused = dedupeFused(fuseResults(channels, config.fusion.k, config.fusion.keep), config.compress.dedupThreshold)
@@ -484,6 +536,23 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
   })
 
   /**
+   * ── 4.2 聚合事实**保底置顶**（2026-10-16）────────────────────────────
+   *
+   * 为什么必须置顶而不是参与打分：聚合文档的 `sparse`/`dense`/`kb` 分都是 0
+   * （它不是任何通道召回出来的），`coverage` 也低（正文是统计表，不一定含检索词）
+   * ⇒ 总分必然垫底 ⇒ 被挤出上下文预算。实测（真实数据）：「我一共收到多少笔转账」
+   * 的聚合事实（含「转账」282 条）**根本没进上下文**，模型只能从 14 条片段里数，
+   * 于是答「14 条」。
+   *
+   * 它是**确定性事实**（`COUNT(*)` 的结果），与「片段」不是同一类东西 ——
+   * 让它们竞争名次本身就是错的。所以直接插到最前面，且不受 `limit` 截断影响
+   * （聚合事实最多 1~2 条，占不了多少预算）。
+   */
+  const aggRanked = ranked.filter(r => r.doc.source === 'agg')
+  const restRanked = ranked.filter(r => r.doc.source !== 'agg')
+  const ordered = aggRanked.length > 0 ? [...aggRanked, ...restRanked] : ranked
+
+  /**
    * ── 4.5 模型精排（可选）──────────────────────────────────────────────
    * 插在**本地打分之后**，不是在它之前 —— 这条位置是功能成立的前提：
    * `rerankDocs` 是按自己的 8 个特征**从头排序**的，把候选池喂成别的顺序给它看，
@@ -501,16 +570,21 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
    * 让模型按「相关性」重排会把最新一条挤掉 —— 那是答非所问。
    */
   let rerankInfo: PipelineOutput['rerankInfo'] = { used: false, note: '本地线性加权（未配置重排序模型）' }
-  let poolRanked = ranked
-  if (typeof input.rerank === 'function' && ranked.length > 1 && !policy.recencyFirst && !pureTime) {
-    const take = Math.min(ranked.length, RERANK_CANDIDATE_LIMIT)
-    const head = ranked.slice(0, take)
-    const tail = ranked.slice(take)
+  // 用 `ordered`（聚合事实已置顶）而不是 `ranked` —— 见 4.2 的说明。
+  let poolRanked = ordered
+  // 聚合事实**不参与模型精排**：它是确定性事实，让模型按「相关性」给它打分只会把它
+  // 重新压下去（模型看不到「这是 COUNT(*) 的结果」这个语义）。所以精排只处理片段。
+  const rerankable = ordered.filter(r => r.doc.source !== 'agg')
+  if (typeof input.rerank === 'function' && rerankable.length > 1 && !policy.recencyFirst && !pureTime) {
+    const take = Math.min(rerankable.length, RERANK_CANDIDATE_LIMIT)
+    const head = rerankable.slice(0, take)
+    const tail = rerankable.slice(take)
     try {
       const scores = await input.rerank(plan.normalized, head.map(r => r.doc.text))
       const order = head.map((r, i) => ({ r, s: Number(scores[i] ?? 0), i }))
       order.sort((a, b) => (b.s - a.s) || (a.i - b.i))
-      poolRanked = [...order.map(o => o.r), ...tail]
+      // 聚合事实仍置顶，精排只决定片段的先后。
+      poolRanked = [...aggRanked, ...order.map(o => o.r), ...tail]
       rerankInfo = { used: true, candidates: take, kept: Math.min(limit, take), model: input.rerankModel ?? '' }
     } catch (e) {
       rerankInfo = { used: false, note: '精排这次没跑成：' + errorText(e) + '（已退回本地加权）' }

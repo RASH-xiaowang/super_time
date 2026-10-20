@@ -14,6 +14,8 @@
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { ClawbotBindQr, ClawbotBindStateSnapshot, ClawbotBindingSnapshot, ClawbotEnvSnapshot, ClawbotInstanceConfig, ClawbotInstanceCreated, ClawbotInstanceDeleted, ClawbotInstancesSnapshot, ClawbotMediaResult, ClawbotMessageQuery, ClawbotMessageSnapshot, ClawbotSendResult } from './types.ts'
 import { createClawbotRemotes } from './remotes/clawbot.ts'
+import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from './query/clawbot/clawbot-prompt.ts'
+import { addClawbotTokenUsage } from './query/clawbot/clawbot-token.ts'
 import { GatewayDbHealth } from './gateway-db-health.ts'
 
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
@@ -55,8 +57,22 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
    * @returns 落库后的完整配置。
    */
   @Remote('setClawbotInstanceConfig')
-  setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }): ClawbotInstanceConfig {
+  setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): ClawbotInstanceConfig {
     return this.clawbotRemotes().setClawbotInstanceConfig(options)
+  }
+
+  /**
+   * 给实例起别名（「工作号」「客服号」；2026-10-16）。
+   *
+   * 与绑定状态机无关（只动 `label` 一列）⇒ 别名活过重新绑定与解绑。
+   * 空串 = 清除别名（界面回落到昵称，再回落到「实例 N」）。
+   * @param options.slot - 实例编号。
+   * @param options.label - 新别名（空串 = 清除）。
+   * @returns 落库后的绑定卡片快照。
+   */
+  @Remote('renameClawbotInstance')
+  renameClawbotInstance(options: { slot: number, label: string }): ClawbotBindingSnapshot {
+    return this.clawbotRemotes().renameClawbotInstance(options)
   }
 
   /**
@@ -107,6 +123,29 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
   @Remote('listClawbotMessages')
   listClawbotMessages(options?: ClawbotMessageQuery): ClawbotMessageSnapshot {
     return this.clawbotRemotes().listClawbotMessages(options)
+  }
+
+  /**
+   * 清空某实例的**接入会话**（2026-10-17）：只删消息，不动绑定与配置。
+   * @param options.slot - 实例编号（缺省 = 第一个实例）。
+   * @returns 删掉的条数 + 最新会话页快照（界面据此立刻刷新）。
+   */
+  @Remote('clearClawbotMessages')
+  clearClawbotMessages(options?: { slot?: number }): { removed: number, messages: ClawbotMessageSnapshot } {
+    return this.clawbotRemotes().clearClawbotMessages(options)
+  }
+
+  /**
+   * 取**内置的拟人化默认系统提示词**（2026-10-17）。
+   *
+   * 为什么要有它：设置视图的输入框此前是空的（「留空 = 用默认值」），用户**看不到**
+   * 默认值长什么样 —— 想改也不知道从哪改起。把它暴露给界面，输入框就能预填，
+   * 用户可以直接在默认值上改（而不是从零写）。
+   * @returns 默认提示词全文。
+   */
+  @Remote('getClawbotDefaultPrompt')
+  getClawbotDefaultPrompt(): { prompt: string } {
+    return { prompt: DEFAULT_CLAWBOT_SYSTEM_PROMPT }
   }
 
   /**
@@ -178,11 +217,32 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
        *   · 历史落一条 `source: 'auto'` —— 问答历史里必须认得出「这条不是我自己问的」。
        *     不带它就会落成缺省的 `'ask'`（= 用户手动问），于是用户看到一条没问过的记录，
        *     排查「为什么自动回了这么一句」时也失去唯一的依据。
+       *
+       * ⚠️ **数据面限定 `kb-only`（2026-10-17）**：自动回复是**无人值守出网**，
+       * 它的数据面只许是「知识库 + 对话上下文 + 模型」—— **不许检索本机微信数据**
+       * （消息 / 联系人 / 朋友圈 / 收藏 / 文件 / 账单）。理由：
+       *   ① 微信里随便一个人发一句话，就能让本机把**全部聊天记录**检索一遍并送去模型，
+       *      这是用户没有逐条同意过的出网；
+       *   ② 手动问答有「用户此刻的意图」兜底（他刚选了范围、看着界面），自动回复没有。
+       * 关掉后：检索阶段跳过微信侧、不建向量索引（不把消息正文送去 embedding），
+       * 只保留知识库通道；依据行会写明「本次仅检索知识库」。
        * 失败一律转成 `{ ok:false }` 让上层的审计记账 —— 自动回复**不许抛**进长轮询循环。
        */
-      ask: async (slot, text, kbId) => {
+      ask: async (slot, text, kbId, systemPrompt, context) => {
         try {
-          const r = await this.askDeepRemotes().askWechat({ question: text, source: 'auto', ...(kbId === null ? {} : { kbId }) })
+          const r = await this.askDeepRemotes().askWechat({
+            question: text, source: 'auto', dataScope: 'kb-only',
+            // 系统提示词：用户写了就用他的，没写就用内置拟人化默认值（**不是「没有提示词」**）。
+            systemPromptOverride: systemPrompt.trim() !== '' ? systemPrompt : DEFAULT_CLAWBOT_SYSTEM_PROMPT,
+            ...(kbId === null ? {} : { kbId }),
+            // 最近对话与图片（2026-10-18）：自动回复的上下文只来自本 ClawBot 会话库，
+            // ask 管道内按模型是否支持读图决定发送图片还是显式说明看不到图片。
+            ...(context?.history === undefined ? {} : { history: context.history }),
+            ...(context?.images === undefined ? {} : { images: context.images }),
+          })
+          // 按实例记 token 消耗（2026-10-19）：供应商不返回 usage 时 r.usage 为空，
+          // addClawbotTokenUsage 不落 0 行 ⇒ 统计显示 0 是「确实没记到」。
+          addClawbotTokenUsage(this._dirs.decrypted, slot, r.usage)
           return { ok: true, answer: r.answer }
         } catch (e) {
           return { ok: false, answer: '', error: e instanceof Error ? e.message : String(e) }

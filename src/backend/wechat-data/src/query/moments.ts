@@ -3,13 +3,28 @@
  * Timeline rows live in SnsTimeLine (tid/user_name/content XML); the content
  * XML is parsed into text/media/location/link fields mirroring the Rust
  * modules/moments.rs parse_sns_xml. Author names resolve via contact.db.
+ *
+ * 2026-10-19 起列表**归档优先**：先把线上行幂等导入 `<数据根>/moments-archive.db`
+ * （见 `moments-archive.ts`），再从归档出列表/作者/月度。好友删动态后，线上行消失，
+ * 归档行仍在 —— 这就是「防撤回」。解析器只保留一份（本文件），归档存的是解析后的
+ * payload + 原始 XML，避免两处各自解释格式。
  */
 import { fmtRelativeDaySec } from '../format.ts'
 import { DatabaseSync } from './db-open.ts'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
 import { stripCdata } from './parse-xml.ts'
+import {
+  readArchivedAuthors,
+  readArchivedMomentHashes,
+  readArchivedMoments,
+  readArchivedPayloads,
+  upsertArchivedMoments,
+  type ArchivedMomentInput,
+  type ArchivedMomentRow,
+} from './moments-archive.ts'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
 function cellString(v: unknown): string {
@@ -427,6 +442,185 @@ export function parseSnsLikesComments(xml: string): { likes: MomentLike[]; comme
  * @param authorUsername - optional author filter.
  * @returns the moments snapshot.
  */
+/** 线上表的一行（归档导入的输入）。 */
+interface LiveMomentRow {
+  tid: string
+  username: string
+  content: string
+}
+
+/** 一次同步节流：同一目录 1.5s 内不重复读全表（分页/增量刷新会连着调）。 */
+const ARCHIVE_SYNC_GAP_MS = 1_500
+const LAST_ARCHIVE_SYNC = new Map<string, number>()
+
+/** 线上 sns.db 是否存在（含表结构探测结果）。 */
+function liveMomentsAvailable(dbPath: string): { tid: string; uname: string; content: string } | null {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+    if (!has) return null
+    const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
+    return {
+      tid: cols.has('tid') ? 'tid' : 'Id',
+      uname: cols.has('user_name') ? 'user_name' : 'userName',
+      content: cols.has('content') ? 'content' : 'Content',
+    }
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * 读线上表**全部**行（归档要的是全量超集，不能只读当前页）。
+ * @param decryptedDir - 解密数据根。
+ * @returns 行；没有 sns.db / 没有表时为 `null`。
+ */
+function readLiveMomentRows(decryptedDir: string): LiveMomentRow[] | null {
+  const dbPath = snsDb(decryptedDir)
+  if (dbPath === null) return null
+  const shape = liveMomentsAvailable(dbPath)
+  if (shape === null) return null
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    const rows = db.prepare(
+      `SELECT CAST(${shape.tid} AS TEXT) AS t, ${shape.uname} AS u, ${shape.content} AS c FROM SnsTimeLine`,
+    ).all() as Array<{ t?: unknown; u?: unknown; c?: unknown }>
+    return rows.map((r) => ({ tid: cellString(r.t), username: cellString(r.u), content: cellString(r.c) }))
+  } finally {
+    db.close()
+  }
+}
+
+/** 按 key 去重（保留先出现的，用于合并归档里比线上多出来的点赞/评论/图片）。 */
+function unionBy<T>(oldList: readonly T[], nextList: readonly T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const item of [...oldList, ...nextList]) {
+    const key = keyOf(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+  }
+  return out
+}
+
+/**
+ * 合并「已归档」与「线上最新」两版内容。
+ *
+ * 线上 XML 是**当前状态**：好友删评论、撤点赞、去掉一张图后，XML 里就没有了。
+ * 如果直接覆盖 payload，归档就只剩「最后一次看到」而不是「拿到过的全部」——
+ * 所以社交/媒体三类按稳定键做并集，正文只在新版为空时回退旧版。
+ * @param oldPayload - 归档里的旧 payload（JSON）。
+ * @param next - 线上最新解析出的 entry。
+ * @returns 合并后的 entry（不修改入参）。
+ */
+function mergeArchivedEntry(oldPayload: string, next: MomentEntry): MomentEntry {
+  let old: MomentEntry
+  try { old = JSON.parse(oldPayload) as MomentEntry } catch { return next }
+  const merged: MomentEntry = {
+    ...next,
+    text: next.text === '' ? old.text : next.text,
+    likes: unionBy(old.likes ?? [], next.likes, (l) => l.username + '|' + l.nickname),
+    comments: unionBy(old.comments ?? [], next.comments, (c) => JSON.stringify(c)),
+    images: unionBy(old.images ?? [], next.images, (m) => (m.md5 || '') + '|' + (m.timelineId ?? '') + '|' + (m.id ?? '')),
+    videos: unionBy(old.videos ?? [], next.videos, (v) => (v.md5 || '') + '|' + (v.timelineId ?? '') + '|' + (v.id ?? '')),
+  }
+  if (merged.location === '' && old.location !== '') merged.location = old.location
+  if (merged.link_title === '' && old.link_title !== '') {
+    merged.link_title = old.link_title
+    merged.link_url = old.link_url
+  }
+  return merged
+}
+
+/** 把一行 XML 解析成完整的 `MomentEntry`（线上/归档共用同一份解析）。 */
+function buildMomentEntry(tid: string, username: string, xml: string, names: Map<string, string>, self: string): MomentEntry {
+  const parsed = parseSnsXml(xml)
+  const social = parseSnsLikesComments(xml)
+  const author = names.get(username) || parsed.nickname || username || '未知'
+  const entry: MomentEntry = {
+    tid,
+    username,
+    author,
+    text: parsed.text,
+    ts: parsed.createTime,
+    time: fmtRelativeDaySec(parsed.createTime),
+    media_count: parsed.mediaCount,
+    media_desc: parsed.mediaDesc,
+    images: parsed.images,
+    videos: parsed.videos,
+    location: parsed.location,
+    link_title: parsed.linkTitle,
+    link_url: parsed.linkUrl,
+    is_self: username === self,
+    likes: social.likes,
+    comments: social.comments,
+  }
+  if (parsed.contentType) entry.contentType = parsed.contentType
+  if (parsed.sourceNickName) entry.sourceNickName = parsed.sourceNickName
+  if (parsed.publicUserName) entry.publicUserName = parsed.publicUserName
+  if (parsed.city) entry.city = parsed.city
+  if (parsed.country) entry.country = parsed.country
+  // 只有真的带坐标才输出（本机 490 条），且已按 moments XML 的**属性反置**修正过
+  if (parsed.lat || parsed.lng) { entry.lat = parsed.lat; entry.lng = parsed.lng }
+  return entry
+}
+
+/**
+ * 把线上表同步进归档库（只解析 `content_hash` 变了的行）。
+ *
+ * 节流 1.5s：分页 `load` / 增量刷新会在同一秒连调多次，全表 `SELECT` 没必要重复；
+ * 但**新动态**仍在下一次 `getMoments`（≤1.5s 后）进来，不会像定时器那样等 30s。
+ * @param decryptedDir - 解密数据根。
+ * @param force - 跳过 1.5s 节流（测试/需要立即合并时）。
+ * @returns 本次解析并写入的条数（0 = 没有变化/无线上表）。
+ */
+export function ensureMomentsArchiveFresh(decryptedDir: string, force = false): number {
+  const now = Date.now()
+  const last = LAST_ARCHIVE_SYNC.get(decryptedDir) ?? 0
+  if (!force && now - last < ARCHIVE_SYNC_GAP_MS) return 0
+  const live = readLiveMomentRows(decryptedDir)
+  if (live === null) return 0
+  const names = contactMeta(decryptedDir).names
+  const hashes = readArchivedMomentHashes(decryptedDir)
+  const changedRows: Array<{ tid: string; username: string; content: string; contentHash: string; entry: MomentEntry }> = []
+  for (const row of live) {
+    if (row.tid === '' || row.content === '') continue
+    const contentHash = createHash('sha1').update(row.content).digest('hex')
+    if (hashes !== null && hashes.get(row.tid) === contentHash) continue
+    const entry = buildMomentEntry(row.tid, row.username, row.content, names, '')
+    changedRows.push({ tid: row.tid, username: row.username, content: row.content, contentHash, entry })
+  }
+  const oldPayloads = readArchivedPayloads(decryptedDir, changedRows.map((r) => r.tid))
+  const changed: ArchivedMomentInput[] = changedRows.map((r) => {
+    const old = oldPayloads.get(r.tid)
+    const entry = old === undefined ? r.entry : mergeArchivedEntry(old, r.entry)
+    return {
+      tid: r.tid,
+      username: r.username,
+      author: entry.author,
+      ts: entry.ts,
+      content: r.content,
+      contentHash: r.contentHash,
+      payload: JSON.stringify(entry),
+    }
+  })
+  if (changed.length > 0) {
+    const res = upsertArchivedMoments(decryptedDir, changed)
+    console.error('[moments-archive] 已归档 ' + String(res.added) + ' 条新增 / ' + String(res.updated) + ' 条更新')
+  }
+  LAST_ARCHIVE_SYNC.set(decryptedDir, now)
+  return changed.length
+}
+
+/**
+ * 读一页朋友圈（归档优先；归档不可用时回退线上表）。
+ * @param decryptedDir - decrypted data root.
+ * @param offset - page offset.
+ * @param limit - page size.
+ * @param authorUsername - optional author filter.
+ * @returns the moments snapshot.
+ */
 export function queryMoments(
   decryptedDir: string,
   offset?: number,
@@ -435,79 +629,63 @@ export function queryMoments(
   authorUsername?: string,
   selfUsername?: string,
 ): { moments: MomentEntry[]; total: number } {
-  const dbPath = snsDb(decryptedDir)
-  if (dbPath === null) return { moments: [], total: 0 }
-  const db = new DatabaseSync(dbPath, { readOnly: true })
+  const cap = Math.min(limit ?? 50, 500)
+  const off = offset ?? 0
+  const self = selfUsername ?? ''
+  const liveRows = readLiveMomentRows(decryptedDir) ?? []
   try {
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-    if (!has) return { moments: [], total: 0 }
-    const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
-    const tid = cols.has('tid') ? 'tid' : 'Id'
-    const uname = cols.has('user_name') ? 'user_name' : 'userName'
-    const content = cols.has('content') ? 'content' : 'Content'
-    const cap = Math.min(limit ?? 50, 500)
-    const off = offset ?? 0
-    const where = authorUsername ? ` WHERE ${uname} = ?` : ''
-    const totalRow = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine${where}`).all(...(authorUsername ? [authorUsername] : []))[0] as { n: number }
-    const rows = db.prepare(`SELECT CAST(${tid} AS TEXT) AS t, ${uname} AS u, ${content} AS c FROM SnsTimeLine${where} ORDER BY ${tid} DESC LIMIT ? OFFSET ?`).all(...(authorUsername ? [authorUsername] : []), cap, off) as Array<{ t?: unknown; u?: unknown; c?: unknown }>
-    const names = contactMeta(decryptedDir).names
-    const self = selfUsername ?? ''
-    const moments: MomentEntry[] = rows.map((r) => {
-      const username = cellString(r.u)
-      const xml = cellString(r.c)
-      const parsed = parseSnsXml(xml)
-      const social = parseSnsLikesComments(xml)
-      const author = names.get(username) || parsed.nickname || username || '未知'
-      const entry: MomentEntry = {
-        tid: cellString(r.t),
-        username,
-        author,
-        text: parsed.text,
-        ts: parsed.createTime,
-        time: fmtRelativeDaySec(parsed.createTime),
-        media_count: parsed.mediaCount,
-        media_desc: parsed.mediaDesc,
-        images: parsed.images,
-        videos: parsed.videos,
-        location: parsed.location,
-        link_title: parsed.linkTitle,
-        link_url: parsed.linkUrl,
-        is_self: username === self,
-        likes: social.likes,
-        comments: social.comments,
-      }
-      if (parsed.contentType) entry.contentType = parsed.contentType
-      if (parsed.sourceNickName) entry.sourceNickName = parsed.sourceNickName
-      if (parsed.publicUserName) entry.publicUserName = parsed.publicUserName
-      if (parsed.city) entry.city = parsed.city
-      if (parsed.country) entry.country = parsed.country
-      // 只有真的带坐标才输出（本机 490 条），且已按 moments XML 的**属性反置**修正过
-      if (parsed.lat || parsed.lng) { entry.lat = parsed.lat; entry.lng = parsed.lng }
-      return entry
-    })
-    return { moments, total: totalRow.n }
-  } finally {
-    db.close()
+    ensureMomentsArchiveFresh(decryptedDir)
+  } catch (e) {
+    console.warn('[moments-archive] 同步失败：' + (e instanceof Error ? e.message : String(e)))
   }
+  const names = contactMeta(decryptedDir).names
+  const archived = readArchivedMoments(decryptedDir, { offset: off, limit: cap, ...(authorUsername !== undefined ? { authorUsername } : {}) })
+  // 归档写失败时（库只读/磁盘满）不能拿空列表糊弄：回退到线上表。
+  if (archived !== null && (archived.total > 0 || liveRows.length === 0)) {
+    const moments: MomentEntry[] = []
+    for (const row of archived.rows) {
+      try {
+        const entry = JSON.parse(row.payload) as MomentEntry
+        entry.tid = row.tid
+        entry.username = row.username
+        entry.author = names.get(row.username) || row.author || entry.author || '未知'
+        entry.is_self = row.username === self
+        // 相对时间必须按「现在」重算：归档里存的是归档时刻的「3 天前」，一个月后就不对了。
+        entry.time = fmtRelativeDaySec(row.ts)
+        moments.push(entry)
+      } catch (e) {
+        console.warn('[moments-archive] 跳过坏 payload tid=' + row.tid + '：' + (e instanceof Error ? e.message : String(e)))
+      }
+    }
+    return { moments, total: archived.total }
+  }
+  // 归档库不存在/不可用 ⇒ 保留原来的线上分页路径，功能不因归档故障而消失。
+  const filtered = authorUsername === undefined ? liveRows : liveRows.filter((r) => r.username === authorUsername)
+  const page = filtered.slice(off, off + cap)
+  const moments = page.map((row) => buildMomentEntry(row.tid, row.username, row.content, names, self))
+  return { moments, total: filtered.length }
 }
 
 /**
- * Author-activity counts across the FULL moments table (SQL GROUP BY, no XML
- * parse), mapped to display names, ranked by count descending.
+ * Author-activity counts across the FULL moments archive (deleted posts included),
+ * mapped to display names, ranked by count descending.
  * @param decryptedDir - decrypted data root.
  * @returns author name + moment count, highest first.
  */
 export function queryMomentsAuthors(decryptedDir: string): Array<{ name: string; count: number }> {
+  try { ensureMomentsArchiveFresh(decryptedDir) } catch { /* 归档故障时回退线上表 */ }
+  const names = contactMeta(decryptedDir).names
+  const archived = readArchivedAuthors(decryptedDir)
+  if (archived !== null && archived.length > 0) {
+    return archived.map(r => ({ name: names.get(r.username) || r.author || r.username || '未知', count: r.count }))
+  }
   const dbPath = snsDb(decryptedDir)
   if (dbPath === null) return []
+  const shape = liveMomentsAvailable(dbPath)
+  if (shape === null) return []
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-    if (!has) return []
-    const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
-    const uname = cols.has('user_name') ? 'user_name' : 'userName'
-    const rows = db.prepare(`SELECT ${uname} AS u, COUNT(*) AS n FROM SnsTimeLine GROUP BY ${uname} ORDER BY n DESC`).all() as Array<{ u?: unknown; n?: number }>
-    const names = contactMeta(decryptedDir).names
+    const rows = db.prepare(`SELECT ${shape.uname} AS u, COUNT(*) AS n FROM SnsTimeLine GROUP BY ${shape.uname} ORDER BY n DESC`).all() as Array<{ u?: unknown; n?: number }>
     return rows.map(r => ({ name: names.get(cellString(r.u)) || cellString(r.u) || '未知', count: r.n ?? 0 }))
   } finally {
     db.close()

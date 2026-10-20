@@ -24,18 +24,56 @@
  * @module query/clawbot/clawbot-auto-reply
  */
 import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts';
-/** 自动回复正文的长度上限（超出截断并注明）—— 模型可以输出很长，微信会话不该被一条回复刷屏。 */
-export declare const MAX_REPLY_CHARS = 2000;
+/**
+ * 自动回复正文的**总长**上限（超出截断并注明）。
+ *
+ * 取 **300**（2026-10-17 用户要求「每次回复不能超过 30 字」）：单条上限 30 字，
+ * 300 字 = 最多 10 条 —— 再多就不是「回一条消息」而是「刷屏」了。
+ * 模型可以输出很长，微信会话不该被一条回复刷屏。
+ */
+export declare const MAX_REPLY_CHARS = 300;
 /** 每实例的待回复上限（超出丢弃并记账）：一批几百条消息不该把模型调用打爆。 */
 export declare const MAX_PENDING = 5;
 /**
+ * 一条对话上下文消息（自动回复把最近几轮一起送进 ask 管道）。
+ *
+ * 为什么要带上下文（2026-10-18 用户报「不能关联上下文」）：只把最后一条文本当问题，
+ * 模型会把「分析一下图中右边那辆车」当成一句孤立的话，于是回「我这边没看到图呀」。
+ * 上下文里保留 `[图片]` / `[语音]` 占位，模型至少知道对方发过什么。
+ */
+export interface ClawbotHistoryMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
+/**
+ * 一张随消息送进模型的图片（canonical base64 + MIME）。
+ *
+ * 图片由调用方从 ClawBot 媒体缓存读出；是否真的能送给模型由 ask 管道按模型能力决定，
+ * 本模块不判断（也不联网）。
+ */
+export interface ClawbotImageInput {
+    data: string;
+    mediaType: string;
+    name?: string;
+}
+/** 自动回复附带的上下文（最近对话 + 最近图片）。 */
+export interface ClawbotAskContext {
+    history?: ClawbotHistoryMessage[];
+    images?: ClawbotImageInput[];
+}
+/**
  * 自动回复用的 ask 能力（由装配层注入）。
  *
- * 形状刻意保持很窄（一个问题 + 可选知识库 ⇒ 一段答案）：调用方不许知道模型是谁、
- * 也不许自己拼提示词 —— 那些都在 ask 管道里，与手动问答共用一份实现。
- * `kbId` 非 null 时把该知识库纳入检索（知识库增强回复）。
+ * 形状刻意保持很窄（一个问题 + 可选知识库 + 可选系统提示词 + 可选上下文 ⇒ 一段答案）：
+ * 调用方不许知道模型是谁、也不许自己拼提示词 —— 那些都在 ask 管道里，
+ * 与手动问答共用一份实现。
+ * @param slot - 实例编号。
+ * @param text - 入站消息正文（作为问题）。
+ * @param kbId - 非 null 时把该知识库纳入检索（知识库增强回复）。
+ * @param systemPrompt - 该实例的系统提示词（空串 = 用内置拟人化默认值）。
+ * @param context - 最近对话与图片（2026-10-18 起；旧注入方可忽略）。
  */
-export type ClawbotAskFn = (slot: number, text: string, kbId: number | null) => Promise<{
+export type ClawbotAskFn = (slot: number, text: string, kbId: number | null, systemPrompt: string, context?: ClawbotAskContext) => Promise<{
     ok: boolean;
     answer: string;
     error?: string;
@@ -61,6 +99,8 @@ export interface ReplyableMessage {
     direction: 'in' | 'out';
     msgType: string | null;
     content: string;
+    /** 落库行 id（用于从库里取「这条之前的对话」与媒体缓存；旧调用方可不带）。 */
+    id?: number;
 }
 /**
  * 这条消息值不值得回。
@@ -101,6 +141,10 @@ export interface AutoReplyRunnerDeps {
         slot: number;
         id: number;
     }) => void;
+    /** 取目标消息之前的最近对话（缺省 = 不带上下文，退回旧行为）。 */
+    history?: (slot: number, target: ReplyableMessage) => ClawbotHistoryMessage[];
+    /** 取目标消息之前最近的入站图片（缺省 = 不送图；读取失败按空处理）。 */
+    images?: (slot: number, target: ReplyableMessage) => Promise<ClawbotImageInput[]>;
 }
 /**
  * 自动回复执行器：**全局单飞 + 每实例队列**。

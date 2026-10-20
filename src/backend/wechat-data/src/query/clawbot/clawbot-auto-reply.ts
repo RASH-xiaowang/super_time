@@ -24,21 +24,69 @@
  * @module query/clawbot/clawbot-auto-reply
  */
 import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts'
+import { splitReplyText } from './clawbot-prompt.ts'
 
-/** 自动回复正文的长度上限（超出截断并注明）—— 模型可以输出很长，微信会话不该被一条回复刷屏。 */
-export const MAX_REPLY_CHARS = 2000
+/**
+ * 自动回复正文的**总长**上限（超出截断并注明）。
+ *
+ * 取 **300**（2026-10-17 用户要求「每次回复不能超过 30 字」）：单条上限 30 字，
+ * 300 字 = 最多 10 条 —— 再多就不是「回一条消息」而是「刷屏」了。
+ * 模型可以输出很长，微信会话不该被一条回复刷屏。
+ */
+export const MAX_REPLY_CHARS = 300
 
 /** 每实例的待回复上限（超出丢弃并记账）：一批几百条消息不该把模型调用打爆。 */
 export const MAX_PENDING = 5
 
 /**
+ * 一条对话上下文消息（自动回复把最近几轮一起送进 ask 管道）。
+ *
+ * 为什么要带上下文（2026-10-18 用户报「不能关联上下文」）：只把最后一条文本当问题，
+ * 模型会把「分析一下图中右边那辆车」当成一句孤立的话，于是回「我这边没看到图呀」。
+ * 上下文里保留 `[图片]` / `[语音]` 占位，模型至少知道对方发过什么。
+ */
+export interface ClawbotHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/**
+ * 一张随消息送进模型的图片（canonical base64 + MIME）。
+ *
+ * 图片由调用方从 ClawBot 媒体缓存读出；是否真的能送给模型由 ask 管道按模型能力决定，
+ * 本模块不判断（也不联网）。
+ */
+export interface ClawbotImageInput {
+  data: string
+  mediaType: string
+  name?: string
+}
+
+/** 自动回复附带的上下文（最近对话 + 最近图片）。 */
+export interface ClawbotAskContext {
+  history?: ClawbotHistoryMessage[]
+  images?: ClawbotImageInput[]
+}
+
+/**
  * 自动回复用的 ask 能力（由装配层注入）。
  *
- * 形状刻意保持很窄（一个问题 + 可选知识库 ⇒ 一段答案）：调用方不许知道模型是谁、
- * 也不许自己拼提示词 —— 那些都在 ask 管道里，与手动问答共用一份实现。
- * `kbId` 非 null 时把该知识库纳入检索（知识库增强回复）。
+ * 形状刻意保持很窄（一个问题 + 可选知识库 + 可选系统提示词 + 可选上下文 ⇒ 一段答案）：
+ * 调用方不许知道模型是谁、也不许自己拼提示词 —— 那些都在 ask 管道里，
+ * 与手动问答共用一份实现。
+ * @param slot - 实例编号。
+ * @param text - 入站消息正文（作为问题）。
+ * @param kbId - 非 null 时把该知识库纳入检索（知识库增强回复）。
+ * @param systemPrompt - 该实例的系统提示词（空串 = 用内置拟人化默认值）。
+ * @param context - 最近对话与图片（2026-10-18 起；旧注入方可忽略）。
  */
-export type ClawbotAskFn = (slot: number, text: string, kbId: number | null) => Promise<{ ok: boolean, answer: string, error?: string }>
+export type ClawbotAskFn = (
+  slot: number,
+  text: string,
+  kbId: number | null,
+  systemPrompt: string,
+  context?: ClawbotAskContext,
+) => Promise<{ ok: boolean, answer: string, error?: string }>
 
 /** 决策结果（`should` 为假时 `reason` 说明为什么，供审计与用例断言）。 */
 export interface AutoReplyDecision {
@@ -73,6 +121,8 @@ export interface ReplyableMessage {
   direction: 'in' | 'out'
   msgType: string | null
   content: string
+  /** 落库行 id（用于从库里取「这条之前的对话」与媒体缓存；旧调用方可不带）。 */
+  id?: number
 }
 
 /**
@@ -122,6 +172,10 @@ export interface AutoReplyRunnerDeps {
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   /** 回复成功后通知外层（发 `clawbot/message` 事件，前端实时可见）。 */
   onReplied: (info: { slot: number, id: number }) => void
+  /** 取目标消息之前的最近对话（缺省 = 不带上下文，退回旧行为）。 */
+  history?: (slot: number, target: ReplyableMessage) => ClawbotHistoryMessage[]
+  /** 取目标消息之前最近的入站图片（缺省 = 不送图；读取失败按空处理）。 */
+  images?: (slot: number, target: ReplyableMessage) => Promise<ClawbotImageInput[]>
 }
 
 /**
@@ -150,16 +204,31 @@ export function createAutoReplyRunner(deps: AutoReplyRunnerDeps): {
     return null
   }
 
-  async function handle(slot: number, msg: ReplyableMessage, kbId: number | null): Promise<void> {
+  async function handle(slot: number, msg: ReplyableMessage, cfg: ClawbotInstanceConfig): Promise<void> {
     const tag = `slot=${slot}`
     const ask = deps.ask
     if (ask === undefined) {
       deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, 'ask 能力未注入（自动回复不可用）')
       return
     }
+    const kbId = cfg.kbEnabled && cfg.kbId !== null ? cfg.kbId : null
+    /*
+     * 上下文（2026-10-18）：把目标消息**之前**的最近对话与图片一起送进 ask 管道。
+     * 读失败一律按「没有上下文」处理 —— 自动回复不许因为库读不出来而完全不回。
+     */
+    const context: ClawbotAskContext = {}
+    try {
+      const history = deps.history?.(slot, msg)
+      if (history !== undefined && history.length > 0) context.history = history
+    } catch { /* 上下文尽力而为 */ }
+    try {
+      const images = deps.images === undefined ? undefined : await deps.images(slot, msg)
+      if (images !== undefined && images.length > 0) context.images = images
+    } catch { /* 图片尽力而为：读不到就当这次没有图 */ }
     let r: Awaited<ReturnType<ClawbotAskFn>>
     try {
-      r = await ask(slot, msg.content, kbId)
+      // 系统提示词：空串 = 用内置拟人化默认值（在装配层解析，这里只传用户写的那份）。
+      r = await ask(slot, msg.content, kbId, cfg.systemPrompt, context)
     } catch (e) {
       deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '自动回复失败：' + (e instanceof Error ? e.message : String(e)))
       return
@@ -173,22 +242,42 @@ export function createAutoReplyRunner(deps: AutoReplyRunnerDeps): {
       deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '模型返回空答案，未发送')
       return
     }
-    let sent: ClawbotSendResult
-    try {
-      sent = await deps.send(slot, text)
-    } catch (e) {
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '回复发送失败：' + (e instanceof Error ? e.message : String(e)))
-      return
-    }
-    if (!sent.ok || sent.id === null) {
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '回复未发出：' + (sent.error ?? '未知原因'))
-      return
+    /*
+     * 分段发送（2026-10-17）：微信里一条几千字读起来很累，且容易被折叠。
+     * 开启时按语义切段逐条发出（像人连发几条）；关闭时整条发出。
+     * ⚠️ 分段是**多条消息**：任一段失败就停（后面的不再发）—— 半截回复比不回复更让人困惑。
+     */
+    const parts = cfg.splitReply ? splitReplyText(text) : [text]
+    let sentCount = 0
+    let lastId: number | null = null
+    for (const part of parts) {
+      let sent: ClawbotSendResult
+      try {
+        sent = await deps.send(slot, part)
+      } catch (e) {
+        deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag,
+          `回复发送失败（第 ${String(sentCount + 1)}/${String(parts.length)} 段）：` + (e instanceof Error ? e.message : String(e)))
+        return
+      }
+      if (!sent.ok || sent.id === null) {
+        deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag,
+          `回复未发出（第 ${String(sentCount + 1)}/${String(parts.length)} 段）：` + (sent.error ?? '未知原因'))
+        return
+      }
+      sentCount += 1
+      lastId = sent.id
+      try {
+        deps.onReplied({ slot, id: sent.id })
+      } catch { /* 事件尽力而为（与其余事件同一策略） */ }
     }
     deps.op('clawbot', 'clawbot_auto_reply', 'ok', tag,
-      `已自动回复 ${String(text.length)} 字` + (kbId === null ? '（未检索知识库）' : `（知识库 ${String(kbId)}）`))
-    try {
-      deps.onReplied({ slot, id: sent.id })
-    } catch { /* 事件尽力而为（与其余事件同一策略） */ }
+      `已自动回复 ${String(text.length)} 字` +
+      (parts.length > 1 ? `（分 ${String(parts.length)} 段发送）` : '') +
+      (kbId === null ? '（未检索知识库）' : `（知识库 ${String(kbId)}）`) +
+      (context.history === undefined ? '' : `（上下文 ${String(context.history.length)} 条）`) +
+      (context.images === undefined ? '' : `（图片 ${String(context.images.length)} 张）`))
+    /* v8 ignore next -- 循环至少跑一次（parts 非空），lastId 必被赋值。 */
+    if (lastId === null) return
   }
 
   async function drain(): Promise<void> {
@@ -199,9 +288,9 @@ export function createAutoReplyRunner(deps: AutoReplyRunnerDeps): {
         const next = takeNext()
         if (next === null) break
         // 配置**逐条现读**：用户在队列消化期间关掉开关，剩下的就不再回。
-        const decision = decideAutoReply(deps.readConfig(next.slot))
-        if (!decision.should) continue
-        await handle(next.slot, next.msg, decision.kbId)
+        const cfg = deps.readConfig(next.slot)
+        if (!decideAutoReply(cfg).should) continue
+        await handle(next.slot, next.msg, cfg)
       }
     } catch (e) {
       // 兜底：本模块**一条都不许外抛**（调用方是常驻长轮询）。

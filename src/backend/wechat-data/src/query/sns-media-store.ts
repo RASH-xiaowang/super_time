@@ -1,5 +1,9 @@
 /**
- * 朋友圈**原图**的落盘缓存（`<数据根>/decoded_images/sns-media/`）。
+ * 朋友圈**原图**的落盘缓存（`<数据根>/decoded_images/sns-media/`）与**长期归档**
+ * （`<数据根>/moments-media/`，2026-10-19 加）。
+ *
+ * 主缓存放 `decoded_images` 下，换密钥时会被整体清空；用户要求「CDN 原图落盘后保留」，
+ * 所以再加一份独立于解码缓存的长期归档，按 md5 内容寻址，读取时长期归档优先。
  *
  * ## 为什么要有它
  *
@@ -34,7 +38,7 @@
  * @module query/sns-media-store
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, basename, join } from 'node:path'
 import { MD5_RE } from '../md5.ts'
 
 /** 落盘子目录名（在 `decoded_images` 之下，与 `article-covers` 同级）。 */
@@ -255,6 +259,159 @@ export function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array)
 /** 把落盘原图变成 data URL（省得调用方再拼一次 mime）。 */
 export function originalAsDataUrl(hit: { bytes: Buffer; ext: string }): string {
   return 'data:' + mimeOfExt(hit.ext) + ';base64,' + hit.bytes.toString('base64')
+}
+
+/**
+ * 朋友圈原图**长期归档**目录（2026-10-19 用户：「CDN 原图落盘后请保留在本地」）。
+ *
+ * 与 `decoded_images/sns-media` 的区别：后者是「解码缓存」，`wechat-config.ts` 在密钥
+ * 变更时会整体清空；这里放在**数据根**下（`<数据根>/moments-media/`），不随解码缓存
+ * 失效 —— 只要原图被我们拿到过一次，换密钥/重新解密后仍可直接用，不必再向 CDN 要。
+ *
+ * 目录布局仍是 `md5 前两位分 shard`（与主缓存同构），按 md5 内容寻址：
+ * 同名必同内容，重复写入无害，也不存在「任务/朋友圈之间串图」。
+ */
+export const MOMENTS_MEDIA_SUBDIR = 'moments-media'
+
+/** 长期归档容量（字节）。默认 8 GB；`SUPERTIME_MOMENTS_MEDIA_BYTES` 可覆盖。 */
+export const MOMENTS_MEDIA_BUDGET_BYTES = ((): number => {
+  const raw = Number(process.env['SUPERTIME_MOMENTS_MEDIA_BYTES'] ?? '')
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 8 * 1024 * 1024 * 1024
+})()
+
+/** 长期归档条数上限。默认 50000；`SUPERTIME_MOMENTS_MEDIA_FILES` 可覆盖。 */
+export const MOMENTS_MEDIA_BUDGET_FILES = ((): number => {
+  const raw = Number(process.env['SUPERTIME_MOMENTS_MEDIA_FILES'] ?? '')
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50_000
+})()
+
+/** 长期归档根（数据根下，与 `decoded_images` 同级）。 */
+export function momentsMediaArchiveRoot(decodedDir: string): string {
+  // 生产布局是 `<数据根>/decoded_images`；显式 pin 的目录（或测试里传数据根）放它自己里面，
+  // 避免把同名归档写到共享父目录（`%TEMP%`）里与其它进程/用例互相污染。
+  if (basename(decodedDir) === 'decoded_images') return join(dirname(decodedDir), MOMENTS_MEDIA_SUBDIR)
+  return join(decodedDir, MOMENTS_MEDIA_SUBDIR)
+}
+
+function archiveShardOf(decodedDir: string, md5: string): string {
+  return join(momentsMediaArchiveRoot(decodedDir), md5.slice(0, 2))
+}
+
+/**
+ * 查**长期归档**里的原图（进入朋友圈的第一判断）。
+ * @param decodedDir - `decoded_images` 目录（用它定位数据根）。
+ * @param md5 - 32 位媒体 md5。
+ * @returns 命中的字节与格式；没有则 `null`。
+ */
+export function lookupArchivedOriginal(decodedDir: string, md5: string): { bytes: Buffer; ext: string } | null {
+  const key = (md5 || '').trim().toLowerCase()
+  if (!decodedDir || !MD5_RE.test(key)) return null
+  const shard = archiveShardOf(decodedDir, key)
+  for (const e of EXTS) {
+    const p = join(shard, key + '.' + e.ext)
+    try {
+      if (!existsSync(p)) continue
+      const bytes = readFileSync(p)
+      if (bytes.length < MIN_ORIGINAL_BYTES) continue
+      return { bytes, ext: e.ext }
+    } catch { /* 读不到就试下一个扩展名 */ }
+  }
+  return null
+}
+
+/** 归档淘汰节流：每 100 次写或 5 分钟检查一次，避免每次保存都全扫。 */
+let archiveWritesSinceSweep = 0
+let lastArchiveSweepAt = 0
+const ARCHIVE_SWEEP_EVERY_N_WRITES = 100
+const ARCHIVE_SWEEP_MIN_INTERVAL_MS = 5 * 60_000
+
+/**
+ * 把原图写入**长期归档**。
+ *
+ * 与主缓存同一套纪律：先 `.part` 再 rename（半截文件会被当原图永久缓存）；写失败只是
+ * 「这次没存上」，不影响本次展示。容量超了按 mtime 淘汰最旧的（默认 8GB/5 万张，
+ * 远高于普通用户朋友圈总量；淘汰是最后手段，不是常态）。
+ * @param decodedDir - `decoded_images` 目录。
+ * @param md5 - 32 位媒体 md5。
+ * @param bytes - 原图字节。
+ * @returns 落盘扩展名；不是图片/写失败为 `null`。
+ */
+export function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null {
+  const key = (md5 || '').trim().toLowerCase()
+  if (!decodedDir || !MD5_RE.test(key)) return null
+  const ext = sniffOriginalExt(bytes)
+  if (ext === null) return null
+  try {
+    const shard = archiveShardOf(decodedDir, key)
+    if (!existsSync(shard)) mkdirSync(shard, { recursive: true })
+    const target = join(shard, key + '.' + ext)
+    if (existsSync(target)) return ext
+    const part = target + '.part'
+    writeFileSync(part, bytes)
+    try { renameSync(part, target) } catch {
+      try { unlinkSync(part) } catch { /* best-effort */ }
+      return null
+    }
+    archiveWritesSinceSweep += 1
+    const now = Date.now()
+    if (archiveWritesSinceSweep >= ARCHIVE_SWEEP_EVERY_N_WRITES && now - lastArchiveSweepAt >= ARCHIVE_SWEEP_MIN_INTERVAL_MS) {
+      lastArchiveSweepAt = now
+      archiveWritesSinceSweep = 0
+      sweepMomentsMediaArchive(decodedDir)
+    }
+    return ext
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 按容量回收长期归档（按 mtime 从旧到新删，直到低于预算）。
+ * @param decodedDir - `decoded_images` 目录。
+ * @param budgetBytes - 字节预算。
+ * @param budgetFiles - 条数预算。
+ * @returns 删除的条数。
+ */
+export function sweepMomentsMediaArchive(
+  decodedDir: string,
+  budgetBytes = MOMENTS_MEDIA_BUDGET_BYTES,
+  budgetFiles = MOMENTS_MEDIA_BUDGET_FILES,
+): number {
+  const root = momentsMediaArchiveRoot(decodedDir)
+  if (!existsSync(root)) return 0
+  const files: Array<{ p: string; size: number; mtimeMs: number }> = []
+  let total = 0
+  let shards: string[] = []
+  try { shards = readdirSync(root) } catch { return 0 }
+  for (const shard of shards) {
+    const dir = join(root, shard)
+    let names: string[] = []
+    try { names = readdirSync(dir) } catch { continue }
+    for (const name of names) {
+      const p = join(dir, name)
+      try {
+        const st = statSync(p)
+        if (!st.isFile() || name.endsWith('.part')) continue
+        files.push({ p, size: st.size, mtimeMs: st.mtimeMs })
+        total += st.size
+      } catch { /* 扫不到就跳过 */ }
+    }
+  }
+  let dropped = 0
+  const overBudget = (): boolean => total > budgetBytes || files.length - dropped > budgetFiles
+  if (!overBudget()) return 0
+  files.sort((a, b) => a.mtimeMs - b.mtimeMs)
+  for (const f of files) {
+    if (!overBudget()) break
+    try { unlinkSync(f.p); total -= f.size; dropped += 1 } catch { /* 删不掉就跳过 */ }
+  }
+  return dropped
+}
+
+/** 测试用：清掉长期归档的淘汰节流状态。 */
+export function forgetMomentsArchiveSweepStateForTest(): void {
+  archiveWritesSinceSweep = 0
+  lastArchiveSweepAt = 0
 }
 
 /** 测试用：清掉淘汰节流的状态（否则两条用例之间会互相吞掉）。 */

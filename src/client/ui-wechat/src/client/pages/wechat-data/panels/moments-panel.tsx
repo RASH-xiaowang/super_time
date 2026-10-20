@@ -12,12 +12,12 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTransientNotice } from './hooks.tsx'
 import { apiOpenPath } from '../api.ts'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { Drawer, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
-import { buildMomentRows, momentsEmptyText } from './moments-rows.ts'
+import { buildMomentRows, momentsEmptyText, type MomentRow } from './moments-rows.ts'
 import { MomentsTimeline } from './moments-timeline.tsx'
 import { imageDownloadName, pickImageSrc, toggleInSet } from './moments-actions.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
@@ -30,11 +30,99 @@ import { useMomentsScope } from './moments-scope.ts'
 /** 一行的估计高度：日期标签一行、卡片按"头像 + 正文两行"量级（真实高度由 `measureElement` 回灌）。 */
 const MOMENT_DAY_ROW_PX = 30
 const MOMENT_CARD_PX = 220
+
+/**
+ * 时间线虚拟化的稳定行 key。
+ *
+ * 为什么必须给：不给时 `@tanstack/react-virtual` 用**下标**当 key，而 `measureElement`
+ * 量到的真实高度是**按 key 缓存**的。筛选/排序一变，同一行下标指向另一条动态 ——
+ * 缓存的高度就串到别人身上，接着整窗重新测量；滚动时窗口一移动，新进场的行
+ * 又都是"没量过"的，于是每帧都在测量 + 重排。真机实测朋友圈滚动 p50 9ms、
+ * p90 14ms、p99 29ms、单帧最长 97ms，并伴随一次 92ms 长任务（CDP 滚动探针），
+ * 而它的节点数只有 148 —— 卡的不是节点多，是测量。
+ *
+ * 消息流（`Chats.tsx`）从一开始就带着 `getItemKey: msgItemKey`，这里补齐同一形状。
+ * 日期行用 `day`（同一天只会有一行），动态行用 `tid`（朋友圈的稳定主键）。
+ * @param row - `buildMomentRows` 的产物。
+ * @returns 虚拟化与 React 共用的 key。
+ */
+function momentRowKey(row: MomentRow | undefined): string {
+  if (!row) return 'nil'
+  return row.kind === 'day' ? 'day-' + row.day : 'm-' + String(row.m.tid)
+}
 import { useMomentsMedia } from './moments-media.ts'
 import { useMomentsExport } from './moments-export.ts'
 import { useMomentsVideos } from './moments-videos.ts'
 import { imageExtOf, useMomentsViewer } from './moments-viewer.ts'
 import { useMomentsData } from './moments-data.ts'
+
+/**
+ * 朋友圈工具行：搜索 + 共 N 条（灰字）+ 更多 ▾。
+ * 隐私/刷新/同步/导出/筛选都收在「更多」里 —— 页头只留两个可见动作。
+ */
+function MomentsToolbar(props: {
+  search: string
+  onSearch: (v: string) => void
+  total: number
+  author?: string | null | undefined
+  onClearAuthor?: (() => void) | undefined
+  privacy: boolean
+  loading: boolean
+  syncing: boolean
+  lastSync: number
+  onTogglePrivacy: () => void
+  onRefresh: () => void
+  onSync: () => void
+  openExport: () => void
+  onOpenFilter: () => void
+}): React.JSX.Element {
+  const { search, onSearch, total, author, onClearAuthor, privacy, loading, syncing, lastSync, onTogglePrivacy, onRefresh, onSync, openExport, onOpenFilter } = props
+  const [moreOpen, setMoreOpen] = useState(false)
+  const barRef = useRef<HTMLDivElement | null>(null)
+  // 点外面 / 按 Esc 关闭「更多」菜单。
+  useEffect(() => {
+    if (!moreOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (barRef.current !== null && !barRef.current.contains(e.target as Node)) setMoreOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMoreOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [moreOpen])
+  return (
+    <div className={css.momentBar} ref={barRef}>
+      <SearchInput value={search} onChange={onSearch} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" className={css.hdSearch} />
+      <span className={css.countText}>共 {total} 条</span>
+      {author && onClearAuthor && (
+        <button type="button" className={css.btn} onClick={onClearAuthor} title="返回全部动态">仅看 {author} ✕</button>
+      )}
+      <span className={css.barSpacer} />
+      <div className={css.moreWrap}>
+        <button
+          type="button"
+          className={css.btn}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          onClick={() => { setMoreOpen(v => !v) }}
+        >更多 ▾</button>
+        {moreOpen && (
+          <div className={css.moreMenu} role="menu" aria-label="朋友圈更多操作">
+            <button type="button" role="menuitem" className={css.menuItem} onClick={() => { setMoreOpen(false); onOpenFilter() }}>筛选…</button>
+            <button type="button" role="menuitem" className={css.menuItem} data-on={privacy || undefined} onClick={() => { setMoreOpen(false); onTogglePrivacy() }} title="隐私模式：模糊头像与内容，悬停查看">{privacy ? '关闭隐私模式' : '隐私模式'}</button>
+            <button type="button" role="menuitem" className={css.menuItem} onClick={() => { setMoreOpen(false); onRefresh() }} disabled={loading}>刷新</button>
+            <button type="button" role="menuitem" className={css.menuItem} data-on={syncing || undefined} onClick={() => { setMoreOpen(false); onSync() }} disabled={syncing}>{syncing ? '同步中…' : '重新同步'}</button>
+            {lastSync > 0 && <span className={css.syncStatus}>最近同步 {fmtHourMinuteMs(lastSync)}</span>}
+            <button type="button" role="menuitem" className={css.menuItem} onClick={openExport} {...desktopActionProps()}>{desktopAction() ? '导出（仅电脑）' : '导出'}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /**
  * Render the moments (朋友圈) panel.
@@ -47,6 +135,8 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const deferredSearch = useDeferredValue(search)
   const [mediaFilter, setMediaFilter] = useState<MediaFilter>('all')
   const [privacy, setPrivacy] = useState(false)
+  /** 右栏筛选改成抽屉（时间线因此可以满宽）。 */
+  const [filterOpen, setFilterOpen] = useState(false)
   const [expandedTextByCard, setExpandedTextByCard] = useState<Set<string>>(new Set())
   const [expandedSocialByCard, setExpandedSocialByCard] = useState<Set<string>>(new Set())
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({})
@@ -100,8 +190,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   /**
    * 时间线虚拟化（#22 最后一处长列表）。行 = 日期标签 + 该天每条动态各一行
    * （摊平在 `moments-rows.ts`，两套下标只会长出"最后一天的标签不见了"那种错）。
-   * 卡片高度差得厉害（纯文字 vs 九宫格 vs 视频），所以 `estimateSize` 只是起点，
-   * 真实高度靠 `measureElement` 回灌。
+   * 卡片高度差得厉害（纯文字 vs 九宫格 vs 视频），所以 `estimateSize` 只是起点，真实高度靠 `measureElement` 回灌。
    */
   const momentRows = useMemo(() => buildMomentRows(groups), [groups])
   const momentVirtualizer = useVirtualizer({
@@ -109,6 +198,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (momentRows[i]?.kind === 'day' ? MOMENT_DAY_ROW_PX : MOMENT_CARD_PX),
     overscan: 4,
+    getItemKey: (i) => momentRowKey(momentRows[i]),
   })
   const momentWindowItems = momentVirtualizer.getVirtualItems()
   /** 渲染窗口指纹：窗口一动，媒体层就重新观察一遍新挂载的占位块（见 `moments-media.ts`）。 */
@@ -211,29 +301,17 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   return (
     <div className={css.panel}>
-      <PanelHeader
-        title={(
-          <>
-            朋友圈
-            <span className={css.count}>共 {total} 条</span>
-            {author && onClearAuthor && (
-              <button type="button" className={css.btn} onClick={onClearAuthor} title="返回全部动态">✕ 仅看 {author}</button>
-            )}
-          </>
-        )}
-        /* 页头口径（U12）：标题 + 一句"这页是什么/数据从哪来" + 操作三件套，
-           与其它面板保持一致（此前这里是唯一一个没有 desc 的面板）。 */
-        desc={`本机朋友圈动态 · 图片/视频/链接/评论互动，共 ${total} 条；统计范围只含已解密的部分`}
-        actions={(
-          <>
-            <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" className={css.hdSearch} />
-            <button type="button" className={css.btn} data-on={privacy || undefined} onClick={() => { setPrivacy(v => !v) }} title="隐私模式：模糊头像与内容，悬停查看">🔒 隐私</button>
-            <button type="button" className={css.btn} onClick={() => { void load() }} disabled={loading}>刷新</button>
-            <button type="button" className={css.btn} data-on={syncing || undefined} onClick={() => { void doSync() }} disabled={syncing}>{syncing ? '同步中…' : '↻ 同步'}</button>
-            {lastSync > 0 && <span className={css.syncStatus} title="最近一次手动重同步时间">最近同步 {fmtHourMinuteMs(lastSync)}</span>}
-            <button type="button" className={css.btn} onClick={openExport} {...desktopActionProps()}>{desktopAction() ? '导出（仅电脑）' : '导出'}</button>
-          </>
-        )}
+      {/* 页头压缩成一条工具行：搜索 + 共 N 条（灰字）+ 更多。
+          标题「朋友圈」已由分段条承载，这里不再重复；隐私/刷新/同步/导出/筛选全部收进「更多」。 */}
+      <MomentsToolbar
+        search={search} onSearch={setSearch} total={total}
+        author={author} onClearAuthor={onClearAuthor}
+        privacy={privacy} loading={loading} syncing={syncing} lastSync={lastSync}
+        onTogglePrivacy={() => { setPrivacy(v => !v) }}
+        onRefresh={() => { void load() }}
+        onSync={() => { void doSync() }}
+        openExport={openExport}
+        onOpenFilter={() => { setFilterOpen(true) }}
       />
 
       {/* 读失败必须与「没有动态」分开说（P1-1/#9）：月度直方图空着的时候，用户看到的
@@ -243,33 +321,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       )}
 
       <div className={css.layout}>
-        <MomentsSidebar
-          search={search}
-          clearFilters={clearFilters}
-          topAuthors={topAuthors}
-          showAllAuthors={showAllAuthors}
-          setShowAllAuthors={setShowAllAuthors}
-          authorFilter={authorFilter}
-          setAuthorFilter={setAuthorFilter}
-          mediaFilter={mediaFilter}
-          setMediaFilter={setMediaFilter}
-          mineFilter={mineFilter}
-          setMineFilter={setMineFilter}
-          sortOrder={sortOrder}
-          setSortOrder={setSortOrder}
-          dateFrom={dateFrom}
-          setDateFrom={setDateFrom}
-          dateTo={dateTo}
-          setDateTo={setDateTo}
-          monthFilter={monthFilter}
-          setMonthFilter={setMonthFilter}
-          monthly={monthly}
-          monthMax={monthMax}
-          loadedCount={moments.length}
-          total={total}
-          insight={insight}
-        />
-
         <MomentsTimeline
           rows={momentRows}
           virtualizer={momentVirtualizer}
@@ -317,11 +368,41 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
           )}
         />
       </div>
+
+      {/* 右栏筛选改抽屉：时间线满宽，筛选不再长期占掉 1/3 宽度。 */}
+      <Drawer open={filterOpen} onClose={() => { setFilterOpen(false) }} title="筛选" width={460}>
+        <MomentsSidebar
+          search={search}
+          clearFilters={clearFilters}
+          topAuthors={topAuthors}
+          showAllAuthors={showAllAuthors}
+          setShowAllAuthors={setShowAllAuthors}
+          authorFilter={authorFilter}
+          setAuthorFilter={setAuthorFilter}
+          mediaFilter={mediaFilter}
+          setMediaFilter={setMediaFilter}
+          mineFilter={mineFilter}
+          setMineFilter={setMineFilter}
+          sortOrder={sortOrder}
+          setSortOrder={setSortOrder}
+          dateFrom={dateFrom}
+          setDateFrom={setDateFrom}
+          dateTo={dateTo}
+          setDateTo={setDateTo}
+          monthFilter={monthFilter}
+          setMonthFilter={setMonthFilter}
+          monthly={monthly}
+          monthMax={monthMax}
+          loadedCount={moments.length}
+          total={total}
+          insight={insight}
+        />
+      </Drawer>
       {notice && <div className={css.hint}>{notice}</div>}
       {exportedPath && (
         <div className={css.exportResult}>
-          <span className={css.exportResultPath} title={exportedPath}>📄 {exportedPath}</span>
-          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).catch(() => { hold('无法打开文件') }) }} {...desktopActionProps()}>打开导出文件</button>
+          <span className={css.exportResultPath} title={exportedPath}>{exportedPath}</span>
+          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).then((r) => { if (!r.ok) hold(r.error ?? '无法打开文件') }).catch(() => { hold('无法打开文件') }) }} {...desktopActionProps()}>打开导出文件</button>
         </div>
       )}
 

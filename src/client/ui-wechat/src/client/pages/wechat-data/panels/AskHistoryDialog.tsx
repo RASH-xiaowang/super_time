@@ -287,7 +287,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
                         onClick={() => { onAskAgain(it.question) }}
                         title="把这句问填回输入框（不会自动发送，你可以先改措辞）"
                       >
-                        ↗ 再问一次
+                      再问一次
                       </button>
                     )}
                     <button
@@ -316,7 +316,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
                     ? <div className={css.answerFull}>{it.answer}</div>
                     : <div className={css.answer}>{it.answer}</div>)
                   : <div className={css.answer}>（这次没有产生回答）</div>}
-                {expanded && it.basis && <div className={css.basis}>📄 {it.basis}</div>}
+                {expanded && it.basis && <div className={css.basis}>{it.basis}</div>}
                 {expanded && cites.length > 0 && (
                   <div className={css.cites}>
                     {cites.map((c, ci) => {

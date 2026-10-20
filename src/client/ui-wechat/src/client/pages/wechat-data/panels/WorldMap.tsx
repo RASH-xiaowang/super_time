@@ -81,6 +81,31 @@ interface Slot {
 const EMPTY_WORLD: RegionNode = { key: 'world', name: '世界', count: 0, children: [], friends: [] }
 
 /**
+ * 世界地图该不该渲染。
+ *
+ * **世界层**与**非中国的国家层**渲染世界地图（2026-10-16 修「下钻后不显示」）：
+ * 原先只允许世界层画地图，下钻到国家就切成 treemap，但 treemap 对「该国只有 1 个好友、
+ * 且没有省份信息」只会画出一个格子（实测下钻「缅甸」后整块地图区只剩一个「省份未填 1」
+ * 的小方块），用户看到的就是「地图不见了」。国家层没有更细的底图可用
+ * （`geo.datav.aliyun.com` 的 adcode 接口只覆盖中国行政区划），所以留在世界地图上把该国
+ * 高亮出来，配合下方榜单看城市分布。
+ *
+ * ⚠️ 中国层（有自己的省级地图）与省 / 市层（有自己的市级 / 区级地图）**必须排除**，
+ * 否则会叠两张地图（实测中国层、广西层各叠过一次）。判据用 `provinceMode` / `cityMode`
+ * 而**不是** `showProvinceMap` / `showCityMap`：后者在底图 fallback 时为 false，
+ * 那时应当落到 treemap，而不是退回世界地图。
+ * @param ready - 世界 GeoJSON 是否已就绪。
+ * @param onWorldMap - 是否在世界层。
+ * @param chinaMode - 是否在中国层。
+ * @param provinceMode - 是否在省层（有省级底图）。
+ * @param cityMode - 是否在市层（有市级底图）。
+ * @returns 是否渲染世界地图。
+ */
+function shouldShowWorldEcharts(ready: boolean, onWorldMap: boolean, chinaMode: boolean, provinceMode: boolean, cityMode: boolean): boolean {
+  return ready && (onWorldMap || (!chinaMode && !provinceMode && !cityMode))
+}
+
+/**
  * Render the world-region map.
  * @returns the world-map element tree.
  */
@@ -129,21 +154,18 @@ export function WorldMapPanel(): React.JSX.Element {
   const cityProvinceAd = cityNode && path[1] ? provinceAdcode(path[1].name) : null
   const cityMode = cityProvinceAd !== null
   const showCityMap = cityMode && !cityFallback
-  const worldEchartsReady = onWorldMap && worldGeo?.ok === true
-  // **不等地区数据**（2026-09-26：用户要求「先渲染世界地图」+ 地理 SVG 已移除）。
-  // GeoJSON 一到就先画**真地图底图**，好友地区着色随后叠加（数据未就绪时传空世界节点）。
-  // 原先这里要求 `map !== null`，是为了绕开「切到 ECharts 但 `map` 那一路被挡住 ⇒ 两边都不画」；
-  // 现在空节点由 `GeoEchartsMap` 自己吃得下，那个约束连同 SVG 回退一起撤掉了。
-  const showWorldEcharts = worldEchartsReady
+  // **世界地图在「世界层」与「非中国的国家层」渲染**（2026-10-16 修「下钻后不显示」）。
+  // 判据与理由见 `shouldShowWorldEcharts` 的 JSDoc。
+  const worldEchartsReady = worldGeo?.ok === true
+  const showWorldEcharts = shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)
   // 底图拉不到（未联网 / 镜像源不可达）时给一句明确说明，而不是留一片空白。
   const geoTilesBlocked = onWorldMap && worldGeo?.ok === false
   // The ECharts map is the default China view; it falls back to the SVG map when offline.
   const showChinaEcharts = chinaMode && !chinaFallback
   // 2026-09-28：世界层回到 **2D 平面 ECharts 地图**（用户要求移除 3D 与倾斜/透视）。
-  // 非中国的国家层仍走 treemap 承接 —— 2D 地图上没有"推近动画"，留在地图上没有意义，
-  // 而方块图能直接把该国的城市好友摊开看（下方榜单也同一口径）。
-  // Everything else (cities, unknown provinces, China-fallback) uses the squarified treemap.
-  const showTreemap = !onWorldMap && (!chinaMode || chinaFallback) && !showProvinceMap && !showCityMap
+  // 2026-10-16：非中国的国家层也留在世界地图上（见上面 `worldEchartsReady` 的说明），
+  // 所以 treemap 只承接**省 / 市 / 中国回退**这些「有更细底图但取不到」的情形。
+  const showTreemap = !onWorldMap && !chinaMode && !showProvinceMap && !showCityMap && !showWorldEcharts
 
   const children = focused?.children ?? []
 
@@ -298,30 +320,26 @@ export function WorldMapPanel(): React.JSX.Element {
       {regionLoading && <RegionLoading elapsed={regionElapsed} onRetry={() => { void load() }} />}
 
       {showWorldEcharts && (
-        <MapStage
+        <WorldEchartsStage
+          /* `onWorldMap` 决定「把国家映射到子节点、点击可下钻」；非中国的国家层传 false
+             ⇒ 只有该国高亮、点地图任意处返回世界层。 */
+          onWorldMap={onWorldMap}
+          world={map?.world ?? null}
+          focused={focused}
+          geo={worldGeo?.ok === true ? worldGeo.data : undefined}
           leftFriends={leftFriends}
           rightFriends={rightFriends}
           avatars={avatars}
-          hint="滚轮缩放 · 拖拽平移 · 点击国家下钻"
-        >
-          <GeoEchartsMap
-            node={map?.world ?? EMPTY_WORLD}
-            mapName="world"
-            urls={WORLD_GEO_URLS}
-            geo={worldGeo.data}
-            featureName={worldFeatureName}
-            featureLabel={worldFeatureName}
-            childByKey={key => worldChildByName(map?.world.children ?? [], key)}
-            onDrill={zoomInto}
-            onFallback={fallbackWorldEcharts}
-          />
-        </MapStage>
+          onDrill={zoomInto}
+          onBack={goUp}
+          onFallback={fallbackWorldEcharts}
+        />
       )}
 
       {geoTilesBlocked && (
         <div className={css.stage}>
           <div className={css.mapEmpty}>
-            地图底图不可用：当前无法从镜像源取到行政区划数据（应用内已无底图开关）。
+            地图底图不可用：随包底图读取失败（或启动时请求队列繁忙，已自动重试）。
             好友地区数据仍可通过下方的省份 / 城市榜单查看。
           </div>
         </div>
@@ -395,6 +413,70 @@ export function WorldMapPanel(): React.JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * 世界地图舞台（世界层与国家层共用）。
+ *
+ * 从 `WorldMapPanel` 里整块搬出来的 —— 它是面板里最长的一段 JSX，搬出来后
+ * `WorldMapPanel` 才收得回 250 行的单函数棘轮（`function-size-ratchet.spec.ts`）。
+ *
+ * ## 为什么国家层也画世界地图（2026-10-16 修「下钻后不显示」）
+ *
+ * 原先只有世界层画地图，下钻到国家就切成 treemap。但 treemap 对「该国只有 1 个好友、
+ * 且没有省份信息」的情形只会画出一个格子（实测下钻「缅甸」后整块地图区只剩一个
+ * 「省份未填 1」的小方块），用户看到的就是「地图不见了」。
+ *
+ * 为什么国家层没有更细的底图可用：`geo.datav.aliyun.com` 的 adcode 接口只覆盖中国行政区划，
+ * 外国没有可取的省级 GeoJSON（后端白名单也只放行中国那几份）。所以国家层**留在世界地图上**
+ * 把该国高亮出来，配合下方榜单看城市分布 —— 比切成一个空格子有用得多。
+ *
+ * @param props - 当前层级、节点、GeoJSON 与回调。
+ * @returns 地图舞台元素。
+ */
+function WorldEchartsStage({ onWorldMap, world, focused, geo, leftFriends, rightFriends, avatars, onDrill, onBack, onFallback }: {
+  onWorldMap: boolean
+  world: RegionNode | null
+  focused: RegionNode | null
+  geo: unknown
+  leftFriends: readonly RegionFriend[]
+  rightFriends: readonly RegionFriend[]
+  avatars: Record<string, string>
+  onDrill: (child: RegionNode) => void
+  onBack: () => void
+  onFallback: () => void
+}): React.JSX.Element {
+  return (
+    <MapStage
+      leftFriends={leftFriends}
+      rightFriends={rightFriends}
+      avatars={avatars}
+      hint={onWorldMap ? '滚轮缩放 · 拖拽平移 · 点击国家下钻' : '滚轮缩放 · 拖拽平移 · 点击该国返回世界'}
+    >
+      <GeoEchartsMap
+        /* 世界层传世界节点；下钻到国家后传**该国节点** —— 于是地图上只有该国有颜色。 */
+        node={onWorldMap ? (world ?? EMPTY_WORLD) : focused}
+        mapName="world"
+        urls={WORLD_GEO_URLS}
+        geo={geo}
+        featureName={worldFeatureName}
+        featureLabel={worldFeatureName}
+        /* 世界层：把国家映射到子节点（决定哪些国家有颜色、点击能否下钻）。
+           国家层：**只把当前国家**映射到它自己 —— 其余国家归零。
+           用 `worldChildByName([focused], key)` 反查而不是直接比 `key === focused.name`：
+           快照里的名字可能是别名（如「中国香港」），GeoJSON 里是「香港」，
+           别名表在 `world-map-data.ts` 里，复用它才不会漏。 */
+        childByKey={key => {
+          if (onWorldMap) return worldChildByName(world?.children ?? [], key)
+          return focused ? worldChildByName([focused], key) : null
+        }}
+        onDrill={onDrill}
+        /* 国家层点地图任意处 = 返回世界层（没有更细的底图可下钻）。 */
+        onBack={onWorldMap ? undefined : onBack}
+        onFallback={onFallback}
+      />
+    </MapStage>
   )
 }
 

@@ -1,9 +1,16 @@
 /**
- * Super Time 多页面启动页
+ * Super Time 多页面启动页（2026-10-19 微信化改版）
  *
- * 四页：首页 / 功能引导 / 使用说明 / 关于。
- * 首次启动必须浏览全部页面；再次启动可跳过直接进入主界面。
- * 视觉令牌复用主面板 scifi-theme.css（--nm-*）。
+ * 四页：首页 / 功能引导 / 使用说明 / 关于；之后是隐私同意与授权两道闸门。
+ * 首次启动必须浏览全部介绍页；再次启动可跳过直接进入主界面。
+ *
+ * 版式（微信定调：简洁、克制、一致）：
+ *   · 自适应单列 —— 内容列 max-width 760、超出上下滚动，不再有 1180×760 的固定舞台
+ *     与等比缩放（那套「演示文稿感」已被删除）；
+ *   · 只有一处品牌名（自绘标题栏），启动页顶部只留页面导航与主题切换；
+ *   · 页脚只留「上一步 / 下一步（或进入系统）」+ 一行「第 X 步 / 共 N 步」，
+ *     删掉进度环、进度点与 `STAGE 01/04` 这类英文装饰标签；
+ *   · 背景/粒子/HUD/扫描线/渐变文字全部移除，只保留白卡 + 灰底 + 微信绿主按钮。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // 启动页可能先于 WechatDataPanel 挂载，主题令牌需在此加载
@@ -18,26 +25,27 @@ import {
   type OnboardingPageId,
   type OnboardingState,
 } from './store.ts'
-import { ParticleField } from './particles.tsx'
 import { LicenseAuthPanel, isLicenseUsable } from '../license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from '../license/LicenseGate.tsx'
 // 隐私同意是启动页的第五站（H14）：直接复用主界面那一屏，文案与守卫都是同一份，
 // 不另写一个「精简版同意提示」（两份声明会漂，而这是给用户看的法律性文本）。
 import { PrivacyConsentGate } from '../privacy/PrivacyConsentGate.tsx'
+import { PRIVACY_VERSION } from '../privacy/consent.ts'
 // 启动页（含最后一站「授权验证」也要能看到「有新版本可装 / 许可证即将到期」——
 // 更新与到期是主进程的事，与「有没有进主界面」无关。这一屏没有设置弹窗，故不传 onOpenLicense。
 import { NoticeBanner } from '@deepseek-ai/dsh-client-ui-wechat/notice'
 import css from './onboarding.module.css'
+import cssstage from './onboarding-stage.module.css'
 import cssstages from './onboarding-stages.module.css'
 // 2026-10-12 拆屏：四个内容页与舞台零件各归各的文件，本文件只留状态机与外壳。
 // 四页仍然从这里**转出导出** —— `scripts/onboarding-ssr.tsx` 按这个路径导入它们，
 // 拆分因此不改变那份冒烟的用法（也别改：它是这些页面唯一的渲染级判据）。
-import { BrandMark, HudCorner, ProgressRing, StageHead } from './stage-chrome.tsx'
+import { StageHead } from './stage-chrome.tsx'
 import { AboutPage } from './pages/AboutPage.tsx'
 import { FeaturesPage } from './pages/FeaturesPage.tsx'
 import { HelpPage } from './pages/HelpPage.tsx'
 import { HomePage } from './pages/HomePage.tsx'
-import { CONSENT_STAGE, LICENSE_STAGE, STAGE_BGS, type RuntimeVersions } from './runtime.ts'
+import { CONSENT_STAGE, LICENSE_STAGE, type RuntimeVersions } from './runtime.ts'
 
 export { AboutPage, FeaturesPage, HelpPage, HomePage }
 export type { RuntimeVersions }
@@ -81,7 +89,6 @@ export function OnboardingShell({
   const [versions, setVersions] = useState<RuntimeVersions | null>(null)
   const [theme, setTheme] = useState(() => getThemeMode())
   const [lic, setLic] = useState<LicenseStatus | null>(null)
-  const [licLoading, setLicLoading] = useState(true)
   const bodyRef = useRef<HTMLElement | null>(null)
   /** 滚轮翻页冷却：一次手势只切一页，避免触控板惯性连翻。 */
   const wheelLockRef = useRef(false)
@@ -114,28 +121,8 @@ export function OnboardingShell({
     [consentGate],
   )
   // `pageOrder.indexOf` 会有**一帧**取到 -1：同意刚生效/刚失效时，纠正用的 effect 要到
-  // 下一帧才跑（见上面）。按 0 兜住，否则那一帧背景整块暗掉、页码显示成 00。
+  // 下一帧才跑（见上面）。按 0 兜住，否则那一帧页码会显示成 00。
   const pageIndex = Math.max(0, pageOrder.indexOf(page))
-  /** 闸门两站（同意 / 授权）的页码按实际顺序算：插进同意站后授权会变成 06。 */
-  const stageIndex = String(pageIndex + 1).padStart(2, '0')
-  /** 背景图只有 4 张：第 5 站起（同意 / 授权）沿用最后一张，否则背景会整块暗下去。 */
-  const bgIndex = Math.min(pageIndex, STAGE_BGS.length - 1)
-  const visitedCount = ONBOARDING_PAGES.filter((p) => state.visited.includes(p.id)).length
-  /** 闸门两站（同意 / 授权）的进度单独算：它们问的是「过了没有」，不是「看了几页」。 */
-  const gateStage = onLicenseStage || onConsentStage
-  const gateTotal = consentGate ? 2 : 1
-  const gateDone = (consentGate ? 0 : 1) + (licenseOk ? 1 : 0)
-  const gateLabel = onConsentStage ? 'CONSENT REQUIRED'
-    : licLoading ? 'CHECKING LICENSE…'
-      : licenseOk ? 'LICENSE OK' : 'LICENSE REQUIRED'
-  /** 底栏那一句提示说的是**当前这一站还缺什么**，所以同意排在授权前面时它也先说同意。 */
-  const footerHint = requireConsent
-    ? (onConsentStage ? '请阅读后勾选，再点「同意并继续」' : '同意隐私声明后方可继续')
-    : !licenseOk
-      ? (onLicenseStage ? '完成授权后方可进入系统' : '最后一页完成授权后方可进入系统')
-      : !ready && isFirstLaunch
-        ? '浏览完四页后可进入 · ← → 翻页'
-        : '← → 翻页'
 
   // 每次进入启动页都检测 License（含过期/无效强制授权）
   useEffect(() => {
@@ -143,19 +130,12 @@ export function OnboardingShell({
     const api = window.electronAPI?.license
     if (!api?.status) {
       setLic({ state: 'error', licensed: false, reason: 'license_api_missing' })
-      setLicLoading(false)
       return
     }
     void api.status().then((s: LicenseStatus) => {
-      if (!cancelled) {
-        setLic(s)
-        setLicLoading(false)
-      }
+      if (!cancelled) setLic(s)
     }).catch((err: Error) => {
-      if (!cancelled) {
-        setLic({ state: 'error', licensed: false, reason: err.message })
-        setLicLoading(false)
-      }
+      if (!cancelled) setLic({ state: 'error', licensed: false, reason: err.message })
     })
     return () => { cancelled = true }
   }, [])
@@ -288,219 +268,141 @@ export function OnboardingShell({
     onComplete()
   }, [isFirstLaunch, state, onComplete, canEnter])
 
-  const handleSkip = useCallback(() => {
-    // 「跳过」跳的是介绍页，不是闸门：未同意或未授权时它必须同样 disabled
-    // （按钮的 disabled 用的就是 canEnter，见 footer）。
-    if (!canEnter) return
-    const next = completeOnboarding(state)
-    setState(next)
-    onComplete()
-  }, [state, onComplete, canEnter])
-
   const toggleTheme = useCallback(() => {
     toggleThemeMode()
     setTheme(getThemeMode())
   }, [])
 
   return (
-    <div
-      className={css.shell}
-      data-theme={theme}
-      data-stage={pageIndex}
-      style={{ ['--stage-p' as string]: String(pageIndex / Math.max(1, pageOrder.length - 1)) }}
-    >
-      {/* 主动提醒（右下角悬浮）：启动页上也要能看到「有新版本可装 / 许可证即将到期」。
-          位置由卡片自己 fixed 决定，放在 DOM 哪儿都不影响呈现。
-          同意站除外 —— `PrivacyConsentGate` 自己带一份，两个 fixed 堆叠在同一角上会叠成
-          两张一样的卡（点掉一张还剩一张，看起来像「关闭」坏了）。 */}
-      {!onConsentStage ? <NoticeBanner /> : null}
+    <div className={cssstage.stage} data-theme={theme}>
+      <div className={cssstage.shell}>
+        {/* 主动提醒（右下角悬浮）：启动页上也要能看到「有新版本可装 / 许可证即将到期」。
+            同意站除外 —— `PrivacyConsentGate` 自己带一份，两个 fixed 堆叠在同一角上会叠成
+            两张一样的卡（点掉一张还剩一张，看起来像「关闭」坏了）。 */}
+        {!onConsentStage ? <NoticeBanner /> : null}
 
-      {/* 多张背景图：随滚轮切页交叉淡入。
-          只给**当前与相邻那一张**设背景：交叉淡入同时需要「进来的」和「出去的」两张，
-          其余三张在进入范围之前不下 —— 虽然 WebP 之后总共才 0.59MB，但每张 1536×1024
-          解码成位图要 ~6MB 内存，四张一起下就是首启动 25MB 的常驻内存。 */}
-      <div className={cssstages.bgStack} aria-hidden="true">
-        {STAGE_BGS.map((src, i) => (
-          <div
-            key={src}
-            className={`${css.bgImage}${bgIndex === i ? ` ${css.bgImageOn}` : ''}`}
-            style={Math.abs(i - bgIndex) <= 1 ? { backgroundImage: `url(${src})` } : undefined}
-          />
-        ))}
-      </div>
-      <div className={css.bgVeil} aria-hidden="true" />
-      {/* 阶段光晕：随滚轮切页改变位置与色相 */}
-      <div className={css.stageWash} aria-hidden="true" />
-      {/* 背景光效层：网格 / 粒子 / 光带 / 扫描 / 几何 / HUD 角 */}
-      <div className={css.bgGrid} aria-hidden="true" />
-      <ParticleField className={cssstages.particles} stage={bgIndex} />
-      <div className={`${css.lightBand} ${css.lightBandA}`} aria-hidden="true" />
-      <div className={`${css.lightBand} ${css.lightBandB}`} aria-hidden="true" />
-      <div className={`${css.lightBand} ${css.lightBandC}`} aria-hidden="true" />
-      <div className={css.scanlines} aria-hidden="true" />
-      <div className={css.scanBeam} aria-hidden="true" />
-      <div className={`${css.geoRing} ${css.geoRingA}`} aria-hidden="true" />
-      <div className={`${css.geoRing} ${css.geoRingB}`} aria-hidden="true" />
-      <div className={`${css.geoDot} ${css.geoDotA}`} aria-hidden="true" />
-      <div className={`${css.geoDot} ${css.geoDotB}`} aria-hidden="true" />
-      <div className={`${css.geoDot} ${css.geoDotC}`} aria-hidden="true" />
-      <div className={`${css.hudFrame} ${css.hudTl}`} aria-hidden="true"><HudCorner /></div>
-      <div className={`${css.hudFrame} ${css.hudTr}`} aria-hidden="true"><HudCorner /></div>
-      <div className={`${css.hudFrame} ${css.hudBl}`} aria-hidden="true"><HudCorner /></div>
-      <div className={`${css.hudFrame} ${css.hudBr}`} aria-hidden="true"><HudCorner /></div>
-
-      <header className={css.top}>
-        <div className={cssstages.brand}>
-          <span className={css.brandIcon}><BrandMark size={20} /></span>
-          <div className={cssstages.brandText}>
-            <span className={cssstages.brandName}>Super Time</span>
-            <span className={cssstages.brandSub}>Onboarding · System Boot</span>
-          </div>
-        </div>
-        <nav className={cssstages.tabs} aria-label="启动页导航">
-          {ONBOARDING_PAGES.map((p) => {
-            const done = state.visited.includes(p.id)
-            return (
+        <header className={cssstage.top}>
+          <div className={cssstage.topInner}>
+            <nav className={cssstage.tabs} aria-label="启动页导航">
+              {ONBOARDING_PAGES.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`${css.tab}${page === p.id ? ` ${css.tabActive}` : ''}`}
+                  onClick={() => goPage(p.id)}
+                  aria-current={page === p.id ? 'page' : undefined}
+                >
+                  {p.label}
+                </button>
+              ))}
+              {/* 同意这一站只在还缺同意时出现；同意了就直接消失（不必留着让人回来看一份已生效的声明）。 */}
+              {consentGate ? (
+                <button
+                  type="button"
+                  className={`${css.tab}${onConsentStage ? ` ${css.tabActive}` : ''}`}
+                  onClick={() => goPage(CONSENT_STAGE)}
+                  aria-current={onConsentStage ? 'page' : undefined}
+                >
+                  隐私同意
+                </button>
+              ) : null}
+              {/* 授权是启动页的最后一站。已授权的老用户点它可直接跳过去，不必重看介绍页。 */}
               <button
-                key={p.id}
                 type="button"
-                className={`${css.tab}${page === p.id ? ` ${css.tabActive}` : ''}`}
-                onClick={() => goPage(p.id)}
-                aria-current={page === p.id ? 'page' : undefined}
+                className={`${css.tab}${onLicenseStage ? ` ${css.tabActive}` : ''}`}
+                onClick={() => goPage(LICENSE_STAGE)}
+                aria-current={onLicenseStage ? 'page' : undefined}
               >
-                {done && page !== p.id ? <span className={cssstages.tabDot} aria-hidden="true" /> : null}
-                {p.label}
+                授权验证
               </button>
-            )
-          })}
-          {/* 同意这一站只在还缺同意时出现；同意了就直接消失（不必留着让人回来看一份已生效的声明）。 */}
-          {consentGate ? (
+            </nav>
             <button
               type="button"
-              className={`${css.tab}${onConsentStage ? ` ${css.tabActive}` : ''}`}
-              onClick={() => goPage(CONSENT_STAGE)}
-              aria-current={onConsentStage ? 'page' : undefined}
-            >
-              隐私同意
-            </button>
-          ) : null}
-          {/* 授权是启动页的最后一站。已授权的老用户点它可直接跳过去，不必重看介绍页。 */}
-          <button
-            type="button"
-            className={`${css.tab}${onLicenseStage ? ` ${css.tabActive}` : ''}`}
-            onClick={() => goPage(LICENSE_STAGE)}
-            aria-current={onLicenseStage ? 'page' : undefined}
-          >
-            {licenseOk && !onLicenseStage ? <span className={cssstages.tabDot} aria-hidden="true" /> : null}
-            授权验证
-          </button>
-          {/*
-            工具位（主题切换）与页面标签**分开渲染**：它不是一页，跟着整个启动页走。
-            混在标签里时它长得和内容页标签一样，用户会以为点了会切走一块内容。
-          */}
-          <span className={cssstages.tools}>
-            <button
-              type="button"
-              className={cssstages.toolBtn}
+              className={cssstage.toolBtn}
               onClick={toggleTheme}
               title={theme === 'light' ? '切换到深色' : '切换到浅色'}
               aria-label="切换主题"
             >
-              <span aria-hidden="true">{theme === 'light' ? '🌙' : '☀️'}</span>
               {theme === 'light' ? '深色' : '浅色'}
             </button>
-          </span>
-        </nav>
-      </header>
-      <div className={css.neonRule} aria-hidden="true" />
-
-      <main className={cssstages.body} ref={bodyRef}>
-        {onConsentStage ? (
-          <PrivacyConsentGate onAccepted={acceptConsentHere} onExit={onConsentExit} />
-        ) : onLicenseStage ? (
-          <div className={css.page}>
-            <StageHead
-              index={stageIndex}
-              title="License 授权验证"
-              lead="最后一步。已经拿到厂商签发的许可证就直接导入；没有就先导出「激活请求」交给签发方，换回许可证再来导入。"
-            />
-            <LicenseAuthPanel
-              status={lic}
-              compact
-              onStatusChange={(next) => {
-                setLic(next)
-              }}
-            />
           </div>
-        ) : (
-          <>
-            {page === 'home' && <HomePage onExplore={() => goPage('features')} versions={versions} />}
-            {page === 'features' && <FeaturesPage />}
-            {page === 'help' && <HelpPage />}
-            {page === 'about' && <AboutPage versions={versions} />}
-          </>
-        )}
-      </main>
+        </header>
 
-      <div className={css.neonRule} aria-hidden="true" />
-      <footer className={css.footer}>
-        <div className={cssstages.progress}>
-          <ProgressRing
-            value={gateStage ? gateDone : (isFirstLaunch ? visitedCount : pageIndex + 1)}
-            total={gateStage ? gateTotal : ONBOARDING_PAGES.length}
-          />
-          <div className={cssstages.dots} aria-hidden="true">
-            {ONBOARDING_PAGES.map((p) => (
-              <span
-                key={p.id}
-                className={`${css.dot}${state.visited.includes(p.id) ? ` ${css.dotDone}` : ''}${page === p.id ? ` ${css.dotCurrent}` : ''}`}
-              />
-            ))}
-            {/* 同意这一颗点只在还缺同意时存在：同意了它就整颗消失（与标签同一套逻辑）。 */}
-            {consentGate ? (
-              <span className={`${css.dot}${onConsentStage ? ` ${css.dotCurrent}` : ''}`} />
-            ) : null}
-            <span className={`${css.dot}${licenseOk ? ` ${css.dotDone}` : ''}${onLicenseStage ? ` ${css.dotCurrent}` : ''}`} />
-          </div>
-          <span className={cssstages.progressText}>
-            {`STAGE ${stageIndex}/0${pageOrder.length}${gateStage ? ` · ${gateLabel}` : (isFirstLaunch ? ` · 已浏览 ${visitedCount}` : '')}`}
-          </span>
-        </div>
-        <div className={cssstages.actions}>
-          <span className={cssstages.hint}>{footerHint}</span>
-          {state.completed ? (
-            <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={handleSkip} disabled={!canEnter}>
-              跳过
-            </button>
-          ) : null}
-          <button type="button" className={css.btn} onClick={goPrev} disabled={pageIndex <= 0}>
-            上一页
-          </button>
+        <main className={cssstage.body} ref={bodyRef}>
           {onConsentStage ? (
-            /* 这一站不给「下一页」：能往前走的只有同意屏自己的「同意并继续」。
-               留着一颗点了没用的按钮，比不给按钮更糟（人会以为它坏了）。 */
-            null
-          ) : pageIndex < pageOrder.length - 1 ? (
-            <button type="button" className={`${css.btn} ${css.btnPrimary}`} onClick={goNext}>
-              下一页
-            </button>
+            /* 同意站：页头交给统一的 `StageHead`，同意屏自己只管「单列滚动 + 底部同意条」。
+               ⚠️ 这里不用 `.page`：同意屏内部需要一条确定的高度链
+               （`.body` → `.consentPage` → `.shell` → 滚动区 → 同意条），
+               `.consentPage` 的 `height: 100%` 负责把它钉在内容区高度上。 */
+            <div className={css.consentPage}>
+              <StageHead
+                title="隐私与数据边界"
+                lead={`开始之前，请确认你了解它会读什么、会往哪里发。完整声明见 docs/PRIVACY.md（声明版本 v${PRIVACY_VERSION}）。`}
+              />
+              {/* `embedded`：页头由上面的 StageHead 给，本组件只排正文 + 同意条。
+                  独立整屏（声明升版后的重新同意）走默认值，自己渲染页头并填满 #root。 */}
+              <PrivacyConsentGate embedded onAccepted={acceptConsentHere} onExit={onConsentExit} />
+            </div>
+          ) : onLicenseStage ? (
+            /* 授权站与同意站同一套骨架：`StageHead` 页头 + 铺满型容器。
+               面板内部两栏（左栏状态 / 右栏操作），这里只负责给它一条确定的高度链。 */
+            <div className={`${css.consentPage} ${css.widePage}`}>
+              <StageHead
+                title="License 授权验证"
+                lead="最后一步。已经拿到厂商签发的许可证就直接导入；没有就先导出「激活请求」交给签发方，换回许可证再来导入。"
+              />
+              <LicenseAuthPanel
+                status={lic}
+                compact
+                onStatusChange={(next) => {
+                  setLic(next)
+                }}
+              />
+            </div>
           ) : (
-            <button
-              type="button"
-              className={`${css.btn} ${css.btnPrimary}`}
-              onClick={handleEnter}
-              disabled={!ready}
-            >
-              进入系统
-            </button>
+            <>
+              {page === 'home' && <HomePage onExplore={() => goPage('features')} />}
+              {page === 'features' && <FeaturesPage />}
+              {page === 'help' && <HelpPage />}
+              {page === 'about' && <AboutPage versions={versions} />}
+            </>
           )}
-          {pageIndex < pageOrder.length - 1 && ready ? (
-            <button type="button" className={css.btn} onClick={handleEnter}>
-              进入系统
-            </button>
-          ) : null}
-        </div>
-      </footer>
+        </main>
+
+        <footer className={cssstage.footer}>
+          <div className={cssstage.footerInner}>
+            <span className={cssstages.progressText}>{`第 ${pageIndex + 1} 步 / 共 ${pageOrder.length} 步`}</span>
+            <div className={cssstages.actions}>
+              <button
+                type="button"
+                className={`${css.btn} ${css.btnGhost}`}
+                onClick={goPrev}
+                disabled={pageIndex <= 0}
+              >
+                上一步
+              </button>
+              {onConsentStage ? (
+                /* 这一站不给「下一步」：能往前走的只有同意屏自己的「同意并继续」。
+                   留着一颗点了没用的按钮，比不给按钮更糟（人会以为它坏了）。 */
+                null
+              ) : pageIndex < pageOrder.length - 1 ? (
+                <button type="button" className={`${css.btn} ${css.btnPrimary}`} onClick={goNext}>
+                  下一步
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`${css.btn} ${css.btnPrimary}`}
+                  onClick={handleEnter}
+                  disabled={!ready}
+                >
+                  进入系统
+                </button>
+              )}
+            </div>
+          </div>
+        </footer>
+      </div>
     </div>
   )
 }

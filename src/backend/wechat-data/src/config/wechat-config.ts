@@ -68,7 +68,7 @@ function readRawConfig(p: string): Record<string, unknown> | null {
  * 见 `docs/PRIVACY.md` 第四节 H。（`query/settings.ts` 早就是这个口径，此处与它对齐。）
  */
 function defaultConfig(): Record<string, unknown> {
-  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: false, api_port: 5032, api_token: '' }
+  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: false, api_port: 5032, api_token: '', wxcdn_original_enabled: false, wechat_image_autodownload_enabled: false, wechat_image_autodownload_whitelist: [] }
 }
 
 /**

@@ -96,6 +96,7 @@ import { MUTATIONS_BATCH3Z } from './mutations-registry.batch3z.mjs'
 import { MUTATIONS_BATCH3ZA } from './mutations-registry.batch3za.mjs'
 import { MUTATIONS_BATCH3ZB } from './mutations-registry.batch3zb.mjs'
 import { MUTATIONS_BATCH3ZC } from './mutations-registry.batch3zc.mjs'
+import { MUTATIONS_BATCH3ZD } from './mutations-registry.batch3zd.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -104,10 +105,10 @@ import { MUTATIONS_BATCH3ZC } from './mutations-registry.batch3zc.mjs'
 const MUTATIONS_BATCH12 = [
   {
     id: 'M1-grid-gap',
-    why: '宽档栅格间距被改小 1px —— layout-tokens.spec 必须发现基准与真源已漂移',
-    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview.module.css',
-    from: 'grid-template-columns: repeat(12, minmax(0, 1fr));\n  gap: 12px;',
-    to: 'grid-template-columns: repeat(12, minmax(0, 1fr));\n  gap: 11px;',
+    why: '总览 KPI 栅格的跨列类被改错（`col-6 col-sm-3` → `col-sm-4`）—— 2026-10-19 微信化把 8 张 KPI 收成 4 张/行（手机 2 列 / ≥sm 4 列），layout-tokens.spec 必须发现「与其他界面一致的 Bootstrap 栅格」已漂移（Wave D3 起本条盯列类）。',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-sections.tsx',
+    from: 'className="col-6 col-sm-3"',
+    to: 'className="col-6 col-sm-4"',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/layout-tokens.spec.ts',
   },
   {
@@ -176,10 +177,10 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M10-records-card-shrinkable',
-    why: '去掉 `.recordsCard` 的 `flex-shrink: 0` —— 卡片又被压缩、再被 overflow 切掉 85px 表格',
+    why: '去掉 `.panel > .recordsCard` 的「撑满剩余高度」（`flex: 1 1 auto` → `flex: 0 0 auto`）—— 卡片又退回被压缩/留白，panel-clip 判据必须发现（2026-10-18 用户报「卡片要撑满屏幕」后，这条从 `.recordsCard { flex-shrink: 0 }` 改为盯新规则）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/records.module.css',
-    from: '.recordsCard { flex-shrink: 0; }',
-    to: '.recordsCard { }',
+    from: '.panel > .recordsCard {\n  flex: 1 1 auto;',
+    to: '.panel > .recordsCard {\n  flex: 0 0 auto;',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/panel-clip.wiring.spec.ts',
   },
   {
@@ -208,10 +209,10 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M14-empty-state-regress',
-    why: '把年度报告的空态退回裸元素（不再用 EmptyState）—— U14 的"整屏空态要有信息"必须发现',
+    why: '把年度报告的空态退回裸元素（不再用 EmptyState）—— U14 的"整屏空态要有信息"必须发现（2026-10-19 微信化去掉了 emoji 图标，判据仍是 EmptyState + title + desc）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx',
-    from: '            <EmptyState\n              icon="📅"',
-    to: '            <span\n              data-fake="📅"',
+    from: '            <EmptyState\n              icon=""',
+    to: '            <span\n              data-fake=""',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/u14-empty-state.wiring.spec.ts',
   },
   {
@@ -248,7 +249,17 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-13（ClawBot 多实例 +4 → 192）：第六次跟。
     // 2026-10-13（W3-11.7 损坏库修复链路 +2 → 194）：第七次跟。
     // 2026-10-14（地图 GeoJSON 后端代理 +1 → 195）：第八次跟。
-    from: '195 个 Remote 方法）',
+    // 2026-10-16（ClawBot 实例别名 +1 → 196）：第九次跟。
+    // 2026-10-17（ClawBot 清除对话历史 +1 → 197）：第十次跟。
+    // 2026-10-17（ClawBot 默认提示词 +1 → 198）：第十一次跟。
+    // 2026-10-17（原图自动收割：四个动作合成一个 `originalHarvest` → 199）：第十二次跟。
+    // 2026-10-17（收割状态拆成独立 `getOriginalHarvestStatus` → 200）：第十三次跟。
+    // 2026-10-17（第三方原图服务额度 `getWxcdnQuota` → 201）：第十四次跟。
+    // 2026-10-18（微信原图自动下载 `wechatImageAutoDownload` → 202）：第十五次跟。
+    // 2026-10-18（实时同步修订 `getDataRevision` → 203）：第十六次跟。
+    // 2026-10-19（聊天素材收集任务 +2 → 205）：第十七次跟。
+    // 2026-10-19（任务信息 / 触发记录 / 回调 +7 → 212）：第十八次跟。
+    from: '212 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -256,23 +267,24 @@ const MUTATIONS_BATCH12 = [
     id: 'M19-wdp-tab-count-drift',
     why: '把主容器头注的页签数改回旧的 32 —— 「导航计数以 nav-config 为真源」必须发现',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: '可路由页签共 **38**（其余 20 项',
-    to: '可路由页签共 **32**（其余 20 项',
+    // 2026-10-19（任务信息页签 +1 → 39）：锚点跟着真源走。
+    from: '可路由页签共 **39**（其余 23 项',
+    to: '可路由页签共 **32**（其余 23 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
   {
     id: 'M20-merged-section-key-typo',
-    why: '把某个合并组的分段 key 拼错（ledger → ledgr）—— 深链 #ledger 会静默落回第一段，必须发现',
+    why: '把某个合并组的分段 key 拼错（ledger → ledgr）—— 深链 #ledger 会静默落回第一段，必须发现（2026-10-19 分段标签从「月度汇总」改名为「汇总」，锚点跟着新标签走）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: "{ key: 'ledger', label: '月度汇总'",
-    to: "{ key: 'ledgr', label: '月度汇总'",
+    from: "{ key: 'ledger', label: '汇总',",
+    to: "{ key: 'ledgr', label: '汇总',",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
   },
   {
     id: 'M21-merged-group-count-drift',
     why: '把合并组的组数注释改回旧的「共 6 组」—— 组数注释与代码必须一致',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: '共 8 组**合并视图',
+    from: '共 9 组**合并视图',
     to: '共 6 组**合并视图',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
   },
@@ -294,10 +306,10 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M27-analysis-toggle-not-wired',
-    why: '「分析」按钮的 onClick 变成空操作 —— 按钮在、点了没反应，必须发现',
+    why: '「分析」按钮的 onClick 变成空操作（不再 toggle `analysisPaneOpen`）—— 按钮在、点了没反应，必须发现（2026-10-19 微信化后这个按钮同时负责收起「更多」菜单，锚点跟着带上 `setMoreOpen(false)`）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-head-actions.tsx',
-    from: 'onClick={() => { setAnalysisPaneOpen(v => !v) }}',
-    to: 'onClick={() => { setAnalysisPaneOpen(false) }}',
+    from: 'onClick={() => { setMoreOpen(false); setAnalysisPaneOpen(v => !v) }}',
+    to: 'onClick={() => { setMoreOpen(false); setAnalysisPaneOpen(false) }}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
   {
@@ -387,18 +399,18 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M46-worldmap-waits-for-data',
-    why: '世界层退回「等数据才画地图」—— GeoJSON 与数据都到齐才肯画，先到的那份白等',
+    why: '世界层退回「等数据才画地图」—— GeoJSON 与数据都到齐才肯画，先到的那份白等。⚠️ 2026-10-16：条件扩到「世界层 + 非中国的国家层」，锚点跟着改。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
-    from: '  const showWorldEcharts = worldEchartsReady\n',
-    to: '  const showWorldEcharts = worldEchartsReady && map !== null\n',
+    from: '  const showWorldEcharts = shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)\n',
+    to: '  const showWorldEcharts = shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode) && map !== null\n',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
     id: 'M47-worldmap-no-empty-node',
-    why: 'ECharts 的 node 去掉空值兜底 —— 地区数据没到时世界层会直接崩（而不是只画底图）',
+    why: 'ECharts 的 node 去掉空值兜底 —— 地区数据没到时世界层会直接崩（而不是只画底图）。⚠️ 2026-10-16：`node` 改成三元（世界层传世界节点、国家层传该国节点），锚点跟着改到世界层那一支。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
-    from: '            node={map?.world ?? EMPTY_WORLD}',
-    to: '            node={map?.world as RegionNode}',
+    from: '        node={onWorldMap ? (world ?? EMPTY_WORLD) : focused}',
+    to: '        node={onWorldMap ? (world as RegionNode) : focused}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
@@ -411,9 +423,9 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M49-china-fallback-lost',
-    why: '中国层 ECharts 起不来时不再降级到 treemap —— SVG 已删，这块会变成什么都不显示',
+    why: '中国层 ECharts 起不来时不再降级到 treemap —— SVG 已删，这块会变成什么都不显示。⚠️ 2026-10-16：国家层不再走 treemap（它留在世界地图上），条件里多了 `!showWorldEcharts`，锚点跟着改。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
-    from: 'const showTreemap = !onWorldMap && (!chinaMode || chinaFallback) && !showProvinceMap && !showCityMap',
+    from: 'const showTreemap = !onWorldMap && !chinaMode && !showProvinceMap && !showCityMap && !showWorldEcharts',
     to: 'const showTreemap = !onWorldMap && !chinaMode && !showProvinceMap && !showCityMap',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
@@ -421,8 +433,8 @@ const MUTATIONS_BATCH12 = [
     id: 'M50-geo-svg-resurrected',
     why: '被删掉的地理 SVG 又长回来了（哪怕只是一个开关名）—— 「已移除」必须是可验证的，不是一次性的手工动作',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
-    from: '  const showWorldEcharts = worldEchartsReady\n',
-    to: '  const showWorldSvg = onWorldMap && !worldEchartsReady\n  const showWorldEcharts = worldEchartsReady\n',
+    from: '  const showWorldEcharts = shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)\n',
+    to: '  const showWorldSvg = onWorldMap && !worldEchartsReady\n  const showWorldEcharts = shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)\n',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
@@ -434,27 +446,35 @@ const MUTATIONS_BATCH12 = [
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
+    id: 'M589-geo-cache-caches-failure',
+    why: '底图 GeoJSON 的缓存把**失败**也写进去 ⇒ 一次网络抖动会让该层（中国 / 省 / 市）**永久空白**，而重进面板也不会重试。缓存只该记成功结果。（2026-10-18：取数口加了对 REMOTE_BUSY 的退避重试，成功写缓存挪进 `if (result.ok)` 分支，锚点跟随。）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts',
+    from: '      if (result.ok) {\n        GEO_CACHE.set(key, result.data)',
+    to: '      if (true) {\n        GEO_CACHE.set(key, result.data)',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
+  },
+  {
     id: 'M41-calls-rank-unbounded',
-    why: '排行列表去掉限高 —— 长列表会重新把同一行的矮卡片顶出一大片空白（用户报的留白）',
+    why: '排行列表重新限高 —— 页面会变回「页面滚 + 卡内滚」两层（2026-10-19 契约：单页面滚动）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
-    from: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; max-height: 330px; overflow-y: auto; }',
-    to: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; overflow-y: auto; }',
+    from: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;  }',
+    to: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; max-height: 330px; }',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
   },
   {
     id: 'M42-calls-recent-fixed-height',
-    why: '最近通话把 max-height 写成固定 height —— 条目少时会拖出一条空滚动区（「内容不足时不影响布局」被破坏）',
+    why: '最近通话列表重新限高 —— 嵌套滚动回归（单页面滚动契约被破坏）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
-    from: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; max-height: 400px; overflow-y: auto; }',
-    to: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; height: 400px; overflow-y: auto; }',
+    from: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;  }',
+    to: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; max-height: 400px; }',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
   },
   {
     id: 'M43-calls-scrollbar-not-declared',
-    why: '滚动条宽度改回 0 —— 依赖全局规则（它只在主题 CSS 加载时才生效），列表看起来无法滚动',
-    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
-    from: '.rankList::-webkit-scrollbar, .monthList::-webkit-scrollbar, .recentList::-webkit-scrollbar { width: 6px; height: 6px; }',
-    to: '.rankList::-webkit-scrollbar, .monthList::-webkit-scrollbar, .recentList::-webkit-scrollbar { width: 0px; height: 0px; }',
+    why: '全局滚动条宽度被改回 0 —— 所有长列表又变成「能滚但没有任何提示」',
+    file: 'src/client/ui-app/scrollbars.css',
+    from: 'width: 8px;',
+    to: 'width: 0px;',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
   },
   {
@@ -533,8 +553,8 @@ const MUTATIONS_BATCH12 = [
     id: "M66-openpath-policy-not-applied",
     why: "让网关的 openPath 不再走路径政策（政策函数还在、没人调用）—— 就是审查那条「限根只写在文档里」的形状",
     file: "src/backend/wechat-data/src/gateway-read.ts",
-    from: "    const denial = openDenialReason(p, dataRoot)",
-    to: "    const denial: string | null = null\n    void openDenialReason\n    void dataRoot",
+    from: "    const denial = openDenialReason(p, dataRoot, extraRoots)",
+    to: "    const denial: string | null = null\n    void openDenialReason\n    void dataRoot\n    void extraRoots",
     spec: "src/backend/wechat-data/tests/path-policy.spec.ts",
   },
   {
@@ -948,7 +968,7 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC, ...MUTATIONS_BATCH3ZD]
 
 /** 全量条数唯一来源：门禁文案与预算不要再各自抄一个会腐坏的数字。 */
 export const MUTATION_COUNT = MUTATIONS.length

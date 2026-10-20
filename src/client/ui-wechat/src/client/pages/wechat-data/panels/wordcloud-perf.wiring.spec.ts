@@ -245,7 +245,7 @@ describe('词云卡片本身仍然完整（别为了性能把功能弄丢）', (
     expect(LAYOUT, '按画布尺寸换算词数的函数不见了（面积那一道住在这里）').toContain('export function cloudLimitForStage(')
     expect(LAYOUT, '换算式的夹取范围要写清楚').toContain('CLOUD_LIMIT_MIN')
     expect(CARD, '卡片必须调布局模块的尺寸换算函数（高度要和布局同一个来源）')
-      .toContain('cloudLimitForStage(stageW, height ?? cloudStageHeight(stageW), limit)')
+      .toContain('cloudLimitForStage(stageW, stageHeight, limit)')
   })
 
   /**
@@ -262,7 +262,7 @@ describe('词云卡片本身仍然完整（别为了性能把功能弄丢）', (
       .toContain('}, [scope, username, year, cacheKey, liveTick])')
     expect(CARD, '缓存 key 不许含词数/宽度')
       .toMatch(/const cacheKey = `wordcloud:\$\{scope\}:\$\{username \?\? ''\}:\$\{year \?\? 'all'\}`/)
-    expect(CARD, '显示几个词要本地切（不重新取数）').toContain('cloudLimitForStage(stageW, height ?? cloudStageHeight(stageW), limit)')
+    expect(CARD, '显示几个词要本地切（不重新取数）').toContain('cloudLimitForStage(stageW, stageHeight, limit)')
     // 反例：把宽度塞回依赖（那正是"全屏后又统计一次"的接线）
     expect(CARD.includes('[scope, username, year, requestLimit'), '宽度又回到请求依赖里了').toBe(false)
   })

@@ -1,5 +1,5 @@
 /**
- * 朋友圈的**离线媒体**层：懒解密、公众号封面兜底、IndexedDB 恢复、灯箱按需解析。
+ * 朋友圈媒体层：本地缓存优先、懒解密、公众号封面兜底、灯箱按需解析。
  *
  * ## 为什么单独成模块（第三批 #18 第二步）
  *
@@ -15,14 +15,15 @@
  * 面板只读它。所以这个 ref 必须在 render 期间就能被卡片写到 —— 把它挪进 `useEffect`
  * 会让观察器永远查不到 spec，表现是「滚动到图片也不解密」。
  *
- * ## 取图口径：先网后本（2026-10-08 产品规则）
+ * ## 取图口径：**本地优先、CDN 兜底**（2026-10-19 用户口径变更）
  *
- * **有网**时直接向微信 CDN 要 `/0` 那份**原图**显示，取回即由后端落盘；
- * **只有无网时**才用已下载的本地缓存（先 IndexedDB，再让后端走「已下载原图 → 微信原始目录」）。
+ * 进面板先批量从 IndexedDB 恢复**原图**（`wantOriginal` 把缩略图当未命中），本地有就
+ * 直接显示、不再出网；单格同样先查 IndexedDB 原图，命中就跳过 RPC。只有本地没有原图时
+ * 才走 `getSnsImageDataUrl`，而后端也按「长期归档 → 解码缓存 → 本机目录 → CDN」的顺序。
  *
- * 因此有网时本模块**不做任何本地判断**：不查 IndexedDB 单张、不查 IndexedDB 批量恢复。
- * 少了这个约束，用户看到的会还是上一次那张（可能是缩略图、可能是旧的），而网络明明是通的 ——
- * 而且界面上看不出任何异常。
+ * 这与旧口径（有网先 CDN、只有无网才看 IndexedDB）相反 —— 旧口径下每次进入都会重新
+ * 出网，本地已经落盘的高清图被跳过；用户明确要求「先用本地显示，然后再使用 CDN」。
+ * md5 是内容寻址，本地那份只要是原图就与 CDN 同一张，先看本地不会看到旧图。
  *
  * 网络状态取自 `navigator.onLine`（与 `remote-img.tsx` 的离线短路同一个信号），由
  * {@link isOffline} 在**取图那一刻**读一次并随 RPC 传给后端。不做成 state：它变了不必
@@ -81,8 +82,33 @@ export interface MediaKeySpec {
 /** 灯箱按需解析时用的最小图结构（与 `MomentsImageViewer` 传进来的形状兼容）。 */
 type ViewerImage = { thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }
 
-/** 一批出队解码的条数：太大一顿卡，太小把并发用不满。 */
-const MEDIA_BATCH = 8
+/**
+ * 一批出队解码的条数。
+ *
+ * ⚠️ **必须 ≤ 后端重活队列容量**（`src/backend/http-queue.js` 的 `HEAVY_QUEUE_MAX = 4`）。
+ * `getSnsImageDataUrl` / `getSnsVideoCoverDataUrl` 都在 `remote-policy.js` 的
+ * `HEAVY_CALL_LEDGER` 里（缓存未命中时退化成 12–21s 的读+解密+哈希），因此每个请求都占
+ * 一个**重活**名额；后端重活车道是「1 个在跑 + 4 个排队」，超出的立刻回 `REMOTE_BUSY`。
+ *
+ * 2026-10-16 真机实测：原值 8 时，朋友圈首屏一批 8 个请求里有 3–4 个被拒
+ * （日志刷屏 `重任务排队已满（已有 1 个在跑、4 个在排队）`），重试机制虽救回大部分，
+ * 但仍有零星图片永久失败（`[moments-media] 取图失败（已重试 2 次，放弃）`）。
+ * 降到 4 后每批都能进队列，不再触发 `REMOTE_BUSY`。
+ *
+ * 别再往上调：批越大越容易撞队列上限，而**吞吐并不由这里决定** —— 后端重活并发恒为 1，
+ * 前端发再多也只是排队或被拒。
+ */
+const MEDIA_BATCH = 4
+
+/**
+ * 进面板时一次从 IndexedDB 批量恢复的上限。
+ *
+ * 不能把 `moments` 里的全部键（真实数据 1000+）一次恢复：`snsImgs` 只有 200 条上限，
+ * `capRecord` 超限会淘汰**最早插入**的键。真机实测一次 `getMany` 返回 555 条，结果
+ * 首屏最先入表的几张被挤出内存，界面一直显示「正在取原图」——而滚动到后面的图正常。
+ * 只恢复开头 80 个够覆盖首屏；后面的图懒加载时按单张 `snsMediaCacheGet` 命中。
+ */
+const SNS_IMG_RESTORE_MAX = 80
 
 /**
  * 一批发出的封面请求条数（A2，2026-09-28 性能修复）。
@@ -183,6 +209,103 @@ function sweepSnsKeys(ob: IntersectionObserver, fetched: Set<string>): void {
   }
 }
 
+/**
+ * 这个格子此刻是否**真的在视口里**（而不是只在 IO 的预取边距内）。
+ *
+ * 为什么要区分：IO 的 `rootMargin` 是**预取**边距（提前解码，滚到时已经好了），
+ * 但后端重活车道只有「1 个在跑 + 4 个排队」（见 {@link MEDIA_BATCH}），
+ * 所以**队列顺序就是用户等待顺序**。若把预取区的格子与视口内的格子一视同仁地 FIFO 排队，
+ * 用户正看着的那几张会排在「下一屏还没滚到的」后面 —— 表现为「滚到哪儿哪儿都在转圈」。
+ *
+ * 判据用 `getBoundingClientRect()` 与滚动容器的矩形相交，而不是 `entry.intersectionRatio`：
+ * IO 的 ratio 是相对**加了 rootMargin 的扩展矩形**算的，在预取区里也是 1，区分不出来。
+ * @param el - 媒体占位格。
+ * @param root - 滚动容器（`null` 时退回视口）。
+ * @returns 与容器矩形相交则为 true。
+ */
+function isInViewport(el: HTMLElement, root: HTMLElement | null): boolean {
+  const r = el.getBoundingClientRect()
+  const box = root ? root.getBoundingClientRect() : { top: 0, bottom: window.innerHeight }
+  return r.bottom > box.top && r.top < box.bottom
+}
+
+/**
+ * 把一批刚相交的媒体格子按「视口内 / 预取区」分派进队列。
+ *
+ * 视口内的**插队到队首**，预取区的追加到队尾。理由见 {@link isInViewport}。
+ *
+ * 同一批 entries 里先收集再入队：IO 一次回调可能带多个格子，逐个 `unshift` 会把
+ * 顺序**倒过来**（后 unshift 的排更前），而 DOM 顺序才是用户从上往下看的顺序。
+ *
+ * 独立成函数而不是内联在 hook 里：hook 紧贴 `function-size-ratchet` 的 250 行线。
+ * @param entries - IO 回调给的相交项。
+ * @param specOf - 按 key 查媒体请求描述。
+ * @param fetched - 已入过队的键（本函数会就地累加）。
+ * @param queue - 待办队列（本函数会就地插入）。
+ * @param root - 滚动容器。
+ * @returns 是否真的入队了（调用方据此决定要不要触发 drain）。
+ */
+function enqueueIntersecting(
+  entries: readonly IntersectionObserverEntry[],
+  specOf: Map<string, MediaKeySpec>,
+  fetched: Set<string>,
+  queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
+  root: HTMLElement | null,
+): boolean {
+  const urgent: Array<{ key: string } & MediaKeySpec> = []
+  const lazy: Array<{ key: string } & MediaKeySpec> = []
+  for (const e of entries) {
+    if (!e.isIntersecting) continue
+    const el = e.target as HTMLElement
+    const key = el.dataset.snsKey || ''
+    if (!key || fetched.has(key)) continue
+    const spec = specOf.get(key)
+    if (!spec) continue
+    fetched.add(key)
+    ;(isInViewport(el, root) ? urgent : lazy).push({ key, ...spec })
+  }
+  if (urgent.length === 0 && lazy.length === 0) return false
+  // `unshift(...urgent)` 保持 urgent 内部顺序（DOM 顺序 = 用户从上往下看的顺序）。
+  if (urgent.length > 0) queue.current.unshift(...urgent)
+  if (lazy.length > 0) queue.current.push(...lazy)
+  return true
+}
+
+/**
+ * 取图失败后**延迟**放回队列，而不是立即 `push`。
+ *
+ * ## 为什么必须延迟（2026-10-16 真机实测）
+ *
+ * 立即放回是忙等：`drainMedia` 的 `while` 循环会马上把这一条连同下一批一起再发，
+ * 而后端重活车道只有「1 个在跑 + 4 个排队」（`src/backend/http-queue.js` 的
+ * `HEAVY_QUEUE_MAX = 4`；`getSnsImageDataUrl` 在 `remote-policy.js` 的 `HEAVY_CALL_LEDGER` 里）。
+ * 于是失败 → 立即重发 → 再失败，形成 `REMOTE_BUSY` 风暴：日志被
+ * `重任务排队已满（已有 1 个在跑、4 个在排队）` 刷屏，严重时渲染进程崩溃
+ * （`[render-process-gone] {"reason":"crashed"}`）。
+ *
+ * `MEDIA_RETRY_DELAY_MS` 这个常量此前**定义了却从未使用**（注释写着"间隔 1.5s，不忙等"，
+ * 实现却是立即放回）—— 这里把它接上：等 1.5s 让后端队列排空，再放回并重新触发 drain。
+ *
+ * 独立成函数而不是内联在 hook 里：hook 紧贴 `function-size-ratchet` 的 250 行线。
+ *
+ * @param it - 失败的那条媒体请求。
+ * @param queue - 待办队列（放回它）。
+ * @param unmounted - 组件是否已卸载（卸载后早退，避免后台自激）。
+ * @param drain - 重新触发排空的回调。
+ */
+function requeueAfterDelay(
+  it: { key: string } & MediaKeySpec,
+  queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
+  unmounted: React.MutableRefObject<boolean>,
+  drain: () => void,
+): void {
+  window.setTimeout(() => {
+    if (unmounted.current) return
+    queue.current.push(it)
+    drain()
+  }, MEDIA_RETRY_DELAY_MS)
+}
+
 /** `useMomentsMedia` 的输入。 */
 export interface MomentsMediaInput {
   moments: readonly MomentItem[]
@@ -213,6 +336,42 @@ export interface MomentsMediaInput {
 }
 
 /**
+ * 重活 RPC 的串行车道（2026-10-19 修 REMOTE_BUSY）。
+ *
+ * 后端 `http-queue.js` 的重活车道只有 1 个运行位 + 4 个排队位；朋友圈一屏多张图同时
+ * 请求时，缺 CDN 三件套的那些会落进重活车道，排队一满就 `REMOTE_BUSY`（真机日志
+ * 「重任务排队已满（已有 1 个在跑、4 个在排队）」）。这里把可能走重活车道的请求串成
+ * 一条链：一次只有 1 个在飞，其余在本地排队，不再把后端队列塞满。
+ *
+ * 注意：串行的是 RPC，不是渲染 —— 已经命中的 IndexedDB 原图不会进这条链。
+ * @returns `run(task)`：把 task 排进串行链，返回它的结果 Promise。
+ */
+function createHeavyRpcLane(): <T>(task: () => Promise<T>) => Promise<T> {
+  let chain: Promise<void> = Promise.resolve()
+  return <T,>(task: () => Promise<T>): Promise<T> => {
+    const run = chain.then(task, task)
+    chain = run.then(() => undefined, () => undefined)
+    return run
+  }
+}
+
+/**
+ * 这条媒体 RPC 会不会进后端重活车道（决定是否要串行）。
+ *
+ * 判据与 `call-priority.js` 的 `downgradeHeavyByArgs` 对齐：视频封面恒重；图片只有
+ * 「在线 + CDN 三件套齐」才会被降到普通车道，其余都按重活处理。
+ * @param item - 媒体请求。
+ * @param offline - 当前是否无网。
+ * @returns true = 需要走串行车道。
+ */
+function needsHeavyRpcLane(item: MediaKeySpec, offline: boolean): boolean {
+  if (item.kind === 'video' || offline) return true
+  return !(typeof item.url === 'string' && item.url !== ''
+    && typeof item.token === 'string' && item.token !== ''
+    && typeof item.seed === 'string' && item.seed !== '')
+}
+
+/**
  * 朋友圈媒体层钩子：滚动懒解密 + 封面兜底 + IDB 恢复 + 灯箱按需解析。
  * @param input - 见 {@link MomentsMediaInput}。
  * @returns 面板与卡片要用的两份状态与一个引用。
@@ -236,6 +395,10 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const mediaQueue = useRef<Array<{ key: string } & MediaKeySpec>>([])
   const mediaFetching = useRef(false)
   const mediaObserved = useRef<IntersectionObserver | null>(null)
+  /** 重活 RPC 串行链（见 createHeavyRpcLane）：一次只发一个，防后端重活队列 REMOTE_BUSY。 */
+  const runHeavyRpc = useRef(createHeavyRpcLane()).current
+  /** 组件是否已卸载：延迟重试的 `setTimeout` 回调据此早退，避免卸载后自激（见 catch 分支）。 */
+  const mediaUnmounted = useRef(false)
 
   /** 当前是否无网。读法与「为什么不做成 state」见文件头「先网后本」。 */
   const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false
@@ -246,7 +409,6 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     try {
       while (mediaQueue.current.length > 0) {
         const batch = mediaQueue.current.splice(0, MEDIA_BATCH)
-        const updates: Record<string, string> = {}
         const offline = isOffline()
         await Promise.all(batch.map(async (it) => {
           const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string; offline?: boolean } = {
@@ -264,17 +426,29 @@ export function useMomentsMedia(input: MomentsMediaInput): {
           if (it.mediaId) opts.mediaId = it.mediaId
           if (it.seed) opts.key = it.seed
           if (it.thumb) opts.thumb = it.thumb
-          // 先网后本：有网时后端直接去 CDN 要原图并落盘，无网时才用已下载的本地缓存。
+          // 本地优先（2026-10-19 用户口径）：先查 IndexedDB 里的**原图**（`wantOriginal`
+          // 会把缩略图当未命中）。命中就直接显示、不再出网；只有本地确实没有原图才走
+          // 后端（后端同样先查长期归档/本机，最后才 CDN）。
           opts.offline = offline
           try {
-            // 有网时**不查**本地缓存（产品规则：有网直接取原图，先命中旧缓存就等于什么都没改）
-            const cached = offline ? await snsMediaCacheGet(it.key, true) : null
-            if (cached) { updates[it.key] = cached; return }
-            const r = it.kind === 'video'
-              ? await apiGetSnsVideoCoverDataUrl(opts)
-              : await apiGetSnsImageDataUrl(opts)
+            const cached = await snsMediaCacheGet(it.key, true)
+            if (cached) {
+              // 逐条上屏，不能等 `Promise.all` 全部结束：同一批里只要有一张 RPC 卡住，
+              // 其余几张**已经命中的本地原图**也会一起被压住（真机实测：IDB 里明明有
+              // 3 张，界面却一直显示「正在取原图」）。
+              setSnsImgs(prev => capRecord({ ...prev, [it.key]: cached }, SNS_IMG_CACHE_MAX))
+              setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
+              return
+            }
+            // 重活车道判定：视频恒重；图片只有「在线 + CDN 三件套齐」才走普通车道，其余串行。
+            const needsHeavyLane = needsHeavyRpcLane(it, offline)
+            const rpc = () => (it.kind === 'video'
+              ? apiGetSnsVideoCoverDataUrl(opts)
+              : apiGetSnsImageDataUrl(opts))
+            const r = needsHeavyLane ? await runHeavyRpc(rpc) : await rpc()
             if (r.url) {
-              updates[it.key] = r.url
+              setSnsImgs(prev => capRecord({ ...prev, [it.key]: r.url as string }, SNS_IMG_CACHE_MAX))
+              setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
               // 把「这次是不是缩略图」一起存下去：后端降级给缩略图时标上，
               // 下一轮就能跳过它去换原图（而不是把缩略图当成最终结果永久缓存）。
               void snsMediaCacheSet(it.key, r.url, r.thumb === true)
@@ -292,7 +466,8 @@ export function useMomentsMedia(input: MomentsMediaInput): {
             const n = (mediaRetryCount.get(it.key) ?? 0) + 1
             mediaRetryCount.set(it.key, n)
             if (n <= MEDIA_RETRY_MAX) {
-              mediaQueue.current.push(it) // 放回队列 ⇒ 同一轮内再试（最多 2 次，不会死循环）
+              // 延迟放回（理由见 `requeueAfterDelay` 的文件头）：立即放回会形成 REMOTE_BUSY 风暴。
+              requeueAfterDelay(it, mediaQueue, mediaUnmounted, () => { void drainMedia() })
             } else {
               const reason = (e as Error).message
               console.warn('[moments-media] 取图失败（已重试 ' + String(MEDIA_RETRY_MAX) + ' 次，放弃）:', it.key, reason)
@@ -300,15 +475,6 @@ export function useMomentsMedia(input: MomentsMediaInput): {
             }
           }
         }))
-        if (Object.keys(updates).length > 0) {
-          setSnsImgs(prev => capRecord({ ...prev, ...updates }, SNS_IMG_CACHE_MAX))
-          // 同一格后来成功了 ⇒ 清掉旧错误，避免"已经出图了还挂着失败提示"
-          setSnsErrs(prev => {
-            const next = { ...prev }
-            for (const k of Object.keys(updates)) delete next[k]
-            return next
-          })
-        }
       }
     } finally {
       mediaFetching.current = false
@@ -330,20 +496,18 @@ export function useMomentsMedia(input: MomentsMediaInput): {
       return
     }
     const ob = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue
-        const el = e.target as HTMLElement
-        const key = el.dataset.snsKey || ''
-        if (!key || snsFetched.current.has(key)) continue
-        const spec = mediaKeySpec.current.get(key)
-        if (!spec) continue
-        snsFetched.current.add(key)
-        mediaQueue.current.push({ key, ...spec })
+      // 视口内的插队到队首、预取区的排到队尾（理由见 `enqueueIntersecting`）。
+      if (enqueueIntersecting(entries, mediaKeySpec.current, snsFetched.current, mediaQueue, scrollRef.current)) {
         void drainMedia()
       }
     }, { root: scrollRef.current, rootMargin: '480px 0px' })
     mediaObserved.current = ob
-    return () => { ob.disconnect(); mediaObserved.current = null }
+    return () => {
+      ob.disconnect()
+      mediaObserved.current = null
+      // 卸载后不再让延迟重试的 setTimeout 触发 drain（否则会在后台自激）。
+      mediaUnmounted.current = true
+    }
   }, [])
 
   /** 观察新出现的格子；为什么必须扫 `document`、为什么还要一个 `detailKey`，见 {@link sweepSnsKeys}。 */
@@ -418,12 +582,12 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     for (const el of cells) ob.observe(el)
   }, [groups, renderKey])
 
-  // 进面板时从 IndexedDB 恢复已解密媒体：**只在无网时做**（有网时不该先拿旧缓存顶上，
-  // 视口内那几张随后各自去后端要原图，取到后覆盖写回同一条记录）。理由见文件头。
+  // 进面板时先从 IndexedDB 恢复**已解密原图**（2026-10-19 起不再区分有网/无网）。
+  // 本地有原图就立刻画出来，本地没有的才会在视口内各自去后端要；只恢复开头一段。
   useEffect(() => {
-    if (!isOffline()) return
     const keys = collectMediaKeys(moments)
       .filter((k) => !snsFetched.current.has(k))
+      .slice(0, SNS_IMG_RESTORE_MAX)
     if (keys.length === 0) return
     void snsMediaCacheGetMany(keys, true).then((cached) => {
       const found = Object.keys(cached)
@@ -433,20 +597,25 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     })
   }, [moments])
 
-  // 灯箱当前图离线解码缺失时按需解析（与卡片共用 key：md5 或 timelineId:mediaId）。
+  // 灯箱当前图：先查本地原图，没有才按需解析（与卡片共用 key）。
   useEffect(() => {
     const im = viewer ? viewer.images[viewer.index] as ViewerImage | undefined : undefined
     if (!im) return
     const key = imgKey(im)
     if (!key || snsImgs[key] || snsFetched.current.has(key)) return
     snsFetched.current.add(key)
-    void apiGetSnsImageDataUrl({ md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id })
-      .then((r) => {
+    void snsMediaCacheGet(key, true).then(async (cached) => {
+      if (cached) {
+        setSnsImgs(prev => capRecord({ ...prev, [key]: cached }, SNS_IMG_CACHE_MAX))
+        return
+      }
+      try {
+        const r = await apiGetSnsImageDataUrl({ md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id })
         if (r.url) {
           setSnsImgs(prev => capRecord({ ...prev, [key]: r.url as string }, SNS_IMG_CACHE_MAX))
         }
-      })
-      .catch(() => { /* 保留 CDN 兜底 */ })
+      } catch { /* 保留后端兜底 */ }
+    })
   }, [viewer, snsImgs])
 
   /* 取图失败的原因（key → 后端给的原因）。**可加性**输出：调用方暂时可以不理会，

@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { startSyncWatch, type SyncWatcherLike } from '../src/query/sync-watch.ts'
+import { startSyncWatch, WATCH_DEBOUNCE_MS, WATCH_MIN_GAP_MS, type SyncWatcherLike } from '../src/query/sync-watch.ts'
 
 interface FakeWatcher extends SyncWatcherLike {
   dir: string
@@ -73,7 +73,7 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     vi.useFakeTimers()
   })
 
-  it('一个写入簇经 400ms 防抖合并成一次触发（防抖前零触发）', () => {
+  it('一个写入簇经 WATCH_DEBOUNCE_MS 防抖合并成一次触发（防抖前零触发）', () => {
     const fw = makeFakeWatch()
     const onTrigger = vi.fn()
     const h = startSyncWatch({ onTrigger }, { watchDir: fw.watchDir })
@@ -86,28 +86,29 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     vi.advanceTimersByTime(100)
     fw.watchers[0]!.fire('rename', 'MSG0.db')
     expect(onTrigger, '防抖窗口内不许触发').not.toHaveBeenCalled()
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger, '一个簇只该合并成一次').toHaveBeenCalledTimes(1)
   })
 
-  it('1.5s 内的第二次触发被限频跳过；越过窗口后恢复', () => {
+  it('WATCH_MIN_GAP_MS 内的第二次触发被限频跳过；越过窗口后恢复', () => {
     const fw = makeFakeWatch()
     const onTrigger = vi.fn()
     const h = startSyncWatch({ onTrigger }, { watchDir: fw.watchDir })
     handles.push(h)
     h.refresh('C:/wx/raw')
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger).toHaveBeenCalledTimes(1)
-    // 触发时刻是 t=400；t=1800 的这次距上次只有 1400ms < 1.5s ⇒ 跳过
-    vi.advanceTimersByTime(1000)
+    // 触发时刻是 t=WATCH_DEBOUNCE_MS；下面这次距上次不足 WATCH_MIN_GAP_MS ⇒ 跳过。
+    // 用「限频窗口的一半」推进，保证无论常量取多少都落在窗口内。
+    vi.advanceTimersByTime(Math.floor(WATCH_MIN_GAP_MS / 2))
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger, '限频窗口内的触发必须跳过').toHaveBeenCalledTimes(1)
-    // t=2400 触发，距上次 2000ms ≥ 1.5s ⇒ 恢复
-    vi.advanceTimersByTime(200)
+    // 再推一个完整窗口 ⇒ 距上次已超过 WATCH_MIN_GAP_MS ⇒ 恢复
+    vi.advanceTimersByTime(WATCH_MIN_GAP_MS)
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger, '越过窗口后必须恢复').toHaveBeenCalledTimes(2)
   })
 
@@ -127,7 +128,7 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     expect(fw.watchers[1]?.dir).toBe('D:/wx/raw2')
     expect(onAttached).toHaveBeenCalledTimes(2)
     fw.watchers[1]!.fire('change', 'x.db-wal')
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger, '新目录的事件必须能触发').toHaveBeenCalledTimes(1)
   })
 
@@ -197,14 +198,17 @@ describe('sync.ts 的接线（源码锚点）', () => {
     expect(SRC.length).toBeGreaterThan(500)
   })
 
-  it('同步循环接上监听器：触发即拍 tick、每拍重挂到当前 raw 根、disposer 停止监听', () => {
+  it('同步循环接上监听器：触发经合并器拍 tick、每拍重挂到当前 raw 根、disposer 停止监听', () => {
     expect(SRC, '必须把监听触发接到 tick 上（否则监听只是摆设）').toContain('startSyncWatch({')
-    expect(SRC, '必须把监听触发接到 tick 上（否则监听只是摆设）').toContain('onTrigger: () => { void tick() }')
+    expect(SRC, 'tick 运行期间的 WAL 触发不许丢：必须走合并器').toContain('createSyncTrigger({ run: tick })')
+    expect(SRC, '合并器得真被监听器调用（否则白合并）').toContain('onTrigger: () => { triggerSync.trigger() }')
     expect(SRC, '每拍必须 refresh 到当前 raw 根（目录变了/报错后靠它重挂）').toContain('syncWatch.refresh(raw)')
     expect(SRC, 'disposer 必须停掉监听（否则卸载后监听还活着）').toContain('syncWatch.stop()')
   })
 
-  it('轮询兜底必须保留（fs.watch 会丢事件：宁可慢，不可错）', () => {
-    expect(SRC).toContain("timer = setInterval(() => { void tick() }, SYNC_INTERVAL_MS)")
+  it('轮询兜底必须保留，且监听没挂上时用更短间隔（宁可慢，不可错）', () => {
+    expect(SRC, '兜底轮询不许删').toContain('SYNC_INTERVAL_MS')
+    expect(SRC, '监听不可用时轮询是唯一新鲜度来源，必须能切到快档').toContain('SYNC_FALLBACK_FAST_MS')
+    expect(SRC, '快/慢档必须由「监听是否真的挂上」决定').toContain('syncWatch.attached()')
   })
 })

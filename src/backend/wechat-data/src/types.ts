@@ -21,6 +21,7 @@ export * from './types-config.ts'
 export * from './types-laya.ts'
 export * from './types-retrieval.ts'
 export * from './types-kb-wire.ts'
+export * from './types-taskcenter.ts'
 
 /**
  * 这些类型原先只住在实现模块里，前端不得不再镜像一份（`types.ts` 里的「待 H11/H12

@@ -213,6 +213,12 @@ export const STEP_ICONS: Record<string, React.JSX.Element> = {
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M12 8v4M12 16h.01" />
     </svg>
   ),
+  // 隐私体检（2026-10-17 从主界面迁进本弹窗）：盾牌 + 对勾（与侧栏那枚同形）。
+  privacy: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
   backup: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12a9 9 0 1 1-9-9" /><polyline points="21 3 21 9 15 9" />
@@ -231,6 +237,39 @@ export const STEP_ICONS: Record<string, React.JSX.Element> = {
 }
 
 export type StepState = 'done' | 'todo' | 'note'
+
+/** 左导航的一个条目（`settings-state.tsx` 的 `createSettingsNavItems` 产出）。 */
+export interface SettingsNavItem {
+  key: string
+  group: string
+  label: string
+  icon: React.ReactNode
+  value: string
+  dot?: 'done' | 'warning' | 'ongoing'
+}
+
+/**
+ * 导航项按 `group` 分组（2026-10-16 设置布局重设计）。
+ *
+ * 左导航把每组包成一个圆角卡片，右内容区在每组第一张卡前插一条分组标题 ——
+ * 两处用**同一份分组**，不会漂。分组顺序沿用 `items` 里首次出现的顺序
+ * （`createSettingsNavItems` 已按语义排好）。
+ *
+ * 放在本文件（而不是 `settings-state.tsx`）：后者贴着 M21 的 1000 行文件上限，
+ * 而本文件是设置面板的「共享定义」面，导航相关的类型与纯函数本来就该住这里。
+ *
+ * @param items - 扁平的导航项（已按语义排序）。
+ * @returns 按 group 连续切分后的分组数组。
+ */
+export function groupNavItems(items: readonly SettingsNavItem[]): Array<{ label: string; items: SettingsNavItem[] }> {
+  const out: Array<{ label: string; items: SettingsNavItem[] }> = []
+  for (const it of items) {
+    const last = out[out.length - 1]
+    if (last && last.label === it.group) last.items.push(it)
+    else out.push({ label: it.group, items: [it] })
+  }
+  return out
+}
 
 /** 通知内容(可带明细列表,渲染为悬浮层不挤占布局)。 */
 export interface Notice {

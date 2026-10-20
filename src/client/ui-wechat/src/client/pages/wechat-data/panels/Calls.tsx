@@ -14,7 +14,7 @@ import { useCallback } from 'react'
 import { useFreshData } from './use-fresh-data.ts'
 import { apiGetCalls } from '../api.ts'
 import type { CallsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, EmptyState, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, EmptyState, LoadingState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './calls.module.css'
 import { fmtLocaleSec } from '../utils/format.ts'
@@ -68,9 +68,9 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   return (
     <div className={kitCss.panelShell}>
       <PanelHeader
-        title="通话记录"
+        title="通话"
         desc={snap
-          ? `${snap.total} 通 · 覆盖 ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)} · 快照 ${fmtLocaleSec(snap.updatedAt)}`
+          ? `${snap.total} 通 · ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)}`
           : '语音/视频通话统计（来自消息库 type-50 的 voip XML）'}
         actions={(
           <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>
@@ -90,14 +90,15 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
 
       {snap && snap.total > 0 && (
         <>
-          <StatGrid>
-            <StatCard icon="📞" value={snap.total} label="通话总数" hint={`覆盖 ${snap.peerCount} 位联系人`} />
-            <StatCard icon="⏱️" value={fmtDuration(snap.durationSec)} label="通话总时长" tone="purple" hint={`平均 ${fmtDuration(snap.avgSec)}`} />
-            <StatCard icon="✅" value={`${snap.connected} / ${snap.missed}`} label="接通 / 未接通" tone={snap.missed > snap.connected ? 'amber' : 'green'} hint={snap.total > 0 ? `接通率 ${Math.round((snap.connected / snap.total) * 100)}%` : ''} />
-            <StatCard icon="📤" value={`${snap.outgoing} / ${snap.incoming}`} label="呼出 / 呼入" tone="blue" />
-            <StatCard icon="🏆" value={fmtClock(snap.longestSec)} label="最长通话" tone="amber" hint={snap.longestPeer || ''} />
-            <StatCard icon="📵" value={snap.ackElsewhere} label="其它设备接听" hint="接通但没有本机时长" />
-          </StatGrid>
+          {/* 6 张统计卡 → 1 条内联 KPI（NV-08）：固定区不再叠三层，图表与列表上移。 */}
+          <div className={css.kpiRow}>
+            <span className={css.kpiItem}><b>{snap.total}</b> 通话</span>
+            <span className={css.kpiItem}><b>{fmtDuration(snap.durationSec)}</b> 总时长</span>
+            <span className={css.kpiItem}><b>{snap.peerCount}</b> 位联系人</span>
+            <span className={css.kpiItem}><b>{snap.connected} / {snap.missed}</b> 接通 / 未接</span>
+            <span className={css.kpiItem}><b>{Math.round((snap.connected / snap.total) * 100)}%</b> 接通率</span>
+            <span className={css.kpiItem}><b>{fmtClock(snap.longestSec)}</b> 最长一通</span>
+          </div>
 
           <div className={kitCss.cardGrid}>
             <Card title="逐月通话" extra={<span className={kitCss.textCaption}>{snap.months.length} 个月</span>}>
@@ -205,9 +206,8 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
             )}
           </Card>
 
-          <div className={kitCss.emptyInline}>
-            口径说明：时长取自通话气泡里的「通话时长 MM:SS」文本（XML 的 duration 字段恒为 0）；
-            「已在其它设备接听」计为接通但不计入时长；语音/视频不做区分（通话 XML 里的类型字段尚无可靠依据）。
+          <div className={kitCss.textMeta}>
+            口径：时长取自通话气泡文本；「其它设备接听」计接通不计时长；语音 / 视频不区分。
           </div>
         </>
       )}

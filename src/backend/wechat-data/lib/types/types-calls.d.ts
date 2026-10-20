@@ -192,6 +192,14 @@ export interface WechatConfigFull {
     whisper_models_dir: string;
     /** Persisted whisper-cli engine path (file or its bin dir). */
     whisper_bin: string;
+    /**
+     * 「用第三方服务取原图」开关（默认 **false**）。
+     *
+     * 打开后，本机没有原图时会用 `cdnbigimgurl` 的 fileid 向 `wxcdn.c3o.re` 请求原图
+     * （**按流量计费**，Free 套餐 50 MB/天）。该服务不是腾讯官方，且需要把本机的
+     * `all_users/config/global_config` 发给它 —— 所以必须默认关闭、由用户显式打开。
+     */
+    wxcdn_original_enabled: boolean;
     resolved?: Record<string, string>;
     /**
      * M1 密钥迁移提示状态（W2-12.3）：`pending` 为真表示 `config.json` 里还留着密钥字段，

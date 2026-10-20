@@ -18,12 +18,8 @@
   font-size: 12px;
 }
 .title {
-  font-weight: 700;
+  font-weight: 600;
   color: var(--nm-text-1);
-  background: linear-gradient(90deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
   flex-shrink: 0;
 }
 .breadcrumb { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
@@ -55,8 +51,6 @@
   padding: 4px 10px;
   border-radius: var(--nm-dense-r);
   cursor: pointer;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
 }
 .backOverlay:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
 .meta { color: var(--nm-text-2); font-size: 11px; margin-left: auto; }
@@ -102,7 +96,7 @@
   min-width: 0;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+  background: var(--nm-bg-1);
   overflow: hidden;
 }
 
@@ -136,7 +130,7 @@
   max-height: 520px;
   border-radius: var(--nm-r-md);
   cursor: grab;
-  background: radial-gradient(ellipse 70% 60% at 50% 40%, color-mix(in srgb, var(--nm-cyan) 6%, transparent), transparent 72%);
+  background: transparent;
 }
 .isoCanvas:active { cursor: grabbing; }
 /* 悬停提示：跟着光标走的小卡（国家 + 好友数 + 前三个城市） */
@@ -147,11 +141,10 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-sm);
-  background: color-mix(in srgb, var(--nm-bg-card) 88%, transparent);
-  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.9);
-  backdrop-filter: blur(8px);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
   pointer-events: none;
   font-size: 11.5px;
   color: var(--nm-text-1);
@@ -220,9 +213,9 @@
   justify-content: center;
   gap: 2px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-sm);
-  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  background: var(--nm-bg-hover);
   color: var(--nm-text-1);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.15s, box-shadow 0.15s, z-index 0s;
@@ -230,22 +223,20 @@
   text-align: center;
 }
 .cell:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+  background: var(--nm-bg-active);
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 18px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
   z-index: 5;
-  transform: scale(1.01);
 }
-.cell[data-leaf='true'] { background: color-mix(in srgb, var(--nm-purple) 10%, transparent); }
-.cell[data-leaf='true']:hover { background: color-mix(in srgb, var(--nm-purple) 22%, transparent); border-color: color-mix(in srgb, var(--nm-purple) 50%, transparent); }
+.cell[data-leaf='true'] { background: var(--nm-bg-hover); }
+.cell[data-leaf='true']:hover { background: var(--nm-bg-active); border-color: var(--nm-border-hover); }
 .cell[data-hovered='true'] {
-  background: color-mix(in srgb, var(--nm-cyan) 26%, transparent);
+  background: var(--nm-bg-active);
   border-color: var(--nm-cyan);
   z-index: 6;
 }
 .cellName {
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -265,8 +256,6 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -302,8 +291,6 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   overflow-y: auto;
   align-content: start;
   max-height: 520px;
@@ -331,7 +318,7 @@
   justify-content: space-between;
   gap: 8px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--nm-text-1);
 }
 .friendsCount { font-size: 11px; color: var(--nm-text-2); font-weight: 500; }
@@ -368,7 +355,7 @@
 }
 .avatarFallback {
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--nm-cyan);
 }
 .friendLabel {

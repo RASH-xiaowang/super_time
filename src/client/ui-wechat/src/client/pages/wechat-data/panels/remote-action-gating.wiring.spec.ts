@@ -35,6 +35,22 @@ const POLICY = resolve(HERE, '../../../../../../../backend/http-remote-policy.js
 
 /** 台账：文件 → 覆盖它的那一句（在 `file` 里必须能原样搜到）。 */
 const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, why: string }>> = {
+  'use-original-harvest.ts': {
+    file: 'settings-steps.tsx',
+    needle: 'onClick={() => { void originalHarvest(',
+    why: '原图自动收割只从「设置 → 图片解码」卡片触发，而设置面板本身是桌面专属（手机态进不去）',
+  },
+  'use-third-party-original.ts': {
+    file: 'settings-steps.tsx',
+    needle: 'onClick={() => { void toggleWxcdn() }}',
+    why: '第三方原图服务的开关与查额度只从「设置 → 图片解码」卡片触发，设置面板本身是桌面专属',
+  },
+  'image-autodownload-card.tsx': {
+    file: 'settings-steps.tsx',
+    needle: '<ImageAutoDownloadCard />',
+    why: '微信原图自动下载（实验）只从「设置 → 图片解码」卡片触发，设置面板本身是桌面专属；'
+      + '它还会往本机微信进程注入组件，手机/浏览器态没有这个入口',
+  },
   'chats-export.tsx': {
     file: 'chats-head-actions.tsx',
     needle: 'disabled={exporting || desktopAction()}',
@@ -72,13 +88,13 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
   },
   'settings-state.tsx': {
     file: 'Settings.tsx',
-    needle: 'if (runtimeCapabilities().isBrowser) return <SettingsBrowserPanel',
-    why: '设置面板在浏览器态整块换视图，这份状态钩子根本不挂载',
+    needle: 'runtimeCapabilities().desktopEquivalent !== true',
+    why: '设置面板在普通浏览器态整块换视图，这份状态钩子根本不挂载；交接态则与桌面端同权限',
   },
   'settings-steps.tsx': {
     file: 'Settings.tsx',
-    needle: 'if (runtimeCapabilities().isBrowser) return <SettingsBrowserPanel',
-    why: '五步配置卡都在设置面板里，手机态由根分派挡下',
+    needle: 'runtimeCapabilities().desktopEquivalent !== true',
+    why: '五步配置卡都在设置面板里，普通浏览器态由根分派挡下；交接态与桌面端同权限',
   },
   'chats-media.tsx': {
     file: 'chats-media.tsx',

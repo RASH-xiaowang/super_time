@@ -18,7 +18,7 @@ import { act } from 'react-dom/test-utils'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NAV_GROUPS, type WechatTab } from '../nav-config.ts'
-import { MOBILE_PRIMARY_TABS, MobileNav, MobileNavHost } from './mobile-nav.tsx'
+import { MOBILE_HIDDEN_TABS, MOBILE_KEEP_TABS, MOBILE_PRIMARY_TABS, MobileNav, MobileNavHost } from './mobile-nav.tsx'
 import { PHONE_QUERY } from './use-media-query.ts'
 
 /** 桌面侧栏真正渲染的 tab（与 WechatDataPanel 的过滤口径一致：非 hidden、非 settings）。 */
@@ -93,8 +93,8 @@ describe('窄视口判定', () => {
   })
 })
 
-describe('「更多」sheet 覆盖桌面侧栏的全部条目', () => {
-  it('打开后每个桌面可见 tab 都在里面，且点它会选中并关 sheet', () => {
+describe('「更多」sheet 覆盖手机端保留的全部条目', () => {
+  it('打开后每个保留 tab 都在里面，且点它会选中并关 sheet', () => {
     stubMatchMedia(true)
     const picked: WechatTab[] = []
     mount(createElement(MobileNav, { active: 'overview', onSelect: (t: WechatTab) => picked.push(t) }))
@@ -104,25 +104,28 @@ describe('「更多」sheet 覆盖桌面侧栏的全部条目', () => {
     act(() => { more.click() })
     const labels = sheetButtons()
 
-    // 覆盖性：桌面侧栏渲染的每个 tab 都能在手机上到达
-    const missing = SIDEBAR_TABS.filter((t) => {
+    // 覆盖性：手机端保留的每个 tab 都能在 sheet 里到达
+    const missing = MOBILE_KEEP_TABS.filter((t) => {
       const item = NAV_GROUPS.flatMap((g) => [...g.items]).find((i) => i.tab === t)
       return item && !labels.includes(item.label)
     })
-    expect(missing, `这些 tab 在手机上到不了：${missing.join(', ')}`).toEqual([])
-    // 反向：sheet 里不许出现桌面侧栏没有的条目（多出来的入口点了会去到不存在的页）
-    const extra = labels.filter((l) => !NAV_GROUPS.flatMap((g) => [...g.items]).some((i) => i.label === l) && l !== '设置')
-    expect(extra, `sheet 里出现了 nav-config 没有的条目：${extra.join(', ')}`).toEqual([])
+    expect(missing, `这些保留 tab 在手机上到不了：${missing.join(', ')}`).toEqual([])
+    // 反向：sheet 里不许出现白名单之外的条目（多出来的入口点了会去到不该在手机上出现的页）
+    const keepLabels = new Set(
+      NAV_GROUPS.flatMap((g) => [...g.items]).filter((i) => MOBILE_KEEP_TABS.includes(i.tab)).map((i) => i.label),
+    )
+    const extra = labels.filter((l) => !keepLabels.has(l) && l !== '设置')
+    expect(extra, `sheet 里出现了白名单之外的条目：${extra.join(', ')}`).toEqual([])
     // hidden 条目不该出现在 sheet 里（桌面侧栏也不渲染它们）
     for (const it of NAV_GROUPS.flatMap((g) => [...g.items]).filter((i) => i.hidden)) {
       expect(labels, `hidden 条目 ${it.tab} 被渲染进了 sheet`).not.toContain(it.label)
     }
 
-    // 点「聊天会话」：选中 + 关 sheet
-    const chats = [...host.querySelectorAll('[role="dialog"] button')]
-      .find((b) => (b.textContent ?? '').includes('聊天会话')) as HTMLElement
-    act(() => { chats.click() })
-    expect(picked).toEqual(['chats'])
+    // 点「朋友圈」（它在白名单里；「聊天会话」是底部栏高频位，不在 sheet 里）
+    const moments = [...host.querySelectorAll('[role="dialog"] button')]
+      .find((b) => (b.textContent ?? '').includes('朋友圈')) as HTMLElement
+    act(() => { moments.click() })
+    expect(picked).toEqual(['moments'])
     expect(host.querySelector('[role="dialog"][aria-label="全部功能"]'), '选完没有关掉 sheet').toBeNull()
   })
 
@@ -159,5 +162,55 @@ describe('「更多」sheet 覆盖桌面侧栏的全部条目', () => {
     expect(more2.hasAttribute('data-active'), 'chats 是高频位，「更多」却高亮了').toBe(false)
     act(() => { r2.unmount(); root2.unmount() })
     h2.remove()
+  })
+})
+
+/**
+ * 手机端**刻意收窄**导航（2026-10-16 手机端重设计）。
+ *
+ * ## 为什么不再要求「覆盖桌面侧栏的全部条目」
+ *
+ * 这条判据原先要求手机端能到达桌面侧栏的**每一个** tab。那是「手机 = 桌面的缩小版」的假设，
+ * 而实测下来它站不住：桌面侧栏有 16 个可见条目，其中 `oplog`（操作日志）在手机上
+ * **横向溢出 104 处**（640px 表格塞进 556px 视口），`calls`（通话记录）本机只有个位数条 ——
+ * 把它们塞进手机 sheet 只是让用户点进一个读不动的页。
+ *
+ * 所以口径改成：**手机端保留一份白名单**（{@link MOBILE_KEEP_TABS}），
+ * 移除的每一条都必须在 {@link MOBILE_HIDDEN_TABS} 里**写明理由**。
+ * 这样「新增 tab 时忘了看手机侧」仍然会红（新 tab 不在白名单里 ⇒ 下面第一条判据红），
+ * 而「刻意移除」必须留下理由，不能悄悄消失。
+ */
+describe('手机端导航白名单（刻意收窄，不是漏了）', () => {
+  it('白名单里的每一条都必须是 NAV_GROUPS 里真实存在的可见 tab（写错 id 会静默少一格）', () => {
+    const all = NAV_GROUPS.flatMap((g) => [...g.items])
+    for (const t of MOBILE_KEEP_TABS) {
+      const item = all.find((i) => i.tab === t)
+      expect(item, `白名单里的 ${t} 在 nav-config 里不存在`).toBeTruthy()
+      expect(item?.hidden, `白名单里的 ${t} 是 hidden 条目（它本来就不该出现在任何导航里）`).not.toBe(true)
+    }
+  })
+
+  it('桌面可见条目 = 白名单 ∪ 高频位 ∪ 移除项（不许有「既没保留也没写理由」的漏网）', () => {
+    const visible = NAV_GROUPS.flatMap((g) => [...g.items])
+      .filter((i) => !i.hidden && i.tab !== 'settings')
+      .map((i) => i.tab)
+    const accounted = new Set<string>([...MOBILE_KEEP_TABS, ...MOBILE_PRIMARY_TABS, ...Object.keys(MOBILE_HIDDEN_TABS)])
+    const unaccounted = visible.filter((t) => !accounted.has(t))
+    expect(unaccounted, `这些桌面可见 tab 既不在手机白名单、也没写移除理由：${unaccounted.join(', ')}`).toEqual([])
+  })
+
+  it('移除的每一条都写了非空理由（没有理由的移除看起来就像漏了）', () => {
+    const entries = Object.entries(MOBILE_HIDDEN_TABS)
+    expect(entries.length, '移除项为空 —— 那这条判据就是恒真的').toBeGreaterThan(0)
+    for (const [tab, why] of entries) {
+      expect(why.length, `移除项 ${tab} 的理由太短（少于 10 字），等于没写`).toBeGreaterThan(10)
+    }
+  })
+
+  it('移除项不许同时出现在白名单或高频位里（自相矛盾）', () => {
+    for (const tab of Object.keys(MOBILE_HIDDEN_TABS)) {
+      expect(MOBILE_KEEP_TABS, `${tab} 既被移除又在白名单里`).not.toContain(tab)
+      expect(MOBILE_PRIMARY_TABS, `${tab} 既被移除又在高频位里`).not.toContain(tab)
+    }
   })
 })

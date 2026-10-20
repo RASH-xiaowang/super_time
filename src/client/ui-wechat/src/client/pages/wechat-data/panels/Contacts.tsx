@@ -1,33 +1,44 @@
 /**
- * 通讯录面板 — React 版，忠实迁移 WeChatPanel 的 contacts 页签：分类统计
- * （联系人/群聊/公众号/服务号/企业微信/群成员/系统/已删除）、拼音首字母
- * 分组、搜索、资料卡（群主/群成员数/所在群/签名/类型）、TA的朋友圈、
- * 发消息、复制用户名、CSV 导出。数据经 DSH 后端 Remote（contact.db 完整语义）。
+ * 通讯录面板 — 微信桌面端风格：36px 工具行（标题 / 搜索 / 筛选 / 更多）、
+ * 5 个分类分段（其余分类进「筛选」菜单）、字母索引（列表 >50 条时显示）、
+ * 多列联系人网格、资料抽屉（群主/群成员数/所在群/签名/类型）、TA 的朋友圈、
+ * 发消息、复制用户名、CSV 导出与导出记录。数据经 DSH 后端 Remote（contact.db 完整语义）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
-import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts, apiSaveFileDialog } from '../api.ts'
+import { apiExportCsv, apiGetAvatarBatched, apiGetContact360, apiGetContacts, apiSaveFileDialog } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Drawer, EmptyMaybeSyncing, LinkButton, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { clickableKey, Drawer, EmptyMaybeSyncing, LinkButton, SearchInput, Segmented } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
+import { useAvatarPrewarm } from './contacts-avatar-prewarm.ts'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
 
-const CATS: ReadonlyArray<{ key: string; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'friend', label: '联系人' },
-  { key: 'group', label: '群聊' },
-  { key: 'official', label: '公众号' },
+/**
+ * 联系人的全部互斥分类（后端 `category` 口径）。
+ * 「全部 / 联系人 / 群聊 / 公众号」在主分段里常驻；其余 5 类收进「筛选」菜单 ——
+ * 它们合计占比低，平铺会把工具行挤成两行。
+ */
+const OTHER_CATS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'service', label: '服务号' },
   { key: 'enterprise', label: '企业微信' },
   { key: 'member', label: '群成员' },
   { key: 'system', label: '系统' },
   { key: 'deleted', label: '已删除' },
+]
+const OTHER_KEYS = new Set(OTHER_CATS.map(c => c.key))
+/** 主分段：4 个常用分类 + 一个「其它」入口（点开筛选菜单）。 */
+const VISIBLE_CATS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'friend', label: '联系人' },
+  { key: 'group', label: '群聊' },
+  { key: 'official', label: '公众号' },
+  { key: 'other', label: '其它' },
 ]
 
 function displayName(c: ContactRow): string {
@@ -54,8 +65,217 @@ function typeLabel(c: ContactRow): string {
 
 /** 头像缓存。 */
 const avatarCache = new Map<string, string | null>()
-/** 头像缓存上限：模块级缓存生命周期等于渲染进程，必须设上限（值为 base64 data URL）。 */
+/** 头像缓存上限（模块级缓存生命周期 = 渲染进程，必须设上限；值同时是**预热条数**上限）。 */
 const AVATAR_CACHE_MAX = 300
+
+/** 字母索引只在列表足够长时才出现（短列表上它只是装饰）。 */
+const INDEX_MIN_ROWS = 50
+
+/** 工具行里的下拉菜单标号。 */
+type ToolMenu = 'filter' | 'more' | null
+
+/** 工具行：标题 + 搜索 + 分类分段 + 筛选 + 更多（窄窗允许换行）。 */
+function ContactsToolbar(props: {
+  search: string
+  onSearch: (v: string) => void
+  total: number
+  cat: string
+  catValue: string
+  segOptions: ReadonlyArray<{ value: string; label: string }>
+  stats: Record<string, number>
+  exporting: boolean
+  onSegChange: (v: string) => void
+  onCat: (key: string) => void
+  onExport: () => void
+  onOpenHistory: () => void
+}): React.JSX.Element {
+  const { search, onSearch, total, cat, catValue, segOptions, stats, exporting, onSegChange, onCat, onExport, onOpenHistory } = props
+  const [menu, setMenu] = useState<ToolMenu>(null)
+  const toolRef = useRef<HTMLDivElement | null>(null)
+  // 点外面 / 按 Esc 关闭菜单（浮层不关会一直挡着列表）。
+  useEffect(() => {
+    if (menu === null) return
+    const onDown = (e: MouseEvent): void => {
+      if (toolRef.current !== null && !toolRef.current.contains(e.target as Node)) setMenu(null)
+    }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMenu(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+  return (
+    <div className={css.toolRow} ref={toolRef}>
+      <span className={css.toolTitle}>通讯录</span>
+      <SearchInput value={search} onChange={onSearch} placeholder="搜索昵称 / 备注 / 微信号 / 全拼" ariaLabel="搜索联系人" className={css.toolSearch} />
+      <span className={css.toolCount}>共 {total.toLocaleString()} 人</span>
+      <span className={css.toolSpacer} />
+      <div
+        className={css.segWrap}
+        /* 「其它」既是当前分类的聚合显示、也是筛选菜单的入口。
+           Radix 单选分段在「点已选中项」时不会再回调 onChange —— 落进「其它」之后
+           想换另一个低频分类时，靠这里补一次菜单开关。 */
+        onClickCapture={(e) => {
+          if (catValue !== 'other') return
+          const btn = (e.target as HTMLElement).closest('button')
+          if (btn?.textContent?.startsWith('其它') === true) setMenu(m => (m === 'filter' ? null : 'filter'))
+        }}
+      >
+        <Segmented
+          options={segOptions}
+          value={catValue}
+          /* 'other' 只是筛选菜单的入口，不直接改分类（菜单项才是真正的分类）。 */
+          onChange={(v) => { if (v === 'other') setMenu(m => (m === 'filter' ? null : 'filter')); else onSegChange(v) }}
+          ariaLabel="联系人分类"
+        />
+      </div>
+      <div className={css.menuWrap}>
+        <button
+          type="button"
+          className={css.toolBtn}
+          aria-haspopup="menu"
+          aria-expanded={menu === 'filter'}
+          data-on={OTHER_KEYS.has(cat) || undefined}
+          onClick={() => { setMenu(m => m === 'filter' ? null : 'filter') }}
+        >筛选 ▾</button>
+        {menu === 'filter' && (
+          <div className={css.menu} role="menu" aria-label="更多联系人分类">
+            <div className={css.menuLabel}>更多分类</div>
+            {OTHER_CATS.map(c => (
+              <button
+                key={c.key}
+                type="button"
+                role="menuitemradio"
+                aria-checked={cat === c.key}
+                className={css.menuItem}
+                data-on={cat === c.key || undefined}
+                onClick={() => { onCat(c.key); setMenu(null) }}
+              >
+                <span>{c.label}</span>
+                <span className={css.menuCount}>{stats[c.key] ?? 0}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className={css.menuWrap}>
+        <button
+          type="button"
+          className={css.toolBtn}
+          aria-haspopup="menu"
+          aria-expanded={menu === 'more'}
+          onClick={() => { setMenu(m => m === 'more' ? null : 'more') }}
+        >更多 ▾</button>
+        {menu === 'more' && (
+          <div className={css.menu} role="menu" aria-label="通讯录更多操作">
+            <button
+              type="button"
+              role="menuitem"
+              className={css.menuItem}
+              onClick={() => { setMenu(null); onExport() }}
+              disabled={exporting}
+              {...desktopActionProps()}
+            >{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
+            {/* 导出记录：与「导出」同处，用户导完就地能查结果/重新导出/清理。 */}
+            <button
+              type="button"
+              role="menuitem"
+              className={css.menuItem}
+              data-open-export-history=""
+              title="查看历史导出：打开文件、复制路径、按原参数重新导出、清理"
+              onClick={() => { setMenu(null); onOpenHistory() }}
+              {...desktopActionProps()}
+            >{desktopAction() ? '导出记录（仅电脑）' : '导出记录'}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 资料抽屉（kit Drawer：实色白底、1px 边框、无模糊）。 */
+function ContactProfileDrawer(props: {
+  profile: ContactRow | null
+  profile360: Contact360Snapshot | null
+  profile360Loading: boolean
+  onClose: () => void
+  onCopyUsername: (c: ContactRow) => void
+  onOpenChat?: ((username: string) => void) | undefined
+  onOpenMoments?: ((username: string) => void) | undefined
+  onSendMessage: (c: ContactRow) => void
+}): React.JSX.Element {
+  const { profile, profile360, profile360Loading, onClose, onCopyUsername, onOpenChat, onOpenMoments, onSendMessage } = props
+  return (
+    <Drawer open={profile !== null} onClose={onClose} title={profile ? displayName(profile) : '联系人资料'} width={460}>
+      {profile && (
+        <>
+          <div className={css.profileHd}>
+            <ContactAvatar c={profile} size={56} />
+            <div className={css.profileNames}>
+              <div className={css.profileName}>{displayName(profile)}</div>
+              <div className={css.profileType}>{typeLabel(profile)}</div>
+            </div>
+          </div>
+          <div className={css.profileRow}><span>微信号</span><code>{profile.username}</code></div>
+          {profile.alias && <div className={css.profileRow}><span>别名</span><span>{profile.alias}</span></div>}
+          {profile.remark && <div className={css.profileRow}><span>备注</span><span>{profile.remark}</span></div>}
+          {profile.nickName && profile.nickName !== profile.displayName && (
+            <div className={css.profileRow}><span>昵称</span><span>{profile.nickName}</span></div>
+          )}
+          {profile.description && <div className={css.profileRow}><span>签名</span><span>{profile.description}</span></div>}
+          {profile.memberCount != null && <div className={css.profileRow}><span>群成员数</span><span>{profile.memberCount} 人</span></div>}
+          {profile.owner && <div className={css.profileRow}><span>群主</span><span>{profile.owner}</span></div>}
+          {profile.groupName && (
+            <div className={css.profileRow}>
+              <span>所在群</span>
+              <LinkButton onClick={() => { onClose(); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</LinkButton>
+            </div>
+          )}
+          {profile360Loading && <div className={css.profileRow}><span>画像</span><span>统计中…</span></div>}
+          {profile360 && (
+            <>
+              <div className={css.profileSection}>社交画像</div>
+              <div className={css.profileRow}><span>消息</span><span>{profile360.messages.count.toLocaleString()} 条{profile360.messages.lastTime ? ` · 最近 ${fmtTs(profile360.messages.lastTime)}` : ''}</span></div>
+              {profile360.messages.firstTime ? (
+                <div className={css.profileRow}><span>认识</span><span>{fmtTs(profile360.messages.firstTime)}</span></div>
+              ) : null}
+              <div className={css.profileRow}><span>朋友圈</span><span>{profile360.moments.count.toLocaleString()} 条</span></div>
+              <div className={css.profileRow}>
+                <span>资金往来</span>
+                <span>转账 {profile360.funds.transfers} · 红包 {profile360.funds.redpackets}</span>
+              </div>
+              {profile360.commonGroups.length > 0 && (
+                <div className={css.profileRow}>
+                  <span>共同群</span>
+                  <span className={css.commonGroups}>
+                    {profile360.commonGroups.map(g => (
+                      <button
+                        key={g.username}
+                        type="button"
+                        className={css.groupChip}
+                        onClick={() => { onClose(); onOpenChat?.(g.username) }}
+                        title={`${g.name} · ${g.memberCount} 人`}
+                      >
+                        {g.name} ({g.memberCount})
+                      </button>
+                    ))}
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+          <div className={css.profileActions}>
+            <button type="button" className={css.catBtn} onClick={() => { onCopyUsername(profile) }}>复制用户名</button>
+            {onOpenMoments && <button type="button" className={css.catBtn} onClick={() => { onClose(); onOpenMoments(profile.username) }}>TA 的朋友圈</button>}
+            <button type="button" className={css.catBtn} onClick={() => { onClose(); onSendMessage(profile) }}>发消息</button>
+          </div>
+        </>
+      )}
+    </Drawer>
+  )
+}
 
 /**
  * Render the contacts panel.
@@ -90,7 +310,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice(4000)
   const [exporting, setExporting] = useState(false)
-  /** 导出记录弹窗开关（入口在工具栏的「导出记录」按钮）。 */
+  /** 导出记录弹窗开关（入口收在工具行的「更多」菜单里）。 */
   const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const jumpToLetter = useCallback((letter: string): void => {
@@ -98,7 +318,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   }, [])
 
   const pager = usePagedList<ContactRow>({
-    pageSize: 200,
+    pageSize: 200, maxItems: 1000,
     fetchPage: async (offset, limit) => {
       // 分类过滤必须交给后端（在分页之前过滤）。此前是在渲染层对**已分页**的
       // 结果再 filter：全局排序（字母 + 全拼）的前 200 条里若恰好没有该类目，
@@ -112,10 +332,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   const searching = search.trim() !== ''
   // 普通浏览：分页逐页加载；搜索时一次性拉全量（用户主动操作），保证跨页搜索结果完整。
   // 搜索与浏览都带上当前分类 —— 后端在分页之前过滤，`total` 才是该视图的真实条数。
-  //
-  // `searching` 与 `cat` 合成一个 effect：两者都是「筛选条件」，变化时都应当**回到第一页
-  // 并回到顶部**（内容真的变了，回到顶部是预期行为）。先前拆成两个 effect 会导致
-  // 挂载时连续 reset 两次，而且第二个 effect 无谓地多触发一轮取数。
+  // `searching` 与 `cat` 合成一个 effect：两者都是「筛选条件」，变化时都应当**回到第一页并回到顶部**。
   useEffect(() => {
     if (searching) {
       let cancelled = false
@@ -145,11 +362,9 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   }, [searching, pager.items, pager.total, pager.loading, pager.error])
 
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current, pager.items.length)
-
-  // 数据落地后安静刷新（有渲染缓存时不闪整页），使新联系/群名及时可见。
-  // 用 `pager.refresh()`（非破坏性，会按**已加载条数**重取）而不是 `reset()`：
-  // `reset()` 会同步清空列表 → 容器高度塌陷 → 浏览器把 scrollTop 钳到 0，
-  // 于是实时同步每约 10 秒就把正在往下翻的用户**弹回顶部**。
+  useAvatarPrewarm(contacts, avatarCache, AVATAR_CACHE_MAX, !searching)
+  // 数据落地后安静刷新：用 `pager.refresh()`（非破坏性）而不是 `reset()`，否则实时同步
+  // 每约 10 秒会把正在往下翻的用户弹回顶部。
   useWechatDataUpdated(() => { if (!searching) pager.refresh() })
 
   // 打开资料卡时异步拉取跨域社交画像（消息/朋友圈/资金/共同群）。
@@ -174,8 +389,8 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
     // 在这里过滤等于对**已分页**的结果再筛，正是"页签有数据却空白"的根因。
     const filtered = contacts.filter((c) => {
       if (!q) return true
-      // 第 85 轮：加上备注拼音（remarkQuanPin）—— 界面上显示的是备注名，
-      // 而此前只索引昵称拼音，实测 280 个有备注的联系人里 270 人搜不到自己显示出来的名字。
+      // 加上备注拼音（remarkQuanPin）—— 界面上显示的是备注名，只索引昵称拼音时，
+      // 实测 280 个有备注的联系人里 270 人搜不到自己显示出来的名字。
       return [displayName(c), c.username, c.alias ?? '', c.remark, c.quanPin ?? '', c.remarkQuanPin ?? ''].some(v => v.toLowerCase().includes(q))
     })
     const map = new Map<string, ContactRow[]>()
@@ -188,10 +403,28 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
     return Array.from(map.entries()).sort((a, b) => (a[0] === '#' ? 1 : b[0] === '#' ? -1 : a[0].localeCompare(b[0])))
   }, [contacts, search])
 
+  /** 当前分类的显示值：其余 5 类在分段上统一显示为「其它」。 */
+  const catValue = OTHER_KEYS.has(cat) ? 'other' : cat
+  /** 「其它」分段上的计数 = 菜单里 5 类之和。 */
+  const otherCount = useMemo(() => OTHER_CATS.reduce((sum, c) => sum + (stats[c.key] ?? 0), 0), [stats])
+  /** 当前落在「其它」里的具体分类名（用于分段文案，避免用户不知道自己在看什么）。 */
+  const otherActiveLabel = OTHER_KEYS.has(cat) ? (OTHER_CATS.find(c => c.key === cat)?.label ?? '') : ''
+  const segOptions = useMemo(() => VISIBLE_CATS.map((c) => {
+    // 页签计数一律取全量口径的 stats —— `total` 现在是**当前类目**的条数。
+    const n = c.key === 'all' ? (stats.all ?? total) : c.key === 'other' ? otherCount : (stats[c.key] ?? 0)
+    const label = c.key === 'other' && otherActiveLabel ? `其它 · ${otherActiveLabel}` : c.label
+    return { value: c.key, label: `${label}${n > 0 ? ` (${n})` : ''}` }
+  }), [stats, total, otherCount, otherActiveLabel])
+
+  /** 分段点击：'other' 只是筛选菜单的入口，不直接改分类。 */
+  const onSegChange = (v: string): void => {
+    if (v === 'other') return
+    setCat(v)
+  }
+
   const doExport = async (): Promise<void> => {
-    // 先让用户选路径：此前是后端把文件写死在 `<数据根>/exports/` 下、界面只回报一个
-    // 用户既没选过也很难找到的路径。默认文件名带上当前分类与日期，便于区分多次导出。
-    const catLabel = CATS.find(c => c.key === cat)?.label ?? '全部'
+    // 先让用户选路径：默认文件名带上当前分类与日期，便于区分多次导出。
+    const catLabel = cat === 'all' ? '全部' : (OTHER_CATS.find(c => c.key === cat)?.label ?? (cat === 'friend' ? '联系人' : cat === 'group' ? '群聊' : '公众号'))
     const d = new Date()
     const p = (n: number): string => String(n).padStart(2, '0')
     const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
@@ -229,45 +462,27 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
     onNavigate?.('chats')
   }
 
+  // 字母索引只对足够长的列表有意义；搜索态下它也没用（结果集已经很小）。
+  const showIndex = !searching && total > INDEX_MIN_ROWS
+
   return (
     <div className={css.panel}>
-      <Toolbar
-        left={(
-          <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索昵称 / 备注 / 微信号 / 全拼" ariaLabel="搜索联系人" />
-        )}
-        right={(
-          <>
-            <Segmented
-              options={CATS.map((c) => {
-                // 页签计数一律取全量口径的 stats（含 all）—— `total` 现在是**当前类目**的条数，
-                // 拿它当「全部」的计数会把「全部(2150)」显示成「全部(282)」。
-                const n = c.key === 'all' ? (stats.all ?? total) : (stats[c.key] ?? 0)
-                return { value: c.key, label: `${c.label}${n > 0 ? ` (${n})` : ''}` }
-              })}
-              value={cat}
-              onChange={(v) => { setCat(v) }}
-              ariaLabel="联系人分类"
-            />
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
-            {/* 导出记录：入口与「导出」放在一起。
-                原先挂在「设置 → 高级设置」里 —— 那是低频维护分组，而导出是通讯录这一屏
-                的动作；用户在这里点完导出，查看结果/重新导出应当就在同一处。 */}
-            <button
-              type="button"
-              className={css.catBtn}
-              data-open-export-history=""
-              onClick={() => { setHistoryOpen(true) }}
-              title="查看历史导出：打开文件、复制路径、按原参数重新导出、清理"
-            {...desktopActionProps()}>{desktopAction() ? '导出记录（仅电脑）' : '导出记录'}</button>
-          </>
-        )}
+      <ContactsToolbar
+        search={search} onSearch={setSearch} total={total}
+        cat={cat} catValue={catValue} segOptions={segOptions} stats={stats}
+        exporting={exporting}
+        onSegChange={onSegChange} onCat={setCat}
+        onExport={() => { void doExport() }}
+        onOpenHistory={() => { setHistoryOpen(true) }}
       />
       {notice && <div className={css.notice}>{notice}</div>}
-      <div className={css.indexBar} aria-hidden="false">
-        {grouped.map(([letter]) => (
-          <button key={letter} type="button" className={css.indexLetter} onClick={() => { jumpToLetter(letter) }} aria-label={'跳到字母 ' + (letter === '#' ? '其他' : letter)}>{letter === '#' ? '其' : letter}</button>
-        ))}
-      </div>
+      {showIndex && (
+        <div className={css.indexBar} aria-hidden="false">
+          {grouped.map(([letter]) => (
+            <button key={letter} type="button" className={css.indexLetter} onClick={() => { jumpToLetter(letter) }} aria-label={'跳到字母 ' + (letter === '#' ? '其他' : letter)}>{letter === '#' ? '其' : letter}</button>
+          ))}
+        </div>
+      )}
       <div className={css.scroll} ref={scrollRef}>
         {/* 骨架必须与真实栅格同形（U3）：真实内容是 `.list` 的多列网格
             （`repeat(auto-fill, minmax(240px, 1fr))`，实测排 3–5 列），
@@ -281,97 +496,39 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
             {/* `#` 是「没有任何拼音可依」的兜底桶（微信只为加过好友的联系人写拼音首字母，
                 群成员常常两列全空）。标成「其他」而不是让用户以为分组坏了。 */}
             <div className={css.letterHd}>{letter === '#' ? '其他' : letter}（{list.length}）</div>
-            {/* 多列网格：分组头独占一行，组内联系人按 `flex: 1 1 240px` 自动排 3–5 列。
-                原先单列全宽时，每行只有「36px 头像 + 名字 + 类型」，右侧整片空白。 */}
             <div className={css.list}>
               {list.map(c => (<ContactRowItem key={c.username} c={c} onOpen={() =>{  setProfile(c) }} />))}
             </div>
           </div>
         ))}
-        {!loading && !error && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
+        {!loading && !error && !searching && (pager.capped ? <CapNote loaded={contacts.length} total={total} /> : pager.hasMore && <ListSentinel refFn={loadMoreRef} />)}
       </div>
 
-      {/* 资料卡抽屉 */}
-      <Drawer open={profile !== null} onClose={() => { setProfile(null) }} title={profile ? displayName(profile) : '联系人资料'} width={460}>
-        {profile && (
-          <>
-            <div className={css.profileHd}>
-              <ContactAvatar c={profile} size={56} />
-              <div className={css.profileNames}>
-                <div className={css.profileName}>{displayName(profile)}</div>
-                <div className={css.profileType}>{typeLabel(profile)}</div>
-              </div>
-            </div>
-            <div className={css.profileRow}><span>微信号</span><code>{profile.username}</code></div>
-            {profile.alias && <div className={css.profileRow}><span>别名</span><span>{profile.alias}</span></div>}
-            {profile.remark && <div className={css.profileRow}><span>备注</span><span>{profile.remark}</span></div>}
-            {profile.nickName && profile.nickName !== profile.displayName && (
-              <div className={css.profileRow}><span>昵称</span><span>{profile.nickName}</span></div>
-            )}
-            {profile.description && <div className={css.profileRow}><span>签名</span><span>{profile.description}</span></div>}
-            {profile.memberCount != null && <div className={css.profileRow}><span>群成员数</span><span>{profile.memberCount} 人</span></div>}
-            {profile.owner && <div className={css.profileRow}><span>群主</span><span>{profile.owner}</span></div>}
-            {profile.groupName && (
-              <div className={css.profileRow}>
-                <span>所在群</span>
-                <LinkButton onClick={() => { setProfile(null); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</LinkButton>
-              </div>
-            )}
-            {profile360Loading && <div className={css.profileRow}><span>画像</span><span>统计中…</span></div>}
-            {profile360 && (
-              <>
-                <div className={css.profileSection}>社交画像</div>
-                <div className={css.profileRow}><span>消息</span><span>{profile360.messages.count.toLocaleString()} 条{profile360.messages.lastTime ? ` · 最近 ${fmtTs(profile360.messages.lastTime)}` : ''}</span></div>
-                {profile360.messages.firstTime ? (
-                  <div className={css.profileRow}><span>认识</span><span>{fmtTs(profile360.messages.firstTime)}</span></div>
-                ) : null}
-                <div className={css.profileRow}><span>朋友圈</span><span>{profile360.moments.count.toLocaleString()} 条</span></div>
-                <div className={css.profileRow}>
-                  <span>资金往来</span>
-                  <span>转账 {profile360.funds.transfers} · 红包 {profile360.funds.redpackets}</span>
-                </div>
-                {profile360.commonGroups.length > 0 && (
-                  <div className={css.profileRow}>
-                    <span>共同群</span>
-                    <span className={css.commonGroups}>
-                      {profile360.commonGroups.map(g => (
-                        <button
-                          key={g.username}
-                          type="button"
-                          className={css.groupChip}
-                          onClick={() => { setProfile(null); onOpenChat?.(g.username) }}
-                          title={`${g.name} · ${g.memberCount} 人`}
-                        >
-                          {g.name} ({g.memberCount})
-                        </button>
-                      ))}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-            <div className={css.profileActions}>
-              <button type="button" className={css.catBtn} onClick={() => { void copyUsername(profile) }}>复制用户名</button>
-              {onOpenMoments && <button type="button" className={css.catBtn} onClick={() => { setProfile(null); onOpenMoments(profile.username) }}>TA 的朋友圈</button>}
-              <button type="button" className={css.catBtn} onClick={() => { setProfile(null); sendMessage(profile) }}>发消息</button>
-            </div>
-          </>
-        )}
-      </Drawer>
+      <ContactProfileDrawer
+        profile={profile} profile360={profile360} profile360Loading={profile360Loading}
+        onClose={() => { setProfile(null) }}
+        onCopyUsername={(c) => { void copyUsername(c) }}
+        onOpenChat={onOpenChat}
+        onOpenMoments={onOpenMoments}
+        onSendMessage={sendMessage}
+      />
 
-      {/* 导出记录弹窗。入口在工具栏「导出记录」按钮 —— 与「导出 CSV」同处，
-          用户导完就地能查结果/重新导出/清理，不必再跳设置。
-          默认预筛「通讯录」，与本屏上下文一致（可在下拉里改回「全部」）。 */}
-      {/* 手机态**不挂载**（真机量到：弹窗即使关着，挂载时也会打一次 `getExportHistory` —— 分页器不看 `open`，而那不在远程白名单里）。只禁用入口只解决「点不到」，不解决「界面自己发出去」。 */} {!desktopAction() && <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />}
+      {/* 导出记录弹窗。入口收在工具行「更多」里 —— 与「导出 CSV」同处；
+          手机态**不挂载**（真机量到：弹窗即使关着，挂载时也会打一次 `getExportHistory` ——
+          分页器不看 `open`，而那不在远程白名单里）。 */}
+      {!desktopAction() && <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />}
     </div>
   )
 }
 
+/** 「已加载前 N 位」提示条（触到 `usePagedList` 的 `maxItems` 上界时显示）。 */
+function CapNote({ loaded, total }: { loaded: number; total: number }): React.JSX.Element {
+  return <div className={css.capNote} role="status">已加载前 {loaded} 位（共 {total} 位）。要找人请用上方搜索。</div>
+}
+
 /** 联系人行（含懒加载头像）。 */
 function ContactRowItem({ c, onOpen }: { c: ContactRow; onOpen: () => void }): React.JSX.Element {
-  // 次要行补上有信息量的字段（此前只有类型，多列网格下右半格是空的）：
-  //   群聊 → 类型 + 成员数（"群聊 · 486 人"）
-  //   其余 → 类型 + 微信号（长了会按 CSS 省略号截断）
+  // 次要行补上有信息量的字段：群聊 → 类型 + 成员数；其余 → 类型 + 微信号（CSS 省略号截断）。
   const meta = c.memberCount != null && c.memberCount > 0
     ? `${typeLabel(c)} · ${c.memberCount} 人`
     : (c.username ? `${typeLabel(c)} · ${c.username}` : typeLabel(c))
@@ -396,14 +553,15 @@ function ContactAvatar({ c, size }: { c: ContactRow; size: number }): React.JSX.
     let cancelled = false
     if (!key) return
     // 快照里的 avatarUrl 只有**本机地址**才能直接当 src：远程地址不许由渲染层自己去要（M23 ——
-    // 那两个出网开关管不到 `<img>` 自己发的请求）。实测 1,994 个联系人里 1,594 个是 https、
-    // 400 个是 http，所以这里命中不了时**继续往下走** `apiGetAvatar`，那一层会把远程地址
-    // 交给后端代理（本机离线头像优先，其次代理远端图；都拿不到才算没有头像）。
+    // 那两个出网开关管不到 `<img>` 自己发的请求）。命中不了时**继续往下走** `apiGetAvatarBatched`，
+    // 那一层会把远程地址交给后端代理（本机离线头像优先，其次代理远端图；都拿不到才算没有头像）。
     const local = localImageSrc(c.avatarUrl)
     if (local) { setSrc(local); return }
     const cached = avatarCache.get(key)
     if (cached !== undefined) { setSrc(cached); return }
-    apiGetAvatar({ username: key })
+    // 走攒批队列：一屏 N 个联系人合成一次 `getAvatarsLocal`，而不是 N 次 `getAvatar`。
+    // 通讯录一屏最多 1000 行（`maxItems`），逐张发就是 1000 次 RPC。
+    apiGetAvatarBatched({ username: key })
       .then((r) => {
         const v = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, v, AVATAR_CACHE_MAX)
@@ -416,7 +574,7 @@ function ContactAvatar({ c, size }: { c: ContactRow; size: number }): React.JSX.
     return <img src={src} alt="" className={`${css.avatarImg} ${css.avatarImgRound}`} width={size} height={size} loading="lazy" />
   }
   const letter = displayName(c).slice(0, 1).toUpperCase()
-  // 第 88 轮：底色 + 文字色一起由 avatarColors 给（白字在 hsl(h 45% 55%) 上 360 个色相只有 57 个达标）
+  // 底色 + 文字色一起由 avatarColors 给（白字在 hsl(h 45% 55%) 上 360 个色相只有 57 个达标）
   const av = avatarColors(c.username || displayName(c))
   return <div className={css.avatar} style={{ width: size, height: size, background: av.background, color: av.color }}>{letter}</div>
 }

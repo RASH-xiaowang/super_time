@@ -61,7 +61,11 @@ export interface RemoteAccessState {
 export interface RemoteAccessDeps {
   getDataRoot: () => string;
   getUiDistDir: () => string;
+  /** 后端解析出的 decoded_images 根；浏览器端 `/api/media/...` 流式读图用。 */
+  getDecodedRoot?: () => string;
   gatedCall: (method: string, args: unknown[]) => Promise<unknown>;
+  /** 桌面交接会话的原生能力代理（目录/文件对话框、截图、许可证、诊断、更新等）。 */
+  nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   callQueue?: unknown;
   pairings?: unknown;
   authLimiter?: AuthLimiter;
@@ -80,7 +84,8 @@ export interface RemoteAccessServer {
   syncWithConfig(): Promise<RemoteAccessState>;
   refreshBinding(): Promise<void>;
   isRunning(): boolean;
-  issuePairingCode(): string;
+  /** 发一个配对码；`fullAccess:true` = 「打开网页」交接码（换来的会话与桌面同权限）。 */
+  issuePairingCode(options?: { fullAccess?: boolean }): string;
 }
 
 /** 本机可用于局域网访问的 IPv4 地址（已按适配度排序）。 */

@@ -63,3 +63,12 @@
   gap: var(--nm-dense-g3);
   min-width: 0;
 }
+
+/* ── 手机档（≤560）：段条收窄 ──
+   段条（「聊天消息 / 撤回消息」这类视图切换）在手机档是筛选区的一部分，
+   基础档的 `padding-bottom: var(--nm-dense-g3)`（6px）在这里是纯留白 ——
+   下面紧跟着的 `.search` 自己带 6px 上内边距，两者相加 12px 的缝在 375px 上太宽。
+   收掉之后段条从 48px 降到 42px。 */
+@media (max-width: 560px) {
+  .bar { padding-bottom: 0; }
+}

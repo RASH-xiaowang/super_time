@@ -3,8 +3,8 @@
    不引入新色值。 */
 
 .rail {
-  flex: 0 0 176px;
-  width: 176px;
+  flex: 0 0 156px;
+  width: 156px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -21,7 +21,6 @@
   gap: var(--nm-dense-g2);
   padding: 0 var(--nm-dense-g2) 0 var(--nm-dense-g3);
   font-size: var(--nm-dense-fs-xs);
-  letter-spacing: 0.08em;
   color: var(--nm-text-3);
 }
 
@@ -79,9 +78,10 @@
 .kbRow {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: var(--nm-dense-row-y) var(--nm-dense-g3);
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px var(--nm-dense-g3);
   border: 0;
   border-radius: var(--nm-r-sm);
   background: transparent;
@@ -92,8 +92,8 @@
   transition: background var(--nm-t-fast);
 }
 .kbRow:hover { background: var(--nm-bg-hover); }
-.kbRow[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-cyan); }
-.kbRow:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+.kbRow[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-brand); }
+.kbRow:focus-visible { outline: 2px solid var(--nm-brand); outline-offset: -2px; }
 
 .kbName {
   min-width: 0;
@@ -108,6 +108,8 @@
 .kbRow[data-on] .kbName { color: var(--nm-text-1); }
 
 .kbMeta {
+  flex: 0 0 auto;
+  margin-left: auto;
   font-size: var(--nm-dense-fs-xs);
   color: var(--nm-text-3);
   font-variant-numeric: tabular-nums;
@@ -188,7 +190,7 @@
   padding: 6px var(--nm-dense-g3);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: var(--nm-bg-1);
+  background: transparent;
   color: var(--nm-text-2);
   font-size: var(--nm-dense-fs-xs);
   text-align: left;
@@ -203,8 +205,6 @@
   border-color: var(--nm-cyan-20);
   background: var(--nm-cyan-10);
 }
-
-.modelIcon { flex: 0 0 auto; font-size: 12px; }
 
 .modelText {
   min-width: 0;

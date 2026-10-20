@@ -43,16 +43,28 @@ export function Segmented({ options, value, onChange, ariaLabel }: {
   onChange: (value: string) => void
   ariaLabel?: string
 }): React.JSX.Element {
+  /*
+   * ⚠️ Radix `ToggleGroup` **不接受空字符串作为 item value**（2026-10-17 实测踩到）：
+   * `''` 是它内部的「无选中」哨兵 —— 传 `value=''` 时它认为**没有任何项被选中**，
+   * 于是「全部」这一项永远不高亮；点它时 Radix 认为「已经是空」，`onValueChange` 不再回调
+   * ⇒ 表现为「**只能点一次**」（ClawBot 收/发筛选的「全部」、操作日志的「全部」等）。
+   *
+   * 修法：内部把空字符串换成哨兵 `'\u0000empty'`（不可能与真实值撞），对外仍原样传 `''`。
+   * 这样 Radix 眼里「全部」是一个**正常的、非空的值**，选中/切换都正常。
+   */
+  const EMPTY = '\u0000empty'
+  const toRadix = (v: string): string => (v === '' ? EMPTY : v)
+  const fromRadix = (v: string): string => (v === EMPTY ? '' : v)
   return (
     <ToggleGroup.Root
       className={overlayCss.seg}
       type="single"
-      value={value}
+      value={toRadix(value)}
       aria-label={ariaLabel}
-      onValueChange={(v) => { if (v) onChange(v) }}
+      onValueChange={(v) => { if (v !== '') onChange(fromRadix(v)) }}
     >
       {options.map(o => (
-        <ToggleGroup.Item key={o.value} className={overlayCss.segItem} value={o.value}>
+        <ToggleGroup.Item key={o.value} className={overlayCss.segItem} value={toRadix(o.value)}>
           {o.label}
         </ToggleGroup.Item>
       ))}

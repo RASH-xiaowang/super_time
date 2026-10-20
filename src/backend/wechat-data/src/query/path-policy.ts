@@ -85,9 +85,18 @@ export function isInsideRoot(child: string, root: string): boolean {
  * 「交给系统打开」的拒绝理由（返回 null = 允许）。
  * @param target - 要打开的路径（文件或目录）。
  * @param dataRoot - 数据根（`dirname(decryptedDir)`）—— 应用自己的产出都在这里。
+ * @param extraRoots - 额外的允许根（2026-10-17 新增）。
+ *
+ *   **为什么需要它**：应用有**两个**自己的数据目录，它们是兄弟关系：
+ *     · `<userData>/wechat-data/` —— 解密快照、导出、缓存（= `dataRoot`）；
+ *     · `<userData>/wechat/` —— `config.json` / `llm.json` / `logs/`（配置与日志）。
+ *   而设置弹窗底部那个「配置: wechat/config.json ↗」要打开的是**后者** ——
+ *   它不在 `dataRoot` 之下，于是被这条政策拒掉，用户看到的就是「点了没反应」
+ *   （真机实测：`openPath` 返回 `ok:false` + 「只能打开应用自己数据目录内的文件」）。
+ *   两者都是应用自己产出的东西，安全口径完全一致，所以由调用方把配置目录传进来。
  * @returns 给用户看的中文理由，或 null。
  */
-export function openDenialReason(target: string, dataRoot: string): string | null {
+export function openDenialReason(target: string, dataRoot: string, extraRoots: readonly string[] = []): string | null {
   const raw = String(target ?? '').trim()
   if (raw === '') return '没有给出要打开的路径'
   const abs = resolve(raw)
@@ -96,6 +105,9 @@ export function openDenialReason(target: string, dataRoot: string): string | nul
     return `出于安全不打开可执行文件（${ext}）：请只在资源管理器里定位数据文件`
   }
   if (isInsideRoot(abs, dataRoot)) return null
+  for (const r of extraRoots) {
+    if (isInsideRoot(abs, r)) return null
+  }
   for (const g of grantedRoots) {
     if (isInsideRoot(abs, g)) return null
   }

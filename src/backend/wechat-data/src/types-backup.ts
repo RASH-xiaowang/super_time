@@ -130,3 +130,35 @@ export interface TaskMutationResult {
   added?: number
   error?: string
 }
+
+/** One chat resource collection task（新建任务：保留某会话最近 N 条文本 + M 张图片）。 */
+export interface ChatCollectTask {
+  id: number
+  username: string
+  displayName: string
+  /** 创建时选择的文本条数。 */
+  textLimit: number
+  /** 创建时选择的图片张数。 */
+  imageLimit: number
+  /** 实际保留的文本条数。 */
+  textCount: number
+  /** 实际落盘的图片张数（解码失败的图片不计入）。 */
+  imageCount: number
+  /** 资源目录：texts.json / images/ / task.json 所在。 */
+  dir: string
+  createdAt: number
+}
+
+/** 收集任务列表快照。 */
+export interface ChatCollectTaskSnapshot {
+  items: ChatCollectTask[]
+  total: number
+  readError?: string
+}
+
+/** 收集任务创建结果。 */
+export interface ChatCollectTaskResult {
+  ok: boolean
+  task?: ChatCollectTask
+  error?: string
+}

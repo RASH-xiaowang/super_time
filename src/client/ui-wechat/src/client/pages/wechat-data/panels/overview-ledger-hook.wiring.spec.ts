@@ -10,7 +10,8 @@
  * 只有真窗口跑一遍才暴露 —— 而那一步不在 CI 里。所以在这里先把两端对齐一次。
  * @vitest-environment node
  */
-import { dirname } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { findRoot, readStripped } from '../../../test-helpers/wiring-kit.ts'
@@ -18,9 +19,14 @@ import { findRoot, readStripped } from '../../../test-helpers/wiring-kit.ts'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = findRoot(HERE)
 const HOOK = 'data-st-ledger-money'
-/** 剥过注释的源码（注释里讲这个属性的历史，不该被当成"代码里出现了一次"）。 */
-const panel = () => readStripped(`${HERE}/overview-panel.tsx`)
-const harness = () => readStripped(`${ROOT}/scripts/ledger-reload-e2e.mjs`)
+/** 剥过注释的源码（注释里讲这个属性的历史，不该被当成"代码里出现了一次"）。
+ *  M22 把资金卡拆进 `overview-sections.tsx#LedgerSection`，读取面改成全部 overview* 源码的联合。 */
+const panel = (): string => readdirSync(HERE)
+  .filter((f) => /^overview(-[a-z]+)?\.(ts|tsx)$/.test(f))
+  .sort()
+  .map((f) => readStripped(join(HERE, f)))
+  .join('\n')
+const harness = (): string => readStripped(`${ROOT}/scripts/ledger-reload-e2e.mjs`)
 
 describe('资金快照那一格的真窗口钩子', () => {
   it('面板里有这个属性，且挂在那一格 metricGrid 上（不是随手加在别的容器上）', () => {

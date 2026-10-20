@@ -69,6 +69,22 @@ export declare function completeBinding(decryptedDir: string, identity: {
  * @returns 落库后的绑定行。
  */
 export declare function unbindBinding(decryptedDir: string, slot?: number): ClawbotBinding;
+/**
+ * 给实例起别名（`label`；2026-10-16）。
+ *
+ * 与 `completeBinding` / `unbindBinding` **刻意分开**：那两条是绑定状态机的一部分
+ * （会清凭证、改 status），而别名是纯用户偏好 —— 它必须活过重新绑定，也不该因为
+ * 解绑而消失。所以这里只动 `label` 与 `updated_at` 两列。
+ *
+ * 归一：首尾空白去掉；空串 / 全空白 ⇒ 存 `NULL`（=「没起别名」，界面回落到昵称）。
+ * 长度上限 40 字符（超出截断而不是抛错 —— 别名是展示用的，截断比拒绝更友好）。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @param label - 新别名（空串 = 清除别名）。
+ * @returns 落库后的绑定行。
+ * @throws 实例不存在时抛可读中文（调用方按 message 展示）。
+ */
+export declare function renameBinding(decryptedDir: string, slot: number, label: string): ClawbotBinding;
 /** 会话凭证（iLink 绑定确认后由服务端下发；只进 worker 内部）。 */
 export interface BindingCredentials {
     botToken: string;
@@ -114,3 +130,17 @@ export declare function saveSyncBuf(decryptedDir: string, buf: string, slot?: nu
  * @param token - 非空令牌。
  */
 export declare function saveSendContextToken(decryptedDir: string, token: string, slot?: number): void;
+/**
+ * 读**全部** slot 的 iLink 机器人 id（`ilink_bot_id`；2026-10-17 补全实例信息）。
+ *
+ * 为什么单独开一个函数而不是并进 {@link readBindings}：`ilink_bot_id` 住在**凭证列组**里，
+ * 而 `SELECT_COLUMNS` 是「公开列」白名单 —— 把凭证列并进去等于把 `bot_token` 也一起
+ * 带进渲染层快照（那正是本仓反复强调不许发生的事）。这里只挑**一个非敏感列**出来，
+ * 让实例卡能显示「这个实例挂在哪个 bot 上」。
+ *
+ * `ilink_bot_id` 是**公开标识**（bot 的编号），不是密钥：真正的密钥是 `bot_token`，
+ * 它仍然只走 {@link readBindingInternal}。未绑定 / 老库无此列 ⇒ 该 slot 不出现在结果里。
+ * @param decryptedDir - 解密数据根。
+ * @returns `slot → botId` 映射（读失败返回空映射，不抛 —— 它是展示增强，不该拖垮实例列表）。
+ */
+export declare function readBotIds(decryptedDir: string): Record<number, string>;

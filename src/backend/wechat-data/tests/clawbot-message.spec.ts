@@ -126,13 +126,16 @@ describe('clawbot 接入会话：写入与检索', () => {
     expect(snap.readError ?? '').toContain('接入会话读取失败')
   })
 
-  it('计数：today 只数 ts >= since 的行，total 数全量；库不存在时全 0', () => {
+  it('计数：today 只数 ts >= since 的行，total 数全量，lastTs 取 MAX(ts)；库不存在时全 0', () => {
     const dir = root()
-    expect(clawbotMessageCounts(dir, { since: 0 })).toEqual({ today: 0, total: 0 })
+    expect(clawbotMessageCounts(dir, { since: 0 })).toEqual({ today: 0, total: 0, lastTs: 0 })
     insertClawbotMessage(dir, { ts: 100, direction: 'in', content: 'a' })
     insertClawbotMessage(dir, { ts: 200, direction: 'in', content: 'b' })
     insertClawbotMessage(dir, { ts: 300, direction: 'out', content: 'c' })
-    expect(clawbotMessageCounts(dir, { since: 200 })).toEqual({ today: 2, total: 3 })
+    expect(clawbotMessageCounts(dir, { since: 200 })).toEqual({ today: 2, total: 3, lastTs: 300 })
+    // lastTs 是 MAX(ts) 而不是「最后一行的 ts」：先插晚的、再插早的，仍取最大值。
+    insertClawbotMessage(dir, { ts: 50, direction: 'in', content: 'd' })
+    expect(clawbotMessageCounts(dir, { since: 0 }).lastTs).toBe(300)
   })
 
   it('库里是原生表结构：direction 只接受 in/out（脏值按 in 归一，不抛）', () => {
@@ -165,17 +168,17 @@ describe('clawbot 接入会话：附件列', () => {
     const dir = root()
     const id = insertClawbotMessage(dir, {
       ts: 1, direction: 'in', msgType: 'file', content: '[文件] 报表.xlsx',
-      media: { kind: 'file', ref: 'enc-param-1', key: 'a2V5', name: '报表.xlsx', size: 2048 },
+      media: { kind: 'file', ref: 'enc-param-1', key: 'a2V5', name: '报表.xlsx', size: 2048, duration: null },
     })
     expect(id).toBe(1)
     const row = listClawbotMessages(dir).items[0]
-    expect(row?.media).toEqual({ kind: 'file', name: '报表.xlsx', size: 2048 })
+    expect(row?.media).toEqual({ kind: 'file', name: '报表.xlsx', size: 2048, duration: null })
     // 公开行里不许出现取数引用与密钥（它们只在内部读里）。
     expect(JSON.stringify(row)).not.toContain('enc-param-1')
     expect(JSON.stringify(row)).not.toContain('a2V5')
 
     const internal = readClawbotMessageInternal(dir, 1)
-    expect(internal?.media).toEqual({ kind: 'file', ref: 'enc-param-1', key: 'a2V5', name: '报表.xlsx', size: 2048 })
+    expect(internal?.media).toEqual({ kind: 'file', ref: 'enc-param-1', key: 'a2V5', name: '报表.xlsx', size: 2048, duration: null })
   })
 
   it('纯文本行 media 为 null；不存在的行内部读为 null', () => {

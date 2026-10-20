@@ -27,6 +27,7 @@ import type { WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/
 const mocks = vi.hoisted(() => ({
   apiGetNewMessages: vi.fn(),
   apiGetMessages: vi.fn(),
+  apiGetDataRevision: vi.fn(),
   readRenderCache: vi.fn(),
   writeRenderCache: vi.fn(),
   SNAPSHOT_REFRESHED_EVENT: 'dsh-snapshot-refreshed',
@@ -41,8 +42,8 @@ const { SNAPSHOT_REFRESHED_EVENT } = await import('../cache.ts')
 const CUR = { username: 'wxid_poll', displayName: '轮询夹具', type: 'private' } as WechatSession
 const OTHER = { username: 'wxid_other', displayName: '另一个会话', type: 'private' } as WechatSession
 
-/** 钩子返回值（测试从这里取 pollNew / reconcileRecent）。 */
-let api: { pollNew: () => Promise<void>; reconcileRecent: () => Promise<void> } | null = null
+/** 钩子返回值（测试从这里取 pollNew / reconcileRecent / 新消息浮标）。 */
+let api: { pollNew: () => Promise<number>; reconcileRecent: () => Promise<void>; newMsgCount: number; jumpToLatest: () => void } | null = null
 
 /** 面板那侧被模拟的 state：只保留本族用得上的行为（**延后的** updater + 身份比较）。 */
 let msgs: readonly WechatMessage[] = []
@@ -56,6 +57,9 @@ let liveEpoch = 0
 let liveTalker = CUR.username
 let session: WechatSession | null = CUR
 let inFlight = false
+let revisionFeed = 0
+/** 消息区滚动容器（新消息「跟随 / 只提示」的判据）。 */
+let scrollBox: HTMLDivElement
 
 let host: HTMLDivElement
 let root: Root
@@ -67,7 +71,8 @@ function Harness(): React.JSX.Element {
   api = useChatsPolling({
     curSession: session,
     inFlightRef: { get current() { return inFlight }, set current(v: boolean) { inFlight = v } } as React.MutableRefObject<boolean>,
-    msgEndRef: { current: document.createElement('div') } as React.RefObject<HTMLDivElement>,
+    msgScrollRef: { current: scrollBox } as React.MutableRefObject<HTMLDivElement | null>,
+    messagesLen: msgs.length,
     sessionAlive: (epoch, talker) => epoch === liveEpoch && talker === liveTalker,
     sessionEpochRef: { get current() { return liveEpoch }, set current(v: number) { liveEpoch = v } } as React.MutableRefObject<number>,
     setMessages: (u) => {
@@ -100,6 +105,7 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback): number => { cb(0); return 1 })
   mocks.apiGetNewMessages.mockReset().mockResolvedValue({ messages: [] })
   mocks.apiGetMessages.mockReset().mockResolvedValue({ messages: [] })
+  mocks.apiGetDataRevision.mockReset().mockResolvedValue({ revision: 0, updatedAt: 0, shards: [], messageChanged: false })
   mocks.writeRenderCache.mockReset()
   mocks.readRenderCache.mockReset().mockReturnValue(null)
   msgs = []
@@ -113,6 +119,7 @@ beforeEach(() => {
   liveTalker = CUR.username
   session = CUR
   inFlight = false
+  scrollBox = document.createElement('div')
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -147,6 +154,18 @@ function commit(): void {
 const pollRaw = async (): Promise<void> => { await act(async () => { await api?.pollNew() }) }
 const poll = async (): Promise<void> => { await pollRaw(); commit() }
 const reconcile = async (): Promise<void> => { await act(async () => { await api?.reconcileRecent() }); commit() }
+
+/** 连续 flush：refresh 里串了「修订 → 增量 → 对账」三段 await。 */
+async function settle(): Promise<void> { for (let i = 0; i < 6; i += 1) await flush() }
+
+/** 让后端修订每被读一次就 +1（模拟「每次触发都有新数据」）。 */
+function primeRevisionFeed(): void {
+  revisionFeed = 0
+  mocks.apiGetDataRevision.mockImplementation(async () => {
+    revisionFeed += 1
+    return { revision: revisionFeed, updatedAt: Date.now(), shards: ['message_0.db:wal(0p/w1)'], messageChanged: true }
+  })
+}
 
 describe('轮询的两道闸门', () => {
   it('水位为 0 ⇒ 一次 RPC 都不发（没有水位就不知道该问哪之后）', async () => {
@@ -229,6 +248,36 @@ describe('合并、去重与写回缓存', () => {
   })
 })
 
+describe('新消息到达：在底部就跟随、在翻历史就只提示（2026-10-18）', () => {
+  /** jsdom 没有布局：手工给滚动容器三个度量，并派发一次 scroll 让 hook 记下「用户已离开底部」。 */
+  function boxMetrics(scrollHeight: number, clientHeight: number, scrollTop: number): void {
+    Object.defineProperty(scrollBox, 'scrollHeight', { configurable: true, value: scrollHeight })
+    Object.defineProperty(scrollBox, 'clientHeight', { configurable: true, value: clientHeight })
+    scrollBox.scrollTop = scrollTop
+    scrollBox.dispatchEvent(new Event('scroll'))
+  }
+
+  it('用户正在翻历史（离底 > 80px）⇒ 不抢滚动，把条数交给浮标', async () => {
+    msgs = [msg(1)]
+    seenWatermark = 1
+    boxMetrics(5000, 500, 0)
+    mocks.apiGetNewMessages.mockResolvedValue({ messages: [msg(2), msg(3), msg(4)] })
+    await poll()
+    expect(api?.newMsgCount, '翻历史时收到的新消息没有交给浮标').toBe(3)
+    expect(scrollBox.scrollTop, '翻历史时被强行拽到底了').toBe(0)
+  })
+
+  it('用户就在底部附近 ⇒ 自动钉到底，不显示浮标', async () => {
+    msgs = [msg(1)]
+    seenWatermark = 1
+    boxMetrics(500, 500, 0)
+    mocks.apiGetNewMessages.mockResolvedValue({ messages: [msg(2)] })
+    await poll()
+    expect(api?.newMsgCount, '已经在底部还要再提示一次').toBe(0)
+    expect(scrollBox.scrollTop, '在底部时没有跟随到新消息').toBe(500)
+  })
+})
+
 describe('状态栏：成功与失败都要如实留痕', () => {
   it('成功 ⇒ `✓ 时间 · N 条新消息`', async () => {
     msgs = [msg(1)]
@@ -261,7 +310,11 @@ describe('定时器：可见与隐藏两套周期，卸载要清干净', () => {
 
   /** 推进假时间并把微任务排干（`inFlightRef` 闸门要等 promise 落地才放开）。 */
   async function tick(ms: number): Promise<void> {
-    await act(async () => { vi.advanceTimersByTime(ms); await Promise.resolve(); await Promise.resolve() })
+    await act(async () => {
+      vi.advanceTimersByTime(ms)
+      // refresh 是「修订 → 增量 → 对账」三段 await，一次微任务不够落地。
+      for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    })
   }
 
   const calls = (): number => mocks.apiGetNewMessages.mock.calls.length
@@ -269,6 +322,7 @@ describe('定时器：可见与隐藏两套周期，卸载要清干净', () => {
   it('可见 ⇒ 每 POLL_VISIBLE_MS 一次；隐藏 ⇒ 换成 POLL_HIDDEN_MS', async () => {
     vi.useFakeTimers()
     seenWatermark = 1
+    primeRevisionFeed()
     remount()
     await tick(POLL_VISIBLE_MS)
     expect(calls(), '可见时一个周期都没打后端').toBe(1)
@@ -289,6 +343,7 @@ describe('定时器：可见与隐藏两套周期，卸载要清干净', () => {
   it('卸载 ⇒ 定时器与 visibilitychange 监听都摘掉（切会话会重挂，漏一次就多一条在打的定时器）', async () => {
     vi.useFakeTimers()
     seenWatermark = 1
+    primeRevisionFeed()
     remount()
     await tick(POLL_VISIBLE_MS)
     const at = calls()
@@ -306,10 +361,45 @@ describe('定时器：可见与隐藏两套周期，卸载要清干净', () => {
 describe('宿主推送与 SWR 广播：两个事件都要同时触发增量与对账', () => {
   it('`dsh-wechat-data-updated` ⇒ pollNew + reconcileRecent 各一次', async () => {
     seenWatermark = 3
+    primeRevisionFeed()
     await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
-    await flush()
+    await settle()
     expect(mocks.apiGetNewMessages, '推送没触发增量轮询').toHaveBeenCalledTimes(1)
     expect(mocks.apiGetMessages, '推送没触发就地改对账（撤回会一直挂着旧内容）').toHaveBeenCalledWith({ talker: CUR.username, limit: 50 })
+  })
+
+  it('有新消息时对账也限频（对账很贵，不该挡住新消息显示）', async () => {
+    seenWatermark = 3
+    mocks.apiGetNewMessages.mockResolvedValue({ messages: [msg(9)] })
+    primeRevisionFeed()
+    await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await settle()
+    expect(mocks.apiGetNewMessages, '第一拍要拉新消息').toHaveBeenCalledTimes(1)
+    expect(mocks.apiGetMessages, '第一拍应做一次对账').toHaveBeenCalledTimes(1)
+    await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await settle()
+    expect(mocks.apiGetNewMessages).toHaveBeenCalledTimes(2)
+    expect(mocks.apiGetMessages, '2s 内的第二拍不该再对账（限频）').toHaveBeenCalledTimes(1)
+  })
+
+  it('同一修订重复到达 ⇒ 不重复拉消息增量（事件洪峰去重）', async () => {
+    seenWatermark = 3
+    mocks.apiGetDataRevision.mockResolvedValue({ revision: 7, updatedAt: 0, shards: ['message_0.db:wal(0p/w1)'], messageChanged: true })
+    await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await settle()
+    expect(mocks.apiGetNewMessages).toHaveBeenCalledTimes(1)
+    await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await settle()
+    expect(mocks.apiGetNewMessages, '同一 revision 不该再拉一次消息').toHaveBeenCalledTimes(1)
+  })
+
+  it('修订变了但只动了非消息库 ⇒ 不拉消息、不对账（会话/通讯录各自有推送）', async () => {
+    seenWatermark = 3
+    mocks.apiGetDataRevision.mockResolvedValue({ revision: 9, updatedAt: 0, shards: ['session.db:wal(0p/w0)'], messageChanged: false })
+    await act(async () => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await settle()
+    expect(mocks.apiGetNewMessages, '非消息库变化也去查消息分片 = 白查一次 SQL').not.toHaveBeenCalled()
+    expect(mocks.apiGetMessages).not.toHaveBeenCalled()
   })
 
   it(`\`${SNAPSHOT_REFRESHED_EVENT}:messages\` ⇒ 同样两条都跑（SWR 后台刷新落地的另一半）`, async () => {

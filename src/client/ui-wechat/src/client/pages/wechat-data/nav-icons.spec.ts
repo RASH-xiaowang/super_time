@@ -116,10 +116,21 @@ describe('侧栏图标：逐条对齐微信官方字形', () => {
     }
   })
 
-  it('官方字形那几条必须仍在侧栏（换名/改 hidden 会直接丢失形制一致性）', () => {
+  /**
+   * ⚠️ 2026-10-17：`calls`（并入聊天会话）与 `privacy`（并入设置）已标 hidden ——
+   * 它们不再占侧栏条目，但**图标仍留在配置里**（逐条对照官方字形画过，将来复用不必重画）。
+   * 所以这条判据从「必须在 VISIBLE 里」改成「图标必须在配置里（含 hidden）」——
+   * 强度不变（换名 / 删条目仍会红），但不再与「合并进别的入口」冲突。
+   */
+  it('官方字形那几条的图标必须仍在配置里（换名/删条目会直接丢失形制一致性）', () => {
     const official = ['chats', 'contacts', 'moments', 'favorites', 'ledger', 'files', 'calls', 'settings', 'privacy']
-    const tabs = VISIBLE.map(it => it.tab)
-    for (const t of official) expect(tabs, `${t} 不再是可见条目`).toContain(t)
+    const tabs = ALL.map(it => it.tab)
+    for (const t of official) expect(tabs, `${t} 的图标从配置里消失了`).toContain(t)
+    // 仍在侧栏可见的那几条（没被合并的）额外要求「可见」。
+    const visibleTabs = VISIBLE.map(it => it.tab)
+    for (const t of ['chats', 'contacts', 'moments', 'favorites', 'ledger', 'files', 'settings']) {
+      expect(visibleTabs, `${t} 不再是可见条目`).toContain(t)
+    }
   })
 
   it('三条对照过官方截图的形状特征（防止被换成「差不多」的几何形）', () => {

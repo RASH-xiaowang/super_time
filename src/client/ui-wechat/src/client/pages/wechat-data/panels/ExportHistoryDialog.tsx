@@ -76,6 +76,25 @@ function parseParams(raw: string): Record<string, unknown> | null {
 }
 
 /**
+ * 打开一条导出记录的文件（模块级：让 `ExportHistoryDialog` 留在函数行数棘轮线内）。
+ *
+ * ⚠️ 必须检查 `openPath` 的返回值（2026-10-17）：它失败时**不抛异常**，
+ * 而是返回 `{ ok: false, error }`（路径政策拒绝 / 文件不存在 / 系统调用失败）。
+ * 原先只 `await` 不检查 ⇒ 后端拒绝时界面毫无反应。
+ * @param r - 导出记录。
+ * @param hold - 提示出口。
+ */
+async function openExportFile(r: ExportHistoryEntry, hold: (text: string) => void): Promise<void> {
+  if (!r.existsNow) { hold('文件已不在原位置（可能被移动或删除）'); return }
+  try {
+    const res = await apiOpenPath(r.path)
+    if (!res.ok) hold('打开失败：' + (res.error ?? '系统拒绝打开该文件'))
+  } catch (e) {
+    hold('打开失败：' + (e as Error).message)
+  }
+}
+
+/**
  * 导出记录弹窗。
  * @param props.open - 是否显示。
  * @param props.onClose - 关闭回调。
@@ -186,12 +205,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
 
   /** 打开文件。文件已被外部删除时**明确告知**，而不是静默失败。 */
   const openFile = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
-    if (!r.existsNow) { hold('文件已不在原位置（可能被移动或删除）'); return }
-    try {
-      await apiOpenPath(r.path)
-    } catch (e) {
-      hold('打开失败：' + (e as Error).message)
-    }
+    await openExportFile(r, hold)
   }, [hold])
 
   /** 在资源管理器中定位。走 preload 的 `showInFolder`（与「诊断日志 → 打开所在目录」同一个）。 */

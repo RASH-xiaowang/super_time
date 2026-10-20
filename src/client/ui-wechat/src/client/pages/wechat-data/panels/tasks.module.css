@@ -1,34 +1,103 @@
-/* Task extraction — NEON MATRIX 科技风（与每日总结共用令牌）。 */
+/* 待办日程 — 微信风格：白底、0.5px 分割、44px 行高，无毛玻璃/发光。 */
 .input {
   flex: 1;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  background: var(--nm-bg-input);
   color: var(--nm-text-1);
   font-size: 12px;
-  padding: 8px 12px;
+  padding: 8px 10px;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s;
 }
-.input:focus { border-color: var(--nm-cyan); }
+.input:focus { border-color: var(--nm-brand); }
 
-.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+/* 「更多」菜单：低频动作（导入微信原生提醒）收在这里，页头只留一个主操作。 */
+.more { position: relative; }
+.moreSummary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  height: 28px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: 12px;
+  user-select: none;
+}
+.moreSummary::-webkit-details-marker { display: none; }
+.moreSummary:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.more[open] > .moreSummary { background: var(--nm-bg-hover); }
+.moreMenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
+}
+.moreItem {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.moreItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
+.moreItem:disabled { color: var(--nm-text-3); cursor: not-allowed; }
 
-.list { display: flex; flex-direction: column; gap: 8px; }
+.notice { font-size: 12px; color: var(--nm-text-2); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+
+/* 2026-10-18 用户报「其他面板的卡片要撑满屏幕」：待办卡吃掉面板剩余高度，
+   空态放进卡内并垂直居中（此前空态直接摊在面板上，下半屏是一整片裸空）。 */
+.fill { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.fill > [class*='_card_'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+}
+.fill > [class*='_card_'] > [class*='_cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.fill [class*='_empty_'] {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.list { display: flex; flex-direction: column; }
 .taskRow {
   display: flex;
   align-items: center;
   gap: 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-card);
-  padding: 10px 14px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  min-height: 44px;
+  padding: 6px 4px;
+  border-bottom: 0.5px solid var(--nm-border);
+  background: transparent;
 }
+.taskRow:last-child { border-bottom: 0; }
 .taskRow[data-status='done'] { opacity: 0.6; }
-.taskInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.taskInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .taskTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); word-break: break-word; }
 .taskRow[data-status='done'] .taskTitle { text-decoration: line-through; }
 .taskMeta { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--nm-text-2); }
-.taskActions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.taskActions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }

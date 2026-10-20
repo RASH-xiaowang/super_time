@@ -9,14 +9,17 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, apiOriginalHarvest, apiGetOriginalHarvestStatus, apiGetWxcdnQuota, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
 import { PollRegistry, createPollRegistry } from './poll-registry.ts'
-import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
-import { IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import { CachedSettingsConfig, cacheableConfig, groupNavItems, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS, type SettingsNavItem } from './settings-common.tsx'
+import { sectionEls } from './settings-section-els.ts'
+import { IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus, WxcdnQuota } from '@deepseek-ai/dsh-wechat-data/types'
+import { useOriginalHarvest } from './use-original-harvest.ts'
+import { useThirdPartyOriginal } from './use-third-party-original.ts'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /** SSR 下退化成 useEffect，客户端仍保留首帧落位的 layout 时序。 */
@@ -44,31 +47,8 @@ type WhisperProgress = { model: string; file: string; received: number; total: n
  * @param set - `setWhisperDownloading`。
  * @returns 停掉轮询的函数（调用方在 finally 里调）。
  */
-/**
- * 「远程访问（手机）」这一节的导航条目。
- *
- * 放在**模块级**而不是 `useSettingsState` 里面：那个 hook 已经在函数行数棘轮上
- * （只许变小），而这一条是纯静态数据（图标是常量 SVG、文案不依赖任何状态），
- * 没有理由占 hook 的行数。
- *
- * 排在「数据边界与出网」之后：两者是同一类问题（我的数据会不会被这台机器之外的东西读到），
- * 只是方向相反 —— 前者管**出站**，这一节管**入站**。
- */
-const NAV_REMOTE = {
-  key: 'remote' as const,
-  group: '智能与隐私',
-  label: '远程访问（手机）',
-  icon: (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M11 18.5h2" />
-    </svg>
-  ),
-  value: '局域网链接 · 令牌（默认关闭）',
-}
-
 type SettingsNavKey = (typeof STEPS)[number]['key']
-  | 'ai' | 'boundary' | 'remote' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
-type SettingsNavItem = { key: SettingsNavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }
+  | 'ai' | 'boundary' | 'privacy' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'remote' | 'advanced'
 
 function createSettingsNavItems(
   stepStates: Record<(typeof STEPS)[number]['key'], StepState>,
@@ -85,12 +65,13 @@ function createSettingsNavItems(
     })),
     { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
     { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
-    NAV_REMOTE,
+    { key: 'privacy', group: '智能与隐私', label: '隐私体检', icon: STEP_ICONS.privacy, value: '敏感信息扫描 · 风险 TOP10' },
     { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
     { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
     { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
     { key: 'health', group: '维护与自检', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
     { key: 'hook', group: '维护与自检', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
+    { key: 'remote', group: '维护与自检', label: '局域网访问（手机）', icon: <IconGlobeOutline14 size={14} />, value: '扫码连接 · 配对码' },
     { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
   ]
 }
@@ -321,7 +302,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       if (Date.now() < spyLockUntil.current) return
       const box = paneRef.current
       if (!box) return
-      const secs = Array.from(box.querySelectorAll<HTMLElement>('[data-settings-section]'))
+      const secs = sectionEls(box)
       if (secs.length === 0) return
       // 触底时直接选最后一节：「某节顶端对齐容器顶端」对末尾几节做不到（下方内容不够高）
       if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2) {
@@ -875,6 +856,12 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     }
   }
 
+  // 原图自动收割（状态与动作在 `use-original-harvest.ts`）：微信负责下载，我们负责收割。
+  const harvest = useOriginalHarvest(notify)
+
+  // 「第三方原图服务」开关与额度（`wxcdn.c3o.re`）：本机唯一能覆盖那 81.6% 的通路，按流量计费、默认关闭。
+  const thirdParty = useThirdPartyOriginal(cachedCfg?.wxcdn_original_enabled === true, notify)
+
   /**
    * 升级老解码缓存：把**已经解出来**的图，按本机现存最好的一档重解一遍（不联网）。
    *
@@ -946,8 +933,8 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
           ? (imgAes.trim() ? '可批量解密' : '未配置')
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
-  const navItems = createSettingsNavItems(stepStates, stepValueOf)
-
+  // 左导航分组卡片 + 右内容分组标题共用同一份分组（见 groupNavItems）。
+  const navGroups = groupNavItems(createSettingsNavItems(stepStates, stepValueOf))
   /**
    * 弹窗内各面板的跳转：能落在本弹窗某节的就切节（不关弹窗），
    * 其余的（文件资产 / 存储分析）交回宿主，由它关弹窗再切主内容区。
@@ -970,12 +957,13 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
     imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
-    message, nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,
-    pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
-    saving, scanOriginals, closeDiagPreview, copyDiagLogPath, diagPreview, previewDiagLog, secretMigration: cfg?.secret_migration ?? null, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
+    message, nativeTranscribe, navGroups, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,
+    harvestBusy: harvest.busy, harvestResult: harvest.result, harvestStatus: harvest.status, originalHarvest: harvest.run,
+    wxcdn: { thirdPartyOriginal: thirdParty.enabled, wxcdnBusy: thirdParty.busy, wxcdnQuota: thirdParty.quota, toggleWxcdn: thirdParty.toggle, refreshWxcdnQuota: thirdParty.refresh },
+    pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,    saving, scanOriginals, closeDiagPreview, copyDiagLogPath, diagPreview, previewDiagLog, secretMigration: cfg?.secret_migration ?? null, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
     upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
     cancelWhisperDownload, voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
-    whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
+    whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing, setWhisperDirMsg,
   }
 }

@@ -35,20 +35,28 @@ export function NoticeList({
   onAction,
   onDismiss,
   busy = null,
+  inline = false,
 }: {
   notices: readonly Notice[]
   onAction: (action: NoticeAction) => void
   onDismiss: (id: string) => void
   /** 正在执行的动作（期间禁用全部动作按钮）。 */
   busy?: NoticeAction | null
+  /**
+   * 放在**文档流里**（同意屏的页头/同意条之间）而不是右下角悬浮。
+   *
+   * 为什么需要：隐私同意屏底部就是「同意并继续」主按钮，右下角悬浮卡（fixed, bottom 76）
+   * 会直接盖住它；而这张卡本身在该屏又必须能看到（新版本/许可证临期与走到哪一屏无关）。
+   * 悬浮卡和主按钮是同一块地方，只能让卡片改走文档流。
+   */
+  inline?: boolean
 }): React.JSX.Element | null {
   if (notices.length === 0) return null
   return (
-    <div className={css.stack} role="region" aria-label="提醒">
+    <div className={inline ? css.stackInline : css.stack} role="region" aria-label="提醒">
       {notices.map((n) => (
         <div key={n.id} className={css.card} data-tone={n.tone} data-notice={n.id} role="status">
           <div className={css.cardHd}>
-            <span className={css.dot} aria-hidden="true" />
             <span className={css.title}>{n.title}</span>
             <button
               type="button"
@@ -87,8 +95,15 @@ export function NoticeList({
 /**
  * 接线层：取状态 → 判定 → 交给 `NoticeList`。
  * @param props.onOpenLicense - 点「去软件授权」时打开设置弹窗的授权节（由宿主提供）。
+ * @param props.placement - `corner`（默认，右下角悬浮）/ `inline`（文档流，给底部有主按钮的整屏用）。
  */
-export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }): React.JSX.Element | null {
+export function NoticeBanner({
+  onOpenLicense,
+  placement = 'corner',
+}: {
+  onOpenLicense?: () => void
+  placement?: 'corner' | 'inline'
+}): React.JSX.Element | null {
   const [update, setUpdate] = useState<UpdateFacts | null>(null)
   const [license, setLicense] = useState<LicenseFacts | null>(null)
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set<string>())
@@ -201,5 +216,13 @@ export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }):
     })
   }, [])
 
-  return <NoticeList notices={shown} onAction={(a) => { void onAction(a) }} onDismiss={onDismiss} busy={busy} />
+  return (
+    <NoticeList
+      notices={shown}
+      onAction={(a) => { void onAction(a) }}
+      onDismiss={onDismiss}
+      busy={busy}
+      inline={placement === 'inline'}
+    />
+  )
 }

@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CLAWBOT_SLOT, clawbotDbPath } from '../src/query/clawbot/clawbot-db.ts'
-import { completeBinding, readBinding, readBindingInternal } from '../src/query/clawbot/clawbot-binding.ts'
+import { completeBinding, readBinding, readBindingInternal, renameBinding, unbindBinding } from '../src/query/clawbot/clawbot-binding.ts'
 import { insertClawbotMessage, listClawbotMessages } from '../src/query/clawbot/clawbot-message.ts'
 import { createClawbotInstance, defaultInstanceConfig, deleteClawbotInstance, listClawbotInstances, readInstanceConfig, saveInstanceConfig } from '../src/query/clawbot/clawbot-instance.ts'
 
@@ -72,24 +72,60 @@ describe('clawbot 多实例：slot 与配置', () => {
     const dir = root()
     createClawbotInstance(dir) // slot 2
     const saved = saveInstanceConfig(dir, 1, { autoReply: true, kbEnabled: true, kbId: 7 })
-    expect(saved).toEqual({ slot: 1, autoReply: true, kbEnabled: true, kbId: 7 })
+    expect(saved).toEqual({ slot: 1, autoReply: true, kbEnabled: true, kbId: 7, systemPrompt: '', splitReply: true })
     expect(readInstanceConfig(dir, 2).config, 'slot 2 没配过，必须还是默认值（不许被 slot 1 的配置串到）')
       .toEqual(defaultInstanceConfig(2))
 
     // 部分更新：只关自动回复，知识库设置保持
     const patched = saveInstanceConfig(dir, 1, { autoReply: false })
-    expect(patched).toEqual({ slot: 1, autoReply: false, kbEnabled: true, kbId: 7 })
+    expect(patched).toEqual({ slot: 1, autoReply: false, kbEnabled: true, kbId: 7, systemPrompt: '', splitReply: true })
 
     // 重新绑定（身份与凭证被覆盖）之后，配置仍在
     completeBinding(dir, { wxid: 'wxid_a', userName: '甲' }, CREDS, 1)
     expect(readInstanceConfig(dir, 1).config, '重新绑定把配置清了 = 用户每次扫码都要重设一遍')
-      .toEqual({ slot: 1, autoReply: false, kbEnabled: true, kbId: 7 })
+      .toEqual({ slot: 1, autoReply: false, kbEnabled: true, kbId: 7, systemPrompt: '', splitReply: true })
   })
 
   it('配置只能挂在已存在的实例上（拒绝造出「没有实例的配置」）', () => {
     const dir = root()
     createClawbotInstance(dir) // 建库
     expect(() => saveInstanceConfig(dir, 99, { autoReply: true })).toThrow(/不存在/)
+  })
+
+  it('别名（label）：可改可清，且**活过重新绑定与解绑**（2026-10-16）', () => {
+    const dir = root()
+    createClawbotInstance(dir) // 建库（slot 1 由 ensureSchema 补出）
+    expect(readBinding(dir, 1).binding.label, '没起过别名时是 null（界面回落到昵称）').toBeNull()
+
+    expect(renameBinding(dir, 1, '  工作号  ').label, '首尾空白要去掉').toBe('工作号')
+    expect(listClawbotInstances(dir, { since: 0 }).instances[0]?.label, '列表要带上别名').toBe('工作号')
+
+    // 别名是用户偏好，不是绑定状态机的一部分 ⇒ 重新绑定与解绑都不该动它。
+    completeBinding(dir, { wxid: 'wxid_a', userName: '甲' }, CREDS, 1)
+    expect(readBinding(dir, 1).binding.label, '重新绑定把别名清了 = 用户每次扫码都要重起一遍').toBe('工作号')
+    unbindBinding(dir, 1)
+    expect(readBinding(dir, 1).binding.label, '解绑把别名清了 = 用户重新绑定后认不出哪个号').toBe('工作号')
+
+    // 空串 / 全空白 = 清除别名（不是「起一个空名字」）。
+    expect(renameBinding(dir, 1, '   ').label).toBeNull()
+    expect(readBinding(dir, 1).binding.label).toBeNull()
+  })
+
+  it('别名：超长截断到 40 字符；实例不存在时拒绝', () => {
+    const dir = root()
+    createClawbotInstance(dir)
+    expect(renameBinding(dir, 1, 'x'.repeat(80)).label, '别名是展示用的，截断比拒绝更友好').toHaveLength(40)
+    expect(() => renameBinding(dir, 99, '甲')).toThrow(/不存在/)
+  })
+
+  it('别名按实例隔离：改 slot 1 不动 slot 2', () => {
+    const dir = root()
+    createClawbotInstance(dir) // slot 2
+    renameBinding(dir, 1, '工作号')
+    renameBinding(dir, 2, '客服号')
+    const bySlot = new Map(listClawbotInstances(dir, { since: 0 }).instances.map((i) => [i.slot, i.label]))
+    expect(bySlot.get(1)).toBe('工作号')
+    expect(bySlot.get(2)).toBe('客服号')
   })
 
   it('删实例：连带删它自己的会话与配置，**别的实例一条不动**', () => {
@@ -108,7 +144,7 @@ describe('clawbot 多实例：slot 与配置', () => {
       .toEqual(defaultInstanceConfig(1))
     expect(listClawbotMessages(dir, { slot: 2 }).total, '实例 2 的会话不许被删').toBe(1)
     expect(readInstanceConfig(dir, 2).config, '实例 2 的配置不许被删')
-      .toEqual({ slot: 2, autoReply: true, kbEnabled: true, kbId: 5 })
+      .toEqual({ slot: 2, autoReply: true, kbEnabled: true, kbId: 5, systemPrompt: '', splitReply: true })
   })
 
   it('slot **不复用**：删掉 2 之后再建，拿到的是 3（否则新实例会捡到残留配置）', () => {
@@ -161,6 +197,32 @@ describe('clawbot 多实例：slot 与配置', () => {
     expect(inst?.todayMessages).toBe(1)
     expect(inst?.channel, '没注入通道查询时给「未运行」，不许瞎报运行中').toEqual({ running: false, error: null })
   })
+
+  it('补全实例信息（2026-10-17）：botId 是公开标识、lastMessageAt 取 MAX(ts)', () => {
+    const dir = root()
+    // 绑定一个实例（带凭证 ⇒ ilink_bot_id 落库）。
+    completeBinding(dir, { wxid: 'wx-1' }, { botToken: 'bt', ilinkBotId: 'bot-abc', ilinkUserId: 'wx-1', baseUrl: '' }, 1)
+    // 先插晚的、再插早的：lastMessageAt 必须取 MAX(ts) 而不是「最后一行的 ts」。
+    insertClawbotMessage(dir, { slot: 1, ts: 9000, direction: 'in', content: '晚' })
+    insertClawbotMessage(dir, { slot: 1, ts: 1000, direction: 'in', content: '早' })
+    const inst = listClawbotInstances(dir, { since: 0 }).instances[0]
+    expect(inst?.botId, 'botId 是公开标识（非凭证），实例卡要能显示它').toBe('bot-abc')
+    expect(inst?.lastMessageAt, 'lastMessageAt 取 MAX(ts)，不是最后一行的 ts').toBe(9000)
+    // 未绑定的实例：botId 为 null（不编造），lastMessageAt 为 0（还没有消息）。
+    const fresh = createClawbotInstance(dir)
+    const freshInst = listClawbotInstances(dir, { since: 0 }).instances.find((i) => i.slot === fresh.slot)
+    expect(freshInst?.botId).toBeNull()
+    expect(freshInst?.lastMessageAt).toBe(0)
+  })
+
+  it('botId 只挑非敏感列：实例列表快照里不许出现 bot_token（凭证）', () => {
+    const dir = root()
+    completeBinding(dir, { wxid: 'wx-1' }, { botToken: 'SECRET-TOKEN', ilinkBotId: 'bot-abc', ilinkUserId: 'wx-1', baseUrl: '' }, 1)
+    const snap = listClawbotInstances(dir, { since: 0 })
+    // 整个快照序列化后不许含凭证 —— botId 是公开标识，bot_token 才是密钥。
+    expect(JSON.stringify(snap)).not.toContain('SECRET-TOKEN')
+    expect(JSON.stringify(snap)).toContain('bot-abc')
+  })
 })
 
 describe('clawbot 多实例：老库迁移', () => {
@@ -197,5 +259,27 @@ describe('clawbot 多实例：老库迁移', () => {
     legacyDb(dir)
     completeBinding(dir, { wxid: 'wxid_old' }, null, 1)
     expect(listClawbotInstances(dir, { since: 0 }).instances.map((i) => i.slot)).toEqual([1])
+  })
+
+  it('读路径也要补列：老库缺 label 时**读**不许报「no such column」（2026-10-16 真机踩到）', () => {
+    // 真机症状：升级后打开面板显示「实例列表读取失败：绑定列表读取失败：no such column: label」。
+    // 成因：`ensureClawbotSchema` 原先只在**写路径**调用，而 `SELECT_COLUMNS` 写死了 `label` ——
+    // 用户什么都没做错，只是升级了版本，而**读**是打开面板的第一件事，写路径的自愈根本轮不到。
+    const dir = root()
+    legacyDb(dir)
+    // 先补出 slot 列（老库连 slot 都没有），但**不补 label** —— 模拟「升级到多实例之后、
+    // 别名功能之前」那一版建的库。
+    const db = new DatabaseSync(clawbotDbPath(dir))
+    db.exec('ALTER TABLE clawbot_binding ADD COLUMN slot INTEGER NOT NULL DEFAULT 1')
+    db.exec('UPDATE clawbot_binding SET slot = id')
+    db.close()
+
+    // 纯读路径（不经过任何写）：必须自愈，不许把「缺列」报成「读失败」。
+    const snap = listClawbotInstances(dir, { since: 0 })
+    expect(snap.readError, '读路径没补列 ⇒ 老库升级后打开面板就是一片红').toBeUndefined()
+    expect(snap.instances.map((i) => i.slot)).toEqual([1])
+    expect(snap.instances[0]?.label, '补出来的 label 列是 NULL（= 没起别名）').toBeNull()
+    expect(snap.instances[0]?.userName, '老库的身份不许丢').toBe('老用户')
+    expect(readBinding(dir, 1).readError).toBeUndefined()
   })
 })

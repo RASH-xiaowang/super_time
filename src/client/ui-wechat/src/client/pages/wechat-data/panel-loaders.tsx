@@ -7,6 +7,7 @@
  */
 
 import { lazy, Suspense, type ComponentProps } from 'react'
+import { ErrorBoundary } from './ui/error-boundary.tsx'
 
 export const OverviewPanel = lazy(() => import('./panels/Overview.tsx').then(({ OverviewPanel }) => ({ default: OverviewPanel })))
 export const PrivacyPanel = lazy(() => import('./panels/Privacy.tsx').then(({ PrivacyPanel }) => ({ default: PrivacyPanel })))
@@ -22,6 +23,8 @@ export const FilesPanel = lazy(() => import('./panels/Files.tsx').then(({ FilesP
 export const RecordsPanel = lazy(() => import('./panels/Records.tsx').then(({ RecordsPanel }) => ({ default: RecordsPanel })))
 export const LedgerPanel = lazy(() => import('./panels/Ledger.tsx').then(({ LedgerPanel }) => ({ default: LedgerPanel })))
 export const TasksPanel = lazy(() => import('./panels/Tasks.tsx').then(({ TasksPanel }) => ({ default: TasksPanel })))
+// 任务信息（2026-10-19）：关键词触发式任务 + 触发记录的双栏面板。
+export const TaskCenterPanel = lazy(() => import('./panels/TaskCenter.tsx').then(({ TaskCenterPanel }) => ({ default: TaskCenterPanel })))
 export const GroupInsightsPanel = lazy(() => import('./panels/GroupInsights.tsx').then(({ GroupInsightsPanel }) => ({ default: GroupInsightsPanel })))
 export const MomentsInsightsPanel = lazy(() => import('./panels/MomentsInsights.tsx').then(({ MomentsInsightsPanel }) => ({ default: MomentsInsightsPanel })))
 export const AssetInsightsPanel = lazy(() => import('./panels/AssetInsights.tsx').then(({ AssetInsightsPanel }) => ({ default: AssetInsightsPanel })))
@@ -32,8 +35,12 @@ export const CallsPanel = lazy(() => import('./panels/Calls.tsx').then(({ CallsP
 export const RevokedPanel = lazy(() => import('./panels/Revoked.tsx').then(({ RevokedPanel }) => ({ default: RevokedPanel })))
 export const MonitorPanel = lazy(() => import('./panels/Monitor.tsx').then(({ MonitorPanel }) => ({ default: MonitorPanel })))
 export const AnnualPanel = lazy(() => import('./panels/Annual.tsx').then(({ AnnualPanel }) => ({ default: AnnualPanel })))
+// 2026-10-17：`DailySummaryPanel` / `PeriodSummaryPanel` 已合并为 `SummaryWorkbench`。
+// 两个旧 loader 保留（`panel-loaders` 的导出面被 `api-module-split.spec.ts` 等守卫盯着，
+// 删导出会连带改一堆断言），但**不再有调用点** —— 真正的入口是下面这个。
 export const DailySummaryPanel = lazy(() => import('./panels/DailySummary.tsx').then(({ DailySummaryPanel }) => ({ default: DailySummaryPanel })))
 export const PeriodSummaryPanel = lazy(() => import('./panels/PeriodSummary.tsx').then(({ PeriodSummaryPanel }) => ({ default: PeriodSummaryPanel })))
+export const SummaryWorkbench = lazy(() => import('./panels/SummaryWorkbench.tsx').then(({ SummaryWorkbench }) => ({ default: SummaryWorkbench })))
 export const GraphPanel = lazy(() => import('./panels/Graph.tsx').then(({ GraphPanel }) => ({ default: GraphPanel })))
 export const SettingsPanel = lazy(() => import('./panels/Settings.tsx').then(({ SettingsPanel }) => ({ default: SettingsPanel })))
 export const KbShell = lazy(() => import('./panels/KbShell.tsx').then(({ KbShell }) => ({ default: KbShell })))
@@ -41,11 +48,17 @@ export const KbShell = lazy(() => import('./panels/KbShell.tsx').then(({ KbShell
 /**
  * 设置弹窗不在 `activePanel` 的 Suspense 范围里，这里给它的懒加载补一个独立边界。
  * 把边界收在 loader 模块里，主容器不需要为了懒加载多包一层 JSX。
+ *
+ * 外面再套一层 {@link ErrorBoundary}：设置面板把 13 节塞进同一个 chunk，任何一节在渲染期
+ * 抛错都会让 React 卸载整棵根树 —— 表现为「弹窗还在、内容全黑」。有了边界，出错的那一节
+ * 会显示可读的错误卡，其余部分照常可用。
  */
 export function SettingsPanelGate(props: ComponentProps<typeof SettingsPanel>): React.JSX.Element {
   return (
-    <Suspense fallback={<div style={{ padding: 24 }}>正在加载设置…</div>}>
-      <SettingsPanel {...props} />
-    </Suspense>
+    <ErrorBoundary label="设置">
+      <Suspense fallback={<div style={{ padding: 24 }}>正在加载设置…</div>}>
+        <SettingsPanel {...props} />
+      </Suspense>
+    </ErrorBoundary>
   )
 }

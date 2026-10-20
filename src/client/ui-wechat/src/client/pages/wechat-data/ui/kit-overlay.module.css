@@ -35,7 +35,7 @@
 .tabTrigger[data-state='active'] {
   color: var(--nm-cyan);
   background: var(--nm-bg-active);
-  box-shadow: inset 0 0 0 1px var(--nm-border-active);
+  font-weight: 600;
 }
 
 /* ── Segmented（Radix ToggleGroup） ───────── */
@@ -83,8 +83,7 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(4, 8, 20, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.4);
 }
 
 .drawerOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
@@ -98,13 +97,13 @@
   width: min(560px, 92vw);
   display: flex;
   flex-direction: column;
-  background: var(--nm-bg-1);
+  background: var(--nm-bg-2);
   border-left: 1px solid var(--nm-border);
   box-shadow: var(--nm-shadow-popup);
   outline: none;
 }
 
-.drawer[data-state='open'] { animation: kitSlideIn var(--nm-t-normal); }
+.drawer[data-state='open'] { animation: kitSlideIn 0.15s ease-out; }
 
 .drawerHd {
   display: flex;
@@ -160,11 +159,10 @@
   position: fixed;
   inset: 0;
   z-index: 70;
-  background: rgba(4, 8, 20, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.42);
 }
 
-.dialogOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
+.dialogOverlay[data-state='open'] { animation: kitFadeIn 0.15s ease-out; }
 
 /* 居中定位与层级都在这里：
    1) 不给 .dialog 定位于是把落进 body 的常规流 —— 实测会掉到窗口左下角（body 是 flex）；
@@ -180,14 +178,14 @@
   max-height: 84vh;
   display: flex;
   flex-direction: column;
-  background: var(--nm-bg-1);
+  background: var(--nm-bg-2);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-xl);
   box-shadow: var(--nm-shadow-popup);
   outline: none;
 }
 
-.dialog[data-state='open'] { animation: kitPopIn var(--nm-t-normal); }
+.dialog[data-state='open'] { animation: kitPopIn 0.15s ease-out; }
 
 .dialogBd {
   flex: 1;
@@ -233,9 +231,13 @@
 @media (max-width: 560px) {
   /* 分段条是 8 组合并视图（通讯录/朋友圈/文件与存储…）的**主导航**，基础档刻意停在
      24px（WCAG 2.5.8 AA，`merged-compact.wiring.spec.ts` 钉着，不许动）；
-     手机档抬到 44px（WCAG 2.5.5 AAA / Apple HIG）—— 元素级的全局规则被这里的类特异性盖住，
-     所以必须在**这一份**里覆盖，且只能写在媒体查询内（桌面保持 24px 不变）。 */
-  .segItem { min-height: 44px; }
+     手机档抬到 36px —— 元素级的全局 44px 规则被这里的类特异性盖住，所以必须在**这一份**里
+     覆盖，且只能写在媒体查询内（桌面保持 24px 不变）。
+     **2026-10-16 从 44px 收到 36px**（用户报「筛选区占比太大」）：分段条是**密集筛选控件**，
+     不是主要操作按钮 —— 44px 是「主要操作」的标准（Apple HIG 的 44pt 针对的是主按钮），
+     套在筛选条上会让「段条 + 搜索行 + 分类条」三行合计 222px，吃掉 718px 内容区的 31%。
+     36px 仍高于 WCAG 2.5.8 的 24px AA 下限，也是 iOS 上紧凑分段控件的常见高度。 */
+  .segItem { min-height: 36px; }
 
   .drawer {
     top: auto !important;
@@ -247,7 +249,7 @@
     height: 88dvh;
     max-height: 88dvh;
     border-left: none;
-    border-top: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
+    border-top: 1px solid var(--nm-border);
     border-radius: var(--nm-r-lg, 14px);
   }
 

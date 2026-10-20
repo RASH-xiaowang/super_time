@@ -126,6 +126,34 @@ export type { ImageUpgradeResult } from './query/image-upgrade.ts'
  */
 export type { ImageOriginalCandidate, OriginalBatchResult, OriginalFetchPlan } from './query/image-original-batch.ts'
 
+/**
+ * 「原图自动收割」的结果与状态类型（真源在 `query/original-harvester.ts`）。
+ * 同上一行的理由：query 不能 import 本文件（M24 分层守卫），所以由这里再导出给 Remote 客户端。
+ */
+export type { HarvestResult, HarvestStatus } from './query/original-harvester.ts'
+
+/**
+ * 「实时同步修订」的对外类型（真源在 `query/sync-status.ts`）。
+ * 同上：query 不能 import 本文件（M24 分层守卫），所以由这里再导出给 Remote 客户端。
+ */
+export type { DataRevision } from './query/sync-status.ts'
+
+/**
+ * 「第三方原图服务」的额度类型（真源在 `query/wxcdn-original.ts`）。
+ * 同上一行的理由：query 不能 import 本文件（M24 分层守卫），所以由这里再导出给 Remote 客户端。
+ */
+export type { WxcdnQuota, WxcdnDownloadResult } from './query/wxcdn-original.ts'
+
+/**
+ * 「微信原图自动下载」的状态与动作类型（真源在 `query/wechat-image-autodownload.ts`）。
+ * 同上一条：query 不 import 本文件（M24 分层守卫），由这里再导出给 Remote 客户端。
+ */
+export type {
+  WechatImageAutoDownloadAction,
+  WechatImageAutoDownloadState,
+  WechatImageAutoDownloadStatus,
+} from './query/wechat-image-autodownload.ts'
+
 /** Live decryption progress snapshot (getDecryptStatus). */
 export interface DecryptStatus {
   /**
@@ -258,6 +286,28 @@ export interface WechatConfigPatch {
    * 留在 config.json 里当普通配置项即可。
    */
   secret_migration_notice_ack?: boolean
+  /**
+   * 「用第三方服务取原图」开关（默认 **false**）。
+   *
+   * 打开后，本机没有原图时会用 `cdnbigimgurl` 的 fileid 向 `wxcdn.c3o.re` 请求原图
+   * （**按流量计费**，Free 套餐 50 MB/天）。该服务不是腾讯官方，且需要把本机的
+   * `all_users/config/global_config` 发给它 —— 所以必须默认关闭、由用户显式打开。
+   */
+  wxcdn_original_enabled?: boolean
+  /**
+   * 「微信原图自动下载」开关（默认 **false**，实验功能）。
+   *
+   * 打开后，本应用会把上游 WeFlow-X（MIT）的 `img_helper.dll` 注入正在运行的微信进程，
+   * 让微信在**接收新图片时**按原图下载（本应用自己不联网、不碰凭据）。
+   * 只影响设置生效之后收到的图片；历史图片仍需在微信里点开原图（或走其它通路）。
+   * 该功能会修改微信进程内存，必须由用户显式打开。
+   */
+  wechat_image_autodownload_enabled?: boolean
+  /**
+   * 自动下载的会话白名单（会话 username 列表）。空数组 = **全部会话**（与上游组件语义一致）。
+   * 只影响新收到的图片，用来把流量/磁盘占用限制在需要的会话里。
+   */
+  wechat_image_autodownload_whitelist?: string[]
 }
 
 /** Delete result. */
@@ -303,6 +353,15 @@ declare module '@deepseek-ai/cordis' {
      */
     'wechat-data/updated'(shards: string[]): void
     /**
+     * 任务触发扫描新建了记录 / 投递了回调（2026-10-19 提速）。
+     *
+     * 扫描由实时同步回调事件驱动（不再只靠定时器）；新建记录后立刻发这条事件，
+     * 让「任务信息」面板不必等到下一次微信同步（约 10s）才看到新记录。
+     * @mode emit
+     * @param payload - 本拍新建记录数与投递成功数（面板只据此回源，不把它当数据源）。
+     */
+    'task-center/updated'(payload: { created: number; dispatched: number }): void
+    /**
      * 微信问答的流式回答增量：payload 是 `{ id, text }`，`id` 为本次流式请求的标识
      * （由客户端在调用 askWechat 时生成），渲染端按 id 把增量拼起来。
      * 由 `gateway.ts` 的流式回调发出、`src/client/ui-app/ui-entry.tsx` 消费。
@@ -310,6 +369,27 @@ declare module '@deepseek-ai/cordis' {
      * @param payload - 流式标识与本次新增的文本片段。
      */
     'wechat-ask/delta'(payload: { id: string; text: string }): void
+    /**
+     * 微信问答的**思考过程增量**（2026-10-16）：payload 是 `{ id, text }`，
+     * `text` 是**已生成的思考全文**（与 delta 同一套「推全文」约定）。
+     *
+     * 为什么与 `wechat-ask/delta` 分开两条事件：模型可能先吐一大段 reasoning 再吐正文，
+     * 混在一条里渲染端就没法把「思考过程」单独折叠展示（用户要的是「像问答产品一样」）。
+     * @mode emit
+     * @param payload - 流式标识与已生成的思考全文。
+     */
+    'wechat-ask/reasoning'(payload: { id: string; text: string }): void
+    /**
+     * 微信问答的**阶段事件**（2026-10-16）：payload 是
+     * `{ id, key, label, status, detail? }`。
+     *
+     * 流水线每一步（规划 → 检索 → 精排 → 生成 → 接地核对）在**发生的那一刻**推一条，
+     * 渲染端据此显示「🔍 检索本机记录 · 召回 128 条」这样的过程行。
+     * 同一个 `key` 会先推 `running` 再推 `done`（带结果摘要），渲染端按 key 就地更新。
+     * @mode emit
+     * @param payload - 流式标识、阶段标识/名称/状态与结果摘要。
+     */
+    'wechat-ask/stage'(payload: { id: string; key: string; label: string; status: 'running' | 'done' | 'skipped'; detail?: string }): void
     /**
      * 导出/加密备份的进度（M3）：payload 是 `{ jobId, phase, done, total }`。
      *

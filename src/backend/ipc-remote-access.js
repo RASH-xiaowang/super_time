@@ -27,9 +27,12 @@ function registerRemoteAccessIpc(ctx) {
   // 开关与令牌轮换：写配置一律走后端的 saveWechatConfig（它负责原子写、写前备份、
   // 以及把 api_token 这类密钥字段分流进 secrets.json 并收紧 ACL）。
   const control = createRemoteAccessControl({ backendCall, remoteAccess });
-  handleIpc('remote-access:rotate', async () => {
+  handleIpc('remote-access:rotate', async (_e, options) => {
     try {
-      const r = await control.rotate();
+      // 2026-10-19：局域网扫码入口与桌面端同权限（用户明确要求）。
+      // 只接受布尔标记，避免渲染层塞任意对象进来。
+      const fullAccess = options !== null && typeof options === 'object' && options.fullAccess === true;
+      const r = await control.rotate({ fullAccess });
       return r.ok ? { ok: true, value: r } : { ok: false, error: { message: r.error } };
     } catch (e) {
       return { ok: false, error: { message: e?.message ?? String(e) } };

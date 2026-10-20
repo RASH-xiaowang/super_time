@@ -61,7 +61,9 @@ export function KbShell({ initial, onOpenChat, focusFileId, focusNonce }: {
               // 侧栏「知识库」经 `landing` 落在**第一段**（文件）上：默认面与左起第一段
               // 从此是同一个，不再需要「惯例 vs 最常用」那套取舍。
               { key: 'kbfiles', label: '文件', render: () => <KbFilesPanel focusFileId={focusFileId ?? null} focusNonce={focusNonce ?? 0} /> },
-              { key: 'kb', label: '笔记库', render: () => <KnowledgeBasePanel onOpenChat={onOpenChat} /> },
+              // 2026-10-17：笔记库空态里的「从文件沉淀 →」要能跳到「文件」分段 ——
+              // 分段状态在 `MergedSections` 里，所以用它的 `go` 回调。
+              { key: 'kb', label: '笔记库', render: (go) => <KnowledgeBasePanel onOpenChat={onOpenChat} onGoFiles={() => { go('kbfiles') }} /> },
               { key: 'knowledge', label: '知识图谱', render: () => <GraphPanel variant="knowledge" onOpenChat={onOpenChat} /> },
             ]}
           />

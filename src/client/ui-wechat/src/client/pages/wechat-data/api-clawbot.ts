@@ -47,8 +47,21 @@ export async function apiDeleteClawbotInstance(options: { slot: number }): Promi
  * @param options - 实例编号 + 要改的字段。
  * @returns 落库后的完整配置。
  */
-export async function apiSetClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }): Promise<ClawbotInstanceConfig> {
+export async function apiSetClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): Promise<ClawbotInstanceConfig> {
   return unwrap(await remote().setClawbotInstanceConfig(options))
+}
+
+/**
+ * 给实例起别名（「工作号」「客服号」；2026-10-16）。
+ *
+ * 与绑定状态机无关（后端只动 `label` 一列）⇒ 别名活过重新绑定与解绑。
+ * 空串 = 清除别名（界面回落到昵称，再回落到「实例 N」）。
+ * @param options.slot - 实例编号。
+ * @param options.label - 新别名（空串 = 清除）。
+ * @returns 落库后的绑定卡片快照。
+ */
+export async function apiRenameClawbotInstance(options: { slot: number, label: string }): Promise<ClawbotBindingSnapshot> {
+  return unwrap(await remote().renameClawbotInstance(options))
 }
 
 /**
@@ -94,6 +107,26 @@ export async function apiUnbindClawbot(options?: { slot?: number }): Promise<Cla
  */
 export async function apiListClawbotMessages(options?: ClawbotMessageQuery): Promise<ClawbotMessageSnapshot> {
   return unwrap(await remote().listClawbotMessages(options))
+}
+
+/**
+ * 清空某实例的**接入会话**（2026-10-17）：只删消息，不动绑定与配置。
+ * @param options.slot - 实例编号（缺省 = 第一个实例）。
+ * @returns 删掉的条数 + 最新会话页快照。
+ */
+export async function apiClearClawbotMessages(options?: { slot?: number }): Promise<{ removed: number, messages: ClawbotMessageSnapshot }> {
+  return unwrap(await remote().clearClawbotMessages(options))
+}
+
+/**
+ * 取内置的拟人化默认系统提示词（2026-10-17）。
+ *
+ * 设置视图的输入框用它**预填** —— 用户能看到默认值长什么样，直接在它上面改，
+ * 而不是面对一个空框从零写。
+ * @returns 默认提示词全文。
+ */
+export async function apiGetClawbotDefaultPrompt(): Promise<string> {
+  return unwrap(await remote().getClawbotDefaultPrompt()).prompt
 }
 
 /**

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Super Time · 让聊天记录成为你自己的数据资产</title>
-<meta name="description" content="Super Time 是面向微信 4.x 本地数据的桌面端洞察与 AI 问答工具：全程离线、数据不出本机。混合检索 RAG、本地语音转写、对齐官方视觉的聊天回放。">
+<meta name="description" content="Super Time 是面向微信 4.x 本地数据的桌面端洞察与 AI 问答工具：全程离线、数据不出本机。混合检索 RAG、本地语音转写、对齐官方视觉的聊天回放，还能扫码接入微信让 AI 替你收发消息。">
 <meta name="theme-color" content="#04050a">
 <style>
 /* ==========================================================================
@@ -314,6 +314,8 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 
 /* ---------- 亮点 ---------- */
 .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+/* 解决方案：4 张卡（个人 / 助理 / 团队 / 创作者）—— 宽屏 4 列，中屏 2 列，窄屏 1 列。 */
+.grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px}
 .hl h3{margin:20px 0 10px;font-size:19px;font-weight:650;letter-spacing:-.01em}
 .hl p{margin:0;color:var(--txt-2);font-size:14.3px}
 .hl .tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}
@@ -345,12 +347,12 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .visual .vhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .visual .vhead b{font-size:12px;letter-spacing:.12em;color:var(--txt-3);font-family:var(--mono);font-weight:600}
 .visual .vhead span{font-size:10.5px;font-family:var(--mono);color:#7ff0c3}
-.vrow{display:grid;gap:9px}
+.vrow{display:grid;grid-template-columns:minmax(0,1fr);gap:9px}
 .vcell{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:rgba(255,255,255,.017);transition:.35s var(--ease)}
 .vcell:hover{border-color:var(--line-2);background:rgba(122,160,255,.06);transform:translateX(3px)}
 .vcell .av{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#04222b;background:linear-gradient(140deg,#7ef0ff,#a78bfa)}
 .vcell .tx{min-width:0;flex:1}
-.vcell .tx b{display:block;font-size:12.8px;font-weight:600;color:var(--txt)}
+.vcell .tx b{display:block;font-size:12.8px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vcell .tx span{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vcell .mt{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);flex:none}
 .flowmap{display:grid;gap:8px}
@@ -370,7 +372,7 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 /* ---------- 解决方案 ---------- */
 .sol{position:relative;overflow:hidden}
 .sol .top{display:flex;align-items:center;justify-content:space-between;gap:14px}
-.sol .plan{font-family:var(--mono);font-size:10.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.3);border-radius:999px;padding:3px 10px;background:rgba(34,211,238,.07)}
+.sol .plan{font-family:var(--mono);font-size:10.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.3);border-radius:999px;padding:3px 10px;background:rgba(34,211,238,.07);flex:none;white-space:nowrap}
 .sol h3{margin:18px 0 10px;font-size:20px;font-weight:660}
 .sol p{margin:0;color:var(--txt-2);font-size:14.2px}
 .sol ul{margin:18px 0 0;padding:0;list-style:none;display:grid;gap:9px}
@@ -444,6 +446,45 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .cbox b{display:block;font-size:14.2px;margin-bottom:3px}
 .cbox p{margin:0;font-size:13.4px;color:var(--txt-2);font-family:var(--mono)}
 .note{margin-top:6px;border:1px dashed rgba(122,160,255,.3);border-radius:13px;padding:15px;font-size:12.8px;color:var(--txt-3);line-height:1.7}
+
+/* ---------- 微信二维码卡（联系我们） ---------- */
+.qr-card{
+  display:flex;gap:18px;align-items:center;
+  border:1px solid var(--line-2);border-radius:16px;padding:18px;
+  background:linear-gradient(140deg,rgba(34,211,238,.07),rgba(139,92,246,.07) 55%,rgba(244,114,182,.05));
+  position:relative;overflow:hidden;
+}
+.qr-card::before{
+  content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
+  background:linear-gradient(140deg,rgba(34,211,238,.5),rgba(139,92,246,.34) 50%,rgba(244,114,182,.22));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+}
+.qr-img{
+  width:132px;height:132px;flex:none;border-radius:12px;
+  background:#fff;padding:7px;box-sizing:border-box;
+  box-shadow:0 12px 34px -16px rgba(34,211,238,.9);
+}
+.qr-img img{width:100%;height:100%;object-fit:contain;display:block}
+/* 图片缺失时的占位（用户还没把二维码放进来） */
+.qr-img .qr-ph{
+  width:100%;height:100%;display:grid;place-items:center;gap:6px;
+  border:1px dashed rgba(122,160,255,.5);border-radius:8px;
+  font-size:10.5px;color:#63708f;text-align:center;line-height:1.5;
+}
+.qr-txt{min-width:0}
+.qr-txt b{display:block;font-size:15.5px;font-weight:660;margin-bottom:6px}
+.qr-txt p{margin:0;font-size:13px;color:var(--txt-2);line-height:1.7}
+.qr-txt .qr-hint{
+  display:inline-flex;align-items:center;gap:6px;margin-top:10px;
+  font-family:var(--mono);font-size:11px;color:#7ff0c3;
+  border:1px solid rgba(10,201,122,.3);border-radius:999px;padding:3px 10px;background:rgba(10,201,122,.07);
+}
+@media (max-width:520px){
+  .qr-card{flex-direction:column;text-align:center}
+  .qr-txt .qr-hint{margin-left:auto;margin-right:auto}
+}
 
 /* ---------- CTA 尾带 ---------- */
 .cta-band{position:relative;overflow:hidden;border-radius:22px;border:1px solid var(--line-2);text-align:center;
@@ -525,6 +566,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .nav-act .btn{display:none}
   .burger{display:flex}
   .arch{gap:30px}
+  .grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
 /* ---- ≤980：Hero 改单列，控制台预览居中限宽 ---- */
@@ -542,6 +584,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 /* ---- ≤820：平板竖屏 —— 功能卡/技术栈单列，分页横向滚动 ---- */
 @media (max-width:820px){
   .grid-3{grid-template-columns:minmax(0,1fr)}
+  .grid-4{grid-template-columns:minmax(0,1fr)}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
   .stat:nth-child(3)::before{display:none}
   .fgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
@@ -611,7 +654,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .note{font-size:12.2px;padding:13px}
   .cta-band h2{font-size:21px}
   .cta-band p{font-size:14px}
-  .top{width:40px;height:40px}
+  .toTop{width:40px;height:40px}
   .toast{font-size:12.6px;padding:11px 16px}
   footer{padding-top:42px}
   .disc{font-size:11.2px}
@@ -687,6 +730,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <a href="#home" class="active">首页</a>
       <a href="#highlights">产品亮点</a>
       <a href="#features">核心功能</a>
+      <a href="#clawbot">微信接入</a>
       <a href="#solutions">解决方案</a>
       <a href="#tech">技术架构</a>
       <a href="#about">关于我们</a>
@@ -708,6 +752,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <a href="#home">首页</a>
   <a href="#highlights">产品亮点</a>
   <a href="#features">核心功能</a>
+  <a href="#clawbot">微信接入</a>
   <a href="#solutions">解决方案</a>
   <a href="#tech">技术架构</a>
   <a href="#about">关于我们</a>
@@ -732,7 +777,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <p class="lead rv" style="--d:160ms">
           Super Time 是面向 <b>微信 4.x 本地数据</b>的 Windows 桌面工作台：
           直接读取本机数据目录，用混合检索 RAG 让 13 万条消息<br class="hide-sm">
-          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案。
+          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案；
+          还能把微信接进来，让 AI 替你收发消息。
         </p>
         <div class="hero-cta rv" style="--d:240ms">
           <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
@@ -746,7 +792,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
         <div class="hero-facts rv" style="--d:320ms">
           <span class="chip"><b>0</b> 字节默认上传</span>
-          <span class="chip"><b>195</b> 个数据接口</span>
+          <span class="chip"><b>198</b> 个数据接口</span>
           <span class="chip">Windows x64 · 单机运行</span>
           <span class="chip">无需填写微信账号密码</span>
         </div>
@@ -806,7 +852,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 <div class="band">
   <div class="wrap">
     <div class="stats">
-      <div class="stat rv"><b data-count="195">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
+      <div class="stat rv"><b data-count="212">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
       <div class="stat rv" style="--d:90ms"><b data-count="5000" data-suffix="+">0</b><span>自动化测试用例</span><em>500+ TEST FILES</em></div>
       <div class="stat rv" style="--d:180ms"><b data-count="100" data-suffix="%">0</b><span>检索召回率 R@10</span><em>合成评测集</em></div>
       <div class="stat rv" style="--d:270ms"><b data-count="135" data-suffix="k+">0</b><span>单机可检索消息量</span><em>LOCAL INDEX</em></div>
@@ -866,10 +912,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 
       <div class="card hl js-tilt rv" style="--d:220ms">
         <div class="num">06</div>
-        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 4v5"/></svg></div>
-        <h3>可控的授权与备份</h3>
-        <p>本地许可闸门统一管控功能可见性；配置备份、操作日志、健康自检全部内置，把「谁在什么时候动了什么」记录下来。</p>
-        <div class="tags"><i>license gate</i><i>审计日志</i><i>一键备份</i></div>
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+        <h3>微信接入与 AI 代回</h3>
+        <p>扫码绑定一个微信号，本机常驻长轮询通道；AI 按你写的人设自动回复，长回复按语义分段发出。数据面刻意收窄为「仅知识库」，默认关闭、逐条审计。</p>
+        <div class="tags"><i>iLink 协议</i><i>多实例</i><i>人设可写</i></div>
       </div>
     </div>
   </div>
@@ -880,8 +926,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-eyebrow">CORE CAPABILITIES</div>
-      <h2>四大模块，覆盖<span class="grad-txt">从读取到洞察</span>的完整链路</h2>
-      <p>每个模块都建立在同一份本地索引之上 —— 不是四个彼此割裂的小工具，而是一条贯通的数据管线。</p>
+      <h2>五大模块，覆盖<span class="grad-txt">从读取到洞察</span>的完整链路</h2>
+      <p>每个模块都建立在同一份本地索引之上 —— 不是五个彼此割裂的小工具，而是一条贯通的数据管线。</p>
     </div>
 
     <div class="tabs rv" role="tablist" aria-label="核心功能">
@@ -900,6 +946,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <button class="tab" role="tab" aria-selected="false" data-pane="p4">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
         媒体资产
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p5">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg>
+        微信接入
       </button>
     </div>
 
@@ -1011,7 +1061,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
         <div class="visual">
           <div class="vhead"><b>MEDIA ASSETS</b><span>● 4 TYPES</span></div>
-          <div class="vrow" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="vrow" style="grid-template-columns:repeat(3,minmax(0,1fr))">
             <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
               <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#7ef0ff;fill:none;stroke-width:1.7"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
               <span style="font-size:11.5px;color:#9aa6c9">图片</span>
@@ -1037,6 +1087,107 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
       </div>
     </div>
+
+    <!-- P5 -->
+    <div class="pane" id="p5" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>让 AI 替你收发微信消息</h3>
+          <p class="desc">扫码绑定后，本机常驻一条长轮询通道。收到的消息落进本地会话库，AI 按你写的人设自动回复；回复内容与检索范围都受同一套闸门约束。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>扫码绑定</b>：一次扫码完成接入，不需要 App ID / App Secret，也不要求账号密码</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>多实例</b>：一个微信号 = 一个实例，各自的通道、会话与行为配置互不干扰</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>人设可写</b>：每个实例一份系统提示词，内置拟人化默认值，长回复按语义分段发出</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>数据面收窄</b>：自动回复只检索你选的知识库，不碰本机微信数据；默认关闭、逐条审计</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>CLAWBOT PIPELINE</b><span>● 长轮询中</span></div>
+          <div class="flowmap">
+            <div class="row"><span class="node hot">扫码绑定</span><span class="arw">→</span><span class="node">长轮询收消息</span><span class="arw">→</span><span class="node v">落本地会话库</span></div>
+            <div class="row"><span class="arw">↓ 附件自动取回 · 本地解密</span></div>
+            <div class="row"><span class="node hot">AI 生成回复</span><span class="arw">→</span><span class="node">语义分段</span><span class="arw">→</span><span class="node hot">经 iLink 回发</span></div>
+          </div>
+          <div class="meter" style="margin-top:16px">
+            <div class="lbl"><span>数据面</span><b>仅知识库</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>默认状态</span><b>关闭</b></div>
+            <div class="track"><div class="fill" data-w="0"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>每次回复</span><b>写操作日志</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>单条回复上限</span><b>2000 字</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="tagline"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 微信接入（ClawBot） ============ -->
+<section id="clawbot">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">WECHAT BRIDGE · CLAWBOT</div>
+      <h2>把微信接进来，让 AI <span class="grad-txt">替你收发消息</span></h2>
+      <p>扫码绑定一个微信号，本机常驻一条长轮询通道：收到的消息落进本地会话库，AI 可以按你写的人设自动回复。全程不填账号密码，不碰微信数据面。</p>
+    </div>
+
+    <div class="grid-3">
+      <div class="card hl js-tilt rv">
+        <div class="num">01</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+        <h3>扫码即绑定，无需密钥</h3>
+        <p>用微信扫一次码就完成接入，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到。</p>
+        <div class="tags"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:110ms">
+        <div class="num">02</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg></div>
+        <h3>AI 自动回复，人设由你定</h3>
+        <p>每个实例一份系统提示词，内置一套拟人化默认值（像真人发微信那样口语、简短、自然）。长回复按语义切成几条依次发出，不会一条几千字刷屏。</p>
+        <div class="tags"><i>自定义人设</i><i>语义分段</i><i>逐条审计</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:220ms">
+        <div class="num">03</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>数据面刻意收窄</h3>
+        <p>自动回复只检索你为它选的知识库，<b>不碰本机微信数据</b>。默认关闭、开关就在实例卡上、每次回复写一行操作日志 —— 无人值守出网必须你显式开启。</p>
+        <div class="tags"><i>仅知识库</i><i>默认关闭</i><i>操作日志</i></div>
+      </div>
+    </div>
+
+    <div class="pane-grid rv" style="margin-top:26px">
+      <div>
+        <h3>一个微信号 = 一个实例，可以同时管几个</h3>
+        <p class="desc">每个实例有独立的通道、会话与行为配置：各自的自动回复开关、各自的知识库、各自的提示词。实例轨常驻左侧，点一下就能切换。</p>
+        <ul class="flist">
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>接入会话</b>：收到的消息按会话留存，支持筛选、导出 TXT / CSV、清除历史</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>附件自动取回</b>：图片 / 语音 / 视频 / 文件收到即从 CDN 取回并本地解密缓存</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音转写</b>：优先用微信自带的转写文本，没有则留占位与时长</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>环境自检</b>：通道状态、绑定详情、常见问题排障指引都在设置页</span></li>
+        </ul>
+      </div>
+      <div class="visual">
+        <div class="vhead"><b>CLAWBOT · 接入会话</b><span>● 长轮询中</span></div>
+        <div class="vrow">
+          <div class="vcell"><span class="av">李</span><span class="tx"><b>李工</b><span>明天那个方案能出个初稿吗？</span></span><span class="mt">21:04</span></div>
+          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>可以，我今晚先把框架搭出来，明早发你过一遍。</span></span><span class="mt">21:04</span></div>
+          <div class="vcell"><span class="av">王</span><span class="tx"><b>王总</b><span>[语音] 18″ · 已转写</span></span><span class="mt">20:41</span></div>
+          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>收到，我按您说的顺序调整一下。</span></span><span class="mt">20:41</span></div>
+        </div>
+        <div class="tagline"><i>仅知识库检索</i><i>默认关闭</i><i>逐条可审计</i></div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -1049,7 +1200,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <p>共同点是：数据属于自己，又确实需要被重新读一遍。所有场景都要求你使用对数据拥有合法访问权的账号。</p>
     </div>
 
-    <div class="grid-3">
+    <div class="grid-4">
       <div class="card sol js-tilt rv">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></div>
@@ -1066,6 +1217,21 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       </div>
 
       <div class="card sol js-tilt rv" style="--d:110ms">
+        <div class="top">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+          <span class="plan">ASSISTANT</span>
+        </div>
+        <h3>微信里的 AI 助理</h3>
+        <p>扫码把微信接进来，让 AI 按你写的人设替你回消息 —— 出差、开会、睡觉时也不漏掉重要的人。</p>
+        <ul>
+          <li>自定义人设与语气，长回复按语义分段发出</li>
+          <li>只检索你选的知识库，不碰本机微信数据</li>
+          <li>默认关闭、逐条审计，随时可解绑</li>
+        </ul>
+        <div class="glow"></div>
+      </div>
+
+      <div class="card sol js-tilt rv" style="--d:220ms">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9.5 21v-6h5v6"/></svg></div>
           <span class="plan">TEAM</span>
@@ -1112,8 +1278,9 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="lrow rv"><span class="k">UI LAYER</span><span class="v"><i>React 18</i><i>TypeScript</i><i>Vite</i><i>ECharts</i><i>深浅双主题</i></span></div>
         <div class="lrow rv" style="--d:90ms"><span class="k">QUERY</span><span class="v"><i>会话 / 记录</i><i>朋友圈</i><i>媒体资产</i><i>台账</i><i>地图足迹</i><i>年度报告</i></span></div>
         <div class="lrow rv" style="--d:180ms"><span class="k">RETRIEVAL</span><span class="v"><i>意图路由</i><i>查询改写</i><i>BM25</i><i>向量余弦</i><i>结构化过滤</i><i>RRF 融合</i><i>交叉重排</i><i>上下文压缩</i></span></div>
-        <div class="lrow rv" style="--d:270ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
-        <div class="lrow rv" style="--d:360ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
+        <div class="lrow rv" style="--d:270ms"><span class="k">BRIDGE</span><span class="v"><i>iLink 长轮询</i><i>扫码绑定</i><i>多实例</i><i>AI 自动回复</i><i>附件自动取回</i></span></div>
+        <div class="lrow rv" style="--d:360ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
+        <div class="lrow rv" style="--d:450ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
       </div>
 
       <div class="tech">
@@ -1144,7 +1311,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           <div class="it"><b>起点</b><p>十年聊天记录只能靠手指一直往上滑 —— 明明数据在自己电脑里，却读不出来。</p></div>
           <div class="it"><b>取舍</b><p>市面上大多数方案要你把数据交出去。我们反过来：解析、索引、检索全放本机，宁可牺牲一点效果。</p></div>
           <div class="it"><b>打磨</b><p>把 RAG 做成可评估、可调参、可降级的工程系统：有评测集，有消融对照，有回归护栏。</p></div>
-          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，让「看得懂」和「信得过」同时成立。</p></div>
+          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，并让 AI 从「读你的数据」走到「替你收发消息」—— 让「看得懂」和「信得过」同时成立。</p></div>
         </div>
       </div>
 
@@ -1196,6 +1363,14 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <button type="button">支持什么系统？数据规模上有限制吗？</button>
         <div class="ans"><p>当前为 Windows x64 桌面客户端。索引采用增量构建，实测在 13 万条量级消息上检索延迟以百毫秒计；更大的语料可调大候选池并采用分批增量构建。</p></div>
       </div>
+      <div class="q rv" style="--d:320ms">
+        <button type="button">微信接入（ClawBot）需要提供账号密码吗？</button>
+        <div class="ans"><p>不需要。用微信扫一次码就完成绑定，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到，可随时解绑。</p></div>
+      </div>
+      <div class="q rv" style="--d:400ms">
+        <button type="button">AI 自动回复会读我的聊天记录吗？</button>
+        <div class="ans"><p>不会。自动回复的数据面被刻意收窄为「只检索你为它选的知识库」，不碰本机微信数据。它默认关闭，开关就在实例卡上，每次回复都写一行操作日志 —— 无人值守出网必须你显式开启。</p></div>
+      </div>
     </div>
   </div>
 </section>
@@ -1234,6 +1409,18 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       </form>
 
       <div class="cinfo rv" style="--d:120ms">
+        <div class="qr-card">
+          <div class="qr-img">
+            <img src="wechat-qr.png" alt="Super Time 微信二维码" loading="lazy"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+            <div class="qr-ph" style="display:none">二维码<br>待放入</div>
+          </div>
+          <div class="qr-txt">
+            <b>扫码添加微信</b>
+            <p>想试用桌面版、想了解隐私与合规边界、或者想反馈一个问题，直接扫码找我们，比邮件更快。</p>
+            <span class="qr-hint">● 微信 · 一对一沟通</span>
+          </div>
+        </div>
         <div class="cbox">
           <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7 8.5 6 8.5-6"/></svg></div>
           <div><b>商务与合作</b><p>contact@supertime.app</p></div>
@@ -1319,7 +1506,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   </div>
 </footer>
 
-<button class="top" id="toTop" aria-label="回到顶部">
+<button class="toTop" id="toTop" aria-label="回到顶部">
   <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
 </button>
 

@@ -1,0 +1,52 @@
+/**
+ * 渲染错误兜底卡的样式。
+ *
+ * 几何口径与其余面板一致（`theme-geometry.spec.ts` 守着）：圆角只用令牌，
+ * 间距避开 5 / 7 / 9 / 18px，颜色走 nm 令牌并带兜底。
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--nm-danger-border, rgba(248, 113, 113, 0.35));
+  border-radius: var(--nm-r-lg, 14px);
+  background: var(--nm-danger-bg, rgba(248, 113, 113, 0.08));
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--nm-danger, #f87171);
+}
+
+.msg {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--nm-text-1, #e2e8f0);
+  word-break: break-word;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--nm-text-2, #94a3b8);
+}
+
+.retry {
+  align-self: flex-start;
+  padding: 8px 16px;
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.2));
+  border-radius: var(--nm-r-md, 10px);
+  background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
+  color: var(--nm-text-1, #e2e8f0);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.retry:hover {
+  border-color: var(--nm-border-active, #07c160);
+}

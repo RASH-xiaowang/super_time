@@ -123,6 +123,10 @@ export function GlobalSearch({ value, onChange, open, onOpenChange, inputRef, ch
           onFocus={() => { onOpenChange(true) }}
           aria-label="全局搜索微信数据（Ctrl+K）"
           title="全局搜索：会话 / 消息 / 联系人 / 朋友圈 / 收藏 / 文件 / 记录（Ctrl+K）"
+          /* 手机档的全局 44px 触摸目标下限要放过它：它自己就是整条搜索条，
+             抬到 44px 会让 `.box`（44 + 6×2 + 1×2 = 58px）比 56px 的搜索条还高。
+             类名有 CSS Modules hash、全局文件选不中，所以用 data- 属性（见 mobile-viewport.css）。 */
+          data-global-search=""
         />
         {value !== '' && (
           <button

@@ -17,7 +17,7 @@ export const MUTATIONS_BATCH3P = [
     id: 'M518-page-diff-stale-fingerprints-used',
     why: '指纹列表不再与源签名绑定（恒真）⇒ 过期指纹参与比对：主库变了而指纹说没变，那一轮静默跳过、数据漏同步，且没有报错。判据：sync-page-diff.spec.ts 的「指纹必须与源签名绑定」。',
     file: 'src/backend/wechat-data/src/query/sync.ts',
-    from: 'if (hashEntry !== undefined && hashEntry.sig === prevMain) {',
+    from: 'if (!diffSuppressed && hashEntry !== undefined && hashEntry.sig === prevMain) {',
     to: 'if (hashEntry !== undefined) {',
     spec: 'src/backend/wechat-data/tests/sync-page-diff.spec.ts',
   },

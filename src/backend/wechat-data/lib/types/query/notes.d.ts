@@ -110,9 +110,11 @@ export declare function saveNote(decryptedDir: string, kbId: number, input: {
     title: string;
     body?: string;
     tags?: string[] | string;
-    sourceKind?: 'manual' | 'ask';
+    sourceKind?: 'manual' | 'ask' | 'file';
     sourceUsername?: string;
     sourceQuestion?: string;
+    /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+    sourceFileId?: number;
 }): NoteMutationResult;
 /**
  * Delete one note of one knowledge base (links pointing at it become stubs next build).

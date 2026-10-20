@@ -17,10 +17,12 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { changedFilesSince, REGISTRY_PATH_RE, selectForDiff } from '../../../scripts/mutation-scope.mjs'
+import { changedFilesForGate, changedFilesSince, REGISTRY_PATH_RE, selectForDiff } from '../../../scripts/mutation-scope.mjs'
 import { MUTATIONS } from '../../../scripts/mutations-registry.mjs'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -95,6 +97,27 @@ describe('增量选取与真实登记表对得上', () => {
     const r = changedFilesSince('refs/heads/definitely-not-a-real-ref-xyz', ROOT)
     expect(r.ok).toBe(false)
     expect(r.files).toEqual([])
+  })
+
+  it('changedFilesForGate 把工作树未提交/未跟踪文件也算进增量', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mutation-scope-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      writeFileSync(join(dir, 'a.ts'), 'export const a = 1\n')
+      execFileSync('git', ['add', 'a.ts'], { cwd: dir })
+      execFileSync('git', [
+        '-c', 'user.name=test', '-c', 'user.email=test@example.invalid',
+        'commit', '-q', '-m', 'init',
+      ], { cwd: dir })
+      writeFileSync(join(dir, 'a.ts'), 'export const a = 2\n')
+      writeFileSync(join(dir, 'b.ts'), 'export const b = 1\n')
+      const r = changedFilesForGate('HEAD', dir)
+      expect(r.ok).toBe(true)
+      expect(r.files).toContain('a.ts')
+      expect(r.files).toContain('b.ts')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('⚠️ 每条变异都必须有 file 与 spec —— 少一个就等于它在增量模式下永远不会被选中', () => {

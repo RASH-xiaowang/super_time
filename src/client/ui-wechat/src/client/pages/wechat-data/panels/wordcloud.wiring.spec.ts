@@ -11,7 +11,7 @@
  * 源码锚点断言 + 先剥注释（本仓既有做法）；纯逻辑（searchQueryFromEvent）直接调用。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -24,22 +24,30 @@ const read = (...p: string[]): string => readFileSync(join(HERE, ...p), 'utf8')
 const card = read('WordCloudCard.tsx')
 const groupInsights = read('GroupInsights.tsx')
 const momentsInsights = read('MomentsInsights.tsx')
-const overview = read('overview-panel.tsx')
+// M22 把词云卡拆进 `overview-sections.tsx#WordCloudSection`，读取面改成全部 overview* 源码的联合。
+const overview = readdirSync(HERE)
+  .filter((f) => /^overview(-[a-z]+)?\.(ts|tsx)$/.test(f))
+  .sort()
+  .map((f) => read(f))
+  .join('\n')
 const panel = strip(read('..', 'WechatDataPanel.tsx'))
 
 describe('词云三处落位', () => {
   it('群聊分析页：scope=chat 且绑定当前选中的群（username 随选择器走）', () => {
-    expect(groupInsights).toContain('<WordCloudCard scope="chat" username={data.username} />')
+    expect(groupInsights).toContain('<WordCloudCard scope="chat" username={data.username} fill />')
   })
   it('朋友圈洞察页：scope=moments', () => {
-    expect(momentsInsights).toContain('<WordCloudCard scope="moments" />')
+    // 2026-10-17：词云与「月度发布分布」并排（`grid2`），用 `fill` 而不是固定 `height`
+    // —— 固定 220px 时月度分布 479px，词云下方空出 177px（真机 1230×713 实测）。
+    // `fill` 让舞台高度跟着卡片走，卡片高度由 `grid2` 的固定 300px 决定。
+    expect(momentsInsights).toContain('<WordCloudCard scope="moments" fill />')
   })
-  it('数据总览：scope=global，且卡片栅格与既有布局成对（span12 全宽）', () => {
+  it('数据总览：scope=global，且卡片是 Bootstrap 全宽行（col-12 独占一行）', () => {
     expect(overview).toContain('<WordCloudCard scope="global"')
-    // overview-layout.spec 要求 4/8 栅格成对：词云卡必须用 span12（独占一行），不用 4/8/6
+    // Wave D3：总览改用 Bootstrap 栅格，词云卡是整行（col-12），不再用自造 span12
     const at = overview.indexOf('<WordCloudCard scope="global"')
     const before = overview.slice(Math.max(0, at - 160), at)
-    expect(before.includes('css.ovSpan12'), '词云卡必须是 span12（4/8 栅格要成对，6 栅格要偶数）').toBe(true)
+    expect(before.includes('className="col-12"'), '词云卡必须是 Bootstrap col-12（整行独占）').toBe(true)
   })
 })
 

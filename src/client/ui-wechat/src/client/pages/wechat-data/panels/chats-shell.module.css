@@ -1,5 +1,21 @@
 .statUnread { color: var(--nm-danger); font-weight: 600; }
 .list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+/*
+ * 「已加载最近 N 个会话」提示条。
+ *
+ * 位置在列表**末尾**（`ListSentinel` 之前）：它是「为什么下面没有了」的解释，
+ * 放在列表上方会先于内容出现，读起来像一条错误。用 `--nm-text-2` 而不是警示色 ——
+ * 触顶是**设计行为**（DOM 上界），不是故障。
+ */
+.capNote {
+  padding: 8px 10px;
+  margin: 6px 2px;
+  border-radius: var(--nm-r-sm);
+  font-size: 12px;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-hover);
+  text-align: center;
+}
 /* 置顶区块 */
 .pinSection { border-bottom: 1px solid var(--nm-border); margin-bottom: 2px; }
 .pinArrow { display: inline-flex; color: var(--nm-text-2); }
@@ -17,31 +33,20 @@
   .calBtnLabel { display: none; }
 }
 /*
- * 头部标题：默认**留在文档流里**（flex: 1 吃掉中间，动作排自然贴右）；消息列够宽（≥960px）时
- * 才切成微信桌面端那套「标题绝对居中 + 动作靠右」。
+ * 头部标题：**始终左对齐**（留在文档流里，`flex: 1` 吃掉中间，动作排自然贴右）。
  *
- * 为什么要这道门槛（2026-10-14 实测）：2026-10-12 那版是**无条件**绝对居中，修好它的死选择器后
- * 量出来的几何不成立 —— 动作排六个带文字的按钮约 350px，1280px 窗口下消息列只有约 740px，
- * 居中的标题与动作排**必然重叠约 57px**（标题 z-index 更高、压在按钮上面）。
- * 门槛的数也是量出来的：动作排 350 + 标题上界 240 ⇒ 列宽 ≥ 2×350 + 240 ≈ 940 才放得下，取 960 留余量；
- * 查询的容器是 `.messages`（消息列自己），所以门槛量的是真正会重叠的那一列，不是窗口。
- * 门槛以下回到在流布局（标题左、动作右），一个像素都不重叠 —— 那不是降级，是几何不允许。
+ * ## 为什么不再做「绝对居中」（2026-10-16 用户要求）
+ *
+ * 2026-10-14 那版在宽列（≥1200px）切成微信桌面端那套「标题绝对居中 + 动作靠右」。
+ * 绝对居中要求标题两侧**完全对称**，于是右侧所有内容（动作排 351 + gap 10 + 轮询 112）
+ * 都要计入门槛：`2 × 473 + 标题 240 = 1186`。这个约束很脆 —— 任何右侧元素增删都要重算门槛，
+ * 且窄窗口下标题会突然从居中跳到左侧，观感割裂。
+ *
+ * 现在统一左对齐：标题紧贴左缘，动作排与轮询状态贴右缘，**任何列宽下都不重叠**，
+ * 也不再需要按宽度切换布局。
  */
 .msgHeaderInfo { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-@container (min-width: 960px) {
-  .msgHeaderInfo {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    align-items: center;
-    text-align: center;
-    max-width: 240px;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .msgHeaderActions { margin-left: auto; }
-}
+.msgHeaderActions { margin-left: auto; }
 /* 动作区必须能收窄：原先 flex-shrink:0 让它在窄窗口把内容顶出消息区，
    被 overflow 裁掉后按钮直接不可达（审计 P0-2）。收窄后内部 flex-wrap 才会生效。 */
 .msgHeaderActions { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; flex-wrap: wrap; }
@@ -54,12 +59,7 @@
   font-family: var(--nm-font-mono, monospace);
 }
 .msgErr { color: var(--nm-danger); font-size: 12px; text-align: center; padding: 8px; }
-/* 星空背景（空态装饰）。消息流背景自带 radial 氛围光。 */
-.starWrap { position: absolute; inset: 0; z-index: 0; overflow: hidden; display: flex; }
-.starWrap[data-hidden] { display: none; }
-.starfield { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.msgEmptyIcon { font-size: 30px; opacity: 0.5; filter: drop-shadow(0 0 10px color-mix(in srgb, var(--nm-cyan) 40%, transparent)); }
-.msgEmptyText { font-size: 12px; color: var(--nm-text-2); max-width: 320px; }
+/* 空态：一行提示 + 一个主按钮（雨窗/发光图标/说明句已删，NV-07）。 */
 .chatlogBody { flex: 1; overflow-y: auto; padding: 4px 14px 14px; scrollbar-width: thin; }
 .chatlogRow { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--nm-border); }
 .chatlogRow:last-child { border-bottom: none; }
@@ -93,6 +93,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   padding: 14px 16px;
   border-bottom: 1px solid var(--nm-border);
 }
@@ -103,16 +104,35 @@
 .calEmpty { aspect-ratio: 1; }
 .calDayNum { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
 .calHint { margin-top: 12px; font-size: 11px; color: var(--nm-text-2); text-align: center; }
-.exportBody { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
-.exportField { display: flex; flex-direction: column; gap: 6px; }
+.exportBody {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+/* 底部动作栏：固定在弹窗底缘（不随正文滚动），上缘一条发丝线。 */
+.exportActions {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+}
 .exportChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.exportField { display: flex; flex-direction: column; gap: 6px; }
 .exportHint {
   font-size: 11px;
   color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
 }
 .exportCheckbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-1); cursor: pointer; }
-.exportActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .editErr {
   margin: 8px 0 0;
   font-size: 12px;
@@ -138,7 +158,20 @@
   font-weight: 600;
   color: var(--nm-text-1);
 }
-.groupInfoBody { flex: 1; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; display: flex; flex-direction: column; }
+/* 区⓪–⓬ 的滚动区。它是抽屉里唯一可滚动的部分；导出按钮在它外面固定（见
+   chats-group-info-view.tsx 与下面的 .groupExport），所以滚动内容永远不会盖住底部动作。 */
+.groupInfoBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; scrollbar-width: thin; display: flex; flex-direction: column; }
+/* 抽屉底部的固定动作槽：不参与滚动、不覆盖内容；上方 1px 分隔把
+   它和可滚动内容分开。padding 让按钮离抽屉左右边各 14px。 */
+.groupExport {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  position: relative;
+  z-index: 2;
+}
 .memberGrid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

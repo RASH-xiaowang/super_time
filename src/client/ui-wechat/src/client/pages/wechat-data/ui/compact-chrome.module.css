@@ -1,0 +1,331 @@
+/**
+ * 全局「紧凑 chrome」层（Wave D1 / `docs/UI-DENSITY.md` §3 A 层）。
+ *
+ * ## 为什么是一个「按类名片段命中」的全局覆盖层
+ *
+ * 密度审计的结论是全站共性：页头 51px、卡片头 48–79px、统计卡墙 110–316px。
+ * 这些结构由 5 个 kit 公共组件（PanelHeader / Card / StatCard / DataTable / EmptyState）
+ * 生成，分布在 144 个面板视图里；逐面板改会重复 144 次且必然漂移。`docs/UI-DENSITY.md` §3
+ * 定的做法是：**不动 kit 源文件**，在 `WechatDataPanel` 顶部副作用引入本文件，
+ * 用「标签 + 属性子串」选择器覆盖 kit 的哈希类名。
+ *
+ * ## 选择器纪律（三根硬线）
+ *
+ *   1. **标签 + 属性**：`div[class*='_panelHeader_']` 的特异性是 (0,1,1)，高于 kit 的
+ *      `.panelHeader`（0,1,0）—— 因此**不依赖 CSS 打包/加载顺序**（面板 CSS 是懒加载
+ *      chunk，顺序不可控）；也绝不使用 `!important`。
+ *   2. **只认 CSS Modules 的哈希类名片段**：kit 类名形如 `_panelHeader_1wwo2_8`，片段取
+ *      `_panelHeader_`（含首尾下划线）就不会误伤 `_panelTitleWrap_` 这类前缀相同的类。
+ *   3. **间距只用 4/6/8/10/12/16 刻度**（主题几何棘轮：5/7/9/18 会打红）；不改
+ *      `--nm-*` 令牌值、不改圆角令牌、不写死圆角字面量。
+ *
+ * ## 覆盖面
+ *
+ *   · 页头：标题 15px + 说明 11px **同一行**、说明单行省略、页头 ≤44px；
+ *   · 卡片：cardHd 8/12、标题 13px、cardBd 12、cardFt 8/12、卡间距 8、面板骨架 gap 8；
+ *   · 统计卡：`StatCard` 改**单行内联 KPI**（icon 20 + 数值 15 + 标签 10.5 + hint 10），
+ *     整条 40–46px（详见 .statCard 一段；>6 项的页面在面板层再处理）；
+ *   · 表格：单元格 6px 10px、表头行高 30px（数据行随之为 28px 上下）；
+ *   · 空态：垂直 padding ≤32px、改「居上」而不是整屏居中；
+ *   · 面板骨架：`.panelShell` 上下 12px、`gap` 12→8。
+ *
+ * 触摸目标：本文件**不缩任何按钮/输入的高度**（手机档 44px 触摸下限由
+ * `mobile-viewport.css` 与各面板手机档维护）；只收间距与排版尺寸。
+ */
+
+/* 本文件没有「局部类」可供 JS 引用；但 Vite 会把「只有 :global/属性选择器、
+ * 无导出引用」的 CSS Modules 当成无副作用导入摇掉（实测首次接入后 0 条规则进产物）。
+ * 因此导出一个空标记类，由 shell 根节点挂上 —— 保证整份覆盖层随主包加载。
+ * 这里写一个无视觉影响的声明，避免被压缩器当空规则删掉。 */
+.compactChrome {
+  --compact-chrome-layer: 1;
+}
+
+/* ============================================================
+ * 1. 页头（PanelHeader：标题 + 说明 + 动作）
+ * ============================================================ */
+div[class*='_panelHeader_'] {
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+}
+
+/* 标题与说明并排：原来是 column（标题一行、说明一行），页头因此 51px 起。 */
+div[class*='_panelTitleWrap_'] {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+h2[class*='_panelTitle_'] {
+  font-size: 15px;
+  line-height: 1.35;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+p[class*='_panelDesc_'] {
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+div[class*='_panelActions_'] {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ============================================================
+ * 2. 工具栏（Toolbar）—— 只收行内间距，不改控件高度
+ * ============================================================ */
+div[class*='_toolbar_'] {
+  gap: 8px;
+}
+
+div[class*='_toolbarLeft_'],
+div[class*='_toolbarRight_'] {
+  gap: 6px;
+}
+
+/* ============================================================
+ * 3. 卡片（Card）与面板骨架
+ * ============================================================ */
+div[class*='_cardHd_'] {
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+div[class*='_cardTitle_'] {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+div[class*='_cardBd_'] {
+  padding: 12px;
+}
+
+div[class*='_cardFt_'] {
+  padding: 8px 12px;
+}
+
+div[class*='_cardGrid_'] {
+  gap: 8px;
+}
+
+div[class*='_panelShell_'],
+div[class*='_panelBody_'],
+div[class*='_panelEmbed_'] {
+  gap: 8px;
+}
+
+/* --nm-panel-pad 是 `16px 0`：只收上下，左右保持 0（面板内容整宽）。 */
+div[class*='_panelShell_'] {
+  padding: 12px 0;
+}
+
+/* ============================================================
+ * 4. 统计卡（StatCard）→ 单行内联 KPI
+ *
+ * 结构：icon / value / label / (hint)。原来 column + 16px padding + 2xl 数值
+ * ⇒ 每卡 110px；审计里 6 张卡墙占 272–316px、1280 折成两排。
+ * 现在：icon 20px 占左侧整两行；数值 15px / 标签 10.5px 叠在中间列；hint 10px 靠右
+ * ——整条 44px 左右，6 张卡在 1280 内容宽（~1070px）下一排排下。
+ *
+ * 用 `:has(> [class*='_statIcon_'])` 精确命中 kit 的 StatCard：Oplog 等面板也有
+ * 自己的 `_statCard_<hash>` 局部类（结构不同），不在全局层强行套网格，交给面板层。
+ * ============================================================ */
+div[class*='_statGrid_'] {
+  gap: 6px;
+}
+
+div[class*='_statCard_']:has(> div[class*='_statIcon_']),
+button[class*='_statCard_']:has(> span[class*='_statIcon_']) {
+  /* 120 而不是 140：设置弹窗里的「数据健康中心」内容宽约 840px，6 张 140 的卡
+     （6×140+5×6=870）会折成两排 97.8px；120 时 750px 一排排下，statH 45.9。 */
+  flex: 1 1 120px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
+  grid-template-areas:
+    'icon value hint'
+    'icon label hint';
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 0;
+  padding: 6px 10px;
+}
+
+div[class*='_statIcon_'] {
+  grid-area: icon;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+}
+
+div[class*='_statValue_'] {
+  grid-area: value;
+  font-size: 15px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+div[class*='_statLabel_'] {
+  grid-area: label;
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+div[class*='_statHint_'] {
+  grid-area: hint;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ============================================================
+ * 5. 表格（DataTable）—— 单元格 6/10、表头 30px
+ *
+ * kit-table 的 `.table tbody td` 是 (0,1,2)；这里用 `tbody tr td` 提到 (0,1,3)，
+ * 同样不依赖加载顺序。
+ * ============================================================ */
+table[class*='_table_'] thead th {
+  height: 30px;
+  padding: 6px 10px;
+}
+
+table[class*='_table_'] tbody tr td {
+  padding: 6px 10px;
+}
+
+/* ============================================================
+ * 6. 空态（EmptyState / emptyInline）—— 收紧、居上
+ * ============================================================ */
+div[class*='_empty_'] {
+  padding: 24px 16px;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+div[class*='_emptyIcon_'] {
+  font-size: 22px;
+}
+
+div[class*='_emptyTitle_'] {
+  font-size: 13px;
+}
+
+div[class*='_emptyDesc_'] {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+div[class*='_emptyInline_'] {
+  padding: 12px 16px;
+}
+
+/* ============================================================
+ * 7. 设置弹窗内嵌面板（Wave D2）
+ *
+ * `hook` / `backup` / `health` 等页签是设置弹窗里嵌进来的面板：卡片 grid 行默认
+ * `stretch`，把「暂无备份」这类空态卡拉到 800×384，卡内除空态外全是大块空白
+ * （D2 新口径 emptyRatio 90.4% / 87.7% 的样本）。按 docs §2.4「卡片最小高度按内容」，
+ * 只让**内嵌面板**里的卡片按内容高 —— 普通页签的列表卡仍保留拉伸（列表需要吃满）。
+ * ============================================================ */
+div[class*='_panelEmbed_'] div[class*='_cardGrid_'] {
+  align-items: start;
+}
+
+/* ============================================================
+ * 8. 卡片尺寸边界（2026-10-18 用户报：限制每张卡片的大小，别让分辨率改变布局）
+ *
+ * 约束只落在**高度**与**卡内布局**上，宽度沿用各面板原有布局（2026-10-18 二次反馈：
+ * 「不要居中，弄回之前的布局」—— 内容区不再加 max-width / margin-inline:auto，
+ * 保持原来紧跟侧边栏、铺满可用宽度的排版）。
+ *
+ *   A. 卡片高度预算：普通内容卡 ≤ min(60vh, 560px)，内容超出走**卡内滚动**（不是裁切，也不是
+ *      无限长高）。视觉类卡（canvas/svg/地图/图谱/热力/日历/图表/词云/舞台/编辑器）豁免 ——
+ *      它们按自身宽高比渲染，硬套高度预算会把图压扁，这些卡各自已有显式高度。
+ *      注意选择器**不能带 `div` 标签**：kit Card 的根节点是 `<section>`（空态/列表卡都是），
+ *      带标签会漏掉一半卡片（2026-10-18 实测 kb/groupinsights 的卡高 1226/1050 没被限住）。
+ *   B. 卡片网格按内容高对齐（普通页也生效）：一行里最高的卡不再把空态/短卡拉高；
+ *      卡高由内容决定，换分辨率时只改变列数，不改变卡内布局。
+ * ============================================================ */
+[class*='_card_'] {
+  max-width: 100%;
+}
+
+/* 高度预算落在**卡身**而不是整卡：卡本身按内容自然高度（header + 卡身），
+ * 卡身超出预算时卡内滚动。这样卡片总高仍被限住（≤ 预算 + 卡头 ~35px），
+ * 又不会因为外卡 `overflow:hidden` 把内容裁掉（2026-10-18：整卡 max-height 会让
+ * monitor/groupinsights 的图表卡在 390 档被 y-clip 判为裁切）。
+ * 卡身有两种：kit 的 `_cardBd_`（含 flush 变体）与面板自定义的 `_cardBody_`，两者都罩。
+ * 无卡身的卡（内容直接摊在卡上）不硬裁，由面板自己给滚动容器。
+ * 选择器不带标签：kit Card 可能是 `<section>`。 */
+[class*='_card_'] > [class*='_cardBd'],
+[class*='_card_'] > [class*='_cardBody'] {
+  min-height: 0;
+  overflow-y: auto;
+  max-height: min(60vh, 526px);
+}
+
+/* 卡片本身也设上界：有些页面（kb / dailysummary / groupinsights）用 flex/grid 把卡片
+ * 拉伸到整列高，卡身只有 200px，卡却能到 1226px —— 那种「被父布局拉高」的卡虽然内容没被裁，
+ * 但已经和分辨率强相关。上界 = 卡身预算 + 卡头/卡脚余量（56px，实测 390 档
+ * 卡头 39 + 边框/圆角取整需要 ~50px，用 56 留安全余量，避免 10px 级 y-clip 误报）。 */
+[class*='_card_']:has(> [class*='_cardBd'], > [class*='_cardBody']) {
+  max-height: calc(min(60vh, 526px) + 72px);
+}
+
+/* 视觉类卡（canvas/svg/图表…）给更宽松的卡身预算。 */
+[class*='_card_']:has(:is(canvas, svg,
+  [class*='_map'], [class*='_graph'], [class*='_heat'], [class*='_calendar'],
+  [class*='_chart'], [class*='_plot'], [class*='_wordcloud'], [class*='_stage'], [class*='_editor'])) > [class*='_cardBd'],
+[class*='_card_']:has(:is(canvas, svg,
+  [class*='_map'], [class*='_graph'], [class*='_heat'], [class*='_calendar'],
+  [class*='_chart'], [class*='_plot'], [class*='_wordcloud'], [class*='_stage'], [class*='_editor'])) > [class*='_cardBody'] {
+  max-height: min(82vh, 788px);
+}
+
+[class*='_card_']:has(> [class*='_cardBd'], > [class*='_cardBody']):has(:is(canvas, svg,
+  [class*='_map'], [class*='_graph'], [class*='_heat'], [class*='_calendar'],
+  [class*='_chart'], [class*='_plot'], [class*='_wordcloud'], [class*='_stage'], [class*='_editor'])) {
+  max-height: calc(min(82vh, 788px) + 72px);
+}
+
+/* 2026-10-19 用户要求「合理使用滚动条，能撑满屏幕就撑满屏幕」：
+ * 桌面档（≥901px）卡片高度交给内容与页面滚动，不再给卡身 60vh/526px 上界 ——
+ * 否则长内容会被迫在卡内再开一条滚动条，形成「页面滚 + 卡内滚」两层。
+ * 窄档（≤900）保留上面的上界，避免 390 档整卡被 y-clip 裁掉。 */
+@media (min-width: 901px) {
+  [class*='_card_'] > [class*='_cardBd'],
+  [class*='_card_'] > [class*='_cardBody'] { max-height: none; }
+  [class*='_card_']:has(> [class*='_cardBd'], > [class*='_cardBody']) { max-height: none; }
+}
+
+/* 2026-10-18 用户要求「看一下其他面板，没有铺满屏幕的请修复」：
+ * 显式标了 `_fillCard_` 的列表/表格/消息卡由父布局分配高度，要做的是**铺满**，
+ * 因此解除上面两条卡高上界（否则 1456×908 下卡止于 598px，下方留 88~300px 空白）。
+ * 用重复属性选择器把特异度抬到 (0,3,0)，避免依赖 CSS 加载顺序。 */
+[class*='_card_'][class*='_fillCard_'][class*='_fillCard_'] { max-height: none; }
+[class*='_card_'][class*='_fillCard_'][class*='_fillCard_'] > [class*='_cardBd'],
+[class*='_card_'][class*='_fillCard_'][class*='_fillCard_'] > [class*='_cardBody'] { max-height: none; }
+
+[class*='_cardGrid_'] {
+  align-items: start;
+}

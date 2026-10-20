@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { recordPads, useRecordRowVirtualizer, visibleRecordRows } from './records-virtual.ts'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
-import { Badge, Card, DateRangeField, EmptyMaybeSyncing, LinkButton, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { Card, DateRangeField, EmptyMaybeSyncing, LinkButton, PanelHeader, SearchInput, Segmented, Select, Toolbar } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
@@ -14,13 +14,19 @@ import kitCss from '../ui/kit.module.css'
 
 type Kind = 'revokes' | 'transfers' | 'redpackets' | 'finder' | 'miniprograms' | 'friendverifications'
 
-const KIND_META: Record<Kind, { label: string; desc: string; icon: string }> = {
-  revokes: { label: '撤回消息', desc: '本地撤回缓存记录，点击会话可跳转定位', icon: '↩️' },
-  transfers: { label: '转账记录', desc: '微信转账明细，点击会话可跳转', icon: '💳' },
-  redpackets: { label: '红包记录', desc: '微信红包明细，点击会话可跳转', icon: '🧧' },
-  finder: { label: '视频号', desc: '视频号直播 / 用户页记录', icon: '📺' },
-  miniprograms: { label: '小程序', desc: '已使用的小程序联系人', icon: '🧩' },
-  friendverifications: { label: '好友验证', desc: '新朋友 / 好友验证消息', icon: '👥' },
+/**
+ * 分类元数据。
+ *
+ * `label` 用于页头/空态（完整说法），`short` 只用于分类下拉 —— 下拉一行放得下 6 类，
+ * 计数跟在名字后面（已访问过的类目才显示，避免假装是 0）。
+ */
+const KIND_META: Record<Kind, { label: string; short: string; desc: string }> = {
+  revokes: { label: '撤回消息', short: '撤回', desc: '本地撤回缓存记录，点击会话可跳转定位' },
+  transfers: { label: '转账记录', short: '转账', desc: '微信转账明细，点击会话可跳转' },
+  redpackets: { label: '红包记录', short: '红包', desc: '微信红包明细，点击会话可跳转' },
+  finder: { label: '视频号', short: '视频号', desc: '视频号直播 / 用户页记录' },
+  miniprograms: { label: '小程序', short: '小程序', desc: '已使用的小程序联系人' },
+  friendverifications: { label: '好友验证', short: '好友验证', desc: '新朋友 / 好友验证消息' },
 }
 
 const KINDS: ReadonlyArray<Kind> = ['revokes', 'transfers', 'redpackets', 'finder', 'miniprograms', 'friendverifications']
@@ -177,7 +183,6 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedQuery?.nonce])
 
-
   const load = useCallback(async (reset: boolean): Promise<void> => {
     if (reset) setPage(0)
     setError(null)
@@ -322,37 +327,34 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
 
   return (
     <div className={css.panel}>
+      {/* 页头紧凑化（2026-10-18）：只在本面板作用域内收 h2/p 的 UA 外边距与 42px 图标
+          （页头 93px → 约 40px）。选择器见 records.module.css 的 `.panel > div:first-child`；
+          不再包一层 div —— mutation M11 按 `desc={meta.desc}` 的逐字缩进锁定 PanelHeader。 */}
       <PanelHeader
-        title={<><span className={css.hdIcon}>{meta.icon}</span>{meta.label}</>}
+        title="资金往来"
         desc={meta.desc}
-        actions={<Badge tone="cyan">共 {total.toLocaleString()} 条</Badge>}
+        actions={<button type="button" className={css.btn} onClick={() => { void load(true) }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>}
       />
 
-      {/* 合并成一个 Toolbar（2026-09-29：原来两个 Toolbar 各占一行 ⇒ 四行稀疏、行间大片空白）。
-          左 = 分类 + 搜索 + 时间筛选，右 = 排序 + 搜索 + 导出；Toolbar 自带 flex-wrap，窄窗自动折行。 */}
+      {/* 第 1 排：分类（下拉，带计数）+ 搜索。
+          2026-10-18 布局重设计：原来「分类 + 搜索 + 时间范围 + 排序 + 按钮」全塞在一个
+          Toolbar 里，1440 宽也折成 3 排（144px），表格被顶到 y=361。现在拆成两排紧凑行，
+          固定筛选区约 64px；「搜索」按钮也删掉 —— 输入框 400ms 防抖 + Enter 已是同一条路。
+          2026-10-19 微信化：6 项分类段条改成下拉筛选（窄窗不再换行，计数跟在下拉项里）。 */}
+      <div className={css.kindRow}>
+        {/* 分类下拉拆成同文件的小组件：RecordsPanel 在函数体棘轮上（只许变小），
+            选项标签的拼接逻辑搬出去后本函数比登记值更短。 */}
+        <RecordKindTabs value={kind} totals={totals} onChange={switchKind} />
+        <SearchInput value={keyword} onChange={(v) => { setKeyword(v) }} onEnter={() => { void load(true) }} placeholder="搜索会话 / 用户 / ID…" ariaLabel="搜索记录" className={css.search} />
+      </div>
+
       <Toolbar
         left={(
           <>
-            <Segmented
-              options={KINDS.map(k => ({
-                value: k,
-                label: `${KIND_META[k].icon} ${KIND_META[k].label}${totals[k] != null && totals[k] > 0 ? ` (${totals[k]})` : ''}`,
-              }))}
-              value={kind}
-              onChange={(v) => { switchKind(v as Kind) }}
-              ariaLabel="记录分类"
-            />
-            <SearchInput value={keyword} onChange={(v) => { setKeyword(v) }} onEnter={() => { void load(true) }} placeholder="搜索会话 / 用户 / ID…" ariaLabel="搜索记录" />
             {TIME_KINDS[kind] && (
-              <DateRangeField
-                from={fromDate}
-                to={toDate}
-                onFrom={setFromDate}
-                onTo={setToDate}
+              <DateRangeField inline from={fromDate} to={toDate} onFrom={setFromDate} onTo={setToDate}
                 onClear={() => { setFromDate(''); setToDate('') }}
-                presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                ariaLabel="记录时间筛选"
-              />
+                presets={['today', 'week', 'month', 'last-7', 'last-30']} ariaLabel="记录时间筛选" />
             )}
           </>
         )}
@@ -364,7 +366,6 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
               onChange={(v) => { setDirection(v as 'asc' | 'desc') }}
               ariaLabel="排序方向"
             />
-            <button type="button" className={css.btn} onClick={() => { void load(true) }} disabled={loading}>搜索</button>
             <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
           </>
         )}
@@ -382,12 +383,12 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
           卡片作为 flex 子项默认会被压缩，再被自己的 `overflow: hidden` 切掉一截表格
           （实测切 85px、且没有滚动条）。见 records.module.css 里那段说明。 */}
       <Card flush className={css.recordsCard}>
-        {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
+        {error && <div className={kitCss.error} role="alert">{error}</div>}
         {loading && items.length === 0 && <ListSkeleton rows={10} />}
         {!loading && !error && items.length === 0 && (
           readError
-            ? <div className={kitCss.error} role="alert">⚠️ {readError}</div>
-            : <EmptyMaybeSyncing text={`暂无${meta.label}记录`} />
+            ? <div className={kitCss.error} role="alert">{readError}</div>
+            : <EmptyMaybeSyncing text={`暂无${meta.label}`} />
         )}
         {!loading && !error && items.length > 0 && (
           <div className={css.tableScroll} ref={tableScrollRef}>{renderTable()}</div>
@@ -401,5 +402,35 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         )}
       </Card>
     </div>
+  )
+}
+
+/**
+ * 记录分类下拉（2026-10-19 从段条改成下拉，仍从 `RecordsPanel` 拆出）。
+ *
+ * 为什么拆：`RecordsPanel` 在 `function-size-ratchet.spec.ts` 的登记表上（276 行，只许变小），
+ * 而本轮筛选区要把 6 项段条换成带计数的下拉。把「标签拼 count」的推导搬成独立小组件后，
+ * 面板函数行数不变，下拉逻辑也可单独看。
+ *
+ * @param props.value - 当前分类。
+ * @param props.totals - 已访问分类的计数（未访问的不显示，避免假装是 0）。
+ * @param props.onChange - 切分类回调。
+ * @returns 分类下拉。
+ */
+function RecordKindTabs({ value, totals, onChange }: {
+  value: Kind
+  totals: Partial<Record<Kind, number>>
+  onChange: (kind: Kind) => void
+}): React.JSX.Element {
+  return (
+    <Select
+      value={value}
+      onChange={(v) => { onChange(v as Kind) }}
+      options={KINDS.map(k => ({
+        value: k,
+        label: totals[k] != null && totals[k] > 0 ? `${KIND_META[k].short} · ${String(totals[k])}` : KIND_META[k].short,
+      }))}
+      ariaLabel="记录分类"
+    />
   )
 }

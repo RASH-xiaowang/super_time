@@ -1,6 +1,6 @@
 /* Shared styles for list/grid data panels (favorites/emoticons/files/
-   annual/hook/privacy/backup/revoked) — NEON MATRIX redesign.
-   Glass surfaces, neon cyan accent, glowing hovers, mono numerals. */
+   hook/privacy/backup/revoked) — 微信灰阶 + 绿色主操作，去装饰。
+   共用面只做低风险调整：去渐变/发光/毛玻璃，统一行高 44 与卡片头 36。 */
 
 .panel {
 
@@ -9,7 +9,6 @@
 
   height: 100%;
   display: flex; flex-direction: column; gap: 12px; min-height: 0; box-sizing: border-box;
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
 /* 嵌进「微信数据配置」弹窗的整页视图（隐私体检）：不要 height:100%，
@@ -25,24 +24,110 @@
   padding: 4px 13px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+  background: var(--nm-bg-card);
   font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
   corner-shape: round;
 }
 .catBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
 .catBtn[data-active='true'] {
-  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   color: var(--nm-cyan);
   font-weight: 600;
   border-color: var(--nm-cyan);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
 }
 .catBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ── 组内共用：内联 KPI 条（4 个文件页同一套视觉）────────────────────
+ * 统计从「页头长句 / 卡片墙」收成一条 44px 横带：标签在上、数值在下，
+ * 语义色只染小面积数值。超过 4 项时允许换行，不压缩数字。 */
+.kpiBar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+  min-height: 44px;
+}
+.kpiItem {
+  flex: 1 1 0;
+  min-width: 118px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 12px;
+  border-left: 1px solid var(--nm-border);
+}
+.kpiItem:first-child { border-left: 0; }
+.kpiLabel {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpiValue {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpiItem[data-tone='success'] .kpiValue { color: var(--nm-success-text); }
+.kpiItem[data-tone='danger'] .kpiValue { color: var(--nm-danger-text); }
+
+/* ── 组内共用：页头「更多 ▾」菜单 ────────────────────────────────────
+ * 页头只留主操作 + 更多；低频动作（导出 / 查找重复 / 跳转）收进这里。 */
+.moreMenu { position: relative; }
+.morePanel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  box-shadow: var(--nm-shadow-popup);
+}
+.moreItem {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: var(--nm-fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.moreItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
+.moreItem:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── 列表/网格容器 ── */
+/*
+ * 这两个容器**故意没有** `backdrop-filter`。
+ *
+ * 它们原先各带一条 `blur(10px)`，但自己的底色是 `--nm-bg-card` = #0f172a，
+ * **完全不透明** —— 模糊一层看不见的东西不会产生任何可见效果，只是一层多余的合成。
+ * 代价是滚动时每帧都要把整块区域重新模糊一遍（收藏与表情 74 节点、文件与存储 394 节点，
+ * 后者真机实测 p90 6ms、单帧最长 13ms）。同一模式在 `chats-cards.module.css` 的
+ * 审计里已记过一次（P2-3），这里补齐。
+ */
 .scroll {
   flex: 1;
   min-height: 0;
@@ -50,8 +135,6 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   padding: 8px;
 }
 .grid {
@@ -61,13 +144,17 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   padding: 10px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 10px;
   align-content: start;
+}
+
+/* 搜索框在窄面板里随工具栏收窄，避免把右侧分段器顶出列。 */
+.searchGrow {
+  flex: 1;
+  min-width: 0;
 }
 
 /*
@@ -79,34 +166,34 @@
 .fileGrid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 
 /* ── 列表行 ── */
-.row { display: flex; gap: 10px; padding: 8px; border-radius: var(--nm-r-md); transition: background 0.15s; }
+.row { display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 6px 8px; border-radius: var(--nm-r-md); transition: background var(--nm-t-fast); }
 .row:hover { background: var(--nm-bg-hover); }
 .rowIcon {
   width: 36px; height: 36px;
   border-radius: var(--nm-r-md);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 16%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
-  color: var(--nm-cyan);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; font-size: 16px;
-  box-shadow: inset 0 0 12px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
 }
 .rowName { font-size: 13px; font-weight: 600; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rowTime { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 /* ── 表情/文件网格 ── */
 .emoCell {
-  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   position: relative;
   cursor: pointer;
-  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
-  transition: all 0.15s;
+  background: transparent;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast);
+  /* 固定高度：改前每格三行文字把高度撑到 150px，30 个格子要滚 4 屏；
+     现在只留图片（+ 有 caption 时一行名称），96px 一屏能看 5 行。 */
+  min-height: 96px;
 }
 .emoCell:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .emoPh { font-size: 30px; }
 /* 表情格里的真图：固定 72px 见方、只做 contain（动图自己会动，别加 transition） */
@@ -121,8 +208,8 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   cursor: pointer;
-  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
-  transition: all 0.15s;
+  background: transparent;
+  transition: background var(--nm-t-fast), border-color var(--nm-t-fast);
 }
 /* 备份条目：**横向排布**（2026-09-29 用户截图指出："修复这个，文本内容横向排布"）。
  *
@@ -147,10 +234,38 @@
 .bkCell > .fileMeta { flex: 1 1 320px; min-width: 0; margin-left: 0; margin-right: 0; }
 
 .fileCell:hover {
-  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+/* 文件格：缩略区与图标区做成有明确边界的视觉块，减少旧版的死白间隔。 */
+.fileThumbWrap {
+  position: relative;
+  width: 100%;
+  border-radius: var(--nm-r-md);
+  overflow: hidden;
+  background: var(--nm-bg-hover);
+}
+.fileIconWrap {
+  width: 100%;
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+}
+.fileIconWrap .fileIcon {
+  font-size: 34px;
+  line-height: 1;
+}
+.fileExt {
+  font-size: var(--nm-fs-xs, 11px);
+  font-weight: 700;
+  color: var(--nm-cyan);
+  font-family: var(--nm-font-mono, monospace);
+  letter-spacing: 0.04em;
 }
 /* 备份预览弹层（第 87 轮）：原先这些样式是 Backup.tsx 里的行内样式，颜色写死为
    `#8b949e` / `#e6edf3`（深色主题专用字面量）—— 浅色主题下实测对比度 2.72:1 与 **1.04:1**
@@ -195,7 +310,7 @@
 .rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: var(--nm-dense-r); background: var(--nm-bg-hover); }
 .rvFootNote { margin-top: 4px; }
 
-/* 新版图片灯箱预览 */
+/* 新版图片灯箱预览（微信化：纯色遮罩，无毛玻璃） */
 .lightbox {
   position: fixed;
   inset: 0;
@@ -204,9 +319,7 @@
   align-items: center;
   justify-content: center;
   padding: 22px;
-  background: rgba(3, 6, 12, 0.86);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.4);
 }
 .lightboxCard {
   width: min(600px, 92vw);
@@ -217,7 +330,7 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   overflow: hidden;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--nm-shadow-popup);
 }
 .lightboxHd {
   display: flex;
@@ -243,10 +356,10 @@
   flex-shrink: 0;
   padding: 2px 8px;
   border-radius: var(--nm-r-sm);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
-  color: var(--nm-cyan);
+  border: 1px solid var(--nm-border);
+  color: var(--nm-text-2);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .lightboxClose {
   flex-shrink: 0;
@@ -275,7 +388,7 @@
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(0, 0, 0, 0.38);
+  background: var(--nm-bg-0);
   overflow: hidden;
 }
 .lightboxImg {
@@ -513,101 +626,11 @@
 .heatGrid { display: grid; grid-template-columns: 20px repeat(24, minmax(0, 1fr)); gap: 2px; }
 .heatCell { aspect-ratio: 1; border-radius: var(--nm-r-xs); transition: opacity 0.15s; }
 .heatCell:hover { opacity: 0.7; }
-.monthlyBar { display: flex; align-items: flex-end; gap: 4px; height: 72px; padding-top: 6px; }
-.monthCol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.monthFill {
-  width: 100%;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--nm-cyan) 65%, transparent), color-mix(in srgb, var(--nm-purple) 40%, transparent));
-  border-radius: 4px 3px 0 0;
-  transition: height 0.3s;
-}
+/* ── 年度报告（消费者在 annual.module.css；此处保留共用条带样式） ── */
 .barRow { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
 .barLabel { width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
-.barTrack { flex: 1; height: 8px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); border-radius: var(--nm-r-xs); overflow: hidden; }
-.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-xs); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
-.reportGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.statChips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.statChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: var(--nm-bg-hover);
-  font-size: 12px;
-  color: var(--nm-text-1);
-  corner-shape: round;
-}
-.statChip b { color: var(--nm-cyan); font-weight: 700; }
-.tagRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
-
-/* ── FancyUI 焦点句 / 跑马灯 ── */
-.focus { padding: 6px 0; }
-.focusEyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--nm-cyan);
-  margin-bottom: 4px;
-}
-.focusSentence {
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 1.5;
-  color: var(--nm-text-1);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.marquee { position: relative; overflow: hidden; }
-.marqueeTrack {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: max-content;
-  animation: wcMarquee linear infinite;
-  will-change: transform;
-  padding: 6px 0;
-}
-@keyframes wcMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-.marqueeTrack[data-reverse] { animation-direction: reverse; }
-.marquee:hover .marqueeTrack { animation-play-state: paused; }
-.marqueeMaskL {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 56px;
-  background: linear-gradient(to right, var(--nm-bg-card), transparent);
-  pointer-events: none;
-}
-.marqueeMaskR {
-  position: absolute; right: 0; top: 0; bottom: 0; width: 56px;
-  background: linear-gradient(to left, var(--nm-bg-card), transparent);
-  pointer-events: none;
-}
-.marqueeCard {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: var(--nm-r-md);
-  border: 1px solid var(--nm-border);
-  background: var(--nm-bg-card);
-  flex: none;
-}
-.marqueeCardIcon { font-size: 20px; flex: none; }
-.marqueeCardBody { display: flex; flex-direction: column; gap: 2px; }
-.marqueeCardTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); white-space: nowrap; }
-.marqueeCardMeta { font-size: 11px; color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
-.tagChip {
-  display: inline-flex;
-  padding: 3px 10px;
-  border-radius: var(--nm-r-pill);
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  color: var(--nm-cyan);
-  font-size: 11px;
-  corner-shape: round;
-}
+.barTrack { flex: 1; height: 8px; background: var(--nm-bg-hover); border-radius: var(--nm-r-xs); overflow: hidden; }
+.barFill { height: 100%; background: var(--nm-cyan); border-radius: var(--nm-r-xs); }
 .barValue {
   width: 70px;
   text-align: right;
@@ -616,29 +639,34 @@
   font-family: var(--ds-font-family-code);
 }
 
-/* ── 收藏卡片 ── */
+/* ── 收藏卡片 ──
+ * 2026-10-17 重做：改前卡片之间**没有任何分隔**（只有 hover 才变色），
+ * 一屏 8 条收藏挤成一片，扫读时找不到边界（真机截图）。
+ * 现在给每张卡加 1px 底边 + 更紧凑的内边距，摘要从 3 行压到 2 行。 */
 .favCard {
   display: flex;
   gap: 12px;
-  padding: 12px 14px;
-  border-radius: var(--nm-r-lg);
+  padding: 10px 12px;
+  border-radius: var(--nm-r-md);
   cursor: pointer;
   align-items: flex-start;
   transition: background 0.15s;
+  /* 卡片之间的分隔线：最后一张不要（避免与列表底边叠成双线）。 */
+  border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 60%, transparent);
 }
+.favCard:last-child { border-bottom: none; }
 .favCard:hover { background: var(--nm-bg-hover); }
-.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .favCardTitle { font-size: 14px; font-weight: 700; color: var(--nm-text-1); word-break: break-word; }
-.favCardDesc { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.favCardThumb { width: 68px; height: 68px; border-radius: var(--nm-r-md); object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+/* 摘要 2 行（改前 3 行）：一屏能多看 2 条，且标题与摘要的层级更清楚。 */
+.favCardDesc { font-size: 12px; color: var(--nm-text-2); line-height: 1.55; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.favCardThumb { width: 60px; height: 60px; border-radius: var(--nm-r-md); object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 .favDetail { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
 .favPart { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); padding-bottom: 12px; }
 .favPart:last-child { border-bottom: none; padding-bottom: 0; }
-.favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 5px; }
+.favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 4px; }
 .favPartText { font-size: 13px; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .favPartImg { max-width: 100%; max-height: 420px; border-radius: var(--nm-r-md); display: block; background: var(--nm-bg-hover); }
-@keyframes dshSpin { to { transform: rotate(360deg); } }
-@keyframes dshToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .backupInput {
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
@@ -730,7 +758,7 @@
 }
 .rvLandTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
 .rvLandDesc { font-size: 12px; line-height: 1.6; color: var(--nm-text-2); }
-.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.rvLandList { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
 .rvLandList li { font-size: 11.5px; line-height: 1.6; color: var(--nm-text-2); }
 .rvLandList b { color: var(--nm-text-1); font-weight: 600; }
 .rvLandActions { display: flex; gap: 8px; flex-wrap: wrap; }

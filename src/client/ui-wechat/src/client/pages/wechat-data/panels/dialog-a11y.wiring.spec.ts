@@ -92,6 +92,8 @@ const NAMED_OVERLAYS = [
   { name: 'files-lightbox', attrIn: 'Files.tsx', focusIn: 'Files.tsx', escIn: 'Files.tsx' },
   { name: 'chats-viewer', attrIn: 'chats-media.tsx', focusIn: 'chats-media.tsx', escIn: 'chats-media.tsx' },
   { name: 'chats-contactinfo', attrIn: 'chats-contact-info-view.tsx', focusIn: 'chats-contact-info-view.tsx', escIn: 'chats-contact-info-view.tsx' },
+  // 2026-10-19：「新建任务」三处入口共用的触发式任务弹窗（自包含，Esc + 焦点陷阱都在本文件）。
+  { name: 'task-create', attrIn: 'task-create-dialog.tsx', focusIn: 'task-create-dialog.tsx', escIn: 'task-create-dialog.tsx' },
   // ── 跨文件接线（状态在父级）──────────────────────────────────────────
   { name: 'chats-cal', attrIn: 'chats-calendar-dialog.tsx', focusIn: 'chats-msg-search.tsx', escIn: 'chats-msg-search.tsx' },
   { name: 'chats-chatlog', attrIn: 'chats-chatlog-dialog.tsx', focusIn: 'chats-msg-search.tsx', escIn: 'chats-msg-search.tsx' },

@@ -15,7 +15,7 @@ import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
 import { withDb } from './db-open.ts'
-import { senderLabel, splitGroupPrefix } from './search-display.ts'
+import { senderLabel } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
 
 /**
@@ -46,7 +46,7 @@ export const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
  * 老索引的内容列还在，新代码不会再往里读，但**留着它也没有任何收益**（重建走 DROP + 建表），
  * 所以升版本让所有存量索引在下次构建时重建成小一半的库（实测同夹具 372MB → 175MB）。
  */
-export const INDEX_SCHEMA_VERSION = '5'
+export const INDEX_SCHEMA_VERSION = '6'
 
 /** 索引最近一次构建/同步完成的时刻（毫秒 epoch，来自 Date.now()）。 */
 export const REFRESHED_KEY = 'refreshed_ms'
@@ -212,7 +212,7 @@ export function searchIndexBatch(
   const match = parts.join(' OR ')
   try {
     return withDb(searchIndexPath(decryptedDir), (db) => {
-      const sql = 'SELECT m.text, m.username, m.create_time, m.local_id, bm25(message_fts) AS score'
+      const sql = 'SELECT m.text, m.username, m.create_time, m.local_id, m.sender, bm25(message_fts) AS score'
         + ' FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid'
         + ' WHERE message_fts MATCH ?'
         + (opts?.username ? ' AND m.username = ?' : '')
@@ -224,7 +224,10 @@ export function searchIndexBatch(
         const text = decodeCell(r['text'])
         const username = decodeCell(r['username'])
         const createTime = Number(r['create_time'] ?? 0)
-        const { sender, body: display } = splitGroupPrefix(text, username)
+        // `sender` 列存的是**原始 wxid**（构建时从群前缀切出，见 `search-build.ts`）。
+        // 旧实现从 `text` 再切一次 —— 而 `text` 在入库时已剥掉前缀，永远切不出东西，
+        // 于是群消息的发送者名恒为空（实测：回答里只有群名、没有「谁说的」）。
+        const sender = decodeCell(r['sender'])
         return {
           text,
           username,
@@ -232,7 +235,7 @@ export function searchIndexBatch(
           local_id: Number(r['local_id'] ?? 0),
           name: names.get(username) ?? username,
           time: fmtDateTimeSec(createTime),
-          snippet: display.slice(0, 120),
+          snippet: text.slice(0, 120),
           sender: senderLabel(sender, names),
           // bm25() 越小越相关，取负号变成「越大越相关」
           score: -Number(r['score'] ?? 0),
@@ -311,10 +314,35 @@ export function loadSessionUsernames(decryptedDir: string): string[] {
   return out
 }
 
-/** Display names: contact remark/nick then session titles. */
+/**
+ * Display names: contact remark/nick then session titles, then **群内备注**.
+ *
+ * ## 为什么需要「群内备注」这一层（2026-10-16 实测）
+ *
+ * 用户报「回答里用的是 `a懂` 这种，不是真实昵称」。实测真实数据：
+ *   · `contact` 表 3068 条（含 70 个 `@chatroom`）—— 覆盖**已加好友**的人与群；
+ *   · 但**未加好友的群成员**不在 `contact` 表里，他们的昵称只在
+ *     `contact_fts.db#chatroom_member_fts_v3.a_group_remark`（实测 365 条非空）。
+ * 缺这一层时，群消息的发送者只能显示成 `wxid_xxx`，而模型转述时就会
+ * 把 `wxid` 或系统提示里的碎片当成名字（用户看到的 `a懂` 就是这么来的）。
+ *
+ * ## 优先级（低到高，后面的覆盖前面的）
+ *
+ *   ① 群内备注（`a_group_remark`）—— 最弱：只在某个群里成立，换个群可能不同名；
+ *   ② 会话标题（`SessionNoContactInfoTable.session_title`）—— 群名兜底；
+ *   ③ 联系人备注 / 昵称（`contact.remark || nick_name`）—— 最强：用户自己设的。
+ *
+ * 反过来（群内备注覆盖联系人备注）会让「同一个人在 A 群叫小花、在 B 群叫小王」
+ * 随机决定显示哪个 —— 而用户自己设的备注是**跨群一致**的，必须赢。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @returns username → 显示名。
+ */
 export function loadDisplayNames(decryptedDir: string): Map<string, string> {
   const names = new Map<string, string>()
-  for (const [u, n] of contactMeta(decryptedDir).names) names.set(u, n)
+  // ① 群内备注（最弱，先写，后面被覆盖）
+  for (const [u, n] of groupMemberRemarks(decryptedDir)) if (!names.has(u)) names.set(u, n)
+  // ② 会话标题（群名兜底）
   const sessionDb = join(decryptedDir, 'session', 'session.db')
   if (existsSync(sessionDb)) {
     try {
@@ -333,7 +361,52 @@ export function loadDisplayNames(decryptedDir: string): Map<string, string> {
       // session.db unavailable
     }
   }
+  // ③ 联系人备注 / 昵称（最强，最后写，覆盖前两层）
+  for (const [u, n] of contactMeta(decryptedDir).names) names.set(u, n)
   return names
+}
+
+/**
+ * 群内备注：`contact_fts.db#chatroom_member_fts_v3` 的 `a_group_remark`。
+ *
+ * 该表存的是**数字 id 对**（`room_id` / `member_id`），要经 `contact.db#name2id`
+ * 的 rowid 映射回 username。实测 2913 行里 365 行有备注 —— 其余是「没设备注」，
+ * 不是解析失败（空串直接跳过，不写进 map，免得把 `wxid` 覆盖成空）。
+ *
+ * 读不到（库不存在 / 表结构变了）时返回空 Map，**不抛错** —— 显示名是锦上添花，
+ * 缺了它检索仍要能用（退回 `wxid`）。
+ * @param decryptedDir - decrypted data root.
+ * @returns username → 群内备注。
+ */
+function groupMemberRemarks(decryptedDir: string): Map<string, string> {
+  const out = new Map<string, string>()
+  const ftsPath = join(decryptedDir, 'contact', 'contact_fts.db')
+  const contactPath = join(decryptedDir, 'contact', 'contact.db')
+  if (!existsSync(ftsPath) || !existsSync(contactPath)) return out
+  try {
+    // id → username（`name2id` 只有 username 一列，rowid 就是 id）
+    const id2u = new Map<number, string>()
+    withDb(contactPath, (db) => {
+      const rows = db.prepare('SELECT rowid AS id, username FROM name2id').all() as Array<{ id: number; username: unknown }>
+      for (const r of rows) {
+        const u = decodeCell(r.username).trim()
+        if (u) id2u.set(Number(r.id), u)
+      }
+    })
+    if (id2u.size === 0) return out
+    withDb(ftsPath, (db) => {
+      const rows = db.prepare("SELECT member_id, a_group_remark FROM chatroom_member_fts_v3 WHERE a_group_remark != ''").all() as Array<{ member_id: number; a_group_remark: unknown }>
+      for (const r of rows) {
+        const u = id2u.get(Number(r.member_id))
+        const n = decodeCell(r.a_group_remark).trim()
+        // 空串跳过：写进去会把「没备注」变成「名字是空」，比退回 wxid 更糟。
+        if (u && n && !out.has(u)) out.set(u, n)
+      }
+    })
+  } catch {
+    // 群成员库不可读：退回空 Map（显示名退回 wxid，检索照常）
+  }
+  return out
 }
 
 /**

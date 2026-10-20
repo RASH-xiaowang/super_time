@@ -90,3 +90,15 @@
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
 }
+
+/* 底部动作位的主操作（新建任务）：微信绿实心；导出保持次按钮。 */
+.exportActionPrimary {
+  border-color: transparent;
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
+}
+
+.exportActionPrimary:hover {
+  background: color-mix(in srgb, var(--nm-brand) 88%, #000);
+  border-color: transparent;
+}

@@ -2,7 +2,7 @@
 /**
  * 知识库域的 @Remote 处理器（M21 第 38 刀自 `gateway.ts` 搬出）。
  *
- * 为什么这么切：`gateway.ts` 是 195 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
+ * 为什么这么切：`gateway.ts` 是 212 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
  * （建库 / 文件 / 检索 / 向量索引 / 模型配置）。类里保留 Remote 装饰器与签名 —— 协议层要按名字
  * 枚举 —— 方法体改成一行转发；真正的逻辑搬到这里，依赖由 `ctx` 显式给出（原来靠 `this` 拿）。
  */
@@ -155,6 +155,123 @@ function fusedKbResult(res: KbSearchResult, denseCount: number, fused: readonly 
   }
 }
 
+/**
+ * 生成一份文件的摘要（从 `createKbRemotes` 里搪出：工厂受函数体行数棘轮管着）。
+ *
+ * ## 三道前置闸门，顺序不能换
+ *
+ * ① 文件存在 → ② `includeInRag`（关掉就等于「内容不得离开本机」）→ ③ 有可用正文块。
+ * ②在③前面：一个关掉出网的文件，说「还没有正文块」是误导 —— 用户会去等解析，
+ * 而真正的原因是那个开关。
+ *
+ * ## 为什么 `maxTokens` 是 1024（2026-10-17 实测）
+ *
+ * 改前是 400，**必然返回空**：推理型模型先吐一大段 reasoning 再吐正文，
+ * 400 token 常常在 reasoning 阶段就耗尽 —— 流正常结束、`text` 是空串。
+ * 同目录 `summary.ts` 用 1024、`annual-narr.ts` 用 600 都能跑通。
+ * 空结果时把 reasoning 的长度说出来，用户才知道该调预算还是换模型。
+ * @param rc - 处理器依赖。
+ * @param kbId - 知识库 id。
+ * @param id - 文件 id。
+ * @returns 摘要结果（含覆盖字数与模型名）。
+ */
+async function summarizeKbFileIn(rc: KbRemoteCtx, kbId: number, id: number): Promise<KbSummaryResult> {
+  const ctx = rc.ctx
+  const dir = rc.dirs().decrypted
+
+  const file = getKbFile(dir, kbId, id)
+  if (file === null) return { ok: false, error: '文件不存在，或不属于当前知识库' }
+  if (!file.includeInRag) {
+    // 明确说「因为你关掉了那个开关」，否则用户只会看到一次失败的生成。
+    const reason = '该文件已关闭「参与语义检索（会出网）」，按此设置它的内容不得离开本机，因此不能生成摘要。'
+    rc.op('task', 'kb_file_summary', 'skip', `id=${id}`, reason)
+    return { ok: false, error: reason }
+  }
+  if (file.parseState !== 'ready' || file.chunkCount === 0) {
+    return { ok: false, error: '这个文件还没有可用的正文块（解析未成功或还在排队），无法摘要。' }
+  }
+
+  const sel = (ctx as unknown as {
+    agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
+  }).agentDefaultModel?.currentSelection()
+  if (!sel || !sel.provider || !sel.model) {
+    rc.op('task', 'kb_file_summary', 'fail', `id=${id}`, '未配置默认模型（agentDefaultModel）')
+    return { ok: false, error: '未配置默认模型（agentDefaultModel），无法生成摘要' }
+  }
+  /**
+   * 本库的语言模型覆盖（只换**模型名**，端点与凭据仍用当前生效的那一套）。
+   * 空 ⇒ 用全局那条。落库的 `summary_model` 记的就是这个最终值 ——
+   * 换模型之后用户要能看出这条摘要不是当前模型给的。
+   */
+  const chatModel = rc.kbModel(kbId, 'chat').model || sel.model
+
+  // 按字符预算取前若干块：块本身就是文档原有顺序，截的是「开头」而不是随机片段。
+  const parts: string[] = []
+  let covered = 0
+  let offset = 0
+  for (let page = 0; page < 20 && covered < SUMMARY_INPUT_CHARS; page += 1) {
+    const chunk = listKbFileChunks(dir, kbId, id, { limit: 200, offset })
+    if (chunk.readError !== undefined) return { ok: false, error: '正文读取失败：' + chunk.readError }
+    if (chunk.items.length === 0) break
+    for (const c of chunk.items) {
+      if (covered >= SUMMARY_INPUT_CHARS) break
+      const take = c.text.slice(0, SUMMARY_INPUT_CHARS - covered)
+      parts.push((c.heading !== '' ? `【${c.heading}】\n` : '') + take)
+      covered += take.length
+    }
+    offset += chunk.items.length
+    if (offset >= chunk.total) break
+  }
+  if (covered === 0) return { ok: false, error: '这个文件没有可摘要的正文。' }
+
+  const body = parts.join('\n\n')
+  // 截断与否要写进 prompt：模型若不知道正文被切过，会理直气壮地概括出一个「全文要点」。
+  const scope = covered < file.charCount ? `前 ${covered} 字（全文 ${file.charCount} 字，已截断）` : `全文 ${file.charCount} 字`
+  const prompt = `文件名：${file.name}\n\n正文（${scope}）：\n${body}`
+  const [summaryGated] = rc.privacyGate('kb_file_summary', { sessions: 0, messages: 0 }, [prompt])
+
+  const assembler = new BlockAssembler()
+  const opts: GenerateOptions = {
+    provider: sel.provider,
+    model: chatModel,
+    messages: [createUserMessage({
+      content: [{ type: 'text', text: summaryGated ?? prompt }],
+      source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+    })],
+    system: '你是文档摘要器。用中文把给定正文概括成不超过 5 条要点，每条一行、以「· 」开头，'
+      + '只写正文里确有的事实，不要推测、不要评价。若正文被截断，最后一行注明「以上仅覆盖给出的部分」。',
+    maxTokens: 1024,
+  }
+  let text = ''
+  let reasoning = ''
+  try {
+    for await (const c of ctx.llm.stream(opts)) assembler.push(c)
+    const blocks = assembler.blocks()
+    text = blocks.map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+    reasoning = blocks.map(b => (b.type === 'reasoning' ? b.text : '')).join('').trim()
+  } catch (e) {
+    rc.op('task', 'kb_file_summary', 'fail', `id=${id}`, (e as Error).message)
+    return { ok: false, error: '模型调用失败：' + (e as Error).message }
+  }
+  if (text === '') {
+    // 区分「模型什么都没说」和「模型只在思考、预算被吃光」—— 后者是配置问题，
+    // 让用户去调大预算或换个非推理模型，而不是反复点「生成摘要」。
+    const why = reasoning !== ''
+      ? `模型只输出了思考过程（${reasoning.length} 字）、没有给出正文，多半是 token 预算被思考吃光了。`
+      : '模型没有返回内容，未写入摘要。'
+    rc.op('task', 'kb_file_summary', 'fail', `id=${id}`, why)
+    return { ok: false, error: why }
+  }
+
+  // 落库的是**实际发出去的那个模型名**（含库级覆盖），不是全局那条 ——
+  // 否则换了库级模型之后，界面上的「由 X 生成」会指着一条其实没参与过的模型。
+  const model = `${sel.provider}/${chatModel}`
+  const saved = setKbFileSummary(dir, kbId, id, text, model, covered)
+  if (!saved.ok) return { ok: false, error: '摘要已生成但保存失败：' + (saved.error ?? '未知原因') }
+  rc.op('task', 'kb_file_summary', 'ok', `id=${id}`, `${model} · 覆盖 ${covered}/${file.charCount} 字`)
+  return { ok: true, summary: text, model, at: Date.now(), coveredChars: covered, totalChars: file.charCount }
+}
+
 export function createKbRemotes(rc: KbRemoteCtx) {
   return {
     getKbs(): KbListSnapshot {
@@ -266,90 +383,7 @@ export function createKbRemotes(rc: KbRemoteCtx) {
     },
 
     async summarizeKbFile(options: { kbId: number; id: number }): Promise<KbSummaryResult> {
-      const ctx = rc.ctx
-      const kbId = Number(options?.kbId)
-      const id = Number(options?.id)
-
-      const file = getKbFile(rc.dirs().decrypted, kbId, id)
-      if (file === null) return { ok: false, error: '文件不存在，或不属于当前知识库' }
-      if (!file.includeInRag) {
-        // 明确说「因为你关掉了那个开关」，否则用户只会看到一次失败的生成。
-        const reason = '该文件已关闭「参与语义检索（会出网）」，按此设置它的内容不得离开本机，因此不能生成摘要。'
-        rc.op('task', 'kb_file_summary', 'skip', `id=${id}`, reason)
-        return { ok: false, error: reason }
-      }
-      if (file.parseState !== 'ready' || file.chunkCount === 0) {
-        return { ok: false, error: '这个文件还没有可用的正文块（解析未成功或还在排队），无法摘要。' }
-      }
-
-      const sel = (ctx as unknown as {
-        agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
-      }).agentDefaultModel?.currentSelection()
-      if (!sel || !sel.provider || !sel.model) {
-        rc.op('task', 'kb_file_summary', 'fail', `id=${id}`, '未配置默认模型（agentDefaultModel）')
-        return { ok: false, error: '未配置默认模型（agentDefaultModel），无法生成摘要' }
-      }
-      /**
-       * 本库的语言模型覆盖（只换**模型名**，端点与凭据仍用当前生效的那一套）。
-       * 空 ⇒ 用全局那条。落库的 `summary_model` 记的就是这个最终值 ——
-       * 换模型之后用户要能看出这条摘要不是当前模型给的。
-       */
-      const chatModel = rc.kbModel(kbId, 'chat').model || sel.model
-
-      // 按字符预算取前若干块：块本身就是文档原有顺序，截的是「开头」而不是随机片段。
-      const parts: string[] = []
-      let covered = 0
-      let offset = 0
-      for (let page = 0; page < 20 && covered < SUMMARY_INPUT_CHARS; page += 1) {
-        const chunk = listKbFileChunks(rc.dirs().decrypted, kbId, id, { limit: 200, offset })
-        if (chunk.readError !== undefined) return { ok: false, error: '正文读取失败：' + chunk.readError }
-        if (chunk.items.length === 0) break
-        for (const c of chunk.items) {
-          if (covered >= SUMMARY_INPUT_CHARS) break
-          const take = c.text.slice(0, SUMMARY_INPUT_CHARS - covered)
-          parts.push((c.heading !== '' ? `【${c.heading}】\n` : '') + take)
-          covered += take.length
-        }
-        offset += chunk.items.length
-        if (offset >= chunk.total) break
-      }
-      if (covered === 0) return { ok: false, error: '这个文件没有可摘要的正文。' }
-
-      const body = parts.join('\n\n')
-      // 截断与否要写进 prompt：模型若不知道正文被切过，会理直气壮地概括出一个「全文要点」。
-      const scope = covered < file.charCount ? `前 ${covered} 字（全文 ${file.charCount} 字，已截断）` : `全文 ${file.charCount} 字`
-      const prompt = `文件名：${file.name}\n\n正文（${scope}）：\n${body}`
-      const [summaryGated] = rc.privacyGate('kb_file_summary', { sessions: 0, messages: 0 }, [prompt])
-
-      const assembler = new BlockAssembler()
-      const opts: GenerateOptions = {
-        provider: sel.provider,
-        model: chatModel,
-        messages: [createUserMessage({
-          content: [{ type: 'text', text: summaryGated ?? prompt }],
-          source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-        })],
-        system: '你是文档摘要器。用中文把给定正文概括成不超过 5 条要点，每条一行、以「· 」开头，'
-          + '只写正文里确有的事实，不要推测、不要评价。若正文被截断，最后一行注明「以上仅覆盖给出的部分」。',
-        maxTokens: 400,
-      }
-      let text = ''
-      try {
-        for await (const c of ctx.llm.stream(opts)) assembler.push(c)
-        text = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-      } catch (e) {
-        rc.op('task', 'kb_file_summary', 'fail', `id=${id}`, (e as Error).message)
-        return { ok: false, error: '模型调用失败：' + (e as Error).message }
-      }
-      if (text === '') return { ok: false, error: '模型没有返回内容，未写入摘要。' }
-
-      // 落库的是**实际发出去的那个模型名**（含库级覆盖），不是全局那条 ——
-      // 否则换了库级模型之后，界面上的「由 X 生成」会指着一条其实没参与过的模型。
-      const model = `${sel.provider}/${chatModel}`
-      const saved = setKbFileSummary(rc.dirs().decrypted, kbId, id, text, model, covered)
-      if (!saved.ok) return { ok: false, error: '摘要已生成但保存失败：' + (saved.error ?? '未知原因') }
-      rc.op('task', 'kb_file_summary', 'ok', `id=${id}`, `${model} · 覆盖 ${covered}/${file.charCount} 字`)
-      return { ok: true, summary: text, model, at: Date.now(), coveredChars: covered, totalChars: file.charCount }
+      return summarizeKbFileIn(rc, Number(options?.kbId), Number(options?.id))
     },
 
     async searchKb(options: { kbId: number; query?: string; topK?: number }): Promise<KbSearchResult> {

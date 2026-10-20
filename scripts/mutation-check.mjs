@@ -41,7 +41,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MUTATIONS } from './mutations-registry.mjs'
-import { changedFilesSince, selectForDiff } from './mutation-scope.mjs'
+import { changedFilesForGate, selectForDiff } from './mutation-scope.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const VITEST = join(ROOT, 'node_modules', 'vitest', 'vitest.mjs')
@@ -83,13 +83,14 @@ function pickByDiff() {
     files = filesArg.split(',').map((s) => s.trim()).filter((s) => s !== '')
     how = '--files 指定的 ' + String(files.length) + ' 个文件'
   } else {
-    const r = changedFilesSince(effectiveSince, ROOT)
+    // 2026-10-19：增量口径扩到工作树（未提交/未跟踪），否则本地改守卫再跑 --diff 会漏验。
+    const r = changedFilesForGate(effectiveSince, ROOT)
     if (!r.ok) {
       process.stdout.write(`[增量] 取 ${effectiveSince}...HEAD 的改动失败：${r.detail}\n[增量] 退化成**全量**（静默跳过是最坏的结果）\n`)
       return { list: MUTATIONS, note: '增量失败（' + String(effectiveSince) + '）⇒ 全量' }
     }
     files = r.files
-    how = String(effectiveSince) + '...HEAD 的 ' + r.detail
+    how = String(effectiveSince) + '...HEAD + 工作树的 ' + r.detail
   }
   const sel = selectForDiff(MUTATIONS, files)
   if (sel.all) {

@@ -13,7 +13,7 @@
  * 收尾状态只写一次 localStorage：`done`（配完了）/`dismissed`（用户点了稍后）—— 之后不再弹，
  * 也不在配完后因为后来清空配置又冒出来。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { apiDetectWechatAccounts, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, runtimeCapabilities } from '../api.ts'
 import {
@@ -24,7 +24,6 @@ import {
   stepDone,
   type SetupFacts,
 } from './setup-guide.ts'
-import { useDraggableFloat } from './use-draggable.ts'
 import css from './setup-guide.module.css'
 
 /** 收尾状态：写过就不再自动弹。 */
@@ -65,26 +64,9 @@ export function SetupGuideCard({
 }): React.JSX.Element {
   const { done, total } = setupProgress(facts)
   const voiceOk = facts.voiceReady
-  // 卡片可拖动（标题栏是把手），位置记在 localStorage 里；挡着内容时用户能把它挪开，
-  // 而不是只能关掉整张卡 —— 关掉就等于把「该配什么」的提示一起关了。
-  const cardRef = useRef<HTMLElement | null>(null)
-  const drag = useDraggableFloat('setup-guide', cardRef)
   return (
-    <section
-      className={css.card}
-      aria-label="首次配置向导"
-      ref={cardRef}
-      style={drag.cardStyle}
-      data-dragging={drag.dragging || undefined}
-    >
-      <div className={css.hd} {...drag.handleProps}>
-        <span className={css.grip} aria-hidden="true">
-          <svg viewBox="0 0 10 16" width="10" height="16" fill="currentColor">
-            <circle cx="2.5" cy="3" r="1.2" /><circle cx="7.5" cy="3" r="1.2" />
-            <circle cx="2.5" cy="8" r="1.2" /><circle cx="7.5" cy="8" r="1.2" />
-            <circle cx="2.5" cy="13" r="1.2" /><circle cx="7.5" cy="13" r="1.2" />
-          </svg>
-        </span>
+    <section className={css.card} aria-label="首次配置向导">
+      <div className={css.hd}>
         <span className={css.title}>首次配置向导</span>
         <span className={css.count}>已完成 {done}/{total}</span>
       </div>
@@ -124,10 +106,6 @@ export function SetupGuideCard({
 
       <div className={css.ft}>
         <span className={css.ftHint}>也可以随时在「设置 → 配置向导」里继续</span>
-        {/* 挪过之后才给「复位」：位置记在本地，挪歪了能一键回到默认角 */}
-        {drag.moved && (
-          <button type="button" className={css.later} onClick={drag.reset}>复位</button>
-        )}
         <button type="button" className={css.later} onClick={onLater}>稍后再说</button>
       </div>
     </section>
@@ -148,9 +126,12 @@ export function SetupGuide({
 }): React.JSX.Element | null {
   // 浏览器态直接不渲染：这张卡的全部作用是「指路到设置里的配置向导」，而那一整块在手机上
   // 不存在（见 settings-browser.tsx）；留着一个指向空处的浮卡，比没有更让人困惑。
-  // 放在所有 hook 之前是安全的 —— 环境在一个进程生命周期内不会从浏览器变成桌面，
-  // 而下面那几个取数调用在手机上**全部**会被远程白名单拒掉。
-  if (runtimeCapabilities().isBrowser) return null
+  //
+  // ⚠️ 判定必须放在所有 hooks **之后**（见函数末尾的 `if (isBrowser) return null`）。
+  // 这里曾经写在 hooks 之前，理由是「环境在一个进程生命周期内不会从浏览器变成桌面」——
+  // 那个假设不成立：能力表是**注入**的（`setCapabilities`），注入时机与 HMR 都可能让它在
+  // 两次渲染之间翻转，于是 hook 数量变化 ⇒ React 抛
+  // "Rendered more hooks than during the previous render" ⇒ 整棵根树被卸载 ⇒ 黑屏。
   const [facts, setFacts] = useState<SetupFacts>(() => emptyFacts())
   const [state, setState] = useState<GuideState>(() => readGuideState())
   /** 取过一次数才敢判定「已完成」，否则首帧的空事实会把已配好的机器误判成未配置。 */
@@ -212,6 +193,8 @@ export function SetupGuide({
     setState('dismissed')
   }, [])
 
+  // 浏览器态不渲染（hooks 之后判定，hook 数量恒定）；交接态拥有桌面权限，照常渲染。
+  if (runtimeCapabilities().isBrowser && runtimeCapabilities().desktopEquivalent !== true) return null
   if (!ready || state !== null || !open) return null
   return <SetupGuideCard facts={facts} onOpenStep={onOpenStep} onLater={onLater} />
 }

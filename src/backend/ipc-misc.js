@@ -11,6 +11,13 @@
  *   diagLog / STATE_DIR / APP_VERSION / debugGates / licenseService / getMainWindow /
  *   buildDiagnosticReport / installWebContentsGuards（后两个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
+const { bumpMutationEpoch } = require('./mutation-gate.js');
+
+/** 许可证变化会改变可写范围；成功后开新代际，阻挡旧代际的排队写。 */
+function bumpLicenseEpoch(result) {
+  if (result && typeof result === 'object' && result.ok === true) bumpMutationEpoch('license-changed');
+  return result;
+}
 /** 诊断日志的查询、导出、预览、复制与定位。 */
 function registerDiagnosticIpc(reg, deps) {
   const {
@@ -171,7 +178,7 @@ function registerLicenseIpc(reg, deps) {
       });
       if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
       const content = fs.readFileSync(picked.filePaths[0], 'utf8');
-      return licenseService.importLicense(app.getPath('userData'), APP_VERSION, content);
+      return bumpLicenseEpoch(licenseService.importLicense(app.getPath('userData'), APP_VERSION, content));
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -179,7 +186,7 @@ function registerLicenseIpc(reg, deps) {
 
   reg.handleIpc('license:import-text', (_e, text) => {
     try {
-      return licenseService.importLicense(app.getPath('userData'), APP_VERSION, String(text ?? ''));
+      return bumpLicenseEpoch(licenseService.importLicense(app.getPath('userData'), APP_VERSION, String(text ?? '')));
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -187,7 +194,7 @@ function registerLicenseIpc(reg, deps) {
 
   reg.handleIpc('license:remove', () => {
     try {
-      return { ok: true, status: licenseService.removeLicense(app.getPath('userData'), APP_VERSION) };
+      return bumpLicenseEpoch({ ok: true, status: licenseService.removeLicense(app.getPath('userData'), APP_VERSION) });
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -245,7 +252,7 @@ function registerDialogIpc(reg, deps) {
 
 /** 系统外壳与自绘窗口控制。 */
 function registerShellWindowIpc(reg, deps) {
-  const { getMainWindow, dialog, fs, shell } = deps;
+  const { getMainWindow, screen, dialog, fs, shell } = deps;
 
   reg.handleIpc('shell:show-item', (_event, filePath) => {
     if (typeof filePath === 'string' && filePath) {
@@ -260,10 +267,74 @@ function registerShellWindowIpc(reg, deps) {
   reg.onIpc('window:close', () => {
     if (getMainWindow()) getMainWindow().close();
   });
+
+  /**
+   * 「全屏」= **铺满当前显示器的工作区**（保留任务栏），不是 OS 全屏。
+   *
+   * 为什么不用 `setFullScreen(true)`：Windows 上那是真全屏，2560×1440 的屏上 bounds 变成
+   * `0,0,2560,1440`，把底部 40px 任务栏整个盖住（用户 2026-10-18 报的就是它）。
+   *
+   * 为什么不用 `maximize()`：本窗口是 `frame:false`。实测 maximize 后 bounds 是
+   * `-8,-8,2576,1416` —— Windows 把不可见的窗口缩放边框算到可视区外面，右/下各越界 8px，
+   * 仍会压住任务栏上沿；而且**这两种状态之后再 setBounds 都会被 Electron 忽略**
+   * （实测 A/B 两组都是原 bounds 不变），没法事后修正。
+   *
+   * 显式 `setBounds(display.workArea)` 是实测唯一精确的路径：`0,0,2560,1400`，
+   * 屏幕铺满、任务栏保持可见、退出时把进入前的 bounds 还回去。若进入前本身已经接近
+   * 铺满（或被系统/Win32 最大化过），退出时改用启动基准 1440×900 居中，否则用户会觉得
+   * 「点了退出全屏还是全屏」。
+   * 代价是窗口不算「OS 最大化态」（本窗口本来就没有系统标题栏，铺满只由自绘按钮触发）。
+   */
+  let savedBounds = null;
+  const liveWindow = () => {
+    const win = getMainWindow();
+    return win && !win.isDestroyed() ? win : null;
+  };
+  /** 退出全屏时用的「合适尺寸」：启动基准 1440×900，按当前显示器工作区留 10% 边距并居中。 */
+  const SUITABLE_W = 1440;
+  const SUITABLE_H = 900;
+  const MIN_W = 960;
+  const MIN_H = 640;
+  const suitableBounds = (display) => {
+    const wa = display.workArea;
+    const width = Math.max(MIN_W, Math.min(SUITABLE_W, Math.floor(wa.width * 0.9)));
+    const height = Math.max(MIN_H, Math.min(SUITABLE_H, Math.floor(wa.height * 0.9)));
+    return {
+      x: wa.x + Math.max(0, Math.round((wa.width - width) / 2)),
+      y: wa.y + Math.max(0, Math.round((wa.height - height) / 2)),
+      width,
+      height,
+    };
+  };
   reg.onIpc('window:fullscreen-toggle', () => {
-    if (getMainWindow()) getMainWindow().setFullScreen(!getMainWindow().isFullScreen());
+    const win = liveWindow();
+    if (!win) return;
+    if (savedBounds) {
+      const restore = savedBounds;
+      savedBounds = null;
+      // 进入全屏前的窗口如果本身已经接近铺满（例如上一次被 Win32/系统最大化，或直接
+      // 从旧版本残留的大尺寸启动），原样还回去等于"退出全屏但看起来还是全屏"。
+      // 这种情况改用启动基准尺寸并居中；用户自己拖出来的正常尺寸仍原样保留。
+      const display = screen.getDisplayMatching(win.getBounds());
+      const wa = display.workArea;
+      const nearlyFull = restore.width >= Math.round(wa.width * 0.95)
+        && restore.height >= Math.round(wa.height * 0.95);
+      const outside = restore.width > wa.width || restore.height > wa.height;
+      win.setBounds(nearlyFull || outside ? suitableBounds(display) : restore);
+      win.webContents.send('window:fullscreen-changed', false);
+      return;
+    }
+    // 多屏：按窗口**当前所在**显示器取工作区，而不是主屏。
+    const display = screen.getDisplayMatching(win.getBounds());
+    savedBounds = win.getBounds();
+    win.setBounds(display.workArea);
+    win.webContents.send('window:fullscreen-changed', true);
   });
-  reg.handleIpc('window:is-fullscreen', () => getMainWindow()?.isFullScreen() ?? false);
+  reg.handleIpc('window:is-fullscreen', () => {
+    const win = liveWindow();
+    if (!win) return false;
+    return savedBounds !== null || win.isFullScreen();
+  });
 
   reg.handleIpc('window:capture-panel', async (_event, rect) => {
     try {
@@ -299,7 +370,7 @@ function registerShellWindowIpc(reg, deps) {
 }
 
 function registerMiscIpc(ctx) {
-  const { ipcMain, ipcTrust, app, clipboard, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards } = ctx;
+  const { ipcMain, ipcTrust, app, screen, clipboard, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards } = ctx;
   const handleIpc = (channel, handler) => ipcMain.handle(channel, ipcTrust.wrap(channel, handler));
   const onIpc = (channel, listener) => ipcMain.on(channel, ipcTrust.wrapOn(channel, listener));
   const reg = { handleIpc, onIpc };
@@ -313,7 +384,7 @@ function registerMiscIpc(ctx) {
   registerAppIpc(reg, { app, fs, path, STATE_DIR, APP_VERSION, debugGates });
   registerLicenseIpc(reg, { app, dialog, fs, getMainWindow, licenseService, APP_VERSION });
   registerDialogIpc(reg, { dialog, getMainWindow, path });
-  registerShellWindowIpc(reg, { getMainWindow, dialog, fs, shell });
+  registerShellWindowIpc(reg, { getMainWindow, screen, dialog, fs, shell });
 }
 
 

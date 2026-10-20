@@ -141,6 +141,14 @@ profile 集合由 `llm-config-store.js` 负责；两者的 JSON 原子写、损�
   账本读不出来 / 版本不认识 / 条目形状不对 / 产物被删，**一律回到整库重解密** ——
   少解一遍只是慢几秒，跳过一次是永久显示旧数据。见
   [`../src/backend/wechat-data/src/query/sync-state.ts`](../src/backend/wechat-data/src/query/sync-state.ts)。
+- **实时同步是「事件为主、轮询兜底」**：WAL 监听触发先过合并器（`query/sync-trigger.ts`：
+  tick 在跑时记 pending、跑完补一拍，不丢不并发），兜底轮询按「监听是否真的挂上」在
+  `SYNC_INTERVAL_MS` / `SYNC_FALLBACK_FAST_MS` 之间切换。每拍发布一次进程内修订
+  （`query/sync-status.ts`，经 `getDataRevision` 暴露），渲染层轮询它，只有
+  `messageChanged` 时才拉消息增量 —— 把「每秒一次消息 SQL」降成「每秒一次内存读」。
+  ⚠️ **解密快照必须与微信原始主库同构**：不许在快照里加自己的表/索引（历史教训：
+  `dsh_sort_*` 索引页会被 WAL/页级补丁按原始页号覆盖成 invalid rootpage，导致每轮检查点
+  都退回整库重解密）。同步侧已加 `schemaIntact` 自检，坏快照整库重解自愈，不发布坏快照。
 - **缓存是 SWR**：`cachedBySig` / `cachedFetch` 以"文件签名"为键，过期先回旧值再后台刷新；
   签名必须覆盖**真正被读到的东西**（只签 `sns.db` 而实际还读了 `contact.db` 就是错的键）。
 

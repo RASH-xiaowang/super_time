@@ -1,65 +1,367 @@
-/* Moments insights — NEON MATRIX 科技风（与总览共用令牌）。 */
+/* 朋友圈洞察 — 微信桌面端风格：内联 KPI 条 + 4 张图/榜卡（分两行栅格）。
+ *
+ * 密度令牌沿用原值（--mi-row: 22px），卡片统一 padding，不再每张卡各写一套。
+ * 颜色只用 --nm-* 令牌（灰阶层级 + 绿主色 + 语义琥珀/红），本文件不写裸 hex。
+ */
 
-
-.list { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
-.rowName { color: var(--nm-text-1); }
-.rowCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
-/* 提醒清单里的两个小标：未读醒目、已消失用次要色 */
-.rowCount[data-tone='warn'] { color: var(--nm-warning); }
-.badgeWarn,
-.badgeMuted {
-  margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: var(--nm-r-pill);
-  font-family: var(--nm-font-sans, inherit);
-  font-size: var(--nm-fs-xs, 11px);
+/* ── 密度令牌 ─────────────────────────────────────────────────── */
+.panel {
+  --mi-pad: 10px 12px;
+  --mi-row: 22px;
+  --mi-gap: 8px;
 }
-.badgeWarn { color: var(--nm-warning); background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
-.badgeMuted { color: var(--nm-text-2); background: var(--nm-bg-hover); }
 
-.monthly { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.monthRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.monthLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; }
-.monthTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: var(--nm-r-sm); overflow: hidden; }
-.monthFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-sm); }
-.monthCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
-
-.todayList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.todayRow { display: flex; gap: 10px; font-size: 12px; color: var(--nm-text-1); }
-/* 第 94 轮：口径说明那种 todayRow 额外带 2px 纵向留白（原来是行内 style）。
-   单独一个类，因为「那年今天」的 todayRow 并不需要这个留白。 */
-.todayRowPad { padding: 2px 0; }
-.todayTime { color: var(--nm-text-2); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.todayText { word-break: break-word; }
-
-/* ── 足迹地图（第 58 轮）────────────────────────────────────────────
-   自绘 SVG：大陆剪影用 var(--nm-cyan) 的低透明度填充，打卡气泡用青色实心点。
-   全部走主题令牌，浅色主题下不会变成「亮青色叠白底」那种刺眼效果。 */
-.footprintWrap { display: flex; flex-direction: column; padding: 10px 14px 12px; gap: 8px; }
-.footprintBar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.footprintSvg {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 2 / 1;
-  display: block;
-  border-radius: var(--nm-dense-r);
-  background:
-    radial-gradient(120% 90% at 30% 20%, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 70%),
-    var(--nm-bg-0);
+/* ── 内联 KPI 条（40–46px，不再堆 3 张大统计卡）────────────────────── */
+.insightBar {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-3);
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: 4px 12px;
   border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  flex-shrink: 0;
 }
-.footprintLand {
-  fill: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
-  stroke: color-mix(in srgb, var(--nm-cyan) 32%, transparent);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
+
+.kpiRow {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-3);
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.footprintDot {
-  fill: var(--nm-cyan);
-  stroke: color-mix(in srgb, var(--nm-bg-0) 75%, transparent);
-  stroke-width: 0.6;
-  cursor: help;
+
+.kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
 }
-.footprintDot:hover { fill: var(--nm-purple); }
-.footprintFoot { display: flex; }
+
+.kpiValue {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpiLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.refreshBtn {
+  padding: 4px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast);
+}
+.refreshBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.refreshBtn:disabled { opacity: 0.5; cursor: default; }
+.refreshBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+/* ── 两行栅格：互动 Top + 热词 / 月度分布 + 足迹 ────────────────────
+ * 行高固定（300 / 340）：词云与月度热力格是「铺满卡片」的图形，必须有确定高度；
+ * 卡身统一 flex 撑满，卡片高度由行高决定。 */
+.gridTop {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--mi-gap);
+  align-items: stretch;
+}
+
+.gridBottom {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--mi-gap);
+  align-items: stretch;
+}
+
+.gridTop > * {
+  height: auto;
+  min-height: 0;
+}
+
+.gridBottom > * {
+  height: auto;
+  min-height: 0;
+}
+
+.gridTop > * > [class*='cardBd'],
+.gridBottom > * > [class*='cardBd'] {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 900px) {
+  .gridTop,
+  .gridBottom { grid-template-columns: minmax(0, 1fr); }
+  .gridTop > * { height: 300px; }
+  .gridBottom > * { height: 360px; }
+}
+
+/* ── 互动 Top：同卡两列 ────────────────────────────────────────── */
+.topCols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--nm-s-4);
+}
+
+@media (max-width: 720px) {
+  .topCols { grid-template-columns: minmax(0, 1fr); }
+}
+
+.topCol { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+
+.subTitle {
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  color: var(--nm-text-2);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--nm-border);
+}
+
+/* ── 列表（双榜 / 地点共用）───────────────────────────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--mi-row);
+  padding: 0 6px;
+  border-radius: var(--nm-r-sm);
+  font-size: var(--nm-fs-sm);
+  transition: background-color var(--nm-t-fast);
+}
+
+.row:hover { background: var(--nm-bg-hover); }
+
+.rowName {
+  color: var(--nm-text-1);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowCount {
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.rowCount[data-tone='warn'] { color: var(--nm-warning); }
+
+/* ── 带条形的排行行（城市 / 地点）──────────────────────────────── */
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 0.8fr) 34px;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--mi-row);
+  padding: 0 6px;
+  border-radius: var(--nm-r-sm);
+  font-size: var(--nm-fs-sm);
+  transition: background-color var(--nm-t-fast);
+}
+
+.barRow:hover { background: var(--nm-bg-hover); }
+
+.barName {
+  color: var(--nm-text-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTrack {
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+  overflow: hidden;
+}
+
+/* 功能性条形：单色主色，不再用青→紫渐变。 */
+.barFill {
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+.barCount {
+  text-align: right;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nm-fs-xs);
+}
+
+/* ── 月度发布热力图（按年分组）──────────────────────────────────
+ * 一年一行：`年份 | 12 个格子 | 总数`，格子用**颜色深浅**编码发布量。
+ * 5 档色阶：0 = 空月（描边框），1~4 = 由浅到深的主色。 */
+.heat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.heatRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.heatYear {
+  flex: 0 0 36px;
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.heatTotal {
+  flex: 0 0 40px;
+  text-align: right;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.heatCells {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  /* 显式行高：grid 的默认 `align-items: stretch` 会把格子拉到行高。 */
+  grid-auto-rows: 14px;
+  gap: 3px;
+}
+
+.heatCell {
+  height: 14px;
+  min-width: 0;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-bg-hover);
+}
+
+.heatCell[data-level='0'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--nm-border);
+}
+
+.heatCell[data-level='1'] { background: var(--nm-cyan-20); }
+.heatCell[data-level='2'] { background: var(--nm-cyan-40); }
+.heatCell[data-level='3'] { background: var(--nm-cyan-60); }
+.heatCell[data-level='4'] { background: var(--nm-cyan); }
+
+.heatAxis {
+  display: flex;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.heatAxisPad {
+  flex: 0 0 36px;
+}
+
+.heatTick {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 10px;
+  color: var(--nm-text-2);
+  line-height: 1;
+}
+
+.heatLegend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding-top: 4px;
+}
+
+.heatLegend .heatCell {
+  width: 10px;
+  height: 10px;
+  aspect-ratio: auto;
+}
+
+.heatLegendLabel {
+  font-size: 10px;
+  color: var(--nm-text-2);
+  padding: 0 4px;
+}
+
+/* ── 足迹：地图 + 打卡最多的地方 ───────────────────────────────── */
+.footWrap {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--nm-s-4);
+  align-items: start;
+}
+
+.footMap { min-width: 0; }
+.footSide { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 900px) {
+  .footWrap { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 通用行内空态 / 「暂无数据」。 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 2px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}
+
+/* ── 足迹地图画布（ECharts canvas 必须有确定高度）────────────────── */
+.footprintWrap { display: flex; flex-direction: column; padding: 8px 12px 10px; gap: 6px; }
+.footprintBar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.footprintMapBox {
+  height: 220px;
+  min-height: 220px;
+  border-radius: var(--nm-r-md);
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .footprintMapBox {
+    height: 200px;
+    min-height: 200px;
+  }
+}

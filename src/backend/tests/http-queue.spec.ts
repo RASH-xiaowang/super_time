@@ -24,7 +24,7 @@ const queueMod = require(join(ROOT, 'src', 'backend', 'http-queue.js')) as {
   REMOTE_CALL_CONCURRENCY: number
   REMOTE_QUEUE_MAX: number
   HEAVY_QUEUE_MAX: number
-  createCallQueue: (opts?: { concurrency?: number, maxQueued?: number, maxQueuedHeavy?: number, now?: () => number }) => {
+  createCallQueue: (opts?: { concurrency?: number, maxQueued?: number, maxQueuedHeavy?: number, waitTimeoutMs?: number, now?: () => number }) => {
     run: (task: () => unknown, meta?: { channel?: string, method?: string, priority?: number }) => Promise<unknown>
     drain: (reason?: string, channel?: string) => number
     stats: () => {
@@ -40,6 +40,8 @@ const queueMod = require(join(ROOT, 'src', 'backend', 'http-queue.js')) as {
       channels: Record<string, { rejected: number, completed: number, failed: number, active: number, queued: number }>
       activeCalls: Array<{ channel: string, method: string, waitMs: number, elapsedMs: number }>
       queuedCalls: Array<{ channel: string, method: string, waitMs: number }>
+      waitTimeoutMs?: number
+      waitTimedOut?: number
       activeHeavy?: number
       heavyLimit?: number
       wait: { count: number, totalMs: number, maxMs: number, p50Ms: number, p95Ms: number }
@@ -125,6 +127,39 @@ describe('并发闸：上限、计数归还、排队与拒绝', () => {
     gate.resolve()
     await running
     expect(await Promise.all([queued1, queued2])).toEqual(['q1', 'q2'])
+  })
+
+  it('排队等待超时后明确拒（QUEUE_WAIT_TIMEOUT），不让请求无限转圈', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1, waitTimeoutMs: 20 })
+    const gate = deferred()
+    const running = q.run(() => gate.promise, { channel: 'remote', method: 'long' })
+    const holder: { err?: Error & { code?: string } } = {}
+    const queued = q.run(async () => 'never', { channel: 'remote', method: 'queued' })
+      .catch((e: Error & { code?: string }) => { holder.err = e })
+    await Promise.resolve()
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 45))
+    expect(holder.err?.code).toBe('QUEUE_WAIT_TIMEOUT')
+    expect(holder.err?.message).toContain('排队等待超时')
+    expect(q.stats().waitTimedOut).toBe(1)
+    expect(q.stats().queued).toBe(0)
+    gate.resolve()
+    await running
+    await queued
+  })
+
+  it('等待超时 timer 会在正常出队时撤销（不会迟到再拒一次）', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1, waitTimeoutMs: 20 })
+    let release!: () => void
+    const running = q.run(() => new Promise<void>((resolve) => { release = resolve }), { method: 'long' })
+    const result = q.run(async () => 'ok', { method: 'queued' })
+    await Promise.resolve()
+    await Promise.resolve()
+    release()
+    await running
+    await expect(result).resolves.toBe('ok')
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    expect(q.stats().waitTimedOut).toBe(0)
   })
 
   it('队列满时交互请求可以挤出低优先级排队项，取消动作不会被低优先级任务堵死', async () => {

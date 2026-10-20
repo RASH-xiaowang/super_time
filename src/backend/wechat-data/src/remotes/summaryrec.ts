@@ -6,9 +6,10 @@
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
 import { collectDayMessagesAsync, collectPeriodMessages, collectPeriodMessagesAsync } from '../query/daily-summary.ts'
+import { buildSummaryPrompt, type SummaryFormat } from '../query/summary-prompt.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import { buildReplyPrompt, collectReplyContext, collectReplyKbSnippets, parseReplyCandidates } from '../query/reply-suggest.ts'
-import { deleteSummaryRecord as delRec } from '../query/summary-tasks.ts'
+import { deleteSummaryRecord as delRec, saveSummaryRecord as saveRec } from '../query/summary-tasks.ts'
 import { DailySummaryResult, OperationCategory, OperationStatus, PeriodSummaryResult, ReplySuggestResult, SummaryTaskMutationResult, SummaryTaskRunResult } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
@@ -95,7 +96,7 @@ export interface createSummaryRecordRemotesInputs {
 
 export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs) {
   return {
-    async generateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<DailySummaryResult> {
+    async generateDailySummary(options: { date: string; provider?: string; model?: string; format?: string }): Promise<DailySummaryResult> {
       // 2026-09-28：改用可让出版收集 —— 真实 @Remote 探针实测本方法冷跑 **230ms 且一次
       // 都不让出**（`working/probe-remote.txt`），成本全在这一步（模型调用在下面）。
       const { lines, count, sessions, total, types, hourly, topSessions } = await collectDayMessagesAsync(rc.dirs().decrypted, options.date, undefined, yieldToLoop)
@@ -123,7 +124,13 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         rc.op('task', 'generate_daily_summary', 'fail', options.date, '未配置默认模型或 LLM 服务')
         return { summary: fallback, date: options.date, sessions, messages: count, total, types, hourly, topSessions }
       }
-      const prompt = '请总结 ' + options.date + ' 当天的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
+      const prompt = buildSummaryPrompt({
+        from: options.date,
+        to: options.date,
+        lines,
+        stats: { total, sessions, messages: count },
+        format: (options.format as SummaryFormat | undefined) ?? 'brief',
+      })
       const [gated] = rc.privacyGate('daily_summary', { sessions, messages: count }, [prompt])
       const userMsg = createUserMessage({
         content: [{ type: 'text', text: gated ?? prompt }],
@@ -134,8 +141,8 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         provider: useProvider,
         model: useModel,
         messages: [userMsg],
-        system: '你是微信每日总结助手，用中文输出简洁的当日聊天要点总结。',
-        maxTokens: 1024,
+        system: '你是微信聊天总结助手。严格按用户给出的篇幅与结构要求输出中文总结，只依据素材内容，不推测不编造。',
+        maxTokens: 2048,
       }
       let summary = ''
       try {
@@ -150,6 +157,20 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
           : '（当天没有可用的文本消息）')
       const ok = !finalSummary.startsWith('LLM 调用失败')
       rc.op('task', 'generate_daily_summary', ok ? 'ok' : 'fail', options.date, ok ? `共 ${count} 条消息` : finalSummary.slice(0, 120))
+      // 2026-10-17：手动生成的每日总结**也落库**（改前只有定时任务落库，手动生成的
+      // 刷新就没了 —— 用户实测"生成完切个页签回来就空了"）。
+      // `taskId` 用 0 表示「手动生成」；`summaryDate` 存单个日期，与周期总结（存 `from~to`）区分。
+      // 落库失败不影响本次结果返回 —— 用户已经拿到总结了，不该因为存不下就报错。
+      saveRec(rc.dirs().decrypted, {
+        taskId: 0,
+        groupUsername: '',
+        groupName: '',
+        summaryDate: options.date,
+        summary: finalSummary,
+        messageCount: count,
+        status: ok ? 'done' : 'error',
+        error: ok ? '' : finalSummary.slice(0, 200),
+      })
       return { summary: finalSummary, date: options.date, sessions, messages: count, total, types, hourly, topSessions }
     },
 
@@ -159,7 +180,7 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       return r
     },
 
-    async generatePeriodSummary(options: { from: string; to: string; provider?: string; model?: string }): Promise<PeriodSummaryResult> {
+    async generatePeriodSummary(options: { from: string; to: string; provider?: string; model?: string; format?: string }): Promise<PeriodSummaryResult> {
       // 2026-09-28：改用可让出版收集 —— 实测本方法冷跑 **448ms 且一次都不让出**
       // （`working/probe-remote.txt`，当时最长的一个独占项）。
       const collected = await collectPeriodMessagesAsync(rc.dirs().decrypted, options.from, options.to, undefined, yieldToLoop)
@@ -187,16 +208,36 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         rc.op('task', 'generate_period_summary', 'fail', `${options.from}~${options.to}`, '未配置默认模型或 LLM 服务')
         return { summary: fallback, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
       }
-      const prompt = '请总结 ' + options.from + ' 至 ' + options.to + ' 的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
+      const prompt = buildSummaryPrompt({
+        from: options.from,
+        to: options.to,
+        lines,
+        stats: { total, sessions, messages: count },
+        format: (options.format as SummaryFormat | undefined) ?? 'brief',
+      })
       const [gated] = rc.privacyGate('period_summary', { sessions, messages: count }, [prompt])
       const userMsg = createUserMessage({ content: [{ type: 'text', text: gated ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
       const assembler = new BlockAssembler()
-      const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信周期总结助手，用中文输出简洁的要点总结。', maxTokens: 1024 }
+      const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信聊天总结助手。严格按用户给出的篇幅与结构要求输出中文总结，只依据素材内容，不推测不编造。', maxTokens: 2048 }
       let summary = ''
       try { for await (const chunk of llm.stream(opts)) assembler.push(chunk); summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim() } catch (e) { summary = 'LLM 调用失败: ' + (e as Error).message }
       const finalSummary = summary || (lines.length > 0 ? '模型未返回内容。\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '') : '（该周期没有可用的文本消息）')
       const ok = !finalSummary.startsWith('LLM 调用失败')
       rc.op('task', 'generate_period_summary', ok ? 'ok' : 'fail', `${options.from}~${options.to}`, ok ? `共 ${count} 条消息` : finalSummary.slice(0, 120))
+      // 2026-10-17：周期总结**落库**（改前只在内存里，刷新就没了 —— 用户实测"生成完切个页签回来就空了"）。
+      // `taskId` 用 0 表示「手动生成」（不是定时任务产出）；`summaryDate` 存区间 `from~to`，
+      // 这样「总结阅览」里能一眼看出这是哪一段，也能和每日总结（存单个日期）区分开。
+      // 落库失败不影响本次结果返回 —— 用户已经拿到总结了，不该因为存不下就报错。
+      saveRec(rc.dirs().decrypted, {
+        taskId: 0,
+        groupUsername: '',
+        groupName: '',
+        summaryDate: `${options.from}~${options.to}`,
+        summary: finalSummary,
+        messageCount: count,
+        status: ok ? 'done' : 'error',
+        error: ok ? '' : finalSummary.slice(0, 200),
+      })
       return { summary: finalSummary, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
     },
 

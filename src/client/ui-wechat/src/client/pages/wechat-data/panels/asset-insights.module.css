@@ -1,19 +1,240 @@
-/* Asset insights (favorites + emoticons) — NEON MATRIX 科技风。 */
+/* 收藏/表情统计 — 微信桌面端风格：内联 KPI 条 + 2 张分布图。
+ *
+ * 颜色只用 --nm-* 令牌（灰阶层级 + 绿主色），条形为单色，不再用青→紫渐变；
+ * 常用表情 Top 列表已从统计页删除（`asset-top-emoticons.tsx` 的样式保留，供其自身/后续复用）。
+ */
 
+/* ── 内联 KPI 条（40–46px）────────────────────────────────────── */
+.insightBar {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-3);
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: 4px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  flex-shrink: 0;
+}
 
-.typeList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.typeRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
-.typeLabel { color: var(--nm-text-1); }
-.typeCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+.kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
 
-.yearList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.yearRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.yearLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.yearTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: var(--nm-r-sm); overflow: hidden; }
-.yearFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-sm); }
-.yearCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+.kpiValue {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  font-variant-numeric: tabular-nums;
+}
 
-.emojiList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.emojiRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
-.emojiMd5 { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); word-break: break-all; }
-.emojiCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); flex-shrink: 0; }
+.kpiLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.barSpacer { flex: 1 1 auto; }
+
+.refreshBtn {
+  padding: 4px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast);
+}
+.refreshBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.refreshBtn:disabled { opacity: 0.5; cursor: default; }
+.refreshBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+/* ── 2 列栅格 ─────────────────────────────────────────────────── */
+.grid2 {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.fillCard {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.fillCard > [class*='_cardBd'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fillCard > [class*='_cardBd'] > .list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.fillCard > [class*='_cardBd'] > .empty {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── 列表 ─────────────────────────────────────────────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ── 带条形的排行行（类型 / 年份共用）──────────────────────────── */
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: var(--nm-r-sm);
+  font-size: var(--nm-fs-sm);
+  transition: background-color var(--nm-t-fast);
+}
+
+.barRow:hover { background: var(--nm-bg-hover); }
+
+.barName {
+  color: var(--nm-text-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTrack {
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+  overflow: hidden;
+}
+
+/* 功能性条形：单色主色，不再用青→紫渐变。 */
+.barFill {
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+.barCount {
+  text-align: right;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nm-fs-xs);
+}
+
+/* ── 常用表情：缩略图卡片网格（统计页已不渲染，样式保留给承载组件）────
+ * 一行 10 个（`repeat(auto-fill, minmax(72px, 1fr))`），每张卡「排名 + 缩略图 + 次数 + 迷你条」。
+ * 视觉对齐微信灰阶：卡片底为 hover 灰、排名角标单色。 */
+.emoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.emoCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px 6px;
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  transition: background-color var(--nm-t-fast);
+}
+
+.emoCard:hover { background: var(--nm-bg-active); }
+
+/* 排名角标：左上角小圆点，第 1 名用主色。 */
+.emoRank {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.emoCard:first-child .emoRank {
+  background: var(--nm-cyan);
+  color: var(--nm-on-accent);
+  font-weight: 600;
+}
+
+.emoThumb {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border-radius: var(--nm-r-sm);
+}
+
+.emoThumbPh {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--nm-text-3);
+}
+
+.emoCount {
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nm-fs-xs);
+  line-height: 1;
+}
+
+/* 迷你条：单色主色，表达相对次数。 */
+.emoBar {
+  width: 100%;
+  height: 3px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+}
+
+.emoBarFill {
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+/* ── 空态 ─────────────────────────────────────────────────────── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 2px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}

@@ -294,6 +294,16 @@ export interface WechatContact {
   /** Member's owning group username (members only). */
   groupUsername?: string
   groupName?: string
+  /**
+   * **全部**所属群的 username 列表（成员可能同时在多个群）。
+   *
+   * 为什么需要：`groupUsername` 只能存一个，而一个人可以在多个群里 ——
+   * 只按 `groupUsername` 筛群成员时，多群成员只在其中一个群可见
+   * （2026-10-17 用户报障：选「智能回复机器人·ai-3群」显示「未读取到群成员」，
+   *  实测该群成员 `wxid_umyqa86if3lm22` 同时在另一个群，`groupUsername` 被后者覆盖）。
+   * 前端筛群成员**必须用这个字段**。
+   */
+  groupUsernames?: string[]
 }
 
 /** Contacts grouped by kind. */

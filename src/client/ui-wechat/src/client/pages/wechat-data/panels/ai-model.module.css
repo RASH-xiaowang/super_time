@@ -27,7 +27,7 @@
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.modelInput:focus { border-color: var(--nm-cyan); }
+.modelInput:focus { border-color: var(--nm-brand); }
 /* ── 三块模型面板（2026-09-30 重做）──────────────────────────────────────────
  * 对话 / 嵌入 / 重排序各是一张可折叠卡：标题栏整条是真按钮（键盘可达），
  * 右侧一个状态徽标 + 一个会旋转的折叠箭头。收起时**不渲染**内容（由 TSX 决定，不是 CSS 隐藏）。
@@ -36,12 +36,12 @@
   margin-top: 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-panel-solid, #0f172a) 55%, transparent);
+  background: var(--nm-bg-card);
   overflow: hidden;
 }
 
 .panelCard[data-open] {
-  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  border-color: var(--nm-border-hover);
 }
 
 .panelHead {
@@ -56,14 +56,18 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  /* 标题栏是整条按钮：被挤压时文字会**逐字换行**成竖排（实测 375px 手机上
+     被压到 80px 宽、309px 高）。标题与副标题各自不换行，由 `.panelHeadText`
+     的 `min-width: 0` + 省略号收尾。 */
+  white-space: nowrap;
 }
 
 .panelHead:hover {
-  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+  background: var(--nm-bg-hover);
 }
 
 .panelHead:focus-visible {
-  outline: 2px solid var(--nm-cyan);
+  outline: 2px solid var(--nm-brand);
   outline-offset: -2px;
 }
 
@@ -94,10 +98,10 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   padding: 2px 8px;
-  border-radius: var(--nm-r-pill, 999px);
-  border: 1px solid var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  border-radius: var(--nm-r-sm);
+  border: 1px solid var(--nm-border);
   font-size: var(--nm-dense-fs-xs);
-  color: var(--nm-cyan);
+  color: var(--nm-text-2);
 }
 
 .panelStatus[data-tone='idle'] {
@@ -177,8 +181,8 @@
   cursor: pointer;
   transition: color var(--nm-t-fast), background var(--nm-t-fast);
 }
-.keyEye:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
-.keyEye[data-on] { color: var(--nm-cyan); }
+.keyEye:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+.keyEye[data-on] { color: var(--nm-brand); }
 /* 探针区（2026-09-30）：连接测试 / 余额查询 —— 两个**只读**动作，与「获取 / 保存」分行。
    混在一行会让人以为它们也会改配置。与 .modelActions 同为等宽两列，上边距一致。 */
 /* 探针行改成 .probeRow（每块面板一条按钮），旧的 .modelProbes 两列网格已不再使用。 */
@@ -191,25 +195,19 @@
 }
 .modelPrimary {
   padding: 8px 10px;
-  border: 1px solid var(--nm-cyan);
+  border: 1px solid var(--nm-brand);
   border-radius: var(--nm-r-md);
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 24%, transparent),
-    color-mix(in srgb, var(--nm-purple) 20%, transparent));
-  color: var(--nm-cyan-text);
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+  transition: background 0.15s, border-color 0.15s;
 }
 .modelPrimary:hover:enabled {
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 34%, transparent),
-    color-mix(in srgb, var(--nm-purple) 30%, transparent));
-  box-shadow: var(--nm-glow-sm);
+  filter: brightness(0.96);
 }
-.modelPrimary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.modelPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
 .modelGhost {
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
@@ -263,16 +261,16 @@
 .profileSpacer { flex: 1 1 auto; min-width: 0; }
 .profileAdd {
   padding: 4px 10px;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: transparent;
-  color: var(--nm-cyan-text);
+  color: var(--nm-text-2);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.profileAdd:hover:enabled { background: var(--nm-cyan-10); border-color: var(--nm-cyan); }
+.profileAdd:hover:enabled { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 .profileAdd:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* 芯片网格：自适应列数，窄屏自然塌成单列（不给固定列数，免得多写一组断点）。 */
@@ -292,10 +290,10 @@
   transition: border-color 0.15s, background 0.15s;
 }
 .profileChip:hover { border-color: var(--nm-border-hover); }
-/* 使用中的那条：青边 + 青底，和「已配置」徽标同一套色，一眼认得出此刻在用谁。 */
+/* 使用中的那条：主色边框 + 极浅绿底，一眼认得出此刻在用谁。 */
 .profileChip[data-active] {
-  border-color: var(--nm-cyan);
-  background: var(--nm-cyan-10);
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 8%, transparent);
 }
 /* 三行栅格：① 圆点 + 名称 ② 模型名 ③ 上次使用。
    为什么要栅格而不是 column 的 flex：圆点必须是①行里的一个格，否则它会单独占一行
@@ -327,7 +325,7 @@
   border-radius: 50%;
   background: var(--nm-text-3);
 }
-.profileChip[data-active] .profileDot { background: var(--nm-cyan); box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent); }
+.profileChip[data-active] .profileDot { background: var(--nm-brand); }
 .profileLabel { grid-area: label; font-size: 13px; font-weight: 600; }
 .profileModel {
   grid-area: model;
@@ -340,7 +338,7 @@
   white-space: nowrap;
 }
 .profileState { grid-area: state; font-size: 11px; color: var(--nm-text-3); }
-.profileChip[data-active] .profileState { color: var(--nm-cyan-text); }
+.profileChip[data-active] .profileState { color: var(--nm-text-2); }
 /* 删除：常驻但低对比（可见才找得到、才按得到 —— 用 opacity:0 藏起来会让键盘用户摸不到）；
    hover 才升到危险色。 */
 .profileDel {

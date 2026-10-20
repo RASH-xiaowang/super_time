@@ -1,33 +1,127 @@
-/* Contacts panel — NEON MATRIX 科技风重设计。
-   深空黑底 + 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple) + 毛玻璃卡片 + 发光悬停。
-   保留全部被 TSX 引用的类名与既有语义（搜索、分类、字母索引、列表、资料卡）。 */
+/* Contacts panel — 微信桌面端风格：白/浅灰底、1px 分隔、灰阶层级、绿色主操作。
+   保留全部被 TSX 引用的类名与既有语义（工具行、分类分段、字母索引、列表、资料卡）。
+   本文件的圆角/间距一律走 --nm-* 令牌（几何守卫不允许新增字面量圆角）。 */
 
 .panel {
-  /* 设计令牌 */
-
   height: 100%;
   /* 第 81 轮：删除此处的 `color-scheme: dark`。主题的 color-scheme 由
      `:root` / `:root.theme-light`（scifi-theme.css）统一切换，面板再写死一次会让
-     面板内的**原生控件与滚动条**在浅色主题下仍按深色渲染（审计第 3 节点名过这一行）。 */
+     面板内的**原生控件与滚动条**在浅色主题下仍按深色渲染（审计第 3 节点名过这一行）。
+     面板底色由 shell 决定，这里不再叠任何径向渐变/辉光。 */
   /* 内部滚动容器继承双层配色（见 ui-theme styles/scrollbar.css 的绑定约定） */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
   box-sizing: border-box;
   position: relative;
-
-  /* 第 81 轮：这里原本是 `radial-gradient(...) , rgba(4, 10, 24, 0.50)` ——
-     第二个图层是**写死的深色字面量**，在浅色主题下把整块面板压成 #82858c
-     （合成亮度 0.232），是一整块灰绿色面板。改成与 kit `.panelShell` 相同的
-     令牌化辉光底（不再自带底色，面板底色由 shell 决定）。
-     判据见 `scripts/st-verify-theme-surface.js`（`npm run check:surface`）。 */
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
+/* ── 36px 工具行：标题 + 搜索 + 分类分段 + 筛选 + 更多 ─────────────────── */
+.toolRow {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  flex-wrap: wrap;
+  min-height: 36px;
+  flex-shrink: 0;
+}
+
+.toolTitle {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  margin-right: var(--nm-s-1);
+}
+
+.toolSearch {
+  /* 接管 kit SearchInput 的宽度策略：工具栏里它该吸收剩余宽度，而不是钉死 320px。 */
+  flex: 1 1 220px;
+  max-width: 340px;
+  min-width: 160px;
+}
+
+.toolCount {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.toolSpacer { flex: 1 1 auto; }
+
+.segWrap { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+
+/* 工具行按钮（筛选 / 更多）：与分段同高、描边按钮，主色只在选中态出现。 */
+.toolBtn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
+}
+.toolBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.toolBtn[data-on] { border-color: var(--nm-border-active); color: var(--nm-cyan); }
+.toolBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+/* ── 下拉菜单 ──────────────────────────────────────────────────────────── */
+.menuWrap { position: relative; }
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  box-shadow: var(--nm-shadow-popup);
+}
+
+.menuLabel {
+  padding: 2px 8px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--nm-t-fast), color var(--nm-t-fast);
+}
+.menuItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
+.menuItem[data-on] { color: var(--nm-cyan); }
+.menuItem:disabled { opacity: 0.5; cursor: default; }
+.menuItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+.menuCount { color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+
+/* 资料抽屉里的操作按钮（抽屉本体用 kit Drawer 皮肤）。 */
 .catBtn {
   padding: 4px 12px;
   border: 1px solid var(--nm-border);
@@ -37,27 +131,26 @@
   color: var(--nm-text-1);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
-  transition: all 0.15s;
-  corner-shape: round;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
 .catBtn:hover {
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .catBtn[data-active='true'] {
   background: var(--nm-cyan-10);
   color: var(--nm-cyan);
   font-weight: 600;
   border-color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
 }
-.catBtn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.catBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.catBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
+/* ── 字母索引（仅列表 >50 时渲染）────────────────────────────────────────
+   多列网格后行高更矮、列表更靠上，索引栏起点随之上移。
+   top 与 .scroll 的上边界对齐（工具行 36px + gap 10px + 边框 1px ≈ 47px）。 */
 .indexBar {
-  /* 多列网格后行高更矮、列表更靠上，索引栏起点随之上移（原先 top:88px 是单列时代的
-     估算值，会在网格下悬在列表中部）。top 与 .scroll 的上边界对齐。 */
-  position: absolute; top: 56px; right: 4px; bottom: 6px; z-index: 5;
+  position: absolute; top: 47px; right: 4px; bottom: 6px; z-index: 5;
   display: flex; flex-direction: column; justify-content: center; gap: 1px;
   padding: 4px 2px; pointer-events: none;
 }
@@ -65,9 +158,8 @@
 .indexLetter {
   pointer-events: auto; width: 18px; height: 15px; border: none; background: transparent;
   color: var(--nm-text-2); font-size: var(--nm-fs-xs, 11px); line-height: 1; cursor: pointer; border-radius: var(--nm-r-xs);
-  font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
-  transition: all 0.15s;
+  transition: color var(--nm-t-fast), background-color var(--nm-t-fast);
   /* WCAG 2.2 SC 2.5.8：A–Z 索引是紧凑的定高栏，把每格撑到 24px 会让整栏达 648px
      而失去索引的意义（属该条目的 Essential 例外；面板另有搜索作为等价路径）。
      这里以伪元素把**实际命中区**扩到约 24×24，视觉尺寸与栏高都不变。
@@ -79,31 +171,42 @@
 
 .scroll {
   flex: 1; min-height: 0; overflow-y: auto;
-  /* 令牌按**生效值**选：scifi-theme.css 在 387-388 行二次定义过 r-lg/r-xl，
-     所以 --nm-r-lg=10px、--nm-r-xl=14px（后者胜出）。这里要的是原来的 14px。 */
-  border: 1px solid var(--nm-border); border-radius: var(--nm-r-xl); background: var(--nm-bg-card); padding: 8px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); background: var(--nm-bg-card); padding: 8px;
+  /*
+   * 这里**故意没有** `backdrop-filter` —— 底色 `--nm-bg-card` 完全不透明，
+   * 模糊一层看不见的东西只是一层多余的合成（滚动时每帧重算）。
+   */
 }
 
 .group { margin-bottom: 2px; }
 
+/*
+ * 「已加载前 N 位联系人」提示条。
+ *
+ * 位置在列表**末尾**（`ListSentinel` 之前）：它是「为什么下面没有了」的解释，
+ * 放在列表上方会先于内容出现，读起来像一条错误。用 `--nm-text-2` 而不是警示色 ——
+ * 触顶是**设计行为**（DOM 上界），不是故障。
+ */
+.capNote {
+  padding: 8px 10px;
+  margin-top: 6px;
+  border-radius: var(--nm-r-sm);
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  background: var(--nm-bg-hover);
+  text-align: center;
+}
+
 .letterHd {
-  font-size: 11px; font-weight: 700; color: var(--nm-text-2); padding: 6px 8px 4px;
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  color: var(--nm-text-2);
+  padding: 6px 8px 4px;
   position: sticky; top: 0; z-index: 2; background: var(--nm-bg-card);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   /* 分组头下压一条极淡的分隔，多列网格里靠它划开相邻字母，不然会连成一片。 */
-  border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 60%, transparent);
+  border-bottom: 1px solid var(--nm-border);
   margin-bottom: 4px;
-}
-.letterHd::before {
-  content: ''; display: inline-block; width: 3px; height: 10px;
-  margin-right: 6px; vertical-align: middle;
-  border-radius: var(--nm-r-xs);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
 }
 
 /* ── 联系人网格 ───────────────────────────────────────────────
@@ -125,7 +228,7 @@
 .list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 4px 8px;
+  gap: 2px 8px;
 }
 
 .contactItem {
@@ -137,28 +240,26 @@
   border-radius: var(--nm-r-sm);
   cursor: pointer;
   border: 1px solid transparent;
-  background: color-mix(in srgb, var(--nm-bg-hover) 45%, transparent);
-  transition: all 0.15s;
+  background: transparent;
+  transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast);
 }
 .contactItem:hover {
   background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  border-color: var(--nm-border);
 }
 
 .avatar {
-  /* 第 88 轮：兜底底色原为 hsl(190 50% 50%)，白字在其上只有 2.72:1（照片加载中的占位也是它）。
-     压到 32% 亮度后白字约 6.5:1；真正有名字的首字格子由 utils/format.ts: avatarColors() 给色。 */
-  border-radius: var(--nm-r-md); background: hsl(190 50% 32%);
+  /* 兜底底色用中性灰（白字压 #666 约 5.7:1）：真正有名字的首字格子由
+     utils/format.ts: avatarColors() 给色。 */
+  border-radius: var(--nm-r-md); background: #666666;
   color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   border: 1px solid var(--nm-border);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
 
 .contactInfo { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 
 .contactName {
-  font-size: var(--nm-fs-sm); font-weight: 600; color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm); font-weight: 500; color: var(--nm-text-1);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   /* 固定行高：卡片高度被钉在 46px，两行文字必须自带行高，否则默认 `normal`
      （约 1.4 倍）会让 12px + 10.5px 两行合计约 49px，在固定高度里被裁掉。 */
@@ -167,66 +268,55 @@
 
 .contactMeta {
   font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   line-height: 14px;
 }
 
-
 .notice {
-  padding: 6px 12px; font-size: 12px; color: var(--nm-success);
-  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-success) 20%, transparent);
-  border-radius: var(--nm-dense-r);
+  padding: 6px 12px; font-size: var(--nm-fs-sm); color: var(--nm-success);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
 }
 
 .profileHd { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 
 .profileNames { flex: 1; min-width: 0; }
 
-.profileName {
-  font-size: 15px; font-weight: 700;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
+.profileName { font-size: var(--nm-fs-lg); font-weight: 600; color: var(--nm-text-1); }
 
-.profileType { font-size: 11px; color: var(--nm-text-2); margin-top: 2px; }
+.profileType { font-size: var(--nm-fs-xs); color: var(--nm-text-2); margin-top: 2px; }
 
 .profileRow {
-  display: flex; gap: 8px; padding: 6px 0; font-size: 12px;
+  display: flex; gap: 8px; padding: 6px 0; font-size: var(--nm-fs-sm);
   border-bottom: 1px solid var(--nm-border);
   font-variant-numeric: tabular-nums;
 }
 .profileRow span:first-child { color: var(--nm-text-2); flex-shrink: 0; width: 56px; }
-.profileRow code { word-break: break-all; font-family: var(--nm-font-mono, monospace); }
+.profileRow code { word-break: break-all; }
 
 .profileSection {
   margin-top: 10px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--nm-cyan);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  color: var(--nm-text-2);
+  letter-spacing: 0.04em;
 }
 .commonGroups { display: flex; flex-wrap: wrap; gap: 6px; }
 .groupChip {
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  padding: 2px 10px;
-  font-size: 11px;
+  border-radius: var(--nm-r-sm);
+  padding: 2px 8px;
+  font-size: var(--nm-fs-xs);
   color: var(--nm-text-1);
   background: var(--nm-bg-hover);
   cursor: pointer;
-  transition: all 0.15s;
-  corner-shape: round;
+  transition: border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
-.groupChip:hover { border-color: var(--nm-cyan); color: var(--nm-cyan); }
+.groupChip:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 
 .profileActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-
 
 .avatarImg {  display: block; object-fit: cover;
   border-radius: var(--nm-r-md);
@@ -239,17 +329,48 @@
 .avatarImgRound { border-radius: var(--nm-r-sm); }
 
 /*
- * 窄屏（2026-09-17 随「社交图谱并入通讯录」一并补的小屏适配）。
+ * 窄屏（2026-09-17 随「社交图谱并入通讯录」一并补的小屏适配；2026-10-18 Wave 2 改写）。
  *
  * `.indexBar` 是 `position: absolute; right: 4px` 的一列 A–Z，它之所以能这么放，
  * 前提是右侧有**属于列表自己的**空白（宽屏下网格是 4–6 列，索引栏压在最后一列的
- * 右侧内边距上）。窄屏网格退化成 1 列后，那点留白没有了，索引栏会直接压在联系人卡片
- * 上、挡住微信号与类型。
+ * 右侧内边距上）。窄屏网格退化成 1 列后，那点留白没有了，竖排索引栏会直接压在联系人
+ * 卡片上、挡住微信号与类型。
  *
- * 直接隐藏而不是「改成横向吸顶」：本面板的搜索框覆盖昵称 / 备注 / 微信号 / 全拼
- *（含 remarkQuanPin），是索引栏的**等价路径**，而横向索引条在 1 列网格下仍要吃掉
- * 一整行高度，收益不如让位给列表。宽屏（>700px）行为完全不变。
+ * 2026-10-18 的响应式审计把它记为「业务内容消失」（hidden，high）—— 搜索与字母跳转
+ * 并不是等价操作：搜索是「记得名字才找得到」，索引是「按首字母扫一遍」。按方案
+ * §2.1「只允许换形态」，这里改成列表上方的**横向字母条**（`.indexBar` 在 DOM 里就在
+ * `.scroll` 之前，`position: static` 后自然占一条工具带、点按仍走 `jumpToLetter`）。
+ * 宽屏（>700px）的竖排靠边形态不变。
  */
 @media (max-width: 700px) {
-  .indexBar { display: none; }
+  .indexBar {
+    display: flex;
+    position: static;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-height: 32px;
+    box-sizing: border-box;
+    padding: 4px 8px;
+    overflow-x: auto;
+    border: 1px solid var(--nm-border);
+    border-radius: var(--nm-r-md);
+    background: var(--nm-bg-card);
+    flex: 0 0 auto;
+    /* 横向条自己就是滚动容器：打开容器命中（竖排档是 pointer-events:none，只放行字母） */
+    pointer-events: auto;
+  }
+  .indexLetter {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+  }
+}
+
+/* 窄窗：工具行里的分段可以换行占满一整行，避免把搜索框压到不可用。 */
+@media (max-width: 900px) {
+  .segWrap { width: 100%; order: 3; }
+  .toolSearch { max-width: none; }
 }

@@ -251,8 +251,17 @@ export interface WechatBridge {
 export interface RemoteAccessBridge {
   state(): Promise<RemoteEnvelope<RemoteAccessState>>
   apply(): Promise<RemoteEnvelope<RemoteAccessState>>
-  rotate(): Promise<RemoteEnvelope<RemoteAccessRotation>>
+  rotate(options?: { fullAccess?: boolean }): Promise<RemoteEnvelope<RemoteAccessRotation>>
   toggle(enabled: boolean): Promise<RemoteEnvelope<RemoteAccessState>>
+}
+
+/** 浏览器交接：把操作权交给默认浏览器，桌面端缩成右下角卡片。 */
+export interface WebHandoffBridge {
+  /** 打开默认浏览器并隐藏主窗口；失败时主窗口保持原样。 */
+  open(): Promise<{ ok: boolean, error?: string }>
+  /** 返回桌面：停掉 HTTP 服务（浏览器会话作废）并显示主窗口。 */
+  restore(): Promise<{ ok: boolean }>
+  state(): Promise<{ active: boolean }>
 }
 
 export interface LicenseBridge {
@@ -294,6 +303,7 @@ export interface ElectronApi {
   windowControls: WindowControlsBridge
   wechat: WechatBridge
   remoteAccess: RemoteAccessBridge
+  webHandoff: WebHandoffBridge
   license: LicenseBridge
   diag: DiagBridge
   update: UpdateBridge

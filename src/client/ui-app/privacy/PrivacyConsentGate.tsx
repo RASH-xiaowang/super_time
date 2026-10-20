@@ -11,18 +11,21 @@
  *     `src/client/ui-app/privacy/consent.spec.ts`（含「ui-entry 真的渲染本组件」那条接线判据）与
  *     `src/backend/tests/privacy-statement.spec.ts` 守着不许漂。
  *
- * 排版取向（2026-09 改版）：把它当**数据流合约**排，而不是一屏宣传语 ——
- *   · 长句拆成「标签 / 说明 / 标记」三栏，出网点逐条可扫；
- *   · 每节的关键句用 keyBox 圈起来，顶部的「一句话结论」单独成块；
- *   · **关不掉的出网点**单独用琥珀色实心框圈出（全页唯一的警示色），
- *     因为「关掉 AI 开关就等于完全离线」是这份声明里最容易被误读的一点。
+ * 微信化改版（2026-10-19）：**单列单滚动**（内容列 max-width 760）。
+ *   · 顶部「一句话结论」= 3 条 TL;DR（数据只在本机 / AI 只发给你自己配的模型 / 无遥测）；
+ *   · 正文改成可展开小节（原生 `<details>`，无 JS）：出网点与入站两条默认展开 ——
+ *     它们是这份声明的核心决策清单；三节说明默认收起；
+ *   · 底部同意条在**文档流末尾**（不是 sticky / fixed：桌面端 flex 列把它钉在内容区底部，
+ *     嵌入启动页时也只占最后一格，不遮挡正文 —— `consent.spec.ts` 钉着这条）；
+ *   · 去渐变、去发光、去彩色底：白卡 + 1px 边框 + 微信绿主按钮。
  *
- * 版面是**左右两栏**：左栏（一句话结论 / 数据在本机处理 / 只读扫描内存 / 你的控制）讲
- * 「我们怎么处理、你能改什么」，右栏（会出网的地方）是全页最长的清单，独占一栏保持逐条可扫。
- * 两栏各自满高、互不拉伸，页面总高由较高的左栏决定 —— 所以结论块放在左栏还能吃掉左栏的空档。
- * **小节的编号已去掉**：两栏布局下「01→02→03→04」的视觉顺序本来就无法与编号一致，留着只会误导。
- * 样式见 `PrivacyConsentGate.module.css`；窄卡片下出网点会自动折成上下两行（容器查询）。
+ * 两条渲染路径（2026-10-19 布局重做后保持）：
+ *  ① **内嵌启动页**（`embedded`）：页头由 `StageHead` 给（标题 + 导语），本组件只负责
+ *     「单列滚动 + 同意条」。父级 `.consentPage` 有确定高度（height:100%）。
+ *  ② **独立整屏**（默认）：声明升版后的「重新同意」直接挂在 `#root` 下，没有启动页外壳，
+ *     这一路径自己给页头并填满 `#root` 的确定高度。
  */
+
 import React, { useState } from 'react'
 
 import { PRIVACY_VERSION } from './consent.ts'
@@ -36,7 +39,7 @@ import css from './PrivacyConsentGate.module.css'
  *  · `none`   —— 没有开关（琥珀色圈出，全页唯一的警示色）
  *  · `manual` —— 只在你点击时才发生
  *  · `off`    —— **默认关闭、且有真开关**（2026-10-14 随入站监听首次出现；
- *                出网侧自 2026-09-30 起已无此档，故它是本屏唯一的青色标记） */
+ *                出网侧自 2026-09-30 起已无此档） */
 type SwitchKind = 'none' | 'manual' | 'off'
 
 interface SurfaceEntry {
@@ -44,10 +47,10 @@ interface SurfaceEntry {
   label: string
   /** 中栏说明（一句话讲清「什么时候发、发什么」）。 */
   text: string
-  /** 目的地主机（等宽字体，看得出是技术事实而不是形容词）。 */
+  /** 目的地主机（看得出是技术事实而不是形容词）。 */
   host?: string
   kind: SwitchKind
-  /** 需要额外提醒时的一行 —— 目前只有「头像图片」与「地图底图」这两条用得上。 */
+  /** 需要额外提醒时的一行 —— 目前只有「头像图片」与「地图底图」与入站那条用得上。 */
   note?: string
 }
 
@@ -58,9 +61,7 @@ const KIND_CHIP: Readonly<Record<SwitchKind, string>> = {
 }
 
 /**
- * 标记的配色：`none` 用琥珀（全页唯一的警示色，「关不掉」），其余用中性/青色。
- * `off` 复用既有但一直没被引用的 `.chipToggle`（青色 = 「这一条有真开关」）——
- * 它正是 2026-09-30 拆掉出网开关后空下来的那一档，语义与配色都对得上。
+ * 标记的配色：`none` 用琥珀（全页唯一的警示色，「关不掉」），其余用中性/绿色。
  */
 const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
   none: `${css.chip} ${css.chipNone}`,
@@ -71,11 +72,8 @@ const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
 /**
  * 出网点清单（与 `docs/PRIVACY.md` 第四节 A–G 逐条对应）。
  *
- * 口径提醒（2026-09-30）：应用内的出网开关**已全部移除**（原来的「禁止 AI 出网」
- * 「禁止地图底图出网」与「自动获取原图（CDN）」），所以这里不再有 `可关闭` 这一档 ——
+ * 口径提醒（2026-09-30）：应用内的出网开关**已全部移除**，所以这里不再有 `可关闭` 这一档 ——
  * 每条都是「无开关」或「仅在你点击时才发生」。要断网只能靠系统防火墙或断网。
- * 图片/头像/视频这一类自 M23 起全部由后端代取，界面自己不再向任何远程主机要图
- * （CSP 的 `img-src` 只放行本机来源）。
  */
 const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
   {
@@ -122,16 +120,15 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
  * 入站监听面（与 `docs/PRIVACY.md` 第四节 H 对应）。
  *
  * 刻意**与出网点分开列、不并进上面的计数**：方向相反（本机监听、别的设备连进来），
- * 混在一起会让「共 N 个出网点」这句话变成假话。它是本屏唯一带 `off` 标记的一条 ——
- * 出网侧自 2026-09-30 起已无任何开关，而入站这一条**默认就是关的、且有真开关**。
+ * 混在一起会让「共 N 个出网点」这句话变成假话。它是本屏唯一带 `off` 标记的一条。
  */
 const INBOUND: ReadonlyArray<SurfaceEntry> = [
   {
-    label: '局域网远程访问（手机端）',
-    text: '打开「设置 → 远程访问（手机）」后，本机在局域网里监听一个端口（默认 5032），你自己的手机可用浏览器访问同一套界面。访问用一次性配对码换取会话，且只开放一份方法白名单 —— 模型 API Key、许可证、诊断、更新、备份还原、配置写入与全部原生能力（选目录、窗口控制、截图）都不开放',
-    host: '本机局域网 IPv4:5032（可在设置里改端口 / 关开关）',
+    label: '「打开网页」交接（临时入站监听）',
+    text: '只有点击标题栏「打开网页」时，本机才在局域网临时监听一个端口（默认 5032），让默认浏览器打开同一套界面。浏览器会话与桌面端同权限（可能读到模型 API Key 等配置）；点右下角卡片返回即停服、作废会话。普通「远程访问（手机）」开关已移除',
+    host: '本机局域网 IPv4:5032（仅交接期间临时监听）',
     kind: 'off',
-    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到配对码与你查阅的数据（长期令牌不出本机）。只在你信任的局域网里打开，用完就关。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则手机连不上。',
+    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到交接码与你查阅的数据。交接期间请把浏览器窗口当作桌面端本人；用完点卡片返回即停。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则浏览器连不上。',
   },
 ]
 
@@ -146,8 +143,8 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
     text: '数据配置 → AI 大模型：换模型 / 换服务商，或把 apiUrl 指向你自己的内网或本机模型。',
   },
   {
-    label: '远程访问（手机）',
-    text: '设置 → 远程访问（手机）：开关（默认关闭）、二维码与局域网地址、轮换令牌。关掉开关即停止监听，轮换令牌会让已连上的手机与未用配对码一起失效。',
+    label: '打开网页',
+    text: '标题栏「打开网页」：用默认浏览器打开同一套界面，桌面缩为右下角卡片；浏览器与桌面端同权限，点卡片「返回桌面应用」即停服并作废会话。',
   },
   {
     label: '重新审阅本声明',
@@ -163,7 +160,7 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   },
 ]
 
-/** 一条网络面的行：出网与入站共用同一套「标签 / 说明 / 标记」三栏排版。 */
+/** 一条网络面的行：出网与入站共用同一套「标签 / 说明 / 标记」排版。 */
 function SurfaceRow({ e }: { e: SurfaceEntry }): React.JSX.Element {
   return (
     <div className={e.kind === 'none' ? `${css.row} ${css.rowNone}` : css.row} data-switch={e.kind}>
@@ -182,168 +179,183 @@ function SurfaceRow({ e }: { e: SurfaceEntry }): React.JSX.Element {
  * 渲染同意闸门。
  * @param props.onAccepted - 用户同意后的回调（由调用方放行主界面）。
  * @param props.onExit - 用户选择退出（可选；不传则只显示提示）。
+ * @param props.embedded - 作为启动页的一个 stage 渲染（页头由外层 `StageHead` 提供）；
+ *   缺省 = 独立整屏（声明升版后的重新同意，自己渲染页头并填满 `#root`）。
  */
 export function PrivacyConsentGate({
   onAccepted,
   onExit,
+  embedded = false,
 }: {
   onAccepted: () => void
   onExit?: () => void
+  embedded?: boolean
 }): React.JSX.Element {
   const [checked, setChecked] = useState(false)
   const blocked = OUTBOUND.filter((e) => e.kind === 'none')
 
   return (
-    <div className={css.shell}>
-      {/* 主动提醒（右下角悬浮）：同意屏上也能看到「有新版本可装」 */}
-      <NoticeBanner />
-      <div className={css.doc}>
-        <header className={css.head}>
-          <span className={css.kicker}>首次启动 · 需要你确认</span>
-          <h1 className={css.title}>隐私与数据边界</h1>
-          <p className={css.sub}>
-            开始之前，请确认你了解它会读什么、会往哪里发。
-            完整声明见 <code className={css.code}>docs/PRIVACY.md</code>（声明版本 v{PRIVACY_VERSION}）。
-          </p>
+    <div
+      className={css.shell}
+      data-standalone={embedded ? undefined : ''}
+      data-embedded={embedded ? '' : undefined}
+    >
+      {/* 提醒卡改走**文档流**：这一屏底部就是「同意并继续」主按钮，
+          右下角悬浮卡会直接盖住它。没有提醒时组件返回 null，不占高度。 */}
+      <NoticeBanner placement="inline" />
+
+      {/* 独立整屏才画页头：内嵌启动页时 StageHead 已经给了同一套标题与导语，
+          这里再画一遍就是两条标题（`consent.spec.ts` 的 ③ 也钉着这一点）。 */}
+      {!embedded && (
+        <header className={css.pageHead}>
+          <div className={css.pageHeadCopy}>
+            <span className={css.pageEyebrow}>需要你确认 · 一屏读完</span>
+            <h1 className={css.pageTitle}>隐私与数据边界</h1>
+            <p className={css.pageLead}>
+              在读取本机微信数据之前，请确认你了解它会读什么、会往哪里发。
+              <span className={css.pageVersion}>声明版本 v{PRIVACY_VERSION}</span>
+              完整声明见 <code className={css.pageCode}>docs/PRIVACY.md</code>。
+            </p>
+          </div>
         </header>
+      )}
 
-        <div className={css.grid}>
-          <div className={css.col}>
-            {/* 一句话结论 —— 全页最上面被「圈起来」的一段 */}
-            <section className={css.verdict} aria-label="一句话结论">
-              <span className={css.verdictTag}>一句话结论</span>
-              <ul className={css.verdictList}>
-                <li>数据不出本机：解析、检索、统计、导出全部在你自己的电脑上完成。</li>
-                <li>
-                  唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 发给你<b>自己配置</b>的模型接口。
-                </li>
-                <li>
-                  其余出网点都不涉及聊天内容，已在右边逐条列明；应用内已<b>没有任何出网开关</b>，
-                  要完全断网请配合系统防火墙或断网。
-                </li>
-              </ul>
-            </section>
+      {/* 单列单滚动：整页只有这一处滚动条。 */}
+      <div className={css.scroll}>
+        {/* 一句话结论 = 顶部 3 条 TL;DR（不涉及细节，细节都在下面的小节里）。 */}
+        <section className={css.verdict} aria-label="一句话结论">
+          <span className={css.verdictTag}>一句话结论</span>
+          <ul className={css.verdictList}>
+            <li>数据不出本机：解析、检索、统计、导出全部在你自己的电脑上完成。</li>
+            <li>
+              唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 发给你<b>自己配置</b>的模型接口。
+            </li>
+            <li>
+              其余出网点都不涉及聊天内容，已在下面逐条列明；应用内已<b>没有任何出网开关</b>，
+              要完全断网请配合系统防火墙或断网。
+            </li>
+          </ul>
+        </section>
 
-            {/* 三节说明**全部常显**（2026-09-29 用户要求移除折叠）：
-                折叠会让"知情"变成"需要点开才知情"，直接展开更稳妥。 */}
-            <section className={css.sec}>
-              <div className={css.secHd}>
-                <h2 className={css.secTitle}>数据在本机处理</h2>
-              </div>
-              <p className={css.p}>
-                微信数据库在本机解密、存储与分析；检索、统计、导出、图谱、账本、备份全部为纯本地操作。
-              </p>
-              <p className={css.keyBox}>我们没有任何服务器，不会上传你的聊天记录、图片或导出物。</p>
-            </section>
+        {/* 核心决策清单默认展开：合规资产不能藏在折叠里。 */}
+        <details className={css.sec} open>
+          <summary className={css.secTitle}>会出网的地方（逐条）</summary>
+          <div className={css.secBody}>
+            <div className={css.stat}>
+              <span className={css.statChip}>共 {OUTBOUND.length} 个出网点</span>
+              <span className={css.statChipWarn}>{blocked.length} 条无开关</span>
+              <span className={css.statChip}>{OUTBOUND.length - blocked.length} 条只在你要用时发生</span>
+            </div>
 
-            <section className={css.sec}>
-              <div className={css.secHd}>
-                <h2 className={css.secTitle}>只读扫描微信进程内存（取解密密钥）</h2>
-              </div>
-              <p className={css.p}>
-                微信 4.x 的数据库密钥不以明文存在磁盘上，只存在于运行中的微信进程内存里。
-                「自动获取密钥」会以只读方式扫描 Weixin.exe 的内存区域，并用一个数据库文件校验命中结果。
-              </p>
-              <div className={css.pills}>
-                {['不写入', '不修改', '不注入', '不挂钩', '不保存或外发内存内容'].map((t) => (
-                  <span key={t} className={css.pill}>{t}</span>
-                ))}
-              </div>
-              <p className={css.keyBox}>
-                命中后密钥写入本机 secrets.json（权限收紧到当前用户）。微信没在运行时该能力不可用，可改为手动填写密钥。
-              </p>
-            </section>
+            <div className={css.rows}>
+              {OUTBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
+            </div>
 
-            <section className={css.sec}>
-              <div className={css.secHd}>
-                <h2 className={css.secTitle}>你的控制</h2>
-              </div>
-              <div className={css.rows}>
-                {CONTROLS.map((c) => (
-                  <div key={c.label} className={css.row}>
-                    <span className={css.rowLabel}>{c.label}</span>
-                    <span className={css.rowText}>{c.text}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <p className={css.caveat}>
+              <b>诚实说明</b>：上面 {blocked.length} 条出网点（{blocked.map((e) => e.label).join('、')}）
+              <b>不受任何应用内设置控制</b> —— 应用里已经没有任何出网开关。图片、头像与视频这一类
+              全部由后端代取，界面自己不向任何远程主机要图。要断掉这些请求，只能靠系统防火墙或断网。
+            </p>
           </div>
+        </details>
 
-          <div className={css.col}>
-            <section className={css.sec}>
-              <div className={css.secHd}>
-                <h2 className={css.secTitle}>会出网的地方（逐条）</h2>
-              </div>
-              <div className={css.stat}>
-                <span className={css.statChip}>共 {OUTBOUND.length} 个出网点</span>
-                <span className={css.statChipWarn}>{blocked.length} 条无开关</span>
-                <span className={css.statChip}>{OUTBOUND.length - blocked.length} 条只在你要用时发生</span>
-              </div>
-
-              <div className={css.rows}>
-                {OUTBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
-              </div>
-
-              <p className={css.caveat}>
-                <b>诚实说明</b>：上面 {blocked.length} 条出网点（{blocked.map((e) => e.label).join('、')}）
-                <b>不受任何应用内设置控制</b> —— 应用里已经没有任何出网开关。图片、头像与视频这一类
-                全部由后端代取，界面自己不向任何远程主机要图。要断掉这些请求，只能靠系统防火墙或断网。
-              </p>
-            </section>
-
-            {/* 入站方向单独成节：与出网方向相反（本机监听、别的设备连进来），
-                并进上面那节会让「共 N 个出网点」变成假话。 */}
-            <section className={css.sec}>
-              <div className={css.secHd}>
-                <h2 className={css.secTitle}>会被连进来的地方（入站）</h2>
-              </div>
-              <div className={css.stat}>
-                <span className={css.statChip}>共 {INBOUND.length} 个监听面</span>
-                <span className={css.statChip}>{INBOUND.length} 条默认关闭</span>
-              </div>
-              <div className={css.rows}>
-                {INBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
-              </div>
-              <p className={css.keyBox}>
-                与出网点不同，这一条<b>有真开关、而且默认是关的</b>：不打开「设置 → 远程访问（手机）」，
-                本应用一个端口都不监听，别人无法从网络连进来。
-              </p>
-            </section>
+        <details className={css.sec} open>
+          <summary className={css.secTitle}>会被连进来的地方（入站）</summary>
+          <div className={css.secBody}>
+            <div className={css.stat}>
+              <span className={css.statChip}>共 {INBOUND.length} 个监听面</span>
+              <span className={css.statChip}>{INBOUND.length} 条默认关闭</span>
+            </div>
+            <div className={css.rows}>
+              {INBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
+            </div>
+            <p className={css.keyBox}>
+              与出网点不同，这一条<b>只在你点「打开网页」时临时开启</b>：
+              没有常驻开关，也不在启动时监听；点卡片返回即停服，本应用恢复「一个端口都不监听」。
+            </p>
           </div>
-        </div>
+        </details>
 
-        {/* 同意区（勾选 + 两个按钮）**在文档流内**（2026-09-30 用户要求：不要悬浮式）。
-            它曾在 2026-09-29 被做成吸底条；悬浮条会盖住正文最后一行，也让人误以为它是
-            浮层而不是文档的一部分。现在它作为最后一段随流排下，滚到底勾选即可。 */}
-        <div className={css.consentBar}>
-          <label className={css.consent} data-on={checked || undefined}>
-            <input
-              type="checkbox"
-              className={css.consentBox}
-              checked={checked}
-              onChange={(e) => { setChecked(e.target.checked) }}
-            />
-            <span className={css.consentText}>
-              我已阅读并理解上述数据处理方式，同意本应用读取本机微信数据、只读扫描微信进程内存以获取解密密钥，
-              并按上述方式使用网络。
-            </span>
-          </label>
+        <details className={css.sec}>
+          <summary className={css.secTitle}>数据在本机处理</summary>
+          <div className={css.secBody}>
+            <p className={css.p}>
+              微信数据库在本机解密、存储与分析；检索、统计、导出、图谱、账本、备份全部为纯本地操作。
+            </p>
+            <p className={css.keyBox}>我们没有任何服务器，不会上传你的聊天记录、图片或导出物。</p>
+          </div>
+        </details>
 
-          <div className={css.actions}>
-            {onExit && (
-              <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={onExit}>
-                不同意并退出
-              </button>
-            )}
-            <button
-              type="button"
-              className={`${css.btn} ${css.btnPrimary}`}
-              disabled={!checked}
-              onClick={onAccepted}
-            >
-              同意并继续
+        <details className={css.sec}>
+          <summary className={css.secTitle}>只读扫描微信进程内存（取解密密钥）</summary>
+          <div className={css.secBody}>
+            <p className={css.p}>
+              微信 4.x 的数据库密钥不以明文存在磁盘上，只存在于运行中的微信进程内存里。
+              「自动获取密钥」会以只读方式扫描 Weixin.exe 的内存区域，并用一个数据库文件校验命中结果。
+            </p>
+            <div className={css.pills}>
+              {['不写入', '不修改', '不注入', '不挂钩', '不保存或外发内存内容'].map((t) => (
+                <span key={t} className={css.pill}>{t}</span>
+              ))}
+            </div>
+            <p className={css.keyBox}>
+              命中后密钥写入本机 secrets.json（权限收紧到当前用户）。微信没在运行时该能力不可用，可改为手动填写密钥。
+            </p>
+            <p className={css.p}>
+              唯一例外：<b>设置 → 图片解码 → 微信原图自动下载</b>（<b>默认关闭</b>）——
+              你显式打开后，应用会向微信进程注入上游 MIT 组件，让微信自己下载新图片的原图；
+              关闭或退出时请求还原，崩溃后微信可能保持被修改状态直到重启（界面会提示）。
+              详见声明 §一.5。
+            </p>
+          </div>
+        </details>
+
+        <details className={css.sec}>
+          <summary className={css.secTitle}>你的控制</summary>
+          <div className={css.secBody}>
+            <div className={css.rows}>
+              {CONTROLS.map((c) => (
+                <div key={c.label} className={`${css.row} ${css.rowSimple}`}>
+                  <span className={css.rowLabel}>{c.label}</span>
+                  <span className={css.rowText}>{c.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {/* 同意区（勾选 + 两个按钮）在滚动区**外面**：单列滚动时它钉在容器底部，
+          不随正文滚走；用 flex 布局而不是 `position: sticky/fixed`（那会压在正文上，
+          `consent.spec.ts` 钉着 `.consentBar` 不许变成浮层）。 */}
+      <div className={css.consentBar}>
+        <label className={css.consent} data-on={checked || undefined}>
+          <input
+            type="checkbox"
+            className={css.consentBox}
+            checked={checked}
+            onChange={(e) => { setChecked(e.target.checked) }}
+          />
+          <span className={css.consentText}>
+            <b>我已阅读并理解上述数据处理方式</b>，同意本应用读取本机微信数据、只读扫描微信进程内存以获取解密密钥，
+            并按上述方式使用网络。
+          </span>
+        </label>
+
+        <div className={css.actions}>
+          {onExit && (
+            <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={onExit}>
+              不同意并退出
             </button>
-          </div>
+          )}
+          <button
+            type="button"
+            className={`${css.btn} ${css.btnPrimary}`}
+            disabled={!checked}
+            onClick={onAccepted}
+          >
+            同意并继续
+          </button>
         </div>
       </div>
     </div>

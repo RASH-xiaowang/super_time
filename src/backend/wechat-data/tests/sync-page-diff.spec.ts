@@ -141,6 +141,9 @@ describe('syncMessageShard 的差分路径（集成 + 安全网）', () => {
     const target = readFileSync(join(decMsg, 'message_0.db'))
     expect(target.equals(zeroTail(fullBytes)), '安全网必须兜住：最终快照完整').toBe(true)
     expect(r.fullPages).toBe(fullBytes.length / PAGE_SZ)
+    // 2026-10-18：被拒时要如实报出是哪条增量路径（sync.ts 用它做自适应止损 + 诊断日志）。
+    expect(r.rejected, '差分被拒必须标记回退来源').toBe('page-diff')
+    expect(r.rejectReason, '拒绝原因要带页/WAL 帧诊断，否则线上只能看到整库重解').toContain('patched=')
   })
 })
 

@@ -5,6 +5,12 @@ import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from
 import { VectorBuildResult } from '../types-retrieval.ts';
 import type { Context } from '@deepseek-ai/cordis';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
+/** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
+interface AskImageInput {
+    data: string;
+    mediaType: string;
+    name?: string;
+}
 export interface createAskDeepRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -24,6 +30,15 @@ export interface createAskDeepRemotesInputs {
     makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined;
     makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined;
     makeDeltaEmitter: (streamId?: string) => ((text: string) => void) | undefined;
+    /** 思考过程发射器（2026-10-16）：与可见正文分开推，界面单独折叠展示。 */
+    makeReasoningEmitter: (streamId?: string) => ((text: string) => void) | undefined;
+    /** 阶段事件发射器（2026-10-16）：把「规划 / 检索 / 生成」的进度推给界面。 */
+    makeStageEmitter: (streamId?: string) => ((stage: {
+        key: string;
+        label: string;
+        status: 'running' | 'done' | 'skipped';
+        detail?: string;
+    }) => void) | undefined;
     kbModel: (kbId: number, role: KbModelRole) => ResolvedModel;
     askKnownEntities: () => string[];
     saveAskHistory: (options: {
@@ -70,6 +85,25 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
          */
         kbId?: number;
         jobId?: string;
+        /**
+         * 数据面（2026-10-17）：`wechat`（缺省）= 可检索本机微信数据；
+         * `kb-only` = **只检索知识库**，不碰本机微信数据。
+         *
+         * 自动回复（无人值守出网）传 `kb-only` —— 微信里随便一个人发一句话，
+         * 不该让本机把全部聊天记录检索一遍并送去模型。
+         */
+        dataScope?: "wechat" | "kb-only";
+        /**
+         * 随问题一起送模型的图片（2026-10-18，ClawBot 自动回复「识别图中内容」）：
+         * canonical base64 + MIME，最多 2 张。是否真的送模型由当前模型是否声明
+         * `image` 输入模态决定；不支持时改成一句「看不到图片内容」的说明。
+         */
+        images?: AskImageInput[];
+        /**
+         * 系统提示词覆盖（2026-10-17）：传了就用它当 system，**用户消息里的检索材料与规则照旧**
+         * （那部分保证「不编造」的底线）。自动回复用它注入实例的拟人化人设。
+         */
+        systemPromptOverride?: string;
     }): Promise<AskResult>;
     cancelAsk: (options: {
         jobId: string;
@@ -91,3 +125,4 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
         force?: boolean;
     }): Promise<VectorBuildResult>;
 };
+export {};

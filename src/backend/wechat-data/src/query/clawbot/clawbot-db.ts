@@ -74,6 +74,10 @@ const BINDING_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['base_url', 'TEXT'],
   ['sync_buf', 'TEXT'],
   ['send_context_token', 'TEXT'],
+  // 2026-10-16：用户给实例起的**别名**（「工作号」「客服号」）。与 `user_name` 分开存：
+  // `user_name` 是微信昵称（绑定回写、重新绑定会变），别名是用户偏好（必须活过重新绑定）。
+  // 空串 / NULL 都表示「没起别名」⇒ 界面回落到昵称，再回落到「实例 N」。
+  ['label', 'TEXT'],
 ]
 
 /**
@@ -100,6 +104,10 @@ const MESSAGE_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['media_key', 'TEXT'],
   ['media_name', 'TEXT'],
   ['media_size', 'INTEGER'],
+  // 2026-10-17：语音时长（毫秒；协议 `voice_item.playtime`）。
+  // 单独一列而不是塞进 `media_size`：体积与时长是两件事，混在一起后
+  // 「3 秒的语音」与「3KB 的语音」在界面上分不出来。非语音类恒为 NULL。
+  ['media_duration', 'INTEGER'],
 ]
 
 /**
@@ -113,6 +121,10 @@ const INSTANCE_CONFIG_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]
   ['auto_reply', 'INTEGER NOT NULL DEFAULT 0'],
   ['kb_enabled', 'INTEGER NOT NULL DEFAULT 0'],
   ['kb_id', 'INTEGER'],
+  // 2026-10-17：实例的系统提示词（人设 / 语气 / 回复风格）。空串 = 用内置拟人化默认值。
+  ['system_prompt', "TEXT NOT NULL DEFAULT ''"],
+  // 2026-10-17：长回复是否分段发送（微信里一条几千字读起来很累）。
+  ['split_reply', 'INTEGER NOT NULL DEFAULT 1'],
   ['created_at', 'INTEGER NOT NULL DEFAULT 0'],
   ['updated_at', 'INTEGER NOT NULL DEFAULT 0'],
 ]
@@ -153,7 +165,8 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     ilink_user_id TEXT,
     base_url     TEXT,
     sync_buf     TEXT,
-    send_context_token TEXT
+    send_context_token TEXT,
+    label        TEXT
   )`)
   db.exec(`CREATE TABLE IF NOT EXISTS clawbot_message (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,7 +181,8 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     media_ref   TEXT,
     media_key   TEXT,
     media_name  TEXT,
-    media_size  INTEGER
+    media_size  INTEGER,
+    media_duration INTEGER
   )`)
   /*
    * 每实例的行为配置（多实例，2026-10-13）：与绑定表**分表**是刻意的 ——
@@ -180,8 +194,24 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     auto_reply  INTEGER NOT NULL DEFAULT 0,
     kb_enabled  INTEGER NOT NULL DEFAULT 0,
     kb_id       INTEGER,
+    system_prompt TEXT NOT NULL DEFAULT '',
+    split_reply INTEGER NOT NULL DEFAULT 1,
     created_at  INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0
+  )`)
+  /*
+   * 每实例的模型 token 消耗（2026-10-19）：按「实例 + 本地日期」聚合。
+   * 自动回复每次拿到供应商 usage 后 upsert 一行；删实例时一并清掉。
+   */
+  db.exec(`CREATE TABLE IF NOT EXISTS clawbot_token_usage (
+    slot         INTEGER NOT NULL,
+    day          TEXT    NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    calls        INTEGER NOT NULL DEFAULT 0,
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (slot, day)
   )`)
   ensureColumns(db, 'clawbot_binding', BINDING_COLUMN_MIGRATIONS)
   /*

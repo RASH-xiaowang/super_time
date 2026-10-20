@@ -1,0 +1,83 @@
+/* ============================================================================
+ * bootstrap-bridge.css —— Bootstrap 组件类的**最小桥接层**（Wave 0）
+ *
+ * 背景：本仓只引入 bootstrap-grid + bootstrap-utilities 两个「只有类」的子文件
+ * （见 ui-entry.tsx 顶部与 docs/BOOTSTRAP-RESPONSIVE.md 第 0/1 节），
+ * **没有**引入 bootstrap.css 全量包，所以 .table / .card / .form-control /
+ * .modal* / .navbar* 这些组件类默认**没有外观**。方案要求：组件不换实现、只借
+ * 类名与栅格语义，需要组件类时由本文件给最小桥接，外观一律走 --nm-* 令牌。
+ *
+ * 硬约束（Reviewer 可直接按此打回）：
+ *   1) 只作用于显式 class，**不写** body / html / * / :root 等全局选择器；
+ *   2) **不含 reboot**、**不复刻** Bootstrap 组件样式（没有整段抄 .btn/.badge 之类）；
+ *   3) **不引 Bootstrap JS / data-api**：显隐、开合、焦点仍由本仓 Radix kit 与状态机控制；
+ *   4) 颜色 / 圆角 / 字体 / 内距一律取 --nm-* 令牌；仅「结构尺寸」用字面量
+ *      （宽度、高度、边框粗细、断点、z-index —— 令牌体系没有对应档位）。
+ *
+ * 现状：截至本次引入，src/client 下**零处**使用这些组件类（Wave 1 才会在面板里
+ * 用到），本文件当前对线上界面零影响，只是给后续改写提供令牌化的视觉基线。
+ * ========================================================================== */
+
+/* ── Table 家族 ────────────────────────────────────────────────────────────
+ * 为什么需要：grid/utilities 只给「类名」不给表格外观；Wave 1 修宽表格
+ * （群成员 / 朋友圈 / 流水）时要用 .table 做语义标记，外层套 .table-responsive
+ * 保底横向滚动（方案 §2.2：表格必须滚动而不是裁切；粘性表头时容器不能
+ * overflow:hidden，这里只给 overflow-x:auto，正好满足）。
+ * 说明：只给行高/边框/表头底色，列宽、粘性表头仍由 DataTable 与面板决定。
+ */
+.table { width: 100%; border-collapse: collapse; color: var(--nm-text-1); font-family: var(--nm-font-sans); font-size: var(--nm-dense-fs); }
+.table th, .table td { padding: var(--nm-dense-row-y) var(--nm-dense-pad-x); border-bottom: 1px solid var(--nm-border); text-align: left; }
+.table thead th { background: var(--nm-table-header-bg); color: var(--nm-text-2); font-weight: 600; }
+.table tbody tr:hover { background: var(--nm-table-row-hover); }
+.table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; min-width: 0; max-width: 100%; }
+
+/* ── Card 家族 ─────────────────────────────────────────────────────────────
+ * 为什么需要：kit 的 Card 有自己的标题/footer 外观；但 Wave 1 里「把卡片放进
+ * 栅格」的容器可能需要直接用 .card/.card-body 做语义（不再复制一套 CSS Module
+ * 卡片）。这里只给容器级底色/描边/圆角与最小内距，不碰 Card 的结构与交互。
+ * 为什么补 .card 内表格一列：方案 §3.3 —— 卡片内滚动区必须能「内部滚」而不是
+ * 把表格撑破卡片；min-width:0 同时兜住栅格/flex 子项被长文本撑破的经典溢出。
+ */
+.card { background: var(--nm-bg-card); border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); color: var(--nm-text-1); min-width: 0; }
+.card-body { padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x); min-width: 0; overflow-wrap: anywhere; }
+.card .table-responsive, .card .table { min-width: 0; }
+
+/* ── Form 家族 ─────────────────────────────────────────────────────────────
+ * 为什么需要：表单字段栅格化（方案 §3.2）后仍走本仓 kit-fields；.form-label /
+ * .form-control / .form-select 只作为「可被 .row.g-2/.col-* 托管」的语义类。
+ * 高度/圆角/聚焦环与 kit 输入保持同一套令牌，避免出现第二套输入框观感；
+ * min-width:0 是栅格子项不被长 label 撑破的必要条件（方案 §2.4）。
+ */
+.form-label { display: block; margin-bottom: var(--nm-dense-g2); color: var(--nm-text-2); font-family: var(--nm-font-sans); font-size: var(--nm-fs-sm); font-weight: 600; min-width: 0; }
+.form-control, .form-select { width: 100%; min-width: 0; height: 30px; padding: 0 var(--nm-dense-pad-x); color: var(--nm-text-1); background: var(--nm-bg-input); border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); font-family: var(--nm-font-sans); font-size: var(--nm-dense-fs); }
+.form-control:focus, .form-select:focus { outline: none; border-color: var(--nm-border-active); box-shadow: 0 0 0 2px var(--nm-cyan-18); }
+
+/* ── Modal 家族 ────────────────────────────────────────────────────────────
+ * 为什么需要：方案 §3.5 —— 宽度用 .modal-dialog 语义 + max-width:
+ * min(680px, calc(100vw - 32px))，内容**内部滚动**而不是整页滚动，关闭按钮
+ * 始终可见。显隐/焦点/ESC 由调用方的 Radix Dialog 负责（本文件不定义
+ * display:none 默认态，避免「忘了加 .show 的弹层永远不可见」这类 JS 依赖）；
+ * 新弹层仍必须复用 kit 的 Drawer，这里只是给非 Radix 语义标记兜底。
+ */
+.modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: var(--nm-dense-g5); background: var(--nm-veil-55); }
+.modal-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; min-width: 0; }
+.modal-content { display: flex; flex-direction: column; width: 100%; min-height: 0; max-height: 100%; background: var(--nm-bg-1); border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); box-shadow: var(--nm-shadow-popup); overflow: hidden; }
+.modal-body { min-height: 0; overflow: auto; padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x); }
+
+/* ── Navbar 家族 ───────────────────────────────────────────────────────────
+ * 为什么需要：方案 §3.1 —— 不换 DOM 骨架，只借栅格与断点行为；.navbar-collapse
+ * 只表达「窄屏收进抽屉」的语义，展开/收起仍由本仓状态机（mobile-nav.tsx）控制。
+ * 这里只保证**不塌陷**：允许换行、子项可收缩；断点用 Bootstrap 官方 767.98px，
+ * 窄屏整行折到下一行而不是横向溢出（方案 §2.7：禁止自造 640/900 之类的中间值）。
+ */
+.navbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nm-dense-g2); min-width: 0; }
+.navbar-collapse { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nm-dense-g3); flex: 1 1 auto; min-width: 0; }
+@media (max-width: 767.98px) { .navbar-collapse { flex-basis: 100%; } }
+
+/* ── .container / .container-fluid：刻意**不桥接** ────────────────────────
+ * 为什么不用：方案 §2.8 明确「不使用 .container 包整页」——本应用面板已有自己的
+ * padding 与滚动容器，再套 .container 会二次留白；bootstrap-grid.min.css 已经
+ * 给 .container 六档断点宽度与 --bs-gutter-x 内距，这里再定义一套宽度就会出现
+ * 两个真源。需要限宽时用 `.mx-auto` + max-width 令牌（方案 §2.8），
+ * 需要满宽时用 utilities 的 `.w-100`，两者都不需要桥接层介入。
+ */

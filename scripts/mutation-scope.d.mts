@@ -38,5 +38,8 @@ export function selectForDiff(
 /** 取 `ref...HEAD` 之间改动的文件。 */
 export function changedFilesSince(ref: string, cwd: string): ChangedFiles
 
+/** 取 `ref...HEAD` + 工作树未提交/未跟踪文件的并集（`--diff` 用）。 */
+export function changedFilesForGate(ref: string, cwd: string): ChangedFiles
+
 /** 登记表本体的路径匹配（改动它 ⇒ 全量）。 */
 export const REGISTRY_PATH_RE: RegExp

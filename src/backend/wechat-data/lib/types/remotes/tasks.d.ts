@@ -16,9 +16,10 @@ export declare function createTasksRemotes(rc: createTasksRemotesInputs): {
         title: string;
         body?: string;
         tags?: string[] | string;
-        sourceKind?: "manual" | "ask";
+        sourceKind?: "manual" | "ask" | "file";
         sourceUsername?: string;
         sourceQuestion?: string;
+        sourceFileId?: number;
     }): NoteMutationResult;
     deleteNote(kbId: number, options: {
         id: number;

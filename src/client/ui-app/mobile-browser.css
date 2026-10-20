@@ -1,0 +1,115 @@
+/**
+ * 手机浏览器（局域网远程访问）专用的**壳层补丁**。
+ *
+ * ## 为什么单独一个文件
+ *
+ * 手机浏览器与 Electron 走同一份构建、同一个 `WechatDataPanel`。浏览器态下壳层只差三件事：
+ *   · 没有 preload 桥 ⇒ `capabilities.titlebar=false`，自绘标题栏被移除、换 `BrowserSession` 令牌门；
+ *   · `Settings` 换成 `SettingsBrowserPanel`（只留「数据边界」+ 「只能在电脑上完成」清单）；
+ *   · 视口是**动态**的（地址栏收放）且可能带安全区。
+ *
+ * 前两条让「桌面 390 窗口」测不出浏览器态的问题（同一宽度、不同 DOM/不同弹窗内容），
+ * 第三条是 Electron 窗口里恒为 0 的维度。这个文件只补**壳层**；面板内部的响应式仍归
+ * Wave 2/4（不改 kit / 主题 / 面板 module.css / wechat-data.module.css）。
+ *
+ * ## 三条各解决什么（都有 `working/team/lan-mobile-report.md` 的四档实测证据）
+ *
+ *   ① **手机版设置弹窗没有滚动容器**：`SettingsBrowserPanel` 只渲染两块内容，不渲染桌面版的
+ *      `.layout/.mainScroll`；而 `.root[data-in-dialog]` 是 `overflow: hidden` ⇒ 内容比弹窗高的
+ *      部分被直接裁掉（真实 Chrome 四档实测被裁 258–510px：settings / privacy / backup /
+ *      health / hook / privacytrust 六个设置类页签全中，且**没有任何滚动条**）。
+ *      这里按稳定选择器 `[data-settings-scope='browser']`（`SettingsBrowserPanel` 自己挂的
+ *      data 属性，不含 CSS Modules 哈希）把它变成滚动容器。选择器写 `body ...` + 双属性是为了
+ *      压过 `.root[data-in-dialog]`（0,2,0）—— 模块 CSS 与全局 CSS 的先后顺序不可依赖。
+ *   ② **弹窗高度用 `dvh`**：`.settingsDialog` 在 `wechat-data.module.css` 里写死 `90vh`；
+ *      手机浏览器的 `vh` 是**大视口**（地址栏收起时的高度），地址栏可见时弹窗底部会滑到
+ *      视口外（手机浏览器最经典的 `100vh` 抖动）。这里在手机档用 `dvh` 覆盖，老内核先吃
+ *      `vh` 再被 `dvh` 覆盖（与 `mobile-viewport.css` / `browser-gate` 同一写法）。
+ *   ③ **横屏手机（高 ≤ 500）的桌面壳**：断点按宽度算，844×390 落不进 ≤560 手机档 ⇒ 左侧栏
+ *      沿用桌面壳，导航项只有 32–33px 高（手指点不准），也拿不到安全区与可选中正文。
+ *      用 `(pointer: coarse)` 限定为触摸设备（桌面鼠标窗口零影响），只抬**壳层导航**的触摸目标；
+ *      面板里的密集筛选控件（36px 的段条、24px 的筛选芯片）属 Wave 2/4，不在这里动。
+ *   ④ **横屏刘海下的设置弹窗**（Wave 4 追加，CDP 安全区仿真实测）：桌面版弹窗宽
+ *      `min(1080px, 96vw)` 居中，812×375/左右各 44px 时左缘 x≈16、右缘 x≈796，压进左右刘海
+ *      各 28px —— 右上角关闭按钮有一半在右刘海带里、标题首字压在左刘海带。手机档按安全区收窄。
+ *   ⑤ **fixed 悬浮按钮**（朋友圈「回到顶部」）：面板 CSS 是 `right:30px; bottom:28px`，
+ *      手机上 28px 会压在底部标签栏（57px 高）上、横屏右侧压进 44px 刘海带。这里只挪位置。
+ *
+ * ## 刻意不做
+ *
+ *   · 不把横屏手机强制切成底部标签栏（需要覆盖面板壳的整组媒体查询，属 Wave 2 的壳重排）。
+ *   · 不在这份文件里改面板/kit 的尺寸与配色；④⑤ 只做**位置/安全区**的壳层修正。
+ *     `viewport-fit=cover` 已由 Lead 在 `index.html` 补上（Wave 3 报告 §8 建议），env() 从此生效。
+ */
+
+/* ── ① 手机版设置弹窗：给内容一个滚动容器 ─────────────────────────────── */
+body [data-settings-scope='browser'],
+body [data-settings-scope='browser'][data-in-dialog] {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 底部手势条留白（viewport-fit=cover 生效后才有值；当前为 0 不影响布局） */
+  padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+}
+
+/* ── ② 弹窗高度跟动态视口走（地址栏收起/展开不把底部顶出视口）───────────── */
+@media (max-width: 560px), (orientation: landscape) and (max-height: 500px) {
+  /* 类名是 CSS Modules 哈希类 `_settingsDialog_<hash>_<line>`：属性子串选择器命中「类名片段」，
+     不会误伤 `_settingsDialogTitle_` / `_settingsDialogBody_`（它们的片段是 `_settingsDialogTitle_`）。 */
+  [class*='_settingsDialog_'] {
+    height: min(90vh, 1060px);
+    height: min(90dvh, 1060px);
+    max-height: 90vh;
+    max-height: 90dvh;
+  }
+}
+
+/* ── ③ 横屏手机：桌面壳的触摸目标与安全区 ───────────────────────────────── */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  body {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    box-sizing: border-box;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* 与 mobile-viewport.css 的 ≤560 档同口径：手机上正文要能长按选中/复制 */
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* 只抬壳层导航（左栏 / 底部标签栏）；`.nav` 自己 `overflow-y: auto`，行高变化由它滚，不裁内容。 */
+  aside button,
+  aside [role="button"],
+  nav[aria-label='主导航'] button,
+  nav[aria-label='主导航'] [role="button"] {
+    min-height: 44px;
+  }
+
+  /* ── ④ 横屏刘海：设置弹窗收进左右安全区 ───────────────────────────────
+   * 实测（Wave 4 CDP，812×375 / 左右各 44px）：桌面版弹窗 `min(1080px, 96vw)` 居中后左缘 x≈16、
+   * 右缘 x≈796，压进左右刘海各 28px；右上角关闭按钮（46px 圆钮里的 ×）有一半落进右刘海带、
+   * 标题首字落进左刘海带。手机档按安全区收窄（仍居中）：812−44−44−24=700px，左右各留 56px。
+   * 选择器同时写 `_settingsDialog_` 与 `_dialog_` 两个类名片段，特异性 (0,2,1) 压过模块规则 (0,2,0)，
+   * 且不会误伤 `_settingsDialogTitle_/_settingsDialogBody_`（片段不同）。 */
+  body [class*='_settingsDialog_'][class*='_dialog_'] {
+    width: min(1080px, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 24px));
+  }
+
+  /* ── ⑤ 横屏刘海：fixed 悬浮按钮（朋友圈「回到顶部」）避让右侧刘海 ──────
+   * 面板 CSS 是 `right:30px; bottom:28px`（面板级，只读）：46px 按钮右缘会压进 44px 刘海带 14px。
+   * 只挪位置、不改尺寸与配色；底部同时补手势条（21px）留白。 */
+  body [class*='_backTop_'] {
+    right: calc(30px + env(safe-area-inset-right, 0px));
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ── ⑤ 竖屏：fixed 悬浮按钮（朋友圈「回到顶部」）避开底部标签栏 + 手势条 ──────
+ * 实测（375×812 / bottom 34px）：按钮原 bottom:28px ⇒ 底边 y≈784，压住 57px 高的底部标签栏
+ * （标签栏顶 y≈721），并把导航项挡住（occluded 规则实测拦截 `_barItem` 43px）。
+ * 57px = 标签栏本体高度，12px = 呼吸间距；env 由 ①/④ 的 viewport-fit=cover 提供。 */
+@media (max-width: 560px) {
+  body [class*='_backTop_'] {
+    right: calc(30px + env(safe-area-inset-right, 0px));
+    bottom: calc(57px + 12px + env(safe-area-inset-bottom, 0px));
+  }
+}

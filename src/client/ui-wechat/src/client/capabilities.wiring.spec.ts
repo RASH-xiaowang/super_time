@@ -43,6 +43,11 @@ const relOf = (abs: string): string => relative(CLIENT_ROOT, abs).replace(/\\/g,
 const TRANSPORT_FILES: ReadonlySet<string> = new Set([
   'ui-app/capabilities.ts',
   'ui-app/ui-entry.tsx',
+  // 交接态引导：在 capabilities 求值前安装原生代理桥（这正是它存在的唯一目的）。
+  'ui-app/handoff-boot.ts',
+  // 标题栏状态区（模型余额 / 数据就绪 / 打开网页）：标题栏只由桌面壳渲染，
+  // 浏览器里整条 #titlebar 已被摘掉；这里碰桥是**发动作**，不是判环境。
+  'ui-app/titlebar-status.tsx',
   'ui-app/http-remote.ts',
   'ui-wechat/src/client/electron-api.ts',
   'ui-wechat/src/client/pages/wechat-data/api-core.ts',
@@ -277,7 +282,7 @@ describe('环境判据只有一处（capabilities.wiring）', (): void => {
 
   it('④ 手机端的「设置」不挂载桌面端那份状态钩子（被屏蔽方法的调用次数必须是零）', (): void => {
     const settings = readFileSync(join(CLIENT_ROOT, 'ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'), 'utf8')
-    expect(/if \(runtimeCapabilities\(\)\.isBrowser\) return <SettingsBrowserPanel/.test(settings)).toBe(true)
+    expect(/if \(runtimeCapabilities\(\)\.isBrowser && runtimeCapabilities\(\)\.desktopEquivalent !== true\) return <SettingsBrowserPanel/.test(settings)).toBe(true)
     expect(settings).toContain('function SettingsDesktopPanel')
     const browser = readFileSync(join(CLIENT_ROOT, 'ui-wechat/src/client/pages/wechat-data/panels/settings-browser.tsx'), 'utf8')
     expect(browser).not.toContain('useSettingsState(')
@@ -285,7 +290,7 @@ describe('环境判据只有一处（capabilities.wiring）', (): void => {
     // 配置向导那张「指路卡」自己也要摘掉：它指的那五节在手机上不存在，
     // 留一张指向空处的浮卡比没有更让人困惑（而它挂载时打的那四个接口全会被拒）。
     const guide = readFileSync(join(CLIENT_ROOT, 'ui-wechat/src/client/pages/wechat-data/panels/SetupGuide.tsx'), 'utf8')
-    expect(guide).toMatch(/^\s*if \(runtimeCapabilities\(\)\.isBrowser\) return null/m)
+    expect(guide).toMatch(/^\s*if \(runtimeCapabilities\(\)\.isBrowser && runtimeCapabilities\(\)\.desktopEquivalent !== true\) return null/m)
   })
 
   it('⑤ 三道本地闸门只在浏览器态绕行，桌面端恒不绕行', (): void => {

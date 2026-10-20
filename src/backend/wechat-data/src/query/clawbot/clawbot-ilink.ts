@@ -428,7 +428,7 @@ function numOrNull(v: unknown): number | null {
 function pickMedia(item: MessageItem, kind: 'image' | 'voice' | 'video' | 'file'): ClawbotMediaRef | null {
   if (kind === 'image') {
     const url = str(item.image_item?.url)
-    if (url !== '') return { kind, ref: url, key: '', name: null, size: numOrNull(item.image_item?.mid_size) }
+    if (url !== '') return { kind, ref: url, key: '', name: null, size: numOrNull(item.image_item?.mid_size), duration: null }
   }
   const media = kind === 'image' ? item.image_item?.media
     : kind === 'voice' ? item.voice_item?.media
@@ -446,6 +446,8 @@ function pickMedia(item: MessageItem, kind: 'image' | 'voice' | 'video' | 'file'
     key: str(media?.aes_key),
     name: kind === 'file' ? (str(item.file_item?.file_name) || null) : null,
     size,
+    // 时长只有语音有（协议 `voice_item.playtime`，毫秒）；其余类型恒为 null。
+    duration: kind === 'voice' ? numOrNull(item.voice_item?.playtime) : null,
   }
 }
 

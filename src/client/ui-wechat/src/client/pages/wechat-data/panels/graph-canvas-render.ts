@@ -125,10 +125,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
 
     ctx.save()
     ctx.globalAlpha = opacity * (isStub ? 0.6 : 1) * reveal
-    if (settings.blurNodes > 0) {
-      ctx.shadowBlur = settings.blurNodes * 1.5
-      ctx.shadowColor = dark ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.3)'
-    }
+    // 「头像模糊」（2026-10-18 用户要求）：只糊头像位图本身，名字 / 圆点 / 描边环 / 连线保持清晰。
+    // 旧实现是给整个节点加 shadowBlur，头像和名字一起糊，且圆点/笔记盘也被糊成一团。
+    const blurPx = settings.blurNodes
     const avatarId = scene.avatarIdOf(n)
     const sprite = avatarId ? scene.sprites.get(avatarId) : undefined
     const commColor = n.kind === 'self' ? theme.ringSelected : n.community >= 0 ? communityColor(n.community) : ''
@@ -150,9 +149,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
       // 方块的四角以前是「看得见、点不着」。
       ctx.beginPath()
       ctx.arc(s.x, s.y, sr, 0, Math.PI * 2)
-      ctx.fillStyle = dark ? '#6d5bd0' : '#8b7ff0'
+      ctx.fillStyle = dark ? '#3eb575' : '#0e7a3c'
       ctx.fill()
-      ctx.strokeStyle = dark ? '#a99bff' : '#6d5bd0'
+      ctx.strokeStyle = dark ? '#66c99b' : '#0b8a4a'
       ctx.lineWidth = 1.5
       ctx.stroke()
     } else if (n.kind === 'file' || n.kind === 'section' || n.kind === 'entity') {
@@ -174,7 +173,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
       ctx.arc(s.x, s.y, sr, 0, Math.PI * 2)
       ctx.fillStyle = theme.disc
       ctx.fill()
+      if (blurPx > 0) ctx.filter = `blur(${blurPx}px)`
       ctx.drawImage(sprite, s.x - sr, s.y - sr, sr * 2, sr * 2)
+      if (blurPx > 0) ctx.filter = 'none'
     } else {
       // 兜底：社区色圆盘 + 首字（头像还没到位 / 拉取失败）
       ctx.beginPath()
@@ -697,7 +698,7 @@ export function sceneToSvg(
       parts.push(`<image x="${(s.x - sr).toFixed(2)}" y="${(s.y - sr).toFixed(2)}" width="${(sr * 2).toFixed(2)}" height="${(sr * 2).toFixed(2)}" clip-path="url(#${id})" xlink:href="${esc(url)}"${op}/>`)
     } else if (isNote) {
       // 与屏幕绘制保持同一形状（圆盘）：导出/分享出去的那张图必须和画布一致
-      parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${scene.dark ? '#6d5bd0' : '#8b7ff0'}" stroke="${scene.dark ? '#a99bff' : '#6d5bd0'}" stroke-width="1.5"${op}/>`)
+      parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${scene.dark ? '#3eb575' : '#0e7a3c'}" stroke="${scene.dark ? '#66c99b' : '#0b8a4a'}" stroke-width="1.5"${op}/>`)
     } else if (isDoc) {
       // 文档层的三类：颜色走与屏幕同一个 `docColors()`，否则导出的图与所见不是一张图
       const { fill, stroke } = docColors(n.kind, scene.dark)

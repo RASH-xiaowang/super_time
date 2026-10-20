@@ -1,16 +1,31 @@
 /**
- * 手机端底部标签栏 + 「更多」全屏 sheet 的样式。
+ * 手机端底部标签栏 + 「更多」全屏 sheet 的样式（2026-10-16 全新设计）。
  *
- * 三条硬口径（都被守卫盯着，新文件零容忍）：圆角只用令牌或 0；间距避开 5 / 7 / 9 / 18px；
- * `nm` 令牌引用一律带兜底。
+ * ## 设计口径
  *
- * 两个手机端专属的写法：
+ * 参考微信 / 现代移动 App 的底部导航，把「拇指可达 + 一眼看清在哪」放在第一位：
+ *   · **底部栏 56px**（原 48px）—— 图标 24px + 标签 11px 之间留出呼吸，不再挤成一团；
+ *     56px 也高于 44px 触摸下限，整格都是热区。
+ *   · **激活态三重表达**：顶部 2px 指示条 + 图标/文字变品牌色 + 图标底下一圈柔光。
+ *     只靠变色在深色霓虹主题里对比不够（实测 11px 文字变色几乎看不出），加指示条才一眼可辨。
+ *   · **「更多」sheet 改 3 列大格**（原 4 列）—— 375px 下 4 列每格仅约 80px，中文标签
+ *     频繁截断；3 列每格约 108px，标签能完整显示，格子也更好点。
+ *   · **分组卡片化**：每组一个圆角容器 + 组名，视觉上把「概览 / 会话 / 社交…」分开，
+ *     而不是一长条平铺。
+ *
+ * ## 三条硬口径（都被守卫盯着，新文件零容忍）
+ *
+ * 圆角只用令牌或 0；间距避开 5 / 7 / 9 / 18px；`nm` 令牌引用一律带兜底。
+ *
+ * ## 两个手机端专属的写法
+ *
  *   · 底部栏用 `position: fixed` + `env(safe-area-inset-bottom)` —— 全面屏的手势条会盖住
  *     最后一排像素，不加内边距的话「更多」那一格点不到；
- *   · 格子最小高度 48px（> 44px 的触摸目标下限），标签 11px 且**不换行** ——
+ *   · 格子最小高度 56px（> 44px 的触摸目标下限），标签 11px 且**不换行** ——
  *     底部栏放不下两行，超长的名字用省略号，全名在「更多」sheet 里看得到。
  */
 
+/* ── 底部标签栏 ───────────────────────────────────────── */
 .bar {
   position: fixed;
   left: 0;
@@ -20,31 +35,67 @@
   display: flex;
   align-items: stretch;
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-top: 1px solid var(--nm-border, rgba(0, 240, 255, 0.12));
-  background: color-mix(in srgb, var(--nm-bg-0, #050a18) 92%, transparent);
-  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--nm-border);
+  background: var(--nm-bg-2);
 }
 
 .barItem {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
-  min-height: 48px;
+  min-height: 56px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 6px 2px;
+  gap: 4px;
+  padding: 8px 2px 6px;
   font: inherit;
-  color: var(--nm-text-3, #64748b);
+  color: var(--nm-text-2);
   background: transparent;
   border: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: color var(--nm-t-fast, 0.15s);
+}
+
+/* 激活态：顶部指示条（绝对定位，不占布局高度） */
+.barItem::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 24px;
+  height: 2px;
+  /* 上直下圆：复合角只能用**不带兜底**的令牌（带兜底的 var() 含空格，会被几何守卫
+     的复合角解析拆成非法分量）。--nm-r-xs 在 scifi-theme.css 里恒有定义。 */
+  border-radius: 0 0 var(--nm-r-xs) var(--nm-r-xs);
+  background: var(--nm-cyan);
+  transform: translateX(-50%) scaleX(0);
+  transition: transform var(--nm-t-normal, 0.2s);
 }
 
 .barItem[data-active] {
-  color: var(--nm-cyan, #00f0ff);
+  color: var(--nm-cyan);
+}
+
+.barItem[data-active]::before {
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* 图标底下的柔光：激活时点亮，让「在哪」在深色主题里也一眼可辨 */
+.barIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 24px;
+  border-radius: var(--nm-r-sm, 8px);
+  transition: background var(--nm-t-fast, 0.15s);
+}
+
+.barItem[data-active] .barIcon {
+  background: transparent;
 }
 
 .barLabel {
@@ -70,18 +121,33 @@
 .sheetScrim {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.45);
 }
 
 .sheetPanel {
   position: relative;
   display: flex;
   flex-direction: column;
-  max-height: 82%;
-  border-top-left-radius: var(--nm-r-lg, 14px);
-  border-top-right-radius: var(--nm-r-lg, 14px);
-  background: var(--nm-bg-1, #0b1220);
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.4);
+  max-height: 86%;
+  border-top-left-radius: var(--nm-r-lg, 12px);
+  border-top-right-radius: var(--nm-r-lg, 12px);
+  background: var(--nm-bg-2);
+  animation: sheetRise 0.15s ease-out;
+}
+
+@keyframes sheetRise {
+  from { transform: translateY(12px); opacity: 0.6; }
+  to { transform: none; opacity: 1; }
+}
+
+/* 顶部抓手：移动端 sheet 的通用暗示（可下拉关闭） */
+.sheetGrip {
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: var(--nm-r-pill, 999px);
+  background: color-mix(in srgb, var(--nm-text-3, #64748b) 50%, transparent);
+  flex-shrink: 0;
 }
 
 .sheetHd {
@@ -89,14 +155,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 10px;
-  border-bottom: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  padding: 10px 16px 10px;
+  border-bottom: 1px solid var(--nm-border);
 }
 
 .sheetTitle {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--nm-text-1, #e2e8f0);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-text-1);
 }
 
 .sheetClose {
@@ -107,10 +173,10 @@
   justify-content: center;
   font: inherit;
   font-size: 14px;
-  color: var(--nm-text-2, #94a3b8);
+  color: var(--nm-text-2);
   background: transparent;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.16));
-  border-radius: var(--nm-r-sm, 8px);
+  border: none;
+  border-radius: var(--nm-r-sm, 6px);
   cursor: pointer;
 }
 
@@ -119,23 +185,34 @@
   padding: 12px 16px;
   padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* 分组卡片：每组一个圆角容器，把「概览 / 会话 / 社交…」在视觉上分开 */
+/* 微信式分组：白底圆角容器 + 灰字组名，不使用彩色底 */
+.sheetGroup {
+  padding: 8px 0 4px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg, 12px);
+  background: var(--nm-bg-2);
 }
 
 .sheetGroup + .sheetGroup {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .sheetGroupLabel {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--nm-text-3, #64748b);
+  color: var(--nm-text-2);
 }
 
+/* 3 列大格：375px 下每格约 108px，中文标签能完整显示 */
 .sheetGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -146,33 +223,33 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 4px;
+  padding: 8px 6px;
   font: inherit;
-  color: var(--nm-text-2, #94a3b8);
-  background: var(--nm-bg-0, #050a18);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  border-radius: var(--nm-r-md, 10px);
+  color: var(--nm-text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--nm-r-md, 6px);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: color var(--nm-t-fast, 0.15s), background var(--nm-t-fast, 0.15s);
 }
 
 .sheetItem[data-active] {
-  color: var(--nm-cyan, #00f0ff);
-  border-color: color-mix(in srgb, var(--nm-cyan, #00f0ff) 40%, transparent);
-  background: color-mix(in srgb, var(--nm-cyan, #00f0ff) 10%, transparent);
+  color: var(--nm-cyan);
+  background: var(--nm-bg-active);
 }
 
 .sheetItemLabel {
   max-width: 100%;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.3;
   text-align: center;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-/* 极窄屏（320px 一档的老设备）：4 列会挤到标签全变省略号，退成 3 列 */
+/* 极窄屏（320px 一档的老设备）：3 列会挤到标签变省略号，退成 2 列 */
 @media (max-width: 360px) {
-  .sheetGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sheetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

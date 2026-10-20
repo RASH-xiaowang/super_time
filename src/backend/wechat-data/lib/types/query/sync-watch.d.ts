@@ -1,7 +1,7 @@
 /** 事件防抖：一个写入簇合并成一次触发。 */
-export declare const WATCH_DEBOUNCE_MS = 400;
+export declare const WATCH_DEBOUNCE_MS = 120;
 /** 触发限频：两次监听触发的最小间隔（轮询兜底不受影响）。 */
-export declare const WATCH_MIN_GAP_MS = 1500;
+export declare const WATCH_MIN_GAP_MS = 250;
 /** 监听器的最小接口（真机是 `node:fs` 的 FSWatcher，单测注入假件）。 */
 export interface SyncWatcherLike {
     close(): void;
@@ -15,6 +15,8 @@ export interface SyncWatchDeps {
 export interface SyncWatchHandle {
     /** 每拍都带当前 raw 根调用：目录变了就重挂监听（报错后也靠它自愈）。 */
     refresh(dir: string): void;
+    /** 当前是否真的挂着监听（挂载失败/报错摘掉后为 false，调用方据此决定兜底轮询节奏）。 */
+    attached(): boolean;
     stop(): void;
 }
 /**

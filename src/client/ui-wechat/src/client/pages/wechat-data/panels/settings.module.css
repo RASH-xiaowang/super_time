@@ -1,5 +1,4 @@
-/* 设置面板 — NEON MATRIX 科技风重设计。
-   深空黑底 + 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple)；毛玻璃卡片与发光悬停。
+/* 设置面板 — 微信风格：白/浅灰底、细边框、绿主色，无渐变/发光/毛玻璃。
    保留 Settings 5 步向导语义：步骤条、固定高度反馈槽、按钮族、模型网格、账号列表。 */
 
 .root {
@@ -15,17 +14,21 @@
   padding: 14px 0;
   position: relative;
   color: var(--nm-text-1);
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+  background: transparent;
 }
 
 /* ── 左右结构：左导航（固定宽） + 右内容（可滚动） ──
    原来 5 张速览卡横排在顶部、下面 5 节一路堆叠：一屏装不下，想改「图片密钥」得先滚下去，
-   还容易忘了下面还有几节。改成竖排导航项后，右侧一次只显示当前一节。 */
+   还容易忘了下面还有几节。改成竖排导航项后，右侧一次只显示当前一节。
+
+   2026-10-16 重设计：左导航 196 → 220px（副标题不再频繁截断），分组**卡片化**
+   （每组一个圆角容器 + 组名），激活态加**左侧指示条**（与主侧栏 .navItem 同一套语言）。
+   微信化（2026-10-19）：去副标题、去分组卡片外壳与渐变，改为「组标题 + 单行条目」。 */
 .layout {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 12px;
+  gap: 14px;
 }
 .navRail {
   flex: 0 0 196px;
@@ -33,60 +36,72 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-right: 2px;
+  gap: 6px;
+  padding: 2px 8px 2px 0;
+  /* 导航轨自身不显示滚动条（滚轮/键盘仍可滚）：6px 滚动条会把 196px 挤窄。 */
+  scrollbar-width: none;
+}
+.navRail::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 分组：只留组标题，不再给每组套圆角卡片（微信设置左栏就是一列文字导航）。 */
+.navGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  border: none;
+  background: none;
 }
 .navItem {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid transparent;
+  padding: 8px;
+  border: none;
   border-radius: var(--nm-r-md);
   background: transparent;
-  color: var(--nm-text-2);
+  color: var(--nm-text-1);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
-.navItem:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+.navItem:hover { background: var(--nm-bg-hover); }
 
-/* 分组标题：14 节平铺太密，按「配置向导 / 智能与隐私 / 授权与维护 / 高级」分段。
-   样式对齐外层侧栏的 .navGroupLabel（小字 + 大字距），但这里常显、不折叠。 */
+/* 分组标题：11px 灰字，常显不折叠。 */
 .navGroupLabel {
   font-size: var(--nm-fs-xs, 11px);
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--nm-text-2);
-  padding: 6px 10px 1px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--nm-text-3);
+  padding: 10px 8px 3px;
 }
-.navGroupLabel:first-child { padding-top: 1px; }
 .navItemActive {
-  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
-  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  background: var(--nm-bg-active);
   color: var(--nm-text-1);
+}
+/* 激活态左侧指示条：与主侧栏 .navItem[data-active] 同一套语言（3px 圆角竖条，纯主色、不发光）。 */
+.navItemActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 18%;
+  bottom: 18%;
+  width: 3px;
+  border-radius: 0 var(--nm-r-xs) var(--nm-r-xs) 0;
+  background: var(--nm-brand);
 }
 .navIcon {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--nm-r-md);
-  color: var(--nm-cyan);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 12%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-}
-.navBody { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
-.navLabel { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-.navValue {
-  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+.navItemActive .navIcon { color: var(--nm-brand); }
+.navLabel { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 右侧主内容滚动区 */
 .mainScroll {
@@ -96,9 +111,34 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-right: 2px;
-  scroll-behavior: smooth;
+  /*
+   * ⚠️ 2026-10-17：**不用 `gap`，改用 `margin` 精确控制三种间距**。
+   *
+   * 原先写 `gap: 12px`，而 `.sectionGroupTitle` 又带 `margin: 6px 2px -2px` ——
+   * 两者叠加后实测出现 **10 / 12 / 17 / 18** 四种间距（同一份文档里）：
+   *   · 分组标题 → 卡片：12 + 6 − 2 = **16**（但实测 10，因为负 margin 吃掉了 gap）
+   *   · 卡片 → 卡片：**12**
+   *   · 卡片 → 分组标题：12 + 6 = **18**（实测 17，亚像素舍入）
+   * 用户看到的就是「有的地方挤、有的地方松」，而且组与组之间的分隔感不稳定。
+   *
+   * 现在口径（三种间距，各自只有一个来源）：
+   *   · 同组内相邻卡片：**12px**（`.mainScroll > * + *` 的 margin-top）
+   *   · 分组标题 → 它下面第一张卡：**8px**（标题的 margin-bottom）
+   *   · 上一组最后一张卡 → 下一组标题：**20px**（标题的 margin-top）
+   * 组间（20）明显大于组内（12），「读到哪一组了」一眼能看出来。
+   */
+  gap: 0;
+  padding-right: 4px;
+  /*
+   * 这里**故意不写** `scroll-behavior: smooth`。
+   *
+   * 它原先在这里，本意是让「点左导航跳节」有方向感 —— 但那个需求已经由
+   * `settings-state.tsx` 的 `scrollToSection` 用 `box.scrollTo({ behavior: 'smooth' })`
+   * **显式**满足了（近距离平滑、远距离直接跳，还带 900ms 的侦测锁）。
+   * 而 CSS 上的这一条是**全局**的：它把用户自己的滚轮/触控板滚动也变成平滑动画 ——
+   * 每滚一格都要跑一段缓动，长文档（八千多像素、15 节）上表现为明显的拖沓与掉帧。
+   * 程序化滚动要平滑就写在 `scrollTo` 的 options 里，不要写在容器上。
+   */
 }
 
 /* 右区的直接子项同样禁止压缩：`.mainScroll` 是定高 flex 列，默认 flex-shrink:1 会把
@@ -106,9 +146,63 @@
    理由与 kit.module.css 的 `.panelShell > *` 相同。 */
 .mainScroll > * { flex-shrink: 0; }
 
+/*
+ * 同组内相邻卡片：12px。
+ *
+ * ⚠️ **flex 容器的子项 margin 不折叠**（与普通块级流不同）—— 所以这里不能靠
+ * 「标题 margin-bottom + 卡片 margin-top 取较大值」那套，两者会**相加**。
+ * 因此口径写成「谁负责哪一段」：
+ *   · 卡片 → 卡片：由这条 `+ *` 的 12px 负责；
+ *   · 标题 → 卡片：由标题的 margin-bottom 负责，**卡片不再加 12px**（见下面 `+ .sectionGroupTitle + *`）；
+ *   · 卡片 → 标题：由标题的 margin-top 负责，**卡片不再加 12px**（见 `.mainScroll > .sectionGroupTitle`）。
+ */
+.mainScroll > * + * { margin-top: 12px; }
+
+/* 标题后面紧跟的那一项：间距完全交给标题的 margin-bottom（8px），不再叠加 12px。 */
+.mainScroll > .sectionGroupTitle + * { margin-top: 0; }
+
+/*
+ * 分组标题的间距要**压过**上面那条 `.mainScroll > * + *`（它给每个非首个子项都加了 12px）。
+ * 优先级：`.mainScroll > .sectionGroupTitle`（0,2,0）> `.mainScroll > * + *`（0,1,0）。
+ */
+.mainScroll > .sectionGroupTitle { margin-top: 20px; }
+
+/* 右内容的分组标题：与左导航的分组一一对应，让 15 节连续滚动时有清晰的视觉分段。
+   比左导航的组名更醒目（带左侧色条 + 分隔线），因为它是「读到哪一组了」的路标。 */
+.sectionGroupTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /*
+   * 上 20 / 下 8：组间（20）明显大于组内（12），组内标题与内容（8）更紧。
+   * 上边距的最终值由上面那条 `.mainScroll > .sectionGroupTitle` 决定（要压过 `+ *` 的 12px）。
+   */
+  margin: 20px 2px 8px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.sectionGroupTitle::before {
+  content: '';
+  flex: 0 0 3px;
+  height: 14px;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-brand);
+}
+.sectionGroupTitle::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--nm-border) 82%, transparent);
+}
+
 /* 15 节全部堆叠在 `.mainScroll` 里连续滚动（左导航是目录）。原先这里有一条
    `.mainScroll [hidden] { display: none !important }` —— 那是在「一次只显示一节」时
    压过 `.card` 的 display 用的，现在没有节需要隐藏了，规则随之删除。 */
+/* 微信化（2026-10-19）：右区改回「左选节 + 右单节」，非当前节用 hidden 隐藏；
+   这条规则负责压过各节根节点自己的 display（`.card` / `.embedPane` / div）。 */
+.mainScroll [hidden] { display: none !important; }
 
 /* 整页视图（数据边界与出网 / 隐私体检）：这两页原来是外层侧栏的独立页签，迁进弹窗后
    保留自己的页头与卡片，这里只负责它们与相邻节一致的纵向间距。 */
@@ -119,7 +213,7 @@
   min-height: 0;
 }
 
-/* toast — 右上角悬浮层(不遮挡标题/操作区),不挤占文档流 */
+/* toast — 右上角悬浮层(不遮挡标题/操作区),不挤占文档流；微信样式：白底 + 1px 边框 + 轻阴影，无毛玻璃/回弹。 */
 .notice {
   position: absolute;
   top: 16px;
@@ -132,14 +226,9 @@
   border-radius: var(--nm-r-md);
   font-size: 12px;
   line-height: 18px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35), 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
-  animation: noticeIn 0.18s ease-out;
-}
-@keyframes noticeIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to { opacity: 1; transform: translateY(0); }
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  box-shadow: var(--nm-shadow-popup);
 }
 .noticeHead {
   display: flex;
@@ -196,76 +285,66 @@
   border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, transparent);
 }
 
-/* card — 毛玻璃卡片 */
+/* card — 白底、1px 边框、8px 圆角，无毛玻璃/投影/装饰色条 */
 .card {
   position: relative;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
-  overflow: hidden;
+  /* 微信化（2026-10-19）：右区一次只显示一节，卡片不再逐张限高（否则会出现
+     卡内滚动 + 右区滚动两层滚动条）。 */
+  overflow-x: hidden;
   flex-shrink: 0;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
-  transition: all 0.2s;
+  transition: border-color 0.15s;
   /* 视口外卡片延迟渲染，降低内存/首屏开销 */
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
   contain: layout paint;
 }
-.card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--nm-cyan), var(--nm-purple));
-  opacity: 0.55;
-}
 .card:hover {
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
-.cardHd {
+/* ⚠️ 双类名 `.cardHd.cardHd` 提权到 (0,2,0)：D1 的全局紧凑层用
+   `div[class*='_cardHd_'] { padding: 8px 12px }`（0,1,1）压过了模块里的单类规则 ——
+   实测本地 `padding: 4px 12px` 一直没生效、卡片头停在 39px。跨模块覆盖层与模块规则
+   并存时，模块侧必须显式提权（同 `kbfiles.module.css` 的 `.shell.shell` 做法）。 */
+.cardHd.cardHd {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px 12px 20px;
+  gap: 8px;
+  /* Wave D2（docs/UI-DENSITY.md §2.4「卡片头 ≤36px」）：原 `14px 16px 12px 20px`
+     + 30px 图标 + 标题/说明上下两行 ⇒ 实测 cardHdH=67.4（settings/hook/privacy 三页共用）。
+     收到 4/12、图标 22px、标题与说明并排单行：卡片头 = max(22, 标题块 26) + 8 + 1 ≤ 35px。 */
+  padding: 4px 12px;
   border-bottom: 1px solid var(--nm-border);
 }
 .cardIconChip {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--nm-r-md);
-  color: var(--nm-cyan);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 12%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  border-radius: var(--nm-r-sm);
+  color: var(--nm-text-2);
 }
 .cardTitle {
   font-size: 13px;
-  font-weight: 700;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  font-weight: 600;
+  color: var(--nm-text-1);
 }
 .cardBadge {
   /* 不再 `margin-left: auto`：弹窗里的卡片是整宽卡片（约 940px），把徽标推到最右会在标题与徽标
-     之间留下 500~660px 的空档。让它跟在标题后 —— 状态与标题本来就是一回事。 */
+     之间留下 500~660px 的空档。让它跟在标题后 —— 状态与标题本来就是一回事。
+     Wave D2：padding 3/8 + 11px 行高把卡片头顶到 25.6px（cardHdH 38.6 > 36 目标），
+     收到 2/6 + 10.5px 行高 ⇒ 卡片头由 22px 的图标决定（约 35px）。 */
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.2;
   color: var(--nm-text-2);
-  padding: 3px 8px;
+  padding: 2px 6px;
   border-radius: var(--nm-r-pill);
   border: 1px solid var(--nm-border);
   background: var(--nm-bg-hover);
@@ -277,8 +356,11 @@
 }
 .cardTitleBox {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  /* Wave D2：标题 13px 与说明 11px **同一行**（原上下两行 = 35px 高，是 cardHdH 67.4 的主因）；
+     说明沿用 textCaptionTrunc（单行省略），信息不删。 */
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
 }
 /* rows */
@@ -374,8 +456,7 @@
 .progressFill {
   height: 100%;
   border-radius: var(--nm-r-pill);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  background: var(--nm-brand);
   transition: width 0.3s ease;
   corner-shape: round;
 }
@@ -419,16 +500,12 @@
 }
 .statChip:hover {
   border-color: var(--nm-border-hover);
-  background: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+  background: var(--nm-bg-hover);
 }
 .statNum {
   font-size: 16px;
-  font-weight: 700;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  font-weight: 600;
+  color: var(--nm-text-1);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
 }
@@ -442,22 +519,19 @@
   flex: none;
 }
 
-/* 按钮反馈:固定占宽(文案变化不挪位)、按压/聚焦反馈、悬停发光 */
+/* 按钮反馈:固定占宽(文案变化不挪位)、按压/聚焦反馈；微信化后不再悬停发光 */
 .btnFx {
-  transition: transform 0.08s ease, filter 0.12s ease, background 0.12s ease,
-    border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .btnFx:active:not(:disabled) {
-  transform: translateY(1px) scale(0.98);
   filter: brightness(0.96);
 }
 .btnFx:focus-visible {
-  outline: 2px solid var(--nm-cyan);
+  outline: 2px solid var(--nm-brand);
   outline-offset: 2px;
 }
 .btnFx:hover:not(:disabled) {
   border-color: var(--nm-border-hover);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
 }
 .btnFixed {
   min-width: 116px;
@@ -482,9 +556,26 @@
   to { transform: rotate(360deg); }
 }
 
-/* 弹窗形态：外层弹窗已经给了内边距，这里只留一点纵向呼吸。 */
+/* 弹窗形态：外层弹窗已经给了内边距，这里只留一点纵向呼吸。
+ *
+ * ⚠️ 高度必须用 `flex: 1` 而不是 `height: 100%`（2026-10-16 修「滚动区域没设计好」）：
+ * `.root` 是 `.settingsDialogBody`（`flex: 1` 的 flex 容器）的 flex item，
+ * 而**百分比高度对 flex item 依赖父容器的确定高度** —— 父高是 flex 算出来的，
+ * 于是 `height: 100%` 退化成 `auto`，`.root` 被内容撑到 3719px，
+ * 溢出部分漏到 `.dialogBd` 上，让**弹窗内容区**变成滚动容器（双滚动条），
+ * 而 `.mainScroll` 自己的滚动条形同虚设（滚的是外层）。
+ * 改成 `flex: 1` + `min-height: 0` 后，高度链才真正收在 `.mainScroll` / `.navRail` 上。 */
 .root[data-in-dialog] {
-  padding: 2px 0 6px;
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  padding: 2px 16px 0;
+}
+/* 弹窗内底部保存条整宽贴边（内容仍由保存条自己的 16px 内边距对齐）。 */
+.root[data-in-dialog] [class*='saveBar'] {
+  margin-left: -16px;
+  margin-right: -16px;
 }
 /* W2-12.3 · M1 密钥搬家的一次性提示条 */
 .secretMigration {
@@ -557,4 +648,80 @@
   line-height: 1.5;
   resize: vertical;
   white-space: pre;
+}
+
+/* ============================================================
+ * 手机档（≤560）：左右两栏改**上下两段**
+ *
+ * ## 为什么必须改（2026-10-16 真机实测）
+ *
+ * `.layout` 是 `display:flex` 的左右两栏，`.navRail` 固定 `flex: 0 0 220px`。
+ * 375px 手机上：220（导航）+ 14（gap）+ 8（内边距）= 242px 被吃掉，
+ * 右侧 `.mainScroll` 只剩 **124px** —— 实测 `.panelHead`（AI 模型卡片标题）
+ * 被压到 **80px 宽、309px 高**，文字逐字换行成竖排；`.toggle`（敏感字段打码）
+ * 58×210、`.btn`（复制配对码）40×96，全是同一个成因。
+ *
+ * ## 怎么改
+ *
+ * 导航轨从「左侧竖列」变成「顶部横向滚动的标签条」：`.navGroup` 的卡片外壳与
+ * 分组标题在手机上收掉（横向条里放不下分组层级），`.navItem` 变成不换行的胶囊。
+ * 内容区因此拿到整宽（375 - 24 = 351px）。
+ *
+ * 为什么用横向滚动而不是换行：15 个导航项换行会占掉三四行、把内容区顶下去，
+ * 而横向滚动只占一行 44px，且「目录」的语义（一条可滑的索引）在触摸上很自然。
+ * ============================================================ */
+@media (max-width: 560px) {
+  .root { padding: 8px 0; gap: 8px; }
+
+  .layout {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* 导航轨：竖列 → 顶部横向滚动条 */
+  .navRail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 0 2px;
+    /* 横向滚动时不要纵向滚动条；`overscroll-behavior-x: contain` 防止滑到头把整页带走 */
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .navRail::-webkit-scrollbar { height: 0; }
+
+  /* 分组卡片外壳在横向条里没有意义（分组标题也放不下），收掉 */
+  .navGroup {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+  }
+  .navGroupLabel { display: none; }
+
+  /* 导航项：竖排的「图标 + 两行文字」压成一行胶囊 */
+  .navItem {
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 8px 12px;
+    border-color: var(--nm-border);
+    border-radius: var(--nm-r-pill, 999px);
+    background: var(--nm-bg-input);
+    white-space: nowrap;
+  }
+  /* 激活态的左侧指示条在胶囊形态下没有位置，改用底色表达 */
+  .navItemActive::before { display: none; }
+  .navItemActive {
+    background: var(--nm-bg-active);
+  }
+  .navIcon { width: 18px; height: 18px; }
+  .navLabel { font-size: 12px; }
+
+  /* 内容区拿到整宽 */
+  .mainScroll { padding-right: 0; }
 }

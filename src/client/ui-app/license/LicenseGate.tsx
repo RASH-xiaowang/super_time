@@ -2,6 +2,13 @@
  * License 门禁：仅 licensed 放行主界面；
  * unlicensed / expired / invalid / device_mismatch 等显示解锁页。
  * 本应用**没有试用期** —— 未导入许可证就没法进入。
+ *
+ * 2026-10-19 微信化改版（表现层）：
+ *   · 去掉渐变标题、玻璃卡、发光主按钮与底部那句「导出 → 签发 → 导入」重复流程
+ *     （导语已说清两次出口，常见问题在启动页的授权面板里）；
+ *   · 品牌名只留自绘标题栏一处，这里不再渲染 `SUPER TIME`；
+ *   · 按钮层级：主「导入许可证」/ 次「导出激活请求」/ 文字链「重新校验」。
+ * 业务逻辑（状态查询、导入、导出、刷新）一字未改。
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import css from './license-gate.module.css'
@@ -60,7 +67,6 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
     return (
       <div className={css.lock}>
         <div className={css.card}>
-          <div className={css.brand}>SUPER TIME</div>
           <p className={css.lead}>正在校验授权…</p>
         </div>
       </div>
@@ -113,7 +119,6 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
     <div className={css.lock}>
       <NoticeBanner />
       <div className={css.card}>
-        <div className={css.brand}>SUPER TIME</div>
         <h1 className={css.title}>{title}</h1>
         <p className={css.lead}>
           本机数据分析功能需要有效许可证。请导入厂商签发的 license.json，
@@ -141,10 +146,6 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
         </div>
 
         {msg ? <p className={css.msg}>{msg}</p> : null}
-
-        <p className={css.hint}>
-          流程：导出激活请求 → 厂商用 License Studio 签发 → 本机导入 → 重启或点「重新校验」。
-        </p>
       </div>
     </div>
   )

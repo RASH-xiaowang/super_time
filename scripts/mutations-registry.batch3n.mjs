@@ -17,10 +17,10 @@
 export const MUTATIONS_BATCH3N = [
   {
     id: 'M511-sync-tail-quick-check-bypassed',
-    why: 'quick_check 闸被拆 ⇒ 尾部路径不再校验拼好的快照：坏计划/前提不成立的追加会把损坏的快照发出去（宁可慢不可错的安全网被拆；变异的靶子必须是 sync.ts 的**闸**本身——只改助手内部是等价变异，withDb 打开损坏库时自己会抛错兜住）。判据：sync-tail-patch.spec.ts 的「坏计划（偏移错页）⇒ quick_check 拦下并退回整库重解」。',
+    why: 'quick_check 闸被拆 ⇒ 尾部/差分路径不再校验拼好的快照：坏计划/前提不成立的追加会把损坏的快照发出去（宁可慢不可错的安全网被拆；变异的靶子必须是 sync.ts 的**闸**本身——只改助手内部是等价变异，withDb 打开损坏库时自己会抛错兜住）。判据：sync-tail-patch.spec.ts 的「坏计划（偏移错页）⇒ quick_check 拦下并退回整库重解」。',
     file: 'src/backend/wechat-data/src/query/sync.ts',
-    from: "if (!tailQuickCheckOk(stagingDb)) throw new Error(kind + ' patch quick_check failed for ' + file)",
-    to: "if (false) throw new Error(kind + ' patch quick_check failed for ' + file)",
+    from: 'if (!tailQuickCheckOk(stagingDb)) {',
+    to: 'if (false) {',
     spec: 'src/backend/wechat-data/tests/sync-tail-patch.spec.ts',
   },
   {

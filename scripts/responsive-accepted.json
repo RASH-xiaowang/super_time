@@ -1,0 +1,47 @@
+{
+  "note": "响应式门禁（scripts/ui-responsive-gate.mjs）的接受清单：只放行『有意响应式』与『已知数据时序漂移』，真实新增缺陷仍然阻塞。每季度随基线收敛清理条目。",
+  "allow": [
+    {
+      "tab": "overview",
+      "rule": "hidden",
+      "selector": "*_avatarRail*",
+      "reason": "地图两侧头像栏按地图数据懒挂载，审计快照可能早于数据到达（±2 条漂移）；属有意降级，见 docs/BOOTSTRAP-RESPONSIVE.md §5.1"
+    },
+    {
+      "tab": "overview",
+      "rule": "clipped",
+      "selector": "*_cloud*",
+      "reason": "词云舞台 canvas/绝对定位标签兜底裁切，内容由组件自身缩放可达；§5.1 accepted（门禁会剥掉 CSS Modules 哈希，选择器按去哈希后的稳定名写）"
+    },
+    {
+      "tab": "overview",
+      "rule": "hidden",
+      "selector": "*_toolbar > span._title",
+      "reason": "世界地图工具栏标题与父卡片头重复，有意 display:none；§5.1 accepted（去哈希稳定选择器）"
+    },
+    {
+      "tab": "annual",
+      "rule": "clipped",
+      "selector": "*_moreRow*",
+      "reason": "2–3px 行高舍入噪声、滚动可达；§5.1 accepted"
+    },
+    {
+      "tab": "annual",
+      "rule": "hidden",
+      "selector": "*_calMonths*",
+      "reason": "年度日历热力图按**容器查询** ≤620px 隐藏月份刻度（卡太窄时标签会挤成一坨，悬停仍有完整日期），属设计内响应式降级；§5.1 accepted"
+    },
+    {
+      "tab": "annual",
+      "rule": "hidden",
+      "selector": "*_calDows*",
+      "reason": "同上：容器查询 ≤620px 隐藏星期刻度，热力图信息在疏密；§5.1 accepted"
+    },
+    {
+      "tab": "clawbot",
+      "rule": "hidden",
+      "selector": "*_filterRow*",
+      "reason": "ClawBot 会话视图筛选条按断点成对渲染 Full/Short 文案与日期预设（窄档显示短文案、宽档显示完整项），另一种 display:none 属有意响应式降级；§5.1 accepted（2026-10-18：审计状态从设置视图切到会话视图后新暴露，非回归）"
+    }
+  ]
+}

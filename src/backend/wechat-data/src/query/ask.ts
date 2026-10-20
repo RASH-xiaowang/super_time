@@ -798,13 +798,23 @@ export function formatAskContext(
         blocks.push(`[${i + 1}] 知识库文件《${kb?.fileName ?? c.name}》${loc ? ' · ' + loc : ''}（**文件内容，不是聊天记录**，没有发生时间）\n    ${c.snippet}`)
         return
       }
+      // 聚合事实（2026-10-16）：它是**确定性统计结果**（`COUNT(*)` / `GROUP BY`），
+      // 不是聊天片段。必须显式说明这一点 —— 否则模型会把它当成「又一段聊天记录」，
+      // 甚至因为「它不像对话」而拒绝引用（实测：模型看到统计表却答「没有找到证据」）。
+      if (c.source === 'agg') {
+        blocks.push(`[${i + 1}] 【本机统计结果】${c.name}\n${c.snippet}\n    ↑ 这是对**全部 ${'本机消息'}**跑 SQL 统计得到的**准确数字**，不是抽样片段。回答「一共多少 / 哪个最多」这类问题时**必须直接采用这些数字**，并标注 [${i + 1}]。`)
+        return
+      }
       const who = c.sender ? `${c.name} · ${c.sender}` : c.name
       blocks.push(`[${i + 1}] ${who} (${c.time}): ${c.snippet}`)
     })
   }
-  const sourceLine = hasKb
-    ? '以下是本机检索到的相关材料（每个 [n] 是一段连续对话或一段文件内容，已按相关度排序），是回答的唯一事实依据：'
-    : '以下是本机微信聊天记录中检索到的相关对话片段（每个 [n] 是一段连续对话，已按相关度排序），是回答的唯一事实依据：'
+  const hasAgg = Boolean(chunks && chunks.some(ch => ch.anchor.source === 'agg'))
+  const sourceLine = hasAgg
+    ? '以下是本机检索到的相关材料（每个 [n] 是一段连续对话、一段文件内容，或一条**统计结果**；已按相关度排序），是回答的唯一事实依据。标着「本机统计结果」的那几条是**全量 SQL 统计**，涉及数量/排名的问题必须直接采用它们给出的数字：'
+    : (hasKb
+      ? '以下是本机检索到的相关材料（每个 [n] 是一段连续对话或一段文件内容，已按相关度排序），是回答的唯一事实依据：'
+      : '以下是本机微信聊天记录中检索到的相关对话片段（每个 [n] 是一段连续对话，已按相关度排序），是回答的唯一事实依据：')
   return `${head ? head + '\n' : ''}${sourceLine}\n${blocks.join('\n\n')}`
 }
 

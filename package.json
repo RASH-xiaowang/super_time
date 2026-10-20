@@ -1,12 +1,13 @@
 {
   "name": "super-time-electron",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Super Time —— 把本机微信数据变成可检索、可分析、可导出的 Electron 桌面工作台（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
     "start": "node scripts/launch-app.mjs",
     "dev": "npm run build:all && node scripts/launch-app.mjs",
     "dev:only": "node scripts/launch-app.mjs",
+    "dev:pair-link": "node scripts/dev-pair-link.mjs",
     "prestart": "npm run build:all",
     "build:all": "npm run build:backend && npm run build:types && npm run build:ui",
     "build:ui": "vite build",
@@ -28,6 +29,8 @@
     "security-guard:smoke": "node scripts/security-guard-smoke.js",
     "security-guard:smoke:packaged": "node scripts/security-guard-smoke.js --packaged",
     "test": "vitest run",
+    "test:affected": "node scripts/affected-tests.mjs",
+    "test:affected:list": "node scripts/affected-tests.mjs --list",
     "test:watch": "vitest",
     "ci:board-history": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-board-history.mjs",
     "ci:baseline": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-baseline.mjs",
@@ -49,6 +52,7 @@
     "onboarding:smoke": "node scripts/ui-ask-smoke.js scripts/onboarding-ssr.tsx",
     "wordcloud:smoke": "node scripts/ui-ask-smoke.js scripts/wordcloud-ssr.tsx",
     "llm-balance:smoke": "node scripts/ui-ask-smoke.js scripts/llm-balance-ssr.tsx",
+    "task-center:smoke": "node scripts/ui-ask-smoke.js scripts/task-center-ssr.tsx",
     "ui:accept": "node scripts/ui-acceptance.mjs",
     "ui:e2e-smoke": "node scripts/ui-e2e-smoke.mjs",
     "ui:nav-e2e": "node scripts/nav-shell-e2e.mjs",
@@ -82,7 +86,11 @@
     "theme:live-audit": "node scripts/theme-live-audit.mjs",
     "ui:verify": "node scripts/ui-verify.mjs",
     "ui:interactive-budget": "node scripts/interactive-budget.mjs",
-    "ui:theme-budget": "node scripts/theme-contrast-budget.mjs"
+    "ui:theme-budget": "node scripts/theme-contrast-budget.mjs",
+    "ui:responsive-audit": "node scripts/responsive-audit.mjs",
+    "ui:responsive-gate": "node scripts/ui-responsive-gate.mjs",
+    "ui:density-audit": "node scripts/ui-density-audit.mjs",
+    "ui:density-gate": "node scripts/ui-density-gate.mjs"
   },
   "keywords": [
     "electron",
@@ -107,6 +115,7 @@
     "@deepseek-ai/schemastery": "file:src/backend/deps/schemastery",
     "@huggingface/tokenizers": "^0.2.0",
     "@standard-schema/spec": "file:src/backend/deps/@standard-schema/spec",
+    "bootstrap": "^5.3.8",
     "electron-updater": "^6.8.9",
     "fzstd": "file:src/backend/deps/fzstd",
     "koffi": "file:src/backend/deps/koffi",

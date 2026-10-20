@@ -22,6 +22,7 @@ import {
   pickReplyTarget,
   truncateReply,
   type AutoReplyRunnerDeps,
+  type ClawbotAskContext,
   type ReplyableMessage,
 } from '../src/query/clawbot/clawbot-auto-reply.ts'
 import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../src/types.ts'
@@ -29,7 +30,7 @@ import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, Opera
 const flush = async (): Promise<void> => { for (let i = 0; i < 6; i += 1) await new Promise((r) => { setImmediate(r) }) }
 
 function cfg(patch: Partial<ClawbotInstanceConfig> = {}): ClawbotInstanceConfig {
-  return { slot: 1, autoReply: false, kbEnabled: false, kbId: null, ...patch }
+  return { slot: 1, autoReply: false, kbEnabled: false, kbId: null, systemPrompt: '', splitReply: false, ...patch }
 }
 
 function msg(patch: Partial<ReplyableMessage> = {}): ReplyableMessage {
@@ -221,5 +222,57 @@ describe('③ 执行器：一问一答、失败不抛、开关现读', () => {
       { slot: 3, text: '三号的消息' },
     ])
     expect(h.sends.map(s => s.slot)).toEqual([2, 3])
+  })
+
+  /*
+   * 2026-10-18 用户截图「不能关联上下文和识别图中内容」：
+   * 目标消息之前的最近对话与图片必须交给 ask 管道；读上下文/图片失败也要照常回复，
+   * 不许因为「历史读不出来」就整条不发。
+   */
+  it('最近对话与图片随 ask 一起送出（图片含 MIME，供模型读图）', async () => {
+    const calls: Array<{ text: string, ctx: ClawbotAskContext | undefined }> = []
+    const deps: AutoReplyRunnerDeps = {
+      readConfig: () => cfg({ autoReply: true }),
+      ask: async (_slot, text, _kbId, _sp, context) => {
+        calls.push({ text, ctx: context })
+        return { ok: true, answer: '看到了，右边那辆是……' }
+      },
+      send: async () => ({ ok: true, id: 1 }),
+      op: () => {},
+      onReplied: () => {},
+      history: () => [
+        { role: 'user', content: '你好' },
+        { role: 'assistant', content: '你好呀，有事吗' },
+        { role: 'user', content: '[图片]' },
+      ],
+      images: async () => [{ data: 'aGVsbG8=', mediaType: 'image/jpeg', name: 'wx-image-7' }],
+    }
+    createAutoReplyRunner(deps).consider(1, [msg({ id: 9, content: '分析一下图中右边那辆车是什么车？' })])
+    await flush()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.ctx?.history?.map(m => m.content)).toEqual(['你好', '你好呀，有事吗', '[图片]'])
+    expect(calls[0]?.ctx?.images).toEqual([{ data: 'aGVsbG8=', mediaType: 'image/jpeg', name: 'wx-image-7' }])
+  })
+
+  it('上下文/图片读取抛错 ⇒ 按空处理，照样回复（不阻断）', async () => {
+    const calls: Array<{ text: string, ctx: ClawbotAskContext | undefined }> = []
+    const sends: string[] = []
+    const deps: AutoReplyRunnerDeps = {
+      readConfig: () => cfg({ autoReply: true }),
+      ask: async (_slot, text, _kbId, _sp, context) => {
+        calls.push({ text, ctx: context })
+        return { ok: true, answer: '收到' }
+      },
+      send: async (_slot, text) => { sends.push(text); return { ok: true, id: 2 } },
+      op: () => {},
+      onReplied: () => {},
+      history: () => { throw new Error('history db down') },
+      images: async () => { throw new Error('media cache down') },
+    }
+    createAutoReplyRunner(deps).consider(1, [msg({ id: 9 })])
+    await flush()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.ctx).toEqual({})
+    expect(sends).toEqual(['收到'])
   })
 })

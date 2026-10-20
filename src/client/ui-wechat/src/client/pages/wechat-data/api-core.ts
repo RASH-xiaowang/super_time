@@ -31,6 +31,8 @@ import type {
   ExportHistorySnapshot,
   BackupSnapshot,
   CalendarSnapshot,
+  ChatCollectTaskResult,
+  ChatCollectTaskSnapshot,
   ChatHistoryResolveResult,
   ClawbotBindQr,
   ClawbotBindStateSnapshot,
@@ -53,12 +55,16 @@ import type {
   DbIntegrityResult,
   DbRepairResult,
   DbStatusSnapshot,
+  DataRevision,
   DecryptAllResult,
   DecryptImagesResult,
   DecryptStatus,
   ImageUpgradeResult,
   OriginalBatchResult,
   OriginalFetchPlan,
+  HarvestResult,
+  HarvestStatus,
+  WxcdnQuota,
   DeleteFavoriteResult,
   DraftClearResult,
   DraftsClearResult,
@@ -125,12 +131,26 @@ import type {
   VoiceTranscribeResult,
   WechatConfigFull,
   WechatConfigPatch,
+  WechatImageAutoDownloadStatus,
   WhisperDownloadResult,
   WhisperStatus,
   LayaAnalysisView,
   LayaDownloadOutcome,
   LayaStatus,
   LayaVisibleAnalysisResult,
+} from '@deepseek-ai/dsh-wechat-data/types'
+// 任务信息 / 触发记录（2026-10-19）：类型单一真源在后端 `types-taskcenter.ts`，
+// 这里只转发，不在前端镜像字段。单独一条 import 而不是塞进上面那一大坨，
+// 是为了让「这一域新增了什么类型」在 diff 里一眼可见。
+import type {
+  TaskCallbackDispatchResult,
+  TaskInfoInput,
+  TaskInfoMutationResult,
+  TaskInfoSnapshot,
+  TaskInfoStatus,
+  TaskTriggerQuery,
+  TaskTriggerScanResult,
+  TaskTriggerSnapshot,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   SNAPSHOT_REFRESHED_EVENT,
@@ -229,6 +249,8 @@ export interface ImageDataUrlBatchItem {
   format?: string
   /** true = 缩略/中图（与单张入口的 `ImageDataUrlResult.thumb` 同义）。预取写缓存要用它。 */
   thumb?: boolean
+  /** 相对 decoded_images 的落盘路径；有它就转 wechat-media://（见 wechat-media.ts）。 */
+  file?: string
   error?: string
 }
 
@@ -258,6 +280,24 @@ export interface WechatRemote {
   getContact360(options: { username: string }): Promise<RemoteResult<Contact360Snapshot>>
   getMessages(options: { talker: string; limit?: number; cursor?: number; cursorLocalId?: number }): Promise<RemoteResult<MessagesSnapshot>>
   getNewMessages(options: { talker: string; after: number; limit?: number }): Promise<RemoteResult<MessagesSnapshot>>
+  /** 新建聊天素材收集任务（保留会话最近 N 条文本 + M 张图片）。 */
+  createChatCollectTask(options: { username: string; displayName?: string; textLimit?: number; imageLimit?: number }): Promise<RemoteResult<ChatCollectTaskResult>>
+  /** 收集任务列表（最新在前）。 */
+  listChatCollectTasks(): Promise<RemoteResult<ChatCollectTaskSnapshot>>
+  /** 任务信息列表（最新在前；readError 与「确实没有任务」区分）。 */
+  listTaskInfos(): Promise<RemoteResult<TaskInfoSnapshot>>
+  /** 新建 / 更新任务信息（id 缺省 = 新建；新建默认「待完善」）。 */
+  saveTaskInfo(options: TaskInfoInput): Promise<RemoteResult<TaskInfoMutationResult>>
+  /** 删除任务信息（触发记录保留）。 */
+  deleteTaskInfo(options: { id: number }): Promise<RemoteResult<TaskInfoMutationResult>>
+  /** 标记「待完善 / 已完善」——已完善才参与触发与回调投递。 */
+  setTaskInfoStatus(options: { id: number; status: TaskInfoStatus }): Promise<RemoteResult<TaskInfoMutationResult>>
+  /** 任务触发记录（可按任务过滤；最新在前）。 */
+  listTaskTriggers(options?: TaskTriggerQuery): Promise<RemoteResult<TaskTriggerSnapshot>>
+  /** 立即按关键词扫描一次新消息并生成触发记录（常驻扫描另在网关定时器里）。 */
+  scanTaskTriggers(): Promise<RemoteResult<TaskTriggerScanResult>>
+  /** 手动重投一条触发记录的回调。 */
+  dispatchTaskCallback(options: { triggerId: number }): Promise<RemoteResult<TaskCallbackDispatchResult>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>
   getSelfUsername(): Promise<RemoteResult<{ username: string }>>
   getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
@@ -302,12 +342,15 @@ export interface WechatRemote {
   listClawbotInstances(): Promise<RemoteResult<ClawbotInstancesSnapshot>>
   createClawbotInstance(): Promise<RemoteResult<ClawbotInstanceCreated>>
   deleteClawbotInstance(options: { slot: number }): Promise<RemoteResult<ClawbotInstanceDeleted>>
-  setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null }): Promise<RemoteResult<ClawbotInstanceConfig>>
+  setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): Promise<RemoteResult<ClawbotInstanceConfig>>
+  renameClawbotInstance(options: { slot: number, label: string }): Promise<RemoteResult<ClawbotBindingSnapshot>>
   getClawbotBinding(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindingSnapshot>>
   createClawbotBindQr(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindQr>>
   getClawbotBindState(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindStateSnapshot>>
   unbindClawbot(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindingSnapshot>>
   listClawbotMessages(options?: ClawbotMessageQuery): Promise<RemoteResult<ClawbotMessageSnapshot>>
+  clearClawbotMessages(options?: { slot?: number }): Promise<RemoteResult<{ removed: number, messages: ClawbotMessageSnapshot }>>
+  getClawbotDefaultPrompt(): Promise<RemoteResult<{ prompt: string }>>
   checkClawbotEnv(options?: { slot?: number }): Promise<RemoteResult<ClawbotEnvSnapshot>>
   sendClawbotMessage(options: { text: string, slot?: number }): Promise<RemoteResult<ClawbotSendResult>>
   getClawbotMedia(options: { id: number }): Promise<RemoteResult<ClawbotMediaResult>>
@@ -322,9 +365,11 @@ export interface WechatRemote {
     title: string
     body?: string
     tags?: string[] | string
-    sourceKind?: 'manual' | 'ask'
+    sourceKind?: 'manual' | 'ask' | 'file'
     sourceUsername?: string
     sourceQuestion?: string
+    /** 来源文件 id（`sourceKind === 'file'` 时才有）。 */
+    sourceFileId?: number
   }): Promise<RemoteResult<NoteMutationResult>>
   deleteNote(kbId: number, options: { id: number }): Promise<RemoteResult<NoteMutationResult>>
   getKnowledgeGraph(kbId: number): Promise<RemoteResult<KnowledgeSnapshotRead>>
@@ -383,6 +428,8 @@ export interface WechatRemote {
      * 不传 = 这一轮不可取消（旧客户端行为，与改动前一致）。
      */
     jobId?: string
+    /** 随问题送模型的图片（2026-10-18，ClawBot 自动回复的「识别图中内容」；手动问答不传）。 */
+    images?: Array<{ data: string; mediaType: string; name?: string }>
   }): Promise<RemoteResult<AskResult>>
   /** 取消一轮正在生成的问答（W3-6.1）。找不到在跑的那一轮时 ok=false + message。 */
   cancelAsk(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
@@ -429,9 +476,9 @@ export interface WechatRemote {
   resolveChatHistory(options: { serverId: string }): Promise<RemoteResult<ChatHistoryResolveResult>>
   getPaymentStatus(options: { serverId: string }): Promise<RemoteResult<PaymentStatus>>
   getDailyCounts(options: { username: string; year: number; month: number }): Promise<RemoteResult<CalendarSnapshot>>
-  getImageDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<ImageDataUrlResult>>
+  getImageDataUrl(options: { username: string; localId: number; fileOnly?: boolean }): Promise<RemoteResult<ImageDataUrlResult>>
   /** 一次 RPC 解码一批消息图片（N16：批量入口，路径表只查一次）。 */
-  getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): Promise<RemoteResult<{ items: ImageDataUrlBatchItem[] }>>
+  getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }>; fileOnly?: boolean }): Promise<RemoteResult<{ items: ImageDataUrlBatchItem[] }>>
   /** 取消一个在跑的导出/备份任务（M3）。 */
   cancelExportJob(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
   /** 读一个导出/备份任务的最新进度（M3；事件中继之外的兜底路径）。 */
@@ -476,6 +523,11 @@ export interface WechatRemote {
   getArticleCovers(options: { urls: readonly string[] }): Promise<RemoteResult<{ items: Array<{ url: string; dataUrl?: string; error?: string }> }>>
   getMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<RemoteResult<ImageDataUrlResult>>
   getDbStatus(): Promise<RemoteResult<DbStatusSnapshot>>
+  /**
+   * 实时同步修订（纯内存读，1s 级轮询可用）：`revision` 判断有没有新数据落地，
+   * `messageChanged` 判断要不要真去查消息增量。
+   */
+  getDataRevision(): Promise<RemoteResult<DataRevision>>
   getDbHealth(): Promise<RemoteResult<DbHealthSnapshot>>
   /**
    * 逐库完整性体检（PRAGMA integrity_check）——「库文件已损坏」处方指向的检查。
@@ -508,13 +560,14 @@ export interface WechatRemote {
   createEncryptedBackup(options: { password: string; jobId?: string }): Promise<RemoteResult<BackupMutationResult>>
   restoreBackup(options: { name: string; password: string }): Promise<RemoteResult<BackupRestoreResult>>
   deleteBackup(options: { name: string }): Promise<RemoteResult<BackupMutationResult>>
-  generateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<RemoteResult<DailySummaryResult>>
+  generateDailySummary(options: { date: string; provider?: string; model?: string; format?: string }): Promise<RemoteResult<DailySummaryResult>>
   generateAnnualNarrative(options: { year: number; jobId?: string }): Promise<RemoteResult<AnnualNarrativeResult>>
   generatePeriodSummary(options: {
     from: string
     to: string
     provider?: string
     model?: string
+    format?: string
   }): Promise<RemoteResult<PeriodSummaryResult>>
   listLlmProviders(): Promise<RemoteResult<{ providers: Array<{ id: string; name: string }> }>>
   listLlmModels(options: { provider: string }): Promise<RemoteResult<{ models: Array<{ id: string; name: string }> }>>
@@ -584,6 +637,15 @@ export interface WechatRemote {
     keyFormat?: string
   }): Promise<RemoteResult<GenerateKeysResult>>
   getWechatKeysInfo(): Promise<RemoteResult<KeysInfoResult>>
+  /**
+   * 微信原图自动下载（实验）：`start` 打开开关并让微信开始下载新图片的原图 /
+   * `stop` 关闭并还原微信进程 / `status` 只读状态（界面轮询用）。
+   *
+   * 仅桌面端可调：它会向本机微信进程注入组件并改变其内存行为（见设置 → 图片解码卡片）。
+   * @param options - 动作；缺省为 `status`。
+   * @returns 最新状态快照（含错误码、组件路径与清理提示）。
+   */
+  wechatImageAutoDownload(options?: { action?: 'start' | 'stop' | 'status' }): Promise<RemoteResult<WechatImageAutoDownloadStatus>>
   verifyImageKey(): Promise<RemoteResult<VerifyImageKeyResult>>
   decryptAllDatabases(): Promise<RemoteResult<DecryptAllResult>>
   /**
@@ -595,6 +657,12 @@ export interface WechatRemote {
   upgradeDecodedImages(): Promise<RemoteResult<ImageUpgradeResult>>
   planOriginalFetch(): Promise<RemoteResult<OriginalFetchPlan>>
   fetchOriginalImagesBatch(options?: { limit?: number; concurrency?: number }): Promise<RemoteResult<OriginalBatchResult>>
+  /** 原图自动收割：`start` 启动监控 / `stop` 停止监控 / `now` 手动收割一次。 */
+  originalHarvest(options: { action: 'start' | 'stop' | 'now' }): Promise<RemoteResult<HarvestResult | HarvestStatus>>
+  /** 读原图自动收割状态（纯内存，毫秒级；不占重任务槽）。 */
+  getOriginalHarvestStatus(): Promise<RemoteResult<HarvestStatus>>
+  /** 读第三方原图服务的额度（wxcdn.c3o.re）。 */
+  getWxcdnQuota(): Promise<RemoteResult<{ quota?: WxcdnQuota; error?: string }>>
   getDecryptStatus(): Promise<RemoteResult<DecryptStatus>>
   getWhisperStatus(): Promise<RemoteResult<WhisperStatus>>
   downloadWhisperModel(options: { model: string; jobId?: string }): Promise<RemoteResult<WhisperDownloadResult>>
@@ -694,6 +762,8 @@ export async function pickDirectory(): Promise<string | null> {
 export interface RuntimeCapabilities {
   isDesktop: boolean
   isBrowser: boolean
+  /** 交接态：浏览器里临时拥有桌面端权限（原生动作由服务端代理）。 */
+  desktopEquivalent: boolean
   dirPicker: boolean
   capturePanel: boolean
   shellOpen: boolean
@@ -714,7 +784,7 @@ export function setCapabilities(c: RuntimeCapabilities): void {
  * 宁可少几个按钮，也不能让界面去调一个不存在的桥（那是直接抛，不是降级）。
  */
 export function runtimeCapabilities(): RuntimeCapabilities {
-  return _caps ?? { isDesktop: false, isBrowser: true, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false }
+  return _caps ?? { isDesktop: false, isBrowser: true, desktopEquivalent: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false }
 }
 
 /** 面板截图导出的结果。 */

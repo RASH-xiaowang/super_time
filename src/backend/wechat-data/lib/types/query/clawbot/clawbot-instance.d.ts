@@ -29,7 +29,7 @@
  * @module query/clawbot/clawbot-instance
  */
 import type { ClawbotBinding, ClawbotChannelInfo, ClawbotInstanceConfig, ClawbotInstancesSnapshot } from '../../types.ts';
-/** 未配置过的实例的默认行为：自动回复**关**、知识库**关**（默认不出网、不检索，需用户显式打开）。 */
+/** 未配置过的实例的默认行为：自动回复**关**、知识库**关**、提示词用内置默认、长回复分段。 */
 export declare function defaultInstanceConfig(slot?: number): ClawbotInstanceConfig;
 /** 拆成两半：配置 + （可选）读失败原因。 */
 export interface InstanceConfigRead {

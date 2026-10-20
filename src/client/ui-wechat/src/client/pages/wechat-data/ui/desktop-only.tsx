@@ -31,9 +31,9 @@ const DESKTOP_ONLY: Readonly<Record<string, { label: string, why: string, where:
     where: '在电脑上打开 Super Time → 设置 → AI 大模型',
   },
   remote: {
-    label: '远程访问（手机）',
+    label: '局域网访问（手机）',
     why: '这一节本身就是「在这台电脑上开一个入站监听」。从监听进来的那一侧改监听，等于让被连进来的一方决定谁能连进来。',
-    where: '在电脑上打开 Super Time → 设置 → 远程访问（手机）',
+    where: '在电脑上打开 Super Time → 设置 → 维护与自检 → 局域网访问（手机）',
   },
   license: {
     label: '软件授权',
@@ -60,6 +60,11 @@ const DESKTOP_ONLY: Readonly<Record<string, { label: string, why: string, where:
     why: '自检会在本机跑一遍原图解码链路（含本机缓存与解码器），远程端拿不到那些文件。',
     where: '在电脑上打开 Super Time → 设置 → 原图链路自检',
   },
+  privacy: {
+    label: '隐私体检',
+    why: '全库敏感信息扫描要逐条读本机解密库（手机侧没有这条通道），而且命中样本要能跳回会话原文 —— 那需要本机的会话数据。',
+    where: '在电脑上打开 Super Time → 设置 → 隐私体检',
+  },
   advanced: {
     label: '高级设置',
     why: '输出目录与启动引导状态都是这台电脑上的路径与本地状态。',
@@ -76,7 +81,9 @@ export const DESKTOP_ONLY_KEYS: readonly string[] = Object.keys(DESKTOP_ONLY)
  * @returns 降级卡或 null。
  */
 export function desktopOnlyGate(key: string): React.JSX.Element | null {
-  if (!runtimeCapabilities().isBrowser) return null
+  const caps = runtimeCapabilities()
+  // 桌面端与「打开网页」交接态：都有这台电脑的原生能力。
+  if (!caps.isBrowser || caps.desktopEquivalent === true) return null
   const item = DESKTOP_ONLY[key] ?? { label: key, why: '这一节做的事都发生在这台电脑上。', where: '在电脑上打开 Super Time 的设置里完成。' }
   return (
     <div className={css.card} data-desktop-only={key} role="note">
@@ -135,7 +142,8 @@ export function desktopOnlyListCard(keys: readonly string[]): React.JSX.Element 
  * 而这一族的判据必须能被 spec 在「桌面态 / 浏览器态」两边各跑一次。
  */
 export function desktopAction(): boolean {
-  return runtimeCapabilities().isBrowser
+  const caps = runtimeCapabilities()
+  return caps.isBrowser && caps.desktopEquivalent !== true
 }
 
 /** 禁用态下显示给用户的那句话（`title` 与 `aria-label` 共用）。 */

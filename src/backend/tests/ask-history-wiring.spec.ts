@@ -112,7 +112,9 @@ describe('问答历史：自动回复的问答必须与「用户自己问的」�
   })
 
   it('自动回复走的是注入的 ask 能力（模型统一由「对话模型」决定）', () => {
+    // 2026-10-17：签名加了第 4 参 `systemPrompt`（实例的系统提示词）。
+    // 2026-10-18：加第 5 参 `context`（最近对话 + 图片），「统一模型」不变。
     expect(gateway, '自动回复没有注入点 ⇒ 它会另找一条模型路径，「统一模型」就守不住了')
-      .toMatch(/ask:\s*async \(slot, text, kbId\)/)
+      .toMatch(/ask:\s*async \(slot, text, kbId, systemPrompt(?:, context)?\)/)
   })
 })

@@ -1,0 +1,46 @@
+/*
+ * 聊天消息区外壳 + 「N 条新消息」浮标（2026-10-18）。
+ *
+ * 为什么单独一个模块：chats-rows / chats-cards 都已接近 M21 的 1000 行上限，
+ * chats-shell 又被 `chats-wx-geometry.wiring.spec` 全文件扫「left:50%」（防头部居中回潮），
+ * 浮标必须 left:50% 居中，放进去会误伤那条守卫。这里只有这两个类，独立文件最干净。
+ */
+
+/* 消息区外壳：给浮标一个定位上下文（.msgBody 仍是滚动容器，flex:1 由它自己声明）。 */
+.msgWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 浮标：翻历史时新消息只提示、不抢滚动；点击回到最新。 */
+.newMsgPill {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px;
+  border: 1px solid color-mix(in srgb, var(--wx-bubble-self, #95ec69) 35%, var(--wx-border, rgba(255, 255, 255, 0.18)));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wx-bubble-self, #95ec69) 16%, var(--wx-chat-bg, #16181d));
+  color: var(--wx-text, #e6edf3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 20px color-mix(in srgb, #000 42%, transparent);
+  animation: newMsgPillIn 0.16s ease-out;
+}
+.newMsgPill:hover { filter: brightness(1.1); }
+.newMsgPill:active { transform: translateX(-50%) scale(0.97); }
+@keyframes newMsgPillIn {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

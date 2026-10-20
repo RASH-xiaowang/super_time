@@ -125,6 +125,14 @@ const _deepseek_ai_dsh_wechat_data_wechatData_askWechat_result$schema = z.object
   'intent': z.string(),
   'subQueries': z.array(z.string()),
 }).optional(),
+  'usage': z.object({
+  'inputTokens': z.number(),
+  'outputTokens': z.number(),
+  'totalTokens': z.number().optional(),
+  'cacheReadTokens': z.number().optional(),
+  'cacheWriteTokens': z.number().optional(),
+  'reasoningTokens': z.number().optional(),
+}).optional(),
 })
 const _deepseek_ai_dsh_wechat_data_wechatData_autoGetDbKey_parameter_0$schema = z.object({
   'dbPath': z.string().optional(),
@@ -2207,6 +2215,8 @@ const _deepseek_ai_dsh_wechat_data_wechatData_clawbotInstanceItem$schema = z.obj
 }),
   'todayMessages': z.number(),
   'totalMessages': z.number(),
+  'todayTokens': z.number(),
+  'totalTokens': z.number(),
   'channel': z.object({
   'running': z.boolean(),
   'error': z.union([z.literal(null), z.string()]),
@@ -2240,6 +2250,144 @@ const _deepseek_ai_dsh_wechat_data_wechatData_setClawbotInstanceConfig_result$sc
   'autoReply': z.boolean(),
   'kbEnabled': z.boolean(),
   'kbId': z.union([z.literal(null), z.number()]),
+})
+
+// ── 聊天素材收集任务（2026-10-19，手写）──────────────────────────────────────
+// 与 types-backup.ts 的 ChatCollectTask / ChatCollectTaskResult / ChatCollectTaskSnapshot 逐字段一致。
+const _deepseek_ai_dsh_wechat_data_wechatData_chatCollectTaskItem$schema = z.object({
+  'id': z.number(),
+  'username': z.string(),
+  'displayName': z.string(),
+  'textLimit': z.number(),
+  'imageLimit': z.number(),
+  'textCount': z.number(),
+  'imageCount': z.number(),
+  'dir': z.string(),
+  'createdAt': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_createChatCollectTask_parameter_0$schema = z.object({
+  'username': z.string(),
+  'displayName': z.string().optional(),
+  'textLimit': z.number().optional(),
+  'imageLimit': z.number().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_createChatCollectTask_result$schema = z.object({
+  'ok': z.boolean(),
+  'task': _deepseek_ai_dsh_wechat_data_wechatData_chatCollectTaskItem$schema.optional(),
+  'error': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_listChatCollectTasks_result$schema = z.object({
+  'items': z.array(_deepseek_ai_dsh_wechat_data_wechatData_chatCollectTaskItem$schema),
+  'total': z.number(),
+  'readError': z.string().optional(),
+})
+
+// ── 任务信息 / 任务触发记录（2026-10-19，手写）──────────────────────────────
+// 生成器不在本仓（见 `src/backend/deps/PROVENANCE.json` 的既有先例：新增 @Remote 时
+// 按同样形状手写 schema 条目）。与 `src/backend/wechat-data/src/types-taskcenter.ts` 逐字段一致；
+// 这 7 个方法都不在 `ENFORCED_SCHEMA_METHODS` 里，schema 只用于 `info().argGuard` 的影子账本
+// （`wechat-args-guard.spec.ts` 用它量「新增方法有没有把覆盖数拖大」）。
+const _deepseek_ai_dsh_wechat_data_wechatData_taskInfoItem$schema = z.object({
+  'id': z.number(),
+  'name': z.string(),
+  'chatUsername': z.string(),
+  'chatName': z.string(),
+  'chatType': z.union([z.literal("private"), z.literal("group")]),
+  'targetUsername': z.string(),
+  'targetName': z.string(),
+  'keywords': z.array(z.string()),
+  'photoLimit': z.number(),
+  'callbackUrl': z.string(),
+  'status': z.union([z.literal("incomplete"), z.literal("ready")]),
+  'createdAt': z.number(),
+  'updatedAt': z.number(),
+  'lastTriggeredAt': z.number().optional(),
+  'triggerCount': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerImage$schema = z.object({
+  'localId': z.number(),
+  'createTime': z.number(),
+  'sender': z.string(),
+  'md5': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerRecord$schema = z.object({
+  'id': z.number(),
+  'taskId': z.number(),
+  'taskName': z.string(),
+  'chatUsername': z.string(),
+  'chatName': z.string(),
+  'targetUsername': z.string(),
+  'targetName': z.string(),
+  'keyword': z.string(),
+  'text': z.string(),
+  'images': z.array(_deepseek_ai_dsh_wechat_data_wechatData_taskTriggerImage$schema),
+  'messageLocalId': z.number(),
+  'messageSortSeq': z.number(),
+  'triggeredAt': z.number(),
+  'callbackStatus': z.union([z.literal("pending"), z.literal("sent"), z.literal("failed"), z.literal("skipped")]),
+  'callbackAt': z.number().optional(),
+  'callbackError': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_taskMutationResult$schema = z.object({
+  'ok': z.boolean(),
+  'id': z.number().optional(),
+  'status': z.union([z.literal("incomplete"), z.literal("ready")]).optional(),
+  'error': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_taskInfoStatus$schema = z.union([z.literal("incomplete"), z.literal("ready")])
+const _deepseek_ai_dsh_wechat_data_wechatData_saveTaskInfo_parameter_0$schema = z.object({
+  'id': z.number().optional(),
+  'name': z.string().optional(),
+  'chatUsername': z.string(),
+  'chatName': z.string().optional(),
+  'chatType': z.union([z.literal("private"), z.literal("group")]),
+  'targetUsername': z.string().optional(),
+  'targetName': z.string().optional(),
+  'keywords': z.array(z.string()),
+  'photoLimit': z.number().optional(),
+  'callbackUrl': z.string().optional(),
+  'status': _deepseek_ai_dsh_wechat_data_wechatData_taskInfoStatus$schema.optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_saveTaskInfo_result$schema = _deepseek_ai_dsh_wechat_data_wechatData_taskMutationResult$schema
+const _deepseek_ai_dsh_wechat_data_wechatData_deleteTaskInfo_parameter_0$schema = z.object({
+  'id': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_deleteTaskInfo_result$schema = _deepseek_ai_dsh_wechat_data_wechatData_taskMutationResult$schema
+const _deepseek_ai_dsh_wechat_data_wechatData_setTaskInfoStatus_parameter_0$schema = z.object({
+  'id': z.number(),
+  'status': _deepseek_ai_dsh_wechat_data_wechatData_taskInfoStatus$schema,
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_setTaskInfoStatus_result$schema = _deepseek_ai_dsh_wechat_data_wechatData_taskMutationResult$schema
+const _deepseek_ai_dsh_wechat_data_wechatData_listTaskInfos_result$schema = z.object({
+  'items': z.array(_deepseek_ai_dsh_wechat_data_wechatData_taskInfoItem$schema),
+  'total': z.number(),
+  'readError': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_listTaskTriggers_parameter_0$schema = z.object({
+  'taskId': z.number().optional(),
+  'limit': z.number().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_listTaskTriggers_result$schema = z.object({
+  'items': z.array(_deepseek_ai_dsh_wechat_data_wechatData_taskTriggerRecord$schema),
+  'total': z.number(),
+  'readError': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_scanTaskTriggers_result$schema = z.object({
+  'ok': z.boolean(),
+  'tasks': z.number(),
+  'scanned': z.number(),
+  'created': z.number(),
+  'dispatched': z.number(),
+  'error': z.string().optional(),
+  'errors': z.array(z.string()).optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_dispatchTaskCallback_parameter_0$schema = z.object({
+  'triggerId': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_dispatchTaskCallback_result$schema = z.object({
+  'ok': z.boolean(),
+  'status': z.union([z.literal("pending"), z.literal("sent"), z.literal("failed"), z.literal("skipped")]),
+  'error': z.string().optional(),
 })
 
 export const TYPERT = {
@@ -5151,6 +5299,202 @@ export const TYPERT = {
         schema: _deepseek_ai_dsh_wechat_data_wechatData_unbindClawbot_result$schema,
       },
       sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/createChatCollectTask',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'createChatCollectTask',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/createChatCollectTask:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_createChatCollectTask_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ChatCollectTaskResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_createChatCollectTask_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-read.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/listChatCollectTasks',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'listChatCollectTasks',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ChatCollectTaskSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_listChatCollectTasks_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-read.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/listTaskInfos',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'listTaskInfos',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskInfoSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_listTaskInfos_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/saveTaskInfo',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'saveTaskInfo',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/saveTaskInfo:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_saveTaskInfo_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskInfoMutationResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_saveTaskInfo_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/deleteTaskInfo',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'deleteTaskInfo',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/deleteTaskInfo:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_deleteTaskInfo_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskInfoMutationResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_deleteTaskInfo_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/setTaskInfoStatus',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'setTaskInfoStatus',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/setTaskInfoStatus:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_setTaskInfoStatus_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskInfoMutationResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_setTaskInfoStatus_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/listTaskTriggers',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'listTaskTriggers',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          acceptsUndefined: true,
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/listTaskTriggers:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_listTaskTriggers_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskTriggerSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_listTaskTriggers_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/scanTaskTriggers',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'scanTaskTriggers',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskTriggerScanResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_scanTaskTriggers_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/dispatchTaskCallback',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'dispatchTaskCallback',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/dispatchTaskCallback:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_dispatchTaskCallback_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#TaskCallbackDispatchResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_dispatchTaskCallback_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-taskcenter.ts","line":null,"column":null},
     },
   ],
   model: {

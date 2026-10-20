@@ -13,9 +13,12 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.12));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
   border-radius: var(--nm-r-lg, 14px);
   background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
+  /* 尺寸上界（2026-10-18）：设置卡不再随分辨率/内容无限长高，超出卡内滚动。 */
+  max-height: min(60vh, 526px);
+  overflow-y: auto;
 }
 
 .hd {
@@ -54,11 +57,27 @@
   flex: 0 0 auto;
 }
 
+/* 视觉隐藏但**保留在原位**的 checkbox。
+ *
+ * ⚠️ 这里曾经写成 `position: absolute; width: 1px; height: 1px`（没有 top/left）——
+ * 那会让 input 的静态位置落到**内容流末尾**（实测 y≈4082，而 label 在 y≈130）。
+ * 点 label 时浏览器会把点击转发给 input，并**滚动最近的滚动祖先**让它可见 ⇒
+ * `.root` 的 `scrollTop` 从 0 跳到 2964 ⇒ 内容被滚出可视区 ⇒ 用户看到的是
+ * 「点开关后设置弹窗内容区全黑」（内容其实还在，只是滚走了）。
+ *
+ * 正确写法：`top: 0; left: 0` 把它钉在 label 的左上角（**不**参与静态定位），
+ * 尺寸归零、透明。这样它永远在可视区内，浏览器不会为了「让它可见」而滚动。
+ * 不用 `display: none` / `visibility: hidden`：那会让 input 不可聚焦，
+ * 键盘用户就 Tab 不到这个开关了。 */
 .switch input {
   position: absolute;
-  opacity: 0;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .track {
@@ -66,7 +85,7 @@
   width: 40px;
   height: 22px;
   flex: 0 0 auto;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.2));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.12));
   border-radius: var(--nm-r-pill, 999px);
   background: var(--nm-bg-0, #050a18);
   transition: background 0.16s ease, border-color 0.16s ease;
@@ -84,17 +103,17 @@
 }
 
 .switch[data-on] .track {
-  border-color: color-mix(in srgb, var(--nm-cyan, #00f0ff) 45%, transparent);
-  background: color-mix(in srgb, var(--nm-cyan, #00f0ff) 16%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan, #07c160) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan, #07c160) 16%, transparent);
 }
 
 .switch[data-on] .knob {
   transform: translateX(18px);
-  background: var(--nm-cyan, #00f0ff);
+  background: var(--nm-cyan, #07c160);
 }
 
 .switch input:focus-visible + .track {
-  outline: 2px solid var(--nm-cyan, #00f0ff);
+  outline: 2px solid var(--nm-cyan, #07c160);
   outline-offset: 2px;
 }
 
@@ -113,7 +132,7 @@
   font-size: 12px;
   font-family: var(--nm-font-mono, ui-monospace, Consolas, monospace);
   color: var(--nm-text-2, #94a3b8);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.12));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
   border-radius: var(--nm-r-md, 10px);
   background: var(--nm-bg-0, #050a18);
 }
@@ -128,7 +147,6 @@
 
 .status[data-on] .dot {
   background: var(--nm-ok, #22c55e);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-ok, #22c55e) 60%, transparent);
 }
 
 .status[data-on] {
@@ -152,9 +170,9 @@
   gap: 16px;
   align-items: flex-start;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan, #00f0ff) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan, #07c160) 30%, transparent);
   border-radius: var(--nm-r-md, 10px);
-  background: color-mix(in srgb, var(--nm-cyan, #00f0ff) 6%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan, #07c160) 6%, transparent);
 }
 
 .qrPaper {
@@ -204,8 +222,8 @@
   padding: 8px 10px;
   font-size: 11.5px;
   word-break: break-all;
-  color: var(--nm-cyan, #00f0ff);
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.16));
+  color: var(--nm-cyan, #07c160);
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.10));
   border-radius: var(--nm-r-sm, 8px);
   background: var(--nm-bg-0, #050a18);
 }
@@ -245,7 +263,7 @@
   padding: 2px 8px;
   font-family: var(--nm-font-mono, ui-monospace, Consolas, monospace);
   font-size: 11.5px;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.10));
   border-radius: var(--nm-r-xs, 6px);
   background: var(--nm-bg-0, #050a18);
 }
@@ -264,10 +282,13 @@
   font-size: 12px;
   font-weight: 700;
   color: var(--nm-bg-0, #050a18);
-  background: var(--nm-cyan, #00f0ff);
+  background: var(--nm-cyan, #07c160);
   border: none;
   border-radius: var(--nm-r-md, 10px);
   cursor: pointer;
+  /* 被挤压时文字会逐字换行成竖排（实测 375px 手机上 40×96）。
+     按钮文字一律不换行，放不下就由 `.btnRow` 的 `flex-wrap: wrap` 换行。 */
+  white-space: nowrap;
 }
 
 .btn:disabled {
@@ -282,7 +303,7 @@
   font-size: 12px;
   color: var(--nm-text-2, #94a3b8);
   background: transparent;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.2));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.12));
   border-radius: var(--nm-r-md, 10px);
   cursor: pointer;
 }
@@ -298,7 +319,7 @@
   font-size: 11px;
   color: var(--nm-text-2, #94a3b8);
   background: transparent;
-  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.2));
+  border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.12));
   border-radius: var(--nm-r-xs, 6px);
   cursor: pointer;
 }
@@ -319,6 +340,7 @@
   font-size: 12px;
   font-weight: 700;
   color: var(--nm-amber, #f59e0b);
+  cursor: pointer;
 }
 
 .warnList {

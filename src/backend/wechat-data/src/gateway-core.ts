@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 195 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 212 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -15,6 +15,7 @@ import type { AskResult, DecryptStatus, ExportStatus, SummaryTaskRunResult, Whis
 import { resolveSelfUsername } from './query/config.ts'
 import { warmDecodedImages } from './query/image-warm.ts'
 import { startRealtimeSync } from './query/sync.ts'
+import { SYNC_INTERVAL_MS } from './query/sync-pacing.ts'
 import { createTasksRemotes } from './remotes/tasks.ts'
 import { createOpsLogRemotes } from './remotes/opslog.ts'
 import { createWordcloudRemotes } from './remotes/wordcloud.ts'
@@ -47,6 +48,7 @@ import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts'
 import { recordOperation } from './query/operation-log.ts'
 import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
+import { publishDataRevision } from './query/sync-status.ts'
 import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
 import { createSummaryScheduler, type SummaryScheduler } from './gateway-scheduler.ts'
@@ -214,6 +216,15 @@ export abstract class GatewayCore extends TypertRemoteService {
    */
   protected bootClawbotChannel(): void { /* 默认无 */ }
 
+  /**
+   * 子类钩子：任务触发扫描的一拍（体在 `gateway-taskcenter.ts`；默认实现什么都不做 ——
+   * 任务信息域的组装在更派生的层）。
+   *
+   * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。与 `bootClawbotChannel` 分开的理由：那个是「拉起长轮询」，
+   * 这个是「周期扫描」，生命周期与失败语义都不同（前者启动一次，后者每拍都可能失败）。
+   */
+  protected scanTaskTriggersBackground(): void { /* 默认无 */ }
+
   constructor(ctx: Context) {
     super(ctx, 'wechatData')
     this._ctx = ctx
@@ -236,6 +247,24 @@ export abstract class GatewayCore extends TypertRemoteService {
       //     （它们没法用单个文件的签名表达，见 meta.ts 的说明）。
       // 整棵树被替换的场合（全量解密）仍用 `invalidateWechatMeta()`。
       bumpDataGeneration()
+      // 对外修订（2026-10-18）：心跳级轻量读，renderer 轮询它决定要不要拉消息增量。
+      // 必须在 emit 之前发布：事件到达前端时，前端马上读修订就能读到同一拍。
+      publishDataRevision(synced)
+      // 事件先发（2026-10-18）：聊天窗口/会话列表的可见延迟只取决于这一行；
+      // 归档、SNS 预热、密钥解析都排在它后面，不许挡在通知前面。
+      try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
+      /**
+       * 任务触发扫描（2026-10-19 提速）：新分片到达即刻扫，不再等 30s 定时器。
+       * 放在 `emit` 之后 + `setTimeout(0)`：聊天刷新事件先出去，扫描的 SQL 不挡它；
+       * 单飞/合并见 `GatewayTaskCenter.scheduleTaskTriggerScan`，重复触发不会并发。
+       */
+      if (synced.length > 0) {
+        setTimeout(() => {
+          try { this.scanTaskTriggersBackground() } catch (e) {
+            console.warn('[task-trigger] 扫描触发失败:', (e as Error).message)
+          }
+        }, 0)
+      }
       /**
        * 撤回原文归档（2026-09-29，用户选 C：全量归档）——**挂在同步 tick 上，而不是读路径**。
        *
@@ -268,13 +297,19 @@ export abstract class GatewayCore extends TypertRemoteService {
         void pumpSnsDecodeCache(rawDbDir(), pair.aesKey, pair.xorKey, { maxMs: 300 })
           .catch((e) => console.warn('[sns-prewarm] 预热失败:', (e as Error).message))
       } catch (e) { console.warn('[sns-prewarm] 预热失败:', (e as Error).message) }
-      try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
     })
     ctx.effect(() => stopSync, 'wechat-data: realtime sync')
     // Daily-summary scheduler: every 30s, run any enabled task whose schedule
     // time (HH:MM) matches the current minute and has not run in the last minute.
     const schedTimer = setInterval(() => { void this.maybeRunDueTasks() }, 30_000)
     ctx.effect(() => () => { clearInterval(schedTimer) }, 'wechat-data: summary scheduler')
+    // 任务触发扫描（2026-10-19）：正常由上面的同步回调**事件驱动**（分片一变就扫），
+    // 这颗 10s 定时器只是兜底：WAL 监听没挂上（网络盘 / fs.watch 报错）时仍有新鲜度，
+    // 也顺带重试失败的 pending 回调（`scanAndDispatch` 会投递一批）。
+    // 独立一颗而不是塞进摘要调度：摘要按 HH:MM 判到点，触发按 sort_seq 判新消息，语义无关；
+    // 共用一颗时任何一侧的异常/长耗时都会把另一侧一起拖住。
+    const taskScanTimer = setInterval(() => { this.scanTaskTriggersBackground() }, SYNC_INTERVAL_MS)
+    ctx.effect(() => () => { clearInterval(taskScanTimer) }, 'wechat-data: task trigger scanner')
     // 知识库文件库的崩溃恢复：把上一个进程留下的 parsing / chunking / embedding 打回 queued。
     // **只在启动时做这一次** —— `recoverInterrupted` 自己按数据根记住「本进程已做过」，
     // 重复调用直接跳过。把这件事放进「读列表」的路径是这类功能最常见的走捷径写法，
@@ -696,6 +731,8 @@ export abstract class GatewayCore extends TypertRemoteService {
       makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
       makeRerankFn: (kbId) => this.makeRerankFn(kbId),
       makeDeltaEmitter: (streamId) => this.makeDeltaEmitter(streamId),
+      makeReasoningEmitter: (streamId) => this.makeReasoningEmitter(streamId),
+      makeStageEmitter: (streamId) => this.makeStageEmitter(streamId),
       kbModel: (kbId, role) => this.kbModel(kbId, role),
       askKnownEntities: () => this.askKnownEntities(),
       saveAskHistory: (options, result, elapsedMs, model) => this.saveAskHistory(options, result, elapsedMs, model),
@@ -854,6 +891,53 @@ export abstract class GatewayCore extends TypertRemoteService {
       if (now - last < 80) return
       last = now
       try { ctx.emit('wechat-ask/delta', { id, text }) } catch { /* 事件尽力而为，失败不影响生成 */ }
+    }
+  }
+
+  /**
+   * 构造「思考过程增量」事件推送器（2026-10-16 新增）。
+   *
+   * 与 {@link makeDeltaEmitter} 同一套节流与「推全文」约定，只是走另一条事件名 ——
+   * 思考内容与可见正文是**两条独立的流**（模型可能先吐一大段 reasoning 再吐正文），
+   * 混在一条里前端就没法把它们分开展示。
+   *
+   * 为什么需要：问答产品里「思考过程」是可折叠的一块，用户据此判断模型有没有跑偏。
+   * 后端此前把 `reasoning-delta` 直接丢掉（`runChat` 只认 `text-delta`），
+   * 于是界面上永远看不到思考 —— 不是没生成，是没接。
+   * @param streamId - 客户端生成的流式标识；为空表示不推送。
+   * @returns 增量回调（text 为**已生成的思考全文**）。
+   */
+  protected makeReasoningEmitter(streamId?: string): ((text: string) => void) | undefined {
+    const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
+    if (!id) return undefined
+    const ctx = this._ctx
+    let last = 0
+    return (text: string): void => {
+      const now = Date.now()
+      if (now - last < 80) return
+      last = now
+      try { ctx.emit('wechat-ask/reasoning', { id, text }) } catch { /* 尽力而为 */ }
+    }
+  }
+
+  /**
+   * 构造「阶段」事件推送器（2026-10-16 新增）。
+   *
+   * 问答是一条多阶段流水线（规划 → 检索 → 精排 → 生成 → 接地核对），
+   * 每个阶段都有可展示的结果（意图、召回条数、精排模型、引用条数…）。
+   * 把这些**在发生的那一刻**推给前端，界面才能像问答产品那样显示
+   * 「🔍 检索本机记录 · 召回 128 条」这样的过程行，而不是等全部跑完再一次性平铺。
+   *
+   * 不节流：阶段是离散事件（一轮最多 6 条），节流只会让「进行中」的状态跳帧。
+   * @param streamId - 客户端生成的流式标识；为空表示不推送。
+   * @returns 阶段回调。
+   */
+  protected makeStageEmitter(streamId?: string): ((stage: { key: string; label: string; status: 'running' | 'done' | 'skipped'; detail?: string }) => void) | undefined {
+    const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
+    if (!id) return undefined
+    const ctx = this._ctx
+    return (stage): void => {
+      try { ctx.emit('wechat-ask/stage', { id, ...stage }) } catch { /* 尽力而为 */ }
     }
   }
 

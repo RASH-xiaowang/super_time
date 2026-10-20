@@ -24,7 +24,8 @@ export type CiteTarget =
 
 /** 判定所需的字段子集（三个调用点的 `AskCitation` 都满足）。 */
 export interface CiteLike {
-  source?: 'msg' | 'kb'
+  /** 来源域。`agg` 是聚合统计事实（没有会话、没有发生时间）—— 它**不可跳转**。 */
+  source?: 'msg' | 'kb' | 'agg'
   username?: string
   local_id?: number
   kb?: { kbId?: number; fileId?: number }
@@ -45,6 +46,9 @@ function posInt(v: unknown): number | null {
  * @returns 点击目标；信息不全时返回 `null`。
  */
 export function citeTarget(c: CiteLike): CiteTarget | null {
+  // 聚合统计事实（`agg`）没有会话、没有发生时间 —— 它是一条**算出来的结论**，
+  // 不是某条原文。点它没有可去的地方，所以判不可跳（渲染成只读块）。
+  if (c.source === 'agg') return null
   if (c.source === 'kb') {
     const kbId = posInt(c.kb?.kbId)
     const fileId = posInt(c.kb?.fileId)

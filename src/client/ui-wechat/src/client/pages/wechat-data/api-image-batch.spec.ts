@@ -122,6 +122,23 @@ describe('N16：列表型取图走批量入口（合并窗口在 api 层）', ()
     expect(stub.batches.length).toBe(1)
     expect(stub.singles.length).toBe(0)
   })
+
+  it('fileOnly=true 随批量请求下发；有 file 的条目转成 wechat-media://（首载不再回传 base64）', async () => {
+    const calls: Array<{ items: Array<{ username: string; localId: number }>; fileOnly?: boolean }> = []
+    setWechatRemote({
+      getImageDataUrlsBatch: async (options: { items: Array<{ username: string; localId: number }>; fileOnly?: boolean }) => {
+        calls.push(options)
+        return { ok: true as const, value: { items: options.items.map(it => ({ ...it, file: 'wxid_a/x.jpg' })) } }
+      },
+    } as unknown as WechatRemote)
+    const rows = await apiGetImageDataUrlsBatch([{ username: 'wxid_a', localId: 1 }])
+    expect(calls[0]!.fileOnly).toBe(true)
+    expect(rows[0]!.url).toBe('wechat-media://decoded/wxid_a/x.jpg')
+    const single = await apiGetImageDataUrl({ username: 'wxid_a', localId: 2 })
+    expect(calls.length).toBe(2)
+    expect(calls[1]!.fileOnly).toBe(true)
+    expect(single.url).toBe('wechat-media://decoded/wxid_a/x.jpg')
+  })
 })
 
 describe('M3：jobId / 取消 / 进度三条 RPC 的前端镜像', () => {

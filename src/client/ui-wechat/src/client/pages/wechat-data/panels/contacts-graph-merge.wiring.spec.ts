@@ -94,7 +94,9 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     // 精确钉住而不是写 `>= 15`：README 那个数字就是靠模糊口径长期停在错误值上。
     const inGroups = visible.filter(t => t !== 'settings')
     // 2026-10-12：ClawBot 集成新增一个可见入口（16 → 17）。
-    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(17)
+    // 2026-10-17：朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口（17 → 14）。
+    // 2026-10-19：新增「任务信息」可见入口（14 → 15）。
+    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(15)
     expect(visible, '「设置」仍应作为底部入口留在 NAV_GROUPS 里（图标来源）').toContain('settings')
   })
 
@@ -189,26 +191,40 @@ describe('无功能丢失：通讯录原有的四个 props 全部透传', () => 
     // 迁移只动导航与外壳；这些是「功能没丢」的锚点。知识笔记编辑器（variant='knowledge'
     // 才用得到）与社交侧同在 Graph.tsx 里，一并留在锚点里 —— 顺带证明这次没有把 Graph.tsx
     // 按 variant 拆成两个文件（拆了就会让两套面板各有一份状态，社交侧的历史布局缓存也会分叉）。
-    for (const anchor of ['<GraphCanvas', 'legendLineBlueDash', 'doExportPoster', 'doExportSvg', 'KnowledgeNoteEditor', '最亲近 · 消息量']) {
+    //
+    // 2026-10-16：右侧控制栏抽成了 `GraphRail.tsx`（`GraphPanel` 撞 250 行函数棘轮），
+    // 所以「最亲近 · 消息量」这个锚点改到新文件里查 —— 它仍在，只是换了住处。
+    for (const anchor of ['<GraphCanvas', 'legendLineBlueDash', 'doExportPoster', 'doExportSvg', 'KnowledgeNoteEditor', '<GraphRail']) {
       expect(graphPanel, `Graph.tsx 少了 ${anchor}`).toContain(anchor)
     }
+    const rail = readFileSync(join(HERE, 'GraphRail.tsx'), 'utf8')
+    expect(rail, 'GraphRail.tsx 少了 最亲近 · 消息量').toContain('最亲近 · 消息量')
   })
 })
 
 describe('小屏适配：并入后补的两条断点仍在', () => {
-  it('图谱主体在 ≤900px 纵向堆叠，且控制栏允许收缩（否则把画布顶出容器）', () => {
+  it('图谱主体在 ≤900px 保留画布高度地板（控制栏改悬浮层后不再需要纵向堆叠）', () => {
     const block = graphCss.slice(graphCss.indexOf('@media (max-width: 900px)'))
     expect(block, '缺少 900px 断点').not.toBe('')
-    expect(block).toMatch(/\.body \{ flex-direction: column; \}/)
-    expect(block, '控制栏缺 max-height 会按内容高度溢出').toMatch(/max-height: 45%/)
-    expect(block, '控制栏 flex-shrink 必须放开（原为 0）').toMatch(/flex-shrink: 1;/)
+    // 2026-10-16：控制栏从「固定 252px 右栏」改成**悬浮层**（绝对定位、不占布局宽度），
+    // 所以原先那套「纵向堆叠 + 控制栏允许收缩」的补偿**不再需要**（画布永远独占整宽）。
+    // 保留的只有画布高度地板 —— 防止父容器高度不足时画布被压成 0。
     expect(block, '画布需要高度地板').toMatch(/\.stage \{ min-height: 260px; \}/)
+    expect(block, '控制栏已是悬浮层，不该再有纵向堆叠的补偿').not.toMatch(/\.body \{ flex-direction: column; \}/)
   })
 
-  it('通讯录的 A–Z 索引栏在 ≤700px 隐藏（窄屏网格退化后它会压住卡片）', () => {
+  it('通讯录的 A–Z 索引栏在 ≤700px 改为列表上方的横向条（Wave 2：不许整条消失）', () => {
     const block = contactsCss.slice(contactsCss.indexOf('@media (max-width: 700px)'))
     expect(block).not.toBe('')
-    expect(block).toMatch(/\.indexBar \{ display: none; \}/)
+    // 2026-10-18 Wave 2（响应式审计 hidden high / 方案 §2.1）：原先是 `display: none`，
+    // 390 档字母索引整条消失。现在改为列表上方的横向字母条：`position: static` 占位、
+    // 横向可滚、字母热区 24×24，窄屏「按首字母扫一遍」的能力仍在（宽屏竖排形态不变）。
+    expect(block, '索引栏窄屏不许再整条隐藏').not.toMatch(/\.indexBar \{ display: none; \}/)
+    const indexBar = block.slice(block.indexOf('.indexBar {'), block.indexOf('.indexLetter {'))
+    expect(indexBar, '窄屏索引栏要变成横向条').toMatch(/display: flex;/)
+    expect(indexBar, '必须脱离 absolute 才能作为工具带占位').toMatch(/position: static;/)
+    expect(indexBar, '横向排列').toMatch(/flex-direction: row;/)
+    expect(indexBar, '字母多时横向滚动').toMatch(/overflow-x: auto;/)
   })
 
   it('宽屏行为不受影响：900px 断点是 max-width，桌面档不命中', () => {
@@ -217,11 +233,14 @@ describe('小屏适配：并入后补的两条断点仍在', () => {
     expect(graphCss).not.toContain('@media (min-width: 900px)')
   })
 
-  it('画布内两个底部浮层在窄屏不互压：图例换行占满宽、小地图挪到右上', () => {
+  it('画布内浮层在窄屏不互压：图例换行占满宽、小地图挪到左上（避开右上角的折叠按钮）', () => {
     // 实测（430px × 900，CDP 探针 + 截图）：并入之后画布能从 ~108px 恢复到整宽，
     // 但底部两个绝对定位浮层会撞在一起 —— 图例（单行胶囊、无 flex-wrap）被压成
     // 「一个字一行」的竖条，148px 的小地图（z-index:5）正压在上面。
     // 只改 .body 的纵排解决不了：它们是 .stage 的子元素，与两栏/一栏无关。
+    //
+    // 2026-10-16：控制栏改悬浮层后，右上角被「⚙ 参数」折叠按钮占了 ⇒ 小地图从右上
+    // 改到**左上**（四个角：左下=图例、右下=空、右上=折叠按钮、左上=空）。
     const block = graphCss.slice(graphCss.indexOf('@media (max-width: 820px)'))
     expect(block, '缺少 820px 的浮层避让断点').not.toBe('')
     // 只取**规则体**，不要把注释也算进来 —— 注释里引用了被否掉的写法（`width: 104px`），
@@ -237,7 +256,9 @@ describe('小屏适配：并入后补的两条断点仍在', () => {
     expect(legend, '图例缺 flex-wrap，单行胶囊换不了行').toMatch(/flex-wrap:\s*wrap/)
     const mini = ruleBody('.minimap')
     expect(mini, '小地图仍留在底部会压住图例').toMatch(/bottom:\s*auto/)
-    expect(mini, '小地图需要换到上部（top）').toMatch(/top:\s*8px/)
+    expect(mini, '小地图需要换到左上（右上被折叠按钮占了）').toMatch(/top:\s*8px/)
+    expect(mini, '小地图必须靠左：右上角是「⚙ 参数」按钮，靠右会重叠').toMatch(/left:\s*8px/)
+    expect(mini, '小地图不能同时靠右（会与折叠按钮重叠）').toMatch(/right:\s*auto/)
     // 小地图的**尺寸**不能在这里改：GraphCanvas.tsx 把 148×96（连同 dpr 位图）
     // 写成行内样式，行内优先级高于选择器 → 这里写 width/height 是死代码（实测量到仍是 148×96）。
     // 这条断言是防「下一个人以为是漏写了尺寸、又加回来」。
@@ -246,6 +267,17 @@ describe('小屏适配：并入后补的两条断点仍在', () => {
     // 两个浮层都必须保留（这是避让，不是隐藏 —— 隐藏会丢信息）
     expect(block, '图例被隐藏了：这是避让改动，不该丢信息').not.toMatch(/\.legend\s*\{[^}]*display:\s*none/)
     expect(block, '小地图被隐藏了：这是避让改动，不该丢信息').not.toMatch(/\.minimap\s*\{[^}]*display:\s*none/)
+  })
+
+  it('参数浮层展开时小地图让位（浮层 z-index 20 会盖住它，半遮半掩不如收起）', () => {
+    // 浮层是 `right:10px; bottom:10px`，小地图是 `right:12px; bottom:12px` —— 桌面档
+    // 两者必然重叠，而浮层 z-index 20 > 小地图 5 ⇒ 小地图被压掉一半。
+    const graphPanel = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
+    expect(graphPanel, '没把 railOpen 传给画布 ⇒ 浮层展开时小地图被压掉一半')
+      .toMatch(/hideMinimap=\{railOpen\}/)
+    const host = readFileSync(join(HERE, 'graph-canvas-host.tsx'), 'utf8')
+    expect(host, '画布没把 hideMinimap 落到 DOM 上').toMatch(/data-hidden=\{hideMinimap \|\| undefined\}/)
+    expect(graphCss, '缺 .minimap[data-hidden] 的隐藏规则').toMatch(/\.minimap\[data-hidden\] \{ display: none; \}/)
   })
 })
 
@@ -273,13 +305,14 @@ describe('用户可见的计数声明不再静默漂移（这次迁移会改到�
     ).toBe(String(renderedInGroups.length))
   })
 
-  it('历次导航变更的净效果是 17（钉住这个数字，不用范围）', () => {
+  it('历次导航变更的净效果是 14（钉住这个数字，不用范围）', () => {
     // 口径沿革：并入社交图谱前 17（含独立可见的 graph）
     // → 2026-09-17 并入后 16 → 新增「知识库」(kb) 后 17
     // → 2026-09-18 知识图谱并入知识库（knowledge 转 hidden）后 16
-    // → 2026-10-12 新增「ClawBot」后 **17**。
+    // → 2026-10-12 新增「ClawBot」后 **17**
+    // → 2026-10-17 朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口后 **14** → 2026-10-19 新增「任务信息」后 **15**。
     // 写成精确值而不是范围 —— 范围断言正是这个数字上次能长期漂着的原因。
-    expect(renderedInGroups.length).toBe(17)
+    expect(renderedInGroups.length).toBe(15)
     for (const t of ['graph', 'knowledge'] as const) {
       expect(renderedInGroups, `${t} 不该再出现在侧栏分组里`).not.toContain(t)
       // 但两者必须仍是**合法 tab** —— 这是深链与段条第二段的前提

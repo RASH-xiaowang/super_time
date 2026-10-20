@@ -1,0 +1,153 @@
+/* ============================================================
+ * Super Time 启动页 — 舞台（2026-10-19 微信化改版）
+ *
+ * 这一份只管**外壳**：灰底画布、顶栏（页面导航 + 主题切换）、可滚内容区、底栏。
+ * 内容页排版在 `onboarding-stages.module.css`，壳的零件在 `onboarding.module.css`。
+ *
+ * 与 2026-10-17 那版的区别（用户要求「微信官方定调：简洁、克制、一致」）：
+ *   · 取消固定 1180×760 舞台与等比缩放 —— 改成自适应单列：内容列 max-width 760、
+ *     超出上下滚动（见 `.body` 的 1180 画布 + `onboarding.module.css` 里的 760 内容列）；
+ *   · 删除全部背景层（四张全屏图 / 极光 / 网格 / 扫描线 / 粒子 / HUD 角 / 几何圆环）；
+ *   · 顶栏与底栏去掉毛玻璃、渐变与霓虹分隔线，只留 1px 分隔线；
+ *   · 只允许 ≤1100 / ≤900 / ≤720 三档视口断点（`first-impressions-tokens.spec.ts` 盯着）。
+ *
+ * ⚠️ 类名不许跨份（`onboarding-css-split.wiring.spec.ts` 的 ① 会咬）：
+ * 本文件里的 `.stage` / `.shell` / `.top` / `.body` / `.footer` 等**只在这里定义**。
+ * ============================================================ */
+
+/* ── 舞台：相对 #root 铺满 ─────────────────────────────────
+ *
+ * `#root` 是 `body` 的 flex 子项且有 `position: relative`（见 `titlebar.css`），
+ * 所以 `inset: 0` 相对的是**标题栏下方那块**，不会盖住 38px 的自绘标题栏。
+ */
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: var(--nm-bg-0);
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-sans);
+}
+
+.shell {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--nm-bg-0);
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-sans);
+}
+
+/* ── 顶栏：页面导航 + 主题切换 ──────────────────────────── */
+.top {
+  flex: 0 0 auto;
+  background: var(--nm-bg-1);
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.topInner {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 6px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.toolBtn {
+  appearance: none;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.toolBtn:hover {
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+}
+
+.toolBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+
+/* ── 内容区：单滚动 ─────────────────────────────────────── */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--nm-border-hover) transparent;
+}
+
+.body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── 底栏：只有「第 X 步 / 共 N 步」+ 上一步 / 下一步 ───── */
+.footer {
+  flex: 0 0 auto;
+  background: var(--nm-bg-1);
+  border-top: 1px solid var(--nm-border);
+}
+
+.footerInner {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .body {
+    padding: 16px 14px 20px;
+  }
+
+  .topInner,
+  .footerInner {
+    padding: 4px 12px;
+  }
+}
+
+@media (max-width: 720px) {
+  .topInner {
+    gap: 8px;
+  }
+
+  .footerInner {
+    gap: 8px;
+  }
+}

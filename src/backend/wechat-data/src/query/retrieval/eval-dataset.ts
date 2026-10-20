@@ -306,9 +306,9 @@ export function syntheticRetrieve(c: EvalCase, opts: SyntheticEvalOptions = {}):
     now: SYNTHETIC_NOW,
   })
   const channels: ChannelResult[] = []
-  if (opts.sparseEnabled !== false) channels.push(sparseChannel(plan.terms, SYNTHETIC_CORPUS, policy.channelTopK.sparse))
-  if (opts.denseEnabled !== false) channels.push(denseChannel(plan.normalized, SYNTHETIC_CORPUS, policy.channelTopK.dense, 0.15))
-  if (opts.structuredEnabled !== false) channels.push(structuredChannel(plan.entity, plan.from, plan.to, SYNTHETIC_CORPUS, policy.channelTopK.structured))
+  if (opts.sparseEnabled !== false) channels.push(sparseChannel(plan.terms, SYNTHETIC_CORPUS, policy.channelTopK.sparse ?? 0))
+  if (opts.denseEnabled !== false) channels.push(denseChannel(plan.normalized, SYNTHETIC_CORPUS, policy.channelTopK.dense ?? 0, 0.15))
+  if (opts.structuredEnabled !== false) channels.push(structuredChannel(plan.entity, plan.from, plan.to, SYNTHETIC_CORPUS, policy.channelTopK.structured ?? 0))
 
   const fused = dedupeFused(fuseResults(channels, 60, 120), 0.85)
   const ranked = rerankDocs({

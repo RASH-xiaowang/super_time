@@ -71,7 +71,11 @@ describe('① 地理 SVG 已移除，且不许复活', () => {
 
 describe('② 世界层：ECharts 不等数据', () => {
   it('showWorldEcharts 不再要求 map', () => {
-    expect(MAP, '又退回「等数据才画」了').toMatch(/const showWorldEcharts = worldEchartsReady\s*$/m)
+    // 2026-10-16：条件从「世界层」扩到「世界层 + 非中国的国家层」，但**必须**排除
+    // 中国层（有自己的省级地图）与省 / 市层（有自己的市级 / 区级地图），否则会叠两张地图。
+    // 判据抽成了模块级纯函数 `shouldShowWorldEcharts`，这里同时钉住函数体与调用点。
+    expect(MAP, '又退回「等数据才画」了').toMatch(/return ready && \(onWorldMap \|\| \(!chinaMode && !provinceMode && !cityMode\)\)/)
+    expect(MAP, '调用点没接上纯函数').toContain('shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)')
     expect(MAP.includes('worldEchartsReady && map !== null'), '不该再要求 map').toBe(false)
   })
 
@@ -79,11 +83,14 @@ describe('② 世界层：ECharts 不等数据', () => {
     expect(MAP).toContain('{showWorldEcharts && (')
     expect(MAP.includes('{map && showWorldEcharts && ('), '不该再等数据').toBe(false)
     expect(MAP, '缺空世界节点').toMatch(/const EMPTY_WORLD: RegionNode = \{ key: 'world'/)
-    expect(MAP, 'node 没做空值回退').toContain('node={map?.world ?? EMPTY_WORLD}')
+    // 2026-10-16：`node` 改成三元（世界层传世界节点、国家层传该国节点），
+    // 空值兜底仍在世界层那一支（`world` 是 `map?.world` 的入参）。
+    expect(MAP, 'node 没做空值回退').toContain('world ?? EMPTY_WORLD')
   })
 
   it('childByKey 也要防空（否则数据没到时直接崩）', () => {
-    expect(MAP).toContain('worldChildByName(map?.world.children ?? [], key)')
+    // 2026-10-16：世界地图那段 JSX 搬进了 `WorldEchartsStage`，`map?.world` 变成入参 `world`。
+    expect(MAP).toContain('worldChildByName(world?.children ?? [], key)')
   })
 })
 
@@ -112,7 +119,9 @@ describe('③ 底图拉不到时给明确说明，不留空白', () => {
 
 describe('④ 中国层 ECharts 起不来 → treemap', () => {
   it('showTreemap 把 chinaFallback 也算进去', () => {
-    expect(MAP).toMatch(/const showTreemap = !onWorldMap && \(!chinaMode \|\| chinaFallback\) && !showProvinceMap && !showCityMap/)
+    // 2026-10-16：国家层不再走 treemap（它留在世界地图上，见 `worldEchartsReady` 的说明），
+    // 所以条件里多了 `!showWorldEcharts`；`chinaFallback` 那一支仍在。
+    expect(MAP).toMatch(/const showTreemap = !onWorldMap && !chinaMode && !showProvinceMap && !showCityMap && !showWorldEcharts/)
   })
 
   it('fallbackWorldEcharts 仍在（ECharts 失败时标记底图不可用）', () => {
@@ -134,7 +143,8 @@ describe('⑤ 取数口不再问开关（出网开关与本地镜像都已删除
     // 现在取数从后端 `getMapGeoJson` 走，渲染层文件里不许再有裸 fetch。
     expect(DATA, '取数口里又长回了底图闸门').not.toContain('mapTilesBlocked')
     expect(DATA, '取数口里又长回了本地镜像').not.toContain('readMapTilesFlag')
-    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,240}await apiGetMapGeoJson\(urls\)/)
+    // 2026-10-18：取数口加了对 REMOTE_BUSY 的退避重试（try/catch 包住调用），窗口放宽到 700。
+    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,700}await apiGetMapGeoJson\(urls\)/)
     expect(DATA, '渲染层又直接 fetch 地图地址').not.toMatch(/\bawait fetch\(/)
     expect(MAP, 'WorldMap 又去问隐私开关了').not.toContain('apiGetPrivacyState')
   })
@@ -150,6 +160,19 @@ describe('⑤ 取数口不再问开关（出网开关与本地镜像都已删除
   it('防空转：两个文件都真读到了', () => {
     atLeast(MAP.length, 5000, 'WorldMap.tsx 源码')
     atLeast(DATA.length, 2000, 'world-map-data.ts 源码')
+  })
+
+  it('底图 GeoJSON 有内存缓存，且只缓存成功结果', () => {
+    // 2026-10-16：`ChinaMap` / `ProvinceMap` 都不传 `geo`，每次挂载都要 `fetchFirstJson`。
+    // 底图是静态资源，重复出网既慢又给了「网络抖动 ⇒ 地图空白」的机会
+    // （实测下钻中国层偶发空白，就是这一次 fetch 失败触发了 `onFallback`）。
+    expect(DATA, '底图取数没有缓存').toMatch(/const GEO_CACHE = new Map<string, unknown>\(\)/)
+    expect(DATA, '缓存命中没短路').toMatch(/const hit = GEO_CACHE\.get\(key\)\s*\n\s*if \(hit !== undefined\) return hit/)
+    // ⚠️ 失败**不写缓存** —— 否则一次抖动会让该层永久空白。
+    // 2026-10-18：取数口加了对 REMOTE_BUSY 的退避重试，成功写入被挪进 `if (result.ok)`
+    // 分支 —— 判据改成「只有 ok 分支写缓存」，并确认 catch（失败）里没有写缓存。
+    expect(DATA, '失败也写进了缓存').toMatch(/if \(result\.ok\) \{\s*\n\s*GEO_CACHE\.set\(key, result\.data\)\s*\n\s*return result\.data/)
+    expect(DATA, '失败分支里写了缓存').not.toMatch(/catch \(e\) \{[\s\S]{0,220}GEO_CACHE\.set\(/)
   })
 })
 

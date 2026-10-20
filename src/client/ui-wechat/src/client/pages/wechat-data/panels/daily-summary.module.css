@@ -17,7 +17,7 @@
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
-/* 标签页 */
+/* 标签栏 */
 .tabBar { display: flex; gap: var(--nm-dense-g3); flex-wrap: wrap; }
 .tabBtn {
   padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill);
@@ -57,8 +57,8 @@
 .sideList { display: flex; flex-direction: column; gap: var(--nm-dense-g3); padding: var(--nm-dense-g4) var(--nm-dense-pad-x); }
 
 /* 任务 / 记录行。
-   改前：.taskInfo 是纵向三行（名称 / 元信息 / 徽标），一行信息吃掉三行高度；
-   改后：名称、元信息、徽标全部排在**同一行**，窄到放不下才 wrap（换行是兜底，不是默认）。
+   改前：`taskInfo` 是纵向三行（名称 / 元信息 / 徽标），一行信息吃掉三行高度；
+   改后：名称、元信息、徽标全部排成**同一行**，窄到放不下才 wrap（换行是兜底，不是默认），
    行高从约 74px 降到约 27px。 */
 .taskRow {
   display: flex; align-items: center; gap: var(--nm-dense-g3); flex-wrap: wrap;
@@ -109,12 +109,12 @@
 /* 双栏布局 */
 .dsLayout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--nm-dense-g5); flex: 1; min-height: 0; }
 @media (max-width: 1100px) { .dsLayout { grid-template-columns: 1fr; } }
-/* 「手动生成」只有主栏（无右侧预览栏），双栏网格会空占 380px 把内容挤窄 */
+/* 「手动生成」只有主栏（无右侧预览栏），双栏网格会空出 380px 把内容挤窄。 */
 .dsLayoutSingle { grid-template-columns: minmax(0, 1fr); }
 .dsMain { display: flex; flex-direction: column; gap: var(--nm-dense-g5); min-width: 0; min-height: 0; overflow-y: auto; }
 .dsSide { display: flex; flex-direction: column; gap: var(--nm-dense-g5); min-width: 0; min-height: 0; overflow-y: auto; }
 
-/* 总结预览卡 */
+/* 总结预览 */
 .previewCard {
   border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card); overflow: hidden;
@@ -145,7 +145,7 @@
 }
 .previewActions { display: flex; gap: var(--nm-dense-g3); padding: 0 var(--nm-dense-pad-x) var(--nm-dense-pad-y); }
 
-/* 生成卡 */
+/* 生成区 */
 .panelCard {
   border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card); overflow: hidden;
@@ -251,10 +251,10 @@
 
 @keyframes dshSpin { to { transform: rotate(360deg); } }
 
-/* ── 第 93 轮：原来写在 TSX 行内样式里的静态布局，搬到此处 ──────────────
-   声明逐字搬运，只有一处例外：成员多选区的 `gap: 5px` 不在间距刻度上
+/* ── 第 93 轮：原来写在 TSX 行内样式里的静态布局，搬到此文件 ──────────────
+   声明逐字搬运，只有一处例外：成员多选区的 `gap: 5px` 不在间距刻度
    （2/3/4/6/8/10/12/14/16），搬进 CSS 就会被 `audit:scale` 拦下，
-   所以取最近的刻度值 6px（视觉几乎无差）。 */
+   所以取最近的刻度 6px（视觉几乎无差）。 */
 .dsNewBtn { align-self: center; }
 .dsSearchWrap { margin-bottom: var(--nm-dense-g3); }
 .dsToolbarTop { margin-top: var(--nm-dense-g4); }
@@ -268,10 +268,10 @@
 .dsPrompt { resize: vertical; font-family: inherit; line-height: 1.6; }
 .dsScheduleRow { display: flex; gap: var(--nm-dense-g4); align-items: center; }
 
-/* ── 全新用户的落地卡（0 任务 0 记录）────────────────────────────────
-   此前这里是"一张空卡 + 一句'还没有定时任务'"，下方 470px 全是空白，
+/* ── 全新用户的落地卡（任务 0 记录）────────────────────────────────
+   此前这里是「一张空态 + 一句『还没有定时任务』」，下方 470px 全是空白；
    而用户最需要知道的一件事 —— **总结要靠模型生成，没配模型点了必然失败** —— 一个字都没有。
-   两张卡并排填满整行：左"三步开始"，右"总结长什么样"。 */
+   两张卡并排填满整行：左「三步开始」，右「总结长什么样」。 */
 .dsStart {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
@@ -305,8 +305,8 @@
   background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
 }
-/* 一步一行：标题与说明并排（改前是上下两行）。放不下时 wrap，不截断 ——
-   这里会出现「尚未配置 —— 总结由模型生成」这类必须看全的提示。 */
+/* 一步一行：标题与说明并排（改前是上下两行）。放不下才 wrap，不截断 ——
+   这里会出现「尚未配置 — 总结由模型生成」这类必须看全的提示。 */
 .dsStepBody { display: flex; flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: var(--nm-dense-g3); min-width: 0; flex: 1; }
 .dsStepName { flex: 0 0 auto; font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1); }
 .dsStepMeta { min-width: 0; font-size: var(--nm-dense-fs-sm); line-height: var(--nm-dense-lh); color: var(--nm-text-2); }
@@ -315,8 +315,8 @@
 .dsStartList b { color: var(--nm-text-1); font-weight: 600; }
 
 /* 行内动作按钮：一行里最多并排 5 个（运行/编辑/复制/启停/删除），
-   比表单里的 .catBtn 再紧一档，否则按钮组会把名称和徽标挤到换行。 */
+   比表单里的 `.catBtn` 再紧一档，否则按钮组会把名称和徽标挤到换行。 */
 .taskActions .catBtn { padding: 2px 8px; }
 
-/* 阅览页的空态：给一个"去生成"的出口，而不是一句"还没有历史总结"就结束 */
+/* 阅览页的空态：给一个「去生成」的出口，而不是一句『还没有历史总结』就结束。 */
 .dsEmptyRecords { display: flex; flex-direction: column; align-items: center; gap: var(--nm-dense-g3); padding: var(--nm-dense-g3) 0 var(--nm-dense-g5); }

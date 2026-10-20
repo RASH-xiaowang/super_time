@@ -61,8 +61,20 @@ describe('panel-loaders：按 tab 懒加载不能被重新长回静态入口', (
     const entries = loaderEntries(LOADERS)
     const render = sliceBetween(SHELL, 'function renderTab(', '\nconst DIALOG_SECTION_OF:', 'renderTab 函数')
     const used = [...new Set([...render.matchAll(/<([A-Z][A-Za-z0-9]*)(?=[\s/])/g)].map((m) => m[1] ?? ''))].sort()
-    const expected = [...new Set(entries.map((e) => e.name).filter((n) => n !== 'SettingsPanel')), 'MergedSections'].sort()
-    atLeast(used.length, 29, 'renderTab 的面板调用数')
+    /*
+     * ⚠️ 2026-10-17：`PrivacyPanel` 从 renderTab 移出（隐私体检迁进「设置」弹窗，
+     * 改由 `Settings.tsx` 消费）。它仍在 loader 里（懒加载边界不变），但不再出现在
+     * renderTab 的组件集合里 —— 所以要从 expected 里排除。
+     * 这类「由别的面板消费的 loader」都记在这里，别逐个写 if。
+     *
+     * ⚠️ 2026-10-17 同日：`DailySummaryPanel` / `PeriodSummaryPanel` 合并成
+     * `SummaryWorkbench`（一个时间范围驱动的工作台）。两个旧 loader 保留导出
+     * （删导出会连带改一堆守卫断言），但 renderTab 里只剩 `SummaryWorkbench`。
+     */
+    const CONSUMED_ELSEWHERE = new Set(['SettingsPanel', 'PrivacyPanel', 'DailySummaryPanel', 'PeriodSummaryPanel'])
+    const expected = [...new Set(entries.map((e) => e.name).filter((n) => !CONSUMED_ELSEWHERE.has(n))), 'MergedSections'].sort()
+    // 27 = 合并前 28 个面板 − 2 个旧总结面板 + 1 个 SummaryWorkbench。
+    atLeast(used.length, 27, 'renderTab 的面板调用数')
     expect(used, 'renderTab 的面板集合与 loader 不一致：少接的会落占位页，多出的会被静态打包').toEqual(expected)
   })
 

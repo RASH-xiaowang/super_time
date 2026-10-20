@@ -1,10 +1,11 @@
 /* 聊天信息「官方行语法」样式（D0，2026-10-13 微信对齐）。
-   独立成份：chats-rows 已近 M21 的 1000 行上限；行语法/只读开关自成一族（chats-info-rows.tsx 消费）。
-   官方列表行：标签左 12 / 值右 14 / 行高 44–56 / 1px 分隔。圆角与开关全走令牌
-   （theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。 */
+   独立成份：chats-rows 已近 M21 的 1000 行上限；行语法自成一族（chats-info-rows.tsx 消费）。
+   官方列表行：标签左 12 / 值右 14 / 行高 44–56 / 1px 分隔。圆角全走令牌
+   （theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。
+   2026-10-19：只读开关那一族（.infoSwitch / .infoSwitchKnob）随区③ 四行一起删除。 */
 /* ── 聊天信息行语法（D0，2026-10-13 微信对齐）─────────────────────
    官方列表行：标签左 12 / 值右 14 / 行高 44–56 / 1px 分隔。两抽屉共用（chats-info-rows.tsx）。
-   圆角/开关全走令牌（theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。 */
+   圆角全走令牌（theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。 */
 .infoRow {
   display: flex;
   align-items: center;
@@ -41,23 +42,3 @@
   font-size: var(--wx-info-meta, 12px);
   color: var(--nm-text-3);
 }
-/* 只读开关（L13 死控件纪律）：视觉是官方 switch，交互刻意关闭（span + aria-disabled）。 */
-.infoSwitch {
-  position: relative;
-  flex-shrink: 0;
-  width: 28px;
-  height: 16px;
-  border-radius: var(--nm-r-pill, 999px);
-  background: var(--nm-bg-hover, #222222);
-}
-.infoSwitch[data-on='true'] { background: color-mix(in srgb, var(--nm-success) 55%, transparent); }
-.infoSwitchKnob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: var(--nm-r-pill, 999px);
-  background: var(--nm-text-3);
-}
-.infoSwitch[data-on='true'] .infoSwitchKnob { left: 14px; background: var(--nm-bg-card, #ffffff); }

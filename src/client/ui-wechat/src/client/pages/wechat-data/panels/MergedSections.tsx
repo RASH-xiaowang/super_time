@@ -15,7 +15,15 @@ import css from './merged.module.css'
 export interface MergedSection {
   key: string
   label: string
-  render: () => ReactNode
+  /**
+   * 渲染该分段。
+   *
+   * `go` 让面板能**主动跳到另一个分段**（2026-10-17 新增）：
+   * 知识库空态里的「从文件沉淀 →」需要把用户送到「文件」分段，
+   * 而分段状态在本组件里 —— 不传这个回调，面板就只能干看着。
+   * @param go - 切到指定分段（key 不存在时忽略）。
+   */
+  render: (go: (key: string) => void) => ReactNode
 }
 
 /**
@@ -41,6 +49,8 @@ export function MergedSections({ sections, initial, ariaLabel, trailing }: {
   // 一个分区都没有就没有东西可渲染（调用方恒给至少一个）—— 这里不兜第一个分区，
   // 因为 `current.key` / `current.render()` 拿一个不存在的分区当默认会白屏且无声。
   if (!current) return null
+  /** 面板主动跳分段：key 不存在时忽略（不报错、不白屏）。 */
+  const go = (key: string): void => { if (sections.some(s => s.key === key)) setActive(key) }
   return (
     <div className={css.root}>
       <div className={css.bar}>
@@ -52,7 +62,7 @@ export function MergedSections({ sections, initial, ariaLabel, trailing }: {
         />
         {trailing && <div className={css.trailing}>{trailing}</div>}
       </div>
-      <div className={css.body}>{current.render()}</div>
+      <div className={css.body}>{current.render(go)}</div>
     </div>
   )
 }

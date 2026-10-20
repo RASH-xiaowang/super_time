@@ -140,10 +140,14 @@ describe('sync.ts 的接线（源码锚点）', () => {
     expect(SRC, '还有直接 copyFile 的 staging 拷贝').not.toContain('await copyFile(')
   })
 
-  it('staging 打开全部走 stageOpenRetry（sync.ts 读源库/写产物 2 处 + sqlcipher-wal.ts WAL 补丁 1 处），open 直用已移除', () => {
-    const sites = (SRC.match(/await stageOpenRetry\(/g) ?? []).length
+  it('staging 打开全部走 stageOpenRetry（sync-decrypt.ts 读源库/写产物 2 处 + sqlcipher-wal.ts WAL 补丁 1 处），open 直用已移除', () => {
+    // 2026-10-18：fullDecryptFile 从 sync.ts 搬到 sync-decrypt.ts（m21 行数上限）。
+    const DEC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/query/sync-decrypt.ts'), 'utf8')
+    expect(DEC.length, 'sync-decrypt.ts 没读到').toBeGreaterThan(500)
+    const sites = (DEC.match(/await stageOpenRetry\(/g) ?? []).length
     expect(sites, 'staging 打开的接线点数量变了（应 2 处：读源库 / 写产物；WAL 补丁句柄已随 2026-10-13 拆到 sqlcipher-wal.ts）').toBe(2)
-    expect(SRC, '还有直接 open 的 staging 打开').not.toContain('await open(')
+    expect(DEC, '还有直接 open 的 staging 打开').not.toContain('await open(')
+    expect(SRC, 'sync.ts 里不该再留 staging 打开（fullDecryptFile 已搬走）').not.toContain('await stageOpenRetry(')
     const WAL = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/query/sqlcipher-wal.ts'), 'utf8')
     expect(WAL.length, 'sqlcipher-wal.ts 没读到').toBeGreaterThan(500)
     expect((WAL.match(/await stageOpenRetry\(/g) ?? []).length, 'WAL 补丁句柄必须走 stageOpenRetry').toBe(1)

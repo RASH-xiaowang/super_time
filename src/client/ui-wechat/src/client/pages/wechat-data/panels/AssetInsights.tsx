@@ -1,15 +1,45 @@
 /**
- * 收藏/表情资产洞察 — 收藏类型与年份分布、表情包/文案规模、最常使用的
- * 表情 md5 排行。全部本机离线计算。
+ * 收藏/表情统计 — 内联 KPI 条 + 2 张分布图。
+ * 全部本机离线计算。
+ *
+ * 微信化精简（本轮）：
+ *   · 3 张 StatCard → 一条内联 KPI 条（40–46px，四个计数并排）；
+ *   · 「常用表情 Top 10」列表删除 —— 它是表情页的重复列表，统计页只保留聚合视角；
+ *   · 只留 2 张图：收藏类型分布 / 收藏年份分布；
+ *   · 去掉渐变条、彩色底徽章与 emoji，条形统一用主色。
  */
 import { useCallback } from 'react'
 import { apiGetAssetInsights } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { AssetInsightsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Card, LoadingState } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './asset-insights.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
+
+/** 一行「名称 + 条形 + 数字」，条宽按 `max` 归一。 */
+function BarRow({ name, count, max }: { name: string; count: number; max: number }): React.JSX.Element {
+  const w = Math.max(2, Math.round((count / Math.max(1, max)) * 100))
+  return (
+    <div className={css.barRow} title={`${name}：${String(count)} 项`}>
+      <span className={css.barName}>{name}</span>
+      <div className={css.barTrack}>
+        <div className={css.barFill} style={{ width: `${String(w)}%` }} />
+      </div>
+      <span className={css.barCount}>{count}</span>
+    </div>
+  )
+}
+
+/** 内联 KPI：一个数字 + 一个标签。 */
+function Kpi({ value, label }: { value: React.ReactNode; label: string }): React.JSX.Element {
+  return (
+    <span className={css.kpi}>
+      <span className={css.kpiValue}>{value}</span>
+      <span className={css.kpiLabel}>{label}</span>
+    </span>
+  )
+}
 
 /**
  * Render the asset insights panel.
@@ -21,73 +51,70 @@ export function AssetInsightsPanel(): React.JSX.Element {
   const load = useCallback((): Promise<AssetInsightsSnapshot> => apiGetAssetInsights(), [])
   const { data, loading, error, reload } = useFreshData<AssetInsightsSnapshot>('asset-insights', load)
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
-  // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
-  // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
-  // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
+  // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约 10 秒一次）。
+  // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费。
   useWechatDataUpdated(() => { if (!data) void reload() })
 
-  const maxYear = data && data.favorites.byYear.length > 0 ? Math.max(...data.favorites.byYear.map(y => y.count)) : 1
+  const typeMax = data && data.favorites.byType.length > 0
+    ? Math.max(...data.favorites.byType.map(t => t.count))
+    : 1
+  const yearMax = data && data.favorites.byYear.length > 0
+    ? Math.max(...data.favorites.byYear.map(y => y.count))
+    : 1
 
   return (
     <div className={kitCss.panelShell}>
-      <PanelHeader
-        title="收藏/表情资产"
-        desc="收藏类型与年份分布 · 表情规模 · 常用表情排行"
-      />
-
       {error && <div className={kitCss.error} role="alert">{error}</div>}
       {loading && !data && <LoadingState variant="compact" label="统计中…" />}
 
       {data && !loading && (
         <>
-          <StatGrid>
-            <StatCard icon="⭐" value={data.favorites.total} label="收藏总数" tone="amber" />
-            <StatCard icon="😀" value={data.emoticons.customCount} label="自定义表情" tone="green" />
-            <StatCard icon="📦" value={data.emoticons.storePackages} label="表情包" tone="purple" />
-            <StatCard icon="💬" value={data.emoticons.captions} label="表情文案" tone="blue" />
-          </StatGrid>
+          {/* 内联 KPI 条：分段名已是「统计」，这里不再重复标题。 */}
+          <div className={css.insightBar}>
+            <Kpi value={data.favorites.total} label="收藏总数" />
+            <Kpi value={data.emoticons.customCount} label="自定义表情" />
+            {data.emoticons.storePackages > 0 && <Kpi value={data.emoticons.storePackages} label="表情包" />}
+            <Kpi value={data.emoticons.captions} label="表情文案" />
+            <Kpi value={data.favorites.byType.length} label="收藏类型" />
+            <Kpi value={data.favorites.byYear.length} label="年份跨度" />
+            <span className={css.barSpacer} />
+            <button type="button" className={css.refreshBtn} onClick={() => { void reload() }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
+          </div>
 
-          <div className={kitCss.cardGrid}>
-            <Card title="收藏类型分布">
-              {data.favorites.byType.length === 0 ? <div className={kitCss.emptyInline}>暂无收藏</div> : (
-                <div className={css.typeList}>
+          {/* 只保留 2 张图（收藏类型 / 收藏年份），与收藏页的条目列表不重复。 */}
+          <div className={css.grid2}>
+            <Card
+              title="收藏类型分布"
+              className={css.fillCard}
+              extra={<span className={kitCss.textCaption}>{`${String(data.favorites.byType.length)} 类`}</span>}
+            >
+              {data.favorites.byType.length === 0 ? (
+                <div className={css.empty}>暂无收藏</div>
+              ) : (
+                <div className={css.list}>
                   {data.favorites.byType.map(t => (
-                    <div key={t.type} className={css.typeRow}>
-                      <span className={css.typeLabel}>{t.label}</span>
-                      <span className={css.typeCount}>{t.count}</span>
-                    </div>
+                    <BarRow key={t.type} name={t.label} count={t.count} max={typeMax} />
                   ))}
                 </div>
               )}
             </Card>
 
-            <Card title="收藏年份分布">
-              {data.favorites.byYear.length === 0 ? <div className={kitCss.emptyInline}>暂无收藏</div> : (
-                <div className={css.yearList}>
-                  {data.favorites.byYear.slice(0, 12).map(y => (
-                    <div key={y.year} className={css.yearRow}>
-                      <span className={css.yearLabel}>{y.year}</span>
-                      <div className={css.yearTrack}><div className={css.yearFill} style={{ width: `${Math.round((y.count / maxYear) * 100)}%` }} /></div>
-                      <span className={css.yearCount}>{y.count}</span>
-                    </div>
+            <Card
+              title="收藏年份分布"
+              className={css.fillCard}
+              extra={<span className={kitCss.textCaption}>{`${String(data.favorites.byYear.length)} 年`}</span>}
+            >
+              {data.favorites.byYear.length === 0 ? (
+                <div className={css.empty}>暂无收藏</div>
+              ) : (
+                <div className={css.list}>
+                  {data.favorites.byYear.map(y => (
+                    <BarRow key={y.year} name={String(y.year)} count={y.count} max={yearMax} />
                   ))}
                 </div>
               )}
             </Card>
           </div>
-
-          <Card title="常用表情 Top 10">
-            {data.emoticons.topUsed.length === 0 ? <div className={kitCss.emptyInline}>暂无使用记录</div> : (
-              <div className={css.emojiList}>
-                {data.emoticons.topUsed.map(e => (
-                  <div key={e.md5} className={css.emojiRow}>
-                    <span className={css.emojiMd5}>{e.md5}</span>
-                    <span className={css.emojiCount}>{e.count} 次</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
         </>
       )}
     </div>

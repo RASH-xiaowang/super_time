@@ -60,16 +60,19 @@ export interface ClawbotMediaRef {
   name: string | null
   /** 密文/明文体积提示（字节；未知为 null）。 */
   size: number | null
+  /** 时长（毫秒；**只有语音有**，协议 `voice_item.playtime`；其余为 null）。 */
+  duration: number | null
 }
 
-/** 行 → 公开附件信息（只给渲染层展示元数据：kind/name/size；不含取数引用与密钥）。 */
-function toMediaInfo(r: Record<string, unknown>): { kind: string, name: string | null, size: number | null } | null {
+/** 行 → 公开附件信息（只给渲染层展示元数据：kind/name/size/duration；不含取数引用与密钥）。 */
+function toMediaInfo(r: Record<string, unknown>): { kind: string, name: string | null, size: number | null, duration: number | null } | null {
   const kind = typeof r['media_kind'] === 'string' && r['media_kind'] !== '' ? r['media_kind'] : null
   if (kind === null) return null
   return {
     kind,
     name: str(r['media_name']),
     size: num(r['media_size']),
+    duration: num(r['media_duration']),
   }
 }
 
@@ -129,18 +132,18 @@ export function insertClawbotMessage(decryptedDir: string, input: ClawbotMessage
       if (dup) return null
     }
     const m = input.media ?? null
-    const r = db.prepare('INSERT INTO clawbot_message(slot, ts, direction, msg_type, content, created_at, msg_id, media_kind, media_ref, media_key, media_name, media_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const r = db.prepare('INSERT INTO clawbot_message(slot, ts, direction, msg_type, content, created_at, msg_id, media_kind, media_ref, media_key, media_name, media_size, media_duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(
         slot, Math.floor(input.ts), input.direction === 'out' ? 'out' : 'in', input.msgType ?? null, input.content,
         Math.floor(input.createdAt ?? Date.now()), msgId,
-        m?.kind ?? null, m?.ref ?? null, m?.key ?? null, m?.name ?? null, m?.size ?? null,
+        m?.kind ?? null, m?.ref ?? null, m?.key ?? null, m?.name ?? null, m?.size ?? null, m?.duration ?? null,
       )
     return Number(r.lastInsertRowid)
   })
 }
 
 /** 列表 SELECT 的列（公开行 + 媒体展示元数据；取数引用与密钥**不在这里**）。 */
-const SELECT_COLS = 'id, slot, ts, direction, msg_type, content, created_at, media_kind, media_name, media_size'
+const SELECT_COLS = 'id, slot, ts, direction, msg_type, content, created_at, media_kind, media_name, media_size, media_duration'
 
 /**
  * **内部**读一行（含媒体取数引用与密钥）—— 取媒体时用，不进渲染层快照。
@@ -154,7 +157,7 @@ export function readClawbotMessageInternal(decryptedDir: string, id: number): Cl
   if (!clawbotDbExists(decryptedDir)) return null
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => {
-      const row = db.prepare('SELECT id, direction, msg_type, content, media_kind, media_ref, media_key, media_name, media_size FROM clawbot_message WHERE id = ? LIMIT 1').get(Math.floor(id)) as Record<string, unknown> | undefined
+      const row = db.prepare('SELECT id, direction, msg_type, content, media_kind, media_ref, media_key, media_name, media_size, media_duration FROM clawbot_message WHERE id = ? LIMIT 1').get(Math.floor(id)) as Record<string, unknown> | undefined
       if (row === undefined) return null
       const kind = typeof row['media_kind'] === 'string' ? row['media_kind'] : ''
       const ref = typeof row['media_ref'] === 'string' ? row['media_ref'] : ''
@@ -165,6 +168,7 @@ export function readClawbotMessageInternal(decryptedDir: string, id: number): Cl
             key: typeof row['media_key'] === 'string' ? row['media_key'] : '',
             name: str(row['media_name']),
             size: num(row['media_size']),
+            duration: num(row['media_duration']),
           }
         : null
       return {
@@ -279,25 +283,57 @@ export function listClawbotMessages(decryptedDir: string, query: ClawbotMessageQ
 }
 
 /**
- * 计数（设置卡片的「今日消息 / 累计消息」）—— 一条连接里同时取两个数。
+/**
+ * 清空某实例的**接入会话**（2026-10-17 用户要求「增加对话历史清除按钮，可以删除对话历史
+ * 以防止污染回复」）。
+ *
+ * 为什么需要它：接入会话是**累积**的（永久保留、无自动清理），而它同时是
+ * 「对话读法」的展示内容与「自动回复」的上下文来源。用户换话题、或 bot 之前回错了一堆，
+ * 旧消息会一直留在那里 —— 清空是唯一的「重新开始」手段。
+ *
+ * ⚠️ **只删消息，不动绑定与配置**：绑定（`clawbot_binding`）与行为偏好
+ * （`clawbot_instance_config`）是另一回事，清历史不该把它们一起清掉。
+ * ⚠️ **不可恢复**：调用方必须在确认框里说清条数（与「移除实例」同一纪律）。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @returns 删掉的条数（供界面如实回报）。
+ */
+export function clearClawbotMessages(decryptedDir: string, slot: number = DEFAULT_CLAWBOT_SLOT): { removed: number } {
+  const s = Math.max(Math.floor(slot), 1)
+  if (!clawbotDbExists(decryptedDir)) return { removed: 0 }
+  return withWritableDb(clawbotDbPath(decryptedDir), (db) => {
+    ensureClawbotSchema(db)
+    const before = Number((db.prepare('SELECT COUNT(*) AS n FROM clawbot_message WHERE slot = ?').get(s) as { n?: number } | undefined)?.n ?? 0)
+    db.prepare('DELETE FROM clawbot_message WHERE slot = ?').run(s)
+    return { removed: before }
+  })
+}
+
+/**
+ * 计数（设置卡片的「今日消息 / 累计消息」）—— 一条连接里同时取三个数。
  *
  * 读失败时返回全 0 并留一行 warn：这张卡片是状态展示，库级失败已由绑定行的
  * `readError` 覆盖（同一个库，两者几乎必然同时失败），不在这里再造一个错误通道。
  * @param decryptedDir - 解密数据根。
  * @param opts.since - 「今日」的起点（本地时区当天 0 点的时间戳）。
- * @returns `{ today, total }`。
+ * @returns `{ today, total, lastTs }`（`lastTs` = 最后一条消息的接收时间，0 = 还没有消息）。
  */
-export function clawbotMessageCounts(decryptedDir: string, opts: { since: number, slot?: number }): { today: number, total: number } {
-  if (!clawbotDbExists(decryptedDir)) return { today: 0, total: 0 }
+export function clawbotMessageCounts(decryptedDir: string, opts: { since: number, slot?: number }): { today: number, total: number, lastTs: number } {
+  if (!clawbotDbExists(decryptedDir)) return { today: 0, total: 0, lastTs: 0 }
   const slot = Math.max(Math.floor(opts.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
   try {
     return withDb(clawbotDbPath(decryptedDir), (db) => {
-      const row = db.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS today FROM clawbot_message WHERE slot = ?')
-        .get(Math.floor(opts.since), slot) as { total?: number, today?: number | null } | undefined
-      return { today: Number(row?.today ?? 0), total: Number(row?.total ?? 0) }
+      /*
+       * `lastTs` 用 `MAX(ts)` 而不是「最后一行」：`ts` 是**接收时间**（协议帧没有时间戳），
+       * 而 `id` 是插入顺序 —— 两者在正常路径下同序，但补扫历史时 `id` 会晚于 `ts`。
+       * 实例卡要回答的是「这个号最近什么时候有动静」，用 `ts` 才符合直觉。
+       */
+      const row = db.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS today, MAX(ts) AS last_ts FROM clawbot_message WHERE slot = ?')
+        .get(Math.floor(opts.since), slot) as { total?: number, today?: number | null, last_ts?: number | null } | undefined
+      return { today: Number(row?.today ?? 0), total: Number(row?.total ?? 0), lastTs: Number(row?.last_ts ?? 0) }
     })
   } catch (e) {
     console.warn('[clawbot] 会话计数失败（显示为 0）：' + (e instanceof Error ? e.message : String(e)))
-    return { today: 0, total: 0 }
+    return { today: 0, total: 0, lastTs: 0 }
   }
 }

@@ -14,6 +14,7 @@ import clsx from 'clsx'
 import { Badge, Button, Card, EmptyState } from '../ui/kit.tsx'
 import type { KbFileChunk, KbFileMeta } from '../types.ts'
 import { PARSE_LOOK, formatBytes, headingWorthShowing } from './kb-files-support.tsx'
+import { KbFileReader } from './kb-file-reader.tsx'
 import { formatRelative } from './kb-model.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './kbfiles.module.css'
@@ -41,17 +42,18 @@ export interface KbFileDetailPaneProps {
   /** 相对时间的基准（容器随每次加载更新，避免滚动时时间自己跳）。 */
   now: number
   onSummarize: (f: KbFileMeta) => void
+  /** 把摘要存成一条笔记（`sourceKind: 'file'`）—— 打通「文件 → 笔记 → 图谱」链路。 */
+  onSaveAsNote: (f: KbFileMeta) => void
   onChunks: (fileId: number) => void
   onCloseReader: () => void
   onReveal: (f: KbFileMeta) => void
   onRemove: (f: KbFileMeta) => void
-  onMoreReader: () => void
   onToggleRag: (f: KbFileMeta, next: boolean) => void
 }
 
 export function KbFileDetailPane({
   hidden, loading, selected, busyId, busySummaryId, summaryError, reader, now,
-  onSummarize, onChunks, onCloseReader, onReveal, onRemove, onMoreReader, onToggleRag,
+  onSummarize, onSaveAsNote, onChunks, onCloseReader, onReveal, onRemove, onToggleRag,
 }: KbFileDetailPaneProps): React.JSX.Element {
   /**
    * 摘要三字段的归一化。
@@ -71,7 +73,14 @@ export function KbFileDetailPane({
    * 所以这里还能渲染出来的空态只可能是「有列表但还没选中」。
    * ⚠️ 别改用 `data-*` 标记：kit 的 Card 只接受 title/extra/footer/children/
    * flush/className，**不会把额外 props 透传到 DOM**，写了会被静默丢掉。
+   *
+   * 2026-10-17 改：正文展开时**不再**跨满两栏（原 `detailPaneFull`）。
+   * 跨栏会把文件列表挤到上面去 —— 用户点「查看正文」只是想读内容，
+   * 不是想把列表收起来；列表被挤走后还得滚回去才能换文件。
+   * 现在列表原地不动，正文在详情栏内部自己排（窄了就退成上下两段，见 `.readerSplit`）。
    */
+  /** 正文是否正展开着（且展开的正是当前选中的这个文件）。摘要块据此让位。 */
+  const readerOpen = reader !== null && selected !== null && reader.fileId === selected.id
   return (
     <Card className={clsx(css.detailPane, hidden && css.detailPaneHidden)}>
       {selected ? (
@@ -93,6 +102,19 @@ export function KbFileDetailPane({
                   : '该文件已关闭「参与语义检索（会出网）」，按此设置它的内容不得离开本机，因此不能生成摘要'}
               >
                 {busySummaryId === selected.id ? '生成中…' : summaryText === '' ? '生成摘要' : '重新生成'}
+              </Button>
+              {/* 2026-10-17：把摘要存成笔记 —— 改前摘要只躺在文件元数据里，
+                  笔记库永远是空的、图谱里只有文件章节节点（链路是断的）。
+                  没有摘要时禁用并写明原因，而不是让人点下去拿一条错误。 */}
+              <Button
+                variant="pill"
+                onClick={() => { void onSaveAsNote(selected) }}
+                disabled={busySummaryId === selected.id || summaryText === ''}
+                title={summaryText === ''
+                  ? '这份文件还没有摘要 —— 先生成摘要，再存为笔记'
+                  : '把这份摘要存成一条笔记，之后可以在「笔记库」里编辑、在「知识图谱」里看到它'}
+              >
+                存为笔记
               </Button>
               {/* 默认就是展开的，所以这个按钮的常态是「收起」。**不设 disabled**：
                   读取途中用户也应该能把它关掉，而不是被锁在等待里。
@@ -139,32 +161,45 @@ export function KbFileDetailPane({
           {selected.parseError ? <div className={css.hintNote}>说明：{selected.parseError}</div> : null}
 
           {/* 出网开关。这是全应用里唯一按文件粒度的出网控制，所以要说清
-              「关掉 ≠ 搜不到」——否则用户会以为关掉就等于把文件踢出知识库。 */}
-          <div className={css.switchRow}>
-            <input
-              id={`kb-file-rag-${selected.id}`}
-              className={css.switchBox}
-              type="checkbox"
-              role="switch"
-              checked={selected.includeInRag}
-              disabled={busyId === selected.id}
-              onChange={(e) => { void onToggleRag(selected, e.target.checked) }}
-            />
-            <label className={css.switchText} htmlFor={`kb-file-rag-${selected.id}`}>
-              <span className={css.switchTitle}>参与语义检索（会出网）</span>
-              <span className={css.switchDesc}>
-                打开后，这个文件的文本块可能被发到模型服务做向量；关掉它就完全不出网。
-                两种情况下都仍然能被关键词搜到，只是关掉后不再参与「意思相近」的检索。
-              </span>
-            </label>
-          </div>
+              「关掉 ≠ 搜不到」——否则用户会以为关掉就等于把文件踢出知识库。
+
+              2026-10-17：正文展开时**不渲染**（与摘要块同一处理）。
+              用户点「查看正文」就是要读原文，开关和摘要一样属于「文件设置」，
+              占着上面一大块把正文推下去。收起正文后它们自然回来。 */}
+          {!readerOpen && (
+            <div className={css.switchRow}>
+              <input
+                id={`kb-file-rag-${selected.id}`}
+                className={css.switchBox}
+                type="checkbox"
+                role="switch"
+                checked={selected.includeInRag}
+                disabled={busyId === selected.id}
+                onChange={(e) => { void onToggleRag(selected, e.target.checked) }}
+              />
+              <label className={css.switchText} htmlFor={`kb-file-rag-${selected.id}`}>
+                <span className={css.switchTitle}>参与语义检索（会出网）</span>
+                <span className={css.switchDesc}>
+                  打开后，这个文件的文本块可能被发到模型服务做向量；关掉它就完全不出网。
+                  两种情况下都仍然能被关键词搜到，只是关掉后不再参与「意思相近」的检索。
+                </span>
+              </label>
+            </div>
+          )}
 
           <div className={css.divider} />
 
           {/* 摘要（模型生成，会出网）。放在正文之前：先看结论再看原文。
-              没有摘要且没出过时整块不渲染 —— 入口就是上面那个按钮，
-              再摆一个空壳只会让详情区多一段没信息量的字。 */}
-          {(summaryText !== '' || summaryError !== null) && (
+              2026-10-17：**始终渲染**（改前只在「有摘要或有错误」时渲染）。
+              改前用户点了「生成摘要」、模型返回空，界面上什么都不显示 ——
+              因为错误被后续 effect 清掉了，而空摘要又不满足渲染条件。
+              现在没有摘要时给一句引导，用户至少知道这块是干什么的、下一步该点哪。
+
+              2026-10-17 再改：**正文展开时整块不渲染**。
+              用户点「查看正文」就是要读原文，摘要占着上面一大块把正文推下去，
+              还得先滚过它才能看到内容。收起正文后摘要自然回来 ——
+              它没有丢，只是让位给用户此刻真正要看的东西。 */}
+          {!readerOpen && (
             <div className={css.summary}>
               <div className={css.summaryHd}>
                 <span>摘要</span>
@@ -183,75 +218,59 @@ export function KbFileDetailPane({
               {summaryError && <div className={kitCss.error} role="alert">⚠️ {summaryError}</div>}
               {summaryText !== ''
                 ? <p className={css.summaryText}>{summaryText}</p>
-                : <p className={css.summaryEmpty}>没有生成成功，原因见上。这份文件的内容没有被改动过。</p>}
+                : summaryError !== null
+                  // 失败时要说清「你的文件没被动过」—— 用户看到「生成失败」第一反应是
+                  // 「是不是把我文件弄坏了」，这句话是安抚，也是事实（摘要只写 summary 列）。
+                  ? <p className={css.summaryEmpty}>没有生成成功，原因见上。这份文件的内容没有被改动过。</p>
+                  : (
+                    <p className={css.summaryEmpty}>
+                      还没有摘要。点右上角「生成摘要」让模型读一遍这份文件、写几条要点
+                      （会把前 8,000 字发给你配置的模型，会出网）。
+                    </p>
+                  )}
             </div>
           )}
 
-          {/* 就地展开的正文。放在「明细」之前：想读内容的人不会想先看完指纹和路径。 */}
+          {/* 就地展开的正文。放在「明细」之前：想读内容的人不会想先看完指纹和路径。
+              2026-10-17：改成**左右两栏**（左原文 / 右分块），实现见 `kb-file-reader.tsx`。 */}
           {reader !== null && reader.fileId === selected.id && (
-            <div className={css.reader}>
-              <div className={css.readerHd}>
-                <span>正文</span>
-                <span className={css.readerMeta}>
-                  已读 {reader.items.length} / {reader.total} 块 · {reader.totalChars.toLocaleString('zh-CN')} 字
-                </span>
-              </div>
-              {/* 必须说清看的是什么：这是解析出来的文本，也就是「问答」和「正文检索」
-                  实际读到的东西；表格、图片、页眉页脚在解析阶段已经丢掉。
-                  不说这句，用户会拿它当原稿核对，而两者可以给出不同的结论。 */}
-              <p className={css.readerNote}>
-                这是解析出来的文本，也就是问答与正文检索实际读到的内容 ——
-                表格、图片与页眉页脚在解析时已经丢掉。要核对原稿请用「在资源管理器中定位」。
-              </p>
-              {reader.error && <div className={kitCss.error} role="alert">{reader.error}</div>}
-              {reader.loading && reader.items.length === 0 && (
-                <div className={css.readerLoading} role="status">读取正文…</div>
-              )}
-              {reader.items.length === 0 && !reader.loading && reader.error === null && (
-                <div className={css.readerEmpty}>
-                  这个文件还没有正文块 —— 解析没成功或还在排队时，展开就是空的。
-                </div>
-              )}
-              <div className={css.readerBody}>
-                {reader.items.map(c => (
-                  <div key={c.ordinal} className={css.chunk}>
-                    {(headingWorthShowing(c.heading) || c.page > 0) && (
-                      <div className={css.chunkMeta}>
-                        {c.page > 0 ? <span>第 {c.page} 页</span> : null}
-                        {headingWorthShowing(c.heading) ? <span>{c.heading}</span> : null}
-                      </div>
-                    )}
-                    <p className={css.chunkText}>{c.text}</p>
-                  </div>
-                ))}
-              </div>
-              {reader.items.length < reader.total && (
-                <Button variant="pill" onClick={() => { void onMoreReader() }} disabled={reader.loading}>
-                  {reader.loading ? '读取中…' : `继续加载（还有 ${reader.total - reader.items.length} 块）`}
-                </Button>
-              )}
-            </div>
+            <KbFileReader
+              items={reader.items}
+              total={reader.total}
+              totalChars={reader.totalChars}
+              loading={reader.loading}
+              error={reader.error}
+            />
           )}
 
-          <div className={css.sectionLabel}>明细</div>
-          <dl className={css.kv}>
-            <dt className={css.kvKey}>大小</dt>
-            <dd className={css.kvVal}>{formatBytes(selected.sizeBytes)}（{selected.sizeBytes.toLocaleString('zh-CN')} 字节）</dd>
-            <dt className={css.kvKey}>文本块</dt>
-            <dd className={css.kvVal}>
-              {selected.chunkCount} 块{selected.charCount > 0 ? ` · ${selected.charCount.toLocaleString('zh-CN')} 字` : ''}
-            </dd>
-            <dt className={css.kvKey}>解析器</dt>
-            <dd className={css.kvVal}>{selected.parser || '（尚未使用）'}</dd>
-            <dt className={css.kvKey}>内容指纹</dt>
-            <dd className={clsx(css.kvVal, css.mono)} title={selected.sha256}>{selected.sha256 || '（空）'}</dd>
-            <dt className={css.kvKey}>原始路径</dt>
-            {/* 只登记、从不变动：这句话要跟路径放在一起，看路径的人才会放心。 */}
-            <dd className={clsx(css.kvVal, css.mono)} title={selected.srcPath}>
-              {selected.srcPath || '（空）'}
-              <div className={css.hintNote}>仅登记，不会被修改或删除。</div>
-            </dd>
-          </dl>
+          {/* 明细（大小 / 文本块 / 解析器 / 指纹 / 路径）。
+              2026-10-17：正文展开时**不渲染** —— 与摘要块、出网开关同一处理。
+              用户点「查看正文」就是要读原文，这些元信息属于「文件设置」，
+              排在正文下方只会让用户滚到底时突然撞见一堆指纹和路径。
+              收起正文后它们自然回来。 */}
+          {!readerOpen && (
+            <>
+              <div className={css.sectionLabel}>明细</div>
+              <dl className={css.kv}>
+                <dt className={css.kvKey}>大小</dt>
+                <dd className={css.kvVal}>{formatBytes(selected.sizeBytes)}（{selected.sizeBytes.toLocaleString('zh-CN')} 字节）</dd>
+                <dt className={css.kvKey}>文本块</dt>
+                <dd className={css.kvVal}>
+                  {selected.chunkCount} 块{selected.charCount > 0 ? ` · ${selected.charCount.toLocaleString('zh-CN')} 字` : ''}
+                </dd>
+                <dt className={css.kvKey}>解析器</dt>
+                <dd className={css.kvVal}>{selected.parser || '（尚未使用）'}</dd>
+                <dt className={css.kvKey}>内容指纹</dt>
+                <dd className={clsx(css.kvVal, css.mono)} title={selected.sha256}>{selected.sha256 || '（空）'}</dd>
+                <dt className={css.kvKey}>原始路径</dt>
+                {/* 只登记、从不变动：这句话要跟路径放在一起，看路径的人才会放心。 */}
+                <dd className={clsx(css.kvVal, css.mono)} title={selected.srcPath}>
+                  {selected.srcPath || '（空）'}
+                  <div className={css.hintNote}>仅登记，不会被修改或删除。</div>
+                </dd>
+              </dl>
+            </>
+          )}
         </div>
       ) : loading ? null : (
         <EmptyState

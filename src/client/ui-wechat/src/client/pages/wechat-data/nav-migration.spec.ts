@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+/** 仓库根（`HERE` = src/client/ui-wechat/src/client/pages/wechat-data，上 7 层）。 */
+const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..')
 
 /** 读源码并去掉注释 —— 注释里为「记录历史」提到旧类名会让断言误判。 */
 function codeOf(file: string): string {
@@ -85,22 +87,64 @@ describe('顶栏已取消：四件事全部迁入导航栏', () => {
   })
 
   /**
-   * 2026-09-30：底部固定区（设置 / 模型余额 / 主题与数据状态）拆成了 `SidebarFooter`。
-   * 判据跟着搬，**但强度不变**：aside 里必须**渲染**这个组件，而组件体里必须真的有
-   * 主题按钮与状态标签（只查 `<SidebarFooter` 会让"组件里其实没画"悄悄过关）。
+   * 2026-09-30：底部固定区（设置 / 模型余额 / 数据状态）拆成了 `SidebarFooter`。
+   * 判据跟着搬，**但强度不变**：aside 里必须**渲染**这个组件。
+   *
+   * ⚠️ 2026-10-17：**三块全部迁到标题栏右上角**（窗口控制按钮前）——
+   * 主题切换（与最小化/全屏/关闭同属「全局动作」）、模型余额 + 数据就绪
+   * （描述的是整个应用的状态，不是当前页签的内容）。
+   * 所以侧栏底部固定区**只剩「设置」**，这里改为断言「三块都不在侧栏」
+   * （防止有人又加回来变成两处）。
    */
-  it('主题切换与数据状态都落在 `</aside>` 之内（落在外面就说明写错了层）', () => {
+  it('侧栏底部固定区只剩「设置」；余额/状态/主题**都不在**侧栏（已迁到标题栏）', () => {
     expect(aside, 'aside 里没渲染底部固定区组件').toContain('<SidebarFooter')
     const footerFn = panel.slice(panel.indexOf('function SidebarFooter('), panel.indexOf('export function WechatDataPanel'))
-    expect(footerFn.length, '切不出 SidebarFooter 的函数体 ⇒ 下面的断言会空转').toBeGreaterThan(300)
-    expect(footerFn).toContain('css.navFooterRow')
-    expect(footerFn).toContain('css.themeToggle')
-    expect(footerFn).toContain('css.apiTag')
-    expect(footerFn).toContain('data-theme-toggle')
-    // 两个都在底部固定区这一个容器里
-    const footer = footerFn.match(/css\.navFooterRow[\s\S]*?<\/div>/)?.[0] ?? ''
-    expect(footer).toContain('css.themeToggle')
-    expect(footer).toContain('css.apiTag')
+    expect(footerFn.length, '切不出 SidebarFooter 的函数体 ⇒ 下面的断言会空转').toBeGreaterThan(200)
+    expect(footerFn).toContain('css.sidebarFooter')
+    expect(footerFn).toContain('设置')
+    // 三块都已迁走：侧栏里**不许**再有它们（两处会分叉）。
+    expect(footerFn, '主题按钮又回到侧栏了（已迁到标题栏右上角）').not.toContain('css.themeToggle')
+    expect(footerFn, '主题按钮又回到侧栏了（已迁到标题栏右上角）').not.toContain('data-theme-toggle')
+    expect(footerFn, '模型余额又回到侧栏了（已迁到标题栏右上角）').not.toContain('<SidebarBalance')
+    expect(footerFn, '数据状态又回到侧栏了（已迁到标题栏右上角）').not.toContain('css.apiTag')
+    expect(footerFn, '数据状态又回到侧栏了（已迁到标题栏右上角）').not.toContain('css.navFooterRow')
+  })
+
+  it('主题按钮在标题栏（`index.html` 的 `#tb-theme`，窗口控制按钮之前）', () => {
+    // 迁到标题栏后，判据跟着搬：按钮必须在 `#tb-controls` 里、且在 `#tb-min` **之前**。
+    const html = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'index.html'), 'utf8')
+    expect(html, '标题栏里没有主题按钮').toContain('id="tb-theme"')
+    const controls = html.slice(html.indexOf('class="tb-controls"'), html.indexOf('id="tb-close"'))
+    expect(controls, '主题按钮不在 tb-controls 里').toContain('id="tb-theme"')
+    expect(
+      controls.indexOf('id="tb-theme"') < controls.indexOf('id="tb-min"'),
+      '主题按钮必须在最小化按钮**之前**（用户要求「迁移到右上角这三个按钮前」）',
+    ).toBe(true)
+    // 宿主侧要真的接上（只放个按钮不接线 = 死控件）。
+    const entry = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'ui-entry.tsx'), 'utf8')
+    expect(entry, '宿主没给主题按钮接线').toContain("byId('tb-theme')")
+    expect(entry, '宿主没调 toggleThemeMode').toContain('toggleThemeMode()')
+    expect(entry, '宿主没订阅主题变化（别处改了图标不同步）').toContain('subscribeThemeMode(syncTheme)')
+  })
+
+  it('模型余额与数据状态在标题栏（`#tb-status` 容器 + 独立 React root）', () => {
+    // 两块都是 React 组件（余额要轮询、状态要订阅），而标题栏是静态 HTML ⇒
+    // 宿主给 `#tb-status` 挂一个独立 root。
+    const html = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'index.html'), 'utf8')
+    expect(html, '标题栏里没有状态容器').toContain('id="tb-status"')
+    const controls = html.slice(html.indexOf('class="tb-controls"'), html.indexOf('id="tb-close"'))
+    expect(controls, '状态容器不在 tb-controls 里').toContain('id="tb-status"')
+    expect(
+      controls.indexOf('id="tb-status"') < controls.indexOf('id="tb-theme"'),
+      '状态区应在主题按钮**之前**（状态在左、动作在右）',
+    ).toBe(true)
+    // 宿主侧：挂载函数 + 组件 + 状态订阅都要真的接上。
+    const entry = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'ui-entry.tsx'), 'utf8')
+    expect(entry, '宿主没挂载标题栏状态区').toContain('mountTitlebarStatus()')
+    const status = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'titlebar-status.tsx'), 'utf8')
+    expect(status, '状态区没渲染余额').toContain('<SidebarBalance')
+    expect(status, '状态区没渲染数据状态').toContain('subscribeApiStatus')
+    expect(status, '状态区没挂到 #tb-status').toContain("getElementById('tb-status')")
   })
 
   it('顶栏折叠条（FoldableBar）不再被主面板使用', () => {
@@ -133,19 +177,16 @@ describe('收起态（58px 轨）不能出现半截元素', () => {
     expect(rule('.sidebar[data-open] .navBrandText'), '展开态应露出文字').toMatch(/max-width:\s*120px/)
   })
 
-  it('状态文案：收起态只留状态点，展开态显示文字', () => {
-    expect(rule('.apiTagText'), '基线（收起态）应隐藏状态文案').toMatch(/display:\s*none/)
-    expect(rule('.sidebar[data-open] .apiTagText'), '展开态应显示状态文案').toMatch(/display:\s*inline/)
-  })
-
-  it('底部固定区：收起态纵向堆叠（42px 放不下一行），展开态改回一行', () => {
-    expect(rule('.navFooterRow'), '基线（收起态）应纵向堆叠').toMatch(/flex-direction:\s*column/)
-    expect(rule('.sidebar[data-open] .navFooterRow'), '展开态应为一行').toMatch(/flex-direction:\s*row/)
-  })
-
-  it('底部固定区自带下内边距（`.sidebar` 的 padding-bottom 是 0，不补就贴窗口下沿）', () => {
-    expect(rule('.navFooterRow')).toMatch(/padding:\s*8px 0 10px/)
-    expect(rule('.sidebar[data-open] .navFooterRow')).toMatch(/padding:\s*8px 6px 10px/)
+  /**
+   * ⚠️ 2026-10-17：状态文案 / 底部固定区 / 主题按钮**全部迁到标题栏**，
+   * 侧栏里已无这些规则 —— 所以这里改为断言「这些类名在侧栏 CSS 里已退役」
+   * （防止有人把旧规则又加回来，与标题栏那套分叉）。
+   */
+  it('已迁走的类名在侧栏 CSS 里退役（状态文案 / 底部固定区 / 主题按钮）', () => {
+    expect(css, '状态文案类名又回到侧栏 CSS 了（已迁到标题栏）').not.toContain('.apiTagText')
+    expect(css, '底部固定区类名又回到侧栏 CSS 了（已迁到标题栏）').not.toContain('.navFooterRow')
+    expect(css, '主题按钮类名又回到侧栏 CSS 了（已迁到标题栏）').not.toContain('.themeToggle')
+    expect(css, '状态胶囊类名又回到侧栏 CSS 了（已迁到标题栏）').not.toContain('.apiTag')
   })
 })
 

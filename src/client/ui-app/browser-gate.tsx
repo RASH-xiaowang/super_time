@@ -131,11 +131,9 @@ export function BrowserSession({ children }: { children: React.ReactNode }): Rea
     return (
       <div className={css.shell}>
         <form className={css.card} onSubmit={(e) => { void submit(e) }}>
-          <h1 className={css.title}>Super Time</h1>
+          <h1 className={css.title}>打开浏览器会话</h1>
           <p className={css.sub}>
-            这台电脑上的微信数据工作台。请输入桌面端
-            <b>「设置 → 远程访问（手机）」</b>
-            里显示的配对码（或直接扫那边的二维码）。
+            请回到桌面端，点击标题栏<b>「打开网页」</b>重新打开同一套界面。
           </p>
           <label className={css.label} htmlFor="ra-token">
             访问配对码
@@ -157,10 +155,13 @@ export function BrowserSession({ children }: { children: React.ReactNode }): Rea
           <button type="submit" className={css.btn} disabled={busy || token.trim() === ''}>
             {busy ? '正在验证…' : '进入'}
           </button>
-          <p className={css.note}>
-            配对码由桌面端生成，只在这台电脑上显示。连不上时请确认：手机与电脑在<b>同一个
-            Wi-Fi</b>、电脑上的开关是打开的、并且 Windows 防火墙弹窗当时点了「允许」。
-          </p>
+          <details className={css.help}>
+            <summary className={css.helpSummary}>连不上怎么办</summary>
+            <p className={css.helpBody}>
+              配对码由桌面端生成、只在这台电脑上显示。请确认手机与电脑在同一 Wi-Fi、
+              电脑上的开关是打开的，且 Windows 防火墙弹窗当时点了「允许」。
+            </p>
+          </details>
         </form>
       </div>
     )

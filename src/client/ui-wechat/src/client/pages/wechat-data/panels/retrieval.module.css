@@ -9,14 +9,18 @@
 /* —— 次级说明文字（规划行/标注面板共用）—— */
 .rowHint { font-size: 11px; color: var(--nm-text-3); margin-top: 2px; line-height: 1.45; }
 
-/* ───────── 回答反馈行（挂在每条 AI 回答下方）───────── */
-.fbBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* ───────── 回答反馈行（挂在每条 AI 回答下方）─────────
+   ⚠️ 2026-10-16：它现在嵌在 `.answerFoot > .footActions` 里（与「沉淀」同排），
+   所以**不再自己换行**（`nowrap`）—— 折行由外层 `.answerFoot` 统一管，
+   两层都 wrap 会让按钮组在窄屏被拆成两半。 */
+.fbBar { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .fbBtn {
   display: inline-flex; align-items: center; gap: 4px;
   height: 24px; padding: 0 8px; font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-3); background: transparent;
   border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-pill); cursor: pointer;
   transition: var(--nm-t-ui);
+  white-space: nowrap;
 }
 .fbBtn:hover:enabled { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
 .fbBtn:disabled { opacity: 0.5; cursor: default; }
@@ -56,3 +60,43 @@
   font-variant-numeric: tabular-nums;
 }
 .retrWarn { color: var(--nm-warning); background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
+
+/* ───────── 回答脚注行：依据 + 反馈 + 沉淀**合成一行** ─────────
+   旧实现三行（依据 / 反馈 / 沉淀各一行 + 3×8px 间距 ≈ 90px），而三者都是
+   「回答的附属信息」—— 堆三行会把每轮回答撑得很高。合成后 ≈ 24px。
+   窄屏由 `flex-wrap` 自动折行（依据行先让位到第二行），不需要媒体查询。
+   放在本文件而不是 `ask.module.css`：与 `.fbBar` 同属「回答附属信息」，
+   且后者已贴 1000 行上限。 */
+.answerFoot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  width: 100%;
+  min-width: 0;
+}
+/* 按钮组：靠右、不收缩（依据行让位）。 */
+.footActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+/* 沉淀为笔记：比赞/踩反馈更低调（反馈高频、沉淀偶尔为之），但同高同胶囊形。 */
+.distillBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: var(--nm-dense-fs-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.distillBtn:hover { border-color: var(--nm-purple); color: var(--nm-purple); }
