@@ -128,21 +128,32 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 > **(b) 本产品的触发方式配置字段** —— 用户在编辑抽屉里要填的内容（这才是落入 `trigger_config`/`trigger_secret` 的键）。
 > 两家客户端的差异（SaaS/私有化）在「默认值」列体现为可配置 base URL。
 
-### 3.1 八爪鱼 RPA（现有实现，迁移基线）
+### 3.1 八爪鱼 RPA（现有实现，迁移基线；v1.3.0 协议修正）
 
-- 通道：`POST https://api-rpa.bazhuayu.com/api/bots/scheduling/start`，固定主机。
-- 鉴权：`X-Api-Key`（用户配置）。
-- Body 字段：`FlowId`、`FlowContentRetrievalMode`（固定 `ByNewestContent`）、`SpecifiedPublicationVersion`（`""`）、`SpecifiedBot`（`""`）、**`Params`（2026-10-21 v1.2.0 起不再自动填三个内置参数，默认 `{}`；所有入参都在「附加参数」里逐条配置）**、`UserStartSource`（固定 `OpenApi`）。
-- 回调：无（2xx 即视为成功）。
+- 通道：`POST https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`，固定主机。
+- 鉴权：`X-API-Key: <API Key>`（官方 API Key 文档推荐）；官方也接受 `Authorization: Bearer <API Key>`。
+- Body 字段（官方 **camelCase**）：`flowId`、`flowContentRetrievalMode`（固定 `ByNewestContent`）、`params`（可选；默认 `{}`，内容全部由「附加参数」逐条配置）。**可选字段留空时不发**（不再发送 `SpecifiedPublicationVersion` / `SpecifiedBot` / `UserStartSource`）。
+- 成功响应：HTTP **200**，返回 `{ flowId, flowProcessNo }` → `flowProcessNo` 落到触发记录的 `external_task_id`（供后续轮询扩展）。
+- 失败响应：常见 HTTP **400**，body 带 `{ code, description, requestId }`；界面「失败原因」展示 **HTTP 状态 + 厂商 `description`**（如 `身份凭证无效，请重新登录`，**不含本地凭据**）。
+- 重试：**不自动重试**（接口无幂等键，避免同一个流程被重复启动）；失败由人工在触发记录里「重新投递」。
+- 回调：无（HTTP 200 只代表「已受理启动」，执行结果需到八爪鱼控制台查看）。
 - 迁移：`triggerMethod='bazhuayu'`，`trigger_config={flowId, extraParams}`（**v1.2.0 丢弃旧 `paramMap`**），`trigger_secret={apiKey}`；升级后默认不发送任何业务参数，需要旧行为（会话名/触发文本/触发对象）可在附加参数里各加一条恢复。
 
-**（b）本产品配置字段**（v1.2.0：**无内置参数**）
+> **2026-10-21 v1.3.0 修正**：旧实现的 `POST /api/bots/scheduling/start`（**少了 `/v1`**）不是公开接口路径，对端会按未认证返回 **HTTP 401「身份凭证无效，请重新登录」**；旧 body 的 PascalCase（`FlowId` / `Params`）也不符合官方契约。v1.3.0 已按官方文档修正 URL、鉴权头（`X-API-Key`）与 camelCase body，并把 `flowProcessNo` 落库、失败时展示厂商 `description`。
+
+**（b）本产品配置字段**（v1.2.0 起无内置参数；v1.3.0 协议修正）
 
 | 显示名 | 配置键 | 类型 | 必填 | 默认 / 示例 | 说明 |
 |---|---|---|---|---|---|
 | FlowId | `flowId` | string | 是 | `6ad859ccee2df270d53fc6e5` | 控制台流程详情复制；不是凭据，随任务列表返回 |
-| API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 `X-Api-Key`，**不参与参数** |
-| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一参数入口**：最多 **20 条**「参数名 → 值来源」；值来源 11 种（见 §4.3）；默认 `Params: {}`，要发什么就配什么 |
+| API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 **`X-API-Key`** 请求头，**不参与参数** |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一参数入口**：最多 **20 条**「参数名 → 值来源」；值来源 11 种（见 §4.3）；默认 `params: {}`，要发什么就配什么 |
+
+**来源与核对（2026-10-21 在线核对）**：
+[机器人调度-启动单个应用](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/robot-scheduling-start-single) ·
+[API Key](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/api-key) ·
+[授权](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/authorization) ·
+[Webhook 触发器](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/webhook-trigger)。
 
 ### 3.2 影刀 RPA（建议 P0）
 

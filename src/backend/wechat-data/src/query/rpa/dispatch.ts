@@ -141,14 +141,19 @@ function parseResponse(
 function parseGenericResponse(spec: RpaResponseSpec, response: RpaHttpResponse): RpaSendResult {
   const json = parseJsonOrUndefined(response.bodyText)
   const message = spec.messagePath !== undefined ? messageOf(json, spec.messagePath) : ''
+  // 厂商错误体几乎都会带一句人话（description/message/...），把它带进「失败原因」，
+  // 否则界面只剩「HTTP 401」这种没法排查的结论（八爪鱼 401 就是这么暴露出来的）。
+  const detail = message !== '' ? message : fallbackErrorMessage(json)
   const httpOk = spec.okHttpStatus.includes(response.status)
   if (!httpOk) {
-    return { ok: false, retryable: false, message: message !== '' ? message : 'HTTP ' + String(response.status) }
+    const suffix = detail !== '' ? '：' + detail : ''
+    return { ok: false, retryable: false, message: 'HTTP ' + String(response.status) + suffix }
   }
   if (spec.okPath !== undefined) {
     const actual = readJsonPath(json, spec.okPath)
     if (!matchesOkValue(actual, spec.okValue)) {
-      return { ok: false, retryable: false, message: message !== '' ? message : '业务码 ' + String(actual) }
+      const suffix = detail !== '' ? '：' + detail : ''
+      return { ok: false, retryable: false, message: '业务码 ' + String(actual) + suffix }
     }
   }
   const externalTaskId = spec.externalTaskIdPath !== undefined
@@ -174,6 +179,26 @@ function messageOf(json: unknown, path: string): string {
   const value = readJsonPath(json, path)
   if (typeof value === 'string') return value.slice(0, 200)
   if (typeof value === 'number') return String(value)
+  return ''
+}
+
+/**
+ * 通用错误体兜底：常见字段 `description` / `message` / `msg` / `error`（含 `error.message`）。
+ * 只取前 200 字；非 JSON 或没有这些字段返回空串（调用方保留「HTTP xxx」）。
+ */
+function fallbackErrorMessage(json: unknown): string {
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) return ''
+  const record = json as Record<string, unknown>
+  for (const key of ['description', 'message', 'msg']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim().slice(0, 200)
+  }
+  const error = record['error']
+  if (typeof error === 'string' && error.trim() !== '') return error.trim().slice(0, 200)
+  if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+    const nested = (error as Record<string, unknown>)['message']
+    if (typeof nested === 'string' && nested.trim() !== '') return nested.trim().slice(0, 200)
+  }
   return ''
 }
 

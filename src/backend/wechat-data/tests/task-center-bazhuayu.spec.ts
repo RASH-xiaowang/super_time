@@ -36,7 +36,7 @@ const PRIVATE_TALKER = 'wxid_lisi'
 const GROUP_TALKER = 'room@chatroom'
 const API_KEY = 'bz-secret-key-123456'
 const FLOW_ID = '6ad859ccee2df270d53fc6e5'
-const BAZHUAYU_URL = 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start'
+const BAZHUAYU_URL = 'https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start'
 /**
  * 八爪鱼描述符的默认非敏感配置：2026-10-21 v1.2.0 起没有「三个内置参数」，
  * 只有空的附加参数列表；Params 完全由任务配置显式决定。
@@ -466,14 +466,14 @@ describe('老库迁移（旧专用列 → 通用列）', () => {
 })
 
 describe('八爪鱼投递（注册表管道）', () => {
-  it('成功：URL / X-Api-Key / 请求体字段正确，记录置 sent，且不解码图片', async () => {
+  it('成功：官方 v1 URL / X-API-Key / camelCase 请求体，记录置 sent 且落 flowProcessNo', async () => {
     const triggerId = fixtureWithBazhuayuTrigger()
     const calls: Array<{ url: string; init: RequestInit }> = []
     const gateCalls: string[] = []
     let decodeCalls = 0
     const fetchImpl = async (url: string, init?: RequestInit): Promise<Response> => {
       calls.push({ url, init: init ?? {} })
-      return new Response('{"code":0}', { status: 200 })
+      return new Response(JSON.stringify({ flowId: FLOW_ID, flowProcessNo: 'proc-1' }), { status: 200 })
     }
     const deps = dispatchDeps({
       fetchImpl,
@@ -489,28 +489,26 @@ describe('八爪鱼投递（注册表管道）', () => {
     })
 
     const result = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
-    expect(result).toEqual({ ok: true, status: 'sent' })
+    expect(result).toEqual({ ok: true, status: 'sent', externalTaskId: 'proc-1' })
     expect(gateCalls).toEqual(['task_callback'])
     expect(calls).toHaveLength(1)
     expect(calls[0]?.url).toBe(BAZHUAYU_URL)
 
     const headers = calls[0]?.init.headers as Record<string, string>
-    expect(headers['X-Api-Key']).toBe(API_KEY)
+    expect(headers['X-API-Key']).toBe(API_KEY)
     const rawBody = String(calls[0]?.init.body)
     expect(rawBody).not.toContain(API_KEY)
     expect(JSON.parse(rawBody)).toEqual({
-      FlowId: FLOW_ID,
-      FlowContentRetrievalMode: 'ByNewestContent',
-      SpecifiedPublicationVersion: '',
-      SpecifiedBot: '',
-      Params: { room_name: '报价群', content: '*** 报价 内容', at_name: '小王' },
-      UserStartSource: 'OpenApi',
+      flowId: FLOW_ID,
+      flowContentRetrievalMode: 'ByNewestContent',
+      params: { room_name: '报价群', content: '*** 报价 内容', at_name: '小王' },
     })
     // 八爪鱼接口没有图片参数：即使任务 photoLimit=2 也不解码图片。
     expect(decodeCalls).toBe(0)
 
     const saved = listTaskTriggers(decrypted).items.find((item) => item.id === triggerId)
     expect(saved?.callbackStatus).toBe('sent')
+    expect(saved?.externalTaskId).toBe('proc-1')
     expect(typeof saved?.callbackAt).toBe('number')
     expect(saved?.callbackError).toBeUndefined()
   })
@@ -540,7 +538,7 @@ describe('八爪鱼投递（注册表管道）', () => {
       },
     })
     expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
-    const params = bodies[0]?.['Params'] as Record<string, unknown> | undefined
+    const params = bodies[0]?.['params'] as Record<string, unknown> | undefined
     expect(params?.['room_name']).toBe('李四')
     expect(params?.['at_name']).toBe('李四')
     // 群聊用例见上一条成功用例：targetName='小王' 时 at_name 严格保持「小王」。
@@ -577,7 +575,7 @@ describe('八爪鱼投递（注册表管道）', () => {
       },
     })
     expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
-    const params = bodies[0]?.['Params'] as Record<string, string> | undefined
+    const params = bodies[0]?.['params'] as Record<string, string> | undefined
     expect(params).toEqual({
       room_name: '报价群',
       content: '*** 报价 内容',
@@ -586,7 +584,7 @@ describe('八爪鱼投递（注册表管道）', () => {
       kw: '报价',
       tpl: '报价群/群报价任务',
     })
-    expect(bodies[0]?.['FlowId']).toBe(FLOW_ID)
+    expect(bodies[0]?.['flowId']).toBe(FLOW_ID)
   })
 
   it('失败：非 2xx ⇒ failed + 错误落库', async () => {

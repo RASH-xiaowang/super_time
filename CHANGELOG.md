@@ -92,6 +92,26 @@
     `privacy-consent-ssr` 断言「附加参数逐条配置 / 默认不发业务参数 / 自定义模板 / 不含凭据」；
     本次不新增 Remote，`docs:api:check` 仍 218。
 
+### 任务信息：八爪鱼 API 协议修正（2026-10-21，v1.3.0）
+
+- **修复八爪鱼真实投递 401**（2026-10-21，用户实际触发后定位）：官方文档（在线核对）的
+  「机器人调度-启动单个应用」是 `POST https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`
+  —— 旧实现少了 **`/v1`**（`/api/bots/...` 不是公开接口路径），对端按未认证返回
+  **HTTP 401「身份凭证无效，请重新登录」**。v1.3.0 修正：URL 补 `/v1`；鉴权改
+  **`X-API-Key`**（也接受 `Authorization: Bearer`）；body 改官方 **camelCase**
+  （`flowId` / `flowContentRetrievalMode` / `params`）；可选字段空值不再发送
+  （删除 `SpecifiedPublicationVersion` / `SpecifiedBot` / `UserStartSource`）；
+  成功 HTTP 200 返回 `{ flowId, flowProcessNo }`，`flowProcessNo` 落到
+  `external_task_id`；失败展示 **HTTP 状态 + 厂商 `description`**（界面「失败原因」
+  不再只有 401）；**取消自动重试**（接口无幂等键，避免重复启动流程），失败由人工
+  「重新投递」。
+  - 隐私：**版本不变（仍 v25）** —— 主机仍是 `api-rpa.bazhuayu.com`，发送内容与范围未扩大；
+    `docs/PRIVACY.md` G3 仅把当前口径的 `X-Api-Key` 改为 `X-API-Key`，并补
+    「失败原因展示厂商错误描述（不含本地凭据）」。
+  - 文档：`docs/RPA-VENDOR-TRIGGERS.md` §3.1 按官方文档重写并补 4 个官方链接；
+    `docs/TASK-CENTER.md` §6.3/§6.4/§10/§12/§13 同步；出网台账/版本号不变
+    （`docs:api:check` 仍 218）。
+
 ### 待归类
 
 - 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。

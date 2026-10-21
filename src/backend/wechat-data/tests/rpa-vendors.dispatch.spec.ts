@@ -215,7 +215,7 @@ describe('Webhook（内置）', () => {
   })
 })
 
-describe('八爪鱼 RPA（内置，回归基线）', () => {
+describe('八爪鱼 RPA（官方 v1 协议，2026-10-21 修正）', () => {
   const API_KEY = 'bz-secret-key-123456'
   // v1.2.0 起没有内置参数：显式配置三个附加参数（还原旧行为的写法）。
   const config = {
@@ -227,38 +227,40 @@ describe('八爪鱼 RPA（内置，回归基线）', () => {
     ],
   }
 
-  it('成功：固定主机 + X-Api-Key 头 + Params 由附加参数组装（Key 不在 body）', async () => {
-    const transport = createTransport({ status: 200, body: {} })
+  it('成功：官方 v1 URL + X-API-Key + camelCase body；flowProcessNo 落 externalTaskId', async () => {
+    const transport = createTransport({ status: 200, body: { flowId: 'flow-1', flowProcessNo: 'proc-1' } })
     const outcome = await dispatch(bazhuayu, makeCtx(config, { apiKey: API_KEY }), transport.deps)
-    expect(outcome).toEqual({ status: 'sent' })
+    expect(outcome).toEqual({ status: 'sent', externalTaskId: 'proc-1' })
     expect(transport.calls).toHaveLength(1)
     const call = transport.calls[0] as HttpCall
-    expect(call.url).toBe('https://api-rpa.bazhuayu.com/api/bots/scheduling/start')
+    // 官方文档：/api/v1/bots/scheduling/start（旧实现漏了 /v1，对端按未认证返回 401）。
+    expect(call.url).toBe('https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start')
     expect(call.method).toBe('POST')
     expect(call.headers['x-api-key']).toBe(API_KEY)
     expect(call.body).not.toContain(API_KEY)
     const body = bodyJson(call)
-    expect(body['FlowId']).toBe('flow-1')
-    expect(body['FlowContentRetrievalMode']).toBe('ByNewestContent')
-    expect(body['SpecifiedPublicationVersion']).toBe('')
-    expect(body['SpecifiedBot']).toBe('')
-    expect(body['UserStartSource']).toBe('OpenApi')
-    expect(body['Params']).toEqual({ room_name: '测试群', content: '你好 RPA', at_name: '张三' })
+    expect(Object.keys(body).sort()).toEqual(
+      ['flowContentRetrievalMode', 'flowId', 'params'].sort(),
+    )
+    expect(body['flowId']).toBe('flow-1')
+    expect(body['flowContentRetrievalMode']).toBe('ByNewestContent')
+    expect(body['params']).toEqual({ room_name: '测试群', content: '你好 RPA', at_name: '张三' })
   })
 
-  it('单聊没有触发对象名时 at_name 回落会话名（旧实现口径）', async () => {
-    const transport = createTransport({ status: 200 })
+  it('单聊没有触发对象名时 at 回落会话名（旧实现口径）', async () => {
+    const transport = createTransport({ status: 200, body: { flowProcessNo: 'proc-2' } })
     const ctx = makeCtx(config, { apiKey: API_KEY }, { chatType: 'private', targetName: '', targetUsername: '' })
     await dispatch(bazhuayu, ctx, transport.deps)
     const call = transport.calls[0] as HttpCall
-    expect(bodyJson(call)['Params']).toEqual({ room_name: '测试群', content: '你好 RPA', at_name: '测试群' })
+    expect(bodyJson(call)['params']).toEqual({ room_name: '测试群', content: '你好 RPA', at_name: '测试群' })
   })
 
-  it('失败：非 2xx → failed', async () => {
-    const transport = createTransport({ status: 400, rawBody: 'nope' })
+  it('失败：非 2xx → failed（把厂商 description 带进错误原因）', async () => {
+    const transport = createTransport({ status: 401, body: { code: 'Unauthorized', description: '身份凭证无效，请重新登录' } })
     const outcome = await dispatch(bazhuayu, makeCtx(config, { apiKey: API_KEY }), transport.deps)
     expect(outcome.status).toBe('failed')
-    expect(outcome.error).toContain('HTTP 400')
+    expect(outcome.error).toContain('HTTP 401')
+    expect(outcome.error).toContain('身份凭证无效')
     expect(transport.calls).toHaveLength(1)
   })
 })

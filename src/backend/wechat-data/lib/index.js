@@ -9708,20 +9708,20 @@ var apiKeyField = {
   type: "password",
   required: true,
   secret: true,
-  help: "\u53EA\u5B58\u672C\u673A\uFF1B\u6295\u9012\u65F6\u7531\u540E\u7AEF\u8BFB\u51FA\u6765\u653E\u8FDB X-Api-Key \u8BF7\u6C42\u5934\uFF0C\u4E0D\u8FDB\u4EFB\u52A1\u5217\u8868/Remote \u8FD4\u56DE\u503C\u3002"
+  help: "\u53EA\u5B58\u672C\u673A\uFF1B\u6295\u9012\u65F6\u7531\u540E\u7AEF\u8BFB\u51FA\u6765\u653E\u8FDB X-API-Key \u8BF7\u6C42\u5934\uFF0C\u4E0D\u8FDB\u4EFB\u52A1\u5217\u8868/Remote \u8FD4\u56DE\u503C\u3002"
 };
 var descriptor2 = {
   id: "bazhuayu",
   name: "\u516B\u722A\u9C7C RPA",
   vendor: "\u516B\u722A\u9C7C RPA\uFF08Bazhuayu\uFF09",
-  version: "1.2.0",
+  version: "1.3.0",
   summary: "\u628A\u4EFB\u52A1\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u6620\u5C04\u6210\u516B\u722A\u9C7C\u6D41\u7A0B\u5165\u53C2\uFF08\u9ED8\u8BA4\u4E0D\u53D1\u4E1A\u52A1\u53C2\u6570\uFF09\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
   status: "stable",
   docs: {
-    home: "https://www.bazhuayu.com/",
-    triggerApi: "https://www.bazhuayu.com/",
+    home: "https://rpa.bazhuayu.com/",
+    triggerApi: "https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/robot-scheduling-start-single",
     lastVerifiedAt: "2026-10-21",
-    pageVersion: "\u5185\u7F6E\u901A\u9053\uFF082026-10-21 \u56DE\u5F52\u6838\u5BF9\uFF1B\u65E0\u516C\u5F00\u63A5\u53E3\u9875\uFF09"
+    pageVersion: "\u5B98\u65B9\u6587\u6863 2026-10-21 \u5728\u7EBF\u6838\u5BF9\uFF1A\u673A\u5668\u4EBA\u8C03\u5EA6-\u542F\u52A8\u5355\u4E2A\u5E94\u7528\uFF08/api/v1/bots/scheduling/start\uFF09"
   },
   capabilities: {
     direction: "outbound",
@@ -9753,7 +9753,7 @@ var descriptor2 = {
     }
   ],
   auth: {
-    // 凭据直接写进请求模板 header（X-Api-Key: ${secret.apiKey}），没有额外鉴权流程。
+    // 凭据直接写进请求模板 header（X-API-Key: ${secret.apiKey}），没有额外鉴权流程。
     modes: []
   },
   mapping: {
@@ -9764,25 +9764,28 @@ var descriptor2 = {
   },
   request: {
     method: "POST",
-    url: "https://api-rpa.bazhuayu.com/api/bots/scheduling/start",
+    // 官方文档（2026-10-21 核对）：机器人调度-启动单个应用 → /api/v1/bots/scheduling/start。
+    // 旧实现漏了 `/v1`（/api/bots/... 不是公开接口路径），对端会按未认证返回 401。
+    url: "https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start",
     headers: {
       "Content-Type": "application/json",
-      "X-Api-Key": "${secret.apiKey}"
+      // 官方 API Key 文档：X-API-Key（推荐）或 Authorization: Bearer <key>。
+      "X-API-Key": "${secret.apiKey}"
     },
     body: {
-      FlowId: "${config.flowId}",
-      FlowContentRetrievalMode: "ByNewestContent",
-      SpecifiedPublicationVersion: "",
-      SpecifiedBot: "",
-      Params: "${mapped}",
-      UserStartSource: "OpenApi"
+      flowId: "${config.flowId}",
+      flowContentRetrievalMode: "ByNewestContent",
+      // params 可选字段；specifiedBot / specifiedPublicationVersion 留空时不发（官方示例只带需要的字段）。
+      params: "${mapped}"
     }
   },
   response: {
-    // 旧实现按「HTTP 2xx = 成功」判定（接口没有业务码约定）。
-    okHttpStatus: [200, 201, 202, 204]
+    // 官方文档：成功 HTTP 200，返回 { flowId, flowProcessNo }；失败 400 + code/description/requestId。
+    okHttpStatus: [200],
+    externalTaskIdPath: "flowProcessNo"
   },
-  retry: { maxAttempts: 2, retryOn: ["network", "http-5xx", "http-429"] },
+  // 启动机器人没有幂等键：网络超时后自动重发可能重复启动同一个流程，只发一次，失败由人工重投。
+  retry: { maxAttempts: 1, retryOn: [] },
   governance: {
     contentOutbound: true,
     hosts: [{ kind: "exact", value: "api-rpa.bazhuayu.com" }],
@@ -9790,13 +9793,16 @@ var descriptor2 = {
     privacySection: "G3"
   },
   risks: [
-    "2xx \u5373\u89C6\u4E3A\u6210\u529F\uFF1A\u63A5\u53E3\u6CA1\u6709\u4E1A\u52A1\u7801\u53EF\u6838\u5BF9\uFF0C\u6267\u884C\u5931\u8D25\u53EA\u80FD\u5230\u516B\u722A\u9C7C\u63A7\u5236\u53F0\u67E5\u770B",
+    "\u63A5\u53E3\u6CA1\u6709\u5E42\u7B49\u952E\uFF1A\u7F51\u7EDC\u8D85\u65F6\u540E\u4E0D\u4F1A\u81EA\u52A8\u91CD\u53D1\uFF08\u907F\u514D\u540C\u4E00\u4E2A\u6D41\u7A0B\u88AB\u542F\u52A8\u4E24\u6B21\uFF09\uFF0C\u5931\u8D25\u8BF7\u5728\u89E6\u53D1\u8BB0\u5F55\u91CC\u4EBA\u5DE5\u91CD\u6295",
+    "HTTP 200 \u53EA\u4EE3\u8868\u300C\u5DF2\u53D7\u7406\u542F\u52A8\u300D\uFF1A\u6267\u884C\u7ED3\u679C\u9700\u5230\u516B\u722A\u9C7C\u63A7\u5236\u53F0\u67E5\u770B",
     "\u63A5\u53E3\u6CA1\u6709\u56FE\u7247\u53C2\u6570\uFF1ARPA \u65B9\u5F0F\u4E0D\u53D1\u56FE\u7247\uFF08\u4EFB\u52A1\u91CC\u7684 photoLimit \u5BF9\u5B83\u4E0D\u751F\u6548\uFF09",
-    "FlowId \u5FC5\u987B\u5C5E\u4E8E\u8BE5 API Key \u7684\u6388\u6743\u8303\u56F4\uFF0C\u5426\u5219\u5BF9\u7AEF\u53EF\u80FD\u8FD4\u56DE\u9519\u8BEF",
+    "FlowId \u5FC5\u987B\u5C5E\u4E8E\u8BE5 API Key \u7684\u6388\u6743\u8303\u56F4\uFF0C\u5426\u5219\u5BF9\u7AEF\u8FD4\u56DE 401/400",
     "\u9644\u52A0\u53C2\u6570\u5B8C\u5168\u7531\u4F60\u914D\u7F6E\uFF1A\u503C\u6765\u81EA\u89E6\u53D1\u8BB0\u5F55/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\uFF0C\u53D1\u51FA\u53BB\u4E4B\u524D\u8BF7\u786E\u8BA4\u5BF9\u7AEF\u6D41\u7A0B\u80FD\u63A5\u53D7\u8FD9\u4E9B\u952E"
   ],
   notes: [
-    "2026-10-21\uFF08v1.2.0\uFF0C\u6309\u7528\u6237\u8981\u6C42\uFF09\uFF1A\u79FB\u9664\u300C\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u300D\u2014\u2014Params \u5B8C\u5168\u7531\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u914D\u7F6E\uFF0C\u9ED8\u8BA4 {}\uFF1B",
+    "2026-10-21\uFF08v1.3.0\uFF09\uFF1A\u6309\u5B98\u65B9\u6587\u6863\u4FEE\u6B63\u8BF7\u6C42\u2014\u2014URL \u8865 `/v1`\u3001\u9274\u6743\u6539 `X-API-Key`\u3001\u8BF7\u6C42\u4F53\u6539\u5B98\u65B9 camelCase \u5B57\u6BB5\uFF1B",
+    "  \u4E0D\u518D\u81EA\u52A8\u91CD\u8BD5\uFF08\u65E0\u5E42\u7B49\u952E\uFF09\uFF1B\u6210\u529F\u65F6\u628A `flowProcessNo` \u843D\u5230 `external_task_id`\uFF0C\u5931\u8D25\u65F6\u5C55\u793A\u5382\u5546 `description`\u3002",
+    "2026-10-21\uFF08v1.2.0\uFF0C\u6309\u7528\u6237\u8981\u6C42\uFF09\uFF1A\u79FB\u9664\u300C\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u300D\u2014\u2014params \u5B8C\u5168\u7531\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u914D\u7F6E\uFF0C\u9ED8\u8BA4 {}\uFF1B",
     "\u9700\u8981\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61\u65F6\uFF0C\u5728\u9644\u52A0\u53C2\u6570\u91CC\u5404\u52A0\u4E00\u6761\uFF08\u503C\u6765\u6E90\u5206\u522B\u9009\u300C\u4F1A\u8BDD\u540D / \u89E6\u53D1\u6587\u672C / \u89E6\u53D1\u5BF9\u8C61\u300D\uFF09\u3002",
     "\u9644\u52A0\u53C2\u6570\u7684\u503C\u6765\u6E90\uFF1A\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61/\u4EFB\u52A1\u540D/\u5173\u952E\u8BCD/\u89E6\u53D1\u65F6\u95F4/\u4F1A\u8BDD\u7C7B\u578B/\u4EFB\u52A1 id/\u8BB0\u5F55 id/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\u3002",
     "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u5141\u8BB8 `${record.<\u5B57\u6BB5>}` / `${task.<\u5B57\u6BB5>}`\uFF08\u5B57\u6BB5\u767D\u540D\u5355\u89C1 docs/TASK-CENTER.md \xA76.3\uFF09\u3002"
@@ -12365,14 +12371,17 @@ function parseResponse(adapter8, response, ctx) {
 function parseGenericResponse(spec, response) {
   const json = parseJsonOrUndefined(response.bodyText);
   const message2 = spec.messagePath !== void 0 ? messageOf(json, spec.messagePath) : "";
+  const detail = message2 !== "" ? message2 : fallbackErrorMessage(json);
   const httpOk = spec.okHttpStatus.includes(response.status);
   if (!httpOk) {
-    return { ok: false, retryable: false, message: message2 !== "" ? message2 : "HTTP " + String(response.status) };
+    const suffix = detail !== "" ? "\uFF1A" + detail : "";
+    return { ok: false, retryable: false, message: "HTTP " + String(response.status) + suffix };
   }
   if (spec.okPath !== void 0) {
     const actual = readJsonPath(json, spec.okPath);
     if (!matchesOkValue(actual, spec.okValue)) {
-      return { ok: false, retryable: false, message: message2 !== "" ? message2 : "\u4E1A\u52A1\u7801 " + String(actual) };
+      const suffix = detail !== "" ? "\uFF1A" + detail : "";
+      return { ok: false, retryable: false, message: "\u4E1A\u52A1\u7801 " + String(actual) + suffix };
     }
   }
   const externalTaskId = spec.externalTaskIdPath !== void 0 ? idTextOf(readJsonPath(json, spec.externalTaskIdPath)) : "";
@@ -12390,6 +12399,21 @@ function messageOf(json, path) {
   const value = readJsonPath(json, path);
   if (typeof value === "string") return value.slice(0, 200);
   if (typeof value === "number") return String(value);
+  return "";
+}
+function fallbackErrorMessage(json) {
+  if (typeof json !== "object" || json === null || Array.isArray(json)) return "";
+  const record = json;
+  for (const key of ["description", "message", "msg"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 200);
+  }
+  const error = record["error"];
+  if (typeof error === "string" && error.trim() !== "") return error.trim().slice(0, 200);
+  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+    const nested = error["message"];
+    if (typeof nested === "string" && nested.trim() !== "") return nested.trim().slice(0, 200);
+  }
   return "";
 }
 function matchesOkValue(actual, expected) {

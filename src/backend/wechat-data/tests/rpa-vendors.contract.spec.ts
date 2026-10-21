@@ -304,10 +304,11 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(descriptor.retry.maxAttempts).toBe(2)
   })
 
-  it('bazhuayu：固定 URL + X-Api-Key + 旧 body 形状（回归基线）', () => {
+  it('bazhuayu：官方 v1 URL + X-API-Key + 官方 camelCase body（2026-10-21 核对）', () => {
     const descriptor = descriptorOf('bazhuayu')
-    expect(descriptor.request.url).toBe('https://api-rpa.bazhuayu.com/api/bots/scheduling/start')
-    expect(descriptor.request.headers?.['X-Api-Key']).toBe('${secret.apiKey}')
+    // 官方文档：机器人调度-启动单个应用 → /api/v1/bots/scheduling/start（旧 /api/bots/... 会 401）。
+    expect(descriptor.request.url).toBe('https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start')
+    expect(descriptor.request.headers?.['X-API-Key']).toBe('${secret.apiKey}')
     const flowField = descriptor.fields.find((field) => field.key === 'flowId')
     expect(flowField?.ariaLabel).toBe('八爪鱼 FlowId')
     expect(flowField?.required).toBe(true)
@@ -317,11 +318,13 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(apiKeyField?.required).toBe(true)
     const body = descriptor.request.body as Record<string, unknown>
     expect(Object.keys(body).sort()).toEqual(
-      ['FlowId', 'FlowContentRetrievalMode', 'Params', 'SpecifiedBot', 'SpecifiedPublicationVersion', 'UserStartSource'].sort(),
+      ['flowContentRetrievalMode', 'flowId', 'params'].sort(),
     )
-    expect(body['Params']).toBe('${mapped}')
-    expect(body['FlowContentRetrievalMode']).toBe('ByNewestContent')
-    expect(body['UserStartSource']).toBe('OpenApi')
+    expect(body['params']).toBe('${mapped}')
+    expect(body['flowContentRetrievalMode']).toBe('ByNewestContent')
+    expect(body['flowId']).toBe('${config.flowId}')
+    // 官方返回 flowProcessNo：落 external_task_id 供后续核对。
+    expect(descriptor.response.externalTaskIdPath).toBe('flowProcessNo')
   })
 
   it('yingdao：AK/SK token-exchange + nameValueTypeArray 参数', () => {
