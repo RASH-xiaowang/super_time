@@ -64,4 +64,11 @@ describe('接线守卫：启动器真的做了 构建/杀旧实例/启动', () =
     expect(launcher).toContain('detached: true')
     expect(readFileSync(join(ROOT, 'Latest.cmd'), 'utf8')).toContain('node scripts\\launch-latest.mjs')
   })
+
+  it('批处理必须 LF 安全：仓库行尾纪律是 eol=lf，括号块/标签在 LF 下会误解析', () => {
+    const cmd = readFileSync(join(ROOT, 'Latest.cmd'), 'utf8')
+    expect(cmd.includes('\r'), 'cmd 出现 CR（仓库规定 LF）').toBe(false)
+    expect(cmd, '出现跨行括号块').not.toMatch(/\(\s*$/m)
+    expect(cmd, '出现批处理标签（LF 下 label 不可靠）').not.toMatch(/^\s*:[A-Za-z]/m)
+  })
 })
