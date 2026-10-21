@@ -72,6 +72,17 @@ describe('sig-disk-cache', () => {
   })
 })
 
+describe('storage file-names 接线守卫', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  const SRC = readFileSync(join(HERE, '..', 'src', 'query', 'storage.ts'), 'utf8')
+
+  it('loadFileNamesBySize 真的按签名读写磁盘缓存（缺任一边都不算跨启动命中）', () => {
+    expect(SRC, '缺 load ⇒ 每次启动都要整树 stat').toContain('loadSigCached<Array<[number, string]>>(fileNamesDiskPath(decryptedDir), sig)')
+    expect(SRC, '缺 save ⇒ 扫完从不落盘').toContain('saveSigCached(fileNamesDiskPath(decryptedDir), sig')
+    expect(SRC, '签名必须来自 msg/file 目录树而不是 SQLite 文件（checkpoint 会改库文件）').toContain('const sig = fileNamesSig(root)')
+  })
+})
+
 describe('overview-extras 接线守卫', () => {
   const HERE = dirname(fileURLToPath(import.meta.url))
   const SRC = readFileSync(join(HERE, '..', 'src', 'query', 'overview-extras.ts'), 'utf8')

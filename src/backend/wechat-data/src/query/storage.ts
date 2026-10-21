@@ -7,8 +7,9 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { raiseAnalyticsCache } from '../sqlite-connection.ts'
+import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { decompress } from 'fzstd'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
@@ -120,8 +121,20 @@ function fileNamesSig(root: string): string {
   return parts.join('|')
 }
 
+/**
+ * file-names（size→原文件名）磁盘缓存的位置：`<数据根>/cache/file-names.v1.json`。
+ *
+ * 为什么能跨启动命中：这里的签名是 **`msg/file` 目录树**的 mtime/size，
+ * 与应用启动的 SQLite WAL checkpoint 无关（checkpoint 只改库文件、不碰文件树），
+ * 所以「数据没新增文件」时连续启动签名稳定 ⇒ 可直接复用上一次的扫描结果。
+ * 而每次冷扫描要逐文件 stat 上万个文件（本机实测 122ms）。
+ */
+function fileNamesDiskPath(dec: string): string {
+  return join(dirname(dec), 'cache', 'file-names.v1.json')
+}
+
 /** 扫描 msg/file 各月份子目录，建立 size -> 原文件名 映射（还原大文件真实文件名）。 */
-async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<Map<number, string>> {
+async function loadFileNamesBySize(wechatBaseDir: string | undefined, decryptedDir: string): Promise<Map<number, string>> {
   if (!wechatBaseDir) return new Map<number, string>()
   const root = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(root)) return new Map<number, string>()
@@ -132,7 +145,13 @@ async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<M
   // TTL 保持 10s（不是这里的默认 30s）：目录签名看不到「同名文件原地改 size」这类
   // 子目录内部变更（NTFS 下目录的 mtime/size 不会因此变化），而改动前那次「事件后清空」
   // 给的实效上界就是 ~10s（同步活跃期事件间隔）。别把上界放宽。
-  return cachedBySigAsync('storage-file-names:' + root, fileNamesSig(root), async () => {
+  //
+  // 进程内的 10s TTL 之外还有一层**磁盘**缓存：它同样按签名校验，所以不会放大上面的
+  // 陈旧窗口（签名一变就 miss），只在「同一份数据重新启动」时省掉整树 stat。
+  const sig = fileNamesSig(root)
+  return cachedBySigAsync('storage-file-names:' + root, sig, async () => {
+    const cached = loadSigCached<Array<[number, string]>>(fileNamesDiskPath(decryptedDir), sig)
+    if (cached !== null) return new Map(cached)
     const map = new Map<number, string>()
     try {
       for (const e of readdirSync(root, { withFileTypes: true })) {
@@ -151,6 +170,8 @@ async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<M
         }
       }
     } catch { /* ignore */ }
+    // 落盘纯缓存（失败只影响下次重启重扫）。
+    saveSigCached(fileNamesDiskPath(decryptedDir), sig, Array.from(map.entries()))
     return map
   }, 10_000)
 }
@@ -259,7 +280,7 @@ async function computeStorageStats(
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       ORDER BY d.size DESC LIMIT 100`).all() as Array<{ s: number; ty: number; di: string; p?: Uint8Array | null; ct: number; u: string; svr: string }>
     storageMark('big-rows', bigRows.length)
-    const sizeToName = await loadFileNamesBySize(wechatBaseDir)
+    const sizeToName = await loadFileNamesBySize(wechatBaseDir, decryptedDir)
     storageMark('file-names', sizeToName.size)
     const large_files: LargeFile[] = []
     for (const r of bigRows) {
