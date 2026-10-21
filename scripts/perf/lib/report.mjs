@@ -4,7 +4,7 @@
  * 只做纯数据变换与打印：从样本抽平坦指标（extractMetrics）→ 跨样本聚合（aggregateSamples）
  * → 人眼摘要（printSummary）。不碰应用、不读日志、不启动进程。
  */
-import { aggregateSeries, round } from './stats.mjs'
+import { aggregateSeries, quantile, round } from './stats.mjs'
 
 /* ═══════════════════════════ 汇总 ═══════════════════════════ */
 
