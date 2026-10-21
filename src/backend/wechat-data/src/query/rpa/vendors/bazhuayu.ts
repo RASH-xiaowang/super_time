@@ -13,10 +13,16 @@ import type { RpaVendorAdapter } from '../types.ts'
 
 /** 三个语义参数位的默认映射键（=`Params` 的三个固定字段，沿用旧实现）。 */
 const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
+  { semantic: 'room', defaultKey: 'room_name', label: '会话名' },
+  { semantic: 'content', defaultKey: 'content', label: '触发文本' },
+  { semantic: 'at', defaultKey: 'at_name', label: '触发对象' },
 ]
+
+/** 附加参数允许的值来源：触发记录/任务的内置字段 + 固定值 + 自定义模板（不含图片）。 */
+const EXTRA_PARAM_SOURCES = [
+  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
+  'taskId', 'recordId', 'fixed', 'template',
+] as const
 
 /** 八爪鱼 API Key（凭据：只存 trigger_secret，投递时进 X-Api-Key）。 */
 const apiKeyField: RpaField = {
@@ -33,8 +39,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'bazhuayu',
   name: '八爪鱼 RPA',
   vendor: '八爪鱼 RPA（Bazhuayu）',
-  version: '1.0.0',
-  summary: '把触发记录映射成 room_name/content/at_name，POST 到八爪鱼固定主机启动流程（不发图片）。',
+  version: '1.1.0',
+  summary: '把触发记录映射成 room_name/content/at_name，并可按需追加参数，POST 到八爪鱼固定主机启动流程（不发图片）。',
   status: 'stable',
   docs: {
     home: 'https://www.bazhuayu.com/',
@@ -61,6 +67,23 @@ const descriptor: RpaVendorDescriptor = {
       help: '八爪鱼流程 id（控制台流程详情里复制）；不是凭据，随任务配置返回。',
     },
     apiKeyField,
+    {
+      key: 'paramMap',
+      label: '参数映射',
+      type: 'map',
+      required: false,
+      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
+      help: '把三个内置参数映射到你流程里的入参名（默认 room_name / content / at_name）；只影响这三个键。',
+    },
+    {
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...EXTRA_PARAM_SOURCES],
+      help: '可选：追加任意「参数名 → 值来源」，命中关键词后随本次请求一起发出；参数名不能与上面三个映射键重名。',
+    },
   ],
   auth: {
     // 凭据直接写进请求模板 header（X-Api-Key: ${secret.apiKey}），没有额外鉴权流程。
@@ -70,6 +93,7 @@ const descriptor: RpaVendorDescriptor = {
     style: 'object',
     mapField: 'paramMap',
     targets: MAPPING_TARGETS,
+    extrasField: 'extraParams',
   },
   request: {
     method: 'POST',
@@ -102,9 +126,13 @@ const descriptor: RpaVendorDescriptor = {
     '2xx 即视为成功：接口没有业务码可核对，执行失败只能到八爪鱼控制台查看',
     '接口没有图片参数：RPA 方式不发图片（任务里的 photoLimit 对它不生效）',
     'FlowId 必须属于该 API Key 的授权范围，否则对端可能返回错误',
+    '附加参数完全由你配置：值来自触发记录/固定值/自定义模板，发出去之前请确认对端流程能接受这些键',
   ],
   notes: [
-    '内置厂商：请求 URL / 请求头 / 请求体与 2026-10-21 之前完全一致（作为多厂商改造的回归基线）。',
+    '内置厂商：三个内置参数（room_name/content/at_name）的默认行为与 2026-10-21 之前逐字节一致。',
+    '2026-10-21 参数增强：可改三个内置参数名（参数映射），并追加任意附加参数；只发你显式配置的键。',
+    '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/固定值/自定义模板。',
+    '自定义模板只允许 `${record.<字段>}` / `${task.<字段>}`（字段白名单见 docs/TASK-CENTER.md §6.3）。',
   ],
 }
 

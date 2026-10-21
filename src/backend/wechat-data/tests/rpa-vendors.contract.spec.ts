@@ -29,6 +29,11 @@ const EXPECTED_IDS = ['webhook', 'bazhuayu', 'yingdao', 'uipath', 'aliyun-rpa', 
 const VERIFIED_AT = '2026-10-21'
 /** 明确要求 experimental 的厂商（官方契约有缺失/待联调）。 */
 const EXPERIMENTAL_IDS = ['aliyun-rpa', 'laiye', 'shizai']
+/** 附加参数允许的值来源（与 `types-rpa.ts` 的 RpaParamSource 同步）。 */
+const PARAM_SOURCE_SET = new Set([
+  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
+  'taskId', 'recordId', 'fixed', 'template',
+])
 
 /** 递归遍历描述符里的每个值，用于「不许有 undefined/函数」守卫。 */
 function walkDescriptor(value: unknown, path: string, visit: (path: string, value: unknown) => void): void {
@@ -129,11 +134,21 @@ describe('厂商描述符契约', () => {
         expect(new Set(keys).size).toBe(keys.length)
         for (const field of descriptor.fields) {
           expect(String(field.label)).not.toBe('')
-          expect(['text', 'password', 'number', 'boolean', 'select', 'map']).toContain(field.type)
+          expect(['text', 'password', 'number', 'boolean', 'select', 'map', 'paramList']).toContain(field.type)
           expect(typeof field.required).toBe('boolean')
           if (field.required && field.secret !== true) {
             // 必填字段必须在 UI 上给出可照抄的示例或默认值（secret 除外：不能放示例凭据）。
             expect(field.example !== undefined || field.defaultValue !== undefined, field.key).toBe(true)
+          }
+          if (field.type === 'paramList') {
+            // 附加参数控件：来源白名单非空且只含合法值；maxItems 若声明必须是正整数。
+            const sources = field.paramSources ?? []
+            expect(sources.length, field.key).toBeGreaterThan(0)
+            for (const source of sources) expect(PARAM_SOURCE_SET.has(source), field.key + ':' + source).toBe(true)
+            if (field.maxItems !== undefined) {
+              expect(Number.isInteger(field.maxItems) && field.maxItems > 0, field.key).toBe(true)
+            }
+            expect(descriptor.mapping.extrasField, field.key + ' 必须被 mapping.extrasField 引用').toBe(field.key)
           }
           if (field.type === 'select') {
             expect(Array.isArray(field.options), field.key).toBe(true)

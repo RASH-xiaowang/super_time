@@ -433,6 +433,30 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
     expect(code, '行内删除入口没有使用共享按钮').toContain('TaskDeleteButton')
   })
 
+  it('paramList（附加参数）控件：descriptor 驱动、不硬编码厂商文案、规则在独立纯逻辑文件', () => {
+    const field = panelRead('task-center-param-list-field.tsx')
+    const logic = panelRead('task-center-param-list.ts')
+    expect(code, '编辑表单没有接线 paramList 控件').toContain("import { ParamListField } from './task-center-param-list-field.tsx'")
+    expect(code, '动态字段分支缺少 paramList').toContain("field.type === 'paramList'")
+    expect(code, 'paramList 行数据没有从配置读取').toContain('paramEntriesOf(ctx.config, field.key)')
+    // 编辑表单不认识具体厂商：标题/来源/上限全来自描述符（按钮文案由字段 label 组装）。
+    expect(code, '编辑表单写死了「附加参数」').not.toContain('附加参数')
+    expect(logic, '规则文件 import 了 react（应为纯逻辑）').not.toMatch(/from 'react'/)
+    expect(logic, '值来源没有从 field.paramSources 收窄').toContain('field.paramSources')
+    expect(logic, '上限没有读 field.maxItems').toContain('field.maxItems')
+    expect(field, '控件没有用值来源选项 helper').toContain('paramSourceOptions(field)')
+    expect(field, '控件没有用 maxItems helper').toContain('maxParamItems(field)')
+    expect(field, '控件没有用添加 helper').toContain('appendParamEntry(')
+    expect(field, '控件没有用删除 helper').toContain('removeParamEntry(')
+    expect(field, '控件没有用更新 helper').toContain('updateParamEntry(')
+    for (const aria of ['参数名 ${String(n)}', '值来源 ${String(n)}', '固定值 ${String(n)}', '模板 ${String(n)}', '删除${label} ${String(n)}']) {
+      expect(field, `paramList 控件缺少带序号的 aria「${aria}」`).toContain(aria)
+    }
+    expect(field, '添加按钮没有用字段 label 组装').toContain('`添加${field.label}`')
+    expect(field, '模板输入框缺少 placeholder/白名单提示').toContain('TEMPLATE_PLACEHOLDER')
+    expect(field, '模板白名单提示没有展示 record/task 字段').toContain('${task.name}')
+  })
+
   it('「标记已完善」按描述符 required + secretSet 校验，并把焦点指到第一个错字段', () => {
     expect(code, '没有按描述符算缺项').toContain('readyMissingFields(')
     expect(code, '缺项没有生成「请填写 <label>」行内错误').toContain('`请填写 ${field.label}`')
@@ -504,6 +528,11 @@ describe('样式与 SSR 冒烟', () => {
       '八爪鱼 FlowId',
       '八爪鱼 API Key',
       '已保存，留空保持不变',
+      '参数映射',
+      '附加参数',
+      '添加附加参数',
+      '附加参数 固定值 1',
+      '附加参数 模板 2',
       '影刀 RPA',
       'AccessKeyId',
       'AccessKeySecret',
@@ -526,7 +555,7 @@ describe('样式与 SSR 冒烟', () => {
     for (const rule of ['.triggerHint {', '.triggerSummary {']) {
       expect(css, `缺少样式 ${rule}`).toContain(rule)
     }
-    for (const rule of ['.catalogError {', '.vendorSection {', '.advancedBlock {', '.vendorInfo {', '.mapGrid {', '.vendorField {']) {
+    for (const rule of ['.catalogError {', '.vendorSection {', '.advancedBlock {', '.vendorInfo {', '.mapGrid {', '.vendorField {', '.paramRow {', '.paramGrid {']) {
       expect(triggerCss, `缺少多厂商触发样式 ${rule}`).toContain(rule)
     }
     expect(css, '触发方式摘要没有省略号（长 FlowId 会挤爆任务行）').toMatch(/\.triggerSummary\s*\{[\s\S]*?text-overflow:\s*ellipsis/)

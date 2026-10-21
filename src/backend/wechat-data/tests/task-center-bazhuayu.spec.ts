@@ -37,6 +37,15 @@ const GROUP_TALKER = 'room@chatroom'
 const API_KEY = 'bz-secret-key-123456'
 const FLOW_ID = '6ad859ccee2df270d53fc6e5'
 const BAZHUAYU_URL = 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start'
+/**
+ * 八爪鱼描述符的默认非敏感配置（2026-10-21 参数增强后：除 FlowId 外还有可编辑的
+ * 三个语义映射键（默认值）与空的附加参数列表）。保存时按描述符补默认值，因此列表
+ * 读回的 triggerConfig 会带上这两个键。
+ */
+const BAZHUAYU_CONFIG_DEFAULTS = {
+  paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
+  extraParams: [],
+}
 
 let root = ''
 let decrypted = ''
@@ -208,7 +217,7 @@ describe('通用配置/凭据：落库与凭据边界', () => {
     expect(snapshot.readError).toBeUndefined()
     const task = snapshot.items[0]
     expect(task?.triggerMethod).toBe('bazhuayu')
-    expect(task?.triggerConfig).toEqual({ flowId: FLOW_ID })
+    expect(task?.triggerConfig).toEqual({ flowId: FLOW_ID, ...BAZHUAYU_CONFIG_DEFAULTS })
     expect(task?.triggerSecretSet).toEqual({ apiKey: true })
     expect(task?.triggerVendorVersion).not.toBe('')
     // 兼容别名（派生视图）
@@ -260,7 +269,7 @@ describe('通用配置/凭据：落库与凭据边界', () => {
     })
     expect(bazhuayu.ok).toBe(true)
     const bazhuayuTask = listTaskInfos(decrypted).items.find((item) => item.id === bazhuayu.id)
-    expect(bazhuayuTask?.triggerConfig).toEqual({ flowId: FLOW_ID })
+    expect(bazhuayuTask?.triggerConfig).toEqual({ flowId: FLOW_ID, ...BAZHUAYU_CONFIG_DEFAULTS })
     expect(bazhuayuTask?.triggerSecretSet).toEqual({ apiKey: true })
     expect(bazhuayuTask?.bazhuayuApiKeySet).toBe(true)
   })
@@ -277,7 +286,7 @@ describe('通用配置/凭据：落库与凭据边界', () => {
       name: '只改配置',
     }).ok).toBe(true)
     let task = listTaskInfos(decrypted).items[0]
-    expect(task?.triggerConfig).toEqual({ flowId: 'new-flow-id' })
+    expect(task?.triggerConfig).toEqual({ flowId: 'new-flow-id', ...BAZHUAYU_CONFIG_DEFAULTS })
     // triggerSecret 缺省 = 保留旧 Key
     expect(task?.triggerSecretSet).toEqual({ apiKey: true })
 
@@ -440,6 +449,7 @@ describe('老库迁移（旧专用列 → 通用列）', () => {
     })
     const task = listTaskInfos(decrypted).items[0]
     expect(task?.triggerMethod).toBe('bazhuayu')
+    // 读旧行时只回退迁移出已有的键（flowId）；paramMap/extraParams 等默认值在保存/渲染时补齐。
     expect(task?.triggerConfig).toEqual({ flowId: FLOW_ID })
     expect(task?.triggerSecretSet).toEqual({ apiKey: true })
     expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
@@ -519,6 +529,46 @@ describe('八爪鱼投递（注册表管道）', () => {
     expect(params?.['room_name']).toBe('李四')
     expect(params?.['at_name']).toBe('李四')
     // 群聊用例见上一条成功用例：targetName='小王' 时 at_name 严格保持「小王」。
+  })
+
+  it('参数增强：参数映射改名 + 附加参数随 Params 一起发出（真实派发链路）', async () => {
+    seedMessages(GROUP_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', text: '历史 报价' },
+    ])
+    expect(saveTaskInfo(decrypted, groupBazhuayuInput({
+      name: '群报价任务',
+      triggerConfig: {
+        flowId: FLOW_ID,
+        paramMap: { room: 'group_name', content: 'text', at: 'user' },
+        extraParams: [
+          { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+          { name: 'kw', source: 'keyword' },
+          { name: 'tpl', source: 'template', template: '${record.chatName}/${task.name}' },
+        ],
+      },
+    })).ok).toBe(true)
+    seedMessages(GROUP_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_target', text: '秘密 报价 内容' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const triggerId = firstTriggerId()
+    const bodies: Array<Record<string, unknown>> = []
+    const deps = dispatchDeps({
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      },
+    })
+    expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
+    const params = bodies[0]?.['Params'] as Record<string, string> | undefined
+    expect(params?.['group_name']).toBe('报价群')
+    expect(params?.['text']).toBe('*** 报价 内容')
+    expect(params?.['user']).toBe('小王')
+    expect(params?.['order_no']).toBe('A-001')
+    expect(params?.['kw']).toBe('报价')
+    expect(params?.['tpl']).toBe('报价群/群报价任务')
+    expect(params?.['room_name']).toBeUndefined()
+    expect(bodies[0]?.['FlowId']).toBe(FLOW_ID)
   })
 
   it('失败：非 2xx ⇒ failed + 错误落库', async () => {

@@ -33,6 +33,13 @@ import type {
   TaskTriggerScanResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import { fmtDateTimeSec } from '../utils/format.ts'
+import {
+  defaultParamListValue,
+  flattenConfigValues,
+  normalizeParamListEntries,
+  paramEntriesOf,
+  validateParamListConfig,
+} from './task-center-param-list.ts'
 
 /** Badge 支持的颜色档（与 `ui/kit-shell.tsx` 的 `Tone` 同集，避免纯逻辑层 import React 模块）。 */
 export type TaskCenterTone = 'default' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue'
@@ -369,6 +376,7 @@ export function defaultVendorConfig(descriptor: RpaVendorDescriptor): RpaTrigger
       continue
     }
     if (field.defaultValue !== undefined) config[field.key] = field.defaultValue
+    if (field.type === 'paramList') config[field.key] = defaultParamListValue()
   }
   return config
 }
@@ -500,25 +508,18 @@ export function readyMissingFields(
       }
       continue
     }
+    if (field.type === 'paramList') {
+      if (paramEntriesOf(draft.config, field.key).length === 0) missing.push(field)
+      continue
+    }
     if (configTextValue(draft.config, field.key) === '') missing.push(field)
   }
   return missing
 }
 
-/**
- * 任务配置里所有字符串值（任务搜索用；与后端「flatten config 字符串值」同口径）。
- * @param config - `triggerConfig`。
- * @returns 扁平后的字符串列表（含 map 子值）。
- */
+/** 任务配置里所有字符串值（任务搜索用；与后端 flatten 同口径，含附加参数名/固定值/模板）。 */
 export function flattenTriggerConfig(config: RpaTriggerConfig): string[] {
-  const out: string[] = []
-  const walk = (value: RpaConfigValue): void => {
-    if (typeof value === 'string') out.push(value)
-    else if (typeof value === 'number' || typeof value === 'boolean') out.push(String(value))
-    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) walk(inner)
-  }
-  for (const value of Object.values(config)) walk(value)
-  return out
+  return flattenConfigValues(config)
 }
 
 /**
@@ -816,6 +817,8 @@ export function validateTaskDraft(draft: TaskEditDraft, descriptor: RpaVendorDes
     const message = validateVendorField(field, raw)
     if (message !== undefined) fields[field.key] = message
   }
+  // 附加参数（paramList）逐行校验：`${field.key}:${index}` 为行内错误，`${field.key}` 为列表级。
+  Object.assign(fields, validateParamListConfig(descriptor, draft.config))
   if (Object.keys(fields).length > 0) errors.fields = fields
   return errors
 }
@@ -879,6 +882,10 @@ function normalizeVendorConfig(descriptor: RpaVendorDescriptor, config: RpaTrigg
         next[target.semantic] = value === '' ? target.defaultKey : value
       }
       out[field.key] = next
+      continue
+    }
+    if (field.type === 'paramList') {
+      out[field.key] = normalizeParamListEntries(config[field.key])
       continue
     }
     if (field.type === 'boolean') {

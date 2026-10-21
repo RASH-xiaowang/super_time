@@ -64,6 +64,8 @@ import {
 } from './task-center.ts'
 import css from './task-center.module.css'
 import triggerCss from './task-center-trigger.module.css'
+import { paramEntriesOf } from './task-center-param-list.ts'
+import { ParamListField } from './task-center-param-list-field.tsx'
 import kitCss from '../ui/kit.module.css'
 
 /** 表单的注入依赖：写动作由容器提供（本文件不 import api-*）。 */
@@ -245,6 +247,17 @@ function VendorFieldControl({ field, ctx }: { field: RpaField; ctx: VendorFormCo
   const help = field.help !== undefined ? <span className={triggerCss.fieldHelp}>{field.help}</span> : null
   const errorNode = error === undefined ? null : <span className={css.errorText} role="alert">{error}</span>
   if (field.type === 'map') return <MapFieldControl field={field} ctx={ctx} />
+  if (field.type === 'paramList') {
+    return (
+      <ParamListField
+        field={field}
+        value={paramEntriesOf(ctx.config, field.key)}
+        errors={ctx.errors}
+        onChange={(next) => { ctx.onConfigChange(field.key, next) }}
+        registerFirstRow={(el) => { ctx.registerRef(field.key, el) }}
+      />
+    )
+  }
   if (field.type === 'boolean') {
     return (
       <label className={triggerCss.checkRow}>
@@ -648,9 +661,13 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
   const patchConfig = useCallback((key: string, value: RpaConfigValue): void => {
     setDraft((d) => ({ ...d, config: { ...d.config, [key]: value } }))
     setErrors((e) => {
-      if (e.fields?.[key] === undefined) return e
+      // paramList 的行内错误键是 `${key}:${index}`：改任意一行都要把该字段的错误一起清掉。
+      const prefix = `${key}:`
+      if (e.fields === undefined || !Object.keys(e.fields).some((k) => k === key || k.startsWith(prefix))) return e
       const fields = { ...e.fields }
-      delete fields[key]
+      for (const k of Object.keys(fields)) {
+        if (k === key || k.startsWith(prefix)) delete fields[k]
+      }
       return { ...e, fields }
     })
     setApiError(null)
@@ -746,7 +763,9 @@ function useTaskFormActions(options: {
   const focusFirstError = useCallback((found: TaskDraftErrors): void => {
     if (descriptor !== null) {
       for (const field of vendorFields(descriptor)) {
-        if (found.fields?.[field.key] === undefined) continue
+        // paramList 的行内错误挂在 `${key}:${index}` 上（聚焦第一行参数名）。
+        const hasRowError = Object.keys(found.fields ?? {}).some((key) => key.startsWith(`${field.key}:`))
+        if (found.fields?.[field.key] === undefined && !hasRowError) continue
         options.fieldRefsRef.current[field.key]?.focus()
         return
       }

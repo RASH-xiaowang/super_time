@@ -9689,9 +9689,22 @@ var adapter = {
 
 // src/backend/wechat-data/src/query/rpa/vendors/bazhuayu.ts
 var MAPPING_TARGETS2 = [
-  { semantic: "room", defaultKey: "room_name" },
-  { semantic: "content", defaultKey: "content" },
-  { semantic: "at", defaultKey: "at_name" }
+  { semantic: "room", defaultKey: "room_name", label: "\u4F1A\u8BDD\u540D" },
+  { semantic: "content", defaultKey: "content", label: "\u89E6\u53D1\u6587\u672C" },
+  { semantic: "at", defaultKey: "at_name", label: "\u89E6\u53D1\u5BF9\u8C61" }
+];
+var EXTRA_PARAM_SOURCES = [
+  "room",
+  "content",
+  "at",
+  "taskName",
+  "keyword",
+  "triggeredAt",
+  "chatType",
+  "taskId",
+  "recordId",
+  "fixed",
+  "template"
 ];
 var apiKeyField = {
   key: "apiKey",
@@ -9706,8 +9719,8 @@ var descriptor2 = {
   id: "bazhuayu",
   name: "\u516B\u722A\u9C7C RPA",
   vendor: "\u516B\u722A\u9C7C RPA\uFF08Bazhuayu\uFF09",
-  version: "1.0.0",
-  summary: "\u628A\u89E6\u53D1\u8BB0\u5F55\u6620\u5C04\u6210 room_name/content/at_name\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
+  version: "1.1.0",
+  summary: "\u628A\u89E6\u53D1\u8BB0\u5F55\u6620\u5C04\u6210 room_name/content/at_name\uFF0C\u5E76\u53EF\u6309\u9700\u8FFD\u52A0\u53C2\u6570\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
   status: "stable",
   docs: {
     home: "https://www.bazhuayu.com/",
@@ -9733,7 +9746,24 @@ var descriptor2 = {
       summary: true,
       help: "\u516B\u722A\u9C7C\u6D41\u7A0B id\uFF08\u63A7\u5236\u53F0\u6D41\u7A0B\u8BE6\u60C5\u91CC\u590D\u5236\uFF09\uFF1B\u4E0D\u662F\u51ED\u636E\uFF0C\u968F\u4EFB\u52A1\u914D\u7F6E\u8FD4\u56DE\u3002"
     },
-    apiKeyField
+    apiKeyField,
+    {
+      key: "paramMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: false,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u628A\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u6620\u5C04\u5230\u4F60\u6D41\u7A0B\u91CC\u7684\u5165\u53C2\u540D\uFF08\u9ED8\u8BA4 room_name / content / at_name\uFF09\uFF1B\u53EA\u5F71\u54CD\u8FD9\u4E09\u4E2A\u952E\u3002"
+    },
+    {
+      key: "extraParams",
+      label: "\u9644\u52A0\u53C2\u6570",
+      type: "paramList",
+      required: false,
+      maxItems: 20,
+      paramSources: [...EXTRA_PARAM_SOURCES],
+      help: "\u53EF\u9009\uFF1A\u8FFD\u52A0\u4EFB\u610F\u300C\u53C2\u6570\u540D \u2192 \u503C\u6765\u6E90\u300D\uFF0C\u547D\u4E2D\u5173\u952E\u8BCD\u540E\u968F\u672C\u6B21\u8BF7\u6C42\u4E00\u8D77\u53D1\u51FA\uFF1B\u53C2\u6570\u540D\u4E0D\u80FD\u4E0E\u4E0A\u9762\u4E09\u4E2A\u6620\u5C04\u952E\u91CD\u540D\u3002"
+    }
   ],
   auth: {
     // 凭据直接写进请求模板 header（X-Api-Key: ${secret.apiKey}），没有额外鉴权流程。
@@ -9742,7 +9772,8 @@ var descriptor2 = {
   mapping: {
     style: "object",
     mapField: "paramMap",
-    targets: MAPPING_TARGETS2
+    targets: MAPPING_TARGETS2,
+    extrasField: "extraParams"
   },
   request: {
     method: "POST",
@@ -9774,10 +9805,14 @@ var descriptor2 = {
   risks: [
     "2xx \u5373\u89C6\u4E3A\u6210\u529F\uFF1A\u63A5\u53E3\u6CA1\u6709\u4E1A\u52A1\u7801\u53EF\u6838\u5BF9\uFF0C\u6267\u884C\u5931\u8D25\u53EA\u80FD\u5230\u516B\u722A\u9C7C\u63A7\u5236\u53F0\u67E5\u770B",
     "\u63A5\u53E3\u6CA1\u6709\u56FE\u7247\u53C2\u6570\uFF1ARPA \u65B9\u5F0F\u4E0D\u53D1\u56FE\u7247\uFF08\u4EFB\u52A1\u91CC\u7684 photoLimit \u5BF9\u5B83\u4E0D\u751F\u6548\uFF09",
-    "FlowId \u5FC5\u987B\u5C5E\u4E8E\u8BE5 API Key \u7684\u6388\u6743\u8303\u56F4\uFF0C\u5426\u5219\u5BF9\u7AEF\u53EF\u80FD\u8FD4\u56DE\u9519\u8BEF"
+    "FlowId \u5FC5\u987B\u5C5E\u4E8E\u8BE5 API Key \u7684\u6388\u6743\u8303\u56F4\uFF0C\u5426\u5219\u5BF9\u7AEF\u53EF\u80FD\u8FD4\u56DE\u9519\u8BEF",
+    "\u9644\u52A0\u53C2\u6570\u5B8C\u5168\u7531\u4F60\u914D\u7F6E\uFF1A\u503C\u6765\u81EA\u89E6\u53D1\u8BB0\u5F55/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\uFF0C\u53D1\u51FA\u53BB\u4E4B\u524D\u8BF7\u786E\u8BA4\u5BF9\u7AEF\u6D41\u7A0B\u80FD\u63A5\u53D7\u8FD9\u4E9B\u952E"
   ],
   notes: [
-    "\u5185\u7F6E\u5382\u5546\uFF1A\u8BF7\u6C42 URL / \u8BF7\u6C42\u5934 / \u8BF7\u6C42\u4F53\u4E0E 2026-10-21 \u4E4B\u524D\u5B8C\u5168\u4E00\u81F4\uFF08\u4F5C\u4E3A\u591A\u5382\u5546\u6539\u9020\u7684\u56DE\u5F52\u57FA\u7EBF\uFF09\u3002"
+    "\u5185\u7F6E\u5382\u5546\uFF1A\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\uFF08room_name/content/at_name\uFF09\u7684\u9ED8\u8BA4\u884C\u4E3A\u4E0E 2026-10-21 \u4E4B\u524D\u9010\u5B57\u8282\u4E00\u81F4\u3002",
+    "2026-10-21 \u53C2\u6570\u589E\u5F3A\uFF1A\u53EF\u6539\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u540D\uFF08\u53C2\u6570\u6620\u5C04\uFF09\uFF0C\u5E76\u8FFD\u52A0\u4EFB\u610F\u9644\u52A0\u53C2\u6570\uFF1B\u53EA\u53D1\u4F60\u663E\u5F0F\u914D\u7F6E\u7684\u952E\u3002",
+    "\u9644\u52A0\u53C2\u6570\u7684\u503C\u6765\u6E90\uFF1A\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61/\u4EFB\u52A1\u540D/\u5173\u952E\u8BCD/\u89E6\u53D1\u65F6\u95F4/\u4F1A\u8BDD\u7C7B\u578B/\u4EFB\u52A1 id/\u8BB0\u5F55 id/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\u3002",
+    "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u5141\u8BB8 `${record.<\u5B57\u6BB5>}` / `${task.<\u5B57\u6BB5>}`\uFF08\u5B57\u6BB5\u767D\u540D\u5355\u89C1 docs/TASK-CENTER.md \xA76.3\uFF09\u3002"
   ]
 };
 var adapter2 = {
@@ -11334,7 +11369,49 @@ var SEMANTIC_LABELS = {
   content: "\u89E6\u53D1\u6587\u672C",
   at: "\u89E6\u53D1\u5BF9\u8C61"
 };
+var ALL_PARAM_SOURCES = [
+  "room",
+  "content",
+  "at",
+  "taskName",
+  "keyword",
+  "triggeredAt",
+  "chatType",
+  "taskId",
+  "recordId",
+  "fixed",
+  "template"
+];
+var PARAM_SOURCE_LABELS = {
+  room: "\u4F1A\u8BDD\u540D",
+  content: "\u89E6\u53D1\u6587\u672C",
+  at: "\u89E6\u53D1\u5BF9\u8C61",
+  taskName: "\u4EFB\u52A1\u540D",
+  keyword: "\u89E6\u53D1\u5173\u952E\u8BCD",
+  triggeredAt: "\u89E6\u53D1\u65F6\u95F4",
+  chatType: "\u4F1A\u8BDD\u7C7B\u578B",
+  taskId: "\u4EFB\u52A1 id",
+  recordId: "\u89E6\u53D1\u8BB0\u5F55 id",
+  fixed: "\u56FA\u5B9A\u503C",
+  template: "\u81EA\u5B9A\u4E49\u6A21\u677F"
+};
+var TEMPLATE_ALLOWED_PATHS = {
+  record: [
+    "chatName",
+    "targetName",
+    "targetUsername",
+    "username",
+    "keyword",
+    "text",
+    "chatType",
+    "triggeredAt"
+  ],
+  task: ["name", "id"]
+};
 var URL_FIELD_MAX = 2048;
+var PARAM_NAME_MAX = 64;
+var PARAM_VALUE_MAX = 2048;
+var PARAM_TEMPLATE_MAX = 512;
 var WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/;
 var INLINE_PLACEHOLDER = /\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}/g;
 function isRecord(value) {
@@ -11387,12 +11464,24 @@ function normalizeConfigInput(raw) {
 function sanitizeConfigValue(value) {
   if (typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
+  if (Array.isArray(value)) return sanitizeParamEntries(value);
   if (!isRecord(value)) return void 0;
   const out = {};
   for (const [key, item] of Object.entries(value)) {
     if (typeof item === "string") out[key] = item;
   }
   return Object.keys(out).length > 0 ? out : void 0;
+}
+function sanitizeParamEntries(value) {
+  const out = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item["name"] !== "string" || typeof item["source"] !== "string") continue;
+    const entry = { name: item["name"], source: item["source"] };
+    if (typeof item["fixedValue"] === "string") entry.fixedValue = item["fixedValue"];
+    if (typeof item["template"] === "string") entry.template = item["template"];
+    out.push(entry);
+  }
+  return out;
 }
 function parseSecretJson(raw) {
   const text = typeof raw === "string" ? raw : "";
@@ -11436,6 +11525,10 @@ function defaultConfigFor(descriptor8) {
   for (const field of configFieldList(descriptor8)) {
     if (field.type === "map") {
       out[field.key] = normalizeMapValue(descriptor8, field.defaultValue);
+      continue;
+    }
+    if (field.type === "paramList") {
+      out[field.key] = [];
       continue;
     }
     if (field.defaultValue !== void 0) out[field.key] = field.defaultValue;
@@ -11489,14 +11582,120 @@ function validateVendorConfig(descriptor8, config) {
     const value = validateFieldValue(descriptor8, field, provided, errors);
     if (value !== void 0) out[field.key] = value;
   }
+  dropExtrasCollidingWithMapping(descriptor8, out, errors);
   return { config: out, errors };
 }
 function validateFieldValue(descriptor8, field, raw, errors) {
   if (field.type === "map") return normalizeMapValue(descriptor8, raw);
+  if (field.type === "paramList") return validateParamListField(field, raw, errors);
   if (field.type === "number") return validateNumberField(field, raw, errors);
   if (field.type === "boolean") return validateBooleanField(field, raw, errors);
   if (field.type === "select") return validateSelectField(field, raw, errors);
   return validateTextField(field, raw, errors);
+}
+function dropExtrasCollidingWithMapping(descriptor8, config, errors) {
+  const extrasField = descriptor8.mapping.extrasField;
+  if (extrasField === void 0) return;
+  const extras = config[extrasField];
+  if (!Array.isArray(extras) || extras.length === 0) return;
+  const reserved = new Set(
+    Object.values(normalizeMapValue(descriptor8, config[descriptor8.mapping.mapField])).map((key) => key.toLowerCase())
+  );
+  const kept = extras.filter((entry) => {
+    if (!reserved.has(entry.name.toLowerCase())) return true;
+    errors.push("\u9644\u52A0\u53C2\u6570\u300C" + entry.name + "\u300D\u4E0E\u53C2\u6570\u6620\u5C04\u7684\u952E\u91CD\u540D\uFF08\u4F1A\u7ED9\u5382\u5546\u53D1\u4E24\u4E2A\u540C\u540D\u53C2\u6570\uFF09");
+    return false;
+  });
+  config[extrasField] = kept;
+}
+function validateParamListField(field, raw, errors) {
+  if (!Array.isArray(raw)) {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u53C2\u6570\u5217\u8868");
+    return void 0;
+  }
+  const max = field.maxItems ?? 50;
+  if (raw.length > max) errors.push(field.label + " \u6700\u591A " + String(max) + " \u6761");
+  const allowed = new Set(field.paramSources ?? ALL_PARAM_SOURCES);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  raw.forEach((item, index) => {
+    const label = field.label + " \u7B2C " + String(index + 1) + " \u9879";
+    if (out.length >= max) return;
+    if (!isRecord(item)) {
+      errors.push(label + "\u683C\u5F0F\u4E0D\u6B63\u786E");
+      return;
+    }
+    const name = typeof item["name"] === "string" ? item["name"].trim() : "";
+    const source = typeof item["source"] === "string" ? item["source"] : void 0;
+    if (name === "") {
+      errors.push(label + "\u7F3A\u5C11\u53C2\u6570\u540D");
+      return;
+    }
+    if (name.length > PARAM_NAME_MAX) {
+      errors.push(label + "\u53C2\u6570\u540D\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_NAME_MAX) + " \u5B57\u7B26\uFF09");
+      return;
+    }
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) {
+      errors.push(label + "\u53C2\u6570\u540D\u91CD\u590D\uFF1A" + name);
+      return;
+    }
+    if (source === void 0 || !ALL_PARAM_SOURCES.includes(source)) {
+      errors.push(label + "\u503C\u6765\u6E90\u65E0\u6548");
+      return;
+    }
+    if (!allowed.has(source)) {
+      errors.push(label + "\u4E0D\u652F\u6301\u7684\u503C\u6765\u6E90\uFF1A" + PARAM_SOURCE_LABELS[source]);
+      return;
+    }
+    const entry = { name, source };
+    if (source === "fixed") {
+      const fixed = typeof item["fixedValue"] === "string" ? item["fixedValue"].trim() : "";
+      if (fixed === "") {
+        errors.push(label + "\u9009\u62E9\u56FA\u5B9A\u503C\u65F6\u5FC5\u987B\u586B\u5199\u503C");
+        return;
+      }
+      if (fixed.length > PARAM_VALUE_MAX) {
+        errors.push(label + "\u56FA\u5B9A\u503C\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_VALUE_MAX) + " \u5B57\u7B26\uFF09");
+        return;
+      }
+      entry.fixedValue = fixed;
+    } else if (source === "template") {
+      const template = typeof item["template"] === "string" ? item["template"].trim() : "";
+      const valid = validateParamTemplate(template, label, errors);
+      if (valid === void 0) return;
+      entry.template = valid;
+    }
+    seen.add(lower);
+    out.push(entry);
+  });
+  return out;
+}
+function validateParamTemplate(value, label, errors) {
+  if (value === "") {
+    errors.push(label + "\u9009\u62E9\u81EA\u5B9A\u4E49\u6A21\u677F\u65F6\u5FC5\u987B\u586B\u5199\u6A21\u677F");
+    return void 0;
+  }
+  if (value.length > PARAM_TEMPLATE_MAX) {
+    errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_TEMPLATE_MAX) + " \u5B57\u7B26\uFF09");
+    return void 0;
+  }
+  for (const match of value.matchAll(/\$\{([^}]*)\}/g)) {
+    const expr = (match[1] ?? "").trim();
+    const dot2 = expr.indexOf(".");
+    const root2 = dot2 === -1 ? expr : expr.slice(0, dot2);
+    const rest = dot2 === -1 ? "" : expr.slice(dot2 + 1);
+    if (root2 !== "record" && root2 !== "task") {
+      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u652F\u6301 record / task \u5B57\u6BB5\uFF08\u4E0D\u652F\u6301\uFF1A" + expr + "\uFF09");
+      return void 0;
+    }
+    const allowedPath = TEMPLATE_ALLOWED_PATHS[root2];
+    if (!allowedPath.includes(rest)) {
+      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u5B57\u6BB5\u4E0D\u5728\u5141\u8BB8\u6E05\u5355\uFF1A" + expr);
+      return void 0;
+    }
+  }
+  return value;
 }
 function validateNumberField(field, raw, errors) {
   const value = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
@@ -11585,6 +11784,7 @@ function isConfigFieldMissing(field, value) {
     if (!isRecord(value)) return true;
     return Object.keys(value).length === 0;
   }
+  if (field.type === "paramList") return !Array.isArray(value) || value.length === 0;
   return String(value).trim() === "";
 }
 function migrateLegacyConfig(method, legacy) {
@@ -11715,17 +11915,55 @@ function formatMapped(entries2, style) {
   for (const entry of entries2) object[entry.name] = entry.value;
   return JSON.stringify(object);
 }
-function resolveMapped(descriptor8, config, record) {
+function resolveMapped(descriptor8, ctx) {
+  const config = { ...defaultConfigFor(descriptor8), ...ctx.config };
   const keys = mappingKeys(descriptor8, config);
   const entries2 = [];
   for (const target of descriptor8.mapping.targets) {
-    const value = semanticValue6(record, target.semantic).trim();
+    const value = semanticValue6(ctx.record, target.semantic).trim();
     if (value === "" && target.semantic !== "content") {
       throw new Error("\u7F3A\u5C11\u6620\u5C04\u503C\uFF1A" + SEMANTIC_LABELS[target.semantic]);
     }
     entries2.push({ name: keys[target.semantic], value });
   }
+  entries2.push(...resolveExtraEntries(descriptor8, config, ctx));
   return formatMapped(entries2, descriptor8.mapping.style);
+}
+function resolveExtraEntries(descriptor8, config, ctx) {
+  const extrasField = descriptor8.mapping.extrasField;
+  if (extrasField === void 0) return [];
+  const raw = config[extrasField];
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry["name"] !== "string" || entry["name"].trim() === "") continue;
+    out.push({ name: entry["name"].trim(), value: resolveParamSourceValue(entry, ctx) });
+  }
+  return out;
+}
+function resolveParamSourceValue(entry, ctx) {
+  const source = entry["source"];
+  if (source === "room") return ctx.record.chatName;
+  if (source === "content") return ctx.record.text;
+  if (source === "at") return semanticValue6(ctx.record, "at");
+  if (source === "taskName") return ctx.taskName;
+  if (source === "keyword") return ctx.record.keyword;
+  if (source === "triggeredAt") return new Date(ctx.record.triggeredAt).toLocaleString("zh-CN", { hour12: false });
+  if (source === "chatType") return ctx.record.chatType === "group" ? "\u7FA4\u804A" : "\u5355\u804A";
+  if (source === "taskId") return String(ctx.taskId);
+  if (source === "recordId") return String(ctx.recordId);
+  if (source === "fixed") return typeof entry["fixedValue"] === "string" ? entry["fixedValue"] : "";
+  if (source === "template") {
+    const rendered = renderTemplate(entry["template"] ?? "", {
+      record: ctx.record,
+      task: { name: ctx.taskName, id: ctx.taskId }
+    });
+    if (typeof rendered === "string") return rendered;
+    if (typeof rendered === "number") return String(rendered);
+    if (typeof rendered === "boolean") return rendered ? "true" : "false";
+    throw new Error("\u9644\u52A0\u53C2\u6570\u300C" + String(entry["name"]) + "\u300D\u7684\u81EA\u5B9A\u4E49\u6A21\u677F\u6CA1\u6709\u89E3\u6790\u51FA\u5B57\u7B26\u4E32");
+  }
+  throw new Error("\u672A\u77E5\u9644\u52A0\u53C2\u6570\u6765\u6E90\uFF1A" + String(source));
 }
 function renderRequest(descriptor8, ctx) {
   const config = { ...defaultConfigFor(descriptor8), ...ctx.config };
@@ -11733,12 +11971,13 @@ function renderRequest(descriptor8, ctx) {
     config,
     secret: ctx.secrets,
     record: ctx.record,
+    task: { name: ctx.taskName, id: ctx.taskId },
     invocation: {
       taskId: ctx.taskId,
       recordId: ctx.recordId,
       idempotencyKey: ctx.idempotencyKey
     },
-    mapped: resolveMapped(descriptor8, config, ctx.record)
+    mapped: resolveMapped(descriptor8, ctx)
   };
   const url = renderTemplate(descriptor8.request.url, roots);
   if (typeof url !== "string" || url.trim() === "") {

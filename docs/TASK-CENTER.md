@@ -154,6 +154,13 @@ SSR 与 E2E 选择器依赖它。会话与触发对象在这一版不提供换�
   placeholder 为「已保存，留空保持不变」（界面只从 `triggerSecretSet` 知道「配置过」）；
   `map` 字段渲染 3 个输入（会话名 / 触发文本 / 触发对象，默认 key 来自
   `descriptor.mapping.targets`，标签见 `target.label`）。
+- `paramList` 字段（如八爪鱼「附加参数」）渲染为**可增删的参数列表**：每行 = 参数名输入 +
+  「值来源」下拉（`field.paramSources` 子集，缺省 11 种：会话名 / 触发文本 / 触发对象 /
+  任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 固定值 / 自定义模板）+
+  按来源显示的「固定值」输入或「自定义模板」输入（模板只允许 `${record.<白名单字段>}` /
+  `${task.name}` / `${task.id}`，模板框旁给白名单提示）；支持「添加 / 删除」（列表顺序即
+  请求里的参数顺序），最多 `field.maxItems` 条（八爪鱼 = 20），超过时禁用「添加」；参数名
+  不得与三个映射键重名、同一列表内不得重名（保存 / 标记已完善时报错并定位到该行）。
 - 每个输入 `aria-label = field.ariaLabel ?? field.label`（E2E / SSR 依赖）；`example` 作 placeholder。
 - 厂商说明区：厂商名 + 状态徽标（实验性 → ⚠ 实验性）+ 一句话简介 + 官方文档链接 +
   「参数核对 2026-10-21」+ 风险前 2 条（小字）。
@@ -375,10 +382,10 @@ stateDiagram-v2
 图片解码在投递时进行。单张超过约 8,000,000 字符的 data URL、解码失败或路径不安全时，
 该张图片省略并带 `error`，不会让整条回调失败。
 
-### 6.3 内置八爪鱼 RPA（触发方式 = `bazhuayu`，v23 起）
+### 6.3 内置八爪鱼 RPA（触发方式 = `bazhuayu`，v23 起；v25 参数增强）
 
-它现在是注册表里的**内置厂商之一**（`query/rpa/vendors/bazhuayu.ts`）：固定主机 + `X-Api-Key`，
-请求体与 v23 完全一致（作为 S0 重构的回归基线）。
+它现在是注册表里的**内置厂商之一**（`query/rpa/vendors/bazhuayu.ts`，descriptor version `1.1.0`）：
+固定主机 + `X-Api-Key`。**不配置参数映射 / 附加参数时，请求体与 v23 逐字节一致**（S0 回归基线）。
 
 - 方法：`POST`
 - 地址：`https://api-rpa.bazhuayu.com/api/bots/scheduling/start`（**固定主机**，不可改）
@@ -387,7 +394,7 @@ stateDiagram-v2
   触发记录的 `callback_error`
 - **不含图片**：RPA 接口没有图片参数，触发记录里的图片引用不会解码、也不会发送
 
-请求体形状来自 `TaskBazhuayuStartPayload`，示例：
+请求体形状沿用 `TaskBazhuayuStartPayload`，示例（未配置参数映射 / 附加参数时）：
 
 ```json
 {
@@ -404,17 +411,75 @@ stateDiagram-v2
 }
 ```
 
-字段映射：
+固定字段映射：`FlowId` 来自任务配置的「FlowId」；`FlowContentRetrievalMode` 固定
+`ByNewestContent`；`SpecifiedPublicationVersion` / `SpecifiedBot` 固定空串；
+`UserStartSource` 固定 `OpenApi`。
 
-| 字段 | 来源 |
-|---|---|
-| `FlowId` | 任务编辑抽屉里该任务的「FlowId」 |
-| `FlowContentRetrievalMode` | 固定 `ByNewestContent`（八爪鱼开放接口要求） |
-| `SpecifiedPublicationVersion` / `SpecifiedBot` | 固定空串（同上） |
-| `UserStartSource` | 固定 `OpenApi`（同上） |
-| `Params.room_name` | 触发记录的会话显示名 |
-| `Params.content` | 触发文本（上限 4,000 字；过隐私闸后发送） |
-| `Params.at_name` | 触发对象显示名：群聊用目标成员 `targetName`；**单聊任务创建时不填 `targetName`，`at_name` 回落会话名 `chatName`**（否则单聊任务会把它发成空串） |
+#### 6.3.1 参数映射（三个内置参数可改名，v25）
+
+| 语义参数 | 默认参数名 | 取值（仍由系统决定） |
+|---|---|---|
+| 会话名 | `room_name` | 触发记录的会话显示名 `chatName` |
+| 触发文本 | `content` | 触发文本（上限 4,000 字；过隐私闸后发送） |
+| 触发对象 | `at_name` | 群聊 = 目标成员 `targetName`；**单聊没有独立目标名 → 回落会话名 `chatName`** |
+
+`paramMap` 是 `map` 配置字段（默认 `{room: 'room_name', content: 'content', at: 'at_name'}`），
+只改这三个键的名字、不改取值来源；保存后落在 `trigger_config.paramMap`。
+
+#### 6.3.2 附加参数（`extraParams`，可选，最多 20 条）
+
+描述符声明 `mapping.extrasField='extraParams'`；通用管道在三个语义参数**之后**把
+`trigger_config.extraParams` 逐条解析并追加进同一个参数容器（`object` 形态 → `Params`
+对象的额外键，数组 / form 形态同理追加）。条目结构 `{ name, source, fixedValue?, template? }`；
+`name` 在同一列表内唯一，且**不得与三个映射键重名**（保存 / 标记已完善时报错）。
+
+值来源（11 种）与解析规则：
+
+| `source` | 界面名称 | 解析为 |
+|---|---|---|
+| `room` | 会话名 | 触发记录的会话显示名 |
+| `content` | 触发文本 | 已过隐私闸的触发文本 |
+| `at` | 触发对象 | 目标成员显示名；单聊回落会话名 |
+| `taskName` | 任务名 | 任务当前名称 |
+| `keyword` | 触发关键词 | 命中的关键词原文 |
+| `triggeredAt` | 触发时间 | 本地时间文本（`zh-CN` 24 小时制） |
+| `chatType` | 会话类型 | `群聊` / `单聊` |
+| `taskId` | 任务 id | 十进制字符串 |
+| `recordId` | 触发记录 id | 十进制字符串 |
+| `fixed` | 固定值 | `fixedValue` 原文（≤2048 字） |
+| `template` | 自定义模板 | 渲染后的字符串（≤512 字） |
+
+**自定义模板白名单**（只允许下列 `${...}`；其余在保存时报错）：
+`${record.chatName}`、`${record.targetName}`、`${record.targetUsername}`、`${record.username}`、
+`${record.keyword}`、`${record.text}`、`${record.chatType}`、`${record.triggeredAt}`、
+`${task.name}`、`${task.id}`。**不允许 `${secret.*}` / `${config.*}` 或白名单外字段**；
+模板只做字符串插值 / 整值替换，不执行表达式。
+
+校验与上限：参数名 ≤64 字、同一列表唯一、不得与三个映射键重名；固定值 ≤2048 字；
+模板 ≤512 字；附加参数 ≤`maxItems`（八爪鱼 = 20，通用缺省 50）；空列表合法。
+
+请求体示例（`paramMap` 改成 `room/content/at`，并追加两条参数：`keyword` 来源 +
+`summary` 自定义模板 `${record.chatName} / ${record.keyword} / ${record.triggeredAt}`）：
+
+```json
+{
+  "FlowId": "6ad859ccee2df270d53fc6e5",
+  "FlowContentRetrievalMode": "ByNewestContent",
+  "SpecifiedPublicationVersion": "",
+  "SpecifiedBot": "",
+  "Params": {
+    "room": "项目群",
+    "content": "王工，最新报价请今天发我",
+    "at": "小王",
+    "keyword": "报价",
+    "summary": "项目群 / 报价 / 2026/10/20 09:03:03"
+  },
+  "UserStartSource": "OpenApi"
+}
+```
+
+> 该机制通用：其他厂商后续只需在描述符里声明 `mapping.extrasField`（指向一个
+> `type: 'paramList'` 字段）即可复用，核心管道不用改。
 
 ### 6.4 厂商目录（`listRpaVendors`）与逐家请求
 
@@ -424,7 +489,7 @@ stateDiagram-v2
 | id | 名称 | 状态 | 触发主机 | 请求要点 | 凭据（secret） | 图片 |
 |---|---|---|---|---|---|---|
 | `webhook` | 内置 Webhook | stable | 用户填写的 http(s) 地址 | 整条记录 JSON | 无 | ✅ 含图片 |
-| `bazhuayu` | 八爪鱼 RPA | stable | `api-rpa.bazhuayu.com` | `FlowId` + `Params` 三键 + `X-Api-Key` | `apiKey` | ❌ 不发 |
+| `bazhuayu` | 八爪鱼 RPA | stable | `api-rpa.bazhuayu.com` | `FlowId` + `Params` 三键（可改名）+ 可选附加参数（≤20 条）+ `X-Api-Key` | `apiKey` | ❌ 不发 |
 | `yingdao` | 影刀 RPA | stable | `api.yingdao.com`（专有云用实例地址） | 先换 token，再 `POST /oapi/dispatch/v2/job/start`；`idempotentUuid` + `params[]` | `accessKeyId` / `accessKeySecret` | ❌ 不发 |
 | `uipath` | UiPath Orchestrator | stable | `cloud.uipath.com`（`*.uipath.com` / `*.uipath.us`）或实例地址 | `POST …/odata/Jobs/…StartJobs`；PAT 或 OAuth（token-exchange）；`startInfo.InputArguments` 为 JSON 字符串 | `pat` 或 `clientId` / `clientSecret` | ❌ 不发 |
 | `aliyun-rpa` | 阿里云 RPA | **实验性** | `console-rpa.aliyun.com`（线下部署用实例地址） | HMAC-SHA1 RPC 签名（custom）；服务型 `CreateTask` / 本地型 `createServiceTask` | `accessKeyId` / `accessKeySecret` | ❌ 不发 |
@@ -463,7 +528,11 @@ v24（2026-10-21，多厂商）新增四列：
 
 - `trigger_method TEXT NOT NULL DEFAULT 'webhook'`：开放字符串 —— 内置 `webhook` / `bazhuayu`，
   或注册表里的厂商 id；旧库缺列 / 无法识别的值按 `webhook` 归一；
-- `trigger_config TEXT NOT NULL DEFAULT '{}'`：非敏感配置 JSON（键 = 描述符字段 key，含已填默认值）；
+- `trigger_config TEXT NOT NULL DEFAULT '{}'`：非敏感配置 JSON（键 = 描述符字段 key，含已填默认值）。
+  八爪鱼在其中的结构：`flowId`（string）、`paramMap`（`{ room, content, at }` 三个参数名映射）、
+  `extraParams`（**附加参数数组** `Array<{ name: string; source: string; fixedValue?: string; template?: string }>`，
+  `source` 为 §6.3.2 的 11 种值来源之一；非敏感，随任务列表返回；上限由描述符
+  `maxItems` 决定，八爪鱼 = 20，通用缺省 50）；
 - `trigger_secret TEXT NOT NULL DEFAULT '{}'`：敏感配置 JSON（键 = secret 字段 key）。
   **任何公开快照都不返回原文**：`TaskInfo` 只回 `triggerSecretSet`（键 → 是否已配置），
   列表与编辑表单都拿不到凭据本身，投递时由后端读出使用。凭据以明文存在本机 SQLite 里，
@@ -588,10 +657,14 @@ payload 变成第二份数据源。
     skipped；旧任务不会自动迁移到别的厂商，也不会静默改成 Webhook。
 16. **厂商参数版本漂移。** 任务保存 `triggerVendorVersion`；描述符更新后旧任务只提示复核，
     不自动改配置。厂商 id 永不复用，下线厂商保留 id 黑名单。
+17. **八爪鱼附加参数完全由用户配置，发送前请自行确认对端流程能接受。** 参数名 / 来源 /
+    固定值 / 模板在保存时做格式与白名单校验（重名、长度、模板字段），但**参数名是否与对端
+    流程入参一致、语义是否正确只有用户知道**；多余的参数可能被对端忽略或报错。附加参数是
+    内容出网的一部分（任务名 / 关键词 / 时间等可能随参数发出），已在 `PRIVACY.md` G3 登记。
 
 ### 10.5 文档漂移
 
-17. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
+19. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
     精确重试白名单修正；[`UI-WECHAT-REDESIGN-INVENTORY.md`](UI-WECHAT-REDESIGN-INVENTORY.md) 的 DL-09 行
     也标明创建弹窗没有 Webhook 地址字段。
 
@@ -627,6 +700,7 @@ payload 变成第二份数据源。
 - [ ] 抽屉标题是「编辑任务 · <任务名>」，表单保留 `aria-label="编辑任务：<任务名>"`。
 - [ ] 「触发方式」选择器由后端 `listRpaVendors` 目录渲染（内置 Webhook / 八爪鱼 + 影刀 / UiPath / 阿里云 / 来也 / 实在），默认 Webhook；任务当前厂商不在目录时显示「触发方式不可用」并禁止保存。
 - [ ] 切到某厂商后按描述符渲染动态字段：secret 用密码框（已配置时「已保存，留空保持不变」）、map 渲染会话名 / 触发文本 / 触发对象三个输入、select / number / boolean 正常；`advanced` 字段收进「高级」折叠。
+- [ ] 八爪鱼「参数映射」三个输入默认 `room_name` / `content` / `at_name`、可改名；「附加参数」支持添加 / 删除（顺序即请求参数顺序），最多 20 条（满时禁用添加），值来源下拉 11 种、按来源显示固定值或自定义模板输入；模板框只允许白名单字段（非法字段保存时行内报错、定位到该行）。
 - [ ] 厂商说明区显示厂商名、状态徽标（阿里云 / 来也 / 实在 → ⚠ 实验性）、官方文档链接、「参数核对 2026-10-21」与风险前 2 条。
 - [ ] 缺当前方式的必填项 / 必填凭据时「标记已完善」整单拒绝，报「标记已完善前需补全：…」并把焦点移到第一个缺项字段。
 - [ ] 任务行摘要：Webhook 显示 `Webhook <host>` / 未填时 `未填 Webhook`；八爪鱼显示 `八爪鱼 RPA · <flowId>`；其它厂商显示 `<厂商名> · <summary 字段>`（如影刀显示应用 UUID）。
@@ -662,6 +736,9 @@ payload 变成第二份数据源。
 - [ ] 未知 / 已下线 `triggerMethod`：保存拒绝（中文原因）；读取照常显示「触发方式不可用」；投递 skipped 且不发请求。
 - [ ] `triggerConfig` 缺省=沿用、传入=整体替换并补描述符默认值；`triggerSecret` 逐键覆盖（缺省保留、`''` 清空、非空覆盖）。
 - [ ] 标记「已完善」按 `missingReadyFields`：webhook 缺 url / 八爪鱼缺 flowId 或 apiKey / 影刀缺 robotUuid 或 AK/SK / UiPath 缺 releaseKey 或 PAT(OAuth) / 阿里云缺 appId 或 AK/SK / 来也缺 flowName 或 token / 实在缺 jobUuid 或 AppKey/Secret 均整单失败。
+- [ ] 八爪鱼参数映射：`paramMap` 三个键可改且只影响 `Params` 的三个键；空/空白项回落默认键（`room_name` / `content` / `at_name`）。
+- [ ] 八爪鱼附加参数（`extraParams`）校验：参数名 ≤64 字、同列表唯一、不得与三个映射键重名；`source` 必须在描述符 `paramSources` 内；`fixed` 必须有固定值 ≤2048 字；`template` 只允许 `${record.<白名单>}` / `${task.name}` / `${task.id}` 且 ≤512 字；条数 ≤20；空列表合法。
+- [ ] 八爪鱼投递：假 fetch 收到的 URL / `X-Api-Key` / body 字段与 §6.3 一致；不配置参数映射/附加参数时与旧请求体逐字节一致；11 种 `source` 各自解析正确；`Params` 含映射后的三个键 + 附加参数解析值；凭据不出现在 `Params` 里；记录状态 `sent`，且**不含图片**。
 - [ ] 列表返回值与 `JSON.stringify` 里不含任何厂商凭据原文（`triggerSecretSet` 只回布尔）。
 - [ ] `listRpaVendors` 返回目录（`items` + `registryVersion`），不含凭据/钩子；未知 id 不崩。
 - [ ] 投递成功写 `sent`（厂商返回 id 时落 `external_task_id`），失败写 `failed` + 错误；命中时配置缺失 ⇒ 记录 `skipped`，后台批量投递只捞 `pending`。
@@ -703,7 +780,7 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 | 共享类型（厂商） | [`../src/backend/wechat-data/src/types-rpa.ts`](../src/backend/wechat-data/src/types-rpa.ts) | `RpaVendorDescriptor` / `RpaField` / `RpaVendorCatalog` / `RpaTriggerConfig` / `RpaTriggerSecretSet`（`build:types` 后给前端） |
 | 厂商注册表 | [`../src/backend/wechat-data/src/query/rpa/registry.ts`](../src/backend/wechat-data/src/query/rpa/registry.ts) | 内置 + 5 家厂商适配器数组、`findVendor`、`listVendorDescriptors`、`RPA_REGISTRY_VERSION` |
 | 通用派发管道 | [`../src/backend/wechat-data/src/query/rpa/dispatch.ts`](../src/backend/wechat-data/src/query/rpa/dispatch.ts) | **本域唯一出网函数 `sendRequest`** + `dispatchRpaRecord`：主机白名单 / 鉴权 / 重试 / 响应解析 |
-| 字段校验与渲染 | [`../src/backend/wechat-data/src/query/rpa/template.ts`](../src/backend/wechat-data/src/query/rpa/template.ts) | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` / 参数映射 |
+| 字段校验与渲染 | [`../src/backend/wechat-data/src/query/rpa/template.ts`](../src/backend/wechat-data/src/query/rpa/template.ts) | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` / 参数映射 / **附加参数来源解析与模板白名单** |
 | 鉴权 | [`../src/backend/wechat-data/src/query/rpa/auth.ts`](../src/backend/wechat-data/src/query/rpa/auth.ts) | bearer / header / token-exchange / custom（阿里云 HMAC-RPC 签名）、token 缓存 |
 | 厂商适配器 | [`../src/backend/wechat-data/src/query/rpa/vendors/`](../src/backend/wechat-data/src/query/rpa/vendors/) | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件（描述符 + 可选钩子） |
 | 存储/CRUD | [`../src/backend/wechat-data/src/query/task-center.ts`](../src/backend/wechat-data/src/query/task-center.ts) | 建库、v24 迁移/双写、校验、水位、任务读写、记录查询 |
@@ -734,13 +811,14 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 
 - **后端行为**：用临时目录合成真实 `Msg_*` 表，覆盖 CRUD、校验、水位、对象过滤、
   最近图片、回调请求体、隐私闸、失败状态和读错误口径；八爪鱼方式另有独立用例覆盖
-  旧库迁移、ready 校验、Key 保留/清空与「Key 不进返回值」、请求体与失败状态（S0 回归基线）；
+  旧库迁移、ready 校验、Key 保留/清空与「Key 不进返回值」、请求体与失败状态（S0 回归基线），
+  以及 v25 的**参数映射 / 附加参数**（11 种值来源、模板白名单、重名与上限校验、默认请求体不变）；
   多厂商另有 `task-center-rpa.spec.ts`（v24 迁移/双写、未知厂商、通用配置校验、通用派发、
   批量待投递）与两份厂商 spec（描述符完整性、逐家 mock 派发与重试策略）。
 - **调度行为**：覆盖扫描单飞/补跑、事件时机、扫描与投递解耦、失败不卡死，以及
   “不得退回只靠 30 秒定时器”的接线守卫。
 - **前端契约**：覆盖纯逻辑文案/校验、导航与懒加载、API 接线、手机降级、弹窗焦点与
-  SSR 冒烟（含右侧编辑抽屉、`listRpaVendors` 目录驱动与动态字段渲染）。
+  SSR 冒烟（含右侧编辑抽屉、`listRpaVendors` 目录驱动、动态字段渲染与 `paramList` 控件）。
 - **桌面端到端**：`npm run task-center:e2e` 使用临时用户目录启动真实 Electron，
   经 preload → Remote → worker → SQLite 走通双栏空态、任务搜索、120 条同毫秒记录的
   跨页加载、`%` / `_` / 回调错误搜索、任务批删保留历史、触发记录批删重算统计，

@@ -105,7 +105,14 @@ const TASK_BAZHUAYU: TaskInfo = {
   photoLimit: 0,
   mentionMeOnly: false,
   triggerMethod: 'bazhuayu',
-  triggerConfig: { flowId: '6ad859ccee2df270d53fc6e5' },
+  triggerConfig: {
+    flowId: '6ad859ccee2df270d53fc6e5',
+    paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
+    extraParams: [
+      { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+      { name: 'kw_template', source: 'template', template: '${record.keyword}' },
+    ],
+  },
   triggerSecretSet: { apiKey: true },
   triggerVendorVersion: '1.0.0',
   callbackUrl: '',
@@ -235,11 +242,25 @@ const BAZHUAYU_VENDOR: RpaVendorDescriptor = {
       pattern: '^[A-Za-z0-9_-]{1,128}$',
     },
     { key: 'apiKey', label: '八爪鱼 API Key', type: 'password', required: true, secret: true, ariaLabel: '八爪鱼 API Key' },
+    { key: 'paramMap', label: '参数映射', type: 'map', required: false },
+    {
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      help: '随 Params 一起发送的附加参数；参数名不要与上面三个映射键重名',
+      paramSources: [
+        'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
+        'taskId', 'recordId', 'fixed', 'template',
+      ],
+    },
   ],
   auth: { modes: [] },
   mapping: {
     style: 'object',
     mapField: 'paramMap',
+    extrasField: 'extraParams',
     targets: [
       { semantic: 'room', defaultKey: 'room_name' },
       { semantic: 'content', defaultKey: 'content' },
@@ -614,6 +635,26 @@ check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已
 check('八爪鱼 Key 从未配置时：placeholder 提示填写（不是「已保存」）', () => {
   ok(bazhuayuNewFormHtml.includes('填写八爪鱼 API Key'), '未配置 Key 的 placeholder 不对')
   ok(!bazhuayuNewFormHtml.includes('已保存，留空保持不变'), '从未配置 Key 却提示「已保存」')
+})
+
+check('八爪鱼参数传递：参数映射（可改键）+ 附加参数（固定值 / 自定义模板两行）都渲染', () => {
+  ok(bazhuayuFormHtml.includes('参数映射'), '缺少「参数映射」字段')
+  ok(bazhuayuFormHtml.includes('aria-label="参数映射 · 会话名"'), 'map 字段没有渲染「会话名」参数名输入')
+  ok(bazhuayuFormHtml.includes('value="room_name"'), '参数映射没有回填默认 room_name')
+  ok(bazhuayuFormHtml.includes('附加参数'), '缺少「附加参数」字段')
+  ok(bazhuayuFormHtml.includes('随 Params 一起发送'), '附加参数缺少 help 说明')
+  ok(bazhuayuFormHtml.includes('添加附加参数'), '缺少「添加附加参数」按钮')
+  ok(bazhuayuFormHtml.includes('最多 20 条'), '附加参数没有展示 maxItems 上限')
+  ok(bazhuayuFormHtml.includes('aria-label="附加参数 参数名 1"'), '第一行缺少「附加参数 参数名 1」')
+  ok(bazhuayuFormHtml.includes('aria-label="附加参数 值来源 1"'), '第一行缺少「附加参数 值来源 1」')
+  ok(bazhuayuFormHtml.includes('aria-label="附加参数 固定值 1"'), '固定值来源没有渲染「附加参数 固定值 1」')
+  ok(bazhuayuFormHtml.includes('value="order_no"'), '第一行参数名没有回填 order_no')
+  ok(bazhuayuFormHtml.includes('value="A-001"'), '固定值没有回填 A-001')
+  ok(bazhuayuFormHtml.includes('aria-label="附加参数 模板 2"'), '第二行缺少「附加参数 模板 2」')
+  ok(bazhuayuFormHtml.includes('value="kw_template"'), '第二行参数名没有回填 kw_template')
+  ok(bazhuayuFormHtml.includes('value="${record.keyword}"'), '模板没有回填 ${record.keyword}')
+  ok(bazhuayuFormHtml.includes('aria-label="删除附加参数 1"'), '缺少「删除附加参数 1」按钮')
+  ok(!bazhuayuFormHtml.includes('aria-label="附加参数 固定值 2"'), '模板来源的行不该渲染固定值输入')
 })
 
 check('影刀 RPA：catalog 动态字段（账号与鉴权 / 流程与参数 / 高级 / map / 厂商说明）', () => {

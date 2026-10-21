@@ -16,7 +16,7 @@
  * `auth.ts` 统一替换（凭据不进模板上下文之外的任何地方）。
  */
 import type { RpaField, RpaTriggerConfig, RpaTriggerSecretInput, RpaTriggerSecretSet, RpaVendorDescriptor } from '../../types-rpa.ts';
-import type { RpaHttpRequest, RpaInvocationContext, RpaRecordContext } from './types.ts';
+import type { RpaHttpRequest, RpaInvocationContext } from './types.ts';
 /** 非敏感配置字段（写 `trigger_config`；`secret` 字段不算）。 */
 export declare function configFieldList(descriptor: RpaVendorDescriptor): RpaField[];
 /**
@@ -154,14 +154,14 @@ export declare function readJsonPath(root: unknown, path: string): unknown;
  */
 export declare function renderTemplate(template: unknown, roots: Record<string, unknown>): unknown;
 /**
- * 生成 `mapped` 根：三个语义值按映射 key 装进厂商容器（`mapping.style` 五种形态）。
+ * 生成 `mapped` 根：三个语义值按映射 key 装进厂商容器（`mapping.style` 五种形态），
+ * 再把「附加参数」（`mapping.extrasField`，若有）按值来源解析后追加进去。
  * @param descriptor - 厂商描述符。
- * @param config - 已归一化配置。
- * @param record - 触发记录快照。
+ * @param ctx - 投递上下文（含配置 / 触发记录 / 任务名）。
  * @returns `object` / 数组 / JSON 字符串 / form 串（视 style）。
- * @throws 语义值缺失时抛可读错误。
+ * @throws 语义值缺失或附加参数模板无法解析时抛可读错误。
  */
-export declare function resolveMapped(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig, record: RpaRecordContext): unknown;
+export declare function resolveMapped(descriptor: RpaVendorDescriptor, ctx: RpaInvocationContext): unknown;
 /**
  * 按描述符渲染一次请求（`buildRequest` 钩子存在时由适配器覆盖，不会走到这里）。
  * @param descriptor - 厂商描述符。

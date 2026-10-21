@@ -18,6 +18,8 @@
 import type {
   RpaConfigValue,
   RpaField,
+  RpaParamEntry,
+  RpaParamSource,
   RpaParamStyle,
   RpaSemantic,
   RpaTriggerConfig,
@@ -33,8 +35,48 @@ const SEMANTIC_LABELS: Record<RpaSemantic, string> = {
   content: '触发文本',
   at: '触发对象',
 }
+
+/** 附加参数的全部值来源（描述符可用 `field.paramSources` 收窄子集）。 */
+const ALL_PARAM_SOURCES: readonly RpaParamSource[] = [
+  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
+  'taskId', 'recordId', 'fixed', 'template',
+]
+
+/** 附加参数「值来源」的中文名（校验错误与文档共用同一套字面量）。 */
+const PARAM_SOURCE_LABELS: Record<RpaParamSource, string> = {
+  room: '会话名',
+  content: '触发文本',
+  at: '触发对象',
+  taskName: '任务名',
+  keyword: '触发关键词',
+  triggeredAt: '触发时间',
+  chatType: '会话类型',
+  taskId: '任务 id',
+  recordId: '触发记录 id',
+  fixed: '固定值',
+  template: '自定义模板',
+}
+
+/**
+ * 自定义模板允许引用的字段（白名单，防止把凭据/无关上下文带进参数）。
+ * 只允许 `${record.<字段>}` 与 `${task.<字段>}`，未知字段在保存时报错。
+ */
+const TEMPLATE_ALLOWED_PATHS: Readonly<Record<'record' | 'task', readonly string[]>> = {
+  record: [
+    'chatName', 'targetName', 'targetUsername', 'username', 'keyword', 'text',
+    'chatType', 'triggeredAt',
+  ],
+  task: ['name', 'id'],
+}
+
 /** 地址类字段的最大长度（与旧 Webhook 回调地址口径一致）。 */
 const URL_FIELD_MAX = 2048
+/** 附加参数名最大长度。 */
+const PARAM_NAME_MAX = 64
+/** 固定值最大长度。 */
+const PARAM_VALUE_MAX = 2048
+/** 自定义模板最大长度。 */
+const PARAM_TEMPLATE_MAX = 512
 /** 整值占位符：模板值恰好等于一个 `${root.path}` 时整体替换（保留对象/数组/数字）。 */
 const WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/
 /** 字符串中间的占位符。 */
@@ -126,16 +168,30 @@ export function normalizeConfigInput(raw: unknown): RpaTriggerConfig {
   return out
 }
 
-/** 单个配置值的白名单化（对象只保留字符串值，即 map 字段）。 */
+/** 单个配置值的白名单化（对象只保留字符串值，即 map 字段；数组按附加参数条目过滤）。 */
 function sanitizeConfigValue(value: unknown): RpaConfigValue | undefined {
   if (typeof value === 'string' || typeof value === 'boolean') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (Array.isArray(value)) return sanitizeParamEntries(value)
   if (!isRecord(value)) return undefined
   const out: Record<string, string> = {}
   for (const [key, item] of Object.entries(value)) {
     if (typeof item === 'string') out[key] = item
   }
   return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 附加参数数组的粗筛（保留 name/source/固定值/模板字符串，细校验交给 validateVendorConfig）。 */
+function sanitizeParamEntries(value: unknown[]): RpaParamEntry[] {
+  const out: RpaParamEntry[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item['name'] !== 'string' || typeof item['source'] !== 'string') continue
+    const entry: RpaParamEntry = { name: item['name'], source: item['source'] as RpaParamSource }
+    if (typeof item['fixedValue'] === 'string') entry.fixedValue = item['fixedValue']
+    if (typeof item['template'] === 'string') entry.template = item['template']
+    out.push(entry)
+  }
+  return out
 }
 
 /** 解析库里的 `trigger_secret` JSON（只保留非空字符串值；原文永不返回调用方快照）。 */
@@ -200,6 +256,10 @@ export function defaultConfigFor(descriptor: RpaVendorDescriptor): RpaTriggerCon
   for (const field of configFieldList(descriptor)) {
     if (field.type === 'map') {
       out[field.key] = normalizeMapValue(descriptor, field.defaultValue)
+      continue
+    }
+    if (field.type === 'paramList') {
+      out[field.key] = []
       continue
     }
     if (field.defaultValue !== undefined) out[field.key] = field.defaultValue
@@ -309,6 +369,7 @@ export function validateVendorConfig(
     const value = validateFieldValue(descriptor, field, provided, errors)
     if (value !== undefined) out[field.key] = value
   }
+  dropExtrasCollidingWithMapping(descriptor, out, errors)
   return { config: out, errors }
 }
 
@@ -320,10 +381,137 @@ function validateFieldValue(
   errors: string[],
 ): RpaConfigValue | undefined {
   if (field.type === 'map') return normalizeMapValue(descriptor, raw)
+  if (field.type === 'paramList') return validateParamListField(field, raw, errors)
   if (field.type === 'number') return validateNumberField(field, raw, errors)
   if (field.type === 'boolean') return validateBooleanField(field, raw, errors)
   if (field.type === 'select') return validateSelectField(field, raw, errors)
   return validateTextField(field, raw, errors)
+}
+
+/**
+ * 附加参数与三个语义映射键重名时丢弃该条并报错。
+ *
+ * 为什么不在渲染时决定：重名会让「到底谁覆盖谁」取决于拼接顺序，用户看不出来；
+ * 保存时就明确拒绝，比到厂商那边参数被悄悄改写更容易排查。
+ */
+function dropExtrasCollidingWithMapping(
+  descriptor: RpaVendorDescriptor,
+  config: RpaTriggerConfig,
+  errors: string[],
+): void {
+  const extrasField = descriptor.mapping.extrasField
+  if (extrasField === undefined) return
+  const extras = config[extrasField]
+  if (!Array.isArray(extras) || extras.length === 0) return
+  const reserved = new Set(
+    Object.values(normalizeMapValue(descriptor, config[descriptor.mapping.mapField]))
+      .map((key) => key.toLowerCase()),
+  )
+  const kept = extras.filter((entry) => {
+    if (!reserved.has(entry.name.toLowerCase())) return true
+    errors.push('附加参数「' + entry.name + '」与参数映射的键重名（会给厂商发两个同名参数）')
+    return false
+  })
+  config[extrasField] = kept
+}
+
+/**
+ * 校验并归一化「附加参数」列表。
+ *
+ * 规则：参数名非空/去重/不得与语义映射键重名（后者见 {@link dropExtrasCollidingWithMapping}）；
+ * `source` 必须在描述符允许集合内；`fixed` 必须有固定值；`template` 必须非空且只引用
+ * 白名单字段（`${record.…}` / `${task.…}`）。空列表合法。
+ */
+function validateParamListField(field: RpaField, raw: unknown, errors: string[]): RpaParamEntry[] | undefined {
+  if (!Array.isArray(raw)) {
+    errors.push(field.label + ' 必须是参数列表')
+    return undefined
+  }
+  const max = field.maxItems ?? 50
+  if (raw.length > max) errors.push(field.label + ' 最多 ' + String(max) + ' 条')
+  const allowed = new Set<RpaParamSource>(field.paramSources ?? ALL_PARAM_SOURCES)
+  const out: RpaParamEntry[] = []
+  const seen = new Set<string>()
+  raw.forEach((item, index) => {
+    const label = field.label + ' 第 ' + String(index + 1) + ' 项'
+    if (out.length >= max) return
+    if (!isRecord(item)) {
+      errors.push(label + '格式不正确')
+      return
+    }
+    const name = typeof item['name'] === 'string' ? item['name'].trim() : ''
+    const source = typeof item['source'] === 'string' ? item['source'] as RpaParamSource : undefined
+    if (name === '') {
+      errors.push(label + '缺少参数名')
+      return
+    }
+    if (name.length > PARAM_NAME_MAX) {
+      errors.push(label + '参数名过长（最多 ' + String(PARAM_NAME_MAX) + ' 字符）')
+      return
+    }
+    const lower = name.toLowerCase()
+    if (seen.has(lower)) {
+      errors.push(label + '参数名重复：' + name)
+      return
+    }
+    if (source === undefined || !ALL_PARAM_SOURCES.includes(source)) {
+      errors.push(label + '值来源无效')
+      return
+    }
+    if (!allowed.has(source)) {
+      errors.push(label + '不支持的值来源：' + PARAM_SOURCE_LABELS[source])
+      return
+    }
+    const entry: RpaParamEntry = { name, source }
+    if (source === 'fixed') {
+      const fixed = typeof item['fixedValue'] === 'string' ? item['fixedValue'].trim() : ''
+      if (fixed === '') {
+        errors.push(label + '选择固定值时必须填写值')
+        return
+      }
+      if (fixed.length > PARAM_VALUE_MAX) {
+        errors.push(label + '固定值过长（最多 ' + String(PARAM_VALUE_MAX) + ' 字符）')
+        return
+      }
+      entry.fixedValue = fixed
+    } else if (source === 'template') {
+      const template = typeof item['template'] === 'string' ? item['template'].trim() : ''
+      const valid = validateParamTemplate(template, label, errors)
+      if (valid === undefined) return
+      entry.template = valid
+    }
+    seen.add(lower)
+    out.push(entry)
+  })
+  return out
+}
+
+/** 自定义模板校验：只允许 `${record.<白名单字段>}` / `${task.<白名单字段>}`。 */
+function validateParamTemplate(value: string, label: string, errors: string[]): string | undefined {
+  if (value === '') {
+    errors.push(label + '选择自定义模板时必须填写模板')
+    return undefined
+  }
+  if (value.length > PARAM_TEMPLATE_MAX) {
+    errors.push(label + '自定义模板过长（最多 ' + String(PARAM_TEMPLATE_MAX) + ' 字符）')
+    return undefined
+  }
+  for (const match of value.matchAll(/\$\{([^}]*)\}/g)) {
+    const expr = (match[1] ?? '').trim()
+    const dot = expr.indexOf('.')
+    const root = dot === -1 ? expr : expr.slice(0, dot)
+    const rest = dot === -1 ? '' : expr.slice(dot + 1)
+    if (root !== 'record' && root !== 'task') {
+      errors.push(label + '自定义模板只支持 record / task 字段（不支持：' + expr + '）')
+      return undefined
+    }
+    const allowedPath = TEMPLATE_ALLOWED_PATHS[root]
+    if (!(allowedPath as readonly string[]).includes(rest)) {
+      errors.push(label + '自定义模板字段不在允许清单：' + expr)
+      return undefined
+    }
+  }
+  return value
 }
 
 /** 数字字段：接受 number 或数字字符串；NaN/空串报错。 */
@@ -441,6 +629,7 @@ function isConfigFieldMissing(field: RpaField, value: RpaConfigValue | undefined
     if (!isRecord(value)) return true
     return Object.keys(value).length === 0
   }
+  if (field.type === 'paramList') return !Array.isArray(value) || value.length === 0
   return String(value).trim() === ''
 }
 
@@ -661,28 +850,80 @@ function formatMapped(entries: Array<{ name: string; value: string }>, style: Rp
 }
 
 /**
- * 生成 `mapped` 根：三个语义值按映射 key 装进厂商容器（`mapping.style` 五种形态）。
+ * 生成 `mapped` 根：三个语义值按映射 key 装进厂商容器（`mapping.style` 五种形态），
+ * 再把「附加参数」（`mapping.extrasField`，若有）按值来源解析后追加进去。
  * @param descriptor - 厂商描述符。
- * @param config - 已归一化配置。
- * @param record - 触发记录快照。
+ * @param ctx - 投递上下文（含配置 / 触发记录 / 任务名）。
  * @returns `object` / 数组 / JSON 字符串 / form 串（视 style）。
- * @throws 语义值缺失时抛可读错误。
+ * @throws 语义值缺失或附加参数模板无法解析时抛可读错误。
  */
-export function resolveMapped(
-  descriptor: RpaVendorDescriptor,
-  config: RpaTriggerConfig,
-  record: RpaRecordContext,
-): unknown {
+export function resolveMapped(descriptor: RpaVendorDescriptor, ctx: RpaInvocationContext): unknown {
+  const config: RpaTriggerConfig = { ...defaultConfigFor(descriptor), ...ctx.config }
   const keys = mappingKeys(descriptor, config)
   const entries: Array<{ name: string; value: string }> = []
   for (const target of descriptor.mapping.targets) {
-    const value = semanticValue(record, target.semantic).trim()
+    const value = semanticValue(ctx.record, target.semantic).trim()
     if (value === '' && target.semantic !== 'content') {
       throw new Error('缺少映射值：' + SEMANTIC_LABELS[target.semantic])
     }
     entries.push({ name: keys[target.semantic], value })
   }
+  entries.push(...resolveExtraEntries(descriptor, config, ctx))
   return formatMapped(entries, descriptor.mapping.style)
+}
+
+/**
+ * 解析附加参数列表（值来源 → 实际字符串）。
+ *
+ * 顺序即用户在表单里排列的顺序；空名字/未知来源属于非法状态（保存时已拦截），
+ * 这里仍防御性跳过空名字并让未知来源抛错，避免发出半截参数。
+ */
+function resolveExtraEntries(
+  descriptor: RpaVendorDescriptor,
+  config: RpaTriggerConfig,
+  ctx: RpaInvocationContext,
+): Array<{ name: string; value: string }> {
+  const extrasField = descriptor.mapping.extrasField
+  if (extrasField === undefined) return []
+  const raw = config[extrasField]
+  if (!Array.isArray(raw)) return []
+  const out: Array<{ name: string; value: string }> = []
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry['name'] !== 'string' || entry['name'].trim() === '') continue
+    out.push({ name: entry['name'].trim(), value: resolveParamSourceValue(entry, ctx) })
+  }
+  return out
+}
+
+/**
+ * 单条附加参数的「值来源」解析。
+ * @param entry - 已通过保存校验的附加参数条目。
+ * @param ctx - 投递上下文。
+ * @returns 参数字符串（`fixed` / `template` 也在这里解析）。
+ */
+function resolveParamSourceValue(entry: Record<string, unknown>, ctx: RpaInvocationContext): string {
+  const source = entry['source']
+  if (source === 'room') return ctx.record.chatName
+  if (source === 'content') return ctx.record.text
+  if (source === 'at') return semanticValue(ctx.record, 'at')
+  if (source === 'taskName') return ctx.taskName
+  if (source === 'keyword') return ctx.record.keyword
+  if (source === 'triggeredAt') return new Date(ctx.record.triggeredAt).toLocaleString('zh-CN', { hour12: false })
+  if (source === 'chatType') return ctx.record.chatType === 'group' ? '群聊' : '单聊'
+  if (source === 'taskId') return String(ctx.taskId)
+  if (source === 'recordId') return String(ctx.recordId)
+  if (source === 'fixed') return typeof entry['fixedValue'] === 'string' ? entry['fixedValue'] : ''
+  if (source === 'template') {
+    const rendered = renderTemplate(entry['template'] ?? '', {
+      record: ctx.record,
+      task: { name: ctx.taskName, id: ctx.taskId },
+    })
+    if (typeof rendered === 'string') return rendered
+    if (typeof rendered === 'number') return String(rendered)
+    if (typeof rendered === 'boolean') return rendered ? 'true' : 'false'
+    throw new Error('附加参数「' + String(entry['name']) + '」的自定义模板没有解析出字符串')
+  }
+  throw new Error('未知附加参数来源：' + String(source))
 }
 
 /**
@@ -697,12 +938,13 @@ export function renderRequest(descriptor: RpaVendorDescriptor, ctx: RpaInvocatio
     config,
     secret: ctx.secrets,
     record: ctx.record,
+    task: { name: ctx.taskName, id: ctx.taskId },
     invocation: {
       taskId: ctx.taskId,
       recordId: ctx.recordId,
       idempotencyKey: ctx.idempotencyKey,
     },
-    mapped: resolveMapped(descriptor, config, ctx.record),
+    mapped: resolveMapped(descriptor, ctx),
   }
   const url = renderTemplate(descriptor.request.url, roots)
   if (typeof url !== 'string' || url.trim() === '') {

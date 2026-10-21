@@ -208,3 +208,90 @@
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-3);
 }
+
+/* ── 附加参数（paramList）：行卡片 + 顶部「第 N 项 / 删除」+ 参数名/来源两列 ───────── */
+.paramEmpty {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.paramRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+}
+
+.paramRowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.paramRowIndex {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.paramRowRemove {
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+}
+
+.paramRowRemove:hover {
+  border-color: var(--nm-danger);
+}
+
+/* 参数名与值来源并排，窄屏自动落成单列。 */
+.paramGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.paramField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.paramFieldLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.paramListFoot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.paramAdd {
+  padding: 6px 12px;
+  border: 1px dashed var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-cyan-text);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+}
+
+.paramAdd:hover:not(:disabled) {
+  border-color: var(--nm-cyan);
+}
+
+.paramAdd:disabled {
+  color: var(--nm-text-3);
+  cursor: not-allowed;
+}

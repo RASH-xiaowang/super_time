@@ -9,7 +9,25 @@
  * 本文件进 `build:types` 的公开类型（渲染层只从这里取类型，不 import 后端实现）。
  */
 /** 配置字段的控件类型（渲染层按此选择控件；后端按此做最小校验）。 */
-export type RpaFieldType = 'text' | 'password' | 'number' | 'boolean' | 'select' | 'map';
+export type RpaFieldType = 'text' | 'password' | 'number' | 'boolean' | 'select' | 'map' | 'paramList';
+/**
+ * 「附加参数」值来源（2026-10-21 八爪鱼参数增强）：
+ *  · 语义位 `room` / `content` / `at`（带隐私闸后的触发文本）；`taskName` / `keyword` /
+ *    `triggeredAt` / `chatType` / `taskId` / `recordId` 是触发记录/任务的内置字段；
+ *  · `fixed` = 用户填固定值；`template` = 自定义模板（只允许 `${record.xxx}` / `${task.xxx}`，
+ *    见 `rpa/template.ts` 的白名单）。
+ */
+export type RpaParamSource = 'room' | 'content' | 'at' | 'taskName' | 'keyword' | 'triggeredAt' | 'chatType' | 'taskId' | 'recordId' | 'fixed' | 'template';
+/** 一条附加参数（存 `triggerConfig[extrasField]`，随厂商参数容器一起发出去）。 */
+export interface RpaParamEntry {
+    /** 参数名（发到厂商的 key；同一列表内唯一，且不得与三个语义映射键重名）。 */
+    name: string;
+    source: RpaParamSource;
+    /** `source='fixed'` 时的固定值。 */
+    fixedValue?: string;
+    /** `source='template'` 时的模板（如 `${record.keyword}` / `${task.name}`）。 */
+    template?: string;
+}
 /** `select` 字段的可选项。 */
 export interface RpaFieldOption {
     value: string;
@@ -44,6 +62,10 @@ export interface RpaField {
     pattern?: string;
     /** 该字段参与任务行摘要（如 FlowId / 应用 UUID）。 */
     summary?: boolean;
+    /** `paramList` 字段允许的值来源（缺省 = 全部；实验性厂商可收窄）。 */
+    paramSources?: RpaParamSource[];
+    /** `paramList` 字段最多允许几条附加参数（缺省 50）。 */
+    maxItems?: number;
 }
 /** 触发参数容器的形态（各厂商对参数的包装方式不同）。 */
 export type RpaParamStyle = 'object' | 'nameValueArray' | 'nameValueTypeArray' | 'jsonStringObject' | 'formParams';
@@ -92,11 +114,17 @@ export interface RpaMappingTarget {
     /** 表单里这一项的中文名（缺省：会话名/触发文本/触发对象）。 */
     label?: string;
 }
-/** 参数映射：`mapField` 指向一个 `type: 'map'` 的配置字段，值为 `{ room, content, at }`。 */
+/**
+ * 参数映射：`mapField` 指向一个 `type: 'map'` 的配置字段，值为 `{ room, content, at }`。
+ *
+ * `extrasField`（可选）指向一个 `type: 'paramList'` 字段：其条目在三个语义参数之后追加
+ * 到厂商参数容器（五类容器都支持）；未声明 = 该厂商暂不开放附加参数。
+ */
 export interface RpaMapping {
     style: RpaParamStyle;
     mapField: string;
     targets: RpaMappingTarget[];
+    extrasField?: string;
 }
 /** 出网主机声明：固定域名（exact）或后缀（suffix，如厂商子域）。 */
 export interface RpaGovernanceHost {
@@ -180,8 +208,8 @@ export interface RpaVendorCatalog {
     items: RpaVendorDescriptor[];
     registryVersion: string;
 }
-/** 非敏感配置值（`map` 字段是字符串字典）。 */
-export type RpaConfigValue = string | number | boolean | Record<string, string>;
+/** 非敏感配置值（`map` 字段是字符串字典；`paramList` 字段是附加参数数组）。 */
+export type RpaConfigValue = string | number | boolean | Record<string, string> | RpaParamEntry[];
 /** 任务的非敏感触发配置（键 = 描述符字段 key）。 */
 export type RpaTriggerConfig = Record<string, RpaConfigValue>;
 /** 凭据配置：键 = secret 字段 key；空串语义 = 清空，缺省 = 保留旧值。 */

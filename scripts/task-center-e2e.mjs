@@ -10,9 +10,11 @@
  *    `.tmp-e2e/task-center-edit-drawer.png`；
  *  · 触发方式选择器由后端厂商目录（`listRpaVendors`）驱动：选项含 Webhook / 八爪鱼 RPA /
  *    影刀 RPA；切到八爪鱼填旧 aria（`八爪鱼 FlowId`/`八爪鱼 API Key`）→ 读回
- *    `triggerConfig.flowId` + `triggerSecretSet.apiKey`；切到影刀填 `AccessKeyId`/
- *    `AccessKeySecret`/`应用 UUID` → 读回 `triggerConfig.robotUuid` + 两个 secretSet；
- *    再切回八爪鱼仍能读到旧 FlowId 并保存（切换厂商不清空已填）；凭据原文不出现在列表返回值；
+ *    `triggerConfig.flowId` + `triggerSecretSet.apiKey`；八爪鱼参数传递：参数映射默认三键可见、
+ *    可改「会话名」键；「添加附加参数」两行（固定值 A-001 + 模板 `${record.keyword}`）→
+ *    读回 `triggerConfig.extraParams` 数组；切到影刀填 `AccessKeyId`/`AccessKeySecret`/`应用 UUID`
+ *    → 读回 `triggerConfig.robotUuid` + 两个 secretSet；再切回八爪鱼仍能读到旧 FlowId/附加参数，
+ *    改 paramMap.room=group_name 保存后读回；凭据原文不出现在列表返回值；
  *  · 任务行摘要显示「八爪鱼 RPA · <flowId>」；
  *
  * 数据隔离：每次使用一个临时 `SUPERTIME_USER_DATA_DIR`，不读写真实微信数据。
@@ -408,14 +410,39 @@ try {
   )
   await flowIdField.fill('6ad859ccee2df270d53fc6e5')
   await apiKeyField.fill('e2e-bazhuayu-key-001')
+  // 参数映射三键默认存在且可改；附加参数：固定值 + 自定义模板两行。
+  const mapRoomField = editDrawer.getByLabel('参数映射 · 会话名', { exact: true })
+  await mapRoomField.waitFor({ state: 'visible' })
+  check((await mapRoomField.inputValue()) === 'room_name', '参数映射默认键 room_name 可见（可改）')
+  await editDrawer.getByRole('button', { name: '添加附加参数', exact: true }).click()
+  await editDrawer.getByLabel('附加参数 参数名 1', { exact: true }).fill('order_no')
+  await editDrawer.getByLabel('附加参数 值来源 1', { exact: true }).selectOption({ label: '固定值' })
+  await editDrawer.getByLabel('附加参数 固定值 1', { exact: true }).fill('A-001')
+  await editDrawer.getByRole('button', { name: '添加附加参数', exact: true }).click()
+  await editDrawer.getByLabel('附加参数 参数名 2', { exact: true }).fill('kw_template')
+  await editDrawer.getByLabel('附加参数 值来源 2', { exact: true }).selectOption({ label: '自定义模板' })
+  await editDrawer.getByLabel('附加参数 模板 2', { exact: true }).fill('${record.keyword}')
+  check(
+    await editDrawer.getByLabel('附加参数 固定值 2', { exact: true }).count() === 0,
+    '模板来源的行不渲染固定值输入',
+  )
   await editDrawer.screenshot({ path: join(EVIDENCE_DIR, 'task-center-edit-drawer.png') })
   await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
+  const expectedExtraParams = [
+    { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+    { name: 'kw_template', source: 'template', template: '${record.keyword}' },
+  ]
+  const expectedParamMap = { room: 'room_name', content: 'content', at: 'at_name' }
   // 等**后端真的落库**再断言：上一条「任务配置已保存」提示可能还没消失，不能拿提示条当完成信号。
   const bazhuayuDeadline = Date.now() + 20_000
   let tasksAfterBazhuayu = await remote(win, 'listTaskInfos', [])
   let savedBazhuayuTask = tasksAfterBazhuayu.items?.find((task) => task.id === taskA.id)
   while (
-    !(savedBazhuayuTask?.triggerMethod === 'bazhuayu' && savedBazhuayuTask?.triggerSecretSet?.apiKey === true)
+    !(savedBazhuayuTask?.triggerMethod === 'bazhuayu'
+      && savedBazhuayuTask?.triggerSecretSet?.apiKey === true
+      && Array.isArray(savedBazhuayuTask?.triggerConfig?.extraParams)
+      && savedBazhuayuTask.triggerConfig.extraParams.length === expectedExtraParams.length
+      && savedBazhuayuTask?.triggerConfig?.paramMap?.room === 'room_name')
     && Date.now() < bazhuayuDeadline
   ) {
     await sleep(250)
@@ -431,6 +458,16 @@ try {
       && savedBazhuayuTask?.bazhuayuApiKeySet === true,
     '八爪鱼触发方式经真实后端读回 triggerConfig/triggerSecretSet 与兼容别名',
     `method=${savedBazhuayuTask?.triggerMethod} flow=${savedBazhuayuTask?.triggerConfig?.flowId} keySet=${savedBazhuayuTask?.triggerSecretSet?.apiKey}`,
+  )
+  check(
+    JSON.stringify(savedBazhuayuTask?.triggerConfig?.extraParams) === JSON.stringify(expectedExtraParams),
+    '附加参数（固定值 + 自定义模板）经真实后端读回 triggerConfig.extraParams',
+    JSON.stringify(savedBazhuayuTask?.triggerConfig?.extraParams),
+  )
+  check(
+    JSON.stringify(savedBazhuayuTask?.triggerConfig?.paramMap) === JSON.stringify(expectedParamMap),
+    '参数映射三个默认键仍随 triggerConfig 落库',
+    JSON.stringify(savedBazhuayuTask?.triggerConfig?.paramMap),
   )
   check(
     !JSON.stringify(tasksAfterBazhuayu).includes('e2e-bazhuayu-key-001'),
@@ -492,11 +529,16 @@ try {
     (await flowIdAgain.inputValue()) === '6ad859ccee2df270d53fc6e5',
     '切回八爪鱼仍可读上次填写的 FlowId',
   )
+  // 改映射键：会话名参数名改成 group_name，保存后读回；附加参数应仍在。
+  const mapRoomAgain = editDrawer.getByLabel('参数映射 · 会话名', { exact: true })
+  await mapRoomAgain.waitFor({ state: 'visible' })
+  check((await mapRoomAgain.inputValue()) === 'room_name', '切回八爪鱼后参数映射仍是默认键')
+  await mapRoomAgain.fill('group_name')
   await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
   const backDeadline = Date.now() + 20_000
   let tasksBack = await remote(win, 'listTaskInfos', [])
   let backTask = tasksBack.items?.find((task) => task.id === taskA.id)
-  while (!(backTask?.triggerMethod === 'bazhuayu' && backTask?.triggerConfig?.flowId === '6ad859ccee2df270d53fc6e5') && Date.now() < backDeadline) {
+  while (!(backTask?.triggerMethod === 'bazhuayu' && backTask?.triggerConfig?.paramMap?.room === 'group_name') && Date.now() < backDeadline) {
     await sleep(250)
     tasksBack = await remote(win, 'listTaskInfos', [])
     backTask = tasksBack.items?.find((task) => task.id === taskA.id)
@@ -505,6 +547,18 @@ try {
     backTask?.triggerMethod === 'bazhuayu' && backTask?.triggerConfig?.flowId === '6ad859ccee2df270d53fc6e5',
     '切回八爪鱼后保存，旧 FlowId 仍持久',
     `method=${backTask?.triggerMethod} flow=${backTask?.triggerConfig?.flowId}`,
+  )
+  check(
+    backTask?.triggerConfig?.paramMap?.room === 'group_name'
+      && backTask?.triggerConfig?.paramMap?.content === 'content'
+      && backTask?.triggerConfig?.paramMap?.at === 'at_name',
+    '改映射键后读回 paramMap.room=group_name（另两个默认键不变）',
+    JSON.stringify(backTask?.triggerConfig?.paramMap),
+  )
+  check(
+    JSON.stringify(backTask?.triggerConfig?.extraParams) === JSON.stringify(expectedExtraParams),
+    '切回并保存后附加参数仍持久',
+    JSON.stringify(backTask?.triggerConfig?.extraParams),
   )
 
   await editDrawer.getByRole('button', { name: '关闭', exact: true }).click()

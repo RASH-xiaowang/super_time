@@ -27,6 +27,7 @@ import {
 import { applyAuth, clearTokenCache } from '../src/query/rpa/auth.ts'
 import type { RpaAuthDeps } from '../src/query/rpa/auth.ts'
 import { dispatchRpaRecord } from '../src/query/rpa/dispatch.ts'
+import { adapter as bazhuayuAdapter } from '../src/query/rpa/vendors/bazhuayu.ts'
 import {
   findVendor,
   listVendorDescriptors,
@@ -351,6 +352,119 @@ describe('模板层：占位符渲染与参数容器', () => {
 
     const inlineObject = descriptorOf({ request: { method: 'POST', url: 'https://api.example.test/run', body: { x: 'value=${mapped.object}' } } })
     expect(() => renderRequest(inlineObject, ctxOf())).toThrow(/只能整值替换/)
+  })
+})
+
+describe('附加参数（八爪鱼参数增强，2026-10-21）', () => {
+  /** 八爪鱼描述符 + request.body 换成直接暴露 Params（沿用真实描述符的字段/映射）。 */
+  function bazhuayuWithParams(): RpaVendorDescriptor {
+    return {
+      ...bazhuayuAdapter.descriptor,
+      request: { ...bazhuayuAdapter.descriptor.request, body: { Params: '${mapped}' } },
+    }
+  }
+
+  it('默认配置仍是三个内置参数（旧行为逐字节不变）', () => {
+    const req = renderRequest(bazhuayuWithParams(), ctxOf({ config: { flowId: 'flow-1' }, secrets: { apiKey: 'k-1' } }))
+    const params = (JSON.parse(req.body) as Record<string, unknown>)['Params'] as Record<string, string>
+    expect(params).toEqual({ room_name: '李四', content: '发票 内容', at_name: '李四' })
+  })
+
+  it('参数映射可改三个内置参数名；附加参数按值来源追加', () => {
+    const config: RpaTriggerConfig = {
+      flowId: 'flow-1',
+      paramMap: { room: 'group_name', content: 'text', at: 'user' },
+      extraParams: [
+        { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+        { name: 'kw', source: 'keyword' },
+        { name: 'task', source: 'taskName' },
+        { name: 'at2', source: 'at' },
+        { name: 'tpl', source: 'template', template: '${record.chatName}/${task.name}' },
+        { name: 'typ', source: 'chatType' },
+        { name: 'tid', source: 'taskId' },
+        { name: 'rid', source: 'recordId' },
+        { name: 'content2', source: 'content' },
+      ],
+    }
+    const req = renderRequest(bazhuayuWithParams(), ctxOf({ config, secrets: { apiKey: 'k-1' } }))
+    const params = (JSON.parse(req.body) as Record<string, unknown>)['Params'] as Record<string, string>
+    expect(params['group_name']).toBe('李四')
+    expect(params['text']).toBe('发票 内容')
+    expect(params['user']).toBe('李四')
+    expect(params['order_no']).toBe('A-001')
+    expect(params['kw']).toBe('发票')
+    expect(params['task']).toBe('测试任务')
+    expect(params['at2']).toBe('李四')
+    expect(params['tpl']).toBe('李四/测试任务')
+    expect(params['typ']).toBe('单聊')
+    expect(params['tid']).toBe('1')
+    expect(params['rid']).toBe('2')
+    expect(params['content2']).toBe('发票 内容')
+    expect(Object.keys(params)).toHaveLength(12)
+  })
+
+  it('校验：重名/缺固定值/模板越界/与映射键冲突/超上限都报可读错误', () => {
+    const descriptor = bazhuayuWithParams()
+    const duplicate = validateVendorConfig(descriptor, {
+      extraParams: [
+        { name: 'x', source: 'keyword' },
+        { name: 'X', source: 'taskName' },
+      ],
+    })
+    expect(duplicate.errors.some((e) => e.includes('参数名重复'))).toBe(true)
+
+    const noFixed = validateVendorConfig(descriptor, {
+      extraParams: [{ name: 'x', source: 'fixed' }],
+    })
+    expect(noFixed.errors.some((e) => e.includes('固定值'))).toBe(true)
+
+    const badTemplate = validateVendorConfig(descriptor, {
+      extraParams: [{ name: 'x', source: 'template', template: '${record.notAField}' }],
+    })
+    expect(badTemplate.errors.some((e) => e.includes('自定义模板字段不在允许清单'))).toBe(true)
+
+    const forbiddenRoot = validateVendorConfig(descriptor, {
+      extraParams: [{ name: 'x', source: 'template', template: '${secret.apiKey}' }],
+    })
+    expect(forbiddenRoot.errors.some((e) => e.includes('只支持 record / task'))).toBe(true)
+
+    const collision = validateVendorConfig(descriptor, {
+      extraParams: [{ name: 'room_name', source: 'keyword' }],
+    })
+    expect(collision.errors.some((e) => e.includes('与参数映射的键重名'))).toBe(true)
+    expect((collision.config['extraParams'] as unknown[]).length).toBe(0)
+
+    const tooMany = validateVendorConfig(descriptor, {
+      extraParams: Array.from({ length: 21 }, (_, i) => ({ name: 'p' + String(i), source: 'keyword' as const })),
+    })
+    expect(tooMany.errors.some((e) => e.includes('最多 20 条'))).toBe(true)
+  })
+
+  it('校验：合法列表 trim 参数名、保留顺序；空列表合法', () => {
+    const descriptor = bazhuayuWithParams()
+    const ok = validateVendorConfig(descriptor, {
+      extraParams: [
+        { name: '  order_no  ', source: 'fixed', fixedValue: ' A-001 ' },
+        { name: 'kw', source: 'template', template: '${record.keyword}' },
+      ],
+    })
+    expect(ok.errors).toEqual([])
+    expect(ok.config['extraParams']).toEqual([
+      { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+      { name: 'kw', source: 'template', template: '${record.keyword}' },
+    ])
+    const empty = validateVendorConfig(descriptor, { extraParams: [] })
+    expect(empty.errors).toEqual([])
+    expect(empty.config['extraParams']).toEqual([])
+  })
+
+  it('默认配置带空附加参数列表，参数来源白名单完整', () => {
+    const defaults = defaultConfigFor(bazhuayuAdapter.descriptor)
+    expect(defaults['extraParams']).toEqual([])
+    const field = bazhuayuAdapter.descriptor.fields.find((item) => item.key === 'extraParams')
+    expect(field?.type).toBe('paramList')
+    expect(field?.paramSources).toContain('template')
+    expect(field?.paramSources).toContain('fixed')
   })
 })
 
