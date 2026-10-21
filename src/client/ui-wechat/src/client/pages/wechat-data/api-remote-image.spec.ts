@@ -105,7 +105,10 @@ describe('M23：渲染层的远程图片走后端代理', () => {
     const { batches } = stubRemote()
     const urls = Array.from({ length: 45 }, (_, i) => `https://p.qpic.cn/big/${String(i)}`)
     const got = await all(urls)
-    expect(batches.map((b) => b.urls.length), `各批大小：${JSON.stringify(batches.map((b) => b.urls.length))}`).toEqual([40, 5])
+    const sizes = batches.map((b) => b.urls.length)
+    // 后端 MAX_IMAGES_PER_CALL=20；每批不得超过它，45 张应拆成 20 + 20 + 5。
+    expect(sizes.every((n) => n <= 20), `各批大小：${JSON.stringify(sizes)}`).toBe(true)
+    expect(sizes, `各批大小：${JSON.stringify(sizes)}`).toEqual([20, 20, 5])
     expect(got.filter((u) => u === PNG).length).toBe(45)
   })
 

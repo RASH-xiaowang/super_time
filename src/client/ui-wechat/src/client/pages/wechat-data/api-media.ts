@@ -371,8 +371,11 @@ export async function apiGetMapGeoJson(urls: readonly string[]): Promise<MapGeoJ
   return unwrap(await remote().getMapGeoJson({ urls: [...urls] }))
 }
 
-/** 一次代理请求最多带几张（与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL` 对齐；超了后端会整条回错误）。 */
-const REMOTE_IMAGE_CHUNK = 40
+/**
+ * 一次代理请求最多带几张：与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL=20` 一致；改这里必须同步后端。
+ * 不能更大：超过 20 张时后端会把整批以「单次最多 20 张」拒绝，客户端重试仍会整批失败。
+ */
+const REMOTE_IMAGE_CHUNK = 20
 /**
  * 攒批窗口（毫秒）：同一屏里挂出来的朋友圈视频封面并成一次 `getSnsVideoCoversBatch`（W2-5.6）。
  *

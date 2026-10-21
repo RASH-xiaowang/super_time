@@ -23,7 +23,25 @@ import {
   selectEdges, sizeCapFor, MAX_SPACING_SCALE, MIN_SPACING_SCALE, spacingScale, worldToScreen, zoomAt, type Camera,
   type Point
 } from './graph-canvas.ts'
+import { AVATAR_ASSETS_MAX, avatarAssets } from './graph-canvas-support.ts'
 import { S, node, edge, VIEW } from './graph-spec-fixtures.ts'
+
+describe('头像资源缓存上界', () => {
+  it('写入 900 条后只保留 800 条，并逐出最早的键', () => {
+    avatarAssets.clear()
+    for (let i = 0; i < 900; i++) {
+      avatarAssets.set(`avatar-${String(i)}`, { url: '', sprite: null })
+    }
+
+    expect(AVATAR_ASSETS_MAX).toBe(800)
+    expect(avatarAssets.size).toBe(AVATAR_ASSETS_MAX)
+    expect(avatarAssets.has('avatar-0')).toBe(false)
+    expect(avatarAssets.has('avatar-99')).toBe(false)
+    expect(avatarAssets.has('avatar-100')).toBe(true)
+    expect(avatarAssets.has('avatar-899')).toBe(true)
+    avatarAssets.clear()
+  })
+})
 
 describe('节点尺寸：与改前 ECharts 版逐档一致', () => {
   it('sizeCapFor 的分档边界', () => {

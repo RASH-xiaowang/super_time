@@ -99,7 +99,23 @@ export function styleIsDark(style: PosterStyle): boolean {
  * 头像资源缓存：跨挂载共享（切走再切回不用重新拉取）。
  * 键是头像主人（username；「我」用真实 wxid），值是原始 data URL + 已裁圆的 sprite。
  */
-export const avatarAssets = new Map<string, AvatarAsset>()
+export const AVATAR_ASSETS_MAX = 800
+
+class BoundedAvatarAssets extends Map<string, AvatarAsset> {
+  override set(key: string, asset: AvatarAsset): this {
+    // 重复写入也算一次访问：先删再设，让它移动到队尾。
+    this.delete(key)
+    super.set(key, asset)
+    while (this.size > AVATAR_ASSETS_MAX) {
+      const oldest = this.keys().next().value
+      if (oldest === undefined) break
+      this.delete(oldest)
+    }
+    return this
+  }
+}
+
+export const avatarAssets: Map<string, AvatarAsset> = new BoundedAvatarAssets()
 
 /** 小地图的世界 → 小地图坐标映射（每帧刷新），供点击跳转使用。 */
 export type MiniTransform = { minX: number; minY: number; s: number; ox: number; oy: number }
