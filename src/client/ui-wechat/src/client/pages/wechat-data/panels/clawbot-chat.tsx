@@ -22,12 +22,13 @@ import type { ClawbotBindingSnapshot, ClawbotMessage, ClawbotMessageQuery } from
 import { apiClearClawbotMessages, apiGetPrivacyState, apiListClawbotMessages, apiSendClawbotMessage } from '../api.ts'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { Badge, Card, DataTable, DateRangeField, Dialog, EmptyState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
+import { Badge, Card, DataTable, DateRangeField, EmptyState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import { ListSentinel, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { maskSensitiveText } from './clawbot-mask.ts'
 import { ClawbotThread, MediaCell, useClawbotMediaAccess, useConversationScroll } from './clawbot-thread.tsx'
 import css from './clawbot.module.css'
+import { ClawbotMediaViewer } from './clawbot-media-viewer.tsx'
 
 const PAGE_SIZE = 100
 
@@ -524,9 +525,7 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
       </Card>
 
       {media.zoom !== null && (
-        <Dialog open onClose={() => { media.setZoom(null) }} title={media.zoom.name ?? '图片预览'} className={css.mediaZoomDialog}>
-          <img className={css.mediaZoom} src={media.zoom.src} alt="附件大图" />
-        </Dialog>
+        <ClawbotMediaViewer media={media.zoom} onClose={() => { media.setZoom(null) }} />
       )}
     </>
   )

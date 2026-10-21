@@ -16,10 +16,11 @@ import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
 import { fetchFileFullUrl, prefetchKeys, thumbWidthFor } from './files-thumbs.ts'
 import { useFileThumbnails } from './use-file-thumbs.ts'
 import { duplicateGroups, namesByMd5 } from './files-dup.ts'
+import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
-import { Drawer, EmptyMaybeSyncing, PanelHeader, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { Drawer, EmptyMaybeSyncing, PanelHeader, useDebouncedValue } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
@@ -63,21 +64,10 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<FileItem | null>(null)
-  /** 灯箱用的**原图档** URL（网格里存的是自适应宽度的缩略图，点开要换成原图）。 */
-  const [previewSrc, setPreviewSrc] = useState('')
   // 视频/文件没有预览（后端只提供图片解码），点开的是**详情抽屉**而不是死点击。
   const [detail, setDetail] = useState<FileItem | null>(null)
   const [dupOpen, setDupOpen] = useState(false)
-  // 手写灯箱的 Esc 关闭（kit 的 Drawer/Dialog 用 Radix 提供）
-  useEscapeToClose(preview !== null, () => { setPreview(null) })
-  // 焦点管理：进入移入、Tab 循环、关闭还原。
-  useDialogFocus(preview !== null, '[data-st-dialog="files-lightbox"]')
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null)
-  const [dragging, setDragging] = useState(false)
   const gridRef = useRef<HTMLDivElement | null>(null)
-  const resetView = (): void => { setZoom(1); setPan({ x: 0, y: 0 }) }
 
   // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
   // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
@@ -182,9 +172,6 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const openFileCell = useCallback((f: FileItem): void => {
     if (f.category !== 'image') { setDetail(f); return }
     setPreview(f)
-    setPreviewSrc('')
-    // 原图档：单张请求（灯箱一次只要一张），后端缺原图时回退 `_t` 档。
-    void fetchFileFullUrl(fileKey(f)).then((url) => { if (url) setPreviewSrc(url) })
   }, [])
 
   // 重复组/名称补全的逻辑在 files-dup.ts（纯函数，受单函数行数棘轮约束）。
@@ -197,8 +184,31 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
 
   const doExport = (): void => { void exportFilesCsv(flashExport) }
 
-  /** 灯箱当前要显示的 URL：原图档优先，退回网格缩略图（两者都可能是协议 URL 或 data URL）。 */
-  const previewUrl = preview ? (previewSrc || fileImgs[fileKey(preview)] || '') : ''
+  /** 灯箱的翻页范围：已加载的图片，顺序与网格一致。 */
+  const imageItems = useMemo(() => visible.filter((f) => f.category === 'image'), [visible])
+  /** 每张图的元信息 + 按需加载（缩略图先铺底，原图到了查看器内淡入）。 */
+  const viewerSources = useMemo(() => imageItems.map((f) => {
+    const key = fileKey(f)
+    const caption = [CAT_LABEL[f.category] || f.category, fmtBytes(f.fileSize || 0), fmtMonthDaySec(f.modifyTime)]
+    if (fileSource(f)) caption.push(`来源 ${fileSource(f)}`)
+    return {
+      key,
+      thumb: fileImgs[key],
+      title: fileDisplayName(f),
+      subtitle: caption.join(' · '),
+      load: () => fetchFileFullUrl(key),
+      downloadName: `${key}.jpg`,
+      onDownload: (src: string) => {
+        const a = document.createElement('a')
+        a.href = src
+        a.download = `${key}.jpg`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+      },
+    }
+  }), [imageItems, fileImgs])
+  const viewerIndex = preview ? imageItems.findIndex((f) => fileKey(f) === fileKey(preview)) : -1
 
   return (
     <div className={css.panel}>
@@ -315,77 +325,14 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
           </div>
         )}
       </Drawer>
-      {preview && (
-        <div className={css.lightbox} data-st-dialog="files-lightbox" role="dialog" aria-modal="true" onClick={() => { setPreview(null) }}>
-          <div className={css.lightboxCard} onClick={(e) => { e.stopPropagation() }}>
-            <header className={css.lightboxHd}>
-              <div className={css.lightboxTitle}>
-                <span className={css.lightboxName}>{fileDisplayName(preview)}</span>
-                <span className={kitCss.textCaption}>
-                  {CAT_LABEL[preview.category] || preview.category} · {fmtBytes(preview.fileSize || 0)} · {fmtMonthDaySec(preview.modifyTime)}
-                  {fileSource(preview) ? ` · 来源 ${fileSource(preview)}` : ''}
-                </span>
-              </div>
-              {/* 类型标签并入标题行（按真实扩展名显示），不再写死 JPG 徽标装饰 */}
-              <button type="button" className={css.lightboxClose} aria-label="关闭预览" onClick={() => { setPreview(null) }}>×</button>
-            </header>
-            <div className={css.lightboxBody}>
-              {previewUrl ? (
-                <div
-                  className={dragging ? `${css.lightboxStage} ${css.lightboxDragging}` : css.lightboxStage}
-                  onWheel={(e) => {
-                    const d = e.deltaY < 0 ? 0.15 : -0.15
-                    setZoom(z => Math.min(5, Math.max(0.5, Math.round((z + d) * 100) / 100)))
-                  }}
-                  onPointerDown={(e) => {
-                    dragRef.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y }
-                    setDragging(true)
-                    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
-                  }}
-                  onPointerMove={(e) => {
-                    const d = dragRef.current
-                    if (d) setPan({ x: d.px + (e.clientX - d.sx), y: d.py + (e.clientY - d.sy) })
-                  }}
-                  onPointerUp={() => { dragRef.current = null; setDragging(false) }}
-                  onPointerCancel={() => { dragRef.current = null; setDragging(false) }}
-                >
-                  <img
-                    className={css.lightboxImg}
-                    src={previewUrl}
-                    alt={preview.fileName || preview.md5}
-                    referrerPolicy="no-referrer"
-                    draggable={false}
-                    style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-                  />
-                </div>
-              ) : (
-                <div className={css.lightboxEmpty}>
-                  <span className={css.lightboxEmptyTitle}>这张图还没解密出来</span>
-                  <span className={css.lightboxEmptyNote}>本机没有该 md5 的附件原图（msg/attach）</span>
-                </div>
-              )}
-            </div>
-            <div className={css.lightboxZoom}>
-              <button type="button" className={css.lightboxZoomBtn} onClick={() => { setZoom(z => Math.max(0.5, Math.round((z - 0.15) * 100) / 100)) }} aria-label="缩小">−</button>
-              <span className={css.lightboxZoomText}>{Math.round(zoom * 100)}%</span>
-              <button type="button" className={css.lightboxZoomBtn} onClick={() => { setZoom(z => Math.min(5, Math.round((z + 0.15) * 100) / 100)) }} aria-label="放大">＋</button>
-              <button type="button" className={css.lightboxZoomBtn} onClick={resetView} aria-label="重置视图">重置</button>
-            </div>
-            <footer className={css.lightboxFt}>
-              <span className={css.lightboxMd5}>{preview.md5 || fileKey(preview)}</span>
-              <button type="button" className={css.catBtn} onClick={() => {
-                const src = previewUrl
-                if (!src) return
-                const a = document.createElement('a')
-                a.href = src
-                a.download = `${fileKey(preview)}.jpg`
-                document.body.appendChild(a)
-                a.click()
-                document.body.removeChild(a)
-              }} disabled={!previewUrl}>下载图片</button>
-            </footer>
-          </div>
-        </div>
+      {preview && viewerIndex >= 0 && (
+        <MediaViewer
+          sources={viewerSources}
+          index={viewerIndex}
+          onIndexChange={(i) => { const next = imageItems[i]; if (next) setPreview(next) }}
+          onClose={() => { setPreview(null) }}
+          dialogName="files-lightbox"
+        />
       )}
     </div>
   )

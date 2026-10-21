@@ -16,9 +16,11 @@ import {
   apiGetVoiceDataUrl,
 } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
+import { clickableKey } from '../ui/kit.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import { openLink } from './chats-support.tsx'
 import { RemoteImg } from './remote-img.tsx'
+import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import css from './list-panel.module.css'
 
 export interface FavoritePartProps {
@@ -71,6 +73,7 @@ function FavoriteImage({ part, thumbs }: {
   const cacheKey = candidates.join('|')
   const [loaded, setLoaded] = useState<LoadedUrl | null>(null)
   const [failed, setFailed] = useState<LoadedText | null>(null)
+  const [zoom, setZoom] = useState(false)
   const src = loaded?.key === cacheKey ? loaded.url : initial
   useEffect(() => {
     setLoaded(null)
@@ -118,7 +121,34 @@ function FavoriteImage({ part, thumbs }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, initial])
   if (src !== '') {
-    return <img className={css.favPartImg} src={src} alt="" loading="lazy" referrerPolicy="no-referrer" />
+    return (
+      <>
+        <img
+          className={css.favPartImg}
+          src={src}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          style={{ cursor: 'zoom-in' }}
+          {...clickableKey(() => { setZoom(true) }, { label: '查看大图' })}
+        />
+        {zoom && (
+          <MediaViewer
+            sources={[{
+              key: cacheKey || 'favorite-image',
+              thumb: src,
+              title: '收藏图片',
+              load: async () => src,
+              downloadName: 'favorite-image.jpg',
+            }]}
+            index={0}
+            onIndexChange={() => { /* 单张 */ }}
+            onClose={() => { setZoom(false) }}
+            dialogName="favorites-media"
+          />
+        )}
+      </>
+    )
   }
   return <div className={kitCss.textMeta}>{failed?.key === cacheKey ? failed.text : '正在加载图片…'}</div>
 }

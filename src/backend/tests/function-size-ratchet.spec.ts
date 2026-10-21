@@ -103,9 +103,9 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  384',
   // 2026-10-16：资产类面板（文件/收藏/表情/媒体/公众号）重做时把列表筛选与操作按钮
   // 抽进 `asset-ui.tsx`，`FilesPanel` 364 → 359。棘轮只许变小，成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  336',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  282',
   // 2026-10-19（微信化改版）：消息卡去掉渐变/发光分支，329 → 322。棘轮只许变小，成果记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  322',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  312',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  306',
   // 2026-09-28（E1 性能修复）：334 → 362。增量全部是**新增的 `getEmoticonDataUrls`
   // 批量壳**（签名 + 文档 + 一行转发）—— 算法体已搬到 `query/emoticon-batch.ts`，

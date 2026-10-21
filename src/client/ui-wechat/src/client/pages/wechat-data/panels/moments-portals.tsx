@@ -15,6 +15,8 @@ import { imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget 
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { videoCoverKey, type MediaKeySpec } from './moments-media.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
+import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
+import { apiGetSnsImageDataUrl } from '../api.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -146,6 +148,12 @@ export function MomentsExportDialog({
  * 状态与副作用仍留在面板：重置/滚轮/键盘/按需解码四个 effect 都读面板里的 state，
  * 一起搬会改掉「何时重跑」的时机；只搬 JSX，道具名与面板作用域里的名字完全相同。
  */
+/**
+ * 朋友圈图片查看器（2026-10-21 接入统一 `MediaViewer`）。
+ *
+ * 保留朋友圈专属能力：复制链接、保存原图、旋转 90°、缩略图条；
+ * 缩放/拖拽/双击/方向键/预取/错误重试走共享壳。
+ */
 export interface MomentsImageViewerProps {
   viewer: ViewerState | null
   setViewer: (v: ViewerState | null) => void
@@ -156,103 +164,52 @@ export interface MomentsImageViewerProps {
   saveCurrentImage: () => void
   viewRotate: number
   setViewRotate: React.Dispatch<React.SetStateAction<number>>
-  viewZoom: number
-  setViewZoom: React.Dispatch<React.SetStateAction<number>>
-  viewPan: { x: number; y: number }
-  setViewPan: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
-  lightboxWrapRef: React.MutableRefObject<HTMLDivElement | null>
-  pinchRef: React.MutableRefObject<{ dist: number; zoom: number } | null>
-  viewZoomRef: React.MutableRefObject<number>
-  dragRef: React.MutableRefObject<{ sx: number; sy: number; ox: number; oy: number } | null>
 }
 
 export function MomentsImageViewer({
   viewer, setViewer, setViewerIndex, curImg, snsImgs, copyCurrentLink, saveCurrentImage,
-  viewRotate, setViewRotate, viewZoom, setViewZoom,
-  viewPan, setViewPan, lightboxWrapRef, pinchRef, viewZoomRef, dragRef,
+  viewRotate, setViewRotate,
 }: MomentsImageViewerProps): React.JSX.Element | null {
   if (!viewer) return null
-  return createPortal(
-      <div className={[css.overlay, css.overlayTop].join(' ')} data-st-dialog="moments-viewer" onClick={() => { setViewer(null) }} role="dialog" aria-modal="true">
-        <div className={css.lightbox} onClick={(e) => { e.stopPropagation() }}>
-          <div className={css.lightboxHead}>
-            <span>{viewer.author} · {String(viewer.index + 1)}/{String(viewer.images.length)}</span>
-            <div className={css.lightboxHeadActions}>
-              <button type="button" className={css.btn} onClick={copyCurrentLink} disabled={!((curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || curImg?.thumb)} title="复制链接">复制</button>
-              <button type="button" className={css.btn} onClick={saveCurrentImage} disabled={!((curImg && snsImgs[imgKey(curImg)]) || curImg?.url || curImg?.thumb)} title="保存到本地">保存</button>
-              <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
-              <button type="button" className={css.btn} onClick={() => { setViewZoom(1); setViewPan({ x: 0, y: 0 }) }} disabled={viewZoom === 1} title="重置缩放">1:1</button>
-              <button type="button" className={css.btn} onClick={() => { setViewer(null) }} aria-label="关闭">×</button>
-            </div>
-          </div>
-          <div ref={lightboxWrapRef} className={css.lightboxImgWrap}
-            onDoubleClick={() => { setViewZoom(z => (z === 1 ? 2.5 : 1)); setViewPan({ x: 0, y: 0 }) }}
-            onTouchStart={(e) => {
-              const a = e.touches[0]
-              const b = e.touches[1]
-              if (e.touches.length === 2 && a && b) {
-                const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-                pinchRef.current = { dist: d, zoom: viewZoomRef.current }
-              }
-            }}
-            onTouchMove={(e) => {
-              const p = pinchRef.current
-              const a = e.touches[0]
-              const b = e.touches[1]
-              if (p && e.touches.length === 2 && a && b) {
-                const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-                const n = Math.min(5, Math.max(1, p.zoom * (d / p.dist)))
-                setViewZoom(n)
-                if (n === 1) setViewPan({ x: 0, y: 0 })
-              }
-            }}
-            onTouchEnd={() => { pinchRef.current = null }}
-            onMouseDown={(e) => {
-              if (viewZoom <= 1) return
-              dragRef.current = { sx: e.clientX, sy: e.clientY, ox: viewPan.x, oy: viewPan.y }
-            }}
-            onMouseMove={(e) => {
-              const d = dragRef.current
-              if (d) setViewPan({ x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) })
-            }}
-            onMouseUp={() => { dragRef.current = null }}
-            onMouseLeave={() => { dragRef.current = null }}
-            style={{ cursor: viewZoom > 1 ? 'move' : 'zoom-in' }}
-          >
-            {/* 「原图」开关决定优先要哪一个地址；两个都可能是 CDN 地址，那就交给后端代理（M23）。
-                取不到才说「加载失败」—— 在这一步之前谁也不知道是网络问题还是本机没有。 */}
-            <RemoteImg
-              src={curImg ? (snsImgs[imgKey(curImg)] || '') : ''}
-              alt=""
-              draggable={false}
-              className={css.lightboxImg}
-              style={{ transform: 'rotate(' + String(viewRotate) + 'deg) scale(' + String(viewZoom) + ') translate(' + String(viewPan.x) + 'px,' + String(viewPan.y) + 'px)' }}
-              failed={<div className={css.lightboxFail}>图片加载失败</div>}
-            />
-          </div>
-          <div className={css.lightboxNav}>
-            <button type="button" className={css.btn} disabled={viewer.index <= 0} onClick={() => { setViewerIndex(viewer.index - 1) }}>‹ 上一张</button>
-            <button type="button" className={css.btn} disabled={viewer.index >= viewer.images.length - 1} onClick={() => { setViewerIndex(viewer.index + 1) }}>下一张 ›</button>
-          </div>
-          {viewer.images.length > 1 && (
-            <div className={css.lightboxThumbs}>
-              {viewer.images.map((im, i) => {
-                const t = snsImgs[imgKey(im)] || ''
-                return (
-                  <RemoteImg
-                    key={i}
-                    src={t || ''}
-                    alt=""
-                    className={[css.lightboxThumb, i === viewer.index ? css.lightboxThumbActive : ''].filter(Boolean).join(' ')}
-                    {...clickableKey(() => { setViewerIndex(i) }, { label: `查看第 ${i + 1} 张图` })}
-                  />
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </div>,
-      document.body,
+  const sources = viewer.images.map((im) => ({
+    key: imgKey(im) || `${String(viewer.index)}-${String(im.md5 ?? im.id ?? '')}`,
+    thumb: snsImgs[imgKey(im)] ?? im.thumb ?? undefined,
+    title: viewer.author,
+    load: async (): Promise<string> => {
+      const local = snsImgs[imgKey(im)]
+      if (local) return local
+      const r = await apiGetSnsImageDataUrl({
+        md5: im.md5 ?? '',
+        ...(im.timelineId ? { timelineId: im.timelineId } : {}),
+        ...(im.id ? { mediaId: im.id } : {}),
+      })
+      if (r.url) return r.url
+      throw new Error(r.error ?? '图片暂不可用')
+    },
+  }))
+  const canCopy = Boolean(curImg?.url || (curImg ? snsImgs[imgKey(curImg)] : '') || curImg?.thumb)
+  const canSave = canCopy
+  return (
+    <MediaViewer
+      sources={sources}
+      index={viewer.index}
+      onIndexChange={setViewerIndex}
+      onClose={() => { setViewer(null) }}
+      dialogName="moments-viewer"
+      showThumbnails={viewer.images.length > 1}
+      minZoom={1}
+      maxZoom={5}
+      rotate={viewRotate}
+      headerActions={(
+        <>
+          <button type="button" className={css.btn} onClick={copyCurrentLink} disabled={!canCopy} title="复制链接">复制</button>
+          <button type="button" className={css.btn} onClick={saveCurrentImage} disabled={!canSave} title="保存到本地">保存</button>
+        </>
+      )}
+      extraToolbar={(
+        <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
+      )}
+    />
   )
 }
 

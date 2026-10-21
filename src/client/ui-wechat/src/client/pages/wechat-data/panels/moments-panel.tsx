@@ -150,11 +150,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [detail, setDetail] = useState<{ m: MomentItem } | null>(null)
-  // 灯箱状态 + 缩放/平移/旋转/原图 + 方向键切图，交给 moments-viewer.ts。
-  // 位置有约束：必须在 useMomentsMedia 之前（媒体层要按 viewer 决定给哪一张做离线解码）。
-  const { viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate,
-    dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex } =
-    useMomentsViewer()
+  // 灯箱状态：切换/索引/旋转交给 moments-viewer.ts；缩放/拖拽/方向键由共享 MediaViewer 负责
+  // （`keyboard:false` 关掉旧的方向键监听，避免与共享壳双跳）。位置仍在 useMomentsMedia 之前
+  // —— 媒体层要按 viewer 决定给哪一张做离线解码。
+  const { viewer, setViewer, viewRotate, setViewRotate, curImg, setViewerIndex } =
+    useMomentsViewer({ keyboard: false })
   // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
   // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold, clear } = useTransientNotice(6000)
@@ -254,11 +254,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     return () => { ob.disconnect() }
   }, [moments.length, total, load])
   // Esc 关闭走 kit 的共享栈：灯箱与详情同时打开时，一次 Esc 只关最上层（原来两个监听会一起关）
-  useEscapeToClose(viewer !== null, () => { setViewer(null) })
   useEscapeToClose(detail !== null, () => { setDetail(null) })
   useEscapeToClose(exportOpen, () => { setExportOpen(false) })
   // 焦点管理：进入移入、Tab 循环、关闭还原（手写弹窗没有 Radix 的那套）
-  useDialogFocus(viewer !== null, '[data-st-dialog="moments-viewer"]')
   useDialogFocus(detail !== null, '[data-st-dialog="moments-detail"]')
   useDialogFocus(exportOpen, '[data-st-dialog="moments-export"]')
 
@@ -417,14 +415,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         saveCurrentImage={saveCurrentImage}
         viewRotate={viewRotate}
         setViewRotate={setViewRotate}
-        viewZoom={viewZoom}
-        setViewZoom={setViewZoom}
-        viewPan={viewPan}
-        setViewPan={setViewPan}
-        lightboxWrapRef={lightboxWrapRef}
-        pinchRef={pinchRef}
-        viewZoomRef={viewZoomRef}
-        dragRef={dragRef}
       />
 
       {/* 单条动态详情 */}

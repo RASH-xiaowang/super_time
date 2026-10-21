@@ -7,18 +7,17 @@
  */
 import { apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiOpenPath, apiTranscribeVoiceMessage } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
-import { clickableKey, ErrorState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { clickableKey } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
+import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { recallImage, rememberImage } from '../image-cache.ts'
 import { CardFoot } from './chats-card-foot.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
-import { IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16, IconFullscreenOutline16, IconLinkOutline14, IconPlayOutline16, IconPlusOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconLinkOutline14, IconPlayOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
-import { clsx } from 'clsx'
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
 /** 微信语音时长（秒）→ 气泡宽度：官方公式 80px + 秒数×4（1s→84px，60s 封顶 320px）。 */
 export function voiceWidth(sec: number): string {
   const clamped = Math.min(60, Math.max(1, sec))
@@ -30,8 +29,10 @@ export interface ViewerImage {
   localId: number
 }
 /**
- * Lightbox image viewer: zoom (wheel/buttons), drag pan, prev/next, ESC/backdrop close.
- * Resolves each image to a data URL through the Remote on demand.
+ * 聊天图片查看器（2026-10-21 接入统一 `MediaViewer`）：
+ *  - 缩略图先用内存缓存铺底（`recallImage`），原图按需取；
+ *  - 左右相邻各预取一张，翻页不闪白；
+ *  - 缩放/拖拽/双击/键盘/缩略图条与全应用同一套交互。
  */
 export function ImageViewer({ images, index, onClose, onIndexChange }: {
   images: readonly ViewerImage[]
@@ -39,104 +40,31 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
   onClose: () => void
   onIndexChange: (i: number) => void
 }): React.JSX.Element {
-  const item = images[index]
-  const [src, setSrc] = useState<string | null>(null)
-  const [vErr, setVErr] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [zoom, setZoom] = useState(1)
-  const [off, setOff] = useState({ x: 0, y: 0 })
-  const [dragging, setDragging] = useState(false)
-  const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
-
-  useEffect(() => {
-    if (!item) return
-    let cancelled = false
-    setSrc(null)
-    setVErr(null)
-    setZoom(1)
-    setOff({ x: 0, y: 0 })
-    setLoading(true)
-    apiGetImageDataUrl({ username: item.username, localId: item.localId })
-      .then((r) => {
-        if (cancelled) return
-        if (r.url) setSrc(r.url)
-        else setVErr(r.error ?? '图片不可用')
-      })
-      .catch((e: unknown) => { if (!cancelled) setVErr((e as Error).message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [item?.username, item?.localId])
-
-  // 媒体查看器是 createPortal 出去的覆盖层，同样需要把焦点收进来并锁在里面。
-  useDialogFocus(!!item, '[data-st-dialog="chats-viewer"]')
-
-  /*
-   * Esc 关闭（R7 收编）。
-   *
-   * 此前这里是一段**自己写的** keydown 监听：`if (e.key === 'Escape') onClose()`。
-   * 能关，但**不进 `escStack`** —— 全局其它手写覆盖层都走 kit 的栈（只让最上层响应），
-   * 只有它游离在外。后果：查看器之上再叠一层弹窗时，一次 Esc 会把两层一起关掉。
-   * 现在 Esc 交给 `useEscapeToClose`（自动入栈、退栈、只响应最上层），
-   * 这里只保留查看器**专属**的方向键翻页。
-   */
-  useEscapeToClose(!!item, onClose)
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'ArrowLeft') onIndexChange((index - 1 + images.length) % images.length)
-      else if (e.key === 'ArrowRight') onIndexChange((index + 1) % images.length)
-    }
-    window.addEventListener('keydown', onKey)
-    return () =>{  window.removeEventListener('keydown', onKey) }
-  }, [onIndexChange, index, images.length])
-
-  const zoomBy = (f: number): void =>{  setZoom(z => Math.min(Math.max(z * f, 0.25), 8)) }
-  const reset = (): void => { setZoom(1); setOff({ x: 0, y: 0 }) }
-
-  return createPortal(
-    <div className={cssrows.viewerOverlay} role="dialog" data-st-dialog="chats-viewer" aria-modal="true"
-      onWheel={(e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15) }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-      onMouseMove={(e) => {
-        if (dragging && dragStart.current) {
-          setOff({
-            x: dragStart.current.ox + (e.clientX - dragStart.current.x),
-            y: dragStart.current.oy + (e.clientY - dragStart.current.y),
-          })
-        }
-      }}
-      onMouseUp={() => { setDragging(false); dragStart.current = null }}
-      onMouseLeave={() => { setDragging(false); dragStart.current = null }}
-    >
-
-      <div className={cssrows.viewerBar}>
-        <span className={cssrows.viewerCount}>{index + 1} / {images.length}</span>
-        <button type="button" className={cssrows.viewerBtn} title="放大" aria-label="放大" onClick={() =>{  zoomBy(1.3) }}><IconPlusOutline16 size={15} /></button>
-        <button type="button" className={cssrows.viewerBtn} title="缩小" aria-label="缩小" onClick={() =>{  zoomBy(1 / 1.3) }}><IconMinus /></button>
-        <button type="button" className={cssrows.viewerBtn} title="1:1" aria-label="1:1" onClick={reset}><IconFullscreenOutline16 size={15} /></button>
-        <button type="button" className={cssrows.viewerBtn} title="上一张" aria-label="上一张" onClick={() => { onIndexChange((index - 1 + images.length) % images.length) }}><IconChevronLeftOutline14 /></button>
-        <button type="button" className={cssrows.viewerBtn} title="下一张" aria-label="下一张" onClick={() => { onIndexChange((index + 1) % images.length) }}><IconChevronRightOutline14 /></button>
-        <button type="button" className={clsx(cssrows.viewerBtn, cssrows.viewerBtnClose)} title="关闭" aria-label="关闭" onClick={(e) => { e.stopPropagation(); onClose() }}><IconCloseOutline16 size={16} /></button>
-      </div>
-      <div className={cssrows.viewerStage}>
-        {loading && !src && !vErr && <div className={cssrows.viewerMsg}>加载中…</div>}
-        {vErr && <ErrorState message={vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）' : vErr} />}
-        {src && (
-          <img
-            src={src}
-            alt="图片"
-            className={cssrows.viewerImg}
-            style={{ transform: `translate(${off.x}px, ${off.y}px) scale(${zoom})` }}
-            draggable={false}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              setDragging(true)
-              dragStart.current = { x: e.clientX, y: e.clientY, ox: off.x, oy: off.y }
-            }}
-          />
-        )}
-      </div>
-    </div>,
-    document.body,
+  const sources = useMemo(() => images.map((im) => ({
+    key: `${im.username}:${String(im.localId)}`,
+    thumb: recallImage(im.username, im.localId)?.url,
+    load: async (): Promise<string> => {
+      const cached = recallImage(im.username, im.localId)
+      if (cached) return cached.url
+      const r = await apiGetImageDataUrl({ username: im.username, localId: im.localId })
+      if (r.url) {
+        rememberImage(im.username, im.localId, { url: r.url, thumb: r.thumb === true })
+        return r.url
+      }
+      throw new Error(r.error === 'hevc-unsupported'
+        ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）'
+        : (r.error ?? '图片不可用'))
+    },
+  })), [images])
+  return (
+    <MediaViewer
+      sources={sources}
+      index={index}
+      onIndexChange={onIndexChange}
+      onClose={onClose}
+      dialogName="chats-viewer"
+      showThumbnails={images.length > 1}
+    />
   )
 }
 /** 单张消息图片（可点击进大图）。图片组网格也复用它。 */

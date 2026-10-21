@@ -211,7 +211,7 @@ describe('接线：面板只从这一层拿灯箱状态', () => {
   })
 
   it('钩子调用必须留在媒体层之前（媒体层按 viewer 决定给哪一张做离线解码）', () => {
-    const a = panel.indexOf('useMomentsViewer()')
+    const a = panel.indexOf('useMomentsViewer(')
     const b = panel.indexOf('useMomentsMedia({')
     expect(a).toBeGreaterThan(0)
     expect(b).toBeGreaterThan(0)

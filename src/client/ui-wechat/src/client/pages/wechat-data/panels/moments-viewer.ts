@@ -73,7 +73,7 @@ export function imageExtOf(src: string): string {
  * 灯箱状态：开关、四个变换量、三个 ref 与索引钳位。
  * @returns 面板与 `MomentsImageViewer` 要的那一组值。
  */
-export function useMomentsViewer(): {
+export function useMomentsViewer(options?: { keyboard?: boolean }): {
   viewer: MomentsViewerState | null
   setViewer: React.Dispatch<React.SetStateAction<MomentsViewerState | null>>
   viewZoom: number
@@ -126,15 +126,16 @@ export function useMomentsViewer(): {
   }, [viewer])
 
   // Keyboard control while the lightbox is open: arrows switch image（Esc 交给共享 hook）。
+  // 2026-10-21：灯箱改用共享 MediaViewer 后方向键由它处理，这里可关掉避免双跳。
   useEffect(() => {
-    if (!viewer) return
+    if (!viewer || options?.keyboard === false) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'ArrowLeft') setViewer(v => (v ? { ...v, index: clampIndex(v.images.length, v.index - 1) } : v))
       if (e.key === 'ArrowRight') setViewer(v => (v ? { ...v, index: clampIndex(v.images.length, v.index + 1) } : v))
     }
     window.addEventListener('keydown', onKey)
     return () => { window.removeEventListener('keydown', onKey) }
-  }, [viewer])
+  }, [viewer, options?.keyboard])
 
   const setViewerIndex = (index: number): void => {
     setViewer(v => (v ? { ...v, index: clampIndex(v.images.length, index) } : v))

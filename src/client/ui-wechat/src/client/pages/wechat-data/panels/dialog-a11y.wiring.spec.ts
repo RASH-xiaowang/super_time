@@ -86,11 +86,20 @@ const ALL = [...SOURCES.values()].join('\n')
  * 注：`escIn` 只是「该文件确实用了 esc 栈」的存在性检查；真正的语义绑定
  * （打开条件对不对）由各自的业务 spec 钉（如 `chats-chatlog-dialog.wiring.spec.ts`）。
  */
-const NAMED_OVERLAYS = [
+/** 一条点名：attrIn 写属性、focusIn/escIn 调钩子；sharedViewer = 由共享 MediaViewer 渲染。 */
+interface NamedOverlay {
+  name: string
+  attrIn: string
+  focusIn: string
+  escIn: string
+  sharedViewer?: true
+}
+
+const NAMED_OVERLAYS: readonly NamedOverlay[] = [
   // ── 同文件接线（组件自包含）──────────────────────────────────────────
   { name: 'daily-form', attrIn: 'DailySummary.tsx', focusIn: 'DailySummary.tsx', escIn: 'DailySummary.tsx' },
-  { name: 'files-lightbox', attrIn: 'Files.tsx', focusIn: 'Files.tsx', escIn: 'Files.tsx' },
-  { name: 'chats-viewer', attrIn: 'chats-media.tsx', focusIn: 'chats-media.tsx', escIn: 'chats-media.tsx' },
+  { name: 'files-lightbox', attrIn: 'Files.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
+  { name: 'chats-viewer', attrIn: 'chats-media.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
   { name: 'chats-contactinfo', attrIn: 'chats-contact-info-view.tsx', focusIn: 'chats-contact-info-view.tsx', escIn: 'chats-contact-info-view.tsx' },
   // 2026-10-19：「新建任务」三处入口共用的触发式任务弹窗（自包含，Esc + 焦点陷阱都在本文件）。
   { name: 'task-create', attrIn: 'task-create-dialog.tsx', focusIn: 'task-create-dialog.tsx', escIn: 'task-create-dialog.tsx' },
@@ -101,8 +110,11 @@ const NAMED_OVERLAYS = [
   { name: 'chats-export', attrIn: 'chats-export-dialog.tsx', focusIn: 'chats-msg-search.tsx', escIn: 'chats-msg-search.tsx' },
   { name: 'chats-groupinfo', attrIn: 'chats-group-info-view.tsx', focusIn: 'chats-thread.tsx', escIn: 'chats-thread.tsx' },
   { name: 'moments-export', attrIn: 'moments-portals.tsx', focusIn: 'moments-panel.tsx', escIn: 'moments-panel.tsx' },
-  { name: 'moments-viewer', attrIn: 'moments-portals.tsx', focusIn: 'moments-panel.tsx', escIn: 'moments-panel.tsx' },
+  { name: 'moments-viewer', attrIn: 'moments-portals.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
   { name: 'moments-detail', attrIn: 'moments-portals.tsx', focusIn: 'moments-panel.tsx', escIn: 'moments-panel.tsx' },
+  // 2026-10-21：ClawBot / 收藏图片也接入共享查看器（属性/焦点/Esc 都在 MediaViewer）。
+  { name: 'clawbot-media', attrIn: 'clawbot-media-viewer.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
+  { name: 'favorites-media', attrIn: 'favorites-media.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
 ] as const
 
 /** 收集所有 `data-st-dialog="X"` 属性用法（排除 `querySelector('[data-st-dialog=…]')`）。 */
@@ -161,12 +173,25 @@ describe('手写覆盖层的无障碍接线', () => {
   })
 
   it('哨兵：逐一确认下面点名的名字真的存在（名字改了要立刻红）', () => {
-    const missingAttr = NAMED_OVERLAYS.filter(o => !attrs.get(o.name)?.has(o.attrIn))
+    const missingAttr = NAMED_OVERLAYS.filter(o => !o.sharedViewer && !attrs.get(o.name)?.has(o.attrIn))
       .map(o => `${o.name} 的属性不在 ${o.attrIn}`)
-    const missingFocus = NAMED_OVERLAYS.filter(o => !focuses.get(o.name)?.has(o.focusIn))
+    const missingFocus = NAMED_OVERLAYS.filter(o => !o.sharedViewer && !focuses.get(o.name)?.has(o.focusIn))
       .map(o => `${o.name} 的 useDialogFocus 不在 ${o.focusIn}`)
     expect(missingAttr, `这些覆盖层的 data-st-dialog 属性找不到了：\n  ${missingAttr.join('\n  ')}`).toEqual([])
     expect(missingFocus, `这些覆盖层没人给它做焦点管理：\n  ${missingFocus.join('\n  ')}`).toEqual([])
+  })
+
+  it('共享查看器：适配器传字面量名字，MediaViewer 渲染属性 + 焦点 + Esc', () => {
+    const viewerSrc = SOURCES.get('MediaViewer.tsx')
+    expect(viewerSrc, 'MediaViewer.tsx 没读到').toBeDefined()
+    expect(viewerSrc!, '共享壳必须把 dialogName 写成 data-st-dialog').toContain('data-st-dialog={dialogName}')
+    expect(/useDialogFocus\s*\(/.test(viewerSrc!), '共享壳缺焦点陷阱').toBe(true)
+    expect(callsEscapeToClose(viewerSrc!), '共享壳缺 Esc 入栈调用').toBe(true)
+    const bad = NAMED_OVERLAYS.filter(o => o.sharedViewer).filter((o) => {
+      const adapter = SOURCES.get(o.attrIn)
+      return !adapter?.includes(`dialogName="${o.name}"`)
+    }).map(o => `${o.name}: ${o.attrIn} 没有传字面量 dialogName`)
+    expect(bad, `共享查看器接线不对：\n  ${bad.join('\n  ')}`).toEqual([])
   })
 
   it('每个被点名的覆盖层，Esc 与焦点两套 hook 都真的被调用（不是只写了属性）', () => {
