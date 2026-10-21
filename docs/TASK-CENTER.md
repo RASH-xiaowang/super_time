@@ -8,6 +8,8 @@
 > [`../src/backend/wechat-data/src/query/task-center.ts`](../src/backend/wechat-data/src/query/task-center.ts)，
 > 面板在 [`../src/client/ui-wechat/src/client/pages/wechat-data/panels/TaskCenter.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/TaskCenter.tsx)。
 > 隐私与出网声明见 [`PRIVACY.md`](PRIVACY.md) §四 G3；Remote 方法签名见 [`API.md`](API.md)。
+> 多 RPA 厂商（影刀/实在/来也/UiPath/阿里云等）的可选触发方案与调研见
+> [`RPA-VENDOR-TRIGGERS.md`](RPA-VENDOR-TRIGGERS.md)（方案阶段，未改动本域行为）。
 
 ---
 
