@@ -192,5 +192,7 @@ refactor(P3-5): 图片解码三兄弟收成两份公共体，两处有意差异�
 2. 需要回滚点时用提交/tag 或 `git bundle` 备份（备份放仓库外，如 `D:\super-time-wechat-backup\`），
    **不要为此新建分支**；合并类历史保留在提交里；
 3. 启动用桌面「Super Time」或 `SuperTime.cmd`（自动按需构建 `main` 最新代码）；
-4. `git fetch` 已收敛为只拉 `origin/main`；要让远端也最新需显式 push；
-5. 如确有必须隔离的实验，先在本文档登记理由并确认，实验结束即删分支/工作树。
+4. **远端 `origin/main` 是独立的「官网发布线」**（孤儿历史：只有 `index.html`/`README`，没有源码）；
+   本地 `main` 是开发源码线 —— **不 push、不 force-push、不设 upstream**，两条历史没有共同祖先，不能合并；
+5. 本地 `git fetch` 已收敛为只拉 `origin/main`；确认要动远端之前先读本节；
+6. 如确有必须隔离的实验，先在本文档登记理由并确认，实验结束即删分支/工作树。
