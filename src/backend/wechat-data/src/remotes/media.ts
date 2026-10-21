@@ -19,7 +19,6 @@ import { fetchQuota, type WxcdnQuota } from '../query/wxcdn-original.ts'
 import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan, scanImageOriginalPlanAsync } from '../query/image-original-batch.ts'
 import { getOriginalHarvestStatus, harvestHdDats, setHarvestProgress, startOriginalHarvester, stopOriginalHarvester, type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
-import { resolveFavoriteMediaDataUrl } from '../query/favorite-media.ts'
 import { lookupOriginal, lookupArchivedOriginal, originalAsDataUrl, saveArchivedOriginal, saveOriginal } from '../query/sns-media-store.ts'
 import { readArchivedAvatar, readArchivedAvatars, saveArchivedAvatar, saveArchivedAvatars } from '../query/moments-archive.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
@@ -27,16 +26,15 @@ import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
 import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
+import { createFavoriteMediaRemotes } from './media-favorites.ts'
+import { createVoiceVideoRemotes } from './media-voice.ts'
 import { createFileImageRemotes } from './media-file-images.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
-import { resolveVideoInfo } from '../query/media-video.ts'
-import { resolveVoiceInfo } from '../query/media-voice.ts'
 import { fetchMapGeoJson } from '../query/map-geo.ts'
 import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrlsAsync, resolveSnsVideoCoverDataUrlAsync, resolveSnsVideoDataUrlAsync } from '../query/sns-video.ts'
-import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VoiceInfoResult } from '../types.ts'
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -154,26 +152,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return queryFiles(rc.dirs().decrypted, options?.limit, options?.offset, options?.category, options?.q)
     },
 
-    getVoiceInfo(options: { username: string; localId: number }): VoiceInfoResult {
-      return resolveVoiceInfo(rc.dirs().decrypted, options.username, options.localId)
-    },
-
-    async getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<VoiceDataUrlResult> {
-      return await resolveVoiceDataUrl(
-        rc.dirs().decrypted,
-        rc.dirs().decoded,
-        options.username ?? '',
-        options.localId,
-        options.svrId ?? '',
-      )
-    },
-
-    getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
-      return resolveVideoInfo(
-        rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId,
-        rawWechatBase(rc.dirs().decrypted) || undefined,
-      )
-    },
+    ...createVoiceVideoRemotes(rc),
 
     getAvatar(options: { username: string; nickname?: string }): AvatarResult {
       return avatarWithArchive(rc, options)
@@ -209,25 +188,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
 
     ...createFileImageRemotes(rc),
 
-    /**
-     * 收藏资源本地缓存：图片、视频、文件、语音和未知资源共用同一条
-     * “按明文内容 MD5 匹配 business/favorite 下不透明文件”的解析链。
-     * @param options - XML 中的 md5/thumbMd5/fullMd5 与资源类型提示。
-     * @returns data URL（含正确 MIME）或本地缓存未命中的说明。
-     */
-    getFavoriteMediaDataUrl(options: {
-      md5?: string
-      thumbMd5?: string
-      fullMd5?: string
-      kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
-      ext?: string
-      fileName?: string
-      size?: number
-    }): ImageDataUrlResult {
-      const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return resolveFavoriteMediaDataUrl(base, options ?? {}, aesKey, xorKey)
-    },
+    ...createFavoriteMediaRemotes(rc),
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined

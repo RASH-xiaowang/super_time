@@ -1,7 +1,7 @@
 import { type WxcdnQuota } from '../query/wxcdn-original.ts';
 import { type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts';
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -160,6 +160,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         source?: string;
         error?: string;
     }>;
+    getFavoriteMediaDataUrl: (options: import("./media-favorites.ts").FavoriteMediaOptions) => ImageDataUrlResult;
     getFileImageDataUrl: (options: {
         md5: string;
         thumbFirst?: boolean;
@@ -168,28 +169,6 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         keys: string[];
         thumbFirst?: boolean;
     }) => Promise<import("../types-panels.ts").FileImageDataUrlsResult>;
-    getEmoticons(options?: {
-        limit?: number;
-        offset?: number;
-    }): EmoticonsSnapshot;
-    getFiles(options?: {
-        limit?: number;
-        offset?: number;
-        category?: string;
-        q?: string;
-    }): FilesSnapshot;
-    getVoiceInfo(options: {
-        username: string;
-        localId: number;
-    }): VoiceInfoResult;
-    getVoiceDataUrl(options: {
-        username: string;
-        localId: number;
-    }): Promise<VoiceDataUrlResult>;
-    getVideoInfo(options: {
-        username: string;
-        localId: number;
-    }): VideoInfoResult;
     getAvatar(options: {
         username: string;
         nickname?: string;
@@ -219,6 +198,29 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     }>;
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
+    getVoiceInfo: (options: {
+        username: string;
+        localId: number;
+    }) => VoiceInfoResult;
+    getVoiceDataUrl: (options: {
+        username?: string;
+        localId?: number;
+        svrId?: string;
+    }) => Promise<import("../types-ask-export.ts").VoiceDataUrlResult>;
+    getVideoInfo: (options: {
+        username: string;
+        localId: number;
+    }) => import("../types-panels.ts").VideoInfoResult;
+    getEmoticons(options?: {
+        limit?: number;
+        offset?: number;
+    }): EmoticonsSnapshot;
+    getFiles(options?: {
+        limit?: number;
+        offset?: number;
+        category?: string;
+        q?: string;
+    }): FilesSnapshot;
 };
 /**
  * `fileOnly` 模式的返回整形：有落盘文件就不再回传 base64（桌面端用 wechat-media:// 流式显示）。

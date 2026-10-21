@@ -49,11 +49,7 @@ const LIMIT = 250
  */
 const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  791',
-  // 登记理由（2026-09-29）：这段循环必须**保持整段内联**才能同时满足连接纪律棘轮 ——
-  // 把分片读取抽成独立函数会让 `new DatabaseSync` 的站点归属变到账本里没有的函数名上
-  // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
-  // 就是在这个内联循环外面挂了一层"命中即 continue"。**行数只许变小。**
-  'src/backend/wechat-data/src/query/overview-insights.ts  computeOverviewInsights  252',
+  // 2026-10-21：收藏/任务功能线合并后 computeOverviewInsights 已降到 250 以内 ⇒ 移出棘轮（清单只许变小，达标即删）。
   // 2026-10-21：收藏/任务功能线把知识库批量动作拆成 `kb-batch-actions.tsx` ⇒ 727 → 687。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  687',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
@@ -123,7 +119,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 模块级 `remoteImagesWithOp` / `mapGeoJsonWithOp`，方法体退回「签名 + 一行转发」。
   // 2026-10-19：319 → 317。头像归档逻辑搬到模块级 `avatarWithArchive` /
   // `avatarsLocalWithArchive`，方法体退回「签名 + 一行转发」。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  313',
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  302',
   // 2026-10-14（M9）：`SettingsPanel` 改成「桌面/浏览器」分派器（浏览器态整面板降级，见
   // `settings-browser.tsx`），原来那份三百多行的实现改名 `SettingsDesktopPanel`。
   // 这是**改名不是变胖**：行数一字未动，仍记 328。想降就得把某几节真搬出去。
@@ -148,7 +144,9 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-18：筛选区拆成两排（分类段条搬成 RecordKindTabs）⇒ 276。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  276',
   'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
-  // 2026-10-21：通用收藏详情抽成 `favorites-detail.tsx`，FavoritesPanel 已低于 250 阈值 ⇒ 移出棘轮。
+  // 2026-10-21：收藏功能线与性能分支合并后，FavoritesPanel 实测 257 行（两只详情子视图已抽出）。
+  // 仍高于 250 阈值 ⇒ 重新登记为「只许变小」；下一次再长必须先拆。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  257',
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',
   // 2026-10-08：图片那一路不再拿 CDN 原始地址当 src（那是 WxIsaac64 密文，原理上渲染不出来），
   // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。

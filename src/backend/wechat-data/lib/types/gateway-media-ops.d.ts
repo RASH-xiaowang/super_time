@@ -43,12 +43,14 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     /**
      * Resolve one voice message to an inline-playable wav data URL.
      * 语音实体是 silk，需要解码成 wav 才能播；产物落在转写链路同一份缓存里。
-     * @param options - username and localId of the voice message.
+     * 收藏语音没有聊天会话/locale_id，可直接用 XML 里的 `svrId` 定位。
+     * @param options - svrId，或 username + localId（二选一）。
      * @returns VoiceDataUrlResult: base64 wav data URL (+ duration) or error.
     */
     getVoiceDataUrl(options: {
-        username: string;
-        localId: number;
+        username?: string;
+        localId?: number;
+        svrId?: string;
     }): Promise<VoiceDataUrlResult>;
     /**
      * Look up one video message: cover thumbnail + the on-disk video path.
@@ -151,6 +153,24 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         md5: string;
         thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 收藏资源本地缓存解析。
+     *
+     * 微信收藏的图片/视频/文件/语音文件位于 `business/favorite`，文件名是不透明
+     * 哈希，XML 只提供明文内容 MD5。此入口与 SNS 图片接口分开，避免继续拿
+     * 朋友圈缓存去碰运气。
+     * @param options - XML 中的 md5/thumbMd5/fullMd5 + 类型提示。
+     * @returns data URL 或本地未命中说明。
+     */
+    getFavoriteMediaDataUrl(options: {
+        md5?: string;
+        thumbMd5?: string;
+        fullMd5?: string;
+        kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown';
+        ext?: string;
+        fileName?: string;
+        size?: number;
+    }): ImageDataUrlResult;
     /**
      * 批量取文件库图片（2026-10-21：把「一屏 N 格 = N 次 RPC」收成 1 次；借鉴 Alpha 的批量 token）。
      *
