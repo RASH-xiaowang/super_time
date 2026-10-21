@@ -29,6 +29,7 @@
 | 19 | 本轮 | perf(files): 文件面板缩略图批量 RPC（27→2 次，−93%）+ 可视化验证 | Q（文件面板批量） | 8 spec 文件 54 用例绿；typecheck 0；check-generated 一致；真实应用截图：31/31 协议图加载成功、0 破图；decoded +44、缩略图 +22、0 错误 |
 | 20 | 本轮 | refactor(perf): 拆分 remotes/media.ts 与 FilesPanel，修绿两条棘轮并记账 | R（棘轮修复） | 棘轮 9/9 绿；measure:quick 18/21 用例 27.56s |
 | 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实截图 `assets/sidebar-nickname.png` |
+| 22 | 本轮 | perf(files): 缩略图宽度自适应 + 视区外预取（hook 两条 lane、LRU 随列数放大） | S（资源生命周期） | 7 spec 45 用例绿；棘轮绿；measure:quick 18/21 用例 27.37s；真实应用：URL 全为 `?w=240`（原 320）、31 张渲染却新建 51 个缩略图缓存（预取生效）、0 破图 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -170,6 +171,20 @@
   * 品牌守卫更新：窗口标题/关于页仍是 Super Time，品牌名作为**兜底常量**保留。
 - **验证**：真实启动应用并截图 → 品牌位文本 **SuperT_王国宁**（`title="SuperT_王国宁 · Super Time"`），副标题/头像不变；self-profile 5/5、brand-consistency 6/6、相关 spec 共 64 用例（除棘轮外）全绿；typecheck 0；measure:quick 27.56s。
 - **回滚**：`git revert` 对应两笔提交即可（Remote 为新增、品牌位组件可单文件回退；取不到昵称自动回退品牌名，不存在空标题风险）。
+
+### S · 文件面板：视区外预取 + 缩略图宽度自适应（第十四轮，Lead）
+- **需求**：① 可视区外预取，滚动时图已在；② 缩略图宽度按格子实际宽度自适应（原固定 320px）。
+- **实现**：
+  * `use-grid-columns.ts` 现在返回 `{cols, cellWidth}`：`clientWidth − padding − gap×(cols−1)` 后均分（纯函数 `cellWidthFor` 可测）；
+  * `thumbWidthFor(cellWidth, dpr)`：按「格宽 × 设备像素比」向上取固定档位 `160/240/320/480/640`，既不在 2x 屏发糊，也不会每拖一次窗口就多一份 `.wNNN.jpg` 缓存；
+  * 新增 `use-file-thumbs.ts`：**可视 24ms / 预取 180ms 两条独立 lane**（可视永远不会排在预取后面）、`fetched/queued` 去重、LRU 上界 `thumbCacheLimitFor(cols)`（60→96/6 列，封顶 240）保证预取不挤掉屏上的图；
+  * `Files.tsx` 接入 `useFileThumbnails`，无依赖 effect 用虚拟器 `range` 计算 `prefetchKeys(visible, cols, range)`（上下各 3 行、跳过非图片、贴边安全）；面板函数 354 → **336 行**（棘轮同步记账）。
+- **真实应用验证**（Playwright 启动 + 截图）：
+  * 所有协议图片 URL 从 `?w=320` 变为 `?w=240`（当前窗口实测格宽≈205px、DPR=1 ⇒ 240 档）；
+  * 可见 `<img>` 仅 **31** 张且 31/31 加载、0 破图，但本次运行新建缩略图缓存 **51** 个 ⇒ 约 20 张是视区外预取（另外滚动过程中加载）；
+  * 截图存 `docs/perf/assets/files-prefetch-adaptive.png`。
+- **验收**：新增 `files-prefetch.spec.ts`（12 用例）+ 更新 virtual wiring 守卫；相关 7 spec 45 用例绿；两只棘轮绿；typecheck 0；check-generated 一致；measure:quick 27.37s。
+- **回滚**：`git revert` 本提交即可（hook 为新增，`Files.tsx` 回退后仍走原固定 320 逻辑；无后端/接口变更）。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
