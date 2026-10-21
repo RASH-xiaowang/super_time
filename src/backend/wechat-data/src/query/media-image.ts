@@ -96,6 +96,12 @@ export function extractMd5FromPacked(value: unknown): string | null {
   return null
 }
 
+/** Resolved image identity for one message. */
+export interface ImageResourceHint {
+  md5: string | null
+  dataIndex: string
+}
+
 /**
  * Resolve image MD5 + MessageResourceDetail.data_index for (username, local_id):
  * message shard packed_info_data first, then message_resource.db
@@ -109,7 +115,7 @@ export function resolveImageResourceHint(
   decryptedDir: string,
   username: string,
   localId: number,
-): { md5: string | null; dataIndex: string } {
+): ImageResourceHint {
   const table = msgTableName(username)
   // 分片目录缓存直接定位持有该表的分片，逐图解析不再每次遍历打开所有分片库。
   for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
@@ -177,18 +183,20 @@ export function resolveImageResourceHint(
  *    少复制一处就少一处两条路径行为漂移的机会；
  * ③ 跨分片合并时**先命中者胜出**（与单张入口逐分片试到就 return 同构）。
  *
- * **它现在只服务预热阶段**：批量入口的返回值仍由单张入口产出（那里自己还会查一次 md5），所以合并
- * 省下的是**预热段的开合**，不是整段 —— 本机实测 30 张：62 次 → 33 次，剩下 30 次就是那 30 张各走
- * 一次单张入口。把这一条写死在这里，是因为只读函数名的话很容易以为"批量已经整段只查一次"。
+ * `resolveImageMd5sBatch` remains the compatibility wrapper used by prewarm. The image
+ * batch entry uses `resolveImageResourceHintsBatch` so the resolved hint (including
+ * data_index) can be passed into each internal decode call. Before that wiring, the
+ * local 30-image fixture measured 33 handle closes; after it, the batch path only
+ * opens the message shard and hardlink index.
  * @param decryptedDir - 解密库目录（分片与 hardlink 的根）。
  * @param items - 待解析的 (username, localId) 列表；返回顺序与之对齐。
- * @returns 与 `items` 等长的 md5 数组，解析不到的是空串（调用方按长度 32 过滤）。
+ * @returns 与 `items` 等长的 hint 数组；快路径未命中的条目走与单张入口相同的兜底。
  */
-export function resolveImageMd5sBatch(
+export function resolveImageResourceHintsBatch(
   decryptedDir: string,
   items: ReadonlyArray<{ username: string; localId: number }>,
-): string[] {
-  const out = new Array<string>(items.length).fill('')
+): ImageResourceHint[] {
+  const out: ImageResourceHint[] = items.map(() => ({ md5: null, dataIndex: '' }))
   // 按会话分组：一张消息表就是一个 username，组内一次 IN 查完
   const idsByUser = new Map<string, Set<number>>()
   for (const it of items) {
@@ -230,9 +238,24 @@ export function resolveImageMd5sBatch(
     if (!it) continue
     const hit = md5ByKey.get(it.username + '#' + String(it.localId))
     // 回落走的就是原来那条逐张路径，所以「库里确实没有」与「批量没查到」在这里不区分
-    out[i] = hit ?? resolveImageResourceHint(decryptedDir, it.username, it.localId).md5 ?? ''
+    out[i] = hit !== undefined
+      ? { md5: hit, dataIndex: '' }
+      : resolveImageResourceHint(decryptedDir, it.username, it.localId)
   }
   return out
+}
+
+/**
+ * Backward-compatible MD5-only view used by the prewarm path.
+ * @param decryptedDir - decrypted data root.
+ * @param items - messages to resolve.
+ * @returns one MD5 per item; unresolved entries are empty strings.
+ */
+export function resolveImageMd5sBatch(
+  decryptedDir: string,
+  items: ReadonlyArray<{ username: string; localId: number }>,
+): string[] {
+  return resolveImageResourceHintsBatch(decryptedDir, items).map(hint => hint.md5 ?? '')
 }
 
 /** Normalize a MessageResourceDetail.data_index cell to a non-empty string. */

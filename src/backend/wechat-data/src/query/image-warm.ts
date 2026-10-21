@@ -42,6 +42,7 @@ async function pathExists(path: string): Promise<boolean> {
  * @param items - 待预热的 (username, localId) 列表。
  * @param aesKey - V2 AES key。
  * @param xorKey - XOR key 字节。
+ * @param knownMd5s - md5 resolved by the caller in the same pass; optional.
  */
 export async function warmDecodedImages(
   decryptedDir: string,
@@ -50,11 +51,12 @@ export async function warmDecodedImages(
   items: ReadonlyArray<{ username: string; localId: number }>,
   aesKey: string | undefined,
   xorKey: number,
+  knownMd5s?: readonly string[],
 ): Promise<void> {
   try {
     // md5 也批量查（每个 (username, 分片) 一次 IN）—— 见 `resolveImageMd5sBatch` 的注释：
     // 原本只有下面的路径查询合并了，md5 仍是每张开一次库，在慢机器上等于没省。
-    const md5ByItem = resolveImageMd5sBatch(decryptedDir, items)
+    const md5ByItem = knownMd5s ?? resolveImageMd5sBatch(decryptedDir, items)
     const wanted = md5ByItem.filter(m => m.length === 32)
     if (wanted.length === 0) return
     // 唯一一次「按 md5 找 .dat」的查询（N16 的收益点：N 张图从 N 次全表扫降到 1 次 IN）。

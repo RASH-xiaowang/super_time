@@ -28,7 +28,7 @@
 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { clearDecodedImageCache, resolveImageResourceHint, writeDecodedCache } from './media-image.ts'
+import { clearDecodedImageCache, resolveImageResourceHint, writeDecodedCache, type ImageResourceHint } from './media-image.ts'
 import { decodeImageDataUrlAsync } from './media-image-async.ts'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from './image-original.ts'
 import { recordFetchedOriginal } from './image-original-batch.ts'
@@ -187,6 +187,7 @@ export function forgetAutoUpgradeAttempt(username: string, localId: number): voi
  * @param aesKey - V2 AES 密钥。
  * @param xorKey - XOR key 字节。
  * @param allowNetwork - 是否允许走 CDN 直链（默认 true；批量路径可关掉以免拖慢）。
+ * @param options - optional resolved hint / fileOnly mode used by the batch entry.
  * @returns 升级结果；`format` 为空表示没升级成功。
  */
 export async function tryUpgradeToOriginal(
@@ -198,19 +199,23 @@ export async function tryUpgradeToOriginal(
   aesKey: string | Uint8Array | undefined,
   xorKey: number,
   allowNetwork = true,
+  options: { hint?: ImageResourceHint; fileOnly?: boolean } = {},
 ): Promise<AutoUpgradeResult> {
   const key = username + '|' + String(localId)
   const last = triedAt.get(key)
   if (last !== undefined && Date.now() - last < RETRY_TTL_MS) return { error: '最近试过，跳过' }
 
-  const hint = resolveImageResourceHint(decryptedDir, username, localId)
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId)
   if (!hint.md5) return { error: '拿不到 md5' }
 
   // ① 本机重解：清掉占坑的缩略图缓存，按本机最好的一档重解。
   //    这是本机数据上**唯一有效**的路径（用户点开过原图 ⇒ attach 里有 `_h.dat`）。
   clearDecodedImageCache(decodedDir, username, hint.md5)
-  const redone = await decodeImageDataUrlAsync(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey)
-  if (redone.url !== undefined && redone.thumb !== true) {
+  const redone = await decodeImageDataUrlAsync(
+    decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey,
+    { hint, fileOnly: options.fileOnly },
+  )
+  if ((redone.url !== undefined || redone.file !== undefined) && redone.thumb !== true) {
     triedAt.delete(key)
     return { format: redone.format, via: 'local' }
   }

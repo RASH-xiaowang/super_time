@@ -2486,7 +2486,7 @@ import { Remote as Remote9 } from "@deepseek-ai/dsh-typert-protocol";
 import { Remote as Remote8 } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/backend/wechat-data/src/query/media-image-async.ts
-import { access, mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
+import { access, mkdir as mkdir2, readFile as readFile2, stat, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join10, relative } from "node:path";
 
 // src/backend/wechat-data/src/md5.ts
@@ -3744,8 +3744,8 @@ function resolveImageResourceHint(decryptedDir, username, localId) {
   }
   return { md5: null, dataIndex };
 }
-function resolveImageMd5sBatch(decryptedDir, items) {
-  const out = new Array(items.length).fill("");
+function resolveImageResourceHintsBatch(decryptedDir, items) {
+  const out = items.map(() => ({ md5: null, dataIndex: "" }));
   const idsByUser = /* @__PURE__ */ new Map();
   for (const it of items) {
     let ids = idsByUser.get(it.username);
@@ -3787,9 +3787,12 @@ function resolveImageMd5sBatch(decryptedDir, items) {
     const it = items[i];
     if (!it) continue;
     const hit = md5ByKey.get(it.username + "#" + String(it.localId));
-    out[i] = hit ?? resolveImageResourceHint(decryptedDir, it.username, it.localId).md5 ?? "";
+    out[i] = hit !== void 0 ? { md5: hit, dataIndex: "" } : resolveImageResourceHint(decryptedDir, it.username, it.localId);
   }
   return out;
+}
+function resolveImageMd5sBatch(decryptedDir, items) {
+  return resolveImageResourceHintsBatch(decryptedDir, items).map((hint) => hint.md5 ?? "");
 }
 function dataIndexOf(v) {
   if (v === null || v === void 0) return "";
@@ -4093,14 +4096,22 @@ async function pathExists(path) {
     return false;
   }
 }
-async function cachedImageAsync(dir, md5) {
+async function cachedImageAsync(dir, md5, fileOnly = false) {
   for (const thumb of [false, true]) {
     for (const ext of RENDERABLE_EXTS) {
       const p = join10(dir, md5 + (thumb ? ".t." : ".") + ext);
       if (!await pathExists(p)) continue;
+      const fmt = ext === "jpeg" ? "jpg" : ext;
+      if (fileOnly) {
+        try {
+          if (!(await stat(p)).isFile()) return null;
+          return { format: fmt, ...thumb ? { thumb: true } : {}, file: p };
+        } catch {
+          return null;
+        }
+      }
       try {
         const bytes = await readFile2(p);
-        const fmt = ext === "jpeg" ? "jpg" : ext;
         return { url: toDataUrl2(fmt, new Uint8Array(bytes)), format: fmt, ...thumb ? { thumb: true } : {}, file: p };
       } catch {
         return null;
@@ -4129,7 +4140,7 @@ async function decodeDatBytesAsync(data, aesKey, xorKey, opts = {}) {
   const t = await (opts.wxgf ?? transcodeWxgfAsync)(payload.bytes);
   return renderWxgfTranscode(payload.bytes, t);
 }
-async function decodeDatToResultAsync(files, aesBytes, xorKey, onDecoded) {
+async function decodeDatToResultAsync(files, aesBytes, xorKey, onDecoded, includeDataUrl = true) {
   for (const f of files) {
     try {
       const bytes = await readFile2(f);
@@ -4139,7 +4150,12 @@ async function decodeDatToResultAsync(files, aesBytes, xorKey, onDecoded) {
         await onDecoded(f, dec);
       } catch {
       }
-      return { url: toDataUrl2(dec.format, dec.bytes), format: dec.format, file: f };
+      return {
+        ...includeDataUrl ? { url: toDataUrl2(dec.format, dec.bytes) } : {},
+        format: dec.format,
+        file: f,
+        bytes: dec.bytes
+      };
     } catch {
     }
   }
@@ -4149,14 +4165,15 @@ function toDataUrl2(format, bytes) {
   const mime = format === "jpg" ? "jpeg" : format;
   return "data:image/" + mime + ";base64," + Buffer.from(bytes).toString("base64");
 }
-async function decodeImageDataUrlAsync(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey) {
-  const hint = resolveImageResourceHint(decryptedDir, username, localId);
+async function decodeImageDataUrlAsync(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey, options = {}) {
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId);
   const md5 = hint.md5;
+  const fileOnly = options.fileOnly === true;
   let writtenFile = "";
   const relFile = (abs) => relative(decodedDir, abs).split("\\").join("/");
   if (!md5 && !hint.dataIndex) return { error: "\u65E0\u6CD5\u627E\u5230\u56FE\u7247 MD5" };
   if (md5) {
-    const hit = await cachedImageAsync(decodedDir, md5) ?? await cachedImageAsync(join10(decodedDir, username), md5);
+    const hit = await cachedImageAsync(decodedDir, md5, fileOnly) ?? await cachedImageAsync(join10(decodedDir, username), md5, fileOnly);
     if (hit) return hit.file === void 0 ? hit : { ...hit, file: relFile(hit.file) };
   }
   const hasHevc = md5 ? await pathExists(join10(decodedDir, username, md5 + ".hevc")) : false;
@@ -4173,8 +4190,15 @@ async function decodeImageDataUrlAsync(decryptedDir, decodedDir, username, local
         return mkdir2(dir, { recursive: true }).then(() => writeFile2(out, Buffer.from(dec.bytes))).then(() => {
           writtenFile = out;
         });
-      });
-      if (r) return { url: r.url, format: r.format, ...isThumbTier(r.file) ? { thumb: true } : {}, ...writtenFile === "" ? {} : { file: relFile(writtenFile) } };
+      }, !fileOnly);
+      if (r) {
+        return {
+          ...r.url !== void 0 ? { url: r.url } : writtenFile === "" ? { url: toDataUrl2(r.format, r.bytes) } : {},
+          format: r.format,
+          ...isThumbTier(r.file) ? { thumb: true } : {},
+          ...writtenFile === "" ? {} : { file: relFile(writtenFile) }
+        };
+      }
       return { error: "hevc-unsupported" };
     }
   }
@@ -4189,8 +4213,15 @@ async function decodeImageDataUrlAsync(decryptedDir, decodedDir, username, local
         return mkdir2(dir, { recursive: true }).then(() => writeFile2(out, Buffer.from(dec.bytes))).then(() => {
           writtenFile = out;
         });
-      });
-      if (r) return { url: r.url, format: r.format, ...isThumbTier(r.file) ? { thumb: true } : {}, ...writtenFile === "" ? {} : { file: relFile(writtenFile) } };
+      }, !fileOnly);
+      if (r) {
+        return {
+          ...r.url !== void 0 ? { url: r.url } : writtenFile === "" ? { url: toDataUrl2(r.format, r.bytes) } : {},
+          format: r.format,
+          ...isThumbTier(r.file) ? { thumb: true } : {},
+          ...writtenFile === "" ? {} : { file: relFile(writtenFile) }
+        };
+      }
     }
   }
   if (hasHevc) return { error: "hevc-unsupported" };
@@ -7942,8 +7973,8 @@ function scanChunk(buf, chunkSize) {
   return out;
 }
 function extractXorKeysFromDll(dllPath) {
-  const stat2 = statSync11(dllPath);
-  if (stat2.size < 1024) return [];
+  const stat3 = statSync11(dllPath);
+  if (stat3.size < 1024) return [];
   const file = readFileSync9(dllPath);
   const peOffset = file.readUInt32LE(60);
   if (peOffset + 24 > file.length) return [];
@@ -8297,7 +8328,7 @@ function listChildDirs(dir) {
 }
 function readV2Template(filePath) {
   try {
-    const stat2 = statSync12(filePath);
+    const stat3 = statSync12(filePath);
     const fd = readFileSync11(filePath);
     const headerLen = V2_CIPHERTEXT_START + AES_BLOCK_SIZE;
     if (fd.length < headerLen || !fd.subarray(0, V2_MAGIC2.length).equals(V2_MAGIC2)) return null;
@@ -8305,7 +8336,7 @@ function readV2Template(filePath) {
     return {
       path: filePath,
       ciphertext: Buffer.from(fd.subarray(V2_CIPHERTEXT_START, headerLen)),
-      mtimeNs: stat2.mtimeMs * 1e6,
+      mtimeNs: stat3.mtimeMs * 1e6,
       tailXorKey: inferXorKeyFromV2Tails([tailBytes]),
       tailBytes: Buffer.from(tailBytes)
     };
@@ -14871,15 +14902,24 @@ var triedAt = /* @__PURE__ */ new Map();
 function forgetAutoUpgradeAttempt(username, localId) {
   triedAt.delete(username + "|" + String(localId));
 }
-async function tryUpgradeToOriginal(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey, allowNetwork = true) {
+async function tryUpgradeToOriginal(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey, allowNetwork = true, options = {}) {
   const key = username + "|" + String(localId);
   const last = triedAt.get(key);
   if (last !== void 0 && Date.now() - last < RETRY_TTL_MS) return { error: "\u6700\u8FD1\u8BD5\u8FC7\uFF0C\u8DF3\u8FC7" };
-  const hint = resolveImageResourceHint(decryptedDir, username, localId);
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId);
   if (!hint.md5) return { error: "\u62FF\u4E0D\u5230 md5" };
   clearDecodedImageCache(decodedDir, username, hint.md5);
-  const redone = await decodeImageDataUrlAsync(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey);
-  if (redone.url !== void 0 && redone.thumb !== true) {
+  const redone = await decodeImageDataUrlAsync(
+    decryptedDir,
+    decodedDir,
+    username,
+    localId,
+    wechatBaseDir,
+    aesKey,
+    xorKey,
+    { hint, fileOnly: options.fileOnly }
+  );
+  if ((redone.url !== void 0 || redone.file !== void 0) && redone.thumb !== true) {
     triedAt.delete(key);
     return { format: redone.format, via: "local" };
   }
@@ -17361,6 +17401,23 @@ async function findLocalVideoPathAsync(wechatBaseDir, md5, _timelineId, _mediaId
 import { readdirSync as readdirSync25, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join52 } from "node:path";
 var IMAGE_BATCH_MAX = 200;
+var IMAGE_BATCH_CONCURRENCY = 8;
+async function mapWithConcurrency(items, limit, mapper) {
+  if (items.length === 0) return [];
+  const width = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      out[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: width }, worker));
+  return out;
+}
 var REMOTE_URLS_RPC_MAX = 200;
 function avatarWithArchive(rc, options) {
   const decrypted = rc.dirs().decrypted;
@@ -17431,7 +17488,7 @@ function createMediaRemotes(rc) {
     async getImageDataUrlsBatch(options) {
       const base = rawWechatBase2(rc.dirs().decrypted) || void 0;
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted);
-      return imagesBatchWithAutoUpgrade(rc, options?.items, base, aesKey, xorKey);
+      return imagesBatchWithAutoUpgrade(rc, options?.items, base, aesKey, xorKey, options?.fileOnly === true);
     },
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options) {
@@ -17756,26 +17813,41 @@ async function harvestWithOp(rc, action) {
   );
   return r;
 }
-async function imageWithAutoUpgrade(rc, username, localId, base, aesKey, xorKey, allowNetwork) {
+async function imageWithAutoUpgrade(rc, username, localId, base, aesKey, xorKey, allowNetwork, decodeOptions) {
   const decrypted = rc.dirs().decrypted;
   const decoded = rc.dirs().decoded;
-  const r = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey);
-  if (r.thumb !== true || r.url === void 0) return r;
-  const up = await tryUpgradeToOriginal(decrypted, decoded, username, localId, base, aesKey, xorKey ?? 255, allowNetwork);
+  const r = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey, decodeOptions);
+  if (r.thumb !== true || r.url === void 0 && r.file === void 0) return r;
+  const up = await tryUpgradeToOriginal(
+    decrypted,
+    decoded,
+    username,
+    localId,
+    base,
+    aesKey,
+    xorKey ?? 255,
+    allowNetwork,
+    { hint: decodeOptions?.hint, fileOnly: decodeOptions?.fileOnly }
+  );
   if (up.format === void 0) return r;
-  const again = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey);
-  return again.url !== void 0 ? again : r;
+  const again = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey, decodeOptions);
+  return again.url !== void 0 || again.file !== void 0 ? again : r;
 }
-async function imagesBatchWithAutoUpgrade(rc, rawItems, base, aesKey, xorKey) {
+async function imagesBatchWithAutoUpgrade(rc, rawItems, base, aesKey, xorKey, fileOnly) {
   const decrypted = rc.dirs().decrypted;
   const decoded = rc.dirs().decoded;
   const items = (Array.isArray(rawItems) ? rawItems : []).slice(0, IMAGE_BATCH_MAX);
-  if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey ?? 255);
+  const hints = resolveImageResourceHintsBatch(decrypted, items);
+  const md5s = hints.map((hint) => hint.md5 ?? "");
+  if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey ?? 255, md5s);
   return {
-    items: await Promise.all(items.map(async (it) => {
-      const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false);
+    items: await mapWithConcurrency(items, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
+      const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {
+        hint: hints[index],
+        fileOnly
+      });
       return { username: it.username, localId: it.localId, ...r };
-    }))
+    })
   };
 }
 function withoutDataUrlWhenFile(result) {
@@ -24270,9 +24342,9 @@ function computeMediaAssets(decryptedDir) {
           const md5Col = cols.has("md5") ? "md5" : cols.has("MD5") ? "MD5" : "";
           const sizeCol = cols.has("file_size") ? "file_size" : "0";
           const statRows = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(${sizeCol}), 0) AS s FROM ${table}`).all();
-          const stat2 = statRows[0] ?? { n: 0, s: 0 };
-          const count = stat2.n;
-          const size = stat2.s;
+          const stat3 = statRows[0] ?? { n: 0, s: 0 };
+          const count = stat3.n;
+          const size = stat3.s;
           categories.push({ category: label, count, size });
           totalFiles += count;
           totalBytes += size;
@@ -27351,9 +27423,9 @@ async function pathExists2(path) {
     return false;
   }
 }
-async function warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) {
+async function warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey, knownMd5s) {
   try {
-    const md5ByItem = resolveImageMd5sBatch(decryptedDir, items);
+    const md5ByItem = knownMd5s ?? resolveImageMd5sBatch(decryptedDir, items);
     const wanted = md5ByItem.filter((m) => m.length === 32);
     if (wanted.length === 0) return;
     const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted);
@@ -27450,7 +27522,7 @@ import { readFile as readFile6 } from "node:fs/promises";
 
 // src/backend/wechat-data/src/query/snapshot-sidecars.ts
 import { statSync as statSync32 } from "node:fs";
-import { copyFile, open, readdir, stat, unlink } from "node:fs/promises";
+import { copyFile, open, readdir, stat as stat2, unlink } from "node:fs/promises";
 import { join as join95 } from "node:path";
 var STAGE_COPY_ATTEMPTS = 3;
 var STAGE_COPY_RETRY_DELAY_MS = 150;
@@ -27525,7 +27597,7 @@ async function cleanStaleSnapshotLeftovers(root2) {
         if (isWal) {
           let size = 0;
           try {
-            size = (await stat(p)).size;
+            size = (await stat2(p)).size;
           } catch {
           }
           if (size <= WAL_HEADER_SZ) continue;

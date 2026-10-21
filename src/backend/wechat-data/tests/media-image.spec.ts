@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveImageResourceHint } from '../src/query/media-image.ts'
+import { resolveImageResourceHint, resolveImageResourceHintsBatch } from '../src/query/media-image.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -54,5 +54,28 @@ describe('resolveImageResourceHint', () => {
       db.exec(`CREATE TABLE "${table}" (local_id INTEGER, local_type INTEGER, packed_info_data TEXT)`)
     })
     expect(resolveImageResourceHint(root, 'wxid_a', 999)).toEqual({ md5: null, dataIndex: '' })
+  })
+
+  it('batch hints match the single resolver, including resource.db fallbacks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-img-'))
+    scratch.push(root)
+    const md5 = '11223344556677889900aabbccddeeff'
+    const table = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_1.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER, local_type INTEGER, packed_info_data BLOB)`)
+    })
+    makeDb(join(root, 'message', 'message_resource.db'), (db) => {
+      db.exec('CREATE TABLE ChatName2Id (user_name TEXT)')
+      const chatId = Number(db.prepare('INSERT INTO ChatName2Id (user_name) VALUES (?)').run('wxid_a').lastInsertRowid)
+      db.exec('CREATE TABLE MessageResourceInfo (chat_id INTEGER, message_local_id INTEGER, message_local_type INTEGER, message_create_time INTEGER, message_id INTEGER, packed_info BLOB)')
+      db.exec('CREATE TABLE MessageResourceDetail (message_id INTEGER, resource_id INTEGER, packed_info BLOB, data_index TEXT)')
+      db.prepare('INSERT INTO MessageResourceInfo VALUES (?,?,?,?,?,?)').run(chatId, 7, 3, 1, 70, Buffer.from(md5, 'utf8'))
+      db.prepare('INSERT INTO MessageResourceInfo VALUES (?,?,?,?,?,?)').run(chatId, 8, 3, 2, 80, null)
+      db.prepare('INSERT INTO MessageResourceDetail VALUES (?,?,?,?)').run(80, 1, null, 'detail-row-80')
+    })
+
+    const items = [{ username: 'wxid_a', localId: 7 }, { username: 'wxid_a', localId: 8 }, { username: 'wxid_a', localId: 9 }]
+    expect(resolveImageResourceHintsBatch(root, items))
+      .toEqual(items.map(item => resolveImageResourceHint(root, item.username, item.localId)))
   })
 })
