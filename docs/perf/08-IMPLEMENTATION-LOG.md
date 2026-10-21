@@ -16,6 +16,7 @@
 | 6 | `3e7b7b7` | perf(media): 图片批量链路复用 hint、fileOnly 零读字节、并发加界（30 张开库 33→3） | D（资源加载速度） | 6 spec / 36 用例绿；`build:backend` 一致；`tsc` 0 错；`measure:quick` 18 文件/21 用例 27.15s（基线 27.08s，无退化）；`npm run typecheck` 全绿 |
 | 7 | `70a63a7` | perf(boot): 敏感目录 ACL 已收紧时跳过递归传播（后端 ready 2.9s→0.4s，总览落定 4.0s→1.4s） | F（首屏/启动） | 5 spec / 49 用例绿；typecheck 0；measure:quick 27.20s；boot 分段实测见 §F |
 | 8 | `0556d57` | perf(boot): 原图自动下载的启动恢复延后到首屏后（后端组装 320→98ms，总览落定 1.37→1.23s） | G（启动竞态） | autodownload spec 14/14；`check-generated --all` 一致；typecheck 0；3 样本复测见 §G |
+| 9 | `140e183` | perf(sqlite): 分析型只读连接临时调大页缓存（storage 434→271ms、ledger 334→161ms） | H（查询提速） | analytics-cache 5/5；ledger 7/7；check-generated `--all` 一致；typecheck 0；measure:quick 27.07s |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -64,6 +65,17 @@
 - 改法：boot hook 只做「读开关 + 支持性」毫秒级判断；真正的 marker 校验与注入延后 `BOOT_RESUME_DELAY_MS=1200ms`；加取消票据（`stop()`/配置关闭取消，避免停止后被定时器又注入回去）。语义不变：仍在启动阶段自动恢复，30s tick 继续兜底。
 - 实测：`backend:assembled` 320ms→**98ms**；`main:ready` 522→**328ms**；3 样本：后端 ready **142ms [1–256]**、总览落定 **1229ms [1133–1271]**、面板切换 P50/P95 **153/251ms**（无退化）。
 - 附带：重新生成 `lib/index.js` 与 `lib/types`，补齐 A/D 两包当时只跑 `--backend` 遗留的类型声明欠账（`check-generated-artifacts --all` 现已一致）。
+
+### H · SQLite 分析型连接页缓存 + 存储查询分段打点（第三轮，Lead）
+- **量具先行**：给 `computeStorageStats` 加 `SUPERTIME_STORAGE_TRACE=1` 分段打点（默认零开销），配合 harness `--keep-profile` 直接读 app.log。改前分布：**chats 183ms / file-names 122ms / senders 58ms / types 40ms，合计 434ms**。
+- **根因**：`sqlite-connection.ts` 的全局读缓存是 **256KB**（为「短读连接不放大 RSS」而定）；`getStorageStats`/`getLedger` 是扫 29MB 资源库并按 `message_id` 随机 JOIN 回 `MessageResourceInfo` 的分析型查询，256KB 反复打穿页缓存。同库 A/B：chats+senders **233ms → 64ms（3.6×）**；档位 4MB 74ms / 8MB 64ms / 16MB 63ms（平台期）。
+- **改法**：新增 `raiseAnalyticsCache(db)` —— 只给**当前这条**只读连接 `PRAGMA cache_size`，查询结束连接即关闭，不抬常驻 RSS；默认 8MB，`DSH_WECHAT_ANALYTICS_CACHE_KB` 可覆盖，0/负数=不干预。接在 `storage.ts` 与 `ledger.ts`（分片扫描 + general.db）的连接上。
+- 应用内实测（慢调用日志）：`getStorageStats` 676(冷)/434(分段) → **271–273ms**；`getLedger` 334 → **161–163ms**。
+- 边界：`getOverview`/`getOverviewInsights` 用**全局 8MB** 实验复测无变化（360/474ms）⇒ 它们不是缓存瓶颈，没有盲目加。
+
+### 第三轮负结果登记（两条，均已回滚，供后人别再试）
+1. **首屏查询预热（`prewarmFirstScreenQueries`）**：在 gateway 的 setImmediate 里提前跑 4 个首屏查询、每步让出事件循环。实测**首屏落定 1228 → 1447ms（变差 18%）**：直接调用不走 RPC 队列，预热占着 worker 事件循环，反而让刚挂载的面板请求排在它后面。`getStorageStats` 慢调用虽从 676→166ms，但 `getOverview/Insights` 反而升到 407/514ms。**结论：在这些查询本身没变快之前，预热只是把成本在时间轴上搬家。**已回滚。
+2. **敏感文件逐条 `icacls` 合批**：想用一条 `icacls f1 f2 /inheritance:r /grant:r ...` 省掉 6 个进程。实测 icacls **不支持**多路径加选项（exit 87），进入逐文件回退后反而 **129ms vs 112ms**（+17ms）。**结论：icacls 没有可用的合批形态**，保留逐文件（5–10 次 × ~17ms）；真要省只能改为「目录已收紧就跳过文件级显式 ACE」，但那会把「敏感文件显式 ACL」这条既有不变量降级为「靠目录继承」，安全口径变化需单独评审，本轮不做。已回滚。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
