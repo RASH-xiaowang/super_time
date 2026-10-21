@@ -45,6 +45,33 @@
     `task-center-bazhuayu.spec.ts`（迁移/校验/投递）；两个 SSR 冒烟脚本
     （`privacy-consent` / `task-center`）同步更新。
 
+### 任务信息：多 RPA 厂商触发方式（2026-10-21 第二次扩展）
+
+- **触发方式从「Webhook / 八爪鱼 RPA」升级为注册表驱动的多厂商选择**（2026-10-21）：
+  编辑抽屉里的「触发方式」选项改由后端下发的目录（新 Remote `listRpaVendors`）渲染，
+  内置 `Webhook` / `八爪鱼 RPA` 之外新增 **影刀 RPA、UiPath Orchestrator、阿里云 RPA、
+  来也 RPA、实在智能 RPA**；每家厂商的配置字段（账号 / 凭据、流程 id、参数映射、实例地址）
+  与鉴权方式由描述符声明，表单按描述符自动渲染。**默认触发方式仍是 Webhook，旧任务行为与
+  配置不变**（八爪鱼成为内置厂商之一）。
+  - 阿里云 / 来也 / 实在标为**实验性**：官方契约有缺口（阿里云签名位置、来也 OpenAPI 文档
+    不公开、实在鉴权 header 名未公开），参数待联调；UI 显示 ⚠ 与风险说明，见
+    `docs/RPA-VENDOR-TRIGGERS.md` §6。
+  - 派发改为**唯一一条通用出网管道**（`query/rpa/dispatch.ts#sendRequest`）：按描述符组装请求 +
+    鉴权（API Key / AccessKey / PAT / 令牌 / HMAC 签名）+ 主机白名单 + 重试策略；除内置
+    Webhook 外**都不发图片**，触发文本仍过同一个隐私闸（`task_callback`）。无幂等键的厂商
+    （实在 / 来也 / UiPath）禁止自动重试。v1 不接收厂商回调、不轮询完成状态，`sent` 仅表示
+    厂商已受理（`external_task_id` 落库供后续扩展）。
+  - 凭据只存本机 `<数据根>\wechat_task_center.db` 的 `trigger_secret`，不进任务列表 / Remote
+    返回值（界面只回 `triggerSecretSet`）；非敏感配置存 `trigger_config`。旧列
+    `callback_url` / `bazhuayu_flow_id` / `bazhuayu_api_key` 兼容期保留并双写。
+  - 隐私：内容出网点范围扩大，`PRIVACY_VERSION` 由 23 升至 24、要求重新同意；
+    `docs/PRIVACY.md` 第四节 G3 与同意屏出网清单已逐家登记主机；
+    `docs/TASK-CENTER.md` §3.5/§6/§7/§13 与 `docs/RPA-VENDOR-TRIGGERS.md` 实现状态已同步。
+  - 守卫：`outbound-site-coverage.spec.ts` 改为单点 `query/rpa/dispatch.ts#sendRequest`；
+    `rpa-vendors.contract.spec.ts`（描述符完整性）、`rpa-vendors.dispatch.spec.ts`
+    （逐家请求 / 重试）、`task-center-rpa.spec.ts`（迁移 / 校验 / 投递）；
+    `docs/API.md` 重新生成（Remote 方法 217 → 218）。
+
 ### 待归类
 
 - 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。

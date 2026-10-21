@@ -7,12 +7,14 @@
  *
  * 2026-10-21：编辑入口从「左栏行内展开表单」改成「右侧抽屉」后，本文件的任务行**只负责
  * 打开抽屉**（`actions.onToggleEdit`），不再渲染 `<TaskEditForm>` —— 抽屉外壳与表单都在
- * `TaskCenter.tsx` / `task-center-edit-form.tsx`。行内保留触发方式摘要（Webhook 主机 /
- * 八爪鱼 FlowId），用户不打开抽屉也能一眼看出这条任务往哪投递。
+ * `TaskCenter.tsx` / `task-center-edit-form.tsx`。行内保留触发方式摘要，用户不打开抽屉也能
+ * 一眼看出这条任务往哪投递：摘要由 `taskTriggerSummary(task, descriptor)` 按**厂商描述符**
+ * 生成（Webhook 主机名 / 厂商 `summary` 字段）；目录没加载出来时内置 Webhook 仍显示旧文案。
  *
  * @module task-center-panes
  */
 import type {
+  RpaVendorDescriptor,
   TaskInfo,
   TaskTriggerRecord,
 } from '@deepseek-ai/dsh-wechat-data/types'
@@ -31,6 +33,7 @@ import {
   callbackStatusMeta,
   exceedsBatchLimit,
   filterTasksBySearch,
+  findVendorDescriptor,
   lastTriggeredLabel,
   photoLimitLabel,
   plainText,
@@ -60,20 +63,23 @@ import kitCss from '../ui/kit.module.css'
  * 所以这里手动判 `e.target === e.currentTarget`，并让点击事件跳过按钮里的交互。
  * 「编辑」只打开右侧抽屉（`onToggleEdit`），**不会**顺带改变右栏筛选（那是点行身的语义）。
  */
-function TaskRow({ task, active, editing, batchMode, checked, actions, onToggleSelection }: {
+function TaskRow({ task, active, editing, batchMode, checked, vendorCatalog, actions, onToggleSelection }: {
   task: TaskInfo
   active: boolean
   editing: boolean
   batchMode: boolean
   checked: boolean
+  vendorCatalog: readonly RpaVendorDescriptor[]
   actions: TaskCenterActions
   onToggleSelection: () => void
 }): React.JSX.Element {
   const status = taskStatusMeta(task.status)
   const keywords = visibleKeywords(task.keywords)
-  const summaryTitle = task.triggerMethod === 'bazhuayu'
-    ? (task.bazhuayuFlowId !== '' ? `八爪鱼 FlowId：${task.bazhuayuFlowId}` : '尚未填写八爪鱼 FlowId')
-    : (task.callbackUrl !== '' ? task.callbackUrl : undefined)
+  const descriptor = findVendorDescriptor(vendorCatalog, task.triggerMethod)
+  const summary = taskTriggerSummary(task, descriptor)
+  const summaryTitle = descriptor === null
+    ? (task.triggerMethod === 'webhook' ? undefined : '当前版本没有该厂商描述符（厂商已下线）')
+    : `${descriptor.name}：${descriptor.summary}`
   const activate = (): void => {
     if (batchMode) {
       onToggleSelection()
@@ -133,9 +139,10 @@ function TaskRow({ task, active, editing, batchMode, checked, actions, onToggleS
         ))}
         {keywords.hidden > 0 && <span className={css.kwMore}>+{String(keywords.hidden)}</span>}
         <span className={css.kwMore}>{photoLimitLabel(task.photoLimit)}</span>
-        {/* 触发方式摘要（2026-10-21）：八爪鱼 RPA · <flowId> / Webhook <host> / 未填 Webhook。 */}
+        {/* 触发方式摘要（2026-10-21）：按厂商描述符生成（八爪鱼 RPA · FlowId / Webhook <host>）。
+            未知厂商（已下线）显示「触发方式不可用（厂商已下线）」。 */}
         <span className={css.triggerSummary} title={summaryTitle} data-trigger-method={task.triggerMethod}>
-          {taskTriggerSummary(task)}
+          {summary}
         </span>
         {task.mentionMeOnly && <span className={css.kwMore}>仅匹配 @我</span>}
       </div>
@@ -266,6 +273,7 @@ export function TaskPane({
   onSearchChange,
   selectedTaskId,
   expandedTaskId,
+  vendorCatalog,
   batchMode,
   selectedIds,
   onBatchModeChange,
@@ -282,6 +290,8 @@ export function TaskPane({
   onSearchChange: (search: string) => void
   selectedTaskId: number | null
   expandedTaskId: number | null
+  /** 触发方式目录（任务行摘要按描述符生成；空 = 目录未加载/读取失败）。 */
+  vendorCatalog: readonly RpaVendorDescriptor[]
   batchMode: boolean
   selectedIds: ReadonlySet<number>
   onBatchModeChange: (mode: boolean) => void
@@ -364,6 +374,7 @@ export function TaskPane({
             editing={task.id === expandedTaskId}
             batchMode={batchMode}
             checked={selectedIds.has(task.id)}
+            vendorCatalog={vendorCatalog}
             actions={actions}
             onToggleSelection={() => { onToggleSelection(task.id) }}
           />

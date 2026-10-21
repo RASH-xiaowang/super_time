@@ -8,7 +8,8 @@
  *
  * 这里放的都是「渲染层反复要问、又必须与容器口径一致」的问题：
  *  · 状态/回调状态的中文文案与色调（Badge 的 tone 只有那几个）；
- *  · 回调 URL 的前端校验与「主机名」展示；
+ *  · **触发方式目录驱动**的表单口径（字段分组/默认值/校验/摘要/保存入参；2026-10-21 多厂商）；
+ *  · 回调 URL 的展示辅助（Webhook 摘要仍显示主机名）；
  *  · 触发时间/记录的格式化（**手写**而不用 `toLocaleString`：SSR 冒烟在
  *    Node 里渲染，国际化输出随 ICU/时区变化，判据会变成环境依赖）；
  *  · 选中项失效后的下一个值（任务被删后右栏必须回「全部记录」而不是越界）；
@@ -17,6 +18,11 @@
  * @module task-center
  */
 import type {
+  RpaConfigValue,
+  RpaField,
+  RpaTriggerConfig,
+  RpaTriggerSecretInput,
+  RpaVendorDescriptor,
   TaskCallbackDispatchResult,
   TaskInfo,
   TaskInfoInput,
@@ -223,78 +229,296 @@ export function callbackUrlLabel(url: string): string {
   return callbackHostname(url) || '未填 Webhook'
 }
 
-/* ── 触发方式（Webhook / 八爪鱼 RPA，2026-10-21）────────────────────────
+/* ── 触发方式：注册表 + 描述符驱动（2026-10-21 多厂商）──────────────────
  *
- * 任务本身仍由微信群消息命中关键词触发；这里选的是**命中之后往哪投递**：
- * `webhook` = 原有整条记录 JSON POST；`bazhuayu` = 调八爪鱼启动流程接口，
- * 把触发记录映射成 room_name / content / at_name（详见 `docs/TASK-CENTER.md`）。
- * 文案是 SSR / E2E 与后端错误文案共用的字面量，不要意译。
+ * 任务本身仍由微信群消息命中关键词触发；`triggerMethod` 选的是**命中之后往哪投递**：
+ * 内置 `webhook`（整条记录 JSON POST）或注册表里的某个 RPA 厂商 id。厂商由
+ * 后端 `listRpaVendors` 返回的**可序列化描述符**描述，前端的触发方式选择器、动态表单、
+ * 校验与任务行摘要全部按描述符生成 —— 新增厂商只改后端注册表，前端不再硬编码任何厂商。
+ * 文案（分区标题/字段可访问名）是 SSR / E2E 断言的字面量，不要意译。
  */
 
-/** 触发方式选项（Segmented 与 spec 共用，顺序即展示顺序）。 */
-export const TASK_TRIGGER_METHOD_OPTIONS: ReadonlyArray<{ value: TaskTriggerMethod; label: string }> = [
-  { value: 'webhook', label: 'Webhook' },
-  { value: 'bazhuayu', label: '八爪鱼 RPA' },
-]
+/** 触发方式目录未加载时用的空列表（稳定身份，避免每帧新建数组）。 */
+export const NO_RPA_VENDORS: readonly RpaVendorDescriptor[] = []
 
 /**
- * 触发方式的中文名（徽标 / 表单 / 提示复用）。
- * @param method - 后端触发方式。
- * @returns `Webhook` 或 `八爪鱼 RPA`。
+ * 在目录里找触发方式描述符。
+ * @param catalog - `listRpaVendors` 的 items。
+ * @param method - 任务的 `triggerMethod`（内置 `webhook` 或厂商 id）。
+ * @returns 描述符；未知/已下线厂商与目录未加载时返回 null（UI 显示「触发方式不可用」）。
  */
-export function triggerMethodLabel(method: TaskTriggerMethod): string {
-  return method === 'bazhuayu' ? '八爪鱼 RPA' : 'Webhook'
+export function findVendorDescriptor(
+  catalog: readonly RpaVendorDescriptor[],
+  method: string,
+): RpaVendorDescriptor | null {
+  return catalog.find((item) => item.id === method) ?? null
 }
 
 /**
- * 任务行的一行触发摘要（用户一眼看出这条任务命中后往哪投递）。
- * @param task - 任务。
- * @returns `八爪鱼 RPA · <flowId>`；webhook 沿用 `Webhook <host>` / `未填 Webhook`。
+ * 描述符可渲染字段的并集：`fields` + 各 `auth.modes[].fields`（按 key 去重，凭据统一 secret=true）。
+ * @param descriptor - 厂商描述符。
+ * @returns 字段列表（保持描述符声明顺序）。
  */
-export function taskTriggerSummary(task: TaskInfo): string {
-  if (task.triggerMethod === 'bazhuayu') {
-    const flowId = task.bazhuayuFlowId.trim()
-    return flowId === '' ? '八爪鱼 RPA · 未填 FlowId' : `八爪鱼 RPA · ${flowId}`
+export function vendorFields(descriptor: RpaVendorDescriptor): readonly RpaField[] {
+  const seen = new Map<string, RpaField>()
+  for (const field of descriptor.fields) seen.set(field.key, field)
+  for (const mode of descriptor.auth?.modes ?? []) {
+    for (const field of mode.fields) {
+      const existing = seen.get(field.key)
+      if (existing === undefined) seen.set(field.key, { ...field, secret: true })
+      else if (field.secret === true && existing.secret !== true) seen.set(field.key, { ...existing, secret: true })
+    }
   }
-  const host = callbackHostname(task.callbackUrl)
+  return [...seen.values()]
+}
+
+/** 动态表单的三个分组：账号与鉴权 / 流程与参数 / 高级（折叠）。 */
+export interface VendorFieldGroups {
+  /** 凭据字段（secret，非高级）：密码框，已配置时只回「已保存」。 */
+  auth: readonly RpaField[]
+  /** 非敏感配置字段（非高级）。 */
+  config: readonly RpaField[]
+  /** `advanced: true` 的字段，收进「高级」折叠区。 */
+  advanced: readonly RpaField[]
+}
+
+/**
+ * 按描述符字段属性分组（高级 > 凭据 > 普通配置）。
+ * @param fields - {@link vendorFields} 的结果。
+ * @returns 三个分组。
+ */export function groupVendorFields(fields: readonly RpaField[]): VendorFieldGroups {
+  const auth: RpaField[] = []
+  const config: RpaField[] = []
+  const advanced: RpaField[] = []
+  for (const field of fields) {
+    if (field.advanced === true) advanced.push(field)
+    else if (field.secret === true) auth.push(field)
+    else config.push(field)
+  }
+  return { auth, config, advanced }
+}
+
+/** 字段可访问名（`ariaLabel ?? label`；与后端同口径；E2E 依赖旧厂商 aria，不能自己拼前缀）。 */
+export function fieldAriaLabel(field: RpaField): string {
+  const aria = field.ariaLabel?.trim() ?? ''
+  return aria !== '' ? aria : field.label
+}
+
+/** 三个语义参数位的中文名（描述符没给 label 时用这个）。 */
+export const RPA_MAP_SEMANTIC_LABELS: Record<'room' | 'content' | 'at', string> = {
+  room: '会话名',
+  content: '触发文本',
+  at: '触发对象',
+}
+
+/** 映射表单的一行：语义位 / 中文名 / 默认厂商参数名。 */
+export interface VendorMapTarget {
+  semantic: 'room' | 'content' | 'at'
+  label: string
+  defaultKey: string
+}
+
+/** 参数映射的三个目标位（描述符 `mapping.targets`，label 缺省为中文语义名）。 */
+export function vendorMapTargets(descriptor: RpaVendorDescriptor): readonly VendorMapTarget[] {
+  return descriptor.mapping.targets.map((target) => ({
+    semantic: target.semantic,
+    label: target.label?.trim() === undefined || target.label?.trim() === '' ? RPA_MAP_SEMANTIC_LABELS[target.semantic] : target.label,
+    defaultKey: target.defaultKey,
+  }))
+}
+
+/** 配置里的字符串值（数字/布尔也转文本；`map` 字段返回空串）。 */
+export function configTextValue(config: RpaTriggerConfig, key: string): string {
+  const raw = config[key]
+  if (raw === undefined || raw === null) return ''
+  if (typeof raw === 'string') return raw
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw)
+  return ''
+}
+
+/** 配置里的 `map` 字段值（永远是字符串字典；缺失时返回空对象）。 */
+export function configMapValue(config: RpaTriggerConfig, key: string): Record<string, string> {
+  const raw = config[key]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v
+  return out
+}
+
+/**
+ * 某个厂商的默认配置（新任务 / 切换厂商时预填）：`map` 按 `mapping.targets[].defaultKey`
+ * 生成 `{room,content,at}`（字段自身 `defaultValue` 可覆盖），其它字段直接填 `defaultValue`。
+ * @param descriptor - 厂商描述符。
+ * @returns 默认配置（新对象）。
+ */
+export function defaultVendorConfig(descriptor: RpaVendorDescriptor): RpaTriggerConfig {
+  const config: RpaTriggerConfig = {}
+  for (const field of vendorFields(descriptor)) {
+    if (field.secret === true) continue
+    if (field.type === 'map') {
+      const map: Record<string, string> = {}
+      for (const target of vendorMapTargets(descriptor)) map[target.semantic] = target.defaultKey
+      const preset = field.defaultValue
+      if (preset !== null && typeof preset === 'object' && !Array.isArray(preset)) {
+        for (const semantic of Object.keys(map)) {
+          const value = (preset as Record<string, unknown>)[semantic]
+          if (typeof value === 'string' && value !== '') map[semantic] = value
+        }
+      }
+      config[field.key] = map
+      continue
+    }
+    if (field.defaultValue !== undefined) config[field.key] = field.defaultValue
+  }
+  return config
+}
+
+/** 用描述符默认值补齐缺失配置（已有值优先；`map` 按键合并，不覆盖用户已改的键）。 */
+export function withVendorDefaults(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig): RpaTriggerConfig {
+  const merged: RpaTriggerConfig = { ...config }
+  const defaults = defaultVendorConfig(descriptor)
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    const current = merged[key]
+    if (current === undefined) {
+      merged[key] = defaultValue
+      continue
+    }
+    if (
+      defaultValue !== null && typeof defaultValue === 'object' && !Array.isArray(defaultValue)
+      && current !== null && typeof current === 'object' && !Array.isArray(current)
+    ) {
+      merged[key] = { ...(defaultValue as Record<string, string>), ...(current as Record<string, string>) }
+    }
+  }
+  return merged
+}
+
+/** Webhook 地址摘要（内置方式，保持旧的「Webhook <host> / 未填 Webhook」文案）。 */
+function webhookSummary(config: RpaTriggerConfig): string {
+  const host = callbackHostname(configTextValue(config, 'url'))
   return host === '' ? '未填 Webhook' : `Webhook ${host}`
 }
 
 /**
- * 「标记已完善」还需要补什么（表单在 Segmented 下方给一行说明，与后端错误文案同口径）。
- * @param method - 当前选择的触发方式。
- * @returns 一句话提示。
+ * 任务行摘要：`descriptor.name` + `summary` 字段值（Webhook 保持主机名文案）；
+ * 未知厂商（已下线）显示「触发方式不可用（厂商已下线）」。
+ * @param task - 任务。
+ * @param descriptor - 当前触发方式的描述符（目录未加载/未知厂商 = null）。
+ * @returns 展示文案。
  */
-export function readyRequirementHint(method: TaskTriggerMethod): string {
-  return method === 'bazhuayu'
-    ? '标记已完善前需填写八爪鱼 FlowId 与 API Key'
-    : '标记已完善前需填写 Webhook 地址'
+export function taskTriggerSummary(task: TaskInfo, descriptor: RpaVendorDescriptor | null): string {
+  if (descriptor === null) {
+    // `webhook` 是内置方式：目录读取失败时也能给出旧文案（不把内置能力误判成「已下线」）。
+    return task.triggerMethod === 'webhook' ? webhookSummary(task.triggerConfig ?? {}) : '触发方式不可用（厂商已下线）'
+  }
+  if (descriptor.id === 'webhook') return webhookSummary(task.triggerConfig ?? {})
+  const parts: string[] = []
+  for (const field of vendorFields(descriptor)) {
+    if (field.secret === true || field.summary !== true || field.type === 'map') continue
+    const text = configTextValue(task.triggerConfig ?? {}, field.key)
+    if (text !== '') parts.push(text)
+  }
+  return parts.length > 0 ? `${descriptor.name} · ${parts.join(' · ')}` : descriptor.name
 }
 
-/** 八爪鱼 FlowId 的长度上限（与后端校验同口径）。 */
-export const BAZHUAYU_FLOW_ID_MAX = 128
-/** 八爪鱼 API Key 的长度上限（与后端校验同口径）。 */
-export const BAZHUAYU_API_KEY_MAX = 512
+/** 「标记已完善」前置提示（按描述符 required 字段生成）。 */
+export function readyRequirementHint(descriptor: RpaVendorDescriptor | null): string {
+  if (descriptor === null) return '请先选择可用的触发方式'
+  const labels = vendorFields(descriptor).filter((field) => field.required).map((field) => field.label)
+  return labels.length === 0 ? '该触发方式没有必填项' : `标记已完善前需填写：${labels.join('、')}`
+}
 
-/**
- * 八爪鱼 FlowId 的形态：`[A-Za-z0-9_-]{1,128}`（空串 = 待完善任务还没填，不算非法）。
- * @param value - 用户输入。
- * @returns 去掉首尾空白后是否仍是合法形态。
- */
-export function isValidBazhuayuFlowId(value: string): boolean {
-  return new RegExp(`^[A-Za-z0-9_-]{1,${String(BAZHUAYU_FLOW_ID_MAX)}}$`).test(value.trim())
+/** 正则校验；描述符里的非法正则不误伤用户（按「通过」处理，错误交给后端兜底）。 */
+function matchesPattern(pattern: string, value: string): boolean {
+  try {
+    return new RegExp(pattern).test(value)
+  } catch {
+    return true
+  }
 }
 
 /**
- * 八爪鱼 API Key 的形态：非空、trim 后无任何空白/控制字符、不超过 512 字。
- * （Key 由用户从八爪鱼开放平台复制，本机只校验「像不像一个可用的请求头值」。）
- * @param value - 用户输入。
- * @returns 是否合法；空串按「未填」处理并返回 false。
+ * 校验单个字段的**保存口径**（`required` 不在这里——待完善任务允许留空，
+ * 「标记已完善」才用 {@link readyMissingFields}）。
+ * @param field - 描述符字段。
+ * @param valueText - 用户输入（凭据字段传输入框内容，map 字段不适用）。
+ * @returns 行内错误文案；合法时 undefined。
  */
-export function isValidBazhuayuApiKey(value: string): boolean {
-  const raw = value.trim()
-  if (raw === '' || raw.length > BAZHUAYU_API_KEY_MAX) return false
-  return !/[\s\u0000-\u001F\u007F]/.test(raw)
+export function validateVendorField(field: RpaField, valueText: string): string | undefined {
+  const value = valueText.trim()
+  if (value === '') return undefined
+  if (field.type === 'number') {
+    if (!Number.isFinite(Number(value))) return `${field.label}必须是数字`
+    if (field.pattern !== undefined && !matchesPattern(field.pattern, value)) return `${field.label}格式不正确`
+    return undefined
+  }
+  if (field.type === 'boolean' || field.type === 'map') return undefined
+  if (field.type === 'select') {
+    const options = field.options ?? []
+    return options.some((option) => option.value === value) ? undefined : `${field.label}的值不在可选范围内`
+  }
+  if (field.pattern !== undefined && !matchesPattern(field.pattern, value)) return `${field.label}格式不正确`
+  return undefined
+}
+
+/** 单个 `map` 参数名的校验（pattern 只约束非空值）。 */
+function validateMapValue(field: RpaField, label: string, value: string): string | undefined {
+  const text = value.trim()
+  if (text === '' || field.pattern === undefined) return undefined
+  return matchesPattern(field.pattern, text) ? undefined : `${label}格式不正确`
+}
+
+/**
+ * 「标记已完善」还缺哪些必填字段（与后端 `missingReadyFields` 同口径）。
+ *
+ * 凭据字段看「已保存快照」或「本次输入非空」；`map` 字段要求三个语义位都非空；
+ * 其它字段看配置值是否为空。返回字段对象是为了让表单把错误挂到对应输入框并聚焦。
+ * @param task - 被编辑的任务（提供 `triggerSecretSet`）。
+ * @param draft - 当前草稿。
+ * @param descriptor - 当前触发方式描述符。
+ * @returns 缺失的字段列表（空数组 = 可标记已完善）。
+ */
+export function readyMissingFields(
+  task: TaskInfo,
+  draft: TaskEditDraft,
+  descriptor: RpaVendorDescriptor | null,
+): readonly RpaField[] {
+  if (descriptor === null) return []
+  const missing: RpaField[] = []
+  for (const field of vendorFields(descriptor)) {
+    if (!field.required) continue
+    if (field.secret === true) {
+      const configured = task.triggerSecretSet?.[field.key] === true
+      const typed = (draft.secretInputs[field.key] ?? '').trim() !== ''
+      if (!configured && !typed) missing.push(field)
+      continue
+    }
+    if (field.type === 'map') {
+      const map = configMapValue(draft.config, field.key)
+      if (vendorMapTargets(descriptor).some((target) => String(map[target.semantic] ?? '').trim() === '')) {
+        missing.push(field)
+      }
+      continue
+    }
+    if (configTextValue(draft.config, field.key) === '') missing.push(field)
+  }
+  return missing
+}
+
+/**
+ * 任务配置里所有字符串值（任务搜索用；与后端「flatten config 字符串值」同口径）。
+ * @param config - `triggerConfig`。
+ * @returns 扁平后的字符串列表（含 map 子值）。
+ */
+export function flattenTriggerConfig(config: RpaTriggerConfig): string[] {
+  const out: string[] = []
+  const walk = (value: RpaConfigValue): void => {
+    if (typeof value === 'string') out.push(value)
+    else if (typeof value === 'number' || typeof value === 'boolean') out.push(String(value))
+    else if (value !== null && typeof value === 'object') for (const inner of Object.values(value)) walk(inner)
+  }
+  for (const value of Object.values(config)) walk(value)
+  return out
 }
 
 /**
@@ -337,8 +561,8 @@ export function normalizeTriggerSearch(value: string): string {
  *
  * 任务列表本身一次性取全，所以这里不需要服务端查询；空关键词返回原数组身份，
  * 避免搜索框刚聚焦就让整列产生无意义的重渲染。匹配范围与用户能在行里看到的身份字段
- * 一致：任务名、关键词、会话/对象及其 username，另外带上 Webhook 地址 / 八爪鱼 FlowId
- * 便于定位触发方式配置。
+ * 一致：任务名、关键词、会话/对象及其 username，另外**扁平化触发配置的字符串值**
+ * （webhook url / 各厂商 flowId、robotUuid 等）便于定位触发方式配置 —— 与后端搜索同口径。
  * @param tasks - 全部任务。
  * @param query - 搜索框原文。
  * @returns 命中任务；空搜索时就是入参本身。
@@ -353,8 +577,8 @@ export function filterTasksBySearch(tasks: readonly TaskInfo[], query: string): 
       task.chatUsername,
       task.targetName,
       task.targetUsername,
-      task.callbackUrl,
-      task.bazhuayuFlowId,
+      task.triggerMethod,
+      ...flattenTriggerConfig(task.triggerConfig ?? {}),
       ...task.keywords,
     ]
     return fields.some((field) => field.toLowerCase().includes(needle))
@@ -491,67 +715,81 @@ export function taskCounts(tasks: readonly TaskInfo[]): TaskCounts {
   return { total: tasks.length, incomplete, ready, triggers }
 }
 
-/** 编辑表单的草稿（受控值全集；校验与提交都只看它）。 */
+/**
+ * 编辑表单的草稿（受控值全集；校验与提交都只看它）。
+ *
+ * 触发部分全部是**通用形状**：`triggerMethod`（内置 webhook 或厂商 id）+ `config`
+ * （描述符字段 key → 非敏感值）+ `secretInputs`（凭据字段 key → 本次输入，永不回读原文）。
+ */
 export interface TaskEditDraft {
   name: string
   keywords: string[]
   photoLimit: number
   mentionMeOnly: boolean
-  /** 触发方式：`webhook`（整条记录 POST）或 `bazhuayu`（八爪鱼 RPA 启动流程）。 */
+  /** 触发方式：内置 `webhook` 或某个厂商 id（见 `listRpaVendors`）。 */
   triggerMethod: TaskTriggerMethod
-  callbackUrl: string
-  bazhuayuFlowId: string
+  /** 非敏感配置（已按描述符补默认值）。 */
+  config: RpaTriggerConfig
   /**
-   * API Key 的**输入框内容**（不是已保存的 Key）。
+   * 凭据字段的**输入框内容**（不是已保存的凭据）。
    *
-   * Remote 返回值里只有 `bazhuayuApiKeySet: boolean`、从不回读 Key 原文，所以草稿恒从空串开始；
-   * 用户不输入 = 保留旧 Key（保存时不带 `bazhuayuApiKey` 字段）。
+   * Remote 只回 `triggerSecretSet`（是否已配置），从不回读原文，所以草稿恒从空串开始；
+   * 用户不输入 = 保留旧凭据（保存时缺省该键）。
    */
-  bazhuayuApiKeyInput: string
+  secretInputs: RpaTriggerSecretInput
 }
 
 /**
  * 从任务快照生成表单初值。
  * @param task - 任务。
- * @returns 草稿（关键字/回调/FlowId 均原样，不做 trim —— 用户一进表单就改字符会丢输入）。
+ * @param descriptor - 当前触发方式描述符（目录未加载/未知厂商 = null，配置原样保留）。
+ * @returns 草稿（文本值原样，不做 trim —— 用户一进表单就改字符会丢输入；缺省键补描述符默认值）。
  */
-export function draftFromTask(task: TaskInfo): TaskEditDraft {
+export function draftFromTask(task: TaskInfo, descriptor: RpaVendorDescriptor | null): TaskEditDraft {
+  const source = task.triggerConfig ?? {}
   return {
     name: task.name,
     keywords: [...task.keywords],
     photoLimit: task.photoLimit,
     mentionMeOnly: task.mentionMeOnly,
-    // 旧快照（类型升上来之前的缓存）可能没有该字段：缺省按 webhook 渲染，行为不变。
-    triggerMethod: task.triggerMethod === 'bazhuayu' ? 'bazhuayu' : 'webhook',
-    callbackUrl: task.callbackUrl,
-    bazhuayuFlowId: task.bazhuayuFlowId,
-    bazhuayuApiKeyInput: '',
+    triggerMethod: task.triggerMethod,
+    config: descriptor === null ? { ...source } : withVendorDefaults(descriptor, source),
+    secretInputs: {},
   }
 }
 
-/** 表单校验错误（字段名 → 行内文案）。 */
+/** 表单校验错误（字段名 → 行内文案；厂商字段按描述符 key 收在 `fields` 里）。 */
 export interface TaskDraftErrors {
   name?: string
   keywords?: string
   photoLimit?: string
-  callbackUrl?: string
-  bazhuayuFlowId?: string
-  bazhuayuApiKey?: string
+  /** 触发方式本身不可用（厂商已下线 / 目录读取失败）。 */
+  triggerMethod?: string
+  /** 厂商字段 key → 行内错误。 */
+  fields?: Record<string, string>
+}
+
+/** 错误集合是否为空（`fields` 可能为空对象）。 */
+export function hasDraftErrors(errors: TaskDraftErrors): boolean {
+  return errors.name !== undefined
+    || errors.keywords !== undefined
+    || errors.photoLimit !== undefined
+    || errors.triggerMethod !== undefined
+    || Object.keys(errors.fields ?? {}).length > 0
 }
 
 /**
  * 校验编辑草稿。
  *
- * 规则（与后端一致的最小集）：任务名非空、关键词至少 1 个；两种触发方式**各自只校验
- * 当前方式**的配置（切换方式时另一方式的字段保留不清空，但不该拦住这次保存）：
- *  · `webhook`：地址**可空**（待完善任务允许先不填），一旦填了就必须是 http/https；
- *  · `bazhuayu`：FlowId 可空，填了必须是 `[A-Za-z0-9_-]{1,128}`；API Key 可空
- *    （空 = 保留旧 Key / 尚未配置），填了必须无空白且 ≤512。
- * 「标记已完善」的必填前置不在这里，而在表单 submit 里按方式分支（见 `readyRequirementHint`）。
+ * 规则（与后端 `validateVendorConfig` 同口径的最小集）：任务名非空、关键词至少 1 个、
+ * 照片数 0–9；厂商字段按描述符校验 `pattern` / `select` / `number`，**`required` 不拦保存**
+ * （待完善任务允许先不填，只有「标记已完善」才用 {@link readyMissingFields}）。
+ * 未知厂商（任务 method 已不在目录里）直接报 `triggerMethod` 错误并禁止保存。
  * @param draft - 草稿。
+ * @param descriptor - 当前触发方式描述符（未知厂商 = null）。
  * @returns 错误集合；全合法时为空对象。
  */
-export function validateTaskDraft(draft: TaskEditDraft): TaskDraftErrors {
+export function validateTaskDraft(draft: TaskEditDraft, descriptor: RpaVendorDescriptor | null): TaskDraftErrors {
   const errors: TaskDraftErrors = {}
   if (draft.name.trim() === '') errors.name = '任务名不能为空'
   const keywords = draft.keywords.filter((k) => k.trim() !== '')
@@ -559,19 +797,26 @@ export function validateTaskDraft(draft: TaskEditDraft): TaskDraftErrors {
   if (!Number.isInteger(draft.photoLimit) || draft.photoLimit < PHOTO_LIMIT_MIN || draft.photoLimit > PHOTO_LIMIT_MAX) {
     errors.photoLimit = `照片数量需为 ${String(PHOTO_LIMIT_MIN)}–${String(PHOTO_LIMIT_MAX)} 的整数（0 = 不带图片）`
   }
-  if (draft.triggerMethod === 'bazhuayu') {
-    const flowId = draft.bazhuayuFlowId.trim()
-    if (flowId !== '' && !isValidBazhuayuFlowId(flowId)) {
-      errors.bazhuayuFlowId = `FlowId 只能包含字母、数字、下划线或短横线，且不超过 ${String(BAZHUAYU_FLOW_ID_MAX)} 个字符`
-    }
-    const apiKey = draft.bazhuayuApiKeyInput.trim()
-    if (apiKey !== '' && !isValidBazhuayuApiKey(apiKey)) {
-      errors.bazhuayuApiKey = `API Key 不能包含空白字符，且不超过 ${String(BAZHUAYU_API_KEY_MAX)} 个字符`
-    }
-  } else {
-    const callback = draft.callbackUrl.trim()
-    if (callback !== '' && !isHttpCallbackUrl(callback)) errors.callbackUrl = 'Webhook 地址必须是 http/https 链接'
+  if (descriptor === null) {
+    errors.triggerMethod = '触发方式不可用（厂商已下线），请重新选择'
+    return errors
   }
+  const fields: Record<string, string> = {}
+  for (const field of vendorFields(descriptor)) {
+    if (field.type === 'map') {
+      if (field.pattern === undefined) continue
+      const map = configMapValue(draft.config, field.key)
+      for (const target of vendorMapTargets(descriptor)) {
+        const message = validateMapValue(field, target.label, map[target.semantic] ?? '')
+        if (message !== undefined) fields[field.key] = message
+      }
+      continue
+    }
+    const raw = field.secret === true ? (draft.secretInputs[field.key] ?? '') : configTextValue(draft.config, field.key)
+    const message = validateVendorField(field, raw)
+    if (message !== undefined) fields[field.key] = message
+  }
+  if (Object.keys(fields).length > 0) errors.fields = fields
   return errors
 }
 
@@ -617,18 +862,58 @@ export function removeKeyword(list: readonly string[], keyword: string): string[
 }
 
 /**
+ * 把草稿配置归一成保存形状（按描述符字段顺序/类型；描述符不认识的旧键原样保留）。
+ * @param descriptor - 当前触发方式描述符。
+ * @param config - 草稿配置。
+ * @returns 归一后的 `triggerConfig`（数字字段存 number、map 存三键、空文本不写）。
+ */
+function normalizeVendorConfig(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig): RpaTriggerConfig {
+  const out: RpaTriggerConfig = {}
+  for (const field of vendorFields(descriptor)) {
+    if (field.secret === true) continue
+    if (field.type === 'map') {
+      const map = configMapValue(config, field.key)
+      const next: Record<string, string> = {}
+      for (const target of vendorMapTargets(descriptor)) {
+        const value = String(map[target.semantic] ?? target.defaultKey).trim()
+        next[target.semantic] = value === '' ? target.defaultKey : value
+      }
+      out[field.key] = next
+      continue
+    }
+    if (field.type === 'boolean') {
+      out[field.key] = config[field.key] === true
+      continue
+    }
+    // 文本/select 值在保存时 trim（用户常从别处粘贴带空白的值；后端也按 trim 存）。
+    const text = configTextValue(config, field.key).trim()
+    if (field.type === 'number') {
+      if (text !== '') out[field.key] = Number(text)
+      continue
+    }
+    if (text !== '') out[field.key] = text
+  }
+  // 前向兼容：描述符新增/删改字段时，旧客户端不认识的既有键也原样带回（后端按描述符再归一）。
+  for (const [key, value] of Object.entries(config)) {
+    if (out[key] === undefined) out[key] = value
+  }
+  return out
+}
+
+/**
  * 草稿 → 保存入参（补齐任务自身的会话/目标字段，`id` 必带 = 更新）。
  *
  * 触发方式的保存语义（与后端 `ResolvedTaskFields` 同口径）：
  *  · `triggerMethod` 总是带上（用户可能刚从另一种方式切过来）；
- *  · `bazhuayuFlowId` 总是带上（空串 = 清空，与「旧值沿用」区分开）；
- *  · `bazhuayuApiKey` **只在输入框非空时带上**：空输入 = 用户没改 Key，
- *    整个字段缺省（undefined）后端才保留旧 Key；传空串的语义是**清空**，表单不提供该入口。
+ *  · `triggerConfig` **全量带**（整体替换；未填字段由后端按描述符补默认值）；
+ *  · `triggerSecret` **只带本次输入非空的键**：缺省 = 保留旧凭据，空串 = 清空
+ *    （编辑表单永远不回读凭据原文，所以「没改」必须能与「清空」区分开）。
  * @param task - 被编辑的任务。
  * @param draft - 已经校验过的草稿。
+ * @param descriptor - 当前触发方式描述符（未知厂商 = null，此时只带原始 config）。
  * @returns `apiSaveTaskInfo` 的入参。
  */
-export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft): TaskInfoInput {
+export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft, descriptor: RpaVendorDescriptor | null): TaskInfoInput {
   const input: TaskInfoInput = {
     id: task.id,
     name: draft.name.trim(),
@@ -641,11 +926,17 @@ export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft): TaskInfoInp
     photoLimit: clampPhotoLimit(draft.photoLimit),
     mentionMeOnly: task.chatType === 'group' && draft.mentionMeOnly,
     triggerMethod: draft.triggerMethod,
-    callbackUrl: draft.callbackUrl.trim(),
-    bazhuayuFlowId: draft.bazhuayuFlowId.trim(),
+    triggerConfig: descriptor === null ? { ...draft.config } : normalizeVendorConfig(descriptor, draft.config),
   }
-  const apiKey = draft.bazhuayuApiKeyInput.trim()
-  if (apiKey !== '') input.bazhuayuApiKey = apiKey
+  if (descriptor !== null) {
+    const secret: RpaTriggerSecretInput = {}
+    for (const field of vendorFields(descriptor)) {
+      if (field.secret !== true) continue
+      const typed = (draft.secretInputs[field.key] ?? '').trim()
+      if (typed !== '') secret[field.key] = typed
+    }
+    if (Object.keys(secret).length > 0) input.triggerSecret = secret
+  }
   return input
 }
 

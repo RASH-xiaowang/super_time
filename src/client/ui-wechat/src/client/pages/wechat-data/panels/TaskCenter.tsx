@@ -31,6 +31,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  RpaVendorDescriptor,
   TaskCallbackDispatchResult,
   TaskBatchMutationResult,
   TaskInfo,
@@ -44,6 +45,7 @@ import {
   apiDeleteTaskInfo,
   apiDeleteTaskTriggers,
   apiDispatchTaskCallback,
+  apiListRpaVendors,
   apiListTaskInfos,
   apiSaveTaskInfo,
   apiScanTaskTriggers,
@@ -67,6 +69,7 @@ import { useTaskCenterTriggers } from './use-task-center-triggers.ts'
 import {
   exceedsBatchLimit,
   filterTriggersByTask,
+  NO_RPA_VENDORS,
   retainSelectedIds,
   nextExpandedTaskId,
   nextSelectedTaskId,
@@ -75,6 +78,7 @@ import {
   toggleSelectedId,
 } from './task-center.ts'
 import css from './task-center.module.css'
+import triggerCss from './task-center-trigger.module.css'
 import kitCss from '../ui/kit.module.css'
 
 /** 空列表常量：避免每次渲染都新建数组（依赖数组里更容易稳定）。 */
@@ -169,6 +173,12 @@ export interface TaskCenterViewProps {
   onTriggerBatchModeChange?: (mode: boolean) => void
   /** 选中/取消一条触发记录。 */
   onToggleTriggerSelection?: (id: number) => void
+  /** 触发方式目录（`listRpaVendors` 的 items；由容器加载，缺省 = 空）。 */
+  vendorCatalog?: readonly RpaVendorDescriptor[]
+  /** 目录是否仍在加载（编辑抽屉据此提示「正在读取」）。 */
+  vendorCatalogLoading?: boolean
+  /** 目录读取失败原因（非 null 时面板顶部显示错误条，编辑抽屉禁止保存）。 */
+  vendorCatalogError?: string | null
   actions: TaskCenterActions
 }
 
@@ -198,6 +208,9 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
   const editingTask = props.expandedTaskId === null
     ? null
     : (props.tasks.find((t) => t.id === props.expandedTaskId) ?? null)
+  /** 触发方式目录：选择器/动态表单/任务行摘要都由它驱动；空 = 未加载或读取失败。 */
+  const vendorCatalog = props.vendorCatalog ?? NO_RPA_VENDORS
+  const vendorCatalogError = props.vendorCatalogError ?? null
   // 右栏**始终**按选中项过一遍：服务端已按 taskId 查过，这里兜住「切换瞬间两栏不同源」。
   const records = filterTriggersByTask(props.triggers, props.selectedTaskId)
   /** 首屏仍在查时也锁住刷新，避免重构后把两次回源叠在一起。 */
@@ -253,7 +266,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
     <div className={css.root}>
       <PanelHeader
         title="任务信息"
-        desc="命中关键词后记录触发内容并投递（Webhook / 八爪鱼 RPA）；仅「已完善」的任务参与触发与投递"
+        desc="命中关键词后记录触发内容并投递（Webhook / 多家 RPA 厂商）；仅「已完善」的任务参与触发与投递"
         actions={(
           <>
             <Button
@@ -275,7 +288,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
                 void (async () => {
                   const ok = await confirm({
                     title: '立即检查？',
-                    message: '会按关键词扫描一次新消息，把命中项写入触发记录并按 Webhook 地址投递。',
+                    message: '会按关键词扫描一次新消息，把命中项写入触发记录并按触发方式（Webhook / RPA 厂商）投递。',
                     confirmText: '立即检查',
                   })
                   if (ok) actions.onScan()
@@ -307,6 +320,15 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
 
       {props.notice !== null && <div className={css.notice} role="status">{props.notice}</div>}
 
+      {/* 触发方式目录读不到时：选择器/动态表单不可用，编辑抽屉禁止保存 —— 必须显式告诉用户，
+          而不是让「列表里没有可选厂商」看起来像「这个版本只有 Webhook」。 */}
+      {vendorCatalogError !== null && (
+        <div className={triggerCss.catalogError} role="alert">
+          读取触发方式目录失败：{vendorCatalogError}
+          {' '}· 当前不能保存触发方式配置；可点「刷新」重试
+        </div>
+      )}
+
       <div className={css.board}>
         <TaskPane
           tasks={props.tasks}
@@ -318,6 +340,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
           onSearchChange={setTaskSearch}
           selectedTaskId={props.selectedTaskId}
           expandedTaskId={props.expandedTaskId}
+          vendorCatalog={vendorCatalog}
           batchMode={taskBatchMode}
           selectedIds={selectedTaskIds}
           onBatchModeChange={(mode) => { props.onTaskBatchModeChange?.(mode) }}
@@ -367,6 +390,9 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
           <TaskEditForm
             key={editingTask.id}
             task={editingTask}
+            vendorCatalog={vendorCatalog}
+            vendorCatalogError={vendorCatalogError}
+            vendorCatalogLoading={props.vendorCatalogLoading === true}
             onSave={(input) => actions.onSaveTask(editingTask, input)}
             onSetStatus={(status) => actions.onSetStatus(editingTask.id, status)}
             onDelete={() => actions.onDeleteTask(editingTask.id)}
@@ -393,11 +419,142 @@ const TASK_CENTER_DEBOUNCE_MS = 150
 const HOST_REFRESH_DEBOUNCE_MS = 800
 
 /**
+ * 面板写动作（从容器拆出，控制单函数行数；取数/刷新调度仍在 `TaskCenterPanel` 里）。
+ *
+ * 所有写动作失败都走两种提示：`flash`（短提示）/`hold`（一直留着的错误）—— 与容器一致；
+ * 成功的删除/批删要**先等两栏回源**再给提示（数据没回来就提示成功会闪一下旧数据）。
+ * @param options - 刷新函数、提示函数与各选中/展开态 setter。
+ * @returns 注入给视图的动作集合。
+ */
+function useTaskCenterActions(options: {
+  flash: (text: string, durationMs?: number) => void
+  hold: (text: string) => void
+  refreshBoth: () => Promise<void>
+  onRefresh: () => void
+  scanning: boolean
+  setScanning: React.Dispatch<React.SetStateAction<boolean>>
+  setSelectedTaskId: React.Dispatch<React.SetStateAction<number | null>>
+  setExpandedTaskId: React.Dispatch<React.SetStateAction<number | null>>
+  setOpenRecordId: React.Dispatch<React.SetStateAction<number | null>>
+  setSelectedTaskIds: React.Dispatch<React.SetStateAction<ReadonlySet<number>>>
+  setSelectedTriggerIds: React.Dispatch<React.SetStateAction<ReadonlySet<number>>>
+}): TaskCenterActions {
+  const { flash, hold, refreshBoth, scanning, setScanning, setSelectedTaskId, setExpandedTaskId, setOpenRecordId } = options
+  const { setSelectedTaskIds, setSelectedTriggerIds } = options
+
+  const handleScan = useCallback((): void => {
+    if (scanning) return
+    setScanning(true)
+    void (async (): Promise<void> => {
+      try {
+        const result = await apiScanTaskTriggers()
+        if (result.ok) flash(scanResultText(result), 6000)
+        else hold(scanResultText(result))
+        await refreshBoth()
+      } catch (e) {
+        hold(`扫描失败：${(e as Error).message}`)
+      } finally {
+        setScanning(false)
+      }
+    })()
+  }, [flash, hold, refreshBoth, scanning, setScanning])
+
+  const handleSaveTask = useCallback(async (task: TaskInfo, input: TaskInfoInput): Promise<TaskInfoMutationResult> => {
+    try {
+      return await apiSaveTaskInfo({ ...input, id: task.id })
+    } catch (e) {
+      const message = (e as Error).message
+      // 抛异常 = 连后端都没回话（表单的 apiError 只覆盖「返回 ok:false」那一档）。
+      hold(`保存任务失败：${message}`)
+      return { ok: false, error: message }
+    }
+  }, [hold])
+
+  const handleSetStatus = useCallback(async (id: number, status: TaskInfoStatus): Promise<TaskInfoMutationResult> => {
+    try {
+      return await apiSetTaskInfoStatus({ id, status })
+    } catch (e) {
+      const message = (e as Error).message
+      hold(`切换任务状态失败：${message}`)
+      return { ok: false, error: message }
+    }
+  }, [hold])
+
+  const handleDeleteTask = useCallback(async (id: number): Promise<TaskInfoMutationResult> => {
+    try {
+      const result = await apiDeleteTaskInfo({ id })
+      if (result.ok) {
+        setExpandedTaskId((cur) => (cur === id ? null : cur))
+        setSelectedTaskId((cur) => (cur === id ? null : cur))
+        await refreshBoth()
+      }
+      return result
+    } catch (e) {
+      const message = (e as Error).message
+      hold(`删除任务失败：${message}`)
+      return { ok: false, error: message }
+    }
+  }, [hold, refreshBoth, setExpandedTaskId, setSelectedTaskId])
+
+  const handleDeleteTasks = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
+    const result = await apiDeleteTaskInfos({ ids })
+    if (result.ok) {
+      const removed = new Set(ids)
+      setSelectedTaskIds((current) => new Set([...current].filter((id) => !removed.has(id))))
+      setExpandedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      setSelectedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      await refreshBoth()
+    }
+    return result
+  }, [refreshBoth, setExpandedTaskId, setSelectedTaskId, setSelectedTaskIds])
+
+  const handleDeleteTriggers = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
+    const result = await apiDeleteTaskTriggers({ ids })
+    if (result.ok) {
+      const removed = new Set(ids)
+      setSelectedTriggerIds((current) => new Set([...current].filter((id) => !removed.has(id))))
+      setOpenRecordId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      await refreshBoth()
+    }
+    return result
+  }, [refreshBoth, setOpenRecordId, setSelectedTriggerIds])
+
+  const handleDispatch = useCallback(async (triggerId: number): Promise<TaskCallbackDispatchResult> => {
+    try {
+      return await apiDispatchTaskCallback({ triggerId })
+    } catch (e) {
+      const message = (e as Error).message
+      hold(`重新投递失败：${message}`)
+      return { ok: false, status: 'failed', error: message }
+    }
+  }, [hold])
+
+  return {
+    onSelectTask: (id) => { setSelectedTaskId(id) },
+    // 行内「编辑」= 打开/切换到该任务的抽屉；只改编辑态，不动右栏筛选。
+    onToggleEdit: (id) => { setExpandedTaskId(id) },
+    onCloseEdit: () => { setExpandedTaskId(null) },
+    onOpenRecord: (id) => { setOpenRecordId(id) },
+    onCloseRecord: () => { setOpenRecordId(null) },
+    onRefresh: options.onRefresh,
+    onScan: handleScan,
+    onSaveTask: handleSaveTask,
+    onSetStatus: handleSetStatus,
+    onDeleteTask: handleDeleteTask,
+    onDeleteTasks: handleDeleteTasks,
+    onDeleteTriggers: handleDeleteTriggers,
+    onDispatch: handleDispatch,
+    onNotice: flash,
+  }
+}
+
+/**
  * 数据容器：取数与事件联动，渲染 {@link TaskCenterView}。
  * @returns 任务信息面板。
  */
 export function TaskCenterPanel(): React.JSX.Element {
   const fetchTasks = useCallback(() => apiListTaskInfos(), [])
+  const fetchVendors = useCallback(() => apiListRpaVendors(), [])
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
   const [openRecordId, setOpenRecordId] = useState<number | null>(null)
@@ -416,9 +573,15 @@ export function TaskCenterPanel(): React.JSX.Element {
   const { notice, flash, hold } = useTransientNotice(4000)
 
   const taskState = useFreshData('taskCenter:tasks', fetchTasks, { shouldCache: (d) => !d.readError, liveRefresh: true })
+  /**
+   * 触发方式目录：面板打开时取一次（不缓存 —— 目录随应用版本变化，读旧目录会让新厂商字段
+   * 显示不出来）。失败时 `data` 为 null，面板显示错误条、编辑器禁止保存。
+   */
+  const vendorState = useFreshData('taskCenter:vendors', fetchVendors, { shouldCache: () => false })
   const triggerState = useTaskCenterTriggers(selectedTaskId)
   const reloadTasks = taskState.reloadSilent
   const reloadTriggers = triggerState.reloadSilent
+  const reloadVendors = vendorState.reloadSilent
   const refreshing = taskState.refreshing || triggerState.refreshing
 
   /** 两栏一起静默回源（写动作/事件/刷新/扫描后的统一出口）。 */
@@ -496,113 +659,24 @@ export function TaskCenterPanel(): React.JSX.Element {
   )
 
   const handleRefresh = useCallback((): void => {
+    // 目录读取失败后用户点「刷新」能重试（其它情况下它只是一次廉价的只读查询）。
     void refreshBoth()
-  }, [refreshBoth])
+    void reloadVendors()
+  }, [refreshBoth, reloadVendors])
 
-  const handleScan = useCallback((): void => {
-    if (scanning) return
-    setScanning(true)
-    void (async (): Promise<void> => {
-      try {
-        const result = await apiScanTaskTriggers()
-        if (result.ok) flash(scanResultText(result), 6000)
-        else hold(scanResultText(result))
-        await refreshBoth()
-      } catch (e) {
-        hold(`扫描失败：${(e as Error).message}`)
-      } finally {
-        setScanning(false)
-      }
-    })()
-  }, [flash, hold, refreshBoth, scanning])
-
-  const handleSaveTask = useCallback(async (task: TaskInfo, input: TaskInfoInput): Promise<TaskInfoMutationResult> => {
-    try {
-      return await apiSaveTaskInfo({ ...input, id: task.id })
-    } catch (e) {
-      const message = (e as Error).message
-      // 抛异常 = 连后端都没回话（表单的 apiError 只覆盖「返回 ok:false」那一档）。
-      hold(`保存任务失败：${message}`)
-      return { ok: false, error: message }
-    }
-  }, [hold])
-
-  const handleSetStatus = useCallback(async (id: number, status: TaskInfoStatus): Promise<TaskInfoMutationResult> => {
-    try {
-      return await apiSetTaskInfoStatus({ id, status })
-    } catch (e) {
-      const message = (e as Error).message
-      hold(`切换任务状态失败：${message}`)
-      return { ok: false, error: message }
-    }
-  }, [hold])
-
-  const handleDeleteTask = useCallback(async (id: number): Promise<TaskInfoMutationResult> => {
-    try {
-      const result = await apiDeleteTaskInfo({ id })
-      if (result.ok) {
-        setExpandedTaskId((cur) => (cur === id ? null : cur))
-        setSelectedTaskId((cur) => (cur === id ? null : cur))
-        await refreshBoth()
-      }
-      return result
-    } catch (e) {
-      const message = (e as Error).message
-      hold(`删除任务失败：${message}`)
-      return { ok: false, error: message }
-    }
-  }, [hold, refreshBoth])
-
-  const handleDeleteTasks = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
-    const result = await apiDeleteTaskInfos({ ids })
-    if (result.ok) {
-      const removed = new Set(ids)
-      setSelectedTaskIds((current) => new Set([...current].filter((id) => !removed.has(id))))
-      setExpandedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
-      setSelectedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
-      await refreshBoth()
-    }
-    return result
-  }, [refreshBoth])
-
-  const handleDeleteTriggers = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
-    const result = await apiDeleteTaskTriggers({ ids })
-    if (result.ok) {
-      const removed = new Set(ids)
-      setSelectedTriggerIds((current) => new Set([...current].filter((id) => !removed.has(id))))
-      setOpenRecordId((cur) => (cur !== null && removed.has(cur) ? null : cur))
-      await refreshBoth()
-    }
-    return result
-  }, [refreshBoth])
-
-  const handleDispatch = useCallback(async (triggerId: number): Promise<TaskCallbackDispatchResult> => {
-    try {
-      return await apiDispatchTaskCallback({ triggerId })
-    } catch (e) {
-      const message = (e as Error).message
-      hold(`重新投递失败：${message}`)
-      return { ok: false, status: 'failed', error: message }
-    }
-  }, [hold])
-
-  const actions: TaskCenterActions = {
-    onSelectTask: (id) => { setSelectedTaskId(id) },
-    // 行内「编辑」= 打开/切换到该任务的抽屉；只改编辑态，不动右栏筛选。
-    onToggleEdit: (id) => { setExpandedTaskId(id) },
-    onCloseEdit: () => { setExpandedTaskId(null) },
-    onOpenRecord: (id) => { setOpenRecordId(id) },
-    onCloseRecord: () => { setOpenRecordId(null) },
+  const actions = useTaskCenterActions({
+    flash,
+    hold,
+    refreshBoth,
     onRefresh: handleRefresh,
-    onScan: handleScan,
-    onSaveTask: handleSaveTask,
-    onSetStatus: handleSetStatus,
-    onDeleteTask: handleDeleteTask,
-    onDeleteTasks: handleDeleteTasks,
-    onDeleteTriggers: handleDeleteTriggers,
-    onDispatch: handleDispatch,
-    onNotice: flash,
-  }
+    scanning,
+    setScanning,
+    setSelectedTaskId,
+    setExpandedTaskId,
+    setOpenRecordId,
+    setSelectedTaskIds,
+    setSelectedTriggerIds,
+  })
 
   return (
     <TaskCenterView
@@ -641,6 +715,9 @@ export function TaskCenterPanel(): React.JSX.Element {
       selectedTriggerIds={selectedTriggerIds}
       onTriggerBatchModeChange={(mode) => { setTriggerBatchMode(mode); if (!mode) setSelectedTriggerIds(new Set()) }}
       onToggleTriggerSelection={(id) => { setSelectedTriggerIds((current) => toggleSelectedId(current, id)) }}
+      vendorCatalog={vendorState.data?.items ?? NO_RPA_VENDORS}
+      vendorCatalogLoading={vendorState.loading}
+      vendorCatalogError={vendorState.error}
       actions={actions}
     />
   )

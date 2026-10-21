@@ -23,8 +23,10 @@ import {
   setTaskInfoStatus,
 } from '../query/task-center.ts'
 import type { PendingDispatchResult, TaskDispatchDeps } from '../query/task-center.ts'
+import { listVendorDescriptors, RPA_REGISTRY_VERSION } from '../query/rpa/registry.ts'
 import type { RetryFetch } from '../net/fetch-retry.ts'
 import type {
+  RpaVendorCatalog,
   TaskCallbackDispatchResult,
   TaskBatchMutationResult,
   TaskInfoInput,
@@ -112,6 +114,11 @@ export function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs) {
   return {
     listTaskInfos(): TaskInfoSnapshot {
       return listTaskInfos(dirs().decrypted)
+    },
+
+    /** 厂商目录（触发方式选择器/动态表单的数据源）：可序列化描述符副本 + 注册表版本。 */
+    listRpaVendors(): RpaVendorCatalog {
+      return { items: listVendorDescriptors(), registryVersion: RPA_REGISTRY_VERSION }
     },
 
     saveTaskInfo(options: TaskInfoInput): TaskInfoMutationResult {

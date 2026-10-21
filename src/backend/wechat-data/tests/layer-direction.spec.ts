@@ -75,8 +75,12 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  *
  * `net/fetch-retry.ts` 是网络重试原语（**唯一实现源**）：query 的出网点与宿主层都引用它，
  * 但模块本身不 import 包内任何东西，因此不会把上层依赖反向带进 query。
+ *
+ * `types-rpa.ts` 与 `types.ts` 同性质：多 RPA 厂商触发的**纯类型契约**（描述符/目录/配置），
+ * 不 import 任何运行时模块，query 层的 task-center / query/rpa 只拿类型。放行它不会把运行时
+ * 依赖方向带偏，也不会形成 keys ↔ query 的双向环。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts', 'net/fetch-retry.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'net/fetch-retry.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {

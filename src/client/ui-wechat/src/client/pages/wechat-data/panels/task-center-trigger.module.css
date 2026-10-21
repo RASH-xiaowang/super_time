@@ -1,0 +1,210 @@
+/*
+ * 任务编辑抽屉里「多厂商触发方式」的样式（2026-10-21，从 `task-center.module.css` 拆出）。
+ *
+ * 为什么单独一份：主样式文件已到 M21 的 1000 行硬上限，而厂商字段/说明区是自成一体的
+ * 可拆簇（只被 `task-center-edit-form.tsx` 与 `TaskCenter.tsx` 引用）。
+ *
+ * 口径与主文件一致：颜色/圆角/间距**只吃** `--nm-*` 设计令牌，不写裸色值；
+ * 圆角只用 `--nm-r-*` / `--nm-dense-r` / `0`（`theme-geometry.spec.ts` 机检）；
+ * 间距不写 5/7/9/18px。
+ */
+
+/* 目录读取失败的整宽错误条：与通知条同层，明确说「不能保存」而不是静默只剩 Webhook。 */
+.catalogError {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-danger);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-sm);
+}
+
+/* `<select>`（触发方式 / select 类型字段）：与主表单的 .input 同高，保留原生下拉箭头。 */
+.selectInput {
+  cursor: pointer;
+}
+
+/* 动态厂商字段分区：账号与鉴权 / 流程与参数（与高级折叠区分开）。 */
+.vendorSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+}
+
+/* 跨文件选择器不能引用主文件 `.field`（CSS Modules 会各自 hash）：
+ * 动态字段统一带这个类，用来把主文件 `.field` 的 `flex: 1 1 220px` 收成内容高度。 */
+.vendorField {
+  flex: 0 0 auto;
+}
+
+.sectionTitle {
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--nm-text-3);
+}
+
+/* 字段说明（help）/ 选择器加载提示：一行小字，可折长 URL。 */
+.fieldHelp {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  overflow-wrap: anywhere;
+}
+
+/* boolean 字段：复选框 + 标题 + 说明。 */
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  cursor: pointer;
+}
+
+.checkRow > input {
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--nm-cyan);
+}
+
+.checkRow > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.checkTitle {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+/* `map` 字段：3 行「语义位 + 厂商参数名」。 */
+.mapGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mapRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mapLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.mapInput {
+  height: 28px;
+}
+
+/* 「高级」折叠区（原生 details，无额外 JS 状态）。 */
+.advancedBlock {
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+}
+
+.advancedSummary {
+  padding: 8px 12px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  cursor: pointer;
+}
+
+.advancedBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+/* 厂商说明区：名称 / 状态 / 参数核对时间 / 文档链接 / 风险。 */
+.vendorInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-purple) 2%, transparent);
+}
+
+.vendorInfoHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vendorInfoName {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.vendorStatusOk {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-green);
+}
+
+.vendorStatusWarn {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-amber);
+}
+
+.vendorInfoMeta {
+  margin-left: auto;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.vendorSummary {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-2);
+}
+
+.vendorDocs {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  overflow-wrap: anywhere;
+}
+
+.vendorDocs a {
+  color: var(--nm-cyan-text);
+}
+
+.vendorRisks {
+  margin: 0;
+  padding-left: 16px;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-3);
+}
+
+.vendorVersionWarn {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-amber);
+}
+
+.vendorNotes {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}

@@ -1,4 +1,4 @@
-import type { TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from './types.ts';
+import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from './types.ts';
 import { createTaskCenterRemotes } from './remotes/task-center.ts';
 import { GatewayLayaOps } from './gateway-laya-ops.ts';
 /** 投递一拍的结果形状（与 `query/task-center-callback.ts` 的 `PendingDispatchResult` 相容）。 */
@@ -17,6 +17,14 @@ export declare abstract class GatewayTaskCenter extends GatewayLayaOps {
      *   （与「确实还没有任务」区分，见 N1 口径）。
      */
     listTaskInfos(): TaskInfoSnapshot;
+    /**
+     * 厂商目录（前端触发方式选择器 + 动态表单的唯一数据源，2026-10-21）。
+     *
+     * 返回**可序列化描述符**（字段/鉴权/映射/请求模板/风险；不含任何钩子或凭据）。
+     * 前端不打包厂商清单：新增厂商只改后端注册表，`listRpaVendors` 自动带出。
+     * @returns RpaVendorCatalog：`items`（顺序即 UI 顺序）+ `registryVersion`。
+     */
+    listRpaVendors(): RpaVendorCatalog;
     /**
      * 新建 / 更新任务配置（`options.id` 缺省 = 新建）。
      *

@@ -62,6 +62,8 @@ const REMOTE_SAFE_BY_FAMILY = {
     // 2026-10-14 的 M10 审计矩阵把它从 A 类挪出来：留在 A 类的症状是手机上转账/红包卡片
     // 显示不出状态，而它读的数据 `getRecords` / `getMessages` 早就允许远程读了 —— 挡不住什么。
     'getCalls', 'resolveChatHistory', 'getSelfUsername', 'getRevoked', 'getPaymentStatus',
+    // 2026-10-21：补分类既有只读方法（此前漏登记，policy spec 一直红；只读本机自己的账号画像）。
+    'getSelfProfile',
     'editChatMessage', 'listEditedMessages', 'resetEditedMessage',
   ],
   '总览与洞察': [
@@ -89,7 +91,9 @@ const REMOTE_SAFE_BY_FAMILY = {
     // 2026-10-19：任务信息 / 触发记录的**只读**视图。列表本身是纯读自建库，
     // 与「手机上看看有哪些任务、触发过什么」的语义一致；写侧（建/改/删/扫描/投递）
     // 全部落在下面的 B / D 两族（扫描会写库、投递会按用户配置的地址把内容发出去）。
-    'listTaskInfos', 'listTaskTriggers',
+    // 2026-10-21：多 RPA 厂商的触发方式目录也是纯读（注册表描述符，不含凭据），
+    // 只读面板要靠它渲染「触发方式」选择器与动态表单。
+    'listTaskInfos', 'listTaskTriggers', 'listRpaVendors',
   ],
   '知识库': [
     'getKbs', 'getKbFiles', 'getKbFileChunks', 'getNotes', 'saveNote', 'deleteNote',
@@ -104,6 +108,8 @@ const REMOTE_SAFE_BY_FAMILY = {
     'getSnsImageDataUrl', 'getSnsVideoDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoCoversBatch',
     'getVoiceDataUrl', 'getVoiceInfo', 'getVoiceTranscript', 'transcribeVoiceMessage',
     'getVideoInfo', 'getFileImageDataUrl', 'getMessageFile',
+    // 2026-10-21：补分类既有只读媒体方法（此前漏登记，policy spec 一直红；只读本机图片字节）。
+    'getFavoriteMediaDataUrl', 'getFileImageDataUrls',
     'getFiles', 'getFavorites', 'deleteFavoriteItems', 'getMediaAssets', 'getOfficialAssets',
   ],
   '账本与记录': ['getLedger', 'getRecords'],

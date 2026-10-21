@@ -145,6 +145,7 @@ import type {
 // 这里只转发，不在前端镜像字段。单独一条 import 而不是塞进上面那一大坨，
 // 是为了让「这一域新增了什么类型」在 diff 里一眼可见。
 import type {
+  RpaVendorCatalog,
   TaskCallbackDispatchResult,
   TaskInfoInput,
   TaskInfoMutationResult,
@@ -289,6 +290,8 @@ export interface WechatRemote {
   listChatCollectTasks(): Promise<RemoteResult<ChatCollectTaskSnapshot>>
   /** 任务信息列表（最新在前；readError 与「确实没有任务」区分）。 */
   listTaskInfos(): Promise<RemoteResult<TaskInfoSnapshot>>
+  /** 触发方式目录（内置 webhook + 已注册 RPA 厂商描述符；编辑抽屉据此渲染选择器与动态表单）。 */
+  listRpaVendors(): Promise<RemoteResult<RpaVendorCatalog>>
   /** 新建 / 更新任务信息（id 缺省 = 新建；新建默认「待完善」）。 */
   saveTaskInfo(options: TaskInfoInput): Promise<RemoteResult<TaskInfoMutationResult>>
   /** 删除任务信息（触发记录保留）。 */

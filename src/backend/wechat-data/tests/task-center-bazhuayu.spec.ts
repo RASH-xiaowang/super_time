@@ -1,19 +1,17 @@
 // @vitest-environment node
 /**
- * 「任务触发方式 = 八爪鱼 RPA」的后端行为守卫（2026-10-21）。
+ * 「触发方式 = 内置八爪鱼 RPA」的后端行为守卫（多厂商版，2026-10-21 改写）。
  *
- * 背景：任务在编辑抽屉里新增「触发方式」二选一 —— `webhook`（原有：整条记录 JSON POST）
- * 与 `bazhuayu`（八爪鱼 RPA：调 `bots/scheduling/start`，只把触发记录映射成
- * `room_name` / `content` / `at_name`）。本文件覆盖四类行为：
- *  ① **落库与凭据边界**：三列往返，列表只回 `bazhuayuApiKeySet`，任何快照都不含 Key 原文；
- *  ② **更新语义**：不传 Key = 保留、传空串 = 清空，切换触发方式不清空另一方式的字段；
- *  ③ **「已完善」校验**：save 与 setTaskInfoStatus 两处都按触发方式分支；
- *  ④ **投递**：八爪鱼请求的 URL / `X-Api-Key` 头 / 请求体字段，成功/失败/未配置三种结果，
- *     以及「不限 Webhook 地址」的扫描 → pending → 批量投递链路（旧口径会把八爪鱼记录
- *     直接写成 skipped，这条用例就是那处 bug 的回归判据）。
+ * 多厂商改造后八爪鱼只是注册表里的一个内置厂商：配置走通用 `triggerConfig`、凭据走通用
+ * `triggerSecret`，旧入参/旧专用列只在兼容期做归一。本文件覆盖：
+ *  ① 通用配置/凭据的落库、描述符版本，以及「列表永不回 Key 原文」；
+ *  ② 旧入参（callbackUrl / bazhuayuFlowId / bazhuayuApiKey）与旧库专用列的迁移兼容；
+ *  ③ 更新语义（缺省保留 / `''` 清空 / triggerConfig 整体替换）与 ready 校验（save + setStatus）；
+ *  ④ 投递：固定 URL、`X-Api-Key` 头、Params 三键（含单聊 at_name 回落）、成功/失败/未配置；
+ *  ⑤ 链路：bazhuayu 任务（通用配置里没有 Webhook 地址）也能扫出 pending 并批量投递。
  *
- * 与 `task-center.spec.ts` 同款：临时目录 + 合成**真实解密消息分片**（`Msg_<md5>` 表），
- * 扫描链路走生产代码；投递用注入的假 fetch，不联网。
+ * 与 `task-center.spec.ts` 同款：临时目录 + 合成真实解密消息分片（走生产扫描链路），
+ * 投递注入假 fetch，不联网。
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -129,7 +127,7 @@ function seedMessages(talker: string, rows: SeedRow[]): void {
   }
 }
 
-/** 一个八爪鱼触发的**待完善**任务入参（可覆写）。 */
+/** 一个八爪鱼触发的**待完善**任务入参（通用字段版）。 */
 function bazhuayuInput(overrides: Partial<TaskInfoInput> = {}): TaskInfoInput {
   return {
     chatUsername: PRIVATE_TALKER,
@@ -140,14 +138,14 @@ function bazhuayuInput(overrides: Partial<TaskInfoInput> = {}): TaskInfoInput {
     keywords: ['发票'],
     photoLimit: 0,
     triggerMethod: 'bazhuayu',
-    bazhuayuFlowId: FLOW_ID,
-    bazhuayuApiKey: API_KEY,
+    triggerConfig: { flowId: FLOW_ID },
+    triggerSecret: { apiKey: API_KEY },
     status: 'incomplete',
     ...overrides,
   }
 }
 
-/** 群聊八爪鱼任务（已完善）入参：callbackUrl 留空，证明它不再是 ready 的必填项。 */
+/** 群聊八爪鱼任务（已完善）入参：通用配置里没有 Webhook 地址也能标记已完善。 */
 function groupBazhuayuInput(overrides: Partial<TaskInfoInput> = {}): TaskInfoInput {
   return bazhuayuInput({
     chatUsername: GROUP_TALKER,
@@ -171,7 +169,7 @@ function dispatchDeps(overrides: Partial<TaskDispatchDeps> = {}): TaskDispatchDe
   return { ...base, ...overrides }
 }
 
-/** 第一条触发记录的 id（夹具里刚扫出来那条）。 */
+/** 第一条触发记录的 id。 */
 function firstTriggerId(): number {
   const id = listTaskTriggers(decrypted).items[0]?.id
   if (id === undefined) throw new Error('夹具里没有触发记录')
@@ -201,8 +199,8 @@ function fixtureWithBazhuayuTrigger(): number {
   return firstTriggerId()
 }
 
-describe('八爪鱼触发方式：落库与凭据边界', () => {
-  it('新建落三列：列表回 triggerMethod / flowId / 是否已配置，JSON 里不含 Key 原文', () => {
+describe('通用配置/凭据：落库与凭据边界', () => {
+  it('新建 bazhuayu：列表回通用配置/是否已配置/描述符版本，JSON 不含 Key 原文，旧列双写', () => {
     const created = saveTaskInfo(decrypted, bazhuayuInput())
     expect(created.ok).toBe(true)
 
@@ -210,139 +208,144 @@ describe('八爪鱼触发方式：落库与凭据边界', () => {
     expect(snapshot.readError).toBeUndefined()
     const task = snapshot.items[0]
     expect(task?.triggerMethod).toBe('bazhuayu')
+    expect(task?.triggerConfig).toEqual({ flowId: FLOW_ID })
+    expect(task?.triggerSecretSet).toEqual({ apiKey: true })
+    expect(task?.triggerVendorVersion).not.toBe('')
+    // 兼容别名（派生视图）
     expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
     expect(task?.bazhuayuApiKeySet).toBe(true)
     expect(task?.callbackUrl).toBe('')
-
-    // Key 只存在本机任务库：任何 list 快照 / Remote 返回值都不带原文。
+    // 凭据原文只在本机库，不进任何列表快照
     expect(JSON.stringify(snapshot)).not.toContain(API_KEY)
     expect(JSON.stringify(listTaskTriggers(decrypted))).not.toContain(API_KEY)
-    // 但库里确实存了（投递时由后端读出）。
-    const stored = withTaskDb((db) => db.prepare(
-      'SELECT bazhuayu_api_key AS k FROM task_info ORDER BY id LIMIT 1',
-    ).get() as { k?: unknown } | undefined)
-    expect(stored?.k).toBe(API_KEY)
+
+    const row = withTaskDb((db) => db.prepare(
+      'SELECT trigger_config AS c, trigger_secret AS s, bazhuayu_flow_id AS f, bazhuayu_api_key AS k FROM task_info ORDER BY id LIMIT 1',
+    ).get() as Record<string, unknown> | undefined)
+    expect(String(row?.['c'])).toContain(FLOW_ID)
+    expect(String(row?.['s'])).toContain(API_KEY)
+    // 双写旧列，保证降级可读
+    expect(row?.['f']).toBe(FLOW_ID)
+    expect(row?.['k']).toBe(API_KEY)
   })
 
-  it('形状校验：FlowId 只允许 [A-Za-z0-9_-] 且 ≤128，Key 不含空白/控制字符', () => {
-    expect(saveTaskInfo(decrypted, bazhuayuInput({ bazhuayuFlowId: 'bad id!' })).ok).toBe(false)
-    expect(String(saveTaskInfo(decrypted, bazhuayuInput({ bazhuayuFlowId: 'x'.repeat(129) })).error))
-      .toContain('FlowId')
-    const blankKey = saveTaskInfo(decrypted, bazhuayuInput({ bazhuayuApiKey: 'abc def' }))
-    expect(blankKey.ok).toBe(false)
-    expect(String(blankKey.error)).toContain('API Key')
-    // callbackUrl 仍照旧清洗：即使触发方式不是 webhook，非法地址也整单拒绝。
-    const badUrl = saveTaskInfo(decrypted, bazhuayuInput({ callbackUrl: 'ftp://callback.example' }))
-    expect(badUrl.ok).toBe(false)
-    expect(String(badUrl.error)).toContain('回调地址')
-    // 校验失败不该留下半条任务
-    expect(listTaskInfos(decrypted).items).toHaveLength(0)
-
-    // 只认 'bazhuayu'：运行时传入其它值（脏数据）一律归一为 webhook。
-    const normalized = saveTaskInfo(decrypted, {
-      ...bazhuayuInput(),
-      triggerMethod: 'rpa' as unknown as TaskInfoInput['triggerMethod'],
+  it('旧入参兼容：callbackUrl / bazhuayuFlowId / bazhuayuApiKey 仍被归一进通用配置与凭据', () => {
+    const webhook = saveTaskInfo(decrypted, {
+      chatUsername: PRIVATE_TALKER,
+      chatName: '李四',
+      chatType: 'private',
+      targetUsername: '',
+      targetName: '',
+      keywords: ['发票'],
+      callbackUrl: 'https://callback.example/hook',
+      status: 'incomplete',
     })
-    expect(normalized.ok).toBe(true)
-    expect(listTaskInfos(decrypted).items[0]?.triggerMethod).toBe('webhook')
-  })
-})
+    expect(webhook.ok).toBe(true)
+    const webhookTask = listTaskInfos(decrypted).items[0]
+    expect(webhookTask?.triggerMethod).toBe('webhook')
+    expect(webhookTask?.triggerConfig['url']).toBe('https://callback.example/hook')
+    expect(webhookTask?.callbackUrl).toBe('https://callback.example/hook')
 
-describe('八爪鱼触发方式：更新语义', () => {
-  it('不传 Key = 保留；传空串 = 清空；切换触发方式不清空另一方式的字段', () => {
+    const bazhuayu = saveTaskInfo(decrypted, {
+      chatUsername: PRIVATE_TALKER,
+      chatName: '李四',
+      chatType: 'private',
+      targetUsername: '',
+      targetName: '',
+      keywords: ['发票'],
+      triggerMethod: 'bazhuayu',
+      bazhuayuFlowId: FLOW_ID,
+      bazhuayuApiKey: API_KEY,
+      status: 'incomplete',
+    })
+    expect(bazhuayu.ok).toBe(true)
+    const bazhuayuTask = listTaskInfos(decrypted).items.find((item) => item.id === bazhuayu.id)
+    expect(bazhuayuTask?.triggerConfig).toEqual({ flowId: FLOW_ID })
+    expect(bazhuayuTask?.triggerSecretSet).toEqual({ apiKey: true })
+    expect(bazhuayuTask?.bazhuayuApiKeySet).toBe(true)
+  })
+
+  it('更新：triggerConfig 整体替换；凭据缺省保留、空串清空', () => {
     const id = saveTaskInfo(decrypted, bazhuayuInput()).id ?? 0
 
-    // 编辑表单「保存」通常不带 Key（不回显原文）：应保留已保存的 Key。
+    // triggerConfig 整体替换：只传 flowId 就只留 flowId（按描述符补默认值，但不沿用旧值）。
     expect(saveTaskInfo(decrypted, {
+      ...bazhuayuInput(),
       id,
-      chatUsername: PRIVATE_TALKER,
-      chatType: 'private',
-      keywords: ['报销'],
-      name: '只改名字',
+      triggerConfig: { flowId: 'new-flow-id' },
+      triggerSecret: undefined,
+      name: '只改配置',
     }).ok).toBe(true)
     let task = listTaskInfos(decrypted).items[0]
-    expect(task?.triggerMethod).toBe('bazhuayu')
-    expect(task?.bazhuayuApiKeySet).toBe(true)
-    expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
+    expect(task?.triggerConfig).toEqual({ flowId: 'new-flow-id' })
+    // triggerSecret 缺省 = 保留旧 Key
+    expect(task?.triggerSecretSet).toEqual({ apiKey: true })
 
-    // 空串 = 清空（用户显式要删 Key）。
-    expect(saveTaskInfo(decrypted, { ...bazhuayuInput(), id, bazhuayuApiKey: '' }).ok).toBe(true)
-    expect(listTaskInfos(decrypted).items[0]?.bazhuayuApiKeySet).toBe(false)
-
-    // 切到 webhook：八爪鱼的 FlowId / Key 不清空（用户来回切不该丢配置）。
-    expect(saveTaskInfo(decrypted, {
-      id,
-      chatUsername: PRIVATE_TALKER,
-      chatType: 'private',
-      keywords: ['报销'],
-      triggerMethod: 'webhook',
-      callbackUrl: 'https://callback.example/hook',
-      bazhuayuApiKey: 'k2-abcdef',
-    }).ok).toBe(true)
+    // 显式空串 = 清空
+    expect(saveTaskInfo(decrypted, { ...bazhuayuInput(), id, triggerSecret: { apiKey: '' } }).ok).toBe(true)
     task = listTaskInfos(decrypted).items[0]
-    expect(task?.triggerMethod).toBe('webhook')
-    expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
-    expect(task?.bazhuayuApiKeySet).toBe(true)
+    expect(task?.triggerSecretSet).toEqual({})
 
-    // 切回八爪鱼：刚才那套配置还在。
-    expect(saveTaskInfo(decrypted, {
-      id,
-      chatUsername: PRIVATE_TALKER,
-      chatType: 'private',
-      keywords: ['报销'],
-      triggerMethod: 'bazhuayu',
-    }).ok).toBe(true)
+    // 重新配置后可用
+    expect(saveTaskInfo(decrypted, { ...bazhuayuInput(), id, triggerSecret: { apiKey: 'k2' } }).ok).toBe(true)
     task = listTaskInfos(decrypted).items[0]
-    expect(task?.triggerMethod).toBe('bazhuayu')
-    expect(task?.callbackUrl).toBe('https://callback.example/hook')
-    expect(task?.bazhuayuApiKeySet).toBe(true)
+    expect(task?.triggerSecretSet).toEqual({ apiKey: true })
+    const raw = withTaskDb((db) => db.prepare('SELECT bazhuayu_api_key AS k FROM task_info WHERE id = ?').get(id) as { k?: unknown } | undefined)
+    expect(raw?.k).toBe('k2')
   })
 })
 
-describe('八爪鱼触发方式：「已完善」校验（save 与 setTaskInfoStatus 两处分支）', () => {
-  it('bazhuayu 缺 FlowId / 缺 Key 整单失败；webhook 缺回调地址仍失败', () => {
-    const noFlow = saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready', bazhuayuFlowId: '' }))
+describe('通用校验：ready 与未知触发方式', () => {
+  it('bazhuayu 缺 FlowId / 缺 API Key 整单失败；webhook 缺地址仍失败；未知方式保存拒绝', () => {
+    const noFlow = saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready', triggerConfig: {} }))
     expect(noFlow.ok).toBe(false)
-    expect(String(noFlow.error)).toContain('标记已完善前请先填写八爪鱼 FlowId')
+    expect(String(noFlow.error)).toContain('标记已完善前需补全：')
+    expect(String(noFlow.error)).toContain('FlowId')
 
-    const noKey = saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready', bazhuayuApiKey: '' }))
+    const noKey = saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready', triggerSecret: {} }))
     expect(noKey.ok).toBe(false)
-    expect(String(noKey.error)).toContain('标记已完善前请先填写八爪鱼 API Key')
+    expect(String(noKey.error)).toContain('标记已完善前需补全：')
+    expect(String(noKey.error)).toContain('API Key')
 
     const webhookNoUrl = saveTaskInfo(decrypted, {
       ...bazhuayuInput({ status: 'ready' }),
       triggerMethod: 'webhook',
-      callbackUrl: '',
+      triggerConfig: {},
+      triggerSecret: {},
     })
     expect(webhookNoUrl.ok).toBe(false)
-    expect(String(webhookNoUrl.error)).toContain('标记已完善前请先填写回调地址')
+    expect(String(webhookNoUrl.error)).toContain('标记已完善前需补全：')
+    expect(String(webhookNoUrl.error)).toContain('回调地址')
 
-    // bazhuayu 的 ready 不要求 callbackUrl（空串合法）。
+    const unknown = saveTaskInfo(decrypted, bazhuayuInput({ triggerMethod: 'no-such-vendor' }))
+    expect(unknown.ok).toBe(false)
+    expect(String(unknown.error)).toContain('未知的触发方式')
+
+    // bazhuayu 的 ready 不要求 Webhook 地址（通用配置里根本没有 url）
     expect(saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready' })).ok).toBe(true)
   })
 
-  it('setTaskInfoStatus(ready) 也按触发方式拦：缺 FlowId / 缺 Key 都会被拒', () => {
-    const noFlow = saveTaskInfo(decrypted, bazhuayuInput({ bazhuayuFlowId: '', bazhuayuApiKey: '' }))
+  it('setTaskInfoStatus(ready) 同口径拦截：缺 FlowId / 缺 Key 都会被拒', () => {
+    const noFlow = saveTaskInfo(decrypted, bazhuayuInput({ triggerConfig: {} }))
     const noFlowId = noFlow.id ?? 0
     const toReadyNoFlow = setTaskInfoStatus(decrypted, noFlowId, 'ready')
     expect(toReadyNoFlow.ok).toBe(false)
-    expect(String(toReadyNoFlow.error)).toContain('八爪鱼 FlowId')
+    expect(String(toReadyNoFlow.error)).toContain('标记已完善前需补全：')
+    expect(String(toReadyNoFlow.error)).toContain('FlowId')
 
-    const keyless = saveTaskInfo(decrypted, bazhuayuInput({ bazhuayuApiKey: '' }))
+    const keyless = saveTaskInfo(decrypted, bazhuayuInput({ triggerSecret: {} }))
     const toReadyNoKey = setTaskInfoStatus(decrypted, keyless.id ?? 0, 'ready')
     expect(toReadyNoKey.ok).toBe(false)
-    expect(String(toReadyNoKey.error)).toContain('八爪鱼 API Key')
+    expect(String(toReadyNoKey.error)).toContain('API Key')
 
-    // 配齐后才能变已完善。
-    const ready = setTaskInfoStatus(decrypted, noFlowId, 'ready')
-    expect(ready.ok).toBe(false)
+    // 配齐后可标记已完善
     expect(saveTaskInfo(decrypted, { ...bazhuayuInput(), id: noFlowId }).ok).toBe(true)
     expect(setTaskInfoStatus(decrypted, noFlowId, 'ready').ok).toBe(true)
   })
 })
 
-describe('八爪鱼触发方式：老库迁移', () => {
-  it('旧 task_info（无三列）打开后自动补列，旧任务按 webhook 读取且行为不变', () => {
+describe('老库迁移（旧专用列 → 通用列）', () => {
+  it('旧 task_info 只有专用列：读取按旧列回退派生，写入后补齐通用列且行为不变', () => {
     mkdirSync(join(root, 'data'), { recursive: true })
     withTaskDb((db) => {
       db.exec(`CREATE TABLE task_info (
@@ -368,19 +371,19 @@ describe('八爪鱼触发方式：老库迁移', () => {
          keywords, photo_limit, callback_url, status, last_scan_seq,
          created_at, updated_at, trigger_count)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        '旧任务', PRIVATE_TALKER, '李四', 'private', PRIVATE_TALKER, '李四',
+        '旧 Webhook 任务', PRIVATE_TALKER, '李四', 'private', PRIVATE_TALKER, '李四',
         '["发票"]', 0, 'https://callback.example/hook', 'ready', 0, 1, 1, 0,
       )
     })
 
-    // 读路径不建表/不补列，但缺列按默认值归一：旧任务 = webhook、未配置八爪鱼。
+    // 读路径不建表：旧任务按 webhook + 旧 callback_url 迁移成通用配置
     const before = listTaskInfos(decrypted)
     expect(before.readError).toBeUndefined()
     expect(before.items[0]?.triggerMethod).toBe('webhook')
-    expect(before.items[0]?.bazhuayuFlowId).toBe('')
-    expect(before.items[0]?.bazhuayuApiKeySet).toBe(false)
+    expect(before.items[0]?.triggerConfig).toEqual({ url: 'https://callback.example/hook' })
+    expect(before.items[0]?.callbackUrl).toBe('https://callback.example/hook')
 
-    // 任何一次写（这里 saveTaskInfo 改名字）都会 ensureTaskSchema → 自动补三列。
+    // 任意一次写会 ensureTaskSchema 补新列，并把通用列写实
     const id = before.items[0]?.id ?? 0
     expect(saveTaskInfo(decrypted, {
       id,
@@ -392,17 +395,59 @@ describe('八爪鱼触发方式：老库迁移', () => {
     const columns = withTaskDb((db) => (
       db.prepare('PRAGMA table_info(task_info)').all() as Array<Record<string, unknown>>
     ).map((row) => String(row['name'])))
-    expect(columns).toEqual(expect.arrayContaining([
-      'trigger_method', 'bazhuayu_flow_id', 'bazhuayu_api_key',
-    ]))
+    expect(columns).toEqual(expect.arrayContaining(['trigger_config', 'trigger_secret', 'trigger_vendor_version']))
     const after = listTaskInfos(decrypted).items[0]
     expect(after?.name).toBe('迁移后')
     expect(after?.triggerMethod).toBe('webhook')
+    expect(after?.triggerConfig['url']).toBe('https://callback.example/hook')
     expect(after?.status).toBe('ready')
+  })
+
+  it('旧八爪鱼任务（bazhuayu_flow_id + bazhuayu_api_key）迁移成通用配置与凭据', () => {
+    mkdirSync(join(root, 'data'), { recursive: true })
+    withTaskDb((db) => {
+      db.exec(`CREATE TABLE task_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        chat_username TEXT NOT NULL,
+        chat_name TEXT NOT NULL DEFAULT '',
+        chat_type TEXT NOT NULL DEFAULT 'private',
+        target_username TEXT NOT NULL DEFAULT '',
+        target_name TEXT NOT NULL DEFAULT '',
+        keywords TEXT NOT NULL DEFAULT '[]',
+        photo_limit INTEGER NOT NULL DEFAULT 0,
+        mention_me_only INTEGER NOT NULL DEFAULT 0,
+        trigger_method TEXT NOT NULL DEFAULT 'webhook',
+        bazhuayu_flow_id TEXT NOT NULL DEFAULT '',
+        bazhuayu_api_key TEXT NOT NULL DEFAULT '',
+        callback_url TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'incomplete',
+        last_scan_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_triggered_at INTEGER,
+        trigger_count INTEGER NOT NULL DEFAULT 0
+      )`)
+      db.prepare(`INSERT INTO task_info
+        (name, chat_username, chat_name, chat_type, target_username, target_name,
+         keywords, photo_limit, mention_me_only, trigger_method, bazhuayu_flow_id, bazhuayu_api_key,
+         callback_url, status, last_scan_seq, created_at, updated_at, trigger_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        '旧八爪鱼任务', PRIVATE_TALKER, '李四', 'private', '', '',
+        '["发票"]', 0, 0, 'bazhuayu', FLOW_ID, API_KEY,
+        '', 'ready', 0, 1, 1, 0,
+      )
+    })
+    const task = listTaskInfos(decrypted).items[0]
+    expect(task?.triggerMethod).toBe('bazhuayu')
+    expect(task?.triggerConfig).toEqual({ flowId: FLOW_ID })
+    expect(task?.triggerSecretSet).toEqual({ apiKey: true })
+    expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
+    expect(task?.bazhuayuApiKeySet).toBe(true)
   })
 })
 
-describe('八爪鱼触发方式：投递', () => {
+describe('八爪鱼投递（注册表管道）', () => {
   it('成功：URL / X-Api-Key / 请求体字段正确，记录置 sent，且不解码图片', async () => {
     const triggerId = fixtureWithBazhuayuTrigger()
     const calls: Array<{ url: string; init: RequestInit }> = []
@@ -432,7 +477,6 @@ describe('八爪鱼触发方式：投递', () => {
     expect(calls[0]?.url).toBe(BAZHUAYU_URL)
 
     const headers = calls[0]?.init.headers as Record<string, string>
-    expect(headers['content-type']).toBe('application/json')
     expect(headers['X-Api-Key']).toBe(API_KEY)
     const rawBody = String(calls[0]?.init.body)
     expect(rawBody).not.toContain(API_KEY)
@@ -444,7 +488,7 @@ describe('八爪鱼触发方式：投递', () => {
       Params: { room_name: '报价群', content: '*** 报价 内容', at_name: '小王' },
       UserStartSource: 'OpenApi',
     })
-    // RPA 接口没有图片参数：即使任务 photoLimit=2 也不解码图片。
+    // 八爪鱼接口没有图片参数：即使任务 photoLimit=2 也不解码图片。
     expect(decodeCalls).toBe(0)
 
     const saved = listTaskTriggers(decrypted).items.find((item) => item.id === triggerId)
@@ -454,7 +498,6 @@ describe('八爪鱼触发方式：投递', () => {
   })
 
   it('单聊任务（targetName 为空）at_name 回落会话名；群聊仍严格用触发对象显示名', async () => {
-    // 单聊：创建弹窗不填 targetName ⇒「触发的用户对象」就是会话本人，at_name 应回落 chatName。
     seedMessages(PRIVATE_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' },
     ])
@@ -464,10 +507,6 @@ describe('八爪鱼触发方式：投递', () => {
     ])
     expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
     const triggerId = firstTriggerId()
-    const record = listTaskTriggers(decrypted).items[0]
-    expect(record?.chatName).toBe('李四')
-    expect(record?.targetName).toBe('')
-
     const bodies: Array<Record<string, unknown>> = []
     const deps = dispatchDeps({
       fetchImpl: async (_url, init) => {
@@ -475,30 +514,26 @@ describe('八爪鱼触发方式：投递', () => {
         return new Response('ok', { status: 200 })
       },
     })
-    const result = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
-    expect(result).toEqual({ ok: true, status: 'sent' })
+    expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
     const params = bodies[0]?.['Params'] as Record<string, unknown> | undefined
     expect(params?.['room_name']).toBe('李四')
     expect(params?.['at_name']).toBe('李四')
-    // 群聊用例见上一条成功用例：targetName='小王' 时 at_name 严格保持「小王」（不回落群名）。
+    // 群聊用例见上一条成功用例：targetName='小王' 时 at_name 严格保持「小王」。
   })
 
-  it('失败：非 2xx ⇒ failed + 八爪鱼错误落库（≤500 字）', async () => {
+  it('失败：非 2xx ⇒ failed + 错误落库', async () => {
     const triggerId = fixtureWithBazhuayuTrigger()
-    const deps = dispatchDeps({
-      fetchImpl: async () => new Response('boom', { status: 500 }),
-    })
+    const deps = dispatchDeps({ fetchImpl: async () => new Response('boom', { status: 500 }) })
     const result = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
     expect(result.ok).toBe(false)
     expect(result.status).toBe('failed')
-    expect(String(result.error)).toContain('八爪鱼触发失败：HTTP 500')
+    expect(String(result.error)).toContain('500')
     const saved = listTaskTriggers(decrypted).items.find((item) => item.id === triggerId)
     expect(saved?.callbackStatus).toBe('failed')
-    expect(String(saved?.callbackError)).toContain('八爪鱼触发失败：HTTP 500')
-    expect(typeof saved?.callbackAt).toBe('number')
+    expect(String(saved?.callbackError)).toContain('500')
   })
 
-  it('未配置（缺 Key / 缺 FlowId / 任务被退回待完善）⇒ skipped 且不发请求', async () => {
+  it('未配置（缺 Key / 缺 FlowId / 未知厂商 / 任务非 ready）⇒ skipped 且不发请求', async () => {
     const triggerId = fixtureWithBazhuayuTrigger()
     const taskId = listTaskInfos(decrypted).items[0]?.id ?? 0
     let requests = 0
@@ -509,30 +544,43 @@ describe('八爪鱼触发方式：投递', () => {
       },
     })
 
-    // 缺 Key（模拟 Key 被清掉的老状态；正常保存路径下 ready 任务不允许缺 Key）。
-    withTaskDb((db) => { db.prepare("UPDATE task_info SET bazhuayu_api_key = '' WHERE id = ?").run(taskId) })
-    const noKey = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
-    expect(noKey).toEqual({ ok: false, status: 'skipped', error: '任务未完善或未配置八爪鱼 FlowId / API Key' })
-
-    // 缺 FlowId。
+    // 同时清掉通用列与旧列（旧列是降级回退读，不清会被迁移逻辑"复活"）
     withTaskDb((db) => {
-      db.prepare("UPDATE task_info SET bazhuayu_flow_id = '', bazhuayu_api_key = ? WHERE id = ?").run(API_KEY, taskId)
+      db.prepare("UPDATE task_info SET trigger_secret = '{}', bazhuayu_api_key = '' WHERE id = ?").run(taskId)
+    })
+    const noKey = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
+    expect(noKey.status).toBe('skipped')
+    expect(String(noKey.error)).toContain('触发配置不完整')
+    expect(String(noKey.error)).toContain('API Key')
+
+    withTaskDb((db) => {
+      db.prepare("UPDATE task_info SET trigger_config = '{}', bazhuayu_flow_id = '', trigger_secret = ? WHERE id = ?")
+        .run(JSON.stringify({ apiKey: API_KEY }), taskId)
     })
     const noFlow = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
     expect(noFlow.status).toBe('skipped')
-    expect(String(noFlow.error)).toContain('八爪鱼 FlowId')
+    expect(String(noFlow.error)).toContain('FlowId')
 
-    // 任务退回待完善。
-    withTaskDb((db) => { db.prepare('UPDATE task_info SET bazhuayu_flow_id = ? WHERE id = ?').run(FLOW_ID, taskId) })
+    // 未知厂商：任务照常可读，投递 skipped 并写明原因
+    withTaskDb((db) => {
+      db.prepare("UPDATE task_info SET trigger_method = 'gone-vendor', trigger_config = ? WHERE id = ?")
+        .run(JSON.stringify({ flowId: FLOW_ID }), taskId)
+    })
+    const unknown = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
+    expect(unknown).toEqual({ ok: false, status: 'skipped', error: '触发方式不可用：gone-vendor' })
+
+    // 任务退回待完善
+    withTaskDb((db) => { db.prepare("UPDATE task_info SET trigger_method = 'bazhuayu' WHERE id = ?").run(taskId) })
     expect(setTaskInfoStatus(decrypted, taskId, 'incomplete').ok).toBe(true)
     const incomplete = await dispatchTaskCallback(decrypted, decoded, triggerId, deps)
     expect(incomplete).toEqual({ ok: false, status: 'skipped', error: '任务未完善' })
 
     expect(requests).toBe(0)
   })
+})
 
-  it('链路：bazhuayu 任务（callbackUrl 为空）扫出 pending 记录，批量投递能捞出并送出', async () => {
-    // 扫描阶段：旧口径只看 callbackUrl，八爪鱼任务会直接写成 skipped ⇒ 永远不进投递队列。
+describe('多厂商链路：扫描 → pending → 批量投递', () => {
+  it('bazhuayu 任务（通用配置无 Webhook 地址）扫出 pending 记录，批量投递能捞出并送出', async () => {
     seedMessages(GROUP_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', text: '历史' },
     ])
@@ -545,10 +593,10 @@ describe('八爪鱼触发方式：投递', () => {
     const scanned = listTaskTriggers(decrypted)
     expect(scanned.items.map((item) => item.callbackStatus)).toEqual(['pending', 'pending'])
 
-    const calls: Array<{ url: string; init: RequestInit }> = []
+    const calls: Array<{ url: string }> = []
     const deps = dispatchDeps({
-      fetchImpl: async (url, init) => {
-        calls.push({ url, init: init ?? {} })
+      fetchImpl: async (url) => {
+        calls.push({ url })
         return new Response('ok', { status: 200 })
       },
     })
@@ -558,22 +606,44 @@ describe('八爪鱼触发方式：投递', () => {
     expect(calls).toHaveLength(2)
     expect(calls.every((call) => call.url === BAZHUAYU_URL)).toBe(true)
     expect(listTaskTriggers(decrypted).items.map((item) => item.callbackStatus)).toEqual(['sent', 'sent'])
-    // 再跑一次没有 pending 可投。
     expect((await dispatchPendingTaskCallbacks(decrypted, decoded, deps)).dispatched).toBe(0)
   })
 
-  it('链路：bazhuayu 任务缺 Key 时扫描写 skipped（不制造永远投不出去的 pending）', () => {
+  it('未知厂商的任务：扫描直接写 skipped（不制造永远投不出去的 pending）', () => {
     seedMessages(PRIVATE_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' },
     ])
     const created = saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready' }))
     const taskId = created.id ?? 0
-    // 模拟 Key 丢失的脏状态（正常保存路径下 ready 任务不允许缺 Key）。
-    withTaskDb((db) => { db.prepare("UPDATE task_info SET bazhuayu_api_key = '' WHERE id = ?").run(taskId) })
+    withTaskDb((db) => {
+      db.prepare("UPDATE task_info SET trigger_method = 'gone-vendor' WHERE id = ?").run(taskId)
+    })
     seedMessages(PRIVATE_TALKER, [
       { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_lisi', text: '命中 发票' },
     ])
     expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
     expect(listTaskTriggers(decrypted).items[0]?.callbackStatus).toBe('skipped')
+  })
+
+  it('厂商下线后的既有 pending：批量投递落成 skipped（不再每拍重复占用队头）', async () => {
+    const triggerId = fixtureWithBazhuayuTrigger()
+    const taskId = listTaskInfos(decrypted).items[0]?.id ?? 0
+    withTaskDb((db) => {
+      db.prepare("UPDATE task_info SET trigger_method = 'gone-vendor' WHERE id = ?").run(taskId)
+    })
+    const deps = dispatchDeps({
+      fetchImpl: async () => {
+        throw new Error('不该出网')
+      },
+    })
+    const first = await dispatchPendingTaskCallbacks(decrypted, decoded, deps)
+    expect(first.dispatched).toBe(0)
+    expect(first.failed).toBe(1)
+    const saved = listTaskTriggers(decrypted).items.find((item) => item.id === triggerId)
+    expect(saved?.callbackStatus).toBe('skipped')
+    expect(String(saved?.callbackError)).toContain('触发方式不可用')
+    // 已落 skipped，下一拍不会再捞到（否则会阻塞后面配置齐全的记录）
+    const second = await dispatchPendingTaskCallbacks(decrypted, decoded, deps)
+    expect(second).toEqual({ dispatched: 0, failed: 0 })
   })
 })

@@ -220,7 +220,8 @@ describe('任务配置 CRUD 与校验', () => {
   it('ready 必须有回调地址；群聊缺目标用户 / 无关键词 / 非法 URL 一律拒绝且不落库', () => {
     const noCallback = saveTaskInfo(decrypted, taskInput({ status: 'ready', callbackUrl: '' }))
     expect(noCallback.ok).toBe(false)
-    expect(String(noCallback.error)).toContain('标记已完善前请先填写回调地址')
+    // 多厂商改造后「已完善」错误文案统一为「标记已完善前需补全：<字段中文名>」。
+    expect(String(noCallback.error)).toContain('标记已完善前需补全：回调地址')
 
     const groupWithoutTarget = saveTaskInfo(decrypted, taskInput({
       chatUsername: GROUP_TALKER, chatName: '项目群', chatType: 'group', targetUsername: '',

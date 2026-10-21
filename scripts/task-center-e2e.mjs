@@ -6,13 +6,14 @@
  *  · 左栏搜索任务名/关键词/会话/对象，清除按钮与无匹配空态可用；
  *  · 右栏由服务端搜索触发记录，覆盖 `%` / `_` 字面量和失败错误；
  *  · 编辑 = **右侧抽屉**（`role="dialog"`）：标题含任务名、Webhook 地址字段、
- *    群聊「仅匹配@我的文本」、切到「八爪鱼 RPA」后的 FlowId / API Key、三种关闭方式
- *    （× / Esc / 点遮罩），并留存抽屉截图 `.tmp-e2e/task-center-edit-drawer.png`；
- *  · 保存八爪鱼配置后任务行摘要显示「八爪鱼 RPA · <flowId>」，经 Remote 读回
- *    `triggerMethod` / `bazhuayuFlowId` / `bazhuayuApiKeySet`（Key 原文不出现在返回值里）；
- *  · 120 条同毫秒触发记录首屏 100 条，复合游标「加载更多」补齐 120 条；
- *  · 任务批量删除后只移除所选配置，触发记录仍保留；
- *  · 触发记录批量删除后重算任务统计，编辑抽屉内删除再验证历史记录保留。
+ *    群聊「仅匹配@我的文本」、三种关闭方式（× / Esc / 点遮罩），并留存抽屉截图
+ *    `.tmp-e2e/task-center-edit-drawer.png`；
+ *  · 触发方式选择器由后端厂商目录（`listRpaVendors`）驱动：选项含 Webhook / 八爪鱼 RPA /
+ *    影刀 RPA；切到八爪鱼填旧 aria（`八爪鱼 FlowId`/`八爪鱼 API Key`）→ 读回
+ *    `triggerConfig.flowId` + `triggerSecretSet.apiKey`；切到影刀填 `AccessKeyId`/
+ *    `AccessKeySecret`/`应用 UUID` → 读回 `triggerConfig.robotUuid` + 两个 secretSet；
+ *    再切回八爪鱼仍能读到旧 FlowId 并保存（切换厂商不清空已填）；凭据原文不出现在列表返回值；
+ *  · 任务行摘要显示「八爪鱼 RPA · <flowId>」；
  *
  * 数据隔离：每次使用一个临时 `SUPERTIME_USER_DATA_DIR`，不读写真实微信数据。
  * 触发记录直接写进临时任务库，是为了稳定造出「同一毫秒 + 跨页」的边界；任务则经
@@ -365,7 +366,7 @@ try {
   await webhookField.waitFor({ state: 'visible' })
   const webhookPlaceholder = await webhookField.getAttribute('placeholder')
   check(
-    webhookPlaceholder === 'https://example.com/webhook',
+    webhookPlaceholder === 'https://example.com/rpa/callback',
     '抽屉里显示 Webhook 地址字段',
     webhookPlaceholder ?? '无 placeholder',
   )
@@ -379,8 +380,18 @@ try {
   const savedMentionTask = tasksAfterMention.items?.find((task) => task.id === taskA.id)
   check(savedMentionTask?.mentionMeOnly === true, '勾选后经真实后端读回 mentionMeOnly=true')
 
-  // 触发方式：切到「八爪鱼 RPA」后出现 FlowId / API Key；保存后行内摘要与 Remote 都要反映。
-  await editDrawer.getByRole('radio', { name: '八爪鱼 RPA', exact: true }).click()
+  // 触发方式选择器由后端厂商目录（listRpaVendors）驱动：选项里应能看到内置 Webhook 与各厂商。
+  const vendorSelect = editDrawer.getByLabel('触发方式', { exact: true })
+  await vendorSelect.waitFor({ state: 'visible' })
+  const vendorOptions = await vendorSelect.locator('option').allTextContents()
+  check(
+    vendorOptions.includes('Webhook') && vendorOptions.includes('八爪鱼 RPA') && vendorOptions.includes('影刀 RPA'),
+    '触发方式选择器按厂商目录渲染',
+    vendorOptions.join(' / '),
+  )
+
+  // ②c 八爪鱼：切到「八爪鱼 RPA」后出现 FlowId / API Key（旧 aria 保持不变）；保存后行内摘要与 Remote 都要反映。
+  await vendorSelect.selectOption({ label: '八爪鱼 RPA' })
   const flowIdField = editDrawer.getByLabel('八爪鱼 FlowId', { exact: true })
   const apiKeyField = editDrawer.getByLabel('八爪鱼 API Key', { exact: true })
   await flowIdField.waitFor({ state: 'visible' })
@@ -391,7 +402,7 @@ try {
   )
   const apiKeyPlaceholder = await apiKeyField.getAttribute('placeholder')
   check(
-    apiKeyPlaceholder === '填写八爪鱼 X-Api-Key',
+    typeof apiKeyPlaceholder === 'string' && apiKeyPlaceholder.includes('填写'),
     '未配置 Key 时 placeholder 提示填写',
     apiKeyPlaceholder ?? '无 placeholder',
   )
@@ -404,7 +415,7 @@ try {
   let tasksAfterBazhuayu = await remote(win, 'listTaskInfos', [])
   let savedBazhuayuTask = tasksAfterBazhuayu.items?.find((task) => task.id === taskA.id)
   while (
-    !(savedBazhuayuTask?.triggerMethod === 'bazhuayu' && savedBazhuayuTask?.bazhuayuApiKeySet === true)
+    !(savedBazhuayuTask?.triggerMethod === 'bazhuayu' && savedBazhuayuTask?.triggerSecretSet?.apiKey === true)
     && Date.now() < bazhuayuDeadline
   ) {
     await sleep(250)
@@ -413,15 +424,89 @@ try {
   }
   check(
     savedBazhuayuTask?.triggerMethod === 'bazhuayu'
+      && savedBazhuayuTask?.triggerConfig?.flowId === '6ad859ccee2df270d53fc6e5'
+      && savedBazhuayuTask?.triggerSecretSet?.apiKey === true
+      // 兼容别名仍是通用配置的派生视图（旧 E2E/旧代码读它们）。
       && savedBazhuayuTask?.bazhuayuFlowId === '6ad859ccee2df270d53fc6e5'
       && savedBazhuayuTask?.bazhuayuApiKeySet === true,
-    '八爪鱼触发方式经真实后端读回 triggerMethod/flowId/apiKeySet',
-    `method=${savedBazhuayuTask?.triggerMethod} flow=${savedBazhuayuTask?.bazhuayuFlowId} keySet=${savedBazhuayuTask?.bazhuayuApiKeySet}`,
+    '八爪鱼触发方式经真实后端读回 triggerConfig/triggerSecretSet 与兼容别名',
+    `method=${savedBazhuayuTask?.triggerMethod} flow=${savedBazhuayuTask?.triggerConfig?.flowId} keySet=${savedBazhuayuTask?.triggerSecretSet?.apiKey}`,
   )
   check(
     !JSON.stringify(tasksAfterBazhuayu).includes('e2e-bazhuayu-key-001'),
     'API Key 原文不出现在任务列表返回值里',
   )
+
+  // ②d 影刀：切到「影刀 RPA」后出现目录声明的动态字段（账号与鉴权 / 流程与参数 / 高级）。
+  await vendorSelect.selectOption({ label: '影刀 RPA' })
+  const accessKeyIdField = editDrawer.getByLabel(/AccessKeyId/)
+  const accessKeySecretField = editDrawer.getByLabel(/AccessKeySecret/)
+  const robotUuidField = editDrawer.getByLabel(/应用 UUID/)
+  await accessKeyIdField.waitFor({ state: 'visible' })
+  await accessKeySecretField.waitFor({ state: 'visible' })
+  await robotUuidField.waitFor({ state: 'visible' })
+  check(
+    (await accessKeySecretField.getAttribute('type')) === 'password',
+    '影刀 AccessKeySecret 为 password（凭据不回显）',
+  )
+  check(
+    await editDrawer.getByText('账号与鉴权', { exact: true }).count() >= 1
+      && await editDrawer.getByText('流程与参数', { exact: true }).count() >= 1,
+    '影刀动态字段按描述符分组渲染（账号与鉴权 / 流程与参数）',
+  )
+  await accessKeyIdField.fill('e2e-yingdao-ak-id')
+  await accessKeySecretField.fill('e2e-yingdao-ak-secret')
+  await robotUuidField.fill('73d9a119-7ec7-4226-b679-506afefae667')
+  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
+  const yingdaoDeadline = Date.now() + 20_000
+  let tasksAfterYingdao = await remote(win, 'listTaskInfos', [])
+  let savedYingdaoTask = tasksAfterYingdao.items?.find((task) => task.id === taskA.id)
+  while (
+    !(savedYingdaoTask?.triggerMethod === 'yingdao'
+      && savedYingdaoTask?.triggerConfig?.robotUuid === '73d9a119-7ec7-4226-b679-506afefae667'
+      && savedYingdaoTask?.triggerSecretSet?.accessKeyId === true)
+    && Date.now() < yingdaoDeadline
+  ) {
+    await sleep(250)
+    tasksAfterYingdao = await remote(win, 'listTaskInfos', [])
+    savedYingdaoTask = tasksAfterYingdao.items?.find((task) => task.id === taskA.id)
+  }
+  check(
+    savedYingdaoTask?.triggerMethod === 'yingdao'
+      && savedYingdaoTask?.triggerConfig?.robotUuid === '73d9a119-7ec7-4226-b679-506afefae667'
+      && savedYingdaoTask?.triggerSecretSet?.accessKeyId === true
+      && savedYingdaoTask?.triggerSecretSet?.accessKeySecret === true,
+    '影刀触发方式经真实后端读回 triggerConfig/triggerSecretSet',
+    `method=${savedYingdaoTask?.triggerMethod} robot=${savedYingdaoTask?.triggerConfig?.robotUuid} ak=${savedYingdaoTask?.triggerSecretSet?.accessKeyId}`,
+  )
+  check(
+    !JSON.stringify(tasksAfterYingdao).includes('e2e-yingdao-ak-secret'),
+    '影刀凭据原文不出现在任务列表返回值里',
+  )
+
+  // ②e 切回「八爪鱼 RPA」：仍能读到上次填的旧配置并保存（切换厂商不清空已填）。
+  await vendorSelect.selectOption({ label: '八爪鱼 RPA' })
+  const flowIdAgain = editDrawer.getByLabel('八爪鱼 FlowId', { exact: true })
+  await flowIdAgain.waitFor({ state: 'visible' })
+  check(
+    (await flowIdAgain.inputValue()) === '6ad859ccee2df270d53fc6e5',
+    '切回八爪鱼仍可读上次填写的 FlowId',
+  )
+  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
+  const backDeadline = Date.now() + 20_000
+  let tasksBack = await remote(win, 'listTaskInfos', [])
+  let backTask = tasksBack.items?.find((task) => task.id === taskA.id)
+  while (!(backTask?.triggerMethod === 'bazhuayu' && backTask?.triggerConfig?.flowId === '6ad859ccee2df270d53fc6e5') && Date.now() < backDeadline) {
+    await sleep(250)
+    tasksBack = await remote(win, 'listTaskInfos', [])
+    backTask = tasksBack.items?.find((task) => task.id === taskA.id)
+  }
+  check(
+    backTask?.triggerMethod === 'bazhuayu' && backTask?.triggerConfig?.flowId === '6ad859ccee2df270d53fc6e5',
+    '切回八爪鱼后保存，旧 FlowId 仍持久',
+    `method=${backTask?.triggerMethod} flow=${backTask?.triggerConfig?.flowId}`,
+  )
+
   await editDrawer.getByRole('button', { name: '关闭', exact: true }).click()
   await editDrawer.waitFor({ state: 'hidden' })
   await taskPane.getByText(/八爪鱼 RPA · 6ad859ccee2df270d53fc6e5/).waitFor({ state: 'visible', timeout: 20_000 })

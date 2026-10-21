@@ -4,8 +4,13 @@
  * 这一域是用户显式创建的**触发式任务**：某会话（单聊/群聊 + 群内目标用户）的消息命中
  * 关键词时，记一条「触发记录」（触发时间 / 触发群聊 / 触发对象 / 触发图片 / 触发文本），
  * 已完善（`ready`）的任务再按**触发方式**把这条记录送出去：Webhook 回调（整条记录 POST
- * 到用户填的地址），或八爪鱼 RPA（调 `bots/scheduling/start`，参数映射见
- * {@link TaskBazhuayuStartPayload}）。
+ * 到用户填的地址），或某个 RPA 厂商（`api-rpa.bazhuayu.com` 的八爪鱼、影刀、UiPath、阿里云 RPA
+ * 等；参数映射与能力见 {@link RpaVendorDescriptor} 与 `docs/RPA-VENDOR-TRIGGERS.md`）。
+ *
+ * 触发方式是**注册表驱动**的（2026-10-21）：`triggerMethod` 是内置 `webhook` 或厂商 id，
+ * 厂商配置存通用 `triggerConfig`（非敏感）与 `triggerSecret`（敏感，永不回读），
+ * 不再为某一家厂商新增专用列/专用字段。旧列 `callback_url` / `bazhuayu_flow_id` /
+ * `bazhuayu_api_key` 只在迁移窗口内双写/回退读。
  *
  * 与相邻概念的分工（别混）：
  *  · `wechat-tasks.ts` 的待办：从聊天**文本规则**提取的 TODO，没有目标/关键词/回调；
@@ -16,6 +21,7 @@
  * 前后端共用：`build:types` 会把本文件生成到 `lib/types/`，渲染层只从
  * `@deepseek-ai/dsh-wechat-data/types` 取类型，不 import 后端实现。
  */
+import type { RpaTriggerConfig, RpaTriggerSecretInput, RpaTriggerSecretSet } from './types-rpa.ts'
 
 /** 任务状态：待完善（不能触发/回调） / 已完善（可用）。 */
 export type TaskInfoStatus = 'incomplete' | 'ready'
@@ -24,13 +30,14 @@ export type TaskInfoStatus = 'incomplete' | 'ready'
 export type TaskInfoChatType = 'private' | 'group'
 
 /**
- * 任务的下游触发方式（2026-10-21）：
- *  · `webhook`  —— 把整条触发记录 JSON POST 到用户填写的回调地址（原有能力）；
- *  · `bazhuayu` —— 调八爪鱼 RPA 的 `bots/scheduling/start`，参数只取
- *    会话名 / 触发文本 / 触发对象（见 {@link TaskBazhuayuStartPayload}）。
- * 旧库没有该列时按 `webhook` 处理，保证既有任务行为不变。
+ * 任务的下游触发方式（2026-10-21 起是**开放字符串**）：
+ *  · `webhook`  —— 把整条触发记录 JSON POST 到用户填写的回调地址（原有能力，内置）；
+ *  · 厂商 id   —— 注册表里的 RPA 厂商（当前：`bazhuayu` / `yingdao` / `uipath` /
+ *    `aliyun-rpa` / `laiye` / `shizai`）；描述符见 `listRpaVendors` 返回值。
+ * 旧库没有该列时按 `webhook` 处理，保证既有任务行为不变；未知 id（厂商已下线）不崩，
+ * 只在投递时 skipped 并显示可读原因。
  */
-export type TaskTriggerMethod = 'webhook' | 'bazhuayu'
+export type TaskTriggerMethod = string
 
 /** 一条触发记录的回调投递状态。 */
 export type TaskTriggerCallbackStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -56,21 +63,35 @@ export interface TaskInfo {
   photoLimit: number
   /** 仅匹配结构化 @ 登录账号的群消息；单聊始终为 false。 */
   mentionMeOnly: boolean
-  /** 下游触发方式（缺省 / 旧库 = `webhook`）。 */
+  /** 下游触发方式（缺省 / 旧库 = `webhook`；当前厂商 id 见 `listRpaVendors`）。 */
   triggerMethod: TaskTriggerMethod
-  /** Webhook 地址（http/https）。触发方式为 `webhook` 时，已完善任务必填。 */
+  /**
+   * 当前触发方式的**非敏感配置**（键 = 厂商描述符的 `fields[].key`）。
+   *
+   * 内置 `webhook` 的地址、八爪鱼的 FlowId 都在这里；厂商配置不再有专用字段。
+   */
+  triggerConfig: RpaTriggerConfig
+  /**
+   * 当前触发方式的凭据**是否已保存**（键 = secret 字段 key）。
+   *
+   * 凭据原文只在本机任务库里，投递时由后端读出；不进 Remote 返回值（列表会被只读会话读到）。
+   */
+  triggerSecretSet: RpaTriggerSecretSet
+  /** 保存时厂商描述符的版本；与当前注册表不一致时 UI 提示复核（厂商参数可能已变）。 */
+  triggerVendorVersion: string
+  /**
+   * Webhook 地址（**兼容别名**，= `triggerConfig.url`；2026-10-21 前是独立字段）。
+   * @deprecated 新代码用 `triggerConfig` / `listRpaVendors`；连接口搜索仍读它。
+   */
   callbackUrl: string
   /**
-   * 八爪鱼 RPA 流程 id（触发方式为 `bazhuayu` 时已完善必填）。
-   *
-   * 这不是凭据，可以随任务列表返回；API Key **不返回**，只回 {@link bazhuayuApiKeySet}。
+   * 八爪鱼 RPA 流程 id（**兼容别名**，= `triggerConfig.flowId`）。
+   * @deprecated 新代码用 `triggerConfig`。
    */
   bazhuayuFlowId: string
   /**
-   * 是否已保存八爪鱼 API Key。
-   *
-   * 列表 / 编辑表单只需要知道「配没配」；Key 本身只在本机任务库里，投递时由后端读出，
-   * 不进 Remote 返回值（列表会被只读会话读到，不该把凭据带出去）。
+   * 是否已保存八爪鱼 API Key（**兼容别名**，= `triggerSecretSet.apiKey`）。
+   * @deprecated 新代码用 `triggerSecretSet`。
    */
   bazhuayuApiKeySet: boolean
   status: TaskInfoStatus
@@ -96,12 +117,31 @@ export interface TaskInfoInput {
   mentionMeOnly?: boolean
   /** 下游触发方式；缺省 = 新建按 `webhook`、更新沿用旧值。 */
   triggerMethod?: TaskTriggerMethod
+  /**
+   * 当前触发方式的非敏感配置；**整体替换**（缺省 = 沿用旧配置）。
+   *
+   * 厂商默认值由后端按描述符补齐；未传的键沿用旧值（这里不做深合并，避免厂商参数
+   * 被旧值悄悄复活；前端提交处已带全量 config）。
+   */
+  triggerConfig?: RpaTriggerConfig
+  /**
+   * 凭据字段：**出现的键才覆盖**；`''` = 清空，缺省 = 保留旧值。
+   * 编辑表单从不回读凭据原文，所以「没改」必须能与「清空」区分开。
+   */
+  triggerSecret?: RpaTriggerSecretInput
+  /**
+   * Webhook 地址（**兼容入参**，= `triggerConfig.url`；仅旧客户端/旧测试使用）。
+   * @deprecated 新代码用 `triggerMethod` + `triggerConfig`。
+   */
   callbackUrl?: string
-  /** 八爪鱼流程 id；缺省（更新）= 沿用旧值，空串 = 清空。 */
+  /**
+   * 八爪鱼流程 id（**兼容入参**，= `triggerConfig.flowId`；空串 = 清空）。
+   * @deprecated 新代码用 `triggerMethod` + `triggerConfig`。
+   */
   bazhuayuFlowId?: string
   /**
-   * 八爪鱼 API Key；缺省（更新）= **保留已保存的 Key**，空串 = 清空，非空 = 覆盖。
-   * 编辑表单不显示 Key 本身，所以「没改动」必须能与「清空」区分开。
+   * 八爪鱼 API Key（**兼容入参**，= `triggerSecret.apiKey`；空串 = 清空）。
+   * @deprecated 新代码用 `triggerSecret`。
    */
   bazhuayuApiKey?: string
   status?: TaskInfoStatus
@@ -165,6 +205,11 @@ export interface TaskTriggerRecord {
   callbackStatus: TaskTriggerCallbackStatus
   callbackAt?: number
   callbackError?: string
+  /**
+   * 厂商侧的任务/运行 id（2026-10-21 多厂商接入新增；如八爪鱼无、影刀 `jobUuid`、
+   * UiPath `Job.Key`、阿里云 `TaskId`）。用于到厂商控制台核对与后续轮询。
+   */
+  externalTaskId?: string
 }
 
 /** 触发记录查询。 */
@@ -224,6 +269,8 @@ export interface TaskCallbackDispatchResult {
   ok: boolean
   status: TaskTriggerCallbackStatus
   error?: string
+  /** 厂商侧任务/运行 id（成功投递时尽量带上，便于到厂商控制台核对）。 */
+  externalTaskId?: string
 }
 
 /** 回调请求体（后端按此形状 POST JSON；不持久化，只发出去）。 */
@@ -249,16 +296,16 @@ export interface TaskCallbackPayload {
 }
 
 /**
- * 八爪鱼 RPA 的「启动流程」请求体（2026-10-21，触发方式 = `bazhuayu`）。
+ * 八爪鱼 RPA 的「启动流程」请求体（2026-10-21 首版接入时的形状，保留作兼容/对照）。
  *
- * 字段形状来自八爪鱼开放接口 `POST /api/bots/scheduling/start` 的示例；三个业务参数
- * 由触发记录映射：
- *  · `Params.room_name` ← 会话名（群聊名 / 单聊对象名，`TaskTriggerRecord.chatName`）；
- *  · `Params.content`   ← 触发文本（过隐私闸后的 `text`）；
- *  · `Params.at_name`   ← 触发对象显示名（`TaskTriggerRecord.targetName`）；单聊任务创建时
- *    没有目标成员，回落会话名 `chatName`（单聊里「触发的用户对象」就是会话本人）。
+ * 2026-10-21 多厂商改造后，八爪鱼只是注册表里的一个厂商描述符；该形状由
+ * `rpa/vendors/bazhuayu.ts` 的请求模板生成，字段映射规则不变：
+ *  · `Params.room_name` ← 会话名；`Params.content` ← 触发文本（过隐私闸后）；
+ *  · `Params.at_name` ← 触发对象显示名；单聊回落会话名 `chatName`。
  *
  * 说明：RPA 方式**不发图片**（接口没有对应参数），`photoLimit` 对它不生效。
+ *
+ * @deprecated 厂商协议已由描述符承载，新代码不要直接引用该类型。
  */
 export interface TaskBazhuayuStartPayload {
   FlowId: string

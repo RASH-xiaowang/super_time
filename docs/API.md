@@ -4,7 +4,7 @@
 > `@Remote('name')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。
 > CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。
 
-当前共 **217** 个 Remote 方法。
+当前共 **218** 个 Remote 方法。
 
 渲染进程通过这些方法与后端通信（方法面分布在 `src/backend/wechat-data/src/gateway*.ts` 的多个网关壳里）：
 渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →
@@ -182,57 +182,58 @@
 | 164 | `listLlmModels` | List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider cat… |
 | 165 | `listLlmProviders` | List the daily-summary model provider(s): the default model's provider (the one the user actually configured)… |
 | 166 | `listRetrievalFeedback` | 列出最近的问答反馈 + 汇总统计。 |
-| 167 | `listSummaryRecords` | List generated summary records. |
-| 168 | `listSummaryTasks` | List daily-summary tasks. |
-| 169 | `listTaskInfos` | 任务列表（最新在前）。 |
-| 170 | `listTaskTriggers` | 触发记录列表（triggered_at 倒序，最新在前）。 |
-| 171 | `listTasks` | — |
-| 172 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
-| 173 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
-| 174 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
-| 175 | `originalHarvest` | 原图自动收割：监控微信 `msg/attach`，微信一落盘 `_h.dat` 就解进解码缓存。 |
-| 176 | `planOriginalFetch` | 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。 |
-| 177 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
-| 178 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
-| 179 | `renameClawbotInstance` | 给实例起别名（「工作号」「客服号」；2026-10-16）。 |
-| 180 | `renameKb` | Rename one knowledge base. |
-| 181 | `repairCorruptDbs` | 修复损坏的库：体检 → 只重解密损坏的那几个 → 复检（`query/db-repair.ts`）。 |
-| 182 | `resetEditedMessage` | Restore a message to its original content. |
-| 183 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
-| 184 | `resolveChatHistory` | — |
-| 185 | `restoreBackup` | — |
-| 186 | `runSummaryTask` | — |
-| 187 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
-| 188 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
-| 189 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
-| 190 | `saveTaskInfo` | 新建 / 更新任务配置（`options.id` 缺省 = 新建）。 |
-| 191 | `saveWechatConfig` | Save the WeChat config (merge patch). |
-| 192 | `scanTaskTriggers` | 立即扫描一次（面板「立即检查」/ 调试用；常驻扫描见 {@link scanTaskTriggersBackground}）。 |
-| 193 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
-| 194 | `searchMembers` | Contact / group-member search. |
-| 195 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
-| 196 | `searchUnified` | — |
-| 197 | `sendClawbotMessage` | 发送一条消息到微信（用户主动触发；正文经腾讯服务中转，**唯一由内容驱动的出网路径**）。 |
-| 198 | `setClawbotInstanceConfig` | 改某实例的**行为配置**（AI 自动回复 / 知识库增强；部分更新）。 |
-| 199 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
-| 200 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
-| 201 | `setPrivacyState` | — |
-| 202 | `setTaskInfoStatus` | 标记任务「待完善 / 已完善」。 |
-| 203 | `setTaskStatus` | — |
-| 204 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
-| 205 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
-| 206 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
-| 207 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
-| 208 | `syncHandoffTasks` | — |
-| 209 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
-| 210 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
-| 211 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
-| 212 | `unbindClawbot` | 解绑（断开该实例的通道；**接入会话保留**，见 PRIVACY.md 第三节）。 |
-| 213 | `unloadLaya` | Unload the model, releasing roughly 1.2 GB of resident memory. |
-| 214 | `upgradeDecodedImages` | 升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。 |
-| 215 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
-| 216 | `verifyImageKey` | — |
-| 217 | `wechatImageAutoDownload` | 微信原图自动下载（实验）：`start` 打开开关并让微信开始下载新图片的原图 / `stop` 关闭并还原微信进程 / `status` 只读状态（界面轮询用）。 |
+| 167 | `listRpaVendors` | 厂商目录（前端触发方式选择器 + 动态表单的唯一数据源，2026-10-21）。 |
+| 168 | `listSummaryRecords` | List generated summary records. |
+| 169 | `listSummaryTasks` | List daily-summary tasks. |
+| 170 | `listTaskInfos` | 任务列表（最新在前）。 |
+| 171 | `listTaskTriggers` | 触发记录列表（triggered_at 倒序，最新在前）。 |
+| 172 | `listTasks` | — |
+| 173 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
+| 174 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
+| 175 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
+| 176 | `originalHarvest` | 原图自动收割：监控微信 `msg/attach`，微信一落盘 `_h.dat` 就解进解码缓存。 |
+| 177 | `planOriginalFetch` | 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。 |
+| 178 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
+| 179 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
+| 180 | `renameClawbotInstance` | 给实例起别名（「工作号」「客服号」；2026-10-16）。 |
+| 181 | `renameKb` | Rename one knowledge base. |
+| 182 | `repairCorruptDbs` | 修复损坏的库：体检 → 只重解密损坏的那几个 → 复检（`query/db-repair.ts`）。 |
+| 183 | `resetEditedMessage` | Restore a message to its original content. |
+| 184 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
+| 185 | `resolveChatHistory` | — |
+| 186 | `restoreBackup` | — |
+| 187 | `runSummaryTask` | — |
+| 188 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
+| 189 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
+| 190 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
+| 191 | `saveTaskInfo` | 新建 / 更新任务配置（`options.id` 缺省 = 新建）。 |
+| 192 | `saveWechatConfig` | Save the WeChat config (merge patch). |
+| 193 | `scanTaskTriggers` | 立即扫描一次（面板「立即检查」/ 调试用；常驻扫描见 {@link scanTaskTriggersBackground}）。 |
+| 194 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
+| 195 | `searchMembers` | Contact / group-member search. |
+| 196 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
+| 197 | `searchUnified` | — |
+| 198 | `sendClawbotMessage` | 发送一条消息到微信（用户主动触发；正文经腾讯服务中转，**唯一由内容驱动的出网路径**）。 |
+| 199 | `setClawbotInstanceConfig` | 改某实例的**行为配置**（AI 自动回复 / 知识库增强；部分更新）。 |
+| 200 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
+| 201 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
+| 202 | `setPrivacyState` | — |
+| 203 | `setTaskInfoStatus` | 标记任务「待完善 / 已完善」。 |
+| 204 | `setTaskStatus` | — |
+| 205 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
+| 206 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
+| 207 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
+| 208 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
+| 209 | `syncHandoffTasks` | — |
+| 210 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
+| 211 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
+| 212 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
+| 213 | `unbindClawbot` | 解绑（断开该实例的通道；**接入会话保留**，见 PRIVACY.md 第三节）。 |
+| 214 | `unloadLaya` | Unload the model, releasing roughly 1.2 GB of resident memory. |
+| 215 | `upgradeDecodedImages` | 升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。 |
+| 216 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
+| 217 | `verifyImageKey` | — |
+| 218 | `wechatImageAutoDownload` | 微信原图自动下载（实验）：`start` 打开开关并让微信开始下载新图片的原图 / `stop` 关闭并还原微信进程 / `status` 只读状态（界面轮询用）。 |
 
 ## 明细
 
@@ -1941,6 +1942,16 @@ listRetrievalFeedback(options?: { limit?: number }): { items: FeedbackRecord[] s
 列出最近的问答反馈 + 汇总统计。
 
 - @param options - limit。
+
+### `listRpaVendors`
+
+```ts
+listRpaVendors(): RpaVendorCatalog
+```
+
+厂商目录（前端触发方式选择器 + 动态表单的唯一数据源，2026-10-21）。  返回**可序列化描述符**（字段/鉴权/映射/请求模板/风险；不含任何钩子或凭据）。 前端不打包厂商清单：新增厂商只改后端注册表，`listRpaVendors` 自动带出。
+
+- @returns RpaVendorCatalog：`items`（顺序即 UI 顺序）+ `registryVersion`。
 
 ### `listSummaryRecords`
 

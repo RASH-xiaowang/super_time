@@ -8920,11 +8920,11 @@ async function runBuildSearchIndex(decryptedDir, force, hooks) {
     throwIfCanceled();
     let shardsDone = 0;
     let skippedCount = 0;
-    const skipped = [];
+    const skipped2 = [];
     const recordSkip = (shard, e) => {
       skippedCount += 1;
       const detail = basename2(shard) + ": " + e.message;
-      if (skipped.length < 5) skipped.push(detail);
+      if (skipped2.length < 5) skipped2.push(detail);
       console.warn("[search] \u8DF3\u8FC7\u4E0D\u53EF\u8BFB\u5206\u7247 " + detail);
     };
     const flush = () => {
@@ -9028,7 +9028,7 @@ async function runBuildSearchIndex(decryptedDir, force, hooks) {
     } catch {
     }
     const result = { status: "ok", rows: total, built_at: builtAt, elapsed_ms: Date.now() - started };
-    if (skippedCount > 0) result.message = `\u5DF2\u8DF3\u8FC7 ${skippedCount} \u4E2A\u4E0D\u53EF\u8BFB\u5206\u7247\uFF1A${skipped.join("; ")}`;
+    if (skippedCount > 0) result.message = `\u5DF2\u8DF3\u8FC7 ${skippedCount} \u4E2A\u4E0D\u53EF\u8BFB\u5206\u7247\uFF1A${skipped2.join("; ")}`;
     return result;
   } catch (e) {
     try {
@@ -9506,10 +9506,2276 @@ async function queryMessageByServerIdUncached(decryptedDir, serverId) {
   return await tryLookup("CAST(server_id AS TEXT)", sid);
 }
 
+// src/backend/wechat-data/src/query/rpa/vendors/webhook.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join13 } from "node:path";
+var IMAGE_DATA_URL_MAX = 8e6;
+var ERROR_TEXT_MAX = 500;
+var MAPPING_TARGETS = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var descriptor = {
+  id: "webhook",
+  name: "Webhook",
+  vendor: "\u5185\u7F6E Webhook\uFF08\u6807\u51C6 HTTP POST\uFF09",
+  version: "1.0.0",
+  summary: "\u628A\u6574\u6761\u89E6\u53D1\u8BB0\u5F55\uFF08\u542B\u56FE\u7247\uFF09JSON POST \u5230\u4F60\u586B\u5199\u7684\u5730\u5740\uFF1B\u9ED8\u8BA4\u89E6\u53D1\u65B9\u5F0F\uFF0C\u884C\u4E3A\u4E0E\u65E7\u7248\u4E00\u81F4\u3002",
+  status: "stable",
+  docs: {
+    home: "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Methods/POST",
+    triggerApi: "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Methods/POST",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "\u5185\u7F6E\u901A\u9053\uFF08\u975E\u5382\u5546 API\uFF0C2026-10-21 \u56DE\u5F52\u6838\u5BF9\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: true,
+    completion: "none",
+    idempotency: "none",
+    deployment: ["cloud", "onprem"]
+  },
+  fields: [
+    {
+      key: "url",
+      label: "\u56DE\u8C03\u5730\u5740",
+      ariaLabel: "Webhook \u5730\u5740",
+      type: "text",
+      required: true,
+      example: "https://example.com/rpa/callback",
+      pattern: "^https?://",
+      summary: true,
+      help: "\u53EA\u652F\u6301 http/https\uFF1B\u7531\u4F60\u81EA\u884C\u4FDD\u8BC1\u5BF9\u7AEF\u53EF\u8FBE\u5E76\u8FD4\u56DE 2xx\u3002"
+    },
+    {
+      key: "paramMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: false,
+      advanced: true,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "Webhook \u53D1\u9001\u6574\u6761\u89E6\u53D1\u8BB0\u5F55\uFF0C\u4E0D\u4F7F\u7528\u53C2\u6570\u6620\u5C04\uFF1B\u4FDD\u7559\u6B64\u9879\u4EC5\u4E3A\u63CF\u8FF0\u7B26\u5B8C\u6574\u6027\u3002"
+    }
+  ],
+  auth: {
+    // 内置 Webhook 没有凭据：不做任何鉴权（地址本身即用户配置的接收端）。
+    modes: []
+  },
+  mapping: {
+    style: "object",
+    mapField: "paramMap",
+    targets: MAPPING_TARGETS
+  },
+  request: {
+    method: "POST",
+    url: "${config.url}",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      taskId: "${invocation.taskId}",
+      recordId: "${invocation.recordId}",
+      keyword: "${record.keyword}",
+      text: "${record.text}"
+    }
+  },
+  response: {
+    okHttpStatus: [200, 201, 202, 204]
+  },
+  retry: { maxAttempts: 2, retryOn: ["network", "http-5xx", "http-429"] },
+  governance: {
+    contentOutbound: true,
+    // 内置 Webhook：hosts 为空 + allowCustomBaseUrl 由核心特判为「任意 http(s)」——
+    // 保持旧版「用户自担地址」的口径（旧版允许本机/内网地址）。
+    hosts: [],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "\u5730\u5740\u7531\u7528\u6237\u586B\u5199\uFF1A\u5BF9\u7AEF\u4E0D\u53EF\u8FBE\u6216\u8FD4\u56DE\u975E 2xx \u65F6\u8BB0\u4E3A\u5931\u8D25\uFF0C\u6700\u591A\u5C1D\u8BD5 2 \u6B21\uFF08\u542B\u9996\u6B21\uFF09",
+    "\u56FE\u7247\u9010\u5F20\u89E3\u7801\uFF1A\u5355\u5F20\u8D85\u8FC7\u7EA6 6MB \u6216\u89E3\u7801\u5931\u8D25\u65F6\u53EA\u7701\u7565\u8BE5\u5F20\u5E76\u5E26\u4E0A error",
+    "\u9690\u79C1\u95F8\u53EA\u5BF9\u89E6\u53D1\u6587\u672C\u8131\u654F\uFF08\u529F\u80FD\u540D task_callback\uFF09\uFF0C\u56FE\u7247\u4E0D\u505A\u6253\u7801"
+  ],
+  notes: [
+    "\u5185\u7F6E\u901A\u9053\uFF08\u975E\u5382\u5546 API\uFF09\uFF1A\u8BF7\u6C42\u4F53\u5F62\u72B6\u4E0E 2026-10-21 \u4E4B\u524D\u9010\u5B57\u6BB5\u4E00\u81F4\uFF08TaskCallbackPayload + \u56FE\u7247 data URL\uFF09\u3002"
+  ]
+};
+function imageMimeOf2(file) {
+  const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  if (ext === "bmp") return "image/bmp";
+  return "image/jpeg";
+}
+function isSafeDecodedPath(file) {
+  const normalized = file.replace(/\\/g, "/");
+  if (normalized.startsWith("..") || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) return false;
+  return normalized !== "";
+}
+function errorText2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+async function buildPayloadImages(record, deps2) {
+  const out = [];
+  for (const image of record.images) {
+    const item = {
+      localId: image.localId,
+      createTime: image.createTime,
+      sender: image.sender
+    };
+    if (image.md5 !== void 0) item.md5 = image.md5;
+    try {
+      const decoded = await deps2.decodeImage(record.username, image.localId);
+      let dataUrl = typeof decoded.url === "string" ? decoded.url : "";
+      if (dataUrl === "" && typeof decoded.file === "string" && decoded.file !== "") {
+        if (!isSafeDecodedPath(decoded.file)) {
+          item.error = "\u56FE\u7247\u8DEF\u5F84\u8D85\u51FA\u89E3\u7801\u76EE\u5F55\uFF0C\u5DF2\u7701\u7565";
+        } else {
+          const bytes = readFileSync4(join13(deps2.decodedDir, decoded.file));
+          dataUrl = "data:" + imageMimeOf2(decoded.file) + ";base64," + bytes.toString("base64");
+        }
+      }
+      if (item.error === void 0) {
+        if (dataUrl === "") item.error = "\u56FE\u7247\u89E3\u7801\u5931\u8D25";
+        else if (dataUrl.length > IMAGE_DATA_URL_MAX) item.error = "\u56FE\u7247\u8FC7\u5927\uFF0C\u5DF2\u7701\u7565";
+        else item.dataUrl = dataUrl;
+      }
+    } catch (error) {
+      item.error = errorText2(error).slice(0, ERROR_TEXT_MAX);
+    }
+    out.push(item);
+  }
+  return out;
+}
+async function buildCallbackPayload(ctx, deps2) {
+  const record = ctx.record;
+  const images = await buildPayloadImages(record, deps2);
+  return {
+    taskId: ctx.taskId,
+    taskName: ctx.taskName,
+    recordId: ctx.recordId,
+    triggeredAt: record.triggeredAt,
+    triggeredAtText: new Date(record.triggeredAt).toLocaleString("zh-CN", { hour12: false }),
+    chat: { username: record.username, name: record.chatName, type: record.chatType },
+    target: { username: record.targetUsername, name: record.targetName },
+    keyword: record.keyword,
+    text: record.text,
+    images
+  };
+}
+var adapter = {
+  descriptor,
+  /**
+   * 组装 Webhook 请求：整条触发记录 JSON + 图片 data URL。
+   * @param ctx - 投递上下文（text 已过隐私闸）。
+   * @param deps - 图片解码依赖。
+   * @returns 可直接发送的 POST 请求。
+   * @throws 任务未配置回调地址时抛可读错误。
+   */
+  async buildRequest(ctx, deps2) {
+    const rawUrl = ctx.config["url"];
+    const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+    if (url === "") throw new Error("Webhook \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u56DE\u8C03\u5730\u5740");
+    const payload = await buildCallbackPayload(ctx, deps2);
+    return {
+      method: "POST",
+      url,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      contentType: "application/json"
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/bazhuayu.ts
+var MAPPING_TARGETS2 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var apiKeyField = {
+  key: "apiKey",
+  label: "API Key",
+  ariaLabel: "\u516B\u722A\u9C7C API Key",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u53EA\u5B58\u672C\u673A\uFF1B\u6295\u9012\u65F6\u7531\u540E\u7AEF\u8BFB\u51FA\u6765\u653E\u8FDB X-Api-Key \u8BF7\u6C42\u5934\uFF0C\u4E0D\u8FDB\u4EFB\u52A1\u5217\u8868/Remote \u8FD4\u56DE\u503C\u3002"
+};
+var descriptor2 = {
+  id: "bazhuayu",
+  name: "\u516B\u722A\u9C7C RPA",
+  vendor: "\u516B\u722A\u9C7C RPA\uFF08Bazhuayu\uFF09",
+  version: "1.0.0",
+  summary: "\u628A\u89E6\u53D1\u8BB0\u5F55\u6620\u5C04\u6210 room_name/content/at_name\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
+  status: "stable",
+  docs: {
+    home: "https://www.bazhuayu.com/",
+    triggerApi: "https://www.bazhuayu.com/",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "\u5185\u7F6E\u901A\u9053\uFF082026-10-21 \u56DE\u5F52\u6838\u5BF9\uFF1B\u65E0\u516C\u5F00\u63A5\u53E3\u9875\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: true,
+    completion: "none",
+    idempotency: "none",
+    deployment: ["cloud"]
+  },
+  fields: [
+    {
+      key: "flowId",
+      label: "FlowId",
+      ariaLabel: "\u516B\u722A\u9C7C FlowId",
+      type: "text",
+      required: true,
+      example: "6ad859ccee2df270d53fc6e5",
+      summary: true,
+      help: "\u516B\u722A\u9C7C\u6D41\u7A0B id\uFF08\u63A7\u5236\u53F0\u6D41\u7A0B\u8BE6\u60C5\u91CC\u590D\u5236\uFF09\uFF1B\u4E0D\u662F\u51ED\u636E\uFF0C\u968F\u4EFB\u52A1\u914D\u7F6E\u8FD4\u56DE\u3002"
+    },
+    apiKeyField
+  ],
+  auth: {
+    // 凭据直接写进请求模板 header（X-Api-Key: ${secret.apiKey}），没有额外鉴权流程。
+    modes: []
+  },
+  mapping: {
+    style: "object",
+    mapField: "paramMap",
+    targets: MAPPING_TARGETS2
+  },
+  request: {
+    method: "POST",
+    url: "https://api-rpa.bazhuayu.com/api/bots/scheduling/start",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Key": "${secret.apiKey}"
+    },
+    body: {
+      FlowId: "${config.flowId}",
+      FlowContentRetrievalMode: "ByNewestContent",
+      SpecifiedPublicationVersion: "",
+      SpecifiedBot: "",
+      Params: "${mapped}",
+      UserStartSource: "OpenApi"
+    }
+  },
+  response: {
+    // 旧实现按「HTTP 2xx = 成功」判定（接口没有业务码约定）。
+    okHttpStatus: [200, 201, 202, 204]
+  },
+  retry: { maxAttempts: 2, retryOn: ["network", "http-5xx", "http-429"] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "exact", value: "api-rpa.bazhuayu.com" }],
+    allowCustomBaseUrl: false,
+    privacySection: "G3"
+  },
+  risks: [
+    "2xx \u5373\u89C6\u4E3A\u6210\u529F\uFF1A\u63A5\u53E3\u6CA1\u6709\u4E1A\u52A1\u7801\u53EF\u6838\u5BF9\uFF0C\u6267\u884C\u5931\u8D25\u53EA\u80FD\u5230\u516B\u722A\u9C7C\u63A7\u5236\u53F0\u67E5\u770B",
+    "\u63A5\u53E3\u6CA1\u6709\u56FE\u7247\u53C2\u6570\uFF1ARPA \u65B9\u5F0F\u4E0D\u53D1\u56FE\u7247\uFF08\u4EFB\u52A1\u91CC\u7684 photoLimit \u5BF9\u5B83\u4E0D\u751F\u6548\uFF09",
+    "FlowId \u5FC5\u987B\u5C5E\u4E8E\u8BE5 API Key \u7684\u6388\u6743\u8303\u56F4\uFF0C\u5426\u5219\u5BF9\u7AEF\u53EF\u80FD\u8FD4\u56DE\u9519\u8BEF"
+  ],
+  notes: [
+    "\u5185\u7F6E\u5382\u5546\uFF1A\u8BF7\u6C42 URL / \u8BF7\u6C42\u5934 / \u8BF7\u6C42\u4F53\u4E0E 2026-10-21 \u4E4B\u524D\u5B8C\u5168\u4E00\u81F4\uFF08\u4F5C\u4E3A\u591A\u5382\u5546\u6539\u9020\u7684\u56DE\u5F52\u57FA\u7EBF\uFF09\u3002"
+  ]
+};
+var adapter2 = {
+  descriptor: descriptor2
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/yingdao.ts
+var MAPPING_TARGETS3 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var MAP_FIELD = "paramMap";
+var IDEMPOTENT_MAX = 36;
+var authFields = [
+  {
+    key: "accessKeyId",
+    label: "AccessKeyId",
+    type: "password",
+    required: true,
+    secret: true,
+    example: "ak-\u2026",
+    help: "\u5F71\u5200\u63A7\u5236\u53F0\u300Capi \u914D\u7F6E\u300D\u91CC\u7531\u4F01\u4E1A\u7BA1\u7406\u5458\u521B\u5EFA\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
+  },
+  {
+    key: "accessKeySecret",
+    label: "AccessKeySecret",
+    type: "password",
+    required: true,
+    secret: true,
+    help: "\u4E0E AccessKeyId \u6210\u5BF9\uFF1B\u53EA\u5B58\u672C\u673A\uFF0C\u6362 token \u65F6\u7531\u540E\u7AEF\u4F7F\u7528\u3002"
+  }
+];
+var descriptor3 = {
+  id: "yingdao",
+  name: "\u5F71\u5200 RPA",
+  vendor: "\u5F71\u5200 RPA\uFF08YingDao\uFF0C\u5B98\u7F51 yingdao.com\uFF09",
+  version: "1.0.0",
+  summary: "\u7528 AK/SK \u6362 token \u540E\u542F\u52A8\u5F71\u5200\u5E94\u7528\uFF1B\u5F02\u6B65 + \u56DE\u8C03\uFF0C\u53C2\u6570\u6620\u5C04\u5230\u5E94\u7528\u5165\u53C2\u3002",
+  status: "stable",
+  docs: {
+    home: "https://www.yingdao.com/yddoc/rpa/zh-CN/710488569666060288",
+    triggerApi: "https://www.yingdao.com/yddoc/rpa/zh-CN/710488569666060288",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "\u672A\u6807\u6CE8\uFF08SPA \u6E32\u67D3\u8BFB\u53D6\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: false,
+    completion: "callback",
+    idempotency: "vendor-key",
+    deployment: ["cloud", "onprem"]
+  },
+  fields: [
+    {
+      key: "baseUrl",
+      label: "\u670D\u52A1\u5730\u5740",
+      type: "text",
+      required: true,
+      defaultValue: "https://api.yingdao.com",
+      pattern: "^https?://",
+      help: "SaaS \u56FA\u5B9A https://api.yingdao.com\uFF1B\u4E13\u6709\u4E91\u8BF7\u586B\u5382\u5546\u63D0\u4F9B\u7684\u4E13\u6709\u5730\u5740\uFF08\u5B98\u65B9\u672A\u516C\u5F00\u683C\u5F0F\uFF09\u3002"
+    },
+    {
+      key: "robotUuid",
+      label: "\u5E94\u7528 UUID",
+      type: "text",
+      required: true,
+      example: "73d9a119-7ec7-4226-b679-506afefae667",
+      summary: true,
+      help: "\u63A7\u5236\u53F0-\u5E94\u7528\u7BA1\u7406-\u5E94\u7528\u8BE6\u60C5\u91CC\u590D\u5236\u3002"
+    },
+    {
+      key: "accountName",
+      label: "\u673A\u5668\u4EBA\u8D26\u53F7",
+      type: "text",
+      required: false,
+      example: "admin@fckj",
+      help: "\u4E0E\u300C\u673A\u5668\u4EBA\u5206\u7EC4 UUID\u300D\u4E8C\u9009\u4E00\uFF1B\u4E24\u8005\u90FD\u586B\u65F6\u4EE5\u5206\u7EC4\u4E3A\u51C6\u3002"
+    },
+    {
+      key: "robotClientGroupUuid",
+      label: "\u673A\u5668\u4EBA\u5206\u7EC4 UUID",
+      type: "text",
+      required: false,
+      advanced: true,
+      help: "\u4E0E\u300C\u673A\u5668\u4EBA\u8D26\u53F7\u300D\u4E8C\u9009\u4E00\uFF1B\u586B\u4E86\u5206\u7EC4\u65F6\u4F18\u5148\u7528\u5206\u7EC4\u3002"
+    },
+    {
+      key: "priority",
+      label: "\u6392\u961F\u4F18\u5148\u7EA7",
+      type: "select",
+      required: false,
+      defaultValue: "middle",
+      options: [
+        { value: "high", label: "high" },
+        { value: "middle", label: "middle" },
+        { value: "low", label: "low" }
+      ],
+      advanced: true,
+      help: "\u5B98\u65B9\u793A\u4F8B\u4E0E\u9ED8\u8BA4\u503C\u4E3A middle\uFF1B\u5B8C\u6574\u679A\u4E3E\u503C\u9875\u672A\u53D6\u8BC1\uFF0C\u8054\u8C03\u65F6\u6838\u5BF9\u3002"
+    },
+    {
+      key: "paramMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: false,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u9ED8\u8BA4 room_name/content/at_name\uFF1B\u987B\u6539\u6210\u4F60\u5F71\u5200\u5E94\u7528\u91CC\u771F\u5B9E\u5165\u53C2\u540D\u3002"
+    }
+  ],
+  auth: {
+    modes: [
+      {
+        strategy: "token-exchange",
+        fields: authFields,
+        exchange: {
+          method: "GET",
+          url: "${config.baseUrl}/oapi/token/v2/token/create",
+          query: {
+            accessKeyId: "${secret.accessKeyId}",
+            accessKeySecret: "${secret.accessKeySecret}"
+          },
+          // 官方页只明确「响应含 expiresIn」，未给完整 JSON 示例；tokenPath 为约定推断（见 notes）。
+          tokenPath: "data.accessToken",
+          expiresInPath: "expiresIn",
+          headerPrefix: "Bearer "
+        }
+      }
+    ]
+  },
+  mapping: {
+    style: "nameValueTypeArray",
+    mapField: MAP_FIELD,
+    targets: MAPPING_TARGETS3
+  },
+  request: {
+    method: "POST",
+    url: "${config.baseUrl}/oapi/dispatch/v2/job/start",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      robotUuid: "${config.robotUuid}",
+      idempotentUuid: "${invocation.idempotencyKey}",
+      params: "${mapped}"
+    }
+  },
+  response: {
+    okHttpStatus: [200],
+    okPath: "code",
+    okValue: 200,
+    externalTaskIdPath: "data.jobUuid",
+    messagePath: "msg"
+  },
+  retry: { maxAttempts: 2, retryOn: ["network", "http-5xx", "http-429"] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "exact", value: "api.yingdao.com" }],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "\u56DE\u8C03\u65E0\u7B7E\u540D\uFF1A\u53EA\u80FD\u5F53\u300C\u6709\u53D8\u5316\u300D\u7684\u4FE1\u53F7\uFF0C\u4E0D\u80FD\u7528\u56DE\u8C03\u5185\u5BB9\u76F4\u63A5\u5199\u4E1A\u52A1\u72B6\u6001\uFF08\u9700\u67E5\u8BE2\u63A5\u53E3\u4E8C\u6B21\u786E\u8BA4\uFF09",
+    "\u4E13\u6709\u4E91\u5730\u5740\u5B98\u65B9\u672A\u7ED9\u51FA\uFF1AbaseUrl \u5FC5\u987B\u53EF\u914D\u7F6E",
+    "\u53C2\u6570\u5408\u8BA1\u5EFA\u8BAE \u22648000\uFF08\u4E13\u6709\u4E91 6.0.0 \u524D 3000\uFF09\uFF1BwaitTimeout \u5B98\u65B9\u6807\u6CE8\u5373\u5C06\u4F5C\u5E9F\uFF0C\u672C\u9002\u914D\u5668\u4E0D\u4F7F\u7528",
+    "\u9650\u6D41\uFF1Ajob/start 10 \u6B21/\u79D2\uFF1BAPI \u662F\u5426\u6709\u4F01\u4E1A\u7248\u95E8\u69DB\u5B98\u65B9\u672A\u7B54\u590D"
+  ],
+  notes: [
+    "token \u54CD\u5E94\u89E3\u6790\u8DEF\u5F84\u6309 data.accessToken \u7EA6\u5B9A\uFF08\u5B98\u65B9\u9875\u9762\u53EA\u660E\u786E\u54CD\u5E94\u542B expiresIn\uFF0C\u672A\u7ED9\u5B8C\u6574 JSON \u793A\u4F8B\uFF09\u2192 \u8054\u8C03\u6838\u5BF9",
+    "priority \u53EF\u9009\u503C\u53EA\u6838\u5BF9\u5230 middle\uFF08\u9ED8\u8BA4\uFF09\uFF1B\u679A\u4E3E\u503C\u8BF4\u660E\u9875\u672A\u53D6\u8BC1 \u2192 \u8054\u8C03\u6838\u5BF9",
+    "\u56DE\u8C03\u662F\u63A7\u5236\u53F0\u5168\u5C40\u5355\u70B9\u914D\u7F6E\uFF08\u4E0D\u80FD\u6309\u4EFB\u52A1\u533A\u5206\u76EE\u7684\u5730\uFF09\uFF1Bv1 \u53EA\u628A jobUuid \u843D\u5E93\uFF0C\u4E0D\u63A5\u6536\u56DE\u8C03"
+  ]
+};
+function configText(ctx, key) {
+  const value = ctx.config[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+function semanticValue(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function mappedParams(ctx) {
+  const raw = ctx.config[MAP_FIELD];
+  const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  return MAPPING_TARGETS3.map((target) => {
+    const custom = overrides[target.semantic];
+    const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+    return { name, value: semanticValue(ctx.record, target.semantic), type: "str" };
+  });
+}
+var adapter3 = {
+  descriptor: descriptor3,
+  /**
+   * 组装「启动应用运行」请求：必要字段 + accountName/分组二选一 + params[]。
+   * @param ctx - 投递上下文（config 含 baseUrl/robotUuid 等，secrets 含 AK/SK）。
+   * @returns POST job/start 请求。
+   * @throws 服务地址或应用 UUID 缺失时抛可读错误。
+   */
+  buildRequest(ctx) {
+    const baseUrl = configText(ctx, "baseUrl").replace(/\/+$/, "");
+    if (baseUrl === "") throw new Error("\u5F71\u5200 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
+    const robotUuid = configText(ctx, "robotUuid");
+    if (robotUuid === "") throw new Error("\u5F71\u5200 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u5E94\u7528 UUID");
+    const body = {
+      robotUuid,
+      // 幂等 uuid ≤36 位；用触发记录级 id 做一次创建防重（官方：重复请求只成功创建一次）。
+      idempotentUuid: ctx.idempotencyKey.slice(0, IDEMPOTENT_MAX),
+      params: mappedParams(ctx)
+    };
+    const group = configText(ctx, "robotClientGroupUuid");
+    const account = configText(ctx, "accountName");
+    if (group !== "") body["robotClientGroupUuid"] = group;
+    else if (account !== "") body["accountName"] = account;
+    const priority = configText(ctx, "priority");
+    if (priority !== "") body["priority"] = priority;
+    return {
+      method: "POST",
+      url: baseUrl + "/oapi/dispatch/v2/job/start",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      contentType: "application/json"
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/uipath.ts
+var MAPPING_TARGETS4 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var MAP_FIELD2 = "inputArgumentsMap";
+var INPUT_ARGUMENTS_MAX = 1e4;
+var patField = {
+  key: "pat",
+  label: "PAT",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u4E2A\u4EBA\u8BBF\u95EE\u4EE4\u724C\uFF0C\u9700\u8981 Jobs.Create \u6743\u9650\uFF1B\u4EC5\u672C\u5730\u7528\u6237\uFF0C\u76EE\u5F55/SAML \u7528\u6237\u8BF7\u7528 OAuth\u3002"
+};
+var clientIdField = {
+  key: "clientId",
+  label: "OAuth client_id",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u5916\u90E8\u5E94\u7528\uFF08\u673A\u5BC6\u5E94\u7528\uFF09\u7684 client_id\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
+};
+var clientSecretField = {
+  key: "clientSecret",
+  label: "OAuth client_secret",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u5916\u90E8\u5E94\u7528\uFF08\u673A\u5BC6\u5E94\u7528\uFF09\u7684 client_secret\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
+};
+var descriptor4 = {
+  id: "uipath",
+  name: "UiPath Orchestrator",
+  vendor: "UiPath\uFF08Orchestrator\uFF09",
+  version: "1.0.0",
+  summary: "\u7528 StartJobs \u542F\u52A8\u4F5C\u4E1A\uFF1BPAT \u6216 OAuth \u5916\u90E8\u5E94\u7528\u9274\u6743\uFF0C\u8FD4\u56DE Job.Key \u4F9B\u8F6E\u8BE2\u6838\u5BF9\u3002",
+  status: "stable",
+  docs: {
+    home: "https://docs.uipath.com/orchestrator/automation-cloud/latest/api-guide/jobs-requests",
+    triggerApi: "https://docs.uipath.com/orchestrator/automation-cloud/latest/api-guide/jobs-requests",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "Automation Cloud \xB7 latest\uFF08\u9875\u9762\u65E0\u6700\u540E\u66F4\u65B0\u65F6\u95F4\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: false,
+    completion: "callback",
+    idempotency: "none",
+    deployment: ["cloud", "onprem"]
+  },
+  fields: [
+    {
+      key: "deployment",
+      label: "\u90E8\u7F72\u5F62\u6001",
+      type: "select",
+      required: true,
+      defaultValue: "cloud",
+      options: [
+        { value: "cloud", label: "Automation Cloud" },
+        { value: "onprem", label: "Standalone\uFF08\u79C1\u6709\u5316\uFF09" }
+      ],
+      help: "Standalone \u7684 URL \u524D\u7F00\u5B98\u65B9\u672A\u7ED9\u539F\u6587\uFF1A\u8BF7\u628A\u670D\u52A1\u5730\u5740\u586B\u5230 Orchestrator \u6839\uFF0C\u8054\u8C03\u6838\u5BF9\u3002"
+    },
+    {
+      key: "baseUrl",
+      label: "\u670D\u52A1\u5730\u5740",
+      type: "text",
+      required: true,
+      defaultValue: "https://cloud.uipath.com",
+      pattern: "^https?://",
+      help: "Cloud \u586B https://cloud.uipath.com\uFF08\u6216 govcloud/dedicated \u533A\u57DF\u5730\u5740\uFF09\uFF1B\u79C1\u6709\u5316\u586B\u5B9E\u4F8B\u5730\u5740\u3002"
+    },
+    {
+      key: "organizationName",
+      label: "\u7EC4\u7EC7\u540D",
+      type: "text",
+      required: true,
+      example: "myorg",
+      help: "Cloud\uFF1A\u7EC4\u7EC7\uFF08organization\uFF09\u540D\uFF1B\u79C1\u6709\u5316\u82E5 URL \u65E0\u7EC4\u7EC7\u6BB5\u53EF\u7559\u7A7A\u4E32\uFF08\u8054\u8C03\u6838\u5BF9\uFF09\u3002"
+    },
+    {
+      key: "tenantName",
+      label: "\u79DF\u6237\u540D",
+      type: "text",
+      required: true,
+      example: "mytenant",
+      help: "Cloud\uFF1A\u79DF\u6237\uFF08tenant\uFF09\u540D\u3002"
+    },
+    {
+      key: "folderKey",
+      label: "\u6587\u4EF6\u5939 Key",
+      type: "text",
+      required: true,
+      example: "6ea73196-ca89-446c-81e1-5279bdd36dc2",
+      help: "\u6587\u4EF6\u5939 key\uFF08\u5B98\u65B9\uFF1A\u4E0D\u968F\u8BB8\u53EF\u8BA1\u5212\u53D8\u5316\uFF09\uFF1B\u4F5C\u4E3A X-UIPATH-FolderKey \u53D1\u9001\u3002"
+    },
+    {
+      key: "releaseKey",
+      label: "\u6D41\u7A0B ReleaseKey",
+      type: "text",
+      required: true,
+      example: "795cbab2-8008-4a54-b1cb-f9ff1ece139e",
+      summary: true,
+      help: "\u8981\u6267\u884C\u7684\u6D41\u7A0B\u7248\u672C ReleaseKey\uFF08Orchestrator \u6D41\u7A0B\u8BE6\u60C5\u91CC\u590D\u5236\uFF09\u3002"
+    },
+    {
+      key: "authMode",
+      label: "\u9274\u6743\u65B9\u5F0F",
+      type: "select",
+      required: true,
+      defaultValue: "pat",
+      options: [
+        { value: "pat", label: "PAT\uFF08\u4E2A\u4EBA\u8BBF\u95EE\u4EE4\u724C\uFF09" },
+        { value: "oauth", label: "OAuth \u5916\u90E8\u5E94\u7528" }
+      ],
+      help: "PAT \u4EC5\u9002\u7528\u4E8E\u672C\u5730\u7528\u6237\uFF1B\u76EE\u5F55/SAML \u7528\u6237\u8BF7\u7528 OAuth \u5916\u90E8\u5E94\u7528\u3002"
+    },
+    {
+      key: "scope",
+      label: "OAuth scope",
+      type: "text",
+      required: false,
+      defaultValue: "OR.Default",
+      advanced: true,
+      help: "OAuth \u4EE4\u724C scope\uFF0C\u9ED8\u8BA4 OR.Default\uFF08\u7EC6\u7C92\u5EA6\u6743\u9650\u5728\u79DF\u6237/\u6587\u4EF6\u5939\u7ED9\u5E94\u7528\u5206\u914D\u89D2\u8272\uFF09\u3002"
+    },
+    {
+      key: "strategy",
+      label: "\u5206\u914D\u7B56\u7565",
+      type: "select",
+      required: false,
+      defaultValue: "ModernJobsCount",
+      options: [
+        { value: "ModernJobsCount", label: "ModernJobsCount" },
+        { value: "All", label: "All\uFF08\u4EC5\u7ECF\u5178\u6587\u4EF6\u5939\uFF09" }
+      ],
+      advanced: true,
+      help: "\u5B98\u65B9\u793A\u4F8B\u53EA\u51FA\u73B0\u8FD9\u4E09\u4E2A\u503C\uFF1B\u300CAll\u300D\u4E0D\u9002\u7528\u4E8E\u65B0\u5F0F\u6587\u4EF6\u5939\uFF0C\u672C\u7248\u9ED8\u8BA4 ModernJobsCount\u3002"
+    },
+    {
+      key: "jobsCount",
+      label: "\u4F5C\u4E1A\u6570",
+      type: "number",
+      required: false,
+      defaultValue: 1,
+      advanced: true,
+      help: "\u4E0E ModernJobsCount \u540C\u7528\uFF08\u5B98\u65B9\u793A\u4F8B 1\uFF09\u3002"
+    },
+    {
+      key: "inputArgumentsMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: true,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u6620\u5C04\u6210 InputArguments \u7684 JSON \u5B57\u6BB5\u540D\uFF08\u952E\u540D\u987B\u4E0E UiPath \u6D41\u7A0B\u5165\u53C2\u4E00\u81F4\uFF09\u3002"
+    }
+  ],
+  auth: {
+    modes: [
+      {
+        strategy: "bearer",
+        when: { field: "authMode", equals: ["pat"] },
+        fields: [patField]
+      },
+      {
+        strategy: "token-exchange",
+        when: { field: "authMode", equals: ["oauth"] },
+        fields: [clientIdField, clientSecretField],
+        exchange: {
+          method: "POST",
+          url: "${config.baseUrl}/${config.organizationName}/identity_/connect/token",
+          contentType: "application/x-www-form-urlencoded",
+          body: {
+            grant_type: "client_credentials",
+            client_id: "${secret.clientId}",
+            client_secret: "${secret.clientSecret}",
+            scope: "${config.scope}"
+          },
+          tokenPath: "access_token",
+          expiresInPath: "expires_in",
+          headerPrefix: "Bearer "
+        }
+      }
+    ]
+  },
+  mapping: {
+    style: "jsonStringObject",
+    mapField: MAP_FIELD2,
+    targets: MAPPING_TARGETS4
+  },
+  request: {
+    method: "POST",
+    url: "${config.baseUrl}/${config.organizationName}/${config.tenantName}/orchestrator_/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs",
+    headers: {
+      "Content-Type": "application/json",
+      "X-UIPATH-FolderKey": "${config.folderKey}"
+    },
+    body: {
+      startInfo: {
+        ReleaseKey: "${config.releaseKey}",
+        Strategy: "${config.strategy}",
+        JobsCount: "${config.jobsCount}",
+        InputArguments: "${mapped}"
+      }
+    }
+  },
+  response: {
+    okHttpStatus: [200],
+    externalTaskIdPath: "value[0].Key",
+    messagePath: "value[0].State"
+  },
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: {
+    contentOutbound: true,
+    hosts: [
+      { kind: "suffix", value: "uipath.com" },
+      { kind: "suffix", value: "uipath.us" }
+    ],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "Orchestrator Webhook \u4E0D\u91CD\u8BD5/\u4E0D\u5B58\u50A8/\u5931\u8D25\u5373\u4E22\u3001\u5931\u8D25\u7194\u65AD 1 \u5C0F\u65F6\uFF1A\u5B8C\u6210\u72B6\u6001\u9700\u7528 Job.Key \u8F6E\u8BE2\u6838\u5BF9\uFF08v1 \u53EA\u843D\u5E93\uFF09",
+    "StartJobs \u5B98\u65B9\u9875\u6CA1\u6709\u5B57\u6BB5\u7EA7\u5FC5\u586B/\u7C7B\u578B/\u9ED8\u8BA4\u503C\u8868\uFF1B\u672C\u9002\u914D\u5668\u53EA\u7528\u5B98\u65B9\u793A\u4F8B\u53EF\u8BC1\u5B57\u6BB5\uFF0C\u4E0A\u7EBF\u524D\u9700\u6309\u5B9E\u4F8B Swagger \u590D\u6838",
+    "Cloud \u4E0E Standalone \u79C1\u6709\u5316\u7684 URL/\u79DF\u6237\u5934\u5DEE\u5F02\u5B98\u65B9\u672A\u7ED9\u539F\u6587\uFF1A\u9700\u5BA2\u6237\u5B9E\u4F8B\u8054\u8C03",
+    "PAT \u4E0D\u9002\u7528\u76EE\u5F55/SAML \u7528\u6237\uFF1B\u4F01\u4E1A\u5BA2\u6237\u5EFA\u8BAE OAuth \u5916\u90E8\u5E94\u7528",
+    "InputArguments JSON \u6587\u672C \u226410,000 \u5B57\u7B26\uFF1BJobs \u5217\u8868\u7AEF\u70B9\u6709\u9650\u6D41\uFF08\u5355\u4F5C\u4E1A\u7AEF\u70B9\u4E0D\u9650\uFF09"
+  ],
+  notes: [
+    "\u6587\u4EF6\u5939\u5934\u7528 X-UIPATH-FolderKey\uFF08\u800C\u975E X-UIPATH-OrganizationUnitId\uFF09\uFF1A\u540E\u8005\u8981\u6C42 Int64 FolderId\uFF0C\u672C\u4EA7\u54C1\u914D\u7F6E\u7684\u662F FolderKey\u3002",
+    "Standalone\uFF1AbaseUrl \u586B\u5230 Orchestrator \u6839\uFF08\u4E0D\u542B /odata\uFF09\uFF0CURL \u6309 /odata/Jobs/\u2026 \u62FC\u63A5\uFF1B\u8BE5\u5047\u8BBE\u5B98\u65B9\u672A\u7ED9\u539F\u6587\uFF0C\u9700\u8054\u8C03\u6838\u5BF9\u3002",
+    "strategy=All \u4E0D\u9002\u7528\u4E8E\u65B0\u5F0F\u6587\u4EF6\u5939\uFF1Bstrategy=Specific \u9700\u8981 RobotIds\uFF08\u672C\u7248\u672A\u63D0\u4F9B\u5B57\u6BB5\uFF09\uFF0C\u9ED8\u8BA4 ModernJobsCount\u3002"
+  ]
+};
+function configText2(ctx, key) {
+  const value = ctx.config[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+function semanticValue2(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function inputArguments(ctx) {
+  const raw = ctx.config[MAP_FIELD2];
+  const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const target of MAPPING_TARGETS4) {
+    const custom = overrides[target.semantic];
+    const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+    out[key] = semanticValue2(ctx.record, target.semantic).trim();
+  }
+  return out;
+}
+function startJobsUrl(config) {
+  const base = config.baseUrl.replace(/\/+$/, "");
+  const suffix = "/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs";
+  if (config.onprem) return base + suffix;
+  return base + "/" + config.org + "/" + config.tenant + "/orchestrator_" + suffix;
+}
+function pickJobKey(parsed) {
+  if (typeof parsed !== "object" || parsed === null) return {};
+  const value = parsed["value"];
+  const first = Array.isArray(value) ? value[0] : value;
+  if (typeof first !== "object" || first === null) return {};
+  const job = first;
+  const key = job["Key"];
+  const state3 = job["State"];
+  return {
+    key: typeof key === "string" ? key : void 0,
+    state: typeof state3 === "string" ? state3 : void 0
+  };
+}
+var adapter4 = {
+  descriptor: descriptor4,
+  /**
+   * 组装 StartJobs 请求：URL 按部署形态分支，InputArguments 为 JSON 文本字符串。
+   * @param ctx - 投递上下文。
+   * @returns POST StartJobs 请求。
+   * @throws 服务地址/组织/租户/流程 ReleaseKey 缺失时抛可读错误。
+   */
+  buildRequest(ctx) {
+    const baseUrl = configText2(ctx, "baseUrl");
+    if (baseUrl === "") throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
+    const onprem = configText2(ctx, "deployment") === "onprem";
+    const org = configText2(ctx, "organizationName");
+    const tenant = configText2(ctx, "tenantName");
+    const releaseKey = configText2(ctx, "releaseKey");
+    if (releaseKey === "") throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u6D41\u7A0B ReleaseKey");
+    if (!onprem && (org === "" || tenant === "")) {
+      throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1ACloud \u90E8\u7F72\u5FC5\u987B\u914D\u7F6E\u7EC4\u7EC7\u540D\u4E0E\u79DF\u6237\u540D");
+    }
+    const argumentsText = JSON.stringify(inputArguments(ctx));
+    if (argumentsText.length > INPUT_ARGUMENTS_MAX) {
+      throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1AInputArguments \u8D85\u8FC7 10000 \u5B57\u7B26\u4E0A\u9650");
+    }
+    const strategy = configText2(ctx, "strategy") !== "" ? configText2(ctx, "strategy") : "ModernJobsCount";
+    const rawCount = ctx.config["jobsCount"];
+    const parsedCount = typeof rawCount === "number" ? rawCount : Number(configText2(ctx, "jobsCount"));
+    const jobsCount = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 1;
+    const headers = { "Content-Type": "application/json" };
+    const folderKey = configText2(ctx, "folderKey");
+    if (folderKey !== "") headers["X-UIPATH-FolderKey"] = folderKey;
+    const body = {
+      startInfo: {
+        ReleaseKey: releaseKey,
+        Strategy: strategy,
+        JobsCount: jobsCount,
+        InputArguments: argumentsText
+      }
+    };
+    return {
+      method: "POST",
+      url: startJobsUrl({ baseUrl, org, tenant, onprem }),
+      headers,
+      body: JSON.stringify(body),
+      contentType: "application/json"
+    };
+  },
+  /**
+   * 解析 StartJobs 响应：HTTP 200 + `value[]` 数组里的 `Key`（作业键）。
+   * 数组/单对象都兼容；没有作业对象时按失败处理（避免把空响应当成功）。
+   */
+  parseResponse(res) {
+    const status = Number(res.status);
+    if (status !== 200) {
+      return {
+        ok: false,
+        retryable: status >= 500 || status === 429,
+        message: "UiPath \u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(status)
+      };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(res.bodyText);
+    } catch {
+      return { ok: false, retryable: false, message: "UiPath \u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON" };
+    }
+    const job = pickJobKey(parsed);
+    if (job.key === void 0) {
+      return { ok: false, retryable: false, message: "UiPath \u672A\u8FD4\u56DE\u4F5C\u4E1A\u5BF9\u8C61\uFF08\u7F3A\u5C11 value[0].Key\uFF09" };
+    }
+    return {
+      ok: true,
+      retryable: false,
+      externalTaskId: job.key,
+      message: job.state !== void 0 ? "UiPath \u4F5C\u4E1A\u5DF2\u521B\u5EFA\uFF08" + job.state + "\uFF09" : void 0
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/aliyun-rpa.ts
+import { createHmac, randomUUID as randomUUID5 } from "node:crypto";
+var SIGNATURE_METHOD = "HMAC-SHA1";
+var SIGNATURE_VERSION = "1.0";
+var API_VERSION = "20200430";
+var DEFAULT_TASK_PRIORITY = 50;
+var APP_PARAMS_MAX = 4e4;
+var MAPPING_TARGETS5 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var MAP_FIELD3 = "appParamsMap";
+var accessKeyIdField = {
+  key: "accessKeyId",
+  label: "AccessKeyId",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u4ECE RPA \u63A7\u5236\u53F0\u300C\u7CFB\u7EDF\u8BBE\u7F6E\u300D\u83B7\u53D6\u7684 AK\uFF08\u4E0D\u662F\u963F\u91CC\u4E91 RAM AccessKey\uFF09\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
+};
+var accessKeySecretField = {
+  key: "accessKeySecret",
+  label: "AccessKeySecret",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u4E0E AccessKeyId \u6210\u5BF9\uFF1B\u53EA\u7528\u4E8E\u672C\u5730\u7B7E\u540D\uFF0C\u4E0D\u53D1\u9001\u3002"
+};
+var descriptor5 = {
+  id: "aliyun-rpa",
+  name: "\u963F\u91CC\u4E91 RPA",
+  vendor: "\u963F\u91CC\u4E91 \u673A\u5668\u4EBA\u6D41\u7A0B\u81EA\u52A8\u5316\uFF08RPA\uFF0C\u539F\u7801\u6808\uFF09",
+  version: "1.0.0",
+  summary: "\u8C03\u7528\u963F\u91CC\u4E91 RPA OpenAPI \u521B\u5EFA\u4EFB\u52A1\uFF08\u670D\u52A1\u578B/\u672C\u5730\u578B\u4E24\u5957\u63A5\u53E3\uFF0CHMAC-SHA1 \u7B7E\u540D\uFF09\u3002\u5B9E\u9A8C\u6027\uFF1A\u7B7E\u540D\u4F4D\u7F6E\u5F85 POC\u3002",
+  status: "experimental",
+  docs: {
+    home: "https://help.aliyun.com/zh/rpa/developer-reference/",
+    triggerApi: "https://help.aliyun.com/zh/rpa/developer-reference/createtask",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "\u591A\u6570\u9875\u9762\u300C\u66F4\u65B0\u65F6\u95F4\u300D\u4E3A\u7A7A\uFF1B\u4EA7\u54C1\u7EBF v4\uFF08v3 \u5DF2\u4E8E 2024-12-31 \u505C\u6B62\u670D\u52A1\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: false,
+    completion: "callback",
+    idempotency: "vendor-key",
+    deployment: ["cloud", "onprem"]
+  },
+  fields: [
+    {
+      key: "apiFamily",
+      label: "\u63A5\u53E3\u65CF",
+      type: "select",
+      required: true,
+      defaultValue: "service",
+      options: [
+        { value: "service", label: "\u670D\u52A1\u578B\u673A\u5668\u4EBA\uFF08CreateTask\uFF0C\u53C2\u6570\u5927\u5199\uFF09" },
+        { value: "local", label: "\u672C\u5730\u578B\u673A\u5668\u4EBA\uFF08createServiceTask\uFF0C\u53C2\u6570\u5C0F\u5199\uFF09" }
+      ],
+      help: "\u4E24\u5957 API \u5927\u5C0F\u5199\u654F\u611F\u3001\u4E0D\u53EF\u6DF7\u7528\uFF1B\u670D\u52A1\u578B\u4EC5\u516C\u6709\u4E91\uFF08\u9700\u65E0\u5F71\u4E91\u7535\u8111\uFF09\u3002"
+    },
+    {
+      key: "baseUrl",
+      label: "\u670D\u52A1\u5730\u5740",
+      type: "text",
+      required: true,
+      defaultValue: "https://console-rpa.aliyun.com",
+      pattern: "^https?://",
+      help: "\u516C\u6709\u4E91\u56FA\u5B9A https://console-rpa.aliyun.com\uFF1B\u7EBF\u4E0B\u90E8\u7F72\u586B RPA \u63A7\u5236\u53F0\u5730\u5740\u3002"
+    },
+    {
+      key: "appId",
+      label: "\u5E94\u7528 ID",
+      type: "text",
+      required: true,
+      example: "2e8e34bf-0000-0000-0000-e1d0add3d95e",
+      summary: true,
+      help: "\u63A7\u5236\u53F0\u300C\u4F01\u4E1A\u5E94\u7528-\u4F01\u4E1A\u5E94\u7528\u5217\u8868\u300D\u67E5\u770B\u3002"
+    },
+    {
+      key: "appVersion",
+      label: "\u5E94\u7528\u7248\u672C",
+      type: "text",
+      required: true,
+      example: "1.0.0",
+      help: "\u586B\u5177\u4F53\u7248\u672C\u53F7\u6216 dynamic\uFF1B\u7559\u7A7A\u884C\u4E3A\u968F\u90E8\u7F72\u5F62\u6001/\u670D\u52A1\u7AEF\u7248\u672C\u6F02\u79FB\uFF08\u5B98\u65B9\u591A\u5904\u53E3\u5F84\u51B2\u7A81\uFF09\uFF0C\u672C\u7248\u5F3A\u5236\u586B\u3002"
+    },
+    {
+      key: "allocateMode",
+      label: "\u5206\u914D\u65B9\u5F0F",
+      type: "select",
+      required: false,
+      defaultValue: "auto",
+      options: [
+        { value: "auto", label: "auto\uFF08\u6309\u5206\u7EC4\u81EA\u52A8\u5206\u914D\uFF09" },
+        { value: "manu", label: "manu\uFF08\u624B\u52A8\u6307\u5B9A\u673A\u5668\u4EBA\uFF09" }
+      ],
+      advanced: true,
+      help: "\u5B98\u65B9\uFF1A\u7A7A=auto\uFF1B\u624B\u52A8\u6307\u5B9A\u65F6\u9700 AllocateMode=manu + RobotId\u3002"
+    },
+    {
+      key: "robotId",
+      label: "\u673A\u5668\u4EBA ID",
+      type: "text",
+      required: false,
+      advanced: true,
+      help: "\u670D\u52A1\u578B\uFF1ARobotId\uFF08\u914D\u5408 manu\uFF09\uFF1B\u672C\u5730\u578B\uFF1A\u673A\u5668\u4EBA ID\uFF08createServiceTask \u7684 clientId\uFF09\u3002"
+    },
+    {
+      key: "packId",
+      label: "\u673A\u5668\u4EBA\u5206\u7EC4 ID",
+      type: "text",
+      required: false,
+      advanced: true,
+      example: "bv2XPrDl",
+      help: "\u670D\u52A1\u578B\uFF1A\u914D\u5408 auto \u6307\u5B9A\u673A\u5668\u4EBA\u5206\u7EC4\uFF0C\u7A7A=\u9ED8\u8BA4\u5206\u7EC4\uFF1B\u672C\u5730\u578B\u4E0D\u4F7F\u7528\u3002"
+    },
+    {
+      key: "taskPriority",
+      label: "\u4EFB\u52A1\u4F18\u5148\u7EA7",
+      type: "number",
+      required: false,
+      defaultValue: DEFAULT_TASK_PRIORITY,
+      advanced: true,
+      help: "1\u2013100\uFF0C100 \u6700\u9AD8\uFF1B\u5B98\u65B9\u9ED8\u8BA4 50\u3002"
+    },
+    {
+      key: "callbackUrl",
+      label: "\u56DE\u8C03\u5730\u5740",
+      type: "text",
+      required: false,
+      advanced: true,
+      example: "https://example.com/rpa/callback?token=\u2026",
+      help: "\u53EF\u9009\u3002\u5B98\u65B9\u56DE\u8C03\u65E0\u7B7E\u540D\uFF0C\u5EFA\u8BAE https + \u968F\u673A token \u653E query\uFF1Bv1 \u53EA\u628A TaskId \u843D\u5E93\u3002"
+    },
+    {
+      key: "appParamsMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: true,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u6620\u5C04\u6210 AppParams \u7684 name/value \u6570\u7EC4\uFF08\u952E\u540D\u987B\u4E0E RPA \u5E94\u7528\u5165\u53C2\u540D\u4E00\u81F4\uFF09\u3002"
+    }
+  ],
+  auth: {
+    modes: [
+      {
+        strategy: "custom",
+        custom: "aliyun-rpc-hmac-sha1",
+        fields: [accessKeyIdField, accessKeySecretField]
+      }
+    ]
+  },
+  mapping: {
+    style: "nameValueArray",
+    mapField: MAP_FIELD3,
+    targets: MAPPING_TARGETS5
+  },
+  request: {
+    method: "POST",
+    url: "${config.baseUrl}/rpa/openapi/raas/task/CreateTask",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: {
+      AppId: "${config.appId}",
+      AppVersion: "${config.appVersion}",
+      AppParams: "${mapped}"
+    }
+  },
+  response: {
+    okHttpStatus: [200],
+    okPath: "code",
+    okValue: 0,
+    externalTaskIdPath: "data.TaskId",
+    messagePath: "msg"
+  },
+  retry: { maxAttempts: 2, retryOn: ["network", "http-5xx", "http-429"] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "exact", value: "console-rpa.aliyun.com" }],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "\u5B98\u65B9\u793A\u4F8B\u77DB\u76FE\uFF1ACreateTask \u8BF4 body \u4F20\u53C2\u4F46\u793A\u4F8B\u662F query \u4E32\uFF1BPython \u793A\u4F8B\u7B7E\u540D\u53C2\u6570\u653E body\u3001Java \u793A\u4F8B\u653E query \u2192 \u7B7E\u540D\u4F4D\u7F6E\u5FC5\u987B POC \u6838\u5BF9",
+    "\u56DE\u8C03\u65E0\u7B7E\u540D\uFF1Abody \u53EA\u6709 taskId/taskStatus/taskResult\uFF0C\u53EF\u88AB\u4F2A\u9020/\u91CD\u653E\uFF08\u9700\u968F\u673A\u8DEF\u5F84 + token + \u4E8C\u6B21\u67E5\u8BE2\uFF09",
+    "\u670D\u52A1\u578B/\u672C\u5730\u578B\u662F\u4E24\u5957\u5927\u5C0F\u5199\u654F\u611F\u63A5\u53E3\uFF0C\u53C2\u6570\u4E0D\u53EF\u6DF7\u7528\uFF1BAppVersion \u9ED8\u8BA4\u8BED\u4E49\u591A\u5904\u51B2\u7A81",
+    "\u6210\u672C\u4E0E\u5F00\u901A\u95E8\u69DB\u9AD8\uFF08\u673A\u5668\u4EBA\u6388\u6743 5,000 \u5143/\u5E74\u8D77 + \u7F16\u8F91\u5668\u6388\u6743\uFF1B\u670D\u52A1\u578B\u9700\u65E0\u5F71\u4E91\u7535\u8111 + \u4E3B\u8D26\u53F7\u6388\u6743\uFF09",
+    "AK \u6765\u6E90\u662F RPA \u63A7\u5236\u53F0\u300C\u7CFB\u7EDF\u8BBE\u7F6E\u300D\uFF0C\u4E0D\u662F\u963F\u91CC\u4E91 RAM AccessKey\uFF08\u4E0E RAM/STS \u5173\u7CFB\u5B98\u65B9\u672A\u8BF4\u660E\uFF09"
+  ],
+  notes: [
+    "\u5B98\u65B9\u672A\u516C\u5F00\uFF1A\u5168\u5C40\u9650\u6D41 QPS\u3001\u672C\u5730\u578B\u56DE\u8C03\u534F\u8BAE\u7EC6\u8282\uFF08\u8D85\u65F6/\u91CD\u8BD5/payload\uFF09\u3002\u672C\u9002\u914D\u5668\u4E0D\u627F\u8BFA\u8FD9\u4E24\u9879\u3002",
+    "\u7B7E\u540D\u5B9E\u73B0\u6309\u5B98\u65B9 HTTP \u8C03\u7528\u8BF4\u660E\uFF08HMAC-SHA1 / SignatureVersion=1.0 / Version=20200430\uFF09\u628A\u516C\u5171\u53C2\u6570\u4E0E\u4E1A\u52A1\u53C2\u6570\u90FD\u653E form body\uFF1B\u5B98\u65B9\u793A\u4F8B body/query \u7B7E\u540D\u4F4D\u7F6E\u77DB\u76FE\uFF0C\u5F85\u8054\u8C03\uFF08POC\uFF09\u6838\u5BF9\u3002",
+    "\u670D\u52A1\u578B CreateTask \u652F\u6301 X-Idempotent-Request-ID\uFF08\u226450 \u5B57\u7B26\u3001180 \u79D2\u7A97\u53E3\u3001\u975E\u5F3A\u5236\uFF09\uFF1A\u672C\u9002\u914D\u5668\u7528\u89E6\u53D1\u8BB0\u5F55\u7EA7 id \u6CE8\u5165\u3002",
+    "\u56DE\u8C03\u65E0\u7B7E\u540D \u2192 v1 \u53EA\u843D\u5E93 externalTaskId\uFF08TaskId\uFF09\uFF0C\u4E0D\u63A5\u6536\u56DE\u8C03\uFF1B\u72B6\u6001\u67E5\u8BE2\u7559\u5F85\u540E\u7EED\uFF08ListTasks/ListTaskDetails\uFF09\u3002"
+  ]
+};
+function percentEncode(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) => {
+    return "%" + char.charCodeAt(0).toString(16).toUpperCase();
+  });
+}
+function canonicalizedQuery(params) {
+  return Object.keys(params).sort().map((key) => percentEncode(key) + "=" + percentEncode(params[key] ?? "")).join("&");
+}
+function aliyunRpcSign(params, accessKeySecret, method = "POST") {
+  const canonical = canonicalizedQuery(params);
+  const stringToSign = method.toUpperCase() + "&" + percentEncode("/") + "&" + percentEncode(canonical);
+  return createHmac("sha1", accessKeySecret + "&").update(stringToSign, "utf8").digest("base64");
+}
+function encodeForm(params) {
+  return Object.keys(params).map((key) => percentEncode(key) + "=" + percentEncode(params[key] ?? "")).join("&");
+}
+function configText3(ctx, key) {
+  const value = ctx.config[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+function configNumber(ctx, key, fallback) {
+  const value = ctx.config[key];
+  const parsed = typeof value === "number" ? value : Number(configText3(ctx, key));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function semanticValue3(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function appParams(ctx) {
+  const raw = ctx.config[MAP_FIELD3];
+  const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  return MAPPING_TARGETS5.map((target) => {
+    const custom = overrides[target.semantic];
+    const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+    return { name, value: semanticValue3(ctx.record, target.semantic) };
+  });
+}
+function businessParams(ctx, family) {
+  const appId = configText3(ctx, "appId");
+  if (appId === "") throw new Error("\u963F\u91CC\u4E91 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u5E94\u7528 ID");
+  const appVersion = configText3(ctx, "appVersion");
+  const paramsText = JSON.stringify(appParams(ctx));
+  if (paramsText.length > APP_PARAMS_MAX) {
+    throw new Error("\u963F\u91CC\u4E91 RPA \u6295\u9012\u5931\u8D25\uFF1AAppParams \u8D85\u8FC7 40KB \u4E0A\u9650");
+  }
+  const callbackUrl = configText3(ctx, "callbackUrl");
+  const robotId = configText3(ctx, "robotId");
+  const packId = configText3(ctx, "packId");
+  if (family === "service") {
+    const out = { AppId: appId, AppParams: paramsText };
+    const allocateMode = configText3(ctx, "allocateMode") !== "" ? configText3(ctx, "allocateMode") : "auto";
+    out["AllocateMode"] = allocateMode;
+    if (allocateMode === "manu" && robotId !== "") out["RobotId"] = robotId;
+    if (allocateMode !== "manu" && packId !== "") out["PackId"] = packId;
+    out["TaskPriority"] = String(configNumber(ctx, "taskPriority", DEFAULT_TASK_PRIORITY));
+    if (appVersion !== "") out["AppVersion"] = appVersion;
+    if (callbackUrl !== "") out["CallbackUrl"] = callbackUrl;
+    return out;
+  }
+  const local = { appId, appParams: paramsText };
+  if (robotId !== "") local["clientId"] = robotId;
+  if (appVersion !== "") local["appVersion"] = appVersion;
+  if (callbackUrl !== "") local["callbackUrl"] = callbackUrl;
+  return local;
+}
+function triggerPath(family) {
+  return family === "service" ? "/rpa/openapi/raas/task/CreateTask" : "/rpa/openapi/task/createServiceTask";
+}
+function apiFamilyOf(ctx) {
+  return configText3(ctx, "apiFamily") === "local" ? "local" : "service";
+}
+var adapter5 = {
+  descriptor: descriptor5,
+  /**
+   * 组装 CreateTask / createServiceTask 请求：业务参数先放 form body（未签名），
+   * 公共参数与 Signature 由 {@link signRequest} 在出网前补齐。
+   * @param ctx - 投递上下文。
+   * @returns POST 请求（body 为 form-urlencoded）。
+   * @throws 应用 ID / 服务地址缺失或 AppParams 超限时抛可读错误。
+   */
+  buildRequest(ctx) {
+    const baseUrl = configText3(ctx, "baseUrl") !== "" ? configText3(ctx, "baseUrl") : "https://console-rpa.aliyun.com";
+    const family = apiFamilyOf(ctx);
+    const params = businessParams(ctx, family);
+    const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    if (family === "service") {
+      headers["X-Idempotent-Request-ID"] = ctx.idempotencyKey.slice(0, 50);
+    }
+    return {
+      method: "POST",
+      url: baseUrl.replace(/\/+$/, "") + triggerPath(family),
+      headers,
+      body: encodeForm(params),
+      contentType: "application/x-www-form-urlencoded"
+    };
+  },
+  /**
+   * RPC 签名（custom 鉴权）：解析 body 里的业务参数 → 补公共参数 → 计算 Signature →
+   * 把所有参数（含 Signature）重新编码进 form body。官方 Java 示例是 query、Python 示例是 body；
+   * 本实现按「body 传参」的官方文字说明，需 POC 核对（见 notes/risks）。
+   * @param req - 已组装的请求（原地改写 body）。
+   * @param ctx - 投递上下文（secrets 里取 AK/SK）。
+   * @throws 凭据缺失时抛可读错误（避免把无签名请求发出去）。
+   */
+  signRequest(req, ctx) {
+    const accessKeyId = ctx.secrets["accessKeyId"] ?? "";
+    const accessKeySecret = ctx.secrets["accessKeySecret"] ?? "";
+    if (accessKeyId === "" || accessKeySecret === "") {
+      throw new Error("\u963F\u91CC\u4E91 RPA \u6295\u9012\u5931\u8D25\uFF1A\u7F3A\u5C11 AccessKeyId / AccessKeySecret");
+    }
+    const params = {};
+    for (const [key, value] of new URLSearchParams(req.body)) params[key] = value;
+    params["AccessKeyId"] = accessKeyId;
+    params["SignatureMethod"] = SIGNATURE_METHOD;
+    params["SignatureVersion"] = SIGNATURE_VERSION;
+    params["SignatureNonce"] = randomUUID5().replace(/-/g, "");
+    params["Timestamp"] = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+    params["Version"] = API_VERSION;
+    params["Format"] = "json";
+    params["Signature"] = aliyunRpcSign(params, accessKeySecret, req.method);
+    req.body = encodeForm(params);
+  },
+  /** 解析响应：`code=0` 成功，任务 id 取 `data.TaskId`（服务型）/`data.taskId`（本地型）。 */
+  parseResponse(res) {
+    const status = Number(res.status);
+    if (status !== 200) {
+      return {
+        ok: false,
+        retryable: status >= 500 || status === 429,
+        message: "\u963F\u91CC\u4E91 RPA \u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(status)
+      };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(res.bodyText);
+    } catch {
+      return { ok: false, retryable: false, message: "\u963F\u91CC\u4E91 RPA \u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON" };
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      return { ok: false, retryable: false, message: "\u963F\u91CC\u4E91 RPA \u54CD\u5E94\u683C\u5F0F\u4E0D\u6B63\u786E" };
+    }
+    const root2 = parsed;
+    const code2 = root2["code"];
+    const okCode = code2 === 0 || code2 === "0" || code2 === void 0;
+    if (!okCode) {
+      const msg = root2["msg"];
+      return {
+        ok: false,
+        retryable: false,
+        message: "\u963F\u91CC\u4E91 RPA \u89E6\u53D1\u5931\u8D25\uFF1A" + (typeof msg === "string" ? msg : "code=" + String(code2))
+      };
+    }
+    const data = root2["data"];
+    const record = typeof data === "object" && data !== null ? data : {};
+    const taskId = record["TaskId"] ?? record["taskId"];
+    return {
+      ok: true,
+      retryable: false,
+      externalTaskId: typeof taskId === "string" ? taskId : typeof taskId === "number" ? String(taskId) : void 0,
+      message: typeof root2["msg"] === "string" ? root2["msg"] : void 0
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/laiye.ts
+var CREATE_TASK_TOOL = "create_task";
+var MAPPING_TARGETS6 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var MAP_FIELD4 = "parameterMap";
+var tokenField = {
+  key: "token",
+  label: "\u4E2A\u4EBA\u8BBF\u95EE\u4EE4\u724C",
+  type: "password",
+  required: true,
+  secret: true,
+  example: "rk-{CompanyOpenId}-{randomString}",
+  help: "\u673A\u5668\u4EBA\u6307\u6325\u5B98\u300C\u4E2A\u4EBA\u4EE4\u724C\u300D\u751F\u6210\uFF1BBearer \u8BA4\u8BC1\uFF0C\u91CD\u7F6E\u4EE4\u724C\u4F1A\u8BA9\u65E7\u4EE4\u724C\u7ACB\u5373\u5931\u6548\u3002"
+};
+var descriptor6 = {
+  id: "laiye",
+  name: "\u6765\u4E5F RPA",
+  vendor: "\u6765\u4E5F\u79D1\u6280\uFF08Laiye\uFF09\xB7 \u673A\u5668\u4EBA\u6307\u6325\u5B98 Automation Commander",
+  version: "1.0.0",
+  summary: "\u901A\u8FC7\u673A\u5668\u4EBA\u6307\u6325\u5B98 MCP \u670D\u52A1\uFF08tools/call create_task\uFF09\u521B\u5EFA\u4EFB\u52A1\uFF1B\u5B9E\u9A8C\u6027\uFF1A\u5B98\u65B9\u672A\u7ED9 JSON-RPC \u62A5\u6587\u793A\u4F8B\u3002",
+  status: "experimental",
+  docs: {
+    home: "https://documents.laiye.com/automation-commander/docs/MCP",
+    triggerApi: "https://documents.laiye.com/automation-commander/docs/MCP",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "V6.7\uFF08\u6587\u6863\u7AD9\u9875\u5934\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: false,
+    completion: "poll",
+    idempotency: "none",
+    deployment: ["onprem"]
+  },
+  fields: [
+    {
+      key: "baseUrl",
+      label: "Commander \u57FA\u5740",
+      type: "text",
+      required: true,
+      example: "https://rpa.example.com:8182",
+      pattern: "^https?://",
+      help: "\u673A\u5668\u4EBA\u6307\u6325\u5B98/\u7528\u6237\u4E2D\u5FC3\u5730\u5740\uFF08\u79C1\u6709\u5316\u90E8\u7F72\uFF09\uFF1B\u5B98\u65B9\u793A\u4F8B\u57DF\u540D\u5E26 8182 \u7AEF\u53E3\u3002"
+    },
+    {
+      key: "flowName",
+      label: "\u6D41\u7A0B\u540D",
+      type: "text",
+      required: true,
+      example: "finance_report_flow",
+      summary: true,
+      help: "\u8981\u6267\u884C\u7684 RPA \u6D41\u7A0B\u540D\u79F0\uFF08create_task.flowName\uFF09\u3002"
+    },
+    {
+      key: "assignType",
+      label: "\u5206\u914D\u65B9\u5F0F",
+      type: "select",
+      required: true,
+      defaultValue: "automatic",
+      options: [
+        { value: "automatic", label: "automatic\uFF08\u81EA\u52A8\u5206\u914D\uFF09" },
+        { value: "designate", label: "designate\uFF08\u6307\u5B9A\u673A\u5668\u4EBA\uFF09" }
+      ],
+      help: "\u5B98\u65B9\uFF1Aautomatic / designate\uFF1Bdesignate \u65F6\u586B\u673A\u5668\u4EBA\u540D\uFF0Cautomatic \u53EF\u586B\u673A\u5668\u4EBA\u7EC4\u540D\u3002"
+    },
+    {
+      key: "workerName",
+      label: "\u673A\u5668\u4EBA\u540D",
+      type: "text",
+      required: false,
+      help: '\u6307\u5B9A\u5206\u914D\u65F6\u7684\u673A\u5668\u4EBA\u540D\u79F0\uFF08automatic \u65F6\u7559\u7A7A\u6216\u586B "0"\uFF09\u3002'
+    },
+    {
+      key: "workerGroupName",
+      label: "\u673A\u5668\u4EBA\u7EC4\u540D",
+      type: "text",
+      required: false,
+      example: "\u8D22\u52A1\u673A\u5668\u4EBA\u7EC4",
+      help: '\u81EA\u52A8\u5206\u914D\u65F6\u7684\u673A\u5668\u4EBA\u7EC4\u540D\u79F0\uFF08designate \u65F6\u7559\u7A7A\u6216\u586B "0"\uFF09\u3002'
+    },
+    {
+      key: "departmentName",
+      label: "\u90E8\u95E8\u540D",
+      type: "text",
+      required: false,
+      advanced: true,
+      example: "Laiye Tech",
+      help: "\u7528\u6237\u5C5E\u4E8E\u591A\u4E2A\u90E8\u95E8\u65F6\u5FC5\u586B\u3002"
+    },
+    {
+      key: "priority",
+      label: "\u4F18\u5148\u7EA7",
+      type: "select",
+      required: false,
+      defaultValue: "middle",
+      options: [
+        { value: "high", label: "high" },
+        { value: "middle", label: "middle" },
+        { value: "low", label: "low" }
+      ],
+      advanced: true,
+      help: "\u5B98\u65B9\uFF1Ahigh/middle/low\uFF0C\u9ED8\u8BA4 middle\u3002"
+    },
+    {
+      key: "parameterMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: true,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u6620\u5C04\u6210 create_task.parameters[]\uFF08parameterName/parameterType/parameterValue\uFF0C\u7C7B\u578B\u4EC5 string/number/boolean\uFF09\u3002"
+    }
+  ],
+  auth: {
+    modes: [
+      {
+        strategy: "bearer",
+        fields: [tokenField]
+      }
+    ]
+  },
+  mapping: {
+    style: "object",
+    mapField: MAP_FIELD4,
+    targets: MAPPING_TARGETS6
+  },
+  request: {
+    method: "POST",
+    url: "${config.baseUrl}/automation/mcp",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      jsonrpc: "2.0",
+      id: "${invocation.idempotencyKey}",
+      method: "tools/call",
+      params: {
+        name: CREATE_TASK_TOOL,
+        arguments: { flowName: "${config.flowName}", assignType: "${config.assignType}" }
+      }
+    }
+  },
+  response: {
+    okHttpStatus: [200]
+  },
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "suffix", value: "laiye.com" }],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "OpenAPI \u521B\u5EFA\u4EFB\u52A1\u63A5\u53E3\u6587\u6863\u4E0D\u516C\u5F00\uFF08\u5B98\u65B9\u8981\u6C42\u8054\u7CFB\u9500\u552E\uFF09\uFF1A\u672C\u9002\u914D\u5668\u53EA\u8D70\u516C\u5F00\u7684 MCP \u901A\u9053",
+    "\u56DE\u8C03\u5951\u7EA6\u7F3A\u5931\uFF08\u4E8B\u4EF6\u63A8\u9001\u5730\u5740\u7684 payload/\u7B7E\u540D/\u91CD\u8BD5\u5747\u672A\u516C\u5F00\uFF09\uFF1A\u5B8C\u6210\u72B6\u6001\u53EA\u80FD\u9760 query_task_result \u8F6E\u8BE2",
+    "\u5B98\u65B9\u672A\u7ED9 create_task \u7684 HTTP/JSON-RPC \u62A5\u6587\u6837\u4F8B\uFF1A\u5C01\u88C5\u683C\u5F0F\u5F85\u8054\u8C03\u6838\u5BF9",
+    "MCP \u54CD\u5E94\u9700\u4E8C\u6B21/\u4E09\u6B21 JSON \u89E3\u6790\uFF08result \u662F\u5B57\u7B26\u4E32\uFF0Creturn.data \u53EF\u80FD\u4ECD\u662F\u5B57\u7B26\u4E32\uFF09",
+    "\u65E0\u5E42\u7B49\u952E\uFF1A\u81EA\u52A8\u91CD\u8BD5\u53EF\u80FD\u91CD\u590D\u521B\u5EFA\u4EFB\u52A1\uFF08maxAttempts=1\uFF09\uFF1B\u7248\u672C\u5DEE\u5F02\u5927\uFF086.0\u21926.7\uFF09"
+  ],
+  notes: [
+    "\u5B98\u65B9\u672A\u7ED9 HTTP \u62A5\u6587\u793A\u4F8B\uFF08\u53EA\u7ED9\u5DE5\u5177\u540D/\u53C2\u6570\u8868/\u54CD\u5E94\u793A\u4F8B\uFF09\u2192 JSON-RPC \u5C01\u88C5\u5F85\u8054\u8C03\u6838\u5BF9\u3002",
+    "Bearer \u4E2A\u4EBA\u4EE4\u724C\u6709\u6548\u671F\u5B98\u65B9\u672A\u516C\u5F00\uFF1B\u53EA\u80FD\u7ED1\u4E2A\u4EBA\u8EAB\u4EFD\uFF0C\u4EBA\u5458\u79BB\u804C/\u91CD\u7F6E\u4EE4\u724C\u4F1A\u8BA9\u96C6\u6210\u4E2D\u65AD\u3002",
+    "\u54CD\u5E94\u89E3\u6790\u6309\u300Cresult \u5B57\u7B26\u4E32 \u2192 return.code/data.taskIds\u300D\u5B9E\u73B0\uFF0C\u5E76\u517C\u5BB9 MCP content[].text \u5F62\u6001\u3002",
+    "v1 \u53EA\u843D\u5E93 taskIds[0]\uFF08externalTaskId\uFF09\uFF0C\u4E0D\u5B9E\u73B0 query_task_result \u8F6E\u8BE2\u3002"
+  ]
+};
+function configText4(ctx, key) {
+  const value = ctx.config[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+function semanticValue4(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function taskParameters(ctx) {
+  const raw = ctx.config[MAP_FIELD4];
+  const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  return MAPPING_TARGETS6.map((target) => {
+    const custom = overrides[target.semantic];
+    const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+    return {
+      parameterName: name,
+      // 微信侧三个值都是字符串；官方 create_task 的 parameterType 支持 string/number/boolean。
+      parameterType: "string",
+      parameterValue: semanticValue4(ctx.record, target.semantic)
+    };
+  });
+}
+function parseMaybeJson(value) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return void 0;
+  }
+}
+function mcpBusinessBody(outer) {
+  const parsed = parseMaybeJson(outer);
+  if (typeof parsed !== "object" || parsed === null) return parsed;
+  const root2 = parsed;
+  if (root2["error"] !== void 0) return root2;
+  let payload = root2["result"];
+  if (typeof payload === "object" && payload !== null) {
+    const content = payload["content"];
+    if (Array.isArray(content)) {
+      const first = content[0];
+      const text = typeof first === "object" && first !== null ? first["text"] : void 0;
+      if (typeof text === "string") payload = text;
+    }
+  }
+  const inner = parseMaybeJson(payload);
+  if (typeof inner !== "object" || inner === null) return inner;
+  const record = inner;
+  const business = record["return"] ?? record;
+  return parseMaybeJson(business) ?? business;
+}
+var adapter6 = {
+  descriptor: descriptor6,
+  /**
+   * 组装 MCP JSON-RPC 请求（`tools/call` → `create_task`）。
+   * @param ctx - 投递上下文。
+   * @returns POST `/automation/mcp` 请求。
+   * @throws 服务地址 / 流程名缺失时抛可读错误。
+   */
+  buildRequest(ctx) {
+    const baseUrl = configText4(ctx, "baseUrl").replace(/\/+$/, "");
+    if (baseUrl === "") throw new Error("\u6765\u4E5F RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E Commander \u57FA\u5740");
+    const flowName = configText4(ctx, "flowName");
+    if (flowName === "") throw new Error("\u6765\u4E5F RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u6D41\u7A0B\u540D");
+    const args = {
+      flowName,
+      assignType: configText4(ctx, "assignType") !== "" ? configText4(ctx, "assignType") : "automatic",
+      parameters: taskParameters(ctx)
+    };
+    const workerName = configText4(ctx, "workerName");
+    if (workerName !== "") args["workerName"] = workerName;
+    const workerGroupName = configText4(ctx, "workerGroupName");
+    if (workerGroupName !== "") args["workerGroupName"] = workerGroupName;
+    const departmentName = configText4(ctx, "departmentName");
+    if (departmentName !== "") args["departmentName"] = departmentName;
+    const priority = configText4(ctx, "priority");
+    if (priority !== "") args["priority"] = priority;
+    const body = {
+      jsonrpc: "2.0",
+      id: ctx.idempotencyKey,
+      method: "tools/call",
+      params: { name: CREATE_TASK_TOOL, arguments: args }
+    };
+    return {
+      method: "POST",
+      url: baseUrl + "/automation/mcp",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      contentType: "application/json"
+    };
+  },
+  /** 解析 MCP 响应：二次 JSON 解析后看 `return.code`（'0'=成功）与 `return.data.taskIds[]`。 */
+  parseResponse(res) {
+    const status = Number(res.status);
+    if (status !== 200) {
+      return {
+        ok: false,
+        retryable: status >= 500 || status === 429,
+        message: "\u6765\u4E5F RPA \u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(status)
+      };
+    }
+    let outer;
+    try {
+      outer = JSON.parse(res.bodyText);
+    } catch {
+      return { ok: false, retryable: false, message: "\u6765\u4E5F MCP \u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON" };
+    }
+    const body = mcpBusinessBody(outer);
+    if (typeof body !== "object" || body === null) {
+      return { ok: false, retryable: false, message: "\u6765\u4E5F MCP \u54CD\u5E94\u683C\u5F0F\u4E0D\u6B63\u786E\uFF08\u65E0\u6CD5\u89E3\u6790\u4E1A\u52A1\u6B63\u6587\uFF09" };
+    }
+    const business = body;
+    const rpcError = business["error"];
+    if (typeof rpcError === "object" && rpcError !== null) {
+      const message2 = rpcError["message"];
+      return {
+        ok: false,
+        retryable: false,
+        message: "\u6765\u4E5F MCP \u8C03\u7528\u5931\u8D25\uFF1A" + (typeof message2 === "string" ? message2 : "\u672A\u77E5\u9519\u8BEF")
+      };
+    }
+    const code2 = business["code"];
+    if (code2 !== void 0 && code2 !== 0 && code2 !== "0") {
+      const message2 = business["message"];
+      return {
+        ok: false,
+        retryable: false,
+        message: "\u6765\u4E5F\u521B\u5EFA\u4EFB\u52A1\u5931\u8D25\uFF1A" + (typeof message2 === "string" ? message2 : "code=" + String(code2))
+      };
+    }
+    const data = business["data"];
+    const record = typeof data === "object" && data !== null ? data : {};
+    const taskIds = record["taskIds"];
+    const first = Array.isArray(taskIds) ? taskIds[0] : void 0;
+    return {
+      ok: true,
+      retryable: false,
+      externalTaskId: typeof first === "number" || typeof first === "string" ? String(first) : void 0,
+      message: typeof business["message"] === "string" ? business["message"] : void 0
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/vendors/shizai.ts
+var OPERATION_START = 1;
+var MAPPING_TARGETS7 = [
+  { semantic: "room", defaultKey: "room_name" },
+  { semantic: "content", defaultKey: "content" },
+  { semantic: "at", defaultKey: "at_name" }
+];
+var MAP_FIELD5 = "inputParamMap";
+var appKeyField = {
+  key: "appKey",
+  label: "AppKey",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u63A7\u5236\u4E2D\u67A2\u300C\u57FA\u7840\u914D\u7F6E\u300D\u9875\u9762\u83B7\u53D6\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
+};
+var appSecretField = {
+  key: "appSecret",
+  label: "AppSecret",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u4E0E AppKey \u6210\u5BF9\uFF1B\u53EA\u5B58\u672C\u673A\uFF0C\u6295\u9012\u65F6\u653E\u8FDB\u4F60\u586B\u7684 Secret header\u3002"
+};
+var descriptor7 = {
+  id: "shizai",
+  name: "\u5B9E\u5728\u667A\u80FD RPA",
+  vendor: "\u5B9E\u5728\u667A\u80FD\uFF08Intelligent RPA\uFF09",
+  version: "1.0.0",
+  summary: "\u5BF9\u9884\u5EFA\u4EFB\u52A1\u89E6\u53D1\u6267\u884C\uFF08openAPI/v2/job/operation\uFF09\uFF1B\u5B9E\u9A8C\u6027\uFF1A\u9274\u6743 header \u540D\u5B98\u65B9\u672A\u516C\u5F00\uFF0C\u9700\u8054\u8C03\u3002",
+  status: "experimental",
+  docs: {
+    home: "https://rpa-college.ai-indeed.com/doc/group_1687.html",
+    triggerApi: "https://rpa-college.ai-indeed.com/doc/2477.html",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "\u6838\u5FC3\u63A5\u53E3\u9875\u300C\u53D1\u520A\u65E5\u671F 2023/08/22\u300D\uFF1B\u7AD9\u70B9\u65E0\u66F4\u65B0\u8BB0\u5F55"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: false,
+    completion: "none",
+    idempotency: "none",
+    deployment: ["cloud", "onprem"]
+  },
+  fields: [
+    {
+      key: "baseUrl",
+      label: "\u670D\u52A1\u5730\u5740",
+      type: "text",
+      required: true,
+      defaultValue: "https://z-commander-api.ai-indeed.com",
+      pattern: "^https?://",
+      help: "SaaS \u56FA\u5B9A https://z-commander-api.ai-indeed.com\uFF1B\u79C1\u6709\u5316\u586B\u79C1\u6709\u5730\u5740\u3002"
+    },
+    {
+      key: "keyHeader",
+      label: "AppKey header \u540D",
+      type: "text",
+      required: false,
+      defaultValue: "",
+      advanced: true,
+      help: "\u5B98\u65B9\u672A\u516C\u5F00\u9274\u6743 header \u5B57\u6BB5\u540D\uFF08\u53EA\u5199\u300C\u968F header \u4F20\u9012\u300D\uFF09\uFF1A\u8054\u8C03\u786E\u8BA4\u540E\u628A AppKey \u7684 header \u540D\u586B\u8FD9\u91CC\u3002"
+    },
+    {
+      key: "secretHeader",
+      label: "AppSecret header \u540D",
+      type: "text",
+      required: false,
+      defaultValue: "",
+      advanced: true,
+      help: "\u540C\u4E0A\uFF1A\u8054\u8C03\u786E\u8BA4\u540E\u628A AppSecret \u7684 header \u540D\u586B\u8FD9\u91CC\u3002"
+    },
+    {
+      key: "jobUuid",
+      label: "\u4EFB\u52A1 UUID",
+      type: "text",
+      required: true,
+      example: "UADACDSKKAKSDLLAL",
+      summary: true,
+      help: "\u63A7\u5236\u5668\u91CC\u9884\u5EFA\u4EFB\u52A1\u7684 UUID\uFF08\u4EFB\u52A1\u5165\u53C2\u987B\u4E0E\u6D41\u7A0B\u300C\u5F15\u7528\u53C2\u6570/\u6A21\u677F\u300D\u4E00\u81F4\uFF09\u3002"
+    },
+    {
+      key: "priority",
+      label: "\u4F18\u5148\u7EA7",
+      type: "number",
+      required: false,
+      defaultValue: 2,
+      advanced: true,
+      help: "\u9884\u5EFA\u4EFB\u52A1\u4F18\u5148\u7EA7\uFF081 \u9AD8 / 2 \u4E2D / 3 \u4F4E\uFF09\u3002\u5B98\u65B9 v2/job/operation \u8BF7\u6C42\u4F53\u672A\u542B\u8BE5\u5B57\u6BB5\uFF0C\u672C\u7248\u4E0D\u53D1\u9001\uFF0C\u8BF7\u5728\u63A7\u5236\u5668\u8BBE\u7F6E\u3002"
+    },
+    {
+      key: "inputParamMap",
+      label: "\u53C2\u6570\u6620\u5C04",
+      type: "map",
+      required: true,
+      defaultValue: { room: "room_name", content: "content", at: "at_name" },
+      help: "\u6620\u5C04\u6210 inputParam \u7684 JSON \u952E\uFF08\u952E\u540D\u5FC5\u987B\u4E0E\u6D41\u7A0B\u5F15\u7528\u53C2\u6570\u4E00\u81F4\uFF0C\u5B98\u65B9\u65E0\u81EA\u7531 JSON \u627F\u8BFA\uFF09\u3002"
+    }
+  ],
+  auth: {
+    modes: [
+      {
+        strategy: "custom",
+        custom: "shizai-appkey-headers",
+        fields: [appKeyField, appSecretField]
+      }
+    ]
+  },
+  mapping: {
+    style: "object",
+    mapField: MAP_FIELD5,
+    targets: MAPPING_TARGETS7
+  },
+  request: {
+    method: "POST",
+    url: "${config.baseUrl}/openAPI/v2/job/operation",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      jobUuid: "${config.jobUuid}",
+      operation: OPERATION_START,
+      inputParam: "${mapped}"
+    }
+  },
+  response: {
+    okHttpStatus: [200],
+    okPath: "code",
+    okValue: 0,
+    externalTaskIdPath: "data.works[0].workUuid",
+    messagePath: "msg"
+  },
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "exact", value: "z-commander-api.ai-indeed.com" }],
+    allowCustomBaseUrl: true,
+    privacySection: "G3"
+  },
+  risks: [
+    "\u9274\u6743 header \u5B57\u6BB5\u540D\u5B98\u65B9\u672A\u516C\u5F00\uFF08blocker\uFF09\uFF1AkeyHeader/secretHeader \u5FC5\u987B\u8054\u8C03\u786E\u8BA4\u540E\u586B\u5199\uFF0C\u5426\u5219\u8BF7\u6C42\u65E0\u6CD5\u901A\u8FC7\u9274\u6743",
+    "\u65E0\u56DE\u8C03\u3001\u65E0\u5E42\u7B49\u952E\uFF1A\u8D85\u65F6\u91CD\u8BD5\u4F1A\u91CD\u590D\u6267\u884C RPA \u2192 \u672C\u9002\u914D\u5668\u7981\u6B62\u81EA\u52A8\u91CD\u8BD5\uFF08maxAttempts=1\uFF09",
+    "inputParam \u53D7\u6D41\u7A0B\u300C\u5F15\u7528\u53C2\u6570/\u6A21\u677F\u300D\u7EA6\u675F\uFF08\u9519\u8BEF\u7801\uFF1A\u4EFB\u52A1\u53C2\u6570\u4E0D\u5339\u914D / \u5F15\u7528\u7C7B\u578B\u9700\u4F20\u5F15\u7528\u53C2\u6570\uFF09",
+    "v2/job/operation \u9700\u63A7\u5236\u5668 \u22651.8.0\uFF1B\u6587\u6863\u8F83\u65E7\uFF082023/08/22 \u53D1\u520A\uFF09"
+  ],
+  notes: [
+    "\u5B98\u65B9\u672A\u516C\u5F00\uFF1A\u9274\u6743 header \u540D\u3001\u9650\u6D41 QPS\u3001\u56DE\u8C03\uFF08\u53EA\u6709\u7AD9\u5185\u6D88\u606F\uFF09\u3002\u72B6\u6001\u67E5\u8BE2\u9700 work-execute/list / work-list \u8F6E\u8BE2\uFF08v1 \u4E0D\u505A\uFF09\u3002",
+    "priority \u5B57\u6BB5\u662F\u9884\u5EFA\u4EFB\u52A1\u5C5E\u6027\uFF1B\u5B98\u65B9 v2/job/operation \u8BF7\u6C42\u4F53\u53EA\u6709 jobUuid/operation/inputParam \u2192 \u672C\u9002\u914D\u5668\u4E0D\u53D1\u9001 priority\uFF0C\u5F85\u8054\u8C03\u786E\u8BA4\u3002",
+    "operation=1\uFF08\u7ACB\u5373/\u518D\u6B21\u6267\u884C\uFF09\u4E3A\u5B98\u65B9\u53D6\u503C\uFF1B\u505C\u6B62/\u5220\u9664\u5206\u522B\u7528 2/3/4\uFF0C\u672C\u9002\u914D\u5668\u53EA\u7528 1\u3002"
+  ]
+};
+function configText5(ctx, key) {
+  const value = ctx.config[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+function semanticValue5(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function inputParam(ctx) {
+  const raw = ctx.config[MAP_FIELD5];
+  const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const target of MAPPING_TARGETS7) {
+    const custom = overrides[target.semantic];
+    const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+    out[key] = semanticValue5(ctx.record, target.semantic);
+  }
+  return out;
+}
+function pickWorkUuid(data) {
+  const works = data["works"];
+  if (Array.isArray(works)) {
+    const first = works[0];
+    if (typeof first === "object" && first !== null) {
+      const workUuid = first["workUuid"];
+      if (typeof workUuid === "string" && workUuid !== "") return workUuid;
+    }
+  }
+  const jobUuid = data["jobUuid"];
+  return typeof jobUuid === "string" && jobUuid !== "" ? jobUuid : void 0;
+}
+var adapter7 = {
+  descriptor: descriptor7,
+  /**
+   * 组装「预建任务触发」请求：`{jobUuid, operation:1, inputParam}`。
+   * @param ctx - 投递上下文。
+   * @returns POST `/openAPI/v2/job/operation` 请求。
+   * @throws 服务地址 / 任务 UUID 缺失时抛可读错误。
+   */
+  buildRequest(ctx) {
+    const baseUrl = configText5(ctx, "baseUrl").replace(/\/+$/, "");
+    if (baseUrl === "") throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
+    const jobUuid = configText5(ctx, "jobUuid");
+    if (jobUuid === "") throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u4EFB\u52A1 UUID");
+    const body = {
+      jobUuid,
+      operation: OPERATION_START,
+      inputParam: inputParam(ctx)
+    };
+    return {
+      method: "POST",
+      url: baseUrl + "/openAPI/v2/job/operation",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      contentType: "application/json"
+    };
+  },
+  /**
+   * 实在的「明文 Key/Secret」鉴权：官方只写「随 header 传递」、未给 header 名。
+   * 这里按用户配置的 header 名注入；两个名字都必须由联调确认后填写（不猜、不伪造）。
+   * @param req - 已组装的请求（原地改写 headers）。
+   * @param ctx - 投递上下文（secrets 里取 appKey/appSecret）。
+   * @throws 任一 header 名或凭据缺失时抛可读错误（避免发出无鉴权请求）。
+   */
+  signRequest(req, ctx) {
+    const keyHeader = configText5(ctx, "keyHeader");
+    const secretHeader = configText5(ctx, "secretHeader");
+    const appKey = ctx.secrets["appKey"] ?? "";
+    const appSecret = ctx.secrets["appSecret"] ?? "";
+    if (keyHeader === "" || secretHeader === "") {
+      throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u672A\u914D\u7F6E\u9274\u6743 header \u540D\uFF08\u5B98\u65B9\u672A\u516C\u5F00\uFF0C\u9700\u8054\u8C03\u786E\u8BA4\u540E\u586B\u5199\uFF09");
+    }
+    if (appKey === "" || appSecret === "") {
+      throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u7F3A\u5C11 AppKey / AppSecret");
+    }
+    req.headers[keyHeader] = appKey;
+    req.headers[secretHeader] = appSecret;
+  },
+  /** 解析响应：`code=0` 成功；运行记录 id 取 `data.works[0].workUuid`。 */
+  parseResponse(res) {
+    const status = Number(res.status);
+    if (status !== 200) {
+      return {
+        ok: false,
+        retryable: status >= 500 || status === 429,
+        message: "\u5B9E\u5728\u667A\u80FD RPA \u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(status)
+      };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(res.bodyText);
+    } catch {
+      return { ok: false, retryable: false, message: "\u5B9E\u5728\u667A\u80FD RPA \u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON" };
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      return { ok: false, retryable: false, message: "\u5B9E\u5728\u667A\u80FD RPA \u54CD\u5E94\u683C\u5F0F\u4E0D\u6B63\u786E" };
+    }
+    const root2 = parsed;
+    const code2 = root2["code"];
+    if (code2 !== 0 && code2 !== "0") {
+      const msg = root2["msg"];
+      return {
+        ok: false,
+        retryable: false,
+        message: "\u5B9E\u5728\u667A\u80FD RPA \u89E6\u53D1\u5931\u8D25\uFF1A" + (typeof msg === "string" ? msg : "code=" + String(code2))
+      };
+    }
+    const data = root2["data"];
+    const record = typeof data === "object" && data !== null ? data : {};
+    return {
+      ok: true,
+      retryable: false,
+      externalTaskId: pickWorkUuid(record),
+      message: typeof root2["msg"] === "string" ? root2["msg"] : void 0
+    };
+  }
+};
+
+// src/backend/wechat-data/src/query/rpa/registry.ts
+var RPA_VENDORS = [
+  adapter,
+  adapter2,
+  adapter3,
+  adapter4,
+  adapter5,
+  adapter6,
+  adapter7
+];
+var RPA_VENDOR_MAP = new Map(
+  RPA_VENDORS.map((adapter8) => [adapter8.descriptor.id, adapter8])
+);
+var RPA_REGISTRY_VERSION = "2026-10-21";
+function findVendor(id) {
+  if (typeof id !== "string" || id === "") return void 0;
+  return RPA_VENDOR_MAP.get(id);
+}
+function listVendorDescriptors() {
+  return RPA_VENDORS.map((adapter8) => JSON.parse(JSON.stringify(adapter8.descriptor)));
+}
+
+// src/backend/wechat-data/src/query/rpa/template.ts
+var SEMANTIC_LABELS = {
+  room: "\u4F1A\u8BDD\u540D",
+  content: "\u89E6\u53D1\u6587\u672C",
+  at: "\u89E6\u53D1\u5BF9\u8C61"
+};
+var URL_FIELD_MAX = 2048;
+var WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/;
+var INLINE_PLACEHOLDER = /\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}/g;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function safeRegExp(pattern) {
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return null;
+  }
+}
+function configFieldList(descriptor8) {
+  return descriptor8.fields.filter((field) => field.secret !== true);
+}
+function secretFieldList(descriptor8) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (field) => {
+    if (field.secret !== true || seen.has(field.key)) return;
+    seen.add(field.key);
+    out.push(field);
+  };
+  for (const field of descriptor8.fields) add(field);
+  for (const mode of descriptor8.auth.modes) {
+    for (const field of mode.fields) add(field);
+  }
+  return out;
+}
+function parseConfigJson(raw) {
+  const text = typeof raw === "string" ? raw : "";
+  if (text === "") return {};
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  return normalizeConfigInput(value);
+}
+function normalizeConfigInput(raw) {
+  if (!isRecord(raw)) return {};
+  const out = {};
+  for (const [key, item] of Object.entries(raw)) {
+    const sanitized = sanitizeConfigValue(item);
+    if (sanitized !== void 0) out[key] = sanitized;
+  }
+  return out;
+}
+function sanitizeConfigValue(value) {
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
+  if (!isRecord(value)) return void 0;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") out[key] = item;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function parseSecretJson(raw) {
+  const text = typeof raw === "string" ? raw : "";
+  if (text === "") return {};
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!isRecord(value)) return {};
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string" && item !== "") out[key] = item;
+  }
+  return out;
+}
+function secretSetOf(secrets) {
+  const out = {};
+  for (const [key, value] of Object.entries(secrets)) {
+    if (value !== "") out[key] = true;
+  }
+  return out;
+}
+function defaultMapValue(descriptor8) {
+  const out = {};
+  for (const target of descriptor8.mapping.targets) out[target.semantic] = target.defaultKey;
+  return out;
+}
+function normalizeMapValue(descriptor8, raw) {
+  const out = defaultMapValue(descriptor8);
+  if (!isRecord(raw)) return out;
+  for (const target of descriptor8.mapping.targets) {
+    const item = raw[target.semantic];
+    if (typeof item === "string" && item.trim() !== "") out[target.semantic] = item.trim();
+  }
+  return out;
+}
+function defaultConfigFor(descriptor8) {
+  const out = {};
+  for (const field of configFieldList(descriptor8)) {
+    if (field.type === "map") {
+      out[field.key] = normalizeMapValue(descriptor8, field.defaultValue);
+      continue;
+    }
+    if (field.defaultValue !== void 0) out[field.key] = field.defaultValue;
+  }
+  return out;
+}
+function applySecretInput(descriptor8, saved, input) {
+  const secrets = {};
+  for (const field of secretFieldList(descriptor8)) {
+    const value = saved[field.key];
+    if (value !== void 0 && value !== "") secrets[field.key] = value;
+  }
+  const errors = [];
+  if (input !== void 0) {
+    if (!isRecord(input)) {
+      errors.push("\u51ED\u636E\u914D\u7F6E\u683C\u5F0F\u4E0D\u6B63\u786E");
+    } else {
+      applySecretOverrides(descriptor8, secrets, input, errors);
+    }
+  }
+  return { secrets, set: secretSetOf(secrets), errors };
+}
+function applySecretOverrides(descriptor8, secrets, input, errors) {
+  for (const field of secretFieldList(descriptor8)) {
+    if (!(field.key in input)) continue;
+    const raw = input[field.key];
+    if (typeof raw !== "string") {
+      errors.push(field.label + " \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+      continue;
+    }
+    const value = raw.trim();
+    if (value === "") {
+      delete secrets[field.key];
+      continue;
+    }
+    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
+    if (pattern !== null && !pattern.test(value)) {
+      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
+      continue;
+    }
+    secrets[field.key] = value;
+  }
+}
+function validateVendorConfig(descriptor8, config) {
+  const out = defaultConfigFor(descriptor8);
+  const errors = [];
+  const raw = isRecord(config) ? config : {};
+  for (const field of configFieldList(descriptor8)) {
+    const provided = raw[field.key];
+    if (provided === void 0) continue;
+    const value = validateFieldValue(descriptor8, field, provided, errors);
+    if (value !== void 0) out[field.key] = value;
+  }
+  return { config: out, errors };
+}
+function validateFieldValue(descriptor8, field, raw, errors) {
+  if (field.type === "map") return normalizeMapValue(descriptor8, raw);
+  if (field.type === "number") return validateNumberField(field, raw, errors);
+  if (field.type === "boolean") return validateBooleanField(field, raw, errors);
+  if (field.type === "select") return validateSelectField(field, raw, errors);
+  return validateTextField(field, raw, errors);
+}
+function validateNumberField(field, raw, errors) {
+  const value = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(value)) {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6570\u5B57");
+    return void 0;
+  }
+  return value;
+}
+function validateBooleanField(field, raw, errors) {
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  errors.push(field.label + " \u5FC5\u987B\u662F\u5E03\u5C14\u503C");
+  return void 0;
+}
+function validateSelectField(field, raw, errors) {
+  if (typeof raw !== "string") {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
+    return void 0;
+  }
+  const value = raw.trim();
+  if (value === "") return "";
+  const options = field.options ?? [];
+  if (!options.some((option) => option.value === value)) {
+    errors.push(field.label + " \u4E0D\u662F\u53EF\u9009\u503C");
+    return void 0;
+  }
+  return value;
+}
+function validateTextField(field, raw, errors) {
+  if (typeof raw !== "string") {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
+    return void 0;
+  }
+  const value = raw.trim();
+  if (value !== "") {
+    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
+    if (pattern !== null && !pattern.test(value)) {
+      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
+      return void 0;
+    }
+  }
+  if (field.key === "url" || field.key === "baseUrl") return validateAddressField(field, value, errors);
+  return value;
+}
+function validateAddressField(field, value, errors) {
+  if (value === "") return "";
+  if (field.key === "url" && value.length > URL_FIELD_MAX) {
+    errors.push("\u56DE\u8C03\u5730\u5740\u8FC7\u957F\uFF08\u6700\u591A " + String(URL_FIELD_MAX) + " \u4E2A\u5B57\u7B26\uFF09");
+    return "";
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    errors.push(addressErrorText(field));
+    return "";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" || parsed.hostname === "") {
+    errors.push(addressErrorText(field));
+    return "";
+  }
+  return value;
+}
+function addressErrorText(field) {
+  if (field.key === "url") return "\u56DE\u8C03\u5730\u5740\u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
+  return field.label + " \u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
+}
+function missingReadyFields(descriptor8, config, secretSet) {
+  const merged = { ...defaultConfigFor(descriptor8), ...config };
+  const missing = [];
+  for (const field of configFieldList(descriptor8)) {
+    if (!field.required) continue;
+    if (isConfigFieldMissing(field, merged[field.key])) missing.push(field.label);
+  }
+  for (const field of secretFieldList(descriptor8)) {
+    if (field.required && secretSet[field.key] !== true) missing.push(field.label);
+  }
+  return missing;
+}
+function isConfigFieldMissing(field, value) {
+  if (value === void 0) return true;
+  if (field.type === "boolean") return false;
+  if (field.type === "map") {
+    if (!isRecord(value)) return true;
+    return Object.keys(value).length === 0;
+  }
+  return String(value).trim() === "";
+}
+function migrateLegacyConfig(method, legacy) {
+  const callbackUrl = typeof legacy.callbackUrl === "string" ? legacy.callbackUrl.trim() : "";
+  const flowId = typeof legacy.bazhuayuFlowId === "string" ? legacy.bazhuayuFlowId.trim() : "";
+  if (method === "webhook" && callbackUrl !== "") return { url: callbackUrl };
+  if (method === "bazhuayu" && flowId !== "") return { flowId };
+  return {};
+}
+function migrateLegacySecrets(method, apiKey) {
+  const text = typeof apiKey === "string" ? apiKey.trim() : "";
+  if (method !== "bazhuayu" || text === "") return {};
+  return { apiKey: text };
+}
+function legacyColumnsFor(method, config, secrets) {
+  const url = configValueText(config["url"]);
+  const flowId = configValueText(config["flowId"]);
+  const apiKey = secrets["apiKey"] ?? "";
+  return {
+    callbackUrl: method === "webhook" ? url : "",
+    bazhuayuFlowId: method === "bazhuayu" ? flowId : "",
+    bazhuayuApiKey: method === "bazhuayu" ? apiKey : ""
+  };
+}
+function configValueText(value) {
+  return typeof value === "string" ? value : "";
+}
+function normalizeTriggerMethod(raw, fallback = "webhook") {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (text !== "") return text;
+  return fallback;
+}
+function readJsonPath(root2, path) {
+  const trimmed = path.trim();
+  if (trimmed === "") return root2;
+  const segments = trimmed.replace(/\[(\d+)\]/g, ".$1").split(".").filter((segment) => segment !== "");
+  let current = root2;
+  for (const segment of segments) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index)) return void 0;
+      current = current[index];
+      continue;
+    }
+    if (!isRecord(current)) return void 0;
+    current = current[segment];
+    if (current === void 0) return void 0;
+  }
+  return current;
+}
+function renderTemplate(template, roots) {
+  if (typeof template === "string") return renderString(template, roots);
+  if (Array.isArray(template)) return template.map((item) => renderTemplate(item, roots));
+  if (!isRecord(template)) return template;
+  const out = {};
+  for (const [key, value] of Object.entries(template)) out[key] = renderTemplate(value, roots);
+  return out;
+}
+function renderString(template, roots) {
+  const whole = WHOLE_PLACEHOLDER.exec(template);
+  if (whole !== null && whole[1] !== void 0) {
+    const value = resolvePlaceholder(whole[1], roots);
+    return value === void 0 ? template : value;
+  }
+  return template.replace(INLINE_PLACEHOLDER, (match, expr) => {
+    if (placeholderRoot(expr) === "auth") return match;
+    const value = resolvePlaceholder(expr, roots);
+    if (value === void 0) return match;
+    if (typeof value === "object" && value !== null) {
+      throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u53EA\u80FD\u6574\u503C\u66FF\u6362\uFF1A${" + expr + "}");
+    }
+    return String(value);
+  });
+}
+function placeholderRoot(expr) {
+  const index = expr.indexOf(".");
+  return index === -1 ? expr : expr.slice(0, index);
+}
+var MAPPED_STYLE_KEYS = /* @__PURE__ */ new Set([
+  "object",
+  "nameValueArray",
+  "nameValueTypeArray",
+  "jsonStringObject",
+  "formParams"
+]);
+function resolvePlaceholder(expr, roots) {
+  const root2 = placeholderRoot(expr);
+  if (root2 === "auth") return void 0;
+  const container = roots[root2];
+  if (container === void 0) throw new Error("\u672A\u77E5\u5360\u4F4D\u7B26\uFF1A${" + expr + "}");
+  const rest = expr.slice(root2.length + 1);
+  if (root2 === "mapped" && rest !== "" && MAPPED_STYLE_KEYS.has(rest)) return container;
+  const value = rest === "" || expr === root2 ? container : readJsonPath(container, rest);
+  if (value === void 0) throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u7F3A\u5C11\u503C\uFF1A${" + expr + "}");
+  return value;
+}
+function mappingKeys(descriptor8, config) {
+  const raw = config[descriptor8.mapping.mapField];
+  const overrides = isRecord(raw) ? raw : {};
+  const out = {};
+  for (const target of descriptor8.mapping.targets) {
+    const custom = overrides[target.semantic];
+    out[target.semantic] = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+  }
+  return out;
+}
+function semanticValue6(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function formatMapped(entries2, style) {
+  if (style === "object") {
+    const out = {};
+    for (const entry of entries2) out[entry.name] = entry.value;
+    return out;
+  }
+  if (style === "nameValueArray") {
+    return entries2.map((entry) => ({ name: entry.name, value: entry.value }));
+  }
+  if (style === "nameValueTypeArray") {
+    return entries2.map((entry) => ({ name: entry.name, value: entry.value, type: "str" }));
+  }
+  if (style === "formParams") {
+    return entries2.map((entry) => encodeURIComponent(entry.name) + "=" + encodeURIComponent(entry.value)).join("&");
+  }
+  const object = {};
+  for (const entry of entries2) object[entry.name] = entry.value;
+  return JSON.stringify(object);
+}
+function resolveMapped(descriptor8, config, record) {
+  const keys = mappingKeys(descriptor8, config);
+  const entries2 = [];
+  for (const target of descriptor8.mapping.targets) {
+    const value = semanticValue6(record, target.semantic).trim();
+    if (value === "" && target.semantic !== "content") {
+      throw new Error("\u7F3A\u5C11\u6620\u5C04\u503C\uFF1A" + SEMANTIC_LABELS[target.semantic]);
+    }
+    entries2.push({ name: keys[target.semantic], value });
+  }
+  return formatMapped(entries2, descriptor8.mapping.style);
+}
+function renderRequest(descriptor8, ctx) {
+  const config = { ...defaultConfigFor(descriptor8), ...ctx.config };
+  const roots = {
+    config,
+    secret: ctx.secrets,
+    record: ctx.record,
+    invocation: {
+      taskId: ctx.taskId,
+      recordId: ctx.recordId,
+      idempotencyKey: ctx.idempotencyKey
+    },
+    mapped: resolveMapped(descriptor8, config, ctx.record)
+  };
+  const url = renderTemplate(descriptor8.request.url, roots);
+  if (typeof url !== "string" || url.trim() === "") {
+    throw new Error(descriptor8.name + " \u7684\u8BF7\u6C42\u5730\u5740\u6A21\u677F\u4E3A\u7A7A");
+  }
+  const headers = {};
+  for (const [key, value] of Object.entries(descriptor8.request.headers ?? {})) {
+    const rendered = renderTemplate(value, roots);
+    headers[key] = typeof rendered === "string" ? rendered : String(rendered);
+  }
+  const renderedBody = renderTemplate(descriptor8.request.body, roots);
+  const contentType = descriptor8.request.contentType ?? findHeaderValue(headers, "content-type") ?? "application/json";
+  return {
+    method: descriptor8.request.method,
+    url: url.trim(),
+    headers,
+    body: typeof renderedBody === "string" ? renderedBody : JSON.stringify(renderedBody ?? {}),
+    contentType
+  };
+}
+function findHeaderValue(headers, name) {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return void 0;
+}
+
 // src/backend/wechat-data/src/query/task-center-scan.ts
 var SCAN_PAGE_SIZE = 200;
 var SCAN_MAX_PAGES = 5;
 var TRIGGER_TEXT_MAX = 4e3;
+function downstreamReady(task) {
+  const adapter8 = findVendor(task.triggerMethod);
+  if (adapter8 === void 0) return false;
+  return missingReadyFields(adapter8.descriptor, task.triggerConfig, task.triggerSecretSet).length === 0;
+}
 function isTargetMessage(msg, task, selfUsername) {
   if (task.chatType === "private") return msg.isSender === 0;
   const target = task.targetUsername;
@@ -9588,19 +11854,19 @@ function scanTaskTriggers(decryptedDir, opts) {
         try {
           scanOneTask(db, decryptedDir, task, taskCellNum(row["last_scan_seq"]), selfUsername, result);
         } catch (e) {
-          pushScanError(errors, "\u4EFB\u52A1\u300C" + task.name + "\u300D\u626B\u63CF\u5931\u8D25\uFF1A" + errorText2(e));
+          pushScanError(errors, "\u4EFB\u52A1\u300C" + task.name + "\u300D\u626B\u63CF\u5931\u8D25\uFF1A" + errorText3(e));
         }
       }
     });
   } catch (e) {
     result.ok = false;
-    result.error = "\u4EFB\u52A1\u5E93\u8BFB\u53D6\u5931\u8D25\uFF1A" + errorText2(e);
+    result.error = "\u4EFB\u52A1\u5E93\u8BFB\u53D6\u5931\u8D25\uFF1A" + errorText3(e);
     return result;
   }
   if (errors.length > 0) result.errors = errors;
   return result;
 }
-function errorText2(e) {
+function errorText3(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -9624,8 +11890,7 @@ function scanOneTask(db, decryptedDir, task, lastScanSeq, selfUsername, result) 
       const match = matchTrigger(msg, task.keywords);
       if (match === null) continue;
       const images = cachedImages ??= collectTriggerImages(decryptedDir, task, selfUsername, task.photoLimit);
-      const downstreamReady = task.triggerMethod === "bazhuayu" ? task.bazhuayuFlowId !== "" && task.bazhuayuApiKeySet : task.callbackUrl !== "";
-      const callbackStatus = downstreamReady ? "pending" : "skipped";
+      const callbackStatus = downstreamReady(task) ? "pending" : "skipped";
       const info = db.prepare(`INSERT OR IGNORE INTO task_triggers
         (task_id, task_name, chat_username, chat_name, target_username, target_name, keyword, text, images,
          message_local_id, message_sort_seq, triggered_at, callback_status)
@@ -9664,15 +11929,297 @@ function scanOneTask(db, decryptedDir, task, lastScanSeq, selfUsername, result) 
   }
 }
 
+// src/backend/wechat-data/src/query/rpa/auth.ts
+import { createHash as createHash5 } from "node:crypto";
+var TOKEN_CACHE = /* @__PURE__ */ new Map();
+var DEFAULT_TOKEN_TTL_SECONDS = 3600;
+var TOKEN_EXPIRY_MARGIN_SECONDS = 60;
+var TOKEN_MIN_TTL_SECONDS = 30;
+async function applyAuth(adapter8, req, ctx, deps2, cache = TOKEN_CACHE) {
+  const modes = adapter8.descriptor.auth.modes;
+  if (modes.length === 0) return req;
+  const mode = selectAuthMode(modes, ctx.config);
+  const name = adapter8.descriptor.name;
+  if (mode === void 0) {
+    throw new Error("\u672A\u5339\u914D\u5230 " + name + " \u7684\u9274\u6743\u6A21\u5F0F\uFF0C\u8BF7\u68C0\u67E5\u89E6\u53D1\u65B9\u5F0F\u914D\u7F6E");
+  }
+  if (mode.strategy === "custom") return applyCustom(adapter8, req, ctx);
+  if (mode.strategy === "header") return applyHeaderSecrets(req, mode, ctx, name);
+  if (mode.strategy === "token-exchange") {
+    const token = await resolveToken(adapter8, mode, ctx, deps2, cache);
+    return withToken(req, token, mode.exchange?.headerPrefix ?? "Bearer ");
+  }
+  return withToken(req, bearerToken(mode, ctx, name), "Bearer ");
+}
+function selectAuthMode(modes, config) {
+  for (const mode of modes) {
+    if (mode.when === void 0) return mode;
+    const current = configText6(config[mode.when.field]);
+    if (mode.when.equals.includes(current)) return mode;
+  }
+  return void 0;
+}
+function configText6(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function applyCustom(adapter8, req, ctx) {
+  if (typeof adapter8.signRequest !== "function") {
+    throw new Error(adapter8.descriptor.name + " \u58F0\u660E\u4E86\u81EA\u5B9A\u4E49\u7B7E\u540D\uFF0C\u4F46\u9002\u914D\u5668\u6CA1\u6709\u5B9E\u73B0 signRequest");
+  }
+  const out = { ...req, headers: { ...req.headers } };
+  adapter8.signRequest(out, ctx);
+  return out;
+}
+function applyHeaderSecrets(req, mode, ctx, vendorName) {
+  const headers = { ...req.headers };
+  for (const field of mode.fields) {
+    const value = ctx.secrets[field.key] ?? "";
+    if (value === "") throw new Error("\u7F3A\u5C11\u51ED\u636E\uFF1A" + vendorName + " \u7684 " + field.label);
+    headers[field.key] = value;
+  }
+  return { ...req, headers };
+}
+function bearerToken(mode, ctx, vendorName) {
+  const field = mode.fields[0];
+  if (field === void 0) throw new Error(vendorName + " \u7684 bearer \u9274\u6743\u6CA1\u6709\u58F0\u660E\u51ED\u636E\u5B57\u6BB5");
+  const token = ctx.secrets[field.key] ?? "";
+  if (token === "") throw new Error("\u7F3A\u5C11\u51ED\u636E\uFF1A" + vendorName + " \u7684 " + field.label);
+  return token;
+}
+function withToken(req, token, prefix) {
+  const headers = {};
+  let replaced = false;
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value.includes("${auth.token}")) {
+      headers[key] = value.split("${auth.token}").join(token);
+      replaced = true;
+    } else {
+      headers[key] = value;
+    }
+  }
+  if (!replaced) headers["Authorization"] = prefix + token;
+  return { ...req, headers };
+}
+async function resolveToken(adapter8, mode, ctx, deps2, cache) {
+  const exchange = mode.exchange;
+  const name = adapter8.descriptor.name;
+  if (exchange === void 0) throw new Error(name + " \u7F3A\u5C11\u6362 token \u8BF7\u6C42\u58F0\u660E");
+  const cacheKey2 = tokenCacheKey(adapter8.descriptor, ctx);
+  const cached = cache.get(cacheKey2);
+  if (cached !== void 0 && cached.expiresAt > Date.now()) return cached.token;
+  const response = await deps2.send(buildExchangeRequest(name, exchange, ctx));
+  const token = parseTokenResponse(name, exchange, response);
+  cache.set(cacheKey2, {
+    token: token.token,
+    expiresAt: Date.now() + token.ttlSeconds * 1e3
+  });
+  return token.token;
+}
+function tokenCacheKey(descriptor8, ctx) {
+  const parts = Object.keys(ctx.secrets).sort().map((key) => key + "=" + (ctx.secrets[key] ?? ""));
+  const fingerprint = createHash5("sha256").update(parts.join("\n"), "utf8").digest("hex").slice(0, 16);
+  return descriptor8.id + "|" + configText6(ctx.config["baseUrl"]) + "|" + fingerprint;
+}
+function buildExchangeRequest(vendorName, exchange, ctx) {
+  const roots = {
+    config: ctx.config,
+    secret: ctx.secrets,
+    record: ctx.record,
+    invocation: { taskId: ctx.taskId, recordId: ctx.recordId, idempotencyKey: ctx.idempotencyKey }
+  };
+  const renderedUrl = renderTemplate(exchange.url, roots);
+  if (typeof renderedUrl !== "string" || renderedUrl.trim() === "") {
+    throw new Error(vendorName + " \u7684\u6362 token \u5730\u5740\u6A21\u677F\u4E3A\u7A7A");
+  }
+  let url;
+  try {
+    url = new URL(renderedUrl);
+  } catch {
+    throw new Error(vendorName + " \u7684\u6362 token \u5730\u5740\u4E0D\u662F\u5408\u6CD5 URL");
+  }
+  for (const [key, value] of Object.entries(exchange.query ?? {})) {
+    url.searchParams.set(key, String(renderTemplate(value, roots)));
+  }
+  const headers = {};
+  const contentType = exchange.contentType ?? "application/json";
+  let body = "";
+  if (exchange.body !== void 0) {
+    body = encodeExchangeBody(renderTemplate(exchange.body, roots), contentType);
+    headers["content-type"] = contentType;
+  }
+  return { method: exchange.method, url: url.toString(), headers, body, contentType };
+}
+function encodeExchangeBody(rendered, contentType) {
+  if (typeof rendered === "string") return rendered;
+  if (/application\/x-www-form-urlencoded/i.test(contentType) && isRecord2(rendered)) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(rendered)) params.set(key, value === null || value === void 0 ? "" : String(value));
+    return params.toString();
+  }
+  return JSON.stringify(rendered);
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseTokenResponse(vendorName, exchange, response) {
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error("\u6362\u53D6 " + vendorName + " \u8BBF\u95EE\u4EE4\u724C\u5931\u8D25\uFF1AHTTP " + String(response.status));
+  }
+  let json;
+  try {
+    json = response.bodyText === "" ? void 0 : JSON.parse(response.bodyText);
+  } catch {
+    throw new Error("\u6362\u53D6 " + vendorName + " \u8BBF\u95EE\u4EE4\u724C\u5931\u8D25\uFF1A\u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON");
+  }
+  const token = readJsonPath(json, exchange.tokenPath);
+  if (typeof token !== "string" || token === "") {
+    throw new Error("\u6362\u53D6 " + vendorName + " \u8BBF\u95EE\u4EE4\u724C\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 token\uFF08" + exchange.tokenPath + "\uFF09");
+  }
+  let expiresIn = DEFAULT_TOKEN_TTL_SECONDS;
+  if (exchange.expiresInPath !== void 0) {
+    const raw = Number(readJsonPath(json, exchange.expiresInPath));
+    if (Number.isFinite(raw) && raw > 0) expiresIn = raw;
+  }
+  const ttlSeconds = Math.max(TOKEN_MIN_TTL_SECONDS, expiresIn - TOKEN_EXPIRY_MARGIN_SECONDS);
+  return { token, ttlSeconds };
+}
+
+// src/backend/wechat-data/src/query/rpa/dispatch.ts
+var SEND_TIMEOUT_MS2 = 15e3;
+var MAX_ATTEMPTS_LIMIT = 5;
+var ERROR_TEXT_MAX2 = 500;
+var PRIVATE_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|0(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|169\.254(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|::1|\[::1\])$/i;
+async function sendRequest(req, deps2, retry) {
+  const doFetch = deps2.fetchImpl ?? fetch;
+  const headers = { ...req.headers };
+  if (!hasHeader(headers, "content-type") && req.body !== "") headers["content-type"] = req.contentType;
+  const maxAttempts = Math.min(MAX_ATTEMPTS_LIMIT, Math.max(1, Math.trunc(retry.maxAttempts)));
+  const method = req.method;
+  const init = { method, headers };
+  if (method !== "GET" && method !== "HEAD" && req.body !== "") init.body = req.body;
+  const res = await fetchWithRetry(doFetch, req.url, init, { maxAttempts, timeoutMs: SEND_TIMEOUT_MS2 });
+  const bodyText = await res.text();
+  return { status: res.status, bodyText };
+}
+function hasHeader(headers, name) {
+  const lower = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
+}
+async function dispatchRpaRecord(input) {
+  const { adapter: adapter8, ctx, deps: deps2, buildDeps } = input;
+  const descriptor8 = adapter8.descriptor;
+  try {
+    const built = typeof adapter8.buildRequest === "function" ? await adapter8.buildRequest(ctx, buildDeps) : renderRequest(descriptor8, ctx);
+    assertHostAllowed(descriptor8, ctx.config, built.url);
+    const authDeps = { send: (tokenReq) => sendRequest(tokenReq, deps2, descriptor8.retry) };
+    const authed = await applyAuth(adapter8, withContentType(built), ctx, authDeps);
+    const response = await sendRequest(authed, deps2, descriptor8.retry);
+    return outcomeOf(parseResponse(adapter8, response, ctx));
+  } catch (e) {
+    return { status: "failed", error: errorText4(e) };
+  }
+}
+function outcomeOf(result) {
+  if (!result.ok) return { status: "failed", error: trimError(result.message ?? "\u5382\u5546\u8FD4\u56DE\u5931\u8D25") };
+  if (result.externalTaskId !== void 0 && result.externalTaskId !== "") {
+    return { status: "sent", externalTaskId: result.externalTaskId };
+  }
+  return { status: "sent" };
+}
+function withContentType(req) {
+  if (hasHeader(req.headers, "content-type")) return req;
+  return { ...req, headers: { ...req.headers, "content-type": req.contentType } };
+}
+function parseResponse(adapter8, response, ctx) {
+  if (typeof adapter8.parseResponse === "function") return adapter8.parseResponse(response, ctx);
+  return parseGenericResponse(adapter8.descriptor.response, response);
+}
+function parseGenericResponse(spec, response) {
+  const json = parseJsonOrUndefined(response.bodyText);
+  const message2 = spec.messagePath !== void 0 ? messageOf(json, spec.messagePath) : "";
+  const httpOk = spec.okHttpStatus.includes(response.status);
+  if (!httpOk) {
+    return { ok: false, retryable: false, message: message2 !== "" ? message2 : "HTTP " + String(response.status) };
+  }
+  if (spec.okPath !== void 0) {
+    const actual = readJsonPath(json, spec.okPath);
+    if (!matchesOkValue(actual, spec.okValue)) {
+      return { ok: false, retryable: false, message: message2 !== "" ? message2 : "\u4E1A\u52A1\u7801 " + String(actual) };
+    }
+  }
+  const externalTaskId = spec.externalTaskIdPath !== void 0 ? idTextOf(readJsonPath(json, spec.externalTaskIdPath)) : "";
+  return externalTaskId === "" ? { ok: true, retryable: false } : { ok: true, retryable: false, externalTaskId };
+}
+function parseJsonOrUndefined(text) {
+  if (text.trim() === "") return void 0;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function messageOf(json, path) {
+  const value = readJsonPath(json, path);
+  if (typeof value === "string") return value.slice(0, 200);
+  if (typeof value === "number") return String(value);
+  return "";
+}
+function matchesOkValue(actual, expected) {
+  if (expected === void 0) return actual !== void 0 && actual !== null;
+  if (actual === void 0) return false;
+  return String(actual) === String(expected);
+}
+function idTextOf(value) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+function assertHostAllowed(descriptor8, config, rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("\u8BF7\u6C42\u5730\u5740\u4E0D\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("\u8BF7\u6C42\u5730\u5740\u5FC5\u987B\u662F http/https \u5730\u5740");
+  }
+  const host = url.hostname.toLowerCase();
+  const governance = descriptor8.governance;
+  if (governance.hosts.length === 0) return;
+  if (governance.hosts.some((rule) => hostMatches(host, rule.kind, rule.value))) return;
+  if (governance.allowCustomBaseUrl === true) {
+    const baseHost = configuredHost(config["baseUrl"]);
+    if (baseHost !== "" && baseHost === host && !PRIVATE_HOST.test(host)) return;
+  }
+  throw new Error("\u51FA\u7F51\u4E3B\u673A\u4E0D\u5728\u5141\u8BB8\u6E05\u5355\u5185\uFF1A" + host);
+}
+function hostMatches(host, kind, value) {
+  const rule = value.trim().toLowerCase();
+  if (rule === "") return false;
+  if (kind === "exact") return host === rule;
+  return host === rule || host.endsWith("." + rule);
+}
+function configuredHost(baseUrl) {
+  if (typeof baseUrl !== "string" || baseUrl.trim() === "") return "";
+  try {
+    return new URL(baseUrl.trim()).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+function errorText4(e) {
+  const message2 = e?.message;
+  const text = typeof message2 === "string" && message2 !== "" ? message2 : String(e);
+  return trimError(text);
+}
+function trimError(text) {
+  return text.length > ERROR_TEXT_MAX2 ? text.slice(0, ERROR_TEXT_MAX2) : text;
+}
+
 // src/backend/wechat-data/src/query/task-center-callback.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join13 } from "node:path";
-var IMAGE_DATA_URL_MAX = 8e6;
 var CALLBACK_ERROR_MAX = 500;
-var DISPATCH_MAX_ATTEMPTS = 2;
-var DISPATCH_TIMEOUT_MS = 15e3;
 var PENDING_DISPATCH_LIMIT = 10;
-var BAZHUAYU_TRIGGER_URL = "https://api-rpa.bazhuayu.com/api/bots/scheduling/start";
 function readDispatchTarget(file, triggerId) {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare("SELECT * FROM task_triggers WHERE id = ?").get(triggerId);
@@ -9680,160 +12227,106 @@ function readDispatchTarget(file, triggerId) {
     const record = rowToTrigger(triggerRow);
     const taskRow = db.prepare("SELECT * FROM task_info WHERE id = ?").get(record.taskId);
     if (taskRow === void 0) return { record };
-    return {
-      record,
-      task: rowToTask(taskRow),
-      bazhuayuApiKey: taskCellStr(taskRow["bazhuayu_api_key"])
-    };
+    const task = rowToTask(taskRow);
+    return { record, task, secrets: secretsOfRow(taskRow, task.triggerMethod) };
   });
 }
-function imageMimeOf2(file) {
-  const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
-  if (ext === "png") return "image/png";
-  if (ext === "webp") return "image/webp";
-  if (ext === "gif") return "image/gif";
-  if (ext === "bmp") return "image/bmp";
-  return "image/jpeg";
+function secretsOfRow(row, method) {
+  const stored = parseSecretJson(row["trigger_secret"]);
+  if (Object.keys(stored).length > 0) return stored;
+  return migrateLegacySecrets(method, taskCellStr(row["bazhuayu_api_key"]));
 }
-function isSafeDecodedPath(file) {
-  const normalized = file.replace(/\\/g, "/");
-  if (normalized.startsWith("..") || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) return false;
-  return normalized !== "";
-}
-async function buildPayloadImages(record, decodedDir, decodeImage) {
-  const out = [];
-  for (const image of record.images) {
-    const item = {
-      localId: image.localId,
-      createTime: image.createTime,
-      sender: image.sender
-    };
-    if (image.md5 !== void 0) item.md5 = image.md5;
-    try {
-      const decoded = await decodeImage(record.chatUsername, image.localId);
-      let dataUrl = typeof decoded.url === "string" ? decoded.url : "";
-      if (dataUrl === "" && typeof decoded.file === "string" && decoded.file !== "") {
-        if (!isSafeDecodedPath(decoded.file)) {
-          item.error = "\u56FE\u7247\u8DEF\u5F84\u8D85\u51FA\u89E3\u7801\u76EE\u5F55\uFF0C\u5DF2\u7701\u7565";
-        } else {
-          const bytes = readFileSync4(join13(decodedDir, decoded.file));
-          dataUrl = "data:" + imageMimeOf2(decoded.file) + ";base64," + bytes.toString("base64");
-        }
-      }
-      if (item.error === void 0) {
-        if (dataUrl === "") item.error = "\u56FE\u7247\u89E3\u7801\u5931\u8D25";
-        else if (dataUrl.length > IMAGE_DATA_URL_MAX) item.error = "\u56FE\u7247\u8FC7\u5927\uFF0C\u5DF2\u7701\u7565";
-        else item.dataUrl = dataUrl;
-      }
-    } catch (e) {
-      item.error = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX);
-    }
-    out.push(item);
-  }
-  return out;
-}
-async function postTaskCallback(doFetch, url, payload) {
-  const res = await fetchWithRetry(doFetch, url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS });
-  if (!res.ok) throw new Error("\u56DE\u8C03\u5931\u8D25\uFF1AHTTP " + String(res.status));
-}
-async function postBazhuayuTrigger(doFetch, apiKey, payload) {
-  const res = await fetchWithRetry(doFetch, BAZHUAYU_TRIGGER_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "X-Api-Key": apiKey
-    },
-    body: JSON.stringify(payload)
-  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS });
-  if (!res.ok) throw new Error("\u516B\u722A\u9C7C\u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(res.status));
-}
-function buildBazhuayuPayload(task, record, text) {
-  return {
-    FlowId: task.bazhuayuFlowId,
-    FlowContentRetrievalMode: "ByNewestContent",
-    SpecifiedPublicationVersion: "",
-    SpecifiedBot: "",
-    Params: {
-      room_name: record.chatName,
-      content: text,
-      // 单聊没有独立的触发对象显示名 ⇒ 回落会话名；群聊保持目标成员显示名。
-      at_name: record.targetName !== "" ? record.targetName : record.chatName
-    },
-    UserStartSource: "OpenApi"
-  };
-}
-function buildCallbackPayload(record, task, text, images) {
-  return {
-    taskId: task.id,
-    taskName: task.name,
-    recordId: record.id,
-    triggeredAt: record.triggeredAt,
-    triggeredAtText: new Date(record.triggeredAt).toLocaleString("zh-CN", { hour12: false }),
-    chat: { username: task.chatUsername, name: task.chatName, type: task.chatType },
-    target: { username: task.targetUsername, name: task.targetName },
-    keyword: record.keyword,
-    text,
-    images
-  };
-}
-function saveDispatchResult(file, triggerId, status, error) {
+function saveDispatchResult(file, triggerId, status, error, externalTaskId) {
   withWritableDb(file, (db) => {
     ensureTaskSchema(db);
-    db.prepare("UPDATE task_triggers SET callback_status = ?, callback_at = ?, callback_error = ? WHERE id = ?").run(status, Date.now(), error, triggerId);
+    db.prepare(`UPDATE task_triggers SET
+      callback_status = ?, callback_at = ?, callback_error = ?, external_task_id = ?
+      WHERE id = ?`).run(status, Date.now(), error, externalTaskId, triggerId);
   });
+}
+function persistSkipped(file, triggerId, error) {
+  try {
+    saveDispatchResult(file, triggerId, "skipped", error.slice(0, CALLBACK_ERROR_MAX), "");
+  } catch {
+  }
+}
+function buildInvocationContext(task, record, secrets, text) {
+  const recordContext = {
+    username: record.chatUsername,
+    chatName: record.chatName,
+    chatType: task.chatType,
+    targetName: record.targetName,
+    targetUsername: record.targetUsername,
+    text,
+    keyword: record.keyword,
+    triggeredAt: record.triggeredAt,
+    images: record.images
+  };
+  return {
+    taskId: task.id,
+    recordId: record.id,
+    idempotencyKey: String(task.id) + ":" + String(record.id),
+    taskName: task.name,
+    record: recordContext,
+    config: task.triggerConfig,
+    secrets
+  };
+}
+function skipped(error) {
+  return { ok: false, status: "skipped", error };
+}
+function outcomeResult(outcome) {
+  if (outcome.status === "sent") {
+    const result = { ok: true, status: "sent" };
+    if (outcome.externalTaskId !== void 0 && outcome.externalTaskId !== "") {
+      result.externalTaskId = outcome.externalTaskId;
+    }
+    return { result, error: "" };
+  }
+  const error = (outcome.error ?? (outcome.status === "skipped" ? "\u5DF2\u8DF3\u8FC7" : "\u6295\u9012\u5931\u8D25")).slice(0, CALLBACK_ERROR_MAX);
+  return { result: { ok: false, status: outcome.status, error }, error };
 }
 async function dispatchTaskCallback(decryptedDir, decodedDir, triggerId, deps2) {
   const id = taskCellNum(triggerId);
-  if (id <= 0) return { ok: false, status: "skipped", error: "\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728" };
-  if (!storeExists(decryptedDir)) return { ok: false, status: "skipped", error: "\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728" };
+  if (id <= 0) return skipped("\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728");
+  if (!storeExists(decryptedDir)) return skipped("\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728");
   const file = taskDbPath(decryptedDir);
-  let record;
-  let task;
-  let apiKey = "";
+  let target;
   try {
-    const target = readDispatchTarget(file, id);
-    record = target.record;
-    task = target.task;
-    apiKey = target.bazhuayuApiKey ?? "";
+    target = readDispatchTarget(file, id);
   } catch (e) {
-    return { ok: false, status: "skipped", error: "\u8BFB\u53D6\u89E6\u53D1\u8BB0\u5F55\u5931\u8D25\uFF1A" + taskErrorText(e) };
+    return skipped("\u8BFB\u53D6\u89E6\u53D1\u8BB0\u5F55\u5931\u8D25\uFF1A" + taskErrorText(e));
   }
-  if (record === void 0) return { ok: false, status: "skipped", error: "\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728" };
-  if (task === void 0) return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u4E0D\u5B58\u5728\u6216\u5DF2\u5220\u9664" };
-  if (task.status !== "ready") return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584" };
-  if (task.triggerMethod === "bazhuayu") {
-    if (task.bazhuayuFlowId === "" || apiKey === "") {
-      return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584\u6216\u672A\u914D\u7F6E\u516B\u722A\u9C7C FlowId / API Key" };
-    }
-  } else if (task.callbackUrl === "") {
-    return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584\u6216\u672A\u914D\u7F6E\u56DE\u8C03\u5730\u5740" };
-  }
+  const { record, task } = target;
+  if (record === void 0) return skipped("\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728");
+  if (task === void 0) return skipped("\u4EFB\u52A1\u4E0D\u5B58\u5728\u6216\u5DF2\u5220\u9664");
+  if (task.status !== "ready") return skipped("\u4EFB\u52A1\u672A\u5B8C\u5584");
+  const adapter8 = findVendor(task.triggerMethod);
+  if (adapter8 === void 0) return skipped("\u89E6\u53D1\u65B9\u5F0F\u4E0D\u53EF\u7528\uFF1A" + task.triggerMethod);
+  const missing = missingReadyFields(adapter8.descriptor, task.triggerConfig, task.triggerSecretSet);
+  if (missing.length > 0) return skipped("\u89E6\u53D1\u914D\u7F6E\u4E0D\u5B8C\u6574\uFF1A" + missing.join("\u3001"));
   const gated = deps2.gate("task_callback", { sessions: 1, messages: 1 }, [record.text]);
-  const text = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text;
-  const send = deps2.fetchImpl ?? fetch;
-  let sent = false;
-  let failure = "";
+  const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text;
+  const text = adapter8.descriptor.governance.contentOutbound ? gatedText : "";
+  const ctx = buildInvocationContext(task, record, target.secrets ?? {}, text);
+  let outcome;
   try {
-    if (task.triggerMethod === "bazhuayu") {
-      await postBazhuayuTrigger(send, apiKey, buildBazhuayuPayload(task, record, text));
-    } else {
-      const images = await buildPayloadImages(record, decodedDir, deps2.decodeImage);
-      await postTaskCallback(send, task.callbackUrl, buildCallbackPayload(record, task, text, images));
-    }
-    sent = true;
+    outcome = await dispatchRpaRecord({
+      adapter: adapter8,
+      ctx,
+      deps: deps2.fetchImpl === void 0 ? {} : { fetchImpl: deps2.fetchImpl },
+      buildDeps: { decodedDir, decodeImage: deps2.decodeImage }
+    });
   } catch (e) {
-    failure = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX);
+    outcome = { status: "failed", error: taskErrorText(e) };
   }
+  const { result, error } = outcomeResult(outcome);
   try {
-    saveDispatchResult(file, id, sent ? "sent" : "failed", failure);
+    saveDispatchResult(file, id, result.status, error, result.externalTaskId ?? "");
   } catch (e) {
-    return sent ? { ok: true, status: "sent", error: "\u56DE\u8C03\u7ED3\u679C\u4FDD\u5B58\u5931\u8D25\uFF1A" + taskErrorText(e) } : { ok: false, status: "failed", error: failure + "\uFF08\u7ED3\u679C\u4FDD\u5B58\u5931\u8D25\uFF1A" + taskErrorText(e) + "\uFF09" };
+    return result.ok ? { ok: true, status: "sent", error: "\u6295\u9012\u7ED3\u679C\u4FDD\u5B58\u5931\u8D25\uFF1A" + taskErrorText(e) } : { ok: false, status: result.status, error: error + "\uFF08\u7ED3\u679C\u4FDD\u5B58\u5931\u8D25\uFF1A" + taskErrorText(e) + "\uFF09" };
   }
-  return sent ? { ok: true, status: "sent" } : { ok: false, status: "failed", error: failure };
+  return result;
 }
 async function dispatchPendingTaskCallbacks(decryptedDir, decodedDir, deps2, limit = PENDING_DISPATCH_LIMIT) {
   if (!storeExists(decryptedDir)) return { dispatched: 0, failed: 0 };
@@ -9844,10 +12337,7 @@ async function dispatchPendingTaskCallbacks(decryptedDir, decodedDir, deps2, lim
       ensureTaskSchema(db);
       const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
         JOIN task_info i ON i.id = t.task_id
-        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND (
-          (i.trigger_method = 'webhook' AND i.callback_url <> '')
-          OR (i.trigger_method = 'bazhuayu' AND i.bazhuayu_flow_id <> '' AND i.bazhuayu_api_key <> '')
-        )
+        WHERE t.callback_status = 'pending' AND i.status = 'ready'
         ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(cap);
       return rows.map((row) => taskCellNum(row.id));
     });
@@ -9857,6 +12347,7 @@ async function dispatchPendingTaskCallbacks(decryptedDir, decodedDir, deps2, lim
   let dispatched = 0;
   let failed = 0;
   const errors = [];
+  const file = taskDbPath(decryptedDir);
   for (const id of ids) {
     try {
       const r = await dispatchTaskCallback(decryptedDir, decodedDir, id, deps2);
@@ -9864,6 +12355,7 @@ async function dispatchPendingTaskCallbacks(decryptedDir, decodedDir, deps2, lim
       else {
         failed += 1;
         if (errors.length < 10) errors.push("\u8BB0\u5F55 " + String(id) + "\uFF1A" + (r.error ?? r.status));
+        if (r.status === "skipped") persistSkipped(file, id, r.error ?? "");
       }
     } catch (e) {
       failed += 1;
@@ -9878,11 +12370,6 @@ var DB_FILE = "wechat_task_center.db";
 var KEYWORD_MAX_LEN = 64;
 var KEYWORD_MAX = 20;
 var PHOTO_LIMIT_MAX = 9;
-var CALLBACK_URL_MAX = 2048;
-var BAZHUAYU_FLOW_ID_MAX = 128;
-var BAZHUAYU_FLOW_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-var BAZHUAYU_API_KEY_MAX = 512;
-var BAZHUAYU_API_KEY_FORBIDDEN = /[\s\u0000-\u001f\u007f]/;
 var TRIGGER_QUERY_DEFAULT = 100;
 var TRIGGER_QUERY_MAX = 200;
 var TRIGGER_SEARCH_MAX = 100;
@@ -9963,6 +12450,9 @@ function ensureTaskSchema(db) {
     bazhuayu_flow_id TEXT NOT NULL DEFAULT '',
     bazhuayu_api_key TEXT NOT NULL DEFAULT '',
     callback_url TEXT NOT NULL DEFAULT '',
+    trigger_config TEXT NOT NULL DEFAULT '{}',
+    trigger_secret TEXT NOT NULL DEFAULT '{}',
+    trigger_vendor_version TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'incomplete',
     last_scan_seq INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
@@ -9987,9 +12477,11 @@ function ensureTaskSchema(db) {
     callback_status TEXT NOT NULL DEFAULT 'pending',
     callback_at INTEGER,
     callback_error TEXT NOT NULL DEFAULT '',
+    external_task_id TEXT NOT NULL DEFAULT '',
     UNIQUE(task_id, message_local_id)
   )`);
-  ensureTaskInfoColumns(db);
+  ensureSchemaColumns(db, "task_info", TASK_INFO_COLUMN_MIGRATIONS);
+  ensureSchemaColumns(db, "task_triggers", TASK_TRIGGER_COLUMN_MIGRATIONS);
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_task ON task_triggers(task_id, triggered_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_task_order ON task_triggers(task_id, triggered_at DESC, id DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_order ON task_triggers(triggered_at DESC, id DESC)");
@@ -9998,13 +12490,19 @@ var TASK_INFO_COLUMN_MIGRATIONS = [
   ["mention_me_only", "ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0"],
   ["trigger_method", "ALTER TABLE task_info ADD COLUMN trigger_method TEXT NOT NULL DEFAULT 'webhook'"],
   ["bazhuayu_flow_id", "ALTER TABLE task_info ADD COLUMN bazhuayu_flow_id TEXT NOT NULL DEFAULT ''"],
-  ["bazhuayu_api_key", "ALTER TABLE task_info ADD COLUMN bazhuayu_api_key TEXT NOT NULL DEFAULT ''"]
+  ["bazhuayu_api_key", "ALTER TABLE task_info ADD COLUMN bazhuayu_api_key TEXT NOT NULL DEFAULT ''"],
+  ["trigger_config", "ALTER TABLE task_info ADD COLUMN trigger_config TEXT NOT NULL DEFAULT '{}'"],
+  ["trigger_secret", "ALTER TABLE task_info ADD COLUMN trigger_secret TEXT NOT NULL DEFAULT '{}'"],
+  ["trigger_vendor_version", "ALTER TABLE task_info ADD COLUMN trigger_vendor_version TEXT NOT NULL DEFAULT ''"]
 ];
-function ensureTaskInfoColumns(db) {
+var TASK_TRIGGER_COLUMN_MIGRATIONS = [
+  ["external_task_id", "ALTER TABLE task_triggers ADD COLUMN external_task_id TEXT NOT NULL DEFAULT ''"]
+];
+function ensureSchemaColumns(db, table, migrations) {
   const columns = new Set(
-    db.prepare("PRAGMA table_info(task_info)").all().map((row) => taskCellStr(row["name"]))
+    db.prepare("PRAGMA table_info(" + table + ")").all().map((row) => taskCellStr(row["name"]))
   );
-  for (const [name, sql] of TASK_INFO_COLUMN_MIGRATIONS) {
+  for (const [name, sql] of migrations) {
     if (!columns.has(name)) db.exec(sql);
   }
 }
@@ -10045,32 +12543,6 @@ function parseTriggerImages(raw) {
     return [];
   }
 }
-function rowToTask(r) {
-  const task = {
-    id: taskCellNum(r["id"]),
-    name: taskCellStr(r["name"]),
-    chatUsername: taskCellStr(r["chat_username"]),
-    chatName: taskCellStr(r["chat_name"]),
-    chatType: taskCellStr(r["chat_type"]) === "group" ? "group" : "private",
-    targetUsername: taskCellStr(r["target_username"]),
-    targetName: taskCellStr(r["target_name"]),
-    keywords: parseStringArray(r["keywords"]),
-    photoLimit: taskCellNum(r["photo_limit"]),
-    mentionMeOnly: taskCellNum(r["mention_me_only"]) === 1,
-    triggerMethod: taskCellStr(r["trigger_method"]) === "bazhuayu" ? "bazhuayu" : "webhook",
-    callbackUrl: taskCellStr(r["callback_url"]),
-    bazhuayuFlowId: taskCellStr(r["bazhuayu_flow_id"]),
-    bazhuayuApiKeySet: taskCellStr(r["bazhuayu_api_key"]) !== "",
-    status: taskCellStr(r["status"]) === "ready" ? "ready" : "incomplete",
-    createdAt: taskCellNum(r["created_at"]),
-    updatedAt: taskCellNum(r["updated_at"]),
-    triggerCount: taskCellNum(r["trigger_count"])
-  };
-  if (r["last_triggered_at"] !== null && r["last_triggered_at"] !== void 0) {
-    task.lastTriggeredAt = taskCellNum(r["last_triggered_at"]);
-  }
-  return task;
-}
 function rowToTrigger(r) {
   const statusText = taskCellStr(r["callback_status"]);
   const callbackStatus = statusText === "sent" || statusText === "failed" || statusText === "skipped" ? statusText : "pending";
@@ -10093,6 +12565,8 @@ function rowToTrigger(r) {
   if (r["callback_at"] !== null && r["callback_at"] !== void 0) record.callbackAt = taskCellNum(r["callback_at"]);
   const callbackError = taskCellStr(r["callback_error"]);
   if (callbackError !== "") record.callbackError = callbackError;
+  const externalTaskId = taskCellStr(r["external_task_id"]);
+  if (externalTaskId !== "") record.externalTaskId = externalTaskId;
   return record;
 }
 function cleanKeywords(raw) {
@@ -10116,55 +12590,55 @@ function cleanKeywords(raw) {
   }
   return { keywords: out };
 }
-function cleanCallbackUrl(raw) {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (value === "") return { url: "" };
-  if (value.length > CALLBACK_URL_MAX) {
-    return { url: "", error: "\u56DE\u8C03\u5730\u5740\u8FC7\u957F\uFF08\u6700\u591A " + String(CALLBACK_URL_MAX) + " \u4E2A\u5B57\u7B26\uFF09" };
-  }
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return { url: "", error: "\u56DE\u8C03\u5730\u5740\u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740" };
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" || parsed.hostname === "") {
-    return { url: "", error: "\u56DE\u8C03\u5730\u5740\u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740" };
-  }
-  return { url: value };
+function rowTriggerConfig(r, method) {
+  const stored = parseConfigJson(r["trigger_config"]);
+  if (Object.keys(stored).length > 0) return stored;
+  return migrateLegacyConfig(method, {
+    callbackUrl: taskCellStr(r["callback_url"]),
+    bazhuayuFlowId: taskCellStr(r["bazhuayu_flow_id"])
+  });
 }
-function cleanBazhuayuFlowId(raw) {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (value === "") return { flowId: "" };
-  if (value.length > BAZHUAYU_FLOW_ID_MAX) {
-    return { flowId: "", error: "\u516B\u722A\u9C7C FlowId \u8FC7\u957F\uFF08\u6700\u591A " + String(BAZHUAYU_FLOW_ID_MAX) + " \u4E2A\u5B57\u7B26\uFF09" };
-  }
-  if (!BAZHUAYU_FLOW_ID_PATTERN.test(value)) {
-    return { flowId: "", error: "\u516B\u722A\u9C7C FlowId \u53EA\u80FD\u5305\u542B\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u548C\u77ED\u6A2A\u7EBF" };
-  }
-  return { flowId: value };
+function rowTriggerSecrets(r, method) {
+  const stored = parseSecretJson(r["trigger_secret"]);
+  if (Object.keys(stored).length > 0) return stored;
+  return migrateLegacySecrets(method, taskCellStr(r["bazhuayu_api_key"]));
 }
-function cleanBazhuayuApiKey(raw) {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (value === "") return { apiKey: "" };
-  if (value.length > BAZHUAYU_API_KEY_MAX) {
-    return { apiKey: "", error: "\u516B\u722A\u9C7C API Key \u8FC7\u957F\uFF08\u6700\u591A " + String(BAZHUAYU_API_KEY_MAX) + " \u4E2A\u5B57\u7B26\uFF09" };
-  }
-  if (BAZHUAYU_API_KEY_FORBIDDEN.test(value)) {
-    return { apiKey: "", error: "\u516B\u722A\u9C7C API Key \u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26" };
-  }
-  return { apiKey: value };
+function configTextOf(config, key) {
+  const value = config[key];
+  return typeof value === "string" ? value : "";
 }
-function readyPreconditionError(triggerMethod, callbackUrl, bazhuayuFlowId, bazhuayuApiKey, keywords, chatType, targetUsername) {
-  if (triggerMethod === "bazhuayu") {
-    if (bazhuayuFlowId === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u516B\u722A\u9C7C FlowId";
-    if (bazhuayuApiKey === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u516B\u722A\u9C7C API Key";
-  } else if (callbackUrl === "") {
-    return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u56DE\u8C03\u5730\u5740";
+function rowToTask(r) {
+  const triggerMethod = normalizeTriggerMethod(r["trigger_method"]);
+  const triggerConfig = rowTriggerConfig(r, triggerMethod);
+  const secretSet = secretSetOf(rowTriggerSecrets(r, triggerMethod));
+  const task = {
+    id: taskCellNum(r["id"]),
+    name: taskCellStr(r["name"]),
+    chatUsername: taskCellStr(r["chat_username"]),
+    chatName: taskCellStr(r["chat_name"]),
+    chatType: taskCellStr(r["chat_type"]) === "group" ? "group" : "private",
+    targetUsername: taskCellStr(r["target_username"]),
+    targetName: taskCellStr(r["target_name"]),
+    keywords: parseStringArray(r["keywords"]),
+    photoLimit: taskCellNum(r["photo_limit"]),
+    mentionMeOnly: taskCellNum(r["mention_me_only"]) === 1,
+    triggerMethod,
+    triggerConfig,
+    triggerSecretSet: secretSet,
+    triggerVendorVersion: taskCellStr(r["trigger_vendor_version"]),
+    // 兼容别名（只读派生视图）：旧客户端/旧测试仍按这些字段读取。
+    callbackUrl: triggerMethod === "webhook" ? configTextOf(triggerConfig, "url") : "",
+    bazhuayuFlowId: configTextOf(triggerConfig, "flowId"),
+    bazhuayuApiKeySet: secretSet["apiKey"] === true,
+    status: taskCellStr(r["status"]) === "ready" ? "ready" : "incomplete",
+    createdAt: taskCellNum(r["created_at"]),
+    updatedAt: taskCellNum(r["updated_at"]),
+    triggerCount: taskCellNum(r["trigger_count"])
+  };
+  if (r["last_triggered_at"] !== null && r["last_triggered_at"] !== void 0) {
+    task.lastTriggeredAt = taskCellNum(r["last_triggered_at"]);
   }
-  if (keywords.length === 0) return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u89E6\u53D1\u5173\u952E\u8BCD";
-  if (chatType === "group" && targetUsername === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u9009\u62E9\u7FA4\u5185\u76EE\u6807\u7528\u6237";
-  return "";
+  return task;
 }
 function currentMaxSortSeq(decryptedDir, chatUsername, selfUsername) {
   try {
@@ -10244,6 +12718,26 @@ function listTaskTriggers(decryptedDir, query) {
     return { items: [], total: 0, readError };
   }
 }
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function resolveTriggerMethod(input, existing) {
+  const existingMethod = existing === void 0 ? "" : normalizeTriggerMethod(existing["trigger_method"], "");
+  return normalizeTriggerMethod(input?.triggerMethod, existingMethod !== "" ? existingMethod : "webhook");
+}
+function resolveTriggerConfig(input, existing, method, methodChanged) {
+  let base = {};
+  if (input.triggerConfig !== void 0) base = normalizeConfigInput(input.triggerConfig);
+  else if (existing !== void 0 && !methodChanged) base = rowTriggerConfig(existing, method);
+  const merged = { ...base };
+  if (input.callbackUrl !== void 0) {
+    merged["url"] = typeof input.callbackUrl === "string" ? input.callbackUrl.trim() : "";
+  }
+  if (input.bazhuayuFlowId !== void 0) {
+    merged["flowId"] = typeof input.bazhuayuFlowId === "string" ? input.bazhuayuFlowId.trim() : "";
+  }
+  return merged;
+}
 function resolveTaskFields(input, existing) {
   const chatUsername = typeof input?.chatUsername === "string" ? input.chatUsername.trim() : "";
   if (chatUsername === "") return { error: "\u672A\u6307\u5B9A\u4F1A\u8BDD" };
@@ -10257,29 +12751,6 @@ function resolveTaskFields(input, existing) {
   const cleanedKeywords = cleanKeywords(input?.keywords);
   if (cleanedKeywords.error !== void 0) return { error: cleanedKeywords.error };
   const keywords = cleanedKeywords.keywords;
-  const existingCallbackUrl = existing === void 0 ? "" : taskCellStr(existing["callback_url"]);
-  const cleanedUrl = input?.callbackUrl === void 0 && existing !== void 0 ? { url: existingCallbackUrl } : cleanCallbackUrl(input?.callbackUrl);
-  if (cleanedUrl.error !== void 0) return { error: cleanedUrl.error };
-  const existingMethod = existing === void 0 ? "" : taskCellStr(existing["trigger_method"]);
-  const triggerMethod = input?.triggerMethod === "bazhuayu" ? "bazhuayu" : input?.triggerMethod === "webhook" ? "webhook" : existingMethod === "bazhuayu" ? "bazhuayu" : "webhook";
-  const cleanedFlowId = input?.bazhuayuFlowId === void 0 && existing !== void 0 ? { flowId: taskCellStr(existing["bazhuayu_flow_id"]) } : cleanBazhuayuFlowId(input?.bazhuayuFlowId);
-  if (cleanedFlowId.error !== void 0) return { error: cleanedFlowId.error };
-  const cleanedApiKey = input?.bazhuayuApiKey === void 0 && existing !== void 0 ? { apiKey: taskCellStr(existing["bazhuayu_api_key"]) } : cleanBazhuayuApiKey(input?.bazhuayuApiKey);
-  if (cleanedApiKey.error !== void 0) return { error: cleanedApiKey.error };
-  const existingStatus = existing === void 0 ? "incomplete" : taskCellStr(existing["status"]) === "ready" ? "ready" : "incomplete";
-  const status = input?.status === "ready" ? "ready" : input?.status === "incomplete" ? "incomplete" : existingStatus;
-  if (status === "ready") {
-    const precondition = readyPreconditionError(
-      triggerMethod,
-      cleanedUrl.url,
-      cleanedFlowId.flowId,
-      cleanedApiKey.apiKey,
-      keywords,
-      chatType,
-      targetUsername
-    );
-    if (precondition !== "") return { error: precondition };
-  }
   const existingChatName = existing === void 0 ? "" : taskCellStr(existing["chat_name"]);
   const chatName = input?.chatName === void 0 ? existingChatName : typeof input.chatName === "string" ? input.chatName.trim() : "";
   const existingTargetName = existing === void 0 ? "" : taskCellStr(existing["target_name"]);
@@ -10291,6 +12762,23 @@ function resolveTaskFields(input, existing) {
   const explicitName = typeof input?.name === "string" ? input.name.trim() : "";
   const existingName = existing === void 0 ? "" : taskCellStr(existing["name"]);
   const name = explicitName !== "" ? explicitName : existingName !== "" ? existingName : (chatName !== "" ? chatName : chatUsername) + " \xB7 " + (keywords[0] ?? "");
+  const triggerMethod = resolveTriggerMethod(input, existing);
+  const vendor = findVendor(triggerMethod);
+  if (vendor === void 0) return { error: "\u672A\u77E5\u7684\u89E6\u53D1\u65B9\u5F0F\uFF1A" + triggerMethod };
+  const methodChanged = existing !== void 0 && normalizeTriggerMethod(existing["trigger_method"]) !== triggerMethod;
+  const rawConfig = resolveTriggerConfig(input, existing, triggerMethod, methodChanged);
+  const validated = validateVendorConfig(vendor.descriptor, rawConfig);
+  if (validated.errors.length > 0) {
+    return { error: "\u89E6\u53D1\u914D\u7F6E\u65E0\u6548\uFF1A" + validated.errors.join("\uFF1B") };
+  }
+  const secretsResult = buildResolvedSecrets(input, existing, triggerMethod, methodChanged, vendor);
+  if (secretsResult.error !== void 0) return { error: secretsResult.error };
+  const existingStatus = existing === void 0 ? "incomplete" : taskCellStr(existing["status"]) === "ready" ? "ready" : "incomplete";
+  const status = input?.status === "ready" ? "ready" : input?.status === "incomplete" ? "incomplete" : existingStatus;
+  if (status === "ready") {
+    const missing = missingReadyFields(vendor.descriptor, validated.config, secretSetOf(secretsResult.secrets));
+    if (missing.length > 0) return { error: "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u9700\u8865\u5168\uFF1A" + missing.join("\u3001") };
+  }
   return {
     fields: {
       chatUsername,
@@ -10302,13 +12790,29 @@ function resolveTaskFields(input, existing) {
       photoLimit,
       mentionMeOnly,
       triggerMethod,
-      callbackUrl: cleanedUrl.url,
-      bazhuayuFlowId: cleanedFlowId.flowId,
-      bazhuayuApiKey: cleanedApiKey.apiKey,
+      triggerConfig: validated.config,
+      triggerSecrets: secretsResult.secrets,
+      triggerVendorVersion: vendor.descriptor.version,
       status,
       name
     }
   };
+}
+function buildResolvedSecrets(input, existing, triggerMethod, methodChanged, vendor) {
+  const saved = existing === void 0 || methodChanged ? {} : rowTriggerSecrets(existing, normalizeTriggerMethod(existing["trigger_method"]));
+  const secretInput = mergeSecretAliases(input);
+  const result = applySecretInput(vendor.descriptor, saved, secretInput);
+  if (result.errors.length > 0) return { secrets: result.secrets, error: "\u89E6\u53D1\u51ED\u636E\u65E0\u6548\uFF1A" + result.errors.join("\uFF1B") };
+  return { secrets: result.secrets };
+}
+function mergeSecretAliases(input) {
+  const fromNew = input.triggerSecret;
+  if (input.bazhuayuApiKey === void 0) {
+    return fromNew === void 0 ? void 0 : isPlainRecord(fromNew) ? fromNew : {};
+  }
+  const merged = isPlainRecord(fromNew) ? { ...fromNew } : {};
+  merged["apiKey"] = typeof input.bazhuayuApiKey === "string" ? input.bazhuayuApiKey : "";
+  return merged;
 }
 function saveTaskInfo(decryptedDir, input, selfUsername = "") {
   const id = taskCellNum(input?.id);
@@ -10322,14 +12826,16 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
       if (resolved.fields === void 0) return { ok: false, error: resolved.error ?? "\u4EFB\u52A1\u914D\u7F6E\u65E0\u6548" };
       const fields = resolved.fields;
       const now = Date.now();
+      const legacy = legacyColumnsFor(fields.triggerMethod, fields.triggerConfig, fields.triggerSecrets);
       if (id > 0 && existing !== void 0) {
         const existedReady = taskCellStr(existing["status"]) === "ready";
         const chatChanged = taskCellStr(existing["chat_username"]) !== fields.chatUsername;
         const watermark2 = fields.status === "ready" && (!existedReady || chatChanged) ? currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername) : taskCellNum(existing["last_scan_seq"]);
         db.prepare(`UPDATE task_info SET
           name = ?, chat_username = ?, chat_name = ?, chat_type = ?, target_username = ?, target_name = ?,
-          keywords = ?, photo_limit = ?, mention_me_only = ?, trigger_method = ?, callback_url = ?,
-          bazhuayu_flow_id = ?, bazhuayu_api_key = ?, status = ?, last_scan_seq = ?, updated_at = ?
+          keywords = ?, photo_limit = ?, mention_me_only = ?, trigger_method = ?, trigger_config = ?,
+          trigger_secret = ?, trigger_vendor_version = ?, callback_url = ?, bazhuayu_flow_id = ?,
+          bazhuayu_api_key = ?, status = ?, last_scan_seq = ?, updated_at = ?
           WHERE id = ?`).run(
           fields.name,
           fields.chatUsername,
@@ -10341,9 +12847,12 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
           fields.photoLimit,
           fields.mentionMeOnly ? 1 : 0,
           fields.triggerMethod,
-          fields.callbackUrl,
-          fields.bazhuayuFlowId,
-          fields.bazhuayuApiKey,
+          JSON.stringify(fields.triggerConfig),
+          JSON.stringify(fields.triggerSecrets),
+          fields.triggerVendorVersion,
+          legacy.callbackUrl,
+          legacy.bazhuayuFlowId,
+          legacy.bazhuayuApiKey,
           fields.status,
           watermark2,
           now,
@@ -10354,9 +12863,10 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
       const watermark = currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername);
       const info = db.prepare(`INSERT INTO task_info
         (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit,
-         mention_me_only, trigger_method, callback_url, bazhuayu_flow_id, bazhuayu_api_key,
+         mention_me_only, trigger_method, trigger_config, trigger_secret, trigger_vendor_version,
+         callback_url, bazhuayu_flow_id, bazhuayu_api_key,
          status, last_scan_seq, created_at, updated_at, trigger_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
         fields.name,
         fields.chatUsername,
         fields.chatName,
@@ -10367,9 +12877,12 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
         fields.photoLimit,
         fields.mentionMeOnly ? 1 : 0,
         fields.triggerMethod,
-        fields.callbackUrl,
-        fields.bazhuayuFlowId,
-        fields.bazhuayuApiKey,
+        JSON.stringify(fields.triggerConfig),
+        JSON.stringify(fields.triggerSecrets),
+        fields.triggerVendorVersion,
+        legacy.callbackUrl,
+        legacy.bazhuayuFlowId,
+        legacy.bazhuayuApiKey,
         fields.status,
         watermark,
         now,
@@ -10394,19 +12907,13 @@ function setTaskInfoStatus(decryptedDir, id, status, selfUsername = "") {
       if (row === void 0) return { ok: false, error: "\u4EFB\u52A1\u4E0D\u5B58\u5728" };
       const existedReady = taskCellStr(row["status"]) === "ready";
       if (status === "ready") {
-        const savedMethod = taskCellStr(row["trigger_method"]) === "bazhuayu" ? "bazhuayu" : "webhook";
-        const savedUrl = cleanCallbackUrl(row["callback_url"]);
-        if (savedUrl.error !== void 0) return { ok: false, error: savedUrl.error };
-        const precondition = readyPreconditionError(
-          savedMethod,
-          savedUrl.url,
-          taskCellStr(row["bazhuayu_flow_id"]),
-          taskCellStr(row["bazhuayu_api_key"]),
-          parseStringArray(row["keywords"]),
-          taskCellStr(row["chat_type"]) === "group" ? "group" : "private",
-          taskCellStr(row["target_username"])
-        );
-        if (precondition !== "") return { ok: false, error: precondition };
+        const task = rowToTask(row);
+        const vendor = findVendor(task.triggerMethod);
+        if (vendor === void 0) return { ok: false, error: "\u89E6\u53D1\u65B9\u5F0F\u4E0D\u53EF\u7528\uFF1A" + task.triggerMethod };
+        const missing = missingReadyFields(vendor.descriptor, task.triggerConfig, task.triggerSecretSet);
+        if (task.keywords.length === 0) missing.push("\u89E6\u53D1\u5173\u952E\u8BCD");
+        if (task.chatType === "group" && task.targetUsername === "") missing.push("\u7FA4\u5185\u76EE\u6807\u7528\u6237");
+        if (missing.length > 0) return { ok: false, error: "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u9700\u8865\u5168\uFF1A" + missing.join("\u3001") };
       }
       const watermark = !existedReady && status === "ready" ? currentMaxSortSeq(decryptedDir, taskCellStr(row["chat_username"]), selfUsername) : taskCellNum(row["last_scan_seq"]);
       db.prepare("UPDATE task_info SET status = ?, last_scan_seq = ?, updated_at = ? WHERE id = ?").run(status, watermark, Date.now(), taskId);
@@ -10489,7 +12996,7 @@ function deleteTaskTriggers(decryptedDir, rawIds) {
 }
 
 // src/backend/wechat-data/src/remotes/task-center.ts
-function errorText3(e) {
+function errorText5(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -10525,13 +13032,17 @@ function createTaskCenterRemotes(rc) {
         result.errors = [...result.errors ?? [], ...pending2.errors ?? []].slice(0, 10);
       }
     } catch (e) {
-      result.errors = [...result.errors ?? [], "\u6295\u9012\u5F85\u53D1\u56DE\u8C03\u5931\u8D25\uFF1A" + errorText3(e)].slice(0, 10);
+      result.errors = [...result.errors ?? [], "\u6295\u9012\u5F85\u53D1\u56DE\u8C03\u5931\u8D25\uFF1A" + errorText5(e)].slice(0, 10);
     }
     return result;
   };
   return {
     listTaskInfos() {
       return listTaskInfos(dirs().decrypted);
+    },
+    /** 厂商目录（触发方式选择器/动态表单的数据源）：可序列化描述符副本 + 注册表版本。 */
+    listRpaVendors() {
+      return { items: listVendorDescriptors(), registryVersion: RPA_REGISTRY_VERSION };
     },
     saveTaskInfo(options) {
       const r = saveTaskInfo(dirs().decrypted, options, rc.selfUsername());
@@ -11019,7 +13530,7 @@ function resolveSelfUsername(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/keys/db-key-verify.ts
-import { createDecipheriv as createDecipheriv3, createHmac, pbkdf2Sync } from "node:crypto";
+import { createDecipheriv as createDecipheriv3, createHmac as createHmac2, pbkdf2Sync } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync14, mkdirSync as mkdirSync6, openSync as openSync3, readSync as readSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname9, relative as relative2 } from "node:path";
 var PAGE_SZ = 4096;
@@ -11058,7 +13569,7 @@ function verifyDbKey(page1, wxKeyBin) {
   const macKey = pbkdf2Sync(derivedKey, macSalt, 2, 32, "sha512");
   const hmacData = page1.subarray(16, PAGE_SZ - RESERVE_SZ + IV_SZ);
   const storedHmac = page1.subarray(PAGE_SZ - HMAC_SZ, PAGE_SZ);
-  const mac = createHmac("sha512", macKey);
+  const mac = createHmac2("sha512", macKey);
   mac.update(hmacData);
   const pgno = Buffer.alloc(4);
   pgno.writeUInt32LE(1, 0);
@@ -11482,7 +13993,7 @@ async function recoverDbKeyV4(pid, dbFilePath, internalDbKey) {
 }
 
 // src/backend/wechat-data/src/keys/image-key-resolver.ts
-import { createDecipheriv as createDecipheriv4, createHash as createHash5 } from "node:crypto";
+import { createDecipheriv as createDecipheriv4, createHash as createHash6 } from "node:crypto";
 import { readdirSync as readdirSync10, readFileSync as readFileSync11, statSync as statSync12 } from "node:fs";
 import { join as join20 } from "node:path";
 var V2_MAGIC2 = Buffer.from([7, 8, 86, 50, 8, 7]);
@@ -11504,7 +14015,7 @@ function deriveImageKeys(code2, wxid) {
   }
   const cleanedWxid = cleanWxid(wxid);
   if (cleanedWxid === "") throw new Error("wxid must not be empty");
-  const digest = createHash5("md5").update(String(code2) + cleanedWxid, "utf8").digest("hex");
+  const digest = createHash6("md5").update(String(code2) + cleanedWxid, "utf8").digest("hex");
   return { xorKey: code2 & 255, aesKey: digest.slice(0, 16) };
 }
 function decryptAesBlock(aesKey, ciphertext) {
@@ -13879,7 +16390,7 @@ function openStore2(decryptedDir) {
   try {
     mkdirSync10(dirname17(file), { recursive: true });
   } catch (e) {
-    console.warn("[kb-files] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText4(e));
+    console.warn("[kb-files] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText6(e));
   }
   const db = new DatabaseSync(file);
   migrate(db);
@@ -13905,7 +16416,7 @@ function cellStr(v) {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
 }
-function errorText4(e) {
+function errorText6(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -13983,7 +16494,7 @@ function removeBlobIfUnreferenced(db, decryptedDir, sha256, blobName) {
     unlinkSync3(dest);
     return true;
   } catch (e) {
-    warn("\u526F\u672C\u5220\u9664\u5931\u8D25\uFF08\u767B\u8BB0\u884C\u7167\u5E38\u5220\u9664\uFF09\uFF1A" + dest + ": " + errorText4(e));
+    warn("\u526F\u672C\u5220\u9664\u5931\u8D25\uFF08\u767B\u8BB0\u884C\u7167\u5E38\u5220\u9664\uFF09\uFF1A" + dest + ": " + errorText6(e));
     return false;
   }
 }
@@ -14007,7 +16518,7 @@ function insertChunks(db, fileId, kbId, chunks) {
 }
 
 // src/backend/wechat-data/src/query/kb-files-register.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { readFileSync as readFileSync15, statSync as statSync19 } from "node:fs";
 import { basename as basename8 } from "node:path";
 
@@ -14971,7 +17482,7 @@ function hammingDistance(a, b) {
 // src/backend/wechat-data/src/query/kb-vectors.ts
 var KB_VECTORS_TABLE = "kb_vectors";
 var KB_VECTOR_SCHEMA_VERSION = "1";
-function errorText5(e) {
+function errorText7(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -15318,7 +17829,7 @@ async function searchKbDense(decryptedDir, kbId, queryText, embed, opts) {
   try {
     qvecs = await embed([queryText.slice(0, 400)]);
   } catch (e) {
-    return { hits: [], note: "embedding \u5931\u8D25: " + errorText5(e) };
+    return { hits: [], note: "embedding \u5931\u8D25: " + errorText7(e) };
   }
   const raw = qvecs[0];
   if (!raw || raw.length === 0) return { hits: [], note: "embedding \u8FD4\u56DE\u7A7A" };
@@ -15394,7 +17905,7 @@ function deleteKbVectorsForFile(decryptedDir, fileId) {
       db.close();
     }
   } catch (e) {
-    console.warn("[kb-vectors] \u5220\u9664\u6587\u4EF6\u5411\u91CF\u5931\u8D25\uFF08\u767B\u8BB0\u884C\u7167\u5E38\u5220\u9664\uFF09\uFF1A" + p + ": " + errorText5(e));
+    console.warn("[kb-vectors] \u5220\u9664\u6587\u4EF6\u5411\u91CF\u5931\u8D25\uFF08\u767B\u8BB0\u884C\u7167\u5E38\u5220\u9664\uFF09\uFF1A" + p + ": " + errorText7(e));
     return 0;
   }
 }
@@ -15431,7 +17942,7 @@ function reassignKbVectors(decryptedDir, fileId, targetKbId) {
       db.close();
     }
   } catch (e) {
-    console.warn("[kb-vectors] \u8FC1\u79FB\u6587\u4EF6\u5411\u91CF\u5931\u8D25\uFF08\u4E0B\u6B21\u5EFA\u5E93\u4F1A\u81EA\u5DF1\u6536\u655B\uFF09\uFF1A" + p + ": " + errorText5(e));
+    console.warn("[kb-vectors] \u8FC1\u79FB\u6587\u4EF6\u5411\u91CF\u5931\u8D25\uFF08\u4E0B\u6B21\u5EFA\u5E93\u4F1A\u81EA\u5DF1\u6536\u655B\uFF09\uFF1A" + p + ": " + errorText7(e));
     return { moved: 0, dropped: 0 };
   }
 }
@@ -15465,14 +17976,14 @@ function registerKbFile(decryptedDir, input) {
     }
     bytes = readFileSync15(srcPath);
   } catch (e) {
-    return { ok: false, code: "read-failed", error: "\u8BFB\u4E0D\u5230\u8FD9\u4E2A\u6587\u4EF6\uFF1A" + errorText4(e) };
+    return { ok: false, code: "read-failed", error: "\u8BFB\u4E0D\u5230\u8FD9\u4E2A\u6587\u4EF6\uFF1A" + errorText6(e) };
   }
-  const sha256 = createHash6("sha256").update(bytes).digest("hex");
+  const sha256 = createHash7("sha256").update(bytes).digest("hex");
   let db;
   try {
     db = openStore2(decryptedDir);
   } catch (e) {
-    return { ok: false, code: "store-failed", error: isBusyError(e) ? BUSY_TEXT : errorText4(e) };
+    return { ok: false, code: "store-failed", error: isBusyError(e) ? BUSY_TEXT : errorText6(e) };
   }
   try {
     const dup = db.prepare("SELECT id, name FROM kb_files WHERE kb_id = ? AND sha256 = ?").get(kbId, sha256);
@@ -15497,7 +18008,7 @@ function registerKbFile(decryptedDir, input) {
       writeBlob(decryptedDir, blobName, bytes);
     } catch (e) {
       blobName = "";
-      blobNote = "\u65E0\u6CD5\u4FDD\u5B58\u5185\u5BB9\u526F\u672C\uFF08" + errorText4(e) + "\uFF09\uFF0C\u539F\u6587\u4EF6\u88AB\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u4E0A\u4F20";
+      blobNote = "\u65E0\u6CD5\u4FDD\u5B58\u5185\u5BB9\u526F\u672C\uFF08" + errorText6(e) + "\uFF09\uFF0C\u539F\u6587\u4EF6\u88AB\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u4E0A\u4F20";
       warn(blobNote);
     }
     const asyncParsed = isAsyncParsableExt(ext);
@@ -15540,7 +18051,7 @@ function registerKbFile(decryptedDir, input) {
     const row = db.prepare("SELECT * FROM kb_files WHERE id = ?").get(fileId);
     return { ok: true, file: rowToFileMeta(row ?? {}) };
   } catch (e) {
-    return { ok: false, code: "store-failed", error: isBusyError(e) ? BUSY_TEXT : errorText4(e) };
+    return { ok: false, code: "store-failed", error: isBusyError(e) ? BUSY_TEXT : errorText6(e) };
   } finally {
     try {
       db.close();
@@ -15568,7 +18079,7 @@ function listKbFiles(decryptedDir, kbId, opts = {}) {
       }
     }
   } catch (e) {
-    const readError = errorText4(e);
+    const readError = errorText6(e);
     console.warn("[kb-files] \u6587\u4EF6\u5217\u8868\u8BFB\u53D6\u5931\u8D25\uFF1A" + kbFilesDbPath(decryptedDir) + ": " + readError);
     return { kbId: kb, items: [], total: 0, readError };
   }
@@ -15616,7 +18127,7 @@ function listKbFileChunks(decryptedDir, kbId, fileId, opts = {}) {
       }
     }
   } catch (e) {
-    const readError = errorText4(e);
+    const readError = errorText6(e);
     console.warn("[kb-files] \u6587\u4EF6\u6B63\u6587\u8BFB\u53D6\u5931\u8D25\uFF1A" + kbFilesDbPath(decryptedDir) + ": " + readError);
     return { ...empty, readError };
   }
@@ -15639,7 +18150,7 @@ function recoverInterrupted(decryptedDir) {
       }
     }
   } catch (e) {
-    const readError = errorText4(e);
+    const readError = errorText6(e);
     warn("\u5D29\u6E83\u6062\u590D\u5931\u8D25\uFF1A" + readError);
     return { reset: 0, skipped: false, readError };
   }
@@ -15704,7 +18215,7 @@ function deleteKbFile(decryptedDir, kbId, fileId) {
       }
     }
   } catch (e) {
-    return { ok: false, error: errorText4(e) };
+    return { ok: false, error: errorText6(e) };
   }
 }
 function getKbFile(decryptedDir, kbId, fileId) {
@@ -15723,7 +18234,7 @@ function getKbFile(decryptedDir, kbId, fileId) {
       }
     }
   } catch (e) {
-    console.warn("[kb-files] \u5355\u6587\u4EF6\u8BFB\u53D6\u5931\u8D25\uFF1A" + errorText4(e));
+    console.warn("[kb-files] \u5355\u6587\u4EF6\u8BFB\u53D6\u5931\u8D25\uFF1A" + errorText6(e));
     return null;
   }
 }
@@ -15756,7 +18267,7 @@ function setKbFileSummary(decryptedDir, kbId, fileId, summary, model, coveredCha
       }
     }
   } catch (e) {
-    return { ok: false, error: errorText4(e) };
+    return { ok: false, error: errorText6(e) };
   }
 }
 function setKbFileRagFlag(decryptedDir, kbId, fileId, includeInRag) {
@@ -15778,7 +18289,7 @@ function setKbFileRagFlag(decryptedDir, kbId, fileId, includeInRag) {
       }
     }
   } catch (e) {
-    return { ok: false, error: errorText4(e) };
+    return { ok: false, error: errorText6(e) };
   }
 }
 function kbFilesOnKbDelete(decryptedDir, kbId, targetKbId) {
@@ -15824,7 +18335,7 @@ function kbFilesOnKbDelete(decryptedDir, kbId, targetKbId) {
       }
     }
   } catch (e) {
-    return { ok: false, movedFiles: 0, removedFiles: 0, error: errorText4(e) };
+    return { ok: false, movedFiles: 0, removedFiles: 0, error: errorText6(e) };
   }
 }
 function countKbFilesByKb(decryptedDir) {
@@ -15888,7 +18399,7 @@ function normalizeTopK(value) {
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_KB_TOP_K;
   return Math.min(n, MAX_KB_TOP_K);
 }
-function errorText6(e) {
+function errorText8(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -15931,7 +18442,7 @@ function searchKb(decryptedDir, kbId, opts = {}) {
   try {
     db = openStore2(decryptedDir);
   } catch (e) {
-    const readError = errorText6(e);
+    const readError = errorText8(e);
     console.warn("[kb-search] \u6587\u4EF6\u5E93\u6253\u5F00\u5931\u8D25\uFF1A" + readError);
     return empty({ readError });
   }
@@ -15975,7 +18486,7 @@ function searchKb(decryptedDir, kbId, opts = {}) {
       degraded: { reason: "no-vector-index", label: "\u4EC5\u5173\u952E\u8BCD\uFF08\u672A\u5EFA\u5411\u91CF\u7D22\u5F15\uFF09" }
     };
   } catch (e) {
-    const readError = errorText6(e);
+    const readError = errorText8(e);
     console.warn("[kb-search] \u68C0\u7D22\u5931\u8D25\uFF1A" + readError);
     return empty({ readError });
   } finally {
@@ -16090,7 +18601,7 @@ function dedupe(list) {
 
 // src/backend/wechat-data/src/query/voice-transcribe.ts
 import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { existsSync as existsSync25, mkdirSync as mkdirSync12, readFileSync as readFileSync16, readlinkSync, rmSync as rmSync6, symlinkSync, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename as basename9, dirname as dirname20, join as join32 } from "node:path";
@@ -16128,7 +18639,7 @@ function pickAliasBase(decodedDir) {
 function ensureAsciiLink(realDir, aliasBase) {
   const cached = aliasLinks.get(realDir);
   if (cached) return cached;
-  let link = join32(aliasBase, "wpa-" + createHash7("sha1").update(realDir.toLowerCase()).digest("hex").slice(0, 12));
+  let link = join32(aliasBase, "wpa-" + createHash8("sha1").update(realDir.toLowerCase()).digest("hex").slice(0, 12));
   try {
     if (existsSync25(link)) {
       const target = readlinkSync(link).replace(/[\\/]+$/, "").toLowerCase();
@@ -16236,7 +18747,7 @@ async function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId
   const errors = [];
   let done = 0;
   let failed = 0;
-  let skipped = 0;
+  let skipped2 = 0;
   const outcomes = new Array(sources.length);
   let nextReport = 0;
   let nextSource = 0;
@@ -16244,7 +18755,7 @@ async function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId
     outcomes[index] = outcome;
     if (outcome.kind === "done") done += 1;
     else if (outcome.kind === "failed") failed += 1;
-    else skipped += 1;
+    else skipped2 += 1;
     while (nextReport < sources.length && outcomes[nextReport]) {
       const src = sources[nextReport];
       onProgress(nextReport + 1, sources.length, failed, src.svrId);
@@ -16287,7 +18798,7 @@ async function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId
     total: sources.length,
     done,
     failed,
-    skipped,
+    skipped: skipped2,
     errors,
     engine: engineBin,
     model: modelFile
@@ -16826,7 +19337,7 @@ import { Remote as Remote4 } from "@deepseek-ai/dsh-typert-protocol";
 import { Remote as Remote3 } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/backend/wechat-data/src/query/avatar.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { existsSync as existsSync26, readFileSync as readFileSync17 } from "node:fs";
 import { join as join33 } from "node:path";
 function sniffImageFormat(data) {
@@ -16881,7 +19392,7 @@ function avatarUrlFromContact(decryptedDir, username) {
 }
 function avatarFromTempHeadFile(wechatBaseDir, url) {
   if (!wechatBaseDir || !url) return null;
-  const hash = createHash8("md5").update(Buffer.from(url, "utf8")).digest("hex");
+  const hash = createHash9("md5").update(Buffer.from(url, "utf8")).digest("hex");
   const f = join33(wechatBaseDir, "temp", "head_image", hash);
   if (!existsSync26(f)) return null;
   try {
@@ -17215,7 +19726,7 @@ function computeEmoticons(decryptedDir, limit, offset = 0, wechatBaseDir) {
 // src/backend/wechat-data/src/query/files.ts
 import { statSync as statSync20 } from "node:fs";
 import { join as join35 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 function cellStr5(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
@@ -17307,7 +19818,7 @@ function dirSourceCached(decryptedDir) {
       const md5ToName = /* @__PURE__ */ new Map();
       for (const [user, display] of names) {
         if (!user) continue;
-        const h = createHash9("md5").update(user, "utf8").digest("hex");
+        const h = createHash10("md5").update(user, "utf8").digest("hex");
         if (!md5ToName.has(h)) md5ToName.set(h, display || user);
       }
       const rows = db.prepare("SELECT rowid AS rid, username FROM dir2id").all();
@@ -17419,7 +19930,7 @@ function queryFiles(decryptedDir, limit, offset = 0, category, q) {
 }
 
 // src/backend/wechat-data/src/query/image-original.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join36 } from "node:path";
 import { decompress as decompress4 } from "fzstd";
@@ -17447,7 +19958,7 @@ function resolveImageOriginalLink(decryptedDir, username, localId) {
   const hint = resolveImageResourceHint(decryptedDir, username, localId);
   const md52 = hint.md5;
   if (!md52) return null;
-  const table = "Msg_" + createHash10("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash11("md5").update(username, "utf8").digest("hex");
   for (const shard of shardCatalogDirs(decryptedDir, ["message"])) {
     const meta = shard.tables.get(table);
     if (!meta) continue;
@@ -17522,7 +20033,7 @@ function sniffImageFormat2(b) {
 // src/backend/wechat-data/src/query/image-original-batch.ts
 import { existsSync as existsSync29, readFileSync as readFileSync18, readdirSync as readdirSync15, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join38 } from "node:path";
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { decompress as decompress5 } from "fzstd";
 
 // src/backend/wechat-data/src/query/decrypt-images.ts
@@ -17582,7 +20093,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
   const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null;
   let okCount = 0;
   let failed = 0;
-  let skipped = 0;
+  let skipped2 = 0;
   const errors = [];
   const skippedDetails = [];
   let cursor = 0;
@@ -17600,7 +20111,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
       const thumbTier = isThumbTier(file);
       if (writtenMain.has(md52) || hasCached(md52, false) || thumbTier && hasCached(md52, true)) {
         const have = writtenMain.get(md52);
-        skipped += 1;
+        skipped2 += 1;
         skippedDetails.push({
           file: name,
           reason: have ? `\u540C\u4E00\u5F20\u56FE\u5DF2\u7528 ${have} \u6863\u89E3\u51FA\uFF08${md52}\uFF09\uFF0C\u8DF3\u8FC7 ${tier} \u6863` : `\u5DF2\u6709\u4E3B\u69FD\u7F13\u5B58\uFF08${md52}\uFF09\uFF0C\u8DF3\u8FC7 ${tier} \u6863`
@@ -17615,7 +20126,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
         return;
       }
       if (dec.format === "hevc") {
-        skipped += 1;
+        skipped2 += 1;
         skippedDetails.push({
           file: name,
           reason: "wxgf \u539F\u56FE\uFF1A\u672A\u627E\u5230\u5FAE\u4FE1\u89E3\u7801\u5E93\uFF08VoipEngine.dll\uFF09\u6216\u8F6C\u7801\u5931\u8D25\uFF0C\u672C\u673A\u6682\u4E0D\u53EF\u6E32\u67D3"
@@ -17624,7 +20135,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
       }
       const ext = dec.format === "jpeg" ? "jpg" : dec.format;
       if (!WRITE_EXTS.has(ext)) {
-        skipped += 1;
+        skipped2 += 1;
         skippedDetails.push({ file: name, reason: `\u4E0D\u652F\u6301\u7684\u56FE\u7247\u683C\u5F0F\uFF08${ext}\uFF09\uFF0C\u5DF2\u8DF3\u8FC7` });
         return;
       }
@@ -17658,7 +20169,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
   const workers = Math.max(1, Math.min(Math.floor(concurrency), 32));
   for (let i = 0; i < workers; i += 1) pool.push(worker());
   await Promise.all(pool);
-  return { total: files.length, okCount, failed, skipped, errors, skippedDetails };
+  return { total: files.length, okCount, failed, skipped: skipped2, errors, skippedDetails };
 }
 
 // src/backend/wechat-data/src/query/image-original-batch.ts
@@ -17707,7 +20218,7 @@ function talkerByTableHash(decryptedDir) {
   try {
     for (const r of db.prepare("SELECT user_name FROM ChatName2Id").all()) {
       const name = cellText4(r.user_name).trim().replace(/^"|"$/g, "");
-      if (name !== "") out.set(createHash11("md5").update(name, "utf8").digest("hex"), name);
+      if (name !== "") out.set(createHash12("md5").update(name, "utf8").digest("hex"), name);
     }
   } catch {
   } finally {
@@ -18090,7 +20601,7 @@ async function fetchQuota(rawRoot) {
 
 // src/backend/wechat-data/src/query/image-auto-upgrade.ts
 import { decompress as decompress6 } from "fzstd";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 var ZSTD_MAGIC6 = Buffer.from([40, 181, 47, 253]);
 function isWxcdnEnabled(decryptedDir) {
   try {
@@ -18114,7 +20625,7 @@ function cellText5(v) {
   return new TextDecoder("utf-8", { fatal: false }).decode(out);
 }
 function readCdnFileid(decryptedDir, username, localId) {
-  const table = "Msg_" + createHash12("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash13("md5").update(username, "utf8").digest("hex");
   for (const shard of shardCatalogDirs(decryptedDir, ["message"])) {
     const meta = shard.tables.get(table);
     if (!meta) continue;
@@ -18967,7 +21478,7 @@ function readArchivedAvatars(decryptedDir, usernames) {
 }
 
 // src/backend/wechat-data/src/query/remote-image.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { mkdirSync as mkdirSync16, readFileSync as readFileSync22, readdirSync as readdirSync19, renameSync as renameSync7, statSync as statSync24, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join44 } from "node:path";
 
@@ -19094,7 +21605,7 @@ function memSet(url, dataUrl) {
   memCache.set(url, dataUrl);
 }
 function cacheKey(url) {
-  return createHash13("md5").update(url, "utf8").digest("hex");
+  return createHash14("md5").update(url, "utf8").digest("hex");
 }
 function readCache(url, decodedDir, index) {
   const hit = memGet(url);
@@ -19210,7 +21721,7 @@ async function fetchRemoteImages(urls, decodedDir) {
 }
 
 // src/backend/wechat-data/src/query/favorite-media.ts
-import { createDecipheriv as createDecipheriv5, createHash as createHash14 } from "node:crypto";
+import { createDecipheriv as createDecipheriv5, createHash as createHash15 } from "node:crypto";
 import { existsSync as existsSync35, readdirSync as readdirSync20, readFileSync as readFileSync23 } from "node:fs";
 import { basename as basename12, join as join45 } from "node:path";
 var BUCKETS = ["data", "mid", "thumb", "temp"];
@@ -19244,7 +21755,7 @@ var MIME_BY_EXT = {
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 };
 function md5(bytes) {
-  return createHash14("md5").update(bytes).digest("hex");
+  return createHash15("md5").update(bytes).digest("hex");
 }
 function extensionOf(path) {
   const base = path.replace(/\\/g, "/").split("/").pop() ?? "";
@@ -19496,10 +22007,10 @@ function createFavoriteMediaRemotes(rc) {
 
 // src/backend/wechat-data/src/query/media-video.ts
 import { existsSync as existsSync36, readdirSync as readdirSync21, readFileSync as readFileSync24 } from "node:fs";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 import { join as join46 } from "node:path";
 function msgTableName4(username) {
-  return "Msg_" + createHash15("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash16("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles2(decryptedDir) {
   const dir = join46(decryptedDir, "message");
@@ -19594,10 +22105,10 @@ function toJpegDataUrl(bytes, ext) {
 
 // src/backend/wechat-data/src/query/media-voice.ts
 import { existsSync as existsSync37, readdirSync as readdirSync22 } from "node:fs";
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { join as join47 } from "node:path";
 function msgTableName5(username) {
-  return "Msg_" + createHash16("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash17("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles3(decryptedDir) {
   const dir = join47(decryptedDir, "message");
@@ -20005,7 +22516,7 @@ async function fetchMapGeoJson(urls, readLocal) {
 }
 
 // src/backend/wechat-data/src/query/sns-image.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 import { existsSync as existsSync40, readdirSync as readdirSync24, statSync as statSync26 } from "node:fs";
 import { readFile as readFile3 } from "node:fs/promises";
 import { join as join51 } from "node:path";
@@ -20179,7 +22690,7 @@ async function snsResolveByIndex(wechatBaseDir, aesKey, xorKey, wantMd5, notes, 
   return { complete: allWalked && notes.length === 0 };
 }
 function md5Of(bytes) {
-  return createHash17("md5").update(Buffer.from(bytes)).digest("hex");
+  return createHash18("md5").update(Buffer.from(bytes)).digest("hex");
 }
 function walkFiles(dir, out, depth, notes) {
   if (depth > 5 || !existsSync40(dir)) return;
@@ -20324,7 +22835,7 @@ function hasSnsMediaIndexEntries() {
 }
 async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md52, timelineId, mediaId, allowThumb = true) {
   const key = (md52 || "").trim().toLowerCase();
-  const baseCacheKey = timelineId && mediaId ? createHash17("md5").update(timelineId + "_" + mediaId + "_2", "utf8").digest("hex") : key;
+  const baseCacheKey = timelineId && mediaId ? createHash18("md5").update(timelineId + "_" + mediaId + "_2", "utf8").digest("hex") : key;
   const cacheKey2 = baseCacheKey + (allowThumb ? "" : "#o");
   if (!baseCacheKey) return { error: "\u7F3A\u5C11\u56FE\u7247\u6807\u8BC6" };
   const cached = md5UrlCache.get(cacheKey2);
@@ -20349,7 +22860,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md52, timel
     let rootsTried = 0;
     let sawButUndecodable = 0;
     for (const suffix of ["_2", "_1", "_0", ""]) {
-      const k = createHash17("md5").update(timelineId + "_" + mediaId + suffix, "utf8").digest("hex");
+      const k = createHash18("md5").update(timelineId + "_" + mediaId + suffix, "utf8").digest("hex");
       const sub = k.slice(0, 2);
       const rest = k.slice(2);
       const roots = snsLeafRoots(wechatBaseDir, "Img", notes);
@@ -20773,7 +23284,7 @@ async function fetchSnsCdnImage(rawUrl, token, seed, fetchImpl = fetch) {
 }
 
 // src/backend/wechat-data/src/query/sns-video.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 import { createReadStream, existsSync as existsSync41, readFileSync as readFileSync27, readdirSync as readdirSync25, statSync as statSync27 } from "node:fs";
 import { readFile as readFile4 } from "node:fs/promises";
 import { join as join53 } from "node:path";
@@ -20809,7 +23320,7 @@ function cacheVideoDataUrl(md52, dataUrl) {
   videoUrlCacheBytes += size;
 }
 async function md5OfFileAsync(path) {
-  const hash = createHash18("md5");
+  const hash = createHash19("md5");
   try {
     let chunks = 0;
     for await (const chunk of createReadStream(path)) {
@@ -20933,7 +23444,7 @@ async function fetchAndDecodeVideo(remoteUrl, expectMd5, opts = {}) {
     }
     if (!isMp4Container(bytes)) return { error: "\u89E3\u5BC6\u540E\u4ECD\u4E0D\u662F MP4 \u5BB9\u5668\uFF08<enc key> \u53EF\u80FD\u4E0D\u5339\u914D\uFF09" };
   }
-  const got_md5 = createHash18("md5").update(bytes).digest("hex");
+  const got_md5 = createHash19("md5").update(bytes).digest("hex");
   const want = (expectMd5 || "").trim().toLowerCase();
   if (want && got_md5 !== want) {
     return { error: `\u53D6\u56DE\u7684\u5B57\u8282\u4E0E\u8BB0\u5F55\u4E0D\u7B26\uFF08md5 ${got_md5.slice(0, 8)}\u2026 \u2260 ${want.slice(0, 8)}\u2026\uFF09` };
@@ -21767,7 +24278,7 @@ async function snsVideoCoverWithCdnFirst(rc, options) {
 }
 
 // src/backend/wechat-data/src/query/wechat-image-autodownload.ts
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { mkdirSync as mkdirSync17, readFileSync as readFileSync28, rmSync as rmSync7, writeFileSync as writeFileSync14 } from "node:fs";
 import { dirname as dirname25, join as join55 } from "node:path";
@@ -21799,7 +24310,7 @@ async function defaultLoadHelper() {
   const path = defaultResolveHelperPath();
   if (path === "") throw new Error("\u627E\u4E0D\u5230\u539F\u56FE\u81EA\u52A8\u4E0B\u8F7D\u7EC4\u4EF6\uFF08native/img_helper/win32-x64/img_helper.dll\uFF09");
   const bytes = readFileSync28(path);
-  const sha256 = createHash19("sha256").update(bytes).digest("hex");
+  const sha256 = createHash20("sha256").update(bytes).digest("hex");
   if (sha256 !== IMAGE_AUTODOWNLOAD_HELPER_SHA256) {
     throw new Error(
       `\u539F\u56FE\u81EA\u52A8\u4E0B\u8F7D\u7EC4\u4EF6\u5B8C\u6574\u6027\u6821\u9A8C\u5931\u8D25\uFF08\u671F\u671B ${IMAGE_AUTODOWNLOAD_HELPER_SHA256.slice(0, 16)}\u2026\uFF0C\u5B9E\u9645 ${sha256.slice(0, 16)}\u2026\uFF09\uFF0C\u5DF2\u62D2\u7EDD\u52A0\u8F7D`
@@ -23321,7 +25832,7 @@ function clampInt2(v, fallback, min, max) {
   const n = typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : fallback;
   return Math.min(max, Math.max(min, n));
 }
-function errorText7(e) {
+function errorText9(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -23353,7 +25864,7 @@ function openStore3(decryptedDir) {
   try {
     mkdirSync18(dirname27(file), { recursive: true });
   } catch (e) {
-    console.warn("[chat-collect] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText7(e));
+    console.warn("[chat-collect] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText9(e));
   }
   const db = new DatabaseSync(file);
   db.exec(`CREATE TABLE IF NOT EXISTS chat_collect_tasks (
@@ -23379,7 +25890,7 @@ function listChatCollectTasks(decryptedDir) {
       db.close();
     }
   } catch (e) {
-    const readError = errorText7(e);
+    const readError = errorText9(e);
     console.warn("[chat-collect] \u6536\u96C6\u4EFB\u52A1\u5E93\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u4EFB\u52A1\u300D\u4E0D\u540C\uFF09\uFF1A" + readError);
     return { items: [], total: 0, readError };
   }
@@ -23460,7 +25971,7 @@ async function createChatCollectTask(decryptedDir, decodedDir, options) {
       cursorLocalId = snap.cursorLocalId;
     }
   } catch (e) {
-    return { ok: false, error: "\u8BFB\u53D6\u4F1A\u8BDD\u6D88\u606F\u5931\u8D25\uFF1A" + errorText7(e) };
+    return { ok: false, error: "\u8BFB\u53D6\u4F1A\u8BDD\u6D88\u606F\u5931\u8D25\uFF1A" + errorText9(e) };
   }
   texts.reverse();
   images.reverse();
@@ -23471,7 +25982,7 @@ async function createChatCollectTask(decryptedDir, decodedDir, options) {
   try {
     mkdirSync18(imageDir, { recursive: true });
   } catch (e) {
-    return { ok: false, error: "\u521B\u5EFA\u4EFB\u52A1\u76EE\u5F55\u5931\u8D25\uFF1A" + errorText7(e) };
+    return { ok: false, error: "\u521B\u5EFA\u4EFB\u52A1\u76EE\u5F55\u5931\u8D25\uFF1A" + errorText9(e) };
   }
   let imageCount = 0;
   for (const [index, image] of images.entries()) {
@@ -23512,7 +26023,7 @@ async function createChatCollectTask(decryptedDir, decodedDir, options) {
     writeFileSync15(join62(folder, "texts.json"), JSON.stringify(texts, null, 2), "utf8");
     writeFileSync15(join62(folder, "task.json"), JSON.stringify(taskMeta, null, 2), "utf8");
   } catch (e) {
-    return { ok: false, error: "\u5199\u5165\u4EFB\u52A1\u6587\u4EF6\u5931\u8D25\uFF1A" + errorText7(e) };
+    return { ok: false, error: "\u5199\u5165\u4EFB\u52A1\u6587\u4EF6\u5931\u8D25\uFF1A" + errorText9(e) };
   }
   try {
     const db = openStore3(decryptedDir);
@@ -23537,12 +26048,12 @@ async function createChatCollectTask(decryptedDir, decodedDir, options) {
       db.close();
     }
   } catch (e) {
-    return { ok: false, error: "\u4FDD\u5B58\u4EFB\u52A1\u8BB0\u5F55\u5931\u8D25\uFF1A" + errorText7(e) };
+    return { ok: false, error: "\u4FDD\u5B58\u4EFB\u52A1\u8BB0\u5F55\u5931\u8D25\uFF1A" + errorText9(e) };
   }
 }
 
 // src/backend/wechat-data/src/query/moments.ts
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 import { existsSync as existsSync45 } from "node:fs";
 import { join as join63 } from "node:path";
 function cellString2(v) {
@@ -23867,7 +26378,7 @@ function ensureMomentsArchiveFresh(decryptedDir, force = false) {
   const changedRows = [];
   for (const row of live) {
     if (row.tid === "" || row.content === "") continue;
-    const contentHash = createHash20("sha1").update(row.content).digest("hex");
+    const contentHash = createHash21("sha1").update(row.content).digest("hex");
     if (hashes !== null && hashes.get(row.tid) === contentHash) continue;
     const entry = buildMomentEntry(row.tid, row.username, row.content, names, "");
     changedRows.push({ tid: row.tid, username: row.username, content: row.content, contentHash, entry });
@@ -24905,13 +27416,13 @@ function archiveMessages(decryptedDir) {
     let added = 0;
     let tables = 0;
     let scanned = 0;
-    let skipped = 0;
+    let skipped2 = 0;
     for (const file of files) {
       const srcFile = join68(msgDir, file);
       const sig = srcSig(srcFile);
       const known = getSrc.get(file);
       if (sig !== "" && known?.sig === sig) {
-        skipped += 1;
+        skipped2 += 1;
         continue;
       }
       let rows = [];
@@ -24955,7 +27466,7 @@ function archiveMessages(decryptedDir) {
       }
       setSrc.run(file, sig, rows.length, now);
     }
-    return { added, tables, scanned, skipped };
+    return { added, tables, scanned, skipped: skipped2 };
   });
 }
 function senderFromXmlTip(tip) {
@@ -25363,7 +27874,7 @@ function queryRevoked(decryptedDir, limit, offset = 0, q) {
 }
 
 // src/backend/wechat-data/src/query/storage.ts
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 import { existsSync as existsSync53, readdirSync as readdirSync30, statSync as statSync29 } from "node:fs";
 import { dirname as dirname32, join as join70 } from "node:path";
 import { decompress as decompress7 } from "fzstd";
@@ -25399,7 +27910,7 @@ function xmlTitle(xml) {
   return m ? (m[1] ?? "").trim() : "";
 }
 function findMsgShard(dec, username) {
-  const table = "Msg_" + createHash21("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash22("md5").update(username, "utf8").digest("hex");
   for (const sh of shardCatalogDirs(dec, ["message", "bizchat"])) {
     if (sh.tables.has(table)) return { db: sh.file, table };
   }
@@ -25613,7 +28124,7 @@ import { join as join125 } from "node:path";
 import { openNativePath as openNativePath2 } from "@deepseek-ai/dsh-native-command";
 
 // src/backend/wechat-data/src/query/calls.ts
-import { createHash as createHash22 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 import { decompress as decompress8 } from "fzstd";
 import { join as join72 } from "node:path";
 var ZSTD_MAGIC8 = Buffer.from([40, 181, 47, 253]);
@@ -25660,7 +28171,7 @@ function parseDuration(text) {
 function md5Index(decryptedDir) {
   const names = contactMeta(decryptedDir).names;
   const map = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) map.set(createHash22("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) map.set(createHash23("md5").update(u, "utf8").digest("hex"), u);
   return map;
 }
 async function scanCalls(decryptedDir, selfUsername) {
@@ -25818,7 +28329,7 @@ async function queryCalls(decryptedDir, selfUsername, topPeers = 20, recentLimit
 }
 
 // src/backend/wechat-data/src/query/graph.ts
-import { createHash as createHash23 } from "node:crypto";
+import { createHash as createHash24 } from "node:crypto";
 import { existsSync as existsSync55 } from "node:fs";
 import { join as join73 } from "node:path";
 function cellString4(v) {
@@ -25857,7 +28368,7 @@ function remarkClassKey(remark) {
 async function loadMessageCounts(decryptedDir, usernames) {
   const counts = /* @__PURE__ */ new Map();
   const tableToUser = /* @__PURE__ */ new Map();
-  for (const u of usernames) tableToUser.set("Msg_" + createHash23("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of usernames) tableToUser.set("Msg_" + createHash24("md5").update(u, "utf8").digest("hex"), u);
   for (const sh of shardCatalog(decryptedDir)) {
     const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ""));
     if (wanted.length === 0) continue;
@@ -26104,11 +28615,11 @@ async function computeGraph(decryptedDir, selfUsername) {
 }
 
 // src/backend/wechat-data/src/query/calendar.ts
-import { createHash as createHash24 } from "node:crypto";
+import { createHash as createHash25 } from "node:crypto";
 import { existsSync as existsSync56, readdirSync as readdirSync32 } from "node:fs";
 import { join as join74 } from "node:path";
 function msgTableName6(username) {
-  return "Msg_" + createHash24("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash25("md5").update(username, "utf8").digest("hex");
 }
 function getDailyCounts(decryptedDir, username, year, month) {
   if (month < 1 || month > 12) throw new Error("\u65E0\u6548\u6708\u4EFD");
@@ -26353,7 +28864,7 @@ function searchMembers(decryptedDir, q, opts) {
 }
 
 // src/backend/wechat-data/src/query/article-cover.ts
-import { createHash as createHash25 } from "node:crypto";
+import { createHash as createHash26 } from "node:crypto";
 import { existsSync as existsSync58, mkdirSync as mkdirSync22, readdirSync as readdirSync33, readFileSync as readFileSync32, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join76 } from "node:path";
 var coverCache2 = /* @__PURE__ */ new Map();
@@ -26432,12 +28943,12 @@ function coverImageFetchUrl(raw, articleUrl) {
 }
 function coverFile(cacheDir, key) {
   if (!cacheDir) return null;
-  const hash = createHash25("md5").update(Buffer.from(key, "utf8")).digest("hex");
+  const hash = createHash26("md5").update(Buffer.from(key, "utf8")).digest("hex");
   return join76(cacheDir, "article-covers", hash + ".img");
 }
 function coverMissFile(cacheDir, key) {
   if (!cacheDir) return null;
-  const hash = createHash25("md5").update(Buffer.from(key, "utf8")).digest("hex");
+  const hash = createHash26("md5").update(Buffer.from(key, "utf8")).digest("hex");
   return join76(cacheDir, "article-covers", hash + ".miss");
 }
 var COVER_MISS_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -26585,7 +29096,7 @@ async function resolveArticleCoversDataUrls(urls, cacheDir, localCover) {
     let preImgN = 0;
     if (trace) {
       for (const k of batch) {
-        const h = createHash25("md5").update(Buffer.from(k, "utf8")).digest("hex");
+        const h = createHash26("md5").update(Buffer.from(k, "utf8")).digest("hex");
         if (existsSync58(join76(cacheDir ?? "", "article-covers", h + ".miss"))) preMissN += 1;
         if (existsSync58(join76(cacheDir ?? "", "article-covers", h + ".img"))) preImgN += 1;
       }
@@ -26597,7 +29108,7 @@ async function resolveArticleCoversDataUrls(urls, cacheDir, localCover) {
     waves += 1;
     if (trace) {
       const ok = settled.filter((x) => x.dataUrl !== void 0).length;
-      const k0 = createHash25("md5").update(Buffer.from(batch[0] ?? "", "utf8")).digest("hex");
+      const k0 = createHash26("md5").update(Buffer.from(batch[0] ?? "", "utf8")).digest("hex");
       const miss0 = existsSync58(join76(cacheDir ?? "", "article-covers", k0 + ".miss"));
       console.warn(`[cover-trace] n=${String(wanted.length)} wave=${String(waves)} size=${String(batch.length)} \u547D\u4E2D/\u5931\u8D25=${ok}/${batch.length - ok} \u672C\u6CE2=${Date.now() - waveStartedAt}ms \u7D2F\u8BA1=${Date.now() - callStartedAt}ms \u6CE2\u524D[\u5DF2\u6709\u6807\u8BB0=${String(preMissN)} \u5DF2\u6709\u56FE=${String(preImgN)}] \u5206\u5C42[\u5185\u5B58=${coverStats.mem} \u843D\u76D8\u56FE=${coverStats.img} \u843D\u76D8\u65E0\u5C01\u9762=${coverStats.missFile} \u672C\u673A=${coverStats.local} \u51FA\u7F51=${coverStats.net} \u9875\u9762\u65E0\u5C01\u9762=${coverStats.noCover}]`);
       coverStats.mem = 0;
@@ -26615,10 +29126,10 @@ async function resolveArticleCoversDataUrls(urls, cacheDir, localCover) {
 }
 
 // src/backend/wechat-data/src/gateway-read.ts
-import { createHash as createHash41 } from "node:crypto";
+import { createHash as createHash42 } from "node:crypto";
 
 // src/backend/wechat-data/src/query/overview-insights.ts
-import { createHash as createHash27 } from "node:crypto";
+import { createHash as createHash28 } from "node:crypto";
 import { existsSync as existsSync61, readdirSync as readdirSync35, statSync as statSync31 } from "node:fs";
 import { join as join79 } from "node:path";
 
@@ -26668,7 +29179,7 @@ function saveInsightsShardCache(path, entries2) {
 }
 
 // src/backend/wechat-data/src/query/overview-extras.ts
-import { createHash as createHash26 } from "node:crypto";
+import { createHash as createHash27 } from "node:crypto";
 import { existsSync as existsSync60, readdirSync as readdirSync34, statSync as statSync30 } from "node:fs";
 import { dirname as dirname34, join as join78 } from "node:path";
 function extrasCachePath(dec) {
@@ -26729,7 +29240,7 @@ function computeOverviewExtras(dec, sig) {
   const day90 = now - 90 * 86400;
   const names = contactMeta(dec).names;
   const md5ToUser = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) md5ToUser.set(createHash26("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) md5ToUser.set(createHash27("md5").update(u, "utf8").digest("hex"), u);
   try {
     const sp = join78(dec, "session", "session.db");
     if (existsSync60(sp)) {
@@ -26737,7 +29248,7 @@ function computeOverviewExtras(dec, sig) {
       if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0) {
         for (const r of db.prepare("SELECT username FROM SessionTable").all()) {
           const u = cellStr10(r["username"]);
-          if (u) md5ToUser.set(createHash26("md5").update(u, "utf8").digest("hex"), u);
+          if (u) md5ToUser.set(createHash27("md5").update(u, "utf8").digest("hex"), u);
         }
       }
       db.close();
@@ -27059,7 +29570,7 @@ async function computeOverviewInsights(decryptedDir, self = "") {
   ensureShardCacheHydrated(dec);
   const names = contactMeta(dec).names;
   const md5ToUser = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) md5ToUser.set(createHash27("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) md5ToUser.set(createHash28("md5").update(u, "utf8").digest("hex"), u);
   try {
     const sp = join79(dec, "session", "session.db");
     if (existsSync61(sp)) {
@@ -27069,7 +29580,7 @@ async function computeOverviewInsights(decryptedDir, self = "") {
         const rows = db.prepare("SELECT username FROM SessionTable").all();
         for (const r of rows) {
           const u = cellStr11(r["username"]);
-          if (u) md5ToUser.set(createHash27("md5").update(u, "utf8").digest("hex"), u);
+          if (u) md5ToUser.set(createHash28("md5").update(u, "utf8").digest("hex"), u);
         }
       }
       db.close();
@@ -28102,7 +30613,7 @@ async function computeLedger(decryptedDir, month, selfUsername) {
 }
 
 // src/backend/wechat-data/src/query/contact360.ts
-import { createHash as createHash28 } from "node:crypto";
+import { createHash as createHash29 } from "node:crypto";
 import { existsSync as existsSync65 } from "node:fs";
 import { join as join84 } from "node:path";
 function cellString5(v) {
@@ -28117,7 +30628,7 @@ function tableColumns7(db, table) {
   return new Set(rows.map((r) => r.name));
 }
 function msgTableName7(username) {
-  return "Msg_" + createHash28("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash29("md5").update(username, "utf8").digest("hex");
 }
 function messageStats2(decryptedDir, username) {
   const table = msgTableName7(username);
@@ -28255,7 +30766,7 @@ function queryContact360(decryptedDir, username) {
 }
 
 // src/backend/wechat-data/src/query/group-insights.ts
-import { createHash as createHash29 } from "node:crypto";
+import { createHash as createHash30 } from "node:crypto";
 import { existsSync as existsSync66, readdirSync as readdirSync36 } from "node:fs";
 import { join as join85 } from "node:path";
 import { decompress as decompress10 } from "fzstd";
@@ -28346,7 +30857,7 @@ function queryGroupInsights(decryptedDir, username) {
 }
 function computeGroupInsights(decryptedDir, username) {
   const names = contactMeta(decryptedDir).names;
-  const table = "Msg_" + createHash29("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash30("md5").update(username, "utf8").digest("hex");
   const dir = join85(decryptedDir, "message");
   let total = 0;
   let minTime = null;
@@ -29019,7 +31530,7 @@ async function computeMomentsMonthly(decryptedDir, author, authorName) {
 }
 
 // src/backend/wechat-data/src/query/official-assets.ts
-import { createHash as createHash30 } from "node:crypto";
+import { createHash as createHash31 } from "node:crypto";
 import { existsSync as existsSync71, readdirSync as readdirSync38 } from "node:fs";
 import { join as join90 } from "node:path";
 import { decompress as decompress12 } from "fzstd";
@@ -29118,7 +31629,7 @@ async function computeOfficialAssets(decryptedDir) {
       try {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all().map((r) => r.name);
         for (const table of tables) {
-          const username = usernames.find((u) => "Msg_" + createHash30("md5").update(u, "utf8").digest("hex") === table);
+          const username = usernames.find((u) => "Msg_" + createHash31("md5").update(u, "utf8").digest("hex") === table);
           if (!username) continue;
           const cols = tableColumns11(db, table);
           if (!cols.has("create_time") || !cols.has("local_type")) continue;
@@ -29354,7 +31865,7 @@ function searchUnified(decryptedDir, query, limit) {
 // src/backend/wechat-data/src/query/annual-report.ts
 import { decompress as decompress13 } from "fzstd";
 import { existsSync as existsSync73, readdirSync as readdirSync39 } from "node:fs";
-import { createHash as createHash31 } from "node:crypto";
+import { createHash as createHash32 } from "node:crypto";
 import { join as join92 } from "node:path";
 
 // src/backend/wechat-data/src/query/zip.ts
@@ -29858,7 +32369,7 @@ var ZipFileWriter = class _ZipFileWriter {
 
 // src/backend/wechat-data/src/query/annual-report.ts
 function msgTableName8(username) {
-  return "Msg_" + createHash31("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash32("md5").update(username, "utf8").digest("hex");
 }
 function cellStr12(v) {
   if (typeof v === "string") return v;
@@ -30134,7 +32645,7 @@ function typeLabel(t) {
 
 // src/backend/wechat-data/src/query/annual-review.ts
 import { decompress as decompress14 } from "fzstd";
-import { createHash as createHash32 } from "node:crypto";
+import { createHash as createHash33 } from "node:crypto";
 
 // src/backend/wechat-data/src/query/annual-moments.ts
 import { existsSync as existsSync74 } from "node:fs";
@@ -30691,7 +33202,7 @@ async function queryAnnualReview(decryptedDir, year, selfUsername = "") {
   const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1e3);
   const md5ToUser = /* @__PURE__ */ new Map();
   const noteUser = (u) => {
-    if (u) md5ToUser.set(createHash32("md5").update(u, "utf8").digest("hex"), u);
+    if (u) md5ToUser.set(createHash33("md5").update(u, "utf8").digest("hex"), u);
   };
   for (const u of names.keys()) noteUser(u);
   let sent = 0;
@@ -31248,10 +33759,10 @@ function assemble(b) {
 
 // src/backend/wechat-data/src/query/edit.ts
 import { existsSync as existsSync76, readdirSync as readdirSync40 } from "node:fs";
-import { createHash as createHash33 } from "node:crypto";
+import { createHash as createHash34 } from "node:crypto";
 import { dirname as dirname37, join as join95 } from "node:path";
 function msgTableName9(username) {
-  return "Msg_" + createHash33("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash34("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles4(decryptedDir) {
   const dir = join95(decryptedDir, "message");
@@ -31451,7 +33962,7 @@ import { dirname as dirname38, join as join97 } from "node:path";
 function dbPath3(decryptedDir) {
   return join97(dirname38(decryptedDir), "daily_summary.db");
 }
-function errorText8(e) {
+function errorText10(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -31460,7 +33971,7 @@ function openStore5(decryptedDir) {
   try {
     mkdirSync26(dirname38(file), { recursive: true });
   } catch (e) {
-    console.warn("[summary-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText8(e));
+    console.warn("[summary-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
   }
   const db = new DatabaseSync(file);
   db.exec("CREATE TABLE IF NOT EXISTS summary_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', custom_prompt TEXT NOT NULL DEFAULT '', schedule_time TEXT NOT NULL DEFAULT '08:00', enabled INTEGER NOT NULL DEFAULT 1, last_run_at INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
@@ -31504,7 +34015,7 @@ function listSummaryTasks(decryptedDir) {
     const items = rows.map(rowToTask3);
     return { items, total: items.length };
   } catch (e) {
-    const readError = errorText8(e);
+    const readError = errorText10(e);
     console.warn("[summary-tasks] \u6458\u8981\u4EFB\u52A1\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u4EFB\u52A1\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath3(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
@@ -31604,7 +34115,7 @@ function listSummaryRecords(decryptedDir, taskId) {
     }));
     return { items, total: items.length };
   } catch (e) {
-    const readError = errorText8(e);
+    const readError = errorText10(e);
     console.warn("[summary-tasks] \u6458\u8981\u8BB0\u5F55\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u8BB0\u5F55\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath3(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
@@ -31948,13 +34459,13 @@ function tailQuickCheckOk(stagingDb) {
 }
 
 // src/backend/wechat-data/src/query/sync-page-diff.ts
-import { createHash as createHash34 } from "node:crypto";
+import { createHash as createHash35 } from "node:crypto";
 import { open as open3 } from "node:fs/promises";
 var PAGE_DIFF_YIELD_PAGES = 512;
 var READ_CHUNK_PAGES = 256;
 var DIFF_MAX_CHANGED_RATIO = 0.2;
 function pageHash(page) {
-  return createHash34("sha256").update(page).digest();
+  return createHash35("sha256").update(page).digest();
 }
 async function pageHashesOf(path) {
   const fh = await open3(path, "r");
@@ -32987,10 +35498,10 @@ function startRealtimeSync(rawDbDir, decryptedDir, onSync) {
 // src/backend/wechat-data/src/query/daily-summary.ts
 import { decompress as decompress15 } from "fzstd";
 import { existsSync as existsSync81, readdirSync as readdirSync42 } from "node:fs";
-import { createHash as createHash35 } from "node:crypto";
+import { createHash as createHash36 } from "node:crypto";
 import { join as join102 } from "node:path";
 function msgTableName10(username) {
-  return "Msg_" + createHash35("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash36("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles5(decryptedDir) {
   const dir = join102(decryptedDir, "message");
@@ -33283,13 +35794,13 @@ function openStore6(decryptedDir) {
   try {
     mkdirSync27(dirname41(file), { recursive: true });
   } catch (e) {
-    console.warn("[wechat-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText9(e));
+    console.warn("[wechat-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText11(e));
   }
   const db = new DatabaseSync(file);
   db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', due_at INTEGER, source_username TEXT NOT NULL DEFAULT '', source_local_id INTEGER, message_time INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   return db;
 }
-function errorText9(e) {
+function errorText11(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -33322,7 +35833,7 @@ function listTasks(decryptedDir) {
     const items = rows.map(rowToTask4);
     return { items, total: items.length };
   } catch (e) {
-    const readError = errorText9(e);
+    const readError = errorText11(e);
     console.warn("[wechat-tasks] \u5F85\u529E\u5E93\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u5F85\u529E\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath4(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
@@ -33457,7 +35968,7 @@ function withNotesStore(decryptedDir, fn) {
   try {
     mkdirSync28(dirname42(file), { recursive: true });
   } catch (e) {
-    console.warn("[notes] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
+    console.warn("[notes] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText12(e));
   }
   return withWritableDb(file, (db) => {
     migrate3(db);
@@ -33484,7 +35995,7 @@ function cellStr19(v) {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
 }
-function errorText10(e) {
+function errorText12(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -33636,7 +36147,7 @@ function listKbs(decryptedDir) {
       return { items, total: items.length };
     });
   } catch (e) {
-    const readError = errorText10(e);
+    const readError = errorText12(e);
     console.warn("[notes] \u77E5\u8BC6\u5E93\u5217\u8868\u8BFB\u53D6\u5931\u8D25\uFF1A" + dbPath5(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
@@ -33654,7 +36165,7 @@ function createKb(decryptedDir, name) {
       return { ok: true, id: Number(r.lastInsertRowid) };
     });
   } catch (e) {
-    return { ok: false, error: errorText10(e) };
+    return { ok: false, error: errorText12(e) };
   }
 }
 function renameKb(decryptedDir, id, name) {
@@ -33674,7 +36185,7 @@ function renameKb(decryptedDir, id, name) {
       return { ok: true, id: kbId };
     });
   } catch (e) {
-    return { ok: false, error: errorText10(e) };
+    return { ok: false, error: errorText12(e) };
   }
 }
 function deleteKb(decryptedDir, id, action) {
@@ -33718,7 +36229,7 @@ function deleteKb(decryptedDir, id, action) {
       return { ok: false, error: "\u5220\u9664\u65B9\u5F0F\u65E0\u6CD5\u8BC6\u522B" };
     });
   } catch (e) {
-    return { ok: false, error: errorText10(e) };
+    return { ok: false, error: errorText12(e) };
   }
 }
 function listNotes(decryptedDir, kbId, options) {
@@ -33743,7 +36254,7 @@ function listNotes(decryptedDir, kbId, options) {
       return { items, total: Number(totalRow?.n ?? items.length) };
     });
   } catch (e) {
-    const readError = errorText10(e);
+    const readError = errorText12(e);
     console.warn("[notes] \u7B14\u8BB0\u5E93\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u7B14\u8BB0\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath5(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
@@ -33791,7 +36302,7 @@ function saveNote(decryptedDir, kbId, input) {
       return { ok: true, id: Number(r.lastInsertRowid) };
     });
   } catch (e) {
-    return { ok: false, error: errorText10(e) };
+    return { ok: false, error: errorText12(e) };
   }
 }
 function deleteNote(decryptedDir, kbId, id) {
@@ -33805,7 +36316,7 @@ function deleteNote(decryptedDir, kbId, id) {
       return { ok: r.changes > 0, id: noteId };
     });
   } catch (e) {
-    return { ok: false, error: errorText10(e) };
+    return { ok: false, error: errorText12(e) };
   }
 }
 function buildKnowledgeGraph(decryptedDir, kbId, names) {
@@ -33838,7 +36349,7 @@ function buildKnowledgeGraph(decryptedDir, kbId, names) {
     }
     rows = read.rows;
   } catch (e) {
-    const readError = errorText10(e);
+    const readError = errorText12(e);
     console.warn("[notes] \u77E5\u8BC6\u56FE\u8C31\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u7B14\u8BB0\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath5(decryptedDir) + ": " + readError);
     return { ...empty, readError };
   }
@@ -34224,7 +36735,7 @@ function redactSensitiveText(text) {
 }
 
 // src/backend/wechat-data/src/query/privacy.ts
-import { createHash as createHash36 } from "node:crypto";
+import { createHash as createHash37 } from "node:crypto";
 import { existsSync as existsSync83, readdirSync as readdirSync43 } from "node:fs";
 import { join as join108 } from "node:path";
 var CATEGORIES2 = [
@@ -34323,7 +36834,7 @@ async function computePrivacyScan(decryptedDir, rowBudget) {
     const shards = readdirSync43(msgDir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("tmp"));
     const targetUsernames = usernames.slice(0, 800);
     const tableToUser = /* @__PURE__ */ new Map();
-    for (const username of targetUsernames) tableToUser.set("Msg_" + createHash36("md5").update(username, "utf8").digest("hex"), username);
+    for (const username of targetUsernames) tableToUser.set("Msg_" + createHash37("md5").update(username, "utf8").digest("hex"), username);
     const fileInfos = [];
     for (const file of shards) {
       await yieldToLoop();
@@ -34447,7 +36958,7 @@ function createOpsLogRemotes(rc) {
 // src/backend/wechat-data/src/query/wordcloud.ts
 import { decompress as decompress16 } from "fzstd";
 import { existsSync as existsSync84, readdirSync as readdirSync44 } from "node:fs";
-import { createHash as createHash37 } from "node:crypto";
+import { createHash as createHash38 } from "node:crypto";
 import { join as join109 } from "node:path";
 
 // src/backend/wechat-data/src/query/word-match.ts
@@ -34707,7 +37218,7 @@ function pruneFragmentWords(counts, matcher, opts) {
 
 // src/backend/wechat-data/src/query/wordcloud.ts
 function msgTableName11(username) {
-  return "Msg_" + createHash37("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash38("md5").update(username, "utf8").digest("hex");
 }
 var ZSTD_MAGIC16 = Buffer.from([40, 181, 47, 253]);
 function decodeCell11(v) {
@@ -34915,7 +37426,7 @@ function createWordcloudRemotes(rc) {
 // src/backend/wechat-data/src/query/backup.ts
 import { closeSync as closeSync5, cpSync as cpSync3, createReadStream as createReadStream3, existsSync as existsSync85, mkdirSync as mkdirSync29, openSync as openSync5, readSync as readSync5, readdirSync as readdirSync45, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync34, statfsSync, writeFileSync as writeFileSync22 } from "node:fs";
 import { dirname as dirname45, join as join110, relative as relative3 } from "node:path";
-import { createCipheriv, createDecipheriv as createDecipheriv7, createHmac as createHmac2, randomBytes as randomBytes3, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv as createDecipheriv7, createHmac as createHmac3, randomBytes as randomBytes3, scryptSync } from "node:crypto";
 var MAGIC = Buffer.from("DSHWCB1\n", "utf8");
 var SALT_LEN = 16;
 var VERSION = 1;
@@ -35152,7 +37663,7 @@ async function createEncryptedBackup(decryptedDir, password, ctrl) {
     }))
   };
   const headerBuf = Buffer.from(JSON.stringify(header), "utf8");
-  const mac = createHmac2("sha256", key).update(headerBuf).digest();
+  const mac = createHmac3("sha256", key).update(headerBuf).digest();
   const sink = await StreamWriter.create(tmp);
   let written = 0;
   try {
@@ -35213,7 +37724,7 @@ function restoreEncryptedBackup(decryptedDir, name, password) {
     const headerBuf = readExactFd(fd, headerLen);
     const mac = readExactFd(fd, 32);
     const key = scryptSync(password, salt, 32);
-    const expect = createHmac2("sha256", key).update(headerBuf).digest();
+    const expect = createHmac3("sha256", key).update(headerBuf).digest();
     if (!mac.equals(expect)) return { ok: false, error: "\u5BC6\u7801\u9519\u8BEF\u6216\u6587\u4EF6\u88AB\u7BE1\u6539" };
     const header = JSON.parse(headerBuf.toString("utf8"));
     const plainBytes = header.files.reduce((n, f) => n + (Number(f.size) || 0), 0);
@@ -38158,7 +40669,7 @@ function findFilesMentioning(db, kbId, phrase, limit = DEFAULT_MENTION_FILE_LIMI
 // src/backend/wechat-data/src/query/kb/extract.ts
 var KB_ENTITIES_TABLE = "kb_doc_entities";
 var ENTITY_KINDS = ["person", "org", "product", "place", "topic"];
-function errorText11(e) {
+function errorText13(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -38284,7 +40795,7 @@ function saveDocEntities(decryptedDir, kbId, fileId, items, model) {
     }
     return { ok: true, saved: items.length };
   } catch (e) {
-    return { ok: false, saved: 0, error: errorText11(e) };
+    return { ok: false, saved: 0, error: errorText13(e) };
   }
 }
 async function extractFileEntities(decryptedDir, kbId, fileId, ask, model, budget = 8e3) {
@@ -38305,7 +40816,7 @@ async function extractFileEntities(decryptedDir, kbId, fileId, ask, model, budge
   try {
     raw = await ask(buildExtractPrompt(name, digest.text, digest.truncated));
   } catch (e) {
-    return { ok: false, error: errorText11(e) };
+    return { ok: false, error: errorText13(e) };
   }
   if (raw === "") {
     return { ok: false, saved: 0, dropped: 0, error: "\u6A21\u578B\u6CA1\u6709\u8FD4\u56DE\u53EF\u89E3\u6790\u7684\u5B9E\u4F53\u6B63\u6587\uFF08\u53EF\u80FD\u8F93\u51FA\u88AB\u622A\u65AD\u6216\u53EA\u751F\u6210\u4E86\u601D\u8003\u5185\u5BB9\uFF09" };
@@ -38350,7 +40861,7 @@ function readDocEntities2(decryptedDir, kbId) {
       }))
     };
   } catch (e) {
-    return { items: [], readError: errorText11(e) };
+    return { items: [], readError: errorText13(e) };
   }
 }
 function ensureEntitiesTableReadOnly(db) {
@@ -39013,7 +41524,7 @@ function createVoiceLlmRemotes(rc) {
 
 // src/backend/wechat-data/src/query/annual-segments.ts
 import { existsSync as existsSync93, readdirSync as readdirSync49 } from "node:fs";
-import { createHash as createHash38 } from "node:crypto";
+import { createHash as createHash39 } from "node:crypto";
 import { join as join119 } from "node:path";
 import { decompress as decompress17 } from "fzstd";
 var ZSTD_MAGIC17 = Buffer.from([40, 181, 47, 253]);
@@ -39051,7 +41562,7 @@ function bodyOnly(content) {
   return stripXml4(t.replace(/^[\x00-\x1f\x7f-\x9f]*/, "")).slice(0, 120);
 }
 function msgTableName12(username) {
-  return "Msg_" + createHash38("md5").update(username, "utf8").digest("hex");
+  return "Msg_" + createHash39("md5").update(username, "utf8").digest("hex");
 }
 function loadUsernames2(decryptedDir) {
   const p = join119(decryptedDir, "session", "session.db");
@@ -39501,7 +42012,7 @@ function kbDocFromHit(kbId, h) {
     }
   };
 }
-function errorText12(e) {
+function errorText14(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -39554,7 +42065,7 @@ async function kbChannel(decryptedDir, kbId, query, topK, opts = {}) {
       if (res.readError) return { hits: [], failed: "\u77E5\u8BC6\u5E93\u6253\u4E0D\u5F00\uFF1A" + res.readError };
       return { hits: res.hits, ...res.degraded ? { degraded: res.degraded } : {} };
     } catch (e) {
-      return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u5931\u8D25\uFF1A" + errorText12(e) };
+      return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u5931\u8D25\uFF1A" + errorText14(e) };
     }
   })();
   const denseTask = useDense ? (async () => {
@@ -39567,7 +42078,7 @@ async function kbChannel(decryptedDir, kbId, query, topK, opts = {}) {
       });
       return { hits: res.hits, ...res.note ? { note: res.note } : {} };
     } catch (e) {
-      return { hits: [], note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25\uFF1A" + errorText12(e) };
+      return { hits: [], note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25\uFF1A" + errorText14(e) };
     }
   })() : Promise.resolve(null);
   const [sparse, dense] = await Promise.all([sparseTask, denseTask]);
@@ -39929,7 +42440,7 @@ function factsToDocs(facts) {
 
 // src/backend/wechat-data/src/query/retrieval/pipeline.ts
 var RERANK_CANDIDATE_LIMIT = 60;
-function errorText13(e) {
+function errorText15(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -40221,7 +42732,7 @@ async function runRetrievalPipeline(input) {
       poolRanked = [...aggRanked, ...order.map((o) => o.r), ...tail];
       rerankInfo = { used: true, candidates: take, kept: Math.min(limit, take), model: input.rerankModel ?? "" };
     } catch (e) {
-      rerankInfo = { used: false, note: "\u7CBE\u6392\u8FD9\u6B21\u6CA1\u8DD1\u6210\uFF1A" + errorText13(e) + "\uFF08\u5DF2\u9000\u56DE\u672C\u5730\u52A0\u6743\uFF09" };
+      rerankInfo = { used: false, note: "\u7CBE\u6392\u8FD9\u6B21\u6CA1\u8DD1\u6210\uFF1A" + errorText15(e) + "\uFF08\u5DF2\u9000\u56DE\u672C\u5730\u52A0\u6743\uFF09" };
     }
   } else if (typeof input.rerank === "function") {
     rerankInfo = { used: false, note: "\u672C\u6B21\u672A\u505A\u6A21\u578B\u7CBE\u6392\uFF08\u5019\u9009\u4E0D\u8DB3\u4E24\u6761\uFF0C\u6216\u95EE\u6CD5\u8981\u7684\u662F\u65F6\u95F4\u5E8F\uFF09" };
@@ -41839,7 +44350,7 @@ async function optimizeAskQuestionIn(rc, options) {
 }
 
 // src/backend/wechat-data/src/query/kb-queue.ts
-import { createHash as createHash39 } from "node:crypto";
+import { createHash as createHash40 } from "node:crypto";
 import { existsSync as existsSync97, readFileSync as readFileSync39 } from "node:fs";
 import { join as join121 } from "node:path";
 var SCAN_LIMIT = 200;
@@ -41908,10 +44419,10 @@ function readJobBytes(decryptedDir, job) {
   try {
     raw = readFileSync39(job.srcPath);
   } catch (e) {
-    throw new Error("\u5185\u5BB9\u526F\u672C\u4E0D\u5728\u4E86\uFF0C\u539F\u6587\u4EF6\u4E5F\u8BFB\u4E0D\u5230\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u52A8\u6216\u5220\u9664\uFF09\uFF1A" + errorText4(e));
+    throw new Error("\u5185\u5BB9\u526F\u672C\u4E0D\u5728\u4E86\uFF0C\u539F\u6587\u4EF6\u4E5F\u8BFB\u4E0D\u5230\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u52A8\u6216\u5220\u9664\uFF09\uFF1A" + errorText6(e));
   }
   if (job.sha256 !== "") {
-    const actual = createHash39("sha256").update(raw).digest("hex");
+    const actual = createHash40("sha256").update(raw).digest("hex");
     if (actual !== job.sha256) {
       throw new Error("\u5185\u5BB9\u526F\u672C\u4E0D\u5728\u4E86\uFF0C\u800C\u539F\u6587\u4EF6\u7684\u5185\u5BB9\u5DF2\u7ECF\u88AB\u6539\u52A8\u8FC7 \u2014\u2014 \u4E3A\u907F\u514D\u628A\u53E6\u4E00\u4EFD\u5185\u5BB9\u5F53\u6210\u8FD9\u4E2A\u6587\u4EF6\uFF0C\u8BF7\u91CD\u65B0\u6DFB\u52A0");
     }
@@ -41938,7 +44449,7 @@ async function markState(decryptedDir, id, state3, parser, note2, chunkCount, ch
       () => markStateOnce(decryptedDir, id, state3, parser, note2, chunkCount, charCount)
     );
   } catch (e) {
-    warn3("\u72B6\u6001\u5199\u56DE\u5931\u8D25\uFF08id=" + id + " \u2192 " + state3 + "\uFF09\uFF1A" + errorText4(e));
+    warn3("\u72B6\u6001\u5199\u56DE\u5931\u8D25\uFF08id=" + id + " \u2192 " + state3 + "\uFF09\uFF1A" + errorText6(e));
   }
 }
 function commitReady(decryptedDir, job, parser, note2, truncated, blocks) {
@@ -41964,7 +44475,7 @@ async function runJob(decryptedDir, job) {
     const bytes = readJobBytes(decryptedDir, job);
     outcome = await parseFileByExtAsync(job.ext, bytes);
   } catch (e) {
-    await markState(decryptedDir, job.id, "failed", "", errorText4(e), 0, 0);
+    await markState(decryptedDir, job.id, "failed", "", errorText6(e), 0, 0);
     return "failed";
   }
   if (outcome.state !== "ready") {
@@ -41979,7 +44490,7 @@ async function runJob(decryptedDir, job) {
     );
     return "ready";
   } catch (e) {
-    await markState(decryptedDir, job.id, "failed", outcome.parser, errorText4(e), 0, 0);
+    await markState(decryptedDir, job.id, "failed", outcome.parser, errorText6(e), 0, 0);
     return "failed";
   }
 }
@@ -42082,7 +44593,7 @@ import { existsSync as existsSync98, mkdirSync as mkdirSync31 } from "node:fs";
 import { dirname as dirname48 } from "node:path";
 var KB_MODELS_TABLE = "kb_models";
 var INLINE_PREFIX = "m:";
-function errorText14(e) {
+function errorText16(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -42102,7 +44613,7 @@ function openModelsDb(decryptedDir, readOnly = false) {
     try {
       mkdirSync31(dirname48(file), { recursive: true });
     } catch (e) {
-      console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText14(e));
+      console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText16(e));
     }
   }
   const db = new DatabaseSync(file, readOnly ? { readOnly: true } : {});
@@ -44126,7 +46637,7 @@ function kbModelOf(source, kbId, role) {
 }
 
 // src/backend/wechat-data/src/query/embed-cache.ts
-import { createHash as createHash40 } from "node:crypto";
+import { createHash as createHash41 } from "node:crypto";
 import { existsSync as existsSync100, mkdirSync as mkdirSync34, rmSync as rmSync12, statSync as statSync38 } from "node:fs";
 import { dirname as dirname51, join as join124 } from "node:path";
 var CACHE_SCHEMA_VERSION = "1";
@@ -44140,7 +46651,7 @@ function embedCachePath(decryptedDir) {
   return join124(retrievalRoot(decryptedDir), "wechat_embed_cache.db");
 }
 function embedCacheKey(ns, model, text) {
-  return createHash40("sha256").update(ns).update("\0").update(model).update("\0").update(text).digest("hex");
+  return createHash41("sha256").update(ns).update("\0").update(model).update("\0").update(text).digest("hex");
 }
 function withCache(p, ro, fn) {
   if (embedCacheMaxBytes() <= 0) return void 0;
@@ -45518,7 +48029,7 @@ function buildCoverLocalProbe(dirs) {
   if (!hasSnsMediaIndexEntries()) return void 0;
   const { aesKey, xorKey } = resolveImageKeyPair(dirs.decrypted);
   return (contentUrl) => {
-    const key = createHash41("md5").update(contentUrl, "utf8").digest("hex");
+    const key = createHash42("md5").update(contentUrl, "utf8").digest("hex");
     return findSnsMediaDataUrlByIndex(base, aesKey, xorKey, key);
   };
 }
@@ -46159,12 +48670,12 @@ __decorateElement(_init7, 1, "unloadLaya", _unloadLaya_dec, GatewayLayaOps);
 __decoratorMetadata(_init7, GatewayLayaOps);
 
 // src/backend/wechat-data/src/gateway-taskcenter.ts
-function errorText15(e) {
+function errorText17(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
-var _dispatchTaskCallback_dec, _scanTaskTriggers_dec, _listTaskTriggers_dec, _setTaskInfoStatus_dec, _deleteTaskTriggers_dec, _deleteTaskInfos_dec, _deleteTaskInfo_dec, _saveTaskInfo_dec, _listTaskInfos_dec, _a8, _init8;
-var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec = [Remote8("listTaskInfos")], _saveTaskInfo_dec = [Remote8("saveTaskInfo")], _deleteTaskInfo_dec = [Remote8("deleteTaskInfo")], _deleteTaskInfos_dec = [Remote8("deleteTaskInfos")], _deleteTaskTriggers_dec = [Remote8("deleteTaskTriggers")], _setTaskInfoStatus_dec = [Remote8("setTaskInfoStatus")], _listTaskTriggers_dec = [Remote8("listTaskTriggers")], _scanTaskTriggers_dec = [Remote8("scanTaskTriggers")], _dispatchTaskCallback_dec = [Remote8("dispatchTaskCallback")], _a8) {
+var _dispatchTaskCallback_dec, _scanTaskTriggers_dec, _listTaskTriggers_dec, _setTaskInfoStatus_dec, _deleteTaskTriggers_dec, _deleteTaskInfos_dec, _deleteTaskInfo_dec, _saveTaskInfo_dec, _listRpaVendors_dec, _listTaskInfos_dec, _a8, _init8;
+var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec = [Remote8("listTaskInfos")], _listRpaVendors_dec = [Remote8("listRpaVendors")], _saveTaskInfo_dec = [Remote8("saveTaskInfo")], _deleteTaskInfo_dec = [Remote8("deleteTaskInfo")], _deleteTaskInfos_dec = [Remote8("deleteTaskInfos")], _deleteTaskTriggers_dec = [Remote8("deleteTaskTriggers")], _setTaskInfoStatus_dec = [Remote8("setTaskInfoStatus")], _listTaskTriggers_dec = [Remote8("listTaskTriggers")], _scanTaskTriggers_dec = [Remote8("scanTaskTriggers")], _dispatchTaskCallback_dec = [Remote8("dispatchTaskCallback")], _a8) {
   constructor() {
     super(...arguments);
     __runInitializers(_init8, 5, this);
@@ -46180,6 +48691,9 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
   }
   listTaskInfos() {
     return this.taskCenterRemotes().listTaskInfos();
+  }
+  listRpaVendors() {
+    return this.taskCenterRemotes().listRpaVendors();
   }
   saveTaskInfo(options) {
     return this.taskCenterRemotes().saveTaskInfo(options);
@@ -46243,7 +48757,7 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
     try {
       scan = this.taskCenterRemotes().scanOnce();
     } catch (e) {
-      scan = { ok: false, tasks: 0, scanned: 0, created: 0, dispatched: 0, error: errorText15(e) };
+      scan = { ok: false, tasks: 0, scanned: 0, created: 0, dispatched: 0, error: errorText17(e) };
     }
     if (scan.created > 0) this.emitTaskCenterUpdated(scan.created, 0);
     void this.scheduleTaskDispatch();
@@ -46272,8 +48786,8 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
       if (pending2.dispatched > 0) this.emitTaskCenterUpdated(0, pending2.dispatched);
       return pending2;
     }).catch((e) => {
-      console.warn("[task-center] \u540E\u53F0\u6295\u9012\u5931\u8D25\uFF1A" + errorText15(e));
-      return { dispatched: 0, failed: 0, errors: ["\u6295\u9012\u5F85\u53D1\u56DE\u8C03\u5931\u8D25\uFF1A" + errorText15(e)] };
+      console.warn("[task-center] \u540E\u53F0\u6295\u9012\u5931\u8D25\uFF1A" + errorText17(e));
+      return { dispatched: 0, failed: 0, errors: ["\u6295\u9012\u5F85\u53D1\u56DE\u8C03\u5931\u8D25\uFF1A" + errorText17(e)] };
     }).finally(() => {
       this._taskDispatch = null;
       if (this._taskDispatchQueued) {
@@ -46318,6 +48832,7 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
 };
 _init8 = __decoratorStart(_a8);
 __decorateElement(_init8, 1, "listTaskInfos", _listTaskInfos_dec, GatewayTaskCenter);
+__decorateElement(_init8, 1, "listRpaVendors", _listRpaVendors_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "saveTaskInfo", _saveTaskInfo_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "deleteTaskInfo", _deleteTaskInfo_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "deleteTaskInfos", _deleteTaskInfos_dec, GatewayTaskCenter);

@@ -194,7 +194,7 @@ docs/                    十五份当前有效的文档（见下方索引）
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
 | [`docs/TASK-CENTER.md`](docs/TASK-CENTER.md) | 任务信息：关键词触发任务的界面、状态机、扫描与回调链路、权限边界、已知风险与代码地图 |
-| [`docs/RPA-VENDOR-TRIGGERS.md`](docs/RPA-VENDOR-TRIGGERS.md) | 多 RPA 厂商可选触发方案（调研 + 设计）：影刀/实在/来也/UiPath/阿里云五家的触发参数与鉴权、统一触发选择结构与厂商扩展机制、来源/版本/核对时间与风险清单 |
+| [`docs/RPA-VENDOR-TRIGGERS.md`](docs/RPA-VENDOR-TRIGGERS.md) | 多 RPA 厂商触发（已实现）：影刀/实在/来也/UiPath/阿里云五家的触发参数与鉴权、描述符注册表与扩展机制、来源/版本/核对时间与风险清单 |
 | [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md) | 响应式与 Bootstrap 适配：npm 引入方式、栅格/断点规约、五类组件策略、验收清单与审计门禁 |
 | [`docs/UI-DENSITY.md`](docs/UI-DENSITY.md) | UI 密度规范：固定内容/空白率指标与目标、卡片与组件紧凑化规则、实施分层与验收清单 |
 | [`docs/CARD-SIZE.md`](docs/CARD-SIZE.md) | 卡片尺寸规范：每张卡的宽高上界、卡内滚动、视觉卡例外与全站卡片审计工具 |

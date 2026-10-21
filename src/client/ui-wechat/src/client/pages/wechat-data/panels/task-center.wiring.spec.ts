@@ -122,8 +122,9 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
     )
     expect(button, '「编辑」没有打开抽屉').toContain('actions.onToggleEdit(task.id)')
     expect(button, '「编辑」顺带改变了右栏筛选（应只改编辑态）').not.toContain('onSelectTask')
-    const actionsAt = code.indexOf('const actions: TaskCenterActions = {')
-    expect(actionsAt, '找不到容器的 actions 定义').toBeGreaterThan(0)
+    // 写动作已抽到 `useTaskCenterActions`（容器函数行数棘轮）：断言它被容器接线，
+    // 且编辑抽屉的两个动作在同一个返回对象里。
+    expect(code, '容器没有接线写动作 hook').toContain('const actions = useTaskCenterActions({')
     const editActions = sliceBetween(code, 'onToggleEdit: (id)', 'onOpenRecord:', '编辑抽屉动作')
     expect(editActions, 'onToggleEdit 没有改成「设置正在编辑的任务」').toContain('setExpandedTaskId(id)')
     expect(editActions, 'onToggleEdit 不该碰右栏筛选状态').not.toContain('setSelectedTaskId')
@@ -142,7 +143,26 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
     expect(triggers, '触发记录 hook 没有透出静默刷新').toContain('reloadSilent: fresh.reloadSilent')
   })
 
-  it('调用了任务中心的读接口与「立即检查」', () => {
+  it('触发方式目录：容器用 apiListRpaVendors 取一次，失败显示错误条，目录传给任务行与编辑抽屉', () => {
+    expect(code, '容器没有请求触发方式目录').toContain('apiListRpaVendors()')
+    expect(code, '目录没有走 useFreshData（打开即查、失败不留假数据）').toContain("useFreshData('taskCenter:vendors'")
+    expect(code, '目录不该缓存旧版本（读旧目录会让新厂商字段显示不出来）').toContain('shouldCache: () => false')
+    expect((code.match(/vendorCatalog=\{vendorCatalog\}/g) ?? []).length, '目录要同时传给任务行与编辑抽屉').toBe(2)
+    expect(code, '抽屉不知道目录是否在加载').toContain('vendorCatalogLoading={props.vendorCatalogLoading === true}')
+    expect(code, '目录读取失败没有整体错误条').toContain('读取触发方式目录失败')
+    expect(code, '错误条不是 role=alert').toContain('className={triggerCss.catalogError} role="alert"')
+    expect(code, '「刷新」没有重试目录').toContain('void reloadVendors()')
+  })
+
+  it('任务行摘要由描述符生成（不再读旧的 callbackUrl/bazhuayuFlowId 兼容字段）', () => {
+    expect(panes, '任务行没有按目录找当前触发方式').toContain('findVendorDescriptor(vendorCatalog, task.triggerMethod)')
+    expect(panes, '任务行没有用通用的摘要函数').toContain('taskTriggerSummary(task, descriptor)')
+    for (const legacy of ['callbackUrl', 'bazhuayuFlowId', 'bazhuayuApiKeySet']) {
+      expect(panes, `任务行还在读旧兼容字段 ${legacy}`).not.toContain(legacy)
+    }
+  })
+
+  it('调用任务中心的读接口与「立即检查」', () => {
     expect(code).toContain('apiListTaskInfos()')
     expect(triggers, '触发记录读接口没有走分页搜索 hook').toContain('apiListTaskTriggers(')
     expect(code).toContain('apiScanTaskTriggers()')
@@ -236,7 +256,8 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
 
   it('手动刷新无感：不弹成功提示、按钮只显示在途状态，不清空当前内容', () => {
     const refreshAt = code.indexOf('const handleRefresh = useCallback')
-    const scanAt = code.indexOf('const handleScan = useCallback', refreshAt)
+    // 写动作已抽到 `useTaskCenterActions`：刷新动作块到「接线动作 hook」为止。
+    const scanAt = code.indexOf('const actions = useTaskCenterActions({', refreshAt)
     expect(refreshAt, '找不到手动刷新动作').toBeGreaterThan(0)
     expect(scanAt, '找不到手动刷新动作的结束边界').toBeGreaterThan(refreshAt)
     const refreshBody = code.slice(refreshAt, scanAt)
@@ -331,35 +352,65 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
   const remove = panelRead('task-delete-button.tsx')
   const logic = panelRead('task-center.ts')
 
-  it('配置项齐全：任务名 / 触发关键词 / 触发方式 / 照片数量 / Webhook 或八爪鱼配置', () => {
-    for (const label of ['任务名', '触发关键词', '触发方式', '照片数量', 'Webhook 地址', '八爪鱼 FlowId', '八爪鱼 API Key']) {
+  it('选择器由 catalog 渲染（选项 = descriptor.name），不为具体厂商写死', () => {
+    for (const label of ['任务名', '触发关键词', '触发方式', '照片数量']) {
       expect(code, `编辑表单缺少「${label}」`).toContain(label)
     }
-    expect(logic, '触发方式选项里缺少「八爪鱼 RPA」').toContain('八爪鱼 RPA')
-    expect(code, '照片数量没有做成可输入项').toContain('type="number"')
-    expect(code, '照片数量输入没有夹取').toContain('clampPhotoLimit')
-    expect(code, '触发方式没有用 kit 的 Segmented').toContain('Segmented')
-    expect(code, 'Segmented 没有可访问名').toContain('ariaLabel="触发方式"')
-    expect(code, '两种触发方式没有从纯逻辑取选项').toContain('TASK_TRIGGER_METHOD_OPTIONS')
-    expect(code, '「已完善」前置提示没有按方式泛化').toContain('readyRequirementHint(')
+    expect(code, '触发方式选择器没有接收目录').toContain('catalog={vendorCatalog}')
+    expect(code, '选择器没有遍历目录').toContain('props.catalog.map')
+    expect(code, '选项文案不是描述符 name').toContain('<option key={item.id} value={item.id}>{item.name}</option>')
+    expect(code, '选择器没有可访问名（E2E 依赖）').toContain('aria-label="触发方式"')
+    expect(code, '选择器不是原生 select（E2E 用 selectOption）').toContain('className={`${css.input} ${triggerCss.selectInput}`}')
+    expect(code, '未知厂商没有「触发方式不可用（厂商已下线）」').toContain('触发方式不可用（厂商已下线）')
+    expect(code, '目录失败没有可读错误条').toContain('读取触发方式目录失败')
+    expect(code, '目录加载中没有提示').toContain('正在读取触发方式目录…')
+    expect(code, '未知厂商/目录失败没有禁止保存').toContain('disabled={!canSubmit}')
+    expect(code, '没有用目录查当前描述符').toContain('findVendorDescriptor(vendorCatalog, draft.triggerMethod)')
+    // 编辑表单不认识任何具体厂商：厂商名/字段都来自描述符。
+    expect(code, '编辑表单写死了 webhook 分支').not.toContain("'webhook'")
+    expect(code, '编辑表单写死了八爪鱼分支').not.toContain("'bazhuayu'")
   })
 
-  it('触发方式两套配置区：Webhook 地址 / 八爪鱼 FlowId + API Key（Key 不回显）', () => {
-    expect(code, '没有按触发方式切换配置区').toContain("draft.triggerMethod === 'webhook' ? (")
-    expect(code, '缺少 Webhook 地址字段').toContain('<WebhookField')
-    expect(code, '缺少八爪鱼配置字段').toContain('<BazhuayuFields')
-    expect(code, 'Webhook 地址 placeholder 变了').toContain('placeholder="https://example.com/webhook"')
-    expect(code).toContain('aria-label="Webhook 地址"')
-    expect(code, 'FlowId 没有可访问名').toContain('aria-label="八爪鱼 FlowId"')
-    expect(code, 'FlowId placeholder 变了').toContain('placeholder="例如 6ad859ccee2df270d53fc6e5"')
-    expect(code, 'API Key 没有可访问名').toContain('aria-label="八爪鱼 API Key"')
-    expect(code, 'API Key 输入框不是 password').toContain('type="password"')
-    expect(code, '已配置 Key 时没有「已保存，留空保持不变」提示').toContain('已保存，留空保持不变')
-    expect(code, '未配置 Key 时没有输入提示').toContain('填写八爪鱼 X-Api-Key')
-    expect(code, 'placeholder 没有按 bazhuayuApiKeySet 分支').toContain('apiKeySet ?')
-    expect(code, '缺少八爪鱼参数映射说明').toContain('https://api-rpa.bazhuayu.com/api/bots/scheduling/start')
-    expect(code, '说明没有写清三个参数映射').toContain('room_name=会话名')
-    expect(code, '说明没有写清不发图片').toContain('图片不会发送')
+  it('动态表单按 descriptor.fields 渲染：分组 / 控件类型 / 高级折叠 / 厂商说明', () => {
+    expect(code, '字段没有从描述符取').toContain('vendorFields(')
+    expect(code, '字段没有分组').toContain('groupVendorFields(')
+    expect(code, '多厂商样式没有按 M21 拆到 trigger.module.css').toContain("import triggerCss from './task-center-trigger.module.css'")
+    for (const section of ['账号与鉴权', '流程与参数', '高级']) {
+      expect(code, `动态表单缺少分区「${section}」`).toContain(section)
+    }
+    expect(code, '「高级」没有折叠').toContain('<details className={triggerCss.advancedBlock}>')
+    expect(code, 'map 字段没有渲染三键').toContain('vendorMapTargets(')
+    expect(code, '没有 map 字段控件').toContain("field.type === 'map'")
+    expect(code, '没有 boolean 字段控件').toContain("field.type === 'boolean'")
+    expect(code, '没有 select 字段控件').toContain("field.type === 'select'")
+    expect(code, '没有 number 字段控件').toContain("field.type === 'number'")
+    expect(code, '字段说明（help）没有渲染').toContain('field.help')
+    expect(code, '字段可访问名没有统一取描述符').toContain('fieldAriaLabel(field)')
+  })
+
+  it('凭据字段：密码框、永不回显、已配置占位、保存只带非空输入', () => {
+    expect(code, '凭据输入框不是 password').toContain('type="password"')
+    expect(code, '已配置凭据没有「已保存，留空保持不变」').toContain('已保存，留空保持不变')
+    expect(code, '凭据是否已配置没有读 triggerSecretSet').toContain('task.triggerSecretSet ?? {}')
+    expect(code, '凭据输入没有走独立的 secretInputs').toContain('secretInputs')
+    expect(logic, '保存入参没有「只带非空凭据」').toContain("if (typed !== '') secret[field.key] = typed")
+  })
+
+  it('厂商说明区：文档链接 / 参数核对 / 实验性警告 / risks / 版本复核', () => {
+    for (const text of ['官方文档', '参数核对', '⚠ 实验性', '触发接口']) {
+      expect(code, `厂商说明区缺少「${text}」`).toContain(text)
+    }
+    expect(code, '文档链接不是描述符的 triggerApi').toContain('href={descriptor.docs.triggerApi}')
+    expect(code, '厂商 risks 没有展示').toContain('descriptor.risks')
+    expect(code, '实验性状态没有警告徽标').toContain("descriptor.status === 'experimental'")
+    expect(code, '描述符版本不一致没有提示复核').toContain('请复核后保存')
+    expect(code, '补充说明 notes 没有展示').toContain('descriptor.notes')
+  })
+
+  it('切换厂商不清空已填（内存里按厂商暂存草稿）', () => {
+    expect(code, '切换厂商没有暂存当前草稿').toContain('vendorDraftsRef.current[current.triggerMethod] = { config: current.config, secretInputs: current.secretInputs }')
+    expect(code, '新厂商没有用默认配置').toContain('defaultVendorConfig(nextDescriptor)')
+    expect(logic, '目录里没有默认配置生成器').toContain('export function defaultVendorConfig(')
   })
 
   it('群聊编辑支持「仅匹配@我的文本」，单聊不显示且保存归一为 false', () => {
@@ -382,14 +433,13 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
     expect(code, '行内删除入口没有使用共享按钮').toContain('TaskDeleteButton')
   })
 
-  it('「标记已完善」前置按触发方式分支，并把焦点指到对应输入框', () => {
-    expect(code, 'webhook 缺地址时没有本地拦截').toContain('标记「已完善」前必须填写 Webhook 地址')
-    expect(code, '没有把焦点指到 Webhook 输入框').toContain('callbackRef.current?.focus()')
-    expect(code, 'bazhuayu 缺 FlowId 时没有本地拦截').toContain('标记「已完善」前必须填写八爪鱼 FlowId')
-    expect(code, 'bazhuayu 缺 Key（且没存过）时没有本地拦截').toContain('标记「已完善」前必须填写八爪鱼 API Key')
-    expect(code, '没有按 bazhuayuApiKeySet 判断「已存过 Key」').toContain('task.bazhuayuApiKeySet')
-    expect(code, '没有把焦点指到 FlowId 输入框').toContain('flowIdRef.current?.focus()')
-    expect(code, '没有把焦点指到 API Key 输入框').toContain('apiKeyRef.current?.focus()')
+  it('「标记已完善」按描述符 required + secretSet 校验，并把焦点指到第一个错字段', () => {
+    expect(code, '没有按描述符算缺项').toContain('readyMissingFields(')
+    expect(code, '缺项没有生成「请填写 <label>」行内错误').toContain('`请填写 ${field.label}`')
+    expect(code, '没有把焦点指到第一个出错字段').toContain('fieldRefsRef.current[field.key]?.focus()')
+    expect(code, '没有把焦点指到触发方式选择器').toContain('selectRef.current?.focus()')
+    expect(logic, '缺项没有看凭据是否已保存').toContain('task.triggerSecretSet?.[field.key]')
+    expect(logic, '缺项没有要求 map 三个语义位都非空').toContain("vendorMapTargets(descriptor).some((target) =>")
   })
 
   it('关键词支持回车/逗号添加与去重、移除', () => {
@@ -427,9 +477,11 @@ describe('样式与 SSR 冒烟', () => {
     expect(rule, '搜索框在窄栏里会缩到无法输入').toContain('min-width: 140px')
   })
 
-  it('SSR 冒烟脚本存在，渲染 TaskCenterView 并含关键文案与失败退出码', () => {
+  it('SSR 冒烟脚本存在，渲染 TaskCenterView / 编辑表单并含关键文案与失败退出码', () => {
     const script = readText(join(ROOT, 'scripts', 'task-center-ssr.tsx'))
     expect(script).toContain("import { TaskCenterView")
+    expect(script, 'SSR 没有直接渲染抽屉 body（Drawer 的 Radix Portal 在 renderToStaticMarkup 下是 null）')
+      .toContain('TaskEditForm')
     expect(script).toContain('renderToStaticMarkup')
     expect(script, 'SSR 冒烟没有失败退出码').toContain('process.exitCode = 1')
     for (const text of ['触发记录', '待完善', '已完善', '触发时间']) {
@@ -442,10 +494,9 @@ describe('样式与 SSR 冒烟', () => {
     expect(script, 'SSR 冒烟没有覆盖任务行删除入口').toContain('aria-label="删除任务')
   })
 
-  it('SSR 冒烟覆盖「抽屉 body + 触发方式」与任务行摘要（Radix Portal 在 SSR 下不挂载）', () => {
+  it('SSR 冒烟覆盖 catalog 注入、影刀动态表单、任务行摘要与目录失败/未知厂商降级', () => {
     const script = readText(join(ROOT, 'scripts', 'task-center-ssr.tsx'))
-    expect(script, 'SSR 没有直接渲染抽屉 body（Drawer 的 Radix Portal 在 renderToStaticMarkup 下是 null）')
-      .toContain('TaskEditForm')
+    expect(script, 'SSR 没有注入厂商目录 fixture').toContain('RpaVendorCatalog')
     for (const text of [
       'aria-label="编辑任务：客户报价跟进"',
       '触发方式',
@@ -453,7 +504,15 @@ describe('样式与 SSR 冒烟', () => {
       '八爪鱼 FlowId',
       '八爪鱼 API Key',
       '已保存，留空保持不变',
-      'api-rpa.bazhuayu.com',
+      '影刀 RPA',
+      'AccessKeyId',
+      'AccessKeySecret',
+      '账号与鉴权',
+      '流程与参数',
+      '高级',
+      '参数核对 2026-10-21',
+      '触发方式不可用（厂商已下线）',
+      '读取触发方式目录失败',
     ]) {
       expect(script, `SSR 冒烟没有断言「${text}」`).toContain(text)
     }
@@ -461,12 +520,18 @@ describe('样式与 SSR 冒烟', () => {
     expect(script, '空态场景没有断言不渲染编辑表单').toContain('空态不该渲染')
   })
 
-  it('抽屉表单与触发方式分区的样式在 module.css 里（只用设计令牌）', () => {
+  it('抽屉表单与 catalog 动态分区的样式在 module.css 里（只用设计令牌）', () => {
     const css = readText(join(PANELS, 'task-center.module.css'))
-    for (const rule of ['.triggerHint {', '.triggerSummary {', '.triggerConfig {', '.triggerDesc {']) {
+    const triggerCss = readText(join(PANELS, 'task-center-trigger.module.css'))
+    for (const rule of ['.triggerHint {', '.triggerSummary {']) {
       expect(css, `缺少样式 ${rule}`).toContain(rule)
     }
+    for (const rule of ['.catalogError {', '.vendorSection {', '.advancedBlock {', '.vendorInfo {', '.mapGrid {', '.vendorField {']) {
+      expect(triggerCss, `缺少多厂商触发样式 ${rule}`).toContain(rule)
+    }
     expect(css, '触发方式摘要没有省略号（长 FlowId 会挤爆任务行）').toMatch(/\.triggerSummary\s*\{[\s\S]*?text-overflow:\s*ellipsis/)
+    expect(triggerCss, '拆出去的样式里出现裸 hex 色值').not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(triggerCss, '拆出去的样式里出现裸 rgb()/rgba() 色值').not.toMatch(/rgba?\(/)
   })
 
   it('`pages/**` 的新文件不许 import node: 内建（layer-direction 判据）', () => {

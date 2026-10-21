@@ -89,9 +89,9 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     kind: 'none',
   },
   {
-    label: '任务触发（Webhook / 八爪鱼 RPA）',
-    text: '任务命中关键词后投递这一条触发记录，两种方式二选一：Webhook 发整条记录 JSON；八爪鱼 RPA 只发会话名/触发文本/触发对象三个参数（不发图片）。默认不配置不发送',
-    host: '你配置的 Webhook 地址 / api-rpa.bazhuayu.com',
+    label: '任务触发（Webhook / 多家 RPA 厂商）',
+    text: '任务命中关键词后投递触发记录：Webhook 发整条记录 JSON；RPA 厂商只发会话名/触发文本/触发对象（都不发图片）。默认不配置不发送；阿里云 / 来也 / 实在为实验性接入',
+    host: '你配置的 Webhook 地址；api-rpa.bazhuayu.com、api.yingdao.com、console-rpa.aliyun.com、z-commander-api.ai-indeed.com；UiPath（默认 cloud.uipath.com，云区域名 uipath.com / uipath.us）/ 来也（laiye.com）/ 私有化部署用你配置的实例地址',
     kind: 'none',
   },
   {

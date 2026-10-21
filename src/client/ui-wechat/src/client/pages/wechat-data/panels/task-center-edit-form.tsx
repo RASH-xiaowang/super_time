@@ -1,52 +1,81 @@
 /**
- * 「任务信息」右侧编辑抽屉里的**配置表单**（2026-10-21 从行内展开迁入抽屉）。
+ * 「任务信息」右侧编辑抽屉里的**配置表单**（2026-10-21：catalog 驱动 + 动态厂商字段）。
  *
  * 职责边界（与 `TaskCenter.tsx` 的分工）：
- *  · 本文件只管**草稿状态与校验**（任务名 / 关键词 / 触发方式 / 照片数量 / Webhook 或八爪鱼配置）；
- *  · 抽屉外壳（打开/关闭、标题）在 `TaskCenter.tsx` 的 `TaskCenterView` 根部；本文件是抽屉 body；
+ *  · 本文件只管**草稿状态与校验**（任务名 / 关键词 / 照片数量 / 触发方式 / 厂商字段）；
+ *  · 触发方式由后端 `listRpaVendors` 的**描述符目录**决定：选择器渲染 `catalog.items`，
+ *    字段区按 `descriptor.fields`（+ `auth.modes[].fields`）自动生成 —— 本文件不认识任何
+ *    具体厂商，新增厂商只改后端注册表；
  *  · 写库动作（`apiSaveTaskInfo` / `apiSetTaskInfoStatus` / `apiDeleteTaskInfo`）由容器注入，
  *    容器负责广播后的两栏刷新与提示 —— 表单不自己取数，避免出现第二个真源；
- *  · 纯算术（草稿生成、校验、关键词增删、保存入参、触发方式文案）全在 `task-center.ts`。
+ *  · 纯算术（草稿生成、字段分组、默认值、校验、摘要、保存入参）全在 `task-center.ts`；
+ *  · 多厂商字段/说明区的样式在 `task-center-trigger.module.css`（主样式文件已到 M21 上限）。
  *
- * 四个容易踩的行为约定：
- *  ① **「标记已完善」= 先保存再改状态**：用户经常「改完配置直接点已完善」，
- *     若只改状态不保存，配置会停在旧值上（看着已完善、触发目标却是空的）。
- *     所以它走与「保存」同一份校验，再依次调 save / setStatus；
- *  ② **必填前置按触发方式分支**：webhook 缺地址 / bazhuayu 缺 FlowId / bazhuayu 既没存过 Key
- *     又没填新 Key ⇒ 本地拦截并把焦点指到对应输入框（后端的校验是最后一道闸）；
- *  ③ **API Key 不回显**：Remote 只回 `bazhuayuApiKeySet`，草稿里的 Key 输入框恒从空串开始；
- *     保存时只有输入非空才提交 `bazhuayuApiKey`（缺省 = 后端保留旧 Key，空串在契约里是「清空」，
- *     表单不提供清空入口，所以绝不能传空串）；
- *  ④ 保存成功后**不清空草稿**：容器刷新回来的任务快照会更新状态徽标，用户可能还要继续改；
- *     只有 API Key 输入框会在保存成功后清空（Key 已落库，placeholder 会变成「已保存」）。
+ * 五个容易踩的行为约定：
+ *  ① **字段分组固定**：凭据字段 →「账号与鉴权」（密码框，已配置时 placeholder「已保存，
+ *     留空保持不变」）；普通配置 →「流程与参数」；`advanced` →「高级」折叠；
+ *  ② **凭据永不回显**：Remote 只回 `triggerSecretSet`（是否已配置）；保存时只带本次输入
+ *     非空的键（缺省 = 保留旧值，空串 = 清空），表单不提供「清空凭据」入口；
+ *  ③ **切换厂商不清空已填**：切换时把当前厂商的 config/secretInputs 留在内存，
+ *     切回来能接着改（也满足 E2E「切回八爪鱼仍可读旧配置并保存」）；
+ *  ④ **保存/标记已完善都按描述符校验**：`required` 只拦「标记已完善」（待完善任务允许
+ *     先不填）；未知厂商（已下线）与目录读取失败都禁止保存并给出可读原因；
+ *  ⑤ 保存成功后不清空草稿（容器刷新快照后状态徽标会变），只清空凭据输入框。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoStatus, TaskTriggerMethod } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Button, Segmented } from '../ui/kit.tsx'
+import type {
+  RpaConfigValue,
+  RpaField,
+  RpaTriggerConfig,
+  RpaTriggerSecretInput,
+  RpaVendorDescriptor,
+  TaskInfo,
+  TaskInfoInput,
+  TaskInfoMutationResult,
+  TaskInfoStatus,
+} from '@deepseek-ai/dsh-wechat-data/types'
+import { Badge, Button } from '../ui/kit.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import { TaskDeleteButton } from './task-delete-button.tsx'
 import {
   addKeywords,
   clampPhotoLimit,
+  configMapValue,
+  configTextValue,
+  defaultVendorConfig,
   draftFromTask,
+  fieldAriaLabel,
+  findVendorDescriptor,
+  groupVendorFields,
+  hasDraftErrors,
   PHOTO_LIMIT_MAX,
   PHOTO_LIMIT_MIN,
+  readyMissingFields,
   readyRequirementHint,
   removeKeyword,
   taskSaveInput,
   taskStatusMeta,
-  TASK_TRIGGER_METHOD_OPTIONS,
   validateTaskDraft,
+  vendorFields,
+  vendorMapTargets,
+  withVendorDefaults,
   type TaskDraftErrors,
   type TaskEditDraft,
 } from './task-center.ts'
 import css from './task-center.module.css'
+import triggerCss from './task-center-trigger.module.css'
 import kitCss from '../ui/kit.module.css'
 
 /** 表单的注入依赖：写动作由容器提供（本文件不 import api-*）。 */
 export interface TaskEditFormProps {
   /** 被编辑的任务（保存/改状态后由容器刷新快照，本组件保留草稿）。 */
   task: TaskInfo
+  /** 触发方式目录（`listRpaVendors` 的 items；空 = 未加载/读取失败）。 */
+  vendorCatalog: readonly RpaVendorDescriptor[]
+  /** 目录读取失败原因（null = 正常；失败时禁止保存并显示错误条）。 */
+  vendorCatalogError: string | null
+  /** 目录是否仍在加载（加载中时选择器提示「正在读取」并暂时禁止保存）。 */
+  vendorCatalogLoading: boolean
   /** 保存任务（容器调用 `apiSaveTaskInfo`，入参已带 id）。 */
   onSave: (input: TaskInfoInput) => Promise<TaskInfoMutationResult>
   /** 切换「待完善 / 已完善」（容器调用 `apiSetTaskInfoStatus`）。 */
@@ -57,7 +86,7 @@ export interface TaskEditFormProps {
   onNotice: (text: string) => void
 }
 
-/** 照片数量字段的 props（独立成小组件，避免 TaskEditForm 越过函数行数棘轮）。 */
+/** 照片数量字段的 props（独立成小组件，避免主表单越过函数行数棘轮）。 */
 interface PhotoLimitFieldProps {
   value: number
   error?: string
@@ -146,131 +175,301 @@ function KeywordField({ keywords, input, error, inputRef, onInputChange, onKeyDo
   )
 }
 
-/** Webhook 地址字段的 props。 */
-interface WebhookFieldProps {
-  value: string
-  error?: string
-  inputRef: React.MutableRefObject<HTMLInputElement | null>
-  onChange: (value: string) => void
+/** 动态厂商字段的公共上下文（避免每个控件都传一长串 props）。 */
+interface VendorFormContext {
+  descriptor: RpaVendorDescriptor
+  /** 已按描述符补过默认值的配置（展示值以它为准）。 */
+  config: RpaTriggerConfig
+  secretInputs: RpaTriggerSecretInput
+  /** 凭据是否已保存（只回布尔，永不回原文）。 */
+  secretSet: Record<string, boolean>
+  /** 字段 key → 行内错误。 */
+  errors: Record<string, string>
+  onConfigChange: (key: string, value: RpaConfigValue) => void
+  onSecretChange: (key: string, value: string) => void
+  registerRef: (key: string, el: HTMLElement | null) => void
 }
 
 /**
- * Webhook 地址（触发方式 = Webhook 时显示）。
- * @param props - 当前值 / 错误 / 输入框 ref / 变更回调。
- * @returns 地址输入框。
- */
-function WebhookField({ value, error, inputRef, onChange }: WebhookFieldProps): React.JSX.Element {
-  return (
-    <label className={css.field}>
-      <span className={css.fieldLabel}>Webhook 地址（http/https；标记已完善前必填）</span>
-      <input
-        ref={inputRef}
-        className={css.input}
-        type="url"
-        value={value}
-        placeholder="https://example.com/webhook"
-        aria-label="Webhook 地址"
-        aria-invalid={error !== undefined}
-        onChange={(e) => { onChange(e.target.value) }}
-      />
-      {error !== undefined && <span className={css.errorText} role="alert">{error}</span>}
-    </label>
-  )
-}
-
-/** 八爪鱼配置字段的 props。 */
-interface BazhuayuFieldsProps {
-  flowId: string
-  flowIdError?: string
-  apiKeyInput: string
-  apiKeyError?: string
-  /** 该任务是否已保存过 API Key（决定 placeholder：已保存时不回显，只能留空保持不变）。 */
-  apiKeySet: boolean
-  flowIdRef: React.MutableRefObject<HTMLInputElement | null>
-  apiKeyRef: React.MutableRefObject<HTMLInputElement | null>
-  onFlowIdChange: (value: string) => void
-  onApiKeyChange: (value: string) => void
-}
-
-/**
- * 八爪鱼 RPA 配置（触发方式 = 八爪鱼 RPA 时显示）：FlowId + API Key + 参数映射说明。
+ * `map` 字段：按 `mapping.targets` 渲染 3 个参数名输入（会话名 / 触发文本 / 触发对象）。
  *
- * API Key 用 `type="password"` 且**永不回显**：已配置时 placeholder 提示「已保存，留空保持不变」，
- * 用户不输入就不会覆盖后端已保存的 Key。
- * @param props - 两个输入的值 / 错误 / ref 与变更回调。
- * @returns FlowId、API Key 与一段说明。
+ * 值存的是**厂商参数名**（默认取 targets[].defaultKey，用户可改成自己流程的入参名），
+ * 不是触发内容本身 —— 触发内容在投递时由后端映射进来。
+ * @param props.field - map 字段描述符。
+ * @param props.ctx - 动态字段上下文。
+ * @returns 三行参数名输入。
  */
-function BazhuayuFields({
-  flowId,
-  flowIdError,
-  apiKeyInput,
-  apiKeyError,
-  apiKeySet,
-  flowIdRef,
-  apiKeyRef,
-  onFlowIdChange,
-  onApiKeyChange,
-}: BazhuayuFieldsProps): React.JSX.Element {
+function MapFieldControl({ field, ctx }: { field: RpaField; ctx: VendorFormContext }): React.JSX.Element {
+  const aria = fieldAriaLabel(field)
+  const map = configMapValue(ctx.config, field.key)
   return (
-    <div className={css.triggerConfig}>
-      <label className={css.field}>
-        <span className={css.fieldLabel}>FlowId</span>
-        <input
-          ref={flowIdRef}
-          className={css.input}
-          type="text"
-          value={flowId}
-          placeholder="例如 6ad859ccee2df270d53fc6e5"
-          aria-label="八爪鱼 FlowId"
-          aria-invalid={flowIdError !== undefined}
-          onChange={(e) => { onFlowIdChange(e.target.value) }}
-        />
-        {flowIdError !== undefined && <span className={css.errorText} role="alert">{flowIdError}</span>}
-      </label>
-      <label className={css.field}>
-        <span className={css.fieldLabel}>API Key</span>
-        <input
-          ref={apiKeyRef}
-          className={css.input}
-          type="password"
-          autoComplete="off"
-          value={apiKeyInput}
-          placeholder={apiKeySet ? '已保存，留空保持不变' : '填写八爪鱼 X-Api-Key'}
-          aria-label="八爪鱼 API Key"
-          aria-invalid={apiKeyError !== undefined}
-          onChange={(e) => { onApiKeyChange(e.target.value) }}
-        />
-        {apiKeyError !== undefined && <span className={css.errorText} role="alert">{apiKeyError}</span>}
-      </label>
-      <p className={css.triggerDesc}>
-        {'触发时调用 https://api-rpa.bazhuayu.com/api/bots/scheduling/start，把 room_name=会话名、content=触发文本、at_name=触发对象 传给该流程；图片不会发送。'}
-      </p>
+    <div className={`${css.field} ${triggerCss.vendorField}`}>
+      <span className={css.fieldLabel}>{field.label}</span>
+      <div className={triggerCss.mapGrid}>
+        {vendorMapTargets(ctx.descriptor).map((target, index) => (
+          <label key={target.semantic} className={triggerCss.mapRow}>
+            <span className={triggerCss.mapLabel}>{target.label}</span>
+            <input
+              className={`${css.input} ${triggerCss.mapInput}`}
+              type="text"
+              value={map[target.semantic] ?? target.defaultKey}
+              placeholder={target.defaultKey}
+              aria-label={`${aria} · ${target.label}`}
+              ref={index === 0 ? (el) => { ctx.registerRef(field.key, el) } : undefined}
+              onChange={(e) => {
+                ctx.onConfigChange(field.key, { ...map, [target.semantic]: e.target.value })
+              }}
+            />
+          </label>
+        ))}
+      </div>
+      {field.help !== undefined && <span className={triggerCss.fieldHelp}>{field.help}</span>}
+      {ctx.errors[field.key] !== undefined && <span className={css.errorText} role="alert">{ctx.errors[field.key]}</span>}
     </div>
   )
 }
 
-/** 触发方式分段控件的 props。 */
-interface TriggerMethodPickerProps {
-  method: TaskTriggerMethod
-  onChange: (method: TaskTriggerMethod) => void
+/**
+ * 单个动态厂商字段的控件（text / password / number / boolean / select / map）。
+ *
+ * 可访问名统一 `fieldAriaLabel(field)`（= `ariaLabel ?? label`）——E2E/SSR 依赖它；
+ * `example` 渲染为 placeholder；`help` 渲染为一行小字。
+ * @param props.field - 字段描述符。
+ * @param props.ctx - 动态字段上下文。
+ * @returns 一个字段控件。
+ */
+function VendorFieldControl({ field, ctx }: { field: RpaField; ctx: VendorFormContext }): React.JSX.Element {
+  const aria = fieldAriaLabel(field)
+  const error = ctx.errors[field.key]
+  const register = (el: HTMLElement | null): void => { ctx.registerRef(field.key, el) }
+  const help = field.help !== undefined ? <span className={triggerCss.fieldHelp}>{field.help}</span> : null
+  const errorNode = error === undefined ? null : <span className={css.errorText} role="alert">{error}</span>
+  if (field.type === 'map') return <MapFieldControl field={field} ctx={ctx} />
+  if (field.type === 'boolean') {
+    return (
+      <label className={triggerCss.checkRow}>
+        <input
+          type="checkbox"
+          ref={register}
+          checked={ctx.config[field.key] === true}
+          aria-label={aria}
+          onChange={(e) => { ctx.onConfigChange(field.key, e.target.checked) }}
+        />
+        <span>
+          <span className={triggerCss.checkTitle}>{field.label}</span>
+          {field.help !== undefined && <span className={triggerCss.fieldHelp}>{field.help}</span>}
+        </span>
+      </label>
+    )
+  }
+  if (field.type === 'select') {
+    return (
+      <label className={`${css.field} ${triggerCss.vendorField}`}>
+        <span className={css.fieldLabel}>{field.label}</span>
+        <select
+          ref={(el) => { ctx.registerRef(field.key, el) }}
+          className={`${css.input} ${triggerCss.selectInput}`}
+          value={configTextValue(ctx.config, field.key)}
+          aria-label={aria}
+          aria-invalid={error !== undefined}
+          onChange={(e) => { ctx.onConfigChange(field.key, e.target.value) }}
+        >
+          {(field.options ?? []).map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        {help}
+        {errorNode}
+      </label>
+    )
+  }
+  if (field.type === 'number') {
+    return (
+      <label className={`${css.field} ${triggerCss.vendorField}`}>
+        <span className={css.fieldLabel}>{field.label}</span>
+        <input
+          className={css.input}
+          type="number"
+          ref={register}
+          value={configTextValue(ctx.config, field.key)}
+          placeholder={field.example ?? ''}
+          aria-label={aria}
+          aria-invalid={error !== undefined}
+          onChange={(e) => { ctx.onConfigChange(field.key, e.target.value) }}
+        />
+        {help}
+        {errorNode}
+      </label>
+    )
+  }
+  if (field.secret === true) {
+    const placeholder = ctx.secretSet[field.key] === true ? '已保存，留空保持不变' : `填写${field.example ?? field.label}`
+    return (
+      <label className={`${css.field} ${triggerCss.vendorField}`}>
+        <span className={css.fieldLabel}>{field.label}</span>
+        <input
+          ref={register}
+          className={css.input}
+          type="password"
+          autoComplete="off"
+          value={ctx.secretInputs[field.key] ?? ''}
+          placeholder={placeholder}
+          aria-label={aria}
+          aria-invalid={error !== undefined}
+          onChange={(e) => { ctx.onSecretChange(field.key, e.target.value) }}
+        />
+        {help}
+        {errorNode}
+      </label>
+    )
+  }
+  return (
+    <label className={`${css.field} ${triggerCss.vendorField}`}>
+      <span className={css.fieldLabel}>{field.label}</span>
+      <input
+        ref={register}
+        className={css.input}
+        type="text"
+        value={configTextValue(ctx.config, field.key)}
+        placeholder={field.example ?? ''}
+        aria-label={aria}
+        aria-invalid={error !== undefined}
+        onChange={(e) => { ctx.onConfigChange(field.key, e.target.value) }}
+      />
+      {help}
+      {errorNode}
+    </label>
+  )
 }
 
 /**
- * 触发方式分区（Segmented：Webhook / 八爪鱼 RPA）+ 已完善前置提示。
- * @param props - 当前方式与切换回调。
- * @returns 分段控件与一行说明。
+ * 动态字段分区：账号与鉴权 / 流程与参数 / 高级（折叠）。
+ * @param props.ctx - 动态字段上下文（描述符 + 草稿 + 回调）。
+ * @returns 三组字段控件。
  */
-function TriggerMethodPicker({ method, onChange }: TriggerMethodPickerProps): React.JSX.Element {
+function VendorFieldSections({ ctx }: { ctx: VendorFormContext }): React.JSX.Element {
+  const groups = groupVendorFields(vendorFields(ctx.descriptor))
+  return (
+    <>
+      {groups.auth.length > 0 && (
+        <section className={triggerCss.vendorSection} aria-label="账号与鉴权">
+          <span className={triggerCss.sectionTitle}>账号与鉴权</span>
+          {groups.auth.map((field) => <VendorFieldControl key={field.key} field={field} ctx={ctx} />)}
+        </section>
+      )}
+      {groups.config.length > 0 && (
+        <section className={triggerCss.vendorSection} aria-label="流程与参数">
+          <span className={triggerCss.sectionTitle}>流程与参数</span>
+          {groups.config.map((field) => <VendorFieldControl key={field.key} field={field} ctx={ctx} />)}
+        </section>
+      )}
+      {groups.advanced.length > 0 && (
+        <details className={triggerCss.advancedBlock}>
+          <summary className={triggerCss.advancedSummary}>高级</summary>
+          <div className={triggerCss.advancedBody}>
+            {groups.advanced.map((field) => <VendorFieldControl key={field.key} field={field} ctx={ctx} />)}
+          </div>
+        </details>
+      )}
+    </>
+  )
+}
+
+/**
+ * 厂商说明区：名称 / 状态徽标 / 一句话说明 / 文档链接 / 参数核对时间 / 风险（前 2 条）。
+ *
+ * 状态徽标对 `experimental` 显式标「⚠ 实验性」——契约要求官方未公开的参数不得假装稳定。
+ * 任务保存时的描述符版本与当前目录不一致时提示复核（厂商参数可能已变）。
+ * @param props.descriptor - 当前厂商描述符。
+ * @param props.savedVersion - 任务保存时的 `triggerVendorVersion`。
+ * @returns 说明区。
+ */
+function VendorInfoPanel({ descriptor, savedVersion }: {
+  descriptor: RpaVendorDescriptor
+  savedVersion: string
+}): React.JSX.Element {
+  const risks = descriptor.risks.slice(0, 2)
+  return (
+    <section className={triggerCss.vendorInfo} aria-label="厂商说明">
+      <div className={triggerCss.vendorInfoHead}>
+        <span className={triggerCss.vendorInfoName}>{descriptor.name}</span>
+        {descriptor.status === 'experimental'
+          ? <span className={triggerCss.vendorStatusWarn}>⚠ 实验性</span>
+          : <span className={triggerCss.vendorStatusOk}>稳定</span>}
+        <span className={triggerCss.vendorInfoMeta}>参数核对 {descriptor.docs.lastVerifiedAt}</span>
+      </div>
+      <p className={triggerCss.vendorSummary}>{descriptor.summary}</p>
+      <p className={triggerCss.vendorDocs}>
+        官方文档：
+        <a href={descriptor.docs.triggerApi} target="_blank" rel="noreferrer">触发接口</a>
+        {' '}·{' '}
+        <a href={descriptor.docs.home} target="_blank" rel="noreferrer">{descriptor.vendor}</a>
+      </p>
+      {risks.length > 0 && (
+        <ul className={triggerCss.vendorRisks}>
+          {risks.map((risk) => <li key={risk}>{risk}</li>)}
+        </ul>
+      )}
+      {savedVersion !== '' && savedVersion !== descriptor.version && (
+        <p className={triggerCss.vendorVersionWarn}>
+          厂商参数已更新（任务保存于 {savedVersion}，当前 {descriptor.version}），请复核后保存
+        </p>
+      )}
+      {descriptor.notes !== undefined && descriptor.notes.length > 0 && (
+        <p className={triggerCss.vendorNotes}>{descriptor.notes[0]}</p>
+      )}
+    </section>
+  )
+}
+
+/** 触发方式选择器的 props。 */
+interface VendorSelectorProps {
+  catalog: readonly RpaVendorDescriptor[]
+  catalogError: string | null
+  loading: boolean
+  method: string
+  descriptor: RpaVendorDescriptor | null
+  selectRef: React.MutableRefObject<HTMLSelectElement | null>
+  onChange: (method: string) => void
+}
+
+/**
+ * 触发方式选择器（`<select>`，选项 = catalog.items 的 `descriptor.name`）。
+ *
+ * 目录读取失败 / 任务当前厂商不在目录里时都给出可读错误；未知厂商的选项排在同级
+ * （用户仍可切到可用方式后保存）。文案是 SSR/E2E 依赖的字面量。
+ * @param props - 目录、当前方式与回调。
+ * @returns 选择器与提示。
+ */
+function VendorSelector(props: VendorSelectorProps): React.JSX.Element {
+  const { descriptor, catalogError, loading, method } = props
+  const unknown = descriptor === null
   return (
     <div className={css.field}>
       <span className={css.fieldLabel}>触发方式</span>
-      <Segmented
-        ariaLabel="触发方式"
-        options={TASK_TRIGGER_METHOD_OPTIONS}
+      <select
+        ref={props.selectRef}
+        className={`${css.input} ${triggerCss.selectInput}`}
+        aria-label="触发方式"
         value={method}
-        onChange={(value) => { onChange(value === 'bazhuayu' ? 'bazhuayu' : 'webhook') }}
-      />
-      <span className={css.triggerHint}>{readyRequirementHint(method)}</span>
+        onChange={(e) => { props.onChange(e.target.value) }}
+      >
+        {props.catalog.map((item) => (
+          <option key={item.id} value={item.id}>{item.name}</option>
+        ))}
+        {unknown && catalogError === null && !loading && (
+          <option value={method}>触发方式不可用（厂商已下线）</option>
+        )}
+        {unknown && catalogError !== null && <option value={method}>触发方式目录不可用</option>}
+        {unknown && loading && <option value={method}>加载触发方式目录…</option>}
+      </select>
+      {catalogError !== null
+        ? <span className={css.errorText} role="alert">读取触发方式目录失败：{catalogError}</span>
+        : loading
+          ? <span className={triggerCss.fieldHelp}>正在读取触发方式目录…</span>
+          : descriptor === null
+            ? <span className={css.errorText} role="alert">触发方式不可用（厂商已下线），请重新选择触发方式</span>
+            : <span className={css.triggerHint}>{readyRequirementHint(descriptor)}</span>}
     </div>
   )
 }
@@ -281,6 +480,8 @@ interface FormActionsProps {
   taskStatus: TaskInfoStatus
   busy: boolean
   photoLimit: number
+  /** 触发方式不可用（目录失败/未知厂商）时禁用「保存 / 标记」；删除仍可用。 */
+  disabled: boolean
   onSave: () => void
   onMarkReady: () => void
   onMarkIncomplete: () => void
@@ -291,26 +492,24 @@ interface FormActionsProps {
 
 /**
  * 抽屉表单底部动作区：保存 / 标记已完善（或标记待完善）/ 删除 + 一行状态说明。
- *
- * 独立成组件有两个原因：① 主表单函数已逼近 250 行棘轮（CI 硬门禁）；
- * ② 三个写动作的禁用/降级形态是同一套，放一起不容易改一处漏一处。
  * @param props - 任务状态、在途标记与三个写动作。
  * @returns 动作区。
  */
 function FormActions(props: FormActionsProps): React.JSX.Element {
   const status = taskStatusMeta(props.taskStatus)
+  const blocked = props.busy || props.disabled
   return (
     <div className={css.formActions}>
       {/* 保存/改状态/删除都会写本机库（后端把它们归为「仅桌面」）：手机端禁用，桌面端 spread 为空。 */}
-      <Button size="sm" variant="primary" onClick={props.onSave} disabled={props.busy} {...desktopActionProps()}>
+      <Button size="sm" variant="primary" onClick={props.onSave} disabled={blocked} {...desktopActionProps()}>
         {props.busy ? '处理中…' : '保存'}
       </Button>
       {props.taskStatus === 'ready' ? (
-        <Button size="sm" variant="outline" onClick={props.onMarkIncomplete} disabled={props.busy} {...desktopActionProps()}>
+        <Button size="sm" variant="outline" onClick={props.onMarkIncomplete} disabled={blocked} {...desktopActionProps()}>
           标记待完善
         </Button>
       ) : (
-        <Button size="sm" variant="outline" onClick={props.onMarkReady} disabled={props.busy} {...desktopActionProps()}>
+        <Button size="sm" variant="outline" onClick={props.onMarkReady} disabled={blocked} {...desktopActionProps()}>
           标记已完善
         </Button>
       )}
@@ -332,36 +531,80 @@ function FormActions(props: FormActionsProps): React.JSX.Element {
   )
 }
 
-/**
- * 任务配置表单（抽屉 body）。
- * @param props - 任务 + 三个写动作 + 提示回调（见 {@link TaskEditFormProps}）。
- * @returns 表单元素。
- */
-export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: TaskEditFormProps): React.JSX.Element {
-  const [draft, setDraft] = useState<TaskEditDraft>(() => draftFromTask(task))
+/** 抽屉表单 body 需要的字段区（描述符 + 上下文 + 版本提示）。 */
+function VendorFormBody({ descriptor, ctx, savedVersion }: {
+  descriptor: RpaVendorDescriptor
+  ctx: VendorFormContext
+  savedVersion: string
+}): React.JSX.Element {
+  return (
+    <>
+      <VendorFieldSections ctx={ctx} />
+      <VendorInfoPanel descriptor={descriptor} savedVersion={savedVersion} />
+    </>
+  )
+}
+
+/** 草稿状态 + 基础字段回调（从主表单拆出，控制单函数行数）。 */
+function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDescriptor[]): {
+  draft: TaskEditDraft
+  setDraft: React.Dispatch<React.SetStateAction<TaskEditDraft>>
+  keywordInput: string
+  setKeywordInput: React.Dispatch<React.SetStateAction<string>>
+  errors: TaskDraftErrors
+  setErrors: React.Dispatch<React.SetStateAction<TaskDraftErrors>>
+  apiError: string | null
+  setApiError: React.Dispatch<React.SetStateAction<string | null>>
+  busy: boolean
+  setBusy: React.Dispatch<React.SetStateAction<boolean>>
+  keywordRef: React.MutableRefObject<HTMLInputElement | null>
+  photoRef: React.MutableRefObject<HTMLInputElement | null>
+  selectRef: React.MutableRefObject<HTMLSelectElement | null>
+  fieldRefsRef: React.MutableRefObject<Record<string, HTMLElement | null>>
+  commitKeyword: () => void
+  dropKeyword: (keyword: string) => void
+  onKeywordKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  patchBase: <K extends 'name' | 'keywords' | 'photoLimit' | 'mentionMeOnly'>(key: K, value: TaskEditDraft[K]) => void
+  patchConfig: (key: string, value: RpaConfigValue) => void
+  patchSecret: (key: string, value: string) => void
+  changeTriggerMethod: (method: string) => void
+  registerFieldRef: (key: string, el: HTMLElement | null) => void
+} {
+  const [draft, setDraft] = useState<TaskEditDraft>(() => draftFromTask(task, findVendorDescriptor(vendorCatalog, task.triggerMethod)))
   const [keywordInput, setKeywordInput] = useState('')
   const [errors, setErrors] = useState<TaskDraftErrors>({})
   const [apiError, setApiError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  /**
-   * 后台回源只会换掉 `task` 快照；用户正在编辑的草稿必须保留。
-   * 仅在任务 id 切换时重建草稿，避免刷新把输入框内容“跳回旧值”。
-   */
   const taskIdRef = useRef(task.id)
-  const callbackRef = useRef<HTMLInputElement | null>(null)
   const keywordRef = useRef<HTMLInputElement | null>(null)
   const photoRef = useRef<HTMLInputElement | null>(null)
-  const flowIdRef = useRef<HTMLInputElement | null>(null)
-  const apiKeyRef = useRef<HTMLInputElement | null>(null)
+  const selectRef = useRef<HTMLSelectElement | null>(null)
+  /** 厂商字段 key → 输入框（校验失败时把焦点移过去；map 字段取第一行）。 */
+  const fieldRefsRef = useRef<Record<string, HTMLElement | null>>({})
+  /** 切换厂商时暂存各厂商的草稿（config/secretInputs），切回来不丢已填。 */
+  const vendorDraftsRef = useRef<Record<string, { config: RpaTriggerConfig; secretInputs: RpaTriggerSecretInput }>>({})
+  /** 目录加载完成后给当前厂商补一次默认值（首屏目录可能晚于表单到达）。 */
+  const seededRef = useRef('')
+  const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
 
   useEffect(() => {
     if (taskIdRef.current === task.id) return
     taskIdRef.current = task.id
-    setDraft(draftFromTask(task))
+    setDraft(draftFromTask(task, findVendorDescriptor(vendorCatalog, task.triggerMethod)))
     setKeywordInput('')
     setErrors({})
     setApiError(null)
-  }, [task])
+    vendorDraftsRef.current = {}
+    seededRef.current = ''
+  }, [task, vendorCatalog])
+
+  useEffect(() => {
+    if (descriptor === null) return
+    const stamp = `${String(task.id)}:${descriptor.id}:${descriptor.version}`
+    if (seededRef.current === stamp) return
+    seededRef.current = stamp
+    setDraft((current) => ({ ...current, config: withVendorDefaults(descriptor, current.config) }))
+  }, [descriptor, task.id])
 
   /** 追加关键词（回车/逗号触发；去重由纯逻辑保证）。 */
   const commitKeyword = useCallback((): void => {
@@ -391,65 +634,158 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
     }
   }, [commitKeyword, dropKeyword, draft.keywords, keywordInput])
 
-  /** 就地写回某一字段（并清掉该字段的旧错误；切换触发方式时另一方式的校验错误一起清掉）。 */
-  const patch = useCallback(<K extends keyof TaskEditDraft>(key: K, value: TaskEditDraft[K]): void => {
+  /** 就地写回一个基础字段（任务名/关键词/照片/@过滤），并清掉该字段错误。 */
+  const patchBase = useCallback(<K extends 'name' | 'keywords' | 'photoLimit' | 'mentionMeOnly'>(
+    key: K,
+    value: TaskEditDraft[K],
+  ): void => {
     setDraft((d) => ({ ...d, [key]: value }))
+    setErrors((e) => ({ ...e, [key]: undefined }))
+    setApiError(null)
+  }, [])
+
+  /** 写回一个厂商配置字段（值类型由控件决定；保存时再按描述符归一）。 */
+  const patchConfig = useCallback((key: string, value: RpaConfigValue): void => {
+    setDraft((d) => ({ ...d, config: { ...d.config, [key]: value } }))
     setErrors((e) => {
-      const next: TaskDraftErrors = { ...e }
-      if (key === 'name') delete next.name
-      else if (key === 'keywords') delete next.keywords
-      else if (key === 'photoLimit') delete next.photoLimit
-      else if (key === 'callbackUrl') delete next.callbackUrl
-      else if (key === 'bazhuayuFlowId') delete next.bazhuayuFlowId
-      else if (key === 'bazhuayuApiKeyInput') delete next.bazhuayuApiKey
-      else if (key === 'triggerMethod') {
-        delete next.callbackUrl
-        delete next.bazhuayuFlowId
-        delete next.bazhuayuApiKey
-      }
-      return next
+      if (e.fields?.[key] === undefined) return e
+      const fields = { ...e.fields }
+      delete fields[key]
+      return { ...e, fields }
     })
     setApiError(null)
   }, [])
+
+  /** 写回一个凭据字段（只改输入框内容，不回显已保存的凭据）。 */
+  const patchSecret = useCallback((key: string, value: string): void => {
+    setDraft((d) => ({ ...d, secretInputs: { ...d.secretInputs, [key]: value } }))
+    setErrors((e) => {
+      if (e.fields?.[key] === undefined) return e
+      const fields = { ...e.fields }
+      delete fields[key]
+      return { ...e, fields }
+    })
+    setApiError(null)
+  }, [])
+
+  /** 切换触发方式：当前厂商草稿留在内存，目标厂商用缓存/默认值。 */
+  const changeTriggerMethod = useCallback((nextMethod: string): void => {
+    setDraft((current) => {
+      if (current.triggerMethod === nextMethod) return current
+      vendorDraftsRef.current[current.triggerMethod] = { config: current.config, secretInputs: current.secretInputs }
+      const nextDescriptor = findVendorDescriptor(vendorCatalog, nextMethod)
+      const cached = vendorDraftsRef.current[nextMethod]
+      const nextConfig = cached !== undefined
+        ? cached.config
+        : nextDescriptor !== null
+          ? defaultVendorConfig(nextDescriptor)
+          : {}
+      const nextSecrets = cached !== undefined ? cached.secretInputs : {}
+      return { ...current, triggerMethod: nextMethod, config: nextConfig, secretInputs: nextSecrets }
+    })
+    setErrors((e) => {
+      const next: TaskDraftErrors = { ...e }
+      delete next.triggerMethod
+      delete next.fields
+      return next
+    })
+    setApiError(null)
+  }, [vendorCatalog])
+
+  const registerFieldRef = useCallback((key: string, el: HTMLElement | null): void => {
+    fieldRefsRef.current[key] = el
+  }, [])
+
+  return {
+    draft,
+    setDraft,
+    keywordInput,
+    setKeywordInput,
+    errors,
+    setErrors,
+    apiError,
+    setApiError,
+    busy,
+    setBusy,
+    keywordRef,
+    photoRef,
+    selectRef,
+    fieldRefsRef,
+    commitKeyword,
+    dropKeyword,
+    onKeywordKeyDown,
+    patchBase,
+    patchConfig,
+    patchSecret,
+    changeTriggerMethod,
+    registerFieldRef,
+  }
+}
+
+/** 提交/改状态动作（从主表单拆出，控制单函数行数）。 */
+function useTaskFormActions(options: {
+  task: TaskInfo
+  vendorCatalog: readonly RpaVendorDescriptor[]
+  draft: TaskEditDraft
+  setDraft: React.Dispatch<React.SetStateAction<TaskEditDraft>>
+  setErrors: React.Dispatch<React.SetStateAction<TaskDraftErrors>>
+  setApiError: React.Dispatch<React.SetStateAction<string | null>>
+  setBusy: React.Dispatch<React.SetStateAction<boolean>>
+  selectRef: React.MutableRefObject<HTMLSelectElement | null>
+  keywordRef: React.MutableRefObject<HTMLInputElement | null>
+  photoRef: React.MutableRefObject<HTMLInputElement | null>
+  fieldRefsRef: React.MutableRefObject<Record<string, HTMLElement | null>>
+  onSave: (input: TaskInfoInput) => Promise<TaskInfoMutationResult>
+  onSetStatus: (status: TaskInfoStatus) => Promise<TaskInfoMutationResult>
+  onNotice: (text: string) => void
+}): { submit: (thenReady: boolean) => Promise<void>; markIncomplete: () => Promise<void> } {
+  const { task, vendorCatalog, draft, setDraft, setErrors, setApiError, setBusy, onSave, onSetStatus, onNotice } = options
+  const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
+
+  /** 校验失败时把焦点移到第一个出错控件（厂商字段优先，按描述符顺序）。 */
+  const focusFirstError = useCallback((found: TaskDraftErrors): void => {
+    if (descriptor !== null) {
+      for (const field of vendorFields(descriptor)) {
+        if (found.fields?.[field.key] === undefined) continue
+        options.fieldRefsRef.current[field.key]?.focus()
+        return
+      }
+    }
+    if (found.triggerMethod !== undefined) options.selectRef.current?.focus()
+    else if (found.keywords !== undefined) options.keywordRef.current?.focus()
+    else if (found.photoLimit !== undefined) options.photoRef.current?.focus()
+  }, [descriptor, options.fieldRefsRef, options.keywordRef, options.photoRef, options.selectRef])
 
   /**
    * 校验并提交。
    * @param thenReady - 提交成功后是否紧接着标记「已完善」。
    */
   const submit = useCallback(async (thenReady: boolean): Promise<void> => {
-    const found = validateTaskDraft(draft)
-    if (thenReady) {
-      // 必填前置按触发方式分支（与后端「已完善」校验同口径；文案是用户能看到的最后一道本地提示）。
-      if (draft.triggerMethod === 'webhook' && draft.callbackUrl.trim() === '') {
-        found.callbackUrl = '标记「已完善」前必须填写 Webhook 地址（已完善的任务才会投递）'
-      }
-      if (draft.triggerMethod === 'bazhuayu') {
-        if (draft.bazhuayuFlowId.trim() === '') found.bazhuayuFlowId = '标记「已完善」前必须填写八爪鱼 FlowId'
-        if (!task.bazhuayuApiKeySet && draft.bazhuayuApiKeyInput.trim() === '') {
-          found.bazhuayuApiKey = '标记「已完善」前必须填写八爪鱼 API Key'
-        }
+    const currentDescriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
+    const found = validateTaskDraft(draft, currentDescriptor)
+    if (thenReady && currentDescriptor !== null) {
+      const missing = readyMissingFields(task, draft, currentDescriptor)
+      if (missing.length > 0) {
+        const fields = { ...(found.fields ?? {}) }
+        for (const field of missing) fields[field.key] = `请填写 ${field.label}`
+        found.fields = fields
       }
     }
-    if (Object.keys(found).length > 0) {
+    if (hasDraftErrors(found)) {
       setErrors(found)
-      if (found.bazhuayuFlowId !== undefined) flowIdRef.current?.focus()
-      else if (found.bazhuayuApiKey !== undefined) apiKeyRef.current?.focus()
-      else if (found.callbackUrl !== undefined) callbackRef.current?.focus()
-      else if (found.keywords !== undefined) keywordRef.current?.focus()
-      else if (found.photoLimit !== undefined) photoRef.current?.focus()
+      focusFirstError(found)
       return
     }
     setBusy(true)
     setApiError(null)
     try {
-      const saved = await onSave(taskSaveInput(task, draft))
+      const saved = await onSave(taskSaveInput(task, draft, currentDescriptor))
       if (!saved.ok) {
         setApiError(saved.error ?? '保存失败')
         return
       }
-      // Key 已随这次保存落库（Remote 不回读原文）：清空输入框，避免下次保存把同一把 Key 再覆盖一遍。
-      // 容器刷新任务快照后 placeholder 会变成「已保存，留空保持不变」。
-      if (draft.bazhuayuApiKeyInput.trim() !== '') setDraft((d) => ({ ...d, bazhuayuApiKeyInput: '' }))
+      // 凭据已随这次保存落库（Remote 不回读原文）：清空输入框，避免下次保存把同一把凭据再覆盖一遍。
+      if (Object.keys(draft.secretInputs).length > 0) setDraft((d) => ({ ...d, secretInputs: {} }))
       if (!thenReady) {
         onNotice('任务配置已保存')
         return
@@ -465,7 +801,7 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
     } finally {
       setBusy(false)
     }
-  }, [draft, onNotice, onSave, onSetStatus, task])
+  }, [draft, focusFirstError, onNotice, onSave, onSetStatus, setApiError, setBusy, setDraft, setErrors, task, vendorCatalog])
 
   /** 已完善 → 待完善（可逆）。 */
   const markIncomplete = useCallback(async (): Promise<void> => {
@@ -480,7 +816,51 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
     } finally {
       setBusy(false)
     }
-  }, [onNotice, onSetStatus])
+  }, [onNotice, onSetStatus, setApiError, setBusy])
+
+  return { submit, markIncomplete }
+}
+
+/**
+ * 任务配置表单（抽屉 body）。
+ * @param props - 任务 + 触发方式目录 + 三个写动作 + 提示回调（见 {@link TaskEditFormProps}）。
+ * @returns 表单元素。
+ */
+export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
+  const { task, vendorCatalog, vendorCatalogError, vendorCatalogLoading, onSave, onSetStatus, onDelete, onNotice } = props
+  const state = useTaskDraftState(task, vendorCatalog)
+  const { draft, errors } = state
+  const { submit, markIncomplete } = useTaskFormActions({
+    task,
+    vendorCatalog,
+    draft,
+    setDraft: state.setDraft,
+    setErrors: state.setErrors,
+    setApiError: state.setApiError,
+    setBusy: state.setBusy,
+    selectRef: state.selectRef,
+    keywordRef: state.keywordRef,
+    photoRef: state.photoRef,
+    fieldRefsRef: state.fieldRefsRef,
+    onSave,
+    onSetStatus,
+    onNotice,
+  })
+  const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
+  const config = descriptor === null ? draft.config : withVendorDefaults(descriptor, draft.config)
+  const ctx: VendorFormContext | null = descriptor === null
+    ? null
+    : {
+        descriptor,
+        config,
+        secretInputs: draft.secretInputs,
+        secretSet: task.triggerSecretSet ?? {},
+        errors: errors.fields ?? {},
+        onConfigChange: state.patchConfig,
+        onSecretChange: state.patchSecret,
+        registerRef: state.registerFieldRef,
+      }
+  const canSubmit = descriptor !== null && !vendorCatalogLoading
 
   return (
     <form
@@ -497,52 +877,40 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
           placeholder="给这个任务起个名字"
           aria-label="任务名"
           aria-invalid={errors.name !== undefined}
-          onChange={(e) => { patch('name', e.target.value) }}
+          onChange={(e) => { state.patchBase('name', e.target.value) }}
         />
         {errors.name !== undefined && <span className={css.errorText} role="alert">{errors.name}</span>}
       </label>
 
       <KeywordField
         keywords={draft.keywords}
-        input={keywordInput}
+        input={state.keywordInput}
         error={errors.keywords}
-        inputRef={keywordRef}
-        onInputChange={setKeywordInput}
-        onKeyDown={onKeywordKeyDown}
-        onDrop={dropKeyword}
+        inputRef={state.keywordRef}
+        onInputChange={state.setKeywordInput}
+        onKeyDown={state.onKeywordKeyDown}
+        onDrop={state.dropKeyword}
       />
 
-      <TriggerMethodPicker
+      <VendorSelector
+        catalog={vendorCatalog}
+        catalogError={vendorCatalogError}
+        loading={vendorCatalogLoading}
         method={draft.triggerMethod}
-        onChange={(method) => { patch('triggerMethod', method) }}
+        descriptor={descriptor}
+        selectRef={state.selectRef}
+        onChange={state.changeTriggerMethod}
       />
 
       <PhotoLimitField
         value={draft.photoLimit}
         error={errors.photoLimit}
-        inputRef={photoRef}
-        onChange={(value) => { patch('photoLimit', value) }}
+        inputRef={state.photoRef}
+        onChange={(value) => { state.patchBase('photoLimit', value) }}
       />
 
-      {draft.triggerMethod === 'webhook' ? (
-        <WebhookField
-          value={draft.callbackUrl}
-          error={errors.callbackUrl}
-          inputRef={callbackRef}
-          onChange={(value) => { patch('callbackUrl', value) }}
-        />
-      ) : (
-        <BazhuayuFields
-          flowId={draft.bazhuayuFlowId}
-          flowIdError={errors.bazhuayuFlowId}
-          apiKeyInput={draft.bazhuayuApiKeyInput}
-          apiKeyError={errors.bazhuayuApiKey}
-          apiKeySet={task.bazhuayuApiKeySet}
-          flowIdRef={flowIdRef}
-          apiKeyRef={apiKeyRef}
-          onFlowIdChange={(value) => { patch('bazhuayuFlowId', value) }}
-          onApiKeyChange={(value) => { patch('bazhuayuApiKeyInput', value) }}
-        />
+      {ctx !== null && (
+        <VendorFormBody descriptor={ctx.descriptor} ctx={ctx} savedVersion={task.triggerVendorVersion ?? ''} />
       )}
 
       {task.chatType === 'group' && (
@@ -550,7 +918,7 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
           <input
             type="checkbox"
             checked={draft.mentionMeOnly}
-            onChange={(e) => { patch('mentionMeOnly', e.target.checked) }}
+            onChange={(e) => { state.patchBase('mentionMeOnly', e.target.checked) }}
           />
           <span>
             <span className={css.mentionTitle}>仅匹配@我的文本</span>
@@ -559,19 +927,20 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
         </label>
       )}
 
-      {apiError !== null && <div className={kitCss.error} role="alert">{apiError}</div>}
+      {state.apiError !== null && <div className={kitCss.error} role="alert">{state.apiError}</div>}
 
       <FormActions
         taskName={task.name}
         taskStatus={task.status}
-        busy={busy}
+        busy={state.busy}
         photoLimit={draft.photoLimit}
+        disabled={!canSubmit}
         onSave={() => { void submit(false) }}
         onMarkReady={() => { void submit(true) }}
         onMarkIncomplete={() => { void markIncomplete() }}
         onDelete={onDelete}
         onNotice={onNotice}
-        onError={setApiError}
+        onError={state.setApiError}
       />
     </form>
   )

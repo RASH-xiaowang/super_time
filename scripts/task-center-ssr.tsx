@@ -24,6 +24,8 @@
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
+  RpaVendorCatalog,
+  RpaVendorDescriptor,
   TaskCallbackDispatchResult,
   TaskInfo,
   TaskInfoInput,
@@ -51,6 +53,9 @@ const TASK_A: TaskInfo = {
   photoLimit: 3,
   mentionMeOnly: true,
   triggerMethod: 'webhook',
+  triggerConfig: {},
+  triggerSecretSet: {},
+  triggerVendorVersion: '1.0.0',
   callbackUrl: '',
   bazhuayuFlowId: '',
   bazhuayuApiKeySet: false,
@@ -74,6 +79,9 @@ const TASK_B: TaskInfo = {
   photoLimit: 1,
   mentionMeOnly: false,
   triggerMethod: 'webhook',
+  triggerConfig: { url: 'https://example.com/supertime/callback' },
+  triggerSecretSet: {},
+  triggerVendorVersion: '1.0.0',
   callbackUrl: 'https://example.com/supertime/callback',
   bazhuayuFlowId: '',
   bazhuayuApiKeySet: false,
@@ -97,6 +105,9 @@ const TASK_BAZHUAYU: TaskInfo = {
   photoLimit: 0,
   mentionMeOnly: false,
   triggerMethod: 'bazhuayu',
+  triggerConfig: { flowId: '6ad859ccee2df270d53fc6e5' },
+  triggerSecretSet: { apiKey: true },
+  triggerVendorVersion: '1.0.0',
   callbackUrl: '',
   bazhuayuFlowId: '6ad859ccee2df270d53fc6e5',
   bazhuayuApiKeySet: true,
@@ -104,6 +115,236 @@ const TASK_BAZHUAYU: TaskInfo = {
   createdAt: T(2026, 10, 20, 9, 0, 0),
   updatedAt: T(2026, 10, 20, 9, 0, 0),
   triggerCount: 0,
+}
+
+/** 任务 D：触发方式 = 影刀 RPA（catalog 动态字段：两个 secret + 应用 UUID + map）。 */
+const TASK_YINGDAO: TaskInfo = {
+  id: 4,
+  name: '影刀报价同步',
+  chatUsername: 'wxid_group_a',
+  chatName: '报价群',
+  chatType: 'group',
+  targetUsername: 'wxid_target_a',
+  targetName: '客户经理',
+  keywords: ['影刀'],
+  photoLimit: 0,
+  mentionMeOnly: false,
+  triggerMethod: 'yingdao',
+  triggerConfig: { robotUuid: '73d9a119-7ec7-4226-b679-506afefae667' },
+  triggerSecretSet: { accessKeyId: true, accessKeySecret: true },
+  triggerVendorVersion: '1.0.0',
+  callbackUrl: '',
+  bazhuayuFlowId: '',
+  bazhuayuApiKeySet: false,
+  status: 'incomplete',
+  createdAt: T(2026, 10, 20, 9, 30, 0),
+  updatedAt: T(2026, 10, 20, 9, 30, 0),
+  triggerCount: 0,
+}
+
+/** 任务 E：厂商已下线（目录里没有该 id）——保存必须被拒、任务行摘要要显示「不可用」。 */
+const TASK_UNKNOWN: TaskInfo = {
+  id: 5,
+  name: '已下线厂商任务',
+  chatUsername: 'wxid_group_a',
+  chatName: '报价群',
+  chatType: 'group',
+  targetUsername: 'wxid_target_a',
+  targetName: '客户经理',
+  keywords: ['旧'],
+  photoLimit: 0,
+  mentionMeOnly: false,
+  triggerMethod: 'gone-vendor',
+  triggerConfig: { legacy: 'x' },
+  triggerSecretSet: {},
+  triggerVendorVersion: '',
+  callbackUrl: '',
+  bazhuayuFlowId: '',
+  bazhuayuApiKeySet: false,
+  status: 'incomplete',
+  createdAt: T(2026, 10, 20, 10, 0, 0),
+  updatedAt: T(2026, 10, 20, 10, 0, 0),
+  triggerCount: 0,
+}
+
+/** 厂商描述符夹具（与后端 `listRpaVendors` 的 JSON 同形；前端只认描述符，不认识具体厂商）。 */
+const WEBHOOK_VENDOR: RpaVendorDescriptor = {
+  id: 'webhook',
+  name: 'Webhook',
+  vendor: '内置',
+  version: '1.0.0',
+  summary: '把整条触发记录 JSON POST 到你填写的地址（含图片）',
+  status: 'stable',
+  docs: {
+    home: 'https://example.com/docs/webhook',
+    triggerApi: 'https://example.com/docs/webhook/trigger',
+    lastVerifiedAt: '2026-10-21',
+  },
+  capabilities: { direction: 'outbound', synchronous: true, completion: 'none', idempotency: 'none', deployment: ['cloud', 'onprem'] },
+  fields: [
+    {
+      key: 'url',
+      label: 'Webhook 地址',
+      type: 'text',
+      required: true,
+      ariaLabel: 'Webhook 地址',
+      example: 'https://example.com/webhook',
+      pattern: '^https?://',
+    },
+    { key: 'paramMap', label: '参数映射', type: 'map', required: false, advanced: true },
+  ],
+  auth: { modes: [] },
+  mapping: {
+    style: 'object',
+    mapField: 'paramMap',
+    targets: [
+      { semantic: 'room', defaultKey: 'room_name' },
+      { semantic: 'content', defaultKey: 'content' },
+      { semantic: 'at', defaultKey: 'at_name' },
+    ],
+  },
+  request: { method: 'POST', url: '${config.url}' },
+  response: { okHttpStatus: [200] },
+  retry: { maxAttempts: 2, retryOn: ['network', 'http-5xx'] },
+  governance: { contentOutbound: true, hosts: [], allowCustomBaseUrl: true, privacySection: 'G3' },
+  risks: ['Webhook 端点由你自行提供，请确保可接收 JSON'],
+}
+
+const BAZHUAYU_VENDOR: RpaVendorDescriptor = {
+  id: 'bazhuayu',
+  name: '八爪鱼 RPA',
+  vendor: '八爪鱼 RPA（api-rpa.bazhuayu.com）',
+  version: '1.0.0',
+  summary: '调用八爪鱼启动流程接口：room_name=会话名、content=触发文本、at_name=触发对象',
+  status: 'stable',
+  docs: {
+    home: 'https://www.bazhuayu.com/help',
+    triggerApi: 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start',
+    lastVerifiedAt: '2026-10-21',
+  },
+  capabilities: { direction: 'outbound', synchronous: false, completion: 'none', idempotency: 'none', deployment: ['cloud'] },
+  fields: [
+    {
+      key: 'flowId',
+      label: '八爪鱼 FlowId',
+      type: 'text',
+      required: true,
+      summary: true,
+      ariaLabel: '八爪鱼 FlowId',
+      example: '例如 6ad859ccee2df270d53fc6e5',
+      pattern: '^[A-Za-z0-9_-]{1,128}$',
+    },
+    { key: 'apiKey', label: '八爪鱼 API Key', type: 'password', required: true, secret: true, ariaLabel: '八爪鱼 API Key' },
+  ],
+  auth: { modes: [] },
+  mapping: {
+    style: 'object',
+    mapField: 'paramMap',
+    targets: [
+      { semantic: 'room', defaultKey: 'room_name' },
+      { semantic: 'content', defaultKey: 'content' },
+      { semantic: 'at', defaultKey: 'at_name' },
+    ],
+  },
+  request: { method: 'POST', url: 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start' },
+  response: { okHttpStatus: [200] },
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: { contentOutbound: true, hosts: [{ kind: 'exact', value: 'api-rpa.bazhuayu.com' }], privacySection: 'G3' },
+  risks: ['图片不会发送（RPA 接口没有图片参数）'],
+}
+
+const YINGDAO_VENDOR: RpaVendorDescriptor = {
+  id: 'yingdao',
+  name: '影刀 RPA',
+  vendor: '影刀 RPA（YingDao）',
+  version: '1.0.0',
+  summary: '调用影刀应用运行接口，参数按应用流程引用名映射',
+  status: 'stable',
+  docs: {
+    home: 'https://www.yingdao.com/yddoc/rpa/zh-CN/710488569666060288',
+    triggerApi: 'https://api.yingdao.com/oapi/dispatch/v2/job/start',
+    lastVerifiedAt: '2026-10-21',
+  },
+  capabilities: { direction: 'outbound', synchronous: false, completion: 'callback', idempotency: 'vendor-key', deployment: ['cloud', 'onprem'] },
+  fields: [
+    { key: 'baseUrl', label: '服务地址', type: 'text', required: true, defaultValue: 'https://api.yingdao.com', advanced: true },
+    { key: 'robotUuid', label: '应用 UUID', type: 'text', required: true, summary: true, example: '73d9a119-…' },
+    { key: 'accountName', label: '机器人账号', type: 'text', required: false, help: '与机器人分组二选一' },
+    { key: 'robotClientGroupUuid', label: '机器人分组 UUID', type: 'text', required: false },
+    {
+      key: 'priority',
+      label: '排队优先级',
+      type: 'select',
+      required: false,
+      options: [{ value: 'middle', label: '中' }, { value: 'high', label: '高' }],
+      defaultValue: 'middle',
+    },
+    { key: 'paramMap', label: '参数映射', type: 'map', required: false },
+  ],
+  auth: {
+    modes: [{
+      strategy: 'token-exchange',
+      fields: [
+        { key: 'accessKeyId', label: 'AccessKeyId', type: 'password', required: true, secret: true },
+        { key: 'accessKeySecret', label: 'AccessKeySecret', type: 'password', required: true, secret: true },
+      ],
+    }],
+  },
+  mapping: {
+    style: 'nameValueTypeArray',
+    mapField: 'paramMap',
+    targets: [
+      { semantic: 'room', defaultKey: 'room_name' },
+      { semantic: 'content', defaultKey: 'content' },
+      { semantic: 'at', defaultKey: 'at_name' },
+    ],
+  },
+  request: { method: 'POST', url: '${config.baseUrl}/oapi/dispatch/v2/job/start' },
+  response: { okHttpStatus: [200], okPath: 'code', okValue: 200, externalTaskIdPath: 'data.jobUuid' },
+  retry: { maxAttempts: 2, retryOn: ['network', 'http-5xx'] },
+  governance: { contentOutbound: true, hosts: [{ kind: 'exact', value: 'api.yingdao.com' }], allowCustomBaseUrl: true, privacySection: 'G3' },
+  risks: ['回调无签名，只能作为信号并用查询接口二次确认', '专有云地址需用户自填'],
+  notes: ['官方未给完整响应示例，tokenPath 需联调核对'],
+}
+
+const ALIYUN_VENDOR: RpaVendorDescriptor = {
+  id: 'aliyun-rpa',
+  name: '阿里云 RPA',
+  vendor: '阿里云 RPA',
+  version: '1.0.0',
+  summary: '调用阿里云 RPA CreateTask（实验性，签名与 body 位置待 POC 确认）',
+  status: 'experimental',
+  docs: {
+    home: 'https://help.aliyun.com/product/104798.html',
+    triggerApi: 'https://help.aliyun.com/document_detail/104798.html',
+    lastVerifiedAt: '2026-10-21',
+  },
+  capabilities: { direction: 'outbound', synchronous: false, completion: 'callback', idempotency: 'vendor-key', deployment: ['cloud', 'onprem'] },
+  fields: [
+    { key: 'appId', label: '应用 AppId', type: 'text', required: true },
+    { key: 'robotId', label: '机器人 id', type: 'text', required: false },
+  ],
+  auth: { modes: [{ strategy: 'custom', custom: 'aliyun-rpc-hmac-sha1', fields: [] }] },
+  mapping: {
+    style: 'formParams',
+    mapField: 'paramMap',
+    targets: [
+      { semantic: 'room', defaultKey: 'room_name' },
+      { semantic: 'content', defaultKey: 'content' },
+      { semantic: 'at', defaultKey: 'at_name' },
+    ],
+  },
+  request: { method: 'POST', url: 'https://console-rpa.aliyun.com/rpa/openapi/task/createServiceTask' },
+  response: { okHttpStatus: [200] },
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: { contentOutbound: true, hosts: [{ kind: 'exact', value: 'console-rpa.aliyun.com' }], privacySection: 'G3' },
+  risks: ['官方请求示例 body/query 矛盾', '回调无签名', '签名位置待 POC 确认'],
+}
+
+/** SSR 注入的厂商目录（顺序即选择器顺序）。 */
+const VENDOR_CATALOG: RpaVendorCatalog = {
+  items: [WEBHOOK_VENDOR, BAZHUAYU_VENDOR, YINGDAO_VENDOR, ALIYUN_VENDOR],
+  registryVersion: '2026-10-21',
 }
 
 /** 触发记录 1（任务 A，有图，已投递）。 */
@@ -197,13 +438,38 @@ const FORM_STUBS = {
   onDelete: () => Promise.resolve(OK_MUTATION),
   onNotice: (_text: string) => { /* noop */ },
 }
+/** 目录正常时的表单公共 props。 */
+const FORM_VENDORS = {
+  vendorCatalog: VENDOR_CATALOG.items,
+  vendorCatalogError: null,
+  vendorCatalogLoading: false,
+}
 /** Webhook 方式的抽屉 body。 */
-const webhookFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_A, ...FORM_STUBS }))
+const webhookFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_A, ...FORM_VENDORS, ...FORM_STUBS }))
 /** 八爪鱼方式（已保存 Key）的抽屉 body。 */
-const bazhuayuFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_BAZHUAYU, ...FORM_STUBS }))
+const bazhuayuFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_BAZHUAYU, ...FORM_VENDORS, ...FORM_STUBS }))
 /** 八爪鱼方式（从未配置过 Key）的抽屉 body：placeholder 应提示去填。 */
 const bazhuayuNewFormHtml = renderToStaticMarkup(h(TaskEditForm, {
-  task: { ...TASK_BAZHUAYU, bazhuayuApiKeySet: false },
+  task: { ...TASK_BAZHUAYU, triggerSecretSet: {}, bazhuayuApiKeySet: false },
+  ...FORM_VENDORS,
+  ...FORM_STUBS,
+}))
+/** 影刀方式：catalog 动态字段（账号与鉴权 / 流程与参数 / 高级 / map / 厂商说明）。 */
+const yingdaoFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_YINGDAO, ...FORM_VENDORS, ...FORM_STUBS }))
+/** 实验性厂商：状态徽标与 risks。 */
+const experimentalFormHtml = renderToStaticMarkup(h(TaskEditForm, {
+  task: { ...TASK_UNKNOWN, triggerMethod: 'aliyun-rpa', triggerConfig: {} },
+  ...FORM_VENDORS,
+  ...FORM_STUBS,
+}))
+/** 厂商已下线：选择器显示不可用、保存/标记按钮禁用。 */
+const unknownVendorFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_UNKNOWN, ...FORM_VENDORS, ...FORM_STUBS }))
+/** 目录读取失败：抽屉里也要显示可读错误（且禁止保存）。 */
+const catalogErrorFormHtml = renderToStaticMarkup(h(TaskEditForm, {
+  task: TASK_A,
+  vendorCatalog: [],
+  vendorCatalogError: 'remote unavailable',
+  vendorCatalogLoading: false,
   ...FORM_STUBS,
 }))
 
@@ -258,6 +524,7 @@ const html = renderToStaticMarkup(h(TaskCenterView, {
   selectedTaskIds: new Set([1]),
   triggerBatchMode: false,
   selectedTriggerIds: new Set([101]),
+  vendorCatalog: VENDOR_CATALOG.items,
   actions: ACTIONS,
 }))
 
@@ -316,21 +583,21 @@ check('弹窗回调区：状态徽标 + 重新投递入口', () => {
   ok(html.includes('投递时间'), '缺少回调投递时间')
 })
 
-check('抽屉 body（Webhook 方式）：任务名 / 触发关键词 / 触发方式 / Webhook 地址 / 照片数量 / 标记已完善 / 删除', () => {
+check('抽屉 body（Webhook 方式）：任务名 / 触发关键词 / 触发方式选择器 / Webhook 地址 / 照片数量 / 标记已完善 / 删除', () => {
   for (const label of ['任务名', '触发关键词', '触发方式', '照片数量', 'Webhook 地址', 'Webhook', '八爪鱼 RPA', '标记已完善', '删除', '保存']) {
     ok(webhookFormHtml.includes(label), `抽屉表单缺少「${label}」`)
   }
   ok(webhookFormHtml.includes('aria-label="编辑任务：客户报价跟进"'), '抽屉表单没有可访问名（aria-label="编辑任务：<name>"）')
-  ok(webhookFormHtml.includes('aria-label="触发方式"'), '「触发方式」分段控件没有可访问名')
-  ok(webhookFormHtml.includes('role="radiogroup"'), '「触发方式」没有渲染成分段控件（Segmented）')
+  ok(webhookFormHtml.includes('aria-label="触发方式"'), '「触发方式」选择器没有可访问名')
+  ok(webhookFormHtml.includes('<select'), '「触发方式」没有渲染成 select（E2E 用 selectOption）')
   ok(webhookFormHtml.includes('placeholder="https://example.com/webhook"'), 'Webhook 地址 placeholder 不对')
   ok(webhookFormHtml.includes('aria-label="Webhook 地址"'), 'Webhook 地址输入框没有可访问名')
   ok(webhookFormHtml.includes('仅匹配@我的文本'), '群聊抽屉表单缺少「仅匹配@我的文本」')
   ok(webhookFormHtml.includes('@所有人不算'), '勾选项缺少结构化 @ 的边界说明')
-  ok(webhookFormHtml.includes('标记已完善前需填写 Webhook 地址'), '缺少按触发方式泛化的「已完善」前置提示')
+  ok(webhookFormHtml.includes('标记已完善前需填写：Webhook 地址'), '缺少按描述符 required 生成的「已完善」前置提示')
 })
 
-check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已保存不回显）/ 参数映射说明', () => {
+check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已保存不回显）/ 厂商说明', () => {
   ok(bazhuayuFormHtml.includes('aria-label="编辑任务：八爪鱼报价同步"'), '八爪鱼任务表单没有可访问名')
   ok(bazhuayuFormHtml.includes('aria-label="八爪鱼 FlowId"'), '缺少「八爪鱼 FlowId」输入框')
   ok(bazhuayuFormHtml.includes('placeholder="例如 6ad859ccee2df270d53fc6e5"'), 'FlowId placeholder 不对')
@@ -338,15 +605,46 @@ check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已
   ok(bazhuayuFormHtml.includes('aria-label="八爪鱼 API Key"'), '缺少「八爪鱼 API Key」输入框')
   ok(bazhuayuFormHtml.includes('type="password"'), 'API Key 输入框不是 password（Key 不能明文展示）')
   ok(bazhuayuFormHtml.includes('已保存，留空保持不变'), '已配置 Key 时 placeholder 没有提示「留空保持不变」')
-  ok(bazhuayuFormHtml.includes('https://api-rpa.bazhuayu.com/api/bots/scheduling/start'), '缺少八爪鱼启动流程接口说明')
-  ok(bazhuayuFormHtml.includes('room_name=会话名'), '说明没有写清 room_name 参数映射')
-  ok(bazhuayuFormHtml.includes('图片不会发送'), '说明没有写清不发图片')
-  ok(bazhuayuFormHtml.includes('标记已完善前需填写八爪鱼 FlowId 与 API Key'), '缺少八爪鱼方式的「已完善」前置提示')
+  ok(bazhuayuFormHtml.includes('room_name=会话名'), '厂商说明没有写清 room_name 参数映射')
+  ok(bazhuayuFormHtml.includes('图片不会发送'), '厂商说明没有写清不发图片')
+  ok(bazhuayuFormHtml.includes('api-rpa.bazhuayu.com'), '厂商说明缺少官方触发接口地址')
+  ok(bazhuayuFormHtml.includes('标记已完善前需填写：八爪鱼 FlowId、八爪鱼 API Key'), '缺少八爪鱼方式的「已完善」前置提示')
 })
 
-check('八爪鱼 Key 从未配置时：placeholder 提示填写 X-Api-Key（不是「已保存」）', () => {
-  ok(bazhuayuNewFormHtml.includes('填写八爪鱼 X-Api-Key'), '未配置 Key 的 placeholder 不对')
+check('八爪鱼 Key 从未配置时：placeholder 提示填写（不是「已保存」）', () => {
+  ok(bazhuayuNewFormHtml.includes('填写八爪鱼 API Key'), '未配置 Key 的 placeholder 不对')
   ok(!bazhuayuNewFormHtml.includes('已保存，留空保持不变'), '从未配置 Key 却提示「已保存」')
+})
+
+check('影刀 RPA：catalog 动态字段（账号与鉴权 / 流程与参数 / 高级 / map / 厂商说明）', () => {
+  ok(yingdaoFormHtml.includes('aria-label="编辑任务：影刀报价同步"'), '影刀任务表单没有可访问名')
+  ok(yingdaoFormHtml.includes('影刀 RPA'), '选择器里没有渲染目录中的「影刀 RPA」')
+  ok(yingdaoFormHtml.includes('账号与鉴权'), '缺少「账号与鉴权」分区')
+  ok(yingdaoFormHtml.includes('流程与参数'), '缺少「流程与参数」分区')
+  ok(yingdaoFormHtml.includes('高级'), '缺少「高级」折叠区')
+  ok(yingdaoFormHtml.includes('aria-label="AccessKeyId"'), '缺少 AccessKeyId 凭据字段')
+  ok(yingdaoFormHtml.includes('aria-label="AccessKeySecret"'), '缺少 AccessKeySecret 凭据字段')
+  ok(yingdaoFormHtml.includes('aria-label="应用 UUID"'), '缺少「应用 UUID」字段')
+  ok(yingdaoFormHtml.includes('aria-label="参数映射 · 会话名"'), 'map 字段没有渲染「会话名」参数名输入')
+  ok(yingdaoFormHtml.includes('aria-label="参数映射 · 触发文本"'), 'map 字段没有渲染「触发文本」参数名输入')
+  ok(yingdaoFormHtml.includes('aria-label="参数映射 · 触发对象"'), 'map 字段没有渲染「触发对象」参数名输入')
+  ok(yingdaoFormHtml.includes('value="73d9a119-7ec7-4226-b679-506afefae667"'), '应用 UUID 没有回填任务里的值')
+  ok(yingdaoFormHtml.includes('参数核对 2026-10-21'), '厂商说明缺少参数核对时间')
+  ok(yingdaoFormHtml.includes('https://api.yingdao.com/oapi/dispatch/v2/job/start'), '厂商说明缺少官方触发接口链接')
+  ok(yingdaoFormHtml.includes('回调无签名'), '厂商 risks 没有展示')
+})
+
+check('实验性厂商：⚠ 实验性徽标 + risks；已下线厂商：选择器不可用且保存/标记禁用', () => {
+  ok(experimentalFormHtml.includes('⚠ 实验性'), '实验性厂商没有警告徽标')
+  ok(experimentalFormHtml.includes('body/query 矛盾'), '实验性厂商 risks 没有展示')
+  ok(unknownVendorFormHtml.includes('触发方式不可用（厂商已下线）'), '未知厂商没有「触发方式不可用（厂商已下线）」')
+  ok(unknownVendorFormHtml.includes('disabled=""'), '未知厂商的「保存 / 标记」按钮没有禁用')
+  ok(!unknownVendorFormHtml.includes('aria-label="八爪鱼 FlowId"'), '未知厂商不该渲染动态字段')
+})
+
+check('目录读取失败：抽屉里也有可读错误且禁止保存', () => {
+  ok(catalogErrorFormHtml.includes('读取触发方式目录失败：remote unavailable'), '抽屉里没有目录读取失败错误')
+  ok(catalogErrorFormHtml.includes('disabled=""'), '目录读取失败时保存按钮没有禁用')
 })
 
 /** 八爪鱼 fixture 的任务行：行内摘要要能一眼看出触发方式（不打开抽屉）。 */
@@ -373,6 +671,7 @@ const bazhuayuRowHtml = renderToStaticMarkup(h(TaskCenterView, {
   taskSearch: '',
   triggerSearch: '',
   triggerSearchDraft: '',
+  vendorCatalog: VENDOR_CATALOG.items,
   actions: ACTIONS,
 }))
 
@@ -380,6 +679,74 @@ check('任务行摘要：八爪鱼 RPA · <flowId>（用户不打开抽屉也能
   ok(bazhuayuRowHtml.includes('八爪鱼 RPA · 6ad859ccee2df270d53fc6e5'), '任务行没有显示「八爪鱼 RPA · <flowId>」摘要')
   ok(bazhuayuRowHtml.includes('data-trigger-method="bazhuayu"'), '任务行摘要没有标记触发方式')
   ok(!bazhuayuRowHtml.includes('未填 Webhook'), '八爪鱼任务不该再显示 Webhook 摘要')
+})
+
+/** 已下线厂商的任务行：摘要必须显示「触发方式不可用（厂商已下线）」。 */
+const unknownRowHtml = renderToStaticMarkup(h(TaskCenterView, {
+  tasks: [TASK_UNKNOWN],
+  triggers: [],
+  selectedTaskId: null,
+  expandedTaskId: null,
+  openRecordId: null,
+  openRecord: null,
+  tasksLoading: false,
+  triggersLoading: false,
+  tasksError: null,
+  triggersError: null,
+  tasksReadError: null,
+  triggersReadError: null,
+  triggersTotal: 0,
+  triggersHasMore: false,
+  triggersLoadingMore: false,
+  triggersLoadMoreError: null,
+  onLoadMoreTriggers: () => { /* noop */ },
+  scanning: false,
+  notice: null,
+  taskSearch: '',
+  triggerSearch: '',
+  triggerSearchDraft: '',
+  vendorCatalog: VENDOR_CATALOG.items,
+  actions: ACTIONS,
+}))
+
+check('已下线厂商：任务行摘要显示「触发方式不可用（厂商已下线）」', () => {
+  ok(unknownRowHtml.includes('触发方式不可用（厂商已下线）'), '任务行没有提示触发方式不可用')
+  ok(unknownRowHtml.includes('data-trigger-method="gone-vendor"'), '任务行没有保留触发方式 id')
+})
+
+/** 目录读取失败：面板顶部错误条（不是静默只剩 Webhook）。 */
+const catalogErrorHtml = renderToStaticMarkup(h(TaskCenterView, {
+  tasks: [TASK_A],
+  triggers: [],
+  selectedTaskId: null,
+  expandedTaskId: null,
+  openRecordId: null,
+  openRecord: null,
+  tasksLoading: false,
+  triggersLoading: false,
+  tasksError: null,
+  triggersError: null,
+  tasksReadError: null,
+  triggersReadError: null,
+  triggersTotal: 0,
+  triggersHasMore: false,
+  triggersLoadingMore: false,
+  triggersLoadMoreError: null,
+  onLoadMoreTriggers: () => { /* noop */ },
+  scanning: false,
+  notice: null,
+  taskSearch: '',
+  triggerSearch: '',
+  triggerSearchDraft: '',
+  vendorCatalog: [],
+  vendorCatalogError: 'remote unavailable',
+  actions: ACTIONS,
+}))
+
+check('触发方式目录读取失败：面板顶部错误条 + 说明「当前不能保存」', () => {
+  ok(catalogErrorHtml.includes('读取触发方式目录失败：remote unavailable'), '缺少目录读取失败错误条')
+  ok(catalogErrorHtml.includes('当前不能保存触发方式配置'), '错误条没有说明不能保存')
+  ok(catalogErrorHtml.includes('role="alert"'), '错误条没有 role="alert"')
 })
 
 check('工具条：「刷新」「立即检查」与计数都在', () => {

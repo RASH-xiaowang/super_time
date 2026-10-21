@@ -19,6 +19,7 @@ export * from './types-laya.ts';
 export * from './types-retrieval.ts';
 export * from './types-kb-wire.ts';
 export * from './types-taskcenter.ts';
+export * from './types-rpa.ts';
 /**
  * 这些类型原先只住在实现模块里，前端不得不再镜像一份（`types.ts` 里的「待 H11/H12
  * 落地」旧账）。现在把它们收进共享契约，前端可以只 `export type` 转发，不再逐字段

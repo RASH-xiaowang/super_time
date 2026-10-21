@@ -419,16 +419,16 @@
   gap: 14px;
 }
 
-/* `.field` 的 `flex: 1 1 220px` 是给**行内两列**布局用的（原来的 `.formRow`）；抽屉改成
- * 单列后，字段直接成了 `.form` / `.triggerConfig` 的 flex 子项 —— 在 column 方向里
- * `flex-basis:220px + flex-grow` 会变成「每格至少 220px 高」，字段之间出现大片空白
- * （2026-10-21 抽屉截图实测）。这里把它们收成内容高度。 */
-.form > .field,
-.triggerConfig > .field {
+/* `.field` 的 `flex: 1 1 220px` 是给**行内两列**布局用的；抽屉改成单列后，字段直接成了
+ * `.form` 的 flex 子项 —— 在 column 方向里 `flex-basis:220px + flex-grow` 会变成
+ * 「每格至少 220px 高」，字段之间出现大片空白（2026-10-21 抽屉截图实测）。这里收成内容高度。
+ * 多厂商触发相关的字段/分区样式在 `task-center-trigger.module.css`（该文件里有 `.vendorField`
+ * 做同样的收高，跨文件不能用 CSS Modules 的 `.field` 选择器）。 */
+.form > .field {
   flex: 0 0 auto;
 }
 
-/* 触发方式：Segmented 下方一行「标记已完善」前置说明。 */
+/* 触发方式：选择器下方一行「标记已完善」前置说明。 */
 .triggerHint {
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
@@ -446,25 +446,9 @@
   white-space: nowrap;
 }
 
-/* 八爪鱼 RPA 配置区：FlowId + API Key + 参数映射说明。 */
-.triggerConfig {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
+/* 多厂商触发方式（选择器/动态字段/厂商说明）的样式已按 M21 拆到
+ * `task-center-trigger.module.css`（与本文件同目录、同一套设计令牌）。 */
 
-/* 「触发时调用…图片不会发送」的说明块：长 URL 需要能折行。 */
-.triggerDesc {
-  margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-2);
-  font-size: var(--nm-fs-xs);
-  line-height: var(--nm-lh-body);
-  color: var(--nm-text-2);
-  overflow-wrap: anywhere;
-}
 
 .field {
   display: flex;

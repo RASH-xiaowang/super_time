@@ -4,7 +4,8 @@
  * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 投递）
  * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
  * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
- * 对外方法面逐名增加 9 个（`gateway-remote-surface.spec.ts` / 契约用例守）。
+ * 对外方法面逐名增加 10 个（`gateway-remote-surface.spec.ts` / 契约用例守；2026-10-21
+ * 多 RPA 厂商接入新增 `listRpaVendors`）。
  *
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）与两个装配点；处理器体在
  * `remotes/task-center.ts`（与其它域一致），真正的读写/扫描/投递在 `query/task-center.ts`。
@@ -13,6 +14,7 @@
  */
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type {
+  RpaVendorCatalog,
   TaskCallbackDispatchResult,
   TaskBatchMutationResult,
   TaskInfoInput,
@@ -53,6 +55,18 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   @Remote('listTaskInfos')
   listTaskInfos(): TaskInfoSnapshot {
     return this.taskCenterRemotes().listTaskInfos()
+  }
+
+  /**
+   * 厂商目录（前端触发方式选择器 + 动态表单的唯一数据源，2026-10-21）。
+   *
+   * 返回**可序列化描述符**（字段/鉴权/映射/请求模板/风险；不含任何钩子或凭据）。
+   * 前端不打包厂商清单：新增厂商只改后端注册表，`listRpaVendors` 自动带出。
+   * @returns RpaVendorCatalog：`items`（顺序即 UI 顺序）+ `registryVersion`。
+   */
+  @Remote('listRpaVendors')
+  listRpaVendors(): RpaVendorCatalog {
+    return this.taskCenterRemotes().listRpaVendors()
   }
 
   /**

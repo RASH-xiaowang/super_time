@@ -1,20 +1,21 @@
 /**
- * 「任务投递」：把一条触发记录按任务的**触发方式**送出。
+ * 「任务投递」入口（多厂商版，2026-10-21）。
  *
- * 从 `task-center.ts` 拆出来（M21 单文件 1000 行上限）：这里只有投递一侧的逻辑，
- * 存储/校验/CRUD 在 `task-center.ts`，对外接口由它统一再导出。
+ * 从 `task-center.ts` 拆出来（M21 单文件 1000 行上限）：这里只做**入口编排**——
+ * 读记录/任务/凭据原文 → 隐私闸 → 交给 `rpa/dispatch.ts` 的统一管道 → 把结果写回记录。
+ * 厂商差异（请求模板/鉴权/响应解析）全部在 `rpa/vendors/*` 的描述符与钩子里，本文件
+ * 不认识任何具体厂商；**本文件不再直接出网**（唯一出网点在 `rpa/dispatch.ts#sendRequest`）。
  *
- * 本文件是**本域仅有的两个出网点**（出网台账 `outbound-site-coverage.spec.ts` 逐条登记）：
- *  · `postTaskCallback` —— Webhook：整条记录 JSON POST 到用户逐条填写的地址（只允许 http/https）；
- *  · `postBazhuayuTrigger` —— 八爪鱼 RPA：POST 到固定的 `api-rpa.bazhuayu.com`，Key 在
- *    `X-Api-Key` 头，只发会话名 / 触发文本 / 触发对象三个参数（**不发图片**）。
- * 任务未完善 / 对应方式的配置不齐时不会走到出网函数（返回 skipped）。
+ * 语义要点：
+ *  · 隐私闸 feature 仍是 `task_callback`（多厂商同一口径、审计不按厂商拆分）；
+ *  · 凭据原文只在内存里出现（从 `trigger_secret` 读，兼容回退旧 `bazhuayu_api_key`），
+ *    写回记录时只落 `external_task_id` 等非敏感结果；
+ *  · 失败原因 ≤500 字落 `task_triggers.callback_error`，不含任何凭据。
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { withWritableDb } from './db-open.ts'
-import { fetchWithRetry } from '../net/fetch-retry.ts'
-import type { RetryFetch } from '../net/fetch-retry.ts'
+import { findVendor } from './rpa/registry.ts'
+import { missingReadyFields, migrateLegacySecrets, normalizeTriggerMethod, parseSecretJson } from './rpa/template.ts'
+import { dispatchRpaRecord } from './rpa/dispatch.ts'
 import {
   clampTaskInt,
   ensureTaskSchema,
@@ -26,35 +27,26 @@ import {
   taskDbPath,
   taskErrorText,
 } from './task-center.ts'
+import type { RetryFetch } from '../net/fetch-retry.ts'
+import type { RpaDispatchOutcome, RpaInvocationContext, RpaRecordContext } from './rpa/types.ts'
 import type {
-  TaskBazhuayuStartPayload,
   TaskCallbackDispatchResult,
-  TaskCallbackPayload,
   TaskInfo,
+  TaskTriggerCallbackStatus,
   TaskTriggerRecord,
 } from '../types.ts'
 
-/** 单张图片 data URL 的字符上限（约 6 MB 原始字节；超过就省略该张而不是把整条回调撑爆）。 */
-const IMAGE_DATA_URL_MAX = 8_000_000
-/** 回调失败原因落库上限。 */
+/** 投递失败原因落库上限。 */
 const CALLBACK_ERROR_MAX = 500
-/** 出网 POST：最多尝试 2 次（Webhook 对端抖动一次还有救；八爪鱼固定主机同理，多了只会堆重复投递）。 */
-const DISPATCH_MAX_ATTEMPTS = 2
-const DISPATCH_TIMEOUT_MS = 15_000
 /** 一批待投递记录的上限（定时器每拍只处理这么多，避免一次拍住事件循环太久）。 */
 const PENDING_DISPATCH_LIMIT = 10
-/**
- * 八爪鱼「启动流程」接口地址（主机写死，不来自用户输入）。
- *
- * 出网台账按 `本文件#postBazhuayuTrigger` 记账；改地址=改出网目的地，必须同步隐私声明。
- */
-const BAZHUAYU_TRIGGER_URL = 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start'
 
 /** 投递依赖：图片解码、隐私闸与 fetch 都由调用方注入（query 层不 import gateway 侧）。 */
 export interface TaskDispatchDeps {
   /**
    * 解码一张图片（`username` + `localId`）。返回 `url`（data URL）或 `file`
    * （相对 `decodedDir` 的路径）之一；两者都没有 = 这张解不出来。
+   * 只有 Webhook 适配器使用（其他厂商不发图片）。
    */
   decodeImage: (username: string, localId: number) => Promise<{ url?: string; file?: string }>
   /** 隐私闸（脱敏 + 审计）；返回可直接发出去的文本。 */
@@ -70,220 +62,142 @@ export interface PendingDispatchResult {
   errors?: string[]
 }
 
-/**
- * 读取投递需要的「记录 + 所属任务」；任一缺失都不抛错（调用方给可读结果）。
- *
- * 读也走 `withWritableDb`：这是**我们自己的写库**，异常退出后可能残留 `-wal/-shm`，
- * 只读连接会因此报错、让面板显示 `readError`（而数据其实可读）。`withDb` 留给
- * 微信解密库那种只读快照。
- * @param file - 任务库路径（已由调用方确认存在）。
- * @param triggerId - 触发记录 id。
- * @returns 记录 / 所属任务 / 任务行里的原始八爪鱼 API Key；找不到的部分缺省。
- */
-function readDispatchTarget(file: string, triggerId: number): {
+/** 一次投递要读齐的三样东西：记录 / 所属任务 / 凭据原文。 */
+interface DispatchTarget {
   record?: TaskTriggerRecord
   task?: TaskInfo
-  /**
-   * 八爪鱼 API Key 原文（内部字段，**不进 `TaskInfo` / 任何列表快照**）。
-   *
-   * 只有投递这一刻需要它；`rowToTask` 对外只给 `bazhuayuApiKeySet` 布尔。
-   */
-  bazhuayuApiKey?: string
-} {
+  /** 凭据原文（只在本次投递内存里出现，绝不写回/返回）。 */
+  secrets?: Record<string, string>
+}
+
+/**
+ * 读取投递需要的「记录 + 所属任务 + 凭据原文」；任一缺失都不抛错（调用方给可读结果）。
+ *
+ * 读也走 `withWritableDb`：这是**我们自己的写库**，异常退出后可能残留 `-wal/-shm`，
+ * 只读连接会因此报错；`withDb` 留给微信解密库那种只读快照。
+ * @param file - 任务库路径（已由调用方确认存在）。
+ * @param triggerId - 触发记录 id。
+ * @returns 记录 / 所属任务 / 凭据原文；找不到的部分缺省。
+ */
+function readDispatchTarget(file: string, triggerId: number): DispatchTarget {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare('SELECT * FROM task_triggers WHERE id = ?').get(triggerId) as Record<string, unknown> | undefined
     if (triggerRow === undefined) return {}
     const record = rowToTrigger(triggerRow)
     const taskRow = db.prepare('SELECT * FROM task_info WHERE id = ?').get(record.taskId) as Record<string, unknown> | undefined
     if (taskRow === undefined) return { record }
-    return {
-      record,
-      task: rowToTask(taskRow),
-      bazhuayuApiKey: taskCellStr(taskRow['bazhuayu_api_key']),
-    }
+    const task = rowToTask(taskRow)
+    return { record, task, secrets: secretsOfRow(taskRow, task.triggerMethod) }
   })
 }
 
-/** 文件扩展名 → data URL 的 MIME（未知按 jpeg，与解码器默认输出一致）。 */
-function imageMimeOf(file: string): string {
-  const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase()
-  if (ext === 'png') return 'image/png'
-  if (ext === 'webp') return 'image/webp'
-  if (ext === 'gif') return 'image/gif'
-  if (ext === 'bmp') return 'image/bmp'
-  return 'image/jpeg'
-}
-
-/** 图片路径是否安全（只接受 `decodedDir` 内的相对路径，拒绝绝对路径与 `..`）。 */
-function isSafeDecodedPath(file: string): boolean {
-  const normalized = file.replace(/\\/g, '/')
-  if (normalized.startsWith('..') || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) return false
-  return normalized !== ''
-}
-
 /**
- * 把一条记录的图片引用解码成回调里的 base64 / 错误说明。
- *
- * 单张失败不影响其它：解不出来就写 `error`（用户能看出"这张没带上"），
- * 而不是伪造一张图或让整条回调失败。单张超过 8,000,000 字符同样省略。
- * @param record - 触发记录（图片引用清单）。
- * @param decodedDir - 图片解码缓存根。
- * @param decodeImage - 注入的解码函数。
- * @returns 回调请求体里的 images 数组。
+ * 任务行的凭据原文：通用列优先；为空时回退旧 `bazhuayu_api_key`（迁移窗口内的老库）。
+ * @param row - `task_info` 行。
+ * @param method - 已归一的触发方式。
+ * @returns 凭据键值（非空）。
  */
-async function buildPayloadImages(
-  record: TaskTriggerRecord,
-  decodedDir: string,
-  decodeImage: TaskDispatchDeps['decodeImage'],
-): Promise<TaskCallbackPayload['images']> {
-  const out: TaskCallbackPayload['images'] = []
-  for (const image of record.images) {
-    const item: TaskCallbackPayload['images'][number] = {
-      localId: image.localId,
-      createTime: image.createTime,
-      sender: image.sender,
-    }
-    if (image.md5 !== undefined) item.md5 = image.md5
-    try {
-      const decoded = await decodeImage(record.chatUsername, image.localId)
-      let dataUrl = typeof decoded.url === 'string' ? decoded.url : ''
-      if (dataUrl === '' && typeof decoded.file === 'string' && decoded.file !== '') {
-        if (!isSafeDecodedPath(decoded.file)) {
-          item.error = '图片路径超出解码目录，已省略'
-        } else {
-          const bytes = readFileSync(join(decodedDir, decoded.file))
-          dataUrl = 'data:' + imageMimeOf(decoded.file) + ';base64,' + bytes.toString('base64')
-        }
-      }
-      if (item.error === undefined) {
-        if (dataUrl === '') item.error = '图片解码失败'
-        else if (dataUrl.length > IMAGE_DATA_URL_MAX) item.error = '图片过大，已省略'
-        else item.dataUrl = dataUrl
-      }
-    } catch (e) {
-      item.error = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX)
-    }
-    out.push(item)
-  }
-  return out
-}
-
-/**
- * 发出一次 **Webhook** 回调 POST（本域出网点之一）。
- *
- * 走 `fetchWithRetry`：单次尝试 15s 超时、最多 2 次（用户自己的服务，抖动一次还有救；
- * 次数再多只会让重复投递变多）。非 2xx 一律当失败。
- * @param doFetch - fetch 实现（生产 = 全局 fetch）。
- * @param url - 用户配置的回调地址。
- * @param payload - 请求体（不持久化）。
- * @throws 网络/超时/非 2xx 时抛可读错误（调用方截断后落库）。
- */
-async function postTaskCallback(doFetch: RetryFetch, url: string, payload: TaskCallbackPayload): Promise<void> {
-  const res = await fetchWithRetry(doFetch, url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS })
-  if (!res.ok) throw new Error('回调失败：HTTP ' + String(res.status))
-}
-
-/**
- * 发出一次**八爪鱼 RPA 启动流程** POST（本域出网点之二）。
- *
- * 主机写死（{@link BAZHUAYU_TRIGGER_URL}，不来自用户输入）；只有用户为某个任务显式选了
- * 「八爪鱼 RPA」并填了 FlowId + API Key、任务已完善时才会走到这里。参数只有触发记录的
- * 会话名 / 触发文本 / 触发对象（见 {@link buildBazhuayuPayload}），**不发图片**。
- *
- * 重试口径与 Webhook 一致：2 次尝试 / 单次 15s，2xx = 成功。
- * @param doFetch - fetch 实现（生产 = 全局 fetch）。
- * @param apiKey - 任务行里的八爪鱼 API Key（只进请求头，不落 payload）。
- * @param payload - 启动流程请求体（不持久化）。
- * @throws 网络/超时/非 2xx 时抛可读错误（调用方截断后落 `callback_error`）。
- */
-async function postBazhuayuTrigger(
-  doFetch: RetryFetch,
-  apiKey: string,
-  payload: TaskBazhuayuStartPayload,
-): Promise<void> {
-  const res = await fetchWithRetry(doFetch, BAZHUAYU_TRIGGER_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'X-Api-Key': apiKey,
-    },
-    body: JSON.stringify(payload),
-  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS })
-  if (!res.ok) throw new Error('八爪鱼触发失败：HTTP ' + String(res.status))
-}
-
-/**
- * 组装八爪鱼启动流程请求体：把一条触发记录映射成 `room_name` / `content` / `at_name`。
- *
- * 取值口径：`room_name` = 触发记录的会话名；`content` = 过隐私闸后的触发文本；
- * `at_name` = 触发对象显示名 —— 群聊用目标成员 `targetName`；单聊任务创建弹窗不填
- * `targetName`，此时「触发的用户对象」就是会话本人，**回落会话名 `record.chatName`**
- * （否则单聊任务会把 `at_name` 发成空串）。`FlowId` 来自任务配置。
- * @param task - 任务配置（提供 FlowId）。
- * @param record - 触发记录（提供三个业务参数的快照值）。
- * @param text - 已过隐私闸的触发文本。
- * @returns 启动流程请求体（与 `TaskBazhuayuStartPayload` 同形）。
- */
-function buildBazhuayuPayload(
-  task: TaskInfo,
-  record: TaskTriggerRecord,
-  text: string,
-): TaskBazhuayuStartPayload {
-  return {
-    FlowId: task.bazhuayuFlowId,
-    FlowContentRetrievalMode: 'ByNewestContent',
-    SpecifiedPublicationVersion: '',
-    SpecifiedBot: '',
-    Params: {
-      room_name: record.chatName,
-      content: text,
-      // 单聊没有独立的触发对象显示名 ⇒ 回落会话名；群聊保持目标成员显示名。
-      at_name: record.targetName !== '' ? record.targetName : record.chatName,
-    },
-    UserStartSource: 'OpenApi',
-  }
-}
-
-/** 组装回调请求体；`triggeredAtText` 用 zh-CN 的 24 小时制（只在 query 层格式化，不引 UI 依赖）。 */
-function buildCallbackPayload(
-  record: TaskTriggerRecord,
-  task: TaskInfo,
-  text: string,
-  images: TaskCallbackPayload['images'],
-): TaskCallbackPayload {
-  return {
-    taskId: task.id,
-    taskName: task.name,
-    recordId: record.id,
-    triggeredAt: record.triggeredAt,
-    triggeredAtText: new Date(record.triggeredAt).toLocaleString('zh-CN', { hour12: false }),
-    chat: { username: task.chatUsername, name: task.chatName, type: task.chatType },
-    target: { username: task.targetUsername, name: task.targetName },
-    keyword: record.keyword,
-    text,
-    images,
-  }
+function secretsOfRow(row: Record<string, unknown>, method: string): Record<string, string> {
+  const stored = parseSecretJson(row['trigger_secret'])
+  if (Object.keys(stored).length > 0) return stored
+  return migrateLegacySecrets(method, taskCellStr(row['bazhuayu_api_key']))
 }
 
 /** 把投递结果写回记录（单语句 autocommit；写失败不影响已经发出的请求这一事实）。 */
-function saveDispatchResult(file: string, triggerId: number, status: 'sent' | 'failed', error: string): void {
+function saveDispatchResult(
+  file: string,
+  triggerId: number,
+  status: TaskTriggerCallbackStatus,
+  error: string,
+  externalTaskId: string,
+): void {
   withWritableDb(file, (db) => {
     ensureTaskSchema(db)
-    db.prepare('UPDATE task_triggers SET callback_status = ?, callback_at = ?, callback_error = ? WHERE id = ?')
-      .run(status, Date.now(), error, triggerId)
+    db.prepare(`UPDATE task_triggers SET
+      callback_status = ?, callback_at = ?, callback_error = ?, external_task_id = ?
+      WHERE id = ?`).run(status, Date.now(), error, externalTaskId, triggerId)
   })
 }
 
 /**
- * 手动 / 扫描后投递一条触发记录（按任务的触发方式分支）。
+ * 批量投递时把「任务没配好 / 厂商已下线」的 pending 记录落成 `skipped`。
  *
- * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要有回调地址，
- * 八爪鱼要有 FlowId + 已保存的 API Key。文本先过**同一个**隐私闸（feature 仍是
- * `task_callback`，审计口径不因触发方式而变）；Webhook 才解码图片，八爪鱼不发图片。
+ * 预检 skipped 不出网；但若不落库，同一批 pending 会被每一拍重复捞到（队头阻塞，
+ * 后面配置齐全的记录永远排不上）。落库失败只影响下一拍重试，不改变本次返回。
+ * @param file - 任务库路径。
+ * @param triggerId - 触发记录 id。
+ * @param error - 跳过原因（≤500 字）。
+ */
+function persistSkipped(file: string, triggerId: number, error: string): void {
+  try {
+    saveDispatchResult(file, triggerId, 'skipped', error.slice(0, CALLBACK_ERROR_MAX), '')
+  } catch {
+    /* 落库失败：下一拍还会再遇到它，不改变本次计数 */
+  }
+}
+
+/**
+ * 组装一次投递的上下文（模板占位符的顶层根）。
+ *
+ * `record.chatType` 取任务配置（触发记录只存会话用户名/显示名，没存类型）；
+ * `text` 已过隐私闸；`images` 原样带上（只有 Webhook 会解码）。
+ * @param task - 任务配置。
+ * @param record - 触发记录。
+ * @param secrets - 凭据原文。
+ * @param text - 已过隐私闸的触发文本。
+ * @returns 投递上下文。
+ */
+function buildInvocationContext(
+  task: TaskInfo,
+  record: TaskTriggerRecord,
+  secrets: Record<string, string>,
+  text: string,
+): RpaInvocationContext {
+  const recordContext: RpaRecordContext = {
+    username: record.chatUsername,
+    chatName: record.chatName,
+    chatType: task.chatType,
+    targetName: record.targetName,
+    targetUsername: record.targetUsername,
+    text,
+    keyword: record.keyword,
+    triggeredAt: record.triggeredAt,
+    images: record.images,
+  }
+  return {
+    taskId: task.id,
+    recordId: record.id,
+    idempotencyKey: String(task.id) + ':' + String(record.id),
+    taskName: task.name,
+    record: recordContext,
+    config: task.triggerConfig,
+    secrets,
+  }
+}
+
+/** 跳过原因（预检失败，不写库、不出网）。 */
+function skipped(error: string): TaskCallbackDispatchResult {
+  return { ok: false, status: 'skipped', error }
+}
+
+/** 把管道结果转成对外结果 + 落库错误文案。 */
+function outcomeResult(outcome: RpaDispatchOutcome): { result: TaskCallbackDispatchResult; error: string } {
+  if (outcome.status === 'sent') {
+    const result: TaskCallbackDispatchResult = { ok: true, status: 'sent' }
+    if (outcome.externalTaskId !== undefined && outcome.externalTaskId !== '') {
+      result.externalTaskId = outcome.externalTaskId
+    }
+    return { result, error: '' }
+  }
+  const error = (outcome.error ?? (outcome.status === 'skipped' ? '已跳过' : '投递失败')).slice(0, CALLBACK_ERROR_MAX)
+  return { result: { ok: false, status: outcome.status, error }, error }
+}
+
+/**
+ * 手动 / 扫描后投递一条触发记录（按任务的触发方式走注册表）。
+ *
+ * 前置：任务已完善 + 厂商已注册 + 描述符必填项齐全，否则 skipped + 可读原因。
+ * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）；图片只由 Webhook 适配器按需解码。
  * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。
@@ -298,68 +212,59 @@ export async function dispatchTaskCallback(
   deps: TaskDispatchDeps,
 ): Promise<TaskCallbackDispatchResult> {
   const id = taskCellNum(triggerId)
-  if (id <= 0) return { ok: false, status: 'skipped', error: '触发记录不存在' }
-  if (!storeExists(decryptedDir)) return { ok: false, status: 'skipped', error: '触发记录不存在' }
+  if (id <= 0) return skipped('触发记录不存在')
+  if (!storeExists(decryptedDir)) return skipped('触发记录不存在')
   const file = taskDbPath(decryptedDir)
-  let record: TaskTriggerRecord | undefined
-  let task: TaskInfo | undefined
-  let apiKey = ''
+  let target: DispatchTarget
   try {
-    const target = readDispatchTarget(file, id)
-    record = target.record
-    task = target.task
-    apiKey = target.bazhuayuApiKey ?? ''
+    target = readDispatchTarget(file, id)
   } catch (e) {
-    return { ok: false, status: 'skipped', error: '读取触发记录失败：' + taskErrorText(e) }
+    return skipped('读取触发记录失败：' + taskErrorText(e))
   }
-  if (record === undefined) return { ok: false, status: 'skipped', error: '触发记录不存在' }
-  if (task === undefined) return { ok: false, status: 'skipped', error: '任务不存在或已删除' }
-  if (task.status !== 'ready') return { ok: false, status: 'skipped', error: '任务未完善' }
-  if (task.triggerMethod === 'bazhuayu') {
-    if (task.bazhuayuFlowId === '' || apiKey === '') {
-      return { ok: false, status: 'skipped', error: '任务未完善或未配置八爪鱼 FlowId / API Key' }
-    }
-  } else if (task.callbackUrl === '') {
-    return { ok: false, status: 'skipped', error: '任务未完善或未配置回调地址' }
-  }
-  // 两种触发方式过同一个隐私闸：feature 不随方式变化（审计口径与用户告知保持一致）。
+  const { record, task } = target
+  if (record === undefined) return skipped('触发记录不存在')
+  if (task === undefined) return skipped('任务不存在或已删除')
+  if (task.status !== 'ready') return skipped('任务未完善')
+  const adapter = findVendor(task.triggerMethod)
+  if (adapter === undefined) return skipped('触发方式不可用：' + task.triggerMethod)
+  const missing = missingReadyFields(adapter.descriptor, task.triggerConfig, task.triggerSecretSet)
+  if (missing.length > 0) return skipped('触发配置不完整：' + missing.join('、'))
+
+  // 所有厂商都发过闸文本；`contentOutbound=false` 的厂商拿空串（当前没有这种厂商）。
   const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
-  const text = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
-  // 直接取全局 `fetch`（而不是包一层箭头）：多包一层会在出网点台账里多出一个匿名调用点，
-  // 而本域刻意只登记 `postTaskCallback` / `postBazhuayuTrigger` 两个出网函数。
-  const send: RetryFetch = deps.fetchImpl ?? fetch
-  let sent = false
-  let failure = ''
+  const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
+  const text = adapter.descriptor.governance.contentOutbound ? gatedText : ''
+  const ctx = buildInvocationContext(task, record, target.secrets ?? {}, text)
+  let outcome: RpaDispatchOutcome
   try {
-    if (task.triggerMethod === 'bazhuayu') {
-      // 八爪鱼接口没有图片参数：不解码图片，只发三个业务参数。
-      await postBazhuayuTrigger(send, apiKey, buildBazhuayuPayload(task, record, text))
-    } else {
-      const images = await buildPayloadImages(record, decodedDir, deps.decodeImage)
-      await postTaskCallback(send, task.callbackUrl, buildCallbackPayload(record, task, text, images))
-    }
-    sent = true
+    outcome = await dispatchRpaRecord({
+      adapter,
+      ctx,
+      deps: deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl },
+      buildDeps: { decodedDir, decodeImage: deps.decodeImage },
+    })
   } catch (e) {
-    failure = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX)
+    outcome = { status: 'failed', error: taskErrorText(e) }
   }
+  const { result, error } = outcomeResult(outcome)
   try {
-    saveDispatchResult(file, id, sent ? 'sent' : 'failed', failure)
+    saveDispatchResult(file, id, result.status, error, result.externalTaskId ?? '')
   } catch (e) {
     // 请求可能已经到达对端；此时如实说"结果没存下来"，而不是回一个会诱发重复投递的失败。
-    return sent
-      ? { ok: true, status: 'sent', error: '回调结果保存失败：' + taskErrorText(e) }
-      : { ok: false, status: 'failed', error: failure + '（结果保存失败：' + taskErrorText(e) + '）' }
+    return result.ok
+      ? { ok: true, status: 'sent', error: '投递结果保存失败：' + taskErrorText(e) }
+      : { ok: false, status: result.status, error: error + '（结果保存失败：' + taskErrorText(e) + '）' }
   }
-  return sent ? { ok: true, status: 'sent' } : { ok: false, status: 'failed', error: failure }
+  return result
 }
 
 /**
  * 投递一批 `pending` 记录。
  *
- * 只取「所属任务仍已完善 + **触发方式对应的下游配置齐全**」的记录（与
- * `dispatchTaskCallback` 的 skipped 判据同口径）：Webhook 看回调地址，八爪鱼看
- * FlowId + 是否存过 API Key（Key 原文只在投递时读出，不在 SQL 里比较明文）。
- * 扫描器每拍「扫描 → 投递」；单条失败不连坐（错误只收集前 10 条）。
+ * 只按「记录 pending + 所属任务 ready」捞（**不再按厂商列过滤**）：逐条在 JS 里用注册表
+ * 判配置后投递，未配置/厂商下线的记录会被 skipped 并写明原因（**落库为 skipped**，否则
+ * 同一批 pending 会每拍重复占用名额、队头阻塞）。单条失败不连坐（错误只收集前 10 条）；
+ * 成功/失败/skipped 都算处理过，下一拍不会重复捞。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根。
  * @param deps - 解码 / 隐私闸 / fetch 注入。
@@ -377,14 +282,11 @@ export async function dispatchPendingTaskCallbacks(
   let ids: number[] = []
   try {
     ids = withWritableDb(taskDbPath(decryptedDir), (db) => {
-      // 老库在这里顺手补列：这条 SQL 引用了 2026-10-21 新增的三列。
+      // 老库在这里顺手补列：下面 SELECT 引用了外部任务 id / 通用配置等新列。
       ensureTaskSchema(db)
       const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
         JOIN task_info i ON i.id = t.task_id
-        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND (
-          (i.trigger_method = 'webhook' AND i.callback_url <> '')
-          OR (i.trigger_method = 'bazhuayu' AND i.bazhuayu_flow_id <> '' AND i.bazhuayu_api_key <> '')
-        )
+        WHERE t.callback_status = 'pending' AND i.status = 'ready'
         ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(cap) as Array<{ id?: unknown }>
       return rows.map((row) => taskCellNum(row.id))
     })
@@ -394,6 +296,7 @@ export async function dispatchPendingTaskCallbacks(
   let dispatched = 0
   let failed = 0
   const errors: string[] = []
+  const file = taskDbPath(decryptedDir)
   for (const id of ids) {
     try {
       const r = await dispatchTaskCallback(decryptedDir, decodedDir, id, deps)
@@ -401,6 +304,8 @@ export async function dispatchPendingTaskCallbacks(
       else {
         failed += 1
         if (errors.length < 10) errors.push('记录 ' + String(id) + '：' + (r.error ?? r.status))
+        // 预检 skipped 不出网但必须落库：否则每拍重复捞到同一批，队头阻塞后面的记录。
+        if (r.status === 'skipped') persistSkipped(file, id, r.error ?? '')
       }
     } catch (e) {
       failed += 1

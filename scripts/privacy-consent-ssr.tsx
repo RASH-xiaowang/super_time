@@ -61,16 +61,24 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('仅点击时下载'), '没有点明「仅点击时下载」的那一条')
   ok(html.includes('AI 问答与总结'), '没有说明 AI 出网')
   ok(html.includes('腾讯图片 CDN') || html.includes('头像'), '没有说明头像出网')
-  // 2026-10-21：任务触发新增八爪鱼 RPA 方式 —— 同意屏必须如实列出来（含固定主机与「不发图片」）。
-  ok(html.includes('八爪鱼 RPA'), '没有说明任务触发的八爪鱼 RPA 方式')
-  ok(html.includes('api-rpa.bazhuayu.com'), '没有点明八爪鱼 RPA 的固定出网主机')
-  ok(html.includes('不发图片'), '没有说清八爪鱼 RPA 方式不发图片')
+  // 2026-10-21（v24）：任务触发从「Webhook / 八爪鱼」扩到多厂商 —— 同意屏必须如实列出
+  // 每家厂商的出网主机（固定主机 + 可配置实例地址）与「不发图片 / 实验性」口径。
+  ok(html.includes('多家 RPA 厂商'), '没有说明任务触发的多厂商方式')
+  for (const host of [
+    'api-rpa.bazhuayu.com', 'api.yingdao.com', 'console-rpa.aliyun.com',
+    'z-commander-api.ai-indeed.com', 'cloud.uipath.com', 'uipath.com', 'laiye.com',
+  ]) {
+    ok(html.includes(host), `没有点明 RPA 厂商的出网主机：${host}`)
+  }
+  ok(html.includes('实例地址'), '没有说明 UiPath / 来也 / 私有化部署用你配置的实例地址')
+  ok(html.includes('实验性'), '没有说清阿里云 / 来也 / 实在为实验性接入')
+  ok(html.includes('不发图片'), '没有说清 RPA 厂商方式不发图片')
 })
 
 check('出网点开关口径与文档一致（应用内已无任何出网开关：6 条无开关 + 1 条仅点击时下载）', () => {
   // 2026-09-30：出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
   // 其余六个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
-  // （2026-10-21：新增「任务触发（Webhook / 八爪鱼 RPA）」；它没有应用内开关，
+  // （2026-10-21：新增「任务触发（Webhook / 多家 RPA 厂商）」；它没有应用内开关，
   // 约束是每个任务的触发方式配置 —— 不配置就不发送。）
   //
   // 注意不能用「按 data-switch 切块、再看块里含哪个标签」来配：下面的诚实说明里也点了
@@ -84,7 +92,7 @@ check('出网点开关口径与文档一致（应用内已无任何出网开关�
     .map((c) => c.slice(0, c.indexOf('"')))
     .filter((k) => k === 'none' || k === 'manual')
   const ORDER = [
-    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 八爪鱼 RPA）', '头像图片',
+    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）', '头像图片',
     '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
   ]
   /** 唯一一条「仅点击时下载」的出网点；其余出网点都应当是「无开关」。 */

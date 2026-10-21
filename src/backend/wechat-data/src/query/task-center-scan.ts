@@ -8,12 +8,14 @@
  *  ① **水位推进**只在确实见过更大的 `sort_seq` 时发生；无消息时不写库（否则每次空扫都写一行）。
  *  ② 单任务失败不连坐：坏会话（分片正在重解密/库被占用）只把原因收进 `errors`，其余任务照扫。
  *
- * 记录的初始回调状态也在这里定：`pending` = 该记录值得进入投递队列（**触发方式对应配置齐全**），
- * `skipped` = 任务没配好。注意这不只等价于「有 Webhook 地址」——八爪鱼方式允许 `callbackUrl`
- * 为空，判定见 {@link scanOneTask} 里的 `downstreamReady`。
+ * 记录的初始回调状态也在这里定：`pending` = 该记录值得进入投递队列（**当前触发方式的
+ * 描述符必填项齐全**），`skipped` = 任务没配好 / 厂商不在注册表。判定见
+ * {@link scanOneTask} 里的 `downstreamReady`（与投递入口同一套 `missingReadyFields` 口径）。
  */
 import { withWritableDb } from './db-open.ts'
 import type { DatabaseSync } from './db-open.ts'
+import { findVendor } from './rpa/registry.ts'
+import { missingReadyFields } from './rpa/template.ts'
 import { queryMessages, queryNewMessages } from './messages.ts'
 import {
   ensureTaskSchema,
@@ -36,6 +38,20 @@ const SCAN_PAGE_SIZE = 200
 const SCAN_MAX_PAGES = 5
 /** 触发文本落库上限（与聊天素材收集同口径）。 */
 const TRIGGER_TEXT_MAX = 4000
+
+/**
+ * 该任务当前是否「下游配置齐全」：厂商已注册 + 描述符必填项（含凭据是否已保存）齐全。
+ *
+ * 未知/停用厂商与缺配置都返回 false ⇒ 记录初始状态写 `skipped`（投递入口还会再判一次，
+ * 两层同一套 {@link missingReadyFields} 口径，避免"先 pending 再永远投不出去"）。
+ * @param task - 任务配置。
+ * @returns 可进入投递队列为 true。
+ */
+function downstreamReady(task: TaskInfo): boolean {
+  const adapter = findVendor(task.triggerMethod)
+  if (adapter === undefined) return false
+  return missingReadyFields(adapter.descriptor, task.triggerConfig, task.triggerSecretSet).length === 0
+}
 
 /** 扫描参数（网关把登录账号 wxid 注进来，query 层不 import gateway 侧）。 */
 export interface ScanTaskTriggersOptions {
@@ -264,16 +280,8 @@ function scanOneTask(
       const match = matchTrigger(msg, task.keywords)
       if (match === null) continue
       const images = cachedImages ??= collectTriggerImages(decryptedDir, task, selfUsername, task.photoLimit)
-      // 记录是否值得进入投递队列：按**触发方式**看对应配置齐不齐，不再只看 Webhook 地址。
-      //   · pending = 触发方式对应的下游配置齐全（Webhook 看 callbackUrl；八爪鱼看
-      //     FlowId + 是否存过 Key），批量投递会捞它；
-      //   · skipped = 任务没配好，批量投递不捞。旧口径「有 Webhook 地址才 pending」对
-      //     八爪鱼任务不成立（它的 callbackUrl 允许为空），沿用会让八爪鱼记录永远 skipped。
-      // 这里只读 `bazhuayuApiKeySet` 这个布尔，Key 原文不出任务库。
-      const downstreamReady = task.triggerMethod === 'bazhuayu'
-        ? (task.bazhuayuFlowId !== '' && task.bazhuayuApiKeySet)
-        : task.callbackUrl !== ''
-      const callbackStatus: TaskTriggerCallbackStatus = downstreamReady ? 'pending' : 'skipped'
+      // 记录是否值得进入投递队列：按注册表 + 描述符必填项判定（与投递入口同一口径）。
+      const callbackStatus: TaskTriggerCallbackStatus = downstreamReady(task) ? 'pending' : 'skipped'
       const info = db.prepare(`INSERT OR IGNORE INTO task_triggers
         (task_id, task_name, chat_username, chat_name, target_username, target_name, keyword, text, images,
          message_local_id, message_sort_seq, triggered_at, callback_status)

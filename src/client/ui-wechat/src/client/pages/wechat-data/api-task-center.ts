@@ -12,6 +12,7 @@
  * **读同一份后端数据**同时刷新。
  */
 import type {
+  RpaVendorCatalog,
   TaskCallbackDispatchResult,
   TaskBatchMutationResult,
   TaskInfoInput,
@@ -28,6 +29,16 @@ import { notifyTaskCenterUpdated } from './task-center-events.ts'
 /** 任务列表（最新在前）。 */
 export async function apiListTaskInfos(): Promise<TaskInfoSnapshot> {
   return unwrap(await remote().listTaskInfos())
+}
+
+/**
+ * 触发方式目录（内置 `webhook` + 已注册 RPA 厂商描述符）。
+ *
+ * 面板打开时取一次；编辑抽屉的触发方式选择器与动态表单都按它渲染。
+ * **不缓存**（目录随应用版本变化，读旧目录会让新厂商字段显示不出来）；失败由面板显示错误条。
+ */
+export async function apiListRpaVendors(): Promise<RpaVendorCatalog> {
+  return unwrap(await remote().listRpaVendors())
 }
 
 /** 触发记录（可按任务过滤；最新在前）。 */

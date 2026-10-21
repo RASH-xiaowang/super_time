@@ -31,10 +31,10 @@ export declare function cleanTaskBatchIds(raw: unknown, max?: number): {
 };
 /** 建表语句（两张表一次建齐；`IF NOT EXISTS` ⇒ 可在每个写连接里重复执行）。 */
 export declare function ensureTaskSchema(db: DatabaseSync): void;
-/** `task_info` 行 → 契约里的 `TaskInfo`（`last_scan_seq` 是扫描内部状态，不进契约）。 */
-export declare function rowToTask(r: Record<string, unknown>): TaskInfo;
 /** `task_triggers` 行 → 契约里的 `TaskTriggerRecord`。 */
 export declare function rowToTrigger(r: Record<string, unknown>): TaskTriggerRecord;
+/** `task_info` 行 → 契约里的 `TaskInfo`（`last_scan_seq` 是扫描内部状态，不进契约）。 */
+export declare function rowToTask(r: Record<string, unknown>): TaskInfo;
 /**
  * 任务列表（id DESC，最新在前）。
  *

@@ -1,9 +1,30 @@
 # 多 RPA 厂商可选触发方案（调研 + 设计）
 
-> 状态：**方案与调研，未改变现有行为**（落地按第 8 节分阶段，需先评审）。
+> 状态：**已实现（2026-10-21）**：S0 抽象重构（Webhook / 八爪鱼迁入注册表 + 通用管道 +
+> `listRpaVendors` + 描述符驱动 UI）+ **7 个适配器**（内置 `webhook` / `bazhuayu`，新增
+> `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）；其中 **`aliyun-rpa` / `laiye` /
+> `shizai` 为实验性**（参数待联调，见第 6 节风险）。**回调接收端 / 完成状态轮询 / 入站触发为后续**
+> （v1 只到「厂商已受理」，`externalTaskId` 落库供后续扩展）。旧任务行为不变。
 > 调研/核对时间：**2026-10-21（Asia/Shanghai）**。参数、鉴权、回调的原始证据见第 5 节与各厂商小节内引用链接。
-> 背景：任务信息目前只有 `Webhook` 与 `八爪鱼 RPA` 两种触发方式（见 [`TASK-CENTER.md`](TASK-CENTER.md)）。
+> 背景：任务信息此前只有 `Webhook` 与 `八爪鱼 RPA` 两种触发方式（见 [`TASK-CENTER.md`](TASK-CENTER.md)）。
 > 本方案把它推广为「**统一触发方式选择 + 厂商适配器注册表**」：新增厂商不改核心派发逻辑，只加一份厂商描述。
+
+**实现映射（2026-10-21）**
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 共享类型（公开） | [`../src/backend/wechat-data/src/types-rpa.ts`](../src/backend/wechat-data/src/types-rpa.ts) | `RpaVendorDescriptor` / `RpaField` / `RpaVendorCatalog` / `RpaTriggerConfig` 等（`build:types` 后给前端用） |
+| 运行时契约 | [`../src/backend/wechat-data/src/query/rpa/types.ts`](../src/backend/wechat-data/src/query/rpa/types.ts) | `RpaVendorAdapter`、请求/响应、派发上下文（不进公开 d.ts） |
+| 注册表 | `src/backend/wechat-data/src/query/rpa/registry.ts` | 内置 + 5 家厂商的适配器数组（顺序即 UI 顺序）+ `listVendorDescriptors` |
+| 通用管道 | `src/backend/wechat-data/src/query/rpa/dispatch.ts` | 本域**唯一**出网函数 `sendRequest` + `dispatchRpaRecord`（主机白名单/鉴权/重试/解析） |
+| 字段校验与渲染 | `src/backend/wechat-data/src/query/rpa/template.ts` | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` 等 |
+| 鉴权 | `src/backend/wechat-data/src/query/rpa/auth.ts` | bearer / header / token-exchange / custom（阿里云签名） |
+| 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
+| Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors`（`@Remote` 方法数 217 → 218） |
+
+> 隐私与文档口径：`PRIVACY_VERSION` 24、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
+> [`TASK-CENTER.md`](TASK-CENTER.md) §3.5/§6；出网台账登记 `query/rpa/dispatch.ts#sendRequest`。
+> 设计文档以下内容保留为**调研与设计依据**（不随实现状态更新而删除）。
 
 ---
 
@@ -642,7 +663,7 @@ const yingdao: RpaVendorAdapter = {
 **要加（一个厂商 = 一个目录文件 + 注册一行 + 登记两处）**：
 
 ```text
-src/backend/wechat-data/src/rpa/
+src/backend/wechat-data/src/query/rpa/
   types.ts                 # descriptor / field / template / poll 类型（共享契约，生成 d.ts）
   registry.ts              # 唯一注册表：显式 import + 数组（新增厂商只改这一行）
   dispatch.ts              # 通用管道；不认识任何具体厂商

@@ -139,26 +139,19 @@ const LEDGER: LedgerEntry[] = [
       + '单份上限 32MB；逐条口径见 docs/PRIVACY.md 的 G2 节。',
   },
   {
-    site: 'src/backend/wechat-data/src/query/task-center-callback.ts#postTaskCallback',
-    control: '用户显式配置的回调地址；仅已完善任务投递',
-    anchor: 'src/backend/wechat-data/src/query/task-center-callback.ts', marker: 'fetchWithRetry(',
-    why: '任务触发回调（2026-10-19）：用户在「任务信息」里为每个任务逐条填写回调地址，'
-      + '任务标记「已完善」后，后台在每次微信新消息同步落地时立即扫描（另有每 10 秒兜底）；命中关键词就把**这一条**触发记录'
-      + '（触发时间 / 会话 / 触发对象 / 关键词 / 文本 / 该对象最近 N 张图片）以 JSON POST 到该地址。'
-      + '地址只允许 http/https；未完善任务不扫描、不投递，失败只记状态（2 次尝试 / 15s 超时）。'
-      + '逐条口径见 docs/PRIVACY.md 的 G3 节。',
-  },
-  {
-    site: 'src/backend/wechat-data/src/query/task-center-callback.ts#postBazhuayuTrigger',
-    control: '用户显式为每个任务配置 FlowId + API Key、触发方式=八爪鱼 RPA 才发生；主机固定；仅已完善任务',
-    anchor: 'src/backend/wechat-data/src/query/task-center-callback.ts', marker: 'api-rpa.bazhuayu.com',
-    why: '任务触发方式「八爪鱼 RPA」（2026-10-21）：用户在任务编辑抽屉里把该任务的触发方式切到八爪鱼，'
-      + '并逐任务填写 FlowId 与 API Key；只有「任务已完善 + 该方式配置齐全」时才会走到这里。'
-      + '目的地写死为 `https://api-rpa.bazhuayu.com/api/bots/scheduling/start`（应用不内置其它 RPA 主机），'
-      + '用 `X-Api-Key` 请求头携带该任务的 Key（Key 只存本机任务库、不进列表返回值）。'
-      + '参数只有 room_name=会话名 / content=触发文本（先过与 Webhook 同一个隐私闸，功能名 task_callback）/ '
-      + 'at_name=触发对象，**不发图片**，也不发任务 id/名称与 username；失败只记状态（2 次尝试 / 15s 超时）。'
-      + '默认触发方式仍是 webhook，既有任务行为不变；逐条口径见 docs/PRIVACY.md 的 G3 节。',
+    site: 'src/backend/wechat-data/src/query/rpa/dispatch.ts#sendRequest',
+    control: '主机来自厂商描述符白名单（governance.hosts）；webhook 仅允许用户填写 http(s)',
+    anchor: 'src/backend/wechat-data/src/query/rpa/dispatch.ts', marker: 'sendRequest',
+    why: '任务触发投递（2026-10-19 新增 Webhook；2026-10-21 v23 加八爪鱼；2026-10-21 v24 改为'
+      + '多厂商注册表）：用户在「任务信息」里为每个任务选触发方式（Webhook 或某个 RPA 厂商）并配齐参数，'
+      + '任务标记「已完善」后由后台扫描命中关键词、把**这一条**触发记录经本域**唯一**出网函数发出。'
+      + '该函数是通用管道：目的地来自厂商描述符的 `governance.hosts` 白名单（固定域名/suffix 或用户配置的'
+      + '私有化实例地址；私有化地址禁止 localhost/私网 IP），webhook 适配器只允许用户填写的 http(s) 地址；'
+      + '请求先按描述符组装并鉴权（API Key / AccessKey / PAT / 令牌等凭据只存本机任务库、不进列表返回值），'
+      + '再按描述符的重试策略发送（无幂等键的厂商 maxAttempts=1）。'
+      + '发出去的内容：内置 Webhook 是整条记录 JSON（含按需解码的图片）；各 RPA 厂商只有会话名 / '
+      + '触发文本（先过 `task_callback` 隐私闸）/ 触发对象三个映射参数，**不发图片**。'
+      + '逐家目的地与发送内容见 docs/PRIVACY.md 第四节 G3；失败只记状态（callback_error / external_task_id）。',
   },
   {
     site: 'src/backend/wechat-data/src/query/map-geo.ts#fetchMapGeoJson',
