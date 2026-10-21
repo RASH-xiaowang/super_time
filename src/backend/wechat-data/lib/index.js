@@ -9812,6 +9812,923 @@ var adapter2 = {
   descriptor: descriptor2
 };
 
+// src/backend/wechat-data/src/query/rpa/template.ts
+var SEMANTIC_LABELS = {
+  room: "\u4F1A\u8BDD\u540D",
+  content: "\u89E6\u53D1\u6587\u672C",
+  at: "\u89E6\u53D1\u5BF9\u8C61"
+};
+var ALL_PARAM_SOURCES = [
+  "room",
+  "content",
+  "at",
+  "taskName",
+  "keyword",
+  "triggeredAt",
+  "chatType",
+  "taskId",
+  "recordId",
+  "fixed",
+  "template"
+];
+var PARAM_SOURCE_LABELS = {
+  room: "\u4F1A\u8BDD\u540D",
+  content: "\u89E6\u53D1\u6587\u672C",
+  at: "\u89E6\u53D1\u5BF9\u8C61",
+  taskName: "\u4EFB\u52A1\u540D",
+  keyword: "\u89E6\u53D1\u5173\u952E\u8BCD",
+  triggeredAt: "\u89E6\u53D1\u65F6\u95F4",
+  chatType: "\u4F1A\u8BDD\u7C7B\u578B",
+  taskId: "\u4EFB\u52A1 id",
+  recordId: "\u89E6\u53D1\u8BB0\u5F55 id",
+  fixed: "\u56FA\u5B9A\u503C",
+  template: "\u81EA\u5B9A\u4E49\u6A21\u677F"
+};
+var TEMPLATE_ALLOWED_PATHS = {
+  record: [
+    "chatName",
+    "targetName",
+    "targetUsername",
+    "username",
+    "keyword",
+    "text",
+    "chatType",
+    "triggeredAt"
+  ],
+  task: ["name", "id"]
+};
+var URL_FIELD_MAX = 2048;
+var PARAM_NAME_MAX = 64;
+var PARAM_VALUE_MAX = 2048;
+var PARAM_TEMPLATE_MAX = 512;
+var WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/;
+var INLINE_PLACEHOLDER = /\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}/g;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function safeRegExp(pattern) {
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return null;
+  }
+}
+function configFieldList(descriptor9) {
+  return descriptor9.fields.filter((field) => field.secret !== true);
+}
+function secretFieldList(descriptor9) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (field) => {
+    if (field.secret !== true || seen.has(field.key)) return;
+    seen.add(field.key);
+    out.push(field);
+  };
+  for (const field of descriptor9.fields) add(field);
+  for (const mode of descriptor9.auth.modes) {
+    for (const field of mode.fields) add(field);
+  }
+  return out;
+}
+function parseConfigJson(raw) {
+  const text = typeof raw === "string" ? raw : "";
+  if (text === "") return {};
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  return normalizeConfigInput(value);
+}
+function normalizeConfigInput(raw) {
+  if (!isRecord(raw)) return {};
+  const out = {};
+  for (const [key, item] of Object.entries(raw)) {
+    const sanitized = sanitizeConfigValue(item);
+    if (sanitized !== void 0) out[key] = sanitized;
+  }
+  return out;
+}
+function sanitizeConfigValue(value) {
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
+  if (Array.isArray(value)) return sanitizeParamEntries(value);
+  if (!isRecord(value)) return void 0;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") out[key] = item;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function sanitizeParamEntries(value) {
+  const out = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item["name"] !== "string" || typeof item["source"] !== "string") continue;
+    const entry = { name: item["name"], source: item["source"] };
+    if (typeof item["fixedValue"] === "string") entry.fixedValue = item["fixedValue"];
+    if (typeof item["template"] === "string") entry.template = item["template"];
+    out.push(entry);
+  }
+  return out;
+}
+function parseSecretJson(raw) {
+  const text = typeof raw === "string" ? raw : "";
+  if (text === "") return {};
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!isRecord(value)) return {};
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string" && item !== "") out[key] = item;
+  }
+  return out;
+}
+function secretSetOf(secrets) {
+  const out = {};
+  for (const [key, value] of Object.entries(secrets)) {
+    if (value !== "") out[key] = true;
+  }
+  return out;
+}
+function defaultMapValue(descriptor9) {
+  const out = {};
+  for (const target of descriptor9.mapping.targets) out[target.semantic] = target.defaultKey;
+  return out;
+}
+function normalizeMapValue(descriptor9, raw) {
+  const out = defaultMapValue(descriptor9);
+  if (!isRecord(raw)) return out;
+  for (const target of descriptor9.mapping.targets) {
+    const item = raw[target.semantic];
+    if (typeof item === "string" && item.trim() !== "") out[target.semantic] = item.trim();
+  }
+  return out;
+}
+function defaultConfigFor(descriptor9) {
+  const out = {};
+  for (const field of configFieldList(descriptor9)) {
+    if (field.type === "map") {
+      out[field.key] = normalizeMapValue(descriptor9, field.defaultValue);
+      continue;
+    }
+    if (field.type === "paramList") {
+      out[field.key] = [];
+      continue;
+    }
+    if (field.defaultValue !== void 0) out[field.key] = field.defaultValue;
+  }
+  return out;
+}
+function applySecretInput(descriptor9, saved, input) {
+  const secrets = {};
+  for (const field of secretFieldList(descriptor9)) {
+    const value = saved[field.key];
+    if (value !== void 0 && value !== "") secrets[field.key] = value;
+  }
+  const errors = [];
+  if (input !== void 0) {
+    if (!isRecord(input)) {
+      errors.push("\u51ED\u636E\u914D\u7F6E\u683C\u5F0F\u4E0D\u6B63\u786E");
+    } else {
+      applySecretOverrides(descriptor9, secrets, input, errors);
+    }
+  }
+  return { secrets, set: secretSetOf(secrets), errors };
+}
+function applySecretOverrides(descriptor9, secrets, input, errors) {
+  for (const field of secretFieldList(descriptor9)) {
+    if (!(field.key in input)) continue;
+    const raw = input[field.key];
+    if (typeof raw !== "string") {
+      errors.push(field.label + " \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+      continue;
+    }
+    const value = raw.trim();
+    if (value === "") {
+      delete secrets[field.key];
+      continue;
+    }
+    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
+    if (pattern !== null && !pattern.test(value)) {
+      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
+      continue;
+    }
+    secrets[field.key] = value;
+  }
+}
+function validateVendorConfig(descriptor9, config) {
+  const out = defaultConfigFor(descriptor9);
+  const errors = [];
+  const raw = isRecord(config) ? config : {};
+  for (const field of configFieldList(descriptor9)) {
+    const provided = raw[field.key];
+    if (provided === void 0) continue;
+    const value = validateFieldValue(descriptor9, field, provided, errors);
+    if (value !== void 0) out[field.key] = value;
+  }
+  dropExtrasCollidingWithMapping(descriptor9, out, errors);
+  return { config: out, errors };
+}
+function validateFieldValue(descriptor9, field, raw, errors) {
+  if (field.type === "map") return normalizeMapValue(descriptor9, raw);
+  if (field.type === "paramList") return validateParamListField(field, raw, errors);
+  if (field.type === "number") return validateNumberField(field, raw, errors);
+  if (field.type === "boolean") return validateBooleanField(field, raw, errors);
+  if (field.type === "select") return validateSelectField(field, raw, errors);
+  return validateTextField(field, raw, errors);
+}
+function dropExtrasCollidingWithMapping(descriptor9, config, errors) {
+  const extrasField = descriptor9.mapping.extrasField;
+  if (extrasField === void 0) return;
+  const extras = config[extrasField];
+  if (!Array.isArray(extras) || extras.length === 0) return;
+  const mapField = descriptor9.mapping.mapField;
+  const reserved = new Set(
+    mapField === void 0 ? [] : Object.values(normalizeMapValue(descriptor9, config[mapField])).map((key) => key.toLowerCase())
+  );
+  const kept = extras.filter((entry) => {
+    if (!reserved.has(entry.name.toLowerCase())) return true;
+    errors.push("\u9644\u52A0\u53C2\u6570\u300C" + entry.name + "\u300D\u4E0E\u53C2\u6570\u6620\u5C04\u7684\u952E\u91CD\u540D\uFF08\u4F1A\u7ED9\u5382\u5546\u53D1\u4E24\u4E2A\u540C\u540D\u53C2\u6570\uFF09");
+    return false;
+  });
+  config[extrasField] = kept;
+}
+function validateParamListField(field, raw, errors) {
+  if (!Array.isArray(raw)) {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u53C2\u6570\u5217\u8868");
+    return void 0;
+  }
+  const max = field.maxItems ?? 50;
+  if (raw.length > max) errors.push(field.label + " \u6700\u591A " + String(max) + " \u6761");
+  const allowed = new Set(field.paramSources ?? ALL_PARAM_SOURCES);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  raw.forEach((item, index) => {
+    const label = field.label + " \u7B2C " + String(index + 1) + " \u9879";
+    if (out.length >= max) return;
+    if (!isRecord(item)) {
+      errors.push(label + "\u683C\u5F0F\u4E0D\u6B63\u786E");
+      return;
+    }
+    const name = typeof item["name"] === "string" ? item["name"].trim() : "";
+    const source = typeof item["source"] === "string" ? item["source"] : void 0;
+    if (name === "") {
+      errors.push(label + "\u7F3A\u5C11\u53C2\u6570\u540D");
+      return;
+    }
+    if (name.length > PARAM_NAME_MAX) {
+      errors.push(label + "\u53C2\u6570\u540D\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_NAME_MAX) + " \u5B57\u7B26\uFF09");
+      return;
+    }
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) {
+      errors.push(label + "\u53C2\u6570\u540D\u91CD\u590D\uFF1A" + name);
+      return;
+    }
+    if (source === void 0 || !ALL_PARAM_SOURCES.includes(source)) {
+      errors.push(label + "\u503C\u6765\u6E90\u65E0\u6548");
+      return;
+    }
+    if (!allowed.has(source)) {
+      errors.push(label + "\u4E0D\u652F\u6301\u7684\u503C\u6765\u6E90\uFF1A" + PARAM_SOURCE_LABELS[source]);
+      return;
+    }
+    const entry = { name, source };
+    if (source === "fixed") {
+      const fixed = typeof item["fixedValue"] === "string" ? item["fixedValue"].trim() : "";
+      if (fixed === "") {
+        errors.push(label + "\u9009\u62E9\u56FA\u5B9A\u503C\u65F6\u5FC5\u987B\u586B\u5199\u503C");
+        return;
+      }
+      if (fixed.length > PARAM_VALUE_MAX) {
+        errors.push(label + "\u56FA\u5B9A\u503C\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_VALUE_MAX) + " \u5B57\u7B26\uFF09");
+        return;
+      }
+      entry.fixedValue = fixed;
+    } else if (source === "template") {
+      const template = typeof item["template"] === "string" ? item["template"].trim() : "";
+      const valid = validateParamTemplate(template, label, errors);
+      if (valid === void 0) return;
+      entry.template = valid;
+    }
+    seen.add(lower);
+    out.push(entry);
+  });
+  return out;
+}
+function validateParamTemplate(value, label, errors) {
+  if (value === "") {
+    errors.push(label + "\u9009\u62E9\u81EA\u5B9A\u4E49\u6A21\u677F\u65F6\u5FC5\u987B\u586B\u5199\u6A21\u677F");
+    return void 0;
+  }
+  if (value.length > PARAM_TEMPLATE_MAX) {
+    errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_TEMPLATE_MAX) + " \u5B57\u7B26\uFF09");
+    return void 0;
+  }
+  for (const match of value.matchAll(/\$\{([^}]*)\}/g)) {
+    const expr = (match[1] ?? "").trim();
+    const dot2 = expr.indexOf(".");
+    const root2 = dot2 === -1 ? expr : expr.slice(0, dot2);
+    const rest = dot2 === -1 ? "" : expr.slice(dot2 + 1);
+    if (root2 !== "record" && root2 !== "task") {
+      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u652F\u6301 record / task \u5B57\u6BB5\uFF08\u4E0D\u652F\u6301\uFF1A" + expr + "\uFF09");
+      return void 0;
+    }
+    const allowedPath = TEMPLATE_ALLOWED_PATHS[root2];
+    if (!allowedPath.includes(rest)) {
+      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u5B57\u6BB5\u4E0D\u5728\u5141\u8BB8\u6E05\u5355\uFF1A" + expr);
+      return void 0;
+    }
+  }
+  return value;
+}
+function validateNumberField(field, raw, errors) {
+  const value = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(value)) {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6570\u5B57");
+    return void 0;
+  }
+  return value;
+}
+function validateBooleanField(field, raw, errors) {
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  errors.push(field.label + " \u5FC5\u987B\u662F\u5E03\u5C14\u503C");
+  return void 0;
+}
+function validateSelectField(field, raw, errors) {
+  if (typeof raw !== "string") {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
+    return void 0;
+  }
+  const value = raw.trim();
+  if (value === "") return "";
+  const options = field.options ?? [];
+  if (!options.some((option) => option.value === value)) {
+    errors.push(field.label + " \u4E0D\u662F\u53EF\u9009\u503C");
+    return void 0;
+  }
+  return value;
+}
+function validateTextField(field, raw, errors) {
+  if (typeof raw !== "string") {
+    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
+    return void 0;
+  }
+  const value = raw.trim();
+  if (value !== "") {
+    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
+    if (pattern !== null && !pattern.test(value)) {
+      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
+      return void 0;
+    }
+  }
+  if (field.key === "url" || field.key === "baseUrl") return validateAddressField(field, value, errors);
+  return value;
+}
+function validateAddressField(field, value, errors) {
+  if (value === "") return "";
+  if (field.key === "url" && value.length > URL_FIELD_MAX) {
+    errors.push("\u56DE\u8C03\u5730\u5740\u8FC7\u957F\uFF08\u6700\u591A " + String(URL_FIELD_MAX) + " \u4E2A\u5B57\u7B26\uFF09");
+    return "";
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    errors.push(addressErrorText(field));
+    return "";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" || parsed.hostname === "") {
+    errors.push(addressErrorText(field));
+    return "";
+  }
+  return value;
+}
+function addressErrorText(field) {
+  if (field.key === "url") return "\u56DE\u8C03\u5730\u5740\u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
+  return field.label + " \u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
+}
+function missingReadyFields(descriptor9, config, secretSet) {
+  const merged = { ...defaultConfigFor(descriptor9), ...config };
+  const missing = [];
+  for (const field of configFieldList(descriptor9)) {
+    if (!field.required) continue;
+    if (isConfigFieldMissing(field, merged[field.key])) missing.push(field.label);
+  }
+  for (const field of secretFieldList(descriptor9)) {
+    if (field.required && secretSet[field.key] !== true) missing.push(field.label);
+  }
+  return missing;
+}
+function isConfigFieldMissing(field, value) {
+  if (value === void 0) return true;
+  if (field.type === "boolean") return false;
+  if (field.type === "map") {
+    if (!isRecord(value)) return true;
+    return Object.keys(value).length === 0;
+  }
+  if (field.type === "paramList") return !Array.isArray(value) || value.length === 0;
+  return String(value).trim() === "";
+}
+function migrateLegacyConfig(method, legacy) {
+  const callbackUrl = typeof legacy.callbackUrl === "string" ? legacy.callbackUrl.trim() : "";
+  const flowId = typeof legacy.bazhuayuFlowId === "string" ? legacy.bazhuayuFlowId.trim() : "";
+  if (method === "webhook" && callbackUrl !== "") return { url: callbackUrl };
+  if (method === "bazhuayu" && flowId !== "") return { flowId };
+  return {};
+}
+function migrateLegacySecrets(method, apiKey) {
+  const text = typeof apiKey === "string" ? apiKey.trim() : "";
+  if (method !== "bazhuayu" || text === "") return {};
+  return { apiKey: text };
+}
+function legacyColumnsFor(method, config, secrets) {
+  const url = configValueText(config["url"]);
+  const flowId = configValueText(config["flowId"]);
+  const apiKey = secrets["apiKey"] ?? "";
+  return {
+    callbackUrl: method === "webhook" ? url : "",
+    bazhuayuFlowId: method === "bazhuayu" ? flowId : "",
+    bazhuayuApiKey: method === "bazhuayu" ? apiKey : ""
+  };
+}
+function configValueText(value) {
+  return typeof value === "string" ? value : "";
+}
+function normalizeTriggerMethod(raw, fallback = "webhook") {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (text !== "") return text;
+  return fallback;
+}
+function readJsonPath(root2, path) {
+  const trimmed = path.trim();
+  if (trimmed === "") return root2;
+  const segments = trimmed.replace(/\[(\d+)\]/g, ".$1").split(".").filter((segment) => segment !== "");
+  let current = root2;
+  for (const segment of segments) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index)) return void 0;
+      current = current[index];
+      continue;
+    }
+    if (!isRecord(current)) return void 0;
+    current = current[segment];
+    if (current === void 0) return void 0;
+  }
+  return current;
+}
+function renderTemplate(template, roots) {
+  if (typeof template === "string") return renderString(template, roots);
+  if (Array.isArray(template)) return template.map((item) => renderTemplate(item, roots));
+  if (!isRecord(template)) return template;
+  const out = {};
+  for (const [key, value] of Object.entries(template)) out[key] = renderTemplate(value, roots);
+  return out;
+}
+function renderString(template, roots) {
+  const whole = WHOLE_PLACEHOLDER.exec(template);
+  if (whole !== null && whole[1] !== void 0) {
+    const value = resolvePlaceholder(whole[1], roots);
+    return value === void 0 ? template : value;
+  }
+  return template.replace(INLINE_PLACEHOLDER, (match, expr) => {
+    if (placeholderRoot(expr) === "auth") return match;
+    const value = resolvePlaceholder(expr, roots);
+    if (value === void 0) return match;
+    if (typeof value === "object" && value !== null) {
+      throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u53EA\u80FD\u6574\u503C\u66FF\u6362\uFF1A${" + expr + "}");
+    }
+    return String(value);
+  });
+}
+function placeholderRoot(expr) {
+  const index = expr.indexOf(".");
+  return index === -1 ? expr : expr.slice(0, index);
+}
+var MAPPED_STYLE_KEYS = /* @__PURE__ */ new Set([
+  "object",
+  "nameValueArray",
+  "nameValueTypeArray",
+  "jsonStringObject",
+  "formParams"
+]);
+function resolvePlaceholder(expr, roots) {
+  const root2 = placeholderRoot(expr);
+  if (root2 === "auth") return void 0;
+  const container = roots[root2];
+  if (container === void 0) throw new Error("\u672A\u77E5\u5360\u4F4D\u7B26\uFF1A${" + expr + "}");
+  const rest = expr.slice(root2.length + 1);
+  if (root2 === "mapped" && rest !== "" && MAPPED_STYLE_KEYS.has(rest)) return container;
+  const value = rest === "" || expr === root2 ? container : readJsonPath(container, rest);
+  if (value === void 0) throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u7F3A\u5C11\u503C\uFF1A${" + expr + "}");
+  return value;
+}
+function mappingKeys(descriptor9, config) {
+  const mapField = descriptor9.mapping.mapField;
+  const raw = mapField === void 0 ? void 0 : config[mapField];
+  const overrides = isRecord(raw) ? raw : {};
+  const out = {};
+  for (const target of descriptor9.mapping.targets) {
+    const custom = overrides[target.semantic];
+    out[target.semantic] = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
+  }
+  return out;
+}
+function semanticValue(record, semantic) {
+  if (semantic === "room") return record.chatName;
+  if (semantic === "content") return record.text;
+  return record.targetName !== "" ? record.targetName : record.chatName;
+}
+function formatMapped(entries2, style) {
+  if (style === "object") {
+    const out = {};
+    for (const entry of entries2) out[entry.name] = entry.value;
+    return out;
+  }
+  if (style === "nameValueArray") {
+    return entries2.map((entry) => ({ name: entry.name, value: entry.value }));
+  }
+  if (style === "nameValueTypeArray") {
+    return entries2.map((entry) => ({ name: entry.name, value: entry.value, type: "str" }));
+  }
+  if (style === "formParams") {
+    return entries2.map((entry) => encodeURIComponent(entry.name) + "=" + encodeURIComponent(entry.value)).join("&");
+  }
+  const object = {};
+  for (const entry of entries2) object[entry.name] = entry.value;
+  return JSON.stringify(object);
+}
+function resolveMapped(descriptor9, ctx) {
+  const config = { ...defaultConfigFor(descriptor9), ...ctx.config };
+  const keys = mappingKeys(descriptor9, config);
+  const entries2 = [];
+  for (const target of descriptor9.mapping.targets) {
+    const value = semanticValue(ctx.record, target.semantic).trim();
+    if (value === "" && target.semantic !== "content") {
+      throw new Error("\u7F3A\u5C11\u6620\u5C04\u503C\uFF1A" + SEMANTIC_LABELS[target.semantic]);
+    }
+    entries2.push({ name: keys[target.semantic] ?? target.defaultKey, value });
+  }
+  entries2.push(...resolveExtraEntries(descriptor9, config, ctx));
+  return formatMapped(entries2, descriptor9.mapping.style);
+}
+function resolveExtraEntries(descriptor9, config, ctx) {
+  const extrasField = descriptor9.mapping.extrasField;
+  if (extrasField === void 0) return [];
+  const raw = config[extrasField];
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry["name"] !== "string" || entry["name"].trim() === "") continue;
+    out.push({ name: entry["name"].trim(), value: resolveParamSourceValue(entry, ctx) });
+  }
+  return out;
+}
+function resolveParamSourceValue(entry, ctx) {
+  const source = entry["source"];
+  if (source === "room") return ctx.record.chatName;
+  if (source === "content") return ctx.record.text;
+  if (source === "at") return semanticValue(ctx.record, "at");
+  if (source === "taskName") return ctx.taskName;
+  if (source === "keyword") return ctx.record.keyword;
+  if (source === "triggeredAt") return new Date(ctx.record.triggeredAt).toLocaleString("zh-CN", { hour12: false });
+  if (source === "chatType") return ctx.record.chatType === "group" ? "\u7FA4\u804A" : "\u5355\u804A";
+  if (source === "taskId") return String(ctx.taskId);
+  if (source === "recordId") return String(ctx.recordId);
+  if (source === "fixed") return typeof entry["fixedValue"] === "string" ? entry["fixedValue"] : "";
+  if (source === "template") {
+    const rendered = renderTemplate(entry["template"] ?? "", {
+      record: ctx.record,
+      task: { name: ctx.taskName, id: ctx.taskId }
+    });
+    if (typeof rendered === "string") return rendered;
+    if (typeof rendered === "number") return String(rendered);
+    if (typeof rendered === "boolean") return rendered ? "true" : "false";
+    throw new Error("\u9644\u52A0\u53C2\u6570\u300C" + String(entry["name"]) + "\u300D\u7684\u81EA\u5B9A\u4E49\u6A21\u677F\u6CA1\u6709\u89E3\u6790\u51FA\u5B57\u7B26\u4E32");
+  }
+  throw new Error("\u672A\u77E5\u9644\u52A0\u53C2\u6570\u6765\u6E90\uFF1A" + String(source));
+}
+function renderRequest(descriptor9, ctx) {
+  const config = { ...defaultConfigFor(descriptor9), ...ctx.config };
+  const roots = {
+    config,
+    secret: ctx.secrets,
+    record: ctx.record,
+    task: { name: ctx.taskName, id: ctx.taskId },
+    invocation: {
+      taskId: ctx.taskId,
+      recordId: ctx.recordId,
+      idempotencyKey: ctx.idempotencyKey
+    },
+    mapped: resolveMapped(descriptor9, ctx)
+  };
+  const url = renderTemplate(descriptor9.request.url, roots);
+  if (typeof url !== "string" || url.trim() === "") {
+    throw new Error(descriptor9.name + " \u7684\u8BF7\u6C42\u5730\u5740\u6A21\u677F\u4E3A\u7A7A");
+  }
+  const headers = {};
+  for (const [key, value] of Object.entries(descriptor9.request.headers ?? {})) {
+    const rendered = renderTemplate(value, roots);
+    headers[key] = typeof rendered === "string" ? rendered : String(rendered);
+  }
+  const renderedBody = renderTemplate(descriptor9.request.body, roots);
+  const contentType = descriptor9.request.contentType ?? findHeaderValue(headers, "content-type") ?? "application/json";
+  return {
+    method: descriptor9.request.method,
+    url: url.trim(),
+    headers,
+    body: typeof renderedBody === "string" ? renderedBody : JSON.stringify(renderedBody ?? {}),
+    contentType
+  };
+}
+function findHeaderValue(headers, name) {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return void 0;
+}
+
+// src/backend/wechat-data/src/query/rpa/vendors/bazhuayu-mcp.ts
+var CALL_TOOL = "automation_call";
+var API_KEY_FIELD = {
+  key: "apiKey",
+  label: "API Key",
+  ariaLabel: "\u516B\u722A\u9C7C API Key",
+  type: "password",
+  required: true,
+  secret: true,
+  help: "\u516B\u722A\u9C7C\u5BA2\u6237\u7AEF\u300C\u5F00\u653E\u80FD\u529B\uFF08AI\uFF09\u2192 API Key\u300D\u751F\u6210\uFF1B\u53EA\u5B58\u672C\u673A\uFF0C\u6295\u9012\u65F6\u8FDB X-API-Key \u8BF7\u6C42\u5934\u3002"
+};
+var EXTRA_PARAM_SOURCES2 = [
+  "room",
+  "content",
+  "at",
+  "taskName",
+  "keyword",
+  "triggeredAt",
+  "chatType",
+  "taskId",
+  "recordId",
+  "fixed",
+  "template"
+];
+var descriptor3 = {
+  id: "bazhuayu-mcp",
+  name: "\u516B\u722A\u9C7C RPA\uFF08MCP\uFF09",
+  vendor: "\u516B\u722A\u9C7C RPA\uFF08Bazhuayu\uFF09\xB7 MCP \u5DE5\u5177",
+  version: "1.0.0",
+  summary: "\u901A\u8FC7\u516B\u722A\u9C7C\u5B98\u65B9 MCP Server \u8C03\u7528 automation_call \u542F\u52A8\u5E94\u7528\uFF1B\u4E2A\u4EBA\u7248\u53EF\u7528\uFF0C\u53C2\u6570\u7531\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u914D\u7F6E\u3002",
+  status: "experimental",
+  docs: {
+    home: "https://rpa.bazhuayu.com/helpcenter/features/app-management/mcp-tools",
+    triggerApi: "https://rpa.bazhuayu.com/helpcenter/features/app-management/mcp-tools",
+    lastVerifiedAt: "2026-10-21",
+    pageVersion: "MCP \u5DE5\u5177\uFF082026-10-21 \u5728\u7EBF\u6838\u5BF9\uFF1A/mcp + X-API-Key + automation_call\uFF09"
+  },
+  capabilities: {
+    direction: "outbound",
+    synchronous: true,
+    completion: "none",
+    idempotency: "none",
+    deployment: ["cloud"]
+  },
+  fields: [
+    {
+      key: "automationId",
+      label: "\u5E94\u7528 ID\uFF08automation id\uFF09",
+      type: "text",
+      required: true,
+      example: "flow_registration_6ad859ccee2df270d53fc6e5",
+      summary: true,
+      help: "MCP \u4FA7\u7684\u5E94\u7528 id\uFF0C\u5F62\u5982 `flow_registration_<FlowId>`\uFF1B\u53EF\u5728\u5BA2\u6237\u7AEF\u300C\u5F00\u653E\u80FD\u529B\uFF08AI\uFF09\u2192 MCP \u5DE5\u5177\u300D\u91CC\u67E5\u770B\uFF0C\u6216\u5148\u7528 MCP \u5DE5\u5177 automation_search \u641C\u5230\u540E\u590D\u5236\u3002\u4E0D\u8981\u586B\u88F8 FlowId\u3002"
+    },
+    API_KEY_FIELD,
+    {
+      key: "botId",
+      label: "\u673A\u5668\u4EBA ID",
+      type: "text",
+      required: false,
+      advanced: true,
+      help: "\u53EF\u9009\uFF1B\u7559\u7A7A = \u7531\u516B\u722A\u9C7C\u81EA\u52A8\u9009\u62E9\u53EF\u7528\u673A\u5668\u4EBA\u3002\u53EF\u5148\u7528 bot_online_list \u67E5\u5230\u673A\u5668\u4EBA id \u518D\u586B\u3002"
+    },
+    {
+      key: "extraParams",
+      label: "\u9644\u52A0\u53C2\u6570",
+      type: "paramList",
+      required: false,
+      maxItems: 20,
+      paramSources: [...EXTRA_PARAM_SOURCES2],
+      help: "\u4F20\u7ED9 automation_call.parameters \u7684\u952E\u503C\u5BF9\uFF08\u9ED8\u8BA4 {}\uFF09\u3002\u53C2\u6570\u540D\u5FC5\u987B\u4E0E\u516B\u722A\u9C7C\u5E94\u7528\u5165\u53C2\u4E00\u81F4\uFF1B\u9700\u8981\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61\u65F6\uFF0C\u5404\u52A0\u4E00\u6761\u5E76\u628A\u503C\u6765\u6E90\u9009\u6210\u5BF9\u5E94\u9879\u3002"
+    }
+  ],
+  auth: {
+    // 凭据直接写进请求头（X-API-Key: ${secret.apiKey}），没有额外鉴权流程。
+    modes: []
+  },
+  mapping: {
+    style: "object",
+    // 无内置语义参数：parameters 完全由附加参数组装（默认 {}）。
+    targets: [],
+    extrasField: "extraParams"
+  },
+  request: {
+    method: "POST",
+    url: "https://mcp-rpa.bazhuayu.com/mcp",
+    headers: {
+      "Content-Type": "application/json",
+      // MCP Streamable HTTP：服务端返回 SSE，必须显式接受两种类型。
+      Accept: "application/json, text/event-stream",
+      "X-API-Key": "${secret.apiKey}"
+    },
+    body: {
+      jsonrpc: "2.0",
+      id: "${invocation.idempotencyKey}",
+      method: "tools/call",
+      params: {
+        name: CALL_TOOL,
+        arguments: { id: "${config.automationId}" }
+      }
+    }
+  },
+  response: {
+    // MCP 统一 HTTP 200；业务成败看 JSON-RPC result（解析见下方 parseResponse）。
+    okHttpStatus: [200]
+  },
+  // 没有幂等键：MCP 超时后自动重发可能重复启动应用，只发一次，失败由人工重投。
+  retry: { maxAttempts: 1, retryOn: [] },
+  governance: {
+    contentOutbound: true,
+    hosts: [{ kind: "exact", value: "mcp-rpa.bazhuayu.com" }],
+    allowCustomBaseUrl: false,
+    privacySection: "G3"
+  },
+  risks: [
+    "\u8D26\u53F7/\u673A\u5668\u4EBA\u6CA1\u6709\u300C\u6267\u884C\u300D\u6743\u76CA\u65F6\uFF0CMCP \u8FD4\u56DE BotFeatureIsDisabled\uFF08\u4E2A\u4EBA\u7248\u9700\u5728\u5BA2\u6237\u7AEF\u5F00\u901A\u673A\u5668\u4EBA\u6267\u884C\u80FD\u529B\uFF09",
+    "\u63A5\u53E3\u6CA1\u6709\u5E42\u7B49\u952E\uFF1A\u7F51\u7EDC\u8D85\u65F6\u540E\u4E0D\u4F1A\u81EA\u52A8\u91CD\u53D1\uFF08\u907F\u514D\u540C\u4E00\u4E2A\u5E94\u7528\u88AB\u542F\u52A8\u4E24\u6B21\uFF09\uFF0C\u5931\u8D25\u8BF7\u5728\u89E6\u53D1\u8BB0\u5F55\u91CC\u4EBA\u5DE5\u91CD\u6295",
+    "MCP \u8FD4\u56DE runId \u53EA\u4EE3\u8868\u300C\u5DF2\u53D7\u7406\u8FD0\u884C\u300D\uFF1A\u6267\u884C\u8FDB\u5EA6/\u7ED3\u679C\u9700\u5230\u516B\u722A\u9C7C\u5BA2\u6237\u7AEF\u6216 automation_run_status \u67E5\u770B",
+    "\u5E94\u7528 ID \u5FC5\u987B\u662F MCP \u4FA7\u7684 automation id\uFF08\u901A\u5E38\u5F62\u5982 flow_registration_<FlowId>\uFF09\uFF0C\u586B\u88F8 FlowId \u4F1A\u63D0\u793A\u627E\u4E0D\u5230\u5E94\u7528",
+    "MCP \u65B9\u5F0F\u4E0D\u53D1\u56FE\u7247\uFF08\u4EFB\u52A1\u91CC\u7684 photoLimit \u5BF9\u5B83\u4E0D\u751F\u6548\uFF09",
+    "MCP Server \u7684\u54CD\u5E94\u662F SSE\u3001\u5DE5\u5177\u540D/\u53C2\u6570\u53EF\u80FD\u968F\u5B98\u65B9\u5347\u7EA7\u53D8\u5316\uFF1A\u672C\u9002\u914D\u5668\u6309 2026-10-21 \u7684 tools/list \u5951\u7EA6\u5B9E\u73B0",
+    "\u5B9E\u9A8C\u6027\uFF1A\u867D\u5DF2\u6309\u771F\u5B9E API Key \u5B9E\u6D4B tools/list \u4E0E automation_call\uFF0C\u4F46\u5B98\u65B9\u5347\u7EA7\u5DE5\u5177\u53C2\u6570/\u54CD\u5E94\u683C\u5F0F\u65F6\u4ECD\u9700\u8054\u8C03\u6838\u5BF9"
+  ],
+  notes: [
+    "2026-10-21\uFF08v1.0.0\uFF09\uFF1A\u7528\u771F\u5B9E API Key \u6838\u5BF9 MCP Server \u2014\u2014 POST /mcp + X-API-Key \u53EF initialize/tools/list\uFF1B",
+    "  automation_call \u5165\u53C2 { id, parameters, botId? }\uFF1B\u6210\u529F\u8FD4\u56DE runId\uFF0C\u5931\u8D25\u5728 result.isError \u7684 Markdown \u91CC\u7ED9 Error Code/Message\u3002",
+    "\u4E0E\u300C\u516B\u722A\u9C7C RPA\u300D\u7684\u533A\u522B\uFF1A\u90A3\u6761\u662F\u4F01\u4E1A\u7248\u5F00\u653E API\uFF08/api/v1/bots/scheduling/start\uFF09\uFF0C\u672C\u6761\u76EE\u662F MCP \u5DE5\u5177\u901A\u9053\uFF1B",
+    "  \u4E2A\u4EBA\u7248\u8D26\u53F7\u5728\u5F00\u653E API \u8C03\u5EA6\u4E0A\u4F1A FeatureIsDisabled\uFF0C\u6539\u7528 MCP \u5DE5\u5177\uFF08\u5E76\u786E\u4FDD\u673A\u5668\u4EBA\u6709\u6267\u884C\u6743\u76CA\uFF09\u53EF\u7ED5\u5F00\u8BE5\u9650\u5236\u3002",
+    "\u9644\u52A0\u53C2\u6570\u7684\u503C\u6765\u6E90\uFF1A\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61/\u4EFB\u52A1\u540D/\u5173\u952E\u8BCD/\u89E6\u53D1\u65F6\u95F4/\u4F1A\u8BDD\u7C7B\u578B/\u4EFB\u52A1 id/\u8BB0\u5F55 id/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\u3002"
+  ]
+};
+function parseRpcMessages(bodyText) {
+  const trimmed = bodyText.trim();
+  if (trimmed === "") return [];
+  if (trimmed.startsWith("{")) {
+    try {
+      return [JSON.parse(trimmed)];
+    } catch {
+      return [];
+    }
+  }
+  const messages = [];
+  for (const line of bodyText.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice("data:".length).trim();
+    if (payload === "") continue;
+    try {
+      messages.push(JSON.parse(payload));
+    } catch {
+    }
+  }
+  return messages;
+}
+function pickRpcMessage(messages) {
+  let fallback;
+  for (const message2 of messages) {
+    if (typeof message2 !== "object" || message2 === null) continue;
+    const record = message2;
+    if (record["result"] !== void 0 || record["error"] !== void 0) fallback = record;
+  }
+  return fallback;
+}
+function contentText(result) {
+  const content = result["content"];
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const item of content) {
+    if (typeof item !== "object" || item === null) continue;
+    const text = item["text"];
+    if (typeof text === "string") parts.push(text);
+  }
+  return parts.join("\n");
+}
+function extractRunId(result, text) {
+  const structured = result["structuredContent"];
+  if (typeof structured === "object" && structured !== null) {
+    const value = structured["runId"];
+    if (typeof value === "string" && value !== "") return value;
+    if (typeof value === "number") return String(value);
+  }
+  const patterns = [
+    /"runId"\s*:\s*"([^"]+)"/,
+    /(?:runId|run_id|Run ID|RunId)\s*[：:|]\s*`?([A-Za-z0-9_-]{4,})`?/
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.[1] !== void 0 && match[1] !== "") return match[1];
+  }
+  return void 0;
+}
+function extractToolError(text) {
+  const code2 = /Error Code[^A-Za-z0-9`]*`?([A-Za-z0-9_-]+)`?/.exec(text)?.[1] ?? "";
+  const message2 = /Error Message[^\n]*\n+([\s\S]*?)(?:\n\n|$)/.exec(text)?.[1]?.trim() ?? "";
+  if (code2 !== "" && message2 !== "") return code2 + "\uFF1A" + message2;
+  if (code2 !== "") return code2;
+  const firstLine = text.split(/\r?\n/).map((line) => line.trim()).find((line) => line !== "");
+  return firstLine !== void 0 ? firstLine.slice(0, 300) : "MCP \u5DE5\u5177\u8FD4\u56DE\u5931\u8D25";
+}
+function parseMcpResponse(res) {
+  const status = Number(res.status);
+  const text = res.bodyText;
+  const messages = parseRpcMessages(text);
+  const rpc = messages.length > 0 ? pickRpcMessage(messages) : void 0;
+  const failure = (message2) => ({
+    ok: false,
+    retryable: status >= 500 || status === 429,
+    message: message2
+  });
+  if (status !== 200) {
+    const detail = rpc === void 0 ? "" : extractToolError(text);
+    return failure("HTTP " + String(status) + (detail !== "" ? "\uFF1A" + detail : ""));
+  }
+  if (rpc === void 0) return failure("\u516B\u722A\u9C7C MCP \u54CD\u5E94\u65E0\u6CD5\u89E3\u6790\uFF08\u6CA1\u6709 JSON-RPC \u6D88\u606F\uFF09");
+  const rpcError = rpc["error"];
+  if (typeof rpcError === "object" && rpcError !== null) {
+    const message2 = rpcError["message"];
+    return failure("\u516B\u722A\u9C7C MCP \u8C03\u7528\u5931\u8D25\uFF1A" + (typeof message2 === "string" ? message2 : "\u672A\u77E5\u9519\u8BEF"));
+  }
+  const result = rpc["result"];
+  if (typeof result !== "object" || result === null) return failure("\u516B\u722A\u9C7C MCP \u54CD\u5E94\u7F3A\u5C11 result");
+  const record = result;
+  if (record["isError"] === true) return failure("\u516B\u722A\u9C7C MCP \u8FD4\u56DE\u5931\u8D25\uFF1A" + extractToolError(contentText(record)));
+  const resultText = contentText(record);
+  return {
+    ok: true,
+    retryable: false,
+    externalTaskId: extractRunId(record, resultText),
+    message: resultText !== "" ? resultText.split(/\r?\n/)[0]?.slice(0, 120) : void 0
+  };
+}
+function configText(ctx, key) {
+  const value = ctx.config[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+var adapter3 = {
+  descriptor: descriptor3,
+  /**
+   * 组装 MCP `tools/call → automation_call` 请求：JSON-RPC 2.0 + 参数容器。
+   * @param ctx - 投递上下文。
+   * @returns POST `/mcp` 请求。
+   * @throws 未配置 API Key / 应用 ID 时抛可读错误（不发请求）。
+   */
+  buildRequest(ctx) {
+    const apiKey = (ctx.secrets["apiKey"] ?? "").trim();
+    if (apiKey === "") throw new Error("\u516B\u722A\u9C7C MCP \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E API Key");
+    const automationId = configText(ctx, "automationId");
+    if (automationId === "") throw new Error("\u516B\u722A\u9C7C MCP \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u5E94\u7528 ID\uFF08automation id\uFF09");
+    const parameters = resolveMapped(descriptor3, ctx);
+    const args = { id: automationId, parameters };
+    const botId = configText(ctx, "botId");
+    if (botId !== "") args["botId"] = botId;
+    const body = {
+      jsonrpc: "2.0",
+      id: ctx.idempotencyKey,
+      method: "tools/call",
+      params: { name: CALL_TOOL, arguments: args }
+    };
+    return {
+      method: "POST",
+      url: descriptor3.request.url,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "X-API-Key": apiKey
+      },
+      body: JSON.stringify(body),
+      contentType: "application/json"
+    };
+  },
+  parseResponse: parseMcpResponse
+};
+
 // src/backend/wechat-data/src/query/rpa/vendors/yingdao.ts
 var MAPPING_TARGETS2 = [
   { semantic: "room", defaultKey: "room_name" },
@@ -9839,7 +10756,7 @@ var authFields = [
     help: "\u4E0E AccessKeyId \u6210\u5BF9\uFF1B\u53EA\u5B58\u672C\u673A\uFF0C\u6362 token \u65F6\u7531\u540E\u7AEF\u4F7F\u7528\u3002"
   }
 ];
-var descriptor3 = {
+var descriptor4 = {
   id: "yingdao",
   name: "\u5F71\u5200 RPA",
   vendor: "\u5F71\u5200 RPA\uFF08YingDao\uFF0C\u5B98\u7F51 yingdao.com\uFF09",
@@ -9978,13 +10895,13 @@ var descriptor3 = {
     "\u56DE\u8C03\u662F\u63A7\u5236\u53F0\u5168\u5C40\u5355\u70B9\u914D\u7F6E\uFF08\u4E0D\u80FD\u6309\u4EFB\u52A1\u533A\u5206\u76EE\u7684\u5730\uFF09\uFF1Bv1 \u53EA\u628A jobUuid \u843D\u5E93\uFF0C\u4E0D\u63A5\u6536\u56DE\u8C03"
   ]
 };
-function configText(ctx, key) {
+function configText2(ctx, key) {
   const value = ctx.config[key];
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "";
 }
-function semanticValue(record, semantic) {
+function semanticValue2(record, semantic) {
   if (semantic === "room") return record.chatName;
   if (semantic === "content") return record.text;
   return record.targetName !== "" ? record.targetName : record.chatName;
@@ -9995,11 +10912,11 @@ function mappedParams(ctx) {
   return MAPPING_TARGETS2.map((target) => {
     const custom = overrides[target.semantic];
     const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
-    return { name, value: semanticValue(ctx.record, target.semantic), type: "str" };
+    return { name, value: semanticValue2(ctx.record, target.semantic), type: "str" };
   });
 }
-var adapter3 = {
-  descriptor: descriptor3,
+var adapter4 = {
+  descriptor: descriptor4,
   /**
    * 组装「启动应用运行」请求：必要字段 + accountName/分组二选一 + params[]。
    * @param ctx - 投递上下文（config 含 baseUrl/robotUuid 等，secrets 含 AK/SK）。
@@ -10007,9 +10924,9 @@ var adapter3 = {
    * @throws 服务地址或应用 UUID 缺失时抛可读错误。
    */
   buildRequest(ctx) {
-    const baseUrl = configText(ctx, "baseUrl").replace(/\/+$/, "");
+    const baseUrl = configText2(ctx, "baseUrl").replace(/\/+$/, "");
     if (baseUrl === "") throw new Error("\u5F71\u5200 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
-    const robotUuid = configText(ctx, "robotUuid");
+    const robotUuid = configText2(ctx, "robotUuid");
     if (robotUuid === "") throw new Error("\u5F71\u5200 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u5E94\u7528 UUID");
     const body = {
       robotUuid,
@@ -10017,11 +10934,11 @@ var adapter3 = {
       idempotentUuid: ctx.idempotencyKey.slice(0, IDEMPOTENT_MAX),
       params: mappedParams(ctx)
     };
-    const group = configText(ctx, "robotClientGroupUuid");
-    const account = configText(ctx, "accountName");
+    const group = configText2(ctx, "robotClientGroupUuid");
+    const account = configText2(ctx, "accountName");
     if (group !== "") body["robotClientGroupUuid"] = group;
     else if (account !== "") body["accountName"] = account;
-    const priority = configText(ctx, "priority");
+    const priority = configText2(ctx, "priority");
     if (priority !== "") body["priority"] = priority;
     return {
       method: "POST",
@@ -10065,7 +10982,7 @@ var clientSecretField = {
   secret: true,
   help: "\u5916\u90E8\u5E94\u7528\uFF08\u673A\u5BC6\u5E94\u7528\uFF09\u7684 client_secret\uFF1B\u53EA\u5B58\u672C\u673A\u3002"
 };
-var descriptor4 = {
+var descriptor5 = {
   id: "uipath",
   name: "UiPath Orchestrator",
   vendor: "UiPath\uFF08Orchestrator\uFF09",
@@ -10269,13 +11186,13 @@ var descriptor4 = {
     "strategy=All \u4E0D\u9002\u7528\u4E8E\u65B0\u5F0F\u6587\u4EF6\u5939\uFF1Bstrategy=Specific \u9700\u8981 RobotIds\uFF08\u672C\u7248\u672A\u63D0\u4F9B\u5B57\u6BB5\uFF09\uFF0C\u9ED8\u8BA4 ModernJobsCount\u3002"
   ]
 };
-function configText2(ctx, key) {
+function configText3(ctx, key) {
   const value = ctx.config[key];
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "";
 }
-function semanticValue2(record, semantic) {
+function semanticValue3(record, semantic) {
   if (semantic === "room") return record.chatName;
   if (semantic === "content") return record.text;
   return record.targetName !== "" ? record.targetName : record.chatName;
@@ -10287,7 +11204,7 @@ function inputArguments(ctx) {
   for (const target of MAPPING_TARGETS3) {
     const custom = overrides[target.semantic];
     const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
-    out[key] = semanticValue2(ctx.record, target.semantic).trim();
+    out[key] = semanticValue3(ctx.record, target.semantic).trim();
   }
   return out;
 }
@@ -10310,8 +11227,8 @@ function pickJobKey(parsed) {
     state: typeof state3 === "string" ? state3 : void 0
   };
 }
-var adapter4 = {
-  descriptor: descriptor4,
+var adapter5 = {
+  descriptor: descriptor5,
   /**
    * 组装 StartJobs 请求：URL 按部署形态分支，InputArguments 为 JSON 文本字符串。
    * @param ctx - 投递上下文。
@@ -10319,12 +11236,12 @@ var adapter4 = {
    * @throws 服务地址/组织/租户/流程 ReleaseKey 缺失时抛可读错误。
    */
   buildRequest(ctx) {
-    const baseUrl = configText2(ctx, "baseUrl");
+    const baseUrl = configText3(ctx, "baseUrl");
     if (baseUrl === "") throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
-    const onprem = configText2(ctx, "deployment") === "onprem";
-    const org = configText2(ctx, "organizationName");
-    const tenant = configText2(ctx, "tenantName");
-    const releaseKey = configText2(ctx, "releaseKey");
+    const onprem = configText3(ctx, "deployment") === "onprem";
+    const org = configText3(ctx, "organizationName");
+    const tenant = configText3(ctx, "tenantName");
+    const releaseKey = configText3(ctx, "releaseKey");
     if (releaseKey === "") throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u6D41\u7A0B ReleaseKey");
     if (!onprem && (org === "" || tenant === "")) {
       throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1ACloud \u90E8\u7F72\u5FC5\u987B\u914D\u7F6E\u7EC4\u7EC7\u540D\u4E0E\u79DF\u6237\u540D");
@@ -10333,12 +11250,12 @@ var adapter4 = {
     if (argumentsText.length > INPUT_ARGUMENTS_MAX) {
       throw new Error("UiPath \u6295\u9012\u5931\u8D25\uFF1AInputArguments \u8D85\u8FC7 10000 \u5B57\u7B26\u4E0A\u9650");
     }
-    const strategy = configText2(ctx, "strategy") !== "" ? configText2(ctx, "strategy") : "ModernJobsCount";
+    const strategy = configText3(ctx, "strategy") !== "" ? configText3(ctx, "strategy") : "ModernJobsCount";
     const rawCount = ctx.config["jobsCount"];
-    const parsedCount = typeof rawCount === "number" ? rawCount : Number(configText2(ctx, "jobsCount"));
+    const parsedCount = typeof rawCount === "number" ? rawCount : Number(configText3(ctx, "jobsCount"));
     const jobsCount = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 1;
     const headers = { "Content-Type": "application/json" };
-    const folderKey = configText2(ctx, "folderKey");
+    const folderKey = configText3(ctx, "folderKey");
     if (folderKey !== "") headers["X-UIPATH-FolderKey"] = folderKey;
     const body = {
       startInfo: {
@@ -10417,7 +11334,7 @@ var accessKeySecretField = {
   secret: true,
   help: "\u4E0E AccessKeyId \u6210\u5BF9\uFF1B\u53EA\u7528\u4E8E\u672C\u5730\u7B7E\u540D\uFF0C\u4E0D\u53D1\u9001\u3002"
 };
-var descriptor5 = {
+var descriptor6 = {
   id: "aliyun-rpa",
   name: "\u963F\u91CC\u4E91 RPA",
   vendor: "\u963F\u91CC\u4E91 \u673A\u5668\u4EBA\u6D41\u7A0B\u81EA\u52A8\u5316\uFF08RPA\uFF0C\u539F\u7801\u6808\uFF09",
@@ -10601,7 +11518,7 @@ function aliyunRpcSign(params, accessKeySecret, method = "POST") {
 function encodeForm(params) {
   return Object.keys(params).map((key) => percentEncode(key) + "=" + percentEncode(params[key] ?? "")).join("&");
 }
-function configText3(ctx, key) {
+function configText4(ctx, key) {
   const value = ctx.config[key];
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -10609,10 +11526,10 @@ function configText3(ctx, key) {
 }
 function configNumber(ctx, key, fallback) {
   const value = ctx.config[key];
-  const parsed = typeof value === "number" ? value : Number(configText3(ctx, key));
+  const parsed = typeof value === "number" ? value : Number(configText4(ctx, key));
   return Number.isFinite(parsed) ? parsed : fallback;
 }
-function semanticValue3(record, semantic) {
+function semanticValue4(record, semantic) {
   if (semantic === "room") return record.chatName;
   if (semantic === "content") return record.text;
   return record.targetName !== "" ? record.targetName : record.chatName;
@@ -10623,23 +11540,23 @@ function appParams(ctx) {
   return MAPPING_TARGETS4.map((target) => {
     const custom = overrides[target.semantic];
     const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
-    return { name, value: semanticValue3(ctx.record, target.semantic) };
+    return { name, value: semanticValue4(ctx.record, target.semantic) };
   });
 }
 function businessParams(ctx, family) {
-  const appId = configText3(ctx, "appId");
+  const appId = configText4(ctx, "appId");
   if (appId === "") throw new Error("\u963F\u91CC\u4E91 RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u5E94\u7528 ID");
-  const appVersion = configText3(ctx, "appVersion");
+  const appVersion = configText4(ctx, "appVersion");
   const paramsText = JSON.stringify(appParams(ctx));
   if (paramsText.length > APP_PARAMS_MAX) {
     throw new Error("\u963F\u91CC\u4E91 RPA \u6295\u9012\u5931\u8D25\uFF1AAppParams \u8D85\u8FC7 40KB \u4E0A\u9650");
   }
-  const callbackUrl = configText3(ctx, "callbackUrl");
-  const robotId = configText3(ctx, "robotId");
-  const packId = configText3(ctx, "packId");
+  const callbackUrl = configText4(ctx, "callbackUrl");
+  const robotId = configText4(ctx, "robotId");
+  const packId = configText4(ctx, "packId");
   if (family === "service") {
     const out = { AppId: appId, AppParams: paramsText };
-    const allocateMode = configText3(ctx, "allocateMode") !== "" ? configText3(ctx, "allocateMode") : "auto";
+    const allocateMode = configText4(ctx, "allocateMode") !== "" ? configText4(ctx, "allocateMode") : "auto";
     out["AllocateMode"] = allocateMode;
     if (allocateMode === "manu" && robotId !== "") out["RobotId"] = robotId;
     if (allocateMode !== "manu" && packId !== "") out["PackId"] = packId;
@@ -10658,10 +11575,10 @@ function triggerPath(family) {
   return family === "service" ? "/rpa/openapi/raas/task/CreateTask" : "/rpa/openapi/task/createServiceTask";
 }
 function apiFamilyOf(ctx) {
-  return configText3(ctx, "apiFamily") === "local" ? "local" : "service";
+  return configText4(ctx, "apiFamily") === "local" ? "local" : "service";
 }
-var adapter5 = {
-  descriptor: descriptor5,
+var adapter6 = {
+  descriptor: descriptor6,
   /**
    * 组装 CreateTask / createServiceTask 请求：业务参数先放 form body（未签名），
    * 公共参数与 Signature 由 {@link signRequest} 在出网前补齐。
@@ -10670,7 +11587,7 @@ var adapter5 = {
    * @throws 应用 ID / 服务地址缺失或 AppParams 超限时抛可读错误。
    */
   buildRequest(ctx) {
-    const baseUrl = configText3(ctx, "baseUrl") !== "" ? configText3(ctx, "baseUrl") : "https://console-rpa.aliyun.com";
+    const baseUrl = configText4(ctx, "baseUrl") !== "" ? configText4(ctx, "baseUrl") : "https://console-rpa.aliyun.com";
     const family = apiFamilyOf(ctx);
     const params = businessParams(ctx, family);
     const headers = { "Content-Type": "application/x-www-form-urlencoded" };
@@ -10770,7 +11687,7 @@ var tokenField = {
   example: "rk-{CompanyOpenId}-{randomString}",
   help: "\u673A\u5668\u4EBA\u6307\u6325\u5B98\u300C\u4E2A\u4EBA\u4EE4\u724C\u300D\u751F\u6210\uFF1BBearer \u8BA4\u8BC1\uFF0C\u91CD\u7F6E\u4EE4\u724C\u4F1A\u8BA9\u65E7\u4EE4\u724C\u7ACB\u5373\u5931\u6548\u3002"
 };
-var descriptor6 = {
+var descriptor7 = {
   id: "laiye",
   name: "\u6765\u4E5F RPA",
   vendor: "\u6765\u4E5F\u79D1\u6280\uFF08Laiye\uFF09\xB7 \u673A\u5668\u4EBA\u6307\u6325\u5B98 Automation Commander",
@@ -10919,13 +11836,13 @@ var descriptor6 = {
     "v1 \u53EA\u843D\u5E93 taskIds[0]\uFF08externalTaskId\uFF09\uFF0C\u4E0D\u5B9E\u73B0 query_task_result \u8F6E\u8BE2\u3002"
   ]
 };
-function configText4(ctx, key) {
+function configText5(ctx, key) {
   const value = ctx.config[key];
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "";
 }
-function semanticValue4(record, semantic) {
+function semanticValue5(record, semantic) {
   if (semantic === "room") return record.chatName;
   if (semantic === "content") return record.text;
   return record.targetName !== "" ? record.targetName : record.chatName;
@@ -10940,7 +11857,7 @@ function taskParameters(ctx) {
       parameterName: name,
       // 微信侧三个值都是字符串；官方 create_task 的 parameterType 支持 string/number/boolean。
       parameterType: "string",
-      parameterValue: semanticValue4(ctx.record, target.semantic)
+      parameterValue: semanticValue5(ctx.record, target.semantic)
     };
   });
 }
@@ -10972,8 +11889,8 @@ function mcpBusinessBody(outer) {
   const business = record["return"] ?? record;
   return parseMaybeJson(business) ?? business;
 }
-var adapter6 = {
-  descriptor: descriptor6,
+var adapter7 = {
+  descriptor: descriptor7,
   /**
    * 组装 MCP JSON-RPC 请求（`tools/call` → `create_task`）。
    * @param ctx - 投递上下文。
@@ -10981,22 +11898,22 @@ var adapter6 = {
    * @throws 服务地址 / 流程名缺失时抛可读错误。
    */
   buildRequest(ctx) {
-    const baseUrl = configText4(ctx, "baseUrl").replace(/\/+$/, "");
+    const baseUrl = configText5(ctx, "baseUrl").replace(/\/+$/, "");
     if (baseUrl === "") throw new Error("\u6765\u4E5F RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E Commander \u57FA\u5740");
-    const flowName = configText4(ctx, "flowName");
+    const flowName = configText5(ctx, "flowName");
     if (flowName === "") throw new Error("\u6765\u4E5F RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u6D41\u7A0B\u540D");
     const args = {
       flowName,
-      assignType: configText4(ctx, "assignType") !== "" ? configText4(ctx, "assignType") : "automatic",
+      assignType: configText5(ctx, "assignType") !== "" ? configText5(ctx, "assignType") : "automatic",
       parameters: taskParameters(ctx)
     };
-    const workerName = configText4(ctx, "workerName");
+    const workerName = configText5(ctx, "workerName");
     if (workerName !== "") args["workerName"] = workerName;
-    const workerGroupName = configText4(ctx, "workerGroupName");
+    const workerGroupName = configText5(ctx, "workerGroupName");
     if (workerGroupName !== "") args["workerGroupName"] = workerGroupName;
-    const departmentName = configText4(ctx, "departmentName");
+    const departmentName = configText5(ctx, "departmentName");
     if (departmentName !== "") args["departmentName"] = departmentName;
-    const priority = configText4(ctx, "priority");
+    const priority = configText5(ctx, "priority");
     if (priority !== "") args["priority"] = priority;
     const body = {
       jsonrpc: "2.0",
@@ -11088,7 +12005,7 @@ var appSecretField = {
   secret: true,
   help: "\u4E0E AppKey \u6210\u5BF9\uFF1B\u53EA\u5B58\u672C\u673A\uFF0C\u6295\u9012\u65F6\u653E\u8FDB\u4F60\u586B\u7684 Secret header\u3002"
 };
-var descriptor7 = {
+var descriptor8 = {
   id: "shizai",
   name: "\u5B9E\u5728\u667A\u80FD RPA",
   vendor: "\u5B9E\u5728\u667A\u80FD\uFF08Intelligent RPA\uFF09",
@@ -11213,13 +12130,13 @@ var descriptor7 = {
     "operation=1\uFF08\u7ACB\u5373/\u518D\u6B21\u6267\u884C\uFF09\u4E3A\u5B98\u65B9\u53D6\u503C\uFF1B\u505C\u6B62/\u5220\u9664\u5206\u522B\u7528 2/3/4\uFF0C\u672C\u9002\u914D\u5668\u53EA\u7528 1\u3002"
   ]
 };
-function configText5(ctx, key) {
+function configText6(ctx, key) {
   const value = ctx.config[key];
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "";
 }
-function semanticValue5(record, semantic) {
+function semanticValue6(record, semantic) {
   if (semantic === "room") return record.chatName;
   if (semantic === "content") return record.text;
   return record.targetName !== "" ? record.targetName : record.chatName;
@@ -11231,7 +12148,7 @@ function inputParam(ctx) {
   for (const target of MAPPING_TARGETS6) {
     const custom = overrides[target.semantic];
     const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
-    out[key] = semanticValue5(ctx.record, target.semantic);
+    out[key] = semanticValue6(ctx.record, target.semantic);
   }
   return out;
 }
@@ -11247,8 +12164,8 @@ function pickWorkUuid(data) {
   const jobUuid = data["jobUuid"];
   return typeof jobUuid === "string" && jobUuid !== "" ? jobUuid : void 0;
 }
-var adapter7 = {
-  descriptor: descriptor7,
+var adapter8 = {
+  descriptor: descriptor8,
   /**
    * 组装「预建任务触发」请求：`{jobUuid, operation:1, inputParam}`。
    * @param ctx - 投递上下文。
@@ -11256,9 +12173,9 @@ var adapter7 = {
    * @throws 服务地址 / 任务 UUID 缺失时抛可读错误。
    */
   buildRequest(ctx) {
-    const baseUrl = configText5(ctx, "baseUrl").replace(/\/+$/, "");
+    const baseUrl = configText6(ctx, "baseUrl").replace(/\/+$/, "");
     if (baseUrl === "") throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u670D\u52A1\u5730\u5740");
-    const jobUuid = configText5(ctx, "jobUuid");
+    const jobUuid = configText6(ctx, "jobUuid");
     if (jobUuid === "") throw new Error("\u5B9E\u5728\u667A\u80FD RPA \u6295\u9012\u5931\u8D25\uFF1A\u4EFB\u52A1\u672A\u914D\u7F6E\u4EFB\u52A1 UUID");
     const body = {
       jobUuid,
@@ -11281,8 +12198,8 @@ var adapter7 = {
    * @throws 任一 header 名或凭据缺失时抛可读错误（避免发出无鉴权请求）。
    */
   signRequest(req, ctx) {
-    const keyHeader = configText5(ctx, "keyHeader");
-    const secretHeader = configText5(ctx, "secretHeader");
+    const keyHeader = configText6(ctx, "keyHeader");
+    const secretHeader = configText6(ctx, "secretHeader");
     const appKey = ctx.secrets["appKey"] ?? "";
     const appSecret = ctx.secrets["appSecret"] ?? "";
     if (keyHeader === "" || secretHeader === "") {
@@ -11342,10 +12259,11 @@ var RPA_VENDORS = [
   adapter4,
   adapter5,
   adapter6,
-  adapter7
+  adapter7,
+  adapter8
 ];
 var RPA_VENDOR_MAP = new Map(
-  RPA_VENDORS.map((adapter8) => [adapter8.descriptor.id, adapter8])
+  RPA_VENDORS.map((adapter9) => [adapter9.descriptor.id, adapter9])
 );
 var RPA_REGISTRY_VERSION = "2026-10-21";
 function findVendor(id) {
@@ -11353,652 +12271,7 @@ function findVendor(id) {
   return RPA_VENDOR_MAP.get(id);
 }
 function listVendorDescriptors() {
-  return RPA_VENDORS.map((adapter8) => JSON.parse(JSON.stringify(adapter8.descriptor)));
-}
-
-// src/backend/wechat-data/src/query/rpa/template.ts
-var SEMANTIC_LABELS = {
-  room: "\u4F1A\u8BDD\u540D",
-  content: "\u89E6\u53D1\u6587\u672C",
-  at: "\u89E6\u53D1\u5BF9\u8C61"
-};
-var ALL_PARAM_SOURCES = [
-  "room",
-  "content",
-  "at",
-  "taskName",
-  "keyword",
-  "triggeredAt",
-  "chatType",
-  "taskId",
-  "recordId",
-  "fixed",
-  "template"
-];
-var PARAM_SOURCE_LABELS = {
-  room: "\u4F1A\u8BDD\u540D",
-  content: "\u89E6\u53D1\u6587\u672C",
-  at: "\u89E6\u53D1\u5BF9\u8C61",
-  taskName: "\u4EFB\u52A1\u540D",
-  keyword: "\u89E6\u53D1\u5173\u952E\u8BCD",
-  triggeredAt: "\u89E6\u53D1\u65F6\u95F4",
-  chatType: "\u4F1A\u8BDD\u7C7B\u578B",
-  taskId: "\u4EFB\u52A1 id",
-  recordId: "\u89E6\u53D1\u8BB0\u5F55 id",
-  fixed: "\u56FA\u5B9A\u503C",
-  template: "\u81EA\u5B9A\u4E49\u6A21\u677F"
-};
-var TEMPLATE_ALLOWED_PATHS = {
-  record: [
-    "chatName",
-    "targetName",
-    "targetUsername",
-    "username",
-    "keyword",
-    "text",
-    "chatType",
-    "triggeredAt"
-  ],
-  task: ["name", "id"]
-};
-var URL_FIELD_MAX = 2048;
-var PARAM_NAME_MAX = 64;
-var PARAM_VALUE_MAX = 2048;
-var PARAM_TEMPLATE_MAX = 512;
-var WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/;
-var INLINE_PLACEHOLDER = /\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}/g;
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function safeRegExp(pattern) {
-  try {
-    return new RegExp(pattern);
-  } catch {
-    return null;
-  }
-}
-function configFieldList(descriptor8) {
-  return descriptor8.fields.filter((field) => field.secret !== true);
-}
-function secretFieldList(descriptor8) {
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  const add = (field) => {
-    if (field.secret !== true || seen.has(field.key)) return;
-    seen.add(field.key);
-    out.push(field);
-  };
-  for (const field of descriptor8.fields) add(field);
-  for (const mode of descriptor8.auth.modes) {
-    for (const field of mode.fields) add(field);
-  }
-  return out;
-}
-function parseConfigJson(raw) {
-  const text = typeof raw === "string" ? raw : "";
-  if (text === "") return {};
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return {};
-  }
-  return normalizeConfigInput(value);
-}
-function normalizeConfigInput(raw) {
-  if (!isRecord(raw)) return {};
-  const out = {};
-  for (const [key, item] of Object.entries(raw)) {
-    const sanitized = sanitizeConfigValue(item);
-    if (sanitized !== void 0) out[key] = sanitized;
-  }
-  return out;
-}
-function sanitizeConfigValue(value) {
-  if (typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : void 0;
-  if (Array.isArray(value)) return sanitizeParamEntries(value);
-  if (!isRecord(value)) return void 0;
-  const out = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string") out[key] = item;
-  }
-  return Object.keys(out).length > 0 ? out : void 0;
-}
-function sanitizeParamEntries(value) {
-  const out = [];
-  for (const item of value) {
-    if (!isRecord(item) || typeof item["name"] !== "string" || typeof item["source"] !== "string") continue;
-    const entry = { name: item["name"], source: item["source"] };
-    if (typeof item["fixedValue"] === "string") entry.fixedValue = item["fixedValue"];
-    if (typeof item["template"] === "string") entry.template = item["template"];
-    out.push(entry);
-  }
-  return out;
-}
-function parseSecretJson(raw) {
-  const text = typeof raw === "string" ? raw : "";
-  if (text === "") return {};
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return {};
-  }
-  if (!isRecord(value)) return {};
-  const out = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string" && item !== "") out[key] = item;
-  }
-  return out;
-}
-function secretSetOf(secrets) {
-  const out = {};
-  for (const [key, value] of Object.entries(secrets)) {
-    if (value !== "") out[key] = true;
-  }
-  return out;
-}
-function defaultMapValue(descriptor8) {
-  const out = {};
-  for (const target of descriptor8.mapping.targets) out[target.semantic] = target.defaultKey;
-  return out;
-}
-function normalizeMapValue(descriptor8, raw) {
-  const out = defaultMapValue(descriptor8);
-  if (!isRecord(raw)) return out;
-  for (const target of descriptor8.mapping.targets) {
-    const item = raw[target.semantic];
-    if (typeof item === "string" && item.trim() !== "") out[target.semantic] = item.trim();
-  }
-  return out;
-}
-function defaultConfigFor(descriptor8) {
-  const out = {};
-  for (const field of configFieldList(descriptor8)) {
-    if (field.type === "map") {
-      out[field.key] = normalizeMapValue(descriptor8, field.defaultValue);
-      continue;
-    }
-    if (field.type === "paramList") {
-      out[field.key] = [];
-      continue;
-    }
-    if (field.defaultValue !== void 0) out[field.key] = field.defaultValue;
-  }
-  return out;
-}
-function applySecretInput(descriptor8, saved, input) {
-  const secrets = {};
-  for (const field of secretFieldList(descriptor8)) {
-    const value = saved[field.key];
-    if (value !== void 0 && value !== "") secrets[field.key] = value;
-  }
-  const errors = [];
-  if (input !== void 0) {
-    if (!isRecord(input)) {
-      errors.push("\u51ED\u636E\u914D\u7F6E\u683C\u5F0F\u4E0D\u6B63\u786E");
-    } else {
-      applySecretOverrides(descriptor8, secrets, input, errors);
-    }
-  }
-  return { secrets, set: secretSetOf(secrets), errors };
-}
-function applySecretOverrides(descriptor8, secrets, input, errors) {
-  for (const field of secretFieldList(descriptor8)) {
-    if (!(field.key in input)) continue;
-    const raw = input[field.key];
-    if (typeof raw !== "string") {
-      errors.push(field.label + " \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
-      continue;
-    }
-    const value = raw.trim();
-    if (value === "") {
-      delete secrets[field.key];
-      continue;
-    }
-    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
-    if (pattern !== null && !pattern.test(value)) {
-      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
-      continue;
-    }
-    secrets[field.key] = value;
-  }
-}
-function validateVendorConfig(descriptor8, config) {
-  const out = defaultConfigFor(descriptor8);
-  const errors = [];
-  const raw = isRecord(config) ? config : {};
-  for (const field of configFieldList(descriptor8)) {
-    const provided = raw[field.key];
-    if (provided === void 0) continue;
-    const value = validateFieldValue(descriptor8, field, provided, errors);
-    if (value !== void 0) out[field.key] = value;
-  }
-  dropExtrasCollidingWithMapping(descriptor8, out, errors);
-  return { config: out, errors };
-}
-function validateFieldValue(descriptor8, field, raw, errors) {
-  if (field.type === "map") return normalizeMapValue(descriptor8, raw);
-  if (field.type === "paramList") return validateParamListField(field, raw, errors);
-  if (field.type === "number") return validateNumberField(field, raw, errors);
-  if (field.type === "boolean") return validateBooleanField(field, raw, errors);
-  if (field.type === "select") return validateSelectField(field, raw, errors);
-  return validateTextField(field, raw, errors);
-}
-function dropExtrasCollidingWithMapping(descriptor8, config, errors) {
-  const extrasField = descriptor8.mapping.extrasField;
-  if (extrasField === void 0) return;
-  const extras = config[extrasField];
-  if (!Array.isArray(extras) || extras.length === 0) return;
-  const mapField = descriptor8.mapping.mapField;
-  const reserved = new Set(
-    mapField === void 0 ? [] : Object.values(normalizeMapValue(descriptor8, config[mapField])).map((key) => key.toLowerCase())
-  );
-  const kept = extras.filter((entry) => {
-    if (!reserved.has(entry.name.toLowerCase())) return true;
-    errors.push("\u9644\u52A0\u53C2\u6570\u300C" + entry.name + "\u300D\u4E0E\u53C2\u6570\u6620\u5C04\u7684\u952E\u91CD\u540D\uFF08\u4F1A\u7ED9\u5382\u5546\u53D1\u4E24\u4E2A\u540C\u540D\u53C2\u6570\uFF09");
-    return false;
-  });
-  config[extrasField] = kept;
-}
-function validateParamListField(field, raw, errors) {
-  if (!Array.isArray(raw)) {
-    errors.push(field.label + " \u5FC5\u987B\u662F\u53C2\u6570\u5217\u8868");
-    return void 0;
-  }
-  const max = field.maxItems ?? 50;
-  if (raw.length > max) errors.push(field.label + " \u6700\u591A " + String(max) + " \u6761");
-  const allowed = new Set(field.paramSources ?? ALL_PARAM_SOURCES);
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  raw.forEach((item, index) => {
-    const label = field.label + " \u7B2C " + String(index + 1) + " \u9879";
-    if (out.length >= max) return;
-    if (!isRecord(item)) {
-      errors.push(label + "\u683C\u5F0F\u4E0D\u6B63\u786E");
-      return;
-    }
-    const name = typeof item["name"] === "string" ? item["name"].trim() : "";
-    const source = typeof item["source"] === "string" ? item["source"] : void 0;
-    if (name === "") {
-      errors.push(label + "\u7F3A\u5C11\u53C2\u6570\u540D");
-      return;
-    }
-    if (name.length > PARAM_NAME_MAX) {
-      errors.push(label + "\u53C2\u6570\u540D\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_NAME_MAX) + " \u5B57\u7B26\uFF09");
-      return;
-    }
-    const lower = name.toLowerCase();
-    if (seen.has(lower)) {
-      errors.push(label + "\u53C2\u6570\u540D\u91CD\u590D\uFF1A" + name);
-      return;
-    }
-    if (source === void 0 || !ALL_PARAM_SOURCES.includes(source)) {
-      errors.push(label + "\u503C\u6765\u6E90\u65E0\u6548");
-      return;
-    }
-    if (!allowed.has(source)) {
-      errors.push(label + "\u4E0D\u652F\u6301\u7684\u503C\u6765\u6E90\uFF1A" + PARAM_SOURCE_LABELS[source]);
-      return;
-    }
-    const entry = { name, source };
-    if (source === "fixed") {
-      const fixed = typeof item["fixedValue"] === "string" ? item["fixedValue"].trim() : "";
-      if (fixed === "") {
-        errors.push(label + "\u9009\u62E9\u56FA\u5B9A\u503C\u65F6\u5FC5\u987B\u586B\u5199\u503C");
-        return;
-      }
-      if (fixed.length > PARAM_VALUE_MAX) {
-        errors.push(label + "\u56FA\u5B9A\u503C\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_VALUE_MAX) + " \u5B57\u7B26\uFF09");
-        return;
-      }
-      entry.fixedValue = fixed;
-    } else if (source === "template") {
-      const template = typeof item["template"] === "string" ? item["template"].trim() : "";
-      const valid = validateParamTemplate(template, label, errors);
-      if (valid === void 0) return;
-      entry.template = valid;
-    }
-    seen.add(lower);
-    out.push(entry);
-  });
-  return out;
-}
-function validateParamTemplate(value, label, errors) {
-  if (value === "") {
-    errors.push(label + "\u9009\u62E9\u81EA\u5B9A\u4E49\u6A21\u677F\u65F6\u5FC5\u987B\u586B\u5199\u6A21\u677F");
-    return void 0;
-  }
-  if (value.length > PARAM_TEMPLATE_MAX) {
-    errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u8FC7\u957F\uFF08\u6700\u591A " + String(PARAM_TEMPLATE_MAX) + " \u5B57\u7B26\uFF09");
-    return void 0;
-  }
-  for (const match of value.matchAll(/\$\{([^}]*)\}/g)) {
-    const expr = (match[1] ?? "").trim();
-    const dot2 = expr.indexOf(".");
-    const root2 = dot2 === -1 ? expr : expr.slice(0, dot2);
-    const rest = dot2 === -1 ? "" : expr.slice(dot2 + 1);
-    if (root2 !== "record" && root2 !== "task") {
-      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u652F\u6301 record / task \u5B57\u6BB5\uFF08\u4E0D\u652F\u6301\uFF1A" + expr + "\uFF09");
-      return void 0;
-    }
-    const allowedPath = TEMPLATE_ALLOWED_PATHS[root2];
-    if (!allowedPath.includes(rest)) {
-      errors.push(label + "\u81EA\u5B9A\u4E49\u6A21\u677F\u5B57\u6BB5\u4E0D\u5728\u5141\u8BB8\u6E05\u5355\uFF1A" + expr);
-      return void 0;
-    }
-  }
-  return value;
-}
-function validateNumberField(field, raw, errors) {
-  const value = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(value)) {
-    errors.push(field.label + " \u5FC5\u987B\u662F\u6570\u5B57");
-    return void 0;
-  }
-  return value;
-}
-function validateBooleanField(field, raw, errors) {
-  if (typeof raw === "boolean") return raw;
-  if (raw === "true") return true;
-  if (raw === "false") return false;
-  errors.push(field.label + " \u5FC5\u987B\u662F\u5E03\u5C14\u503C");
-  return void 0;
-}
-function validateSelectField(field, raw, errors) {
-  if (typeof raw !== "string") {
-    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
-    return void 0;
-  }
-  const value = raw.trim();
-  if (value === "") return "";
-  const options = field.options ?? [];
-  if (!options.some((option) => option.value === value)) {
-    errors.push(field.label + " \u4E0D\u662F\u53EF\u9009\u503C");
-    return void 0;
-  }
-  return value;
-}
-function validateTextField(field, raw, errors) {
-  if (typeof raw !== "string") {
-    errors.push(field.label + " \u5FC5\u987B\u662F\u6587\u672C");
-    return void 0;
-  }
-  const value = raw.trim();
-  if (value !== "") {
-    const pattern = field.pattern !== void 0 ? safeRegExp(field.pattern) : null;
-    if (pattern !== null && !pattern.test(value)) {
-      errors.push(field.label + " \u683C\u5F0F\u4E0D\u6B63\u786E");
-      return void 0;
-    }
-  }
-  if (field.key === "url" || field.key === "baseUrl") return validateAddressField(field, value, errors);
-  return value;
-}
-function validateAddressField(field, value, errors) {
-  if (value === "") return "";
-  if (field.key === "url" && value.length > URL_FIELD_MAX) {
-    errors.push("\u56DE\u8C03\u5730\u5740\u8FC7\u957F\uFF08\u6700\u591A " + String(URL_FIELD_MAX) + " \u4E2A\u5B57\u7B26\uFF09");
-    return "";
-  }
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    errors.push(addressErrorText(field));
-    return "";
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" || parsed.hostname === "") {
-    errors.push(addressErrorText(field));
-    return "";
-  }
-  return value;
-}
-function addressErrorText(field) {
-  if (field.key === "url") return "\u56DE\u8C03\u5730\u5740\u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
-  return field.label + " \u5FC5\u987B\u662F\u5408\u6CD5\u7684 http/https \u5730\u5740";
-}
-function missingReadyFields(descriptor8, config, secretSet) {
-  const merged = { ...defaultConfigFor(descriptor8), ...config };
-  const missing = [];
-  for (const field of configFieldList(descriptor8)) {
-    if (!field.required) continue;
-    if (isConfigFieldMissing(field, merged[field.key])) missing.push(field.label);
-  }
-  for (const field of secretFieldList(descriptor8)) {
-    if (field.required && secretSet[field.key] !== true) missing.push(field.label);
-  }
-  return missing;
-}
-function isConfigFieldMissing(field, value) {
-  if (value === void 0) return true;
-  if (field.type === "boolean") return false;
-  if (field.type === "map") {
-    if (!isRecord(value)) return true;
-    return Object.keys(value).length === 0;
-  }
-  if (field.type === "paramList") return !Array.isArray(value) || value.length === 0;
-  return String(value).trim() === "";
-}
-function migrateLegacyConfig(method, legacy) {
-  const callbackUrl = typeof legacy.callbackUrl === "string" ? legacy.callbackUrl.trim() : "";
-  const flowId = typeof legacy.bazhuayuFlowId === "string" ? legacy.bazhuayuFlowId.trim() : "";
-  if (method === "webhook" && callbackUrl !== "") return { url: callbackUrl };
-  if (method === "bazhuayu" && flowId !== "") return { flowId };
-  return {};
-}
-function migrateLegacySecrets(method, apiKey) {
-  const text = typeof apiKey === "string" ? apiKey.trim() : "";
-  if (method !== "bazhuayu" || text === "") return {};
-  return { apiKey: text };
-}
-function legacyColumnsFor(method, config, secrets) {
-  const url = configValueText(config["url"]);
-  const flowId = configValueText(config["flowId"]);
-  const apiKey = secrets["apiKey"] ?? "";
-  return {
-    callbackUrl: method === "webhook" ? url : "",
-    bazhuayuFlowId: method === "bazhuayu" ? flowId : "",
-    bazhuayuApiKey: method === "bazhuayu" ? apiKey : ""
-  };
-}
-function configValueText(value) {
-  return typeof value === "string" ? value : "";
-}
-function normalizeTriggerMethod(raw, fallback = "webhook") {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (text !== "") return text;
-  return fallback;
-}
-function readJsonPath(root2, path) {
-  const trimmed = path.trim();
-  if (trimmed === "") return root2;
-  const segments = trimmed.replace(/\[(\d+)\]/g, ".$1").split(".").filter((segment) => segment !== "");
-  let current = root2;
-  for (const segment of segments) {
-    if (Array.isArray(current)) {
-      const index = Number(segment);
-      if (!Number.isInteger(index)) return void 0;
-      current = current[index];
-      continue;
-    }
-    if (!isRecord(current)) return void 0;
-    current = current[segment];
-    if (current === void 0) return void 0;
-  }
-  return current;
-}
-function renderTemplate(template, roots) {
-  if (typeof template === "string") return renderString(template, roots);
-  if (Array.isArray(template)) return template.map((item) => renderTemplate(item, roots));
-  if (!isRecord(template)) return template;
-  const out = {};
-  for (const [key, value] of Object.entries(template)) out[key] = renderTemplate(value, roots);
-  return out;
-}
-function renderString(template, roots) {
-  const whole = WHOLE_PLACEHOLDER.exec(template);
-  if (whole !== null && whole[1] !== void 0) {
-    const value = resolvePlaceholder(whole[1], roots);
-    return value === void 0 ? template : value;
-  }
-  return template.replace(INLINE_PLACEHOLDER, (match, expr) => {
-    if (placeholderRoot(expr) === "auth") return match;
-    const value = resolvePlaceholder(expr, roots);
-    if (value === void 0) return match;
-    if (typeof value === "object" && value !== null) {
-      throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u53EA\u80FD\u6574\u503C\u66FF\u6362\uFF1A${" + expr + "}");
-    }
-    return String(value);
-  });
-}
-function placeholderRoot(expr) {
-  const index = expr.indexOf(".");
-  return index === -1 ? expr : expr.slice(0, index);
-}
-var MAPPED_STYLE_KEYS = /* @__PURE__ */ new Set([
-  "object",
-  "nameValueArray",
-  "nameValueTypeArray",
-  "jsonStringObject",
-  "formParams"
-]);
-function resolvePlaceholder(expr, roots) {
-  const root2 = placeholderRoot(expr);
-  if (root2 === "auth") return void 0;
-  const container = roots[root2];
-  if (container === void 0) throw new Error("\u672A\u77E5\u5360\u4F4D\u7B26\uFF1A${" + expr + "}");
-  const rest = expr.slice(root2.length + 1);
-  if (root2 === "mapped" && rest !== "" && MAPPED_STYLE_KEYS.has(rest)) return container;
-  const value = rest === "" || expr === root2 ? container : readJsonPath(container, rest);
-  if (value === void 0) throw new Error("\u6A21\u677F\u5360\u4F4D\u7B26\u7F3A\u5C11\u503C\uFF1A${" + expr + "}");
-  return value;
-}
-function mappingKeys(descriptor8, config) {
-  const mapField = descriptor8.mapping.mapField;
-  const raw = mapField === void 0 ? void 0 : config[mapField];
-  const overrides = isRecord(raw) ? raw : {};
-  const out = {};
-  for (const target of descriptor8.mapping.targets) {
-    const custom = overrides[target.semantic];
-    out[target.semantic] = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
-  }
-  return out;
-}
-function semanticValue6(record, semantic) {
-  if (semantic === "room") return record.chatName;
-  if (semantic === "content") return record.text;
-  return record.targetName !== "" ? record.targetName : record.chatName;
-}
-function formatMapped(entries2, style) {
-  if (style === "object") {
-    const out = {};
-    for (const entry of entries2) out[entry.name] = entry.value;
-    return out;
-  }
-  if (style === "nameValueArray") {
-    return entries2.map((entry) => ({ name: entry.name, value: entry.value }));
-  }
-  if (style === "nameValueTypeArray") {
-    return entries2.map((entry) => ({ name: entry.name, value: entry.value, type: "str" }));
-  }
-  if (style === "formParams") {
-    return entries2.map((entry) => encodeURIComponent(entry.name) + "=" + encodeURIComponent(entry.value)).join("&");
-  }
-  const object = {};
-  for (const entry of entries2) object[entry.name] = entry.value;
-  return JSON.stringify(object);
-}
-function resolveMapped(descriptor8, ctx) {
-  const config = { ...defaultConfigFor(descriptor8), ...ctx.config };
-  const keys = mappingKeys(descriptor8, config);
-  const entries2 = [];
-  for (const target of descriptor8.mapping.targets) {
-    const value = semanticValue6(ctx.record, target.semantic).trim();
-    if (value === "" && target.semantic !== "content") {
-      throw new Error("\u7F3A\u5C11\u6620\u5C04\u503C\uFF1A" + SEMANTIC_LABELS[target.semantic]);
-    }
-    entries2.push({ name: keys[target.semantic] ?? target.defaultKey, value });
-  }
-  entries2.push(...resolveExtraEntries(descriptor8, config, ctx));
-  return formatMapped(entries2, descriptor8.mapping.style);
-}
-function resolveExtraEntries(descriptor8, config, ctx) {
-  const extrasField = descriptor8.mapping.extrasField;
-  if (extrasField === void 0) return [];
-  const raw = config[extrasField];
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const entry of raw) {
-    if (!isRecord(entry) || typeof entry["name"] !== "string" || entry["name"].trim() === "") continue;
-    out.push({ name: entry["name"].trim(), value: resolveParamSourceValue(entry, ctx) });
-  }
-  return out;
-}
-function resolveParamSourceValue(entry, ctx) {
-  const source = entry["source"];
-  if (source === "room") return ctx.record.chatName;
-  if (source === "content") return ctx.record.text;
-  if (source === "at") return semanticValue6(ctx.record, "at");
-  if (source === "taskName") return ctx.taskName;
-  if (source === "keyword") return ctx.record.keyword;
-  if (source === "triggeredAt") return new Date(ctx.record.triggeredAt).toLocaleString("zh-CN", { hour12: false });
-  if (source === "chatType") return ctx.record.chatType === "group" ? "\u7FA4\u804A" : "\u5355\u804A";
-  if (source === "taskId") return String(ctx.taskId);
-  if (source === "recordId") return String(ctx.recordId);
-  if (source === "fixed") return typeof entry["fixedValue"] === "string" ? entry["fixedValue"] : "";
-  if (source === "template") {
-    const rendered = renderTemplate(entry["template"] ?? "", {
-      record: ctx.record,
-      task: { name: ctx.taskName, id: ctx.taskId }
-    });
-    if (typeof rendered === "string") return rendered;
-    if (typeof rendered === "number") return String(rendered);
-    if (typeof rendered === "boolean") return rendered ? "true" : "false";
-    throw new Error("\u9644\u52A0\u53C2\u6570\u300C" + String(entry["name"]) + "\u300D\u7684\u81EA\u5B9A\u4E49\u6A21\u677F\u6CA1\u6709\u89E3\u6790\u51FA\u5B57\u7B26\u4E32");
-  }
-  throw new Error("\u672A\u77E5\u9644\u52A0\u53C2\u6570\u6765\u6E90\uFF1A" + String(source));
-}
-function renderRequest(descriptor8, ctx) {
-  const config = { ...defaultConfigFor(descriptor8), ...ctx.config };
-  const roots = {
-    config,
-    secret: ctx.secrets,
-    record: ctx.record,
-    task: { name: ctx.taskName, id: ctx.taskId },
-    invocation: {
-      taskId: ctx.taskId,
-      recordId: ctx.recordId,
-      idempotencyKey: ctx.idempotencyKey
-    },
-    mapped: resolveMapped(descriptor8, ctx)
-  };
-  const url = renderTemplate(descriptor8.request.url, roots);
-  if (typeof url !== "string" || url.trim() === "") {
-    throw new Error(descriptor8.name + " \u7684\u8BF7\u6C42\u5730\u5740\u6A21\u677F\u4E3A\u7A7A");
-  }
-  const headers = {};
-  for (const [key, value] of Object.entries(descriptor8.request.headers ?? {})) {
-    const rendered = renderTemplate(value, roots);
-    headers[key] = typeof rendered === "string" ? rendered : String(rendered);
-  }
-  const renderedBody = renderTemplate(descriptor8.request.body, roots);
-  const contentType = descriptor8.request.contentType ?? findHeaderValue(headers, "content-type") ?? "application/json";
-  return {
-    method: descriptor8.request.method,
-    url: url.trim(),
-    headers,
-    body: typeof renderedBody === "string" ? renderedBody : JSON.stringify(renderedBody ?? {}),
-    contentType
-  };
-}
-function findHeaderValue(headers, name) {
-  const lower = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === lower) return value;
-  }
-  return void 0;
+  return RPA_VENDORS.map((adapter9) => JSON.parse(JSON.stringify(adapter9.descriptor)));
 }
 
 // src/backend/wechat-data/src/query/task-center-scan.ts
@@ -12006,9 +12279,9 @@ var SCAN_PAGE_SIZE = 200;
 var SCAN_MAX_PAGES = 5;
 var TRIGGER_TEXT_MAX = 4e3;
 function downstreamReady(task) {
-  const adapter8 = findVendor(task.triggerMethod);
-  if (adapter8 === void 0) return false;
-  return missingReadyFields(adapter8.descriptor, task.triggerConfig, task.triggerSecretSet).length === 0;
+  const adapter9 = findVendor(task.triggerMethod);
+  if (adapter9 === void 0) return false;
+  return missingReadyFields(adapter9.descriptor, task.triggerConfig, task.triggerSecretSet).length === 0;
 }
 function isTargetMessage(msg, task, selfUsername) {
   if (task.chatType === "private") return msg.isSender === 0;
@@ -12169,18 +12442,18 @@ var TOKEN_CACHE = /* @__PURE__ */ new Map();
 var DEFAULT_TOKEN_TTL_SECONDS = 3600;
 var TOKEN_EXPIRY_MARGIN_SECONDS = 60;
 var TOKEN_MIN_TTL_SECONDS = 30;
-async function applyAuth(adapter8, req, ctx, deps2, cache = TOKEN_CACHE) {
-  const modes = adapter8.descriptor.auth.modes;
+async function applyAuth(adapter9, req, ctx, deps2, cache = TOKEN_CACHE) {
+  const modes = adapter9.descriptor.auth.modes;
   if (modes.length === 0) return req;
   const mode = selectAuthMode(modes, ctx.config);
-  const name = adapter8.descriptor.name;
+  const name = adapter9.descriptor.name;
   if (mode === void 0) {
     throw new Error("\u672A\u5339\u914D\u5230 " + name + " \u7684\u9274\u6743\u6A21\u5F0F\uFF0C\u8BF7\u68C0\u67E5\u89E6\u53D1\u65B9\u5F0F\u914D\u7F6E");
   }
-  if (mode.strategy === "custom") return applyCustom(adapter8, req, ctx);
+  if (mode.strategy === "custom") return applyCustom(adapter9, req, ctx);
   if (mode.strategy === "header") return applyHeaderSecrets(req, mode, ctx, name);
   if (mode.strategy === "token-exchange") {
-    const token = await resolveToken(adapter8, mode, ctx, deps2, cache);
+    const token = await resolveToken(adapter9, mode, ctx, deps2, cache);
     return withToken(req, token, mode.exchange?.headerPrefix ?? "Bearer ");
   }
   return withToken(req, bearerToken(mode, ctx, name), "Bearer ");
@@ -12188,20 +12461,20 @@ async function applyAuth(adapter8, req, ctx, deps2, cache = TOKEN_CACHE) {
 function selectAuthMode(modes, config) {
   for (const mode of modes) {
     if (mode.when === void 0) return mode;
-    const current = configText6(config[mode.when.field]);
+    const current = configText7(config[mode.when.field]);
     if (mode.when.equals.includes(current)) return mode;
   }
   return void 0;
 }
-function configText6(value) {
+function configText7(value) {
   return typeof value === "string" ? value.trim() : "";
 }
-function applyCustom(adapter8, req, ctx) {
-  if (typeof adapter8.signRequest !== "function") {
-    throw new Error(adapter8.descriptor.name + " \u58F0\u660E\u4E86\u81EA\u5B9A\u4E49\u7B7E\u540D\uFF0C\u4F46\u9002\u914D\u5668\u6CA1\u6709\u5B9E\u73B0 signRequest");
+function applyCustom(adapter9, req, ctx) {
+  if (typeof adapter9.signRequest !== "function") {
+    throw new Error(adapter9.descriptor.name + " \u58F0\u660E\u4E86\u81EA\u5B9A\u4E49\u7B7E\u540D\uFF0C\u4F46\u9002\u914D\u5668\u6CA1\u6709\u5B9E\u73B0 signRequest");
   }
   const out = { ...req, headers: { ...req.headers } };
-  adapter8.signRequest(out, ctx);
+  adapter9.signRequest(out, ctx);
   return out;
 }
 function applyHeaderSecrets(req, mode, ctx, vendorName) {
@@ -12234,11 +12507,11 @@ function withToken(req, token, prefix) {
   if (!replaced) headers["Authorization"] = prefix + token;
   return { ...req, headers };
 }
-async function resolveToken(adapter8, mode, ctx, deps2, cache) {
+async function resolveToken(adapter9, mode, ctx, deps2, cache) {
   const exchange = mode.exchange;
-  const name = adapter8.descriptor.name;
+  const name = adapter9.descriptor.name;
   if (exchange === void 0) throw new Error(name + " \u7F3A\u5C11\u6362 token \u8BF7\u6C42\u58F0\u660E");
-  const cacheKey2 = tokenCacheKey(adapter8.descriptor, ctx);
+  const cacheKey2 = tokenCacheKey(adapter9.descriptor, ctx);
   const cached = cache.get(cacheKey2);
   if (cached !== void 0 && cached.expiresAt > Date.now()) return cached.token;
   const response = await deps2.send(buildExchangeRequest(name, exchange, ctx));
@@ -12249,10 +12522,10 @@ async function resolveToken(adapter8, mode, ctx, deps2, cache) {
   });
   return token.token;
 }
-function tokenCacheKey(descriptor8, ctx) {
+function tokenCacheKey(descriptor9, ctx) {
   const parts = Object.keys(ctx.secrets).sort().map((key) => key + "=" + (ctx.secrets[key] ?? ""));
   const fingerprint = createHash5("sha256").update(parts.join("\n"), "utf8").digest("hex").slice(0, 16);
-  return descriptor8.id + "|" + configText6(ctx.config["baseUrl"]) + "|" + fingerprint;
+  return descriptor9.id + "|" + configText7(ctx.config["baseUrl"]) + "|" + fingerprint;
 }
 function buildExchangeRequest(vendorName, exchange, ctx) {
   const roots = {
@@ -12340,15 +12613,15 @@ function hasHeader(headers, name) {
   return Object.keys(headers).some((key) => key.toLowerCase() === lower);
 }
 async function dispatchRpaRecord(input) {
-  const { adapter: adapter8, ctx, deps: deps2, buildDeps } = input;
-  const descriptor8 = adapter8.descriptor;
+  const { adapter: adapter9, ctx, deps: deps2, buildDeps } = input;
+  const descriptor9 = adapter9.descriptor;
   try {
-    const built = typeof adapter8.buildRequest === "function" ? await adapter8.buildRequest(ctx, buildDeps) : renderRequest(descriptor8, ctx);
-    assertHostAllowed(descriptor8, ctx.config, built.url);
-    const authDeps = { send: (tokenReq) => sendRequest(tokenReq, deps2, descriptor8.retry) };
-    const authed = await applyAuth(adapter8, withContentType(built), ctx, authDeps);
-    const response = await sendRequest(authed, deps2, descriptor8.retry);
-    return outcomeOf(parseResponse(adapter8, response, ctx));
+    const built = typeof adapter9.buildRequest === "function" ? await adapter9.buildRequest(ctx, buildDeps) : renderRequest(descriptor9, ctx);
+    assertHostAllowed(descriptor9, ctx.config, built.url);
+    const authDeps = { send: (tokenReq) => sendRequest(tokenReq, deps2, descriptor9.retry) };
+    const authed = await applyAuth(adapter9, withContentType(built), ctx, authDeps);
+    const response = await sendRequest(authed, deps2, descriptor9.retry);
+    return outcomeOf(parseResponse(adapter9, response, ctx));
   } catch (e) {
     return { status: "failed", error: errorText4(e) };
   }
@@ -12364,9 +12637,9 @@ function withContentType(req) {
   if (hasHeader(req.headers, "content-type")) return req;
   return { ...req, headers: { ...req.headers, "content-type": req.contentType } };
 }
-function parseResponse(adapter8, response, ctx) {
-  if (typeof adapter8.parseResponse === "function") return adapter8.parseResponse(response, ctx);
-  return parseGenericResponse(adapter8.descriptor.response, response);
+function parseResponse(adapter9, response, ctx) {
+  if (typeof adapter9.parseResponse === "function") return adapter9.parseResponse(response, ctx);
+  return parseGenericResponse(adapter9.descriptor.response, response);
 }
 function parseGenericResponse(spec, response) {
   const json = parseJsonOrUndefined(response.bodyText);
@@ -12426,7 +12699,7 @@ function idTextOf(value) {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return "";
 }
-function assertHostAllowed(descriptor8, config, rawUrl) {
+function assertHostAllowed(descriptor9, config, rawUrl) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -12437,7 +12710,7 @@ function assertHostAllowed(descriptor8, config, rawUrl) {
     throw new Error("\u8BF7\u6C42\u5730\u5740\u5FC5\u987B\u662F http/https \u5730\u5740");
   }
   const host = url.hostname.toLowerCase();
-  const governance = descriptor8.governance;
+  const governance = descriptor9.governance;
   if (governance.hosts.length === 0) return;
   if (governance.hosts.some((rule) => hostMatches(host, rule.kind, rule.value))) return;
   if (governance.allowCustomBaseUrl === true) {
@@ -12553,18 +12826,18 @@ async function dispatchTaskCallback(decryptedDir, decodedDir, triggerId, deps2) 
   if (record === void 0) return skipped("\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728");
   if (task === void 0) return skipped("\u4EFB\u52A1\u4E0D\u5B58\u5728\u6216\u5DF2\u5220\u9664");
   if (task.status !== "ready") return skipped("\u4EFB\u52A1\u672A\u5B8C\u5584");
-  const adapter8 = findVendor(task.triggerMethod);
-  if (adapter8 === void 0) return skipped("\u89E6\u53D1\u65B9\u5F0F\u4E0D\u53EF\u7528\uFF1A" + task.triggerMethod);
-  const missing = missingReadyFields(adapter8.descriptor, task.triggerConfig, task.triggerSecretSet);
+  const adapter9 = findVendor(task.triggerMethod);
+  if (adapter9 === void 0) return skipped("\u89E6\u53D1\u65B9\u5F0F\u4E0D\u53EF\u7528\uFF1A" + task.triggerMethod);
+  const missing = missingReadyFields(adapter9.descriptor, task.triggerConfig, task.triggerSecretSet);
   if (missing.length > 0) return skipped("\u89E6\u53D1\u914D\u7F6E\u4E0D\u5B8C\u6574\uFF1A" + missing.join("\u3001"));
   const gated = deps2.gate("task_callback", { sessions: 1, messages: 1 }, [record.text]);
   const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text;
-  const text = adapter8.descriptor.governance.contentOutbound ? gatedText : "";
+  const text = adapter9.descriptor.governance.contentOutbound ? gatedText : "";
   const ctx = buildInvocationContext(task, record, target.secrets ?? {}, text);
   let outcome;
   try {
     outcome = await dispatchRpaRecord({
-      adapter: adapter8,
+      adapter: adapter9,
       ctx,
       deps: deps2.fetchImpl === void 0 ? {} : { fetchImpl: deps2.fetchImpl },
       buildDeps: { decodedDir, decodeImage: deps2.decodeImage }
@@ -39608,7 +39881,7 @@ function buildQueryPlan(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
   const normalized = normalizeQuestion(input.question);
   const recency = RECENCY_RE2.test(normalized);
-  const contentText = stripTimeExpr(normalized);
+  const contentText2 = stripTimeExpr(normalized);
   const plannedPhrases = [];
   for (const q of input.subQueries ?? []) {
     const t = normalizeQuestion(stripTimeExpr(q));
@@ -39616,7 +39889,7 @@ function buildQueryPlan(input) {
     if (plannedPhrases.length >= 4) break;
   }
   const planned = (input.subQueries ?? []).flatMap((q) => extractAskTerms(stripTimeExpr(q)));
-  const fallback = extractAskTerms(contentText);
+  const fallback = extractAskTerms(contentText2);
   const baseTerms = [];
   const seen = /* @__PURE__ */ new Set();
   for (const t of [...plannedPhrases, ...planned, ...fallback]) {
@@ -39649,7 +39922,7 @@ function buildQueryPlan(input) {
   pushVariant(normalized);
   for (const s of input.subQueries ?? []) pushVariant(normalizeQuestion(s));
   if (synonyms.length > 0) pushVariant(synonyms.slice(0, 4).join(" "));
-  const timeBrowse = contentResidue(contentText).length === 0;
+  const timeBrowse = contentResidue(contentText2).length === 0;
   return { original: input.question, normalized, terms, variants, entity, from, to, timeHard, recency, timeBrowse };
 }
 

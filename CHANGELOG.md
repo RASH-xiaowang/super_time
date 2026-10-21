@@ -127,6 +127,25 @@
   - API：新增 `@Remote('revealTaskTriggerSecret')`，方法面 **218 → 219**；`docs/API.md` 已重生成，
     `docs:api:check` 219。
 
+### 任务信息：八爪鱼 MCP 工具触发方式（2026-10-21 v27）
+
+- **新增第 8 个厂商「八爪鱼 RPA（MCP）」（实验性）**（2026-10-21，用户要求）：任务编辑抽屉的
+  触发方式目录里新增同厂第二条通道 —— 八爪鱼官方 **MCP Server**（`POST https://mcp-rpa.bazhuayu.com/mcp`，
+  JSON-RPC `tools/call → automation_call`，响应 SSE）。配置字段：**应用 ID（automation id，
+  形如 `flow_registration_<FlowId>`，必填）**、API Key（secret，必填）、机器人 ID（可选、高级）、
+  附加参数（paramList，11 来源，默认 `{}`）。成功后返回的 **runId** 落 `external_task_id`；
+  失败从 `result.isError` 的 Markdown 提取 `Error Code` / `Error Message` 展示；无幂等键
+  **只发 1 次**；**不发图片**。
+  - 与开放 API 的关系：**两条并存链路，不是替换** —— 开放 API 的机器人调度属企业版能力
+    （个人版 `FeatureIsDisabled`）；MCP 工具个人版也能调，但**机器人需有执行权益**。
+    实测结论（2026-10-21，真实 API Key）：`tools/list` / `automation_details` / `bot_online_list`
+    均 200；`automation_call` 当前返回 `BotFeatureIsDisabled`（账号侧限制，协议链路已验证通）。
+  - 隐私：**新增出网主机 `mcp-rpa.bazhuayu.com`**（固定，不允许自定义基址），`PRIVACY_VERSION`
+    由 26 升至 **27**、要求重新同意；`docs/PRIVACY.md` G3 目的地/附加参数/网络细节、同意屏
+    出网清单、`docs/TASK-CENTER.md` §2/§3.2/§6.4/§6.5/§7/§10/§12/§13、
+    `docs/RPA-VENDOR-TRIGGERS.md` §3.2 已同步。
+  - API：**无新 Remote**，方法面仍 **219**；`docs:api:check` 219。
+
 ### 待归类
 
 - 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。

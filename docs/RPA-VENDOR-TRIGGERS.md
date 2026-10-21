@@ -1,12 +1,14 @@
 # 多 RPA 厂商可选触发方案（调研 + 设计）
 
 > 状态：**已实现（2026-10-21）**：S0 抽象重构（Webhook / 八爪鱼迁入注册表 + 通用管道 +
-> `listRpaVendors` + 描述符驱动 UI）+ **7 个适配器**（内置 `webhook` / `bazhuayu`，新增
-> `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）；其中 **`aliyun-rpa` / `laiye` /
-> `shizai` 为实验性**（参数待联调，见第 6 节风险）。**回调接收端 / 完成状态轮询 / 入站触发为后续**
-> （v1 只到「厂商已受理」，`externalTaskId` 落库供后续扩展）。旧任务行为不变。
+> `listRpaVendors` + 描述符驱动 UI）+ **8 个适配器**（内置 `webhook` / `bazhuayu`，新增
+> `bazhuayu-mcp` / `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）；其中
+> **`bazhuayu-mcp` / `aliyun-rpa` / `laiye` / `shizai` 为实验性**（参数待联调 / 待开通执行权益，见 §6）。
+> **回调接收端 / 完成状态轮询 / 入站触发为后续**（v1 只到「厂商已受理」，`externalTaskId` 落库供后续扩展）。
+> 旧任务行为不变。
 > 2026-10-21 追加**八爪鱼附加参数**（`mapping.extrasField` 通用机制，隐私 v25）；同日
-> **v1.2.0 移除内置三参数**（`mapping.targets: []` = extras-only，默认 `Params: {}`，参数全部由用户在「附加参数」里显式配置）。
+> **v1.2.0 移除内置三参数**（`mapping.targets: []` = extras-only，默认 `Params: {}`，参数全部由用户在「附加参数」里显式配置）；
+> 同日新增**八爪鱼 RPA（MCP 工具）**通道（第 8 个适配器，`mcp-rpa.bazhuayu.com`，隐私 v27，见 §3.2）。
 > 调研/核对时间：**2026-10-21（Asia/Shanghai）**。参数、鉴权、回调的原始证据见第 5 节与各厂商小节内引用链接。
 > 背景：任务信息此前只有 `Webhook` 与 `八爪鱼 RPA` 两种触发方式（见 [`TASK-CENTER.md`](TASK-CENTER.md)）。
 > 本方案把它推广为「**统一触发方式选择 + 厂商适配器注册表**」：新增厂商不改核心派发逻辑，只加一份厂商描述。
@@ -17,14 +19,14 @@
 |---|---|---|
 | 共享类型（公开） | [`../src/backend/wechat-data/src/types-rpa.ts`](../src/backend/wechat-data/src/types-rpa.ts) | `RpaVendorDescriptor` / `RpaField` / `RpaVendorCatalog` / `RpaTriggerConfig` 等（`build:types` 后给前端用） |
 | 运行时契约 | [`../src/backend/wechat-data/src/query/rpa/types.ts`](../src/backend/wechat-data/src/query/rpa/types.ts) | `RpaVendorAdapter`、请求/响应、派发上下文（不进公开 d.ts） |
-| 注册表 | `src/backend/wechat-data/src/query/rpa/registry.ts` | 内置 + 5 家厂商的适配器数组（顺序即 UI 顺序）+ `listVendorDescriptors` |
+| 注册表 | `src/backend/wechat-data/src/query/rpa/registry.ts` | 8 个适配器的数组（顺序即 UI 顺序：`webhook` / `bazhuayu` / `bazhuayu-mcp` / `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）+ `listVendorDescriptors` |
 | 通用管道 | `src/backend/wechat-data/src/query/rpa/dispatch.ts` | 本域**唯一**出网函数 `sendRequest` + `dispatchRpaRecord`（主机白名单/鉴权/重试/解析） |
 | 字段校验与渲染 | `src/backend/wechat-data/src/query/rpa/template.ts` | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` 等 |
 | 鉴权 | `src/backend/wechat-data/src/query/rpa/auth.ts` | bearer / header / token-exchange / custom（阿里云签名） |
-| 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
+| 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `bazhuayu-mcp` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
 | Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors` / `revealTaskTriggerSecret`（`@Remote` 方法数 217 → **219**） |
 
-> 隐私与文档口径：`PRIVACY_VERSION` 26、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
+> 隐私与文档口径：`PRIVACY_VERSION` **27**、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
 > [`TASK-CENTER.md`](TASK-CENTER.md) §3.5/§6；出网台账登记 `query/rpa/dispatch.ts#sendRequest`。
 > 设计文档以下内容保留为**调研与设计依据**（不随实现状态更新而删除）。
 
@@ -119,6 +121,10 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 
 **Microsoft Power Automate（备选）** — 外部只能说 POST「预生成的 SAS 触发器 URL」；官方明确 `api.flow.microsoft.com` 不受支持、管理连接器无 Run Flow；桌面流必须云端流中转；无原生完成回调；SAS 轮换只能浏览器 DevTools 手工做。只建议「实验性/第二阶段」，不作为默认选项。
 
+**八爪鱼 RPA（MCP 工具，实验性）** — 与同厂开放 API 并存的第二条通道（`mcp-rpa.bazhuayu.com/mcp`，JSON-RPC + SSE，见 §3.2）：客户端「开放能力（AI）→ MCP 工具」添加应用后可用，个人版也能调；代价是**机器人需有执行权益**（实测 `automation_call` 返回 `BotFeatureIsDisabled`），且 `automationId` 不是裸 FlowId、工具契约随官方升级。适合「个人版 / 已开通 MCP 工具、能接受实验性」的客户。
+
+> 实现注册表共 **8 个适配器**（顺序：`webhook` / `bazhuayu` / `bazhuayu-mcp` / `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`），其中 `bazhuayu-mcp` / `aliyun-rpa` / `laiye` / `shizai` 为 `experimental`。
+
 ---
 
 ## 3. 各厂商触发参数清单
@@ -155,7 +161,75 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [授权](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/authorization) ·
 [Webhook 触发器](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/webhook-trigger)。
 
-### 3.2 影刀 RPA（建议 P0）
+### 3.2 八爪鱼 RPA（MCP 工具，实验性；2026-10-21 实测）
+
+**与 §3.1 的关系**：这是八爪鱼官方的**第二条触发通道**（官方 MCP Server），与开放 API **并存、不互相替代**：
+开放 API 的机器人调度属企业版能力（个人版会 `FeatureIsDisabled`）；MCP 工具在八爪鱼客户端「开放能力（AI）→
+MCP 工具」里添加应用后即可调用，个人版也能用（但**机器人需有执行权益**，否则 `BotFeatureIsDisabled`）。
+
+**触发 API**：`POST https://mcp-rpa.bazhuayu.com/mcp`（固定主机，不允许自定义基址），JSON-RPC 2.0 over HTTP；
+响应是 **SSE**（`Content-Type: text/event-stream`，每行 `data: {…}` 一个 JSON-RPC 消息）。
+**鉴权**：`X-API-Key: <八爪鱼 API Key>`（与 §3.1 同一套 API Key，客户端「开放能力（AI）→ API Key」生成）；
+另需 `Accept: application/json, text/event-stream`。
+
+**（a）工具契约（2026-10-21 用真实 API Key 实测）**
+
+- `tools/list` 返回：`automation_search` / `automation_details` / `automation_call` / `automation_run_status` / `automation_run_stop` / `bot_online_list`。
+- 触发用 `tools/call` → 工具 `automation_call`，`arguments = { id, parameters, botId? }`：
+  - `id`：MCP 侧**应用 id**（automation id，通常形如 `flow_registration_<FlowId>`，**不是裸 FlowId**；可用 `automation_search` / `automation_details` 查到）；
+  - `parameters`：对象，键值对即应用入参（默认 `{}`）；
+  - `botId`：可选；留空 = 由八爪鱼自动选择可用机器人（可先用 `bot_online_list` 查）。
+- 成功：`result.isError` 缺失 / false，正文（`result.content[].text`，Markdown）里给 **runId**（也可能在 `result.structuredContent.runId`）→ 本应用落 `external_task_id`；runId 只代表「已受理运行」。
+- 失败：`result.isError=true`，Markdown 正文给 `Error Code` / `Error Message`（适配器已提取成可读错误，如 `BotFeatureIsDisabled：…`）；JSON-RPC 层错误看 `error.message`；HTTP 非 200 时展示状态码 + 可提取详情。
+- 无幂等键 → **只发 1 次**（避免重复启动应用），失败人工「重新投递」。
+- **不发图片**（任务里的 `photoLimit` 对它不生效）。
+
+**实测结论（2026-10-21）**：`tools/list`、`automation_details`、`bot_online_list` 均 200；`automation_call` 当前返回
+`BotFeatureIsDisabled` —— **协议链路已验证通**，失败原因是**个人版机器人没有执行权益**（账号侧限制；与开放 API 的
+`FeatureIsDisabled` 属同一根因）。如实记录，不宣称「已能跑通执行」。
+
+**（b）本产品配置字段**
+
+| 显示名 | 配置键 | 类型 | 必填 | 默认 / 示例 | 说明 |
+|---|---|---|---|---|---|
+| 应用 ID（automation id） | `automationId` | string | 是 | `flow_registration_6ad859ccee2df270d53fc6e5` | MCP 侧应用 id；**不要填裸 FlowId**；随任务配置返回 |
+| API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 `X-API-Key` 头，**不参与参数** |
+| 机器人 ID | `botId` | string（高级） | 否 | — | 留空 = 自动选择；可先用 `bot_online_list` 查到再填 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | `automation_call.parameters` 的键值对（默认 `{}`）；最多 20 条，11 种值来源（见 §4.3）；要发会话名 / 触发文本 / 触发对象就各加一条 |
+
+**请求示例**（`id` 是本次派发标识 `taskId:recordId`）：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "12:87",
+  "method": "tools/call",
+  "params": {
+    "name": "automation_call",
+    "arguments": {
+      "id": "flow_registration_6ad859ccee2df270d53fc6e5",
+      "parameters": { "room_name": "项目群", "content": "王工，最新报价请今天发我" },
+      "botId": "bot_xxx"
+    }
+  }
+}
+```
+
+**响应示例（SSE，节选）**：
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"**Run ID:** `run_abc123`"}],"structuredContent":{"runId":"run_abc123"},"isError":false}}
+```
+
+失败示例（`isError=true` 的正文是 Markdown）：`**Error Code:** `BotFeatureIsDisabled`` / `**Error Message:** 机器人执行权益未开通…`。
+
+**来源与核对（2026-10-21）**：
+[MCP 工具（应用管理）](https://rpa.bazhuayu.com/helpcenter/features/app-management/mcp-tools) ·
+[MCP 接入指南](https://rpa.bazhuayu.com/mcp-guide)。
+**风险**：high｜个人版机器人执行权益（`BotFeatureIsDisabled`，协议通但执行被账号限制）；medium｜工具名 / 参数 / 响应随官方升级变化（SSE 契约按 2026-10-21 `tools/list` 实测实现）；medium｜`automationId` 不是裸 FlowId，填错会提示找不到应用。
+
+### 3.3 影刀 RPA（建议 P0）
 
 **触发 API**：`POST https://api.yingdao.com/oapi/dispatch/v2/job/start`（单应用；另有 `/v2/task/start` 调度任务）。
 **鉴权**：先 `GET https://api.yingdao.com/oapi/token/v2/token/create?accessKeyId=…&accessKeySecret=…` 换 `accessToken`（最大 2 小时，`expiresIn` 秒，不要自定缓存）；调 API 带 `Authorization: Bearer <token>`。
@@ -201,7 +275,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [限流说明](https://www.yingdao.com/yddoc/rpa/zh-CN/912893828744491008)。
 **风险**：high｜回调无鉴权（只当信号）；high｜开通门槛（社区有「只有企业版才可调 API?」未获官方答复）与专有云地址未给 → base URL 可配；medium｜`waitTimeout` 即将作废、`runTimeout` 依赖客户端 5.10+、参数体积按版本分档。
 
-### 3.3 实在智能 RPA（P2，先联调）
+### 3.4 实在智能 RPA（P2，先联调）
 
 **触发 API**：推荐「预建任务 + 每次触发」`POST https://z-commander-api.ai-indeed.com/openAPI/v2/job/operation`（since 1.8.0，返回 `works[].workUuid`）；降级 `PUT /openAPI/v1/job/{jobUuid}/{operation}`；新建任务 `POST /openAPI/v1/job`。
 **鉴权**：`appKey` + `appSecret`「随 header 传递」——**官方未给 header 字段名**（实测未登录响应也不提示）。
@@ -247,7 +321,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [消息中心](https://rpa-college.ai-indeed.com/doc/77.html)。
 **风险**：high｜鉴权 header 名缺失（blocker，必须联调确认）；high｜无回调 + 无幂等（重试会重复建任务/重复执行 → 适配器禁止 POST 自动重试）；medium｜`inputParam` 受流程模板约束、接口能力随控制器版本（1.7.3.1 / 1.8.0）变化、文档较旧。
 
-### 3.4 来也 RPA（P2，先商务/联调）
+### 3.5 来也 RPA（P2，先商务/联调）
 
 **触发通道**：①（目标形态）机器人指挥官 **OpenAPI 创建任务**——官方文档**不公开**（发行说明原文要求联系销售）；②（公开可落地）**MCP 服务** `POST {基址}/automation/mcp`，工具 `create_task` / `query_task_result` / `get_task_templates`。
 **鉴权**：MCP 个人令牌 `Authorization: Bearer rk-{CompanyOpenId}-{randomString}`（有效期未公开，可重置/删除，重置即失效）。
@@ -291,7 +365,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [历史应用管理（V6.0.0.2211）](https://documents.laiye.com/automation-commander/docs/V6.0.0.2211/应用管理)。
 **风险**：high｜OpenAPI 创建任务契约未公开（需商务索取 + 联调）；high｜回调契约缺失（只能轮询兜底）；medium｜无入站 API 触发器（仅时间/队列触发器）；medium｜版本差异大（6.0→6.7 菜单与端点多次变化）；medium｜MCP 响应需二次/三次 JSON 解析、示例域名带 8182 端口。
 
-### 3.5 UiPath Orchestrator（P1）
+### 3.6 UiPath Orchestrator（P1）
 
 **触发 API**：`POST {AutomationCloudURL}/{organizationName}/{tenantName}/orchestrator_/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs`。
 **鉴权**：PAT（`Authorization: Bearer <PAT>`；仅本地用户，撤销后缓存 1 小时）或 OAuth2 外部应用（client_credentials，令牌端点 `https://cloud.uipath.com/{org}/identity_/connect/token`，`expires_in=3600`，无 refresh）；权限 `Jobs.Create`；新式文件夹需传 `X-UIPATH-OrganizationUnitId`（或 `X-UIPATH-FolderKey`/`X-UIPATH-FolderPath`/`X-UIPATH-FolderPath-Encoded`）。
@@ -339,7 +413,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [管理 API 触发器](https://docs.uipath.com/orchestrator/automation-cloud/latest/user-guide/managing-api-triggers)。
 **风险**：high｜Webhook 不可靠（必须轮询补偿）；high｜StartJobs 无字段级必填表（需实例 Swagger 二次取证）；medium｜Cloud 与 Standalone 私有化 URL/租户头差异未取证（需客户实例联调）；medium｜PAT 不适用目录/SAML 用户 → 企业客户主推 OAuth 外部应用；medium｜InputArguments ≤10,000 字符、Jobs 列表限流 100/1,000 每分钟。
 
-### 3.6 阿里云 RPA（P1，POC 后）
+### 3.7 阿里云 RPA（P1，POC 后）
 
 **触发 API（两套，大小写敏感，不可混用）**：
 - 服务型：`POST https://console-rpa.aliyun.com/rpa/openapi/raas/task/CreateTask`（参数首字母大写）；
@@ -389,7 +463,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 [v3 停止服务](https://help.aliyun.com/zh/rpa/product-overview/v3-version-out-of-service-and-replacement-schedule)。
 **风险**：high｜回调无签名（必须随机路径+token+`taskId` 比对+`ListTaskDetails` 二次核对）；high｜官方示例矛盾（body/query 签名位置、Python/Java 不一致、Content-Type 拼写错误）→ POC 前不能标「已支持」；medium｜两套 API 易混（大小写敏感）；medium｜成本与开通门槛高（5,000 元/机器人授权/年起 + 编辑器授权；服务型需无影云电脑 + 主账号授权）。
 
-### 3.7 Power Automate（备选，实验性）
+### 3.8 Power Automate（备选，实验性）
 
 - 触发：`POST <预生成的 HTTP 触发器 URL>`（URL 含 `api-version=2016-06-01&sp=…&sv=1.0&sig=…`，SAS 即凭据）；请求体 JSON Schema 由流程作者定义；入站请求 120 秒上限；同步 Response 需流程里加 Response 动作。
 - 鉴权：URL 内 SAS；或把触发器限制为租户用户后额外带 Bearer（audience 需精确匹配云区，如 `https://service.flow.microsoft.com/`）。
@@ -399,7 +473,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 - 来源与核对（2026-10-21）：HTTP 触发器 OAuth <https://learn.microsoft.com/en-us/power-automate/oauth-authentication>（2026-04-29）；SAS 轮换 <https://learn.microsoft.com/en-us/power-automate/regenerate-sas-key>（2024-09-27）；限制 <https://learn.microsoft.com/en-us/power-automate/limits-and-config>（2026-07-18）；云端流调度桌面流 <https://learn.microsoft.com/en-us/power-automate/desktop-flows/trigger-desktop-flows>（2026-05-06）；管理连接器 <https://learn.microsoft.com/en-us/connectors/flowmanagement/>；不受支持的 API <https://learn.microsoft.com/en-us/power-automate/manage-flows-with-code>（2024-10-29）。
 - 结论：**不纳入默认支持**；若目标客户大量使用 Power Platform，再按「流程末尾回调我们」落地。
 
-### 3.8 入站方向：厂商提供的「第三方触发 URL」
+### 3.9 入站方向：厂商提供的「第三方触发 URL」
 
 | 厂商 | 入站触发器 | 参数传递 | 鉴权 | 说明 |
 |---|---|---|---|---|
@@ -569,7 +643,7 @@ export interface RpaField {
 描述符可在 `mapping.mapField` + `mapping.targets` 之外声明 `extrasField`，指向一个
 `type:'paramList'` 的配置字段（如八爪鱼 `extraParams`）。用户在表单里逐条配置
 「参数名 → 值来源」，投递时由通用管道解析成最终字符串，**追加在语义参数之后**
-（同一个参数容器；顺序 = 用户排列顺序）。若 `mapping.targets` 为空（八爪鱼 v1.2.0），
+（同一个参数容器；顺序 = 用户排列顺序）。若 `mapping.targets` 为空（八爪鱼 RPA / 八爪鱼 MCP），
 该容器**只含附加参数**（默认 `{}`），即「extras-only」形态。
 
 ```ts
@@ -675,7 +749,7 @@ const yingdao: RpaVendorAdapter = {
 | `${invocation.xxx}` | `${invocation.idempotencyKey}` | 本次派发标识（`taskId:recordId`） |
 | `${mapped.xxx}` | `${mapped.object}` / `${mapped.nameValueArray}` | 按 `mapping.style` 生成的参数容器 |
 
-**参数容器的 5 种形态**（覆盖本次 5 家厂商 + 八爪鱼）：
+**参数容器的 5 种形态**（覆盖本次 5 家厂商 + 八爪鱼（开放 API / MCP））：
 
 | style | 形态 | 厂商 |
 |---|---|---|
@@ -739,7 +813,8 @@ src/backend/wechat-data/src/query/rpa/
   template.ts              # 占位符渲染、参数容器映射、校验
   vendors/
     webhook.ts             # 内置
-    bazhuayu.ts            # 内置（迁移现有实现）
+    bazhuayu.ts            # 内置（开放 API；迁移现有实现）
+    bazhuayu-mcp.ts        # 八爪鱼 MCP 工具（实验性；JSON-RPC + SSE 钩子）
     yingdao.ts             # 新增厂商 = 本文件（descriptor + 可选 auth/sign/parse 钩子）
     uipath.ts
     aliyun-rpa.ts
@@ -783,7 +858,7 @@ for (const adapter of RPA_VENDORS) {
 | 出网目的地 | 描述符声明 `hosts`；通用管道校验 `url` 的 host 在允许清单内（固定域名或 `*.厂商域` 模板）；私有化自定义 base URL 需用户显式勾选「私有化地址」并受「禁止 localhost/私网」默认策略约束（与现有 Webhook 的 http/https 口径衔接） |
 | 隐私版本 | 新增厂商=新增内容出网点 → `PRIVACY_VERSION` +1 并重新同意；同意屏出网清单补「任务触发（Webhook / 你选择的 RPA 厂商）」，具体主机以 `docs/PRIVACY.md` G3 为准 |
 | 出网台账 | 通用管道只有一个 `fetch` 调用点；台账登记该点，并在 `why` 里说明「主机来自注册表描述符，逐家已登记隐私声明」；新增厂商触发 `outbound-site-coverage` 的注册表一致性守卫（描述符 hosts ⊆ 隐私文档） |
-| 幂等/重试 | 仅 `idempotency='vendor-key'`（影刀/阿里云）允许网络/5xx 自动重试；`none`（实在/来也/UiPath/PA）默认**不自动重试**，失败留给人工「重新投递」；重试前先查本地派发记录防重复 |
+| 幂等/重试 | 仅 `idempotency='vendor-key'`（影刀/阿里云）允许网络/5xx 自动重试；`none`（八爪鱼开放 API / 八爪鱼 MCP / 实在/来也/UiPath/PA）默认**不自动重试**，失败留给人工「重新投递」；重试前先查本地派发记录防重复 |
 | 入站 | 默认不监听；仅在用户显式开启「局域网访问」后挂回调/触发端点；每厂商鉴权策略独立，无签名厂商的 payload 不得直接写业务状态 |
 
 ### 4.9 迁移计划（分阶段，可回滚）
@@ -856,7 +931,7 @@ for (const adapter of RPA_VENDORS) {
 
 ## 7. 待产品决策的开放问题
 
-1. **是否要入站触发（厂商 → 本应用）**：需要用户显式开启入站通道（PRIVACY §H），默认关闭；若要做，建议先统一入口协议再谈厂商差异（§3.8）。
+1. **是否要入站触发（厂商 → 本应用）**：需要用户显式开启入站通道（PRIVACY §H），默认关闭；若要做，建议先统一入口协议再谈厂商差异（§3.9）。
 2. **凭据归属**：按任务独立配置（当前设计），还是增加「厂商账号」全局配置、任务只引用？前者简单、后者便于轮换（UiPath OAuth/影刀 token 都有过期语义，倾向后者作为后续演进）。
 3. **完成状态的产品语义**：`sent`（已受理）与 `completed`（执行完成）是否需要向用户区分展示？本方案建议区分（厂商能力不同，不能假装都一样）。
 4. **长文本/图片**：影刀参数 ≤8000、UiPath InputArguments ≤10,000、阿里云 AppParams ≤40KB；超限时截断还是走「文件/Storage Bucket/OSS」？首版建议截断并在记录里标注。

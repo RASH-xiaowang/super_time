@@ -65,13 +65,14 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   // 每家厂商的出网主机（固定主机 + 可配置实例地址）与「不发图片 / 实验性」口径。
   ok(html.includes('多家 RPA 厂商'), '没有说明任务触发的多厂商方式')
   for (const host of [
-    'api-rpa.bazhuayu.com', 'api.yingdao.com', 'console-rpa.aliyun.com',
+    'api-rpa.bazhuayu.com', 'mcp-rpa.bazhuayu.com', 'api.yingdao.com', 'console-rpa.aliyun.com',
     'z-commander-api.ai-indeed.com', 'cloud.uipath.com', 'uipath.com', 'laiye.com',
   ]) {
     ok(html.includes(host), `没有点明 RPA 厂商的出网主机：${host}`)
   }
   ok(html.includes('实例地址'), '没有说明 UiPath / 来也 / 私有化部署用你配置的实例地址')
   ok(html.includes('实验性'), '没有说清阿里云 / 来也 / 实在为实验性接入')
+  ok(html.includes('八爪鱼 RPA（MCP）'), '没有说明八爪鱼 MCP 这条实验性通道')
   ok(html.includes('不发图片'), '没有说清 RPA 厂商方式不发图片')
   // 2026-10-21（v25 / 八爪鱼 v1.2.0）：参数改为全部在「附加参数」里显式配置，默认不发业务参数，
   // 同意屏必须点明「附加参数逐条配置 + 默认不发业务参数 + 值来源 + 不含凭据」。

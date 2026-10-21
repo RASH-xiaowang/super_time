@@ -31,6 +31,7 @@ import type {
 import type { TaskTriggerImage } from '../src/types-taskcenter.ts'
 import { adapter as webhook } from '../src/query/rpa/vendors/webhook.ts'
 import { adapter as bazhuayu } from '../src/query/rpa/vendors/bazhuayu.ts'
+import { adapter as bazhuayuMcp } from '../src/query/rpa/vendors/bazhuayu-mcp.ts'
 import { adapter as yingdao } from '../src/query/rpa/vendors/yingdao.ts'
 import { adapter as uipath } from '../src/query/rpa/vendors/uipath.ts'
 import { adapter as aliyunRpa } from '../src/query/rpa/vendors/aliyun-rpa.ts'
@@ -561,6 +562,76 @@ describe('来也 RPA（experimental，MCP JSON-RPC）', () => {
   })
 })
 
+describe('八爪鱼 MCP 工具（experimental，SSE + automation_call）', () => {
+  const config = {
+    automationId: 'flow_registration_6ad859ccee2df270d53fc6e5',
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+      { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+    ],
+  }
+  const secrets = { apiKey: 'oct_mcp_key_001' }
+
+  it('成功：POST /mcp + X-API-Key + JSON-RPC automation_call；SSE 里解析 runId', async () => {
+    const sse = 'event: message\ndata: {"jsonrpc":"2.0","id":"7:11","result":{"content":[{"type":"text","text":"## ✅ Run started\\n\\nRun ID: run-123456"}]}}\n\n'
+    const transport = createTransport({ status: 200, rawBody: sse })
+    const outcome = await dispatch(bazhuayuMcp, makeCtx(config, secrets), transport.deps)
+    expect(outcome).toEqual({ status: 'sent', externalTaskId: 'run-123456' })
+    expect(transport.calls).toHaveLength(1)
+    const call = transport.calls[0] as HttpCall
+    expect(call.method).toBe('POST')
+    expect(call.url).toBe('https://mcp-rpa.bazhuayu.com/mcp')
+    expect(call.headers['x-api-key']).toBe('oct_mcp_key_001')
+    expect(call.headers['accept']).toContain('text/event-stream')
+    expect(call.body).not.toContain('oct_mcp_key_001')
+    const body = bodyJson(call)
+    expect(body['jsonrpc']).toBe('2.0')
+    expect(body['method']).toBe('tools/call')
+    const params = body['params'] as Record<string, unknown>
+    expect(params['name']).toBe('automation_call')
+    const args = params['arguments'] as Record<string, unknown>
+    expect(args['id']).toBe('flow_registration_6ad859ccee2df270d53fc6e5')
+    expect(args['botId']).toBeUndefined()
+    expect(args['parameters']).toEqual({
+      room_name: '测试群',
+      content: '你好 RPA',
+      at_name: '张三',
+      order_no: 'A-001',
+    })
+  })
+
+  it('工具 isError（BotFeatureIsDisabled）→ failed，错误原因带厂商错误码与说明', async () => {
+    const text = '## ⚠️ Tool Execution Failed\n\n**Error Code:** `BotFeatureIsDisabled`\n\n**Error Message:**\nThe bot assigned to this automation does not have the required feature enabled.'
+    const sse = 'event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: '7:11', result: { isError: true, content: [{ type: 'text', text }] } }) + '\n\n'
+    const transport = createTransport({ status: 200, rawBody: sse })
+    const outcome = await dispatch(bazhuayuMcp, makeCtx(config, secrets), transport.deps)
+    expect(outcome.status).toBe('failed')
+    expect(outcome.error).toContain('BotFeatureIsDisabled')
+    expect(outcome.error).toContain('does not have the required feature enabled')
+    expect(transport.calls).toHaveLength(1)
+  })
+
+  it('未配置应用 ID / API Key → failed（不发请求）', async () => {
+    const transport = createTransport({ status: 200 })
+    const missingId = await dispatch(bazhuayuMcp, makeCtx({ ...config, automationId: '' }, secrets), transport.deps)
+    expect(missingId.status).toBe('failed')
+    expect(missingId.error).toContain('应用 ID')
+    const missingKey = await dispatch(bazhuayuMcp, makeCtx(config, {}), transport.deps)
+    expect(missingKey.status).toBe('failed')
+    expect(missingKey.error).toContain('API Key')
+    expect(transport.calls).toHaveLength(0)
+  })
+
+  it('HTTP 401 → failed，只发 1 次', async () => {
+    const transport = createTransport({ status: 401, body: { error: { message: 'Unauthorized' } } })
+    const outcome = await dispatch(bazhuayuMcp, makeCtx(config, secrets), transport.deps)
+    expect(outcome.status).toBe('failed')
+    expect(outcome.error).toContain('HTTP 401')
+    expect(transport.calls).toHaveLength(1)
+  })
+})
 describe('实在智能 RPA（experimental，header 名待联调）', () => {
   const config = {
     baseUrl: 'https://z-commander-api.ai-indeed.com',

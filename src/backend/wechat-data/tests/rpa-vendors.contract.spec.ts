@@ -24,11 +24,11 @@ import type { RpaField, RpaVendorDescriptor } from '../src/types-rpa.ts'
 import { aliyunRpcSign, canonicalizedQuery, percentEncode } from '../src/query/rpa/vendors/aliyun-rpa.ts'
 
 /** 注册表内固定 id 与顺序（UI 顺序也依赖它）。 */
-const EXPECTED_IDS = ['webhook', 'bazhuayu', 'yingdao', 'uipath', 'aliyun-rpa', 'laiye', 'shizai'] as const
+const EXPECTED_IDS = ['webhook', 'bazhuayu', 'bazhuayu-mcp', 'yingdao', 'uipath', 'aliyun-rpa', 'laiye', 'shizai'] as const
 /** 参数核对日期（契约要求）。 */
 const VERIFIED_AT = '2026-10-21'
 /** 明确要求 experimental 的厂商（官方契约有缺失/待联调）。 */
-const EXPERIMENTAL_IDS = ['aliyun-rpa', 'laiye', 'shizai']
+const EXPERIMENTAL_IDS = ['bazhuayu-mcp', 'aliyun-rpa', 'laiye', 'shizai']
 /** 附加参数允许的值来源（与 `types-rpa.ts` 的 RpaParamSource 同步）。 */
 const PARAM_SOURCE_SET = new Set([
   'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
@@ -176,7 +176,8 @@ describe('厂商描述符契约', () => {
         // 内置 webhook 无凭据；八爪鱼的 Key 直接写进请求模板 header（X-Api-Key: ${secret.apiKey}），
         // 其余厂商必须有可选的鉴权模式声明。
         if (descriptor.auth.modes.length === 0) {
-          expect(['webhook', 'bazhuayu']).toContain(descriptor.id)
+          // 这两家把凭据直接写进请求模板 header；bazhuayu-mcp 同理（X-API-Key）。
+          expect(['webhook', 'bazhuayu', 'bazhuayu-mcp']).toContain(descriptor.id)
         } else {
           expect(descriptor.auth.modes.length).toBeGreaterThan(0)
         }
@@ -325,6 +326,29 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(body['flowId']).toBe('${config.flowId}')
     // 官方返回 flowProcessNo：落 external_task_id 供后续核对。
     expect(descriptor.response.externalTaskIdPath).toBe('flowProcessNo')
+  })
+
+  it('bazhuayu-mcp：官方 MCP /mcp + X-API-Key + automation_call（2026-10-21 实测契约）', () => {
+    const adapter = byId.get('bazhuayu-mcp')
+    const descriptor = descriptorOf('bazhuayu-mcp')
+    // MCP 通道与开放 API 是两条链路：固定 MCP Server，JSON-RPC 调 automation_call。
+    expect(adapter?.buildRequest).toBeTypeOf('function')
+    expect(adapter?.parseResponse).toBeTypeOf('function')
+    expect(descriptor.request.url).toBe('https://mcp-rpa.bazhuayu.com/mcp')
+    expect(descriptor.request.headers?.['X-API-Key']).toBe('${secret.apiKey}')
+    expect(String(descriptor.request.headers?.['Accept'])).toContain('text/event-stream')
+    const automationField = descriptor.fields.find((field) => field.key === 'automationId')
+    expect(automationField?.required).toBe(true)
+    expect(automationField?.secret).toBeUndefined()
+    const apiKeyField = descriptor.fields.find((field) => field.key === 'apiKey')
+    expect(apiKeyField?.ariaLabel).toBe('八爪鱼 API Key')
+    expect(apiKeyField?.secret).toBe(true)
+    // 无内置语义参数：parameters 完全由附加参数组装（默认 {}）。
+    expect(descriptor.mapping.targets).toEqual([])
+    expect(descriptor.mapping.extrasField).toBe('extraParams')
+    // 无幂等键：只发一次。
+    expect(descriptor.retry.maxAttempts).toBe(1)
+    expect(descriptor.governance.hosts).toEqual([{ kind: 'exact', value: 'mcp-rpa.bazhuayu.com' }])
   })
 
   it('yingdao：AK/SK token-exchange + nameValueTypeArray 参数', () => {

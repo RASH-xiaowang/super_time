@@ -12,6 +12,7 @@ import type { RpaVendorAdapter } from './types.ts'
 import type { RpaVendorDescriptor } from '../../types-rpa.ts'
 import { adapter as webhook } from './vendors/webhook.ts'
 import { adapter as bazhuayu } from './vendors/bazhuayu.ts'
+import { adapter as bazhuayuMcp } from './vendors/bazhuayu-mcp.ts'
 import { adapter as yingdao } from './vendors/yingdao.ts'
 import { adapter as uipath } from './vendors/uipath.ts'
 import { adapter as aliyunRpa } from './vendors/aliyun-rpa.ts'
@@ -22,6 +23,7 @@ import { adapter as shizai } from './vendors/shizai.ts'
 export const RPA_VENDORS: RpaVendorAdapter[] = [
   webhook,
   bazhuayu,
+  bazhuayuMcp,
   yingdao,
   uipath,
   aliyunRpa,

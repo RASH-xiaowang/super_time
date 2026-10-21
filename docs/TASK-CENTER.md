@@ -20,9 +20,9 @@
 某位成员）、一组关键词和**触发方式**；任务启用后，系统只检查该对象**新产生**的消息，命中
 关键词就落一条触发记录，再按当前触发方式投递。触发方式来自**后端下发的目录**（默认
 Webhook，其余为注册表里的 RPA 厂商，见 §3.5/§6）：内置 Webhook 把整条记录 POST 到你填的
-地址；内置八爪鱼与新增的影刀 / UiPath / 阿里云 / 来也 / 实在则走同一条**通用出网管道**，
-发该厂商参数映射出的三个语义参数；**八爪鱼 v1.2.0 起没有内置参数**，全部由「附加参数」显式配置。
-触发方式只决定「记录怎么投出去」，不改变
+地址；内置八爪鱼（开放 API）、八爪鱼 MCP（实验性）与新增的影刀 / UiPath / 阿里云 / 来也 / 实在
+则走同一条**通用出网管道**，发该厂商参数映射出的三个语义参数；**八爪鱼（开放 API 与 MCP）
+没有内置参数**，全部由「附加参数」显式配置。触发方式只决定「记录怎么投出去」，不改变
 「任务由微信消息命中驱动」这一事实；任何方式都不能回扫历史。
 
 它不是：
@@ -53,6 +53,7 @@ Webhook，其余为注册表里的 RPA 厂商，见 §3.5/§6）：内置 Webhoo
 | 触发凭据 | 敏感配置 JSON（API Key / AccessKey / PAT / 令牌…），存在 `task_info.trigger_secret`；任务列表 / 触发记录只回 `triggerSecretSet` 布尔；**桌面端本机可在编辑抽屉点眼睛按需回读原文**（`revealTaskTriggerSecret`，见 §3.2/§7） | `TaskInfo.triggerSecretSet` |
 | 内置 Webhook | 触发方式之一：把一条触发记录以 JSON POST 到该任务配置的地址（含图片） | `query/rpa/vendors/webhook.ts` |
 | 内置八爪鱼 RPA | 触发方式之一（v23 新增，v24 起为「内置厂商之一」）：POST 到固定主机 `api-rpa.bazhuayu.com` 的 `/api/v1/bots/scheduling/start`（v1.3.0 修正），用任务里配的 FlowId + API Key（`X-API-Key`）；**v1.2.0 起没有内置三参数，参数全部由「附加参数」显式配置（默认 `params` 为空）**，**不发图片** | `query/rpa/vendors/bazhuayu.ts` |
+| 八爪鱼 RPA（MCP） | 第 8 个适配器（实验性，2026-10-21）：POST `https://mcp-rpa.bazhuayu.com/mcp`，JSON-RPC `tools/call → automation_call`，用任务里配的**应用 ID** + API Key（`X-API-Key`），`parameters` 由「附加参数」组装（默认 `{}`）；成功取 `runId`；**不发图片**，个人版机器人需有执行权益 | `query/rpa/vendors/bazhuayu-mcp.ts` |
 | 通用派发管道 | 与厂商无关的「校验 → 隐私闸 → 渲染 → 鉴权 → 发送 → 解析 → 落状态」；本域**唯一**出网函数 `sendRequest` 在 `query/rpa/dispatch.ts` | `query/rpa/dispatch.ts` |
 | 已完善 | 可参与扫描与投递；必须有关键词 + **当前触发方式**的必填配置/凭据齐全（`missingReadyFields` 为空），群聊还必须选目标成员 | `TaskInfoStatus = 'ready'` |
 | 待完善 | 只保存配置，不扫描、不投递 | `TaskInfoStatus = 'incomplete'` |
@@ -144,6 +145,7 @@ SSR 与 E2E 选择器依赖它。会话与触发对象在这一版不提供换�
 不在目录里时显示「触发方式不可用（厂商已下线）」并禁止保存。目录当前包含：
 
 - **内置**：`Webhook`、`八爪鱼 RPA`（v23 新增，v24 起为内置厂商之一）；
+- **八爪鱼 RPA（MCP）**：同厂第二条通道（第 8 个适配器，**实验性**；见 §6.5）；
 - **新增厂商**：影刀 RPA、UiPath Orchestrator、阿里云 RPA（实验性）、来也 RPA（实验性）、
   实在智能 RPA（实验性）。
 
@@ -161,7 +163,7 @@ SSR 与 E2E 选择器依赖它。会话与触发对象在这一版不提供换�
   `map` 字段（其它厂商，如影刀）渲染 3 个输入（会话名 / 触发文本 / 触发对象，默认 key 来自
   `descriptor.mapping.targets`，标签见 `target.label`）；**八爪鱼 v1.2.0 起没有 `map` 字段**，
   只有下面的「附加参数」。
-- `paramList` 字段（八爪鱼「附加参数」；v1.2.0 起是**唯一参数入口**）渲染为**可增删的参数列表**：
+- `paramList` 字段（八爪鱼 RPA / 八爪鱼 MCP 的「附加参数」；两者唯一参数入口）渲染为**可增删的参数列表**：
   每行 = 参数名输入 + 「值来源」下拉（`field.paramSources` 子集，缺省 11 种：会话名 / 触发文本 /
   触发对象 / 任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 固定值 /
   自定义模板）+ 按来源显示的「固定值」输入或「自定义模板」输入（模板只允许
@@ -495,7 +497,11 @@ v1.2.0 之前八爪鱼会自动把三个语义参数按默认键发出去（`roo
 ```
 
 > 该机制通用：其他厂商后续只需在描述符里声明 `mapping.extrasField`（指向一个
-> `type: 'paramList'` 字段）即可复用；`mapping.targets` 为空的厂商就是「extras-only」形态。
+> `type: 'paramList'` 字段）即可复用；`mapping.targets` 为空的厂商就是「extras-only」形态
+> （八爪鱼 RPA / 八爪鱼 MCP 都是这种形态）。
+>
+> **注意**：八爪鱼 RPA（本节，开放 API）与 **八爪鱼 MCP（§6.5）**是**两条独立链路**，
+> 不是「替换」关系：前者走企业版机器人调度、后者走官方 MCP 工具；同一任务只能选其一。
 
 ### 6.4 厂商目录（`listRpaVendors`）与逐家请求
 
@@ -506,16 +512,79 @@ v1.2.0 之前八爪鱼会自动把三个语义参数按默认键发出去（`roo
 |---|---|---|---|---|---|---|
 | `webhook` | 内置 Webhook | stable | 用户填写的 http(s) 地址 | 整条记录 JSON | 无 | ✅ 含图片 |
 | `bazhuayu` | 八爪鱼 RPA | stable | `api-rpa.bazhuayu.com` | `POST /api/v1/bots/scheduling/start`；camelCase body `flowId` + `params`（附加参数，默认 `{}`）+ **`X-API-Key`**；成功取 `flowProcessNo`；无幂等键不自动重试 | `apiKey` | ❌ 不发 |
+| `bazhuayu-mcp` | 八爪鱼 RPA（MCP） | **实验性** | `mcp-rpa.bazhuayu.com`（固定） | `POST /mcp` + JSON-RPC `tools/call → automation_call`；`id`=应用 ID、`parameters`=附加参数（默认 `{}`）、`botId?`；响应 SSE，成功取 `runId`；无幂等不重试；个人版机器人需执行权益 | `apiKey` | ❌ 不发 |
 | `yingdao` | 影刀 RPA | stable | `api.yingdao.com`（专有云用实例地址） | 先换 token，再 `POST /oapi/dispatch/v2/job/start`；`idempotentUuid` + `params[]` | `accessKeyId` / `accessKeySecret` | ❌ 不发 |
 | `uipath` | UiPath Orchestrator | stable | `cloud.uipath.com`（`*.uipath.com` / `*.uipath.us`）或实例地址 | `POST …/odata/Jobs/…StartJobs`；PAT 或 OAuth（token-exchange）；`startInfo.InputArguments` 为 JSON 字符串 | `pat` 或 `clientId` / `clientSecret` | ❌ 不发 |
 | `aliyun-rpa` | 阿里云 RPA | **实验性** | `console-rpa.aliyun.com`（线下部署用实例地址） | HMAC-SHA1 RPC 签名（custom）；服务型 `CreateTask` / 本地型 `createServiceTask` | `accessKeyId` / `accessKeySecret` | ❌ 不发 |
 | `laiye` | 来也 RPA | **实验性** | `*.laiye.com` 或你配置的 Commander 实例地址 | MCP JSON-RPC：`POST {baseUrl}/automation/mcp`，`tools/call create_task` | `token` | ❌ 不发 |
 | `shizai` | 实在智能 RPA | **实验性** | `z-commander-api.ai-indeed.com`（私有化用实例地址） | `POST /openAPI/v2/job/operation`；`jobUuid` / `operation` / `inputParam`；`retry.maxAttempts=1` | `appKey` / `appSecret` | ❌ 不发 |
 
-> 实验性厂商（阿里云 / 来也 / 实在）的官方契约存在缺口（阿里云签名位置、来也 OpenAPI 文档未公开、
-> 实在鉴权 header 名未公开），参数待联调；UI 会显示 ⚠ 与风险说明，未取得官方原文的字段不编造。
+> 实验性厂商（**八爪鱼 MCP** / 阿里云 / 来也 / 实在）：八爪鱼 MCP 的协议已用真实 API Key 实测通
+> （`tools/list` / `automation_details` / `bot_online_list` 200；`automation_call` 因个人版机器人无执行权益
+> 返回 `BotFeatureIsDisabled`）；阿里云 / 来也 / 实在的官方契约存在缺口，参数待联调。UI 对它们都显示
+> ⚠ 与风险说明，未取得官方原文的字段不编造。
 
-### 6.5 文本隐私闸
+### 6.5 八爪鱼 RPA（MCP 工具，实验性）
+
+与 §6.3 **并存**的第二条八爪鱼通道（官方 MCP Server，`mcp-rpa.bazhuayu.com`）：
+开放 API 的机器人调度属企业版能力（个人版 `FeatureIsDisabled`），MCP 工具在八爪鱼客户端
+「开放能力（AI）→ MCP 工具」里添加应用后即可调用，个人版也能用 —— 但**机器人需有执行权益**，
+否则返回 `BotFeatureIsDisabled`。同一任务只能选一种触发方式。
+
+**配置字段**（`query/rpa/vendors/bazhuayu-mcp.ts`，descriptor 1.0.0）：
+
+| 显示名 | 配置键 | 类型 | 必填 | 说明 |
+|---|---|---|---|---|
+| 应用 ID（automation id） | `automationId` | text | 是 | 形如 `flow_registration_<FlowId>`；**不要填裸 FlowId**；可用 `automation_search` 查 |
+| API Key | `apiKey` | secret | 是 | 与 §6.3 同一套八爪鱼 API Key；只存本机，投递时进 `X-API-Key` |
+| 机器人 ID | `botId` | text（高级） | 否 | 留空 = 自动选择；可先用 `bot_online_list` 查 |
+| 附加参数 | `extraParams` | paramList | 否 | 传给 `automation_call.parameters` 的键值对（默认 `{}`）；最多 20 条，11 种值来源见 §6.3.2 |
+
+**请求**：`POST https://mcp-rpa.bazhuayu.com/mcp`（固定主机，不允许自定义基址）；
+头 `Content-Type: application/json` + `Accept: application/json, text/event-stream` +
+`X-API-Key`；body 是 JSON-RPC 2.0：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "12:87",
+  "method": "tools/call",
+  "params": {
+    "name": "automation_call",
+    "arguments": {
+      "id": "flow_registration_6ad859ccee2df270d53fc6e5",
+      "parameters": { "room_name": "项目群", "content": "王工，最新报价请今天发我" },
+      "botId": "bot_xxx"
+    }
+  }
+}
+```
+
+（`id` = `taskId:recordId` 派发标识；`parameters` 由附加参数组装；`botId` 为空时**不发送**。）
+
+**响应**：SSE（`text/event-stream`，`data: {…}` 一行一个 JSON-RPC 消息）。适配器先拆 SSE 行，
+再取最后一条带 `result`/`error` 的消息：
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"**Run ID:** `run_abc123`"}],"structuredContent":{"runId":"run_abc123"},"isError":false}}
+```
+
+- 成功：`result.isError` 缺失/false → 从 `result.structuredContent.runId` 或正文提取 **runId** 落
+  触发记录的 `external_task_id`；`sent` 只代表「已受理运行」，执行进度/结果需到八爪鱼客户端或
+  `automation_run_status` 查看。
+- 失败：`result.isError=true` → 从 Markdown 正文提取 `Error Code` / `Error Message`（如
+  `BotFeatureIsDisabled：…`）写进「失败原因」；JSON-RPC 层错误看 `error.message`；HTTP 非 200
+  展示状态码 + 可提取详情；**不自动重试**（无幂等键，避免重复启动应用）。
+- **不发图片**（`photoLimit` 不生效）。
+
+**实测结论（2026-10-21）**：`tools/list`、`automation_details`、`bot_online_list` 均 200；
+`automation_call` 当前返回 `BotFeatureIsDisabled` —— 协议链路已验证通，失败原因是**个人版机器人
+没有执行权益**（账号侧限制；与开放 API 的 `FeatureIsDisabled` 同一根因）。**风险**：工具名/参数/
+响应格式随官方升级变化（SSE 契约按 2026-10-21 `tools/list` 实测实现）；`automationId` 填错会提示
+找不到应用。
+
+### 6.6 文本隐私闸
 
 所有触发方式投递前都会以功能名 `task_callback` 调用同一个隐私闸：
 
@@ -545,10 +614,11 @@ v24（2026-10-21，多厂商）新增四列：
 - `trigger_method TEXT NOT NULL DEFAULT 'webhook'`：开放字符串 —— 内置 `webhook` / `bazhuayu`，
   或注册表里的厂商 id；旧库缺列 / 无法识别的值按 `webhook` 归一；
 - `trigger_config TEXT NOT NULL DEFAULT '{}'`：非敏感配置 JSON（键 = 描述符字段 key，含已填默认值）。
-  八爪鱼（v1.2.0）在其中的结构：`{ flowId: string, extraParams: Array<{ name: string;
+  八爪鱼（v1.2.0，开放 API）在其中的结构：`{ flowId: string, extraParams: Array<{ name: string;
   source: string; fixedValue?: string; template?: string }> }` —— **没有 `paramMap`**；
+  八爪鱼 MCP（§6.5）在其中的结构：`{ automationId: string, botId?: string, extraParams: 同上的数组 }`；
   `source` 为 §6.3.2 的 11 种值来源之一；非敏感，随任务列表返回；上限由描述符
-  `maxItems` 决定，八爪鱼 = 20，通用缺省 50；
+  `maxItems` 决定，八爪鱼 / 八爪鱼 MCP = 20，通用缺省 50；
 - `trigger_secret TEXT NOT NULL DEFAULT '{}'`：敏感配置 JSON（键 = secret 字段 key）。
   **任何公开快照都不返回原文**：`TaskInfo` / 任务列表 / 触发记录只回 `triggerSecretSet`
   （键 → 是否已配置），投递时由后端读出使用；**唯一**的原文回读入口是
@@ -694,10 +764,16 @@ payload 变成第二份数据源。
     `revealTaskTriggerSecret` 列入 `LOCAL_ONLY` 并被拒绝；回读不写日志、不做操作留痕、
     关闭抽屉即丢弃明文，但**没有二次确认或系统级认证**。要更换凭据仍只能覆盖保存；把任务
     「标记待完善」或删除**不会**删除 `trigger_secret` 里的旧值。
+20. **八爪鱼 MCP 通道是实验性（2026-10-21）。** 协议已用真实 API Key 实测（`tools/list` /
+    `automation_details` / `bot_online_list` 200），但 `automation_call` 当前返回
+    `BotFeatureIsDisabled` —— **个人版机器人没有执行权益**，属账号侧限制（与开放 API 的
+    `FeatureIsDisabled` 同一根因）；开通权益前「投递成功」只到 `sent`（协议受理），不会真正
+    执行。工具名 / 参数 / SSE 响应格式随官方升级可能变化；`automationId` 不是裸 FlowId，
+    填错会提示找不到应用；无幂等键不自动重试。
 
 ### 10.5 文档漂移
 
-20. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
+21. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
     精确重试白名单修正；[`UI-WECHAT-REDESIGN-INVENTORY.md`](UI-WECHAT-REDESIGN-INVENTORY.md) 的 DL-09 行
     也标明创建弹窗没有 Webhook 地址字段。
 
@@ -731,7 +807,7 @@ payload 变成第二份数据源。
 - [ ] 新任务显示为「待完善」，不会产生记录，也不会投递。
 - [ ] 点任务行「编辑」在右侧打开编辑抽屉（`role="dialog"`）；关闭按钮、遮罩与 Esc 都能关闭，关闭后右栏筛选不变。
 - [ ] 抽屉标题是「编辑任务 · <任务名>」，表单保留 `aria-label="编辑任务：<任务名>"`。
-- [ ] 「触发方式」选择器由后端 `listRpaVendors` 目录渲染（内置 Webhook / 八爪鱼 + 影刀 / UiPath / 阿里云 / 来也 / 实在），默认 Webhook；任务当前厂商不在目录时显示「触发方式不可用」并禁止保存。
+- [ ] 「触发方式」选择器由后端 `listRpaVendors` 目录渲染（内置 Webhook / 八爪鱼 RPA + 八爪鱼 RPA（MCP）+ 影刀 / UiPath / 阿里云 / 来也 / 实在），默认 Webhook；任务当前厂商不在目录时显示「触发方式不可用」并禁止保存。
 - [ ] 切到某厂商后按描述符渲染动态字段：secret 用密码框（已配置时「已保存，留空保持不变」）、map 渲染会话名 / 触发文本 / 触发对象三个输入、select / number / boolean 正常；`advanced` 字段收进「高级」折叠。
 - [ ] 已配置的 secret 字段显示「👁 查看」：点击显示**本机**保存的原文、按钮变「隐藏」，再点恢复密码框；未保存过的字段没有该按钮；关闭抽屉 / 切换触发方式 / 保存成功后明文立即清空。
 - [ ] 手机 / 普通浏览器会话不显示该按钮（或禁用）；该会话通过 HTTP 远程通道调用 `revealTaskTriggerSecret` 被拒绝。
@@ -774,6 +850,7 @@ payload 变成第二份数据源。
 - [ ] 八爪鱼 v1.2.0 无内置参数：descriptor 无 `paramMap`、`mapping.targets = []`；默认投递 body 的 `params` 为 `{}`；旧任务保存的 `paramMap` 在保存时被丢弃。
 - [ ] 八爪鱼附加参数（`extraParams`）校验：参数名 ≤64 字、同列表唯一；`source` 必须在描述符 `paramSources` 内；`fixed` 必须有固定值 ≤2048 字；`template` 只允许 `${record.<白名单>}` / `${task.name}` / `${task.id}` 且 ≤512 字；条数 ≤20；空列表合法。
 - [ ] 八爪鱼 v1.3.0 协议：假 fetch 收到的 URL 为 `https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`、头含 **`X-API-Key`**、body 为 **camelCase**（`flowId` / `flowContentRetrievalMode: 'ByNewestContent'` / `params`）；未配置附加参数时 `params === {}`；**不再发送** `SpecifiedPublicationVersion` / `SpecifiedBot` / `UserStartSource`；11 种 `source` 各自解析正确并按配置顺序进入 `params`；凭据不出现在 body 里；HTTP 200 + `{flowId, flowProcessNo}` ⇒ `sent` 且 `external_task_id = flowProcessNo`；400 + `{code,description}` ⇒ `failed` 且错误文案含 HTTP 状态与厂商 `description`（不含本地凭据）；**只发 1 次（不自动重试）**；**不含图片**。
+- [ ] 八爪鱼 MCP（`bazhuayu-mcp`）：descriptor 实验性、host 仅 `mcp-rpa.bazhuayu.com`、`allowCustomBaseUrl=false`；URL `https://mcp-rpa.bazhuayu.com/mcp`、头 `X-API-Key` + `Accept: application/json, text/event-stream`、body 为 JSON-RPC `tools/call`（`name='automation_call'`，`arguments.id=automationId`、`arguments.parameters`=附加参数默认 `{}`、`botId` 为空时不发）；SSE 响应可拆包、`structuredContent.runId` / Markdown runId ⇒ `external_task_id`；`result.isError=true` ⇒ `failed` 且错误文案含提取出的 `Error Code/Message`（如 `BotFeatureIsDisabled`）；JSON-RPC `error` ⇒ failed；HTTP 非 200 ⇒ failed；未配 API Key / automationId 时不发请求；`retry.maxAttempts=1`（只发 1 次）；不发图片。
 - [ ] 列表返回值与 `JSON.stringify` 里不含任何厂商凭据原文（`triggerSecretSet` 只回布尔）。
 - [ ] `revealTaskTriggerSecret`：返回 `{ ok, triggerMethod, secrets }`（没有凭据的字段不出现、任务不存在/未配置给可读错误）；**仅桌面端本机可调**——`http-remote-policy.js` 的 `LOCAL_ONLY` 命中远程/手机通道并拒绝；**不写操作日志 / 不做操作留痕**；列表与触发记录仍只回 `triggerSecretSet`。
 - [ ] `listRpaVendors` 返回目录（`items` + `registryVersion`），不含凭据/钩子；未知 id 不崩。
@@ -814,11 +891,12 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 |---|---|---|
 | 共享类型（任务） | [`../src/backend/wechat-data/src/types-taskcenter.ts`](../src/backend/wechat-data/src/types-taskcenter.ts) | `TaskInfo`、`TaskTriggerRecord`、`TaskInfoInput`、回调 payload 等单一契约 |
 | 共享类型（厂商） | [`../src/backend/wechat-data/src/types-rpa.ts`](../src/backend/wechat-data/src/types-rpa.ts) | `RpaVendorDescriptor` / `RpaField` / `RpaVendorCatalog` / `RpaTriggerConfig` / `RpaTriggerSecretSet`（`build:types` 后给前端） |
-| 厂商注册表 | [`../src/backend/wechat-data/src/query/rpa/registry.ts`](../src/backend/wechat-data/src/query/rpa/registry.ts) | 内置 + 5 家厂商适配器数组、`findVendor`、`listVendorDescriptors`、`RPA_REGISTRY_VERSION` |
+| 厂商注册表 | [`../src/backend/wechat-data/src/query/rpa/registry.ts`](../src/backend/wechat-data/src/query/rpa/registry.ts) | 8 个适配器数组（`webhook` / `bazhuayu` / `bazhuayu-mcp` / `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）、`findVendor`、`listVendorDescriptors`、`RPA_REGISTRY_VERSION` |
 | 通用派发管道 | [`../src/backend/wechat-data/src/query/rpa/dispatch.ts`](../src/backend/wechat-data/src/query/rpa/dispatch.ts) | **本域唯一出网函数 `sendRequest`** + `dispatchRpaRecord`：主机白名单 / 鉴权 / 重试 / 响应解析 |
 | 字段校验与渲染 | [`../src/backend/wechat-data/src/query/rpa/template.ts`](../src/backend/wechat-data/src/query/rpa/template.ts) | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` / 参数映射 / **附加参数来源解析与模板白名单** |
 | 鉴权 | [`../src/backend/wechat-data/src/query/rpa/auth.ts`](../src/backend/wechat-data/src/query/rpa/auth.ts) | bearer / header / token-exchange / custom（阿里云 HMAC-RPC 签名）、token 缓存 |
-| 厂商适配器 | [`../src/backend/wechat-data/src/query/rpa/vendors/`](../src/backend/wechat-data/src/query/rpa/vendors/) | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件（描述符 + 可选钩子）；**八爪鱼 v1.2.0** = 无内置参数（`targets: []`），参数全走 `extrasField='extraParams'`；**v1.3.0** 协议修正（`/api/v1` + `X-API-Key` + camelCase body + `flowProcessNo`） |
+| 厂商适配器 | [`../src/backend/wechat-data/src/query/rpa/vendors/`](../src/backend/wechat-data/src/query/rpa/vendors/) | `webhook` `bazhuayu` `bazhuayu-mcp` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件（描述符 + 可选钩子）；**八爪鱼 v1.2.0** = 无内置参数（`targets: []`），参数全走 `extrasField='extraParams'`；**v1.3.0** 协议修正（`/api/v1` + `X-API-Key` + camelCase body + `flowProcessNo`）；**八爪鱼 MCP** = 实验性 JSON-RPC + SSE（`automation_call` / `runId` / `isError`） |
+| 八爪鱼 MCP 适配器 | [`../src/backend/wechat-data/src/query/rpa/vendors/bazhuayu-mcp.ts`](../src/backend/wechat-data/src/query/rpa/vendors/bazhuayu-mcp.ts) | JSON-RPC `tools/call → automation_call` + SSE 拆包 + runId / `Error Code` 提取 + 可选 `botId`（实验性） |
 | 存储/CRUD | [`../src/backend/wechat-data/src/query/task-center.ts`](../src/backend/wechat-data/src/query/task-center.ts) | 建库、v24 迁移/双写、校验、水位、任务读写、记录查询 |
 | 凭据按需回读 | [`../src/backend/wechat-data/src/query/task-center-secret.ts`](../src/backend/wechat-data/src/query/task-center-secret.ts) | 桌面端「眼睛」唯一原文回读入口 `revealTaskTriggerSecret`（不写日志、现读现弃；HTTP 远程通道 LOCAL_ONLY 拒绝） |
 | 扫描 | [`../src/backend/wechat-data/src/query/task-center-scan.ts`](../src/backend/wechat-data/src/query/task-center-scan.ts) | 新消息过滤、关键词匹配、图片引用、水位推进 |
@@ -853,6 +931,8 @@ npx vitest run src/backend/tests/docs-index.spec.ts
   11 种值来源、模板白名单、列表内重名与上限校验、旧 `paramMap` 丢弃、旧行为恢复路径、
   `/api/v1` + `X-API-Key` + camelCase body + `flowProcessNo` 落库 + 失败展示厂商 description + 不自动重试）；
   **v26 凭据回读**（`revealTaskTriggerSecret`：已保存字段回原文、空字段不出现、任务不存在/参数错误给可读错误）；
+  **八爪鱼 MCP（`bazhuayu-mcp`）** 另有描述符 / 派发用例（JSON-RPC 报文、SSE 拆包、runId 落库、`isError` 错误码提取、
+  `botId` 可选、只发 1 次）；
   多厂商另有 `task-center-rpa.spec.ts`（v24 迁移/双写、未知厂商、通用配置校验、通用派发、
   批量待投递）与两份厂商 spec（描述符完整性、逐家 mock 派发与重试策略）。
 - **调度行为**：覆盖扫描单飞/补跑、事件时机、扫描与投递解耦、失败不卡死，以及
