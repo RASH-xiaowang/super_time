@@ -52,14 +52,34 @@
 - **第三轮两条负结果**（均已回滚、登记在 `08-IMPLEMENTATION-LOG.md` §「第三轮负结果登记」）：① 首屏查询预热让落定 1228→1447ms（直接调用抢事件循环）；② `icacls` 多文件合批语法不存在（exit 87），回退后反而 +17ms。**不要重试这两条。**
 
 ## 4. 下一步该用什么量具/还能往哪优化（本轮未做）
-1. **worker 内存**：哨兵已恢复 60s 轮询；下一步做 `--inspect` heap snapshot（进朋友圈/词云/sync 前后各一张），按 retained size 对账 `docs/perf/04-MEMORY-AUDIT.md` §3。
+1. **worker 内存**：哨兵已恢复 60s 轮询，`[mem]` 已带受控缓存占用（见 §4.5：典型 ≈6MB，
+   不是 RSS 主因）。下一步必须做 `--inspect` heap snapshot（进朋友圈/词云/sync 前后各一张），
+   按 retained size 定位 357–449MB 的主体；同时用 `[mem]` 时间序列确认是否随负载持续上涨。
 2. **渲染图片内存**：`data:` 图片占大头的是**已解码位图**（CDP JS 堆只有 31MB），迁 `wechat-media://` 前必须先做 heap snapshot 归因，否则可能只是把 base64 换成文件路径而位图内存不变。
 3. **启动剩余 ~311ms**（boot 打点口径）：worker requires 5 / bundle import 39 / typert 47 / gateway 3 / 后端装配其余 ~4 / 主进程 init 回程 ~30 / 设置回灌 ~44 / ACL 校验+文件收紧 ~136 / 其余 ~3。可做的：`getStorageStats` 的 file-names 遍历 122ms（需持久化或改索引方式）、typert schema 按需加载（47ms，但会短暂降低入参校验覆盖）、ACL 文件级（安全口径需评审）。
 4. **首屏落定已到判据下限**（600ms 静默窗口）；要再降真实体感，应换指标（首卡片可读时间/可交互）并继续减 `getOverview`（360–466ms）与 `getOverviewInsights`（446–506ms）的 CPU —— 已用全局 8MB 实验证明它们**不是缓存瓶颈**，需要给它们各自加分段打点找热点。
 5. **首屏 CSS 剩余体积**：Bootstrap Grid 50.6KB 仍全量（只有总览/RegionBoard 用 `row/col-*`），迁到局部 CSS grid 需先做 `css:bundle-diff` + 面板截图验收。
 6. **内存 WS 量化**：`worker WS` 逐样本 145–535MB，需更长重负载 + heap snapshot；`[mem]` 时间序列现在可用（哨兵已修）。
 
+## 4.5 运行时内存基线：受控缓存占用（第四轮新增量具）
+
+`[mem]` 行现在同时带每个受控缓存的**当前/上限**（`caches=label=当前/上限,…`），不再只有总 RSS。
+
+| 缓存 | 实测占用（1 样本：总览→朋友圈→通讯录 + 3 轮滚动 + 60s 空闲） | 上限 |
+|---|---|---|
+| `remote-image` | 0.4MB | 32MB |
+| `sns-image` | 0.0MB | 32MB |
+| `sns-keystream` | 0.0MB | 16MB |
+| `resultCache`（host） | 5.8MB（字符×2 估字节） | 128MB（64M 字符） |
+| **合计** | **≈6.2MB** | **208MB** |
+
+同时段 worker `[mem]`：启动 RSS 68MB → 空闲 60s 后 **449MB**（进程 WS 357MB）。
+
+**归因**：受控缓存只占 ~6MB ⇒ **worker RSS 的增长不来自这些缓存**。缓存字节上限的价值是
+保护**最坏情况**（审计里的 300×512KB resultCache、1.5GB 级 md5UrlCache 理论最坏），
+不是解释稳态 RSS；解释后者需要 worker heap snapshot（sqlite 页缓存 / V8 / 大 buffer）。
+
 ## 5. 结论一句话
 > **验证成立**：后端 ready **2910ms→142ms（−95%，control 对照归因）**、总览落定 **3977ms→1229ms（−69%）**；首屏两个最贵查询 `getStorageStats` **676/434→271ms**、`getLedger` **334→161ms**（分析型连接页缓存 256KB→8MB，同库 A/B 最高 3.6×）；首屏 CSS −32%（传输 −6.0%）、contacts 面板 IPC −55%、图片批量 30 张句柄开合 33→3（−91%）且 fileOnly 白算 base64 归零、4 处后端缓存获得硬字节上界、随包 −601.5KiB、1 处监听泄漏与 2 处无界小表修复、内存哨兵恢复轮询；后端基准与全量 typecheck 无退化。
-> **没有验证成立**：进程内存 WS（worker/renderer/总）—— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB，需要 heap snapshot 才能定量；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。
+> **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB；第四轮新增的运行时量具已排除受控缓存（典型合计 ≈6MB，不是 RSS 主因），要解释 357–449MB 仍需 heap snapshot；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。
 > 两条负结果（首屏预热、icacls 合批）已登记并回滚，不虚报收益；所有改动均有单测/守卫与独立提交可回滚；对外契约（Remote 方法、返回字段、错误文案）未变；`D:\Alpha` 仅作只读参照、未修改。

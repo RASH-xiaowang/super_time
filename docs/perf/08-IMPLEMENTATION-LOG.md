@@ -17,6 +17,7 @@
 | 7 | `70a63a7` | perf(boot): 敏感目录 ACL 已收紧时跳过递归传播（后端 ready 2.9s→0.4s，总览落定 4.0s→1.4s） | F（首屏/启动） | 5 spec / 49 用例绿；typecheck 0；measure:quick 27.20s；boot 分段实测见 §F |
 | 8 | `0556d57` | perf(boot): 原图自动下载的启动恢复延后到首屏后（后端组装 320→98ms，总览落定 1.37→1.23s） | G（启动竞态） | autodownload spec 14/14；`check-generated --all` 一致；typecheck 0；3 样本复测见 §G |
 | 9 | `140e183` | perf(sqlite): 分析型只读连接临时调大页缓存（storage 434→271ms、ledger 334→161ms） | H（查询提速） | analytics-cache 5/5；ledger 7/7；check-generated `--all` 一致；typecheck 0；measure:quick 27.07s |
+| 10 | `2966bdc` | feat(perf): 受控缓存运行时可观测（`[mem]` 行带 当前/上限）+ 运行时内存归因 | I（内存基线） | cache-budget/sentinel/result-cache/autodownload 4 spec 48 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 26.63s |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -76,6 +77,12 @@
 ### 第三轮负结果登记（两条，均已回滚，供后人别再试）
 1. **首屏查询预热（`prewarmFirstScreenQueries`）**：在 gateway 的 setImmediate 里提前跑 4 个首屏查询、每步让出事件循环。实测**首屏落定 1228 → 1447ms（变差 18%）**：直接调用不走 RPC 队列，预热占着 worker 事件循环，反而让刚挂载的面板请求排在它后面。`getStorageStats` 慢调用虽从 676→166ms，但 `getOverview/Insights` 反而升到 407/514ms。**结论：在这些查询本身没变快之前，预热只是把成本在时间轴上搬家。**已回滚。
 2. **敏感文件逐条 `icacls` 合批**：想用一条 `icacls f1 f2 /inheritance:r /grant:r ...` 省掉 6 个进程。实测 icacls **不支持**多路径加选项（exit 87），进入逐文件回退后反而 **129ms vs 112ms**（+17ms）。**结论：icacls 没有可用的合批形态**，保留逐文件（5–10 次 × ~17ms）；真要省只能改为「目录已收紧就跳过文件级显式 ACE」，但那会把「敏感文件显式 ACL」这条既有不变量降级为「靠目录继承」，安全口径变化需单独评审，本轮不做。已回滚。
+
+### I · 受控缓存运行时可观测 + 内存归因（第四轮，Lead）
+- **缺口**：objective 的「显著降低运行时内存」此前只有单测证据（缓存字节上限），线上只有 worker 总 RSS，分不清 RSS 是缓存、sqlite 页缓存还是一次性大对象。
+- **改法**：`createBoundedCache` 加 `label` + 进程内注册表，新增 `cacheBudgetSnapshot()`（条数/字节/上限）；三个受控缓存打 label（`remote-image` / `sns-image` / `sns-keystream`）；`wechat-host` 新增 `cacheStatsLine()`（含 `resultCache`，字符数×2 估字节并注明口径）；worker 哨兵新增 `extra` 注入，把 `caches=…` 拼到既有 `[mem]` **同一行**（便于对时间序列，`extra` 抛错不影响采样）；harness 的 LogTail 解析 `caches=` 存进 `memSamples`。
+- **实测**（1 样本：overview→moments→contacts + 3 轮滚动 + 60s 空闲）：`remote-image=0.4MB/32MB`、`sns-image=0.0MB/32MB`、`sns-keystream=0.0MB/16MB`、`resultCache=5.8MB/128MB` ⇒ **受控缓存合计 ≈6MB，远低于 208MB 上限**；worker RSS 启动 68MB → 空闲 60s **449MB**（WS 357MB）。
+- **归因结论（重要）**：worker RSS 的增长**不来自这些受控缓存** —— 典型负载下它们几乎不占内存，缓存上限的价值是保护最坏情况（例如 300 条 512KB 的 resultCache、1.5GB 的 md5UrlCache 理论最坏）。要解释 357–449MB 必须做 heap snapshot（指向 sqlite 页缓存/V8/大 buffer），这是下一轮的量具。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
