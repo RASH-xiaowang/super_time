@@ -9,6 +9,13 @@ import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
+import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
+import {
+  insightsShardCachePath,
+  loadInsightsShardCache,
+  saveInsightsShardCache,
+  type InsightsShardCacheEntry,
+} from './insights-shard-store.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryOverviewExtras } from './overview-extras.ts'
 
@@ -129,6 +136,46 @@ interface InsightsShardAgg {
 const INSIGHTS_SHARD_CACHE_MAX = 64
 const insightsShardCache = new Map<string, { sig: string; agg: InsightsShardAgg }>()
 
+/** 磁盘缓存已为哪个数据根 hydrate 过（同一进程只读一次文件）。 */
+let shardCacheHydratedFor = ''
+/** 本次进程是否有新聚合需要写回磁盘。 */
+let shardCacheDirty = false
+
+/**
+ * 首次用到时把磁盘缓存灌进内存 Map。
+ *
+ * 命中与否仍由 `applyCachedShard` 逐字比对 sig 决定，所以这里**不信任文件内容**：
+ * 过期/损坏的条目只会变成未命中，不会返回错数。
+ * @param dec - 已解密数据根。
+ */
+function ensureShardCacheHydrated (dec: string): void {
+  if (shardCacheHydratedFor === dec) return
+  shardCacheHydratedFor = dec
+  try {
+    const loaded = loadInsightsShardCache<InsightsShardAgg>(insightsShardCachePath(dec))
+    for (const [key, entry] of loaded) insightsShardCache.set(key, { sig: entry.sig, agg: entry.agg })
+    while (insightsShardCache.size > INSIGHTS_SHARD_CACHE_MAX) {
+      const oldest = insightsShardCache.keys().next().value
+      if (oldest === undefined) break
+      insightsShardCache.delete(oldest)
+    }
+  } catch { /* 纯缓存：读不到就当没有 */ }
+}
+
+/**
+ * 把本次新算出的分片聚合原子写回磁盘（失败只留空缓存，不影响查询）。
+ * @param dec - 已解密数据根。
+ */
+function persistShardCacheIfDirty (dec: string): void {
+  if (!shardCacheDirty) return
+  shardCacheDirty = false
+  try {
+    const entries: Array<InsightsShardCacheEntry<InsightsShardAgg>> = []
+    for (const [key, v] of insightsShardCache) entries.push({ key, sig: v.sig, agg: v.agg })
+    saveInsightsShardCache(insightsShardCachePath(dec), entries)
+  } catch { /* 写不进去只是下次还要重算 */ }
+}
+
 /** 累计量与极值的容器（循环里用 `t` / `b` 两个对象，便于整体抽到模块级纯函数）。 */
 interface InsightsTotals {
   total: { n: number; sent: number }
@@ -221,6 +268,7 @@ function recordShard (
     lastActive: b.lastActive > before.bounds.lastActive ? b.lastActive : 0,
   }
   insightsShardCache.set(key, { sig, agg })
+  shardCacheDirty = true
   if (insightsShardCache.size > INSIGHTS_SHARD_CACHE_MAX) {
     const oldest = insightsShardCache.keys().next().value
     if (oldest !== undefined) insightsShardCache.delete(oldest)
@@ -247,6 +295,8 @@ function diffMapNums<K> (before: Map<K, number>, after: Map<K, number>): Array<[
 
 async function computeOverviewInsights(decryptedDir: string, self = ''): Promise<OverviewInsights> {
   const dec = decryptedDir
+  queryTraceBegin('insights')
+  ensureShardCacheHydrated(dec)
   const names = contactMeta(dec).names
 
   // 反向映射 md5(table suffix) -> 联系人。真实账号来自 contactMeta 与
@@ -269,6 +319,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       db.close()
     }
   } catch { /* ignore */ }
+  queryTraceMark('insights', 'contacts', md5ToUser.size)
 
   const total = { n: 0, sent: 0 }
   const buckets: Record<string, number> = { text: 0, image: 0, voice: 0, video: 0, rich: 0, system: 0, revoked: 0, other: 0 }
@@ -347,6 +398,10 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   }
 
   // 循环后的纯计算抽成模块级助手（单函数行数棘轮：这段搬走让本函数净变短）
+  queryTraceMark('insights', 'shards')
+  // 本次有新分片聚合 ⇒ 写回磁盘缓存（下次启动直接命中，不用再扫 239 张表）。
+  persistShardCacheIfDirty(dec)
+  queryTraceMark('insights', 'shards-persist')
   const { busyHour, busyCount, deepNight, weekend } = postProcessInsights(hourDist, dayCounts)
   const totalSafe = Math.max(1, total.n)
 
@@ -373,6 +428,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       })
     } catch { /* ignore */ }
   }
+  queryTraceMark('insights', 'contact-rows', contactRows.length)
   const friendRows = contactRows.filter(r => !r.isGroup && !r.isGh)
   const activeFriends = friendRows.filter(r => talkerCount.has(r.username)).length
   const silentFriends = friendRows.length - activeFriends
@@ -424,6 +480,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       })
     } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
   }
+  queryTraceMark('insights', 'moments', moments.total)
 
   // 资产
   const assets = { favorites: 0, emoticons: 0, files: 0, fileBytes: 0, mediaItems: 0, mediaBytes: 0 }
@@ -457,9 +514,11 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   }
 
   // 数据健康
+  queryTraceMark('insights', 'assets')
   const dbs: Array<{ path: string; bytes: number }> = []
   walkDbFiles(dec, dbs, 0)
   const dbBytes = dbs.reduce((a, r) => a + r.bytes, 0)
+  queryTraceMark('insights', 'db-walk', dbs.length)
 
   return {
     messages: {

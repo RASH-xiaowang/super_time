@@ -6,9 +6,21 @@
 import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig, dataGenerationSig } from './meta.ts'
 import type { OverviewExtras } from '../types.ts'
+import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
+import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
+
+/**
+ * 「签名 + 结果」磁盘缓存的位置：`<数据根>/cache/overview-extras.v1.json`。
+ *
+ * 冷算实测 ~120ms（每分片全部 Msg_ 表一次 GROUP BY），而结果只有几 KB；
+ * 同一份解密数据第二次启动还要再算一遍纯属浪费 —— 存盘后按签名失效。
+ */
+function extrasCachePath(dec: string): string {
+  return join(dirname(dec), 'cache', 'overview-extras.v1.json')
+}
 
 
 function cellStr(v: unknown): string {
@@ -49,10 +61,17 @@ export function queryOverviewExtras(decryptedDir: string): OverviewExtras {
     fileSigOf(join(dec, 'session', 'session.db')),
     dataGenerationSig(),
   ].join('|')
-  return cachedBySig('overview-extras:' + dec, sig, () => computeOverviewExtras(dec), 30_000)
+  return cachedBySig('overview-extras:' + dec, sig, () => computeOverviewExtras(dec, sig), 30_000)
 }
 
-function computeOverviewExtras(dec: string): OverviewExtras {
+function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
+  queryTraceBegin('extras')
+  // 跨启动复用：签名一致就直接返回上次算好的结果（跳过下面全部扫描）。
+  const diskHit = loadSigCached<OverviewExtras>(extrasCachePath(dec), sig)
+  if (diskHit !== null) {
+    queryTraceMark('extras', 'disk-hit')
+    return diskHit
+  }
   const now = Math.floor(Date.now() / 1000)
   const day7 = now - 7 * 86400
   const day30 = now - 30 * 86400
@@ -76,6 +95,7 @@ function computeOverviewExtras(dec: string): OverviewExtras {
       db.close()
     }
   } catch { /* ignore */ }
+  queryTraceMark('extras', 'contacts', md5ToUser.size)
 
   const dayCounts = new Map<string, number>()
   let m7 = 0; let m30 = 0; let m60 = 0; let prev7 = 0; let prev30 = 0
@@ -114,6 +134,7 @@ function computeOverviewExtras(dec: string): OverviewExtras {
       }
     } catch { /* skip shard */ }
   }
+  queryTraceMark('extras', 'shards')
 
   // 90-day heatmap, one entry per day ascending.
   const heatmap: Array<{ d: string; count: number }> = []
@@ -138,11 +159,13 @@ function computeOverviewExtras(dec: string): OverviewExtras {
       db.close()
     } catch { /* ignore */ }
   }
+  queryTraceMark('extras', 'resource', storageBytes30)
 
   const dbState = { files: 0, bytes: 0, wal: false }
   walkDb(dec, 0, dbState)
+  queryTraceMark('extras', 'db-walk', dbState.files)
 
-  return {
+  const result: OverviewExtras = {
     trends: {
       messages7: m7,
       messages30: m30,
@@ -164,4 +187,8 @@ function computeOverviewExtras(dec: string): OverviewExtras {
       lastSync: lastSync ? new Date(lastSync * 1000).toLocaleString('zh-CN') : '',
     },
   }
+  queryTraceMark('extras', 'done')
+  // 落盘纯缓存：签名一致时下次启动直接命中（写失败只影响下次重算）。
+  saveSigCached(extrasCachePath(dec), sig, result)
+  return result
 }
