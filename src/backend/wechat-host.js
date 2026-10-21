@@ -58,8 +58,9 @@ const ENFORCED_SCHEMA_METHODS = new Set([
  * 这里在适配层加一层有界缓存：命中即返回，重复请求从十几秒降到 0；
  * 失败结果同样缓存，避免对"确实没有"的图反复全量扫描。
  *
- * 两条边界：
+ * 三条边界：
  *   - 单条结果超过 512KB（例如整段视频的 base64）不入缓存，不把大对象钉在内存里；
+ *   - 全部结果的总字符数不超过 64MB，超过后按 LRU 队头逐出；
  *   - 数据更新时**定向**失效，不是整体清空（见 clearStaleResultCache 的说明）。
  */
 const CACHEABLE_METHODS = new Set([
@@ -75,11 +76,29 @@ const CACHEABLE_METHODS = new Set([
 const VOLATILE_CACHE_METHODS = new Set(['getAvatar', 'getArticleCover']);
 const RESULT_CACHE_MAX = 300;
 const RESULT_CACHE_MAX_CHARS = 512 * 1024;
+const RESULT_CACHE_MAX_TOTAL_CHARS = 64 * 1024 * 1024;
 const resultCache = new Map();
+let resultCacheChars = 0;
 
 /** 整体失效：只用于「解码结果整体作废」的场合（图片密钥变更）。 */
 function clearResultCache() {
   resultCache.clear();
+  resultCacheChars = 0;
+}
+
+/** 单条结果实际进入预算的字符数（只算缓存会命中的 url/data 字符串）。 */
+function resultCacheCharsOf(result) {
+  const value = result && result.value;
+  const payload = value && typeof value === 'object' ? (value.url ?? value.data ?? null) : null;
+  return typeof payload === 'string' ? payload.length : 0;
+}
+
+/** 删除单条并同步总字符计数。 */
+function deleteResultCacheEntry(key) {
+  if (!resultCache.has(key)) return;
+  const result = resultCache.get(key);
+  resultCache.delete(key);
+  resultCacheChars -= resultCacheCharsOf(result);
 }
 
 /**
@@ -102,7 +121,7 @@ function clearStaleResultCache() {
   for (const [key, result] of [...resultCache]) {
     const sep = key.indexOf('\u0000');
     const method = sep < 0 ? key : key.slice(0, sep);
-    if (VOLATILE_CACHE_METHODS.has(method) || (result && result.ok === false)) resultCache.delete(key);
+    if (VOLATILE_CACHE_METHODS.has(method) || (result && result.ok === false)) deleteResultCacheEntry(key);
   }
 }
 
@@ -134,16 +153,17 @@ function readResultCache(key) {
 }
 
 function writeResultCache(key, result) {
-  const value = result?.value;
+  const value = result && result.value;
   const payload = value && typeof value === 'object' ? (value.url ?? value.data ?? null) : null;
   if (typeof payload === 'string' && payload.length > RESULT_CACHE_MAX_CHARS) return;
-  if (resultCache.has(key)) resultCache.delete(key);
-  while (resultCache.size >= RESULT_CACHE_MAX) {
+  if (resultCache.has(key)) deleteResultCacheEntry(key);
+  resultCache.set(key, result);
+  resultCacheChars += resultCacheCharsOf(result);
+  while (resultCache.size > RESULT_CACHE_MAX || resultCacheChars > RESULT_CACHE_MAX_TOTAL_CHARS) {
     const oldest = resultCache.keys().next();
     if (oldest.done) break;
-    resultCache.delete(oldest.value);
+    deleteResultCacheEntry(oldest.value);
   }
-  resultCache.set(key, result);
 }
 
 /** 最小化 Cordis Context：只实现 WechatDataGateway 运行时需要的面。 */
@@ -636,6 +656,7 @@ function resultCacheHandles() {
     clearStale: clearStaleResultCache,
     clearAll: clearResultCache,
     size: () => resultCache.size,
+    stats: () => ({ size: resultCache.size, chars: resultCacheChars }),
   };
 }
 module.exports = {

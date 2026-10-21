@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import { createBoundedCache } from './cache-budget.ts'
 
 /**
  * **视频**只有头这一段是加密的（字节数）。
@@ -136,7 +137,28 @@ function loadRuntime(): Promise<Runtime> {
   return runtimePromise
 }
 
-const keystreamCache = new Map<string, Buffer>()
+const KEYSTREAM_CACHE_MAX_ENTRIES = 64
+const KEYSTREAM_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+const KEYSTREAM_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024
+const keystreamCache = createBoundedCache<string, Buffer>({
+  maxEntries: KEYSTREAM_CACHE_MAX_ENTRIES,
+  maxTotal: KEYSTREAM_CACHE_MAX_TOTAL_BYTES,
+  maxEntry: KEYSTREAM_CACHE_MAX_ENTRY_BYTES,
+  sizeOf: (bytes) => bytes.length,
+})
+
+/** 密钥流缓存的单测把手；不暴露内部 Map。 */
+export function keystreamCacheHandles(): {
+  stats: () => { count: number; total: number }
+  clear: () => void
+  putForTest: (key: string, bytes: Buffer) => void
+} {
+  return {
+    stats: () => ({ count: keystreamCache.size(), total: keystreamCache.total() }),
+    clear: () => keystreamCache.clear(),
+    putForTest: (key, bytes) => keystreamCache.set(key, bytes),
+  }
+}
 
 /**
  * 生成 WxIsaac64 密钥流。
@@ -151,7 +173,7 @@ export async function wxIsaac64Keystream(seed: string, size: number): Promise<Bu
   if (n === 0) return Buffer.alloc(0)
   const cacheKey = `${key}:${n}`
   const hit = keystreamCache.get(cacheKey)
-  if (hit) return hit
+  if (hit !== undefined) return hit
 
   const rt = await loadRuntime()
   const isaac = new rt.module.WxIsaac64!(key)
@@ -180,7 +202,6 @@ export async function wxIsaac64Keystream(seed: string, size: number): Promise<Bu
   if (bytes.length !== n) {
     throw new Error('密钥流长度不符：需要 ' + String(n) + ' 字节，实得 ' + String(bytes.length) + ' 字节')
   }
-  if (keystreamCache.size > 64) keystreamCache.clear()
   keystreamCache.set(cacheKey, bytes)
   return bytes
 }

@@ -12,15 +12,20 @@
  * 头解对了、尾部原封不动（仍是密文），而调用方只看到「解密成功」。
  * 「一屏 9 张全挂」当年就是这么来的。
  */
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
   SNS_HEAD_ENCRYPTED_BYTES,
   decryptSnsAll,
   decryptSnsHead,
+  keystreamCacheHandles,
   wxIsaac64Keystream,
 } from '../src/query/sns-keystream.ts'
 
 const SEED = '7789788357417345129'
+
+beforeEach(() => {
+  keystreamCacheHandles().clear()
+})
 
 /** 造一段确定性字节：JPEG 头 + 可复现的填充（跨进程一致，才能当判据）。 */
 function fixture(len: number): Buffer {
@@ -95,4 +100,17 @@ describe('decryptSnsHead：只覆盖头部（视频语义）', () => {
     expect(r.decrypted).toBe(len)
     expect(r.bytes.equals(plain)).toBe(true)
   }, 60000)
+})
+
+describe('keystreamCache：字节预算与逐出', () => {
+  it('20 条 × 1.5MB 后总额不超过 16MB，按条逐出而不是整表清空', () => {
+    const h = keystreamCacheHandles()
+    const bytes = Buffer.alloc(1536 * 1024, 0xa5)
+    for (let i = 0; i < 20; i += 1) h.putForTest(`seed-${String(i)}:1572864`, bytes)
+
+    const stats = h.stats()
+    expect(stats.total).toBeLessThanOrEqual(16 * 1024 * 1024)
+    expect(stats.count).toBeGreaterThan(0)
+    expect(stats.count).toBeLessThan(20)
+  })
 })

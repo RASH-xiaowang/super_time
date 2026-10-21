@@ -6409,7 +6409,7 @@ function messageStats(decryptedDir, table, shards) {
     }
   }, 0);
   const stats = { total, typeStats };
-  statsCache.set(key, { sig, stats });
+  boundedSet(statsCache, key, { sig, stats }, 512);
   return stats;
 }
 function queryMessages(decryptedDir, talker, limit, cursor, selfUsername, cursorLocalId) {
@@ -15666,6 +15666,66 @@ function readArchivedAvatars(decryptedDir, usernames) {
 import { createHash as createHash13 } from "node:crypto";
 import { mkdirSync as mkdirSync16, readFileSync as readFileSync22, readdirSync as readdirSync19, renameSync as renameSync7, statSync as statSync24, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join44 } from "node:path";
+
+// src/backend/wechat-data/src/query/cache-budget.ts
+function createBoundedCache(opts) {
+  const entries2 = /* @__PURE__ */ new Map();
+  let totalSize = 0;
+  function evictOldest() {
+    const oldest = entries2.keys().next();
+    if (oldest.done === true) return;
+    const entry = entries2.get(oldest.value);
+    entries2.delete(oldest.value);
+    if (entry !== void 0) totalSize -= entry.size;
+  }
+  return {
+    get(key) {
+      const entry = entries2.get(key);
+      if (entry === void 0) return void 0;
+      entries2.delete(key);
+      entries2.set(key, entry);
+      return entry.value;
+    },
+    set(key, value) {
+      const size = opts.sizeOf(value);
+      if (opts.maxEntry !== void 0 && size > opts.maxEntry) return;
+      const previous = entries2.get(key);
+      if (previous !== void 0) {
+        entries2.delete(key);
+        totalSize -= previous.size;
+      }
+      entries2.set(key, { value, size });
+      totalSize += size;
+      while (entries2.size > opts.maxEntries || totalSize > opts.maxTotal) {
+        const before = entries2.size;
+        evictOldest();
+        if (entries2.size === before) break;
+      }
+    },
+    delete(key) {
+      const entry = entries2.get(key);
+      if (entry === void 0) return false;
+      entries2.delete(key);
+      totalSize -= entry.size;
+      return true;
+    },
+    clear() {
+      entries2.clear();
+      totalSize = 0;
+    },
+    size() {
+      return entries2.size;
+    },
+    total() {
+      return totalSize;
+    },
+    keys() {
+      return entries2.keys();
+    }
+  };
+}
+
+// src/backend/wechat-data/src/query/remote-image.ts
 var MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024;
 var MAX_IMAGES_PER_CALL = 20;
 var FETCH_CONCURRENCY = 10;
@@ -15683,21 +15743,19 @@ var RENDERABLE_MIME = {
 var CACHE_SUFFIXES = /* @__PURE__ */ new Set(["png", "jpg", "gif", "webp"]);
 var failUntil = /* @__PURE__ */ new Map();
 var MAX_MEM_ENTRIES = 300;
-var memCache = /* @__PURE__ */ new Map();
+var MAX_MEM_TOTAL_CHARS = 32 * 1024 * 1024;
+var MAX_MEM_ENTRY_CHARS = 2 * 1024 * 1024;
+var memCache = createBoundedCache({
+  maxEntries: MAX_MEM_ENTRIES,
+  maxTotal: MAX_MEM_TOTAL_CHARS,
+  maxEntry: MAX_MEM_ENTRY_CHARS,
+  sizeOf: (dataUrl) => dataUrl.length
+});
 function memGet(url) {
-  const v = memCache.get(url);
-  if (v === void 0) return void 0;
-  memCache.delete(url);
-  memCache.set(url, v);
-  return v;
+  return memCache.get(url);
 }
 function memSet(url, dataUrl) {
   memCache.set(url, dataUrl);
-  while (memCache.size > MAX_MEM_ENTRIES) {
-    const oldest = memCache.keys().next();
-    if (oldest.done === true) break;
-    memCache.delete(oldest.value);
-  }
 }
 function cacheKey(url) {
   return createHash13("md5").update(url, "utf8").digest("hex");
@@ -15746,6 +15804,13 @@ function cooledDown(url) {
   const until = failUntil.get(url);
   return until !== void 0 && Date.now() < until;
 }
+function markFailed(url) {
+  const now = Date.now();
+  for (const [failedUrl, until] of failUntil) {
+    if (until <= now) failUntil.delete(failedUrl);
+  }
+  boundedSet(failUntil, url, now + FAIL_COOLDOWN_MS, 500);
+}
 async function fetchRemoteImage(rawUrl, decodedDir, opts = {}) {
   const url = String(rawUrl ?? "").trim();
   if (url === "") return { url, error: "\u56FE\u7247\u5730\u5740\u4E3A\u7A7A" };
@@ -15757,7 +15822,7 @@ async function fetchRemoteImage(rawUrl, decodedDir, opts = {}) {
   try {
     const res = await fetchWithRetry(fetch, url, { headers: { "User-Agent": "Mozilla/5.0" } }, { timeoutMs: FETCH_TIMEOUT_MS });
     if (!res.ok) {
-      failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
+      markFailed(url);
       return { url, error: "\u53D6\u56FE\u5931\u8D25 HTTP " + String(res.status) };
     }
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -15783,7 +15848,7 @@ async function fetchRemoteImage(rawUrl, decodedDir, opts = {}) {
     memSet(url, dataUrl);
     return { url, dataUrl, fromCache: false };
   } catch (e) {
-    failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
+    markFailed(url);
     return { url, error: "\u53D6\u56FE\u5931\u8D25\uFF1A" + String(e?.message ?? e) };
   }
 }
@@ -16202,7 +16267,15 @@ function missWithScanNotes(msg, notes) {
 
 // src/backend/wechat-data/src/query/sns-image.ts
 var MD5_NAME_RE = new RegExp("^" + MD5_SEGMENT + "$", "i");
-var md5UrlCache = /* @__PURE__ */ new Map();
+var MD5_URL_CACHE_MAX_ENTRIES = 300;
+var MD5_URL_CACHE_MAX_TOTAL_CHARS = 32 * 1024 * 1024;
+var MD5_URL_CACHE_MAX_ENTRY_CHARS = 8 * 1024 * 1024;
+var md5UrlCache = createBoundedCache({
+  maxEntries: MD5_URL_CACHE_MAX_ENTRIES,
+  maxTotal: MD5_URL_CACHE_MAX_TOTAL_CHARS,
+  maxEntry: MD5_URL_CACHE_MAX_ENTRY_CHARS,
+  sizeOf: (dataUrl) => dataUrl.length
+});
 var snsImageIndex = /* @__PURE__ */ new Map();
 var SNS_INDEX_BUDGET_FILES = 40;
 function refreshMonth(entry, root2, notes) {
@@ -16446,10 +16519,8 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
   const baseCacheKey = timelineId && mediaId ? createHash16("md5").update(timelineId + "_" + mediaId + "_2", "utf8").digest("hex") : key;
   const cacheKey2 = baseCacheKey + (allowThumb ? "" : "#o");
   if (!baseCacheKey) return { error: "\u7F3A\u5C11\u56FE\u7247\u6807\u8BC6" };
-  if (md5UrlCache.has(cacheKey2)) {
-    const cached = md5UrlCache.get(cacheKey2) ?? "";
-    if (cached) return { url: cached };
-  }
+  const cached = md5UrlCache.get(cacheKey2);
+  if (cached) return { url: cached };
   if (!wechatBaseDir) return { error: "\u672A\u914D\u7F6E\u5FAE\u4FE1\u539F\u59CB\u76EE\u5F55\uFF0C\u65E0\u6CD5\u79BB\u7EBF\u89E3\u7801" };
   const trace = process.env.SUPERTIME_SNS_TRACE === "1";
   const marks = [];
@@ -16481,7 +16552,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
           sawButUndecodable += 1;
           const data = await decodeCachedFile(p, aesKey, xorKey);
           if (data) {
-            boundedSet(md5UrlCache, cacheKey2, data);
+            md5UrlCache.set(cacheKey2, data);
             mark("tid");
             flushTrace();
             return { url: data };
@@ -16504,7 +16575,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
   if (idxRes.file) {
     const data = await decodeCachedFile(idxRes.file, aesKey, xorKey);
     if (data) {
-      boundedSet(md5UrlCache, cacheKey2, data);
+      md5UrlCache.set(cacheKey2, data);
       return { url: data };
     }
     indexDead = true;
@@ -16521,7 +16592,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
         if ("error" in dec) continue;
         if (key && md5Of(dec.bytes) !== key) continue;
         const data = dataUrlOf(dec);
-        boundedSet(md5UrlCache, cacheKey2, data);
+        md5UrlCache.set(cacheKey2, data);
         return { url: data };
       } catch {
       }
@@ -16575,7 +16646,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
         const data = dataUrlOf(dec);
         if (f.isThumb) {
           if (!allowThumb) continue;
-          boundedSet(md5UrlCache, cacheKey2, data);
+          md5UrlCache.set(cacheKey2, data);
           return { url: data };
         }
         if (!hevcFallback) hevcFallback = { data };
@@ -16583,7 +16654,7 @@ async function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timeli
       }
     }
     if (hevcFallback) {
-      boundedSet(md5UrlCache, cacheKey2, hevcFallback.data);
+      md5UrlCache.set(cacheKey2, hevcFallback.data);
       return { url: hevcFallback.data };
     }
     mark("attach-scan");
@@ -16735,7 +16806,15 @@ function loadRuntime() {
   })();
   return runtimePromise;
 }
-var keystreamCache = /* @__PURE__ */ new Map();
+var KEYSTREAM_CACHE_MAX_ENTRIES = 64;
+var KEYSTREAM_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+var KEYSTREAM_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024;
+var keystreamCache = createBoundedCache({
+  maxEntries: KEYSTREAM_CACHE_MAX_ENTRIES,
+  maxTotal: KEYSTREAM_CACHE_MAX_TOTAL_BYTES,
+  maxEntry: KEYSTREAM_CACHE_MAX_ENTRY_BYTES,
+  sizeOf: (bytes) => bytes.length
+});
 async function wxIsaac64Keystream(seed, size) {
   const key = String(seed ?? "").trim();
   if (!key) throw new Error("\u7F3A\u5C11\u5BC6\u94A5\u6D41\u79CD\u5B50\uFF08XML \u672A\u7ED9\u51FA <enc key>\uFF09");
@@ -16743,7 +16822,7 @@ async function wxIsaac64Keystream(seed, size) {
   if (n === 0) return Buffer.alloc(0);
   const cacheKey2 = `${key}:${n}`;
   const hit = keystreamCache.get(cacheKey2);
-  if (hit) return hit;
+  if (hit !== void 0) return hit;
   const rt = await loadRuntime();
   const isaac = new rt.module.WxIsaac64(key);
   const parts = [];
@@ -16761,7 +16840,6 @@ async function wxIsaac64Keystream(seed, size) {
   if (bytes.length !== n) {
     throw new Error("\u5BC6\u94A5\u6D41\u957F\u5EA6\u4E0D\u7B26\uFF1A\u9700\u8981 " + String(n) + " \u5B57\u8282\uFF0C\u5B9E\u5F97 " + String(bytes.length) + " \u5B57\u8282");
   }
-  if (keystreamCache.size > 64) keystreamCache.clear();
   keystreamCache.set(cacheKey2, bytes);
   return bytes;
 }

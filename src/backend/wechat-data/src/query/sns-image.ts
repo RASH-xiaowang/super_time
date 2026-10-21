@@ -7,8 +7,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createBoundedCache } from './cache-budget.ts'
 import { decodeDatBytesAsync } from './media-image-async.ts'
-import { boundedSet } from './meta.ts'
 import { MD5_SEGMENT } from '../md5.ts'
 import { missWithScanNotes, noteScan, snsLeafRoots, snsMonthRoots } from './sns-scan.ts'
 import type { ScanNotes } from './sns-scan.ts'
@@ -16,7 +16,28 @@ import type { ScanNotes } from './sns-scan.ts'
 /** 「文件名本身就是明文 md5」的形状（32 位 hex）——字面量只许住在 `md5.ts`（P3-3）。 */
 const MD5_NAME_RE = new RegExp('^' + MD5_SEGMENT + '$', 'i')
 
-const md5UrlCache = new Map<string, string>()
+const MD5_URL_CACHE_MAX_ENTRIES = 300
+const MD5_URL_CACHE_MAX_TOTAL_CHARS = 32 * 1024 * 1024
+const MD5_URL_CACHE_MAX_ENTRY_CHARS = 8 * 1024 * 1024
+const md5UrlCache = createBoundedCache<string, string>({
+  maxEntries: MD5_URL_CACHE_MAX_ENTRIES,
+  maxTotal: MD5_URL_CACHE_MAX_TOTAL_CHARS,
+  maxEntry: MD5_URL_CACHE_MAX_ENTRY_CHARS,
+  sizeOf: (dataUrl) => dataUrl.length,
+})
+
+/** 朋友圈图片 data URL 缓存的单测把手；不暴露内部 Map。 */
+export function snsImageUrlCacheHandles(): {
+  stats: () => { count: number; total: number }
+  clear: () => void
+  putForTest: (key: string, dataUrl: string) => void
+} {
+  return {
+    stats: () => ({ count: md5UrlCache.size(), total: md5UrlCache.total() }),
+    clear: () => md5UrlCache.clear(),
+    putForTest: (key, dataUrl) => md5UrlCache.set(key, dataUrl),
+  }
+}
 
 /**
  * 按月增量的明文 md5 索引。
@@ -597,7 +618,7 @@ async function decodeCachedFile(f: string, aesKey: string | undefined, xorKey: n
 /**
  * 版本二：*内容*取回 —— 只要「本机确实有这张图」那份 data URL（A4，2026-09-28 性能修复）。
  *
- * 为什么不在这里 import `meta.ts` 的 `boundedSet`：`decodeCachedFile` 已经做了密钥解析，
+ * 为什么先查 `md5UrlCache`：`decodeCachedFile` 已经做了密钥解析，
  * 这里再原地解一次就够；从 `md5UrlCache` 拿一份已经解过的可以省一次解密。
  * ⚠ 口径与 `resolveSnsImageDataUrl` 的**索引分支**逐字一致：`indexDead`（索引指向的文件
  * 解不开）**不算命中** —— 否则「本机有一份坏文件」会被当成「本机有图」，把封面永久钉在坏数据上。
@@ -660,10 +681,8 @@ export async function resolveSnsImageDataUrl(
   // 会被后面的 `allowThumb: false` 当成原图读出来 —— 恰好是这次要修的那件事。
   const cacheKey = baseCacheKey + (allowThumb ? '' : '#o')
   if (!baseCacheKey) return { error: '缺少图片标识' }
-  if (md5UrlCache.has(cacheKey)) {
-    const cached = md5UrlCache.get(cacheKey) ?? ''
-    if (cached) return { url: cached }
-  }
+  const cached = md5UrlCache.get(cacheKey)
+  if (cached) return { url: cached }
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法离线解码' }
   // 分段计时（`SUPERTIME_SNS_TRACE=1` 时打到 stderr）：这条链路的分段成本此前全靠猜，
   // 而"整段 1–3 秒"里到底哪一段占大头，只有分段量才知道。
@@ -706,7 +725,7 @@ export async function resolveSnsImageDataUrl(
           sawButUndecodable += 1
           const data = await decodeCachedFile(p, aesKey, xorKey)
           if (data) {
-            boundedSet(md5UrlCache, cacheKey, data)
+            md5UrlCache.set(cacheKey, data)
             mark('tid')
             flushTrace()
             return { url: data }
@@ -734,7 +753,7 @@ export async function resolveSnsImageDataUrl(
   if (idxRes.file) {
     const data = await decodeCachedFile(idxRes.file, aesKey, xorKey)
     if (data) {
-      boundedSet(md5UrlCache, cacheKey, data)
+      md5UrlCache.set(cacheKey, data)
       return { url: data }
     }
     indexDead = true // 索引指向的文件解不开（损坏/被清理）→ 仍值得兜底扫一遍
@@ -761,7 +780,7 @@ export async function resolveSnsImageDataUrl(
         if ('error' in dec) continue
         if (key && md5Of(dec.bytes) !== key) continue
         const data = dataUrlOf(dec)
-        boundedSet(md5UrlCache, cacheKey, data)
+        md5UrlCache.set(cacheKey, data)
         return { url: data }
       } catch {
         // next file
@@ -838,7 +857,7 @@ export async function resolveSnsImageDataUrl(
         const data = dataUrlOf(dec)
         if (f.isThumb) {
           if (!allowThumb) continue
-          boundedSet(md5UrlCache, cacheKey, data)
+          md5UrlCache.set(cacheKey, data)
           return { url: data }
         }
         if (!hevcFallback) hevcFallback = { data }
@@ -847,7 +866,7 @@ export async function resolveSnsImageDataUrl(
       }
     }
     if (hevcFallback) {
-      boundedSet(md5UrlCache, cacheKey, hevcFallback.data)
+      md5UrlCache.set(cacheKey, hevcFallback.data)
       return { url: hevcFallback.data }
     }
     mark('attach-scan')

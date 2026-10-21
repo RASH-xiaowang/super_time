@@ -22,6 +22,10 @@ function freshCache() {
   return h
 }
 
+function cacheStats(h = resultCacheHandles()): { size: number; chars: number } {
+  return (h as unknown as { stats: () => { size: number; chars: number } }).stats()
+}
+
 const scratch: string[] = []
 afterEach(() => {
   for (const d of scratch) rmSync(d, { recursive: true, force: true })
@@ -67,6 +71,7 @@ describe('结果缓存的定向失效（M8）', () => {
 
     expect(h.read(miss)).toBe(null) // 之前的「没找到」要允许重试
     expect(h.read(hit)).toEqual({ ok: true, value: { data: 'data:image/png;base64,AAA' } })
+    expect(cacheStats(h).chars).toBe('data:image/png;base64,AAA'.length)
   })
 
   it('内容会变的方法（头像/远程封面）在数据更新时被丢掉', () => {
@@ -114,6 +119,28 @@ describe('结果缓存的定向失效（M8）', () => {
     const k = h.key('getSnsVideoDataUrl', [{ md5: 'big' }])
     h.write(k, { ok: true, value: { data: 'x'.repeat(512 * 1024 + 1) } })
     expect(h.read(k)).toBe(null)
+  })
+
+  it('总字符预算 64MB：超量后逐出最早键，clearAll 后计数归零', () => {
+    const h = freshCache()
+    const payload = 'x'.repeat(512 * 1024)
+    const first = h.key('getSnsImageDataUrl', [{ md5: 'first' }])
+    const keys: Array<string | null> = [first]
+    h.write(first, { ok: true, value: { data: payload } })
+    for (let i = 0; i < 128; i += 1) {
+      const key = h.key('getSnsImageDataUrl', [{ md5: `budget-${String(i)}` }])
+      keys.push(key)
+      h.write(key, { ok: true, value: { data: payload } })
+    }
+
+    const beforeClear = cacheStats(h)
+    expect(beforeClear.chars).toBeLessThanOrEqual(64 * 1024 * 1024)
+    expect(beforeClear.size).toBeLessThan(129)
+    expect(h.read(first)).toBe(null)
+    expect(h.read(keys.at(-1) ?? null)).not.toBe(null)
+
+    h.clearAll()
+    expect(cacheStats(h)).toEqual({ size: 0, chars: 0 })
   })
 })
 

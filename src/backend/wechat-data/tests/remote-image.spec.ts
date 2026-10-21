@@ -15,7 +15,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { wechatCdnHostAllowed } from '../src/query/cdn-hosts.ts'
-import { fetchRemoteImage, fetchRemoteImages, REMOTE_IMAGE_CACHE_DIRNAME, MAX_IMAGES_PER_CALL, FETCH_CONCURRENCY } from '../src/query/remote-image.ts'
+import {
+  FETCH_CONCURRENCY,
+  MAX_IMAGES_PER_CALL,
+  REMOTE_IMAGE_CACHE_DIRNAME,
+  fetchRemoteImage,
+  fetchRemoteImages,
+  remoteImageMemHandles,
+} from '../src/query/remote-image.ts'
 
 /**
  * 每次运行都换一个地址。
@@ -41,6 +48,7 @@ let maxInflight = 0
 let respond: (url: string) => { ok: boolean; status: number; bytes: Uint8Array } = () => ({ ok: true, status: 200, bytes: pngBytes() })
 
 beforeEach(() => {
+  remoteImageMemHandles().clear()
   root = mkdtempSync(join(tmpdir(), 'st-remote-image-'))
   urlSeq += 1
   OK_URL = `https://mmbiz.qpic.cn/mmbiz_jpg/case-${String(urlSeq)}/0`
@@ -253,6 +261,41 @@ describe('远程图片代理：批量入口', () => {
     expect(r.fromCache).toBe(true)
     expect(r.dataUrl).toBe(first.dataUrl)
     expect(calls.length, '缓存命中不该再出网').toBe(diskReads)
+  })
+})
+
+describe('远程图片代理：内存层容量', () => {
+  it('40 条 × 1.5MB 字符后总字符数不超过 32MB，最早条目被逐出', async () => {
+    const h = remoteImageMemHandles()
+    const first = await fetchRemoteImage(OK_URL, root, {})
+    expect(first.dataUrl, first.error).toBeDefined()
+    rmSync(cachedFile(OK_URL))
+
+    const oneAndHalfMb = 'x'.repeat(1536 * 1024)
+    const dataUrl = 'data:image/png;base64,' + oneAndHalfMb
+    for (let i = 0; i < 40; i += 1) {
+      h.putForTest(`https://p.qpic.cn/budget/${String(i)}`, dataUrl)
+    }
+
+    const stats = h.stats()
+    expect(stats.total).toBeLessThanOrEqual(32 * 1024 * 1024)
+    expect(stats.count).toBeLessThan(40)
+
+    const before = calls.length
+    await fetchRemoteImage(OK_URL, root, {})
+    expect(calls.length, '最早条目应已被逐出，因此磁盘删除后会重新出网').toBe(before + 1)
+  })
+
+  it('单条 3MB 不入内存层，但仍落盘并照常返回 dataUrl', async () => {
+    const h = remoteImageMemHandles()
+    respond = () => ({ ok: true, status: 200, bytes: pngBytes(3 * 1024 * 1024) })
+
+    const result = await fetchRemoteImage(OK_URL, root, {})
+
+    expect(result.dataUrl, result.error).toMatch(/^data:image\/png;base64,/)
+    expect(result.fromCache).toBe(false)
+    expect(h.stats().count).toBe(0)
+    expect(existsSync(cachedFile(OK_URL))).toBe(true)
   })
 })
 
