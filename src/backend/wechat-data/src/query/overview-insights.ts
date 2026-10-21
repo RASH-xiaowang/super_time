@@ -9,6 +9,13 @@ import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
+import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
+import {
+  insightsShardCachePath,
+  loadInsightsShardCache,
+  saveInsightsShardCache,
+  type InsightsShardCacheEntry,
+} from './insights-shard-store.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryOverviewExtras } from './overview-extras.ts'
 
@@ -61,6 +68,28 @@ function cellStr(v: unknown): string {
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
   if (v instanceof Uint8Array) return new TextDecoder('utf-8', { fatal: false }).decode(v)
   return ''
+}
+
+/**
+ * 子串出现次数（**不分配数组**）。
+ *
+ * 为什么不用 `str.split(x).length - 1`：朋友圈那条解析是每行要数 2–3 个标记的热路径，
+ * `split` 会为每个标记物化一个临时数组（几千行 × 每条 XML 数 KB）。改成 indexOf 循环
+ * 只省分配、不省扫描：实测 insights 冷跑该段仍在 44–47ms（字符串扫描为主），
+ * 整体 370→362ms 属小幅；这里保留是为了减少 GC 抖动，不单独宣称延迟收益。
+ * @param hay - 被搜索的字符串。
+ * @param needle - 非空子串。
+ * @returns 非重叠出现次数。
+ */
+function countSubstr(hay: string, needle: string): number {
+  if (needle === '') return 0
+  let count = 0
+  let idx = hay.indexOf(needle)
+  while (idx !== -1) {
+    count += 1
+    idx = hay.indexOf(needle, idx + needle.length)
+  }
+  return count
 }
 
 /** 枚举 decrypted 目录下所有 *.db（不含 -wal/-shm）。 */
@@ -128,6 +157,46 @@ interface InsightsShardAgg {
 /** 分片级聚合缓存：键 `分片#self#talkerKey`，指纹 `fileSigOf(分片)`（含 SQLite 变更计数器）。 */
 const INSIGHTS_SHARD_CACHE_MAX = 64
 const insightsShardCache = new Map<string, { sig: string; agg: InsightsShardAgg }>()
+
+/** 磁盘缓存已为哪个数据根 hydrate 过（同一进程只读一次文件）。 */
+let shardCacheHydratedFor = ''
+/** 本次进程是否有新聚合需要写回磁盘。 */
+let shardCacheDirty = false
+
+/**
+ * 首次用到时把磁盘缓存灌进内存 Map。
+ *
+ * 命中与否仍由 `applyCachedShard` 逐字比对 sig 决定，所以这里**不信任文件内容**：
+ * 过期/损坏的条目只会变成未命中，不会返回错数。
+ * @param dec - 已解密数据根。
+ */
+function ensureShardCacheHydrated (dec: string): void {
+  if (shardCacheHydratedFor === dec) return
+  shardCacheHydratedFor = dec
+  try {
+    const loaded = loadInsightsShardCache<InsightsShardAgg>(insightsShardCachePath(dec))
+    for (const [key, entry] of loaded) insightsShardCache.set(key, { sig: entry.sig, agg: entry.agg })
+    while (insightsShardCache.size > INSIGHTS_SHARD_CACHE_MAX) {
+      const oldest = insightsShardCache.keys().next().value
+      if (oldest === undefined) break
+      insightsShardCache.delete(oldest)
+    }
+  } catch { /* 纯缓存：读不到就当没有 */ }
+}
+
+/**
+ * 把本次新算出的分片聚合原子写回磁盘（失败只留空缓存，不影响查询）。
+ * @param dec - 已解密数据根。
+ */
+function persistShardCacheIfDirty (dec: string): void {
+  if (!shardCacheDirty) return
+  shardCacheDirty = false
+  try {
+    const entries: Array<InsightsShardCacheEntry<InsightsShardAgg>> = []
+    for (const [key, v] of insightsShardCache) entries.push({ key, sig: v.sig, agg: v.agg })
+    saveInsightsShardCache(insightsShardCachePath(dec), entries)
+  } catch { /* 写不进去只是下次还要重算 */ }
+}
 
 /** 累计量与极值的容器（循环里用 `t` / `b` 两个对象，便于整体抽到模块级纯函数）。 */
 interface InsightsTotals {
@@ -221,6 +290,7 @@ function recordShard (
     lastActive: b.lastActive > before.bounds.lastActive ? b.lastActive : 0,
   }
   insightsShardCache.set(key, { sig, agg })
+  shardCacheDirty = true
   if (insightsShardCache.size > INSIGHTS_SHARD_CACHE_MAX) {
     const oldest = insightsShardCache.keys().next().value
     if (oldest !== undefined) insightsShardCache.delete(oldest)
@@ -245,8 +315,56 @@ function diffMapNums<K> (before: Map<K, number>, after: Map<K, number>): Array<[
   return out
 }
 
+/**
+ * 朋友圈内容统计（从 computeOverviewInsights 拆出：单函数行数棘轮 ≤250，且这段是纯扫描）。
+ *
+ * 只读 SnsTimeLine 并累加 total/images/videos/likes/comments；游标跨 await 必须用
+ * withDbAsync（见 db-open 的说明），每 SNS_YIELD_EVERY_ROWS 行让出一次。
+ * @param dec - 已解密数据根。
+ * @returns 朋友圈计数（读不到时全 0，不影响其它统计）。
+ */
+async function scanMomentsStats(dec: string): Promise<{ total: number; images: number; videos: number; likes: number; comments: number }> {
+  // 朋友圈
+  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
+  const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
+  if (existsSync(sp2)) {
+    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
+    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
+    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
+    try {
+      await withDbAsync(sp2, async (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return
+        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
+        let scanned = 0
+        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
+          const xml = cellStr(r.c)
+          moments.total += 1
+          moments.images += countSubstr(xml, '<media>') + countSubstr(xml, '<media ')
+          if (xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')) moments.videos += 1
+          const le = xml.indexOf('<LocalExtraInfo>')
+          if (le >= 0) {
+            const block = xml.slice(le, xml.indexOf('</LocalExtraInfo>', le) || xml.length)
+            const parts = countSubstr(block, '<user_comment>')
+            const likes = countSubstr(block, '<type>1</type>')
+            moments.likes += likes
+            moments.comments += Math.max(0, parts - likes)
+          }
+          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
+          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
+          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
+        }
+        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
+      })
+    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
+  }
+  return moments
+}
+
 async function computeOverviewInsights(decryptedDir: string, self = ''): Promise<OverviewInsights> {
   const dec = decryptedDir
+  queryTraceBegin('insights')
+  ensureShardCacheHydrated(dec)
   const names = contactMeta(dec).names
 
   // 反向映射 md5(table suffix) -> 联系人。真实账号来自 contactMeta 与
@@ -269,6 +387,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       db.close()
     }
   } catch { /* ignore */ }
+  queryTraceMark('insights', 'contacts', md5ToUser.size)
 
   const total = { n: 0, sent: 0 }
   const buckets: Record<string, number> = { text: 0, image: 0, voice: 0, video: 0, rich: 0, system: 0, revoked: 0, other: 0 }
@@ -347,6 +466,10 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   }
 
   // 循环后的纯计算抽成模块级助手（单函数行数棘轮：这段搬走让本函数净变短）
+  queryTraceMark('insights', 'shards')
+  // 本次有新分片聚合 ⇒ 写回磁盘缓存（下次启动直接命中，不用再扫 239 张表）。
+  persistShardCacheIfDirty(dec)
+  queryTraceMark('insights', 'shards-persist')
   const { busyHour, busyCount, deepNight, weekend } = postProcessInsights(hourDist, dayCounts)
   const totalSafe = Math.max(1, total.n)
 
@@ -373,6 +496,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       })
     } catch { /* ignore */ }
   }
+  queryTraceMark('insights', 'contact-rows', contactRows.length)
   const friendRows = contactRows.filter(r => !r.isGroup && !r.isGh)
   const activeFriends = friendRows.filter(r => talkerCount.has(r.username)).length
   const silentFriends = friendRows.length - activeFriends
@@ -390,40 +514,8 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       return { username: u, name, count }
     })
 
-  // 朋友圈
-  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
-  const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
-  if (existsSync(sp2)) {
-    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
-    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
-    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
-    try {
-      await withDbAsync(sp2, async (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-        if (!has) return
-        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
-        let scanned = 0
-        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
-          const xml = cellStr(r.c)
-          moments.total += 1
-          moments.images += xml.split('<media>').length - 1 + xml.split('<media ').length - 1
-          if (xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')) moments.videos += 1
-          const le = xml.indexOf('<LocalExtraInfo>')
-          if (le >= 0) {
-            const block = xml.slice(le, xml.indexOf('</LocalExtraInfo>', le) || xml.length)
-            const parts = block.split('<user_comment>').length - 1
-            const likes = (block.match(/<type>1<\/type>/g) ?? []).length
-            moments.likes += likes
-            moments.comments += Math.max(0, parts - likes)
-          }
-          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
-          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
-          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
-        }
-        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
-      })
-    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
-  }
+  const moments = await scanMomentsStats(dec)
+  queryTraceMark('insights', 'moments', moments.total)
 
   // 资产
   const assets = { favorites: 0, emoticons: 0, files: 0, fileBytes: 0, mediaItems: 0, mediaBytes: 0 }
@@ -457,9 +549,11 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   }
 
   // 数据健康
+  queryTraceMark('insights', 'assets')
   const dbs: Array<{ path: string; bytes: number }> = []
   walkDbFiles(dec, dbs, 0)
   const dbBytes = dbs.reduce((a, r) => a + r.bytes, 0)
+  queryTraceMark('insights', 'db-walk', dbs.length)
 
   return {
     messages: {

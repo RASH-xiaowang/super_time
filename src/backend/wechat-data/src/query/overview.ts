@@ -3,10 +3,23 @@
  * Mirrors the Rust get_wechat_data_overview: one-screen asset summary.
  */
 import { DatabaseSync } from './db-open.ts'
+import { raiseAnalyticsCache } from '../sqlite-connection.ts'
 import { existsSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
+import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
+
+/**
+ * 「签名 + 结果」磁盘缓存位置：`<数据根>/cache/overview.v1.json`。
+ *
+ * 冷算实测 ~98ms（resource 聚合 41ms 最大）；同一份解密数据第二次启动还要重算纯属浪费。
+ * 命中判断靠签名（含资源库/分片目录），数据一变自动失效。
+ */
+function overviewCachePath(dec: string): string {
+  return join(dirname(dec), 'cache', 'overview.v1.json')
+}
 import { classifyPacked } from './resource-classify.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { queryContacts } from './contacts.ts'
@@ -107,11 +120,19 @@ export async function queryOverview(decryptedDir: string): Promise<OverviewResul
     fileSigOf(join(dec, 'message', 'message_resource.db')),
     shardCatalogSig(dec, ['message']),
   ].join('|')
-  return cachedBySigAsync('overview:' + dec, sig, () => computeOverview(dec), 30_000)
+  return cachedBySigAsync('overview:' + dec, sig, () => computeOverview(dec, sig), 30_000)
 }
 
-async function computeOverview(dec: string): Promise<OverviewResult> {
+async function computeOverview(dec: string, sig: string): Promise<OverviewResult> {
+  queryTraceBegin('overview')
+  // 跨启动复用：签名一致直接返回上次结果（跳过下面全部扫描）。
+  const diskHit = loadSigCached<OverviewResult>(overviewCachePath(dec), sig)
+  if (diskHit !== null) {
+    queryTraceMark('overview', 'disk-hit')
+    return diskHit
+  }
   const cstats = queryContacts(dec).stats
+  queryTraceMark('overview', 'contacts')
   const sessions = countRows(join(dec, 'session', 'session.db'), 'SessionTable')
   const groups = cstats.group ?? 0
   const contacts = cstats.friend ?? 0
@@ -119,7 +140,9 @@ async function computeOverview(dec: string): Promise<OverviewResult> {
   const moments = countRows(join(dec, 'sns', 'sns.db'), 'SnsTimeLine')
   const favorites = countRows(join(dec, 'favorite', 'favorite.db'), 'fav_db_item')
   const emoticons = countRows(join(dec, 'emoticon', 'emoticon.db'), 'kNonStoreEmoticonTable')
+  queryTraceMark('overview', 'counts')
   const revoked = await countRevokedAcrossShards(dec)
+  queryTraceMark('overview', 'revoked', revoked)
 
   // storage
   let total_size = 0
@@ -129,6 +152,9 @@ async function computeOverview(dec: string): Promise<OverviewResult> {
   if (existsSync(resourcePath)) {
     try {
       withDb(resourcePath, (db) => {
+        // 分析型查询（29MB 资源库 GROUP BY type）：全局读缓存 256KB 会反复打穿，
+        // 只给这条连接临时抬高（与 getStorageStats 同一口径）。
+        raiseAnalyticsCache(db)
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined
         if (!has) return
         const agg = db.prepare('SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail').get() as { s: number; n: number }
@@ -149,6 +175,7 @@ async function computeOverview(dec: string): Promise<OverviewResult> {
       })
     } catch { /* resource db unavailable */ }
   }
+  queryTraceMark('overview', 'resource', total_count)
 
   // moments authors (Top 20)
   const moments_authors: MomentsAuthorStat[] = []
@@ -187,8 +214,9 @@ async function computeOverview(dec: string): Promise<OverviewResult> {
       })
     } catch { /* no sns */ }
   }
+  queryTraceMark('overview', 'sns', moments_authors.length)
 
-  return {
+  const result: OverviewResult = {
     sessions,
     groups,
     contacts,
@@ -200,4 +228,8 @@ async function computeOverview(dec: string): Promise<OverviewResult> {
     storage: { total_size, total_count, categories },
     moments_authors,
   }
+  queryTraceMark('overview', 'done')
+  // 落盘纯缓存：签名一致时下次启动直接命中（写失败只影响下次重算）。
+  saveSigCached(overviewCachePath(dec), sig, result)
+  return result
 }

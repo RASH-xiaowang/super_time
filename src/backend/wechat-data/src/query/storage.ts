@@ -6,8 +6,10 @@
  */
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
+import { raiseAnalyticsCache } from '../sqlite-connection.ts'
+import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { decompress } from 'fzstd'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
@@ -21,6 +23,29 @@ export interface StorageRank { username: string; name: string; count: number; si
 export interface LargeFile { name: string; username: string; sessionName: string; create_time: number; size: number }
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
+
+/**
+ * `getStorageStats` 的分段打点（`SUPERTIME_STORAGE_TRACE=1` 才生效，默认零开销）。
+ *
+ * 为什么需要：它是首屏「数据总览」最贵的单个查询（本机实测慢调用日志 676ms，
+ * 见 docs/perf/09-RESULT.md）。但 676ms 到底花在 SQL 聚合、联系人表、还是
+ * `msg/file` 名称树的逐文件 stat 上，光看代码判断不了 —— 本机只读复刻实测 SQL
+ * 合计仅 157ms、contact.db 15ms，说明大头在应用内某个别的段。这里只打时间戳，
+ * 不做任何业务动作，是定位而不是优化。
+ */
+const STORAGE_TRACE = process.env.SUPERTIME_STORAGE_TRACE === '1'
+let storageTraceT0 = 0
+/**
+ * 打一条存储分段。
+ * @param label - 阶段名（固定词表，便于日志侧解析）。
+ * @param n - 可选计数（行数/条目数），用于判断「慢在量上还是常数开销」。
+ */
+function storageMark(label: string, n = 0): void {
+  if (!STORAGE_TRACE) return
+  try {
+    console.log('[storage-trace] ' + label + ' t=' + String(Date.now() - storageTraceT0) + (n > 0 ? ' n=' + String(n) : ''))
+  } catch { /* 打点失败绝不影响查询 */ }
+}
 
 function decodeMsgText(v: unknown): string {
   if (v === null || v === undefined) return ''
@@ -96,8 +121,20 @@ function fileNamesSig(root: string): string {
   return parts.join('|')
 }
 
+/**
+ * file-names（size→原文件名）磁盘缓存的位置：`<数据根>/cache/file-names.v1.json`。
+ *
+ * 为什么能跨启动命中：这里的签名是 **`msg/file` 目录树**的 mtime/size，
+ * 与应用启动的 SQLite WAL checkpoint 无关（checkpoint 只改库文件、不碰文件树），
+ * 所以「数据没新增文件」时连续启动签名稳定 ⇒ 可直接复用上一次的扫描结果。
+ * 而每次冷扫描要逐文件 stat 上万个文件（本机实测 122ms）。
+ */
+function fileNamesDiskPath(dec: string): string {
+  return join(dirname(dec), 'cache', 'file-names.v1.json')
+}
+
 /** 扫描 msg/file 各月份子目录，建立 size -> 原文件名 映射（还原大文件真实文件名）。 */
-async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<Map<number, string>> {
+async function loadFileNamesBySize(wechatBaseDir: string | undefined, decryptedDir: string): Promise<Map<number, string>> {
   if (!wechatBaseDir) return new Map<number, string>()
   const root = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(root)) return new Map<number, string>()
@@ -108,7 +145,13 @@ async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<M
   // TTL 保持 10s（不是这里的默认 30s）：目录签名看不到「同名文件原地改 size」这类
   // 子目录内部变更（NTFS 下目录的 mtime/size 不会因此变化），而改动前那次「事件后清空」
   // 给的实效上界就是 ~10s（同步活跃期事件间隔）。别把上界放宽。
-  return cachedBySigAsync('storage-file-names:' + root, fileNamesSig(root), async () => {
+  //
+  // 进程内的 10s TTL 之外还有一层**磁盘**缓存：它同样按签名校验，所以不会放大上面的
+  // 陈旧窗口（签名一变就 miss），只在「同一份数据重新启动」时省掉整树 stat。
+  const sig = fileNamesSig(root)
+  return cachedBySigAsync('storage-file-names:' + root, sig, async () => {
+    const cached = loadSigCached<Array<[number, string]>>(fileNamesDiskPath(decryptedDir), sig)
+    if (cached !== null) return new Map(cached)
     const map = new Map<number, string>()
     try {
       for (const e of readdirSync(root, { withFileTypes: true })) {
@@ -127,6 +170,8 @@ async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<M
         }
       }
     } catch { /* ignore */ }
+    // 落盘纯缓存（失败只影响下次重启重扫）。
+    saveSigCached(fileNamesDiskPath(decryptedDir), sig, Array.from(map.entries()))
     return map
   }, 10_000)
 }
@@ -176,12 +221,18 @@ async function computeStorageStats(
 }> {
   const path = join(decryptedDir, 'message', 'message_resource.db')
   if (!existsSync(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] }
+  storageTraceT0 = Date.now()
   const db = new DatabaseSync(path, { readOnly: true })
+  // 分析型查询：全局读缓存只有 256KB（短读连接口径），这条查询会把 JOIN 打穿。
+  // 只给本连接临时抬高（实测 chats+senders 233ms → 64ms），查询结束连接即关闭。
+  raiseAnalyticsCache(db)
   try {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined
     if (!has) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] }
+    storageMark('open')
 
     const agg = db.prepare('SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail').get() as { s: number; n: number }
+    storageMark('agg')
 
     // categories: group by type, sample packed_info per type for the label
     const typeRows = db.prepare('SELECT type, COUNT(*) AS c, SUM(size) AS s FROM MessageResourceDetail GROUP BY type').all() as Array<{ type: number; c: number; s: number }>
@@ -195,8 +246,10 @@ async function computeStorageStats(
       catMap.set(label, cur)
     }
     const categories: StorageCategory[] = Array.from(catMap.entries()).map(([label, v]) => ({ label, count: v.count, size: v.size }))
+    storageMark('types', typeRows.length)
 
     const names = contactMeta(decryptedDir).names
+    storageMark('contacts', names.size)
 
     // chat ranking: join detail -> info -> ChatName2Id (chat_id is a rowid)
     const chatRows = db.prepare(`
@@ -206,6 +259,7 @@ async function computeStorageStats(
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       GROUP BY i.chat_id ORDER BY SUM(d.size) DESC LIMIT 50`).all() as Array<{ u: string; n: number; s: number }>
     const chats: StorageRank[] = chatRows.map(r => ({ username: r.u, name: names.get(r.u) ?? '', count: r.n, size: r.s }))
+    storageMark('chats', chatRows.length)
 
     // sender ranking
     const senderRows = db.prepare(`
@@ -215,6 +269,7 @@ async function computeStorageStats(
       LEFT JOIN SenderName2Id s ON s.rowid = i.sender_id
       GROUP BY i.sender_id ORDER BY SUM(d.size) DESC LIMIT 50`).all() as Array<{ u: string; n: number; s: number }>
     const senders: StorageRank[] = senderRows.map(r => ({ username: r.u, name: names.get(r.u) ?? '', count: r.n, size: r.s }))
+    storageMark('senders', senderRows.length)
 
     // large files (top 100, real names + owning session)
     const bigRows = db.prepare(`
@@ -224,7 +279,9 @@ async function computeStorageStats(
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       ORDER BY d.size DESC LIMIT 100`).all() as Array<{ s: number; ty: number; di: string; p?: Uint8Array | null; ct: number; u: string; svr: string }>
-    const sizeToName = await loadFileNamesBySize(wechatBaseDir)
+    storageMark('big-rows', bigRows.length)
+    const sizeToName = await loadFileNamesBySize(wechatBaseDir, decryptedDir)
+    storageMark('file-names', sizeToName.size)
     const large_files: LargeFile[] = []
     for (const r of bigRows) {
       // P1-2：每条大文件都可能触发 `resolveFileTitle`，而它会**逐个消息分片**开库去找那条消息
@@ -240,6 +297,7 @@ async function computeStorageStats(
       }
       large_files.push({ name, username: r.u, sessionName: names.get(r.u) ?? '', create_time: r.ct, size: r.s })
     }
+    storageMark('large-files', large_files.length)
 
     return { total_size: agg.s, total_count: agg.n, categories, chats, senders, large_files }
   } finally {

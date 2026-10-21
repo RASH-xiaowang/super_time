@@ -1,5 +1,9 @@
 'use strict';
 
+// 启动分段打点的统一时间原点：必须早于任何 require，才能把模块加载成本算进去
+// （打点本身由 `SUPERTIME_BOOT_TRACE=1` 门控，未开启时只是一个数字赋值）。
+globalThis.__SUPERTIME_BOOT_T0 = Date.now();
+
 /**
  * 「Super Time」后端独立进程（Electron utilityProcess）。
  *
@@ -31,6 +35,16 @@ require('./console-safe').install();
 const { createWechatBackend } = require('./wechat-host');
 const { createMemSentinel } = require('./worker-mem-sentinel');
 
+/** 与 `wechat-host.js` 同一口径的启动分段打点（`SUPERTIME_BOOT_TRACE=1` 门控）。 */
+const BOOT_TRACE_ON = process.env.SUPERTIME_BOOT_TRACE === '1';
+function bootTrace(label) {
+  if (!BOOT_TRACE_ON) return;
+  try {
+    console.log('[boot-phase] ' + label + ' t=' + String(Date.now() - globalThis.__SUPERTIME_BOOT_T0));
+  } catch { /* 打点失败绝不影响启动 */ }
+}
+bootTrace('worker:requires-done');
+
 // 后端进程启动留痕（主进程会把这一行转进 <STATE_DIR>/logs/app.log）。
 // 为什么值得常驻一条：后端是独立进程 —— 它静默没起来、或起来又立刻死了，
 // 界面上只表现成「功能不可用」；有一条带 pid 的启动行才好判断。
@@ -41,7 +55,22 @@ console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=
 // 而涨的原因可能只是一次性的全量年报）。逻辑与判据见 worker-mem-sentinel.js
 // 与 tests/worker-mem-sentinel.spec.ts。起不来就算了：观测设施不该拖垮后端。
 try {
-  createMemSentinel({ log: (level, args) => console.log(String(args[0])) }).start();
+  // 2026-10-21（性能专项）：**必须把真实定时器传进去**。`createMemSentinel` 的缺省
+  // `setIntervalFn` 是空函数（为了让单测不必真等 60 秒），此前这里只传了 `log`，
+  // 于是生产环境只在 start() 时采一次、之后再也不会采 —— 诊断日志里的 `[mem]`
+  // 永远只有启动那一行（基线实测 80s 运行仅 1 条，见 docs/perf/02-BASELINE.md §9-2），
+  // 「worker 内存时间序列」因此一直读不到。
+  createMemSentinel({
+    log: (level, args) => console.log(String(args[0])),
+    setIntervalFn: setInterval,
+    clearIntervalFn: clearInterval,
+    // 2026-10-21（内存基线）：把「受控缓存当前占用/上限」拼进同一行 —— 这样
+    // 「有界缓存真的在界内」在线上是可回看的事实（见 wechat-host 的 cacheStatsLine）。
+    extra: () => (backend && typeof backend.cacheStatsLine === 'function' ? 'caches=' + backend.cacheStatsLine() : ''),
+    // 诊断：`SUPERTIME_MEM_GC=1` + worker 带 `--expose-gc` 时，采样前强制 GC，
+    // 用来区分「还没回收的垃圾」与「真实保留」。（不会在生产默认开启）
+    ...(process.env.SUPERTIME_MEM_GC === '1' && typeof global.gc === 'function' ? { gc: () => global.gc() } : {}),
+  }).start();
 } catch { /* 哨兵起不来不影响后端本身 */ }
 
 let backend = null;
@@ -74,10 +103,12 @@ async function handle(msg) {
   try {
     switch (type) {
       case 'init': {
+        bootTrace('worker:init-received');
         backend = await createWechatBackend({
           userDataPath: payload?.userDataPath,
           onEvent: (name, args) => post({ type: 'event', name, args }),
         });
+        bootTrace('worker:init-done');
         post({ id, value: { info: backend.info(), methods: backend.methodNames() } });
         return;
       }

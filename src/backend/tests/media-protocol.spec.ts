@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MIME_BY_EXT, mediaResponse, parseDecodedUrl, resolveDecodedFile } from '../media-protocol.js'
+import { MIME_BY_EXT, mediaResponse, parseDecodedUrl, parseThumbWidth, resolveDecodedFile } from '../media-protocol.js'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -84,5 +84,28 @@ describe('mediaResponse：流式返回图片，404 不泄露路径', () => {
     expect(noRoot.status).toBe(404)
     const missing = mediaResponse(root, 'wechat-media://decoded/missing.jpg')
     expect(missing.status).toBe(404)
+  })
+})
+
+describe('parseThumbWidth：thumb 档宽度（Alpha 的 thumb/full 两档）', () => {
+  it('只接受 64–1024 的整数；缺失/非法/越界一律 null（回原图）', () => {
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=320')).toBe(320)
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=64')).toBe(64)
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=1024')).toBe(1024)
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg')).toBeNull()
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=63')).toBeNull()
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=1025')).toBeNull()
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=abc')).toBeNull()
+    expect(parseThumbWidth('wechat-media://decoded/a.jpg?w=-320')).toBeNull()
+  })
+
+  it('node 环境没有 nativeImage ⇒ 回退原图仍 200（不炸、不 404）', async () => {
+    const root = tempRoot()
+    writeFileSync(join(root, 'a.png'), 'png-bytes')
+    const res = mediaResponse(root, 'wechat-media://decoded/a.png?w=320')
+    expect(res.status).toBe(200)
+    // 单测里 require('electron') 不可用：走原图 fallback（content-type 保持 png）
+    expect(res.headers.get('Content-Type')).toBe(MIME_BY_EXT['.png'])
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('png-bytes')
   })
 })

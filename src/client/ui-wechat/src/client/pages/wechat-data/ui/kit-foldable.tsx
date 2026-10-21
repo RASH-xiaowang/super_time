@@ -95,6 +95,7 @@ export const FoldableBar = forwardRef(function FoldableBar({ children, idleMs, l
     ctrlRef.current = ctrl
     return () => {
       if (clipTimerRef.current !== null) { window.clearTimeout(clipTimerRef.current); clipTimerRef.current = null }
+      mq.removeEventListener('change', onMq)
       ctrl.dispose()
       ctrlRef.current = null
     }

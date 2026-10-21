@@ -54,6 +54,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
   // 就是在这个内联循环外面挂了一层"命中即 continue"。**行数只许变小。**
   'src/backend/wechat-data/src/query/overview-insights.ts  computeOverviewInsights  252',
+  // 2026-10-21：收藏/任务功能线把知识库批量动作拆成 `kb-batch-actions.tsx` ⇒ 727 → 687。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  687',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
   // 725 → 513；同日补上「始终可见的折叠按钮」（浮层收起后唯一的入口）⇒ 513 → 523；
@@ -106,7 +107,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  384',
   // 2026-10-16：资产类面板（文件/收藏/表情/媒体/公众号）重做时把列表筛选与操作按钮
   // 抽进 `asset-ui.tsx`，`FilesPanel` 364 → 359。棘轮只许变小，成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  359',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  336',
   // 2026-10-19（微信化改版）：消息卡去掉渐变/发光分支，329 → 322。棘轮只许变小，成果记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  322',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  306',
@@ -122,7 +123,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 模块级 `remoteImagesWithOp` / `mapGeoJsonWithOp`，方法体退回「签名 + 一行转发」。
   // 2026-10-19：319 → 317。头像归档逻辑搬到模块级 `avatarWithArchive` /
   // `avatarsLocalWithArchive`，方法体退回「签名 + 一行转发」。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  317',
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  313',
   // 2026-10-14（M9）：`SettingsPanel` 改成「桌面/浏览器」分派器（浏览器态整面板降级，见
   // `settings-browser.tsx`），原来那份三百多行的实现改名 `SettingsDesktopPanel`。
   // 这是**改名不是变胖**：行数一字未动，仍记 328。想降就得把某几节真搬出去。

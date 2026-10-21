@@ -5,7 +5,7 @@
  * 生产媒体 RPC 必须走这里的 async 入口：原始 .dat、缓存与写入都走 fs/promises，
  * wxgf → ffmpeg 兜底再 await 子进程，尽量不让 worker 事件循环做磁盘/进程等待。
  */
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { isMd5 } from '../md5.ts'
 import { normalizeAesKey } from '../keys/image-key.ts'
@@ -22,6 +22,7 @@ import {
   resolveImageFilePath,
   resolveImageResourceHint,
   type DecodeDatPayload,
+  type ImageResourceHint,
 } from './media-image.ts'
 import { transcodeWxgfAsync, type WxgfTranscoderAsync } from './wxam-image.ts'
 
@@ -32,6 +33,13 @@ export type AsyncImageResult = {
   /** 相对 decoded_images 的落盘路径（如 `wxid_x/ab12.jpg`）：桌面端拼 wechat-media://，手机端忽略。 */
   file?: string
   error?: string
+}
+
+export interface DecodeImageOptions {
+  /** Hint already resolved by the batch entry; avoids a per-image shard lookup. */
+  hint?: ImageResourceHint
+  /** Return only the decoded file path when possible; skip base64 in fileOnly mode. */
+  fileOnly?: boolean
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -47,14 +55,23 @@ async function pathExists(path: string): Promise<boolean> {
 async function cachedImageAsync(
   dir: string,
   md5: string,
+  fileOnly = false,
 ): Promise<{ url?: string; format?: string; thumb?: boolean; file?: string } | null> {
   for (const thumb of [false, true]) {
     for (const ext of RENDERABLE_EXTS) {
       const p = join(dir, md5 + (thumb ? '.t.' : '.') + ext)
       if (!(await pathExists(p))) continue
+      const fmt = ext === 'jpeg' ? 'jpg' : ext
+      if (fileOnly) {
+        try {
+          if (!(await stat(p)).isFile()) return null
+          return { format: fmt, ...(thumb ? { thumb: true } : {}), file: p }
+        } catch {
+          return null
+        }
+      }
       try {
         const bytes = await readFile(p)
-        const fmt = ext === 'jpeg' ? 'jpg' : ext
         return { url: toDataUrl(fmt, new Uint8Array(bytes)), format: fmt, ...(thumb ? { thumb: true } : {}), file: p }
       } catch {
         // 与同步入口一致：坏缓存落到 .dat 重解，而不是把读失败当成答案。
@@ -109,7 +126,8 @@ async function decodeDatToResultAsync(
   aesBytes: Uint8Array | null,
   xorKey: number,
   onDecoded: (file: string, dec: { format: string; bytes: Uint8Array }) => void | Promise<void>,
-): Promise<{ url: string; format: string; file: string } | null> {
+  includeDataUrl = true,
+): Promise<{ url?: string; format: string; file: string; bytes: Uint8Array } | null> {
   for (const f of files) {
     try {
       const bytes = await readFile(f)
@@ -118,7 +136,12 @@ async function decodeDatToResultAsync(
       try {
         await onDecoded(f, dec)
       } catch { /* cache best-effort */ }
-      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, file: f }
+      return {
+        ...(includeDataUrl ? { url: toDataUrl(dec.format, dec.bytes) } : {}),
+        format: dec.format,
+        file: f,
+        bytes: dec.bytes,
+      }
     } catch { /* try next candidate */ }
   }
   return null
@@ -138,15 +161,18 @@ export async function decodeImageDataUrlAsync(
   wechatBaseDir?: string,
   aesKey?: string | Uint8Array,
   xorKey?: number,
+  options: DecodeImageOptions = {},
 ): Promise<AsyncImageResult> {
-  const hint = resolveImageResourceHint(decryptedDir, username, localId)
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId)
   const md5 = hint.md5
+  const fileOnly = options.fileOnly === true
   // 桌面临时路径：落盘成功才回填，失败时留给 data URL 兜底（不能把不存在的路径发给渲染层）。
   let writtenFile = ''
   const relFile = (abs: string): string => relative(decodedDir, abs).split('\\').join('/')
   if (!md5 && !hint.dataIndex) return { error: '无法找到图片 MD5' }
   if (md5) {
-    const hit = await cachedImageAsync(decodedDir, md5) ?? await cachedImageAsync(join(decodedDir, username), md5)
+    const hit = await cachedImageAsync(decodedDir, md5, fileOnly)
+      ?? await cachedImageAsync(join(decodedDir, username), md5, fileOnly)
     if (hit) return hit.file === undefined ? hit : { ...hit, file: relFile(hit.file) }
   }
   // 老缓存里的 `.hevc` 占位只在所有可重解路径都失败后用于给出一致的降级文案；
@@ -165,8 +191,19 @@ export async function decodeImageDataUrlAsync(
         return mkdir(dir, { recursive: true })
           .then(() => writeFile(out, Buffer.from(dec.bytes)))
           .then(() => { writtenFile = out })
-      })
-      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}), ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }) }
+      }, !fileOnly)
+      if (r) {
+        return {
+          ...(r.url !== undefined
+            ? { url: r.url }
+            : writtenFile === ''
+              ? { url: toDataUrl(r.format, r.bytes) }
+              : {}),
+          format: r.format,
+          ...(isThumbTier(r.file) ? { thumb: true } : {}),
+          ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }),
+        }
+      }
       return { error: 'hevc-unsupported' }
     }
   }
@@ -181,8 +218,19 @@ export async function decodeImageDataUrlAsync(
         return mkdir(dir, { recursive: true })
           .then(() => writeFile(out, Buffer.from(dec.bytes)))
           .then(() => { writtenFile = out })
-      })
-      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}), ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }) }
+      }, !fileOnly)
+      if (r) {
+        return {
+          ...(r.url !== undefined
+            ? { url: r.url }
+            : writtenFile === ''
+              ? { url: toDataUrl(r.format, r.bytes) }
+              : {}),
+          format: r.format,
+          ...(isThumbTier(r.file) ? { thumb: true } : {}),
+          ...(writtenFile === '' ? {} : { file: relFile(writtenFile) }),
+        }
+      }
     }
   }
   if (hasHevc) return { error: 'hevc-unsupported' }

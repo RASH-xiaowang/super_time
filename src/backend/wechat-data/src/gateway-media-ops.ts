@@ -6,7 +6,7 @@
  */
 
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, MapGeoJsonResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, OriginalBatchResult, OriginalFetchPlan, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts'
+import type { AccountsSnapshot, FileImageDataUrlsResult, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, MapGeoJsonResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, OriginalBatchResult, OriginalFetchPlan, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts'
 import { withoutDataUrlWhenFile, type ImageBatchItem, type SnsVideoCoverBatchOptions, type SnsVideoCoverBatchResult } from './remotes/media.ts'
 import type { HarvestResult, HarvestStatus } from './query/original-harvester.ts'
 import type { WxcdnQuota } from './query/wxcdn-original.ts'
@@ -165,13 +165,16 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
 
 
   /**
-   * Resolve a file-library image (hardlink md5) to an offline base64 data URL.
-   * 优先读已解密缓存，否则通过 hardlink.db 定位 .dat 原图解密。
-   * @param options - file md5.
-   * @returns ImageDataUrlResult: base64 data URL or error.
+   * Resolve a file-library image to decoded-cache path / data URL.
+   *
+   * 2026-10-21：按需解密（`msg/attach` 索引 → `.dat` → decoded 缓存），
+   * 桌面端返回 `file`（相对路径）供 `wechat-media://` 流式显示；
+   * `thumbFirst`：网格取 `_t` 缩略档，灯箱取原图档。
+   * @param options - file image key (attachment filename md5 prefix) + optional thumbFirst.
+   * @returns ImageDataUrlResult: `file`（优先）/ `url` / error.
   */
   @Remote('getFileImageDataUrl')
-  async getFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
+  async getFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
   return await this.mediaRemotes().getFileImageDataUrl(options)
   }
 
@@ -195,6 +198,20 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
     size?: number
   }): ImageDataUrlResult {
     return this.mediaRemotes().getFavoriteMediaDataUrl(options)
+  }
+
+
+  /**
+   * 批量取文件库图片（2026-10-21：把「一屏 N 格 = N 次 RPC」收成 1 次；借鉴 Alpha 的批量 token）。
+   *
+   * 后端去重、单次上限 48、块内并行且总解码并发 ≤4；返回逐条 `{key, file?, error?}`，
+   * 桌面端按 `file` 拼 `wechat-media://` 流式显示。
+   * @param options - `keys` 屏上可见格 key；`thumbFirst` 网格传 true（`_t` 档优先）。
+   * @returns FileImageDataUrlsResult（`key` 回信，顺序 = 去重后的入参顺序）。
+  */
+  @Remote('getFileImageDataUrls')
+  async getFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<FileImageDataUrlsResult> {
+  return await this.mediaRemotes().getFileImageDataUrls(options)
   }
 
 

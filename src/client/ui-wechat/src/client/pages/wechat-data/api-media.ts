@@ -54,6 +54,7 @@ import type {
   CallsSnapshot,
   GraphSnapshot,
   GroupInfoSnapshot,
+  FileImageDataUrlsResult,
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
   ImageDataUrlResult,
@@ -167,12 +168,14 @@ export async function apiGetSnsImageDataUrl(options: {
   return unwrap(await remote().getSnsImageDataUrl(options))
 }
 /**
- * Resolve a file-library image (hardlink md5) to a data URL.
- * 优先读已解密缓存，否则定位 .dat 原图解密。
- * @param options - file md5.
+ * Resolve a file-library image (attachment md5) to decoded cache path / data URL.
+ *
+ * 2026-10-21：后端按需解密并返回 `file` 相对路径；桌面端据此拼
+ * `wechat-media://` 流式显示（缩略图由主进程按需生成）。`thumbFirst` 网格用 `_t` 档。
+ * @param options - file image key + optional thumbFirst.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
+export async function apiGetFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getFileImageDataUrl(options))
 }
 
@@ -196,6 +199,17 @@ export async function apiGetFavoriteMediaDataUrl(options: {
   return unwrap(await remote().getFavoriteMediaDataUrl(options))
 }
 
+/**
+ * 批量取文件库图片（一屏 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
+ *
+ * 后端去重/限流/按需解密，返回逐条 `{key, file?, error?}`；调用方按 `key` 回贴缩略图，
+ * 不要把结果按下标与卡片对齐（去重后顺序已不再是入参顺序）。
+ * @param options - `keys` 屏上可见格 key；`thumbFirst` 网格传 true。
+ * @returns FileImageDataUrlsResult.
+ */
+export async function apiGetFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<FileImageDataUrlsResult> {
+  return unwrap(await remote().getFileImageDataUrls(options))
+}
 /**
  * Resolve a custom emoticon (sticker) md5 to a data URL.
  *
@@ -392,8 +406,11 @@ export async function apiGetMapGeoJson(urls: readonly string[]): Promise<MapGeoJ
   return unwrap(await remote().getMapGeoJson({ urls: [...urls] }))
 }
 
-/** 一次代理请求最多带几张（与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL` 对齐；超了后端会整条回错误）。 */
-const REMOTE_IMAGE_CHUNK = 40
+/**
+ * 一次代理请求最多带几张：与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL=20` 一致；改这里必须同步后端。
+ * 不能更大：超过 20 张时后端会把整批以「单次最多 20 张」拒绝，客户端重试仍会整批失败。
+ */
+const REMOTE_IMAGE_CHUNK = 20
 /**
  * 攒批窗口（毫秒）：同一屏里挂出来的朋友圈视频封面并成一次 `getSnsVideoCoversBatch`（W2-5.6）。
  *

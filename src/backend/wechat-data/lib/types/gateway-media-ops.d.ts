@@ -4,7 +4,7 @@
  * 与其它 gateway-* 壳共同构成继承链；装饰器标记会落到最派生原型上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：gateway-remote-surface.spec.ts）。
  */
-import type { AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
+import type { FileImageDataUrlsResult, AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
 import { type ImageBatchItem, type SnsVideoCoverBatchOptions, type SnsVideoCoverBatchResult } from './remotes/media.ts';
 import type { HarvestResult, HarvestStatus } from './query/original-harvester.ts';
 import type { WxcdnQuota } from './query/wxcdn-original.ts';
@@ -43,14 +43,12 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     /**
      * Resolve one voice message to an inline-playable wav data URL.
      * 语音实体是 silk，需要解码成 wav 才能播；产物落在转写链路同一份缓存里。
-     * 收藏语音没有聊天会话/locale_id，可直接用 XML 里的 `svrId` 定位。
-     * @param options - svrId，或 username + localId（二选一）。
+     * @param options - username and localId of the voice message.
      * @returns VoiceDataUrlResult: base64 wav data URL (+ duration) or error.
     */
     getVoiceDataUrl(options: {
-        username?: string;
-        localId?: number;
-        svrId?: string;
+        username: string;
+        localId: number;
     }): Promise<VoiceDataUrlResult>;
     /**
      * Look up one video message: cover thumbnail + the on-disk video path.
@@ -141,32 +139,30 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         offline?: boolean;
     }): Promise<ImageDataUrlResult>;
     /**
-     * Resolve a file-library image (hardlink md5) to an offline base64 data URL.
-     * 优先读已解密缓存，否则通过 hardlink.db 定位 .dat 原图解密。
-     * @param options - file md5.
-     * @returns ImageDataUrlResult: base64 data URL or error.
+     * Resolve a file-library image to decoded-cache path / data URL.
+     *
+     * 2026-10-21：按需解密（`msg/attach` 索引 → `.dat` → decoded 缓存），
+     * 桌面端返回 `file`（相对路径）供 `wechat-media://` 流式显示；
+     * `thumbFirst`：网格取 `_t` 缩略档，灯箱取原图档。
+     * @param options - file image key (attachment filename md5 prefix) + optional thumbFirst.
+     * @returns ImageDataUrlResult: `file`（优先）/ `url` / error.
     */
     getFileImageDataUrl(options: {
         md5: string;
+        thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
     /**
-     * 收藏资源本地缓存解析。
+     * 批量取文件库图片（2026-10-21：把「一屏 N 格 = N 次 RPC」收成 1 次；借鉴 Alpha 的批量 token）。
      *
-     * 微信收藏的图片/视频/文件/语音文件位于 `business/favorite`，文件名是不透明
-     * 哈希，XML 只提供明文内容 MD5。此入口与 SNS 图片接口分开，避免继续拿
-     * 朋友圈缓存去碰运气。
-     * @param options - XML 中的 md5/thumbMd5/fullMd5 + 类型提示。
-     * @returns data URL 或本地未命中说明。
-     */
-    getFavoriteMediaDataUrl(options: {
-        md5?: string;
-        thumbMd5?: string;
-        fullMd5?: string;
-        kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown';
-        ext?: string;
-        fileName?: string;
-        size?: number;
-    }): ImageDataUrlResult;
+     * 后端去重、单次上限 48、块内并行且总解码并发 ≤4；返回逐条 `{key, file?, error?}`，
+     * 桌面端按 `file` 拼 `wechat-media://` 流式显示。
+     * @param options - `keys` 屏上可见格 key；`thumbFirst` 网格传 true（`_t` 档优先）。
+     * @returns FileImageDataUrlsResult（`key` 回信，顺序 = 去重后的入参顺序）。
+    */
+    getFileImageDataUrls(options: {
+        keys: string[];
+        thumbFirst?: boolean;
+    }): Promise<FileImageDataUrlsResult>;
     /**
      * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.
      * 先读 decoded 缓存 → 扫 msg/attach 与微信的表情缓存目录里解密；

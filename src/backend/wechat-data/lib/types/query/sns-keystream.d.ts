@@ -6,6 +6,15 @@
  * 这个常量只服务于 `decryptSnsHead`（视频链路）。
  */
 export declare const SNS_HEAD_ENCRYPTED_BYTES = 131072;
+/** 密钥流缓存的单测把手；不暴露内部 Map。 */
+export declare function keystreamCacheHandles(): {
+    stats: () => {
+        count: number;
+        total: number;
+    };
+    clear: () => void;
+    putForTest: (key: string, bytes: Buffer) => void;
+};
 /**
  * 生成 WxIsaac64 密钥流。
  * @param seed - 朋友圈 XML 里 `<enc key="NNNN">` 的十进制字符串。

@@ -25,8 +25,9 @@ import { readArchivedAvatar, readArchivedAvatars, saveArchivedAvatar, saveArchiv
 import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
-import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint } from '../query/media-image.ts'
-import { decodeEmoticonDataUrlAsync, decodeFileImageDataUrlAsync, decodeImageDataUrlAsync } from '../query/media-image-async.ts'
+import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
+import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
+import { createFileImageRemotes } from './media-file-images.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
@@ -54,11 +55,15 @@ export interface MediaRemoteCtx {
    */
   decryptState: DecryptStatus
   warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string,
-    items: ReadonlyArray<{ username: string; localId: number }>, aesKey: string | undefined, xorKey: number) => Promise<void>
+    items: ReadonlyArray<{ username: string; localId: number }>, aesKey: string | undefined, xorKey: number,
+    knownMd5s?: readonly string[]) => Promise<void>
 }
 
 /** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
 const IMAGE_BATCH_MAX = 200
+
+import { IMAGE_BATCH_CONCURRENCY, mapWithConcurrency } from '../query/concurrency.ts'
+export { IMAGE_BATCH_CONCURRENCY, mapWithConcurrency }
 
 /**
  * 批量取表情时的**出网并发上限**（E1，2026-09-28）。
@@ -191,10 +196,10 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
     /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
-    async getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): Promise<{ items: ImageBatchItem[] }> {
+    async getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }>; fileOnly?: boolean }): Promise<{ items: ImageBatchItem[] }> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return imagesBatchWithAutoUpgrade(rc, options?.items, base, aesKey, xorKey)
+      return imagesBatchWithAutoUpgrade(rc, options?.items, base, aesKey, xorKey, options?.fileOnly === true)
     },
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult> {
@@ -202,11 +207,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return snsImageWithCdnFirst(rc, options, pair)
     },
 
-    async getFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
-      const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return await decodeFileImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
-    },
+    ...createFileImageRemotes(rc),
 
     /**
      * 收藏资源本地缓存：图片、视频、文件、语音和未知资源共用同一条
@@ -612,16 +613,20 @@ async function imageWithAutoUpgrade(
   aesKey: string | undefined,
   xorKey: number | undefined,
   allowNetwork: boolean,
+  decodeOptions?: DecodeImageOptions,
 ): Promise<ImageDataUrlResult> {
   const decrypted = rc.dirs().decrypted
   const decoded = rc.dirs().decoded
-  const r = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey)
+  const r = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey, decodeOptions)
   // 只有「解出来是缩略图」才值得再试一次；已经是原图 / 出错都不动。
-  if (r.thumb !== true || r.url === undefined) return r
-  const up = await tryUpgradeToOriginal(decrypted, decoded, username, localId, base, aesKey, xorKey ?? 0xff, allowNetwork)
+  if (r.thumb !== true || (r.url === undefined && r.file === undefined)) return r
+  const up = await tryUpgradeToOriginal(
+    decrypted, decoded, username, localId, base, aesKey, xorKey ?? 0xff, allowNetwork,
+    { hint: decodeOptions?.hint, fileOnly: decodeOptions?.fileOnly },
+  )
   if (up.format === undefined) return r
-  const again = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey)
-  return again.url !== undefined ? again : r
+  const again = await decodeImageDataUrlAsync(decrypted, decoded, username, localId, base, aesKey, xorKey, decodeOptions)
+  return again.url !== undefined || again.file !== undefined ? again : r
 }
 
 /**
@@ -638,16 +643,22 @@ async function imagesBatchWithAutoUpgrade(
   base: string | undefined,
   aesKey: string | undefined,
   xorKey: number | undefined,
+  fileOnly: boolean,
 ): Promise<{ items: ImageBatchItem[] }> {
   const decrypted = rc.dirs().decrypted
   const decoded = rc.dirs().decoded
   const items = (Array.isArray(rawItems) ? rawItems : []).slice(0, IMAGE_BATCH_MAX)
-  if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey ?? 0xff)
+  const hints: ImageResourceHint[] = resolveImageResourceHintsBatch(decrypted, items)
+  const md5s = hints.map(hint => hint.md5 ?? '')
+  if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey ?? 0xff, md5s)
   return {
-    items: await Promise.all(items.map(async (it) => {
-      const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false)
+    items: await mapWithConcurrency(items, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
+      const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {
+        hint: hints[index],
+        fileOnly,
+      })
       return { username: it.username, localId: it.localId, ...r }
-    })),
+    }),
   }
 }
 

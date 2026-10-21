@@ -56,6 +56,7 @@ import type {
   GroupInfoSnapshot,
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
+  SelfProfile,
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
@@ -217,6 +218,13 @@ export async function apiGetMoments(options?: { offset?: number; limit?: number;
 export async function apiGetSelfUsername(): Promise<string> {
   const r = await remote().getSelfUsername()
   return unwrap(r).username
+}
+/**
+ * 当前账号的展示信息（昵称/备注），侧栏品牌位用。
+ * @returns 形如 `{ username, name, alias? }`；取不到时 name 为空串。
+ */
+export async function apiGetSelfProfile(): Promise<SelfProfile> {
+  return unwrap(await remote().getSelfProfile())
 }
 /** Fetch full-history author activity counts (ranked descending). */
 export async function apiGetMomentsAuthors(): Promise<Array<{ name: string; count: number }>> {

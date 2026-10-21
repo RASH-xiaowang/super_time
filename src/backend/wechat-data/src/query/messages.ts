@@ -25,7 +25,7 @@ import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
 import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
-import { cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
+import { boundedSet, cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
@@ -615,7 +615,7 @@ function messageStats(decryptedDir: string, table: string, shards: MsgShard[]): 
     } catch { return a }
   }, 0)
   const stats: MessageStats = { total, typeStats }
-  statsCache.set(key, { sig, stats })
+  boundedSet(statsCache, key, { sig, stats }, 512)
   return stats
 }
 

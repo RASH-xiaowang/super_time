@@ -39,6 +39,10 @@ async function migrateSupervisorSecrets(runtime) {
   const backendConfigFile = dataRoot ? runtime.path.join(dataRoot, 'config.json') : '';
   const r = runtime.restrictWechatState({ stateDir: runtime.stateDir, ...(dataRoot ? { dataRoot } : {}) });
   if (!r.ok) runtime.log.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
+  else if (Array.isArray(r.skipped) && r.skipped.length > 0) {
+    // 已收紧的目录不再重写整棵子树的 ACL（数据根 4.8 万文件时那是每次启动 2.6s 的白工）。
+    runtime.log.log('[security] 敏感目录 ACL 已收紧，跳过递归传播（' + String(r.elapsedMs ?? 0) + 'ms）');
+  }
 
   try {
     if (!backendConfigFile || !runtime.fs.existsSync(backendConfigFile)) return;
@@ -57,6 +61,65 @@ async function migrateSupervisorSecrets(runtime) {
   }
 }
 
+/**
+ * 拉起 worker 进程并接好日志/通道（从 createBackendSupervisor 拆出：单函数行数棘轮 ≤250）。
+ * @param {object} ctx - 闭包依赖（见下面的解构）。
+ * @returns {object} createWorkerChannel 返回的句柄。
+ */
+function spawnWorkerProcess(ctx) {
+  const { userData, onExit, bootTrace, isPackaged, env, deps, diagLog, createWorkerChannel, onEvent, resolveHangMethods, DEBUG_HANG_ENV, utilityProcess, path } = ctx;
+
+    const hangMethods = resolveHangMethods({ isPackaged, env });
+    const workerEnv = { ...env };
+    if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
+    else delete workerEnv[DEBUG_HANG_ENV];
+
+    // 仅「未打包 + 显式 env」才给 worker 加 node 启动参数：用于内存/heap 策略实验
+    // （例如 `--max-old-space-size=192`）与 heap snapshot 归因。打包态一律不加。
+    const workerExecArgv = [];
+    if (!isPackaged) {
+      if (env.SUPERTIME_BACKEND_INSPECT === '1') {
+        const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
+        workerExecArgv.push('--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229'));
+      }
+      const nodeArgs = String(env.SUPERTIME_BACKEND_NODE_ARGS ?? '').trim();
+      if (nodeArgs !== '') workerExecArgv.push(...nodeArgs.split(/\s+/).filter((s) => s !== ''));
+    }
+    const child = utilityProcess.fork(
+      path.join(__dirname, 'wechat-worker.js'),
+      [],
+      {
+        serviceName: 'super-time-wechat-backend',
+        stdio: 'pipe',
+        env: workerEnv,
+        ...(workerExecArgv.length > 0 ? { execArgv: workerExecArgv } : {}),
+      },
+    );
+    bootTrace('main:spawn-called');
+    for (const [stream, level, target] of [
+      [child.stdout, 'backend', process.stdout],
+      [child.stderr, 'backend!', process.stderr],
+    ]) {
+      if (!stream || typeof stream.on !== 'function') continue;
+      stream.on('data', (chunk) => {
+        for (const line of String(chunk).split(/\r?\n/)) {
+          if (line.trim() === '') continue;
+          diagLog.write(level, [line]);
+          try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
+        }
+      });
+    }
+    return createWorkerChannel(child, {
+      userDataPath: userData,
+      onEvent: (name, args) => {
+        if (env.SUPERTIME_RELAY_LOG === '1') log.log('[relay:in]', name);
+        onEvent(name, args);
+      },
+      onExit,
+      ...(deps.callTimeoutMs === undefined ? {} : { callTimeoutMs: deps.callTimeoutMs }),
+      ...(deps.longTimeoutMs === undefined ? {} : { longTimeoutMs: deps.longTimeoutMs }),
+    });
+  }
 /**
  * 创建一个后端监管器。
  *
@@ -147,41 +210,25 @@ function createBackendSupervisor(deps) {
     }
   }
 
-  function spawn(userData, onExit) {
-    const hangMethods = resolveHangMethods({ isPackaged, env });
-    const workerEnv = { ...env };
-    if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
-    else delete workerEnv[DEBUG_HANG_ENV];
+  /**
+   * 启动分段打点（`SUPERTIME_BOOT_TRACE=1` 门控；默认零开销）。
+   * 时间原点在 `bootstrap()` 入口重置，所以每条 t 都是「从本次 bootstrap 开始」的毫秒数。
+   */
+  let bootT0 = 0;
+  function bootTrace(label) {
+    if (process.env.SUPERTIME_BOOT_TRACE !== '1') return;
+    try {
+      log.log('[boot-phase] main:' + label + ' t=' + String(bootT0 === 0 ? 0 : Date.now() - bootT0));
+    } catch { /* 打点失败绝不影响启动 */ }
+  }
 
-    const child = utilityProcess.fork(
-      path.join(__dirname, 'wechat-worker.js'),
-      [],
-      { serviceName: 'super-time-wechat-backend', stdio: 'pipe', env: workerEnv },
-    );
-    for (const [stream, level, target] of [
-      [child.stdout, 'backend', process.stdout],
-      [child.stderr, 'backend!', process.stderr],
-    ]) {
-      if (!stream || typeof stream.on !== 'function') continue;
-      stream.on('data', (chunk) => {
-        for (const line of String(chunk).split(/\r?\n/)) {
-          if (line.trim() === '') continue;
-          diagLog.write(level, [line]);
-          try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
-        }
-      });
-    }
-    return createWorkerChannel(child, {
-      userDataPath: userData,
-      onEvent: (name, args) => {
-        if (env.SUPERTIME_RELAY_LOG === '1') log.log('[relay:in]', name);
-        onEvent(name, args);
-      },
-      onExit,
-      ...(deps.callTimeoutMs === undefined ? {} : { callTimeoutMs: deps.callTimeoutMs }),
-      ...(deps.longTimeoutMs === undefined ? {} : { longTimeoutMs: deps.longTimeoutMs }),
+  function spawn(userData, onExit) {
+    return spawnWorkerProcess({
+      userData, onExit, bootTrace, isPackaged, env, deps, diagLog, utilityProcess, path,
+      createWorkerChannel, onEvent, resolveHangMethods, DEBUG_HANG_ENV,
     });
   }
+
 
   async function start(userData) {
     const handle = spawn(userData, (code) => {
@@ -279,27 +326,34 @@ function createBackendSupervisor(deps) {
    * 设置回灌与 ACL 收尾只 warn，与历史行为一致。
    */
   async function bootstrap(userData) {
+    bootT0 = Date.now();
+    bootTrace('bootstrap-start');
     applyConfig();
     userDataPath = userData;
     try {
       await start(userData);
+      bootTrace('init-returned');
       try {
         recordResolved(boot.info);
       } catch (e) {
         log.warn('[wechat] 记录路径配置失败:', e);
       }
+      bootTrace('record-resolved');
       try {
         await applySupervisorSettings(lifecycle);
       } catch (e) {
         log.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
       }
+      bootTrace('settings-applied');
       try {
         await migrateSupervisorSecrets(lifecycle);
       } catch (e) {
         log.warn('[security] 密钥加固收尾失败:', e);
       }
+      bootTrace('secrets-migrated');
       restartCount = 0;
       setStatus('ready');
+      bootTrace('ready');
       log.log('[wechat] Super Time 后端已就绪，Remote 方法数:', boot.methods.length);
       return { ok: true, backend, boot };
     } catch (err) {

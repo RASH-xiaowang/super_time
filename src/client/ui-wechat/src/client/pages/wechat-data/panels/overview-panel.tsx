@@ -238,7 +238,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
             {/* 卡片区：Bootstrap 栅格。默认 6 张核心卡（趋势/热度/关系/内容/存储/资金），
                 其余分析收进「更多分析」折叠区 —— 首屏不再是一堵卡片墙。 */}
-            <div className="d-flex flex-column gap-2">
+            <div className={css.cardStack}>
               <div className="row g-2">
                 {extras && <TrendSection extras={extras} />}
                 {extras && extras.heatmap.length > 0 && <HeatmapSection heatmap={extras.heatmap} />}

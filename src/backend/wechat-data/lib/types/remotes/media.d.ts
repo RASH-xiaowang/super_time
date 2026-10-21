@@ -22,8 +22,10 @@ export interface MediaRemoteCtx {
     warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
         username: string;
         localId: number;
-    }>, aesKey: string | undefined, xorKey: number) => Promise<void>;
+    }>, aesKey: string | undefined, xorKey: number, knownMd5s?: readonly string[]) => Promise<void>;
 }
+import { IMAGE_BATCH_CONCURRENCY, mapWithConcurrency } from '../query/concurrency.ts';
+export { IMAGE_BATCH_CONCURRENCY, mapWithConcurrency };
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
 export interface ImageBatchItem {
     username: string;
@@ -42,75 +44,6 @@ export interface ImageBatchItem {
     error?: string;
 }
 export declare function createMediaRemotes(rc: MediaRemoteCtx): {
-    getEmoticons(options?: {
-        limit?: number;
-        offset?: number;
-    }): EmoticonsSnapshot;
-    getFiles(options?: {
-        limit?: number;
-        offset?: number;
-        category?: string;
-        q?: string;
-    }): FilesSnapshot;
-    getVoiceInfo(options: {
-        username: string;
-        localId: number;
-    }): VoiceInfoResult;
-    getVoiceDataUrl(options: {
-        username?: string;
-        localId?: number;
-        svrId?: string;
-    }): Promise<VoiceDataUrlResult>;
-    getVideoInfo(options: {
-        username: string;
-        localId: number;
-    }): VideoInfoResult;
-    getAvatar(options: {
-        username: string;
-        nickname?: string;
-    }): AvatarResult;
-    getAvatarsLocal(options: {
-        usernames: string[];
-    }): Record<string, string>;
-    /**
-     * 取一条消息的图片（data URL），**自动取原图**：解出来是缩略图时会自己再试一次升级
-     * （本机重解 → CDN 直链），不需要用户点按钮。算法体在 `imageWithAutoUpgrade`。
-     * @param options - `username` 会话；`localId` 消息 id。
-     * @returns data URL + 格式；`thumb: true` 表示这次仍是缩略图（升级没成功）。
-     */
-    getImageDataUrl(options: {
-        username: string;
-        localId: number;
-    }): Promise<ImageDataUrlResult>;
-    /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
-    getImageDataUrlsBatch(options: {
-        items: Array<{
-            username: string;
-            localId: number;
-        }>;
-    }): Promise<{
-        items: ImageBatchItem[];
-    }>;
-    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
-    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
-    getFileImageDataUrl(options: {
-        md5: string;
-    }): Promise<ImageDataUrlResult>;
-    /**
-     * 收藏资源本地缓存：图片、视频、文件、语音和未知资源共用同一条
-     * “按明文内容 MD5 匹配 business/favorite 下不透明文件”的解析链。
-     * @param options - XML 中的 md5/thumbMd5/fullMd5 与资源类型提示。
-     * @returns data URL（含正确 MIME）或本地缓存未命中的说明。
-     */
-    getFavoriteMediaDataUrl(options: {
-        md5?: string;
-        thumbMd5?: string;
-        fullMd5?: string;
-        kind?: "image" | "video" | "audio" | "file" | "unknown";
-        ext?: string;
-        fileName?: string;
-        size?: number;
-    }): ImageDataUrlResult;
     getEmoticonDataUrl(options: {
         md5: string;
         emojiUrl?: string;
@@ -227,6 +160,65 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         source?: string;
         error?: string;
     }>;
+    getFileImageDataUrl: (options: {
+        md5: string;
+        thumbFirst?: boolean;
+    }) => Promise<ImageDataUrlResult>;
+    getFileImageDataUrls: (options: {
+        keys: string[];
+        thumbFirst?: boolean;
+    }) => Promise<import("../types-panels.ts").FileImageDataUrlsResult>;
+    getEmoticons(options?: {
+        limit?: number;
+        offset?: number;
+    }): EmoticonsSnapshot;
+    getFiles(options?: {
+        limit?: number;
+        offset?: number;
+        category?: string;
+        q?: string;
+    }): FilesSnapshot;
+    getVoiceInfo(options: {
+        username: string;
+        localId: number;
+    }): VoiceInfoResult;
+    getVoiceDataUrl(options: {
+        username: string;
+        localId: number;
+    }): Promise<VoiceDataUrlResult>;
+    getVideoInfo(options: {
+        username: string;
+        localId: number;
+    }): VideoInfoResult;
+    getAvatar(options: {
+        username: string;
+        nickname?: string;
+    }): AvatarResult;
+    getAvatarsLocal(options: {
+        usernames: string[];
+    }): Record<string, string>;
+    /**
+     * 取一条消息的图片（data URL），**自动取原图**：解出来是缩略图时会自己再试一次升级
+     * （本机重解 → CDN 直链），不需要用户点按钮。算法体在 `imageWithAutoUpgrade`。
+     * @param options - `username` 会话；`localId` 消息 id。
+     * @returns data URL + 格式；`thumb: true` 表示这次仍是缩略图（升级没成功）。
+     */
+    getImageDataUrl(options: {
+        username: string;
+        localId: number;
+    }): Promise<ImageDataUrlResult>;
+    /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
+    getImageDataUrlsBatch(options: {
+        items: Array<{
+            username: string;
+            localId: number;
+        }>;
+        fileOnly?: boolean;
+    }): Promise<{
+        items: ImageBatchItem[];
+    }>;
+    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
+    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
 };
 /**
  * `fileOnly` 模式的返回整形：有落盘文件就不再回传 base64（桌面端用 wechat-media:// 流式显示）。
@@ -291,4 +283,3 @@ export interface SnsVideoCoverBatchResult {
         error?: string;
     }>;
 }
-export {};

@@ -80,6 +80,8 @@ import type {
   GroupInfoSnapshot,
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
+  FileImageDataUrlsResult,
+  SelfProfile,
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
@@ -305,6 +307,11 @@ export interface WechatRemote {
   dispatchTaskCallback(options: { triggerId: number }): Promise<RemoteResult<TaskCallbackDispatchResult>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>
   getSelfUsername(): Promise<RemoteResult<{ username: string }>>
+  /**
+   * 当前账号的展示信息（备注 > 昵称 > 微信号），侧栏品牌位显示用户网名用。
+   * 未解密/取不到时 name 为空串（界面回退品牌名）。
+   */
+  getSelfProfile(): Promise<RemoteResult<SelfProfile>>
   getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlySnapshot>>
@@ -489,7 +496,12 @@ export interface WechatRemote {
   /** 读一个导出/备份任务的最新进度（M3；事件中继之外的兜底路径）。 */
   getExportProgress(options: { jobId: string }): Promise<RemoteResult<ExportProgressSnapshot>>
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
-  getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  getFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<RemoteResult<ImageDataUrlResult>>
+  /**
+   * 批量取文件库图片（2026-10-21，一屏 1 次 RPC；借鉴 Alpha 的批量 token）。
+   * `files-thumbs.ts` 用它攒批；单张入口继续服务灯箱。
+   */
+  getFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<RemoteResult<FileImageDataUrlsResult>>
   /**
    * 收藏资源本地缓存：`business/favorite` 按明文 MD5 匹配，
    * 图片、视频、文件、语音和未知资源共用。

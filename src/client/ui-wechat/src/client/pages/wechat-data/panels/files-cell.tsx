@@ -134,7 +134,7 @@ export function FileCell({ f, imgSrc, onOpen, onMounted }: FileCellProps): React
     >
       {imgSrc ? (
         <div className={css.fileThumbWrap}>
-          <img className={css.fileThumb} src={imgSrc} alt="" loading="lazy" referrerPolicy="no-referrer" />
+          <img className={css.fileThumb} src={imgSrc} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
         </div>
       ) : (
         <div className={css.fileIconWrap} aria-hidden="true">

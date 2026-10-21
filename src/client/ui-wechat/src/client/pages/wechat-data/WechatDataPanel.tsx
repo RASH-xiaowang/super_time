@@ -70,6 +70,7 @@ import { Dialog } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
 import { MobileNavHost } from './ui/mobile-nav.tsx'
 import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
+import { BrandTitle } from './panels/brand-title.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
 import { SEARCH_QUERY_EVENT, searchQueryFromEvent } from './panels/search-events.ts'
 import gs from './panels/global-search.module.css'
@@ -737,7 +738,7 @@ export function WechatDataPanel(): React.JSX.Element {
               <BrandAvatar online={apiStatus === 'online'} />
             </span>
             <span className={css.navBrandText}>
-              <span className={css.navBrandName}>Super Time</span>
+              <BrandTitle />
               <span className={css.navBrandSub}>微信数据工作台</span>
             </span>
           </div>

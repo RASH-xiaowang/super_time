@@ -31,7 +31,8 @@ const MEDIA_CODE = stripComments(MEDIA)
 describe('自动取原图：只在需要时升级', () => {
   it('① 只在 `thumb === true` 时触发升级（已经是原图不重解）', () => {
     // 判据在 `imageWithAutoUpgrade`：`r.thumb !== true || r.url === undefined` 直接返回。
-    expect(MEDIA_CODE).toContain('if (r.thumb !== true || r.url === undefined) return r')
+    // fileOnly returns a file path instead of a URL, so either is a valid decoded result.
+    expect(MEDIA_CODE).toContain('if (r.thumb !== true || (r.url === undefined && r.file === undefined)) return r')
   })
 
   it('② 升级顺序：本机重解在前，CDN 直链在后', () => {
@@ -45,7 +46,7 @@ describe('自动取原图：只在需要时升级', () => {
 
   it('③ 批量路径不联网（`allowNetwork=false`）', () => {
     // 一屏几十张，每张都发一次 CDN 请求会把首屏拖到分钟级。
-    expect(MEDIA_CODE, '批量路径必须传 allowNetwork=false').toContain('imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false)')
+    expect(MEDIA_CODE, '批量路径必须传 allowNetwork=false').toContain('imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {')
     expect(MEDIA_CODE, '单条路径才允许联网').toContain('imageWithAutoUpgrade(rc, options.username, options.localId, base, aesKey, xorKey, true)')
   })
 
@@ -67,6 +68,6 @@ describe('自动取原图：只在需要时升级', () => {
 
   it('⑦ 升级成功后要重新解一次（缓存槽已被原图占住）', () => {
     expect(MEDIA_CODE).toContain('const again = await decodeImageDataUrlAsync(')
-    expect(MEDIA_CODE).toContain('return again.url !== undefined ? again : r')
+    expect(MEDIA_CODE).toContain('return again.url !== undefined || again.file !== undefined ? again : r')
   })
 })

@@ -13,14 +13,16 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   __testing,
+  BOOT_RESUME_DELAY_MS,
   buildWhitelistBuffer,
   getWechatImageAutoDownloadStatus,
   sanitizeWhitelist,
   startWechatImageAutoDownload,
+  startWechatImageAutoDownloadOnBoot,
   stopWechatImageAutoDownload,
   wechatImageAutoDownload,
   type ImageAutoDownloadDeps,
@@ -224,5 +226,73 @@ describe('状态机与生命周期', () => {
     expect(status.hooked).toBe(false)
     expect(status.state).toBe('waiting_wechat')
     expect(existsSync(join(root, 'wechat-image-autodownload.state.json'))).toBe(false)
+  })
+})
+
+/**
+ * 启动恢复必须**不挡**后端 ready / 首屏（2026-10-21 性能专项）。
+ *
+ * 实测：旧实现里 `startWechatImageAutoDownloadOnBoot` 会同步走一轮
+ * PowerShell/CIM 进程发现（217ms，主线程阻塞），把后端 ready 从 ~120ms 拖到 ~340ms。
+ * 现在只判断开关与支持性，真正的恢复延后 `BOOT_RESUME_DELAY_MS`。
+ */
+describe('启动恢复延后：不阻塞 init，且取消后不再注入', () => {
+  it('boot hook 里不同步找进程；到点后才恢复注入', async () => {
+    vi.useFakeTimers()
+    try {
+      const { decrypted } = makeRoot()
+      const calls: string[] = []
+      let findCalls = 0
+      __testing.setDeps(fakeDeps({
+        config: { wechat_image_autodownload_enabled: true },
+        calls,
+        pid: () => { findCalls += 1; return 1234 },
+      }))
+      const boot = startWechatImageAutoDownloadOnBoot(decrypted)
+      expect(boot?.enabled).toBe(true)
+      expect(findCalls, 'boot hook 里同步找进程就是这 217ms 的来源').toBe(0)
+      expect(calls.filter((c) => c.startsWith('init:')), '还没到点就注入 = 又把 ready 拖慢了').toEqual([])
+
+      await vi.advanceTimersByTimeAsync(BOOT_RESUME_DELAY_MS)
+      expect(findCalls).toBeGreaterThan(0)
+      expect(calls).toContain('init:1234:all')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('延后窗口内 stop ⇒ 取消恢复，绝不在取消后注入', async () => {
+    vi.useFakeTimers()
+    try {
+      const { decrypted } = makeRoot()
+      const calls: string[] = []
+      let findCalls = 0
+      __testing.setDeps(fakeDeps({
+        config: { wechat_image_autodownload_enabled: true },
+        calls,
+        pid: () => { findCalls += 1; return 1234 },
+      }))
+      const boot = startWechatImageAutoDownloadOnBoot(decrypted)
+      expect(boot).not.toBeNull()
+      boot!.stop()
+      await vi.advanceTimersByTimeAsync(BOOT_RESUME_DELAY_MS * 2)
+      expect(findCalls).toBe(0)
+      expect(calls.filter((c) => c.startsWith('init:'))).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('开关关闭 / 平台不支持 ⇒ 直接返回 null（不排定时器）', () => {
+    const off = makeRoot()
+    __testing.setDeps(fakeDeps({ config: { wechat_image_autodownload_enabled: false }, calls: [] }))
+    expect(startWechatImageAutoDownloadOnBoot(off.decrypted)).toBeNull()
+
+    const unsupported = makeRoot()
+    __testing.setDeps({
+      ...fakeDeps({ config: { wechat_image_autodownload_enabled: true }, calls: [] }),
+      platform: 'darwin',
+    })
+    expect(startWechatImageAutoDownloadOnBoot(unsupported.decrypted)).toBeNull()
   })
 })

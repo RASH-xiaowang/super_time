@@ -9,6 +9,15 @@
  * ① 卡片头部/正文的微调 ② 内容类（图表/列表/热力/地图/骨架）。
  */
 
+/* 卡片区竖向堆叠：原先用 Bootstrap 工具类 `d-flex flex-column gap-2`（8px 间距）。
+ * 2026-10-21 性能专项 P-E1 起改为局部类 —— 全仓只此一处用到工具类，
+ * 为此保留 83.5KB 的 bootstrap-utilities.min.css 不划算。数值与工具类逐字一致。 */
+.cardStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 /* ── 页头动作 ─────────────────────────────────────────────── */
 .refresh {
   display: inline-flex;

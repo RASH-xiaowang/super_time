@@ -10,8 +10,7 @@
  * 同时钉住「批量答案 == 逐张答案」：批量的收益只有在结果不变的前提下才算收益。
  *
  * 诚实边界（写在用例里而不是藏在实现里）：
- *   ① 单张的 md5 仍各查一次消息分片（`resolveImageResourceHint`，`WHERE local_id = ?`）——
- *      那不是 N16 指的那条全表扫，也没有批量入口可用（`media-image.ts` 不在本轮写集内）；
+ *   ① 单张入口仍各查一次消息分片；批量入口把同一批 md5/data_index 一次解析后透传；
  *   ② 这里造的是「解码缓存为空」的最坏情形：真实机器上多半直接命中 `decoded_images/`。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -24,6 +23,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
 import { warmDecodedImages } from '../src/query/image-warm.ts'
 import { rawWechatBase } from '../src/gateway-support.ts'
+
+const fsReadCalls = vi.hoisted(() => ({ count: 0 }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      fsReadCalls.count += 1
+      return actual.readFile(...args)
+    },
+  }
+})
 
 const TALKER = 'wxid_n16_talker'
 /** 一屏图片的数量（与 RELEASE-PLAN 里 30 张的实测口径一致）。 */
@@ -152,9 +163,8 @@ function sqlCounter(): { md5Queries: () => number, matching: (fragment: string) 
  * 为什么把数字**打进 stdout**：这个文件在 CI 上跑 46 秒、本机 0.3 秒（147 倍），而**算料只有本机能数、
  * 秒数只有 CI 有** —— 两边留着同一份计数，下一次看那条 41730ms 的人才有可能归因，而不是再猜一轮
  * （同一份运行里量到 106ms 与 77ms 每次开合，见 RELEASE-PLAN 的 N36）。
- * 上界只防回涨：谁把剩下的那份单张复用也省掉，计数会掉下来，那时请把这里的常量一起改小
- * （批量入口的 md5 已经合并成一条 IN；剩下的每图一次是**刻意保留**的单张复用，理由写在
- * `gateway-media-ops.ts` 的「诚实边界」里）。
+ * 上界只防回涨：批量入口现在复用一次解析出的 hint，30 张图只应开消息分片
+ * 与 hardlink 两条库，因此把上界收紧到 5。
  */
 function openCounter(): { since: () => number, report: (label: string, n: number, ceiling: number) => void } {
   const spy = vi.spyOn(DatabaseSync.prototype, 'close')
@@ -181,16 +191,15 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     const beforeEq = sql.matching('local_id = ?')
     const r = await gw.getImageDataUrlsBatch({ items })
     const batchQueries = sql.md5Queries() - before
-    h.report(`${IMAGE_COUNT} 张走批量入口`, h.since(), 33)
+    h.report(`${IMAGE_COUNT} 张走批量入口`, h.since(), 5)
     const batchIn = sql.matching('local_id IN (') - beforeIn
     const batchEq = sql.matching('local_id = ?') - beforeEq
     console.log(`[算料] gateway-image-batch 批量段 SQL：合并查询 ${String(batchIn)} 次、逐张 local_id = ? ${String(batchEq)} 次`)
-    // 批量入口自己那趟 md5 取数必须是一条 IN（被人改回逐张时，这句会红，而 33→62 的开合数也会红）
+    // 批量入口自己那趟 md5 取数必须是一条 IN（被人改回逐张时，这句会红）
     expect(batchIn, '批量入口取 md5 该合并成一条 local_id IN (…) —— 没合并就等于每张图各开一次分片库').toBe(1)
-    // 剩下的 30 次是**故意保留**的：批量预热之后每张图仍走一次单张入口（错误语义、data_index
-    // 兜底、hevc 判定都从那里来，复制一份到批量路径就是多一份漂移）。见 gateway-media-ops.ts
-    // 里「诚实边界」那条注释。将来真要把这 30 次也省掉，改的是这个复用方式，不是这里的数字。
-    expect(batchEq, '批量段里逐张 local_id = ? 不该超过每张一次；掉下来说明那份复用被去掉了，请连注释与 N36 一起改').toBeLessThanOrEqual(IMAGE_COUNT)
+    // Hint reuse must remove every per-image shard lookup while preserving the
+    // same md5/data_index fallback semantics.
+    expect(batchEq, '批量段里仍出现逐张 local_id = ?，说明解码没有复用批量 hint').toBe(0)
 
     expect(r.items.length).toBe(IMAGE_COUNT)
     expect(r.items.every(it => it.url?.startsWith('data:image/png;base64,'))).toBe(true)
@@ -212,7 +221,7 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     const t2a = h2.since()
     const batch = (await gatewayFor(decoded).getImageDataUrlsBatch({ items })).items
     const t2b = h2.since()
-    h2.report(`第 2 次同样 ${IMAGE_COUNT} 张走批量入口`, t2b - t2a, 35)
+    h2.report(`第 2 次同样 ${IMAGE_COUNT} 张走批量入口`, t2b - t2a, 5)
     // 逐张入口当**参考答案**，并且**整批比对**：批量入口现在合并了 md5 的取法（一次
     // `local_id IN (…)` 而不是每张开一次库），只抽一张会漏掉「某个 localId 落在别的分片」
     // 「md5 大小写」「走 resource.db 兜底」这类单点差异 —— 那些恰好是最容易只错一条的形态。
@@ -222,16 +231,35 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
       const it = items[i]
       if (!it) continue
       const one = await gwRef.getImageDataUrl(it)
-      expect(batch[i]?.url, `第 ${String(i + 1)} 张：批量与逐张必须给同一个 data URL`).toBe(one.url)
-      expect(batch[i]?.format, `第 ${String(i + 1)} 张：两条路径的格式判定必须一致`).toBe(one.format)
+      expect(batch[i], `第 ${String(i + 1)} 张：批量与逐张必须逐字段一致`).toEqual({ ...it, ...one })
     }
     h2.report(`${IMAGE_COUNT} 张走逐张入口（第 2 次，参考答案）`, h2.since() - refBase, 60)
     // 未命中 / 无 md5 的条目仍是条目（不抛、不塌成 0 长度）
-    const miss = await gatewayFor(join(scratch, 'decoded-miss')).getImageDataUrlsBatch({ items: [{ username: TALKER, localId: 999 }, { username: 'wxid_other', localId: 1 }] })
-    expect(miss.items.length).toBe(2)
-    expect(miss.items[0]?.error).toBeTruthy()
-    expect(miss.items[0]?.username).toBe(TALKER)
-    expect(miss.items[1]?.localId).toBe(1)
+    const missItems = [{ username: TALKER, localId: 999 }, { username: 'wxid_other', localId: 1 }]
+    const miss = await gatewayFor(join(scratch, 'decoded-miss')).getImageDataUrlsBatch({ items: missItems })
+    const missRef = gatewayFor(join(scratch, 'decoded-miss-single'))
+    const missSingles = await Promise.all(missItems.map(async it => ({ ...it, ...(await missRef.getImageDataUrl(it)) })))
+    expect(miss.items).toEqual(missSingles)
+  })
+
+  it('fileOnly 批量只 stat 已解码文件，不读字节、不生成 base64', async () => {
+    makeFixture(IMAGE_COUNT)
+    const items = Array.from({ length: IMAGE_COUNT }, (_, i) => ({ username: TALKER, localId: i + 1 }))
+    const gw = gatewayFor(decoded)
+    const normal = (await gw.getImageDataUrlsBatch({ items })).items
+    const expected = normal.map((item) => {
+      expect(item.file).toBeTruthy()
+      expect(item.url).toMatch(/^data:image\/png;base64,/)
+      const copy = { ...item }
+      delete copy.url
+      return copy
+    })
+
+    fsReadCalls.count = 0
+    const fileOnly = await gw.getImageDataUrlsBatch({ items, fileOnly: true })
+    expect(fsReadCalls.count, 'fileOnly 不应调用 fs/promises.readFile').toBe(0)
+    expect(fileOnly.items).toEqual(expected)
+    expect(fileOnly.items.every(item => item.url === undefined)).toBe(true)
   })
 
   it('空清单不查库、也不报错（边界不是「一次全表扫」）', async () => {

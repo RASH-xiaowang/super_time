@@ -1,4 +1,4 @@
-import { type DecodeDatPayload } from './media-image.ts';
+import { type DecodeDatPayload, type ImageResourceHint } from './media-image.ts';
 import { type WxgfTranscoderAsync } from './wxam-image.ts';
 export type AsyncImageResult = {
     url?: string;
@@ -8,6 +8,12 @@ export type AsyncImageResult = {
     file?: string;
     error?: string;
 };
+export interface DecodeImageOptions {
+    /** Hint already resolved by the batch entry; avoids a per-image shard lookup. */
+    hint?: ImageResourceHint;
+    /** Return only the decoded file path when possible; skip base64 in fileOnly mode. */
+    fileOnly?: boolean;
+}
 /**
  * 异步版 `decodeDatBytes`。解密本身仍是 CPU 内的纯计算；wxgf 转码时才会真正 await。
  */
@@ -20,7 +26,7 @@ export declare function decodeDatBytesAsync(data: Uint8Array, aesKey: Uint8Array
     error: string;
 }>;
 /** `decodeImageDataUrl` 的异步版；生产 `getImageDataUrl` / 批量取图走这里。 */
-export declare function decodeImageDataUrlAsync(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir?: string, aesKey?: string | Uint8Array, xorKey?: number): Promise<AsyncImageResult>;
+export declare function decodeImageDataUrlAsync(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir?: string, aesKey?: string | Uint8Array, xorKey?: number, options?: DecodeImageOptions): Promise<AsyncImageResult>;
 /** `decodeEmoticonDataUrl` 的异步版：缓存命中不 await，只有 .dat 解码可能起 ffmpeg。 */
 export declare function decodeEmoticonDataUrlAsync(decryptedDir: string, decodedDir: string, wechatBaseDir: string | undefined, md5: string | undefined, aesKey?: string | Uint8Array, xorKey?: number): Promise<{
     url?: string;

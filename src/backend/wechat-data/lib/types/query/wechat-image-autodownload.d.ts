@@ -123,7 +123,19 @@ export declare function getWechatImageAutoDownloadStatus(decryptedDir: string): 
  */
 export declare function startWechatImageAutoDownload(decryptedDir: string): Promise<WechatImageAutoDownloadStatus>;
 /**
- * 关闭自动下载并尽力还原微信进程（幂等）。
+ * 启动恢复的延迟（毫秒）。
+ *
+ * 为什么不在 init 里同步恢复：`startWechatImageAutoDownload` 会先同步跑一轮进程发现
+ * （`deps.findPid()` = PowerShell/CIM 查询，本机实测 217ms，超时上限 10s），
+ * 而它正好落在「后端 ready」的返回路径上 —— 实测把后端 ready 从 ~120ms 拖到 ~340ms，
+ * 并且这 217ms 是**主线程同步阻塞**，会和首屏查询抢同一个事件循环。
+ *
+ * 延后到首屏之后：开关与支持性仍在 boot 里判断（毫秒级），真正的 marker 校验 + 注入
+ * 放到这个延迟之后。语义不变（仍在启动阶段自动恢复），只是不再挡 ready/首屏。
+ */
+export declare const BOOT_RESUME_DELAY_MS = 1200;
+/**
+ * 开启自动下载并尽力还原微信进程（幂等）。
  * @returns 最新状态快照。
  */
 export declare function stopWechatImageAutoDownload(): Promise<WechatImageAutoDownloadStatus>;

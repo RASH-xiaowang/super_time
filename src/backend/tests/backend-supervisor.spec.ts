@@ -23,6 +23,8 @@ function makeHarness(options: {
   settings?: Record<string, unknown>
   secrets?: Record<string, unknown>
   restartBackoffMs?: number[]
+  env?: Record<string, string>
+  isPackaged?: boolean
 } = {}) {
   const settings = options.settings ?? {}
   const secrets = options.secrets ?? {}
@@ -55,8 +57,8 @@ function makeHarness(options: {
   })
 
   const supervisor = createBackendSupervisor({
-    isPackaged: false,
-    env: {},
+    isPackaged: options.isPackaged ?? false,
+    env: options.env ?? {},
     utilityProcess: { fork },
     diagLog: { write: vi.fn() },
     resolveHangMethods: vi.fn(() => []),
@@ -121,6 +123,30 @@ describe('backend-supervisor', () => {
     expect(h.restrictWechatState).toHaveBeenCalledWith({ stateDir: 'D:\\state', dataRoot: 'D:\\data' })
     expect(h.supervisor.status).toEqual({ state: 'ready', restarts: 0, lastError: null })
     expect(h.events.map(([name]) => name)).toContain('wechat-backend/status')
+  })
+
+  it('未打包 + `SUPERTIME_BACKEND_INSPECT=1` ⇒ worker 带 `--inspect`（只绑 127.0.0.1，供 heap 归因）', async () => {
+    const h = makeHarness({ env: { SUPERTIME_BACKEND_INSPECT: '1', SUPERTIME_BACKEND_INSPECT_PORT: '9333' } })
+    await h.supervisor.bootstrap('D:\\userData')
+    const calls = h.fork.mock.calls as unknown as Array<unknown[]>
+    const opts = calls[0]![2] as { execArgv?: string[] }
+    expect(opts.execArgv).toEqual(['--inspect=127.0.0.1:9333'])
+  })
+
+  it('打包态即使设了 inspect env 也不给 worker 开调试端口（发行版不能带）', async () => {
+    const h = makeHarness({ isPackaged: true, env: { SUPERTIME_BACKEND_INSPECT: '1' } })
+    await h.supervisor.bootstrap('D:\\userData')
+    const calls = h.fork.mock.calls as unknown as Array<unknown[]>
+    const opts = calls[0]![2] as { execArgv?: string[] }
+    expect(opts.execArgv).toBeUndefined()
+  })
+
+  it('未打包 + `SUPERTIME_BACKEND_NODE_ARGS` ⇒ 透传给 worker（heap 策略实验用）', async () => {
+    const h = makeHarness({ env: { SUPERTIME_BACKEND_NODE_ARGS: '--max-old-space-size=192 --expose-gc' } })
+    await h.supervisor.bootstrap('D:\\userData')
+    const calls = h.fork.mock.calls as unknown as Array<unknown[]>
+    const opts = calls[0]![2] as { execArgv?: string[] }
+    expect(opts.execArgv).toEqual(['--max-old-space-size=192', '--expose-gc'])
   })
 
   it('init 失败会 dispose 当前句柄并进入有界退避；下一次 init 成功后恢复', async () => {

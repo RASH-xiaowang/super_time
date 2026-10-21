@@ -53,3 +53,20 @@ export function preferMediaUrl<T extends { file?: string; url?: string }>(row: T
   if (url === '') return row
   return { ...row, url }
 }
+
+/**
+ * 给协议/HTTP 图片 URL 追加缩略图宽度参数（`?w=320`）。
+ *
+ * 借鉴 Alpha 的 thumb/full 两档：网格加载 thumb 档（主进程按需缩放并落盘缓存），
+ * 灯箱不带这个参数（原图档）。data URL 原样返回（手机端没有协议层）。
+ * @param url - `preferMediaUrl` 给出的 URL。
+ * @param width - 目标宽度（像素，64–1024）；<=0 返回原 URL。
+ * @returns 带 `w` 查询参数的 URL；非法输入原样返回。
+ */
+export function withThumbWidth(url: string, width: number): string {
+  const raw = String(url ?? '')
+  if (raw === '' || raw.startsWith('data:')) return raw
+  const w = Math.trunc(Number(width))
+  if (!Number.isFinite(w) || w <= 0) return raw
+  return raw + (raw.includes('?') ? '&' : '?') + 'w=' + String(w)
+}

@@ -94,7 +94,72 @@ function resolveDecodedFile(root, rel) {
 }
 
 /**
+ * 解析 `?w=<px>` 缩略图宽度（借鉴 Alpha 的 thumb/full 两档）。
+ *
+ * 只接受 64–1024 的整数：网格里的格子最宽约 200–320px，超过 1024 的「缩略图」
+ * 只会白占磁盘；非法/越界值一律当「不带缩略档」处理（回原图），不报错也不 404。
+ * @param {string} rawUrl - 完整 URL（Chromium 传入 request.url）。
+ * @returns {number | null} 目标宽度（像素）或 null。
+ */
+function parseThumbWidth(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl));
+  } catch {
+    return null;
+  }
+  const raw = parsed.searchParams.get('w');
+  if (raw === null || !/^\d{1,4}$/.test(raw)) return null;
+  const width = Number(raw);
+  if (!Number.isFinite(width) || width < 64 || width > 1024) return null;
+  return width;
+}
+
+/**
+ * 缩略图落盘路径：与原图同目录、同名前缀（`ab12….jpg.w320.jpg`）。
+ * 放在 decoded 根内 ⇒ 下次请求直接命中，删除缓存目录即可整体回收。
+ * @param {string} abs - 原图绝对路径。
+ * @param {number} width - 目标宽度。
+ * @returns {string} 缩略图绝对路径。
+ */
+function thumbPathFor(abs, width) {
+  return abs + '.w' + String(width) + '.jpg';
+}
+
+/**
+ * 用 Electron `nativeImage` 生成缩略图并原子落盘（失败只返回 null，绝不抛）。
+ * 只在主进程被调用；node 单测里 `require('electron')` 不可用 ⇒ 自动回退原图。
+ * @param {string} abs - 原图绝对路径。
+ * @param {number} width - 目标宽度。
+ * @returns {string | null} 缩略图路径（生成/已存在）或 null。
+ */
+function ensureThumb(abs, width) {
+  const out = thumbPathFor(abs, width);
+  try {
+    if (fs.statSync(out).isFile()) return out;
+  } catch { /* 还没生成 */ }
+  try {
+    const { nativeImage } = require('electron');
+    const img = nativeImage.createFromPath(abs);
+    if (!img || img.isEmpty()) return null;
+    const resized = img.resize({ width, quality: 'good' });
+    if (!resized || resized.isEmpty()) return null;
+    const bytes = resized.toJPEG(80);
+    if (!bytes || bytes.length === 0) return null;
+    const tmp = out + '.tmp';
+    fs.writeFileSync(tmp, bytes);
+    fs.renameSync(tmp, out);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 为一个 `wechat-media://` 请求构造流式响应。
+ *
+ * `?w=<px>` ⇒ thumb 档（按需生成并缓存缩略图，`immutable` 可长期缓存）；
+ * 不带 ⇒ full 档（原图，`no-store`，避免大图长期占磁盘/内存）。
  * @param {string} root - decoded_images 绝对路径。
  * @param {string} rawUrl - request.url。
  * @returns {Response} 200 流式图片，或 404 文本。
@@ -103,13 +168,16 @@ function mediaResponse(root, rawUrl) {
   const rel = parseDecodedUrl(rawUrl);
   const abs = rel === null ? null : resolveDecodedFile(root, rel);
   if (abs === null) return new Response(NOT_FOUND, { status: 404 });
-  const mime = MIME_BY_EXT[path.extname(abs).toLowerCase()];
+  const width = parseThumbWidth(rawUrl);
+  const thumb = width === null ? null : ensureThumb(abs, width);
+  const serve = thumb === null ? abs : thumb;
+  const mime = thumb === null ? MIME_BY_EXT[path.extname(abs).toLowerCase()] : 'image/jpeg';
   const headers = {
     'Content-Type': mime,
-    'Cache-Control': 'no-store',
+    'Cache-Control': thumb === null ? 'no-store' : 'public, max-age=604800, immutable',
   };
   try {
-    const stream = fs.createReadStream(abs);
+    const stream = fs.createReadStream(serve);
     return new Response(Readable.toWeb(stream), { headers });
   } catch {
     return new Response(NOT_FOUND, { status: 404 });
@@ -120,6 +188,7 @@ module.exports = {
   WECHAT_MEDIA_SCHEME,
   MIME_BY_EXT,
   parseDecodedUrl,
+  parseThumbWidth,
   resolveDecodedFile,
   mediaResponse,
 };

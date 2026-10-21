@@ -3,7 +3,7 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { preferMediaUrl, WECHAT_MEDIA_SCHEME, wechatMediaHttpUrl, wechatMediaUrl } from './wechat-media.ts'
+import { preferMediaUrl, WECHAT_MEDIA_SCHEME, wechatMediaHttpUrl, wechatMediaUrl, withThumbWidth } from './wechat-media.ts'
 
 describe('wechatMediaUrl：相对路径 → 自定义协议 URL', () => {
   it('逐段编码，保留子目录；反斜杠统一成正斜杠', () => {
@@ -49,5 +49,21 @@ describe('preferMediaUrl：有 file 用协议，没有就原样返回', () => {
     expect(preferMediaUrl(data)).toBe(data)
     expect(preferMediaUrl({ file: '', url: 'data:image/jpeg;base64,xxx' })).toEqual({ file: '', url: 'data:image/jpeg;base64,xxx' })
     expect(preferMediaUrl({ file: '..', url: 'data:image/jpeg;base64,xxx' })).toEqual({ file: '..', url: 'data:image/jpeg;base64,xxx' })
+  })
+})
+
+describe('withThumbWidth：thumb/full 两档（借鉴 Alpha）', () => {
+  it('协议/HTTP URL 追加 w 参数；已有查询串用 &', () => {
+    expect(withThumbWidth('wechat-media://decoded/a.jpg', 320)).toBe('wechat-media://decoded/a.jpg?w=320')
+    expect(withThumbWidth('/api/media/decoded/a.jpg', 320)).toBe('/api/media/decoded/a.jpg?w=320')
+    expect(withThumbWidth('wechat-media://decoded/a.jpg?x=1', 320)).toBe('wechat-media://decoded/a.jpg?x=1&w=320')
+  })
+
+  it('data URL / 空串 / 非正宽度原样返回（手机端没有缩略协议层）', () => {
+    const data = 'data:image/jpeg;base64,xxx'
+    expect(withThumbWidth(data, 320)).toBe(data)
+    expect(withThumbWidth('', 320)).toBe('')
+    expect(withThumbWidth('wechat-media://decoded/a.jpg', 0)).toBe('wechat-media://decoded/a.jpg')
+    expect(withThumbWidth('wechat-media://decoded/a.jpg', Number.NaN)).toBe('wechat-media://decoded/a.jpg')
   })
 })

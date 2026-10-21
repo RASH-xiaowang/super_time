@@ -28,8 +28,10 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fetchWithRetry } from '../net/fetch-retry.ts'
+import { createBoundedCache } from './cache-budget.ts'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { detectImageFormat } from './media-image.ts'
+import { boundedSet } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
 
 /** 单张上限：卡片缩略图与朋友圈图都在几十~几百 KB 量级，超过就是异常响应，宁可失败。 */
@@ -93,28 +95,38 @@ const failUntil = new Map<string, number>()
  * 就是 40 次读盘 + 40 次 base64（图越大越贵）。这一层把「同一批 URL 在短时间内被重复问」
  * （虚拟化反复挂载/卸载、切回面板）直接短路成 Map 查找。
  *
- * 容量用 `MAX_MEM_ENTRIES` 封顶而不是无限增长：data URL 是原图字节的 ~1.33 倍，
- * 内存里攒多了会显著抬高常驻。超限时按**插入序**丢最早的一批（Map 保序，够用且零成本，
- * 不必引入真 LRU 的双向链表）。
+ * 容量同时受条数、总字符数与单条字符数限制：data URL 是原图字节的 ~1.33 倍，
+ * 内存里攒多了会显著抬高常驻。只影响缓存命中率，不影响落盘与本次返回。
  */
 const MAX_MEM_ENTRIES = 300
-const memCache = new Map<string, string>()
+const MAX_MEM_TOTAL_CHARS = 32 * 1024 * 1024
+const MAX_MEM_ENTRY_CHARS = 2 * 1024 * 1024
+const memCache = createBoundedCache<string, string>({
+  label: 'remote-image',
+  maxEntries: MAX_MEM_ENTRIES,
+  maxTotal: MAX_MEM_TOTAL_CHARS,
+  maxEntry: MAX_MEM_ENTRY_CHARS,
+  sizeOf: (dataUrl) => dataUrl.length,
+})
 
 function memGet(url: string): string | undefined {
-  const v = memCache.get(url)
-  if (v === undefined) return undefined
-  // 触碰即刷新（简易 LRU 语义）：删了再塞回，把这项挪到队尾。
-  memCache.delete(url)
-  memCache.set(url, v)
-  return v
+  return memCache.get(url)
 }
 
 function memSet(url: string, dataUrl: string): void {
   memCache.set(url, dataUrl)
-  while (memCache.size > MAX_MEM_ENTRIES) {
-    const oldest = memCache.keys().next()
-    if (oldest.done === true) break
-    memCache.delete(oldest.value)
+}
+
+/** 远程图内存层的单测把手；不暴露内部 Map。 */
+export function remoteImageMemHandles(): {
+  stats: () => { count: number; total: number }
+  clear: () => void
+  putForTest: (url: string, dataUrl: string) => void
+} {
+  return {
+    stats: () => ({ count: memCache.size(), total: memCache.total() }),
+    clear: () => memCache.clear(),
+    putForTest: (url, dataUrl) => memCache.set(url, dataUrl),
   }
 }
 
@@ -193,6 +205,14 @@ function cooledDown(url: string): boolean {
   return until !== undefined && Date.now() < until
 }
 
+function markFailed(url: string): void {
+  const now = Date.now()
+  for (const [failedUrl, until] of failUntil) {
+    if (until <= now) failUntil.delete(failedUrl)
+  }
+  boundedSet(failUntil, url, now + FAIL_COOLDOWN_MS, 500)
+}
+
 /**
  * 取一张远程图片（缓存优先，未命中才出网）。
  * @param rawUrl - 消息里的图片地址；http(s) 且主机在微信 CDN 清单内才会被请求。
@@ -216,7 +236,7 @@ export async function fetchRemoteImage(
   try {
     const res = await fetchWithRetry(fetch, url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, { timeoutMs: FETCH_TIMEOUT_MS })
     if (!res.ok) {
-      failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS)
+      markFailed(url)
       return { url, error: '取图失败 HTTP ' + String(res.status) }
     }
     const bytes = new Uint8Array(await res.arrayBuffer())
@@ -246,7 +266,7 @@ export async function fetchRemoteImage(
     memSet(url, dataUrl)
     return { url, dataUrl, fromCache: false }
   } catch (e) {
-    failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS)
+    markFailed(url)
     return { url, error: '取图失败：' + String((e as Error)?.message ?? e) }
   }
 }
