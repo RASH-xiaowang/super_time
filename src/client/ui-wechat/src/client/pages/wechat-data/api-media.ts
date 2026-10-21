@@ -54,6 +54,7 @@ import type {
   CallsSnapshot,
   GraphSnapshot,
   GroupInfoSnapshot,
+  FileImageDataUrlsResult,
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
   ImageDataUrlResult,
@@ -176,6 +177,17 @@ export async function apiGetSnsImageDataUrl(options: {
  */
 export async function apiGetFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getFileImageDataUrl(options))
+}
+/**
+ * 批量取文件库图片（一屏 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
+ *
+ * 后端去重/限流/按需解密，返回逐条 `{key, file?, error?}`；调用方按 `key` 回贴缩略图，
+ * 不要把结果按下标与卡片对齐（去重后顺序已不再是入参顺序）。
+ * @param options - `keys` 屏上可见格 key；`thumbFirst` 网格传 true。
+ * @returns FileImageDataUrlsResult.
+ */
+export async function apiGetFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<FileImageDataUrlsResult> {
+  return unwrap(await remote().getFileImageDataUrls(options))
 }
 /**
  * Resolve a custom emoticon (sticker) md5 to a data URL.

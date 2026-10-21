@@ -241,6 +241,16 @@ export interface EmoticonDataUrlsResult {
   items: Array<{ md5: string; dataUrl?: string; format?: string; error?: string }>
 }
 
+/**
+ * 批量取「文件库图片」的结果（2026-10-21，借鉴 Alpha 的批量 token 解析）。
+ *
+ * 形状与 {@link EmoticonDataUrlsResult} 一致：`key` 回信（入参去重后顺序不再与卡片一一对应），
+ * 每条给 `file`（相对 decoded 路径，桌面端拼 `wechat-media://`）或 `error`。
+ */
+export interface FileImageDataUrlsResult {
+  items: Array<{ key: string; file?: string; format?: string; thumb?: boolean; error?: string }>
+}
+
 /** Decrypted DB status summary lines. */
 export interface DbStatusSnapshot {
   lines: string[]

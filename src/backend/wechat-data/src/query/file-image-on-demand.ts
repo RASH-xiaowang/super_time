@@ -158,6 +158,62 @@ function releaseDecodeSlot(): void {
 /** 同一张图在解时，后来的请求等同一个 Promise（避免一屏叠影时重复解密）。 */
 const inFlight = new Map<string, Promise<FileImageHit>>()
 
+/** 批量请求的参数（与单张一致，去掉 `key`/`thumbFirst` 由调用方逐个传）。 */
+export interface FileImageBatchArgs {
+  decryptedDir: string
+  decodedDir: string
+  rawBase: string
+  aesKey?: string | Uint8Array
+  xorKey?: number
+}
+
+/** 批量结果里的一条：`key` 如实回信，便于调用方按自己的卡片匹配。 */
+export interface FileImageBatchItem extends FileImageHit {
+  key: string
+}
+
+/** 单次批量上限：一屏最多几十格，超过它多半是调用方算错，直接截断保护 worker。 */
+export const MAX_BATCH_KEYS = 48
+
+/** 单块并行宽度（与全局解码槽位 4 配合：块内大多在等磁盘/解密）。 */
+const BATCH_CHUNK = 12
+
+/**
+ * 批量按需解密（把「N 格 = N 次 RPC」收成 1 次，借鉴 Alpha 的批量 token 解析）。
+ *
+ * 去重 + 保持首次出现顺序；超过 {@link MAX_BATCH_KEYS} 截断；分块推进，
+ * 真正的解码并发由 {@link ensureFileImageDecoded} 的全局槽位（4）限制 —— 两层都保留：
+ * 块内并行隐藏磁盘延迟，又不让一屏 30 张同时解。
+ * @param args - 解密/缓存参数。
+ * @param keys - 待取 key 列表（客户端 `fileKey()` 结果；自动去重、忽略空值）。
+ * @param thumbFirst - true 时优先缩略档（网格），false 原图档优先（灯箱）。
+ * @returns 逐条结果，顺序 = 去重后的入参顺序（`key` 回信）。
+ */
+export async function ensureFileImagesDecodedBatch(
+  args: FileImageBatchArgs,
+  keys: readonly string[],
+  thumbFirst = true,
+): Promise<FileImageBatchItem[]> {
+  const uniq: string[] = []
+  const seen = new Set<string>()
+  for (const raw of keys ?? []) {
+    const key = String(raw ?? '').trim().toLowerCase()
+    if (key === '' || seen.has(key)) continue
+    seen.add(key)
+    uniq.push(key)
+    if (uniq.length >= MAX_BATCH_KEYS) break
+  }
+  const out = new Array<FileImageBatchItem>(uniq.length)
+  for (let i = 0; i < uniq.length; i += BATCH_CHUNK) {
+    const slice = uniq.slice(i, i + BATCH_CHUNK)
+    await Promise.all(slice.map(async (key, j) => {
+      const hit = await ensureFileImageDecoded({ ...args, key, thumbFirst })
+      out[i + j] = { key, ...hit }
+    }))
+  }
+  return out
+}
+
 /**
  * 按需把文件库图片解到 decoded 缓存，并给出流式显示用的相对路径。
  *

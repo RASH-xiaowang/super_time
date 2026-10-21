@@ -1,7 +1,7 @@
 import { type WxcdnQuota } from '../query/wxcdn-original.ts';
 import { type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts';
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FileImageDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -109,6 +109,17 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         md5: string;
         thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 批量取文件库图片（一屏 = 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
+     *
+     * 去重、保持首次顺序、单次上限 48、块内并行且总解码并发 ≤4（保护 worker）。
+     * @param options - `keys` 为屏上可见格的 key（`fileKey()` 结果）；`thumbFirst` 网格传 true。
+     * @returns 逐条 `{key, file?, error?}`；调用方按 `key` 回贴，别按顺序。
+     */
+    getFileImageDataUrls(options: {
+        keys: string[];
+        thumbFirst?: boolean;
+    }): Promise<FileImageDataUrlsResult>;
     getEmoticonDataUrl(options: {
         md5: string;
         emojiUrl?: string;

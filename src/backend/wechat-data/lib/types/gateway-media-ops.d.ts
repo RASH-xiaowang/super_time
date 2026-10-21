@@ -4,7 +4,7 @@
  * 与其它 gateway-* 壳共同构成继承链；装饰器标记会落到最派生原型上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：gateway-remote-surface.spec.ts）。
  */
-import type { AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
+import type { FileImageDataUrlsResult, AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
 import { type ImageBatchItem, type SnsVideoCoverBatchOptions, type SnsVideoCoverBatchResult } from './remotes/media.ts';
 import type { HarvestResult, HarvestStatus } from './query/original-harvester.ts';
 import type { WxcdnQuota } from './query/wxcdn-original.ts';
@@ -151,6 +151,18 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         md5: string;
         thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 批量取文件库图片（2026-10-21：把「一屏 N 格 = N 次 RPC」收成 1 次；借鉴 Alpha 的批量 token）。
+     *
+     * 后端去重、单次上限 48、块内并行且总解码并发 ≤4；返回逐条 `{key, file?, error?}`，
+     * 桌面端按 `file` 拼 `wechat-media://` 流式显示。
+     * @param options - `keys` 屏上可见格 key；`thumbFirst` 网格传 true（`_t` 档优先）。
+     * @returns FileImageDataUrlsResult（`key` 回信，顺序 = 去重后的入参顺序）。
+    */
+    getFileImageDataUrls(options: {
+        keys: string[];
+        thumbFirst?: boolean;
+    }): Promise<FileImageDataUrlsResult>;
     /**
      * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.
      * 先读 decoded 缓存 → 扫 msg/attach 与微信的表情缓存目录里解密；

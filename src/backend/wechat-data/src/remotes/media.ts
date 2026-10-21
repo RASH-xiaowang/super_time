@@ -26,7 +26,7 @@ import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
 import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
-import { ensureFileImageDecoded } from '../query/file-image-on-demand.ts'
+import { ensureFileImageDecoded, ensureFileImagesDecodedBatch } from '../query/file-image-on-demand.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
@@ -35,7 +35,7 @@ import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrlsAsync, resolveSnsVideoCoverDataUrlAsync, resolveSnsVideoDataUrlAsync } from '../query/sns-video.ts'
 import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FileImageDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -222,6 +222,26 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         xorKey,
         thumbFirst: options.thumbFirst === true,
       })
+    },
+
+    /**
+     * 批量取文件库图片（一屏 = 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
+     *
+     * 去重、保持首次顺序、单次上限 48、块内并行且总解码并发 ≤4（保护 worker）。
+     * @param options - `keys` 为屏上可见格的 key（`fileKey()` 结果）；`thumbFirst` 网格传 true。
+     * @returns 逐条 `{key, file?, error?}`；调用方按 `key` 回贴，别按顺序。
+     */
+    async getFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<FileImageDataUrlsResult> {
+      const dec = rc.dirs().decrypted
+      const { aesKey, xorKey } = resolveImageKeyPair(dec)
+      const items = await ensureFileImagesDecodedBatch({
+        decryptedDir: dec,
+        decodedDir: rc.dirs().decoded,
+        rawBase: rc.rawWechatBase(dec) || '',
+        aesKey,
+        xorKey,
+      }, options?.keys ?? [], options?.thumbFirst !== false)
+      return { items }
     },
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {

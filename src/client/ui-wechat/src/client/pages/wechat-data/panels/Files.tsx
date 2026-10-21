@@ -13,8 +13,8 @@ import { AssetKpiBar, AssetMoreMenu, FileCell } from './files-cell.tsx'
 import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.ts'
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { rememberThumb } from '../utils/thumb-cache.ts'
-import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } from '../api.ts'
-import { preferMediaUrl, withThumbWidth } from '../wechat-media.ts'
+import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
+import { fetchFileFullUrl, fetchFileThumbUrls } from './files-thumbs.ts'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
@@ -168,50 +168,40 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   })
   /** 缩略图缓存的当前快照（异步回调要读最新值）；渲染用的是 `fileImgs` 那份 state。 */
   const fileThumbsRef = useRef<Record<string, string>>({})
+  /** 攒批队列：可视格挂载后入队，~24ms 内合并成**一次批量 RPC**（Alpha 的批量 token）。 */
+  const thumbQueue = useRef<string[]>([])
+  const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
-   * 一格挂载 → 解码它那张图（原来是给整段格子墙挂 IntersectionObserver 观察 `data-media-key`）。
+   * 一格挂载 → 入缩略图队列（不是立刻发 RPC）。
    * 口径与搬出前一致：**拿 `fileKey` 当 md5**（微信附件名本来就是 32 位哈希；非哈希名按设计跳过，
    * 留扩展名图标占位），淘汰走 `rememberThumb`（写值 / 记顺序 / 淘汰时连请求标记一起清）。
    */
   const decodeThumb = useCallback((key: string): void => {
     if (!key || imgFetched.current.has(key) || !/^[0-9a-f]{32}$/i.test(key)) return
     imgFetched.current.add(key)
-    // 2026-10-21：后端现在会按需解密并回 `file`（decoded 相对路径），渲染层拼
-    // `wechat-media://` 流式显示；`?w=320` 让主进程生成/复用缩略图（Alpha 的 thumb 档）。
-    // 命中旧缓存时仍可能回 data URL（手机/浏览器端），这里两种都接受。
-    void apiGetFileImageDataUrl({ md5: key, thumbFirst: true })
-      .then((r) => {
-        const media = preferMediaUrl(r as { file?: string; url?: string })
-        const base = (media as { url?: string }).url
-        if (!base) return
-        const url = withThumbWidth(base, 320)
-        const next = rememberThumb(
-          { thumbs: fileThumbsRef.current, order: imgOrder.current, fetched: imgFetched.current },
-          key,
-          url,
-        )
+    thumbQueue.current.push(key)
+    if (thumbTimer.current !== null) return
+    thumbTimer.current = setTimeout(() => {
+      thumbTimer.current = null
+      const keys = thumbQueue.current
+      thumbQueue.current = []
+      void fetchFileThumbUrls(keys).then((urls) => {
+        let next = { thumbs: fileThumbsRef.current, order: imgOrder.current, fetched: imgFetched.current }
+        for (const [k, url] of Object.entries(urls)) next = rememberThumb(next, k, url)
         fileThumbsRef.current = next.thumbs
         imgOrder.current = next.order
         imgFetched.current = next.fetched
         setFileImgs(next.thumbs)
       })
-      .catch(() => { /* 失败后不再重试，保留图标兜底 */ })
+    }, 24)
   }, [])
   /** 图片开灯箱；视频/文件开**详情抽屉**（没有预览，但要看名称/来源/月份/md5）。 */
   const openFileCell = useCallback((f: FileItem): void => {
     if (f.category !== 'image') { setDetail(f); return }
-    const key = fileKey(f)
     setPreview(f)
     setPreviewSrc('')
-    if (!key) return
-    // 原图档：同一个远端，`thumbFirst=false` 优先 `_h`/主体那一份；字节仍走协议流式。
-    void apiGetFileImageDataUrl({ md5: key })
-      .then((r) => {
-        const media = preferMediaUrl(r as { file?: string; url?: string })
-        const url = (media as { url?: string }).url
-        if (url) setPreviewSrc(url)
-      })
-      .catch(() => { /* 灯箱回退到网格缩略图 */ })
+    // 原图档：单张请求（灯箱一次只要一张），后端缺原图时回退 `_t` 档。
+    void fetchFileFullUrl(fileKey(f)).then((url) => { if (url) setPreviewSrc(url) })
   }, [])
 
   // 服务端的重复组只给 md5 / 份数 / 字节；文件名用**已加载**的文件补齐，

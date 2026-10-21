@@ -80,6 +80,7 @@ import type {
   GroupInfoSnapshot,
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
+  FileImageDataUrlsResult,
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
@@ -484,7 +485,12 @@ export interface WechatRemote {
   /** 读一个导出/备份任务的最新进度（M3；事件中继之外的兜底路径）。 */
   getExportProgress(options: { jobId: string }): Promise<RemoteResult<ExportProgressSnapshot>>
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
-  getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  getFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<RemoteResult<ImageDataUrlResult>>
+  /**
+   * 批量取文件库图片（2026-10-21，一屏 1 次 RPC；借鉴 Alpha 的批量 token）。
+   * `files-thumbs.ts` 用它攒批；单张入口继续服务灯箱。
+   */
+  getFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<RemoteResult<FileImageDataUrlsResult>>
   getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   /**
    * 批量取表情（E1，2026-09-28 性能修复）。

@@ -16029,6 +16029,28 @@ function releaseDecodeSlot() {
   else activeDecodes -= 1;
 }
 var inFlight3 = /* @__PURE__ */ new Map();
+var MAX_BATCH_KEYS = 48;
+var BATCH_CHUNK = 12;
+async function ensureFileImagesDecodedBatch(args, keys, thumbFirst = true) {
+  const uniq = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of keys ?? []) {
+    const key = String(raw ?? "").trim().toLowerCase();
+    if (key === "" || seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(key);
+    if (uniq.length >= MAX_BATCH_KEYS) break;
+  }
+  const out = new Array(uniq.length);
+  for (let i = 0; i < uniq.length; i += BATCH_CHUNK) {
+    const slice = uniq.slice(i, i + BATCH_CHUNK);
+    await Promise.all(slice.map(async (key, j) => {
+      const hit = await ensureFileImageDecoded({ ...args, key, thumbFirst });
+      out[i + j] = { key, ...hit };
+    }));
+  }
+  return out;
+}
 async function ensureFileImageDecoded(args) {
   const key = String(args.key ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(key)) return { error: "\u7F3A\u5C11\u56FE\u7247 MD5" };
@@ -17695,6 +17717,25 @@ function createMediaRemotes(rc) {
         xorKey,
         thumbFirst: options.thumbFirst === true
       });
+    },
+    /**
+     * 批量取文件库图片（一屏 = 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
+     *
+     * 去重、保持首次顺序、单次上限 48、块内并行且总解码并发 ≤4（保护 worker）。
+     * @param options - `keys` 为屏上可见格的 key（`fileKey()` 结果）；`thumbFirst` 网格传 true。
+     * @returns 逐条 `{key, file?, error?}`；调用方按 `key` 回贴，别按顺序。
+     */
+    async getFileImageDataUrls(options) {
+      const dec = rc.dirs().decrypted;
+      const { aesKey, xorKey } = resolveImageKeyPair(dec);
+      const items = await ensureFileImagesDecodedBatch({
+        decryptedDir: dec,
+        decodedDir: rc.dirs().decoded,
+        rawBase: rc.rawWechatBase(dec) || "",
+        aesKey,
+        xorKey
+      }, options?.keys ?? [], options?.thumbFirst !== false);
+      return { items };
     },
     async getEmoticonDataUrl(options) {
       const base = rawWechatBase2(rc.dirs().decrypted) || void 0;
@@ -41793,8 +41834,8 @@ __decorateElement(_init2, 1, "generatePeriodSummary", _generatePeriodSummary_dec
 __decoratorMetadata(_init2, GatewayAskOps);
 
 // src/backend/wechat-data/src/gateway-media-ops.ts
-var _wechatImageAutoDownload_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoversBatch_dec, _getSnsVideoCoverDataUrl_dec, _getMessageFile_dec, _getMapGeoJson_dec, _getRemoteImages_dec, _getWxcdnQuota_dec, _getOriginalHarvestStatus_dec, _originalHarvest_dec, _fetchOriginalImagesBatch_dec, _planOriginalFetch_dec, _getImageOriginal_dec, _getEmoticonDataUrls_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getAvatarsLocal_dec, _getAvatar_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _getEmoticons_dec, _a3, _init3;
-var GatewayMediaOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getEmoticonDataUrls_dec = [Remote3("getEmoticonDataUrls")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _planOriginalFetch_dec = [Remote3("planOriginalFetch")], _fetchOriginalImagesBatch_dec = [Remote3("fetchOriginalImagesBatch")], _originalHarvest_dec = [Remote3("originalHarvest")], _getOriginalHarvestStatus_dec = [Remote3("getOriginalHarvestStatus")], _getWxcdnQuota_dec = [Remote3("getWxcdnQuota")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMapGeoJson_dec = [Remote3("getMapGeoJson")], _getMessageFile_dec = [Remote3("getMessageFile")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoCoversBatch_dec = [Remote3("getSnsVideoCoversBatch")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _wechatImageAutoDownload_dec = [Remote3("wechatImageAutoDownload")], _a3) {
+var _wechatImageAutoDownload_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoversBatch_dec, _getSnsVideoCoverDataUrl_dec, _getMessageFile_dec, _getMapGeoJson_dec, _getRemoteImages_dec, _getWxcdnQuota_dec, _getOriginalHarvestStatus_dec, _originalHarvest_dec, _fetchOriginalImagesBatch_dec, _planOriginalFetch_dec, _getImageOriginal_dec, _getEmoticonDataUrls_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrls_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getAvatarsLocal_dec, _getAvatar_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _getEmoticons_dec, _a3, _init3;
+var GatewayMediaOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getFileImageDataUrls_dec = [Remote3("getFileImageDataUrls")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getEmoticonDataUrls_dec = [Remote3("getEmoticonDataUrls")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _planOriginalFetch_dec = [Remote3("planOriginalFetch")], _fetchOriginalImagesBatch_dec = [Remote3("fetchOriginalImagesBatch")], _originalHarvest_dec = [Remote3("originalHarvest")], _getOriginalHarvestStatus_dec = [Remote3("getOriginalHarvestStatus")], _getWxcdnQuota_dec = [Remote3("getWxcdnQuota")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMapGeoJson_dec = [Remote3("getMapGeoJson")], _getMessageFile_dec = [Remote3("getMessageFile")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoCoversBatch_dec = [Remote3("getSnsVideoCoversBatch")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _wechatImageAutoDownload_dec = [Remote3("wechatImageAutoDownload")], _a3) {
   constructor() {
     super(...arguments);
     __runInitializers(_init3, 5, this);
@@ -41833,6 +41874,9 @@ var GatewayMediaOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [R
   }
   async getFileImageDataUrl(options) {
     return await this.mediaRemotes().getFileImageDataUrl(options);
+  }
+  async getFileImageDataUrls(options) {
+    return await this.mediaRemotes().getFileImageDataUrls(options);
   }
   async getEmoticonDataUrl(options) {
     return this.mediaRemotes().getEmoticonDataUrl(options);
@@ -41895,6 +41939,7 @@ __decorateElement(_init3, 1, "getImageDataUrl", _getImageDataUrl_dec, GatewayMed
 __decorateElement(_init3, 1, "getImageDataUrlsBatch", _getImageDataUrlsBatch_dec, GatewayMediaOps);
 __decorateElement(_init3, 1, "getSnsImageDataUrl", _getSnsImageDataUrl_dec, GatewayMediaOps);
 __decorateElement(_init3, 1, "getFileImageDataUrl", _getFileImageDataUrl_dec, GatewayMediaOps);
+__decorateElement(_init3, 1, "getFileImageDataUrls", _getFileImageDataUrls_dec, GatewayMediaOps);
 __decorateElement(_init3, 1, "getEmoticonDataUrl", _getEmoticonDataUrl_dec, GatewayMediaOps);
 __decorateElement(_init3, 1, "getEmoticonDataUrls", _getEmoticonDataUrls_dec, GatewayMediaOps);
 __decorateElement(_init3, 1, "getImageOriginal", _getImageOriginal_dec, GatewayMediaOps);

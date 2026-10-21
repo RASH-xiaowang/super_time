@@ -31,6 +31,32 @@ export declare function decodedFileRel(decodedDir: string, key: string): string 
 export declare function locateFileDats(rawBase: string, key: string): Promise<string[]>;
 /** 测试用：清掉模块内的 attach 索引缓存。 */
 export declare function resetAttachIndexForTest(): void;
+/** 批量请求的参数（与单张一致，去掉 `key`/`thumbFirst` 由调用方逐个传）。 */
+export interface FileImageBatchArgs {
+    decryptedDir: string;
+    decodedDir: string;
+    rawBase: string;
+    aesKey?: string | Uint8Array;
+    xorKey?: number;
+}
+/** 批量结果里的一条：`key` 如实回信，便于调用方按自己的卡片匹配。 */
+export interface FileImageBatchItem extends FileImageHit {
+    key: string;
+}
+/** 单次批量上限：一屏最多几十格，超过它多半是调用方算错，直接截断保护 worker。 */
+export declare const MAX_BATCH_KEYS = 48;
+/**
+ * 批量按需解密（把「N 格 = N 次 RPC」收成 1 次，借鉴 Alpha 的批量 token 解析）。
+ *
+ * 去重 + 保持首次出现顺序；超过 {@link MAX_BATCH_KEYS} 截断；分块推进，
+ * 真正的解码并发由 {@link ensureFileImageDecoded} 的全局槽位（4）限制 —— 两层都保留：
+ * 块内并行隐藏磁盘延迟，又不让一屏 30 张同时解。
+ * @param args - 解密/缓存参数。
+ * @param keys - 待取 key 列表（客户端 `fileKey()` 结果；自动去重、忽略空值）。
+ * @param thumbFirst - true 时优先缩略档（网格），false 原图档优先（灯箱）。
+ * @returns 逐条结果，顺序 = 去重后的入参顺序（`key` 回信）。
+ */
+export declare function ensureFileImagesDecodedBatch(args: FileImageBatchArgs, keys: readonly string[], thumbFirst?: boolean): Promise<FileImageBatchItem[]>;
 /**
  * 按需把文件库图片解到 decoded 缓存，并给出流式显示用的相对路径。
  *

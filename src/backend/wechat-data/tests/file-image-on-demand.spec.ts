@@ -16,8 +16,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   decodedFileRel,
   ensureFileImageDecoded,
+  ensureFileImagesDecodedBatch,
   fileImageKeyOf,
   locateFileDats,
+  MAX_BATCH_KEYS,
   resetAttachIndexForTest,
 } from '../src/query/file-image-on-demand.ts'
 
@@ -112,16 +114,50 @@ describe('ensureFileImageDecoded：缓存命中/参数错误都有可展示结�
   })
 })
 
+describe('ensureFileImagesDecodedBatch：一屏一次 RPC（去重/顺序/上限）', () => {
+  it('去重并保持首次出现顺序；缓存命中走文件路径', async () => {
+    const decoded = tempDir()
+    writeFileSync(join(decoded, KEYS.h + '.jpg'), 'full')
+    writeFileSync(join(decoded, KEYS.t + '.t.jpg'), 'thumb')
+    const items = await ensureFileImagesDecodedBatch(
+      { decryptedDir: '/dec', decodedDir: decoded, rawBase: '/raw' },
+      [KEYS.t.toUpperCase(), KEYS.h, KEYS.t, '不是md5', ''],
+      true,
+    )
+    expect(items.map((i) => i.key)).toEqual([KEYS.t, KEYS.h, '不是md5'])
+    expect(items[0]?.file).toBe(KEYS.t + '.t.jpg')
+    expect(items[1]?.file).toBe(KEYS.h + '.jpg')
+    expect(items[2]?.error).toContain('缺少图片 MD5')
+  })
+
+  it('超过单批上限直接截断（保护 worker）', async () => {
+    const decoded = tempDir()
+    const keys = Array.from({ length: MAX_BATCH_KEYS + 10 }, (_, i) => i.toString(16).padStart(32, '0'))
+    const items = await ensureFileImagesDecodedBatch(
+      { decryptedDir: '/dec', decodedDir: decoded, rawBase: '' },
+      keys,
+      true,
+    )
+    expect(items.length).toBe(MAX_BATCH_KEYS)
+  })
+})
+
 describe('接线守卫：别让优化只活在测试里', () => {
-  it('Remote 走按需解密；文件面板用协议 URL + 320 宽缩略图；protocol 支持 w 参数', async () => {
+  it('批量链路/IPC 协议/缩略档都接上了', async () => {
     const { readFileSync } = await import('node:fs')
     const { fileURLToPath } = await import('node:url')
     const base = join(fileURLToPath(import.meta.url), '..', '..')
     const media = readFileSync(join(base, 'src', 'remotes', 'media.ts'), 'utf8')
     expect(media).toContain('ensureFileImageDecoded')
-    const files = readFileSync(join(base, '..', '..', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'Files.tsx'), 'utf8')
-    expect(files, '网格必须走 thumb 档').toContain('withThumbWidth(base, 320)')
-    expect(files, '灯箱必须请求原图档').toContain('apiGetFileImageDataUrl({ md5: key })')
+    expect(media, '批量 Remote 必须用批量实现').toContain('ensureFileImagesDecodedBatch')
+    const gateway = readFileSync(join(base, 'src', 'gateway-media-ops.ts'), 'utf8')
+    expect(gateway).toContain("@Remote('getFileImageDataUrls')")
+    const panels = join(base, '..', '..', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
+    const files = readFileSync(join(panels, 'Files.tsx'), 'utf8')
+    expect(files, '网格必须走攒批').toContain('fetchFileThumbUrls')
+    const thumbs = readFileSync(join(panels, 'files-thumbs.ts'), 'utf8')
+    expect(thumbs).toContain('apiGetFileImageDataUrls')
+    expect(thumbs, '缩略档必须带 w 参数').toContain('withThumbWidth(url, width)')
     const protocol = readFileSync(join(base, '..', '..', '..', 'src', 'backend', 'media-protocol.js'), 'utf8')
     expect(protocol).toContain('function parseThumbWidth')
     expect(protocol, '缩略图要落盘复用').toContain('thumbPathFor')
