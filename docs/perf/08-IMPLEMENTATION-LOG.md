@@ -26,6 +26,7 @@
 | 16 | `9f267a9` | refactor(perf): 收口验证并修绿两条项目棘轮（单文件 ≤1000 / 单函数 ≤250） | O（收口） | 棘轮/supervisor/media/overview 22 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.38s；全后端 3455 用例仅 1 例环境相关失败（`llm-embed-model`，与本分支无关） |
 | 17 | `1607735` | fix(files): 文件库图片按需解密 + thumb/full 两档协议流式（借鉴 D:\Alpha 媒体架构） | P（文件面板秒开） | 7 spec 文件 51 用例绿；typecheck 0；check-generated 一致；measure:quick 27.69s；真实数据 harness：decoded +10 张、.w320 缩略图 0→5、0 错误 |
 | 18 | `4318c3e` | chore(perf): 移除误拷贝并被跟踪的 scripts/perf/perf/ 目录 | P（收口清理） | m21 棘轮绿；无代码影响 |
+| 19 | 本轮 | perf(files): 文件面板缩略图批量 RPC（27→2 次，−93%）+ 可视化验证 | Q（文件面板批量） | 8 spec 文件 54 用例绿；typecheck 0；check-generated 一致；真实应用截图：31/31 协议图加载成功、0 破图；decoded +44、缩略图 +22、0 错误 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -145,6 +146,18 @@
   * `media-protocol.js` 支持 `?w=64–1024`：主进程 `nativeImage` 按需生成缩略图并原子落盘 `.w320.jpg`（immutable 缓存；无 nativeImage 自动回退原图）。
   * 渲染层：网格 `preferMediaUrl`+`withThumbWidth(...,320)`+`<img lazy decoding=async>`；灯箱单独取原图档、失败回退缩略图。
 - **验证**：harness 1 样本（panels=files，真实数据根）：decoded_images **+10**、`.w320.jpg` **0→5**、样本错误 0；7 个 spec 51 用例绿；typecheck 0；measure:quick 27.69s。
+
+### Q · 文件面板取图批量 RPC + 可视化验证（第十二轮，Lead）
+- **问题**：第十一轮后图片能出了，但仍是「一格一次 RPC」：harness 实测一次文件面板会话 **27 次** `getFileImageDataUrl`。
+- **做法**（对齐 Alpha 的批量 token）：
+  * 新增 Remote `getFileImageDataUrls({keys, thumbFirst})`：后端去重、单次上限 48、分块并行且总解码并发 ≤4；返回逐条 `{key, file?, error?}`（键回信，避免去重后错位贴图）；
+  * 渲染层抽出 `files-thumbs.ts`：攒批队列（24ms 合并）、每批 ≤24、协议 URL + `?w=320`；`FilesPanel` 因此从 380 → **370 行**（单函数棘轮不涨）；
+  * 灯箱仍走单张原图档（`thumbFirst=false`）。
+- **验证**：
+  * IPC 计数（harness `--panels=files`，同一口径）：`getFileImageDataUrl` **27 → 0**、`getFileImageDataUrls` **2**，合计 **2 次（−93%）**；
+  * 真实应用（Playwright 启动 + 截图）：31 张 `wechat-media://decoded/*.t.jpg?w=320` 全部 `naturalWidth>0`、**0 破图**；截图存 `docs/perf/assets/files-panel-thumbnails.png`；
+  * 同次运行 decoded_images **+44**、`.w320.jpg` 缩略图 **+22**、样本错误 0；
+  * 8 个 spec 54 用例绿；typecheck 0；check-generated 一致。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
