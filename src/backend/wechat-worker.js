@@ -41,7 +41,16 @@ console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=
 // 而涨的原因可能只是一次性的全量年报）。逻辑与判据见 worker-mem-sentinel.js
 // 与 tests/worker-mem-sentinel.spec.ts。起不来就算了：观测设施不该拖垮后端。
 try {
-  createMemSentinel({ log: (level, args) => console.log(String(args[0])) }).start();
+  // 2026-10-21（性能专项）：**必须把真实定时器传进去**。`createMemSentinel` 的缺省
+  // `setIntervalFn` 是空函数（为了让单测不必真等 60 秒），此前这里只传了 `log`，
+  // 于是生产环境只在 start() 时采一次、之后再也不会采 —— 诊断日志里的 `[mem]`
+  // 永远只有启动那一行（基线实测 80s 运行仅 1 条，见 docs/perf/02-BASELINE.md §9-2），
+  // 「worker 内存时间序列」因此一直读不到。
+  createMemSentinel({
+    log: (level, args) => console.log(String(args[0])),
+    setIntervalFn: setInterval,
+    clearIntervalFn: clearInterval,
+  }).start();
 } catch { /* 哨兵起不来不影响后端本身 */ }
 
 let backend = null;

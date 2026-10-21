@@ -136,6 +136,19 @@ describe('W3-1.2：内存哨兵', () => {
     expect(codeOnly, '哨兵不该知道 utilityProcess 的存在（它只管打印）').not.toMatch(/utilityProcess/)
   })
 
+  it('生产接线把真实定时器传给哨兵（缺了它只会采一次）', () => {
+    // 单测里的假定时器保证「逻辑对」；这一条守的是**调用点有没有把真实定时器接上**。
+    // 2026-10-21 基线实测：80s 运行只有 1 条 `[mem]`（启动那次），就是缺了下面两行。
+    const workerSrc = readFileSync(join(HERE, '..', 'wechat-worker.js'), 'utf8')
+    const m = /createMemSentinel\(\{([\s\S]*?)\}\)/.exec(workerSrc)
+    expect(m, '找不到 createMemSentinel 调用点').not.toBeNull()
+    const block = m?.[1] ?? ''
+    expect(block, '缺 setIntervalFn ⇒ 生产只会在 start() 采一次，没有时间序列')
+      .toMatch(/setIntervalFn:\s*setInterval\b/)
+    expect(block, '缺 clearIntervalFn ⇒ stop() 摘不掉真实定时器')
+      .toMatch(/clearIntervalFn:\s*clearInterval\b/)
+  })
+
   it('fmtBytes 两档可读（MB / GB），不输出一串原始字节', () => {
     expect(fmtBytes(812 * 1024 * 1024)).toBe('812MB')
     expect(fmtBytes(1.2 * 1024 * 1024 * 1024)).toBe('1.20GB')
