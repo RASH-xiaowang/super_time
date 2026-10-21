@@ -25,7 +25,8 @@ import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
-import { decodeEmoticonDataUrlAsync, decodeFileImageDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
+import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
+import { ensureFileImageDecoded } from '../query/file-image-on-demand.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
@@ -199,10 +200,28 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return snsImageWithCdnFirst(rc, options, pair)
     },
 
-    async getFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
-      const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return await decodeFileImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
+    /**
+     * 文件库图片（hardlink 文件名前缀）→ decoded 缓存相对路径（供 `wechat-media://` 流式显示）。
+     *
+     * 2026-10-21：此前这里只读已解密缓存（文件库图片从未解密过 ⇒ 13,071 张命中 0，界面全占位）。
+     * 现在按需定位 `msg/attach/<md5>_*.dat` 解密并落盘；返回 `file`（相对路径）而不是 base64，
+     * 渲染层拼 `wechat-media://decoded/<rel>`，字节不再经 IPC、也不进渲染堆。
+     * @param options - `md5` 为附件文件名去掉 `.dat`/档位后缀后的 32 位前缀；
+     *   `thumbFirst=true`（网格）时优先解 `_t` 缩略档，false（灯箱）时原图档优先。
+     * @returns `{file, format, thumb?}` 或 `{error}`。
+     */
+    async getFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
+      const dec = rc.dirs().decrypted
+      const { aesKey, xorKey } = resolveImageKeyPair(dec)
+      return await ensureFileImageDecoded({
+        decryptedDir: dec,
+        decodedDir: rc.dirs().decoded,
+        rawBase: rc.rawWechatBase(dec) || '',
+        key: options.md5,
+        aesKey,
+        xorKey,
+        thumbFirst: options.thumbFirst === true,
+      })
     },
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {

@@ -139,13 +139,17 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         offline?: boolean;
     }): Promise<ImageDataUrlResult>;
     /**
-     * Resolve a file-library image (hardlink md5) to an offline base64 data URL.
-     * 优先读已解密缓存，否则通过 hardlink.db 定位 .dat 原图解密。
-     * @param options - file md5.
-     * @returns ImageDataUrlResult: base64 data URL or error.
+     * Resolve a file-library image to decoded-cache path / data URL.
+     *
+     * 2026-10-21：按需解密（`msg/attach` 索引 → `.dat` → decoded 缓存），
+     * 桌面端返回 `file`（相对路径）供 `wechat-media://` 流式显示；
+     * `thumbFirst`：网格取 `_t` 缩略档，灯箱取原图档。
+     * @param options - file image key (attachment filename md5 prefix) + optional thumbFirst.
+     * @returns ImageDataUrlResult: `file`（优先）/ `url` / error.
     */
     getFileImageDataUrl(options: {
         md5: string;
+        thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
     /**
      * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.

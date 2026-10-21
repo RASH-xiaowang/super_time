@@ -95,8 +95,19 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     }>;
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
+    /**
+     * 文件库图片（hardlink 文件名前缀）→ decoded 缓存相对路径（供 `wechat-media://` 流式显示）。
+     *
+     * 2026-10-21：此前这里只读已解密缓存（文件库图片从未解密过 ⇒ 13,071 张命中 0，界面全占位）。
+     * 现在按需定位 `msg/attach/<md5>_*.dat` 解密并落盘；返回 `file`（相对路径）而不是 base64，
+     * 渲染层拼 `wechat-media://decoded/<rel>`，字节不再经 IPC、也不进渲染堆。
+     * @param options - `md5` 为附件文件名去掉 `.dat`/档位后缀后的 32 位前缀；
+     *   `thumbFirst=true`（网格）时优先解 `_t` 缩略档，false（灯箱）时原图档优先。
+     * @returns `{file, format, thumb?}` 或 `{error}`。
+     */
     getFileImageDataUrl(options: {
         md5: string;
+        thumbFirst?: boolean;
     }): Promise<ImageDataUrlResult>;
     getEmoticonDataUrl(options: {
         md5: string;

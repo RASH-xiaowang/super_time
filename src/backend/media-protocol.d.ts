@@ -17,5 +17,8 @@ export function parseDecodedUrl(rawUrl: string): string | null
 /** 把 decoded 根的相对路径解析成允许读取的真实文件；越界/非图片/不存在返回 null。 */
 export function resolveDecodedFile(root: string, rel: string): string | null
 
+/** 解析 `?w=<px>` 缩略图宽度（64–1024 整数）；缺失/非法返回 null（回原图）。 */
+export function parseThumbWidth(rawUrl: string): number | null
+
 /** 为一个 `wechat-media://` 请求构造流式响应（200 或 404）。 */
 export function mediaResponse(root: string, rawUrl: string): Response

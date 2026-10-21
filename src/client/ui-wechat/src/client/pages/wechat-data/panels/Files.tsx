@@ -14,6 +14,7 @@ import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { rememberThumb } from '../utils/thumb-cache.ts'
 import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } from '../api.ts'
+import { preferMediaUrl, withThumbWidth } from '../wechat-media.ts'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
@@ -62,6 +63,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const [error, setError] = useState<string | null>(null)
   const [fileImgs, setFileImgs] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState<FileItem | null>(null)
+  /** 灯箱用的**原图档** URL（网格里存的是 `?w=320` 缩略图，点开要换成原图）。 */
+  const [previewSrc, setPreviewSrc] = useState('')
   // 视频/文件没有预览（后端只提供图片解码），点开的是**详情抽屉**而不是死点击。
   const [detail, setDetail] = useState<FileItem | null>(null)
   const [dupOpen, setDupOpen] = useState(false)
@@ -173,10 +176,15 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const decodeThumb = useCallback((key: string): void => {
     if (!key || imgFetched.current.has(key) || !/^[0-9a-f]{32}$/i.test(key)) return
     imgFetched.current.add(key)
-    void apiGetFileImageDataUrl({ md5: key })
+    // 2026-10-21：后端现在会按需解密并回 `file`（decoded 相对路径），渲染层拼
+    // `wechat-media://` 流式显示；`?w=320` 让主进程生成/复用缩略图（Alpha 的 thumb 档）。
+    // 命中旧缓存时仍可能回 data URL（手机/浏览器端），这里两种都接受。
+    void apiGetFileImageDataUrl({ md5: key, thumbFirst: true })
       .then((r) => {
-        const url = r.url as string | undefined
-        if (!url) return
+        const media = preferMediaUrl(r as { file?: string; url?: string })
+        const base = (media as { url?: string }).url
+        if (!base) return
+        const url = withThumbWidth(base, 320)
         const next = rememberThumb(
           { thumbs: fileThumbsRef.current, order: imgOrder.current, fetched: imgFetched.current },
           key,
@@ -191,8 +199,19 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   }, [])
   /** 图片开灯箱；视频/文件开**详情抽屉**（没有预览，但要看名称/来源/月份/md5）。 */
   const openFileCell = useCallback((f: FileItem): void => {
-    if (f.category === 'image') setPreview(f)
-    else setDetail(f)
+    if (f.category !== 'image') { setDetail(f); return }
+    const key = fileKey(f)
+    setPreview(f)
+    setPreviewSrc('')
+    if (!key) return
+    // 原图档：同一个远端，`thumbFirst=false` 优先 `_h`/主体那一份；字节仍走协议流式。
+    void apiGetFileImageDataUrl({ md5: key })
+      .then((r) => {
+        const media = preferMediaUrl(r as { file?: string; url?: string })
+        const url = (media as { url?: string }).url
+        if (url) setPreviewSrc(url)
+      })
+      .catch(() => { /* 灯箱回退到网格缩略图 */ })
   }, [])
 
   // 服务端的重复组只给 md5 / 份数 / 字节；文件名用**已加载**的文件补齐，
@@ -220,6 +239,9 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const { notice: exportNotice, flash: flashExport } = useActionNotice()
 
   const doExport = (): void => { void exportFilesCsv(flashExport) }
+
+  /** 灯箱当前要显示的 URL：原图档优先，退回网格缩略图（两者都可能是协议 URL 或 data URL）。 */
+  const previewUrl = preview ? (previewSrc || fileImgs[fileKey(preview)] || '') : ''
 
   return (
     <div className={css.panel}>
@@ -351,7 +373,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
               <button type="button" className={css.lightboxClose} aria-label="关闭预览" onClick={() => { setPreview(null) }}>×</button>
             </header>
             <div className={css.lightboxBody}>
-              {fileImgs[fileKey(preview)] ? (
+              {previewUrl ? (
                 <div
                   className={dragging ? `${css.lightboxStage} ${css.lightboxDragging}` : css.lightboxStage}
                   onWheel={(e) => {
@@ -372,7 +394,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
                 >
                   <img
                     className={css.lightboxImg}
-                    src={fileImgs[fileKey(preview)] ?? ''}
+                    src={previewUrl}
                     alt={preview.fileName || preview.md5}
                     referrerPolicy="no-referrer"
                     draggable={false}
@@ -381,8 +403,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
                 </div>
               ) : (
                 <div className={css.lightboxEmpty}>
-                  <span className={css.lightboxEmptyTitle}>未找到已解密图片</span>
-                  <span className={css.lightboxEmptyNote}>decoded_images/{fileKey(preview)}.jpg 不存在</span>
+                  <span className={css.lightboxEmptyTitle}>这张图还没解密出来</span>
+                  <span className={css.lightboxEmptyNote}>本机没有该 md5 的附件原图（msg/attach）</span>
                 </div>
               )}
             </div>
@@ -395,7 +417,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
             <footer className={css.lightboxFt}>
               <span className={css.lightboxMd5}>{preview.md5 || fileKey(preview)}</span>
               <button type="button" className={css.catBtn} onClick={() => {
-                const src = fileImgs[fileKey(preview)]
+                const src = previewUrl
                 if (!src) return
                 const a = document.createElement('a')
                 a.href = src
@@ -403,7 +425,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
                 document.body.appendChild(a)
                 a.click()
                 document.body.removeChild(a)
-              }} disabled={!fileImgs[fileKey(preview)]}>下载图片</button>
+              }} disabled={!previewUrl}>下载图片</button>
             </footer>
           </div>
         </div>

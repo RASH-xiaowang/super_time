@@ -167,12 +167,14 @@ export async function apiGetSnsImageDataUrl(options: {
   return unwrap(await remote().getSnsImageDataUrl(options))
 }
 /**
- * Resolve a file-library image (hardlink md5) to a data URL.
- * 优先读已解密缓存，否则定位 .dat 原图解密。
- * @param options - file md5.
+ * Resolve a file-library image (attachment md5) to decoded cache path / data URL.
+ *
+ * 2026-10-21：后端按需解密并返回 `file` 相对路径；桌面端据此拼
+ * `wechat-media://` 流式显示（缩略图由主进程按需生成）。`thumbFirst` 网格用 `_t` 档。
+ * @param options - file image key + optional thumbFirst.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
+export async function apiGetFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getFileImageDataUrl(options))
 }
 /**
