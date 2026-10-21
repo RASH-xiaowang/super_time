@@ -27,6 +27,8 @@
 | 17 | `1607735` | fix(files): 文件库图片按需解密 + thumb/full 两档协议流式（借鉴 D:\Alpha 媒体架构） | P（文件面板秒开） | 7 spec 文件 51 用例绿；typecheck 0；check-generated 一致；measure:quick 27.69s；真实数据 harness：decoded +10 张、.w320 缩略图 0→5、0 错误 |
 | 18 | `4318c3e` | chore(perf): 移除误拷贝并被跟踪的 scripts/perf/perf/ 目录 | P（收口清理） | m21 棘轮绿；无代码影响 |
 | 19 | 本轮 | perf(files): 文件面板缩略图批量 RPC（27→2 次，−93%）+ 可视化验证 | Q（文件面板批量） | 8 spec 文件 54 用例绿；typecheck 0；check-generated 一致；真实应用截图：31/31 协议图加载成功、0 破图；decoded +44、缩略图 +22、0 错误 |
+| 20 | 本轮 | refactor(perf): 拆分 remotes/media.ts 与 FilesPanel，修绿两条棘轮并记账 | R（棘轮修复） | 棘轮 9/9 绿；measure:quick 18/21 用例 27.56s |
+| 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实截图 `assets/sidebar-nickname.png` |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -158,6 +160,16 @@
   * 真实应用（Playwright 启动 + 截图）：31 张 `wechat-media://decoded/*.t.jpg?w=320` 全部 `naturalWidth>0`、**0 破图**；截图存 `docs/perf/assets/files-panel-thumbnails.png`；
   * 同次运行 decoded_images **+44**、`.w320.jpg` 缩略图 **+22**、样本错误 0；
   * 8 个 spec 54 用例绿；typecheck 0；check-generated 一致。
+
+### R · 收口：棘轮修复 + 侧栏显示当前用户昵称（第十三轮，Lead）
+- **棘轮修复（上一轮遗留红）**：`remotes/media.ts` 1021 行 / `createMediaRemotes` 355 行、`FilesPanel` 370 行 → 超门禁。拆出 `remotes/media-file-images.ts`（两个文件库图片 Remote 由工厂返回，`...createFileImageRemotes(rc)` 展开）与 `panels/files-dup.ts`（重复组/名称归并纯函数）后：media.ts **979 行**、createMediaRemotes **313 行**、FilesPanel **354 行**，棘轮登记数字同步记账（317→313、359→354）。
+- **用户需求**：侧栏品牌位原来写死 `Super Time`，改为**当前微信账号昵称**。
+  * 后端新增 `query/self-profile.ts`：只读 `contact.db` 自己那一行，显示优先级**备注 > 昵称 > 微信号**；未解密/取不到给空串（界面回退品牌名，绝不空标题）。
+  * 新增 Remote `getSelfProfile`（`{username, name, alias?}`，仅一行查询，不复用 3000+ 联系人的全表扫描）；客户端 `apiGetSelfProfile`。
+  * 侧栏新增 `panels/brand-title.tsx`（会话级缓存，避免导航栏常驻组件反复打 Remote）；CSS 补省略号，`title` 保留「昵称 · Super Time」。
+  * 品牌守卫更新：窗口标题/关于页仍是 Super Time，品牌名作为**兜底常量**保留。
+- **验证**：真实启动应用并截图 → 品牌位文本 **SuperT_王国宁**（`title="SuperT_王国宁 · Super Time"`），副标题/头像不变；self-profile 5/5、brand-consistency 6/6、相关 spec 共 64 用例（除棘轮外）全绿；typecheck 0；measure:quick 27.56s。
+- **回滚**：`git revert` 对应两笔提交即可（Remote 为新增、品牌位组件可单文件回退；取不到昵称自动回退品牌名，不存在空标题风险）。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
