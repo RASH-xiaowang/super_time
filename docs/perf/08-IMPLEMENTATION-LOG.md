@@ -21,6 +21,7 @@
 | 11 | `e165933` | feat(perf): worker heap snapshot 抓取/归因工具 + `[mem]` 补齐 external/arrayBuffers | J（内存归因） | backend-supervisor 8/8（含 2 条 inspect 门控守卫）、sentinel 12/12；typecheck 0；check-generated `--all` 一致 |
 | 12 | `77c441f` | feat(perf): sqlite 连接数进 `[mem]` + 诊断用 node-args/强制 GC 门控（三个内存策略实验） | K（内存实验） | sentinel 15/15、supervisor 9/9、sqlite-stats 3/3；typecheck 0；check-generated `--all` 一致；measure:quick 27.10s |
 | 13 | `250d24d` | feat(perf): 首屏查询分段打点 + 两处聚合的跨启动磁盘缓存（条件性命中，附负结果证据） | L（查询提速） | query-trace 3/3、insights-shard-store 6/6、sig-disk-cache 6/6；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
+| 14 | `f60a350` | perf(query): overview 资源聚合用分析缓存 + insights 朋友圈解析去 split 分配（实测 +2%） | M（查询小优化） | overview/insights 20 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -109,6 +110,12 @@
 - **隔离验证**（两个独立进程、无写入）：`insights` **370→83ms（4.5×）**（shards 208→20、extras 109→disk-hit 0），`overview` 98→<1ms。
 - **负结果证据**：真实应用连续两次启动（harness 2 样本、同一数据根）仍全冷（sample2 `getOverviewInsights` 448ms / `getOverview` 345ms）。原因：`fileSig` 含 mtimeNs+size+SQLite change counter+WAL，而应用启动的 **WAL checkpoint 会自增 change counter** ⇒ 每次启动签名都变。缓存文件确实写出（insights 49KB / extras 3.8KB / overview 3KB），miss 成本仅一次 fs 读（≈1–2ms）。
 - **结论**：跨启动缓存是**条件性**优化（只有无同步写入的窗口才命中）；要稳定吃满收益需换「内容稳定」版本键（如 sync-state 指纹），须先验证失效语义，本轮不做。
+
+### M · insights 分片扫描页缓存实验 + 两个小优化（第八轮，Lead）
+- **假设验证（负结果）**：insights 冷 370ms 里 191ms 是 374 张 Msg 表各一次 GROUP BY，怀疑同样被 256KB 页缓存拖累（storage 的 JOIN 查询曾 3.6×）。同口径微基准（同一批真实查询/同一批库文件）：
+  `256KB→196.3ms / 4MB→205.6 / 8MB→200.4 / 16MB→208.5` ⇒ **页缓存对顺序 GROUP BY 扫描基本无影响**，该假设证伪，分片扫描路径不动（避免为错误假设改代码）。
+- **保留的小优化**：① overview 的 resource 聚合连接加 `raiseAnalyticsCache`（29MB 资源库 GROUP BY，与 getStorageStats 同口径）；② insights 朋友圈解析的 `split().length-1` / `match(regex)` 换成 `countSubstr`（indexOf 循环），只去临时数组分配。
+- **隔离实测**：`overview` 98.3→96.4ms；`insights` 369.9→361.6ms（**+2%**）。明确不宣称更大收益：moments 段仍以字符串扫描为主（44–47ms）。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 

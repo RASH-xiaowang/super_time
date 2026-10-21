@@ -120,6 +120,14 @@
 
 **负结果证据**：`fileSig` 含 mtimeNs+size+SQLite change counter+WAL，而应用启动的 WAL checkpoint 会自增 change counter ⇒ 每次启动签名都变，磁盘缓存必然 miss；miss 成本仅一次 fs 读（≈1–2ms）。要稳定命中需换「内容稳定」版本键（如 sync-state 指纹）并验证失效语义，本轮不做。
 
+## 4.9 insights 分片扫描的页缓存实验 + 微优化（第八轮）
+
+| 项 | 结果 | 判定 |
+|---|---|---|
+| insights 374 表 GROUP BY 的页缓存 A/B | 256KB 196.3ms / 4MB 205.6 / 8MB 200.4 / 16MB 208.5（同批真实查询） | **页缓存无影响**（与 storage 的 JOIN 查询不同），假设证伪，不改扫描路径 |
+| overview resource 连接加分析缓存 + 删除资源库 GROUP BY 冷段 | overview 冷 98.3→**96.4ms** | 小幅（−2%） |
+| insights 朋友圈解析去 split 分配（`countSubstr`/indexOf） | insights 冷 369.9→**361.6ms** | 小幅（−2%）；moments 段仍 44–47ms 以扫描为主 |
+
 ## 5. 结论一句话
 > **验证成立**：后端 ready **2910ms→142ms（−95%，control 对照归因）**、总览落定 **3977ms→1229ms（−69%）**；首屏两个最贵查询 `getStorageStats` **676/434→271ms**、`getLedger` **334→161ms**（分析型连接页缓存 256KB→8MB，同库 A/B 最高 3.6×）；首屏 CSS −32%（传输 −6.0%）、contacts 面板 IPC −55%、图片批量 30 张句柄开合 33→3（−91%）且 fileOnly 白算 base64 归零、4 处后端缓存获得硬字节上界、随包 −601.5KiB、1 处监听泄漏与 2 处无界小表修复、内存哨兵恢复轮询；后端基准与全量 typecheck 无退化。
 > **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB。第四~六轮已完成归因与策略实验：缓存 18.9MB、sqlite 连接 ≤4、`--max-old-space-size` 与强制 GC 均为负结果（§4.5–§4.7）；重载 RSS 343–415MB ≈ V8 heapTotal 175 + external 53 + 原生 ~157，轻载 heap 空闲 60s 无增长（+0.3MB）。再往下只能做「减少大对象分配/复用 Buffer」级重构，需单独立项；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。首屏两查询已分段（隔离冷跑 overview 98ms / insights 370ms，§4.8）；跨启动磁盘缓存为**条件性**优化（无写入窗口 4.5×），真实启动因 WAL checkpoint 改签名而 miss，负结果已记录。
