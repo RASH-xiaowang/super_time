@@ -23,6 +23,7 @@
 | 13 | `250d24d` | feat(perf): 首屏查询分段打点 + 两处聚合的跨启动磁盘缓存（条件性命中，附负结果证据） | L（查询提速） | query-trace 3/3、insights-shard-store 6/6、sig-disk-cache 6/6；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
 | 14 | `f60a350` | perf(query): overview 资源聚合用分析缓存 + insights 朋友圈解析去 split 分配（实测 +2%） | M（查询小优化） | overview/insights 20 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
 | 15 | `b66648c` | perf(storage): file-names 整树扫描跨启动落盘缓存（冷 203ms → 1ms，首个真实命中的跨启动缓存） | N（跨启动缓存） | sig-disk-cache 7/7；typecheck 0；check-generated `--all` 一致；measure:quick 27.93s |
+| 16 | `9f267a9` | refactor(perf): 收口验证并修绿两条项目棘轮（单文件 ≤1000 / 单函数 ≤250） | O（收口） | 棘轮/supervisor/media/overview 22 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.38s；全后端 3455 用例仅 1 例环境相关失败（`llm-embed-model`，与本分支无关） |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -124,6 +125,13 @@
 - **实现**：`loadFileNamesBySize` 加一层 `sig-disk-cache`（`<数据根>/cache/file-names.v1.json`，原子写/损坏退化/签名逐字比对；进程内 10s TTL 与磁盘层互不放大陈旧窗口）+ 源码级接线守卫。
 - **实测**（harness 2 样本、同一数据根、`SUPERTIME_STORAGE_TRACE=1`）：sample1 file-names 段 108→311ms（**203ms**，n=2844）；sample2 108→109ms（**~1ms**，n=2844）⇒ **首个真实命中的跨启动缓存，重复启动省 ~200ms**（getStorageStats 约 −40%）。
 - 剩余大头：large-files 段 91ms（100 条大文件逐条 `resolveFileTitle`，冷 OS 缓存）。
+
+### O · 收口验证与两条项目棘轮（第十轮，Lead）
+- **全后端套件**（`src/backend/tests` + `src/backend/wechat-data/tests`，3455 用例）：**3420 通过 / 34 跳过 / 1 失败**。唯一失败 `llm-embed-model`（"什么都没配 ⇒ 名字为空串"）与本次 25 个提交无关：该链路 `git log 70c3ca6..HEAD` 为空、隔离运行同样失败、移走工作树本地 `wechat/llm.json` 仍失败 ⇒ 宿主环境注入的 LLM 配置导致，需干净环境复验（已记入已知环境项）。
+- **修绿两条项目棘轮**（否则分支不可合并）：
+  * `m21-file-size-ratchet`：`scripts/perf/perf-baseline.mjs` 1096 行 → 拆出 `scripts/perf/lib/report.mjs`（extractMetrics/aggregateSamples/printSummary）→ **811 行**；另删除工作树里**误拷贝的 `scripts/perf/perf/` 整份副本**（未跟踪文件，被棘轮按 scripts 全树扫到）。
+  * `function-size-ratchet`：`createBackendSupervisor` 286 → **241 行**（`spawn` 实现在模块级 `spawnWorkerProcess(ctx)`，闭包依赖显式传入）；`computeOverviewInsights` 263 → ~225 行（朋友圈扫描抽成 `scanMomentsStats`，并按其规则删除棘轮清单里的 252 条目）；`remotes/media.ts` 1006 → **982 行**（`IMAGE_BATCH_CONCURRENCY`/`mapWithConcurrency` 拆到 `query/concurrency.ts`，re-export 保持外部用法不变）。
+- 证明：改动全是搬运（无行为变更）；棘轮 + supervisor + media/overview 相关 **22 用例绿**；typecheck 0；check-generated `--all` 一致；measure:quick 27.38s。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 

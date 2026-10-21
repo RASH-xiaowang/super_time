@@ -139,6 +139,12 @@
 
 ⇒ **重复启动省 ~200ms**（getStorageStats 约 −40%）。这是第七轮磁盘缓存机制在真实启动中的**首次命中**（此前 overview/insights 因 `fileSig` 含 checkpoint 会自增的 change counter 而必然 miss）。
 
+## 4.11 收口验证（第十轮）
+
+- **全后端套件**（`src/backend/tests` + `src/backend/wechat-data/tests`）：3455 用例 → **3420 通过 / 34 跳过 / 1 失败**。唯一失败 `llm-embed-model` 与本分支无关（链路未改、隔离仍失败、移走本地 llm.json 仍失败 ⇒ 宿主环境注入配置），记为环境项待干净环境复验。
+- **项目棘轮全部绿**：单文件 ≤1000 行（拆出 `scripts/perf/lib/report.mjs`，基线 1096→811；`media.ts` 1006→982，并发工具拆到 `query/concurrency.ts`）、单函数 ≤250 行（`createBackendSupervisor` 286→241、`computeOverviewInsights` 263→~225）。
+- typecheck 0；check-generated `--all` 一致；measure:quick 18/21 用例 27.38s。
+
 ## 5. 结论一句话
 > **验证成立**：后端 ready **2910ms→142ms（−95%，control 对照归因）**、总览落定 **3977ms→1229ms（−69%）**；首屏两个最贵查询 `getStorageStats` **676/434→271ms**、`getLedger` **334→161ms**（分析型连接页缓存 256KB→8MB，同库 A/B 最高 3.6×）；首屏 CSS −32%（传输 −6.0%）、contacts 面板 IPC −55%、图片批量 30 张句柄开合 33→3（−91%）且 fileOnly 白算 base64 归零、4 处后端缓存获得硬字节上界、随包 −601.5KiB、1 处监听泄漏与 2 处无界小表修复、内存哨兵恢复轮询；后端基准与全量 typecheck 无退化。
 > **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB。第四~六轮已完成归因与策略实验：缓存 18.9MB、sqlite 连接 ≤4、`--max-old-space-size` 与强制 GC 均为负结果（§4.5–§4.7）；重载 RSS 343–415MB ≈ V8 heapTotal 175 + external 53 + 原生 ~157，轻载 heap 空闲 60s 无增长（+0.3MB）。再往下只能做「减少大对象分配/复用 Buffer」级重构，需单独立项；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。首屏两查询已分段（隔离冷跑 overview 98ms / insights 370ms，§4.8）；跨启动磁盘缓存为**条件性**优化（无写入窗口 4.5×），真实启动因 WAL checkpoint 改签名而 miss，负结果已记录。
