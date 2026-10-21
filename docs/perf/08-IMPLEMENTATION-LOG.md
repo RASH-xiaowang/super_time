@@ -30,6 +30,7 @@
 | 20 | 本轮 | refactor(perf): 拆分 remotes/media.ts 与 FilesPanel，修绿两条棘轮并记账 | R（棘轮修复） | 棘轮 9/9 绿；measure:quick 18/21 用例 27.56s |
 | 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实截图 `assets/sidebar-nickname.png` |
 | 22 | 本轮 | perf(files): 缩略图宽度自适应 + 视区外预取（hook 两条 lane、LRU 随列数放大） | S（资源生命周期） | 7 spec 45 用例绿；棘轮绿；measure:quick 18/21 用例 27.37s；真实应用：URL 全为 `?w=240`（原 320）、31 张渲染却新建 51 个缩略图缓存（预取生效）、0 破图 |
+| 23 | 本轮 | chore(launch): 「启动最新版」启动器（按需构建 + 关旧实例 + 启动自检），主区 SuperTime.cmd 转调 | T（启动链路） | 自检 exit 0：产物最新时跳过构建；运行中再启动 → 关闭旧实例 1 个、新主进程 1 个；launch-latest 3 组单测 + 棘轮 16 用例绿；typecheck 0 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -185,6 +186,18 @@
   * 截图存 `docs/perf/assets/files-prefetch-adaptive.png`。
 - **验收**：新增 `files-prefetch.spec.ts`（12 用例）+ 更新 virtual wiring 守卫；相关 7 spec 45 用例绿；两只棘轮绿；typecheck 0；check-generated 一致；measure:quick 27.37s。
 - **回滚**：`git revert` 本提交即可（hook 为新增，`Files.tsx` 回退后仍走原固定 320 逻辑；无后端/接口变更）。
+
+### T · 「每次启动都是最新版」启动器（第十五轮，Lead）
+- **根因**：桌面快捷方式 `Super Time.lnk` 指向主工作区 `SuperTime.cmd`，它只 `start electron.exe` —— 既不在性能分支的工作树上，也**从不构建**（`ui-dist`/`lib` 是 gitignore 产物）。所以"代码已提交、启动的还是旧界面"。
+- **实现**：
+  * 新增 `scripts/launch-latest.mjs` + 纯逻辑 `scripts/launch-latest-lib.mjs` + `Latest.cmd`（工作树根）：
+    - 先打印分支/短 SHA/未提交改动数（一眼看出跑的是哪份代码）；
+    - 按需构建：源码（排除测试/产物/依赖）最新 mtime > 产物最旧 mtime、产物缺失、或 `--force-build` 时跑 `npm run build:all`；**构建失败不启动**（避免悄悄跑旧代码）；
+    - 关掉旧实例后再启动：只杀命令行含 `super-time-wechat` 的 dev Electron 主进程，并轮询到进程真正退出（否则单实例锁会挡掉新实例）；启动后 1.8s 自检，没窗口进程则报错退出；
+    - 参数：`--no-launch`（只自检+构建）、`--force-build`、`--skip-build`、`--no-kill`；
+  * 主工作区 `SuperTime.cmd` 改为转调工作树 `Latest.cmd`：**桌面/任务栏快捷方式不用动**，点开就是最新版。
+- **验证**：`SuperTime.cmd --no-launch` → banner `perf/resource-lifecycle-v1 @ 8fba8bb`、产物最新跳过构建、exit 0；真实启动 → Electron 主进程 1 + 渲染子进程 4；运行中再次启动 → 输出"已关闭旧实例 1 个"、新主进程 1 个；测试实例已关闭。
+- **回滚**：主区 `git checkout -- SuperTime.cmd` 即恢复原启动逻辑；工作树删掉 `Latest.cmd`/`scripts/launch-latest*` 即回到手动 `npm start`。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
