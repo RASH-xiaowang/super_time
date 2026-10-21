@@ -1,3 +1,12 @@
+/** 朋友圈图片 data URL 缓存的单测把手；不暴露内部 Map。 */
+export declare function snsImageUrlCacheHandles(): {
+    stats: () => {
+        count: number;
+        total: number;
+    };
+    clear: () => void;
+    putForTest: (key: string, dataUrl: string) => void;
+};
 /**
  * 单次调用**最多解密多少个缓存文件**（2026-09-29 实测后加的硬上限）。
  *
@@ -104,7 +113,7 @@ export declare function snsAttachProgressForTest(wechatBaseDir: string): {
 /**
  * 版本二：*内容*取回 —— 只要「本机确实有这张图」那份 data URL（A4，2026-09-28 性能修复）。
  *
- * 为什么不在这里 import `meta.ts` 的 `boundedSet`：`decodeCachedFile` 已经做了密钥解析，
+ * 为什么先查 `md5UrlCache`：`decodeCachedFile` 已经做了密钥解析，
  * 这里再原地解一次就够；从 `md5UrlCache` 拿一份已经解过的可以省一次解密。
  * ⚠ 口径与 `resolveSnsImageDataUrl` 的**索引分支**逐字一致：`indexDead`（索引指向的文件
  * 解不开）**不算命中** —— 否则「本机有一份坏文件」会被当成「本机有图」，把封面永久钉在坏数据上。

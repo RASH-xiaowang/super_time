@@ -26,6 +26,7 @@
  * 带 TTL（默认 10 分钟）—— 用户中途在微信里点开了原图，10 分钟后会自动再试一次。
  */
 import { existsSync } from 'node:fs';
+import { type ImageResourceHint } from './media-image.ts';
 /** 自动升级的结果（给调用方决定要不要替换返回值）。 */
 export interface AutoUpgradeResult {
     /** 升级成功时的格式。 */
@@ -56,9 +57,13 @@ export declare function forgetAutoUpgradeAttempt(username: string, localId: numb
  * @param aesKey - V2 AES 密钥。
  * @param xorKey - XOR key 字节。
  * @param allowNetwork - 是否允许走 CDN 直链（默认 true；批量路径可关掉以免拖慢）。
+ * @param options - optional resolved hint / fileOnly mode used by the batch entry.
  * @returns 升级结果；`format` 为空表示没升级成功。
  */
-export declare function tryUpgradeToOriginal(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir: string | undefined, aesKey: string | Uint8Array | undefined, xorKey: number, allowNetwork?: boolean): Promise<AutoUpgradeResult>;
+export declare function tryUpgradeToOriginal(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir: string | undefined, aesKey: string | Uint8Array | undefined, xorKey: number, allowNetwork?: boolean, options?: {
+    hint?: ImageResourceHint;
+    fileOnly?: boolean;
+}): Promise<AutoUpgradeResult>;
 /**
  * 清空全部「已试过」记忆（切换账号 / 用户手动触发全量重试时用）。
  */

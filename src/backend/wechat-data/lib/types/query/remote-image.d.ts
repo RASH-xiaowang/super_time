@@ -24,6 +24,15 @@ export interface RemoteImageResult {
     /** 给用户看的原因（开关关闭 / 主机不在清单 / 不是可渲染的图片…）。 */
     error?: string;
 }
+/** 远程图内存层的单测把手；不暴露内部 Map。 */
+export declare function remoteImageMemHandles(): {
+    stats: () => {
+        count: number;
+        total: number;
+    };
+    clear: () => void;
+    putForTest: (url: string, dataUrl: string) => void;
+};
 /**
  * 取一张远程图片（缓存优先，未命中才出网）。
  * @param rawUrl - 消息里的图片地址；http(s) 且主机在微信 CDN 清单内才会被请求。

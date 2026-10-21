@@ -551,8 +551,11 @@ async function createWechatBackend(options = {}) {
     SLOW_LOG_MS,
   } = await loadBackendRuntime(options);
   const decodeInputSig = createDecodeInputSig(gateway);
+  bootTrace('backend:decode-sig');
   const methodMap = buildMethodMap(protocol, gateway);
+  bootTrace('backend:method-map');
   const cancel = createBackendCancel(gateway);
+  bootTrace('backend:cancel-map');
   /**
    * 原图自动下载（实验）的启动/收尾钩子。
    *

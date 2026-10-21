@@ -22,8 +22,15 @@ export interface MediaRemoteCtx {
     warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
         username: string;
         localId: number;
-    }>, aesKey: string | undefined, xorKey: number) => Promise<void>;
+    }>, aesKey: string | undefined, xorKey: number, knownMd5s?: readonly string[]) => Promise<void>;
 }
+/**
+ * Disk/CPU batch ceiling. Decoding returns large base64 strings, so 8 keeps the
+ * peak memory bounded while still hiding file and SQLite latency.
+ */
+export declare const IMAGE_BATCH_CONCURRENCY = 8;
+/** Run async work with a fixed in-flight ceiling, preserving input order. */
+export declare function mapWithConcurrency<T, R>(items: readonly T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]>;
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
 export interface ImageBatchItem {
     username: string;
@@ -87,6 +94,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
             username: string;
             localId: number;
         }>;
+        fileOnly?: boolean;
     }): Promise<{
         items: ImageBatchItem[];
     }>;

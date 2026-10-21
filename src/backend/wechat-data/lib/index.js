@@ -18383,7 +18383,13 @@ async function startWechatImageAutoDownload(decryptedDir) {
   await attemptHook();
   return getWechatImageAutoDownloadStatus(decryptedDir);
 }
+var BOOT_RESUME_DELAY_MS = 1200;
+var bootResumeToken = null;
 async function stopWechatImageAutoDownload() {
+  if (bootResumeToken !== null) {
+    bootResumeToken.cancelled = true;
+    bootResumeToken = null;
+  }
   if (timer !== null) {
     try {
       deps.clearTimer(timer);
@@ -18434,12 +18440,24 @@ async function wechatImageAutoDownload(decryptedDir, action) {
 }
 function startWechatImageAutoDownloadOnBoot(decryptedDir) {
   try {
-    ensureRoot(decryptedDir);
     if (!readEnabled(decryptedDir) || !isSupported() || cleanupUnconfirmed) return null;
-    void startWechatImageAutoDownload(decryptedDir);
-    return { enabled: true, stop: () => {
-      void stopWechatImageAutoDownload();
-    } };
+    const token = { cancelled: false };
+    bootResumeToken = token;
+    const timer2 = setTimeout(() => {
+      if (token.cancelled) return;
+      if (bootResumeToken === token) bootResumeToken = null;
+      void startWechatImageAutoDownload(decryptedDir).catch(() => {
+      });
+    }, BOOT_RESUME_DELAY_MS);
+    if (timer2 && typeof timer2.unref === "function") timer2.unref();
+    return {
+      enabled: true,
+      stop: () => {
+        token.cancelled = true;
+        if (bootResumeToken === token) bootResumeToken = null;
+        void stopWechatImageAutoDownload();
+      }
+    };
   } catch {
     return null;
   }

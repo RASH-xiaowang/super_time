@@ -563,10 +563,31 @@ export async function startWechatImageAutoDownload(decryptedDir: string): Promis
 }
 
 /**
- * 关闭自动下载并尽力还原微信进程（幂等）。
+ * 启动恢复的延迟（毫秒）。
+ *
+ * 为什么不在 init 里同步恢复：`startWechatImageAutoDownload` 会先同步跑一轮进程发现
+ * （`deps.findPid()` = PowerShell/CIM 查询，本机实测 217ms，超时上限 10s），
+ * 而它正好落在「后端 ready」的返回路径上 —— 实测把后端 ready 从 ~120ms 拖到 ~340ms，
+ * 并且这 217ms 是**主线程同步阻塞**，会和首屏查询抢同一个事件循环。
+ *
+ * 延后到首屏之后：开关与支持性仍在 boot 里判断（毫秒级），真正的 marker 校验 + 注入
+ * 放到这个延迟之后。语义不变（仍在启动阶段自动恢复），只是不再挡 ready/首屏。
+ */
+export const BOOT_RESUME_DELAY_MS = 1200
+
+/** 等待中的「启动恢复」票据：stop() 或配置关闭时取消，避免取消后又被定时器注入回来。 */
+let bootResumeToken: { cancelled: boolean } | null = null
+
+/**
+ * 开启自动下载并尽力还原微信进程（幂等）。
  * @returns 最新状态快照。
  */
 export async function stopWechatImageAutoDownload(): Promise<WechatImageAutoDownloadStatus> {
+  // 先取消尚未执行的「启动恢复」：否则 stop 之后定时器到点还会把注入装回去。
+  if (bootResumeToken !== null) {
+    bootResumeToken.cancelled = true
+    bootResumeToken = null
+  }
   if (timer !== null) {
     try {
       deps.clearTimer(timer)
@@ -634,10 +655,25 @@ export function startWechatImageAutoDownloadOnBoot(
   decryptedDir: string,
 ): { enabled: boolean; stop: () => void } | null {
   try {
-    ensureRoot(decryptedDir)
+    // 这里只做「读配置 + 拼路径」这种毫秒级判断，**不做任何进程探测**（见
+    // BOOT_RESUME_DELAY_MS 的注释：进程发现是同步 PowerShell，会挡 ready/首屏）。
     if (!readEnabled(decryptedDir) || !isSupported() || cleanupUnconfirmed) return null
-    void startWechatImageAutoDownload(decryptedDir)
-    return { enabled: true, stop: () => { void stopWechatImageAutoDownload() } }
+    const token = { cancelled: false }
+    bootResumeToken = token
+    const timer = setTimeout(() => {
+      if (token.cancelled) return
+      if (bootResumeToken === token) bootResumeToken = null
+      void startWechatImageAutoDownload(decryptedDir).catch(() => { /* 后台恢复失败只影响该功能 */ })
+    }, BOOT_RESUME_DELAY_MS)
+    if (timer && typeof timer.unref === 'function') timer.unref()
+    return {
+      enabled: true,
+      stop: () => {
+        token.cancelled = true
+        if (bootResumeToken === token) bootResumeToken = null
+        void stopWechatImageAutoDownload()
+      },
+    }
   } catch {
     return null
   }

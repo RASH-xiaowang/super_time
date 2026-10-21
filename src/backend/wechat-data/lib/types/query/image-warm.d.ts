@@ -17,8 +17,9 @@ export declare const CACHED_IMAGE_EXTS: string[];
  * @param items - 待预热的 (username, localId) 列表。
  * @param aesKey - V2 AES key。
  * @param xorKey - XOR key 字节。
+ * @param knownMd5s - md5 resolved by the caller in the same pass; optional.
  */
 export declare function warmDecodedImages(decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
     username: string;
     localId: number;
-}>, aesKey: string | undefined, xorKey: number): Promise<void>;
+}>, aesKey: string | undefined, xorKey: number, knownMd5s?: readonly string[]): Promise<void>;
