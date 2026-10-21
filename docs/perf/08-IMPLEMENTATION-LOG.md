@@ -18,6 +18,7 @@
 | 8 | `0556d57` | perf(boot): 原图自动下载的启动恢复延后到首屏后（后端组装 320→98ms，总览落定 1.37→1.23s） | G（启动竞态） | autodownload spec 14/14；`check-generated --all` 一致；typecheck 0；3 样本复测见 §G |
 | 9 | `140e183` | perf(sqlite): 分析型只读连接临时调大页缓存（storage 434→271ms、ledger 334→161ms） | H（查询提速） | analytics-cache 5/5；ledger 7/7；check-generated `--all` 一致；typecheck 0；measure:quick 27.07s |
 | 10 | `2966bdc` | feat(perf): 受控缓存运行时可观测（`[mem]` 行带 当前/上限）+ 运行时内存归因 | I（内存基线） | cache-budget/sentinel/result-cache/autodownload 4 spec 48 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 26.63s |
+| 11 | `e165933` | feat(perf): worker heap snapshot 抓取/归因工具 + `[mem]` 补齐 external/arrayBuffers | J（内存归因） | backend-supervisor 8/8（含 2 条 inspect 门控守卫）、sentinel 12/12；typecheck 0；check-generated `--all` 一致 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -83,6 +84,13 @@
 - **改法**：`createBoundedCache` 加 `label` + 进程内注册表，新增 `cacheBudgetSnapshot()`（条数/字节/上限）；三个受控缓存打 label（`remote-image` / `sns-image` / `sns-keystream`）；`wechat-host` 新增 `cacheStatsLine()`（含 `resultCache`，字符数×2 估字节并注明口径）；worker 哨兵新增 `extra` 注入，把 `caches=…` 拼到既有 `[mem]` **同一行**（便于对时间序列，`extra` 抛错不影响采样）；harness 的 LogTail 解析 `caches=` 存进 `memSamples`。
 - **实测**（1 样本：overview→moments→contacts + 3 轮滚动 + 60s 空闲）：`remote-image=0.4MB/32MB`、`sns-image=0.0MB/32MB`、`sns-keystream=0.0MB/16MB`、`resultCache=5.8MB/128MB` ⇒ **受控缓存合计 ≈6MB，远低于 208MB 上限**；worker RSS 启动 68MB → 空闲 60s **449MB**（WS 357MB）。
 - **归因结论（重要）**：worker RSS 的增长**不来自这些受控缓存** —— 典型负载下它们几乎不占内存，缓存上限的价值是保护最坏情况（例如 300 条 512KB 的 resultCache、1.5GB 的 md5UrlCache 理论最坏）。要解释 357–449MB 必须做 heap snapshot（指向 sqlite 页缓存/V8/大 buffer），这是下一轮的量具。
+
+### J · worker heap snapshot 抓取/归因（第五轮，Lead）
+- **问题**：第四轮已排除受控缓存（≈6–19MB），但 133MB V8 heap 与 343–449MB RSS 之间那 ~200MB 是什么，没有证据。
+- **工具**：① `backend-supervisor` 仅在**未打包 + `SUPERTIME_BACKEND_INSPECT=1`** 时给 worker 加 `--inspect=127.0.0.1:<port>`（打包态一律不开，2 条守卫钉住）；② `scripts/perf/worker-heap.mjs` 用 Playwright 起应用（真实数据根 + 临时 profile），CDP `HeapProfiler.takeHeapSnapshot` 抓「启动后 15s / 再等 45s」两张 gzip 快照；③ `scripts/perf/analyze-heap.mjs` 按 `self_size` 聚合类型/名字排行 + 大字符串盘点；④ `[mem]` 增补 `arrayBuffers=`，harness 解析 `heapTotal/external/arrayBuffers`。
+- **轻载结果**（启动+总览，空闲 60s）：heap self_size **47.9→48.2MB（+0.3MB，无泄漏迹象）**；构成 `string 21.7MB(45%) / object 6.6 / code 5.6 / array 5.5 / closure 3.3`；最大单条 3.3MB 字符串 = **bundle 自身 ESM 源文本**（含中文注释按 2 字节存），属 V8 正常保留，不是重复拷贝（bundle 里 `sourceMappingURL` 为 0）。
+- **重载结果**（总览→朋友圈→通讯录→文件 + 6 轮滚动 + 60s 空闲）：**RSS 343MB = V8 heapUsed 133 + external 53 + 原生/代码等 ~157**；`heapTotal 175`（空余 42）、`arrayBuffers 0MB`（⇒ 53MB external 不是 Buffer，更像 node:sqlite 的堆外内存）；受控缓存合计 **18.9MB**。
+- **归因结论**：缓存不是 RSS 主因；V8 heap（133MB，含 175MB 预留）与 sqlite 堆外（53MB）才是大头，剩余为原生/代码页。下一步应做**策略实验**而不是继续改缓存：`--max-old-space-size` 收 heapTotal、sqlite 连接/页缓存上限、以及重载后 GC 行为（本 run 空闲 60s 内 heapUsed 未回落，需确认是缓存保留还是 V8 未回收）。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
