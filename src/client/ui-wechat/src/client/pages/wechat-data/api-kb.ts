@@ -344,6 +344,7 @@ export async function apiSetKbModelConfig(kbId: number, patch: { chatRef?: strin
  *   · `kb-model:<id>` —— 弹层里那一行「已存 N 条 / 还有 M 个没抽」就是这次操作的结果；
  *   · 快照 + `kb-` 渲染缓存 + `NOTES_UPDATED_EVENT` —— 实体是知识图谱的**节点来源**，
  *     抽完不广播的话，正在看图的人要切一次库才看得见新点（而他会以为「抽了个寂寞」）。
+ *     后端现在只有写入至少一条实体才回 `ok:true`；空响应会失败且保留旧实体。
  * @param kbId - 知识库 id。
  * @param opts - 只抽指定文件（`fileIds`）与单轮上限（`limit`）。
  * @returns 后端结果（含逐文件的失败原因；被隐私闸拦下时 `ok:false` + 原因）。
@@ -351,7 +352,9 @@ export async function apiSetKbModelConfig(kbId: number, patch: { chatRef?: strin
 export async function apiExtractKbEntities(kbId: number, opts: { fileIds?: number[]; limit?: number } = {}): Promise<KbExtractResult> {
   const result: KbExtractResult = unwrap(await remote().extractKbEntities({ kbId, ...opts }))
   invalidateWechatCache(kbCacheKey('kb-model', kbId))
-  if (result.saved > 0) invalidateKnowledgeCaches()
+  // `ok` 表示至少一个文件成功写入实体。失败请求不删旧实体，也没有新的写路径，
+  // 不必叫醒笔记库、知识图谱和问答三个面板。
+  if (result.ok) invalidateKnowledgeCaches()
   return result
 }
 

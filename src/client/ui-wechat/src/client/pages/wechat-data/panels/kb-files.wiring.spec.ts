@@ -61,7 +61,13 @@ const BACKEND_SRC = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
  * 原文件只剩转发桶 —— 这里读**桶与那三个模块的联合**（断言一条没放宽；拆出去的边界
  * 不该影响任何一条守卫的结论）。
  */
-const panel = ['KbFiles.tsx', 'kb-files-support.tsx', 'kb-files-panel.tsx', 'kb-files-detail.tsx']
+const panel = [
+  'KbFiles.tsx',
+  'kb-files-support.tsx',
+  'kb-files-panel.tsx',
+  'kb-files-detail.tsx',
+  'use-kb-files-snapshot.ts',
+]
   .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 /**
  * 摘要/存笔记的 hook 单独读一份：`useFileErrors` 的 Map 语义在 hook 里，
@@ -273,9 +279,11 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
   it('切库时把「属于上一个库」的界面状态清干净', () => {
     // 只重取数据而留着选中的文件 id，用户会在乙库里看到「高亮着甲库那个文件」；
     // 若那个 id 恰好也存在，详情区显示的就是别的库的文件。
-    expect(panelCode).toMatch(
-      /setSnapshot\(cachedFiles\(kbId\) \?\? \{ items: \[\], total: 0 \}\)\s*\n\s*setSelectedId\(null\)/
+    const snapshotModule = readFileSync(join(HERE, 'use-kb-files-snapshot.ts'), 'utf8')
+    expect(snapshotModule).toMatch(
+      /setSnapshot\(cachedFiles\(kbId\) \?\? \{ items: \[\], total: 0 \}\)/
     )
+    expect(panelCode).toMatch(/setSelectedId\(null\)\s*\n\s*setQuery\(''\)/)
     expect(panelCode).toMatch(/setQuery\(''\)\s*\n\s*setFilter\('all'\)/)
   })
 })
@@ -598,14 +606,23 @@ describe('2026-09-19 三栏重排：吸顶骨架与「定位原文件」', () =>
   })
 })
 
-describe('2026-09-19 正文默认展开', () => {
-  it('选中即读第一页，且依赖只用原子值（不能依赖 selected 对象）', () => {
+describe('2026-10-20 正文默认收起', () => {
+  it('选中文件不自动加载正文，只在点击「查看正文」时按需加载', () => {
     // 解析中的文件每 PARSE_POLL_MS 轮询一次，每次轮询都重建整个 snapshot ⇒
-    // `selected` 每 1.5 秒就是一个新引用。effect 依赖它 = 每 1.5 秒重读一遍正文并闪一次
-    // 加载态，而代码看起来完全正常 —— 只有读源码能发现。
-    expect(panelCode).toMatch(/useEffect\(\(\) => \{[\s\S]{0,200}?void loadChunks\(selectedId\)[\s\S]{0,120}?\[selectedId, loadChunks\]\)/)
+    // effect 只能依赖 `selectedId` 这个原子值，不能依赖 `selected` 对象。
+    expect(panelCode).toMatch(/useEffect\(\(\) => \{\s*setReader\(null\)\s*\}, \[selectedId\]\)/)
+    expect(panelCode, '选中文件时又自动加载正文了').not.toMatch(
+      /useEffect\(\(\) => \{[\s\S]{0,200}?void loadChunks\(selectedId\)[\s\S]{0,120}?\[selectedId, loadChunks\]\)/,
+    )
     expect(panelCode).not.toMatch(/\[selected, loadChunks\]/)
     expect(panelCode).not.toMatch(/\[selectedId, selected, /)
+    // 阅读器只能由按钮显式触发：容器把加载回调交给详情区，详情区在
+    // `reader === null`（收起态）时才调用它。
+    expect(panelCode).toContain('onChunks={loadChunks}')
+    expect(panelCode).toMatch(
+      /onClick=\{\(\) => \{ if \(reader === null\) void onChunks\(selected\.id\); else onCloseReader\(\) \}\}/,
+    )
+    expect(panelCode).toMatch(/reader === null \? '查看正文' : '收起正文'/)
     // 取数回来必须核对还是不是当前这个文件：路上那次请求可能已经换了选中甚至换了库。
     // 2026-10-17：循环拉取的实现搬到了 `kb-save-note.ts` 的 `useLoadAllChunks`
     // （单函数行数棘轮），判据跟着去那边看。
@@ -613,6 +630,10 @@ describe('2026-09-19 正文默认展开', () => {
     expect(hookSrc).toMatch(/prev && prev\.fileId === fileId/)
     // 每轮都要核对「用户是不是已经切走了」，切走了就立刻停（不再继续拉）。
     expect(hookSrc).toMatch(/if \(readerRef\.current\?\.fileId !== fileId\) return/)
+  })
+
+  it('切换文件时清空上一份正文，避免旧正文挂在新文件标题下', () => {
+    expect(panelCode).toMatch(/useEffect\(\(\) => \{\s*setReader\(null\)\s*\}, \[selectedId\]\)/)
   })
 
   it('收起按钮不设 disabled：读取途中也要能关掉', () => {
@@ -715,8 +736,8 @@ describe('模型摘要：界面必须说清这段摘要覆盖了什么', () => {
    *
    * 两个原因叠在一起：
    *   ① 摘要区只在 `summaryText !== '' || summaryError !== null` 时渲染 —— 空摘要 + 无错误 = 整块消失；
-   *   ② 错误是面板级一个字符串，而 `useEffect([selectedId, loadChunks])` 里会清它，
-   *      `runSummary` 成功后调 `reload` 重建 snapshot → 刚设好的错误被紧随其后的 effect 清掉。
+   *   ② 错误是面板级一个字符串，而选文件时会清空它；`runSummary` 成功后调
+   *      `reload` 重建 snapshot → 刚设好的错误可能被紧随其后的清空动作清掉。
    *
    * 这条守卫锁两件事：摘要区**无条件渲染**、错误**按文件 id 存**。
    */
@@ -736,7 +757,9 @@ describe('模型摘要：界面必须说清这段摘要覆盖了什么', () => {
     // 那个会清错误的 effect 里不许再出现 setSummaryError(null)
     expect(panelCode).not.toMatch(/setSummaryError\(null\)/)
     // 错误容器来自 useFileActionState（按 id 存的 Map），不是面板自己 useState 一个字符串
-    expect(panelCode).toContain('errors: summaryErrors, setError: setSummaryError } = useFileActionState()')
+    expect(panelCode).toContain('busySummaryId, busyEntityId, summaryErrors')
+    expect(hookCode).toContain('const summaryState = useFileActionState()')
+    expect(hookCode).toContain('setError: summaryState.setError')
     // 传给详情区的必须是「当前选中文件」的那一条
     expect(panelCode).toMatch(/summaryError=\{selectedId === null \? null : \(summaryErrors\.get\(selectedId\) \?\? null\)\}/)
     // hook 本体：Map<number, string>，null 表示删掉该文件的错误
@@ -774,7 +797,7 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
     expect(panelCode).toMatch(/title="[^"]*建\/补齐向量索引（会出网）"/)
     // 手机态这一颗是禁用的（`buildKbVectorIndex` / `cancelKbIndexBuild` 都不在远程白名单里），
     // 所以降级属性组紧跟在 disabled 之后 —— 顺序有判据兜着（capabilities.wiring ⑥：写反了会被覆盖掉）。
-    expect(panelCode).toMatch(/disabled=\{indexing\} \{\.\.\.desktopActionProps\(\)\}\s*\n\s*title=/)
+    expect(panelCode).toMatch(/disabled=\{indexing \|\| batchJobs\.runningId !== null\} \{\.\.\.desktopActionProps\(\)\}\s*\n\s*title=/)
     expect(panelCode).toMatch(/\{indexing \? '建索引中…' : '语义索引'\}/)
   })
 

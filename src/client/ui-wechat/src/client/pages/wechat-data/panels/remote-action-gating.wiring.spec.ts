@@ -73,7 +73,7 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
   },
   'kb-index-build.ts': {
     file: 'kb-files-panel.tsx',
-    needle: 'disabled={indexing} {...desktopActionProps()}',
+    needle: 'disabled={indexing || batchJobs.runningId !== null} {...desktopActionProps()}',
     why: '建索引 hook 只被「语义索引」那颗按钮驱动，按钮已禁用',
   },
   'moments-export.ts': {

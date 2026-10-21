@@ -92,7 +92,7 @@ export interface BindingCredentials {
     ilinkUserId: string;
     baseUrl: string;
 }
-/** 拆成五份：绑定行（公开）+ 凭证 + 同步游标 + 发送令牌 +（可选）读失败原因。 */
+/** 绑定行（公开）+ 凭证 + 游标/令牌/会话代次/清空水位 +（可选）读失败原因。 */
 export interface BindingInternalRead {
     binding: ClawbotBinding;
     /** 身份三项**齐备**才是凭证，缺一个就归 null（半截凭证发不出合法请求）。 */
@@ -101,13 +101,17 @@ export interface BindingInternalRead {
     syncBuf: string;
     /** 最近一条入站消息带来的会话令牌（空串 = 还没收到过消息，**发不了**）。 */
     sendContextToken: string;
+    /** 当前绑定会话代次；旧批次写消息、墓碑或游标时必须带回来做条件校验。 */
+    sessionEpoch: number;
+    /** 当前会话清空前的最大服务端消息 id；写消息时用于拦截已被裁剪墓碑的旧回放。 */
+    clearWatermark: number;
     readError?: string;
 }
 /**
  * 读当前绑定行 + 内部字段（凭证 / 游标 / 发送令牌）。
  *
  * 与 {@link readBinding} 同一套读失败语义（库不存在 = 默认值无 readError；打不开 = readError），
- * 区别只在多带三列 —— 给 worker 内的通道装配与发送路径用，**不要**把它接进渲染层的快照。
+ * 区别只在多带内部运行态列 —— 给 worker 内的通道装配与发送路径用，**不要**把它接进渲染层的快照。
  * @param decryptedDir - 解密数据根。
  * @returns 内部读结果。
  */
@@ -119,8 +123,10 @@ export declare function readBindingInternal(decryptedDir: string, slot?: number)
  * 让它冲刷 `updated_at` 会把「最近一次绑定状态迁移」的时间搅浑。
  * @param decryptedDir - 解密数据根。
  * @param buf - 服务端下发的游标。
+ * @param slot - 实例编号。
+ * @param expectedSessionEpoch - 批次捕获时的会话代次；传入后只允许写回同一会话。
  */
-export declare function saveSyncBuf(decryptedDir: string, buf: string, slot?: number): void;
+export declare function saveSyncBuf(decryptedDir: string, buf: string, slot?: number, expectedSessionEpoch?: number): void;
 /**
  * 保存发送用的会话令牌（最近一条入站消息带来）。
  *
@@ -128,8 +134,10 @@ export declare function saveSyncBuf(decryptedDir: string, buf: string, slot?: nu
  * 与 {@link saveSyncBuf} 同款：不动 `updated_at`。
  * @param decryptedDir - 解密数据根。
  * @param token - 非空令牌。
+ * @param slot - 实例编号。
+ * @param expectedSessionEpoch - 批次捕获时的会话代次；传入后只允许写回同一会话。
  */
-export declare function saveSendContextToken(decryptedDir: string, token: string, slot?: number): void;
+export declare function saveSendContextToken(decryptedDir: string, token: string, slot?: number, expectedSessionEpoch?: number): void;
 /**
  * 读**全部** slot 的 iLink 机器人 id（`ilink_bot_id`；2026-10-17 补全实例信息）。
  *

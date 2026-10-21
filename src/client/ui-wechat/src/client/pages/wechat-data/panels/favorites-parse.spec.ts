@@ -82,6 +82,7 @@ describe('parseFavParts：资源条目', () => {
   it('图片取 md5 的顺序是 thumbfullmd5 → fullmd5 → dataid（决定拿缩略还是原图，不能反）', () => {
     const withBoth = parseFavParts(item('datatype="2" dataid="aaa"', '<fullmd5>bbb</fullmd5><thumbfullmd5>ccc</thumbfullmd5>'))
     expect(withBoth[0]?.md5).toBe('ccc')
+    expect(withBoth[0]).toMatchObject({ fullMd5: 'bbb', thumbMd5: 'ccc' })
     expect(parseFavParts(item('datatype="2" dataid="aaa"', '<fullmd5>bbb</fullmd5>'))[0]?.md5).toBe('bbb')
     expect(parseFavParts(item('datatype="2" dataid="AAA"', ''))[0]?.md5).toBe('aaa')
   })
@@ -113,9 +114,57 @@ describe('parseFavParts：资源条目', () => {
     expect(parseFavParts(item('datatype="4"', '<fullmd5>m</fullmd5><duration>-3</duration>'))[0]).not.toHaveProperty('duration')
   })
 
-  it('不认识的 datatype 不产出条目（界面宁可少一行，也不要一个点开啥也没有的占位）', () => {
-    expect(parseFavParts(item('datatype="6"', '<datatitle>位置</datatitle>'))).toEqual([])
+  it('不认识的 datatype 仍产出可读条目（保留原始类型与标题，不静默丢资源）', () => {
+    const [part] = parseFavParts(item('datatype="6"', '<datatitle>位置</datatitle>'))
+    expect(part).toMatchObject({ kind: 'unknown', dataType: 6, title: '位置' })
     expect(parseFavParts('<fav>没有 dataitem</fav>')).toEqual([])
+  })
+
+  it('未知资源也保留可点击 URL/封面，而不是只把链接塞进不可点的元信息', () => {
+    const [part] = parseFavParts(item('datatype="77"', '<datatitle>新资源</datatitle><url>https://example.com/new</url><cdn_thumburl>https://wx.qlogo.cn/cover</cdn_thumburl>'))
+    expect(part).toMatchObject({
+      kind: 'unknown',
+      url: 'https://example.com/new',
+      coverUrl: 'https://wx.qlogo.cn/cover',
+    })
+  })
+
+  it('顶层 locitem 解析成位置，坐标与地址不丢', () => {
+    const [part] = parseFavParts('<fav><locitem><poiname>南宁市鑫硕机动车登记服务站</poiname><label>江南区星光大道</label><lat>22.786</lat><lng>108.31</lng><poiCategoryTips>汽车服务</poiCategoryTips><poiBusinessHour>09:00-18:00</poiBusinessHour><poiPhone>0771-1234567</poiPhone></locitem></fav>')
+    expect(part).toMatchObject({
+      kind: 'location',
+      poiName: '南宁市鑫硕机动车登记服务站',
+      address: '江南区星光大道',
+      lat: 22.786,
+      lng: 108.31,
+      category: '汽车服务',
+      businessHours: '09:00-18:00',
+      phone: '0771-1234567',
+    })
+    expect(part?.url).toContain('uri.amap.com/marker')
+  })
+
+  it('小程序从 appbranditem 取 AppID/页面/图标，并保留封面 md5', () => {
+    const [part] = parseFavParts('<fav><datalist><dataitem datatype="19" dataid="mini-cover"><datatitle>小程序标题</datatitle><datadesc>小程序描述</datadesc></dataitem></datalist><appbranditem><appid>wx123</appid><username>gh_demo</username><pagepath>pages/index</pagepath><iconurl>https://wx.qlogo.cn/icon</iconurl></appbranditem></fav>')
+    expect(part).toMatchObject({
+      kind: 'miniapp',
+      appId: 'wx123',
+      appUsername: 'gh_demo',
+      pagePath: 'pages/index',
+      iconUrl: 'https://wx.qlogo.cn/icon',
+      md5: 'mini-cover',
+    })
+  })
+
+  it('语音保留 svrId 与毫秒时长，供无会话上下文的收藏直接取音频', () => {
+    const [part] = parseFavParts(item('datatype="3"', '<fullmd5>voice-md5</fullmd5><datafmt>silk</datafmt><duration>2686</duration><fromnewmsgid>2538601227098830648</fromnewmsgid>'))
+    expect(part).toMatchObject({
+      kind: 'voice',
+      md5: 'voice-md5',
+      format: 'silk',
+      durationMs: 2686,
+      svrId: '2538601227098830648',
+    })
   })
 
   it('文本条目优先 datadesc、其次 datatitle；两个都空就不产出（避免空行）', () => {
@@ -131,6 +180,11 @@ describe('parseFavParts：资源条目', () => {
       + '<dataitem datatype="5"><url>https://x</url></dataitem>'
       + '</datalist></fav>')
     expect(parts.map((p) => p.kind)).toEqual(['text', 'image', 'link'])
+  })
+
+  it('聊天记录的发送者头像 URL 也要从 dataitem 里收到（交给 RemoteImg，不在渲染层直连）', () => {
+    const [part] = parseFavParts(item('datatype="1"', '<datadesc>x</datadesc><sourceheadurl>https://wx.qlogo.cn/a/96</sourceheadurl>'))
+    expect(part?.sourceHead).toBe('https://wx.qlogo.cn/a/96')
   })
 })
 

@@ -19,9 +19,9 @@
  *    只会刷日志；恢复动作是重新绑定，停下来的状态界面看得见）；
  * 3. **其他服务端错误**（ret≠0 且 errcode≠0）：记日志 + 1s 间隔继续
  *    （原版这里不回退直接 continue，服务器半开时会变成热循环）；
- * 4. **成功**：清失败计数；游标非空则保存（**每一拍都持久化** —— 进程崩了重来时
- *    少拉一次历史，代价是一分钟不到两次的库写）；消息批交 `insertMessages`
- *    落库（去重由它兜底），真有新增才回调 `onMessages` 发事件。
+ * 4. **成功**：消息批先交 `insertMessages` 落库（去重由它兜底），落库成功后才
+ *    保存新游标；两件事都成功才清失败计数并更新 `lastPollAt`。落库或存游标失败
+ *    时保留旧游标、按指数退避重拉，避免把未持久化的批次跳过。
  *
  * @module query/clawbot/clawbot-channel
  */
@@ -46,8 +46,33 @@ export interface ClawbotChannelState {
     /** 最近一次成功轮询的本地时间（没成功过为 `null`）。 */
     lastPollAt: number | null;
 }
+/**
+ * 一次 `getUpdates` 的接收代次租约。
+ *
+ * `isCurrent()` 在响应回来时判断这一批是否仍属于当前会话；清空、解绑、删除或
+ * 重新绑定都会让旧租约失效。`canAdvanceStaleBuf()` 进一步区分「只是清空消息，
+ * 同一绑定会话仍可安全推进游标」与「绑定会话已变化，不能再写旧游标」。
+ */
+export interface ClawbotBatchLease {
+    isCurrent: () => boolean;
+    canAdvanceStaleBuf: () => boolean;
+    /**
+     * 这一批启动时读到的持久会话代次。清空/重启/被别的实例接管后，旧批次即使
+     * 进程内代次还没变，也必须靠它拒绝写消息、墓碑与游标。
+     */
+    sessionEpoch?: number;
+    /**
+     * clear 时已落库的最大 message_id。stale 成功批次里 `id <= clearWatermark`
+     * 是清空前的旧消息，`id > clearWatermark` 是同一响应中 clear 后的新消息。
+     */
+    clearWatermark?: number;
+}
 /** 装配方提供的依赖（全是直调 / 注入，本模块不 import 库与事件）。 */
 export interface ClawbotChannelDeps {
+    /**
+     * 在每次长轮询前取一个接收代次租约。缺省 = 不做代次校验（旧测试与单次调用）。
+     */
+    beginBatch?: () => ClawbotBatchLease;
     /**
      * 一次消息长轮询（真实实现 = `clawbot-ilink.ts#getUpdates` 绑定凭证后的偏函数）。
      * 第二参数是通道生命周期发出的 AbortSignal：实现应把它透传给网络请求，使
@@ -57,9 +82,14 @@ export interface ClawbotChannelDeps {
     /** 读同步游标（绑定行的 `sync_buf` 列）。 */
     readBuf: () => string;
     /** 存同步游标。 */
-    saveBuf: (buf: string) => void;
+    saveBuf: (buf: string, expectedSessionEpoch?: number) => void;
+    /**
+     * 跨进程记住 clear 竞态下的旧消息 id。缺省只靠本循环内存抑制；
+     * 生产装配应写入当前绑定会话的 tombstone。
+     */
+    suppressMessages?: (msgIds: readonly number[], expectedSessionEpoch?: number) => void;
     /** 一批消息落库（自动跳过重复 `message_id`）；没有新增时返回 null。 */
-    insertMessages: (msgs: readonly WeixinMessage[]) => {
+    insertMessages: (msgs: readonly WeixinMessage[], expectedSessionEpoch?: number) => {
         lastId: number;
         delta: number;
     } | null;

@@ -104,15 +104,23 @@ describe('正文阅读区：两栏各自独立滚动（2026-10-17 用户要求�
     expect(labelIdx, '栏头必须排在 .paneBody 之前（在滚动区外面）').toBeLessThan(bodyIdx)
   })
 
-  it('高度封在 .readerSplit 上，且行高必须显式封顶', () => {
+  it('阅读器吃满详情栏剩余高度，且行高必须显式封顶', () => {
     const split = ruleOf('readerSplit')
     expect(split, '找不到 .readerSplit').not.toBe('')
-    expect(split, '.readerSplit 必须 max-height 封顶').toMatch(/max-height:\s*60vh/)
+    expect(split, '.readerSplit 必须 flex: 1 1 auto 吃满详情栏剩余高度').toMatch(/flex:\s*1 1 auto/)
+    expect(split, '.readerSplit 必须 min-height: 0 才能让两栏内部滚动').toMatch(/min-height:\s*0/)
+    expect(split, '.readerSplit 不许再用视口百分比封顶（窗口变高会留下空白）').not.toMatch(/max-height/)
     expect(split, '.readerSplit 必须 align-items: stretch 让两栏等高').toMatch(/align-items:\s*stretch/)
     // ⚠️ 行高必须 `minmax(0, 1fr)`：`auto` 行会被内容撑到 5867px，
     // 于是子项的 `height: 100%` 也变成 5867px，`max-height` 形同虚设（真机实测）。
     expect(split, '.readerSplit 的行高必须 minmax(0, 1fr)，不能留给 auto').toMatch(
       /grid-template-rows:\s*minmax\(0,\s*1fr\)/,
+    )
+    const reader = ruleOf('reader')
+    expect(reader, '阅读器容器必须 flex: 1 1 auto').toMatch(/flex:\s*1 1 auto/)
+    expect(reader, '阅读器容器必须 min-height: 0').toMatch(/min-height:\s*0/)
+    expect(panelCss, '详情内容列必须 height: 100% 传递可用高度').toMatch(
+      /\.detail\s*\{[^}]*height:\s*100%/,
     )
   })
 })
@@ -356,8 +364,15 @@ describe('文件面板页头：压缩到两行（2026-10-17 用户要求「不�
     expect(supportSrc).toMatch(/className=\{css\.indexChip\}/)
     // 面板里用这个组件，不再自己拼
     expect(panelSrc).toMatch(/title=\{<KbTitleRow visible=\{visible\.length\} total=\{total\} index=\{idx\} \/>\}/)
-    // 工具栏右侧不许再挂统计（那会多占一行）
-    expect(panelSrc, '工具栏不许再挂 right 统计').not.toMatch(/<Toolbar[\s\S]{0,900}?right=\{/)
+    // 工具栏右侧只允许放操作入口（处理状态抽屉），统计仍必须留在标题行。
+    // 2026-10-20：处理状态从列表上方改到工具栏右侧抽屉；它不是第二份统计，
+    // 而是打开实时进度的入口，因此不再禁止 right 槽位。
+    expect(panelSrc, '工具栏右侧又挂回了标题统计').not.toMatch(
+      /<Toolbar[\s\S]{0,900}?right=\{[\s\S]{0,300}?(已登记|KbTitleRow|indexChip)/,
+    )
+    expect(panelSrc, '处理状态入口没挂在工具栏 right 槽位').toMatch(
+      /<Toolbar[\s\S]{0,900}?right=\{[\s\S]{0,300}?<KbProcessingEntry/,
+    )
   })
 
   it('解析队列空且无事可做时整行不渲染', () => {
@@ -408,6 +423,17 @@ describe('正文阅读区：与文件列表的关系', () => {
     // 2026-10-17：列表栏从 240–340px 收窄到 200–260px（用户要求「文件列表区域太宽了」），
     // 判据跟着改 —— 但**结构**不变：仍是「窄列表 + 1fr 详情」两列。
     expect(panelCss).toMatch(/\.body\s*\{[^}]*grid-template-columns:\s*minmax\(200px,\s*260px\)\s+minmax\(0,\s*1fr\)/)
+  })
+
+  it('明细贴在详情栏最底部，不悬在摘要下方', () => {
+    expect(detailSrc).toMatch(/<div className=\{css\.detailFoot\}>[\s\S]{0,120}?css\.sectionLabel}>明细/)
+    const foot = ruleOf('detailFoot')
+    expect(foot, '找不到 .detailFoot').not.toBe('')
+    expect(foot, '.detailFoot 必须 flex: 1 0 auto 吃掉剩余高度').toMatch(/flex:\s*1 0 auto/)
+    expect(foot, '.detailFoot 必须把内容推到底部').toMatch(/justify-content:\s*flex-end/)
+    expect(panelCss, '详情 Card 的内容层必须撑满可分配高度').toMatch(
+      /\.detailPane > \[class\*='_cardBd'\][^{]*\{[^}]*flex:\s*1 1 auto/,
+    )
   })
 
   /**

@@ -202,7 +202,13 @@ export abstract class GatewayRead extends GatewayCore {
    */
   @Remote('getFavorites')
   getFavorites(options?: { limit?: number; offset?: number; q?: string }): FavoritesSnapshot {
-    return queryFavorites(this._dirs.decrypted, options?.limit, options?.offset, options?.q)
+    return queryFavorites(
+      this._dirs.decrypted,
+      options?.limit,
+      options?.offset,
+      options?.q,
+      rawWechatBase(this._dirs.decrypted) || undefined,
+    )
   }
 
   /**

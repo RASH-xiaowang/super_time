@@ -37,6 +37,7 @@ import type { RetrievedDoc, RankedDoc } from '../src/query/retrieval/types.ts'
 import { citationDocKey, kbChannel, kbDocFromHit, kbDocKey } from '../src/query/retrieval/kb-channel.ts'
 import { compressContext, docToRanked } from '../src/query/retrieval/compress.ts'
 import { defaultPolicyFor, defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
+import { runRetrievalPipeline } from '../src/query/retrieval/pipeline.ts'
 import { formatAskContext, parseCitedIndexes } from '../src/query/ask.ts'
 import { auditGrounding } from '../src/query/grounding.ts'
 import { registerKbFile, setKbFileRagFlag } from '../src/query/kb-files.ts'
@@ -420,17 +421,19 @@ function seedChatData(): void {
 }
 
 /** 只提供 askWechat 真正用到的表面（`llm.stream` + 默认模型）。 */
-function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> } {
+function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; planCalls: () => number } {
   const prompts: string[] = []
   /** 每次「综合生成」用户消息的完整 content（2026-10-18：断言图片块真的进消息）。 */
   const contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> = []
   let synth = 0
+  let plans = 0
   const llm = {
     // 只有显式传入时才挂 `embed`：缺省时 `makeEmbedFn` 返回 undefined ⇒ 稠密通道整体降级。
     // 这很重要 —— 否则 C3 引入的出网点会改变本文件其它用例的运行环境（它们都在纯稀疏下断言）。
     ...(embed ? { embed } : {}),
     async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ type?: string, text?: string, data?: string, mediaType?: string }> }> }) {
       if (String(opts.system ?? '').includes('检索规划器')) {
+        plans += 1
         yield { type: 'text-delta', index: 0, text: JSON.stringify({ intent: '查合同条款', subQueries: ['蓝鲸协议', '合同'], from: '', to: '', person: '' }) }
         if (usage) yield { type: 'usage', usage }
         return
@@ -451,7 +454,7 @@ function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[
     llm,
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock' }) },
   }
-  return { ctx: ctx as unknown as Context, prompts, contents }
+  return { ctx: ctx as unknown as Context, prompts, contents, planCalls: () => plans }
 }
 
 /** 引用的值都能在材料里找到 ⇒ 不触发回炉（只调一次模型，便于断言模型看到的上下文）。 */
@@ -460,18 +463,18 @@ const ANSWER = '文件里写着验收款 12000 元 [1]，聊天里也提到过�
 /** 装好消息 + 文件的网关（甲库放合同、乙库放别的）。 */
 async function gatewayWith(
   kb1File: string,
-  reply = ANSWER,
+  reply: string | string[] = ANSWER,
   embed?: (texts: string[]) => Promise<number[][]>,
   usage?: { inputTokens: number, outputTokens: number, totalTokens?: number },
-): Promise<{ gw: WechatDataGateway; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> }> {
+): Promise<{ gw: WechatDataGateway; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; planCalls: () => number }> {
   seedChatData()
   await buildSearchIndex(decrypted, true)
   register('蓝鲸合同.md', kb1File, 1)
   register('玄武纪要.md', '内部纪要：' + OTHER + '。', 2)
   vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
   vi.stubEnv('DSH_WECHAT_DECODED_DIR', join(decrypted, 'decoded_images'))
-  const m = makeCtx([reply], embed, usage)
-  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts, contents: m.contents }
+  const m = makeCtx(Array.isArray(reply) ? reply : [reply], embed, usage)
+  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts, contents: m.contents, planCalls: m.planCalls }
 }
 
 describe('端到端：模型 usage 记账（2026-10-19）', () => {
@@ -513,6 +516,99 @@ describe('端到端：自动回复的图片（2026-10-18）', () => {
     expect(imageParts.length).toBeGreaterThan(0)
     expect(imageParts[0]?.data).toBe('aGVsbG8=')
     expect(imageParts[0]?.mediaType).toBe('image/png')
+  })
+})
+
+describe('端到端：自动回复的接地协议（2026-10-20）', () => {
+  type AutoAsk = (o: {
+    question: string
+    kbId?: number
+    dataScope?: 'wechat' | 'kb-only'
+    source?: string
+    images?: Array<{ data: string, mediaType: string, name?: string }>
+  }) => Promise<{
+    answer: string
+    basis?: string
+    insufficient?: boolean
+    withheld?: boolean
+    grounding?: { checked: number, unsupported: string[], cited: number, repaired: boolean }
+  }>
+
+  it('未启用知识库时跳过无效的检索规划，只调用一次模型完成聊天兜底', async () => {
+    const answer = '在的，有事你说。'
+    const { gw, prompts, planCalls } = await gatewayWith(contractText(), answer)
+    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
+    const r = await ask({
+      question: '在吗',
+      dataScope: 'kb-only',
+      source: 'auto',
+    })
+    expect(planCalls()).toBe(0)
+    expect(prompts).toHaveLength(1)
+    expect(r.answer).toBe(answer)
+    expect(r.insufficient).toBe(true)
+  })
+
+  it('禁止角标的自然回复不再被强制回炉或拒答，金额仍能通过接地核对', async () => {
+    const natural = '验收款是 12000 元，签约后三十日内支付。'
+    const { gw, prompts } = await gatewayWith(contractText(), natural)
+    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
+    const r = await ask({
+      question: '蓝鲸协议第七附则里的验收款是多少',
+      kbId: 1,
+      dataScope: 'kb-only',
+      source: 'auto',
+    })
+    // 规划调用不计入 prompts；这里只有一次综合生成，说明没有因缺 [n] 而回炉。
+    expect(prompts).toHaveLength(1)
+    expect(r.answer).toBe(natural)
+    expect(r.answer).not.toMatch(/\[\d+\]/)
+    expect(r.withheld).toBeUndefined()
+    expect(r.grounding?.unsupported).toEqual([])
+    expect(r.basis).toContain('依据知识库')
+    expect(r.basis).not.toContain('依据本机记录')
+  })
+
+  it('无出处的金额触发一次自然口吻重写，重写轮仍携带原图片', async () => {
+    const first = '验收款是 9000 元。'
+    const fixed = '验收款我这边没法确认，我先问下本人。'
+    const { gw, prompts, contents } = await gatewayWith(contractText(), [first, fixed])
+    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
+    const r = await ask({
+      question: '蓝鲸协议第七附则里的验收款是多少',
+      kbId: 1,
+      dataScope: 'kb-only',
+      source: 'auto',
+      images: [{ data: 'aGVsbG8=', mediaType: 'image/png', name: 'wx-image-9' }],
+    })
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).not.toContain('必须紧跟对应的 [n]')
+    expect(r.answer).toBe(fixed)
+    expect(r.grounding?.repaired).toBe(true)
+    expect(r.grounding?.unsupported).toEqual([])
+    expect(r.withheld).toBeUndefined()
+    // 首答与回炉都必须带图；否则视觉问题在重写时已经看不到原图。
+    expect(contents).toHaveLength(2)
+    for (const content of contents) {
+      expect(content.some(p => p.type === 'image' && p.data === 'aGVsbG8=')).toBe(true)
+    }
+  })
+
+  it('重写后仍有编造数字时不把内部审计文案发到微信，改用自然兜底', async () => {
+    const ghost = '验收款是 9000 元。'
+    const { gw } = await gatewayWith(contractText(), [ghost, ghost])
+    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
+    const r = await ask({
+      question: '蓝鲸协议第七附则里的验收款是多少',
+      kbId: 1,
+      dataScope: 'kb-only',
+      source: 'auto',
+    })
+    expect(r.withheld).toBe(true)
+    expect(r.answer).toBe('这个数字我这边没法确认，我先问下本人。')
+    expect(r.answer).not.toContain('审计')
+    expect(r.answer).not.toContain('证据')
+    expect(r.answer).not.toContain('9000')
   })
 })
 
@@ -625,5 +721,39 @@ describe('默认配置：kb 是条件通道', () => {
       expect(policy.channels).toContain('kb')
       expect(policy.channelTopK.kb).toBeGreaterThan(0)
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// H. dataScope=kb-only：聚合通道不得读本机消息，知识库通道仍须工作
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('kb-only 数据面隔离：聚合通道', () => {
+  it('聚合意图不执行 runAggregate，知识库命中照常返回', async () => {
+    seedChatData()
+    expect((await buildSearchIndex(decrypted, true)).status).toBe('ok')
+    register('蓝鲸合同.md', contractText(), 1)
+
+    const base = {
+      decryptedDir: decrypted,
+      question: '我一共收到多少份蓝鲸协议合同？',
+      subQueries: ['蓝鲸协议', '合同'],
+      limit: 10,
+      config: defaultRetrievalConfig(),
+      kbId: 1,
+    }
+
+    // 对照：同一夹具在允许微信数据时确实会产出聚合事实，证明下面的空结果不是空转。
+    const wechat = await runRetrievalPipeline(base)
+    expect(wechat.stats.intent).toBe('aggregation')
+    expect(wechat.stats.channels.some(c => c.channel === 'agg')).toBe(true)
+
+    const kbOnly = await runRetrievalPipeline({ ...base, wechatDataEnabled: false })
+    expect(kbOnly.stats.intent).toBe('aggregation')
+    expect(kbOnly.stats.channels.some(c => c.channel === 'agg')).toBe(false)
+    expect(kbOnly.stats.channels.find(c => c.channel === 'kb')?.active).toBe(true)
+    expect(kbOnly.citations.length).toBeGreaterThan(0)
+    // PipelineOutput.citations 的公开形状不带 source；KB 引用的 username 恒为 `kb:<id>:<fileId>`。
+    expect(kbOnly.citations.every(c => c.username.startsWith('kb:1:'))).toBe(true)
   })
 })

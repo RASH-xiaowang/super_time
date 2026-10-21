@@ -67,6 +67,7 @@
 .paneHd {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
@@ -74,7 +75,7 @@
 }
 
 .paneTitle {
-  min-width: 0;
+  flex-shrink: 0;
   font-size: var(--nm-fs-md);
   font-weight: 600;
   color: var(--nm-text-1);
@@ -91,6 +92,40 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 标题行内的搜索框：占据标题与计数之间的弹性空间，不参与纵向拉伸。 */
+.paneSearch {
+  flex: 1 1 160px;
+  width: auto;
+  min-width: 140px;
+  max-width: none;
+}
+
+/* 批量模式操作条：紧贴栏头下方，列表滚动时保持可操作。 */
+.batchBar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--nm-border);
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+}
+
+.batchCheck {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--nm-cyan);
+  cursor: pointer;
+}
+
+.batchLimit {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger-text);
+}
+
 .paneBody {
   flex: 1;
   min-height: 0;
@@ -99,6 +134,16 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 右栏翻到当前已加载末尾：按钮留在列表流里，不遮住最后一条记录。 */
+.loadMore {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 4px;
 }
 
 /* 读错误条 / 首屏加载态也是 paneBody 的直接子项：不要被 flex 压扁。 */
@@ -227,6 +272,61 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.taskActionGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 群聊任务的行内过滤条件：与关键词、照片、Webhook 同属配置摘要。 */
+.mentionRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+  cursor: pointer;
+}
+
+.mentionRow:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}
+
+.mentionRow > input {
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--nm-cyan);
+}
+
+.mentionRow > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mentionTitle {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.mentionHint {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+/* 行内删除失败时紧跟在按钮后显示；不与整行选择态抢焦点。 */
+.deleteError {
+  flex-basis: 100%;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger-text);
+  overflow-wrap: anywhere;
 }
 
 /* ── 右栏：触发记录行 ───────────────────────────────────────────────── */

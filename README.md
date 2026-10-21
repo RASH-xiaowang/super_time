@@ -164,7 +164,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 149 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 153 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
@@ -174,13 +174,13 @@ vendor-keys/             许可证**公钥**（私钥不在仓库里；本目录
 tools/                   laya 模型导出与验证脚本、许可签发 GUI（license-studio）、视觉审计脚本
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本、CI 分档表（ci-tiers.mjs）、变异登记表
 website/                 官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
-docs/                    十三份当前有效的文档（见下方索引）
+docs/                    十四份当前有效的文档（见下方索引）
 .github/workflows/       CI（ci.yml）、夜间（nightly.yml）、发版（release.yml）、官网（pages.yml）
 ```
 
 ## 文档索引
 
-`docs/` 下只保留**十三份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
+`docs/` 下只保留**十四份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
 代码审计报告、覆盖矩阵等）已随 2026-10-08 的文档精简删除，**原文都在 git 历史里**（见本节末尾的取回方法）。
 正在实施的重设计提案按「当届有效」保留一份（当前：全站微信主题改版）；已落地收口的提案（ClawBot 指挥台 v2）
 保留为已交付设计记录，上一届之前的原文在 git 历史里。
@@ -193,6 +193,7 @@ docs/                    十三份当前有效的文档（见下方索引）
 | [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
+| [`docs/TASK-CENTER.md`](docs/TASK-CENTER.md) | 任务信息：关键词触发任务的界面、状态机、扫描与回调链路、权限边界、已知风险与代码地图 |
 | [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md) | 响应式与 Bootstrap 适配：npm 引入方式、栅格/断点规约、五类组件策略、验收清单与审计门禁 |
 | [`docs/UI-DENSITY.md`](docs/UI-DENSITY.md) | UI 密度规范：固定内容/空白率指标与目标、卡片与组件紧凑化规则、实施分层与验收清单 |
 | [`docs/CARD-SIZE.md`](docs/CARD-SIZE.md) | 卡片尺寸规范：每张卡的宽高上界、卡内滚动、视觉卡例外与全站卡片审计工具 |

@@ -105,6 +105,43 @@ export function useRemoteImage(source: string, fallback = ''): RemoteImageState 
 }
 
 /**
+ * 同一来源地址共享一次解析结果。
+ *
+ * 聊天气泡/聊天记录同一发送者会重复出现几十次；每行各自 `useRemoteImage` 时，
+ * 代理回话有先后，未回话的行会先画首字，已回话的画头像 —— 用户看到的就成了
+ * 「同一个人一会儿是头像、一会儿是首字」。这个 hook 把同地址的解析结果提到父层，
+ * 传回给每一个 `RemoteImg`，让它们在同一帧一起切到 `ready`。
+ *
+ * 只做**展示状态去重**，不改变取图纪律：实际请求仍走 `apiGetRemoteImageUrl` 的攒批与缓存。
+ * @param sources - 当前屏内所有头像/远程图片地址。
+ * @returns 地址 → 已解析出的 data URL；尚未完成或失败时没有条目。
+ */
+export function useSharedRemoteImages(sources: readonly string[]): Readonly<Record<string, string>> {
+  const wanted = [...new Set(
+    sources.map((s) => String(s ?? '').trim()).filter((s) => /^https?:/i.test(s)),
+  )].sort()
+  const key = wanted.join('\n')
+  const [resolved, setResolved] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const urls = key === '' ? [] : key.split('\n')
+    if (urls.length === 0) return
+    let alive = true
+    void Promise.all(urls.map(async (url) => ({ url, dataUrl: await apiGetRemoteImageUrl(url) })))
+      .then((items) => {
+        if (!alive) return
+        const next: Record<string, string> = {}
+        for (const item of items) {
+          if (item.dataUrl !== '') next[item.url] = item.dataUrl
+        }
+        setResolved(next)
+      })
+      .catch(() => { /* 失败时各 RemoteImg 继续走自己的占位/回退 */ })
+    return () => { alive = false }
+  }, [key])
+  return resolved
+}
+
+/**
  * 与原生 `<img>` 同形（少一个 `src` 的歧义：这里的 `src` 允许是远程地址），
  * 外加两种占位。**这里刻意不接受 `data-*`**：`pending` / `failed` 画的是占位而不是 `<img>`，
  * 把「哪一格该去本机解码」这类靠 DOM 认的钥匙挂在这个组件上，就会在代理回话之前消失 ——

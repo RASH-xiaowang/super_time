@@ -19,6 +19,17 @@ export interface GroundingAudit {
     /** 是否通过（只有「引用原文里没有的硬值」才算不通过）。 */
     ok: boolean;
 }
+/** 回答面向的展示场景：界面问答要引用角标，自动回复禁止角标。 */
+export type GroundingReplyMode = 'cited' | 'chat';
+/** 接地审计选项。 */
+export interface GroundingAuditOptions {
+    /**
+     * 是否要求事实句带 `[n]` 角标，缺省 true。
+     * 自动回复在微信里没有可点击角标，必须显式关闭这项要求；
+     * 关闭后金额/日期/长数字仍会逐项核对，不会降低事实校验强度。
+     */
+    requireCitationMarkers?: boolean;
+}
 /** 引用原文侧的比对池。 */
 interface ValuePools {
     dates: Set<string>;
@@ -40,7 +51,9 @@ export declare function buildValuePools(evidenceTexts: readonly string[]): Value
  * @param citationCount - 本轮引用条数（用于校验 [n] 是否越界）。
  * @returns 见 {@link GroundingAudit}。
  */
-export declare function auditGrounding(answer: string, evidenceTexts: readonly string[], citationCount: number): GroundingAudit;
+export declare function auditGrounding(answer: string, evidenceTexts: readonly string[], citationCount: number, options?: GroundingAuditOptions): GroundingAudit;
 /** 把违规值转成「回炉重写」的具体指令；没有违规时返回空串。 */
-export declare function groundingRepairHint(audit: GroundingAudit): string;
+export declare function groundingRepairHint(audit: GroundingAudit, mode?: GroundingReplyMode): string;
+/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的微信自动回复）。 */
+export declare function stripCitationMarkers(text: string): string;
 export {};

@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ClawbotBindQr, ClawbotBindingSnapshot, ClawbotEnvSnapshot, ClawbotInstance, ClawbotInstanceConfig } from '@deepseek-ai/dsh-wechat-data/types'
+import type { ClawbotAutoReplyStage, ClawbotAutoReplyStats, ClawbotBindQr, ClawbotBindingSnapshot, ClawbotEnvSnapshot, ClawbotInstance, ClawbotInstanceConfig } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   apiCheckClawbotEnv,
   apiCreateClawbotBindQr,
@@ -53,6 +53,24 @@ const FAQ: ReadonlyArray<{ q: string, a: string }> = [
     a: '① 确认 Super Time 仍在运行；② 回到本页检查集成状态是否仍为「已绑定」；③ 必要时先解绑再重新扫码绑定。',
   },
 ]
+
+const AUTO_REPLY_STAGE_LABEL: Record<ClawbotAutoReplyStage, string> = {
+  idle: '空闲',
+  recovering: '恢复中',
+  generating: '生成中',
+  sending: '发送中',
+  completing: '收尾中',
+}
+
+/** 一行可扫描的自动回复运行指标；详细错误放在 title 里。 */
+function autoReplyMetricsText(stats: ClawbotAutoReplyStats): string {
+  return `待处理 ${String(stats.pending)} · ${AUTO_REPLY_STAGE_LABEL[stats.stage]}` +
+    ` · 生成成功/失败 ${String(stats.generationSucceeded)}/${String(stats.generationFailed)}` +
+    ` · 发送成功/重试/永久失败 ${String(stats.sendSucceeded)}/${String(stats.sendRetried)}/${String(stats.sendFailedPermanently)}` +
+    ` · 恢复 ${String(stats.recovered)} · 合并 ${String(stats.coalesced)}` +
+    ` · 恢复续跑 ${String(stats.recoveryContinuations)} · 租约丢失 ${String(stats.leaseLost)}` +
+    ` · 丢弃 ${String(stats.dropped)} · 背压 ${String(stats.backpressure)}`
+}
 
 /** 知识库下拉的选项（只取展示需要的两列）。 */
 interface KbOption { id: number, name: string }
@@ -193,7 +211,7 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         />
         <span className={css.autoText}>
           <span className={css.autoTitle}>知识库增强</span>
-          <span className={css.autoDesc}>回复前先检索你为该实例选的知识库；没选库则不检索（不会静默降级成无库回复）。</span>
+          <span className={css.autoDesc}>回复前先检索你为该实例选择的知识库；开启增强但未选择知识库时，仍会继续自动回复，只是不检索知识库。</span>
         </span>
       </label>
       {cfg?.kbEnabled === true && (
@@ -209,7 +227,7 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         </select>
       )}
       {cfg?.autoReply === true && cfg?.kbEnabled === true && cfg?.kbId === null && (
-        <span className={css.instWarn}>开了知识库增强但没选库 —— 不会检索任何内容</span>
+        <span className={css.instWarn}>已开启知识库增强但未选择知识库 —— 会继续自动回复，但不检索知识库。</span>
       )}
 
       {/* 系统提示词（2026-10-17）：人设 / 语气 / 回复风格。留空 = 用内置拟人化默认值。 */}
@@ -262,8 +280,8 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         <span className={css.autoText}>
           <span className={css.autoTitle}>长回复分段发送</span>
           <span className={css.autoDesc}>
-            回复较长时按语义切成几条依次发出（每条不超过 300 字），像人连发几条那样；
-            关闭则整条一次发出。
+            回复较长时按语义切成几条依次发出（每段不超过 30 字、整条不超过 300 字），像人连发几条那样；
+            关闭则整条一次发出，仍不超过 300 字。
           </span>
         </span>
       </label>
@@ -546,6 +564,20 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
                           <span className={css.chkDetail} title={it.detail}>{it.detail}</span>
                         </div>
                       ))}
+                      {cfg?.autoReply === true && (
+                        <div className={css.chk}>
+                          <span className={env.autoReplyStats.lastError === null ? css.tickOk : css.tickBad} aria-hidden="true">
+                            {env.autoReplyStats.lastError === null ? '✓' : '!'}
+                          </span>
+                          <span className={css.chkLabel}>自动回复（本进程）</span>
+                          <span
+                            className={css.chkDetail}
+                            title={env.autoReplyStats.lastError ?? autoReplyMetricsText(env.autoReplyStats)}
+                          >
+                            {autoReplyMetricsText(env.autoReplyStats)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
               </Section>

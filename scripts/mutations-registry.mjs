@@ -259,7 +259,8 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-18（实时同步修订 `getDataRevision` → 203）：第十六次跟。
     // 2026-10-19（聊天素材收集任务 +2 → 205）：第十七次跟。
     // 2026-10-19（任务信息 / 触发记录 / 回调 +7 → 212）：第十八次跟。
-    from: '212 个 Remote 方法）',
+    // 2026-10-20（任务配置 / 触发记录批量删除 +2 → 214）：第十九次跟。
+    from: '214 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },

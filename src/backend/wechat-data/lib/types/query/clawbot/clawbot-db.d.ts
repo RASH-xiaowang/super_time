@@ -15,7 +15,7 @@ export declare function clawbotDbExists(decryptedDir: string): boolean;
  */
 export declare const DEFAULT_CLAWBOT_SLOT = 1;
 /**
- * 在一条**已打开的可写连接**上建表 / 补列 / 保证绑定行存在。
+ * 在一条**已打开的可写连接**上建表 / 补列 / 首次建库时补默认绑定行。
  *
  * 拆成「接收 db」而不是「自己开库」，是为了让写路径把「建表 + 本次写」放进同一条连接
  * （一次 `withWritableDb` 里干完），不出现同一操作两次开库。

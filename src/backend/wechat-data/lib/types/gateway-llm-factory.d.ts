@@ -39,6 +39,19 @@ export type EmbedFeature = 'ask_embed' | 'kb_embed' | 'kb_link_suggest';
 /** 一次性抽取任务的 system 提示：只准出行格式，不解释不寒暄不补全。 */
 export declare const EXTRACT_SYSTEM = "\u4F60\u662F\u4E00\u540D\u4E25\u683C\u7684\u4FE1\u606F\u62BD\u53D6\u5668\u3002\u53EA\u8F93\u51FA\u8981\u6C42\u7684\u884C\u683C\u5F0F\uFF0C\u4E0D\u89E3\u91CA\u3001\u4E0D\u5BD2\u6684\u3001\u4E0D\u8865\u5168\u6587\u6863\u91CC\u6CA1\u6709\u7684\u540D\u5B57\u3002";
 /**
+ * 结构化抽取的单次输出预算。
+ *
+ * 不能再按普通聊天的小上限发：真机复现（2026-10-20，`deepseek-flash`）中，
+ * 500 token 被 500 个 reasoning token 全部吃光，`content` 为空；提高到 4096 后
+ * 同一份文件用 1544 个 reasoning token 后正常输出 11 条实体。
+ *
+ * 2026-10-20 再次实测：同一份文件（21.6k 字）换一次请求，4021 个输出 token 中
+ * 3980 个仍是 reasoning，正文只剩 41 个 token；4096 恰好会在这种请求上再次耗尽。
+ * `deepseek-flash` 支持更大的输出预算，所以这里留到 8192。它只是安全上限，
+ * 模型提前结束不会按未用额度计费。
+ */
+export declare const EXTRACT_MAX_TOKENS = 8192;
+/**
  * 构造「过隐私闸门」的 embedding 函数。
  *
  * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「敏感字段脱敏」时发送脱敏后的

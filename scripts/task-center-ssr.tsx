@@ -5,7 +5,7 @@
  * 的既定结论），而这一页有几件**只有真渲染一次才看得到**的事实：
  *   · 双栏标题、状态徽标、关键词折叠（超 3 个折「+N」）是否真的画出来；
  *   · 弹窗分组是否含「触发时间 / 触发群聊 / 触发对象 / 触发图片 / 触发文本」五组；
- *   · 编辑表单是否含「回调地址」「照片数量」「标记已完善」等入口；
+ *   · 编辑表单是否含「Webhook 地址」「照片数量」「标记已完善」等入口；
  *   · 右栏是否真的按选中任务过滤（未选中任务的那条记录不该出现）。
  *
  * 做法与 `scripts/wordcloud-ssr.tsx` 同一范式：直接渲染**纯展示组件**
@@ -41,6 +41,7 @@ const TASK_A: TaskInfo = {
   targetName: '客户经理',
   keywords: ['报价', '合同', '打款', '交付'],
   photoLimit: 3,
+  mentionMeOnly: true,
   callbackUrl: '',
   status: 'incomplete',
   createdAt: T(2026, 10, 18, 9, 0, 0),
@@ -49,7 +50,7 @@ const TASK_A: TaskInfo = {
   triggerCount: 2,
 }
 
-/** 任务 B：已完善，带回调地址。 */
+/** 任务 B：已完善，带 Webhook 地址。 */
 const TASK_B: TaskInfo = {
   id: 2,
   name: '上线通知',
@@ -60,6 +61,7 @@ const TASK_B: TaskInfo = {
   targetName: '运维值班',
   keywords: ['上线'],
   photoLimit: 1,
+  mentionMeOnly: false,
   callbackUrl: 'https://example.com/supertime/callback',
   status: 'ready',
   createdAt: T(2026, 10, 17, 8, 30, 0),
@@ -139,6 +141,8 @@ const ACTIONS: TaskCenterActions = {
   onSaveTask: (_task: TaskInfo, _input: TaskInfoInput) => Promise.resolve(OK_MUTATION),
   onSetStatus: (_id: number, _status: TaskInfoStatus) => Promise.resolve(OK_MUTATION),
   onDeleteTask: (_id: number) => Promise.resolve(OK_MUTATION),
+  onDeleteTasks: (_ids: number[]) => Promise.resolve({ ok: true, removed: 0 }),
+  onDeleteTriggers: (_ids: number[]) => Promise.resolve({ ok: true, removed: 0 }),
   onDispatch: (_triggerId: number) => Promise.resolve(OK_DISPATCH),
   onNotice: () => { /* noop */ },
 }
@@ -179,8 +183,21 @@ const html = renderToStaticMarkup(h(TaskCenterView, {
   triggersReadError: null,
   tasksStale: false,
   triggersStale: false,
+  triggersTotal: 5,
+  triggersHasMore: true,
+  triggersLoadingMore: false,
+  triggersLoadMoreError: null,
+  onLoadMoreTriggers: () => { /* noop */ },
   scanning: false,
-  notice: '已刷新最新数据',
+  refreshing: false,
+  notice: null,
+  taskSearch: '报价',
+  triggerSearch: '报价',
+  triggerSearchDraft: '报价',
+  taskBatchMode: false,
+  selectedTaskIds: new Set([1]),
+  triggerBatchMode: false,
+  selectedTriggerIds: new Set([101]),
   actions: ACTIONS,
 }))
 
@@ -200,11 +217,11 @@ check('任务状态徽标：待完善 / 已完善 都在（颜色档由 Badge �
   ok(html.includes('data-tone="green"'), '「已完善」没有 green 色调')
 })
 
-check('任务行信息：会话→目标、关键词折叠 +1、照片张数、未填回调、触发次数', () => {
+check('任务行信息：会话→目标、关键词折叠 +1、照片张数、未填 Webhook、触发次数', () => {
   ok(html.includes('报价群') && html.includes('客户经理'), '缺少「会话 → 目标」')
   ok(html.includes('>+1<'), '4 个关键词没有折成「+1」')
   ok(html.includes('3 张图片'), '缺少照片张数')
-  ok(html.includes('未填回调'), '空回调地址没有显示「未填回调」')
+  ok(html.includes('未填 Webhook'), '空 Webhook 地址没有显示「未填 Webhook」')
   ok(html.includes('2 次触发'), '缺少触发次数')
   ok(html.includes(triggerTimeText(RECORD_1.triggeredAt)), '缺少最近触发时间')
 })
@@ -232,18 +249,113 @@ check('弹窗回调区：状态徽标 + 重新投递入口', () => {
   ok(html.includes('投递时间'), '缺少回调投递时间')
 })
 
-check('编辑表单：任务名 / 触发关键词 / 照片数量 / 回调地址 / 标记已完善 / 删除', () => {
-  for (const label of ['任务名', '触发关键词', '照片数量', '回调地址', '标记已完善', '删除', '保存']) {
+check('编辑表单：任务名 / 触发关键词 / 照片数量 / Webhook 地址 / 标记已完善 / 删除', () => {
+  for (const label of ['任务名', '触发关键词', '照片数量', 'Webhook 地址', '标记已完善', '删除', '保存']) {
     ok(html.includes(label), `编辑表单缺少「${label}」`)
   }
-  ok(html.includes('aria-label="回调地址"'), '回调地址输入框没有可访问名')
+  ok(html.includes('aria-label="Webhook 地址"'), 'Webhook 地址输入框没有可访问名')
   ok(html.includes('aria-label="编辑任务：客户报价跟进"'), '表单没有可访问名')
+  ok(html.includes('仅匹配@我的文本'), '群聊编辑表单缺少「仅匹配@我的文本」')
+  ok(html.includes('@所有人不算'), '勾选项缺少结构化 @ 的边界说明')
 })
 
 check('工具条：「刷新」「立即检查」与计数都在', () => {
   ok(html.includes('刷新'), '缺少「刷新」')
   ok(html.includes('立即检查'), '缺少「立即检查」')
   ok(/任务\s*(?:<!-- -->)?\s*2/.test(html), '缺少任务计数')
+})
+
+check('两栏搜索：任务与触发记录都有搜索框、占位符和清除按钮', () => {
+  ok(html.includes('aria-label="搜索任务"'), '左栏缺少搜索框')
+  ok(html.includes('搜索任务名 / 关键词 / 会话'), '左栏搜索占位符不对')
+  ok(html.includes('aria-label="搜索触发记录"'), '右栏缺少搜索框')
+  ok(html.includes('搜索正文 / 任务 / 会话 / 关键词'), '右栏搜索占位符不对')
+  ok((html.match(/aria-label="清除搜索"/g) ?? []).length >= 1, '搜索框没有清除按钮')
+})
+
+check('任务行直接提供删除入口（复用危险色共享按钮）', () => {
+  ok(html.includes('aria-label="删除任务「客户报价跟进」"'), '任务行缺少直接删除入口')
+  ok(html.includes('>删除<'), '任务行删除按钮没有可见文案')
+})
+
+/** 批量模式单独渲染：同一场景下切换两栏的批量选择状态。 */
+const batchProps = {
+    tasks: [TASK_A, TASK_B],
+    triggers: [RECORD_1, RECORD_2, RECORD_OTHER],
+    selectedTaskId: 1,
+    expandedTaskId: null,
+    openRecordId: null,
+    openRecord: null,
+    tasksLoading: false,
+    triggersLoading: false,
+    tasksError: null,
+    triggersError: null,
+    tasksReadError: null,
+    triggersReadError: null,
+    triggersTotal: 3,
+    triggersHasMore: false,
+    triggersLoadingMore: false,
+    triggersLoadMoreError: null,
+    onLoadMoreTriggers: () => { /* noop */ },
+    scanning: false,
+    notice: null,
+    taskSearch: '',
+    triggerSearch: '',
+    triggerSearchDraft: '',
+    taskBatchMode: true,
+    selectedTaskIds: new Set([1]),
+    triggerBatchMode: true,
+    selectedTriggerIds: new Set([101]),
+    actions: ACTIONS,
+} satisfies React.ComponentProps<typeof TaskCenterView>
+const batchHtml = renderToStaticMarkup(h(TaskCenterView, batchProps))
+
+check('批量模式：两栏都有全选/清空/删除所选与选中计数', () => {
+  for (const label of ['任务批量操作', '触发记录批量操作', '删除所选 (1)', '已选 1 条']) {
+    ok(batchHtml.includes(label), `批量模式缺少「${label}」`)
+  }
+  ok((batchHtml.match(/>全选</g) ?? []).length >= 2, '两栏没有都提供全选')
+  ok((batchHtml.match(/>清空</g) ?? []).length >= 2, '两栏没有都提供清空')
+  ok(batchHtml.includes('role="checkbox"'), '批量模式行没有复选框语义')
+  ok(!batchHtml.includes('aria-label="删除任务「客户报价跟进」"'), '批量模式仍暴露单条删除入口')
+})
+
+check('左栏搜索按任务名过滤，未命中的任务不出现', () => {
+  ok(html.includes('客户报价跟进'), '命中的任务没有出现')
+  ok(!html.includes('上线通知'), '未命中的任务仍被画出来（客户端过滤没生效）')
+  ok(html.includes('1 / 2 个任务'), '搜索后的任务计数不对')
+})
+
+check('触发记录无匹配空态与清除提示', () => {
+  const noMatchHtml = renderToStaticMarkup(h(TaskCenterView, {
+    tasks: [TASK_A, TASK_B],
+    triggers: [],
+    selectedTaskId: null,
+    expandedTaskId: null,
+    openRecordId: null,
+    openRecord: null,
+    tasksLoading: false,
+    triggersLoading: false,
+    tasksError: null,
+    triggersError: null,
+    tasksReadError: null,
+    triggersReadError: null,
+    onLoadMoreTriggers: () => { /* noop */ },
+    scanning: false,
+    notice: null,
+    taskSearch: '',
+    triggerSearch: '不存在',
+    triggerSearchDraft: '不存在',
+    actions: ACTIONS,
+  }))
+  ok(noMatchHtml.includes('没有匹配的触发记录'), '缺少触发记录无匹配空态')
+  ok(noMatchHtml.includes('当前搜索「不存在」没有命中'), '无匹配空态没有回显搜索词')
+  ok(noMatchHtml.includes('可换个词或清除搜索'), '无匹配空态没有清除搜索引导')
+})
+
+check('分页入口：显示真实总数与当前已加载条数', () => {
+  ok(html.includes('2 / 5 条'), '右栏标题没有显示「已加载 / 总数」')
+  ok(html.includes('加载更多（已 2 / 5）'), '缺少「加载更多」按钮或计数不对')
 })
 
 /** 空态场景：没有任务时给出去哪创建的引导，而不是一片空白。 */
@@ -260,8 +372,12 @@ const emptyHtml = renderToStaticMarkup(h(TaskCenterView, {
   triggersError: null,
   tasksReadError: null,
   triggersReadError: null,
+  onLoadMoreTriggers: () => { /* noop */ },
   scanning: false,
   notice: null,
+  taskSearch: '',
+  triggerSearch: '',
+  triggerSearchDraft: '',
   actions: ACTIONS,
 }))
 
@@ -286,8 +402,12 @@ const errorHtml = renderToStaticMarkup(h(TaskCenterView, {
   triggersError: null,
   tasksReadError: 'database is locked',
   triggersReadError: 'database is locked',
+  onLoadMoreTriggers: () => { /* noop */ },
   scanning: false,
   notice: null,
+  taskSearch: '',
+  triggerSearch: '',
+  triggerSearchDraft: '',
   actions: ACTIONS,
 }))
 

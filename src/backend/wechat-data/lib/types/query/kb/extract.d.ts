@@ -102,6 +102,8 @@ export declare function readDigestForExtract(db: DatabaseSync, kbId: number, fil
  *
  * 为什么是替换而不是追加：同一个文件重跑一次抽取，旧结果不是「另一批事实」，
  * 而是「同一个问题的旧答案」。追加会让图谱里同一个文件挂出两套互相矛盾的主题词。
+ * 调用方必须先确认这一轮拿到了至少一条可入库实体；空结果不能走到这里，
+ * 否则会先删旧结果再写 0 条，把一次失败伪装成「成功清空」。
  * @param decryptedDir - 解密数据根。
  * @param kbId - 库。
  * @param fileId - 文件。

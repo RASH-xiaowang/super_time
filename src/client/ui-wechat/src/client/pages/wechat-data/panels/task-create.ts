@@ -50,6 +50,8 @@ export interface TaskCreateForm {
   keywordDraft: string
   /** 携带照片数量（0..{@link PHOTO_LIMIT_MAX}，可在表单里直接输入）。 */
   photoLimit: number
+  /** 群聊是否只匹配结构化 @ 登录账号的消息；单聊不展示该选项。 */
+  mentionMeOnly: boolean
   /** 任务名（空 = 自动生成，提交时补默认名）。 */
   name: string
   /** 群聊所选目标成员；单聊保持空串（提交时回填成会话对象）。 */
@@ -60,13 +62,14 @@ export interface TaskCreateForm {
 
 /**
  * 表单初值。
- * @returns 空关键词、默认照片档位、空任务名、未选目标。
+ * @returns 空关键词、默认照片档位、不限制 @、空任务名、未选目标。
  */
 export function initialTaskCreateForm(): TaskCreateForm {
   return {
     keywords: [],
     keywordDraft: '',
     photoLimit: DEFAULT_PHOTO_LIMIT,
+    mentionMeOnly: false,
     name: '',
     targetUsername: '',
     targetName: '',
@@ -228,6 +231,8 @@ export interface BuildTaskInfoInputOptions {
   target?: { username: string; name: string } | null
   keywords: readonly string[]
   photoLimit: number
+  /** 群聊是否只匹配 @ 登录账号；缺省 = false。 */
+  mentionMeOnly?: boolean
   /** 用户填的任务名；空串 = 自动生成。 */
   name?: string
 }
@@ -237,7 +242,7 @@ export interface BuildTaskInfoInputOptions {
  *
  * 单聊的「触发对象」就是会话对象本身（`targetUsername = chat.username`）——
  * 这个回填只发生在这里，界面不给用户第二个选择，避免出现「单聊还要选人」的困惑。
- * 状态固定 `incomplete`：回调地址在【任务信息】里补，补完才参与触发与投递。
+ * 状态固定 `incomplete`：Webhook 地址在【任务信息】里补，补完才参与触发与投递。
  * @param options - 会话/目标/关键词/照片档位/任务名。
  * @returns 可直接交给 `apiSaveTaskInfo` 的入参。
  */
@@ -262,6 +267,7 @@ export function buildTaskInfoInput(options: BuildTaskInfoInputOptions): TaskInfo
     targetName,
     keywords,
     photoLimit: options.photoLimit,
+    mentionMeOnly: isGroup && options.mentionMeOnly === true,
     status: 'incomplete',
   }
 }

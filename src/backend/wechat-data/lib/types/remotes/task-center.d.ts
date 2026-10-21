@@ -1,6 +1,6 @@
 import type { PendingDispatchResult } from '../query/task-center.ts';
 import type { RetryFetch } from '../net/fetch-retry.ts';
-import type { TaskCallbackDispatchResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from '../types.ts';
+import type { TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from '../types.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
 /** 网关侧注入的图片解码上下文（每次调用现取：用户可能在运行中换账号/换密钥）。 */
 export interface TaskCenterImageContext {
@@ -33,6 +33,12 @@ export declare function createTaskCenterRemotes(rc: createTaskCenterRemotesInput
     deleteTaskInfo(options: {
         id: number;
     }): TaskInfoMutationResult;
+    deleteTaskInfos(options: {
+        ids: number[];
+    }): TaskBatchMutationResult;
+    deleteTaskTriggers(options: {
+        ids: number[];
+    }): TaskBatchMutationResult;
     setTaskInfoStatus(options: {
         id: number;
         status: TaskInfoStatus;

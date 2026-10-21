@@ -1,9 +1,11 @@
 import type { DatabaseSync } from './db-open.ts';
-import type { TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerRecord, TaskTriggerSnapshot } from '../types.ts';
+import type { TaskBatchMutationResult, TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerRecord, TaskTriggerSnapshot } from '../types.ts';
 export { scanTaskTriggers } from './task-center-scan.ts';
 export type { ScanTaskTriggersOptions } from './task-center-scan.ts';
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts';
 export type { PendingDispatchResult, TaskDispatchDeps } from './task-center-callback.ts';
+/** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
+export declare const TASK_BATCH_DELETE_MAX = 500;
 /** 任务库路径（`decryptedDir` 的父目录下）。 */
 export declare function taskDbPath(decryptedDir: string): string;
 /** 任务库是否存在（读路径据此区分「确实还没有数据」与「库打不开」）。 */
@@ -14,6 +16,19 @@ export declare function taskCellStr(v: unknown): string;
 export declare function taskCellNum(v: unknown): number;
 /** 整数夹取（非数字按 fallback，其余夹到 [min, max]）。 */
 export declare function clampTaskInt(v: unknown, fallback: number, min: number, max: number): number;
+/**
+ * 清洗批量删除 id：只保留唯一正整数，并拒绝空选择和过大批次。
+ *
+ * Remote 入参来自序列化 JSON，不能只靠 TypeScript 类型；重复 id 去重后返回，
+ * 超过上限时整单拒绝而不是截断 —— 用户勾了 501 条却只删 500 条更难排查。
+ * @param raw - 入参里的 ids（运行时可能不是数组）。
+ * @param max - 允许的最大条数。
+ * @returns 清洗后的 id 或中文错误。
+ */
+export declare function cleanTaskBatchIds(raw: unknown, max?: number): {
+    ids: number[];
+    error?: string;
+};
 /** 建表语句（两张表一次建齐；`IF NOT EXISTS` ⇒ 可在每个写连接里重复执行）。 */
 export declare function ensureTaskSchema(db: DatabaseSync): void;
 /** `task_info` 行 → 契约里的 `TaskInfo`（`last_scan_seq` 是扫描内部状态，不进契约）。 */
@@ -32,9 +47,13 @@ export declare function rowToTrigger(r: Record<string, unknown>): TaskTriggerRec
 export declare function listTaskInfos(decryptedDir: string): TaskInfoSnapshot;
 /**
  * 触发记录列表（triggered_at DESC, id DESC，最新在前）。
+ *
+ * 翻页用 `(triggered_at, id)` 复合游标：先取同一时间戳下 id 更小的记录，再用剩余额度
+ * 取严格更早的记录。顺序不能反过来 —— 更早记录如果先占满本页，同一时间戳的剩余记录
+ * 会被游标永久越过。
  * @param decryptedDir - 解密数据根。
- * @param query - 可选的 `taskId` 过滤与 `limit`（夹 1..200，默认 100）。
- * @returns 记录快照；读库失败时带 `readError`。
+ * @param query - 可选的 `taskId` / `search` 过滤、`limit`（夹 1..200，默认 100）与复合游标。
+ * @returns 记录快照（含真实总数与下一页游标）；读库失败时带 `readError`。
  */
 export declare function listTaskTriggers(decryptedDir: string, query?: TaskTriggerQuery): TaskTriggerSnapshot;
 /**
@@ -68,3 +87,21 @@ export declare function setTaskInfoStatus(decryptedDir: string, id: number, stat
  * @returns 写结果（失败带中文 error）。
  */
 export declare function deleteTaskInfo(decryptedDir: string, id: number): TaskInfoMutationResult;
+/**
+ * 批量删除任务配置。与单条删除同一语义：**触发记录刻意保留**，它们是已经发生过的事实。
+ * @param decryptedDir - 解密数据根。
+ * @param rawIds - 任务 id 列表（运行时未受类型保护）。
+ * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ */
+export declare function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult;
+/**
+ * 批量删除触发记录，并在**同一事务**里重算受影响任务的统计缓存。
+ *
+ * `deleteTaskInfos` 刻意保留触发记录，所以这里要让任务行的 `trigger_count` /
+ * `last_triggered_at` 重新等于记录表事实；否则删了记录，左栏仍显示旧的触发次数。
+ * 任一步失败都回滚，不能留下「记录删了、统计没更新」的半完成状态。
+ * @param decryptedDir - 解密数据根。
+ * @param rawIds - 触发记录 id 列表（运行时未受类型保护）。
+ * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ */
+export declare function deleteTaskTriggers(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult;

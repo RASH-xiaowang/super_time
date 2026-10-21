@@ -37,11 +37,15 @@ export interface KbFileDetailPaneProps {
   selected: KbFileMeta | null
   busyId: number | null
   busySummaryId: number | null
+  busyEntityId: number | null
   summaryError: string | null
+  entityError: string | null
   reader: KbFileReaderState | null
   /** 相对时间的基准（容器随每次加载更新，避免滚动时时间自己跳）。 */
   now: number
   onSummarize: (f: KbFileMeta) => void
+  /** 抽取这份文件的实体，结果会进入知识图谱的推断层。 */
+  onExtractEntities: (f: KbFileMeta) => void
   /** 把摘要存成一条笔记（`sourceKind: 'file'`）—— 打通「文件 → 笔记 → 图谱」链路。 */
   onSaveAsNote: (f: KbFileMeta) => void
   onChunks: (fileId: number) => void
@@ -52,8 +56,8 @@ export interface KbFileDetailPaneProps {
 }
 
 export function KbFileDetailPane({
-  hidden, loading, selected, busyId, busySummaryId, summaryError, reader, now,
-  onSummarize, onSaveAsNote, onChunks, onCloseReader, onReveal, onRemove, onToggleRag,
+  hidden, loading, selected, busyId, busySummaryId, busyEntityId, summaryError, entityError, reader, now,
+  onSummarize, onExtractEntities, onSaveAsNote, onChunks, onCloseReader, onReveal, onRemove, onToggleRag,
 }: KbFileDetailPaneProps): React.JSX.Element {
   /**
    * 摘要三字段的归一化。
@@ -103,6 +107,18 @@ export function KbFileDetailPane({
               >
                 {busySummaryId === selected.id ? '生成中…' : summaryText === '' ? '生成摘要' : '重新生成'}
               </Button>
+              {/* 实体抽取同样把正文发给模型，所以与摘要共用同一道出网开关。
+                  忙碌态单独一份：摘要和实体都可能是长调用，不能让一个动作改写另一个按钮的文案。 */}
+              <Button
+                variant="pill"
+                onClick={() => { void onExtractEntities(selected) }}
+                disabled={busyEntityId === selected.id || !selected.includeInRag}
+                title={selected.includeInRag
+                  ? '提取这份文件里的人名、组织、地点与主题，并以双向连接加入知识图谱（会出网）'
+                  : '该文件已关闭「参与语义检索（会出网）」，内容不得离开本机，因此不能提取实体'}
+              >
+                {busyEntityId === selected.id ? '提取中…' : '提取实体'}
+              </Button>
               {/* 2026-10-17：把摘要存成笔记 —— 改前摘要只躺在文件元数据里，
                   笔记库永远是空的、图谱里只有文件章节节点（链路是断的）。
                   没有摘要时禁用并写明原因，而不是让人点下去拿一条错误。 */}
@@ -116,8 +132,8 @@ export function KbFileDetailPane({
               >
                 存为笔记
               </Button>
-              {/* 默认就是展开的，所以这个按钮的常态是「收起」。**不设 disabled**：
-                  读取途中用户也应该能把它关掉，而不是被锁在等待里。
+              {/* 正文默认收起（2026-10-20），所以这个按钮的常态是「查看正文」。
+                  **不设 disabled**：读取途中用户也应该能把它关掉，而不是被锁在等待里。
                   加载状态由阅读区自己说（见下面的 readerLoading 一行）。 */}
               <Button
                 variant="pill"
@@ -135,6 +151,8 @@ export function KbFileDetailPane({
               </Button>
             </div>
           </div>
+
+          {entityError && <div className={kitCss.error} role="alert">⚠️ {entityError}</div>}
 
           <div className={css.detailMeta}>
             <Badge tone={PARSE_LOOK[selected.parseState].tone}>{PARSE_LOOK[selected.parseState].label}</Badge>
@@ -249,7 +267,7 @@ export function KbFileDetailPane({
               排在正文下方只会让用户滚到底时突然撞见一堆指纹和路径。
               收起正文后它们自然回来。 */}
           {!readerOpen && (
-            <>
+            <div className={css.detailFoot}>
               <div className={css.sectionLabel}>明细</div>
               <dl className={css.kv}>
                 <dt className={css.kvKey}>大小</dt>
@@ -269,7 +287,7 @@ export function KbFileDetailPane({
                   <div className={css.hintNote}>仅登记，不会被修改或删除。</div>
                 </dd>
               </dl>
-            </>
+            </div>
           )}
         </div>
       ) : loading ? null : (

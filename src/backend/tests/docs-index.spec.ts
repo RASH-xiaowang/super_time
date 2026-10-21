@@ -31,8 +31,10 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 /** 本轮（#25）新增的四份文档：缺任何一份，这一项就不算交付。 */
 const NEW_DOCS = ['docs/ARCHITECTURE.md', 'docs/CONTRIBUTING.md', 'docs/DEPLOYMENT.md', 'docs/ERROR-CODES.md']
-/** 引用扫描的语料：四份新文档 + README（文档索引的宿主，也是别人进来的第一扇门）。 */
-const CORPUS = [...NEW_DOCS, 'README.md']
+/** 领域说明文档：同样随功能交付，必须和基础文档一起参与引用校验。 */
+const DOMAIN_DOCS = ['docs/TASK-CENTER.md']
+/** 引用扫描的语料：四份新文档 + 领域文档 + README（文档索引的宿主，也是别人进来的第一扇门）。 */
+const CORPUS = [...NEW_DOCS, ...DOMAIN_DOCS, 'README.md']
 
 /** 只有以这些顶层目录开头的反引号片段才当"仓库内引用"（`utils/format.ts` 那种简写有歧义，不猜）。 */
 const ROOTED = /^(?:src|docs|scripts|tools|tests|wechat|\.github)\//

@@ -19,6 +19,7 @@ import { fetchQuota, type WxcdnQuota } from '../query/wxcdn-original.ts'
 import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan, scanImageOriginalPlanAsync } from '../query/image-original-batch.ts'
 import { getOriginalHarvestStatus, harvestHdDats, setHarvestProgress, startOriginalHarvester, stopOriginalHarvester, type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
+import { resolveFavoriteMediaDataUrl } from '../query/favorite-media.ts'
 import { lookupOriginal, lookupArchivedOriginal, originalAsDataUrl, saveArchivedOriginal, saveOriginal } from '../query/sns-media-store.ts'
 import { readArchivedAvatar, readArchivedAvatars, saveArchivedAvatar, saveArchivedAvatars } from '../query/moments-archive.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
@@ -152,8 +153,14 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return resolveVoiceInfo(rc.dirs().decrypted, options.username, options.localId)
     },
 
-    async getVoiceDataUrl(options: { username: string; localId: number }): Promise<VoiceDataUrlResult> {
-      return await resolveVoiceDataUrl(rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId)
+    async getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<VoiceDataUrlResult> {
+      return await resolveVoiceDataUrl(
+        rc.dirs().decrypted,
+        rc.dirs().decoded,
+        options.username ?? '',
+        options.localId,
+        options.svrId ?? '',
+      )
     },
 
     getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
@@ -199,6 +206,26 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
       return await decodeFileImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
+    },
+
+    /**
+     * 收藏资源本地缓存：图片、视频、文件、语音和未知资源共用同一条
+     * “按明文内容 MD5 匹配 business/favorite 下不透明文件”的解析链。
+     * @param options - XML 中的 md5/thumbMd5/fullMd5 与资源类型提示。
+     * @returns data URL（含正确 MIME）或本地缓存未命中的说明。
+     */
+    getFavoriteMediaDataUrl(options: {
+      md5?: string
+      thumbMd5?: string
+      fullMd5?: string
+      kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
+      ext?: string
+      fileName?: string
+      size?: number
+    }): ImageDataUrlResult {
+      const base = rawWechatBase(rc.dirs().decrypted) || undefined
+      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
+      return resolveFavoriteMediaDataUrl(base, options ?? {}, aesKey, xorKey)
     },
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {

@@ -14,12 +14,30 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { createClawbotRemotes, CLAWBOT_INLINE_MAX_BYTES, type ClawbotEmitEvent } from '../src/remotes/clawbot.ts'
-import { readBindingInternal } from '../src/query/clawbot/clawbot-binding.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createClawbotRemotes, CLAWBOT_INLINE_MAX_BYTES, insertClawbotMessages, type ClawbotEmitEvent } from '../src/remotes/clawbot.ts'
+import { readBindingInternal, saveSendContextToken } from '../src/query/clawbot/clawbot-binding.ts'
+import { clawbotDbExists, clawbotDbPath } from '../src/query/clawbot/clawbot-db.ts'
+import { createClawbotInstance } from '../src/query/clawbot/clawbot-instance.ts'
 import type { ClawbotMediaOutcome } from '../src/query/clawbot/clawbot-media.ts'
+import { insertClawbotMessage, suppressClawbotMessageIds } from '../src/query/clawbot/clawbot-message.ts'
+import { enqueueOrMergeReplyRun, listRecoverableReplyRuns, readReplyRun, saveReplyParts } from '../src/query/clawbot/clawbot-reply-store.ts'
 import type { IlinkCredentials, IlinkOutgoingText, IlinkPollResult, IlinkSendResult, IlinkUpdates, WeixinMessage } from '../src/query/clawbot/clawbot-ilink.ts'
+import { withDb, withWritableDb } from '../src/query/db-open.ts'
 import type { OperationCategory, OperationStatus } from '../src/types.ts'
+
+const capturedAutoReplyRunners = vi.hoisted(() => [] as Array<{ pending: () => number }>)
+vi.mock('../src/query/clawbot/clawbot-auto-reply.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/query/clawbot/clawbot-auto-reply.ts')>()
+  return {
+    ...actual,
+    createAutoReplyRunner: (deps: Parameters<typeof actual.createAutoReplyRunner>[0]) => {
+      const runner = actual.createAutoReplyRunner(deps)
+      capturedAutoReplyRunners.push(runner)
+      return runner
+    },
+  }
+})
 
 const scratch: string[] = []
 afterEach(() => {
@@ -27,6 +45,8 @@ afterEach(() => {
     try { rmSync(dir, { recursive: true, force: true }) } catch { /* Windows 清理尽力而为 */ }
   }
   scratch.length = 0
+  capturedAutoReplyRunners.length = 0
+  vi.useRealTimers()
 })
 
 interface OpRecord { category: OperationCategory, action: string, status: OperationStatus, target: string, detail: string }
@@ -35,6 +55,7 @@ interface OpRecord { category: OperationCategory, action: string, status: Operat
 interface FakeIlink {
   /** 取码：每次返回不同的 token/payload（重生成场景要能看出换了一轮）。 */
   requestBindQrCalls: number
+  requestBindQrImpl: (() => Promise<{ token: string, payload: string }>) | null
   /** 状态轮询的结果队列（空了 ⇒ 抛错提示测试没安排好）。 */
   pollQueue: IlinkPollResult[]
   /** 状态轮询的完全接管（在途去重场景要拿住 promise 不放）。 */
@@ -44,7 +65,8 @@ interface FakeIlink {
   updatesImpl: (buf: string) => Promise<IlinkUpdates>
   /** 发送：按队列消费（空了 = 成功空响应）；项可以是 Error 模拟网络抛错。 */
   sendQueue: Array<IlinkSendResult | Error>
-  sendCalls: Array<{ toUserId: string, text: string, contextToken: string }>
+  sendImpl: ((credentials: IlinkCredentials, out: IlinkOutgoingText) => Promise<IlinkSendResult>) | null
+  sendCalls: Array<{ toUserId: string, text: string, contextToken: string, clientId: string }>
   /** 媒体取数：记录 id，按注入实现作答（缺省给「测试未安排」）。 */
   mediaCalls: number[]
   mediaImpl: ((dir: string, id: number) => Promise<ClawbotMediaOutcome>) | null
@@ -52,7 +74,7 @@ interface FakeIlink {
   mediaPending: number[]
 }
 
-function makeHarness(): {
+function makeHarness(options: { createInstance?: boolean } = {}): {
   rc: Parameters<typeof createClawbotRemotes>[0],
   ops: OpRecord[],
   events: ClawbotEmitEvent[],
@@ -63,15 +85,19 @@ function makeHarness(): {
   scratch.push(base)
   const dir = join(base, 'decrypted')
   mkdirSync(dir)
+  // 生产流程先有实例再取码；需要验证 fresh DB 时由用例显式关闭。
+  if (options.createInstance !== false) createClawbotInstance(dir)
   const ops: OpRecord[] = []
   const events: ClawbotEmitEvent[] = []
   const ilink: FakeIlink = {
     requestBindQrCalls: 0,
+    requestBindQrImpl: null,
     pollQueue: [],
     pollImpl: null,
     pollCalls: [],
     updatesImpl: () => new Promise<IlinkUpdates>(() => { /* 挂起：等测试手动推进或直接不解 */ }),
     sendQueue: [],
+    sendImpl: null,
     sendCalls: [],
     mediaCalls: [],
     mediaImpl: null,
@@ -86,6 +112,7 @@ function makeHarness(): {
     ilink: {
       requestBindQr: async () => {
         ilink.requestBindQrCalls += 1
+        if (ilink.requestBindQrImpl !== null) return ilink.requestBindQrImpl()
         const token = `qr-tok-${ilink.requestBindQrCalls}`
         return { token, payload: `https://liteapp.weixin.qq.com/q/x?qrcode=${token}` }
       },
@@ -98,7 +125,8 @@ function makeHarness(): {
       },
       getUpdates: (_credentials: IlinkCredentials, buf: string) => ilink.updatesImpl(buf),
       sendTextMessage: async (_credentials: IlinkCredentials, out: IlinkOutgoingText): Promise<IlinkSendResult> => {
-        ilink.sendCalls.push({ toUserId: out.toUserId, text: out.text, contextToken: out.contextToken })
+        ilink.sendCalls.push({ toUserId: out.toUserId, text: out.text, contextToken: out.contextToken, clientId: out.clientId ?? '' })
+        if (ilink.sendImpl !== null) return ilink.sendImpl(_credentials, out)
         const next = ilink.sendQueue.shift()
         if (next instanceof Error) throw next
         return next ?? { ret: 0, errMsg: '' }
@@ -132,6 +160,83 @@ const CONFIRMED: IlinkPollResult = {
 
 /** 等一拍：让通道循环里的 microtask 链跑完（不用真定时器参数）。 */
 const flush = async (): Promise<void> => { await new Promise((resolve) => { setImmediate(resolve) }) }
+
+/** 用真实 reply-store 预置一条 run 和两段 outbox。 */
+function seedReplyState(dir: string, slot: number): { runId: number, clientIds: string[] } {
+  const now = Date.now()
+  const run = enqueueOrMergeReplyRun(dir, {
+    slot,
+    targetMessageId: 900 + slot,
+    question: '生命周期清理测试',
+    debounceMs: 0,
+    now,
+  })
+  const parts = saveReplyParts(dir, run.id, ['第一段', '第二段'], now + 1)
+  return { runId: run.id, clientIds: parts.map(part => part.clientId) }
+}
+
+/** 直接数表，确认 run 与 outbox 都没留下孤儿行。 */
+function replyStateCounts(dir: string, slot: number): { runs: number, parts: number } {
+  return withDb(clawbotDbPath(dir), (db) => {
+    const runs = db.prepare('SELECT COUNT(*) AS n FROM clawbot_reply_run WHERE slot = ?').get(slot) as { n?: number } | undefined
+    const parts = db.prepare('SELECT COUNT(*) AS n FROM clawbot_reply_outbox WHERE slot = ?').get(slot) as { n?: number } | undefined
+    return { runs: Number(runs?.n ?? 0), parts: Number(parts?.n ?? 0) }
+  })
+}
+
+function bindingCount(dir: string, slot: number): number {
+  return withDb(clawbotDbPath(dir), (db) => {
+    const row = db.prepare('SELECT COUNT(*) AS n FROM clawbot_binding WHERE slot = ?').get(slot) as { n?: number } | undefined
+    return Number(row?.n ?? 0)
+  })
+}
+
+/** 两个 slot 各排一条 durable run；slot 1 开自动回复，slot 2 关闭。 */
+function makeDiscardScenario(): {
+  r: ReturnType<typeof createClawbotRemotes>
+  dir: string
+  slot1: number
+  slot2: number
+  run1: ReturnType<typeof enqueueOrMergeReplyRun>
+  run2: ReturnType<typeof enqueueOrMergeReplyRun>
+  asks: number[]
+  runner: { pending: () => number }
+} {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const { rc, dir } = makeHarness()
+  const asks: number[] = []
+  const r = createClawbotRemotes({
+    ...rc,
+    ask: async (slot) => {
+      asks.push(slot)
+      return { ok: true, answer: '不应落库' }
+    },
+  })
+  const slot1 = r.createClawbotInstance().slot
+  const slot2 = r.createClawbotInstance().slot
+  r.setClawbotInstanceConfig({ slot: slot1, autoReply: true, splitReply: false })
+  r.setClawbotInstanceConfig({ slot: slot2, autoReply: false, splitReply: false })
+  const now = Date.now()
+  const run1 = enqueueOrMergeReplyRun(dir, {
+    slot: slot1,
+    targetMessageId: 1_101,
+    question: 'slot1 排队',
+    debounceMs: 0,
+    now,
+  })
+  const run2 = enqueueOrMergeReplyRun(dir, {
+    slot: slot2,
+    targetMessageId: 1_102,
+    question: 'slot2 排队',
+    debounceMs: 0,
+    now,
+  })
+  r.ensureClawbotChannel()
+  const runner = capturedAutoReplyRunners.at(-1)
+  expect(runner).toBeDefined()
+  expect(runner?.pending()).toBe(2)
+  return { r, dir, slot1, slot2, run1, run2, asks, runner: runner as { pending: () => number } }
+}
 
 describe('clawbot remotes（iLink 已接入）', () => {
   it('getClawbotBinding：初始快照是未绑定 + 计数 0 + 通道未运行', () => {
@@ -235,6 +340,44 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(ilink.pollCalls).toHaveLength(1)
   })
 
+  it('旧扫码轮询晚到：会话已被解绑删除 ⇒ 不再回写凭证或启动通道', async () => {
+    const { rc, ilink, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+    let release: (v: IlinkPollResult) => void = () => { /* 占位 */ }
+    ilink.pollImpl = () => new Promise<IlinkPollResult>((resolve) => { release = resolve })
+
+    const pending = r.getClawbotBindState({ slot: 1 })
+    r.unbindClawbot({ slot: 1 })
+    release(CONFIRMED)
+    const late = await pending
+
+    expect(late.state).toBe('idle')
+    expect(late.binding.binding.status).toBe('unbound-by-user')
+    expect(readBindingInternal(dir, 1).credentials).toBeNull()
+    expect(late.binding.channel.running).toBe(false)
+  })
+
+  it('取码请求 in-flight 时删除实例：晚到响应不写回、不复活实例', async () => {
+    const { rc, ilink, events, ops, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    const slot = r.createClawbotInstance().slot
+    let releaseQr: (qr: { token: string, payload: string }) => void = () => { /* 占位 */ }
+    ilink.requestBindQrImpl = () => new Promise((resolve) => { releaseQr = resolve })
+
+    const pending = r.createClawbotBindQr({ slot })
+    await flush()
+    expect(ilink.requestBindQrCalls).toBe(1)
+    r.deleteClawbotInstance({ slot })
+    releaseQr({ token: 'qr-late-delete', payload: 'https://example.invalid/qr-late-delete' })
+
+    await expect(pending).rejects.toThrow('实例已删除或绑定状态已变化')
+    expect(bindingCount(dir, slot), '删除后不得被晚到的取码响应复活').toBe(0)
+    expect(events.filter(event => event.name === 'clawbot/binding-changed')).toEqual([])
+    expect(ops.some(op => op.action === 'clawbot_bind_qr')).toBe(false)
+    expect((await r.getClawbotBindState({ slot })).state).toBe('idle')
+  })
+
   it('重生成：新会话替换旧会话，之后轮询的是新 token', async () => {
     const { rc, ilink } = makeHarness()
     const r = createClawbotRemotes(rc)
@@ -244,6 +387,43 @@ describe('clawbot remotes（iLink 已接入）', () => {
     ilink.pollQueue.push({ status: 'wait' })
     await r.getClawbotBindState()
     expect(ilink.pollCalls.at(-1)).toBe(second.token)
+  })
+
+  it('并发两次取码：最后发起者胜，先发起者的晚到响应不得覆盖新二维码', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    const releases: Array<(qr: { token: string, payload: string }) => void> = []
+    ilink.requestBindQrImpl = () => new Promise((resolve) => { releases.push(resolve) })
+
+    const first = r.createClawbotBindQr({ slot: 1 })
+    await flush()
+    const second = r.createClawbotBindQr({ slot: 1 })
+    await flush()
+    expect(releases).toHaveLength(2)
+
+    releases[1]?.({ token: 'qr-new', payload: 'https://example.invalid/qr-new' })
+    await expect(second).resolves.toMatchObject({ token: 'qr-new' })
+    releases[0]?.({ token: 'qr-old', payload: 'https://example.invalid/qr-old' })
+    await expect(first).rejects.toThrow('实例已删除或绑定状态已变化')
+
+    expect(readBindingInternal(dir, 1).binding.qrToken).toBe('qr-new')
+    expect(events.filter(event => event.name === 'clawbot/binding-changed')).toHaveLength(1)
+    ilink.pollQueue.push({ status: 'wait' })
+    await r.getClawbotBindState({ slot: 1 })
+    expect(ilink.pollCalls.at(-1)).toBe('qr-new')
+  })
+
+  it('fresh DB 默认 slot 首次取码可建库；删除实例后同 slot 再取码必须拒绝', async () => {
+    const { rc, dir } = makeHarness({ createInstance: false })
+    expect(clawbotDbExists(dir)).toBe(false)
+    const r = createClawbotRemotes(rc)
+
+    await expect(r.createClawbotBindQr()).resolves.toMatchObject({ token: 'qr-tok-1', state: 'wait' })
+    expect(clawbotDbExists(dir)).toBe(true)
+    expect(readBindingInternal(dir, 1).binding.qrToken).toBe('qr-tok-1')
+
+    r.deleteClawbotInstance({ slot: 1 })
+    await expect(r.createClawbotBindQr({ slot: 1 })).rejects.toThrow('实例已删除或绑定状态已变化')
   })
 
   it('消息流：通道把一批消息落库并发 {lastId,delta} 事件（不带正文）；解绑保留会话', async () => {
@@ -290,6 +470,191 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(unbindOp, '解绑必须留一行审计').toMatchObject({ category: 'clawbot', status: 'ok', target: 'user-1' })
   })
 
+  it('重放消息全被墓碑拦截时不覆盖当前发送令牌；只有新增入站消息才刷新令牌', () => {
+    const { rc, dir } = makeHarness()
+    createClawbotRemotes(rc)
+    saveSendContextToken(dir, 'ctx-current', 1)
+    suppressClawbotMessageIds(dir, 1, [501], 100)
+
+    const replayed = insertClawbotMessages(dir, 1, [{
+      message_id: 501,
+      message_type: 1,
+      context_token: 'ctx-stale',
+      item_list: [{ type: 1, text_item: { text: '被墓碑拦下的旧消息' } }],
+    }])
+    expect(replayed).toBeNull()
+    expect(readBindingInternal(dir, 1).sendContextToken, '旧帧不能覆盖当前上下文').toBe('ctx-current')
+
+    const mixed = insertClawbotMessages(dir, 1, [
+      {
+        message_id: 501,
+        message_type: 1,
+        context_token: 'ctx-stale-again',
+        item_list: [{ type: 1, text_item: { text: '旧消息' } }],
+      },
+      {
+        message_id: 502,
+        message_type: 1,
+        context_token: 'ctx-new',
+        item_list: [{ type: 1, text_item: { text: '新消息' } }],
+      },
+    ])
+    expect(mixed?.delta).toBe(1)
+    expect(readBindingInternal(dir, 1).sendContextToken, '只取真正新增入站消息的令牌').toBe('ctx-new')
+  })
+
+  it('清空并重启通道后：墓碑和裁剪后的水位都阻止旧消息复活、也不覆盖当前令牌', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const first = createClawbotRemotes(rc)
+    await first.createClawbotBindQr({ slot: 1 })
+
+    const pending: Array<{ buf: string, resolve: (u: IlinkUpdates) => void }> = []
+    ilink.updatesImpl = (buf) => new Promise<IlinkUpdates>((resolve) => { pending.push({ buf, resolve }) })
+    ilink.pollQueue.push(CONFIRMED)
+    await first.getClawbotBindState({ slot: 1 })
+    await flush()
+    expect(pending).toHaveLength(1)
+
+    const initial = textBatch(7301, '清空前的旧消息', 'cursor-before-clear')
+    initial.messages[0]!.context_token = 'ctx-before-clear'
+    pending[0]?.resolve(initial)
+    await flush()
+    expect(first.listClawbotMessages({ slot: 1 }).total).toBe(1)
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(1)
+
+    first.clearClawbotMessages({ slot: 1 })
+    saveSendContextToken(dir, 'ctx-current', 1)
+    expect(readBindingInternal(dir, 1).clearWatermark).toBe(7301)
+
+    const second = createClawbotRemotes(rc)
+    second.ensureClawbotChannel()
+    await flush()
+    expect(pending, '重启后的通道应拿到新的 getUpdates 槽位').toHaveLength(3)
+
+    const tombstoneReplay = textBatch(7301, '清空前的旧消息', '')
+    tombstoneReplay.messages[0]!.context_token = 'ctx-stale-tombstone'
+    pending[2]?.resolve(tombstoneReplay)
+    await flush()
+    expect(second.listClawbotMessages({ slot: 1 }).total, '墓碑必须拦截旧消息').toBe(0)
+    expect(readBindingInternal(dir, 1).sendContextToken, '旧帧不得覆盖当前令牌').toBe('ctx-current')
+
+    const { sessionEpoch } = readBindingInternal(dir, 1)
+    withWritableDb(clawbotDbPath(dir), (db) => {
+      db.prepare('DELETE FROM clawbot_message_tombstone WHERE slot = ? AND session_epoch = ? AND msg_id = ?')
+        .run(1, sessionEpoch, 7301)
+    })
+    expect(pending, '第一次重放后循环应继续等待下一批').toHaveLength(4)
+
+    const watermarkReplay = textBatch(7301, '墓碑裁剪后的旧消息重放', '')
+    watermarkReplay.messages[0]!.context_token = 'ctx-stale-watermark'
+    pending[3]?.resolve(watermarkReplay)
+    await flush()
+
+    expect(second.listClawbotMessages({ slot: 1 }).total, '墓碑裁剪后仍要由水位拦截').toBe(0)
+    expect(readBindingInternal(dir, 1).sendContextToken, '仅水位拦截时也不能覆盖令牌').toBe('ctx-current')
+    expect(events.filter(event => event.name === 'clawbot/message'), '两次重放都不得发消息事件').toHaveLength(1)
+  })
+
+  it('清空与在途 getUpdates 竞态：同一响应 [旧,新] 只落新、只 consider 新并发一次事件', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    r.setClawbotInstanceConfig({ slot: 1, autoReply: true, splitReply: false })
+    await r.createClawbotBindQr({ slot: 1 })
+
+    const pending: Array<{ buf: string, resolve: (u: IlinkUpdates) => void }> = []
+    ilink.updatesImpl = (buf) => new Promise<IlinkUpdates>((resolve) => { pending.push({ buf, resolve }) })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    expect(pending).toHaveLength(1)
+
+    insertClawbotMessage(dir, {
+      slot: 1,
+      ts: Date.now(),
+      direction: 'in',
+      content: '清空前的旧消息',
+      msgId: 7001,
+    })
+    r.clearClawbotMessages({ slot: 1 })
+    const mixed = textBatch(7001, '清空前的旧消息', 'cursor-stale-clear')
+    mixed.messages.push({
+      message_id: 7002,
+      message_type: 1,
+      item_list: [{ type: 1, text_item: { text: '清空后的新消息' } }],
+    })
+    pending[0]?.resolve(mixed)
+    await flush()
+
+    expect(r.listClawbotMessages({ slot: 1 }).items.map(message => message.content)).toEqual(['清空后的新消息'])
+    expect(listRecoverableReplyRuns(dir, Date.now() + 2_000, 20), '只允许 clear 后的新消息触发自动回复').toHaveLength(1)
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(1)
+    expect(readBindingInternal(dir, 1).syncBuf, '成功处理混合批次后推进游标').toBe('cursor-stale-clear')
+    expect(r.getClawbotBinding({ slot: 1 }).channel.running).toBe(true)
+
+    expect(pending).toHaveLength(2)
+    pending[1]?.resolve(textBatch(7003, '后续新消息', 'cursor-after-clear'))
+    await flush()
+
+    expect(r.listClawbotMessages({ slot: 1 }).items.map(message => message.content)).toEqual(['后续新消息', '清空后的新消息'])
+    expect(readBindingInternal(dir, 1).syncBuf).toBe('cursor-after-clear')
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(2)
+  })
+
+  it('解绑与在途 getUpdates 竞态：旧批次不污染会话；重新绑定后的新批次正常落库', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+
+    const pending: Array<{ buf: string, resolve: (u: IlinkUpdates) => void }> = []
+    ilink.updatesImpl = (buf) => new Promise<IlinkUpdates>((resolve) => { pending.push({ buf, resolve }) })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    expect(pending).toHaveLength(1)
+
+    r.unbindClawbot({ slot: 1 })
+    pending[0]?.resolve(textBatch(7101, '解绑前的旧消息', 'cursor-stale-unbind'))
+    await flush()
+
+    expect(r.listClawbotMessages({ slot: 1 }).total).toBe(0)
+    expect(events.filter(event => event.name === 'clawbot/message')).toEqual([])
+    expect(readBindingInternal(dir, 1).syncBuf, '解绑后旧游标不得写回').toBe('')
+    expect(r.getClawbotBinding({ slot: 1 }).channel.running).toBe(false)
+
+    await r.createClawbotBindQr({ slot: 1 })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    expect(pending).toHaveLength(2)
+
+    pending[1]?.resolve(textBatch(7102, '重新绑定后的新消息', 'cursor-after-rebind'))
+    await flush()
+
+    expect(r.listClawbotMessages({ slot: 1 }).items.map(message => message.content)).toEqual(['重新绑定后的新消息'])
+    expect(readBindingInternal(dir, 1).syncBuf).toBe('cursor-after-rebind')
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(1)
+  })
+
+  it('删除实例与在途 getUpdates 竞态：晚到旧批次不复活实例、不落库、不发事件', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+
+    let release: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { release = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+
+    r.deleteClawbotInstance({ slot: 1 })
+    release(textBatch(7201, '删除前的旧消息', 'cursor-stale-delete'))
+    await flush()
+
+    expect(bindingCount(dir, 1), '晚到响应不得复活实例').toBe(0)
+    expect(r.listClawbotMessages({ slot: 1 }).total).toBe(0)
+    expect(events.filter(event => event.name === 'clawbot/message')).toEqual([])
+  })
+
   it('可发可收：发送成功才落 out 行 + 事件；令牌来自最近入站消息', async () => {
     const { rc, ilink, events } = makeHarness()
     const r = createClawbotRemotes(rc)
@@ -318,7 +683,9 @@ describe('clawbot remotes（iLink 已接入）', () => {
     // 发送成功：上游拿到的 to=微信用户、正文原文、令牌 ctx-21；行落 out、事件带 id。
     const ok = await r.sendClawbotMessage({ text: '好的，收到' })
     expect(ok).toEqual({ ok: true, id: 2 })
-    expect(ilink.sendCalls).toEqual([{ toUserId: 'user-1', text: '好的，收到', contextToken: 'ctx-21' }])
+    expect(ilink.sendCalls).toHaveLength(1)
+    expect(ilink.sendCalls[0]).toMatchObject({ toUserId: 'user-1', text: '好的，收到', contextToken: 'ctx-21' })
+    expect(ilink.sendCalls[0]?.clientId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     const rows = r.listClawbotMessages().items
     expect(rows[0]).toMatchObject({ direction: 'out', content: '好的，收到', msgType: 'text' })
     expect(events.at(-1)).toEqual({ name: 'clawbot/message', args: { lastId: 2, delta: 1, slot: 1 } })
@@ -337,6 +704,176 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(failed.error).toContain('发送失败：')
     expect(r.listClawbotMessages().total).toBe(2)
     expect((await r.sendClawbotMessage({ text: '   ' })).error).toBe('消息内容为空')
+  })
+
+  it('发送 in-flight 时清空会话：上游成功但不回填 out 行、不发 message 事件', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+    let releaseUpdates: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { releaseUpdates = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    releaseUpdates({
+      ret: 0,
+      errCode: 0,
+      errMsg: '',
+      buf: 'cursor-clear-inflight',
+      longPollingTimeoutMs: 0,
+      messages: [{
+        message_id: 601,
+        message_type: 1,
+        context_token: 'ctx-clear-inflight',
+        item_list: [{ type: 1, text_item: { text: '先建立会话' } }],
+      }],
+    })
+    await flush()
+
+    let releaseSend: (result: IlinkSendResult) => void = () => { /* 占位 */ }
+    ilink.sendImpl = () => new Promise<IlinkSendResult>((resolve) => { releaseSend = resolve })
+    const sending = r.sendClawbotMessage({ text: '清空前的发送', slot: 1 })
+    await flush()
+    expect(ilink.sendCalls).toHaveLength(1)
+    const eventsBeforeClear = events.filter(event => event.name === 'clawbot/message').length
+
+    r.clearClawbotMessages({ slot: 1 })
+    releaseSend({ ret: 0, errMsg: '' })
+    const result = await sending
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: '上游已接收，但本地会话已清理/实例已变化，未回填',
+    })
+    expect(bindingCount(dir, 1)).toBe(1)
+    expect(r.listClawbotMessages({ slot: 1 }).total).toBe(0)
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(eventsBeforeClear)
+    expect(ilink.sendCalls).toHaveLength(1)
+  })
+
+  it('发送 in-flight 时重新取码：扫码代次不影响回填，仍只落一条 out 且只发一次事件', async () => {
+    const { rc, ilink, events } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+    let releaseUpdates: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { releaseUpdates = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    releaseUpdates({
+      ret: 0,
+      errCode: 0,
+      errMsg: '',
+      buf: 'cursor-regenerate-inflight',
+      longPollingTimeoutMs: 0,
+      messages: [{
+        message_id: 603,
+        message_type: 1,
+        context_token: 'ctx-regenerate-inflight',
+        item_list: [{ type: 1, text_item: { text: '先建立会话' } }],
+      }],
+    })
+    await flush()
+
+    const messageEventsBefore = events.filter(event => event.name === 'clawbot/message').length
+    let releaseSend: (result: IlinkSendResult) => void = () => { /* 占位 */ }
+    ilink.sendImpl = () => new Promise<IlinkSendResult>((resolve) => { releaseSend = resolve })
+    const sending = r.sendClawbotMessage({ text: '取码期间发送', slot: 1 })
+    await flush()
+    expect(ilink.sendCalls).toHaveLength(1)
+
+    await expect(r.createClawbotBindQr({ slot: 1 })).resolves.toMatchObject({ token: 'qr-tok-2' })
+    releaseSend({ ret: 0, errMsg: '' })
+    const result = await sending
+
+    expect(result.ok).toBe(true)
+    expect(r.listClawbotMessages({ slot: 1 }).items.filter(message => message.direction === 'out')).toHaveLength(1)
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(messageEventsBefore + 1)
+    expect(ilink.sendCalls).toHaveLength(1)
+  })
+
+  it('发送 in-flight 时完成同 slot 重绑：旧会话结果不得写进新绑定', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+    let releaseUpdates: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { releaseUpdates = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    releaseUpdates({
+      ret: 0,
+      errCode: 0,
+      errMsg: '',
+      buf: 'cursor-before-rebind',
+      longPollingTimeoutMs: 0,
+      messages: [{
+        message_id: 604,
+        message_type: 1,
+        context_token: 'ctx-before-rebind',
+        item_list: [{ type: 1, text_item: { text: '先建立会话' } }],
+      }],
+    })
+    await flush()
+
+    const eventsBefore = events.filter(event => event.name === 'clawbot/message').length
+    let releaseSend: (result: IlinkSendResult) => void = () => { /* 占位 */ }
+    ilink.sendImpl = () => new Promise<IlinkSendResult>((resolve) => { releaseSend = resolve })
+    const sending = r.sendClawbotMessage({ text: '旧绑定发送', slot: 1 })
+    await flush()
+    expect(ilink.sendCalls).toHaveLength(1)
+
+    await r.createClawbotBindQr({ slot: 1 })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    releaseSend({ ret: 0, errMsg: '' })
+    const result = await sending
+
+    expect(result.ok).toBe(false)
+    expect(r.listClawbotMessages({ slot: 1 }).items.filter(message => message.direction === 'out')).toEqual([])
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(eventsBefore)
+    expect(readBindingInternal(dir, 1).sessionEpoch).toBe(2)
+  })
+
+  it('上游成功后本地回填失败：返回可读错误、不向 RPC 抛异常、不重复出网', async () => {
+    const { rc, ilink, events, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    await r.createClawbotBindQr({ slot: 1 })
+    let releaseUpdates: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { releaseUpdates = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot: 1 })
+    await flush()
+    releaseUpdates({
+      ret: 0,
+      errCode: 0,
+      errMsg: '',
+      buf: 'cursor-backfill-fail',
+      longPollingTimeoutMs: 0,
+      messages: [{
+        message_id: 602,
+        message_type: 1,
+        context_token: 'ctx-backfill-fail',
+        item_list: [{ type: 1, text_item: { text: '先建立会话' } }],
+      }],
+    })
+    await flush()
+    const eventsBeforeSend = events.filter(event => event.name === 'clawbot/message').length
+    withWritableDb(clawbotDbPath(dir), (db) => {
+      db.exec(`CREATE TRIGGER fail_outbound_backfill BEFORE INSERT ON clawbot_message
+        WHEN NEW.direction = 'out'
+        BEGIN SELECT RAISE(FAIL, 'simulated backfill failure'); END`)
+    })
+
+    const result = await r.sendClawbotMessage({ text: '会回填失败', slot: 1 })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('上游已接收、本地状态未知/回填失败')
+    expect(result.error).toContain('simulated backfill failure')
+    expect(ilink.sendCalls, '回填失败不得触发第二次上游发送').toHaveLength(1)
+    expect(r.listClawbotMessages({ slot: 1 }).items.filter(message => message.direction === 'out')).toEqual([])
+    expect(events.filter(event => event.name === 'clawbot/message')).toHaveLength(eventsBeforeSend)
   })
 
   it('取媒体：图片给内联 dataUrl、其余给本机路径；超大图不给 dataUrl；错误原样透传', async () => {
@@ -445,5 +982,193 @@ describe('clawbot remotes（iLink 已接入）', () => {
     const snap = r.bindClawbotWechat({ wxid: 'wxid_a' })
     expect(snap.binding.status).toBe('bound')
     expect(readBindingInternal(dir).binding.status).toBe('bound')
+  })
+
+  it('解绑调用 autoReply.discard：目标 slot 的排队 run 不再执行，其他 slot 不受影响', async () => {
+    const { r, dir, slot1, slot2, run1, run2, asks, runner } = makeDiscardScenario()
+
+    r.unbindClawbot({ slot: slot1 })
+
+    expect(runner.pending(), '只清理目标 slot 的排队任务').toBe(1)
+    await vi.advanceTimersByTimeAsync(10)
+    await flush()
+    expect(asks).not.toContain(slot1)
+    expect(asks).not.toContain(slot2)
+    expect(readReplyRun(dir, run1.id)).toBeNull()
+    expect(readReplyRun(dir, run2.id)?.run.status).toBe('skipped')
+  })
+
+  it('清空会话调用 autoReply.discard：目标 slot 的排队 run 不再执行，其他 slot 不受影响', async () => {
+    const { r, dir, slot1, slot2, run1, run2, asks, runner } = makeDiscardScenario()
+
+    r.clearClawbotMessages({ slot: slot1 })
+
+    expect(runner.pending(), '只清理目标 slot 的排队任务').toBe(1)
+    await vi.advanceTimersByTimeAsync(10)
+    await flush()
+    expect(asks).not.toContain(slot1)
+    expect(asks).not.toContain(slot2)
+    expect(readReplyRun(dir, run1.id)).toBeNull()
+    expect(readReplyRun(dir, run2.id)?.run.status).toBe('skipped')
+  })
+
+  it('删除实例调用 autoReply.discard：目标 slot 的排队 run 不再执行，其他 slot 不受影响', async () => {
+    const { r, dir, slot1, slot2, run1, run2, asks, runner } = makeDiscardScenario()
+
+    r.deleteClawbotInstance({ slot: slot1 })
+
+    expect(runner.pending(), '只清理目标 slot 的排队任务').toBe(1)
+    await vi.advanceTimersByTimeAsync(10)
+    await flush()
+    expect(asks).not.toContain(slot1)
+    expect(asks).not.toContain(slot2)
+    expect(readReplyRun(dir, run1.id)).toBeNull()
+    expect(readReplyRun(dir, run2.id)?.run.status).toBe('skipped')
+  })
+
+  it('生命周期清理：解绑删除该实例的 reply run/outbox，保留接入会话', () => {
+    const { rc, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    const slot = 1
+    const seeded = seedReplyState(dir, slot)
+    expect(seeded.clientIds.every(Boolean)).toBe(true)
+    expect(replyStateCounts(dir, slot)).toEqual({ runs: 1, parts: 2 })
+
+    r.unbindClawbot({ slot })
+
+    expect(replyStateCounts(dir, slot), '解绑后 run 与 outbox 都必须是空的').toEqual({ runs: 0, parts: 0 })
+  })
+
+  it('生命周期清理：清空会话删除该实例的 reply run/outbox', () => {
+    const { rc, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    const slot = 1
+    seedReplyState(dir, slot)
+
+    r.clearClawbotMessages({ slot })
+
+    expect(replyStateCounts(dir, slot), '清空会话后 run 与 outbox 都必须是空的').toEqual({ runs: 0, parts: 0 })
+  })
+
+  it('生命周期清理：删除实例删除该实例的 reply run/outbox', () => {
+    const { rc, dir } = makeHarness()
+    const r = createClawbotRemotes(rc)
+    const slot = r.createClawbotInstance().slot
+    seedReplyState(dir, slot)
+    expect(replyStateCounts(dir, slot)).toEqual({ runs: 1, parts: 2 })
+
+    r.deleteClawbotInstance({ slot })
+
+    expect(replyStateCounts(dir, slot), '删除实例后 run 与 outbox 都必须是空的').toEqual({ runs: 0, parts: 0 })
+  })
+
+  it('自动回复端到端：入站文本走 durable run/outbox，分段发送复用 outbox clientId，最终 run done', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { rc, ilink, dir } = makeHarness()
+    const slot = 1
+    const asks: Array<{ slot: number, text: string, kbId: number | null }> = []
+    const r = createClawbotRemotes({
+      ...rc,
+      ask: async (askedSlot, text, kbId) => {
+        asks.push({ slot: askedSlot, text, kbId })
+        return {
+          ok: true,
+          answer: '第一段：明早九点出发去机场。\n\n第二段：到了之后我把车牌发给你。',
+        }
+      },
+    })
+
+    r.setClawbotInstanceConfig({ slot, autoReply: true, splitReply: true })
+    await r.createClawbotBindQr({ slot })
+    let release: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { release = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot })
+    await flush()
+
+    release({
+      ret: 0,
+      errCode: 0,
+      errMsg: '',
+      buf: 'cursor-auto-reply',
+      longPollingTimeoutMs: 0,
+      messages: [{
+        message_id: 501,
+        message_type: 1,
+        context_token: 'ctx-auto-reply',
+        item_list: [{ type: 1, text_item: { text: '明天几点走？' } }],
+      }],
+    })
+    await flush()
+
+    const pending = listRecoverableReplyRuns(dir, Date.now())
+    expect(pending, '入站文本应先落一条 durable run').toHaveLength(1)
+    const runId = pending[0]?.id ?? 0
+    expect(readReplyRun(dir, runId)?.parts, '模型生成前还没有 outbox').toEqual([])
+
+    await vi.advanceTimersByTimeAsync(1_100)
+    await flush()
+
+    expect(asks).toEqual([{ slot, text: '明天几点走？', kbId: null }])
+    expect(ilink.sendCalls.map(call => call.text)).toEqual([
+      '第一段：明早九点出发去机场。',
+      '第二段：到了之后我把车牌发给你。',
+    ])
+    expect(ilink.sendCalls.every(call => call.clientId.trim() !== '')).toBe(true)
+
+    const finished = readReplyRun(dir, runId)
+    expect(finished?.run.status).toBe('done')
+    expect(finished?.parts.map(part => part.status)).toEqual(['sent', 'sent'])
+    expect(ilink.sendCalls.map(call => call.clientId)).toEqual(finished?.parts.map(part => part.clientId))
+    expect(r.checkClawbotEnv({ slot }).autoReplyStats).toMatchObject({
+      pending: 0,
+      inFlight: false,
+      stage: 'idle',
+      generationSucceeded: 1,
+      generationFailed: 0,
+      sendSucceeded: 2,
+      sendFailedPermanently: 0,
+      lastError: null,
+    })
+  })
+
+  it('durable 重试：本地已有同 clientId 消息 ⇒ 不再请求 iLink，只补记 outbox sent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { rc, ilink, dir } = makeHarness()
+    const slot = 1
+    const r = createClawbotRemotes(rc)
+    r.setClawbotInstanceConfig({ slot, autoReply: true, splitReply: false })
+    await r.createClawbotBindQr({ slot })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot })
+    await flush()
+
+    const now = Date.now()
+    const run = enqueueOrMergeReplyRun(dir, {
+      slot,
+      targetMessageId: 801,
+      question: '本地已回填',
+      debounceMs: 0,
+      now,
+    })
+    const [part] = saveReplyParts(dir, run.id, ['只应补记，不应重发'], now)
+    const localId = insertClawbotMessage(dir, {
+      slot,
+      ts: now,
+      direction: 'out',
+      msgType: 'text',
+      content: part?.text ?? '',
+      clientId: part?.clientId ?? '',
+    })
+    expect(localId).not.toBeNull()
+
+    r.ensureClawbotChannel()
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+
+    const finished = readReplyRun(dir, run.id)
+    expect(finished?.run.status).toBe('done')
+    expect(finished?.parts[0]).toMatchObject({ status: 'sent', sentMessageId: localId })
+    expect(ilink.sendCalls, '本地已证明发送成功时不得再出网').toHaveLength(0)
   })
 })

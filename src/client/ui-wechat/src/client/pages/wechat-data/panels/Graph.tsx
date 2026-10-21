@@ -7,7 +7,7 @@
  * 与「笔记库」同属知识库入口，由 WechatDataPanel 的 MergedSections 分段切换。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiDeleteNote, apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph, apiGetNotes } from '../api.ts'
+import { apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
@@ -15,7 +15,13 @@ import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DE
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { GraphRail } from './GraphRail.tsx'
 import { GraphExportMenu } from './GraphExportMenu.tsx'
+import { GraphNodeMenuController } from './GraphNodeMenuController.tsx'
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas.tsx'
+import { useGraphNodeMenu } from './use-graph-node-menu.ts'
+import { useGraphNoteActions } from './use-graph-note-actions.ts'
+import { useGraphNodeSearch } from './use-graph-node-search.ts'
+import { useGraphDetailRequest } from './use-graph-detail-request.ts'
+import { useGraphExportActions } from './use-graph-export-actions.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import { PanelHeader, Select } from '../ui/kit.tsx'
 import { toggleThemeMode, useThemeMode } from '../theme.ts'
@@ -145,23 +151,26 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     prevPhoneRef.current = isPhone
     setRailOpen(!isPhone)
   }, [isPhone])
-  const [search, setSearch] = useState('')
   // 固定节点(画布锚点;布局/拖拽联动都不移动)
   const [pinned, setPinned] = useState<Set<string>>(() => new Set())
   // 圈子聚焦:选中一个圈子高亮,其余淡出(null=关闭)
   const [focusCommunity, setFocusCommunity] = useState<number | null>(null)
   const [hoverCommunity, setHoverCommunity] = useState<number | null>(null)
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null)
+  const nodeMenu = useGraphNodeMenu()
+  /** 详情页切换请求：节点已选中但右侧停在参数页时，仍然能通过右键“查看详情”切回去。 */
+  const detailRequest = useGraphDetailRequest()
   // 选中详情头像
   const [selAvatar, setSelAvatar] = useState('')
   /** 数据已加载标记(稳定引用,避免 load 依赖 data 造成无限重拉循环)。 */
   const dataRef = useRef<GraphSnapshot | null>(data)
+  /** 搜索词状态必须先于切库 effect 声明；命中列表仍依赖稍后构建的图。 */
+  const [searchText, setSearchText] = useState('')
+  const clearSearch = useCallback((): void => { setSearchText('') }, [])
   // 海报导出选择:风格 + 比例
   const [posterStyle, setPosterStyle] = useState<'light' | 'dark' | 'neon'>('dark')
   const [posterRatio, setPosterRatio] = useState<'1:1' | '3:4' | '16:9'>('1:1')
-  const [exporting, setExporting] = useState(false)
   const canvasRef = useRef<GraphCanvasHandle | null>(null)
-
   const patch = (p: Partial<GraphSettings>): void => { setSettings(prev => ({ ...prev, ...p })) }
   /** 切换全局主题（不再是图谱私有轴）。颜色过渡的触发条件 / 时长 / 缓动 / 范围见 theme.ts 文件头。 */
   const toggleTheme = (): void => { toggleThemeMode() }
@@ -214,8 +223,9 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     setFocusCommunity(null)
     setHoverCommunity(null)
     setHoverNodeId(null)
-    setSearch('')
-  }, [kbId])
+    nodeMenu.clear()
+    clearSearch()
+  }, [kbId, nodeMenu.clear, clearSearch])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
@@ -314,33 +324,25 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     patch({ depth: 1 })
     canvasRef.current?.centerOn(id)
   }, [])
+  const openNodeDetails = useCallback((node: GNode): void => {
+    setSelectedId(node.id)
+    setRailOpen(true)
+    detailRequest.show()
+  }, [detailRequest])
   const setMode = (mode: GraphSettings['mode']): void => {
     setFocusCommunity(null)
     patch({ mode })
   }
 
-  // ── 知识笔记的增删改 ──────────────────────────────────────────────
   // 图谱快照只带 excerpt（列表用），编辑需要完整正文，因此打开编辑器时按 id 回查一次 getNotes。
-  const openNoteEditor = useCallback(async (id: number): Promise<void> => {
-    try {
-      const list = await apiGetNotes(kbId)
-      const n = list.items.find(x => x.id === id)
-      setNoteEditor(n ? { open: true, id: n.id, title: n.title, body: n.body } : { open: true, id })
-    } catch {
-      setNoteEditor({ open: true, id })
-    }
-  }, [kbId])
-
-  const removeNote = useCallback(async (id: number): Promise<void> => {
-    try {
-      const r = await apiDeleteNote(kbId, id)
-      if (!r.ok) { setError(r.error ?? '删除笔记失败'); return }
-      if (selectedId === 'note:' + id) setSelectedId(null)
-      await loadKnowledge()
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }, [kbId, selectedId, loadKnowledge])
+  const { openEditor: openNoteEditor, remove: removeNote } = useGraphNoteActions({
+    kbId,
+    selectedId,
+    onSelectedCleared: () => { setSelectedId(null) },
+    onReload: loadKnowledge,
+    onError: setError,
+    onEditor: setNoteEditor,
+  })
 
   /** 侧栏只列「最相关」的几篇：按连接度降序，避免把几百篇笔记铺进窄栏。 */
   const topNotes = useMemo(() => (knowledge?.notes ?? [])
@@ -348,61 +350,18 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     .sort((a, b) => (b.backLinks + b.outLinks) - (a.backLinks + a.outLinks) || b.updatedAt - a.updatedAt)
     .slice(0, 6), [knowledge])
 
-  // 搜索候选(名称/username 包含)
-  const searchTerms = search.trim().toLowerCase()
-  const searchHits = useMemo(() => {
-    if (!searchTerms) return []
-    return graph.nodes.filter(n => n.label.toLowerCase().includes(searchTerms) || n.id.toLowerCase().includes(searchTerms)).slice(0, 8)
-  }, [graph, searchTerms])
+  const nodeSearch = useGraphNodeSearch(graph, searchText, setSearchText, clearSearch)
 
   const locateSearch = (id: string): void => {
     setSelectedId(id)
     canvasRef.current?.centerOn(id)
   }
 
-  const doExportSvg = async (): Promise<void> => {
-    try {
-      const svg = await canvasRef.current?.exportSvg() ?? ''
-      if (!svg) { console.warn('SVG 导出失败:画布未就绪'); return }
-      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = '社交关系图谱.svg'
-      a.click()
-      setTimeout(() => { URL.revokeObjectURL(url) }, 2000)
-    } catch (e) {
-      console.error('SVG 导出失败', e)
-    }
-  }
-  const doExportPng = async (): Promise<void> => {
-    try {
-      const url = await canvasRef.current?.exportPng(posterRatio, posterStyle)
-      if (!url) return
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `社交图谱-${posterStyle}-${posterRatio}.png`
-      a.click()
-    } catch (e) {
-      console.error('PNG 导出失败', e)
-    }
-  }
-  /** 导出朋友圈海报:头像图谱 + 排版(风格/比例即时生效)。 */
-  const doExportPoster = async (): Promise<void> => {
-    setExporting(true)
-    try {
-      const url = await canvasRef.current?.renderPoster(posterRatio, posterStyle)
-      if (!url) return
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `社交图谱-${posterStyle}-${posterRatio}.jpg`
-      a.click()
-    } catch (e) {
-      console.error('海报导出失败', e)
-    } finally {
-      setExporting(false)
-    }
-  }
+  const { exporting, exportSvg: doExportSvg, exportPng: doExportPng, exportPoster: doExportPoster } = useGraphExportActions({
+    canvasRef,
+    posterStyle,
+    posterRatio,
+  })
 
   const focusCommunityRow = focusCommunity !== null ? communities.find(c => c.id === focusCommunity) ?? null : null
 
@@ -420,21 +379,21 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               且最多给出 8 个候选 —— 不说清会让用户以为「搜不到 = 数据里没有」。 */}
           <input
             type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value) }}
+            value={nodeSearch.search}
+            onChange={(e) => { nodeSearch.setSearch(e.target.value) }}
             placeholder="搜索节点…"
             title="仅搜索当前图谱的节点（好友 / 群组 / 知识各自独立），最多给出 8 个候选"
             aria-label="搜索节点（仅当前图谱，最多 8 个候选）"
             className={css.searchInput}
           />
-              {searchHits.length > 0 && (
+              {nodeSearch.hits.length > 0 && (
                 <div className={css.searchDrop}>
-                  {searchHits.map(hit => (
-                    <button key={hit.id} type="button" className={css.searchHit} onClick={() => { locateSearch(hit.id); setSearch('') }}>{hit.label}<span className={css.searchHitId}>{hit.id}</span></button>
+                  {nodeSearch.hits.map(hit => (
+                    <button key={hit.id} type="button" className={css.searchHit} onClick={() => { locateSearch(hit.id); nodeSearch.clear() }}>{hit.label}<span className={css.searchHitId}>{hit.id}</span></button>
                   ))}
                 </div>
               )}
-              {searchTerms && searchHits.length === 0 && (
+              {nodeSearch.terms && nodeSearch.hits.length === 0 && (
                 <div className={css.searchDrop}><span className={css.searchEmpty}>无匹配节点</span></div>
               )}
             </div>
@@ -510,7 +469,24 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 onHoverNode={setHoverNodeId}
                 onOpenChat={onOpenChat}
                 onFocusNode={focusNode}
+                onNodeContextMenu={(id, position) => {
+                  const node = graph.nodes.find(n => n.id === id)
+                  if (node) nodeMenu.open(node, position)
+                }}
                 hideMinimap={railOpen}
+              />
+              <GraphNodeMenuController
+                target={nodeMenu.target}
+                knowledge={isKnowledgeMode}
+                pinned={pinned}
+                onOpenChat={onOpenChat}
+                onClose={nodeMenu.close}
+                onDetails={openNodeDetails}
+                onFocus={focusNode}
+                onTogglePin={togglePin}
+                onEditNote={(id) => { void openNoteEditor(id) }}
+                onCreateNote={() => { setNoteEditor({ open: true }) }}
+                onDeleteNote={(node) => { void removeNote(Number(node.id.slice(5)), node.label) }}
               />
               <div className={css.legend}>
                 {isKnowledgeMode ? (
@@ -559,6 +535,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               graph={graph}
               isKnowledgeMode={isKnowledgeMode}
               selected={selected}
+              detailRequest={detailRequest.request}
               selAvatar={selAvatar}
               selectedGroupNames={selectedGroupNames}
               selectedClass={selectedClass}
@@ -580,7 +557,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               setFocusCommunity={setFocusCommunity}
               setHoverCommunity={setHoverCommunity}
               openNoteEditor={(id) => { if (id !== undefined) void openNoteEditor(id) }}
-              removeNote={(id) => { void removeNote(id) }}
+              removeNote={(id, title) => { void removeNote(id, title) }}
               newNote={() => { setNoteEditor({ open: true }) }}
               relayout={() => { canvasRef.current?.relayout() }}
               clearPinned={() => { setPinned(new Set()) }}
@@ -606,4 +583,3 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     </div>
   )
 }
-

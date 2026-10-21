@@ -171,6 +171,32 @@ describe('任务名与写接口入参', () => {
     expect(input.name).toBe('项目回款')
   })
 
+  it('群聊勾选「仅匹配@我的文本」时提交 true；未勾选/单聊始终为 false', () => {
+    const group = buildTaskInfoInput({
+      chat: GROUP,
+      target: { username: 'wxid_b', name: '李四' },
+      keywords: ['合同'],
+      photoLimit: 0,
+      mentionMeOnly: true,
+    })
+    expect(group.mentionMeOnly).toBe(true)
+    expect(buildTaskInfoInput({
+      chat: GROUP,
+      target: { username: 'wxid_b', name: '李四' },
+      keywords: ['合同'],
+      photoLimit: 0,
+    }).mentionMeOnly).toBe(false)
+
+    const privateInput = buildTaskInfoInput({
+      chat: PRIVATE,
+      target: null,
+      keywords: ['合同'],
+      photoLimit: 0,
+      mentionMeOnly: true,
+    })
+    expect(privateInput.mentionMeOnly, '单聊没有群 @ 列表，不能保存 true').toBe(false)
+  })
+
   it('关键词是拷贝：调用方之后改原数组不会污染入参', () => {
     const keywords = ['报价']
     const input = buildTaskInfoInput({ chat: PRIVATE, keywords, photoLimit: 0 })
@@ -228,6 +254,7 @@ describe('表单初值', () => {
       keywords: [],
       keywordDraft: '',
       photoLimit: 3,
+      mentionMeOnly: false,
       name: '',
       targetUsername: '',
       targetName: '',

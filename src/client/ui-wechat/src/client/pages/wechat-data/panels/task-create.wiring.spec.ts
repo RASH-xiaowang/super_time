@@ -86,7 +86,7 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(DIALOG, '没有把后端 error 文案显示出来').toContain('result.error')
     expect(DIALOG, '错误行没有 role=alert').toContain('role="alert"')
     expect(DIALOG, '没有把 api 层广播后的成功态画出来').toContain('已加入任务信息 · 待完善')
-    expect(DIALOG, '成功文案没讲清"完善回调地址后启用"').toContain('完善回调地址后启用')
+    expect(DIALOG, '成功文案没讲清"完善 Webhook 地址后启用"').toContain('完善 Webhook 地址后启用')
   })
 
   it('弹窗覆盖产品语义：关键词 / 目标用户 / 照片数量 / 待完善', () => {
@@ -107,6 +107,16 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(LOGIC, '单个关键词上限不是 64').toContain('KEYWORD_MAX_LEN = 64')
     expect(LOGIC, '成员列表没有"超过 200 提示搜索"的门槛').toContain('MEMBER_FILTER_THRESHOLD = 200')
     expect(LOGIC, '成员列表没有"最多画 50 行"的上限').toContain('MEMBER_RENDER_LIMIT = 50')
+  })
+
+  it('群聊创建支持勾选「仅匹配@我的文本」，且单聊逻辑强制不生效', () => {
+    expect(DIALOG, '创建弹窗没有渲染「仅匹配@我的文本」').toContain('仅匹配@我的文本')
+    expect(DIALOG, '勾选项没有只在群聊显示').toContain('{isGroup && (')
+    expect(DIALOG, '勾选项没有把原生 checkbox 变化交给回调').toContain('onChange={(e) => { onChange(e.target.checked) }}')
+    expect(DIALOG, '勾选项没有接到表单状态').toContain('onMentionMeOnlyChange={(mentionMeOnly) => { setForm((prev) => ({ ...prev, mentionMeOnly })) }}')
+    expect(DIALOG, '提交入参没有携带 mentionMeOnly').toContain('mentionMeOnly: form.mentionMeOnly')
+    expect(LOGIC, '单聊没有被强制归一为 false').toContain("mentionMeOnly: isGroup && options.mentionMeOnly === true")
+    expect(CSS, '勾选项缺少样式').toContain('.mentionRow {')
   })
 
   it('弹窗自己带 Esc 关闭、焦点陷阱与遮罩判空', () => {

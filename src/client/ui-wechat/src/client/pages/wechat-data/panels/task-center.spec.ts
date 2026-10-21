@@ -11,23 +11,32 @@ import { describe, expect, it } from 'vitest'
 import type { TaskInfo, TaskTriggerRecord } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   addKeywords,
+  appendTriggerPage,
   callbackHostname,
   callbackStatusMeta,
   callbackUrlLabel,
+  capTriggerSearchInput,
   dispatchResultText,
   draftFromTask,
+  exceedsBatchLimit,
+  filterTasksBySearch,
   filterTriggersByTask,
   triggerTimeText,
   isHttpCallbackUrl,
   lastTriggeredLabel,
+  needsTriggerPageBackfill,
   nextExpandedTaskId,
   nextSelectedTaskId,
+  normalizeTriggerSearch,
   photoLimitLabel,
   plainText,
   recordImageCountLabel,
   recordSummary,
+  retainSelectedIds,
   removeKeyword,
   scanResultText,
+  selectAllIds,
+  selectionCountText,
   splitKeywordInput,
   taskCounts,
   taskSaveInput,
@@ -35,6 +44,9 @@ import {
   taskStatusMeta,
   triggerCountLabel,
   triggerPaneTitle,
+  TRIGGER_SEARCH_MAX,
+  TASK_BATCH_DELETE_MAX,
+  toggleSelectedId,
   validateTaskDraft,
   visibleKeywords,
   type TaskEditDraft,
@@ -52,6 +64,7 @@ function makeTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
     targetName: '目标用户',
     keywords: ['报价'],
     photoLimit: 0,
+    mentionMeOnly: false,
     callbackUrl: '',
     status: 'incomplete',
     createdAt: 1,
@@ -145,7 +158,7 @@ describe('文本摘要与关键词折叠', () => {
   })
 })
 
-describe('回调地址校验与展示', () => {
+describe('Webhook 地址校验与展示', () => {
   it('只认 http/https，且必须能解析出主机名', () => {
     expect(isHttpCallbackUrl('http://example.com/hook')).toBe(true)
     expect(isHttpCallbackUrl(' https://example.com:8443/hook ')).toBe(true)
@@ -155,12 +168,12 @@ describe('回调地址校验与展示', () => {
     expect(isHttpCallbackUrl('')).toBe(false)
   })
 
-  it('主机名展示（含端口）；空/非法回落「未填回调」', () => {
+  it('主机名展示（含端口）；空/非法回落「未填 Webhook」', () => {
     expect(callbackHostname('https://example.com:8443/a/b')).toBe('example.com:8443')
     expect(callbackHostname('')).toBe('')
     expect(callbackHostname('not a url')).toBe('')
     expect(callbackUrlLabel('https://example.com/x')).toBe('example.com')
-    expect(callbackUrlLabel('')).toBe('未填回调')
+    expect(callbackUrlLabel('')).toBe('未填 Webhook')
   })
 })
 
@@ -188,6 +201,67 @@ describe('右栏过滤与选中一致性', () => {
   })
 })
 
+describe('左栏任务搜索', () => {
+  const searchableTasks: readonly TaskInfo[] = [
+    makeTask({ id: 1, name: '客户报价跟进', keywords: ['报价', 'Quote'], chatName: '报价群', targetName: '客户经理' }),
+    makeTask({ id: 2, name: '上线通知', keywords: ['Deploy'], chatName: '发布群', targetName: '运维值班' }),
+  ]
+
+  it('任务名 / 关键词 / 会话 / 对象均可搜，大小写不敏感', () => {
+    expect(filterTasksBySearch(searchableTasks, '报价').map((t) => t.id)).toEqual([1])
+    expect(filterTasksBySearch(searchableTasks, 'QUOTE').map((t) => t.id)).toEqual([1])
+    expect(filterTasksBySearch(searchableTasks, '发布群').map((t) => t.id)).toEqual([2])
+    expect(filterTasksBySearch(searchableTasks, '运维').map((t) => t.id)).toEqual([2])
+  })
+
+  it('空搜索保持原数组身份；无命中返回空数组', () => {
+    expect(filterTasksBySearch(searchableTasks, '   ')).toBe(searchableTasks)
+    expect(filterTasksBySearch(searchableTasks, '不存在的任务')).toEqual([])
+  })
+})
+
+describe('触发记录搜索词归一', () => {
+  it('提交前 trim 并把长度限制到与后端相同的 100 字', () => {
+    expect(TRIGGER_SEARCH_MAX).toBe(100)
+    expect(normalizeTriggerSearch('  报价  ')).toBe('报价')
+    expect(normalizeTriggerSearch(`  ${'a'.repeat(120)}  `)).toBe('a'.repeat(100))
+    expect(normalizeTriggerSearch('   ')).toBe('')
+  })
+
+  it('输入框保留原文但同样截到上限（不提前 trim）', () => {
+    expect(capTriggerSearchInput('  报价 ')).toBe('  报价 ')
+    expect(capTriggerSearchInput('b'.repeat(120))).toBe('b'.repeat(100))
+  })
+})
+
+describe('触发记录分页归并', () => {
+  it('下一页按 id 去重，并按 triggeredAt DESC、id DESC 归并', () => {
+    const current = [
+      makeRecord({ id: 9, triggeredAt: 3000 }),
+      makeRecord({ id: 7, triggeredAt: 2000 }),
+    ]
+    const next = [
+      makeRecord({ id: 9, triggeredAt: 3000 }),
+      makeRecord({ id: 8, triggeredAt: 2000 }),
+      makeRecord({ id: 6, triggeredAt: 1000 }),
+    ]
+    expect(appendTriggerPage(current, next).map((r) => r.id)).toEqual([9, 8, 7, 6])
+  })
+
+  it('空页或整页都是重复项时保留原数组，不制造多余渲染', () => {
+    const current = [makeRecord({ id: 9 })]
+    expect(appendTriggerPage(current, [])).toBe(current)
+    expect(appendTriggerPage(current, [makeRecord({ id: 9 })])).toBe(current)
+  })
+
+  it('多页静默刷新需要补齐：只有超过一页时才续取后续页', () => {
+    expect(needsTriggerPageBackfill(100, 100)).toBe(false)
+    expect(needsTriggerPageBackfill(101, 100)).toBe(true)
+    expect(needsTriggerPageBackfill(0, 100)).toBe(false)
+    expect(needsTriggerPageBackfill(120, 0)).toBe(false)
+  })
+})
+
 describe('任务计数', () => {
   it('按状态分组，并把 triggerCount 累加', () => {
     const counts = taskCounts([
@@ -200,6 +274,33 @@ describe('任务计数', () => {
   })
 })
 
+describe('批量选择与删除上限', () => {
+  it('单个切换返回新 Set，不修改原选择；再次切换取消', () => {
+    const original = new Set([1, 2])
+    const added = toggleSelectedId(original, 3)
+    expect([...added]).toEqual([1, 2, 3])
+    expect([...original]).toEqual([1, 2])
+    expect([...toggleSelectedId(added, 2)]).toEqual([1, 3])
+  })
+
+  it('全选只覆盖当前可见 id；刷新后清掉不存在的选择', () => {
+    expect([...selectAllIds([4, 2])]).toEqual([4, 2])
+    const selected = new Set([1, 2, 3])
+    expect([...retainSelectedIds(selected, [2, 3, 4])]).toEqual([2, 3])
+    const unchanged = new Set([1])
+    expect(retainSelectedIds(unchanged, [1]), '未变化时保留原引用').toBe(unchanged)
+    expect(retainSelectedIds(new Set(), [1])).toEqual(new Set())
+  })
+
+  it('计数文案与 500 条上限同源；超过上限必须整单拒绝', () => {
+    expect(selectionCountText(3)).toBe('已选 3 条')
+    expect(selectionCountText(-1)).toBe('已选 0 条')
+    expect(TASK_BATCH_DELETE_MAX).toBe(500)
+    expect(exceedsBatchLimit(TASK_BATCH_DELETE_MAX)).toBe(false)
+    expect(exceedsBatchLimit(TASK_BATCH_DELETE_MAX + 1)).toBe(true)
+  })
+})
+
 describe('编辑草稿：生成、校验、保存入参', () => {
   it('草稿从任务快照复制关键词（改草稿不会污染任务）', () => {
     const task = makeTask({ keywords: ['报价', '合同'] })
@@ -208,15 +309,15 @@ describe('编辑草稿：生成、校验、保存入参', () => {
     expect(task.keywords).toEqual(['报价', '合同'])
   })
 
-  it('校验：任务名非空 / 关键词至少 1 个 / 回调可空但填了必须 http(s)', () => {
-    const base: TaskEditDraft = { name: '  ', keywords: [], photoLimit: 0, callbackUrl: '' }
+  it('校验：任务名非空 / 关键词至少 1 个 / Webhook 可空但填了必须 http(s)', () => {
+    const base: TaskEditDraft = { name: '  ', keywords: [], photoLimit: 0, mentionMeOnly: false, callbackUrl: '' }
     expect(validateTaskDraft(base)).toEqual({ name: '任务名不能为空', keywords: '至少填写 1 个触发关键词' })
     expect(validateTaskDraft({ ...base, name: '任务', keywords: ['x'] })).toEqual({})
-    expect(validateTaskDraft({ name: '任务', keywords: ['  '], photoLimit: 0, callbackUrl: '' }))
+    expect(validateTaskDraft({ name: '任务', keywords: ['  '], photoLimit: 0, mentionMeOnly: false, callbackUrl: '' }))
       .toEqual({ keywords: '至少填写 1 个触发关键词' })
-    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, callbackUrl: 'ftp://x' }))
-      .toEqual({ callbackUrl: '回调地址必须是 http/https 链接' })
-    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, callbackUrl: 'https://x.test/h' })).toEqual({})
+    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, mentionMeOnly: false, callbackUrl: 'ftp://x' }))
+      .toEqual({ callbackUrl: 'Webhook 地址必须是 http/https 链接' })
+    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, mentionMeOnly: false, callbackUrl: 'https://x.test/h' })).toEqual({})
   })
 
   it('关键词拆分：逗号（半/全角）、分号、顿号、换行都能分隔，空串丢掉', () => {
@@ -233,29 +334,40 @@ describe('编辑草稿：生成、校验、保存入参', () => {
 
   it('保存入参带 id 与会话/目标字段，关键词/回调 trim，照片数夹回 0–9', () => {
     const task = makeTask({ id: 7, chatUsername: 'wxid_chat', chatName: '群名', targetUsername: 'wxid_t', targetName: '对象' })
-    const input = taskSaveInput(task, { name: '  新名  ', keywords: [' 报价 '], photoLimit: 5, callbackUrl: ' https://x.test/h ' })
+    const input = taskSaveInput(task, { name: '  新名  ', keywords: [' 报价 '], photoLimit: 5, mentionMeOnly: true, callbackUrl: ' https://x.test/h ' })
     expect(input.id).toBe(7)
     expect(input.name).toBe('新名')
     expect(input.keywords).toEqual(['报价'])
     expect(input.photoLimit, '2/5 这类原来没有档位的数现在应当原样保留').toBe(5)
+    expect(input.mentionMeOnly, '群聊编辑保存必须携带勾选状态').toBe(true)
     expect(input.callbackUrl).toBe('https://x.test/h')
     expect(input.chatUsername).toBe('wxid_chat')
     expect(input.chatName).toBe('群名')
     expect(input.targetUsername).toBe('wxid_t')
     expect(input.targetName).toBe('对象')
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 100, callbackUrl: '' }).photoLimit).toBe(9)
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: -3, callbackUrl: '' }).photoLimit).toBe(0)
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 1.7, callbackUrl: '' }).photoLimit).toBe(1)
+    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 100, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(9)
+    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: -3, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(0)
+    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 1.7, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(1)
   })
 
   it('照片数量校验：0–9 的整数，越界/小数被拦下（输入框之外的兜底）', () => {
-    const base: TaskEditDraft = { name: '任务', keywords: ['x'], photoLimit: 3, callbackUrl: '' }
+    const base: TaskEditDraft = { name: '任务', keywords: ['x'], photoLimit: 3, mentionMeOnly: false, callbackUrl: '' }
     expect(validateTaskDraft(base)).toEqual({})
     expect(validateTaskDraft({ ...base, photoLimit: 0 })).toEqual({})
     expect(validateTaskDraft({ ...base, photoLimit: 9 })).toEqual({})
     expect(validateTaskDraft({ ...base, photoLimit: 10 }).photoLimit).toContain('0–9')
     expect(validateTaskDraft({ ...base, photoLimit: -1 }).photoLimit).toContain('0–9')
     expect(validateTaskDraft({ ...base, photoLimit: 1.5 }).photoLimit).toContain('整数')
+  })
+
+  it('草稿保留「仅匹配 @我」；单聊保存时强制归一为 false', () => {
+    const groupTask = makeTask({ chatType: 'group', mentionMeOnly: true })
+    const groupDraft = draftFromTask(groupTask)
+    expect(groupDraft.mentionMeOnly).toBe(true)
+    expect(taskSaveInput(groupTask, groupDraft).mentionMeOnly).toBe(true)
+
+    const privateTask = makeTask({ chatType: 'private', targetUsername: 'wxid_chat', targetName: '会话名' })
+    expect(taskSaveInput(privateTask, { ...draftFromTask(privateTask), mentionMeOnly: true }).mentionMeOnly).toBe(false)
   })
 })
 

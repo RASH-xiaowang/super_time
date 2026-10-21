@@ -54,13 +54,13 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
   // 就是在这个内联循环外面挂了一层"命中即 continue"。**行数只许变小。**
   'src/backend/wechat-data/src/query/overview-insights.ts  computeOverviewInsights  252',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  727',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  687',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
   // 725 → 513；同日补上「始终可见的折叠按钮」（浮层收起后唯一的入口）⇒ 513 → 523；
   // 同日小地图让位（浮层展开时隐藏，`hideMinimap={railOpen}`）⇒ 523 → 524；
   // 同日把按钮/浮层移进 `.stage`（absolute 缺定位祖先会飘到视口顶部、压住手机档搜索条）
   // + 跨断点同步展开态 ⇒ 524 → 541。棘轮只许变小，拆完要回来改数字。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  526',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  497',
   // 2026-10-19：会话列表接键盘导航（onKeyDown + data-session-row），压缩同处注释抵消
   // 一行增量 ⇒ 376 → 375。棘轮只许变小，拆完要回来改数字。
   // 2026-10-19（微信化改版）：会话壳去掉霓虹背景/装饰层，375 → 370。成果记账。
@@ -147,7 +147,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-18：筛选区拆成两排（分类段条搬成 RecordKindTabs）⇒ 276。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  276',
   'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  255',
+  // 2026-10-21：通用收藏详情抽成 `favorites-detail.tsx`，FavoritesPanel 已低于 250 阈值 ⇒ 移出棘轮。
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',
   // 2026-10-08：图片那一路不再拿 CDN 原始地址当 src（那是 WxIsaac64 密文，原理上渲染不出来），
   // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。

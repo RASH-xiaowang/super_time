@@ -66,11 +66,11 @@ export declare function saveInstanceConfig(decryptedDir: string, slot: number, p
  */
 export declare function createClawbotInstance(decryptedDir: string): ClawbotBinding;
 /**
- * 删除一个实例：绑定行 + 配置 + **该实例的接入会话**一起删（返回删掉的条数）。
+ * 删除一个实例及其全部 slot 级状态。
  *
- * 为什么连会话一起删：会话正文按 slot 存，实例没了之后那些行**再也显示不出来**
- * （列表按实例遍历），留着只是一块谁都看不见的占用。界面必须在确认框里说清
- * 「将删除该实例的 N 条接入会话」，不许静默丢数据。
+ * 绑定、配置、消息、tombstone、回复 run/outbox 与 token 统计必须同生共死：
+ * 任一步失败都要整体回滚，避免留下无法再从实例列表访问的孤儿行。界面必须在
+ * 确认框里说清「将删除该实例的 N 条接入会话」，不许静默丢数据。
  * @param decryptedDir - 解密数据根。
  * @param slot - 实例编号。
  * @returns 删掉的消息条数（供界面如实回报）。

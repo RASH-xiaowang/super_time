@@ -164,10 +164,10 @@ export async function apiGetVoiceInfo(options: { username: string; localId: numb
 }
 /**
  * Fetch a voice message as an inline-playable wav data URL.
- * @param options - Query options: username and message localId.
+ * @param options - 消息用 username + localId；收藏语音用 svrId。
  * @returns VoiceDataUrlResult.
  */
-export async function apiGetVoiceDataUrl(options: { username: string; localId: number }): Promise<VoiceDataUrlResult> {
+export async function apiGetVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<VoiceDataUrlResult> {
   return unwrap(await remote().getVoiceDataUrl(options))
 }
 /**

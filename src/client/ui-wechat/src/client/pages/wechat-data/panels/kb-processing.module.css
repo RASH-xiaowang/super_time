@@ -1,0 +1,200 @@
+/**
+ * 文档处理实时状态面板。
+ *
+ * 从 `kbfiles.module.css` 拆出：抽屉里的两类状态共享一块紧凑面板。
+ * 响应式判据用容器查询而不是窗口媒体查询 —— 抽屉宽度固定，但宿主面板的
+ * 侧栏折叠仍可能改变工具栏里那个入口的可用宽度。
+ */
+
+.processing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 3%, var(--nm-bg-card));
+  container-type: inline-size;
+  container-name: kbprocessing;
+}
+
+.processingHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+}
+
+.processingTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  font-size: var(--nm-dense-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.processingPulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+}
+.processingPulse[data-on] {
+  background: var(--nm-cyan);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  animation: kbProcessingPulse 1.8s ease-out infinite;
+}
+@keyframes kbProcessingPulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.processingMeta,
+.processingCount {
+  font-size: var(--nm-dense-fs-xs);
+  font-weight: 400;
+  color: var(--nm-text-3);
+  white-space: nowrap;
+}
+
+.processingActions { display: flex; gap: var(--nm-dense-g2); flex-wrap: wrap; }
+
+/* 工具栏入口：状态点 + 文案 + 紧凑计数。按钮由 kit 统一给焦点环与禁用态，
+   这里只负责让计数在窄工具栏里也不把按钮撑破。 */
+.entryPulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+}
+.entryPulse[data-on] {
+  background: var(--nm-cyan);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  animation: kbProcessingPulse 1.8s ease-out infinite;
+}
+.entryBadge {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-3);
+  font-size: var(--nm-dense-fs-xs);
+  white-space: nowrap;
+}
+.entryBadge[data-tone='bad'] { color: var(--nm-danger-text); }
+
+.processingSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g1);
+  min-width: 0;
+}
+
+.processingLabel {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g2);
+  flex-wrap: wrap;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-2);
+}
+summary.processingLabel {
+  cursor: pointer;
+  list-style-position: inside;
+}
+summary.processingLabel::marker { color: var(--nm-text-3); }
+
+.processingProgress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+}
+
+.processingBar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--nm-cyan);
+  transition: width 0.25s ease;
+}
+
+.processingList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.processingItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px var(--nm-dense-g3);
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: var(--nm-r-xs);
+}
+.processingItem[data-running] { background: var(--nm-bg-hover); }
+
+.processingFile {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.processingFile:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.processingFileName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-1);
+}
+
+.processingState {
+  flex: 0 0 auto;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+  white-space: nowrap;
+}
+.processingState[data-status='running'] { color: var(--nm-cyan-text); }
+.processingState[data-status='ok'] { color: var(--nm-success-text); }
+.processingState[data-status='failed'] { color: var(--nm-danger-text); }
+
+.processingDetail,
+.processingError,
+.processingMore {
+  grid-column: 1 / -1;
+  padding-left: var(--nm-dense-g2);
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+  word-break: break-word;
+}
+.processingError { color: var(--nm-danger-text); }
+
+@container kbprocessing (max-width: 420px) {
+  .processingHead { align-items: flex-start; }
+  .processingTitle { flex-wrap: wrap; }
+  .processingMeta { white-space: normal; }
+  .processingItem { grid-template-columns: minmax(0, 1fr); }
+  .processingState { grid-column: 1; }
+}

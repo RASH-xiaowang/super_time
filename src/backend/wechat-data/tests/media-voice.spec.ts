@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveVoiceInfo } from '../src/query/media-voice.ts'
+import { voiceDataBySvr } from '../src/query/voice.ts'
 
 /** Scratch dirs removed after each test. */
 const scratch: string[] = []
@@ -55,5 +56,13 @@ describe('resolveVoiceInfo', () => {
     const r = resolveVoiceInfo(root, 'nobody@chatroom', 99)
     expect(r.available).toBe(false)
     expect(r.error).toMatch(/未找到语音数据/)
+  })
+})
+
+describe('voiceDataBySvr', () => {
+  it('收藏语音可直接按 svrId 找到 VoiceInfo，不依赖会话或消息 localId', () => {
+    const root = makeMediaDb()
+    const svrId = '6939560591294896016'
+    expect(voiceDataBySvr(root, svrId)).toEqual(Buffer.from([0x02, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
   })
 })

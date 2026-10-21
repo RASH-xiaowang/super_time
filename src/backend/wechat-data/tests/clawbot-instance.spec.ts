@@ -16,10 +16,12 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DEFAULT_CLAWBOT_SLOT, clawbotDbPath } from '../src/query/clawbot/clawbot-db.ts'
+import { DEFAULT_CLAWBOT_SLOT, clawbotDbPath, ensureClawbotStore } from '../src/query/clawbot/clawbot-db.ts'
 import { completeBinding, readBinding, readBindingInternal, renameBinding, unbindBinding } from '../src/query/clawbot/clawbot-binding.ts'
-import { insertClawbotMessage, listClawbotMessages } from '../src/query/clawbot/clawbot-message.ts'
+import { insertClawbotMessage, listClawbotMessages, suppressClawbotMessageIds } from '../src/query/clawbot/clawbot-message.ts'
 import { createClawbotInstance, defaultInstanceConfig, deleteClawbotInstance, listClawbotInstances, readInstanceConfig, saveInstanceConfig } from '../src/query/clawbot/clawbot-instance.ts'
+import { enqueueOrMergeReplyRun, saveReplyParts } from '../src/query/clawbot/clawbot-reply-store.ts'
+import { addClawbotTokenUsage } from '../src/query/clawbot/clawbot-token.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -46,6 +48,44 @@ function raw<T>(dir: string, sql: string, ...params: Array<string | number>): T 
 }
 
 const CREDS = { botToken: 'bt', ilinkBotId: 'ib', ilinkUserId: 'iu', baseUrl: 'https://x' }
+
+/** 某实例在删除涉及的全部 slot 级表中的行数。 */
+function slotCounts(dir: string, slot: number): Record<string, number> {
+  const count = (table: string): number =>
+    Number(raw<{ n?: number }>(dir, `SELECT COUNT(*) AS n FROM ${table} WHERE slot = ?`, slot)?.n ?? -1)
+  return {
+    binding: count('clawbot_binding'),
+    config: count('clawbot_instance_config'),
+    messages: count('clawbot_message'),
+    tombstones: count('clawbot_message_tombstone'),
+    tokenUsage: count('clawbot_token_usage'),
+    replyRuns: count('clawbot_reply_run'),
+    replyOutbox: count('clawbot_reply_outbox'),
+  }
+}
+
+/** 给一个实例造齐删除必须触达的全部状态。 */
+function seedDeletionSurface(dir: string, slot: number): void {
+  saveInstanceConfig(dir, slot, { autoReply: true, kbEnabled: true, kbId: slot + 10 })
+  const messageId = insertClawbotMessage(dir, {
+    slot,
+    ts: 1000 + slot,
+    direction: 'in',
+    content: `来自 ${slot}`,
+    msgType: 'text',
+    msgId: 100 + slot,
+  })
+  if (messageId === null) throw new Error('测试消息未落库')
+  suppressClawbotMessageIds(dir, slot, [900 + slot])
+  addClawbotTokenUsage(dir, slot, { inputTokens: 7, outputTokens: 3 })
+  const run = enqueueOrMergeReplyRun(dir, {
+    slot,
+    targetMessageId: messageId,
+    question: `问题 ${slot}`,
+    debounceMs: 0,
+  })
+  saveReplyParts(dir, run.id, [`回复 ${slot}`])
+}
 
 describe('clawbot 多实例：slot 与配置', () => {
   it('库不存在：空列表且**不带** readError；配置读回默认（自动回复关、知识库关）', () => {
@@ -128,23 +168,75 @@ describe('clawbot 多实例：slot 与配置', () => {
     expect(bySlot.get(2)).toBe('客服号')
   })
 
-  it('删实例：连带删它自己的会话与配置，**别的实例一条不动**', () => {
+  it('删实例：七类 slot 状态一起删，**别的实例一条不动**', () => {
     const dir = root()
     createClawbotInstance(dir) // slot 2
-    for (const slot of [1, 2]) {
-      insertClawbotMessage(dir, { slot, ts: 1000 + slot, direction: 'in', content: `来自 ${slot}`, msgType: 'text' })
-    }
-    saveInstanceConfig(dir, 2, { autoReply: true, kbEnabled: true, kbId: 5 })
+    seedDeletionSurface(dir, 1)
+    seedDeletionSurface(dir, 2)
 
     const r = deleteClawbotInstance(dir, 1)
     expect(r.removedMessages, '删掉的条数要如实回报（界面在确认框里要说这个数）').toBe(1)
-    expect(Number(raw<{ n?: number }>(dir, 'SELECT COUNT(*) AS n FROM clawbot_binding WHERE slot = 1')?.n ?? -1),
-      '实例 1 的绑定行必须被删（COUNT 恒返回一行，要读它的 n）').toBe(0)
+    expect(slotCounts(dir, 1), '实例 1 的绑定/配置/消息/墓碑/token/回复状态必须全部清空').toEqual({
+      binding: 0,
+      config: 0,
+      messages: 0,
+      tombstones: 0,
+      tokenUsage: 0,
+      replyRuns: 0,
+      replyOutbox: 0,
+    })
     expect(readInstanceConfig(dir, 1).config, '实例 1 的配置行要一起删（否则新实例可能捡到残留）')
       .toEqual(defaultInstanceConfig(1))
+    expect(slotCounts(dir, 2), '实例 2 的七类状态都不许被删').toEqual({
+      binding: 1,
+      config: 1,
+      messages: 1,
+      tombstones: 1,
+      tokenUsage: 1,
+      replyRuns: 1,
+      replyOutbox: 1,
+    })
+    expect(readInstanceConfig(dir, 2).config, '实例 2 的配置值也要原样保留')
+      .toEqual({ slot: 2, autoReply: true, kbEnabled: true, kbId: 12, systemPrompt: '', splitReply: true })
     expect(listClawbotMessages(dir, { slot: 2 }).total, '实例 2 的会话不许被删').toBe(1)
-    expect(readInstanceConfig(dir, 2).config, '实例 2 的配置不许被删')
-      .toEqual({ slot: 2, autoReply: true, kbEnabled: true, kbId: 5, systemPrompt: '', splitReply: true })
+  })
+
+  it('删实例中途失败：七类状态全部回滚，不留半删除窗口', () => {
+    const dir = root()
+    createClawbotInstance(dir) // slot 2
+    seedDeletionSurface(dir, 1)
+    seedDeletionSurface(dir, 2)
+    const beforeTarget = slotCounts(dir, 2)
+    const beforeOther = slotCounts(dir, 1)
+
+    const db = new DatabaseSync(clawbotDbPath(dir))
+    db.exec(`CREATE TRIGGER fail_instance_delete
+      BEFORE DELETE ON clawbot_binding
+      WHEN OLD.slot = 2
+      BEGIN
+        SELECT RAISE(ABORT, 'delete blocked');
+      END`)
+    db.close()
+
+    expect(() => deleteClawbotInstance(dir, 2)).toThrow(/delete blocked/)
+    expect(slotCounts(dir, 2), '失败后目标实例的所有关联行必须原样保留').toEqual(beforeTarget)
+    expect(slotCounts(dir, 1), '回滚不得影响别的实例').toEqual(beforeOther)
+  })
+
+  it('删除唯一实例后保持空库：后续 schema 初始化不得重建默认实例', () => {
+    const dir = root()
+    deleteClawbotInstance(dir, 1)
+
+    expect(listClawbotInstances(dir, { since: 0 }).instances, '删空后的实例列表必须为空').toEqual([])
+    expect(Number(raw<{ n?: number }>(dir, 'SELECT COUNT(*) AS n FROM clawbot_binding')?.n ?? -1),
+      '绑定表里不能留下自愈补出的默认行').toBe(0)
+
+    ensureClawbotStore(dir)
+    ensureClawbotStore(dir)
+
+    expect(listClawbotInstances(dir, { since: 0 }).instances, '任意 schema 写路径重入后仍应保持空库').toEqual([])
+    expect(Number(raw<{ n?: number }>(dir, 'SELECT COUNT(*) AS n FROM clawbot_binding')?.n ?? -1),
+      '持久初始化标记必须阻止默认实例被再次补出').toBe(0)
   })
 
   it('slot **不复用**：删掉 2 之后再建，拿到的是 3（否则新实例会捡到残留配置）', () => {

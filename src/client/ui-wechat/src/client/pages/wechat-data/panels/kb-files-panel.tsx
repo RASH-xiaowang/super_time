@@ -9,8 +9,8 @@
 
 import clsx from 'clsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiAddKbFiles, apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbFiles, apiGetKbVectorIndex, apiOpenFileDialog, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, runtimeCapabilities, writeRenderCache } from '../api.ts'
-import { useFileActions, useFileActionState, useLoadAllChunks } from './kb-save-note.ts'
+import { apiAddKbFiles, apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbVectorIndex, apiOpenFileDialog, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, runtimeCapabilities, writeRenderCache } from '../api.ts'
+import { useKbFileDetailActions, useLoadAllChunks } from './kb-save-note.ts'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import type { KbFileMeta, KbSearchResult, KbVectorIndexView } from '../types.ts'
 import { KB_ACCEPTED_EXTS } from '../types.ts'
@@ -20,8 +20,11 @@ import { ListSkeleton, useTransientNotice } from './hooks.tsx'
 import { formatRelative } from './kb-model.ts'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
 import { useKbIndexBuild } from './kb-index-build.ts'
-import { KbParseQueueLine } from './kb-queue-line.tsx'
 import { KbFileDetailPane, type KbFileReaderState } from './kb-files-detail.tsx'
+import { KbProcessingEntry } from './kb-processing-panel.tsx'
+import { KbBatchActionButtons } from './kb-batch-actions.tsx'
+import { useKbFilesBatch } from './use-kb-files-batch.ts'
+import { useKbFilesSnapshot } from './use-kb-files-snapshot.ts'
 import css from './kbfiles.module.css'
 import kitCss from '../ui/kit.module.css'
 import { AddReport, FILTERS, KbTitleRow, PARSE_LOOK, PARSE_POLL_MAX_MS, PARSE_POLL_MS, SnippetText, StateFilter, baseName, cachedFiles, formatBytes, indexLabel, reasonText } from './kb-files-support.tsx'
@@ -76,18 +79,10 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
     return name ? `「${name}」` : ''
   }, [kbs, kbId])
 
-  const [snapshot, setSnapshot] = useState<{ items: readonly KbFileMeta[]; total: number }>(
-    () => cachedFiles(kbId) ?? { items: [], total: 0 },
-  )
-  /**
-   * 「文件库读不到」的原因（N1）。
-   * 后端读失败时仍返回空列表（面板不该整块崩掉），但带上 `readError`：
-   * 没有它，「库被占用 / 打不开」与「确实一个文件都没有」在界面上完全一样 ——
-   * 用户会照「还没有文件」去排查，方向全错。
-   */
-  const [readError, setReadError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  /** 文件列表快照（N1：读失败必须与「确实没有文件」分开）。 */
+  const {
+    snapshot, setSnapshot, readError, loading, error, setError, now, load,
+  } = useKbFilesSnapshot(kbId)
   const [query, setQuery] = useState('')
   const debounced = useDebouncedValue(query, 300)
   /** 去掉首尾空白后的关键词：空串表示「没有在搜」，是这一屏唯一的判据。 */
@@ -98,16 +93,9 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   const [search, setSearch] = useState<KbSearchResult | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
-  /** 相对时间的基准：随每次加载更新。用固定值而非逐帧 `Date.now()`，避免列表时间在滚动时抖动。 */
-  const [now, setNow] = useState(() => Date.now())
   const [adding, setAdding] = useState(false)
   /** 正在被改的那一行（删除 / 开关）：期间禁用它的按钮，避免同一行并发两次变更。 */
   const [busyId, setBusyId] = useState<number | null>(null)
-  /**
-   * 摘要/存笔记的忙碌态与失败原因（被隐私闸拦下 / 模型没配 / 该文件不许出网）。
-   * 与 `busyId` 分开：摘要慢得多，不该顺手禁用删除按钮。错误按文件 id 存，见 hook 里的说明。
-   */
-  const { busyId: busySummaryId, setBusyId: setBusySummaryId, errors: summaryErrors, setError: setSummaryError } = useFileActionState()
   /**
    * 本库的向量索引状态（`getKbVectorIndex`）。
    *
@@ -120,33 +108,6 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   const [report, setReport] = useState<AddReport | null>(null)
   const { notice, flash, hold } = useTransientNotice()
   const confirm = useConfirm()
-
-  /**
-   * 重新读取文件列表。
-   * @param opts.silent - 后台读取（进度轮询用）：**不碰 `loading`**。前台读取要用它驱动
-   *   骨架屏与「刷新」按钮上的「读取中…」，轮询若也去动它，那个按钮就会每 1.5 秒
-   *   闪一次（看起来像卡住了）。
-   */
-  const load = useCallback(async (opts?: { silent?: boolean }): Promise<void> => {
-    const silent = opts?.silent === true
-    if (!silent) setLoading(true)
-    try {
-      const r = await apiGetKbFiles(kbId)
-      setSnapshot({ items: r.items, total: r.total })
-      setReadError(r.readError ?? null)
-      setNow(Date.now())
-      // 读失败时**不写**渲染缓存：把「读不到」的那份空列表存进去，下次打开会先渲染
-      // 「还没有文件」，而缓存本身看不出来源 —— 正好复现 N1 要消除的那个假象。
-      if (!r.readError) writeRenderCache(kbCacheKey('kb-files', kbId), { items: r.items, total: r.total })
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      if (!silent) setLoading(false)
-    }
-  }, [kbId])
-
-  useEffect(() => { void load() }, [load])
 
   /**
    * 正文检索。有关键词就跑一次，关键词变了就再跑（`debounced` 已做过 300ms 收敛）。
@@ -229,11 +190,9 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   // 只重取数据而留着这几样，用户会在乙库里看到「高亮着甲库那个文件」；若那个 id
   // 恰好也存在，详情区显示的就是别的库的文件。真数据紧接着由上面的 `[load]` 取回。
   useEffect(() => {
-    setSnapshot(cachedFiles(kbId) ?? { items: [], total: 0 })
     setSelectedId(null)
     setQuery('')
     setFilter('all')
-    setReadError(null)
     setReport(null)
     // 检索结果也属于「上一个库」：留着它，切库后会在乙库的界面里看到甲库的命中。
     setSearch(null)
@@ -243,6 +202,9 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
 
   const files = snapshot.items
   const total = snapshot.total
+  const batchJobs = useKbFilesBatch(kbId, files, {
+    flash, hold, confirm, reload: useCallback(() => load({ silent: true }), [load]),
+  })
 
   /**
    * 「有没有还在解析的文件」的指纹（只有集合变了才变）。
@@ -433,6 +395,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
     }
   }, [flash, kbId, load])
 
+
   /**
    * 从知识库里删掉一个文件。
    *
@@ -495,18 +458,15 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    * `reader` 的镜像，供 `loadChunks` 的循环里读「用户是不是已经切走了」。
    *
    * 为什么不用 `reader` 本身：`loadChunks` 的依赖里放 `reader` 会让它的身份每轮都变，
-   * 而它又是那个 `useEffect([selectedId, loadChunks])` 的依赖 —— 等于每轮重读一次正文，
-   * 无限循环。用 ref 读最新值，依赖保持 `[kbId]` 不变。
+   * 详情区也会跟着无效重渲染。用 ref 读最新值，回调身份保持稳定。
    */
   const readerRef = useRef<KbFileReaderState | null>(null)
   readerRef.current = reader
 
-  /**
-   * 摘要与「存为笔记」两个动作。**摘要是一条出网调用**（发的是该文件前 8,000 字正文）。
-   *
-   * 实现搬到 `kb-save-note.ts` 的 `useFileActions`（单函数行数棘轮）。
-   */
-  const { runSummary, saveAsNote } = useFileActions(kbId, { setBusyId: setBusySummaryId, setError: setSummaryError, flash, reload: load })
+  const {
+    busySummaryId, busyEntityId, summaryErrors, entityErrors,
+    runSummary, saveAsNote, extractEntities,
+  } = useKbFileDetailActions(kbId, { flash, reload: load })
   /**
    * 读某个文件的**全部**正文块（自动循环拉完，不用手动点「继续加载」）。
    *
@@ -514,22 +474,15 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    */
   const loadChunks = useLoadAllChunks(kbId, { readerRef, setReader })
 
-  // 默认展开：选中一变就读第一页。`loadChunks` 的身份只在 kbId 变化时变，
-  // 所以切库也会自动重读。
+  // 正文默认收起：选中文件只显示详情，用户点「查看正文」时才加载。
+  // 切到另一个文件时必须清掉上一份正文，否则旧正文会显示在新文件标题下面。
   //
   // ⚠ 依赖里**只能放 `selectedId` 这个原子值，不能放 `selected`**：解析中的文件每
   // `PARSE_POLL_MS` 轮询一次，每次轮询都会重建整个 snapshot，于是 `selected` 每 1.5 秒
-  // 就是一个新引用 —— 依赖它等于「每隔 1.5 秒把正文重读并闪一次加载态」，
-  // 而它在代码评审里看起来完全正常。（笔记库那边的首帧 effect 踩过同一条，注释还留着。）
+  // 就是一个新引用 —— 依赖它等于每轮都误判成「切了文件」。
   useEffect(() => {
-    if (selectedId === null) { setReader(null); return }
-    // 2026-10-17：不再在这里 `setSummaryError(null)` —— 错误已按文件 id 存，
-    // 切文件时自然不串（乙文件不会挂着甲文件的错误）。
-    // 改前靠这个 effect 清全局错误，而 `loadChunks` 依赖 `kbId`、`runSummary` 成功后
-    // 又调 `reload` 重建 snapshot —— 于是「刚设好的错误」被紧随其后的 effect 清掉，
-    // 用户点了「生成摘要」、模型返回空，界面上什么都不显示（用户截图实测）。
-    void loadChunks(selectedId)
-  }, [selectedId, loadChunks])
+    setReader(null)
+  }, [selectedId])
 
   /**
    * 切换一个文件是否参与向量化（出网）。
@@ -594,7 +547,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
               · 描述收进标题的 `title`（悬停即见）—— 它是「第一次用才看一次」的信息，
                 不该每次都占一行；
               · 「已登记 N 个」与索引状态并进标题行，不再单独占工具栏右侧；
-              · 解析队列只在**有活干**时才出现（见 `KbParseQueueLine`）。 */}
+              · 解析与批量进度合并进「文档处理状态」，只在有活干或需处理时出现。 */}
         <PanelHeader
           title={<KbTitleRow visible={visible.length} total={total} index={idx} />}
           actions={(
@@ -607,11 +560,18 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
               <Button
                 variant="ghost"
                 onClick={() => { void runIndex(false) }}
-                disabled={indexing} {...desktopActionProps()}
+                disabled={indexing || batchJobs.runningId !== null} {...desktopActionProps()}
                 title="把本库参与语义检索的文件正文发给向量模型，建/补齐向量索引（会出网）"
               >
                 {indexing ? '建索引中…' : '语义索引'}
               </Button>
+              <KbBatchActionButtons
+                run={batchJobs.run}
+                runningId={batchJobs.runningId}
+                indexing={indexing}
+                onSummaries={() => { void batchJobs.batchSummaries() }}
+                onEntities={() => { void batchJobs.batchEntities() }}
+              />
               <Button variant="ghost" onClick={() => { void load() }} disabled={loading}>
                 {loading ? '读取中…' : '刷新'}
               </Button>
@@ -644,6 +604,9 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
               </div>
             </>
           )}
+          right={(
+            <KbProcessingEntry files={files} batchJobs={batchJobs} onSelectFile={setSelectedId} />
+          )}
         />
       </div>
 
@@ -658,9 +621,6 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           {kbLabel || '这个库'}的文件列表读取失败（不是「还没有文件」）：{readError}
         </div>
       )}
-
-      {/* W3-7.1：解析队列的一行总结（整块搬去 kb-queue-line.tsx）。 */}
-      <KbParseQueueLine files={files} />
 
       {/* 滚动区：回执、检索结果与主从两栏一起滚（与改前「整块面板滚」的行为一致），
           被吸住的只有上面的页头与工具栏。 */}
@@ -774,10 +734,13 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
             selected={selected}
             busyId={busyId}
             busySummaryId={busySummaryId}
+            busyEntityId={busyEntityId}
             summaryError={selectedId === null ? null : (summaryErrors.get(selectedId) ?? null)}
+            entityError={selectedId === null ? null : (entityErrors.get(selectedId) ?? null)}
             reader={reader}
             now={now}
             onSummarize={runSummary}
+            onExtractEntities={extractEntities}
             onSaveAsNote={saveAsNote}
             onChunks={loadChunks}
             onCloseReader={() => { setReader(null) }}

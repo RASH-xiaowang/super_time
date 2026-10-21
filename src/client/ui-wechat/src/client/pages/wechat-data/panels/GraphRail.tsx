@@ -96,6 +96,13 @@ export interface GraphRailProps {
   isKnowledgeMode: boolean
   /** 当前选中的节点（null = 无）。 */
   selected: GNode | null
+  /**
+   * 外部要求切到详情页的序号。每次“查看节点详情”+1。
+   *
+   * 不能只依赖 `selected`：目标节点已经选中、而用户正停在“图谱参数”页时，
+   * `selected?.id` 没变化，effect 不会重跑，详情按钮看起来就“没反应”。
+   */
+  detailRequest: number
   /** 选中节点的头像 data URL（空串 = 用首字兜底）。 */
   selAvatar: string
   /** 选中节点的共同群名。 */
@@ -139,7 +146,7 @@ export interface GraphRailProps {
   /** 打开笔记编辑器（id 为空 = 新建）。 */
   openNoteEditor: (id?: number) => void
   /** 删除一篇笔记。 */
-  removeNote: (id: number) => void
+  removeNote: (id: number, title?: string) => void
   /** 新建笔记。 */
   newNote: () => void
   /** 重新布局。 */
@@ -166,7 +173,7 @@ const KNOWLEDGE_KINDS = new Set(['note', 'stub', 'file', 'section', 'entity'])
  */
 export function GraphRail(p: GraphRailProps): React.JSX.Element {
   const {
-    isKnowledgeMode, selected, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
+    isKnowledgeMode, selected, detailRequest, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
     communities, focusCommunity, topFriends, topNotes, knowledge, settings, isDefaultSettings, pinned,
     patch, setMode, selectNode, clearSelection, focusNode, togglePin, setFocusCommunity, setHoverCommunity,
     openNoteEditor, removeNote, newNote, relayout, clearPinned, restoreDefaults, runAnimation, onOpenChat, onClose,
@@ -178,6 +185,9 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
    */
   const [view, setView] = useState<'params' | 'detail'>(selected ? 'detail' : 'params')
   useEffect(() => { setView(selected ? 'detail' : 'params') }, [selected?.id])
+  useEffect(() => {
+    if (detailRequest > 0) setView('detail')
+  }, [detailRequest])
 
   return (
     <aside className={css.rail} aria-label="图谱参数">
@@ -312,7 +322,7 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
                 <span className={css.noteMetric}>{n.backLinks} ← / → {n.outLinks}</span>
               </button>
               <button type="button" className={css.noteEdit} onClick={() => { openNoteEditor(n.id) }} aria-label={`编辑 ${n.title}`}>编</button>
-              <button type="button" className={css.noteDel} onClick={() => { removeNote(n.id) }} aria-label={`删除 ${n.title}`}>×</button>
+              <button type="button" className={css.noteDel} onClick={() => { removeNote(n.id, n.title) }} aria-label={`删除 ${n.title}`}>×</button>
             </div>
           ))}
         </div>

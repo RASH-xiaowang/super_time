@@ -1,21 +1,14 @@
+import type { FavItemPart } from '../types.ts';
 /** 收藏类型标签（微信 fav type）。 */
 export declare function favTypeLabel(t: number): string;
-/** One parsed dataitem part of a favorite (text/image/voice/video/link/file). */
-interface FavRawPart {
-    kind: 'text' | 'image' | 'voice' | 'video' | 'link' | 'file';
-    text?: string;
-    md5?: string;
-    url?: string;
-    duration?: number;
-    name?: string;
-    ext?: string;
-    size?: number;
-    sourceName?: string;
-    sourceTime?: string;
-    sourceHead?: string;
-}
+/** One parsed resource part of a favorite (kept open for unknown datatypes). */
+type FavRawPart = FavItemPart;
 interface FavorItem {
     localId: number;
+    /** uint64 字符串，避免 JSON/JS number 丢精度。 */
+    serverId?: string;
+    /** 收藏来源消息/资源 uint64 字符串。 */
+    sourceId?: string;
     type: number;
     typeLabel: string;
     title: string;
@@ -27,20 +20,22 @@ interface FavorItem {
     fromUsr: string;
     chatName: string;
     source: string;
+    /**
+     * 来源头像：本机 data URL、contact 表头像地址，或 32 位头像 MD5。
+     * MD5 由客户端交给 `apiGetSnsImageDataUrl` 解出本机图（与收藏图片同一条缓存链）。
+     */
+    avatar?: string;
     items: FavRawPart[];
 }
 /**
  * Read the favorites list with parsed title/desc/url/source.
  * @param decryptedDir - decrypted data root.
  * @param limit - max rows.
+ * @param q - 关键词：匹配收藏 XML / 来源账号 / 实际发送者。
+ * @param wechatBaseDir - 微信原始账号根目录（仅用于 `temp/head_image` 缓存）。
  * @returns the favorites snapshot.
  */
-export declare function queryFavorites(decryptedDir: string, limit?: number, offset?: number, 
-/**
- * 关键词：匹配 `content`（收藏条目 XML，标题与描述就在里面）/ `fromusr` / `realchatname`。
- * 放在服务端是因为收藏分页只有 120 条一页，客户端过滤永远只搜得到已加载的那一页。
- */
-q?: string): {
+export declare function queryFavorites(decryptedDir: string, limit?: number, offset?: number, q?: string, wechatBaseDir?: string): {
     favorites: FavorItem[];
     total: number;
 };

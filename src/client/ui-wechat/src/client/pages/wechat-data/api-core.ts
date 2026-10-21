@@ -146,6 +146,7 @@ import type {
   TaskCallbackDispatchResult,
   TaskInfoInput,
   TaskInfoMutationResult,
+  TaskBatchMutationResult,
   TaskInfoSnapshot,
   TaskInfoStatus,
   TaskTriggerQuery,
@@ -290,6 +291,10 @@ export interface WechatRemote {
   saveTaskInfo(options: TaskInfoInput): Promise<RemoteResult<TaskInfoMutationResult>>
   /** 删除任务信息（触发记录保留）。 */
   deleteTaskInfo(options: { id: number }): Promise<RemoteResult<TaskInfoMutationResult>>
+  /** 批量删除任务信息（触发记录保留）。 */
+  deleteTaskInfos(options: { ids: number[] }): Promise<RemoteResult<TaskBatchMutationResult>>
+  /** 批量删除任务触发记录（后端重算任务统计）。 */
+  deleteTaskTriggers(options: { ids: number[] }): Promise<RemoteResult<TaskBatchMutationResult>>
   /** 标记「待完善 / 已完善」——已完善才参与触发与回调投递。 */
   setTaskInfoStatus(options: { id: number; status: TaskInfoStatus }): Promise<RemoteResult<TaskInfoMutationResult>>
   /** 任务触发记录（可按任务过滤；最新在前）。 */
@@ -485,6 +490,17 @@ export interface WechatRemote {
   getExportProgress(options: { jobId: string }): Promise<RemoteResult<ExportProgressSnapshot>>
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
   getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  /**
+   * 收藏资源本地缓存：`business/favorite` 按明文 MD5 匹配，
+   * 图片、视频、文件、语音和未知资源共用。
+   */
+  getFavoriteMediaDataUrl(options: {
+    md5?: string
+    thumbMd5?: string
+    fullMd5?: string
+    kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
+    ext?: string
+  }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   /**
    * 批量取表情（E1，2026-09-28 性能修复）。
@@ -535,8 +551,11 @@ export interface WechatRemote {
    */
   checkDbIntegrity(): Promise<RemoteResult<DbIntegrityResult>>
   getVoiceInfo(options: { username: string; localId: number }): Promise<RemoteResult<VoiceInfoResult>>
-  /** 语音消息的可播放 wav（data URL）—— 就该地播放用，见后端 resolveVoiceDataUrl。 */
-  getVoiceDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<VoiceDataUrlResult>>
+  /**
+   * 语音消息的可播放 wav（data URL）—— 就地播放用，见后端 resolveVoiceDataUrl。
+   * 普通消息传 username + localId；收藏语音没有会话上下文，改传 svrId。
+   */
+  getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<RemoteResult<VoiceDataUrlResult>>
   getVideoInfo(options: { username: string; localId: number }): Promise<RemoteResult<VideoInfoResult>>
   exportSessionMessages(options: {
     username: string

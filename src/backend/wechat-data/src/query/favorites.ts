@@ -10,6 +10,8 @@ import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
 import { stripCdata } from './parse-xml.ts'
 import { fmtDateTimeSec } from '../format.ts'
+import { resolveAvatarsLocal } from './avatar.ts'
+import type { FavItemPart } from '../types.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -164,24 +166,130 @@ function parseFavContent(favType: number, xml: string): { title: string; desc: s
   return { title, desc: decodeFavText(descRaw), url: '' }
 }
 
-/** One parsed dataitem part of a favorite (text/image/voice/video/link/file). */
-interface FavRawPart {
-  kind: 'text' | 'image' | 'voice' | 'video' | 'link' | 'file'
-  text?: string
-  md5?: string
-  url?: string
-  duration?: number
-  name?: string
-  ext?: string
-  size?: number
-  sourceName?: string
-  sourceTime?: string
-  sourceHead?: string
+/**
+ * 收藏来源用户：`realchatname` 是实际发送者，`fromusr` 在群聊收藏里是群 ID。
+ * 两者都取，解析时按发送者优先、群头像兜底 —— 以真实 70 条非聊天记录收藏为样本，
+ * 单看任一边都会漏掉一部分头像。
+ */
+function favoriteAvatarUsers(fromUsr: string, chatName: string): string[] {
+  const out: string[] = []
+  for (const raw of [chatName, fromUsr]) {
+    const user = raw.trim()
+    if (user && !out.includes(user)) out.push(user)
+  }
+  return out
+}
+
+/** 空串的 MD5：部分收藏 XML 用它表示「没有头像」，不能当成真实头像键。 */
+const EMPTY_AVATAR_MD5 = 'd41d8cd98f00b204e9800998ecf8427e'
+
+/**
+ * 收藏 XML 自带的来源头像 MD5。
+ *
+ * `head_image.db` 只按 username 存图，而真实数据里有一批文件收藏的来源用户
+ * （`realchatname`）已不在通讯录：这时 contact / head_image 都查不到，只有 XML
+ * 里的 `<head256md5>` 仍是有效线索。空 MD5 必须过滤（真实库里有 1 条）。
+ */
+function favoriteHeadMd5(xml: string): string {
+  for (const tag of ['head256md5', 'thumbhead256md5']) {
+    const value = (xmlTagText(xml, tag) ?? '').trim().toLowerCase()
+    if (value && value !== EMPTY_AVATAR_MD5) return value
+  }
+  return ''
+}
+
+/** One parsed resource part of a favorite (kept open for unknown datatypes). */
+type FavRawPart = FavItemPart
+
+/** 从 XML 片段读第一个数字；非法/非正数返回 undefined。 */
+function positiveNumber(value: string | null): number | undefined {
+  const n = Number.parseFloat(value ?? '')
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+/** 从 XML 片段读第一个整数；非法/非正数返回 undefined。 */
+function positiveInt(value: string | null): number | undefined {
+  const n = Number.parseInt(value ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+/** 非负整数（`cdn_encryver=0` 是合法协议值）。 */
+function nonNegativeInt(value: string | null): number | undefined {
+  const n = Number.parseInt(value ?? '', 10)
+  return Number.isFinite(n) && n >= 0 ? n : undefined
+}
+
+/** 只有真正的 HTTP(S) 地址才进 `coverUrl`；其余 CDN 字段保留作诊断。 */
+function httpUrl(value: string): string {
+  const text = value.trim()
+  return /^https?:\/\//i.test(text) ? text : ''
+}
+
+/** 只保留有值且不重复的 `<tag>` 文本，供未知资源做可读元信息。 */
+function favMeta(body: string, fields: ReadonlyArray<readonly [string, string]>): Array<{ label: string; value: string }> {
+  const out: Array<{ label: string; value: string }> = []
+  for (const [tag, label] of fields) {
+    const value = decodeFavText(xmlTagText(body, tag) ?? '').trim()
+    if (value) out.push({ label, value })
+  }
+  return out
+}
+
+/** 收藏 XML 里的小程序/公众号绑定信息。 */
+function parseAppBrand(xml: string): Pick<FavRawPart, 'appId' | 'appUsername' | 'pagePath' | 'iconUrl'> {
+  const start = xml.indexOf('<appbranditem>')
+  const end = start >= 0 ? xml.indexOf('</appbranditem>', start) : -1
+  if (start < 0) return {}
+  const body = end >= 0 ? xml.slice(start, end) : xml.slice(start)
+  const appId = decodeFavText(xmlTagText(body, 'appid') ?? '').trim()
+  const appUsername = decodeFavText(xmlTagText(body, 'username') ?? '').trim()
+  const pagePath = decodeFavText(xmlTagText(body, 'pagepath') ?? '').trim()
+  const iconUrl = decodeFavText(xmlTagText(body, 'iconurl') ?? '').trim()
+  return {
+    ...(appId ? { appId } : {}),
+    ...(appUsername ? { appUsername } : {}),
+    ...(pagePath ? { pagePath } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+  }
+}
+
+/** 位置收藏：真实结构在顶层 `<locitem>`，不在 `<dataitem>` 中。 */
+function parseLocationPart(xml: string): FavRawPart | null {
+  const start = xml.indexOf('<locitem>')
+  if (start < 0) return null
+  const end = xml.indexOf('</locitem>', start)
+  const body = end >= 0 ? xml.slice(start, end + '</locitem>'.length) : xml.slice(start)
+  const poiName = decodeFavText(xmlTagText(body, 'poiname') ?? '').trim()
+  const address = decodeFavText(xmlTagText(body, 'label') ?? '').trim()
+  if (!poiName && !address) return null
+  const lat = Number.parseFloat(xmlTagText(body, 'lat') ?? '')
+  const lng = Number.parseFloat(xmlTagText(body, 'lng') ?? '')
+  const category = decodeFavText(xmlTagText(body, 'poiCategoryTips') ?? '').trim()
+  const businessHours = decodeFavText(xmlTagText(body, 'poiBusinessHour') ?? '').trim()
+  const phone = decodeFavText(xmlTagText(body, 'poiPhone') ?? '').trim()
+  return {
+    kind: 'location',
+    text: [poiName, address].filter(Boolean).join(' · '),
+    title: poiName || address,
+    ...(poiName ? { poiName } : {}),
+    ...(address ? { address } : {}),
+    ...(Number.isFinite(lat) ? { lat } : {}),
+    ...(Number.isFinite(lng) ? { lng } : {}),
+    ...(category ? { category } : {}),
+    ...(businessHours ? { businessHours } : {}),
+    ...(phone ? { phone } : {}),
+    ...(Number.isFinite(lat) && Number.isFinite(lng)
+      ? { url: `https://uri.amap.com/marker?position=${String(lng)},${String(lat)}&name=${encodeURIComponent(poiName || address)}` }
+      : {}),
+  }
 }
 
 /** Parse `<datalist><dataitem>` entries into typed parts (mirror parse_fav_detail). */
 function parseFavParts(xml: string): FavRawPart[] {
   const out: FavRawPart[] = []
+  // 位置没有 dataitem；先单独收顶层 locitem。
+  const location = parseLocationPart(xml)
+  if (location) out.push(location)
   let pos = 0
   for (;;) {
     const start = xml.indexOf('<dataitem', pos)
@@ -190,17 +298,39 @@ function parseFavParts(xml: string): FavRawPart[] {
     const body = end >= 0 ? xml.slice(start, end) : xml.slice(start)
     const datatype = Number.parseInt(xmlTagAttr(body, 'dataitem', 'datatype') ?? '0', 10) || 0
     const dataid = (xmlTagAttr(body, 'dataitem', 'dataid') ?? '').trim().toLowerCase()
-    const md5 = (xmlTagText(body, 'fullmd5') ?? '').trim().toLowerCase() || dataid
+    const fullMd5 = (xmlTagText(body, 'fullmd5') ?? '').trim().toLowerCase() || dataid
     const thumbMd5 = (xmlTagText(body, 'thumbfullmd5') ?? '').trim().toLowerCase()
-    const text = decodeFavText(xmlTagText(body, 'datadesc') ?? '') || decodeFavText(xmlTagText(body, 'datatitle') ?? '')
-    const sourceName = xmlTagText(body, 'datasrcname') ?? ''
-    const sourceTime = xmlTagText(body, 'datasrctime') ?? ''
-    const sourceHead = xmlTagText(body, 'sourceheadurl') ?? ''
+    const fullSize = positiveInt(xmlTagText(body, 'fullsize'))
+    const thumbSize = positiveInt(xmlTagText(body, 'thumbfullsize'))
+    const cdnDataUrl = (xmlTagText(body, 'cdn_dataurl') ?? '').trim()
+    const cdnDataKey = (xmlTagText(body, 'cdn_datakey') ?? '').trim()
+    const cdnThumbUrl = (xmlTagText(body, 'cdn_thumburl') ?? '').trim()
+    const cdnThumbKey = (xmlTagText(body, 'cdn_thumbkey') ?? '').trim()
+    const cdnEncryVer = nonNegativeInt(xmlTagText(body, 'cdn_encryver'))
+    const sourceId = (xmlTagText(body, 'sourceid') ?? '').trim()
+    const dataSourceId = (xmlTagAttr(body, 'dataitem', 'datasourceid') ?? '').trim()
+    const title = decodeFavText(xmlTagText(body, 'datatitle') ?? '').trim()
+    const desc = decodeFavText(xmlTagText(body, 'datadesc') ?? '').trim()
+    const text = desc || title
+    const sourceName = decodeFavText(xmlTagText(body, 'datasrcname') ?? '').trim()
+    const sourceTime = (xmlTagText(body, 'datasrctime') ?? '').trim()
+    const sourceHead = (xmlTagText(body, 'sourceheadurl') ?? '').trim()
     const metaPart = (): FavRawPart => {
-      const p: FavRawPart = { kind: 'text' }
+      const p: FavRawPart = { kind: 'text', dataType: datatype }
+      if (title) p.title = title
+      if (desc) p.desc = desc
       if (sourceName) p.sourceName = sourceName
       if (sourceTime) p.sourceTime = sourceTime
       if (sourceHead) p.sourceHead = sourceHead
+      if (fullSize !== undefined) p.fullSize = fullSize
+      if (thumbSize !== undefined) p.thumbSize = thumbSize
+      if (cdnDataUrl) p.cdnDataUrl = cdnDataUrl
+      if (cdnDataKey) p.cdnDataKey = cdnDataKey
+      if (cdnThumbUrl) p.cdnThumbUrl = cdnThumbUrl
+      if (cdnThumbKey) p.cdnThumbKey = cdnThumbKey
+      if (cdnEncryVer !== undefined) p.cdnEncryVer = cdnEncryVer
+      if (sourceId) p.sourceId = sourceId
+      if (dataSourceId) p.dataSourceId = dataSourceId
       return p
     }
     const pushPart = (part: FavRawPart): void => { out.push(part) }
@@ -210,38 +340,111 @@ function parseFavParts(xml: string): FavRawPart[] {
       const p = metaPart()
       p.kind = 'image'
       if (thumbMd5) p.md5 = thumbMd5
-      else if (md5) p.md5 = md5
+      else if (fullMd5) p.md5 = fullMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      if (thumbMd5) p.thumbMd5 = thumbMd5
       if (text) p.text = text
       pushPart(p)
     } else if (datatype === 3) {
       const p = metaPart()
       p.kind = 'voice'
-      if (md5) p.md5 = md5
+      if (fullMd5) p.md5 = fullMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      const fmt = (xmlTagText(body, 'datafmt') ?? '').trim().toLowerCase()
+      if (fmt) p.format = fmt
+      // 收藏语音的 duration 是毫秒（真实样本 2686 = 2.686s）；同时保留秒口径给老 UI。
+      const durMs = positiveInt(xmlTagText(body, 'duration'))
+      if (durMs !== undefined) {
+        p.durationMs = durMs
+        p.duration = durMs / 1000
+      }
+      const svrId = (xmlTagText(body, 'fromnewmsgid') ?? xmlTagText(body, 'sourceid') ?? '').trim()
+      if (svrId) p.svrId = svrId
       pushPart(p)
     } else if (datatype === 4) {
       const p = metaPart()
       p.kind = 'video'
-      if (md5) p.md5 = md5
-      const dur = Number.parseFloat(xmlTagText(body, 'duration') ?? '0')
-      if (dur > 0) p.duration = dur
+      if (thumbMd5) p.md5 = thumbMd5
+      else if (fullMd5) p.md5 = fullMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      if (thumbMd5) p.thumbMd5 = thumbMd5
+      const dur = positiveNumber(xmlTagText(body, 'duration'))
+      if (dur !== undefined) p.duration = dur
       if (text) p.text = text
       pushPart(p)
-    } else if (datatype === 5 || datatype === 19 || datatype === 36) {
+    } else if (datatype === 5 || datatype === 36) {
       const p = metaPart()
       p.kind = 'link'
       if (text) p.text = text
-      const u = (xmlTagText(body, 'stream_weburl') ?? xmlTagText(body, 'url') ?? '').replace(/&amp;/g, '&')
+      const u = decodeFavText(xmlTagText(body, 'stream_weburl') ?? xmlTagText(body, 'url') ?? '').trim()
       if (u) p.url = u
+      const cover = httpUrl(xmlTagText(body, 'cdn_thumburl') ?? '')
+      if (cover) p.coverUrl = cover
       pushPart(p)
     } else if (datatype === 8) {
       const p = metaPart()
       p.kind = 'file'
-      const n = xmlTagText(body, 'datatitle') ?? ''
+      const n = title || desc
       if (n) p.name = n
-      const e = xmlTagText(body, 'datafmt') ?? ''
+      const e = (xmlTagText(body, 'datafmt') ?? '').trim().toLowerCase()
       if (e) p.ext = e
-      const sz = Number.parseInt(xmlTagText(body, 'fullsize') ?? '0', 10)
-      if (sz > 0) p.size = sz
+      const sz = fullSize
+      if (sz !== undefined) p.size = sz
+      if (fullMd5) p.fullMd5 = fullMd5
+      pushPart(p)
+    } else if (datatype === 19) {
+      const p = metaPart()
+      p.kind = 'miniapp'
+      if (text) p.text = text
+      const app = parseAppBrand(xml)
+      Object.assign(p, app)
+      // 小程序的完整封面有时只在 dataitem 的 thumb/full md5 上。
+      if (thumbMd5) p.thumbMd5 = thumbMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      if (thumbMd5 || fullMd5) p.md5 = thumbMd5 || fullMd5
+      pushPart(p)
+    } else if (datatype === 7 || datatype === 16 || datatype === 18 || datatype === 20) {
+      const p = metaPart()
+      p.kind = datatype === 7 ? 'music' : datatype === 16 ? 'product' : datatype === 18 ? 'note' : 'channels'
+      if (text) p.text = text
+      const u = decodeFavText(xmlTagText(body, 'stream_weburl') ?? xmlTagText(body, 'url') ?? '').trim()
+      if (u) p.url = u
+      const musicUrl = decodeFavText(xmlTagText(body, 'music_url') ?? '').trim()
+      if (musicUrl && !p.url) p.url = musicUrl
+      const cover = httpUrl(decodeFavText(xmlTagText(body, 'cdn_thumburl') ?? ''))
+      if (cover) p.coverUrl = cover
+      if (thumbMd5) p.thumbMd5 = thumbMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      if (thumbMd5 || fullMd5) p.md5 = thumbMd5 || fullMd5
+      pushPart(p)
+    } else {
+      // 新版本微信会继续增加 datatype。未知 == 不能显示是错误策略：
+      // 只要 XML 里有任何可读字段，就生成一条 unknown 卡片交给前端如实展示。
+      const meta = favMeta(body, [
+        ['datafmt', '格式'],
+        ['fullsize', '大小'],
+        ['duration', '时长'],
+        ['appid', 'AppID'],
+        ['username', '账号'],
+        ['pagepath', '页面'],
+        ['url', '链接'],
+        ['stream_weburl', '链接'],
+        ['cdn_thumburl', '封面'],
+        ['datatitle', '标题'],
+        ['datadesc', '描述'],
+      ])
+      const p = metaPart()
+      p.kind = 'unknown'
+      if (text) p.text = text
+      const u = decodeFavText(xmlTagText(body, 'stream_weburl') ?? xmlTagText(body, 'url') ?? '').trim()
+      if (u) p.url = u
+      const cover = httpUrl(decodeFavText(xmlTagText(body, 'cdn_thumburl') ?? ''))
+      if (cover) p.coverUrl = cover
+      if (meta.length > 0) p.meta = meta
+      if (thumbMd5) p.thumbMd5 = thumbMd5
+      if (fullMd5) p.fullMd5 = fullMd5
+      if (thumbMd5 || fullMd5) p.md5 = thumbMd5 || fullMd5
+      // 空 dataitem 也保留，避免「有一条收藏但详情一片空白」。
       pushPart(p)
     }
     pos = end >= 0 ? end + 10 : xml.length
@@ -251,6 +454,10 @@ function parseFavParts(xml: string): FavRawPart[] {
 
 interface FavorItem {
   localId: number
+  /** uint64 字符串，避免 JSON/JS number 丢精度。 */
+  serverId?: string
+  /** 收藏来源消息/资源 uint64 字符串。 */
+  sourceId?: string
   type: number
   typeLabel: string
   title: string
@@ -262,6 +469,11 @@ interface FavorItem {
   fromUsr: string
   chatName: string
   source: string
+  /**
+   * 来源头像：本机 data URL、contact 表头像地址，或 32 位头像 MD5。
+   * MD5 由客户端交给 `apiGetSnsImageDataUrl` 解出本机图（与收藏图片同一条缓存链）。
+   */
+  avatar?: string
   items: FavRawPart[]
 }
 
@@ -269,17 +481,16 @@ interface FavorItem {
  * Read the favorites list with parsed title/desc/url/source.
  * @param decryptedDir - decrypted data root.
  * @param limit - max rows.
+ * @param q - 关键词：匹配收藏 XML / 来源账号 / 实际发送者。
+ * @param wechatBaseDir - 微信原始账号根目录（仅用于 `temp/head_image` 缓存）。
  * @returns the favorites snapshot.
  */
 export function queryFavorites(
   decryptedDir: string,
   limit?: number,
   offset: number = 0,
-  /**
-   * 关键词：匹配 `content`（收藏条目 XML，标题与描述就在里面）/ `fromusr` / `realchatname`。
-   * 放在服务端是因为收藏分页只有 120 条一页，客户端过滤永远只搜得到已加载的那一页。
-   */
   q?: string,
+  wechatBaseDir?: string,
 ): { favorites: FavorItem[]; total: number } {
   const db = new DatabaseSync(join(decryptedDir, 'favorite', 'favorite.db'), { readOnly: true })
   try {
@@ -287,6 +498,7 @@ export function queryFavorites(
     if (!has) return { favorites: [], total: 0 }
     const cols = new Set(db.prepare('PRAGMA table_info(fav_db_item)').all().map(r => r.name))
     const sel = (c: string, dft: string) => (cols.has(c) ? c : dft)
+    const selText = (c: string, dft: string) => (cols.has(c) ? `CAST(${c} AS TEXT) AS ${c}` : `${dft} AS ${c}`)
     const cap = Math.min(limit ?? 200, 2000)
     const kw = (q ?? '').trim()
     const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
@@ -296,7 +508,16 @@ export function queryFavorites(
     const kwParams: string[] = kw ? [like, like, like] : []
     const sql = [
       'SELECT',
-      [sel('local_id', '0'), sel('type', '0'), sel('update_time', '0'), sel('content', "''"), sel('fromusr', "''"), sel('realchatname', "''")].join(', '),
+      [
+        sel('local_id', '0'),
+        selText('server_id', "''"),
+        selText('source_id', "''"),
+        sel('type', '0'),
+        sel('update_time', '0'),
+        sel('content', "''"),
+        sel('fromusr', "''"),
+        sel('realchatname', "''"),
+      ].join(', '),
       'FROM fav_db_item',
       whereSql,
       'ORDER BY', sel('update_time', 'local_id'), 'DESC',
@@ -305,16 +526,40 @@ export function queryFavorites(
     const rows = db.prepare(sql).all(...kwParams, cap, offset) as Array<Record<string, unknown>>
     const total = (db.prepare('SELECT COUNT(*) AS n FROM fav_db_item' + whereSql).get(...kwParams) as { n: number } | undefined)?.n ?? rows.length
     const names = contactMeta(decryptedDir).names
-    const favorites: FavorItem[] = rows.map((r) => {
-      const type = Number(r[sel('type', '0')] ?? 0)
+    const avatarUsers: string[] = []
+    const avatarUserSet = new Set<string>()
+    const parsedRows = rows.map((r) => {
       const xml = cellStr(r[sel('content', '')] ?? '')
       const fromUsr = cellStr(r[sel('fromusr', '')] ?? '')
       const chatName = cellStr(r[sel('realchatname', '')] ?? '')
+      const avatarCandidates = favoriteAvatarUsers(fromUsr, chatName)
+      for (const user of avatarCandidates) {
+        if (!avatarUserSet.has(user)) {
+          avatarUserSet.add(user)
+          avatarUsers.push(user)
+        }
+      }
+      return { r, xml, fromUsr, chatName, avatarCandidates }
+    })
+    // 当前页只取一次：避免前端为每条收藏各发一次头像 RPC。
+    const avatars = resolveAvatarsLocal(decryptedDir, avatarUsers, {
+      wechatBaseDir,
+    })
+    const favorites: FavorItem[] = parsedRows.map(({ r, xml, fromUsr, chatName, avatarCandidates }) => {
+      const type = Number(r[sel('type', '0')] ?? 0)
       const parsed = parseFavContent(type, xml)
       const source = chatName ? (names.get(chatName) ?? chatName) : (fromUsr ? (names.get(fromUsr) ?? fromUsr) : '')
       const updateTime = Number(r[sel('update_time', '0')] ?? 0)
+      const serverId = cellStr(r.server_id ?? '')
+      const sourceId = cellStr(r.source_id ?? '')
+        || (xmlTagAttr(xml, 'source', 'sourceid') ?? '').trim()
+        || (xmlTagText(xml, 'sourceid') ?? '').trim()
+      const avatar = avatarCandidates.map((u) => avatars[u] ?? '').find((v) => v !== '')
+        ?? favoriteHeadMd5(xml)
       return {
         localId: Number(r[sel('local_id', '0')] ?? 0),
+        ...(serverId ? { serverId } : {}),
+        ...(sourceId ? { sourceId } : {}),
         type,
         typeLabel: favTypeLabel(type),
         title: parsed.title,
@@ -326,6 +571,7 @@ export function queryFavorites(
         fromUsr,
         chatName,
         source,
+        avatar,
         items: parseFavParts(xml),
       }
     })

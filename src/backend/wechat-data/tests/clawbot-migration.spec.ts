@@ -73,6 +73,7 @@ describe('clawbot 库迁移：老库缺列时补齐、既有行不丢', () => {
     const creds = { botToken: 'bt', ilinkBotId: 'bot', ilinkUserId: 'user', baseUrl: '' }
     completeBinding(dir, { wxid: 'user' }, creds)
     expect(readBindingInternal(dir).credentials).toEqual(creds)
+    expect(readBindingInternal(dir).clearWatermark, '老库补出的清空水位默认是 0').toBe(0)
     saveSendContextToken(dir, 'ctx-mig')
     expect(readBindingInternal(dir).sendContextToken).toBe('ctx-mig')
 
@@ -112,11 +113,47 @@ describe('clawbot 库迁移：老库缺列时补齐、既有行不丢', () => {
     const msgCols = (db.prepare('PRAGMA table_info(clawbot_message)').all() as Array<{ name?: string }>).map(c => c.name)
     db.close()
     for (const col of ['qr_token', 'qr_expires_at', 'wxid', 'user_name', 'avatar', 'bound_at', 'unbound_at',
-      'bot_token', 'ilink_bot_id', 'ilink_user_id', 'base_url', 'sync_buf', 'send_context_token']) {
+      'bot_token', 'ilink_bot_id', 'ilink_user_id', 'base_url', 'sync_buf', 'send_context_token',
+      'session_epoch', 'clear_watermark']) {
       expect(cols, `新库缺列 ${col}`).toContain(col)
     }
-    for (const col of ['msg_id', 'media_kind', 'media_ref', 'media_key', 'media_name', 'media_size']) {
+    for (const col of ['msg_id', 'media_kind', 'media_ref', 'media_key', 'media_name', 'media_size', 'client_id']) {
       expect(msgCols, `新库消息表缺 ${col}`).toContain(col)
+    }
+  })
+
+  it('老库补出消息 client_id、回复 run/outbox 表与幂等索引', () => {
+    const dir = root()
+    makeOldDb(dir)
+    markBindingQr(dir, { token: 'tok-reply-mig', expiresAt: 1 })
+
+    const db = new DatabaseSync(clawbotDbPath(dir))
+    try {
+      const msgCols = (db.prepare('PRAGMA table_info(clawbot_message)').all() as Array<{ name?: string }>).map(c => c.name)
+      expect(msgCols).toContain('client_id')
+
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name?: string }>)
+        .map(row => row.name)
+      expect(tables).toContain('clawbot_reply_run')
+      expect(tables).toContain('clawbot_reply_outbox')
+      expect(tables).toContain('clawbot_message_tombstone')
+
+      const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name?: string }>)
+        .map(row => row.name)
+      expect(indexes).toContain('clawbot_message_slot_client_id')
+      expect(indexes).toContain('clawbot_message_tombstone_age')
+      expect(indexes).toContain('clawbot_reply_run_slot_target')
+      expect(indexes).toContain('clawbot_reply_outbox_run_part')
+
+      // 部分唯一索引：同一 slot 的同一 client_id 只能回填一条；NULL 历史行可无限共存。
+      const insert = db.prepare(`INSERT INTO clawbot_message(slot, ts, direction, content, created_at, client_id)
+        VALUES (?, ?, 'out', ?, ?, ?)`)
+      insert.run(1, 1, '第一次回填', 1, 'client-dup')
+      expect(() => insert.run(1, 2, '重复回填', 2, 'client-dup')).toThrow()
+      insert.run(1, 3, '历史行一', 3, null)
+      insert.run(1, 4, '历史行二', 4, null)
+    } finally {
+      db.close()
     }
   })
 })

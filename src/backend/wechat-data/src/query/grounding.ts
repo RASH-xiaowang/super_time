@@ -43,6 +43,19 @@ export interface GroundingAudit {
   ok: boolean
 }
 
+/** 回答面向的展示场景：界面问答要引用角标，自动回复禁止角标。 */
+export type GroundingReplyMode = 'cited' | 'chat'
+
+/** 接地审计选项。 */
+export interface GroundingAuditOptions {
+  /**
+   * 是否要求事实句带 `[n]` 角标，缺省 true。
+   * 自动回复在微信里没有可点击角标，必须显式关闭这项要求；
+   * 关闭后金额/日期/长数字仍会逐项核对，不会降低事实校验强度。
+   */
+  requireCitationMarkers?: boolean
+}
+
 /** 最多回报几条违规值（避免把提示词塞满）。 */
 const MAX_REPORTED = 6
 /** 合计校验：引用原文里金额加数的采样上限（避免超长材料把组合数炸开）。 */
@@ -222,6 +235,7 @@ export function auditGrounding(
   answer: string,
   evidenceTexts: readonly string[],
   citationCount: number,
+  options: GroundingAuditOptions = {},
 ): GroundingAudit {
   const text = String(answer || '')
   const pools = buildValuePools(evidenceTexts)
@@ -257,10 +271,14 @@ export function auditGrounding(
   }
 
   // 句子级：带高风险值却没标 [n] 的句子（软问题，只触发一次重写）。
+  // 自动回复明确禁止角标，因此该模式下不把「没有角标」当成问题；
+  // 高风险值与证据的核对仍由上面的确定性检查完成。
   let uncited = 0
-  for (const sentence of text.match(SENTENCE_RE) ?? []) {
-    if (scanValues(sentence).length === 0) continue
-    if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1
+  if (options.requireCitationMarkers !== false) {
+    for (const sentence of text.match(SENTENCE_RE) ?? []) {
+      if (scanValues(sentence).length === 0) continue
+      if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1
+    }
   }
 
   return {
@@ -273,11 +291,24 @@ export function auditGrounding(
 }
 
 /** 把违规值转成「回炉重写」的具体指令；没有违规时返回空串。 */
-export function groundingRepairHint(audit: GroundingAudit): string {
+export function groundingRepairHint(audit: GroundingAudit, mode: GroundingReplyMode = 'cited'): string {
   if (audit.unsupported.length === 0) return ''
   const list = audit.unsupported.map(v => `「${v.value}」`).join('、')
+  if (mode === 'chat') {
+    return `【核对未通过】你写的 ${list} 在检索材料里找不到出处。请按微信聊天口吻改写：\n`
+      + ' · 如果它们是**合计**，写明由哪几条相加得出（如「3500+3500=7000」）；\n'
+      + ' · 如果不是合计，就删掉，或改成材料里**原样出现**的值；\n'
+      + ' · 日期只能写材料里出现过的日期，不要自己换算或推测；\n'
+      + ' · 不要标 [n]，不要提引用、来源、材料或核对过程；\n'
+      + ' · 实在无法确认这个数字，就直说「这个数字我这边没法确认，我先问下本人」。'
+  }
   return `【核对未通过】你写的 ${list} 在你引用的原文里找不到出处。请改写：\n`
     + ' · 如果它们是**合计**，写明由哪几条相加得出（如「3500+3500=7000」）；\n'
     + ' · 如果不是合计，就删掉，或改成原文里**原样出现**的值；\n'
     + ' · 日期只能写原文里出现过的日期，不要自己换算或推测。'
+}
+
+/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的微信自动回复）。 */
+export function stripCitationMarkers(text: string): string {
+  return String(text || '').replace(/\s*\[\d{1,3}\]/g, '').trim()
 }

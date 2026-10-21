@@ -162,6 +162,10 @@ export async function runAskRetrieval(input: AskRetrievalInput): Promise<AskRetr
 
   /** 旧单通道检索：灰度对照 / 回滚 / 流水线异常时的降级路径。 */
   const legacyRetrieve = (): void => {
+    if (input.wechatDataEnabled === false) {
+      op('task', 'ask_wechat', 'skip', 'retrieval_legacy', 'kb-only 已阻止回退到本机微信检索')
+      return
+    }
     const legacy = retrieveAskCitations(
       decryptedDir, question,
       { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },

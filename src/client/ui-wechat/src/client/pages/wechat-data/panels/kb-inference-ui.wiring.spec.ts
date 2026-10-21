@@ -144,11 +144,14 @@ describe('笔记编辑器：模型建议的链接芯片', () => {
 describe('api 层：两个新入口的缓存口径', () => {
   const a = code(apiSrc)
 
-  it('抽取实体失效「弹层进度 + 知识数据」两层，并且只在真有新东西时广播', () => {
-    const fn = a.slice(a.indexOf('export async function apiExtractKbEntities'), a.indexOf('export async function apiSuggestKbLinks'))
+  it('抽取实体失效「弹层进度 + 知识数据」两层，成功落库即广播', () => {
+    const start = a.indexOf('export async function apiExtractKbEntities')
+    const fn = a.slice(start, a.indexOf('export async function apiSuggestKbLinks', start))
     expect(fn).toContain("invalidateWechatCache(kbCacheKey('kb-model', kbId))")
-    expect(fn).toMatch(/if \(result\.saved > 0\) invalidateKnowledgeCaches\(\)/)
-    // 只许出现一次：一行实体都没抽到时也广播，会让三个面板白重取一次数（P2 的同类事故）
+    // 后端成功抽取会整批替换该文件旧实体；写入非空结果必须刷新。
+    expect(fn).toMatch(/if \(result\.ok\) invalidateKnowledgeCaches\(\)/)
+    expect(fn).not.toContain('if (result.saved > 0) invalidateKnowledgeCaches()')
+    // 只许出现一次：失败请求没有写路径，不该让三个面板白重取一次数。
     expect((fn.match(/invalidateKnowledgeCaches\(\)/g) ?? []).length).toBe(1)
   })
 

@@ -54,6 +54,15 @@ export interface FreshDataState<T> {
 
   /** 重新查询（走同一条"先查后缓存"的路径）。 */
   reload: () => Promise<void>
+
+  /**
+   * 静默重新查询：已有数据时不翻 `loading`、不清空内容、失败保留旧值。
+   * 用于“刷新”按钮与事件驱动的回源，避免列表闪空 / 滚动位置被重置。
+   */
+  reloadSilent: () => Promise<void>
+
+  /** 静默刷新是否在途；只用于禁用按钮/`aria-busy`，不替换当前内容。 */
+  refreshing: boolean
 }
 
 export interface FreshDataOpts<T> {
@@ -79,6 +88,7 @@ export function useFreshData<T>(
   /** ① 不预填：初值恒为 null（旧实现是 `useState(() => readRenderCache(key))`）。 */
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   const alive = useRef(true)
@@ -86,26 +96,40 @@ export function useFreshData<T>(
   dataRef.current = data
   const optsRef = useRef(opts)
   optsRef.current = opts
+  /**
+   * 只允许最后一次发起的请求提交结果。
+   *
+   * 静默刷新与首屏/键变化可能重叠：慢的旧请求后回来时，如果不判序号，它会把
+   * 刚上屏的新快照覆盖回去，表现成列表短暂回退。被取代的请求仍会正常写缓存
+   * （它拿到的是同一资源的一份真实快照），但**不更新组件状态**。
+   */
+  const requestSeqRef = useRef(0)
 
   /**
    * @param silent - WAL 推送触发的静默重查：已有数据时不翻 loading、失败保留旧值不报错。
    */
-  const run = useCallback(async (silent = false): Promise<void> => {
-    if (!silent) {
+  /**
+   * @param silent - WAL 推送触发的静默重查：已有数据时不翻 loading、失败保留旧值不报错。
+   * @param keepContent - 内容仍显示在屏上时只更新 `refreshing`，绝不翻 `loading`。
+   */
+  const run = useCallback(async (silent = false, keepContent = false): Promise<void> => {
+    const requestSeq = requestSeqRef.current + 1
+    requestSeqRef.current = requestSeq
+    if (!silent && !keepContent) {
       setLoading(true)
       setError(null)
     }
     try {
       const fresh = await fetcher()
-      if (!alive.current) return
+      if (!alive.current || requestSeq !== requestSeqRef.current) return
       setData(fresh)
       setStale(false)
       // ② 成功写回（除非调用方声明"这次结果不该缓存"）
       const o = optsRef.current
       if (o?.shouldCache === undefined || o.shouldCache(fresh)) writeRenderCache(key, fresh)
     } catch (e) {
-      if (!alive.current) return
-      if (silent && dataRef.current !== null) return
+      if (!alive.current || requestSeq !== requestSeqRef.current) return
+      if ((silent || keepContent) && dataRef.current !== null) return
       const msg = (e as Error).message
       const cached = readRenderCache<T>(key)
       if (cached !== null) {
@@ -117,7 +141,7 @@ export function useFreshData<T>(
         setError(msg)
       }
     } finally {
-      if (alive.current && !silent) setLoading(false)
+      if (alive.current && !silent && !keepContent && requestSeq === requestSeqRef.current) setLoading(false)
     }
   }, [key, fetcher])
 
@@ -160,5 +184,19 @@ export function useFreshData<T>(
   /** 重新查询（非静默）。reload 身份随 `run` 走（`[key, fetcher]`），调用方可以安全放进依赖。 */
   const reload = useCallback((): Promise<void> => run(false), [run])
 
-  return { data, loading, error, stale, reload, override }
+  /** 静默重新查询（保留当前内容；见接口说明）。 */
+  const reloadSilent = useCallback(async (): Promise<void> => {
+    const hasContent = dataRef.current !== null
+    setRefreshing(true)
+    try {
+      // 有内容：保留旧快照，只亮 `refreshing`；失败保留旧值、不打断用户。
+      // 无内容：这是首次可见加载，照常翻 `loading`（页面还没有任何可保留的内容）。
+      // `silent=true` 仅服务 WAL 这类不由用户主动触发的回源。
+      await run(false, hasContent)
+    } finally {
+      if (alive.current) setRefreshing(false)
+    }
+  }, [run])
+
+  return { data, loading, error, stale, reload, reloadSilent, refreshing, override }
 }

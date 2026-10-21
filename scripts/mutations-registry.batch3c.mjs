@@ -275,9 +275,9 @@ export const MUTATIONS_BATCH3C = [
   },
   {
     id: "M343-readme-panel-count-rotted",
-    why: "（2026-10-13：ClawBot 多实例新增 `clawbot-instances.tsx` ⇒ 120 → 121；同日 v2 重设计 C1 新增 `clawbot-thread.tsx` ⇒ 121 → 122、C2 新增 `clawbot-rail.tsx` ⇒ 122 → 123；聊天信息 D0 新增 `chats-info-rows.tsx` ⇒ 123 → 124，锚点跟随。2026-10-13 W3-11.7 新增 `health-integrity.tsx` ⇒ 124 → 125；2026-10-14 远程访问新增 `settings-remote-access.tsx` ⇒ 125 → 126；同日 M9 新增 `settings-browser.tsx` ⇒ 127，锚点跟随。2026-10-16 资产面板重做新增 `asset-ui.tsx`、总览卡片拆分新增 `overview-sections.tsx` ⇒ 127 → 129；同日图谱参数面板拆件新增 `GraphRail.tsx`、`GraphSelectionDetail.tsx` ⇒ 129 → 131；同日问答过程时间线新增 `AskProcess.tsx` ⇒ 131 → 132；同日 `Ask.tsx` 顶到 1000 行上限、引用列表拆出 `ask-cites.tsx` ⇒ 132 → 133；同日引用改正文角标 + 右侧滑出详情，新增 `AnswerBody.tsx`、`CiteDetailPanel.tsx` ⇒ 133 → 135，锚点跟随。2026-10-19 keep-alive 试点新增 `keep-alive.tsx` ⇒ 148 → 149，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
+    why: "（2026-10-13：ClawBot 多实例新增 `clawbot-instances.tsx` ⇒ 120 → 121；同日 v2 重设计 C1 新增 `clawbot-thread.tsx` ⇒ 121 → 122、C2 新增 `clawbot-rail.tsx` ⇒ 122 → 123；聊天信息 D0 新增 `chats-info-rows.tsx` ⇒ 123 → 124，锚点跟随。2026-10-13 W3-11.7 新增 `health-integrity.tsx` ⇒ 124 → 125；2026-10-14 远程访问新增 `settings-remote-access.tsx` ⇒ 125 → 126；同日 M9 新增 `settings-browser.tsx` ⇒ 127，锚点跟随。2026-10-16 资产面板重做新增 `asset-ui.tsx`、总览卡片拆分新增 `overview-sections.tsx` ⇒ 127 → 129；同日图谱参数面板拆件新增 `GraphRail.tsx`、`GraphSelectionDetail.tsx` ⇒ 129 → 131；同日问答过程时间线新增 `AskProcess.tsx` ⇒ 131 → 132；同日 `Ask.tsx` 顶到 1000 行上限、引用列表拆出 `ask-cites.tsx` ⇒ 132 → 133；同日引用改正文角标 + 右侧滑出详情，新增 `AnswerBody.tsx`、`CiteDetailPanel.tsx` ⇒ 133 → 135，锚点跟随。2026-10-19 keep-alive 试点新增 `keep-alive.tsx` ⇒ 148 → 149；2026-10-19 任务信息新增 `task-delete-button.tsx`、`use-task-center-triggers.ts` ⇒ 149 → 150；2026-10-20 任务信息批删拆分 `task-center-panes.tsx` ⇒ 150 → 151；同日知识库批量操作与处理状态面板新增 `kb-batch-actions.tsx`、`kb-processing-panel.tsx` ⇒ 151 → 153，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 149 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 153 个 .tsx 视图）",
     to: "src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },

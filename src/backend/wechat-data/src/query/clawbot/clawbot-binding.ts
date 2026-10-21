@@ -21,6 +21,7 @@ import type { DatabaseSync } from '../db-open.ts'
 import type { ClawbotBinding } from '../../types.ts'
 import { DEFAULT_CLAWBOT_SLOT, clawbotDbExists, clawbotDbPath, ensureClawbotSchema } from './clawbot-db.ts'
 import { withDb, withWritableDb } from '../db-open.ts'
+import { ClawbotSessionChangedError } from './clawbot-errors.ts'
 
 /** 默认（从未绑定）的绑定行；时间戳用 0 表示「没有发生过」。 */
 export function defaultBinding(slot: number = DEFAULT_CLAWBOT_SLOT): ClawbotBinding {
@@ -200,27 +201,44 @@ export function completeBinding(
     ensureClawbotSchema(db)
     ensureSlotRow(db, slot)
     const now = Date.now()
+    db.exec('BEGIN IMMEDIATE')
+    try {
     /*
      * 「一个微信号只服务一个实例」的约束（多实例版，替换原来的「全局只有一行 bound」）：
      * 同一个 wxid 出现在别的 slot 上 ⇒ 把那一条收敛成 `unbound-by-user` 并**清空凭证**。
      * 清空是「解绑即停轮询」的存储侧保证：另一个实例的通道即使还在飞，
      * 下一轮拿不到凭证就自然停住（界面会在自检里看到它断开）。
      */
+    const displaced = (db.prepare(`SELECT slot FROM clawbot_binding
+      WHERE slot <> ? AND wxid = ? AND status = 'bound'`).all(slot, identity.wxid) as Array<{ slot?: number }>)
+      .map(row => Number(row.slot ?? 0))
+      .filter(displacedSlot => displacedSlot > 0)
     db.prepare(`UPDATE clawbot_binding SET status = 'unbound-by-user', unbound_at = ?, updated_at = ?,
       qr_token = NULL, qr_expires_at = NULL, bot_token = NULL, ilink_bot_id = NULL, ilink_user_id = NULL,
-      base_url = NULL, sync_buf = NULL, send_context_token = NULL
+      base_url = NULL, sync_buf = NULL, send_context_token = NULL, clear_watermark = 0,
+      session_epoch = session_epoch + 1
       WHERE slot <> ? AND wxid = ? AND status = 'bound'`).run(now, now, slot, identity.wxid)
     db.prepare(`UPDATE clawbot_binding SET status = 'bound', wxid = ?, user_name = ?, avatar = ?, bound_at = ?,
       qr_token = NULL, qr_expires_at = NULL,
       bot_token = ?, ilink_bot_id = ?, ilink_user_id = ?, base_url = ?, sync_buf = NULL,
-      send_context_token = NULL, updated_at = ? WHERE slot = ?`)
+      send_context_token = NULL, clear_watermark = 0, session_epoch = session_epoch + 1,
+      updated_at = ? WHERE slot = ?`)
       .run(
         identity.wxid, identity.userName ?? null, identity.avatar ?? null, now,
         credentials?.botToken ?? null, credentials?.ilinkBotId ?? null,
         credentials?.ilinkUserId ?? null, credentials?.baseUrl ?? null,
         now, slot,
       )
-    return readLatest(db, slot)
+    for (const displacedSlot of [...displaced, slot]) {
+      db.prepare('DELETE FROM clawbot_message_tombstone WHERE slot = ?').run(displacedSlot)
+    }
+    const bound = readLatest(db, slot)
+    db.exec('COMMIT')
+    return bound
+    } catch (e) {
+      try { db.exec('ROLLBACK') } catch { /* 保留原始异常 */ }
+      throw e
+    }
   })
 }
 
@@ -241,7 +259,8 @@ export function unbindBinding(decryptedDir: string, slot: number = DEFAULT_CLAWB
     const now = Date.now()
     db.prepare(`UPDATE clawbot_binding SET status = 'unbound-by-user', unbound_at = ?, qr_token = NULL,
       qr_expires_at = NULL, bot_token = NULL, ilink_bot_id = NULL, ilink_user_id = NULL, base_url = NULL,
-      sync_buf = NULL, send_context_token = NULL, updated_at = ? WHERE slot = ?`).run(now, now, slot)
+      sync_buf = NULL, send_context_token = NULL, session_epoch = session_epoch + 1, updated_at = ?
+      WHERE slot = ?`).run(now, now, slot)
     return readLatest(db, slot)
   })
 }
@@ -282,7 +301,7 @@ export interface BindingCredentials {
   baseUrl: string
 }
 
-/** 拆成五份：绑定行（公开）+ 凭证 + 同步游标 + 发送令牌 +（可选）读失败原因。 */
+/** 绑定行（公开）+ 凭证 + 游标/令牌/会话代次/清空水位 +（可选）读失败原因。 */
 export interface BindingInternalRead {
   binding: ClawbotBinding
   /** 身份三项**齐备**才是凭证，缺一个就归 null（半截凭证发不出合法请求）。 */
@@ -291,6 +310,10 @@ export interface BindingInternalRead {
   syncBuf: string
   /** 最近一条入站消息带来的会话令牌（空串 = 还没收到过消息，**发不了**）。 */
   sendContextToken: string
+  /** 当前绑定会话代次；旧批次写消息、墓碑或游标时必须带回来做条件校验。 */
+  sessionEpoch: number
+  /** 当前会话清空前的最大服务端消息 id；写消息时用于拦截已被裁剪墓碑的旧回放。 */
+  clearWatermark: number
   readError?: string
 }
 
@@ -298,12 +321,19 @@ export interface BindingInternalRead {
  * 读当前绑定行 + 内部字段（凭证 / 游标 / 发送令牌）。
  *
  * 与 {@link readBinding} 同一套读失败语义（库不存在 = 默认值无 readError；打不开 = readError），
- * 区别只在多带三列 —— 给 worker 内的通道装配与发送路径用，**不要**把它接进渲染层的快照。
+ * 区别只在多带内部运行态列 —— 给 worker 内的通道装配与发送路径用，**不要**把它接进渲染层的快照。
  * @param decryptedDir - 解密数据根。
  * @returns 内部读结果。
  */
 export function readBindingInternal(decryptedDir: string, slot: number = DEFAULT_CLAWBOT_SLOT): BindingInternalRead {
-  const none = { binding: defaultBinding(slot), credentials: null, syncBuf: '', sendContextToken: '' }
+  const none = {
+    binding: defaultBinding(slot),
+    credentials: null,
+    syncBuf: '',
+    sendContextToken: '',
+    sessionEpoch: 0,
+    clearWatermark: 0,
+  }
   if (!clawbotDbExists(decryptedDir)) return none
   healColumns(decryptedDir)
   try {
@@ -322,11 +352,24 @@ export function readBindingInternal(decryptedDir: string, slot: number = DEFAULT
  * 让它冲刷 `updated_at` 会把「最近一次绑定状态迁移」的时间搅浑。
  * @param decryptedDir - 解密数据根。
  * @param buf - 服务端下发的游标。
+ * @param slot - 实例编号。
+ * @param expectedSessionEpoch - 批次捕获时的会话代次；传入后只允许写回同一会话。
  */
-export function saveSyncBuf(decryptedDir: string, buf: string, slot: number = DEFAULT_CLAWBOT_SLOT): void {
+export function saveSyncBuf(
+  decryptedDir: string,
+  buf: string,
+  slot: number = DEFAULT_CLAWBOT_SLOT,
+  expectedSessionEpoch?: number,
+): void {
   withWritableDb(clawbotDbPath(decryptedDir), (db) => {
     ensureClawbotSchema(db)
-    db.prepare('UPDATE clawbot_binding SET sync_buf = ? WHERE slot = ?').run(buf, slot)
+    const update = expectedSessionEpoch === undefined
+      ? db.prepare('UPDATE clawbot_binding SET sync_buf = ? WHERE slot = ?').run(buf, slot)
+      : db.prepare('UPDATE clawbot_binding SET sync_buf = ? WHERE slot = ? AND session_epoch = ?')
+        .run(buf, slot, expectedSessionEpoch)
+    if (expectedSessionEpoch !== undefined && Number(update.changes) !== 1) {
+      throw new ClawbotSessionChangedError(slot, expectedSessionEpoch, currentSessionEpochOn(db, slot))
+    }
   })
 }
 
@@ -337,18 +380,38 @@ export function saveSyncBuf(decryptedDir: string, buf: string, slot: number = DE
  * 与 {@link saveSyncBuf} 同款：不动 `updated_at`。
  * @param decryptedDir - 解密数据根。
  * @param token - 非空令牌。
+ * @param slot - 实例编号。
+ * @param expectedSessionEpoch - 批次捕获时的会话代次；传入后只允许写回同一会话。
  */
-export function saveSendContextToken(decryptedDir: string, token: string, slot: number = DEFAULT_CLAWBOT_SLOT): void {
+export function saveSendContextToken(
+  decryptedDir: string,
+  token: string,
+  slot: number = DEFAULT_CLAWBOT_SLOT,
+  expectedSessionEpoch?: number,
+): void {
   if (token === '') return
   withWritableDb(clawbotDbPath(decryptedDir), (db) => {
     ensureClawbotSchema(db)
-    db.prepare('UPDATE clawbot_binding SET send_context_token = ? WHERE slot = ?').run(token, slot)
+    const update = expectedSessionEpoch === undefined
+      ? db.prepare('UPDATE clawbot_binding SET send_context_token = ? WHERE slot = ?').run(token, slot)
+      : db.prepare('UPDATE clawbot_binding SET send_context_token = ? WHERE slot = ? AND session_epoch = ?')
+        .run(token, slot, expectedSessionEpoch)
+    if (expectedSessionEpoch !== undefined && Number(update.changes) !== 1) {
+      throw new ClawbotSessionChangedError(slot, expectedSessionEpoch, currentSessionEpochOn(db, slot))
+    }
   })
+}
+
+/** 读当前会话代次（条件更新命中 0 行时用于报告实际值）。 */
+function currentSessionEpochOn(db: DatabaseSync, slot: number): number {
+  const row = db.prepare('SELECT session_epoch FROM clawbot_binding WHERE slot = ? ORDER BY id DESC LIMIT 1')
+    .get(slot) as { session_epoch?: number } | undefined
+  return Math.max(Math.floor(Number(row?.session_epoch ?? 0)), 0)
 }
 
 /** 取某个 slot 的最新一行原始记录（内部版，含凭证/游标/令牌列）。 */
 function readLatestRow(db: DatabaseSync, slot: number): Record<string, unknown> {
-  const row = db.prepare('SELECT ' + SELECT_COLUMNS + ', bot_token, ilink_bot_id, ilink_user_id, base_url, sync_buf, send_context_token FROM clawbot_binding WHERE slot = ? ORDER BY id DESC LIMIT 1').get(slot) as Record<string, unknown> | undefined
+  const row = db.prepare('SELECT ' + SELECT_COLUMNS + ', bot_token, ilink_bot_id, ilink_user_id, base_url, sync_buf, send_context_token, session_epoch, clear_watermark FROM clawbot_binding WHERE slot = ? ORDER BY id DESC LIMIT 1').get(slot) as Record<string, unknown> | undefined
   return row ?? {}
 }
 
@@ -401,5 +464,7 @@ function toInternal(row: Record<string, unknown>): BindingInternalRead {
     credentials,
     syncBuf: str(row['sync_buf']) ?? '',
     sendContextToken: str(row['send_context_token']) ?? '',
+    sessionEpoch: Math.max(Math.floor(Number(row['session_epoch'] ?? 0)), 0),
+    clearWatermark: Math.max(Math.floor(Number(row['clear_watermark'] ?? 0)), 0),
   }
 }

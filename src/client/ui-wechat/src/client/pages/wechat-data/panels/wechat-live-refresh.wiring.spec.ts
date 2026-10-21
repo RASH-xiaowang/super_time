@@ -26,7 +26,7 @@ const LIVE_WIRING: ReadonlyArray<readonly [string, string]> = [
   // ── 共用钩子（语义真源）──
   ['hooks.tsx', 'useWechatDataUpdated(() => {'],
   ['use-fresh-data.ts', 'useWechatDataUpdated(() => {'],
-  ['use-fresh-data.ts', 'if (silent && dataRef.current !== null) return'],
+  ['use-fresh-data.ts', 'if ((silent || keepContent) && dataRef.current !== null) return'],
   ['chats-polling.ts', "window.addEventListener('dsh-wechat-data-updated', onUpdated)"],
   // ── 聊天会话族 ──
   ['Chats.tsx', 'refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS'],

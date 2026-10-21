@@ -117,7 +117,23 @@ describe('FavCard', () => {
     const text = host.textContent ?? ''
     expect(text).toContain('后端标题')
     expect(text).toContain('后端描述')
-    expect(text).toContain('某群 · 2026-09-01 10:00')
+    // 底栏按截图拆成「类型 · 来源」与日期两列，文本节点不再连续。
+    expect(text).toContain('图片 · 某群')
+    expect(text).toContain('2026-09-01 10:00')
+  })
+
+  it('每种收藏都有来源头像位；没有可解码头像时显示来源首字', () => {
+    show({
+      f: fav({
+        type: 8,
+        typeLabel: '文件',
+        avatar: '',
+        source: '设计群',
+        content: '<fav><datalist><dataitem datatype="8"><datatitle>报价单.pdf</datatitle><datafmt>pdf</datafmt></dataitem></datalist></fav>',
+      }),
+    })
+    const avatar = need(q('[class*="favCardAvatar"]'), '卡片来源头像')
+    expect(avatar.textContent).toBe('设')
   })
 
   it('有资源条目时摘要取自文本条目（不是整段 desc），并且图片条目不会自己变成一行空摘要', () => {
@@ -125,5 +141,22 @@ describe('FavCard', () => {
     const text = host.textContent ?? ''
     expect(text).toContain('条目里的正文')
     expect(text).not.toContain('整段描述')
+  })
+
+  it('聊天记录收藏的卡片预览只取前两条正文，并带上发送者前缀', () => {
+    show({
+      f: fav({
+        type: 14,
+        content: '<fav><title>群聊的聊天记录</title><datalist>'
+          + '<dataitem datatype="1"><datadesc>第一条</datadesc><datasrcname>甲</datasrcname></dataitem>'
+          + '<dataitem datatype="1"><datadesc>第二条</datadesc><datasrcname>乙</datasrcname></dataitem>'
+          + '<dataitem datatype="1"><datadesc>第三条</datadesc><datasrcname>丙</datasrcname></dataitem>'
+          + '</datalist></fav>',
+      }),
+    })
+    const text = host.textContent ?? ''
+    expect(text).toContain('甲：第一条')
+    expect(text).toContain('乙：第二条')
+    expect(text).not.toContain('丙：第三条')
   })
 })

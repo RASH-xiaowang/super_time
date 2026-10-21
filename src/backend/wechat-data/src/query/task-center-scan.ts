@@ -57,6 +57,23 @@ function isTargetMessage(msg: WechatMessage, task: TaskInfo, selfUsername: strin
   return selfUsername !== '' && target === selfUsername && msg.isSender === 1
 }
 
+/**
+ * 是否命中「仅匹配 @我」条件。
+ *
+ * 只认消息解析层从 `source.atuserlist` 给出的结构化列表，不拿正文里的 `@昵称` 猜：
+ * 昵称可改、重名、正文里的普通 @ 都会造成误触发。群消息 @所有人（`notify@all`）
+ * 不算单独 @ 我，避免一条公告命中所有任务。
+ * @param msg - 已解析消息。
+ * @param task - 任务配置。
+ * @param selfUsername - 登录账号 wxid。
+ * @returns 未开启该条件，或结构化 @ 列表包含登录账号时为 true。
+ */
+function matchesMentionMe(msg: WechatMessage, task: TaskInfo, selfUsername: string): boolean {
+  if (!task.mentionMeOnly) return true
+  if (selfUsername === '') return false
+  return (msg.atUsers ?? []).some((user) => user.username === selfUsername)
+}
+
 /** 消息的可读正文（`displayText` 优先，退回原文；trim 后为空表示"没有正文"）。 */
 function readableText(msg: WechatMessage): string {
   const raw = msg.displayText ?? msg.msgContent ?? msg.strContent ?? ''
@@ -239,6 +256,7 @@ function scanOneTask(
       const messageSortSeq = msg.sortSeq ?? 0
       if (messageSortSeq > maxSeen) maxSeen = messageSortSeq
       if (!isTargetMessage(msg, task, selfUsername)) continue
+      if (!matchesMentionMe(msg, task, selfUsername)) continue
       const match = matchTrigger(msg, task.keywords)
       if (match === null) continue
       const images = cachedImages ??= collectTriggerImages(decryptedDir, task, selfUsername, task.photoLimit)

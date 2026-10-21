@@ -282,7 +282,9 @@
   box-shadow: var(--nm-shadow-popup);
   display: flex;
   flex-direction: column;
-  max-height: 70vh;
+  /* 用户截图：聊天记录预览是近全高的独立窗口，而不是 70vh 的小抽屉。 */
+  height: min(860px, calc(100vh - 32px));
+  max-height: calc(100vh - 32px);
 }
 .chatlogNested {
   border: 1px dashed var(--nm-border);

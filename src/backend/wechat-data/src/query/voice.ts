@@ -225,10 +225,12 @@ const WAV_HEADER_BYTES = 44
 export async function resolveVoiceDataUrl(
   decryptedDir: string,
   decodedDir: string,
-  username: string,
-  localId: number,
+  username = '',
+  localId?: number,
+  explicitSvrId = '',
 ): Promise<{ url?: string; durationSec?: number; error?: string }> {
-  const svrId = svrIdByChatLocal(decryptedDir, username, localId)
+  const svrId = explicitSvrId.trim()
+    || (localId === undefined ? '' : svrIdByChatLocal(decryptedDir, username, localId))
   if (!svrId) return { error: '未找到语音消息' }
   const wavPath = join(decodedDir, 'voices', svrId + '.wav')
   if (!existsSync(wavPath)) {

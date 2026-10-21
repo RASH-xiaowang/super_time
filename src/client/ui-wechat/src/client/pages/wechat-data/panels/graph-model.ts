@@ -944,6 +944,9 @@ export function buildKnowledgeNetwork(
       : e.kind === 'mention' ? 'mention' as const
         : e.kind === 'suggest' ? 'suggest' as const
           : 'wiki' as const,
+    // mention 是笔记 ↔ 文件，suggest 是文件 ↔ 实体；两者都能从任一端互查，
+    // 与 wiki 的单向引用不同，因此两端都画箭头。
+    ...(e.kind === 'mention' || e.kind === 'suggest' ? { bidirectional: true } : {}),
   }))
 
   // 刻意**没有**「把来源会话拉进来」这一步（曾经有，见函数头注释）：

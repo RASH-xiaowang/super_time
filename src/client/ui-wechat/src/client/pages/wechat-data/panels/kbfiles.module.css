@@ -126,6 +126,22 @@
   container-name: kbfilesdetail;
 }
 
+/* kit 的 Card 在 `.card` 与业务内容之间还有一层 `cardBd`。它默认按内容高度收缩，
+   会让 `.detail` 的 `height: 100%` 只拿到内容高度，底部对齐因此失效。
+   只在文件详情栏里把这一层撑开，不改全局 Card 的语义。 */
+.detailPane > [class*='_cardBd'],
+.detailPane > [class*='_cardBdFlush'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detailPane > [class*='_cardBd'] > .detail,
+.detailPane > [class*='_cardBdFlush'] > .detail {
+  flex: 1 1 auto;
+}
+
 /* 正文展开时详情栏自己滚 —— 与列表互不影响。
    `min-height: 0` 是 flex/grid 子项能收缩的前提（默认 `min-height: auto` 会撑住内容高度）。
    ⚠️ 必须写 `overflow-y: auto` 而不是只写 `overflow: auto`：kit 的 `.card` 有
@@ -347,7 +363,9 @@
 .offlineMark { font-size: var(--nm-dense-fs-xs); color: var(--nm-warning-text); white-space: nowrap; }
 
 /* ── 右：文件详情 ─────────────────────────────────────────── */
-.detail { display: flex; flex-direction: column; gap: var(--nm-dense-g4); min-width: 0; }
+/* 阅读区要吃掉详情栏的剩余高度。只把 `.reader` 改成 100% 不够：
+   它的父级 `.detail` 若仍按内容收缩，100% 只会得到内容高度，下面照旧留白。 */
+.detail { display: flex; flex-direction: column; gap: var(--nm-dense-g4); min-width: 0; height: 100%; }
 
 .detailHead { display: flex; align-items: flex-start; gap: var(--nm-dense-g4); }
 .detailTitle {
@@ -360,7 +378,14 @@
   color: var(--nm-text-1);
   word-break: break-word;
 }
-.detailActions { flex: 0 0 auto; display: flex; gap: var(--nm-dense-g2); }
+.detailActions {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  justify-content: flex-end;
+  gap: var(--nm-dense-g2);
+}
 
 .detailMeta {
   display: flex;
@@ -378,6 +403,16 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--nm-text-3);
+}
+
+/* 明细是文件详情的最后一组信息。让它自动吃掉标题、摘要等上方的剩余高度，
+   把标签与属性表推到详情栏底部；内容本身变长时仍由外层详情栏滚动。 */
+.detailFoot {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
 }
 
 /* 属性表：左键右值，窄容器下自动换成上下两行（见 @container 段）。 */
@@ -544,6 +579,8 @@
 .reader {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: var(--nm-dense-g2);
   padding: var(--nm-dense-g3);
   border: 1px solid var(--nm-border);
@@ -636,21 +673,20 @@
  * 200px 够放下 14 个汉字，再多就是浪费正文的宽度。 */
 .readerSplit {
   display: grid;
+  flex: 1 1 auto;
   /* 目录在左（窄栏），原文在右（占满剩余）。 */
   grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
   /* ⚠️ 行高必须显式封顶（`minmax(0, 1fr)`），不能留给 `auto`：
      `auto` 行会被内容撑到 5867px，于是子项的 `height: 100%` 也变成 5867px，
-     `max-height` 形同虚设（真机实测）。`minmax(0, 1fr)` 让行高等于容器高度。 */
+     高度约束形同虚设（真机实测）。`minmax(0, 1fr)` 让行高等于容器高度。 */
   grid-template-rows: minmax(0, 1fr);
   gap: var(--nm-dense-g3);
   /* 两栏等高：`stretch` 让它们都撑满 `.readerSplit` 的高度，
      配合下面的 `height: 100%` 才能让两栏的滚动区一样高。 */
   align-items: stretch;
-  /* 高度封顶在这里，两栏各自在里面滚。
-     `60vh` 而不是 `52vh`：52vh 在 1000px 高的窗口里只有 520px，
-     正文下方留一大片死空白（真机截图实测）。60vh 给到 600px，
-     同时仍留出上方文件标题的位置。 */
-  max-height: 60vh;
+  /* 高度来自详情栏剩余空间，而不是视口百分比。
+     旧实现封在 `60vh`，窗口继续变高时正文不会跟着长，底部就留出大片空白。 */
+  min-height: 0;
 }
 @container kbfilesdetail (max-width: 760px) {
   .readerSplit {
@@ -838,7 +874,7 @@
   white-space: nowrap;
 }
 
-/* 默认展开时首帧的等待态：正文还没回来，先给一句话而不是留一块空白，
+/* 点击「查看正文」后首帧的等待态：正文还没回来，先给一句话而不是留一块空白，
    否则看起来像「这个文件没有内容」。 */
 .readerLoading {
   padding: var(--nm-dense-g4) var(--nm-dense-g2);

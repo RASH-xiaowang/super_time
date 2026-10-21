@@ -157,11 +157,11 @@ export function createClawbotInstance(decryptedDir: string): ClawbotBinding {
 }
 
 /**
- * 删除一个实例：绑定行 + 配置 + **该实例的接入会话**一起删（返回删掉的条数）。
+ * 删除一个实例及其全部 slot 级状态。
  *
- * 为什么连会话一起删：会话正文按 slot 存，实例没了之后那些行**再也显示不出来**
- * （列表按实例遍历），留着只是一块谁都看不见的占用。界面必须在确认框里说清
- * 「将删除该实例的 N 条接入会话」，不许静默丢数据。
+ * 绑定、配置、消息、tombstone、回复 run/outbox 与 token 统计必须同生共死：
+ * 任一步失败都要整体回滚，避免留下无法再从实例列表访问的孤儿行。界面必须在
+ * 确认框里说清「将删除该实例的 N 条接入会话」，不许静默丢数据。
  * @param decryptedDir - 解密数据根。
  * @param slot - 实例编号。
  * @returns 删掉的消息条数（供界面如实回报）。
@@ -170,12 +170,23 @@ export function deleteClawbotInstance(decryptedDir: string, slot: number): { rem
   const s = Math.max(Math.floor(slot), 1)
   return withWritableDb(clawbotDbPath(decryptedDir), (db) => {
     ensureClawbotSchema(db)
-    const before = Number((db.prepare('SELECT COUNT(*) AS n FROM clawbot_message WHERE slot = ?').get(s) as { n?: number } | undefined)?.n ?? 0)
-    db.prepare('DELETE FROM clawbot_message WHERE slot = ?').run(s)
-    db.prepare('DELETE FROM clawbot_instance_config WHERE slot = ?').run(s)
-    db.prepare('DELETE FROM clawbot_token_usage WHERE slot = ?').run(s)
-    db.prepare('DELETE FROM clawbot_binding WHERE slot = ?').run(s)
-    return { removedMessages: before }
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const before = Number((db.prepare('SELECT COUNT(*) AS n FROM clawbot_message WHERE slot = ?').get(s) as { n?: number } | undefined)?.n ?? 0)
+      // 先删子状态，最后删绑定行；任何一条失败都由同一事务回滚。
+      db.prepare('DELETE FROM clawbot_reply_outbox WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_reply_run WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_message WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_message_tombstone WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_instance_config WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_token_usage WHERE slot = ?').run(s)
+      db.prepare('DELETE FROM clawbot_binding WHERE slot = ?').run(s)
+      db.exec('COMMIT')
+      return { removedMessages: before }
+    } catch (e) {
+      try { db.exec('ROLLBACK') } catch { /* 保留原始异常 */ }
+      throw e
+    }
   })
 }
 

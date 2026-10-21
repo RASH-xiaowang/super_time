@@ -43,6 +43,8 @@ export interface TaskInfo {
   keywords: string[]
   /** 触发时携带「该对象最近 M 张图片」的张数（0 = 不带图片）。 */
   photoLimit: number
+  /** 仅匹配结构化 @ 登录账号的群消息；单聊始终为 false。 */
+  mentionMeOnly: boolean
   /** 回调地址（http/https）。已完善任务必填。 */
   callbackUrl: string
   status: TaskInfoStatus
@@ -65,6 +67,7 @@ export interface TaskInfoInput {
   targetName?: string
   keywords: string[]
   photoLimit?: number
+  mentionMeOnly?: boolean
   callbackUrl?: string
   status?: TaskInfoStatus
 }
@@ -82,6 +85,14 @@ export interface TaskInfoMutationResult {
   ok: boolean
   id?: number
   status?: TaskInfoStatus
+  error?: string
+}
+
+/** 任务或触发记录的批量删除结果。 */
+export interface TaskBatchMutationResult {
+  ok: boolean
+  /** 实际删除的行数；重复或不存在的 id 不计入。 */
+  removed: number
   error?: string
 }
 
@@ -125,14 +136,35 @@ export interface TaskTriggerRecord {
 export interface TaskTriggerQuery {
   /** 只看某个任务（缺省 = 全部任务的记录）。 */
   taskId?: number
+  /**
+   * 在正文、任务名、会话/对象、关键词与回调错误里做包含搜索。
+   *
+   * 后端 trim 后最多取 100 字；`%` / `_` 按普通字符匹配，不作为 SQL 通配符。
+   */
+  search?: string
   /** 最多返回多少条（后端夹取 1..200，默认 100）。 */
   limit?: number
+  /**
+   * 上一页最后一条记录的稳定游标；缺省 = 第一页。
+   *
+   * 用 `(triggeredAt, id)` 而非仅时间：同一毫秒内可能有多条记录，单列游标会漏页。
+   */
+  cursor?: TaskTriggerCursor
+}
+
+/** 触发记录倒序列表的复合游标（`triggeredAt` 相同则按 id 继续）。 */
+export interface TaskTriggerCursor {
+  triggeredAt: number
+  id: number
 }
 
 /** 触发记录快照。 */
 export interface TaskTriggerSnapshot {
   items: TaskTriggerRecord[]
+  /** 当前筛选条件下的记录总数（不是本页条数）。 */
   total: number
+  /** 下一页游标；没有更多记录时省略。 */
+  nextCursor?: TaskTriggerCursor
   readError?: string
 }
 

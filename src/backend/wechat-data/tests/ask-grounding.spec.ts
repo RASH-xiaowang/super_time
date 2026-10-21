@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { auditGrounding, groundingRepairHint } from '../src/query/grounding.ts'
+import { auditGrounding, groundingRepairHint, stripCitationMarkers } from '../src/query/grounding.ts'
 import { buildSearchIndex } from '../src/query/search.ts'
 import { runRetrievalPipeline } from '../src/query/retrieval/pipeline.ts'
 import { defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
@@ -84,6 +84,42 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
     const a = auditGrounding('老陈转来 3500.00 元。另外还聊到合同 [1]。', EVIDENCE, 3)
     expect(a.uncited).toBe(1)
     expect(a.ok).toBe(true)
+  })
+
+  it('自动回复模式不要求角标，但高风险值仍逐项核对', () => {
+    const good = auditGrounding(
+      '老陈转来 3500.00 元。',
+      EVIDENCE,
+      3,
+      { requireCitationMarkers: false },
+    )
+    expect(good.uncited).toBe(0)
+    expect(good.ok).toBe(true)
+
+    const bad = auditGrounding(
+      '老陈转来 5000.00 元。',
+      EVIDENCE,
+      3,
+      { requireCitationMarkers: false },
+    )
+    expect(bad.unsupported.map(v => v.value)).toEqual(['5000.00元'])
+  })
+
+  it('自动回复的核对提示不要求角标，并要求无法确认时自然兜底', () => {
+    const a = auditGrounding(
+      '老陈转来 5000.00 元。',
+      EVIDENCE,
+      3,
+      { requireCitationMarkers: false },
+    )
+    const hint = groundingRepairHint(a, 'chat')
+    expect(hint).toContain('5000.00元')
+    expect(hint).toContain('不要标 [n]')
+    expect(hint).toContain('这个数字我这边没法确认')
+  })
+
+  it('误加的 [n] 角标在自动回复发送前被确定性清除', () => {
+    expect(stripCitationMarkers('收到 13.00 元 [1][2]，明天到账。')).toBe('收到 13.00 元，明天到账。')
   })
 
   it('越界的 [n] 不算引用', () => {

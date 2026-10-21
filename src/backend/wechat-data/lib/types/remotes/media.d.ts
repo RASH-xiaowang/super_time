@@ -57,8 +57,9 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         localId: number;
     }): VoiceInfoResult;
     getVoiceDataUrl(options: {
-        username: string;
-        localId: number;
+        username?: string;
+        localId?: number;
+        svrId?: string;
     }): Promise<VoiceDataUrlResult>;
     getVideoInfo(options: {
         username: string;
@@ -95,6 +96,21 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     getFileImageDataUrl(options: {
         md5: string;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 收藏资源本地缓存：图片、视频、文件、语音和未知资源共用同一条
+     * “按明文内容 MD5 匹配 business/favorite 下不透明文件”的解析链。
+     * @param options - XML 中的 md5/thumbMd5/fullMd5 与资源类型提示。
+     * @returns data URL（含正确 MIME）或本地缓存未命中的说明。
+     */
+    getFavoriteMediaDataUrl(options: {
+        md5?: string;
+        thumbMd5?: string;
+        fullMd5?: string;
+        kind?: "image" | "video" | "audio" | "file" | "unknown";
+        ext?: string;
+        fileName?: string;
+        size?: number;
+    }): ImageDataUrlResult;
     getEmoticonDataUrl(options: {
         md5: string;
         emojiUrl?: string;

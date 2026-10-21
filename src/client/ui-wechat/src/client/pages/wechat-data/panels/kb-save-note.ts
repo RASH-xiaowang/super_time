@@ -15,7 +15,7 @@
  * · 没有摘要时**不允许**沉淀：正文为空等于造一条空笔记，不如让用户先生成摘要。
  */
 import { useCallback, useState } from 'react'
-import { apiGetKbFileChunks, apiSaveNote, apiSummarizeKbFile } from '../api.ts'
+import { apiExtractKbEntities, apiGetKbFileChunks, apiSaveNote, apiSummarizeKbFile } from '../api.ts'
 import type { KbFileChunk, KbFileMeta } from '../types.ts'
 import { MAX_CHUNK_PAGE } from './kb-files-support.tsx'
 
@@ -48,9 +48,9 @@ export interface ReaderState {
  * · **发现 `fileId` 变了就立刻停**，不再继续拉 —— 否则用户点得快时
  *   会有一串废弃请求在后台跑，把新文件的首屏挤慢。
  *
- * ⚠️ 用 `readerRef` 而不是把 `reader` 放进依赖：`loadChunks` 是那个
- * `useEffect([selectedId, loadChunks])` 的依赖，依赖 `reader` 会让它的身份每轮都变，
- * 等于每轮重读一次正文 —— 无限循环。
+ * ⚠️ 用 `readerRef` 而不是把 `reader` 放进依赖：`loadChunks` 的身份要稳定，
+ * 否则详情区每次重渲染都会拿到一个新回调。正文现在只由「查看正文」显式触发，
+ * 依赖 `reader` 仍会让回调在加载过程中反复换身份，徒增无效渲染。
  * @param kbId - 当前知识库。
  * @param deps - 面板提供的状态读写。
  * @returns 一个 `(fileId) => Promise<void>` 回调。
@@ -99,9 +99,8 @@ export function useLoadAllChunks(kbId: number, deps: {
  *
  * ## 为什么不是 `useState<string | null>(null)`（2026-10-17 用户截图实测）
  *
- * 改前面板里是全局一个字符串，而那个 `useEffect([selectedId, loadChunks])` 里会
- * `setSummaryError(null)`。`loadChunks` 依赖 `kbId`，`runSummary` 成功后调
- * `reload: load` 会重建 snapshot —— 于是「刚设好的错误」被紧随其后的 effect 清掉：
+ * 改前面板里是全局一个字符串，而选文件时会清空面板级错误。`runSummary` 成功后调
+ * `reload: load` 会重建 snapshot —— 于是「刚设好的错误」可能被紧随其后的清空动作清掉：
  * 用户点了「生成摘要」、模型返回空，界面上**什么都不显示**。
  *
  * 按 id 存之后：错误只属于产生它的那个文件，切文件时自然不串，
@@ -140,6 +139,68 @@ export function useFileActionState(): {
   const [busyId, setBusyId] = useState<number | null>(null)
   const { errors, setError } = useFileErrors()
   return { busyId, setBusyId, errors, setError }
+}
+
+/**
+ * 单文件实体抽取的两个状态：正在抽取哪个文件、失败原因是什么。
+ *
+ * 单独封装是为了让面板在接入新动作时不必再摊开两行解构；忙碌态与错误
+ * 都必须与摘要分开，否则两个长调用会互相改写按钮文案。
+ * @returns 实体抽取专用的 busy / errors 读写。
+ */
+export function useEntityExtractState(): {
+  busyId: number | null
+  setBusyId: (id: number | null) => void
+  errors: ReadonlyMap<number, string>
+  setError: (fileId: number, msg: string | null) => void
+} {
+  return useFileActionState()
+}
+
+/**
+ * 文件详情的三个按钮动作与各自的忙碌态 / 错误。
+ *
+ * 摘要与实体抽取都可能出网且耗时较长，因此各用一套 busy / errors；
+ * 「存为笔记」复用摘要那套错误位（它的前置条件就是摘要）。
+ * @param kbId - 当前知识库。
+ * @param deps - 提示与重载回调。
+ * @returns 面板直接展开给详情组件的动作与状态。
+ */
+export function useKbFileDetailActions(kbId: number, deps: {
+  flash: (msg: string) => void
+  reload: () => Promise<void>
+}): {
+  busySummaryId: number | null
+  busyEntityId: number | null
+  summaryErrors: ReadonlyMap<number, string>
+  entityErrors: ReadonlyMap<number, string>
+  runSummary: (f: KbFileMeta) => Promise<void>
+  saveAsNote: (f: KbFileMeta) => Promise<void>
+  extractEntities: (f: KbFileMeta) => Promise<void>
+} {
+  const summaryState = useFileActionState()
+  const entityState = useEntityExtractState()
+  const { flash, reload } = deps
+  const { runSummary, saveAsNote } = useFileActions(kbId, {
+    setBusyId: summaryState.setBusyId,
+    setError: summaryState.setError,
+    flash,
+    reload,
+  })
+  const extractEntities = useExtractFileEntities(kbId, {
+    setBusyId: entityState.setBusyId,
+    setError: entityState.setError,
+    flash,
+  })
+  return {
+    busySummaryId: summaryState.busyId,
+    busyEntityId: entityState.busyId,
+    summaryErrors: summaryState.errors,
+    entityErrors: entityState.errors,
+    runSummary,
+    saveAsNote,
+    extractEntities,
+  }
 }
 
 /**
@@ -228,6 +289,42 @@ export function useSaveFileAsNote(kbId: number, deps: {
       const r = await apiSaveNote(kbId, { title, body, tags: '文件沉淀', sourceKind: 'file', sourceFileId: f.id })
       if (!r.ok) { setError(f.id, r.error ?? '存为笔记失败'); return }
       flash(`已存为笔记「${title}」`)
+    } catch (e) {
+      setError(f.id, (e as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }, [kbId, setBusyId, setError, flash])
+}
+
+/**
+ * 抽取单个文件的实体（出网调用）。
+ *
+ * 复用整库抽取同一条后端链路，只把 `fileIds` 收窄到当前文件、`limit` 设为 1；
+ * 后端仍会按 `include_in_rag` 和隐私闸门再判一次。成功后 `apiExtractKbEntities`
+ * 会清知识缓存并广播更新，知识图谱无需额外刷新代码。
+ *
+ * @param kbId - 当前知识库。
+ * @param deps - 面板提供的忙碌态、错误与提示回调。
+ * @returns `(file) => Promise<void>`。
+ */
+export function useExtractFileEntities(kbId: number, deps: {
+  setBusyId: (id: number | null) => void
+  setError: (fileId: number, msg: string | null) => void
+  flash: (msg: string) => void
+}): (f: KbFileMeta) => Promise<void> {
+  const { setBusyId, setError, flash } = deps
+  return useCallback(async (f: KbFileMeta): Promise<void> => {
+    setBusyId(f.id)
+    setError(f.id, null)
+    try {
+      const r = await apiExtractKbEntities(kbId, { fileIds: [f.id], limit: 1 })
+      if (!r.ok) {
+        const reason = r.error ?? r.failed[0]?.error ?? '实体提取失败'
+        setError(f.id, reason)
+        return
+      }
+      flash(`已提取 ${r.saved} 个实体，已同步到知识图谱`)
     } catch (e) {
       setError(f.id, (e as Error).message)
     } finally {

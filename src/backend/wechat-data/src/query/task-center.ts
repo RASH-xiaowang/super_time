@@ -29,6 +29,7 @@ import { withWritableDb } from './db-open.ts'
 import type { DatabaseSync } from './db-open.ts'
 import { queryMessages } from './messages.ts'
 import type {
+  TaskBatchMutationResult,
   TaskInfo,
   TaskInfoChatType,
   TaskInfoInput,
@@ -61,6 +62,21 @@ const CALLBACK_URL_MAX = 2048
 /** 触发记录默认 / 最大返回条数。 */
 const TRIGGER_QUERY_DEFAULT = 100
 const TRIGGER_QUERY_MAX = 200
+/** 触发记录搜索词最大长度（与前端输入上限同源；避免异常长 LIKE 把查询拖慢）。 */
+const TRIGGER_SEARCH_MAX = 100
+/** 搜索覆盖的记录快照字段；回调错误也纳入，便于按失败原因定位。 */
+const TRIGGER_SEARCH_COLUMNS = [
+  'text',
+  'task_name',
+  'chat_name',
+  'target_name',
+  'keyword',
+  'chat_username',
+  'target_username',
+  'callback_error',
+] as const
+/** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
+export const TASK_BATCH_DELETE_MAX = 500
 
 /** 任务库路径（`decryptedDir` 的父目录下）。 */
 export function taskDbPath(decryptedDir: string): string {
@@ -97,6 +113,37 @@ export function clampTaskInt(v: unknown, fallback: number, min: number, max: num
 }
 
 /**
+ * 清洗批量删除 id：只保留唯一正整数，并拒绝空选择和过大批次。
+ *
+ * Remote 入参来自序列化 JSON，不能只靠 TypeScript 类型；重复 id 去重后返回，
+ * 超过上限时整单拒绝而不是截断 —— 用户勾了 501 条却只删 500 条更难排查。
+ * @param raw - 入参里的 ids（运行时可能不是数组）。
+ * @param max - 允许的最大条数。
+ * @returns 清洗后的 id 或中文错误。
+ */
+export function cleanTaskBatchIds(raw: unknown, max = TASK_BATCH_DELETE_MAX): { ids: number[]; error?: string } {
+  if (!Array.isArray(raw) || raw.length === 0) return { ids: [], error: '请至少选择一条记录' }
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const value of raw) {
+    const id = Math.trunc(Number(value))
+    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  if (ids.length === 0) return { ids: [], error: '请至少选择一条有效记录' }
+  if (ids.length > max) {
+    return { ids: [], error: '一次最多删除 ' + String(max) + ' 条，请分批操作' }
+  }
+  return { ids }
+}
+
+/** 生成 `?, ?, ?` 形式的 SQL 占位符（调用方已限制 id 数量上限）。 */
+function sqlPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+/**
  * 建父目录（N1 同款）：库建在解密数据根的父目录，那个目录可能在「还没解密过任何库」时不存在。
  * 建目录失败**刻意吞掉**：随后 SQLite 会报出原始错误，失败语义保持与同族 store 一致。
  * @param decryptedDir - 解密数据根。
@@ -121,6 +168,7 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     target_name TEXT NOT NULL DEFAULT '',
     keywords TEXT NOT NULL DEFAULT '[]',
     photo_limit INTEGER NOT NULL DEFAULT 0,
+    mention_me_only INTEGER NOT NULL DEFAULT 0,
     callback_url TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'incomplete',
     last_scan_seq INTEGER NOT NULL DEFAULT 0,
@@ -148,7 +196,18 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     callback_error TEXT NOT NULL DEFAULT '',
     UNIQUE(task_id, message_local_id)
   )`)
+  // 老库升级：CREATE TABLE IF NOT EXISTS 不会补列；先查 table_info 再 ALTER，
+  // 避免每次打开都触发 "duplicate column name"。
+  const taskInfoCols = new Set(
+    (db.prepare('PRAGMA table_info(task_info)').all() as Array<Record<string, unknown>>)
+      .map((row) => taskCellStr(row['name'])),
+  )
+  if (!taskInfoCols.has('mention_me_only')) {
+    db.exec('ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0')
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task ON task_triggers(task_id, triggered_at DESC)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task_order ON task_triggers(task_id, triggered_at DESC, id DESC)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_order ON task_triggers(triggered_at DESC, id DESC)')
 }
 
 /** JSON 字符串数组解析（失败/非数组按空数组容错 —— 配置坏了不等于任务不可用）。 */
@@ -204,6 +263,7 @@ export function rowToTask(r: Record<string, unknown>): TaskInfo {
     targetName: taskCellStr(r['target_name']),
     keywords: parseStringArray(r['keywords']),
     photoLimit: taskCellNum(r['photo_limit']),
+    mentionMeOnly: taskCellNum(r['mention_me_only']) === 1,
     callbackUrl: taskCellStr(r['callback_url']),
     status: taskCellStr(r['status']) === 'ready' ? 'ready' : 'incomplete',
     createdAt: taskCellNum(r['created_at']),
@@ -369,21 +429,75 @@ export function listTaskInfos(decryptedDir: string): TaskInfoSnapshot {
 
 /**
  * 触发记录列表（triggered_at DESC, id DESC，最新在前）。
+ *
+ * 翻页用 `(triggered_at, id)` 复合游标：先取同一时间戳下 id 更小的记录，再用剩余额度
+ * 取严格更早的记录。顺序不能反过来 —— 更早记录如果先占满本页，同一时间戳的剩余记录
+ * 会被游标永久越过。
  * @param decryptedDir - 解密数据根。
- * @param query - 可选的 `taskId` 过滤与 `limit`（夹 1..200，默认 100）。
- * @returns 记录快照；读库失败时带 `readError`。
+ * @param query - 可选的 `taskId` / `search` 过滤、`limit`（夹 1..200，默认 100）与复合游标。
+ * @returns 记录快照（含真实总数与下一页游标）；读库失败时带 `readError`。
  */
 export function listTaskTriggers(decryptedDir: string, query?: TaskTriggerQuery): TaskTriggerSnapshot {
   if (!storeExists(decryptedDir)) return { items: [], total: 0 }
   const limit = clampTaskInt(query?.limit, TRIGGER_QUERY_DEFAULT, 1, TRIGGER_QUERY_MAX)
   const taskId = taskCellNum(query?.taskId)
+  const search = typeof query?.search === 'string'
+    ? query.search.trim().slice(0, TRIGGER_SEARCH_MAX)
+    : ''
+  const cursor = query?.cursor
+  const cursorAt = cursor === undefined ? 0 : Math.max(0, taskCellNum(cursor.triggeredAt))
+  const cursorId = cursor === undefined ? 0 : Math.max(0, taskCellNum(cursor.id))
+  if (cursor !== undefined && (cursorAt <= 0 || cursorId <= 0)) return { items: [], total: 0 }
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
-      const rows = taskId > 0
-        ? db.prepare('SELECT * FROM task_triggers WHERE task_id = ? ORDER BY triggered_at DESC, id DESC LIMIT ?').all(taskId, limit)
-        : db.prepare('SELECT * FROM task_triggers ORDER BY triggered_at DESC, id DESC LIMIT ?').all(limit)
-      const items = (rows as Array<Record<string, unknown>>).map(rowToTrigger)
-      return { items, total: items.length }
+      const whereTask = taskId > 0 ? ' AND task_id = ?' : ''
+      const taskArg = taskId > 0 ? [taskId] : []
+      const whereSearch = search === ''
+        ? ''
+        : ' AND (' + TRIGGER_SEARCH_COLUMNS.map((column) =>
+          'instr(lower(' + column + '), ?) > 0',
+        ).join(' OR ') + ')'
+      const searchArg = search === '' ? [] : TRIGGER_SEARCH_COLUMNS.map(() => search.toLowerCase())
+      const where = ' WHERE 1 = 1' + whereTask + whereSearch
+      const whereArg: Array<string | number> = [...taskArg, ...searchArg]
+      const totalRow = db.prepare('SELECT COUNT(*) AS n FROM task_triggers' + where).get(...whereArg) as { n?: unknown } | undefined
+      const total = Math.max(0, taskCellNum(totalRow?.n))
+      if (total === 0) return { items: [], total: 0 }
+
+      let rows: Array<Record<string, unknown>>
+      if (cursor === undefined || cursorAt <= 0) {
+        rows = db.prepare(
+          'SELECT * FROM task_triggers' + where + ' ORDER BY triggered_at DESC, id DESC LIMIT ?',
+        ).all(...whereArg, limit) as Array<Record<string, unknown>>
+      } else {
+        // 复合排序里，同一时间戳的记录全部排在更早时间之前，因此必须先吃边界这一段。
+        const sameTimestamp = db.prepare(
+          'SELECT * FROM task_triggers WHERE 1 = 1 AND triggered_at = ? AND id < ?' + whereTask + whereSearch + ' ORDER BY id DESC LIMIT ?',
+        ).all(cursorAt, cursorId, ...whereArg, limit) as Array<Record<string, unknown>>
+        const older = sameTimestamp.length < limit
+          ? db.prepare(
+            'SELECT * FROM task_triggers WHERE 1 = 1 AND triggered_at < ?' + whereTask + whereSearch + ' ORDER BY triggered_at DESC, id DESC LIMIT ?',
+          ).all(cursorAt, ...whereArg, limit - sameTimestamp.length) as Array<Record<string, unknown>>
+          : []
+        rows = [...sameTimestamp, ...older]
+      }
+
+      rows.sort((a, b) => {
+        const at = taskCellNum(a['triggered_at'])
+        const bt = taskCellNum(b['triggered_at'])
+        if (at !== bt) return bt - at
+        return taskCellNum(b['id']) - taskCellNum(a['id'])
+      })
+      const items = rows.map(rowToTrigger)
+      const last = items[items.length - 1]
+      const hasMore = last !== undefined && db.prepare(
+        'SELECT 1 AS found FROM task_triggers WHERE 1 = 1' + whereTask + whereSearch +
+        ' AND (triggered_at < ? OR (triggered_at = ? AND id < ?)) LIMIT 1',
+      ).get(...whereArg, last.triggeredAt, last.triggeredAt, last.id) !== undefined
+      const nextCursor = hasMore && last !== undefined
+        ? { triggeredAt: last.triggeredAt, id: last.id }
+        : undefined
+      return nextCursor === undefined ? { items, total } : { items, total, nextCursor }
     })
   } catch (e) {
     const readError = taskErrorText(e)
@@ -403,6 +517,7 @@ interface ResolvedTaskFields {
   targetName: string
   keywords: string[]
   photoLimit: number
+  mentionMeOnly: boolean
   callbackUrl: string
   status: TaskInfoStatus
   name: string
@@ -466,6 +581,11 @@ function resolveTaskFields(
   const photoLimit = input?.photoLimit === undefined
     ? existingPhotoLimit
     : clampTaskInt(input.photoLimit, 0, 0, PHOTO_LIMIT_MAX)
+  // 「仅匹配 @我」只对群聊生效：单聊没有结构化群 @ 列表，强行存 true 会永久不触发。
+  const existingMentionMeOnly = existing === undefined ? false : taskCellNum(existing['mention_me_only']) === 1
+  const mentionMeOnly = chatType === 'group' && (input?.mentionMeOnly === undefined
+    ? existingMentionMeOnly
+    : input.mentionMeOnly === true)
   const explicitName = typeof input?.name === 'string' ? input.name.trim() : ''
   const existingName = existing === undefined ? '' : taskCellStr(existing['name'])
   const name = explicitName !== ''
@@ -474,7 +594,7 @@ function resolveTaskFields(
   return {
     fields: {
       chatUsername, chatName, chatType, targetUsername, targetName,
-      keywords, photoLimit, callbackUrl: cleanedUrl.url, status, name,
+      keywords, photoLimit, mentionMeOnly, callbackUrl: cleanedUrl.url, status, name,
     },
   }
 }
@@ -514,11 +634,11 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
           : taskCellNum(existing['last_scan_seq'])
         db.prepare(`UPDATE task_info SET
           name = ?, chat_username = ?, chat_name = ?, chat_type = ?, target_username = ?, target_name = ?,
-          keywords = ?, photo_limit = ?, callback_url = ?, status = ?, last_scan_seq = ?, updated_at = ?
+          keywords = ?, photo_limit = ?, mention_me_only = ?, callback_url = ?, status = ?, last_scan_seq = ?, updated_at = ?
           WHERE id = ?`).run(
           fields.name, fields.chatUsername, fields.chatName, fields.chatType,
           fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-          fields.callbackUrl, fields.status, watermark, now, id,
+          fields.mentionMeOnly ? 1 : 0, fields.callbackUrl, fields.status, watermark, now, id,
         )
         return { ok: true, id, status: fields.status }
       }
@@ -526,11 +646,11 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
       const watermark = currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername)
       const info = db.prepare(`INSERT INTO task_info
         (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit,
-         callback_url, status, last_scan_seq, created_at, updated_at, trigger_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+         mention_me_only, callback_url, status, last_scan_seq, created_at, updated_at, trigger_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
         fields.name, fields.chatUsername, fields.chatName, fields.chatType,
         fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-        fields.callbackUrl, fields.status, watermark, now, now,
+        fields.mentionMeOnly ? 1 : 0, fields.callbackUrl, fields.status, watermark, now, now,
       )
       return { ok: true, id: taskCellNum(info.lastInsertRowid), status: fields.status }
     })
@@ -609,5 +729,82 @@ export function deleteTaskInfo(decryptedDir: string, id: number): TaskInfoMutati
     })
   } catch (e) {
     return { ok: false, error: '删除任务失败：' + taskErrorText(e) }
+  }
+}
+
+/**
+ * 批量删除任务配置。与单条删除同一语义：**触发记录刻意保留**，它们是已经发生过的事实。
+ * @param decryptedDir - 解密数据根。
+ * @param rawIds - 任务 id 列表（运行时未受类型保护）。
+ * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ */
+export function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult {
+  const cleaned = cleanTaskBatchIds(rawIds)
+  if (cleaned.error !== undefined) return { ok: false, removed: 0, error: cleaned.error }
+  if (!storeExists(decryptedDir)) return { ok: true, removed: 0 }
+  ensureParentDir(decryptedDir)
+  try {
+    return withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureTaskSchema(db)
+      const result = db.prepare(
+        'DELETE FROM task_info WHERE id IN (' + sqlPlaceholders(cleaned.ids.length) + ')',
+      ).run(...cleaned.ids)
+      return { ok: true, removed: Number(result.changes) }
+    })
+  } catch (e) {
+    return { ok: false, removed: 0, error: '批量删除任务失败：' + taskErrorText(e) }
+  }
+}
+
+/**
+ * 批量删除触发记录，并在**同一事务**里重算受影响任务的统计缓存。
+ *
+ * `deleteTaskInfos` 刻意保留触发记录，所以这里要让任务行的 `trigger_count` /
+ * `last_triggered_at` 重新等于记录表事实；否则删了记录，左栏仍显示旧的触发次数。
+ * 任一步失败都回滚，不能留下「记录删了、统计没更新」的半完成状态。
+ * @param decryptedDir - 解密数据根。
+ * @param rawIds - 触发记录 id 列表（运行时未受类型保护）。
+ * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ */
+export function deleteTaskTriggers(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult {
+  const cleaned = cleanTaskBatchIds(rawIds)
+  if (cleaned.error !== undefined) return { ok: false, removed: 0, error: cleaned.error }
+  if (!storeExists(decryptedDir)) return { ok: true, removed: 0 }
+  ensureParentDir(decryptedDir)
+  try {
+    return withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureTaskSchema(db)
+      const placeholders = sqlPlaceholders(cleaned.ids.length)
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const affectedRows = db.prepare(
+          'SELECT DISTINCT task_id FROM task_triggers WHERE id IN (' + placeholders + ')',
+        ).all(...cleaned.ids) as Array<Record<string, unknown>>
+        const affectedTaskIds = affectedRows
+          .map((row) => taskCellNum(row['task_id']))
+          .filter((id) => id > 0)
+        const removed = Number(db.prepare(
+          'DELETE FROM task_triggers WHERE id IN (' + placeholders + ')',
+        ).run(...cleaned.ids).changes)
+        const updateTask = db.prepare(`UPDATE task_info SET
+          trigger_count = (SELECT COUNT(*) FROM task_triggers WHERE task_id = ?),
+          last_triggered_at = (SELECT MAX(triggered_at) FROM task_triggers WHERE task_id = ?)
+          WHERE id = ?`)
+        for (const taskId of affectedTaskIds) {
+          updateTask.run(taskId, taskId, taskId)
+        }
+        db.exec('COMMIT')
+        return { ok: true, removed }
+      } catch (e) {
+        try {
+          db.exec('ROLLBACK')
+        } catch {
+          /* 回滚失败时保留原始错误，便于定位真正的写入问题 */
+        }
+        throw e
+      }
+    })
+  } catch (e) {
+    return { ok: false, removed: 0, error: '批量删除触发记录失败：' + taskErrorText(e) }
   }
 }

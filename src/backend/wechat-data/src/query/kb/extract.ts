@@ -202,6 +202,8 @@ export function readDigestForExtract(
  *
  * 为什么是替换而不是追加：同一个文件重跑一次抽取，旧结果不是「另一批事实」，
  * 而是「同一个问题的旧答案」。追加会让图谱里同一个文件挂出两套互相矛盾的主题词。
+ * 调用方必须先确认这一轮拿到了至少一条可入库实体；空结果不能走到这里，
+ * 否则会先删旧结果再写 0 条，把一次失败伪装成「成功清空」。
  * @param decryptedDir - 解密数据根。
  * @param kbId - 库。
  * @param fileId - 文件。
@@ -271,7 +273,23 @@ export async function extractFileEntities(
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
+  // 「模型调用成功」不等于「抽取成功」：思考型模型可能在预算耗尽时只返回
+  // reasoning、正文为空；这时若继续走 saveDocEntities，会先删掉旧实体再写 0 条。
+  // 空原文与全部行都解析失败都必须是失败回执，旧结果原样保留。
+  if (raw === '') {
+    return { ok: false, saved: 0, dropped: 0, error: '模型没有返回可解析的实体正文（可能输出被截断或只生成了思考内容）' }
+  }
   const parsed = parseEntityLines(raw)
+  if (parsed.items.length === 0) {
+    // 正文非空却没有可用行，通常意味着模型把一段解释、JSON 或不认识的表头写回来了。
+    // 下方错误只报「丢弃了几行」，用户看不到原文长什么样，也就无法判断该换模型还是改文档；
+    // 仍不把原文回给界面（可能含文档正文），只回一小段不含换行的诊断摘要。
+    const preview = raw.replace(/\s+/g, ' ').trim().slice(0, 120)
+    return {
+      ok: false, saved: 0, dropped: parsed.dropped,
+      error: `模型返回的内容里没有可入库的实体（已丢弃 ${parsed.dropped} 行格式不合法内容；返回值开头：${preview}）`,
+    }
+  }
   const saved = saveDocEntities(decryptedDir, kbId, fileId, parsed.items, model)
   if (!saved.ok) return { ok: false, saved: 0, dropped: parsed.dropped, error: saved.error }
   return { ok: true, fileId, saved: saved.saved, dropped: parsed.dropped }

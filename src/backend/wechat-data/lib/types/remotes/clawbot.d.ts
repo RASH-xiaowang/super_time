@@ -147,7 +147,10 @@ export declare const CLAWBOT_INLINE_MAX_BYTES: number;
  *   `inbound` 是**本批新落库的消息**（含方向与类型）—— 自动回复据此挑选候选，
  *   省掉「落完库再查一次刚刚插了哪些」那一趟。
  */
-export declare function insertClawbotMessages(decryptedDir: string, slot: number, msgs: readonly WeixinMessage[]): {
+export declare function insertClawbotMessages(decryptedDir: string, slot: number, msgs: readonly WeixinMessage[], options?: {
+    replyIntake?: boolean;
+    expectedSessionEpoch?: number;
+}): {
     lastId: number;
     delta: number;
     mediaIds: number[];
@@ -191,9 +194,7 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
         systemPrompt?: string;
         splitReply?: boolean;
     }): ClawbotInstanceConfig;
-    /**
-     * **内部**（不加 `@Remote`）：见 {@link createBindFlow} 的 `bindClawbotWechat`。
-     */
+    /** **内部**（不加 `@Remote`）：见 {@link createBindFlow} 的 `bindClawbotWechat`。 */
     bindClawbotWechat: (identity: {
         wxid: string;
         userName?: string | null;

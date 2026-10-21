@@ -586,6 +586,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   }
 
   const onPointerDown = (ev: React.PointerEvent<HTMLCanvasElement>): void => {
+    // 只处理主键。右键会随后触发 contextmenu，若这里也建拖拽/选中状态，
+    // 菜单打开时节点会被右键“顺手”拖住，而且指针捕获会让菜单点击变迟钝。
+    if (ev.button !== 0) return
     const p = propsRef.current
     const lp = localPoint(ev)
     pointerRef.current = lp
@@ -699,6 +702,23 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const onDoubleClick = (ev: React.MouseEvent<HTMLCanvasElement>): void => {
     const hit = hitAt(localPoint(ev))
     if (hit) propsRef.current.onFocusNode?.(hit)
+  }
+
+  /**
+   * 右键命中节点时打开节点菜单。
+   *
+   * 菜单坐标必须用 `clientX/clientY`：菜单挂在 `document.body` 的 portal 上，
+   * 而画布 CSS 坐标以画布左上角为原点（页头/统计条会让两者相差上百像素）。
+   * 空白处返回 `false`，保留浏览器原生菜单 —— 画布不能把所有右键都吃掉。
+   */
+  const onContextMenu = (ev: React.MouseEvent<HTMLCanvasElement>): void => {
+    const hit = hitAt(localPoint(ev))
+    if (!hit || !propsRef.current.onNodeContextMenu) return
+    ev.preventDefault()
+    pointerRef.current = localPoint(ev)
+    // 右键也先选中该节点：菜单操作与画布高亮指向同一个目标，关闭菜单后状态不会错位。
+    propsRef.current.onSelect(hit)
+    propsRef.current.onNodeContextMenu(hit, { x: ev.clientX, y: ev.clientY })
   }
 
   const onMiniClick = (ev: React.PointerEvent<HTMLCanvasElement>): void => {
@@ -891,7 +911,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         onPointerCancel={onPointerUp}
         onDoubleClick={onDoubleClick}
         onWheel={onWheel}
-        onContextMenu={(ev) => { ev.preventDefault() }}
+        onContextMenu={onContextMenu}
         data-locked={settings.lockLayout || undefined}
         // 把交互状态暴露成 data 属性：画布内容是位图，e2e 无法从 DOM 断言「悬停/选中是否生效」，
         // 只能靠截图逐字节比较（噪音大、失败时说不清是检测坏了还是绘制坏了）。

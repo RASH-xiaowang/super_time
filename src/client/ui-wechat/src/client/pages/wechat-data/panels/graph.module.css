@@ -91,6 +91,86 @@
 .menuItem:disabled { opacity: 0.5; cursor: default; }
 .menuItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
 
+/* ── 节点右键菜单 ───────────────────────────────────────────────────────
+ * 定位用视口坐标（portal + fixed），不能用画布坐标系 —— 否则页头/统计条
+ * 会让菜单偏离鼠标几十到上百像素。max-height 兜住窄屏，内容自滚。 */
+.nodeContextMenu {
+  position: fixed;
+  z-index: 1000;
+  width: min(248px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  box-shadow: var(--nm-shadow-popup);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  box-sizing: border-box;
+}
+
+.nodeContextHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 9px 8px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.nodeContextTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.nodeContextKind {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.nodeContextGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 5px;
+}
+.nodeContextGroup:not([data-first]) {
+  margin-top: 3px;
+  border-top: 1px solid var(--nm-border);
+}
+
+.nodeContextItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.nodeContextItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
+.nodeContextItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+.nodeContextItem:disabled { opacity: 0.45; cursor: default; }
+.nodeContextItem[data-danger] { color: var(--nm-danger); }
+.nodeContextItem[data-danger]:hover:not(:disabled) { background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
+.nodeContextHint { flex: none; color: var(--nm-text-3); font-size: var(--nm-fs-xs); }
+
 /* ── 搜索 ──────────────────────────────────────────────────────────────── */
 .searchWrap { position: relative; }
 

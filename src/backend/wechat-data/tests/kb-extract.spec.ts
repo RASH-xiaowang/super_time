@@ -4,8 +4,8 @@
  * 这一层最容易写坏的四件事，全都不在「模型准不准」上：
  *   ① **格式宽容但结构不猜**：模型回 `- person | 张三`、`张三|person`、`"org","某公司"` 都要能吃下；
  *      而吃不下的行必须**丢并计数**，不能硬猜成某个类别 —— 猜错的类别会直接画进图里；
- *   ② **重跑是替换不是追加**：同一个文件再抽一次，旧结果不是「另一批事实」，
- *      而是同一个问题的旧答案。追加会让图谱里一个文件挂出两套互相矛盾的主题词；
+ *   ② **成功才替换，失败保留旧答案**：同一个文件再抽一次，旧结果不是「另一批事实」，
+ *      而是同一个问题的旧答案；但空响应 / 全部格式不合法时不能先删旧实体再写 0 条；
  *   ③ **不许越出自己的库与自己的文件**：`kb_id` 与 `include_in_rag` 都写在 SQL 里。
  *      拿甲库的 fileId 配乙库的 kbId 去抽，物理上会读到乙库不该读的东西；
  *   ④ **合并成节点时的口径**：该合的合（同名同类跨文件）、不该合的别合（同名不同类）。
@@ -176,6 +176,25 @@ describe('③ 抽取入口：作用域与出网意愿', () => {
     const db = new DatabaseSync(kbFilesDbPath(decrypted))
     expect(() => db.prepare('SELECT COUNT(*) AS c FROM kb_doc_entities').get()).not.toThrow()
     db.close()
+  })
+
+  it('模型只返回空正文 ⇒ 明确失败，并保留上一次的实体', async () => {
+    const f = addFile(1, 'a.md', '第一段正文内容用于分块。'.repeat(12))
+    saveDocEntities(decrypted, 1, f, [{ label: '旧主题', kind: 'topic', weight: 60 }], 'm1')
+    const r = await extractFileEntities(decrypted, 1, f, async () => '', 'm2')
+    expect(r.ok).toBe(false)
+    expect(r.error ?? '').toContain('没有返回可解析的实体正文')
+    expect(readDocEntities(decrypted, 1).items.map(i => i.label)).toEqual(['旧主题'])
+  })
+
+  it('模型有正文但全部格式不合法 ⇒ 明确失败，并保留上一次的实体', async () => {
+    const f = addFile(1, 'a.md', '项目背景与交付节奏说明。'.repeat(20))
+    saveDocEntities(decrypted, 1, f, [{ label: '旧主题', kind: 'topic', weight: 60 }], 'm1')
+    const r = await extractFileEntities(decrypted, 1, f, async () => '说明|这是一段解释|而不是实体行', 'm2')
+    expect(r.ok).toBe(false)
+    expect(r.error ?? '').toContain('没有可入库的实体')
+    expect(r.error ?? '').toContain('返回值开头：说明|这是一段解释|而不是实体行')
+    expect(readDocEntities(decrypted, 1).items.map(i => i.label)).toEqual(['旧主题'])
   })
 
   it('成功路径：解析出的实体落库，并带上模型名与时间', async () => {

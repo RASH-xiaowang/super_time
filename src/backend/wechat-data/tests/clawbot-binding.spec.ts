@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { clawbotDbPath } from '../src/query/clawbot/clawbot-db.ts'
 import { completeBinding, markBindingQr, readBinding, readBindingInternal, saveSendContextToken, saveSyncBuf, unbindBinding } from '../src/query/clawbot/clawbot-binding.ts'
+import { ClawbotSessionChangedError, isClawbotSessionChangedError } from '../src/query/clawbot/clawbot-errors.ts'
 import { insertClawbotMessage, listClawbotMessages } from '../src/query/clawbot/clawbot-message.ts'
 
 const scratch: string[] = []
@@ -198,6 +199,44 @@ describe('clawbot 绑定：凭证与同步游标（iLink 内部读）', () => {
     expect(internal.credentials).toBeNull()
     expect(internal.syncBuf).toBe('')
     expect(internal.sendContextToken).toBe('')
+  })
+
+  it('解绑推进 session_epoch，旧会话的迟到写入不能回填游标或令牌', () => {
+    const dir = root()
+    completeBinding(dir, { wxid: 'user-1' }, CREDS)
+    const staleEpoch = readBindingInternal(dir).sessionEpoch
+    const unbound = unbindBinding(dir)
+    const current = readBindingInternal(dir)
+    expect(current.sessionEpoch).toBe(staleEpoch + 1)
+    expect(unbound.status).toBe('unbound-by-user')
+
+    let syncError: unknown
+    try {
+      saveSyncBuf(dir, 'stale-cursor', 1, staleEpoch)
+    } catch (e) {
+      syncError = e
+    }
+    expect(isClawbotSessionChangedError(syncError)).toBe(true)
+    expect(syncError).toBeInstanceOf(ClawbotSessionChangedError)
+    expect(syncError).toMatchObject({ slot: 1, expected: staleEpoch, actual: current.sessionEpoch })
+
+    let tokenError: unknown
+    try {
+      saveSendContextToken(dir, 'stale-token', 1, staleEpoch)
+    } catch (e) {
+      tokenError = e
+    }
+    expect(isClawbotSessionChangedError(tokenError)).toBe(true)
+    expect(tokenError).toMatchObject({ slot: 1, expected: staleEpoch, actual: current.sessionEpoch })
+    expect(readBindingInternal(dir)).toMatchObject({ syncBuf: '', sendContextToken: '' })
+
+    // 未传 expectedSessionEpoch 时保持旧行为：仍按 slot 直接写入。
+    saveSyncBuf(dir, 'legacy-cursor')
+    saveSendContextToken(dir, 'legacy-token')
+    expect(readBindingInternal(dir)).toMatchObject({
+      syncBuf: 'legacy-cursor',
+      sendContextToken: 'legacy-token',
+    })
   })
 
   it('重新绑定：旧会话的发送令牌不跨会话（completeBinding 清空）', () => {

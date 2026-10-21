@@ -2,7 +2,7 @@
  * 「任务信息 · 任务触发记录」双栏面板（2026-10-19）。
  *
  * ── 这一页在做什么 ──────────────────────────────────────────────────────
- * 左栏是用户建的**触发式任务**（会话 + 触发对象 + 关键词 + 照片数量 + 回调地址），
+ * 左栏是用户建的**触发式任务**（会话 + 触发对象 + 关键词 + 照片数量 + Webhook 地址），
  * 右栏是这些任务**命中关键词后留下的触发记录**；点记录看完整内容（触发时间 / 群聊 /
  * 对象 / 图片 / 文本），点任务把右栏筛到该任务，行内「编辑」展开配置表单。
  *
@@ -20,7 +20,7 @@
  *     `liveRefresh` 已做静默重查；这里再挂一条显式回源（防抖 800ms），保证两栏在**任一**
  *     事件后都同源刷新 —— 多一次轻查询换一致性，值；
  *  ④ 本面板内的动作（刷新 / 立即检查 / 保存 / 标记状态 / 删除 / 重投）：
- *     直接 `reload()` 两栏，不依赖事件是否恰好被自己收到。
+ *     直接静默 `reloadSilent()` 两栏并原位替换快照，不依赖事件是否恰好被自己收到。
  *
  * 选中一致性（`nextSelectedTaskId` / `nextExpandedTaskId`）：任务列表刷新后若选中/展开的
  * 任务已不存在，立即回落到 null（右栏回「全部记录」、表单收起）并给一条可见提示 ——
@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   TaskCallbackDispatchResult,
+  TaskBatchMutationResult,
   TaskInfo,
   TaskInfoInput,
   TaskInfoMutationResult,
@@ -38,10 +39,11 @@ import type {
   TaskTriggerRecord,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
+  apiDeleteTaskInfos,
   apiDeleteTaskInfo,
+  apiDeleteTaskTriggers,
   apiDispatchTaskCallback,
   apiListTaskInfos,
-  apiListTaskTriggers,
   apiSaveTaskInfo,
   apiScanTaskTriggers,
   apiSetTaskInfoStatus,
@@ -49,38 +51,31 @@ import {
 import { TASK_CENTER_UPDATED_EVENT } from '../task-center-events.ts'
 import { useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { useFreshData } from './use-fresh-data.ts'
-import { Badge, Button, EmptyState, ErrorState, LinkButton, LoadingState, PanelHeader, Toolbar } from '../ui/kit.tsx'
-import { useConfirm } from '../ui/confirm.tsx'
-import { clickableKey } from '../ui/kit.tsx'
-import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
-import { TaskEditForm } from './task-center-edit-form.tsx'
-import { TaskCenterRecordModal } from './task-center-record-modal.tsx'
 import {
-  callbackStatusMeta,
-  callbackUrlLabel,
+  Button,
+  PanelHeader,
+  Toolbar,
+} from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
+import { TaskCenterRecordModal } from './task-center-record-modal.tsx'
+import { TaskPane, TriggerPane } from './task-center-panes.tsx'
+import { useTaskCenterTriggers } from './use-task-center-triggers.ts'
+import {
+  exceedsBatchLimit,
   filterTriggersByTask,
-  triggerTimeText,
-  lastTriggeredLabel,
+  retainSelectedIds,
   nextExpandedTaskId,
   nextSelectedTaskId,
-  photoLimitLabel,
-  plainText,
-  recordImageCountLabel,
-  recordSummary,
   scanResultText,
   taskCounts,
-  taskScopeLabel,
-  taskStatusMeta,
-  triggerCountLabel,
-  triggerPaneTitle,
-  visibleKeywords,
+  toggleSelectedId,
 } from './task-center.ts'
 import css from './task-center.module.css'
 import kitCss from '../ui/kit.module.css'
 
 /** 空列表常量：避免每次渲染都新建数组（依赖数组里更容易稳定）。 */
 const NO_TASKS: readonly TaskInfo[] = []
-const NO_TRIGGERS: readonly TaskTriggerRecord[] = []
 
 /** 容器注入给视图的全部动作（SSR 冒烟传 noop 即可）。 */
 export interface TaskCenterActions {
@@ -92,7 +87,7 @@ export interface TaskCenterActions {
   onOpenRecord: (id: number) => void
   /** 关闭记录弹窗。 */
   onCloseRecord: () => void
-  /** 手动刷新两栏。 */
+  /** 手动刷新两栏（有内容时静默原位替换，不清空列表）。 */
   onRefresh: () => void
   /** 「立即检查」：按关键词扫描一次新消息。 */
   onScan: () => void
@@ -102,6 +97,10 @@ export interface TaskCenterActions {
   onSetStatus: (id: number, status: TaskInfoStatus) => Promise<TaskInfoMutationResult>
   /** 删除任务。 */
   onDeleteTask: (id: number) => Promise<TaskInfoMutationResult>
+  /** 批量删除任务配置（触发记录保留）。 */
+  onDeleteTasks: (ids: number[]) => Promise<TaskBatchMutationResult>
+  /** 批量删除触发记录（后端重算任务统计）。 */
+  onDeleteTriggers: (ids: number[]) => Promise<TaskBatchMutationResult>
   /** 手动重投一条触发记录的回调。 */
   onDispatch: (triggerId: number) => Promise<TaskCallbackDispatchResult>
   /** 成功提示（编辑表单保存/改状态后用）。 */
@@ -124,124 +123,43 @@ export interface TaskCenterViewProps {
   triggersReadError: string | null
   tasksStale?: boolean
   triggersStale?: boolean
+  triggersTotal?: number
+  triggersHasMore?: boolean
+  triggersLoadingMore?: boolean
+  triggersLoadMoreError?: string | null
+  /** 继续加载当前筛选下的下一页触发记录。 */
+  onLoadMoreTriggers: () => void
   scanning: boolean
+  /** 两栏刷新在途（轻量状态，不替换当前内容）。 */
+  refreshing?: boolean
   notice: string | null
+  /** 左栏任务搜索框原文（客户端过滤全部已加载任务）。 */
+  taskSearch?: string
+  /** 更新左栏搜索词；缺省时视图仍可在本地输入。 */
+  onTaskSearchChange?: (search: string) => void
+  /** 已应用在右栏快照上的服务端搜索词（容器防抖后传入）。 */
+  triggerSearch?: string
+  /** 搜索框原始输入；不受防抖限制，保证受控输入不吞字。 */
+  triggerSearchDraft?: string
+  /** 搜索框原始输入变化（容器负责 250ms 防抖后再查第一页）。 */
+  onTriggerSearchDraftChange?: (search: string) => void
+  /** 左栏是否处于批量选择模式。 */
+  taskBatchMode?: boolean
+  /** 当前选中的任务 id。 */
+  selectedTaskIds?: ReadonlySet<number>
+  /** 切换左栏批量模式。 */
+  onTaskBatchModeChange?: (mode: boolean) => void
+  /** 选中/取消一个任务。 */
+  onToggleTaskSelection?: (id: number) => void
+  /** 右栏是否处于批量选择模式。 */
+  triggerBatchMode?: boolean
+  /** 当前选中的触发记录 id。 */
+  selectedTriggerIds?: ReadonlySet<number>
+  /** 切换右栏批量模式。 */
+  onTriggerBatchModeChange?: (mode: boolean) => void
+  /** 选中/取消一条触发记录。 */
+  onToggleTriggerSelection?: (id: number) => void
   actions: TaskCenterActions
-}
-
-/**
- * 左栏一行：任务名 / 状态 / 会话与目标 / 关键词 chips / 照片与回调 / 触发统计 + 编辑按钮。
- *
- * 行本身是键盘可达的 `role="button"`（Enter / 空格选中），但**不用 `clickableKey`**：
- * 展开后会嵌一个 `<form>`，`clickableKey` 的 keydown 会冒泡到行上，把输入框里的空格/回车
- * 一起吃掉（`preventDefault` 会阻止在关键词里打空格）。所以这里手动判 `e.target === e.currentTarget`，
- * 并让点击事件跳过表单/按钮里的交互。
- */
-function TaskRow({ task, active, expanded, actions }: {
-  task: TaskInfo
-  active: boolean
-  expanded: boolean
-  actions: TaskCenterActions
-}): React.JSX.Element {
-  const status = taskStatusMeta(task.status)
-  const keywords = visibleKeywords(task.keywords)
-  const select = (): void => { actions.onSelectTask(task.id) }
-  return (
-    <div
-      className={css.taskRow}
-      role="button"
-      tabIndex={0}
-      aria-pressed={active}
-      data-active={active || undefined}
-      data-expanded={expanded || undefined}
-      onClick={(e) => {
-        // 行内有表单/按钮：那些点击不该顺带切选中（尤其「编辑」只展开、不改变右栏过滤）。
-        if (e.target instanceof Element && e.target.closest('button, input, form') !== null) return
-        select()
-      }}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-          e.preventDefault()
-          select()
-        }
-      }}
-    >
-      <div className={css.taskTop}>
-        <span className={css.taskName} title={task.name}>{task.name}</span>
-        <span className={css.taskTags}>
-          <Badge tone={status.tone} title={status.hint}>{status.label}</Badge>
-        </span>
-      </div>
-
-      <div className={css.taskMeta}>
-        <span className={css.taskScope} title={taskScopeLabel(task)}>{taskScopeLabel(task)}</span>
-        <span className={css.taskStat}>{triggerCountLabel(task.triggerCount)}</span>
-        <span className={css.taskStat}>{lastTriggeredLabel(task.lastTriggeredAt)}</span>
-      </div>
-
-      <div className={css.kwRow}>
-        {keywords.shown.map((keyword) => (
-          <span key={keyword} className={css.kwChip} title={keyword}>{keyword}</span>
-        ))}
-        {keywords.hidden > 0 && <span className={css.kwMore}>+{String(keywords.hidden)}</span>}
-        <span className={css.kwMore}>{photoLimitLabel(task.photoLimit)}</span>
-        <span className={css.kwMore} title={task.callbackUrl !== '' ? task.callbackUrl : undefined}>回调 {callbackUrlLabel(task.callbackUrl)}</span>
-      </div>
-
-      <div className={css.taskActions}>
-        <Button
-          size="sm"
-          variant="outline"
-          aria-expanded={expanded}
-          aria-label={`${expanded ? '收起' : '展开'}「${task.name}」的配置表单`}
-          onClick={() => { actions.onToggleEdit(task.id) }}
-        >
-          {expanded ? '收起' : '编辑'}
-        </Button>
-        <span className={kitCss.textMeta}>{task.chatType === 'group' ? '群聊任务' : '单聊任务'}</span>
-      </div>
-
-      {expanded && (
-        <TaskEditForm
-          task={task}
-          onSave={(input) => actions.onSaveTask(task, input)}
-          onSetStatus={(status) => actions.onSetStatus(task.id, status)}
-          onDelete={() => actions.onDeleteTask(task.id)}
-          onNotice={actions.onNotice}
-        />
-      )}
-    </div>
-  )
-}
-
-/** 右栏一行：触发时间 / 会话与对象 / 命中关键词 / 文本摘要 / 图片数 / 回调徽标。 */
-function TriggerRow({ record, onOpen }: {
-  record: TaskTriggerRecord
-  onOpen: (id: number) => void
-}): React.JSX.Element {
-  const callback = callbackStatusMeta(record.callbackStatus)
-  const full = plainText(record.text)
-  return (
-    <div
-      className={css.triggerRow}
-      {...clickableKey(() => { onOpen(record.id) }, { label: `查看 ${triggerTimeText(record.triggeredAt)} 的触发记录` })}
-    >
-      <div className={css.triggerTop}>
-        <span className={css.triggerTime}>{triggerTimeText(record.triggeredAt)}</span>
-        <span className={css.triggerTaskName} title={record.taskName}>{record.taskName}</span>
-        <Badge tone={callback.tone} title={callback.hint}>{callback.label}</Badge>
-      </div>
-      <div className={css.triggerPeople} title={`${record.chatName} / ${record.targetName}`}>
-        {record.chatName || '未知会话'} / {record.targetName || '未知对象'}
-      </div>
-      <div className={css.triggerFoot}>
-        <span className={css.triggerKw}>命中「{record.keyword}」</span>
-        <span>{recordImageCountLabel(record.images.length)}</span>
-      </div>
-      <div className={css.triggerText} title={full === '' ? '（无文本）' : full}>{recordSummary(record.text)}</div>
-    </div>
-  )
 }
 
 /**
@@ -252,21 +170,82 @@ function TriggerRow({ record, onOpen }: {
 export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
   const { actions } = props
   const confirm = useConfirm()
+  const [localTaskSearch, setLocalTaskSearch] = useState('')
+  const taskSearch = props.taskSearch ?? localTaskSearch
+  const setTaskSearch = props.onTaskSearchChange ?? setLocalTaskSearch
+  const taskBatchMode = props.taskBatchMode === true
+  const triggerBatchMode = props.triggerBatchMode === true
+  const selectedTaskIds = props.selectedTaskIds ?? new Set<number>()
+  const selectedTriggerIds = props.selectedTriggerIds ?? new Set<number>()
   const counts = taskCounts(props.tasks)
+  const triggersTotal = props.triggersTotal ?? props.triggers.length
   const selectedTask = props.tasks.find((t) => t.id === props.selectedTaskId) ?? null
   // 右栏**始终**按选中项过一遍：服务端已按 taskId 查过，这里兜住「切换瞬间两栏不同源」。
   const records = filterTriggersByTask(props.triggers, props.selectedTaskId)
-  const tasksEmpty = !props.tasksLoading && props.tasks.length === 0 && props.tasksError === null && props.tasksReadError === null
-  const recordsEmpty = !props.triggersLoading && records.length === 0 && props.triggersError === null && props.triggersReadError === null
+  /** 首屏仍在查时也锁住刷新，避免重构后把两次回源叠在一起。 */
+  const refreshBusy = props.refreshing === true || props.tasksLoading || props.triggersLoading
+
+  const confirmDeleteTasks = async (): Promise<void> => {
+    const ids = [...selectedTaskIds]
+    if (ids.length === 0 || exceedsBatchLimit(ids.length)) return
+    const ok = await confirm({
+      title: `删除所选 ${String(ids.length)} 个任务？`,
+      message: '任务配置会被删除，之后不再触发；已产生的触发记录会保留（它们是历史事实，仍可在右栏回看）。',
+      tone: 'danger',
+      confirmText: '批量删除',
+    })
+    if (!ok) return
+    try {
+      const result = await actions.onDeleteTasks(ids)
+      if (!result.ok) {
+        actions.onNotice('批量删除任务失败：' + (result.error ?? '未知错误'))
+        return
+      }
+      props.onTaskBatchModeChange?.(false)
+      actions.onNotice('已删除 ' + String(result.removed) + ' 个任务')
+    } catch (e) {
+      actions.onNotice('批量删除任务失败：' + (e as Error).message)
+    }
+  }
+
+  const confirmDeleteTriggers = async (): Promise<void> => {
+    const ids = [...selectedTriggerIds]
+    if (ids.length === 0 || exceedsBatchLimit(ids.length)) return
+    const ok = await confirm({
+      title: `删除所选 ${String(ids.length)} 条触发记录？`,
+      message: '删除后不可恢复；不会删除微信里的原始消息，所属任务的触发次数与最近触发时间会按剩余记录重算。',
+      tone: 'danger',
+      confirmText: '批量删除',
+    })
+    if (!ok) return
+    try {
+      const result = await actions.onDeleteTriggers(ids)
+      if (!result.ok) {
+        actions.onNotice('批量删除触发记录失败：' + (result.error ?? '未知错误'))
+        return
+      }
+      props.onTriggerBatchModeChange?.(false)
+      actions.onNotice('已删除 ' + String(result.removed) + ' 条触发记录')
+    } catch (e) {
+      actions.onNotice('批量删除触发记录失败：' + (e as Error).message)
+    }
+  }
 
   return (
     <div className={css.root}>
       <PanelHeader
         title="任务信息"
-        desc="命中关键词后记录触发内容并投递回调；仅「已完善」的任务参与触发与回调"
+        desc="命中关键词后记录触发内容并投递 Webhook；仅「已完善」的任务参与触发与投递"
         actions={(
           <>
-            <Button size="sm" variant="pill" onClick={actions.onRefresh} disabled={props.tasksLoading || props.triggersLoading}>
+            <Button
+              size="sm"
+              variant="pill"
+              aria-label="刷新任务信息"
+              aria-busy={refreshBusy}
+              onClick={actions.onRefresh}
+              disabled={refreshBusy}
+            >
               刷新
             </Button>
             {/* 「立即检查」会写库（扫描新消息），后端把它归为「仅桌面」：手机/浏览器态禁用。
@@ -278,7 +257,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
                 void (async () => {
                   const ok = await confirm({
                     title: '立即检查？',
-                    message: '会按关键词扫描一次新消息，把命中项写入触发记录并按回调地址投递。',
+                    message: '会按关键词扫描一次新消息，把命中项写入触发记录并按 Webhook 地址投递。',
                     confirmText: '立即检查',
                   })
                   if (ok) actions.onScan()
@@ -303,7 +282,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
         )}
         right={(
           <span className={kitCss.textMeta}>
-            任务 {counts.total} · 待完善 {counts.incomplete} · 已完善 {counts.ready} · 触发记录 {records.length}
+            任务 {counts.total} · 待完善 {counts.incomplete} · 已完善 {counts.ready} · 触发记录 {triggersTotal}
           </span>
         )}
       />
@@ -311,70 +290,46 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
       {props.notice !== null && <div className={css.notice} role="status">{props.notice}</div>}
 
       <div className={css.board}>
-        <section className={css.pane} aria-label="任务信息">
-          <div className={css.paneHd}>
-            <span className={css.paneTitle}>任务信息</span>
-            {props.tasksStale === true && <Badge tone="amber" title="查询失败，当前显示的是本地缓存，可能不是最新">缓存数据</Badge>}
-            <span className={css.paneMeta}>{counts.total} 个任务</span>
-          </div>
-          <div className={css.paneBody}>
-            {props.tasksReadError !== null && (
-              <ErrorState message={`任务库读取失败（不是「没有任务」）：${props.tasksReadError}`} />
-            )}
-            {props.tasksError !== null && <ErrorState message={`任务列表加载失败：${props.tasksError}`} />}
-            {props.tasksLoading && props.tasks.length === 0 && <LoadingState variant="compact" label="加载任务信息…" />}
-            {tasksEmpty && (
-              <EmptyState
-                icon="🗂️"
-                title="还没有任务信息"
-                desc="在聊天会话 / 聊天信息里点「新建任务」创建：选会话与触发对象、填关键词；配好回调地址并标记「已完善」后，命中关键词的新消息会出现在右栏。"
-              />
-            )}
-            {props.tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                active={task.id === props.selectedTaskId}
-                expanded={task.id === props.expandedTaskId}
-                actions={actions}
-              />
-            ))}
-          </div>
-        </section>
+        <TaskPane
+          tasks={props.tasks}
+          loading={props.tasksLoading}
+          error={props.tasksError}
+          readError={props.tasksReadError}
+          stale={props.tasksStale === true}
+          search={taskSearch}
+          onSearchChange={setTaskSearch}
+          selectedTaskId={props.selectedTaskId}
+          expandedTaskId={props.expandedTaskId}
+          batchMode={taskBatchMode}
+          selectedIds={selectedTaskIds}
+          onBatchModeChange={(mode) => { props.onTaskBatchModeChange?.(mode) }}
+          onToggleSelection={(id) => { props.onToggleTaskSelection?.(id) }}
+          onDeleteSelected={() => { void confirmDeleteTasks() }}
+          actions={actions}
+        />
 
-        <section className={css.pane} aria-label="任务触发记录">
-          <div className={css.paneHd}>
-            <span className={css.paneTitle}>{triggerPaneTitle(selectedTask)}</span>
-            {props.triggersStale === true && <Badge tone="amber" title="查询失败，当前显示的是本地缓存，可能不是最新">缓存数据</Badge>}
-            {selectedTask !== null && (
-              <LinkButton onClick={() => { actions.onSelectTask(null) }}>全部记录</LinkButton>
-            )}
-            <span className={css.paneMeta}>{records.length} 条</span>
-          </div>
-          <div className={css.paneBody}>
-            {props.triggersReadError !== null && (
-              <ErrorState message={`触发记录读取失败（不是「没有记录」）：${props.triggersReadError}`} />
-            )}
-            {props.triggersError !== null && <ErrorState message={`触发记录加载失败：${props.triggersError}`} />}
-            {props.triggersLoading && props.triggers.length === 0 && <LoadingState variant="compact" label="加载触发记录…" />}
-            {recordsEmpty && (selectedTask !== null ? (
-              <EmptyState
-                icon="⚡"
-                title="该任务还没有触发记录"
-                desc="任务标记「已完善」后，命中关键词的新消息会记录在这里（也可以点上方「立即检查」马上扫一次）。"
-              />
-            ) : (
-              <EmptyState
-                icon="⚡"
-                title="还没有任何触发记录"
-                desc="创建任务并标记「已完善」后，命中关键词的新消息会出现在这里；点左栏的任务可以按任务筛选。"
-              />
-            ))}
-            {records.map((record) => (
-              <TriggerRow key={record.id} record={record} onOpen={actions.onOpenRecord} />
-            ))}
-          </div>
-        </section>
+        <TriggerPane
+          records={records}
+          selectedTask={selectedTask}
+          loading={props.triggersLoading}
+          error={props.triggersError}
+          readError={props.triggersReadError}
+          stale={props.triggersStale === true}
+          search={props.triggerSearch ?? ''}
+          searchDraft={props.triggerSearchDraft ?? props.triggerSearch ?? ''}
+          onSearchDraftChange={(value) => { props.onTriggerSearchDraftChange?.(value) }}
+          total={triggersTotal}
+          hasMore={props.triggersHasMore === true}
+          loadingMore={props.triggersLoadingMore === true}
+          loadMoreError={props.triggersLoadMoreError ?? null}
+          onLoadMore={props.onLoadMoreTriggers}
+          batchMode={triggerBatchMode}
+          selectedIds={selectedTriggerIds}
+          onBatchModeChange={(mode) => { props.onTriggerBatchModeChange?.(mode) }}
+          onToggleSelection={(id) => { props.onToggleTriggerSelection?.(id) }}
+          onDeleteSelected={() => { void confirmDeleteTriggers() }}
+          actions={actions}
+        />
       </div>
 
       {props.openRecordId !== null && (
@@ -403,26 +358,41 @@ export function TaskCenterPanel(): React.JSX.Element {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
   const [openRecordId, setOpenRecordId] = useState<number | null>(null)
+  const [taskSearch, setTaskSearch] = useState('')
+  const [taskBatchMode, setTaskBatchMode] = useState(false)
+  const [triggerBatchMode, setTriggerBatchMode] = useState(false)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<ReadonlySet<number>>(() => new Set())
+  const [selectedTriggerIds, setSelectedTriggerIds] = useState<ReadonlySet<number>>(() => new Set())
   const [scanning, setScanning] = useState(false)
+  const refreshingRef = useRef(false)
+  /**
+   * 刷新进行中又收到事件/写操作时，只记录一次尾随刷新；不能直接丢弃，
+   * 否则最后一条变更可能要等下一次轮询才出现。
+   */
+  const refreshPendingRef = useRef(false)
   const { notice, flash, hold } = useTransientNotice(4000)
 
   const taskState = useFreshData('taskCenter:tasks', fetchTasks, { shouldCache: (d) => !d.readError, liveRefresh: true })
-  // 触发记录的缓存键带上选中任务：切换筛选 = 换一份数据，`useFreshData` 会先清空再取。
-  const fetchTriggers = useCallback(
-    () => apiListTaskTriggers(selectedTaskId !== null ? { taskId: selectedTaskId } : undefined),
-    [selectedTaskId],
-  )
-  const triggerState = useFreshData(
-    'taskCenter:triggers:' + (selectedTaskId === null ? 'all' : String(selectedTaskId)),
-    fetchTriggers,
-    { shouldCache: (d) => !d.readError, liveRefresh: true },
-  )
-  const reloadTasks = taskState.reload
-  const reloadTriggers = triggerState.reload
+  const triggerState = useTaskCenterTriggers(selectedTaskId)
+  const reloadTasks = taskState.reloadSilent
+  const reloadTriggers = triggerState.reloadSilent
+  const refreshing = taskState.refreshing || triggerState.refreshing
 
-  /** 两栏一起回源（写动作/事件/刷新/扫描后的统一出口）。 */
+  /** 两栏一起静默回源（写动作/事件/刷新/扫描后的统一出口）。 */
   const refreshBoth = useCallback(async (): Promise<void> => {
-    await Promise.all([reloadTasks(), reloadTriggers()])
+    if (refreshingRef.current) {
+      refreshPendingRef.current = true
+      return
+    }
+    refreshingRef.current = true
+    try {
+      do {
+        refreshPendingRef.current = false
+        await Promise.all([reloadTasks(), reloadTriggers()])
+      } while (refreshPendingRef.current)
+    } finally {
+      refreshingRef.current = false
+    }
   }, [reloadTasks, reloadTriggers])
 
   /** 防抖后的统一回源：两个事件源都走它，避免同一批变更打两轮。 */
@@ -462,7 +432,20 @@ export function TaskCenterPanel(): React.JSX.Element {
   }, [taskData, selectedTaskId, expandedTaskId, flash])
 
   const taskItems = taskData?.items ?? NO_TASKS
-  const triggerItems = triggerState.data?.items ?? NO_TRIGGERS
+  const triggerItems = triggerState.items
+
+  /** 刷新后只保留仍存在的 id；搜索/筛选变化时直接清空，避免删除当前看不到的记录。 */
+  useEffect(() => {
+    setSelectedTaskIds((current) => retainSelectedIds(current, taskItems.map((task) => task.id)))
+  }, [taskItems])
+  useEffect(() => {
+    setSelectedTriggerIds((current) => retainSelectedIds(current, triggerItems.map((record) => record.id)))
+  }, [triggerItems])
+  useEffect(() => { setSelectedTaskIds(new Set()) }, [taskSearch])
+  useEffect(() => {
+    setSelectedTriggerIds(new Set())
+  }, [selectedTaskId, triggerState.searchDraft])
+
   /** 弹窗内容按 id 从**最新**快照解析：找不到时传 null，弹窗显示「记录已不可用」。 */
   const openRecord = useMemo(
     () => (openRecordId === null ? null : (triggerItems.find((r) => r.id === openRecordId) ?? null)),
@@ -470,8 +453,8 @@ export function TaskCenterPanel(): React.JSX.Element {
   )
 
   const handleRefresh = useCallback((): void => {
-    void refreshBoth().then(() => { flash('已刷新最新数据') })
-  }, [flash, refreshBoth])
+    void refreshBoth()
+  }, [refreshBoth])
 
   const handleScan = useCallback((): void => {
     if (scanning) return
@@ -517,6 +500,7 @@ export function TaskCenterPanel(): React.JSX.Element {
       if (result.ok) {
         setExpandedTaskId((cur) => (cur === id ? null : cur))
         setSelectedTaskId((cur) => (cur === id ? null : cur))
+        await refreshBoth()
       }
       return result
     } catch (e) {
@@ -524,7 +508,30 @@ export function TaskCenterPanel(): React.JSX.Element {
       hold(`删除任务失败：${message}`)
       return { ok: false, error: message }
     }
-  }, [hold])
+  }, [hold, refreshBoth])
+
+  const handleDeleteTasks = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
+    const result = await apiDeleteTaskInfos({ ids })
+    if (result.ok) {
+      const removed = new Set(ids)
+      setSelectedTaskIds((current) => new Set([...current].filter((id) => !removed.has(id))))
+      setExpandedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      setSelectedTaskId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      await refreshBoth()
+    }
+    return result
+  }, [refreshBoth])
+
+  const handleDeleteTriggers = useCallback(async (ids: number[]): Promise<TaskBatchMutationResult> => {
+    const result = await apiDeleteTaskTriggers({ ids })
+    if (result.ok) {
+      const removed = new Set(ids)
+      setSelectedTriggerIds((current) => new Set([...current].filter((id) => !removed.has(id))))
+      setOpenRecordId((cur) => (cur !== null && removed.has(cur) ? null : cur))
+      await refreshBoth()
+    }
+    return result
+  }, [refreshBoth])
 
   const handleDispatch = useCallback(async (triggerId: number): Promise<TaskCallbackDispatchResult> => {
     try {
@@ -546,6 +553,8 @@ export function TaskCenterPanel(): React.JSX.Element {
     onSaveTask: handleSaveTask,
     onSetStatus: handleSetStatus,
     onDeleteTask: handleDeleteTask,
+    onDeleteTasks: handleDeleteTasks,
+    onDeleteTriggers: handleDeleteTriggers,
     onDispatch: handleDispatch,
     onNotice: flash,
   }
@@ -563,11 +572,30 @@ export function TaskCenterPanel(): React.JSX.Element {
       tasksError={taskState.error}
       triggersError={triggerState.error}
       tasksReadError={taskData?.readError ?? null}
-      triggersReadError={triggerState.data?.readError ?? null}
+      triggersReadError={triggerState.readError}
       tasksStale={taskState.stale}
       triggersStale={triggerState.stale}
+      triggersTotal={triggerState.total}
+      triggersHasMore={triggerState.hasMore}
+      triggersLoadingMore={triggerState.loadingMore}
+      triggersLoadMoreError={triggerState.loadMoreError}
+      onLoadMoreTriggers={triggerState.loadMore}
       scanning={scanning}
+      refreshing={refreshing}
       notice={notice}
+      taskSearch={taskSearch}
+      onTaskSearchChange={setTaskSearch}
+      triggerSearch={triggerState.search}
+      triggerSearchDraft={triggerState.searchDraft}
+      onTriggerSearchDraftChange={triggerState.setSearchDraft}
+      taskBatchMode={taskBatchMode}
+      selectedTaskIds={selectedTaskIds}
+      onTaskBatchModeChange={(mode) => { setTaskBatchMode(mode); if (!mode) setSelectedTaskIds(new Set()) }}
+      onToggleTaskSelection={(id) => { setSelectedTaskIds((current) => toggleSelectedId(current, id)) }}
+      triggerBatchMode={triggerBatchMode}
+      selectedTriggerIds={selectedTriggerIds}
+      onTriggerBatchModeChange={(mode) => { setTriggerBatchMode(mode); if (!mode) setSelectedTriggerIds(new Set()) }}
+      onToggleTriggerSelection={(id) => { setSelectedTriggerIds((current) => toggleSelectedId(current, id)) }}
       actions={actions}
     />
   )

@@ -12,6 +12,8 @@
 import { decodeImageDataUrlAsync } from '../query/media-image-async.ts'
 import {
   deleteTaskInfo,
+  deleteTaskInfos,
+  deleteTaskTriggers,
   dispatchPendingTaskCallbacks,
   dispatchTaskCallback,
   listTaskInfos,
@@ -24,6 +26,7 @@ import type { PendingDispatchResult, TaskDispatchDeps } from '../query/task-cent
 import type { RetryFetch } from '../net/fetch-retry.ts'
 import type {
   TaskCallbackDispatchResult,
+  TaskBatchMutationResult,
   TaskInfoInput,
   TaskInfoMutationResult,
   TaskInfoSnapshot,
@@ -121,6 +124,24 @@ export function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs) {
     deleteTaskInfo(options: { id: number }): TaskInfoMutationResult {
       const r = deleteTaskInfo(dirs().decrypted, options?.id)
       rc.op('task', 'delete_task_info', r.ok ? 'ok' : 'fail', 'id=' + String(options?.id ?? ''), r.error ?? '')
+      return r
+    },
+
+    deleteTaskInfos(options: { ids: number[] }): TaskBatchMutationResult {
+      const r = deleteTaskInfos(dirs().decrypted, options?.ids)
+      rc.op(
+        'task', 'delete_task_infos', r.ok ? 'ok' : 'fail',
+        'count=' + String(options?.ids?.length ?? 0), r.error ?? ('removed=' + String(r.removed)),
+      )
+      return r
+    },
+
+    deleteTaskTriggers(options: { ids: number[] }): TaskBatchMutationResult {
+      const r = deleteTaskTriggers(dirs().decrypted, options?.ids)
+      rc.op(
+        'task', 'delete_task_triggers', r.ok ? 'ok' : 'fail',
+        'count=' + String(options?.ids?.length ?? 0), r.error ?? ('removed=' + String(r.removed)),
+      )
       return r
     },
 

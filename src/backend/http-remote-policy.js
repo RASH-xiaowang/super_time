@@ -169,7 +169,8 @@ const LOCAL_ONLY_BY_FAMILY = {
   'B 任务信息写侧：写本机任务库 / 扫描会生成触发记录': [
     // 2026-10-19：任务信息是「用户显式创建 + 本机落库」的配置，与待办/摘要任务同族；
     // 扫描会把命中记录写进本机库（并且可能触发下一族的回调投递），远程端不该驱动它。
-    'saveTaskInfo', 'deleteTaskInfo', 'setTaskInfoStatus', 'scanTaskTriggers',
+    'saveTaskInfo', 'deleteTaskInfo', 'deleteTaskInfos', 'deleteTaskTriggers',
+    'setTaskInfoStatus', 'scanTaskTriggers',
   ],
   'D 任务回调投递：按用户配置的地址把触发内容发到外部平台': [
     // 与 ClawBot 发消息同属「以用户身份对外产生后果」：一条调用就会把触发文本与图片

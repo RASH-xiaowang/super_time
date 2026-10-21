@@ -357,6 +357,11 @@ export interface ClawbotMessageQuery {
     q?: string;
     /** 序号续传：只取 `id > afterId` 的行（按 id 升序返回，供实时增量合并）。 */
     afterId?: number;
+    /**
+     * 向前取历史：只取 `id < beforeId` 的行（按 id 倒序返回）。
+     * 自动回复取目标消息之前的上下文时使用，避免先取最新 N 条再过滤而漏掉较旧目标。
+     */
+    beforeId?: number;
     limit?: number;
     offset?: number;
 }
@@ -376,7 +381,36 @@ export interface ClawbotEnvCheckItem {
     state: 'ok' | 'warn' | 'error';
     detail: string;
 }
+/** ClawBot 自动回复当前阶段。 */
+export type ClawbotAutoReplyStage = 'idle' | 'recovering' | 'generating' | 'sending' | 'completing';
+/**
+ * 自动回复 runner 的进程级可观测快照。
+ *
+ * 计数从当前进程创建 runner 起累计；`pending` 包含内存队列、debounce 与 durable 定时器。
+ */
+export interface ClawbotAutoReplyStats {
+    pending: number;
+    inFlight: boolean;
+    stage: ClawbotAutoReplyStage;
+    inFlightSlot: number | null;
+    inFlightRunId: number | null;
+    recovered: number;
+    recoveryContinuations: number;
+    leaseLost: number;
+    coalesced: number;
+    generationSucceeded: number;
+    generationFailed: number;
+    sendSucceeded: number;
+    sendRetried: number;
+    sendFailedPermanently: number;
+    dropped: number;
+    backpressure: number;
+    lastError: string | null;
+    lastCompletedAt: number | null;
+}
 /** 环境自检快照。 */
 export interface ClawbotEnvSnapshot {
     items: ClawbotEnvCheckItem[];
+    /** 进程级统计；自动回复是全局单飞，因此该快照跨实例汇总。 */
+    autoReplyStats: ClawbotAutoReplyStats;
 }

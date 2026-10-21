@@ -58,6 +58,7 @@ import type {
   ClawbotBinding,
   ClawbotBindingSnapshot,
   ClawbotBindingStatus,
+  ClawbotAutoReplyStats,
   ClawbotChannelInfo,
   ClawbotEnvSnapshot,
   ClawbotInstanceConfig,
@@ -71,13 +72,16 @@ import type {
   OperationCategory,
   OperationStatus,
 } from '../types.ts'
+import { randomUUID } from 'node:crypto'
 import type { BindingCredentials } from '../query/clawbot/clawbot-binding.ts'
 import { completeBinding, markBindingQr, readBinding, readBindingInternal, readBindings, renameBinding, saveSendContextToken, saveSyncBuf, unbindBinding } from '../query/clawbot/clawbot-binding.ts'
 import type { ClawbotMessageInput } from '../query/clawbot/clawbot-message.ts'
-import { clearClawbotMessages, clawbotMessageCounts, insertClawbotMessage, listClawbotMediaPending, listClawbotMessages as queryClawbotMessages } from '../query/clawbot/clawbot-message.ts'
+import { clearClawbotMessages, clawbotMessageCounts, findClawbotMessageIdByClientId, insertClawbotMessage, insertClawbotMessagesBatch, listClawbotMediaPending, listClawbotMessages as queryClawbotMessages, suppressClawbotMessageIds } from '../query/clawbot/clawbot-message.ts'
 import { createClawbotChannel, type ClawbotChannel } from '../query/clawbot/clawbot-channel.ts'
-import { DEFAULT_CLAWBOT_SLOT } from '../query/clawbot/clawbot-db.ts'
-import { createAutoReplyRunner, type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts'
+import { DEFAULT_CLAWBOT_SLOT, clawbotDbExists } from '../query/clawbot/clawbot-db.ts'
+import { MAX_PENDING, createAutoReplyRunner, type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts'
+import { clearClawbotReplyState } from '../query/clawbot/clawbot-reply-store.ts'
+import { warmClawbotStore } from '../query/clawbot/clawbot-store-warmup.ts'
 import {
   createClawbotInstance as createInstanceRow,
   deleteClawbotInstance as deleteInstanceRow,
@@ -173,6 +177,58 @@ function safeEmit(rc: createClawbotRemotesInputs, event: ClawbotEmitEvent): void
   } catch { /* event best-effort */ }
 }
 
+/** 单个 slot 的一类内存代次（发送回填与扫码请求各用一套）。 */
+interface ClawbotEpochCounter {
+  current: (slot: number) => number
+  advance: (slot: number) => number
+  isCurrent: (slot: number, epoch: number) => boolean
+}
+
+function createClawbotEpochCounter(): ClawbotEpochCounter {
+  const epochs = new Map<number, number>()
+  const current = (slot: number): number => epochs.get(slot) ?? 0
+  return {
+    current,
+    advance(slot: number): number {
+      const next = current(slot) + 1
+      epochs.set(slot, next)
+      return next
+    },
+    isCurrent(slot: number, epoch: number): boolean {
+      return current(slot) === epoch
+    },
+  }
+}
+
+/**
+ * 发送回填看 `persist`，扫码请求看 `bind`，接收批次看 `intake`，游标会话看 `cursor`。
+ *
+ * 重新生成二维码不应让并发的发送/自动回复被判为本地已清理；只有解绑、清空、删除
+ * 才推进 `persist`。清空推进 `intake` 但保留 `cursor`（同一绑定会话可以安全推进
+ * sync_buf）；解绑/删除/重新绑定同时推进两者，旧批次的游标不得写进新会话。
+ */
+interface ClawbotLifecycleEpochs {
+  persist: ClawbotEpochCounter
+  bind: ClawbotEpochCounter
+  intake: ClawbotEpochCounter
+  cursor: ClawbotEpochCounter
+}
+
+function createClawbotLifecycleEpochs(): ClawbotLifecycleEpochs {
+  return {
+    persist: createClawbotEpochCounter(),
+    bind: createClawbotEpochCounter(),
+    intake: createClawbotEpochCounter(),
+    cursor: createClawbotEpochCounter(),
+  }
+}
+
+/** 库不存在时为 legacy 默认 slot 保留首次取码；已有库则必须命中真实实例。 */
+function clawbotInstanceExists(decryptedDir: string, slot: number): boolean {
+  if (!clawbotDbExists(decryptedDir)) return slot === DEFAULT_CLAWBOT_SLOT
+  return readBindings(decryptedDir).bindings.some(binding => binding.slot === slot)
+}
+
 /** 当天 0 点（本地时区）——「今日消息」的口径与操作日志的 from/to 语义一致。 */
 function startOfToday(): number {
   const d = new Date()
@@ -208,12 +264,25 @@ interface ClawbotBindSession {
 async function sendClawbotText(
   decryptedDir: string,
   ilink: ClawbotIlinkDeps,
-  options: { text: string },
+  options: { text: string, clientId?: string, shouldPersist?: () => boolean },
   slot: number,
 ): Promise<ClawbotSendResult> {
   const text = typeof options?.text === 'string' ? options.text : ''
   if (text.trim() === '') return { ok: false, id: null, error: '消息内容为空' }
-  const { binding, credentials, sendContextToken } = readBindingInternal(decryptedDir, slot)
+  const suppliedClientId = typeof options.clientId === 'string' && options.clientId.trim() !== ''
+    ? options.clientId.trim()
+    : null
+  const clientId = suppliedClientId ?? randomUUID()
+  if (suppliedClientId !== null) {
+    try {
+      const existing = findClawbotMessageIdByClientId(decryptedDir, slot, suppliedClientId)
+      // 本地已有成功回填 ⇒ 上次只是 outbox 状态没来得及写，直接返回同一行。
+      if (existing !== null) return { ok: true, id: existing }
+    } catch (e) {
+      return { ok: false, id: null, error: '发送前本地幂等检查失败：' + (e instanceof Error ? e.message : String(e)) }
+    }
+  }
+  const { binding, credentials, sendContextToken, sessionEpoch } = readBindingInternal(decryptedDir, slot)
   if (binding.status !== 'bound' || credentials === null) {
     return { ok: false, id: null, error: '尚未绑定微信（先到「集成设置」完成绑定）' }
   }
@@ -224,15 +293,37 @@ async function sendClawbotText(
   }
   let resp: IlinkSendResult
   try {
-    resp = await ilink.sendTextMessage(credentials, { toUserId, text, contextToken: sendContextToken })
+    resp = await ilink.sendTextMessage(credentials, { toUserId, text, contextToken: sendContextToken, clientId })
   } catch (e) {
     return { ok: false, id: null, error: '发送失败：' + (e instanceof Error ? e.message : String(e)) }
   }
   if (resp.ret !== 0) {
     return { ok: false, id: null, error: `发送被服务端拒绝（ret=${String(resp.ret)}${resp.errMsg !== '' ? '：' + resp.errMsg : ''}）` }
   }
-  const id = insertClawbotMessage(decryptedDir, { slot, ts: Date.now(), direction: 'out', msgType: 'text', content: text })
-  return { ok: true, id }
+  let shouldPersist = true
+  try {
+    shouldPersist = options.shouldPersist?.() ?? true
+  } catch {
+    shouldPersist = false
+  }
+  if (!shouldPersist) {
+    return { ok: false, id: null, error: '上游已接收，但本地会话已清理/实例已变化，未回填' }
+  }
+  // 手动发送每次生成一次 key；outbox 重试则复用持久化的 key。两步都走同一条本地去重。
+  try {
+    const id = insertClawbotMessage(
+      decryptedDir,
+      { slot, ts: Date.now(), direction: 'out', msgType: 'text', content: text, clientId },
+      { expectedSessionEpoch: sessionEpoch },
+    )
+    return { ok: true, id }
+  } catch (e) {
+    return {
+      ok: false,
+      id: null,
+      error: '上游已接收、本地状态未知/回填失败：' + (e instanceof Error ? e.message : String(e)),
+    }
+  }
 }
 
 /**
@@ -303,29 +394,59 @@ async function mediaFor(decryptedDir: string, media: ClawbotMediaDeps, id: numbe
  *   `inbound` 是**本批新落库的消息**（含方向与类型）—— 自动回复据此挑选候选，
  *   省掉「落完库再查一次刚刚插了哪些」那一趟。
  */
-export function insertClawbotMessages(decryptedDir: string, slot: number, msgs: readonly WeixinMessage[]): { lastId: number, delta: number, mediaIds: number[], inbound: ReplyableMessage[] } | null {
+export function insertClawbotMessages(
+  decryptedDir: string,
+  slot: number,
+  msgs: readonly WeixinMessage[],
+  options: { replyIntake?: boolean, expectedSessionEpoch?: number } = {},
+): { lastId: number, delta: number, mediaIds: number[], inbound: ReplyableMessage[] } | null {
   let lastId = 0
   let delta = 0
   let latestToken = ''
   const mediaIds: number[] = []
   /** 本批新落库的消息（自动回复用；**只有新插入的**才算，去重跳过的旧帧不进来）。 */
   const inbound: ReplyableMessage[] = []
+  /** 同一帧先全部映射，再走一次开库 + 一个事务，避免逐条开库。 */
+  const pending: Array<{ input: ClawbotMessageInput, token: string }> = []
   for (const msg of msgs) {
-    // 会话令牌只认**用户发来**的帧（bot 回显不刷新它），取最新一枚。
     const token = typeof msg.context_token === 'string' ? msg.context_token : ''
-    if (token !== '' && (msg.message_type ?? 1) !== 2) latestToken = token
     const input: ClawbotMessageInput | null = mapWeixinMessage(msg)
     if (input === null) continue
-    const id = insertClawbotMessage(decryptedDir, { ...input, slot })
+    pending.push({ input: { ...input, slot }, token })
+  }
+  const ids = insertClawbotMessagesBatch(
+    decryptedDir,
+    pending.map(item => item.input),
+    {
+      ...(options.replyIntake === true ? { replyIntake: { maxPending: MAX_PENDING } } : {}),
+      ...(options.expectedSessionEpoch === undefined ? {} : { expectedSessionEpoch: options.expectedSessionEpoch }),
+    },
+  )
+  pending.forEach(({ input, token }, i) => {
+    const id = ids[i] ?? null
     if (id !== null) {
       lastId = id
       delta += 1
+      // 只有**真正新增的入站消息**才能刷新发送令牌；被去重/墓碑拦下的旧帧不能覆盖当前上下文。
+      if (token !== '' && input.direction === 'in') latestToken = token
       inbound.push({ direction: input.direction, msgType: input.msgType ?? null, content: input.content, id })
       if (input.media !== null && input.media !== undefined) mediaIds.push(id)
     }
-  }
-  if (latestToken !== '') saveSendContextToken(decryptedDir, latestToken, slot)
+  })
+  if (latestToken !== '') saveSendContextToken(decryptedDir, latestToken, slot, options.expectedSessionEpoch)
   return delta > 0 ? { lastId, delta, mediaIds, inbound } : null
+}
+
+/**
+ * 自动回复执行器的配置读取。
+ *
+ * 读失败必须抛出而不是回落默认配置：默认 `autoReply:false` 会把一次临时库故障
+ * 解释成用户主动关闭，恢复中的 run 就会被错误标记为 skipped。
+ */
+function readAutoReplyConfig(decryptedDir: string, slot: number): ClawbotInstanceConfig {
+  const read = readInstanceConfig(decryptedDir, slot)
+  if (read.readError !== undefined) throw new Error(read.readError)
+  return read.config
 }
 
 /**
@@ -339,9 +460,10 @@ export function insertClawbotMessages(decryptedDir: string, slot: number, msgs: 
  */
 function readAutoReplyHistory(decryptedDir: string, slot: number, beforeId: number): Array<{ role: 'user' | 'assistant', content: string }> {
   try {
-    const snap = queryClawbotMessages(decryptedDir, { slot, limit: 20 })
+    // 直接在 SQL 层限定 id < beforeId：队列积压时目标可能早于“最新 20 条”，
+    // 先取最新再过滤会把上下文误判为空。
+    const snap = queryClawbotMessages(decryptedDir, { slot, beforeId, limit: 20 })
     return snap.items
-      .filter((m) => m.id < beforeId)
       .sort((a, b) => a.id - b.id)
       .map((m) => ({
         role: m.direction === 'in' ? ('user' as const) : ('assistant' as const),
@@ -362,9 +484,10 @@ function readAutoReplyHistory(decryptedDir: string, slot: number, beforeId: numb
 async function readAutoReplyImages(decryptedDir: string, slot: number, beforeId: number): Promise<Array<{ data: string, mediaType: string, name?: string }>> {
   const out: Array<{ data: string, mediaType: string, name?: string }> = []
   try {
-    const snap = queryClawbotMessages(decryptedDir, { slot, limit: 40 })
+    // 方向与上界都交给 SQL：这样目标较旧时仍能找到它之前的入站图片。
+    const snap = queryClawbotMessages(decryptedDir, { slot, beforeId, direction: 'in', limit: 40 })
     const rows = snap.items
-      .filter((m) => m.id < beforeId && m.direction === 'in' && m.msgType === 'image')
+      .filter((m) => m.msgType === 'image')
       .sort((a, b) => b.id - a.id)
       .slice(0, 2)
       .reverse()
@@ -389,12 +512,16 @@ function createBindFlow(deps: {
   dir: () => string
   rc: createClawbotRemotesInputs
   ilink: ClawbotIlinkDeps
+  lifecycle: ClawbotLifecycleEpochs
   channelFor: (slot: number) => ClawbotChannel
   reconcileChannels: () => void
   bindingSnapshot: (slot: number) => ClawbotBindingSnapshot
   sweepMedia: () => void
+  recoverReplies: () => void
+  discardReplies: (slot: number) => void
+  isSessionCurrent: (session: ClawbotBindSession) => boolean
 }) {
-  const { dir, rc, ilink, channelFor, reconcileChannels, bindingSnapshot, sweepMedia } = deps
+  const { dir, rc, ilink, lifecycle, channelFor, reconcileChannels, bindingSnapshot, sweepMedia, recoverReplies, discardReplies, isSessionCurrent } = deps
 
   /**
    * 扫码确认 / 测试驱动的绑定收尾：回写身份与凭证、写审计、发事件、拉起该实例的通道。
@@ -410,10 +537,21 @@ function createBindFlow(deps: {
   ): ClawbotBindingSnapshot {
     const d = dir()
     const before = readBinding(d, slot).binding
+    // completeBinding 会换凭证并清空 sync_buf；旧请求从这一刻起既不能落库，
+    // 也不能把旧会话的游标写回新绑定。
+    lifecycle.intake.advance(slot)
+    lifecycle.cursor.advance(slot)
+    lifecycle.persist.advance(slot)
+    discardReplies(slot)
     const after: ClawbotBinding = completeBinding(d, identity, credentials ?? null, slot)
     rc.op('clawbot', 'clawbot_bind', 'ok', identity.wxid, `已绑定 ${identity.userName ?? identity.wxid}（实例 ${slot}）`)
     safeEmit(rc, { name: 'clawbot/binding-changed', args: { from: before.status, to: after.status, wxid: after.wxid } })
-    if (credentials != null) channelFor(slot).start()
+    if (credentials != null) {
+      const channel = channelFor(slot)
+      channel.stop()
+      channel.start()
+      recoverReplies()
+    }
     // 同一个 wxid 出现在别的实例上时，那一条已被收敛且凭证清空 —— 顺手停掉它的循环。
     reconcileChannels()
     return bindingSnapshot(slot)
@@ -426,6 +564,9 @@ function createBindFlow(deps: {
    */
   async function pollOnce(session: ClawbotBindSession): Promise<ClawbotBindStateSnapshot> {
     const r = await ilink.pollBindStatus(session.token)
+    if (!isSessionCurrent(session)) {
+      return { state: 'idle', binding: bindingSnapshot(session.slot) }
+    }
     if (r.status === 'confirmed') {
       const creds = r.credentials
       const wxid = creds.ilinkUserId !== '' ? creds.ilinkUserId : creds.ilinkBotId
@@ -444,6 +585,10 @@ function createBindFlow(deps: {
    * 条件：该实例 `bound` 且凭证齐备 —— 其他状态一律不启动（**也就不会出网**）。
    */
   function ensureClawbotChannel(): void {
+    const warm = warmClawbotStore(dir())
+    if (warm.error !== undefined) {
+      rc.op('clawbot', 'clawbot_store_warmup', 'fail', '', warm.error)
+    }
     const { bindings } = readBindings(dir())
     let started = 0
     for (const b of bindings) {
@@ -454,6 +599,7 @@ function createBindFlow(deps: {
       started += 1
     }
     if (started > 0) sweepMedia()
+    recoverReplies()
   }
 
   return { bindClawbotWechat, pollOnce, ensureClawbotChannel }
@@ -470,11 +616,13 @@ function createBindingOps(deps: {
   rc: createClawbotRemotesInputs
   ilink: ClawbotIlinkDeps
   sessions: Map<number, ClawbotBindSession>
+  lifecycle: ClawbotLifecycleEpochs
+  discardReplies: (slot: number) => void
   stopChannel: (slot: number) => void
   bindingSnapshot: (slot: number) => ClawbotBindingSnapshot
   bindFlow: ReturnType<typeof createBindFlow>
 }) {
-  const { dir, rc, ilink, sessions, stopChannel, bindingSnapshot, bindFlow } = deps
+  const { dir, rc, ilink, sessions, lifecycle, discardReplies, stopChannel, bindingSnapshot, bindFlow } = deps
   const slotOf = (options?: { slot?: number }): number => resolveClawbotSlot(dir(), options?.slot)
 
   return {
@@ -495,7 +643,13 @@ function createBindingOps(deps: {
     async createClawbotBindQr(options?: { slot?: number }): Promise<ClawbotBindQr> {
       const d = dir()
       const slot = slotOf(options)
+      const epoch = lifecycle.bind.advance(slot)
+      // 新请求一发出，旧扫码会话立即失效，晚到的 poll 结果不能再推进绑定。
+      sessions.delete(slot)
       const qr = await ilink.requestBindQr()
+      if (!lifecycle.bind.isCurrent(slot, epoch) || !clawbotInstanceExists(d, slot)) {
+        throw new Error('绑定二维码已失效：实例已删除或绑定状态已变化，请重新发起绑定')
+      }
       const expiresAt = Date.now() + CLAWBOT_QR_TTL_MS
       const before = readBinding(d, slot).binding
       const after = markBindingQr(d, { token: qr.token, expiresAt }, slot)
@@ -539,11 +693,17 @@ function createBindingOps(deps: {
     unbindClawbot(options?: { slot?: number }): ClawbotBindingSnapshot {
       const d = dir()
       const slot = slotOf(options)
+      lifecycle.intake.advance(slot)
+      lifecycle.cursor.advance(slot)
+      lifecycle.persist.advance(slot)
+      lifecycle.bind.advance(slot)
+      discardReplies(slot)
       // 只停**已建**的通道：解绑一个从没跑过的实例不该凭空建出通道对象。
       stopChannel(slot)
       sessions.delete(slot)
       const before = readBinding(d, slot).binding
       const after = unbindBinding(d, slot)
+      clearClawbotReplyState(d, slot)
       const detail = before.status === 'bound'
         ? `已解绑 ${before.userName ?? before.wxid ?? ''}（接入会话保留）`
         : '解绑（此前未处于已绑定）'
@@ -585,10 +745,13 @@ function createSessionOps(deps: {
   rc: createClawbotRemotesInputs
   ilink: ClawbotIlinkDeps
   media: ClawbotMediaDeps
+  lifecycle: ClawbotLifecycleEpochs
+  discardReplies: (slot: number) => void
   channelInfo: (slot: number) => ClawbotChannelInfo
+  autoReplyStats: () => ClawbotAutoReplyStats
   bindingSnapshot: (slot: number) => ClawbotBindingSnapshot
 }) {
-  const { dir, rc, ilink, media, channelInfo, bindingSnapshot } = deps
+  const { dir, rc, ilink, media, lifecycle, discardReplies, channelInfo, autoReplyStats, bindingSnapshot } = deps
   const slotOf = (options?: { slot?: number }): number => resolveClawbotSlot(dir(), options?.slot)
 
   return {
@@ -612,7 +775,11 @@ function createSessionOps(deps: {
      */
     clearClawbotMessages(options?: { slot?: number }): { removed: number, messages: ClawbotMessageSnapshot } {
       const slot = slotOf(options)
+      lifecycle.intake.advance(slot)
+      lifecycle.persist.advance(slot)
+      discardReplies(slot)
       const { removed } = clearClawbotMessages(dir(), slot)
+      clearClawbotReplyState(dir(), slot)
       rc.op('clawbot', 'clawbot_messages_clear', 'ok', `slot=${slot}`, `已清空接入会话 ${String(removed)} 条`)
       return { removed, messages: queryClawbotMessages(dir(), { slot }) }
     },
@@ -651,6 +818,7 @@ function createSessionOps(deps: {
           { key: 'channel', label: '绑定通道（iLink）', state: channelState, detail: channelDetail },
           { key: 'binding', label: '集成状态仍为「已绑定」', state: bindingState, detail: bindingDetail },
         ],
+        autoReplyStats: autoReplyStats(),
       }
     },
 
@@ -665,7 +833,11 @@ function createSessionOps(deps: {
      */
     async sendClawbotMessage(options: { text: string, slot?: number }): Promise<ClawbotSendResult> {
       const slot = slotOf(options)
-      const result = await sendClawbotText(dir(), ilink, options, slot)
+      const epoch = lifecycle.persist.current(slot)
+      const result = await sendClawbotText(dir(), ilink, {
+        text: options.text,
+        shouldPersist: () => lifecycle.persist.isCurrent(slot, epoch),
+      }, slot)
       if (result.ok && result.id !== null) safeEmit(rc, { name: 'clawbot/message', args: { lastId: result.id, delta: 1, slot } })
       return result
     },
@@ -684,9 +856,108 @@ function createSessionOps(deps: {
   }
 }
 
+/** 实例管理（模块级：只让工厂负责装配，不承载具体生命周期逻辑）。 */
+function createInstanceOps(deps: {
+  decrypted: () => string
+  rc: createClawbotRemotesInputs
+  sessions: Map<number, ClawbotBindSession>
+  channels: Map<number, ClawbotChannel>
+  lifecycle: ClawbotLifecycleEpochs
+  discardReplies: (slot: number) => void
+  instancesSnapshot: () => ClawbotInstancesSnapshot
+  bindFlow: ReturnType<typeof createBindFlow>
+}) {
+  const { decrypted, rc, sessions, channels, lifecycle, discardReplies, instancesSnapshot, bindFlow } = deps
+
+  return {
+    /**
+     * 实例列表（设置视图的实例卡）：每个微信号一条，带各自的行为配置与会话计数。
+     * @returns 实例列表快照（读失败时带 readError，界面必须与「一个实例都没有」分开显示）。
+     */
+    listClawbotInstances(): ClawbotInstancesSnapshot {
+      return instancesSnapshot()
+    },
+
+    /**
+     * 新建一个实例（初始 `unbound`，等扫码绑定）。
+     *
+     * slot 由存储层按「绑定行自增 id」分配（**只增不复用**，见 `query/clawbot/clawbot-instance.ts`）。
+     * @returns 新实例编号 + 最新列表（界面据此立刻对它取码，不用去猜哪条是新的）。
+     */
+    createClawbotInstance(): ClawbotInstanceCreated {
+      const created = createInstanceRow(decrypted())
+      rc.op('clawbot', 'clawbot_instance_create', 'ok', `slot=${created.slot}`, '新建实例（等待绑定）')
+      return { slot: created.slot, ...instancesSnapshot() }
+    },
+
+    /**
+     * 删除一个实例：绑定行 + 配置 + **该实例的接入会话**一起删。
+     *
+     * 连带删会话是有意的（列表按实例遍历，实例没了那些行再也显示不出来），
+     * 所以返回删掉的条数 —— 界面必须在确认框里如实告知「将删除 N 条接入会话」。
+     * @param options.slot - 实例编号。
+     * @returns 连带删掉的会话条数 + 最新列表。
+     */
+    deleteClawbotInstance(options: { slot: number }): ClawbotInstanceDeleted {
+      const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
+      lifecycle.intake.advance(slot)
+      lifecycle.cursor.advance(slot)
+      lifecycle.persist.advance(slot)
+      lifecycle.bind.advance(slot)
+      discardReplies(slot)
+      const handle = channels.get(slot)
+      if (handle !== undefined) { handle.stop(); channels.delete(slot) }
+      sessions.delete(slot)
+      const { removedMessages } = deleteInstanceRow(decrypted(), slot)
+      rc.op('clawbot', 'clawbot_instance_delete', 'ok', `slot=${slot}`, `已删除实例（连带 ${String(removedMessages)} 条接入会话）`)
+      return { removedMessages, ...instancesSnapshot() }
+    },
+
+    /**
+     * 改某实例的行为配置（**部分更新**：只覆盖传进来的字段，缺省保持原值）。
+     * @param options.slot - 实例编号。
+     * @param options.autoReply / kbEnabled / kbId / systemPrompt / splitReply - 要改的字段。
+     * @returns 落库后的完整配置（含归一后的 kbId）。
+     */
+    setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): ClawbotInstanceConfig {
+      const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
+      const patch: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean } = {}
+      if (options.autoReply !== undefined) patch.autoReply = options.autoReply
+      if (options.kbEnabled !== undefined) patch.kbEnabled = options.kbEnabled
+      // 非正数 / 非有限值 = 「没有库」，一律归 null；**不许夹到 1** —— 那等于
+      // 替用户悄悄选了一个库，自动回复会去检索一个他没选过的知识库。
+      if (options.kbId !== undefined) {
+        patch.kbId = options.kbId === null || !Number.isFinite(options.kbId) || options.kbId <= 0
+          ? null
+          : Math.floor(options.kbId)
+      }
+      // 提示词：只接受字符串（非字符串当「没传」，不把 undefined 写进去覆盖原值）。
+      if (typeof options.systemPrompt === 'string') patch.systemPrompt = options.systemPrompt
+      if (options.splitReply !== undefined) patch.splitReply = options.splitReply
+      const cfg = saveInstanceConfig(decrypted(), slot, patch)
+      rc.op('clawbot', 'clawbot_instance_config', 'ok', `slot=${slot}`,
+        `自动回复 ${cfg.autoReply ? '开' : '关'} / 知识库 ${cfg.kbEnabled ? '开' : '关'}` +
+        ` / 提示词 ${cfg.systemPrompt === '' ? '默认' : `${String(cfg.systemPrompt.length)} 字`}` +
+        ` / 分段 ${cfg.splitReply ? '开' : '关'}`)
+      return cfg
+    },
+
+    /** **内部**（不加 `@Remote`）：见 {@link createBindFlow} 的 `bindClawbotWechat`。 */
+    bindClawbotWechat: bindFlow.bindClawbotWechat,
+
+    /**
+     * **内部**（不加 `@Remote`）：网关启动时把**每个已绑定实例**的通道拉起来。
+     *
+     * 条件：该实例 `bound` 且凭证齐备 —— 其他状态一律不启动（**也就不会出网**）。
+     * 幂等：通道自己保证重复 `start()` 无副作用。顺带做一次附件**启动补扫**：
+     * 上次运行没取完、或当时网络不通的那批，在这里补齐（缓存命中的只是一次 stat）。
+     */
+    ensureClawbotChannel: bindFlow.ensureClawbotChannel,
+  }
+}
+
 export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
   const decrypted = (): string => rc.dirs().decrypted
-
   const ilink: ClawbotIlinkDeps = {
     requestBindQr: ilinkRequestBindQr,
     pollBindStatus: ilinkPollBindStatus,
@@ -695,7 +966,6 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms) }),
     ...(rc.ilink ?? {}),
   }
-
   const media: ClawbotMediaDeps = { ensure: rc.media?.ensure ?? ensureClawbotMedia }
 
   /**
@@ -710,7 +980,8 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
 
   /** 进行中的扫码会话（**每实例一场**：用户可能同时给两个号取码）。 */
   const sessions = new Map<number, ClawbotBindSession>()
-
+  /** 生命周期代次只活在当前进程；重启后未完成的发送本来就不该继续回填。 */
+  const lifecycle = createClawbotLifecycleEpochs()
   /**
    * AI 自动回复执行器（多实例，2026-10-13）。
    *
@@ -720,9 +991,17 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
    * 发送复用 `sendClawbotText`（**成功才落库**，失败不写「已回复」的假记录）。
    */
   const autoReply = createAutoReplyRunner({
-    readConfig: (slot: number) => readInstanceConfig(decrypted(), slot).config,
+    readConfig: (slot: number) => readAutoReplyConfig(decrypted(), slot),
     ...(rc.ask === undefined ? {} : { ask: rc.ask }),
-    send: (slot: number, text: string) => sendClawbotText(decrypted(), ilink, { text }, slot),
+    durable: { dir: decrypted },
+    send: (slot, text, context) => {
+      const epoch = lifecycle.persist.current(slot)
+      return sendClawbotText(decrypted(), ilink, {
+        text,
+        ...(context === undefined ? {} : { clientId: context.clientId }),
+        shouldPersist: () => lifecycle.persist.isCurrent(slot, epoch),
+      }, slot)
+    },
     op: rc.op,
     onReplied: ({ slot, id }) => { safeEmit(rc, { name: 'clawbot/message', args: { lastId: id, delta: 1, slot } }) },
     history: (slot, target) => (target.id === undefined ? [] : readAutoReplyHistory(decrypted(), slot, target.id)),
@@ -743,6 +1022,18 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     const existing = channels.get(slot)
     if (existing !== undefined) return existing
     const handle: ClawbotChannel = createClawbotChannel({
+      beginBatch: () => {
+        const intake = lifecycle.intake.current(slot)
+        const cursor = lifecycle.cursor.current(slot)
+        const current = readBindingInternal(decrypted(), slot)
+        if (current.readError !== undefined) throw new Error(current.readError)
+        return {
+          isCurrent: () => lifecycle.intake.current(slot) === intake,
+          canAdvanceStaleBuf: () => lifecycle.cursor.current(slot) === cursor,
+          sessionEpoch: current.sessionEpoch,
+          clearWatermark: current.clearWatermark,
+        }
+      },
       getUpdates: (buf, signal) => {
         const { credentials } = readBindingInternal(decrypted(), slot)
         if (credentials === null) {
@@ -754,9 +1045,28 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
         return ilink.getUpdates(credentials, buf, undefined, signal)
       },
       readBuf: () => readBindingInternal(decrypted(), slot).syncBuf,
-      saveBuf: (buf) => { saveSyncBuf(decrypted(), buf, slot) },
-      insertMessages: (msgs) => {
-        const inserted = insertClawbotMessages(decrypted(), slot, msgs)
+      saveBuf: (buf, expectedSessionEpoch) => { saveSyncBuf(decrypted(), buf, slot, expectedSessionEpoch) },
+      suppressMessages: (msgIds, expectedSessionEpoch) => {
+        suppressClawbotMessageIds(
+          decrypted(),
+          slot,
+          msgIds,
+          expectedSessionEpoch === undefined ? undefined : { expectedSessionEpoch },
+        )
+      },
+      insertMessages: (msgs, expectedSessionEpoch) => {
+        // 自动回复开启（或配置暂时读不出）时，消息与 reply run 在同一事务落库；
+        // 进程在 consider 之前退出也不会留下「消息已收、任务未建」的缺口。
+        let replyIntake = false
+        try {
+          replyIntake = readAutoReplyConfig(decrypted(), slot).autoReply
+        } catch {
+          replyIntake = true
+        }
+        const inserted = insertClawbotMessages(decrypted(), slot, msgs, {
+          replyIntake,
+          ...(expectedSessionEpoch === undefined ? {} : { expectedSessionEpoch }),
+        })
         // 收到带附件的消息 ⇒ 立刻排队自动取回（不等人点；失败在补扫里重试）。
         if (inserted !== null && inserted.mediaIds.length > 0) mediaQueue.enqueue(inserted.mediaIds)
         // 自动回复（**默认关**，开关在实例卡上）：只看本批新落库的入站文本。
@@ -804,7 +1114,11 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
   function reconcileChannels(): void {
     for (const [slot, handle] of channels) {
       const { binding, credentials } = readBindingInternal(decrypted(), slot)
-      if (binding.status !== 'bound' || credentials === null) handle.stop()
+      if (binding.status !== 'bound' || credentials === null) {
+        lifecycle.intake.advance(slot)
+        lifecycle.cursor.advance(slot)
+        handle.stop()
+      }
     }
   }
 
@@ -822,10 +1136,14 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     dir: decrypted,
     rc,
     ilink,
+    lifecycle,
     channelFor,
     reconcileChannels,
     bindingSnapshot,
     sweepMedia: () => { mediaQueue.sweep() },
+    recoverReplies: () => { autoReply.recover() },
+    discardReplies: (slot) => { autoReply.discard(slot) },
+    isSessionCurrent: (session) => sessions.get(session.slot) === session,
   })
 
   const bindingOps = createBindingOps({
@@ -833,6 +1151,8 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     rc,
     ilink,
     sessions,
+    lifecycle,
+    discardReplies: (slot) => { autoReply.discard(slot) },
     stopChannel: (slot: number) => { channels.get(slot)?.stop() },
     bindingSnapshot,
     bindFlow,
@@ -843,93 +1163,27 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
     rc,
     ilink,
     media,
+    lifecycle,
+    discardReplies: (slot) => { autoReply.discard(slot) },
     channelInfo: channelInfoOf,
+    autoReplyStats: () => autoReply.stats(),
     bindingSnapshot,
+  })
+
+  const instanceOps = createInstanceOps({
+    decrypted,
+    rc,
+    sessions,
+    channels,
+    lifecycle,
+    discardReplies: (slot) => { autoReply.discard(slot) },
+    instancesSnapshot,
+    bindFlow,
   })
 
   return {
     ...bindingOps,
     ...sessionOps,
-
-    /**
-     * 实例列表（设置视图的实例卡）：每个微信号一条，带各自的行为配置与会话计数。
-     * @returns 实例列表快照（读失败时带 readError，界面必须与「一个实例都没有」分开显示）。
-     */
-    listClawbotInstances(): ClawbotInstancesSnapshot {
-      return instancesSnapshot()
-    },
-
-    /**
-     * 新建一个实例（初始 `unbound`，等扫码绑定）。
-     *
-     * slot 由存储层按「绑定行自增 id」分配（**只增不复用**，见 `query/clawbot/clawbot-instance.ts`）。
-     * @returns 新实例编号 + 最新列表（界面据此立刻对它取码，不用去猜哪条是新的）。
-     */
-    createClawbotInstance(): ClawbotInstanceCreated {
-      const created = createInstanceRow(decrypted())
-      rc.op('clawbot', 'clawbot_instance_create', 'ok', `slot=${created.slot}`, '新建实例（等待绑定）')
-      return { slot: created.slot, ...instancesSnapshot() }
-    },
-
-    /**
-     * 删除一个实例：绑定行 + 配置 + **该实例的接入会话**一起删。
-     *
-     * 连带删会话是有意的（列表按实例遍历，实例没了那些行再也显示不出来），
-     * 所以返回删掉的条数 —— 界面必须在确认框里如实告知「将删除 N 条接入会话」。
-     * @param options.slot - 实例编号。
-     * @returns 连带删掉的会话条数 + 最新列表。
-     */
-    deleteClawbotInstance(options: { slot: number }): ClawbotInstanceDeleted {
-      const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
-      const handle = channels.get(slot)
-      if (handle !== undefined) { handle.stop(); channels.delete(slot) }
-      sessions.delete(slot)
-      const { removedMessages } = deleteInstanceRow(decrypted(), slot)
-      rc.op('clawbot', 'clawbot_instance_delete', 'ok', `slot=${slot}`, `已删除实例（连带 ${removedMessages} 条接入会话）`)
-      return { removedMessages, ...instancesSnapshot() }
-    },
-
-    /**
-     * 改某实例的行为配置（**部分更新**：只覆盖传进来的字段，缺省保持原值）。
-     * @param options.slot - 实例编号。
-     * @param options.autoReply / kbEnabled / kbId / systemPrompt / splitReply - 要改的字段。
-     * @returns 落库后的完整配置（含归一后的 kbId）。
-     */
-    setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): ClawbotInstanceConfig {
-      const slot = Math.max(Math.floor(options?.slot ?? DEFAULT_CLAWBOT_SLOT), 1)
-      const patch: { autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean } = {}
-      if (options.autoReply !== undefined) patch.autoReply = options.autoReply
-      if (options.kbEnabled !== undefined) patch.kbEnabled = options.kbEnabled
-      // 非正数 / 非有限值 = 「没有库」，一律归 null；**不许夹到 1** —— 那等于
-      // 替用户悄悄选了一个库，自动回复会去检索一个他没选过的知识库。
-      if (options.kbId !== undefined) {
-        patch.kbId = options.kbId === null || !Number.isFinite(options.kbId) || options.kbId <= 0
-          ? null
-          : Math.floor(options.kbId)
-      }
-      // 提示词：只接受字符串（非字符串当「没传」，不把 undefined 写进去覆盖原值）。
-      if (typeof options.systemPrompt === 'string') patch.systemPrompt = options.systemPrompt
-      if (options.splitReply !== undefined) patch.splitReply = options.splitReply
-      const cfg = saveInstanceConfig(decrypted(), slot, patch)
-      rc.op('clawbot', 'clawbot_instance_config', 'ok', `slot=${slot}`,
-        `自动回复 ${cfg.autoReply ? '开' : '关'} / 知识库 ${cfg.kbEnabled ? '开' : '关'}` +
-        ` / 提示词 ${cfg.systemPrompt === '' ? '默认' : `${String(cfg.systemPrompt.length)} 字`}` +
-        ` / 分段 ${cfg.splitReply ? '开' : '关'}`)
-      return cfg
-    },
-
-    /**
-     * **内部**（不加 `@Remote`）：见 {@link createBindFlow} 的 `bindClawbotWechat`。
-     */
-    bindClawbotWechat: bindFlow.bindClawbotWechat,
-
-    /**
-     * **内部**（不加 `@Remote`）：网关启动时把**每个已绑定实例**的通道拉起来。
-     *
-     * 条件：该实例 `bound` 且凭证齐备 —— 其他状态一律不启动（**也就不会出网**）。
-     * 幂等：通道自己保证重复 `start()` 无副作用。顺带做一次附件**启动补扫**：
-     * 上次运行没取完、或当时网络不通的那批，在这里补齐（缓存命中的只是一次 stat）。
-     */
-    ensureClawbotChannel: bindFlow.ensureClawbotChannel,
+    ...instanceOps,
   }
 }

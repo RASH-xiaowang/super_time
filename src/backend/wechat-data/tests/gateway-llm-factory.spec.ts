@@ -18,7 +18,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LlmFactoryDeps } from '../src/gateway-llm-factory.ts'
-import { EXTRACT_SYSTEM, makeChatAskerOf, makeEmbedFnOf, makeRerankFnOf } from '../src/gateway-llm-factory.ts'
+import { EXTRACT_MAX_TOKENS, EXTRACT_SYSTEM, makeChatAskerOf, makeEmbedFnOf, makeRerankFnOf } from '../src/gateway-llm-factory.ts'
 import type { ResolvedModel } from '../src/query/kb/model-config.ts'
 
 /** 假闸门：默认放行，但把每批文本都"脱敏"一遍 —— 判据要能看出发出去的是副本而不是原文。 */
@@ -137,14 +137,15 @@ describe('makeChatAskerOf：过闸、取模型名与收流', () => {
     expect(o.provider).toBe('deepseek')
   })
 
-  it('发出去的是闸门副本，且带的是"抽取器"口径的 system 与 500 token 上界', async () => {
+  it('发出去的是闸门副本，且带的是"抽取器"口径的 system 与足够大的输出上限', async () => {
     const { llm, opts } = streamBridge()
     gateReturn = ['联系 〔用户〕 处理']
     await makeChatAskerOf(deps({ llm }), 1, 'kb_link_suggest')!('联系 @123 处理')
     const o = opts[0] as { system?: string; maxTokens?: number }
     expect(sentText(o)).toBe('联系 〔用户〕 处理')
     expect(o.system).toBe(EXTRACT_SYSTEM)
-    expect(o.maxTokens).toBe(500)
+    expect(o.maxTokens).toBe(EXTRACT_MAX_TOKENS)
+    expect(o.maxTokens, '思考型模型会把 500 token 全花在 reasoning 上').toBeGreaterThanOrEqual(2048)
   })
 
   it('收流文本去掉首尾空白（调用方按行解析，多个空行会被当成一条空记录）', async () => {

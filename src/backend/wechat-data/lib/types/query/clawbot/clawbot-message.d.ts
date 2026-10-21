@@ -26,6 +26,8 @@ export declare const CLAWBOT_MESSAGE_DEFAULT_LIMIT = 100;
  * 体积大一个量级（正文一句话就能上百字节）。2000 条已远超一屏，再多只是给 IPC 添堵。
  */
 export declare const CLAWBOT_MESSAGE_MAX_LIMIT = 2000;
+/** 单实例单会话最多保留多少条 clear 竞态墓碑，防止长期运行无界增长。 */
+export declare const CLAWBOT_MESSAGE_TOMBSTONE_LIMIT = 10000;
 /** 附件引用（**内部**：怎么取 + 展示元数据；`key` 与 `ref` 不进渲染层快照）。 */
 export interface ClawbotMediaRef {
     /** 看 msgType 同源：image / voice / video / file。 */
@@ -58,8 +60,29 @@ export interface ClawbotMessageInput {
      * 缺省/非正数 = 不去重（尽力而为：没有 id 的帧只能按新消息处理）。
      */
     msgId?: number | null;
+    /**
+     * 本地发送幂等键。
+     *
+     * 自动回复 outbox 在发送前就把它持久化；进程在「上游已接收、本地尚未记账」
+     * 之间崩溃时，重试复用同一个键。发送路径据此在本地也只落一行，避免
+     * 服务端幂等成功但本地会话里出现重复出站气泡。
+     */
+    clientId?: string | null;
     /** 附件引用（图片/语音/视频/文件）；纯文本为 null。 */
     media?: ClawbotMediaRef | null;
+}
+/** 批量落库时可选地在同一事务里创建自动回复 run。 */
+export interface ClawbotMessageBatchOptions {
+    /** 批次捕获时的会话代次；仅允许用于单 slot 批次。 */
+    expectedSessionEpoch?: number;
+    replyIntake?: {
+        debounceMs?: number;
+        maxPending?: number;
+    };
+}
+/** 单条落库时的可选持久会话 fencing。 */
+export interface ClawbotMessageInsertOptions {
+    expectedSessionEpoch?: number;
 }
 /**
  * 写入一条接入会话消息。
@@ -68,9 +91,45 @@ export interface ClawbotMessageInput {
  * 去重判断与插入在同一条连接里，不存在检查后被并发插入的窗口（单写方）。
  * @param decryptedDir - 解密数据根。
  * @param input - 消息内容（正文原文；打码只在展示层做）。
+ * @param options - 可选的会话代次快照；传入后在同一事务内校验后才允许写入。
  * @returns 新行的 `id`；被去重跳过时为 null。
  */
-export declare function insertClawbotMessage(decryptedDir: string, input: ClawbotMessageInput): number | null;
+export declare function insertClawbotMessage(decryptedDir: string, input: ClawbotMessageInput, options?: ClawbotMessageInsertOptions): number | null;
+/**
+ * 按发送幂等键查本地消息行。
+ *
+ * durable outbox 重试先查这里：行已经存在说明上游上一次已成功且本地已回填，
+ * 可以直接补记 outbox，不必再次请求上游。读取失败必须抛给调用方，不能把
+ * 「查不到」与「库坏了」混为一谈后冒险重发。
+ */
+export declare function findClawbotMessageIdByClientId(decryptedDir: string, slot: number, clientId: string): number | null;
+/**
+ * 批量写入一帧里的多条消息：**一次开库、一次建表检查、一个事务**。
+ *
+ * 接收通道一帧常带多条历史消息。逐条调用 {@link insertClawbotMessage} 会为每条消息
+ * 重新打开数据库并跑迁移检查，首绑回补历史时会把 I/O 放大到消息数倍。批量入口保持
+ * 逐条去重的语义，同时让整帧要么全部落库、要么全部回滚（游标据此安全推进）。
+ * @param decryptedDir - 解密数据根。
+ * @param inputs - 同一帧内的消息（空数组不建库）。
+ * @returns 与输入等长的行 id；被 `msgId` 去重跳过处为 null。
+ */
+export declare function insertClawbotMessagesBatch(decryptedDir: string, inputs: readonly ClawbotMessageInput[], options?: ClawbotMessageBatchOptions): Array<number | null>;
+/**
+ * 持久记住 clear 竞态下不能回放的旧消息 id。
+ *
+ * 只按当前会话代次生效：重新绑定或同 wxid 被别的实例接管会推进代次，
+ * 下一次会话不受上一场 tombstone 影响。
+ * @param decryptedDir - 解密数据根。
+ * @param slot - 实例编号。
+ * @param msgIds - 旧批次里的服务端消息 id。
+ * @param nowOrOptions - 测试注入时间，或携带时间与预期会话代次的选项。
+ * @returns 实际新增的 tombstone 条数。
+ */
+export interface SuppressClawbotMessageIdsOptions {
+    now?: number;
+    expectedSessionEpoch?: number;
+}
+export declare function suppressClawbotMessageIds(decryptedDir: string, slot: number, msgIds: readonly number[], nowOrOptions?: number | SuppressClawbotMessageIdsOptions): number;
 /**
  * **内部**读一行（含媒体取数引用与密钥）—— 取媒体时用，不进渲染层快照。
  *

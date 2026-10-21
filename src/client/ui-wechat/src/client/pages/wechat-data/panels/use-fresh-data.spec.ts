@@ -27,7 +27,11 @@ const flush = async (): Promise<void> => {
   await act(async () => { await Promise.resolve() })
 }
 
-let lastState: { override: (n: unknown) => void } | null = null
+let lastState: {
+  override: (n: unknown) => void
+  reload: () => Promise<void>
+  reloadSilent: () => Promise<void>
+} | null = null
 
 function Probe({ k, fetcher, opts, n }: { k: string; fetcher: () => Promise<unknown>; opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }; n?: number }): React.JSX.Element {
   const st = useFreshData(k, fetcher, opts as never)
@@ -37,6 +41,7 @@ function Probe({ k, fetcher, opts, n }: { k: string; fetcher: () => Promise<unkn
     'data-loading': String(st.loading),
     'data-stale': String(st.stale),
     'data-err': st.error ?? '',
+    'data-refreshing': String(st.refreshing),
     'data-v': st.data === null ? '' : JSON.stringify(st.data),
     'data-n': String(n ?? 0),
   })
@@ -203,5 +208,70 @@ describe('useFreshData：opts 稳定性与 WAL 实时刷新（2026-10-13）', ()
     expect(attr('data-v'), '首查失败应回退缓存').toBe('{"v":"cached"}')
     await firePush()
     expect(attr('data-err'), '无数据时的失败仍要报').toContain('本地缓存')
+  })
+
+  it('reloadSilent：已有数据时保留内容、不翻 loading，刷新态单独可见', async () => {
+    let resolveSecond: ((value: { v: string }) => void) | null = null
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockImplementationOnce(() => new Promise<{ v: string }>((resolve) => { resolveSecond = resolve }))
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L6', fetcher)
+    await flush()
+    expect(attr('data-v')).toBe('{"v":"first"}')
+
+    let done: Promise<void> | null = null
+    act(() => { done = lastState?.reloadSilent() ?? Promise.resolve() })
+    await flush()
+    expect(attr('data-v'), '静默刷新期间必须保留当前内容').toBe('{"v":"first"}')
+    expect(attr('data-loading'), '静默刷新不许翻 loading').toBe('false')
+    expect(attr('data-refreshing'), '刷新态应单独可见').toBe('true')
+
+    const finishSecond = resolveSecond as ((value: { v: string }) => void) | null
+    finishSecond?.({ v: 'second' })
+    await act(async () => { await done })
+    await flush()
+    expect(attr('data-v')).toBe('{"v":"second"}')
+    expect(attr('data-refreshing')).toBe('false')
+  })
+
+  it('reloadSilent：失败保留旧值、不端出错误、不显示缓存告警', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockRejectedValueOnce(new Error('抖动'))
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L7', fetcher)
+    await flush()
+    await act(async () => { await lastState?.reloadSilent() })
+    expect(attr('data-v'), '静默刷新失败不能丢旧值').toBe('{"v":"first"}')
+    expect(attr('data-err')).toBe('')
+    expect(attr('data-stale')).toBe('false')
+    expect(attr('data-refreshing')).toBe('false')
+  })
+
+  it('并发请求只允许最新一轮提交：慢旧响应不得覆盖后发的新结果', async () => {
+    let resolveOld: ((value: { v: string }) => void) | null = null
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockImplementationOnce(() => new Promise<{ v: string }>((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ v: 'new' })
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L8', fetcher)
+    await flush()
+    expect(attr('data-v')).toBe('{"v":"first"}')
+
+    let oldDone: Promise<void> | null = null
+    act(() => { oldDone = lastState?.reloadSilent() ?? Promise.resolve() })
+    await flush()
+    await act(async () => { await lastState?.reloadSilent() })
+    expect(attr('data-v')).toBe('{"v":"new"}')
+
+    const finishOld = resolveOld as ((value: { v: string }) => void) | null
+    await act(async () => {
+      finishOld?.({ v: 'old' })
+      await oldDone
+    })
+    await flush()
+    expect(attr('data-v'), '慢的旧请求后回来时覆盖了新快照').toBe('{"v":"new"}')
   })
 })

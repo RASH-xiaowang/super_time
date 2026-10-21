@@ -1,29 +1,4 @@
-/**
- * 微信 ClawBot 的 **AI 自动回复**（2026-10-13，多实例）。
- *
- * ## 它回答的问题
- *
- * 「收到微信消息时，要不要自动回一条、回什么」。三件事在这里定死：
- *   · **回不回** —— 只看该实例的开关（`autoReply`，默认关）；
- *   · **带不带知识库** —— `kbEnabled && kbId !== null` 才把该库纳入检索（没有「所有库」这种模式）；
- *   · **谁来答** —— 走注入的 `ask` 能力，也就是与「微信问答」**同一条 ask 管道**
- *     （模型统一由设置里的「对话模型」决定、同过隐私闸与审计）。
- *     本模块**不碰模型、不碰网络、不碰数据库**：它只做「决策 + 编排」，
- *     出网与落库都发生在注入进来的 `send` 里。
- *
- * ## 三条容易被忽略的边界（都写成了守卫）
- *
- * ① **无人值守出网**：这是本仓第一处「不是你点一下才发生」的模型调用。因此默认关、
- *    开关就在实例卡上（用户看得见），且每次回复都写一行审计（`clawbot_auto_reply`）。
- * ② **一批只回一条**：服务端不给我们消息时间（`WeixinMessage` 没有时间戳字段），
- *    所以「刚绑定就拉到一堆历史」无法按时间过滤 —— 上界只能靠「每批最多回最后一条」
- *    压到 1 条。这条边界同时写进了 PRIVACY 的 G2。
- * ③ **错误不许抛**：调用方是常驻长轮询循环，自动回复失败若抛出去会把收消息一起弄挂。
- *    这里所有失败路径都记账返回，一条都不外抛。
- *
- * @module query/clawbot/clawbot-auto-reply
- */
-import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts';
+import type { ClawbotAutoReplyStage, ClawbotAutoReplyStats, ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts';
 /**
  * 自动回复正文的**总长**上限（超出截断并注明）。
  *
@@ -34,6 +9,13 @@ import type { ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, Opera
 export declare const MAX_REPLY_CHARS = 300;
 /** 每实例的待回复上限（超出丢弃并记账）：一批几百条消息不该把模型调用打爆。 */
 export declare const MAX_PENDING = 5;
+/** 后台恢复默认周期；durable runner 用 unref timer 定期吸收分页上限之后的积压。 */
+export declare const DEFAULT_RECOVERY_INTERVAL_MS = 60000;
+/** 一轮恢复撞到安全预算后，短延迟续跑而不是干等下一个完整周期。 */
+export declare const DEFAULT_RECOVERY_CONTINUATION_MS = 100;
+export type AutoReplyRunnerStage = ClawbotAutoReplyStage;
+/** runner 的稳定可观测快照；类型与 Remote 契约共用。 */
+export type AutoReplyRunnerStats = ClawbotAutoReplyStats;
 /**
  * 一条对话上下文消息（自动回复把最近几轮一起送进 ask 管道）。
  *
@@ -127,13 +109,57 @@ export declare function pickReplyTarget(candidates: readonly ReplyableMessage[])
 };
 /** 超长回复截断（带上「已截断」字样，不假装完整）。 */
 export declare function truncateReply(text: string): string;
+/** 自动回复发送时带出的持久化关联键（手动发送不传）。 */
+export interface AutoReplySendContext {
+    clientId: string;
+    runId: number;
+    partId: number;
+    partIndex: number;
+}
+/**
+ * 持久化编排依赖。
+ *
+ * 不传时执行器保持原来的纯内存队列行为（既有单测与旧注入方零改动）；
+ * 生产装配传入后，每个目标消息先落 reply_run，再按 outbox 分段发送。
+ */
+export interface AutoReplyDurableDeps {
+    /** 解密数据根（clawbot.db 在它的父目录）。 */
+    dir: () => string;
+    /** 同 slot 的入站合并窗口；缺省 1s。 */
+    debounceMs?: number;
+    /** 生成阶段最多尝试次数；缺省 3。 */
+    maxGenerationAttempts?: number;
+    /** 单段发送最多尝试次数；缺省 5。 */
+    maxPartAttempts?: number;
+    /** 指数退避基数；缺省 3s。 */
+    retryBaseMs?: number;
+    /** 生成租约；缺省 60s，长任务由 runner 心跳续租。 */
+    generationLeaseMs?: number;
+    /** 单段发送租约；缺省 30s，长任务由 runner 心跳续租。 */
+    sendLeaseMs?: number;
+    /** 单次生成截止时间；缺省 120s，<=0 表示不额外限时。 */
+    askTimeoutMs?: number;
+    /** 单段发送截止时间；缺省 60s，<=0 表示不额外限时。 */
+    sendTimeoutMs?: number;
+    /** 恢复分页大小；缺省 500，主要供压测和故障注入调小。 */
+    recoveryPageSize?: number;
+    /** 单轮恢复最多扫描多少行；缺省 10000。 */
+    recoveryMaxScanPerRound?: number;
+    /** 单轮恢复最多新增多少个调度；缺省 5000。 */
+    recoveryMaxSchedulesPerRound?: number;
+}
 export interface AutoReplyRunnerDeps {
     /** 取该实例的配置（**每次现读**：用户关掉开关后，队列里的下一条就不再回）。 */
     readConfig: (slot: number) => ClawbotInstanceConfig;
+    /**
+     * 同一 slot 的候选合并窗口（毫秒）。默认 0 = 立即入队，保持旧行为。
+     * > 0 时窗口内连续 consider 只保留最后一条可回复文本。
+     */
+    debounceMs?: number;
     /** 统一问答管道（缺省 = 未注入 ⇒ 自动回复不可用，只记账不发送）。 */
     ask?: ClawbotAskFn;
     /** 发送（生产 = `sendClawbotText`：**成功才落库**，失败不写假记录）。 */
-    send: (slot: number, text: string) => Promise<ClawbotSendResult>;
+    send: (slot: number, text: string, context?: AutoReplySendContext) => Promise<ClawbotSendResult>;
     /** 审计一行（`category='clawbot'`）。 */
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
     /** 回复成功后通知外层（发 `clawbot/message` 事件，前端实时可见）。 */
@@ -145,16 +171,26 @@ export interface AutoReplyRunnerDeps {
     history?: (slot: number, target: ReplyableMessage) => ClawbotHistoryMessage[];
     /** 取目标消息之前最近的入站图片（缺省 = 不送图；读取失败按空处理）。 */
     images?: (slot: number, target: ReplyableMessage) => Promise<ClawbotImageInput[]>;
+    /** 持久化 run/outbox；缺省 = 纯内存队列（旧行为）。 */
+    durable?: AutoReplyDurableDeps;
+    /** durable 后台恢复周期；缺省 60s，非正数禁用。 */
+    recoverIntervalMs?: number;
 }
 /**
  * 自动回复执行器：**全局单飞 + 每实例队列**。
  *
  * 单飞是全局的（同一时刻只有一轮 ask 在跑）：模型调用本来就慢，并发起来只会
  * 让几个号一起变慢，还不好排查；而会话内部的顺序本来就必须串行。
+ *
+ * 多个实例都有积压时按 slot ring 公平轮转，避免 Map 插入顺序让先到的实例一直饿死其他实例。
  * @param deps - 注入依赖（见 {@link AutoReplyRunnerDeps}）。
  * @returns `consider(slot, candidates)` 与测试用的 `pending()`。
  */
 export declare function createAutoReplyRunner(deps: AutoReplyRunnerDeps): {
     consider: (slot: number, candidates: readonly ReplyableMessage[]) => void;
     pending: () => number;
+    recover: () => void;
+    discard: (slot: number) => void;
+    stats: () => AutoReplyRunnerStats;
+    dispose: () => void;
 };

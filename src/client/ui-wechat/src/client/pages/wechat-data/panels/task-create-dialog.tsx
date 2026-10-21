@@ -9,7 +9,7 @@
  * 本身；群聊的触发对象是群内某个成员（群消息里发信人是谁很关键），所以只有群聊多一步
  * 「选目标用户」——那一步用 `apiGetGroupInfo` 的成员表，可搜索、单选、未选不许提交。
  *
- * 创建完的状态固定是「待完善」：任务信息面板里补回调地址并标记已完善后才参与触发与
+ * 创建完的状态固定是「待完善」：任务信息面板里补 Webhook 地址并标记已完善后才参与触发与
  * 回调投递。`apiSaveTaskInfo` 成功后会广播 `TASK_CENTER_UPDATED_EVENT`（在 api 层），
  * 任务信息面板据此自动刷新，本弹窗不需要再手动通知。
  */
@@ -192,7 +192,7 @@ function TaskCreatedPanel({ name, keywords, onClose }: {
     <div className={css.success} data-st-region="task-create-success" role="status">
       <div className={css.successTitle}>已加入任务信息 · 待完善</div>
       <p className={css.successDesc}>
-        任务「{name}」已创建。完善回调地址后启用：到「任务信息」里填回调地址并标记已完善，
+        任务「{name}」已创建。完善 Webhook 地址后启用：到「任务信息」里填 Webhook 地址并标记已完善，
         命中关键词时才会把触发记录投递出去。
       </p>
       <p className={css.successMeta}>触发关键词：{keywords.join('、')}</p>
@@ -200,6 +200,171 @@ function TaskCreatedPanel({ name, keywords, onClose }: {
         <button type="button" className={csscards.exportBtnPrimary} onClick={onClose}>知道啦</button>
       </div>
     </div>
+  )
+}
+
+/**
+ * 群聊任务的「仅匹配@我的文本」勾选项。
+ * @param checked - 是否启用该条件。
+ * @param onChange - 勾选变化。
+ * @returns 带说明的 checkbox 行。
+ */
+function MentionMeOnlyField({ checked, onChange }: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+}): React.JSX.Element {
+  return (
+    <label className={css.mentionRow}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => { onChange(e.target.checked) }}
+      />
+      <span>
+        <span className={css.mentionTitle}>仅匹配@我的文本</span>
+        <span className={css.mentionHint}>只处理结构化 @ 了你本人的群消息；@所有人不算</span>
+      </span>
+    </label>
+  )
+}
+
+/** 弹窗主体需要的表单、成员和提交状态。 */
+interface TaskCreateFormPanelProps {
+  session: TaskCreateSession
+  isGroup: boolean
+  form: TaskCreateForm
+  members: readonly GroupMember[]
+  membersLoading: boolean
+  membersError: string
+  memberQuery: string
+  busy: boolean
+  error: string
+  desktop: boolean
+  keywordRef: React.MutableRefObject<HTMLInputElement | null>
+  keywordCount: number
+  targetLabel: string
+  nameExample: string
+  onKeywordDraftChange: (value: string) => void
+  onKeywordKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  onRemoveKeyword: (index: number) => void
+  onMentionMeOnlyChange: (checked: boolean) => void
+  onPhotoLimitChange: (value: number) => void
+  onNameChange: (value: string) => void
+  onMemberQueryChange: (value: string) => void
+  onSelectMember: (member: GroupMember) => void
+  onRetryMembers: () => void
+  onClose: () => void
+  onSubmit: () => void
+}
+
+/**
+ * 新建任务弹窗的表单主体。
+ * @param props - 会话、表单值、成员数据和交互回调。
+ * @returns 可滚动表单与底部动作区。
+ */
+function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element {
+  const { session, isGroup, form } = props
+  return (
+    <>
+      <div className={cssshell.exportBody}>
+        {/* ① 监听对象 */}
+        <div className={cssshell.exportSection}>
+          <div className={cssshell.exportSectionHead}>
+            <span className={csscards.exportSectionTitle}>监听对象</span>
+            <span className={csscards.exportCountBadge}>{chatTypeLabel(session.type)}</span>
+          </div>
+          <div className={css.chatRow}>
+            <Avatar name={session.displayName} username={session.username} size={32} />
+            <div className={css.chatMain}>
+              <div className={css.chatName}>{session.displayName || session.username}</div>
+              <div className={css.chatMeta}>{session.username}</div>
+            </div>
+          </div>
+          {isGroup ? (
+            <>
+              <p className={cssshell.exportHint}>群聊里只有所选目标用户的消息参与触发，请先选一个成员。</p>
+              <MemberPicker
+                members={props.members}
+                loading={props.membersLoading}
+                error={props.membersError}
+                query={props.memberQuery}
+                selected={form.targetUsername}
+                onQueryChange={props.onMemberQueryChange}
+                onSelect={props.onSelectMember}
+                onRetry={props.onRetryMembers}
+              />
+              {form.targetUsername === ''
+                ? <p className={css.warn}>群聊需选择目标用户</p>
+                : <p className={css.hint}>触发对象：{props.targetLabel}</p>}
+            </>
+          ) : (
+            <p className={cssshell.exportHint}>单聊：触发对象就是当前会话对象本身。</p>
+          )}
+        </div>
+
+        {/* ② 触发条件 */}
+        <div className={cssshell.exportSection}>
+          <div className={cssshell.exportSectionHead}>
+            <span className={csscards.exportSectionTitle}>触发条件</span>
+            <span className={cssshell.exportHint}>任一关键词命中即触发</span>
+          </div>
+          <div className={cssshell.exportField}>
+            <span className={kitCss.textMeta}>触发关键词</span>
+            <input
+              ref={props.keywordRef}
+              type="text"
+              className={csscards.exportInput}
+              placeholder="输入关键词后按回车或逗号添加"
+              value={form.keywordDraft}
+              maxLength={KEYWORD_MAX_LEN}
+              onChange={(e) => { props.onKeywordDraftChange(e.target.value) }}
+              onKeyDown={props.onKeywordKeyDown}
+            />
+            <KeywordChips keywords={form.keywords} onRemove={props.onRemoveKeyword} />
+            <p className={cssshell.exportHint}>已添加 {props.keywordCount}/{KEYWORD_MAX_COUNT} 个；重复关键词（不区分大小写）自动忽略。</p>
+          </div>
+          {isGroup && (
+            <MentionMeOnlyField checked={form.mentionMeOnly} onChange={props.onMentionMeOnlyChange} />
+          )}
+          <div className={cssshell.exportField}>
+            <span className={kitCss.textMeta}>携带当前对象最近的照片数量</span>
+            <PhotoLimitInput value={form.photoLimit} onChange={props.onPhotoLimitChange} />
+            <p className={cssshell.exportHint}>{photoHint(form.photoLimit)}</p>
+          </div>
+        </div>
+
+        {/* ③ 任务名 */}
+        <div className={cssshell.exportSection}>
+          <div className={cssshell.exportSectionHead}>
+            <span className={csscards.exportSectionTitle}>任务名</span>
+            <span className={cssshell.exportHint}>可选，留空自动生成</span>
+          </div>
+          <div className={cssshell.exportField}>
+            <input
+              type="text"
+              className={csscards.exportInput}
+              placeholder={`留空自动生成：${props.nameExample}`}
+              value={form.name}
+              maxLength={60}
+              onChange={(e) => { props.onNameChange(e.target.value) }}
+            />
+          </div>
+        </div>
+
+        {props.error !== '' && <p className={kitCss.error} role="alert">{props.error}</p>}
+        {props.desktop && <p className={css.warn}>新建任务需要桌面端（要写本机数据库）。</p>}
+      </div>
+      <div className={cssshell.exportActions}>
+        <button type="button" className={csscards.exportBtnGhost} onClick={props.onClose}>取消</button>
+        <button
+          type="button"
+          className={csscards.exportBtnPrimary}
+          disabled={props.busy || props.desktop}
+          onClick={props.onSubmit}
+          {...desktopActionProps()}
+        >{props.busy ? '创建中…' : '创建任务'}</button>
+      </div>
+    </>
   )
 }
 
@@ -309,6 +474,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
       target,
       keywords: merged.keywords,
       photoLimit: form.photoLimit,
+      mentionMeOnly: form.mentionMeOnly,
       name: form.name,
     })
     setBusy(true)
@@ -356,103 +522,33 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
         {created !== null ? (
           <TaskCreatedPanel name={created.name} keywords={created.keywords} onClose={onClose} />
         ) : (
-          <>
-            <div className={cssshell.exportBody}>
-              {/* ① 监听对象 */}
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>监听对象</span>
-                  <span className={csscards.exportCountBadge}>{chatTypeLabel(session.type)}</span>
-                </div>
-                <div className={css.chatRow}>
-                  <Avatar name={session.displayName} username={session.username} size={32} />
-                  <div className={css.chatMain}>
-                    <div className={css.chatName}>{session.displayName || session.username}</div>
-                    <div className={css.chatMeta}>{session.username}</div>
-                  </div>
-                </div>
-                {isGroup ? (
-                  <>
-                    <p className={cssshell.exportHint}>群聊里只有所选目标用户的消息参与触发，请先选一个成员。</p>
-                    <MemberPicker
-                      members={members}
-                      loading={membersLoading}
-                      error={membersError}
-                      query={memberQuery}
-                      selected={form.targetUsername}
-                      onQueryChange={setMemberQuery}
-                      onSelect={selectMember}
-                      onRetry={() => { void loadMembers() }}
-                    />
-                    {form.targetUsername === ''
-                      ? <p className={css.warn}>群聊需选择目标用户</p>
-                      : <p className={css.hint}>触发对象：{targetLabel}</p>}
-                  </>
-                ) : (
-                  <p className={cssshell.exportHint}>单聊：触发对象就是当前会话对象本身。</p>
-                )}
-              </div>
-
-              {/* ② 触发条件 */}
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>触发条件</span>
-                  <span className={cssshell.exportHint}>任一关键词命中即触发</span>
-                </div>
-                <div className={cssshell.exportField}>
-                  <span className={kitCss.textMeta}>触发关键词</span>
-                  <input
-                    ref={keywordRef}
-                    type="text"
-                    className={csscards.exportInput}
-                    placeholder="输入关键词后按回车或逗号添加"
-                    value={form.keywordDraft}
-                    maxLength={KEYWORD_MAX_LEN}
-                    onChange={(e) => { setForm((prev) => ({ ...prev, keywordDraft: e.target.value })) }}
-                    onKeyDown={onKeywordKeyDown}
-                  />
-                  <KeywordChips keywords={form.keywords} onRemove={(index) => { setForm((prev) => ({ ...prev, keywords: removeKeyword(prev.keywords, index) })) }} />
-                  <p className={cssshell.exportHint}>已添加 {keywordCount}/{KEYWORD_MAX_COUNT} 个；重复关键词（不区分大小写）自动忽略。</p>
-                </div>
-                <div className={cssshell.exportField}>
-                  <span className={kitCss.textMeta}>携带当前对象最近的照片数量</span>
-                  <PhotoLimitInput value={form.photoLimit} onChange={(value) => { setForm((prev) => ({ ...prev, photoLimit: value })) }} />
-                  <p className={cssshell.exportHint}>{photoHint(form.photoLimit)}</p>
-                </div>
-              </div>
-
-              {/* ③ 任务名 */}
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>任务名</span>
-                  <span className={cssshell.exportHint}>可选，留空自动生成</span>
-                </div>
-                <div className={cssshell.exportField}>
-                  <input
-                    type="text"
-                    className={csscards.exportInput}
-                    placeholder={`留空自动生成：${nameExample}`}
-                    value={form.name}
-                    maxLength={60}
-                    onChange={(e) => { setForm((prev) => ({ ...prev, name: e.target.value })) }}
-                  />
-                </div>
-              </div>
-
-              {error !== '' && <p className={kitCss.error} role="alert">{error}</p>}
-              {desktop && <p className={css.warn}>新建任务需要桌面端（要写本机数据库）。</p>}
-            </div>
-            <div className={cssshell.exportActions}>
-              <button type="button" className={csscards.exportBtnGhost} onClick={onClose}>取消</button>
-              <button
-                type="button"
-                className={csscards.exportBtnPrimary}
-                disabled={busy || desktop}
-                onClick={() => { void submit() }}
-                {...desktopActionProps()}
-              >{busy ? '创建中…' : '创建任务'}</button>
-            </div>
-          </>
+          <TaskCreateFormPanel
+            session={session}
+            isGroup={isGroup}
+            form={form}
+            members={members}
+            membersLoading={membersLoading}
+            membersError={membersError}
+            memberQuery={memberQuery}
+            busy={busy}
+            error={error}
+            desktop={desktop}
+            keywordRef={keywordRef}
+            keywordCount={keywordCount}
+            targetLabel={targetLabel}
+            nameExample={nameExample}
+            onKeywordDraftChange={(keywordDraft) => { setForm((prev) => ({ ...prev, keywordDraft })) }}
+            onKeywordKeyDown={onKeywordKeyDown}
+            onRemoveKeyword={(index) => { setForm((prev) => ({ ...prev, keywords: removeKeyword(prev.keywords, index) })) }}
+            onMentionMeOnlyChange={(mentionMeOnly) => { setForm((prev) => ({ ...prev, mentionMeOnly })) }}
+            onPhotoLimitChange={(photoLimit) => { setForm((prev) => ({ ...prev, photoLimit })) }}
+            onNameChange={(name) => { setForm((prev) => ({ ...prev, name })) }}
+            onMemberQueryChange={setMemberQuery}
+            onSelectMember={selectMember}
+            onRetryMembers={() => { void loadMembers() }}
+            onClose={onClose}
+            onSubmit={() => { void submit() }}
+          />
         )}
       </div>
     </div>

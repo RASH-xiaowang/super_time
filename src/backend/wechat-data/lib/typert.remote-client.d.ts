@@ -51,6 +51,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     getDecryptStatus: () => Promise<RemoteResult<DecryptStatus>>
     getEmoticons: (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<EmoticonsSnapshot>>
     getFavorites: (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<FavoritesSnapshot>>
+    getFavoriteMediaDataUrl: (options: { md5?: string; thumbMd5?: string; fullMd5?: string; kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'; ext?: string; }) => Promise<RemoteResult<ImageDataUrlResult>>
     getFiles: (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<FilesSnapshot>>
     getGraph: () => Promise<RemoteResult<GraphSnapshot>>
     getGroupInfo: (options: { username: string; }) => Promise<RemoteResult<GroupInfoSnapshot>>
@@ -165,6 +166,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'wechatData/getDecryptStatus': () => Promise<RemoteResult<DecryptStatus>>
     'wechatData/getEmoticons': (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<EmoticonsSnapshot>>
     'wechatData/getFavorites': (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<FavoritesSnapshot>>
+    'wechatData/getFavoriteMediaDataUrl': (options: { md5?: string; thumbMd5?: string; fullMd5?: string; kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'; ext?: string; }) => Promise<RemoteResult<ImageDataUrlResult>>
     'wechatData/getFiles': (options?: { limit?: number; offset?: number; }) => Promise<RemoteResult<FilesSnapshot>>
     'wechatData/getGraph': () => Promise<RemoteResult<GraphSnapshot>>
     'wechatData/getGroupInfo': (options: { username: string; }) => Promise<RemoteResult<GroupInfoSnapshot>>

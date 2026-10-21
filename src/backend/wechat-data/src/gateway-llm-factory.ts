@@ -45,6 +45,20 @@ export type EmbedFeature = 'ask_embed' | 'kb_embed' | 'kb_link_suggest'
 /** 一次性抽取任务的 system 提示：只准出行格式，不解释不寒暄不补全。 */
 export const EXTRACT_SYSTEM = '你是一名严格的信息抽取器。只输出要求的行格式，不解释、不寒暄、不补全文档里没有的名字。'
 
+/**
+ * 结构化抽取的单次输出预算。
+ *
+ * 不能再按普通聊天的小上限发：真机复现（2026-10-20，`deepseek-flash`）中，
+ * 500 token 被 500 个 reasoning token 全部吃光，`content` 为空；提高到 4096 后
+ * 同一份文件用 1544 个 reasoning token 后正常输出 11 条实体。
+ *
+ * 2026-10-20 再次实测：同一份文件（21.6k 字）换一次请求，4021 个输出 token 中
+ * 3980 个仍是 reasoning，正文只剩 41 个 token；4096 恰好会在这种请求上再次耗尽。
+ * `deepseek-flash` 支持更大的输出预算，所以这里留到 8192。它只是安全上限，
+ * 模型提前结束不会按未用额度计费。
+ */
+export const EXTRACT_MAX_TOKENS = 8192
+
 type EmbedBridge = { embed?: (texts: string[], opts?: { model?: string }) => Promise<number[][]> }
 /**
  * `stream` 的返回元素类型直接从 `BlockAssembler.push` 的参数推 —— 不在这里重declare 一份
@@ -117,7 +131,7 @@ export function makeChatAskerOf(deps: LlmFactoryDeps, kbId: number, feature: str
         source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
       })],
       system: EXTRACT_SYSTEM,
-      maxTokens: 500,
+      maxTokens: EXTRACT_MAX_TOKENS,
     }
     for await (const c of stream(opts)) assembler.push(c)
     return assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()

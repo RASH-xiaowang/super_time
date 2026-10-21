@@ -40,25 +40,25 @@ export interface TaskCenterMeta {
 /**
  * 任务状态（待完善 / 已完善）。
  *
- * 语义是**后端定的**：只有 `ready` 才参与触发与回调投递（见 `types-taskcenter.ts`），
+ * 语义是**后端定的**：只有 `ready` 才参与触发与 Webhook 投递（见 `types-taskcenter.ts`），
  * 所以「待完善」用 amber 而不是 red —— 它不是错误，只是还没配完。
  */
 export const TASK_STATUS_META: Record<TaskInfoStatus, TaskCenterMeta> = {
-  incomplete: { label: '待完善', tone: 'amber', hint: '待完善的任务不参与触发，也不会回调（配好并标记「已完善」后才生效）' },
-  ready: { label: '已完善', tone: 'green', hint: '已完善的任务会参与触发与回调投递' },
+  incomplete: { label: '待完善', tone: 'amber', hint: '待完善的任务不参与触发，也不会投递 Webhook（配好并标记「已完善」后才生效）' },
+  ready: { label: '已完善', tone: 'green', hint: '已完善的任务会参与触发与 Webhook 投递' },
 }
 
 /**
  * 触发记录的回调投递状态。
  *
  * `skipped` 的中文是「未配置」而不是「已跳过」：用户在面板里能看到的真实原因是
- * 任务根本没填回调地址（`callbackUrl` 为空），说「跳过」会让人以为是程序主动放弃。
+ * 任务根本没填 Webhook 地址（`callbackUrl` 为空），说「跳过」会让人以为是程序主动放弃。
  */
 export const CALLBACK_STATUS_META: Record<TaskTriggerCallbackStatus, TaskCenterMeta> = {
-  pending: { label: '待投递', tone: 'amber', hint: '等待投递到任务配置的回调地址' },
-  sent: { label: '已投递', tone: 'green', hint: '已成功 POST 到回调地址' },
-  failed: { label: '投递失败', tone: 'red', hint: '回调请求失败（可在弹窗里重新投递）' },
-  skipped: { label: '未配置', tone: 'default', hint: '任务没有填写回调地址，因此不投递' },
+  pending: { label: '待投递', tone: 'amber', hint: '等待投递到任务配置的 Webhook 地址' },
+  sent: { label: '已投递', tone: 'green', hint: '已成功 POST 到 Webhook 地址' },
+  failed: { label: '投递失败', tone: 'red', hint: 'Webhook 请求失败（可在弹窗里重新投递）' },
+  skipped: { label: '未配置', tone: 'default', hint: '任务没有填写 Webhook 地址，因此不投递' },
 }
 
 /**
@@ -199,8 +199,8 @@ export function isHttpCallbackUrl(url: string): boolean {
 }
 
 /**
- * 回调地址的主机名（列表行展示用；未填/非法时返回空串）。
- * @param url - 回调地址。
+ * Webhook 地址的主机名（列表行展示用；未填/非法时返回空串）。
+ * @param url - Webhook 地址。
  * @returns 形如 `example.com` / `example.com:8080`。
  */
 export function callbackHostname(url: string): string {
@@ -214,12 +214,12 @@ export function callbackHostname(url: string): string {
 }
 
 /**
- * 回调地址的一行文案：有主机名给主机名，否则「未填回调」。
- * @param url - 回调地址。
+ * Webhook 地址的一行文案：有主机名给主机名，否则「未填 Webhook」。
+ * @param url - Webhook 地址。
  * @returns 展示文案。
  */
 export function callbackUrlLabel(url: string): string {
-  return callbackHostname(url) || '未填回调'
+  return callbackHostname(url) || '未填 Webhook'
 }
 
 /**
@@ -234,6 +234,93 @@ export function callbackUrlLabel(url: string): string {
 export function filterTriggersByTask(records: readonly TaskTriggerRecord[], taskId: number | null): readonly TaskTriggerRecord[] {
   if (taskId === null) return records
   return records.filter((r) => r.taskId === taskId)
+}
+
+/** 触发记录搜索词上限（与后端 `TRIGGER_SEARCH_MAX` 同口径）。 */
+export const TRIGGER_SEARCH_MAX = 100
+
+/**
+ * 限制搜索框原始输入长度，不提前 trim（受控输入要保留用户正在输入的空格）。
+ * @param value - 输入框原文。
+ * @returns 最多 100 字。
+ */
+export function capTriggerSearchInput(value: string): string {
+  return value.slice(0, TRIGGER_SEARCH_MAX)
+}
+
+/**
+ * 提交给后端的搜索词：先 trim，再截到 100 字。
+ * @param value - 输入框原文。
+ * @returns 稳定查询词。
+ */
+export function normalizeTriggerSearch(value: string): string {
+  return value.trim().slice(0, TRIGGER_SEARCH_MAX)
+}
+
+/**
+ * 左栏任务搜索（客户端过滤全部已加载任务）。
+ *
+ * 任务列表本身一次性取全，所以这里不需要服务端查询；空关键词返回原数组身份，
+ * 避免搜索框刚聚焦就让整列产生无意义的重渲染。匹配范围与用户能在行里看到的身份字段
+ * 一致：任务名、关键词、会话/对象及其 username，另外带上 Webhook 地址便于定位配置。
+ * @param tasks - 全部任务。
+ * @param query - 搜索框原文。
+ * @returns 命中任务；空搜索时就是入参本身。
+ */
+export function filterTasksBySearch(tasks: readonly TaskInfo[], query: string): readonly TaskInfo[] {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return tasks
+  return tasks.filter((task) => {
+    const fields = [
+      task.name,
+      task.chatName,
+      task.chatUsername,
+      task.targetName,
+      task.targetUsername,
+      task.callbackUrl,
+      ...task.keywords,
+    ]
+    return fields.some((field) => field.toLowerCase().includes(needle))
+  })
+}
+
+/**
+ * 把下一页追加进当前列表（按记录 id 去重，再按服务端同一排序归并）。
+ *
+ * 翻页请求与后台扫描可能同时发生；用 id 去重可避免两页边界重叠时 React 出现重复 key。
+ * @param current - 已加载的记录。
+ * @param next - 新一页记录。
+ * @returns 追加后的新数组（不修改入参）。
+ */
+export function appendTriggerPage(
+  current: readonly TaskTriggerRecord[],
+  next: readonly TaskTriggerRecord[],
+): readonly TaskTriggerRecord[] {
+  if (next.length === 0) return current
+  const seen = new Set(current.map((r) => r.id))
+  const appended = next.filter((r) => !seen.has(r.id))
+  if (appended.length === 0) return current
+  const ordered = [...current, ...appended]
+  ordered.sort((a, b) => {
+    if (a.triggeredAt !== b.triggeredAt) return b.triggeredAt - a.triggeredAt
+    return b.id - a.id
+  })
+  return ordered
+}
+
+/**
+ * 触发记录静默刷新时，判断是否需要按原加载范围续取后续页。
+ *
+ * 第一页刷新只能安全替换第一页；已加载多页时，如果只拿第一页替换，列表会从
+ * N 条缩回一页，右栏高度骤降，滚动位置也会被浏览器钳回顶部。这个判断保持为
+ * 纯函数，hook 只负责按游标补齐。
+ * @param loadedCount - 刷新前已加载条数。
+ * @param pageSize - 服务端页大小。
+ * @returns 是否需要续取后续页。
+ */
+export function needsTriggerPageBackfill(loadedCount: number, pageSize: number): boolean {
+  if (!Number.isFinite(loadedCount) || !Number.isFinite(pageSize) || pageSize <= 0) return false
+  return loadedCount > Math.floor(pageSize)
 }
 
 /**
@@ -259,6 +346,44 @@ export function nextSelectedTaskId(tasks: readonly TaskInfo[], current: number |
  */
 export function nextExpandedTaskId(tasks: readonly TaskInfo[], current: number | null): number | null {
   return nextSelectedTaskId(tasks, current)
+}
+
+/** 批量删除一次最多处理的记录数（与后端 `TASK_BATCH_DELETE_MAX` 同口径）。 */
+export const TASK_BATCH_DELETE_MAX = 500
+
+/** 批量选择切换单个 id（返回新 Set，不修改入参）。 */
+export function toggleSelectedId(selected: ReadonlySet<number>, id: number): ReadonlySet<number> {
+  const next = new Set(selected)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return next
+}
+
+/** 批量「全选」：只选中当前可见的 id（搜索过滤后不会误选隐藏项）。 */
+export function selectAllIds(ids: readonly number[]): ReadonlySet<number> {
+  return new Set(ids)
+}
+
+/** 刷新后清理已不存在的选中 id，避免删除请求带上已经消失的记录。 */
+export function retainSelectedIds(
+  selected: ReadonlySet<number>,
+  availableIds: readonly number[],
+): ReadonlySet<number> {
+  if (selected.size === 0) return selected
+  const available = new Set(availableIds)
+  const next = new Set([...selected].filter((id) => available.has(id)))
+  if (next.size === selected.size && [...selected].every((id) => next.has(id))) return selected
+  return next
+}
+
+/** 批量操作栏的选中计数文案。 */
+export function selectionCountText(count: number): string {
+  return `已选 ${String(Math.max(0, count))} 条`
+}
+
+/** 是否超过批量删除上限（超限时按钮禁用并给出一次说清的原因）。 */
+export function exceedsBatchLimit(count: number): boolean {
+  return count > TASK_BATCH_DELETE_MAX
 }
 
 /** 任务计数（页头/工具栏的「任务 N · 待完善 M」）。 */
@@ -291,6 +416,7 @@ export interface TaskEditDraft {
   name: string
   keywords: string[]
   photoLimit: number
+  mentionMeOnly: boolean
   callbackUrl: string
 }
 
@@ -304,6 +430,7 @@ export function draftFromTask(task: TaskInfo): TaskEditDraft {
     name: task.name,
     keywords: [...task.keywords],
     photoLimit: task.photoLimit,
+    mentionMeOnly: task.mentionMeOnly,
     callbackUrl: task.callbackUrl,
   }
 }
@@ -319,7 +446,7 @@ export interface TaskDraftErrors {
 /**
  * 校验编辑草稿。
  *
- * 规则（与后端一致的最小集）：任务名非空、关键词至少 1 个、回调地址**可空**
+ * 规则（与后端一致的最小集）：任务名非空、关键词至少 1 个、Webhook 地址**可空**
  * （待完善任务允许先不填），但一旦填了就必须是 http/https。
  * @param draft - 草稿。
  * @returns 错误集合；全合法时为空对象。
@@ -333,7 +460,7 @@ export function validateTaskDraft(draft: TaskEditDraft): TaskDraftErrors {
     errors.photoLimit = `照片数量需为 ${String(PHOTO_LIMIT_MIN)}–${String(PHOTO_LIMIT_MAX)} 的整数（0 = 不带图片）`
   }
   const callback = draft.callbackUrl.trim()
-  if (callback !== '' && !isHttpCallbackUrl(callback)) errors.callbackUrl = '回调地址必须是 http/https 链接'
+  if (callback !== '' && !isHttpCallbackUrl(callback)) errors.callbackUrl = 'Webhook 地址必须是 http/https 链接'
   return errors
 }
 
@@ -395,6 +522,7 @@ export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft): TaskInfoInp
     targetName: task.targetName,
     keywords: draft.keywords.map((k) => k.trim()).filter((k) => k !== ''),
     photoLimit: clampPhotoLimit(draft.photoLimit),
+    mentionMeOnly: task.chatType === 'group' && draft.mentionMeOnly,
     callbackUrl: draft.callbackUrl.trim(),
   }
 }

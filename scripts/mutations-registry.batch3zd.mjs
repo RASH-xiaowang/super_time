@@ -420,8 +420,8 @@ export const MUTATIONS_BATCH3ZD = [
     id: 'M672-kb-detail-shown-while-reading',
     why: '去掉明细块的 `{!readerOpen && (` 条件 ⇒ 正文展开时用户滚到底会突然撞见一堆指纹和路径（2026-10-17 用户要求）。判据：kb-reader.wiring.spec.ts 的「正文展开时摘要 / 出网开关 / 明细三块都让位」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-detail.tsx',
-    from: '          {!readerOpen && (\n            <>\n              <div className={css.sectionLabel}>明细</div>',
-    to: '          {(\n            <>\n              <div className={css.sectionLabel}>明细</div>',
+    from: '          {!readerOpen && (\n            <div className={css.detailFoot}>\n              <div className={css.sectionLabel}>明细</div>',
+    to: '          {(\n            <div className={css.detailFoot}>\n              <div className={css.sectionLabel}>明细</div>',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-reader.wiring.spec.ts',
   },
   {

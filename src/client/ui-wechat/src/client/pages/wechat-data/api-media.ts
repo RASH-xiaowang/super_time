@@ -175,6 +175,27 @@ export async function apiGetSnsImageDataUrl(options: {
 export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getFileImageDataUrl(options))
 }
+
+/**
+ * 收藏资源本地缓存（图片/视频/文件/语音/未知资源共用）。
+ *
+ * 微信 4.x 的收藏附件文件名与 XML 里的 MD5 无关，所以这里不是普通图片接口：
+ * 后端在 `business/favorite/{data,mid,thumb}` 上按**解密后的明文 MD5**建索引。
+ * @param options - XML 中的 md5/thumbMd5/fullMd5 与类型提示。
+ * @returns data URL（MIME 已按文件头判定）或未命中说明。
+ */
+export async function apiGetFavoriteMediaDataUrl(options: {
+  md5?: string
+  thumbMd5?: string
+  fullMd5?: string
+  kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
+  ext?: string
+  fileName?: string
+  size?: number
+}): Promise<ImageDataUrlResult> {
+  return unwrap(await remote().getFavoriteMediaDataUrl(options))
+}
+
 /**
  * Resolve a custom emoticon (sticker) md5 to a data URL.
  *

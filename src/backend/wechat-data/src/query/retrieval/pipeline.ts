@@ -496,7 +496,7 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
   //
   // 只在聚合意图下跑：其余意图的答案确实在片段里，跑聚合是白花一次全表扫描。
   // 结果作为**独立文档**（`source: 'agg'`）注入，走与其余通道相同的融合/压缩路径。
-  const aggFacts = decision.intent === 'aggregation'
+  const aggFacts = wechatOk && decision.intent === 'aggregation'
     ? runAggregate({
       decryptedDir: input.decryptedDir,
       question: input.question,

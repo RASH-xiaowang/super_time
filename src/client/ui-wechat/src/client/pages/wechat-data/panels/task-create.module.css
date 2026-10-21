@@ -51,6 +51,42 @@
   text-align: center;
 }
 
+/* ── 群聊「仅匹配 @我」（原生 checkbox + 两行说明）────────────────────── */
+.mentionRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border, #2a2f3a);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  cursor: pointer;
+}
+.mentionRow:hover {
+  background: var(--nm-bg-hover, rgba(255, 255, 255, 0.05));
+  border-color: var(--nm-border-hover);
+}
+.mentionRow > input {
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--nm-cyan);
+}
+.mentionRow > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mentionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1, #e8eaf0);
+}
+.mentionHint {
+  font-size: 11px;
+  color: var(--nm-text-3, #8b93a7);
+}
+
 /* ── ② 关键词 chips ────────────────────────────────────────────────────── */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {

@@ -7,7 +7,8 @@
  */
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from '../query/ask.ts'
 import { beginAskCancel, cancelAskIn } from './ask-cancel.ts'
-import { auditGrounding, groundingRepairHint } from '../query/grounding.ts'
+import { auditGrounding, groundingRepairHint, stripCitationMarkers } from '../query/grounding.ts'
+import type { GroundingReplyMode } from '../query/grounding.ts'
 import { buildKbVectorIndex, kbVectorIndexStatus } from '../query/kb-vectors.ts'
 import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts'
 import { loadRetrievalConfig } from '../query/retrieval/config.ts'
@@ -206,7 +207,7 @@ function askBasisLine(citations: ReadonlyArray<{
   source?: 'msg' | 'kb' | 'agg'
   kb?: { fileId?: number; fileName?: string }
   snippet?: string
-}>): string {
+}>, dataScope?: 'wechat' | 'kb-only'): string {
   if (citations.length === 0) return ''
   const msgs = citations.filter(c => c.source !== 'kb')
   const kbItems = citations.filter(c => c.source === 'kb')
@@ -219,7 +220,7 @@ function askBasisLine(citations: ReadonlyArray<{
     const files = new Set(kbItems.map(c => (c.kb?.fileId !== undefined ? 'f' + c.kb.fileId : (c.kb?.fileName ?? c.snippet ?? ''))))
     parts.push(`${files.size} 个知识库文件`)
   }
-  return `依据本机记录：${parts.join(' · ')}${span}`
+  return `${dataScope === 'kb-only' ? '依据知识库' : '依据本机记录'}：${parts.join(' · ')}${span}`
 }
 
 export interface createAskDeepRemotesInputs {
@@ -250,11 +251,119 @@ export interface createAskDeepRemotesInputs {
  * 自动回复传了 `systemPromptOverride` 就用它（拟人化人设），否则用检索问答那套
  * （要求标 `[n]` 角标 —— 界面上可点、可核对）。两者**刻意分开**：微信里没有角标 UI。
  * @param override - 调用方传的系统提示词（空串/未传 = 用缺省）。
+ * @param dataScope - 数据面；自动回复使用禁止角标的聊天版缺省提示词。
  * @returns 系统提示词。
  */
-function resolveSystemPrompt(override: string | undefined): string {
+function resolveSystemPrompt(override: string | undefined, dataScope?: 'wechat' | 'kb-only'): string {
   if (override !== undefined && override.trim() !== '') return override
+  if (dataScope === 'kb-only') {
+    return '你是用户微信里的自动回复助手。只用下面给出的检索材料回答，像真人发微信一样口语、简短；每段不超过 30 字，不标 [n] 角标；材料里没有的就直说没查到，绝不推测或编造。'
+  }
   return '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。'
+}
+
+/** 自动回复核对失败后的安全文案：不把内部审计术语发给微信联系人。 */
+const CHAT_WITHHELD_ANSWER = '这个数字我这边没法确认，我先问下本人。'
+
+/**
+ * 按回答场景完成接地核对与最多一次回炉。
+ *
+ * 手动问答必须用 `[n]` 把事实对应到来源；自动回复则明确禁止角标，
+ * 但金额/日期/长数字仍要能在本轮检索材料里找到出处。自动回复改写后仍有
+ * 无出处数字时不发送风险答案，改用自然口语的安全兜底。
+ * @param input - 初稿、证据、提示词与模型调用能力。
+ * @returns 最终回答、引用序号、核对结果与是否触发重写。
+ */
+async function resolveGroundedAnswer(input: {
+  mode: GroundingReplyMode
+  answer: string
+  citationCount: number
+  synthPrompt: string
+  evidenceFor: (cited: number[]) => string[]
+  allEvidence: string[]
+  systemPrompt: string
+  runChat: RunChatFn
+  images?: readonly ImageBlock[]
+}): Promise<{
+  answer: string
+  citedIndexes: number[]
+  withheld: boolean
+  grounding: ReturnType<typeof auditGrounding>
+  repaired: boolean
+}> {
+  const auditFor = (text: string, cited: number[]): ReturnType<typeof auditGrounding> =>
+    auditGrounding(
+      text,
+      input.mode === 'chat' ? input.allEvidence : input.evidenceFor(cited),
+      input.citationCount,
+      { requireCitationMarkers: input.mode === 'cited' },
+    )
+
+  let citedIndexes = parseCitedIndexes(input.answer, input.citationCount)
+  let grounding = auditFor(input.answer, citedIndexes)
+  const protocolNeedsRepair = input.mode === 'cited'
+    && (citedIndexes.length === 0 || grounding.uncited > 0)
+  const needsRepair = protocolNeedsRepair || grounding.unsupported.length > 0
+  let finalAnswer = input.answer
+  let repaired = false
+
+  if (needsRepair) {
+    const repairHint = groundingRepairHint(grounding, input.mode)
+    const strictPrompt = input.mode === 'chat'
+      ? `${input.synthPrompt}
+
+  【重要】请重写上一次的微信自动回复，只修事实与表达，不要解释你正在重写。
+  ${repairHint}
+   · 仍然只使用检索材料里的事实，像真人发微信一样简短口语化；
+   · 不要标 [n]，不要提引用、来源、材料、核对或“上一次回答”；
+   · 如果材料不足以确认关键数字，就说「这个数字我这边没法确认，我先问下本人」。`
+      : `${input.synthPrompt}
+
+  【重要】请重写上一次的回答，逐条修掉下面的问题。
+  ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] 来源**。\n' : ''}${repairHint ? repairHint + '\n' : ''} · 每一句事实性陈述后面都必须紧跟对应的 [n]，且只标真正支持这句话的那几条；
+   · 语气保持自然口语化，像在微信里转述聊天内容；
+   · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
+    const second = await input.runChat(
+      input.mode === 'chat'
+        ? input.systemPrompt
+        : '你是用户微信聊天记录里的问答助手。只用给定检索结果回答，自然口语化，每句事实标注 [n]；记录里没有就直说没找到，不要推测或编造。',
+      strictPrompt,
+      input.mode === 'chat' ? 400 : 1600,
+      undefined,
+      undefined,
+      input.images,
+    )
+    const secondCited = parseCitedIndexes(second, input.citationCount)
+    const secondAudit = auditFor(second, secondCited)
+    const protocolOk = input.mode === 'chat' || secondCited.length > 0
+    const fewerUnsupported = secondAudit.unsupported.length < grounding.unsupported.length
+    const sameUnsupportedWithMoreCitations = input.mode === 'cited'
+      && secondAudit.unsupported.length === grounding.unsupported.length
+      && secondCited.length > citedIndexes.length
+    if (protocolOk && (fewerUnsupported || sameUnsupportedWithMoreCitations)) {
+      finalAnswer = second
+      citedIndexes = secondCited
+      grounding = secondAudit
+      repaired = true
+    }
+  }
+
+  let withheld = false
+  if (input.mode === 'chat') {
+    // 模型偶尔仍会违反“禁角标”规则；发送前做确定性清理，不靠提示词保证。
+    finalAnswer = stripCitationMarkers(finalAnswer)
+    citedIndexes = []
+    if (grounding.unsupported.length > 0) {
+      withheld = true
+      finalAnswer = CHAT_WITHHELD_ANSWER
+    }
+    grounding = { ...grounding, cited: [] }
+  } else if (citedIndexes.length === 0) {
+    withheld = true
+    finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
+  }
+
+  return { answer: finalAnswer, citedIndexes, withheld, grounding, repaired }
 }
 
 /**
@@ -448,7 +557,7 @@ async function resolveEmptyAnswer(deps: {
   let chatAnswer = ''
   try {
     chatAnswer = await deps.runChat(
-      resolveSystemPrompt(deps.systemPromptOverride),
+      resolveSystemPrompt(deps.systemPromptOverride, deps.dataScope),
       chatGated ?? chatPrompt,
       400,
       undefined,
@@ -567,6 +676,37 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           (category, action, status, target, detail) => { rc.op(category, action, status, target, detail) },
           system, userText, maxTokens, onDelta, onReasoning, images,
         )
+      const kbId = normalizeKbId(options.kbId)
+
+      // 自动回复无可用知识库：跳过必然为空的规划/检索，直接走同一隐私闸下的聊天兜底。
+      if (options.dataScope === 'kb-only' && kbId === undefined) {
+        const emptyPlan = {
+          intent: '自动回复（未启用知识库）',
+          subQueries: options.question.trim() === '' ? [] : [options.question.trim()],
+          from: '',
+          to: '',
+          person: '',
+        }
+        const emptyResult = await resolveEmptyAnswer({
+          dataScope: options.dataScope,
+          question: options.question,
+          systemPromptOverride: options.systemPromptOverride,
+          plan: emptyPlan,
+          terms: [],
+          stats: { candidates: 0, kept: 0, scope: 'kb-only', recency: false, chunks: 0, windowMessages: 0 },
+          indexNote: '',
+          history: trimmedHistory,
+          imageBlocks,
+          imageNote,
+          runChat: runChatImages,
+          onReasoning,
+          privacyGate: (feature, counts, texts) => rc.privacyGate(feature, counts, texts),
+          op: (category, action, status, target, detail) => { rc.op(category, action, status, target, detail) },
+          ...(emitStage ? { emitStage } : {}),
+        })
+        rc.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel)
+        return emptyResult
+      }
 
       // ── 第 1 步：意图分析与拆解（LLM → JSON 规划） ──
       // 规划器同时负责**把相对时间换算成绝对日期**（「上周三」→ 2026-09-02）与
@@ -640,7 +780,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         question: options.question,
         plan: { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
         scope,
-        ...(normalizeKbId(options.kbId) !== undefined ? { kbId: normalizeKbId(options.kbId) } : {}),
+        ...(kbId !== undefined ? { kbId } : {}),
         // 数据面限定（2026-10-17）：自动回复传 `kb-only` ⇒ 关掉微信侧四通道 + 不建消息向量索引。
         ...(options.dataScope === 'kb-only' ? { wechatDataEnabled: false } : {}),
         indexNote,
@@ -662,7 +802,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       // 精排这一句必须出现在依据行里：`used:true` 与 `used:false` 是两种不同的可信度 ——
       // 前者说明「有个模型读过这批候选并给了顺序」，后者说明「顺序是本地启发式给的」。
       // 不写出来，用户就会把「没配模型」读成「模型认为这些最相关」。
-      const basisLine = askBasisLine(citations) + rerankLine
+      const basisLine = askBasisLine(citations, options.dataScope) + rerankLine
       if (citations.length === 0) {
         // 0 命中分支整块抽到模块级 `resolveEmptyAnswer`（自动回复调模型兜底 / 手动问答短路）。
         const emptyResult = await resolveEmptyAnswer({
@@ -723,7 +863,7 @@ ${buildSynthRules(options.dataScope, timeGuardRule)}`
       )
       emitStage?.({ key: 'synthesize', label: '综合生成回答', status: 'running', detail: `依据 ${citations.length} 条原文` })
       const answer = await runChatImages(
-        resolveSystemPrompt(options.systemPromptOverride),
+        resolveSystemPrompt(options.systemPromptOverride, options.dataScope),
         synthGated ?? synthPrompt,
         // 自动回复（kb-only）要短：单条 ≤30 字、总长 ≤300 字 ⇒ 400 tokens 足够，
         // 且能压住模型「写长」的倾向（生成时长与输出长度成正比）。
@@ -752,53 +892,22 @@ ${buildSynthRules(options.dataScope, timeGuardRule)}`
           return c ? `${c.name} ${c.sender ?? ''} ${c.time} ${c.snippet}` : ''
         })
       }
-      const groundingAuditFor = (text: string, cited: number[]): ReturnType<typeof auditGrounding> =>
-        auditGrounding(text, evidenceFor(cited), citations.length)
-
-      // ── 硬约束二：回答必须能对应到原文，否则不采用 ──
-      // 三道检查，任一不通过都带着**具体问题**回炉重写一次：
-      //   ① 一个 [n] 都没有 → 整段内容无法逐条核实（可能是模型凭常识补的）；
-      //   ② 接地审计发现「引用原文里没有的金额/日期/长数字」→ 典型编造；
-      //   ③ 带这些高风险值的句子没标 [n]（软问题，只触发重写）。
-      // 重写后仍然没有任何引用才**不予采用**。金额类不做硬拦截 —— 合计是模型可以正当
-      // 算出来的，拦住它会把「一共转了多少」直接变成无法回答（与前端
-      // panels/utils/grounding.ts 的同一取舍：那里只提示、不拦截）。重写通过时用重写稿，
-      // 没有变得更差才替换 —— 免得「越改越糟」把已经能核实的内容丢掉。
-      let citedIndexes = parseCitedIndexes(answer, citations.length)
-      let finalAnswer = answer
-      let withheld = false
-      let grounding = groundingAuditFor(answer, citedIndexes)
-      let repaired = false
-      if (citedIndexes.length === 0 || grounding.unsupported.length > 0 || grounding.uncited > 0) {
-        const repairHint = groundingRepairHint(grounding)
-        const strictPrompt = `${synthPrompt}
-
-  【重要】请重写上一次的回答，逐条修掉下面的问题。
-  ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] 来源**。\n' : ''}${repairHint ? repairHint + '\n' : ''} · 每一句事实性陈述后面都必须紧跟对应的 [n]，且只标真正支持这句话的那几条；
-   · 语气保持自然口语化，像在微信里转述聊天内容；
-   · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
-        const second = await runChat(
-          '你是用户微信聊天记录里的问答助手。只用给定检索结果回答，自然口语化，每句事实标注 [n]；记录里没有就直说没找到，不要推测或编造。',
-          strictPrompt,
-          1600,
-        )
-        const secondCited = parseCitedIndexes(second, citations.length)
-        const secondAudit = groundingAuditFor(second, secondCited)
-        const better = secondCited.length > 0 && (
-          secondAudit.unsupported.length < grounding.unsupported.length
-          || (secondAudit.unsupported.length === grounding.unsupported.length && secondCited.length > citedIndexes.length)
-        )
-        if (better) {
-          finalAnswer = second
-          citedIndexes = secondCited
-          grounding = secondAudit
-          repaired = true
-        }
-      }
-      if (citedIndexes.length === 0) {
-        withheld = true
-        finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
-      }
+      // ── 硬约束二：按场景接地核对 ──
+      // 手动问答要求 [n]；自动回复禁止 [n]，但仍核对金额/日期/长数字。
+      // 回炉只重写一次，且必须继续携带原图片，避免多模态问题被降级成纯文本。
+      const mode: GroundingReplyMode = options.dataScope === 'kb-only' ? 'chat' : 'cited'
+      const resolvedAnswer = await resolveGroundedAnswer({
+        mode,
+        answer,
+        citationCount: citations.length,
+        synthPrompt,
+        evidenceFor,
+        allEvidence: evidenceFor([]),
+        systemPrompt: resolveSystemPrompt(options.systemPromptOverride, options.dataScope),
+        runChat: runChatImages,
+        ...(imageBlocks.length > 0 ? { images: imageBlocks } : {}),
+      })
+      const { answer: finalAnswer, citedIndexes, withheld, grounding, repaired } = resolvedAnswer
       const answer_basis = citedIndexes.length > 0
         ? `${basisLine}（回答引用了其中 ${citedIndexes.length} 条：[${citedIndexes.join('][')}]）`
         : basisLine

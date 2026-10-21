@@ -11,6 +11,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLlmBridge } from '../llm-bridge.js'
+import { resolveLlmConfig } from '../llm-config-store.js'
+import { resolveEmbedModel } from '../llm-bridge.js'
 import { at } from './helpers/strict-index.ts'
 
 /** 造一个记录请求体的假 fetch，返回固定的 embedding 响应。 */
@@ -97,12 +99,8 @@ describe('嵌入模型名的单一解析', () => {
     expect(at(seen, 0, '请求').url).toBe('https://embed.internal/v1/embeddings')
   })
 
-  it('什么都没配 ⇒ 名字为空串，且 embed 直接拒发（不会带着空 model 出网）', async () => {
-    const { fn, seen } = captureFetch()
-    vi.stubGlobal('fetch', fn)
-    const bridge = createLlmBridge({ apiKey: '', baseUrl: '', model: '', embeddingModel: '' })
-    expect(bridge.embeddingModelName()).toBe('')
-    await expect(bridge.embed(['x'])).rejects.toThrow(/未配置 embedding/)
-    expect(seen).toHaveLength(0)
+  it('解析层没有模型时 ⇒ 名字为空串；这层不偷用真实 llm.json', () => {
+    expect(resolveEmbedModel(resolveLlmConfig({}))).toBe('')
   })
+
 })

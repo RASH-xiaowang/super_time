@@ -53,6 +53,7 @@
     "wordcloud:smoke": "node scripts/ui-ask-smoke.js scripts/wordcloud-ssr.tsx",
     "llm-balance:smoke": "node scripts/ui-ask-smoke.js scripts/llm-balance-ssr.tsx",
     "task-center:smoke": "node scripts/ui-ask-smoke.js scripts/task-center-ssr.tsx",
+    "task-center:e2e": "npm run build:ui && node scripts/task-center-e2e.mjs",
     "ui:accept": "node scripts/ui-acceptance.mjs",
     "ui:e2e-smoke": "node scripts/ui-e2e-smoke.mjs",
     "ui:nav-e2e": "node scripts/nav-shell-e2e.mjs",

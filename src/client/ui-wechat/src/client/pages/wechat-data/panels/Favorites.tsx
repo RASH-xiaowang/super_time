@@ -7,20 +7,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
+import {
+  apiDeleteFavoriteItems,
+  apiExportCsv,
+  apiGetFavoriteMediaDataUrl,
+  apiGetFavorites,
+  apiGetSnsImageDataUrl,
+} from '../api.ts'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, EmptyState, PanelHeader, useDebouncedValue } from '../ui/kit.tsx'
+import { Drawer, EmptyState, PanelHeader, useDebouncedValue } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
-import { fmtBytes } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
 import { favTypeLabel, parseFavItem } from './favorites-parse.ts'
 import { FavCard } from './favorites-card.tsx'
+import { FavoritesChatlogPreview } from './favorites-chatlog-preview.tsx'
+import { FavoriteDetail } from './favorites-detail.tsx'
 import { ListFilter, PanelAction } from './asset-ui.tsx'
 import { rememberThumb } from '../utils/thumb-cache.ts'
 
-/** 卡片高度的初值（真实高度由 `measureElement` 回灌）：摘要最多三行，88 是"标题 + 一行摘要 + 落款"的量级。 */
-const FAV_CARD_ESTIMATE_PX = 88
+/** 卡片高度的初值（真实高度由 `measureElement` 回灌）：独立卡片 + 两行摘要 + 底栏。 */
+const FAV_CARD_ESTIMATE_PX = 114
 
 /**
  * Render the favorites panel.
@@ -105,28 +112,47 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
   const decodeFavImg = useCallback((md5: string): void => {
     if (!md5 || favImgFetched.current.has(md5)) return
     favImgFetched.current.add(md5)
-    void apiGetSnsImageDataUrl({ md5 })
-      .then((r) => {
-        const url = r.url as string | undefined
-        if (!url) return
-        const next = rememberThumb(
-          { thumbs: favThumbsRef.current, order: favThumbOrder.current, fetched: favImgFetched.current },
-          md5,
-          url,
-        )
-        favThumbsRef.current = next.thumbs
-        favThumbOrder.current = next.order
-        favImgFetched.current = next.fetched
-        setFavImgs(next.thumbs)
-      })
-      .catch(() => { /* 解码失败保留占位图标 */ })
+    void (async () => {
+      let url = ''
+      try {
+        const local = await apiGetFavoriteMediaDataUrl({ md5, kind: 'image' })
+        url = typeof local.url === 'string' ? local.url : ''
+      } catch {
+        // 本地收藏缓存未命中时继续走旧的 SNS 图片链。
+      }
+      if (url === '') {
+        try {
+          const sns = await apiGetSnsImageDataUrl({ md5 })
+          url = typeof sns.url === 'string' ? sns.url : ''
+        } catch {
+          // 两条链都失败时撤掉“已请求”标记，下次重新挂载可重试。
+        }
+      }
+      if (url === '') {
+        favImgFetched.current.delete(md5)
+        return
+      }
+      const next = rememberThumb(
+        { thumbs: favThumbsRef.current, order: favThumbOrder.current, fetched: favImgFetched.current },
+        md5,
+        url,
+      )
+      favThumbsRef.current = next.thumbs
+      favThumbOrder.current = next.order
+      favImgFetched.current = next.fetched
+      setFavImgs(next.thumbs)
+    })()
   }, [])
 
-  // 打开收藏详情时按需解码该条目的图片（点 3c：详情查看时才读取）。
+  // 打开收藏详情时按需解码该条目的封面/缩略图（图片、视频、小程序等都共用）。
   useEffect(() => {
     if (!detail) return
     const d = parseFavItem(detail)
-    for (const it of d.items) if (it.kind === 'image' && it.md5) decodeFavImg(it.md5)
+    for (const it of d.items) {
+      for (const md5 of [it.thumbMd5, it.fullMd5, it.md5]) {
+        if (md5) decodeFavImg(md5)
+      }
+    }
   }, [detail, decodeFavImg])
 
   const types = useMemo(() => {
@@ -205,7 +231,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         ariaLabel="收藏分类"
       />
       {notice && <div className={css.notice}>{notice}</div>}
-      <div className={css.scroll} ref={scrollRef}>
+      <div className={css.scroll + ' ' + css.favScroll} ref={scrollRef}>
         {loading && <ListSkeleton rows={8} />}
         {error && <div className={kitCss.error} role="alert">收藏数据接口尚未就绪（{error}）</div>}
         {!loading && !error && filtered.length === 0 && (
@@ -230,6 +256,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
                   key={vi.key}
                   data-index={vi.index}
                   ref={favVirtualizer.measureElement}
+                  className={css.favVirtualRow}
                   style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                 >
                   <FavCard
@@ -247,37 +274,19 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         )}
         {!loading && !error && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
-      <Dialog open={detail !== null} onClose={() => { setDetail(null) }} title={detail ? parseFavItem(detail).title : '收藏详情'}>
-        {detail && (() => {
-          const d = parseFavItem(detail)
-          return (
-            <div className={css.formBody}>
-              <div className={kitCss.textMeta}>{d.typeLabel + (d.source ? ' · ' + d.source : '') + ' · ' + d.time}</div>
-              <div className={css.favDetail}>
-                {d.items.length > 0 ? d.items.map((it, idx) => (
-                  <div key={idx} className={css.favPart}>
-                    {(it.sourceName || it.sourceTime) && <div className={css.favPartMeta}>{[it.sourceName, it.sourceTime].filter(Boolean).join(' · ')}</div>}
-                    {it.kind === 'image' ? (
-                      (it.md5 && favImgs[it.md5]) ? <img className={css.favPartImg} src={favImgs[it.md5]} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <div className={kitCss.textMeta}>[图片]</div>
-                    ) : it.kind === 'link' ? (
-                      it.url ? <a className={css.favPartText} href={it.url} target="_blank" rel="noopener noreferrer">{it.text || it.url}</a> : <div className={css.favPartText}>{it.text || '[链接]'}</div>
-                    ) : it.kind === 'file' ? (
-                      <div className={css.favPartText}>{it.name || '[文件]'}{it.ext ? ' (' + it.ext + ')' : ''}{it.size ? ` · ${fmtBytes(it.size)}` : ''}</div>
-                    ) : it.kind === 'video' ? (
-                      <div className={css.favPartText}>[视频]{it.duration ? ` · ${Math.round(it.duration)}s` : ''}</div>
-                    ) : it.kind === 'voice' ? (
-                      <div className={css.favPartText}>[语音]</div>
-                    ) : (
-                      <div className={css.favPartText}>{it.text || ''}</div>
-                    )}
-                  </div>
-                )) : <div className={css.favPartText}>{d.desc || ''}</div>}
-              </div>
-              {d.url && <a href={d.url} target="_blank" rel="noopener noreferrer" className={css.rowName}>打开链接</a>}
-            </div>
-          )
-        })()}
-      </Dialog>
+      <Drawer
+        open={detail !== null && detail.type !== 14}
+        onClose={() => { setDetail(null) }}
+        title={detail ? parseFavItem(detail).title : '收藏详情'}
+        width={520}
+      >
+        {detail && detail.type !== 14 && <FavoriteDetail item={detail} thumbs={favImgs} />}
+      </Drawer>
+      <FavoritesChatlogPreview
+        item={detail?.type === 14 ? detail : null}
+        thumbs={favImgs}
+        onClose={() => { setDetail(null) }}
+      />
     </div>
   )
 }

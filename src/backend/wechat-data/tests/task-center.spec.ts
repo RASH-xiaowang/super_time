@@ -22,7 +22,10 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  cleanTaskBatchIds,
+  deleteTaskInfos,
   deleteTaskInfo,
+  deleteTaskTriggers,
   dispatchPendingTaskCallbacks,
   dispatchTaskCallback,
   listTaskInfos,
@@ -30,6 +33,7 @@ import {
   saveTaskInfo,
   scanTaskTriggers,
   setTaskInfoStatus,
+  TASK_BATCH_DELETE_MAX,
 } from '../src/query/task-center.ts'
 import type { TaskDispatchDeps } from '../src/query/task-center.ts'
 import type { TaskInfoInput } from '../src/types.ts'
@@ -77,6 +81,13 @@ interface SeedRow {
   text?: string
   /** 图片消息的 md5（写进 `<img md5="…">`）。 */
   md5?: string
+  /**
+   * 群消息 `source` 列里的结构化 @ 列表。
+   *
+   * 生产解析只在**正文含 `@`** 的群消息上读取它；这里的正文会由
+   * {@link contentOf} 自动补一个真实的 `@`，避免夹具与真实消息形状漂移。
+   */
+  atUsers?: readonly string[]
 }
 
 /** 测试里直接开库造夹具：与 `query-db-lifetime.spec.ts` 同款（生产代码才受连接棘轮约束）。 */
@@ -100,10 +111,17 @@ function openFixtureDb(): DatabaseSync {
 function contentOf(row: SeedRow, talker: string): string {
   const isGroup = talker.endsWith('@chatroom')
   const prefix = isGroup && row.sender !== 'self' ? row.sender + ':\n' : ''
+  const body = (row.text ?? '') + (isGroup && row.atUsers !== undefined && !String(row.text ?? '').includes('@') ? ' @' : '')
   if ((row.type ?? 1) === 3) {
-    return prefix + '<?xml version="1.0"?><msg><img md5="' + (row.md5 ?? '') + '"/></msg>'
+    return prefix + body + '<?xml version="1.0"?><msg><img md5="' + (row.md5 ?? '') + '"/></msg>'
   }
-  return prefix + (row.text ?? '')
+  return prefix + body
+}
+
+/** 一条消息的 `source` XML（真实微信把 `atuserlist` 放在这里，不是正文）。 */
+function sourceOf(row: SeedRow): string {
+  if (row.atUsers === undefined) return ''
+  return '<msgsource><atuserlist><![CDATA[' + row.atUsers.join(',') + ']]></atuserlist></msgsource>'
 }
 
 /** 往某会话的 `Msg_` 表追加消息（可多次调用；表已存在时只插新行）。 */
@@ -117,16 +135,17 @@ function seedMessages(talker: string, rows: SeedRow[]): void {
       local_type INTEGER,
       create_time INTEGER,
       real_sender_id INTEGER,
-      message_content TEXT
+      message_content TEXT,
+      source TEXT
     )`)
     const insert = db.prepare(
-      `INSERT OR REPLACE INTO "${table}" (local_id, sort_seq, local_type, create_time, real_sender_id, message_content)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO "${table}" (local_id, sort_seq, local_type, create_time, real_sender_id, message_content, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     for (const row of rows) {
       insert.run(
         row.localId, row.sortSeq, row.type ?? 1, row.createTime,
-        SENDER_ROWID[row.sender] ?? 1, contentOf(row, talker),
+        SENDER_ROWID[row.sender] ?? 1, contentOf(row, talker), sourceOf(row),
       )
     }
   } finally {
@@ -255,6 +274,81 @@ describe('任务配置 CRUD 与校验', () => {
     expect(task?.name).toBe('改过的任务名')
   })
 
+  it('仅匹配@我：群聊保存勾选、更新缺省沿用、单聊强制归一为 false', () => {
+    const group = saveTaskInfo(decrypted, taskInput({
+      chatUsername: GROUP_TALKER,
+      chatName: '项目群',
+      chatType: 'group',
+      targetUsername: 'wxid_target',
+      targetName: '小王',
+      mentionMeOnly: true,
+    }))
+    const groupId = group.id ?? 0
+    expect(group.ok).toBe(true)
+    expect(listTaskInfos(decrypted).items.find((task) => task.id === groupId)?.mentionMeOnly).toBe(true)
+
+    expect(saveTaskInfo(decrypted, {
+      id: groupId,
+      chatUsername: GROUP_TALKER,
+      chatType: 'group',
+      keywords: ['发票'],
+      name: '只改名字',
+    }).ok).toBe(true)
+    expect(listTaskInfos(decrypted).items.find((task) => task.id === groupId)?.mentionMeOnly)
+      .toBe(true)
+
+    const privateTask = saveTaskInfo(decrypted, taskInput({ mentionMeOnly: true }))
+    expect(privateTask.ok).toBe(true)
+    expect(listTaskInfos(decrypted).items.find((task) => task.id === privateTask.id)?.mentionMeOnly)
+      .toBe(false)
+  })
+
+  it('老库没有 mention_me_only 时自动补列，旧任务按未勾选读取且可正常更新', () => {
+    const file = join(root, 'data', 'wechat_task_center.db')
+    mkdirSync(join(root, 'data'), { recursive: true })
+    const db = new DatabaseSync(file)
+    try {
+      db.exec(`CREATE TABLE task_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        chat_username TEXT NOT NULL,
+        chat_name TEXT NOT NULL DEFAULT '',
+        chat_type TEXT NOT NULL DEFAULT 'private',
+        target_username TEXT NOT NULL DEFAULT '',
+        target_name TEXT NOT NULL DEFAULT '',
+        keywords TEXT NOT NULL DEFAULT '[]',
+        photo_limit INTEGER NOT NULL DEFAULT 0,
+        callback_url TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'incomplete',
+        last_scan_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_triggered_at INTEGER,
+        trigger_count INTEGER NOT NULL DEFAULT 0
+      )`)
+      db.prepare(`INSERT INTO task_info
+        (name, chat_username, chat_name, chat_type, target_username, target_name,
+         keywords, photo_limit, callback_url, status, last_scan_seq,
+         created_at, updated_at, trigger_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        '旧任务', PRIVATE_TALKER, '李四', 'private', PRIVATE_TALKER, '李四',
+        '["发票"]', 0, 'https://callback.example/hook', 'ready', 0, 1, 1, 0,
+      )
+    } finally {
+      db.close()
+    }
+
+    const migrated = listTaskInfos(decrypted)
+    expect(migrated.readError).toBeUndefined()
+    expect(migrated.items[0]?.mentionMeOnly).toBe(false)
+    expect(saveTaskInfo(decrypted, taskInput({
+      id: migrated.items[0]?.id,
+      name: '迁移后可更新',
+      mentionMeOnly: false,
+    })).ok).toBe(true)
+    expect(listTaskInfos(decrypted).items[0]?.name).toBe('迁移后可更新')
+  })
+
   it('已完善任务换会话时重置水位（不拿旧会话的 sort_seq 扫新会话）', () => {
     const OTHER = 'wxid_other_chat'
     const created = saveTaskInfo(decrypted, taskInput())
@@ -280,6 +374,90 @@ describe('任务配置 CRUD 与校验', () => {
     const triggers = listTaskTriggers(decrypted)
     expect(triggers.items).toHaveLength(1)
     expect(triggers.items[0]?.taskName).toBe('李四 · 发票')
+  })
+})
+
+describe('批量删除任务与触发记录', () => {
+  it('批量删除任务只删所选配置，历史触发记录仍保留', () => {
+    seedMessages(PRIVATE_TALKER, [{ localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' }])
+    const first = saveTaskInfo(decrypted, taskInput({ name: '任务一' }))
+    const second = saveTaskInfo(decrypted, taskInput({ name: '任务二' }))
+    const third = saveTaskInfo(decrypted, taskInput({ name: '任务三' }))
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'wxid_lisi', text: '发票 一' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(3)
+    const records = listTaskTriggers(decrypted)
+    expect(records.total).toBe(3)
+
+    const ids = [first.id ?? 0, third.id ?? 0, first.id ?? 0, -1, Number.NaN]
+    const result = deleteTaskInfos(decrypted, ids)
+    expect(result).toEqual({ ok: true, removed: 2 })
+    expect(listTaskInfos(decrypted).items.map((task) => task.id)).toEqual([second.id])
+    expect(listTaskTriggers(decrypted).total).toBe(3)
+    expect(listTaskTriggers(decrypted).items.map((record) => record.taskId).sort())
+      .toEqual([first.id, second.id, third.id].sort())
+  })
+
+  it('批量删除触发记录只删所选，并重算任务触发次数与最近触发时间', () => {
+    seedMessages(PRIVATE_TALKER, [{ localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' }])
+    const first = saveTaskInfo(decrypted, taskInput({ name: '任务一' }))
+    const second = saveTaskInfo(decrypted, taskInput({ name: '任务二' }))
+    const firstId = first.id ?? 0
+    const secondId = second.id ?? 0
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'wxid_lisi', text: '发票 一' },
+      { localId: 3, sortSeq: 30, createTime: 300, sender: 'wxid_lisi', text: '发票 二' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(4)
+
+    const firstRecords = listTaskTriggers(decrypted, { taskId: firstId }).items
+    const secondRecords = listTaskTriggers(decrypted, { taskId: secondId }).items
+    expect(firstRecords).toHaveLength(2)
+    expect(secondRecords).toHaveLength(2)
+    const removeFirstTaskRecord = firstRecords[0]
+    const removeSecondTaskRecords = secondRecords.map((record) => record.id)
+    expect(removeFirstTaskRecord).toBeDefined()
+
+    const result = deleteTaskTriggers(decrypted, [
+      removeFirstTaskRecord?.id ?? 0,
+      ...removeSecondTaskRecords,
+      removeFirstTaskRecord?.id ?? 0,
+    ])
+    expect(result).toEqual({ ok: true, removed: 3 })
+
+    const remainingFirst = listTaskTriggers(decrypted, { taskId: firstId })
+    expect(remainingFirst.items).toHaveLength(1)
+    const firstTask = listTaskInfos(decrypted).items.find((task) => task.id === firstId)
+    expect(firstTask?.triggerCount).toBe(1)
+    expect(firstTask?.lastTriggeredAt).toBe(remainingFirst.items[0]?.triggeredAt)
+
+    const secondTask = listTaskInfos(decrypted).items.find((task) => task.id === secondId)
+    expect(secondTask?.triggerCount).toBe(0)
+    expect(secondTask?.lastTriggeredAt).toBeUndefined()
+    expect(listTaskTriggers(decrypted, { taskId: secondId }).total).toBe(0)
+  })
+
+  it('空选择、全无效与超过 500 条整单拒绝；边界 500 条可处理', () => {
+    expect(deleteTaskInfos(decrypted, [])).toMatchObject({ ok: false, removed: 0 })
+    expect(deleteTaskTriggers(decrypted, [0, -1, 'x', null])).toMatchObject({ ok: false, removed: 0 })
+    expect(cleanTaskBatchIds([1, 1, 2, 0, -3, '4', 5.9, 'bad']))
+      .toEqual({ ids: [1, 2, 4, 5] })
+
+    const tooMany = Array.from({ length: TASK_BATCH_DELETE_MAX + 1 }, (_, index) => index + 1)
+    expect(deleteTaskInfos(decrypted, tooMany)).toEqual({
+      ok: false,
+      removed: 0,
+      error: `一次最多删除 ${String(TASK_BATCH_DELETE_MAX)} 条，请分批操作`,
+    })
+    expect(deleteTaskTriggers(decrypted, tooMany)).toEqual({
+      ok: false,
+      removed: 0,
+      error: `一次最多删除 ${String(TASK_BATCH_DELETE_MAX)} 条，请分批操作`,
+    })
+    const atLimit = Array.from({ length: TASK_BATCH_DELETE_MAX }, (_, index) => index + 1)
+    expect(deleteTaskInfos(decrypted, atLimit)).toEqual({ ok: true, removed: 0 })
+    expect(deleteTaskTriggers(decrypted, atLimit)).toEqual({ ok: true, removed: 0 })
   })
 })
 
@@ -361,6 +539,181 @@ describe('触发扫描：水位、命中与去重', () => {
     const result = scanTaskTriggers(decrypted, { selfUsername: SELF })
     expect(result.created).toBe(1)
     expect(listTaskTriggers(decrypted).items[0]?.messageLocalId).toBe(2)
+  })
+
+  it('群聊「仅匹配@我」：无结构@或仅@所有人不触发，结构化@登录账号才触发', () => {
+    seedMessages(GROUP_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_other', text: '历史 报销' },
+    ])
+    const created = saveTaskInfo(decrypted, taskInput({
+      chatUsername: GROUP_TALKER,
+      chatName: '项目群',
+      chatType: 'group',
+      targetUsername: 'wxid_target',
+      targetName: '小王',
+      keywords: ['报销'],
+      mentionMeOnly: true,
+    }))
+    expect(created.ok).toBe(true)
+
+    seedMessages(GROUP_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 20, sender: 'wxid_target', text: '小王 报销 了' },
+      { localId: 3, sortSeq: 30, createTime: 30, sender: 'wxid_target', text: '小王 报销 @所有人', atUsers: ['notify@all'] },
+      { localId: 4, sortSeq: 40, createTime: 40, sender: 'wxid_target', text: '小王 报销 @你', atUsers: [SELF] },
+      { localId: 5, sortSeq: 50, createTime: 50, sender: 'wxid_target', text: '小王 报销 @别人', atUsers: ['wxid_other'] },
+    ])
+    const result = scanTaskTriggers(decrypted, { selfUsername: SELF })
+    expect(result.created).toBe(1)
+    expect(listTaskTriggers(decrypted).items.map((record) => record.messageLocalId)).toEqual([4])
+  })
+
+  it('群聊未勾选「仅匹配@我」时保持原逻辑：只看目标成员与关键词', () => {
+    const created = saveTaskInfo(decrypted, taskInput({
+      chatUsername: GROUP_TALKER,
+      chatName: '项目群',
+      chatType: 'group',
+      targetUsername: 'wxid_target',
+      targetName: '小王',
+      keywords: ['报销'],
+      mentionMeOnly: false,
+    }))
+    expect(created.ok).toBe(true)
+    seedMessages(GROUP_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_target', text: '小王 报销 了' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+  })
+})
+
+describe('触发记录分页：真实总数、复合游标与兼容旧调用', () => {
+  /** 直接向任务库写触发记录，专注分页查询（扫描链路另有一组用例）。 */
+  function seedTriggers(
+    count: number,
+    triggeredAt?: readonly number[],
+    overrides?: (index: number) => Partial<Record<'taskId' | 'taskName' | 'chatUsername' | 'chatName' | 'targetName' | 'keyword' | 'text' | 'callbackError', string | number>>,
+  ): void {
+    const file = join(root, 'data', 'wechat_task_center.db')
+    const db = new DatabaseSync(file)
+    try {
+      db.exec('CREATE TABLE IF NOT EXISTS task_triggers (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, task_name TEXT NOT NULL DEFAULT \'\', chat_username TEXT NOT NULL DEFAULT \'\', chat_name TEXT NOT NULL DEFAULT \'\', target_username TEXT NOT NULL DEFAULT \'\', target_name TEXT NOT NULL DEFAULT \'\', keyword TEXT NOT NULL DEFAULT \'\', text TEXT NOT NULL DEFAULT \'\', images TEXT NOT NULL DEFAULT \'[]\', message_local_id INTEGER NOT NULL, message_sort_seq INTEGER NOT NULL, triggered_at INTEGER NOT NULL, callback_status TEXT NOT NULL DEFAULT \'pending\', callback_at INTEGER, callback_error TEXT NOT NULL DEFAULT \'\', UNIQUE(task_id, message_local_id))')
+      const insert = db.prepare(`INSERT INTO task_triggers
+        (task_id, task_name, chat_username, chat_name, target_username, target_name, keyword, text, images,
+         message_local_id, message_sort_seq, triggered_at, callback_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      for (let i = 1; i <= count; i += 1) {
+        const at = triggeredAt?.[i - 1] ?? 1000
+        const row = overrides?.(i) ?? {}
+        insert.run(
+          row.taskId ?? 1,
+          row.taskName ?? '分页任务',
+          row.chatUsername ?? PRIVATE_TALKER,
+          row.chatName ?? '李四',
+          '',
+          row.targetName ?? '',
+          row.keyword ?? '发票',
+          row.text ?? String(i),
+          '[]',
+          i,
+          i,
+          at,
+          'sent',
+        )
+        if (row.callbackError !== undefined) {
+          db.prepare('UPDATE task_triggers SET callback_error = ? WHERE task_id = ? AND message_local_id = ?')
+            .run(String(row.callbackError), row.taskId ?? 1, i)
+        }
+      }
+    } finally {
+      db.close()
+    }
+  }
+
+  it('不传游标时保持旧调用形状，但 total 是真实总数并返回 nextCursor', () => {
+    seedTriggers(3)
+    const first = listTaskTriggers(decrypted, { limit: 2 })
+    expect(first.items.map((r) => r.id)).toEqual([3, 2])
+    expect(first.total).toBe(3)
+    expect(first.nextCursor).toEqual({ triggeredAt: 1000, id: 2 })
+  })
+
+  it('复合游标跨页不重不漏（同一 triggered_at 的记录也按 id 续接）', () => {
+    seedTriggers(3)
+    const first = listTaskTriggers(decrypted, { limit: 2 })
+    const second = listTaskTriggers(decrypted, { limit: 2, cursor: first.nextCursor })
+    expect(second.items.map((r) => r.id)).toEqual([1])
+    expect(second.nextCursor).toBeUndefined()
+    expect([...first.items, ...second.items].map((r) => r.id)).toEqual([3, 2, 1])
+  })
+
+  it('边界时间戳还有记录时，不能让更早记录先占满下一页', () => {
+    seedTriggers(8, [1000, 1000, 1000, 1000, 900, 900, 800, 800])
+    const first = listTaskTriggers(decrypted, { limit: 2 })
+    const second = listTaskTriggers(decrypted, { limit: 2, cursor: first.nextCursor })
+    const third = listTaskTriggers(decrypted, { limit: 2, cursor: second.nextCursor })
+    expect(first.items.map((r) => r.id)).toEqual([4, 3])
+    expect(second.items.map((r) => r.id)).toEqual([2, 1])
+    expect(third.items.map((r) => r.id)).toEqual([6, 5])
+    expect([...first.items, ...second.items, ...third.items].map((r) => r.id)).toEqual([4, 3, 2, 1, 6, 5])
+  })
+
+  it('恰好取完整页时不返回无效 nextCursor（最后一页不必再请求）', () => {
+    seedTriggers(2)
+    const page = listTaskTriggers(decrypted, { limit: 2 })
+    expect(page.items.map((r) => r.id)).toEqual([2, 1])
+    expect(page.total).toBe(2)
+    expect(page.nextCursor).toBeUndefined()
+  })
+
+  it('非法游标返回空页，不会把第一页误当成末页', () => {
+    seedTriggers(2)
+    expect(listTaskTriggers(decrypted, { cursor: { triggeredAt: 0, id: 2 } })).toEqual({ items: [], total: 0 })
+    expect(listTaskTriggers(decrypted, { cursor: { triggeredAt: 1000, id: 0 } })).toEqual({ items: [], total: 0 })
+  })
+
+  it('搜索覆盖正文、任务名、会话/对象、关键词与回调错误，且 total 同口径', () => {
+    seedTriggers(5, [500, 400, 300, 200, 100], (i) => {
+      if (i === 1) return { text: '客户提到 Alpha 项目' }
+      if (i === 2) return { taskName: '财务周报' }
+      if (i === 3) return { chatName: '项目群' }
+      if (i === 4) return { targetName: '王小明' }
+      return { keyword: 'beta', callbackError: 'HTTP 502 Bad Gateway' }
+    })
+
+    expect(listTaskTriggers(decrypted, { search: 'alpha' }).items.map((r) => r.id)).toEqual([1])
+    expect(listTaskTriggers(decrypted, { search: '财务' }).items.map((r) => r.id)).toEqual([2])
+    expect(listTaskTriggers(decrypted, { search: '项目群' }).items.map((r) => r.id)).toEqual([3])
+    expect(listTaskTriggers(decrypted, { search: '王小明' }).items.map((r) => r.id)).toEqual([4])
+    expect(listTaskTriggers(decrypted, { search: 'BETA' }).items.map((r) => r.id)).toEqual([5])
+    expect(listTaskTriggers(decrypted, { search: '502' }).items.map((r) => r.id)).toEqual([5])
+    expect(listTaskTriggers(decrypted, { search: '不存在' })).toEqual({ items: [], total: 0 })
+  })
+
+  it('taskId + search 可组合，搜索结果跨页不重不漏', () => {
+    seedTriggers(6, [600, 500, 400, 300, 200, 100], (i) => ({
+      taskId: i <= 3 ? 1 : 2,
+      text: '共同命中 发票 ' + String(i),
+    }))
+    const first = listTaskTriggers(decrypted, { taskId: 1, search: '共同', limit: 2 })
+    const second = listTaskTriggers(decrypted, { taskId: 1, search: '共同', limit: 2, cursor: first.nextCursor })
+    expect(first.total).toBe(3)
+    expect(first.items.map((r) => r.id)).toEqual([1, 2])
+    expect(second.items.map((r) => r.id)).toEqual([3])
+    expect(second.nextCursor).toBeUndefined()
+    expect([...first.items, ...second.items].every((r) => r.taskId === 1)).toBe(true)
+    expect([...first.items, ...second.items].map((r) => r.id)).toEqual([1, 2, 3])
+  })
+
+  it('搜索把 % / _ 当普通字符（instr 按字面匹配）', () => {
+    seedTriggers(3, [300, 200, 100], (i) => {
+      if (i === 1) return { text: '进度 100% 完成', chatName: '报价群', chatUsername: 'wxid-lisi-a' }
+      if (i === 2) return { text: '统计 A_B 指标', chatName: '项目群', chatUsername: 'wxid-lisi-b' }
+      return { text: '普通内容', chatName: '通知群', chatUsername: 'wxid-lisi-c' }
+    })
+    expect(listTaskTriggers(decrypted, { search: '100%' }).items.map((r) => r.id)).toEqual([1])
+    expect(listTaskTriggers(decrypted, { search: 'A_B' }).items.map((r) => r.id)).toEqual([2])
+    expect(listTaskTriggers(decrypted, { search: '%' }).items.map((r) => r.id)).toEqual([1])
+    expect(listTaskTriggers(decrypted, { search: '_' }).items.map((r) => r.id)).toEqual([2])
+    expect(listTaskTriggers(decrypted, { search: 'A%' })).toEqual({ items: [], total: 0 })
   })
 })
 

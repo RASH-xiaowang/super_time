@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { edgeDensityCap } from './graph-budget.ts'
-import { DEFAULT_GRAPH_SETTINGS, buildKnowledgeNetwork } from './graph-model.ts'
+import { DEFAULT_GRAPH_SETTINGS, buildKnowledgeNetwork, connectedEdgesOf } from './graph-model.ts'
 import type { KnowledgeSnapshot } from '../types.ts'
 
 /** 2 篇笔记 + 3 个 stub（其中 rust 被 6 处引用，用于验证 weight 封顶）。 */
@@ -309,8 +309,18 @@ describe('模型实体层进图（推断层的推断层）', () => {
     const suggest = g.edges.filter(e => e.kind === 'suggest')
     expect(suggest).toHaveLength(3)
     expect(suggest.every(e => ids.has(e.source) && ids.has(e.target))).toBe(true)
+    expect(suggest.every(e => e.bidirectional === true)).toBe(true)
     expect(g.nodes.some(n => SOCIAL_KINDS.includes(n.kind))).toBe(false)
     expect(g.nodes.map(n => n.id).filter(id => SOCIAL_ID_PATTERNS.some(re => re.test(id)))).toEqual([])
+  })
+
+  it('实体与来源文件可从任一端查到对方', () => {
+    const g = buildKnowledgeNetwork(withEntities(), SETTINGS)
+    const fromEntity = connectedEdgesOf(g, 'ent:person:张三')
+    const fromFile = connectedEdgesOf(g, 'file:37')
+    expect(fromEntity.map(x => x.other?.id)).toContain('file:37')
+    expect(fromEntity.map(x => x.other?.id)).toContain('file:38')
+    expect(fromFile.map(x => x.other?.id)).toContain('ent:person:张三')
   })
 
   it('suggest 与 mention 同属推断层：观测层占满额度时被裁的是它们', () => {

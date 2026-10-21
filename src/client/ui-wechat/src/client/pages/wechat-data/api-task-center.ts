@@ -13,6 +13,7 @@
  */
 import type {
   TaskCallbackDispatchResult,
+  TaskBatchMutationResult,
   TaskInfoInput,
   TaskInfoMutationResult,
   TaskInfoSnapshot,
@@ -44,6 +45,20 @@ export async function apiSaveTaskInfo(options: TaskInfoInput): Promise<TaskInfoM
 /** 删除任务（关联的触发记录保留：任务已删但记录仍是历史事实）。 */
 export async function apiDeleteTaskInfo(options: { id: number }): Promise<TaskInfoMutationResult> {
   const r = unwrap(await remote().deleteTaskInfo(options))
+  if (r.ok) notifyTaskCenterUpdated()
+  return r
+}
+
+/** 批量删除任务配置；关联触发记录保留。 */
+export async function apiDeleteTaskInfos(options: { ids: number[] }): Promise<TaskBatchMutationResult> {
+  const r = unwrap(await remote().deleteTaskInfos(options))
+  if (r.ok) notifyTaskCenterUpdated()
+  return r
+}
+
+/** 批量删除触发记录；后端会在同一事务里重算任务统计。 */
+export async function apiDeleteTaskTriggers(options: { ids: number[] }): Promise<TaskBatchMutationResult> {
+  const r = unwrap(await remote().deleteTaskTriggers(options))
   if (r.ok) notifyTaskCenterUpdated()
   return r
 }

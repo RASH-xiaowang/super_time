@@ -53,8 +53,11 @@ describe('queryFavorites 剥 CDATA（整条链，含 SQLite）', () => {
     mkdirSync(join(dir, 'favorite'), { recursive: true })
     const db = new DatabaseSync(join(dir, 'favorite', 'favorite.db'))
     db.exec('CREATE TABLE fav_db_item (local_id INTEGER, type INTEGER, update_time INTEGER, content TEXT)')
-    db.prepare('INSERT INTO fav_db_item VALUES (?,?,?,?)').run(1, 5, 1700000000,
-      '<favorite><type5><title><![CDATA[链接 & 标题]]></title><desc><![CDATA[一段 描述]]></desc><url><![CDATA[https://x/a?u=1&v=2]]></url></type5></favorite>')
+    db.exec('ALTER TABLE fav_db_item ADD COLUMN fromusr TEXT')
+    db.exec('ALTER TABLE fav_db_item ADD COLUMN realchatname TEXT')
+    db.prepare('INSERT INTO fav_db_item (local_id,type,update_time,content,fromusr,realchatname) VALUES (?,?,?,?,?,?)').run(1, 5, 1700000000,
+      '<favorite><type5><title><![CDATA[链接 & 标题]]></title><desc><![CDATA[一段 描述]]></desc><url><![CDATA[https://x/a?u=1&v=2]]></url></type5></favorite>',
+      'wxid_fav_link', '')
     db.close()
   })
   afterAll(() => {

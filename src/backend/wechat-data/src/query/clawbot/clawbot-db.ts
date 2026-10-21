@@ -74,6 +74,12 @@ const BINDING_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['base_url', 'TEXT'],
   ['sync_buf', 'TEXT'],
   ['send_context_token', 'TEXT'],
+  // 2026-10-21：持久会话代次。清空消息不换会话；重新绑定/被别的实例接管才换。
+  // 让旧批次墓碑跨进程保留，但不会误伤下一次绑定会话里同号的合法消息。
+  ['session_epoch', 'INTEGER NOT NULL DEFAULT 0'],
+  // 2026-10-21：清空水位。墓碑有保留上限，水位负责在裁剪后继续拒绝旧消息回放；
+  // 重新绑定进入新会话时归零。
+  ['clear_watermark', 'INTEGER NOT NULL DEFAULT 0'],
   // 2026-10-16：用户给实例起的**别名**（「工作号」「客服号」）。与 `user_name` 分开存：
   // `user_name` 是微信昵称（绑定回写、重新绑定会变），别名是用户偏好（必须活过重新绑定）。
   // 空串 / NULL 都表示「没起别名」⇒ 界面回落到昵称，再回落到「实例 N」。
@@ -108,6 +114,9 @@ const MESSAGE_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   // 单独一列而不是塞进 `media_size`：体积与时长是两件事，混在一起后
   // 「3 秒的语音」与「3KB 的语音」在界面上分不出来。非语音类恒为 NULL。
   ['media_duration', 'INTEGER'],
+  // 2026-10-20：发送幂等键。与 `(slot, client_id)` 的部分唯一索引配合，
+  // 集成层在发送成功但本地状态未落盘时，可按同一个 client_id 判定重复回填。
+  ['client_id', 'TEXT'],
 ]
 
 /**
@@ -129,6 +138,40 @@ const INSTANCE_CONFIG_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]
   ['updated_at', 'INTEGER NOT NULL DEFAULT 0'],
 ]
 
+/** `clawbot_reply_run` 的列登记表（老库缺表时先建，未来缺列时按这里补）。 */
+const REPLY_RUN_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
+  ['slot', 'INTEGER NOT NULL DEFAULT 1'],
+  ['target_message_id', 'INTEGER NOT NULL DEFAULT 0'],
+  ['question', "TEXT NOT NULL DEFAULT ''"],
+  ['status', "TEXT NOT NULL DEFAULT 'debouncing'"],
+  ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['last_error', 'TEXT'],
+  ['next_attempt_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['created_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['updated_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['lease_owner', 'TEXT'],
+  ['lease_until', 'INTEGER NOT NULL DEFAULT 0'],
+  ['lease_fence', 'INTEGER NOT NULL DEFAULT 0'],
+]
+
+/** `clawbot_reply_outbox` 的列登记表（同上）。 */
+const REPLY_OUTBOX_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
+  ['run_id', 'INTEGER NOT NULL DEFAULT 0'],
+  ['slot', 'INTEGER NOT NULL DEFAULT 1'],
+  ['part_index', 'INTEGER NOT NULL DEFAULT 0'],
+  ['text', "TEXT NOT NULL DEFAULT ''"],
+  ['client_id', "TEXT NOT NULL DEFAULT ''"],
+  ['status', "TEXT NOT NULL DEFAULT 'pending'"],
+  ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['sent_message_id', 'INTEGER'],
+  ['last_error', 'TEXT'],
+  ['created_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['updated_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['lease_owner', 'TEXT'],
+  ['lease_until', 'INTEGER NOT NULL DEFAULT 0'],
+  ['lease_fence', 'INTEGER NOT NULL DEFAULT 0'],
+]
+
 /** 给老库补列。`ALTER TABLE ADD COLUMN` 是元数据操作：既有行一行不丢。 */
 function ensureColumns(db: DatabaseSync, table: string, columns: ReadonlyArray<readonly [string, string]>): void {
   const have = new Set(
@@ -140,8 +183,13 @@ function ensureColumns(db: DatabaseSync, table: string, columns: ReadonlyArray<r
   }
 }
 
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>)
+    .some(c => c.name === column)
+}
+
 /**
- * 在一条**已打开的可写连接**上建表 / 补列 / 保证绑定行存在。
+ * 在一条**已打开的可写连接**上建表 / 补列 / 首次建库时补默认绑定行。
  *
  * 拆成「接收 db」而不是「自己开库」，是为了让写路径把「建表 + 本次写」放进同一条连接
  * （一次 `withWritableDb` 里干完），不出现同一操作两次开库。
@@ -166,6 +214,8 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     base_url     TEXT,
     sync_buf     TEXT,
     send_context_token TEXT,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
+    clear_watermark INTEGER NOT NULL DEFAULT 0,
     label        TEXT
   )`)
   db.exec(`CREATE TABLE IF NOT EXISTS clawbot_message (
@@ -182,7 +232,8 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     media_key   TEXT,
     media_name  TEXT,
     media_size  INTEGER,
-    media_duration INTEGER
+    media_duration INTEGER,
+    client_id   TEXT
   )`)
   /*
    * 每实例的行为配置（多实例，2026-10-13）：与绑定表**分表**是刻意的 ——
@@ -200,6 +251,18 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     updated_at  INTEGER NOT NULL DEFAULT 0
   )`)
   /*
+   * clear 竞态的持久墓碑：清空消息时正在飞的旧批次可能没有任何游标可推进，
+   * 进程重启后服务端会从旧 sync_buf 重放。按「实例 + 会话代次 + msg_id」记住，
+   * 下一批即使同时夹着新消息，也只落新消息。
+   */
+  db.exec(`CREATE TABLE IF NOT EXISTS clawbot_message_tombstone (
+    slot          INTEGER NOT NULL,
+    session_epoch INTEGER NOT NULL,
+    msg_id        INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    PRIMARY KEY (slot, session_epoch, msg_id)
+  )`)
+  /*
    * 每实例的模型 token 消耗（2026-10-19）：按「实例 + 本地日期」聚合。
    * 自动回复每次拿到供应商 usage 后 upsert 一行；删实例时一并清掉。
    */
@@ -213,6 +276,54 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     updated_at   INTEGER NOT NULL,
     PRIMARY KEY (slot, day)
   )`)
+  /*
+   * 库级一次性状态。`default_instance_seeded` 用来区分「首次建库」与
+   * 「用户主动删光了所有实例」；两类库的绑定表都为空，不能再只看 COUNT。
+   */
+  db.exec(`CREATE TABLE IF NOT EXISTS clawbot_store_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`)
+  /*
+   * 自动回复持久化 run：同一 slot 的连续消息先在 `debouncing` 窗口内合并；
+   * 生成、发送与失败重试都落在这一行，进程重启后由恢复器继续消费。
+   */
+  db.exec(`CREATE TABLE IF NOT EXISTS clawbot_reply_run (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    slot              INTEGER NOT NULL,
+    target_message_id INTEGER NOT NULL,
+    question          TEXT    NOT NULL,
+    status            TEXT    NOT NULL DEFAULT 'debouncing',
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT,
+    next_attempt_at   INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    lease_owner       TEXT,
+    lease_until       INTEGER NOT NULL DEFAULT 0,
+    lease_fence       INTEGER NOT NULL DEFAULT 0
+  )`)
+  /*
+   * 分段 outbox：`(run_id, part_index)` 唯一，重复生成同一 run 不会多出分段；
+   * `client_id` 首次写入后保持不变，发送超时/崩溃重试必须复用同一值。
+   */
+  db.exec(`CREATE TABLE IF NOT EXISTS clawbot_reply_outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          INTEGER NOT NULL,
+    slot            INTEGER NOT NULL,
+    part_index      INTEGER NOT NULL,
+    text            TEXT    NOT NULL,
+    client_id       TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    sent_message_id INTEGER,
+    last_error      TEXT,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    lease_owner     TEXT,
+    lease_until     INTEGER NOT NULL DEFAULT 0,
+    lease_fence     INTEGER NOT NULL DEFAULT 0
+  )`)
   ensureColumns(db, 'clawbot_binding', BINDING_COLUMN_MIGRATIONS)
   /*
    * 老库回填：`slot` 是后加的列，老行全部拿到 DEFAULT 1 ⇒ 多行老库会出现重复 slot。
@@ -221,20 +332,81 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
   db.exec('UPDATE clawbot_binding SET slot = id WHERE slot <> id')
   ensureColumns(db, 'clawbot_message', MESSAGE_COLUMN_MIGRATIONS)
   ensureColumns(db, 'clawbot_instance_config', INSTANCE_CONFIG_COLUMN_MIGRATIONS)
+  const replyRunLeaseMissing = ['lease_owner', 'lease_until', 'lease_fence']
+    .some(column => !hasColumn(db, 'clawbot_reply_run', column))
+  const replyOutboxLeaseMissing = ['lease_owner', 'lease_until', 'lease_fence']
+    .some(column => !hasColumn(db, 'clawbot_reply_outbox', column))
+  ensureColumns(db, 'clawbot_reply_run', REPLY_RUN_COLUMN_MIGRATIONS)
+  ensureColumns(db, 'clawbot_reply_outbox', REPLY_OUTBOX_COLUMN_MIGRATIONS)
+  /*
+   * 升级时旧代码可能正停在 generating/sending。它们没有 owner/fence，但原
+   * `next_attempt_at` 就是当时的恢复时间；只在新列第一次补上时回填，避免把
+   * 新 claim 主动清零的 lease_until 又“复活”成有效租约。
+   */
+  if (replyRunLeaseMissing) {
+    db.exec(`UPDATE clawbot_reply_run
+      SET lease_until = CASE WHEN next_attempt_at > 0 THEN next_attempt_at ELSE lease_until END
+      WHERE status IN ('generating', 'sending') AND lease_until = 0`)
+  }
+  if (replyOutboxLeaseMissing) {
+    db.exec(`UPDATE clawbot_reply_outbox
+      SET lease_until = COALESCE((
+        SELECT r.next_attempt_at FROM clawbot_reply_run r WHERE r.id = clawbot_reply_outbox.run_id
+      ), 0)
+      WHERE status = 'sending' AND lease_until = 0`)
+  }
   db.exec('CREATE INDEX IF NOT EXISTS clawbot_binding_slot ON clawbot_binding(slot)')
   db.exec('CREATE INDEX IF NOT EXISTS clawbot_message_ts ON clawbot_message(ts)')
   // 列表按实例过滤 + 按时间排序（多实例下的主查询形状）。
   db.exec('CREATE INDEX IF NOT EXISTS clawbot_message_slot_ts ON clawbot_message(slot, ts)')
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_message_tombstone_age
+    ON clawbot_message_tombstone(slot, session_epoch, created_at)`)
   // 去重查询（`WHERE msg_id = ?`）走这条索引；非唯一索引足够 —— 去重判断在写入前一次 SELECT。
   db.exec('CREATE INDEX IF NOT EXISTS clawbot_message_msgid ON clawbot_message(msg_id)')
+  // 出站发送幂等：同一实例的 client_id 只允许回填一条消息；NULL 是历史行/未带幂等键的行。
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clawbot_message_slot_client_id
+    ON clawbot_message(slot, client_id) WHERE client_id IS NOT NULL`)
+  // 同一实例内 target_message_id 天然幂等；槽位内允许不同实例复用同一服务端号段。
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clawbot_reply_run_slot_target
+    ON clawbot_reply_run(slot, target_message_id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_run_recoverable
+    ON clawbot_reply_run(status, next_attempt_at, id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_run_slot_status
+    ON clawbot_reply_run(slot, status)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_run_claim
+    ON clawbot_reply_run(status, next_attempt_at, lease_until, id)`)
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clawbot_reply_outbox_run_part
+    ON clawbot_reply_outbox(run_id, part_index)`)
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clawbot_reply_outbox_client_id
+    ON clawbot_reply_outbox(client_id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_outbox_run_status
+    ON clawbot_reply_outbox(run_id, status, part_index)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_outbox_slot_status
+    ON clawbot_reply_outbox(slot, status)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS clawbot_reply_outbox_claim
+    ON clawbot_reply_outbox(status, lease_until, id)`)
   /*
-   * 表**整个为空**时补一行 `unbound`（= 第一个实例；老库与新库都靠它自愈）。
-   * ⚠ 判据是「一行都没有」而不是「slot 1 不存在」：后者会把用户删掉的实例重新变出来。
+   * 仅首次建库时补一行 `unbound`（= 第一个实例）。
+   * 不能只按「绑定表为空」判断：用户删掉唯一实例后表同样为空，旧逻辑会让
+   * 下一次任意 schema 写路径把默认实例重建出来。持久标记保证删空后保持空。
    */
   const n = (db.prepare('SELECT COUNT(*) AS n FROM clawbot_binding').get() as { n?: number } | undefined)?.n ?? 0
-  if (n === 0) {
-    const now = Date.now()
-    db.prepare('INSERT INTO clawbot_binding(slot, status, created_at, updated_at) VALUES (?, ?, ?, ?)').run(DEFAULT_CLAWBOT_SLOT, 'unbound', now, now)
+  const defaultSeeded = db.prepare("SELECT value FROM clawbot_store_meta WHERE key = 'default_instance_seeded'").get() !== undefined
+  if (!defaultSeeded) {
+    db.exec('SAVEPOINT clawbot_seed_default')
+    try {
+      // 先原子抢占标记：多连接同时首次初始化时，只有抢到标记的一方可以补默认行。
+      const claimed = db.prepare("INSERT OR IGNORE INTO clawbot_store_meta(key, value) VALUES ('default_instance_seeded', '1')").run()
+      if (Number(claimed.changes) > 0 && n === 0) {
+        const now = Date.now()
+        db.prepare('INSERT INTO clawbot_binding(slot, status, created_at, updated_at) VALUES (?, ?, ?, ?)').run(DEFAULT_CLAWBOT_SLOT, 'unbound', now, now)
+      }
+      db.exec('RELEASE clawbot_seed_default')
+    } catch (e) {
+      try { db.exec('ROLLBACK TO clawbot_seed_default') } catch { /* 保留原始异常 */ }
+      try { db.exec('RELEASE clawbot_seed_default') } catch { /* 保留原始异常 */ }
+      throw e
+    }
   }
 }
 

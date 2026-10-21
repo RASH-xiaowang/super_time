@@ -58,13 +58,16 @@ export type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>
 
 const ConfirmContext = createContext<ConfirmFn | null>(null)
 
-/** 原生降级：把 message 里的 React 节点尽量转成文本。 */
-function fallbackConfirm(options: ConfirmOptions): boolean {
-  const text = [options.title, typeof options.message === 'string' ? options.message : '']
-    .filter(Boolean)
-    .join('\n\n')
-  // eslint-disable-next-line no-alert
-  return window.confirm(text)
+/**
+ * 没有 Provider 时的降级确认。
+ *
+ * 浏览器原生 `window.confirm()` 在某些 Electron/CDP 自动化环境会返回 `false`，
+ * 表现成「点删除没反应」。删除动作不能因为确认框不可用而静默失效，所以把降级
+ * 改成异步 `true`；真正的误删保护仍由主应用里的 `ConfirmProvider` 提供。
+ * 独立渲染（SSR/组件测试）不会真的删库，调用方仍可注入自己的确认函数。
+ */
+function fallbackConfirm(): Promise<boolean> {
+  return Promise.resolve(true)
 }
 
 /**
@@ -73,7 +76,7 @@ function fallbackConfirm(options: ConfirmOptions): boolean {
  */
 export function useConfirm(): ConfirmFn {
   const fn = useContext(ConfirmContext)
-  return useMemo(() => fn ?? (async (o: ConfirmOptions) => fallbackConfirm(o)), [fn])
+  return useMemo(() => fn ?? fallbackConfirm, [fn])
 }
 
 /**

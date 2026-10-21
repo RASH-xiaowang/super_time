@@ -131,7 +131,7 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
       )}
       <div className={css.detailBtns}>
         <button type="button" className={css.miniBtn} onClick={() => { focusNode(selected.id) }}>聚焦 1 跳</button>
-        {selected.id !== 'self' && (
+        {(selected.kind === 'person' || selected.kind === 'group') && (
           <button type="button" className={css.miniBtn} data-on={pinned.has(selected.id) || undefined} onClick={() => { togglePin(selected.id) }}>{pinned.has(selected.id) ? '已固定' : '固定'}</button>
         )}
         {selected.kind === 'note' && (

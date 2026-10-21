@@ -2,24 +2,24 @@
  * 「任务信息」左栏行内展开的**配置表单**（2026-10-19）。
  *
  * 职责边界（与 `TaskCenter.tsx` 的分工）：
- *  · 本文件只管**草稿状态与校验**（任务名 / 关键词 / 照片数量 / 回调地址）；
+ *  · 本文件只管**草稿状态与校验**（任务名 / 关键词 / 照片数量 / Webhook 地址）；
  *  · 写库动作（`apiSaveTaskInfo` / `apiSetTaskInfoStatus` / `apiDeleteTaskInfo`）由容器注入，
  *    容器负责广播后的两栏刷新与提示 —— 表单不自己取数，避免出现第二个真源；
  *  · 纯算术（草稿生成、校验、关键词增删、保存入参）全在 `task-center.ts`，本文件只接线。
  *
  * 三个容易踩的行为约定：
- *  ① **「标记已完善」= 先保存再改状态**：用户经常「改完回调地址直接点已完善」，
+ *  ① **「标记已完善」= 先保存再改状态**：用户经常「改完 Webhook 地址直接点已完善」，
  *     若只改状态不保存，配置会停在旧值上（看着已完善、回调却是空的）。
  *     所以它走与「保存」同一份校验，再依次调 save / setStatus；
  *  ② **回调为空时本地拦截**：后端的「已完善必须填回调」是最后一道闸，这里提前拦下并把焦点
  *     指到回调输入框 —— 否则用户只看到一句错误，不知道要改哪一格；
  *  ③ 保存成功后**不清空草稿**：容器刷新回来的任务快照会更新状态徽标，用户可能还要继续改。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, Button } from '../ui/kit.tsx'
-import { useConfirm } from '../ui/confirm.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
+import { TaskDeleteButton } from './task-delete-button.tsx'
 import {
   addKeywords,
   clampPhotoLimit,
@@ -94,17 +94,30 @@ function PhotoLimitField({ value, error, inputRef, onChange }: PhotoLimitFieldPr
  * @returns 表单元素。
  */
 export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: TaskEditFormProps): React.JSX.Element {
-  const confirm = useConfirm()
   const [draft, setDraft] = useState<TaskEditDraft>(() => draftFromTask(task))
   const [keywordInput, setKeywordInput] = useState('')
   const [errors, setErrors] = useState<TaskDraftErrors>({})
   const [apiError, setApiError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * 后台回源只会换掉 `task` 快照；用户正在编辑的草稿必须保留。
+   * 仅在任务 id 切换时重建草稿，避免刷新把输入框内容“跳回旧值”。
+   */
+  const taskIdRef = useRef(task.id)
   const callbackRef = useRef<HTMLInputElement | null>(null)
   const keywordRef = useRef<HTMLInputElement | null>(null)
   const photoRef = useRef<HTMLInputElement | null>(null)
 
   const status = taskStatusMeta(task.status)
+
+  useEffect(() => {
+    if (taskIdRef.current === task.id) return
+    taskIdRef.current = task.id
+    setDraft(draftFromTask(task))
+    setKeywordInput('')
+    setErrors({})
+    setApiError(null)
+  }, [task])
 
   /** 追加关键词（回车/逗号触发；去重由纯逻辑保证）。 */
   const commitKeyword = useCallback((): void => {
@@ -155,7 +168,7 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
   const submit = useCallback(async (thenReady: boolean): Promise<void> => {
     const found = validateTaskDraft(draft)
     if (thenReady && draft.callbackUrl.trim() === '') {
-      found.callbackUrl = '标记「已完善」前必须填写回调地址（已完善的任务才会回调）'
+      found.callbackUrl = '标记「已完善」前必须填写 Webhook 地址（已完善的任务才会投递）'
     }
     if (Object.keys(found).length > 0) {
       setErrors(found)
@@ -181,7 +194,7 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
         setApiError(ready.error ?? '标记「已完善」失败')
         return
       }
-      onNotice('任务已保存并标记为「已完善」，将参与触发与回调')
+      onNotice('任务已保存并标记为「已完善」，将参与触发与 Webhook 投递')
     } catch (e) {
       setApiError((e as Error).message)
     } finally {
@@ -196,35 +209,13 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
     try {
       const r = await onSetStatus('incomplete')
       if (!r.ok) setApiError(r.error ?? '标记「待完善」失败')
-      else onNotice('已标记为「待完善」，不再参与触发与回调')
+      else onNotice('已标记为「待完善」，不再参与触发与 Webhook 投递')
     } catch (e) {
       setApiError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }, [onNotice, onSetStatus])
-
-  /** 删除任务：二次确认（触发记录会保留，文案里说清）。 */
-  const remove = useCallback(async (): Promise<void> => {
-    const ok = await confirm({
-      title: `删除任务「${task.name}」？`,
-      message: '任务配置会被删除，之后不再触发；已产生的触发记录会保留（它们是历史事实，仍可在右栏回看）。',
-      tone: 'danger',
-      confirmText: '删除任务',
-    })
-    if (!ok) return
-    setBusy(true)
-    setApiError(null)
-    try {
-      const r = await onDelete()
-      if (!r.ok) setApiError(r.error ?? '删除失败')
-      else onNotice('任务已删除')
-    } catch (e) {
-      setApiError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }, [confirm, onDelete, onNotice, task.name])
 
   return (
     <form
@@ -288,20 +279,34 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
         />
 
         <label className={css.field}>
-          <span className={css.fieldLabel}>回调地址（http/https；标记已完善前必填）</span>
+          <span className={css.fieldLabel}>Webhook 地址（http/https；标记已完善前必填）</span>
           <input
             ref={callbackRef}
             className={css.input}
             type="url"
             value={draft.callbackUrl}
-            placeholder="https://example.com/supertime/callback"
-            aria-label="回调地址"
+            placeholder="https://example.com/webhook"
+            aria-label="Webhook 地址"
             aria-invalid={errors.callbackUrl !== undefined}
             onChange={(e) => { patch('callbackUrl', e.target.value) }}
           />
           {errors.callbackUrl !== undefined && <span className={css.errorText} role="alert">{errors.callbackUrl}</span>}
         </label>
       </div>
+
+      {task.chatType === 'group' && (
+        <label className={css.mentionRow}>
+          <input
+            type="checkbox"
+            checked={draft.mentionMeOnly}
+            onChange={(e) => { patch('mentionMeOnly', e.target.checked) }}
+          />
+          <span>
+            <span className={css.mentionTitle}>仅匹配@我的文本</span>
+            <span className={css.mentionHint}>只处理结构化 @ 了你本人的群消息；@所有人不算</span>
+          </span>
+        </label>
+      )}
 
       {apiError !== null && <div className={kitCss.error} role="alert">{apiError}</div>}
 
@@ -319,13 +324,18 @@ export function TaskEditForm({ task, onSave, onSetStatus, onDelete, onNotice }: 
             标记已完善
           </Button>
         )}
-        <Button size="sm" variant="danger" disabled={busy} onClick={() => { void remove() }} {...desktopActionProps()}>
-          删除
-        </Button>
+        <TaskDeleteButton
+          taskName={task.name}
+          onDelete={onDelete}
+          onNotice={onNotice}
+          onError={setApiError}
+          showError={false}
+          disabled={busy}
+        />
         <span className={css.formHint}>
           当前状态：
           <Badge tone={status.tone} title={status.hint}>{status.label}</Badge>
-          {' '}· 只有「已完善」的任务才参与触发与回调；
+          {' '}· 只有「已完善」的任务才参与触发与 Webhook 投递；
           {draft.photoLimit === 0 ? '当前不带图片' : `当前带 ${String(draft.photoLimit)} 张图片`}
         </span>
       </div>

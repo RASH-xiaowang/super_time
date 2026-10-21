@@ -54,11 +54,12 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
   /**
    * Resolve one voice message to an inline-playable wav data URL.
    * 语音实体是 silk，需要解码成 wav 才能播；产物落在转写链路同一份缓存里。
-   * @param options - username and localId of the voice message.
+   * 收藏语音没有聊天会话/locale_id，可直接用 XML 里的 `svrId` 定位。
+   * @param options - svrId，或 username + localId（二选一）。
    * @returns VoiceDataUrlResult: base64 wav data URL (+ duration) or error.
   */
   @Remote('getVoiceDataUrl')
-  async getVoiceDataUrl(options: { username: string; localId: number }): Promise<VoiceDataUrlResult> {
+  async getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<VoiceDataUrlResult> {
   return await this.mediaRemotes().getVoiceDataUrl(options)
   }
 
@@ -172,6 +173,28 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
   @Remote('getFileImageDataUrl')
   async getFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
   return await this.mediaRemotes().getFileImageDataUrl(options)
+  }
+
+  /**
+   * 收藏资源本地缓存解析。
+   *
+   * 微信收藏的图片/视频/文件/语音文件位于 `business/favorite`，文件名是不透明
+   * 哈希，XML 只提供明文内容 MD5。此入口与 SNS 图片接口分开，避免继续拿
+   * 朋友圈缓存去碰运气。
+   * @param options - XML 中的 md5/thumbMd5/fullMd5 + 类型提示。
+   * @returns data URL 或本地未命中说明。
+   */
+  @Remote('getFavoriteMediaDataUrl')
+  getFavoriteMediaDataUrl(options: {
+    md5?: string
+    thumbMd5?: string
+    fullMd5?: string
+    kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
+    ext?: string
+    fileName?: string
+    size?: number
+  }): ImageDataUrlResult {
+    return this.mediaRemotes().getFavoriteMediaDataUrl(options)
   }
 
 

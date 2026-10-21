@@ -186,7 +186,7 @@ describe('ClawBot 前端接线', () => {
     expect(askdeep, 'askWechat 没有 systemPromptOverride 参数 ⇒ 提示词传不进来')
       .toContain('systemPromptOverride')
     expect(askdeep, 'systemPromptOverride 没真的覆盖 system（只声明不用）')
-      .toContain('resolveSystemPrompt(options.systemPromptOverride)')
+      .toContain('resolveSystemPrompt(options.systemPromptOverride, options.dataScope)')
     // 默认提示词必须真的存在且是拟人化的（不是空串、不是报告腔）。
     const prompt = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-prompt.ts')
     expect(prompt, '没有内置默认提示词常量').toContain('DEFAULT_CLAWBOT_SYSTEM_PROMPT')

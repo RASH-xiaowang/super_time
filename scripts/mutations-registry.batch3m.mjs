@@ -26,7 +26,7 @@ export const MUTATIONS_BATCH3M = [
     id: 'M509-fresh-data-silent-failure-guard-dropped',
     why: '静默重查的失败保护被拿掉 ⇒ 一次网络抖动就把用户正看着的最新数据换成缓存兜底 + 「可能不是最新」的错误标注（无感刷新变成有感惊吓）。判据：use-fresh-data.spec.ts 的「liveRefresh 开但静默重查失败 ⇒ 保留旧值、不端出错误」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/use-fresh-data.ts',
-    from: 'if (silent && dataRef.current !== null) return',
+    from: 'if ((silent || keepContent) && dataRef.current !== null) return',
     to: 'if (false) return',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/use-fresh-data.spec.ts',
   },

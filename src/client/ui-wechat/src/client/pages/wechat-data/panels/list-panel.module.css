@@ -640,33 +640,183 @@
 }
 
 /* ── 收藏卡片 ──
- * 2026-10-17 重做：改前卡片之间**没有任何分隔**（只有 hover 才变色），
- * 一屏 8 条收藏挤成一片，扫读时找不到边界（真机截图）。
- * 现在给每张卡加 1px 底边 + 更紧凑的内边距，摘要从 3 行压到 2 行。 */
+ * 2026-10-21 用户截图：收藏列表要像微信收藏一样是**独立圆角卡片**，
+ * 不能只靠一条底边分隔。卡片间距由虚拟行 wrapper 的 padding-bottom 提供
+ * （margin 不计入 measureElement 的 border-box）。
+ */
+.favScroll {
+  padding: 10px;
+  background: var(--nm-bg-0);
+}
+.favVirtualRow {
+  padding-bottom: 8px;
+}
 .favCard {
   display: flex;
   gap: 12px;
-  padding: 10px 12px;
-  border-radius: var(--nm-r-md);
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
   cursor: pointer;
   align-items: flex-start;
-  transition: background 0.15s;
-  /* 卡片之间的分隔线：最后一张不要（避免与列表底边叠成双线）。 */
-  border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 60%, transparent);
+  box-sizing: border-box;
+  transition: background 0.15s, border-color 0.15s;
 }
-.favCard:last-child { border-bottom: none; }
-.favCard:hover { background: var(--nm-bg-hover); }
-.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.favCard:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.favCard:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 2px; }
+.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.favCardAvatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+}
+.favCardAvatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.favCardAvatarFallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-hover));
+}
 .favCardTitle { font-size: 14px; font-weight: 700; color: var(--nm-text-1); word-break: break-word; }
-/* 摘要 2 行（改前 3 行）：一屏能多看 2 条，且标题与摘要的层级更清楚。 */
 .favCardDesc { font-size: 12px; color: var(--nm-text-2); line-height: 1.55; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.favCardThumb { width: 60px; height: 60px; border-radius: var(--nm-r-md); object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.favCardFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; margin-top: auto; padding-top: 2px; }
+.favCardMeta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.favCardTime { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.favCardThumb { width: 64px; height: 64px; border-radius: var(--nm-r-md); object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.favCardThumbFallback {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--nm-r-md);
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+  font-size: 18px;
+}
+.favSource { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.favSourceAvatar { width: 40px; height: 40px; border-radius: var(--nm-r-md); overflow: hidden; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.favSourceAvatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.favSourceAvatarFallback { width: 100%; height: 100%; display: grid; place-items: center; font-size: 16px; font-weight: 700; color: var(--nm-text-1); background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-hover)); }
+.favSourceMeta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.favSourceName { font-size: 13px; font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .favDetail { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
 .favPart { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); padding-bottom: 12px; }
 .favPart:last-child { border-bottom: none; padding-bottom: 0; }
 .favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 4px; }
 .favPartText { font-size: 13px; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .favPartImg { max-width: 100%; max-height: 420px; border-radius: var(--nm-r-md); display: block; background: var(--nm-bg-hover); }
+.favMediaCard {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 3%, var(--nm-bg-card));
+  min-width: 0;
+}
+.favMediaHeader { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.favMediaIcon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--nm-r-sm);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 20%, var(--nm-border));
+  color: var(--nm-cyan);
+  font-size: 14px;
+  line-height: 1;
+}
+.favMediaBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.favMediaTitle { font-size: 13px; font-weight: 650; line-height: 1.5; color: var(--nm-text-1); word-break: break-word; }
+.favMediaDesc { font-size: 12px; line-height: 1.55; color: var(--nm-text-2); white-space: pre-wrap; word-break: break-word; }
+.favMediaMeta { font-size: 11px; line-height: 1.45; color: var(--nm-text-2); word-break: break-all; }
+.favMediaLink { font-size: 11.5px; line-height: 1.45; color: var(--nm-cyan); word-break: break-all; text-decoration: none; }
+.favMediaLink:hover { text-decoration: underline; }
+.favMediaCover { width: 100%; max-height: 250px; overflow: hidden; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); }
+.favMediaCover > img { width: 100%; max-height: 250px; object-fit: cover; display: block; }
+.favAudio { width: 100%; min-height: 38px; }
+.favVideo { width: 100%; max-height: 360px; border-radius: var(--nm-r-md); display: block; background: #000; }
+.favVideoStage {
+  position: relative;
+  width: 100%;
+  min-height: 150px;
+  max-height: 300px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+  padding: 0;
+  cursor: pointer;
+}
+.favVideoStage:disabled { cursor: default; opacity: 0.7; }
+.favVideoStage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.7; }
+.favVideoPlay {
+  position: relative;
+  z-index: 1;
+  padding: 5px 12px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-bg-card) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
+  font-size: 12px;
+  font-weight: 600;
+}
+.favFileCard {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.favFileCard:disabled { cursor: progress; opacity: 0.75; }
+.favFileIcon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-hover));
+  color: var(--nm-cyan);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.favFileAction {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  color: var(--nm-cyan);
+  font-size: 15px;
+}
 .backupInput {
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
@@ -762,4 +912,3 @@
 .rvLandList li { font-size: 11.5px; line-height: 1.6; color: var(--nm-text-2); }
 .rvLandList b { color: var(--nm-text-1); font-weight: 600; }
 .rvLandActions { display: flex; gap: 8px; flex-wrap: wrap; }
-

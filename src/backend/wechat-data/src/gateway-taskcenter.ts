@@ -4,7 +4,7 @@
  * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 回调）
  * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
  * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
- * 对外方法面逐名增加 7 个（`gateway-remote-surface.spec.ts` / 契约用例守）。
+ * 对外方法面逐名增加 9 个（`gateway-remote-surface.spec.ts` / 契约用例守）。
  *
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）与两个装配点；处理器体在
  * `remotes/task-center.ts`（与其它域一致），真正的读写/扫描/投递在 `query/task-center.ts`。
@@ -14,6 +14,7 @@
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type {
   TaskCallbackDispatchResult,
+  TaskBatchMutationResult,
   TaskInfoInput,
   TaskInfoMutationResult,
   TaskInfoSnapshot,
@@ -70,13 +71,37 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
 
   /**
    * 删除任务配置。**关联触发记录保留**：记录里存了任务名/会话/对象快照，任务删了它仍是
-   * 已经发生过的事实（列表与回调重试都还能用）。
+   * 已经发生过的事实，仍可用于列表查看。当前投递要求所属任务存在且已完善，因此删除后
+   * 的 pending / failed 记录不能再重新投递。
    * @param options.id - 任务 id。
    * @returns TaskInfoMutationResult：`ok` 表示确实删掉了一行。
    */
   @Remote('deleteTaskInfo')
   deleteTaskInfo(options: { id: number }): TaskInfoMutationResult {
     return this.taskCenterRemotes().deleteTaskInfo(options)
+  }
+
+  /**
+   * 批量删除任务配置。**关联触发记录保留**：与单条删除同一语义，记录里的任务/会话/
+   * 对象快照仍可用于回看历史。
+   * @param options.ids - 任务 id 列表；去重后 1..500 条，超过上限整单拒绝。
+   * @returns TaskBatchMutationResult：`removed` 是实际删除行数（不存在的 id 不计入）。
+   */
+  @Remote('deleteTaskInfos')
+  deleteTaskInfos(options: { ids: number[] }): TaskBatchMutationResult {
+    return this.taskCenterRemotes().deleteTaskInfos(options)
+  }
+
+  /**
+   * 批量删除触发记录，并在同一事务里重算受影响任务的触发次数与最近触发时间。
+   *
+   * 删除记录不会删除微信原始消息；任务配置也不受影响。若任一步写入失败，整单回滚。
+   * @param options.ids - 触发记录 id 列表；去重后 1..500 条，超过上限整单拒绝。
+   * @returns TaskBatchMutationResult：`removed` 是实际删除的记录数。
+   */
+  @Remote('deleteTaskTriggers')
+  deleteTaskTriggers(options: { ids: number[] }): TaskBatchMutationResult {
+    return this.taskCenterRemotes().deleteTaskTriggers(options)
   }
 
   /**
@@ -96,8 +121,10 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   /**
    * 触发记录列表（triggered_at 倒序，最新在前）。
    * @param options.taskId - 只看某个任务（缺省 = 全部任务）。
+   * @param options.search - 在正文、任务名、会话/对象、关键词与回调错误里包含搜索；`%` / `_` 按普通字符处理。
    * @param options.limit - 最多返回多少条（夹 1..200，默认 100）。
-   * @returns TaskTriggerSnapshot：记录列表 + 总数；读不到库时 `readError` 非空。
+   * @param options.cursor - 上一页返回的 `nextCursor`；缺省为第一页。
+   * @returns TaskTriggerSnapshot：记录列表 + 真实总数 + 下一页游标；读不到库时 `readError` 非空。
    */
   @Remote('listTaskTriggers')
   listTaskTriggers(options?: TaskTriggerQuery): TaskTriggerSnapshot {
@@ -126,7 +153,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   }
 
   /**
-   * 手动重投一条触发记录的回调（面板上对失败记录点「重试」）。
+   * 手动重投一条触发记录的回调（面板上对失败记录点「重新投递」）。
    *
    * 只投「任务已完善 + 配了回调地址」的记录；正文先过隐私闸（`task_callback`：脱敏 + 审计）。
    * 图片逐张按需解码，单张失败只在请求体里带 `error`，不影响整条投递。

@@ -129,6 +129,13 @@ export interface GraphCanvasProps {
   onOpenChat?: ((username: string) => void) | undefined
   onFocusNode?: ((id: string) => void) | undefined
   /**
+   * 右键命中节点时回调。
+   *
+   * 坐标是 `clientX/clientY`（视口坐标），因为菜单挂到 portal 后不受画布的
+   * `overflow: hidden` 与坐标系影响。空白处不回调，保留浏览器原生菜单。
+   */
+  onNodeContextMenu?: ((id: string, position: { x: number, y: number }) => void) | undefined
+  /**
    * 坐标落盘的作用域（`'social'` 或 `'kb:<id>'`）—— 由调用方给，画布不自己猜。
    *
    * 为什么不在这里从 graph 推：画布拿到的是 `BuiltGraph`，里面**没有库标识**
