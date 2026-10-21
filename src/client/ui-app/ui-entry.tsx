@@ -6,24 +6,26 @@
  * 转发到主进程后端（wechat:call）。
  */
 // ── Bootstrap 响应式基建（Wave 0，方案见 docs/BOOTSTRAP-RESPONSIVE.md 第 0/1 节）──
-// 只取**类**：栅格（.row/.col-*/.g-*/.container*）与实用类（d-*/flex-*/gap-*/w-100 等），
-// **不引** bootstrap.css 全量包（无 reboot、无组件外观），也**不引** Bootstrap JS。
+// 只取**类**：栅格（.row/.col-*/.g-*/.container*）；**不引** bootstrap.css 全量包
+// （无 reboot、无组件外观），也**不引** Bootstrap JS。
 //
-// 为什么这三个 import 必须排在本文件最前面（早于 ./titlebar.css 等本地样式，
+// 2026-10-21（性能专项 P-E1）：**移除 bootstrap-utilities.min.css（首屏 CSS −83.5KB）**。
+// 全仓只用到 3 个工具类（`d-flex flex-column gap-2`，唯一在 overview-panel.tsx），
+// 已改成 overview.module.css 的局部类 `.cardStack`。工具类是 Bootstrap 5 默认带
+// !important 的「显式开关」，留着等于多付 55.5% 的 CSS 解析量却只服务这 3 个类名。
+//
+// 为什么栅格 import 必须排在本文件最前面（早于 ./titlebar.css 等本地样式，
 // 也早于下面 `@deepseek-ai/dsh-client-ui-wechat/host` 带进来的 scifi-theme.css /
 // light-theme.css 主题导入）：
 //   1) CSS 级联按 import 顺序决定同特异度规则的胜负。栅格类（.row/.col-*）与
 //      bootstrap-bridge.css 的组件桥接都**不带** !important，靠「先加载」把优先级让给
 //      --nm-* 令牌、主题与各面板 CSS Modules；排到最后会把面板已有外观反向盖掉
-//      （等于给 144 个面板换一层默认皮）。（utilities 里的工具类是 Bootstrap 5
-//      默认带 !important 的「显式开关」，只在面板真的写了 d-*/flex-*/gap-* 时才生效；
-//      当前零引用，回归面为零。）
-//   2) 被引入的子文件是编译后的**纯类**产物（grid 仅 :root 的 --bs-breakpoint-* 变量
-//      与 .row>* 的 box-sizing；utilities 仅类 + :root 的 --bs-* 变量），
-//      不含 body/html/标题/按钮这些 reboot 基线，所以提前加载不会污染全局。
+//      （等于给 144 个面板换一层默认皮）。
+//   2) 被引入的 grid 是编译后的**纯类**产物（仅 :root 的 --bs-breakpoint-* 变量
+//      与 .row>* 的 box-sizing），不含 body/html/标题/按钮这些 reboot 基线，
+//      所以提前加载不会污染全局。
 //   3) CSP 只放行 'self'：npm 包由 Vite 打进本地产物，运行期零网络请求（方案第 0 节）。
 import 'bootstrap/dist/css/bootstrap-grid.min.css'
-import 'bootstrap/dist/css/bootstrap-utilities.min.css'
 // 组件类最小桥接：.table/.card/.form-*/.modal*/.navbar* 的外观，全部取 --nm-* 令牌，
 // 不含 reboot、不抄 Bootstrap 组件样式（见该文件头注释）。
 import './bootstrap-bridge.css'
