@@ -27,6 +27,7 @@ const MARKERS = [
   ['rendererError', /\[renderer\] \[error\]/g],
   ['wechatSync', /\[wechat-sync\] updated:/g],
   ['queueReject', /REMOTE_BUSY|QUEUE_WAIT_TIMEOUT/g],
+  ['bootPhase', /\[boot-phase\]/g],
 ]
 
 /** 把日志里的 "123MB"/"1.2GB" 换成 MB 数值。 */
@@ -52,11 +53,13 @@ export class LogTail {
     this.memSamples = []
     /** 累计读取行数。 */
     this.lines = 0
+    /** 启动分段（`[boot-phase] <label> t=<ms>`，按出现顺序；探针打点见 wechat-worker/host/supervisor）。 */
+    this.bootPhases = []
   }
 
   /** 读自上次以来的新增内容并解析；返回本次增量（不抛错）。 */
   async readDelta () {
-    const delta = { lines: 0, markers: {}, slowCalls: [], memSamples: [], bytes: 0 }
+    const delta = { lines: 0, markers: {}, slowCalls: [], memSamples: [], bootPhases: [], bytes: 0 }
     let handle
     try {
       handle = await open(this.path, 'r')
@@ -92,6 +95,13 @@ export class LogTail {
           if (this.slowCalls.length > 500) this.slowCalls.shift()
           delta.slowCalls.push(call)
         }
+        const boot = line.match(/\[boot-phase\] (\S+) t=(\d+)/)
+        if (boot) {
+          const phase = { label: boot[1], t: Number(boot[2]) }
+          this.bootPhases.push(phase)
+          if (this.bootPhases.length > 200) this.bootPhases.shift()
+          delta.bootPhases.push(phase)
+        }
       }
     } catch (e) {
       this.error = String(e.message || e).slice(0, 160)
@@ -111,6 +121,7 @@ export class LogTail {
       memSampleCount: this.memSamples.length,
       slowCalls: this.slowCalls.slice(-20),
       slowCallCount: this.slowCalls.length,
+      bootPhases: this.bootPhases.slice(-60),
       error: this.error,
     }
   }

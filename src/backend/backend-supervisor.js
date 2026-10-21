@@ -39,6 +39,10 @@ async function migrateSupervisorSecrets(runtime) {
   const backendConfigFile = dataRoot ? runtime.path.join(dataRoot, 'config.json') : '';
   const r = runtime.restrictWechatState({ stateDir: runtime.stateDir, ...(dataRoot ? { dataRoot } : {}) });
   if (!r.ok) runtime.log.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
+  else if (Array.isArray(r.skipped) && r.skipped.length > 0) {
+    // 已收紧的目录不再重写整棵子树的 ACL（数据根 4.8 万文件时那是每次启动 2.6s 的白工）。
+    runtime.log.log('[security] 敏感目录 ACL 已收紧，跳过递归传播（' + String(r.elapsedMs ?? 0) + 'ms）');
+  }
 
   try {
     if (!backendConfigFile || !runtime.fs.existsSync(backendConfigFile)) return;
@@ -147,6 +151,18 @@ function createBackendSupervisor(deps) {
     }
   }
 
+  /**
+   * 启动分段打点（`SUPERTIME_BOOT_TRACE=1` 门控；默认零开销）。
+   * 时间原点在 `bootstrap()` 入口重置，所以每条 t 都是「从本次 bootstrap 开始」的毫秒数。
+   */
+  let bootT0 = 0;
+  function bootTrace(label) {
+    if (process.env.SUPERTIME_BOOT_TRACE !== '1') return;
+    try {
+      log.log('[boot-phase] main:' + label + ' t=' + String(bootT0 === 0 ? 0 : Date.now() - bootT0));
+    } catch { /* 打点失败绝不影响启动 */ }
+  }
+
   function spawn(userData, onExit) {
     const hangMethods = resolveHangMethods({ isPackaged, env });
     const workerEnv = { ...env };
@@ -158,6 +174,7 @@ function createBackendSupervisor(deps) {
       [],
       { serviceName: 'super-time-wechat-backend', stdio: 'pipe', env: workerEnv },
     );
+    bootTrace('main:spawn-called');
     for (const [stream, level, target] of [
       [child.stdout, 'backend', process.stdout],
       [child.stderr, 'backend!', process.stderr],
@@ -279,27 +296,34 @@ function createBackendSupervisor(deps) {
    * 设置回灌与 ACL 收尾只 warn，与历史行为一致。
    */
   async function bootstrap(userData) {
+    bootT0 = Date.now();
+    bootTrace('bootstrap-start');
     applyConfig();
     userDataPath = userData;
     try {
       await start(userData);
+      bootTrace('init-returned');
       try {
         recordResolved(boot.info);
       } catch (e) {
         log.warn('[wechat] 记录路径配置失败:', e);
       }
+      bootTrace('record-resolved');
       try {
         await applySupervisorSettings(lifecycle);
       } catch (e) {
         log.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
       }
+      bootTrace('settings-applied');
       try {
         await migrateSupervisorSecrets(lifecycle);
       } catch (e) {
         log.warn('[security] 密钥加固收尾失败:', e);
       }
+      bootTrace('secrets-migrated');
       restartCount = 0;
       setStatus('ready');
+      bootTrace('ready');
       log.log('[wechat] Super Time 后端已就绪，Remote 方法数:', boot.methods.length);
       return { ok: true, backend, boot };
     } catch (err) {

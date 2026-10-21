@@ -19,6 +19,31 @@ const argsGuard = require('./wechat-args-guard');
 const { cancelPlanFor, injectFallbackJobId, jobIdForCall } = require('./wechat-cancel');
 const { createLlmBridge } = require('./llm-bridge');
 
+/**
+ * 启动分段打点（`SUPERTIME_BOOT_TRACE=1` 才生效，默认零开销）。
+ *
+ * 为什么需要它：首屏「后端 ready」实测中位 2806ms（docs/perf/02-BASELINE.md §3），
+ * 但这一个数字把「拉进程 + 加载 1.7MB bundle + 建 gateway + 主进程收尾」全糊在一起，
+ * 无法判断该优化哪一段。这里只打时间戳、不做任何业务动作，是定位而不是优化。
+ *
+ * 时间原点由 `wechat-worker.js` 在**任何 require 之前**写进
+ * `globalThis.__SUPERTIME_BOOT_T0`，所以 `worker:requires-done` 也包含 require 成本；
+ * 在非 worker 环境（单测）里退化成模块加载时刻。
+ */
+const BOOT_TRACE_ON = process.env.SUPERTIME_BOOT_TRACE === '1';
+const BOOT_T0 = Number(globalThis.__SUPERTIME_BOOT_T0) || Date.now();
+
+/**
+ * 打一条启动分段。
+ * @param {string} label - 阶段名（固定词表，便于日志侧解析）。
+ */
+function bootTrace(label) {
+  if (!BOOT_TRACE_ON) return;
+  try {
+    console.log('[boot-phase] ' + label + ' t=' + String(Date.now() - BOOT_T0));
+  } catch { /* 打点失败绝不影响启动 */ }
+}
+
 
 /**
  * 已经用**真实流量**证明过「生成的 schema 与面板实际传来的形状对得上」的方法。
@@ -258,13 +283,17 @@ function configureBackendEnvironment(options) {
  * 各观察设施加载失败只降级不阻断业务；typert schema 只负责 ② 档影子校验。
  */
 async function loadBackendRuntime(options) {
+  bootTrace('runtime:start');
   const userHome = configureBackendEnvironment(options);
+  bootTrace('env-config');
   const mod = await import('./wechat-data/lib/index.js');
+  bootTrace('bundle-import');
   // 连接策略由后端包自己实现；这里在 gateway 建好前把宿主配置交给它。
   if (typeof mod.configureSqliteCachePolicy === 'function') {
     mod.configureSqliteCachePolicy();
   }
   const protocol = await import('@deepseek-ai/dsh-typert-protocol');
+  bootTrace('protocol-import');
 
   /**
    * H2：慢调用的耗时写进审计表（`wechat_privacy.db#operation_log.duration_ms`）。
@@ -291,8 +320,11 @@ async function loadBackendRuntime(options) {
     console.warn('[wechat] typert schema 表没加载到（形状校验关闭）:', e?.message ?? e);
   }
 
+  bootTrace('typert-schema');
   const context = createMiniContext(options);
+  bootTrace('mini-context');
   const gateway = new mod.WechatDataGateway(context);
+  bootTrace('gateway-ctor');
   return { userHome, protocol, argSchemas, context, gateway, mod, recordSlowCall, SLOW_CALL_MS, SLOW_LOG_MS };
 }
 
@@ -536,6 +568,7 @@ async function createWechatBackend(options = {}) {
       return null;
     }
   })();
+  bootTrace('backend:assembled');
 
   return {
     gateway,

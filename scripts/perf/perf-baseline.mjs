@@ -984,6 +984,20 @@ function printSummary ({ samples, medians, out, hostInfo }) {
   console.log(`峰值：主进程 WS ${fmt(medians['peaks.mainWorkingSetBytes']?.median)}｜渲染 WS ${fmt(medians['peaks.rendererWorkingSetBytes']?.median)}｜后端 worker ${fmt(medians['peaks.backendWorkerWorkingSetBytes']?.median)}`)
   console.log(`缓存代理：wechat:call 快调用占比 ${ser('cache.queryProxy.fastCallRatio')}｜后端 execution P50 ${ser('cache.backendExecutionP50Ms')}ms｜P95 ${ser('cache.backendExecutionP95Ms')}ms｜慢调用日志 ${ser('cache.backendSlowCallLogCount')} 条`)
   console.log(`错误：样本失败 ${ser('errors.sampleErrors')}｜渲染 console error ${ser('errors.rendererConsole')}｜pageerror ${ser('errors.pageErrors')}`)
+  // 启动分段：只有开了 SUPERTIME_BOOT_TRACE=1 才有数据；按 label 取跨样本中位，便于改动前后对比。
+  const bootByLabel = new Map()
+  for (const s of samples) {
+    const phases = s.snapshots?.startupStable?.logs?.totals?.bootPhases ?? []
+    for (const p of phases) {
+      if (!bootByLabel.has(p.label)) bootByLabel.set(p.label, [])
+      bootByLabel.get(p.label).push(p.t)
+    }
+  }
+  if (bootByLabel.size > 0) {
+    const med = (arr) => { const a = [...arr].sort((x, y) => x - y); return a[Math.floor((a.length - 1) / 2)] }
+    console.log('启动分段（[boot-phase] 跨样本中位，ms）：')
+    for (const [label, arr] of bootByLabel) console.log(`  ${label.padEnd(26)} ${med(arr)}ms`)
+  }
   console.log(`\n原始 JSON：${out}`)
   console.log('复跑（同一台机器）：node scripts/perf/perf-baseline.mjs --samples=3 --out=' + out.replace(ROOT + '\\', '').replace(ROOT + '/', ''))
 }

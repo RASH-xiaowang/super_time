@@ -1,5 +1,9 @@
 'use strict';
 
+// 启动分段打点的统一时间原点：必须早于任何 require，才能把模块加载成本算进去
+// （打点本身由 `SUPERTIME_BOOT_TRACE=1` 门控，未开启时只是一个数字赋值）。
+globalThis.__SUPERTIME_BOOT_T0 = Date.now();
+
 /**
  * 「Super Time」后端独立进程（Electron utilityProcess）。
  *
@@ -30,6 +34,16 @@ require('./console-safe').install();
 
 const { createWechatBackend } = require('./wechat-host');
 const { createMemSentinel } = require('./worker-mem-sentinel');
+
+/** 与 `wechat-host.js` 同一口径的启动分段打点（`SUPERTIME_BOOT_TRACE=1` 门控）。 */
+const BOOT_TRACE_ON = process.env.SUPERTIME_BOOT_TRACE === '1';
+function bootTrace(label) {
+  if (!BOOT_TRACE_ON) return;
+  try {
+    console.log('[boot-phase] ' + label + ' t=' + String(Date.now() - globalThis.__SUPERTIME_BOOT_T0));
+  } catch { /* 打点失败绝不影响启动 */ }
+}
+bootTrace('worker:requires-done');
 
 // 后端进程启动留痕（主进程会把这一行转进 <STATE_DIR>/logs/app.log）。
 // 为什么值得常驻一条：后端是独立进程 —— 它静默没起来、或起来又立刻死了，
@@ -83,10 +97,12 @@ async function handle(msg) {
   try {
     switch (type) {
       case 'init': {
+        bootTrace('worker:init-received');
         backend = await createWechatBackend({
           userDataPath: payload?.userDataPath,
           onEvent: (name, args) => post({ type: 'event', name, args }),
         });
+        bootTrace('worker:init-done');
         post({ id, value: { info: backend.info(), methods: backend.methodNames() } });
         return;
       }
