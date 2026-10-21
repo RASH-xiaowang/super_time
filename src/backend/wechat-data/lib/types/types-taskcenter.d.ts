@@ -3,7 +3,9 @@
  *
  * 这一域是用户显式创建的**触发式任务**：某会话（单聊/群聊 + 群内目标用户）的消息命中
  * 关键词时，记一条「触发记录」（触发时间 / 触发群聊 / 触发对象 / 触发图片 / 触发文本），
- * 已完善（`ready`）的任务再把整条记录 POST 到用户填的回调地址。
+ * 已完善（`ready`）的任务再按**触发方式**把这条记录送出去：Webhook 回调（整条记录 POST
+ * 到用户填的地址），或八爪鱼 RPA（调 `bots/scheduling/start`，参数映射见
+ * {@link TaskBazhuayuStartPayload}）。
  *
  * 与相邻概念的分工（别混）：
  *  · `wechat-tasks.ts` 的待办：从聊天**文本规则**提取的 TODO，没有目标/关键词/回调；
@@ -18,6 +20,14 @@
 export type TaskInfoStatus = 'incomplete' | 'ready';
 /** 任务所属会话类型。 */
 export type TaskInfoChatType = 'private' | 'group';
+/**
+ * 任务的下游触发方式（2026-10-21）：
+ *  · `webhook`  —— 把整条触发记录 JSON POST 到用户填写的回调地址（原有能力）；
+ *  · `bazhuayu` —— 调八爪鱼 RPA 的 `bots/scheduling/start`，参数只取
+ *    会话名 / 触发文本 / 触发对象（见 {@link TaskBazhuayuStartPayload}）。
+ * 旧库没有该列时按 `webhook` 处理，保证既有任务行为不变。
+ */
+export type TaskTriggerMethod = 'webhook' | 'bazhuayu';
 /** 一条触发记录的回调投递状态。 */
 export type TaskTriggerCallbackStatus = 'pending' | 'sent' | 'failed' | 'skipped';
 /** 一条任务配置。 */
@@ -41,8 +51,23 @@ export interface TaskInfo {
     photoLimit: number;
     /** 仅匹配结构化 @ 登录账号的群消息；单聊始终为 false。 */
     mentionMeOnly: boolean;
-    /** 回调地址（http/https）。已完善任务必填。 */
+    /** 下游触发方式（缺省 / 旧库 = `webhook`）。 */
+    triggerMethod: TaskTriggerMethod;
+    /** Webhook 地址（http/https）。触发方式为 `webhook` 时，已完善任务必填。 */
     callbackUrl: string;
+    /**
+     * 八爪鱼 RPA 流程 id（触发方式为 `bazhuayu` 时已完善必填）。
+     *
+     * 这不是凭据，可以随任务列表返回；API Key **不返回**，只回 {@link bazhuayuApiKeySet}。
+     */
+    bazhuayuFlowId: string;
+    /**
+     * 是否已保存八爪鱼 API Key。
+     *
+     * 列表 / 编辑表单只需要知道「配没配」；Key 本身只在本机任务库里，投递时由后端读出，
+     * 不进 Remote 返回值（列表会被只读会话读到，不该把凭据带出去）。
+     */
+    bazhuayuApiKeySet: boolean;
     status: TaskInfoStatus;
     createdAt: number;
     updatedAt: number;
@@ -63,7 +88,16 @@ export interface TaskInfoInput {
     keywords: string[];
     photoLimit?: number;
     mentionMeOnly?: boolean;
+    /** 下游触发方式；缺省 = 新建按 `webhook`、更新沿用旧值。 */
+    triggerMethod?: TaskTriggerMethod;
     callbackUrl?: string;
+    /** 八爪鱼流程 id；缺省（更新）= 沿用旧值，空串 = 清空。 */
+    bazhuayuFlowId?: string;
+    /**
+     * 八爪鱼 API Key；缺省（更新）= **保留已保存的 Key**，空串 = 清空，非空 = 覆盖。
+     * 编辑表单不显示 Key 本身，所以「没改动」必须能与「清空」区分开。
+     */
+    bazhuayuApiKey?: string;
     status?: TaskInfoStatus;
 }
 /** 任务列表快照。 */
@@ -202,4 +236,32 @@ export interface TaskCallbackPayload {
         dataUrl?: string;
         error?: string;
     }>;
+}
+/**
+ * 八爪鱼 RPA 的「启动流程」请求体（2026-10-21，触发方式 = `bazhuayu`）。
+ *
+ * 字段形状来自八爪鱼开放接口 `POST /api/bots/scheduling/start` 的示例；三个业务参数
+ * 由触发记录映射：
+ *  · `Params.room_name` ← 会话名（群聊名 / 单聊对象名，`TaskTriggerRecord.chatName`）；
+ *  · `Params.content`   ← 触发文本（过隐私闸后的 `text`）；
+ *  · `Params.at_name`   ← 触发对象显示名（`TaskTriggerRecord.targetName`）；单聊任务创建时
+ *    没有目标成员，回落会话名 `chatName`（单聊里「触发的用户对象」就是会话本人）。
+ *
+ * 说明：RPA 方式**不发图片**（接口没有对应参数），`photoLimit` 对它不生效。
+ */
+export interface TaskBazhuayuStartPayload {
+    FlowId: string;
+    /** 固定 `ByNewestContent`：让流程取最新一条内容，而不是指定版本。 */
+    FlowContentRetrievalMode: 'ByNewestContent';
+    /** 固定空串（接口必填但暂不支持指定版本）。 */
+    SpecifiedPublicationVersion: string;
+    /** 固定空串（接口必填但暂不支持指定机器人）。 */
+    SpecifiedBot: string;
+    Params: {
+        room_name: string;
+        content: string;
+        at_name: string;
+    };
+    /** 固定 `OpenApi`：来源是本应用的外部 API 触发。 */
+    UserStartSource: 'OpenApi';
 }

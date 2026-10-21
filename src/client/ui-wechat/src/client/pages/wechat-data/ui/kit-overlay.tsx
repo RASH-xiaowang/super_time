@@ -72,20 +72,40 @@ export function Segmented({ options, value, onChange, ariaLabel }: {
   )
 }
 
-/** 右侧抽屉（Radix Dialog）：详情/筛选面板统一入口。 */
-export function Drawer({ open, onClose, title, children, footer, width }: {
+/**
+ * 右侧抽屉（Radix Dialog）：详情/筛选面板统一入口。
+ *
+ * `modal` 默认 true（焦点陷阱 + 背景 inert，适合纯查看/筛选类抽屉）。
+ * **抽屉里还要弹应用内确认框时传 `modal={false}`**：Radix 模态会把 `#root` 从可访问性树
+ * 隐藏并给 body 加 `pointer-events:none`，而 `ConfirmProvider` 的 `role="alertdialog"`
+ * 渲染在 `#root` 里 —— 结果确认框**看得见却读不到、点不了**（2026-10-21 任务编辑抽屉里
+ * 删除按钮实测踩到）。非模态抽屉仍保留「点遮罩/×/Esc 关闭」，只是不再禁用背景。
+ */
+export function Drawer({ open, onClose, title, children, footer, width, modal = true }: {
   open: boolean
   onClose: () => void
   title: React.ReactNode
   children: React.ReactNode
   footer?: React.ReactNode
   width?: number
+  /** 是否模态（默认 true）。抽屉内要弹 `role="alertdialog"` 确认框时必须传 false。 */
+  modal?: boolean
 }): React.JSX.Element {
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+    <DialogPrimitive.Root open={open} modal={modal} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={overlayCss.drawerOverlay} />
-        <DialogPrimitive.Content className={overlayCss.drawer} style={width ? { width: Math.min(width, 560) } : undefined}>
+        <DialogPrimitive.Content
+          className={overlayCss.drawer}
+          style={width ? { width: Math.min(width, 560) } : undefined}
+          // 与 kit `Dialog` 同一套守卫：确认框（更高一层模态）开着时，
+          // 点它或按 Esc 都不算「点到了抽屉外面」，避免把抽屉一起关掉。
+          onInteractOutside={(e) => {
+            const t = e.target
+            if (hasHigherModal() || (t instanceof Element && t.closest('[role="alertdialog"]') !== null)) e.preventDefault()
+          }}
+          onEscapeKeyDown={(e) => { if (hasHigherModal()) e.preventDefault() }}
+        >
           <div className={overlayCss.drawerHd}>
             <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>
             <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>

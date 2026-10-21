@@ -25,20 +25,25 @@ export interface PendingDispatchResult {
     errors?: string[];
 }
 /**
- * 手动 / 扫描后投递一条触发记录的回调。
+ * 手动 / 扫描后投递一条触发记录（按任务的触发方式分支）。
  *
- * 只投「任务已完善 + 配置了回调地址」的记录；文本先过隐私闸（脱敏 + 审计）。
+ * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要有回调地址，
+ * 八爪鱼要有 FlowId + 已保存的 API Key。文本先过**同一个**隐私闸（feature 仍是
+ * `task_callback`，审计口径不因触发方式而变）；Webhook 才解码图片，八爪鱼不发图片。
  * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
  * @param decryptedDir - 解密数据根。
- * @param decodedDir - 图片解码缓存根。
+ * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。
  * @param triggerId - 触发记录 id。
  * @param deps - 解码 / 隐私闸 / fetch 注入。
- * @returns 投递结果（含 skipped 的三种可读原因）。
+ * @returns 投递结果（含 skipped 的几种可读原因）。
  */
 export declare function dispatchTaskCallback(decryptedDir: string, decodedDir: string, triggerId: number, deps: TaskDispatchDeps): Promise<TaskCallbackDispatchResult>;
 /**
- * 投递一批 `pending` 记录（只取所属任务仍「已完善」且有回调地址的）。
+ * 投递一批 `pending` 记录。
  *
+ * 只取「所属任务仍已完善 + **触发方式对应的下游配置齐全**」的记录（与
+ * `dispatchTaskCallback` 的 skipped 判据同口径）：Webhook 看回调地址，八爪鱼看
+ * FlowId + 是否存过 API Key（Key 原文只在投递时读出，不在 SQL 里比较明文）。
  * 扫描器每拍「扫描 → 投递」；单条失败不连坐（错误只收集前 10 条）。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根。

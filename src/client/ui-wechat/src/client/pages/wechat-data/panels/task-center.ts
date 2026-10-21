@@ -22,6 +22,7 @@ import type {
   TaskInfoInput,
   TaskInfoStatus,
   TaskTriggerCallbackStatus,
+  TaskTriggerMethod,
   TaskTriggerRecord,
   TaskTriggerScanResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
@@ -40,25 +41,25 @@ export interface TaskCenterMeta {
 /**
  * 任务状态（待完善 / 已完善）。
  *
- * 语义是**后端定的**：只有 `ready` 才参与触发与 Webhook 投递（见 `types-taskcenter.ts`），
+ * 语义是**后端定的**：只有 `ready` 才参与触发与投递（见 `types-taskcenter.ts`），
  * 所以「待完善」用 amber 而不是 red —— 它不是错误，只是还没配完。
  */
 export const TASK_STATUS_META: Record<TaskInfoStatus, TaskCenterMeta> = {
-  incomplete: { label: '待完善', tone: 'amber', hint: '待完善的任务不参与触发，也不会投递 Webhook（配好并标记「已完善」后才生效）' },
-  ready: { label: '已完善', tone: 'green', hint: '已完善的任务会参与触发与 Webhook 投递' },
+  incomplete: { label: '待完善', tone: 'amber', hint: '待完善的任务不参与触发，也不会投递（Webhook / 八爪鱼 RPA）；配好并标记「已完善」后才生效' },
+  ready: { label: '已完善', tone: 'green', hint: '已完善的任务会参与触发与投递（Webhook / 八爪鱼 RPA）' },
 }
 
 /**
  * 触发记录的回调投递状态。
  *
  * `skipped` 的中文是「未配置」而不是「已跳过」：用户在面板里能看到的真实原因是
- * 任务根本没填 Webhook 地址（`callbackUrl` 为空），说「跳过」会让人以为是程序主动放弃。
+ * 任务根本没配置当前触发方式所需的地址/凭据，说「跳过」会让人以为是程序主动放弃。
  */
 export const CALLBACK_STATUS_META: Record<TaskTriggerCallbackStatus, TaskCenterMeta> = {
-  pending: { label: '待投递', tone: 'amber', hint: '等待投递到任务配置的 Webhook 地址' },
-  sent: { label: '已投递', tone: 'green', hint: '已成功 POST 到 Webhook 地址' },
-  failed: { label: '投递失败', tone: 'red', hint: 'Webhook 请求失败（可在弹窗里重新投递）' },
-  skipped: { label: '未配置', tone: 'default', hint: '任务没有填写 Webhook 地址，因此不投递' },
+  pending: { label: '待投递', tone: 'amber', hint: '等待投递到任务配置的触发目标（Webhook 地址 / 八爪鱼流程）' },
+  sent: { label: '已投递', tone: 'green', hint: '已成功投递到任务配置的触发目标（Webhook / 八爪鱼 RPA）' },
+  failed: { label: '投递失败', tone: 'red', hint: '触发目标请求失败（可在弹窗里重新投递）' },
+  skipped: { label: '未配置', tone: 'default', hint: '任务没有填写当前触发方式所需的 Webhook 地址或八爪鱼配置，因此不投递' },
 }
 
 /**
@@ -222,6 +223,80 @@ export function callbackUrlLabel(url: string): string {
   return callbackHostname(url) || '未填 Webhook'
 }
 
+/* ── 触发方式（Webhook / 八爪鱼 RPA，2026-10-21）────────────────────────
+ *
+ * 任务本身仍由微信群消息命中关键词触发；这里选的是**命中之后往哪投递**：
+ * `webhook` = 原有整条记录 JSON POST；`bazhuayu` = 调八爪鱼启动流程接口，
+ * 把触发记录映射成 room_name / content / at_name（详见 `docs/TASK-CENTER.md`）。
+ * 文案是 SSR / E2E 与后端错误文案共用的字面量，不要意译。
+ */
+
+/** 触发方式选项（Segmented 与 spec 共用，顺序即展示顺序）。 */
+export const TASK_TRIGGER_METHOD_OPTIONS: ReadonlyArray<{ value: TaskTriggerMethod; label: string }> = [
+  { value: 'webhook', label: 'Webhook' },
+  { value: 'bazhuayu', label: '八爪鱼 RPA' },
+]
+
+/**
+ * 触发方式的中文名（徽标 / 表单 / 提示复用）。
+ * @param method - 后端触发方式。
+ * @returns `Webhook` 或 `八爪鱼 RPA`。
+ */
+export function triggerMethodLabel(method: TaskTriggerMethod): string {
+  return method === 'bazhuayu' ? '八爪鱼 RPA' : 'Webhook'
+}
+
+/**
+ * 任务行的一行触发摘要（用户一眼看出这条任务命中后往哪投递）。
+ * @param task - 任务。
+ * @returns `八爪鱼 RPA · <flowId>`；webhook 沿用 `Webhook <host>` / `未填 Webhook`。
+ */
+export function taskTriggerSummary(task: TaskInfo): string {
+  if (task.triggerMethod === 'bazhuayu') {
+    const flowId = task.bazhuayuFlowId.trim()
+    return flowId === '' ? '八爪鱼 RPA · 未填 FlowId' : `八爪鱼 RPA · ${flowId}`
+  }
+  const host = callbackHostname(task.callbackUrl)
+  return host === '' ? '未填 Webhook' : `Webhook ${host}`
+}
+
+/**
+ * 「标记已完善」还需要补什么（表单在 Segmented 下方给一行说明，与后端错误文案同口径）。
+ * @param method - 当前选择的触发方式。
+ * @returns 一句话提示。
+ */
+export function readyRequirementHint(method: TaskTriggerMethod): string {
+  return method === 'bazhuayu'
+    ? '标记已完善前需填写八爪鱼 FlowId 与 API Key'
+    : '标记已完善前需填写 Webhook 地址'
+}
+
+/** 八爪鱼 FlowId 的长度上限（与后端校验同口径）。 */
+export const BAZHUAYU_FLOW_ID_MAX = 128
+/** 八爪鱼 API Key 的长度上限（与后端校验同口径）。 */
+export const BAZHUAYU_API_KEY_MAX = 512
+
+/**
+ * 八爪鱼 FlowId 的形态：`[A-Za-z0-9_-]{1,128}`（空串 = 待完善任务还没填，不算非法）。
+ * @param value - 用户输入。
+ * @returns 去掉首尾空白后是否仍是合法形态。
+ */
+export function isValidBazhuayuFlowId(value: string): boolean {
+  return new RegExp(`^[A-Za-z0-9_-]{1,${String(BAZHUAYU_FLOW_ID_MAX)}}$`).test(value.trim())
+}
+
+/**
+ * 八爪鱼 API Key 的形态：非空、trim 后无任何空白/控制字符、不超过 512 字。
+ * （Key 由用户从八爪鱼开放平台复制，本机只校验「像不像一个可用的请求头值」。）
+ * @param value - 用户输入。
+ * @returns 是否合法；空串按「未填」处理并返回 false。
+ */
+export function isValidBazhuayuApiKey(value: string): boolean {
+  const raw = value.trim()
+  if (raw === '' || raw.length > BAZHUAYU_API_KEY_MAX) return false
+  return !/[\s\u0000-\u001F\u007F]/.test(raw)
+}
+
 /**
  * 右栏按当前选中任务过滤（`null` = 全部记录）。
  *
@@ -262,7 +337,8 @@ export function normalizeTriggerSearch(value: string): string {
  *
  * 任务列表本身一次性取全，所以这里不需要服务端查询；空关键词返回原数组身份，
  * 避免搜索框刚聚焦就让整列产生无意义的重渲染。匹配范围与用户能在行里看到的身份字段
- * 一致：任务名、关键词、会话/对象及其 username，另外带上 Webhook 地址便于定位配置。
+ * 一致：任务名、关键词、会话/对象及其 username，另外带上 Webhook 地址 / 八爪鱼 FlowId
+ * 便于定位触发方式配置。
  * @param tasks - 全部任务。
  * @param query - 搜索框原文。
  * @returns 命中任务；空搜索时就是入参本身。
@@ -278,6 +354,7 @@ export function filterTasksBySearch(tasks: readonly TaskInfo[], query: string): 
       task.targetName,
       task.targetUsername,
       task.callbackUrl,
+      task.bazhuayuFlowId,
       ...task.keywords,
     ]
     return fields.some((field) => field.toLowerCase().includes(needle))
@@ -339,7 +416,10 @@ export function nextSelectedTaskId(tasks: readonly TaskInfo[], current: number |
 }
 
 /**
- * 展开编辑项的下一个值（同 {@link nextSelectedTaskId} 的口径，删除后收起表单）。
+ * 展开编辑项的下一个值（同 {@link nextSelectedTaskId} 的口径，删除后收起抽屉）。
+ *
+ * 2026-10-21 起 `expandedTaskId` 的语义是「**正在编辑**的任务 id」：编辑入口从行内展开
+ * 改成了右侧抽屉，任务刷新后不存在时这里返回 null，容器据此关抽屉。
  * @param tasks - 最新任务列表。
  * @param current - 当前展开 id。
  * @returns 仍然有效的 id 或 null。
@@ -417,13 +497,23 @@ export interface TaskEditDraft {
   keywords: string[]
   photoLimit: number
   mentionMeOnly: boolean
+  /** 触发方式：`webhook`（整条记录 POST）或 `bazhuayu`（八爪鱼 RPA 启动流程）。 */
+  triggerMethod: TaskTriggerMethod
   callbackUrl: string
+  bazhuayuFlowId: string
+  /**
+   * API Key 的**输入框内容**（不是已保存的 Key）。
+   *
+   * Remote 返回值里只有 `bazhuayuApiKeySet: boolean`、从不回读 Key 原文，所以草稿恒从空串开始；
+   * 用户不输入 = 保留旧 Key（保存时不带 `bazhuayuApiKey` 字段）。
+   */
+  bazhuayuApiKeyInput: string
 }
 
 /**
  * 从任务快照生成表单初值。
  * @param task - 任务。
- * @returns 草稿（关键字/回调均原样，不做 trim —— 用户一进表单就改字符会丢输入）。
+ * @returns 草稿（关键字/回调/FlowId 均原样，不做 trim —— 用户一进表单就改字符会丢输入）。
  */
 export function draftFromTask(task: TaskInfo): TaskEditDraft {
   return {
@@ -431,7 +521,11 @@ export function draftFromTask(task: TaskInfo): TaskEditDraft {
     keywords: [...task.keywords],
     photoLimit: task.photoLimit,
     mentionMeOnly: task.mentionMeOnly,
+    // 旧快照（类型升上来之前的缓存）可能没有该字段：缺省按 webhook 渲染，行为不变。
+    triggerMethod: task.triggerMethod === 'bazhuayu' ? 'bazhuayu' : 'webhook',
     callbackUrl: task.callbackUrl,
+    bazhuayuFlowId: task.bazhuayuFlowId,
+    bazhuayuApiKeyInput: '',
   }
 }
 
@@ -441,13 +535,19 @@ export interface TaskDraftErrors {
   keywords?: string
   photoLimit?: string
   callbackUrl?: string
+  bazhuayuFlowId?: string
+  bazhuayuApiKey?: string
 }
 
 /**
  * 校验编辑草稿。
  *
- * 规则（与后端一致的最小集）：任务名非空、关键词至少 1 个、Webhook 地址**可空**
- * （待完善任务允许先不填），但一旦填了就必须是 http/https。
+ * 规则（与后端一致的最小集）：任务名非空、关键词至少 1 个；两种触发方式**各自只校验
+ * 当前方式**的配置（切换方式时另一方式的字段保留不清空，但不该拦住这次保存）：
+ *  · `webhook`：地址**可空**（待完善任务允许先不填），一旦填了就必须是 http/https；
+ *  · `bazhuayu`：FlowId 可空，填了必须是 `[A-Za-z0-9_-]{1,128}`；API Key 可空
+ *    （空 = 保留旧 Key / 尚未配置），填了必须无空白且 ≤512。
+ * 「标记已完善」的必填前置不在这里，而在表单 submit 里按方式分支（见 `readyRequirementHint`）。
  * @param draft - 草稿。
  * @returns 错误集合；全合法时为空对象。
  */
@@ -459,8 +559,19 @@ export function validateTaskDraft(draft: TaskEditDraft): TaskDraftErrors {
   if (!Number.isInteger(draft.photoLimit) || draft.photoLimit < PHOTO_LIMIT_MIN || draft.photoLimit > PHOTO_LIMIT_MAX) {
     errors.photoLimit = `照片数量需为 ${String(PHOTO_LIMIT_MIN)}–${String(PHOTO_LIMIT_MAX)} 的整数（0 = 不带图片）`
   }
-  const callback = draft.callbackUrl.trim()
-  if (callback !== '' && !isHttpCallbackUrl(callback)) errors.callbackUrl = 'Webhook 地址必须是 http/https 链接'
+  if (draft.triggerMethod === 'bazhuayu') {
+    const flowId = draft.bazhuayuFlowId.trim()
+    if (flowId !== '' && !isValidBazhuayuFlowId(flowId)) {
+      errors.bazhuayuFlowId = `FlowId 只能包含字母、数字、下划线或短横线，且不超过 ${String(BAZHUAYU_FLOW_ID_MAX)} 个字符`
+    }
+    const apiKey = draft.bazhuayuApiKeyInput.trim()
+    if (apiKey !== '' && !isValidBazhuayuApiKey(apiKey)) {
+      errors.bazhuayuApiKey = `API Key 不能包含空白字符，且不超过 ${String(BAZHUAYU_API_KEY_MAX)} 个字符`
+    }
+  } else {
+    const callback = draft.callbackUrl.trim()
+    if (callback !== '' && !isHttpCallbackUrl(callback)) errors.callbackUrl = 'Webhook 地址必须是 http/https 链接'
+  }
   return errors
 }
 
@@ -507,12 +618,18 @@ export function removeKeyword(list: readonly string[], keyword: string): string[
 
 /**
  * 草稿 → 保存入参（补齐任务自身的会话/目标字段，`id` 必带 = 更新）。
+ *
+ * 触发方式的保存语义（与后端 `ResolvedTaskFields` 同口径）：
+ *  · `triggerMethod` 总是带上（用户可能刚从另一种方式切过来）；
+ *  · `bazhuayuFlowId` 总是带上（空串 = 清空，与「旧值沿用」区分开）；
+ *  · `bazhuayuApiKey` **只在输入框非空时带上**：空输入 = 用户没改 Key，
+ *    整个字段缺省（undefined）后端才保留旧 Key；传空串的语义是**清空**，表单不提供该入口。
  * @param task - 被编辑的任务。
  * @param draft - 已经校验过的草稿。
  * @returns `apiSaveTaskInfo` 的入参。
  */
 export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft): TaskInfoInput {
-  return {
+  const input: TaskInfoInput = {
     id: task.id,
     name: draft.name.trim(),
     chatUsername: task.chatUsername,
@@ -523,8 +640,13 @@ export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft): TaskInfoInp
     keywords: draft.keywords.map((k) => k.trim()).filter((k) => k !== ''),
     photoLimit: clampPhotoLimit(draft.photoLimit),
     mentionMeOnly: task.chatType === 'group' && draft.mentionMeOnly,
+    triggerMethod: draft.triggerMethod,
     callbackUrl: draft.callbackUrl.trim(),
+    bazhuayuFlowId: draft.bazhuayuFlowId.trim(),
   }
+  const apiKey = draft.bazhuayuApiKeyInput.trim()
+  if (apiKey !== '') input.bazhuayuApiKey = apiKey
+  return input
 }
 
 /**

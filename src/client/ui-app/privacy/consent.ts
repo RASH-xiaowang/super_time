@@ -99,8 +99,18 @@
  * 模型 Key、许可证、诊断、备份与原生文件能力都在范围内。默认关闭；关闭、退出或轮换即停服/作废会话。
  * 链路上仍是**明文 HTTP、无 TLS**。这是入站面的**访问入口恢复**，属材料性变更，
  * 故升版要求重新同意（见 `docs/PRIVACY.md` 第四节 H）。
+ *
+ * v22 → v23（2026-10-21）：**任务信息新增第二种触发方式「八爪鱼 RPA」**。任务仍由微信群消息
+ * 命中关键词触发，投递目的地从「只支持你填的 Webhook」扩展为二选一：`webhook`（原有：把整条
+ * 触发记录 JSON POST 到你填的地址）或 `bazhuayu`（新增：POST 到**固定主机**
+ * `https://api-rpa.bazhuayu.com/api/bots/scheduling/start`，参数只有 room_name=会话名 /
+ * content=触发文本 / at_name=触发对象，**不发图片**；你为该任务配置的 FlowId 与 API Key 一并
+ * 参与，Key 作为 `X-Api-Key` 请求头发送）。API Key 只存本机
+ * `<数据根>\wechat_task_center.db`、**不进任务列表返回值**（界面只知道「已保存」）。
+ * 默认触发方式仍是 `webhook`，既有任务行为不变。这是新增的**内容出网点**，
+ * 属材料性变更，故升版要求重新同意（见 `docs/PRIVACY.md` 第四节 G3）。
  */
-export const PRIVACY_VERSION = 22
+export const PRIVACY_VERSION = 23
 
 /**
  * 存储键（后缀是**存储格式**版本，不是声明版本，便于将来整体迁移）。

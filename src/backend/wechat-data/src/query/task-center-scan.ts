@@ -7,6 +7,10 @@
  * 两条关键决策：
  *  ① **水位推进**只在确实见过更大的 `sort_seq` 时发生；无消息时不写库（否则每次空扫都写一行）。
  *  ② 单任务失败不连坐：坏会话（分片正在重解密/库被占用）只把原因收进 `errors`，其余任务照扫。
+ *
+ * 记录的初始回调状态也在这里定：`pending` = 该记录值得进入投递队列（**触发方式对应配置齐全**），
+ * `skipped` = 任务没配好。注意这不只等价于「有 Webhook 地址」——八爪鱼方式允许 `callbackUrl`
+ * 为空，判定见 {@link scanOneTask} 里的 `downstreamReady`。
  */
 import { withWritableDb } from './db-open.ts'
 import type { DatabaseSync } from './db-open.ts'
@@ -260,7 +264,16 @@ function scanOneTask(
       const match = matchTrigger(msg, task.keywords)
       if (match === null) continue
       const images = cachedImages ??= collectTriggerImages(decryptedDir, task, selfUsername, task.photoLimit)
-      const callbackStatus: TaskTriggerCallbackStatus = task.callbackUrl !== '' ? 'pending' : 'skipped'
+      // 记录是否值得进入投递队列：按**触发方式**看对应配置齐不齐，不再只看 Webhook 地址。
+      //   · pending = 触发方式对应的下游配置齐全（Webhook 看 callbackUrl；八爪鱼看
+      //     FlowId + 是否存过 Key），批量投递会捞它；
+      //   · skipped = 任务没配好，批量投递不捞。旧口径「有 Webhook 地址才 pending」对
+      //     八爪鱼任务不成立（它的 callbackUrl 允许为空），沿用会让八爪鱼记录永远 skipped。
+      // 这里只读 `bazhuayuApiKeySet` 这个布尔，Key 原文不出任务库。
+      const downstreamReady = task.triggerMethod === 'bazhuayu'
+        ? (task.bazhuayuFlowId !== '' && task.bazhuayuApiKeySet)
+        : task.callbackUrl !== ''
+      const callbackStatus: TaskTriggerCallbackStatus = downstreamReady ? 'pending' : 'skipped'
       const info = db.prepare(`INSERT OR IGNORE INTO task_triggers
         (task_id, task_name, chat_username, chat_name, target_username, target_name, keyword, text, images,
          message_local_id, message_sort_seq, triggered_at, callback_status)

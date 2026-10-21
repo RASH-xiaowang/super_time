@@ -86,7 +86,9 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(DIALOG, '没有把后端 error 文案显示出来').toContain('result.error')
     expect(DIALOG, '错误行没有 role=alert').toContain('role="alert"')
     expect(DIALOG, '没有把 api 层广播后的成功态画出来').toContain('已加入任务信息 · 待完善')
-    expect(DIALOG, '成功文案没讲清"完善 Webhook 地址后启用"').toContain('完善 Webhook 地址后启用')
+    expect(DIALOG, '成功文案没讲清"完善触发方式后启用"').toContain('完善触发方式后启用')
+    expect(DIALOG, '成功文案没给出「任务信息 → 编辑」入口').toContain('点「编辑」')
+    expect(DIALOG, '成功文案只提 Webhook，漏了八爪鱼 RPA').toContain('Webhook 地址或八爪鱼 RPA')
   })
 
   it('弹窗覆盖产品语义：关键词 / 目标用户 / 照片数量 / 待完善', () => {

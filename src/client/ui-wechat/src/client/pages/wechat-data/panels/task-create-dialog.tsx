@@ -9,8 +9,9 @@
  * 本身；群聊的触发对象是群内某个成员（群消息里发信人是谁很关键），所以只有群聊多一步
  * 「选目标用户」——那一步用 `apiGetGroupInfo` 的成员表，可搜索、单选、未选不许提交。
  *
- * 创建完的状态固定是「待完善」：任务信息面板里补 Webhook 地址并标记已完善后才参与触发与
- * 回调投递。`apiSaveTaskInfo` 成功后会广播 `TASK_CENTER_UPDATED_EVENT`（在 api 层），
+ * 创建完的状态固定是「待完善」：任务信息面板（右侧「编辑」抽屉）里补触发方式配置
+ * （Webhook 地址或八爪鱼 RPA）并标记已完善后才参与触发与回调投递。`apiSaveTaskInfo`
+ * 成功后会广播 `TASK_CENTER_UPDATED_EVENT`（在 api 层），
  * 任务信息面板据此自动刷新，本弹窗不需要再手动通知。
  */
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
@@ -192,7 +193,7 @@ function TaskCreatedPanel({ name, keywords, onClose }: {
     <div className={css.success} data-st-region="task-create-success" role="status">
       <div className={css.successTitle}>已加入任务信息 · 待完善</div>
       <p className={css.successDesc}>
-        任务「{name}」已创建。完善 Webhook 地址后启用：到「任务信息」里填 Webhook 地址并标记已完善，
+        任务「{name}」已创建。完善触发方式后启用：到「任务信息」里点「编辑」，配置 Webhook 地址或八爪鱼 RPA 并标记已完善，
         命中关键词时才会把触发记录投递出去。
       </p>
       <p className={css.successMeta}>触发关键词：{keywords.join('、')}</p>

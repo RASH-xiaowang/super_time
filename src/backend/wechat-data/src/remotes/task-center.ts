@@ -50,7 +50,7 @@ export interface createTaskCenterRemotesInputs {
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   /** 登录账号 wxid（扫描的单聊「对方」判定 + 水位初始化）。 */
   selfUsername: () => string
-  /** 隐私闸：脱敏 + 审计（回调文本发出去前必须过）。 */
+  /** 隐私闸：脱敏 + 审计（触发文本发出去前必须过；两种触发方式同一口径）。 */
   privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => string[]
   /** 图片解码所需的本机上下文（网关侧用 `rawWechatBase` + `resolveImageKeyPair` 组装）。 */
   imageContext: () => TaskCenterImageContext
@@ -86,11 +86,11 @@ export function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs) {
     return deps
   }
 
-  /** 只扫描（同步）：记录落库即返回，不等回调 HTTP（网关调度器把投递拆成独立单飞）。 */
+  /** 只扫描（同步）：记录落库即返回，不等投递 HTTP（网关调度器把投递拆成独立单飞）。 */
   const scanOnce = (): TaskTriggerScanResult =>
     scanTaskTriggers(dirs().decrypted, { selfUsername: rc.selfUsername() })
 
-  /** 只投递待发回调（异步）：与扫描分开调度，慢请求不会堵住新消息的触发。 */
+  /** 只投递待发记录（异步）：与扫描分开调度，慢请求不会堵住新消息的触发。 */
   const dispatchPending = (): Promise<PendingDispatchResult> =>
     dispatchPendingTaskCallbacks(dirs().decrypted, dirs().decoded, dispatchDeps())
 
@@ -155,7 +155,7 @@ export function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs) {
       return listTaskTriggers(dirs().decrypted, options)
     },
 
-    /** 面板「立即检查」与后台定时器共用：扫描 + 顺手投递待发回调。 */
+    /** 面板「立即检查」与后台定时器共用：扫描 + 顺手投递待发记录。 */
     scanTaskTriggers(): Promise<TaskTriggerScanResult> {
       return scanAndDispatch()
     },

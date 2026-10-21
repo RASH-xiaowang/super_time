@@ -61,11 +61,17 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('仅点击时下载'), '没有点明「仅点击时下载」的那一条')
   ok(html.includes('AI 问答与总结'), '没有说明 AI 出网')
   ok(html.includes('腾讯图片 CDN') || html.includes('头像'), '没有说明头像出网')
+  // 2026-10-21：任务触发新增八爪鱼 RPA 方式 —— 同意屏必须如实列出来（含固定主机与「不发图片」）。
+  ok(html.includes('八爪鱼 RPA'), '没有说明任务触发的八爪鱼 RPA 方式')
+  ok(html.includes('api-rpa.bazhuayu.com'), '没有点明八爪鱼 RPA 的固定出网主机')
+  ok(html.includes('不发图片'), '没有说清八爪鱼 RPA 方式不发图片')
 })
 
-check('出网点开关口径与文档一致（应用内已无任何出网开关：5 条无开关 + 1 条仅点击时下载）', () => {
+check('出网点开关口径与文档一致（应用内已无任何出网开关：6 条无开关 + 1 条仅点击时下载）', () => {
   // 2026-09-30：出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
-  // 其余五个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
+  // 其余六个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
+  // （2026-10-21：新增「任务触发（Webhook / 八爪鱼 RPA）」；它没有应用内开关，
+  // 约束是每个任务的触发方式配置 —— 不配置就不发送。）
   //
   // 注意不能用「按 data-switch 切块、再看块里含哪个标签」来配：下面的诚实说明里也点了
   // 那些标签名，会被算进最后一块。改成按**渲染顺序**对齐（顺序不一致就直接判错位）。
@@ -73,23 +79,28 @@ check('出网点开关口径与文档一致（应用内已无任何出网开关�
   // 2026-10-15：手机端（M0–M4）新增了**入站监听面**（`kind: 'off'`，局域网远程访问）。
   // 它刻意与出网点分开列、**不并进「共 N 个出网点」**（方向相反：本机监听、别的设备连进来）。
   // 所以这里必须只数**出网侧**的两种档位（none / manual），把 off 排除掉 ——
-  // 否则这条断言会把入站那条算进来，报「应为 6 个，实际 7 个」。
+  // 否则这条断言会把入站那条算进来，报「应为 7 个，实际 8 个」。
   const kinds = html.split('data-switch="').slice(1)
     .map((c) => c.slice(0, c.indexOf('"')))
     .filter((k) => k === 'none' || k === 'manual')
-  const ORDER = ['AI 问答与总结', 'AI embedding', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载']
+  const ORDER = [
+    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 八爪鱼 RPA）', '头像图片',
+    '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
+  ]
+  /** 唯一一条「仅点击时下载」的出网点；其余出网点都应当是「无开关」。 */
+  const MANUAL = '语音模型下载'
   const at = ORDER.map((l) => html.indexOf(`>${l}<`))
   ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => (at[i] ?? -1) < 0).join('、')}`)
   // 取不到前一项就当 NaN：任何与 NaN 的比较都是 false ⇒ 宁可判错位，不许悄悄放过
   ok(at.every((v, i) => i === 0 || v > (at[i - 1] ?? Number.NaN)), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
   ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
   const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
-  ok(kindOf['语音模型下载'] === 'manual', `语音模型下载应标为「仅点击时下载」，实际 ${kindOf['语音模型下载']}`)
-  for (const l of ORDER.slice(0, 5)) ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
-  ok(kinds.filter((k) => k === 'none').length === 5, '无开关的应当且仅当 5 条（语音模型下载除外）')
+  ok(kindOf[MANUAL] === 'manual', `${MANUAL}应标为「仅点击时下载」，实际 ${kindOf[MANUAL]}`)
+  for (const l of ORDER.filter((l) => l !== MANUAL)) ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
+  ok(kinds.filter((k) => k === 'none').length === ORDER.length - 1, `无开关的应当且仅当 ${ORDER.length - 1} 条（${MANUAL}除外）`)
   ok(kinds.filter((k) => k === 'manual').length === 1, '「仅点击时下载」的应当且仅当 1 条')
   // 标记文字与 data-switch 同源，这里再按渲染结果数一遍（防「值对但标签写错」）。
-  ok((html.match(/>无开关</g) ?? []).length === 5, '渲染出的「无开关」标记不是 5 个')
+  ok((html.match(/>无开关</g) ?? []).length === ORDER.length - 1, `渲染出的「无开关」标记不是 ${ORDER.length - 1} 个`)
   ok((html.match(/>仅点击时下载</g) ?? []).length === 1, '渲染出的「仅点击时下载」标记不是 1 个')
 })
 
@@ -100,11 +111,12 @@ check('重点被单独框出：一句话结论 + 那句「没有任何出网开�
   // 统计行里的条数是界面自己算出来的（blocked.length），这里核对的是**它算得对**：
   // 与清单里 data-switch="none" 的颗数一致。写死数字的守则会自己过期（它曾经就是硬写着 2）。
   const noneCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('none')).length
-  ok(/共[\s\S]{0,40}?6[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 6 个出网点」')
+  const manualCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('manual')).length
+  ok(/共[\s\S]{0,40}?7[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 7 个出网点」')
   ok(new RegExp(`${String(noneCount)}[\\s\\S]{0,20}?条无开关`).test(html),
     `统计行里的「无开关」条数应与清单一致（${String(noneCount)} 条）`)
-  ok(new RegExp(`${String(6 - noneCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(html),
-    '统计行里的「只在你要用时发生」条数应为 1')
+  ok(new RegExp(`${String(manualCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(html),
+    `统计行里的「只在你要用时发生」条数应与清单一致（${String(manualCount)} 条）`)
   ok(html.includes('诚实说明'), '缺少「别把关开关读成完全离线」的说明')
   ok(html.includes('系统防火墙') || html.includes('断网'), '没有给出完全离线的办法')
 })

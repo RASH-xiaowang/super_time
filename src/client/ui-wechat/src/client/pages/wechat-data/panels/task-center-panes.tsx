@@ -5,6 +5,11 @@
  * 两栏搜索与批量选择是可以独立测试的纯展示层。这里不取数、不弹确认框，所有写动作仍由
  * `TaskCenterView` 通过 props 注入；保持原可访问性名称和 DOM 结构不变，SSR 与 E2E 无需迁移。
  *
+ * 2026-10-21：编辑入口从「左栏行内展开表单」改成「右侧抽屉」后，本文件的任务行**只负责
+ * 打开抽屉**（`actions.onToggleEdit`），不再渲染 `<TaskEditForm>` —— 抽屉外壳与表单都在
+ * `TaskCenter.tsx` / `task-center-edit-form.tsx`。行内保留触发方式摘要（Webhook 主机 /
+ * 八爪鱼 FlowId），用户不打开抽屉也能一眼看出这条任务往哪投递。
+ *
  * @module task-center-panes
  */
 import type {
@@ -21,11 +26,9 @@ import {
   SearchInput,
 } from '../ui/kit.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
-import { TaskEditForm } from './task-center-edit-form.tsx'
 import { TaskDeleteButton } from './task-delete-button.tsx'
 import {
   callbackStatusMeta,
-  callbackUrlLabel,
   exceedsBatchLimit,
   filterTasksBySearch,
   lastTriggeredLabel,
@@ -38,6 +41,7 @@ import {
   taskCounts,
   taskScopeLabel,
   taskStatusMeta,
+  taskTriggerSummary,
   triggerCountLabel,
   triggerPaneTitle,
   triggerTimeText,
@@ -49,17 +53,17 @@ import css from './task-center.module.css'
 import kitCss from '../ui/kit.module.css'
 
 /**
- * 左栏一行：任务名 / 状态 / 会话与目标 / 关键词 chips / 照片与回调 / 触发统计 + 编辑按钮。
+ * 左栏一行：任务名 / 状态 / 会话与目标 / 关键词 chips / 触发方式与照片 / 触发统计 + 编辑按钮。
  *
  * 行本身是键盘可达的 `role="button"`（Enter / 空格选中），但**不用 `clickableKey`**：
- * 展开后会嵌一个 `<form>`，`clickableKey` 的 keydown 会冒泡到行上，把输入框里的空格/回车
- * 一起吃掉（`preventDefault` 会阻止在关键词里打空格）。所以这里手动判 `e.target === e.currentTarget`，
- * 并让点击事件跳过表单/按钮里的交互。
+ * 行内有「编辑 / 删除」两个按钮，`clickableKey` 的 keydown 会冒泡到行上一起触发选中。
+ * 所以这里手动判 `e.target === e.currentTarget`，并让点击事件跳过按钮里的交互。
+ * 「编辑」只打开右侧抽屉（`onToggleEdit`），**不会**顺带改变右栏筛选（那是点行身的语义）。
  */
-function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggleSelection }: {
+function TaskRow({ task, active, editing, batchMode, checked, actions, onToggleSelection }: {
   task: TaskInfo
   active: boolean
-  expanded: boolean
+  editing: boolean
   batchMode: boolean
   checked: boolean
   actions: TaskCenterActions
@@ -67,6 +71,9 @@ function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggle
 }): React.JSX.Element {
   const status = taskStatusMeta(task.status)
   const keywords = visibleKeywords(task.keywords)
+  const summaryTitle = task.triggerMethod === 'bazhuayu'
+    ? (task.bazhuayuFlowId !== '' ? `八爪鱼 FlowId：${task.bazhuayuFlowId}` : '尚未填写八爪鱼 FlowId')
+    : (task.callbackUrl !== '' ? task.callbackUrl : undefined)
   const activate = (): void => {
     if (batchMode) {
       onToggleSelection()
@@ -83,9 +90,9 @@ function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggle
       aria-pressed={batchMode ? undefined : active}
       aria-label={batchMode ? `选择任务「${task.name}」` : undefined}
       data-active={active || checked || undefined}
-      data-expanded={expanded || undefined}
+      data-expanded={editing || undefined}
       onClick={(e) => {
-        // 行内有表单/按钮：那些点击不该顺带切选中（尤其「编辑」只展开、不改变右栏过滤）。
+        // 行内有按钮：那些点击不该顺带切选中（尤其「编辑」只开抽屉、不改变右栏过滤）。
         if (e.target instanceof Element && e.target.closest('button, input, form') !== null) return
         activate()
       }}
@@ -126,7 +133,10 @@ function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggle
         ))}
         {keywords.hidden > 0 && <span className={css.kwMore}>+{String(keywords.hidden)}</span>}
         <span className={css.kwMore}>{photoLimitLabel(task.photoLimit)}</span>
-        <span className={css.kwMore} title={task.callbackUrl !== '' ? task.callbackUrl : undefined}>Webhook {callbackUrlLabel(task.callbackUrl)}</span>
+        {/* 触发方式摘要（2026-10-21）：八爪鱼 RPA · <flowId> / Webhook <host> / 未填 Webhook。 */}
+        <span className={css.triggerSummary} title={summaryTitle} data-trigger-method={task.triggerMethod}>
+          {taskTriggerSummary(task)}
+        </span>
         {task.mentionMeOnly && <span className={css.kwMore}>仅匹配 @我</span>}
       </div>
 
@@ -135,11 +145,11 @@ function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggle
           <Button
             size="sm"
             variant="outline"
-            aria-expanded={expanded}
-            aria-label={`${expanded ? '收起' : '展开'}「${task.name}」的配置表单`}
+            aria-expanded={editing}
+            aria-label={`编辑「${task.name}」`}
             onClick={() => { actions.onToggleEdit(task.id) }}
           >
-            {expanded ? '收起' : '编辑'}
+            编辑
           </Button>
           <TaskDeleteButton
             taskName={task.name}
@@ -149,16 +159,6 @@ function TaskRow({ task, active, expanded, batchMode, checked, actions, onToggle
         </span>
         <span className={kitCss.textMeta}>{task.chatType === 'group' ? '群聊任务' : '单聊任务'}</span>
       </div>}
-
-      {!batchMode && expanded && (
-        <TaskEditForm
-          task={task}
-          onSave={(input) => actions.onSaveTask(task, input)}
-          onSetStatus={(status) => actions.onSetStatus(task.id, status)}
-          onDelete={() => actions.onDeleteTask(task.id)}
-          onNotice={actions.onNotice}
-        />
-      )}
     </div>
   )
 }
@@ -361,7 +361,7 @@ export function TaskPane({
             key={task.id}
             task={task}
             active={task.id === selectedTaskId}
-            expanded={task.id === expandedTaskId}
+            editing={task.id === expandedTaskId}
             batchMode={batchMode}
             checked={selectedIds.has(task.id)}
             actions={actions}

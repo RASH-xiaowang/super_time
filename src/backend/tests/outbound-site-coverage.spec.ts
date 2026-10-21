@@ -149,6 +149,18 @@ const LEDGER: LedgerEntry[] = [
       + '逐条口径见 docs/PRIVACY.md 的 G3 节。',
   },
   {
+    site: 'src/backend/wechat-data/src/query/task-center-callback.ts#postBazhuayuTrigger',
+    control: '用户显式为每个任务配置 FlowId + API Key、触发方式=八爪鱼 RPA 才发生；主机固定；仅已完善任务',
+    anchor: 'src/backend/wechat-data/src/query/task-center-callback.ts', marker: 'api-rpa.bazhuayu.com',
+    why: '任务触发方式「八爪鱼 RPA」（2026-10-21）：用户在任务编辑抽屉里把该任务的触发方式切到八爪鱼，'
+      + '并逐任务填写 FlowId 与 API Key；只有「任务已完善 + 该方式配置齐全」时才会走到这里。'
+      + '目的地写死为 `https://api-rpa.bazhuayu.com/api/bots/scheduling/start`（应用不内置其它 RPA 主机），'
+      + '用 `X-Api-Key` 请求头携带该任务的 Key（Key 只存本机任务库、不进列表返回值）。'
+      + '参数只有 room_name=会话名 / content=触发文本（先过与 Webhook 同一个隐私闸，功能名 task_callback）/ '
+      + 'at_name=触发对象，**不发图片**，也不发任务 id/名称与 username；失败只记状态（2 次尝试 / 15s 超时）。'
+      + '默认触发方式仍是 webhook，既有任务行为不变；逐条口径见 docs/PRIVACY.md 的 G3 节。',
+  },
+  {
     site: 'src/backend/wechat-data/src/query/map-geo.ts#fetchMapGeoJson',
     control: '固定 GeoJSON 主机 + 路径/参数白名单', anchor: 'ANY', marker: 'isAllowedMapGeoUrl',
     why: '不含你的数据；渲染层只传候选地址，后端按固定主机与路径形状过滤后才发请求。',

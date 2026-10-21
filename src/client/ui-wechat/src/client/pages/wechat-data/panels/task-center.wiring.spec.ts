@@ -89,6 +89,47 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
     expect(code).toContain('export function TaskCenterView(')
   })
 
+  it('编辑抽屉：TaskCenterView 根部渲染一次 Drawer；任务行只负责打开，不再内联表单', () => {
+    const drawerCall = sliceBetween(code, '<Drawer', '</Drawer>', '编辑抽屉')
+    expect(drawerCall, '抽屉没有按「正在编辑的任务」开关').toContain('open={editingTask !== null}')
+    expect(drawerCall, '抽屉关闭没有走 onCloseEdit（× / 遮罩 / Esc）').toContain('onClose={actions.onCloseEdit}')
+    expect(drawerCall, '抽屉标题没有包含任务名').toContain('编辑任务 · ${editingTask.name}')
+    expect(drawerCall, '抽屉宽度不是 520').toContain('width={520}')
+    // 抽屉里有「删除」→ 应用内确认框（role="alertdialog"）必须真的可点：
+    // Radix 模态会把 #root 从可访问性树隐藏并禁用指针事件（确认框渲染在 #root 里），
+    // 实测就是「确认框看得见却点不了」。这条钉住「编辑抽屉必须非模态」。
+    expect(drawerCall, '编辑抽屉改回 Radix 模态后，抽屉里的删除确认框会变成看得见点不了').toContain('modal={false}')
+    const overlay = readStripped(join(DATA_DIR, 'ui', 'kit-overlay.tsx'))
+    expect(overlay, 'kit Drawer 不支持 modal 属性（非模态抽屉无法实现）').toMatch(/modal = true/)
+    expect(overlay, 'kit Drawer 缺「确认框开着时不算点到外面」的守卫（点确认按钮会把抽屉一起关掉）')
+      .toMatch(/onInteractOutside[\s\S]{0,240}hasHigherModal\(\)/)
+    expect(overlay, 'kit Drawer 缺「确认框开着时 Esc 先归确认框」的守卫').toMatch(/onEscapeKeyDown[\s\S]{0,120}hasHigherModal\(\)/)
+    expect(drawerCall, '抽屉 body 没有渲染 TaskEditForm').toContain('<TaskEditForm')
+    expect(code, '正在编辑的任务没有从最新快照解析（任务被删后抽屉要关）').toContain('props.tasks.find((t) => t.id === props.expandedTaskId)')
+    expect(panes, '任务行把编辑表单塞回行内了').not.toContain('<TaskEditForm')
+    expect(panes, '任务行还在 import edit-form（行内表单会复活）').not.toContain('task-center-edit-form')
+    expect(panes, '任务行没有用 onToggleEdit 打开抽屉').toContain('actions.onToggleEdit(task.id)')
+    expect(panes, '「编辑」按钮的可访问名变了（E2E / SSR 依赖它）').toContain('aria-label={`编辑「${task.name}」`}')
+    expect(panes, '任务行不再渲染按钮展开态').toContain('aria-expanded={editing}')
+  })
+
+  it('点「编辑」只打开抽屉，不改变右栏任务筛选', () => {
+    const button = sliceBetween(
+      panes,
+      'aria-label={`编辑「${task.name}」`}',
+      '</Button>',
+      '任务行「编辑」按钮',
+    )
+    expect(button, '「编辑」没有打开抽屉').toContain('actions.onToggleEdit(task.id)')
+    expect(button, '「编辑」顺带改变了右栏筛选（应只改编辑态）').not.toContain('onSelectTask')
+    const actionsAt = code.indexOf('const actions: TaskCenterActions = {')
+    expect(actionsAt, '找不到容器的 actions 定义').toBeGreaterThan(0)
+    const editActions = sliceBetween(code, 'onToggleEdit: (id)', 'onOpenRecord:', '编辑抽屉动作')
+    expect(editActions, 'onToggleEdit 没有改成「设置正在编辑的任务」').toContain('setExpandedTaskId(id)')
+    expect(editActions, 'onToggleEdit 不该碰右栏筛选状态').not.toContain('setSelectedTaskId')
+    expect(editActions, '缺少关闭抽屉的动作').toContain('onCloseEdit: () => { setExpandedTaskId(null) }')
+  })
+
   it('任务与触发记录都走 useFreshData（打开即查 + 读失败不进缓存 + WAL/按钮静默刷新）', () => {
     expect(code, '任务列表的缓存键不是 taskCenter:tasks').toContain("useFreshData('taskCenter:tasks'")
     expect(code, '触发记录取数没有走专用 hook').toContain('useTaskCenterTriggers(')
@@ -285,23 +326,47 @@ describe('记录弹窗：完整内容五组 + 图片按需解码 + 可访问性'
   })
 })
 
-describe('编辑表单：配置项与三个动作', () => {
+describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
   const code = panelRead('task-center-edit-form.tsx')
   const remove = panelRead('task-delete-button.tsx')
+  const logic = panelRead('task-center.ts')
 
-  it('配置项齐全：任务名 / 触发关键词 / 照片数量 / Webhook 地址', () => {
-    for (const label of ['任务名', '触发关键词', '照片数量', 'Webhook 地址']) {
+  it('配置项齐全：任务名 / 触发关键词 / 触发方式 / 照片数量 / Webhook 或八爪鱼配置', () => {
+    for (const label of ['任务名', '触发关键词', '触发方式', '照片数量', 'Webhook 地址', '八爪鱼 FlowId', '八爪鱼 API Key']) {
       expect(code, `编辑表单缺少「${label}」`).toContain(label)
     }
+    expect(logic, '触发方式选项里缺少「八爪鱼 RPA」').toContain('八爪鱼 RPA')
     expect(code, '照片数量没有做成可输入项').toContain('type="number"')
     expect(code, '照片数量输入没有夹取').toContain('clampPhotoLimit')
+    expect(code, '触发方式没有用 kit 的 Segmented').toContain('Segmented')
+    expect(code, 'Segmented 没有可访问名').toContain('ariaLabel="触发方式"')
+    expect(code, '两种触发方式没有从纯逻辑取选项').toContain('TASK_TRIGGER_METHOD_OPTIONS')
+    expect(code, '「已完善」前置提示没有按方式泛化').toContain('readyRequirementHint(')
+  })
+
+  it('触发方式两套配置区：Webhook 地址 / 八爪鱼 FlowId + API Key（Key 不回显）', () => {
+    expect(code, '没有按触发方式切换配置区').toContain("draft.triggerMethod === 'webhook' ? (")
+    expect(code, '缺少 Webhook 地址字段').toContain('<WebhookField')
+    expect(code, '缺少八爪鱼配置字段').toContain('<BazhuayuFields')
+    expect(code, 'Webhook 地址 placeholder 变了').toContain('placeholder="https://example.com/webhook"')
+    expect(code).toContain('aria-label="Webhook 地址"')
+    expect(code, 'FlowId 没有可访问名').toContain('aria-label="八爪鱼 FlowId"')
+    expect(code, 'FlowId placeholder 变了').toContain('placeholder="例如 6ad859ccee2df270d53fc6e5"')
+    expect(code, 'API Key 没有可访问名').toContain('aria-label="八爪鱼 API Key"')
+    expect(code, 'API Key 输入框不是 password').toContain('type="password"')
+    expect(code, '已配置 Key 时没有「已保存，留空保持不变」提示').toContain('已保存，留空保持不变')
+    expect(code, '未配置 Key 时没有输入提示').toContain('填写八爪鱼 X-Api-Key')
+    expect(code, 'placeholder 没有按 bazhuayuApiKeySet 分支').toContain('apiKeySet ?')
+    expect(code, '缺少八爪鱼参数映射说明').toContain('https://api-rpa.bazhuayu.com/api/bots/scheduling/start')
+    expect(code, '说明没有写清三个参数映射').toContain('room_name=会话名')
+    expect(code, '说明没有写清不发图片').toContain('图片不会发送')
   })
 
   it('群聊编辑支持「仅匹配@我的文本」，单聊不显示且保存归一为 false', () => {
     expect(code, '编辑表单没有渲染「仅匹配@我的文本」').toContain('仅匹配@我的文本')
     expect(code, '勾选项没有只在群聊显示').toContain("task.chatType === 'group'")
     expect(code, '勾选项没有接到草稿').toContain('checked={draft.mentionMeOnly}')
-    expect(panelRead('task-center.ts'), '保存没有强制单聊为 false')
+    expect(logic, '保存没有强制单聊为 false')
       .toContain("mentionMeOnly: task.chatType === 'group' && draft.mentionMeOnly")
   })
 
@@ -317,9 +382,14 @@ describe('编辑表单：配置项与三个动作', () => {
     expect(code, '行内删除入口没有使用共享按钮').toContain('TaskDeleteButton')
   })
 
-  it('回调为空时本地拦截「标记已完善」并把焦点指到回调输入框', () => {
-    expect(code, '标记已完善前没有校验 Webhook 地址').toContain('标记「已完善」前必须填写 Webhook 地址')
-    expect(code, '没有把焦点指到回调输入框').toContain('callbackRef.current?.focus()')
+  it('「标记已完善」前置按触发方式分支，并把焦点指到对应输入框', () => {
+    expect(code, 'webhook 缺地址时没有本地拦截').toContain('标记「已完善」前必须填写 Webhook 地址')
+    expect(code, '没有把焦点指到 Webhook 输入框').toContain('callbackRef.current?.focus()')
+    expect(code, 'bazhuayu 缺 FlowId 时没有本地拦截').toContain('标记「已完善」前必须填写八爪鱼 FlowId')
+    expect(code, 'bazhuayu 缺 Key（且没存过）时没有本地拦截').toContain('标记「已完善」前必须填写八爪鱼 API Key')
+    expect(code, '没有按 bazhuayuApiKeySet 判断「已存过 Key」').toContain('task.bazhuayuApiKeySet')
+    expect(code, '没有把焦点指到 FlowId 输入框').toContain('flowIdRef.current?.focus()')
+    expect(code, '没有把焦点指到 API Key 输入框').toContain('apiKeyRef.current?.focus()')
   })
 
   it('关键词支持回车/逗号添加与去重、移除', () => {
@@ -370,6 +440,33 @@ describe('样式与 SSR 冒烟', () => {
     expect(script, 'SSR 冒烟没有触发记录搜索框').toContain('搜索正文 / 任务 / 会话 / 关键词')
     expect(script, 'SSR 冒烟没有覆盖清除按钮').toContain('aria-label="清除搜索"')
     expect(script, 'SSR 冒烟没有覆盖任务行删除入口').toContain('aria-label="删除任务')
+  })
+
+  it('SSR 冒烟覆盖「抽屉 body + 触发方式」与任务行摘要（Radix Portal 在 SSR 下不挂载）', () => {
+    const script = readText(join(ROOT, 'scripts', 'task-center-ssr.tsx'))
+    expect(script, 'SSR 没有直接渲染抽屉 body（Drawer 的 Radix Portal 在 renderToStaticMarkup 下是 null）')
+      .toContain('TaskEditForm')
+    for (const text of [
+      'aria-label="编辑任务：客户报价跟进"',
+      '触发方式',
+      '八爪鱼 RPA',
+      '八爪鱼 FlowId',
+      '八爪鱼 API Key',
+      '已保存，留空保持不变',
+      'api-rpa.bazhuayu.com',
+    ]) {
+      expect(script, `SSR 冒烟没有断言「${text}」`).toContain(text)
+    }
+    expect(script, 'SSR 主场景没有用 bazhuayu fixture 断言任务行摘要').toContain('八爪鱼 RPA · ')
+    expect(script, '空态场景没有断言不渲染编辑表单').toContain('空态不该渲染')
+  })
+
+  it('抽屉表单与触发方式分区的样式在 module.css 里（只用设计令牌）', () => {
+    const css = readText(join(PANELS, 'task-center.module.css'))
+    for (const rule of ['.triggerHint {', '.triggerSummary {', '.triggerConfig {', '.triggerDesc {']) {
+      expect(css, `缺少样式 ${rule}`).toContain(rule)
+    }
+    expect(css, '触发方式摘要没有省略号（长 FlowId 会挤爆任务行）').toMatch(/\.triggerSummary\s*\{[\s\S]*?text-overflow:\s*ellipsis/)
   })
 
   it('`pages/**` 的新文件不许 import node: 内建（layer-direction 判据）', () => {

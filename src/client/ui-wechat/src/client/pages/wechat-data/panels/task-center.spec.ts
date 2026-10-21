@@ -12,6 +12,8 @@ import type { TaskInfo, TaskTriggerRecord } from '@deepseek-ai/dsh-wechat-data/t
 import {
   addKeywords,
   appendTriggerPage,
+  BAZHUAYU_API_KEY_MAX,
+  BAZHUAYU_FLOW_ID_MAX,
   callbackHostname,
   callbackStatusMeta,
   callbackUrlLabel,
@@ -23,6 +25,8 @@ import {
   filterTriggersByTask,
   triggerTimeText,
   isHttpCallbackUrl,
+  isValidBazhuayuApiKey,
+  isValidBazhuayuFlowId,
   lastTriggeredLabel,
   needsTriggerPageBackfill,
   nextExpandedTaskId,
@@ -30,6 +34,7 @@ import {
   normalizeTriggerSearch,
   photoLimitLabel,
   plainText,
+  readyRequirementHint,
   recordImageCountLabel,
   recordSummary,
   retainSelectedIds,
@@ -42,8 +47,11 @@ import {
   taskSaveInput,
   taskScopeLabel,
   taskStatusMeta,
+  taskTriggerSummary,
   triggerCountLabel,
+  triggerMethodLabel,
   triggerPaneTitle,
+  TASK_TRIGGER_METHOD_OPTIONS,
   TRIGGER_SEARCH_MAX,
   TASK_BATCH_DELETE_MAX,
   toggleSelectedId,
@@ -65,11 +73,29 @@ function makeTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
     keywords: ['报价'],
     photoLimit: 0,
     mentionMeOnly: false,
+    triggerMethod: 'webhook',
     callbackUrl: '',
+    bazhuayuFlowId: '',
+    bazhuayuApiKeySet: false,
     status: 'incomplete',
     createdAt: 1,
     updatedAt: 2,
     triggerCount: 0,
+    ...overrides,
+  }
+}
+
+/** 造一份编辑草稿（触发方式默认 webhook；测试只覆盖关心的字段）。 */
+function makeDraft(overrides: Partial<TaskEditDraft> = {}): TaskEditDraft {
+  return {
+    name: '任务',
+    keywords: ['x'],
+    photoLimit: 0,
+    mentionMeOnly: false,
+    triggerMethod: 'webhook',
+    callbackUrl: '',
+    bazhuayuFlowId: '',
+    bazhuayuApiKeyInput: '',
     ...overrides,
   }
 }
@@ -110,6 +136,9 @@ describe('状态文案与色调', () => {
     expect(callbackStatusMeta('failed').label).toBe('投递失败')
     expect(callbackStatusMeta('failed').tone).toBe('red')
     expect(callbackStatusMeta('skipped').label).toBe('未配置')
+    // 触发方式有两种，提示文案不能再只说「Webhook 地址」。
+    expect(callbackStatusMeta('skipped').hint).toContain('触发方式')
+    expect(callbackStatusMeta('pending').hint).toContain('八爪鱼')
   })
 })
 
@@ -194,10 +223,11 @@ describe('右栏过滤与选中一致性', () => {
     expect(nextSelectedTaskId([], 1)).toBeNull()
   })
 
-  it('展开编辑项同口径（删除后收起表单）', () => {
+  it('展开编辑项同口径（删除后关闭抽屉）', () => {
     const tasks = [makeTask({ id: 1 })]
     expect(nextExpandedTaskId(tasks, 1)).toBe(1)
     expect(nextExpandedTaskId(tasks, 2)).toBeNull()
+    expect(nextExpandedTaskId([], 1)).toBeNull()
   })
 })
 
@@ -217,6 +247,11 @@ describe('左栏任务搜索', () => {
   it('空搜索保持原数组身份；无命中返回空数组', () => {
     expect(filterTasksBySearch(searchableTasks, '   ')).toBe(searchableTasks)
     expect(filterTasksBySearch(searchableTasks, '不存在的任务')).toEqual([])
+  })
+
+  it('八爪鱼 FlowId 也可搜（触发方式配置同样要能被定位）', () => {
+    const tasks = [makeTask({ id: 3, triggerMethod: 'bazhuayu', bazhuayuFlowId: '6ad859ccee2df270d53fc6e5' })]
+    expect(filterTasksBySearch(tasks, '6AD859').map((t) => t.id)).toEqual([3])
   })
 })
 
@@ -310,14 +345,14 @@ describe('编辑草稿：生成、校验、保存入参', () => {
   })
 
   it('校验：任务名非空 / 关键词至少 1 个 / Webhook 可空但填了必须 http(s)', () => {
-    const base: TaskEditDraft = { name: '  ', keywords: [], photoLimit: 0, mentionMeOnly: false, callbackUrl: '' }
+    const base = makeDraft({ name: '  ', keywords: [] })
     expect(validateTaskDraft(base)).toEqual({ name: '任务名不能为空', keywords: '至少填写 1 个触发关键词' })
     expect(validateTaskDraft({ ...base, name: '任务', keywords: ['x'] })).toEqual({})
-    expect(validateTaskDraft({ name: '任务', keywords: ['  '], photoLimit: 0, mentionMeOnly: false, callbackUrl: '' }))
+    expect(validateTaskDraft(makeDraft({ keywords: ['  '] })))
       .toEqual({ keywords: '至少填写 1 个触发关键词' })
-    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, mentionMeOnly: false, callbackUrl: 'ftp://x' }))
+    expect(validateTaskDraft(makeDraft({ callbackUrl: 'ftp://x' })))
       .toEqual({ callbackUrl: 'Webhook 地址必须是 http/https 链接' })
-    expect(validateTaskDraft({ name: '任务', keywords: ['x'], photoLimit: 0, mentionMeOnly: false, callbackUrl: 'https://x.test/h' })).toEqual({})
+    expect(validateTaskDraft(makeDraft({ callbackUrl: 'https://x.test/h' }))).toEqual({})
   })
 
   it('关键词拆分：逗号（半/全角）、分号、顿号、换行都能分隔，空串丢掉', () => {
@@ -334,7 +369,13 @@ describe('编辑草稿：生成、校验、保存入参', () => {
 
   it('保存入参带 id 与会话/目标字段，关键词/回调 trim，照片数夹回 0–9', () => {
     const task = makeTask({ id: 7, chatUsername: 'wxid_chat', chatName: '群名', targetUsername: 'wxid_t', targetName: '对象' })
-    const input = taskSaveInput(task, { name: '  新名  ', keywords: [' 报价 '], photoLimit: 5, mentionMeOnly: true, callbackUrl: ' https://x.test/h ' })
+    const input = taskSaveInput(task, makeDraft({
+      name: '  新名  ',
+      keywords: [' 报价 '],
+      photoLimit: 5,
+      mentionMeOnly: true,
+      callbackUrl: ' https://x.test/h ',
+    }))
     expect(input.id).toBe(7)
     expect(input.name).toBe('新名')
     expect(input.keywords).toEqual(['报价'])
@@ -345,13 +386,13 @@ describe('编辑草稿：生成、校验、保存入参', () => {
     expect(input.chatName).toBe('群名')
     expect(input.targetUsername).toBe('wxid_t')
     expect(input.targetName).toBe('对象')
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 100, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(9)
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: -3, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(0)
-    expect(taskSaveInput(task, { name: '任务', keywords: ['x'], photoLimit: 1.7, mentionMeOnly: false, callbackUrl: '' }).photoLimit).toBe(1)
+    expect(taskSaveInput(task, makeDraft({ photoLimit: 100 })).photoLimit).toBe(9)
+    expect(taskSaveInput(task, makeDraft({ photoLimit: -3 })).photoLimit).toBe(0)
+    expect(taskSaveInput(task, makeDraft({ photoLimit: 1.7 })).photoLimit).toBe(1)
   })
 
   it('照片数量校验：0–9 的整数，越界/小数被拦下（输入框之外的兜底）', () => {
-    const base: TaskEditDraft = { name: '任务', keywords: ['x'], photoLimit: 3, mentionMeOnly: false, callbackUrl: '' }
+    const base = makeDraft({ photoLimit: 3 })
     expect(validateTaskDraft(base)).toEqual({})
     expect(validateTaskDraft({ ...base, photoLimit: 0 })).toEqual({})
     expect(validateTaskDraft({ ...base, photoLimit: 9 })).toEqual({})
@@ -368,6 +409,111 @@ describe('编辑草稿：生成、校验、保存入参', () => {
 
     const privateTask = makeTask({ chatType: 'private', targetUsername: 'wxid_chat', targetName: '会话名' })
     expect(taskSaveInput(privateTask, { ...draftFromTask(privateTask), mentionMeOnly: true }).mentionMeOnly).toBe(false)
+  })
+})
+
+describe('触发方式（Webhook / 八爪鱼 RPA）', () => {
+  it('两个选项与中文名：Webhook / 八爪鱼 RPA（字面量供 SSR / E2E 断言）', () => {
+    expect(TASK_TRIGGER_METHOD_OPTIONS.map((o) => o.value)).toEqual(['webhook', 'bazhuayu'])
+    expect(TASK_TRIGGER_METHOD_OPTIONS.map((o) => o.label)).toEqual(['Webhook', '八爪鱼 RPA'])
+    expect(triggerMethodLabel('webhook')).toBe('Webhook')
+    expect(triggerMethodLabel('bazhuayu')).toBe('八爪鱼 RPA')
+  })
+
+  it('行内摘要：八爪鱼 RPA · <flowId>；webhook 仍是 Webhook <host> / 未填 Webhook', () => {
+    expect(taskTriggerSummary(makeTask({ triggerMethod: 'bazhuayu', bazhuayuFlowId: '6ad859ccee2df270d53fc6e5' })))
+      .toBe('八爪鱼 RPA · 6ad859ccee2df270d53fc6e5')
+    expect(taskTriggerSummary(makeTask({ triggerMethod: 'bazhuayu', bazhuayuFlowId: '  ' })))
+      .toBe('八爪鱼 RPA · 未填 FlowId')
+    // 八爪鱼任务即使留着旧 Webhook 地址，摘要也必须反映当前方式。
+    expect(taskTriggerSummary(makeTask({
+      triggerMethod: 'bazhuayu',
+      bazhuayuFlowId: 'flow-1',
+      callbackUrl: 'https://example.com/h',
+    }))).toBe('八爪鱼 RPA · flow-1')
+    expect(taskTriggerSummary(makeTask({ callbackUrl: 'https://example.com:8443/h' }))).toBe('Webhook example.com:8443')
+    expect(taskTriggerSummary(makeTask({ callbackUrl: '' }))).toBe('未填 Webhook')
+  })
+
+  it('「标记已完善」前置提示按方式泛化', () => {
+    expect(readyRequirementHint('webhook')).toContain('Webhook 地址')
+    expect(readyRequirementHint('bazhuayu')).toContain('八爪鱼 FlowId')
+    expect(readyRequirementHint('bazhuayu')).toContain('API Key')
+  })
+
+  it('FlowId 形态：1–128 个 [A-Za-z0-9_-]；空串按「未填」不在这里判错', () => {
+    expect(isValidBazhuayuFlowId('6ad859ccee2df270d53fc6e5')).toBe(true)
+    expect(isValidBazhuayuFlowId(' flow_1-2 ')).toBe(true)
+    expect(isValidBazhuayuFlowId('')).toBe(false)
+    expect(isValidBazhuayuFlowId('bad flow')).toBe(false)
+    expect(isValidBazhuayuFlowId('a'.repeat(BAZHUAYU_FLOW_ID_MAX))).toBe(true)
+    expect(isValidBazhuayuFlowId('a'.repeat(BAZHUAYU_FLOW_ID_MAX + 1))).toBe(false)
+    expect(BAZHUAYU_FLOW_ID_MAX).toBe(128)
+  })
+
+  it('API Key 形态：trim 后非空、无空白/控制字符、≤512', () => {
+    expect(isValidBazhuayuApiKey('  abc123  ')).toBe(true)
+    expect(isValidBazhuayuApiKey('')).toBe(false)
+    expect(isValidBazhuayuApiKey('   ')).toBe(false)
+    expect(isValidBazhuayuApiKey('has space')).toBe(false)
+    expect(isValidBazhuayuApiKey('tab\tinside')).toBe(false)
+    expect(isValidBazhuayuApiKey('a'.repeat(BAZHUAYU_API_KEY_MAX))).toBe(true)
+    expect(isValidBazhuayuApiKey('a'.repeat(BAZHUAYU_API_KEY_MAX + 1))).toBe(false)
+  })
+
+  it('草稿：从任务取触发方式与 FlowId，Key 输入恒为空串（Remote 不回读）', () => {
+    const draft = draftFromTask(makeTask({ triggerMethod: 'bazhuayu', bazhuayuFlowId: 'flow-1', bazhuayuApiKeySet: true }))
+    expect(draft.triggerMethod).toBe('bazhuayu')
+    expect(draft.bazhuayuFlowId).toBe('flow-1')
+    expect(draft.bazhuayuApiKeyInput).toBe('')
+    // 旧快照（类型升上来之前的缓存）没有该字段：回落 webhook，行为不变。
+    const legacy = { ...makeTask(), triggerMethod: undefined } as unknown as TaskInfo
+    expect(draftFromTask(legacy).triggerMethod).toBe('webhook')
+  })
+
+  it('按方式校验：另一种方式的字段不拦当前保存', () => {
+    // webhook 方式下不校验八爪鱼字段形态（切过来时留着旧值不该拦保存）。
+    expect(validateTaskDraft(makeDraft({
+      triggerMethod: 'webhook',
+      bazhuayuFlowId: 'bad flow',
+      bazhuayuApiKeyInput: 'has space',
+    }))).toEqual({})
+    // bazhuayu 方式下不校验 callbackUrl（旧 Webhook 地址原样保留）。
+    expect(validateTaskDraft(makeDraft({ triggerMethod: 'bazhuayu', callbackUrl: 'ftp://x' }))).toEqual({})
+    // bazhuayu 形态错误按字段报。
+    expect(validateTaskDraft(makeDraft({ triggerMethod: 'bazhuayu', bazhuayuFlowId: 'bad flow' })).bazhuayuFlowId).toContain('FlowId')
+    expect(validateTaskDraft(makeDraft({ triggerMethod: 'bazhuayu', bazhuayuApiKeyInput: 'has space' })).bazhuayuApiKey).toContain('API Key')
+    // 空值 = 待完善任务先不填，保存合法（「已完善」的必填前置在表单 submit 里）。
+    expect(validateTaskDraft(makeDraft({ triggerMethod: 'bazhuayu' }))).toEqual({})
+    expect(validateTaskDraft(makeDraft({
+      triggerMethod: 'bazhuayu',
+      bazhuayuFlowId: 'flow_1',
+      bazhuayuApiKeyInput: 'key-123',
+    }))).toEqual({})
+  })
+
+  it('保存入参：带 triggerMethod / flowId；Key 非空才带（空 = 缺省，后端保留旧 Key）', () => {
+    const task = makeTask({ id: 9, triggerMethod: 'webhook' })
+    const bazhuayu = taskSaveInput(task, makeDraft({
+      triggerMethod: 'bazhuayu',
+      bazhuayuFlowId: '  flow_1  ',
+      bazhuayuApiKeyInput: '  key-123  ',
+      callbackUrl: 'https://example.com/h',
+    }))
+    expect(bazhuayu.triggerMethod).toBe('bazhuayu')
+    expect(bazhuayu.bazhuayuFlowId).toBe('flow_1')
+    expect(bazhuayu.bazhuayuApiKey).toBe('key-123')
+    expect(bazhuayu.callbackUrl, '切换方式不清空另一方式的配置').toBe('https://example.com/h')
+    const keep = taskSaveInput(task, makeDraft({
+      triggerMethod: 'bazhuayu',
+      bazhuayuFlowId: 'flow_1',
+      bazhuayuApiKeyInput: '   ',
+    }))
+    expect('bazhuayuApiKey' in keep, '空白输入 = 没改 Key，必须缺省而不是空串（空串语义是清空）').toBe(false)
+    const webhook = taskSaveInput(task, makeDraft({ triggerMethod: 'webhook', callbackUrl: 'https://example.com/h' }))
+    expect(webhook.triggerMethod).toBe('webhook')
+    expect(webhook.bazhuayuFlowId).toBe('')
+    expect('bazhuayuApiKey' in webhook).toBe(false)
   })
 })
 

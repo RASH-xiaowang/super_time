@@ -5,10 +5,14 @@
  *  · 深链进入「任务信息」，左右两栏与空态都可见；
  *  · 左栏搜索任务名/关键词/会话/对象，清除按钮与无匹配空态可用；
  *  · 右栏由服务端搜索触发记录，覆盖 `%` / `_` 字面量和失败错误；
- *  · 编辑表单的用户可见名称是「Webhook 地址」，群聊可勾选「仅匹配@我的文本」，并留存字段截图；
+ *  · 编辑 = **右侧抽屉**（`role="dialog"`）：标题含任务名、Webhook 地址字段、
+ *    群聊「仅匹配@我的文本」、切到「八爪鱼 RPA」后的 FlowId / API Key、三种关闭方式
+ *    （× / Esc / 点遮罩），并留存抽屉截图 `.tmp-e2e/task-center-edit-drawer.png`；
+ *  · 保存八爪鱼配置后任务行摘要显示「八爪鱼 RPA · <flowId>」，经 Remote 读回
+ *    `triggerMethod` / `bazhuayuFlowId` / `bazhuayuApiKeySet`（Key 原文不出现在返回值里）；
  *  · 120 条同毫秒触发记录首屏 100 条，复合游标「加载更多」补齐 120 条；
  *  · 任务批量删除后只移除所选配置，触发记录仍保留；
- *  · 触发记录批量删除后重算任务统计，编辑表单内删除再验证历史记录保留。
+ *  · 触发记录批量删除后重算任务统计，编辑抽屉内删除再验证历史记录保留。
  *
  * 数据隔离：每次使用一个临时 `SUPERTIME_USER_DATA_DIR`，不读写真实微信数据。
  * 触发记录直接写进临时任务库，是为了稳定造出「同一毫秒 + 跨页」的边界；任务则经
@@ -345,31 +349,103 @@ try {
   await waitForTaskName(win, '华东客户跟进')
   check(true, '左栏清除按钮恢复全部任务')
 
-  // 展开配置表单，确认原「回调地址」字段对用户呈现为「Webhook 地址」。
+  // ②b 编辑右侧抽屉（2026-10-21）：行内「编辑」→ role="dialog" 抽屉，配置项都在抽屉里。
   const taskPane = win.getByRole('region', { name: '任务信息', exact: true })
-  await win.getByRole('button', { name: '展开「华东客户跟进」的配置表单', exact: true }).click()
-  const webhookField = win.getByLabel('Webhook 地址', { exact: true })
+  const editButton = win.getByRole('button', { name: '编辑「华东客户跟进」', exact: true })
+  await editButton.click()
+  const editDrawer = win.getByRole('dialog')
+  await editDrawer.waitFor({ state: 'visible' })
+  const drawerText = await editDrawer.innerText()
+  check(
+    /编辑任务 · 华东客户跟进/.test(drawerText),
+    '点「编辑」打开右侧抽屉且标题含任务名',
+    drawerText.split('\n').slice(0, 3).join(' | '),
+  )
+  const webhookField = editDrawer.getByLabel('Webhook 地址', { exact: true })
   await webhookField.waitFor({ state: 'visible' })
   const webhookPlaceholder = await webhookField.getAttribute('placeholder')
   check(
     webhookPlaceholder === 'https://example.com/webhook',
-    '编辑表单显示 Webhook 地址字段',
+    '抽屉里显示 Webhook 地址字段',
     webhookPlaceholder ?? '无 placeholder',
   )
-  const mentionMeOnly = win.getByLabel(/仅匹配@我的文本/)
+  const mentionMeOnly = editDrawer.getByLabel(/仅匹配@我的文本/)
   await mentionMeOnly.waitFor({ state: 'visible' })
   check(await mentionMeOnly.isChecked() === false, '群聊任务默认不勾选「仅匹配@我的文本」')
   await mentionMeOnly.check()
-  await taskPane.getByRole('button', { name: '保存', exact: true }).click()
+  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
   await win.getByText('任务配置已保存', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
   const tasksAfterMention = await remote(win, 'listTaskInfos', [])
   const savedMentionTask = tasksAfterMention.items?.find((task) => task.id === taskA.id)
   check(savedMentionTask?.mentionMeOnly === true, '勾选后经真实后端读回 mentionMeOnly=true')
-  await taskPane.locator('form[aria-label="编辑任务：华东客户跟进"]').screenshot({
-    path: join(EVIDENCE_DIR, 'task-center-webhook-field.png'),
-  })
-  // 后续删除要验证展开表单入口；先收起，等造完夹具再展开，避免同名按钮混淆选择器。
-  await win.getByRole('button', { name: '收起「华东客户跟进」的配置表单', exact: true }).click()
+
+  // 触发方式：切到「八爪鱼 RPA」后出现 FlowId / API Key；保存后行内摘要与 Remote 都要反映。
+  await editDrawer.getByRole('radio', { name: '八爪鱼 RPA', exact: true }).click()
+  const flowIdField = editDrawer.getByLabel('八爪鱼 FlowId', { exact: true })
+  const apiKeyField = editDrawer.getByLabel('八爪鱼 API Key', { exact: true })
+  await flowIdField.waitFor({ state: 'visible' })
+  await apiKeyField.waitFor({ state: 'visible' })
+  check(
+    (await apiKeyField.getAttribute('type')) === 'password',
+    'API Key 输入框为 password（不回显）',
+  )
+  const apiKeyPlaceholder = await apiKeyField.getAttribute('placeholder')
+  check(
+    apiKeyPlaceholder === '填写八爪鱼 X-Api-Key',
+    '未配置 Key 时 placeholder 提示填写',
+    apiKeyPlaceholder ?? '无 placeholder',
+  )
+  await flowIdField.fill('6ad859ccee2df270d53fc6e5')
+  await apiKeyField.fill('e2e-bazhuayu-key-001')
+  await editDrawer.screenshot({ path: join(EVIDENCE_DIR, 'task-center-edit-drawer.png') })
+  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
+  // 等**后端真的落库**再断言：上一条「任务配置已保存」提示可能还没消失，不能拿提示条当完成信号。
+  const bazhuayuDeadline = Date.now() + 20_000
+  let tasksAfterBazhuayu = await remote(win, 'listTaskInfos', [])
+  let savedBazhuayuTask = tasksAfterBazhuayu.items?.find((task) => task.id === taskA.id)
+  while (
+    !(savedBazhuayuTask?.triggerMethod === 'bazhuayu' && savedBazhuayuTask?.bazhuayuApiKeySet === true)
+    && Date.now() < bazhuayuDeadline
+  ) {
+    await sleep(250)
+    tasksAfterBazhuayu = await remote(win, 'listTaskInfos', [])
+    savedBazhuayuTask = tasksAfterBazhuayu.items?.find((task) => task.id === taskA.id)
+  }
+  check(
+    savedBazhuayuTask?.triggerMethod === 'bazhuayu'
+      && savedBazhuayuTask?.bazhuayuFlowId === '6ad859ccee2df270d53fc6e5'
+      && savedBazhuayuTask?.bazhuayuApiKeySet === true,
+    '八爪鱼触发方式经真实后端读回 triggerMethod/flowId/apiKeySet',
+    `method=${savedBazhuayuTask?.triggerMethod} flow=${savedBazhuayuTask?.bazhuayuFlowId} keySet=${savedBazhuayuTask?.bazhuayuApiKeySet}`,
+  )
+  check(
+    !JSON.stringify(tasksAfterBazhuayu).includes('e2e-bazhuayu-key-001'),
+    'API Key 原文不出现在任务列表返回值里',
+  )
+  await editDrawer.getByRole('button', { name: '关闭', exact: true }).click()
+  await editDrawer.waitFor({ state: 'hidden' })
+  await taskPane.getByText(/八爪鱼 RPA · 6ad859ccee2df270d53fc6e5/).waitFor({ state: 'visible', timeout: 20_000 })
+  check(true, '任务行摘要显示「八爪鱼 RPA · <flowId>」')
+  check(
+    await win.getByRole('button', { name: '编辑「华东客户跟进」', exact: true }).count() === 1,
+    '抽屉关闭后任务行「编辑」入口仍在',
+  )
+
+  // 抽屉的另外两种关闭语义（× 已在上一步用过）：Esc 与点遮罩。
+  await editButton.click()
+  await editDrawer.waitFor({ state: 'visible' })
+  await win.keyboard.press('Escape')
+  await editDrawer.waitFor({ state: 'hidden' })
+  check(true, 'Esc 可关闭编辑抽屉')
+  await editButton.click()
+  await editDrawer.waitFor({ state: 'visible' })
+  await win.mouse.click(8, 8)
+  await editDrawer.waitFor({ state: 'hidden' })
+  check(true, '点抽屉外遮罩可关闭编辑抽屉')
+  check(
+    await win.getByRole('button', { name: '编辑「华东客户跟进」', exact: true }).count() === 1,
+    '遮罩关闭后任务行「编辑」入口仍在',
+  )
 
   // ③ 直接造 120 条同毫秒触发记录，验证首屏 100 + 复合游标加载更多。
   insertTriggers(taskA.id, '华东客户跟进')
@@ -562,13 +638,14 @@ try {
     '触发记录批删成功后自动退出批量模式',
   )
 
-  // ⑦ 展开表单内删除：确认框语义 + 任务消失 + 触发记录仍保留且可搜索。
+  // ⑦ 抽屉表单内删除：确认框语义 + 任务消失 + 触发记录仍保留且可搜索。
   await taskPane.getByText('华东客户跟进', { exact: true }).click()
   await waitForTriggerTotal(win, PAGE_SIZE, remainingTotal)
-  await taskPane.getByRole('button', { name: '展开「华东客户跟进」的配置表单', exact: true }).click()
-  const editForm = taskPane.getByRole('form', { name: '编辑任务：华东客户跟进', exact: true })
+  await win.getByRole('button', { name: '编辑「华东客户跟进」', exact: true }).click()
+  await editDrawer.waitFor({ state: 'visible' })
+  const editForm = editDrawer.getByRole('form', { name: '编辑任务：华东客户跟进', exact: true })
   await editForm.waitFor({ state: 'visible' })
-  // 用户报障截图里的入口：编辑表单底部的删除按钮，而不是收起表单后的行内按钮。
+  // 用户报障截图里的入口：编辑抽屉底部的删除按钮，而不是任务行内的删除入口。
   await editForm.getByRole('button', { name: '删除任务「华东客户跟进」', exact: true }).click()
   const dialog = win.getByRole('alertdialog')
   await dialog.waitFor({ state: 'visible' })
@@ -577,6 +654,7 @@ try {
   await dialog.getByRole('button', { name: '删除任务', exact: true }).click()
   await win.getByText('任务已删除', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
   check(await taskPane.getByText('华东客户跟进', { exact: true }).count() === 0, '确认删除后左栏任务消失')
+  check(await win.getByRole('dialog').count() === 0, '任务被删后编辑抽屉自动关闭')
   check(countTriggers(taskA.id) === remainingTotal, '删除任务不级联删除历史触发记录', `count=${countTriggers(taskA.id)}`)
 
   // 删除后右栏回到全部记录；行内仍保留任务名快照，历史正文也仍能独立命中。

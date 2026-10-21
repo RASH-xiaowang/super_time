@@ -242,7 +242,8 @@ export interface BuildTaskInfoInputOptions {
  *
  * 单聊的「触发对象」就是会话对象本身（`targetUsername = chat.username`）——
  * 这个回填只发生在这里，界面不给用户第二个选择，避免出现「单聊还要选人」的困惑。
- * 状态固定 `incomplete`：Webhook 地址在【任务信息】里补，补完才参与触发与投递。
+ * 状态固定 `incomplete`：触发方式配置（Webhook 地址 / 八爪鱼 RPA）在【任务信息】里补，
+ * 补完才参与触发与投递。
  * @param options - 会话/目标/关键词/照片档位/任务名。
  * @returns 可直接交给 `apiSaveTaskInfo` 的入参。
  */

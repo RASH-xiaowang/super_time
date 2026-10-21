@@ -2,7 +2,9 @@
  * 「任务信息 / 任务触发记录」域的**存储与配置**（2026-10-19）。
  *
  * 这一域是用户显式创建的**触发式任务**：某会话（单聊/群聊 + 群内目标用户）的消息命中
- * 关键词时，记一条「触发记录」，已完善（`ready`）的任务再把整条记录 POST 到回调地址。
+ * 关键词时，记一条「触发记录」，已完善（`ready`）的任务再按**触发方式**送出：Webhook
+ * （整条记录 JSON POST 到 `callbackUrl`）或八爪鱼 RPA（调启动流程接口，参数映射见
+ * `TaskBazhuayuStartPayload`；FlowId / API Key 存在本文件负责建表的三列里）。
  * 与相邻三个 store 的分工（别混）：
  *  · `wechat-tasks.ts`：从聊天文本里本地规则提取的待办，没有目标/关键词/回调；
  *  · `chat-collect.ts`：创建任务时**快照**最近 N 条文本 + M 张图，没有触发语义；
@@ -11,14 +13,15 @@
  * 本文件负责：库路径 / 建表 / 行转换 / 校验 / 任务 CRUD / 触发记录查询。
  * 另外两半在同目录的兄弟文件里（对外仍从**本文件**导出，调用方只认一个入口）：
  *  · `task-center-scan.ts` —— 关键词扫描、水位推进、最近图片抓取；
- *  · `task-center-callback.ts` —— 回调 payload / 图片 data URL / 唯一出网 POST。
+ *  · `task-center-callback.ts` —— 两种触发方式的 payload / 图片 data URL / 出网 POST。
  *
  * 三个口径值得先说清（都直接决定用户会不会被"历史消息全触发"打到）：
  *  ① **水位**（`last_scan_seq`）：任务新建 / 由「待完善」变「已完善」时初始化成该会话
  *     当前最大 `sort_seq` —— 否则一启用就会把历史消息全部当成"新消息"，一次生成几百条
- *     触发记录、并给回调地址打几百发 POST。
+ *     触发记录、并向下游（Webhook / 八爪鱼 RPA）打几百发 POST。
  *  ② **去重**靠 `UNIQUE(task_id, message_local_id)` + `INSERT OR IGNORE`（见 scan 兄弟文件）。
- *  ③ **图片不在扫描时解码**：只记引用（localId/createTime/sender），真正解码发生在投递那一刻。
+ *  ③ **图片不在扫描时解码**：只记引用（localId/createTime/sender）；Webhook 在投递那一刻解码，
+ *     八爪鱼方式不发图片（接口没有对应参数，`photoLimit` 对它不生效）。
  *
  * 连接纪律与 N1 同款：写走 `withWritableDb`、读走 `existsSync` 判断 + `withDb`；
  * 「库不存在」= 确实还没有数据（空 + 无 `readError`），「库打不开」= 带 `readError` + 留痕。
@@ -38,6 +41,7 @@ import type {
   TaskInfoStatus,
   TaskTriggerCallbackStatus,
   TaskTriggerImage,
+  TaskTriggerMethod,
   TaskTriggerQuery,
   TaskTriggerRecord,
   TaskTriggerSnapshot,
@@ -59,6 +63,14 @@ const KEYWORD_MAX = 20
 const PHOTO_LIMIT_MAX = 9
 /** 回调地址最大长度。 */
 const CALLBACK_URL_MAX = 2048
+/** 八爪鱼 FlowId 最大长度（trim 后）。 */
+const BAZHUAYU_FLOW_ID_MAX = 128
+/** 八爪鱼 FlowId 允许的字符集（流程 id 形态：字母 / 数字 / 下划线 / 短横线）。 */
+const BAZHUAYU_FLOW_ID_PATTERN = /^[A-Za-z0-9_-]+$/
+/** 八爪鱼 API Key 最大长度（trim 后）。 */
+const BAZHUAYU_API_KEY_MAX = 512
+/** API Key 会原样进 `X-Api-Key` 头，因此不允许空白与控制字符。 */
+const BAZHUAYU_API_KEY_FORBIDDEN = /[\s\u0000-\u001f\u007f]/
 /** 触发记录默认 / 最大返回条数。 */
 const TRIGGER_QUERY_DEFAULT = 100
 const TRIGGER_QUERY_MAX = 200
@@ -169,6 +181,9 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     keywords TEXT NOT NULL DEFAULT '[]',
     photo_limit INTEGER NOT NULL DEFAULT 0,
     mention_me_only INTEGER NOT NULL DEFAULT 0,
+    trigger_method TEXT NOT NULL DEFAULT 'webhook',
+    bazhuayu_flow_id TEXT NOT NULL DEFAULT '',
+    bazhuayu_api_key TEXT NOT NULL DEFAULT '',
     callback_url TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'incomplete',
     last_scan_seq INTEGER NOT NULL DEFAULT 0,
@@ -196,18 +211,39 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     callback_error TEXT NOT NULL DEFAULT '',
     UNIQUE(task_id, message_local_id)
   )`)
-  // 老库升级：CREATE TABLE IF NOT EXISTS 不会补列；先查 table_info 再 ALTER，
-  // 避免每次打开都触发 "duplicate column name"。
-  const taskInfoCols = new Set(
-    (db.prepare('PRAGMA table_info(task_info)').all() as Array<Record<string, unknown>>)
-      .map((row) => taskCellStr(row['name'])),
-  )
-  if (!taskInfoCols.has('mention_me_only')) {
-    db.exec('ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0')
-  }
+  // 老库升级：CREATE TABLE IF NOT EXISTS 不会补列，缺列时逐列 ALTER（见下表）。
+  ensureTaskInfoColumns(db)
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task ON task_triggers(task_id, triggered_at DESC)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task_order ON task_triggers(task_id, triggered_at DESC, id DESC)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_order ON task_triggers(triggered_at DESC, id DESC)')
+}
+
+/**
+ * `task_info` 的历史补列清单：`[列名, ALTER 语句]`。
+ *
+ * 列名 → 补列语句按引入顺序排列；`table_info` 里已有的列不会重复 ALTER（否则每次打开
+ * 都会触发 "duplicate column name"）。旧行按语句里的 DEFAULT 归一：老任务触发方式变成
+ * `webhook`（行为与旧版完全一致）、两个八爪鱼列变成空串（= 未配置）。
+ */
+const TASK_INFO_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
+  ['mention_me_only', 'ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0'],
+  ['trigger_method', "ALTER TABLE task_info ADD COLUMN trigger_method TEXT NOT NULL DEFAULT 'webhook'"],
+  ['bazhuayu_flow_id', "ALTER TABLE task_info ADD COLUMN bazhuayu_flow_id TEXT NOT NULL DEFAULT ''"],
+  ['bazhuayu_api_key', "ALTER TABLE task_info ADD COLUMN bazhuayu_api_key TEXT NOT NULL DEFAULT ''"],
+]
+
+/**
+ * 老库补列：先读 `PRAGMA table_info(task_info)`，只对缺的列执行 ALTER。
+ * @param db - 已打开的任务库连接（`task_info` 必须已存在）。
+ */
+function ensureTaskInfoColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(task_info)').all() as Array<Record<string, unknown>>)
+      .map((row) => taskCellStr(row['name'])),
+  )
+  for (const [name, sql] of TASK_INFO_COLUMN_MIGRATIONS) {
+    if (!columns.has(name)) db.exec(sql)
+  }
 }
 
 /** JSON 字符串数组解析（失败/非数组按空数组容错 —— 配置坏了不等于任务不可用）。 */
@@ -264,7 +300,10 @@ export function rowToTask(r: Record<string, unknown>): TaskInfo {
     keywords: parseStringArray(r['keywords']),
     photoLimit: taskCellNum(r['photo_limit']),
     mentionMeOnly: taskCellNum(r['mention_me_only']) === 1,
+    triggerMethod: taskCellStr(r['trigger_method']) === 'bazhuayu' ? 'bazhuayu' : 'webhook',
     callbackUrl: taskCellStr(r['callback_url']),
+    bazhuayuFlowId: taskCellStr(r['bazhuayu_flow_id']),
+    bazhuayuApiKeySet: taskCellStr(r['bazhuayu_api_key']) !== '',
     status: taskCellStr(r['status']) === 'ready' ? 'ready' : 'incomplete',
     createdAt: taskCellNum(r['created_at']),
     updatedAt: taskCellNum(r['updated_at']),
@@ -369,14 +408,86 @@ function cleanCallbackUrl(raw: unknown): CallbackUrlResult {
   return { url: value }
 }
 
-/** 「已完善」的前置条件：回调地址、关键词、群聊目标缺一不可（各自给一句可操作的话）。 */
+/** 八爪鱼 FlowId 清洗结果（空串 = 未配置，合法）。 */
+interface BazhuayuFlowIdResult {
+  flowId: string
+  error?: string
+}
+
+/**
+ * 八爪鱼 FlowId：trim 后 ≤128 字符，且只含 `[A-Za-z0-9_-]`；空串合法。
+ *
+ * 空串是合法的（待完善任务可以先不填），「已完善」校验才要求非空。
+ * @param raw - 入参里的 `bazhuayuFlowId`（运行时可能不是字符串）。
+ * @returns 规整后的 FlowId 或中文错误。
+ */
+function cleanBazhuayuFlowId(raw: unknown): BazhuayuFlowIdResult {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (value === '') return { flowId: '' }
+  if (value.length > BAZHUAYU_FLOW_ID_MAX) {
+    return { flowId: '', error: '八爪鱼 FlowId 过长（最多 ' + String(BAZHUAYU_FLOW_ID_MAX) + ' 个字符）' }
+  }
+  if (!BAZHUAYU_FLOW_ID_PATTERN.test(value)) {
+    return { flowId: '', error: '八爪鱼 FlowId 只能包含字母、数字、下划线和短横线' }
+  }
+  return { flowId: value }
+}
+
+/** 八爪鱼 API Key 清洗结果（空串 = 清空/未配置，合法）。 */
+interface BazhuayuApiKeyResult {
+  apiKey: string
+  error?: string
+}
+
+/**
+ * 八爪鱼 API Key：trim 后 ≤512 字符，且不含空白/控制字符（它会原样进 `X-Api-Key` 头）。
+ *
+ * 空串合法（= 清空）；**缺省（undefined）的语义是「保留旧 Key」**，由
+ * {@link resolveTaskFields} 在合并旧行时处理，这个函数只负责清洗显式传入的值。
+ * @param raw - 入参里的 `bazhuayuApiKey`（运行时可能不是字符串）。
+ * @returns 规整后的 Key 或中文错误。
+ */
+function cleanBazhuayuApiKey(raw: unknown): BazhuayuApiKeyResult {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (value === '') return { apiKey: '' }
+  if (value.length > BAZHUAYU_API_KEY_MAX) {
+    return { apiKey: '', error: '八爪鱼 API Key 过长（最多 ' + String(BAZHUAYU_API_KEY_MAX) + ' 个字符）' }
+  }
+  if (BAZHUAYU_API_KEY_FORBIDDEN.test(value)) {
+    return { apiKey: '', error: '八爪鱼 API Key 不能包含空白或控制字符' }
+  }
+  return { apiKey: value }
+}
+
+/**
+ * 「已完善」的前置条件：关键词、群聊目标必填，再加**当前触发方式**对应的一侧配置。
+ *
+ * 两种方式互斥地决定「发得出去吗」：webhook 要回调地址，bazhuayu 要 FlowId + API Key。
+ * 另一方式的字段不参与判定（也不清空，方便用户来回切换）。
+ * @param triggerMethod - 任务的下游触发方式。
+ * @param callbackUrl - 已清洗的回调地址。
+ * @param bazhuayuFlowId - 已清洗的八爪鱼 FlowId。
+ * @param bazhuayuApiKey - 已清洗的八爪鱼 API Key。
+ * @param keywords - 触发关键词。
+ * @param chatType - 会话类型。
+ * @param targetUsername - 群内目标用户。
+ * @returns 中文错误；齐全时为空串。
+ */
 function readyPreconditionError(
+  triggerMethod: TaskTriggerMethod,
   callbackUrl: string,
+  bazhuayuFlowId: string,
+  bazhuayuApiKey: string,
   keywords: string[],
   chatType: TaskInfoChatType,
   targetUsername: string,
 ): string {
-  if (callbackUrl === '') return '标记已完善前请先填写回调地址'
+  if (triggerMethod === 'bazhuayu') {
+    if (bazhuayuFlowId === '') return '标记已完善前请先填写八爪鱼 FlowId'
+    if (bazhuayuApiKey === '') return '标记已完善前请先填写八爪鱼 API Key'
+  } else if (callbackUrl === '') {
+    return '标记已完善前请先填写回调地址'
+  }
   if (keywords.length === 0) return '标记已完善前请先填写触发关键词'
   if (chatType === 'group' && targetUsername === '') return '标记已完善前请先选择群内目标用户'
   return ''
@@ -518,7 +629,12 @@ interface ResolvedTaskFields {
   keywords: string[]
   photoLimit: number
   mentionMeOnly: boolean
+  triggerMethod: TaskTriggerMethod
+  /** 触发方式 = webhook 时的回调地址；bazhuayu 时仍照旧保存/清洗，只是不参与 ready 判定。 */
   callbackUrl: string
+  bazhuayuFlowId: string
+  /** 八爪鱼 API Key（只落本机任务库，绝不进 `TaskInfo` 快照 / Remote 返回值）。 */
+  bazhuayuApiKey: string
   status: TaskInfoStatus
   name: string
 }
@@ -529,7 +645,9 @@ interface ResolvedTaskFields {
  * **更新时缺省字段一律沿用旧值**（`undefined` = 不修改，空串 = 清空）：
  * 编辑表单的「保存」通常只带用户改过的项，尤其 `status` 是可选 —— 若按"没传就是
  * incomplete"处理，用户改个名字就会把已完善任务退回待完善，触发器直接停摆。
- * 新建时缺省才用默认值（status = incomplete、photoLimit = 0）。
+ * 新建时缺省才用默认值（status = incomplete、photoLimit = 0、triggerMethod = webhook）。
+ * `bazhuayuApiKey` 的缺省语义是**保留旧 Key**（表单不回显 Key 原文，无法区分"没改"与"清空"），
+ * 想清空必须显式传空串。
  * @param input - 入参。
  * @param existing - 旧行（新建时为 undefined）。
  * @returns 完整字段或中文校验错误。
@@ -559,6 +677,23 @@ function resolveTaskFields(
     ? { url: existingCallbackUrl }
     : cleanCallbackUrl(input?.callbackUrl)
   if (cleanedUrl.error !== undefined) return { error: cleanedUrl.error }
+  // 触发方式：只认 'bazhuayu'，其它值（含缺省）一律归一为 'webhook'；更新时缺省沿用旧行。
+  const existingMethod = existing === undefined ? '' : taskCellStr(existing['trigger_method'])
+  const triggerMethod: TaskTriggerMethod = input?.triggerMethod === 'bazhuayu'
+    ? 'bazhuayu'
+    : (input?.triggerMethod === 'webhook'
+      ? 'webhook'
+      : (existingMethod === 'bazhuayu' ? 'bazhuayu' : 'webhook'))
+  // FlowId / API Key 与回调地址同一合并口径：undefined = 沿用旧值（API Key 是「保留已保存的
+  // Key」），空串 = 清空。切换触发方式不清空另一方式的字段，用户来回切不该丢配置。
+  const cleanedFlowId = input?.bazhuayuFlowId === undefined && existing !== undefined
+    ? { flowId: taskCellStr(existing['bazhuayu_flow_id']) }
+    : cleanBazhuayuFlowId(input?.bazhuayuFlowId)
+  if (cleanedFlowId.error !== undefined) return { error: cleanedFlowId.error }
+  const cleanedApiKey = input?.bazhuayuApiKey === undefined && existing !== undefined
+    ? { apiKey: taskCellStr(existing['bazhuayu_api_key']) }
+    : cleanBazhuayuApiKey(input?.bazhuayuApiKey)
+  if (cleanedApiKey.error !== undefined) return { error: cleanedApiKey.error }
   const existingStatus = existing === undefined
     ? 'incomplete'
     : (taskCellStr(existing['status']) === 'ready' ? 'ready' : 'incomplete')
@@ -566,7 +701,10 @@ function resolveTaskFields(
     ? 'ready'
     : (input?.status === 'incomplete' ? 'incomplete' : existingStatus)
   if (status === 'ready') {
-    const precondition = readyPreconditionError(cleanedUrl.url, keywords, chatType, targetUsername)
+    const precondition = readyPreconditionError(
+      triggerMethod, cleanedUrl.url, cleanedFlowId.flowId, cleanedApiKey.apiKey,
+      keywords, chatType, targetUsername,
+    )
     if (precondition !== '') return { error: precondition }
   }
   const existingChatName = existing === undefined ? '' : taskCellStr(existing['chat_name'])
@@ -594,7 +732,9 @@ function resolveTaskFields(
   return {
     fields: {
       chatUsername, chatName, chatType, targetUsername, targetName,
-      keywords, photoLimit, mentionMeOnly, callbackUrl: cleanedUrl.url, status, name,
+      keywords, photoLimit, mentionMeOnly, triggerMethod,
+      callbackUrl: cleanedUrl.url, bazhuayuFlowId: cleanedFlowId.flowId,
+      bazhuayuApiKey: cleanedApiKey.apiKey, status, name,
     },
   }
 }
@@ -634,11 +774,13 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
           : taskCellNum(existing['last_scan_seq'])
         db.prepare(`UPDATE task_info SET
           name = ?, chat_username = ?, chat_name = ?, chat_type = ?, target_username = ?, target_name = ?,
-          keywords = ?, photo_limit = ?, mention_me_only = ?, callback_url = ?, status = ?, last_scan_seq = ?, updated_at = ?
+          keywords = ?, photo_limit = ?, mention_me_only = ?, trigger_method = ?, callback_url = ?,
+          bazhuayu_flow_id = ?, bazhuayu_api_key = ?, status = ?, last_scan_seq = ?, updated_at = ?
           WHERE id = ?`).run(
           fields.name, fields.chatUsername, fields.chatName, fields.chatType,
           fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-          fields.mentionMeOnly ? 1 : 0, fields.callbackUrl, fields.status, watermark, now, id,
+          fields.mentionMeOnly ? 1 : 0, fields.triggerMethod, fields.callbackUrl,
+          fields.bazhuayuFlowId, fields.bazhuayuApiKey, fields.status, watermark, now, id,
         )
         return { ok: true, id, status: fields.status }
       }
@@ -646,11 +788,13 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
       const watermark = currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername)
       const info = db.prepare(`INSERT INTO task_info
         (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit,
-         mention_me_only, callback_url, status, last_scan_seq, created_at, updated_at, trigger_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+         mention_me_only, trigger_method, callback_url, bazhuayu_flow_id, bazhuayu_api_key,
+         status, last_scan_seq, created_at, updated_at, trigger_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
         fields.name, fields.chatUsername, fields.chatName, fields.chatType,
         fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-        fields.mentionMeOnly ? 1 : 0, fields.callbackUrl, fields.status, watermark, now, now,
+        fields.mentionMeOnly ? 1 : 0, fields.triggerMethod, fields.callbackUrl,
+        fields.bazhuayuFlowId, fields.bazhuayuApiKey, fields.status, watermark, now, now,
       )
       return { ok: true, id: taskCellNum(info.lastInsertRowid), status: fields.status }
     })
@@ -687,10 +831,16 @@ export function setTaskInfoStatus(
       if (row === undefined) return { ok: false, error: '任务不存在' }
       const existedReady = taskCellStr(row['status']) === 'ready'
       if (status === 'ready') {
+        // 与保存同一条判据：先按触发方式分支，再要求关键词 / 群聊目标齐全。
+        const savedMethod: TaskTriggerMethod =
+          taskCellStr(row['trigger_method']) === 'bazhuayu' ? 'bazhuayu' : 'webhook'
         const savedUrl = cleanCallbackUrl(row['callback_url'])
         if (savedUrl.error !== undefined) return { ok: false, error: savedUrl.error }
         const precondition = readyPreconditionError(
+          savedMethod,
           savedUrl.url,
+          taskCellStr(row['bazhuayu_flow_id']),
+          taskCellStr(row['bazhuayu_api_key']),
           parseStringArray(row['keywords']),
           taskCellStr(row['chat_type']) === 'group' ? 'group' : 'private',
           taskCellStr(row['target_username']),

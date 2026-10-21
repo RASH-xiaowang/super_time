@@ -1,12 +1,14 @@
 /**
- * 「任务回调投递」：把一条触发记录组装成 JSON，POST 到用户为该任务配置的回调地址。
+ * 「任务投递」：把一条触发记录按任务的**触发方式**送出。
  *
  * 从 `task-center.ts` 拆出来（M21 单文件 1000 行上限）：这里只有投递一侧的逻辑，
  * 存储/校验/CRUD 在 `task-center.ts`，对外接口由它统一再导出。
  *
- * 本文件是**本域唯一的出网点**（`postTaskCallback`）：地址来自用户逐条填写，
- * 只允许 http/https；任务未完善 / 未配置地址时不会走到这里。
- * 出网台账（`outbound-site-coverage.spec.ts`）登记的就是 `#postTaskCallback`。
+ * 本文件是**本域仅有的两个出网点**（出网台账 `outbound-site-coverage.spec.ts` 逐条登记）：
+ *  · `postTaskCallback` —— Webhook：整条记录 JSON POST 到用户逐条填写的地址（只允许 http/https）；
+ *  · `postBazhuayuTrigger` —— 八爪鱼 RPA：POST 到固定的 `api-rpa.bazhuayu.com`，Key 在
+ *    `X-Api-Key` 头，只发会话名 / 触发文本 / 触发对象三个参数（**不发图片**）。
+ * 任务未完善 / 对应方式的配置不齐时不会走到出网函数（返回 skipped）。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,6 +27,7 @@ import {
   taskErrorText,
 } from './task-center.ts'
 import type {
+  TaskBazhuayuStartPayload,
   TaskCallbackDispatchResult,
   TaskCallbackPayload,
   TaskInfo,
@@ -35,11 +38,17 @@ import type {
 const IMAGE_DATA_URL_MAX = 8_000_000
 /** 回调失败原因落库上限。 */
 const CALLBACK_ERROR_MAX = 500
-/** 回调 POST：最多尝试 2 次（回调地址是用户自己的服务，抖动一次还有救，多了会堆重复投递）。 */
+/** 出网 POST：最多尝试 2 次（Webhook 对端抖动一次还有救；八爪鱼固定主机同理，多了只会堆重复投递）。 */
 const DISPATCH_MAX_ATTEMPTS = 2
 const DISPATCH_TIMEOUT_MS = 15_000
 /** 一批待投递记录的上限（定时器每拍只处理这么多，避免一次拍住事件循环太久）。 */
 const PENDING_DISPATCH_LIMIT = 10
+/**
+ * 八爪鱼「启动流程」接口地址（主机写死，不来自用户输入）。
+ *
+ * 出网台账按 `本文件#postBazhuayuTrigger` 记账；改地址=改出网目的地，必须同步隐私声明。
+ */
+const BAZHUAYU_TRIGGER_URL = 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start'
 
 /** 投递依赖：图片解码、隐私闸与 fetch 都由调用方注入（query 层不 import gateway 侧）。 */
 export interface TaskDispatchDeps {
@@ -69,16 +78,29 @@ export interface PendingDispatchResult {
  * 微信解密库那种只读快照。
  * @param file - 任务库路径（已由调用方确认存在）。
  * @param triggerId - 触发记录 id。
- * @returns 记录 / 所属任务；找不到的部分缺省。
+ * @returns 记录 / 所属任务 / 任务行里的原始八爪鱼 API Key；找不到的部分缺省。
  */
-function readDispatchTarget(file: string, triggerId: number): { record?: TaskTriggerRecord; task?: TaskInfo } {
+function readDispatchTarget(file: string, triggerId: number): {
+  record?: TaskTriggerRecord
+  task?: TaskInfo
+  /**
+   * 八爪鱼 API Key 原文（内部字段，**不进 `TaskInfo` / 任何列表快照**）。
+   *
+   * 只有投递这一刻需要它；`rowToTask` 对外只给 `bazhuayuApiKeySet` 布尔。
+   */
+  bazhuayuApiKey?: string
+} {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare('SELECT * FROM task_triggers WHERE id = ?').get(triggerId) as Record<string, unknown> | undefined
     if (triggerRow === undefined) return {}
     const record = rowToTrigger(triggerRow)
     const taskRow = db.prepare('SELECT * FROM task_info WHERE id = ?').get(record.taskId) as Record<string, unknown> | undefined
     if (taskRow === undefined) return { record }
-    return { record, task: rowToTask(taskRow) }
+    return {
+      record,
+      task: rowToTask(taskRow),
+      bazhuayuApiKey: taskCellStr(taskRow['bazhuayu_api_key']),
+    }
   })
 }
 
@@ -147,7 +169,7 @@ async function buildPayloadImages(
 }
 
 /**
- * 真正发出一次回调 POST（本域**唯一**出网点）。
+ * 发出一次 **Webhook** 回调 POST（本域出网点之一）。
  *
  * 走 `fetchWithRetry`：单次尝试 15s 超时、最多 2 次（用户自己的服务，抖动一次还有救；
  * 次数再多只会让重复投递变多）。非 2xx 一律当失败。
@@ -163,6 +185,67 @@ async function postTaskCallback(doFetch: RetryFetch, url: string, payload: TaskC
     body: JSON.stringify(payload),
   }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS })
   if (!res.ok) throw new Error('回调失败：HTTP ' + String(res.status))
+}
+
+/**
+ * 发出一次**八爪鱼 RPA 启动流程** POST（本域出网点之二）。
+ *
+ * 主机写死（{@link BAZHUAYU_TRIGGER_URL}，不来自用户输入）；只有用户为某个任务显式选了
+ * 「八爪鱼 RPA」并填了 FlowId + API Key、任务已完善时才会走到这里。参数只有触发记录的
+ * 会话名 / 触发文本 / 触发对象（见 {@link buildBazhuayuPayload}），**不发图片**。
+ *
+ * 重试口径与 Webhook 一致：2 次尝试 / 单次 15s，2xx = 成功。
+ * @param doFetch - fetch 实现（生产 = 全局 fetch）。
+ * @param apiKey - 任务行里的八爪鱼 API Key（只进请求头，不落 payload）。
+ * @param payload - 启动流程请求体（不持久化）。
+ * @throws 网络/超时/非 2xx 时抛可读错误（调用方截断后落 `callback_error`）。
+ */
+async function postBazhuayuTrigger(
+  doFetch: RetryFetch,
+  apiKey: string,
+  payload: TaskBazhuayuStartPayload,
+): Promise<void> {
+  const res = await fetchWithRetry(doFetch, BAZHUAYU_TRIGGER_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Api-Key': apiKey,
+    },
+    body: JSON.stringify(payload),
+  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS })
+  if (!res.ok) throw new Error('八爪鱼触发失败：HTTP ' + String(res.status))
+}
+
+/**
+ * 组装八爪鱼启动流程请求体：把一条触发记录映射成 `room_name` / `content` / `at_name`。
+ *
+ * 取值口径：`room_name` = 触发记录的会话名；`content` = 过隐私闸后的触发文本；
+ * `at_name` = 触发对象显示名 —— 群聊用目标成员 `targetName`；单聊任务创建弹窗不填
+ * `targetName`，此时「触发的用户对象」就是会话本人，**回落会话名 `record.chatName`**
+ * （否则单聊任务会把 `at_name` 发成空串）。`FlowId` 来自任务配置。
+ * @param task - 任务配置（提供 FlowId）。
+ * @param record - 触发记录（提供三个业务参数的快照值）。
+ * @param text - 已过隐私闸的触发文本。
+ * @returns 启动流程请求体（与 `TaskBazhuayuStartPayload` 同形）。
+ */
+function buildBazhuayuPayload(
+  task: TaskInfo,
+  record: TaskTriggerRecord,
+  text: string,
+): TaskBazhuayuStartPayload {
+  return {
+    FlowId: task.bazhuayuFlowId,
+    FlowContentRetrievalMode: 'ByNewestContent',
+    SpecifiedPublicationVersion: '',
+    SpecifiedBot: '',
+    Params: {
+      room_name: record.chatName,
+      content: text,
+      // 单聊没有独立的触发对象显示名 ⇒ 回落会话名；群聊保持目标成员显示名。
+      at_name: record.targetName !== '' ? record.targetName : record.chatName,
+    },
+    UserStartSource: 'OpenApi',
+  }
 }
 
 /** 组装回调请求体；`triggeredAtText` 用 zh-CN 的 24 小时制（只在 query 层格式化，不引 UI 依赖）。 */
@@ -196,15 +279,17 @@ function saveDispatchResult(file: string, triggerId: number, status: 'sent' | 'f
 }
 
 /**
- * 手动 / 扫描后投递一条触发记录的回调。
+ * 手动 / 扫描后投递一条触发记录（按任务的触发方式分支）。
  *
- * 只投「任务已完善 + 配置了回调地址」的记录；文本先过隐私闸（脱敏 + 审计）。
+ * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要有回调地址，
+ * 八爪鱼要有 FlowId + 已保存的 API Key。文本先过**同一个**隐私闸（feature 仍是
+ * `task_callback`，审计口径不因触发方式而变）；Webhook 才解码图片，八爪鱼不发图片。
  * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
  * @param decryptedDir - 解密数据根。
- * @param decodedDir - 图片解码缓存根。
+ * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。
  * @param triggerId - 触发记录 id。
  * @param deps - 解码 / 隐私闸 / fetch 注入。
- * @returns 投递结果（含 skipped 的三种可读原因）。
+ * @returns 投递结果（含 skipped 的几种可读原因）。
  */
 export async function dispatchTaskCallback(
   decryptedDir: string,
@@ -218,29 +303,41 @@ export async function dispatchTaskCallback(
   const file = taskDbPath(decryptedDir)
   let record: TaskTriggerRecord | undefined
   let task: TaskInfo | undefined
+  let apiKey = ''
   try {
     const target = readDispatchTarget(file, id)
     record = target.record
     task = target.task
+    apiKey = target.bazhuayuApiKey ?? ''
   } catch (e) {
     return { ok: false, status: 'skipped', error: '读取触发记录失败：' + taskErrorText(e) }
   }
   if (record === undefined) return { ok: false, status: 'skipped', error: '触发记录不存在' }
   if (task === undefined) return { ok: false, status: 'skipped', error: '任务不存在或已删除' }
-  if (task.status !== 'ready' || task.callbackUrl === '') {
+  if (task.status !== 'ready') return { ok: false, status: 'skipped', error: '任务未完善' }
+  if (task.triggerMethod === 'bazhuayu') {
+    if (task.bazhuayuFlowId === '' || apiKey === '') {
+      return { ok: false, status: 'skipped', error: '任务未完善或未配置八爪鱼 FlowId / API Key' }
+    }
+  } else if (task.callbackUrl === '') {
     return { ok: false, status: 'skipped', error: '任务未完善或未配置回调地址' }
   }
+  // 两种触发方式过同一个隐私闸：feature 不随方式变化（审计口径与用户告知保持一致）。
   const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
   const text = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
-  const images = await buildPayloadImages(record, decodedDir, deps.decodeImage)
-  const payload = buildCallbackPayload(record, task, text, images)
   // 直接取全局 `fetch`（而不是包一层箭头）：多包一层会在出网点台账里多出一个匿名调用点，
-  // 而本域刻意只登记 `postTaskCallback` 这一处出网。
+  // 而本域刻意只登记 `postTaskCallback` / `postBazhuayuTrigger` 两个出网函数。
   const send: RetryFetch = deps.fetchImpl ?? fetch
   let sent = false
   let failure = ''
   try {
-    await postTaskCallback(send, task.callbackUrl, payload)
+    if (task.triggerMethod === 'bazhuayu') {
+      // 八爪鱼接口没有图片参数：不解码图片，只发三个业务参数。
+      await postBazhuayuTrigger(send, apiKey, buildBazhuayuPayload(task, record, text))
+    } else {
+      const images = await buildPayloadImages(record, decodedDir, deps.decodeImage)
+      await postTaskCallback(send, task.callbackUrl, buildCallbackPayload(record, task, text, images))
+    }
     sent = true
   } catch (e) {
     failure = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX)
@@ -257,8 +354,11 @@ export async function dispatchTaskCallback(
 }
 
 /**
- * 投递一批 `pending` 记录（只取所属任务仍「已完善」且有回调地址的）。
+ * 投递一批 `pending` 记录。
  *
+ * 只取「所属任务仍已完善 + **触发方式对应的下游配置齐全**」的记录（与
+ * `dispatchTaskCallback` 的 skipped 判据同口径）：Webhook 看回调地址，八爪鱼看
+ * FlowId + 是否存过 API Key（Key 原文只在投递时读出，不在 SQL 里比较明文）。
  * 扫描器每拍「扫描 → 投递」；单条失败不连坐（错误只收集前 10 条）。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根。
@@ -277,9 +377,14 @@ export async function dispatchPendingTaskCallbacks(
   let ids: number[] = []
   try {
     ids = withWritableDb(taskDbPath(decryptedDir), (db) => {
+      // 老库在这里顺手补列：这条 SQL 引用了 2026-10-21 新增的三列。
+      ensureTaskSchema(db)
       const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
         JOIN task_info i ON i.id = t.task_id
-        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND i.callback_url <> ''
+        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND (
+          (i.trigger_method = 'webhook' AND i.callback_url <> '')
+          OR (i.trigger_method = 'bazhuayu' AND i.bazhuayu_flow_id <> '' AND i.bazhuayu_api_key <> '')
+        )
         ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(cap) as Array<{ id?: unknown }>
       return rows.map((row) => taskCellNum(row.id))
     })

@@ -89,6 +89,12 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     kind: 'none',
   },
   {
+    label: '任务触发（Webhook / 八爪鱼 RPA）',
+    text: '任务命中关键词后投递这一条触发记录，两种方式二选一：Webhook 发整条记录 JSON；八爪鱼 RPA 只发会话名/触发文本/触发对象三个参数（不发图片）。默认不配置不发送',
+    host: '你配置的 Webhook 地址 / api-rpa.bazhuayu.com',
+    kind: 'none',
+  },
+  {
     label: '头像图片',
     text: '本机未缓存时由后端按微信记录的头像地址代为取回（界面不直接请求）',
     host: 'wx.qlogo.cn、mmhead.c2c.wechat.com 等腾讯图片 CDN',

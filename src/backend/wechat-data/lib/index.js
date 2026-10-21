@@ -9624,7 +9624,8 @@ function scanOneTask(db, decryptedDir, task, lastScanSeq, selfUsername, result) 
       const match = matchTrigger(msg, task.keywords);
       if (match === null) continue;
       const images = cachedImages ??= collectTriggerImages(decryptedDir, task, selfUsername, task.photoLimit);
-      const callbackStatus = task.callbackUrl !== "" ? "pending" : "skipped";
+      const downstreamReady = task.triggerMethod === "bazhuayu" ? task.bazhuayuFlowId !== "" && task.bazhuayuApiKeySet : task.callbackUrl !== "";
+      const callbackStatus = downstreamReady ? "pending" : "skipped";
       const info = db.prepare(`INSERT OR IGNORE INTO task_triggers
         (task_id, task_name, chat_username, chat_name, target_username, target_name, keyword, text, images,
          message_local_id, message_sort_seq, triggered_at, callback_status)
@@ -9671,6 +9672,7 @@ var CALLBACK_ERROR_MAX = 500;
 var DISPATCH_MAX_ATTEMPTS = 2;
 var DISPATCH_TIMEOUT_MS = 15e3;
 var PENDING_DISPATCH_LIMIT = 10;
+var BAZHUAYU_TRIGGER_URL = "https://api-rpa.bazhuayu.com/api/bots/scheduling/start";
 function readDispatchTarget(file, triggerId) {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare("SELECT * FROM task_triggers WHERE id = ?").get(triggerId);
@@ -9678,7 +9680,11 @@ function readDispatchTarget(file, triggerId) {
     const record = rowToTrigger(triggerRow);
     const taskRow = db.prepare("SELECT * FROM task_info WHERE id = ?").get(record.taskId);
     if (taskRow === void 0) return { record };
-    return { record, task: rowToTask(taskRow) };
+    return {
+      record,
+      task: rowToTask(taskRow),
+      bazhuayuApiKey: taskCellStr(taskRow["bazhuayu_api_key"])
+    };
   });
 }
 function imageMimeOf2(file) {
@@ -9734,6 +9740,32 @@ async function postTaskCallback(doFetch, url, payload) {
   }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS });
   if (!res.ok) throw new Error("\u56DE\u8C03\u5931\u8D25\uFF1AHTTP " + String(res.status));
 }
+async function postBazhuayuTrigger(doFetch, apiKey, payload) {
+  const res = await fetchWithRetry(doFetch, BAZHUAYU_TRIGGER_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Api-Key": apiKey
+    },
+    body: JSON.stringify(payload)
+  }, { maxAttempts: DISPATCH_MAX_ATTEMPTS, timeoutMs: DISPATCH_TIMEOUT_MS });
+  if (!res.ok) throw new Error("\u516B\u722A\u9C7C\u89E6\u53D1\u5931\u8D25\uFF1AHTTP " + String(res.status));
+}
+function buildBazhuayuPayload(task, record, text) {
+  return {
+    FlowId: task.bazhuayuFlowId,
+    FlowContentRetrievalMode: "ByNewestContent",
+    SpecifiedPublicationVersion: "",
+    SpecifiedBot: "",
+    Params: {
+      room_name: record.chatName,
+      content: text,
+      // 单聊没有独立的触发对象显示名 ⇒ 回落会话名；群聊保持目标成员显示名。
+      at_name: record.targetName !== "" ? record.targetName : record.chatName
+    },
+    UserStartSource: "OpenApi"
+  };
+}
 function buildCallbackPayload(record, task, text, images) {
   return {
     taskId: task.id,
@@ -9761,27 +9793,37 @@ async function dispatchTaskCallback(decryptedDir, decodedDir, triggerId, deps2) 
   const file = taskDbPath(decryptedDir);
   let record;
   let task;
+  let apiKey = "";
   try {
     const target = readDispatchTarget(file, id);
     record = target.record;
     task = target.task;
+    apiKey = target.bazhuayuApiKey ?? "";
   } catch (e) {
     return { ok: false, status: "skipped", error: "\u8BFB\u53D6\u89E6\u53D1\u8BB0\u5F55\u5931\u8D25\uFF1A" + taskErrorText(e) };
   }
   if (record === void 0) return { ok: false, status: "skipped", error: "\u89E6\u53D1\u8BB0\u5F55\u4E0D\u5B58\u5728" };
   if (task === void 0) return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u4E0D\u5B58\u5728\u6216\u5DF2\u5220\u9664" };
-  if (task.status !== "ready" || task.callbackUrl === "") {
+  if (task.status !== "ready") return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584" };
+  if (task.triggerMethod === "bazhuayu") {
+    if (task.bazhuayuFlowId === "" || apiKey === "") {
+      return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584\u6216\u672A\u914D\u7F6E\u516B\u722A\u9C7C FlowId / API Key" };
+    }
+  } else if (task.callbackUrl === "") {
     return { ok: false, status: "skipped", error: "\u4EFB\u52A1\u672A\u5B8C\u5584\u6216\u672A\u914D\u7F6E\u56DE\u8C03\u5730\u5740" };
   }
   const gated = deps2.gate("task_callback", { sessions: 1, messages: 1 }, [record.text]);
   const text = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text;
-  const images = await buildPayloadImages(record, decodedDir, deps2.decodeImage);
-  const payload = buildCallbackPayload(record, task, text, images);
   const send = deps2.fetchImpl ?? fetch;
   let sent = false;
   let failure = "";
   try {
-    await postTaskCallback(send, task.callbackUrl, payload);
+    if (task.triggerMethod === "bazhuayu") {
+      await postBazhuayuTrigger(send, apiKey, buildBazhuayuPayload(task, record, text));
+    } else {
+      const images = await buildPayloadImages(record, decodedDir, deps2.decodeImage);
+      await postTaskCallback(send, task.callbackUrl, buildCallbackPayload(record, task, text, images));
+    }
     sent = true;
   } catch (e) {
     failure = taskErrorText(e).slice(0, CALLBACK_ERROR_MAX);
@@ -9799,9 +9841,13 @@ async function dispatchPendingTaskCallbacks(decryptedDir, decodedDir, deps2, lim
   let ids = [];
   try {
     ids = withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureTaskSchema(db);
       const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
         JOIN task_info i ON i.id = t.task_id
-        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND i.callback_url <> ''
+        WHERE t.callback_status = 'pending' AND i.status = 'ready' AND (
+          (i.trigger_method = 'webhook' AND i.callback_url <> '')
+          OR (i.trigger_method = 'bazhuayu' AND i.bazhuayu_flow_id <> '' AND i.bazhuayu_api_key <> '')
+        )
         ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(cap);
       return rows.map((row) => taskCellNum(row.id));
     });
@@ -9833,6 +9879,10 @@ var KEYWORD_MAX_LEN = 64;
 var KEYWORD_MAX = 20;
 var PHOTO_LIMIT_MAX = 9;
 var CALLBACK_URL_MAX = 2048;
+var BAZHUAYU_FLOW_ID_MAX = 128;
+var BAZHUAYU_FLOW_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+var BAZHUAYU_API_KEY_MAX = 512;
+var BAZHUAYU_API_KEY_FORBIDDEN = /[\s\u0000-\u001f\u007f]/;
 var TRIGGER_QUERY_DEFAULT = 100;
 var TRIGGER_QUERY_MAX = 200;
 var TRIGGER_SEARCH_MAX = 100;
@@ -9909,6 +9959,9 @@ function ensureTaskSchema(db) {
     keywords TEXT NOT NULL DEFAULT '[]',
     photo_limit INTEGER NOT NULL DEFAULT 0,
     mention_me_only INTEGER NOT NULL DEFAULT 0,
+    trigger_method TEXT NOT NULL DEFAULT 'webhook',
+    bazhuayu_flow_id TEXT NOT NULL DEFAULT '',
+    bazhuayu_api_key TEXT NOT NULL DEFAULT '',
     callback_url TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'incomplete',
     last_scan_seq INTEGER NOT NULL DEFAULT 0,
@@ -9936,15 +9989,24 @@ function ensureTaskSchema(db) {
     callback_error TEXT NOT NULL DEFAULT '',
     UNIQUE(task_id, message_local_id)
   )`);
-  const taskInfoCols = new Set(
-    db.prepare("PRAGMA table_info(task_info)").all().map((row) => taskCellStr(row["name"]))
-  );
-  if (!taskInfoCols.has("mention_me_only")) {
-    db.exec("ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0");
-  }
+  ensureTaskInfoColumns(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_task ON task_triggers(task_id, triggered_at DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_task_order ON task_triggers(task_id, triggered_at DESC, id DESC)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_triggers_order ON task_triggers(triggered_at DESC, id DESC)");
+}
+var TASK_INFO_COLUMN_MIGRATIONS = [
+  ["mention_me_only", "ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0"],
+  ["trigger_method", "ALTER TABLE task_info ADD COLUMN trigger_method TEXT NOT NULL DEFAULT 'webhook'"],
+  ["bazhuayu_flow_id", "ALTER TABLE task_info ADD COLUMN bazhuayu_flow_id TEXT NOT NULL DEFAULT ''"],
+  ["bazhuayu_api_key", "ALTER TABLE task_info ADD COLUMN bazhuayu_api_key TEXT NOT NULL DEFAULT ''"]
+];
+function ensureTaskInfoColumns(db) {
+  const columns = new Set(
+    db.prepare("PRAGMA table_info(task_info)").all().map((row) => taskCellStr(row["name"]))
+  );
+  for (const [name, sql] of TASK_INFO_COLUMN_MIGRATIONS) {
+    if (!columns.has(name)) db.exec(sql);
+  }
 }
 function parseStringArray(raw) {
   const text = taskCellStr(raw);
@@ -9995,7 +10057,10 @@ function rowToTask(r) {
     keywords: parseStringArray(r["keywords"]),
     photoLimit: taskCellNum(r["photo_limit"]),
     mentionMeOnly: taskCellNum(r["mention_me_only"]) === 1,
+    triggerMethod: taskCellStr(r["trigger_method"]) === "bazhuayu" ? "bazhuayu" : "webhook",
     callbackUrl: taskCellStr(r["callback_url"]),
+    bazhuayuFlowId: taskCellStr(r["bazhuayu_flow_id"]),
+    bazhuayuApiKeySet: taskCellStr(r["bazhuayu_api_key"]) !== "",
     status: taskCellStr(r["status"]) === "ready" ? "ready" : "incomplete",
     createdAt: taskCellNum(r["created_at"]),
     updatedAt: taskCellNum(r["updated_at"]),
@@ -10068,8 +10133,35 @@ function cleanCallbackUrl(raw) {
   }
   return { url: value };
 }
-function readyPreconditionError(callbackUrl, keywords, chatType, targetUsername) {
-  if (callbackUrl === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u56DE\u8C03\u5730\u5740";
+function cleanBazhuayuFlowId(raw) {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value === "") return { flowId: "" };
+  if (value.length > BAZHUAYU_FLOW_ID_MAX) {
+    return { flowId: "", error: "\u516B\u722A\u9C7C FlowId \u8FC7\u957F\uFF08\u6700\u591A " + String(BAZHUAYU_FLOW_ID_MAX) + " \u4E2A\u5B57\u7B26\uFF09" };
+  }
+  if (!BAZHUAYU_FLOW_ID_PATTERN.test(value)) {
+    return { flowId: "", error: "\u516B\u722A\u9C7C FlowId \u53EA\u80FD\u5305\u542B\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u548C\u77ED\u6A2A\u7EBF" };
+  }
+  return { flowId: value };
+}
+function cleanBazhuayuApiKey(raw) {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value === "") return { apiKey: "" };
+  if (value.length > BAZHUAYU_API_KEY_MAX) {
+    return { apiKey: "", error: "\u516B\u722A\u9C7C API Key \u8FC7\u957F\uFF08\u6700\u591A " + String(BAZHUAYU_API_KEY_MAX) + " \u4E2A\u5B57\u7B26\uFF09" };
+  }
+  if (BAZHUAYU_API_KEY_FORBIDDEN.test(value)) {
+    return { apiKey: "", error: "\u516B\u722A\u9C7C API Key \u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26" };
+  }
+  return { apiKey: value };
+}
+function readyPreconditionError(triggerMethod, callbackUrl, bazhuayuFlowId, bazhuayuApiKey, keywords, chatType, targetUsername) {
+  if (triggerMethod === "bazhuayu") {
+    if (bazhuayuFlowId === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u516B\u722A\u9C7C FlowId";
+    if (bazhuayuApiKey === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u516B\u722A\u9C7C API Key";
+  } else if (callbackUrl === "") {
+    return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u56DE\u8C03\u5730\u5740";
+  }
   if (keywords.length === 0) return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u586B\u5199\u89E6\u53D1\u5173\u952E\u8BCD";
   if (chatType === "group" && targetUsername === "") return "\u6807\u8BB0\u5DF2\u5B8C\u5584\u524D\u8BF7\u5148\u9009\u62E9\u7FA4\u5185\u76EE\u6807\u7528\u6237";
   return "";
@@ -10168,10 +10260,24 @@ function resolveTaskFields(input, existing) {
   const existingCallbackUrl = existing === void 0 ? "" : taskCellStr(existing["callback_url"]);
   const cleanedUrl = input?.callbackUrl === void 0 && existing !== void 0 ? { url: existingCallbackUrl } : cleanCallbackUrl(input?.callbackUrl);
   if (cleanedUrl.error !== void 0) return { error: cleanedUrl.error };
+  const existingMethod = existing === void 0 ? "" : taskCellStr(existing["trigger_method"]);
+  const triggerMethod = input?.triggerMethod === "bazhuayu" ? "bazhuayu" : input?.triggerMethod === "webhook" ? "webhook" : existingMethod === "bazhuayu" ? "bazhuayu" : "webhook";
+  const cleanedFlowId = input?.bazhuayuFlowId === void 0 && existing !== void 0 ? { flowId: taskCellStr(existing["bazhuayu_flow_id"]) } : cleanBazhuayuFlowId(input?.bazhuayuFlowId);
+  if (cleanedFlowId.error !== void 0) return { error: cleanedFlowId.error };
+  const cleanedApiKey = input?.bazhuayuApiKey === void 0 && existing !== void 0 ? { apiKey: taskCellStr(existing["bazhuayu_api_key"]) } : cleanBazhuayuApiKey(input?.bazhuayuApiKey);
+  if (cleanedApiKey.error !== void 0) return { error: cleanedApiKey.error };
   const existingStatus = existing === void 0 ? "incomplete" : taskCellStr(existing["status"]) === "ready" ? "ready" : "incomplete";
   const status = input?.status === "ready" ? "ready" : input?.status === "incomplete" ? "incomplete" : existingStatus;
   if (status === "ready") {
-    const precondition = readyPreconditionError(cleanedUrl.url, keywords, chatType, targetUsername);
+    const precondition = readyPreconditionError(
+      triggerMethod,
+      cleanedUrl.url,
+      cleanedFlowId.flowId,
+      cleanedApiKey.apiKey,
+      keywords,
+      chatType,
+      targetUsername
+    );
     if (precondition !== "") return { error: precondition };
   }
   const existingChatName = existing === void 0 ? "" : taskCellStr(existing["chat_name"]);
@@ -10195,7 +10301,10 @@ function resolveTaskFields(input, existing) {
       keywords,
       photoLimit,
       mentionMeOnly,
+      triggerMethod,
       callbackUrl: cleanedUrl.url,
+      bazhuayuFlowId: cleanedFlowId.flowId,
+      bazhuayuApiKey: cleanedApiKey.apiKey,
       status,
       name
     }
@@ -10219,7 +10328,8 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
         const watermark2 = fields.status === "ready" && (!existedReady || chatChanged) ? currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername) : taskCellNum(existing["last_scan_seq"]);
         db.prepare(`UPDATE task_info SET
           name = ?, chat_username = ?, chat_name = ?, chat_type = ?, target_username = ?, target_name = ?,
-          keywords = ?, photo_limit = ?, mention_me_only = ?, callback_url = ?, status = ?, last_scan_seq = ?, updated_at = ?
+          keywords = ?, photo_limit = ?, mention_me_only = ?, trigger_method = ?, callback_url = ?,
+          bazhuayu_flow_id = ?, bazhuayu_api_key = ?, status = ?, last_scan_seq = ?, updated_at = ?
           WHERE id = ?`).run(
           fields.name,
           fields.chatUsername,
@@ -10230,7 +10340,10 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
           JSON.stringify(fields.keywords),
           fields.photoLimit,
           fields.mentionMeOnly ? 1 : 0,
+          fields.triggerMethod,
           fields.callbackUrl,
+          fields.bazhuayuFlowId,
+          fields.bazhuayuApiKey,
           fields.status,
           watermark2,
           now,
@@ -10241,8 +10354,9 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
       const watermark = currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername);
       const info = db.prepare(`INSERT INTO task_info
         (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit,
-         mention_me_only, callback_url, status, last_scan_seq, created_at, updated_at, trigger_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+         mention_me_only, trigger_method, callback_url, bazhuayu_flow_id, bazhuayu_api_key,
+         status, last_scan_seq, created_at, updated_at, trigger_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
         fields.name,
         fields.chatUsername,
         fields.chatName,
@@ -10252,7 +10366,10 @@ function saveTaskInfo(decryptedDir, input, selfUsername = "") {
         JSON.stringify(fields.keywords),
         fields.photoLimit,
         fields.mentionMeOnly ? 1 : 0,
+        fields.triggerMethod,
         fields.callbackUrl,
+        fields.bazhuayuFlowId,
+        fields.bazhuayuApiKey,
         fields.status,
         watermark,
         now,
@@ -10277,10 +10394,14 @@ function setTaskInfoStatus(decryptedDir, id, status, selfUsername = "") {
       if (row === void 0) return { ok: false, error: "\u4EFB\u52A1\u4E0D\u5B58\u5728" };
       const existedReady = taskCellStr(row["status"]) === "ready";
       if (status === "ready") {
+        const savedMethod = taskCellStr(row["trigger_method"]) === "bazhuayu" ? "bazhuayu" : "webhook";
         const savedUrl = cleanCallbackUrl(row["callback_url"]);
         if (savedUrl.error !== void 0) return { ok: false, error: savedUrl.error };
         const precondition = readyPreconditionError(
+          savedMethod,
           savedUrl.url,
+          taskCellStr(row["bazhuayu_flow_id"]),
+          taskCellStr(row["bazhuayu_api_key"]),
           parseStringArray(row["keywords"]),
           taskCellStr(row["chat_type"]) === "group" ? "group" : "private",
           taskCellStr(row["target_username"])
@@ -10453,7 +10574,7 @@ function createTaskCenterRemotes(rc) {
     listTaskTriggers(options) {
       return listTaskTriggers(dirs().decrypted, options);
     },
-    /** 面板「立即检查」与后台定时器共用：扫描 + 顺手投递待发回调。 */
+    /** 面板「立即检查」与后台定时器共用：扫描 + 顺手投递待发记录。 */
     scanTaskTriggers() {
       return scanAndDispatch();
     },
@@ -46051,7 +46172,7 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
     this._taskScan = null;
     /** 扫描期间又来了请求：结束后补跑**一拍**（不是每个请求各跑一次）。 */
     this._taskScanQueued = false;
-    /** 正在跑的投递（与扫描分开单飞：回调 HTTP 再慢也不能卡住扫描）。 */
+    /** 正在跑的投递（与扫描分开单飞：投递 HTTP 再慢也不能卡住扫描）。 */
     this._taskDispatch = null;
     /** 投递期间又来了请求：结束后补跑一拍。 */
     this._taskDispatchQueued = false;
@@ -46107,10 +46228,10 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
    *
    * 为什么必须合并：同步节拍、兜底定时器、面板「立即检查」三处都会触发；不合并会出现
    * 两个并发扫描同时 `withWritableDb` 打开同一个任务库，把同一批消息记两遍（UNIQUE 只挡住
-   * 记录重复，但外部回调会被真的投递两次）。
+   * 记录重复，但外部下游会被真的投递两次）。
    *
    * 关键提速点：扫描与**投递**解耦 —— 记录落库后立刻广播 `task-center/updated`，然后
-   * 投递在后台单飞跑；回调地址慢/超时不会拖住下一拍扫描，面板也不会等 HTTP 才看到记录。
+   * 投递在后台单飞跑；下游 HTTP 慢/超时不会拖住下一拍扫描，面板也不会等 HTTP 才看到记录。
    * @returns 这一拍（或正在跑的那一拍）的扫描结果；`dispatched` 由手动入口另行合并。
    */
   scheduleTaskTriggerScan() {
@@ -46136,7 +46257,7 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
     return this._taskScan;
   }
   /**
-   * 单飞 + 合并的**回调投递**调度器。
+   * 单飞 + 合并的**投递**调度器。
    *
    * 与扫描分开：一次投递最多 10 条、每条 2 次尝试 / 15s 超时，最坏能跑上百秒；
    * 如果把它塞在扫描的 Promise 里（旧实现），这期间所有新消息的触发都会被堵住。

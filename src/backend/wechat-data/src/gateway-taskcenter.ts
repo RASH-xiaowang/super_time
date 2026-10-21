@@ -1,7 +1,7 @@
 /**
- * WechatDataGateway 方法面 · **任务信息 / 任务触发记录 / 回调投递**（2026-10-19）。
+ * WechatDataGateway 方法面 · **任务信息 / 任务触发记录 / 触发投递**（2026-10-19）。
  *
- * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 回调）
+ * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 投递）
  * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
  * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
  * 对外方法面逐名增加 9 个（`gateway-remote-surface.spec.ts` / 契约用例守）。
@@ -60,7 +60,8 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
    *
    * 校验失败返回**中文原因**而不是静默修正：会话必填、群聊必须选目标用户、关键词至少 1 个
    * （去重、每个 ≤64 字、最多 20 个）、`photoLimit` 夹 0..9、回调地址非空时必须是合法
-   * http/https；「已完善」还要求回调地址 + 关键词 + 群聊目标齐全。
+   * http/https；「已完善」要求关键词 + 群聊目标齐全，再加**当前触发方式**对应的一侧配置：
+   * webhook 要回调地址，bazhuayu 要 FlowId + API Key（缺省 = 保留旧 Key，空串 = 清空）。
    * @param options - 任务配置（`id` 缺省 = 新建）。
    * @returns TaskInfoMutationResult：`ok` + 任务 id / 状态；失败带 `error`。
    */
@@ -107,11 +108,12 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   /**
    * 标记任务「待完善 / 已完善」。
    *
-   * 只有「已完善」任务参与触发扫描与回调投递。由「待完善」变「已完善」时会把扫描水位
+   * 只有「已完善」任务参与触发扫描与投递（按各自触发方式）。由「待完善」变「已完善」时会把扫描水位
    * 重置为该会话当前最大 `sort_seq` —— 否则一启用就会把历史消息全部触发一遍。
    * @param options.id - 任务 id。
    * @param options.status - `incomplete`（待完善） / `ready`（已完善）。
-   * @returns TaskInfoMutationResult：`ok` + 落库后的状态；缺回调地址/关键词等前置条件时带 `error`。
+   * @returns TaskInfoMutationResult：`ok` + 落库后的状态；缺当前触发方式的下游配置
+   *   （webhook 回调地址 / bazhuayu FlowId + API Key）或关键词等前置条件时带 `error`。
    */
   @Remote('setTaskInfoStatus')
   setTaskInfoStatus(options: { id: number; status: TaskInfoStatus }): TaskInfoMutationResult {
@@ -121,7 +123,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   /**
    * 触发记录列表（triggered_at 倒序，最新在前）。
    * @param options.taskId - 只看某个任务（缺省 = 全部任务）。
-   * @param options.search - 在正文、任务名、会话/对象、关键词与回调错误里包含搜索；`%` / `_` 按普通字符处理。
+   * @param options.search - 在正文、任务名、会话/对象、关键词与投递错误里包含搜索；`%` / `_` 按普通字符处理。
    * @param options.limit - 最多返回多少条（夹 1..200，默认 100）。
    * @param options.cursor - 上一页返回的 `nextCursor`；缺省为第一页。
    * @returns TaskTriggerSnapshot：记录列表 + 真实总数 + 下一页游标；读不到库时 `readError` 非空。
@@ -135,7 +137,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
    * 立即扫描一次（面板「立即检查」/ 调试用；常驻扫描见 {@link scanTaskTriggersBackground}）。
    *
    * 只扫「已完善」任务；逐任务失败不连坐（`errors` 只保留前 10 条）。扫描完顺手投递
-   * 一批 `pending` 回调，投递成功数回填在 `dispatched`。
+   * 一批 `pending` 记录，投递成功数回填在 `dispatched`。
    * 与后台节拍走同一个单飞调度器：手动点击撞上后台扫描时复用同一拍，不会并发开库。
    * @returns TaskTriggerScanResult：参与任务数 / 检查消息数 / 新建记录数 / 投递成功数。
    */
@@ -153,10 +155,12 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   }
 
   /**
-   * 手动重投一条触发记录的回调（面板上对失败记录点「重新投递」）。
+   * 手动重投一条触发记录（面板上对失败记录点「重新投递」）。
    *
-   * 只投「任务已完善 + 配了回调地址」的记录；正文先过隐私闸（`task_callback`：脱敏 + 审计）。
-   * 图片逐张按需解码，单张失败只在请求体里带 `error`，不影响整条投递。
+   * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要回调地址，
+   * 八爪鱼要 FlowId + 已保存的 API Key。正文先过隐私闸（`task_callback`：脱敏 + 审计，
+   * 两种方式同一口径）；Webhook 才逐张解码图片（单张失败只在请求体里带 `error`），
+   * 八爪鱼方式不发图片。
    * @param options.triggerId - 触发记录 id。
    * @returns TaskCallbackDispatchResult：`ok` + `sent`/`failed`/`skipped`；失败带可读 `error`。
    */
@@ -184,7 +188,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   /** 扫描期间又来了请求：结束后补跑**一拍**（不是每个请求各跑一次）。 */
   protected _taskScanQueued = false
 
-  /** 正在跑的投递（与扫描分开单飞：回调 HTTP 再慢也不能卡住扫描）。 */
+  /** 正在跑的投递（与扫描分开单飞：投递 HTTP 再慢也不能卡住扫描）。 */
   protected _taskDispatch: Promise<TaskDispatchOutcome> | null = null
 
   /** 投递期间又来了请求：结束后补跑一拍。 */
@@ -195,10 +199,10 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
    *
    * 为什么必须合并：同步节拍、兜底定时器、面板「立即检查」三处都会触发；不合并会出现
    * 两个并发扫描同时 `withWritableDb` 打开同一个任务库，把同一批消息记两遍（UNIQUE 只挡住
-   * 记录重复，但外部回调会被真的投递两次）。
+   * 记录重复，但外部下游会被真的投递两次）。
    *
    * 关键提速点：扫描与**投递**解耦 —— 记录落库后立刻广播 `task-center/updated`，然后
-   * 投递在后台单飞跑；回调地址慢/超时不会拖住下一拍扫描，面板也不会等 HTTP 才看到记录。
+   * 投递在后台单飞跑；下游 HTTP 慢/超时不会拖住下一拍扫描，面板也不会等 HTTP 才看到记录。
    * @returns 这一拍（或正在跑的那一拍）的扫描结果；`dispatched` 由手动入口另行合并。
    */
   protected scheduleTaskTriggerScan(): Promise<TaskTriggerScanResult> {
@@ -213,7 +217,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
       scan = { ok: false, tasks: 0, scanned: 0, created: 0, dispatched: 0, error: errorText(e) }
     }
     if (scan.created > 0) this.emitTaskCenterUpdated(scan.created, 0)
-    // 投递不 await：先把扫描这一拍收干净，回调 HTTP 在后台单飞跑（慢请求不卡下一拍）。
+    // 投递不 await：先把扫描这一拍收干净，投递 HTTP 在后台单飞跑（慢请求不卡下一拍）。
     void this.scheduleTaskDispatch()
     this._taskScan = Promise.resolve(scan).finally(() => {
       this._taskScan = null
@@ -226,7 +230,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   }
 
   /**
-   * 单飞 + 合并的**回调投递**调度器。
+   * 单飞 + 合并的**投递**调度器。
    *
    * 与扫描分开：一次投递最多 10 条、每条 2 次尝试 / 15s 超时，最坏能跑上百秒；
    * 如果把它塞在扫描的 Promise 里（旧实现），这期间所有新消息的触发都会被堵住。

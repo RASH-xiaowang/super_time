@@ -2,15 +2,16 @@
  * 「任务信息 · 任务触发记录」双栏面板（2026-10-19）。
  *
  * ── 这一页在做什么 ──────────────────────────────────────────────────────
- * 左栏是用户建的**触发式任务**（会话 + 触发对象 + 关键词 + 照片数量 + Webhook 地址），
+ * 左栏是用户建的**触发式任务**（会话 + 触发对象 + 关键词 + 照片数量 + 触发方式配置），
  * 右栏是这些任务**命中关键词后留下的触发记录**；点记录看完整内容（触发时间 / 群聊 /
- * 对象 / 图片 / 文本），点任务把右栏筛到该任务，行内「编辑」展开配置表单。
+ * 对象 / 图片 / 文本），点任务把右栏筛到该任务，行内「编辑」打开**右侧抽屉**编辑配置。
  *
  * ── 分工（按 `docs/CONTRIBUTING.md` §6）────────────────────────────────
  * · 纯逻辑（文案/校验/过滤/选中项推导）在 `task-center.ts`（不 import React，有 spec）；
- * · 表单在 `task-center-edit-form.tsx`，记录弹窗在 `task-center-record-modal.tsx`；
+ * · 抽屉里的表单在 `task-center-edit-form.tsx`，记录弹窗在 `task-center-record-modal.tsx`；
  * · 本文件 = **数据容器**（`TaskCenterPanel`：取数、事件联动、写动作接线、选中一致性）
  *   + **纯展示视图**（`TaskCenterView`，SSR 冒烟直接渲染它，不依赖后端）。
+ *   编辑抽屉在 `TaskCenterView` 根部渲染一次（kit `Drawer`，Radix 右侧滑出）。
  *
  * ── 状态联动（四条通路，缺一条就会出现「左栏变了右栏没变」）─────────────
  *  ① 打开页签：`useFreshData` 打开即查（不预填缓存）；读失败才回退并标注；
@@ -22,8 +23,8 @@
  *  ④ 本面板内的动作（刷新 / 立即检查 / 保存 / 标记状态 / 删除 / 重投）：
  *     直接静默 `reloadSilent()` 两栏并原位替换快照，不依赖事件是否恰好被自己收到。
  *
- * 选中一致性（`nextSelectedTaskId` / `nextExpandedTaskId`）：任务列表刷新后若选中/展开的
- * 任务已不存在，立即回落到 null（右栏回「全部记录」、表单收起）并给一条可见提示 ——
+ * 选中一致性（`nextSelectedTaskId` / `nextExpandedTaskId`）：任务列表刷新后若选中/编辑的
+ * 任务已不存在，立即回落到 null（右栏回「全部记录」、编辑抽屉关闭）并给一条可见提示 ——
  * 不这么做的话右栏会一直空着，用户看不出是「没有记录」还是「选了一个已删除的任务」。
  *
  * @module TaskCenter
@@ -53,12 +54,14 @@ import { useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { useFreshData } from './use-fresh-data.ts'
 import {
   Button,
+  Drawer,
   PanelHeader,
   Toolbar,
 } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { TaskCenterRecordModal } from './task-center-record-modal.tsx'
+import { TaskEditForm } from './task-center-edit-form.tsx'
 import { TaskPane, TriggerPane } from './task-center-panes.tsx'
 import { useTaskCenterTriggers } from './use-task-center-triggers.ts'
 import {
@@ -81,8 +84,15 @@ const NO_TASKS: readonly TaskInfo[] = []
 export interface TaskCenterActions {
   /** 选中一个任务（null = 全部记录 / 解除筛选）。 */
   onSelectTask: (id: number | null) => void
-  /** 展开/收起某任务的行内编辑表单。 */
+  /**
+   * 打开/切换某任务的编辑抽屉（行内「编辑」调用）。
+   *
+   * 2026-10-21 起编辑入口是右侧抽屉：这里只设置 `expandedTaskId`（正在编辑的任务 id），
+   * **不会**改变右栏的任务筛选（那是点行身的语义）；关闭走 {@link onCloseEdit}。
+   */
   onToggleEdit: (id: number) => void
+  /** 关闭编辑抽屉（× / 遮罩 / Esc，以及任务被删后容器清理）。 */
+  onCloseEdit: () => void
   /** 打开一条触发记录的完整内容弹窗。 */
   onOpenRecord: (id: number) => void
   /** 关闭记录弹窗。 */
@@ -180,6 +190,14 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
   const counts = taskCounts(props.tasks)
   const triggersTotal = props.triggersTotal ?? props.triggers.length
   const selectedTask = props.tasks.find((t) => t.id === props.selectedTaskId) ?? null
+  /**
+   * 正在编辑的任务（右侧抽屉的数据源）。任务被删 / 刷新后不存在时解析为 null：
+   * 抽屉 `open={false}` 自动关闭（容器还会把 `expandedTaskId` 清成 null，见 `nextExpandedTaskId`），
+   * 不会留下一个指向已消失任务的空表单。
+   */
+  const editingTask = props.expandedTaskId === null
+    ? null
+    : (props.tasks.find((t) => t.id === props.expandedTaskId) ?? null)
   // 右栏**始终**按选中项过一遍：服务端已按 taskId 查过，这里兜住「切换瞬间两栏不同源」。
   const records = filterTriggersByTask(props.triggers, props.selectedTaskId)
   /** 首屏仍在查时也锁住刷新，避免重构后把两次回源叠在一起。 */
@@ -235,7 +253,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
     <div className={css.root}>
       <PanelHeader
         title="任务信息"
-        desc="命中关键词后记录触发内容并投递 Webhook；仅「已完善」的任务参与触发与投递"
+        desc="命中关键词后记录触发内容并投递（Webhook / 八爪鱼 RPA）；仅「已完善」的任务参与触发与投递"
         actions={(
           <>
             <Button
@@ -331,6 +349,31 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
           actions={actions}
         />
       </div>
+
+      {/* 编辑抽屉：整个视图只渲染这一处（在根部，任务行只负责打开）。
+          kit Drawer 走 Radix Dialog（右侧滑出、Esc/遮罩/× 关闭），宽度 ≈520。
+          `modal={false}`：抽屉里的「删除」会弹应用内确认框（`role="alertdialog"`），
+          而 ConfirmProvider 渲染在 `#root` 里 —— Radix 模态会把 `#root` 从可访问性树隐藏并
+          禁用指针事件，确认框就变成「看得见、读不到、点不了」。非模态仍保留三种关闭方式；
+          kit Drawer 同时带「确认框开着时不算点到外面」的守卫（见 `ui/kit-overlay.tsx`）。 */}
+      <Drawer
+        open={editingTask !== null}
+        onClose={actions.onCloseEdit}
+        title={editingTask !== null ? `编辑任务 · ${editingTask.name}` : '编辑任务'}
+        width={520}
+        modal={false}
+      >
+        {editingTask !== null && (
+          <TaskEditForm
+            key={editingTask.id}
+            task={editingTask}
+            onSave={(input) => actions.onSaveTask(editingTask, input)}
+            onSetStatus={(status) => actions.onSetStatus(editingTask.id, status)}
+            onDelete={() => actions.onDeleteTask(editingTask.id)}
+            onNotice={actions.onNotice}
+          />
+        )}
+      </Drawer>
 
       {props.openRecordId !== null && (
         <TaskCenterRecordModal
@@ -545,7 +588,9 @@ export function TaskCenterPanel(): React.JSX.Element {
 
   const actions: TaskCenterActions = {
     onSelectTask: (id) => { setSelectedTaskId(id) },
-    onToggleEdit: (id) => { setExpandedTaskId((cur) => (cur === id ? null : id)) },
+    // 行内「编辑」= 打开/切换到该任务的抽屉；只改编辑态，不动右栏筛选。
+    onToggleEdit: (id) => { setExpandedTaskId(id) },
+    onCloseEdit: () => { setExpandedTaskId(null) },
     onOpenRecord: (id) => { setOpenRecordId(id) },
     onCloseRecord: () => { setOpenRecordId(null) },
     onRefresh: handleRefresh,

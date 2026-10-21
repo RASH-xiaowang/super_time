@@ -21,6 +21,30 @@
 
 ## [Unreleased]
 
+### 任务信息（2026-10-21 用户要求「点击编辑后请在右边抽屉展开，然后触发方式增加以下方式」）
+
+- **任务编辑改为右侧抽屉**（2026-10-21）：任务行只留「编辑」按钮，点击后从右侧滑出抽屉
+  （kit `Drawer`，`role="dialog"`，标题「编辑任务 · <任务名>」），表单单列分区为
+  任务名 / 触发关键词 / 触发方式 / 照片数量 / 触发方式对应配置 / 仅匹配@我的文本 / 动作区；
+  关闭按钮、遮罩与 Esc 都能关闭，任务被删或刷新后不存在时抽屉自动关闭。行内展开表单移除，
+  SSR / E2E 仍按 `aria-label="编辑任务：<任务名>"` 定位。
+- **任务新增第二种触发方式「八爪鱼 RPA」**（2026-10-21）：每个任务在抽屉里二选一
+  `Webhook`（原有，**默认**）或 `八爪鱼 RPA`（新增）。八爪鱼方式需要填 FlowId 与 API Key；
+  任务命中关键词后，触发记录会 POST 到固定主机
+  `https://api-rpa.bazhuayu.com/api/bots/scheduling/start`（`X-Api-Key` 头），body 的
+  `Params` 只有 `room_name`（会话名）/ `content`（触发文本）/ `at_name`（触发对象显示名；
+  单聊任务没有单独的目标名时回落会话名），**不发图片**；触发文本与 Webhook 方式走同一个
+  隐私闸（功能名 `task_callback`）。
+  API Key 只存本机 `<数据根>\wechat_task_center.db`、不随任务列表返回（列表只回
+  `bazhuayuApiKeySet`）；切换触发方式不清空另一方式的配置；旧库缺列时按 `webhook` 归一，
+  **既有任务行为不变**。
+  - 隐私：新增内容出网点，`PRIVACY_VERSION` 由 22 升至 23、要求重新同意；
+    `docs/PRIVACY.md` 第四节 G3 与同意屏出网清单已逐条登记。
+  - 守卫：`outbound-site-coverage.spec.ts` 登记 `#postBazhuayuTrigger`（主机字面量
+    `api-rpa.bazhuayu.com`）、`privacy-statement.spec.ts`（版本/文档口径）、
+    `task-center-bazhuayu.spec.ts`（迁移/校验/投递）；两个 SSR 冒烟脚本
+    （`privacy-consent` / `task-center`）同步更新。
+
 ### 待归类
 
 - 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。
