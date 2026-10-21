@@ -3,8 +3,7 @@
  * FoldableBar 的媒体查询监听必须与组件生命周期成对：
  * 页面反复切走再切回时，未摘掉的 change 监听会一直持有组件闭包。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FoldableBar } from './kit-foldable.tsx'
@@ -35,6 +34,7 @@ let root: Root | null = null
 let host: HTMLElement
 
 beforeEach(() => {
+  ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   host = document.createElement('div')
   document.body.appendChild(host)
 })
