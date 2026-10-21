@@ -169,10 +169,21 @@ function createBackendSupervisor(deps) {
     if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
     else delete workerEnv[DEBUG_HANG_ENV];
 
+    // 仅「未打包 + 显式 env」才给 worker 开 inspector：用于 heap snapshot 归因
+    // （性能专项）。打包态一律不开，避免把调试端口带进发行版；只绑 127.0.0.1。
+    const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
+    const inspectArgv = !isPackaged && env.SUPERTIME_BACKEND_INSPECT === '1'
+      ? ['--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229')]
+      : undefined;
     const child = utilityProcess.fork(
       path.join(__dirname, 'wechat-worker.js'),
       [],
-      { serviceName: 'super-time-wechat-backend', stdio: 'pipe', env: workerEnv },
+      {
+        serviceName: 'super-time-wechat-backend',
+        stdio: 'pipe',
+        env: workerEnv,
+        ...(inspectArgv ? { execArgv: inspectArgv } : {}),
+      },
     );
     bootTrace('main:spawn-called');
     for (const [stream, level, target] of [

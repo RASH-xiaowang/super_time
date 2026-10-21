@@ -81,9 +81,15 @@ export class LogTail {
           const n = (line.match(re) ?? []).length
           if (n > 0) { this.totals[name] += n; delta.markers[name] = (delta.markers[name] ?? 0) + n }
         }
-        const mem = line.match(/\[mem\] rss=([\d.]+)(MB|GB) heapUsed=([\d.]+)(MB|GB)/)
+        const mem = line.match(/\[mem\] rss=([\d.]+)(MB|GB) heapUsed=([\d.]+)(MB|GB) heapTotal=([\d.]+)(MB|GB) external=([\d.]+)(MB|GB)(?: arrayBuffers=([\d.]+)(MB|GB))?/)
         if (mem) {
-          const sample = { rssMb: toMb(mem[1], mem[2]), heapUsedMb: toMb(mem[3], mem[4]) }
+          const sample = {
+            rssMb: toMb(mem[1], mem[2]),
+            heapUsedMb: toMb(mem[3], mem[4]),
+            heapTotalMb: toMb(mem[5], mem[6]),
+            externalMb: toMb(mem[7], mem[8]),
+          }
+          if (mem[9] !== undefined) sample.arrayBuffersMb = toMb(mem[9], mem[10])
           // 受控缓存占用（worker 哨兵拼在行尾的 `caches=label=当前/上限,…`）。
           const caches = line.match(/caches=(\S+)/)
           if (caches) sample.caches = caches[1]

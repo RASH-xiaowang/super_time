@@ -51,7 +51,7 @@ function harness(extra?: () => string): {
 } {
   const lines: Array<{ level: string; text: string }> = []
   let t = 0
-  const mem = { rss: 100 * 1024 * 1024, heapUsed: 50 * 1024 * 1024, heapTotal: 60 * 1024 * 1024, external: 1024 }
+  const mem = { rss: 100 * 1024 * 1024, heapUsed: 50 * 1024 * 1024, heapTotal: 60 * 1024 * 1024, external: 1024, arrayBuffers: 2 * 1024 * 1024 }
   let fn: (() => void) | null = null
   const start = (): { stop: () => void } => {
     const s = createMemSentinel({
@@ -86,6 +86,7 @@ describe('W3-1.2：内存哨兵', () => {
     expect(first.text).toContain('heapUsed=')
     expect(first.text).toContain('heapTotal=')
     expect(first.text).toContain('external=')
+    expect(first.text, 'arrayBuffers 是 Buffer 内存的主要读数（RSS 归因用）').toContain('arrayBuffers=')
     expect(first.text).toContain('limit=')
     expect(first.text, '读数要能看出「超没超、连续几次」').toMatch(/over=(yes|no) \(limit=.*, \d+\/\d+\)/)
   })

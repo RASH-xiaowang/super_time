@@ -82,6 +82,7 @@ function createMemSentinel(deps = {}) {
   const sample = () => {
     const m = memoryUsage();
     const rss = Number(m && m.rss) || 0;
+    const arrayBuffers = Number(m && m.arrayBuffers) || 0;
     const isOver = rss > rssLimit;
     if (isOver) over += 1;
     else { over = 0; warned = false; }
@@ -95,13 +96,14 @@ function createMemSentinel(deps = {}) {
     log('mem', [
       `[mem] rss=${fmtBytes(rss)} heapUsed=${fmtBytes(m && m.heapUsed)}`
       + ` heapTotal=${fmtBytes(m && m.heapTotal)} external=${fmtBytes(m && m.external)}`
+      + ` arrayBuffers=${fmtBytes(arrayBuffers)}`
       + ` over=${isOver ? 'yes' : 'no'} (limit=${fmtBytes(rssLimit)}, ${isOver ? over : 0}/${strikes})`
       + ` t=${new Date(at).toISOString()}`
       + (extraText === '' ? '' : ' ' + extraText),
     ]);
     // 连续 ${strikes} 次超限才告警；单次峰值往往就是一次性的全量年报，不值得叫。
     if (over >= strikes && !warned) { warned = true; log('mem-warn', [`[mem-warn] rss=${fmtBytes(rss)} 超限 ${over} 次连续（限 ${fmtBytes(rssLimit)}）—— 只告警，不重启`]); }
-    return { rss, heapUsed: Number(m && m.heapUsed) || 0, external: Number(m && m.external) || 0, over: isOver, at, extra: extraText };
+    return { rss, heapUsed: Number(m && m.heapUsed) || 0, external: Number(m && m.external) || 0, arrayBuffers, over: isOver, at, extra: extraText };
   };
 
   return {
