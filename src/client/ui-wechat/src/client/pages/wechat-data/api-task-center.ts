@@ -21,6 +21,7 @@ import type {
   TaskInfoStatus,
   TaskTriggerQuery,
   TaskTriggerScanResult,
+  TaskTriggerSecretRevealResult,
   TaskTriggerSnapshot,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import { remote, unwrap } from './api-core.ts'
@@ -39,6 +40,20 @@ export async function apiListTaskInfos(): Promise<TaskInfoSnapshot> {
  */
 export async function apiListRpaVendors(): Promise<RpaVendorCatalog> {
   return unwrap(await remote().listRpaVendors())
+}
+
+/**
+ * 回读某任务已保存的凭据原文（编辑抽屉「眼睛」用）。
+ *
+ * 只有一个任务、一次点击；**不要缓存**，也不要打印返回值。结果自带 `ok`：
+ * `ok=false` 时把 `error` 交给调用方显示（后端在远程通道/无效 id/无凭据时都会拒绝）。
+ * @param id - 任务 id。
+ * @returns 原文映射（键 = 描述符里的 secret 字段 key）与触发方式；失败只带 error。
+ */
+export async function apiRevealTaskTriggerSecret(id: number): Promise<TaskTriggerSecretRevealResult> {
+  // 与其它 Remote 方法一样：传输层包一层 RemoteResult，这里拆开拿到业务结果；
+  // 业务结果自身带 ok（任务不存在等是业务错误，不抛异常，交给眼睛控件显示）。
+  return unwrap(await remote().revealTaskTriggerSecret({ id }))
 }
 
 /** 触发记录（可按任务过滤；最新在前）。 */

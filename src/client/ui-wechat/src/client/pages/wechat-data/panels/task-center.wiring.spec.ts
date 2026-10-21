@@ -389,11 +389,40 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
   })
 
   it('凭据字段：密码框、永不回显、已配置占位、保存只带非空输入', () => {
-    expect(code, '凭据输入框不是 password').toContain('type="password"')
-    expect(code, '已配置凭据没有「已保存，留空保持不变」').toContain('已保存，留空保持不变')
+    const secretField = panelRead('task-center-secret-field.tsx')
+    const secretLogic = panelRead('task-center-secret.ts')
+    expect(secretField, '凭据控件没有切换 password/text').toContain('secretFieldType(props.revealed)')
+    expect(secretLogic, 'password 类型丢失').toContain("return revealed ? 'text' : 'password'")
+    expect(secretLogic, '已配置凭据没有「已保存，留空保持不变」').toContain('已保存，留空保持不变')
     expect(code, '凭据是否已配置没有读 triggerSecretSet').toContain('task.triggerSecretSet ?? {}')
     expect(code, '凭据输入没有走独立的 secretInputs').toContain('secretInputs')
     expect(logic, '保存入参没有「只带非空凭据」').toContain("if (typed !== '') secret[field.key] = typed")
+  })
+
+  it('凭据「眼睛」：api 包装 / 眼睛 aria / 回显清理都接线且不硬编码厂商', () => {
+    const apiCore = readText(join(DATA_DIR, 'api-core.ts'))
+    const apiTaskCenter = readText(join(DATA_DIR, 'api-task-center.ts'))
+    const secretField = panelRead('task-center-secret-field.tsx')
+    const secretLogic = panelRead('task-center-secret.ts')
+    expect(apiCore, 'WechatRemote 缺少 revealTaskTriggerSecret').toContain('revealTaskTriggerSecret(options: { id: number }): Promise<RemoteResult<TaskTriggerSecretRevealResult>>')
+    expect(apiTaskCenter, '缺少 reveal 包装函数').toContain('export async function apiRevealTaskTriggerSecret(id: number)')
+    expect(apiTaskCenter, 'reveal 包装没有拆 RemoteResult 信封').toContain('unwrap(await remote().revealTaskTriggerSecret({ id }))')
+    expect(apiTaskCenter, 'reveal 包装必须拆 RemoteResult 信封（另测业务结果 self-ok）').not.toContain('return remote().revealTaskTriggerSecret({ id })')
+    expect(code, '编辑表单没有接线 useSecretReveal').toContain('useSecretReveal({ taskId: task.id, onError: onNotice })')
+    expect(code, '编辑表单没有渲染 SecretField').toContain('<SecretField')
+    expect(code, '眼睛显示判定没有按已保存 secretSet').toContain('canRevealSecret(field, task.triggerSecretSet?.[field.key] === true, task.id)')
+    expect(code, '眼睛字段没有按描述符通用渲染（硬编码厂商）').not.toContain("field.key === 'apiKey'")
+    expect((code.match(/resetReveal\(\)/g) ?? []).length, '切换厂商/任务切换/保存成功都应清回显').toBeGreaterThanOrEqual(3)
+    expect(code, '切换厂商仍缓存凭据输入（明文残留）').toContain('vendorDraftsRef.current[current.triggerMethod] = { config: current.config }')
+    expect(code, '编辑表单打印了日志（可能泄漏凭据）').not.toMatch(/console\.(log|info|warn|debug)\(/)
+    expect(secretField, '眼睛按钮没有统一 aria helper').toContain('secretRevealButtonLabel(field, props.revealed)')
+    expect(secretField, '没有调用 reveal Remote').toContain('apiRevealTaskTriggerSecret(taskId)')
+    expect(secretField, '失败提示没有「查看失败：」').toContain('查看失败：')
+    expect(secretField, '隐藏没有清空输入框').toContain("apply('')")
+    expect(secretField, '打印了日志（凭据泄漏）').not.toMatch(/console\.(log|info|warn|debug)\(/)
+    expect(secretLogic, '纯逻辑文件 import 了 react').not.toMatch(/from 'react'/)
+    expect(secretLogic, '显示判定没有限制 secret 字段').toContain('field.secret === true')
+    expect(secretLogic, '眼睛显示没有限制有效任务 id').toContain('Number.isInteger(taskId) && taskId > 0')
   })
 
   it('厂商说明区：文档链接 / 参数核对 / 实验性警告 / risks / 版本复核', () => {
@@ -407,8 +436,10 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
     expect(code, '补充说明 notes 没有展示').toContain('descriptor.notes')
   })
 
-  it('切换厂商不清空已填（内存里按厂商暂存草稿）', () => {
-    expect(code, '切换厂商没有暂存当前草稿').toContain('vendorDraftsRef.current[current.triggerMethod] = { config: current.config, secretInputs: current.secretInputs }')
+  it('切换厂商保留配置但不保留凭据输入（避免明文残留），眼睛状态一并清掉', () => {
+    expect(code, '切换厂商没有暂存当前配置').toContain('vendorDraftsRef.current[current.triggerMethod] = { config: current.config }')
+    expect(code, '切换厂商仍把凭据输入放进缓存（明文残留）').not.toContain('secretInputs: current.secretInputs')
+    expect(code, '切换厂商后没有清空凭据输入').toContain('secretInputs: {}')
     expect(code, '新厂商没有用默认配置').toContain('defaultVendorConfig(nextDescriptor)')
     expect(logic, '目录里没有默认配置生成器').toContain('export function defaultVendorConfig(')
   })
@@ -533,6 +564,7 @@ describe('样式与 SSR 冒烟', () => {
       '添加附加参数',
       '附加参数 固定值 1',
       '附加参数 模板 2',
+      '查看 八爪鱼 API Key',
       '影刀 RPA',
       'AccessKeyId',
       'AccessKeySecret',

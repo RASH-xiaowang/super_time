@@ -11,12 +11,23 @@
  *
  * @vitest-environment node
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   RpaVendorDescriptor,
   TaskInfo,
   TaskTriggerRecord,
 } from '@deepseek-ai/dsh-wechat-data/types'
+
+/** `vi.mock` 工厂在导入阶段执行：reveal 桩必须放 hoisted。 */
+const revealMocks = vi.hoisted(() => ({ reveal: vi.fn() }))
+vi.mock('../api-core.ts', () => ({
+  remote: (): { revealTaskTriggerSecret: typeof revealMocks.reveal } => ({ revealTaskTriggerSecret: revealMocks.reveal }),
+  unwrap: (r: { ok: boolean; value?: unknown }): unknown => {
+    if (!r.ok) throw new Error('remote failed')
+    return r.value
+  },
+}))
+const { apiRevealTaskTriggerSecret } = await import('../api-task-center.ts')
 import {
   addKeywords,
   appendTriggerPage,
@@ -75,6 +86,12 @@ import {
   type TaskEditDraft,
 } from './task-center.ts'
 import { flattenConfigValues } from './task-center-param-list.ts'
+import {
+  canRevealSecret,
+  secretFieldPlaceholder,
+  secretFieldType,
+  secretRevealButtonLabel,
+} from './task-center-secret.ts'
 
 /** 造一个厂商描述符（只覆盖用到的字段，其余给稳定默认值）。 */
 function makeDescriptor(overrides: Partial<RpaVendorDescriptor> = {}): RpaVendorDescriptor {
@@ -861,5 +878,38 @@ describe('标题与作用域文案', () => {
   it('会话 → 目标；单聊同名时不重复', () => {
     expect(taskScopeLabel(makeTask({ chatName: '群名', targetName: '对象' }))).toBe('群名 → 对象')
     expect(taskScopeLabel(makeTask({ chatType: 'private', chatName: '张三', targetName: '张三' }))).toBe('张三')
+  })
+})
+
+describe('凭据「眼睛」：显示判定与 reveal 包装', () => {
+  const apiKeyField = vendorFields(BAZHUAYU).find((field) => field.key === 'apiKey')!
+
+  it('只有「已保存的 secret 字段 + 有效任务 id」才显示眼睛（新任务/非法 id 不显示）', () => {
+    expect(canRevealSecret(apiKeyField, true, 7)).toBe(true)
+    expect(canRevealSecret(apiKeyField, false, 7)).toBe(false)
+    expect(canRevealSecret(apiKeyField, true, 0)).toBe(false)
+    expect(canRevealSecret(apiKeyField, true, -1)).toBe(false)
+    expect(canRevealSecret(apiKeyField, true, Number.NaN)).toBe(false)
+    const plain = vendorFields(BAZHUAYU).find((field) => field.key === 'flowId')!
+    expect(canRevealSecret(plain, true, 7)).toBe(false)
+  })
+
+  it('眼睛 aria / type / placeholder 的显示口径', () => {
+    expect(secretRevealButtonLabel(apiKeyField, false)).toBe('查看 八爪鱼 API Key')
+    expect(secretRevealButtonLabel(apiKeyField, true)).toBe('隐藏 八爪鱼 API Key')
+    expect(secretFieldType(false)).toBe('password')
+    expect(secretFieldType(true)).toBe('text')
+    expect(secretFieldPlaceholder(apiKeyField, true, false)).toBe('已保存，留空保持不变')
+    expect(secretFieldPlaceholder(apiKeyField, false, false)).toBe('填写八爪鱼 API Key')
+    expect(secretFieldPlaceholder(apiKeyField, true, true)).toBe('')
+  })
+
+  it('reveal 包装：按 { id } 调用并原样透传结果（ok=false 不抛错）', async () => {
+    revealMocks.reveal.mockReset()
+    revealMocks.reveal.mockResolvedValueOnce({ ok: true, value: { ok: true, triggerMethod: 'bazhuayu', secrets: { apiKey: 'k-1' } } })
+    await expect(apiRevealTaskTriggerSecret(7)).resolves.toEqual({ ok: true, triggerMethod: 'bazhuayu', secrets: { apiKey: 'k-1' } })
+    expect(revealMocks.reveal).toHaveBeenCalledWith({ id: 7 })
+    revealMocks.reveal.mockResolvedValueOnce({ ok: true, value: { ok: false, error: '凭据不存在' } })
+    await expect(apiRevealTaskTriggerSecret(9)).resolves.toEqual({ ok: false, error: '凭据不存在' })
   })
 })

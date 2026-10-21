@@ -154,6 +154,7 @@ import type {
   TaskInfoStatus,
   TaskTriggerQuery,
   TaskTriggerScanResult,
+  TaskTriggerSecretRevealResult,
   TaskTriggerSnapshot,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
@@ -292,6 +293,13 @@ export interface WechatRemote {
   listTaskInfos(): Promise<RemoteResult<TaskInfoSnapshot>>
   /** 触发方式目录（内置 webhook + 已注册 RPA 厂商描述符；编辑抽屉据此渲染选择器与动态表单）。 */
   listRpaVendors(): Promise<RemoteResult<RpaVendorCatalog>>
+  /**
+   * 按需回读本机已保存的任务凭据原文（编辑抽屉「眼睛」用；桌面端本机通道专属）。
+   *
+   * 语义与其它 Remote 不同：结果对象自带 `ok`，不套 `RemoteResult` 信封；
+   * 手机/浏览器远程通道已在后端 LOCAL_ONLY 拒绝。凭据原文不写日志、不进列表快照。
+   */
+  revealTaskTriggerSecret(options: { id: number }): Promise<RemoteResult<TaskTriggerSecretRevealResult>>
   /** 新建 / 更新任务信息（id 缺省 = 新建；新建默认「待完善」）。 */
   saveTaskInfo(options: TaskInfoInput): Promise<RemoteResult<TaskInfoMutationResult>>
   /** 删除任务信息（触发记录保留）。 */

@@ -66,6 +66,7 @@ import css from './task-center.module.css'
 import triggerCss from './task-center-trigger.module.css'
 import { paramEntriesOf } from './task-center-param-list.ts'
 import { ParamListField } from './task-center-param-list-field.tsx'
+import { canRevealSecret, SecretField, useSecretReveal } from './task-center-secret-field.tsx'
 import kitCss from '../ui/kit.module.css'
 
 /** 表单的注入依赖：写动作由容器提供（本文件不 import api-*）。 */
@@ -187,6 +188,13 @@ interface VendorFormContext {
   secretSet: Record<string, boolean>
   /** 字段 key → 行内错误。 */
   errors: Record<string, string>
+  /** 凭据「眼睛」：回显状态与动作（只对已保存的 secret 字段）。 */
+  secretReveal: {
+    revealedKey: string | null
+    busyKey: string | null
+    canReveal: (field: RpaField) => boolean
+    onToggle: (field: RpaField) => void
+  }
   onConfigChange: (key: string, value: RpaConfigValue) => void
   onSecretChange: (key: string, value: string) => void
   registerRef: (key: string, el: HTMLElement | null) => void
@@ -316,24 +324,19 @@ function VendorFieldControl({ field, ctx }: { field: RpaField; ctx: VendorFormCo
     )
   }
   if (field.secret === true) {
-    const placeholder = ctx.secretSet[field.key] === true ? '已保存，留空保持不变' : `填写${field.example ?? field.label}`
     return (
-      <label className={`${css.field} ${triggerCss.vendorField}`}>
-        <span className={css.fieldLabel}>{field.label}</span>
-        <input
-          ref={register}
-          className={css.input}
-          type="password"
-          autoComplete="off"
-          value={ctx.secretInputs[field.key] ?? ''}
-          placeholder={placeholder}
-          aria-label={aria}
-          aria-invalid={error !== undefined}
-          onChange={(e) => { ctx.onSecretChange(field.key, e.target.value) }}
-        />
-        {help}
-        {errorNode}
-      </label>
+      <SecretField
+        field={field}
+        value={ctx.secretInputs[field.key] ?? ''}
+        configured={ctx.secretSet[field.key] === true}
+        showReveal={ctx.secretReveal.canReveal(field)}
+        revealed={ctx.secretReveal.revealedKey === field.key}
+        busy={ctx.secretReveal.busyKey === field.key}
+        error={error}
+        registerRef={register}
+        onChange={(value) => { ctx.onSecretChange(field.key, value) }}
+        onToggle={() => { ctx.secretReveal.onToggle(field) }}
+      />
     )
   }
   return (
@@ -559,7 +562,11 @@ function VendorFormBody({ descriptor, ctx, savedVersion }: {
 }
 
 /** 草稿状态 + 基础字段回调（从主表单拆出，控制单函数行数）。 */
-function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDescriptor[]): {
+function useTaskDraftState(
+  task: TaskInfo,
+  vendorCatalog: readonly RpaVendorDescriptor[],
+  resetReveal: () => void,
+): {
   draft: TaskEditDraft
   setDraft: React.Dispatch<React.SetStateAction<TaskEditDraft>>
   keywordInput: string
@@ -594,8 +601,8 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
   const selectRef = useRef<HTMLSelectElement | null>(null)
   /** 厂商字段 key → 输入框（校验失败时把焦点移过去；map 字段取第一行）。 */
   const fieldRefsRef = useRef<Record<string, HTMLElement | null>>({})
-  /** 切换厂商时暂存各厂商的草稿（config/secretInputs），切回来不丢已填。 */
-  const vendorDraftsRef = useRef<Record<string, { config: RpaTriggerConfig; secretInputs: RpaTriggerSecretInput }>>({})
+  /** 切换厂商时暂存各厂商的配置（**不缓存凭据输入**，避免明文残留内存），切回来不丢配置。 */
+  const vendorDraftsRef = useRef<Record<string, { config: RpaTriggerConfig }>>({})
   /** 目录加载完成后给当前厂商补一次默认值（首屏目录可能晚于表单到达）。 */
   const seededRef = useRef('')
   const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
@@ -609,7 +616,8 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
     setApiError(null)
     vendorDraftsRef.current = {}
     seededRef.current = ''
-  }, [task, vendorCatalog])
+    resetReveal()
+  }, [task, vendorCatalog, resetReveal])
 
   useEffect(() => {
     if (descriptor === null) return
@@ -685,11 +693,12 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
     setApiError(null)
   }, [])
 
-  /** 切换触发方式：当前厂商草稿留在内存，目标厂商用缓存/默认值。 */
+  /** 切换触发方式：当前厂商配置留在内存，目标厂商用缓存/默认值；**凭据输入不回显不缓存**。 */
   const changeTriggerMethod = useCallback((nextMethod: string): void => {
+    resetReveal()
     setDraft((current) => {
       if (current.triggerMethod === nextMethod) return current
-      vendorDraftsRef.current[current.triggerMethod] = { config: current.config, secretInputs: current.secretInputs }
+      vendorDraftsRef.current[current.triggerMethod] = { config: current.config }
       const nextDescriptor = findVendorDescriptor(vendorCatalog, nextMethod)
       const cached = vendorDraftsRef.current[nextMethod]
       const nextConfig = cached !== undefined
@@ -697,8 +706,7 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
         : nextDescriptor !== null
           ? defaultVendorConfig(nextDescriptor)
           : {}
-      const nextSecrets = cached !== undefined ? cached.secretInputs : {}
-      return { ...current, triggerMethod: nextMethod, config: nextConfig, secretInputs: nextSecrets }
+      return { ...current, triggerMethod: nextMethod, config: nextConfig, secretInputs: {} }
     })
     setErrors((e) => {
       const next: TaskDraftErrors = { ...e }
@@ -707,7 +715,7 @@ function useTaskDraftState(task: TaskInfo, vendorCatalog: readonly RpaVendorDesc
       return next
     })
     setApiError(null)
-  }, [vendorCatalog])
+  }, [resetReveal, vendorCatalog])
 
   const registerFieldRef = useCallback((key: string, el: HTMLElement | null): void => {
     fieldRefsRef.current[key] = el
@@ -755,8 +763,10 @@ function useTaskFormActions(options: {
   onSave: (input: TaskInfoInput) => Promise<TaskInfoMutationResult>
   onSetStatus: (status: TaskInfoStatus) => Promise<TaskInfoMutationResult>
   onNotice: (text: string) => void
+  /** 保存成功后清掉凭据回显状态（明文不残留在表单里）。 */
+  resetReveal: () => void
 }): { submit: (thenReady: boolean) => Promise<void>; markIncomplete: () => Promise<void> } {
-  const { task, vendorCatalog, draft, setDraft, setErrors, setApiError, setBusy, onSave, onSetStatus, onNotice } = options
+  const { task, vendorCatalog, draft, setDraft, setErrors, setApiError, setBusy, onSave, onSetStatus, onNotice, resetReveal } = options
   const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
 
   /** 校验失败时把焦点移到第一个出错控件（厂商字段优先，按描述符顺序）。 */
@@ -803,8 +813,9 @@ function useTaskFormActions(options: {
         setApiError(saved.error ?? '保存失败')
         return
       }
-      // 凭据已随这次保存落库（Remote 不回读原文）：清空输入框，避免下次保存把同一把凭据再覆盖一遍。
+      // 凭据已随这次保存落库（Remote 不回读原文）：清空输入框并退出回显，避免明文残留/重复覆盖。
       if (Object.keys(draft.secretInputs).length > 0) setDraft((d) => ({ ...d, secretInputs: {} }))
+      resetReveal()
       if (!thenReady) {
         onNotice('任务配置已保存')
         return
@@ -820,7 +831,7 @@ function useTaskFormActions(options: {
     } finally {
       setBusy(false)
     }
-  }, [draft, focusFirstError, onNotice, onSave, onSetStatus, setApiError, setBusy, setDraft, setErrors, task, vendorCatalog])
+  }, [draft, focusFirstError, onNotice, onSave, onSetStatus, resetReveal, setApiError, setBusy, setDraft, setErrors, task, vendorCatalog])
 
   /** 已完善 → 待完善（可逆）。 */
   const markIncomplete = useCallback(async (): Promise<void> => {
@@ -847,7 +858,8 @@ function useTaskFormActions(options: {
  */
 export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
   const { task, vendorCatalog, vendorCatalogError, vendorCatalogLoading, onSave, onSetStatus, onDelete, onNotice } = props
-  const state = useTaskDraftState(task, vendorCatalog)
+  const reveal = useSecretReveal({ taskId: task.id, onError: onNotice })
+  const state = useTaskDraftState(task, vendorCatalog, reveal.reset)
   const { draft, errors } = state
   const { submit, markIncomplete } = useTaskFormActions({
     task,
@@ -864,9 +876,21 @@ export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
     onSave,
     onSetStatus,
     onNotice,
+    resetReveal: reveal.reset,
   })
   const descriptor = findVendorDescriptor(vendorCatalog, draft.triggerMethod)
   const config = descriptor === null ? draft.config : withVendorDefaults(descriptor, draft.config)
+  const secretReveal: VendorFormContext['secretReveal'] = {
+    revealedKey: reveal.revealedKey,
+    busyKey: reveal.busyKey,
+    canReveal: (field) => canRevealSecret(field, task.triggerSecretSet?.[field.key] === true, task.id),
+    onToggle: (field) => {
+      // 同时只回显一个字段：切到另一个字段前先把上一个的明文清掉。
+      const previous = reveal.revealedKey
+      if (previous !== null && previous !== field.key) state.patchSecret(previous, '')
+      reveal.toggle(field, (value) => { state.patchSecret(field.key, value) })
+    },
+  }
   const ctx: VendorFormContext | null = descriptor === null
     ? null
     : {
@@ -875,6 +899,7 @@ export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
         secretInputs: draft.secretInputs,
         secretSet: task.triggerSecretSet ?? {},
         errors: errors.fields ?? {},
+        secretReveal,
         onConfigChange: state.patchConfig,
         onSecretChange: state.patchSecret,
         registerRef: state.registerFieldRef,

@@ -141,6 +141,9 @@ const LOCAL_ONLY_BY_FAMILY = {
     'verifyDatabaseKey', 'verifyImageKey', 'detectWechatAccounts',
     'listLlmModels', 'listLlmProviders', 'getKbModelConfig', 'setKbModelConfig',
     'setPrivacyState',
+    // 2026-10-21：任务编辑抽屉的「眼睛」按需回读本机已保存的触发凭据原文（如八爪鱼
+    // API Key）。A 类「会给出凭据」——只允许桌面端本机界面调用，手机/浏览器会话拒绝。
+    'revealTaskTriggerSecret',
     // 原图自动下载（实验）会向本机微信进程注入组件并改变其内存行为 —— 只允许桌面端触发，
     // 手机/浏览器态没有「本机微信进程」这个概念，不该有这个入口。
     'wechatImageAutoDownload',

@@ -13247,6 +13247,28 @@ function deleteTaskTriggers(decryptedDir, rawIds) {
   }
 }
 
+// src/backend/wechat-data/src/query/task-center-secret.ts
+function revealTaskTriggerSecret(decryptedDir, id) {
+  const taskId = taskCellNum(id);
+  if (taskId <= 0) return { ok: false, error: "\u4EFB\u52A1 id \u4E0D\u6B63\u786E" };
+  if (!storeExists(decryptedDir)) return { ok: false, error: "\u4EFB\u52A1\u4E0D\u5B58\u5728" };
+  try {
+    return withWritableDb(taskDbPath(decryptedDir), (db) => {
+      const row = db.prepare(
+        "SELECT trigger_method AS method, trigger_secret AS secret FROM task_info WHERE id = ?"
+      ).get(taskId);
+      if (row === void 0) return { ok: false, error: "\u4EFB\u52A1\u4E0D\u5B58\u5728" };
+      return {
+        ok: true,
+        triggerMethod: String(row["method"] ?? ""),
+        secrets: parseSecretJson(row["secret"])
+      };
+    });
+  } catch (e) {
+    return { ok: false, error: taskErrorText(e) };
+  }
+}
+
 // src/backend/wechat-data/src/remotes/task-center.ts
 function errorText5(e) {
   const msg = e?.message;
@@ -13291,6 +13313,13 @@ function createTaskCenterRemotes(rc) {
   return {
     listTaskInfos() {
       return listTaskInfos(dirs().decrypted);
+    },
+    /**
+     * 编辑抽屉「眼睛」：按需回读本机已保存凭据（桌面端本机调用；远程通道已拒绝）。
+     * 刻意不写操作留痕/控制台：凭据原文不应出现在任何日志里。
+     */
+    revealTaskTriggerSecret(options) {
+      return revealTaskTriggerSecret(dirs().decrypted, options?.id);
     },
     /** 厂商目录（触发方式选择器/动态表单的数据源）：可序列化描述符副本 + 注册表版本。 */
     listRpaVendors() {
@@ -48926,8 +48955,8 @@ function errorText17(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
-var _dispatchTaskCallback_dec, _scanTaskTriggers_dec, _listTaskTriggers_dec, _setTaskInfoStatus_dec, _deleteTaskTriggers_dec, _deleteTaskInfos_dec, _deleteTaskInfo_dec, _saveTaskInfo_dec, _listRpaVendors_dec, _listTaskInfos_dec, _a8, _init8;
-var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec = [Remote8("listTaskInfos")], _listRpaVendors_dec = [Remote8("listRpaVendors")], _saveTaskInfo_dec = [Remote8("saveTaskInfo")], _deleteTaskInfo_dec = [Remote8("deleteTaskInfo")], _deleteTaskInfos_dec = [Remote8("deleteTaskInfos")], _deleteTaskTriggers_dec = [Remote8("deleteTaskTriggers")], _setTaskInfoStatus_dec = [Remote8("setTaskInfoStatus")], _listTaskTriggers_dec = [Remote8("listTaskTriggers")], _scanTaskTriggers_dec = [Remote8("scanTaskTriggers")], _dispatchTaskCallback_dec = [Remote8("dispatchTaskCallback")], _a8) {
+var _dispatchTaskCallback_dec, _scanTaskTriggers_dec, _listTaskTriggers_dec, _setTaskInfoStatus_dec, _deleteTaskTriggers_dec, _deleteTaskInfos_dec, _deleteTaskInfo_dec, _saveTaskInfo_dec, _revealTaskTriggerSecret_dec, _listRpaVendors_dec, _listTaskInfos_dec, _a8, _init8;
+var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec = [Remote8("listTaskInfos")], _listRpaVendors_dec = [Remote8("listRpaVendors")], _revealTaskTriggerSecret_dec = [Remote8("revealTaskTriggerSecret")], _saveTaskInfo_dec = [Remote8("saveTaskInfo")], _deleteTaskInfo_dec = [Remote8("deleteTaskInfo")], _deleteTaskInfos_dec = [Remote8("deleteTaskInfos")], _deleteTaskTriggers_dec = [Remote8("deleteTaskTriggers")], _setTaskInfoStatus_dec = [Remote8("setTaskInfoStatus")], _listTaskTriggers_dec = [Remote8("listTaskTriggers")], _scanTaskTriggers_dec = [Remote8("scanTaskTriggers")], _dispatchTaskCallback_dec = [Remote8("dispatchTaskCallback")], _a8) {
   constructor() {
     super(...arguments);
     __runInitializers(_init8, 5, this);
@@ -48946,6 +48975,9 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
   }
   listRpaVendors() {
     return this.taskCenterRemotes().listRpaVendors();
+  }
+  revealTaskTriggerSecret(options) {
+    return this.taskCenterRemotes().revealTaskTriggerSecret(options);
   }
   saveTaskInfo(options) {
     return this.taskCenterRemotes().saveTaskInfo(options);
@@ -49085,6 +49117,7 @@ var GatewayTaskCenter = class extends (_a8 = GatewayLayaOps, _listTaskInfos_dec 
 _init8 = __decoratorStart(_a8);
 __decorateElement(_init8, 1, "listTaskInfos", _listTaskInfos_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "listRpaVendors", _listRpaVendors_dec, GatewayTaskCenter);
+__decorateElement(_init8, 1, "revealTaskTriggerSecret", _revealTaskTriggerSecret_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "saveTaskInfo", _saveTaskInfo_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "deleteTaskInfo", _deleteTaskInfo_dec, GatewayTaskCenter);
 __decorateElement(_init8, 1, "deleteTaskInfos", _deleteTaskInfos_dec, GatewayTaskCenter);

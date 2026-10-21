@@ -22,9 +22,9 @@
 | 字段校验与渲染 | `src/backend/wechat-data/src/query/rpa/template.ts` | `defaultConfigFor` / `validateVendorConfig` / `missingReadyFields` / `renderRequest` 等 |
 | 鉴权 | `src/backend/wechat-data/src/query/rpa/auth.ts` | bearer / header / token-exchange / custom（阿里云签名） |
 | 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
-| Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors`（`@Remote` 方法数 217 → 218） |
+| Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors` / `revealTaskTriggerSecret`（`@Remote` 方法数 217 → **219**） |
 
-> 隐私与文档口径：`PRIVACY_VERSION` 24、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
+> 隐私与文档口径：`PRIVACY_VERSION` 26、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
 > [`TASK-CENTER.md`](TASK-CENTER.md) §3.5/§6；出网台账登记 `query/rpa/dispatch.ts#sendRequest`。
 > 设计文档以下内容保留为**调研与设计依据**（不随实现状态更新而删除）。
 
@@ -73,7 +73,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 | 现状 | 本方案 |
 |---|---|
 | `TaskTriggerMethod = 'webhook' \| 'bazhuayu'`，`task-center-callback.ts` 里 `if (webhook) … else if (bazhuayu) …` | `triggerMethod: string`（内置 `webhook` + 注册表里的厂商 id）；派发走**一个**通用管道 |
-| `bazhuayu_flow_id` / `bazhuayu_api_key` 专用列 | 通用列 `trigger_config`（非敏感 JSON）+ `trigger_secret`（敏感 JSON，永不回读）+ `trigger_vendor_version` |
+| `bazhuayu_flow_id` / `bazhuayu_api_key` 专用列 | 通用列 `trigger_config`（非敏感 JSON）+ `trigger_secret`（敏感 JSON；默认不回读，桌面端本机可经 `revealTaskTriggerSecret` 按需回读）+ `trigger_vendor_version` |
 | 编辑抽屉里两段硬编码表单 | 描述符驱动的**动态表单**（字段/必填/示例/默认/分组都来自 descriptor） |
 | 隐私版本与出网点逐个人工登记 | 描述符必须声明 `hosts`/`contentOutbound`/`docs`，由守卫测试强制登记进 `PRIVACY.md` 与出网台账 |
 
@@ -422,7 +422,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 
 1. **声明式优先**：厂商差异用数据（描述符）表达；只有「阿里云 RPC 签名」「MCP 二次 JSON 解析」这类确实无法模板化的点，才在厂商文件里写钩子函数。
 2. **核心不认识任何具体厂商**：通用管道只依赖描述符；`if (vendor === 'xxx')` 不进核心。
-3. **凭据与配置分离**：`trigger_config`（可回读、非敏感）与 `trigger_secret`（永不回读）分开存；UI 只显示「已配置」布尔。
+3. **凭据与配置分离**：`trigger_config`（可回读、非敏感）与 `trigger_secret`（默认不返回，仅桌面端本机可按需回读）分开存；列表/触发记录只显示「已配置」布尔。
 4. **完成状态不靠猜**：每家声明 `completion.mode = callback | poll | none`；没有可靠回调的一律要轮询兜底。
 5. **隐私/安全可登记**：描述符必须声明 `hosts`（出网目的地）与 `contentOutbound`，守卫测试强制逐家登记进隐私声明与出网台账。
 6. **未知厂商不崩**：库里出现未注册/已停用的厂商 id → 该任务标记「触发方式不可用」，派发 skipped 并给可读原因，不参与自动重试。
@@ -432,7 +432,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 ```sql
 -- v24 迁移（在 task_info 上）
 ALTER TABLE task_info ADD COLUMN trigger_config TEXT NOT NULL DEFAULT '{}';       -- 非敏感配置 JSON
-ALTER TABLE task_info ADD COLUMN trigger_secret TEXT NOT NULL DEFAULT '{}';       -- 敏感配置 JSON（永不返回）
+ALTER TABLE task_info ADD COLUMN trigger_secret TEXT NOT NULL DEFAULT '{}';       -- 敏感配置 JSON（默认不返回；桌面端本机可按需回读）
 ALTER TABLE task_info ADD COLUMN trigger_vendor_version TEXT NOT NULL DEFAULT ''; -- 保存时 descriptor.version
 -- 兼容窗口保留 bazhuayu_flow_id / bazhuayu_api_key 两列；写入双写、读取回退，v25 删除
 ```
@@ -550,7 +550,7 @@ export interface RpaField {
   label: string
   type: 'text' | 'password' | 'number' | 'boolean' | 'select' | 'map' | 'paramList'
   required: boolean
-  secret?: boolean             // true → 存 trigger_secret，只回 configured 布尔
+  secret?: boolean             // true → 存 trigger_secret；默认只回 configured 布尔（桌面端本机可按需回读）
   example?: string             // UI placeholder（示例值）
   defaultValue?: unknown       // 新任务预填
   options?: Array<{ value: string; label: string }>
@@ -779,7 +779,7 @@ for (const adapter of RPA_VENDORS) {
 
 | 项 | 设计 |
 |---|---|
-| 凭据 | 存 `trigger_secret`（与现有八爪鱼 API Key 同口径：本机 DB，不返回）；UI 只回 `triggerSecretSet`；日志/错误信息脱敏 |
+| 凭据 | 存 `trigger_secret`（与现有八爪鱼 API Key 同口径：本机 DB）；**默认不返回**，列表 / 触发记录只回 `triggerSecretSet`；**桌面端本机**可按需回读原文（`revealTaskTriggerSecret`：远程 HTTP 通道 `LOCAL_ONLY` 拒绝、不写日志 / 不留痕、关闭抽屉即丢弃）；日志/错误信息脱敏（不含凭据） |
 | 出网目的地 | 描述符声明 `hosts`；通用管道校验 `url` 的 host 在允许清单内（固定域名或 `*.厂商域` 模板）；私有化自定义 base URL 需用户显式勾选「私有化地址」并受「禁止 localhost/私网」默认策略约束（与现有 Webhook 的 http/https 口径衔接） |
 | 隐私版本 | 新增厂商=新增内容出网点 → `PRIVACY_VERSION` +1 并重新同意；同意屏出网清单补「任务触发（Webhook / 你选择的 RPA 厂商）」，具体主机以 `docs/PRIVACY.md` G3 为准 |
 | 出网台账 | 通用管道只有一个 `fetch` 调用点；台账登记该点，并在 `why` 里说明「主机来自注册表描述符，逐家已登记隐私声明」；新增厂商触发 `outbound-site-coverage` 的注册表一致性守卫（描述符 hosts ⊆ 隐私文档） |

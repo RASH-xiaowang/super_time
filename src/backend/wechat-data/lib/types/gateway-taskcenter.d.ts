@@ -1,4 +1,4 @@
-import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from './types.ts';
+import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSecretRevealResult, TaskTriggerSnapshot } from './types.ts';
 import { createTaskCenterRemotes } from './remotes/task-center.ts';
 import { GatewayLayaOps } from './gateway-laya-ops.ts';
 /** 投递一拍的结果形状（与 `query/task-center-callback.ts` 的 `PendingDispatchResult` 相容）。 */
@@ -25,6 +25,18 @@ export declare abstract class GatewayTaskCenter extends GatewayLayaOps {
      * @returns RpaVendorCatalog：`items`（顺序即 UI 顺序）+ `registryVersion`。
      */
     listRpaVendors(): RpaVendorCatalog;
+    /**
+     * 编辑抽屉「眼睛」：按需回读某任务已保存的凭据原文（桌面端本机专用）。
+     *
+     * 默认所有列表/快照都只回「是否已配置」；本方法是**唯一**例外，只用于用户在本机点击
+     * 「眼睛」核对已保存的 API Key。HTTP 远程通道已把它列入 LOCAL_ONLY（手机/浏览器拿到也调
+     * 不到）；处理器不写日志、不落盘，界面拿到后只在当前抽屉内存里使用、关闭即丢弃。
+     * @param options.id - 任务 id。
+     * @returns 触发方式 + 凭据字段原文；任务不存在时 `ok=false` + 可读错误。
+     */
+    revealTaskTriggerSecret(options: {
+        id: number;
+    }): TaskTriggerSecretRevealResult;
     /**
      * 新建 / 更新任务配置（`options.id` 缺省 = 新建）。
      *

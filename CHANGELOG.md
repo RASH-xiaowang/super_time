@@ -112,6 +112,21 @@
     `docs/TASK-CENTER.md` §6.3/§6.4/§10/§12/§13 同步；出网台账/版本号不变
     （`docs:api:check` 仍 218）。
 
+### 任务信息：查看已保存凭据（眼睛，2026-10-21 v26）
+
+- **任务编辑抽屉的凭据字段可点「眼睛」查看已保存原文**（2026-10-21，用户直接要求）：
+  八爪鱼 API Key / 影刀 AccessKeySecret / UiPath PAT 等**所有 secret 字段**通用 —— 点击后调用
+  新 Remote `revealTaskTriggerSecret` 按需回读**本机** `trigger_secret` 里的原文并在输入框显示，
+  再点隐藏；未保存过的字段没有该按钮；关闭抽屉 / 切换触发方式 / 保存成功后立即清空明文。
+  - 安全边界：**仅桌面端本机**（HTTP 远程通道已列入 `LOCAL_ONLY`，手机 / 普通浏览器调用被拒绝）；
+    **不写日志、不做操作留痕**；任务列表 / 触发记录仍只回 `triggerSecretSet` 布尔、不含原文；
+    凭据仍只进厂商请求头、不参与参数、不发图片。
+  - 隐私：改变「凭据永不回读」口径，`PRIVACY_VERSION` 由 25 升至 **26**、要求重新同意；
+    `docs/PRIVACY.md` 生效版本/G3 凭据行、同意屏出网清单、`docs/TASK-CENTER.md`
+    §2/§3.2/§7/§10/§12/§13、`docs/RPA-VENDOR-TRIGGERS.md` 凭据边界已同步。
+  - API：新增 `@Remote('revealTaskTriggerSecret')`，方法面 **218 → 219**；`docs/API.md` 已重生成，
+    `docs:api:check` 219。
+
 ### 待归类
 
 - 下个版本的对外可见变更写在这里；发版时把它归档成 `## [x.y.z] - YYYY-MM-DD`。

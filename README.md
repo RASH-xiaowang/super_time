@@ -164,7 +164,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 162 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 163 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析

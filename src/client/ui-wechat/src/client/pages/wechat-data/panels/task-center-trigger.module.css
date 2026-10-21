@@ -209,6 +209,34 @@
   color: var(--nm-text-3);
 }
 
+/* ── 凭据字段「眼睛」：password 输入框 + 已保存时的查看/隐藏按钮 ─────────────────── */
+.secretRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secretRow > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.secretEye {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-2);
+  color: var(--nm-cyan-text);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+}
+
+.secretEye:disabled {
+  color: var(--nm-text-3);
+  cursor: wait;
+}
+
 /* ── 附加参数（paramList）：行卡片 + 顶部「第 N 项 / 删除」+ 参数名/来源两列 ───────── */
 .paramEmpty {
   font-size: var(--nm-fs-xs);

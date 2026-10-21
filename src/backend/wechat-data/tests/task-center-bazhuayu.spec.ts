@@ -28,6 +28,7 @@ import {
   scanTaskTriggers,
   setTaskInfoStatus,
 } from '../src/query/task-center.ts'
+import { revealTaskTriggerSecret } from '../src/query/task-center-secret.ts'
 import type { TaskDispatchDeps } from '../src/query/task-center.ts'
 import type { TaskInfoInput } from '../src/types.ts'
 
@@ -462,6 +463,35 @@ describe('老库迁移（旧专用列 → 通用列）', () => {
     expect(task?.triggerSecretSet).toEqual({ apiKey: true })
     expect(task?.bazhuayuFlowId).toBe(FLOW_ID)
     expect(task?.bazhuayuApiKeySet).toBe(true)
+  })
+})
+
+describe('编辑抽屉「眼睛」：按需回读已保存凭据', () => {
+  it('revealTaskTriggerSecret 返回原文；列表/记录快照仍不含原文；无效 id 报错', () => {
+    const created = saveTaskInfo(decrypted, bazhuayuInput())
+    expect(created.ok).toBe(true)
+    const id = listTaskInfos(decrypted).items[0]?.id ?? 0
+    expect(id).toBeGreaterThan(0)
+
+    const revealed = revealTaskTriggerSecret(decrypted, id)
+    expect(revealed).toEqual({ ok: true, triggerMethod: 'bazhuayu', secrets: { apiKey: API_KEY } })
+    // 回读入口不改变列表/记录/操作留痕的边界：快照里仍只有「是否已配置」。
+    expect(JSON.stringify(listTaskInfos(decrypted))).not.toContain(API_KEY)
+    expect(JSON.stringify(listTaskTriggers(decrypted))).not.toContain(API_KEY)
+
+    expect(revealTaskTriggerSecret(decrypted, 0).ok).toBe(false)
+    expect(revealTaskTriggerSecret(decrypted, 999999)).toEqual({ ok: false, error: '任务不存在' })
+  })
+
+  it('没有保存凭据时回空对象（界面据此不显示眼睛/或提示未配置）', () => {
+    const created = saveTaskInfo(decrypted, bazhuayuInput())
+    expect(created.ok).toBe(true)
+    const id = listTaskInfos(decrypted).items[0]?.id ?? 0
+    withTaskDb((db) => {
+      db.prepare("UPDATE task_info SET trigger_secret = '{}' WHERE id = ?").run(id)
+    })
+    const revealed = revealTaskTriggerSecret(decrypted, id)
+    expect(revealed).toEqual({ ok: true, triggerMethod: 'bazhuayu', secrets: {} })
   })
 })
 

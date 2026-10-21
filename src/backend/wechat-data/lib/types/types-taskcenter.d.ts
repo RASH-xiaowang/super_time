@@ -256,6 +256,20 @@ export interface TaskCallbackDispatchResult {
     /** 厂商侧任务/运行 id（成功投递时尽量带上，便于到厂商控制台核对）。 */
     externalTaskId?: string;
 }
+/**
+ * 编辑抽屉「眼睛」按需回读的已保存凭据（2026-10-21）。
+ *
+ * 安全边界：只允许**桌面端本机界面**调用（HTTP 远程通道已列入 LOCAL_ONLY）；返回值
+ * 绝不进任务列表/触发记录/日志，调用方拿到后只在当前抽屉内存里使用、关闭即丢弃。
+ */
+export interface TaskTriggerSecretRevealResult {
+    ok: boolean;
+    /** 任务的触发方式 id；任务不存在时省略。 */
+    triggerMethod?: string;
+    /** 凭据字段 → 本机保存的原文；没有凭据的字段不出现。 */
+    secrets?: Record<string, string>;
+    error?: string;
+}
 /** 回调请求体（后端按此形状 POST JSON；不持久化，只发出去）。 */
 export interface TaskCallbackPayload {
     taskId: number;

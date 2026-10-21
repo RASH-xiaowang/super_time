@@ -50,7 +50,7 @@ Webhook，其余为注册表里的 RPA 厂商，见 §3.5/§6）：内置 Webhoo
 | 厂商描述符 | 一家厂商的声明式描述：配置字段、鉴权、参数映射、请求模板、响应解析、完成能力、出网主机白名单、来源与风险 | `RpaVendorDescriptor` |
 | 注册表 | 显式 import 各厂商适配器并按 UI 顺序排列的数组；派发时按 `triggerMethod` 查表，未知/下线 → skipped | `query/rpa/registry.ts` |
 | 触发配置 | 非敏感配置 JSON（URL / FlowId / ReleaseKey / 参数映射…），存在 `task_info.trigger_config`，随任务列表返回 | `TaskInfo.triggerConfig` |
-| 触发凭据 | 敏感配置 JSON（API Key / AccessKey / PAT / 令牌…），存在 `task_info.trigger_secret`，**只回 `triggerSecretSet` 布尔**，永不回读原文 | `TaskInfo.triggerSecretSet` |
+| 触发凭据 | 敏感配置 JSON（API Key / AccessKey / PAT / 令牌…），存在 `task_info.trigger_secret`；任务列表 / 触发记录只回 `triggerSecretSet` 布尔；**桌面端本机可在编辑抽屉点眼睛按需回读原文**（`revealTaskTriggerSecret`，见 §3.2/§7） | `TaskInfo.triggerSecretSet` |
 | 内置 Webhook | 触发方式之一：把一条触发记录以 JSON POST 到该任务配置的地址（含图片） | `query/rpa/vendors/webhook.ts` |
 | 内置八爪鱼 RPA | 触发方式之一（v23 新增，v24 起为「内置厂商之一」）：POST 到固定主机 `api-rpa.bazhuayu.com` 的 `/api/v1/bots/scheduling/start`（v1.3.0 修正），用任务里配的 FlowId + API Key（`X-API-Key`）；**v1.2.0 起没有内置三参数，参数全部由「附加参数」显式配置（默认 `params` 为空）**，**不发图片** | `query/rpa/vendors/bazhuayu.ts` |
 | 通用派发管道 | 与厂商无关的「校验 → 隐私闸 → 渲染 → 鉴权 → 发送 → 解析 → 落状态」；本域**唯一**出网函数 `sendRequest` 在 `query/rpa/dispatch.ts` | `query/rpa/dispatch.ts` |
@@ -151,8 +151,13 @@ SSR 与 E2E 选择器依赖它。会话与触发对象在这一版不提供换�
 
 - 分三组：secret / 账号类字段 →「账号与鉴权」；流程与参数映射字段 →「流程与参数」；
   `advanced` 字段 →「高级」（默认折叠，如私有化实例地址、回调地址）。
-- 控件按 `type`：text / number / select / boolean；`secret` 用密码框且**永不回显**，已配置时
-  placeholder 为「已保存，留空保持不变」（界面只从 `triggerSecretSet` 知道「配置过」）；
+- 控件按 `type`：text / number / select / boolean；`secret` 用密码框，已配置时
+  placeholder 为「已保存，留空保持不变」（列表只从 `triggerSecretSet` 知道「配置过」）；
+  **眼睛（2026-10-21 v26）**：已配置的 secret 字段右侧有「👁 查看」按钮 —— 点击调用
+  `revealTaskTriggerSecret` **按需**取回**本机**保存的原文并在输入框里显示，按钮变「隐藏」，
+  再点即恢复密码框；**未保存过**的字段没有该按钮（无原文可看）。关闭抽屉 / 切换触发方式 /
+  保存成功后立即清空已显示的明文。该按钮**只对桌面端本机开放**：手机 / 普通浏览器会话的
+  HTTP 远程通道已把该方法列入 `LOCAL_ONLY`，调用会被拒绝（界面对这些入口不显示按钮或显示禁用态）。
   `map` 字段（其它厂商，如影刀）渲染 3 个输入（会话名 / 触发文本 / 触发对象，默认 key 来自
   `descriptor.mapping.targets`，标签见 `target.label`）；**八爪鱼 v1.2.0 起没有 `map` 字段**，
   只有下面的「附加参数」。
@@ -545,9 +550,12 @@ v24（2026-10-21，多厂商）新增四列：
   `source` 为 §6.3.2 的 11 种值来源之一；非敏感，随任务列表返回；上限由描述符
   `maxItems` 决定，八爪鱼 = 20，通用缺省 50；
 - `trigger_secret TEXT NOT NULL DEFAULT '{}'`：敏感配置 JSON（键 = secret 字段 key）。
-  **任何公开快照都不返回原文**：`TaskInfo` 只回 `triggerSecretSet`（键 → 是否已配置），
-  列表与编辑表单都拿不到凭据本身，投递时由后端读出使用。凭据以明文存在本机 SQLite 里，
-  保护方式与任务库其它内容一致（数据根与目录权限），没有额外加密；
+  **任何公开快照都不返回原文**：`TaskInfo` / 任务列表 / 触发记录只回 `triggerSecretSet`
+  （键 → 是否已配置），投递时由后端读出使用；**唯一**的原文回读入口是
+  `revealTaskTriggerSecret`（桌面端本机编辑抽屉「眼睛」，§3.2）：按任务 id 现读本机库、
+  远程 HTTP 通道列入 `LOCAL_ONLY` 拒绝、**不写日志 / 不做操作留痕**、返回结果只交给当前界面、
+  关闭抽屉即丢弃。凭据以明文存在本机 SQLite 里，保护方式与任务库其它内容一致
+  （数据根与目录权限），没有额外加密；
 - `trigger_vendor_version TEXT NOT NULL DEFAULT ''`：保存时的 `descriptor.version`；与当前
   注册表不一致时 UI 提示「厂商参数已更新，请复核」；
 - `task_triggers.external_task_id TEXT NOT NULL DEFAULT ''`：厂商返回的任务 id（供后续轮询；v1 只落库）。
@@ -680,10 +688,16 @@ payload 变成第二份数据源。
     失败原因展示 **HTTP 状态 + 厂商 `description`**（不回显本地凭据），便于自查；
     接口**无幂等键、不自动重试**，网络超时后重投可能重复启动流程。厂商若改路径 / 字段，
     需再核对 [`RPA-VENDOR-TRIGGERS.md`](RPA-VENDOR-TRIGGERS.md) §3.1 的官方链接。
+19. **桌面端本机可以看到凭据明文（2026-10-21 v26 眼睛）。** 能操作这台机器的人（或能拿到
+    已解锁桌面会话的人）可以在任务编辑抽屉里点「眼睛」看到已保存的 API Key / AccessKey /
+    PAT 原文 —— 门槛比此前「只能读任务库文件」更低。远程 HTTP 通道（手机 / 普通浏览器）已把
+    `revealTaskTriggerSecret` 列入 `LOCAL_ONLY` 并被拒绝；回读不写日志、不做操作留痕、
+    关闭抽屉即丢弃明文，但**没有二次确认或系统级认证**。要更换凭据仍只能覆盖保存；把任务
+    「标记待完善」或删除**不会**删除 `trigger_secret` 里的旧值。
 
 ### 10.5 文档漂移
 
-19. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
+20. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
     精确重试白名单修正；[`UI-WECHAT-REDESIGN-INVENTORY.md`](UI-WECHAT-REDESIGN-INVENTORY.md) 的 DL-09 行
     也标明创建弹窗没有 Webhook 地址字段。
 
@@ -719,6 +733,8 @@ payload 变成第二份数据源。
 - [ ] 抽屉标题是「编辑任务 · <任务名>」，表单保留 `aria-label="编辑任务：<任务名>"`。
 - [ ] 「触发方式」选择器由后端 `listRpaVendors` 目录渲染（内置 Webhook / 八爪鱼 + 影刀 / UiPath / 阿里云 / 来也 / 实在），默认 Webhook；任务当前厂商不在目录时显示「触发方式不可用」并禁止保存。
 - [ ] 切到某厂商后按描述符渲染动态字段：secret 用密码框（已配置时「已保存，留空保持不变」）、map 渲染会话名 / 触发文本 / 触发对象三个输入、select / number / boolean 正常；`advanced` 字段收进「高级」折叠。
+- [ ] 已配置的 secret 字段显示「👁 查看」：点击显示**本机**保存的原文、按钮变「隐藏」，再点恢复密码框；未保存过的字段没有该按钮；关闭抽屉 / 切换触发方式 / 保存成功后明文立即清空。
+- [ ] 手机 / 普通浏览器会话不显示该按钮（或禁用）；该会话通过 HTTP 远程通道调用 `revealTaskTriggerSecret` 被拒绝。
 - [ ] 八爪鱼只有「附加参数」一个参数入口（v1.2.0 无内置三参数）：默认列表为空、请求体 `params` 为 `{}`；支持添加 / 删除（顺序即请求参数顺序），最多 20 条（满时禁用添加），值来源下拉 11 种、按来源显示固定值或自定义模板输入；模板框只允许白名单字段（非法字段保存时行内报错、定位到该行）。
 - [ ] 厂商说明区显示厂商名、状态徽标（阿里云 / 来也 / 实在 → ⚠ 实验性）、官方文档链接、「参数核对 2026-10-21」与风险前 2 条。
 - [ ] 缺当前方式的必填项 / 必填凭据时「标记已完善」整单拒绝，报「标记已完善前需补全：…」并把焦点移到第一个缺项字段。
@@ -759,6 +775,7 @@ payload 变成第二份数据源。
 - [ ] 八爪鱼附加参数（`extraParams`）校验：参数名 ≤64 字、同列表唯一；`source` 必须在描述符 `paramSources` 内；`fixed` 必须有固定值 ≤2048 字；`template` 只允许 `${record.<白名单>}` / `${task.name}` / `${task.id}` 且 ≤512 字；条数 ≤20；空列表合法。
 - [ ] 八爪鱼 v1.3.0 协议：假 fetch 收到的 URL 为 `https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`、头含 **`X-API-Key`**、body 为 **camelCase**（`flowId` / `flowContentRetrievalMode: 'ByNewestContent'` / `params`）；未配置附加参数时 `params === {}`；**不再发送** `SpecifiedPublicationVersion` / `SpecifiedBot` / `UserStartSource`；11 种 `source` 各自解析正确并按配置顺序进入 `params`；凭据不出现在 body 里；HTTP 200 + `{flowId, flowProcessNo}` ⇒ `sent` 且 `external_task_id = flowProcessNo`；400 + `{code,description}` ⇒ `failed` 且错误文案含 HTTP 状态与厂商 `description`（不含本地凭据）；**只发 1 次（不自动重试）**；**不含图片**。
 - [ ] 列表返回值与 `JSON.stringify` 里不含任何厂商凭据原文（`triggerSecretSet` 只回布尔）。
+- [ ] `revealTaskTriggerSecret`：返回 `{ ok, triggerMethod, secrets }`（没有凭据的字段不出现、任务不存在/未配置给可读错误）；**仅桌面端本机可调**——`http-remote-policy.js` 的 `LOCAL_ONLY` 命中远程/手机通道并拒绝；**不写操作日志 / 不做操作留痕**；列表与触发记录仍只回 `triggerSecretSet`。
 - [ ] `listRpaVendors` 返回目录（`items` + `registryVersion`），不含凭据/钩子；未知 id 不崩。
 - [ ] 投递成功写 `sent`（厂商返回 id 时落 `external_task_id`），失败写 `failed` + 错误；命中时配置缺失 ⇒ 记录 `skipped`，后台批量投递只捞 `pending`。
 - [ ] 投递时任务已退回待完善 / 已删除 ⇒ 返回 `skipped`，不改变记录已有状态。
@@ -803,9 +820,10 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 | 鉴权 | [`../src/backend/wechat-data/src/query/rpa/auth.ts`](../src/backend/wechat-data/src/query/rpa/auth.ts) | bearer / header / token-exchange / custom（阿里云 HMAC-RPC 签名）、token 缓存 |
 | 厂商适配器 | [`../src/backend/wechat-data/src/query/rpa/vendors/`](../src/backend/wechat-data/src/query/rpa/vendors/) | `webhook` `bazhuayu` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件（描述符 + 可选钩子）；**八爪鱼 v1.2.0** = 无内置参数（`targets: []`），参数全走 `extrasField='extraParams'`；**v1.3.0** 协议修正（`/api/v1` + `X-API-Key` + camelCase body + `flowProcessNo`） |
 | 存储/CRUD | [`../src/backend/wechat-data/src/query/task-center.ts`](../src/backend/wechat-data/src/query/task-center.ts) | 建库、v24 迁移/双写、校验、水位、任务读写、记录查询 |
+| 凭据按需回读 | [`../src/backend/wechat-data/src/query/task-center-secret.ts`](../src/backend/wechat-data/src/query/task-center-secret.ts) | 桌面端「眼睛」唯一原文回读入口 `revealTaskTriggerSecret`（不写日志、现读现弃；HTTP 远程通道 LOCAL_ONLY 拒绝） |
 | 扫描 | [`../src/backend/wechat-data/src/query/task-center-scan.ts`](../src/backend/wechat-data/src/query/task-center-scan.ts) | 新消息过滤、关键词匹配、图片引用、水位推进 |
 | 投递编排 | [`../src/backend/wechat-data/src/query/task-center-callback.ts`](../src/backend/wechat-data/src/query/task-center-callback.ts) | 读记录/任务/凭据、隐私闸、调 `dispatchRpaRecord`、状态与 `external_task_id` 回写、批量 pending |
-| Remote 壳 | [`../src/backend/wechat-data/src/gateway-taskcenter.ts`](../src/backend/wechat-data/src/gateway-taskcenter.ts) | 10 个 `@Remote`（含 `listRpaVendors`）、扫描/投递单飞调度、事件广播 |
+| Remote 壳 | [`../src/backend/wechat-data/src/gateway-taskcenter.ts`](../src/backend/wechat-data/src/gateway-taskcenter.ts) | 11 个 `@Remote`（含 `listRpaVendors` / `revealTaskTriggerSecret`）、扫描/投递单飞调度、事件广播 |
 | 处理器 | [`../src/backend/wechat-data/src/remotes/task-center.ts`](../src/backend/wechat-data/src/remotes/task-center.ts) | 目录/密钥/隐私闸注入与操作留痕（含 `listRpaVendors` handler） |
 | 前端入口 | [`../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-create-dialog.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-create-dialog.tsx) | 三个聊天侧入口共用的创建弹窗 |
 | 前端面板 | [`../src/client/ui-wechat/src/client/pages/wechat-data/panels/TaskCenter.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/TaskCenter.tsx) | 取数、加载 `listRpaVendors` 目录、事件刷新、双栏视图根与右侧编辑抽屉（kit `Drawer`） |
@@ -834,6 +852,7 @@ npx vitest run src/backend/tests/docs-index.spec.ts
   以及 v25 / **八爪鱼 v1.2.0 + v1.3.0** 的**附加参数与协议**（无内置参数、默认 `params: {}`、
   11 种值来源、模板白名单、列表内重名与上限校验、旧 `paramMap` 丢弃、旧行为恢复路径、
   `/api/v1` + `X-API-Key` + camelCase body + `flowProcessNo` 落库 + 失败展示厂商 description + 不自动重试）；
+  **v26 凭据回读**（`revealTaskTriggerSecret`：已保存字段回原文、空字段不出现、任务不存在/参数错误给可读错误）；
   多厂商另有 `task-center-rpa.spec.ts`（v24 迁移/双写、未知厂商、通用配置校验、通用派发、
   批量待投递）与两份厂商 spec（描述符完整性、逐家 mock 派发与重试策略）。
 - **调度行为**：覆盖扫描单飞/补跑、事件时机、扫描与投递解耦、失败不卡死，以及

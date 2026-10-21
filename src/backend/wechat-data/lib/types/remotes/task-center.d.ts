@@ -1,6 +1,6 @@
 import type { PendingDispatchResult } from '../query/task-center.ts';
 import type { RetryFetch } from '../net/fetch-retry.ts';
-import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSnapshot } from '../types.ts';
+import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSecretRevealResult, TaskTriggerSnapshot } from '../types.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
 /** 网关侧注入的图片解码上下文（每次调用现取：用户可能在运行中换账号/换密钥）。 */
 export interface TaskCenterImageContext {
@@ -29,6 +29,13 @@ export interface createTaskCenterRemotesInputs {
 }
 export declare function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs): {
     listTaskInfos(): TaskInfoSnapshot;
+    /**
+     * 编辑抽屉「眼睛」：按需回读本机已保存凭据（桌面端本机调用；远程通道已拒绝）。
+     * 刻意不写操作留痕/控制台：凭据原文不应出现在任何日志里。
+     */
+    revealTaskTriggerSecret(options: {
+        id: number;
+    }): TaskTriggerSecretRevealResult;
     /** 厂商目录（触发方式选择器/动态表单的数据源）：可序列化描述符副本 + 注册表版本。 */
     listRpaVendors(): RpaVendorCatalog;
     saveTaskInfo(options: TaskInfoInput): TaskInfoMutationResult;

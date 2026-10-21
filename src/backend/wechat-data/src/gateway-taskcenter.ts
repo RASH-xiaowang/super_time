@@ -4,8 +4,8 @@
  * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 投递）
  * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
  * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
- * 对外方法面逐名增加 10 个（`gateway-remote-surface.spec.ts` / 契约用例守；2026-10-21
- * 多 RPA 厂商接入新增 `listRpaVendors`）。
+ * 对外方法面逐名增加 11 个（`gateway-remote-surface.spec.ts` / 契约用例守；2026-10-21
+ * 多 RPA 厂商接入新增 `listRpaVendors`，同日新增 `revealTaskTriggerSecret`）。
  *
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）与两个装配点；处理器体在
  * `remotes/task-center.ts`（与其它域一致），真正的读写/扫描/投递在 `query/task-center.ts`。
@@ -23,6 +23,7 @@ import type {
   TaskInfoStatus,
   TaskTriggerQuery,
   TaskTriggerScanResult,
+  TaskTriggerSecretRevealResult,
   TaskTriggerSnapshot,
 } from './types.ts'
 import { createTaskCenterRemotes } from './remotes/task-center.ts'
@@ -67,6 +68,20 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   @Remote('listRpaVendors')
   listRpaVendors(): RpaVendorCatalog {
     return this.taskCenterRemotes().listRpaVendors()
+  }
+
+  /**
+   * 编辑抽屉「眼睛」：按需回读某任务已保存的凭据原文（桌面端本机专用）。
+   *
+   * 默认所有列表/快照都只回「是否已配置」；本方法是**唯一**例外，只用于用户在本机点击
+   * 「眼睛」核对已保存的 API Key。HTTP 远程通道已把它列入 LOCAL_ONLY（手机/浏览器拿到也调
+   * 不到）；处理器不写日志、不落盘，界面拿到后只在当前抽屉内存里使用、关闭即丢弃。
+   * @param options.id - 任务 id。
+   * @returns 触发方式 + 凭据字段原文；任务不存在时 `ok=false` + 可读错误。
+   */
+  @Remote('revealTaskTriggerSecret')
+  revealTaskTriggerSecret(options: { id: number }): TaskTriggerSecretRevealResult {
+    return this.taskCenterRemotes().revealTaskTriggerSecret(options)
   }
 
   /**

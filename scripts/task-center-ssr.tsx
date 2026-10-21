@@ -36,6 +36,10 @@ import type {
 import { TaskCenterView, type TaskCenterActions } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/TaskCenter.tsx'
 import { TaskEditForm } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-center-edit-form.tsx'
 import { triggerTimeText } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-center.ts'
+import { setCapabilities } from '../src/client/ui-wechat/src/client/pages/wechat-data/api.ts'
+
+// SSR 模拟桌面端：凭据「眼睛」等桌面专属控件要按 isDesktop 渲染（与真机一致）。
+setCapabilities({ isDesktop: true, isBrowser: false, desktopEquivalent: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false })
 
 /** 本地时区构造时间戳：断言里的「本地化时间」在任何 TZ 下都是同一串字符。 */
 const T = (y: number, mo: number, d: number, hh: number, mm: number, ss: number): number => new Date(y, mo - 1, d, hh, mm, ss).getTime()
@@ -638,6 +642,15 @@ check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已
 check('八爪鱼 Key 从未配置时：placeholder 提示填写（不是「已保存」）', () => {
   ok(bazhuayuNewFormHtml.includes('填写API Key'), '未配置 Key 的 placeholder 不对')
   ok(!bazhuayuNewFormHtml.includes('已保存，留空保持不变'), '从未配置 Key 却提示「已保存」')
+})
+
+check('凭据「眼睛」：已保存的 API Key 有「查看」按钮，未配置没有；SSR 只断言存在（点击行为由 E2E 覆盖）', () => {
+  ok(bazhuayuFormHtml.includes('aria-label="查看 八爪鱼 API Key"'), '已保存 Key 的字段缺少「查看 八爪鱼 API Key」眼睛按钮')
+  ok(bazhuayuFormHtml.includes('查看</button>'), '眼睛按钮文案不对')
+  ok(!bazhuayuNewFormHtml.includes('aria-label="查看 八爪鱼 API Key"'), '未配置 Key 却渲染了眼睛按钮')
+  ok(!bazhuayuNewFormHtml.includes('隐藏 八爪鱼 API Key'), '未配置 Key 却出现「隐藏」状态')
+  // 眼睛按钮不能把明文带进 SSR（服务端只渲染 password 输入框）。
+  ok(!bazhuayuFormHtml.includes('e2e-bazhuayu-key'), 'SSR 里出现了凭据原文（服务端不该回显）')
 })
 
 check('八爪鱼参数传递（v1.2.0）：没有「参数映射」区块，附加参数渲染固定值 / 自定义模板两行', () => {

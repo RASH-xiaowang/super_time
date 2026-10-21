@@ -408,8 +408,9 @@ try {
     '未配置 Key 时 placeholder 提示填写',
     apiKeyPlaceholder ?? '无 placeholder',
   )
+  const BAZHUAYU_API_KEY = 'e2e-bazhuayu-key-001'
   await flowIdField.fill('6ad859ccee2df270d53fc6e5')
-  await apiKeyField.fill('e2e-bazhuayu-key-001')
+  await apiKeyField.fill(BAZHUAYU_API_KEY)
   // v1.2.0：八爪鱼没有内置「参数映射」，所有参数都在「附加参数」里显式添加。
   check(
     await editDrawer.getByText('参数映射', { exact: true }).count() === 0
@@ -482,7 +483,7 @@ try {
     JSON.stringify(savedBazhuayuTask?.triggerConfig?.paramMap),
   )
   check(
-    !JSON.stringify(tasksAfterBazhuayu).includes('e2e-bazhuayu-key-001'),
+    !JSON.stringify(tasksAfterBazhuayu).includes(BAZHUAYU_API_KEY),
     'API Key 原文不出现在任务列表返回值里',
   )
 
@@ -533,7 +534,9 @@ try {
     '影刀凭据原文不出现在任务列表返回值里',
   )
 
-  // ②e 切回「八爪鱼 RPA」：仍能读到上次填的旧配置并保存（切换厂商不清空已填）。
+  // ②e 切回「八爪鱼 RPA」：配置读回上次填的（切换厂商不清空 config），但凭据按安全语义
+  // **不跟随厂商切换**（后端 methodChanged 会新建凭据集，避免把八爪鱼的 Key 带给影刀）；
+  // 所以这里要像真实用户一样重新填一次 API Key，再验证「眼睛」能查看保存后的原文。
   await vendorSelect.selectOption({ label: '八爪鱼 RPA' })
   const flowIdAgain = editDrawer.getByLabel('八爪鱼 FlowId', { exact: true })
   await flowIdAgain.waitFor({ state: 'visible' })
@@ -549,6 +552,8 @@ try {
     await editDrawer.getByLabel('附加参数 参数名 5', { exact: true }).count() === 1,
     '切回八爪鱼后 5 条附加参数仍在（切换厂商不清空已填）',
   )
+  // 切换厂商不继承旧凭据：重新填写 API Key（否则保存后该任务会缺 Key、眼睛也无从显示）。
+  await editDrawer.getByLabel('八爪鱼 API Key', { exact: true }).fill(BAZHUAYU_API_KEY)
   await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
   const backDeadline = Date.now() + 20_000
   let tasksBack = await remote(win, 'listTaskInfos', [])
@@ -582,6 +587,47 @@ try {
     await win.getByRole('button', { name: '编辑「华东客户跟进」', exact: true }).count() === 1,
     '抽屉关闭后任务行「编辑」入口仍在',
   )
+
+  // ②f 凭据「眼睛」：重新打开抽屉 → 查看已保存的 API Key 原文 → 隐藏（不留残留）→ 再保存仍保留。
+  await editButton.click()
+  await editDrawer.waitFor({ state: 'visible' })
+  const revealEye = editDrawer.getByRole('button', { name: '查看 八爪鱼 API Key', exact: true })
+  await revealEye.waitFor({ state: 'visible' })
+  check(true, '已保存的 API Key 有「查看 八爪鱼 API Key」眼睛按钮')
+  await revealEye.click()
+  const revealedKeyField = editDrawer.getByLabel('八爪鱼 API Key', { exact: true })
+  const revealDeadline = Date.now() + 15_000
+  while ((await revealedKeyField.getAttribute('type')) !== 'text' && Date.now() < revealDeadline) await sleep(100)
+  const revealedType = await revealedKeyField.getAttribute('type')
+  const revealedValue = await revealedKeyField.inputValue()
+  check(
+    revealedType === 'text' && revealedValue === BAZHUAYU_API_KEY,
+    '点「查看」回显已保存的 API Key 原文（type=text）',
+    `type=${revealedType} value=${revealedValue === '' ? '(空)' : '(非空)'}`,
+  )
+  const hideEye = editDrawer.getByRole('button', { name: '隐藏 八爪鱼 API Key', exact: true })
+  await hideEye.click()
+  const hiddenType = await revealedKeyField.getAttribute('type')
+  const hiddenValue = await revealedKeyField.inputValue()
+  const hiddenPlaceholder = await revealedKeyField.getAttribute('placeholder')
+  check(
+    hiddenType === 'password' && hiddenValue === '' && typeof hiddenPlaceholder === 'string' && hiddenPlaceholder.includes('已保存'),
+    '点「隐藏」清空输入框、type 回 password、placeholder 恢复「已保存」',
+    `type=${hiddenType} value=${hiddenValue === '' ? '(空)' : '(非空)'} placeholder=${hiddenPlaceholder ?? ''}`,
+  )
+  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
+  const eyeSaveDeadline = Date.now() + 20_000
+  let tasksAfterEyeSave = await remote(win, 'listTaskInfos', [])
+  let eyeSaveTask = tasksAfterEyeSave.items?.find((task) => task.id === taskA.id)
+  while (eyeSaveTask?.triggerSecretSet?.apiKey !== true && Date.now() < eyeSaveDeadline) {
+    await sleep(250)
+    tasksAfterEyeSave = await remote(win, 'listTaskInfos', [])
+    eyeSaveTask = tasksAfterEyeSave.items?.find((task) => task.id === taskA.id)
+  }
+  check(eyeSaveTask?.triggerSecretSet?.apiKey === true, '查看/隐藏后再保存，已保存凭据仍在（secretSet.apiKey=true）')
+  check(!JSON.stringify(tasksAfterEyeSave).includes(BAZHUAYU_API_KEY), '查看/隐藏后列表 JSON 仍不含凭据原文')
+  await editDrawer.getByRole('button', { name: '关闭', exact: true }).click()
+  await editDrawer.waitFor({ state: 'hidden' })
 
   // 抽屉的另外两种关闭语义（× 已在上一步用过）：Esc 与点遮罩。
   await editButton.click()
