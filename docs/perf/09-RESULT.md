@@ -146,6 +146,17 @@
 - typecheck 0；check-generated `--all` 一致；measure:quick 18/21 用例 27.38s。
 - **完成态最终 3 样本**（修掉 report.mjs 拆分后漏 import `quantile` 的一处工具 bug 后）：后端 ready **2ms**（低于采集下限）、总览落定 **1143ms [1116–1151]**（历次最优）、重载字节 1,231,887B、面板 P50 153 / P95 249、样本/渲染错误 **0**。
 
+## 4.12 文件面板图片：从「永远占位」到按需解密 + 协议流式（第十一轮）
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| 文件库图片解码命中 | **0 / 13,071**（只读 decoded 缓存，无任何链路去解） | 按需解密（探针 8/8 成功，单张 0.8–67ms） |
+| 传输 | 整张原图 base64 走两次结构化克隆（单张最大 1.18MB→base64 ≈1.57MB） | `wechat-media://decoded/<rel>?w=320` 流式 + 主进程缩略图（`.w320.jpg` 落盘复用） |
+| 网格 | 永久「dat」占位图标 | `<img loading=lazy decoding=async>`（thumb 档）；灯箱单独取原图档 |
+| 实测（harness panels=files） | — | decoded_images **+10**、`.w320.jpg` **0→5**、错误 0 |
+
+借鉴 D:\Alpha（只读）：`alpha-media://viewer/<token>/<i>/(thumb|full)` + media thumb/full 两档 + IntersectionObserver 懒加载。
+
 ## 5. 结论一句话
 > **验证成立**：后端 ready **2910ms→142ms（−95%，control 对照归因）**、总览落定 **3977ms→1229ms（−69%）**；首屏两个最贵查询 `getStorageStats` **676/434→271ms**、`getLedger` **334→161ms**（分析型连接页缓存 256KB→8MB，同库 A/B 最高 3.6×）；首屏 CSS −32%（传输 −6.0%）、contacts 面板 IPC −55%、图片批量 30 张句柄开合 33→3（−91%）且 fileOnly 白算 base64 归零、4 处后端缓存获得硬字节上界、随包 −601.5KiB、1 处监听泄漏与 2 处无界小表修复、内存哨兵恢复轮询；后端基准与全量 typecheck 无退化。
 > **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB。第四~六轮已完成归因与策略实验：缓存 18.9MB、sqlite 连接 ≤4、`--max-old-space-size` 与强制 GC 均为负结果（§4.5–§4.7）；重载 RSS 343–415MB ≈ V8 heapTotal 175 + external 53 + 原生 ~157，轻载 heap 空闲 60s 无增长（+0.3MB）。再往下只能做「减少大对象分配/复用 Buffer」级重构，需单独立项；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。首屏两查询已分段（隔离冷跑 overview 98ms / insights 370ms，§4.8）；跨启动磁盘缓存为**条件性**优化（无写入窗口 4.5×），真实启动因 WAL checkpoint 改签名而 miss，负结果已记录。

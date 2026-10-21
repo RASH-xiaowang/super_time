@@ -24,6 +24,8 @@
 | 14 | `f60a350` | perf(query): overview 资源聚合用分析缓存 + insights 朋友圈解析去 split 分配（实测 +2%） | M（查询小优化） | overview/insights 20 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
 | 15 | `b66648c` | perf(storage): file-names 整树扫描跨启动落盘缓存（冷 203ms → 1ms，首个真实命中的跨启动缓存） | N（跨启动缓存） | sig-disk-cache 7/7；typecheck 0；check-generated `--all` 一致；measure:quick 27.93s |
 | 16 | `9f267a9` | refactor(perf): 收口验证并修绿两条项目棘轮（单文件 ≤1000 / 单函数 ≤250） | O（收口） | 棘轮/supervisor/media/overview 22 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 27.38s；全后端 3455 用例仅 1 例环境相关失败（`llm-embed-model`，与本分支无关） |
+| 17 | `1607735` | fix(files): 文件库图片按需解密 + thumb/full 两档协议流式（借鉴 D:\Alpha 媒体架构） | P（文件面板秒开） | 7 spec 文件 51 用例绿；typecheck 0；check-generated 一致；measure:quick 27.69s；真实数据 harness：decoded +10 张、.w320 缩略图 0→5、0 错误 |
+| 18 | `4318c3e` | chore(perf): 移除误拷贝并被跟踪的 scripts/perf/perf/ 目录 | P（收口清理） | m21 棘轮绿；无代码影响 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -132,6 +134,17 @@
   * `m21-file-size-ratchet`：`scripts/perf/perf-baseline.mjs` 1096 行 → 拆出 `scripts/perf/lib/report.mjs`（extractMetrics/aggregateSamples/printSummary）→ **811 行**；另删除工作树里**误拷贝的 `scripts/perf/perf/` 整份副本**（未跟踪文件，被棘轮按 scripts 全树扫到）。
   * `function-size-ratchet`：`createBackendSupervisor` 286 → **241 行**（`spawn` 实现在模块级 `spawnWorkerProcess(ctx)`，闭包依赖显式传入）；`computeOverviewInsights` 263 → ~225 行（朋友圈扫描抽成 `scanMomentsStats`，并按其规则删除棘轮清单里的 252 条目）；`remotes/media.ts` 1006 → **982 行**（`IMAGE_BATCH_CONCURRENCY`/`mapWithConcurrency` 拆到 `query/concurrency.ts`，re-export 保持外部用法不变）。
 - 证明：改动全是搬运（无行为变更）；棘轮 + supervisor + media/overview 相关 **22 用例绿**；typecheck 0；check-generated `--all` 一致；measure:quick 27.38s。
+
+### P · 文件面板图片「秒开」：按需解密 + thumb/full 协议流式（第十一轮，Lead）
+- **现场**：用户截图里「文件」面板 13,071 张图片全部是「dat」占位图标。
+- **根因（实测）**：`getFileImageDataUrl` 只读 `decoded_images/<key>.jpg` 已解密缓存；文件库图片**从未有任何链路去解**，13,071 个 key 命中 **0**；且即便命中也是整张原图 base64（probe 单张最大 1.18MB，base64 ≈1.57MB）经两次结构化克隆进 `<img>`。
+- **借鉴 Alpha（只读参照）**：`alpha-media://viewer/<token>/<i>/(thumb|full)` 协议 + media thumb/full 两档 + IntersectionObserver 懒加载（见其 out/main/index.js LOCATOR 与 renderer media role）。
+- **实现**：
+  * 新模块 `query/file-image-on-demand.ts`：decoded 缓存（主槽→`.t.`）→ `msg/attach` md5 前缀索引（64,001 个 .dat 全树 232ms，进程内缓存+miss 自愈）→ `.dat` 档位解密 → 落缓存 → 返回相对路径；64MB/张上限、并发 4、in-flight 去重。
+  * `getFileImageDataUrl` 返回 `file`（新增可选 `thumbFirst`，签名向后兼容）。
+  * `media-protocol.js` 支持 `?w=64–1024`：主进程 `nativeImage` 按需生成缩略图并原子落盘 `.w320.jpg`（immutable 缓存；无 nativeImage 自动回退原图）。
+  * 渲染层：网格 `preferMediaUrl`+`withThumbWidth(...,320)`+`<img lazy decoding=async>`；灯箱单独取原图档、失败回退缩略图。
+- **验证**：harness 1 样本（panels=files，真实数据根）：decoded_images **+10**、`.w320.jpg` **0→5**、样本错误 0；7 个 spec 51 用例绿；typecheck 0；measure:quick 27.69s。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
