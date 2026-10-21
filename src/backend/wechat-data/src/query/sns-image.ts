@@ -20,6 +20,7 @@ const MD5_URL_CACHE_MAX_ENTRIES = 300
 const MD5_URL_CACHE_MAX_TOTAL_CHARS = 32 * 1024 * 1024
 const MD5_URL_CACHE_MAX_ENTRY_CHARS = 8 * 1024 * 1024
 const md5UrlCache = createBoundedCache<string, string>({
+  label: 'sns-image',
   maxEntries: MD5_URL_CACHE_MAX_ENTRIES,
   maxTotal: MD5_URL_CACHE_MAX_TOTAL_CHARS,
   maxEntry: MD5_URL_CACHE_MAX_ENTRY_CHARS,

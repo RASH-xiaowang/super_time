@@ -49,15 +49,18 @@ function fmtBytes(b) {
  *   memoryUsage?: () => { rss: number, heapUsed: number, heapTotal: number, external: number },
  *   setIntervalFn?: (fn: () => void, ms: number) => unknown,
  *   clearIntervalFn?: (h: unknown) => void,
+ *   extra?: () => string,
  *   intervalMs?: number,
  *   rssLimitBytes?: number,
  *   strikes?: number,
  * }} [deps] 全部可注入；缺省用真实全局（生产）或无操作（测试不传就不会有真定时器）。
+ *   `extra` 是拼在 `[mem]` 行尾的附加信息（当前用于受控缓存占用 `caches=…`）。
  * @returns {{ start: () => void, stop: () => void, sample: () => unknown, ticks: () => number }} 哨兵。
  */
 function createMemSentinel(deps = {}) {
   const log = typeof deps.log === 'function' ? deps.log : () => {};
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
+  const extra = typeof deps.extra === 'function' ? deps.extra : () => '';
   const memoryUsage = typeof deps.memoryUsage === 'function'
     ? deps.memoryUsage
     : () => process.memoryUsage();
@@ -84,15 +87,21 @@ function createMemSentinel(deps = {}) {
     else { over = 0; warned = false; }
     count += 1;
     const at = now();
+    // 附加信息（缓存占用等）自己失败不能影响内存采样本身。
+    let extraText = '';
+    try {
+      extraText = String(extra() ?? '').trim();
+    } catch { /* 附加信息不可用就不打 */ }
     log('mem', [
       `[mem] rss=${fmtBytes(rss)} heapUsed=${fmtBytes(m && m.heapUsed)}`
       + ` heapTotal=${fmtBytes(m && m.heapTotal)} external=${fmtBytes(m && m.external)}`
       + ` over=${isOver ? 'yes' : 'no'} (limit=${fmtBytes(rssLimit)}, ${isOver ? over : 0}/${strikes})`
-      + ` t=${new Date(at).toISOString()}`,
+      + ` t=${new Date(at).toISOString()}`
+      + (extraText === '' ? '' : ' ' + extraText),
     ]);
     // 连续 ${strikes} 次超限才告警；单次峰值往往就是一次性的全量年报，不值得叫。
     if (over >= strikes && !warned) { warned = true; log('mem-warn', [`[mem-warn] rss=${fmtBytes(rss)} 超限 ${over} 次连续（限 ${fmtBytes(rssLimit)}）—— 只告警，不重启`]); }
-    return { rss, heapUsed: Number(m && m.heapUsed) || 0, external: Number(m && m.external) || 0, over: isOver, at };
+    return { rss, heapUsed: Number(m && m.heapUsed) || 0, external: Number(m && m.external) || 0, over: isOver, at, extra: extraText };
   };
 
   return {

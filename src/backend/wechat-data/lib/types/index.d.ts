@@ -22,6 +22,14 @@ export { startWechatImageAutoDownloadOnBoot } from './query/wechat-image-autodow
 export { recordOperation, SLOW_OPERATION_MS } from './query/operation-log.ts';
 export type { OperationLogEntry, OperationCategory, OperationStatus } from './types.ts';
 /**
+ * 进程内**受控缓存的运行时占用**（条数/字节/上限）。
+ *
+ * 给宿主的 worker 内存哨兵用：`[mem]` 那行从此能带上每个缓存的当前/上限，
+ * 让「有界缓存真的在界内」从单测事实变成运行时事实，也便于定位 RSS 高的来源。
+ */
+export { cacheBudgetSnapshot } from './query/cache-budget.ts';
+export type { CacheBudgetUsage } from './query/cache-budget.ts';
+/**
  * Register the WeChat data gateway.
  * @param ctx - Cordis context.
  */

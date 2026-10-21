@@ -15717,6 +15717,29 @@ import { mkdirSync as mkdirSync16, readFileSync as readFileSync22, readdirSync a
 import { join as join44 } from "node:path";
 
 // src/backend/wechat-data/src/query/cache-budget.ts
+var labeledCaches = [];
+function cacheBudgetSnapshot() {
+  return labeledCaches.map(({ label, cache }) => {
+    const opts = registryOptions.get(label);
+    return {
+      label,
+      entries: cache.size(),
+      bytes: cache.total(),
+      maxEntries: opts?.maxEntries ?? 0,
+      maxTotal: opts?.maxTotal ?? 0,
+      ...opts?.maxEntry !== void 0 ? { maxEntry: opts.maxEntry } : {}
+    };
+  });
+}
+var registryOptions = /* @__PURE__ */ new Map();
+function registerLabeledCache(label, cache, opts) {
+  if (label === "") return;
+  const index = labeledCaches.findIndex((e) => e.label === label);
+  const entry = { label, cache };
+  if (index >= 0) labeledCaches[index] = entry;
+  else labeledCaches.push(entry);
+  registryOptions.set(label, opts);
+}
 function createBoundedCache(opts) {
   const entries2 = /* @__PURE__ */ new Map();
   let totalSize = 0;
@@ -15727,7 +15750,7 @@ function createBoundedCache(opts) {
     entries2.delete(oldest.value);
     if (entry !== void 0) totalSize -= entry.size;
   }
-  return {
+  const cache = {
     get(key) {
       const entry = entries2.get(key);
       if (entry === void 0) return void 0;
@@ -15772,6 +15795,14 @@ function createBoundedCache(opts) {
       return entries2.keys();
     }
   };
+  if (opts.label !== void 0) {
+    registerLabeledCache(
+      opts.label,
+      cache,
+      opts
+    );
+  }
+  return cache;
 }
 
 // src/backend/wechat-data/src/query/remote-image.ts
@@ -15795,6 +15826,7 @@ var MAX_MEM_ENTRIES = 300;
 var MAX_MEM_TOTAL_CHARS = 32 * 1024 * 1024;
 var MAX_MEM_ENTRY_CHARS = 2 * 1024 * 1024;
 var memCache = createBoundedCache({
+  label: "remote-image",
   maxEntries: MAX_MEM_ENTRIES,
   maxTotal: MAX_MEM_TOTAL_CHARS,
   maxEntry: MAX_MEM_ENTRY_CHARS,
@@ -16320,6 +16352,7 @@ var MD5_URL_CACHE_MAX_ENTRIES = 300;
 var MD5_URL_CACHE_MAX_TOTAL_CHARS = 32 * 1024 * 1024;
 var MD5_URL_CACHE_MAX_ENTRY_CHARS = 8 * 1024 * 1024;
 var md5UrlCache = createBoundedCache({
+  label: "sns-image",
   maxEntries: MD5_URL_CACHE_MAX_ENTRIES,
   maxTotal: MD5_URL_CACHE_MAX_TOTAL_CHARS,
   maxEntry: MD5_URL_CACHE_MAX_ENTRY_CHARS,
@@ -16859,6 +16892,7 @@ var KEYSTREAM_CACHE_MAX_ENTRIES = 64;
 var KEYSTREAM_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 var KEYSTREAM_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024;
 var keystreamCache = createBoundedCache({
+  label: "sns-keystream",
   maxEntries: KEYSTREAM_CACHE_MAX_ENTRIES,
   maxTotal: KEYSTREAM_CACHE_MAX_TOTAL_BYTES,
   maxEntry: KEYSTREAM_CACHE_MAX_ENTRY_BYTES,
@@ -42192,6 +42226,7 @@ export {
   SLOW_OPERATION_MS,
   WechatDataGateway,
   apply,
+  cacheBudgetSnapshot,
   configureSqliteCachePolicy,
   fetchWithRetry,
   recordOperation,

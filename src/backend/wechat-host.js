@@ -44,6 +44,11 @@ function bootTrace(label) {
   } catch { /* 打点失败绝不影响启动 */ }
 }
 
+/** 字节 → 诊断日志用的 MB 文本（缓存占用行用，避免日志过长）。 */
+function mbText(bytes) {
+  return (Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(1) + 'MB';
+}
+
 
 /**
  * 已经用**真实流量**证明过「生成的 schema 与面板实际传来的形状对得上」的方法。
@@ -589,6 +594,26 @@ async function createWechatBackend(options = {}) {
       SLOW_LOG_MS,
     }),
     ...cancel,
+    /**
+     * 受控缓存的运行时占用（`label=当前/上限,…`）。
+     *
+     * 给 worker 的 `[mem]` 采样拼在同一个行里：这样「缓存是否真的在界内」在线上
+     * 是可回看的事实，而不是只有单测能证明的结论；RSS 异常时也能一眼看出是否缓存。
+     */
+    cacheStatsLine() {
+      try {
+        const parts = [];
+        for (const c of (mod.cacheBudgetSnapshot?.() ?? [])) {
+          parts.push(`${c.label}=${mbText(c.bytes)}/${mbText(c.maxTotal)}`);
+        }
+        // resultCache 的预算单位是**字符数**（UTF-16 code unit）；按 ×2 估字节，
+        // 只用于日志量级判断，不作为精确内存计量。
+        parts.push(`resultCache=${mbText(resultCacheChars * 2)}/${mbText(RESULT_CACHE_MAX_TOTAL_CHARS * 2)}`);
+        return parts.join(',');
+      } catch {
+        return '';
+      }
+    },
     dispose() {
       try {
         imageAutoDownload?.stop?.();

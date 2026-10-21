@@ -64,6 +64,9 @@ try {
     log: (level, args) => console.log(String(args[0])),
     setIntervalFn: setInterval,
     clearIntervalFn: clearInterval,
+    // 2026-10-21（内存基线）：把「受控缓存当前占用/上限」拼进同一行 —— 这样
+    // 「有界缓存真的在界内」在线上是可回看的事实（见 wechat-host 的 cacheStatsLine）。
+    extra: () => (backend && typeof backend.cacheStatsLine === 'function' ? 'caches=' + backend.cacheStatsLine() : ''),
   }).start();
 } catch { /* 哨兵起不来不影响后端本身 */ }
 

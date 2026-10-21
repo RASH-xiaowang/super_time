@@ -141,6 +141,7 @@ const KEYSTREAM_CACHE_MAX_ENTRIES = 64
 const KEYSTREAM_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 const KEYSTREAM_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024
 const keystreamCache = createBoundedCache<string, Buffer>({
+  label: 'sns-keystream',
   maxEntries: KEYSTREAM_CACHE_MAX_ENTRIES,
   maxTotal: KEYSTREAM_CACHE_MAX_TOTAL_BYTES,
   maxEntry: KEYSTREAM_CACHE_MAX_ENTRY_BYTES,

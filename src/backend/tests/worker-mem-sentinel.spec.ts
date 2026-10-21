@@ -43,7 +43,7 @@ const SRC = readFileSync(join(HERE, '..', 'worker-mem-sentinel.js'), 'utf8')
  * 只调 `createMemSentinel` 而不调 `start()` 的话一行都不会采 —— 本文第一版
  * 就是这么写的，注释里说着「采一次」，实际一次都没采。
  */
-function harness(): {
+function harness(extra?: () => string): {
   lines: Array<{ level: string; text: string }>
   setRss: (v: number) => void
   start: () => { stop: () => void }
@@ -62,6 +62,7 @@ function harness(): {
       rssLimitBytes: DEFAULT_RSS_LIMIT_BYTES,
       setIntervalFn: (f: () => void) => { fn = f; return 1 },
       clearIntervalFn: () => { fn = null },
+      ...(extra ? { extra } : {}),
     })
     s.start()
     return { stop: s.stop }
@@ -159,5 +160,27 @@ describe('W3-1.2：内存哨兵', () => {
     expect(DEFAULT_INTERVAL_MS).toBe(60_000)
     expect(DEFAULT_RSS_LIMIT_BYTES).toBe(1.2 * 1024 * 1024 * 1024)
     expect(DEFAULT_STRIKES).toBe(3)
+  })
+
+  it('extra 把受控缓存占用拼进 [mem] 行（运行时可见，不再只有单测能看）', () => {
+    const j = harness(() => 'caches=remote-image=31.5MB/32.0MB,sns-keystream=15.0MB/16.0MB')
+    j.start()
+    expect(j.lines[0]!.text, '缓存占用要跟在内存读数同一行，否则时间序列对不上').toContain('caches=remote-image=31.5MB/32.0MB')
+    expect(j.lines[0]!.text).toMatch(/rss=/)
+  })
+
+  it('extra 抛错不影响内存采样本身（附加信息不能拖垮观测）', () => {
+    const j = harness(() => { throw new Error('extra boom') })
+    j.start()
+    expect(j.lines[0]!.level, 'extra 失败也必须照常采到 [mem]').toBe('mem')
+    expect(j.lines[0]!.text).not.toContain('caches=')
+    expect(j.lines[0]!.text).toContain('rss=')
+  })
+
+  it('生产接线把缓存占用 provider 传给哨兵', () => {
+    const workerSrc = readFileSync(join(HERE, '..', 'wechat-worker.js'), 'utf8')
+    const block = /createMemSentinel\(\{([\s\S]*?)\}\)/.exec(workerSrc)?.[1] ?? ''
+    expect(block, '缺 extra ⇒ [mem] 行永远不会带缓存的当前/上限').toMatch(/extra:\s*\(\)\s*=>/)
+    expect(block, '缓存行必须来自 host 的 cacheStatsLine').toContain('cacheStatsLine')
   })
 })

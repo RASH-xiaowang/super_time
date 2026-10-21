@@ -102,6 +102,7 @@ const MAX_MEM_ENTRIES = 300
 const MAX_MEM_TOTAL_CHARS = 32 * 1024 * 1024
 const MAX_MEM_ENTRY_CHARS = 2 * 1024 * 1024
 const memCache = createBoundedCache<string, string>({
+  label: 'remote-image',
   maxEntries: MAX_MEM_ENTRIES,
   maxTotal: MAX_MEM_TOTAL_CHARS,
   maxEntry: MAX_MEM_ENTRY_CHARS,

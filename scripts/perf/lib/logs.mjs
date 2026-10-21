@@ -84,6 +84,9 @@ export class LogTail {
         const mem = line.match(/\[mem\] rss=([\d.]+)(MB|GB) heapUsed=([\d.]+)(MB|GB)/)
         if (mem) {
           const sample = { rssMb: toMb(mem[1], mem[2]), heapUsedMb: toMb(mem[3], mem[4]) }
+          // 受控缓存占用（worker 哨兵拼在行尾的 `caches=label=当前/上限,…`）。
+          const caches = line.match(/caches=(\S+)/)
+          if (caches) sample.caches = caches[1]
           this.memSamples.push(sample)
           if (this.memSamples.length > 500) this.memSamples.shift()
           delta.memSamples.push(sample)
