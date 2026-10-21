@@ -15,6 +15,7 @@ import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { rememberThumb } from '../utils/thumb-cache.ts'
 import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
 import { fetchFileFullUrl, fetchFileThumbUrls } from './files-thumbs.ts'
+import { duplicateGroups, namesByMd5 } from './files-dup.ts'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
@@ -204,27 +205,11 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
     void fetchFileFullUrl(fileKey(f)).then((url) => { if (url) setPreviewSrc(url) })
   }, [])
 
-  // 服务端的重复组只给 md5 / 份数 / 字节；文件名用**已加载**的文件补齐，
-  // 没加载到的就显示 md5 前 12 位（不影响分组与统计的准确性）。
-  const nameByMd5 = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const f of visible) if (f.md5 && !m.has(f.md5)) m.set(f.md5, fileDisplayName(f))
-    return m
-  }, [visible])
-
-  const dupGroups = useMemo(() => {
-    const byKey = new Map<string, FileItem[]>()
-    for (const f of visible) {
-      const k = fileKey(f)
-      const arr = byKey.get(k) ?? []
-      arr.push(f)
-      byKey.set(k, arr)
-    }
-    return [...byKey.values()]
-      .filter(g => g.length > 1)
-      .map(g => ({ key: g[0]?.md5 ?? '', items: g, total: g.reduce((a, f) => a + (f.fileSize || 0), 0) }))
-      .sort((a, b) => b.items.length * b.total - a.items.length * a.total)
-  }, [visible])
+  // 重复组/名称补全的逻辑在 files-dup.ts（纯函数，受单函数行数棘轮约束）。
+  const { nameByMd5, dupGroups } = useMemo(() => ({
+    nameByMd5: namesByMd5(visible),
+    dupGroups: duplicateGroups(visible),
+  }), [visible])
 
   const { notice: exportNotice, flash: flashExport } = useActionNotice()
 

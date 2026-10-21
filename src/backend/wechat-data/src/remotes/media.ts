@@ -26,7 +26,7 @@ import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
 import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
-import { ensureFileImageDecoded, ensureFileImagesDecodedBatch } from '../query/file-image-on-demand.ts'
+import { createFileImageRemotes } from './media-file-images.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
@@ -35,7 +35,7 @@ import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrlsAsync, resolveSnsVideoCoverDataUrlAsync, resolveSnsVideoDataUrlAsync } from '../query/sns-video.ts'
 import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FileImageDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -200,49 +200,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return snsImageWithCdnFirst(rc, options, pair)
     },
 
-    /**
-     * 文件库图片（hardlink 文件名前缀）→ decoded 缓存相对路径（供 `wechat-media://` 流式显示）。
-     *
-     * 2026-10-21：此前这里只读已解密缓存（文件库图片从未解密过 ⇒ 13,071 张命中 0，界面全占位）。
-     * 现在按需定位 `msg/attach/<md5>_*.dat` 解密并落盘；返回 `file`（相对路径）而不是 base64，
-     * 渲染层拼 `wechat-media://decoded/<rel>`，字节不再经 IPC、也不进渲染堆。
-     * @param options - `md5` 为附件文件名去掉 `.dat`/档位后缀后的 32 位前缀；
-     *   `thumbFirst=true`（网格）时优先解 `_t` 缩略档，false（灯箱）时原图档优先。
-     * @returns `{file, format, thumb?}` 或 `{error}`。
-     */
-    async getFileImageDataUrl(options: { md5: string; thumbFirst?: boolean }): Promise<ImageDataUrlResult> {
-      const dec = rc.dirs().decrypted
-      const { aesKey, xorKey } = resolveImageKeyPair(dec)
-      return await ensureFileImageDecoded({
-        decryptedDir: dec,
-        decodedDir: rc.dirs().decoded,
-        rawBase: rc.rawWechatBase(dec) || '',
-        key: options.md5,
-        aesKey,
-        xorKey,
-        thumbFirst: options.thumbFirst === true,
-      })
-    },
-
-    /**
-     * 批量取文件库图片（一屏 = 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
-     *
-     * 去重、保持首次顺序、单次上限 48、块内并行且总解码并发 ≤4（保护 worker）。
-     * @param options - `keys` 为屏上可见格的 key（`fileKey()` 结果）；`thumbFirst` 网格传 true。
-     * @returns 逐条 `{key, file?, error?}`；调用方按 `key` 回贴，别按顺序。
-     */
-    async getFileImageDataUrls(options: { keys: string[]; thumbFirst?: boolean }): Promise<FileImageDataUrlsResult> {
-      const dec = rc.dirs().decrypted
-      const { aesKey, xorKey } = resolveImageKeyPair(dec)
-      const items = await ensureFileImagesDecodedBatch({
-        decryptedDir: dec,
-        decodedDir: rc.dirs().decoded,
-        rawBase: rc.rawWechatBase(dec) || '',
-        aesKey,
-        xorKey,
-      }, options?.keys ?? [], options?.thumbFirst !== false)
-      return { items }
-    },
+    ...createFileImageRemotes(rc),
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
