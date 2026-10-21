@@ -67,6 +67,9 @@ try {
     // 2026-10-21（内存基线）：把「受控缓存当前占用/上限」拼进同一行 —— 这样
     // 「有界缓存真的在界内」在线上是可回看的事实（见 wechat-host 的 cacheStatsLine）。
     extra: () => (backend && typeof backend.cacheStatsLine === 'function' ? 'caches=' + backend.cacheStatsLine() : ''),
+    // 诊断：`SUPERTIME_MEM_GC=1` + worker 带 `--expose-gc` 时，采样前强制 GC，
+    // 用来区分「还没回收的垃圾」与「真实保留」。（不会在生产默认开启）
+    ...(process.env.SUPERTIME_MEM_GC === '1' && typeof global.gc === 'function' ? { gc: () => global.gc() } : {}),
   }).start();
 } catch { /* 哨兵起不来不影响后端本身 */ }
 

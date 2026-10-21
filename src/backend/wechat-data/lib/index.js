@@ -77,6 +77,12 @@ function configureSqliteCachePolicy(input = {}) {
     DEFAULT_CACHE_KB
   );
 }
+var OWNED = /* @__PURE__ */ Symbol("rea-sqlite-owned");
+var openConnections = 0;
+var peakConnections = 0;
+function sqliteConnectionStats() {
+  return { open: openConnections, peak: peakConnections };
+}
 var DatabaseSync = new Proxy(NativeDatabaseSync, {
   construct(target, args) {
     const db = Reflect.construct(target, args);
@@ -88,9 +94,32 @@ var DatabaseSync = new Proxy(NativeDatabaseSync, {
       } catch {
       }
     }
+    try {
+      ;
+      db[OWNED] = true;
+      openConnections += 1;
+      if (openConnections > peakConnections) peakConnections = openConnections;
+    } catch {
+    }
     return db;
   }
 });
+var nativeClose = NativeDatabaseSync.prototype.close;
+try {
+  NativeDatabaseSync.prototype.close = function patchedClose(...args) {
+    const result = nativeClose.apply(this, args);
+    try {
+      const self = this;
+      if (self[OWNED] === true) {
+        self[OWNED] = false;
+        openConnections = Math.max(0, openConnections - 1);
+      }
+    } catch {
+    }
+    return result;
+  };
+} catch {
+}
 configureSqliteCachePolicy();
 var DEFAULT_ANALYTICS_CACHE_KB = 8 * 1024;
 function raiseAnalyticsCache(db, kbOverride) {
@@ -42230,5 +42259,6 @@ export {
   configureSqliteCachePolicy,
   fetchWithRetry,
   recordOperation,
+  sqliteConnectionStats,
   startWechatImageAutoDownloadOnBoot
 };

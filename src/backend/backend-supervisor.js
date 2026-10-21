@@ -169,12 +169,17 @@ function createBackendSupervisor(deps) {
     if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
     else delete workerEnv[DEBUG_HANG_ENV];
 
-    // 仅「未打包 + 显式 env」才给 worker 开 inspector：用于 heap snapshot 归因
-    // （性能专项）。打包态一律不开，避免把调试端口带进发行版；只绑 127.0.0.1。
-    const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
-    const inspectArgv = !isPackaged && env.SUPERTIME_BACKEND_INSPECT === '1'
-      ? ['--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229')]
-      : undefined;
+    // 仅「未打包 + 显式 env」才给 worker 加 node 启动参数：用于内存/heap 策略实验
+    // （例如 `--max-old-space-size=192`）与 heap snapshot 归因。打包态一律不加。
+    const workerExecArgv = [];
+    if (!isPackaged) {
+      if (env.SUPERTIME_BACKEND_INSPECT === '1') {
+        const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
+        workerExecArgv.push('--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229'));
+      }
+      const nodeArgs = String(env.SUPERTIME_BACKEND_NODE_ARGS ?? '').trim();
+      if (nodeArgs !== '') workerExecArgv.push(...nodeArgs.split(/\s+/).filter((s) => s !== ''));
+    }
     const child = utilityProcess.fork(
       path.join(__dirname, 'wechat-worker.js'),
       [],
@@ -182,7 +187,7 @@ function createBackendSupervisor(deps) {
         serviceName: 'super-time-wechat-backend',
         stdio: 'pipe',
         env: workerEnv,
-        ...(inspectArgv ? { execArgv: inspectArgv } : {}),
+        ...(workerExecArgv.length > 0 ? { execArgv: workerExecArgv } : {}),
       },
     );
     bootTrace('main:spawn-called');

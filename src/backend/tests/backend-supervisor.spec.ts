@@ -141,6 +141,14 @@ describe('backend-supervisor', () => {
     expect(opts.execArgv).toBeUndefined()
   })
 
+  it('未打包 + `SUPERTIME_BACKEND_NODE_ARGS` ⇒ 透传给 worker（heap 策略实验用）', async () => {
+    const h = makeHarness({ env: { SUPERTIME_BACKEND_NODE_ARGS: '--max-old-space-size=192 --expose-gc' } })
+    await h.supervisor.bootstrap('D:\\userData')
+    const calls = h.fork.mock.calls as unknown as Array<unknown[]>
+    const opts = calls[0]![2] as { execArgv?: string[] }
+    expect(opts.execArgv).toEqual(['--max-old-space-size=192', '--expose-gc'])
+  })
+
   it('init 失败会 dispose 当前句柄并进入有界退避；下一次 init 成功后恢复', async () => {
     const h = makeHarness({
       initResults: [

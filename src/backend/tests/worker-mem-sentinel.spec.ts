@@ -43,7 +43,7 @@ const SRC = readFileSync(join(HERE, '..', 'worker-mem-sentinel.js'), 'utf8')
  * 只调 `createMemSentinel` 而不调 `start()` 的话一行都不会采 —— 本文第一版
  * 就是这么写的，注释里说着「采一次」，实际一次都没采。
  */
-function harness(extra?: () => string): {
+function harness(extra?: () => string, gc?: () => void): {
   lines: Array<{ level: string; text: string }>
   setRss: (v: number) => void
   start: () => { stop: () => void }
@@ -63,6 +63,7 @@ function harness(extra?: () => string): {
       setIntervalFn: (f: () => void) => { fn = f; return 1 },
       clearIntervalFn: () => { fn = null },
       ...(extra ? { extra } : {}),
+      ...(gc ? { gc } : {}),
     })
     s.start()
     return { stop: s.stop }
@@ -183,5 +184,27 @@ describe('W3-1.2：内存哨兵', () => {
     const block = /createMemSentinel\(\{([\s\S]*?)\}\)/.exec(workerSrc)?.[1] ?? ''
     expect(block, '缺 extra ⇒ [mem] 行永远不会带缓存的当前/上限').toMatch(/extra:\s*\(\)\s*=>/)
     expect(block, '缓存行必须来自 host 的 cacheStatsLine').toContain('cacheStatsLine')
+  })
+
+  it('gc 注入：每次采样前先强制 GC（诊断模式才开，用来区分垃圾与真保留）', () => {
+    const order: string[] = []
+    const j = harness(undefined, () => { order.push('gc') })
+    j.start()
+    j.tick()
+    expect(order, '两次采样 ⇒ 两次 GC（start 立刻采一次 + tick 一次）').toEqual(['gc', 'gc'])
+    expect(j.lines.filter((l) => l.level === 'mem').length).toBe(2)
+  })
+
+  it('gc 抛错不影响采样（诊断设施不能拖垮观测）', () => {
+    const j = harness(undefined, () => { throw new Error('gc boom') })
+    j.start()
+    expect(j.lines[0]!.level).toBe('mem')
+    expect(j.lines[0]!.text).toContain('rss=')
+  })
+
+  it('生产接线只在 SUPERTIME_MEM_GC=1 且 --expose-gc 可用时才注入 gc', () => {
+    const workerSrc = readFileSync(join(HERE, '..', 'wechat-worker.js'), 'utf8')
+    expect(workerSrc, '诊断开关必须是显式 env').toContain('SUPERTIME_MEM_GC')
+    expect(workerSrc, '没有 global.gc（未带 --expose-gc）时不能注入').toContain('typeof global.gc')
   })
 })

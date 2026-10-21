@@ -50,17 +50,20 @@ function fmtBytes(b) {
  *   setIntervalFn?: (fn: () => void, ms: number) => unknown,
  *   clearIntervalFn?: (h: unknown) => void,
  *   extra?: () => string,
+ *   gc?: () => void,
  *   intervalMs?: number,
  *   rssLimitBytes?: number,
  *   strikes?: number,
  * }} [deps] 全部可注入；缺省用真实全局（生产）或无操作（测试不传就不会有真定时器）。
- *   `extra` 是拼在 `[mem]` 行尾的附加信息（当前用于受控缓存占用 `caches=…`）。
+ *   `extra` 是拼在 `[mem]` 行尾的附加信息（当前用于受控缓存占用 `caches=…`）；
+ *   `gc` 非空时**每次采样前先强制 GC**（诊断用，配合 `--expose-gc` 区分「未回收垃圾」与「真保留」）。
  * @returns {{ start: () => void, stop: () => void, sample: () => unknown, ticks: () => number }} 哨兵。
  */
 function createMemSentinel(deps = {}) {
   const log = typeof deps.log === 'function' ? deps.log : () => {};
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
   const extra = typeof deps.extra === 'function' ? deps.extra : () => '';
+  const gc = typeof deps.gc === 'function' ? deps.gc : null;
   const memoryUsage = typeof deps.memoryUsage === 'function'
     ? deps.memoryUsage
     : () => process.memoryUsage();
@@ -80,6 +83,10 @@ function createMemSentinel(deps = {}) {
 
   /** 采一次并记账。返回本次读数（测试与日志都用它）。 */
   const sample = () => {
+    // 诊断模式：先强制 GC 再读数，读到的才是「真实保留」而不是「还没来得及回收」。
+    if (gc !== null) {
+      try { gc(); } catch { /* GC 失败不影响采样 */ }
+    }
     const m = memoryUsage();
     const rss = Number(m && m.rss) || 0;
     const arrayBuffers = Number(m && m.arrayBuffers) || 0;

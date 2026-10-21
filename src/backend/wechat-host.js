@@ -609,6 +609,9 @@ async function createWechatBackend(options = {}) {
         // resultCache 的预算单位是**字符数**（UTF-16 code unit）；按 ×2 估字节，
         // 只用于日志量级判断，不作为精确内存计量。
         parts.push(`resultCache=${mbText(resultCacheChars * 2)}/${mbText(RESULT_CACHE_MAX_TOTAL_CHARS * 2)}`);
+        // sqlite 连接数：external 内存异常时先排查「是不是打开着太多连接」。
+        const sq = mod.sqliteConnectionStats?.();
+        if (sq && typeof sq.open === 'number') parts.push(`sqlite=${sq.open}/${sq.peak ?? sq.open}`);
         return parts.join(',');
       } catch {
         return '';

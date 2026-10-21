@@ -35,6 +35,12 @@ export { cacheBudgetSnapshot } from './query/cache-budget.ts'
 export type { CacheBudgetUsage } from './query/cache-budget.ts'
 
 /**
+ * sqlite 连接统计（当前打开数 / 峰值），给 `[mem]` 行做堆外内存归因用：
+ * 每条连接至少持有一份页缓存，`external` 异常时可先看是不是连接数出了问题。
+ */
+export { sqliteConnectionStats } from './sqlite-connection.ts'
+
+/**
  * Register the WeChat data gateway.
  * @param ctx - Cordis context.
  */
