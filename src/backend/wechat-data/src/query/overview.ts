@@ -3,6 +3,7 @@
  * Mirrors the Rust get_wechat_data_overview: one-screen asset summary.
  */
 import { DatabaseSync } from './db-open.ts'
+import { raiseAnalyticsCache } from '../sqlite-connection.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
@@ -151,6 +152,9 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
   if (existsSync(resourcePath)) {
     try {
       withDb(resourcePath, (db) => {
+        // 分析型查询（29MB 资源库 GROUP BY type）：全局读缓存 256KB 会反复打穿，
+        // 只给这条连接临时抬高（与 getStorageStats 同一口径）。
+        raiseAnalyticsCache(db)
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined
         if (!has) return
         const agg = db.prepare('SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail').get() as { s: number; n: number }

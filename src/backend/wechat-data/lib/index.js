@@ -20754,6 +20754,7 @@ async function computeOverview(dec, sig) {
   if (existsSync46(resourcePath)) {
     try {
       withDb(resourcePath, (db) => {
+        raiseAnalyticsCache(db);
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0;
         if (!has) return;
         const agg = db.prepare("SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail").get();
@@ -22927,6 +22928,16 @@ function cellStr10(v) {
   if (v instanceof Uint8Array) return new TextDecoder("utf-8", { fatal: false }).decode(v);
   return "";
 }
+function countSubstr(hay, needle) {
+  if (needle === "") return 0;
+  let count = 0;
+  let idx = hay.indexOf(needle);
+  while (idx !== -1) {
+    count += 1;
+    idx = hay.indexOf(needle, idx + needle.length);
+  }
+  return count;
+}
 function walkDbFiles(dir, out, depth) {
   if (depth > 4 || !existsSync58(dir)) return;
   for (const e of readdirSync34(dir, { withFileTypes: true })) {
@@ -23221,13 +23232,13 @@ async function computeOverviewInsights(decryptedDir, self = "") {
         for (const r of db.prepare("SELECT content AS c FROM SnsTimeLine").iterate()) {
           const xml = cellStr10(r.c);
           moments.total += 1;
-          moments.images += xml.split("<media>").length - 1 + xml.split("<media ").length - 1;
+          moments.images += countSubstr(xml, "<media>") + countSubstr(xml, "<media ");
           if (xml.includes("<type>6</type>") || xml.includes("<type>4</type>") || xml.includes("<type>15</type>")) moments.videos += 1;
           const le = xml.indexOf("<LocalExtraInfo>");
           if (le >= 0) {
             const block = xml.slice(le, xml.indexOf("</LocalExtraInfo>", le) || xml.length);
-            const parts = block.split("<user_comment>").length - 1;
-            const likes = (block.match(/<type>1<\/type>/g) ?? []).length;
+            const parts = countSubstr(block, "<user_comment>");
+            const likes = countSubstr(block, "<type>1</type>");
             moments.likes += likes;
             moments.comments += Math.max(0, parts - likes);
           }
