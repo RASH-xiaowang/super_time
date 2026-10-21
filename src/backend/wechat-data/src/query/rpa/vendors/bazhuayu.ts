@@ -1,22 +1,17 @@
 /**
- * 内置厂商：**八爪鱼 RPA**（迁移基线，行为与 2026-10-21 之前逐字段一致）。
+ * 内置厂商：**八爪鱼 RPA**。
  *
  * 固定主机 `api-rpa.bazhuayu.com`（写死在请求模板里，不来自用户输入），鉴权是
- * `X-Api-Key` 请求头（凭据只存本机、只进 header）；请求体形状沿用旧实现：
- * `FlowId` + 固定字段 + `Params{room_name, content, at_name}`，**不发图片**。
+ * `X-Api-Key` 请求头（凭据只存本机、只进 header）；请求体形状：
+ * `FlowId` + 固定字段 + `Params{...}`，**不发图片**。
  *
- * 该厂商完全用声明式模板表达，没有代码钩子；参数映射走 `mapping.style='object'`
- * （`Params` 整值替换为 `{room_name,content,at_name}` 对象）。
+ * 2026-10-21 参数增强（v1.2.0，用户要求）：**不再有「三个内置参数」**——`Params` 里放什么
+ * 完全由任务的「附加参数」逐条配置（参数名 + 值来源），默认 `Params: {}`。这样八爪鱼流程
+ * 的入参名/数量都不受本产品预设限制；需要会话名/触发文本/触发对象时，在附加参数里各加一条
+ * （值来源分别选「会话名 / 触发文本 / 触发对象」）即可。
  */
-import type { RpaVendorDescriptor, RpaField, RpaMappingTarget } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
 import type { RpaVendorAdapter } from '../types.ts'
-
-/** 三个语义参数位的默认映射键（=`Params` 的三个固定字段，沿用旧实现）。 */
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name', label: '会话名' },
-  { semantic: 'content', defaultKey: 'content', label: '触发文本' },
-  { semantic: 'at', defaultKey: 'at_name', label: '触发对象' },
-]
 
 /** 附加参数允许的值来源：触发记录/任务的内置字段 + 固定值 + 自定义模板（不含图片）。 */
 const EXTRA_PARAM_SOURCES = [
@@ -39,8 +34,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'bazhuayu',
   name: '八爪鱼 RPA',
   vendor: '八爪鱼 RPA（Bazhuayu）',
-  version: '1.1.0',
-  summary: '把触发记录映射成 room_name/content/at_name，并可按需追加参数，POST 到八爪鱼固定主机启动流程（不发图片）。',
+  version: '1.2.0',
+  summary: '把任务「附加参数」逐条映射成八爪鱼流程入参（默认不发业务参数），POST 到八爪鱼固定主机启动流程（不发图片）。',
   status: 'stable',
   docs: {
     home: 'https://www.bazhuayu.com/',
@@ -68,21 +63,14 @@ const descriptor: RpaVendorDescriptor = {
     },
     apiKeyField,
     {
-      key: 'paramMap',
-      label: '参数映射',
-      type: 'map',
-      required: false,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '把三个内置参数映射到你流程里的入参名（默认 room_name / content / at_name）；只影响这三个键。',
-    },
-    {
       key: 'extraParams',
       label: '附加参数',
       type: 'paramList',
       required: false,
       maxItems: 20,
       paramSources: [...EXTRA_PARAM_SOURCES],
-      help: '可选：追加任意「参数名 → 值来源」，命中关键词后随本次请求一起发出；参数名不能与上面三个映射键重名。',
+      help: '八爪鱼流程的入参全部在这里配置（默认不发任何业务参数）。参数名必须与流程入参一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -91,8 +79,8 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'object',
-    mapField: 'paramMap',
-    targets: MAPPING_TARGETS,
+    // 无内置语义参数：Params 完全由附加参数组装（默认 {}）。
+    targets: [],
     extrasField: 'extraParams',
   },
   request: {
@@ -129,8 +117,8 @@ const descriptor: RpaVendorDescriptor = {
     '附加参数完全由你配置：值来自触发记录/固定值/自定义模板，发出去之前请确认对端流程能接受这些键',
   ],
   notes: [
-    '内置厂商：三个内置参数（room_name/content/at_name）的默认行为与 2026-10-21 之前逐字节一致。',
-    '2026-10-21 参数增强：可改三个内置参数名（参数映射），并追加任意附加参数；只发你显式配置的键。',
+    '2026-10-21（v1.2.0，按用户要求）：移除「三个内置参数」——Params 完全由「附加参数」逐条配置，默认 {}；',
+    '需要会话名/触发文本/触发对象时，在附加参数里各加一条（值来源分别选「会话名 / 触发文本 / 触发对象」）。',
     '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/固定值/自定义模板。',
     '自定义模板只允许 `${record.<字段>}` / `${task.<字段>}`（字段白名单见 docs/TASK-CENTER.md §6.3）。',
   ],

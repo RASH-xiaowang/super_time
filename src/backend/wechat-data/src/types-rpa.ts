@@ -142,14 +142,16 @@ export interface RpaMappingTarget {
 }
 
 /**
- * 参数映射：`mapField` 指向一个 `type: 'map'` 的配置字段，值为 `{ room, content, at }`。
+ * 参数映射：`mapField`（可选）指向一个 `type: 'map'` 的配置字段，值为 `{ room, content, at }`。
  *
- * `extrasField`（可选）指向一个 `type: 'paramList'` 字段：其条目在三个语义参数之后追加
- * 到厂商参数容器（五类容器都支持）；未声明 = 该厂商暂不开放附加参数。
+ * `targets` 为空且未声明 `mapField` = 该厂商**没有内置语义参数**，所有业务参数都通过
+ * `extrasField`（可选，`type: 'paramList'`）显式配置（八爪鱼 2026-10-21 改为这种形态）。
+ * `extrasField` 的条目在语义参数之后追加到厂商参数容器（五类容器都支持）。
  */
 export interface RpaMapping {
   style: RpaParamStyle
-  mapField: string
+  /** 缺省 = 没有「三个内置参数」的可编辑映射（targets 也必须为空）。 */
+  mapField?: string
   targets: RpaMappingTarget[]
   extrasField?: string
 }

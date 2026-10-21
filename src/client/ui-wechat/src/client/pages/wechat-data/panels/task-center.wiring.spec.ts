@@ -546,6 +546,7 @@ describe('样式与 SSR 冒烟', () => {
       expect(script, `SSR 冒烟没有断言「${text}」`).toContain(text)
     }
     expect(script, 'SSR 主场景没有用 bazhuayu fixture 断言任务行摘要').toContain('八爪鱼 RPA · ')
+    expect(script, 'SSR 没有断言八爪鱼 v1.2.0 不再渲染「参数映射」').toContain("!bazhuayuFormHtml.includes('参数映射')")
     expect(script, '空态场景没有断言不渲染编辑表单').toContain('空态不该渲染')
   })
 

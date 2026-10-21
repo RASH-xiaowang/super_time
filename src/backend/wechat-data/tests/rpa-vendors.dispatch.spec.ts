@@ -217,9 +217,17 @@ describe('Webhook（内置）', () => {
 
 describe('八爪鱼 RPA（内置，回归基线）', () => {
   const API_KEY = 'bz-secret-key-123456'
-  const config = { flowId: 'flow-1' }
+  // v1.2.0 起没有内置参数：显式配置三个附加参数（还原旧行为的写法）。
+  const config = {
+    flowId: 'flow-1',
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
+  }
 
-  it('成功：固定主机 + X-Api-Key 头 + 旧 body 形状（Key 不在 body）', async () => {
+  it('成功：固定主机 + X-Api-Key 头 + Params 由附加参数组装（Key 不在 body）', async () => {
     const transport = createTransport({ status: 200, body: {} })
     const outcome = await dispatch(bazhuayu, makeCtx(config, { apiKey: API_KEY }), transport.deps)
     expect(outcome).toEqual({ status: 'sent' })

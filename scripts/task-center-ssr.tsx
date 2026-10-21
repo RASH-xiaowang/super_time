@@ -107,7 +107,6 @@ const TASK_BAZHUAYU: TaskInfo = {
   triggerMethod: 'bazhuayu',
   triggerConfig: {
     flowId: '6ad859ccee2df270d53fc6e5',
-    paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
     extraParams: [
       { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
       { name: 'kw_template', source: 'template', template: '${record.keyword}' },
@@ -220,36 +219,44 @@ const WEBHOOK_VENDOR: RpaVendorDescriptor = {
 const BAZHUAYU_VENDOR: RpaVendorDescriptor = {
   id: 'bazhuayu',
   name: '八爪鱼 RPA',
-  vendor: '八爪鱼 RPA（api-rpa.bazhuayu.com）',
-  version: '1.0.0',
-  summary: '调用八爪鱼启动流程接口：room_name=会话名、content=触发文本、at_name=触发对象',
+  vendor: '八爪鱼 RPA（Bazhuayu）',
+  version: '1.2.0',
+  summary: '把任务「附加参数」逐条映射成八爪鱼流程入参（默认不发业务参数），POST 到八爪鱼固定主机启动流程（不发图片）。',
   status: 'stable',
   docs: {
-    home: 'https://www.bazhuayu.com/help',
-    triggerApi: 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start',
+    home: 'https://www.bazhuayu.com/',
+    triggerApi: 'https://www.bazhuayu.com/',
     lastVerifiedAt: '2026-10-21',
+    pageVersion: '内置通道（2026-10-21 回归核对；无公开接口页）',
   },
-  capabilities: { direction: 'outbound', synchronous: false, completion: 'none', idempotency: 'none', deployment: ['cloud'] },
+  capabilities: { direction: 'outbound', synchronous: true, completion: 'none', idempotency: 'none', deployment: ['cloud'] },
   fields: [
     {
       key: 'flowId',
-      label: '八爪鱼 FlowId',
+      label: 'FlowId',
       type: 'text',
       required: true,
       summary: true,
       ariaLabel: '八爪鱼 FlowId',
-      example: '例如 6ad859ccee2df270d53fc6e5',
-      pattern: '^[A-Za-z0-9_-]{1,128}$',
+      example: '6ad859ccee2df270d53fc6e5',
+      help: '八爪鱼流程 id（控制台流程详情里复制）；不是凭据，随任务配置返回。',
     },
-    { key: 'apiKey', label: '八爪鱼 API Key', type: 'password', required: true, secret: true, ariaLabel: '八爪鱼 API Key' },
-    { key: 'paramMap', label: '参数映射', type: 'map', required: false },
+    {
+      key: 'apiKey',
+      label: 'API Key',
+      type: 'password',
+      required: true,
+      secret: true,
+      ariaLabel: '八爪鱼 API Key',
+      help: '只存本机；投递时由后端读出来放进 X-Api-Key 请求头，不进任务列表/Remote 返回值。',
+    },
     {
       key: 'extraParams',
       label: '附加参数',
       type: 'paramList',
       required: false,
       maxItems: 20,
-      help: '随 Params 一起发送的附加参数；参数名不要与上面三个映射键重名',
+      help: '八爪鱼流程的入参全部在这里配置（默认不发任何业务参数）；需要会话名/触发文本/触发对象时各加一条并选对应值来源。',
       paramSources: [
         'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
         'taskId', 'recordId', 'fixed', 'template',
@@ -259,13 +266,9 @@ const BAZHUAYU_VENDOR: RpaVendorDescriptor = {
   auth: { modes: [] },
   mapping: {
     style: 'object',
-    mapField: 'paramMap',
+    // 无内置语义参数：Params 完全由附加参数组装（默认 {}）。
+    targets: [],
     extrasField: 'extraParams',
-    targets: [
-      { semantic: 'room', defaultKey: 'room_name' },
-      { semantic: 'content', defaultKey: 'content' },
-      { semantic: 'at', defaultKey: 'at_name' },
-    ],
   },
   request: { method: 'POST', url: 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start' },
   response: { okHttpStatus: [200] },
@@ -621,28 +624,27 @@ check('抽屉 body（Webhook 方式）：任务名 / 触发关键词 / 触发方
 check('抽屉 body（八爪鱼 RPA 方式）：FlowId / API Key（password、已保存不回显）/ 厂商说明', () => {
   ok(bazhuayuFormHtml.includes('aria-label="编辑任务：八爪鱼报价同步"'), '八爪鱼任务表单没有可访问名')
   ok(bazhuayuFormHtml.includes('aria-label="八爪鱼 FlowId"'), '缺少「八爪鱼 FlowId」输入框')
-  ok(bazhuayuFormHtml.includes('placeholder="例如 6ad859ccee2df270d53fc6e5"'), 'FlowId placeholder 不对')
+  ok(bazhuayuFormHtml.includes('placeholder="6ad859ccee2df270d53fc6e5"'), 'FlowId placeholder 不对')
   ok(bazhuayuFormHtml.includes('value="6ad859ccee2df270d53fc6e5"'), 'FlowId 没有回填任务里的值')
   ok(bazhuayuFormHtml.includes('aria-label="八爪鱼 API Key"'), '缺少「八爪鱼 API Key」输入框')
   ok(bazhuayuFormHtml.includes('type="password"'), 'API Key 输入框不是 password（Key 不能明文展示）')
   ok(bazhuayuFormHtml.includes('已保存，留空保持不变'), '已配置 Key 时 placeholder 没有提示「留空保持不变」')
-  ok(bazhuayuFormHtml.includes('room_name=会话名'), '厂商说明没有写清 room_name 参数映射')
+  ok(bazhuayuFormHtml.includes('默认不发业务参数'), '厂商说明没有写清「默认不发业务参数」（v1.2.0 语义）')
   ok(bazhuayuFormHtml.includes('图片不会发送'), '厂商说明没有写清不发图片')
-  ok(bazhuayuFormHtml.includes('api-rpa.bazhuayu.com'), '厂商说明缺少官方触发接口地址')
-  ok(bazhuayuFormHtml.includes('标记已完善前需填写：八爪鱼 FlowId、八爪鱼 API Key'), '缺少八爪鱼方式的「已完善」前置提示')
+  ok(bazhuayuFormHtml.includes('https://www.bazhuayu.com/'), '厂商说明缺少官方文档地址')
+  ok(bazhuayuFormHtml.includes('标记已完善前需填写：FlowId、API Key'), '缺少八爪鱼方式的「已完善」前置提示')
 })
 
 check('八爪鱼 Key 从未配置时：placeholder 提示填写（不是「已保存」）', () => {
-  ok(bazhuayuNewFormHtml.includes('填写八爪鱼 API Key'), '未配置 Key 的 placeholder 不对')
+  ok(bazhuayuNewFormHtml.includes('填写API Key'), '未配置 Key 的 placeholder 不对')
   ok(!bazhuayuNewFormHtml.includes('已保存，留空保持不变'), '从未配置 Key 却提示「已保存」')
 })
 
-check('八爪鱼参数传递：参数映射（可改键）+ 附加参数（固定值 / 自定义模板两行）都渲染', () => {
-  ok(bazhuayuFormHtml.includes('参数映射'), '缺少「参数映射」字段')
-  ok(bazhuayuFormHtml.includes('aria-label="参数映射 · 会话名"'), 'map 字段没有渲染「会话名」参数名输入')
-  ok(bazhuayuFormHtml.includes('value="room_name"'), '参数映射没有回填默认 room_name')
+check('八爪鱼参数传递（v1.2.0）：没有「参数映射」区块，附加参数渲染固定值 / 自定义模板两行', () => {
+  ok(!bazhuayuFormHtml.includes('参数映射'), '八爪鱼 v1.2.0 仍渲染了「参数映射」（内置三参数已移除）')
+  ok(!bazhuayuFormHtml.includes('aria-label="参数映射 · 会话名"'), '八爪鱼仍渲染了参数映射的会话名输入')
   ok(bazhuayuFormHtml.includes('附加参数'), '缺少「附加参数」字段')
-  ok(bazhuayuFormHtml.includes('随 Params 一起发送'), '附加参数缺少 help 说明')
+  ok(bazhuayuFormHtml.includes('八爪鱼流程的入参全部在这里配置'), '附加参数缺少 help 说明（默认不发业务参数）')
   ok(bazhuayuFormHtml.includes('添加附加参数'), '缺少「添加附加参数」按钮')
   ok(bazhuayuFormHtml.includes('最多 20 条'), '附加参数没有展示 maxItems 上限')
   ok(bazhuayuFormHtml.includes('aria-label="附加参数 参数名 1"'), '第一行缺少「附加参数 参数名 1」')

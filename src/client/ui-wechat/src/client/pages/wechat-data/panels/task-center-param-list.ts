@@ -15,7 +15,9 @@
  *  ② `source` 必须在 `field.paramSources`（缺省 = 全部 11 种）里；
  *  ③ `fixed` 必填值（trim 后非空、≤2048）；`template` 必填（trim 后非空、≤512），
  *    且占位符只许 `${record.<白名单>}` / `${task.<白名单>}`；
- *  ④ 不得与参数映射的三个最终键重名（`paramMap` 归一后的大小写不敏感比较）；
+ *  ④ 仅当厂商声明了 `mapping.mapField`（= 仍有「三个内置参数」）时，才校验参数名不得与
+ *     map 字段的三个最终键重名；八爪鱼 v1.2.0 已删除内置参数（`targets: []`、无 `mapField`），
+ *     此时所有参数都在本列表里显式添加，自然没有保留键；
  *  ⑤ 超过 `field.maxItems`（缺省 50）报错，多出的条目不再逐条校验（与后端一致）。
  */
 import type {
@@ -301,13 +303,18 @@ export function validateParamList(field: RpaField, raw: RpaConfigValue | undefin
 }
 
 /**
- * 参数映射的三个最终键（用户改过的值优先，缺省用 `mapping.targets[].defaultKey`）。
+ * 参数映射的最终键（用户改过的值优先，缺省用 `mapping.targets[].defaultKey`）。
+ *
+ * 厂商没有内置语义参数时（`mapping.mapField` 未声明 / `targets` 为空，如八爪鱼 v1.2.0）
+ * 返回空数组：此时不存在保留键，附加参数可以自由使用任意参数名。
  * @param descriptor - 厂商描述符。
  * @param config - 当前配置。
- * @returns 三个键（保留原大小写，供展示/比较）。
+ * @returns 保留键（保留原大小写，供展示/比较）；没有内置映射时为空数组。
  */
 export function resolvedMapKeys(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig): string[] {
-  const raw = config[descriptor.mapping.mapField]
+  const mapField = descriptor.mapping.mapField
+  if (mapField === undefined) return []
+  const raw = config[mapField]
   const map = isRecord(raw) ? raw : {}
   return descriptor.mapping.targets.map((target) => {
     const value = typeof map[target.semantic] === 'string' ? String(map[target.semantic]).trim() : ''

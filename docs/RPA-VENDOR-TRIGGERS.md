@@ -5,7 +5,8 @@
 > `yingdao` / `uipath` / `aliyun-rpa` / `laiye` / `shizai`）；其中 **`aliyun-rpa` / `laiye` /
 > `shizai` 为实验性**（参数待联调，见第 6 节风险）。**回调接收端 / 完成状态轮询 / 入站触发为后续**
 > （v1 只到「厂商已受理」，`externalTaskId` 落库供后续扩展）。旧任务行为不变。
-> 2026-10-21 追加**八爪鱼参数映射 / 附加参数**（`mapping.extrasField` 通用机制，隐私 v25）。
+> 2026-10-21 追加**八爪鱼附加参数**（`mapping.extrasField` 通用机制，隐私 v25）；同日
+> **v1.2.0 移除内置三参数**（`mapping.targets: []` = extras-only，默认 `Params: {}`，参数全部由用户在「附加参数」里显式配置）。
 > 调研/核对时间：**2026-10-21（Asia/Shanghai）**。参数、鉴权、回调的原始证据见第 5 节与各厂商小节内引用链接。
 > 背景：任务信息此前只有 `Webhook` 与 `八爪鱼 RPA` 两种触发方式（见 [`TASK-CENTER.md`](TASK-CENTER.md)）。
 > 本方案把它推广为「**统一触发方式选择 + 厂商适配器注册表**」：新增厂商不改核心派发逻辑，只加一份厂商描述。
@@ -131,18 +132,17 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 
 - 通道：`POST https://api-rpa.bazhuayu.com/api/bots/scheduling/start`，固定主机。
 - 鉴权：`X-Api-Key`（用户配置）。
-- Body 字段：`FlowId`、`FlowContentRetrievalMode`（固定 `ByNewestContent`）、`SpecifiedPublicationVersion`（`""`）、`SpecifiedBot`（`""`）、`Params{room_name, content, at_name}`（2026-10-21 v25 起：三个参数名可映射、可在其后追加附加参数）、`UserStartSource`（固定 `OpenApi`）。
+- Body 字段：`FlowId`、`FlowContentRetrievalMode`（固定 `ByNewestContent`）、`SpecifiedPublicationVersion`（`""`）、`SpecifiedBot`（`""`）、**`Params`（2026-10-21 v1.2.0 起不再自动填三个内置参数，默认 `{}`；所有入参都在「附加参数」里逐条配置）**、`UserStartSource`（固定 `OpenApi`）。
 - 回调：无（2xx 即视为成功）。
-- 迁移：`triggerMethod='bazhuayu'`，`trigger_config={flowId, paramMap?, extraParams?}`，`trigger_secret={apiKey}`；不配置参数映射/附加参数时行为与改造前完全一致（作为回归基线）。
+- 迁移：`triggerMethod='bazhuayu'`，`trigger_config={flowId, extraParams}`（**v1.2.0 丢弃旧 `paramMap`**），`trigger_secret={apiKey}`；升级后默认不发送任何业务参数，需要旧行为（会话名/触发文本/触发对象）可在附加参数里各加一条恢复。
 
-**（b）本产品配置字段**（v25 参数增强后）
+**（b）本产品配置字段**（v1.2.0：**无内置参数**）
 
 | 显示名 | 配置键 | 类型 | 必填 | 默认 / 示例 | 说明 |
 |---|---|---|---|---|---|
 | FlowId | `flowId` | string | 是 | `6ad859ccee2df270d53fc6e5` | 控制台流程详情复制；不是凭据，随任务列表返回 |
 | API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 `X-Api-Key`，**不参与参数** |
-| 参数映射 | `paramMap` | map | 否 | `{room:'room_name', content:'content', at:'at_name'}` | 把三个内置参数（会话名/触发文本/触发对象）映射成自己流程的入参名；只改键名、不改取值来源 |
-| 附加参数 | `extraParams` | paramList | 否 | 空 | 最多 **20 条**「参数名 → 值来源」；值来源 11 种（见 §4.3）；参数名不得与三个映射键重名 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一参数入口**：最多 **20 条**「参数名 → 值来源」；值来源 11 种（见 §4.3）；默认 `Params: {}`，要发什么就配什么 |
 
 ### 3.2 影刀 RPA（建议 P0）
 
@@ -494,13 +494,14 @@ export interface RpaVendorDescriptor {
   }
   /** 本产品配置字段（UI 自动渲染；required 决定「标记已完善」）。 */
   fields: RpaField[]           // 非敏感：robotUuid/ReleaseKey/baseUrl/参数映射…
-  /** 三个语义参数位映射到厂商容器的形状（2026-10-21 v25：可声明附加参数）。 */
+  /** 语义参数位映射到厂商容器的形状（2026-10-21：`mapField`/`targets` 均可为空 = extras-only）。 */
   mapping: {
     style: 'object' | 'nameValueArray' | 'nameValueTypeArray' | 'formParams' | 'jsonStringObject'
-    /** 参数映射字段（`type:'map'`，值 `{room,content,at}` 可逐项覆盖 defaultKey）。 */
-    mapField: string
+    /** 可选：参数映射字段（`type:'map'`，值 `{room,content,at}` 可逐项覆盖 defaultKey）；缺省 = 无映射。 */
+    mapField?: string
+    /** 可为空：`targets: []` 表示该厂商**没有内置语义参数**，参数全部走 `extrasField`（八爪鱼 v1.2.0）。 */
     targets: Array<{ semantic: 'room' | 'content' | 'at'; defaultKey: string; label?: string }>
-    /** 可选：指向一个 `type:'paramList'` 字段；其条目在三个语义参数之后追加。 */
+    /** 可选：指向一个 `type:'paramList'` 字段；其条目追加到参数容器（targets 为空时容器只有这些条目）。 */
     extrasField?: string
   }
   request: {
@@ -556,8 +557,9 @@ export interface RpaField {
 
 描述符可在 `mapping.mapField` + `mapping.targets` 之外声明 `extrasField`，指向一个
 `type:'paramList'` 的配置字段（如八爪鱼 `extraParams`）。用户在表单里逐条配置
-「参数名 → 值来源」，投递时由通用管道解析成最终字符串，**追加在三个语义参数之后**
-（同一个参数容器；顺序 = 用户排列顺序）。
+「参数名 → 值来源」，投递时由通用管道解析成最终字符串，**追加在语义参数之后**
+（同一个参数容器；顺序 = 用户排列顺序）。若 `mapping.targets` 为空（八爪鱼 v1.2.0），
+该容器**只含附加参数**（默认 `{}`），即「extras-only」形态。
 
 ```ts
 export type RpaParamSource =
@@ -567,7 +569,7 @@ export type RpaParamSource =
   | 'fixed' | 'template'                      // 固定值 / 自定义模板
 
 export interface RpaParamEntry {
-  name: string                    // 发到厂商的 key；同列表唯一、不得与三个映射键重名
+  name: string                    // 发到厂商的 key（须与对端入参名一致）；同列表唯一
   source: RpaParamSource
   fixedValue?: string             // source='fixed' 时必填（≤2048 字）
   template?: string               // source='template' 时必填（≤512 字）
@@ -579,7 +581,7 @@ export interface RpaParamEntry {
 `${record.chatType}` / `${record.triggeredAt}` / `${task.name}` / `${task.id}`；
 **不允许 `${secret.*}` / `${config.*}` 或白名单外字段**（保存时校验报错）。模板只做字符串
 插值 / 整值替换，不执行表达式。参数名 ≤64 字；附加参数条数 ≤`maxItems`（八爪鱼 20，
-缺省 50）；空列表合法。
+缺省 50）；空列表合法（等价于不发业务参数）。
 
 > 该机制**通用**：其他厂商后续只需在描述符声明 `extrasField`（+ 一个 `paramList` 字段），
 > 即可复用同一套表单与解析逻辑，核心管道无需改动。
@@ -639,8 +641,8 @@ const yingdao: RpaVendorAdapter = {
   → ② validate(descriptor.fields)   必填/类型/正则/秘密是否已配置 → 缺 → skipped「配置不完整」
   → ③ gate(record.text)             隐私闸（沿用 feature 'task_callback'；两种方式同一口径）
   → ④ render(descriptor.request)    模板上下文：config / secret / record / invocation / mapped
-                                     （mapped = 三个语义参数 + extrasField 附加参数，见 §4.3.1；
-                                      占位符白名单，只允许这几个根；禁止 eval）
+                                     （mapped = 语义参数 + extrasField 附加参数；targets 为空时
+                                      只有附加参数，见 §4.3.1；占位符白名单，禁止 eval）
   → ⑤ auth(descriptor.auth)         header/bearer/token-exchange（通用 token 缓存，单飞）
                                      hmac-rpc/custom → 厂商文件内钩子
   → ⑥ send()                        统一 fetchWithRetry；重试策略来自 descriptor.retry；
@@ -666,14 +668,15 @@ const yingdao: RpaVendorAdapter = {
 
 | style | 形态 | 厂商 |
 |---|---|---|
-| `object` | `{"room_name":"…","content":"…","at_name":"…"}` | 八爪鱼 `Params`、实在 `inputParam` |
+| `object` | `{"room_name":"…","content":"…","at_name":"…"}` | 实在 `inputParam`（八爪鱼 `Params` 默认 `{}`，v1.2.0 起全部来自附加参数） |
 | `nameValueArray` | `[{"name":"room_name","value":"…"}]` | 阿里云 `AppParams` |
 | `nameValueTypeArray` | `[{"name":"room_name","value":"…","type":"str"}]` | 影刀 `params[]` |
 | `jsonStringObject` | `"{\"room_name\":\"…\"}"`（JSON 文本再转义） | UiPath `InputArguments` |
 | `formParams` | `room_name=…&content=…`（form-urlencoded） | 阿里云 POST body（若 POC 确认走 body） |
 
-> 五种容器**都会在三个语义参数之后**追加 `mapping.extrasField` 解析出的附加参数
+> 五种容器**都会在语义参数之后**追加 `mapping.extrasField` 解析出的附加参数
 > （见 §4.3.1）：`object` 加对象键、数组形态加条目、`formParams` 加 `&name=value`；
+> `targets` 为空时容器只含附加参数（八爪鱼 v1.2.0 = extras-only）；
 > 描述符没声明 `extrasField` 的厂商行为不变。该机制通用，其他厂商后续只需声明字段即可。
 
 ### 4.5 选择结构（UI）

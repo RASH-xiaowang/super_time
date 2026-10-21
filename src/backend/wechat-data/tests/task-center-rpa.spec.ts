@@ -355,7 +355,7 @@ describe('模板层：占位符渲染与参数容器', () => {
   })
 })
 
-describe('附加参数（八爪鱼参数增强，2026-10-21）', () => {
+describe('附加参数（八爪鱼 v1.2.0：无内置参数，Params 全由附加参数组装）', () => {
   /** 八爪鱼描述符 + request.body 换成直接暴露 Params（沿用真实描述符的字段/映射）。 */
   function bazhuayuWithParams(): RpaVendorDescriptor {
     return {
@@ -364,46 +364,46 @@ describe('附加参数（八爪鱼参数增强，2026-10-21）', () => {
     }
   }
 
-  it('默认配置仍是三个内置参数（旧行为逐字节不变）', () => {
+  it('默认没有内置参数：未配置附加参数时 Params 为空对象（不再发送 room_name/content/at_name）', () => {
     const req = renderRequest(bazhuayuWithParams(), ctxOf({ config: { flowId: 'flow-1' }, secrets: { apiKey: 'k-1' } }))
     const params = (JSON.parse(req.body) as Record<string, unknown>)['Params'] as Record<string, string>
-    expect(params).toEqual({ room_name: '李四', content: '发票 内容', at_name: '李四' })
+    expect(params).toEqual({})
+    expect(Object.keys(params)).toHaveLength(0)
   })
 
-  it('参数映射可改三个内置参数名；附加参数按值来源追加', () => {
+  it('附加参数按值来源组装 Params（含旧的三个语义位也能用附加参数表达）', () => {
     const config: RpaTriggerConfig = {
       flowId: 'flow-1',
-      paramMap: { room: 'group_name', content: 'text', at: 'user' },
       extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'content', source: 'content' },
+        { name: 'at_name', source: 'at' },
         { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
         { name: 'kw', source: 'keyword' },
         { name: 'task', source: 'taskName' },
-        { name: 'at2', source: 'at' },
         { name: 'tpl', source: 'template', template: '${record.chatName}/${task.name}' },
         { name: 'typ', source: 'chatType' },
         { name: 'tid', source: 'taskId' },
         { name: 'rid', source: 'recordId' },
-        { name: 'content2', source: 'content' },
       ],
     }
     const req = renderRequest(bazhuayuWithParams(), ctxOf({ config, secrets: { apiKey: 'k-1' } }))
     const params = (JSON.parse(req.body) as Record<string, unknown>)['Params'] as Record<string, string>
-    expect(params['group_name']).toBe('李四')
-    expect(params['text']).toBe('发票 内容')
-    expect(params['user']).toBe('李四')
-    expect(params['order_no']).toBe('A-001')
-    expect(params['kw']).toBe('发票')
-    expect(params['task']).toBe('测试任务')
-    expect(params['at2']).toBe('李四')
-    expect(params['tpl']).toBe('李四/测试任务')
-    expect(params['typ']).toBe('单聊')
-    expect(params['tid']).toBe('1')
-    expect(params['rid']).toBe('2')
-    expect(params['content2']).toBe('发票 内容')
-    expect(Object.keys(params)).toHaveLength(12)
+    expect(params).toEqual({
+      room_name: '李四',
+      content: '发票 内容',
+      at_name: '李四',
+      order_no: 'A-001',
+      kw: '发票',
+      task: '测试任务',
+      tpl: '李四/测试任务',
+      typ: '单聊',
+      tid: '1',
+      rid: '2',
+    })
   })
 
-  it('校验：重名/缺固定值/模板越界/与映射键冲突/超上限都报可读错误', () => {
+  it('校验：重名/缺固定值/模板越界/超上限都报可读错误；不再有「映射键重名」限制', () => {
     const descriptor = bazhuayuWithParams()
     const duplicate = validateVendorConfig(descriptor, {
       extraParams: [
@@ -428,11 +428,12 @@ describe('附加参数（八爪鱼参数增强，2026-10-21）', () => {
     })
     expect(forbiddenRoot.errors.some((e) => e.includes('只支持 record / task'))).toBe(true)
 
-    const collision = validateVendorConfig(descriptor, {
-      extraParams: [{ name: 'room_name', source: 'keyword' }],
+    // 没有内置参数后，room_name 等只是普通参数名：允许（旧任务可用附加参数还原旧行为）。
+    const roomName = validateVendorConfig(descriptor, {
+      extraParams: [{ name: 'room_name', source: 'room' }],
     })
-    expect(collision.errors.some((e) => e.includes('与参数映射的键重名'))).toBe(true)
-    expect((collision.config['extraParams'] as unknown[]).length).toBe(0)
+    expect(roomName.errors).toEqual([])
+    expect(roomName.config['extraParams']).toEqual([{ name: 'room_name', source: 'room' }])
 
     const tooMany = validateVendorConfig(descriptor, {
       extraParams: Array.from({ length: 21 }, (_, i) => ({ name: 'p' + String(i), source: 'keyword' as const })),
@@ -458,16 +459,20 @@ describe('附加参数（八爪鱼参数增强，2026-10-21）', () => {
     expect(empty.config['extraParams']).toEqual([])
   })
 
-  it('默认配置带空附加参数列表，参数来源白名单完整', () => {
-    const defaults = defaultConfigFor(bazhuayuAdapter.descriptor)
+  it('描述符：无 mapField/targets、默认配置只有 FlowId + 空附加参数列表', () => {
+    const descriptor = bazhuayuAdapter.descriptor
+    expect(descriptor.mapping.targets).toEqual([])
+    expect(descriptor.mapping.mapField).toBeUndefined()
+    expect(descriptor.mapping.extrasField).toBe('extraParams')
+    const defaults = defaultConfigFor(descriptor)
     expect(defaults['extraParams']).toEqual([])
-    const field = bazhuayuAdapter.descriptor.fields.find((item) => item.key === 'extraParams')
+    expect(defaults['paramMap']).toBeUndefined()
+    const field = descriptor.fields.find((item) => item.key === 'extraParams')
     expect(field?.type).toBe('paramList')
     expect(field?.paramSources).toContain('template')
     expect(field?.paramSources).toContain('fixed')
   })
 })
-
 describe('鉴权层', () => {
   const bearerAdapter: RpaVendorAdapter = {
     descriptor: descriptorOf({

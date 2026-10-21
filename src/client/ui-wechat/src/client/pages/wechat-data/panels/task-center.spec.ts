@@ -74,21 +74,7 @@ import {
   withVendorDefaults,
   type TaskEditDraft,
 } from './task-center.ts'
-import {
-  ALL_PARAM_SOURCES,
-  appendParamEntry,
-  flattenConfigValues,
-  maxParamItems,
-  newParamEntry,
-  normalizeParamListEntries,
-  PARAM_SOURCE_LABELS,
-  paramEntriesOf,
-  paramSourceOptions,
-  removeParamEntry,
-  resolvedMapKeys,
-  updateParamEntry,
-  validateParamList,
-} from './task-center-param-list.ts'
+import { flattenConfigValues } from './task-center-param-list.ts'
 
 /** 造一个厂商描述符（只覆盖用到的字段，其余给稳定默认值）。 */
 function makeDescriptor(overrides: Partial<RpaVendorDescriptor> = {}): RpaVendorDescriptor {
@@ -151,7 +137,8 @@ const WEBHOOK: RpaVendorDescriptor = makeDescriptor({
   ],
 })
 
-/** 八爪鱼描述符：flowId（summary）+ paramMap + extraParams（paramList）+ apiKey（auth secret）。 */
+/** 八爪鱼描述符（v1.2.0）：flowId（summary）+ extraParams（paramList）+ apiKey（auth secret）。
+ * 没有内置「三个参数」：mapping 无 mapField、targets 为空，所有参数都在附加参数里显式添加。 */
 const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
   id: 'bazhuayu',
   name: '八爪鱼 RPA',
@@ -167,7 +154,6 @@ const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
       example: '例如 6ad859ccee2df270d53fc6e5',
       pattern: '^[A-Za-z0-9_-]{1,128}$',
     },
-    { key: 'paramMap', label: '参数映射', type: 'map', required: false },
     {
       key: 'extraParams',
       label: '附加参数',
@@ -187,13 +173,8 @@ const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
   },
   mapping: {
     style: 'object',
-    mapField: 'paramMap',
     extrasField: 'extraParams',
-    targets: [
-      { semantic: 'room', defaultKey: 'room_name' },
-      { semantic: 'content', defaultKey: 'content' },
-      { semantic: 'at', defaultKey: 'at_name' },
-    ],
+    targets: [],
   },
 })
 
@@ -451,7 +432,7 @@ describe('触发方式目录：描述符查询与字段分组', () => {
 
   it('字段并集：descriptor.fields + auth.modes[].fields 去重，凭据字段统一 secret=true', () => {
     const bazhuayuFields = vendorFields(BAZHUAYU)
-    expect(bazhuayuFields.map((f) => f.key)).toEqual(['flowId', 'paramMap', 'extraParams', 'apiKey'])
+    expect(bazhuayuFields.map((f) => f.key)).toEqual(['flowId', 'extraParams', 'apiKey'])
     expect(bazhuayuFields.find((f) => f.key === 'apiKey')?.secret).toBe(true)
     const yingdaoFields = vendorFields(YINGDAO).map((f) => f.key)
     expect(yingdaoFields).toEqual(['baseUrl', 'robotUuid', 'accountName', 'priority', 'paramMap', 'accessKeyId', 'accessKeySecret'])
@@ -679,91 +660,6 @@ describe('触发方式目录：保存入参', () => {
 describe('附加参数（paramList）：值来源 / 默认 / 归一化 / 校验 / 保存', () => {
   const extrasField = BAZHUAYU.fields.find((field) => field.key === 'extraParams')!
 
-  it('值来源中文名与下拉选项：缺省全量 11 种，paramSources 可收窄', () => {
-    expect(ALL_PARAM_SOURCES).toHaveLength(11)
-    expect(PARAM_SOURCE_LABELS).toMatchObject({
-      room: '会话名', content: '触发文本', at: '触发对象', taskName: '任务名',
-      keyword: '触发关键词', triggeredAt: '触发时间', chatType: '会话类型',
-      taskId: '任务 id', recordId: '触发记录 id', fixed: '固定值', template: '自定义模板',
-    })
-    expect(paramSourceOptions(extrasField).map((option) => option.value)).toEqual([...ALL_PARAM_SOURCES])
-    expect(paramSourceOptions({ ...extrasField, paramSources: ['room', 'fixed'] }).map((option) => option.label))
-      .toEqual(['会话名', '固定值'])
-    expect(maxParamItems(extrasField)).toBe(20)
-    expect(maxParamItems({ ...extrasField, maxItems: undefined })).toBe(50)
-  })
-
-  it('默认配置：paramList 字段默认空数组（不是 undefined），map 仍按 targets 生成三键', () => {
-    expect(defaultVendorConfig(BAZHUAYU).extraParams).toEqual([])
-    expect(defaultVendorConfig(BAZHUAYU).paramMap).toEqual({ room: 'room_name', content: 'content', at: 'at_name' })
-  })
-
-  it('草稿读入保留数组与用户改过的映射键；补默认值不覆盖已有数组', () => {
-    const task = makeTask({
-      triggerMethod: 'bazhuayu',
-      triggerConfig: {
-        flowId: 'f1',
-        paramMap: { room: 'group_name' },
-        extraParams: [{ name: 'order_no', source: 'fixed', fixedValue: 'A-001' }],
-      },
-    })
-    const draft = draftFromTask(task, BAZHUAYU)
-    expect(draft.config.extraParams).toEqual([{ name: 'order_no', source: 'fixed', fixedValue: 'A-001' }])
-    expect(draft.config.paramMap).toEqual({ room: 'group_name', content: 'content', at: 'at_name' })
-    const merged = withVendorDefaults(BAZHUAYU, { extraParams: [{ name: 'kw', source: 'keyword' }] })
-    expect(merged.extraParams).toEqual([{ name: 'kw', source: 'keyword' }])
-  })
-
-  it('保存归一化：整数组带上、trim 参数名、只保留来源对应字段；空列表也整体带', () => {
-    const task = makeTask({ triggerMethod: 'bazhuayu' })
-    const input = taskSaveInput(task, makeDraft({
-      triggerMethod: 'bazhuayu',
-      config: {
-        flowId: 'f1',
-        paramMap: { room: 'group_name', content: '', at: '' },
-        extraParams: [
-          { name: ' order_no ', source: 'fixed', fixedValue: ' A-001 ', template: 'ignored' },
-          { name: 'kw', source: 'template', template: ' ${record.keyword} ', fixedValue: 'ignored' },
-          { name: 'room_src', source: 'room', fixedValue: 'ignored' },
-        ],
-      },
-    }), BAZHUAYU)
-    expect(input.triggerConfig?.extraParams).toEqual([
-      { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
-      { name: 'kw', source: 'template', template: '${record.keyword}' },
-      { name: 'room_src', source: 'room' },
-    ])
-    expect(input.triggerConfig?.paramMap).toEqual({ room: 'group_name', content: 'content', at: 'at_name' })
-    const empty = taskSaveInput(task, makeDraft({ triggerMethod: 'bazhuayu', config: { flowId: 'f1' } }), BAZHUAYU)
-    expect(empty.triggerConfig?.extraParams).toEqual([])
-  })
-
-  it('校验：参数名非空/长度/去重/映射键重名/来源/固定值/模板白名单/上限', () => {
-    const reserved = ['room_name', 'content', 'at_name']
-    expect(validateParamList(extrasField, [], reserved)).toEqual({})
-    expect(validateParamList(extrasField, [{ name: '', source: 'room' }], reserved)['extraParams:0']).toContain('缺少参数名')
-    expect(validateParamList(extrasField, [{ name: 'a'.repeat(65), source: 'room' }], reserved)['extraParams:0']).toContain('参数名过长')
-    expect(validateParamList(extrasField, [{ name: 'a', source: 'room' }, { name: 'A', source: 'room' }], reserved)['extraParams:1']).toContain('参数名重复')
-    expect(validateParamList(extrasField, [{ name: 'ROOM_NAME', source: 'fixed', fixedValue: 'x' }], reserved)['extraParams:0'])
-      .toContain('重名')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'nope' as never }], reserved)['extraParams:0']).toContain('值来源无效')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'fixed' }], reserved)['extraParams:0']).toContain('固定值')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'fixed', fixedValue: 'v'.repeat(2049) }], reserved)['extraParams:0'])
-      .toContain('固定值过长')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'template', template: '' }], reserved)['extraParams:0'])
-      .toContain('必须填写模板')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'template', template: '${secret.apiKey}' }], reserved)['extraParams:0'])
-      .toContain('record / task')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'template', template: '${record.nope}' }], reserved)['extraParams:0'])
-      .toContain('允许清单')
-    expect(validateParamList(extrasField, [{ name: 'x', source: 'template', template: '${record.chatName}-${task.name}' }], reserved))
-      .toEqual({})
-    const many = Array.from({ length: 21 }, (_, index) => ({ name: `p${String(index)}`, source: 'room' as const }))
-    const over = validateParamList(extrasField, many, reserved)
-    expect(over.extraParams).toContain('最多 20 条')
-    expect(Object.keys(over)).not.toContain('extraParams:20')
-  })
-
   it('validateTaskDraft 合并行内错误：非法格式保存时就拦，合法/空列表放行', () => {
     const bad = makeDraft({
       triggerMethod: 'bazhuayu',
@@ -818,36 +714,7 @@ describe('附加参数（paramList）：值来源 / 默认 / 归一化 / 校验 
     expect(flattenTriggerConfig({ extraParams: [{ name: 'x', source: 'room' }] })).toEqual(['x'])
   })
 
-  it('行操作：追加/更新/删除；达到上限不再追加；默认来源取允许集合第一个', () => {
-    const narrowed = { ...extrasField, paramSources: ['fixed', 'room'] as never }
-    expect(paramSourceOptions(narrowed).map((option) => option.value)).toEqual(['room', 'fixed'])
-    expect(newParamEntry(narrowed)).toEqual({ name: '', source: 'room' })
-    let entries = appendParamEntry([], extrasField)
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toEqual({ name: '', source: 'room' })
-    entries = updateParamEntry(entries, 0, { name: 'order_no', source: 'fixed', fixedValue: 'A-001' })
-    expect(entries).toEqual([{ name: 'order_no', source: 'fixed', fixedValue: 'A-001' }])
-    expect(removeParamEntry(entries, 0)).toEqual([])
-    const full = Array.from({ length: 20 }, () => newParamEntry(extrasField))
-    expect(appendParamEntry(full, extrasField)).toBe(full)
-  })
 
-  it('paramEntriesOf 丢弃脏条目；resolvedMapKeys 用改过的映射键（缺省回落 defaultKey）', () => {
-    expect(paramEntriesOf({
-      extraParams: [
-        { name: 'ok', source: 'fixed', fixedValue: 'v' },
-        { name: 'bad' },
-        'nope',
-      ] as never,
-    }, 'extraParams')).toEqual([{ name: 'ok', source: 'fixed', fixedValue: 'v' }])
-    expect(normalizeParamListEntries([
-      { name: ' a ', source: 'room', fixedValue: 'ignored' },
-      { name: '  ', source: 'room' },
-    ])).toEqual([{ name: 'a', source: 'room' }])
-    expect(resolvedMapKeys(BAZHUAYU, { paramMap: { room: ' group_name ' } }))
-      .toEqual(['group_name', 'content', 'at_name'])
-    expect(resolvedMapKeys(BAZHUAYU, {})).toEqual(['room_name', 'content', 'at_name'])
-  })
 })
 
 describe('配置值辅助', () => {

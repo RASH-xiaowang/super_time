@@ -208,10 +208,19 @@ describe('厂商描述符契约', () => {
         }
       })
 
-      it('参数映射：三个语义位齐全且 mapField 有对应字段', () => {
+      it('参数映射：内置语义参数可空（全走附加参数）；有内置则三个语义位齐全且 mapField 有对应字段', () => {
         expect(['object', 'nameValueArray', 'nameValueTypeArray', 'jsonStringObject', 'formParams']).toContain(
           descriptor.mapping.style,
         )
+        if (descriptor.mapping.targets.length === 0) {
+          // 无内置参数（八爪鱼 2026-10-21 起）：必须完全靠 extrasField 配置参数。
+          expect(descriptor.mapping.mapField).toBeUndefined()
+          const extrasField = descriptor.mapping.extrasField
+          expect(extrasField, descriptor.id + ' 无语义参数时必须声明 extrasField').toBeDefined()
+          const field = descriptor.fields.find((item) => item.key === extrasField)
+          expect(field?.type, descriptor.id + ' 的 extrasField 必须指向 paramList 字段').toBe('paramList')
+          return
+        }
         expect(String(descriptor.mapping.mapField)).not.toBe('')
         expect(descriptor.mapping.targets.map((target) => target.semantic).sort()).toEqual(['at', 'content', 'room'])
         for (const target of descriptor.mapping.targets) expect(String(target.defaultKey)).not.toBe('')

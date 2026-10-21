@@ -7,7 +7,7 @@
  *  ① 通用配置/凭据的落库、描述符版本，以及「列表永不回 Key 原文」；
  *  ② 旧入参（callbackUrl / bazhuayuFlowId / bazhuayuApiKey）与旧库专用列的迁移兼容；
  *  ③ 更新语义（缺省保留 / `''` 清空 / triggerConfig 整体替换）与 ready 校验（save + setStatus）；
- *  ④ 投递：固定 URL、`X-Api-Key` 头、Params 三键（含单聊 at_name 回落）、成功/失败/未配置；
+ *  ④ 投递：固定 URL、`X-Api-Key` 头、Params 按附加参数组装（含单聊 at/文本回落）、成功/失败/未配置；
  *  ⑤ 链路：bazhuayu 任务（通用配置里没有 Webhook 地址）也能扫出 pending 并批量投递。
  *
  * 与 `task-center.spec.ts` 同款：临时目录 + 合成真实解密消息分片（走生产扫描链路），
@@ -38,12 +38,10 @@ const API_KEY = 'bz-secret-key-123456'
 const FLOW_ID = '6ad859ccee2df270d53fc6e5'
 const BAZHUAYU_URL = 'https://api-rpa.bazhuayu.com/api/bots/scheduling/start'
 /**
- * 八爪鱼描述符的默认非敏感配置（2026-10-21 参数增强后：除 FlowId 外还有可编辑的
- * 三个语义映射键（默认值）与空的附加参数列表）。保存时按描述符补默认值，因此列表
- * 读回的 triggerConfig 会带上这两个键。
+ * 八爪鱼描述符的默认非敏感配置：2026-10-21 v1.2.0 起没有「三个内置参数」，
+ * 只有空的附加参数列表；Params 完全由任务配置显式决定。
  */
 const BAZHUAYU_CONFIG_DEFAULTS = {
-  paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
   extraParams: [],
 }
 
@@ -200,7 +198,17 @@ function fixtureWithBazhuayuTrigger(): number {
   seedMessages(GROUP_TALKER, [
     { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', text: '历史 报价' },
   ])
-  expect(saveTaskInfo(decrypted, groupBazhuayuInput()).ok).toBe(true)
+  // v1.2.0 起没有内置参数：成功投递用例显式配置三个参数（验证组装/隐私闸/回落仍正确）。
+  expect(saveTaskInfo(decrypted, groupBazhuayuInput({
+    triggerConfig: {
+      flowId: FLOW_ID,
+      extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'content', source: 'content' },
+        { name: 'at_name', source: 'at' },
+      ],
+    },
+  })).ok).toBe(true)
   seedMessages(GROUP_TALKER, [
     { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_target', text: '秘密 报价 内容' },
   ])
@@ -511,7 +519,14 @@ describe('八爪鱼投递（注册表管道）', () => {
     seedMessages(PRIVATE_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' },
     ])
-    expect(saveTaskInfo(decrypted, bazhuayuInput({ status: 'ready', chatName: '李四' })).ok).toBe(true)
+    expect(saveTaskInfo(decrypted, bazhuayuInput({
+      status: 'ready',
+      chatName: '李四',
+      triggerConfig: {
+        flowId: FLOW_ID,
+        extraParams: [{ name: 'room_name', source: 'room' }, { name: 'at_name', source: 'at' }],
+      },
+    })).ok).toBe(true)
     seedMessages(PRIVATE_TALKER, [
       { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_lisi', text: '秘密 发票 内容' },
     ])
@@ -531,7 +546,7 @@ describe('八爪鱼投递（注册表管道）', () => {
     // 群聊用例见上一条成功用例：targetName='小王' 时 at_name 严格保持「小王」。
   })
 
-  it('参数增强：参数映射改名 + 附加参数随 Params 一起发出（真实派发链路）', async () => {
+  it('参数增强（v1.2.0）：没有内置三参数，Params 完全由附加参数组装（真实派发链路）', async () => {
     seedMessages(GROUP_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', text: '历史 报价' },
     ])
@@ -539,8 +554,10 @@ describe('八爪鱼投递（注册表管道）', () => {
       name: '群报价任务',
       triggerConfig: {
         flowId: FLOW_ID,
-        paramMap: { room: 'group_name', content: 'text', at: 'user' },
         extraParams: [
+          { name: 'room_name', source: 'room' },
+          { name: 'content', source: 'content' },
+          { name: 'at_name', source: 'at' },
           { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
           { name: 'kw', source: 'keyword' },
           { name: 'tpl', source: 'template', template: '${record.chatName}/${task.name}' },
@@ -561,13 +578,14 @@ describe('八爪鱼投递（注册表管道）', () => {
     })
     expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
     const params = bodies[0]?.['Params'] as Record<string, string> | undefined
-    expect(params?.['group_name']).toBe('报价群')
-    expect(params?.['text']).toBe('*** 报价 内容')
-    expect(params?.['user']).toBe('小王')
-    expect(params?.['order_no']).toBe('A-001')
-    expect(params?.['kw']).toBe('报价')
-    expect(params?.['tpl']).toBe('报价群/群报价任务')
-    expect(params?.['room_name']).toBeUndefined()
+    expect(params).toEqual({
+      room_name: '报价群',
+      content: '*** 报价 内容',
+      at_name: '小王',
+      order_no: 'A-001',
+      kw: '报价',
+      tpl: '报价群/群报价任务',
+    })
     expect(bodies[0]?.['FlowId']).toBe(FLOW_ID)
   })
 

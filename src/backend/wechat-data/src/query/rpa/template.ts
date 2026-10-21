@@ -403,9 +403,12 @@ function dropExtrasCollidingWithMapping(
   if (extrasField === undefined) return
   const extras = config[extrasField]
   if (!Array.isArray(extras) || extras.length === 0) return
+  // 没有内置语义参数（mapField 未声明）的厂商没有保留名——附加参数想叫什么都行。
+  const mapField = descriptor.mapping.mapField
   const reserved = new Set(
-    Object.values(normalizeMapValue(descriptor, config[descriptor.mapping.mapField]))
-      .map((key) => key.toLowerCase()),
+    mapField === undefined
+      ? []
+      : Object.values(normalizeMapValue(descriptor, config[mapField])).map((key) => key.toLowerCase()),
   )
   const kept = extras.filter((entry) => {
     if (!reserved.has(entry.name.toLowerCase())) return true
@@ -802,10 +805,14 @@ function resolvePlaceholder(expr: string, roots: Record<string, unknown>): unkno
  * @param config - 已归一化配置。
  * @returns 语义位 → 厂商参数名。
  */
-function mappingKeys(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig): Record<RpaSemantic, string> {
-  const raw = config[descriptor.mapping.mapField]
+function mappingKeys(
+  descriptor: RpaVendorDescriptor,
+  config: RpaTriggerConfig,
+): Partial<Record<RpaSemantic, string>> {
+  const mapField = descriptor.mapping.mapField
+  const raw = mapField === undefined ? undefined : config[mapField]
   const overrides: Record<string, unknown> = isRecord(raw) ? raw : {}
-  const out = {} as Record<RpaSemantic, string>
+  const out: Partial<Record<RpaSemantic, string>> = {}
   for (const target of descriptor.mapping.targets) {
     const custom = overrides[target.semantic]
     out[target.semantic] = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
@@ -866,7 +873,7 @@ export function resolveMapped(descriptor: RpaVendorDescriptor, ctx: RpaInvocatio
     if (value === '' && target.semantic !== 'content') {
       throw new Error('缺少映射值：' + SEMANTIC_LABELS[target.semantic])
     }
-    entries.push({ name: keys[target.semantic], value })
+    entries.push({ name: keys[target.semantic] ?? target.defaultKey, value })
   }
   entries.push(...resolveExtraEntries(descriptor, config, ctx))
   return formatMapped(entries, descriptor.mapping.style)

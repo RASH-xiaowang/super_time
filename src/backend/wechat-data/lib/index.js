@@ -9688,11 +9688,6 @@ var adapter = {
 };
 
 // src/backend/wechat-data/src/query/rpa/vendors/bazhuayu.ts
-var MAPPING_TARGETS2 = [
-  { semantic: "room", defaultKey: "room_name", label: "\u4F1A\u8BDD\u540D" },
-  { semantic: "content", defaultKey: "content", label: "\u89E6\u53D1\u6587\u672C" },
-  { semantic: "at", defaultKey: "at_name", label: "\u89E6\u53D1\u5BF9\u8C61" }
-];
 var EXTRA_PARAM_SOURCES = [
   "room",
   "content",
@@ -9719,8 +9714,8 @@ var descriptor2 = {
   id: "bazhuayu",
   name: "\u516B\u722A\u9C7C RPA",
   vendor: "\u516B\u722A\u9C7C RPA\uFF08Bazhuayu\uFF09",
-  version: "1.1.0",
-  summary: "\u628A\u89E6\u53D1\u8BB0\u5F55\u6620\u5C04\u6210 room_name/content/at_name\uFF0C\u5E76\u53EF\u6309\u9700\u8FFD\u52A0\u53C2\u6570\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
+  version: "1.2.0",
+  summary: "\u628A\u4EFB\u52A1\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u6620\u5C04\u6210\u516B\u722A\u9C7C\u6D41\u7A0B\u5165\u53C2\uFF08\u9ED8\u8BA4\u4E0D\u53D1\u4E1A\u52A1\u53C2\u6570\uFF09\uFF0CPOST \u5230\u516B\u722A\u9C7C\u56FA\u5B9A\u4E3B\u673A\u542F\u52A8\u6D41\u7A0B\uFF08\u4E0D\u53D1\u56FE\u7247\uFF09\u3002",
   status: "stable",
   docs: {
     home: "https://www.bazhuayu.com/",
@@ -9748,21 +9743,13 @@ var descriptor2 = {
     },
     apiKeyField,
     {
-      key: "paramMap",
-      label: "\u53C2\u6570\u6620\u5C04",
-      type: "map",
-      required: false,
-      defaultValue: { room: "room_name", content: "content", at: "at_name" },
-      help: "\u628A\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u6620\u5C04\u5230\u4F60\u6D41\u7A0B\u91CC\u7684\u5165\u53C2\u540D\uFF08\u9ED8\u8BA4 room_name / content / at_name\uFF09\uFF1B\u53EA\u5F71\u54CD\u8FD9\u4E09\u4E2A\u952E\u3002"
-    },
-    {
       key: "extraParams",
       label: "\u9644\u52A0\u53C2\u6570",
       type: "paramList",
       required: false,
       maxItems: 20,
       paramSources: [...EXTRA_PARAM_SOURCES],
-      help: "\u53EF\u9009\uFF1A\u8FFD\u52A0\u4EFB\u610F\u300C\u53C2\u6570\u540D \u2192 \u503C\u6765\u6E90\u300D\uFF0C\u547D\u4E2D\u5173\u952E\u8BCD\u540E\u968F\u672C\u6B21\u8BF7\u6C42\u4E00\u8D77\u53D1\u51FA\uFF1B\u53C2\u6570\u540D\u4E0D\u80FD\u4E0E\u4E0A\u9762\u4E09\u4E2A\u6620\u5C04\u952E\u91CD\u540D\u3002"
+      help: "\u516B\u722A\u9C7C\u6D41\u7A0B\u7684\u5165\u53C2\u5168\u90E8\u5728\u8FD9\u91CC\u914D\u7F6E\uFF08\u9ED8\u8BA4\u4E0D\u53D1\u4EFB\u4F55\u4E1A\u52A1\u53C2\u6570\uFF09\u3002\u53C2\u6570\u540D\u5FC5\u987B\u4E0E\u6D41\u7A0B\u5165\u53C2\u4E00\u81F4\uFF1B\u9700\u8981\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61\u65F6\uFF0C\u5404\u52A0\u4E00\u6761\u5E76\u628A\u503C\u6765\u6E90\u9009\u6210\u5BF9\u5E94\u9879\u3002"
     }
   ],
   auth: {
@@ -9771,8 +9758,8 @@ var descriptor2 = {
   },
   mapping: {
     style: "object",
-    mapField: "paramMap",
-    targets: MAPPING_TARGETS2,
+    // 无内置语义参数：Params 完全由附加参数组装（默认 {}）。
+    targets: [],
     extrasField: "extraParams"
   },
   request: {
@@ -9809,8 +9796,8 @@ var descriptor2 = {
     "\u9644\u52A0\u53C2\u6570\u5B8C\u5168\u7531\u4F60\u914D\u7F6E\uFF1A\u503C\u6765\u81EA\u89E6\u53D1\u8BB0\u5F55/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\uFF0C\u53D1\u51FA\u53BB\u4E4B\u524D\u8BF7\u786E\u8BA4\u5BF9\u7AEF\u6D41\u7A0B\u80FD\u63A5\u53D7\u8FD9\u4E9B\u952E"
   ],
   notes: [
-    "\u5185\u7F6E\u5382\u5546\uFF1A\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\uFF08room_name/content/at_name\uFF09\u7684\u9ED8\u8BA4\u884C\u4E3A\u4E0E 2026-10-21 \u4E4B\u524D\u9010\u5B57\u8282\u4E00\u81F4\u3002",
-    "2026-10-21 \u53C2\u6570\u589E\u5F3A\uFF1A\u53EF\u6539\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u540D\uFF08\u53C2\u6570\u6620\u5C04\uFF09\uFF0C\u5E76\u8FFD\u52A0\u4EFB\u610F\u9644\u52A0\u53C2\u6570\uFF1B\u53EA\u53D1\u4F60\u663E\u5F0F\u914D\u7F6E\u7684\u952E\u3002",
+    "2026-10-21\uFF08v1.2.0\uFF0C\u6309\u7528\u6237\u8981\u6C42\uFF09\uFF1A\u79FB\u9664\u300C\u4E09\u4E2A\u5185\u7F6E\u53C2\u6570\u300D\u2014\u2014Params \u5B8C\u5168\u7531\u300C\u9644\u52A0\u53C2\u6570\u300D\u9010\u6761\u914D\u7F6E\uFF0C\u9ED8\u8BA4 {}\uFF1B",
+    "\u9700\u8981\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61\u65F6\uFF0C\u5728\u9644\u52A0\u53C2\u6570\u91CC\u5404\u52A0\u4E00\u6761\uFF08\u503C\u6765\u6E90\u5206\u522B\u9009\u300C\u4F1A\u8BDD\u540D / \u89E6\u53D1\u6587\u672C / \u89E6\u53D1\u5BF9\u8C61\u300D\uFF09\u3002",
     "\u9644\u52A0\u53C2\u6570\u7684\u503C\u6765\u6E90\uFF1A\u4F1A\u8BDD\u540D/\u89E6\u53D1\u6587\u672C/\u89E6\u53D1\u5BF9\u8C61/\u4EFB\u52A1\u540D/\u5173\u952E\u8BCD/\u89E6\u53D1\u65F6\u95F4/\u4F1A\u8BDD\u7C7B\u578B/\u4EFB\u52A1 id/\u8BB0\u5F55 id/\u56FA\u5B9A\u503C/\u81EA\u5B9A\u4E49\u6A21\u677F\u3002",
     "\u81EA\u5B9A\u4E49\u6A21\u677F\u53EA\u5141\u8BB8 `${record.<\u5B57\u6BB5>}` / `${task.<\u5B57\u6BB5>}`\uFF08\u5B57\u6BB5\u767D\u540D\u5355\u89C1 docs/TASK-CENTER.md \xA76.3\uFF09\u3002"
   ]
@@ -9820,7 +9807,7 @@ var adapter2 = {
 };
 
 // src/backend/wechat-data/src/query/rpa/vendors/yingdao.ts
-var MAPPING_TARGETS3 = [
+var MAPPING_TARGETS2 = [
   { semantic: "room", defaultKey: "room_name" },
   { semantic: "content", defaultKey: "content" },
   { semantic: "at", defaultKey: "at_name" }
@@ -9947,7 +9934,7 @@ var descriptor3 = {
   mapping: {
     style: "nameValueTypeArray",
     mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS3
+    targets: MAPPING_TARGETS2
   },
   request: {
     method: "POST",
@@ -9999,7 +9986,7 @@ function semanticValue(record, semantic) {
 function mappedParams(ctx) {
   const raw = ctx.config[MAP_FIELD];
   const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
-  return MAPPING_TARGETS3.map((target) => {
+  return MAPPING_TARGETS2.map((target) => {
     const custom = overrides[target.semantic];
     const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
     return { name, value: semanticValue(ctx.record, target.semantic), type: "str" };
@@ -10041,7 +10028,7 @@ var adapter3 = {
 };
 
 // src/backend/wechat-data/src/query/rpa/vendors/uipath.ts
-var MAPPING_TARGETS4 = [
+var MAPPING_TARGETS3 = [
   { semantic: "room", defaultKey: "room_name" },
   { semantic: "content", defaultKey: "content" },
   { semantic: "at", defaultKey: "at_name" }
@@ -10230,7 +10217,7 @@ var descriptor4 = {
   mapping: {
     style: "jsonStringObject",
     mapField: MAP_FIELD2,
-    targets: MAPPING_TARGETS4
+    targets: MAPPING_TARGETS3
   },
   request: {
     method: "POST",
@@ -10291,7 +10278,7 @@ function inputArguments(ctx) {
   const raw = ctx.config[MAP_FIELD2];
   const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
   const out = {};
-  for (const target of MAPPING_TARGETS4) {
+  for (const target of MAPPING_TARGETS3) {
     const custom = overrides[target.semantic];
     const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
     out[key] = semanticValue2(ctx.record, target.semantic).trim();
@@ -10402,7 +10389,7 @@ var SIGNATURE_VERSION = "1.0";
 var API_VERSION = "20200430";
 var DEFAULT_TASK_PRIORITY = 50;
 var APP_PARAMS_MAX = 4e4;
-var MAPPING_TARGETS5 = [
+var MAPPING_TARGETS4 = [
   { semantic: "room", defaultKey: "room_name" },
   { semantic: "content", defaultKey: "content" },
   { semantic: "at", defaultKey: "at_name" }
@@ -10552,7 +10539,7 @@ var descriptor5 = {
   mapping: {
     style: "nameValueArray",
     mapField: MAP_FIELD3,
-    targets: MAPPING_TARGETS5
+    targets: MAPPING_TARGETS4
   },
   request: {
     method: "POST",
@@ -10627,7 +10614,7 @@ function semanticValue3(record, semantic) {
 function appParams(ctx) {
   const raw = ctx.config[MAP_FIELD3];
   const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
-  return MAPPING_TARGETS5.map((target) => {
+  return MAPPING_TARGETS4.map((target) => {
     const custom = overrides[target.semantic];
     const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
     return { name, value: semanticValue3(ctx.record, target.semantic) };
@@ -10762,7 +10749,7 @@ var adapter5 = {
 
 // src/backend/wechat-data/src/query/rpa/vendors/laiye.ts
 var CREATE_TASK_TOOL = "create_task";
-var MAPPING_TARGETS6 = [
+var MAPPING_TARGETS5 = [
   { semantic: "room", defaultKey: "room_name" },
   { semantic: "content", defaultKey: "content" },
   { semantic: "at", defaultKey: "at_name" }
@@ -10886,7 +10873,7 @@ var descriptor6 = {
   mapping: {
     style: "object",
     mapField: MAP_FIELD4,
-    targets: MAPPING_TARGETS6
+    targets: MAPPING_TARGETS5
   },
   request: {
     method: "POST",
@@ -10940,7 +10927,7 @@ function semanticValue4(record, semantic) {
 function taskParameters(ctx) {
   const raw = ctx.config[MAP_FIELD4];
   const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
-  return MAPPING_TARGETS6.map((target) => {
+  return MAPPING_TARGETS5.map((target) => {
     const custom = overrides[target.semantic];
     const name = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
     return {
@@ -11073,7 +11060,7 @@ var adapter6 = {
 
 // src/backend/wechat-data/src/query/rpa/vendors/shizai.ts
 var OPERATION_START = 1;
-var MAPPING_TARGETS7 = [
+var MAPPING_TARGETS6 = [
   { semantic: "room", defaultKey: "room_name" },
   { semantic: "content", defaultKey: "content" },
   { semantic: "at", defaultKey: "at_name" }
@@ -11182,7 +11169,7 @@ var descriptor7 = {
   mapping: {
     style: "object",
     mapField: MAP_FIELD5,
-    targets: MAPPING_TARGETS7
+    targets: MAPPING_TARGETS6
   },
   request: {
     method: "POST",
@@ -11235,7 +11222,7 @@ function inputParam(ctx) {
   const raw = ctx.config[MAP_FIELD5];
   const overrides = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
   const out = {};
-  for (const target of MAPPING_TARGETS7) {
+  for (const target of MAPPING_TARGETS6) {
     const custom = overrides[target.semantic];
     const key = typeof custom === "string" && custom.trim() !== "" ? custom.trim() : target.defaultKey;
     out[key] = semanticValue5(ctx.record, target.semantic);
@@ -11598,8 +11585,9 @@ function dropExtrasCollidingWithMapping(descriptor8, config, errors) {
   if (extrasField === void 0) return;
   const extras = config[extrasField];
   if (!Array.isArray(extras) || extras.length === 0) return;
+  const mapField = descriptor8.mapping.mapField;
   const reserved = new Set(
-    Object.values(normalizeMapValue(descriptor8, config[descriptor8.mapping.mapField])).map((key) => key.toLowerCase())
+    mapField === void 0 ? [] : Object.values(normalizeMapValue(descriptor8, config[mapField])).map((key) => key.toLowerCase())
   );
   const kept = extras.filter((entry) => {
     if (!reserved.has(entry.name.toLowerCase())) return true;
@@ -11882,7 +11870,8 @@ function resolvePlaceholder(expr, roots) {
   return value;
 }
 function mappingKeys(descriptor8, config) {
-  const raw = config[descriptor8.mapping.mapField];
+  const mapField = descriptor8.mapping.mapField;
+  const raw = mapField === void 0 ? void 0 : config[mapField];
   const overrides = isRecord(raw) ? raw : {};
   const out = {};
   for (const target of descriptor8.mapping.targets) {
@@ -11924,7 +11913,7 @@ function resolveMapped(descriptor8, ctx) {
     if (value === "" && target.semantic !== "content") {
       throw new Error("\u7F3A\u5C11\u6620\u5C04\u503C\uFF1A" + SEMANTIC_LABELS[target.semantic]);
     }
-    entries2.push({ name: keys[target.semantic], value });
+    entries2.push({ name: keys[target.semantic] ?? target.defaultKey, value });
   }
   entries2.push(...resolveExtraEntries(descriptor8, config, ctx));
   return formatMapped(entries2, descriptor8.mapping.style);
