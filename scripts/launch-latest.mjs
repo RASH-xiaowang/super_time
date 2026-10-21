@@ -149,6 +149,9 @@ try {
     force: ARGS.forceBuild,
     skip: ARGS.skipBuild,
   })
+  if (git.branch && git.branch !== 'main') {
+    console.warn('[Super Time] 注意：当前在 ' + git.branch + ' 分支；按仓库约定（docs/CONTRIBUTING.md §11）请切回 main 再开发/启动。')
+  }
   console.log(launchBanner({ ...git, build: buildReasonText(plan) }))
 
   if (plan.build) {

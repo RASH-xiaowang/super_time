@@ -62,6 +62,7 @@ describe('接线守卫：启动器真的做了 构建/杀旧实例/启动', () =
     expect(launcher).toContain('killRunningInstances')
     expect(launcher).toContain("join(ROOT, 'scripts', 'launch-app.mjs')")
     expect(launcher).toContain('detached: true')
+    expect(launcher, '非 main 分支要给出约定警告').toContain('请切回 main')
     expect(readFileSync(join(ROOT, 'Latest.cmd'), 'utf8')).toContain('node scripts\\launch-latest.mjs')
   })
 
