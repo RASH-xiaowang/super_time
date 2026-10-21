@@ -315,6 +315,52 @@ function diffMapNums<K> (before: Map<K, number>, after: Map<K, number>): Array<[
   return out
 }
 
+/**
+ * 朋友圈内容统计（从 computeOverviewInsights 拆出：单函数行数棘轮 ≤250，且这段是纯扫描）。
+ *
+ * 只读 SnsTimeLine 并累加 total/images/videos/likes/comments；游标跨 await 必须用
+ * withDbAsync（见 db-open 的说明），每 SNS_YIELD_EVERY_ROWS 行让出一次。
+ * @param dec - 已解密数据根。
+ * @returns 朋友圈计数（读不到时全 0，不影响其它统计）。
+ */
+async function scanMomentsStats(dec: string): Promise<{ total: number; images: number; videos: number; likes: number; comments: number }> {
+  // 朋友圈
+  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
+  const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
+  if (existsSync(sp2)) {
+    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
+    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
+    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
+    try {
+      await withDbAsync(sp2, async (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return
+        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
+        let scanned = 0
+        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
+          const xml = cellStr(r.c)
+          moments.total += 1
+          moments.images += countSubstr(xml, '<media>') + countSubstr(xml, '<media ')
+          if (xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')) moments.videos += 1
+          const le = xml.indexOf('<LocalExtraInfo>')
+          if (le >= 0) {
+            const block = xml.slice(le, xml.indexOf('</LocalExtraInfo>', le) || xml.length)
+            const parts = countSubstr(block, '<user_comment>')
+            const likes = countSubstr(block, '<type>1</type>')
+            moments.likes += likes
+            moments.comments += Math.max(0, parts - likes)
+          }
+          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
+          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
+          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
+        }
+        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
+      })
+    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
+  }
+  return moments
+}
+
 async function computeOverviewInsights(decryptedDir: string, self = ''): Promise<OverviewInsights> {
   const dec = decryptedDir
   queryTraceBegin('insights')
@@ -468,40 +514,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       return { username: u, name, count }
     })
 
-  // 朋友圈
-  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
-  const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
-  if (existsSync(sp2)) {
-    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
-    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
-    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
-    try {
-      await withDbAsync(sp2, async (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-        if (!has) return
-        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
-        let scanned = 0
-        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
-          const xml = cellStr(r.c)
-          moments.total += 1
-          moments.images += countSubstr(xml, '<media>') + countSubstr(xml, '<media ')
-          if (xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')) moments.videos += 1
-          const le = xml.indexOf('<LocalExtraInfo>')
-          if (le >= 0) {
-            const block = xml.slice(le, xml.indexOf('</LocalExtraInfo>', le) || xml.length)
-            const parts = countSubstr(block, '<user_comment>')
-            const likes = countSubstr(block, '<type>1</type>')
-            moments.likes += likes
-            moments.comments += Math.max(0, parts - likes)
-          }
-          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
-          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
-          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
-        }
-        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
-      })
-    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
-  }
+  const moments = await scanMomentsStats(dec)
   queryTraceMark('insights', 'moments', moments.total)
 
   // 资产

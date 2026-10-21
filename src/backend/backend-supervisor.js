@@ -62,6 +62,65 @@ async function migrateSupervisorSecrets(runtime) {
 }
 
 /**
+ * 拉起 worker 进程并接好日志/通道（从 createBackendSupervisor 拆出：单函数行数棘轮 ≤250）。
+ * @param {object} ctx - 闭包依赖（见下面的解构）。
+ * @returns {object} createWorkerChannel 返回的句柄。
+ */
+function spawnWorkerProcess(ctx) {
+  const { userData, onExit, bootTrace, isPackaged, env, deps, diagLog, createWorkerChannel, onEvent, resolveHangMethods, DEBUG_HANG_ENV, utilityProcess, path } = ctx;
+
+    const hangMethods = resolveHangMethods({ isPackaged, env });
+    const workerEnv = { ...env };
+    if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
+    else delete workerEnv[DEBUG_HANG_ENV];
+
+    // 仅「未打包 + 显式 env」才给 worker 加 node 启动参数：用于内存/heap 策略实验
+    // （例如 `--max-old-space-size=192`）与 heap snapshot 归因。打包态一律不加。
+    const workerExecArgv = [];
+    if (!isPackaged) {
+      if (env.SUPERTIME_BACKEND_INSPECT === '1') {
+        const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
+        workerExecArgv.push('--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229'));
+      }
+      const nodeArgs = String(env.SUPERTIME_BACKEND_NODE_ARGS ?? '').trim();
+      if (nodeArgs !== '') workerExecArgv.push(...nodeArgs.split(/\s+/).filter((s) => s !== ''));
+    }
+    const child = utilityProcess.fork(
+      path.join(__dirname, 'wechat-worker.js'),
+      [],
+      {
+        serviceName: 'super-time-wechat-backend',
+        stdio: 'pipe',
+        env: workerEnv,
+        ...(workerExecArgv.length > 0 ? { execArgv: workerExecArgv } : {}),
+      },
+    );
+    bootTrace('main:spawn-called');
+    for (const [stream, level, target] of [
+      [child.stdout, 'backend', process.stdout],
+      [child.stderr, 'backend!', process.stderr],
+    ]) {
+      if (!stream || typeof stream.on !== 'function') continue;
+      stream.on('data', (chunk) => {
+        for (const line of String(chunk).split(/\r?\n/)) {
+          if (line.trim() === '') continue;
+          diagLog.write(level, [line]);
+          try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
+        }
+      });
+    }
+    return createWorkerChannel(child, {
+      userDataPath: userData,
+      onEvent: (name, args) => {
+        if (env.SUPERTIME_RELAY_LOG === '1') log.log('[relay:in]', name);
+        onEvent(name, args);
+      },
+      onExit,
+      ...(deps.callTimeoutMs === undefined ? {} : { callTimeoutMs: deps.callTimeoutMs }),
+      ...(deps.longTimeoutMs === undefined ? {} : { longTimeoutMs: deps.longTimeoutMs }),
+    });
+  }
+/**
  * 创建一个后端监管器。
  *
  * 所有 Electron/文件/配置依赖都从这里注入，便于在 Node 单测里替换。
@@ -164,57 +223,12 @@ function createBackendSupervisor(deps) {
   }
 
   function spawn(userData, onExit) {
-    const hangMethods = resolveHangMethods({ isPackaged, env });
-    const workerEnv = { ...env };
-    if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
-    else delete workerEnv[DEBUG_HANG_ENV];
-
-    // 仅「未打包 + 显式 env」才给 worker 加 node 启动参数：用于内存/heap 策略实验
-    // （例如 `--max-old-space-size=192`）与 heap snapshot 归因。打包态一律不加。
-    const workerExecArgv = [];
-    if (!isPackaged) {
-      if (env.SUPERTIME_BACKEND_INSPECT === '1') {
-        const inspectPort = String(env.SUPERTIME_BACKEND_INSPECT_PORT ?? '9229').trim();
-        workerExecArgv.push('--inspect=127.0.0.1:' + (/^\d+$/.test(inspectPort) ? inspectPort : '9229'));
-      }
-      const nodeArgs = String(env.SUPERTIME_BACKEND_NODE_ARGS ?? '').trim();
-      if (nodeArgs !== '') workerExecArgv.push(...nodeArgs.split(/\s+/).filter((s) => s !== ''));
-    }
-    const child = utilityProcess.fork(
-      path.join(__dirname, 'wechat-worker.js'),
-      [],
-      {
-        serviceName: 'super-time-wechat-backend',
-        stdio: 'pipe',
-        env: workerEnv,
-        ...(workerExecArgv.length > 0 ? { execArgv: workerExecArgv } : {}),
-      },
-    );
-    bootTrace('main:spawn-called');
-    for (const [stream, level, target] of [
-      [child.stdout, 'backend', process.stdout],
-      [child.stderr, 'backend!', process.stderr],
-    ]) {
-      if (!stream || typeof stream.on !== 'function') continue;
-      stream.on('data', (chunk) => {
-        for (const line of String(chunk).split(/\r?\n/)) {
-          if (line.trim() === '') continue;
-          diagLog.write(level, [line]);
-          try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
-        }
-      });
-    }
-    return createWorkerChannel(child, {
-      userDataPath: userData,
-      onEvent: (name, args) => {
-        if (env.SUPERTIME_RELAY_LOG === '1') log.log('[relay:in]', name);
-        onEvent(name, args);
-      },
-      onExit,
-      ...(deps.callTimeoutMs === undefined ? {} : { callTimeoutMs: deps.callTimeoutMs }),
-      ...(deps.longTimeoutMs === undefined ? {} : { longTimeoutMs: deps.longTimeoutMs }),
+    return spawnWorkerProcess({
+      userData, onExit, bootTrace, isPackaged, env, deps, diagLog, utilityProcess, path,
+      createWorkerChannel, onEvent, resolveHangMethods, DEBUG_HANG_ENV,
     });
   }
+
 
   async function start(userData) {
     const handle = spawn(userData, (code) => {

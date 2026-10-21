@@ -49,11 +49,6 @@ const LIMIT = 250
  */
 const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  791',
-  // 登记理由（2026-09-29）：这段循环必须**保持整段内联**才能同时满足连接纪律棘轮 ——
-  // 把分片读取抽成独立函数会让 `new DatabaseSync` 的站点归属变到账本里没有的函数名上
-  // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
-  // 就是在这个内联循环外面挂了一层"命中即 continue"。**行数只许变小。**
-  'src/backend/wechat-data/src/query/overview-insights.ts  computeOverviewInsights  252',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  727',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
   // 725 → 513；同日补上「始终可见的折叠按钮」（浮层收起后唯一的入口）⇒ 513 → 523；

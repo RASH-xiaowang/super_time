@@ -17472,7 +17472,8 @@ async function findLocalVideoPathAsync(wechatBaseDir, md5, _timelineId, _mediaId
 // src/backend/wechat-data/src/remotes/media.ts
 import { readdirSync as readdirSync25, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join52 } from "node:path";
-var IMAGE_BATCH_MAX = 200;
+
+// src/backend/wechat-data/src/query/concurrency.ts
 var IMAGE_BATCH_CONCURRENCY = 8;
 async function mapWithConcurrency(items, limit, mapper) {
   if (items.length === 0) return [];
@@ -17490,6 +17491,9 @@ async function mapWithConcurrency(items, limit, mapper) {
   await Promise.all(Array.from({ length: width }, worker));
   return out;
 }
+
+// src/backend/wechat-data/src/remotes/media.ts
+var IMAGE_BATCH_MAX = 200;
 var REMOTE_URLS_RPC_MAX = 200;
 function avatarWithArchive(rc, options) {
   const decrypted = rc.dirs().decrypted;
@@ -23101,6 +23105,37 @@ function diffMapNums(before, after) {
   }
   return out;
 }
+async function scanMomentsStats(dec) {
+  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 };
+  const sp2 = existsSync58(join76(dec, "sns", "db_sns", "sns.db")) ? join76(dec, "sns", "db_sns", "sns.db") : join76(dec, "sns", "sns.db");
+  if (existsSync58(sp2)) {
+    try {
+      await withDbAsync(sp2, async (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
+        if (!has) return;
+        let scanned = 0;
+        for (const r of db.prepare("SELECT content AS c FROM SnsTimeLine").iterate()) {
+          const xml = cellStr10(r.c);
+          moments.total += 1;
+          moments.images += countSubstr(xml, "<media>") + countSubstr(xml, "<media ");
+          if (xml.includes("<type>6</type>") || xml.includes("<type>4</type>") || xml.includes("<type>15</type>")) moments.videos += 1;
+          const le = xml.indexOf("<LocalExtraInfo>");
+          if (le >= 0) {
+            const block = xml.slice(le, xml.indexOf("</LocalExtraInfo>", le) || xml.length);
+            const parts = countSubstr(block, "<user_comment>");
+            const likes = countSubstr(block, "<type>1</type>");
+            moments.likes += likes;
+            moments.comments += Math.max(0, parts - likes);
+          }
+          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop();
+        }
+        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop();
+      });
+    } catch {
+    }
+  }
+  return moments;
+}
 async function computeOverviewInsights(decryptedDir, self = "") {
   const dec = decryptedDir;
   queryTraceBegin("insights");
@@ -23228,34 +23263,7 @@ async function computeOverviewInsights(decryptedDir, self = "") {
     }
     return { username: u, name, count };
   });
-  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 };
-  const sp2 = existsSync58(join76(dec, "sns", "db_sns", "sns.db")) ? join76(dec, "sns", "db_sns", "sns.db") : join76(dec, "sns", "sns.db");
-  if (existsSync58(sp2)) {
-    try {
-      await withDbAsync(sp2, async (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
-        if (!has) return;
-        let scanned = 0;
-        for (const r of db.prepare("SELECT content AS c FROM SnsTimeLine").iterate()) {
-          const xml = cellStr10(r.c);
-          moments.total += 1;
-          moments.images += countSubstr(xml, "<media>") + countSubstr(xml, "<media ");
-          if (xml.includes("<type>6</type>") || xml.includes("<type>4</type>") || xml.includes("<type>15</type>")) moments.videos += 1;
-          const le = xml.indexOf("<LocalExtraInfo>");
-          if (le >= 0) {
-            const block = xml.slice(le, xml.indexOf("</LocalExtraInfo>", le) || xml.length);
-            const parts = countSubstr(block, "<user_comment>");
-            const likes = countSubstr(block, "<type>1</type>");
-            moments.likes += likes;
-            moments.comments += Math.max(0, parts - likes);
-          }
-          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop();
-        }
-        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop();
-      });
-    } catch {
-    }
-  }
+  const moments = await scanMomentsStats(dec);
   queryTraceMark("insights", "moments", moments.total);
   const assets = { favorites: 0, emoticons: 0, files: 0, fileBytes: 0, mediaItems: 0, mediaBytes: 0 };
   assets.favorites = countRows2(join76(dec, "favorite", "favorite.db"), "fav_db_item");
