@@ -32,6 +32,7 @@
 | 22 | 本轮 | perf(files): 缩略图宽度自适应 + 视区外预取（hook 两条 lane、LRU 随列数放大） | S（资源生命周期） | 7 spec 45 用例绿；棘轮绿；measure:quick 18/21 用例 27.37s；真实应用：URL 全为 `?w=240`（原 320）、31 张渲染却新建 51 个缩略图缓存（预取生效）、0 破图 |
 | 23 | 本轮 | chore(launch): 「启动最新版」启动器（按需构建 + 关旧实例 + 启动自检），主区 SuperTime.cmd 转调 | T（启动链路） | 自检 exit 0：产物最新时跳过构建；运行中再启动 → 关闭旧实例 1 个、新主进程 1 个；launch-latest 3 组单测 + 棘轮 16 用例绿；typecheck 0 |
 | 24 | 本轮 | merge: perf/resource-lifecycle-v1 并入主区（WIP 快照 f918145 → merge a8bbb78 → 修复 69be6ee） | U（主区收口） | 26 spec/222 用例绿；measure:quick 21/21 27.4s；typecheck 0；check-generated 一致；真机截图：昵称 + 49 图全载/0 破图、URL `?w=240`；启动器改为主区本地构建 |
+| 25 | 本轮 | feat(ui): 统一资源预览组件 `MediaViewer`（聊天/文件/朋友圈/ClawBot/收藏五处接入） | V（资源预览） | 受影响 7 spec/86 用例绿；measure:quick 21/21 27.5s；棘轮绿；typecheck 0；真机：35 张图、计数器 1/113→2/113 秒开、缩放 125%、Esc 关闭；截图 `assets/viewer-unified.png` |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -210,6 +211,19 @@
 - **启动器收口**：主区 `SuperTime.cmd` 改为调用**主区本地** `Latest.cmd`（不再依赖 `.worktrees`）；桌面「Super Time」快捷方式目标不变，因此直接生效。
 - **验证**：`typecheck` 0；`check-generated --all` 一致；`measure:quick` 18/21 用例 27.4s；本次合并触及的 26 个 spec / **222 用例全绿**（含收藏/KB/ClawBot 主区新功能与性能分支用例）；真机启动截图：侧栏昵称 `SuperT_王国宁`、文件面板 49 张图全载/0 破图、URL 全为 `?w=240`。
 - **回滚**：`git reset --hard backup/main-release-before-merge` 可整体回到合并前；单点回滚用 `git revert a8bbb78`（合并）或 `git revert 69be6ee`（棘轮/拆分修复）；备份目录保留原始未跟踪文件。
+
+### V · 统一资源预览组件：五处收成一个 `MediaViewer`（2026-10-21）
+- **盘点（改造前各写一套）**：聊天图片查看器（`chats-media.tsx` 自绘白底工具条 + 居中「加载中…」）、文件面板灯箱（`Files.tsx` 卡片式 + 底部缩放）、朋友圈灯箱（`moments-portals.tsx` 自带旋转/保存/缩略图）、ClawBot 图片（通用 Dialog 里的裸 `<img>`）、收藏详情图片（只内嵌、不可放大）。
+- **统一实现**（`pages/wechat-data/media-viewer/`）：
+  * `MediaViewer.tsx`：深色玻璃全屏壳；顶部「标题/元信息 + 计数器 + 下载 + 关闭」，底部浮动词条（− 百分比 +、适应窗口、扩展位）；左右切图、缩略图条（可选）、加载骨架/错误重试/淡入；键盘 ← → + − 0 Esc、滚轮、双击、拖拽、双指缩放；
+  * **效率**：当前图按需 `load()`，同时预取左右相邻各一张；缓存 hook（`use-viewer-cache.ts`）只留最近 4 张；原图未到时先铺缩略图（blur 占位）→ 到位淡入，文件面板直接用网格 `?w=` 缩略图铺底；
+  * `viewer-model.ts`：缩放钳位/步长、循环翻页、相邻预取、计数/百分比文案拆成纯函数并单测；
+  * 无障碍：焦点陷阱 + Esc 入栈统一在共享壳内（`dialog-a11y.wiring.spec.ts` 改为「适配器传字面量名字 + 共享壳渲染属性/钩子」的双向判据）。
+- **接入**：聊天（`chats-media.tsx ImageViewer` 变 30 行包装，命中内存缓存直接返回）、文件（`Files.tsx` 灯箱整段替换，`FilesPanel` 336→**282 行**）、朋友圈（保留复制/保存/旋转/缩略图，缩放拖拽交给共享壳，`MomentsPanel` 322→**312 行**）、ClawBot（抽出 `clawbot-media-viewer.tsx`，单函数回到 250 以内）、收藏图片（点开即可全屏）。
+- **真机验收**（Playwright，文件面板）：35 个图片格 → 打开计数 `1 / 113`、图片已加载、下载/关闭/左右按钮齐；`→` 翻到 `2 / 113` 且**无加载态**（相邻预取生效）；点「+」到 `125%`；`Esc` 后覆盖层消失。截图存 `docs/perf/assets/viewer-unified.png`。
+- **验收门禁**：`npm run test:affected` 7 spec / **86 用例全绿**；`measure:quick` 18/21 用例 27.5s；两只棘轮绿（FilesPanel/MomentsPanel 缩小已记账）；`typecheck` 0；`check-generated --all` 一致。
+- **回滚**：`git revert 本提交`（新组件为新增文件；五处调用点各自可单独回退）。
+- **已知边界**：聊天/朋友圈的视频消息仍内嵌播放（本轮只统一图片类全屏预览）；收藏视频保持内嵌；触屏捏合为 PointerEvents 基础实现，未做惯性。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
