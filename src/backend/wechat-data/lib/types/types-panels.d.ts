@@ -314,6 +314,8 @@ export interface FileImageDataUrlsResult {
         error?: string;
     }>;
 }
+/** 当前登录账号的展示信息（侧栏昵称用）。 */
+export type { SelfProfile } from './query/self-profile.ts';
 /** Decrypted DB status summary lines. */
 export interface DbStatusSnapshot {
     lines: string[];

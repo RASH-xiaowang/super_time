@@ -79,6 +79,9 @@
   color: var(--nm-text-1);
   line-height: 1.2;
   white-space: nowrap;
+  /* 昵称可能比品牌名长（实测「SuperT_王国宁」）：超出宽度省略，完整文本在 title 里 */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .navBrandSub {
   font-size: var(--nm-fs-xs, 11px);

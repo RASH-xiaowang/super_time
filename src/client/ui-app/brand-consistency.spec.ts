@@ -84,10 +84,12 @@ describe('品牌统一为 Super Time', () => {
     expect(read('src/client/ui-app/index.html')).toContain('<title>Super Time</title>')
   })
 
-  it('导航栏里的品牌名是 Super Time（本轮由顶栏迁入的品牌位）', () => {
+  it('导航栏品牌位：有昵称显示昵称、取不到回退 Super Time（品牌名仍是兜底常量）', () => {
     const panel = read('src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx')
-    const brand = panel.match(/css\.navBrandName\}>([^<]*)</)?.[1] ?? ''
-    expect(brand.trim()).toBe('Super Time')
+    expect(panel).toContain('<BrandTitle />')
+    const brandTitle = read('src/client/ui-wechat/src/client/pages/wechat-data/panels/brand-title.tsx')
+    expect(brandTitle, '品牌名兜底必须仍是 Super Time').toContain("export const BRAND_NAME = 'Super Time'")
+    expect(brandTitle, '昵称取不到时必须回退品牌名').toContain('const text = name || BRAND_NAME')
   })
 
   it('后端错误文案也走新名（这些字符串会直接显示在界面上）', () => {

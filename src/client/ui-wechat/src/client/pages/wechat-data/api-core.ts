@@ -81,6 +81,7 @@ import type {
   GroupInsightsSnapshot,
   HandoffRemindsSnapshot,
   FileImageDataUrlsResult,
+  SelfProfile,
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
@@ -301,6 +302,11 @@ export interface WechatRemote {
   dispatchTaskCallback(options: { triggerId: number }): Promise<RemoteResult<TaskCallbackDispatchResult>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>
   getSelfUsername(): Promise<RemoteResult<{ username: string }>>
+  /**
+   * 当前账号的展示信息（备注 > 昵称 > 微信号），侧栏品牌位显示用户网名用。
+   * 未解密/取不到时 name 为空串（界面回退品牌名）。
+   */
+  getSelfProfile(): Promise<RemoteResult<SelfProfile>>
   getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlySnapshot>>

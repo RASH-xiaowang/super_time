@@ -1,7 +1,7 @@
 import { type WxcdnQuota } from '../query/wxcdn-original.ts';
 import { type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts';
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FileImageDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -44,82 +44,6 @@ export interface ImageBatchItem {
     error?: string;
 }
 export declare function createMediaRemotes(rc: MediaRemoteCtx): {
-    getEmoticons(options?: {
-        limit?: number;
-        offset?: number;
-    }): EmoticonsSnapshot;
-    getFiles(options?: {
-        limit?: number;
-        offset?: number;
-        category?: string;
-        q?: string;
-    }): FilesSnapshot;
-    getVoiceInfo(options: {
-        username: string;
-        localId: number;
-    }): VoiceInfoResult;
-    getVoiceDataUrl(options: {
-        username: string;
-        localId: number;
-    }): Promise<VoiceDataUrlResult>;
-    getVideoInfo(options: {
-        username: string;
-        localId: number;
-    }): VideoInfoResult;
-    getAvatar(options: {
-        username: string;
-        nickname?: string;
-    }): AvatarResult;
-    getAvatarsLocal(options: {
-        usernames: string[];
-    }): Record<string, string>;
-    /**
-     * 取一条消息的图片（data URL），**自动取原图**：解出来是缩略图时会自己再试一次升级
-     * （本机重解 → CDN 直链），不需要用户点按钮。算法体在 `imageWithAutoUpgrade`。
-     * @param options - `username` 会话；`localId` 消息 id。
-     * @returns data URL + 格式；`thumb: true` 表示这次仍是缩略图（升级没成功）。
-     */
-    getImageDataUrl(options: {
-        username: string;
-        localId: number;
-    }): Promise<ImageDataUrlResult>;
-    /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
-    getImageDataUrlsBatch(options: {
-        items: Array<{
-            username: string;
-            localId: number;
-        }>;
-        fileOnly?: boolean;
-    }): Promise<{
-        items: ImageBatchItem[];
-    }>;
-    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
-    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
-    /**
-     * 文件库图片（hardlink 文件名前缀）→ decoded 缓存相对路径（供 `wechat-media://` 流式显示）。
-     *
-     * 2026-10-21：此前这里只读已解密缓存（文件库图片从未解密过 ⇒ 13,071 张命中 0，界面全占位）。
-     * 现在按需定位 `msg/attach/<md5>_*.dat` 解密并落盘；返回 `file`（相对路径）而不是 base64，
-     * 渲染层拼 `wechat-media://decoded/<rel>`，字节不再经 IPC、也不进渲染堆。
-     * @param options - `md5` 为附件文件名去掉 `.dat`/档位后缀后的 32 位前缀；
-     *   `thumbFirst=true`（网格）时优先解 `_t` 缩略档，false（灯箱）时原图档优先。
-     * @returns `{file, format, thumb?}` 或 `{error}`。
-     */
-    getFileImageDataUrl(options: {
-        md5: string;
-        thumbFirst?: boolean;
-    }): Promise<ImageDataUrlResult>;
-    /**
-     * 批量取文件库图片（一屏 = 1 次 RPC，2026-10-21 借鉴 Alpha 的批量 token）。
-     *
-     * 去重、保持首次顺序、单次上限 48、块内并行且总解码并发 ≤4（保护 worker）。
-     * @param options - `keys` 为屏上可见格的 key（`fileKey()` 结果）；`thumbFirst` 网格传 true。
-     * @returns 逐条 `{key, file?, error?}`；调用方按 `key` 回贴，别按顺序。
-     */
-    getFileImageDataUrls(options: {
-        keys: string[];
-        thumbFirst?: boolean;
-    }): Promise<FileImageDataUrlsResult>;
     getEmoticonDataUrl(options: {
         md5: string;
         emojiUrl?: string;
@@ -236,6 +160,65 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         source?: string;
         error?: string;
     }>;
+    getFileImageDataUrl: (options: {
+        md5: string;
+        thumbFirst?: boolean;
+    }) => Promise<ImageDataUrlResult>;
+    getFileImageDataUrls: (options: {
+        keys: string[];
+        thumbFirst?: boolean;
+    }) => Promise<import("../types-panels.ts").FileImageDataUrlsResult>;
+    getEmoticons(options?: {
+        limit?: number;
+        offset?: number;
+    }): EmoticonsSnapshot;
+    getFiles(options?: {
+        limit?: number;
+        offset?: number;
+        category?: string;
+        q?: string;
+    }): FilesSnapshot;
+    getVoiceInfo(options: {
+        username: string;
+        localId: number;
+    }): VoiceInfoResult;
+    getVoiceDataUrl(options: {
+        username: string;
+        localId: number;
+    }): Promise<VoiceDataUrlResult>;
+    getVideoInfo(options: {
+        username: string;
+        localId: number;
+    }): VideoInfoResult;
+    getAvatar(options: {
+        username: string;
+        nickname?: string;
+    }): AvatarResult;
+    getAvatarsLocal(options: {
+        usernames: string[];
+    }): Record<string, string>;
+    /**
+     * 取一条消息的图片（data URL），**自动取原图**：解出来是缩略图时会自己再试一次升级
+     * （本机重解 → CDN 直链），不需要用户点按钮。算法体在 `imageWithAutoUpgrade`。
+     * @param options - `username` 会话；`localId` 消息 id。
+     * @returns data URL + 格式；`thumb: true` 表示这次仍是缩略图（升级没成功）。
+     */
+    getImageDataUrl(options: {
+        username: string;
+        localId: number;
+    }): Promise<ImageDataUrlResult>;
+    /** 批量取图：同样自动取原图，但**只走本机重解**（不联网，否则首屏拖到分钟级）。 */
+    getImageDataUrlsBatch(options: {
+        items: Array<{
+            username: string;
+            localId: number;
+        }>;
+        fileOnly?: boolean;
+    }): Promise<{
+        items: ImageBatchItem[];
+    }>;
+    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
+    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
 };
 /**
  * `fileOnly` 模式的返回整形：有落盘文件就不再回传 base64（桌面端用 wechat-media:// 流式显示）。
