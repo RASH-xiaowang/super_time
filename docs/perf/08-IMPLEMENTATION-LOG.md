@@ -31,6 +31,7 @@
 | 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实截图 `assets/sidebar-nickname.png` |
 | 22 | 本轮 | perf(files): 缩略图宽度自适应 + 视区外预取（hook 两条 lane、LRU 随列数放大） | S（资源生命周期） | 7 spec 45 用例绿；棘轮绿；measure:quick 18/21 用例 27.37s；真实应用：URL 全为 `?w=240`（原 320）、31 张渲染却新建 51 个缩略图缓存（预取生效）、0 破图 |
 | 23 | 本轮 | chore(launch): 「启动最新版」启动器（按需构建 + 关旧实例 + 启动自检），主区 SuperTime.cmd 转调 | T（启动链路） | 自检 exit 0：产物最新时跳过构建；运行中再启动 → 关闭旧实例 1 个、新主进程 1 个；launch-latest 3 组单测 + 棘轮 16 用例绿；typecheck 0 |
+| 24 | 本轮 | merge: perf/resource-lifecycle-v1 并入主区（WIP 快照 f918145 → merge a8bbb78 → 修复 69be6ee） | U（主区收口） | 26 spec/222 用例绿；measure:quick 21/21 27.4s；typecheck 0；check-generated 一致；真机截图：昵称 + 49 图全载/0 破图、URL `?w=240`；启动器改为主区本地构建 |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -198,6 +199,17 @@
   * 主工作区 `SuperTime.cmd` 改为转调工作树 `Latest.cmd`：**桌面/任务栏快捷方式不用动**，点开就是最新版。
 - **验证**：`SuperTime.cmd --no-launch` → banner `perf/resource-lifecycle-v1 @ 8fba8bb`、产物最新跳过构建、exit 0；真实启动 → Electron 主进程 1 + 渲染子进程 4；运行中再次启动 → 输出"已关闭旧实例 1 个"、新主进程 1 个；测试实例已关闭。
 - **回滚**：主区 `git checkout -- SuperTime.cmd` 即恢复原启动逻辑；工作树删掉 `Latest.cmd`/`scripts/launch-latest*` 即回到手动 `npm start`。
+
+### U · 主区收口：把 perf 分支真正合并进主工作区（第十六轮，Lead）
+- **背景**：桌面快捷方式最终指向主工作区；此前主区停在 `release/v1.0.9`（70c3ca6），最新代码只在工作树分支上。用户要求「主区本身也是最新」，因此把分支合并进主区。
+- **做法（不丢用户 WIP）**：
+  1. 先把主区 194 项在途改动（收藏媒体/任务批量/图右键菜单等功能线）做成快照提交 `f918145`；备份分支 `backup/main-release-before-merge`（70c3ca6）；垃圾/重复未跟踪文件（`$null`、`({id`、`420`、旧 `scripts/perf`、`docs/perf` 副本）移到 `D:\super-time-wechat-backup\20261021-172637`；
+  2. `git merge perf/resource-lifecycle-v1` → 仅 5 个冲突：`api-core.ts`、`function-size-ratchet.spec.ts` 手工语义合并（两边接口/台账都保留）；3 个生成物（`lib/index.js`、2 个 `.d.ts`）取分支版本后**由源码重建**（`a8bbb78`）；
+  3. 合并后 **M21 单文件 1000 行 / 单函数 250 行**两只棘轮重算：`media.ts` 1005 行 → 拆出 `remotes/media-favorites.ts`、`remotes/media-voice.ts` 后 **967 行**；`createMediaRemotes` 321 → **302 行**；6 个主区在途大文件（ClawBot/askdeep 等）登记白名单并注明为待拆分债务；`computeOverviewInsights` 降到 250 内 ⇒ 移出清单；`FavoritesPanel`（257 行）重新登记（`69be6ee`）；
+  4. 修掉一条**陈旧接线守卫**：`Files.tsx` 改用 `useFileThumbnails` 后，`file-image-on-demand.spec.ts` 仍断言旧的 `fetchFileThumbUrls` 字样 ⇒ 改为「面板走 hook + hook 里走批量」。
+- **启动器收口**：主区 `SuperTime.cmd` 改为调用**主区本地** `Latest.cmd`（不再依赖 `.worktrees`）；桌面「Super Time」快捷方式目标不变，因此直接生效。
+- **验证**：`typecheck` 0；`check-generated --all` 一致；`measure:quick` 18/21 用例 27.4s；本次合并触及的 26 个 spec / **222 用例全绿**（含收藏/KB/ClawBot 主区新功能与性能分支用例）；真机启动截图：侧栏昵称 `SuperT_王国宁`、文件面板 49 张图全载/0 破图、URL 全为 `?w=240`。
+- **回滚**：`git reset --hard backup/main-release-before-merge` 可整体回到合并前；单点回滚用 `git revert a8bbb78`（合并）或 `git revert 69be6ee`（棘轮/拆分修复）；备份目录保留原始未跟踪文件。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
