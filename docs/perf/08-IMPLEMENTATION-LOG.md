@@ -19,6 +19,7 @@
 | 9 | `140e183` | perf(sqlite): 分析型只读连接临时调大页缓存（storage 434→271ms、ledger 334→161ms） | H（查询提速） | analytics-cache 5/5；ledger 7/7；check-generated `--all` 一致；typecheck 0；measure:quick 27.07s |
 | 10 | `2966bdc` | feat(perf): 受控缓存运行时可观测（`[mem]` 行带 当前/上限）+ 运行时内存归因 | I（内存基线） | cache-budget/sentinel/result-cache/autodownload 4 spec 48 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 26.63s |
 | 11 | `e165933` | feat(perf): worker heap snapshot 抓取/归因工具 + `[mem]` 补齐 external/arrayBuffers | J（内存归因） | backend-supervisor 8/8（含 2 条 inspect 门控守卫）、sentinel 12/12；typecheck 0；check-generated `--all` 一致 |
+| 12 | `77c441f` | feat(perf): sqlite 连接数进 `[mem]` + 诊断用 node-args/强制 GC 门控（三个内存策略实验） | K（内存实验） | sentinel 15/15、supervisor 9/9、sqlite-stats 3/3；typecheck 0；check-generated `--all` 一致；measure:quick 27.10s |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -91,6 +92,13 @@
 - **轻载结果**（启动+总览，空闲 60s）：heap self_size **47.9→48.2MB（+0.3MB，无泄漏迹象）**；构成 `string 21.7MB(45%) / object 6.6 / code 5.6 / array 5.5 / closure 3.3`；最大单条 3.3MB 字符串 = **bundle 自身 ESM 源文本**（含中文注释按 2 字节存），属 V8 正常保留，不是重复拷贝（bundle 里 `sourceMappingURL` 为 0）。
 - **重载结果**（总览→朋友圈→通讯录→文件 + 6 轮滚动 + 60s 空闲）：**RSS 343MB = V8 heapUsed 133 + external 53 + 原生/代码等 ~157**；`heapTotal 175`（空余 42）、`arrayBuffers 0MB`（⇒ 53MB external 不是 Buffer，更像 node:sqlite 的堆外内存）；受控缓存合计 **18.9MB**。
 - **归因结论**：缓存不是 RSS 主因；V8 heap（133MB，含 175MB 预留）与 sqlite 堆外（53MB）才是大头，剩余为原生/代码页。下一步应做**策略实验**而不是继续改缓存：`--max-old-space-size` 收 heapTotal、sqlite 连接/页缓存上限、以及重载后 GC 行为（本 run 空闲 60s 内 heapUsed 未回落，需确认是缓存保留还是 V8 未回收）。
+
+### K · 内存策略实验：连接数 / 堆上限 / 强制 GC（第六轮，Lead）
+- **仪表**：`sqlite-connection` 记录当前打开/峰值连接数（每连接一份页缓存），经 bundle 导出并拼进 `[mem]` 的 `sqlite=open/peak`；`backend-supervisor` 新增 `SUPERTIME_BACKEND_NODE_ARGS`（**仅未打包**透传，打包态忽略）；worker 哨兵新增 `SUPERTIME_MEM_GC=1` + `--expose-gc` 时采样前强制 GC（诊断用）。
+- **实验 1 · sqlite 连接泄漏假设 ⇒ 证伪**：重载空闲时 `sqlite=0/4`（峰值 4）⇒ external 53–54MB 与连接数无关。
+- **实验 2 · `--max-old-space-size=192` ⇒ 负结果**：heapUsed 138→116，但 external 54→92、RSS 415→**532**（GC 更频繁、碎片变多），面板 P95 出现 1818ms 离群 ⇒ 不作为默认。
+- **实验 3 · 强制 GC ⇒ 单样本更差**：RSS 415→521、heapUsed 138→204、external 54→156 ⇒ GC 碎片与负载波动叠加，不能作线上策略；工具保留（多次采样 + 固定负载才可下结论）。
+- **结论**：内存主体是 V8 保留量 + `node:sqlite` 堆外 + 原生/代码页，**既不是缓存也不是连接泄漏**。不动业务查询路径时没有低风险削减手段；本轮把「可观测 + 可实验」补齐，并明确记录已知边界。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
