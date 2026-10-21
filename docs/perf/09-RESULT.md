@@ -55,9 +55,11 @@
 1. **worker 内存**：已完成归因与策略实验（§4.6/§4.7）：缓存 18.9MB、连接 ≤4、`--max-old-space-size` 与强制 GC 都是负结果。内存主体是 V8 heapTotal + sqlite 堆外 + 原生页；再往下只能做「减少大对象分配/复用 Buffer」级别的重构，需单独立项评估收益/风险。
 2. **渲染图片内存**：`data:` 图片占大头的是**已解码位图**（CDP JS 堆只有 31MB），迁 `wechat-media://` 前必须先做 heap snapshot 归因，否则可能只是把 base64 换成文件路径而位图内存不变。
 3. **启动剩余 ~311ms**（boot 打点口径）：worker requires 5 / bundle import 39 / typert 47 / gateway 3 / 后端装配其余 ~4 / 主进程 init 回程 ~30 / 设置回灌 ~44 / ACL 校验+文件收紧 ~136 / 其余 ~3。可做的：`getStorageStats` 的 file-names 遍历 122ms（需持久化或改索引方式）、typert schema 按需加载（47ms，但会短暂降低入参校验覆盖）、ACL 文件级（安全口径需评审）。
-4. **首屏落定已到判据下限**（600ms 静默窗口）；要再降真实体感，应换指标（首卡片可读时间/可交互）并继续减 `getOverview`（360–466ms）与 `getOverviewInsights`（446–506ms）的 CPU —— 已用全局 8MB 实验证明它们**不是缓存瓶颈**，需要给它们各自加分段打点找热点。
-5. **首屏 CSS 剩余体积**：Bootstrap Grid 50.6KB 仍全量（只有总览/RegionBoard 用 `row/col-*`），迁到局部 CSS grid 需先做 `css:bundle-diff` + 面板截图验收。
-6. **内存 WS 量化**：`worker WS` 逐样本 145–535MB，需更长重负载 + heap snapshot；`[mem]` 时间序列现在可用（哨兵已修）。
+4. **首屏两查询已分段（§4.8）**：`insights` 冷 370ms 最大头是 shards 191（239 表 GROUP BY）与 extras 109；`overview` 冷 98ms 最大头 resource 41。下一步：① 换「内容稳定」版本键（sync-state 指纹）让磁盘缓存真正命中；② moments 44ms 的 XML 解析改 `indexOf` 计数（去 split 数组分配）；③ overview resource 连接加 `raiseAnalyticsCache`。
+5. **启动剩余 ~311ms**（boot 打点口径）：worker requires 5 / bundle import 39 / typert 47 / gateway 3 / 后端装配其余 ~4 / 主进程 init 回程 ~30 / 设置回灌 ~44 / ACL 校验+文件收紧 ~136 / 其余 ~3。可做的：`getStorageStats` 的 file-names 遍历 122ms（需持久化或改索引方式）、typert schema 按需加载（47ms，但会短暂降低入参校验覆盖）、ACL 文件级（安全口径需评审）。
+6. **首屏落定已到判据下限**（600ms 静默窗口）；要再降真实体感，应换指标（首卡片可读时间/可交互）。
+7. **首屏 CSS 剩余体积**：Bootstrap Grid 50.6KB 仍全量（只有总览/RegionBoard 用 `row/col-*`），迁到局部 CSS grid 需先做 `css:bundle-diff` + 面板截图验收。
+8. **内存 WS 量化**：已归因（§4.6/§4.7），剩余只能做「减少大对象分配/复用 Buffer」级重构。
 
 ## 4.5 运行时内存基线：受控缓存占用（第四轮新增量具）
 
@@ -99,7 +101,26 @@
 **边界结论**：worker 内存主体 = V8 保留量（heapTotal 175–254）+ `node:sqlite` 堆外（external 53–156）+ 原生/代码页；
 受控缓存 18.9MB、连接数 ≤4。不动业务查询路径时没有低风险削减手段；后续若继续只能从「减少大对象分配/复用缓冲」入手。
 
+## 4.8 首屏两个大查询的分段与跨启动缓存（第七轮）
+
+隔离实测（无并发争用、真实数据根；`SUPERTIME_QUERY_TRACE=1`）：
+
+| 查询 | 冷总耗时 | 分段（ms） |
+|---|---|---|
+| `getOverview` | **98ms** | contacts 23 / counts 2 / revoked 7 / **resource 41** / sns 24 |
+| `getOverviewInsights` | **370–391ms** | contacts 5 / **shards 191–208** / contact-rows 3 / **moments 44–46** / **extras 109** / assets 8 / db-walk 1 |
+
+跨启动磁盘缓存（签名校验，落 `<数据根>/cache/`）：
+
+| 场景 | overview | insights |
+|---|---|---|
+| 冷启动（无缓存） | 98ms | 370ms |
+| 第二次启动、签名命中（隔离、无写入） | **<1ms** | **83ms（4.5×）** |
+| 真实应用连续两次启动（有同步写入） | 345ms（miss） | 448ms（miss） |
+
+**负结果证据**：`fileSig` 含 mtimeNs+size+SQLite change counter+WAL，而应用启动的 WAL checkpoint 会自增 change counter ⇒ 每次启动签名都变，磁盘缓存必然 miss；miss 成本仅一次 fs 读（≈1–2ms）。要稳定命中需换「内容稳定」版本键（如 sync-state 指纹）并验证失效语义，本轮不做。
+
 ## 5. 结论一句话
 > **验证成立**：后端 ready **2910ms→142ms（−95%，control 对照归因）**、总览落定 **3977ms→1229ms（−69%）**；首屏两个最贵查询 `getStorageStats` **676/434→271ms**、`getLedger` **334→161ms**（分析型连接页缓存 256KB→8MB，同库 A/B 最高 3.6×）；首屏 CSS −32%（传输 −6.0%）、contacts 面板 IPC −55%、图片批量 30 张句柄开合 33→3（−91%）且 fileOnly 白算 base64 归零、4 处后端缓存获得硬字节上界、随包 −601.5KiB、1 处监听泄漏与 2 处无界小表修复、内存哨兵恢复轮询；后端基准与全量 typecheck 无退化。
-> **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB。第四~六轮已完成归因与策略实验：缓存 18.9MB、sqlite 连接 ≤4、`--max-old-space-size` 与强制 GC 均为负结果（§4.5–§4.7）；重载 RSS 343–415MB ≈ V8 heapTotal 175 + external 53 + 原生 ~157，轻载 heap 空闲 60s 无增长（+0.3MB）。再往下只能做「减少大对象分配/复用 Buffer」级重构，需单独立项；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。
+> **没有验证成立**：进程内存 WS（worker/renderer/总）没有可归因的下降 —— 纯净 HEAD 对照跑的逐样本区间同样跨 145–535MB。第四~六轮已完成归因与策略实验：缓存 18.9MB、sqlite 连接 ≤4、`--max-old-space-size` 与强制 GC 均为负结果（§4.5–§4.7）；重载 RSS 343–415MB ≈ V8 heapTotal 175 + external 53 + 原生 ~157，轻载 heap 空闲 60s 无增长（+0.3MB）。再往下只能做「减少大对象分配/复用 Buffer」级重构，需单独立项；导航可见/FCP/面板切换 P50 无显著变化（窗口壳层与交互路径未改）；总览落定在查询变快后不再变化（判据含固定 600ms 静默窗口，已到量具下限）。首屏两查询已分段（隔离冷跑 overview 98ms / insights 370ms，§4.8）；跨启动磁盘缓存为**条件性**优化（无写入窗口 4.5×），真实启动因 WAL checkpoint 改签名而 miss，负结果已记录。
 > 两条负结果（首屏预热、icacls 合批）已登记并回滚，不虚报收益；所有改动均有单测/守卫与独立提交可回滚；对外契约（Remote 方法、返回字段、错误文案）未变；`D:\Alpha` 仅作只读参照、未修改。

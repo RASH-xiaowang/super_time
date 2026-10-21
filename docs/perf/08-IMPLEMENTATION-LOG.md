@@ -20,6 +20,7 @@
 | 10 | `2966bdc` | feat(perf): 受控缓存运行时可观测（`[mem]` 行带 当前/上限）+ 运行时内存归因 | I（内存基线） | cache-budget/sentinel/result-cache/autodownload 4 spec 48 用例绿；typecheck 0；check-generated `--all` 一致；measure:quick 26.63s |
 | 11 | `e165933` | feat(perf): worker heap snapshot 抓取/归因工具 + `[mem]` 补齐 external/arrayBuffers | J（内存归因） | backend-supervisor 8/8（含 2 条 inspect 门控守卫）、sentinel 12/12；typecheck 0；check-generated `--all` 一致 |
 | 12 | `77c441f` | feat(perf): sqlite 连接数进 `[mem]` + 诊断用 node-args/强制 GC 门控（三个内存策略实验） | K（内存实验） | sentinel 15/15、supervisor 9/9、sqlite-stats 3/3；typecheck 0；check-generated `--all` 一致；measure:quick 27.10s |
+| 13 | `250d24d` | feat(perf): 首屏查询分段打点 + 两处聚合的跨启动磁盘缓存（条件性命中，附负结果证据） | L（查询提速） | query-trace 3/3、insights-shard-store 6/6、sig-disk-cache 6/6；typecheck 0；check-generated `--all` 一致；measure:quick 27.32s |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -99,6 +100,15 @@
 - **实验 2 · `--max-old-space-size=192` ⇒ 负结果**：heapUsed 138→116，但 external 54→92、RSS 415→**532**（GC 更频繁、碎片变多），面板 P95 出现 1818ms 离群 ⇒ 不作为默认。
 - **实验 3 · 强制 GC ⇒ 单样本更差**：RSS 415→521、heapUsed 138→204、external 54→156 ⇒ GC 碎片与负载波动叠加，不能作线上策略；工具保留（多次采样 + 固定负载才可下结论）。
 - **结论**：内存主体是 V8 保留量 + `node:sqlite` 堆外 + 原生/代码页，**既不是缓存也不是连接泄漏**。不动业务查询路径时没有低风险削减手段；本轮把「可观测 + 可实验」补齐，并明确记录已知边界。
+
+### L · 首屏查询分段打点 + 跨启动磁盘缓存（第七轮，Lead）
+- **量具**：新增 `query-trace`（`SUPERTIME_QUERY_TRACE=1` 门控、默认零日志、打点失败不影响查询），覆盖 `overview` / `insights` / `extras` 各主要阶段；隔离实测（无并发、真实数据根）：
+  * `overview` 冷 **98ms** = contacts 23 / counts 2 / revoked 7 / **resource 41** / sns 24
+  * `insights` 冷 **370–391ms** = contacts 5 / **shards 191–208（239 张 Msg 表 GROUP BY）** / contact-rows 3 / **moments 44–46** / **extras 109（extras.shards 104 又一次全表扫描）** / assets 8 / db-walk 1
+- **缓存**：新增 `sig-disk-cache`（签名+值，原子写、损坏/缺失退化、8MB 上限）与 `insights-shard-store`（分片聚合缓存），把 overview 结果 / overviewExtras 结果 / insights 分片聚合落到 `<数据根>/cache/*.v1.json`；命中判断仍逐字比对签名（数据一变立即失效）。
+- **隔离验证**（两个独立进程、无写入）：`insights` **370→83ms（4.5×）**（shards 208→20、extras 109→disk-hit 0），`overview` 98→<1ms。
+- **负结果证据**：真实应用连续两次启动（harness 2 样本、同一数据根）仍全冷（sample2 `getOverviewInsights` 448ms / `getOverview` 345ms）。原因：`fileSig` 含 mtimeNs+size+SQLite change counter+WAL，而应用启动的 **WAL checkpoint 会自增 change counter** ⇒ 每次启动签名都变。缓存文件确实写出（insights 49KB / extras 3.8KB / overview 3KB），miss 成本仅一次 fs 读（≈1–2ms）。
+- **结论**：跨启动缓存是**条件性**优化（只有无同步写入的窗口才命中）；要稳定吃满收益需换「内容稳定」版本键（如 sync-state 指纹），须先验证失效语义，本轮不做。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
