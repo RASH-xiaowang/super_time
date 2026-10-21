@@ -14,6 +14,8 @@
 | 4 | `5978d87` | test(perf): 修正折叠面板监听用例的 React 18 act 用法 | B（补） | 该 spec 1/1 绿、client tsc 0 错 |
 | 5 | `6786cf0` | fix(perf): 内存哨兵在生产只采一次 —— 把真实定时器接上 | C1（观测） | sentinel spec 9/9（含新增接线守卫） |
 | 6 | `3e7b7b7` | perf(media): 图片批量链路复用 hint、fileOnly 零读字节、并发加界（30 张开库 33→3） | D（资源加载速度） | 6 spec / 36 用例绿；`build:backend` 一致；`tsc` 0 错；`measure:quick` 18 文件/21 用例 27.15s（基线 27.08s，无退化）；`npm run typecheck` 全绿 |
+| 7 | `70a63a7` | perf(boot): 敏感目录 ACL 已收紧时跳过递归传播（后端 ready 2.9s→0.4s，总览落定 4.0s→1.4s） | F（首屏/启动） | 5 spec / 49 用例绿；typecheck 0；measure:quick 27.20s；boot 分段实测见 §F |
+| 8 | `0556d57` | perf(boot): 原图自动下载的启动恢复延后到首屏后（后端组装 320→98ms，总览落定 1.37→1.23s） | G（启动竞态） | autodownload spec 14/14；`check-generated --all` 一致；typecheck 0；3 样本复测见 §G |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -48,6 +50,20 @@
 - 守卫测试：`openCounter()` 对 `DatabaseSync.prototype.close` 计数并设上界；断言「批量段里不再出现逐张 `local_id = ?`」；fileOnly 断言 `fs/promises.readFile` 0 次；并发 spec 断言峰值 ≤8 且顺序保持。
 - 实测（同 fixture 同 run）：30 张句柄开合 **33 → 3**；第二条对拍用例 **35 → 5**；fileOnly 预热后 `readFile` **0** 次。
 - 未改任何 Remote 方法签名/返回字段/错误文案；双槽位（原图/缩略）选择顺序与原图升级语义保持。
+
+### F · 启动分段打点 + 敏感目录 ACL 跳过（第二轮，Codex/Lead）
+- **打点**：`SUPERTIME_BOOT_TRACE=1` 门控、默认零开销；时间原点在 worker 任何 require 之前，覆盖 `worker:requires-done → createWechatBackend 各装配段 → 主进程 spawn/init/settings/secrets/ready`。harness 采集并汇总 `[boot-phase]`（`scripts/perf`），后续启动优化按段验收。
+- **根因**：`main:secrets-migrated − main:settings-applied` = **2653ms**，占后端 ready 的 87%。`restrictWechatState` 每次启动都对数据根执行 `icacls /inheritance:r /grant:r (OI)(CI)F`，Windows 必须把新的继承 ACE 传播给全部既有子对象 —— 本机 `decoded_images` **48,539 文件 / 3.81GiB**，且 `execFileSync` 阻塞主进程。真正的后端装配只有 318ms（bundle import 39 / typert 47 / gateway 3）。
+- **改法**：`restrictWechatState` 先做**只读校验**（`icacls <dir>` 实测 4.8ms，与子对象数无关）：无 `(I)` 继承条目 + 只有一条 ACE 且权限含 `(OI)(CI)(F)` 且主体是当前身份 ⇒ 跳过递归传播；换账号/被改过/目录不存在才重跑；`SUPERTIME_FORCE_ACL=1` 强制完整加固。文件级收紧仍每次执行。判据从严：多一条 ACE 就重跑。
+- **安全边界**：目录级 `(OI)(CI)` ACE 会持续继承给新建子对象 ⇒ 一次收紧对之后新建文件仍然生效；任何解析异常一律返回 false（退回完整加固）。
+- 实测：该段 2653ms → **120–153ms**；`main:ready` 3047ms → 328ms；harness 3 样本后端 ready **142ms**、总览落定 **1229ms**。
+
+### G · 原图自动下载的启动恢复延后（第二轮，Lead）
+- 打点继续拆：`createWechatBackend` 在 `gateway-ctor`(96ms) 之后还有 **217ms** 空档 → 定位 `startWechatImageAutoDownloadOnBoot`：它在 init 路径上同步调用 `deps.findPid()`（PowerShell/CIM 查 Weixin 进程，超时 10s），本机实测 217ms，且主线程同步阻塞。
+- 该功能在真实配置里是**开启的**（`wechat_image_autodownload_enabled=true` + marker 存在），所以每次启动都付这笔钱。
+- 改法：boot hook 只做「读开关 + 支持性」毫秒级判断；真正的 marker 校验与注入延后 `BOOT_RESUME_DELAY_MS=1200ms`；加取消票据（`stop()`/配置关闭取消，避免停止后被定时器又注入回去）。语义不变：仍在启动阶段自动恢复，30s tick 继续兜底。
+- 实测：`backend:assembled` 320ms→**98ms**；`main:ready` 522→**328ms**；3 样本：后端 ready **142ms [1–256]**、总览落定 **1229ms [1133–1271]**、面板切换 P50/P95 **153/251ms**（无退化）。
+- 附带：重新生成 `lib/index.js` 与 `lib/types`，补齐 A/D 两包当时只跑 `--backend` 遗留的类型声明欠账（`check-generated-artifacts --all` 现已一致）。
 
 ## 2. 已评估但**本轮未做**（附理由，避免被误读成遗漏）
 
