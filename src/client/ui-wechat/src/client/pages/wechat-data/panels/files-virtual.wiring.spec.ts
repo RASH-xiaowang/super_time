@@ -17,6 +17,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const panel = readFileSync(join(HERE, 'Files.tsx'), 'utf8')
 const css = readFileSync(join(HERE, 'list-panel.module.css'), 'utf8')
 const cell = readFileSync(join(HERE, 'files-cell.tsx'), 'utf8')
+/** 缩略图队列已抽成 hook（2026-10-21：可视/预取两条 lane）：有界缓存判据跟到 hook 里。 */
+const thumbHook = readFileSync(join(HERE, 'use-file-thumbs.ts'), 'utf8')
 
 /** 剥注释（注释里出现 `useProgressiveList(` 是在解释"为什么不用它"）。 */
 function stripComments(src: string): string {
@@ -60,10 +62,12 @@ describe('文件面板的网格虚拟化接线', () => {
     expect(panel).not.toContain('fileCount')
   })
 
-  it('缩略图改成「挂载即解码」+ 有界缓存：整段格子墙的观察器不许长回来', () => {
+  it('缩略图改成「挂载即入队」+ 有界缓存：整段格子墙的观察器不许长回来', () => {
     expect(cell).toContain('onMounted(key)')
     expect(panel, '又给整张格子墙挂 IntersectionObserver 了').not.toContain("querySelectorAll<HTMLElement>('[data-media-key]')")
-    expect(panel).toContain('rememberThumb(')
+    expect(panel, '缩略图队列应走 useFileThumbnails（可视优先 + 视区外预取）').toContain('useFileThumbnails({')
+    expect(thumbHook, '缓存必须经有界 LRU 写入').toContain('rememberThumb(')
+    expect(thumbHook, '上界随列数放大，预取不能挤掉屏上的图').toContain('thumbCacheLimitFor(')
     expect(cell).toContain('data-file-key=')
   })
 

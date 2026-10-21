@@ -47,3 +47,21 @@ export function gridRowRange(row: number, items: number, cols: number): { start:
   const start = Math.max(0, row) * c
   return { start, end: Math.min(Math.max(0, items), start + c) }
 }
+
+/**
+ * 每格可用宽度（CSS px）：内容宽扣掉列间距后均分。
+ *
+ * 缩略图宽度就按它 × DPR 取档（`thumbWidthFor`）—— 写死 320 会在窄格上浪费、
+ * 在 2x 屏上发糊；而每拖一次窗口都生成新缓存又会让解码目录膨胀，所以取档。
+ * @param contentWidth - 容器内容宽（已扣左右 padding）。
+ * @param cols - 列数（至少 1）。
+ * @param gapPx - 列间距（与 CSS `gap` 同值）。
+ * @returns 格宽；宽度不可用时返回 0（调用方回退最小列宽）。
+ */
+export function cellWidthFor(contentWidth: number, cols: number, gapPx: number): number {
+  const c = Math.max(1, Math.ceil(Number(cols) || 1))
+  const width = Number(contentWidth)
+  if (!Number.isFinite(width) || width <= 0) return 0
+  const gap = Math.max(0, Number(gapPx) || 0)
+  return Math.max(0, (width - gap * (c - 1)) / c)
+}

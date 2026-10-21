@@ -101,7 +101,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  384',
   // 2026-10-16：资产类面板（文件/收藏/表情/媒体/公众号）重做时把列表筛选与操作按钮
   // 抽进 `asset-ui.tsx`，`FilesPanel` 364 → 359。棘轮只许变小，成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  354',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  336',
   // 2026-10-19（微信化改版）：消息卡去掉渐变/发光分支，329 → 322。棘轮只许变小，成果记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  322',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  306',

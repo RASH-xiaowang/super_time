@@ -12,9 +12,9 @@ import { useGridColumns } from './use-grid-columns.ts'
 import { AssetKpiBar, AssetMoreMenu, FileCell } from './files-cell.tsx'
 import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.ts'
 import { gridRowCount, gridRowRange } from './files-grid.ts'
-import { rememberThumb } from '../utils/thumb-cache.ts'
 import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
-import { fetchFileFullUrl, fetchFileThumbUrls } from './files-thumbs.ts'
+import { fetchFileFullUrl, prefetchKeys, thumbWidthFor } from './files-thumbs.ts'
+import { useFileThumbnails } from './use-file-thumbs.ts'
 import { duplicateGroups, namesByMd5 } from './files-dup.ts'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -62,9 +62,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [fileImgs, setFileImgs] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState<FileItem | null>(null)
-  /** 灯箱用的**原图档** URL（网格里存的是 `?w=320` 缩略图，点开要换成原图）。 */
+  /** 灯箱用的**原图档** URL（网格里存的是自适应宽度的缩略图，点开要换成原图）。 */
   const [previewSrc, setPreviewSrc] = useState('')
   // 视频/文件没有预览（后端只提供图片解码），点开的是**详情抽屉**而不是死点击。
   const [detail, setDetail] = useState<FileItem | null>(null)
@@ -77,8 +76,6 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null)
   const [dragging, setDragging] = useState(false)
-  const imgFetched = useRef(new Set<string>())
-  const imgOrder = useRef<string[]>([])
   const gridRef = useRef<HTMLDivElement | null>(null)
   const resetView = (): void => { setZoom(1); setPan({ x: 0, y: 0 }) }
 
@@ -160,42 +157,27 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
    * 写死就会"最后一行被截掉"或"格子重叠"），而虚拟器数的是**行**；一行用内联
    * `repeat(cols, 1fr)` 还原网格排列，间距与数据外层的 `.grid` 相同。
    */
-  const fileCols = useGridColumns(gridRef, FILE_MIN_COL_PX)
+  /** 列数与**实测格宽**（缩略图宽度按格子实际宽度自适应，不再写死 320）。 */
+  const { cols: fileCols, cellWidth } = useGridColumns(gridRef, FILE_MIN_COL_PX)
   const fileVirtualizer = useVirtualizer({
     count: gridRowCount(visible.length, fileCols),
     getScrollElement: () => gridRef.current,
     estimateSize: () => FILE_ROW_ESTIMATE_PX,
     overscan: 3,
   })
-  /** 缩略图缓存的当前快照（异步回调要读最新值）；渲染用的是 `fileImgs` 那份 state。 */
-  const fileThumbsRef = useRef<Record<string, string>>({})
-  /** 攒批队列：可视格挂载后入队，~24ms 内合并成**一次批量 RPC**（Alpha 的批量 token）。 */
-  const thumbQueue = useRef<string[]>([])
-  const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
-   * 一格挂载 → 入缩略图队列（不是立刻发 RPC）。
-   * 口径与搬出前一致：**拿 `fileKey` 当 md5**（微信附件名本来就是 32 位哈希；非哈希名按设计跳过，
-   * 留扩展名图标占位），淘汰走 `rememberThumb`（写值 / 记顺序 / 淘汰时连请求标记一起清）。
+   * 缩略图宽度：按**实测格宽 × 设备像素比**取档（窄格/2x 屏不糊，也不会每拖一次窗口就多一份缓存）。
    */
-  const decodeThumb = useCallback((key: string): void => {
-    if (!key || imgFetched.current.has(key) || !/^[0-9a-f]{32}$/i.test(key)) return
-    imgFetched.current.add(key)
-    thumbQueue.current.push(key)
-    if (thumbTimer.current !== null) return
-    thumbTimer.current = setTimeout(() => {
-      thumbTimer.current = null
-      const keys = thumbQueue.current
-      thumbQueue.current = []
-      void fetchFileThumbUrls(keys).then((urls) => {
-        let next = { thumbs: fileThumbsRef.current, order: imgOrder.current, fetched: imgFetched.current }
-        for (const [k, url] of Object.entries(urls)) next = rememberThumb(next, k, url)
-        fileThumbsRef.current = next.thumbs
-        imgOrder.current = next.order
-        imgFetched.current = next.fetched
-        setFileImgs(next.thumbs)
-      })
-    }, 24)
-  }, [])
+  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio
+  const thumbWidth = useMemo(() => thumbWidthFor(cellWidth, dpr), [cellWidth, dpr])
+  /** 可视优先 + 视区外预取两条 lane；LRU 上界按列数放大，预取不会挤掉屏上的图。 */
+  const { thumbs: fileImgs, request: decodeThumb, prefetch: prefetchThumbs } = useFileThumbnails({ width: thumbWidth, cols: fileCols })
+
+  // 视区外预取：虚拟器 range 每次滚动都会触发本组件重渲染，所以这里无依赖跑一遍；
+  // 重复 key 由 hook 内的 fetched/queued 集合去重，不会重复发 RPC。
+  useEffect(() => {
+    prefetchThumbs(prefetchKeys(visible, fileCols, fileVirtualizer.range))
+  })
   /** 图片开灯箱；视频/文件开**详情抽屉**（没有预览，但要看名称/来源/月份/md5）。 */
   const openFileCell = useCallback((f: FileItem): void => {
     if (f.category !== 'image') { setDetail(f); return }
