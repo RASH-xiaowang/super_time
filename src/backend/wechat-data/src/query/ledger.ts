@@ -4,6 +4,7 @@
  * per-contact totals plus fund anomaly warnings.
  */
 import { DatabaseSync } from './db-open.ts'
+import { raiseAnalyticsCache } from '../sqlite-connection.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
@@ -57,6 +58,9 @@ async function resolveMessagesByServerIds(
       let db: DatabaseSync
       // readBigInts: 64 位 server_id 以 BigInt 原样读回，避免 double 精度损失。
       try { db = new DatabaseSync(shard.file, { readOnly: true, readBigInts: true }) } catch { continue }
+      // 分析型扫描：全局读缓存 256KB 对「几十个 server_id 的 IN 查询 + 文本 CAST 兜底」
+      // 会反复打穿页缓存（本机实测整条 getLedger 334ms → 163ms）。
+      raiseAnalyticsCache(db)
       try {
         for (const [table, meta] of shard.tables) {
           if (!meta.cols.has('server_id') || !meta.cols.has('message_content')) continue
@@ -190,6 +194,7 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
 
   if (existsSync(gdb)) {
     const db = new DatabaseSync(gdb, { readOnly: true })
+    raiseAnalyticsCache(db)
     try {
       const tCols = new Set((db.prepare('PRAGMA table_info(transferTable)').all() as Array<{ name: string }>).map(r => r.name))
       if (tCols.has('session_name') && tCols.has('message_server_id')) {

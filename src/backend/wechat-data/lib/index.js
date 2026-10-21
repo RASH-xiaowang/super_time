@@ -92,6 +92,15 @@ var DatabaseSync = new Proxy(NativeDatabaseSync, {
   }
 });
 configureSqliteCachePolicy();
+var DEFAULT_ANALYTICS_CACHE_KB = 8 * 1024;
+function raiseAnalyticsCache(db, kbOverride) {
+  const kb = resolveCacheKb(kbOverride ?? process.env.DSH_WECHAT_ANALYTICS_CACHE_KB, DEFAULT_ANALYTICS_CACHE_KB);
+  if (kb <= 0) return;
+  try {
+    db.exec(`PRAGMA cache_size = -${kb}`);
+  } catch {
+  }
+}
 
 // src/backend/wechat-data/src/query/db-open.ts
 function withDb(file, fn) {
@@ -21303,6 +21312,15 @@ import { existsSync as existsSync49, readdirSync as readdirSync29, statSync as s
 import { join as join67 } from "node:path";
 import { decompress as decompress7 } from "fzstd";
 var ZSTD_MAGIC7 = Buffer.from([40, 181, 47, 253]);
+var STORAGE_TRACE = process.env.SUPERTIME_STORAGE_TRACE === "1";
+var storageTraceT0 = 0;
+function storageMark(label, n = 0) {
+  if (!STORAGE_TRACE) return;
+  try {
+    console.log("[storage-trace] " + label + " t=" + String(Date.now() - storageTraceT0) + (n > 0 ? " n=" + String(n) : ""));
+  } catch {
+  }
+}
 function decodeMsgText(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
@@ -21411,11 +21429,15 @@ async function queryStorageStats(decryptedDir, wechatBaseDir) {
 async function computeStorageStats(decryptedDir, wechatBaseDir) {
   const path = join67(decryptedDir, "message", "message_resource.db");
   if (!existsSync49(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] };
+  storageTraceT0 = Date.now();
   const db = new DatabaseSync(path, { readOnly: true });
+  raiseAnalyticsCache(db);
   try {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0;
     if (!has) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] };
+    storageMark("open");
     const agg = db.prepare("SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail").get();
+    storageMark("agg");
     const typeRows = db.prepare("SELECT type, COUNT(*) AS c, SUM(size) AS s FROM MessageResourceDetail GROUP BY type").all();
     const catMap = /* @__PURE__ */ new Map();
     for (const r of typeRows) {
@@ -21427,7 +21449,9 @@ async function computeStorageStats(decryptedDir, wechatBaseDir) {
       catMap.set(label, cur);
     }
     const categories = Array.from(catMap.entries()).map(([label, v]) => ({ label, count: v.count, size: v.size }));
+    storageMark("types", typeRows.length);
     const names = contactMeta(decryptedDir).names;
+    storageMark("contacts", names.size);
     const chatRows = db.prepare(`
       SELECT COALESCE(c.user_name, '(\u672A\u77E5\u4F1A\u8BDD)') AS u, COUNT(*) AS n, SUM(d.size) AS s
       FROM MessageResourceDetail d
@@ -21435,6 +21459,7 @@ async function computeStorageStats(decryptedDir, wechatBaseDir) {
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       GROUP BY i.chat_id ORDER BY SUM(d.size) DESC LIMIT 50`).all();
     const chats = chatRows.map((r) => ({ username: r.u, name: names.get(r.u) ?? "", count: r.n, size: r.s }));
+    storageMark("chats", chatRows.length);
     const senderRows = db.prepare(`
       SELECT COALESCE(s.user_name, '(\u672A\u77E5\u53D1\u9001\u8005)') AS u, COUNT(*) AS n, SUM(d.size) AS s
       FROM MessageResourceDetail d
@@ -21442,6 +21467,7 @@ async function computeStorageStats(decryptedDir, wechatBaseDir) {
       LEFT JOIN SenderName2Id s ON s.rowid = i.sender_id
       GROUP BY i.sender_id ORDER BY SUM(d.size) DESC LIMIT 50`).all();
     const senders = senderRows.map((r) => ({ username: r.u, name: names.get(r.u) ?? "", count: r.n, size: r.s }));
+    storageMark("senders", senderRows.length);
     const bigRows = db.prepare(`
       SELECT d.size AS s, d.type AS ty, d.data_index AS di, d.packed_info AS p, d.create_time AS ct, COALESCE(c.user_name, '') AS u,
              CAST(i.message_svr_id AS TEXT) AS svr
@@ -21449,7 +21475,9 @@ async function computeStorageStats(decryptedDir, wechatBaseDir) {
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       ORDER BY d.size DESC LIMIT 100`).all();
+    storageMark("big-rows", bigRows.length);
     const sizeToName = await loadFileNamesBySize(wechatBaseDir);
+    storageMark("file-names", sizeToName.size);
     const large_files = [];
     for (const r of bigRows) {
       await yieldToLoop();
@@ -21463,6 +21491,7 @@ async function computeStorageStats(decryptedDir, wechatBaseDir) {
       }
       large_files.push({ name, username: r.u, sessionName: names.get(r.u) ?? "", create_time: r.ct, size: r.s });
     }
+    storageMark("large-files", large_files.length);
     return { total_size: agg.s, total_count: agg.n, categories, chats, senders, large_files };
   } finally {
     db.close();
@@ -23648,6 +23677,7 @@ async function resolveMessagesByServerIds(decryptedDir, serverIds) {
       } catch {
         continue;
       }
+      raiseAnalyticsCache(db);
       try {
         for (const [table, meta] of shard.tables) {
           if (!meta.cols.has("server_id") || !meta.cols.has("message_content")) continue;
@@ -23728,6 +23758,7 @@ async function computeLedger(decryptedDir, month, selfUsername) {
   const serverIds = /* @__PURE__ */ new Set();
   if (existsSync59(gdb)) {
     const db = new DatabaseSync(gdb, { readOnly: true });
+    raiseAnalyticsCache(db);
     try {
       const tCols = new Set(db.prepare("PRAGMA table_info(transferTable)").all().map((r) => r.name));
       if (tCols.has("session_name") && tCols.has("message_server_id")) {

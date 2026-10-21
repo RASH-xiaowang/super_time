@@ -65,3 +65,32 @@ export const DatabaseSync = new Proxy(NativeDatabaseSync, {
 
 // 模块加载时先按环境变量确定默认值；宿主随后仍可显式覆盖。
 configureSqliteCachePolicy()
+
+/**
+ * 分析型只读查询的临时页缓存（KB）。
+ *
+ * 全局读缓存 256KB 是**为短读连接**定的（不让每个连接都吃几 MB RSS）。但像
+ * `getStorageStats` 这种「一次扫描 29MB 的 message_resource.db、还要按 message_id
+ * 随机 JOIN 回 MessageResourceInfo」的查询会被 256KB 打穿：实测同一条 chats+senders
+ * 查询 **233ms → 64ms（3.6×）**，4MB 就回落到 74ms，8MB 之后进入平台期。
+ *
+ * 因此这里只给**这一条连接**抬高页缓存：查询结束连接即关闭，不会让常驻 RSS 涨上去。
+ */
+const DEFAULT_ANALYTICS_CACHE_KB = 8 * 1024
+
+/**
+ * 给一条（已打开的）只读连接临时调大页缓存。
+ *
+ * 0 / 负数表示不干预（沿用连接创建时的策略）；非数字按默认 8MB 兜底。
+ * @param db - 已打开的连接（通常是 `readOnly` 的分析连接）。
+ * @param kbOverride - 显式覆盖（KB）；缺省读 `DSH_WECHAT_ANALYTICS_CACHE_KB`。
+ */
+export function raiseAnalyticsCache(db: DatabaseSync, kbOverride?: unknown): void {
+  const kb = resolveCacheKb(kbOverride ?? process.env.DSH_WECHAT_ANALYTICS_CACHE_KB, DEFAULT_ANALYTICS_CACHE_KB)
+  if (kb <= 0) return
+  try {
+    db.exec(`PRAGMA cache_size = -${kb}`)
+  } catch {
+    /* 个别连接不接受该 PRAGMA：保持连接创建时的策略，不影响查询本身。 */
+  }
+}

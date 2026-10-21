@@ -23,3 +23,11 @@ export declare function configureSqliteCachePolicy(input?: {
  * 与所有实例 API 保持不变，只在新连接上应用本模块统一的页缓存策略。
  */
 export declare const DatabaseSync: typeof NativeDatabaseSync;
+/**
+ * 给一条（已打开的）只读连接临时调大页缓存。
+ *
+ * 0 / 负数表示不干预（沿用连接创建时的策略）；非数字按默认 8MB 兜底。
+ * @param db - 已打开的连接（通常是 `readOnly` 的分析连接）。
+ * @param kbOverride - 显式覆盖（KB）；缺省读 `DSH_WECHAT_ANALYTICS_CACHE_KB`。
+ */
+export declare function raiseAnalyticsCache(db: DatabaseSync, kbOverride?: unknown): void;
