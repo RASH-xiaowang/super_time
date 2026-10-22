@@ -302,13 +302,29 @@
 .rvNoticeText { color: var(--nm-text-2); }
 .rvFilters { display: flex; flex-wrap: wrap; gap: 8px; }
 .rvScroll { padding: 6px; }
-.rvRow { flex-direction: column; cursor: pointer; border: 1px solid var(--nm-border); margin-bottom: 6px; }
-.rvRowHd { display: flex; align-items: center; gap: 10px; }
+.rvRow { flex-direction: column; align-items: stretch; cursor: pointer; border: 1px solid var(--nm-border); margin-bottom: 6px; width: 100%; box-sizing: border-box; }
+.rvRowHd { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 6px 10px; width: 100%; min-width: 0; box-sizing: border-box; }
+.rvRowHd .rowName { min-width: 0; flex: 1 1 120px; }
 .rvTypeBadge { color: var(--nm-cyan); border: 1px solid var(--nm-cyan); }
 .rvTimePush { margin-left: auto; }
-.rvBodyPad { padding: 4px 4px 6px 38px; }
+.rvSession { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--nm-text-2); flex-shrink: 1; }
+.rvChevron { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; }
+.rvBodyPad { width: 100%; box-sizing: border-box; padding: 4px 8px 8px 48px; min-width: 0; }
 .rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: var(--nm-dense-r); background: var(--nm-bg-hover); }
+.rvBodyText { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rvMediaPending { box-sizing: border-box; width: 100%; padding: 8px 12px; color: var(--nm-text-3); font-size: 11px; }
 .rvFootNote { margin-top: 4px; }
+.rvMediaCard { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); background: var(--nm-bg-card); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 100%; box-sizing: border-box; }
+.rvMediaRow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
+.rvMediaTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); overflow-wrap: anywhere; }
+.rvMediaMeta { font-size: 11px; color: var(--nm-text-2); overflow-wrap: anywhere; max-width: 100%; }
+.rvMediaError { font-size: 11px; color: var(--nm-text-2); overflow-wrap: anywhere; }
+.rvMediaImage { display: block; max-width: min(320px, 100%); max-height: 220px; object-fit: contain; border-radius: var(--nm-dense-r); background: var(--nm-bg-hover); }
+.rvMediaEmoji { display: block; width: 112px; height: 112px; object-fit: contain; }
+.rvMediaAudio { width: min(360px, 100%); height: 34px; }
+.rvMediaBtn { padding: 3px 10px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill); background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 11px; cursor: pointer; flex-shrink: 0; }
+.rvMediaBtn:hover { border-color: var(--nm-cyan); color: var(--nm-cyan); }
+.rvMediaBtn:disabled { opacity: 0.5; cursor: wait; }
 
 /* 新版图片灯箱预览（微信化：纯色遮罩，无毛玻璃） */
 .lightbox {
@@ -665,7 +681,7 @@
 }
 .favCard:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
 .favCard:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 2px; }
-.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .favCardAvatar {
   width: 38px;
   height: 38px;
@@ -721,14 +737,14 @@
 .favMediaCard {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   padding: 11px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, var(--nm-bg-card));
   min-width: 0;
 }
-.favMediaHeader { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.favMediaHeader { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .favMediaIcon {
   width: 28px;
   height: 28px;
@@ -767,12 +783,12 @@
   padding: 0;
   cursor: pointer;
 }
-.favVideoStage:disabled { cursor: default; opacity: 0.7; }
+.favVideoStage:disabled { cursor: default; opacity: 0.5; }
 .favVideoStage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.7; }
 .favVideoPlay {
   position: relative;
   z-index: 1;
-  padding: 5px 12px;
+  padding: 4px 12px;
   border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-bg-card) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
@@ -792,7 +808,7 @@
   cursor: pointer;
   min-width: 0;
 }
-.favFileCard:disabled { cursor: progress; opacity: 0.75; }
+.favFileCard:disabled { cursor: progress; opacity: 0.5; }
 .favFileIcon {
   width: 38px;
   height: 38px;

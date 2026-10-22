@@ -14,9 +14,118 @@
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { ClawbotBindQr, ClawbotBindStateSnapshot, ClawbotBindingSnapshot, ClawbotEnvSnapshot, ClawbotInstanceConfig, ClawbotInstanceCreated, ClawbotInstanceDeleted, ClawbotInstancesSnapshot, ClawbotMediaResult, ClawbotMessageQuery, ClawbotMessageSnapshot, ClawbotSendResult } from './types.ts'
 import { createClawbotRemotes } from './remotes/clawbot.ts'
+import { isAnswerStatus, runtimeStatusOf } from './remotes/ask-runtime.ts'
 import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from './query/clawbot/clawbot-prompt.ts'
+import { AUTO_REPLY_KB_REQUIRED_MESSAGE, hasValidAutoReplyKnowledgeBase } from './query/clawbot/clawbot-config-invariant.ts'
 import { addClawbotTokenUsage } from './query/clawbot/clawbot-token.ts'
 import { GatewayDbHealth } from './gateway-db-health.ts'
+
+/** 自动回复诊断只取可读原因；优先级与运行时 statusReason 的生成口径一致。 */
+function autoReplyReason(result: { statusReason?: string, synthesisError?: string, reason?: string }): string {
+  for (const value of [result.statusReason, result.synthesisError, result.reason]) {
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return ''
+}
+
+/**
+ * ClawBot 是无人值守出网：必须默认拒绝，只有能证明作答有据的结果才发送。
+ *
+ * `ok` 也要求至少一条可追溯引用；`degraded` 额外要求接地核对没有未支持的
+ * 数值。缺失状态、`withheld`、证据不足、待澄清与未知状态一律不发送。
+ */
+export function clawbotSendDecision(result: {
+  answer?: string
+  status?: unknown
+  statusReason?: string
+  synthesisError?: string
+  reason?: string
+  withheld?: boolean
+  evidenceUsed?: boolean
+  citations?: ReadonlyArray<unknown>
+  grounding?: { unsupported?: ReadonlyArray<unknown> }
+}, options: { kbId?: number | null } = {}): { send: true; detail?: string } | { send: false; error: string } {
+  const reason = autoReplyReason(result)
+  const suffix = reason === '' ? '' : `：${reason}`
+  const status = result.status
+  if (status === undefined || status === null || status === '') {
+    return { send: false, error: `自动回复未发送：运行状态缺失${suffix}` }
+  }
+  if (status !== 'ok' && status !== 'degraded') {
+    return { send: false, error: `自动回复未发送：运行状态 ${String(status)}${suffix}` }
+  }
+  if (result.withheld === true) {
+    return { send: false, error: `自动回复未发送：模型内容未通过接地核对${suffix}` }
+  }
+  if (result.evidenceUsed === false) {
+    return { send: false, error: `自动回复未发送：回答没有实际使用知识库材料${suffix}` }
+  }
+  if (typeof result.answer !== 'string' || result.answer.trim() === '') {
+    return { send: false, error: `自动回复未发送：模型返回空答案${suffix}` }
+  }
+  const citations = Array.isArray(result.citations) ? result.citations.length : 0
+  if (citations === 0) {
+    return { send: false, error: `自动回复未发送：没有可追溯的知识库引用${suffix}` }
+  }
+  const expectedKbId = options.kbId
+  if (
+    expectedKbId === undefined
+    || expectedKbId === null
+    || !Number.isSafeInteger(expectedKbId)
+    || expectedKbId <= 0
+  ) {
+    return { send: false, error: `自动回复未发送：未选择知识库，引用无法归属${suffix}` }
+  }
+  if (!(result.citations ?? []).every(citation => citationKbId(citation) === expectedKbId)) {
+    return {
+      send: false,
+      error: `自动回复未发送：引用不是当前知识库 ${String(expectedKbId)} 的可追溯材料${suffix}`,
+    }
+  }
+  // 综合生成失败时，answer 是证据兜底文本，不是模型针对问题写出的回复。
+  // 即使证据本身可追溯，也不能让无人值守通道把兜底文本直接发给微信联系人。
+  if (typeof result.synthesisError === 'string' && result.synthesisError.trim() !== '') {
+    return { send: false, error: `自动回复未发送：综合生成失败${suffix}` }
+  }
+  const unsupported = result.grounding?.unsupported?.length ?? 0
+  if (status === 'degraded') {
+    // 降级结果只有在接地复核真实跑过、且没有未核实数值时才允许出网。
+    // 缺少 grounding 意味着无法证明 answer 不是证据兜底文本，按拒绝处理。
+    if (!Array.isArray(result.grounding?.unsupported)) {
+      return { send: false, error: `自动回复未发送：降级结果缺少接地核对${suffix}` }
+    }
+    if (unsupported > 0) {
+      return { send: false, error: `自动回复未发送：降级结果仍有 ${String(unsupported)} 个未核实数值${suffix}` }
+    }
+    return { send: true, detail: `自动回复继续（已降级）：运行状态 degraded · ${String(citations)} 条引用${suffix}` }
+  }
+  if (unsupported > 0) {
+    return { send: false, error: `自动回复未发送：仍有 ${String(unsupported)} 个未核实数值${suffix}` }
+  }
+  return { send: true }
+}
+
+/** 从运行时引用里取可信的 KB id；只认 kb 来源的规范证据键/字段。 */
+function citationKbId(value: unknown): number | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const kb = typeof record['kb'] === 'object' && record['kb'] !== null && !Array.isArray(record['kb'])
+    ? record['kb'] as Record<string, unknown>
+    : undefined
+  const fromField = kb?.['kbId']
+  if (typeof fromField === 'number' && Number.isSafeInteger(fromField) && fromField > 0) {
+    return fromField
+  }
+  const evidenceId = record['evidenceId']
+  if (typeof evidenceId !== 'string') return undefined
+  const match = /^kb:(\d+):(\d+)$/.exec(evidenceId.trim())
+  if (!match) return undefined
+  const kbId = Number(match[1])
+  const chunkId = Number(match[2])
+  return Number.isSafeInteger(kbId) && kbId > 0 && Number.isSafeInteger(chunkId) && chunkId > 0
+    ? kbId
+    : undefined
+}
 
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
 export abstract class GatewayClawbot extends GatewayDbHealth {
@@ -229,6 +338,14 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
        * 失败一律转成 `{ ok:false }` 让上层的审计记账 —— 自动回复**不许抛**进长轮询循环。
        */
       ask: async (slot, text, kbId, systemPrompt, context) => {
+        if (!hasValidAutoReplyKnowledgeBase({ kbEnabled: true, kbId })) {
+          const error = `自动回复未发送：${AUTO_REPLY_KB_REQUIRED_MESSAGE}`
+          this.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${slot}`, error)
+          return {
+            ok: false, answer: '', error, errorCode: 'kb_required',
+            sendDecision: { send: false, error, errorCode: 'kb_required' },
+          }
+        }
         try {
           const r = await this.askDeepRemotes().askWechat({
             question: text, source: 'auto', dataScope: 'kb-only',
@@ -243,9 +360,40 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
           // 按实例记 token 消耗（2026-10-19）：供应商不返回 usage 时 r.usage 为空，
           // addClawbotTokenUsage 不落 0 行 ⇒ 统计显示 0 是「确实没记到」。
           addClawbotTokenUsage(this._dirs.decrypted, slot, r.usage)
-          return { ok: true, answer: r.answer }
+          const reported = runtimeStatusOf(r)
+          const resultStatus = reported === undefined
+            ? undefined
+            : isAnswerStatus(reported) ? reported : undefined
+          const decisionStatus = reported === undefined
+            ? undefined
+            : isAnswerStatus(reported) ? reported : 'unknown'
+          const decision = clawbotSendDecision({ ...r, status: decisionStatus }, {
+            ...(kbId === null ? {} : { kbId }),
+          })
+          if (!decision.send) {
+            this.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${slot}`, decision.error)
+            return {
+              ...r, ok: false, answer: '', error: decision.error, status: resultStatus,
+              errorCode: 'send_decision_rejected',
+              sendDecision: {
+                send: false, error: decision.error,
+                errorCode: 'send_decision_rejected',
+              },
+            }
+          }
+          if (decision.detail !== undefined) {
+            this.op('clawbot', 'clawbot_auto_reply', 'ok', `slot=${slot}`, decision.detail)
+          }
+          return {
+            ...r, ok: true, answer: r.answer, status: resultStatus,
+            sendDecision: { send: true, ...(decision.detail === undefined ? {} : { detail: decision.detail }) },
+          }
         } catch (e) {
-          return { ok: false, answer: '', error: e instanceof Error ? e.message : String(e) }
+          const error = e instanceof Error ? e.message : String(e)
+          return {
+            ok: false, answer: '', error, errorCode: 'generation_failed',
+            sendDecision: { send: false, error, errorCode: 'generation_failed' },
+          }
         }
       },
     }))

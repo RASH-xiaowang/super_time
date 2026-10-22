@@ -20,27 +20,15 @@
  * 上下文由调用方传入（它已经持有会话数据），本组件不自己取 —— 取数逻辑
  * 只该有一份，放在面板里会让「会话内问答」那条链路再写一遍。
  */
+import { useEffect, useState } from 'react'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget, type CiteItem } from './cite-target.ts'
+import { readableCiteError, type CiteContextStatus, type ContextMessage } from './use-cite-detail.ts'
 import css from './ask-cite-detail.module.css'
 
 /** 知识库来源的面包屑：`第 3 页 · 第二章 › 违约条款`。 */
 function kbCrumb(kb: NonNullable<CiteItem['kb']>): string {
   return [kb.page > 0 ? `第 ${kb.page} 页` : '', kb.heading].filter(Boolean).join(' · ')
-}
-
-/** 上下文里的一条消息（由调用方从会话数据里切出来）。 */
-export interface ContextMessage {
-  /** 稳定键（用于 React key）。 */
-  key: string
-  /** 发送者显示名。 */
-  sender: string
-  /** 时间（`YYYY-MM-DD HH:mm`）。 */
-  time: string
-  /** 正文。 */
-  text: string
-  /** 是不是被引用的那一条（高亮它）。 */
-  focus?: boolean
 }
 
 /**
@@ -49,28 +37,59 @@ export interface ContextMessage {
  * @param props.item - 当前查看的引用（`null` = 面板关闭）。
  * @param props.index - 它的编号（与正文角标一致）。
  * @param props.context - 消息上下文（仅消息来源有；知识库来源传空数组）。
+ * @param props.contextStatus - 上下文加载状态（加载中 / 空 / 失败 / 缺定位）。
+ * @param props.contextError - 已归一的失败原因（不含堆栈）。
+ * @param props.onRetryContext - 失败后的重试动作。
  * @param props.onClose - 关闭回调。
  * @param props.onOpenSource - 「跳转到原文」回调（离开问答去会话/知识库）。
  * @param props.onArchive - 「归档」回调（推进历史记录）。
  * @param props.overlay - 强制**覆盖式**（不占布局宽度）。
- *   会话内问答的面板只有 384px，切 320px 给详情会把正文压到不可读 ——
+ *   会话内问答的抽屉空间有限，切 320px 给详情会把正文压到不可读 ——
  *   那里必须覆盖。宽屏的「微信问答」面板则并排（不传这个 prop）。
  * @returns 面板元素；`item` 为 null 时返回 null。
  */
-export function CiteDetailPanel({ item, index, context, onClose, onOpenSource, onOpenKbFile, onArchive, overlay }: {
+export function CiteDetailPanel({
+  item, index, context, contextStatus, contextError, onRetryContext,
+  onClose, onOpenSource, onOpenKbFile, onArchive, overlay,
+}: {
   item: CiteItem | null
   index: number
   context?: ContextMessage[]
+  contextStatus?: CiteContextStatus
+  contextError?: string | null
+  onRetryContext?: () => void
   onClose: () => void
   onOpenSource?: (username: string, localId?: number) => void
-  onOpenKbFile?: (kbId: number, fileId: number) => void
+  onOpenKbFile?: (kbId: number, fileId: number) => void | Promise<void>
   onArchive?: () => void
   overlay?: boolean
 }): React.JSX.Element | null {
+  const [kbBusy, setKbBusy] = useState(false)
+  const [kbError, setKbError] = useState('')
+  const itemKey = item ? `${item.source ?? 'msg'}:${item.username ?? ''}:${item.local_id ?? 0}:${item.kb?.fileId ?? 0}` : ''
+  useEffect(() => {
+    setKbBusy(false)
+    setKbError('')
+  }, [itemKey])
+
+  const openKb = async (kbId: number, fileId: number): Promise<void> => {
+    if (!onOpenKbFile || kbBusy) return
+    setKbBusy(true)
+    setKbError('')
+    try {
+      await onOpenKbFile(kbId, fileId)
+    } catch (e) {
+      setKbError(readableCiteError(e, '无法打开知识库文件，请确认原文件仍在磁盘上'))
+    } finally {
+      setKbBusy(false)
+    }
+  }
+
   if (!item) return null
   const kb = item.source === 'kb' ? item.kb : undefined
   const target = citeTarget(item)
   const ctx = context ?? []
+  const status = contextStatus ?? (ctx.length > 0 ? 'ready' : 'idle')
   return (
     <aside className={css.citeDetail} data-overlay={overlay || undefined} aria-label={`第 ${index} 条来源详情`}>
       <div className={css.citeDetailHead}>
@@ -102,8 +121,44 @@ export function CiteDetailPanel({ item, index, context, onClose, onOpenSource, o
       {/* 被引用的原文：这是「精准跳转」的落点 —— 用户点角标就是为了看它。 */}
       <div className={css.citeDetailBody}>{item.snippet}</div>
 
-      {/* 消息上下文：单条消息常常看不懂，给前后几条让用户自己判断。 */}
-      {ctx.length > 0 && (
+      {/* 消息上下文：单条消息常常看不懂，给前后几条让用户自己判断。
+          知识库来源完全不进这一区（文件块没有「会话附近消息」这回事）。 */}
+      {!kb && status === 'loading' && (
+        <div className={css.citeDetailCtx} data-state="loading" role="status">
+          <div className={css.citeDetailCtxHead}>上下文</div>
+          <div className={css.citeDetailCtxState}>正在读取附近消息…</div>
+        </div>
+      )}
+      {!kb && status === 'empty' && (
+        <div className={css.citeDetailCtx} data-state="empty">
+          <div className={css.citeDetailCtxHead}>上下文</div>
+          <div className={css.citeDetailCtxState}>这条引用附近没有更多消息。</div>
+        </div>
+      )}
+      {!kb && status === 'error' && (
+        <div className={css.citeDetailCtx} data-state="error" role="alert">
+          <div className={css.citeDetailCtxHead}>上下文</div>
+          <div className={css.citeDetailCtxState}>
+            {contextError || '附近消息读取失败。可以重试，或直接打开会话原文核对。'}
+          </div>
+          <div className={css.citeDetailCtxActions}>
+            {onRetryContext && (
+              <button type="button" className={css.citeDetailCtxRetry} onClick={onRetryContext}>重试</button>
+            )}
+            <span className={css.citeDetailCtxHint}>也可以先点下方「打开会话原文」核对。</span>
+          </div>
+        </div>
+      )}
+      {!kb && status === 'unavailable' && (
+        <div className={css.citeDetailCtx} data-state="unavailable">
+          <div className={css.citeDetailCtxHead}>上下文</div>
+          <div className={css.citeDetailCtxState}>
+            这条引用缺少可用的消息定位信息，暂时无法加载附近消息。
+          </div>
+          <div className={css.citeDetailCtxHint}>可点下方「打开会话原文」，按时间与内容人工核对。</div>
+        </div>
+      )}
+      {!kb && status === 'ready' && ctx.length > 0 && (
         <div className={css.citeDetailCtx}>
           <div className={css.citeDetailCtxHead}>上下文</div>
           <div className={css.citeDetailCtxList}>
@@ -125,12 +180,23 @@ export function CiteDetailPanel({ item, index, context, onClose, onOpenSource, o
             打开会话原文
           </button>
         )}
+        {target?.kind === 'kb' && onOpenKbFile && (
+          <button
+            type="button"
+            className={css.citeDetailGhost}
+            disabled={kbBusy}
+            onClick={() => { void openKb(target.kbId, target.fileId) }}
+          >
+            {kbBusy ? '正在打开…' : '打开知识库文件'}
+          </button>
+        )}
         {onArchive && (
           <button type="button" className={css.citeDetailPrimary} onClick={onArchive} title="把这轮问答归档到历史记录">
             归档到历史记录
           </button>
         )}
       </div>
+      {kbError !== '' && <div className={css.citeDetailError} role="alert">{kbError}</div>}
     </aside>
   )
 }

@@ -6,14 +6,13 @@
  *  askLayout（单栏；历史上的模型配置/检索设置侧栏均已迁出或移除）
  *   ├─ askPage
  *   │  ① 面板头（固定）   标题 / 说明 / 历史记录 / 清空对话
- *   │  ② 检索上下文条（固定） 语料状态 · 会话范围 · 时间范围 · 回答模型
- *   │  ③ 对话区（滚动）   多轮问答；空态为一张引导卡，内容贴底生长
- *   │  ④ 提问区（固定）   输入框 + 发送（同一个面）+ 次要动作行
- *   │  ⑤ 隐私说明（固定） 12px 次级小字
+ *   │  ② 对话区（滚动）   多轮问答；空态为一张引导卡，内容贴底生长
+ *   │  ③ 提问区（固定）   输入框 + 发送；输入 @ 时在上方选择检索范围
+ *   │  ④ 隐私说明（固定） 12px 次级小字
  *
  * 与上一版的关键差别：
- *  ① 把「会话/时间/模型」三个限定条件从输入框内部提到输入框**上方**的上下文条 ——
- *     输入框只负责输入与发送（三层挤 158px → 两层），限定条件常驻可见、随时可改。
+ *  ① 检索范围不再常驻占一条工具栏：输入 `@` 时在输入框上方弹出会话/时间选择器，
+ *     选完后只保留一行生效范围提示；范围仍即时作用于后续提问。
  *  ② 模型配置、检索设置都曾有各自的侧栏，现已全部迁出/移除：模型配置只在
  *     「数据配置」页面配一次，检索参数固化为内置默认（不再暴露给用户）。
  *     这样对话栏在整个宽度区间都不被遮挡（旧实现 <1100px 的覆盖式抽屉实测把发送键
@@ -25,68 +24,30 @@
  * 前端只持有当前线程的 turns，清空对话即丢、关窗即没，靠它存历史必然漏。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiGetLlmConfig, apiGetSessions, apiOptimizeAskQuestion, apiSubmitAskFeedback } from '../api.ts'
+import { apiGetLlmConfig, apiGetSessions, apiSubmitAskFeedback } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
-import type { AskOptimizeResult, AskResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { DateRangeField, PanelHeader, Select } from '../ui/kit.tsx'
+import type { AskResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { PanelHeader } from '../ui/kit.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { useKbScope } from './kb-scope.ts'
 import { AskHistoryDialog } from './AskHistoryDialog.tsx'
+import { buildAskExamples } from './ask-examples.ts'
+import { AskEmptyIntro, fmtShortDate } from './ask-scope.tsx'
+import { AskComposer } from './ask-composer.tsx'
 import { useAskSession, type AskTurn } from './use-ask.ts'
+import { useAskOptimize } from './use-ask-optimize.ts'
 import { AskPending } from './ask-pending.tsx'
 import { AskProcess } from './AskProcess.tsx'
+import { AskResources, AskRuntimeMeta, INTENT_LABEL } from './AskRuntimeMeta.tsx'
 import { AnswerBody } from './AnswerBody.tsx'
 import { CiteDetailPanel } from './CiteDetailPanel.tsx'
-import { useCiteDetail } from './use-cite-detail.ts'
+import { loadMessageContext, useCiteDetail } from './use-cite-detail.ts'
 import css from './ask.module.css'
 import rcss from './retrieval.module.css'
 import kitCss from '../ui/kit.module.css'
 
-/** 空态示例问题：点一下即填入输入框并聚焦。 */
-const EXAMPLES = [
-  '上周三我和李四聊了什么？',
-  '谁答应过我下周交报告？',
-  '最近一次转账给我的是谁？',
-]
-
-/** 空态能力行：三条一句话说明「这个面板能做什么 / 边界在哪」，
- *  让首次进入的空白区承载信息而不是纯留白。 */
-const CAPABILITIES = ['本机检索，不出网', '引用可跳转原文', '支持多轮追问']
-
-/** 时间 chip 上的短日期显示：2026-09-11 → 09/11。 */
-function fmtShortDate(d: string): string {
-  return d.length >= 10 ? d.slice(5).replace('-', '/') : d
-}
-
-/** 上下文条上的统一领标图标：两种限定条件用同一套 13px 线性图标。 */
-function ScopeIcon({ kind }: { kind: 'corpus' | 'time' }): React.JSX.Element | null {
-  const common = {
-    className: css.ctxIcon, viewBox: '0 0 24 24', width: 13, height: 13,
-    fill: 'none', stroke: 'currentColor', strokeWidth: 2,
-    strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true,
-  }
-  if (kind === 'corpus') {
-    return (
-      <svg {...common}>
-        <path d="M12 3 2 8l10 5 10-5-10-5Z" />
-        <path d="m2 16 10 5 10-5" />
-        <path d="m2 12 10 5 10-5" />
-      </svg>
-    )
-  }
-  if (kind === 'time') {
-    return (
-      <svg {...common}>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 7v5l3 2" />
-      </svg>
-    )
-  }
-  return null
-}
-
 /** 检索规划元信息行：默认收起只显示意图 + 已识别的限定条件，点击展开检索词。 */
-function PlanLine({ plan }: { plan?: AskResult['plan'] }): React.JSX.Element | null {
+export function PlanLine({ plan }: { plan?: AskResult['plan'] }): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   if (!plan || (!plan.intent && plan.subQueries.length === 0)) return null
   const hasQueries = plan.subQueries.length > 0
@@ -106,7 +67,7 @@ function PlanLine({ plan }: { plan?: AskResult['plan'] }): React.JSX.Element | n
       title={hasQueries ? (open ? '收起检索词' : '展开检索词') : undefined}
     >
       <svg className={css.planChevron} viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-      <span className={css.planIntent}>意图：{plan.intent || '—'}</span>
+      <span className={css.planIntent}>意图：{plan.intent ? INTENT_LABEL[plan.intent] ?? plan.intent : '—'}</span>
       {when && <span className={css.planChip}>时间 {when}</span>}
       {plan.person && <span className={css.planChip}>对象 {plan.person}</span>}
       {open && hasQueries && <span className={css.planQueries}>检索词：{plan.subQueries.join(' / ')}</span>}
@@ -123,16 +84,6 @@ export function BasisLine({ basis }: { basis?: string }): React.JSX.Element | nu
 
 /** 轮次结构复用问答 hook（群聊内 AI 面板是同一套），此处转出以兼容既有引用。 */
 export type { AskTurn }
-
-/** 意图的中文标签（后端给的是稳定枚举，界面要给人看）。 */
-const INTENT_LABEL: Record<string, string> = {
-  recency_lookup: '最近查询',
-  entity_lookup: '实体查询',
-  time_range: '时间范围',
-  aggregation: '聚合统计',
-  comparison: '对比',
-  open_qa: '开放问答',
-}
 
 /** 召回通道的短标签。 */
 const CH_LABEL: Record<string, string> = { sparse: '稀疏', dense: '稠密', structured: '结构化', kb: '知识库' }
@@ -361,11 +312,6 @@ export function AnswerFeedback({ turn, patch }: {
 
 /**
  * Render the WeChat Q&A panel.
- * @param props - optional chat navigation callback.
- * @returns the ask panel element tree.
- */
-/**
- * Render the WeChat Q&A panel.
  * @param props.onOpenChat - 消息引用的跳转（打开会话并定位到那条消息）。
  * @param props.onOpenKbFile - 知识库引用的跳转（切到「知识库 · 文件」并选中该文件）。
  * @returns the ask panel element tree.
@@ -405,17 +351,19 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     ? (sessions.find(s => s.username === scopeUsername)?.displayName || scopeUsername)
     : ''
   /** 多轮对话状态（turns/asking/streamText/error）统一由问答 hook 提供。 */
-  const { turns, asking, streamText, streamReasoning, streamStages, error, ask: askSession, cancel: cancelSession, reset: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamStages, error, ask: askSession, retry: retryTurn, cancel: cancelSession, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     ...(scopeUsername ? { scopeUsername } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
     source: 'ask',
     // 只有这一处开知识库：会话内问答（SessionAsk）不该把文件掺进「这个群说过什么」。
     useKb: true,
+    kbId,
     ...(scopeDisplayName ? { scopeUsernameName: scopeDisplayName } : {}),
   })
+  const askScopeKey = `${scopeUsername}\u0000${from}\u0000${to}\u0000${String(kbId)}`
   /** 引用详情面板的开关（点正文角标 → 右侧滑出；再点同一条收起）。 */
-  const citeDetail = useCiteDetail(turns)
+  const citeDetail = useCiteDetail(turns, askScopeKey, { loadContext: loadMessageContext })
   // 读一次模型配置（读本机 llm.json，很轻）：只用于底部那行"发给谁"。
   useEffect(() => {
     let cancelled = false
@@ -427,12 +375,19 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     })()
     return () => { cancelled = true }
   }, [])
-  /** 提问优化：加载态 + 结果（优化后的问题与建议）+ 错误。 */
-  const [optLoading, setOptLoading] = useState(false)
-  const [optResult, setOptResult] = useState<AskOptimizeResult | null>(null)
-  const [optError, setOptError] = useState<string | null>(null)
-  /** 时间范围面板展开态（上下文条「时间」chip 切换；默认收起）。 */
-  const [timeOpen, setTimeOpen] = useState(false)
+  /** 提问优化：范围绑定，切会话/时间/知识库后丢弃旧结果。 */
+  const {
+    loading: optLoading,
+    result: optResult,
+    error: optError,
+    optimize: optimizeAsk,
+    dismiss: dismissOptimize,
+  } = useAskOptimize({
+    scopeKey: askScopeKey,
+    ...(scopeUsername ? { username: scopeUsername } : {}),
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
+  })
   /** 输入框随内容自动增高（超上限后内部滚动）。 */
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => {
@@ -463,27 +418,9 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
 
   /** 提问优化：调后端 LLM 改写问题 + 给改进建议（结果内联展示，不弹窗）。 */
   const optimizeQuestion = useCallback(async (): Promise<void> => {
-    const q = question.trim()
-    if (!q || optLoading) return
-    setOptLoading(true)
-    setOptError(null)
-    setOptResult(null)
-    try {
-      const history = turns.map(t => ({ role: t.role, content: t.text }))
-      const r = await apiOptimizeAskQuestion({
-        question: q,
-        ...(scopeUsername ? { username: scopeUsername } : {}),
-        ...(from ? { from } : {}),
-        ...(to ? { to } : {}),
-        ...(history.length > 0 ? { history } : {}),
-      })
-      setOptResult(r)
-    } catch (e) {
-      setOptError('优化失败：' + (e as Error).message)
-    } finally {
-      setOptLoading(false)
-    }
-  }, [question, optLoading, turns, scopeUsername, from, to])
+    if (optLoading) return
+    await optimizeAsk(question, turns)
+  }, [optLoading, optimizeAsk, question, turns])
 
   /** 通过 base_url 拉取官方模型列表（主进程请求，绕开 CORS）。
    *  未填 API Key 时会命中的两条兜底路径（内置参考清单），由后端返回 source='catalog'。 */
@@ -504,21 +441,21 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
   useEffect(() => { void loadSessions() }, [loadSessions])
 
   /** 提问：交给问答 hook（它负责流式 id 隔离 / 多轮历史 / 错误态），这里只管清空输入框。 */
-  const ask = useCallback(async (): Promise<void> => {
-    const q = question.trim()
+  const ask = useCallback(async (text: string): Promise<void> => {
+    const q = text.trim()
     if (!q || asking) return
     setQuestion('')
     await askSession(q)
-  }, [question, asking, askSession])
+  }, [asking, askSession])
 
   /** 清空对话与草稿（原「清空」按钮移至面板头）。 */
   const clearConversation = useCallback((): void => {
     setQuestion('')
     resetThread()
     clearError()
-    setOptResult(null)
-    setOptError(null)
-  }, [resetThread, clearError])
+    dismissOptimize()
+    citeDetail.close()
+  }, [resetThread, clearError, dismissOptimize, citeDetail])
 
   const userTurnCount = turns.filter(t => t.role === 'user').length
   /** 取某轮回答对应的提问：用最近的前一条 user 轮次（assistant 轮本身不携带提问）。 */
@@ -571,67 +508,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
         )}
       />
 
-      {/* ② 检索上下文条：左侧「检索什么语料」（会话 + 时间），右侧「谁来回答」（模型）。
-          语料规模（原来的 badge）并进范围控件本身：全部会话 · 128 —— 少一处重复状态。 */}
-      <div className={css.contextBar}>
-        <span className={css.ctxLabel}>范围</span>
-        <div className={css.scopeHost} data-set={scopeUsername ? '' : undefined}>
-          <ScopeIcon kind="corpus" />
-          <Select
-            value={scopeUsername}
-            onChange={(v) => { setScopeUsername(v) }}
-            options={[
-              { value: '', label: sessionsLoaded ? `全部会话 · ${sessions.length}` : '全部会话' },
-              ...sessions.map(s => ({ value: s.username, label: s.displayName || s.username })),
-            ]}
-            onOpen={() => { void loadSessions() }}
-            placeholder="全部会话"
-            ariaLabel="会话范围"
-          />
-        </div>
-        <button
-          type="button"
-          className={css.ctxChip}
-          data-open={timeOpen || undefined}
-          data-set={from || to ? '' : undefined}
-          onClick={() => { setTimeOpen(v => !v) }}
-          aria-expanded={timeOpen}
-          title="限定检索的时间范围"
-        >
-          <ScopeIcon kind="time" />
-          {from || to ? `${from ? fmtShortDate(from) : '…'} → ${to ? fmtShortDate(to) : '…'}` : '全部时间'}
-          <span className={css.ctxCaret} aria-hidden="true">▾</span>
-        </button>
-        {(from || to) && (
-          <button
-            type="button"
-            className={css.ctxClear}
-            onClick={() => { setFrom(''); setTo(''); setTimeOpen(false) }}
-            title="清除时间范围"
-            aria-label="清除时间范围"
-          >
-            清除
-          </button>
-        )}
-        <span className={css.ctxSpacer} />
-      </div>
-      {timeOpen && (
-        <div className={css.scopePanel}>
-          <DateRangeField
-            from={from}
-            to={to}
-            onFrom={setFrom}
-            onTo={setTo}
-            onClear={() => { setFrom(''); setTo('') }}
-            presets={['today', 'week', 'month', 'last-7', 'last-30']}
-            ariaLabel="检索时间范围"
-            idFrom="ask-from"
-            idTo="ask-to"
-          />
-        </div>
-      )}
-
-      {/* ③ 对话区：唯一滚动容器。内容一律贴底生长（聊天契约）：
+      {/* ② 对话区：唯一滚动容器。内容一律贴底生长（聊天契约）：
           内容不足时由 .askStack 的 margin-top:auto 把整块推到输入框上方，
           超出时 auto 归零、从顶部开始正常滚动。 */}
       <div className={`${kitCss.panelBody} ${css.askBody}`} ref={bodyRef}>
@@ -642,7 +519,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
           {userTurnCount === 0 && !asking && (
             <AskEmptyIntro
               noCorpus={noCorpus}
-              sessionCount={sessions.length}
+              sessionCount={sessions.length} examples={buildAskExamples(sessions, scopeDisplayName)}
               onPick={(ex) => { setQuestion(ex); clearError(); taRef.current?.focus() }}
             />
           )}
@@ -653,6 +530,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
             streamReasoning={streamReasoning}
             streamStages={streamStages}
             onStop={cancelSession}
+            onRetry={(i) => { void retryTurn(i) }}
             citeDetail={citeDetail}
             patchTurn={patchTurn}
             questionForTurn={questionForTurn}
@@ -662,7 +540,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
         </div>
       </div>
 
-      {/* ④ 提问区：错误 → 优化建议 → 输入面。三者都属于「本次输入」的上下文，
+      {/* ③ 提问区：错误 → 优化建议 → 输入面。三者都属于「本次输入」的上下文，
           紧贴输入框上方，不进入滚动区。 */}
       {error && <div className={`${kitCss.error} ${css.askError}`} role="alert">{error}</div>}
       {optResult && (
@@ -678,62 +556,36 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
             </>
           )}
           <div className={css.optActions}>
-            <button type="button" className={css.optApply} onClick={() => { setQuestion(optResult.optimized); setOptResult(null) }}>采用优化</button>
-            <button type="button" className={css.optDismiss} onClick={() => { setOptResult(null) }}>忽略</button>
+            <button type="button" className={css.optApply} onClick={() => { setQuestion(optResult.optimized); dismissOptimize() }}>采用优化</button>
+            <button type="button" className={css.optDismiss} onClick={dismissOptimize}>忽略</button>
           </div>
         </div>
       )}
       {optError && <div className={css.optError} role="alert">{optError}</div>}
 
-      <div className={css.composer}>
-        <div className={css.inputRow}>
-          <textarea
-            ref={taRef}
-            className={css.composerInput}
-            value={question}
-            onChange={(e) => { setQuestion(e.target.value) }}
-            onKeyDown={(e) => {
-              // Enter 发送、Shift+Enter 换行；输入法组字期间不拦截（中文候选确认用）。
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                void ask()
-              }
-            }}
-            placeholder="今天想从聊天记录里查点什么？"
-            rows={1}
-            aria-label="微信问答问题"
-          />
-          <button
-            type="button"
-            className={css.send}
-            data-busy={asking || undefined}
-            disabled={!question.trim() || asking}
-            onClick={() => { void ask() }}
-            aria-label="提问"
-            title="提问（Enter 发送，Shift+Enter 换行）"
-          >
-            {asking ? (
-              <span className={css.sendSpinner} aria-hidden="true" />
-            ) : (
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
-            )}
-          </button>
-        </div>
-        <div className={css.composerFooter}>
-          <button
-            type="button"
-            className={css.optBtn}
-            onClick={() => { void optimizeQuestion() }}
-            disabled={optLoading || !question.trim() || asking}
-            title="让 AI 改写问题、给出改进建议（结果内联展示，可一键采用）"
-          >
-            {optLoading ? '优化中…' : '优化提问'}
-          </button>
-          <span className={css.actionHint}>Enter 发送 · Shift+Enter 换行</span>
-        </div>
-      </div>
+      <AskComposer
+        question={question}
+        setQuestion={setQuestion}
+        onSubmit={(text) => { void ask(text) }}
+        asking={asking}
+        onStop={cancelSession}
+        optLoading={optLoading}
+        onOptimize={() => { void optimizeQuestion() }}
+        textareaRef={taRef}
+        scopeUsername={scopeUsername}
+        scopeDisplayName={scopeDisplayName}
+        sessions={sessions}
+        sessionsLoaded={sessionsLoaded}
+        from={from}
+        to={to}
+        onReloadSessions={() => { void loadSessions() }}
+        onPickScope={setScopeUsername}
+        onFrom={setFrom}
+        onTo={setTo}
+        onClearTime={() => { setFrom(''); setTo('') }}
+      />
 
-      {/* ⑤ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动）。
+      {/* ④ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动）。
           「所选模型」要说清是哪一支：用户判断"这句话会不会发出去、发给谁"就靠这一行。 */}
       <div className={css.privacyNote}>
         检索在本机完成；AI 生成会把检索到的片段（聊天记录与知识库文件）发送到
@@ -777,6 +629,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
         open={historyOpen}
         onClose={() => { setHistoryOpen(false) }}
         onOpenCitation={onOpenChat}
+        onOpenKbFile={onOpenKbFile}
         onAskAgain={(q) => {
           setQuestion(q)
           clearError()
@@ -785,55 +638,6 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
         }}
       />
       </div>
-    </div>
-  )
-}
-
-/**
- * 空态引导卡（图标 + 标题 + 说明 + 能力行 + 示例问题）。
- *
- * 抽出来的理由与 `AskStream` / `AskCiteDetail` 相同：`AskPanel` 受函数体棘轮管着，
- * 而这张卡有 40 行 JSX。它也是**语义独立**的一节 —— 只在「还没提问」时出现，
- * 与提问、检索、生成全无耦合。
- *
- * @param props.noCorpus - 是否没有可检索的会话（决定说明文案与警示色）。
- * @param props.sessionCount - 可检索会话数（写进说明）。
- * @param props.onPick - 点示例问题（填入输入框并聚焦，**不**自动发送）。
- * @returns 引导卡元素。
- */
-function AskEmptyIntro({ noCorpus, sessionCount, onPick }: {
-  noCorpus: boolean
-  sessionCount: number
-  onPick: (ex: string) => void
-}): React.JSX.Element {
-  return (
-    <div className={css.emptyIntro}>
-      <div className={css.emptyTitle}>向你的聊天记录提问</div>
-      <div className={css.emptySub} data-warn={noCorpus || undefined}>
-        {noCorpus
-          ? '尚未检测到可检索的会话：请先在「数据配置」中设置数据目录并导入解密库'
-          : `${sessionCount} 个会话可检索 · 回答会附上可点击跳转的本机来源`}
-      </div>
-      <div className={css.emptyCaps}>
-        {CAPABILITIES.map(cap => (
-          <span key={cap} className={css.emptyCap}>
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="m8.5 12.5 2.4 2.4L15.5 9.5" />
-            </svg>
-            {cap}
-          </span>
-        ))}
-      </div>
-      <div className={css.emptyExHead}>试试这样问</div>
-      <div className={css.emptyExGrid}>
-        {EXAMPLES.map(ex => (
-          <button key={ex} type="button" className={css.emptyExCard} onClick={() => { onPick(ex) }}>
-            <span className={css.emptyExText}>{ex}</span>
-          </button>
-        ))}
-      </div>
-      <div className={css.emptyHint}>点一张卡片直接填入，或在下方的输入框里自己写</div>
     </div>
   )
 }
@@ -854,13 +658,17 @@ function AskEmptyIntro({ noCorpus, sessionCount, onPick }: {
 function AskCiteDetail({ detail, onOpenChat, onOpenKbFile, onArchive }: {
   detail: ReturnType<typeof useCiteDetail>
   onOpenChat?: ((username: string, localId?: number) => void) | undefined
-  onOpenKbFile?: ((kbId: number, fileId: number) => void) | undefined
+  onOpenKbFile?: ((kbId: number, fileId: number) => void | Promise<void>) | undefined
   onArchive: () => void
 }): React.JSX.Element {
   return (
     <CiteDetailPanel
       item={detail.item}
       index={detail.ref?.n ?? 0}
+      context={detail.context}
+      contextStatus={detail.contextStatus}
+      contextError={detail.contextError}
+      onRetryContext={detail.retryContext}
       onClose={detail.close}
       {...(onOpenChat ? { onOpenSource: onOpenChat } : {})}
       {...(onOpenKbFile ? { onOpenKbFile } : {})}
@@ -887,13 +695,14 @@ function AskCiteDetail({ detail, onOpenChat, onOpenKbFile, onArchive }: {
  * @param props.onDistill - 「沉淀为笔记」回调。
  * @returns 消息流元素。
  */
-function AskStream({ turns, asking, streamText, streamReasoning, streamStages, onStop, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function AskStream({ turns, asking, streamText, streamReasoning, streamStages, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
   streamStages: React.ComponentProps<typeof AskPending>['streamStages']
   onStop: () => void
+  onRetry: (index: number) => void
   citeDetail: ReturnType<typeof useCiteDetail>
   patchTurn: (index: number, patch: Partial<AskTurn>) => void
   questionForTurn: (idx: number) => string
@@ -904,6 +713,7 @@ function AskStream({ turns, asking, streamText, streamReasoning, streamStages, o
       turns={turns}
       asking={asking}
       pendingProps={{ streamText, streamReasoning, streamStages, onStop }}
+      onRetry={onRetry}
       onOpenCite={citeDetail.toggle}
       activeCite={citeDetail.ref}
       patchTurn={patchTurn}
@@ -926,10 +736,11 @@ function AskStream({ turns, asking, streamText, streamReasoning, streamStages, o
  * @param props.onDistill - 「沉淀为笔记」的回调（打开编辑器）。
  * @returns 消息流元素；没有轮次时返回 null。
  */
-function AskThread({ turns, asking, pendingProps, onOpenCite, activeCite, patchTurn, questionForTurn, onDistill }: {
+function AskThread({ turns, asking, pendingProps, onRetry, onOpenCite, activeCite, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   pendingProps: React.ComponentProps<typeof AskPending>
+  onRetry: (index: number) => void
   /** 点正文角标（轮次下标 + 编号）。 */
   onOpenCite?: ((turn: number, n: number) => void) | undefined
   /** 当前正在看的那条（高亮角标）。 */
@@ -949,6 +760,11 @@ function AskThread({ turns, asking, pendingProps, onOpenCite, activeCite, patchT
         ) : (
             <div key={i} className={css.chatAi}>
               <AskProcess stages={t.stages} reasoning={t.reasoning} />
+              <AskRuntimeMeta
+                turn={t}
+                placement="meta"
+                {...(t.status === 'failed' ? { onRetry: () => { onRetry(i) } } : {})}
+              />
               <PlanLine plan={t.plan} />
               <RetrMeta retrieval={t.retrieval} />
               <div className={css.chatAnswer}>
@@ -986,6 +802,7 @@ function AskThread({ turns, asking, pendingProps, onOpenCite, activeCite, patchT
                   )}
                 </div>
               </div>
+              <AskResources turn={t} />
             </div>
           )
         ))}

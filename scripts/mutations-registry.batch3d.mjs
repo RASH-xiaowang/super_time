@@ -105,8 +105,8 @@ export const MUTATIONS_BATCH3D = [
     id: "M427-view-original-toggle-resurrected",
     why: "把 viewOriginal 状态接回面板 ⇒ 那个开关的 disabled 条件是 !proxyableSrc(curImg.url)，而实测 3219 条地址只有 9 条 https ⇒ 几乎恒禁用；一旦启用就是密文。它是纯死控件。",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx",
-    from: "  const { viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate,",
-    to: "  const { viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate, viewOriginal, setViewOriginal,",
+    from: "  const { viewer, setViewer, viewRotate, setViewRotate, curImg, setViewerIndex } =",
+    to: "  const { viewer, setViewer, viewRotate, setViewRotate, viewOriginal, setViewOriginal, curImg, setViewerIndex } =",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
 

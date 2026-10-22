@@ -48,13 +48,23 @@ export const searchKbTool: RetrievalTool = {
       // `onlyRag: true` 与问答路径一致：只搜「允许参与 RAG」的文件。
       const res = searchKb(ctx.decryptedDir, ctx.kbId, { query: q, topK: limit, onlyRag: true })
       if (res.error) return { tool: 'search_kb', ok: false, error: res.error, hits: [] }
+      const kbId = res.kbId
       const hits = res.hits.map(h => ({
-        key: `kb:${String(ctx.kbId)}:${String(h.chunkId)}`,
+        key: `kb:${String(kbId)}:${String(h.chunkId)}`,
         name: h.fileName,
         time: '',
         snippet: h.text.slice(0, 300),
         source: 'kb' as const,
         score: h.score,
+        trace: {
+          kind: 'kb' as const,
+          kbId,
+          fileId: h.fileId,
+          chunkId: h.chunkId,
+          ordinal: h.ordinal,
+          page: h.page,
+          heading: h.heading,
+        },
       }))
       return {
         tool: 'search_kb', ok: true, hits,
@@ -87,6 +97,9 @@ export function makeSearchSemanticTool(embedFn?: EmbedFn, embedModel = ''): Retr
       type: 'object',
       properties: {
         query: { type: 'string', description: '用自然语言描述要找什么（不必是聊天里出现过的词）' },
+        username: { type: 'string', description: '限定某个会话（不填 = 全部会话；会话内问答由服务端强制）' },
+        from: { type: 'string', description: '起始日期 YYYY-MM-DD（不填 = 不限）' },
+        to: { type: 'string', description: '截止日期 YYYY-MM-DD（不填 = 不限）' },
         limit: { type: 'number', description: '最多返回几条（默认 12，上限 60）' },
       },
       required: ['query'],
@@ -99,14 +112,31 @@ export function makeSearchSemanticTool(embedFn?: EmbedFn, embedModel = ''): Retr
       const st = vectorIndexStatus(ctx.decryptedDir)
       if (!st.ready) return { tool: 'search_semantic', ok: false, error: '向量索引未就绪', hits: [] }
       const limit = argInt(args['limit'], 12, 1, 60)
+      const username = ctx.scope?.username?.trim() || argString(args['username']).trim()
+      const from = ctx.scope?.from?.trim() || argString(args['from']).trim()
+      const to = ctx.scope?.to?.trim() || argString(args['to']).trim()
+      if (from !== '' || to !== '') {
+        return {
+          tool: 'search_semantic',
+          ok: false,
+          error: '当前向量检索接口不支持按日期范围过滤（超出可执行的数据范围）',
+          errorCode: 'unsupported_scope',
+          errorDetails: {
+            argument: from !== '' ? 'from' : 'to',
+            ...(from !== '' ? { from } : {}),
+            ...(to !== '' ? { to } : {}),
+          },
+          hits: [],
+        }
+      }
       try {
         const res = await searchDense(ctx.decryptedDir, q, embedFn, {
           topK: limit,
           minSimilarity: 0.2,
           candidatePool: 2000,
-          ...(ctx.scope?.username ? { username: ctx.scope.username } : {}),
+          ...(username ? { username } : {}),
         })
-        const hits = res.docs.map((d, i) => ({
+        const hits = res.docs.filter(d => !username || d.username === username).map((d, i) => ({
           key: d.docKey,
           name: d.name,
           time: d.create_time ? new Date(d.create_time * 1000).toISOString().slice(0, 16).replace('T', ' ') : '',

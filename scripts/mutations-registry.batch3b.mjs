@@ -307,7 +307,7 @@ export const MUTATIONS_BATCH3B = [
     id: "M259-edit-delete-uses-readonly-helper",
     why: "删编辑记录那一步错用只读的 withDb ⇒ DELETE 抛「readonly database」，恢复原文整条动作失败。两颗 helper 的分别不是洁癖：用错就是行为错，这条用例兜的就是它",
     file: "src/backend/wechat-data/src/query/edit.ts",
-    from: "withWritableDb(p, (store2) =>",
+    from: "withWritableDb(p, (store) =>",
     to: "withDb(p, (store2) =>",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },

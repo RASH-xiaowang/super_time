@@ -7,6 +7,19 @@
  * @module types-ask-export
  */
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+import type {
+  AnswerStatus,
+  EvidenceBundle,
+} from './query/answer-runtime/evidence.ts'
+import type {
+  AnswerRuntimeResourceCitation,
+  ToolCallTrace,
+} from './query/answer-runtime/types.ts'
+import type { ThreadState } from './query/answer-runtime/thread-state.ts'
+import type { AskCitation } from './query/ask-citation-types.ts'
+
+export type { ThreadState } from './query/answer-runtime/thread-state.ts'
+export type { AskCitation } from './query/ask-citation-types.ts'
 
 /** 语音消息的可播放音频（16kHz 单声道 wav 的 data URL）。 */
 export interface VoiceDataUrlResult {
@@ -126,57 +139,6 @@ export interface ExportHistoryPruneOptions {
   onlyMissing?: boolean
 }
 
-/**
- * One citation (source message) for an Ask answer.
- *
- * ⚠ 这个结构是**消息中心**的：`username` / `local_id` / `time` 三个字段构成了
- * 「引用 → 原文」的可定位性，而知识库的文件块**一个都没有**。因此 KB 来源必须靠
- * `source` 判别，不能只把字段填成空值混进来 —— 那样会静默污染三处：
- *   · `gateway.askBasisLine` 的「N 个会话」（空 username 会被算成一个假会话）；
- *   · trace 落盘的反馈归因键（`username + ':' + local_id` 会变成 `:`，
- *     同一次提问里多个 KB 引用还会**互相覆盖**，反馈归因指向不存在的消息）；
- *   · `formatAskContext` 的渲染（模型会看到「未知会话 1970-01-01:」）。
- * 缺省 `source` 为 `'msg'` ⇒ 既有写入方与旧数据不用改。
- */
-export interface AskCitation {
-  name: string
-  time: string
-  snippet: string
-  username: string
-  local_id: number
-  /** 群聊里这条消息的发送者显示名（单聊为空）。 */
-  sender?: string
-  /**
-   * 来源域：`'msg'` = 聊天消息（缺省，向后兼容）；`'kb'` = 知识库文件块；
-   * `'agg'` = **聚合事实**（2026-10-16 新增，`COUNT(*)` / `GROUP BY` 的结果）。
-   *
-   * 判别字段的取舍：不用「`local_id === 0` 判 KB」这种隐式约定 ——
-   * 消息域里 `local_id` 为 0 是否有含义取决于上游，靠它判来源会在上游变化时
-   * 悄悄失效，而且失效时**不报错**（只是统计与归因开始说谎）。
-   */
-  source?: 'msg' | 'kb' | 'agg'
-  /**
-   * 知识库来源专有信息（`source === 'kb'` 时存在）。
-   *
-   * 用途：引用卡片要显示「文件名 + 面包屑 + 页码」（`name` 只有一个字符串装不下），
-   * 反馈归因键要能复算出 `kb:<kbId>:<chunkId>`（与检索侧 docKey 对齐）。
-   */
-  kb?: {
-    kbId: number
-    fileId: number
-    fileName: string
-    /** 小写扩展名（不含点），界面据此选图标。 */
-    fileExt: string
-    chunkId: number
-    /** 块在文件内的序号（0 基）。 */
-    ordinal: number
-    /** 页码（1 基）；非分页形态为 0。 */
-    page: number
-    /** 面包屑（`H1 › H2`）；无标题时为空串。 */
-    heading: string
-  }
-}
-
 /** Ask optimization result: rewritten question + improvement suggestions. */
 export interface AskOptimizeResult {
   optimized: string
@@ -217,6 +179,25 @@ export interface ReplySuggestResult {
 export interface AskResult {
   answer: string
   citations: AskCitation[]
+  /** 本轮问答的执行状态（工具/证据/综合各阶段收敛后的结果）。 */
+  status?: AnswerStatus
+  /** 空证据、澄清、阻断或降级的可读原因。 */
+  reason?: string
+  /**
+   * 状态原因的统一展示口径：优先综合失败原因，其次为空证据/阻断原因。
+   * 保留 `reason` / `synthesisError` 两个原字段，避免诊断信息在映射时丢失。
+   */
+  statusReason?: string
+  /** 综合生成失败时的原始错误（证据仍会保留并降级返回）。 */
+  synthesisError?: string
+  /** 本轮真实执行过的工具 trace（不含完整参数正文）。 */
+  toolCalls?: ToolCallTrace[]
+  /** 收敛、去重、预算截断后的证据包。 */
+  evidence?: EvidenceBundle
+  /** 文件/收藏/朋友圈等独立资源的可点击引用。 */
+  resources?: AnswerRuntimeResourceCitation[]
+  /** 本轮结束后的多轮线程状态，可传给下一次问答继承指代与时间。 */
+  threadState?: ThreadState
   /** Retrieval plan used for this answer (multi-turn pipeline). */
   plan?: AskPlan
   /**
@@ -240,6 +221,8 @@ export interface AskResult {
   insufficient?: boolean
   /** 模型给出的内容无法对应到任何一条原文：已不予采用，改为明确告知无证据。 */
   withheld?: boolean
+  /** 回答是否实际使用了检索材料；`false` 时无人值守通道不得发送。 */
+  evidenceUsed?: boolean
   /**
    * 接地核对结果（生成之后用**回答自己引用的原文**做的确定性复核）：
    *   · checked —— 校验过的「必须逐字来自原文」的值个数（金额/日期/长数字串）；

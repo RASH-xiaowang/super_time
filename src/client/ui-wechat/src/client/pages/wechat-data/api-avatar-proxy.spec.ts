@@ -10,7 +10,7 @@
  * 判据是「假远程面被叫了几次、每次带什么、这一层最终交出什么地址」。
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { apiGetAvatar, apiGetAvatarsLocal, setWechatRemote, type WechatRemote } from './api.ts'
+import { apiGetAvatar, apiGetAvatarBatched, apiGetAvatarsLocal, setWechatRemote, type WechatRemote } from './api.ts'
 import type { RemoteImageItem } from './api-core.ts'
 
 const PNG = 'data:image/png;base64,AVATAR'
@@ -24,6 +24,7 @@ function url(prefix = 'avatar'): string {
 interface Calls {
   proxyBatches: string[][]
   avatarReqs: number
+  avatarOptions: Array<{ username: string; nickname?: string }>
   batchReqs: number
 }
 
@@ -36,11 +37,12 @@ function stub(opts: {
   local?: Record<string, string>
   resolve?: (u: string) => RemoteImageItem
 } = {}): Calls {
-  const calls: Calls = { proxyBatches: [], avatarReqs: 0, batchReqs: 0 }
+  const calls: Calls = { proxyBatches: [], avatarReqs: 0, avatarOptions: [], batchReqs: 0 }
   const resolve = opts.resolve ?? ((u: string) => ({ url: u, dataUrl: PNG }))
   setWechatRemote({
-    getAvatar: async () => {
+    getAvatar: async (options: { username: string; nickname?: string }) => {
       calls.avatarReqs += 1
+      calls.avatarOptions.push({ ...options })
       return { ok: true as const, value: opts.avatar ?? { kind: 'none' } }
     },
     getAvatarsLocal: async () => {
@@ -99,6 +101,18 @@ describe('M23：头像的远程地址在 api 层就换成本机可画地址', ()
     expect(r.kind).toBe('data')
     expect(r.data).toBe(PNG)
     expect(calls.proxyBatches, '本机地址不该再敲代理').toEqual([])
+  })
+
+  it('批量未命中时，单张回落收到的 nickname 与 username 原样对应', async () => {
+    const calls = stub({ avatar: { kind: 'data', data: PNG }, local: {} })
+    const r = await apiGetAvatarBatched({ username: 'wxid_nick', nickname: '张三' })
+    expect(r.kind).toBe('data')
+    expect(r.data).toBe(PNG)
+    expect(calls.batchReqs, '批量入口只该打一次').toBe(1)
+    expect(calls.avatarReqs, '批量未命中应退回单张一次').toBe(1)
+    expect(calls.avatarOptions, '单张回落丢了 nickname，按昵称找联系人不会生效').toEqual([
+      { username: 'wxid_nick', nickname: '张三' },
+    ])
   })
 
   it('批量头像：远程值换成 data URL、本机值原样保留、键一个都不掉', async () => {

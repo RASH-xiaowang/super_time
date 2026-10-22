@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveMessageFileDataUrl } from '../src/query/media-file.ts'
 
@@ -82,6 +83,11 @@ function bodyOf(r: { url?: string; error?: string }): string {
   const at = url.indexOf(';base64,')
   expect(at, `没拿到 data URL，错误是：${String(r.error ?? '(无)')}`).toBeGreaterThan(0)
   return Buffer.from(url.slice(at + 8), 'base64').toString('utf8')
+}
+
+/** MD5 of a file body, matching what WeChat stores in appmsg. */
+function md5Of(body: string): string {
+  return createHash('md5').update(body).digest('hex')
 }
 
 describe('resolveMessageFileDataUrl：同名副本里挑出属于这条消息的那一份', () => {
@@ -217,5 +223,47 @@ describe('resolveMessageFileDataUrl：同名副本里挑出属于这条消息的
     // 旧实现的键是 `name|size|month`，不含根目录 ⇒ 这里会拿到 'AAAA'：
     // 点开的是 B 账号的文件，回来的却是 A 账号的内容（跨账号串数据）。
     expect(bodyOf(resolveMessageFileDataUrl(rootB, '同名同体积.pdf', {})), '缓存键没带目录 ⇒ 换账号串了内容').toBe('BBBB')
+  })
+
+  it('同名同大小时按 fileMd5 命中较旧副本，并允许正确副本在别的月份', () => {
+    const root = makeRoot('md5-disambiguate')
+    const older = 'OLDER-COPY'
+    const newer = 'NEWER-COPY'
+    expect(older.length).toBe(newer.length)
+    putFile(root, '2024-01', '合同.pdf', older, 1_700_000_000)
+    putFile(root, '2024-02', '合同.pdf', newer, 1_800_000_000)
+
+    // 消息报二月，但 MD5 属于一月那份：必须扫全库，不能拿当月的同名文件冒充。
+    const byMd5 = resolveMessageFileDataUrl(root, '合同.pdf', {
+      size: older.length,
+      createTime: tsLocal(2024, 2, 10),
+      fileMd5: md5Of(older),
+    })
+    expect(bodyOf(byMd5), '同名同大小时没有按 MD5 选中较旧副本').toBe(older)
+    // 体积线索失真时也不能把 MD5 已确认的副本排除掉。
+    expect(bodyOf(resolveMessageFileDataUrl(root, '合同.pdf', {
+      size: older.length + 100,
+      fileMd5: md5Of(older),
+    }))).toBe(older)
+  })
+
+  it('给了 fileMd5 但没有任何候选匹配时明确失败，不按 mtime 猜', () => {
+    const root = makeRoot('md5-miss')
+    putFile(root, '2024-03', '不存在匹配.pdf', 'AAAA', 1_700_000_000)
+    putFile(root, '2024-04', '不存在匹配.pdf', 'BBBB', 1_900_000_000)
+    const miss = resolveMessageFileDataUrl(root, '不存在匹配.pdf', {
+      fileMd5: 'f'.repeat(32),
+    })
+    expect(miss.url).toBeUndefined()
+    expect(miss.error).toContain('MD5')
+    expect(miss.error).toContain('停止猜测')
+  })
+
+  it('fileMd5 格式非法时在扫描前明确拒绝', () => {
+    const root = makeRoot('md5-invalid')
+    putFile(root, '2024-05', '坏键.pdf', 'AAAA')
+    const r = resolveMessageFileDataUrl(root, '坏键.pdf', { fileMd5: 'not-an-md5' })
+    expect(r.url).toBeUndefined()
+    expect(r.error).toBe('文件 MD5 格式不正确，无法校验同名文件')
   })
 })

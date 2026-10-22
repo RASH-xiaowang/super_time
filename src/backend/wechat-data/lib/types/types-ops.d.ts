@@ -6,6 +6,8 @@
  *
  * @module types-ops
  */
+import type { ClawbotReplyRunDetail } from './query/clawbot/clawbot-reply-types.ts';
+export type { ClawbotReplyAskResult, ClawbotReplyRunDetail, ClawbotReplySendDecision, } from './query/clawbot/clawbot-reply-types.ts';
 /** One native WeChat reminder (handoff_remind_v0) row. */
 export interface HandoffRemindItem {
     id: number;
@@ -180,9 +182,14 @@ export interface ClawbotInstanceConfig {
     slot: number;
     /** AI 自动回复总开关（收到入站消息时是否自动生成并回发）。 */
     autoReply: boolean;
-    /** 自动回复时是否启用知识库增强（复用问答管道，把该库的文件块纳入检索）。 */
+    /**
+     * 自动回复时是否启用知识库增强。
+     *
+     * `clawbot-auto` 固定 kb-only：`autoReply=true` 必须同时满足本字段为 true 且 `kbId > 0`；
+     * 否则保存时拒绝开启，或在实际运行配置中自动收敛为关闭。
+     */
     kbEnabled: boolean;
-    /** 知识库作用域（`kbEnabled` 为真且非空才生效；无从「所有库」这种模式）。 */
+    /** 知识库作用域（必须为正整数；没有「所有库」或「无库纯聊天」模式）。 */
     kbId: number | null;
     /**
      * 该实例的**系统提示词**（人设 / 语气 / 回复风格；2026-10-17）。
@@ -343,6 +350,8 @@ export interface ClawbotMessage {
     createdAt: number;
     /** 附件展示信息（有附件时非空；正文里仍有 `[图片]`/`[语音]` 等占位说明）。 */
     media: ClawbotMediaInfo | null;
+    /** 自动回复运行详情（入站目标消息与对应出站分段共用同一份摘要）。 */
+    run?: ClawbotReplyRunDetail;
 }
 /** 接入会话检索条件（关键词必须服务端过滤，见 operation-log 的同款教训）。 */
 export interface ClawbotMessageQuery {

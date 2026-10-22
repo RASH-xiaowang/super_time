@@ -59,9 +59,10 @@ export const aggregateMessagesTool: RetrievalTool = {
     const keywords = Array.isArray(args['keywords'])
       ? (args['keywords'] as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, 6)
       : []
-    const from = argString(args['from']) || ctx.scope?.from || ''
-    const to = argString(args['to']) || ctx.scope?.to || ''
-    const username = argString(args['username']) || ctx.scope?.username || ''
+    // 执行上下文里的范围是服务端锁定值，不能被模型参数覆盖。
+    const from = ctx.scope?.from || argString(args['from'])
+    const to = ctx.scope?.to || argString(args['to'])
+    const username = ctx.scope?.username || argString(args['username'])
 
     // 维度：模型给了就用它，没给就按问题自动判断（`pickDimension` 是确定性规则）。
     // 为什么允许模型覆盖：它能看到完整对话上下文，而 `pickDimension` 只看这一句问题。

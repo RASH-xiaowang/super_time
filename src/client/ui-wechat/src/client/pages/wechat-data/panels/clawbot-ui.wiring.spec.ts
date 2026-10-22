@@ -103,7 +103,8 @@ describe('ClawBot 前端接线', () => {
     expect(chat, '输入法组字期间的回车不许误触发送').toContain('isComposing')
     expect(chat, '附件取数要走后端（后端自动取回；界面只读缓存/重试）').toContain('apiGetClawbotMedia')
     expect(chat, '非图片附件用系统应用打开').toContain('apiOpenPath')
-    expect(chat, '图片小图要能放大看').toContain('mediaZoom')
+    expect(chat, '图片小图要能放大看').toContain('setZoom')
+    expect(chat, '放大预览要真的渲染查看器').toContain('ClawbotMediaViewer')
     expect(chat, '图片应出现即自动取小图（不再要人点「加载」）').toContain('void media.load(row)')
     expect(chat, '图片以缩图直接呈现（不再显示「[图片]」占位文字）').toContain('thumbImg')
     expect(chat, '缩图的取回中/失败重试各有形态（同尺寸占位框，列表不跳高）').toContain('thumbBox')
@@ -166,6 +167,27 @@ describe('ClawBot 前端接线', () => {
       .not.toContain('wechatOk')
   })
 
+  it('自动回复逐条运行详情：按 runId 去重并挂到对应消息下方（2026-10-22）', () => {
+    /*
+     * 症状：自动回复发出后，界面只有一条消息；用了哪些工具、命中了什么知识库片段、
+     * 为什么没发送，全都只能去进程日志里找。后端把摘要持久化到
+     * `clawbot_reply_run.result_json` 后，前端还差最后一段接线：
+     *   ① 线程要读取消息上的 `run`；
+     *   ② 同一条 run 可能同时附在入站目标与出站分段上，必须按 runId 去重；
+     *   ③ 详情卡要复用统一运行信息的工具 / 证据 / 引用展示。
+     */
+    const thread = read(...PANELS, 'clawbot-thread.tsx')
+    const detail = read(...PANELS, 'clawbot-run-detail.tsx')
+    const style = read(...PANELS, 'clawbot.module.css')
+    expect(thread, '线程没有读取消息上的自动回复运行摘要').toContain('autoReplyRunOf')
+    expect(thread, '运行详情卡没有接进对话流').toContain('<ClawbotRunDetail')
+    expect(thread, '同一条 run 没有按 runId 收敛（会重复渲染）').toContain('run:${String(detail.runId)}')
+    expect(detail, '没有从消息行读取 run 的兼容入口').toContain('export function autoReplyRunOf')
+    expect(detail, '详情卡没有复用统一运行信息的工具 / 证据展示').toContain('<AskRuntimeMeta')
+    expect(detail, '知识库引用没有独立列表（无法核对来源）').toContain('citationName')
+    expect(style, '运行详情缺少样式（会变成裸 details）').toContain('.runDetail')
+  })
+
   it('自动回复的系统提示词链路完整（2026-10-17）：实例配置 → ask → 覆盖 system', () => {
     /*
      * 用户要求「为实例增加系统提示词的内容输入版块」+「写一套拟人化的默认提示词」。
@@ -185,14 +207,20 @@ describe('ClawBot 前端接线', () => {
     const askdeep = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'askdeep.ts')
     expect(askdeep, 'askWechat 没有 systemPromptOverride 参数 ⇒ 提示词传不进来')
       .toContain('systemPromptOverride')
-    expect(askdeep, 'systemPromptOverride 没真的覆盖 system（只声明不用）')
+    const prompt = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime-prompt.ts')
+    expect(prompt, 'resolveSystemPrompt 没有接收 override 与 dataScope（提示词或数据面会静默失效）')
+      .toContain('export function resolveSystemPrompt(override: string | undefined, dataScope?: AskDataScope): string')
+    const runtime = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime.ts')
+    expect(runtime, '综合生成阶段没走覆盖后的 system ⇒ 用户提示词只影响工具选择')
       .toContain('resolveSystemPrompt(options.systemPromptOverride, options.dataScope)')
+    expect(runtime, 'kb-only 兜底生成没固定 kb-only ⇒ 自动回复可能拿到微信问答提示词')
+      .toContain("resolveSystemPrompt(options.systemPromptOverride, 'kb-only')")
     // 默认提示词必须真的存在且是拟人化的（不是空串、不是报告腔）。
-    const prompt = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-prompt.ts')
-    expect(prompt, '没有内置默认提示词常量').toContain('DEFAULT_CLAWBOT_SYSTEM_PROMPT')
-    expect(prompt, '默认提示词没要求「像真人发微信那样」').toContain('像真人发微信那样')
-    expect(prompt, '默认提示词没禁止报告腔').toContain('综上所述')
-    expect(prompt, '默认提示词没禁止引用角标（微信里没有可点的角标）').toContain('[1]')
+    const clawbotPrompt = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-prompt.ts')
+    expect(clawbotPrompt, '没有内置默认提示词常量').toContain('DEFAULT_CLAWBOT_SYSTEM_PROMPT')
+    expect(clawbotPrompt, '默认提示词没要求「像真人发微信那样」').toContain('像真人发微信那样')
+    expect(clawbotPrompt, '默认提示词没禁止报告腔').toContain('综上所述')
+    expect(clawbotPrompt, '默认提示词没禁止引用角标（微信里没有可点的角标）').toContain('[1]')
   })
 
   it('长回复分段发送（2026-10-17）：切段函数 + 配置开关 + 逐条发出', () => {
@@ -200,7 +228,8 @@ describe('ClawBot 前端接线', () => {
     expect(prompt, '没有分段函数').toContain('export function splitReplyText')
     expect(prompt, '分段上限常量不见了').toContain('CLAWBOT_REPLY_CHUNK_CHARS')
     const reply = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-auto-reply.ts')
-    expect(reply, '自动回复没按配置决定是否分段').toContain('cfg.splitReply ? splitReplyText(text) : [text]')
+    const splitSites = reply.match(/cfg\.splitReply \? splitReplyText\(text\) : \[text\]/g) ?? []
+    expect(splitSites, '普通投递与 durable outbox 两条路径都必须按配置分段').toHaveLength(2)
     expect(reply, '分段后没逐条发送（只发了第一段）').toMatch(/for \(const part of parts\)/)
   })
 
@@ -243,29 +272,30 @@ describe('ClawBot 前端接线', () => {
      * 修复：抽 `buildSynthRules(dataScope, timeGuardRule)`，`kb-only`（自动回复）走**聊天版**
      * （不标角标 + 每条 ≤30 字 + 要求分段），缺省（手动问答）走**检索版**（保留角标）。
      */
-    const askdeep = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'askdeep.ts')
-    expect(askdeep, '没有按数据面分叉的规则构造函数').toContain('function buildSynthRules(')
-    expect(askdeep, '调用点没传 dataScope（分叉无从生效）')
-      .toContain('${buildSynthRules(options.dataScope, timeGuardRule)}')
+    const prompt = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime-prompt.ts')
+    expect(prompt, '没有按数据面分叉的规则构造函数').toContain('export function buildSynthRules(')
+    expect(prompt, '调用点没把 dataScope 传给规则构造函数（分叉无从生效）')
+      .toContain('${buildSynthRules(input.dataScope, input.timeGuardRule)}')
     // 聊天版必须**明确禁止**角标（只说「不要报告腔」不够 —— 旧版也说了，但被第 3 条压过）。
-    expect(askdeep, '聊天版没禁止 [n] 角标 ⇒ 微信里会出现乱码角标')
+    expect(prompt, '聊天版没禁止 [n] 角标 ⇒ 微信里会出现乱码角标')
       .toContain('**不要标 [n] 角标**')
     // 聊天版必须给出**字数硬要求**（只说「简短」模型会写 100+ 字）。
-    expect(askdeep, '聊天版没给字数硬要求 ⇒ 模型会写长')
+    expect(prompt, '聊天版没给字数硬要求 ⇒ 模型会写长')
       .toContain('**每条不超过 30 字**')
     // 检索版必须**保留**角标要求（手动问答的界面要能点、能核对）。
-    expect(askdeep, '检索版丢了 [n] 角标要求 ⇒ 手动问答的引用不可点')
+    expect(prompt, '检索版丢了 [n] 角标要求 ⇒ 手动问答的引用不可点')
       .toContain('**每条事实后面标 [n]**')
     // 自动回复的 maxTokens 要收紧（400），否则模型仍会写长。
-    expect(askdeep, '自动回复没收紧 maxTokens ⇒ 模型仍会写长')
-      .toContain("options.dataScope === 'kb-only' ? 400 : 1200")
+    const runtime = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime.ts')
+    expect(runtime, '自动回复没收紧 maxTokens ⇒ 模型仍会写长')
+      .toContain('isKb ? 400 : 1200')
     // 单条上限 30 字 + 总长上限 300 字（= 最多 10 条）。
-    const prompt = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-prompt.ts')
+    const clawbotPrompt = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-prompt.ts')
     // ⚠️ 用**正则带行尾**而不是 `toContain`：`'...= 30'` 是 `'...= 300'` 的前缀，
     // 只查子串时变异把 30 改成 300 仍然命中（本轮实测 M615 第一次没咬住）。
-    expect(prompt, '单条上限不是 30 字（用户要求「每次回复不能超过 30 字」）')
+    expect(clawbotPrompt, '单条上限不是 30 字（用户要求「每次回复不能超过 30 字」）')
       .toMatch(/export const CLAWBOT_REPLY_CHUNK_CHARS = 30\n/)
-    expect(prompt, '默认提示词没写「每条不超过 30 字」（与切段上限脱节）')
+    expect(clawbotPrompt, '默认提示词没写「每条不超过 30 字」（与切段上限脱节）')
       .toContain('**每条不超过 30 字**')
     const reply = read('src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-auto-reply.ts')
     expect(reply, '总长上限不是 300 字（30 字 × 10 条）')
@@ -284,33 +314,40 @@ describe('ClawBot 前端接线', () => {
      * 修复：抽模块级 `resolveEmptyAnswer`，`kb-only` 走「调模型 + 聊天版兜底提示词」，
      * `wechat` 保持短路。
      */
-    const askdeep = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'askdeep.ts')
-    expect(askdeep, '没有 0 命中分支的处理函数').toContain('async function resolveEmptyAnswer(')
+    const runtime = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime.ts')
+    const prompt = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'ask-runtime-prompt.ts')
+    expect(prompt, '没有兜底对话提示词').toContain('export function buildEmptyChatPrompt(')
+    expect(runtime, '没有把「无证据」识别成聊天兜底分支').toContain('const prompt = noEvidence && isKb')
+    expect(runtime, 'ClawBot 证据不足时没启用综合生成 ⇒ 只会复读一句硬编码文案')
+      .toContain('synthesizeOnInsufficient: profile === \'clawbot-auto\',')
     // 自动回复分支必须**真的调模型**（不是返回硬编码文案）。
-    expect(askdeep, '自动回复 0 命中时没调模型 ⇒ 只会复读一句硬编码文案')
-      .toContain('chatAnswer = await deps.runChat(')
+    expect(runtime, '自动回复 0 命中时没调模型 ⇒ 只会复读一句硬编码文案')
+      .toMatch(/const answer = await gatedChat\(/)
     // 兜底提示词必须**明说「没有材料」**并要求不编造。
-    expect(askdeep, '没有兜底对话提示词').toContain('function buildEmptyChatPrompt(')
-    expect(askdeep, '兜底提示词没明说「没有材料」').toContain('你**没有**任何可参考的材料')
-    expect(askdeep, '兜底提示词没禁止编造').toContain('**绝对不要编造**具体事实')
+    expect(prompt, '兜底提示词没明说「没有材料」').toContain('你**没有**任何可参考的材料')
+    expect(prompt, '兜底提示词没禁止编造').toContain('**绝对不要编造**具体事实')
     // 兜底提示词不许提「知识库 / 检索」这类词（对方不知道你在查什么）。
-    expect(askdeep, '兜底提示词没禁止提「知识库」这类词')
+    expect(prompt, '兜底提示词没禁止提「知识库」这类词')
       .toContain('不要提「知识库」「检索」「材料」这类词')
     // 兜底提示词不许解释自己（真机实测：模型写了「（注：实在没有可引用的记录，就不编号了）」）。
-    expect(askdeep, '兜底提示词没禁止解释自己 ⇒ 模型会写「注：」「（不编号了）」这类元信息')
+    expect(prompt, '兜底提示词没禁止解释自己 ⇒ 模型会写「注：」「（不编号了）」这类元信息')
       .toContain('**不要解释你自己**')
     // ⚠️ 兜底提示词也必须禁角标（真机实测：3 次里 1 次冒出 `[1]`）——
     // 它是**用户消息**，比 system 更「近」，只在 system 里禁不够。
     // ⚠️ 断言要**限定在 `buildEmptyChatPrompt` 函数体内** —— 正常链路的聊天版规则里
     // 也有同一句「不要标 [n] 角标」，只查全文时变异改掉兜底那处仍然命中（本轮实测没咬住）。
-    const emptyFn = askdeep.slice(askdeep.indexOf('function buildEmptyChatPrompt('), askdeep.indexOf('async function resolveEmptyAnswer('))
+    const emptyFn = prompt.slice(
+      prompt.indexOf('export function buildEmptyChatPrompt('),
+      prompt.indexOf('/** 解析本次问答要用的系统提示词。 */'),
+    )
     expect(emptyFn, '兜底提示词没禁 [n] 角标 ⇒ 模型会冒出角标（真机实测 3 次里 1 次）')
       .toContain('**不要标 [n] 角标**')
     // 兜底提示词也要禁「万能开场」与要求「先回应内容」（与默认提示词同口径）。
     expect(emptyFn, '兜底提示词没禁「万能开场」').toContain('开场跟着对方的话走')
     expect(emptyFn, '兜底提示词没要求「先回应对方说的内容」').toContain('先回应对方说的内容')
-    // 手动问答必须**保持短路**（不编造聊天记录是硬底线）。
-    expect(askdeep, '手动问答丢了短路 ⇒ 模型会凭常识编造聊天记录')
-      .toContain("if (deps.dataScope !== 'kb-only') {")
+    // 手动问答必须**保持短路**（不编造聊天记录是硬底线）；运行时统一按证据状态决定是否生成。
+    const answerRuntime = read('src', 'backend', 'wechat-data', 'src', 'query', 'answer-runtime', 'runtime.ts')
+    expect(answerRuntime, '手动问答丢了无可避免的短路 ⇒ 模型会凭常识编造聊天记录')
+      .toContain("(input.synthesize === undefined || input.synthesizeOnInsufficient !== true)")
   })
 })

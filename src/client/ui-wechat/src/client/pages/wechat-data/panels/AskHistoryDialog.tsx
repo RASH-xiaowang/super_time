@@ -10,12 +10,11 @@
  *  ① 「我上次问了什么」—— 问题用最高对比度放在每条的主行位；
  *  ② 「当时答上了没有」—— 状态徽标区分「已回答 / 未检索到 / 未采用」，
  *     而不是让用户对着一堆同样的记录猜哪条是空的；
- *  ③ 「还能不能回到原文」—— 消息引用可点击跳转到会话（与问答面板同一条回调链路）；
- *     知识库文件引用在这里**只读**（本弹窗没有「切到知识库·文件」的出口，
- *     而把它当会话跳转会去开一个不存在的会话，且不报错），要点开请回问答面板。
+ *  ③ 「还能不能回到原文」—— 消息引用跳回会话，知识库引用用既有 API 直接打开原文件；
+ *     两者都先过 `citeTarget()`，绝不把知识库的合成 username 当会话打开。
  *
  * 两条刻意的取舍：
- *  · 引用在这里是**只读清单**（2 列小按钮），不复用问答面板那套带接地告警的 `CiteList`：
+ *  · 引用在这里是**紧凑清单**（2 列小按钮），不复用问答面板那套带接地告警的 `CiteList`：
  *    历史不需要把当初的回答再审计一遍，需要的只是「能不能跳过去」。
  *  · 删除（单条 / 全部）都走应用内确认框；「清空全部」在记录量级较大时要求**逐字输入**
  *    确认文本（不可恢复 + 影响面大），量小时不设这道门槛（否则删 3 条也要打一遍字）。
@@ -25,6 +24,7 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransient
 import { apiClearAskHistory, apiDeleteAskHistory, apiGetAskHistory } from '../api.ts'
 import type { AskHistoryEntry, AskHistoryQuery, AskHistoryStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget } from './cite-target.ts'
+import { readableCiteError } from './use-cite-detail.ts'
 import { Badge, Dialog, EmptyState, ErrorState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './ask-history.module.css'
@@ -66,6 +66,107 @@ const CLEAR_CONFIRM_THRESHOLD = 100
 /** 逐字确认要输入的文本。 */
 const CLEAR_CONFIRM_TEXT = '清空'
 
+/** 知识库引用的面包屑（与问答面板同口径）。 */
+function kbCrumb(kb: NonNullable<AskHistoryEntry['citations'][number]['kb']>): string {
+  return [kb.page > 0 ? `第 ${kb.page} 页` : '', kb.heading].filter(Boolean).join(' · ')
+}
+
+/**
+ * 旧记录可能没有 `source: 'kb'`，但用户名仍是检索侧的合成键 `kb:<库>:<文件>`。
+ * 这类条目必须继续按知识库渲染；否则会被 `citeTarget()` 当成消息，点开一个不存在的会话。
+ */
+function isKbCitation(c: AskHistoryEntry['citations'][number]): boolean {
+  return c.source === 'kb' || c.kb !== undefined || (c.username ?? '').trim().startsWith('kb:')
+}
+
+/**
+ * 历史记录里的引用清单。
+ *
+ * 从主函数抽出有两个原因：主函数受 `function-size-ratchet` 的 289 行台账约束；
+ * 且「点击去哪」与「打开失败怎么提示」是独立的一段交互，放在主函数里会让筛选/分页
+ * 与引用渲染互相淹没。
+ */
+function HistoryCites({ cites, citedIndexes, onOpenCitation, onOpenKbFile, onError }: {
+  cites: AskHistoryEntry['citations']
+  citedIndexes: number[]
+  onOpenCitation?: ((username: string, localId?: number) => void) | undefined
+  onOpenKbFile?: ((kbId: number, fileId: number) => void | Promise<void>) | undefined
+  onError: (message: string) => void
+}): React.JSX.Element {
+  const [busyKey, setBusyKey] = useState('')
+  const citedSet = new Set(citedIndexes)
+  const openKb = async (key: string, kbId: number, fileId: number): Promise<void> => {
+    if (!onOpenKbFile || busyKey !== '') return
+    setBusyKey(key)
+    try {
+      await onOpenKbFile(kbId, fileId)
+    } catch (e) {
+      onError(readableCiteError(e, '无法打开知识库文件，请确认原文件仍在磁盘上'))
+    } finally {
+      setBusyKey('')
+    }
+  }
+  return (
+    <div className={css.cites}>
+      {cites.map((c, ci) => {
+        const citedMark = citedSet.has(ci + 1) || undefined
+        // 「点了去哪」与问答面板共用同一份判定（cite-target.ts），
+        // 免得两处对「什么算文件来源」的理解漂开。
+        const target = citeTarget(c)
+        if (isKbCitation(c)) {
+          const kb = c.kb
+          const crumb = kb ? kbCrumb(kb) : ''
+          const key = `kb:${c.kb?.kbId ?? '?'}:${c.kb?.fileId ?? '?'}:${ci}`
+          const canOpen = target?.kind === 'kb' && onOpenKbFile !== undefined
+          return (
+            <button
+              key={key}
+              type="button"
+              className={css.citeBtn}
+              data-src="kb"
+              data-cited={citedMark}
+              disabled={!canOpen || busyKey !== ''}
+              onClick={() => {
+                if (target?.kind !== 'kb') return
+                void openKb(key, target.kbId, target.fileId)
+              }}
+              title={target?.kind !== 'kb'
+                ? `知识库文件《${kb?.fileName ?? c.name}》 · 这条旧记录缺少文件定位信息，只能查看摘要`
+                : !onOpenKbFile
+                  ? `知识库文件《${kb?.fileName ?? c.name}》 · 当前入口没有打开能力`
+                  : `打开知识库文件《${kb?.fileName ?? c.name}》${crumb ? ' · ' + crumb : ''} · ${c.snippet}`}
+            >
+              <span className={css.citeIdx}>[{ci + 1}]</span>
+              <span className={css.citeName} title={kb?.fileName ?? c.name}>{kb?.fileName ?? c.name}</span>
+              <span className={css.citeTime}>{busyKey === key ? '打开中…' : (kb?.fileExt ? kb.fileExt.toUpperCase() : '文件')}</span>
+              <span className={css.citeSnippet}>{crumb || c.snippet}</span>
+            </button>
+          )
+        }
+        return (
+          <button
+            key={`${c.username ?? ''}:${c.local_id ?? 0}:${ci}`}
+            type="button"
+            className={css.citeBtn}
+            data-cited={citedMark}
+            data-src={target === null ? 'unknown' : undefined}
+            disabled={target === null}
+            onClick={() => { if (target?.kind === 'msg') onOpenCitation?.(target.username, target.localId) }}
+            title={target === null
+              ? '这条旧记录缺少可定位信息，只能查看摘要'
+              : `${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
+          >
+            <span className={css.citeIdx}>[{ci + 1}]</span>
+            <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
+            <span className={css.citeTime}>{c.time}</span>
+            <span className={css.citeSnippet}>{c.snippet}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** 展开区的元信息行：模型 / 意图 / 检索词 / 耗时。 */
 function metaOf(it: AskHistoryEntry): string {
   const parts: string[] = []
@@ -84,10 +185,12 @@ function metaOf(it: AskHistoryEntry): string {
  * @param props.onAskAgain - 把某条历史的问题交回面板（面板负责填入输入框，**不**自动发送）。
  * @returns 弹窗元素。
  */
-export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: {
+export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, onAskAgain }: {
   open: boolean
   onClose: () => void
   onOpenCitation?: (username: string, localId?: number) => void
+  /** 打开知识库原文；返回 Promise 时失败会被弹窗归一成可读提示。 */
+  onOpenKbFile?: (kbId: number, fileId: number) => void | Promise<void>
   onAskAgain?: (question: string) => void
 }): React.JSX.Element {
   const [rawQ, setRawQ] = useState('')
@@ -166,7 +269,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
       flash({ text: `已删除 ${r.removed} 条记录` })
       reset()
     } catch (e) {
-      hold({ text: '删除失败：' + (e as Error).message, error: true })
+      hold({ text: '删除失败：' + readableCiteError(e, '请稍后重试'), error: true })
     } finally {
       setBusy(false)
     }
@@ -193,7 +296,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
       flash({ text: `已清空 ${r.removed} 条记录` })
       reset()
     } catch (e) {
-      hold({ text: '清空失败：' + (e as Error).message, error: true })
+      hold({ text: '清空失败：' + readableCiteError(e, '请稍后重试'), error: true })
     } finally {
       setBusy(false)
     }
@@ -243,7 +346,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
           </button>
         </div>
         {notice && <div className={css.notice} data-error={notice.error ? '' : undefined}>{notice.text}</div>}
-        {error && <ErrorState message={`读取失败：${error}`} />}
+        {error && <ErrorState message={`读取失败：${readableCiteError(error, '请稍后重试')}`} />}
       </div>
 
       {loading && items.length === 0 ? (
@@ -264,7 +367,6 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
             const meta = STATUS_META[it.status] ?? STATUS_META.ok
             const expanded = openId === it.id
             const cites = Array.isArray(it.citations) ? it.citations : []
-            const citedSet = new Set(it.citedIndexes)
             const metaText = metaOf(it)
             return (
               <div key={it.id} className={css.item} data-open={expanded || undefined}>
@@ -318,50 +420,13 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
                   : <div className={css.answer}>（这次没有产生回答）</div>}
                 {expanded && it.basis && <div className={css.basis}>{it.basis}</div>}
                 {expanded && cites.length > 0 && (
-                  <div className={css.cites}>
-                    {cites.map((c, ci) => {
-                      const citedMark = citedSet.has(ci + 1) || undefined
-                      // 「点了去哪」与问答面板共用同一份判定（cite-target.ts），
-                      // 免得两处对「什么算文件来源」的理解漂开。
-                      const target = citeTarget(c)
-                      if (target?.kind === 'kb') {
-                        const kb = c.kb
-                        const crumb = kb
-                          ? [kb.page > 0 ? `第 ${kb.page} 页` : '', kb.heading].filter(Boolean).join(' · ')
-                          : ''
-                        return (
-                          <div
-                            key={`kb:${target.kbId}:${target.fileId}:${ci}`}
-                            className={css.citeBtn}
-                            data-src="kb"
-                            data-cited={citedMark}
-                            title={`知识库文件《${kb?.fileName ?? c.name}》${crumb ? ' · ' + crumb : ''} · ${c.snippet}（在「知识库 · 文件」里查看）`}
-                          >
-                            <span className={css.citeIdx}>[{ci + 1}]</span>
-                            <span className={css.citeName} title={kb?.fileName ?? c.name}>{kb?.fileName ?? c.name}</span>
-                            <span className={css.citeTime}>{kb?.fileExt ? kb.fileExt.toUpperCase() : '文件'}</span>
-                            <span className={css.citeSnippet}>{crumb || c.snippet}</span>
-                          </div>
-                        )
-                      }
-                      return (
-                        <button
-                          key={`${c.username ?? ''}:${c.local_id ?? 0}:${ci}`}
-                          type="button"
-                          className={css.citeBtn}
-                          data-cited={citedMark}
-                          data-src={target === null ? 'unknown' : undefined}
-                          onClick={() => { if (target?.kind === 'msg') onOpenCitation?.(target.username, target.localId) }}
-                          title={`${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
-                        >
-                          <span className={css.citeIdx}>[{ci + 1}]</span>
-                          <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
-                          <span className={css.citeTime}>{c.time}</span>
-                          <span className={css.citeSnippet}>{c.snippet}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                  <HistoryCites
+                    cites={cites}
+                    citedIndexes={it.citedIndexes}
+                    onOpenCitation={onOpenCitation}
+                    onOpenKbFile={onOpenKbFile}
+                    onError={(text) => { hold({ text, error: true }) }}
+                  />
                 )}
                 {expanded && metaText && <div className={css.metaLine}>{metaText}</div>}
               </div>

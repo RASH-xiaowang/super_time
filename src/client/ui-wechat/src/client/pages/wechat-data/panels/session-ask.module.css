@@ -1,6 +1,6 @@
 /* 「新对话」会话级 AI 面板。
-   2026-10-19 微信化：从「并排第三栏（384px，会把消息区挤到约 460px）」改成
-   **覆盖式沉浸抽屉**（宽 400，默认关、可关闭）。抽屉相对 `.panel` 定位，
+   2026-10-19 微信化：从「并排第三栏」改成**覆盖式沉浸抽屉**（默认关、可关闭）。
+   宽度随视口在 440–640px 之间伸缩，窄屏由 `max-width: 100%` 兜底；
    消息列始终占满剩余宽度；全屏态（data-full）铺满整个会话区。 */
 
 .panel {
@@ -9,7 +9,7 @@
   right: 0;
   bottom: 0;
   z-index: 30;
-  width: 400px;
+  width: clamp(440px, 46vw, 640px);
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -128,7 +128,7 @@
 .aiAnswer {
   font-size: 13px; line-height: 1.7; color: var(--nm-text-1);
   white-space: pre-wrap; word-break: break-word;
-  /* 384px 的面板常遇到不带空格的长串（URL / wxid / 哈希 / 路径）：
+  /* 窄面板常遇到不带空格的长串（URL / wxid / 哈希 / 路径）：
      只写 word-break 时该项仍按「不可断」参与最小内容尺寸计算，会顶出容器。 */
   overflow-wrap: anywhere;
 }
@@ -227,6 +227,35 @@ textarea.input:focus-visible { outline: none; }
   border-color: transparent;
   background: color-mix(in srgb, var(--nm-brand) 45%, transparent);
   color: var(--nm-on-accent);
+}
+/* 生成中的原位停止键（与「微信问答」同一位置与同一语义）。 */
+.stopSend {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--nm-danger) 45%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
+  color: var(--nm-danger);
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s;
+}
+.stopSend:hover {
+  border-color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 16%, transparent);
+}
+.stopSend:focus-visible {
+  outline: 2px solid var(--nm-danger);
+  outline-offset: 2px;
+}
+.stopSendGlyph {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--nm-r-xs);
+  background: currentColor;
 }
 .spinner {
   width: 14px; height: 14px; border-radius: 50%;

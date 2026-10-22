@@ -130,7 +130,7 @@ function firstLineTitle(text: string): string {
  * 客户端的 `parseFavItem` 是 `f.title || info.title || typeLabel`，所以后端给空就会一路掉到
  * 类型标签 —— 修复点放在后端，所有消费方一致受益。
  */
-function parseFavContent(favType: number, xml: string): { title: string; desc: string; url: string } {
+export function parseFavContent(favType: number, xml: string): { title: string; desc: string; url: string } {
   if (!xml) return { title: '', desc: '', url: '' }
   const t = 'title'
   const d = 'desc'
@@ -199,7 +199,7 @@ function favoriteHeadMd5(xml: string): string {
 }
 
 /** One parsed resource part of a favorite (kept open for unknown datatypes). */
-type FavRawPart = FavItemPart
+export type FavRawPart = FavItemPart
 
 /** 从 XML 片段读第一个数字；非法/非正数返回 undefined。 */
 function positiveNumber(value: string | null): number | undefined {
@@ -284,8 +284,13 @@ function parseLocationPart(xml: string): FavRawPart | null {
   }
 }
 
-/** Parse `<datalist><dataitem>` entries into typed parts (mirror parse_fav_detail). */
-function parseFavParts(xml: string): FavRawPart[] {
+/**
+ * Parse `<datalist><dataitem>` entries into typed parts (mirror parse_fav_detail).
+ *
+ * 导出给统一搜索复用：资源定位必须与收藏详情面板使用同一份 XML 解释，
+ * 否则同一收藏在两处会得到不同的文件名/MD5/类型。
+ */
+export function parseFavParts(xml: string): FavRawPart[] {
   const out: FavRawPart[] = []
   // 位置没有 dataitem；先单独收顶层 locitem。
   const location = parseLocationPart(xml)

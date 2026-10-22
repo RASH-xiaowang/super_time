@@ -725,13 +725,13 @@ export async function apiGetArticleCovers(options: { urls: readonly string[] }):
 /**
  * Resolve a received message file (msg/file) to a data URL.
  *
- * `size` / `createTime` 来自消息本体（appmsg `<totallen>` 与 create_time）：
- * `msg/file` 只按月份分目录、同名文件可能属于别的会话，带上这两条线索
- * 才能在候选里挑出属于这条消息的那一份。
+ * `size` / `createTime` / `fileMd5` 来自消息本体（appmsg `<totallen>`、
+ * create_time 与附件的 md5）：`msg/file` 只按月份分目录，同名文件也可能
+ * 属于别的会话；同名同大小时必须由 `fileMd5` 消歧。
  * @param options - original file name plus attribution hints from the message.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<ImageDataUrlResult> {
+export async function apiGetMessageFile(options: { fileName: string; size?: number; createTime?: number; fileMd5?: string }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getMessageFile(options))
 }
 

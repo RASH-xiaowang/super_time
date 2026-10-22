@@ -420,21 +420,54 @@ function seedChatData(): void {
   mdb.close()
 }
 
-/** 只提供 askWechat 真正用到的表面（`llm.stream` + 默认模型）。 */
-function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; planCalls: () => number } {
+/**
+ * 只提供 askWechat 真正用到的表面（`llm.stream` + 默认模型）。
+ *
+ * 带工具清单的是工具选择轮：微信问答留空，交给运行时用 `search_hybrid` 兜底；
+ * ClawBot 只允许 `search_kb`，因此显式产出一个知识库检索调用。只有不带工具
+ * 清单的综合轮才进入 `replies`，这样回炉调用不会被工具选择分支吞掉。
+ */
+function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; selectionCalls: () => number } {
   const prompts: string[] = []
   /** 每次「综合生成」用户消息的完整 content（2026-10-18：断言图片块真的进消息）。 */
   const contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>> = []
   let synth = 0
-  let plans = 0
+  let selections = 0
   const llm = {
     // 只有显式传入时才挂 `embed`：缺省时 `makeEmbedFn` 返回 undefined ⇒ 稠密通道整体降级。
     // 这很重要 —— 否则 C3 引入的出网点会改变本文件其它用例的运行环境（它们都在纯稀疏下断言）。
     ...(embed ? { embed } : {}),
-    async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ type?: string, text?: string, data?: string, mediaType?: string }> }> }) {
-      if (String(opts.system ?? '').includes('检索规划器')) {
-        plans += 1
-        yield { type: 'text-delta', index: 0, text: JSON.stringify({ intent: '查合同条款', subQueries: ['蓝鲸协议', '合同'], from: '', to: '', person: '' }) }
+    async *stream(opts: {
+      system?: string
+      tools?: Array<{ name?: string }>
+      messages?: Array<{ content?: Array<{ type?: string, text?: string, data?: string, mediaType?: string }> }>
+    }) {
+      const toolNames = (opts.tools ?? []).map(tool => String(tool.name ?? ''))
+      if (toolNames.length > 0) {
+        selections += 1
+        // ClawBot 没有 search_hybrid 兜底，必须显式选择唯一允许的 search_kb。
+        if (toolNames.includes('search_kb') && !toolNames.includes('search_hybrid')) {
+          const question = opts.messages?.[0]?.content?.[0]?.text ?? ''
+          // 模拟模型构造可命中的检索词：关键词索引不接受整句自然语言。
+          // 金额用例要召回含「验收款」的块，其余合同用例用夹具独有短语。
+          const query = question.includes('验收款')
+            ? '验收款'
+            : question.includes('蓝鲸') ? UNIQUE : question
+          const args = JSON.stringify({ query })
+          yield { type: 'block-start', index: 0, blockType: 'tool-call' as const }
+          yield {
+            type: 'tool-call-delta',
+            index: 0,
+            id: 'call_kb',
+            name: 'search_kb',
+            argumentsDelta: args,
+          }
+          yield {
+            type: 'block-end',
+            index: 0,
+            block: { type: 'tool-call' as const, id: 'call_kb', name: 'search_kb', arguments: args },
+          }
+        }
         if (usage) yield { type: 'usage', usage }
         return
       }
@@ -454,7 +487,7 @@ function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[
     llm,
     agentDefaultModel: { currentSelection: () => ({ provider: 'mock', model: 'mock' }) },
   }
-  return { ctx: ctx as unknown as Context, prompts, contents, planCalls: () => plans }
+  return { ctx: ctx as unknown as Context, prompts, contents, selectionCalls: () => selections }
 }
 
 /** 引用的值都能在材料里找到 ⇒ 不触发回炉（只调一次模型，便于断言模型看到的上下文）。 */
@@ -466,7 +499,7 @@ async function gatewayWith(
   reply: string | string[] = ANSWER,
   embed?: (texts: string[]) => Promise<number[][]>,
   usage?: { inputTokens: number, outputTokens: number, totalTokens?: number },
-): Promise<{ gw: WechatDataGateway; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; planCalls: () => number }> {
+): Promise<{ gw: WechatDataGateway; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; selectionCalls: () => number }> {
   seedChatData()
   await buildSearchIndex(decrypted, true)
   register('蓝鲸合同.md', kb1File, 1)
@@ -474,7 +507,7 @@ async function gatewayWith(
   vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
   vi.stubEnv('DSH_WECHAT_DECODED_DIR', join(decrypted, 'decoded_images'))
   const m = makeCtx(Array.isArray(reply) ? reply : [reply], embed, usage)
-  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts, contents: m.contents, planCalls: m.planCalls }
+  return { gw: new WechatDataGateway(m.ctx), prompts: m.prompts, contents: m.contents, selectionCalls: m.selectionCalls }
 }
 
 describe('端到端：模型 usage 记账（2026-10-19）', () => {
@@ -483,7 +516,8 @@ describe('端到端：模型 usage 记账（2026-10-19）', () => {
       inputTokens: 10, outputTokens: 5, totalTokens: 15,
     })
     const r = await gw.askWechat({ question: '蓝鲸协议第七附则里的验收款是多少', kbId: 1 })
-    // 该路径实际调用模型 3 次（检索规划 + 生成 + 生成后处理），每次 10/5/15。
+    // 实际 3 次：工具选择 + 综合生成 + 接地未通过后的一次回炉，每次 10/5/15。
+    // `prompts` 只记录综合生成轮（2 条），不能拿它当总调用数。
     expect(r.usage).toEqual({ inputTokens: 30, outputTokens: 15, totalTokens: 45 })
   })
 })
@@ -495,6 +529,7 @@ describe('端到端：自动回复的图片（2026-10-18）', () => {
     // 直接走 `askDeep.askWechat` 的内部参数，这里用同一形状做白盒断言。
     const ask = gw.askWechat.bind(gw) as unknown as (o: {
       question: string
+      kbId?: number
       dataScope?: 'wechat' | 'kb-only'
       source?: string
       history?: Array<{ role: 'user' | 'assistant', content: string }>
@@ -503,6 +538,7 @@ describe('端到端：自动回复的图片（2026-10-18）', () => {
     // dataScope kb-only + 一句「看这张图」：这是 ClawBot 自动回复的真实入口参数形状。
     await ask({
       question: '分析一下图中右边那辆车是什么车？',
+      kbId: 1,
       dataScope: 'kb-only',
       source: 'auto',
       history: [
@@ -511,7 +547,7 @@ describe('端到端：自动回复的图片（2026-10-18）', () => {
       ],
       images: [{ data: 'aGVsbG8=', mediaType: 'image/png', name: 'wx-image-7' }],
     })
-    // 至少有一次「综合生成」的用户消息带图片块（规划那一轮只有文本）。
+    // 至少有一次「综合生成」的用户消息带图片块（工具选择轮只有文本）。
     const imageParts = contents.flat().filter((p) => p.type === 'image')
     expect(imageParts.length).toBeGreaterThan(0)
     expect(imageParts[0]?.data).toBe('aGVsbG8=')
@@ -530,23 +566,25 @@ describe('端到端：自动回复的接地协议（2026-10-20）', () => {
     answer: string
     basis?: string
     insufficient?: boolean
+    status?: string
     withheld?: boolean
     grounding?: { checked: number, unsupported: string[], cited: number, repaired: boolean }
   }>
 
-  it('未启用知识库时跳过无效的检索规划，只调用一次模型完成聊天兜底', async () => {
-    const answer = '在的，有事你说。'
-    const { gw, prompts, planCalls } = await gatewayWith(contractText(), answer)
+  it('未启用知识库时在工具选择前阻断，不调用模型或工具', async () => {
+    const { gw, prompts, contents, selectionCalls } = await gatewayWith(contractText(), '不应被调用')
     const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
     const r = await ask({
       question: '在吗',
       dataScope: 'kb-only',
       source: 'auto',
     })
-    expect(planCalls()).toBe(0)
-    expect(prompts).toHaveLength(1)
-    expect(r.answer).toBe(answer)
-    expect(r.insufficient).toBe(true)
+    expect(selectionCalls()).toBe(0)
+    expect(prompts).toHaveLength(0)
+    expect(contents).toHaveLength(0)
+    expect(r.answer).toContain('未选择知识库')
+    expect(r.status).toBe('blocked')
+    expect(r.insufficient).toBe(false)
   })
 
   it('禁止角标的自然回复不再被强制回炉或拒答，金额仍能通过接地核对', async () => {
@@ -559,7 +597,7 @@ describe('端到端：自动回复的接地协议（2026-10-20）', () => {
       dataScope: 'kb-only',
       source: 'auto',
     })
-    // 规划调用不计入 prompts；这里只有一次综合生成，说明没有因缺 [n] 而回炉。
+    // 工具选择调用不计入 prompts；这里只有一次综合生成，说明没有因缺 [n] 而回炉。
     expect(prompts).toHaveLength(1)
     expect(r.answer).toBe(natural)
     expect(r.answer).not.toMatch(/\[\d+\]/)
@@ -618,7 +656,7 @@ describe('端到端：问答接入知识库（kbId 透传 / 依据行口径 / �
     const r = await gw.askWechat({ question: '蓝鲸协议第七附则里的验收款是多少', kbId: 1 })
 
     const kbCites = r.citations.filter(c => c.source === 'kb')
-    const msgCites = r.citations.filter(c => c.source !== 'kb')
+    const msgCites = r.citations.filter(c => c.source !== 'kb' && c.source !== 'agg' && c.source !== 'resource')
     // 两半都要成立，否则下面「会话数只数消息」的断言是空转（0 个会话也是 0 个）。
     expect(kbCites.length).toBeGreaterThan(0)
     expect(msgCites.length).toBeGreaterThan(0)
@@ -629,15 +667,18 @@ describe('端到端：问答接入知识库（kbId 透传 / 依据行口径 / �
     expect(kb.kb?.chunkId).toBeGreaterThan(0)
     // 归因键必须能由引用复算出来（与检索侧 docKey 同一套规则）。
     expect(citationDocKey(kb)).toBe(`kb:1:${kb.kb!.chunkId}`)
-    // KB 引用的 username 是「按文件分组」的合成值，**绝不能**被当成会话。
-    expect(kb.username).toBe(`kb:1:${kb.kb!.fileId}`)
+    // 统一运行时的公开引用不再把知识库伪装成会话；文件身份由 `kb` 明细承载。
+    expect(kb.username).toBe('')
 
     const msgSessions = new Set(msgCites.map(c => c.username ?? '')).size
+    const kbFiles = new Set(kbCites.map(c => c.kb?.fileId)).size
     expect(r.basis).toContain(`${msgSessions} 个会话`)
-    expect(r.basis).toContain('个知识库文件')
+    expect(r.basis).toContain(`${kbFiles} 个知识库文件`)
     // 把 KB 也当成会话时的那个数，必须**不**出现。
     expect(r.basis).not.toContain(`${msgSessions + 1} 个会话`)
-    expect(r.basis).toContain(`${r.citations.length} 条原文`)
+    expect(r.basis).toContain(`${msgCites.length} 条聊天原文`)
+    // 原文数只等于聊天消息数；不能把 KB 块混进「条原文」。
+    expect(r.basis).not.toContain(`${r.citations.length} 条聊天原文`)
     expect(r.basis).toContain('回答引用了其中')
 
     // 模型看到的上下文里，文件块被显式标注来源域。

@@ -14,7 +14,7 @@
  */
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
-import { Dialog, EmptyMaybeSyncing, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
+import { EmptyMaybeSyncing, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
 import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
@@ -34,6 +34,7 @@ import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
 import { ChatsCalendarDialog, type ChatsCalendarDialogProps } from './chats-calendar-dialog.tsx'
 import { ChatsEditedDialog, type ChatsEditedDialogProps } from './chats-edited-dialog.tsx'
 import { ChatsMsgMenu } from './chats-msg-menu.tsx'
+import { ChatsMessageTools, type ChatsMessageToolsController } from './chats-message-tools.tsx'
 import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
@@ -47,6 +48,8 @@ import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
 export interface ChatsViewProps {
+  /** Right-click tools (source/info/editors) live outside the state bag. */
+  messageTools: ChatsMessageToolsController
   /**
    * 一次性动作回执（W3-11.1）：编辑/草稿/复制/打开文件的结果，一行会自动消失的小字。
    *
@@ -97,13 +100,7 @@ export interface ChatsViewProps {
       chatlogStack: ChatlogFrame[]
       clearAllDrafts: () => Promise<void>
       clearDraft: () => Promise<void>
-      closeEdit: () => void
       curSession: WechatSession | null
-      editAreaRef: React.MutableRefObject<HTMLTextAreaElement | null>
-      editBusy: boolean
-      editErr: string | null
-      editTarget: WechatMessage | null
-      editText: string
       error: string | null
       exportBatch: () => Promise<void>
       exportMsg: string | null
@@ -151,7 +148,6 @@ export interface ChatsViewProps {
       renderMsgItem: (item: MessageRenderItem) => React.JSX.Element | null
       renderSession: (s: WechatSession) => React.JSX.Element
       runMenuAction: (item: MsgMenuItem, m: WechatMessage) => void
-      saveEdit: () => Promise<void>
       search: string
       searchMode: 'session' | 'message'
       selected: Set<string>
@@ -165,7 +161,6 @@ export interface ChatsViewProps {
       setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
       setBatchMode: React.Dispatch<React.SetStateAction<boolean>>
       setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
-      setEditText: React.Dispatch<React.SetStateAction<string>>
       setMoreOpen: React.Dispatch<React.SetStateAction<boolean>>
       setMsgMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>>
       setSearch: React.Dispatch<React.SetStateAction<string>>
@@ -215,9 +210,22 @@ function MsgScrollArea({ scrollRef, newMsgCount, onJump, children }: {
   )
 }
 
-export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
-  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText,
-  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
+/** 当前会话的逐条分析缓存（只读取可见窗口，见 use-inline-analysis.ts）。 */
+function useChatsAnalysis(
+  curSession: WechatSession | null,
+  msgItems: MessageRenderItem[],
+  virtualizer: Virtualizer<HTMLDivElement, Element>,
+): ReturnType<typeof useInlineAnalysis> {
+  return useInlineAnalysis({
+    talker: curSession?.username ?? '',
+    items: msgItems,
+    virtualizer,
+  })
+}
+
+export function ChatsView({ state, messageTools, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
+  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
+  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
   // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
   // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
   const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
@@ -225,13 +233,10 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
   // 「只算可见的」是产品决策：单次 0.5 s，全量预跑不现实。
   // 没有开关参数（2026-09-26 起恒开）：曾经那个工具区按钮与「右栏面板开不开」互不知情，
   // 关掉右栏后推理照跑 —— 现在分析的唯一去处就是右栏面板，它开着就算、不需要第二个旋钮。
-  const inlineAnalysis = useInlineAnalysis({
-    talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer,
-  })
+  const inlineAnalysis = useChatsAnalysis(curSession, msgItems, msgVirtualizer)
   // 图片预取：可见窗口上下若干行的图片**提前低优先批量取回**并写内存缓存，
   // 于是滚到它们时 `MessageImage` 首帧就命中缓存 —— 不闪占位（2026-09-26）。
   useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
-
   return (
     <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined}>
       {/* left: session list */}
@@ -384,6 +389,8 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                 <div className={csscards.msgHeaderUser}>{curSession.username}</div>
                 {(exportMsg || notice) && <div className={csscards.msgHeaderExport} role={notice && !exportMsg ? 'status' : undefined} title={exportMsg ?? undefined}>{exportMsg ?? notice}</div>}
               </div>
+              {/* 轮询状态排在动作排前（2026-10-21 用户要求）：先看「✓ 时间 · N 条新消息」，再是 AI 问答 / 更多。 */}
+              {pollStatus && <span className={`${csscards.msgHeaderExport} ${csscards.msgHeaderPoll}`} title={pollStatus}>{pollStatus}</span>}
               <ChatsHeadActions
                 curSession={curSession} onBackToList={onBackToList}
                 aiEligible={aiEligible}
@@ -408,7 +415,6 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
                 clearAllDrafts={clearAllDrafts}
                 clearDraft={clearDraft}
               />
-              {pollStatus && <span className={`${csscards.msgHeaderExport} ${csscards.msgHeaderPoll}`} title={pollStatus}>{pollStatus}</span>}
             </div>
             {/*
               类型统计 chip 行此前在 .msgHeader 内，与标题行/动作行争宽 —— 实测头部因此在
@@ -488,39 +494,8 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
         openNestedChatlog={openNestedChatlog}
       />
 
-      {/* 编辑消息副本：写入本地解密副本，原文在 message_edits.db 里留底，可用「恢复原文」回退 */}
-      <Dialog
-        open={editTarget !== null}
-        onClose={() => { if (!editBusy) closeEdit() }}
-        title="编辑消息副本"
-        footer={(
-          <div className={cssshell.editFoot}>
-            <button type="button" className={csscards.exportBtn} disabled={editBusy} onClick={closeEdit}>取消</button>
-            <button
-              type="button"
-              className={csscards.exportBtnPrimary}
-              disabled={editBusy || editText.trim() === (editTarget?.displayText || editTarget?.strContent || '').trim()}
-              onClick={() => { void saveEdit() }}
-            >
-              {editBusy ? '保存中…' : '保存'}
-            </button>
-          </div>
-        )}
-      >
-        <p className={csscards.editHint}>
-          只改动本地解密副本（微信原始数据库不动）。保存后这条消息会标上「已编辑」，
-          随时可在「更多 → 已编辑消息」里恢复原文。
-        </p>
-        <textarea
-          ref={editAreaRef}
-          className={csscards.editArea}
-          value={editText}
-          onChange={(e) => { setEditText(e.target.value) }}
-          aria-label="消息内容"
-          spellCheck={false}
-        />
-        {editErr && <p className={cssshell.editErr} role="alert">保存失败：{editErr}</p>}
-      </Dialog>
+      {/* 消息工具：源码/信息/普通编辑/源码编辑，均由 chats-message-tools 统一管理。 */}
+      <ChatsMessageTools {...messageTools} />
 
       {/* 消息右键菜单（微信同款）：JSX 在 chats-msg-menu.tsx，「先关菜单再执行动作」那一判在那里被钉住 */}
       <ChatsMsgMenu
@@ -565,6 +540,7 @@ export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, on
 
       {aiOpen && aiEligible && aiTarget && (
         <SessionAsk
+          key={aiTarget.username}
           target={aiTarget}
           onClose={() => { setAiOpen(false); setAiFull(false) }}
           onOpenMessage={(u, id) => { void openSessionAndLocate(u, id > 0 ? id : undefined) }}

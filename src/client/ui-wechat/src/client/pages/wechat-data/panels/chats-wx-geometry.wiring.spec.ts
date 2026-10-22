@@ -113,6 +113,14 @@ describe('消息板面 · 微信桌面端官方几何', () => {
     const poll = blockOf(read('chats-cards.module.css'), 'msgHeaderPoll')
     expect(poll, '轮询状态不许再吃 margin-left: auto（会与动作排平分剩余空间、把动作排推到标题上）')
       .not.toContain('margin-left: auto')
+    // 用户要求（2026-10-21）：时间和新消息要排在「AI 问答 / 更多」之前。
+    // DOM 顺序就是视觉顺序，动作排的 margin-left:auto 只负责把它推到右缘。
+    const view = read('chats-view.tsx')
+    const pollAt = view.indexOf('{pollStatus &&')
+    const actionsAt = view.indexOf('<ChatsHeadActions')
+    expect(pollAt, '找不到会话头轮询状态').toBeGreaterThan(-1)
+    expect(actionsAt, '找不到会话头动作排').toBeGreaterThan(-1)
+    expect(pollAt, '轮询状态又跑回动作排后面了（用户要求放在「AI 问答」前方）').toBeLessThan(actionsAt)
     // 聊天底色只能有一个来源：同一个文件里深色值一份、浅色值一份。
     // （不能按「行首」数：深浅两块都写在各个规则的声明区里，行首匹配会两边都数上。）
     const darkDefs = (ROWS.match(/--wx-chat-bg:\s*#191919;/g) ?? []).length

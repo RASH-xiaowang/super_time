@@ -38,4 +38,14 @@ describe('M13 接线：ask 必须走 ref 单飞闸', () => {
     // `[^}]` 把匹配限制在同一层花括号内 —— 用 `[\s\S]*?` 会跨过内层 `}` 而误报
     expect(code).toMatch(/finally \{[^}]*if \(gate\.finish\(streamId\)\)/)
   })
+
+  it('停止先本地收尾并保留正文；失败写入可重试的失败轮次', () => {
+    expect(code).toContain('finishLocalStream({')
+    expect(code).toContain('streamTextRef.current')
+    expect(code).toContain('stoppedTurn({')
+    expect(code).toContain('failedTurn({')
+    expect(code).toContain("status: 'failed'")
+    expect(code).toContain('const retry = useCallback')
+    expect(code).toContain('await runAsk(asked.text, turnIndex - 1)')
+  })
 })

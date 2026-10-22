@@ -20,6 +20,7 @@
  * @module query/tools/registry
  */
 import type { EmbedFn } from '../retrieval/embedding.ts';
+import { type HybridSearchExecutor } from './search-hybrid-tool.ts';
 import { type RetrievalTool, type ToolContext, type ToolName, type ToolResult } from './types.ts';
 /**
  * 组装完整的工具集。
@@ -30,11 +31,13 @@ import { type RetrievalTool, type ToolContext, type ToolName, type ToolResult } 
  * 消失会让模型以为「没有这个能力」，而实际上是「这次没配」）。
  * @param opts.embedFn - 向量化函数（含隐私闸门）。
  * @param opts.embedModel - 向量模型名（只用于展示）。
+ * @param opts.hybridExecutor - 混合检索执行器（由装配层注入 `runAskRetrieval`）。
  * @returns 完整工具集。
  */
 export declare function buildTools(opts?: {
     embedFn?: EmbedFn;
     embedModel?: string;
+    hybridExecutor?: HybridSearchExecutor;
 }): RetrievalTool[];
 /** 默认工具集（不含语义检索的 embedFn —— 调用方按需用 `buildTools` 组装）。 */
 export declare const allTools: readonly RetrievalTool[];

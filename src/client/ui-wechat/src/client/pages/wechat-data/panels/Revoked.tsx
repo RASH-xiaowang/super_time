@@ -9,8 +9,10 @@ import { apiGetRevoked } from '../api.ts'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
-import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
+import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { Avatar } from './chats-support.tsx'
+import { RevokedContent } from './revoked-content.tsx'
 
 /**
  * Render the revoked-messages panel.
@@ -21,7 +23,7 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set())
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   /** 读失败与「确无撤回消息」分开（W3-11.4）。 */
   const [readError, setReadError] = useState('')
   const [search, setSearch] = useState('')
@@ -109,10 +111,20 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5)
   }, [items])
 
-  const toggle = (idx: number): void => {
+  /** 展开状态用稳定记录键，不能跟着筛选后的数组下标走。 */
+  const recordKey = (it: RevokedItem): string => [
+    it.session_username ?? '',
+    it.local_id ?? '',
+    it.server_id ?? '',
+    it.create_time,
+    it.type_label,
+    it.content.slice(0, 80),
+  ].join('\u0000')
+
+  const toggle = (key: string): void => {
     const next = new Set(expanded)
-    if (next.has(idx)) next.delete(idx)
-    else next.add(idx)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
     setExpanded(next)
   }
 
@@ -175,23 +187,25 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
           <div ref={revokedScrollRef} className={`${css.scroll} ${css.rvScroll}`}>
             {filtered.length === 0 && <div className={css.empty}>无匹配记录</div>}
             {filtered.slice(0, rvCount).map((it, idx) => {
-              const open = expanded.has(idx)
-              const avatar = avatarColors(it.sender || '?')
+              const key = recordKey(it)
+              const open = expanded.has(key)
+              const rowLabel = `${it.sender || '未知'} · ${it.type_label}，${open ? '收起' : '展开'}详情`
               return (
-                <div key={`${it.create_time}-${idx}`} className={`${css.row} ${css.rvRow}`} {...clickableKey(() =>{  toggle(idx) })}>
+                <div
+                  key={`${key}-${idx}`}
+                  className={`${css.row} ${css.rvRow}`}
+                  aria-expanded={open}
+                  {...clickableKey(() => { toggle(key) }, { label: rowLabel })}
+                >
                   <div className={css.rvRowHd}>
-                    <span style={{ width: 28, height: 28, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: avatar.color, background: avatar.background }}>{(it.sender || '?').slice(0, 1)}</span>
-                    <span className={css.rowName}>{it.sender}</span>
+                    <Avatar name={it.sender || '未知'} username={it.sender_username ?? ''} size={28} />
+                    <span className={css.rowName}>{it.sender || '未知'}</span>
                     <span className={css.cite}>{it.type_label}</span>
+                    {it.session_is_group && it.session_name && <span className={css.rvSession}>{it.session_name}</span>}
                     <span className={`${css.rowTime} ${css.rvTimePush}`}>{fmtDateTimeSec(it.create_time)}</span>
-                    <span className={css.rowTime}>{open ? '▾' : '▸'}</span>
+                    <span className={css.rvChevron} aria-hidden="true">{open ? '▾' : '▸'}</span>
                   </div>
-                  {open && (
-                    <div className={css.rvBodyPad}>
-                      <div className={css.rvBody}>{it.content}</div>
-                      <div className={`${kitCss.textMeta} ${css.rvFootNote}`}>↑ 该内容在微信客户端被撤回，此处为本地缓存副本</div>
-                    </div>
-                  )}
+                  <RevokedContent item={it} open={open} />
                 </div>
               )
             })}

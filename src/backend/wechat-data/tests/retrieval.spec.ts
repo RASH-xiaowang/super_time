@@ -34,6 +34,13 @@ afterEach(() => {
   scratch.length = 0
 })
 
+/** 造一个不存在的解密根；父目录唯一且登记清理，避免命中全局 %TEMP%/wechat_search.db。 */
+function makeMissingDecryptedDir(): string {
+  const root = mkdtempSync(join(tmpdir(), 'wx-missing-'))
+  scratch.push(root)
+  return join(root, 'decrypted')
+}
+
 /** 构造一条统一文档。 */
 function doc(username: string, localId: number, text: string, createTime = 0): RetrievedDoc {
   return {
@@ -687,7 +694,7 @@ describe('聚合通道：维度判定与时间窗', () => {
   })
 
   it('库不存在时返回空数组（不抛错，问答照常可用）', () => {
-    expect(runAggregate({ decryptedDir: join(tmpdir(), 'no-such-dir-' + String(Date.now())), question: '哪个群最多' })).toEqual([])
+    expect(runAggregate({ decryptedDir: makeMissingDecryptedDir(), question: '哪个群最多' })).toEqual([])
   })
 
   /**

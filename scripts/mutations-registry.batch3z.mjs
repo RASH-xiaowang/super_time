@@ -216,8 +216,8 @@ export const MUTATIONS_BATCH3Z = [
     id: 'M607-clawbot-split-reply-ignored',
     why: '自动回复不再按配置分段（`cfg.splitReply` 被忽略）⇒ 长回复整条一次发出，微信里几千字读起来很累且容易被折叠（2026-10-17 用户要求「如果内容太长可以分段发送」）。判据：clawbot-ui.wiring.spec.ts 的「长回复分段发送」。',
     file: 'src/backend/wechat-data/src/query/clawbot/clawbot-auto-reply.ts',
-    from: '    const parts = cfg.splitReply ? splitReplyText(text) : [text]',
-    to: '    const parts = [text]',
+    from: "  telemetry.countGenerationSucceeded()\n  const parts = cfg.splitReply ? splitReplyText(text) : [text]\n  telemetry.setStage('sending', slot)",
+    to: "  telemetry.countGenerationSucceeded()\n  const parts = [text]\n  telemetry.setStage('sending', slot)",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-ui.wiring.spec.ts',
   },
   {
@@ -272,9 +272,9 @@ export const MUTATIONS_BATCH3Z = [
   {
     id: 'M614-clawbot-synth-rules-not-forked',
     why: '回答规则不再按数据面分叉（自动回复也用检索版）⇒ 回复里带 `[1]` `[2]` 角标（微信里没有可点的角标，看着像乱码），且模型为了「标全来源」把话说长 —— 这正是用户报的「回复的内容是这样的」（2026-10-17）。判据：clawbot-ui.wiring.spec.ts 的「回答规则按数据面分叉」。',
-    file: 'src/backend/wechat-data/src/remotes/askdeep.ts',
-    from: '${buildSynthRules(options.dataScope, timeGuardRule)}',
-    to: '${buildSynthRules(undefined, timeGuardRule)}',
+    file: 'src/backend/wechat-data/src/remotes/ask-runtime-prompt.ts',
+    from: '${buildSynthRules(input.dataScope, input.timeGuardRule)}',
+    to: '${buildSynthRules(undefined, input.timeGuardRule)}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-ui.wiring.spec.ts',
   },
   {
@@ -288,9 +288,9 @@ export const MUTATIONS_BATCH3Z = [
   {
     id: 'M616-clawbot-empty-answer-short-circuits',
     why: '检索 0 命中时自动回复不再调模型（退回硬编码文案）⇒ 微信里「你好」「在吗」「谢谢」这类寒暄**全部**只回一句「知识库里没有检索到…」—— 那不是聊天，是报错（2026-10-17 真机实测 8/8 例）。判据：clawbot-ui.wiring.spec.ts 的「检索 0 命中时自动回复仍调模型」。',
-    file: 'src/backend/wechat-data/src/remotes/askdeep.ts',
-    from: "  if (deps.dataScope !== 'kb-only') {",
-    to: "  if (deps.dataScope !== 'kb-only' || true) {",
+    file: 'src/backend/wechat-data/src/remotes/ask-runtime.ts',
+    from: "    synthesizeOnInsufficient: profile === 'clawbot-auto',",
+    to: '    synthesizeOnInsufficient: false,',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-ui.wiring.spec.ts',
   },
   {
@@ -328,7 +328,7 @@ export const MUTATIONS_BATCH3Z = [
   {
     id: 'M621-clawbot-empty-prompt-allows-cites',
     why: '兜底提示词不再禁 `[n]` 角标 ⇒ 模型会冒出角标（真机实测 3 次里 1 次：「哈哈不是卖东西的呀[1]」）—— 兜底提示词是**用户消息**，比 system 更「近」，只在 system 里禁不够（2026-10-17）。判据：clawbot-ui.wiring.spec.ts 的「检索 0 命中时自动回复仍调模型」。',
-    file: 'src/backend/wechat-data/src/remotes/askdeep.ts',
+    file: 'src/backend/wechat-data/src/remotes/ask-runtime-prompt.ts',
     from: '  6. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字。',
     to: '  6. 直接回答就行。',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-ui.wiring.spec.ts',

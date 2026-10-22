@@ -78,8 +78,8 @@ import { completeBinding, markBindingQr, readBinding, readBindingInternal, readB
 import type { ClawbotMessageInput } from '../query/clawbot/clawbot-message.ts'
 import { clearClawbotMessages, clawbotMessageCounts, findClawbotMessageIdByClientId, insertClawbotMessage, insertClawbotMessagesBatch, listClawbotMediaPending, listClawbotMessages as queryClawbotMessages, suppressClawbotMessageIds } from '../query/clawbot/clawbot-message.ts'
 import { createClawbotChannel, type ClawbotChannel } from '../query/clawbot/clawbot-channel.ts'
-import { DEFAULT_CLAWBOT_SLOT, clawbotDbExists } from '../query/clawbot/clawbot-db.ts'
-import { MAX_PENDING, createAutoReplyRunner, type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts'
+import { DEFAULT_CLAWBOT_SLOT, attachReplyRunDetails, clawbotDbExists } from '../query/clawbot/clawbot-db.ts'
+import { MAX_PENDING, createAutoReplyRunner, decideAutoReply, type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts'
 import { clearClawbotReplyState } from '../query/clawbot/clawbot-reply-store.ts'
 import { warmClawbotStore } from '../query/clawbot/clawbot-store-warmup.ts'
 import {
@@ -761,7 +761,9 @@ function createSessionOps(deps: {
      * @returns 会话页快照。
      */
     listClawbotMessages(options?: ClawbotMessageQuery): ClawbotMessageSnapshot {
-      return queryClawbotMessages(dir(), { ...options, slot: slotOf(options) })
+      const slot = slotOf(options)
+      const snapshot = queryClawbotMessages(dir(), { ...options, slot })
+      return { ...snapshot, items: attachReplyRunDetails(dir(), slot, snapshot.items) }
     },
 
     /**
@@ -1055,11 +1057,11 @@ export function createClawbotRemotes(rc: createClawbotRemotesInputs) {
         )
       },
       insertMessages: (msgs, expectedSessionEpoch) => {
-        // 自动回复开启（或配置暂时读不出）时，消息与 reply run 在同一事务落库；
+        // 自动回复可运行（或配置暂时读不出）时，消息与 reply run 在同一事务落库；
         // 进程在 consider 之前退出也不会留下「消息已收、任务未建」的缺口。
         let replyIntake = false
         try {
-          replyIntake = readAutoReplyConfig(decrypted(), slot).autoReply
+          replyIntake = decideAutoReply(readAutoReplyConfig(decrypted(), slot)).should
         } catch {
           replyIntake = true
         }

@@ -26,6 +26,7 @@ import { apiGetClawbotMedia, apiOpenPath } from '../api.ts'
 import { fmtBytes } from '../utils/format.ts'
 import css from './clawbot.module.css'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
+import { ClawbotRunDetail, autoReplyRunOf, type ClawbotRunDetailLike } from './clawbot-run-detail.tsx'
 
 /** 距底这个像素数内算「贴在底部」（贴底语义的判定带）。 */
 const AT_BOTTOM_PX = 40
@@ -306,6 +307,47 @@ function bubbleMeta(r: ClawbotMessage): string {
   return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} · ${r.content.length} 字`
 }
 
+interface RunPlacement {
+  key: string
+  detail: ClawbotRunDetailLike
+  direction: 'in' | 'out'
+}
+
+function runKeyOf(row: ClawbotMessage, detail: ClawbotRunDetailLike): string {
+  return typeof detail.runId === 'number' && Number.isFinite(detail.runId) && detail.runId > 0
+    ? `run:${String(detail.runId)}`
+    : `message:${String(row.id)}`
+}
+
+/**
+ * 为同一条 run 选择唯一落点。
+ *
+ * 后端可能把运行摘要同时附在入站目标消息和出站分段上。入站消息是提问的锚点，
+ * 优先显示在它下方；若该 run 只附在出站分段上，则落在第一条出站分段下方。
+ * 没有 `runId` 的旧数据按消息 id 隔离，避免把不同 run 误合并。
+ */
+function placeRuns(rows: readonly ClawbotMessage[]): Map<number, RunPlacement[]> {
+  const best = new Map<string, RunPlacement & { priority: number, index: number }>()
+  rows.forEach((row, index) => {
+    const detail = autoReplyRunOf(row)
+    if (detail === null) return
+    const key = runKeyOf(row, detail)
+    const priority = row.direction === 'in' ? 0 : 1
+    const current = best.get(key)
+    if (current === undefined || priority < current.priority
+      || (priority === current.priority && index < current.index)) {
+      best.set(key, { key, detail, direction: row.direction, priority, index })
+    }
+  })
+  const placements = new Map<number, RunPlacement[]>()
+  for (const item of best.values()) {
+    const list = placements.get(item.index) ?? []
+    list.push({ key: item.key, detail: item.detail, direction: item.direction })
+    placements.set(item.index, list)
+  }
+  return placements
+}
+
 /**
  * 对话流：把已加载行（后端 DESC）反转成正序渲染成气泡时间线。
  *
@@ -323,12 +365,14 @@ export function ClawbotThread({ rows, show, media }: {
 }): React.JSX.Element {
   // 正序 = 把 DESC 的已加载行反转（零后端改动；loadMore 追加的更旧行落在渲染序列头部）。
   const asc = useMemo(() => rows.slice().reverse(), [rows])
+  const runsAt = useMemo(() => placeRuns(asc), [asc])
   return (
     <div className={css.thread}>
       {asc.map((r, i) => {
         const prev = asc[i - 1]
         const sep = prev === undefined || r.ts - prev.ts > SEP_GAP_MS
         const out = r.direction === 'out'
+        const runs = runsAt.get(i) ?? []
         return (
           <Fragment key={r.id}>
             {sep && <span className={css.daySep}>{sepLabel(r.ts)}</span>}
@@ -340,6 +384,14 @@ export function ClawbotThread({ rows, show, media }: {
                 <span className={css.bubbleMeta}>{bubbleMeta(r)}</span>
               </div>
             </div>
+            {runs.map(run => (
+              <div
+                key={run.key}
+                className={run.direction === 'out' ? `${css.runDetailRow} ${css.runDetailRowOut}` : css.runDetailRow}
+              >
+                <ClawbotRunDetail detail={run.detail} />
+              </div>
+            ))}
           </Fragment>
         )
       })}

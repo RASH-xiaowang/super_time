@@ -15,6 +15,11 @@
  */
 export declare function fmtBytes(n: number | null | undefined): string;
 /**
+ * `Date` 对象 → `YYYY-MM-DD`（本地时区）。
+ * @param d - 已经算好的本地 `Date`。
+ */
+export declare function fmtLocalDate(d: Date): string;
+/**
  * **秒级**时间戳 → `YYYY-MM-DD HH:mm`。
  * @param ts - unix 秒（不是毫秒！毫秒传进来会得到 1970 年）。
  * @param placeholder - 空值/非法值时的占位。

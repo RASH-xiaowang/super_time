@@ -12,6 +12,7 @@ import React, { createElement as h, useEffect } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { ConfirmProvider, useConfirm } from './confirm.tsx'
+import { Dialog } from './kit.tsx'
 
 async function flush(n = 6): Promise<void> {
   for (let i = 0; i < n; i++) await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
@@ -69,5 +70,88 @@ describe('确认框 a11y：焦点进入、循环、归还', () => {
     await flush()
     expect(resolved).toBe(false)
     expect(document.activeElement, '关闭后焦点没有还给触发元素').toBe(trigger)
+  })
+
+  it('嵌套在 Radix 模态弹窗内时，逐字确认输入框能获得并保持焦点', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+
+    let confirmFn: ReturnType<typeof useConfirm> | null = null
+    function Probe(): React.JSX.Element {
+      const c = useConfirm()
+      useEffect(() => { confirmFn = c }, [c])
+      return h('div', null, 'probe')
+    }
+
+    const root = createRoot(host)
+    root.render(h(ConfirmProvider, null,
+      h(Dialog, { open: true, onClose: () => {}, title: '问答历史记录', children: h(Probe) }),
+    ))
+    cleanups.push(() => { root.unmount() })
+    await flush()
+
+    void confirmFn!({
+      title: '清空全部问答历史？',
+      message: '此操作不可恢复',
+      tone: 'danger',
+      confirmText: '清空',
+      requireText: '清空',
+    })
+    await flush(10)
+
+    const input = document.querySelector<HTMLInputElement>('[role="alertdialog"] input')
+    expect(input, '找不到逐字确认输入框').not.toBeNull()
+    expect(document.activeElement, '输入框被下层 Radix 弹窗的焦点陷阱抢走了').toBe(input)
+
+    input!.focus()
+    await flush()
+    expect(document.activeElement, '输入框获得焦点后又被打回下层弹窗').toBe(input)
+
+    // 真实键入路径：受控 input 收到原生键盘输入后必须更新，并解禁确认按钮。
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    setter?.call(input, '清空')
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    expect(input!.value, '输入没有写进受控输入框').toBe('清空')
+    const primary = document.querySelector<HTMLButtonElement>('[role="alertdialog"] [data-confirm-primary]')
+    expect(primary?.disabled, '输入正确确认词后仍不能确认').toBe(false)
+  })
+
+  it('嵌套弹窗中 Esc 只关闭确认框，下层弹窗保持打开', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+
+    let confirmFn: ReturnType<typeof useConfirm> | null = null
+    let lowerClosed = false
+    function Probe(): React.JSX.Element {
+      const c = useConfirm()
+      useEffect(() => { confirmFn = c }, [c])
+      return h('div', null, 'probe')
+    }
+
+    const root = createRoot(host)
+    root.render(h(ConfirmProvider, null,
+      h(Dialog, {
+        open: true,
+        onClose: () => { lowerClosed = true },
+        title: '问答历史记录',
+        children: h(Probe),
+      }),
+    ))
+    cleanups.push(() => { root.unmount() })
+    await flush()
+
+    let resolved: boolean | null = null
+    void confirmFn!({ title: '清空全部问答历史？', tone: 'danger', confirmText: '清空' })
+      .then((value) => { resolved = value })
+    await flush()
+    expect(document.querySelector('[role="alertdialog"]'), '确认框没有打开').not.toBeNull()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flush(8)
+
+    expect(resolved, 'Esc 没有关闭确认框').toBe(false)
+    expect(document.querySelector('[role="alertdialog"]'), 'Esc 后确认框仍在').toBeNull()
+    expect(lowerClosed, 'Esc 连带关闭了下层问答历史弹窗').toBe(false)
   })
 })

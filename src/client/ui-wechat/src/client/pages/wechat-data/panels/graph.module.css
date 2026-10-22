@@ -118,7 +118,7 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  padding: 7px 9px 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--nm-border);
 }
 .nodeContextTitle {
@@ -131,7 +131,7 @@
 }
 .nodeContextKind {
   flex: none;
-  padding: 1px 7px;
+  padding: 1px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   color: var(--nm-text-2);
@@ -142,7 +142,7 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding-top: 5px;
+  padding-top: 4px;
 }
 .nodeContextGroup:not([data-first]) {
   margin-top: 3px;
@@ -155,7 +155,7 @@
   justify-content: space-between;
   gap: 10px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 8px;
   border: 0;
   border-radius: var(--nm-r-sm);
   background: transparent;
@@ -166,7 +166,7 @@
 }
 .nodeContextItem:hover:not(:disabled) { background: var(--nm-bg-hover); }
 .nodeContextItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
-.nodeContextItem:disabled { opacity: 0.45; cursor: default; }
+.nodeContextItem:disabled { opacity: 0.5; cursor: default; }
 .nodeContextItem[data-danger] { color: var(--nm-danger); }
 .nodeContextItem[data-danger]:hover:not(:disabled) { background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
 .nodeContextHint { flex: none; color: var(--nm-text-3); font-size: var(--nm-fs-xs); }

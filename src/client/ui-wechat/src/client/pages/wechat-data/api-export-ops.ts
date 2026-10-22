@@ -172,10 +172,10 @@ export async function apiGetVoiceDataUrl(options: { username?: string; localId?:
 }
 /**
  * Fetch video message info.
- * @param options - Query options: username and message localId.
+ * @param options - 定位键（username + localId），或撤回记录里已有的 md5。
  * @returns VideoInfoResult.
  */
-export async function apiGetVideoInfo(options: { username: string; localId: number }): Promise<VideoInfoResult> {
+export async function apiGetVideoInfo(options: { username?: string; localId?: number; md5?: string }): Promise<VideoInfoResult> {
   return unwrap(await remote().getVideoInfo(options))
 }
 /**
@@ -303,7 +303,7 @@ export async function apiListEditedMessages(options?: { sessionId?: string }): P
  * @param options - Mutation options: username, message localId, new content.
  * @returns EditMutationResult.
  */
-export async function apiEditChatMessage(options: { username: string; localId: number; content: string }): Promise<EditMutationResult> {
+export async function apiEditChatMessage(options: { username: string; localId: number; content: string; mode?: 'text' | 'source' }): Promise<EditMutationResult> {
   const r = await remote().editChatMessage(options)
   invalidateAndNotify(['messages:', 'chat-msgs:', 'sessions:'])
   return unwrap(r)

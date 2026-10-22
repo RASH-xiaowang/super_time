@@ -55,12 +55,13 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     /**
      * Look up one video message: cover thumbnail + the on-disk video path.
      * 封面与实体都在真实微信目录 `msg/video` 下，所以要带上数据根目录。
-     * @param options - username and localId of the video message.
+     * @param options - username + localId，或撤回记录里已有的 md5。
      * @returns VideoInfoResult: video cover/thumbnail info.
      */
     getVideoInfo(options: {
-        username: string;
-        localId: number;
+        username?: string;
+        localId?: number;
+        md5?: string;
     }): VideoInfoResult;
     /**
      * Resolve a user avatar (head_image.db data or contact URL).
@@ -330,13 +331,14 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     }): Promise<MapGeoJsonResult>;
     /**
      * Resolve a received message file (msg/file) to a base64 data URL.
-     * @param options - original file name from the message card.
+     * @param options - original file name plus size/createTime/fileMd5 attribution hints.
      * @returns ImageDataUrlResult: data URL or error.
      */
     getMessageFile(options: {
         fileName: string;
         size?: number;
         createTime?: number;
+        fileMd5?: string;
     }): ImageDataUrlResult;
     /**
      * 一条朋友圈视频封面 → data URL（W2-5.6 的单条入口保留；列表请走 `getSnsVideoCoversBatch`）。

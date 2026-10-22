@@ -30,6 +30,7 @@ import type { StreamControl } from './query/zip.ts';
 import { type EmbedFn } from './query/retrieval/embedding.ts';
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts';
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts';
+import type { AnswerRuntimeEmitStage } from './query/answer-runtime/types.ts';
 import { type SummaryScheduler } from './gateway-scheduler.ts';
 import { ResolvedDirs, StreamJob } from './gateway-support.ts';
 import type { EmbedFeature } from './gateway-llm-factory.ts';
@@ -43,6 +44,8 @@ export declare abstract class GatewayCore extends TypertRemoteService {
     static inject: string[];
     protected readonly _ctx: Context;
     protected readonly _dirs: ResolvedDirs;
+    /** 问答目录缓存；读取器延迟到调用时才解引用 `_dirs`，构造期不触发磁盘访问。 */
+    private readonly _askCatalog;
     /**
      * 登录账号 wxid 的**带失效**缓存。
      *
@@ -128,13 +131,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         error: string;
     }>;
     /**
-     * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
-     *
-     * 为什么缓存：这份名单要读联系人表 + 会话表（两次 SQLite 打开），而每次提问都要用；
-     * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
-     */
-    protected readonly _knownEntities: Map<string, string[]>;
-    /**
      * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
      *
      * 按 (解密目录, config.db_dir) 记忆：只要账号没换就直接命中缓存，
@@ -213,6 +209,18 @@ export declare abstract class GatewayCore extends TypertRemoteService {
        * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
        */
     protected askKnownEntities(): string[];
+    /**
+     * 问答用的会话目录（username + 显示名），按数据目录缓存。
+     *
+     * 为什么需要映射而不只是名字：模型/用户写的是显示名「z_卖酒」，
+     * 工具参数要求的却是 `wxid_xxx`。没有映射时只能在两种坏结果里选：
+     * 把显示名当 username 查空，或不断调用 `list_sessions` 试图先找范围。
+     * @returns 会话目录（读取失败时返回空数组，问答照常可用）。
+     */
+    protected askKnownSessions(): Array<{
+        username: string;
+        name: string;
+    }>;
     /**
    * 构造「过隐私闸门」的 embedding 函数 —— 工厂在 `gateway-llm-factory.ts`
    * （#20 第三个协作者，文件头写着那三条出站纪律）。
@@ -450,12 +458,7 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @param streamId - 客户端生成的流式标识；为空表示不推送。
      * @returns 阶段回调。
      */
-    protected makeStageEmitter(streamId?: string): ((stage: {
-        key: string;
-        label: string;
-        status: 'running' | 'done' | 'skipped';
-        detail?: string;
-    }) => void) | undefined;
+    protected makeStageEmitter(streamId?: string): AnswerRuntimeEmitStage | undefined;
     /**
      * 把一次问答落进「历史记录」。
      *

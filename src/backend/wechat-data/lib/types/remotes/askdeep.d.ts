@@ -1,10 +1,23 @@
-import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts';
-import { EmbedFn } from '../query/retrieval/embedding.ts';
-import { IntentKind, RerankWeights } from '../query/retrieval/types.ts';
-import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts';
-import { VectorBuildResult } from '../types-retrieval.ts';
+/**
+ * 问答主链路的 @Remote 处理器（M21 自 `gateway.ts` 搬出）。
+ *
+ * 2026-10-22 起，`askWechat` 不再自己维护「LLM 规划器 + 固定检索 + 综合生成」
+ * 三段式实现，而是统一交给 `askWithRuntime()`：
+ *   · `wechat-ask` / `session-ask` / `clawbot-auto` 共用同一套工具循环；
+ *   · 工具选择、参数修复、范围守卫、重试与证据收敛都在运行时内完成；
+ *   · 本文件只保留宿主接线：取消、流式事件、图片、索引新鲜度与历史落库。
+ *
+ * @module remotes/askdeep
+ */
 import type { Context } from '@deepseek-ai/cordis';
+import type { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts';
+import type { EmbedFn } from '../query/retrieval/embedding.ts';
+import type { IntentKind, RerankWeights } from '../query/retrieval/types.ts';
+import type { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts';
+import type { VectorBuildResult } from '../types-retrieval.ts';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
+import type { ThreadState } from '../query/answer-runtime/thread-state.ts';
+import type { AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
 /** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
 interface AskImageInput {
     data: string;
@@ -27,20 +40,19 @@ export interface createAskDeepRemotesInputs {
     }>;
     privacyGate: PrivacyGateFn;
     embedModelName: (override?: string) => string;
-    makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined;
+    makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined;
     makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined;
     makeDeltaEmitter: (streamId?: string) => ((text: string) => void) | undefined;
-    /** 思考过程发射器（2026-10-16）：与可见正文分开推，界面单独折叠展示。 */
+    /** 思考过程发射器：与可见正文分开推，界面单独折叠展示。 */
     makeReasoningEmitter: (streamId?: string) => ((text: string) => void) | undefined;
-    /** 阶段事件发射器（2026-10-16）：把「规划 / 检索 / 生成」的进度推给界面。 */
-    makeStageEmitter: (streamId?: string) => ((stage: {
-        key: string;
-        label: string;
-        status: 'running' | 'done' | 'skipped';
-        detail?: string;
-    }) => void) | undefined;
+    /** 阶段事件发射器：把意图 / 工具 / 综合生成的进度推给界面。 */
+    makeStageEmitter: (streamId?: string) => ((stage: AnswerRuntimeStage) => void) | undefined;
     kbModel: (kbId: number, role: KbModelRole) => ResolvedModel;
     askKnownEntities: () => string[];
+    askKnownSessions: () => Array<{
+        username: string;
+        name: string;
+    }>;
     saveAskHistory: (options: {
         question: string;
         username?: string;
@@ -69,41 +81,21 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
         }>;
         /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
         streamId?: string;
-        /**
-         * 入口来源，写进问答历史：`ask` = 「微信问答」页签，`session` = 会话内问答。
-         * 缺省按 `ask` 处理 —— 旧客户端不带这个字段时也能正常落库。
-         */
+        /** 入口来源：`ask` = 微信问答页签，`session` = 会话内问答，`auto` = ClawBot。 */
         source?: string;
-        /** 会话显示名：历史列表直接显示，省掉面板再查一次会话表。 */
+        /** 会话显示名：历史列表直接显示。 */
         usernameName?: string;
-        /**
-         * 当前知识库 id：本次提问会把该库的文件块一并纳入检索。
-         *
-         * 缺省不检索知识库（而不是「搜所有库」）—— 与其余知识库接口同一纪律：
-         * `kbId` 是作用域，没有「所有库」这种模式；漏传应当表现为「没检索到文件」，
-         * 而不是把别的库的内容也端上来。
-         */
+        /** 当前知识库 id；缺省不检索知识库。 */
         kbId?: number;
         jobId?: string;
-        /**
-         * 数据面（2026-10-17）：`wechat`（缺省）= 可检索本机微信数据；
-         * `kb-only` = **只检索知识库**，不碰本机微信数据。
-         *
-         * 自动回复（无人值守出网）传 `kb-only` —— 微信里随便一个人发一句话，
-         * 不该让本机把全部聊天记录检索一遍并送去模型。
-         */
+        /** 数据面：`wechat`（缺省）或 `kb-only`（ClawBot 自动回复）。 */
         dataScope?: "wechat" | "kb-only";
-        /**
-         * 随问题一起送模型的图片（2026-10-18，ClawBot 自动回复「识别图中内容」）：
-         * canonical base64 + MIME，最多 2 张。是否真的送模型由当前模型是否声明
-         * `image` 输入模态决定；不支持时改成一句「看不到图片内容」的说明。
-         */
+        /** 随问题一起送模型的图片（canonical base64，最多 2 张）。 */
         images?: AskImageInput[];
-        /**
-         * 系统提示词覆盖（2026-10-17）：传了就用它当 system，**用户消息里的检索材料与规则照旧**
-         * （那部分保证「不编造」的底线）。自动回复用它注入实例的拟人化人设。
-         */
+        /** 系统提示词覆盖；检索材料与「不编造」规则仍由运行时追加。 */
         systemPromptOverride?: string;
+        /** 上一轮问答返回的结构化线程状态；跨请求继承会话/联系人与时间窗。 */
+        threadState?: ThreadState;
     }): Promise<AskResult>;
     cancelAsk: (options: {
         jobId: string;

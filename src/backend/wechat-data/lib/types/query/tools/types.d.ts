@@ -31,9 +31,54 @@
  * @module query/tools/types
  */
 /** 工具名（稳定标识，模型按它调用；改动等于破坏兼容）。 */
-export type ToolName = 'search_messages' | 'search_semantic' | 'aggregate_messages' | 'list_sessions' | 'get_session_messages' | 'get_message_context' | 'search_contacts' | 'get_contact_detail' | 'search_moments' | 'search_favorites' | 'search_files' | 'search_records' | 'search_kb';
+export type ToolName = 'search_messages' | 'search_semantic' | 'search_hybrid' | 'aggregate_messages' | 'list_sessions' | 'get_session_messages' | 'get_message_context' | 'search_contacts' | 'get_contact_detail' | 'search_moments' | 'search_favorites' | 'search_files' | 'search_records' | 'search_kb';
 /** 工具的分类（用于界面分组与「这次用了哪类工具」的展示）。 */
 export type ToolCategory = 'message' | 'aggregate' | 'contact' | 'content' | 'kb';
+/** 独立资源种类（文件/收藏/朋友圈/转账红包）。 */
+export type ToolResourceKind = 'file' | 'favorite' | 'moment' | 'record';
+/**
+ * 资源命中的结构化定位信息。
+ *
+ * 资源没有消息的 `username/local_id`，不能让前端靠数组下标或文件名猜实体。
+ * 稳定键优先使用内容寻址值（文件 md5、收藏 local_id、朋友圈 tid、转账单号）；
+ * 其余字段用于展示元信息与后续接打开能力，缺失时不伪造。
+ */
+export interface ToolResourceTrace {
+    resourceKind: ToolResourceKind;
+    /** 跨轮稳定的资源键；与 `ToolHit.key` 相同。 */
+    stableKey: string;
+    time?: string;
+    session?: string;
+    sourceId?: string;
+    fileName?: string;
+    size?: number;
+    category?: string;
+    md5?: string;
+    thumbMd5?: string;
+    fullMd5?: string;
+    favoriteId?: number;
+    serverId?: string;
+    transferId?: string;
+    messageServerId?: string;
+    timelineId?: string;
+    username?: string;
+    mediaId?: string;
+    /** 收藏媒体的实际类型（image/video/file 等）；与朋友圈的 mediaId 区分。 */
+    mediaKind?: string;
+    url?: string;
+    token?: string;
+    seed?: string;
+    recordType?: 'transfers' | 'redpackets';
+}
+/**
+ * 工具失败的结构化类别。
+ *
+ * `error` 仍然保留人话说明（既有调用方与界面都读它），这个字段给运行时与日志
+ * 一个**稳定的判别值**，避免靠 `error.includes('...')` 猜失败原因。
+ */
+export type ToolErrorCode = 'invalid_arguments' | 'unknown_tool' | 'tool_not_allowed' | 'scope_required' | 'scope_violation' | 'data_scope_blocked' | 'not_configured'
+/** 请求的日期/会话范围在该数据域无法执行（不能伪装成「没有结果」）。 */
+ | 'unsupported_scope' | 'upstream_failure';
 /**
  * 工具的执行上下文。
  *
@@ -56,6 +101,20 @@ export interface ToolContext {
     now?: Date;
     /** 已知实体名（联系人显示名），用于实体识别。 */
     knownEntities?: string[];
+    /**
+     * 是否允许访问本机微信数据。
+     *
+     * 缺省 `true`（手工问答的既有行为）；`false` 时 `search_hybrid` 的
+     * `messages/auto` 模式必须拒绝执行（ClawBot 的 kb-only 边界）。
+     */
+    wechatDataEnabled?: boolean;
+    /**
+     * 单次工具执行的取消信号。
+     *
+     * 运行时在 deadline 或用户取消时会 abort；工具实现应尽快停止 I/O 并返回。
+     * 缺省不传，兼容既有调用方（它们仍按同步/不可取消方式执行）。
+     */
+    signal?: AbortSignal;
 }
 /** 工具执行结果里的一条「命中」。 */
 export interface ToolHit {
@@ -70,9 +129,38 @@ export interface ToolHit {
     /** 群聊里的发送者显示名（单聊为空）。 */
     sender?: string;
     /** 来源域（与 `RetrievedDoc.source` 同口径）。 */
-    source?: 'msg' | 'kb' | 'agg';
+    source?: 'msg' | 'kb' | 'agg' | 'resource';
     /** 该条在本次结果里的得分（各工具量纲不同，只用于排序展示）。 */
     score?: number;
+    /**
+     * 可点击的补充溯源信息（可选）。
+     *
+     * 消息键已经在 `key` 里，够回答「是哪条」；但知识库块还需要知识库 id / 文件 id /
+     * 块 id 才能从引用卡片跳回文件，聚合结果也需要原始标题。把这些放进一个**可选**字段，
+     * 既不破坏既有工具的结果形状，也避免调用方再去解析 key 字符串。
+     */
+    trace?: {
+        /** 证据类型（与 `source` 同口径）。 */
+        kind: 'msg' | 'kb' | 'agg' | 'resource';
+        /** 会话 username（消息）；聚合/知识库为空。 */
+        username?: string;
+        /** 消息的 local_id（消息）；其他为 0。 */
+        localId?: number;
+        /** 知识库 id（知识库块）。 */
+        kbId?: number;
+        /** 文件 id（知识库块）。 */
+        fileId?: number;
+        /** 块 id（知识库块）。 */
+        chunkId?: number;
+        /** 文件内序号（知识库块）。 */
+        ordinal?: number;
+        /** 页码（知识库块）。 */
+        page?: number;
+        /** 面包屑（知识库块）。 */
+        heading?: string;
+        /** 文件/收藏/朋友圈/转账红包的结构化定位。 */
+        resource?: ToolResourceTrace;
+    };
 }
 /**
  * 工具执行结果。
@@ -89,6 +177,10 @@ export interface ToolResult {
     ok: boolean;
     /** 失败原因（`ok=false` 时）。 */
     error?: string;
+    /** 失败类别（稳定的机器判别值；`ok=false` 时尽量填写）。 */
+    errorCode?: ToolErrorCode;
+    /** 失败上下文（如被拒绝的范围、参数名；不要放正文或密钥）。 */
+    errorDetails?: Record<string, unknown>;
     /** 找到的原文片段。 */
     hits: ToolHit[];
     /** 算出来的确定性结论（聚合类工具才有）。 */

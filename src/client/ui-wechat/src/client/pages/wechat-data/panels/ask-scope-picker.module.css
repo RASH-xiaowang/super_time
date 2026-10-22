@@ -1,0 +1,298 @@
+/**
+ * 问答输入框上方的检索范围浮层。
+ *
+ * 定位祖先由 `ask.module.css` 的 `.composer` 提供（position: relative）。
+ * 本文件独立存在是因为 `ask.module.css` 已接近 1000 行上限。
+ */
+
+.panel {
+  position: absolute;
+  /* 与输入框文字的起始边对齐：`.composer` 自身有 12px 内边距，
+     若贴 left:0 会比 textarea 左移 12px（真机实测 269 vs 281）。 */
+  left: 12px;
+  bottom: calc(100% + 8px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100% - 24px));
+  max-height: min(460px, 62vh);
+  max-height: min(460px, 62dvh);
+  overflow: hidden;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  box-shadow: 0 16px 48px color-mix(in srgb, #000 32%, transparent);
+  animation: scope-in 0.16s ease-out;
+}
+
+@keyframes scope-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel { animation: none; }
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.headText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.title {
+  color: var(--nm-text-1);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.summary {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.tabs {
+  padding: 8px 12px 0;
+}
+
+.body {
+  min-height: 0;
+  padding: 8px 8px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.search {
+  position: relative;
+  margin: 0 4px 8px;
+}
+
+.searchIcon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  color: var(--nm-text-3);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px 0 30px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
+  color: var(--nm-text-1);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.searchInput:focus {
+  border-color: color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+}
+
+.searchInput::placeholder {
+  color: var(--nm-text-3);
+}
+
+.sectionHint {
+  padding: 2px 10px 6px;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--nm-bg-hover);
+}
+
+.row[data-active] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+}
+
+.rowIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 7%, transparent);
+  color: var(--nm-text-2);
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rowName {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  display: block;
+  width: 100%;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kind {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-text-1) 7%, transparent);
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.kind[data-kind='group'] {
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan-text);
+}
+
+.check {
+  flex-shrink: 0;
+  color: var(--nm-cyan);
+}
+
+.empty {
+  padding: 24px 14px;
+  color: var(--nm-text-3);
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.loading {
+  padding: 24px 14px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.timeBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--nm-border);
+}
+
+.footHint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.done {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan-text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.done:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+}
+
+@media (max-width: 680px) {
+  .panel {
+    right: 12px;
+    width: auto;
+    max-height: min(56vh, 430px);
+    max-height: min(56dvh, 430px);
+  }
+
+  .row {
+    min-height: 48px;
+  }
+}

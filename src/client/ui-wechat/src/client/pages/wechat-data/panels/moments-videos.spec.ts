@@ -191,11 +191,14 @@ describe('接线：视频 RPC 只有这一条路', () => {
     }
   })
 
-  it('面板目录里调 `apiGetSnsVideoDataUrl` 的只有这一层', () => {
+  it('面板目录里调 `apiGetSnsVideoDataUrl` 的调用点已登记', () => {
     const callers = readdirSync(HERE, { withFileTypes: true })
       .filter((e) => e.isFile() && /\.(ts|tsx)$/.test(e.name) && !e.name.includes('.spec.'))
       .filter((e) => readFileSync(join(HERE, e.name), 'utf8').includes('apiGetSnsVideoDataUrl('))
       .map((e) => e.name)
-    expect(callers, `调用点散开了：${callers.join(', ') || '（一个都没有 ⇒ 判据空转）'}`).toEqual(['moments-videos.ts'])
+      .sort()
+    // 收藏详情先查 business/favorite，再以朋友圈视频 RPC 兜底；其余面板仍必须走统一 hook。
+    expect(callers, `调用点散开了：${callers.join(', ') || '（一个都没有 ⇒ 判据空转）'}`)
+      .toEqual(['favorites-media.tsx', 'moments-videos.ts'])
   })
 })

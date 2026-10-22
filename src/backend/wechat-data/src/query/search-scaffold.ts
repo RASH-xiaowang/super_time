@@ -436,6 +436,37 @@ export function knownEntityNames(decryptedDir: string, limit = 500): string[] {
   return [...out]
 }
 
+/**
+ * 会话目录：真实 username + 当前展示名。
+ *
+ * 与 {@link knownEntityNames} 的区别是**保留映射**：问答参数里的
+ * 「z_卖酒」必须解析成 `wxid_xxx`，只拿名字列表无法做这一步，
+ * 把名字直接写进 `scope.username` 又会静默查空。
+ *
+ * 只收录看起来像真实会话标识的键，避免把联系人展示名误当会话。
+ *
+ * @param decryptedDir - 解密数据根。
+ * @param limit - 最多返回多少项。
+ * @returns username → 显示名（去重、跳过空名）。
+ */
+export function knownSessionCatalog(
+  decryptedDir: string,
+  limit = 2000,
+): Array<{ username: string; name: string }> {
+  const out: Array<{ username: string; name: string }> = []
+  const seen = new Set<string>()
+  for (const [username, name] of loadDisplayNames(decryptedDir)) {
+    const u = username.trim()
+    const n = String(name || '').trim()
+    if (u === '' || n === '' || seen.has(u)) continue
+    if (!/^(?:wxid_[A-Za-z0-9_-]+|gh_[A-Za-z0-9_-]+|[A-Za-z0-9._-]+@chatroom)$/.test(u)) continue
+    seen.add(u)
+    out.push({ username: u, name: n })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; rows: number; built_at: string | null; ready: boolean } {
   const p = searchIndexPath(decryptedDir)
   if (!existsSync(p)) return { exists: false, rows: 0, built_at: null, ready: false }

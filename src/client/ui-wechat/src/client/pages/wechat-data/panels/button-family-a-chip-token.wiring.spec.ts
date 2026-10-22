@@ -44,15 +44,13 @@ const stripComments = (s: string): string =>
  *
  * 排除掉的名（曾按 `border-radius: pill` 粗筛出 29 个，其中 14 个不是 chip）：
  *   `optApply` / `optDismiss` / `loadMore`×2 / `actionBtn`（P1 族 E，独立表单按钮）
- *   `optBtn` / `ctxChip` 之外——见下条 · `distillBtn` / `clearChip` / `clearBtn`
+ *   `optBtn` / `distillBtn` / `clearChip` / `clearBtn`
  *   `moreBtn` / `exportAction` / `suggestBtn` / `note-editor.chip` / `groupChip`
  *
- * ⚠️ `ctxChip` 与 `fbBtn` **同时有固定 height**（32px / 24px）—— 它们是 chip 但
- * 高度被钉死（窄屏手指标 / 密集工具条）。本守卫只查 `font-size`，不碰高度，
- * 所以它们可以安全留在表内。
+ * ⚠️ `fbBtn` **同时有固定 height**（24px）—— 它是 chip 但高度被钉死（密集工具条）。
+ * 本守卫只查 `font-size`，不碰高度，所以它可以安全留在表内。
  */
 const CHIPS = [
-  { file: 'ask.module.css', cls: 'ctxChip' },
   { file: 'chats-rows.module.css', cls: 'exportChip' },
   { file: 'contacts.module.css', cls: 'catBtn' },
   { file: 'daily-summary.module.css', cls: 'tabBtn' },
@@ -100,8 +98,8 @@ describe('P2 族 A 胶囊 chip：font-size 必须是令牌（零视觉变化的�
     return cache.get(file)!
   }
 
-  it('哨兵：14 个真 chip 都真实存在，且都真的是 pill 圆角', () => {
-    expect(CHIPS.length, '点名表被删空').toBe(14)
+  it('哨兵：13 个真 chip 都真实存在，且都真的是 pill 圆角', () => {
+    expect(CHIPS.length, '点名表被删空').toBe(13)
     const missing: string[] = []
     const notPill: string[] = []
     for (const { file, cls } of CHIPS) {

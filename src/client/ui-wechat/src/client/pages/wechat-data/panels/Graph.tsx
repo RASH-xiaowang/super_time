@@ -17,6 +17,7 @@ import { GraphRail } from './GraphRail.tsx'
 import { GraphExportMenu } from './GraphExportMenu.tsx'
 import { GraphNodeMenuController } from './GraphNodeMenuController.tsx'
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas.tsx'
+import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import { useGraphNodeMenu } from './use-graph-node-menu.ts'
 import { useGraphNoteActions } from './use-graph-note-actions.ts'
 import { useGraphNodeSearch } from './use-graph-node-search.ts'
@@ -126,7 +127,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const dark = themeMode === 'dark'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null); const { notice: actionNotice, flash: flashActionNotice } = useActionNotice()
   /**
    * 参数面板是否展开。
    *
@@ -341,6 +342,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     onSelectedCleared: () => { setSelectedId(null) },
     onReload: loadKnowledge,
     onError: setError,
+    flash: flashActionNotice,
     onEditor: setNoteEditor,
   })
 
@@ -417,8 +419,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
             <button type="button" className={css.chip} data-on={selectedId !== null} onClick={() => { setSelectedId(null) }}>{selectedId ? '清除选中' : '选中节点'}</button>
           </>
         )}
-      />
-
+      /><ActionNoticeLine notice={actionNotice} />
       <div className={css.statBar}>
         <div className={css.statBox}><span className={css.statNum}>{graph.nodes.length}</span><span className={kitCss.textCaption}>节点</span></div>
         <div className={css.statBox}><span className={css.statNum}>{graph.edges.length}</span><span className={kitCss.textCaption}>连线</span></div>

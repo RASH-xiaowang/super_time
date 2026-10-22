@@ -23,7 +23,7 @@ export interface VoiceVideoRemoteCtx {
 export function createVoiceVideoRemotes(rc: VoiceVideoRemoteCtx): {
   getVoiceInfo: (options: { username: string; localId: number }) => VoiceInfoResult
   getVoiceDataUrl: (options: { username?: string; localId?: number; svrId?: string }) => Promise<VoiceDataUrlResult>
-  getVideoInfo: (options: { username: string; localId: number }) => VideoInfoResult
+  getVideoInfo: (options: { username?: string; localId?: number; md5?: string }) => VideoInfoResult
 } {
   const rawWechatBase = rc.rawWechatBase
   return {
@@ -41,10 +41,11 @@ export function createVoiceVideoRemotes(rc: VoiceVideoRemoteCtx): {
       )
     },
 
-    getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
+    getVideoInfo(options: { username?: string; localId?: number; md5?: string }): VideoInfoResult {
       return resolveVideoInfo(
-        rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId,
+        rc.dirs().decrypted, rc.dirs().decoded, options.username ?? '', options.localId ?? 0,
         rawWechatBase(rc.dirs().decrypted) || undefined,
+        options.md5,
       )
     },
   }

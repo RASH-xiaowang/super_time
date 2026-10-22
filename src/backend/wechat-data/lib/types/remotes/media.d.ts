@@ -129,6 +129,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         fileName: string;
         size?: number;
         createTime?: number;
+        fileMd5?: string;
     }): ImageDataUrlResult;
     getSnsVideoCoverDataUrl(options: {
         md5?: string;
@@ -208,8 +209,9 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         svrId?: string;
     }) => Promise<import("../types-ask-export.ts").VoiceDataUrlResult>;
     getVideoInfo: (options: {
-        username: string;
-        localId: number;
+        username?: string;
+        localId?: number;
+        md5?: string;
     }) => import("../types-panels.ts").VideoInfoResult;
     getEmoticons(options?: {
         limit?: number;

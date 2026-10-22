@@ -49,6 +49,17 @@ const MAX_QUESTION = 2_000
 const MAX_ANSWER = 20_000
 const MAX_CITATIONS = 60
 const MAX_TERMS = 40
+const MAX_RUNTIME_TEXT = 2_000
+const MAX_TOOL_TRACES = 24
+const MAX_RETRIEVAL_JSON = 16_000
+const RUNTIME_STATUSES = new Set([
+  'ok',
+  'insufficient',
+  'needs_clarification',
+  'degraded',
+  'blocked',
+  'failed',
+])
 
 function dbPath(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'wechat_privacy.db')
@@ -146,11 +157,217 @@ export interface RecordAskInput {
   withheld?: boolean
   /** 失败原因（有值时 status 记为 fail）。 */
   error?: string
+  /** 运行时六态；写入 retrieval.runtimeStatus，并据此显式映射历史四态。 */
+  runtimeStatus?: string
+  /** 运行时状态原因（澄清/阻断/降级/失败的可读说明）。 */
+  statusReason?: string
+  /** 综合生成失败原因；降级时仍保留原文，避免诊断信息丢失。 */
+  synthesisError?: string
+  /** 证据包；只落统计摘要，不落逐条正文。 */
+  evidence?: unknown
+  /** 工具 trace；只落脱敏后的有界字段，不落完整参数。 */
+  toolCalls?: unknown
+  /** 资源引用；只落条数与来源工具。 */
+  resources?: unknown
   /** 多阶段检索统计（结构化存 JSON）。 */
   retrieval?: unknown
   /** 端到端耗时（毫秒）；缺省时由调用方决定是否传。 */
   elapsedMs?: number
   ts?: number
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function clippedText(value: unknown, max: number): string {
+  return clip(cleanText(value), max)
+}
+
+/** 运行时六态 → 历史四态；未知状态必须失败，不能静默伪装成 ok。 */
+function historyStatusOf(input: RecordAskInput): { status: AskHistoryStatus, error: string } {
+  const error = cleanText(input.error)
+  const runtime = cleanText(input.runtimeStatus)
+  if (runtime === '') {
+    // 兼容旧契约：显式 error 永远优先，其次才是 withheld / insufficient / ok。
+    return {
+      status: error ? 'fail' : (input.withheld ? 'withheld' : (input.insufficient ? 'insufficient' : 'ok')),
+      error,
+    }
+  }
+  if (!RUNTIME_STATUSES.has(runtime)) {
+    const unknown = `未知运行状态：${clip(runtime, 80)}`
+    return { status: 'fail', error: error ? `${error}；${unknown}` : unknown }
+  }
+  if (error !== '') {
+    return { status: 'fail', error }
+  }
+  if (runtime === 'blocked' || runtime === 'failed') {
+    return {
+      status: 'fail',
+      error: cleanText(input.statusReason) || cleanText(input.synthesisError) || `运行状态 ${runtime}`,
+    }
+  }
+  if (runtime === 'insufficient' || runtime === 'needs_clarification') {
+    return { status: 'insufficient', error: '' }
+  }
+  if (runtime === 'degraded') {
+    return { status: input.withheld ? 'withheld' : 'ok', error: '' }
+  }
+  return {
+    status: input.withheld ? 'withheld' : (input.insufficient ? 'insufficient' : 'ok'),
+    error: '',
+  }
+}
+
+/** 证据只保留计数与失败工具名，不保存 snippet / 文件正文。 */
+function historyEvidenceSummary(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecordValue(value)) return undefined
+  const stats = isRecordValue(value.stats) ? value.stats : {}
+  const items = Array.isArray(value.items) ? value.items : []
+  const facts = Array.isArray(value.facts) ? value.facts : []
+  const failedTools = Array.isArray(stats.failedTools)
+    ? stats.failedTools
+      .filter((tool): tool is string => typeof tool === 'string' && tool.trim() !== '')
+      .slice(0, 12)
+      .map(tool => clip(tool, 80))
+    : []
+  return {
+    status: clippedText(value.status, 32),
+    count: finiteNumber(stats.count, items.length),
+    messages: finiteNumber(stats.messages),
+    kb: finiteNumber(stats.kb),
+    sessions: finiteNumber(stats.sessions),
+    candidateCount: finiteNumber(stats.candidateCount),
+    facts: finiteNumber(stats.factCount, facts.length),
+    duplicateCount: finiteNumber(stats.duplicateCount),
+    droppedByBudget: finiteNumber(stats.droppedByBudget),
+    attemptedTools: finiteNumber(stats.attemptedTools),
+    successfulTools: finiteNumber(stats.successfulTools),
+    failedTools,
+    truncated: stats.truncated === true,
+  }
+}
+
+/** 工具 trace 只保留稳定诊断字段；参数摘要可能包含原文，明确不入历史。 */
+function historyToolCallSummary(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const items: Array<Record<string, unknown>> = []
+  for (const raw of value.slice(0, MAX_TOOL_TRACES)) {
+    if (!isRecordValue(raw)) continue
+    items.push({
+      index: finiteNumber(raw['index']),
+      round: finiteNumber(raw['round']),
+      name: clippedText(raw['name'], 100),
+      ok: raw['ok'] === true,
+      attempts: finiteNumber(raw['attempts']),
+      retries: finiteNumber(raw['retries']),
+      elapsedMs: finiteNumber(raw['elapsedMs']),
+      errorClass: clippedText(raw['errorClass'], 80),
+      errorCode: clippedText(raw['errorCode'], 120),
+      hits: finiteNumber(raw['hits']),
+      facts: finiteNumber(raw['facts']),
+      skipped: raw['skipped'] === true,
+      deadlineExceeded: raw['deadlineExceeded'] === true,
+    })
+  }
+  return {
+    total: value.length,
+    items,
+    truncated: value.length > MAX_TOOL_TRACES,
+  }
+}
+
+function historyResourceSummary(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const tools = new Set<string>()
+  const items: Array<Record<string, unknown>> = []
+  const seen = new Set<string>()
+  for (const raw of value) {
+    if (!isRecordValue(raw)) continue
+    const tool = clippedText(raw['tool'], 80)
+    if (tool !== '') tools.add(tool)
+    const locator = isRecordValue(raw['locator']) ? raw['locator'] : {}
+    const evidenceId = clippedText(raw['evidenceId'], 240)
+    const key = clippedText(raw['key'], 160) || clippedText(locator['key'], 160)
+    const identity = evidenceId || `${tool}\u0000${key}`
+    if (identity === '' || seen.has(identity)) continue
+    seen.add(identity)
+    items.push({
+      evidenceId,
+      tool,
+      key,
+      name: clippedText(raw['name'], 200),
+      time: clippedText(raw['time'] || locator['time'], 64),
+      resourceKind: clippedText(locator['resourceKind'], 40),
+      sourceId: clippedText(locator['sourceId'], 160),
+    })
+  }
+  return {
+    total: value.length,
+    tools: [...tools].slice(0, 12),
+    items: items.slice(0, 12),
+    truncated: value.length > 12 || items.length > 12,
+  }
+}
+
+function historyRetrievalOf(input: RecordAskInput): unknown {
+  const runtime = clippedText(input.runtimeStatus, 64)
+  const reason = clippedText(input.statusReason, MAX_RUNTIME_TEXT)
+  const synthesisError = clippedText(input.synthesisError, MAX_RUNTIME_TEXT)
+  const evidence = historyEvidenceSummary(input.evidence)
+  const toolCalls = historyToolCallSummary(input.toolCalls)
+  const resources = historyResourceSummary(input.resources)
+  const base = isRecordValue(input.retrieval) ? input.retrieval : {}
+  if (
+    runtime === ''
+    && reason === ''
+    && synthesisError === ''
+    && evidence === undefined
+    && toolCalls === undefined
+    && resources === undefined
+  ) {
+    return input.retrieval
+  }
+  return {
+    ...base,
+    ...(runtime === '' ? {} : { runtimeStatus: runtime }),
+    ...(reason === '' ? {} : { statusReason: reason }),
+    ...(synthesisError === '' ? {} : { synthesisError }),
+    ...(runtime === 'degraded' ? { degraded: true } : {}),
+    ...(runtime === 'needs_clarification' ? { needsClarification: true } : {}),
+    ...(evidence === undefined ? {} : { evidence }),
+    ...(toolCalls === undefined ? {} : { toolCalls }),
+    ...(resources === undefined ? {} : { resources }),
+  }
+}
+
+/** 超限时退化为有界摘要，保证 retrieval 既不会无限膨胀，也不丢运行状态与证据/工具概览。 */
+function safeRetrievalJson(
+  value: unknown,
+  runtime: string,
+  reason: string,
+  synthesisError: string,
+  evidence: Record<string, unknown> | undefined,
+  toolCalls: Record<string, unknown> | undefined,
+  resources: Record<string, unknown> | undefined,
+): string {
+  const json = safeJson(value)
+  if (json !== '' && json.length <= MAX_RETRIEVAL_JSON) return json
+  // 序列化失败（含循环引用）或超限时，保留状态与有界概览，不能把元数据整段丢掉。
+  return safeJson({
+    ...(runtime === '' ? {} : { runtimeStatus: runtime }),
+    ...(reason === '' ? {} : { statusReason: reason }),
+    ...(synthesisError === '' ? {} : { synthesisError }),
+    ...(evidence === undefined ? {} : { evidence }),
+    ...(toolCalls === undefined ? {} : { toolCalls }),
+    ...(resources === undefined ? {} : { resources }),
+    ...(json === '' ? { serializationFailed: true } : { truncated: true, originalChars: json.length }),
+  })
 }
 
 /**
@@ -166,9 +383,13 @@ export function recordAsk(decryptedDir: string, input: RecordAskInput): number |
     const answer = clip(input.answer, MAX_ANSWER)
     // 问题与回答都空的记录没有任何可看内容，不落库（避免攒一堆空行）。
     if (!question && !answer.trim()) return null
-    const status: AskHistoryStatus = cleanText(input.error)
-      ? 'fail'
-      : (input.withheld ? 'withheld' : (input.insufficient ? 'insufficient' : 'ok'))
+    const status = historyStatusOf(input)
+    const runtime = clippedText(input.runtimeStatus, 64)
+    const reason = clippedText(input.statusReason, MAX_RUNTIME_TEXT)
+    const retrieval = historyRetrievalOf(input)
+    const evidence = historyEvidenceSummary(input.evidence)
+    const toolCalls = historyToolCallSummary(input.toolCalls)
+    const resources = historyResourceSummary(input.resources)
     const citations = (Array.isArray(input.citations) ? input.citations : []).slice(0, MAX_CITATIONS)
     const terms = (Array.isArray(input.terms) ? input.terms : [])
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
@@ -194,9 +415,19 @@ export function recordAsk(decryptedDir: string, input: RecordAskInput): number |
           safeJson(citations),
           safeJson((Array.isArray(input.citedIndexes) ? input.citedIndexes : []).filter(n => Number.isFinite(n))),
           cleanText(input.basis),
-          status,
-          cleanText(input.error),
-          input.retrieval === undefined ? '' : safeJson(input.retrieval),
+          status.status,
+          status.error,
+          retrieval === undefined
+            ? ''
+            : safeRetrievalJson(
+              retrieval,
+              runtime,
+              reason,
+              clippedText(input.synthesisError, MAX_RUNTIME_TEXT),
+              evidence,
+              toolCalls,
+              resources,
+            ),
           Number.isFinite(input.elapsedMs) ? Math.round(Number(input.elapsedMs)) : 0,
         )
       return Number(info.lastInsertRowid ?? 0) || null
@@ -245,6 +476,9 @@ function buildWhere(query: AskHistoryQuery): { sql: string; params: Array<string
 
 /** 行 → 条目。 */
 function rowToEntry(r: Record<string, unknown>): AskHistoryEntry {
+  const storedStatus = cleanText(r['status'])
+  const knownStatus = ALLOWED_STATUS.has(storedStatus)
+  const storedError = cleanText(r['error'])
   return {
     id: Number(r['id'] ?? 0),
     ts: Number(r['ts'] ?? 0),
@@ -261,8 +495,11 @@ function rowToEntry(r: Record<string, unknown>): AskHistoryEntry {
     citations: parseJson<AskCitation[]>(r['citations'], []).filter(c => c !== null && typeof c === 'object'),
     citedIndexes: parseJson<number[]>(r['cited_indexes'], []).filter(n => Number.isFinite(n)),
     basis: cleanText(r['basis']),
-    status: (ALLOWED_STATUS.has(cleanText(r['status'])) ? cleanText(r['status']) : 'ok') as AskHistoryStatus,
-    error: cleanText(r['error']),
+    // 未知状态必须显式失败；默认成 ok 会把损坏/未来版本记录误报为成功回答。
+    status: (knownStatus ? storedStatus : 'fail') as AskHistoryStatus,
+    error: knownStatus
+      ? storedError
+      : [storedError, `未知历史状态：${clip(storedStatus, 80) || '（空）'}`].filter(Boolean).join('；'),
     retrieval: parseJson<Record<string, unknown> | null>(r['retrieval'], null),
     elapsedMs: Number(r['elapsed_ms'] ?? 0),
   }

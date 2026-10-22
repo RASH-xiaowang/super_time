@@ -25,6 +25,7 @@ import { AGGREGATE_TOOLS } from './aggregate-tools.ts'
 import { CONTACT_TOOLS } from './contact-tools.ts'
 import { CONTENT_TOOLS } from './content-tools.ts'
 import { KB_TOOLS, makeSearchSemanticTool } from './kb-tools.ts'
+import { makeSearchHybridTool, type HybridSearchExecutor } from './search-hybrid-tool.ts'
 import { findTool, toToolSchemas, type RetrievalTool, type ToolContext, type ToolName, type ToolResult } from './types.ts'
 
 /**
@@ -36,9 +37,14 @@ import { findTool, toToolSchemas, type RetrievalTool, type ToolContext, type Too
  * 消失会让模型以为「没有这个能力」，而实际上是「这次没配」）。
  * @param opts.embedFn - 向量化函数（含隐私闸门）。
  * @param opts.embedModel - 向量模型名（只用于展示）。
+ * @param opts.hybridExecutor - 混合检索执行器（由装配层注入 `runAskRetrieval`）。
  * @returns 完整工具集。
  */
-export function buildTools(opts: { embedFn?: EmbedFn; embedModel?: string } = {}): RetrievalTool[] {
+export function buildTools(opts: {
+  embedFn?: EmbedFn
+  embedModel?: string
+  hybridExecutor?: HybridSearchExecutor
+} = {}): RetrievalTool[] {
   return [
     ...MESSAGE_TOOLS,
     ...AGGREGATE_TOOLS,
@@ -46,6 +52,7 @@ export function buildTools(opts: { embedFn?: EmbedFn; embedModel?: string } = {}
     ...CONTENT_TOOLS,
     ...KB_TOOLS,
     makeSearchSemanticTool(opts.embedFn, opts.embedModel ?? ''),
+    makeSearchHybridTool(opts.hybridExecutor),
   ]
 }
 
@@ -72,17 +79,33 @@ export async function runTool(
 ): Promise<ToolResult> {
   const tool = findTool(tools, name)
   if (!tool) {
-    return { tool: name as ToolName, ok: false, error: `没有这个工具：${name}`, hits: [] }
+    return {
+      tool: name as ToolName,
+      ok: false,
+      error: `没有这个工具：${name}`,
+      errorCode: 'unknown_tool',
+      hits: [],
+    }
   }
   const started = Date.now()
   try {
     const r = await tool.run(args ?? {}, ctx)
+    if (!r || typeof r !== 'object' || !Array.isArray(r.hits)) {
+      return {
+        tool: tool.name,
+        ok: false,
+        errorCode: 'upstream_failure',
+        error: `工具 ${tool.name} 返回了畸形结果（缺少 hits 数组）`,
+        hits: [],
+        elapsedMs: Date.now() - started,
+      }
+    }
     // 耗时以**外层**为准：工具自己算的那份可能漏（比如提前 return 的分支）。
     return { ...r, elapsedMs: r.elapsedMs ?? (Date.now() - started) }
   } catch (e) {
     const msg = (e as { message?: unknown } | null | undefined)?.message
     return {
-      tool: tool.name, ok: false,
+      tool: tool.name, ok: false, errorCode: 'upstream_failure',
       error: typeof msg === 'string' && msg !== '' ? msg : String(e),
       hits: [],
       elapsedMs: Date.now() - started,

@@ -11,18 +11,19 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ErrorState } from '../ui/kit.tsx'
-import type { AskOptimizeResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { apiOptimizeAskQuestion } from '../api.ts'
-import { BasisLine, AnswerFeedback } from './Ask.tsx'
+import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { BasisLine, AnswerFeedback, PlanLine, RetrMeta } from './Ask.tsx'
 import { AnswerBody } from './AnswerBody.tsx'
 import { AskPending } from './ask-pending.tsx'
 import { AskProcess } from './AskProcess.tsx'
+import { AskResources, AskRuntimeMeta } from './AskRuntimeMeta.tsx'
 import { AskHistoryDialog } from './AskHistoryDialog.tsx'
 import { CiteDetailPanel } from './CiteDetailPanel.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { useKbScope } from './kb-scope.ts'
-import { useCiteDetail } from './use-cite-detail.ts'
+import { loadMessageContext, openKbFileFromCitation, useCiteDetail } from './use-cite-detail.ts'
 import { useAskSession, type AskTurn } from './use-ask.ts'
+import { useAskOptimize } from './use-ask-optimize.ts'
 import css from './session-ask.module.css'
 
 /** 空态引导问题（与截图一致，且对任意会话都成立）。 */
@@ -169,13 +170,14 @@ function SessionIntro({ targetName, onPick }: {
  * @param props.onDistill - 「沉淀为笔记」回调（打开编辑器）。
  * @returns 消息流元素。
  */
-function SessionThread({ turns, asking, streamText, streamReasoning, streamStages, onStop, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function SessionThread({ turns, asking, streamText, streamReasoning, streamStages, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
   streamStages: React.ComponentProps<typeof AskPending>['streamStages']
   onStop: () => void
+  onRetry: (index: number) => void
   citeDetail: ReturnType<typeof useCiteDetail>
   patchTurn: (index: number, patch: Partial<AskTurn>) => void
   questionForTurn: (idx: number) => string
@@ -192,6 +194,14 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
           <div key={i} className={css.turnAi}>
             {/* 过程时间线（与「微信问答」同一套）：思考 + 工具调用步骤，放在答案之前。 */}
             <AskProcess stages={t.stages} reasoning={t.reasoning} />
+            <AskRuntimeMeta
+              turn={t}
+              placement="meta"
+              {...(t.status === 'failed' ? { onRetry: () => { onRetry(i) } } : {})}
+            />
+            {/* 规划与检索漏斗：与「微信问答」同一套组件，放进滚动区，不挤输入框。 */}
+            <PlanLine plan={t.plan} />
+            <RetrMeta retrieval={t.retrieval} />
             <div className={css.aiAnswer}>
               <AnswerBody
                 text={t.text}
@@ -225,6 +235,7 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
                 )}
               </div>
             </div>
+            <AskResources turn={t} />
           </div>
         )
       ))}
@@ -255,23 +266,26 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
   const [distill, setDistill] = useState<{ open: boolean; title?: string; body?: string; question?: string }>({ open: false })
   /** 「历史记录」弹窗开关（与「微信问答」同一件）。 */
   const [historyOpen, setHistoryOpen] = useState(false)
-  /** 提问优化（与「微信问答」同一条后端 Remote）。 */
-  const [optResult, setOptResult] = useState<AskOptimizeResult | null>(null)
-  const [optLoading, setOptLoading] = useState(false)
-  const [optError, setOptError] = useState<string | null>(null)
   /** 沉淀时的目标知识库（与「微信问答」同一处 scope）。 */
   const { kbId } = useKbScope()
 
   // 每个会话一份线程：键即 username。
   // source/scopeUsernameName 只用于**问答历史**：让历史列表能区分「在哪问的」并直接显示会话名。
-  const { turns, asking, streamText, streamReasoning, streamStages, error, ask, cancel, reset, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamStages, error, ask, retry: retryTurn, cancel, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     scopeUsername: target.username,
     scopeUsernameName: nameOf(target),
     source: 'session',
     threadKey: target.username,
   })
   /** 引用详情面板的开关（点正文角标 → 右侧滑出；再点同一条收起）。 */
-  const citeDetail = useCiteDetail(turns)
+  const citeDetail = useCiteDetail(turns, target.username, { loadContext: loadMessageContext })
+  const {
+    loading: optLoading,
+    result: optResult,
+    error: optError,
+    optimize: optimizeAsk,
+    dismiss: dismissOptimize,
+  } = useAskOptimize({ scopeKey: target.username, username: target.username })
 
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -313,25 +327,9 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
    * 在单聊里与在群里该补的限定词不同）。
    */
   const optimizeQuestion = useCallback(async (): Promise<void> => {
-    const q = question.trim()
-    if (!q || optLoading) return
-    setOptLoading(true)
-    setOptError(null)
-    setOptResult(null)
-    try {
-      const history = turns.map(t => ({ role: t.role, content: t.text }))
-      const r = await apiOptimizeAskQuestion({
-        question: q,
-        username: target.username,
-        ...(history.length > 0 ? { history } : {}),
-      })
-      setOptResult(r)
-    } catch (e) {
-      setOptError('优化失败：' + (e as Error).message)
-    } finally {
-      setOptLoading(false)
-    }
-  }, [question, optLoading, turns, target.username])
+    if (optLoading) return
+    await optimizeAsk(question, turns)
+  }, [optLoading, optimizeAsk, question, turns])
 
   /** 取某轮回答对应的提问（沉淀时写进笔记的「来源问题」）。 */
   const questionForTurn = useCallback((idx: number): string => {
@@ -351,7 +349,13 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         onToggleFull={onToggleFull}
         onClose={onClose}
         onHistory={() => { setHistoryOpen(true) }}
-        onNewChat={() => { reset(); clearError(); setQuestion('') }}
+        onNewChat={() => {
+          resetThread()
+          clearError()
+          dismissOptimize()
+          citeDetail.close()
+          setQuestion('')
+        }}
       />
 
       {/* 读取范围（只读） */}
@@ -378,6 +382,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             streamReasoning={streamReasoning}
             streamStages={streamStages}
             onStop={cancel}
+            onRetry={(i) => { void retryTurn(i) }}
             citeDetail={citeDetail}
             patchTurn={patchTurn}
             questionForTurn={questionForTurn}
@@ -388,13 +393,18 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
 
       {error && <ErrorState message={error} />}
 
-      {/* 引用详情：**覆盖式**（本面板恒 384px，切不出侧栏）——
+      {/* 引用详情：**覆盖式**（本面板宽度随视口伸缩，切不出侧栏）——
           左侧对话原样留着当上下文，看完关掉即可继续追问。 */}
       <CiteDetailPanel
         item={citeDetail.item}
         index={citeDetail.ref?.n ?? 0}
+        context={citeDetail.context}
+        contextStatus={citeDetail.contextStatus}
+        contextError={citeDetail.contextError}
+        onRetryContext={citeDetail.retryContext}
         onClose={citeDetail.close}
         onOpenSource={(u, id) => { onOpenMessage(u, id ?? 0) }}
+        onOpenKbFile={openKbFileFromCitation}
         overlay
       />
 
@@ -413,8 +423,8 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             </>
           )}
           <div className={css.optActions}>
-            <button type="button" className={css.optApply} onClick={() => { setQuestion(optResult.optimized); setOptResult(null) }}>采用优化</button>
-            <button type="button" className={css.optDismiss} onClick={() => { setOptResult(null) }}>忽略</button>
+            <button type="button" className={css.optApply} onClick={() => { setQuestion(optResult.optimized); dismissOptimize() }}>采用优化</button>
+            <button type="button" className={css.optDismiss} onClick={dismissOptimize}>忽略</button>
           </div>
         </div>
       )}
@@ -448,13 +458,17 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             {optLoading ? '优化中…' : '优化提问'}
           </button>
           <span className={css.footSpacer} />
-          <button type="button" className={css.send} onClick={submit}
-            data-busy={asking || undefined}
-            disabled={!question.trim() || asking} aria-label="发送" title="发送（Enter 发送，Shift+Enter 换行）">
-            {asking
-              ? <span className={css.spinner} aria-hidden="true" />
-              : <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>}
-          </button>
+          {asking ? (
+            <button type="button" className={css.stopSend} onClick={cancel}
+              aria-label="停止生成" title="停止本轮回答的生成（已生成的部分会保留）">
+              <span className={css.stopSendGlyph} aria-hidden="true" />
+            </button>
+          ) : (
+            <button type="button" className={css.send} onClick={submit}
+              disabled={!question.trim()} aria-label="发送" title="发送（Enter 发送，Shift+Enter 换行）">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+            </button>
+          )}
         </div>
       </div>
       <div className={css.note}>回答附原文出处，点击可核对</div>
@@ -480,6 +494,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         open={historyOpen}
         onClose={() => { setHistoryOpen(false) }}
         onOpenCitation={(u, id) => { onOpenMessage(u, id ?? 0) }}
+        onOpenKbFile={openKbFileFromCitation}
         onAskAgain={(q) => {
           setQuestion(q)
           clearError()

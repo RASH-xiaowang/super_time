@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { auditGrounding, groundingRepairHint, stripCitationMarkers } from '../src/query/grounding.ts'
+import { hasEvidenceSupport, resolveGroundedAnswer } from '../src/remotes/ask-runtime-prompt.ts'
 import { buildSearchIndex } from '../src/query/search.ts'
 import { runRetrievalPipeline } from '../src/query/retrieval/pipeline.ts'
 import { defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
@@ -120,6 +121,10 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
 
   it('误加的 [n] 角标在自动回复发送前被确定性清除', () => {
     expect(stripCitationMarkers('收到 13.00 元 [1][2]，明天到账。')).toBe('收到 13.00 元，明天到账。')
+    expect(stripCitationMarkers('收到 13.00 元 [ 1 ][  22 ]，明天到账。'))
+      .toBe('收到 13.00 元，明天到账。')
+    // 全角方括号有不同的语义，不能被半角清理规则顺带吃掉。
+    expect(stripCitationMarkers('收到 13.00 元【1】')).toBe('收到 13.00 元【1】')
   })
 
   it('越界的 [n] 不算引用', () => {
@@ -230,18 +235,22 @@ describe('端到端：核对不通过会带着「具体哪个值不对」回炉�
   })
 
   /**
-   * 只提供 askWechat 真正用到的表面：`llm.stream`（规划器 + 综合）与默认模型。
-   * 规划器那一跳用 system 里是否含「检索规划器」区分；综合回答按 `replies` 依次返回，
-   * 并把每次发给模型的**综合提示词**留下来，用来断言「回炉时点名了具体的值」。
+   * 只提供 askWechat 真正用到的表面：`llm.stream`（工具选择 + 综合）与默认模型。
+   * 带工具清单的是工具选择轮，测试桩不产出文本，让运行时走确定性检索兜底；
+   * 不带工具清单的才是综合生成，按 `replies` 依次返回，并留下综合提示词，
+   * 用来断言「回炉时点名了具体的值」。
    */
   function makeCtx(replies: string[]): { ctx: Context; synthCalls: () => number; prompts: string[] } {
     const prompts: string[] = []
     let synth = 0
     const llm = {
-      async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }) {
-        const sys = String(opts.system ?? '')
-        if (sys.includes('检索规划器')) {
-          yield { type: 'text-delta', index: 0, text: JSON.stringify({ intent: '最近查询', subQueries: ['转账'], from: '', to: '', person: '' }) }
+      async *stream(opts: {
+        system?: string
+        tools?: Array<{ name?: string }>
+        messages?: Array<{ content?: Array<{ text?: string }> }>
+      }) {
+        if (Array.isArray(opts.tools) && opts.tools.length > 0) {
+          // 空的选择轮由运行时用原问题执行 search_hybrid，随后进入综合阶段。
           return
         }
         prompts.push(opts.messages?.[0]?.content?.[0]?.text ?? '')
@@ -303,5 +312,33 @@ describe('端到端：核对不通过会带着「具体哪个值不对」回炉�
     expect(r.withheld).toBe(true)
     expect(r.answer).toContain('没有找到可据以回答的证据')
     expect(r.answer).not.toContain('3 笔')
+  })
+})
+
+describe('证据使用校验：有引用还必须真的使用材料', () => {
+  it('无关通用话术即使有引用也不算使用证据', () => {
+    expect(hasEvidenceSupport('可以，我稍后回复你。', ['合同编号 HT-2026\n付款节点为签约后 30 日内。'])).toBe(false)
+  })
+
+  it('回答复述材料中的具体内容则通过', () => {
+    expect(hasEvidenceSupport('付款节点是签约后 30 日内。', ['合同编号 HT-2026\n付款节点为签约后 30 日内。'])).toBe(true)
+  })
+
+  it('自动回复未使用材料时回炉；修正稿仍未使用时 withheld', async () => {
+    const runChat = vi.fn(async () => '可以，我稍后回复你。')
+    const result = await resolveGroundedAnswer({
+      mode: 'chat',
+      answer: '可以，我稍后回复你。',
+      citationCount: 1,
+      synthPrompt: '只使用材料回答',
+      evidenceFor: () => ['合同编号 HT-2026\n付款节点为签约后 30 日内。'],
+      allEvidence: ['合同编号 HT-2026\n付款节点为签约后 30 日内。'],
+      systemPrompt: '系统',
+      runChat,
+    })
+    expect(runChat).toHaveBeenCalledTimes(1)
+    expect(result.evidenceUsed).toBe(false)
+    expect(result.withheld).toBe(true)
+    expect(result.answer).not.toContain('稍后回复')
   })
 })

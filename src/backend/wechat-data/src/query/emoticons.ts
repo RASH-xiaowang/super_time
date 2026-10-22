@@ -84,14 +84,12 @@ function unescapeXml(s: string): string {
  * @param decryptedDir - 解密后的数据根目录（消息库在这里）。
  * @param wechatBaseDir - 原始微信目录（`msg/attach` 在这里）；缺省时只能靠 `cdnurl`。
  * @param exclude - 要排除的 md5 集合（用户自己的表情）。
- * @param cap - 最多返回多少条（按次数降序）。
  * @returns 按出现次数降序的表情列表（带 `cdnUrl` 的可以远端取图）。
  */
 function collectOtherEmoticons(
   decryptedDir: string,
   wechatBaseDir: string | undefined,
   exclude: ReadonlySet<string>,
-  cap: number,
 ): EmoticonItem[] {
   /*
    * ⚠️ 两个目录**不是同一个**（2026-10-17 实测）：
@@ -143,7 +141,6 @@ function collectOtherEmoticons(
   return [...found.entries()]
     .filter(([md5, v]) => v.cdnUrl !== '' || (index !== null && findEmoticonDats(index, md5).length > 0))
     .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, cap)
     .map(([md5, v]) => {
       const item: EmoticonItem = { md5, item_type: 0, caption: `${String(v.count)} 次` }
       if (v.cdnUrl !== '') item.cdnUrl = v.cdnUrl
@@ -305,9 +302,17 @@ function computeEmoticons(
     let othersTotal: number | undefined
     if (offset === 0) {
       const own = new Set(custom.map(c => c.md5.toLowerCase()))
-      const all = collectOtherEmoticons(decryptedDir, wechatBaseDir, own, 2000)
+      /*
+       * 返回扫描到的**全部**结果，不再二次截断。
+       *
+       * 这里原来先按 2000 条收集，再取前 500 条返回；而 `othersTotal` 统计的是截断前
+       * 的总数。真实数据里出现「其他 1924 · 下拉只有 500」的自相矛盾，用户会合理地
+       * 以为表情丢了。扫描本来就已经遍历完所有消息分片并把去重结果放在内存里，
+       * 去掉返回截断不增加扫描成本；前端用渐进列表渲染，也不会一次挂出上千个 DOM。
+       */
+      const all = collectOtherEmoticons(decryptedDir, wechatBaseDir, own)
       othersTotal = all.length
-      others = all.slice(0, 500)
+      others = all
     }
 
     return { custom, static: [], packages, total, orderedBy: customOrderedBy, others, othersTotal }

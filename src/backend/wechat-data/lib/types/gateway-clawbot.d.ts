@@ -1,6 +1,33 @@
 import type { ClawbotBindQr, ClawbotBindStateSnapshot, ClawbotBindingSnapshot, ClawbotEnvSnapshot, ClawbotInstanceConfig, ClawbotInstanceCreated, ClawbotInstanceDeleted, ClawbotInstancesSnapshot, ClawbotMediaResult, ClawbotMessageQuery, ClawbotMessageSnapshot, ClawbotSendResult } from './types.ts';
 import { createClawbotRemotes } from './remotes/clawbot.ts';
 import { GatewayDbHealth } from './gateway-db-health.ts';
+/**
+ * ClawBot 是无人值守出网：必须默认拒绝，只有能证明作答有据的结果才发送。
+ *
+ * `ok` 也要求至少一条可追溯引用；`degraded` 额外要求接地核对没有未支持的
+ * 数值。缺失状态、`withheld`、证据不足、待澄清与未知状态一律不发送。
+ */
+export declare function clawbotSendDecision(result: {
+    answer?: string;
+    status?: unknown;
+    statusReason?: string;
+    synthesisError?: string;
+    reason?: string;
+    withheld?: boolean;
+    evidenceUsed?: boolean;
+    citations?: ReadonlyArray<unknown>;
+    grounding?: {
+        unsupported?: ReadonlyArray<unknown>;
+    };
+}, options?: {
+    kbId?: number | null;
+}): {
+    send: true;
+    detail?: string;
+} | {
+    send: false;
+    error: string;
+};
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
 export declare abstract class GatewayClawbot extends GatewayDbHealth {
     /**

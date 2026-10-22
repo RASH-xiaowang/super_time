@@ -22,13 +22,20 @@
  * 破坏性操作的额外保护：`requireText` 要求用户**逐字输入**给定文本才能确认
  * （GitHub 删仓库那一套），用于「批量删除并删文件」这类不可逆动作。
  *
+ * ── 为什么用 Radix Dialog 而不是手写遮罩 ─────────────────────
+ * 历史记录/导出记录等入口本身就是 Radix **模态** Dialog。它的 FocusScope 在
+ * document 上监听 focusin，会把任何落到内容区外的焦点立刻拽回下层弹窗 ——
+ * 手写确认框虽然画得出来，`requireText` 输入框却**抢不到焦点，表现为打不了字**
+ * （2026-10-22 用户报障）。改用 Radix Dialog 后，新焦点作用域会暂停下层作用域，
+ * 同时复用其 Esc / 点遮罩关闭与焦点归还语义。
+ *
  * ── 降级 ─────────────────────────────────────────────────────
  * 没有 `ConfirmProvider` 祖先时退回原生 `window.confirm`，**不抛错** —— 这样
  * 组件在独立渲染（如 SSR 冒烟）或未来的新入口里都不会直接崩。
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useEscapeToClose } from './kit.tsx'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
 import css from './confirm.module.css'
 
 /** 确认框的语义色调：danger 用于删除/清空等不可逆动作。 */
@@ -124,8 +131,6 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
     })
   }, [])
 
-  useEscapeToClose(req !== null, () => { settle(false) })
-
   // 打开时聚焦：有 requireText 就聚焦输入框，否则聚焦确认按钮（键盘可直接回车确认）。
   // 同时把 Tab 关在 alertdialog 内，关闭后由 settle 把焦点还给触发元素。
   useEffect(() => {
@@ -173,66 +178,68 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
     <ConfirmContext.Provider value={value}>
       {children}
       {req && (
-        <div className={css.overlay} role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) settle(false) }}>
-          <div
-            ref={boxRef}
-            className={css.box}
-            role="alertdialog"
-            aria-modal="true"
-            tabIndex={-1}
-            aria-labelledby="confirm-title"
-            aria-describedby={req.message ? 'confirm-message' : undefined}
-            data-tone={tone}
-          >
-            <div className={css.hd}>
-              <span className={css.icon} aria-hidden="true">{tone === 'danger' ? '⚠' : '?'}</span>
-              <span className={css.title} id="confirm-title">{req.title}</span>
-            </div>
-
-            {req.message && <div className={css.bd} id="confirm-message">{req.message}</div>}
-
-            {needText && (
-              <div className={css.challenge}>
-                <label className={css.challengeLabel} htmlFor="confirm-challenge">
-                  为确认这是不可逆操作，请输入 <code className={css.challengeWord}>{req.requireText}</code>
-                </label>
-                {/* 用原生 input 而不是 primitives 的 Input：
-                    那个原子的 className 落在**外层 span** 上、且不是 forwardRef，
-                    这里既要给 input 本身设宽度、又要聚焦它，原生元素更直接。 */}
-                <input
-                  id="confirm-challenge"
-                  ref={inputRef}
-                  className={css.challengeInput}
-                  type="text"
-                  value={typed}
-                  onChange={(e) => { setTyped(e.target.value) }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && textOk) { e.preventDefault(); settle(true) }
-                  }}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-invalid={typed.length > 0 && !textOk}
-                  aria-label={`请输入 ${req.requireText} 以确认`}
-                />
+        <DialogPrimitive.Root open onOpenChange={(open) => { if (!open) settle(false) }}>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className={css.overlay} />
+            <DialogPrimitive.Content
+              ref={boxRef}
+              className={css.box}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="confirm-title"
+              aria-describedby={req.message ? 'confirm-message' : undefined}
+              data-tone={tone}
+            >
+              <div className={css.hd}>
+                <span className={css.icon} aria-hidden="true">{tone === 'danger' ? '⚠' : '?'}</span>
+                <span className={css.title} id="confirm-title">{req.title}</span>
               </div>
-            )}
 
-            <div className={css.ft}>
-              <Button size="sm" variant="outline" onClick={() => { settle(false) }}>
-                {req.cancelText ?? '取消'}
-              </Button>
-              <Button
-                size="sm"
-                variant={tone === 'danger' ? 'danger' : 'primary'}
-                data-confirm-primary=""
-                disabled={!textOk}
-                onClick={() => { settle(true) }}
-              >
-                {req.confirmText ?? (tone === 'danger' ? '删除' : '确定')}
-              </Button>
-            </div>
-          </div>
-        </div>
+              {req.message && <div className={css.bd} id="confirm-message">{req.message}</div>}
+
+              {needText && (
+                <div className={css.challenge}>
+                  <label className={css.challengeLabel} htmlFor="confirm-challenge">
+                    为确认这是不可逆操作，请输入 <code className={css.challengeWord}>{req.requireText}</code>
+                  </label>
+                  {/* 用原生 input 而不是 primitives 的 Input：
+                      那个原子的 className 落在**外层 span** 上、且不是 forwardRef，
+                      这里既要给 input 本身设宽度、又要聚焦它，原生元素更直接。 */}
+                  <input
+                    id="confirm-challenge"
+                    ref={inputRef}
+                    className={css.challengeInput}
+                    type="text"
+                    value={typed}
+                    onChange={(e) => { setTyped(e.target.value) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && textOk) { e.preventDefault(); settle(true) }
+                    }}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={typed.length > 0 && !textOk}
+                    aria-label={`请输入 ${req.requireText} 以确认`}
+                  />
+                </div>
+              )}
+
+              <div className={css.ft}>
+                <Button size="sm" variant="outline" onClick={() => { settle(false) }}>
+                  {req.cancelText ?? '取消'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={tone === 'danger' ? 'danger' : 'primary'}
+                  data-confirm-primary=""
+                  disabled={!textOk}
+                  onClick={() => { settle(true) }}
+                >
+                  {req.confirmText ?? (tone === 'danger' ? '删除' : '确定')}
+                </Button>
+              </div>
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
       )}
     </ConfirmContext.Provider>
   )

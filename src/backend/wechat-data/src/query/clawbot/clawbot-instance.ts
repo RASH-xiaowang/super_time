@@ -33,7 +33,19 @@ import { DEFAULT_CLAWBOT_SLOT, clawbotDbExists, clawbotDbPath, ensureClawbotSche
 import { readBindings, readBotIds } from './clawbot-binding.ts'
 import { clawbotMessageCounts } from './clawbot-message.ts'
 import { clawbotDayKey, clawbotTokenStats } from './clawbot-token.ts'
+import { resolveInstanceConfigForSave, type ClawbotInstanceConfigPatch } from './clawbot-config-invariant.ts'
 import { withDb, withWritableDb } from '../db-open.ts'
+
+export {
+  AUTO_REPLY_KB_REQUIRED_MESSAGE,
+  hasValidAutoReplyKnowledgeBase,
+  resolveInstanceConfigForSave,
+} from './clawbot-config-invariant.ts'
+export type {
+  AutoReplyKbConfig,
+  ClawbotInstanceConfigPatch,
+  InstanceConfigSaveInput,
+} from './clawbot-config-invariant.ts'
 
 /** 未配置过的实例的默认行为：自动回复**关**、知识库**关**、提示词用内置默认、长回复分段。 */
 export function defaultInstanceConfig(slot: number = DEFAULT_CLAWBOT_SLOT): ClawbotInstanceConfig {
@@ -95,7 +107,7 @@ export function readInstanceConfig(decryptedDir: string, slot: number = DEFAULT_
 export function saveInstanceConfig(
   decryptedDir: string,
   slot: number,
-  patch: Partial<Omit<ClawbotInstanceConfig, 'slot'>>,
+  patch: ClawbotInstanceConfigPatch,
 ): ClawbotInstanceConfig {
   const s = Math.max(Math.floor(slot), 1)
   return withWritableDb(clawbotDbPath(decryptedDir), (db) => {
@@ -104,20 +116,9 @@ export function saveInstanceConfig(
     if (!exists) throw new Error(`实例 ${s} 不存在（配置只能挂在已建的实例上）`)
     const row = db.prepare('SELECT auto_reply, kb_enabled, kb_id, system_prompt, split_reply FROM clawbot_instance_config WHERE slot = ?').get(s) as Record<string, unknown> | undefined
     const cur = row ? toConfig(row, s) : defaultInstanceConfig(s)
-    // kbId 在这里也归一（与读路径 `toConfig` 同一口径）：0 / 负数 / NaN 都是「没有库」，
-    // 不是「第 0 号库」—— 写进去再读出来会变成另一个值的东西不该落盘。
-    const rawKb = patch.kbId === undefined ? cur.kbId : patch.kbId
-    const kbId = rawKb === null || !Number.isFinite(rawKb) || rawKb <= 0 ? null : Math.floor(rawKb)
-    const next: ClawbotInstanceConfig = {
-      slot: s,
-      autoReply: patch.autoReply ?? cur.autoReply,
-      kbEnabled: patch.kbEnabled ?? cur.kbEnabled,
-      kbId,
-      // 提示词归一：首尾空白去掉；上限 4000 字（超出截断而不是抛错 —— 提示词是展示/偏好，
-      // 截断比拒绝更友好；4000 字已远超任何合理的人设描述）。
-      systemPrompt: (patch.systemPrompt ?? cur.systemPrompt).trim().slice(0, 4000),
-      splitReply: patch.splitReply ?? cur.splitReply,
-    }
+    // kbId 归一、提示词截断与「自动回复必须有知识库」不变量都在纯函数里，
+    // 保存路径与测试共用同一份规则。
+    const next = resolveInstanceConfigForSave({ slot: s, current: cur, patch })
     const now = Date.now()
     db.prepare(`INSERT INTO clawbot_instance_config(slot, auto_reply, kb_enabled, kb_id, system_prompt, split_reply, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)

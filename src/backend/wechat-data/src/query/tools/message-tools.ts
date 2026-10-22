@@ -79,17 +79,23 @@ export const searchMessagesTool: RetrievalTool = {
     const keywords = argStringArray(args['keywords'], 6)
     if (keywords.length === 0) return { tool: 'search_messages', ok: false, error: '缺少 keywords', hits: [] }
     const limit = argInt(args['limit'], 24, 1, 60)
-    const username = argString(args['username']) || ctx.scope?.username || ''
-    const from = argString(args['from']) || ctx.scope?.from || ''
-    const to = argString(args['to']) || ctx.scope?.to || ''
+    // `ctx.scope` 是服务端锁定的硬范围，优先级高于模型参数。
+    const username = ctx.scope?.username || argString(args['username'])
+    const from = ctx.scope?.from || argString(args['from'])
+    const to = ctx.scope?.to || argString(args['to'])
     const lo = dayStartSec(from)
     const hi = dayEndSec(to)
+    // 日期过滤发生在检索之后：先扩大候选，避免前 limit 条都在范围外时
+    // 把范围内真正存在的结果误判成 0 命中。
+    const candidateLimit = lo > 0 || hi > 0
+      ? Math.min(Math.max(limit * 10, limit), 300)
+      : limit
     const names = displayNames(ctx.decryptedDir)
 
     const seen = new Set<string>()
     const hits: ToolHit[] = []
     for (const kw of keywords) {
-      const r = searchIndexMessages(ctx.decryptedDir, kw, limit, username || undefined)
+      const r = searchIndexMessages(ctx.decryptedDir, kw, candidateLimit, username || undefined)
       for (const h of r.hits) {
         const key = h.username + ':' + h.local_id
         if (seen.has(key)) continue
@@ -138,11 +144,14 @@ export const getSessionMessagesTool: RetrievalTool = {
   },
   run: (args, ctx): ToolResult => {
     const started = Date.now()
-    const username = argString(args['username'])
+    const username = ctx.scope?.username || argString(args['username'])
     if (!username) return { tool: 'get_session_messages', ok: false, error: '缺少 username', hits: [] }
     const limit = argInt(args['limit'], 40, 1, 200)
-    const lo = dayStartSec(argString(args['from']))
-    const hi = dayEndSec(argString(args['to']))
+    // 服务端固定范围必须兜底：漏填 `from/to` 时不能退化成「查全历史」。
+    const from = ctx.scope?.from || argString(args['from'])
+    const to = ctx.scope?.to || argString(args['to'])
+    const lo = dayStartSec(from)
+    const hi = dayEndSec(to)
     const names = displayNames(ctx.decryptedDir)
     const name = names.get(username) ?? username
 
@@ -167,7 +176,7 @@ export const getSessionMessagesTool: RetrievalTool = {
       }))
       return {
         tool: 'get_session_messages', ok: true, hits,
-        note: `${name} · ${hits.length} 条${lo > 0 || hi > 0 ? `（${argString(args['from']) || '不限'} ~ ${argString(args['to']) || '不限'}）` : ''}`,
+        note: `${name} · ${hits.length} 条${lo > 0 || hi > 0 ? `（${from || '不限'} ~ ${to || '不限'}）` : ''}`,
         elapsedMs: Date.now() - started,
       }
     } catch (e) {
@@ -216,7 +225,13 @@ export const getMessageContextTool: RetrievalTool = {
     if (centerSec <= 0) return { tool: 'get_message_context', ok: false, error: '找不到这条消息（key 可能过期）', hits: [] }
 
     const names = displayNames(ctx.decryptedDir)
+    const from = ctx.scope?.from ?? ''
+    const to = ctx.scope?.to ?? ''
     const win = loadMessageWindow(ctx.decryptedDir, username, centerSec * 1000, spanMin * 60 * 1000, maxMsgs)
+      .filter((w) => {
+        const day = fmtDateTimeSec(w.create_time).slice(0, 10)
+        return (from === '' || day >= from) && (to === '' || day <= to)
+      })
     const hits: ToolHit[] = win.map(w => ({
       key: username + ':' + w.local_id,
       name: names.get(username) ?? username,

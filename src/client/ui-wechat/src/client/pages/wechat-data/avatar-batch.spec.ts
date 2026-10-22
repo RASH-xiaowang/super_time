@@ -24,16 +24,27 @@ import { describe, expect, it } from 'vitest'
 
 const API = fileURLToPath(new URL('./api-config.ts', import.meta.url))
 const SUPPORT = fileURLToPath(new URL('./panels/chats-support.tsx', import.meta.url))
+const REVOKED = fileURLToPath(new URL('./panels/Revoked.tsx', import.meta.url))
 const api = readFileSync(API, 'utf8')
 const support = readFileSync(SUPPORT, 'utf8')
+const revoked = readFileSync(REVOKED, 'utf8')
 
 describe('W2-10.2 组件走攒批', () => {
   it('Avatar 取图走 apiGetAvatarBatched（不是逐张的 apiGetAvatar）', () => {
     const i = support.indexOf('export function Avatar(')
     expect(i, '找不到 Avatar 组件').toBeGreaterThan(-1)
     const body = support.slice(i, i + 1600)
-    expect(body, 'Avatar 还在逐张发 RPC').toContain('apiGetAvatarBatched({ username: key })')
+    expect(body, 'Avatar 还在逐张发 RPC').toContain('apiGetAvatarBatched({ username: key, nickname: name })')
     expect(body, '逐张那条入口不许留在 Avatar 里').not.toMatch(/apiGetAvatar\(\{ username: key \}\)/)
+  })
+
+  it('展示名只作为 nickname 传入，撤回面板不拿 sender 冒充 username', () => {
+    const start = revoked.indexOf('<Avatar')
+    expect(start, '撤回面板没有 Avatar').toBeGreaterThan(-1)
+    const avatar = revoked.slice(start, revoked.indexOf('/>', start) + 2)
+    expect(avatar, '撤回面板没有把 sender_username 作为真实 username').toContain("username={it.sender_username ?? ''}")
+    expect(avatar, '撤回面板把 sender 当成了 username').not.toMatch(/username=\{it\.sender(?:\s*\|\||\s*\})/)
+    expect(avatar, '撤回面板没有把展示名作为 name').toContain('name={it.sender')
   })
 
   it('签名与语义不变（调用方一行都不用改），所以那处 import 只多不少', () => {
@@ -58,11 +69,12 @@ describe('W2-10.2 队列本体', () => {
     expect(api).toContain('const map = await apiGetAvatarsLocal({ usernames: keys.map((k) => k.username) })')
   })
 
-  it('批量没命中的**退回单张**（那一级「按昵称找联系人」的回落只在单张路上）', () => {
+  it('批量没命中的**退回单张**，且把原队列里的 nickname 一起带过去', () => {
     const i = api.indexOf('const avatarQueue = createImageLoadQueue')
     expect(i).toBeGreaterThan(-1)
     const body = api.slice(i, i + 900)
     expect(body, '未命中就直接判 none ⇒ 会少一批头像').toContain('return apiGetAvatar(k)')
+    expect(body, '单张回落丢了 nickname').toContain('{ username: string; nickname?: string }')
     expect(body).toMatch(/if \(typeof hit === 'string' && hit !== ''\) return \{ kind: 'data', data: hit \}/)
   })
 

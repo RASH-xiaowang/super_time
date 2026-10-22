@@ -1,6 +1,6 @@
 {
   "name": "super-time-electron",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "Super Time —— 把本机微信数据变成可检索、可分析、可导出的 Electron 桌面工作台（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
@@ -29,6 +29,7 @@
     "security-guard:smoke": "node scripts/security-guard-smoke.js",
     "security-guard:smoke:packaged": "node scripts/security-guard-smoke.js --packaged",
     "test": "vitest run",
+    "test:answer-replies": "vitest run src/backend/wechat-data/tests/acceptance/answer-runtime/reply-contract.spec.ts",
     "test:affected": "node scripts/affected-tests.mjs",
     "test:affected:list": "node scripts/affected-tests.mjs --list",
     "test:watch": "vitest",

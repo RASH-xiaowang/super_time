@@ -68,10 +68,13 @@ function makeFixture(): string {
 function makeCtx(release: Promise<void>): { ctx: Context; synthStarted: () => number } {
   let started = 0
   const llm = {
-    async *stream(opts: { system?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }) {
-      const sys = String(opts.system ?? '')
-      if (sys.includes('检索规划器')) {
-        yield { type: 'text-delta', index: 0, text: JSON.stringify({ intent: '查询', subQueries: ['合同'], from: '', to: '', person: '' }) }
+    async *stream(opts: {
+      system?: string
+      tools?: Array<{ name?: string }>
+      messages?: Array<{ content?: Array<{ text?: string }> }>
+    }) {
+      if (Array.isArray(opts.tools) && opts.tools.length > 0) {
+        // 工具选择轮留空，运行时用 search_hybrid 兜底后再进入可中断的综合生成。
         return
       }
       // 合成：第一个 chunk 之后停住，等测试那边取消完再继续。

@@ -26,7 +26,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from '../db-open.ts'
 import { withDb, withWritableDb } from '../db-open.ts'
-import { clawbotDbExists, clawbotDbPath, ensureClawbotSchema } from './clawbot-db.ts'
+import { REPLY_PART_COLS as PART_COLS, REPLY_RUN_COLS as RUN_COLS, REPLY_RUN_STATUSES as RUN_STATUSES, clawbotDbExists, clawbotDbPath, ensureClawbotSchema, hasClawbotTable as hasTable, readReplyPartOn as readPartOn, readReplyPartsOn as readPartsOn, readReplyRunOn as readRunOn, replyIdChunks as idChunks, replyPositiveInt as positiveInt, replyResultJsonOrNull as resultJsonOrNull, replySqlPlaceholders as placeholders, replyTextOrNull as textOrNull, replyTimestamp as timestamp, replyRunColsOn as runColsOn, setReplyRunResultOn as setRunResultOn, toReplyPart as toPart, toReplyRun as toRun, uniqueReplyIds as uniquePositiveIds } from './clawbot-db.ts'
 
 /** 连续入站消息的默认合并窗口。 */
 export const DEFAULT_REPLY_DEBOUNCE_MS = 1_000
@@ -59,6 +59,8 @@ export interface ClawbotReplyRun {
   status: ClawbotReplyRunStatus
   attempts: number
   lastError: string | null
+  /** 白名单运行详情 JSON；null = 旧行或尚未生成摘要。 */
+  resultJson: string | null
   nextAttemptAt: number
   createdAt: number
   updatedAt: number
@@ -114,6 +116,12 @@ export interface ClawbotReplyFailedClaimResult {
   run: ClawbotReplyRun
 }
 
+/** 一页消息对应的 run 关联：target = 入站目标，sent = 出站分段。 */
+export interface ClawbotReplyRunAttachments {
+  target: Map<number, ClawbotReplyRun>
+  sent: Map<number, ClawbotReplyRun>
+}
+
 export interface ClaimReplyRunGenerationInput {
   runId: number
   owner: string
@@ -146,28 +154,7 @@ export interface ClearClawbotReplyStateResult {
   removedParts: number
 }
 
-const RUN_COLS = 'id, slot, target_message_id, question, status, attempts, last_error, next_attempt_at, created_at, updated_at'
-const PART_COLS = 'id, run_id, slot, part_index, text, client_id, status, attempts, sent_message_id, last_error, created_at, updated_at'
-
-const RUN_STATUSES = new Set<ClawbotReplyRunStatus>([
-  'debouncing', 'queued', 'generating', 'ready', 'sending', 'done', 'failed', 'skipped',
-])
-const PART_STATUSES = new Set<ClawbotReplyPartStatus>(['pending', 'sending', 'sent', 'failed'])
 const TERMINAL_RUN_STATUSES = new Set<ClawbotReplyRunStatus>(['done', 'failed', 'skipped'])
-
-function positiveInt(value: number, label: string): number {
-  const n = Math.floor(value)
-  if (!Number.isFinite(n) || n < 1) throw new Error(`${label} 必须是正整数`)
-  return n
-}
-
-function timestamp(value: number | undefined): number {
-  return Number.isFinite(value) ? Math.floor(value as number) : Date.now()
-}
-
-function textOrNull(value: unknown): string | null {
-  return typeof value === 'string' && value !== '' ? value : null
-}
 
 function claimOwner(value: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new Error('owner 不能为空')
@@ -194,69 +181,6 @@ function leaseState(row: Record<string, unknown>): LeaseState {
 
 function sameLease(actual: LeaseState, expected: ClawbotReplyLease): boolean {
   return actual.owner === expected.owner && actual.fence === expected.fence
-}
-
-function toRun(row: Record<string, unknown>): ClawbotReplyRun {
-  const rawStatus = row['status']
-  const status = typeof rawStatus === 'string' && RUN_STATUSES.has(rawStatus as ClawbotReplyRunStatus)
-    ? rawStatus as ClawbotReplyRunStatus
-    : 'queued'
-  return {
-    id: Number(row['id'] ?? 0),
-    slot: Number(row['slot'] ?? 1),
-    targetMessageId: Number(row['target_message_id'] ?? 0),
-    question: typeof row['question'] === 'string' ? row['question'] : '',
-    status,
-    attempts: Number(row['attempts'] ?? 0),
-    lastError: textOrNull(row['last_error']),
-    nextAttemptAt: Number(row['next_attempt_at'] ?? 0),
-    createdAt: Number(row['created_at'] ?? 0),
-    updatedAt: Number(row['updated_at'] ?? 0),
-  }
-}
-
-function toPart(row: Record<string, unknown>): ClawbotReplyPart {
-  const rawStatus = row['status']
-  const status = typeof rawStatus === 'string' && PART_STATUSES.has(rawStatus as ClawbotReplyPartStatus)
-    ? rawStatus as ClawbotReplyPartStatus
-    : 'pending'
-  const sentMessageId = Number(row['sent_message_id'] ?? 0)
-  return {
-    id: Number(row['id'] ?? 0),
-    runId: Number(row['run_id'] ?? 0),
-    partIndex: Number(row['part_index'] ?? 0),
-    slot: Number(row['slot'] ?? 1),
-    text: typeof row['text'] === 'string' ? row['text'] : '',
-    clientId: typeof row['client_id'] === 'string' ? row['client_id'] : '',
-    status,
-    attempts: Number(row['attempts'] ?? 0),
-    sentMessageId: Number.isFinite(sentMessageId) && sentMessageId > 0 ? sentMessageId : null,
-    lastError: textOrNull(row['last_error']),
-    createdAt: Number(row['created_at'] ?? 0),
-    updatedAt: Number(row['updated_at'] ?? 0),
-  }
-}
-
-function readRunOn(db: DatabaseSync, runId: number): ClawbotReplyRun | null {
-  const row = db.prepare(`SELECT ${RUN_COLS} FROM clawbot_reply_run WHERE id = ? LIMIT 1`)
-    .get(runId) as Record<string, unknown> | undefined
-  return row === undefined ? null : toRun(row)
-}
-
-function readPartsOn(db: DatabaseSync, runId: number): ClawbotReplyPart[] {
-  const rows = db.prepare(`SELECT ${PART_COLS} FROM clawbot_reply_outbox WHERE run_id = ? ORDER BY part_index ASC`)
-    .all(runId) as Array<Record<string, unknown>>
-  return rows.map(toPart)
-}
-
-function readPartOn(db: DatabaseSync, partId: number): ClawbotReplyPart | null {
-  const row = db.prepare(`SELECT ${PART_COLS} FROM clawbot_reply_outbox WHERE id = ? LIMIT 1`)
-    .get(partId) as Record<string, unknown> | undefined
-  return row === undefined ? null : toPart(row)
-}
-
-function hasTable(db: DatabaseSync, name: string): boolean {
-  return db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name) !== undefined
 }
 
 function writeTx<T>(db: DatabaseSync, fn: () => T): T {
@@ -406,7 +330,7 @@ export function listRecoverableReplyRuns(
   const max = Math.min(Math.max(Math.floor(limit), 1), MAX_REPLY_RECOVERABLE_LIMIT)
   return withDb(clawbotDbPath(dir), (db) => {
     if (!hasTable(db, 'clawbot_reply_run')) return []
-    const rows = db.prepare(`SELECT ${RUN_COLS} FROM clawbot_reply_run
+    const rows = db.prepare(`SELECT ${runColsOn(db)} FROM clawbot_reply_run
       WHERE status IN ('debouncing', 'queued', 'generating', 'ready', 'sending')
       ORDER BY CASE WHEN next_attempt_at <= ? THEN 0 ELSE 1 END,
                next_attempt_at ASC, id ASC
@@ -432,7 +356,7 @@ export function listRecoverableReplyRunsAfterId(
   const max = Math.min(Math.max(Math.floor(limit), 1), MAX_REPLY_RECOVERABLE_LIMIT)
   return withDb(clawbotDbPath(dir), (db) => {
     if (!hasTable(db, 'clawbot_reply_run')) return []
-    const rows = db.prepare(`SELECT ${RUN_COLS} FROM clawbot_reply_run
+    const rows = db.prepare(`SELECT ${runColsOn(db)} FROM clawbot_reply_run
       WHERE status IN ('debouncing', 'queued', 'generating', 'ready', 'sending')
         AND id > ?
       ORDER BY id ASC
@@ -664,6 +588,7 @@ export function saveReplyPartsClaimed(
   claim: ClawbotReplyGenerationClaim,
   parts: readonly ClawbotReplyPartInput[],
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyPart[] | null {
   const id = positiveInt(claim.run.id, 'runId')
   const at = timestamp(now)
@@ -676,15 +601,19 @@ export function saveReplyPartsClaimed(
       const lease = leaseState(row)
       if (!sameLease(lease, claim.lease)) return null
       const status = row['status']
-      if (status === 'ready') return readPartsOn(db, id)
+      if (status === 'ready') {
+        setRunResultOn(db, id, resultJson)
+        return readPartsOn(db, id)
+      }
       if (status !== 'generating') return null
       const run = requireRun(db, id)
       const saved = saveReplyPartsOn(db, run, parts, at)
       const updated = db.prepare(`UPDATE clawbot_reply_run
-        SET status = 'ready', next_attempt_at = ?, lease_until = 0, updated_at = ?
+        SET status = 'ready', next_attempt_at = ?, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ? AND status = 'generating'
           AND lease_owner = ? AND lease_fence = ?`)
-        .run(at, at, id, claim.lease.owner, claim.lease.fence)
+        .run(at, at, resultJsonOrNull(resultJson), id, claim.lease.owner, claim.lease.fence)
       if (Number(updated.changes) !== 1) throw new Error(`回复 run ${id} 生成 claim 已变化，分段写入已回滚`)
       return saved
     })
@@ -698,6 +627,7 @@ export function markReplyRunRetryClaimed(
   error: string | null = null,
   nextAttemptAt?: number,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
   const id = positiveInt(claim.run.id, 'runId')
   const at = timestamp(now)
@@ -710,13 +640,17 @@ export function markReplyRunRetryClaimed(
       if (row === undefined) return null
       const lease = leaseState(row)
       if (!sameLease(lease, claim.lease)) return null
-      if (row['status'] === 'queued') return requireRun(db, id)
+      if (row['status'] === 'queued') {
+        setRunResultOn(db, id, resultJson)
+        return requireRun(db, id)
+      }
       if (row['status'] !== 'generating') return null
       const updated = db.prepare(`UPDATE clawbot_reply_run
-        SET status = 'queued', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?
+        SET status = 'queued', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ? AND status = 'generating'
           AND lease_owner = ? AND lease_fence = ?`)
-        .run(error, next, at, id, claim.lease.owner, claim.lease.fence)
+        .run(error, next, at, resultJsonOrNull(resultJson), id, claim.lease.owner, claim.lease.fence)
       if (Number(updated.changes) !== 1) return null
       return requireRun(db, id)
     })
@@ -729,6 +663,7 @@ export function markReplyRunFailedClaimed(
   claim: ClawbotReplyGenerationClaim,
   error: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
   const id = positiveInt(claim.run.id, 'runId')
   const at = timestamp(now)
@@ -740,13 +675,17 @@ export function markReplyRunFailedClaimed(
       if (row === undefined) return null
       const lease = leaseState(row)
       if (!sameLease(lease, claim.lease)) return null
-      if (row['status'] === 'failed') return requireRun(db, id)
+      if (row['status'] === 'failed') {
+        setRunResultOn(db, id, resultJson)
+        return requireRun(db, id)
+      }
       if (row['status'] !== 'generating') return null
       const updated = db.prepare(`UPDATE clawbot_reply_run
-        SET status = 'failed', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?
+        SET status = 'failed', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ? AND status = 'generating'
           AND lease_owner = ? AND lease_fence = ?`)
-        .run(error, at, at, id, claim.lease.owner, claim.lease.fence)
+        .run(error, at, at, resultJsonOrNull(resultJson), id, claim.lease.owner, claim.lease.fence)
       if (Number(updated.changes) !== 1) return null
       return requireRun(db, id)
     })
@@ -759,6 +698,7 @@ export function markReplyRunSkippedClaimed(
   claim: ClawbotReplyGenerationClaim,
   reason: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
   const id = positiveInt(claim.run.id, 'runId')
   const at = timestamp(now)
@@ -769,14 +709,18 @@ export function markReplyRunSkippedClaimed(
         FROM clawbot_reply_run WHERE id = ? LIMIT 1`).get(id) as Record<string, unknown> | undefined
       if (row === undefined) return null
       if (!sameLease(leaseState(row), claim.lease)) return null
-      if (row['status'] === 'skipped') return requireRun(db, id)
+      if (row['status'] === 'skipped') {
+        setRunResultOn(db, id, resultJson)
+        return requireRun(db, id)
+      }
       if (TERMINAL_RUN_STATUSES.has(row['status'] as ClawbotReplyRunStatus)) return null
       if (row['status'] !== 'generating') return null
       const updated = db.prepare(`UPDATE clawbot_reply_run
-        SET status = 'skipped', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?
+        SET status = 'skipped', last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ? AND status = 'generating'
           AND lease_owner = ? AND lease_fence = ?`)
-        .run(reason, at, at, id, claim.lease.owner, claim.lease.fence)
+        .run(reason, at, at, resultJsonOrNull(resultJson), id, claim.lease.owner, claim.lease.fence)
       if (Number(updated.changes) !== 1) return null
       return requireRun(db, id)
     })
@@ -942,6 +886,7 @@ export function failReplyPartAndRunClaimed(
   claim: ClawbotReplySendClaim,
   error: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyFailedClaimResult | null {
   const id = positiveInt(claim.part.id, 'partId')
   const at = timestamp(now)
@@ -960,6 +905,7 @@ export function failReplyPartAndRunClaimed(
       if (!sameLease(leaseState(runRow), claim.runLease)) return null
 
       if (partRow['status'] === 'failed' && runRow['status'] === 'failed') {
+        setRunResultOn(db, runId, resultJson)
         return { part: readPartOn(db, id) as ClawbotReplyPart, run: requireRun(db, runId) }
       }
       if (partRow['status'] !== 'sending') return null
@@ -973,10 +919,10 @@ export function failReplyPartAndRunClaimed(
       if (Number(partUpdated.changes) !== 1) return null
       const runUpdated = db.prepare(`UPDATE clawbot_reply_run
         SET status = 'failed', last_error = ?, next_attempt_at = ?,
-            lease_until = 0, updated_at = ?
+            lease_until = 0, updated_at = ?, result_json = COALESCE(?, result_json)
         WHERE id = ? AND status NOT IN ('done', 'failed', 'skipped')
           AND lease_owner = ? AND lease_fence = ?`)
-        .run(error, at, at, runId, claim.runLease.owner, claim.runLease.fence)
+        .run(error, at, at, resultJsonOrNull(resultJson), runId, claim.runLease.owner, claim.runLease.fence)
       if (Number(runUpdated.changes) !== 1) {
         throw new Error(`回复 run ${runId} 发送 claim 已变化，失败回填已回滚`)
       }
@@ -994,6 +940,7 @@ function markReplyRunTerminalClaimed(
   status: 'done' | 'failed',
   error: string | null,
   now: number,
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
   const runId = positiveInt(claim.part.runId, 'runId')
   const at = timestamp(now)
@@ -1004,7 +951,10 @@ function markReplyRunTerminalClaimed(
         FROM clawbot_reply_run WHERE id = ? LIMIT 1`).get(runId) as Record<string, unknown> | undefined
       if (row === undefined) return null
       if (!sameLease(leaseState(row), claim.runLease)) return null
-      if (row['status'] === status) return requireRun(db, runId)
+      if (row['status'] === status) {
+        setRunResultOn(db, runId, resultJson)
+        return requireRun(db, runId)
+      }
       if (TERMINAL_RUN_STATUSES.has(row['status'] as ClawbotReplyRunStatus)) return null
       if (status === 'done') {
         const unsent = Number((db.prepare(`SELECT COUNT(*) AS n FROM clawbot_reply_outbox
@@ -1012,9 +962,11 @@ function markReplyRunTerminalClaimed(
         if (unsent > 0) return null
       }
       db.prepare(`UPDATE clawbot_reply_run
-        SET status = ?, last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?
+        SET status = ?, last_error = ?, next_attempt_at = ?, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ? AND lease_owner = ? AND lease_fence = ?`)
-        .run(status, error, at, at, runId, claim.runLease.owner, claim.runLease.fence)
+        .run(status, error, at, at, resultJsonOrNull(resultJson), runId,
+          claim.runLease.owner, claim.runLease.fence)
       return requireRun(db, runId)
     })
   })
@@ -1030,8 +982,9 @@ export function markReplyRunDoneClaimed(
   dir: string,
   claim: ClawbotReplySendClaim,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
-  return markReplyRunTerminalClaimed(dir, claim, 'done', null, now)
+  return markReplyRunTerminalClaimed(dir, claim, 'done', null, now, resultJson)
 }
 
 /** 发送阶段整条 run 永久失败；同样受最后一次 send claim 的 owner/fence 保护。 */
@@ -1040,8 +993,9 @@ export function markReplyRunFailedAfterSendClaimed(
   claim: ClawbotReplySendClaim,
   error: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
-  return markReplyRunTerminalClaimed(dir, claim, 'failed', error, now)
+  return markReplyRunTerminalClaimed(dir, claim, 'failed', error, now, resultJson)
 }
 
 /** 开始一次生成尝试；attempts 加一，并设置生成租约。 */
@@ -1123,6 +1077,7 @@ function markReplyRunTerminalIfIdle(
   status: 'done' | 'failed' | 'skipped',
   error: string | null,
   now: number,
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
   const id = positiveInt(runId, 'runId')
   const at = timestamp(now)
@@ -1133,7 +1088,9 @@ function markReplyRunTerminalIfIdle(
         WHERE id = ? LIMIT 1`).get(id) as { status?: string, lease_until?: number } | undefined
       if (row === undefined) return null
       if (TERMINAL_RUN_STATUSES.has(row.status as ClawbotReplyRunStatus)) {
-        return row.status === status ? requireRun(db, id) : null
+        if (row.status !== status) return null
+        setRunResultOn(db, id, resultJson)
+        return requireRun(db, id)
       }
       if (Number(row.lease_until ?? 0) > at) return null
       const activeParts = Number((db.prepare(`SELECT COUNT(*) AS n FROM clawbot_reply_outbox
@@ -1162,14 +1119,15 @@ function markReplyRunTerminalIfIdle(
       }
       const updated = db.prepare(`UPDATE clawbot_reply_run
         SET status = ?, last_error = ?, next_attempt_at = ?,
-            lease_owner = NULL, lease_until = 0, updated_at = ?
+            lease_owner = NULL, lease_until = 0, updated_at = ?,
+            result_json = COALESCE(?, result_json)
         WHERE id = ?
           AND status NOT IN ('done', 'failed', 'skipped')
           AND lease_until <= ?
           AND NOT EXISTS (
             SELECT 1 FROM clawbot_reply_outbox
             WHERE run_id = ? AND lease_until > ?
-          )`).run(status, error, at, at, id, at, id, at)
+          )`).run(status, error, at, at, resultJsonOrNull(resultJson), id, at, id, at)
       if (Number(updated.changes) !== 1) return null
       return requireRun(db, id)
     })
@@ -1181,8 +1139,9 @@ export function markReplyRunDoneIfIdle(
   dir: string,
   runId: number,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
-  return markReplyRunTerminalIfIdle(dir, runId, 'done', null, now)
+  return markReplyRunTerminalIfIdle(dir, runId, 'done', null, now, resultJson)
 }
 
 /** 无活动 claim 时把 run 标记为永久失败。 */
@@ -1191,8 +1150,9 @@ export function markReplyRunFailedIfIdle(
   runId: number,
   error: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
-  return markReplyRunTerminalIfIdle(dir, runId, 'failed', error, now)
+  return markReplyRunTerminalIfIdle(dir, runId, 'failed', error, now, resultJson)
 }
 
 /** 无活动 claim 时按策略跳过 run。 */
@@ -1201,8 +1161,9 @@ export function markReplyRunSkippedIfIdle(
   runId: number,
   reason: string | null = null,
   now: number = Date.now(),
+  resultJson?: string | null,
 ): ClawbotReplyRun | null {
-  return markReplyRunTerminalIfIdle(dir, runId, 'skipped', reason, now)
+  return markReplyRunTerminalIfIdle(dir, runId, 'skipped', reason, now, resultJson)
 }
 
 /**

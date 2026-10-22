@@ -148,7 +148,7 @@ const CITY_ALIAS: Record<string, string> = {
   Changping: '昌平区', Daxing: '大兴区', Fengtai: '丰台区', East: '东城区',
   West: '西城区', 'Pudong New District': '浦东新区', Changning: '长宁区',
   Xuhui: '徐汇区', Minhang: '闵行区', Jing: '荆州', Po: '香港仔',
-  Taipa: '氹仔', Banan: '巴南区',
+  Taipa: '氹仔', Banan: '巴南区', 'New York': '纽约', York: '约克',
 }
 
 /** Resolve one region label: key -> Chinese (or Chinese -> key -> Chinese). */

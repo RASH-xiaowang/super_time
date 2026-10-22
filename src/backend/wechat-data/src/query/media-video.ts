@@ -35,9 +35,10 @@ function messageShardFiles(decryptedDir: string): string[] {
  *
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root.
- * @param username - conversation username.
- * @param localId - message local id.
+ * @param username - conversation username; empty when only an MD5 hint is available.
+ * @param localId - message local id; 0 when only an MD5 hint is available.
  * @param wechatBaseDir - raw WeChat data root (…/xwechat_files/<wxid>_<hash>)，用来定位 msg/video。
+ * @param md5Hint - revoked record's media md5; used only after the message locator misses.
  * @returns cover data URL (jpg) when available, plus the on-disk video path.
  */
 export function resolveVideoInfo(
@@ -46,9 +47,17 @@ export function resolveVideoInfo(
   username: string,
   localId: number,
   wechatBaseDir?: string,
+  md5Hint?: string,
 ): { available: boolean; md5?: string; coverUrl?: string; videoPath?: string; error?: string } {
-  const md5 = resolveVideoMd5(decryptedDir, username, localId)
-  if (!md5) return { available: false, error: '未找到视频 MD5' }
+  const hasLocator = username.trim() !== '' && Number.isFinite(localId) && localId > 0
+  const locatorMd5 = hasLocator ? normalizeMd5(resolveVideoMd5(decryptedDir, username, localId)) : undefined
+  const md5 = locatorMd5 ?? normalizeMd5(md5Hint)
+  if (!md5) {
+    return {
+      available: false,
+      error: hasLocator ? '未找到视频 MD5' : '缺少视频 MD5 或消息定位信息',
+    }
+  }
   const found = findVideoArtifacts(wechatBaseDir, md5)
   // 1. 全局解码缓存（与图片同源：批量解密产物，md5 独占、与用户名无关）
   for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
@@ -57,8 +66,8 @@ export function resolveVideoInfo(
     try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
   }
   // 2. 会话内的解码缓存（旧产物路径）
-  const userDir = join(decodedDir, username)
-  if (existsSync(userDir)) {
+  const userDir = username.trim() !== '' ? join(decodedDir, username) : ''
+  if (userDir !== '' && existsSync(userDir)) {
     for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
       const p = join(userDir, md5 + '.' + ext)
       if (!existsSync(p)) continue
@@ -80,6 +89,12 @@ export function resolveVideoInfo(
   return { available: false, md5, error: '封面与视频文件都不在本地，在微信里打开一次后会缓存' }
 }
 
+/** Normalize a caller-provided MD5; reject anything that is not a 32-char hex digest. */
+function normalizeMd5(value: string | null | undefined): string | undefined {
+  const md5 = String(value ?? '').trim().toLowerCase()
+  return /^[a-f0-9]{32}$/.test(md5) ? md5 : undefined
+}
+
 /** Message MD5 for one video message, scanned across the message shards. */
 function resolveVideoMd5(decryptedDir: string, username: string, localId: number): string | null {
   const table = msgTableName(username)
@@ -94,7 +109,7 @@ function resolveVideoMd5(decryptedDir: string, username: string, localId: number
       if (!packed) continue
       const row = db.prepare('SELECT "' + packed + '" AS p FROM "' + table + '" WHERE local_id = ? AND (local_type = 43 OR local_type % 4294967296 = 43) LIMIT 1').get(localId) as { p?: unknown } | undefined
       const md5 = row ? extractMd5FromPacked(row.p) : null
-      if (md5) return md5
+      if (md5) return normalizeMd5(md5) ?? null
     } catch { /* 换下一个分片 */ } finally { db.close() }
   }
   return null
@@ -130,4 +145,3 @@ function toJpegDataUrl(bytes: Buffer, ext: string): string {
   const mime = ext === 'jpg' ? 'jpeg' : ext
   return 'data:image/' + mime + ';base64,' + Buffer.from(bytes).toString('base64')
 }
-

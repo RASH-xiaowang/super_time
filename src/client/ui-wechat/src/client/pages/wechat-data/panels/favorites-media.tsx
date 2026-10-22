@@ -307,7 +307,7 @@ function FavoriteVideo({ part }: { part: FavItemPart }): React.JSX.Element {
           <span className={css.favVideoPlay}>{loading ? '加载中…' : videoKey === '' ? '无视频文件' : '播放视频'}</span>
         </button>
       )}
-      {error !== '' && <div className={kitCss.textMeta}>{error}</div>}
+      {error !== '' && <div className={kitCss.textMeta} role="alert">{error}</div>}
     </div>
   )
 }
@@ -376,7 +376,7 @@ function FavoriteFile({ part, updateTime }: { part: FavItemPart; updateTime: num
         </span>
         <span className={css.favFileAction} aria-hidden="true">{loading ? '…' : '↓'}</span>
       </button>
-      {error !== '' && <div className={kitCss.textMeta}>{error}</div>}
+      {error !== '' && <div className={kitCss.textMeta} role="alert">{error}</div>}
     </div>
   )
 }

@@ -124,7 +124,7 @@ export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React
       >
         {/* 头像尺寸与 --wx-avatar 令牌同源（微信桌面端官方值 40px），别在两处各写一个数 */}
         <Avatar name={avName} username={avUsername} size={40} />
-        <div className={css.msgCol}>
+        <div className={css.msgCol} data-msg-col>
           {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
           <span className={css.msgTimeChip}>
             {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}

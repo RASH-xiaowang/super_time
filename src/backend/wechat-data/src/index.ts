@@ -41,6 +41,12 @@ export type { CacheBudgetUsage } from './query/cache-budget.ts'
 export { sqliteConnectionStats } from './sqlite-connection.ts'
 
 /**
+ * 生成器尚未覆盖的 `@Remote` 参数 schema（宿主加载后与生成表合并）。
+ * 只含参数形状；见 `remote-arg-schema-overlay.ts` 的登记条件。
+ */
+export { REMOTE_ARG_SCHEMA_OVERLAY } from './remote-arg-schema-overlay.ts'
+
+/**
  * Register the WeChat data gateway.
  * @param ctx - Cordis context.
  */

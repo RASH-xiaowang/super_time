@@ -21,7 +21,8 @@ import {
   IconPlayOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { ChatsView } from './chats-view.tsx'
-import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
+import { MSG_MENU_ITEM_HEIGHT, MSG_MENU_WIDTH, type MsgMenuAnchor } from './chats-msg-menu.tsx'
+import { useChatsMenuAction, useChatsMessageTools } from './chats-message-tools.tsx'
 import { useChatsThread } from './chats-thread.tsx'
 import { useChatsMsgSearch } from './chats-msg-search.tsx'
 import { useChatsGroupInfo } from './chats-group-info.tsx'
@@ -34,7 +35,7 @@ export { isEnterpriseChat } from './chats-support.tsx'
 import { SESSIONS_REFRESH_MIN_INTERVAL_MS } from './chats-support.tsx'
 export type { ViewerImage } from './chats-media.tsx'
 import type { ChatView } from './chats-support.tsx'
-import { AVATAR_CACHE_MAX, Avatar, FILE_STYLE, IconCalendar, IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, IconPin, MsgMenuAction, MsgMenuItem, POLL_HIDDEN_MS, POLL_VISIBLE_MS, TransferArrowGlyph, TransferCheckGlyph, avatarCache, buildMsgMenu, copyTextWithNotice, decodeEntities, estimateMsgItemHeight, fileStyle, isEnterpriseChat, isKefuSession, itemLocalId, liveStatusText, msgItemKey, openLink, openMessageFileWithNotice, quoteTypeLabel, sessionInView, transferStateKey, transferStatusLabel, unreadTitle } from './chats-support.tsx'
+import { AVATAR_CACHE_MAX, Avatar, FILE_STYLE, IconCalendar, IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, IconPin, POLL_HIDDEN_MS, POLL_VISIBLE_MS, TransferArrowGlyph, TransferCheckGlyph, avatarCache, buildMsgMenu, copyTextWithNotice, decodeEntities, estimateMsgItemHeight, fileStyle, isEnterpriseChat, isKefuSession, itemLocalId, liveStatusText, msgItemKey, openLink, openMessageFileWithNotice, quoteTypeLabel, sessionInView, transferStateKey, transferStatusLabel, unreadTitle } from './chats-support.tsx'
 import { IconQuoteCard, IconVideoCallOutline, IconVoiceWaves, ImageViewer, MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageImageGroup, MessageLocation, MessageSystem, MessageThumb, MessageVideo, MessageVoice, ViewerImage, currentVoiceAudio, fmtCallDuration, quoteKindIcon, voiceWidth } from './chats-media.tsx'
 import { CARD_KINDS, LabeledCard, LinkCard, MediaCoverCard, MessageBody, MpNewsCard, OpenFileCard, PayStatusLine, RichCard, mpArticlesOf } from './chats-cards.tsx'
 import { CardFoot } from './chats-card-foot.tsx'
@@ -284,7 +285,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [sessionsPager.refresh])
 
   /** Clear the current session's draft (only the local decrypted copy). */
-  const { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editNotice, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
+  const { clearAllDrafts, clearDraft, copyMsgJson, doReset, editNotice, editedIds, editedOpen, editing, edits, flashEditNotice, loadEdits, msgMenu, openEdits, reloadCurrent, searchMode, sessionListRef, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
+  const { controller: messageTools, openInfo, openEditor, openPoster, openSource } = useChatsMessageTools({ curSession, flash: flashEditNotice, reloadCurrent, loadEdits })
   const cancelActiveSearch = useCallback((): void => {
     const jobId = activeSearchJobRef.current
     activeSearchJobRef.current = null
@@ -445,16 +447,16 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   /**
    * 在光标处打开消息菜单：桌面端右键、手机端长按（两个入口共用，见 MsgMenuAnchor）。
    * 坐标夹进视口（留 8px 余量）。高度按条目数估算：估大了只是留白，估小了最后一条
-   * 会被挤出视口，所以按 34px/条 + 16px 走，菜单本体另有 max-height + overflow 兜底。
-   * ≤560 那档坐标不算数：菜单是贴底 sheet（44px 触摸目标会让上面 34px/条的估算偏小）。
+   * 会被挤出视口，所以按菜单常量逐条累加，菜单本体另有 max-height + overflow 兜底。
+   * ≤560 那档坐标不算数：菜单是贴底 sheet（44px 触摸目标会让桌面档的估算偏小）。
    * @param ev - 右键或长按事件（只取坐标与 preventDefault）。
    * @param m - the target message.
    * @param kind - its render kind.
    */
   const openMsgMenu = useCallback((ev: MsgMenuAnchor, m: WechatMessage, kind: RenderKind): void => {
     ev.preventDefault()
-    const estH = buildMsgMenu(m, kind).length * 34 + 16
-    const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 184))
+    const estH = buildMsgMenu(m, kind).length * MSG_MENU_ITEM_HEIGHT + 10
+    const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - MSG_MENU_WIDTH - 8))
     const y = Math.max(8, Math.min(ev.clientY, window.innerHeight - estH - 8))
     setMsgMenu({ x, y, m, kind })
   }, [])
@@ -465,18 +467,7 @@ const {
     calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calTop, calTotal, calYear,
     jumpToDay, openCalendar, refreshCurrentMonth, switchCalMonth,
   } = useChatsCalendar({ curSession, openSessionAndLocate, setCalOpen, setMsgError })
-  const runMenuAction = useCallback((item: MsgMenuItem, m: WechatMessage): void => {
-    switch (item.action) {
-      case 'copyText': copyMsgText(item.arg ?? ''); break
-      case 'copyJson': copyMsgJson(m); break
-      case 'openLink': openLink(item.arg ?? ''); break
-      case 'openViewer': openViewer(m); break
-      case 'openFile': openFileFromMenu(item.arg ?? '', m); break
-      case 'openChatlog': if (m.rich) openChatlog(m.rich); break
-      case 'edit': void onEditFn(m); break
-      default: break
-    }
-  }, [copyMsgText, copyMsgJson, openViewer, openFileFromMenu, openChatlog, onEditFn])
+  const runMenuAction = useChatsMenuAction({ copyText: copyMsgText, copyJson: copyMsgJson, openLink, openViewer, openFile: openFileFromMenu, openChatlog: m => { if (m.rich) openChatlog(m.rich) }, openPoster, openSource, openInfo, openEditor })
 
   /** 菜单打开期间：Esc、滚动、改窗口大小都关闭它（微信点空白处即关）。 */
   useEffect(() => {
@@ -554,13 +545,13 @@ const {
     edited: { doReset, editedOpen, editing, edits, setEditedOpen },
     exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportProgress, exportSession, exporting, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
     groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, onExport: () => setExportOpen(true), setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
-    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
   }
 
   // 编辑/草稿与复制/打开文件共用一条回执（同一时刻不会同时做两件事；都有值时编辑优先）。
   const headerNotice = editNotice ?? actionNotice
 
   return (
-    <ChatsView state={viewState} notice={headerNotice} indexProgress={indexProgress} onCancelIndexBuild={cancelIndexBuild} onBackToList={closeCurrentSession} />
+    <ChatsView state={viewState} messageTools={messageTools} notice={headerNotice} indexProgress={indexProgress} onCancelIndexBuild={cancelIndexBuild} onBackToList={closeCurrentSession} />
   )
 }

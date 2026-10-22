@@ -1,0 +1,597 @@
+{
+  "version": 2,
+  "updatedAt": "2026-10-22",
+  "statusSemantics": {
+    "requestStatus": {
+      "meaning": "请求进入工具循环前的安全门禁。accepted 只表示未被 profile、会话范围或来源约束拒绝，不表示最终有答案。",
+      "values": ["accepted", "blocked"]
+    },
+    "answerStatus": {
+      "meaning": "请求被接受且仍有可用证据时的最终回答状态；没有可用证据时以 fallbackStatus 为准。每格用 statusSelector 明确采用哪一个。",
+      "values": ["ok", "degraded", "insufficient", "needs_clarification", "failed", "blocked"]
+    },
+    "fallbackStatus": {
+      "meaning": "没有可用证据或只能返回兜底文本时的最终回答状态；null 表示该异常不允许兜底。",
+      "values": ["ok", "degraded", "insufficient", "needs_clarification", "failed", "blocked", null]
+    }
+  },
+  "thresholdEvaluation": {
+    "status": "not-measured",
+    "note": "阈值已定义，但仓库尚无固定评测集和评测脚本；定向单测通过不等于质量阈值已达成。"
+  },
+  "profiles": {
+    "wechat-ask": {
+      "label": "微信问答",
+      "dataScope": "wechat",
+      "allowedTools": [
+        "search_messages",
+        "search_semantic",
+        "search_hybrid",
+        "aggregate_messages",
+        "list_sessions",
+        "get_session_messages",
+        "get_message_context",
+        "search_contacts",
+        "get_contact_detail",
+        "search_moments",
+        "search_favorites",
+        "search_files",
+        "search_records",
+        "search_kb"
+      ],
+      "forbiddenTools": [],
+      "sessionScope": "caller-optional",
+      "kbMode": "optional"
+    },
+    "session-ask": {
+      "label": "会话内 AI 问答",
+      "dataScope": "wechat",
+      "allowedTools": [
+        "search_messages",
+        "search_semantic",
+        "get_session_messages",
+        "get_message_context",
+        "aggregate_messages",
+        "search_hybrid"
+      ],
+      "forbiddenTools": [
+        "list_sessions",
+        "search_contacts",
+        "get_contact_detail",
+        "search_moments",
+        "search_favorites",
+        "search_files",
+        "search_records",
+        "search_kb"
+      ],
+      "sessionScope": "locked-current-username",
+      "kbMode": "disabled"
+    },
+    "clawbot-auto": {
+      "label": "ClawBot 集群 AI 自动回复",
+      "dataScope": "kb-only",
+      "allowedTools": [
+        "search_kb"
+      ],
+      "forbiddenTools": [
+        "search_messages",
+        "search_semantic",
+        "search_hybrid",
+        "aggregate_messages",
+        "list_sessions",
+        "get_session_messages",
+        "get_message_context",
+        "search_contacts",
+        "get_contact_detail",
+        "search_moments",
+        "search_favorites",
+        "search_files",
+        "search_records"
+      ],
+      "sessionScope": "none",
+      "kbMode": "required"
+    }
+  },
+  "anomalies": {
+    "empty": {
+      "meaning": "工具正常执行但没有任何命中或事实",
+      "requestStatus": "accepted",
+      "answerStatus": "insufficient",
+      "fallbackStatus": null,
+      "expectedEvidenceState": "missing",
+      "statusRule": "纯空结果必须是 insufficient；不得把“没有命中”说成 blocked、failed 或 degraded。",
+      "mustNotBeStatuses": ["ok", "blocked", "failed", "degraded"]
+    },
+    "tool_error": {
+      "meaning": "工具返回结构化失败或上层异常被捕获",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "expectedEvidenceState": "partial-or-missing",
+      "expectedErrorClass": "internal",
+      "statusRule": "仍有可用证据时 answerStatus=degraded；工具全部失败且没有可用证据时必须取 fallbackStatus=failed。",
+      "mustNotBeStatuses": ["ok", "insufficient"]
+    },
+    "tool_timeout": {
+      "meaning": "工具执行超过运行时截止时间",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "expectedEvidenceState": "partial-or-missing",
+      "expectedErrorClass": "timeout",
+      "statusRule": "仍有可用证据时 answerStatus=degraded；工具全部失败且没有可用证据时必须取 fallbackStatus=failed。",
+      "mustNotBeStatuses": ["ok", "insufficient"]
+    },
+    "scope_violation": {
+      "meaning": "请求越过 profile 的数据面或当前会话硬范围",
+      "requestStatus": "blocked",
+      "answerStatus": "blocked",
+      "fallbackStatus": null,
+      "expectedEvidenceState": "missing",
+      "expectedToolErrorCode": "scope_violation",
+      "statusRule": "会话/来源拒绝必须收敛为 blocked；不得降级成普通工具失败或空结果。",
+      "mustNotBeStatuses": ["ok", "degraded", "insufficient", "failed"]
+    },
+    "invalid_arguments": {
+      "meaning": "工具参数缺必填项、类型错误或无法归一化",
+      "requestStatus": "accepted",
+      "answerStatus": "needs_clarification",
+      "fallbackStatus": null,
+      "expectedEvidenceState": "missing",
+      "expectedToolErrorCode": "invalid_arguments",
+      "statusRule": "参数无法安全归一化时要求澄清；不得执行空查询或返回 blocked。",
+      "mustNotBeStatuses": ["ok", "blocked", "failed"]
+    },
+    "malformed_result": {
+      "meaning": "工具返回成功形状但 hits/facts 不是可消费的稳定结构",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "expectedEvidenceState": "partial-or-missing",
+      "expectedErrorClass": "internal",
+      "statusRule": "仍有可用证据时 answerStatus=degraded；畸形结果且没有可用证据时必须取 fallbackStatus=failed。",
+      "mustNotBeStatuses": ["ok", "insufficient"]
+    }
+  },
+  "matrix": [
+    {
+      "profile": "wechat-ask",
+      "anomaly": "empty",
+      "requestStatus": "accepted",
+      "answerStatus": "insufficient",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "evidence.items.length",
+        "evidence.assessment.status",
+        "finalStatus"
+      ],
+      "acceptance": "不得生成无出处事实；应说明没有找到并允许收窄范围"
+    },
+    {
+      "profile": "wechat-ask",
+      "anomaly": "tool_error",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].errorCode",
+        "evidence.stats.failedTools",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "失败来源必须写入 missing/failedTools；有可用证据可 degraded，全部失败且无证据时 finalStatus 必须为 failed，不得伪装成空结果"
+    },
+    {
+      "profile": "wechat-ask",
+      "anomaly": "tool_timeout",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].deadlineExceeded",
+        "toolCalls[].attempts",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "超时必须可分类为 timeout；有可用证据可 degraded，有界重试后全部失败且无证据时 finalStatus 必须为 failed"
+    },
+    {
+      "profile": "wechat-ask",
+      "anomaly": "scope_violation",
+      "requestStatus": "blocked",
+      "answerStatus": "blocked",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls.length",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "越权请求必须在执行工具前阻断，不能靠事后过滤"
+    },
+    {
+      "profile": "wechat-ask",
+      "anomaly": "invalid_arguments",
+      "requestStatus": "accepted",
+      "answerStatus": "needs_clarification",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorCode",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "缺失或非法参数应要求澄清或提供可修复参数，不得静默查空"
+    },
+    {
+      "profile": "wechat-ask",
+      "anomaly": "malformed_result",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].ok",
+        "evidence.stats.malformedHits",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "非法 hits/facts 必须被拒绝且不得进入引用列表；全部不可消费时 finalStatus 必须为 failed"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "empty",
+      "requestStatus": "accepted",
+      "answerStatus": "insufficient",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "evidence.items.length",
+        "evidence.assessment.status",
+        "finalStatus"
+      ],
+      "acceptance": "只能说明当前会话没有证据，不得回退到全库检索"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "tool_error",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].errorCode",
+        "evidence.stats.failedTools",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "当前会话工具失败可 degraded，全部失败且无证据时 finalStatus=failed；会话范围仍是硬约束"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "tool_timeout",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].deadlineExceeded",
+        "toolCalls[].attempts",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "超时重试不得扩大 scope 或换到其他会话；全部失败且无证据时 finalStatus=failed"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "scope_violation",
+      "requestStatus": "blocked",
+      "answerStatus": "blocked",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls.length",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "username 冲突、跨会话 key、全库工具都必须 requestStatus=blocked 且 finalStatus=blocked，不得降级为 failed"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "invalid_arguments",
+      "requestStatus": "accepted",
+      "answerStatus": "needs_clarification",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorCode",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "参数修复不得把 username 改成其他值；无法修复时要求澄清"
+    },
+    {
+      "profile": "session-ask",
+      "anomaly": "malformed_result",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].ok",
+        "evidence.stats.malformedHits",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "必须校验结果 key 属于当前 username；越界或全部不可消费时不得入证据包，finalStatus 必须为 failed"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "empty",
+      "requestStatus": "accepted",
+      "answerStatus": "insufficient",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "evidence.items.length",
+        "evidence.assessment.status",
+        "finalStatus"
+      ],
+      "acceptance": "只能基于知识库与对话上下文兜底，不得读取本机微信数据"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "tool_error",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].errorCode",
+        "evidence.stats.failedTools",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "search_kb 失败时不得回退到消息工具；有证据可 degraded，全部失败且无证据时 finalStatus=failed 并进入审计"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "tool_timeout",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorClass",
+        "toolCalls[].deadlineExceeded",
+        "toolCalls[].attempts",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "超时只能重试 search_kb；dataScope 必须始终为 kb-only，全部失败且无证据时 finalStatus=failed"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "scope_violation",
+      "requestStatus": "blocked",
+      "answerStatus": "blocked",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls.length",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "任何非 search_kb 工具、缺少知识库或请求本机微信数据都必须 requestStatus=blocked 且 finalStatus=blocked，不得降级为 insufficient"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "invalid_arguments",
+      "requestStatus": "accepted",
+      "answerStatus": "needs_clarification",
+      "fallbackStatus": null,
+      "statusSelector": "answerStatus",
+      "expectedEvidenceState": "missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].errorCode",
+        "evidence.items.length",
+        "finalStatus"
+      ],
+      "acceptance": "search_kb 缺 query 时要求澄清，不得以空 query 搜全库"
+    },
+    {
+      "profile": "clawbot-auto",
+      "anomaly": "malformed_result",
+      "requestStatus": "accepted",
+      "answerStatus": "degraded",
+      "fallbackStatus": "failed",
+      "statusSelector": "answerStatus-with-evidence-else-fallbackStatus",
+      "expectedEvidenceState": "partial-or-missing",
+      "assertionFields": [
+        "requestStatus",
+        "toolCalls[].ok",
+        "evidence.stats.malformedHits",
+        "evidence.status",
+        "finalStatus"
+      ],
+      "acceptance": "知识库结果必须带 kb:<kbId>:<chunkId> 稳定键；非法结果不得回复，全部不可消费时 finalStatus=failed"
+    }
+  ],
+  "thresholds": {
+    "intentScopeAccuracy": {
+      "operator": ">=",
+      "value": 0.92,
+      "unit": "ratio"
+    },
+    "sessionCrossScopeLeaks": {
+      "operator": "=",
+      "value": 0,
+      "unit": "count"
+    },
+    "toolTop1Accuracy": {
+      "operator": ">=",
+      "value": 0.9,
+      "unit": "ratio"
+    },
+    "argumentValidationPassRate": {
+      "operator": ">=",
+      "value": 0.99,
+      "unit": "ratio"
+    },
+    "argumentAutoRepairRate": {
+      "operator": ">=",
+      "value": 0.8,
+      "unit": "ratio"
+    },
+    "recallAt20RelativeImprovement": {
+      "operator": ">=",
+      "value": 0.15,
+      "unit": "relative-ratio"
+    },
+    "mrrRelativeImprovement": {
+      "operator": ">=",
+      "value": 0.1,
+      "unit": "relative-ratio"
+    },
+    "aggregateSqlParity": {
+      "operator": ">=",
+      "value": 0.99,
+      "unit": "ratio"
+    },
+    "citationAccuracy": {
+      "operator": ">=",
+      "value": 0.95,
+      "unit": "ratio"
+    },
+    "unsupportedHighRiskValueRate": {
+      "operator": "<=",
+      "value": 0.01,
+      "unit": "ratio"
+    },
+    "zeroEvidenceFabrication": {
+      "operator": "=",
+      "value": 0,
+      "unit": "count"
+    },
+    "coreferenceAccuracy": {
+      "operator": ">=",
+      "value": 0.9,
+      "unit": "ratio"
+    },
+    "sixAnomalyCoverage": {
+      "operator": "=",
+      "value": 1,
+      "unit": "ratio"
+    },
+    "toolLoopP95Ms": {
+      "operator": "<=",
+      "value": 1500,
+      "unit": "milliseconds"
+    },
+    "latencyRegression": {
+      "operator": "<=",
+      "value": 0.1,
+      "unit": "relative-ratio"
+    },
+    "clawbotCitationViolations": {
+      "operator": "=",
+      "value": 0,
+      "unit": "count"
+    },
+    "evidenceKeyStability": {
+      "operator": "=",
+      "value": 1,
+      "unit": "ratio"
+    },
+    "profileWhitelistExactness": {
+      "operator": "=",
+      "value": 1,
+      "unit": "ratio"
+    }
+  },
+  "knownRuntimeGaps": [
+    {
+      "id": "llm-intent-gain-unmeasured",
+      "kind": "test-sync",
+      "profiles": ["wechat-ask", "session-ask", "clawbot-auto"],
+      "anomalies": ["invalid_arguments"],
+      "currentObserved": "低置信/澄清时已接入 LLM 意图复核，并有 4 秒独立 deadline、返回形状校验与规则回退；但尚未用固定评测集证明相对纯规则的准确率增益。",
+      "target": {
+        "requestStatus": "accepted",
+        "answerStatus": "needs_clarification",
+        "fallbackStatus": null
+      },
+      "expectedApi": "用三个 profile 的分层问题集对比规则与规则+LLM 复核的意图准确率和澄清率；LLM 只能细化意图，不能绕过 profile 白名单或范围守卫，超时/异常/非法返回必须回退规则。",
+      "assertionFields": ["requestStatus", "finalStatus"]
+    },
+    {
+      "id": "quality-thresholds-not-measured",
+      "kind": "test-sync",
+      "profiles": ["wechat-ask", "session-ask", "clawbot-auto"],
+      "anomalies": ["empty"],
+      "currentObserved": "Recall@20、MRR、意图准确率、工具 Top-1、指代消解与 p95 仅有门槛，仓库尚无固定评测集和实测结果。",
+      "target": {
+        "requestStatus": "accepted",
+        "answerStatus": "insufficient",
+        "fallbackStatus": null
+      },
+      "expectedApi": "建立三个 profile 的分层问题集与评测脚本，保留基线、变更后结果和失败样本；未跑通前不得宣称阈值已达成。",
+      "assertionFields": ["requestStatus", "finalStatus"]
+    },
+    {
+      "id": "tool-signal-adoption",
+      "kind": "runtime",
+      "profiles": ["wechat-ask", "session-ask", "clawbot-auto"],
+      "anomalies": ["tool_timeout"],
+      "currentObserved": "运行时已把 AbortSignal 注入 ToolContext，并在单次 deadline 触发时 abort；多数底层检索工具尚未主动检查 ctx.signal。",
+      "target": {
+        "requestStatus": "accepted",
+        "answerStatus": "degraded",
+        "fallbackStatus": "failed"
+      },
+      "expectedApi": "逐工具把 ctx.signal 传入数据库/网络调用，deadline 后尽快停止 I/O；无论工具是否响应 signal，运行时都保持超时结果与有界重试。",
+      "assertionFields": ["requestStatus", "toolCalls[].deadlineExceeded", "finalStatus"]
+    }
+  ]
+}

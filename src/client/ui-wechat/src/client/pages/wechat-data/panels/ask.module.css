@@ -5,8 +5,6 @@
    askLayout（单栏，flex:1，不参与滚动；外壳用 kit .panelShell）
    ├─ askPage      统一内容列 max-width 1080px 居中，flex column，gap 12
    │  ├─ PanelHeader     面板头（固定）
-   │  ├─ contextBar      检索上下文条（固定）：范围胶囊 + 模型胶囊
-   │  ├─ scopePanel      时间范围展开面板（按需，固定）
    │  ├─ panelBody       唯一滚动容器
    │  │  └─ askMain / askStack   对话流或空态卡（贴底生长）
    │  ├─ error / optStrip        本次输入的上下文（固定，紧贴输入框上方）
@@ -15,7 +13,7 @@
 
    设计尺度：字号 11/12/13/14/15；圆角 8/10/14/16/999；间距 4/6/8/10/12/16/24；
              控件高 32（触屏 40）、发送键 44、输入框最小高 44。
-   断点：≤900 上下文条换行；≤760 空态示例单列；≤680 单列 + 触屏尺寸，隐藏快捷键提示。
+   断点：≤760 空态示例单列；≤680 单列 + 触屏尺寸，隐藏快捷键提示。
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ── 布局容器 ──────────────────────────────────────────────
@@ -67,154 +65,6 @@
 
 /* 引用详情是右侧**覆盖式抽屉**（见 ask-cite-detail.module.css），不占本行布局 ⇒
    引用打开时对话列不再左移，正文始终满宽。 */
-
-/* ── ② 检索上下文条 ──────────────────────────────────────────
-   三个限定条件（会话 / 时间 / 模型）同形态：32px 胶囊、1px 描边、13px 线性图标、
-   12px 文字、统一箭头。语义分组：左侧「检索什么语料」，右侧「谁来回答」。
-   它们从输入框内部搬到这里，输入框因此只剩「输入 + 发送」两件正事。 */
-.contextBar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 32px;
-  /* 固定带必须 flex-shrink:0 —— `.askPage` 是定高纵向 flex，panelBody 之外的兄弟项
-     默认 `flex: 0 1 auto` 会被压缩。而这里显式写了 `min-height: 32px`，它**取代**了
-     flex 项「内容不可压缩」的自动最小尺寸（自动最小尺寸只在 min-height:auto 时生效），
-     于是窄屏（上下文条换行成两行、面板正文又很矮）时容器被压回 32px，
-     第二行胶囊直接溢出到对话区、与用户气泡叠在一起（375px 实测）。
-     显式 flex-shrink:0 后，压缩全部由 panelBody 承担（它本来就有 min-height:0）。 */
-  flex: 0 0 auto;
-}
-.ctxLabel {
-  font-size: 12px;
-  color: var(--nm-text-2);
-  padding-right: 2px;
-  user-select: none;
-}
-.ctxSpacer { flex: 1 1 auto; min-width: 0; }
-/* 「已限定范围」提示：范围生效时给一个常驻可见的确认（否则用户改完范围无从判断是否生效）。 */
-.ctxHint {
-  font-size: 11px;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: var(--nm-r-pill);
-  color: var(--nm-cyan-text);
-  background: var(--nm-cyan-10);
-  border: 1px solid var(--nm-cyan-20);
-  white-space: nowrap;
-  user-select: none;
-}
-.ctxChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  max-width: 260px;
-  padding: 0 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
-  color: var(--nm-text-2);
-  font-size: var(--nm-fs-sm);
-  font-family: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.ctxChip:hover,
-.ctxChip[data-open] {
-  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
-  background: var(--nm-cyan-10);
-  color: var(--nm-text-1);
-}
-.ctxChip[data-set] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
-.ctxChip[data-unset] .ctxChipName { color: var(--nm-text-3); font-weight: 500; }
-.ctxIcon { flex-shrink: 0; opacity: 0.9; }
-/* 下拉箭头：三个胶囊统一用同一个 ▾ 字形（与 kit Select 自带的 Icon 一致），
-   不再一处 SVG、一处文字。 */
-.ctxCaret {
-  flex-shrink: 0;
-  font-size: var(--nm-fs-xs, 11px);
-  line-height: 1;
-  color: var(--nm-text-3);
-  transition: transform 0.15s;
-}
-.ctxChip[data-open] .ctxCaret { transform: rotate(180deg); }
-.ctxChipName { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); font-weight: 600; }
-/* 「清除」：作用域生效时才出现的轻量动作，不与胶囊争视觉。 */
-.ctxClear {
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--nm-dense-r);
-  background: transparent;
-  color: var(--nm-text-3);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.ctxClear:hover { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
-
-/* 会话范围（Radix Select 触发器）：外观与 .ctxChip 逐条一致。
-   胶囊外壳由 .scopeHost 承担（含边框/底色/hover），领标用与时间/模型 chip 同一套
-   13px 线性 SVG（真实 DOM 节点，不是遮罩）；Radix 的 <button> 被还原成
-   「胶囊内部的一段空白」——无边、无底、继承文字色，只保留点击与键盘语义。 */
-.scopeHost {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 220px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
-  background: transparent;
-  color: var(--nm-text-2);
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.scopeHost:hover,
-.scopeHost:focus-within {
-  border-color: var(--nm-border-hover);
-  background: var(--nm-bg-hover);
-  color: var(--nm-text-1);
-}
-/* 触发器自身的 outline 被清零，焦点指示改由胶囊外壳给出（键盘用户必须看得见焦点）。 */
-.scopeHost:focus-within { box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
-.scopeHost[data-set] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
-.scopeHost button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-}
-.scopeHost button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scopeHost button > span:last-child { flex-shrink: 0; font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); overflow: visible; }
-
-/* 时间范围展开面板（挂在上下文条下方，不挤输入框） */
-.scopePanel {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-card);
-  flex-shrink: 0;
-}
 
 /* ── ③ 对话区（唯一滚动容器）──────────────────────────────────
    不要给 askMain 加 `flex:1; min-height:0`：可伸缩的 flex 项会收缩到容器高度，
@@ -300,8 +150,8 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  min-height: 84px;
+  gap: 6px;
+  min-height: 96px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
@@ -318,18 +168,24 @@
   border-color: var(--nm-border-hover);
   background: var(--nm-bg-hover);
 }
-.emptyExIcon {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  border-radius: var(--nm-dense-r);
-  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+.emptyExTag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, transparent);
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   color: var(--nm-cyan);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  user-select: none;
 }
-.emptyExText { min-width: 0; }
+.emptyExText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .emptyHint { margin-top: 4px; font-size: 12px; color: var(--nm-text-3); }
 
 /* ── 多轮对话 ── */
@@ -453,6 +309,10 @@
 }
 /* 进行中：青色高亮 + 呼吸；跳过：整体压暗（如实说明「这一步没跑」） */
 .stageRow[data-status='running'] .stageMark { background: var(--nm-cyan-20); color: var(--nm-cyan-text); }
+.stageRow[data-status='failed'] .stageMark {
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+  color: var(--nm-danger);
+}
 .stageRow[data-status='skipped'] { opacity: 0.6; }
 .stageDetail {
   min-width: 0;
@@ -556,8 +416,8 @@
   background: var(--nm-cyan);
 }
 /* 引用来源块：2 列网格 + 默认前 4 条折叠（20 条单列平铺会吞没整屏） */
-/* 宽窄按**本块自己的宽度**判定，而不是窗口宽度：会话内 AI 面板（「新对话」）只有
-   384px，它在窗口里往往并排着一个很宽的消息列 —— 窗口媒体查询永远不命中，
+/* 宽窄按**本块自己的宽度**判定，而不是窗口宽度：会话内 AI 面板（「新对话」）比
+   微信问答窄，它在窗口里往往并排着一个很宽的消息列 —— 窗口媒体查询未必命中，
    2 列引用网格就会把每格压到 ~170px（见 .citeGrid 的 @container）。
    container-type 只加内联轴尺寸包含，本块宽度仍由父级决定，不改变布局。 */
 .citeBlock {
@@ -722,6 +582,7 @@
    焦点状态只用背景微亮表达，**不再**把整面换成青色描边 —— 青描边叠上全局
    textarea 的 focus ring 会让输入框看起来套了两层高亮框。 */
 .composer {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -795,6 +656,35 @@ textarea.composerInput:focus-visible { outline: none; }
   background: color-mix(in srgb, var(--nm-brand) 55%, transparent);
   color: var(--nm-on-accent);
 }
+/* 生成中的原位停止键：沿用发送键的尺寸与位置，避免用户为了停止滚到回答末尾。 */
+.sendStop {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--nm-danger) 45%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
+  color: var(--nm-danger);
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s;
+}
+.sendStop:hover {
+  border-color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 16%, transparent);
+}
+.sendStop:focus-visible {
+  outline: 2px solid var(--nm-danger);
+  outline-offset: 2px;
+}
+.sendStopGlyph {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--nm-r-xs);
+  background: currentColor;
+}
 .sendSpinner {
   width: 14px;
   height: 14px;
@@ -836,6 +726,16 @@ textarea.composerInput:focus-visible { outline: none; }
 }
 .optBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 .actionHint { margin-left: auto; font-size: 12px; color: var(--nm-text-3); white-space: nowrap; }
+/* 当前检索范围：不是控件，只是让用户确认「上一轮选的 @ 范围仍生效」。 */
+.scopeActive {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nm-cyan-text);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 隐私说明：输入面下方次级小字（常驻底部，与上方内容同一条左边线） */
 .privacyNote {
@@ -908,29 +808,14 @@ textarea.composerInput:focus-visible { outline: none; }
 }
 
 /* ── 响应式 ─────────────────────────────────────────────────
-   ≤900：上下文条换行堆叠（去掉弹性间隔，让「已限定范围」提示随范围胶囊走）
    ≤760：空态示例单列
    ≤680：触屏尺寸（胶囊 40、优化按钮 36）、引用单列、抽屉表单单列。
-         2026-10-18 Wave 2：这一档原本还隐藏「范围」领标与「Enter 发送 · Shift+Enter
-         换行」提示，审计记 hidden（「范围」low、快捷键提示 medium）。两者都是可读的
-         业务/操作信息，按方案 §2.1 改成可见的窄屏形态：领标缩一档字号；提示允许在
-         页脚换行（页脚 flex-wrap，提示落到第二行也不裁）。 */
-@media (max-width: 900px) {
-  .contextBar { row-gap: 6px; }
-  .ctxSpacer { display: none; }
-  .ctxHint { order: 1; }
-}
+         页脚允许换行，提示落到第二行也不裁。 */
 @media (max-width: 760px) {
   .emptyExGrid { grid-template-columns: 1fr; }
   .emptyExCard { min-height: 0; flex-direction: row; align-items: center; }
 }
 @media (max-width: 680px) {
-  /* 「范围」领标保留（只缩一档字号）：三个胶囊的语义仍靠它串起来。 */
-  .ctxLabel { font-size: 11px; }
-  /* 触屏/窄屏：胶囊抬到 40px（WCAG 2.2 SC 2.5.8 要求 ≥24，这里给足手指余量） */
-  .ctxChip, .scopeHost { height: 40px; }
-  .ctxChip { padding: 0 14px; }
-  .scopeHost { max-width: 100%; }
   .optBtn { height: 36px; }
   /* 快捷键提示：页脚允许换行，提示掉到第二行也不隐藏（窄屏最多折成两行）。 */
   .composerFooter { flex-wrap: wrap; row-gap: 4px; }

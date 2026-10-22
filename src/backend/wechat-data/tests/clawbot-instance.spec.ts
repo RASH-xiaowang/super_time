@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CLAWBOT_SLOT, clawbotDbPath, ensureClawbotStore } from '../src/query/clawbot/clawbot-db.ts'
 import { completeBinding, readBinding, readBindingInternal, renameBinding, unbindBinding } from '../src/query/clawbot/clawbot-binding.ts'
 import { insertClawbotMessage, listClawbotMessages, suppressClawbotMessageIds } from '../src/query/clawbot/clawbot-message.ts'
-import { createClawbotInstance, defaultInstanceConfig, deleteClawbotInstance, listClawbotInstances, readInstanceConfig, saveInstanceConfig } from '../src/query/clawbot/clawbot-instance.ts'
+import { AUTO_REPLY_KB_REQUIRED_MESSAGE, createClawbotInstance, defaultInstanceConfig, deleteClawbotInstance, listClawbotInstances, readInstanceConfig, resolveInstanceConfigForSave, saveInstanceConfig } from '../src/query/clawbot/clawbot-instance.ts'
 import { enqueueOrMergeReplyRun, saveReplyParts } from '../src/query/clawbot/clawbot-reply-store.ts'
 import { addClawbotTokenUsage } from '../src/query/clawbot/clawbot-token.ts'
 
@@ -130,6 +130,56 @@ describe('clawbot 多实例：slot 与配置', () => {
     const dir = root()
     createClawbotInstance(dir) // 建库
     expect(() => saveInstanceConfig(dir, 99, { autoReply: true })).toThrow(/不存在/)
+  })
+
+  it('自动回复硬门禁：显式开启但没有有效知识库 ⇒ 拒绝保存；清空知识库 ⇒ 自动关闭', () => {
+    const dir = root()
+    createClawbotInstance(dir) // 建库（slot 1 由 ensureSchema 补出）
+
+    // 显式要求开启 autoReply、但当前没有知识库：必须给可读原因，并且不能落库成开启态。
+    expect(() => saveInstanceConfig(dir, 1, { autoReply: true })).toThrow(AUTO_REPLY_KB_REQUIRED_MESSAGE)
+    expect(readInstanceConfig(dir, 1).config).toEqual(defaultInstanceConfig(1))
+
+    // 先准备知识库再开启：允许，且 kbId 原样保留。
+    const withKb = saveInstanceConfig(dir, 1, { kbEnabled: true, kbId: 7 })
+    expect(withKb).toMatchObject({ autoReply: false, kbEnabled: true, kbId: 7 })
+    expect(saveInstanceConfig(dir, 1, { autoReply: true })).toMatchObject({ autoReply: true, kbEnabled: true, kbId: 7 })
+
+    // 关闭知识库导致现有自动回复失去运行条件：自动把 autoReply 置 false，并允许保存。
+    const disabled = saveInstanceConfig(dir, 1, { kbEnabled: false })
+    expect(disabled).toMatchObject({ autoReply: false, kbEnabled: false, kbId: 7 })
+    expect(readInstanceConfig(dir, 1).config.autoReply, '不能留下「开着但必然不发送」的矛盾状态').toBe(false)
+
+    // 重新开启知识库不会把 autoReply 悄悄打开；用户仍要显式再开一次。
+    expect(saveInstanceConfig(dir, 1, { kbEnabled: true })).toMatchObject({ autoReply: false, kbEnabled: true, kbId: 7 })
+  })
+
+  it('配置归一矩阵：纯函数对 patch × 当前状态给出同一结论', () => {
+    const current = { slot: 1, autoReply: true, kbEnabled: true, kbId: 7, systemPrompt: '', splitReply: true }
+    // 显式开启 + 有效知识库 ⇒ 开。
+    expect(resolveInstanceConfigForSave({ slot: 1, current, patch: { autoReply: true } }))
+      .toMatchObject({ autoReply: true, kbEnabled: true, kbId: 7 })
+    // 显式开启 + 同时清空知识库 ⇒ 抛错，不做“先清库再开”的静默半状态。
+    expect(() => resolveInstanceConfigForSave({
+      slot: 1,
+      current,
+      patch: { autoReply: true, kbId: null },
+    })).toThrow(AUTO_REPLY_KB_REQUIRED_MESSAGE)
+    // 关闭知识库 + 未显式要求开 ⇒ 自动收敛为关。
+    expect(resolveInstanceConfigForSave({ slot: 1, current, patch: { kbEnabled: false } }))
+      .toMatchObject({ autoReply: false, kbEnabled: false, kbId: 7 })
+    // 关闭知识库 + 同一次 patch 明确要求开 ⇒ 拒绝，不能靠“保留旧库 id”绕过门禁。
+    expect(() => resolveInstanceConfigForSave({
+      slot: 1,
+      current,
+      patch: { autoReply: true, kbEnabled: false },
+    })).toThrow(AUTO_REPLY_KB_REQUIRED_MESSAGE)
+    // 旧库遗留的矛盾配置（已开但无库）在任意保存时收敛为关。
+    expect(resolveInstanceConfigForSave({
+      slot: 1,
+      current: { ...current, kbEnabled: false, kbId: null },
+      patch: { systemPrompt: '  新提示词  ' },
+    })).toMatchObject({ autoReply: false, kbEnabled: false, kbId: null, systemPrompt: '新提示词' })
   })
 
   it('别名（label）：可改可清，且**活过重新绑定与解绑**（2026-10-16）', () => {
@@ -281,7 +331,7 @@ describe('clawbot 多实例：slot 与配置', () => {
   it('实例列表带上配置与会话计数（设置视图一张卡所需的全部信息）', () => {
     const dir = root()
     insertClawbotMessage(dir, { slot: 1, ts: 5000, direction: 'in', content: 'x', msgType: 'text' })
-    saveInstanceConfig(dir, 1, { autoReply: true })
+    saveInstanceConfig(dir, 1, { autoReply: true, kbEnabled: true, kbId: 9 })
     const inst = listClawbotInstances(dir, { since: 0 }).instances[0]
     expect(inst?.slot).toBe(1)
     expect(inst?.config.autoReply).toBe(true)

@@ -42,8 +42,8 @@ export const MUTATIONS_BATCH3E = [
     id: "M450-clawbot-unbind-clears-messages",
     why: "解绑时顺手把接入会话删了 ⇒ 与 PRIVACY.md 白纸黑字的「解绑不删除接入会话」直接相反，且不可恢复；这条在数据层没有别的守卫拦得住。判据：clawbot-binding.spec.ts 的「接入会话一行不丢」。",
     file: "src/backend/wechat-data/src/query/clawbot/clawbot-binding.ts",
-    from: "      sync_buf = NULL, send_context_token = NULL, updated_at = ? WHERE slot = ?`).run(now, now, slot)",
-    to: "      sync_buf = NULL, send_context_token = NULL, updated_at = ? WHERE slot = ?`).run(now, now, slot)\n    db.exec('DELETE FROM clawbot_message')",
+    from: "      sync_buf = NULL, send_context_token = NULL, session_epoch = session_epoch + 1, updated_at = ?\n      WHERE slot = ?`).run(now, now, slot)",
+    to: "      sync_buf = NULL, send_context_token = NULL, session_epoch = session_epoch + 1, updated_at = ?\n      WHERE slot = ?`).run(now, now, slot)\n    db.exec('DELETE FROM clawbot_message')",
     spec: "src/backend/wechat-data/tests/clawbot-binding.spec.ts",
   },
 

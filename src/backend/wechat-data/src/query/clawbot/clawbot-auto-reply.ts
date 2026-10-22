@@ -4,8 +4,8 @@
  * ## 它回答的问题
  *
  * 「收到微信消息时，要不要自动回一条、回什么」。三件事在这里定死：
- *   · **回不回** —— 只看该实例的开关（`autoReply`，默认关）；
- *   · **带不带知识库** —— `kbEnabled && kbId !== null` 才把该库纳入检索（没有「所有库」这种模式）；
+ *   · **回不回** —— 开关（`autoReply`，默认关）**且**有有效知识库时才回；
+ *   · **带哪个知识库** —— `kbEnabled && kbId > 0`，没有「所有库」或「无库纯聊天」模式；
  *   · **谁来答** —— 走注入的 `ask` 能力，也就是与「微信问答」**同一条 ask 管道**
  *     （模型统一由设置里的「对话模型」决定、同过隐私闸与审计）。
  *     本模块**不碰模型、不碰网络**：它只做「决策 + 编排」；正文出网与消息落库
@@ -28,11 +28,15 @@ import type {
   ClawbotAutoReplyStage,
   ClawbotAutoReplyStats,
   ClawbotInstanceConfig,
+  ClawbotReplyAskResult,
+  ClawbotReplyRunDetail,
   ClawbotSendResult,
   OperationCategory,
   OperationStatus,
 } from '../../types.ts'
 import { splitReplyText } from './clawbot-prompt.ts'
+import { AUTO_REPLY_KB_REQUIRED_MESSAGE, hasValidAutoReplyKnowledgeBase } from './clawbot-config-invariant.ts'
+import { mergeReplyRunDetail, replyRunDetailJson } from './clawbot-db.ts'
 import {
   DEFAULT_REPLY_DEBOUNCE_MS,
   MAX_REPLY_RECOVERABLE_LIMIT,
@@ -146,7 +150,7 @@ export type ClawbotAskFn = (
   kbId: number | null,
   systemPrompt: string,
   context?: ClawbotAskContext,
-) => Promise<{ ok: boolean, answer: string, error?: string }>
+) => Promise<ClawbotReplyAskResult>
 
 /** 决策结果（`should` 为假时 `reason` 说明为什么，供审计与用例断言）。 */
 export interface AutoReplyDecision {
@@ -159,21 +163,17 @@ export interface AutoReplyDecision {
 /**
  * 该实例现在该不该自动回复。
  *
- * 只认开关，不看消息内容：**「开了就回」是用户的显式选择**，自动回复不该再自作主张
- * 判断「这句话值不值得回」（那类启发式一旦误判，用户看到的是「有时候回有时候不回」）。
+ * 仍不看消息内容 —— 是否回复由用户开关决定；但 `clawbot-auto` 是 kb-only + requireKb，
+ * 所以开关打开后还必须存在有效知识库（`kbEnabled && kbId > 0`）才允许运行。
  * @param cfg - 该实例的行为配置（每次现读，用户改完立即生效）。
  * @returns 决策（含实际要用的 kbId）。
  */
 export function decideAutoReply(cfg: ClawbotInstanceConfig): AutoReplyDecision {
   if (!cfg.autoReply) return { should: false, reason: '实例未开启自动回复', kbId: null }
-  if (cfg.kbEnabled && cfg.kbId !== null) {
-    return { should: true, reason: '自动回复 + 知识库增强', kbId: cfg.kbId }
+  if (!hasValidAutoReplyKnowledgeBase(cfg)) {
+    return { should: false, reason: AUTO_REPLY_KB_REQUIRED_MESSAGE, kbId: null }
   }
-  if (cfg.kbEnabled) {
-    // 开了增强却没选库：**照常回复**，但按「不检索」处理 —— 沉默比少检索更让人困惑。
-    return { should: true, reason: '自动回复（开了知识库增强但没选库 ⇒ 不检索）', kbId: null }
-  }
-  return { should: true, reason: '自动回复（不检索知识库）', kbId: null }
+  return { should: true, reason: '自动回复 + 知识库增强', kbId: cfg.kbId }
 }
 
 /** 一条候选消息里，本模块关心的那几列。 */
@@ -1194,6 +1194,31 @@ function durableBackoffMs(rt: DurableReplyRuntime, attempts: number): number {
   return Math.min(rt.retryBaseMs * (2 ** Math.max(attempts - 1, 0)), 60_000)
 }
 
+/** 跳过与生成失败共用同一口径；错误详情只保留代码和可读原因，不含回答正文。 */
+function skipRunDetail(runId: number, decision: AutoReplyDecision): string {
+  const errorCode = decision.reason === AUTO_REPLY_KB_REQUIRED_MESSAGE ? 'kb_required' : 'auto_reply_skipped'
+  return replyRunDetailJson(runId, { ok: false, answer: '', error: decision.reason }, {
+    status: 'skipped',
+    statusReason: decision.reason,
+    sendDecision: { send: false, reason: decision.reason, errorCode },
+    errorCode,
+  })
+}
+
+function failedRunDetail(
+  runId: number,
+  reason: string,
+  errorCode: string,
+  result?: ClawbotReplyAskResult,
+): string {
+  return replyRunDetailJson(runId, result ?? { ok: false, answer: '', error: reason }, {
+    status: 'failed',
+    sendDecision: { send: false, error: reason, errorCode },
+    errorCode,
+    error: reason,
+  })
+}
+
 function heartbeatEvery(leaseMs: number): number {
   return Math.max(Math.floor(leaseMs / 3), 50)
 }
@@ -1323,6 +1348,12 @@ async function sendDurableParts(
 ): Promise<void> {
   const { deps, durable } = rt
   let lastClaim: ClawbotReplySendClaim | null = null
+  const sendFailedDetail = (reason: string): string => mergeReplyRunDetail(run.resultJson, run.id, {
+    status: 'failed',
+    sendDecision: { send: false, error: reason, errorCode: 'send_failed' },
+    errorCode: 'send_failed',
+    error: reason,
+  })
 
   for (const part of parts) {
     if (!rt.telemetry.isActive(run.slot, generation)) return
@@ -1331,7 +1362,7 @@ async function sendDurableParts(
     if (part.status === 'failed') {
       const reason = `第 ${String(part.partIndex + 1)} 段此前已永久失败`
       try {
-        if (markReplyRunFailedIfIdle(durable.dir(), run.id, reason) === null) {
+        if (markReplyRunFailedIfIdle(durable.dir(), run.id, reason, undefined, sendFailedDetail(reason)) === null) {
           rt.scheduleRun(run.id, run.slot, durableBackoffMs(rt, part.attempts), generation)
           return
         }
@@ -1373,6 +1404,8 @@ async function sendDurableParts(
           durable.dir(),
           claim,
           `第 ${String(sending.partIndex + 1)} 段发送尝试已达上限`,
+          undefined,
+          sendFailedDetail('发送尝试已达上限'),
         )
         if (failed === null) return
         rt.telemetry.countSendFailedPermanently(reason)
@@ -1420,6 +1453,8 @@ async function sendDurableParts(
             durable.dir(),
             claim,
             `第 ${String(sending.partIndex + 1)} 段发送失败：${reason}`,
+            undefined,
+            sendFailedDetail(reason),
           )
           if (failed === null) return
           rt.telemetry.countSendFailedPermanently(reason)
@@ -1490,7 +1525,16 @@ async function sendDurableParts(
     (cfg.kbEnabled && cfg.kbId !== null ? `（知识库 ${String(cfg.kbId)}）` : '（未检索知识库）'))
 }
 
-async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise<void> {
+interface DurableRunHandling {
+  run: ClawbotReplyRun
+  parts: readonly ClawbotReplyPart[]
+  cfg: ClawbotInstanceConfig
+  decision: AutoReplyDecision
+  generation: number
+}
+
+/** 读取 run、配置与自动回复决策；失败时按原有退避策略重新排期。 */
+function loadDurableRunForHandling(rt: DurableReplyRuntime, runId: number): DurableRunHandling | null {
   const { deps, durable } = rt
   let snap: ClawbotReplyRunSnapshot | null
   try {
@@ -1500,11 +1544,11 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
     rt.telemetry.noteError(reason)
     deps.op('clawbot', 'clawbot_auto_reply', 'fail', '', `run=${String(runId)} 读取失败：${reason}`)
     rt.scheduleRun(runId, null, Math.max(durableBackoffMs(rt, 3), 5_000), null)
-    return
+    return null
   }
-  if (snap === null) return
+  if (snap === null) return null
   const run = snap.run
-  if (run.status === 'done' || run.status === 'failed' || run.status === 'skipped') return
+  if (run.status === 'done' || run.status === 'failed' || run.status === 'skipped') return null
   const generation = rt.currentGeneration(run.slot)
 
   let cfg: ClawbotInstanceConfig
@@ -1516,24 +1560,105 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
     deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(run.slot)}`,
       `run=${String(run.id)} stage=read_config 失败：${reason}`)
     rt.scheduleRun(run.id, run.slot, durableBackoffMs(rt, 1), generation)
-    return
+    return null
   }
+  return { run, parts: snap.parts, cfg, decision: decideAutoReply(cfg), generation }
+}
 
-  if (snap.parts.length > 0) {
-    if (!decideAutoReply(cfg).should) {
-      try {
-        if (markReplyRunSkippedIfIdle(durable.dir(), run.id, '实例已关闭自动回复') === null) {
-          rt.scheduleRun(run.id, run.slot, durableBackoffMs(rt, 1), generation)
-        }
-      } catch (e) {
-        rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-        deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(run.slot)}`,
-          `run=${String(run.id)} stage=mark_skipped 失败：${e instanceof Error ? e.message : String(e)}`)
+/** 已有 outbox 时只做发送；配置中途关闭则按策略跳过，不再重新生成。 */
+async function handleExistingParts(rt: DurableReplyRuntime, state: DurableRunHandling): Promise<void> {
+  const { deps, durable } = rt
+  const { run, parts, cfg, decision, generation } = state
+  if (!decision.should) {
+    try {
+      const skipped = skipRunDetail(run.id, decision)
+      if (markReplyRunSkippedIfIdle(durable.dir(), run.id, decision.reason, undefined, skipped) === null) {
         rt.scheduleRun(run.id, run.slot, durableBackoffMs(rt, 1), generation)
       }
-      return
+    } catch (e) {
+      rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
+      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(run.slot)}`,
+        `run=${String(run.id)} stage=mark_skipped 失败：${e instanceof Error ? e.message : String(e)}`)
+      rt.scheduleRun(run.id, run.slot, durableBackoffMs(rt, 1), generation)
     }
-    await sendDurableParts(rt, run, snap.parts, cfg, generation)
+    return
+  }
+  await sendDurableParts(rt, run, parts, cfg, generation)
+}
+
+/** 生成失败：未到上限回 queued，达到上限落永久失败；均保留已脱敏详情。 */
+function settleGenerationFailure(
+  rt: DurableReplyRuntime,
+  claim: ClawbotReplyGenerationClaim,
+  generating: ClawbotReplyRun,
+  result: ClawbotReplyAskResult,
+  generation: number,
+): void {
+  const { deps, durable } = rt
+  const reason = result.error ?? '未知原因'
+  const failedDetail = failedRunDetail(
+    generating.id,
+    reason,
+    result.errorCode ?? 'generation_failed',
+    result,
+  )
+  rt.telemetry.countGenerationFailed(reason)
+  if (generating.attempts >= rt.maxGenerationAttempts) {
+    try {
+      if (markReplyRunFailedClaimed(durable.dir(), claim, reason, undefined, failedDetail) === null) return
+    } catch (e) {
+      rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
+      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
+        `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
+      rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
+    }
+    deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
+      `run=${String(generating.id)} stage=generate attempts=${String(generating.attempts)}：${reason}`)
+    return
+  }
+  const next = Date.now() + durableBackoffMs(rt, generating.attempts)
+  try {
+    if (markReplyRunRetryClaimed(durable.dir(), claim, reason, next, undefined, failedDetail) === null) return
+  } catch (e) {
+    rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
+    deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
+      `run=${String(generating.id)} stage=mark_retry 失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+  deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
+    `run=${String(generating.id)} stage=generate_retry attempt=${String(generating.attempts)}：${reason}`)
+  rt.scheduleRun(generating.id, generating.slot, Math.max(next - Date.now(), 0), generation)
+}
+
+/** 在生成 claim 下落永久失败；false = 租约已变或写状态抛错，调用方应立即收手。 */
+function failClaimedGeneration(
+  rt: DurableReplyRuntime,
+  claim: ClawbotReplyGenerationClaim,
+  generating: ClawbotReplyRun,
+  reason: string,
+  detail: string,
+  generation: number,
+): boolean {
+  const { deps, durable } = rt
+  try {
+    if (markReplyRunFailedClaimed(durable.dir(), claim, reason, undefined, detail) === null) return false
+    return true
+  } catch (e) {
+    rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
+    deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
+      `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
+    rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
+    return false
+  }
+}
+
+async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise<void> {
+  const state = loadDurableRunForHandling(rt, runId)
+  if (state === null) return
+  const { deps, durable } = rt
+  const { run, parts: outboxParts, cfg, decision, generation } = state
+
+  if (outboxParts.length > 0) {
+    await handleExistingParts(rt, state)
     return
   }
 
@@ -1558,9 +1683,10 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
   }
   const generating = claim.run
 
-  if (!decideAutoReply(cfg).should) {
+  if (!decision.should) {
     try {
-      if (markReplyRunSkippedClaimed(durable.dir(), claim, '实例已关闭自动回复') === null) return
+      const skipped = skipRunDetail(run.id, decision)
+      if (markReplyRunSkippedClaimed(durable.dir(), claim, decision.reason, undefined, skipped) === null) return
     } catch (e) {
       rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
       deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(run.slot)}`,
@@ -1573,7 +1699,8 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
   if (generating.attempts > rt.maxGenerationAttempts) {
     const reason = `生成尝试已达上限 ${String(rt.maxGenerationAttempts)} 次`
     try {
-      if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
+      const detail = failedRunDetail(run.id, reason, 'generation_attempts_exhausted')
+      if (markReplyRunFailedClaimed(durable.dir(), claim, reason, undefined, detail) === null) return
     } catch (e) {
       rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
       deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(run.slot)}`,
@@ -1587,7 +1714,8 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
   if (ask === undefined) {
     const reason = 'ask 能力未注入（自动回复不可用）'
     try {
-      if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
+      const detail = failedRunDetail(run.id, reason, 'ask_unavailable')
+      if (markReplyRunFailedClaimed(durable.dir(), claim, reason, undefined, detail) === null) return
       rt.telemetry.countGenerationFailed(reason)
     } catch (e) {
       rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
@@ -1620,7 +1748,7 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
       heartbeat.loss,
     )
     if (!rt.telemetry.isActive(generating.slot, generation)) return
-    const kbId = cfg.kbEnabled && cfg.kbId !== null ? cfg.kbId : null
+    const kbId = decision.kbId
     result = await withDeadline(
       ask(generating.slot, generating.question, kbId, cfg.systemPrompt, context),
       rt.askTimeoutMs,
@@ -1640,72 +1768,57 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
   if (heartbeat.lost()) return
   if (!rt.telemetry.isActive(generating.slot, generation)) return
   if (!result.ok) {
-    const reason = result.error ?? '未知原因'
-    rt.telemetry.countGenerationFailed(reason)
-    if (generating.attempts >= rt.maxGenerationAttempts) {
-      try {
-        if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
-      } catch (e) {
-        rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-        deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-          `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
-        rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
-      }
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-        `run=${String(generating.id)} stage=generate attempts=${String(generating.attempts)}：${reason}`)
-    } else {
-      const next = Date.now() + durableBackoffMs(rt, generating.attempts)
-      try {
-        if (markReplyRunRetryClaimed(durable.dir(), claim, reason, next) === null) return
-      } catch (e) {
-        rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-        deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-          `run=${String(generating.id)} stage=mark_retry 失败：${e instanceof Error ? e.message : String(e)}`)
-      }
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-        `run=${String(generating.id)} stage=generate_retry attempt=${String(generating.attempts)}：${reason}`)
-      rt.scheduleRun(generating.id, generating.slot, Math.max(next - Date.now(), 0), generation)
-    }
+    settleGenerationFailure(rt, claim, generating, result, generation)
     return
   }
 
+  const answerDetail = replyRunDetailJson(generating.id, result, {
+    status: result.status ?? 'ok',
+    sendDecision: result.sendDecision ?? { send: true, detail: `运行状态 ${result.status ?? 'ok'}` },
+  })
   const text = truncateReply(result.answer)
   if (text === '') {
     const reason = '模型返回空答案，未发送'
-    try {
-      if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
+    const detail = mergeReplyRunDetail(answerDetail, generating.id, {
+      status: 'failed',
+      sendDecision: { send: false, error: reason, errorCode: 'empty_answer' },
+      errorCode: 'empty_answer',
+      error: reason,
+    })
+    if (failClaimedGeneration(rt, claim, generating, reason, detail, generation)) {
       rt.telemetry.countGenerationFailed(reason)
-    } catch (e) {
-      rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-        `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
-      rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
     }
     return
   }
   const parts = cfg.splitReply ? splitReplyText(text) : [text]
   if (parts.length === 0) {
     const reason = '回复分段为空，未发送'
-    try {
-      if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
+    const detail = mergeReplyRunDetail(answerDetail, generating.id, {
+      status: 'failed',
+      sendDecision: { send: false, error: reason, errorCode: 'empty_parts' },
+      errorCode: 'empty_parts',
+      error: reason,
+    })
+    if (failClaimedGeneration(rt, claim, generating, reason, detail, generation)) {
       rt.telemetry.countGenerationFailed(reason)
-    } catch (e) {
-      rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-        `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
-      rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
     }
     return
   }
   let savedParts: ClawbotReplyPart[] | null
   try {
-    savedParts = saveReplyPartsClaimed(durable.dir(), claim, parts)
+    savedParts = saveReplyPartsClaimed(durable.dir(), claim, parts, undefined, answerDetail)
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e)
     rt.telemetry.noteError(reason)
     const next = Date.now() + durableBackoffMs(rt, generating.attempts)
+    const detail = mergeReplyRunDetail(answerDetail, generating.id, {
+      status: 'failed',
+      sendDecision: { send: false, error: reason, errorCode: 'outbox_save_failed' },
+      errorCode: 'outbox_save_failed',
+      error: reason,
+    })
     try {
-      if (markReplyRunRetryClaimed(durable.dir(), claim, reason, next) === null) return
+      if (markReplyRunRetryClaimed(durable.dir(), claim, reason, next, undefined, detail) === null) return
     } catch { /* 保存失败与状态失败同时发生时，恢复器仍会读到原 run */ }
     deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
       `run=${String(generating.id)} stage=save_outbox_retry attempt=${String(generating.attempts)}：${reason}`)
@@ -1727,14 +1840,13 @@ async function handleDurableRun(rt: DurableReplyRuntime, runId: number): Promise
   if (saved === null || saved.parts.length === 0) {
     const reason = 'outbox 落库后读不到分段'
     rt.telemetry.noteError(reason)
-    try {
-      if (markReplyRunFailedClaimed(durable.dir(), claim, reason) === null) return
-    } catch (e) {
-      rt.telemetry.noteError(e instanceof Error ? e.message : String(e))
-      deps.op('clawbot', 'clawbot_auto_reply', 'fail', `slot=${String(generating.slot)}`,
-        `run=${String(generating.id)} stage=mark_failed 失败：${e instanceof Error ? e.message : String(e)}`)
-      rt.scheduleRun(generating.id, generating.slot, durableBackoffMs(rt, generating.attempts), generation)
-    }
+    const detail = mergeReplyRunDetail(answerDetail, generating.id, {
+      status: 'failed',
+      sendDecision: { send: false, error: reason, errorCode: 'outbox_missing' },
+      errorCode: 'outbox_missing',
+      error: reason,
+    })
+    failClaimedGeneration(rt, claim, generating, reason, detail, generation)
     return
   }
   await sendDurableParts(rt, saved.run, saved.parts, cfg, generation)

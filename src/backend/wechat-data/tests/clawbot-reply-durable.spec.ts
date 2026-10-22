@@ -52,8 +52,8 @@ function cfg(patch: Partial<ClawbotInstanceConfig> = {}): ClawbotInstanceConfig 
   return {
     slot: 1,
     autoReply: true,
-    kbEnabled: false,
-    kbId: null,
+    kbEnabled: true,
+    kbId: 1,
     systemPrompt: '',
     splitReply: false,
     ...patch,
@@ -321,6 +321,36 @@ describe('clawbot durable reply：恢复策略与公平调度', () => {
     const snapshot = readReplyRun(dir, run.id)
     expect(snapshot?.run.status).toBe('skipped')
     expect(snapshot?.parts[0]?.status).toBe('pending')
+    expect(h.asks).toEqual([])
+    expect(h.sends).toEqual([])
+  })
+
+  it('无有效知识库导致跳过时写清缺失原因，不误报「已关闭自动回复」', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const dir = root()
+    const run = enqueueOrMergeReplyRun(dir, {
+      slot: 1,
+      targetMessageId: 403,
+      question: '没有知识库不应发送',
+      debounceMs: 0,
+      now: Date.now(),
+    })
+    saveReplyParts(dir, run.id, ['不应发送'], Date.now())
+
+    const h = makeRunner({
+      dir,
+      config: cfg({ autoReply: true, kbEnabled: false, kbId: null }),
+      ask: async () => ({ ok: true, answer: '不应生成' }),
+      send: async () => ({ ok: true, id: 1 }),
+    })
+    h.runner.recover()
+    await tick()
+
+    const snapshot = readReplyRun(dir, run.id)
+    expect(snapshot?.run.status).toBe('skipped')
+    expect(snapshot?.run.lastError, '跳过原因必须能让用户知道是缺知识库，而不是误以为用户关了自动回复')
+      .toContain('自动回复需要选择知识库')
+    expect(snapshot?.run.lastError).not.toContain('实例已关闭自动回复')
     expect(h.asks).toEqual([])
     expect(h.sends).toEqual([])
   })

@@ -67,11 +67,11 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
   /**
    * Look up one video message: cover thumbnail + the on-disk video path.
    * 封面与实体都在真实微信目录 `msg/video` 下，所以要带上数据根目录。
-   * @param options - username and localId of the video message.
+   * @param options - username + localId，或撤回记录里已有的 md5。
    * @returns VideoInfoResult: video cover/thumbnail info.
    */
   @Remote('getVideoInfo')
-  getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
+  getVideoInfo(options: { username?: string; localId?: number; md5?: string }): VideoInfoResult {
   return this.mediaRemotes().getVideoInfo(options)
   }
 
@@ -376,11 +376,11 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
 
   /**
    * Resolve a received message file (msg/file) to a base64 data URL.
-   * @param options - original file name from the message card.
+   * @param options - original file name plus size/createTime/fileMd5 attribution hints.
    * @returns ImageDataUrlResult: data URL or error.
    */
   @Remote('getMessageFile')
-  getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
+  getMessageFile(options: { fileName: string; size?: number; createTime?: number; fileMd5?: string }): ImageDataUrlResult {
   return this.mediaRemotes().getMessageFile(options)
   }
 

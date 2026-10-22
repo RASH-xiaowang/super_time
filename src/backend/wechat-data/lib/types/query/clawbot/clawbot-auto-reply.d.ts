@@ -1,4 +1,4 @@
-import type { ClawbotAutoReplyStage, ClawbotAutoReplyStats, ClawbotInstanceConfig, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts';
+import type { ClawbotAutoReplyStage, ClawbotAutoReplyStats, ClawbotInstanceConfig, ClawbotReplyAskResult, ClawbotSendResult, OperationCategory, OperationStatus } from '../../types.ts';
 /**
  * 自动回复正文的**总长**上限（超出截断并注明）。
  *
@@ -55,11 +55,7 @@ export interface ClawbotAskContext {
  * @param systemPrompt - 该实例的系统提示词（空串 = 用内置拟人化默认值）。
  * @param context - 最近对话与图片（2026-10-18 起；旧注入方可忽略）。
  */
-export type ClawbotAskFn = (slot: number, text: string, kbId: number | null, systemPrompt: string, context?: ClawbotAskContext) => Promise<{
-    ok: boolean;
-    answer: string;
-    error?: string;
-}>;
+export type ClawbotAskFn = (slot: number, text: string, kbId: number | null, systemPrompt: string, context?: ClawbotAskContext) => Promise<ClawbotReplyAskResult>;
 /** 决策结果（`should` 为假时 `reason` 说明为什么，供审计与用例断言）。 */
 export interface AutoReplyDecision {
     should: boolean;
@@ -70,8 +66,8 @@ export interface AutoReplyDecision {
 /**
  * 该实例现在该不该自动回复。
  *
- * 只认开关，不看消息内容：**「开了就回」是用户的显式选择**，自动回复不该再自作主张
- * 判断「这句话值不值得回」（那类启发式一旦误判，用户看到的是「有时候回有时候不回」）。
+ * 仍不看消息内容 —— 是否回复由用户开关决定；但 `clawbot-auto` 是 kb-only + requireKb，
+ * 所以开关打开后还必须存在有效知识库（`kbEnabled && kbId > 0`）才允许运行。
  * @param cfg - 该实例的行为配置（每次现读，用户改完立即生效）。
  * @returns 决策（含实际要用的 kbId）。
  */

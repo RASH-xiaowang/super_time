@@ -1,0 +1,79 @@
+%% Super Time 系统架构（Mermaid 源文件 · 可移植版本）
+%% 与 system-architecture.svg 同源：改这里请同步改 gen-arch.py
+flowchart TB
+  subgraph ENTRY["入口层"]
+    W1["桌面窗口<br/>BrowserWindow · sandbox"]
+    W2["手机浏览器<br/>HTTP + SSE"]
+    W3["RPA / Webhook<br/>8 个厂商适配器"]
+  end
+
+  subgraph RENDERER["渲染进程"]
+    R1["ui-app 入口壳<br/>引导 → 同意 → 许可证"]
+    R2["ui-wechat 数据面板<br/>39 tab / 侧栏 5 组"]
+    R3["panels 167 个视图"]
+    R4["api-*.ts + cache.ts"]
+  end
+
+  subgraph MAIN["Electron 主进程（宿主层）"]
+    M1["main.js 组合根"]
+    M2["ipc-trust / navigation-policy / media-protocol"]
+    M3["call-gates 三道闸"]
+    M4["http-queue 并发闸"]
+    M5["backend-rpc"]
+    M6["backend-supervisor"]
+    M7["llm-http / update / diag-log"]
+    M8["http-server（手机端）"]
+  end
+
+  subgraph WORKER["后端 worker（utilityProcess）"]
+    K1["wechat-worker.js"]
+    K2["wechat-host.js 适配层"]
+    K3["Gateway 继承链<br/>219 @Remote"]
+    K4["query/** 157 文件"]
+    K5["keys/** 11 文件"]
+    K6["retrieval/** + kb/**"]
+    K7["answer-runtime/** + tools/**"]
+    K8["laya/** 本地模型"]
+  end
+
+  subgraph DATA["数据与持久化"]
+    D1[("decrypted/**<br/>SQLCipher → SQLite")]
+    D2[("派生索引<br/>search / vectors / tasks")]
+    D3[("媒体缓存<br/>decoded_images")]
+    D4[("配置与密钥<br/>config / secrets / keys")]
+  end
+
+  subgraph EXTERNAL["外部系统"]
+    E1["LLM Provider<br/>OpenAI 兼容"]
+    E2["微信 CDN / 文章页"]
+    E3["地图 GeoJSON"]
+    E4["HuggingFace / 镜像"]
+    E5["GitHub Releases"]
+    E6["RPA 厂商"]
+  end
+
+  W1 --> R1
+  W2 --> M8
+  W3 --> K4
+  R1 --> R2 --> R3 --> R4
+  R4 -->|"contextBridge"| M1
+  M1 --> M3 --> M4 --> M5
+  M5 -->|"postMessage"| K1
+  K1 --> K2 --> K3
+  K3 --> K4
+  K3 --> K5
+  K3 --> K6
+  K3 --> K7
+  K3 --> K8
+  K4 --> D1
+  K4 --> D2
+  K4 --> D3
+  K5 --> D4
+  K6 --> D2
+  M1 --> M6
+  M7 --> E1
+  M7 --> E5
+  K4 --> E2
+  K4 --> E3
+  K4 --> E4
+  K4 --> E6

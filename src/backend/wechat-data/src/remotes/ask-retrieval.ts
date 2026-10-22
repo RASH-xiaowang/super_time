@@ -17,15 +17,20 @@
  *
  * @module remotes/ask-retrieval
  */
-import { retrieveAskCitations, type AskCitation, type AskChunk } from '../query/ask.ts'
+import { extractAskTerms, retrieveAskCitations, type AskCitation, type AskChunk } from '../query/ask.ts'
 import { buildKbVectorIndex, kbVectorIndexStatus } from '../query/kb-vectors.ts'
+import { runAggregate } from '../query/retrieval/aggregate.ts'
 import { loadRetrievalConfig } from '../query/retrieval/config.ts'
 import { buildVectorIndex, vectorIndexStatus } from '../query/retrieval/embedding.ts'
 import { loadAdaptedWeights } from '../query/retrieval/feedback.ts'
 import { runRetrievalPipeline, type PipelineOutput } from '../query/retrieval/pipeline.ts'
 import type { RerankWeights } from '../query/retrieval/types.ts'
 import { buildTools } from '../query/tools/registry.ts'
+import type {
+  HybridSearchExecution, HybridSearchExecutor, HybridSearchFact, HybridSearchRequest,
+} from '../query/tools/search-hybrid-tool.ts'
 import type { RetrievalTool, ToolContext } from '../query/tools/types.ts'
+import type { AnswerRuntimeEmitStage } from '../query/answer-runtime/types.ts'
 
 /**
  * 把流水线输出摊平成「与旧 `AskRetrievalStats` 同形」的统计对象。
@@ -109,8 +114,24 @@ export interface AskRetrievalInput {
   kbModel: (kbId: number, role: 'embed' | 'rerank') => { model: string }
   /** 已知实体名。 */
   askKnownEntities: () => string[]
+  /** 现在时刻（可注入，便于测试；缺省用系统时间）。 */
+  now?: Date
+  /**
+   * 最终保留的引用条数（缺省 24，上限 60）。
+   *
+   * 这个值现在也供 `search_hybrid` 使用：模型显式传 `limit` 时不能仍被固定截成 24。
+   */
+  limit?: number
   /** 阶段事件发射器（可选）。 */
-  emitStage?: ((stage: { key: string; label: string; status: 'running' | 'done' | 'skipped'; detail?: string }) => void) | undefined
+  emitStage?: AnswerRuntimeEmitStage | undefined
+  /**
+   * 混合检索完成后的旁路回调。
+   *
+   * 反馈闭环需要 retrievalId 与逐篇特征向量，但这些数据不能塞进给模型看的
+   * `ToolResult`（既占上下文又泄漏内部权重）。装配层通过这个回调把它们带到
+   * `askTrace`，模型侧看到的仍只有命中摘要。
+   */
+  onHybridExecution?: ((output: AskRetrievalOutput) => void) | undefined
 }
 
 /** 检索阶段的产出。 */
@@ -169,7 +190,7 @@ export async function runAskRetrieval(input: AskRetrievalInput): Promise<AskRetr
     const legacy = retrieveAskCitations(
       decryptedDir, question,
       { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
-      scope, 24,
+      scope, Math.min(Math.max(input.limit ?? 24, 1), 60),
     )
     citations = legacy.citations
     chunks = legacy.chunks
@@ -255,7 +276,7 @@ export async function runAskRetrieval(input: AskRetrievalInput): Promise<AskRetr
       from: plan.from,
       to: plan.to,
       scope,
-      limit: 24,
+      limit: Math.min(Math.max(input.limit ?? 24, 1), 60),
       config: retrConfig,
       ...(embedFn ? { embedFn } : {}),
       // 与 embedFn 同一个解析出来的模型名：稠密召回靠它判「库里那批向量是不是本次模型算的」。
@@ -270,6 +291,7 @@ export async function runAskRetrieval(input: AskRetrievalInput): Promise<AskRetr
       ...(kbId !== undefined ? { kbId } : {}),
       // 数据面：`false` 时只关微信侧通道，知识库通道照常（见 PipelineInput 的说明）。
       ...(input.wechatDataEnabled === false ? { wechatDataEnabled: false } : {}),
+      ...(input.now ? { now: input.now } : {}),
     })
     rerankLine = out.rerankInfo.used
       ? ` · 精排：${out.rerankInfo.model || '未知模型'}（候选 ${out.rerankInfo.candidates} → 取 ${out.rerankInfo.kept}）`
@@ -334,7 +356,145 @@ export function buildAskTools(input: AskRetrievalInput): RetrievalTool[] {
   const retrConfig = loadRetrievalConfig(input.decryptedDir)
   const embedModel = input.embedModelName(retrConfig.embedding.model)
   const embedFn = retrConfig.embedding.enabled ? input.makeEmbedFn(embedModel) : undefined
-  return buildTools({ ...(embedFn ? { embedFn } : {}), embedModel })
+  return buildTools({
+    ...(embedFn ? { embedFn } : {}),
+    embedModel,
+    hybridExecutor: makeAskHybridExecutor(input),
+  })
+}
+
+/**
+ * 把 `search_hybrid` 的请求翻译成一次问答检索。
+ *
+ * ## 为什么在装配层做
+ *
+ * 工具层（`query/tools/**`）不能反向 import `remotes/ask-retrieval.ts`，否则
+ * `tools -> remotes -> tools` 成环。这里用闭包把 `AskRetrievalInput` 的装配依赖
+ * 带进去，工具层只拿一个 `HybridSearchExecutor`。
+ *
+ * ## 范围处理
+ *
+ * `request.scope` 已由工具层归一（会与 `ctx.scope` 的硬范围校验冲突），这里再把它
+ * 作为**硬范围**下发给流水线；原始 `input.scope` 中没被请求覆盖的日期也保留。
+ * `mode='kb'` 时关闭微信数据面，确保不会因为流水线配置或降级路径碰到本机消息。
+ *
+ * @param input - 本次问答的装配输入。
+ * @returns 混合检索执行器。
+ */
+export function makeAskHybridExecutor(input: AskRetrievalInput): HybridSearchExecutor {
+  return async (request, ctx): Promise<HybridSearchExecution> => {
+    if (request.query.trim() === '') {
+      return { citations: [], error: { code: 'invalid_arguments', message: '缺少 query' } }
+    }
+
+    const mode = request.mode
+    const wantsWechat = mode !== 'kb'
+    if (wantsWechat && input.wechatDataEnabled === false) {
+      return {
+        citations: [],
+        error: {
+          code: 'data_scope_blocked',
+          message: '当前问答禁止访问本机微信数据',
+          details: { mode },
+        },
+      }
+    }
+    if (mode === 'kb' && (ctx.kbId === undefined || ctx.kbId <= 0)) {
+      return {
+        citations: [],
+        error: { code: 'not_configured', message: '当前没有选中知识库', details: { mode } },
+      }
+    }
+
+    const scope = {
+      ...(request.scope.username ? { username: request.scope.username } : {}),
+      ...(request.scope.from ? { from: request.scope.from } : {}),
+      ...(request.scope.to ? { to: request.scope.to } : {}),
+    }
+    const plan = {
+      subQueries: extractAskTerms(request.query).slice(0, 6),
+      from: '',
+      to: '',
+      person: '',
+    }
+    const facts: HybridSearchFact[] = []
+
+    /*
+     * 知识库 id 以**执行上下文**为准：profile 可能在装配之后才绑定库，
+     * 用装配时的旧值会让 `mode='auto'/'kb'` 搜错库或误报未配置。
+     * `ctx.kbId === undefined` 表示本次不检索知识库（流水线的既有语义）。
+     * `mode='messages'` 时显式摘掉 kbId（本次只查本机消息）。
+     */
+    const kbId = ctx.kbId === undefined || ctx.kbId <= 0 ? undefined : ctx.kbId
+    const out = await runAskRetrieval({
+      ...input,
+      question: request.query,
+      plan,
+      scope,
+      limit: request.limit,
+      // 显式覆盖装配层的 kbId：`undefined` = 本次不检索知识库（流水线的既有语义）。
+      kbId: mode === 'messages' ? undefined : kbId,
+      ...(mode === 'messages' || mode === 'kb' ? { wechatDataEnabled: mode === 'kb' ? false : input.wechatDataEnabled } : {}),
+      scopeDescText: describeHybridScope(scope, mode),
+      indexNote: '',
+      // 混合工具是模型显式追加的一次检索，不应再推进度事件或写一份「route」日志。
+      emitStage: undefined,
+      op: () => {},
+    })
+    try {
+      input.onHybridExecution?.(out)
+    } catch {
+      // 反馈归因是旁路，不能影响检索本身。
+    }
+
+    /*
+     * 聚合事实：`runAskRetrieval` 只在问答意图被判为 aggregation 时才跑聚合，
+     * 而模型显式传 `aggregate=true` 时应当无条件附带一次确定性统计。
+     * 这是复用既有 `runAggregate`，不是第二套算法。
+     */
+    if (request.aggregate && wantsWechat) {
+      const aggFacts = runAggregate({
+        decryptedDir: input.decryptedDir,
+        question: request.query,
+        terms: extractAskTerms(request.query).slice(0, 8),
+        ...(Object.keys(scope).length > 0 ? { scope } : {}),
+        ...(input.now ? { now: input.now } : {}),
+      })
+      facts.push(...aggFacts.map(f => ({ title: f.title, body: f.body })))
+    }
+    // 流水线本身也会产出聚合引用（source='agg'），统一在工具层映射成 facts；
+    // 这里只做一次性拼接，避免同一统计出现两遍。
+    const seen = new Set(facts.map(f => `${f.title}\u0000${f.body}`))
+    for (const c of out.citations) {
+      if (c.source !== 'agg') continue
+      const key = `${c.name}\u0000${c.snippet}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      facts.push({ title: c.name, body: c.snippet })
+    }
+
+    return {
+      citations: out.citations,
+      ...(out.chunks.length > 0 ? { chunks: out.chunks } : {}),
+      ...(out.terms.length > 0 ? { terms: out.terms } : {}),
+      ...(facts.length > 0 ? { facts } : {}),
+      ...(out.rerankLine ? { rerankLine: out.rerankLine } : {}),
+    }
+  }
+}
+
+/** 混合检索的范围描述（写进运行时日志，避免把 kb-only 说成全库）。 */
+function describeHybridScope(
+  scope: { username?: string; from?: string; to?: string },
+  mode: HybridSearchRequest['mode'],
+): string {
+  const parts = [
+    mode === 'kb' ? '仅知识库' : mode === 'messages' ? '仅本机消息' : '消息 + 知识库',
+    scope.username ? '会话限定' : '',
+    scope.from ? `起 ${scope.from}` : '',
+    scope.to ? `止 ${scope.to}` : '',
+  ].filter(Boolean)
+  return parts.join(' ')
 }
 
 /**
@@ -353,6 +513,7 @@ export function askToolContext(input: AskRetrievalInput): ToolContext {
     decryptedDir: input.decryptedDir,
     ...(input.kbId !== undefined ? { kbId: input.kbId } : {}),
     ...(input.scope ? { scope: input.scope } : {}),
+    ...(input.wechatDataEnabled === false ? { wechatDataEnabled: false } : {}),
     knownEntities: person && !known.includes(person) ? [...known, person] : known,
   }
 }

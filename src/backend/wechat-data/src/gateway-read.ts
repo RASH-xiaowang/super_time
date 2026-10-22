@@ -357,9 +357,10 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns EditMutationResult: ok, or error on failure.
    */
   @Remote('editChatMessage')
-  editChatMessage(options: { username: string; localId: number; content: string }): EditMutationResult {
-    const r = editMsg(this._dirs.decrypted, options.username, options.localId, options.content)
-    this.op('edit', 'edit_chat_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? `localId=${options.localId}`)
+  editChatMessage(options: { username: string; localId: number; content: string; mode?: 'text' | 'source' }): EditMutationResult {
+    const mode = options.mode === 'source' ? 'source' : 'text'
+    const r = editMsg(this._dirs.decrypted, options.username, options.localId, options.content, mode)
+    this.op('edit', 'edit_chat_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? `localId=${options.localId} · ${mode}`)
     return r
   }
 

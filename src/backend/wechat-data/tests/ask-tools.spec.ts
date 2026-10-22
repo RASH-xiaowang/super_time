@@ -68,6 +68,13 @@ function makeDataDir(): string {
   return dec
 }
 
+/** 造一个不存在的解密根；父目录唯一且登记清理，避免命中全局 %TEMP%/wechat_search.db。 */
+function makeMissingDataDir(): string {
+  const root = mkdtempSync(join(tmpdir(), 'tools-missing-'))
+  scratch.push(root)
+  return join(root, 'decrypted')
+}
+
 describe('工具集：清单与 schema', () => {
   it('工具名唯一且覆盖各类数据操作', () => {
     const names = allTools.map(t => t.name)
@@ -131,7 +138,7 @@ describe('工具执行：不可信输入与错误兜底', () => {
   })
 
   it('数据目录不存在时不抛错（降级成空结果，而不是崩掉整次问答）', async () => {
-    const r = await runTool(allTools, 'search_messages', { keywords: ['转账'] }, { decryptedDir: join(tmpdir(), 'no-such-' + String(Date.now())) })
+    const r = await runTool(allTools, 'search_messages', { keywords: ['转账'] }, { decryptedDir: makeMissingDataDir() })
     // 检索类工具在数据缺失时**降级成空结果**（ok:true + hits:[]）而不是报错 ——
     // 与其余通道同策略：一个数据源不可用不该让整次问答失败。
     expect(r.hits).toEqual([])
@@ -139,7 +146,7 @@ describe('工具执行：不可信输入与错误兜底', () => {
   })
 
   it('需要具体数据源的工具在数据缺失时如实报错（而不是静默空结果）', async () => {
-    const missing = join(tmpdir(), 'no-such-' + String(Date.now()))
+    const missing = makeMissingDataDir()
     // 这几个工具没有「降级成空」的语义：库不存在就是查不了，必须说清楚。
     for (const [name, args] of [
       ['get_session_messages', { username: 'x' }],

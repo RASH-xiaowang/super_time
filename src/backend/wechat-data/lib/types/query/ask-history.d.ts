@@ -30,6 +30,18 @@ export interface RecordAskInput {
     withheld?: boolean;
     /** 失败原因（有值时 status 记为 fail）。 */
     error?: string;
+    /** 运行时六态；写入 retrieval.runtimeStatus，并据此显式映射历史四态。 */
+    runtimeStatus?: string;
+    /** 运行时状态原因（澄清/阻断/降级/失败的可读说明）。 */
+    statusReason?: string;
+    /** 综合生成失败原因；降级时仍保留原文，避免诊断信息丢失。 */
+    synthesisError?: string;
+    /** 证据包；只落统计摘要，不落逐条正文。 */
+    evidence?: unknown;
+    /** 工具 trace；只落脱敏后的有界字段，不落完整参数。 */
+    toolCalls?: unknown;
+    /** 资源引用；只落条数与来源工具。 */
+    resources?: unknown;
     /** 多阶段检索统计（结构化存 JSON）。 */
     retrieval?: unknown;
     /** 端到端耗时（毫秒）；缺省时由调用方决定是否传。 */

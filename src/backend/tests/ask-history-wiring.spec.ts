@@ -7,9 +7,9 @@
  *   · 存储模块 = 能不能写、写得对不对（单元用例）；
  *   · 网关接线   = **有没有真的写**、写在哪几条路径上（本用例）。
  *
- * 关键细节：`askWechat` 有**两条**成功返回路径 —— ① 没检索到原文的短路返回
- * （未调模型），② 正常回答。两条都必须落库，否则「当时确实问了、也确实没找到」
- * 这类轮次会整段从历史里消失。所以这里断言调用点 ≥ 2，而不是「存在即可」。
+ * 关键细节：统一 answer runtime 把所有状态（正常、无证据、澄清、阻断、降级、失败）
+ * 都收敛到同一个返回点，因此 `askWechat` 只需要**一次**生产落库调用。这里断言
+ * 恰好一处，既防止漏写，也防止旧的多路径实现回流后出现重复记录。
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
@@ -41,13 +41,13 @@ describe('问答历史：网关自动保存', () => {
     expect(gateway).toMatch(/import \{[^}]*recordAsk[^}]*\} from '\.\/query\/ask-history\.ts'/)
   })
 
-  it('askWechat 的两条成功返回路径都落库（≥2 个调用点）', () => {
+  it('askWechat 在统一返回点落库（恰好 1 个生产调用点）', () => {
     // M21：askWechat 搬进 remotes/askdeep.ts ⇒ 调用点前缀变成 `rc.`；同时先剥掉网关里那行
     // ctx 接线（`saveAskHistory: (…) => this.saveAskHistory(…)` 是转发装配，不是落库调用点），
-    // 否则「≥2」会被它虚增成恒真。
+    // 否则调用点计数会被装配代码虚增。
     const calls = [...gateway.replace(/\bsaveAskHistory: \([^)]*\) => this\.saveAskHistory\(/g, '')
       .matchAll(/(?:this|rc)\.saveAskHistory\(/g)]
-    expect(calls.length, '只在一条路径上落库 ⇒ 另一类问答会整段从历史消失').toBeGreaterThanOrEqual(2)
+    expect(calls.length, '统一返回点必须恰好落库一次；0 会丢历史，多条会重复记录').toBe(1)
   })
 
   it('落库内容取的是**回答本身**（问题/回答/引用/basis/检索统计）', () => {
@@ -55,7 +55,12 @@ describe('问答历史：网关自动保存', () => {
     expect(at).toBeGreaterThan(-1)
     // 取到方法体（到下一个方法声明前的收尾括号）
     const body = gateway.slice(at, at + 3000)
-    for (const marker of ['recordAsk(', 'options.question', 'result.answer', 'result.citations', 'result.citedIndexes', 'result.retrieval', 'elapsedMs']) {
+    for (const marker of [
+      'recordAsk(', 'options.question', 'result.answer', 'result.citations', 'result.citedIndexes', 'result.retrieval', 'elapsedMs',
+      // 运行状态不能被旧四态吞掉：原始状态/原因与有界证据摘要都要交给 ask-history 归一。
+      'runtimeStatus: result.status', 'statusReason: result.statusReason', 'synthesisError: result.synthesisError',
+      'evidence: result.evidence', 'toolCalls: result.toolCalls', 'resources: result.resources',
+    ]) {
       expect(body, `saveAskHistory 没写 ${marker}`).toContain(marker)
     }
   })

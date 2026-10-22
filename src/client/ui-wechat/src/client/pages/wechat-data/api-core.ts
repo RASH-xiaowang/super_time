@@ -20,6 +20,7 @@ import type {
   AskHistorySnapshot,
   AskOptimizeResult,
   AskResult,
+  ThreadState,
   ReplySuggestResult,
   AvatarResult,
   BackupMutationResult,
@@ -453,6 +454,8 @@ export interface WechatRemote {
     jobId?: string
     /** 随问题送模型的图片（2026-10-18，ClawBot 自动回复的「识别图中内容」；手动问答不传）。 */
     images?: Array<{ data: string; mediaType: string; name?: string }>
+    /** 上一轮返回的结构化线程状态；用于跨请求继承会话、联系人与时间窗。 */
+    threadState?: ThreadState
   }): Promise<RemoteResult<AskResult>>
   /** 取消一轮正在生成的问答（W3-6.1）。找不到在跑的那一轮时 ok=false + message。 */
   cancelAsk(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
@@ -523,6 +526,8 @@ export interface WechatRemote {
     fullMd5?: string
     kind?: 'image' | 'video' | 'audio' | 'file' | 'unknown'
     ext?: string
+    fileName?: string
+    size?: number
   }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   /**
@@ -560,7 +565,7 @@ export interface WechatRemote {
    * 一屏 N 篇从 N 个 RPC 收成 1 个；后端按 8 并发分批，返回顺序 = 去重后的入参顺序。
    */
   getArticleCovers(options: { urls: readonly string[] }): Promise<RemoteResult<{ items: Array<{ url: string; dataUrl?: string; error?: string }> }>>
-  getMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<RemoteResult<ImageDataUrlResult>>
+  getMessageFile(options: { fileName: string; size?: number; createTime?: number; fileMd5?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getDbStatus(): Promise<RemoteResult<DbStatusSnapshot>>
   /**
    * 实时同步修订（纯内存读，1s 级轮询可用）：`revision` 判断有没有新数据落地，
@@ -579,7 +584,7 @@ export interface WechatRemote {
    * 普通消息传 username + localId；收藏语音没有会话上下文，改传 svrId。
    */
   getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<RemoteResult<VoiceDataUrlResult>>
-  getVideoInfo(options: { username: string; localId: number }): Promise<RemoteResult<VideoInfoResult>>
+  getVideoInfo(options: { username?: string; localId?: number; md5?: string }): Promise<RemoteResult<VideoInfoResult>>
   exportSessionMessages(options: {
     username: string
     format: string
@@ -614,7 +619,7 @@ export interface WechatRemote {
   listLlmProviders(): Promise<RemoteResult<{ providers: Array<{ id: string; name: string }> }>>
   listLlmModels(options: { provider: string }): Promise<RemoteResult<{ models: Array<{ id: string; name: string }> }>>
   listEditedMessages(options?: { sessionId?: string }): Promise<RemoteResult<EditedListSnapshot>>
-  editChatMessage(options: { username: string; localId: number; content: string }): Promise<RemoteResult<EditMutationResult>>
+  editChatMessage(options: { username: string; localId: number; content: string; mode?: 'text' | 'source' }): Promise<RemoteResult<EditMutationResult>>
   resetEditedMessage(options: { username: string; localId: number }): Promise<RemoteResult<EditMutationResult>>
   exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string; jobId?: string }): Promise<RemoteResult<ExportResult>>
   getExportHistory(options?: ExportHistoryQuery): Promise<RemoteResult<ExportHistorySnapshot>>

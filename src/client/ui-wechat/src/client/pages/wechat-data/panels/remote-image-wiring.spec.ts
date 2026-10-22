@@ -73,7 +73,8 @@ describe('M23：卡片缩略图走后端代理', () => {
    * `img-src` 管，不归 `media-src`。视频本体是后端给的 data URL（`media-src` 里有 `data:`），
    * 但 poster 若继续吃 CDN 地址，收紧 `img-src` 之后就会变成「视频能放、封面不出」。
    */
-  for (const [file, minUses] of [['moments-card.tsx', 4], ['moments-portals.tsx', 5]] as const) {
+  // 详情灯箱迁到共享 MediaViewer 后，portals 仍保留正文图、视频封面、评论图 3 个远程面位。
+  for (const [file, minUses] of [['moments-card.tsx', 4], ['moments-portals.tsx', 3]] as const) {
     it(`${file}：没有直连 <img>，poster 只接受本机地址`, () => {
       const { tags, imported } = jsxNames(join(HERE, file))
       expect(tags.filter((t) => t === 'img'), `${file} 里又有直连 <img> 了`).toEqual([])

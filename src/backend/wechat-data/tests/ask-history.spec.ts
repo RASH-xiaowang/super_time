@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { DatabaseSync } from '../src/query/db-open.ts'
 import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from '../src/query/ask-history.ts'
 
 const scratch: string[] = []
@@ -109,6 +110,148 @@ describe('问答历史：记录与读取', () => {
     const byStatus = new Map(listAskHistory(dec, {}).items.map(i => [i.status, i]))
     expect(byStatus.get('withheld')!.answer).toContain('13.00')
     expect(byStatus.get('fail')!.error).toBe('未配置默认模型')
+  })
+
+  it('运行时六态显式映射：blocked/failed 记 fail，needs_clarification 记 insufficient，degraded 记 ok', () => {
+    const dec = makeRoot()
+    seed(dec, { question: 'blocked', runtimeStatus: 'blocked', statusReason: '缺少知识库' })
+    seed(dec, { question: 'failed', runtimeStatus: 'failed', synthesisError: '模型超时', answer: '' })
+    seed(dec, { question: 'clarify', runtimeStatus: 'needs_clarification', statusReason: '对象不明确' })
+    seed(dec, { question: 'degraded', runtimeStatus: 'degraded', statusReason: '工具部分失败' })
+    const rows = new Map(listAskHistory(dec, {}).items.map(row => [row.question, row]))
+    expect(rows.get('blocked')).toMatchObject({ status: 'fail', error: '缺少知识库' })
+    expect(rows.get('failed')).toMatchObject({ status: 'fail', error: '模型超时' })
+    expect(rows.get('clarify')).toMatchObject({ status: 'insufficient' })
+    expect(rows.get('degraded')).toMatchObject({ status: 'ok', error: '' })
+  })
+
+  it('原始运行状态与原因写入 retrieval；degraded 带显式标记，不靠猜测', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '降级', runtimeStatus: 'degraded', statusReason: '语义检索通道失败',
+      retrieval: { candidates: 9, kept: 2, scope: '本机记录', recency: false },
+    })
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.retrieval).toMatchObject({
+      candidates: 9,
+      runtimeStatus: 'degraded',
+      statusReason: '语义检索通道失败',
+      degraded: true,
+    })
+  })
+
+  it('未知运行状态显式记 fail，不默认成 ok', () => {
+    const dec = makeRoot()
+    seed(dec, { question: '未知', runtimeStatus: 'mystery' })
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.status).toBe('fail')
+    expect(row.error).toContain('未知运行状态')
+  })
+
+  it('显式 error 优先于运行状态：即使状态是 ok/degraded 也记 fail', () => {
+    const dec = makeRoot()
+    seed(dec, { question: '降级但报错', runtimeStatus: 'degraded', error: '写回失败' })
+    seed(dec, { question: '成功但报错', runtimeStatus: 'ok', error: '后处理失败' })
+    const rows = new Map(listAskHistory(dec, {}).items.map(row => [row.question, row]))
+    expect(rows.get('降级但报错')).toMatchObject({ status: 'fail', error: '写回失败' })
+    expect(rows.get('成功但报错')).toMatchObject({ status: 'fail', error: '后处理失败' })
+  })
+
+  it('读取到未知历史状态时显式报 fail，不把损坏记录伪装成 ok', () => {
+    const dec = makeRoot()
+    seed(dec, { question: '旧记录' })
+    const db = new DatabaseSync(join(dec, '..', 'wechat_privacy.db'))
+    try {
+      db.prepare("UPDATE ask_history SET status = 'future_state', error = ''").run()
+    } finally {
+      db.close()
+    }
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.status).toBe('fail')
+    expect(row.error).toContain('未知历史状态')
+    expect(row.error).toContain('future_state')
+  })
+
+  it('证据与工具 trace 只落有界摘要，不落 snippet、完整参数或正文', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '摘要', runtimeStatus: 'degraded',
+      evidence: {
+        status: 'degraded',
+        items: [{ snippet: '不应落库的正文', locator: { path: 'C:/secret.txt' } }],
+        facts: [{ title: '金额', body: '不应落库的事实正文' }],
+        stats: {
+          count: 1, messages: 1, kb: 0, sessions: 1, candidateCount: 3,
+          factCount: 1, failedTools: ['search_files'], attemptedTools: 2, successfulTools: 1,
+        },
+      },
+      toolCalls: [{
+        index: 0, round: 1, name: 'search_files', ok: false, attempts: 2, retries: 1,
+        elapsedMs: 120, errorCode: 'E_TIMEOUT', hits: 0, facts: 0,
+        argumentsSummary: '{"query":"不应落库的完整参数"}',
+      }],
+      resources: [{
+        evidenceId: 'res:search_files:file:f1',
+        tool: 'search_files',
+        key: 'file:f1',
+        name: '合同.pdf',
+        time: '2026-10-20 09:00',
+        snippet: '不应落库',
+        locator: { type: 'resource', tool: 'search_files', key: 'file:f1', resourceKind: 'file', sourceId: 's1' },
+      }],
+    })
+    const row = listAskHistory(dec, {}).items[0]!
+    const evidence = row.retrieval?.['evidence'] as Record<string, unknown>
+    const toolCalls = row.retrieval?.['toolCalls'] as Record<string, unknown>
+    const resources = row.retrieval?.['resources'] as Record<string, unknown>
+    expect(evidence).toMatchObject({ count: 1, messages: 1, facts: 1, failedTools: ['search_files'] })
+    expect(toolCalls).toMatchObject({ total: 1, truncated: false })
+    expect(resources).toEqual({
+      total: 1,
+      tools: ['search_files'],
+      items: [{
+        evidenceId: 'res:search_files:file:f1',
+        tool: 'search_files',
+        key: 'file:f1',
+        name: '合同.pdf',
+        time: '2026-10-20 09:00',
+        resourceKind: 'file',
+        sourceId: 's1',
+      }],
+      truncated: false,
+    })
+    const serialized = JSON.stringify(row.retrieval)
+    expect(serialized).not.toContain('不应落库')
+    expect(serialized).not.toContain('argumentsSummary')
+    expect(serialized).not.toContain('snippet')
+  })
+
+  it('超长 retrieval 退化为最小状态摘要，运行状态不会丢', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '超长', runtimeStatus: 'degraded', statusReason: '仍有证据',
+      retrieval: { blob: 'x'.repeat(20_000) },
+    })
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.retrieval).toMatchObject({
+      runtimeStatus: 'degraded', statusReason: '仍有证据', truncated: true,
+    })
+    expect(JSON.stringify(row.retrieval).length).toBeLessThan(2_000)
+  })
+
+  it('retrieval 无法序列化（循环引用）时仍保留运行状态与原因', () => {
+    const dec = makeRoot()
+    const circular: Record<string, unknown> = {}
+    circular['self'] = circular
+    seed(dec, {
+      question: '循环', runtimeStatus: 'degraded', statusReason: '元数据损坏',
+      retrieval: circular,
+    })
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.status).toBe('ok')
+    expect(row.retrieval).toMatchObject({
+      runtimeStatus: 'degraded', statusReason: '元数据损坏', serializationFailed: true,
+    })
   })
 
   it('问题与回答都空的记录不落库（返回 null，不留空行）', () => {

@@ -51,11 +51,13 @@ export function kbDocKey(kbId: number, chunkId: number): string {
  * @returns 归因键；KB 引用缺 `kb` 明细时退化为空串（宁可归因不到，也不要错配到别人身上）。
  */
 export function citationDocKey(c: {
-  source?: 'msg' | 'kb' | 'agg'
+  source?: 'msg' | 'kb' | 'agg' | 'resource'
   username?: string
   local_id?: number
   kb?: { kbId: number; chunkId: number }
 }): string {
+  // 独立资源由 `res:<tool>:<evidenceId>` 另行归因，不能落成 `:0` 的假消息键。
+  if (c.source === 'resource') return ''
   if (c.source === 'kb') {
     const kb = c.kb
     return kb ? kbDocKey(kb.kbId, kb.chunkId) : ''

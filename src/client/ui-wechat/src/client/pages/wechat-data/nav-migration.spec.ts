@@ -56,7 +56,12 @@ describe('顶栏已取消：四件事全部迁入导航栏', () => {
   it('品牌在导航栏内，且用的是导航栏版类名（不是顶栏遗留）', () => {
     expect(aside).toContain('css.navBrand')
     expect(aside).toContain('css.navBrandLogo')
-    expect(aside).toContain('css.navBrandName')
+    // 标题/副标题已抽进 BrandTitle（它同时负责当前用户昵称与地区），
+    // 所以类名要在组件内部核，接线侧只核「导航栏里确实渲染了这个组件」。
+    expect(aside, '导航栏没有渲染 BrandTitle').toContain('<BrandTitle />')
+    const title = codeOf(join('panels', 'brand-title.tsx'))
+    expect(title).toContain('css.navBrandName')
+    expect(title).toContain('css.navBrandSub')
     // 顶栏那套已删干净：类名留着就有第二套样式在等被误用
     expect(panel).not.toContain('css.topbar')
     expect(panel).not.toContain('css.topbarBrand')

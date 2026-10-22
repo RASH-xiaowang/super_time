@@ -10,6 +10,8 @@ import { createDecipheriv, createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ImageDataUrlResult } from '../types.ts'
+import { normalizeAesKey } from '../keys/image-key.ts'
+import { isMd5 } from '../md5.ts'
 
 type FavoriteBucket = 'data' | 'mid' | 'thumb' | 'temp'
 type FavoriteKind = 'image' | 'video' | 'audio' | 'file' | 'unknown'
@@ -35,7 +37,6 @@ interface IndexState {
 }
 
 const BUCKETS: readonly FavoriteBucket[] = ['data', 'mid', 'thumb', 'temp']
-const MD5_RE = /^[0-9a-f]{32}$/i
 const MAX_INDEX_BYTES = 128 * 1024 * 1024
 const IMAGE_FORMATS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff'])
 const VIDEO_FORMATS = new Set(['mp4', 'mov', 'm4v'])
@@ -174,9 +175,10 @@ function decryptV2(raw: Uint8Array, aesKey: string | undefined, xorKey: number):
   const aligned = aesSize % 16 === 0 ? aesSize + 16 : aesSize + (16 - (aesSize % 16))
   const offset = 15
   if (offset + aligned > raw.length || xorSize > raw.length - offset - aligned) return null
-  if (!aesKey || aesKey.trim() === '') return null
+  const key = normalizeAesKey(aesKey)
+  if (key === null) return null
   try {
-    const decipher = createDecipheriv('aes-128-ecb', Buffer.from(aesKey, 'ascii').subarray(0, 16), null)
+    const decipher = createDecipheriv('aes-128-ecb', key.subarray(0, 16), null)
     decipher.setAutoPadding(false)
     const aesBlock = Buffer.concat([
       decipher.update(Buffer.from(raw.subarray(offset, offset + aligned))),
@@ -202,7 +204,7 @@ function buildIndexEntry(path: string, aesKey: string | undefined, xorKey: numbe
   const plain = readPlain(path, aesKey, xorKey)
   if (plain === null) return null
   const digest = md5(plain.bytes)
-  if (!MD5_RE.test(digest)) return null
+  if (!isMd5(digest)) return null
   return {
     md5: digest,
     entry: {
@@ -299,7 +301,7 @@ function requestedMd5(options: { md5?: string; thumbMd5?: string; fullMd5?: stri
   // 所以把它放在 full 之后仍能保留“原图优先”的语义。
   const values = [options.fullMd5, options.md5, options.thumbMd5]
     .map((v) => String(v ?? '').trim().toLowerCase())
-    .filter((v) => MD5_RE.test(v))
+    .filter((v) => isMd5(v))
   return values.filter((v, i) => values.indexOf(v) === i)
 }
 

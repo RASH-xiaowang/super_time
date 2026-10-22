@@ -260,7 +260,8 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-19（聊天素材收集任务 +2 → 205）：第十七次跟。
     // 2026-10-19（任务信息 / 触发记录 / 回调 +7 → 212）：第十八次跟。
     // 2026-10-20（任务配置 / 触发记录批量删除 +2 → 214）：第十九次跟。
-    from: '214 个 Remote 方法）',
+    // 2026-10-22（统一问答运行时新增 Remote 方法 → 219）：第二十次跟。
+    from: '219 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -562,7 +563,7 @@ const MUTATIONS_BATCH12 = [
     id: "M67-unified-search-readerror-dropped",
     why: "全局搜索不再上报域读失败（P1-1 修的那半）—— 库损坏时下拉又变成「未找到相关结果」",
     file: "src/backend/wechat-data/src/query/unified-search.ts",
-    from: "  if (failures.length > 0) {",
+    from: "  if (readFailures.length > 0) {",
     to: "  if (false) {",
     spec: "src/backend/wechat-data/tests/read-error-contract.spec.ts",
   },
@@ -762,8 +763,8 @@ const MUTATIONS_BATCH12 = [
     id: "M92-media-cache-key-loses-root",
     why: "缓存键退回不含 wechatBaseDir —— 换账号/换目录后同名同体积的文件会读到上一个目录的字节",
     file: "src/backend/wechat-data/src/query/media-file.ts",
-    from: "  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}`",
-    to: "  const cacheKey = `${name.toLowerCase()}|${String(size)}|${month}`",
+    from: "  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`",
+    to: "  const cacheKey = `${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`",
     spec: "src/backend/wechat-data/tests/media-file-resolve.spec.ts",
   },
   {

@@ -739,7 +739,6 @@ export function WechatDataPanel(): React.JSX.Element {
             </span>
             <span className={css.navBrandText}>
               <BrandTitle />
-              <span className={css.navBrandSub}>微信数据工作台</span>
             </span>
           </div>
 
@@ -937,7 +936,6 @@ export function WechatDataPanel(): React.JSX.Element {
     </ConfirmProvider>
   )
 }
-
 
 
 

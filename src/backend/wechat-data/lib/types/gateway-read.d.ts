@@ -244,6 +244,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         username: string;
         localId: number;
         content: string;
+        mode?: 'text' | 'source';
     }): EditMutationResult;
     /**
      * 删除若干条问答历史。

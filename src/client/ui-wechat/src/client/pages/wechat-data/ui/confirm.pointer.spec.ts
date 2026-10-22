@@ -86,6 +86,14 @@ describe('确认框：模态弹窗内可点击（pointer-events）', () => {
     const raw = readFileSync(join(HERE, 'confirm.module.css'), 'utf8')
     const overlayRule = /\.overlay\s*\{([\s\S]*?)\}/.exec(raw)?.[1] ?? ''
     expect(overlayRule, '遮罩规则里缺少 pointer-events: auto（真实报障的修法）').toMatch(/pointer-events:\s*auto/)
+
+    // ④ Radix Portal 下 Overlay 与 Content 是兄弟节点：卡片必须自己定位并高于遮罩，
+    //    否则样式看着还在、实际已经掉到 body 流里被遮罩盖住。
+    const boxRule = /\.box\s*\{([\s\S]*?)\}/.exec(raw)?.[1] ?? ''
+    expect(boxRule, '确认卡片缺少 fixed 定位（Radix Portal 后不再受遮罩居中约束）').toMatch(/position:\s*fixed/)
+    const boxZ = Number(/z-index:\s*(\d+)/.exec(boxRule)?.[1] ?? 0)
+    const overlayZ = Number(/z-index:\s*(\d+)/.exec(overlayRule)?.[1] ?? 0)
+    expect(boxZ, '确认卡片必须在遮罩之上').toBeGreaterThan(overlayZ)
   })
 
   it('确认按钮在指针事件生效时能真的 settle（行为层复核）', async () => {
@@ -108,7 +116,7 @@ describe('确认框：模态弹窗内可点击（pointer-events）', () => {
     void confirmFn!({ title: 'x', tone: 'danger', confirmText: '删除记录' }).then(v => { resolved = v })
     await flush()
 
-    const primary = document.querySelector<HTMLButtonElement>(`.${css.overlay} [data-confirm-primary]`)
+    const primary = document.querySelector<HTMLButtonElement>('[role="alertdialog"] [data-confirm-primary]')
     expect(primary, '找不到主操作按钮').not.toBeNull()
     primary!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush()
@@ -137,7 +145,7 @@ describe('确认框：模态弹窗内可点击（pointer-events）', () => {
     void confirmFn!({ title: 'x' }).then(v => { resolved = v })
     await flush()
 
-    const buttons = [...document.querySelectorAll<HTMLButtonElement>(`.${css.overlay} button`)]
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
     const cancel = buttons.find(b => (b.textContent ?? '').includes('取消'))
     expect(cancel, '找不到取消按钮').toBeTruthy()
     cancel!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -166,19 +174,19 @@ describe('确认框：模态弹窗内可点击（pointer-events）', () => {
     void confirmFn!({ title: '删除 8 条记录？', tone: 'danger', confirmText: '删除记录', requireText: '删除 8 条' })
     await flush()
 
-    const primary = document.querySelector<HTMLButtonElement>(`.${css.overlay} [data-confirm-primary]`)!
+    const primary = document.querySelector<HTMLButtonElement>('[role="alertdialog"] [data-confirm-primary]')!
     expect(primary.disabled, '没输入确认文本时按钮应禁用').toBe(true)
 
     // 输入正确文本后应解禁。
     // React 会追踪 input 的 value，直接赋 `.value` 它看不到变化 —— 必须走原生 setter
     // 再派发 input 事件（否则这条断言会因为「React 没收到 onChange」而失败，
     // 而不是因为闸门坏了 ——第一版就是这么误报的）。
-    const input = document.querySelector<HTMLInputElement>(`.${css.overlay} input`)!
+    const input = document.querySelector<HTMLInputElement>('[role="alertdialog"] input')!
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
     setter?.call(input, '删除 8 条')
     input.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
-    const after = document.querySelector<HTMLButtonElement>(`.${css.overlay} [data-confirm-primary]`)!
+    const after = document.querySelector<HTMLButtonElement>('[role="alertdialog"] [data-confirm-primary]')!
     expect(after.disabled, '输入正确后应可点').toBe(false)
   })
 })

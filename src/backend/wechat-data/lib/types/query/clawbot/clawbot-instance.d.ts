@@ -29,6 +29,9 @@
  * @module query/clawbot/clawbot-instance
  */
 import type { ClawbotBinding, ClawbotChannelInfo, ClawbotInstanceConfig, ClawbotInstancesSnapshot } from '../../types.ts';
+import { type ClawbotInstanceConfigPatch } from './clawbot-config-invariant.ts';
+export { AUTO_REPLY_KB_REQUIRED_MESSAGE, hasValidAutoReplyKnowledgeBase, resolveInstanceConfigForSave, } from './clawbot-config-invariant.ts';
+export type { AutoReplyKbConfig, ClawbotInstanceConfigPatch, InstanceConfigSaveInput, } from './clawbot-config-invariant.ts';
 /** 未配置过的实例的默认行为：自动回复**关**、知识库**关**、提示词用内置默认、长回复分段。 */
 export declare function defaultInstanceConfig(slot?: number): ClawbotInstanceConfig;
 /** 拆成两半：配置 + （可选）读失败原因。 */
@@ -54,7 +57,7 @@ export declare function readInstanceConfig(decryptedDir: string, slot?: number):
  * @returns 落库后的完整配置。
  * @throws 实例不存在时抛可读中文（调用方按 message 展示）。
  */
-export declare function saveInstanceConfig(decryptedDir: string, slot: number, patch: Partial<Omit<ClawbotInstanceConfig, 'slot'>>): ClawbotInstanceConfig;
+export declare function saveInstanceConfig(decryptedDir: string, slot: number, patch: ClawbotInstanceConfigPatch): ClawbotInstanceConfig;
 /**
  * 建一个新实例（初始 `unbound`），**slot = 新行的自增 id**。
  *

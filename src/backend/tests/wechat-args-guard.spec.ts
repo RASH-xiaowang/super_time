@@ -156,7 +156,17 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     const mod = await import('../wechat-data/lib/typert.host.js') as unknown as {
       TYPERT?: { invocations?: Parameters<typeof buildSchemaMap>[0] }
     }
-    return buildSchemaMap(mod.TYPERT?.invocations ?? [])
+    // `lib/index.js` 只有包根 `types` 声明、没有同级 `.d.ts`；用变量说明符做运行时导入，
+    // 既验证真实 bundle 里确实导出了覆盖层，又不让测试类型检查落进隐式 any。
+    const backendEntry = '../wechat-data/lib/index.js'
+    const backend = await import(backendEntry) as {
+      REMOTE_ARG_SCHEMA_OVERLAY?: Parameters<typeof buildSchemaMap>[0]
+    }
+    // 与宿主 `loadBackendRuntime` 的合并顺序保持一致：覆盖层在前，生成表最后覆盖。
+    return buildSchemaMap([
+      ...(backend.REMOTE_ARG_SCHEMA_OVERLAY ?? []),
+      ...(mod.TYPERT?.invocations ?? []),
+    ])
   }
 
   it('schema 表非空，且 `addTask` 这种必填项缺失的形状判定会报出**哪个字段**', async () => {
@@ -173,6 +183,20 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     const hard = checkSchema(schemas, 'addTask', [{ title: 1, kind: 'a', payload: {} }], new Set(['addTask']))
     expect(hard.verdict).toBe('mismatch')
     expect(hard.code, '进了名单还只记账 ⇒ ②档永远升级不上去').toBe('ARGS_SCHEMA')
+  })
+
+  it('生成表缺口的四个方法由源码覆盖层补齐，且参数形状真的能判错', async () => {
+    const schemas = await realSchemas()
+    for (const name of ['getSelfProfile', 'listRpaVendors', 'getFileImageDataUrls', 'revealTaskTriggerSecret']) {
+      expect(schemas.has(name), `${name} 仍不在合并后的 schema 表里`).toBe(true)
+    }
+
+    expect(checkSchema(schemas, 'getFileImageDataUrls', [{ keys: ['a'], thumbFirst: true }], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'getFileImageDataUrls', [{ keys: [1] }], new Set()).verdict).toBe('mismatch')
+    expect(checkSchema(schemas, 'revealTaskTriggerSecret', [{ id: 1 }], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'revealTaskTriggerSecret', [{ id: '1' }], new Set()).verdict).toBe('mismatch')
+    expect(checkSchema(schemas, 'getSelfProfile', [], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'listRpaVendors', [], new Set()).verdict).toBe('ok')
   })
 
   it('多余字段不算失败（面板可以先发后端还没认的字段），无 schema 的方法不算覆盖', async () => {
@@ -206,6 +230,8 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     expect(host).toContain('ENFORCED_SCHEMA_METHODS = new Set([')
     expect(host).toContain("  'deleteTask',")
     expect(host).toContain('checkSchema(argSchemas, implName, callArgs, ENFORCED_SCHEMA_METHODS)')
+    expect(host, '生成表缺口必须由源码覆盖层合并，不能手改生成物').toContain('REMOTE_ARG_SCHEMA_OVERLAY')
+    expect(host, '生成表必须最后合并，未来补齐同名方法时以生成物为准').toContain('[...overlay, ...generated]')
     expect(host).toContain('argsGuard.snapshot(argSchemas ? argSchemas.size : 0, methodMap.size, ENFORCED_SCHEMA_METHODS)')
     expect(host, '守卫自己不得再保留自动升级状态').not.toContain('schemaPasses')
     expect(host, '宿主层不得调用守卫内部的自动升级接口').not.toContain('argsGuard.enforcedSchemas()')
@@ -335,6 +361,13 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
      *   · 同一条成因（生成器不在本仓），同一条边界：72 ≤ 未覆盖 ≤ 72。
      *   · 核对方式（可重跑）：`lib/typert.host.js` 里搜不到这两个名字
      *     ⇒ 未覆盖 = 214 − 142 = **72**。两者均为仅桌面写操作，受权限策略管。
+     *
+     * 2026-10-22 仍为 **72**，但构成已经变了（生成物又落后 4 个方法）：
+     *   · 当前 219 个 `@Remote`、生成表覆盖 143 个；缺口 76。
+     *   · 源码侧 `REMOTE_ARG_SCHEMA_OVERLAY` 补齐 `getSelfProfile` / `listRpaVendors` /
+     *     `getFileImageDataUrls` / `revealTaskTriggerSecret` 后，覆盖 147 个、未覆盖回 72。
+     *   · 这 4 个是真实遗漏，不应把基线抬到 76；覆盖层让它们重新受 ② 档影子校验。
+     *   · 剩余 72 个仍是历史生成债务（生成器不在本仓），基线保持不变。
      */
     expect(ag!.uncovered, '未覆盖数变大了 ⇒ 新加的 @Remote 方法没有跟着生成 schema（②档对它永久失明）')
       .toBeLessThanOrEqual(72)

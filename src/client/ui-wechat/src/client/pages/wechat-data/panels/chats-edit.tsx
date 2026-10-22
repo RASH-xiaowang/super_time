@@ -7,10 +7,10 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import type { useConfirm } from '../ui/confirm.tsx'
-import { apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiClearAllSessionDrafts, apiClearSessionDraft, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useActionNotice } from './use-action-notice.tsx'
 import type { EditedMessageRecord, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -37,10 +37,6 @@ const [editedOpen, setEditedOpen] = useState(false)
 const [edits, setEdits] = useState<readonly EditedMessageRecord[]>([])
 const [editedIds, setEditedIds] = useState<Set<number>>(new Set())
 const [editing, setEditing] = useState(false)
-/** 「编辑消息副本」对话框：目标消息 / 编辑中的文本 / 失败原因 / 保存中 */
-const [editTarget, setEditTarget] = useState<WechatMessage | null>(null)
-const [editText, setEditText] = useState('')
-const [editErr, setEditErr] = useState<string | null>(null)
 /**
  * 一次性动作反馈（W3-11.1）：清空草稿 / 复制 JSON / 恢复原文的**结果**。
  *
@@ -50,15 +46,6 @@ const [editErr, setEditErr] = useState<string | null>(null)
  * `editNotice` 是「这次操作成了 / 没成」的一句话结论（会自动消失）。
  */
 const { notice: editNotice, flash: flashEditNotice } = useActionNotice()
-const [editBusy, setEditBusy] = useState(false)
-const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
-
-// 打开即把光标放进编辑框并全选原文（Radix 默认聚焦标题栏的关闭按钮）。
-useEffect(() => {
-  if (!editTarget) return undefined
-  const t = window.setTimeout(() => { editAreaRef.current?.focus(); editAreaRef.current?.select() }, 60)
-  return () => { window.clearTimeout(t) }
-}, [editTarget])
 
 const loadEdits = useCallback(async (): Promise<void> => {
   try {
@@ -100,43 +87,6 @@ const reloadCurrent = useCallback(async (): Promise<void> => {
     writeRenderCache('chat-msgs:v2:' + talker, env.messages)
   } catch { /* keep current view */ }
 }, [curSession])
-
-/**
- * 打开「编辑消息副本」对话框。
- *
- * 原实现用 `window.prompt(...)` 取新内容 —— **Electron 渲染进程不支持 prompt**
- * （调用即抛 `prompt() is not supported.`），于是右键菜单点「编辑消息副本」除了在
- * 控制台留一条报错外什么都不发生（用户反馈「为什么还不能编辑信息」）。
- * 改成应用内对话框：可多行、能显示保存失败的原文、Esc/取消可退。
- */
-const doEdit = useCallback((m: WechatMessage): void => {
-  setEditTarget(m)
-  setEditText(m.displayText || m.strContent || '')
-  setEditErr(null)
-}, [])
-
-const closeEdit = useCallback((): void => {
-  setEditTarget(null)
-  setEditErr(null)
-}, [])
-
-const saveEdit = useCallback(async (): Promise<void> => {
-  const m = editTarget
-  if (!m || !curSession) return
-  setEditBusy(true)
-  setEditErr(null)
-  try {
-    const r = await apiEditChatMessage({ username: curSession.username, localId: m.localId, content: editText })
-    if (!r.ok) { setEditErr(r.error ?? '未知错误'); return }
-    setEditTarget(null)
-    await reloadCurrent()
-    await loadEdits()
-  } catch (e) {
-    setEditErr((e as Error).message)
-  } finally {
-    setEditBusy(false)
-  }
-}, [editTarget, editText, curSession, reloadCurrent, loadEdits])
 
 const sessionListRef = useRef<HTMLDivElement | null>(null)
 const clearDraft = useCallback(async (): Promise<void> => {
@@ -211,7 +161,6 @@ const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
 
 // ── message search (A7) ──
 const [searchMode, setSearchMode] = useState<'session' | 'message'>('session')
-const onEditFn = doEdit
 
 /** 消息右键菜单的光标定位状态（null = 未打开）。 */
 const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>(null)
@@ -225,5 +174,5 @@ const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; m: WechatMessage;
  * 右键菜单）也一起收起，避免残留指向上一个会话的内容。
  * @param next - the category to switch to.
  */
-  return { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editNotice, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode }
+  return { clearAllDrafts, clearDraft, copyMsgJson, doReset, editNotice, editedIds, editedOpen, editing, edits, flashEditNotice, loadEdits, msgMenu, openEdits, reloadCurrent, searchMode, sessionListRef, setEditedOpen, setMsgMenu, setSearchMode }
 }

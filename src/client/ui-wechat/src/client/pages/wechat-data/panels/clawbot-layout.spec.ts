@@ -498,16 +498,20 @@ describe('ClawBot C3：实例卡拆解与设置重排（A5–A8）', () => {
     expect(SETTINGS, '没有「长回复分段发送」开关').toContain('长回复分段发送')
   })
 
-  it('A19 分段与知识库降级文案和实际行为一致（2026-10-20）', () => {
+  it('A19 分段与知识库硬门禁文案和实际行为一致（2026-10-22）', () => {
     // 分段实际是每段 30 字、整条最多 300 字；旧文案把 300 字误写成每段上限。
     expect(SETTINGS, '分段文案没同时说明每段 30 字与整条 300 字')
       .toContain('每段不超过 30 字、整条不超过 300 字')
     expect(SETTINGS, '旧文案仍把 300 字说成每段上限').not.toContain('每条不超过 300 字')
-    // 知识库增强开启但未选库时，自动回复仍会运行，只是不检索知识库。
-    expect(SETTINGS, '知识库说明没讲清未选库时仍会继续自动回复')
-      .toContain('开启增强但未选择知识库时，仍会继续自动回复，只是不检索知识库')
-    expect(SETTINGS, '知识库未选库警告没讲清自动回复与检索的关系')
-      .toContain('已开启知识库增强但未选择知识库 —— 会继续自动回复，但不检索知识库')
+    // 硬门禁：没有有效知识库时不得允许开启自动回复。
+    expect(SETTINGS, '自动回复开关没按知识库就绪态禁用')
+      .toContain('autoReplyBlocked')
+    expect(SETTINGS, '没告诉用户自动回复必须先选知识库')
+      .toContain('自动回复需要选择知识库')
+    expect(SETTINGS, '又出现了「无库仍会回复」的旧承诺')
+      .not.toContain('仍会继续自动回复，只是不检索知识库')
+    expect(SETTINGS, '又出现了「无库回复」的旧警告')
+      .not.toContain('会继续自动回复，但不检索知识库')
     expect(SETTINGS, '又出现了「不会静默降级」的错误承诺').not.toContain('不会静默降级成无库回复')
     expect(SETTINGS, '又出现了「不会检索任何内容」的错误描述').not.toContain('不会检索任何内容')
   })

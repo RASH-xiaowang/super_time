@@ -100,10 +100,11 @@ describe('W2-6.4 提示一路走到界面', () => {
     expect(type).toContain('indexNote?: string')
   })
 
-  it('后端把它填进两处结果组装（有召回的与「没检索到」的）', () => {
-    expect(ask).toContain("...(indexNote === '' ? {} : { indexNote }),")
-    expect((ask.match(/\.\.\.\(indexNote === '' \? \{\} : \{ indexNote \}\)/g) ?? []).length,
-      '两条返回路径都要带：只在一处带就意味着另一种情况下用户看不到提示').toBe(2)
+  it('后端在统一返回点写一次 retrieval.indexNote（所有状态共用同一条路径）', () => {
+    expect(ask).toContain("if (indexNote !== '') runtime.retrieval = {")
+    expect(ask).toContain('}), indexNote }')
+    expect((ask.match(/runtime\.retrieval = \{/g) ?? []).length,
+      '统一运行时只需要一个返回点；出现多处说明提示会因状态不同而丢失或重复').toBe(1)
   })
 
   it('提问路径确实按后台模式调用（老调用点不传 options 的行为不变）', () => {

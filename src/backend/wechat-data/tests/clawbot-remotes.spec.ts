@@ -214,7 +214,7 @@ function makeDiscardScenario(): {
   })
   const slot1 = r.createClawbotInstance().slot
   const slot2 = r.createClawbotInstance().slot
-  r.setClawbotInstanceConfig({ slot: slot1, autoReply: true, splitReply: false })
+  r.setClawbotInstanceConfig({ slot: slot1, autoReply: true, kbEnabled: true, kbId: 1, splitReply: false })
   r.setClawbotInstanceConfig({ slot: slot2, autoReply: false, splitReply: false })
   const now = Date.now()
   const run1 = enqueueOrMergeReplyRun(dir, {
@@ -558,7 +558,7 @@ describe('clawbot remotes（iLink 已接入）', () => {
   it('清空与在途 getUpdates 竞态：同一响应 [旧,新] 只落新、只 consider 新并发一次事件', async () => {
     const { rc, ilink, events, dir } = makeHarness()
     const r = createClawbotRemotes(rc)
-    r.setClawbotInstanceConfig({ slot: 1, autoReply: true, splitReply: false })
+    r.setClawbotInstanceConfig({ slot: 1, autoReply: true, kbEnabled: true, kbId: 1, splitReply: false })
     await r.createClawbotBindQr({ slot: 1 })
 
     const pending: Array<{ buf: string, resolve: (u: IlinkUpdates) => void }> = []
@@ -1062,6 +1062,43 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(replyStateCounts(dir, slot), '删除实例后 run 与 outbox 都必须是空的').toEqual({ runs: 0, parts: 0 })
   })
 
+  it('历史矛盾配置（autoReply=true 但无有效知识库）不再创建 durable run', async () => {
+    const { rc, ilink, dir } = makeHarness()
+    const slot = 1
+    let asks = 0
+    const r = createClawbotRemotes({
+      ...rc,
+      ask: async () => {
+        asks += 1
+        return { ok: true, answer: '不应生成' }
+      },
+    })
+    // 模拟升级前遗留的矛盾行：旧版本只校验 autoReply，本次保存不会把它留到运行期。
+    const now = Date.now()
+    withWritableDb(clawbotDbPath(dir), (db) => {
+      db.prepare(`INSERT INTO clawbot_instance_config(
+        slot, auto_reply, kb_enabled, kb_id, system_prompt, split_reply, created_at, updated_at
+      ) VALUES (?, 1, 0, NULL, '', 1, ?, ?)
+      ON CONFLICT(slot) DO UPDATE SET auto_reply = 1, kb_enabled = 0, kb_id = NULL,
+        updated_at = excluded.updated_at`).run(slot, now, now)
+    })
+
+    await r.createClawbotBindQr({ slot })
+    let release: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { release = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot })
+    await flush()
+
+    release(textBatch(5801, '无库不该排队', 'cursor-no-kb'))
+    await flush()
+
+    expect(r.listClawbotMessages({ slot }).items.map(message => message.content)).toEqual(['无库不该排队'])
+    expect(replyStateCounts(dir, slot), '无有效知识库时不应留下一个永远不处理的 reply run')
+      .toEqual({ runs: 0, parts: 0 })
+    expect(asks, '无有效知识库时必须在进入模型前停下').toBe(0)
+  })
+
   it('自动回复端到端：入站文本走 durable run/outbox，分段发送复用 outbox clientId，最终 run done', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     const { rc, ilink, dir } = makeHarness()
@@ -1078,7 +1115,7 @@ describe('clawbot remotes（iLink 已接入）', () => {
       },
     })
 
-    r.setClawbotInstanceConfig({ slot, autoReply: true, splitReply: true })
+    r.setClawbotInstanceConfig({ slot, autoReply: true, kbEnabled: true, kbId: 7, splitReply: true })
     await r.createClawbotBindQr({ slot })
     let release: (u: IlinkUpdates) => void = () => { /* 占位 */ }
     ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { release = resolve })
@@ -1109,7 +1146,7 @@ describe('clawbot remotes（iLink 已接入）', () => {
     await vi.advanceTimersByTimeAsync(1_100)
     await flush()
 
-    expect(asks).toEqual([{ slot, text: '明天几点走？', kbId: null }])
+    expect(asks).toEqual([{ slot, text: '明天几点走？', kbId: 7 }])
     expect(ilink.sendCalls.map(call => call.text)).toEqual([
       '第一段：明早九点出发去机场。',
       '第二段：到了之后我把车牌发给你。',
@@ -1120,6 +1157,13 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(finished?.run.status).toBe('done')
     expect(finished?.parts.map(part => part.status)).toEqual(['sent', 'sent'])
     expect(ilink.sendCalls.map(call => call.clientId)).toEqual(finished?.parts.map(part => part.clientId))
+    const details = r.listClawbotMessages({ slot }).items
+    const inbound = details.find(message => message.direction === 'in')
+    const outbound = details.filter(message => message.direction === 'out')
+    expect(inbound?.run).toMatchObject({ runId, status: 'done' })
+    expect(outbound).toHaveLength(2)
+    expect(outbound.every(message => message.run?.runId === runId), '同一 run 的出站分段都要带上摘要').toBe(true)
+    expect(outbound.every(message => message.run?.sendDecision?.send === true)).toBe(true)
     expect(r.checkClawbotEnv({ slot }).autoReplyStats).toMatchObject({
       pending: 0,
       inFlight: false,
@@ -1137,7 +1181,7 @@ describe('clawbot remotes（iLink 已接入）', () => {
     const { rc, ilink, dir } = makeHarness()
     const slot = 1
     const r = createClawbotRemotes(rc)
-    r.setClawbotInstanceConfig({ slot, autoReply: true, splitReply: false })
+    r.setClawbotInstanceConfig({ slot, autoReply: true, kbEnabled: true, kbId: 1, splitReply: false })
     await r.createClawbotBindQr({ slot })
     ilink.pollQueue.push(CONFIRMED)
     await r.getClawbotBindState({ slot })
@@ -1170,5 +1214,92 @@ describe('clawbot remotes（iLink 已接入）', () => {
     expect(finished?.run.status).toBe('done')
     expect(finished?.parts[0]).toMatchObject({ status: 'sent', sentMessageId: localId })
     expect(ilink.sendCalls, '本地已证明发送成功时不得再出网').toHaveLength(0)
+  })
+
+  it('生成失败时详情随目标消息返回，保留工具/证据与拒绝发送原因', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { rc, ilink } = makeHarness()
+    const slot = 1
+    const r = createClawbotRemotes({
+      ...rc,
+      ask: async () => ({
+        ok: false,
+        answer: '',
+        error: '上游超时',
+        errorCode: 'timeout',
+        status: 'failed',
+        toolCalls: [{
+          index: 0, round: 1, callId: 'call-1', name: 'search_kb',
+          argumentsSummary: 'query=报价', ok: false, deduplicated: false,
+          attempts: 1, retries: 0, elapsedMs: 20, errorClass: 'timeout',
+          errorCode: 'timeout', hits: 0, facts: 0,
+        }],
+        sendDecision: { send: false, error: '自动回复未发送：上游超时', errorCode: 'timeout' },
+      }),
+    })
+    r.setClawbotInstanceConfig({ slot, autoReply: true, kbEnabled: true, kbId: 7, splitReply: false })
+    await r.createClawbotBindQr({ slot })
+    let release: (u: IlinkUpdates) => void = () => { /* 占位 */ }
+    ilink.updatesImpl = () => new Promise<IlinkUpdates>((resolve) => { release = resolve })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot })
+    await flush()
+
+    release(textBatch(601, '帮我查报价', 'cursor-failed-detail'))
+    await flush()
+    // 默认最多 3 次生成尝试、退避 3s/6s；分段推进并让出事件循环，
+    // 否则重试定时器会在全局 drain 未退出时触发，被单飞闸吞掉。
+    await vi.advanceTimersByTimeAsync(1_100)
+    await flush()
+    await vi.advanceTimersByTimeAsync(3_100)
+    await flush()
+    await vi.advanceTimersByTimeAsync(6_100)
+    await flush()
+
+    const inbound = r.listClawbotMessages({ slot }).items.find(message => message.direction === 'in')
+    expect(inbound?.run).toMatchObject({
+      status: 'failed',
+      errorCode: 'timeout',
+      error: '上游超时',
+      answerStatus: 'failed',
+      sendDecision: { send: false, errorCode: 'timeout' },
+    })
+    expect(inbound?.run?.toolCalls).toHaveLength(1)
+    expect(ilink.sendCalls, '生成失败不得出网').toHaveLength(0)
+  })
+
+  it('配置在 outbox 生成后被关闭：run 落 skipped，仍保留不可发送原因与已生成摘要', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { rc, ilink, dir } = makeHarness()
+    const slot = 1
+    const r = createClawbotRemotes({
+      ...rc,
+      ask: async () => ({ ok: true, answer: '预生成回复', status: 'ok' }),
+    })
+    r.setClawbotInstanceConfig({ slot, autoReply: true, kbEnabled: true, kbId: 7, splitReply: false })
+    await r.createClawbotBindQr({ slot })
+    ilink.pollQueue.push(CONFIRMED)
+    await r.getClawbotBindState({ slot })
+    await flush()
+
+    const now = Date.now()
+    const run = enqueueOrMergeReplyRun(dir, {
+      slot,
+      targetMessageId: 701,
+      question: '关闭后不要发',
+      debounceMs: 0,
+      now,
+    })
+    saveReplyParts(dir, run.id, ['已生成待发送'], now)
+    r.setClawbotInstanceConfig({ slot, autoReply: false })
+    r.ensureClawbotChannel()
+    await vi.advanceTimersByTimeAsync(10)
+    await flush()
+
+    const finished = readReplyRun(dir, run.id)
+    expect(finished?.run.status).toBe('skipped')
+    expect(finished?.parts[0]?.status, '配置关闭不得把已生成内容发出去').toBe('pending')
+    expect(finished?.run.lastError).toContain('未开启自动回复')
+    expect(ilink.sendCalls).toHaveLength(0)
   })
 })

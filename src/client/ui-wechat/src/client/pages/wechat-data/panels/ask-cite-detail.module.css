@@ -53,7 +53,7 @@
    2026-10-19 微信化（NV-02 / DL-12）：从「并排 320px 常驻栏」改成**右侧覆盖式抽屉**
    —— 正文因此始终满宽（打开引用不再挤压回答列）。
    默认关闭（item === null 时不渲染），点正文角标才滑出、点关闭/同一条角标收起。
-   定位祖先是 `.askLayout`（position:relative）；会话内问答则是 384→400 的抽屉
+   定位祖先是 `.askLayout`（position:relative）；会话内问答则是随视口伸缩的抽屉
    `.panel`（`.citeDetail[data-overlay]` 的定位祖先）。 */
 .citeDetail {
   position: absolute;
@@ -183,6 +183,42 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 加载中 / 空 / 失败 / 缺定位：同一块位置，四种状态各自说清，不把空白留给用户猜。 */
+.citeDetailCtxState {
+  padding: 6px 8px;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--nm-text-2);
+  overflow-wrap: anywhere;
+}
+.citeDetailCtx[data-state='error'] .citeDetailCtxState {
+  color: var(--nm-danger-text);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 28%, transparent);
+}
+.citeDetailCtx[data-state='loading'] .citeDetailCtxState {
+  color: var(--nm-text-3);
+}
+.citeDetailCtxActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.citeDetailCtxRetry {
+  padding: 3px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.citeDetailCtxRetry:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
+.citeDetailCtxHint { font-size: 10.5px; line-height: 1.5; color: var(--nm-text-3); overflow-wrap: anywhere; }
 
 /* ── 动作行 ──────────────────────────────────────────────────
    「归档」是主位（把这条留下），「打开会话原文」是次位（离开问答）。 */
@@ -227,6 +263,18 @@
   overflow-wrap: anywhere;
 }
 .citeDetailGhost:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.citeDetailGhost:disabled { opacity: 0.5; cursor: default; }
+/* 打开文件失败：贴在动作行下方，不挤占正文；长错误允许换行。 */
+.citeDetailError {
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 28%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger-text);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
 
 /* ── 窄屏：详情面板改为**覆盖式**（不挤压对话列）──────────────
    手机/平板档（≤820px）对话列本身就只有 ~350px，再切 320px 给详情会把正文
@@ -242,13 +290,15 @@
     z-index: 30;
     box-shadow: -8px 0 24px color-mix(in srgb, #000 45%, transparent);
   }
+  .citeDetailCtxRow { grid-template-columns: auto minmax(0, 1fr); }
+  .citeDetailCtxTime { grid-column: 1; }
+  .citeDetailCtxText { grid-column: 2; grid-row: 1 / span 2; white-space: normal; }
 }
 
 /* ── 强制覆盖式（`data-overlay`）──────────────────────────────
-   会话内问答的面板**恒为 384px**（`session-ask.module.css` 的 `.panel`），
-   与窗口宽度无关 —— 所以上面那条媒体查询在宽窗口下不命中，而 384px 里
-   切 320px 给详情会把正文压到不可读。这里用属性强制覆盖，不依赖窗口宽度。
-   定位祖先是 `SessionAsk` 的 `.panel`（它有 `position: relative`）。 */
+   会话内问答的抽屉宽度随视口伸缩，且常常同时展示着消息列 —— 所以上面那条
+   窗口媒体查询未必命中，再切 320px 给详情仍会把正文压到不可读。这里用属性
+   强制覆盖，不依赖窗口宽度。定位祖先是 `SessionAsk` 的 `.panel`（定位元素）。 */
 .citeDetail[data-overlay] {
   position: absolute;
   top: 0;

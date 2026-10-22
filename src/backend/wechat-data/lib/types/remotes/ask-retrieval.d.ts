@@ -20,7 +20,9 @@
 import { type AskCitation, type AskChunk } from '../query/ask.ts';
 import { type PipelineOutput } from '../query/retrieval/pipeline.ts';
 import type { RerankWeights } from '../query/retrieval/types.ts';
+import type { HybridSearchExecutor } from '../query/tools/search-hybrid-tool.ts';
 import type { RetrievalTool, ToolContext } from '../query/tools/types.ts';
+import type { AnswerRuntimeEmitStage } from '../query/answer-runtime/types.ts';
 /**
  * 把流水线输出摊平成「与旧 `AskRetrievalStats` 同形」的统计对象。
  *
@@ -85,13 +87,24 @@ export interface AskRetrievalInput {
     };
     /** 已知实体名。 */
     askKnownEntities: () => string[];
+    /** 现在时刻（可注入，便于测试；缺省用系统时间）。 */
+    now?: Date;
+    /**
+     * 最终保留的引用条数（缺省 24，上限 60）。
+     *
+     * 这个值现在也供 `search_hybrid` 使用：模型显式传 `limit` 时不能仍被固定截成 24。
+     */
+    limit?: number;
     /** 阶段事件发射器（可选）。 */
-    emitStage?: ((stage: {
-        key: string;
-        label: string;
-        status: 'running' | 'done' | 'skipped';
-        detail?: string;
-    }) => void) | undefined;
+    emitStage?: AnswerRuntimeEmitStage | undefined;
+    /**
+     * 混合检索完成后的旁路回调。
+     *
+     * 反馈闭环需要 retrievalId 与逐篇特征向量，但这些数据不能塞进给模型看的
+     * `ToolResult`（既占上下文又泄漏内部权重）。装配层通过这个回调把它们带到
+     * `askTrace`，模型侧看到的仍只有命中摘要。
+     */
+    onHybridExecution?: ((output: AskRetrievalOutput) => void) | undefined;
 }
 /** 检索阶段的产出。 */
 export interface AskRetrievalOutput {
@@ -176,6 +189,25 @@ export declare function runAskRetrieval(input: AskRetrievalInput): Promise<AskRe
  * @returns 工具集（`search_semantic` 在未配向量模型时仍存在，执行时如实报「未配置」）。
  */
 export declare function buildAskTools(input: AskRetrievalInput): RetrievalTool[];
+/**
+ * 把 `search_hybrid` 的请求翻译成一次问答检索。
+ *
+ * ## 为什么在装配层做
+ *
+ * 工具层（`query/tools/**`）不能反向 import `remotes/ask-retrieval.ts`，否则
+ * `tools -> remotes -> tools` 成环。这里用闭包把 `AskRetrievalInput` 的装配依赖
+ * 带进去，工具层只拿一个 `HybridSearchExecutor`。
+ *
+ * ## 范围处理
+ *
+ * `request.scope` 已由工具层归一（会与 `ctx.scope` 的硬范围校验冲突），这里再把它
+ * 作为**硬范围**下发给流水线；原始 `input.scope` 中没被请求覆盖的日期也保留。
+ * `mode='kb'` 时关闭微信数据面，确保不会因为流水线配置或降级路径碰到本机消息。
+ *
+ * @param input - 本次问答的装配输入。
+ * @returns 混合检索执行器。
+ */
+export declare function makeAskHybridExecutor(input: AskRetrievalInput): HybridSearchExecutor;
 /**
  * 本次问答的工具执行上下文（与 {@link buildAskTools} 配套）。
  *

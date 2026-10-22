@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
+import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, ThreadState, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
 import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbSearchResult, KbSummaryResult } from './types.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import type { KbExtractResult, KbLinkSuggestResult, KbModelConfigResult, KbModelConfigView, KbVectorBuildWireResult, KbVectorIndexView, RetrievalConfig, RetrievalConfigPatch, RetrievalEvalResult, RetrievalStatus, VectorBuildResult } from './types.ts';
@@ -375,6 +375,8 @@ export declare abstract class GatewayAskOps extends GatewayRead {
             mediaType: string;
             name?: string;
         }>;
+        /** 上一轮返回的线程状态；用于跨请求继承会话、联系人与时间窗。 */
+        threadState?: ThreadState;
     }): Promise<AskResult>;
     /**
      * 取消一轮正在生成的问答（W3-6.1）。

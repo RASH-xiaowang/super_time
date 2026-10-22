@@ -51,6 +51,8 @@ export function clickableKey(onActivate: () => void, opts?: {
     'aria-label': opts?.label,
     onClick: (e) => { if (stop) e.stopPropagation(); onActivate() },
     onKeyDown: (e) => {
+      // 行内子按钮自己处理激活；父行的 keydown 不能把它的 Enter/Space 再触发一次。
+      if (e.target !== e.currentTarget) return
       // 空格要 preventDefault，否则会同时滚动页面。
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault()

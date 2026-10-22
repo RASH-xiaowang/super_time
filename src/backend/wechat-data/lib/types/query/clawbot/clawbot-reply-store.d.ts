@@ -19,6 +19,8 @@ export interface ClawbotReplyRun {
     status: ClawbotReplyRunStatus;
     attempts: number;
     lastError: string | null;
+    /** 白名单运行详情 JSON；null = 旧行或尚未生成摘要。 */
+    resultJson: string | null;
     nextAttemptAt: number;
     createdAt: number;
     updatedAt: number;
@@ -66,6 +68,11 @@ export interface ClawbotReplySendClaim {
 export interface ClawbotReplyFailedClaimResult {
     part: ClawbotReplyPart;
     run: ClawbotReplyRun;
+}
+/** 一页消息对应的 run 关联：target = 入站目标，sent = 出站分段。 */
+export interface ClawbotReplyRunAttachments {
+    target: Map<number, ClawbotReplyRun>;
+    sent: Map<number, ClawbotReplyRun>;
 }
 export interface ClaimReplyRunGenerationInput {
     runId: number;
@@ -162,13 +169,13 @@ export declare function renewReplyPartSendingClaim(dir: string, claim: ClawbotRe
  * 旧 owner 在租约过期、另一 worker 接管后调用会返回 null 且不写任何行。
  * 同一 claim 重复提交是幂等的：run 已 ready 时直接返回现有分段。
  */
-export declare function saveReplyPartsClaimed(dir: string, claim: ClawbotReplyGenerationClaim, parts: readonly ClawbotReplyPartInput[], now?: number): ClawbotReplyPart[] | null;
+export declare function saveReplyPartsClaimed(dir: string, claim: ClawbotReplyGenerationClaim, parts: readonly ClawbotReplyPartInput[], now?: number, resultJson?: string | null): ClawbotReplyPart[] | null;
 /** fenced 生成失败回退；旧 owner 返回 null，不覆盖接管者。 */
-export declare function markReplyRunRetryClaimed(dir: string, claim: ClawbotReplyGenerationClaim, error?: string | null, nextAttemptAt?: number, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunRetryClaimed(dir: string, claim: ClawbotReplyGenerationClaim, error?: string | null, nextAttemptAt?: number, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** fenced 生成永久失败；旧 owner 返回 null。 */
-export declare function markReplyRunFailedClaimed(dir: string, claim: ClawbotReplyGenerationClaim, error?: string | null, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunFailedClaimed(dir: string, claim: ClawbotReplyGenerationClaim, error?: string | null, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** fenced 策略跳过；旧 owner 返回 null，不覆盖接管者。 */
-export declare function markReplyRunSkippedClaimed(dir: string, claim: ClawbotReplyGenerationClaim, reason?: string | null, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunSkippedClaimed(dir: string, claim: ClawbotReplyGenerationClaim, reason?: string | null, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /**
  * 在发送 claim 的 fencing 保护下标记 success。
  *
@@ -185,16 +192,16 @@ export declare function markReplyPartFailedClaimed(dir: string, claim: ClawbotRe
  *
  * 任一层 owner/fence 不匹配都会整体返回 null；不会出现只写一半的状态。
  */
-export declare function failReplyPartAndRunClaimed(dir: string, claim: ClawbotReplySendClaim, error?: string | null, now?: number): ClawbotReplyFailedClaimResult | null;
+export declare function failReplyPartAndRunClaimed(dir: string, claim: ClawbotReplySendClaim, error?: string | null, now?: number, resultJson?: string | null): ClawbotReplyFailedClaimResult | null;
 /**
  * 全部 outbox 已 sent 后结束 run。
  *
  * 这里不要求 lease 尚未过期：sent/failed 回填会保留 owner/fence 并把 until 归零，
  * 后续收尾仍由同一 claim 完成；一旦别的 worker 接管，owner/fence 已变，本函数返回 null。
  */
-export declare function markReplyRunDoneClaimed(dir: string, claim: ClawbotReplySendClaim, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunDoneClaimed(dir: string, claim: ClawbotReplySendClaim, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** 发送阶段整条 run 永久失败；同样受最后一次 send claim 的 owner/fence 保护。 */
-export declare function markReplyRunFailedAfterSendClaimed(dir: string, claim: ClawbotReplySendClaim, error?: string | null, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunFailedAfterSendClaimed(dir: string, claim: ClawbotReplySendClaim, error?: string | null, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** 开始一次生成尝试；attempts 加一，并设置生成租约。 */
 export declare function markReplyRunGenerating(dir: string, runId: number, now?: number): ClawbotReplyRun;
 /** 生成失败后回到 queued，并记录下一次尝试时间。 */
@@ -206,11 +213,11 @@ export declare function markReplyRunFailed(dir: string, runId: number, error?: s
 /** run 被策略跳过。 */
 export declare function markReplyRunSkipped(dir: string, runId: number, reason?: string | null, now?: number): ClawbotReplyRun;
 /** 全部 outbox 已 sent 且无人持租约时完成 run。 */
-export declare function markReplyRunDoneIfIdle(dir: string, runId: number, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunDoneIfIdle(dir: string, runId: number, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** 无活动 claim 时把 run 标记为永久失败。 */
-export declare function markReplyRunFailedIfIdle(dir: string, runId: number, error?: string | null, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunFailedIfIdle(dir: string, runId: number, error?: string | null, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 /** 无活动 claim 时按策略跳过 run。 */
-export declare function markReplyRunSkippedIfIdle(dir: string, runId: number, reason?: string | null, now?: number): ClawbotReplyRun | null;
+export declare function markReplyRunSkippedIfIdle(dir: string, runId: number, reason?: string | null, now?: number, resultJson?: string | null): ClawbotReplyRun | null;
 export declare function saveReplyParts(dir: string, runId: number, parts: readonly ClawbotReplyPartInput[], now?: number): ClawbotReplyPart[];
 /**
  * 标记一次实际发送尝试。

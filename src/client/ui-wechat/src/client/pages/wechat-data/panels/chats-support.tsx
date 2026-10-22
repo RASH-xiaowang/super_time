@@ -152,7 +152,9 @@ export function TransferArrowGlyph(): React.JSX.Element {
   )
 }
 /** 右键菜单项要触发的动作。 */
-export type MsgMenuAction = 'copyText' | 'copyJson' | 'openLink' | 'openViewer' | 'openFile' | 'openChatlog' | 'edit'
+export type MsgMenuAction =
+  | 'copyText' | 'copyJson' | 'openLink' | 'openViewer' | 'openFile' | 'openChatlog'
+  | 'poster' | 'viewSource' | 'messageInfo' | 'editMessage' | 'editSource'
 /**
  * 右键菜单里一项的规格。
  *
@@ -170,7 +172,8 @@ export interface MsgMenuItem {
  *
  * 本项目是**只读的本地库查看器**：没有发送链路，所以微信菜单里的
  * 「转发」「撤回」「删除」在这里没有对应动作；能做的按微信顺序排列：
- * 复制文本 → 复制消息 JSON →（打开链接 / 查看大图 / 打开文件 / 查看聊天记录）→ 编辑消息副本。
+ * 复制文本 → 复制消息 JSON →（打开链接 / 查看大图 / 打开文件 / 查看聊天记录）
+ * → 生成聊天海报 / 查看源码 / 查看消息信息 / 修改消息 / 修改源码。
  * 「语音转文字」仍留在语音气泡下方 —— 微信也是把转写做成气泡下方的按钮，不是菜单项。
  * @param m - the target message.
  * @param kind - its render kind.
@@ -186,12 +189,19 @@ export function buildMsgMenu(m: WechatMessage, kind: RenderKind): MsgMenuItem[] 
   if (kind === 'image') items.push({ label: '查看大图', action: 'openViewer' })
   if (kind === 'file') items.push({ label: '打开文件', action: 'openFile', arg: m.rich?.title || text })
   if (kind === 'chatlog' && m.rich) items.push({ label: '查看聊天记录', action: 'openChatlog' })
-  // 只对**纯文本**放开：后端的编辑是整列覆盖 `message_content`，而引用消息（local_type 49）
-  // 的该列是本机 100% BLOB 的 appmsg XML（probe-storage 普查：49 型 13213 行全 blob）。
-  // 覆盖成纯文本等于把引用卡片拍平成文本、被引用的原文从界面上消失。要做引用编辑，
-  // 得改成只改写 XML 里的 <title> 再写回同编码 —— 那是另一件事，先不做。
-  if (kind === 'text') items.push({ label: '编辑消息副本', action: 'edit' })
+  items.push({ label: '生成聊天海报...', action: 'poster' })
+  items.push({ label: '查看源码', action: 'viewSource' })
+  items.push({ label: '查看消息信息', action: 'messageInfo' })
+  // 普通「修改消息」只对纯文本开放：把图片/引用/文件等结构化载荷拍平成文本会直接毁掉卡片。
+  // 这些类型仍可通过「修改源码」显式编辑原始 XML / 载荷，并由后端保留原编码。
+  if (kind === 'text') items.push({ label: '修改消息', action: 'editMessage' })
+  items.push({ label: '修改源码', action: 'editSource' })
   return items
+}
+
+/** 查看/修改源码统一读取本地解密副本里的原始内容（zstd 已在查询层解压）。 */
+export function messageSourceText(m: WechatMessage): string {
+  return m.msgContent ?? m.strContent ?? ''
 }
 /** Module-level avatar cache (username -> data URL / remote URL / null). */
 export const avatarCache = new Map<string, string | null>()
@@ -204,7 +214,7 @@ export const AVATAR_CACHE_MAX = 300
  * 群里两个同名成员（或同一个昵称出现在两个会话）会命中同一条缓存、显示同一个头像 ——
  * 属于「用户标识张冠李戴」。调用方必须传真实 username；拿不到时传空串，
  * 此时只渲染首字母占位、不写缓存（宁可没有头像，也不给错的头像）。
- * @param props.name - 展示名（仅用于首字母与配色）。
+ * @param props.name - 展示名（用于首字母、配色；批量未命中时作为单张回落的 nickname）。
  * @param props.username - 真实 wxid；为空表示未知身份。
  * @param props.size - 头像边长（px）。
  * @returns the avatar element.
@@ -219,7 +229,8 @@ export function Avatar({ name, username, size }: { name: string; username: strin
     // W2-10.2：走攒批队列 —— 一屏 N 个 Avatar 合成一次 `getAvatarsLocal`，而不是 N 次
     // `getAvatar`（实测 200 个头像 5.6×，且少 199 次 IPC 往返）。未命中的那几条由队列
     // 内部退回单张 —— 那里还有一级「按昵称找联系人」的回落，批量接口没有这一级。
-    apiGetAvatarBatched({ username: key })
+    // nickname 只供这一级回落使用；缓存键仍是真实 username，绝不能换成展示名。
+    apiGetAvatarBatched({ username: key, nickname: name })
       .then((r) => {
         const value = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, value, AVATAR_CACHE_MAX)
@@ -268,16 +279,21 @@ export function fileStyle(fileName: string): { kind: string; emoji: string } {
  * 抽成模块级函数的唯一原因：文件卡的点击区与右键菜单的「打开文件」
  * 都要走同一条链路，不能各写一份（两份实现迟早会在错误文案上分叉）。
  * @param fileName - 消息里的文件名。
- * @param opts - 归属线索：消息里的文件字节数与接收时间。`msg/file` 只按月份
- *   分目录，同名文件可能属于别的会话，必须把这两条线索透传给后端。
+ * @param opts - 归属线索：消息里的文件字节数、接收时间与附件 MD5。
+ *   `msg/file` 只按月份分目录，同名文件可能属于别的会话；同名同大小时
+ *   `fileMd5` 是唯一可靠的消歧键。
  * @returns 成功返回空串，失败返回可展示的错误文案。
  */
-export async function downloadMessageFile(fileName: string, opts: { size?: number; createTime?: number } = {}): Promise<string> {
+export async function downloadMessageFile(
+  fileName: string,
+  opts: { size?: number; createTime?: number; fileMd5?: string } = {},
+): Promise<string> {
   try {
     const r = await apiGetMessageFile({
       fileName,
       ...(opts.size !== undefined ? { size: opts.size } : {}),
       ...(opts.createTime !== undefined ? { createTime: opts.createTime } : {}),
+      ...(opts.fileMd5 !== undefined ? { fileMd5: opts.fileMd5 } : {}),
     })
     if (!r.url) return r.error ?? '文件不可用'
     const a = document.createElement('a')

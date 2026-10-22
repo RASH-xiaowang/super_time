@@ -32,7 +32,6 @@ import { createAskDeepRemotes } from './remotes/askdeep.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
-import { knownEntityNames } from './query/search.ts'
 import type { StreamControl } from './query/zip.ts'
 import { getConfig } from './query/config.ts'
 import { recordExport } from './query/export-history.ts'
@@ -46,6 +45,7 @@ import {
 } from './query/kb/model-config.ts'
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts'
+import type { AnswerRuntimeEmitStage } from './query/answer-runtime/types.ts'
 import { recordOperation } from './query/operation-log.ts'
 import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
 import { publishDataRevision } from './query/sync-status.ts'
@@ -63,6 +63,7 @@ import { archiveMessages } from './query/revoke-retain.ts'
 import { PREWARM_PROBE_MS, prewarmBudgetMs, pumpSnsDecodeCache } from './query/sns-image.ts'
 import { prewarmAfterInit, prewarmIsNotable } from './query/startup-prewarm.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
+import { AskCatalogCache } from './gateway-ask-catalog.ts'
 
 /** 网关的「核」：状态、生命周期、共享私有辅助与 16 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export abstract class GatewayCore extends TypertRemoteService {
@@ -73,6 +74,8 @@ export abstract class GatewayCore extends TypertRemoteService {
 
   protected readonly _ctx: Context
   protected readonly _dirs: ResolvedDirs
+  /** 问答目录缓存；读取器延迟到调用时才解引用 `_dirs`，构造期不触发磁盘访问。 */
+  private readonly _askCatalog = new AskCatalogCache(() => this._dirs.decrypted)
   /**
    * 登录账号 wxid 的**带失效**缓存。
    *
@@ -160,14 +163,6 @@ export abstract class GatewayCore extends TypertRemoteService {
    * 在向量库自己的 meta 与行里，见 `kbVectorIndexStatus`。
    */
   protected readonly _kbIndexJobs = new Map<number, { done: number; total: number; startedAt: number; error: string }>()
-  /**
-   * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
-   *
-   * 为什么缓存：这份名单要读联系人表 + 会话表（两次 SQLite 打开），而每次提问都要用；
-   * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
-   */
-  protected readonly _knownEntities = new Map<string, string[]>()
-
   /**
    * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
    *
@@ -432,19 +427,17 @@ export abstract class GatewayCore extends TypertRemoteService {
    * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
    * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
    */
-  protected askKnownEntities(): string[] {
-    const key = this._dirs.decrypted
-    const hit = this._knownEntities.get(key)
-    if (hit) return hit
-    let names: string[] = []
-    try {
-      names = knownEntityNames(key)
-    } catch {
-      names = []
-    }
-    this._knownEntities.set(key, names)
-    return names
-  }
+  protected askKnownEntities(): string[] { return this._askCatalog.entitiesForCurrentDirectory() }
+
+  /**
+   * 问答用的会话目录（username + 显示名），按数据目录缓存。
+   *
+   * 为什么需要映射而不只是名字：模型/用户写的是显示名「z_卖酒」，
+   * 工具参数要求的却是 `wxid_xxx`。没有映射时只能在两种坏结果里选：
+   * 把显示名当 username 查空，或不断调用 `list_sessions` 试图先找范围。
+   * @returns 会话目录（读取失败时返回空数组，问答照常可用）。
+   */
+  protected askKnownSessions(): Array<{ username: string; name: string }> { return this._askCatalog.sessionsForCurrentDirectory() }
 
     /**
    * 构造「过隐私闸门」的 embedding 函数 —— 工厂在 `gateway-llm-factory.ts`
@@ -735,6 +728,7 @@ export abstract class GatewayCore extends TypertRemoteService {
       makeStageEmitter: (streamId) => this.makeStageEmitter(streamId),
       kbModel: (kbId, role) => this.kbModel(kbId, role),
       askKnownEntities: () => this.askKnownEntities(),
+      askKnownSessions: () => this.askKnownSessions(),
       saveAskHistory: (options, result, elapsedMs, model) => this.saveAskHistory(options, result, elapsedMs, model),
       // W3-6.1：可取消的一轮生成。信号与取消把手都由 gateway 持有（与搜索同一套打法），
       // remotes 只消费 —— 否则「谁持有令牌」会出现第二个出处。
@@ -932,7 +926,7 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @param streamId - 客户端生成的流式标识；为空表示不推送。
    * @returns 阶段回调。
    */
-  protected makeStageEmitter(streamId?: string): ((stage: { key: string; label: string; status: 'running' | 'done' | 'skipped'; detail?: string }) => void) | undefined {
+  protected makeStageEmitter(streamId?: string): AnswerRuntimeEmitStage | undefined {
     const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
     if (!id) return undefined
     const ctx = this._ctx
@@ -973,13 +967,13 @@ export abstract class GatewayCore extends TypertRemoteService {
         ...(options.from ? { from: options.from } : {}),
         ...(options.to ? { to: options.to } : {}),
         ...(model ? { model } : {}),
-        intent: result.plan?.intent ?? '',
-        terms: result.plan?.terms ?? [],
+        intent: result.plan?.intent ?? '', terms: result.plan?.terms ?? [],
         citations,
         citedIndexes: result.citedIndexes ?? [],
         basis: result.basis ?? '',
-        insufficient: result.insufficient === true,
-        withheld: result.withheld === true,
+        insufficient: result.insufficient === true, withheld: result.withheld === true,
+        runtimeStatus: result.status, statusReason: result.statusReason, synthesisError: result.synthesisError,
+        evidence: result.evidence, toolCalls: result.toolCalls, resources: result.resources,
         ...(result.retrieval ? { retrieval: result.retrieval } : {}),
         elapsedMs,
       })

@@ -20,6 +20,7 @@ import type {
   AskHistorySnapshot,
   AskOptimizeResult,
   AskResult,
+  ThreadState,
   ReplySuggestResult,
   AvatarResult,
   BackupMutationResult,
@@ -212,6 +213,8 @@ export async function apiAskWechat(options: {
   kbId?: number
   /** 取消标识（W3-6.1）：与 streamId 同值。带上它，「停止生成」才有地方使力。 */
   jobId?: string
+  /** 上一轮返回的结构化线程状态；用于跨请求继承会话、联系人与时间窗。 */
+  threadState?: ThreadState
 }): Promise<AskResult> {
   return unwrap(await remote().askWechat(options))
 }

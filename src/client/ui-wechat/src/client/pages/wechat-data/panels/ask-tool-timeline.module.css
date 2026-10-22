@@ -1,0 +1,122 @@
+/* ── 实时工具时间线 ─────────────────────────────────────────
+   每次工具调用是一张可展开的卡；开始/重试/完成/失败都按 callId 就地更新。
+   失败默认展开，运行中只保留一行，避免过程信息淹没回答。 */
+.toolTimeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.toolCard {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--nm-text-1) 9%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 3%, transparent);
+}
+.toolCard[data-status='running'] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 24%, transparent);
+}
+.toolCard[data-status='failed'] {
+  border-color: color-mix(in srgb, var(--nm-danger) 28%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 5%, transparent);
+}
+.toolCard[data-status='skipped'] { opacity: 0.68; }
+.toolCardHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.toolCardHead:focus-visible {
+  outline: 1px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.toolDot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+}
+.toolCard[data-status='running'] .toolDot {
+  background: var(--nm-cyan);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+.toolCard[data-status='done'] .toolDot { background: var(--nm-success, #4ecb8d); }
+.toolCard[data-status='failed'] .toolDot { background: var(--nm-danger); }
+.toolTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nm-text-1);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolStatus {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-text-1) 7%, transparent);
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.toolCard[data-status='running'] .toolStatus { color: var(--nm-cyan-text); }
+.toolCard[data-status='failed'] .toolStatus {
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
+}
+.toolChevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--nm-text-3);
+  transition: transform 0.15s;
+}
+.toolCardHead[aria-expanded='true'] .toolChevron { transform: rotate(90deg); }
+.toolMeta {
+  margin-top: 2px;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+.toolArgs {
+  margin-top: 3px;
+  padding: 3px 6px;
+  overflow: hidden;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolCardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--nm-text-1) 10%, transparent);
+  color: var(--nm-text-2);
+  font-size: 10.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.toolError { color: var(--nm-danger); }
+.toolPhase { color: var(--nm-text-3); }

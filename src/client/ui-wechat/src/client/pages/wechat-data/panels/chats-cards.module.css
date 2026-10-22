@@ -1,9 +1,7 @@
 /* ── 左侧会话列表 ─────────────────────────────────────────────── */
 .sidebar {
-  width: 304px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
+  width: 304px; flex-shrink: 0;
+  display: flex; flex-direction: column;
   /* 微信桌面端：会话列不是卡片，是**纯白平面**（与会话区之间只留 `.messages` 左侧那条发丝线）。 */
   border: none;
   border-radius: 0;
@@ -94,9 +92,7 @@
   z-index: 20;
   padding: 10px 14px;
   border-bottom: 1px solid var(--nm-border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   flex-wrap: wrap;
   min-height: 52px;
 }
@@ -168,8 +164,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/*
-/* 轮询状态（✓ 时间 · N 条新消息）：跟在动作排后，不能吃 margin-left:auto —— 两个 auto 会平分剩余空间把动作排推到标题上（2026-10-16 真机实测）。 */
+/* 轮询状态（✓ 时间 · N 条新消息）：排在动作排前，不能吃 margin-left:auto —— 两个 auto 会平分剩余空间把动作排推到标题上（2026-10-16 真机实测）。 */
 .msgHeaderPoll { margin-left: 8px; }
 /* 类型统计条：从头部移出的独立条；窄列下整条收起（见上方 @container）。 */
 .msgTypeChips {
@@ -508,6 +503,11 @@
 .exportBtn:disabled,
 .exportBtnPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
 /* ── 编辑消息副本对话框 ── 应用内多行编辑器（Electron 不支持 window.prompt）；正文 14px，与消息流同档。 */
+/* 双类名提权，稳过 kit 的 `.dialog { width: min(520px, 92vw) }`：
+   编辑长消息时 520px 太窄，正文频繁折行。 */
+.editDialog.editDialog {
+  width: min(760px, 92vw);
+}
 .editHint {
   margin: 0 0 10px;
   font-size: 12px;
@@ -516,8 +516,8 @@
 }
 .editArea {
   width: 100%;
-  min-height: 96px;
-  max-height: 40vh;
+  min-height: 160px;
+  max-height: 50vh;
   box-sizing: border-box;
   resize: vertical;
   padding: 10px 12px;
@@ -533,6 +533,71 @@
   outline: none;
   border-color: var(--nm-cyan);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 22%, transparent);
+}
+.messageToolFoot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.messageToolMeta {
+  margin: 0 0 8px;
+  color: var(--nm-text-3);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 12px;
+}
+.messageToolCode {
+  min-height: 280px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+}
+.messageToolError {
+  margin: 10px 0 0;
+  color: var(--nm-danger, #d73a49);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.messageInfoGrid {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) minmax(0, 1fr);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  overflow: hidden;
+}
+.messageInfoRow {
+  display: contents;
+}
+.messageInfoLabel,
+.messageInfoValue {
+  min-width: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--nm-border);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.messageInfoLabel {
+  color: var(--nm-text-3);
+  background: var(--nm-bg-input);
+}
+.messageInfoValue {
+  color: var(--nm-text-1);
+  overflow-wrap: anywhere;
+  font-family: var(--nm-font-mono, monospace);
+}
+.messageInfoRow:last-child .messageInfoLabel,
+.messageInfoRow:last-child .messageInfoValue {
+  border-bottom: none;
+}
+/* 手机档跟 kit 的底部 sheet 一样整宽（双类名优先级高于 kit 的 `.dialog`）。 */
+@media (max-width: 560px) {
+  .editDialog.editDialog {
+    width: 100%;
+    max-width: 100%;
+  }
 }
 .exportSectionTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
 .exportCountBadge {
@@ -650,7 +715,6 @@
   /* 搜索框：微信是填充式灰底、无描边；深色端 #2e2e2e，浅色端见下方覆盖。 */
   --wx-search-bg: #2e2e2e;
   --wx-search-ph: var(--nm-text-2);
-
   width: 300px;
   flex-shrink: 0;
   display: flex;
@@ -721,7 +785,6 @@
 }
 .memberEmptyClear:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 .memberEmptyClear:active { background: var(--nm-bg-active); }
-
 .groupInfoRowValue {
   min-width: 0;
   font-size: var(--wx-info-text);
@@ -785,7 +848,6 @@
   align-items: stretch;
   gap: 4px;
 }
-/* ══════════════════════════════════════════════════════════════════
 /* 消息右键菜单：覆盖层吃掉外部点击与滚动关闭，菜单定位到光标处。 */
 .msgCtxOverlay {
   position: fixed;
@@ -795,7 +857,8 @@
 .msgCtxMenu {
   /* 菜单是 portal 出去的，拿不到 .msgBody 令牌，故自带一套（深浅各一份）。 */
   position: fixed;
-  min-width: 156px;
+  width: 228px;
+  min-width: 228px;
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   padding: 4px 0;
@@ -820,20 +883,37 @@
   --wx-ctx-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
 }
 .msgCtxItem {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
+  height: 36px;
+  box-sizing: border-box;
   border: none;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
-  padding: 8px 16px;
+  padding: 0 14px;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
+.msgCtxIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  color: var(--nm-text-2);
+}
+.msgCtxLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
 .msgCtxItem:hover { background: var(--wx-ctx-hover); }
 .msgCtxItem:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* 群信息六区骨架的内容包与固定底部动作位（导出槽在滚动区外）。 */
 .groupZones { display: flex; flex-direction: column; }
 .memberCount {
@@ -868,7 +948,6 @@
 }
 .groupExportPrimary:hover { background: color-mix(in srgb, var(--nm-brand) 88%, #000); border-color: transparent; }
 .groupExportPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* 手机档（≤560）：会话列表占满整栏，开会话后让位给消息流；跨份选择器只能用纯属性选择器（见 chats-rows 末尾说明）。 */
 @media (max-width: 560px) {
   .sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border: none; border-radius: 0; }
@@ -888,7 +967,8 @@
   }
   /* 触摸目标下限 44px（与底部标签栏同口径）。 */
   .msgCtxItem { display: flex; align-items: center; min-height: 44px; }
-
+  .messageInfoGrid { grid-template-columns: 96px minmax(0, 1fr); }
+  .messageToolCode { min-height: 220px; }
   /* 筛选区紧凑化：段条 48 + 搜索 53 + 分类 50 + 统计 32 = 183px 吃掉内容区 25% 高度；
      收内边距、控件 36px、统计与分类并成一行，合计约 110px。 */
   .search { padding: 6px 10px; }

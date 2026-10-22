@@ -140,6 +140,19 @@ function normalizePrompt(draft: string, defaultPrompt: string): string {
 }
 
 /**
+ * 自动回复是否有可运行的知识库作用域。
+ *
+ * 后端 `clawbot-auto` 是 kb-only + requireKb：没有有效知识库时开启自动回复只会得到
+ * 一个“看起来已开启、实际永不发送”的配置。前端必须使用同一判定提前锁住开关。
+ */
+function hasRunnableKb(cfg: ClawbotInstanceConfig): boolean {
+  return cfg.kbEnabled === true
+    && cfg.kbId !== null
+    && Number.isSafeInteger(cfg.kbId)
+    && cfg.kbId > 0
+}
+
+/**
  * 行为分区（P4）：会替你给微信联系人发消息的开关，视觉重量与说明要配得上它的后果。
  * switch 形态（非裸 checkbox）+ 两行说明（走哪条管道 / 在哪审计）；读失败不冒充配置。
  *
@@ -177,6 +190,9 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
   // 配置从外部变化（切实例 / 重新读）时同步草稿 —— 否则会显示上一个实例的提示词。
   useEffect(() => { setDraft(saved !== '' ? saved : defaultPrompt) }, [saved, defaultPrompt, cfg?.slot])
   const dirty = draft !== (saved !== '' ? saved : defaultPrompt)
+  const kbReady = cfg !== null && hasRunnableKb(cfg)
+  // 已开启的历史矛盾配置仍允许关闭，避免锁死用户；只有“从关切的开启动作”被前置阻断。
+  const autoReplyBlocked = !kbReady && cfg?.autoReply !== true
   return (
     <Section title="自动回复" hint="会替你发消息，请确认">
       {readError !== '' && (
@@ -190,17 +206,25 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
           type="checkbox"
           role="switch"
           checked={cfg?.autoReply ?? false}
-          disabled={cfgBusy || cfg === null} {...desktopActionProps()}
+          disabled={cfgBusy || cfg === null || autoReplyBlocked} {...desktopActionProps()}
           onChange={(e) => { void onPatch({ autoReply: e.target.checked }) }}
         />
         <span className={css.autoText}>
           <span className={css.autoTitle}>AI 自动回复</span>
           <span className={css.autoDesc}>
-            开启后：收到微信消息时，Super Time 用设置里的「对话模型」自动生成回复并发送；
+            开启前必须先在下方开启知识库增强并选择一个有效知识库。开启后：收到微信消息时，
+            Super Time 用设置里的「对话模型」生成回答，且只用该知识库作为事实来源并发送；
             每次回复写一行操作日志（category=clawbot），可在「行动与维护 → 操作日志」里逐条审计。
           </span>
         </span>
       </label>
+      {cfg !== null && !kbReady && (
+        <span className={css.instWarn}>
+          {cfg.autoReply
+            ? '当前自动回复不会运行：自动回复需要选择知识库。请开启知识库增强并选择一个有效知识库；保存知识库设置后，无法运行的自动回复状态会自动关闭。'
+            : '自动回复需要选择知识库：请先开启下方知识库增强并选择一个有效知识库，之后才能打开自动回复。'}
+        </span>
+      )}
       <label className={css.autoRow}>
         <input
           type="checkbox"
@@ -211,7 +235,10 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         />
         <span className={css.autoText}>
           <span className={css.autoTitle}>知识库增强</span>
-          <span className={css.autoDesc}>回复前先检索你为该实例选择的知识库；开启增强但未选择知识库时，仍会继续自动回复，只是不检索知识库。</span>
+          <span className={css.autoDesc}>
+            自动回复的唯一数据来源。开启后请在下方选择一个有效知识库；关闭增强或清空选择时，
+            无法继续运行的自动回复会一并关闭，避免显示已开启却不发送。
+          </span>
         </span>
       </label>
       {cfg?.kbEnabled === true && (
@@ -226,8 +253,8 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
           {kbs.map((k) => <option key={k.id} value={String(k.id)}>{k.name}</option>)}
         </select>
       )}
-      {cfg?.autoReply === true && cfg?.kbEnabled === true && cfg?.kbId === null && (
-        <span className={css.instWarn}>已开启知识库增强但未选择知识库 —— 会继续自动回复，但不检索知识库。</span>
+      {cfg?.kbEnabled === true && kbs.length === 0 && (
+        <span className={css.instWarn}>还没有可用知识库：请先到「知识库」创建并完成索引，再回到这里选择。</span>
       )}
 
       {/* 系统提示词（2026-10-17）：人设 / 语气 / 回复风格。留空 = 用内置拟人化默认值。 */}

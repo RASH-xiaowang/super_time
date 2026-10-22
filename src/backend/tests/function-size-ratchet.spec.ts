@@ -61,19 +61,17 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-19：会话列表接键盘导航（onKeyDown + data-session-row），压缩同处注释抵消
   // 一行增量 ⇒ 376 → 375。棘轮只许变小，拆完要回来改数字。
   // 2026-10-19（微信化改版）：会话壳去掉霓虹背景/装饰层，375 → 370。成果记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  370',
+  // 2026-10-22：消息工具弹窗抽到 chats-message-tools.tsx ⇒ 370 → 338。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  338',
   // 2026-10-17：`reportIndexAction` / `resolveSystemPrompt` 抽成模块级（系统提示词覆盖 +
   // 索引日志），`emptyAnswerText` / `describeScope` / `normalizeKbId` 同批 ⇒ 519 → 516。
   // 棘轮只许变小，成果要记账。
-  // 2026-10-18：ClawBot 自动回复的图片/上下文让 askWechat 长大 ⇒ 把
-  // `buildAskScope` / `trimAskHistory` / `prepareAskImages` / `createAskRunChat` /
-  // `runChatWithImagesFallback` 抽成模块级；工厂从 466 降到 438。棘轮只许变小。
-  // 2026-10-19：ClawBot token 记账把 usage 累加塞进 askWechat；`createAskRunChat` 抽到
-  // `remotes/ask-run-chat.ts`、工厂里的取消包装压回一行 ⇒ 438 → 437。棘轮只许变小。
-  'src/backend/wechat-data/src/remotes/askdeep.ts  createAskDeepRemotes  437',
+  // 2026-10-22：问答主链路收敛到统一 answer runtime，`createAskDeepRemotes` 已低于
+  // 250 行阈值，按棘轮规则从台账移除；若以后再次越线，必须重新登记并先拆分。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  588',
   // 2026-10-19（微信化改版）：对话框/工具栏去掉装饰分支后 458 → 441。棘轮只许变小，成果记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  441',
+  // 2026-10-22：编辑状态移出 useChatsEdit，菜单分发抽成 useChatsMenuAction ⇒ 441 → 431。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  431',
   // 2026-09-30：重做为「三块可折叠面板」时把子件拆成 ai-model-panel / -profiles / -roles /
   // llm-probe 四个文件，540 → 493；同日「默认全部折叠」又去掉了自动展开的旁路，493 → 488。
   // 棘轮只许变小，改完要回来改数字。
@@ -82,10 +80,12 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // `useCiteDetail`），顺带把空态引导卡抽成 `AskEmptyIntro`、消息流装配抽成 `AskStream`、
   // 详情装配抽成 `AskCiteDetail` ⇒ 441 → 421。棘轮只许变小，成果要记账。
   // 2026-10-19（微信化改版）：引用角标那套装配随视觉简化收敛，421 → 418。成果记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  418',
+  // 2026-10-22：检索范围改成输入框上方的 @ 浮层，面板不再渲染常驻范围条；
+  // 输入面抽成 AskComposer，375 → 325。棘轮只许变小。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  325',
   // 2026-09-30：底部固定区（设置 / 模型余额 / 主题与数据状态）拆成 `SidebarFooter`，
   // 492 → 464。棘轮的方向是「只许变小」，所以拆完要回来改数字。
-  'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  473',
+  'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  472',
   // 2026-10-17：`openFile` 抽成模块级 `openExportFile`（顺带修「openPath 失败静默」的 bug）
   // ⇒ 461 → 456。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  456',
@@ -119,7 +119,8 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 模块级 `remoteImagesWithOp` / `mapGeoJsonWithOp`，方法体退回「签名 + 一行转发」。
   // 2026-10-19：319 → 317。头像归档逻辑搬到模块级 `avatarWithArchive` /
   // `avatarsLocalWithArchive`，方法体退回「签名 + 一行转发」。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  302',
+  // 2026-10-22：消息文件解析转发搬到模块级 `messageFileDataUrl` ⇒ 302 → 297。
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  297',
   // 2026-10-14（M9）：`SettingsPanel` 改成「桌面/浏览器」分派器（浏览器态整面板降级，见
   // `settings-browser.tsx`），原来那份三百多行的实现改名 `SettingsDesktopPanel`。
   // 这是**改名不是变胖**：行数一字未动，仍记 328。想降就得把某几节真搬出去。
@@ -138,7 +139,8 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-19：ContactsPanel 已 237 行（< 250 阈值）⇒ 从本棘轮移除（任务要求删除该条）。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KbRail.tsx  KbRail  291',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-cards.tsx  RichCard  290',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/AskHistoryDialog.tsx  AskHistoryDialog  289',
+  // 2026-10-22：引用清单抽成 HistoryCites（知识库原文可点 + 失败提示），289 → 253。棘轮只许变小。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/AskHistoryDialog.tsx  AskHistoryDialog  253',
   'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  285',
   // 2026-09-29：合并两个 Toolbar 为一行 + 注释精简 ⇒ 279（成果记账，数字改小；只许再变小）
   // 2026-10-18：筛选区拆成两排（分类段条搬成 RecordKindTabs）⇒ 276。棘轮只许变小，成果要记账。

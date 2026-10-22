@@ -29,7 +29,18 @@
 }
 
 .box {
+  /* Radix Portal 把 Overlay 与 Content 渲染成 body 下的**兄弟节点**（不再是父子）。
+     因此卡片必须自己 fixed 居中、自己抬到遮罩之上；沿用 kit Dialog 的同一套定位口径，
+     否则静态排版的卡片会掉到 body 流末尾、被遮罩盖住。 */
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 91;
   width: min(440px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: var(--nm-s-3);
@@ -42,8 +53,8 @@
 }
 
 @keyframes confirmPop {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 4px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
 }
 
 /* 危险动作：整框描边转红，一眼知道不是在确认一件小事 */

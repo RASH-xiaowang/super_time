@@ -177,6 +177,23 @@ export declare function loadDisplayNames(decryptedDir: string): Map<string, stri
  * @returns 去重后的名字列表（2-24 字；过短无法区分、过长多半是群公告式标题）。
  */
 export declare function knownEntityNames(decryptedDir: string, limit?: number): string[];
+/**
+ * 会话目录：真实 username + 当前展示名。
+ *
+ * 与 {@link knownEntityNames} 的区别是**保留映射**：问答参数里的
+ * 「z_卖酒」必须解析成 `wxid_xxx`，只拿名字列表无法做这一步，
+ * 把名字直接写进 `scope.username` 又会静默查空。
+ *
+ * 只收录看起来像真实会话标识的键，避免把联系人展示名误当会话。
+ *
+ * @param decryptedDir - 解密数据根。
+ * @param limit - 最多返回多少项。
+ * @returns username → 显示名（去重、跳过空名）。
+ */
+export declare function knownSessionCatalog(decryptedDir: string, limit?: number): Array<{
+    username: string;
+    name: string;
+}>;
 export declare function getSearchIndexStatus(decryptedDir: string): {
     exists: boolean;
     rows: number;

@@ -33,8 +33,8 @@ export const MUTATIONS_BATCH3G = [
     id: 'M480-clawbot-auto-reply-sends-on-failure',
     why: 'ask 失败也继续往发送路径走（不再 return）⇒ 把「未配置默认模型 / 上游 500」这类失败当成有答案去发，最坏情况是发出一段错误文案或空消息。判据：clawbot-auto-reply.spec.ts 的「ask 抛错 / 返回失败 / 空答案 ⇒ 不发送」。',
     file: 'src/backend/wechat-data/src/query/clawbot/clawbot-auto-reply.ts',
-    from: "    if (!r.ok) {\n      deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '自动回复失败：' + (r.error ?? '未知原因'))\n      return\n    }",
-    to: "    if (false) {\n      return\n    }",
+    from: "  if (!r.ok) {\n    const reason = r.error ?? '未知原因'\n    telemetry.countGenerationFailed(reason)\n    deps.op('clawbot', 'clawbot_auto_reply', 'fail', tag, '自动回复失败：' + reason)\n    return\n  }\n  const text = truncateReply(r.answer)",
+    to: "  const text = truncateReply(r.ok ? r.answer : (r.error ?? '未知原因'))",
     spec: 'src/backend/wechat-data/tests/clawbot-auto-reply.spec.ts',
   },
   {

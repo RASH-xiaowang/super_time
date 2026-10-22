@@ -310,5 +310,5 @@ export function groundingRepairHint(audit: GroundingAudit, mode: GroundingReplyM
 
 /** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的微信自动回复）。 */
 export function stripCitationMarkers(text: string): string {
-  return String(text || '').replace(/\s*\[\d{1,3}\]/g, '').trim()
+  return String(text || '').replace(/[ \t]*\[[ \t]*\d{1,3}[ \t]*\]/g, '').trim()
 }

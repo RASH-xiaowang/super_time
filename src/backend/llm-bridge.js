@@ -86,9 +86,57 @@ function toOpenAiContent(message) {
   return content;
 }
 
-/** 把 dsh-llm 的 Message 内容块转成 OpenAI 聊天消息。 */
+/** 把 tool-result 的内容块摊平成 OpenAI `role:"tool"` 消息要求的字符串。 */
+function toolResultText(block) {
+  const parts = Array.isArray(block && block.content) ? block.content : [];
+  return parts.map((part) => {
+    if (!part || typeof part !== 'object') return String(part ?? '');
+    if (part.type === 'text') return String(part.text ?? '');
+    if (typeof part.text === 'string') return part.text;
+    return JSON.stringify(part);
+  }).join('\n');
+}
+
+/**
+ * 把 dsh-llm 的 Message 内容块转成 OpenAI 聊天消息。
+ *
+ * 除了普通文本/图片，还要正确投影工具协议：
+ *   · assistant 的 `tool-call` → `tool_calls[]`；
+ *   · user-role 的 `tool-result` → `role:"tool"` + `tool_call_id`。
+ * 不投影的话，工具循环会把调用记录当普通文本发给模型，第二轮一定答非所问。
+ */
 function toOpenAiMessage(message) {
-  return { role: message.role ?? 'user', content: toOpenAiContent(message) };
+  const role = message.role ?? 'user';
+  const parts = Array.isArray(message.content)
+    ? message.content
+    : [{ type: 'text', text: String(message.content ?? '') }];
+  const toolResult = parts.find((part) => part && part.type === 'tool-result');
+  if (role === 'user' && toolResult) {
+    return {
+      role: 'tool',
+      tool_call_id: String(toolResult.toolCallId ?? ''),
+      content: toolResultText(toolResult),
+    };
+  }
+  const toolCalls = parts
+    .filter((part) => part && part.type === 'tool-call')
+    .map((part) => ({
+      id: String(part.id ?? ''),
+      type: 'function',
+      function: {
+        name: String(part.name ?? ''),
+        arguments: typeof part.arguments === 'string' ? part.arguments : JSON.stringify(part.arguments ?? {}),
+      },
+    }));
+  const content = toOpenAiContent(message);
+  if (role === 'assistant' && toolCalls.length > 0) {
+    return {
+      role,
+      content: typeof content === 'string' && content !== '' ? content : null,
+      tool_calls: toolCalls,
+    };
+  }
+  return { role, content };
 }
 
 /**
@@ -132,142 +180,298 @@ function toTokenUsage(raw) {
   return usage;
 }
 
-/** chat/stream 的请求组装与出网逻辑；重试只在握手阶段进行。 */
-function createChatTransport(configOverrides) {
-  /** 组装一次请求所需的 URL / headers / body。 */
-  function buildRequest(opts, streamMode, includeUsage = false) {
-    const cfg = llmConfigFromEnv(configOverrides);
-    const configured = Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
-    if (!configured) {
-      throw new Error('LLM 未配置：请在「微信问答 → 模型配置」中填写模型与 API Key');
-    }
-    const messages = [
-      ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
-      ...(opts.messages || []).map(toOpenAiMessage),
-    ];
-    const base = parseLlmBaseUrl(cfg.baseUrl).base;
-    const url = base + (cfg.apiPath.startsWith('/') ? cfg.apiPath : '/' + cfg.apiPath);
-    const headers = headersFor(cfg.apiKey, {
-      'content-type': 'application/json',
-      accept: streamMode ? 'text/event-stream' : 'application/json',
-    });
-    return {
-      cfg,
-      url,
-      headers,
-      body: {
-        model: opts.model || cfg.model,
-        messages,
-        max_tokens: opts.maxTokens ?? 2048,
-        stream: streamMode,
-        // 只有流式请求需要显式要 usage：OpenAI / DeepSeek 在最后一个 SSE 块里回。
-        // 不支持的供应商会在下面按 4xx 文案回退一次（不带这个字段重发）。
-        ...(streamMode && includeUsage ? { stream_options: { include_usage: true } } : {}),
-      },
-    };
-  }
+/** 把调用方声明的工具投影成 OpenAI 兼容的 function schema。 */
+function toOpenAiTools(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return null;
+  return tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: String(tool.name ?? ''),
+      description: String(tool.description ?? ''),
+      parameters: tool.parameters && typeof tool.parameters === 'object'
+        ? tool.parameters
+        : { type: 'object', properties: {} },
+    },
+  }));
+}
 
-  async function fetchCompletion(opts) {
-    const req = buildRequest(opts, false);
-    // 有界重试：网络抖动 / 429 / 5xx 自动重来，401/400 这类立刻失败。
-    const res = await llmRequest(req.url, {
-      method: 'POST',
-      headers: req.headers,
-      body: req.body,
-      timeoutMs: req.cfg.timeoutMs,
-      maxAttempts: 3,
-      onRetry: logRetry('chat'),
-    });
+/** 组装一次聊天请求所需的 URL / headers / body。 */
+function buildChatRequest(configOverrides, opts, streamMode, includeUsage = false) {
+  const cfg = llmConfigFromEnv(configOverrides);
+  const configured = Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
+  if (!configured) {
+    throw new Error('LLM 未配置：请在「微信问答 → 模型配置」中填写模型与 API Key');
+  }
+  const messages = [
+    ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
+    ...(opts.messages || []).map(toOpenAiMessage),
+  ];
+  const base = parseLlmBaseUrl(cfg.baseUrl).base;
+  const url = base + (cfg.apiPath.startsWith('/') ? cfg.apiPath : '/' + cfg.apiPath);
+  const headers = headersFor(cfg.apiKey, {
+    'content-type': 'application/json',
+    accept: streamMode ? 'text/event-stream' : 'application/json',
+  });
+  const tools = toOpenAiTools(opts.tools);
+  return {
+    cfg,
+    url,
+    headers,
+    body: {
+      model: opts.model || cfg.model,
+      messages,
+      max_tokens: opts.maxTokens ?? 2048,
+      stream: streamMode,
+      // 只有流式请求需要显式要 usage：OpenAI / DeepSeek 在最后一个 SSE 块里回。
+      // 不支持的供应商会在下面按 4xx 文案回退一次（不带这个字段重发）。
+      ...(streamMode && includeUsage ? { stream_options: { include_usage: true } } : {}),
+      // 工具清单按 OpenAI 兼容的 function schema 投影；没有工具时不发空数组，
+      // 保持旧请求逐字节不变。
+      ...(tools ? { tools, tool_choice: 'auto' } : {}),
+    },
+  };
+}
+
+/** 非流式聊天：有界重试只在出网层进行。 */
+async function fetchChatCompletion(configOverrides, opts) {
+  const req = buildChatRequest(configOverrides, opts, false);
+  // 有界重试：网络抖动 / 429 / 5xx 自动重来，401/400 这类立刻失败。
+  const res = await llmRequest(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: req.body,
+    timeoutMs: req.cfg.timeoutMs,
+    maxAttempts: 3,
+    onRetry: logRetry('chat'),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const payload = await res.json();
+  return payload?.choices?.[0]?.message?.content ?? '';
+}
+
+/**
+ * 创建一次流式响应的增量状态机。
+ *
+ * 块索引约定：正文 0、思考 1、工具调用从 2 起。只有真的收到对应 delta 才发
+ * block-start —— 纯工具调用轮次不该捏造一个空正文块。
+ */
+function createStreamEmitter() {
+  const TEXT_INDEX = 0;
+  const REASONING_INDEX = 1;
+  let nextToolIndex = 2;
+  let textStarted = false;
+  let reasoningStarted = false;
+  let fullText = '';
+  let fullReasoning = '';
+  /** OpenAI 的 tool_calls[].index → 正在流式拼装的调用。 */
+  const toolCalls = new Map();
+
+  const ensureToolCall = (openAiIndex) => {
+    let state = toolCalls.get(openAiIndex);
+    if (state) return state;
+    state = { id: '', name: '', arguments: '', blockIndex: nextToolIndex++, started: false };
+    toolCalls.set(openAiIndex, state);
+    return state;
+  };
+
+  return {
+    textDelta: function* (text) {
+      if (typeof text !== 'string' || text === '') return;
+      if (!textStarted) {
+        textStarted = true;
+        yield { type: 'block-start', index: TEXT_INDEX, blockType: 'text' };
+      }
+      fullText += text;
+      yield { type: 'text-delta', index: TEXT_INDEX, text };
+    },
+    reasoningDelta: function* (text) {
+      if (typeof text !== 'string' || text === '') return;
+      if (!reasoningStarted) {
+        reasoningStarted = true;
+        yield { type: 'block-start', index: REASONING_INDEX, blockType: 'reasoning' };
+      }
+      fullReasoning += text;
+      yield { type: 'reasoning-delta', index: REASONING_INDEX, text };
+    },
+    toolCallDelta: function* (openAiIndex, raw) {
+      if (!raw || typeof raw !== 'object') return;
+      const state = ensureToolCall(openAiIndex);
+      if (typeof raw.id === 'string' && raw.id !== '') state.id = raw.id;
+      const fn = raw.function;
+      if (fn && typeof fn === 'object') {
+        if (typeof fn.name === 'string' && fn.name !== '') {
+          // 有的兼容端点把函数名分片发送；前缀重复时不重复拼接。
+          state.name = state.name === '' || !state.name.endsWith(fn.name) ? state.name + fn.name : state.name;
+        }
+        if (typeof fn.arguments === 'string' && fn.arguments !== '') {
+          state.arguments += fn.arguments;
+        } else if (fn.arguments && typeof fn.arguments === 'object') {
+          state.arguments += JSON.stringify(fn.arguments);
+        }
+      }
+      if (!state.started) {
+        state.started = true;
+        yield { type: 'block-start', index: state.blockIndex, blockType: 'tool-call' };
+      }
+      yield {
+        type: 'tool-call-delta',
+        index: state.blockIndex,
+        id: state.id || `call-${openAiIndex}`,
+        ...(state.name !== '' ? { name: state.name } : {}),
+        argumentsDelta: typeof fn?.arguments === 'string'
+          ? fn.arguments
+          : (fn?.arguments && typeof fn.arguments === 'object' ? JSON.stringify(fn.arguments) : ''),
+      };
+    },
+    endText: function* () {
+      if (textStarted) yield { type: 'block-end', index: TEXT_INDEX, block: { type: 'text', text: fullText } };
+    },
+    endReasoning: function* () {
+      if (reasoningStarted) {
+        yield { type: 'block-end', index: REASONING_INDEX, block: { type: 'reasoning', text: fullReasoning } };
+      }
+    },
+    endToolCalls: function* () {
+      for (const state of toolCalls.values()) {
+        yield {
+          type: 'block-end',
+          index: state.blockIndex,
+          block: {
+            type: 'tool-call',
+            id: state.id || `call-${state.blockIndex}`,
+            name: state.name,
+            arguments: state.arguments || '{}',
+          },
+        };
+      }
+    },
+    finish: function* () {
+      yield { type: 'finish', reason: { kind: toolCalls.size > 0 ? 'tool-calls' : 'stop' } };
+    },
+  };
+}
+
+/** 厂商忽略 stream:true、直接返回整段 JSON 时的增量投影。 */
+function* emitBufferedCompletion(payload, emitter) {
+  const message = payload?.choices?.[0]?.message ?? {};
+  const usage = toTokenUsage(payload?.usage);
+  if (usage) yield { type: 'usage', usage };
+  yield* emitter.textDelta(message.content ?? '');
+  if (Array.isArray(message.tool_calls)) {
+    for (let i = 0; i < message.tool_calls.length; i += 1) {
+      yield* emitter.toolCallDelta(i, message.tool_calls[i]);
+    }
+  }
+  yield* emitter.endText();
+  yield* emitter.endToolCalls();
+  yield* emitter.finish();
+}
+
+/** 把一个 SSE JSON 块投影成 usage / reasoning / text / tool-call 增量。 */
+function* emitSsePayload(parsed, emitter) {
+  // usage 块通常 choices 为空，必须在取 delta 之前处理。
+  const usage = toTokenUsage(parsed?.usage);
+  if (usage) yield { type: 'usage', usage };
+  const choice = parsed?.choices?.[0];
+  const delta = choice?.delta ?? choice?.message;
+  if (!delta) return;
+  const reasoning = delta.reasoning_content ?? delta.reasoning ?? '';
+  yield* emitter.reasoningDelta(reasoning);
+  yield* emitter.textDelta(delta.content ?? '');
+  if (Array.isArray(delta.tool_calls)) {
+    for (const call of delta.tool_calls) {
+      const rawIndex = Number(call?.index);
+      const openAiIndex = Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex : 0;
+      yield* emitter.toolCallDelta(openAiIndex, call);
+    }
+  }
+}
+
+/** 流式聊天：只对握手做重试，一旦开始吐 chunk 就不再重来。 */
+async function* streamChatCompletion(configOverrides, opts) {
+  let includeUsage = true;
+  let req = buildChatRequest(configOverrides, opts, true, includeUsage);
+  // 只对握手做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
+  let res = await llmRequest(req.url, {
+    method: 'POST',
+    headers: req.headers,
+    body: req.body,
+    timeoutMs: req.cfg.timeoutMs,
+    maxAttempts: 3,
+    onRetry: logRetry('chat(stream)'),
+  });
+  if (!res.ok) {
+    let text = await res.text().catch(() => '');
+    // 兼容性回退：部分 OpenAI 兼容端点不认 `stream_options`（400/422）。
+    // 只在文案明确指向该字段时才重发，避免把真正的鉴权/参数错误吞成第二次请求。
+    const retryable = (res.status === 400 || res.status === 422) && includeUsage
+      && /stream_options|include_usage|unknown|unsupported|invalid/i.test(text);
+    if (retryable) {
+      includeUsage = false;
+      req = buildChatRequest(configOverrides, opts, true, false);
+      res = await llmRequest(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: req.body,
+        timeoutMs: req.cfg.timeoutMs,
+        maxAttempts: 3,
+        onRetry: logRetry('chat(stream)'),
+      });
+      if (!res.ok) text = await res.text().catch(() => '');
+    }
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
       throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
-    const payload = await res.json();
-    return payload?.choices?.[0]?.message?.content ?? '';
   }
 
-  async function* stream(opts) {
-    let includeUsage = true;
-    let req = buildRequest(opts, true, includeUsage);
-    // 只对握手做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
-    let res = await llmRequest(req.url, {
-      method: 'POST',
-      headers: req.headers,
-      body: req.body,
-      timeoutMs: req.cfg.timeoutMs,
-      maxAttempts: 3,
-      onRetry: logRetry('chat(stream)'),
-    });
-    if (!res.ok) {
-      let text = await res.text().catch(() => '');
-      // 兼容性回退：部分 OpenAI 兼容端点不认 `stream_options`（400/422）。
-      // 只在文案明确指向该字段时才重发，避免把真正的鉴权/参数错误吞成第二次请求。
-      const retryable = (res.status === 400 || res.status === 422) && includeUsage
-        && /stream_options|include_usage|unknown|unsupported|invalid/i.test(text);
-      if (retryable) {
-        includeUsage = false;
-        req = buildRequest(opts, true, false);
-        res = await llmRequest(req.url, {
-          method: 'POST',
-          headers: req.headers,
-          body: req.body,
-          timeoutMs: req.cfg.timeoutMs,
-          maxAttempts: 3,
-          onRetry: logRetry('chat(stream)'),
-        });
-        if (!res.ok) text = await res.text().catch(() => '');
+  const emitter = createStreamEmitter();
+  const contentType = String(res.headers.get('content-type') || '');
+  // 厂商忽略 stream:true 直接返回整段 JSON 时走这里（也覆盖 res.body 为空的情况）
+  if (!res.body || !contentType.includes('event-stream')) {
+    yield* emitBufferedCompletion(await res.json(), emitter);
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        continue; // 心跳/非 JSON 行忽略
       }
-      if (!res.ok) {
-        throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
-      }
+      yield* emitSsePayload(parsed, emitter);
     }
-    yield { type: 'block-start', index: 0, blockType: 'text' };
-    const contentType = String(res.headers.get('content-type') || '');
-    // 厂商忽略 stream:true 直接返回整段 JSON 时走这里（也覆盖 res.body 为空的情况）
-    if (!res.body || !contentType.includes('event-stream')) {
-      const payload = await res.json();
-      const text = payload?.choices?.[0]?.message?.content ?? '';
-      const usage = toTokenUsage(payload?.usage);
-      if (usage) yield { type: 'usage', usage };
-      yield { type: 'text-delta', index: 0, text };
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } };
-      yield { type: 'finish', reason: 'stop' };
-      return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let full = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue; // 心跳/非 JSON 行忽略
-        }
-        // usage 块通常 choices 为空，必须在取 delta 之前处理。
-        const usage = toTokenUsage(parsed?.usage);
-        if (usage) yield { type: 'usage', usage };
-        const delta = parsed?.choices?.[0]?.delta?.content
-          ?? parsed?.choices?.[0]?.message?.content
-          ?? '';
-        if (!delta) continue;
-        full += delta;
-        yield { type: 'text-delta', index: 0, text: delta };
-      }
-    }
-    yield { type: 'block-end', index: 0, block: { type: 'text', text: full } };
-    yield { type: 'finish', reason: 'stop' };
+  }
+  yield* emitter.endText();
+  yield* emitter.endReasoning();
+  yield* emitter.endToolCalls();
+  // 没有正文也没有工具调用的空响应也按 stop 收尾；调用方会给出空回答提示。
+  yield* emitter.finish();
+}
+
+/** chat/stream 的请求组装与出网逻辑；重试只在握手阶段进行。 */
+function createChatTransport(configOverrides) {
+  function fetchCompletion(opts) {
+    return fetchChatCompletion(configOverrides, opts);
+  }
+
+  function stream(opts) {
+    return streamChatCompletion(configOverrides, opts);
   }
 
   return { fetchCompletion, stream };

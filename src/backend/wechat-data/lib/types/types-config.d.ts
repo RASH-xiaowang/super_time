@@ -385,11 +385,13 @@ declare module '@deepseek-ai/cordis' {
         }): void;
         /**
          * 微信问答的**阶段事件**（2026-10-16）：payload 是
-         * `{ id, key, label, status, detail? }`。
+         * `{ id, key, label, status, detail?, phase?, callId?, ... }`。
          *
          * 流水线每一步（规划 → 检索 → 精排 → 生成 → 接地核对）在**发生的那一刻**推一条，
          * 渲染端据此显示「🔍 检索本机记录 · 召回 128 条」这样的过程行。
-         * 同一个 `key` 会先推 `running` 再推 `done`（带结果摘要），渲染端按 key 就地更新。
+         * 同一个 `key` 会先推 `running` 再推终态（带结果摘要），渲染端按 key 就地更新。
+         * 工具调用额外携带 `callId/toolName/argumentsSummary/attempt/maxAttempts/...`，
+         * 前端按 `callId` 合成实时工具卡；`failed` 表示真实失败，不能伪装成 `done`。
          * @mode emit
          * @param payload - 流式标识、阶段标识/名称/状态与结果摘要。
          */
@@ -397,8 +399,19 @@ declare module '@deepseek-ai/cordis' {
             id: string;
             key: string;
             label: string;
-            status: 'running' | 'done' | 'skipped';
+            status: 'running' | 'done' | 'failed' | 'skipped';
             detail?: string;
+            phase?: 'called' | 'completed' | 'failed' | 'retry';
+            callId?: string;
+            toolName?: string;
+            argumentsSummary?: string;
+            attempt?: number;
+            maxAttempts?: number;
+            elapsedMs?: number;
+            errorClass?: string;
+            deadlineExceeded?: boolean;
+            hits?: number;
+            facts?: number;
         }): void;
         /**
          * 导出/加密备份的进度（M3）：payload 是 `{ jobId, phase, done, total }`。

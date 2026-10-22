@@ -296,7 +296,7 @@ Per-message analysis for the message stream's visible window (local model · no 
 ### `askWechat`
 
 ```ts
-async askWechat(options: { question: string username?: string from?: string to?: string history?: Array<{ role: 'user' | 'assistant'; content: string }> streamId?: string source?: string usernameName?: string kbId?: number jobId?: string images?: Array<{ data: string, mediaType: string, name?: string }> }): Promise<AskResult>
+async askWechat(options: { question: string username?: string from?: string to?: string history?: Array<{ role: 'user' | 'assistant'; content: string }> streamId?: string source?: string usernameName?: string kbId?: number jobId?: string images?: Array<{ data: string, mediaType: string, name?: string }> threadState?: ThreadState }): Promise<AskResult>
 ```
 
 AI Q&A over WeChat data: retrieve context + DSH LLM answer with citations.
@@ -802,7 +802,7 @@ Download one official whisper.cpp ggml model into the models dir (streamed, atom
 ### `editChatMessage`
 
 ```ts
-editChatMessage(options: { username: string; localId: number; content: string }): EditMutationResult
+editChatMessage(options: { username: string; localId: number; content: string; mode?: 'text' | 'source' }): EditMutationResult
 ```
 
 Edit one message content (records the original in the edit store).
@@ -1454,12 +1454,12 @@ _（源码中未附说明 —— 请直接阅读 `src/backend/wechat-data/src/ga
 ### `getMessageFile`
 
 ```ts
-getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult
+getMessageFile(options: { fileName: string; size?: number; createTime?: number; fileMd5?: string }): ImageDataUrlResult
 ```
 
 Resolve a received message file (msg/file) to a base64 data URL.
 
-- @param options - original file name from the message card.
+- @param options - original file name plus size/createTime/fileMd5 attribution hints.
 - @returns ImageDataUrlResult: data URL or error.
 
 ### `getMessages`
@@ -1759,12 +1759,12 @@ Storage stats.
 ### `getVideoInfo`
 
 ```ts
-getVideoInfo(options: { username: string; localId: number }): VideoInfoResult
+getVideoInfo(options: { username?: string; localId?: number; md5?: string }): VideoInfoResult
 ```
 
 Look up one video message: cover thumbnail + the on-disk video path. 封面与实体都在真实微信目录 `msg/video` 下，所以要带上数据根目录。
 
-- @param options - username and localId of the video message.
+- @param options - username + localId，或撤回记录里已有的 md5。
 - @returns VideoInfoResult: video cover/thumbnail info.
 
 ### `getVoiceDataUrl`

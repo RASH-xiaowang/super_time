@@ -319,7 +319,10 @@ async function loadBackendRuntime(options) {
   let argSchemas = null;
   try {
     const typert = await import('./wechat-data/lib/typert.host.js');
-    argSchemas = argsGuard.buildSchemaMap(typert?.TYPERT?.invocations ?? []);
+    const generated = typert?.TYPERT?.invocations ?? [];
+    // 生成器不在本仓：覆盖层只补缺口；生成表最后合并，同名时以生成物为准。
+    const overlay = Array.isArray(mod.REMOTE_ARG_SCHEMA_OVERLAY) ? mod.REMOTE_ARG_SCHEMA_OVERLAY : [];
+    argSchemas = argsGuard.buildSchemaMap([...overlay, ...generated]);
     if (argSchemas.size === 0) console.warn('[wechat] typert schema 表是空的，入参形状校验无覆盖');
   } catch (e) {
     console.warn('[wechat] typert schema 表没加载到（形状校验关闭）:', e?.message ?? e);

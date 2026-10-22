@@ -25,7 +25,26 @@
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { DatabaseSync } from '../db-open.ts'
-import { withWritableDb } from '../db-open.ts'
+import { withDb, withWritableDb } from '../db-open.ts'
+import type {
+  ClawbotMessage,
+} from '../../types.ts'
+import type { ClawbotReplyRunDetail } from './clawbot-reply-types.ts'
+import type {
+  ClawbotReplyPart,
+  ClawbotReplyPartStatus,
+  ClawbotReplyRun,
+  ClawbotReplyRunAttachments,
+  ClawbotReplyRunStatus,
+} from './clawbot-reply-store.ts'
+import { parseReplyRunDetail } from './clawbot-run-detail.ts'
+
+export {
+  mergeReplyRunDetail,
+  parseReplyRunDetail,
+  replyRunDetailJson,
+  serializeReplyRunDetail,
+} from './clawbot-run-detail.ts'
 
 /** `clawbot.db` 在数据根里的位置（与 `wechat_privacy.db` 同级）。 */
 export function clawbotDbPath(decryptedDir: string): string {
@@ -152,6 +171,9 @@ const REPLY_RUN_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['lease_owner', 'TEXT'],
   ['lease_until', 'INTEGER NOT NULL DEFAULT 0'],
   ['lease_fence', 'INTEGER NOT NULL DEFAULT 0'],
+  // 2026-10-22：自动回复运行详情（工具调用/证据/引用/接地/发送决策）。
+  // 只存白名单摘要，不存回答正文、工具完整参数或资源凭证。
+  ['result_json', 'TEXT'],
 ]
 
 /** `clawbot_reply_outbox` 的列登记表（同上）。 */
@@ -301,7 +323,8 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
     updated_at        INTEGER NOT NULL,
     lease_owner       TEXT,
     lease_until       INTEGER NOT NULL DEFAULT 0,
-    lease_fence       INTEGER NOT NULL DEFAULT 0
+    lease_fence       INTEGER NOT NULL DEFAULT 0,
+    result_json       TEXT
   )`)
   /*
    * 分段 outbox：`(run_id, part_index)` 唯一，重复生成同一 run 不会多出分段；
@@ -413,4 +436,221 @@ export function ensureClawbotSchema(db: DatabaseSync): void {
 /** 打开一次可写连接完成建表/补列（读路径不需要它）。 */
 export function ensureClawbotStore(decryptedDir: string): void {
   withWritableDb(clawbotDbPath(decryptedDir), (db) => { ensureClawbotSchema(db) })
+}
+
+/** 回复 run/outbox 的公共列、行映射与老库缺列兼容（store 与消息列表共用）。 */
+export const REPLY_RUN_COLS = 'id, slot, target_message_id, question, status, attempts, last_error, result_json, next_attempt_at, created_at, updated_at'
+export const REPLY_PART_COLS = 'id, run_id, slot, part_index, text, client_id, status, attempts, sent_message_id, last_error, created_at, updated_at'
+export const REPLY_RUN_STATUSES = new Set<ClawbotReplyRunStatus>([
+  'debouncing', 'queued', 'generating', 'ready', 'sending', 'done', 'failed', 'skipped',
+])
+export const REPLY_PART_STATUSES = new Set<ClawbotReplyPartStatus>(['pending', 'sending', 'sent', 'failed'])
+
+export function replyPositiveInt(value: number, label: string): number {
+  const n = Math.floor(value)
+  if (!Number.isFinite(n) || n < 1) throw new Error(`${label} 必须是正整数`)
+  return n
+}
+
+export function replyTimestamp(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.floor(value as number) : Date.now()
+}
+
+export function replyTextOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+export function toReplyRun(row: Record<string, unknown>): ClawbotReplyRun {
+  const rawStatus = row['status']
+  const status = typeof rawStatus === 'string' && REPLY_RUN_STATUSES.has(rawStatus as ClawbotReplyRunStatus)
+    ? rawStatus as ClawbotReplyRunStatus
+    : 'queued'
+  return {
+    id: Number(row['id'] ?? 0),
+    slot: Number(row['slot'] ?? 1),
+    targetMessageId: Number(row['target_message_id'] ?? 0),
+    question: typeof row['question'] === 'string' ? row['question'] : '',
+    status,
+    attempts: Number(row['attempts'] ?? 0),
+    lastError: replyTextOrNull(row['last_error']),
+    resultJson: replyTextOrNull(row['result_json']),
+    nextAttemptAt: Number(row['next_attempt_at'] ?? 0),
+    createdAt: Number(row['created_at'] ?? 0),
+    updatedAt: Number(row['updated_at'] ?? 0),
+  }
+}
+
+export function toReplyPart(row: Record<string, unknown>): ClawbotReplyPart {
+  const rawStatus = row['status']
+  const status = typeof rawStatus === 'string' && REPLY_PART_STATUSES.has(rawStatus as ClawbotReplyPartStatus)
+    ? rawStatus as ClawbotReplyPartStatus
+    : 'pending'
+  const sentMessageId = Number(row['sent_message_id'] ?? 0)
+  return {
+    id: Number(row['id'] ?? 0),
+    runId: Number(row['run_id'] ?? 0),
+    partIndex: Number(row['part_index'] ?? 0),
+    slot: Number(row['slot'] ?? 1),
+    text: typeof row['text'] === 'string' ? row['text'] : '',
+    clientId: typeof row['client_id'] === 'string' ? row['client_id'] : '',
+    status,
+    attempts: Number(row['attempts'] ?? 0),
+    sentMessageId: Number.isFinite(sentMessageId) && sentMessageId > 0 ? sentMessageId : null,
+    lastError: replyTextOrNull(row['last_error']),
+    createdAt: Number(row['created_at'] ?? 0),
+    updatedAt: Number(row['updated_at'] ?? 0),
+  }
+}
+
+export function replyResultJsonOrNull(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/** 旧调用不传摘要时保留已落库详情；显式新摘要则覆盖上一轮。 */
+export function setReplyRunResultOn(
+  db: DatabaseSync,
+  runId: number,
+  resultJson: string | null | undefined,
+): void {
+  const result = replyResultJsonOrNull(resultJson)
+  if (result === null) return
+  db.prepare('UPDATE clawbot_reply_run SET result_json = COALESCE(?, result_json) WHERE id = ?')
+    .run(result, runId)
+}
+
+export function readReplyRunOn(db: DatabaseSync, runId: number): ClawbotReplyRun | null {
+  const row = db.prepare(`SELECT ${replyRunColsOn(db)} FROM clawbot_reply_run WHERE id = ? LIMIT 1`)
+    .get(runId) as Record<string, unknown> | undefined
+  return row === undefined ? null : toReplyRun(row)
+}
+
+export function readReplyPartsOn(db: DatabaseSync, runId: number): ClawbotReplyPart[] {
+  const rows = db.prepare(`SELECT ${REPLY_PART_COLS} FROM clawbot_reply_outbox WHERE run_id = ? ORDER BY part_index ASC`)
+    .all(runId) as Array<Record<string, unknown>>
+  return rows.map(toReplyPart)
+}
+
+export function readReplyPartOn(db: DatabaseSync, partId: number): ClawbotReplyPart | null {
+  const row = db.prepare(`SELECT ${REPLY_PART_COLS} FROM clawbot_reply_outbox WHERE id = ? LIMIT 1`)
+    .get(partId) as Record<string, unknown> | undefined
+  return row === undefined ? null : toReplyPart(row)
+}
+
+export function hasClawbotTable(db: DatabaseSync, name: string): boolean {
+  return db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name) !== undefined
+}
+
+/** 老库还没补 result_json 时，读取仍按旧列集合工作。 */
+export function replyRunColsOn(db: DatabaseSync): string {
+  return hasColumn(db, 'clawbot_reply_run', 'result_json')
+    ? REPLY_RUN_COLS
+    : REPLY_RUN_COLS.replace(', result_json', '')
+}
+
+export function uniqueReplyIds(values: readonly number[]): number[] {
+  return [...new Set(values
+    .filter(value => Number.isFinite(value))
+    .map(value => Math.floor(value))
+    .filter(value => value > 0))]
+}
+
+export function replySqlPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+export function* replyIdChunks(ids: readonly number[], size: number = 400): Generator<readonly number[]> {
+  for (let index = 0; index < ids.length; index += size) {
+    yield ids.slice(index, index + size)
+  }
+}
+
+/** 一页消息对应的 run 摘要；按 target/sent 两条路径各一次批量查询，避免 N+1。 */
+export function listReplyRunAttachments(
+  dir: string,
+  slot: number,
+  targetMessageIds: readonly number[],
+  sentMessageIds: readonly number[],
+): ClawbotReplyRunAttachments {
+  const empty: ClawbotReplyRunAttachments = { target: new Map(), sent: new Map() }
+  if (!clawbotDbExists(dir)) return empty
+  const s = replyPositiveInt(slot, 'slot')
+  const targets = uniqueReplyIds(targetMessageIds)
+  const sentIds = uniqueReplyIds(sentMessageIds)
+  if (targets.length === 0 && sentIds.length === 0) return empty
+  return withDb(clawbotDbPath(dir), (db) => {
+    if (!hasClawbotTable(db, 'clawbot_reply_run')) return empty
+    const cols = replyRunColsOn(db)
+    const target = new Map<number, ClawbotReplyRun>()
+    const sent = new Map<number, ClawbotReplyRun>()
+    for (const chunk of replyIdChunks(targets)) {
+      const rows = db.prepare(`SELECT ${cols} FROM clawbot_reply_run
+        WHERE slot = ? AND target_message_id IN (${replySqlPlaceholders(chunk.length)})`)
+        .all(s, ...chunk) as Array<Record<string, unknown>>
+      for (const row of rows) target.set(Number(row['target_message_id'] ?? 0), toReplyRun(row))
+    }
+    if (sentIds.length === 0 || !hasClawbotTable(db, 'clawbot_reply_outbox')) return { target, sent }
+    const runIdBySentMessage = new Map<number, number>()
+    for (const chunk of replyIdChunks(sentIds)) {
+      const rows = db.prepare(`SELECT sent_message_id, run_id FROM clawbot_reply_outbox
+        WHERE slot = ? AND sent_message_id IN (${replySqlPlaceholders(chunk.length)})`)
+        .all(s, ...chunk) as Array<{ sent_message_id?: number | null, run_id?: number | null }>
+      for (const row of rows) {
+        const sentId = Number(row.sent_message_id ?? 0)
+        const runId = Number(row.run_id ?? 0)
+        if (sentId > 0 && runId > 0) runIdBySentMessage.set(sentId, runId)
+      }
+    }
+    const runs = new Map<number, ClawbotReplyRun>()
+    for (const chunk of replyIdChunks(uniqueReplyIds([...runIdBySentMessage.values()]))) {
+      const rows = db.prepare(`SELECT ${cols} FROM clawbot_reply_run
+        WHERE slot = ? AND id IN (${replySqlPlaceholders(chunk.length)})`)
+        .all(s, ...chunk) as Array<Record<string, unknown>>
+      for (const row of rows) runs.set(Number(row['id'] ?? 0), toReplyRun(row))
+    }
+    for (const [messageId, runId] of runIdBySentMessage) {
+      const run = runs.get(runId)
+      if (run !== undefined) sent.set(messageId, run)
+    }
+    return { target, sent }
+  })
+}
+
+/**
+ * 给消息页批量附上自动回复运行详情。
+ *
+ * 入站目标消息与对应出站分段共用同一份摘要；run 表状态覆盖 JSON 里的生成状态。
+ * 附件查询失败或旧库缺列时退回原消息，列表本身不能因诊断信息不可读取而失败。
+ */
+export function attachReplyRunDetails(
+  dir: string,
+  slot: number,
+  messages: readonly ClawbotMessage[],
+): ClawbotMessage[] {
+  const targetIds = messages.filter(item => item.direction === 'in').map(item => item.id)
+  const sentIds = messages.filter(item => item.direction === 'out').map(item => item.id)
+  let attachments: ReturnType<typeof listReplyRunAttachments>
+  try {
+    attachments = listReplyRunAttachments(dir, slot, targetIds, sentIds)
+  } catch {
+    return [...messages]
+  }
+  const details = new Map<number, ClawbotReplyRunDetail>()
+  const detailOf = (run: ClawbotReplyRun): ClawbotReplyRunDetail => {
+    const cached = details.get(run.id)
+    if (cached !== undefined) return cached
+    const parsed = parseReplyRunDetail(run.resultJson)
+    const error = parsed?.error ?? run.lastError ?? undefined
+    const detail: ClawbotReplyRunDetail = {
+      ...(parsed ?? { runId: run.id, status: run.status }),
+      runId: run.id,
+      status: run.status,
+      ...(error === undefined ? {} : { error }),
+    }
+    details.set(run.id, detail)
+    return detail
+  }
+  return messages.map((item) => {
+    const run = item.direction === 'in' ? attachments.target.get(item.id) : attachments.sent.get(item.id)
+    return run === undefined ? { ...item } : { ...item, run: detailOf(run) }
+  })
 }

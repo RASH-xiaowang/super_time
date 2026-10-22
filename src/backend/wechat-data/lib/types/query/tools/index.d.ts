@@ -8,5 +8,9 @@
  * @module query/tools
  */
 export { buildTools, allTools, runTool, toolSchemas, TOOL_NAMES, } from './registry.ts';
-export type { RetrievalTool, ToolContext, ToolResult, ToolHit, ToolName, ToolCategory, } from './types.ts';
+export type { RetrievalTool, ToolContext, ToolResult, ToolHit, ToolName, ToolCategory, ToolErrorCode, } from './types.ts';
 export { findTool, toToolSchemas, argString, argInt, argStringArray } from './types.ts';
+export { ANSWER_PROFILES, ALL_ANSWER_PROFILES, getAnswerProfile, isToolAllowed, filterToolsForProfile, filterToolsForScope, enforceProfileScope, buildProfileTools, runProfileTool, profileDataScope, } from './profiles.ts';
+export type { AnswerProfile, AnswerProfileId, ProfileScopeDecision } from './profiles.ts';
+export { makeSearchHybridTool } from './search-hybrid-tool.ts';
+export type { HybridSearchMode, HybridSearchRequest, HybridSearchExecution, HybridSearchExecutor, HybridSearchCitation, HybridSearchChunk, HybridSearchFact, HybridSearchExecutionError, } from './search-hybrid-tool.ts';

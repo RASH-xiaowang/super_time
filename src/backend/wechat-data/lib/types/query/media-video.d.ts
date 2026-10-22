@@ -10,12 +10,13 @@
  *
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root.
- * @param username - conversation username.
- * @param localId - message local id.
+ * @param username - conversation username; empty when only an MD5 hint is available.
+ * @param localId - message local id; 0 when only an MD5 hint is available.
  * @param wechatBaseDir - raw WeChat data root (…/xwechat_files/<wxid>_<hash>)，用来定位 msg/video。
+ * @param md5Hint - revoked record's media md5; used only after the message locator misses.
  * @returns cover data URL (jpg) when available, plus the on-disk video path.
  */
-export declare function resolveVideoInfo(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir?: string): {
+export declare function resolveVideoInfo(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir?: string, md5Hint?: string): {
     available: boolean;
     md5?: string;
     coverUrl?: string;

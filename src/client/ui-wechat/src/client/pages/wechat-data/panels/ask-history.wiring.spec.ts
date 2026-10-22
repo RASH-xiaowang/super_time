@@ -83,9 +83,11 @@ describe('问答历史：三条行为契约', () => {
     expect(dialog).toContain('citeTarget(c)')
     // 只有**消息来源**才跳会话，且参数取自 citeTarget 的结果（不是裸 c.username / c.local_id）
     expect(dialog).toMatch(/target\?\.kind === 'msg'\) onOpenCitation\?\.\(target\.username, target\.localId\)/)
-    // 知识库来源必须是**只读**条目：它的 username 是 `kb:<库>:<文件>` 合成键，
-    // 喂给会话跳转会静默地去开一个不存在的会话（不抛错、界面只是空着）
+    // 知识库来源是独立按钮：它必须走 onOpenKbFile(kbId, fileId)，绝不能把合成 username
+    // 喂给会话跳转 —— 那会静默地去开一个不存在的会话（不抛错、界面只是空着）。
     expect(dialog).toContain('data-src="kb"')
+    expect(dialog).toContain('onOpenKbFile(kbId, fileId)')
+    expect(ask).toContain('onOpenKbFile={onOpenKbFile}')
     expect(dialog).not.toMatch(/onOpenCitation\?\.\(c\.username/)
   })
 

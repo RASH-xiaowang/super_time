@@ -21,6 +21,7 @@ export interface UseGraphNoteActionsOptions {
   onSelectedCleared: () => void
   onReload: () => Promise<void> | void
   onError: (message: string) => void
+  flash: (message: string) => void
   onEditor: (state: GraphNoteEditorState) => void
 }
 
@@ -63,6 +64,7 @@ export function useGraphNoteActions(o: UseGraphNoteActionsOptions): {
       if (!r.ok) { current.onError(r.error ?? '删除笔记失败'); return }
       if (current.selectedId === 'note:' + id) current.onSelectedCleared()
       await current.onReload()
+      current.flash('已删除笔记')
     } catch (e) {
       current.onError((e as Error).message)
     }

@@ -1,5 +1,5 @@
 /**
- * 「当前登录账号」的展示信息（昵称/备注/别名），供侧栏品牌位显示用户网名。
+ * 「当前登录账号」的展示信息（昵称/备注/别名/地区），供侧栏品牌位显示用户网名与地区。
  *
  * ## 为什么需要
  *
@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveSelfUsername } from '../config/index.ts'
 import { withDb } from './db-open.ts'
+import { buildRegion, parseContactExtra } from './region.ts'
 
 /** 当前账号展示信息。`username` 可能为空（还没配置/未解密），`name` 可能为空（回退品牌名）。 */
 export interface SelfProfile {
@@ -26,6 +27,8 @@ export interface SelfProfile {
   name: string
   /** 微信号（alias），有就带上，供界面 tooltip 区分同名。 */
   alias?: string
+  /** 当前账号在微信资料里设置的地区（中国显示省+市）；没填时为空串并省略。 */
+  region?: string
 }
 
 /** SQLite 里可能是 TEXT/INTEGER/BLOB：统一成可读字符串（与 query 层其它 cellStr 同口径）。 */
@@ -37,10 +40,16 @@ function cellStr(v: unknown): string {
   return ''
 }
 
+/** SQLite BLOB 可能是 Buffer / Uint8Array；其它类型一律当作空资料。 */
+function cellBuffer(v: unknown): Buffer {
+  if (v instanceof Uint8Array) return Buffer.from(v)
+  return Buffer.alloc(0)
+}
+
 /**
- * 读当前账号的昵称（备注 > 昵称 > 别名）。
+ * 读当前账号的昵称（备注 > 昵称 > 别名）与地区。
  * @param decryptedDir - 已解密数据根。
- * @returns `{username, name, alias?}`；任何一步取不到都给空串而不是抛错。
+ * @returns `{username, name, alias?, region?}`；任何一步取不到都给空串而不是抛错。
  */
 export function querySelfProfile(decryptedDir: string): SelfProfile {
   const username = resolveSelfUsername(decryptedDir)
@@ -49,17 +58,34 @@ export function querySelfProfile(decryptedDir: string): SelfProfile {
   if (!existsSync(path)) return { username, name: '' }
   let name = ''
   let alias = ''
+  let region = ''
   try {
     withDb(path, (db) => {
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
       if (!has) return
-      const row = db.prepare('SELECT nick_name, remark, alias FROM contact WHERE username = ? LIMIT 1').get(username) as
-        | { nick_name?: unknown; remark?: unknown; alias?: unknown }
+      const columns = new Set(
+        (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name?: unknown }>)
+          .map(column => cellStr(column.name)),
+      )
+      const regionColumn = columns.has('extra_buffer') ? ', extra_buffer' : ''
+      const row = db.prepare(
+        `SELECT nick_name, remark, alias${regionColumn} FROM contact WHERE username = ? LIMIT 1`,
+      ).get(username) as
+        | { nick_name?: unknown; remark?: unknown; alias?: unknown; extra_buffer?: unknown }
         | undefined
       if (!row) return
       alias = cellStr(row.alias).trim()
       name = cellStr(row.remark).trim() || cellStr(row.nick_name).trim() || alias
+      if (columns.has('extra_buffer')) {
+        const extra = parseContactExtra(cellBuffer(row.extra_buffer))
+        region = buildRegion(extra.country ?? '', extra.province ?? '', extra.city ?? '').trim()
+      }
     })
   } catch { /* 未解密 / 读失败：回退品牌名 */ }
-  return alias === '' ? { username, name } : { username, name, alias }
+  return {
+    username,
+    name,
+    ...(alias === '' ? {} : { alias }),
+    ...(region === '' ? {} : { region }),
+  }
 }

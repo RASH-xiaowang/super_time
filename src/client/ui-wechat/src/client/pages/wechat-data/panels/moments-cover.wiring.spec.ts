@@ -76,7 +76,9 @@ const sites = [join(HERE, 'moments-card.tsx'), join(HERE, 'moments-portals.tsx')
 
 describe('朋友圈：图片失败要有占位，不能留空格子', () => {
   it('每个固定尺寸的图框都带 failed 占位（视频封面/灯箱缩略图条除外），旧的 display:none 与 failedImgs 一律不许回来', () => {
-    expect(sites.length, '朋友圈里没有 RemoteImg？前提不成立（图没走代理）').toBeGreaterThanOrEqual(9)
+    // 灯箱缩略图条已迁到共享 MediaViewer（data URL 经 API 取回），因此这里剩 7 个
+    // 仍由 RemoteImg 承载的远程图面位；数量下限跟着真实架构走，但继续防止扫描面塌空。
+    expect(sites.length, '朋友圈里没有 RemoteImg？前提不成立（图没走代理）').toBeGreaterThanOrEqual(7)
     // 两类例外与旧口径同样有理由：视频封面（.videoTile 自带背景 + ▶ 徽标）、灯箱缩略图条
     // （取不到就收起那一格，容器本身仍有意义）—— 都不会留下"没有意义的空格子"。
     const collapseOk = ['videoCover', 'lightboxThumb']

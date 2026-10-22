@@ -140,6 +140,18 @@ function avatarsLocalWithArchive(rc: MediaRemoteCtx, options: { usernames: strin
   return Object.keys(archived).length > 0 ? { ...local, ...archived } : local
 }
 
+/** 消息文件解析的模块级转发，避免媒体 Remote 对象继续膨胀。 */
+function messageFileDataUrl(
+  rc: MediaRemoteCtx,
+  options: { fileName: string; size?: number; createTime?: number; fileMd5?: string },
+): ImageDataUrlResult {
+  return resolveMessageFileDataUrl(rc.rawWechatBase(rc.dirs().decrypted) || undefined, options.fileName, {
+    ...(options.size !== undefined ? { size: options.size } : {}),
+    ...(options.createTime !== undefined ? { createTime: options.createTime } : {}),
+    ...(options.fileMd5 !== undefined ? { fileMd5: options.fileMd5 } : {}),
+  })
+}
+
 export function createMediaRemotes(rc: MediaRemoteCtx) {
   // 网关本地的类型（delegation 签名也用它）—— 纯类型导入，无运行期环
   const rawWechatBase = rc.rawWechatBase
@@ -376,13 +388,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     getMapGeoJson: (options: { urls?: string[] } = {}) =>
       mapGeoJsonWithOp(rc, Array.isArray(options?.urls) ? options.urls : []),
 
-    getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
-      // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
-      // 用于在「同名文件」里挑出属于这条消息的那一份，见 resolveMessageFileDataUrl。
-      return resolveMessageFileDataUrl(rawWechatBase(rc.dirs().decrypted) || undefined, options.fileName, {
-        ...(options.size !== undefined ? { size: options.size } : {}),
-        ...(options.createTime !== undefined ? { createTime: options.createTime } : {}),
-      })
+    getMessageFile(options: { fileName: string; size?: number; createTime?: number; fileMd5?: string }): ImageDataUrlResult {
+      return messageFileDataUrl(rc, options)
     },
 
     async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean }): Promise<ImageDataUrlResult> {

@@ -201,6 +201,10 @@ describe('实例管理：列表 / 新建 / 删除 / 改配置', () => {
     const { rc } = makeHarness()
     const r = createClawbotRemotes(rc)
     const a = r.createClawbotInstance()
+    expect(
+      () => r.setClawbotInstanceConfig({ slot: a.slot, autoReply: true }),
+      '无有效知识库时显式开启必须给出中文原因，而不是写入一个永远不会发送的开启态',
+    ).toThrow(/自动回复需要选择知识库/)
     const first = r.setClawbotInstanceConfig({ slot: a.slot, kbEnabled: true, kbId: 5 })
     expect(first).toMatchObject({ autoReply: false, kbEnabled: true, kbId: 5 })
     // 只打开自动回复：kbId 必须原封不动（写成 null 就等于「用户选了库又被清掉」）。

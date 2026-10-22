@@ -4,6 +4,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { boundedSet } from './meta.ts'
 
 /**
@@ -63,26 +64,32 @@ function monthDirOf(createTime: number | undefined): string {
  * 线索收敛到唯一候选：
  *   1. `createTime` → 月份目录（先只在这个月里找，找不到才退回全库）；
  *   2. `fileSize`（appmsg 的 `<totallen>`）→ 精确字节数匹配，优先于 mtime。
- * 同名同大小又同月时仍只能回退 mtime —— 微信的存储路径里没有会话维度，
- * 这一档限制来自数据布局本身，无法在读取侧彻底消除。
+ * 同名同大小又同月时，若消息带 `fileMd5`，则读取候选内容逐个比对 MD5；
+ * 只有未提供 MD5 时才保留旧的 mtime 兜底。给了 MD5 但没有任何候选匹配，
+ * 必须明确失败，不能拿另一份同名文件冒充。
  * @param wechatBaseDir - raw WeChat install dir (current account root).
  * @param fileName - original file name (e.g. 测试报告.pdf).
- * @param opts - 归属线索：消息里的文件字节数与接收时间。
+ * @param opts - 归属线索：文件字节数、接收时间与附件 MD5。
  * @returns ImageDataUrlResult-like result.
  */
 export function resolveMessageFileDataUrl(
   wechatBaseDir: string | undefined,
   fileName: string,
-  opts: { size?: number; createTime?: number } = {},
+  opts: { size?: number; createTime?: number; fileMd5?: string } = {},
 ): { url?: string; error?: string } {
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法定位文件' }
   const name = sanitize(fileName)
   if (!name) return { error: '缺少文件名' }
   const month = monthDirOf(opts.createTime)
   const size = Number.isFinite(opts.size) && (opts.size ?? 0) > 0 ? Math.trunc(opts.size as number) : 0
+  const rawFileMd5 = String(opts.fileMd5 ?? '').trim()
+  const fileMd5 = normalizeMd5(rawFileMd5)
+  if (rawFileMd5 !== '' && fileMd5 === undefined) {
+    return { error: '文件 MD5 格式不正确，无法校验同名文件' }
+  }
   // 缓存键要带上**当前账号的根目录**：换账号 / 改 `wechat_base_dir` 之后，同名同大小同月
   // 的文件是另一个目录里的另一份字节 —— 少了这一维，会把上一个账号的文件内容发回界面。
-  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}`
+  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`
   const hit = fileCache.get(cacheKey)
   if (hit !== undefined && (hit.url !== '' || Date.now() - hit.at < NEGATIVE_TTL_MS)) {
     return hit.url ? { url: hit.url } : { error: '本地未找到该文件' }
@@ -108,17 +115,26 @@ export function resolveMessageFileDataUrl(
       .filter(e => e.isDirectory())
       .map(e => join(fileRoot, e.name))
     // 先按消息所在月份就近找；这个月没有（转发/更早接收）再退回全库。
+    // 带 MD5 时必须扫全部月份：同名同大小的正确副本可能在别的月份，
+    // 不能因为当月有同名文件就提前收窄候选。
     const monthDirs = month ? allDirs.filter(d => d.endsWith(month)) : []
-    let hits = monthDirs.length > 0 ? scan(monthDirs) : []
+    let hits = monthDirs.length > 0 && fileMd5 === undefined ? scan(monthDirs) : []
     if (hits.length === 0) hits = scan(allDirs)
     if (hits.length === 0) {
       boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
       return { error: '本地未找到该文件（需在微信中先打开/下载）' }
     }
-    // 体积精确相等优先；多条同大小同名时退化为「取最新」。
+    // 未给 MD5 时体积精确相等优先；给了 MD5 时 MD5 是更强证据，
+    // 不再让可能失真的体积线索排除正确副本。
     const sized = size > 0 ? hits.filter(h => h.size === size) : []
-    const pool = sized.length > 0 ? sized : hits
-    const best = pool.reduce((a, b) => (b.mtime > a.mtime ? b : a), pool[0] as { path: string; mtime: number; size: number })
+    const pool = fileMd5 !== undefined ? hits : (sized.length > 0 ? sized : hits)
+    const best = fileMd5 !== undefined
+      ? pool.find(h => hashFile(h.path) === fileMd5)
+      : pool.reduce((a, b) => (b.mtime > a.mtime ? b : a), pool[0] as { path: string; mtime: number; size: number })
+    if (best === undefined) {
+      boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
+      return { error: '同名文件未匹配到消息里的 MD5，已停止猜测；请在微信里重新下载该文件' }
+    }
     const bytes = readFileSync(best.path)
     const url = 'data:' + mimeOf(name) + ';base64,' + bytes.toString('base64')
     boundedSet(fileCache, cacheKey, { url, at: Date.now() })
@@ -127,4 +143,15 @@ export function resolveMessageFileDataUrl(
     boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
     return { error: (e as Error).message }
   }
+}
+
+/** Lowercase, trim and validate a 32-char hex MD5. */
+function normalizeMd5(value: string | undefined): string | undefined {
+  const md5 = String(value ?? '').trim().toLowerCase()
+  return /^[a-f0-9]{32}$/.test(md5) ? md5 : undefined
+}
+
+/** MD5 of a candidate file's bytes; callers only use it to disambiguate same-name files. */
+function hashFile(path: string): string {
+  return createHash('md5').update(readFileSync(path)).digest('hex')
 }

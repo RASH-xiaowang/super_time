@@ -54,7 +54,10 @@ const editor = readFileSync(join(HERE, 'KnowledgeNoteEditor.tsx'), 'utf8')
  * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
  */
 const apiSrc = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(SHELL_DIR, f), 'utf8')).join('\n')
-const graphSrc = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
+// 图谱的笔记动作已抽到独立 hook；读联合源码，避免实现搬家后接线断言落在空处。
+const graphSrc = ['Graph.tsx', 'use-graph-note-actions.ts']
+  .map((f) => readFileSync(join(HERE, f), 'utf8'))
+  .join('\n')
 const askSrc = readFileSync(join(HERE, 'Ask.tsx'), 'utf8')
 const railSrc = readFileSync(join(HERE, 'KbRail.tsx'), 'utf8')
 const shellSrc = readFileSync(join(HERE, 'KbShell.tsx'), 'utf8')
@@ -451,8 +454,8 @@ describe('多知识库：作用域（看哪个库）接进两个面板与编辑�
     expect(panelCode).toContain('apiGetNotes(kbId,')
     expect(panelCode).toContain('apiDeleteNote(kbId,')
     expect(code(graphSrc)).toContain('apiGetKnowledgeGraph(kbId)')
-    expect(code(graphSrc)).toContain('apiGetNotes(kbId)')
-    expect(code(graphSrc)).toContain('apiDeleteNote(kbId,')
+    expect(code(graphSrc)).toContain('apiGetNotes(current.kbId)')
+    expect(code(graphSrc)).toContain('apiDeleteNote(current.kbId,')
   })
 
   it('两个视图的渲染缓存键都带库 id（不带就会「切库后首帧画上一个库」）', () => {
@@ -469,7 +472,7 @@ describe('多知识库：作用域（看哪个库）接进两个面板与编辑�
   it('切库时清掉视图状态：图谱清选中/固定/聚焦，笔记库清选中/关键词/标签', () => {
     // 节点 id 里不带库前缀（设计如此），所以选中态与固定集合跨库后指向的可能是另一条笔记
     expect(code(graphSrc), '图谱切库没清选中/固定/聚焦').toMatch(
-      /setSelectedId\(null\)[\s\S]{0,200}?setPinned\(new Set\(\)\)[\s\S]{0,200}?setFocusCommunity\(null\)[\s\S]{0,140}?\}, \[kbId\]\)/)
+      /setSelectedId\(null\)[\s\S]{0,200}?setPinned\(new Set\(\)\)[\s\S]{0,200}?setFocusCommunity\(null\)[\s\S]{0,140}?\}, \[kbId(?:, [^\]]+)?\]\)/)
     expect(panelCode, '笔记库切库没清选中/关键词/标签').toMatch(
       /setSelectedId\(null\)[\s\S]{0,160}?setQuery\(''\)[\s\S]{0,80}?setTag\(null\)[\s\S]{0,60}?\}, \[kbId\]\)/)
   })

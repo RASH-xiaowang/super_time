@@ -33,6 +33,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(HERE, '..', 'src')
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 const gateway = strip(gatewayPlusRemotes(join(SRC, 'gateway.ts')))
+// 文件库图片的实现已拆到独立 Remote 文件，密钥解析由同文件的 context() 统一完成。
+const fileImageRemotes = strip(readFileSync(join(SRC, 'remotes', 'media-file-images.ts'), 'utf8'))
 // M21 把 query/export.ts 拆成 export-io/format/flows 三个模块；这里读**桶 + 拆出模块**的联合，
 // 断言本身不变，类型/函数再搬家也不会误报。
 const exportTs = strip(readdirSync(join(SRC, 'query'))
@@ -74,7 +76,7 @@ function methodBody(code: string, remoteName: string): string | null {
 describe('图片密钥的单一解析点', () => {
   it('每个解码入口都走 resolveImageKeyPair，且不再自己读 cfg', () => {
     for (const name of DECODE_METHODS) {
-      const body = methodBody(gateway, name)
+      const body = name === 'getFileImageDataUrl' ? fileImageRemotes : methodBody(gateway, name)
       expect(body, `找不到 @Remote('${name}') —— 改名或删除时请同步本用例`).not.toBeNull()
       expect(body!.includes('resolveImageKeyPair('), `${name} 必须通过 resolveImageKeyPair 取密钥`).toBe(true)
       expect(body!.includes('image_aes_key'), `${name} 不该再自己读 cfg['image_aes_key']（回退会丢）`).toBe(false)

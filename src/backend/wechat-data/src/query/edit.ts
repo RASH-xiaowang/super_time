@@ -1,13 +1,22 @@
 /**
  * Message edit store, rewritten from st_control edit_store.rs. Edits write to
  * the decrypted message shard and record the original snapshot in
- * <wechat>/message_edits.db so the original can be restored.
+ * <wechat>/message_edits.db so the original can be restored exactly.
  */
-import { DatabaseSync } from './db-open.ts'
+import * as zlib from 'node:zlib'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { withDb, withWritableDb } from './db-open.ts'
+
+/** Which field the editor is changing. `text` is guarded to plain text rows only. */
+export type MessageEditMode = 'text' | 'source'
+
+const EDIT_SCHEMA = 'CREATE TABLE IF NOT EXISTS message_edits (account TEXT NOT NULL, session_id TEXT NOT NULL, db TEXT NOT NULL, table_name TEXT NOT NULL, local_id INTEGER NOT NULL, first_edited_at INTEGER NOT NULL, last_edited_at INTEGER NOT NULL, edit_count INTEGER NOT NULL, original_msg_json TEXT NOT NULL, edited_cols_json TEXT, PRIMARY KEY (account, session_id, db, table_name, local_id))'
+/** Runtime zstd probe: Electron's bundled Node version decides whether the API exists. */
+const zstdApi = zlib as unknown as {
+  zstdCompressSync?: (bytes: Buffer) => Buffer
+}
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
@@ -26,13 +35,6 @@ function editDbPath(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'message_edits.db')
 }
 
-/** Open (create) the edit store with schema. */
-function openEditStore(decryptedDir: string): DatabaseSync {
-  const db = new DatabaseSync(editDbPath(decryptedDir))
-  db.exec('CREATE TABLE IF NOT EXISTS message_edits (account TEXT NOT NULL, session_id TEXT NOT NULL, db TEXT NOT NULL, table_name TEXT NOT NULL, local_id INTEGER NOT NULL, first_edited_at INTEGER NOT NULL, last_edited_at INTEGER NOT NULL, edit_count INTEGER NOT NULL, original_msg_json TEXT NOT NULL, edited_cols_json TEXT, PRIMARY KEY (account, session_id, db, table_name, local_id))')
-  return db
-}
-
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
   if (typeof v === 'string') return v
@@ -42,25 +44,31 @@ function cellStr(v: unknown): string {
 }
 
 /**
- * 把单元格值编码进编辑记录的 JSON 快照。
+ * Encode a raw SQLite cell into the JSON snapshot.
  *
- * 为什么不能直接用 `cellStr()`：它对 **BLOB 返回空串**，而本机文本消息的
- * `message_content` 绝大多数是 BLOB（实测 a妈 会话 153 行里 145 行是 blob）。
- * 用空串做快照的话，「恢复原文」会把消息写成空串、原始内容**永久丢失**。
- * 所以 BLOB 走 base64 + 标记，TEXT 仍存原字符串（旧记录也读得回来）。
- * @param v - the raw cell value.
- * @returns a JSON-safe snapshot value.
+ * BLOB must be base64-tagged. Treating it as an empty string would make restore
+ * overwrite the original compressed payload permanently.
  */
-function encodeOriginalCell(v: unknown): string | { b64: string } {
+type EncodedCell = string | number | { b64: string } | { i64: string } | { null: true }
+
+function encodeOriginalCell(v: unknown): EncodedCell {
+  if (v === null || v === undefined) return { null: true }
   if (v instanceof Uint8Array) return { b64: Buffer.from(v).toString('base64') }
+  if (typeof v === 'bigint') return { i64: String(v) }
+  if (typeof v === 'number') return v
+  if (typeof v === 'boolean') return v ? 1 : 0
   return cellStr(v)
 }
 
-/** 解码 {@link encodeOriginalCell} 的快照值：base64 还原成 Buffer（按 BLOB 写回），其余按字符串。 */
-function decodeOriginalCell(v: unknown): string | Buffer {
-  if (v && typeof v === 'object' && typeof (v as { b64?: unknown }).b64 === 'string') {
-    return Buffer.from((v as { b64: string }).b64, 'base64')
+/** Decode a snapshot cell back to the SQLite storage type it came from. */
+function decodeOriginalCell(v: unknown): string | number | bigint | Buffer | null {
+  if (v && typeof v === 'object') {
+    const tagged = v as { b64?: unknown; i64?: unknown; null?: unknown }
+    if (typeof tagged.b64 === 'string') return Buffer.from(tagged.b64, 'base64')
+    if (typeof tagged.i64 === 'string') return BigInt(tagged.i64)
+    if (tagged.null === true) return null
   }
+  if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'string') return v
   return String(v ?? '')
 }
 
@@ -104,47 +112,61 @@ export function listEditedMessages(decryptedDir: string, sessionId?: string): { 
 }
 
 /**
- * 找到承载这条消息的分片连接。
+ * Locate the first shard/table that really contains the target row.
  *
- * 同一个会话的 `Msg_` 表**可能同时存在于多个分片**（本机实测「a妈」的表：
- * message_0.db 里只有 1 行、message_1.db 里有 153 行）。旧实现取「第一个建了该表的
- * 分片」，拿到只有 1 行的那片后 `WHERE local_id = ?` 查不到目标行 —— 于是编辑必然失败。
- * 现在按 localId 逐片找：哪片真有这一行就用哪片；都没命中时退回「第一个有该表的分片」，
- * 让调用方自己去报「消息不存在」。
- * @param decryptedDir - decrypted data root.
- * @param table - `Msg_<md5(username)>` table name.
- * @param localId - message local id to look for (optional: pick any shard with the table).
- * @returns an open shard connection, or null when the table is nowhere.
+ * A conversation's Msg_ table can exist in more than one shard. Checking each
+ * candidate read-only before opening the writable connection also guarantees
+ * every probe connection is closed, including SQLite error paths.
  */
-function findShard(decryptedDir: string, table: string, localId?: number): DatabaseSync | null {
-  let fallback: DatabaseSync | null = null
-  for (const f of messageShardFiles(decryptedDir)) {
+function findShardFile(decryptedDir: string, table: string, localId: number): string | null {
+  let fallback: string | null = null
+  for (const file of messageShardFiles(decryptedDir)) {
     try {
-      const db = new DatabaseSync(f)
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-      if (!has) { db.close(); continue }
-      if (localId === undefined) {
-        if (fallback) fallback.close()
-        return db
-      }
-      const hit = db.prepare('SELECT 1 FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) !== undefined
-      if (hit) {
-        if (fallback) fallback.close()
-        return db
-      }
-      if (fallback) db.close()
-      else fallback = db
-    } catch { /* try next */ }
+      const state = withDb(file, (db): 'none' | 'table' | 'hit' => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+        if (!has) return 'none'
+        const hit = db.prepare('SELECT 1 FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) !== undefined
+        return hit ? 'hit' : 'table'
+      })
+      if (state === 'hit') return file
+      if (state === 'table' && fallback === null) fallback = file
+    } catch {
+      // A damaged shard must not stop the search in the remaining shards.
+    }
   }
   return fallback
 }
 
+/** SQLite may return `local_type` as a wide integer-like value. Keep the low 32 bits. */
+function normalizedLocalType(value: unknown): number {
+  try {
+    return Number(BigInt(Math.trunc(Number(value))) & 0xffffffffn)
+  } catch {
+    return 0
+  }
+}
+
+/** The original cell shape decides how the edited value must be written back. */
+function usesCompressedBlob(content: unknown, flag: unknown): boolean {
+  return content instanceof Uint8Array || Number(flag) === 4
+}
+
+/** Encode text in the same storage family as the original message cell. */
+function encodeEditedContent(content: unknown, flag: unknown, text: string): { value: string | Buffer; flag: number } {
+  if (!usesCompressedBlob(content, flag)) return { value: text, flag: 0 }
+  if (typeof zstdApi.zstdCompressSync !== 'function') {
+    throw new Error('这条消息使用 zstd 压缩存储，但当前运行时不支持安全压缩，已阻止写入')
+  }
+  return { value: Buffer.from(zstdApi.zstdCompressSync(Buffer.from(text, 'utf8'))), flag: 4 }
+}
+
 /**
- * Edit one message content (writes to the decrypted shard + records the edit).
+ * Edit one message while preserving its original SQLite storage family.
  * @param decryptedDir - decrypted data root.
  * @param username - conversation username.
  * @param localId - message local id.
- * @param newContent - new message content text.
+ * @param newContent - new visible text (text mode) or raw source (source mode).
+ * @param mode - `text` rejects non-text rows; `source` allows structured payloads.
  * @returns result with ok + edited localId.
  */
 export function editChatMessage(
@@ -152,44 +174,91 @@ export function editChatMessage(
   username: string,
   localId: number,
   newContent: string,
+  mode: MessageEditMode = 'text',
 ): { ok: boolean; error?: string; localId?: number } {
+  if (mode !== 'text' && mode !== 'source') return { ok: false, error: '不支持的消息修改模式' }
   const table = msgTableName(username)
-  const db = findShard(decryptedDir, table, localId)
-  if (!db) return { ok: false, error: '未找到消息分库' }
+  const shardFile = findShardFile(decryptedDir, table, localId)
+  if (!shardFile) return { ok: false, error: '未找到消息分库或目标消息' }
   try {
-    const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
-    const contentCol = cols.includes('message_content') ? 'message_content' : cols.includes('Content') ? 'Content' : null
-    const strCol = cols.includes('str_content') ? 'str_content' : null
-    // 注意：这两个早退分支**不能**自己 db.close() —— 下面 finally 还会关一次，
-    // 而 node:sqlite 对已关闭的连接再 close() 会抛 `database is not open`，
-    // 直接把真实原因顶掉（用户看到的就是这句，见报告「编辑消息副本」一节）。
-    if (!contentCol) return { ok: false, error: '消息表缺少内容列' }
-    const row = db.prepare('SELECT "' + contentCol + '" AS c FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) as { c?: unknown } | undefined
-    if (!row) return { ok: false, error: '消息不存在' }
-    // record original snapshot (first edit)
-    const store = openEditStore(decryptedDir)
-    const ts = Date.now()
-    const existing = store.prepare('SELECT 1 FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId)
-    if (!existing) {
-      const originalJson = JSON.stringify({ [contentCol]: encodeOriginalCell(row.c ?? '') })
-      store.prepare("INSERT INTO message_edits(account, session_id, db, table_name, local_id, first_edited_at, last_edited_at, edit_count, original_msg_json, edited_cols_json) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, '[\"" + contentCol + "\"]')").run(username, username, 'message', table, localId, ts, ts, originalJson)
-    } else {
-      store.prepare('UPDATE message_edits SET last_edited_at = ?, edit_count = edit_count + 1 WHERE session_id = ? AND local_id = ?').run(ts, username, localId)
-    }
-    store.close()
-    // write the new content
-    db.prepare('UPDATE "' + table + '" SET "' + contentCol + '" = ? WHERE local_id = ?').run(newContent, localId)
-    if (strCol) db.prepare('UPDATE "' + table + '" SET "' + strCol + '" = ? WHERE local_id = ?').run(newContent, localId)
-    return { ok: true, localId }
+    return withWritableDb(shardFile, (db) => {
+      const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
+      const contentCol = cols.includes('message_content') ? 'message_content' : cols.includes('Content') ? 'Content' : null
+      const strCol = cols.includes('str_content') ? 'str_content' : null
+      const flagCol = contentCol === 'message_content' && cols.includes('WCDB_CT_message_content')
+        ? 'WCDB_CT_message_content'
+        : null
+      if (!contentCol) return { ok: false, error: '消息表缺少内容列' }
+
+      const localTypeCol = cols.includes('local_type') ? 'local_type' : null
+      const select = [
+        '"' + contentCol + '" AS content',
+        flagCol ? '"' + flagCol + '" AS flag' : 'NULL AS flag',
+        strCol ? '"' + strCol + '" AS str_content' : 'NULL AS str_content',
+        localTypeCol ? '"' + localTypeCol + '" AS local_type' : 'NULL AS local_type',
+      ].join(', ')
+      const row = db.prepare('SELECT ' + select + ' FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) as Record<string, unknown> | undefined
+      if (!row) return { ok: false, error: '消息不存在' }
+      if (mode === 'text' && normalizedLocalType(row['local_type']) !== 1) {
+        return { ok: false, error: '这条消息不是纯文本，不能用「修改消息」改写；请使用「修改源码」' }
+      }
+
+      const original: Record<string, unknown> = {
+        [contentCol]: encodeOriginalCell(row['content']),
+      }
+      if (flagCol) original[flagCol] = encodeOriginalCell(row['flag'])
+      if (strCol) original[strCol] = encodeOriginalCell(row['str_content'])
+      const editedCols = [contentCol, ...(flagCol ? [flagCol] : []), ...(strCol ? [strCol] : [])]
+      const encoded = encodeEditedContent(row['content'], row['flag'], newContent)
+
+      withWritableDb(editDbPath(decryptedDir), (store) => {
+        store.exec(EDIT_SCHEMA)
+        const existing = store.prepare('SELECT original_msg_json, edited_cols_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId) as { original_msg_json?: string; edited_cols_json?: string } | undefined
+        const ts = Date.now()
+        if (!existing) {
+          store.prepare('INSERT INTO message_edits(account, session_id, db, table_name, local_id, first_edited_at, last_edited_at, edit_count, original_msg_json, edited_cols_json) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
+            .run(username, username, 'message', table, localId, ts, ts, JSON.stringify(original), JSON.stringify(editedCols))
+          return
+        }
+
+        // Old records may only have the content cell. Fill missing metadata
+        // without overwriting the original content snapshot.
+        let previous: Record<string, unknown> = {}
+        try { previous = JSON.parse(existing.original_msg_json ?? '{}') as Record<string, unknown> } catch { /* replace corrupt snapshot while merging */ }
+        for (const [col, value] of Object.entries(original)) {
+          if (!(col in previous)) previous[col] = value
+        }
+        let previousCols: string[] = []
+        try {
+          const parsed = JSON.parse(existing.edited_cols_json ?? '[]') as unknown
+          if (Array.isArray(parsed)) previousCols = parsed.filter((x): x is string => typeof x === 'string')
+        } catch { /* use current columns */ }
+        const mergedCols = [...new Set([...previousCols, ...editedCols])]
+        store.prepare('UPDATE message_edits SET last_edited_at = ?, edit_count = edit_count + 1, original_msg_json = ?, edited_cols_json = ? WHERE session_id = ? AND local_id = ?')
+          .run(ts, JSON.stringify(previous), JSON.stringify(mergedCols), username, localId)
+      })
+
+      const assignments = ['"' + contentCol + '" = ?']
+      const values: Array<string | number | Uint8Array> = [encoded.value]
+      if (flagCol) {
+        assignments.push('"' + flagCol + '" = ?')
+        values.push(encoded.flag)
+      }
+      if (strCol) {
+        assignments.push('"' + strCol + '" = ?')
+        values.push(newContent)
+      }
+      values.push(localId)
+      db.prepare('UPDATE "' + table + '" SET ' + assignments.join(', ') + ' WHERE local_id = ?').run(...values)
+      return { ok: true, localId }
+    })
   } catch (e) {
     return { ok: false, error: (e as Error).message }
-  } finally {
-    db.close()
   }
 }
 
 /**
- * Restore a message to its original content from the edit store.
+ * Restore every snapshotted column to its original value and storage type.
  * @param decryptedDir - decrypted data root.
  * @param username - conversation username.
  * @param localId - message local id to restore.
@@ -204,20 +273,19 @@ export function resetEditedMessage(decryptedDir: string, username: string, local
     let original: Record<string, unknown> = {}
     try { original = JSON.parse(rec.original_msg_json ?? '{}') as Record<string, unknown> } catch { /* keep empty */ }
     const table = rec.table_name ?? msgTableName(username)
-    const db = findShard(decryptedDir, table, localId)
-    if (!db) return { ok: false, error: '未找到消息分库' }
-    try {
+    const shardFile = findShardFile(decryptedDir, table, localId)
+    if (!shardFile) return { ok: false, error: '未找到消息分库' }
+    withWritableDb(shardFile, (db) => {
       const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
       for (const [col, val] of Object.entries(original)) {
         if (!cols.includes(col)) continue
         db.prepare('UPDATE "' + table + '" SET "' + col + '" = ? WHERE local_id = ?').run(decodeOriginalCell(val), localId)
       }
-      // remove the edit record
-      withWritableDb(p, (store2) => { store2.prepare('DELETE FROM message_edits WHERE session_id = ? AND local_id = ?').run(username, localId) })
-      return { ok: true }
-    } finally {
-      db.close()
-    }
+    })
+    withWritableDb(p, (store) => {
+      store.prepare('DELETE FROM message_edits WHERE session_id = ? AND local_id = ?').run(username, localId)
+    })
+    return { ok: true }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   }

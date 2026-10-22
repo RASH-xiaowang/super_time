@@ -2,8 +2,8 @@
  * AI 自动回复守卫（M3，2026-10-13）。
  *
  * 守的是三组命题：
- *  ① **决策**：开关关着就一定不回；开了就回；知识库「开了但没选库」⇒ 回但不检索
- *     （**不是**「所有库」—— 那会把别的库内容端上来）；
+ *  ① **决策**：开关关着就一定不回；开了但没有有效知识库也不回（`clawbot-auto` 是
+ *     kb-only + requireKb）；只有「开关开 + 增强开 + 有效 kbId」才回；
  *  ② **候选筛选**：只回用户发来的文本（自己的回显、图片/语音/文件都不回）；
  *     一批多条**只回最后一条**（服务端不给消息时间，「刚绑定拉回历史」只能靠这条压上界）；
  *  ③ **执行器的失败纪律**：ask 抛错 / 空答案 / 发送失败 —— 一律**记账返回、不抛**、
@@ -36,7 +36,8 @@ const runners: Array<ReturnType<typeof createAutoReplyRunner>> = []
 const scratch: string[] = []
 
 function cfg(patch: Partial<ClawbotInstanceConfig> = {}): ClawbotInstanceConfig {
-  return { slot: 1, autoReply: false, kbEnabled: false, kbId: null, systemPrompt: '', splitReply: false, ...patch }
+  // 自动回复的合法运行态默认带知识库 1；无库矩阵用例显式覆盖为 kbEnabled:false / kbId:null。
+  return { slot: 1, autoReply: false, kbEnabled: true, kbId: 1, systemPrompt: '', splitReply: false, ...patch }
 }
 
 function msg(patch: Partial<ReplyableMessage> = {}): ReplyableMessage {
@@ -125,19 +126,30 @@ async function flushWithoutLeaseAdvance(rounds = 8): Promise<void> {
   }
 }
 
-describe('① 决策：只认开关，不看消息内容', () => {
+describe('① 决策：自动回复必须有有效知识库', () => {
   it('开关关着 ⇒ 不回（默认值，也是「无人值守出网」的第一道防线）', () => {
     expect(decideAutoReply(cfg())).toMatchObject({ should: false, kbId: null })
   })
 
-  it('开了就回；知识库「开了但没选库」⇒ 回但不检索', () => {
-    expect(decideAutoReply(cfg({ autoReply: true }))).toMatchObject({ should: true, kbId: null })
-    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: true })), '没选库时不许把「所有库」当成作用域').toMatchObject({ should: true, kbId: null })
+  it('开了但无有效知识库 ⇒ 不回，并返回可操作原因', () => {
+    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: false, kbId: null })), '未开启知识库增强时自动回复没有数据来源')
+      .toMatchObject({ should: false, kbId: null, reason: expect.stringContaining('自动回复需要选择知识库') })
+    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: true, kbId: null })), '没选库时不许把「所有库」当成作用域')
+      .toMatchObject({ should: false, kbId: null, reason: expect.stringContaining('自动回复需要选择知识库') })
+  })
+
+  it('只有增强开启且 kbId 为正整数时才回', () => {
     expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: true, kbId: 7 }))).toMatchObject({ should: true, kbId: 7 })
   })
 
-  it('知识库开关关着时，即便配了库 id 也不检索（开关优先于残留配置）', () => {
-    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: false, kbId: 7 }))).toMatchObject({ should: true, kbId: null })
+  it.each([0, -1, 1.5, Number.NaN])('kbId=%s 不是有效知识库 ⇒ 不回', (kbId) => {
+    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: true, kbId })))
+      .toMatchObject({ should: false, kbId: null, reason: expect.stringContaining('自动回复需要选择知识库') })
+  })
+
+  it('知识库开关关着时，即便配了库 id 也不回（开关优先于残留配置）', () => {
+    expect(decideAutoReply(cfg({ autoReply: true, kbEnabled: false, kbId: 7 })))
+      .toMatchObject({ should: false, kbId: null })
   })
 })
 
@@ -260,7 +272,7 @@ describe('③ 执行器：一问一答、失败不抛、开关现读', () => {
     h.runner.consider(1, [msg({ content: '关着的时候' })])
     await flush()
     expect(h.asks, '关着的时候一个 ask 都不该发生').toEqual([])
-    h.setConfig(cfg({ autoReply: true }))
+    h.setConfig(cfg({ autoReply: true, kbEnabled: true, kbId: 1 }))
     h.runner.consider(1, [msg({ content: '打开之后' })])
     await flush()
     expect(h.asks.map(a => a.text)).toEqual(['打开之后'])

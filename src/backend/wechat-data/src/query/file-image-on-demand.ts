@@ -31,6 +31,7 @@ import { join } from 'node:path'
 import { collectImageDatFilesAsync, groupImageDatsByMd5 } from './decrypt-images.ts'
 import { decodeDatBytesAsync } from './media-image-async.ts'
 import { RENDERABLE_EXTS, datTierRank, isThumbTier } from './media-image.ts'
+import { isMd5 } from '../md5.ts'
 
 /** 浏览器可渲染的落盘扩展名（与 batch decrypt 的 WRITE_EXTS 一致）。 */
 const WRITE_EXTS = new Set(['jpg', 'png', 'gif', 'webp'])
@@ -64,7 +65,7 @@ export function fileImageKeyOf(fileName: string): string {
     .replace(/_(t|h|b|thumb.*)$/i, '')
     .trim()
     .toLowerCase()
-  return /^[0-9a-f]{32}$/.test(key) ? key : ''
+  return isMd5(key) ? key : ''
 }
 
 /**
@@ -236,7 +237,7 @@ export async function ensureFileImageDecoded(args: {
   thumbFirst?: boolean
 }): Promise<FileImageHit> {
   const key = String(args.key ?? '').trim().toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(key)) return { error: '缺少图片 MD5' }
+  if (!isMd5(key)) return { error: '缺少图片 MD5' }
   const cached = decodedFileRel(args.decodedDir, key)
   if (cached !== null) {
     const thumb = cached.includes('.t.')

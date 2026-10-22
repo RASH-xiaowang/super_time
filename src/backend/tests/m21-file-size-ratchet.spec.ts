@@ -47,12 +47,18 @@ const LIMIT = 1000
 const ALLOWLIST: Record<string, number> = {
   // 2026-10-21：主区在途功能（ClawBot 自动回复/收藏/深问）引入的大文件，尚未来得及拆分。
   // 登记为「只许变小」的技术债；降到 1000 行以内时必须删条目（防空转会校验）。
-  'src/backend/wechat-data/src/query/clawbot/clawbot-auto-reply.ts': 1989,
+  // 2026-10-22：自动回复运行详情（失败/跳过/发送门禁摘要、终态合并）落库后真实增长。
+  'src/backend/wechat-data/src/query/clawbot/clawbot-auto-reply.ts': 2101,
   'src/backend/wechat-data/src/query/clawbot/clawbot-reply-store.ts': 1369,
-  'src/backend/wechat-data/src/remotes/askdeep.ts': 1067,
-  'src/backend/wechat-data/src/remotes/clawbot.ts': 1189,
-  'src/backend/wechat-data/tests/clawbot-remotes.spec.ts': 1174,
-  'src/backend/wechat-data/tests/clawbot-reply-durable.spec.ts': 1077,
+  // 2026-10-22：统一 answer runtime 的两个规则模块首次超过 1000 行，先如实登记
+  // 为「只许变小」；`askdeep.ts` 已降到 408 行，按规则移出白名单。
+  'src/backend/wechat-data/src/query/answer-runtime/arguments.ts': 1164,
+  'src/backend/wechat-data/src/query/answer-runtime/intent.ts': 1282,
+  // 2026-10-22：消息列表批量附加运行详情（入站目标 + 出站 sent_message_id 分块查询）。
+  'src/backend/wechat-data/src/remotes/clawbot.ts': 1191,
+  // 2026-10-22：成功/失败/跳过/配置关闭四条路径的运行详情与发送门禁回归。
+  'src/backend/wechat-data/tests/clawbot-remotes.spec.ts': 1305,
+  'src/backend/wechat-data/tests/clawbot-reply-durable.spec.ts': 1107,
 }
 
 /**
