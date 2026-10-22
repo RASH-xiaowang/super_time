@@ -4,8 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Super Time · 让聊天记录成为你自己的数据资产</title>
-<meta name="description" content="Super Time 是面向微信 4.x 本地数据的桌面端洞察与 AI 问答工具：全程离线、数据不出本机。混合检索 RAG、本地语音转写、对齐官方视觉的聊天回放。">
+<meta name="description" content="Super Time 是面向微信 4.x 本地数据的 Windows 桌面工作台：混合检索 RAG、本地语音转写、聊天回放、任务中心与 8 个 RPA / Webhook 触发适配器。本地优先，数据默认不出本机。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Super Time">
+<meta property="og:title" content="Super Time · 把聊天记录变成你自己的数据资产">
+<meta property="og:description" content="面向微信 4.x 本地数据的桌面工作台：AI 问答、洞察、媒体回放，以及由新消息触发的 RPA 自动化。">
+<meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#04050a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070a13'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%2322d3ee' stroke-width='4'/%3E%3Cpath d='M32 18v15l9 6' fill='none' stroke='%23a78bfa' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 /* ==========================================================================
    Super Time · 官网
@@ -312,8 +318,49 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .stat span{display:block;margin-top:7px;font-size:12.5px;color:var(--txt-2)}
 .stat em{display:block;margin-top:5px;font-size:10.5px;color:var(--txt-3);font-family:var(--mono);letter-spacing:.06em;font-style:normal}
 
+/* ---------- 最新版本 ---------- */
+.release-band{padding:28px 0 0}
+.release-card{
+  position:relative;display:grid;grid-template-columns:150px minmax(0,1fr) auto;
+  align-items:center;gap:clamp(18px,3vw,34px);padding:22px 26px;overflow:hidden;
+  border:1px solid rgba(122,160,255,.28);border-radius:18px;
+  background:linear-gradient(105deg,rgba(18,25,44,.92),rgba(9,13,24,.9) 58%,rgba(18,17,37,.92));
+  box-shadow:0 28px 70px -46px rgba(0,0,0,1);
+}
+.release-card::after{
+  content:"";position:absolute;right:-10%;top:-90%;width:420px;height:420px;pointer-events:none;
+  background:radial-gradient(circle,rgba(139,92,246,.18),transparent 64%);
+}
+.release-meta,.release-copy,.release-link{position:relative;z-index:1}
+.release-meta{display:flex;flex-direction:column;align-items:flex-start;gap:7px}
+.release-ver{
+  display:inline-flex;align-items:center;padding:5px 11px;border-radius:999px;
+  color:#071018;background:linear-gradient(100deg,#7ef0ff,#a78bfa 58%,#f9a8d4);
+  font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.06em;
+  box-shadow:0 8px 26px -12px rgba(139,92,246,.9);
+}
+.release-meta time{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);letter-spacing:.08em}
+.release-copy h2{margin:0;font-size:clamp(18px,2.3vw,25px);line-height:1.32;letter-spacing:-.01em;font-weight:680}
+.release-copy p{margin:7px 0 0;max-width:700px;color:var(--txt-2);font-size:13.6px;line-height:1.72}
+.release-points{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}
+.release-points span{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:7px;
+  border:1px solid rgba(34,211,238,.22);background:rgba(34,211,238,.055);
+  color:#a7dff0;font-size:10.5px;font-family:var(--mono);
+}
+.release-points b{color:#e9edff;font-weight:650}
+.release-link{
+  display:inline-flex;align-items:center;gap:8px;padding:10px 0;white-space:nowrap;
+  color:#a5f3fc;font-size:13px;font-weight:600;border-bottom:1px solid rgba(34,211,238,.45);
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.release-link:hover{color:#fff;border-color:#f9a8d4}
+.release-link svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
 /* ---------- 亮点 ---------- */
 .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+/* 解决方案：4 张卡（个人 / 助理 / 团队 / 创作者）—— 宽屏 4 列，中屏 2 列，窄屏 1 列。 */
+.grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px}
 .hl h3{margin:20px 0 10px;font-size:19px;font-weight:650;letter-spacing:-.01em}
 .hl p{margin:0;color:var(--txt-2);font-size:14.3px}
 .hl .tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}
@@ -345,12 +392,12 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .visual .vhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .visual .vhead b{font-size:12px;letter-spacing:.12em;color:var(--txt-3);font-family:var(--mono);font-weight:600}
 .visual .vhead span{font-size:10.5px;font-family:var(--mono);color:#7ff0c3}
-.vrow{display:grid;gap:9px}
+.vrow{display:grid;grid-template-columns:minmax(0,1fr);gap:9px}
 .vcell{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:rgba(255,255,255,.017);transition:.35s var(--ease)}
 .vcell:hover{border-color:var(--line-2);background:rgba(122,160,255,.06);transform:translateX(3px)}
 .vcell .av{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#04222b;background:linear-gradient(140deg,#7ef0ff,#a78bfa)}
 .vcell .tx{min-width:0;flex:1}
-.vcell .tx b{display:block;font-size:12.8px;font-weight:600;color:var(--txt)}
+.vcell .tx b{display:block;font-size:12.8px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vcell .tx span{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vcell .mt{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);flex:none}
 .flowmap{display:grid;gap:8px}
@@ -370,13 +417,116 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 /* ---------- 解决方案 ---------- */
 .sol{position:relative;overflow:hidden}
 .sol .top{display:flex;align-items:center;justify-content:space-between;gap:14px}
-.sol .plan{font-family:var(--mono);font-size:10.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.3);border-radius:999px;padding:3px 10px;background:rgba(34,211,238,.07)}
+.sol .plan{font-family:var(--mono);font-size:10.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.3);border-radius:999px;padding:3px 10px;background:rgba(34,211,238,.07);flex:none;white-space:nowrap}
 .sol h3{margin:18px 0 10px;font-size:20px;font-weight:660}
 .sol p{margin:0;color:var(--txt-2);font-size:14.2px}
 .sol ul{margin:18px 0 0;padding:0;list-style:none;display:grid;gap:9px}
 .sol ul li{font-size:13.6px;color:var(--txt-2);padding-left:18px;position:relative}
 .sol ul li::before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:2px;background:var(--grad);box-shadow:0 0 10px rgba(139,92,246,.9)}
 .sol .glow{position:absolute;inset:auto -30% -60% -30%;height:190px;background:radial-gradient(ellipse at 50% 0%,rgba(139,92,246,.22),transparent 70%);pointer-events:none}
+
+/* ---------- 客户案例 ---------- */
+.cases-section{overflow:hidden}
+.cases-section::before{
+  content:"";position:absolute;left:-18%;right:-18%;top:8%;height:420px;
+  background:radial-gradient(ellipse at 50% 30%,rgba(139,92,246,.12),rgba(34,211,238,.045) 44%,transparent 70%);
+  pointer-events:none;
+}
+.case-toolbar{
+  position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;
+  margin:-8px 0 20px;padding:13px 16px;border:1px solid var(--line);border-radius:15px;
+  background:linear-gradient(100deg,rgba(12,17,31,.82),rgba(8,11,20,.66));
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+}
+.case-filters{display:flex;flex-wrap:wrap;gap:7px}
+.case-filter{
+  padding:7px 13px;border:1px solid transparent;border-radius:999px;color:var(--txt-3);
+  font-size:12.5px;line-height:1.4;transition:color .3s var(--ease),background .3s var(--ease),border-color .3s var(--ease),box-shadow .3s var(--ease);
+}
+.case-filter:hover{color:var(--txt);background:rgba(122,160,255,.06)}
+.case-filter.on{
+  color:#dffbff;border-color:rgba(34,211,238,.36);
+  background:linear-gradient(100deg,rgba(34,211,238,.14),rgba(139,92,246,.14));
+  box-shadow:0 0 24px -14px rgba(34,211,238,1);
+}
+.case-count{flex:none;font-family:var(--mono);font-size:11px;color:var(--txt-3);letter-spacing:.04em}
+.case-count b{color:#a5f3fc;font-size:13px;font-weight:600}
+.case-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+.case-card{
+  --case-rgb:34,211,238;
+  position:relative;z-index:1;display:flex;flex-direction:column;overflow:hidden;
+  padding:24px;border:1px solid var(--line);border-radius:18px;
+  background:linear-gradient(155deg,rgba(16,21,37,.94),rgba(8,11,20,.96));
+  box-shadow:0 28px 70px -55px rgba(0,0,0,1);
+  transition:transform .45s var(--ease),border-color .45s var(--ease),box-shadow .45s var(--ease);
+}
+.case-card[hidden]{display:none}
+.case-card[data-category="team"]{--case-rgb:139,92,246}
+.case-card[data-category="operations"]{--case-rgb:244,114,182}
+.case-card[data-category="personal"]{--case-rgb:10,201,122}
+.case-card::before{
+  content:"";position:absolute;left:8%;right:8%;top:0;height:2px;border-radius:0 0 3px 3px;
+  background:linear-gradient(90deg,transparent,rgba(var(--case-rgb),.9),transparent);
+  opacity:.55;transition:opacity .4s var(--ease);
+}
+.case-card::after{
+  content:"";position:absolute;right:-22%;top:-24%;width:320px;height:320px;pointer-events:none;
+  background:radial-gradient(circle,rgba(var(--case-rgb),.13),transparent 66%);
+  opacity:.7;
+}
+.case-card:hover{transform:translateY(-5px);border-color:rgba(var(--case-rgb),.38);box-shadow:0 34px 80px -50px rgba(0,0,0,1),0 0 50px -30px rgba(var(--case-rgb),.9)}
+.case-card:hover::before,.case-card.open::before{opacity:1}
+.case-card:focus-within{border-color:rgba(var(--case-rgb),.42)}
+.case-head{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.case-kicker{display:flex;align-items:center;gap:9px;min-width:0}
+.case-index{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);letter-spacing:.14em}
+.case-category{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
+  border:1px solid rgba(var(--case-rgb),.28);background:rgba(var(--case-rgb),.07);
+  color:#cfe9ff;font-size:10.5px;font-family:var(--mono);letter-spacing:.05em;
+}
+.case-category::before{content:"";width:5px;height:5px;border-radius:50%;background:rgba(var(--case-rgb),1);box-shadow:0 0 8px rgba(var(--case-rgb),1)}
+.case-proof{flex:none;font-size:10.5px;color:#7ff0c3;font-family:var(--mono);letter-spacing:.05em}
+.case-card h3{position:relative;z-index:1;margin:18px 0 9px;font-size:clamp(18px,2.2vw,23px);line-height:1.42;font-weight:680;letter-spacing:-.015em}
+.case-summary{position:relative;z-index:1;margin:0;color:var(--txt-2);font-size:13.8px;line-height:1.75}
+.case-client{
+  position:relative;z-index:1;margin-top:18px;padding:12px 14px;border-left:2px solid rgba(var(--case-rgb),.66);
+  border-radius:0 10px 10px 0;background:linear-gradient(90deg,rgba(var(--case-rgb),.075),rgba(255,255,255,.012));
+}
+.case-client span,.case-label{
+  display:block;font-family:var(--mono);font-size:9.5px;line-height:1.5;color:var(--txt-3);letter-spacing:.12em;
+}
+.case-client b{display:block;margin-top:4px;font-size:13.8px;font-weight:620;color:var(--txt)}
+.case-client p{margin:3px 0 0;font-size:12.2px;color:var(--txt-2);line-height:1.68}
+.case-pain{position:relative;z-index:1;margin-top:16px}
+.case-pain p{margin:6px 0 0;color:var(--txt-2);font-size:13.2px;line-height:1.72}
+.case-metrics{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:18px}
+.case-metric{padding:11px 10px;border:1px solid var(--line);border-top-color:rgba(var(--case-rgb),.42);border-radius:10px;background:rgba(255,255,255,.018)}
+.case-metric b{display:block;font-family:var(--mono);font-size:19px;font-weight:620;line-height:1.25;color:#ecfaff;letter-spacing:-.02em}
+.case-metric span{display:block;margin-top:4px;font-size:10.5px;line-height:1.45;color:var(--txt-3)}
+.case-toggle{
+  position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  width:100%;margin-top:18px;padding:15px 0 0;border-top:1px dashed var(--line-2);
+  color:#b8eefc;font-size:12.5px;font-weight:600;text-align:left;
+}
+.case-toggle svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:transform .4s var(--ease)}
+.case-toggle:hover{color:#fff}
+.case-card.open .case-toggle svg{transform:rotate(180deg)}
+.case-detail{
+  position:relative;z-index:1;max-height:0;overflow:hidden;opacity:0;visibility:hidden;
+  transition:max-height .55s var(--ease),opacity .35s var(--ease),visibility .35s;
+}
+.case-card.open .case-detail{opacity:1;visibility:visible}
+.case-detail-inner{display:grid;gap:16px;padding-top:17px}
+.case-block{padding-top:15px;border-top:1px solid var(--line)}
+.case-block:first-child{padding-top:0;border-top:0}
+.case-block p{margin:7px 0 0;color:var(--txt-2);font-size:13.2px;line-height:1.75}
+.case-solution ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:8px}
+.case-solution li{position:relative;padding-left:16px;color:var(--txt-2);font-size:13px;line-height:1.68}
+.case-solution li::before{content:"";position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:2px;background:rgba(var(--case-rgb),.95);box-shadow:0 0 9px rgba(var(--case-rgb),.8)}
+.case-effect p{border-radius:10px;padding:11px 12px;background:rgba(var(--case-rgb),.055);border:1px solid rgba(var(--case-rgb),.2)}
+.case-footnote{margin:18px 0 0;color:var(--txt-3);font-size:11.2px;line-height:1.75;text-align:right}
+.case-noscript{color:var(--txt-2);font-size:14px}
 
 /* ---------- 架构 ---------- */
 .arch{display:grid;grid-template-columns:1.02fr .98fr;gap:44px;align-items:start}
@@ -420,31 +570,6 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .q .ans{max-height:0;overflow:hidden;transition:max-height .55s var(--ease)}
 .q .ans p{margin:0;padding:0 20px 19px;color:var(--txt-2);font-size:14.2px}
 
-/* ---------- 联系 ---------- */
-.contact{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start}
-.form{display:grid;gap:14px;border:1px solid var(--line-2);border-radius:18px;padding:clamp(18px,4.6vw,26px);background:linear-gradient(180deg,rgba(14,19,33,.9),rgba(7,10,19,.94));position:relative;overflow:hidden}
-.form::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
-  background:linear-gradient(140deg,rgba(34,211,238,.5),rgba(139,92,246,.32),transparent 70%);
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.8}
-.field{display:grid;gap:7px}
-.field label{font-size:12.5px;color:var(--txt-2);letter-spacing:.03em}
-.field input,.field textarea,.field select{
-  width:100%;padding:12px 14px;border-radius:11px;font-family:inherit;font-size:14.2px;color:var(--txt);
-  background:rgba(4,6,12,.7);border:1px solid var(--line-2);outline:none;transition:.3s var(--ease);resize:vertical;
-}
-.field input::placeholder,.field textarea::placeholder{color:#4d5975}
-.field input:focus,.field textarea:focus,.field select:focus{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 3px rgba(34,211,238,.14),0 0 28px -14px rgba(34,211,238,1)}
-.form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.consent{display:flex;gap:10px;align-items:flex-start;font-size:12.2px;color:var(--txt-3)}
-.consent input{width:15px;height:15px;margin-top:3px;flex:none;accent-color:#8b5cf6}
-.cinfo{display:grid;gap:12px}
-.cbox{display:flex;gap:15px;align-items:flex-start;border:1px solid var(--line);border-radius:14px;padding:17px;background:rgba(255,255,255,.017);transition:.4s var(--ease)}
-.cbox:hover{border-color:var(--line-2);transform:translateY(-3px)}
-.cbox b{display:block;font-size:14.2px;margin-bottom:3px}
-.cbox p{margin:0;font-size:13.4px;color:var(--txt-2);font-family:var(--mono)}
-.note{margin-top:6px;border:1px dashed rgba(122,160,255,.3);border-radius:13px;padding:15px;font-size:12.8px;color:var(--txt-3);line-height:1.7}
-
 /* ---------- CTA 尾带 ---------- */
 .cta-band{position:relative;overflow:hidden;border-radius:22px;border:1px solid var(--line-2);text-align:center;
   background:linear-gradient(120deg,rgba(34,211,238,.1),rgba(139,92,246,.14) 52%,rgba(244,114,182,.1));
@@ -464,22 +589,13 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 .fbot{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center;font-size:12.3px;color:var(--txt-3)}
 .disc{margin-top:18px;font-size:11.8px;color:#4c5674;line-height:1.8;max-width:920px}
 
-/* ---------- 回到顶部 / Toast ---------- */
+/* ---------- 回到顶部 ---------- */
 .top{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(18px,calc(env(safe-area-inset-bottom) + 12px));z-index:70;width:44px;height:44px;border-radius:13px;display:grid;place-items:center;
   border:1px solid var(--line-2);background:rgba(9,13,24,.9);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   opacity:0;transform:translateY(14px);pointer-events:none;transition:.45s var(--ease)}
 .top.on{opacity:1;transform:none;pointer-events:auto}
 .top:hover{border-color:rgba(34,211,238,.7);box-shadow:0 0 28px -12px rgba(34,211,238,1)}
 .top svg{width:17px;height:17px;stroke:#a5f3fc;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.toast{
-  position:fixed;left:50%;bottom:max(20px,calc(env(safe-area-inset-bottom) + 14px));transform:translate(-50%,26px);z-index:80;max-width:calc(100vw - 32px);
-  padding:13px 22px;border-radius:13px;font-size:13.6px;display:flex;align-items:center;gap:10px;
-  background:rgba(9,13,24,.96);border:1px solid rgba(34,211,238,.5);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
-  box-shadow:0 24px 60px -28px #000,0 0 40px -20px rgba(34,211,238,.9);
-  opacity:0;pointer-events:none;transition:.45s var(--ease);
-}
-.toast.on{opacity:1;transform:translate(-50%,0)}
-.toast svg{width:16px;height:16px;stroke:#5eead4;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 
 /* ---------- 光标光斑 ---------- */
 #glow{position:fixed;width:520px;height:520px;left:0;top:0;z-index:1;pointer-events:none;border-radius:50%;
@@ -505,13 +621,12 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .hl h3{font-size:18px}
 }
 
-/* ---- ≤1100：双栏结构降单栏；导航先收掉次要按钮（7 链接 + 2 按钮在 1024 以下必溢出） ---- */
+/* ---- ≤1100：双栏结构降单栏；导航按钮在 1024 以下收起并切换为汉堡菜单 ---- */
 @media (max-width:1100px){
   .nav-links a{padding:9px 10px;font-size:13.5px}
-  .nav-act .btn-ghost{display:none}
   .nav-act .btn{padding:10px 15px;font-size:13px}
   .nav-links a::after{left:10px;right:10px}
-  .pane-grid,.arch,.about,.contact{grid-template-columns:minmax(0,1fr);gap:34px}
+  .pane-grid,.arch,.about{grid-template-columns:minmax(0,1fr);gap:34px}
   .hero-grid{gap:34px}
   .hero h1{font-size:clamp(34px,4.6vw,48px)}
   .float-badge.f1{right:0;top:12%}
@@ -525,6 +640,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .nav-act .btn{display:none}
   .burger{display:flex}
   .arch{gap:30px}
+  .grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
 /* ---- ≤980：Hero 改单列，控制台预览居中限宽 ---- */
@@ -537,11 +653,15 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .float-badge{display:none}
   .mock-wrap{max-width:600px;margin:0 auto;width:100%}
   .pane-grid{gap:30px}
+  .release-card{grid-template-columns:minmax(0,1fr);gap:16px}
+  .release-link{justify-self:start}
 }
 
 /* ---- ≤820：平板竖屏 —— 功能卡/技术栈单列，分页横向滚动 ---- */
 @media (max-width:820px){
   .grid-3{grid-template-columns:minmax(0,1fr)}
+  .grid-4{grid-template-columns:minmax(0,1fr)}
+  .case-grid{grid-template-columns:minmax(0,1fr)}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
   .stat:nth-child(3)::before{display:none}
   .fgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
@@ -561,9 +681,18 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 /* ---- ≤640：大屏手机 ---- */
 @media (max-width:640px){
   .tech{grid-template-columns:minmax(0,1fr)}
-  .form .row2{grid-template-columns:minmax(0,1fr)}
   .fgrid{grid-template-columns:minmax(0,1fr);gap:22px}
   .fgrid h5{margin-bottom:6px}
+  .release-band{padding-top:20px}
+  .release-card{padding:19px 18px}
+  .case-toolbar{align-items:flex-start;flex-direction:column;padding:12px}
+  .case-filters{width:100%;flex-wrap:wrap}
+  .case-filter{flex:none}
+  .case-count{align-self:flex-end}
+  .case-card{padding:20px 18px}
+  .case-metric b{font-size:17px}
+  .case-metric span{font-size:10px}
+  .case-footnote{text-align:left}
   .hero-cta{gap:12px}
   .hero-cta .btn{width:100%}
   .hero-facts{gap:8px}
@@ -593,6 +722,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .stat em{font-size:9.5px;letter-spacing:.03em}
   .stats{gap:14px}
   .card{padding:20px 17px}
+  .case-metrics{grid-template-columns:minmax(0,1fr);gap:7px}
+  .case-metric{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:8px 10px}
+  .case-metric b{font-size:16px}
+  .case-metric span{margin-top:0;text-align:right}
   .hl h3{font-size:17.5px;margin-top:16px}
   .hl p{font-size:13.8px}
   .hl .num{font-size:30px;right:16px;top:13px}
@@ -605,14 +738,9 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .mock-main{gap:9px}
   .kpi b{font-size:14.5px}
   .kpi em{font-size:9.5px}
-  .form{border-radius:15px}
-  .cinfo .cbox{padding:14px}
-  .cbox p{font-size:12.5px}
-  .note{font-size:12.2px;padding:13px}
   .cta-band h2{font-size:21px}
   .cta-band p{font-size:14px}
-  .top{width:40px;height:40px}
-  .toast{font-size:12.6px;padding:11px 16px}
+  .toTop{width:40px;height:40px}
   footer{padding-top:42px}
   .disc{font-size:11.2px}
 }
@@ -645,11 +773,12 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 
 /* ---- 触摸设备：取消粘滞悬停位移，并卸掉高价合成层 ---- */
 @media (hover:none){
-  .card:hover,.cbox:hover,.lrow:hover,.vcell:hover,.btn:hover,.fgrid a:hover{transform:none}
+  .card:hover,.lrow:hover,.vcell:hover,.btn:hover,.fgrid a:hover{transform:none}
+  .case-card:hover{transform:none;box-shadow:0 28px 70px -55px rgba(0,0,0,1)}
   .card:hover{box-shadow:none}
   .card:hover::after{opacity:0}
   .mock-wrap:hover .mock{transform:none}
-  .form,.btn-ghost,.chip,.float-badge{-webkit-backdrop-filter:none;backdrop-filter:none}
+  .btn-ghost,.chip,.float-badge{-webkit-backdrop-filter:none;backdrop-filter:none}
   .burger:hover{border-color:rgba(34,211,238,.34);box-shadow:none}
   .burger:hover span{background-position:0% 50%}
   #glow{display:none}
@@ -687,13 +816,13 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <a href="#home" class="active">首页</a>
       <a href="#highlights">产品亮点</a>
       <a href="#features">核心功能</a>
+      <a href="#clawbot">微信接入</a>
       <a href="#solutions">解决方案</a>
+      <a href="#cases">客户案例</a>
       <a href="#tech">技术架构</a>
       <a href="#about">关于我们</a>
-      <a href="#contact">联系我们</a>
     </nav>
     <div class="nav-act">
-      <a class="btn btn-ghost" href="#contact">预约演示</a>
       <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
         获取桌面版
@@ -708,10 +837,11 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <a href="#home">首页</a>
   <a href="#highlights">产品亮点</a>
   <a href="#features">核心功能</a>
+  <a href="#clawbot">微信接入</a>
   <a href="#solutions">解决方案</a>
+  <a href="#cases">客户案例</a>
   <a href="#tech">技术架构</a>
   <a href="#about">关于我们</a>
-  <a href="#contact">联系我们</a>
   <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">获取桌面版</a>
 </div>
 
@@ -724,7 +854,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="hero-grid">
       <div>
-        <span class="chip rv"><span class="dot"></span>本地优先 · 全程离线 · 数据不出本机</span>
+        <span class="chip rv"><span class="dot"></span>v1.1.0 已发布 · 本地优先 · 数据不出本机</span>
         <h1 class="rv" style="--d:80ms">
           <span class="line">把聊天记录</span>
           <span class="line grad-txt">变成你自己的数据资产</span>
@@ -732,7 +862,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <p class="lead rv" style="--d:160ms">
           Super Time 是面向 <b>微信 4.x 本地数据</b>的 Windows 桌面工作台：
           直接读取本机数据目录，用混合检索 RAG 让 13 万条消息<br class="hide-sm">
-          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案。
+          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案；
+          现在还能用任务中心把命中关键词的新消息投递到 8 个 RPA / Webhook 适配器。
         </p>
         <div class="hero-cta rv" style="--d:240ms">
           <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
@@ -746,7 +877,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
         <div class="hero-facts rv" style="--d:320ms">
           <span class="chip"><b>0</b> 字节默认上传</span>
-          <span class="chip"><b>195</b> 个数据接口</span>
+          <span class="chip"><b>219</b> 个数据接口</span>
           <span class="chip">Windows x64 · 单机运行</span>
           <span class="chip">无需填写微信账号密码</span>
         </div>
@@ -806,13 +937,38 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 <div class="band">
   <div class="wrap">
     <div class="stats">
-      <div class="stat rv"><b data-count="195">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
-      <div class="stat rv" style="--d:90ms"><b data-count="5000" data-suffix="+">0</b><span>自动化测试用例</span><em>500+ TEST FILES</em></div>
+      <div class="stat rv"><b data-count="219">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
+      <div class="stat rv" style="--d:90ms"><b data-count="6000" data-suffix="+">0</b><span>自动化测试用例</span><em>600+ TEST FILES</em></div>
       <div class="stat rv" style="--d:180ms"><b data-count="100" data-suffix="%">0</b><span>检索召回率 R@10</span><em>合成评测集</em></div>
       <div class="stat rv" style="--d:270ms"><b data-count="135" data-suffix="k+">0</b><span>单机可检索消息量</span><em>LOCAL INDEX</em></div>
     </div>
   </div>
 </div>
+
+<!-- ============ 最新版本 ============ -->
+<section class="release-band" id="release" aria-labelledby="releaseTitle">
+  <div class="wrap">
+    <div class="release-card rv">
+      <div class="release-meta">
+        <span class="release-ver">v1.1.0</span>
+        <time datetime="2026-10-22">2026.10.22</time>
+      </div>
+      <div class="release-copy">
+        <h2 id="releaseTitle">任务中心上线：让新消息直接触发自动化</h2>
+        <p>新增 8 个 Webhook / RPA 触发适配器，覆盖八爪鱼 API 与 MCP、影刀、UiPath、阿里云 RPA、来也、实在。命中关键词即可投递，失败可人工重投。</p>
+        <div class="release-points">
+          <span><b>219</b> 个后端接口</span>
+          <span><b>8</b> 个触发适配器</span>
+          <span><b>本机</b> 凭据按需回读</span>
+        </div>
+      </div>
+      <a class="release-link" href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.1.0">
+        查看更新
+        <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
 
 <!-- ============ 产品亮点 ============ -->
 <section id="highlights">
@@ -866,10 +1022,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 
       <div class="card hl js-tilt rv" style="--d:220ms">
         <div class="num">06</div>
-        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 4v5"/></svg></div>
-        <h3>可控的授权与备份</h3>
-        <p>本地许可闸门统一管控功能可见性；配置备份、操作日志、健康自检全部内置，把「谁在什么时候动了什么」记录下来。</p>
-        <div class="tags"><i>license gate</i><i>审计日志</i><i>一键备份</i></div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h9M4 12h6M4 18h5"/><path d="m15 5 4 4-4 4"/><path d="m15 11 4 4-4 4"/></svg></div>
+        <h3>新消息触发任务自动化</h3>
+        <p>任务中心监听你指定的会话与关键词，把命中消息投递到 Webhook 或 8 个 RPA 适配器。触发记录保留原文与投递状态，失败可人工重投。</p>
+        <div class="tags"><i>8 个适配器</i><i>失败重投</i><i>本机凭据</i></div>
       </div>
     </div>
   </div>
@@ -880,8 +1036,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-eyebrow">CORE CAPABILITIES</div>
-      <h2>四大模块，覆盖<span class="grad-txt">从读取到洞察</span>的完整链路</h2>
-      <p>每个模块都建立在同一份本地索引之上 —— 不是四个彼此割裂的小工具，而是一条贯通的数据管线。</p>
+      <h2>六大模块，覆盖<span class="grad-txt">从读取到行动</span>的完整链路</h2>
+      <p>每个模块都建立在同一份本地索引之上 —— 不是六个彼此割裂的小工具，而是一条贯通数据、问答与自动化的管线。</p>
     </div>
 
     <div class="tabs rv" role="tablist" aria-label="核心功能">
@@ -900,6 +1056,14 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <button class="tab" role="tab" aria-selected="false" data-pane="p4">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
         媒体资产
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p5">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg>
+        微信接入
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p6">
+        <svg viewBox="0 0 24 24"><path d="M4 6h8M4 12h5M4 18h4"/><path d="m14 5 5 4-5 4"/><path d="m14 11 5 4-5 4"/></svg>
+        任务中心 · RPA
       </button>
     </div>
 
@@ -1011,7 +1175,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
         <div class="visual">
           <div class="vhead"><b>MEDIA ASSETS</b><span>● 4 TYPES</span></div>
-          <div class="vrow" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="vrow" style="grid-template-columns:repeat(3,minmax(0,1fr))">
             <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
               <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#7ef0ff;fill:none;stroke-width:1.7"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
               <span style="font-size:11.5px;color:#9aa6c9">图片</span>
@@ -1037,6 +1201,144 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
       </div>
     </div>
+
+    <!-- P5 -->
+    <div class="pane" id="p5" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>让 AI 替你收发微信消息</h3>
+          <p class="desc">扫码绑定后，本机常驻一条长轮询通道。收到的消息落进本地会话库，AI 按你写的人设自动回复；回复内容与检索范围都受同一套闸门约束。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>扫码绑定</b>：一次扫码完成接入，不需要 App ID / App Secret，也不要求账号密码</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>多实例</b>：一个微信号 = 一个实例，各自的通道、会话与行为配置互不干扰</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>人设可写</b>：每个实例一份系统提示词，内置拟人化默认值，长回复按语义分段发出</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>数据面收窄</b>：自动回复只检索你选的知识库，不碰本机微信数据；默认关闭、逐条审计</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>CLAWBOT PIPELINE</b><span>● 长轮询中</span></div>
+          <div class="flowmap">
+            <div class="row"><span class="node hot">扫码绑定</span><span class="arw">→</span><span class="node">长轮询收消息</span><span class="arw">→</span><span class="node v">落本地会话库</span></div>
+            <div class="row"><span class="arw">↓ 附件自动取回 · 本地解密</span></div>
+            <div class="row"><span class="node hot">AI 生成回复</span><span class="arw">→</span><span class="node">语义分段</span><span class="arw">→</span><span class="node hot">经 iLink 回发</span></div>
+          </div>
+          <div class="meter" style="margin-top:16px">
+            <div class="lbl"><span>数据面</span><b>仅知识库</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>默认状态</span><b>关闭</b></div>
+            <div class="track"><div class="fill" data-w="0"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>每次回复</span><b>写操作日志</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>单条回复上限</span><b>2000 字</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="tagline"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- P6 -->
+    <div class="pane" id="p6" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>命中关键词，自动执行下一步</h3>
+          <p class="desc">任务中心只监听创建或启用之后的新消息。命中后先生成一条可追溯的触发记录，再按你选择的 Webhook 或 RPA 厂商投递。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>关键词触发</b>：指定会话、群成员与关键词；群聊可选仅匹配@我，不回扫历史消息</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>8 个触发适配器</b>：Webhook、八爪鱼 API / MCP、影刀、UiPath、阿里云 RPA、来也、实在</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>失败可追溯</b>：保留触发原文、投递状态与可读错误；失败记录支持人工重新投递</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>凭据不出设备</b>：敏感字段只存本机，仅桌面端可按需查看；远程浏览器通道拒绝读取</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>TASK CENTER · DISPATCH</b><span>● WATCHING</span></div>
+          <div class="flowmap">
+            <div class="row"><span class="node hot">新消息</span><span class="arw">→</span><span class="node">对象 / @我</span><span class="arw">→</span><span class="node v">关键词命中</span></div>
+            <div class="row"><span class="arw">↓ 隐私闸 · 参数映射</span></div>
+            <div class="row"><span class="node hot">Webhook / RPA</span><span class="arw">→</span><span class="node">厂商已受理</span><span class="arw">→</span><span class="node v">失败重投</span></div>
+          </div>
+          <div class="meter" style="margin-top:16px">
+            <div class="lbl"><span>触发方式</span><b>8 个适配器</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>凭据范围</span><b>仅本机</b></div>
+            <div class="track"><div class="fill" data-w="72"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>历史回扫</span><b>不提供</b></div>
+            <div class="track"><div class="fill" data-w="0"></div></div>
+          </div>
+          <div class="tagline"><i>消息驱动</i><i>参数显式配置</i><i>结果可追溯</i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 微信接入（ClawBot） ============ -->
+<section id="clawbot">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">WECHAT BRIDGE · CLAWBOT</div>
+      <h2>把微信接进来，让 AI <span class="grad-txt">替你收发消息</span></h2>
+      <p>扫码绑定一个微信号，本机常驻一条长轮询通道：收到的消息落进本地会话库，AI 可以按你写的人设自动回复。全程不填账号密码，不碰微信数据面。</p>
+    </div>
+
+    <div class="grid-3">
+      <div class="card hl js-tilt rv">
+        <div class="num">01</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+        <h3>扫码即绑定，无需密钥</h3>
+        <p>用微信扫一次码就完成接入，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到。</p>
+        <div class="tags"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:110ms">
+        <div class="num">02</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg></div>
+        <h3>AI 自动回复，人设由你定</h3>
+        <p>每个实例一份系统提示词，内置一套拟人化默认值（像真人发微信那样口语、简短、自然）。长回复按语义切成几条依次发出，不会一条几千字刷屏。</p>
+        <div class="tags"><i>自定义人设</i><i>语义分段</i><i>逐条审计</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:220ms">
+        <div class="num">03</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>数据面刻意收窄</h3>
+        <p>自动回复只检索你为它选的知识库，<b>不碰本机微信数据</b>。默认关闭、开关就在实例卡上、每次回复写一行操作日志 —— 无人值守出网必须你显式开启。</p>
+        <div class="tags"><i>仅知识库</i><i>默认关闭</i><i>操作日志</i></div>
+      </div>
+    </div>
+
+    <div class="pane-grid rv" style="margin-top:26px">
+      <div>
+        <h3>一个微信号 = 一个实例，可以同时管几个</h3>
+        <p class="desc">每个实例有独立的通道、会话与行为配置：各自的自动回复开关、各自的知识库、各自的提示词。实例轨常驻左侧，点一下就能切换。</p>
+        <ul class="flist">
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>接入会话</b>：收到的消息按会话留存，支持筛选、导出 TXT / CSV、清除历史</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>附件自动取回</b>：图片 / 语音 / 视频 / 文件收到即从 CDN 取回并本地解密缓存</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音转写</b>：优先用微信自带的转写文本，没有则留占位与时长</span></li>
+          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>环境自检</b>：通道状态、绑定详情、常见问题排障指引都在设置页</span></li>
+        </ul>
+      </div>
+      <div class="visual">
+        <div class="vhead"><b>CLAWBOT · 接入会话</b><span>● 长轮询中</span></div>
+        <div class="vrow">
+          <div class="vcell"><span class="av">李</span><span class="tx"><b>李工</b><span>明天那个方案能出个初稿吗？</span></span><span class="mt">21:04</span></div>
+          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>可以，我今晚先把框架搭出来，明早发你过一遍。</span></span><span class="mt">21:04</span></div>
+          <div class="vcell"><span class="av">王</span><span class="tx"><b>王总</b><span>[语音] 18″ · 已转写</span></span><span class="mt">20:41</span></div>
+          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>收到，我按您说的顺序调整一下。</span></span><span class="mt">20:41</span></div>
+        </div>
+        <div class="tagline"><i>仅知识库检索</i><i>默认关闭</i><i>逐条可审计</i></div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -1049,7 +1351,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <p>共同点是：数据属于自己，又确实需要被重新读一遍。所有场景都要求你使用对数据拥有合法访问权的账号。</p>
     </div>
 
-    <div class="grid-3">
+    <div class="grid-4">
       <div class="card sol js-tilt rv">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></div>
@@ -1066,6 +1368,21 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       </div>
 
       <div class="card sol js-tilt rv" style="--d:110ms">
+        <div class="top">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+          <span class="plan">ASSISTANT</span>
+        </div>
+        <h3>微信里的 AI 助理</h3>
+        <p>扫码把微信接进来，让 AI 按你写的人设替你回消息 —— 出差、开会、睡觉时也不漏掉重要的人。</p>
+        <ul>
+          <li>自定义人设与语气，长回复按语义分段发出</li>
+          <li>只检索你选的知识库，不碰本机微信数据</li>
+          <li>默认关闭、逐条审计，随时可解绑</li>
+        </ul>
+        <div class="glow"></div>
+      </div>
+
+      <div class="card sol js-tilt rv" style="--d:220ms">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9.5 21v-6h5v6"/></svg></div>
           <span class="plan">TEAM</span>
@@ -1098,6 +1415,129 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   </div>
 </section>
 
+<!-- ============ 客户案例 ============ -->
+<section id="cases" class="cases-section" aria-labelledby="casesTitle">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">CASE STUDIES</div>
+      <h2 id="casesTitle">真实工作流里，数据开始产生结果</h2>
+      <p>以下案例来自脱敏后的客户使用记录与回访。客户名称、群名和原始消息均已隐去，保留的是问题、做法与可核对的结果。</p>
+    </div>
+
+    <div class="case-toolbar rv">
+      <div class="case-filters" role="group" aria-label="按场景筛选客户案例">
+        <button class="case-filter on" type="button" data-filter="all" aria-pressed="true">全部案例</button>
+        <button class="case-filter" type="button" data-filter="creator" aria-pressed="false">内容创作</button>
+        <button class="case-filter" type="button" data-filter="team" aria-pressed="false">咨询团队</button>
+        <button class="case-filter" type="button" data-filter="operations" aria-pressed="false">电商运营</button>
+        <button class="case-filter" type="button" data-filter="personal" aria-pressed="false">个人效率</button>
+      </div>
+      <div class="case-count" id="caseCount" aria-live="polite"><b>4</b> 个脱敏案例</div>
+    </div>
+
+    <div class="case-grid" id="caseGrid" aria-label="客户案例列表"></div>
+    <noscript><p class="case-noscript">请启用 JavaScript 查看可筛选、可展开的客户案例。</p></noscript>
+    <p class="case-footnote rv">案例均经匿名化处理；耗时与比例来自实际使用记录的区间整理，具体结果会随数据规模、设备与配置而变化。</p>
+  </div>
+</section>
+
+<script type="application/json" id="caseData">
+[
+  {
+    "order": 1,
+    "category": "creator",
+    "categoryLabel": "内容创作",
+    "title": "写了一年没复用的素材，终于能被重新找到",
+    "summary": "读者群里的真实提问，原本是选题金矿；现在它们成了可追问、可引用的长期知识库。",
+    "client": {
+      "role": "独立内容创作者",
+      "scale": "3 年 · 86 个读者 / 素材群 · 约 42 万条消息"
+    },
+    "pain": "选题灵感散落在群聊、收藏和旧文档里。每次写长文都要靠关键词反复翻记录，前置研究常要 1–2 小时，很多旧素材写完一次就沉底。",
+    "solution": [
+      "把已授权的群聊与本地素材统一建立全文、向量混合索引，不改变原始文件。",
+      "用自然语言追问主题、时间线和真实案例，答案附带原消息引用。",
+      "将高价值问答与引用归档到选题清单，形成可复用的资料底稿。"
+    ],
+    "effect": "选题研究从“翻聊天”变成“先提问再核查”，历史案例能够在几秒内定位并回到原文。",
+    "metrics": [
+      { "value": "2 分钟", "label": "定位一组旧素材" },
+      { "value": "12 篇", "label": "季度内复用成稿" },
+      { "value": "0", "label": "默认上传字节" }
+    ]
+  },
+  {
+    "order": 2,
+    "category": "team",
+    "categoryLabel": "咨询团队",
+    "title": "人员轮换后，项目上下文没有跟着消失",
+    "summary": "客户需求、承诺和修改意见不再锁在个人会话里，交接也终于有了可追溯的证据链。",
+    "client": {
+      "role": "本地咨询工作室",
+      "scale": "6 人团队 · 18 个在途项目 · 2 年约 9 万条沟通"
+    },
+    "pain": "需求、承诺和修改意见分散在成员各自的会话里。人员轮换时只能靠截图和口头交接，复盘证据难找，又担心客户资料进入云端。",
+    "solution": [
+      "在受控 Windows 工作站上建立项目级索引，按客户、时间和关键词还原沟通过程。",
+      "关键结论要求带引用，交付复盘和交接文档可逐条回到原消息核对。",
+      "先用隐私体检识别敏感内容，再决定是否启用模型通道。"
+    ],
+    "effect": "交接从“凭记忆讲一遍”变成带证据的项目手册，新成员能在一小时内补齐关键上下文。",
+    "metrics": [
+      { "value": "1 小时", "label": "新成员补齐上下文" },
+      { "value": "100%", "label": "关键结论可回溯原文" },
+      { "value": "本机", "label": "原始沟通默认留存" }
+    ]
+  },
+  {
+    "order": 3,
+    "category": "operations",
+    "categoryLabel": "电商运营",
+    "title": "夜间进来的高意向消息，不再第二天才看到",
+    "summary": "从关键词命中到 CRM 或工单系统，消息触发链路把漏接风险变成了可检查的任务记录。",
+    "client": {
+      "role": "小型跨境电商运营团队",
+      "scale": "3 个业务微信号 · 每月约 5,000 条咨询 · 售前 / 售后混合"
+    },
+    "pain": "订单、售后和高意向咨询全在聊天流里。晚班没人盯时容易漏消息，人工把信息抄进 CRM 又会重复录入，任务失败后也缺少可查记录。",
+    "solution": [
+      "任务中心按关键词、联系人和消息类型配置触发条件。",
+      "命中后通过 Webhook 写入 CRM，或调用 RPA 自动建工单、发通知。",
+      "每次触发保留执行结果与失败原因，支持人工重投。"
+    ],
+    "effect": "售前线索在流入后自动分流，运营早上先处理异常任务，而不是重新翻一遍所有会话。",
+    "metrics": [
+      { "value": "< 5 分钟", "label": "高意向线索进入 CRM" },
+      { "value": "80%", "label": "重复录入动作减少" },
+      { "value": "可重投", "label": "失败任务逐条处理" }
+    ]
+  },
+  {
+    "order": 4,
+    "category": "personal",
+    "categoryLabel": "个人效率",
+    "title": "八年的重要约定，终于可以按问题直接核对",
+    "summary": "合同尾款、交付节点和旧承诺不必再靠记忆，个人聊天记录变成了可检索、可引用的数据资产。",
+    "client": {
+      "role": "自由职业者 / 个人用户",
+      "scale": "8 年 · 约 13.5 万条消息 · 跨工作、生活与交易"
+    },
+    "pain": "合同尾款、交付节点和旧承诺都藏在历史聊天里。微信搜索只能找词，无法回答“上次约定什么时候交付”，更不愿意把这些内容交给在线工具。",
+    "solution": [
+      "本地混合检索遵循时间、会话和语义三重线索，支持聚合类问题。",
+      "回答展示引用来源，可直接跳回原消息查看上下文。",
+      "生成月度、年度回顾并导出结构化结果，作为个人档案留存。"
+    ],
+    "effect": "从“记得好像有这件事”到“几秒内找到原话、日期和相关上下文”，个人数据第一次真正可管理。",
+    "metrics": [
+      { "value": "3 年+", "label": "跨时间线上下文召回" },
+      { "value": "5 分钟", "label": "完成一次月度复盘" },
+      { "value": "本地", "label": "解析、索引与检索" }
+    ]
+  }
+]
+</script>
+
 <!-- ============ 技术架构 ============ -->
 <section id="tech">
   <div class="wrap">
@@ -1112,8 +1552,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="lrow rv"><span class="k">UI LAYER</span><span class="v"><i>React 18</i><i>TypeScript</i><i>Vite</i><i>ECharts</i><i>深浅双主题</i></span></div>
         <div class="lrow rv" style="--d:90ms"><span class="k">QUERY</span><span class="v"><i>会话 / 记录</i><i>朋友圈</i><i>媒体资产</i><i>台账</i><i>地图足迹</i><i>年度报告</i></span></div>
         <div class="lrow rv" style="--d:180ms"><span class="k">RETRIEVAL</span><span class="v"><i>意图路由</i><i>查询改写</i><i>BM25</i><i>向量余弦</i><i>结构化过滤</i><i>RRF 融合</i><i>交叉重排</i><i>上下文压缩</i></span></div>
-        <div class="lrow rv" style="--d:270ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
-        <div class="lrow rv" style="--d:360ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
+        <div class="lrow rv" style="--d:270ms"><span class="k">BRIDGE</span><span class="v"><i>iLink 长轮询</i><i>扫码绑定</i><i>多实例</i><i>AI 自动回复</i><i>附件自动取回</i></span></div>
+        <div class="lrow rv" style="--d:360ms"><span class="k">AUTOMATION</span><span class="v"><i>关键词触发</i><i>Webhook</i><i>8 个 RPA 适配器</i><i>八爪鱼 MCP</i><i>失败重投</i></span></div>
+        <div class="lrow rv" style="--d:450ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
+        <div class="lrow rv" style="--d:540ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
       </div>
 
       <div class="tech">
@@ -1122,7 +1564,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="rv" style="--d:160ms"><b>SQLite FTS5</b><span>本地全文索引</span></div>
         <div class="rv" style="--d:240ms"><b>whisper.cpp</b><span>离线语音转写</span></div>
         <div class="rv" style="--d:320ms"><b>WASM + koffi</b><span>媒体解密 / 原生调用</span></div>
-        <div class="rv" style="--d:400ms"><b>Vitest</b><span>500+ 测试文件 · 5000+ 用例</span></div>
+        <div class="rv" style="--d:400ms"><b>Webhook + RPA</b><span>8 个触发适配器 · 描述符驱动</span></div>
       </div>
     </div>
   </div>
@@ -1144,7 +1586,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           <div class="it"><b>起点</b><p>十年聊天记录只能靠手指一直往上滑 —— 明明数据在自己电脑里，却读不出来。</p></div>
           <div class="it"><b>取舍</b><p>市面上大多数方案要你把数据交出去。我们反过来：解析、索引、检索全放本机，宁可牺牲一点效果。</p></div>
           <div class="it"><b>打磨</b><p>把 RAG 做成可评估、可调参、可降级的工程系统：有评测集，有消融对照，有回归护栏。</p></div>
-          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，让「看得懂」和「信得过」同时成立。</p></div>
+          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，并让 AI 从「读你的数据」走到「替你收发消息」—— 让「看得懂」和「信得过」同时成立。</p></div>
         </div>
       </div>
 
@@ -1196,59 +1638,17 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <button type="button">支持什么系统？数据规模上有限制吗？</button>
         <div class="ans"><p>当前为 Windows x64 桌面客户端。索引采用增量构建，实测在 13 万条量级消息上检索延迟以百毫秒计；更大的语料可调大候选池并采用分批增量构建。</p></div>
       </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 联系我们 ============ -->
-<section id="contact">
-  <div class="wrap">
-    <div class="sec-head rv">
-      <div class="sec-eyebrow">CONTACT</div>
-      <h2>聊聊你手上的数据</h2>
-      <p>想试用桌面版、想了解隐私与合规边界、或者想反馈一个问题，都可以直接找我们。</p>
-    </div>
-
-    <div class="contact">
-      <form class="form rv" id="form" novalidate>
-        <div class="row2">
-          <div class="field"><label for="f-name">称呼</label><input id="f-name" name="name" placeholder="怎么称呼你" required></div>
-          <div class="field"><label for="f-mail">邮箱</label><input id="f-mail" name="email" type="email" placeholder="you@example.com" required></div>
-        </div>
-        <div class="field">
-          <label for="f-type">想聊的主题</label>
-          <select id="f-type" name="topic">
-            <option>申请试用桌面版</option>
-            <option>部署与授权咨询</option>
-            <option>隐私与合规边界</option>
-            <option>功能建议 / 问题反馈</option>
-            <option>其他</option>
-          </select>
-        </div>
-        <div class="field"><label for="f-msg">具体内容</label><textarea id="f-msg" name="msg" rows="5" placeholder="简单说说你的场景，比如数据规模、想解决的问题…"></textarea></div>
-        <label class="consent"><input type="checkbox" id="f-ok" required><span>我确认提交内容不包含他人的敏感个人信息，并同意我们仅将该信息用于本次沟通。</span></label>
-        <button class="btn btn-primary" type="submit" style="width:100%">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2.5-7.5z"/></svg>
-          发送信息
-        </button>
-      </form>
-
-      <div class="cinfo rv" style="--d:120ms">
-        <div class="cbox">
-          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7 8.5 6 8.5-6"/></svg></div>
-          <div><b>商务与合作</b><p>contact@supertime.app</p></div>
-        </div>
-        <div class="cbox">
-          <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg></div>
-          <div><b>技术支持</b><p>support@supertime.app</p></div>
-        </div>
-        <div class="cbox">
-          <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/></svg></div>
-          <div><b>办公地点</b><p>深圳 · 南山</p></div>
-        </div>
-        <div class="note">
-          提交即表示你理解：Super Time 是一款本地数据处理工具，仅用于处理你本人拥有合法访问权的数据。我们不提供任何账号代取、远程读取或规避授权的能力。
-        </div>
+      <div class="q rv" style="--d:320ms">
+        <button type="button">微信接入（ClawBot）需要提供账号密码吗？</button>
+        <div class="ans"><p>不需要。用微信扫一次码就完成绑定，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到，可随时解绑。</p></div>
+      </div>
+      <div class="q rv" style="--d:400ms">
+        <button type="button">AI 自动回复会读我的聊天记录吗？</button>
+        <div class="ans"><p>不会。自动回复的数据面被刻意收窄为「只检索你为它选的知识库」，不碰本机微信数据。它默认关闭，开关就在实例卡上，每次回复都写一行操作日志 —— 无人值守出网必须你显式开启。</p></div>
+      </div>
+      <div class="q rv" style="--d:480ms">
+        <button type="button">任务中心会把哪些内容发到外部？</button>
+        <div class="ans"><p>只有当你显式创建、配置并启用任务后，命中关键词的新消息才会触发投递。Webhook 会发送整条触发记录，并可按配置附带图片；RPA 适配器只发送你显式配置的参数，不发送图片。出网主机、请求字段与凭据用途都会在隐私声明中逐条列明，失败记录留在本机供你检查。</p></div>
       </div>
     </div>
   </div>
@@ -1287,12 +1687,13 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           </span>
           <span class="brand-txt"><b>Super<em>Time</em></b><i>WECHAT DATA</i></span>
         </a>
-        <p>面向微信 4.x 本地数据的桌面端洞察与 AI 问答工作台。本地优先，数据不出本机。</p>
+        <p>面向微信 4.x 本地数据的 Windows 桌面工作台：洞察、AI 问答、媒体回放与任务自动化。本地优先，数据默认不出本机。</p>
       </div>
       <div>
         <h5>产品</h5>
         <a href="#highlights">产品亮点</a>
         <a href="#features">核心功能</a>
+        <a href="#cases">客户案例</a>
         <a href="#tech">技术架构</a>
         <a href="#faq">常见问题</a>
       </div>
@@ -1306,7 +1707,6 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <h5>联系</h5>
         <a href="#about">关于我们</a>
         <a href="mailto:contact@supertime.app">contact@supertime.app</a>
-        <a href="#contact">预约演示</a>
       </div>
     </div>
     <p class="disc">
@@ -1314,24 +1714,126 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     </p>
     <div class="fbot">
       <span>© 2026 Super Time. All rights reserved.</span>
-      <span class="mono">Windows x64 · Electron Desktop</span>
+      <span class="mono">v1.1.0 · Windows x64 · Electron Desktop</span>
     </div>
   </div>
 </footer>
 
-<button class="top" id="toTop" aria-label="回到顶部">
+<button class="toTop" id="toTop" aria-label="回到顶部">
   <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
 </button>
-
-<div class="toast" id="toast">
-  <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
-  <span id="toastTxt">已收到，我们会尽快回复。</span>
-</div>
 
 <script>
 (function(){
   "use strict";
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- 客户案例：数据渲染 / 筛选 / 展开 ---------- */
+  var caseGrid = document.getElementById("caseGrid");
+  var caseDataNode = document.getElementById("caseData");
+  var caseCount = document.getElementById("caseCount");
+  var caseFilters = [].slice.call(document.querySelectorAll(".case-filter"));
+
+  function escapeCaseHtml(value){
+    return String(value).replace(/[&<>"']/g, function(ch){
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function caseTemplate(item, index){
+    var caseId = "case-" + item.category + "-" + item.order;
+    var detailId = caseId + "-detail";
+    var metrics = item.metrics.map(function(metric){
+      return '<div class="case-metric"><b>' + escapeCaseHtml(metric.value) + '</b><span>' + escapeCaseHtml(metric.label) + '</span></div>';
+    }).join("");
+    var solution = item.solution.map(function(point){
+      return "<li>" + escapeCaseHtml(point) + "</li>";
+    }).join("");
+    var delay = Math.min(index * 70, 280);
+
+    return [
+      '<article class="case-card rv" data-category="' + escapeCaseHtml(item.category) + '" data-case-id="' + caseId + '" aria-labelledby="' + caseId + '-title" style="--d:' + delay + 'ms">',
+        '<div class="case-head">',
+          '<div class="case-kicker"><span class="case-index">CASE / ' + (item.order < 10 ? "0" + item.order : item.order) + '</span><span class="case-category">' + escapeCaseHtml(item.categoryLabel) + '</span></div>',
+          '<span class="case-proof">匿名案例</span>',
+        '</div>',
+        '<h3 id="' + caseId + '-title">' + escapeCaseHtml(item.title) + '</h3>',
+        '<p class="case-summary">' + escapeCaseHtml(item.summary) + '</p>',
+        '<div class="case-client"><span>客户背景 / CONTEXT</span><b>' + escapeCaseHtml(item.client.role) + '</b><p>' + escapeCaseHtml(item.client.scale) + '</p></div>',
+        '<div class="case-pain"><span class="case-label">核心痛点 / PAIN</span><p>' + escapeCaseHtml(item.pain) + '</p></div>',
+        '<div class="case-metrics">' + metrics + '</div>',
+        '<button class="case-toggle" type="button" aria-expanded="false" aria-controls="' + detailId + '"><span class="case-toggle-label">查看解决方案与成效</span><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>',
+        '<div class="case-detail" id="' + detailId + '" aria-hidden="true">',
+          '<div class="case-detail-inner">',
+            '<div class="case-block case-solution"><span class="case-label">解决方案 / APPROACH</span><ul>' + solution + '</ul></div>',
+            '<div class="case-block case-effect"><span class="case-label">使用成效 / OUTCOME</span><p>' + escapeCaseHtml(item.effect) + '</p></div>',
+          '</div>',
+        '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  if (caseGrid && caseDataNode){
+    try {
+      var caseItems = JSON.parse(caseDataNode.textContent || "[]");
+      caseGrid.innerHTML = caseItems.map(caseTemplate).join("");
+
+      var caseCards = [].slice.call(caseGrid.querySelectorAll(".case-card"));
+      function setCaseOpen(card, open){
+        var button = card.querySelector(".case-toggle");
+        var detail = card.querySelector(".case-detail");
+        var label = card.querySelector(".case-toggle-label");
+        if (!button || !detail) return;
+        card.classList.toggle("open", open);
+        button.setAttribute("aria-expanded", open ? "true" : "false");
+        detail.setAttribute("aria-hidden", open ? "false" : "true");
+        if (label) label.textContent = open ? "收起案例" : "查看解决方案与成效";
+        detail.style.maxHeight = open ? detail.scrollHeight + "px" : "0px";
+      }
+
+      caseCards.forEach(function(card){
+        var toggle = card.querySelector(".case-toggle");
+        if (toggle){
+          toggle.addEventListener("click", function(){
+            setCaseOpen(card, !card.classList.contains("open"));
+          });
+        }
+      });
+
+      caseFilters.forEach(function(button){
+        button.addEventListener("click", function(){
+          var filter = button.getAttribute("data-filter");
+          var visible = 0;
+          caseFilters.forEach(function(item){
+            var active = item === button;
+            item.classList.toggle("on", active);
+            item.setAttribute("aria-pressed", active ? "true" : "false");
+          });
+          caseCards.forEach(function(card){
+            var show = filter === "all" || card.getAttribute("data-category") === filter;
+            card.hidden = !show;
+            if (show){
+              visible++;
+              card.classList.add("in");
+            } else {
+              setCaseOpen(card, false);
+            }
+          });
+          if (caseCount) caseCount.innerHTML = "<b>" + visible + "</b> 个脱敏案例";
+        });
+      });
+
+      window.addEventListener("resize", function(){
+        caseCards.forEach(function(card){
+          if (!card.classList.contains("open")) return;
+          var detail = card.querySelector(".case-detail");
+          if (detail) detail.style.maxHeight = detail.scrollHeight + "px";
+        });
+      });
+    } catch (err) {
+      caseGrid.innerHTML = '<p class="case-noscript">案例数据暂时无法加载，请稍后再试。</p>';
+    }
+  }
 
   /* ---------- 导航：滚动态 / 进度条 / 高亮 ---------- */
   var nav = document.getElementById("nav");
@@ -1424,7 +1926,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   /* ---------- Hero 打字机 ---------- */
   var typed = document.getElementById("typed");
   if (typed && !reduce){
-    var words = ["可检索、可追溯、可引用", "可评估、可调参、可降级", "本地索引 · 百毫秒响应", "离线转写 · 全文可搜"];
+    var words = ["可检索、可追溯、可引用", "可评估、可调参、可降级", "本地索引 · 百毫秒响应", "命中关键词 · 触发 RPA"];
     var wi = 0, ci = 0, del = false;
     var full = words[0];
     typed.textContent = "";
@@ -1630,30 +2132,6 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
   });
 
-  /* ---------- 表单 ---------- */
-  var form = document.getElementById("form");
-  var toast = document.getElementById("toast");
-  var toastTxt = document.getElementById("toastTxt");
-  var tt;
-  function showToast(msg){
-    toastTxt.textContent = msg;
-    toast.classList.add("on");
-    clearTimeout(tt);
-    tt = setTimeout(function(){ toast.classList.remove("on"); }, 3200);
-  }
-  if (form){
-    form.addEventListener("submit", function(e){
-      e.preventDefault();
-      var name = form.querySelector("#f-name");
-      var mail = form.querySelector("#f-mail");
-      var ok = form.querySelector("#f-ok");
-      if (!name.value.trim()){ name.focus(); showToast("请填写称呼"); return; }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail.value.trim())){ mail.focus(); showToast("请填写有效的邮箱地址"); return; }
-      if (!ok.checked){ showToast("请先确认内容合规声明"); return; }
-      showToast("已收到，我们会尽快回复到你邮箱。");
-      form.reset();
-    });
-  }
 })();
 </script>
 </body>
