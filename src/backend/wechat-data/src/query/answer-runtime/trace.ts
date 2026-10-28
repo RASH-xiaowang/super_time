@@ -111,6 +111,9 @@ export interface ToolCallTraceInput {
   deadlineExceeded?: boolean
   skipped?: boolean
   note?: string
+  resultSummary?: string
+  resultDetail?: string
+  resultTruncated?: boolean
 }
 
 /**
@@ -144,5 +147,12 @@ export function createToolCallTrace(input: ToolCallTraceInput): ToolCallTrace {
     ...(input.deadlineExceeded === true ? { deadlineExceeded: true } : {}),
     ...(input.skipped === true ? { skipped: true } : {}),
     ...(input.note === undefined || input.note === '' ? {} : { note: input.note }),
+    ...(input.resultSummary === undefined || input.resultSummary === ''
+      ? {}
+      : { resultSummary: clip(input.resultSummary, 500) }),
+    ...(input.resultDetail === undefined || input.resultDetail === ''
+      ? {}
+      : { resultDetail: clip(input.resultDetail, 16_000) }),
+    ...(input.resultTruncated === true ? { resultTruncated: true } : {}),
   }
 }

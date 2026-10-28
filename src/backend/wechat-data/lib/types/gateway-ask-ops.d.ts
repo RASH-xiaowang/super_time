@@ -578,13 +578,15 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * 消息」那类报障的教训。
      *
      * 出站顺序与当日总结一致：模型不可用时如实说明原因。
-     * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
+     * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）；
+     *   `targetLocalId` 分析面板选中的消息（缺省时按最新上下文推荐）。
      * @returns 候选回复；模型不可用时 `ok=false` 且 `error` 说明原因。
      */
     suggestReplies(options: {
         username?: string;
         kbId?: number;
         count?: number;
+        targetLocalId?: number;
     }): Promise<ReplySuggestResult>;
     generatePeriodSummary(options: {
         from: string;

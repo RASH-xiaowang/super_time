@@ -748,21 +748,63 @@ export function toImageResult(item: ImageDataUrlBatchItem | undefined): ImageDat
   }
 }
 
+/** 批量取图的重试退避：只在队列背压时短暂等待，网络/数据错误立即失败。 */
+const IMAGE_BATCH_RETRY_DELAYS_MS = [120, 500] as const
+
+/** 单张与预取共用稳定键，避免同一张图被两条路径各取一次。 */
+function imageBatchKey(key: { username: string; localId: number }): string {
+  return key.username + '\u0000' + String(key.localId)
+}
+
+/**
+ * 队列繁忙属于瞬时背压，重试有价值；解码失败、参数错误等重试只会浪费 CPU。
+ */
+function isRetryableImageBatchError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'REMOTE_BUSY' || code === 'QUEUE_WAIT_TIMEOUT') return true
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('重任务排队已满')
+    || message.includes('远程调用太密集')
+    || message.includes('排队等待超时')
+}
+
 /**
  * 取图合并队列（N16）：合并语义在 `./image-batch.ts`，这里只把 `flush` 接到批量 RPC 上。
  *
  * 为什么合并发生在 api 层而不是各面板：列表型取图的面板（聊天的 `MessageThumb`、图片组
  * 网格）是「一屏挂 N 个组件、每个组件各自取图」，逐处改要动好几处调用点；它们全部经过
  * {@link apiGetImageDataUrl}，在这里攒批能让它们**一行都不用改**吃到批量入口。
+ *
+ * 单张入口和显式批量入口共用这一条队列：同一张图在「视口必需」与「预取」两条路径里
+ * 同时出现时只发一次；超过 200 张的 chunk 串行发，既不撞后端 1+4 重活队列，也不会
+ * 同时占满两个普通并发槽。
  */
-export const imageLoadQueue = createImageLoadQueue<{ username: string; localId: number }, ImageDataUrlResult>({
+export const imageLoadQueue = createImageLoadQueue<{ username: string; localId: number }, ImageDataUrlBatchItem>({
   chunkSize: IMAGE_BATCH_CHUNK,
-  onMissing: () => ({ error: '批量取图未返回该条目' }),
+  keyOf: imageBatchKey,
+  maxInFlight: 1,
+  retry: {
+    retries: IMAGE_BATCH_RETRY_DELAYS_MS.length,
+    shouldRetry: isRetryableImageBatchError,
+    delayMs: (index) => IMAGE_BATCH_RETRY_DELAYS_MS[index] ?? 500,
+  },
+  onMissing: (key) => ({
+    username: key.username,
+    localId: key.localId,
+    error: '批量取图未返回该条目',
+  }),
   flush: async (keys) => {
     // fileOnly：有本地落盘文件时后端不再回传 base64，渲染层用 wechat-media://（见 wechat-media.ts）。
     const r = unwrap(await remote().getImageDataUrlsBatch({ items: keys.map(k => ({ username: k.username, localId: k.localId })), fileOnly: true }))
     const got = Array.isArray(r?.items) ? r.items : []
-    return got.map((item) => toImageResult(preferMediaUrl(item, useHttpMedia())))
+    return got.map((item, index) => {
+      const key = keys[index]!
+      return preferMediaUrl({
+        ...item,
+        username: key.username,
+        localId: key.localId,
+      }, useHttpMedia())
+    })
   },
 })
 
@@ -776,7 +818,7 @@ export const imageLoadQueue = createImageLoadQueue<{ username: string; localId: 
  * @returns ImageDataUrlResult.
  */
 export function apiGetImageDataUrl(options: { username: string; localId: number }): Promise<ImageDataUrlResult> {
-  return imageLoadQueue.enqueue({ username: options.username, localId: options.localId })
+  return imageLoadQueue.enqueue({ username: options.username, localId: options.localId }).then(toImageResult)
 }
 
 /**
@@ -788,7 +830,5 @@ export function apiGetImageDataUrl(options: { username: string; localId: number 
  * @returns 与传入顺序一一对应的条目。
  */
 export async function apiGetImageDataUrlsBatch(items: Array<{ username: string; localId: number }>): Promise<ImageDataUrlBatchItem[]> {
-  const r = unwrap(await remote().getImageDataUrlsBatch({ items, fileOnly: true }))
-  const rows = Array.isArray(r?.items) ? r.items : []
-  return rows.map((row) => preferMediaUrl(row, useHttpMedia()))
+  return Promise.all(items.map((item) => imageLoadQueue.enqueue({ username: item.username, localId: item.localId })))
 }

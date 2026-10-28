@@ -306,4 +306,30 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     // 计数那句话不许把入站面算进「出网点」—— 方向相反，混算就是假话
     expect(gate, '出网点计数被改成了包含入站面的口径').toContain('共 {OUTBOUND.length} 个出网点')
   })
+
+  it('v30 消息列表台账、下游回复投递与局域网入站 Webhook 都已登记', () => {
+    for (const marker of [
+      'message_list_records',
+      'message_list_rules',
+      '/api/message-webhook/<token>',
+      '消息列表回复投递',
+      '消息列表局域网 Webhook',
+      '完整地址等同于写入凭据',
+      '轮换',
+      '明文 HTTP',
+    ]) {
+      expect(doc, `隐私声明没有登记 v30 边界：${marker}`).toContain(marker)
+    }
+
+    const gate = readFileSync(
+      join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
+    expect(gate).toContain("label: '消息列表回复投递'")
+    expect(gate).toContain("label: '消息列表局域网 Webhook'")
+
+    const route = readFileSync(join(ROOT, 'src', 'backend', 'message-webhook.js'), 'utf8')
+    const server = readFileSync(join(ROOT, 'src', 'backend', 'http-server.js'), 'utf8')
+    expect(route).toContain('createMessageWebhookHandler')
+    expect(server).toContain('urlPath.startsWith(MESSAGE_WEBHOOK_PATH_PREFIX)')
+    expect(server).toContain('handleMessageWebhookPost')
+  })
 })

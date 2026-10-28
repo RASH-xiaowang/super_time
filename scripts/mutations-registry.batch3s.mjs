@@ -89,7 +89,7 @@ export const MUTATIONS_BATCH3S = [
     id: 'M587-remote-host-check-bypassed',
     why: 'Host 校验被短路 ⇒ attacker.example 这类域名也能拿到静态页面并登录 /api/auth，DNS rebinding 门户重新打开。判据：http-server.spec.ts 的「带别的域名 Host 的静态与 /api/auth 请求都在路由前拒绝」。',
     file: 'src/backend/http-server.js',
-    from: '    if (!isHostAllowed(req.headers.host, ctx.state.address, ctx.state.port)) {',
+    from: '    if (!isHostAllowed(req.headers.host, ctx.state.address, ctx.state.port, extraHosts)) {',
     to: '    if (true) {',
     spec: 'src/backend/tests/http-server.spec.ts',
   },

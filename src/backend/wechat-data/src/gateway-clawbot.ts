@@ -16,6 +16,7 @@ import type { ClawbotBindQr, ClawbotBindStateSnapshot, ClawbotBindingSnapshot, C
 import { createClawbotRemotes } from './remotes/clawbot.ts'
 import { isAnswerStatus, runtimeStatusOf } from './remotes/ask-runtime.ts'
 import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from './query/clawbot/clawbot-prompt.ts'
+import { withClawbotPersonaRules } from './query/answer-runtime/persona.ts'
 import { AUTO_REPLY_KB_REQUIRED_MESSAGE, hasValidAutoReplyKnowledgeBase } from './query/clawbot/clawbot-config-invariant.ts'
 import { addClawbotTokenUsage } from './query/clawbot/clawbot-token.ts'
 import { GatewayDbHealth } from './gateway-db-health.ts'
@@ -347,10 +348,13 @@ export abstract class GatewayClawbot extends GatewayDbHealth {
           }
         }
         try {
+          const systemPromptOverride = systemPrompt.trim() !== ''
+            ? withClawbotPersonaRules(systemPrompt)
+            : DEFAULT_CLAWBOT_SYSTEM_PROMPT
           const r = await this.askDeepRemotes().askWechat({
             question: text, source: 'auto', dataScope: 'kb-only',
-            // 系统提示词：用户写了就用他的，没写就用内置拟人化默认值（**不是「没有提示词」**）。
-            systemPromptOverride: systemPrompt.trim() !== '' ? systemPrompt : DEFAULT_CLAWBOT_SYSTEM_PROMPT,
+            // 自定义只改人设与风格；账号本人/聊天联系人/第三方的人称绑定由系统规则固定追加。
+            systemPromptOverride,
             ...(kbId === null ? {} : { kbId }),
             // 最近对话与图片（2026-10-18）：自动回复的上下文只来自本 ClawBot 会话库，
             // ask 管道内按模型是否支持读图决定发送图片还是显式说明看不到图片。

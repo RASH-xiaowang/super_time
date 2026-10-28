@@ -10,6 +10,7 @@
  */
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { fmtMonthDaySec } from '../utils/format.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 
 /** 类目 → 中文（界面与 tooltip 共用一份，别写两处）。 */
 export const CAT_LABEL: Record<string, string> = { image: '图片', video: '视频', file: '文件' }
@@ -27,6 +28,20 @@ export function isHashLike(f: FileItem): boolean {
   return !n.includes('.') && /^[0-9a-z]{16,}$/i.test(n)
 }
 
+/** Display-only source conversation, preferring the message-resource identity. */
+export function fileSourceName(f: FileItem): string {
+  return f.sessionName
+    ? withEnterprise(f.sessionName, f.sessionEnterpriseName)
+    : f.sourceTalker
+      ? withEnterprise(f.sourceTalker, f.sourceTalkerEnterpriseName)
+      : ''
+}
+
+/** Source conversation username for avatar lookup; never fall back to a display name. */
+export function fileSourceUsername(f: FileItem): string {
+  return f.sessionUsername || f.sourceUsername || ''
+}
+
 /**
  * 来源口径（第 84 轮）：会话名优先用 message_resource 口径（`sessionName`），
  * 缺失时用附件目录口径（`sourceTalker`，由 `dir2id` 的 `md5(username)` 反查得到）；
@@ -35,7 +50,7 @@ export function isHashLike(f: FileItem): boolean {
  * @returns 形如「黑龙江沃融-燎引擎 · 2026-09」的来源串（可能只有月份，或为空）。
  */
 export function fileSource(f: FileItem): string {
-  const who = f.sessionName || f.sourceTalker || ''
+  const who = fileSourceName(f)
   const month = f.sourceMonth || ''
   return [who, month].filter(Boolean).join(' · ')
 }
@@ -45,7 +60,7 @@ export function fileDisplayName(f: FileItem | undefined): string {
   if (!f) return '(未知)'
   if (!isHashLike(f)) return f.fileName || f.md5 || ''
   const label = CAT_LABEL[f.category] || f.category || '文件'
-  const src = f.sessionName ? `来自 ${f.sessionName} · ` : ''
+  const src = f.sessionName ? `来自 ${withEnterprise(f.sessionName, f.sessionEnterpriseName)} · ` : ''
   return `${label} · ${src}${fmtMonthDaySec(f.modifyTime)}`
 }
 

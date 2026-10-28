@@ -1,7 +1,6 @@
 
 import type { HarvestResult, HarvestStatus, ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WhisperStatus, WxcdnQuota } from '@deepseek-ai/dsh-wechat-data/types'
 import type { HarvestAction } from './use-original-harvest.ts'
-import { Select } from '../ui/kit.tsx'
 /**
  * 设置面板的五张流程卡片：检测账号 / 数据库密钥 / 图片密钥 / 图片解码 / 语音转写
  * （M21 第二十九刀自 Settings.tsx 拆出）。
@@ -15,9 +14,10 @@ import { apiOpenPath } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
 import { AccountAvatar, MsgSlot, StatusSlot, WHISPER_MODEL_FALLBACK, fmtActive } from './settings-common.tsx'
 import { acctCss, css, modelCss } from './settings-css.ts'
-import { Button, IconGlobeOutline14, IconPersonalizationOutline16, IconSparkle16, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSparkle16, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clsx } from 'clsx'
 import { ImageAutoDownloadCard } from './image-autodownload-card.tsx'
+import { WhisperModelLibrary } from './whisper-model-library.tsx'
 
 /** 检测账号 卡片（面板里的第 1 节）。 */
 export interface SettingsDetectSectionProps {
@@ -467,7 +467,7 @@ export interface SettingsVoiceSectionProps {
   installEngine: () => Promise<void>
   nativeTranscribe: () => void
   pickWhisperDir: () => Promise<void>
-  refreshWhisper: () => Promise<void>
+  refreshWhisper: (force?: boolean) => Promise<void>
   setWhisperDevice: React.Dispatch<React.SetStateAction<'cpu' | 'gpu'>>
   setWhisperModel: React.Dispatch<React.SetStateAction<string>>
   setWhisperModelsDir: React.Dispatch<React.SetStateAction<string>>
@@ -498,133 +498,206 @@ export function SettingsVoiceSection({
   whisperModel, whisperModelsDir, whisperStatus,
   whisperStatusLoading, whisperThreads, whisperTranscribing,
 }: SettingsVoiceSectionProps): React.JSX.Element {
+  const models = whisperStatus?.models ?? WHISPER_MODEL_FALLBACK
+  const currentModel = models.find(model => model.id === whisperModel)
+  const installedModels = models.filter(model => model.installed).length
+  const engineReady = Boolean(whisperStatus?.engine)
+  const modelReady = Boolean(currentModel?.installed)
+  const engineDownloading = whisperDownloading?.model === 'engine'
+  const openModelsDir = (): void => {
+    const dir = whisperModelsDir.trim() || whisperStatus?.modelsDir || ''
+    if (!dir) {
+      setWhisperDirMsg({ kind: 'err', text: '✗ 模型目录尚未确定，请先选择目录' })
+      return
+    }
+    void apiOpenPath(dir).then((r) => {
+      if (!r.ok) setWhisperDirMsg({ kind: 'err', text: '✗ ' + (r.error ?? '无法打开该目录') })
+    }).catch(() => {
+      setWhisperDirMsg({ kind: 'err', text: '✗ 无法打开该目录' })
+    })
+  }
+  const actionLabel = whisperTranscribing.active
+    ? '转写中…'
+    : !engineReady
+      ? '请先安装引擎'
+      : !modelReady
+        ? '请先下载当前模型'
+        : '本地批量转写'
   return (
       <section className={css.card} data-settings-section="voice">
         <header className={css.cardHd}>
           <span className={css.cardIconChip}><IconSparkle16 size={14} /></span>
           <div className={css.cardTitleBox}>
             <span className={css.cardTitle}>语音转写（可选）</span>
-            <span className={kitCss.textCaptionTrunc}>whisper 引擎与模型管理</span>
+            <span className={kitCss.textCaptionTrunc}>本地 whisper.cpp · 模型按需下载</span>
           </div>
           <span className={css.cardBadge}>
-            <StateDot state={whisperStatus?.engine ? 'done' : 'warning'} />
-            {whisperStatus?.engine ? '引擎已就绪' : '待配置引擎'}
+            <StateDot state={engineReady ? 'done' : 'warning'} />
+            {engineReady ? '引擎已就绪' : '待配置引擎'}
           </span>
         </header>
         <div className={css.cardBody}>
-          <div className={modelCss.whisperBanner}>
-            <div className={modelCss.whisperBannerText}>
-              <span className={modelCss.whisperBannerTitle}>本地处理，不上传语音</span>
-              <span className={modelCss.whisperBannerDesc}>
-                已由微信转写的语音会直接复用数据库文字；其余语音才会交给本地 Whisper，需 whisper.cpp 引擎。
+          <div className={modelCss.voiceHero}>
+            <div className={modelCss.voiceHeroContent}>
+              <span className={modelCss.voiceHeroKicker}>仅在本机处理</span>
+              <span className={modelCss.voiceHeroTitle}>把微信语音变成可检索文字</span>
+              <span className={modelCss.voiceHeroDesc}>
+                微信已有转写文字时直接复用；没有文字时才调用本地 Whisper，音频和识别结果都不会上传。
               </span>
             </div>
-            <button type="button" className={modelCss.whisperRefresh} onClick={() => { void refreshWhisper() }} disabled={whisperStatusLoading}>
-              {whisperStatusLoading ? '检测中…' : '刷新状态'}
+            <div className={modelCss.voiceHeroStats}>
+              <span className={modelCss.voiceStat}>
+                <span className={modelCss.voiceStatLabel}>转写引擎</span>
+                <span className={clsx(modelCss.voiceStatValue, engineReady ? modelCss.voiceStatOk : modelCss.voiceStatWarn)}>
+                  {whisperStatusLoading ? '检测中' : engineReady ? '已就绪' : '未安装'}
+                </span>
+              </span>
+              <span className={modelCss.voiceStat}>
+                <span className={modelCss.voiceStatLabel}>本地模型</span>
+                <span className={modelCss.voiceStatValue}>{installedModels}/{models.length}</span>
+              </span>
+              <span className={modelCss.voiceStat}>
+                <span className={modelCss.voiceStatLabel}>推理设备</span>
+                <span className={modelCss.voiceStatValue}>{whisperStatus?.hasCuda ? 'CPU / CUDA' : 'CPU'}</span>
+              </span>
+            </div>
+            <button
+              type="button"
+              className={modelCss.voiceRefresh}
+              onClick={() => { void refreshWhisper(true) }}
+              disabled={whisperStatusLoading}
+            >
+              <IconRefreshOutline14 size={12} />
+              {whisperStatusLoading ? '检测中…' : '刷新'}
             </button>
           </div>
-          <div className={css.row}>
-            <span className={css.rowName}>转写引擎</span>
-            <span className={css.rowMeta} title={whisperStatus?.enginePath ?? ''}>
-              {whisperStatusLoading ? '检测中…' : whisperStatus?.engine
-                ? `已就绪（${whisperStatus.enginePath ?? whisperStatus.engine}）`
-                : '未检测到 whisper.cpp 引擎，可一键下载'}
-            </span>
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixed)} icon={whisperDownloading?.model === 'engine' ? <span className={css.spin} /> : undefined}
-              disabled={whisperDownloading !== null || Boolean(whisperStatus?.engine)} onClick={() => { void installEngine() }}>
-              {whisperDownloading?.model === 'engine' ? '下载中…' : whisperStatus?.engine ? '已安装' : '下载引擎'}
-            </Button>
-          </div>
-          <div className={css.row}>
-            <span className={css.rowName}>推理设备</span>
-            <span className={css.rowMeta}>CPU 兼容所有设备；NVIDIA GPU 使用 CUDA 加速，失败会自动回退 CPU。</span>
-          </div>
-          <div className={css.row}>
-            <span className={css.rowName}>当前设备</span>
-            <div className={modelCss.deviceSeg}>
-              <button type="button" className={clsx(modelCss.deviceSegBtn, whisperDevice === 'cpu' && modelCss.deviceSegOn)} onClick={() => { setWhisperDevice('cpu') }}>CPU</button>
-              <button type="button" className={clsx(modelCss.deviceSegBtn, whisperDevice === 'gpu' && modelCss.deviceSegOn)} disabled={!whisperStatus?.hasCuda} title={whisperStatus?.hasCuda ? 'NVIDIA GPU（CUDA 加速）' : '未检测到可用的 NVIDIA CUDA 设备或驱动'} onClick={() => { setWhisperDevice('gpu') }}>NVIDIA GPU</button>
+          <div className={modelCss.voiceRuntimeGrid}>
+            <div className={modelCss.voiceRuntimeCard}>
+              <div className={modelCss.voiceRuntimeHead}>
+                <span className={modelCss.voiceRuntimeTitle}>运行环境</span>
+                <span className={modelCss.voiceRuntimeBadge}>{engineReady ? '可以开始转写' : '首次使用需安装'}</span>
+              </div>
+              <div className={modelCss.voiceEngineState}>
+                <StateDot state={engineReady ? 'done' : 'warning'} />
+                <span className={modelCss.voiceEngineName}>
+                  {whisperStatusLoading ? '正在检测引擎' : engineReady ? 'whisper.cpp 已连接' : '未检测到 whisper.cpp'}
+                </span>
+                <span className={modelCss.voiceEnginePath} title={whisperStatus?.enginePath ?? ''}>
+                  {whisperStatus?.enginePath ?? whisperStatus?.engine ?? ''}
+                </span>
+              </div>
+              <div className={modelCss.voiceControlRow}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={clsx(css.btnFx, css.btnFixed)}
+                  icon={engineDownloading ? <span className={css.spin} /> : undefined}
+                  disabled={whisperDownloading !== null || engineReady}
+                  onClick={() => { void installEngine() }}
+                >
+                  {engineDownloading ? '下载中…' : engineReady ? '引擎已安装' : '下载引擎'}
+                </Button>
+                <span className={modelCss.voiceControlHint}>
+                  {engineReady ? '本地可执行文件已就绪' : '约 9 MB，安装后无需重复下载'}
+                </span>
+              </div>
+              <div className={modelCss.voiceControlRow}>
+                <span className={modelCss.voiceControlLabel}>推理设备</span>
+                <div className={modelCss.deviceSeg}>
+                  <button type="button" className={clsx(modelCss.deviceSegBtn, whisperDevice === 'cpu' && modelCss.deviceSegOn)} onClick={() => { setWhisperDevice('cpu') }}>CPU</button>
+                  <button
+                    type="button"
+                    className={clsx(modelCss.deviceSegBtn, whisperDevice === 'gpu' && modelCss.deviceSegOn)}
+                    disabled={!whisperStatus?.hasCuda}
+                    title={whisperStatus?.hasCuda ? 'NVIDIA GPU（CUDA 加速）' : '未检测到可用的 NVIDIA CUDA 设备或驱动'}
+                    onClick={() => { setWhisperDevice('gpu') }}
+                  >
+                    NVIDIA GPU
+                  </button>
+                </div>
+                <span className={clsx(
+                  modelCss.voiceControlHint,
+                  whisperStatus?.hasCuda ? modelCss.voiceControlHintOk : modelCss.voiceControlHintWarn,
+                )}>
+                  {whisperStatus?.hasCuda ? 'CUDA 可用' : '仅检测到 CPU，GPU 不可选'}
+                </span>
+              </div>
             </div>
-            <span className={clsx(css.rowMeta, !whisperStatus?.hasCuda && css.rowMetaWarn)}>
-              {whisperStatus?.hasCuda ? 'CUDA 可用' : '未检测到可用的 NVIDIA CUDA 设备或驱动。'}
-            </span>
-          </div>
-          <div className={css.row}>
-            <span className={css.rowName}>模型目录</span>
-            <Input className={css.input} value={whisperModelsDir} onChange={(e) => { setWhisperModelsDir(e.target.value) }} placeholder="留空使用默认目录（<项目>/wechat/whisper）" />
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void pickWhisperDir() }}>选择…</Button>
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { const d = whisperModelsDir.trim(); if (d) void apiOpenPath(d).then((r) => { if (!r.ok) setWhisperDirMsg({ kind: 'err', text: '✗ ' + (r.error ?? '无法打开该目录') }) }).catch(() => { setWhisperDirMsg({ kind: 'err', text: '✗ 无法打开该目录' }) }) }}>打开</Button>
+
+            <div className={modelCss.voiceRuntimeCard}>
+              <div className={modelCss.voiceRuntimeHead}>
+                <span className={modelCss.voiceRuntimeTitle}>存储与性能</span>
+                <span className={modelCss.voiceRuntimeBadge}>{whisperThreads === 0 ? '线程自动' : `${whisperThreads} 线程`}</span>
+              </div>
+              <div className={modelCss.voiceControlRow}>
+                <span className={modelCss.voiceControlLabel}>模型目录</span>
+                <Input
+                  className={modelCss.voicePathInput}
+                  value={whisperModelsDir}
+                  onChange={(e) => { setWhisperModelsDir(e.target.value) }}
+                  placeholder="留空使用数据目录下的 whisper 文件夹"
+                />
+              </div>
+              <div className={modelCss.voiceControlRow}>
+                <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void pickWhisperDir() }}>选择目录…</Button>
+                <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={openModelsDir}>打开目录</Button>
+                <span className={modelCss.voiceControlHint}>修改目录后请保存配置</span>
+              </div>
+              <div className={modelCss.voiceControlRow}>
+                <span className={modelCss.voiceControlLabel}>并发线程</span>
+                <Input
+                  className={modelCss.voiceThreadsInput}
+                  value={String(whisperThreads)}
+                  onChange={(e) => { setWhisperThreads(Math.max(0, Math.min(64, Number(e.target.value) || 0))) }}
+                  placeholder="0"
+                />
+                <span className={modelCss.voiceControlHint}>0 为自动，通常无需修改</span>
+              </div>
+            </div>
           </div>
           <MsgSlot
-            placeholder="点击「选择…/下载」后，结果实时显示在这里"
+            placeholder="模型下载、目录选择和安装结果会显示在这里"
             msg={whisperDirMsg}
           />
-          <div className={modelCss.gridHd}>
-            <span className={modelCss.gridHdTitle}>选择模型</span>
-            <span className={kitCss.textCaption}>当前设备：{whisperDevice === 'gpu' ? 'NVIDIA GPU' : 'CPU'}</span>
-          </div>
-          {/* 2026-09-30 合并（用户要求精简按钮）：原来是六个模型卡片、各带一个「下载」按钮，
-              截图里就是这样一排 6 个按钮。现在一个下拉 + 一个按钮：已安装与体积都并进选项文案，
-              下载进度显示在按钮下方 —— 信息没丢，按钮从 6 个降到 1 个。 */}
-          {(() => {
-            const models = whisperStatus?.models ?? WHISPER_MODEL_FALLBACK
-            const current = models.find((m) => m.id === whisperModel)
-            // W3-5.5：进度条对两路都有效（引擎包也是下载）。
-            const downloading = whisperDownloading
-            const pct = downloading !== null && downloading.total > 0
-              ? Math.round((downloading.received / downloading.total) * 100)
-              : 0
-            return (
-              <div className={modelCss.whisperPick}>
-                <Select
-                  value={whisperModel}
-                  onChange={(v) => { setWhisperModel(v) }}
-                  ariaLabel="选择语音识别模型"
-                  options={models.map((m) => ({
-                    value: m.id,
-                    label: `${m.name} · ${m.sizeLabel}${m.installed ? ' · 已安装' : ''}`,
-                  }))}
-                />
-                {downloading !== null ? (
-                  <span className={modelCss.modelProgress}>
-                    <span className={modelCss.modelProgressTrack}><span className={modelCss.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
-                    <span className={modelCss.modelProgressPct}>{downloading.model === 'engine' ? '引擎' : `${pct}%`}</span>
-                    {/* W3-5.5：取消不删已下载的部分，所以它无损，应该常驻。 */}
-                    <button type="button" className={modelCss.modelProgressStop} onClick={() => { void cancelWhisperDownload() }}>停止</button>
-                  </span>
-                ) : current?.installed ? (
-                  <span className={clsx(modelCss.modelDownload, modelCss.modelDownloadDone)}>已就绪</span>
-                ) : (
-                  <button type="button" className={modelCss.modelDownload} onClick={() => { if (current) void whisperDownload(current) }}>
-                    下载
-                  </button>
-                )}
+          <WhisperModelLibrary
+            device={whisperDevice}
+            download={(model) => {
+              setWhisperModel(model.id)
+              void whisperDownload(model)
+            }}
+            downloading={whisperDownloading}
+            models={models}
+            onCancel={() => { void cancelWhisperDownload() }}
+            onSelect={setWhisperModel}
+            selected={whisperModel}
+          />
+          <div className={modelCss.voiceActionBox}>
+            <div className={modelCss.voiceActionCopy}>
+              <span className={modelCss.voiceActionTitle}>批量生成转写文字</span>
+              <span className={modelCss.voiceActionDesc}>
+                使用 {currentModel?.name ?? whisperModel} 处理最近语音；失败项会逐条列出，可在聊天页单独重试。
+              </span>
+            </div>
+            <div className={modelCss.voiceActionControls}>
+              <div className={modelCss.voiceActionButtons}>
+                <button type="button" className={modelCss.whisperSkip} onClick={() => { skipTranscribe() }}>跳过</button>
+                <Button variant="outline" className={clsx(css.btnFx, css.btnFixed)} onClick={() => { nativeTranscribe() }}>
+                  微信原生文字
+                </Button>
+                <Button
+                  variant="primary"
+                  className={clsx(css.btnFx, css.btnFixed)}
+                  icon={whisperTranscribing.active ? <span className={css.spin} /> : undefined}
+                  disabled={whisperTranscribing.active || !engineReady || !modelReady}
+                  onClick={() => { void batchTranscribe() }}
+                >
+                  {actionLabel}
+                </Button>
               </div>
-            )
-          })()}
-          <div className={css.row}>
-            <span className={css.rowNote}>
-              {whisperStatus?.models.some(m => m.installed)
-                ? `已安装 ${whisperStatus.models.filter(m => m.installed).length} 个模型到本机缓存；模型仅本地推理、不上传语音。`
-                : '模型从 huggingface.co 下载（失败自动切换 hf-mirror；可用 DSH_WECHAT_WHISPER_MIRROR 指定镜像）；仅本地推理、不上传语音。'}
-            </span>
-          </div>
-          <div className={modelCss.whisperThreads}>
-            <span className={modelCss.whisperThreadsLabel}>并发线程数</span>
-            <Input className={css.inputNarrow} value={String(whisperThreads)} onChange={(e) => { setWhisperThreads(Math.max(0, Number(e.target.value) || 0)) }} placeholder="0" />
-            <span className={css.rowMeta}>0 自动，输入正整数</span>
-          </div>
-          <div className={modelCss.whisperFooter}>
-            <button type="button" className={modelCss.whisperSkip} onClick={() => { skipTranscribe() }}>跳过，查看聊天记录</button>
-            <Button variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={whisperTranscribing.active ? <span className={css.spin} /> : undefined} disabled={whisperTranscribing.active} onClick={() => { void batchTranscribe() }}>
-              {whisperTranscribing.active ? '转写中…' : '本地批量转文字'}
-            </Button>
-            <Button variant="outline" className={clsx(css.btnFx, css.btnFixed)} onClick={() => { nativeTranscribe() }}>
-              微信原生批量转文字
-            </Button>
+            </div>
           </div>
           <StatusSlot
-            placeholder="点击「本地批量转文字」后，转写进度实时显示在这里"
+            placeholder="点击「本地批量转写」后，进度和结果会显示在这里"
             active={whisperTranscribing.active}
             pct={whisperTranscribing.total > 0 ? Math.round((whisperTranscribing.done / whisperTranscribing.total) * 100) : 0}
             text={`转写 ${whisperTranscribing.done}/${whisperTranscribing.total} · 成功 ${whisperTranscribing.done} · 跳过 ${whisperTranscribing.skipped} · 失败 ${whisperTranscribing.failed}`}

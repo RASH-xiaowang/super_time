@@ -10,6 +10,7 @@
  * 不再挤进右列窄槽折成三行（实测截图）。宽度 232px 不动（check:wx-tokens 钉住）。
  */
 import { Avatar } from './chats-support.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 
@@ -17,6 +18,7 @@ import cssshell from './chats-shell.module.css'
 export interface MemberProfile {
   name: string
   username: string
+  enterpriseName?: string
   region?: string
   signature?: string
 }
@@ -37,11 +39,16 @@ export function ChatsMemberProfile({ member, pos }: ChatsMemberProfileProps): Re
       <div className={cssshell.memberProfileBody}>
         <div className={cssshell.memberProfileHead}>
           <Avatar name={member.name} username={member.username} size={56} />
-          <div className={cssshell.memberProfileName}>{member.name}</div>
+          <div className={cssshell.memberProfileName}>{withEnterprise(member.name, member.enterpriseName)}</div>
         </div>
         <div className={csscards.memberProfileItem}>
           <span>微信号</span><span className={cssshell.memberProfileMono}>{member.username}</span>
         </div>
+        {member.enterpriseName && member.enterpriseName !== member.name && (
+          <div className={csscards.memberProfileItem}>
+            <span>企业名称</span><span className={cssshell.memberProfileMono}>{member.enterpriseName}</span>
+          </div>
+        )}
         {member.region && (
           <div className={csscards.memberProfileItem}>
             <span>地区</span><span className={cssshell.memberProfileMono}>{member.region}</span>

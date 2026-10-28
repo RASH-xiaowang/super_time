@@ -6,8 +6,9 @@ export declare const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]>;
 /**
  * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
  *
- * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值时回落到
- * `latest`（旧行为，保护已经配好镜像的环境）。
+ * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值固定到 b5454。
+ * GitHub 的 `v1.9.5` release 没有二进制附件，若继续使用 `latest`，
+ * “下载引擎”会稳定落到 404。
  * 这里是一个字符串常量而不是编号——— 固定哪一版
  * 应该是一行改动，而不是到处翻 URL。
  */

@@ -18,6 +18,7 @@
  * 全部是纯函数、可离线，因此可以单测与回归。
  */
 import { parseCitedIndexes } from './ask.ts'
+import { CLAWBOT_UNVERIFIED_VALUE_REPLY } from './answer-runtime/persona.ts'
 
 /** 高风险值类型。 */
 export type GroundingKind = 'amount' | 'date' | 'digits'
@@ -300,7 +301,7 @@ export function groundingRepairHint(audit: GroundingAudit, mode: GroundingReplyM
       + ' · 如果不是合计，就删掉，或改成材料里**原样出现**的值；\n'
       + ' · 日期只能写材料里出现过的日期，不要自己换算或推测；\n'
       + ' · 不要标 [n]，不要提引用、来源、材料或核对过程；\n'
-      + ' · 实在无法确认这个数字，就直说「这个数字我这边没法确认，我先问下本人」。'
+      + ` · 实在无法确认这个数字，就直说「${CLAWBOT_UNVERIFIED_VALUE_REPLY}」。`
   }
   return `【核对未通过】你写的 ${list} 在你引用的原文里找不到出处。请改写：\n`
     + ' · 如果它们是**合计**，写明由哪几条相加得出（如「3500+3500=7000」）；\n'

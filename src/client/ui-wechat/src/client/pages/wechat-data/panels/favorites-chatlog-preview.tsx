@@ -13,6 +13,7 @@ import { parseFavItem } from './favorites-parse.ts'
 import { FavoriteAvatar } from './favorites-avatar.tsx'
 import { FavoritePart } from './favorites-media.tsx'
 import { useSharedRemoteImages } from './remote-img.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 
@@ -44,6 +45,7 @@ export function FavoritesChatlogPreview({ item, thumbs, onClose }: FavoritesChat
       <div className={cssshell.chatlogBody}>
         {lines.length === 0 && <div className={kitCss.emptyInline}>暂无内层消息</div>}
         {lines.map((part, idx) => {
+          const senderIdentity = withEnterprise(part.sourceName || '未知发送者', part.sourceEnterpriseName)
           const avatarSrc = part.sourceHead
             ? (sharedHeads[part.sourceHead] ?? part.sourceHead)
             : (item.avatar ?? '')
@@ -51,12 +53,12 @@ export function FavoritesChatlogPreview({ item, thumbs, onClose }: FavoritesChat
             <div key={idx} className={cssshell.chatlogRow}>
               <FavoriteAvatar
                 avatar={avatarSrc}
-                name={part.sourceName || info.source}
+                name={senderIdentity}
                 className={csscards.chatlogAvatar}
               />
               <div className={cssshell.chatlogMain}>
                 <div className={cssshell.chatlogTop}>
-                  <span className={cssshell.chatlogName}>{part.sourceName || '未知发送者'}</span>
+                  <span className={cssshell.chatlogName}>{senderIdentity}</span>
                   {part.sourceTime && <span className={cssshell.chatlogTime}>{part.sourceTime}</span>}
                 </div>
                 <FavoritePart part={part} updateTime={item.updateTime} thumbs={thumbs} />

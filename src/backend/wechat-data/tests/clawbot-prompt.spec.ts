@@ -103,13 +103,13 @@ describe('DEFAULT_CLAWBOT_SYSTEM_PROMPT：拟人化默认提示词', () => {
   })
 
   it('禁止「在的」当万能开场（2026-10-17 真机实测：6/12 场景都以它开头）', () => {
-    // 真人不会对每个问题都先回「在的」—— 它只在对方问「在吗」时才用。
+    // 真人不会对每个问题都先回「在的」—— 它只在聊天联系人问「在吗」时才用。
     expect(DEFAULT_CLAWBOT_SYSTEM_PROMPT).toContain('不要用万能开场')
-    expect(DEFAULT_CLAWBOT_SYSTEM_PROMPT).toContain('「在的」只在对方问「在吗 / 在不在」时用')
+    expect(DEFAULT_CLAWBOT_SYSTEM_PROMPT).toContain('「在的」只在聊天联系人问「在吗 / 在不在」时用')
   })
 
-  it('要求先回应对方说的内容（2026-10-17 真机实测：一上来就说「我这边没查到」像客服）', () => {
-    expect(DEFAULT_CLAWBOT_SYSTEM_PROMPT).toContain('先回应对方说的内容')
+  it('要求先回应聊天联系人说的内容（2026-10-17 真机实测：一上来就说「我这边没查到」像客服）', () => {
+    expect(DEFAULT_CLAWBOT_SYSTEM_PROMPT).toContain('先回应聊天联系人说的内容')
   })
 
   it('要求闲聊就闲聊、不是每句话都需要回答（2026-10-17 真机实测）', () => {

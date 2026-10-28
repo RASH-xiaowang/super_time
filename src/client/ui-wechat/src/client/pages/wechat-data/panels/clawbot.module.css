@@ -62,13 +62,14 @@
   box-shadow: var(--nm-shadow-card);
   overflow-y: auto;
 }
+.railList { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); min-width: 0; flex: 1 1 auto; min-height: 0; }
+/* 基础规则必须先落列向，再由窄档覆盖成横向条；反过来会被后面的 column 重新压回三行。 */
 @container (max-width: 800px) {
   .rail { flex-direction: row; align-items: stretch; overflow-y: visible; overflow-x: auto; }
   .railList { display: flex; flex-direction: row; gap: var(--nm-dense-g3, 6px); }
   .railRow { flex: 0 0 auto; }
   .railAdd { flex: 0 0 auto; }
 }
-.railList { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); min-width: 0; flex: 1 1 auto; min-height: 0; }
 /*
  * 实例行（2026-10-16 视觉重做；2026-10-17 扩大点击范围）。
  *
@@ -108,7 +109,21 @@
   background: var(--nm-cyan);
 }
 .railRowHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 状态点压在头像角上，给 168px 实例轨省出一行首宽度；姓名与操作仍可各自收缩。 */
+.railAvatarWrap {
+  position: relative; flex: 0 0 26px;
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.railStateDot {
+  position: absolute; right: -2px; bottom: -2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 1px; border-radius: 50%;
+  background: var(--nm-bg-1, var(--nm-bg-card));
+  box-shadow: 0 0 0 1px var(--nm-border);
+}
 .railName {
+  flex: 1 1 auto;
   font-size: 12px; font-weight: 600; color: var(--nm-text-1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   cursor: text;
@@ -136,7 +151,11 @@
   border-radius: var(--nm-r-xs, 4px);
   outline: none;
 }
-.railMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); white-space: nowrap; }
+.railMeta {
+  min-width: 0;
+  font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 /* 实例 token 统计：一行内 今日 / 累计，数字用强调色，过长时省略而不是撑破实例轨。 */
 .railTokens {
   font-size: var(--nm-fs-xs, 11px);
@@ -189,15 +208,12 @@
 
 /* ── 绑定分区 ────────────────────────────────────────────── */
 .bindRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.bindAvatar {
-  width: 42px; height: 42px; flex: 0 0 42px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px;
-  border-radius: var(--nm-r-md, 10px);
-  border: 1px solid var(--nm-border);
-  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-}
 .bindGrow { flex: 1; min-width: 0; }
+.bindName {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; font-weight: 600; color: var(--nm-text-1);
+}
 .bindStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; max-width: 100%; }
 /*
  * 状态行里的 wxid 必须**可截断**（2026-10-17 两栏布局实测）：
@@ -794,6 +810,7 @@ details.section[open] > .sectionHd::before { transform: rotate(90deg); }
 .runCitationBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .runCitationHead { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .runCitationName {
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;

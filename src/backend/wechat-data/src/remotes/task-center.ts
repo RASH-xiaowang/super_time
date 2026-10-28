@@ -25,6 +25,7 @@ import {
 import { revealTaskTriggerSecret } from '../query/task-center-secret.ts'
 import type { PendingDispatchResult, TaskDispatchDeps } from '../query/task-center.ts'
 import { listVendorDescriptors, RPA_REGISTRY_VERSION } from '../query/rpa/registry.ts'
+import type { RpaMediaLinkFactory } from '../query/rpa/media-links.ts'
 import type { RetryFetch } from '../net/fetch-retry.ts'
 import type {
   RpaVendorCatalog,
@@ -58,6 +59,14 @@ export interface createTaskCenterRemotesInputs {
   privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => string[]
   /** 图片解码所需的本机上下文（网关侧用 `rawWechatBase` + `resolveImageKeyPair` 组装）。 */
   imageContext: () => TaskCenterImageContext
+  /**
+   * RPA 图片直链工厂（按触发记录 id 现取）。
+   *
+   * 网关层每次投递都重读 `config.json` / `secrets.json`：这样轮换 `api_token`、改端口或
+   * 改公网入口后，下一次投递就生效。返回 `undefined` = 局域网访问没开，投递参数里会
+   * 如实写「未打开局域网访问」。
+   */
+  mediaLinks?: (recordId: number) => RpaMediaLinkFactory | undefined
   /** 测试注入的 fetch；生产省略 = 全局 fetch。 */
   fetchImpl?: RetryFetch
 }
@@ -80,13 +89,14 @@ export function createTaskCenterRemotes(rc: createTaskCenterRemotesInputs) {
     const decoded = dirs().decoded
     const image = rc.imageContext()
     const deps: TaskDispatchDeps = {
-      decodeImage: (username, localId) => decodeImageDataUrlAsync(
+      decodeImage: (username, localId, options) => decodeImageDataUrlAsync(
         decrypted, decoded, username, localId,
-        image.wechatBaseDir, image.aesKey, image.xorKey,
+        image.wechatBaseDir, image.aesKey, image.xorKey, options,
       ),
       gate: (feature, stats, texts) => rc.privacyGate(feature, stats, texts),
     }
     if (rc.fetchImpl !== undefined) deps.fetchImpl = rc.fetchImpl
+    if (rc.mediaLinks !== undefined) deps.mediaLinks = rc.mediaLinks
     return deps
   }
 

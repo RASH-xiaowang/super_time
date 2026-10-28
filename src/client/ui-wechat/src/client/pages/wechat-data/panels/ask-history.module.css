@@ -133,7 +133,7 @@
   color: var(--nm-info-text);
 }
 
-.scopeTag { color: var(--nm-text-3); }
+.scopeTag { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; color: var(--nm-text-3); }
 
 .itemActs { margin-left: auto; display: inline-flex; gap: 6px; }
 
@@ -211,7 +211,7 @@
 
 .citeBtn {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
   min-width: 0;
   padding: 4px 8px;
@@ -241,7 +241,7 @@
   background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
 }
 .citeBtn[data-src='unknown'] { cursor: default; }
-.citeName { font-weight: 600; flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citeName { font-weight: 600; flex: 0 1 auto; min-width: 0; max-width: 45%; }
 .citeTime { flex-shrink: 0; color: var(--nm-text-3); }
 .citeSnippet { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

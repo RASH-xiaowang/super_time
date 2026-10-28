@@ -19,7 +19,7 @@
 .panelEmbedded .scroll { flex: none; overflow: visible; }
 
 /* ── 头部 ── */
-.hd { display: flex; align-items: baseline; gap: 8px; }
+.hd { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .catBtn {
   padding: 4px 13px;
   border: 1px solid var(--nm-border);
@@ -292,9 +292,10 @@
 .pvSamples { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .pvEmptyInline { padding: 8px; }
 .pvSampleRow { font-size: 12px; line-height: 1.5; }
-.pvSampleHd { display: flex; gap: 8px; align-items: center; }
-.pvSampleName { font-weight: 600; }
-.pvJump { margin-left: auto; }
+.pvSampleHd { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.pvSampleName { flex: 1 1 auto; min-width: 0; font-weight: 600; }
+.pvSampleHd .rowTime { flex: 0 0 auto; }
+.pvJump { flex: 0 0 auto; margin-left: auto; }
 .pvSnippet { word-break: break-all; }
 .pvMore { align-self: center; }
 
@@ -305,15 +306,20 @@
 .rvRow { flex-direction: column; align-items: stretch; cursor: pointer; border: 1px solid var(--nm-border); margin-bottom: 6px; width: 100%; box-sizing: border-box; }
 .rvRowHd { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 6px 10px; width: 100%; min-width: 0; box-sizing: border-box; }
 .rvRowHd .rowName { min-width: 0; flex: 1 1 120px; }
+.rvTopList { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; max-width: 100%; }
+.rvTopItem { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 180px; }
+.rvTopIdentity { min-width: 0; max-width: 160px; }
+.rvTopCount { flex: 0 0 auto; color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 .rvTypeBadge { color: var(--nm-cyan); border: 1px solid var(--nm-cyan); }
 .rvTimePush { margin-left: auto; }
+.rvSessionIdentity { flex: 0 1 180px; max-width: 180px; }
 .rvSession { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--nm-text-2); flex-shrink: 1; }
 .rvChevron { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; }
 .rvBodyPad { width: 100%; box-sizing: border-box; padding: 4px 8px 8px 48px; min-width: 0; }
 .rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: var(--nm-dense-r); background: var(--nm-bg-hover); }
 .rvBodyText { white-space: pre-wrap; overflow-wrap: anywhere; }
 .rvMediaPending { box-sizing: border-box; width: 100%; padding: 8px 12px; color: var(--nm-text-3); font-size: 11px; }
-.rvFootNote { margin-top: 4px; }
+.rvFootNote { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; min-width: 0; margin-top: 4px; }
 .rvMediaCard { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); background: var(--nm-bg-card); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 100%; box-sizing: border-box; }
 .rvMediaRow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
 .rvMediaTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); overflow-wrap: anywhere; }
@@ -528,7 +534,7 @@
 .pvLandGrid {
   display: grid;
   /* 380px 下限：1316px 内容宽下正好 3 列（4 列需要 1520px），三张卡并排铺满一行 */
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: 10px;
 }
 .pvLandCard {
@@ -556,7 +562,7 @@
    align-content: space-evenly 均分到行间 —— 不会在一行芯片下方堆出一整块空白 */
 .pvItems {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   grid-auto-rows: minmax(58px, auto);
   gap: 8px;
   /* 重新设计（2026-09-29 用户："这个界面也重新设计"，此前审计量到最大空白 163px、占比 69%）：
@@ -654,6 +660,19 @@
   font-variant-numeric: tabular-nums;
   font-family: var(--ds-font-family-code);
 }
+.pvRankRow { min-width: 0; }
+.pvRankRow > .barLabel {
+  flex: 0 1 180px;
+  width: auto;
+  min-width: 0;
+}
+.pvRankRow > .barTrack { flex: 1 1 80px; min-width: 48px; }
+.pvRankRow > .barValue { flex: 0 0 auto; }
+@media (max-width: 620px) {
+  .pvRankRow { gap: 6px; }
+  .pvRankRow > .barLabel { flex-basis: 132px; }
+  .pvRankRow > .barValue { width: 58px; }
+}
 
 /* ── 收藏卡片 ──
  * 2026-10-21 用户截图：收藏列表要像微信收藏一样是**独立圆角卡片**，
@@ -731,7 +750,8 @@
 .favDetail { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
 .favPart { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); padding-bottom: 12px; }
 .favPart:last-child { border-bottom: none; padding-bottom: 0; }
-.favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 4px; }
+.favPartMeta { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; min-width: 0; font-size: 11px; color: var(--nm-text-2); margin-bottom: 4px; }
+.favPartMetaSep { flex: 0 0 auto; }
 .favPartText { font-size: 13px; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .favPartImg { max-width: 100%; max-height: 420px; border-radius: var(--nm-r-md); display: block; background: var(--nm-bg-hover); }
 .favMediaCard {

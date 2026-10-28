@@ -43,6 +43,10 @@
   background: var(--nm-bg-card);
   box-shadow: var(--nm-shadow-popup);
 }
+@media (max-width: 560px) {
+  /* 页头动作区横向滚动，右对齐会让 168px 菜单从左侧越界。 */
+  .moreMenu { right: auto; left: 0; }
+}
 .moreItem {
   display: block;
   width: 100%;

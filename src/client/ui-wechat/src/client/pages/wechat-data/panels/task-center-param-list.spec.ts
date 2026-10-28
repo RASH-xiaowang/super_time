@@ -90,7 +90,7 @@ const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
       type: 'paramList',
       required: false,
       maxItems: 20,
-      paramSources: ['room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType', 'taskId', 'recordId', 'fixed', 'template'],
+      paramSources: ['room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType', 'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template'],
     },
   ],
   auth: {
@@ -176,12 +176,14 @@ function makeDraft(overrides: Partial<TaskEditDraft> = {}): TaskEditDraft {
 describe('附加参数（paramList）：值来源 / 默认 / 归一化 / 校验', () => {
   const extrasField = BAZHUAYU.fields.find((field) => field.key === 'extraParams')!
 
-  it('值来源中文名与下拉选项：缺省全量 11 种，paramSources 可收窄', () => {
-    expect(ALL_PARAM_SOURCES).toHaveLength(11)
+  it('值来源中文名与下拉选项：缺省全量 14 种，paramSources 可收窄', () => {
+    expect(ALL_PARAM_SOURCES).toHaveLength(14)
     expect(PARAM_SOURCE_LABELS).toMatchObject({
       room: '会话名', content: '触发文本', at: '触发对象', taskName: '任务名',
       keyword: '触发关键词', triggeredAt: '触发时间', chatType: '会话类型',
-      taskId: '任务 id', recordId: '触发记录 id', fixed: '固定值', template: '自定义模板',
+      taskId: '任务 id', recordId: '触发记录 id',
+      imagesJson: '触发图片（JSON 链接清单）', imageCount: '触发图片数量', firstImageUrl: '首张图片链接',
+      fixed: '固定值', template: '自定义模板',
     })
     expect(paramSourceOptions(extrasField).map((option) => option.value)).toEqual([...ALL_PARAM_SOURCES])
     expect(paramSourceOptions({ ...extrasField, paramSources: ['room', 'fixed'] }).map((option) => option.label))

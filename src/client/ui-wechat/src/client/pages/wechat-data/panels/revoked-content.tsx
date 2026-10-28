@@ -19,6 +19,8 @@ import { fmtBytes } from '../utils/format.ts'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import { LazyMount } from './hooks.tsx'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
 
@@ -333,8 +335,19 @@ export function RevokedContent({ item, open }: { item: RevokedItem; open: boolea
         <div className={css.rvMediaError} role="alert">{item.status_label ?? '原文未保留，无法读取资源'}</div>
       )}
       <div className={`${kitCss.textMeta} ${css.rvFootNote}`}>
-        {item.status_label ?? '该内容在微信客户端被撤回，此处为本地缓存副本'}
-        {item.session_name ? ` · 会话：${item.session_name}` : ''}
+        <span>{item.status_label ?? '该内容在微信客户端被撤回，此处为本地缓存副本'}</span>
+        {item.session_name && (
+          <>
+            <span>· 会话：</span>
+            <IdentityName
+              name={item.session_name}
+              username={item.session_username ?? ''}
+              size={16}
+            >
+              {withEnterprise(item.session_name, item.enterpriseName)}
+            </IdentityName>
+          </>
+        )}
       </div>
     </div>
   )

@@ -43,6 +43,34 @@ function seed(dec: string, over: Partial<Parameters<typeof recordAsk>[1]> = {}):
   })
 }
 
+function protobufString(field: number, value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8')
+  return Buffer.concat([Buffer.from([(field << 3) | 2, bytes.length]), bytes])
+}
+
+function seedEnterpriseContact(
+  dec: string,
+  username: string,
+  name: string,
+  enterprise: string,
+): void {
+  mkdirSync(join(dec, 'contact'), { recursive: true })
+  const db = new DatabaseSync(join(dec, 'contact', 'contact.db'))
+  try {
+    db.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+    db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', enterprise)
+    db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+      username,
+      name,
+      name,
+      protobufString(2, 'wording-ent'),
+    )
+  } finally {
+    db.close()
+  }
+}
+
 describe('问答历史：记录与读取', () => {
   it('记录一次问答后能完整读回来（问题/回答/模型/范围/耗时/状态）', () => {
     const dec = makeRoot()
@@ -80,6 +108,21 @@ describe('问答历史：记录与读取', () => {
     expect(row.basis).toContain('2026-08-01')
     expect(row.status).toBe('ok')
     expect(row.elapsedMs).toBe(4321)
+  })
+
+  it('读取企微会话历史时按当前联系人元数据补充企业名', () => {
+    const dec = makeRoot()
+    const username = 'wxid_history@openim'
+    seedEnterpriseContact(dec, username, '张三', '甲方公司')
+    seed(dec, {
+      username,
+      usernameName: '张三（企业：甲方公司）',
+    })
+
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row.username).toBe(username)
+    expect(row.usernameName).toBe('张三（企业：甲方公司）')
+    expect(row.usernameEnterpriseName).toBe('甲方公司')
   })
 
   it('引用以 JSON 往返：读回来仍是可点击跳转所需的完整对象', () => {

@@ -14,10 +14,16 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { withDb } from '../db-open.ts'
+import { searchMembers } from '../members.ts'
+import {
+  enterpriseNameFromExtra,
+  isEnterpriseWechatUser,
+  loadOpenimWordingNames,
+} from '../openim.ts'
 import { searchIndexPath } from '../search-scaffold.ts'
 import { argInt, argString, type RetrievalTool, type ToolResult } from './types.ts'
 
-/** 联系人检索（走索引库的 `contact_fts`，它带备注/昵称/全拼）。 */
+/** 联系人检索（复用成员搜索，自动兼容 contact_fts 新旧 schema 与 LIKE 降级）。 */
 export const searchContactsTool: RetrievalTool = {
   name: 'search_contacts',
   category: 'contact',
@@ -38,25 +44,16 @@ export const searchContactsTool: RetrievalTool = {
     const q = argString(args['query']).trim()
     if (!q) return { tool: 'search_contacts', ok: false, error: '缺少 query', hits: [] }
     const limit = argInt(args['limit'], 20, 1, 100)
-    const p = searchIndexPath(ctx.decryptedDir)
-    if (!existsSync(p)) return { tool: 'search_contacts', ok: false, error: '检索索引不存在', hits: [] }
     try {
-      const rows = withDb(p, (db) => {
-        const like = '%' + q.replace(/[%_]/g, ' ') + '%'
-        return db.prepare(
-          `SELECT username, name, remark, alias FROM contact_fts
-           WHERE name LIKE ? OR remark LIKE ? OR alias LIKE ? OR quanpin LIKE ?
-           LIMIT ?`,
-        ).all(like, like, like, like, limit) as Array<{ username: string; name: string; remark: string; alias: string }>
-      })
-      const hits = rows.map(r => ({
+      const snapshot = searchMembers(ctx.decryptedDir, q, { limit })
+      const hits = snapshot.items.map(r => ({
         key: r.username,
-        name: (r.remark || r.name || r.username).trim(),
+        name: (r.name || r.username).trim(),
+        ...(r.enterpriseName ? { enterpriseName: r.enterpriseName } : {}),
         time: '',
         snippet: [
-          r.remark && r.remark !== r.name ? `备注：${r.remark}` : '',
-          r.name ? `昵称：${r.name}` : '',
-          r.alias ? `微信号：${r.alias}` : '',
+          r.name ? `显示名：${r.name}` : '',
+          r.enterpriseName ? `企业名称：${r.enterpriseName}` : '',
           `username：${r.username}`,
         ].filter(Boolean).join(' · '),
         source: 'msg' as const,
@@ -96,12 +93,26 @@ export const getContactDetailTool: RetrievalTool = {
     try {
       const row = withDb(p, (db) => {
         const cols = new Set((db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(c => c.name))
-        const sel = (c: string): string => (cols.has(c) ? c : "''")
-        return db.prepare(
+        const sel = (c: string, fallback = "''"): string => (cols.has(c) ? c : fallback)
+        const data = db.prepare(
           `SELECT ${sel('username')} AS username, ${sel('alias')} AS alias, ${sel('remark')} AS remark,
-                  ${sel('nick_name')} AS nick, ${sel('description')} AS descr, ${sel('local_type')} AS ltype
+                  ${sel('nick_name')} AS nick, ${sel('description')} AS descr, ${sel('local_type')} AS ltype,
+                  ${sel('extra_buffer', 'NULL')} AS extra_buffer
            FROM contact WHERE username = ? LIMIT 1`,
-        ).get(username) as { username: string; alias: string; remark: string; nick: string; descr: string; ltype: number } | undefined
+        ).get(username) as {
+          username: string
+          alias: string
+          remark: string
+          nick: string
+          descr: string
+          ltype: number
+          extra_buffer: unknown
+        } | undefined
+        if (!data) return undefined
+        const enterpriseName = isEnterpriseWechatUser(data.username)
+          ? enterpriseNameFromExtra(data.extra_buffer, loadOpenimWordingNames(db))
+          : undefined
+        return { ...data, enterpriseName }
       })
       if (!row) return { tool: 'get_contact_detail', ok: false, error: '通讯录里没有这个人', hits: [] }
 
@@ -122,6 +133,7 @@ export const getContactDetailTool: RetrievalTool = {
       const name = (row.remark || row.nick || row.username).trim()
       const lines = [
         `显示名：${name}`,
+        row.enterpriseName ? `企业名称：${row.enterpriseName}` : '',
         row.remark && row.nick && row.remark !== row.nick ? `昵称：${row.nick}` : '',
         row.alias ? `微信号：${row.alias}` : '',
         row.descr ? `签名：${row.descr}` : '',
@@ -130,8 +142,15 @@ export const getContactDetailTool: RetrievalTool = {
       ].filter(Boolean)
       return {
         tool: 'get_contact_detail', ok: true,
-        hits: [{ key: username, name, time: recent, snippet: lines.join('\n'), source: 'msg' }],
-        note: `${name} 的档案`,
+        hits: [{
+          key: username,
+          name,
+          ...(row.enterpriseName ? { enterpriseName: row.enterpriseName } : {}),
+          time: recent,
+          snippet: lines.join('\n'),
+          source: 'msg',
+        }],
+        note: `${name}${row.enterpriseName ? `（${row.enterpriseName}）` : ''} 的档案`,
         elapsedMs: Date.now() - started,
       }
     } catch (e) {

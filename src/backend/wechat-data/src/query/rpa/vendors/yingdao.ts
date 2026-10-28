@@ -13,16 +13,11 @@
  * 鉴权 …/710499792859115520、启动应用运行 …/710488569666060288、回调 …/710484124829691904、
  * 限流 …/912893828744491008。官方未给完整 token JSON 示例、专有云地址未给出、priority 枚举页未取证。
  */
-import type { RpaMappingTarget, RpaSemantic, RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
-import type { RpaHttpRequest, RpaInvocationContext, RpaRecordContext, RpaVendorAdapter } from '../types.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
+import type { RpaHttpRequest, RpaInvocationContext, RpaVendorAdapter } from '../types.ts'
 
-/** 三个语义参数位 → 影刀应用入参名的默认映射（须与 RPA 应用入参名一致，可改）。 */
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
-const MAP_FIELD = 'paramMap'
 /** 幂等 uuid 官方上限 36 位。 */
 const IDEMPOTENT_MAX = 36
 
@@ -51,8 +46,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'yingdao',
   name: '影刀 RPA',
   vendor: '影刀 RPA（YingDao，官网 yingdao.com）',
-  version: '1.0.0',
-  summary: '用 AK/SK 换 token 后启动影刀应用；异步 + 回调，参数映射到应用入参。',
+  version: '1.1.0',
+  summary: '用 AK/SK 换 token 后启动影刀应用；异步 + 回调，业务参数全部由「附加参数」显式配置。',
   status: 'stable',
   docs: {
     home: 'https://www.yingdao.com/yddoc/rpa/zh-CN/710488569666060288',
@@ -117,12 +112,14 @@ const descriptor: RpaVendorDescriptor = {
       help: '官方示例与默认值为 middle；完整枚举值页未取证，联调时核对。',
     },
     {
-      key: 'paramMap',
-      label: '参数映射',
-      type: 'map',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
       required: false,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '默认 room_name/content/at_name；须改成你影刀应用里真实入参名。',
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: '影刀应用入参全部在这里配置（默认不发任何业务参数）。参数名须与应用入参一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -147,8 +144,9 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'nameValueTypeArray',
-    mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'paramMap',
   },
   request: {
     method: 'POST',
@@ -178,12 +176,14 @@ const descriptor: RpaVendorDescriptor = {
     '回调无签名：只能当「有变化」的信号，不能用回调内容直接写业务状态（需查询接口二次确认）',
     '专有云地址官方未给出：baseUrl 必须可配置',
     '参数合计建议 ≤8000（专有云 6.0.0 前 3000）；waitTimeout 官方标注即将作废，本适配器不使用',
+    '业务参数默认不发；只有「附加参数」显式配置后才进入 params，请确认参数名与应用入参一致',
     '限流：job/start 10 次/秒；API 是否有企业版门槛官方未答复',
   ],
   notes: [
     'token 响应解析路径按 data.accessToken 约定（官方页面只明确响应含 expiresIn，未给完整 JSON 示例）→ 联调核对',
     'priority 可选值只核对到 middle（默认）；枚举值说明页未取证 → 联调核对',
     '回调是控制台全局单点配置（不能按任务区分目的地）；v1 只把 jobUuid 落库，不接收回调',
+    '2026-10-23（v1.1.0）：移除内置 room_name/content/at_name 与参数映射，统一改为「附加参数」；旧 paramMap 自动迁移。',
   ],
 }
 
@@ -193,24 +193,6 @@ function configText(ctx: RpaInvocationContext, key: string): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return ''
-}
-
-/** 三个语义参数位的取值（与旧八爪鱼口径一致：单聊没有触发对象名时回落会话名）。 */
-function semanticValue(record: RpaRecordContext, semantic: RpaSemantic): string {
-  if (semantic === 'room') return record.chatName
-  if (semantic === 'content') return record.text
-  return record.targetName !== '' ? record.targetName : record.chatName
-}
-
-/** 生成 `[{name, value, type:'str'}]`：key 可被配置里的 map 字段逐项覆盖。 */
-function mappedParams(ctx: RpaInvocationContext): Array<{ name: string; value: string; type: 'str' }> {
-  const raw = ctx.config[MAP_FIELD]
-  const overrides = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}
-  return MAPPING_TARGETS.map((target) => {
-    const custom = overrides[target.semantic]
-    const name = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
-    return { name, value: semanticValue(ctx.record, target.semantic), type: 'str' as const }
-  })
 }
 
 export const adapter: RpaVendorAdapter = {
@@ -230,7 +212,7 @@ export const adapter: RpaVendorAdapter = {
       robotUuid,
       // 幂等 uuid ≤36 位；用触发记录级 id 做一次创建防重（官方：重复请求只成功创建一次）。
       idempotentUuid: ctx.idempotencyKey.slice(0, IDEMPOTENT_MAX),
-      params: mappedParams(ctx),
+      params: resolveMapped(descriptor, ctx),
     }
     const group = configText(ctx, 'robotClientGroupUuid')
     const account = configText(ctx, 'accountName')

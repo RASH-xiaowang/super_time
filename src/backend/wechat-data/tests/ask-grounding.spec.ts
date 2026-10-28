@@ -313,6 +313,23 @@ describe('端到端：核对不通过会带着「具体哪个值不对」回炉�
     expect(r.answer).toContain('没有找到可据以回答的证据')
     expect(r.answer).not.toContain('3 笔')
   })
+
+  it('回炉沿用本轮系统提示，不切回旧的角色口径', async () => {
+    const runChat = vi.fn().mockResolvedValueOnce('合同金额是 12000 元 [1]。')
+    const result = await resolveGroundedAnswer({
+      mode: 'cited',
+      answer: '合同金额是 12000 元。',
+      citationCount: 1,
+      synthPrompt: '材料：合同金额 12000 元',
+      evidenceFor: () => ['合同金额 12000 元'],
+      allEvidence: ['合同金额 12000 元'],
+      systemPrompt: '统一角色提示',
+      runChat,
+    })
+    expect(result.repaired).toBe(true)
+    // 首答由调用方直接传入，只有回炉这一步会调用 runChat。
+    expect(runChat.mock.calls[0]?.[0]).toBe('统一角色提示')
+  })
 })
 
 describe('证据使用校验：有引用还必须真的使用材料', () => {

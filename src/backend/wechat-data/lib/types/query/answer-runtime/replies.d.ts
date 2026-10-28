@@ -15,4 +15,4 @@ export declare function insufficientReply(profile?: AnswerProfileId): string;
 /** 检索或模型链路暂时失败时的说明；必须与“没有数据”区分开。 */
 export declare function failedReply(profile?: AnswerProfileId): string;
 /** 请求在进入检索前就被范围门禁拦截时的可读原因。 */
-export declare function blockedReply(reason: string | undefined): string;
+export declare function blockedReply(reason: string | undefined, profile?: AnswerProfileId): string;

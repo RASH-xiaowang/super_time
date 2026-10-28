@@ -87,6 +87,7 @@
 }
 .muted { color: var(--nm-text-2); white-space: nowrap; }
 .ellipsis { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recordIdentityLink { display: inline-flex; min-width: 0; max-width: 100%; padding: 0; text-align: left; }
 
 /* 状态徽章：语义色浅底 + 深字，无发光。 */
 .badge {

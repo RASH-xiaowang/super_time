@@ -17,6 +17,7 @@ import { messagesMatchTalker } from './msg-scope.ts'
 import { pinScrollToBottom, useChatsPolling } from './chats-polling.ts'
 import { makeMsgRow } from './chats-msg-row.tsx'
 import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
+import { directChatEnterpriseName } from './enterprise-identity.ts'
 import type { GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsThreadInputs {
@@ -77,6 +78,17 @@ export interface useChatsThreadInputs {
   setWatermarkFrom: (list: readonly WechatMessage[]) => void
   view: ChatView
   watermarkRef: React.MutableRefObject<number>
+}
+
+/** Fill a direct chat's missing enterprise only after its messages are loaded. */
+function addDirectChatEnterprise(
+  current: WechatSession | null,
+  username: string,
+  messages: ReadonlyArray<WechatMessage>,
+): WechatSession | null {
+  if (current?.username !== username || current.enterpriseName) return current
+  const enterpriseName = directChatEnterpriseName(username, messages)
+  return enterpriseName ? { ...current, enterpriseName } : current
 }
 
 export function useChatsThread(inputs: useChatsThreadInputs) {
@@ -285,8 +297,8 @@ const openSessionAndLocate = useCallback(async (username: string, localId?: numb
       hit = findHit()
     }
     if (!sessionAlive(epoch, username)) return
-    setMessages(list)
-    setWatermarkFrom(list)
+    setCurSession(current => addDirectChatEnterprise(current, username, list))
+    setMessages(list); setWatermarkFrom(list)
     setSelfWxid(env.selfWxid ?? '')
     setHasMore(env.hasMore ?? false)
     setCursor(env.cursor ?? 0)

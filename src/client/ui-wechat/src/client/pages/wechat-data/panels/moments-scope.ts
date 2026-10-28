@@ -66,14 +66,19 @@ export function monthKeyOfSec(ts: number): string {
 /** 搜索命中：刻意比「作者/正文/地点」宽 —— 链接标题与 URL、公众号来源、点赞与评论的人都算。 */
 function matchesSearch(m: MomentItem, q: string): boolean {
   return m.author.toLowerCase().includes(q)
+    || (m.enterpriseName ?? '').toLowerCase().includes(q)
     || m.text.toLowerCase().includes(q)
     || m.location.toLowerCase().includes(q)
     || m.link_title.toLowerCase().includes(q)
     || (m.link_url ?? '').toLowerCase().includes(q)
     || (m.sourceNickName ?? '').toLowerCase().includes(q)
     || (m.publicUserName ?? '').toLowerCase().includes(q)
-    || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q))
-    || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q))
+    || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q) || (l.enterpriseName ?? '').toLowerCase().includes(q))
+    || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q)
+      || (c.enterpriseName ?? '').toLowerCase().includes(q)
+      || (c.to_nickname || c.to_username || '').toLowerCase().includes(q)
+      || (c.toEnterpriseName ?? '').toLowerCase().includes(q)
+      || c.content.toLowerCase().includes(q))
 }
 
 /** 媒体类型那一档；`text` 是「 neither 图 nor 视频 nor 链接」的补集。 */
@@ -145,7 +150,7 @@ export function insightCounts(moments: readonly MomentItem[]): MomentsInsight {
  * @returns `[显示名, 条数]`，按条数降序。
  */
 export function topAuthorRows(
-  full: Array<{ name: string; count: number }> | null,
+  full: Array<{ username?: string; name: string; count: number }> | null,
   moments: readonly MomentItem[],
 ): Array<[string, number]> {
   // 优先全量聚合：它反映真实排名，而「已加载子集」只反映翻到的那几页。
@@ -187,7 +192,7 @@ export function monthlyRows(
 export interface MomentsScopeInput {
   moments: readonly MomentItem[]
   criteria: MomentsCriteria
-  fullAuthors: Array<{ name: string; count: number }> | null
+  fullAuthors: Array<{ username?: string; name: string; enterpriseName?: string; count: number }> | null
   monthlySnap: MomentsMonthlySnapshot
   monthlySnapForAuthor: MomentsMonthlySnapshot
 }
@@ -202,6 +207,8 @@ export function useMomentsScope(input: MomentsScopeInput): {
   scoped: MomentItem[]
   insight: MomentsInsight
   topAuthors: Array<[string, number]>
+  authorEnterpriseNames: ReadonlyMap<string, string>
+  authorUsernames: ReadonlyMap<string, string>
   monthly: MonthlyRow[]
   monthMax: number
   monthlyReadError: string
@@ -214,6 +221,30 @@ export function useMomentsScope(input: MomentsScopeInput): {
   )
   const insight = useMemo(() => insightCounts(moments), [moments])
   const topAuthors = useMemo(() => topAuthorRows(fullAuthors, moments), [fullAuthors, moments])
+  const authorEnterpriseNames = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const author of fullAuthors ?? []) {
+      const enterpriseName = author.enterpriseName?.trim() ?? ''
+      if (enterpriseName !== '') out.set(author.name, enterpriseName)
+    }
+    for (const moment of moments) {
+      const enterpriseName = moment.enterpriseName?.trim() ?? ''
+      if (enterpriseName !== '' && !out.has(moment.author)) out.set(moment.author, enterpriseName)
+    }
+    return out
+  }, [fullAuthors, moments])
+  const authorUsernames = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const author of fullAuthors ?? []) {
+      const username = author.username?.trim() ?? ''
+      if (username !== '' && !out.has(author.name)) out.set(author.name, username)
+    }
+    for (const moment of moments) {
+      const username = moment.username?.trim() ?? ''
+      if (username !== '' && !out.has(moment.author)) out.set(moment.author, username)
+    }
+    return out
+  }, [fullAuthors, moments])
   /** 当前生效的那份月度快照（选中作者时换成作者版）。 */
   const monthlySnapActive = criteria.author ? monthlySnapForAuthor : monthlySnap
   const monthly = useMemo(
@@ -224,6 +255,8 @@ export function useMomentsScope(input: MomentsScopeInput): {
     scoped,
     insight,
     topAuthors,
+    authorEnterpriseNames,
+    authorUsernames,
     monthly,
     monthMax: Math.max(1, ...monthly.map((m) => m.count)),
     monthlyReadError: monthlySnapActive.readError ?? '',

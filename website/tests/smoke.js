@@ -261,7 +261,6 @@ function runDomPass(cfg) {
     const $ = s => D.querySelector(s);
     const $$ = s => Array.from(D.querySelectorAll(s));
     const click = el => el.dispatchEvent(new W.MouseEvent('click', { bubbles: true, cancelable: true }));
-    const toastTxt = () => ($('#toastTxt') || {}).textContent || '';
     await sleep(420);
 
     out.push('-- A1. 骨架与移动端元信息 --');
@@ -270,14 +269,23 @@ function runDomPass(cfg) {
     assert(/width=device-width/.test(vp), 'viewport 含 width=device-width');
     assert(/initial-scale=1/.test(vp), 'viewport 含 initial-scale=1');
     assert(/viewport-fit=cover/.test(vp), 'viewport 含 viewport-fit=cover（刘海屏安全区前提）');
-    ['home', 'highlights', 'features', 'solutions', 'tech', 'about', 'faq', 'contact']
+    assert(/^data:image\/svg\+xml/.test(($('link[rel="icon"]') || {}).href || ''), '内联 favicon 避免额外 404');
+    ['home', 'release', 'highlights', 'features', 'solutions', 'cases', 'tech', 'about', 'faq']
       .forEach(id => assert(!!D.getElementById(id), '存在区块 #' + id));
+    assert(!D.getElementById('contact') && !D.getElementById('form') && !D.getElementById('toast'),
+      '联系我们相关节点已移除');
+    assert($$('a[href="#contact"]').length === 0, '页面不再包含 #contact 链接');
+    assert(!!$('footer a[href^="mailto:"]'), '页脚保留邮箱联系入口');
+    assert(/v1\.1\.0/.test($('#release').textContent), '最新版本区块标注 v1.1.0');
+    assert(!!$('#release a[href$="/releases/tag/v1.1.0"]'), '最新版本直达 v1.1.0 Release');
+    assert(!!$('meta[property="og:title"]'), '包含 Open Graph 标题');
     const dvO = (HTML.match(/<div[ >]/g) || []).length, dvC = (HTML.match(/<\/div>/g) || []).length;
     assert(dvO === dvC, 'div 标签配平（' + dvO + ' / ' + dvC + '）');
 
     out.push('-- A2. 导航（折叠 + 抽屉） --');
-    assert($$('#navLinks a').length === 7, '桌面导航 7 个链接');
-    assert($$('#drawer a').length === 8, '抽屉 8 项（7 链接 + 1 CTA）');
+    const navLinks = $$('#navLinks a');
+    assert(navLinks.length === 8, '桌面导航 8 个链接');
+    assert($$('#drawer a').length === navLinks.length + 1, '抽屉 = 8 个链接 + 1 个 CTA');
     const dead = $$('a[href^="#"]').map(a => a.getAttribute('href'))
       .filter(h => h.length > 1 && !D.getElementById(h.slice(1)));
     assert(dead.length === 0, '页内锚点无死链（' + JSON.stringify(dead) + '）');
@@ -303,7 +311,7 @@ function runDomPass(cfg) {
     assert(counters.every(el => el.textContent !== '0'), '全部计数已滚动');
 
     out.push('-- A5. 核心功能分页 --');
-    assert($$('.tab').length === 4 && $$('.pane').length === 4, '4 个 tab / 4 个面板');
+    assert($$('.tab').length === 6 && $$('.pane').length === 6, '6 个 tab / 6 个面板');
     assert($('#p1').classList.contains('on') && $$('.pane.on').length === 1, '默认只展示 p1');
     const tabP2 = $('.tab[data-pane="p2"]');
     click(tabP2);
@@ -313,10 +321,16 @@ function runDomPass(cfg) {
     await sleep(420);
     const fills = $$('#p2 .fill').map(f => f.style.width);
     assert(fills.length === 4 && fills.every(w => w && w !== '0%'), '进度条已填充：' + JSON.stringify(fills));
+    const tabP6 = $('.tab[data-pane="p6"]');
+    click(tabP6);
+    assert(tabP6.classList.contains('on') && $('#p6').classList.contains('on'), '任务中心分页可切换');
+    await sleep(420);
+    const taskFills = $$('#p6 .fill').map(f => f.style.width);
+    assert(taskFills.length === 3 && taskFills[0] !== '0%', '任务中心分页进度条就绪');
 
     out.push('-- A6. FAQ 手风琴 --');
     const qs = $$('.q');
-    assert(qs.length === 4, '4 条 FAQ');
+    assert(qs.length === 7, '7 条 FAQ');
     click(qs[0].querySelector('button'));
     assert(qs[0].classList.contains('on') && qs[0].querySelector('.ans').style.maxHeight, '第 1 条展开并设了 maxHeight');
     click(qs[1].querySelector('button'));
@@ -324,21 +338,29 @@ function runDomPass(cfg) {
     click(qs[1].querySelector('button'));
     assert(!qs[1].classList.contains('on'), '再次点击可收起');
 
-    out.push('-- A7. 联系表单校验 --');
-    const form = $('#form');
-    const submit = () => form.dispatchEvent(new W.Event('submit', { bubbles: true, cancelable: true }));
-    submit();
-    assert(toastTxt() === '请填写称呼', '空提交拦称呼：' + toastTxt());
-    $('#f-name').value = '张三'; $('#f-mail').value = 'not-an-email';
-    submit();
-    assert(toastTxt() === '请填写有效的邮箱地址', '邮箱格式校验：' + toastTxt());
-    $('#f-mail').value = 'zhangsan@example.com';
-    submit();
-    assert(toastTxt() === '请先确认内容合规声明', '合规声明拦截：' + toastTxt());
-    $('#f-ok').checked = true;
-    submit();
-    assert(toastTxt().indexOf('已收到') === 0, '合法提交成功：' + toastTxt());
-    assert($('#f-name').value === '' && $('#toast').classList.contains('on'), '表单重置 + toast 显示');
+    out.push('-- A7. 客户案例（筛选 + 展开） --');
+    const caseCards = $$('.case-card');
+    assert(caseCards.length === 4, '4 个案例卡片');
+    assert(caseCards.every(c => c.querySelector('.case-client') && c.querySelector('.case-pain')
+      && c.querySelector('.case-solution') && c.querySelector('.case-effect')), '每张卡包含背景、痛点、方案与成效');
+    const teamFilter = $('.case-filter[data-filter="team"]');
+    click(teamFilter);
+    assert(teamFilter.classList.contains('on') && teamFilter.getAttribute('aria-pressed') === 'true',
+      '案例筛选状态与 aria-pressed 同步');
+    assert($$('.case-card:not([hidden])').length === 1, '筛选后仅显示 1 个咨询团队案例');
+    assert($('#caseCount').textContent.indexOf('1') !== -1, '案例数量同步更新');
+    click($('.case-filter[data-filter="all"]'));
+    assert($$('.case-card:not([hidden])').length === 4, '重置筛选后恢复 4 个案例');
+    const firstCase = $('.case-card');
+    const caseToggle = firstCase.querySelector('.case-toggle');
+    click(caseToggle);
+    assert(firstCase.classList.contains('open') && caseToggle.getAttribute('aria-expanded') === 'true',
+      '案例详情可展开且 aria-expanded 同步');
+    assert(firstCase.querySelector('.case-detail').getAttribute('aria-hidden') === 'false',
+      '展开后详情对辅助技术可见');
+    click(caseToggle);
+    assert(!firstCase.classList.contains('open') && caseToggle.getAttribute('aria-expanded') === 'false',
+      '案例详情可再次收起');
 
     out.push('-- A8. 运行时错误 --');
     const realA = pA.errs.filter(e => !/Not implemented/i.test(e));
@@ -373,11 +395,11 @@ function runDomPass(cfg) {
     const SPECS = [
       ['min-width:1600px', ['--maxw:1320px'], '超宽屏放宽容器'],
       ['max-width:1200px', ['.grid-3{'], '功能卡降两列'],
-      ['max-width:1100px', ['.nav-act .btn-ghost{display:none}', 'grid-template-columns:minmax(0,1fr)'], '收次要按钮 + 双栏降单栏'],
+      ['max-width:1100px', ['grid-template-columns:minmax(0,1fr)'], '双栏结构降单栏'],
       ['max-width:1024px', ['.nav-links{display:none}', '.burger{display:flex}'], '导航折叠为汉堡'],
       ['max-width:980px', ['.hide-sm{display:none}', '.mock-wrap{'], 'Hero 单栏 + 去掉强制换行'],
-      ['max-width:820px', ['.tabs{overflow-x:auto', 'grid-template-columns:minmax(0,1fr)'], '平板竖屏单列 + 分页横滑'],
-      ['max-width:640px', ['.form .row2{grid-template-columns:minmax(0,1fr)}'], '大屏手机单列表单'],
+      ['max-width:820px', ['.tabs{overflow-x:auto', '.case-grid{grid-template-columns:minmax(0,1fr)}'], '平板竖屏单列 + 案例单列 + 分页横滑'],
+      ['max-width:640px', ['.tech{grid-template-columns:minmax(0,1fr)}'], '大屏手机技术卡片单列'],
       ['max-width:480px', ['.hero h1{font-size'], '手机字号收敛'],
       ['max-width:360px', ['.stats{grid-template-columns:minmax(0,1fr)}'], '超小屏单列指标'],
       ['max-height:560px', [], '手机横屏压竖向留白'],
@@ -414,8 +436,10 @@ function runDomPass(cfg) {
       'backdrop-filter 标准与 -webkit- 版本成对（标准 ' + bfS + ' / 前缀 ' + bfW + '）—— iOS 15–17 Safari 只认前缀版');
     assert((CSS.match(/-webkit-text-size-adjust:100%/g) || []).length === 1
         && (CSS.match(/[^-]text-size-adjust:100%/g) || []).length === 1, 'text-size-adjust 双写');
-    assert((CSS.match(/mask:linear-gradient\(#000 0 0\) content-box/g) || []).length === 4,
-      'mask 同时提供标准与 -webkit- 版本（渐变描边卡在 Safari/Firefox 都不掉色）');
+    const maskStd = (CSS.match(/(?<!-webkit-)mask:linear-gradient\(#000 0 0\) content-box/g) || []).length;
+    const maskWebkit = (CSS.match(/-webkit-mask:linear-gradient\(#000 0 0\) content-box/g) || []).length;
+    assert(maskStd > 0 && maskStd === maskWebkit,
+      'mask 标准与 -webkit- 版本成对（' + maskStd + ' / ' + maskWebkit + '）');
     const bo = (CSS.match(/\{/g) || []).length, bc = (CSS.match(/\}/g) || []).length;
     assert(bo === bc, '样式表花括号配平（{ ' + bo + ' / } ' + bc + '）');
     assert((CSS.match(/@media/g) || []).length === SPLIT.media.length,
@@ -521,7 +545,7 @@ function runDomPass(cfg) {
     assert((CSS.match(/--navh:66px/) || []).length === 0, '无遗留的 66px 硬编码');
 
     out.push('-- E2. 硬编码宽度扫描（>320px 只允许出现在装饰层） --');
-    const DECOR_OK = ['#glow', '.aurora'];
+    const DECOR_OK = ['#glow', '.aurora', '.release-card::after'];
     const hardRules = [];
     const scan = rs => rs.forEach(x => {
       const m3 = x.decls.width && x.decls.width.match(/^(\d{3,})px$/);

@@ -23,17 +23,22 @@ import css from './moments-insights.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { MonthlyByYear } from './moments-monthly.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /** 一行「名称 + 数字」的紧凑列表项。 */
-function Row({ name, count, title, tone }: {
+function Row({ name, username, count, title, tone }: {
   name: string
+  username?: string
   count: React.ReactNode
   title?: string
   tone?: 'warn'
 }): React.JSX.Element {
   return (
     <div className={css.row} title={title}>
-      <span className={css.rowName}>{name}</span>
+      {username
+        ? <IdentityName className={css.rowName} name={name} username={username} size={20}>{name}</IdentityName>
+        : <span className={css.rowName}>{name}</span>}
       <span className={css.rowCount} data-tone={tone}>{count}</span>
     </div>
   )
@@ -114,7 +119,12 @@ export function MomentsInsightsPanel(): React.JSX.Element {
                   {data.likedBy.length === 0 ? <div className={css.empty}>暂无点赞数据</div> : (
                     <div className={css.list}>
                       {data.likedBy.slice(0, 5).map(r => (
-                        <Row key={r.username || r.nickname} name={r.nickname || r.username} count={r.count} />
+                        <Row
+                          key={r.username || r.nickname}
+                          name={withEnterprise(r.nickname || r.username, r.enterpriseName)}
+                          username={r.username}
+                          count={r.count}
+                        />
                       ))}
                     </div>
                   )}
@@ -124,7 +134,12 @@ export function MomentsInsightsPanel(): React.JSX.Element {
                   {data.commenters.length === 0 ? <div className={css.empty}>暂无评论数据</div> : (
                     <div className={css.list}>
                       {data.commenters.slice(0, 5).map(r => (
-                        <Row key={r.username || r.nickname} name={r.nickname || r.username} count={r.count} />
+                        <Row
+                          key={r.username || r.nickname}
+                          name={withEnterprise(r.nickname || r.username, r.enterpriseName)}
+                          username={r.username}
+                          count={r.count}
+                        />
                       ))}
                     </div>
                   )}

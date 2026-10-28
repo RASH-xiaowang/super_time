@@ -185,6 +185,11 @@ describe('ClawBot 前端接线', () => {
     expect(detail, '没有从消息行读取 run 的兼容入口').toContain('export function autoReplyRunOf')
     expect(detail, '详情卡没有复用统一运行信息的工具 / 证据展示').toContain('<AskRuntimeMeta')
     expect(detail, '知识库引用没有独立列表（无法核对来源）').toContain('citationName')
+    expect(detail, '消息引用仍然显示裸会话名').toContain('identityLabel(citation)')
+    expect(detail, '消息引用没有把真实 username 交给头像').toContain(
+      'username={citation.username} size={18} title={citationName(citation)}',
+    )
+    expect(detail, '引用区仍把 username 直接当正文输出').not.toMatch(/>\s*\{citation\.username\}\s*</)
     expect(style, '运行详情缺少样式（会变成裸 details）').toContain('.runDetail')
   })
 
@@ -202,8 +207,9 @@ describe('ClawBot 前端接线', () => {
       // 2026-10-18：第 5 参是上下文（最近对话 + 图片）；systemPrompt 仍是第 4 参。
       .toMatch(/ask:\s*async \(slot, text, kbId, systemPrompt(?:, context)?\)/)
     // ⚠️ 断言**完整表达式**而不是「字符串存在」：变异把回落逻辑删掉后常量名还在，咬不住。
-    expect(gw, '空提示词没回落到内置默认值 ⇒ 模型会写成报告腔')
-      .toContain("systemPromptOverride: systemPrompt.trim() !== '' ? systemPrompt : DEFAULT_CLAWBOT_SYSTEM_PROMPT,")
+    const promptOverride = /const systemPromptOverride = systemPrompt\.trim\(\) !== ''\s*\n\s*\? withClawbotPersonaRules\(systemPrompt\)\s*\n\s*: DEFAULT_CLAWBOT_SYSTEM_PROMPT/
+    expect(gw, '自定义提示词没追加固定人称规则，或空提示词没回落到内置默认值').toMatch(promptOverride)
+    expect(gw, '装配层没有把最终提示词传给 ask ⇒ 角色规则不生效').toContain('systemPromptOverride,')
     const askdeep = read('src', 'backend', 'wechat-data', 'src', 'remotes', 'askdeep.ts')
     expect(askdeep, 'askWechat 没有 systemPromptOverride 参数 ⇒ 提示词传不进来')
       .toContain('systemPromptOverride')
@@ -324,14 +330,14 @@ describe('ClawBot 前端接线', () => {
     expect(runtime, '自动回复 0 命中时没调模型 ⇒ 只会复读一句硬编码文案')
       .toMatch(/const answer = await gatedChat\(/)
     // 兜底提示词必须**明说「没有材料」**并要求不编造。
-    expect(prompt, '兜底提示词没明说「没有材料」').toContain('你**没有**任何可参考的材料')
+    expect(prompt, '兜底提示词没明说「没有材料」').toContain('本轮**没有**任何可参考的材料')
     expect(prompt, '兜底提示词没禁止编造').toContain('**绝对不要编造**具体事实')
     // 兜底提示词不许提「知识库 / 检索」这类词（对方不知道你在查什么）。
     expect(prompt, '兜底提示词没禁止提「知识库」这类词')
       .toContain('不要提「知识库」「检索」「材料」这类词')
     // 兜底提示词不许解释自己（真机实测：模型写了「（注：实在没有可引用的记录，就不编号了）」）。
     expect(prompt, '兜底提示词没禁止解释自己 ⇒ 模型会写「注：」「（不编号了）」这类元信息')
-      .toContain('**不要解释你自己**')
+      .toContain('**不要解释自己**')
     // ⚠️ 兜底提示词也必须禁角标（真机实测：3 次里 1 次冒出 `[1]`）——
     // 它是**用户消息**，比 system 更「近」，只在 system 里禁不够。
     // ⚠️ 断言要**限定在 `buildEmptyChatPrompt` 函数体内** —— 正常链路的聊天版规则里
@@ -343,8 +349,8 @@ describe('ClawBot 前端接线', () => {
     expect(emptyFn, '兜底提示词没禁 [n] 角标 ⇒ 模型会冒出角标（真机实测 3 次里 1 次）')
       .toContain('**不要标 [n] 角标**')
     // 兜底提示词也要禁「万能开场」与要求「先回应内容」（与默认提示词同口径）。
-    expect(emptyFn, '兜底提示词没禁「万能开场」').toContain('开场跟着对方的话走')
-    expect(emptyFn, '兜底提示词没要求「先回应对方说的内容」').toContain('先回应对方说的内容')
+    expect(emptyFn, '兜底提示词没禁「万能开场」').toContain('开场跟着聊天联系人的话走')
+    expect(emptyFn, '兜底提示词没要求「先回应聊天联系人说的内容」').toContain('先回应聊天联系人说的内容')
     // 手动问答必须**保持短路**（不编造聊天记录是硬底线）；运行时统一按证据状态决定是否生成。
     const answerRuntime = read('src', 'backend', 'wechat-data', 'src', 'query', 'answer-runtime', 'runtime.ts')
     expect(answerRuntime, '手动问答丢了无可避免的短路 ⇒ 模型会凭常识编造聊天记录')

@@ -219,18 +219,22 @@ export function LinkButton({ className, children, ...rest }: {
   )
 }
 
-/** 下拉选择（Radix Select 样式化）。 */export function Select({ value, onChange, options, placeholder = '请选择…', ariaLabel, onOpen }: {
+/** 下拉选择（Radix Select 样式化）。 */export function Select({ value, onChange, options, placeholder = '请选择…', ariaLabel, onOpen, valueContent }: {
   value: string
   onChange: (value: string) => void
   options: ReadonlyArray<{ value: string; label: React.ReactNode }>
   placeholder?: string
   ariaLabel?: string
   onOpen?: () => void
+  /** 仅为 Trigger 的当前选中值渲染自定义内容；选项列表仍保持纯文本。 */
+  valueContent?: React.ReactNode
 }): React.JSX.Element {
   return (
     <SelectPrimitive.Root value={value} onValueChange={onChange} onOpenChange={(open) => { if (open) onOpen?.() }}>
       <SelectPrimitive.Trigger className={css.selectTrigger} aria-label={ariaLabel}>
-        <SelectPrimitive.Value placeholder={placeholder} />
+        {valueContent === undefined
+          ? <SelectPrimitive.Value placeholder={placeholder} />
+          : <SelectPrimitive.Value placeholder={placeholder}>{valueContent}</SelectPrimitive.Value>}
         <SelectPrimitive.Icon>▾</SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>

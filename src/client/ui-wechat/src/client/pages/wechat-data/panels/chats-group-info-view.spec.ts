@@ -199,12 +199,14 @@ describe('搜索与空态', () => {
     expect(q('[class*="memberEmpty"]')).toBeNull()
   })
 
-  it('有命中 ⇒ 一人一颗 tile，title 是昵称', () => {
-    const five = MEMBERS.slice(0, 5)
+  it('有命中 ⇒ 一人一颗 tile，title 含企业名称与微信号', () => {
+    const five = MEMBERS.slice(0, 5).map((member, index) => (
+      index === 0 ? { ...member, enterpriseName: '示例企业' } : member
+    ))
     show({ memberQuery: '成员', filteredMembers: five, shownMembers: five })
     const tiles = qa(TILE)
     expect(tiles).toHaveLength(5)
-    expect(tiles[0]?.getAttribute('title')).toBe('成员0')
+    expect(tiles[0]?.getAttribute('title')).toBe('成员0（企业：示例企业）\nwxid_0')
   })
 })
 

@@ -201,17 +201,19 @@ export function compressContext(
     if (usedChars + cost > opts.maxChars && chunks.length > 0) break
     usedChars += cost
 
-    chunks.push({
-      username: d.username,
-      name: d.name,
-      anchor: {
-        name: d.name,
-        time: timeFull(d.create_time),
-        snippet: d.snippet || d.text.slice(0, 90),
+      chunks.push({
         username: d.username,
-        local_id: d.local_id,
-        ...(d.sender ? { sender: d.sender } : {}),
-      },
+        name: d.name,
+        anchor: {
+          name: d.name,
+          ...(d.enterpriseName ? { enterpriseName: d.enterpriseName } : {}),
+          time: timeFull(d.create_time),
+          snippet: d.snippet || d.text.slice(0, 90),
+          username: d.username,
+          local_id: d.local_id,
+          ...(d.sender ? { sender: d.sender } : {}),
+          ...(d.senderEnterpriseName ? { senderEnterpriseName: d.senderEnterpriseName } : {}),
+        },
       lines,
       score: r.score,
       pref: r.timePref,

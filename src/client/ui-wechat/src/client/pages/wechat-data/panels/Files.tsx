@@ -10,7 +10,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useWechatDataUpdated } from './hooks.tsx'
 import { useGridColumns } from './use-grid-columns.ts'
 import { AssetKpiBar, AssetMoreMenu, FileCell } from './files-cell.tsx'
-import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.ts'
+import { CAT_LABEL, fileDisplayName, fileKey, fileSource, fileSourceName, fileSourceUsername } from './files-naming.ts'
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
 import { fetchFileFullUrl, prefetchKeys, thumbWidthFor } from './files-thumbs.ts'
@@ -26,6 +26,7 @@ import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import { ListFilter, PanelAction } from './asset-ui.tsx'
+import { IdentityName } from './identity.tsx'
 
 /**
  * 文件面板的「导出」动作（W3-11.1）。
@@ -50,6 +51,22 @@ const FILE_MIN_COL_PX = 200
 const FILE_GRID_GAP_PX = 10
 /** 一格的估计高度（图 + 文件名 + 落款）；真实高度由 `measureElement` 回灌。 */
 const FILE_ROW_ESTIMATE_PX = 176
+
+/** One detail row with the source conversation avatar when a real username is available. */
+function FileSourceRow({ item }: { item: FileItem }): React.JSX.Element {
+  const name = fileSourceName(item) || '(未解析到)'
+  const username = fileSourceUsername(item)
+  return (
+    <div className={css.kvRow}>
+      <span className={css.kvKey}>来源会话</span>
+      <span className={css.kvVal}>
+        {username
+          ? <IdentityName name={name} username={username} size={22}>{name}</IdentityName>
+          : name}
+      </span>
+    </div>
+  )
+}
 
 /**
  * Render the files panel.
@@ -314,7 +331,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
             <div className={css.kvRow}><span className={css.kvKey}>类目</span><span className={css.kvVal}>{CAT_LABEL[detail.category] || detail.category}</span></div>
             <div className={css.kvRow}><span className={css.kvKey}>大小</span><span className={css.kvVal}>{fmtBytes(detail.fileSize || 0)}</span></div>
             <div className={css.kvRow}><span className={css.kvKey}>修改时间</span><span className={css.kvVal}>{fmtDateTimeSec(detail.modifyTime)}</span></div>
-            <div className={css.kvRow}><span className={css.kvKey}>来源会话</span><span className={css.kvVal}>{detail.sessionName || detail.sourceTalker || '(未解析到)'}</span></div>
+            <FileSourceRow item={detail} />
             <div className={css.kvRow}><span className={css.kvKey}>来源月份</span><span className={css.kvVal}>{detail.sourceMonth || '(未解析到)'}</span></div>
             <div className={css.kvRow}><span className={css.kvKey}>MD5</span><span className={`${css.kvVal} ${css.kvMono}`}>{detail.md5 || '(空)'}</span></div>
             <div className={kitCss.textCaption}>

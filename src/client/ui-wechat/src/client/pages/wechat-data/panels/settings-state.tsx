@@ -411,9 +411,9 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     void apiGetWechatPathConfig().then(setPathConfigPath)
   }, [])
 
-  const refreshWhisper = async (): Promise<void> => {
+  const refreshWhisper = async (force = false): Promise<void> => {
     const cached = whisperStatusCache
-    if (cached && Date.now() - cached.at < SETTINGS_SCAN_TTL_MS) {
+    if (!force && cached && Date.now() - cached.at < SETTINGS_SCAN_TTL_MS) {
       setWhisperStatus(cached.status)
       return
     }
@@ -505,7 +505,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       const r = await apiDownloadWhisperModel({ model: m.id, jobId })
       if (r.ok) {
         setWhisperDirMsg({ kind: 'ok', text: `✓ 模型 ${m.name} 下载完成${r.bytes ? `（${fmtBytes(r.bytes)}）` : ''}，已就绪` })
-        await refreshWhisper()
+        await refreshWhisper(true)
       } else if (isCanceled(r.error)) {
           setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
       } else {
@@ -582,7 +582,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     try {
       const r = await apiInstallWhisperEngine({ jobId })
       if (r.ok) {
-        await refreshWhisper()
+        await refreshWhisper(true)
         setWhisperDirMsg({ kind: 'ok', text: '✓ whisper.cpp 引擎已就绪，可开始批量转写' })
       } else if (isCanceled(r.error)) {
         setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
@@ -616,7 +616,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       if (r.ok) {
         setSaveMsg({ kind: 'ok', text: '✓ 配置已保存' })
         await load()
-        await refreshWhisper()
+        await refreshWhisper(true)
       }
       else setSaveMsg({ kind: 'err', text: '✗ ' + (r.error ?? '保存失败') })
     } catch (e) {

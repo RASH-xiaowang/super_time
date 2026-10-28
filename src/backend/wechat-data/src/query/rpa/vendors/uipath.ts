@@ -17,23 +17,17 @@
  * 作业请求 jobs-requests、构建 API 请求 building-api-requests、鉴权 authentication-methods、
  * PAT personal-access-tokens、外部应用 OAuth、Webhooks、限流 rate-limits。
  */
-import type { RpaMappingTarget, RpaSemantic, RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
 import type {
   RpaHttpRequest,
   RpaHttpResponse,
   RpaInvocationContext,
-  RpaRecordContext,
   RpaSendResult,
   RpaVendorAdapter,
 } from '../types.ts'
 
-/** 三个语义参数位 → `InputArguments` 里 JSON 字段名的默认映射。 */
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
-const MAP_FIELD = 'inputArgumentsMap'
 /** 官方输入参数 JSON 文本上限（含名称/转义/空格/方括号/值）。 */
 const INPUT_ARGUMENTS_MAX = 10_000
 
@@ -66,8 +60,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'uipath',
   name: 'UiPath Orchestrator',
   vendor: 'UiPath（Orchestrator）',
-  version: '1.0.0',
-  summary: '用 StartJobs 启动作业；PAT 或 OAuth 外部应用鉴权，返回 Job.Key 供轮询核对。',
+  version: '1.1.0',
+  summary: '用 StartJobs 启动作业；PAT 或 OAuth 外部应用鉴权，业务参数全部由「附加参数」显式配置。',
   status: 'stable',
   docs: {
     home: 'https://docs.uipath.com/orchestrator/automation-cloud/latest/api-guide/jobs-requests',
@@ -181,12 +175,14 @@ const descriptor: RpaVendorDescriptor = {
       help: '与 ModernJobsCount 同用（官方示例 1）。',
     },
     {
-      key: 'inputArgumentsMap',
-      label: '参数映射',
-      type: 'map',
-      required: true,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '映射成 InputArguments 的 JSON 字段名（键名须与 UiPath 流程入参一致）。',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: 'InputArguments 全部在这里配置（默认 {}，不发任何业务参数）。参数名须与 UiPath 流程入参一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -219,8 +215,9 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'jsonStringObject',
-    mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'inputArgumentsMap',
   },
   request: {
     method: 'POST',
@@ -259,11 +256,13 @@ const descriptor: RpaVendorDescriptor = {
     'Cloud 与 Standalone 私有化的 URL/租户头差异官方未给原文：需客户实例联调',
     'PAT 不适用目录/SAML 用户；企业客户建议 OAuth 外部应用',
     'InputArguments JSON 文本 ≤10,000 字符；Jobs 列表端点有限流（单作业端点不限）',
+    '业务参数默认不发；只有「附加参数」显式配置后才进入 InputArguments，请确认键名与流程入参一致',
   ],
   notes: [
     '文件夹头用 X-UIPATH-FolderKey（而非 X-UIPATH-OrganizationUnitId）：后者要求 Int64 FolderId，本产品配置的是 FolderKey。',
     'Standalone：baseUrl 填到 Orchestrator 根（不含 /odata），URL 按 /odata/Jobs/… 拼接；该假设官方未给原文，需联调核对。',
     'strategy=All 不适用于新式文件夹；strategy=Specific 需要 RobotIds（本版未提供字段），默认 ModernJobsCount。',
+    '2026-10-23（v1.1.0）：移除内置参数映射，统一改为「附加参数」；旧 inputArgumentsMap 自动迁移。',
   ],
 }
 
@@ -273,26 +272,6 @@ function configText(ctx: RpaInvocationContext, key: string): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return ''
-}
-
-/** 三个语义参数位的取值（单聊没有触发对象名时回落会话名，与旧实现同口径）。 */
-function semanticValue(record: RpaRecordContext, semantic: RpaSemantic): string {
-  if (semantic === 'room') return record.chatName
-  if (semantic === 'content') return record.text
-  return record.targetName !== '' ? record.targetName : record.chatName
-}
-
-/** `InputArguments` 的对象形态：映射键可被配置里的 map 字段逐项覆盖。 */
-function inputArguments(ctx: RpaInvocationContext): Record<string, string> {
-  const raw = ctx.config[MAP_FIELD]
-  const overrides = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}
-  const out: Record<string, string> = {}
-  for (const target of MAPPING_TARGETS) {
-    const custom = overrides[target.semantic]
-    const key = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
-    out[key] = semanticValue(ctx.record, target.semantic).trim()
-  }
-  return out
 }
 
 /**
@@ -341,7 +320,9 @@ export const adapter: RpaVendorAdapter = {
     if (!onprem && (org === '' || tenant === '')) {
       throw new Error('UiPath 投递失败：Cloud 部署必须配置组织名与租户名')
     }
-    const argumentsText = JSON.stringify(inputArguments(ctx))
+    const mapped = resolveMapped(descriptor, ctx)
+    const argumentsText = typeof mapped === 'string' ? mapped : JSON.stringify(mapped)
+    if (argumentsText === undefined) throw new Error('UiPath 投递失败：InputArguments 无法序列化')
     if (argumentsText.length > INPUT_ARGUMENTS_MAX) {
       throw new Error('UiPath 投递失败：InputArguments 超过 10000 字符上限')
     }

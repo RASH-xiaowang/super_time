@@ -8,6 +8,7 @@ interface PrivacyCategory {
 interface PrivacySample {
     username: string;
     name: string;
+    enterpriseName?: string;
     local_id: number;
     ts: number;
     time: string;
@@ -16,6 +17,7 @@ interface PrivacySample {
 interface PrivacyRank {
     username: string;
     name: string;
+    enterpriseName?: string;
     count: number;
 }
 /** 隐私体检快照（`queryPrivacyScan` 的返回形状）。 */

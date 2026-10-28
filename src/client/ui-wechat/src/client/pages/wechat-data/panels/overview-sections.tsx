@@ -42,6 +42,8 @@ import { fmtBytes } from '../utils/format.ts'
 import { deltaArrow, WorldMapPanel } from './overview-export.ts'
 import { AuthorAvatar, CalendarHeatmapGate, CARDS, MSG_BUCKETS, OvIcon, OvSection } from './overview-parts.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /**
  * KPI 条：4 项 kit `StatCard`（手机 2 列 / ≥sm 4 列）。
@@ -115,9 +117,13 @@ export function WorldMapBody(): React.JSX.Element {
 }
 
 /** 关系浓度 + 好友地区（世界地图）+ 对话 Top。 */
-export function RelationSection({ ins, onOpenChat }: { ins: OverviewInsights; onOpenChat: (username: string) => void }): React.JSX.Element {
+export function RelationSection({ ins, onOpenChat, className }: {
+  ins: OverviewInsights
+  onOpenChat: (username: string) => void
+  className?: string
+}): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-6" icon="relation" title="关系与地区">
+    <OvSection className={className} icon="relation" title="关系与地区">
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.total}</span><span className={kitCss.textCaption}>好友总数</span></div>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.active}</span><span className={kitCss.textCaption}>有消息往来</span></div>
@@ -128,9 +134,18 @@ export function RelationSection({ ins, onOpenChat }: { ins: OverviewInsights; on
       {ins.relations.top.length > 0 && (
         <div className={css.topList}>
           {ins.relations.top.slice(0, 8).map((t, i) => (
-            <button key={t.username} type="button" className={css.topRow} onClick={() => { onOpenChat(t.username) }} title={`与「${t.name}」的对话`}>
+            <button key={t.username} type="button" className={css.topRow} onClick={() => { onOpenChat(t.username) }} title={`与「${withEnterprise(t.name, t.enterpriseName)}」的对话`}>
               <span className={css.topRank}>{i + 1}</span>
-              <span className={css.topName}>{t.name}</span>
+              <IdentityName
+                className={css.topIdentity}
+                textClassName={css.topName}
+                name={t.name}
+                username={t.username}
+                size={24}
+                title={t.username}
+              >
+                {withEnterprise(t.name, t.enterpriseName)}
+              </IdentityName>
               <div className={css.topTrack}><div className={css.topFill} style={{ width: `${(t.count / Math.max(1, ...ins.relations.top.map(x => x.count))) * 100}%` }} /></div>
               <span className={css.topCount}>{t.count} 条</span>
             </button>
@@ -142,11 +157,15 @@ export function RelationSection({ ins, onOpenChat }: { ins: OverviewInsights; on
 }
 
 /** 内容构成（收发/类型）与内容资产。 */
-export function ContentAssetsSection({ ins, official }: { ins: OverviewInsights; official: number }): React.JSX.Element {
+export function ContentAssetsSection({ ins, official, className }: {
+  ins: OverviewInsights
+  official: number
+  className?: string
+}): React.JSX.Element {
   const total = Math.max(1, ins.messages.total)
   const sentPct = Math.min(100, Math.max(0, Math.round((ins.messages.sent / total) * 100)))
   return (
-    <OvSection className="col-12 col-xl-6" icon="content" title="内容构成与资产">
+    <OvSection className={className} icon="content" title="内容构成与资产">
       <div className={css.mixLine}>
         <span>消息 <b>{ins.messages.total.toLocaleString()}</b> 条</span>
         <span>发出 <b>{ins.messages.sent.toLocaleString()}</b></span>
@@ -190,14 +209,15 @@ export function ContentAssetsSection({ ins, official }: { ins: OverviewInsights;
 }
 
 /** 存储构成 Top N（按体积排序）+ 媒体占用/超大文件。 */
-export function StorageCompositionSection({ categories, stor, largeFileCount, onGo }: {
+export function StorageCompositionSection({ categories, stor, largeFileCount, onGo, className }: {
   categories: OverviewSnapshot['storage']['categories']
   stor: StorageSnapshot | null
   largeFileCount: number
   onGo: (tab: string) => void
+  className?: string
 }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-6" icon="storage" title={`存储构成 Top ${categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('storage') }}>详情 →</button>}>
+    <OvSection className={className} icon="storage" title={`存储构成 Top ${categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('storage') }}>详情 →</button>}>
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{fmtBytes(stor?.total_size ?? 0)}</span><span className={kitCss.textCaption}>媒体占用</span></div>
         <div className={css.metric}><span className={css.metricValue}>{(stor?.total_count ?? 0).toLocaleString()}</span><span className={kitCss.textCaption}>媒体项</span></div>
@@ -218,10 +238,14 @@ export function StorageCompositionSection({ categories, stor, largeFileCount, on
 }
 
 /** 资金快照。 */
-export function LedgerSection({ ledger, onGo }: { ledger: LedgerSnapshot | null; onGo: (tab: string) => void }): React.JSX.Element {
+export function LedgerSection({ ledger, onGo, className }: {
+  ledger: LedgerSnapshot | null
+  onGo: (tab: string) => void
+  className?: string
+}): React.JSX.Element {
   const ls = ledger?.summary
   return (
-    <OvSection className="col-12 col-xl-6" icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('ledger') }}>详情 →</button>}>
+    <OvSection className={className} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('ledger') }}>详情 →</button>}>
       {ls ? (
         <div className={css.metricGrid} data-st-ledger-money="1">
           <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
@@ -296,10 +320,10 @@ export function MomentsAuthorsSection({ authors, onOpenMoments, onGo }: { author
       {authors.length === 0 ? <div className={kitCss.emptyInline}>暂无朋友圈活跃作者</div> : (
         <div className={css.authors}>
           {authors.slice(0, 10).map((a, i) => (
-            <button key={a.username} type="button" className={css.author} onClick={() => { onOpenMoments(a.username) }} title={`${a.name} 共发布 ${a.posts} 条`}>
+            <button key={a.username} type="button" className={css.author} onClick={() => { onOpenMoments(a.username) }} title={`${withEnterprise(a.name, a.enterpriseName)} 共发布 ${a.posts} 条`}>
               <span className={css.authorRank}>{i + 1}</span>
               <LazyMount placeholder={<span className={css.authorAvatarFallback}>{(a.name || '?').slice(0, 1)}</span>} rootMargin="300px 0px"><AuthorAvatar author={a} /></LazyMount>
-              <span className={css.authorName}>{a.name}</span>
+              <span className={css.authorName}>{withEnterprise(a.name, a.enterpriseName)}</span>
               <span className={css.authorPosts}>{a.posts} 条</span>
             </button>
           ))}

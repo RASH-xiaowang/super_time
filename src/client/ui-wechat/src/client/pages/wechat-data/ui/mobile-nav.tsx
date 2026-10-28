@@ -35,7 +35,7 @@ const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
  *
  * ## 为什么要有白名单，而不是「列全部可见条目」
  *
- * 桌面侧栏有 16 个可见条目，那是**桌面**的信息架构：屏幕宽、鼠标精确、可以并排看。
+ * 桌面侧栏有 17 个可见条目（含设置），那是**桌面**的信息架构：屏幕宽、鼠标精确、可以并排看。
  * 手机上照搬会得到一张 16 格的 sheet，其中一半是**在手机上读不动或没意义**的：
  *
  *   · `oplog`（操作日志）—— 审计长表，手机上横向溢出 104 处（实测 640px 表格塞进 556px 视口），
@@ -43,8 +43,8 @@ const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
  *   · `annual` / `period`（年度 / 周期报告）—— 长报告，手机上读不动（它们本来就是 hidden，
  *     由「总结」页内的分段条到达，手机沿用同一口径）。
  *
- * 保留的 9 条都是**手机上真的会看**的：朋友圈、收藏与表情、文件与存储、资金往来、
- * 群聊分析、知识库、总结、待办日程、ClawBot。
+ * 保留的 10 条都是**手机上真的会看**的：朋友圈、收藏与表情、文件与存储、资金往来、
+ * 群聊分析、知识库、总结、待办日程、ClawBot、客户画像与标签。
  *
  * ⚠️ 2026-10-17：`momentsinsights`（并入朋友圈）、`privacy`（并入设置）、`calls`（并入聊天会话）
  * 三块已转 hidden —— 它们不再占任何导航条目，由父项的分段条到达，所以从白名单里去掉。
@@ -58,7 +58,7 @@ const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
  * 写错 tab 名会静默少一格，那条判据就是防这个的。
  */
 const PHONE_KEEP: readonly WechatTab[] = [
-  'moments', 'favorites', 'files', 'ledger', 'groupinsights',
+  'moments', 'portraits', 'favorites', 'files', 'ledger', 'groupinsights',
   'kb', 'dailysummary', 'tasks', 'clawbot',
 ]
 
@@ -74,6 +74,9 @@ const PHONE_HIDDEN: Readonly<Record<string, string>> = Object.freeze({
   // 与旧「聊天素材收集任务」同为仅桌面端方法（见 `backend/http-remote-policy.js` 的 B/D 族）。
   // 放进手机端只会得到一个「能看列表却点不动编辑/检查」的半死界面，故整项留在桌面。
   taskinfo: '任务信息的写侧（新建/编辑/扫描/回调投递）只允许桌面端（本机任务库 + 用户配置的回调出网）；手机端只能看不能改，故整项不进手机导航',
+  // 2026-10-27：消息列表的规则写入、手动插入、重发与带令牌 Webhook 地址同样只开桌面端。
+  // 手机端虽然能只读记录，但没有可执行动作的台账不值得占「更多」里的固定一格。
+  messagelist: '消息列表的写规则、手动插入、重发与 Webhook 地址只允许桌面端；手机端即使能读记录也无法处理，故整项不进手机导航',
 })
 
 /** 把 NAV_GROUPS 压平成 tab → 条目 的查找表（图标与标签都从这里取，不另写一份）。 */

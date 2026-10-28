@@ -27,6 +27,8 @@ export interface ConfigSnapshot {
 export interface PrivacySample {
   username: string
   name: string
+  /** 企业微信联系人的企业名称。 */
+  enterpriseName?: string
   local_id: number
   ts: number
   time: string
@@ -38,8 +40,8 @@ export interface PrivacySnapshot {
   categories: Array<{ key: string; label: string; count: number; icon: string; samples: PrivacySample[] }>
   total_hits: number
   involved_sessions: number
-  top_contacts: Array<{ username: string; name: string; count: number }>
-  top_groups: Array<{ username: string; name: string; count: number }>
+  top_contacts: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
+  top_groups: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
 }
 
 /** Graph snapshot (edges are derived client-side from group_codes). */
@@ -56,12 +58,14 @@ export interface GraphSnapshot {
   remark_groups?: Array<{
     key: string
     total: number
-    members: Array<{ username: string; name: string; is_friend: boolean; msg_count: number }>
+    members: Array<{ username: string; name: string; enterpriseName?: string; is_friend: boolean; msg_count: number }>
   }>
   nodes: Array<{
     id: string
     label: string
     kind: string
+    /** 企业微信联系人的企业名称；群、公众号与本人节点不设置。 */
+    enterpriseName?: string
     is_friend?: boolean
     msg_count?: number
     group_count?: number
@@ -71,7 +75,7 @@ export interface GraphSnapshot {
     avatar_url?: string
     /** 备注里的「班级/批次」键（`宜州一中404陈泳达` → `宜州一中404`），用户自建的组织维度。 */
     remark_group?: string
-    shared_members?: Array<{ username: string; name: string; is_friend: boolean; msg_count: number }>
+    shared_members?: Array<{ username: string; name: string; enterpriseName?: string; is_friend: boolean; msg_count: number }>
   }>
   edges: Array<{ source: string; target: string; weight: number }>
   summary?: {
@@ -83,7 +87,7 @@ export interface GraphSnapshot {
     contact_book_members?: number
     selected_contacts?: number
     selected_groups?: number
-    top_relations?: Array<{ username: string; name: string; msg_count: number }>
+    top_relations?: Array<{ username: string; name: string; enterpriseName?: string; msg_count: number }>
   }
 }
 
@@ -130,7 +134,7 @@ export interface OverviewInsights {
     active: number
     silent: number
     groupsWithMsg: number
-    top: Array<{ username: string; name: string; count: number }>
+    top: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
   }
   moments: { total: number; images: number; videos: number; likes: number; comments: number }
   assets: { favorites: number; emoticons: number; files: number; fileBytes: number; mediaItems: number; mediaBytes: number }
@@ -166,10 +170,21 @@ export interface SearchHit {
   create_time: number
   local_id: number
   name: string
+  /** 企业微信会话对应的企业名称（普通会话不返回）。 */
+  enterpriseName?: string
   time: string
   snippet: string
   /** 群聊里这条消息的发送者显示名（单聊为空）。 */
   sender?: string
+  /**
+   * 群聊里这条消息发送者的原始 username（wxid）。
+   *
+   * `sender` 是给人看的显示名，不能拿去取头像：同名群成员会命中同一张图。
+   * 单聊或原始前缀缺失时不返回。
+   */
+  sender_username?: string
+  /** 群聊发送者所属企业名称（企业微信成员且本机可解析时返回）。 */
+  senderEnterpriseName?: string
   /** BM25 相关度（越大越相关；仅自建索引路径提供）。 */
   score?: number
 }

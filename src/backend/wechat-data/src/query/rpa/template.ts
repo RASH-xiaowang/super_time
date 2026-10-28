@@ -28,6 +28,8 @@ import type {
   RpaVendorDescriptor,
 } from '../../types-rpa.ts'
 import type { RpaHttpRequest, RpaInvocationContext, RpaRecordContext } from './types.ts'
+import { firstImageUrlOf, imagesJsonOf } from './media-links.ts'
+import { validateParamListField } from './param-validation.ts'
 
 /** 三个语义参数位的中文名（缺映射值时的错误文案）。 */
 const SEMANTIC_LABELS: Record<RpaSemantic, string> = {
@@ -36,47 +38,8 @@ const SEMANTIC_LABELS: Record<RpaSemantic, string> = {
   at: '触发对象',
 }
 
-/** 附加参数的全部值来源（描述符可用 `field.paramSources` 收窄子集）。 */
-const ALL_PARAM_SOURCES: readonly RpaParamSource[] = [
-  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'fixed', 'template',
-]
-
-/** 附加参数「值来源」的中文名（校验错误与文档共用同一套字面量）。 */
-const PARAM_SOURCE_LABELS: Record<RpaParamSource, string> = {
-  room: '会话名',
-  content: '触发文本',
-  at: '触发对象',
-  taskName: '任务名',
-  keyword: '触发关键词',
-  triggeredAt: '触发时间',
-  chatType: '会话类型',
-  taskId: '任务 id',
-  recordId: '触发记录 id',
-  fixed: '固定值',
-  template: '自定义模板',
-}
-
-/**
- * 自定义模板允许引用的字段（白名单，防止把凭据/无关上下文带进参数）。
- * 只允许 `${record.<字段>}` 与 `${task.<字段>}`，未知字段在保存时报错。
- */
-const TEMPLATE_ALLOWED_PATHS: Readonly<Record<'record' | 'task', readonly string[]>> = {
-  record: [
-    'chatName', 'targetName', 'targetUsername', 'username', 'keyword', 'text',
-    'chatType', 'triggeredAt',
-  ],
-  task: ['name', 'id'],
-}
-
 /** 地址类字段的最大长度（与旧 Webhook 回调地址口径一致）。 */
 const URL_FIELD_MAX = 2048
-/** 附加参数名最大长度。 */
-const PARAM_NAME_MAX = 64
-/** 固定值最大长度。 */
-const PARAM_VALUE_MAX = 2048
-/** 自定义模板最大长度。 */
-const PARAM_TEMPLATE_MAX = 512
 /** 整值占位符：模板值恰好等于一个 `${root.path}` 时整体替换（保留对象/数组/数字）。 */
 const WHOLE_PLACEHOLDER = /^\$\{([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\}$/
 /** 字符串中间的占位符。 */
@@ -165,6 +128,42 @@ export function normalizeConfigInput(raw: unknown): RpaTriggerConfig {
     const sanitized = sanitizeConfigValue(item)
     if (sanitized !== undefined) out[key] = sanitized
   }
+  return out
+}
+
+/**
+ * 旧版 `map` 配置 → 附加参数。
+ *
+ * 只在 `extrasField` **完全不存在**时迁移；如果新字段已经是空数组，表示用户已显式清空，
+ * 不能再用旧键把它恢复出来。转换后删除旧键，保存/派发都只看到新形态。
+ * @param descriptor - 厂商描述符。
+ * @param config - 原始配置。
+ * @returns 迁移后的新配置（不修改入参）。
+ */
+export function migrateLegacyMapConfig(
+  descriptor: RpaVendorDescriptor,
+  config: RpaTriggerConfig,
+): RpaTriggerConfig {
+  const legacyField = descriptor.mapping.legacyMapField
+  const extrasField = descriptor.mapping.extrasField
+  if (legacyField === undefined || extrasField === undefined || config[extrasField] !== undefined) {
+    return { ...config }
+  }
+  const legacy = config[legacyField]
+  if (!isRecord(legacy)) return { ...config }
+  const defaults: Record<RpaSemantic, string> = {
+    room: 'room_name',
+    content: 'content',
+    at: 'at_name',
+  }
+  const entries: RpaParamEntry[] = []
+  for (const semantic of ['room', 'content', 'at'] as const) {
+    const custom = legacy[semantic]
+    const name = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : defaults[semantic]
+    entries.push({ name, source: semantic })
+  }
+  const out: RpaTriggerConfig = { ...config, [extrasField]: entries }
+  delete out[legacyField]
   return out
 }
 
@@ -362,7 +361,8 @@ export function validateVendorConfig(
 ): { config: RpaTriggerConfig; errors: string[] } {
   const out = defaultConfigFor(descriptor)
   const errors: string[] = []
-  const raw: Record<string, unknown> = isRecord(config) ? config : {}
+  const migrated = isRecord(config) ? migrateLegacyMapConfig(descriptor, config) : {}
+  const raw: Record<string, unknown> = migrated
   for (const field of configFieldList(descriptor)) {
     const provided = raw[field.key]
     if (provided === undefined) continue
@@ -416,105 +416,6 @@ function dropExtrasCollidingWithMapping(
     return false
   })
   config[extrasField] = kept
-}
-
-/**
- * 校验并归一化「附加参数」列表。
- *
- * 规则：参数名非空/去重/不得与语义映射键重名（后者见 {@link dropExtrasCollidingWithMapping}）；
- * `source` 必须在描述符允许集合内；`fixed` 必须有固定值；`template` 必须非空且只引用
- * 白名单字段（`${record.…}` / `${task.…}`）。空列表合法。
- */
-function validateParamListField(field: RpaField, raw: unknown, errors: string[]): RpaParamEntry[] | undefined {
-  if (!Array.isArray(raw)) {
-    errors.push(field.label + ' 必须是参数列表')
-    return undefined
-  }
-  const max = field.maxItems ?? 50
-  if (raw.length > max) errors.push(field.label + ' 最多 ' + String(max) + ' 条')
-  const allowed = new Set<RpaParamSource>(field.paramSources ?? ALL_PARAM_SOURCES)
-  const out: RpaParamEntry[] = []
-  const seen = new Set<string>()
-  raw.forEach((item, index) => {
-    const label = field.label + ' 第 ' + String(index + 1) + ' 项'
-    if (out.length >= max) return
-    if (!isRecord(item)) {
-      errors.push(label + '格式不正确')
-      return
-    }
-    const name = typeof item['name'] === 'string' ? item['name'].trim() : ''
-    const source = typeof item['source'] === 'string' ? item['source'] as RpaParamSource : undefined
-    if (name === '') {
-      errors.push(label + '缺少参数名')
-      return
-    }
-    if (name.length > PARAM_NAME_MAX) {
-      errors.push(label + '参数名过长（最多 ' + String(PARAM_NAME_MAX) + ' 字符）')
-      return
-    }
-    const lower = name.toLowerCase()
-    if (seen.has(lower)) {
-      errors.push(label + '参数名重复：' + name)
-      return
-    }
-    if (source === undefined || !ALL_PARAM_SOURCES.includes(source)) {
-      errors.push(label + '值来源无效')
-      return
-    }
-    if (!allowed.has(source)) {
-      errors.push(label + '不支持的值来源：' + PARAM_SOURCE_LABELS[source])
-      return
-    }
-    const entry: RpaParamEntry = { name, source }
-    if (source === 'fixed') {
-      const fixed = typeof item['fixedValue'] === 'string' ? item['fixedValue'].trim() : ''
-      if (fixed === '') {
-        errors.push(label + '选择固定值时必须填写值')
-        return
-      }
-      if (fixed.length > PARAM_VALUE_MAX) {
-        errors.push(label + '固定值过长（最多 ' + String(PARAM_VALUE_MAX) + ' 字符）')
-        return
-      }
-      entry.fixedValue = fixed
-    } else if (source === 'template') {
-      const template = typeof item['template'] === 'string' ? item['template'].trim() : ''
-      const valid = validateParamTemplate(template, label, errors)
-      if (valid === undefined) return
-      entry.template = valid
-    }
-    seen.add(lower)
-    out.push(entry)
-  })
-  return out
-}
-
-/** 自定义模板校验：只允许 `${record.<白名单字段>}` / `${task.<白名单字段>}`。 */
-function validateParamTemplate(value: string, label: string, errors: string[]): string | undefined {
-  if (value === '') {
-    errors.push(label + '选择自定义模板时必须填写模板')
-    return undefined
-  }
-  if (value.length > PARAM_TEMPLATE_MAX) {
-    errors.push(label + '自定义模板过长（最多 ' + String(PARAM_TEMPLATE_MAX) + ' 字符）')
-    return undefined
-  }
-  for (const match of value.matchAll(/\$\{([^}]*)\}/g)) {
-    const expr = (match[1] ?? '').trim()
-    const dot = expr.indexOf('.')
-    const root = dot === -1 ? expr : expr.slice(0, dot)
-    const rest = dot === -1 ? '' : expr.slice(dot + 1)
-    if (root !== 'record' && root !== 'task') {
-      errors.push(label + '自定义模板只支持 record / task 字段（不支持：' + expr + '）')
-      return undefined
-    }
-    const allowedPath = TEMPLATE_ALLOWED_PATHS[root]
-    if (!(allowedPath as readonly string[]).includes(rest)) {
-      errors.push(label + '自定义模板字段不在允许清单：' + expr)
-      return undefined
-    }
-  }
-  return value
 }
 
 /** 数字字段：接受 number 或数字字符串；NaN/空串报错。 */
@@ -612,7 +513,8 @@ export function missingReadyFields(
   config: RpaTriggerConfig,
   secretSet: RpaTriggerSecretSet,
 ): string[] {
-  const merged: RpaTriggerConfig = { ...defaultConfigFor(descriptor), ...config }
+  const migrated = migrateLegacyMapConfig(descriptor, config)
+  const merged: RpaTriggerConfig = { ...defaultConfigFor(descriptor), ...migrated }
   const missing: string[] = []
   for (const field of configFieldList(descriptor)) {
     if (!field.required) continue
@@ -865,7 +767,8 @@ function formatMapped(entries: Array<{ name: string; value: string }>, style: Rp
  * @throws 语义值缺失或附加参数模板无法解析时抛可读错误。
  */
 export function resolveMapped(descriptor: RpaVendorDescriptor, ctx: RpaInvocationContext): unknown {
-  const config: RpaTriggerConfig = { ...defaultConfigFor(descriptor), ...ctx.config }
+  const migrated = migrateLegacyMapConfig(descriptor, ctx.config)
+  const config: RpaTriggerConfig = { ...defaultConfigFor(descriptor), ...migrated }
   const keys = mappingKeys(descriptor, config)
   const entries: Array<{ name: string; value: string }> = []
   for (const target of descriptor.mapping.targets) {
@@ -919,6 +822,11 @@ function resolveParamSourceValue(entry: Record<string, unknown>, ctx: RpaInvocat
   if (source === 'chatType') return ctx.record.chatType === 'group' ? '群聊' : '单聊'
   if (source === 'taskId') return String(ctx.taskId)
   if (source === 'recordId') return String(ctx.recordId)
+  // 图片三种来源都读投递前算好的 `ctx.imageLinks`（见 `media-links.ts`）：
+  // 解码是异步的，本函数是同步的，所以链接不可能在这里现算。
+  if (source === 'imagesJson') return imagesJsonOf(ctx.imageLinks)
+  if (source === 'imageCount') return String(ctx.record.images.length)
+  if (source === 'firstImageUrl') return firstImageUrlOf(ctx.imageLinks)
   if (source === 'fixed') return typeof entry['fixedValue'] === 'string' ? entry['fixedValue'] : ''
   if (source === 'template') {
     const rendered = renderTemplate(entry['template'] ?? '', {

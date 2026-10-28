@@ -37,7 +37,6 @@ import { ChatsMsgMenu } from './chats-msg-menu.tsx'
 import { ChatsMessageTools, type ChatsMessageToolsController } from './chats-message-tools.tsx'
 import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
-import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -46,6 +45,10 @@ import { usePagedList } from './hooks.tsx'
 import { focusListRow } from './list-keyboard.ts'
 import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
+import { isAnalyzableMessage, type AnalysisTargetState } from './analysis-selection.ts'
+import { useChatsAnalysis } from './chats-analysis.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 export interface ChatsViewProps {
   /** Right-click tools (source/info/editors) live outside the state bag. */
@@ -85,8 +88,8 @@ export interface ChatsViewProps {
       aiEligible: boolean
       analysisPaneOpen: boolean
       setAnalysisPaneOpen: React.Dispatch<React.SetStateAction<boolean>>
-      analysisTarget: number | null
-      setAnalysisTarget: React.Dispatch<React.SetStateAction<number | null>>
+      analysisTarget: AnalysisTargetState | null
+      setAnalysisTarget: React.Dispatch<React.SetStateAction<AnalysisTargetState | null>>
       aiFull: boolean
       aiOpen: boolean
       aiTarget: WechatSession | null
@@ -210,37 +213,61 @@ function MsgScrollArea({ scrollRef, newMsgCount, onJump, children }: {
   )
 }
 
-/** 当前会话的逐条分析缓存（只读取可见窗口，见 use-inline-analysis.ts）。 */
-function useChatsAnalysis(
-  curSession: WechatSession | null,
-  msgItems: MessageRenderItem[],
-  virtualizer: Virtualizer<HTMLDivElement, Element>,
-): ReturnType<typeof useInlineAnalysis> {
-  return useInlineAnalysis({
-    talker: curSession?.username ?? '',
-    items: msgItems,
-    virtualizer,
-  })
+/** Search-result identity: group hits show sender first, direct hits show the session. */
+function SearchHitIdentity({ hit }: { hit: SearchHit }): React.JSX.Element {
+  const session = withEnterprise(hit.name || hit.username, hit.enterpriseName)
+  const senderUsername = (hit.sender_username ?? '').trim()
+  const sender = hit.sender ? withEnterprise(hit.sender, hit.senderEnterpriseName) : ''
+  return (
+    <IdentityName
+      className={cssshell.searchHitIdentity}
+      textClassName={cssshell.searchHitName}
+      name={senderUsername ? (hit.sender || hit.name || hit.username) : (hit.name || hit.username)}
+      username={senderUsername || hit.username}
+      size={24}
+      title={sender ? `${sender} · ${session}` : session}
+    >
+      {sender ? `${sender} · ${session}` : session}
+    </IdentityName>
+  )
+}
+
+/** Current session heading with the same display-only enterprise suffix as the list. */
+function ChatSessionHeading({ session }: { session: WechatSession }): React.JSX.Element {
+  return (
+    <IdentityName
+      className={csscards.msgHeaderIdentity}
+      textClassName={csscards.msgHeaderName}
+      name={session.displayName || session.username}
+      username={session.username}
+      size={36}
+    >
+      <span>{withEnterprise(session.displayName || session.username, session.enterpriseName)}</span>
+      {isEnterpriseChat(session.username) && (
+        <span className={csscards.entBadge} title={session.enterpriseName ? `企业微信 · ${session.enterpriseName}` : '企业微信'}>
+          企微
+        </span>
+      )}
+    </IdentityName>
+  )
 }
 
 export function ChatsView({ state, messageTools, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
   const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
   error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
-  // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
-  // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
+  // 推荐回复只对单聊成立（群聊“回一句”无意义）；分析读写当前会话，群聊也适用。
   const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
-  // 逐条分析：只对**可见窗口**里的对方文本/语音消息按需推理（见 use-inline-analysis.ts）——
-  // 「只算可见的」是产品决策：单次 0.5 s，全量预跑不现实。
-  // 没有开关参数（2026-09-26 起恒开）：曾经那个工具区按钮与「右栏面板开不开」互不知情，
-  // 关掉右栏后推理照跑 —— 现在分析的唯一去处就是右栏面板，它开着就算、不需要第二个旋钮。
-  const inlineAnalysis = useChatsAnalysis(curSession, msgItems, msgVirtualizer)
-  // 图片预取：可见窗口上下若干行的图片**提前低优先批量取回**并写内存缓存，
-  // 于是滚到它们时 `MessageImage` 首帧就命中缓存 —— 不闪占位（2026-09-26）。
+  const sidePanel = aiOpen && aiEligible && aiTarget ? 'ai' : groupInfoOpen ? 'group' : contactInfoOpen ? 'contact' : (suggestVisible || analysisPaneOpen) ? 'chat' : undefined
+  const { selectedLocalId, targetMessage, speaker, inlineAnalysis, openMessageAnalysis } = useChatsAnalysis({
+    curSession, msgItems, analysisPaneOpen, analysisTarget,
+    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setContactInfoOpen, setGroupInfoOpen: groupInfo.setGroupInfoOpen,
+  })
+  // 图片预取：可见窗口上下若干行的图片提前低优先批量取回并写内存缓存，滚动时首帧命中、不闪占位。
   useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
   return (
-    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined}>
+    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined} data-side-panel={sidePanel}>
       {/* left: session list */}
-      <div className={csscards.sidebar}>
+      <div className={csscards.sidebar} data-chat-sidebar="">
         <div className={csscards.search}>
           <SearchInput
             className={csscards.searchField}
@@ -353,7 +380,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                 {msgHits.map(hit => (
                   <button key={`${hit.username}:${hit.local_id}`} type="button" className={csscards.searchHit} onClick={() => { void openSessionAndLocate(hit.username, hit.local_id) }}>
                     <div className={cssshell.searchHitTop}>
-                      <span className={cssshell.searchHitName}>{hit.name || hit.username}</span>
+                      <SearchHitIdentity hit={hit} />
                       <span className={cssshell.searchHitTime}>{hit.time}</span>
                     </div>
                     <div className={cssshell.searchHitSnippet}>{hit.snippet}</div>
@@ -367,7 +394,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
       </div>
 
       {/* right: message stream */}
-      <div className={cssrows.messages}>
+      <div className={cssrows.messages} data-chat-messages="">
         {curSession === null && (
           <div className={csscards.msgEmptyState}>
             <div className={csscards.msgEmptyTitle}>从左侧选择一个会话</div>
@@ -382,10 +409,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
           <>
             <div className={csscards.msgHeader}>
               <div className={cssshell.msgHeaderInfo}>
-                <div className={csscards.msgHeaderName}>
-                  {curSession.displayName || curSession.username}
-                  {isEnterpriseChat(curSession.username) && <span className={csscards.entBadge} title="企业微信">企业微信</span>}
-                </div>
+                <ChatSessionHeading session={curSession} />
                 <div className={csscards.msgHeaderUser}>{curSession.username}</div>
                 {(exportMsg || notice) && <div className={csscards.msgHeaderExport} role={notice && !exportMsg ? 'status' : undefined} title={exportMsg ?? undefined}>{exportMsg ?? notice}</div>}
               </div>
@@ -395,7 +419,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                 curSession={curSession} onBackToList={onBackToList}
                 aiEligible={aiEligible}
                 aiOpen={aiOpen}
-                setAiOpen={setAiOpen}
+                setAiOpen={setAiOpen} setAiFull={setAiFull}
                 suggestOpen={suggestOpen}
                 setSuggestOpen={setSuggestOpen}
                 analysisPaneOpen={analysisPaneOpen}
@@ -403,6 +427,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                 openCalendar={openCalendar}
                 groupInfoOpen={groupInfoOpen}
                 openGroupInfo={openGroupInfo}
+                setGroupInfoOpen={groupInfo.setGroupInfoOpen}
                 contactInfoOpen={contactInfoOpen}
                 setContactInfoOpen={setContactInfoOpen}
                 moreOpen={moreOpen}
@@ -457,7 +482,10 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                         data-index={vi.index}
                         ref={msgVirtualizer.measureElement}
                         className={cssrows.msgVRow}
-                        onClick={item.kind === 'msg' && item.m.isSender !== 1 ? () => { setAnalysisTarget(item.m.localId) } : undefined}
+                        data-analysis-target={item.kind === 'msg' && selectedLocalId === item.m.localId || undefined}
+                        onClick={item.kind === 'msg' && isAnalyzableMessage(item.m)
+                          ? () => { openMessageAnalysis(item.m) }
+                          : undefined}
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                       >
                         {renderMsgItem(item)}
@@ -514,31 +542,28 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
       {/* 已编辑消息浮层：JSX 在 chats-edited-dialog.tsx（遮罩那一判在那里） */}
       <ChatsEditedDialog {...edited} />
 
-      {/* 右栏（最右一栏）= 一块**合并面板**（`ChatRightPanel`），上下两块共用一个容器：
-          · 上：推荐回复（单聊常驻，读取范围 = 当前会话 + 当前选中的知识库）；
-          · 下：分析（消息流里**点选**的那条对方消息，与逐条推理共用一份落库缓存、不自己发请求）；
-          · 「AI 问答」打开时**整个顶替**右栏 —— 两块并排会把 960px 窗口下的消息列挤到不可用，
-            所以一个位置只放一个面板。
-          群聊不给推荐回复（「回一句」在群里不成立）：此时整栏不挂，分析也随之不可见 ——
-          分析读的是当前会话，单聊之外它也没有落脚点。 */}
-      {curSession !== null && (suggestVisible || analysisPaneOpen) && !(aiOpen && aiEligible && aiTarget) && (
+      {/* 右栏 = 推荐回复与消息分析的合并面板：
+          · 分析只跑当前点选的一条，结果来自本地模型；
+          · 群聊没有推荐回复，但仍可单独打开消息分析；
+          · AI 问答打开时顶替整个右栏，点击消息会先关闭 AI 问答再切回分析。 */}
+      {curSession !== null && (suggestVisible || analysisPaneOpen) && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (
         <ChatRightPanel
           target={curSession}
           onClose={() => { setSuggestOpen(false); setAnalysisPaneOpen(false) }}
           showSuggest={suggestVisible}
           showAnalysis={analysisPaneOpen}
-          analysisTargetId={analysisTarget}
-          analysisEntry={analysisTarget === null ? undefined : inlineAnalysis.get(analysisTarget)}
-          analysisProgress={inlineAnalysis.progress}
-          analysisStopped={inlineAnalysis.stopped}
-          analysisStopError={inlineAnalysis.stopError}
-          onCancelAnalysis={inlineAnalysis.cancel}
+          analysisTargetId={selectedLocalId}
+          analysisEntry={selectedLocalId === null ? undefined : inlineAnalysis.get(selectedLocalId)}
+          analysisMessage={targetMessage}
+          analysisSpeaker={speaker}
+          analysisIsGroup={curSession.type === 'group'}
+          analysisRefreshing={inlineAnalysis.refreshing}
           onRetryAnalysis={inlineAnalysis.retry}
-          onClearAnalysis={() => { setAnalysisTarget(null) }}
+          onRefreshAnalysis={inlineAnalysis.refresh}
         />
       )}
 
-      {aiOpen && aiEligible && aiTarget && (
+      {aiOpen && aiEligible && aiTarget && !groupInfoOpen && !contactInfoOpen && (
         <SessionAsk
           key={aiTarget.username}
           target={aiTarget}

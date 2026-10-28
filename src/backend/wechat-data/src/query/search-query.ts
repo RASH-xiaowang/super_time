@@ -20,6 +20,7 @@ import { decodeCell, loadDisplayNames, loadSessionUsernames, messageShardFiles, 
 export { readableMessageText, senderLabel, splitGroupPrefix, stripGroupPrefix } from './search-display.ts'
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
+import { contactMeta } from './meta.ts'
 
 /** 一条会话窗口内的消息（用于 chunk 级上下文：单条微信消息几乎不构成检索单元）。 */
 export interface WindowMessage {
@@ -118,6 +119,7 @@ export function searchWechatFts(
   cap: number,
   names: Map<string, string>,
   scopeUsername?: string,
+  enterpriseNames: ReadonlyMap<string, string> = new Map(),
 ): { hits: SearchHit[] } {
   const p = join(decryptedDir, 'message', 'message_fts.db')
   if (!existsSync(p)) return { hits: [] }
@@ -150,15 +152,20 @@ export function searchWechatFts(
             // sort_seq 是毫秒时间戳：恢复 create_time，时间筛选与显示才可用（此前恒为 0，时间范围会把命中全部滤掉）
             const ssMs = Number(r['ss'] ?? 0)
             const createTime = ssMs > 1e12 ? Math.floor(ssMs / 1e3) : ssMs > 1e9 ? Math.floor(ssMs) : 0
+            const enterpriseName = enterpriseNames.get(username)?.trim()
+            const senderEnterpriseName = enterpriseNames.get(sender)?.trim()
             out.push({
               text,
               username,
               create_time: createTime,
               local_id: Number(r['lid'] ?? 0),
               name: names.get(username) ?? username,
+              ...(enterpriseName ? { enterpriseName } : {}),
               time: createTime ? fmtDateTimeSec(createTime) : '',
               snippet: display.slice(0, 120),
               sender: senderLabel(sender, names),
+              ...(sender !== '' ? { sender_username: sender } : {}),
+              ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
             })
             if (out.length >= cap) break
           }
@@ -246,24 +253,34 @@ export function hitFromRow(
   talker: string,
   qLower: string,
   names: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string> = new Map(),
 ): SearchHit | null {
-  const text = decodeCell(row['message_content']).replace(/\n/g, ' ').trim()
+  const raw = decodeCell(row['message_content']).trim()
+  if (!raw) return null
+  // 群前缀必须以原始换行 `wxid:\n正文` 识别；先压平换行会把 sender 永久吞掉。
+  const { sender, body } = splitGroupPrefix(raw, talker)
+  const text = raw.replace(/\n/g, ' ').trim()
+  const display = body.replace(/\n/g, ' ').trim()
   if (!text || !text.toLowerCase().includes(qLower)) return null
   const localId = Number(row['local_id'] ?? 0)
   const ts = Number(row['create_time'] ?? 0)
-  const { sender, body: display } = splitGroupPrefix(text, talker)
   const dIdx = display.toLowerCase().indexOf(qLower)
   const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20)
   const snippet = (dStart > 0 ? '…' : '') + display.slice(dStart, dStart + 100)
+  const enterpriseName = enterpriseNames.get(talker)?.trim()
+  const senderEnterpriseName = enterpriseNames.get(sender)?.trim()
   return {
     text,
     username: talker,
     create_time: ts,
     local_id: localId,
     name: names.get(talker) ?? talker,
+    ...(enterpriseName ? { enterpriseName } : {}),
     time: fmtDateTimeSec(ts),
     snippet,
     sender: senderLabel(sender, names),
+    ...(sender !== '' ? { sender_username: sender } : {}),
+    ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
   }
 }
 
@@ -289,7 +306,9 @@ export function probeIndexedSources(
     return { hits: indexed.hits, total: indexed.hits.length, indexed: true }
   }
   // ---- WeChat built-in content tables (LIKE, tokenizer-independent) ----
-  const builtin = searchWechatFts(decryptedDir, q, cap, names, username)
+  const builtin = searchWechatFts(
+    decryptedDir, q, cap, names, username, contactMeta(decryptedDir).enterpriseNames,
+  )
   if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false }
   return null
 }
@@ -312,12 +331,13 @@ export function searchIndexMessages(
   if (!q) return { hits: [], total: 0, indexed: false }
   const cap = Math.min(limit ?? 100, 300)
   const names = loadDisplayNames(decryptedDir)
+  const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
   const early = probeIndexedSources(decryptedDir, q, cap, names, username)
   if (early) return early
   const hits: SearchHit[] = []
   const qLower = q.toLowerCase()
   for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
-    const hit = hitFromRow(row, talker, qLower, names)
+    const hit = hitFromRow(row, talker, qLower, names, enterpriseNames)
     if (hit) hits.push(hit)
     if (hits.length >= cap) break
   }
@@ -351,6 +371,7 @@ export async function searchIndexMessagesCancellable(
   if (!q) return { hits: [], total: 0, indexed: false }
   const cap = Math.min(limit ?? 100, 300)
   const names = loadDisplayNames(decryptedDir)
+  const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
   const early = probeIndexedSources(decryptedDir, q, cap, names, username)
   if (early) return early
   // 走到兜底扫描前先看一眼：已经被取消就没必要开库了
@@ -371,7 +392,7 @@ export async function searchIndexMessagesCancellable(
         if (ctrl?.signal?.aborted) { cancelled = true; break }
       }
     }
-    const hit = hitFromRow(row, talker, qLower, names)
+    const hit = hitFromRow(row, talker, qLower, names, enterpriseNames)
     if (hit) hits.push(hit)
     if (hits.length >= cap) break
   }

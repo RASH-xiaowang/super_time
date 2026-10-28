@@ -63,6 +63,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.summaryIdentity {
+  max-width: 100%;
+  vertical-align: middle;
+}
 
 .close {
   display: grid;
@@ -182,6 +186,11 @@
   align-items: flex-start;
   flex: 1 1 auto;
   min-width: 0;
+  white-space: normal;
+}
+
+.rowIdentity {
+  flex: 1 1 auto;
 }
 
 .rowName {

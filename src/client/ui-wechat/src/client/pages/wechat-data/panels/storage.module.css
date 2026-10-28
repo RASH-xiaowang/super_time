@@ -107,19 +107,22 @@
   gap: var(--nm-s-2);
   margin-bottom: var(--nm-dense-g3);
   font-size: var(--nm-fs-sm);
+  min-width: 0;
 }
 
 .barLabel {
-  width: 110px;
+  flex: 0 1 150px;
+  width: auto;
+  min-width: 0;
   color: var(--nm-text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
 }
 
 .barTrack {
-  flex: 1;
+  flex: 1 1 80px;
+  min-width: 48px;
   height: 8px;
   border-radius: var(--nm-r-xs);
   background: var(--nm-bg-hover);
@@ -134,13 +137,35 @@
 }
 
 .barValue {
-  width: 120px;
+  flex: 0 0 120px;
   text-align: right;
   color: var(--nm-text-2);
-  flex-shrink: 0;
   font-size: var(--nm-fs-xs, 11px);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
+}
+
+.kpiTopChat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.kpiShare { flex: 0 0 auto; }
+
+.sessionCell {
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.sessionLink {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: middle;
 }
 
 @media (max-width: 620px) {
@@ -150,11 +175,11 @@
   }
 
   .barLabel {
-    width: 88px;
+    flex-basis: 120px;
   }
 
   .barValue {
-    width: 92px;
+    flex-basis: 100px;
   }
 }
 
@@ -168,3 +193,12 @@
  * （clientHeight = 0，整卡内容不可见）。卡片按内容高，超出由 `.panel` 滚动。
  * ============================================================ */
 .panel > * { flex-shrink: 0; }
+
+/* The large-file list intentionally leaves scrolling to the panel itself. Keep this
+ * one card exempt from the global card-height cap as well, otherwise its non-scrolling
+ * table body is clipped after roughly one screen. */
+.fileCard.fileCard.fileCard { max-height: none; }
+.fileCard.fileCard.fileCard > [class*='cardBd'] {
+  max-height: none;
+  overflow: visible;
+}

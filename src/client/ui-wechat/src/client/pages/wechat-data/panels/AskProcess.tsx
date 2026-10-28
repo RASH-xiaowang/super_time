@@ -78,7 +78,7 @@ function ToolStageCard({ stage, defaultOpen }: {
       {open && (
         <div className={toolCss.toolCardBody}>
           {stage.detail !== undefined && <div>{stage.detail}</div>}
-          {stage.errorClass !== undefined && <div className={toolCss.toolError}>错误分类：{stage.errorClass}</div>}
+          {stage.errorClass !== undefined && <div className={toolCss.toolError}>失败原因类型：{stage.errorClass}</div>}
           {stage.phase !== undefined && <div className={toolCss.toolPhase}>阶段：{stage.phase}</div>}
         </div>
       )}

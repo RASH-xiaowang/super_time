@@ -61,7 +61,7 @@ describe('事件映射表：10 条，逐条钉住', () => {
     expect(EVENT_MAP.map((e) => e.from).sort()).toEqual([
       'clawbot/binding-changed',
       'clawbot/message',
-      'laya-analysis/progress',
+      'message-list/updated',
       'search-index/progress',
       'task-center/updated',
       'wechat-ask/delta',
@@ -79,11 +79,11 @@ describe('事件映射表：10 条，逐条钉住', () => {
       ['wechat-ask/reasoning', 'dsh-wechat-ask-reasoning', true],
       ['wechat-ask/stage', 'dsh-wechat-ask-stage', true],
       ['wechat-export/progress', 'dsh-wechat-export-progress', true],
-      ['laya-analysis/progress', 'dsh-laya-analysis-progress', true],
       ['search-index/progress', 'dsh-search-index-progress', true],
       ['clawbot/message', 'dsh-clawbot-message', true],
       ['clawbot/binding-changed', 'dsh-clawbot-binding-changed', true],
       ['task-center/updated', 'dsh-wechat-task-center-updated', true],
+      ['message-list/updated', 'dsh-wechat-message-list-updated', true],
     ]
     for (const [from, to, detail] of expected) {
       const entry = EVENT_MAP.find((e) => e.from === from)

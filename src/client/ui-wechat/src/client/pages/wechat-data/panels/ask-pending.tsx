@@ -46,7 +46,7 @@ export function AskPending({ streamText, streamReasoning, streamStages, onStop }
         : (
           <div className={css.chatPending}>
             <span className={css.chatDots} />
-            {hasProcess ? '正在生成回答…' : '正在分析问题意图 → 检索本机记录 → 综合生成回答…'}
+            {hasProcess ? '正在生成回答…' : '正在理解问题 → 检索相关原文 → 生成回答…'}
           </div>
         )}
       {/* 停止生成：取消走后端 Remote cancelAsk（jobId 就是本轮的 streamId），

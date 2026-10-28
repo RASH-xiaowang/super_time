@@ -33,6 +33,8 @@ export interface AnswerSessionCatalogEntry {
   username: string
   name?: string
   aliases?: readonly string[]
+  /** 企业微信会话的企业名称，同时会作为实体别名参与检索。 */
+  enterpriseName?: string
 }
 
 /**
@@ -162,6 +164,12 @@ export interface ToolCallTrace {
   skipped?: boolean
   /** 人话补充（复用缓存 / 跳过原因 / 工具 note）。 */
   note?: string
+  /** 脱敏、压缩后的结果摘要，供过程区直接展示。 */
+  resultSummary?: string
+  /** 脱敏、截断后的结构化结果快照；只在成功调用时提供。 */
+  resultDetail?: string
+  /** 结构化结果是否因条数或长度限制被截断。 */
+  resultTruncated?: boolean
 }
 
 /** 已执行工具结果的缓存条目。 */
@@ -272,11 +280,13 @@ export interface AnswerRuntimeCitation {
   evidenceId: string
   source: EvidenceSource
   name: string
+  enterpriseName?: string
   time: string
   snippet: string
   username: string
   local_id: number
   sender?: string
+  senderEnterpriseName?: string
   kb?: {
     kbId: number
     chunkId: number

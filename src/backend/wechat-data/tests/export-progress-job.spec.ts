@@ -210,7 +210,22 @@ describe('M3：单会话导出的进度与取消', () => {
       const after = text.slice(start + 1)
       const nextDef = after.search(/\n {4}(?:async )?[A-Za-z0-9_]+\(/)
       const body = nextDef > 0 ? after.slice(0, nextDef) : after
-      expect(body, `${m} 的实现没消费 jobId（既没归一也没接进度/取消）`).toMatch(/normalizeJobId|streamControl/)
+      let consumingBody = body
+      if (!/normalizeJobId|streamControl/.test(consumingBody)) {
+        // 超长处理器会抽到模块级 helper（如 exportSessionMessagesIn）。远程方法只剩
+        // `return helper(rc, options)` 时，守卫要继续检查 helper 本体，不能把正确的
+        // 委托误判成「参数被静默丢弃」。
+        const delegated = body.match(/return\s+([A-Za-z0-9_]+)\(rc,\s*options\)/)
+        if (delegated?.[1]) {
+          const helperAt = text.search(new RegExp(`\\n(?:async )?function\\s+${delegated[1]}\\(`))
+          if (helperAt >= 0) {
+            const helperAfter = text.slice(helperAt + 1)
+            const helperEnd = helperAfter.search(/\n}\n/)
+            consumingBody = helperEnd > 0 ? helperAfter.slice(0, helperEnd) : helperAfter
+          }
+        }
+      }
+      expect(consumingBody, `${m} 的实现没消费 jobId（既没归一也没接进度/取消）`).toMatch(/normalizeJobId|streamControl/)
     }
     expect(gatewaySource()).toMatch(/EXPORT_PROGRESS_EVENT/)
   })

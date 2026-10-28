@@ -44,22 +44,26 @@ export const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]> = [
 /**
  * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
  *
- * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值时回落到
- * `latest`（旧行为，保护已经配好镜像的环境）。
+ * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值固定到 b5454。
+ * GitHub 的 `v1.9.5` release 没有二进制附件，若继续使用 `latest`，
+ * “下载引擎”会稳定落到 404。
  * 这里是一个字符串常量而不是编号——— 固定哪一版
  * 应该是一行改动，而不是到处翻 URL。
  */
 export const WHISPER_ENGINE_TAG = ((): string => {
   const pinned = (process.env.DSH_WECHAT_WHISPER_ENGINE_TAG ?? '').trim()
-  return pinned === '' ? 'latest' : pinned
+  return pinned === '' ? 'b5454' : pinned
 })()
-/** Base order: env pin first, then the cached reachable one, then official/mirror. */
+/** Base order: env pin, cached reachable base, then mirror/official. */
 function whisperDownloadBases(): string[] {
   const pinned = process.env.DSH_WECHAT_WHISPER_MIRROR
   const bases: string[] = []
   if (pinned && pinned.trim().length > 0) bases.push(pinned.trim().replace(/\/$/, ''))
   if (reachableBase) bases.push(reachableBase)
-  bases.push('https://huggingface.co', 'https://hf-mirror.com')
+  // In mainland China huggingface.co often accepts the TCP connection only to
+  // stall before headers. Trying the mirror first keeps every model download
+  // responsive while the official host remains a real fallback.
+  bases.push('https://hf-mirror.com', 'https://huggingface.co')
   return [...new Set(bases)]
 }
 
@@ -298,16 +302,6 @@ export function migrateWhisperEngineDir(binPath: string, fromDir: string, toDir:
   return join(toDir, ...rel)
 }
 
-/** ggml file-name prefixes per model id (turbo before large-v3 — it shares the prefix). */
-const MODEL_FILE_PREFIX: ReadonlyArray<[string, string]> = [
-  ['turbo', 'ggml-large-v3-turbo'],
-  ['large-v3', 'ggml-large-v3'],
-  ['medium', 'ggml-medium'],
-  ['small', 'ggml-small'],
-  ['base', 'ggml-base'],
-  ['tiny', 'ggml-tiny'],
-]
-
 /**
  * Resolve one engine candidate: a file path (validated) or a dir that
  * contains whisper-cli.exe / whisper.exe. An existing bare directory is not a
@@ -413,11 +407,17 @@ export function whisperModelsStatus(modelsDir: string): WhisperModelInfo[] {
     try {
       names = readdirSync(modelsDir)
     } catch { /* dir absent: nothing installed */ }
-    return WHISPER_MODELS.map(m => ({
-      ...m,
-      installed: MODEL_FILE_PREFIX.some(([id, prefix]) =>
-        id === m.id && names.some(n => n.toLowerCase().startsWith(prefix) && n.toLowerCase().endsWith('.bin'))),
-    }))
+    const present = new Set(names.map(name => name.toLowerCase()))
+    return WHISPER_MODELS.map((m) => {
+      const file = WHISPER_DOWNLOAD_FILES.find(([id]) => id === m.id)?.[1] ?? ''
+      return {
+        ...m,
+        file,
+        // Match the exact artifact the inference path opens. Prefix matching
+        // made ggml-large-v3-turbo.bin also report Large v3 as installed.
+        installed: file !== '' && present.has(file.toLowerCase()),
+      }
+    })
   })
 }
 
@@ -629,7 +629,7 @@ export async function installWhisperEngine(
       return existsSync(target) ? { ok: true, path: target } : { ok: false, error: 'whisper-cli.exe 安装失败（拷贝/移动未完成）' }
     } catch (e) {
       lastError = `${url} ${(e as Error).message}`
-      // 引擎包**不做续传**：这个 URL 是 `releases/latest`，上游一发新版内容就换了，
+      // 引擎包**不做续传**：固定 tag 也可能由维护者重发附件，
       // 残留的半个 zip 不能保证还是新包的前缀（拼出来解不开，比整份重下更糟）。
       try { unlinkSync(zipPath) } catch { /* best effort */ }
     }

@@ -92,8 +92,8 @@ export const MUTATIONS_BATCH3ZD = [
     id: 'M631-settings-gap-back-to-12',
     why: '把 `.mainScroll` 的 `gap: 0` 改回 `gap: 12px` ⇒ 与子项 margin 叠加，间距又变成 10/12/17/18 四种（用户报的「间隙不一致」原样复现）。判据：settings-spacing.wiring.spec.ts 的「不再用 gap」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings.module.css',
-    from: '  gap: 0;\n  padding-right: 4px;',
-    to: '  gap: 12px;\n  padding-right: 4px;',
+    from: '  gap: 0;\n  padding: 14px 16px 24px;',
+    to: '  gap: 12px;\n  padding: 14px 16px 24px;',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-spacing.wiring.spec.ts',
   },
   {

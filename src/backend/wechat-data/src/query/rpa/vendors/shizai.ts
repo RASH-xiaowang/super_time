@@ -14,24 +14,19 @@
  * 来源：实在学院平台接口文档（2026-10-21）：API 授权（发刊 2023/08/22）、任务管理、流程管理、
  * 机器人管理、控制器简介、消息中心。
  */
-import type { RpaMappingTarget, RpaSemantic, RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
 import type {
   RpaHttpRequest,
   RpaHttpResponse,
   RpaInvocationContext,
-  RpaRecordContext,
   RpaSendResult,
   RpaVendorAdapter,
 } from '../types.ts'
 
 /** 操作码：1 = 立即/再次执行（官方 v2/job/operation）。 */
 const OPERATION_START = 1
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
-const MAP_FIELD = 'inputParamMap'
 
 const appKeyField: RpaField = {
   key: 'appKey',
@@ -54,8 +49,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'shizai',
   name: '实在智能 RPA',
   vendor: '实在智能（Intelligent RPA）',
-  version: '1.0.0',
-  summary: '对预建任务触发执行（openAPI/v2/job/operation）；实验性：鉴权 header 名官方未公开，需联调。',
+  version: '1.1.0',
+  summary: '对预建任务触发执行（openAPI/v2/job/operation）；业务参数全部由「附加参数」显式配置。实验性：鉴权 header 名官方未公开，需联调。',
   status: 'experimental',
   docs: {
     home: 'https://rpa-college.ai-indeed.com/doc/group_1687.html',
@@ -117,12 +112,14 @@ const descriptor: RpaVendorDescriptor = {
       help: '预建任务优先级（1 高 / 2 中 / 3 低）。官方 v2/job/operation 请求体未含该字段，本版不发送，请在控制器设置。',
     },
     {
-      key: 'inputParamMap',
-      label: '参数映射',
-      type: 'map',
-      required: true,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '映射成 inputParam 的 JSON 键（键名必须与流程引用参数一致，官方无自由 JSON 承诺）。',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: 'inputParam 全部在这里配置（默认 {}，不发任何业务参数）。参数名必须与流程引用参数一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -136,8 +133,9 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'object',
-    mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'inputParamMap',
   },
   request: {
     method: 'POST',
@@ -168,11 +166,13 @@ const descriptor: RpaVendorDescriptor = {
     '无回调、无幂等键：超时重试会重复执行 RPA → 本适配器禁止自动重试（maxAttempts=1）',
     'inputParam 受流程「引用参数/模板」约束（错误码：任务参数不匹配 / 引用类型需传引用参数）',
     'v2/job/operation 需控制器 ≥1.8.0；文档较旧（2023/08/22 发刊）',
+    '业务参数默认不发；只有「附加参数」显式配置后才进入 inputParam，请确认键名与流程引用参数一致',
   ],
   notes: [
     '官方未公开：鉴权 header 名、限流 QPS、回调（只有站内消息）。状态查询需 work-execute/list / work-list 轮询（v1 不做）。',
     'priority 字段是预建任务属性；官方 v2/job/operation 请求体只有 jobUuid/operation/inputParam → 本适配器不发送 priority，待联调确认。',
     'operation=1（立即/再次执行）为官方取值；停止/删除分别用 2/3/4，本适配器只用 1。',
+    '2026-10-23（v1.1.0）：移除内置参数映射，统一改为「附加参数」；旧 inputParamMap 自动迁移。',
   ],
 }
 
@@ -182,26 +182,6 @@ function configText(ctx: RpaInvocationContext, key: string): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return ''
-}
-
-/** 三个语义参数位的取值（单聊没有触发对象名时回落会话名，与旧实现同口径）。 */
-function semanticValue(record: RpaRecordContext, semantic: RpaSemantic): string {
-  if (semantic === 'room') return record.chatName
-  if (semantic === 'content') return record.text
-  return record.targetName !== '' ? record.targetName : record.chatName
-}
-
-/** `inputParam` 对象：映射键可被配置里的 map 字段逐项覆盖。 */
-function inputParam(ctx: RpaInvocationContext): Record<string, string> {
-  const raw = ctx.config[MAP_FIELD]
-  const overrides = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}
-  const out: Record<string, string> = {}
-  for (const target of MAPPING_TARGETS) {
-    const custom = overrides[target.semantic]
-    const key = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
-    out[key] = semanticValue(ctx.record, target.semantic)
-  }
-  return out
 }
 
 /** 从 v2/job/operation 响应里取运行记录 id（works[].workUuid），兼容 data.jobUuid。 */
@@ -234,7 +214,7 @@ export const adapter: RpaVendorAdapter = {
     const body = {
       jobUuid,
       operation: OPERATION_START,
-      inputParam: inputParam(ctx),
+      inputParam: resolveMapped(descriptor, ctx),
     }
     return {
       method: 'POST',

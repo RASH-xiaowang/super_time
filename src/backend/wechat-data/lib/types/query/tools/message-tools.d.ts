@@ -3,8 +3,12 @@ import { type RetrievalTool } from './types.ts';
 declare function dayStartSec(d: string): number;
 /** 把 `YYYY-MM-DD` 转成当天 23:59:59 的 epoch 秒（本地时区）。 */
 declare function dayEndSec(d: string): number;
-/** 会话显示名（从索引库的 `contact_fts` 取；取不到就用 username）。 */
-declare function displayNames(decryptedDir: string): Map<string, string>;
+interface DisplayIdentity {
+    name: string;
+    enterpriseName?: string;
+}
+/** 会话显示名与企业名；统一从 contact.db 的缓存元数据读取，兼容旧索引库。 */
+declare function displayNames(decryptedDir: string): Map<string, DisplayIdentity>;
 /** 关键词检索聊天消息。 */
 export declare const searchMessagesTool: RetrievalTool;
 /** 取某个会话在某时段的消息（按时间升序）。 */

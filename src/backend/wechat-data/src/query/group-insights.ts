@@ -138,7 +138,9 @@ export function queryGroupInsights(decryptedDir: string, username: string): Grou
  * @returns 洞察快照。
  */
 export function computeGroupInsights(decryptedDir: string, username: string): GroupInsightsSnapshot {
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
+  const enterpriseNames = meta.enterpriseNames
   const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
   const dir = join(decryptedDir, 'message')
   let total = 0
@@ -179,7 +181,15 @@ export function computeGroupInsights(decryptedDir: string, username: string): Gr
   }
   activeDays = daySet.size
   const topMembers: GroupInsightsMember[] = Array.from(perMember.entries())
-    .map(([u, count]) => ({ username: u, name: names.get(u) ?? u, count }))
+    .map(([u, count]) => {
+      const enterpriseName = enterpriseNames.get(u)?.trim()
+      return {
+        username: u,
+        name: names.get(u) ?? u,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count,
+      }
+    })
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
   const ann = announcement(decryptedDir, username)

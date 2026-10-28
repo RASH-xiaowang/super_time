@@ -12,6 +12,7 @@ import { DatabaseSync } from './db-open.ts'
 import { readdirSync, statSync } from 'node:fs'
 import { sqliteChangeCounter } from './file-sig.ts'
 import { join } from 'node:path'
+import { loadOpenimEnterpriseNamesFromDb } from './openim.ts'
 
 const MAX_AGE_MS = 5_000
 
@@ -199,6 +200,8 @@ export interface ContactMeta {
   names: Map<string, string>
   pinned: Set<string>
   bizTypes: Map<string, number>
+  /** Enterprise-WeChat username -> enterprise name. */
+  enterpriseNames: Map<string, string>
 }
 
 /**
@@ -228,7 +231,8 @@ export function contactMeta(decryptedDir: string): ContactMeta {
     const names = new Map<string, string>()
     const pinned = new Set<string>()
     const bizTypes = new Map<string, number>()
-    if (!sig) return { names, pinned, bizTypes }
+    const enterpriseNames = new Map<string, string>()
+    if (!sig) return { names, pinned, bizTypes, enterpriseNames }
     try {
       const db = new DatabaseSync(p, { readOnly: true })
       try {
@@ -261,11 +265,14 @@ export function contactMeta(decryptedDir: string): ContactMeta {
             if (u) bizTypes.set(u, Number(row.t ?? 0))
           }
         }
+        for (const [username, enterpriseName] of loadOpenimEnterpriseNamesFromDb(db)) {
+          enterpriseNames.set(username, enterpriseName)
+        }
       } finally {
         db.close()
       }
     } catch { /* contact.db unavailable: keep empty maps */ }
-    return { names, pinned, bizTypes }
+    return { names, pinned, bizTypes, enterpriseNames }
   })
 }
 

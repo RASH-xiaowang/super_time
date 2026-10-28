@@ -673,7 +673,7 @@ describe('clawbot remotes（iLink 已接入）', () => {
     // 已绑定但还没收到过消息 ⇒ 没有会话令牌，同样不打上游（错误文案要给出下一步）。
     const noCtx = await r.sendClawbotMessage({ text: '在吗' })
     expect(noCtx.ok).toBe(false)
-    expect(noCtx.error, '没令牌时要指向「先在微信里发一条」而不是含糊报错').toContain('先在微信里给它发一条消息')
+    expect(noCtx.error, '没令牌时要指向「先在微信里发一条」而不是含糊报错').toContain('先在微信里给该 ClawBot 发一条消息')
     expect(ilink.sendCalls).toHaveLength(0)
 
     // 收到一条带令牌的消息（通道刷新令牌）。

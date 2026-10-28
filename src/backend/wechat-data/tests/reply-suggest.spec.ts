@@ -26,6 +26,8 @@ interface Row {
   localId: number
   text: string
   fromSelf: boolean
+  /** 群成员 wxid；单聊夹具可省略。 */
+  sender?: string
 }
 
 /** 造一个最小可用的解密目录：会话表 + 每个 talker 一张 Msg_ 表。 */
@@ -50,13 +52,20 @@ function makeFixture(rows: Row[]): string {
   insN.run(SELF)
   insN.run(SELF)
   insN.run(SELF)
+  const senderIds = new Map<string, number>()
+  for (const sender of new Set(rows.map(r => r.sender).filter((x): x is string => Boolean(x)))) {
+    const result = insN.run(sender)
+    senderIds.set(sender, Number(result.lastInsertRowid))
+  }
   for (const talker of new Set(rows.map(r => r.talker))) {
     const t = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
     mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
     const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
     mdb.exec('BEGIN')
     for (const r of rows.filter(x => x.talker === talker)) {
-      ins.run(r.localId, r.localId, 1, r.fromSelf ? 1 : 0, 1700000000 + r.localId, r.fromSelf ? 3 : 9, r.text, r.localId, '')
+      // Name2Id 是分片级 rowid -> wxid 映射；自定义 sender 必须先在表里占一行。
+      const senderId = r.fromSelf ? 3 : (r.sender === undefined ? 9 : (senderIds.get(r.sender) ?? 9))
+      ins.run(r.localId, r.localId, 1, r.fromSelf ? 1 : 0, 1700000000 + r.localId, senderId, r.text, r.localId, '')
     }
     mdb.exec('COMMIT')
   }
@@ -98,6 +107,45 @@ describe('collectReplyContext', () => {
     const ctx = collectReplyContext(dir, PEER, SELF)
     expect(ctx.count).toBe(0)
     expect(ctx.latestPeer).toBe('')
+  })
+
+  it('指定分析目标时只读取截至该消息的上下文，后续消息不会混入', () => {
+    const dir = makeFixture([
+      { talker: PEER, localId: 1, text: '早上好', fromSelf: false },
+      { talker: PEER, localId: 2, text: '早，刚起', fromSelf: true },
+      { talker: PEER, localId: 3, text: '我也起来了', fromSelf: false },
+      { talker: PEER, localId: 4, text: '那中午一起吃饭', fromSelf: true },
+      { talker: PEER, localId: 5, text: '好呀', fromSelf: false },
+    ])
+    const ctx = collectReplyContext(dir, PEER, SELF, 20, 3)
+    expect(ctx.lines).toEqual(['对方：早上好', '我：早，刚起', '对方：我也起来了'])
+    expect(ctx.lines.join('\n')).not.toContain('中午一起吃饭')
+    expect(ctx.latestPeer).toBe('我也起来了')
+    expect(ctx.targetFound).toBe(true)
+    expect(ctx.count).toBe(3)
+  })
+
+  it('目标消息不存在时明确返回 targetFound=false，不偷偷回退到最新消息', () => {
+    const dir = makeFixture([{ talker: PEER, localId: 1, text: '最新消息', fromSelf: false }])
+    const ctx = collectReplyContext(dir, PEER, SELF, 20, 99)
+    expect(ctx).toMatchObject({ lines: [], latestPeer: '', count: 0, targetFound: false })
+  })
+
+  it('群聊上下文保留不同成员身份，不把所有人揉成同一个「对方」', () => {
+    const group = '123456@chatroom'
+    const dir = makeFixture([
+      { talker: group, localId: 1, text: '明天几点出发', fromSelf: false, sender: 'wxid_alice' },
+      { talker: group, localId: 2, text: '八点吧', fromSelf: true },
+      { talker: group, localId: 3, text: '我也起来了', fromSelf: false, sender: 'wxid_bob' },
+    ])
+    const ctx = collectReplyContext(dir, group, SELF, 20, 3)
+    expect(ctx.lines).toEqual([
+      'wxid_alice：明天几点出发',
+      '我：八点吧',
+      'wxid_bob：我也起来了',
+    ])
+    expect(ctx.targetSpeaker).toBe('wxid_bob')
+    expect(ctx.latestPeer).toBe('我也起来了')
   })
 })
 

@@ -245,20 +245,19 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
               </div>
 
               <div className="row g-2">
-                {ins && <RelationSection ins={ins} onOpenChat={openChat} />}
-                {ins && <ContentAssetsSection ins={ins} official={data.official} />}
-              </div>
-
-              <div className="row g-2">
-                <StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
-                <LedgerSection ledger={ledger} onGo={go} />
+                {ins && <RelationSection className={`col-12 col-xl-6 ${css.overviewRelationColumn}`} ins={ins} onOpenChat={openChat} />}
+                <div className={`col-12 col-xl-6 ${css.overviewRightStack}`}>
+                  {ins && <ContentAssetsSection className={css.overviewStackCard} ins={ins} official={data.official} />}
+                  <StorageCompositionSection className={css.overviewStackCard} categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
+                  <LedgerSection className={css.overviewStackCard} ledger={ledger} onGo={go} />
+                </div>
               </div>
 
               <MoreAnalysis count={6}>
                 {ins && <InteractionSection ins={ins} />}
+                <MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />
                 <WordCloudSection />
                 <RegionBoard />
-                <MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />
                 <RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />
                 {ins && <HealthSection ins={ins} extras={extras} />}
               </MoreAnalysis>

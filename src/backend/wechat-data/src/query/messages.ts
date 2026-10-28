@@ -23,10 +23,11 @@ import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
-import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
+import type { MessageAtUser, MessageRich, MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
 import { boundedSet, cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
+import { createEnterpriseDisplayIndex, enterpriseNameFor, withChatlogEnterprise, type EnterpriseDisplayIndex } from './enterprise-display.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -239,6 +240,19 @@ function needsAtUsers(talker: string, type: number, content: string): boolean {
   return content.includes('@')
 }
 
+/** Attach WeCom display metadata to a parsed rich card without changing storage. */
+function withRichEnterprise(rich: MessageRich, index: EnterpriseDisplayIndex): MessageRich {
+  let next = rich
+  if (rich.type === 'contact') {
+    const enterpriseName = enterpriseNameFor(index, rich.username)
+    if (enterpriseName !== undefined) next = { ...next, enterpriseName }
+  }
+  if (rich.records !== undefined && rich.records.length > 0) {
+    next = { ...next, records: withChatlogEnterprise(rich.records, index) }
+  }
+  return next
+}
+
 function msgTableName(username: string): string {
   return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
 }
@@ -377,6 +391,7 @@ function queryShardRows(shard: MsgShard, table: string, cursor: number | undefin
 function queryShardRowsWith(
   shard: MsgShard, table: string, cursor: number | undefined, after: number | undefined,
   limit: number, ascending: boolean, cursorLocalId?: number,
+  upTo?: { order: number; localId: number },
 ): RawMsgRow[] {
   const { db, cols } = shard
   const has = (c: string): boolean => cols.has(c)
@@ -386,7 +401,17 @@ function queryShardRowsWith(
   const useComposite = cursor !== undefined && cursorLocalId !== undefined && has('sort_seq')
   const params: number[] = []
   let whereClause = ''
-  if (after !== undefined) {
+  if (upTo !== undefined) {
+    // 分析旧消息时取「截至目标消息」的窗口。sort_seq 会重复，必须把 local_id
+    // 也放进上界，否则同一毫秒内排在目标后面的消息会混进上下文。
+    if (has('sort_seq')) {
+      whereClause = 'WHERE sort_seq < ? OR (sort_seq = ? AND local_id <= ?)'
+      params.push(upTo.order, upTo.order, upTo.localId)
+    } else {
+      whereClause = 'WHERE local_id <= ?'
+      params.push(upTo.localId)
+    }
+  } else if (after !== undefined) {
     whereClause = has('sort_seq') ? 'WHERE sort_seq > ?' : 'WHERE local_id > ?'
     params.push(after)
   } else if (cursor !== undefined) {
@@ -447,8 +472,11 @@ function queryShardRowsWith(
  */
 function toWechatMessages(
   rows: RawMsgRow[], talker: string, isGroup: boolean,
-  contactNames: Map<string, string>, selfUsername?: string,
+  contactNames: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string> = new Map(),
+  selfUsername?: string,
 ): WechatMessage[] {
+  const enterpriseIndex = createEnterpriseDisplayIndex(contactNames, enterpriseNames)
   return rows.map((r) => {
     const normType = normalizeMsgType(r.localType)
     const content = decodeBlobText(r.content)
@@ -498,7 +526,7 @@ function toWechatMessages(
     // 有 rich 描述时给出类型占位（[图片]/[表情]…），没有 rich 才退回文本抽取。
     const displayText = parsed.text || (parsed.rich ? richPlaceholder(parsed.rich) : msgText(content))
     if (displayText) msg.displayText = resolveSysRefs(displayText, contactNames)
-    if (parsed.rich) msg.rich = parsed.rich
+    if (parsed.rich) msg.rich = withRichEnterprise(parsed.rich, enterpriseIndex)
     // 归一化呈现种类：界面只按它 switch，不再自己拼白名单。
     const render = classifyRender(normType, parsed.rich, parsed.sysKind)
     msg.renderType = render
@@ -509,10 +537,14 @@ function toWechatMessages(
     if (needsAtUsers(talker, normType, content) && r.source) {
       const names = parseAtUsernames(decodeBlobText(r.source))
       if (names.length > 0) {
-        msg.atUsers = names.map((username) => ({
-          username,
-          displayName: username === 'notify@all' ? '所有人' : (contactNames.get(username) || username),
-        }))
+        msg.atUsers = names.map((username): MessageAtUser => {
+          const enterpriseName = enterpriseNameFor(enterpriseIndex, username)
+          return {
+            username,
+            displayName: username === 'notify@all' ? '所有人' : (contactNames.get(username) || username),
+            ...(enterpriseName === undefined ? {} : { enterpriseName }),
+          }
+        })
       }
     }
     // group chats: per-message member identity (incl. own messages, so the
@@ -524,7 +556,12 @@ function toWechatMessages(
         msg.sender = member
         const name = contactNames.get(member)
         if (name) msg.senderName = name
+        const enterpriseName = enterpriseNames.get(member)?.trim()
+        if (enterpriseName) msg.senderEnterpriseName = enterpriseName
       }
+    } else if (!isSelf) {
+      const enterpriseName = enterpriseNames.get(talker)?.trim()
+      if (enterpriseName) msg.senderEnterpriseName = enterpriseName
     }
     return msg
   })
@@ -559,9 +596,10 @@ export function queryNewMessages(
     }
     merged.sort((a, b) => a.sortSeq - b.sortSeq || a.localId - b.localId)
     const rows = merged.slice(0, cap)
-    const contactNames = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const contactNames = meta.names
     const isGroup = talker.endsWith('@chatroom')
-    const messages = toWechatMessages(rows, talker, isGroup, contactNames, selfUsername)
+    const messages = toWechatMessages(rows, talker, isGroup, contactNames, meta.enterpriseNames, selfUsername)
     const out: MessagesSnapshot = { messages, total: messages.length }
     if (selfUsername && selfUsername.length > 0) out.selfWxid = selfUsername
     return out
@@ -660,10 +698,13 @@ export function queryMessages(
     // 复合游标的第二段：与 cursor 一起返回，下一页据此跳过同 sort_seq 的已读行。
     const nextCursorLocalId = lastRow ? lastRow.localId : 0
 
-    const contactNames = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const contactNames = meta.names
     const isGroup = talker.endsWith('@chatroom')
     // pageRows are newest-first; the UI prepends older pages, so emit oldest→newest.
-    const messages = toWechatMessages(pageRows.reverse(), talker, isGroup, contactNames, selfUsername)
+    const messages = toWechatMessages(
+      pageRows.reverse(), talker, isGroup, contactNames, meta.enterpriseNames, selfUsername,
+    )
 
     const stats = messageStats(decryptedDir, table, shards)
     const base: MessagesSnapshot = { messages, total: stats.total, typeStats: stats.typeStats }
@@ -671,6 +712,75 @@ export function queryMessages(
     return hasMore
       ? { ...base, hasMore, cursor: nextCursor, cursorLocalId: nextCursorLocalId }
       : { ...base, hasMore: false }
+  })
+}
+
+/** 「截至某条消息」的消息窗口；`found=false` 表示目标已不在当前解密快照里。 */
+export interface MessageAtOrBeforeSnapshot {
+  messages: WechatMessage[]
+  found: boolean
+}
+
+/**
+ * Read a bounded message window ending at a specific local message.
+ *
+ * 推荐回复原先固定读会话最新 20 条；分析面板选中历史消息时，候选会错答最新一句。
+ * 这里按 `local_id` 找到目标的全局排序键，再取 `(sort_seq, local_id) <= 目标`
+ * 的最后一页，因此无论目标多旧都只读取当前会话，且不会越过目标看到后续消息。
+ * @param decryptedDir - 解密数据根。
+ * @param talker - 会话 username（范围边界）。
+ * @param localId - 目标消息在当前会话内的 local_id。
+ * @param limit - 窗口最多包含多少条消息（含目标）。
+ * @param selfUsername - 登录账号 wxid，用于区分「我」和对方/群成员。
+ * @returns 按时间正序的消息窗口与目标是否存在。
+ */
+export function queryMessagesAtOrBefore(
+  decryptedDir: string,
+  talker: string,
+  localId: number,
+  limit = 20,
+  selfUsername?: string,
+): MessageAtOrBeforeSnapshot {
+  if (!Number.isFinite(localId) || localId <= 0) return { messages: [], found: false }
+  const table = msgTableName(talker)
+  return withShards(decryptedDir, table, (shards) => {
+    if (shards.length === 0) return { messages: [], found: false }
+
+    let bound: { order: number; localId: number } | undefined
+    for (const shard of shards) {
+      if (!shard.cols.has('local_id')) continue
+      const orderCol = shard.cols.has('sort_seq') ? 'sort_seq' : 'local_id'
+      try {
+        const row = shard.db.prepare(
+          `SELECT ${orderCol} AS ord FROM "${table}" WHERE local_id = ? ORDER BY ${orderCol} DESC LIMIT 1`,
+        ).get(Math.trunc(localId)) as { ord?: unknown } | undefined
+        const order = Number(row?.ord ?? Number.NaN)
+        if (!Number.isFinite(order)) continue
+        if (bound === undefined || order > bound.order) bound = { order, localId: Math.trunc(localId) }
+      } catch {
+        // 某个旧分片缺列/读失败时继续找下一个；找不到目标会如实返回 found=false。
+      }
+    }
+    if (bound === undefined) return { messages: [], found: false }
+
+    const pageSize = Math.max(1, Math.min(Math.trunc(limit), 60))
+    const merged: RawMsgRow[] = []
+    for (const shard of shards) {
+      merged.push(...queryShardRowsWith(
+        shard, table, undefined, undefined, pageSize, false, undefined, bound,
+      ))
+    }
+    merged.sort((a, b) => b.sortSeq - a.sortSeq || b.localId - a.localId)
+    const rows = merged.slice(0, pageSize).reverse()
+    const meta = contactMeta(decryptedDir)
+    const contactNames = meta.names
+    const isGroup = talker.endsWith('@chatroom')
+    return {
+      messages: toWechatMessages(
+        rows, talker, isGroup, contactNames, meta.enterpriseNames, selfUsername,
+      ),
+      found: true,
+    }
   })
 }
 
@@ -758,7 +868,13 @@ async function queryMessageByServerIdUncached(
               typeLabel: msgTypeLabel(normType),
             }
             if (parsed.text) msg.displayText = parsed.text
-            if (parsed.rich) msg.rich = parsed.rich
+            if (parsed.rich) {
+              const meta = contactMeta(decryptedDir)
+              msg.rich = withRichEnterprise(
+                parsed.rich,
+                createEnterpriseDisplayIndex(meta.names, meta.enterpriseNames),
+              )
+            }
             const render = classifyRender(normType, parsed.rich, parsed.sysKind)
             msg.renderType = render
             msg.renderLabel = RENDER_LABEL[render] ?? '未知消息'

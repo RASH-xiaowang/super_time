@@ -238,6 +238,11 @@ describe('低分辨率适配：内容不许溢出容器', () => {
     expect(styleText).toMatch(/\.moreCard \{[\s\S]{0,300}min-width: 0/)
     expect(styleText).toMatch(/\.moreRow > span:first-child \{[^}]*text-overflow: ellipsis/)
     expect(styleText).toMatch(/\.moreRow > span:last-child \{[^}]*overflow-wrap: anywhere/)
+    const moreRowRules = [...styleCode.matchAll(/\.moreRow\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '')
+    expect(moreRowRules.length, '`.moreRow` 的基础样式丢了').toBeGreaterThan(0)
+    for (const rule of moreRowRules) {
+      expect(rule, '身份行不能被 overflow:hidden 裁掉上下边缘').not.toContain('overflow: hidden')
+    }
   })
 
   it('月度趋势的柱子用 flex 等分 + 百分比高度（不写死宽度，任何宽度都不溢出）', () => {

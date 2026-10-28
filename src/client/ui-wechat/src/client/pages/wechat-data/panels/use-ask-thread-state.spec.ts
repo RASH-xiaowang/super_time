@@ -268,6 +268,48 @@ describe('useAskSession：运行时结果与多轮状态', () => {
     expect(hook?.turns.map(t => t.text)).toEqual(['会停止的问题', '已经写了一半\n\n（已停止生成）'])
   })
 
+  it('请求失败时保留工具重试的原始阶段序列，供过程记录展开', async () => {
+    let rejectAsk: ((reason?: unknown) => void) | null = null
+    mocks.apiAskWechat.mockImplementationOnce(() => new Promise((_, reject) => {
+      rejectAsk = reject
+    }))
+
+    let asking: Promise<void> | undefined
+    act(() => { asking = hook?.ask('需要保留重试过程的问题') })
+    const streamId = (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId
+    act(() => {
+      for (const stage of [
+        { key: 'tool:0:search_messages', label: 'search_messages', status: 'running', phase: 'called', callId: 'c-retry', toolName: 'search_messages', attempt: 1, maxAttempts: 2, elapsedMs: 2 },
+        { key: 'tool:0:search_messages', label: 'search_messages', status: 'running', phase: 'retry', callId: 'c-retry', toolName: 'search_messages', attempt: 1, maxAttempts: 2, elapsedMs: 20, errorClass: 'timeout', deadlineExceeded: true },
+        { key: 'tool:0:search_messages', label: 'search_messages', status: 'running', phase: 'retry', callId: 'c-retry', toolName: 'search_messages', attempt: 2, maxAttempts: 2, elapsedMs: 22 },
+        { key: 'tool:0:search_messages', label: 'search_messages', status: 'done', phase: 'completed', callId: 'c-retry', toolName: 'search_messages', attempt: 2, maxAttempts: 2, elapsedMs: 300, hits: 1 },
+      ]) {
+        window.dispatchEvent(new CustomEvent('dsh-wechat-ask-stage', {
+          detail: { id: streamId, ...stage },
+        }))
+      }
+    })
+    await act(async () => {
+      rejectAsk?.(Object.assign(new Error('综合生成失败'), { code: 'MODEL_TIMEOUT' }))
+      await asking
+    })
+
+    const failed = hook?.turns.at(-1)
+    expect(failed).toMatchObject({ role: 'assistant', status: 'failed' })
+    expect(failed?.stages?.map(stage => stage.phase)).toEqual([
+      'called',
+      'retry',
+      'retry',
+      'completed',
+    ])
+    expect(failed?.stages?.at(-1)).toMatchObject({
+      status: 'done',
+      attempt: 2,
+      elapsedMs: 300,
+      hits: 1,
+    })
+  })
+
   it('失败后保留部分正文与错误码，可一键重试并替换失败轮次', async () => {
     mocks.apiAskWechat
       .mockRejectedValueOnce(Object.assign(new Error('模型请求超时'), { code: 'MODEL_TIMEOUT' }))

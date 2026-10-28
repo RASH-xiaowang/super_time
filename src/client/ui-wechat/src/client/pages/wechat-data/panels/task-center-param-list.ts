@@ -4,7 +4,7 @@
  * （控件）共用。
  *
  * 为什么单开一份：
- *  · `task-center.ts` 已到 M21 的 1000 行硬上限，paramList 的规则（11 种来源、模板白名单、
+ *  · `task-center.ts` 已到 M21 的 1000 行硬上限，paramList 的规则（14 种来源、模板白名单、
  *    与参数映射键重名、maxItems）体积不小；
  *  · 这些规则与后端 `rpa/template.ts#validateParamListField` 同口径，前端提前拦能给出
  *    行内中文错误（后端只回一条 error 字符串）；
@@ -12,7 +12,7 @@
  *
  * 与后端的对应关系（前端错误文案独立可读，但判定顺序保持一致）：
  *  ① 参数名 trim 后非空、≤64、不区分大小写去重；
- *  ② `source` 必须在 `field.paramSources`（缺省 = 全部 11 种）里；
+ *  ② `source` 必须在 `field.paramSources`（缺省 = 全部 14 种）里；
  *  ③ `fixed` 必填值（trim 后非空、≤2048）；`template` 必填（trim 后非空、≤512），
  *    且占位符只许 `${record.<白名单>}` / `${task.<白名单>}`；
  *  ④ 仅当厂商声明了 `mapping.mapField`（= 仍有「三个内置参数」）时，才校验参数名不得与
@@ -32,7 +32,7 @@ import type {
 /** 附加参数的全部值来源（描述符可用 `field.paramSources` 收窄子集）。 */
 export const ALL_PARAM_SOURCES: readonly RpaParamSource[] = [
   'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'fixed', 'template',
+  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template',
 ]
 
 /** 值来源的中文名（下拉选项、行内错误、文档共用同一套字面量）。 */
@@ -46,6 +46,9 @@ export const PARAM_SOURCE_LABELS: Record<RpaParamSource, string> = {
   chatType: '会话类型',
   taskId: '任务 id',
   recordId: '触发记录 id',
+  imagesJson: '触发图片（JSON 链接清单）',
+  imageCount: '触发图片数量',
+  firstImageUrl: '首张图片链接',
   fixed: '固定值',
   template: '自定义模板',
 }

@@ -62,8 +62,8 @@ function makeDataDir(): string {
   db.close()
   // 通讯录库（`get_contact_detail` 走它）。
   const cdb = new DatabaseSync(join(dec, 'contact', 'contact.db'))
-  cdb.exec('CREATE TABLE contact (id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT, nick_name TEXT, description TEXT)')
-  cdb.prepare('INSERT INTO contact VALUES (?,?,?,?,?,?,?)').run(1, 'wxid_a', 3, 'chen123', '房东老陈', '房东', '')
+  cdb.exec('CREATE TABLE contact (id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT, nick_name TEXT, quan_pin TEXT, description TEXT)')
+  cdb.prepare('INSERT INTO contact VALUES (?,?,?,?,?,?,?,?)').run(1, 'wxid_a', 3, 'chen123', '房东老陈', '房东', 'fangdong', '')
   cdb.close()
   return dec
 }

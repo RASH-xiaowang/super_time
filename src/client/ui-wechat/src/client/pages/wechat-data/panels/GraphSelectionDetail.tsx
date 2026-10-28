@@ -18,6 +18,8 @@ import { communityColor } from './graph-model.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import css from './graph.module.css'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /** 一个圈子（`communities` 的元素类型，从 `GraphPanel` 的用法反推）。 */
 interface Community {
@@ -30,21 +32,25 @@ interface SelectedClass {
   key: string
   total: number
   visibleCount: number
-  members: ReadonlyArray<{ username: string, name: string, visible: boolean }>
+  members: ReadonlyArray<{ username: string, name: string, enterpriseName?: string, visible: boolean }>
 }
 
 /** 选中节点的相连关系（`other` 可能缺失：对端被「仅显示好友」或节点上限挡在图外）。 */
 interface Connection {
   edge: { source: string, target: string, weight: number }
-  other: { id: string, label: string } | null | undefined
+  other: { id: string, label: string, enterpriseName?: string } | null | undefined
 }
 
 /** 知识类节点（笔记 / 待补 / 文件 / 章节 / 实体）没有「查看聊天」。 */
 const KNOWLEDGE_KINDS = new Set(['note', 'stub', 'file', 'section', 'entity'])
 
 export interface GraphSelectionDetailProps {
+  /** 是否知识图谱（知识节点的 id 不是微信 username，不能拿去查头像）。 */
+  isKnowledgeMode?: boolean
   /** 当前选中的节点。 */
   selected: GNode
+  /** 「我」的真实 username（相连关系里可能包含 self 节点）。 */
+  selfUsername?: string
   /** 选中节点的头像 data URL（空串 = 用首字兜底）。 */
   selAvatar: string
   /** 选中节点的共同群名。 */
@@ -82,10 +88,15 @@ export interface GraphSelectionDetailProps {
  */
 export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.Element {
   const {
-    selected, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
+    isKnowledgeMode = false, selected, selfUsername = '', selAvatar, selectedGroupNames, selectedClass, selectedConnections,
     communities, focusCommunity, pinned, selectNode, clearSelection, focusNode,
     togglePin, openNoteEditor, newNote, onOpenChat,
   } = p
+
+  const connectionUsername = (id: string): string => {
+    if (isKnowledgeMode) return ''
+    return id === 'self' ? selfUsername : id
+  }
 
   return (
     <div className={css.detail} data-focus={focusCommunity !== null || undefined}>
@@ -103,7 +114,7 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
           >{selected.label.slice(0, 1).toUpperCase()}</span>
         )}
         <div className={css.detailTitles}>
-          <span className={css.detailName}>{selected.label}</span>
+          <span className={css.detailName}>{withEnterprise(selected.label, selected.enterpriseName)}</span>
           <span className={kitCss.textMeta}>
             {selected.kind === 'note'
               ? `笔记 · 出链 ${selected.outLinks ?? 0} / 被引用 ${selected.backLinks ?? 0}`
@@ -169,10 +180,19 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
                 className={css.detailChip}
                 data-dim={m.visible ? undefined : true}
                 disabled={!m.visible}
-                title={m.visible ? m.name : `${m.name}（被「仅显示好友」或「节点上限」挡在图外，未参与连边）`}
+                title={m.visible
+                  ? withEnterprise(m.name, m.enterpriseName)
+                  : `${withEnterprise(m.name, m.enterpriseName)}（被「仅显示好友」或「节点上限」挡在图外，未参与连边）`}
                 onClick={() => { if (m.visible) selectNode(m.username) }}
               >
-                {m.name.length > 12 ? m.name.slice(0, 12) + '…' : m.name}
+                <IdentityName
+                  className={css.detailChipIdentity}
+                  name={m.name}
+                  username={m.username}
+                  size={16}
+                >
+                  {withEnterprise(m.name, m.enterpriseName)}
+                </IdentityName>
               </button>
             ))}
           </div>
@@ -181,8 +201,30 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
       <div className={css.detailSub}>相连关系 ({selectedConnections.length})</div>
       <div className={css.detailChips}>
         {selectedConnections.map(ce => (
-          <button key={ce.edge.source + ce.edge.target} type="button" className={css.detailChip} onClick={() => { selectNode(ce.other?.id ?? '') }} title={ce.other?.label ?? ''}>
-            {ce.other?.label ?? '?'}<span className={css.rankW}>{ce.edge.weight}</span>
+          <button
+            key={ce.edge.source + ce.edge.target}
+            type="button"
+            className={css.detailChip}
+            onClick={() => { selectNode(ce.other?.id ?? '') }}
+            title={ce.other ? withEnterprise(ce.other.label, ce.other.enterpriseName) : ''}
+          >
+            {ce.other
+              ? isKnowledgeMode ? (
+                  <span className={css.detailChipLabel}>
+                    {withEnterprise(ce.other.label, ce.other.enterpriseName)}
+                  </span>
+                ) : (
+                  <IdentityName
+                    className={css.detailChipIdentity}
+                    name={ce.other.label}
+                    username={connectionUsername(ce.other.id)}
+                    size={16}
+                  >
+                    {withEnterprise(ce.other.label, ce.other.enterpriseName)}
+                  </IdentityName>
+                )
+              : '?'}
+            <span className={css.rankW}>{ce.edge.weight}</span>
           </button>
         ))}
       </div>

@@ -10,6 +10,7 @@ export interface ExportRemoteCtx {
         decrypted: string;
         decoded: string;
     };
+    rawWechatBase: (decrypted: string) => string;
     ctx: () => Context;
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
     recordExport: (input: {
@@ -26,23 +27,24 @@ export interface ExportRemoteCtx {
     finishStreamJob: (jobId: string, error?: string) => void;
     streamJobs: Map<string, StreamJob>;
 }
+interface SessionExportOptions {
+    username: string;
+    format: string;
+    count?: number;
+    dir?: string;
+    types?: number[];
+    richTypes?: string[];
+    from?: number;
+    to?: number;
+    filename?: string;
+    zip?: boolean;
+    /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
+    sessionName?: string;
+    /** 进度/取消的任务标识（M3）：客户端按它认领 `wechat-export/progress` 事件。 */
+    jobId?: string;
+}
 export declare function createExportRemotes(rc: ExportRemoteCtx): {
-    exportSessionMessages(options: {
-        username: string;
-        format: string;
-        count?: number;
-        dir?: string;
-        types?: number[];
-        richTypes?: string[];
-        from?: number;
-        to?: number;
-        filename?: string;
-        zip?: boolean;
-        /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
-        sessionName?: string;
-        /** 进度/取消的任务标识（M3）：客户端按它认领 `wechat-export/progress` 事件。 */
-        jobId?: string;
-    }): Promise<ExportResult>;
+    exportSessionMessages(options: SessionExportOptions): Promise<ExportResult>;
     exportAnnualReport(options: {
         year: number;
         format: string;
@@ -101,3 +103,4 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
     }): ExportHistoryDeleteResult;
     pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult;
 };
+export {};

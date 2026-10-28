@@ -661,7 +661,9 @@ export function queryRevokedRetained (
       ? 'sender_username, local_id, server_id'
       : "'' AS sender_username, 0 AS local_id, '' AS server_id"
     const kw = (q ?? '').trim().toLowerCase()
-    const names = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const names = meta.names
+    const enterpriseNames = meta.enterpriseNames
     const lookups = talkerLookups(names)
     const selfUsername = resolveSelfUsername(decryptedDir)
     const tips = db.prepare(
@@ -692,6 +694,7 @@ export function queryRevokedRetained (
       const original = prev?.content === undefined ? '' : decodeStored(toText(prev.content))
       const sessionUsername = sessionUsernameOfTalker(t.talker, lookups.byMd5)
       const sessionName = sessionUsername === '' ? '' : (names.get(sessionUsername) ?? sessionUsername)
+      const enterpriseName = sessionUsername === '' ? undefined : enterpriseNames.get(sessionUsername)
       const isGroup = sessionUsername.endsWith('@chatroom') || stripGroupPrefix(tip) !== tip
       // 发送者 username 的优先级：原文群前缀 → 归档 Name2Id → 提示里的 <fromusername>
       // → 撤回提示显示名唯一匹配 → 私聊会话本身 / 自己。
@@ -706,6 +709,7 @@ export function queryRevokedRetained (
         || (!isGroup && sender === names.get(selfUsername) ? selfUsername : '')
       const described = original === '' ? undefined : describeRevokedOriginal(original, prev?.local_type ?? 0, isGroup)
       const content = described?.content ?? '（原文未保留：撤回发生在归档开始之前）'
+      const senderEnterpriseName = senderUsername === '' ? undefined : enterpriseNames.get(senderUsername)
       const item: RetainedRevokeItem = {
         sender,
         type_label: described?.typeLabel ?? '原文缺失',
@@ -714,6 +718,8 @@ export function queryRevokedRetained (
         ...(senderUsername !== '' ? { sender_username: senderUsername } : {}),
         ...(sessionUsername !== '' ? { session_username: sessionUsername } : {}),
         ...(sessionName !== '' ? { session_name: sessionName } : {}),
+        ...(enterpriseName !== undefined && enterpriseName.trim() !== '' ? { enterpriseName } : {}),
+        ...(senderEnterpriseName !== undefined && senderEnterpriseName.trim() !== '' ? { senderEnterpriseName } : {}),
         session_is_group: isGroup,
         ...(prev === undefined ? {} : {
           // v1 归档没有 local_id：真机上 local_id === rowid，回退 row_key。
@@ -725,7 +731,14 @@ export function queryRevokedRetained (
         status_label: described?.statusLabel ?? '原文未保留',
         ...(described?.media ? { media: described.media } : {}),
       }
-      if (kw !== '' && !(item.sender.toLowerCase().includes(kw) || content.toLowerCase().includes(kw) || tip.toLowerCase().includes(kw))) continue
+      const searchable = [
+        item.sender,
+        content,
+        tip,
+        enterpriseName ?? '',
+        senderEnterpriseName ?? '',
+      ].join('\n').toLowerCase()
+      if (kw !== '' && !searchable.includes(kw)) continue
       items.push(item)
     }
     return { items: items.slice(offset, offset + limit), total: items.length }

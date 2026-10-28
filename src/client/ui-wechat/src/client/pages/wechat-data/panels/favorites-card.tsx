@@ -15,6 +15,7 @@ import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
 import { parseFavItem } from './favorites-parse.ts'
 import { FavoriteAvatar } from './favorites-avatar.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface FavCardProps {
@@ -62,6 +63,7 @@ function previewGlyph(part: FavItemPart): string {
  */
 export function FavCard({ f, selectMode, checked, thumbs, onActivate, onMounted }: FavCardProps): React.JSX.Element {
   const info = parseFavItem(f)
+  const sourceIdentity = withEnterprise(info.source, f.sourceEnterpriseName)
   /**
    * 聊天记录收藏的卡片预览只取前两条正文，并带上发送者前缀；
    * 普通收藏仍按原来的口径取文本条目，避免把 `sourceName` 当成正文重复一遍。
@@ -69,7 +71,7 @@ export function FavCard({ f, selectMode, checked, thumbs, onActivate, onMounted 
   const preview = info.items.length > 0
     ? (f.type === 14
         ? info.items.filter((p) => p.kind === 'text' && p.text).slice(0, 2)
-          .map((p) => (p.sourceName ? `${p.sourceName}：${p.text ?? ''}` : p.text ?? '')).join('\n')
+          .map((p) => (p.sourceName ? `${withEnterprise(p.sourceName, p.sourceEnterpriseName)}：${p.text ?? ''}` : p.text ?? '')).join('\n')
         : info.items.filter((p) => p.kind === 'text').map((p) => p.text || '').join('\n'))
     : info.desc
   const previewPart = previewPartOf(info.items)
@@ -88,7 +90,7 @@ export function FavCard({ f, selectMode, checked, thumbs, onActivate, onMounted 
       // 后写的属性覆盖 clickableKey 的默认值，键盘与读屏两边都准确。
       role={selectMode ? 'checkbox' : 'button'}
       aria-checked={selectMode ? checked : undefined}
-      aria-label={info.title}
+      aria-label={`${info.title}${info.source ? ` · ${sourceIdentity}` : ''}`}
     >
       {selectMode && (
         <span className={kitCss.batchCheck} data-checked={checked || undefined}>
@@ -105,7 +107,7 @@ export function FavCard({ f, selectMode, checked, thumbs, onActivate, onMounted 
         <div className={css.favCardTitle}>{info.title}</div>
         {preview && <div className={css.favCardDesc}>{preview}</div>}
         <div className={css.favCardFoot}>
-          <span className={css.favCardMeta + ' ' + kitCss.textCaption}>{info.typeLabel + (info.source ? ' · ' + info.source : '')}</span>
+          <span className={css.favCardMeta + ' ' + kitCss.textCaption}>{info.typeLabel + (info.source ? ' · ' + sourceIdentity : '')}</span>
           {info.time && <span className={css.favCardTime + ' ' + kitCss.textCaption}>{info.time}</span>}
         </div>
       </div>

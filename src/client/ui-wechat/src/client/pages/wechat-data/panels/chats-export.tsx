@@ -121,7 +121,7 @@ const [expTypes, setExpTypes] = useState<readonly string[]>([])
 const [expFrom, setExpFrom] = useState('')
 const [expTo, setExpTo] = useState('')
 const [expFilename, setExpFilename] = useState('')
-const [expZip, setExpZip] = useState(false)
+const [expZip, setExpZip] = useState(true)
 const [pickingDir, setPickingDir] = useState(false)
 
 const EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }> = [
@@ -167,7 +167,9 @@ const exportSession = useCallback(async (): Promise<void> => {
     if (expFilename.trim()) opts.filename = expFilename.trim()
     if (expZip) opts.zip = true
     const r = await apiExportSessionMessages(opts)
-    setExportMsg(`已导出 ${r.count} 条 → ${r.path}`)
+    const media = r.mediaCount && r.mediaCount > 0 ? `、${r.mediaCount} 个资源` : ''
+    const missing = r.mediaMissingCount && r.mediaMissingCount > 0 ? `（${r.mediaMissingCount} 个资源本地缺失，已写入清单）` : ''
+    setExportMsg(`已导出 ${r.count} 条${media}${missing} → ${r.path}`)
     setExportOpen(false)
   } catch (e) {
     const msg = String((e as Error)?.message ?? e)

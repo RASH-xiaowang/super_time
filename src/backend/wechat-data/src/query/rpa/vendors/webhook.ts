@@ -1,19 +1,20 @@
 /**
- * 内置触发方式：**Webhook**（把整条触发记录 JSON POST 到用户逐条填写的地址）。
+ * 内置触发方式：**Webhook**（把整条触发记录 POST 到用户填写的地址）。
  *
- * 这是 2026-10-21 之前就有的能力，多厂商改造后成为注册表里的第一个内置厂商：
- *  · URL 来自任务配置 `config.url`（用户填写，只允许 http/https）；
- *  · 请求体沿用 `TaskCallbackPayload` 的形状（任务/记录 id、时间、会话、触发对象、关键词、
- *    已过隐私闸的触发文本、图片 data URL 数组）——**字段一个都不变**；
- *  · 图片逐张解码：解不出来或单张超过约 6MB 时只省略该张并带上 `error`，不让整条回调失败。
+ * 两种图片传输模式：
+ *  · `dataUrl`（默认，兼容旧接收端）：整条记录仍是 JSON，图片为 base64 data URL；
+ *  · `multipart`：`payload` part 是同一份 JSON 元数据，图片按 `images` 文件 part 发原始字节，
+ *    避免 base64 的约 33% 额外体积，也不会在请求体里出现 data URL。
  *
- * 由于 payload 形状无法用声明式模板表达（要读图片、要格式化本地时间），本厂商用
- * `buildRequest` 钩子整体组装请求；核心管道只负责主机校验、发送与解析。
+ * 图片逐张解码；单张失败只给该图片写 `error`，不影响其它图片和整条回调。
  */
-import { readFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { RpaVendorDescriptor, RpaMappingTarget } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor } from '../../../types-rpa.ts'
 import type { TaskCallbackPayload } from '../../../types.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
 import type {
   RpaBuildDeps,
   RpaHttpRequest,
@@ -24,22 +25,21 @@ import type {
 
 /** 单张图片 data URL 的字符上限（约 6 MB 原始字节；超过就省略该张而不是把整条回调撑爆）。 */
 const IMAGE_DATA_URL_MAX = 8_000_000
+/** multipart 单张/整单原始字节上限：防止一次回调把进程内存和接收端连接撑爆。 */
+const MULTIPART_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+const MULTIPART_TOTAL_MAX_BYTES = 60 * 1024 * 1024
+/** multipart 固定字段名（接收端按这两个名字取值）。 */
+const MULTIPART_PAYLOAD_FIELD = 'payload'
+const MULTIPART_IMAGE_FIELD = 'images'
 /** 单条失败原因的落库/上报上限（与旧实现同口径）。 */
 const ERROR_TEXT_MAX = 500
-
-/** 三个语义参数位的默认映射键（Webhook 发整条记录，映射只用于描述符完整性/未来扩展）。 */
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
 
 const descriptor: RpaVendorDescriptor = {
   id: 'webhook',
   name: 'Webhook',
   vendor: '内置 Webhook（标准 HTTP POST）',
-  version: '1.0.0',
-  summary: '把整条触发记录（含图片）JSON POST 到你填写的地址；默认触发方式，行为与旧版一致。',
+  version: '1.2.0',
+  summary: '把整条触发记录（含图片）POST 到你填写的地址；附加参数放进 params，支持 JSON base64 与 multipart 二进制。',
   status: 'stable',
   docs: {
     home: 'https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Methods/POST',
@@ -67,13 +67,26 @@ const descriptor: RpaVendorDescriptor = {
       help: '只支持 http/https；由你自行保证对端可达并返回 2xx。',
     },
     {
-      key: 'paramMap',
-      label: '参数映射',
-      type: 'map',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: 'Webhook 仍发送整条触发记录；这里配置的条目会额外放进请求体的 params。默认 params={}，需要会话名 / 触发文本 / 触发对象等字段时逐条添加。',
+    },
+    {
+      key: 'imageDelivery',
+      label: '图片传输方式',
+      type: 'select',
       required: false,
       advanced: true,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: 'Webhook 发送整条触发记录，不使用参数映射；保留此项仅为描述符完整性。',
+      defaultValue: 'dataUrl',
+      options: [
+        { value: 'dataUrl', label: 'JSON data URL（兼容旧接收端）' },
+        { value: 'multipart', label: 'multipart/form-data（推荐，省约 1/3 体积）' },
+      ],
+      help: 'multipart 模式读取文件原始字节：payload 字段是 JSON，images 字段是图片文件；接收端必须支持 multipart。',
     },
   ],
   auth: {
@@ -82,8 +95,8 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'object',
-    mapField: 'paramMap',
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
   },
   request: {
     method: 'POST',
@@ -110,11 +123,12 @@ const descriptor: RpaVendorDescriptor = {
   },
   risks: [
     '地址由用户填写：对端不可达或返回非 2xx 时记为失败，最多尝试 2 次（含首次）',
-    '图片逐张解码：单张超过约 6MB 或解码失败时只省略该张并带上 error',
+    'dataUrl 模式单张超过约 6MB、multipart 模式单张超过 20MB 或整单超过 60MB，只省略该张并带上 error',
     '隐私闸只对触发文本脱敏（功能名 task_callback），图片不做打码',
   ],
   notes: [
-    '内置通道（非厂商 API）：请求体形状与 2026-10-21 之前逐字段一致（TaskCallbackPayload + 图片 data URL）。',
+    '默认 imageDelivery=dataUrl，与旧接收端逐字段兼容；改用 multipart 前请确认接收端能从 payload/images 两个字段读取。',
+    '旧版 paramMap 从未影响 Webhook 请求体，因此不自动迁移；如确实需要对应字段，请在「附加参数」里重新添加。',
   ],
 }
 
@@ -138,6 +152,27 @@ function isSafeDecodedPath(file: string): boolean {
 /** 统一把异常转成可读文本（未知值走 String）。 */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** 同一份回调信封（不含图片数组），两种传输模式共用。 */
+function callbackEnvelope(ctx: RpaInvocationContext): Omit<TaskCallbackPayload, 'images'> {
+  const record = ctx.record
+  const mapped = resolveMapped(descriptor, ctx)
+  if (typeof mapped !== 'object' || mapped === null || Array.isArray(mapped)) {
+    throw new Error('Webhook 附加参数解析失败：params 必须是对象')
+  }
+  return {
+    taskId: ctx.taskId,
+    taskName: ctx.taskName,
+    recordId: ctx.recordId,
+    triggeredAt: record.triggeredAt,
+    triggeredAtText: new Date(record.triggeredAt).toLocaleString('zh-CN', { hour12: false }),
+    chat: { username: record.username, name: record.chatName, type: record.chatType },
+    target: { username: record.targetUsername, name: record.targetName },
+    keyword: record.keyword,
+    text: record.text,
+    params: mapped as Record<string, string>,
+  }
 }
 
 /**
@@ -168,7 +203,7 @@ async function buildPayloadImages(
         if (!isSafeDecodedPath(decoded.file)) {
           item.error = '图片路径超出解码目录，已省略'
         } else {
-          const bytes = readFileSync(join(deps.decodedDir, decoded.file))
+          const bytes = await readFile(join(deps.decodedDir, decoded.file))
           dataUrl = 'data:' + imageMimeOf(decoded.file) + ';base64,' + bytes.toString('base64')
         }
       }
@@ -190,26 +225,175 @@ async function buildCallbackPayload(
   ctx: RpaInvocationContext,
   deps: RpaBuildDeps,
 ): Promise<TaskCallbackPayload> {
-  const record = ctx.record
-  const images = await buildPayloadImages(record, deps)
+  const images = await buildPayloadImages(ctx.record, deps)
+  return { ...callbackEnvelope(ctx), images }
+}
+
+/** multipart 中的图片元数据（文件字段/文件名/大小/摘要用于接收端校验）。 */
+interface MultipartImageMetadata {
+  localId: number
+  createTime: number
+  sender: string
+  md5?: string
+  error?: string
+  fileField?: string
+  filename?: string
+  contentType?: string
+  size?: number
+  sha256?: string
+}
+
+/** multipart 回调信封（与 dataUrl 模式字段相同，仅 images 增加文件描述）。 */
+interface MultipartCallbackPayload extends Omit<TaskCallbackPayload, 'images'> {
+  images: MultipartImageMetadata[]
+}
+
+/** 一张待写入 multipart 的图片文件。 */
+interface MultipartFile {
+  filename: string
+  contentType: string
+  bytes: Buffer
+}
+
+/** data URL → 原始字节（仅在 fileOnly 解码仍回退 data URL 时使用）。 */
+function bytesFromDataUrl(dataUrl: string): { bytes: Buffer; mime: string } | null {
+  const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(dataUrl)
+  if (match === null) return null
+  try {
+    return { bytes: Buffer.from(match[2] ?? '', 'base64'), mime: match[1] ?? 'image/jpeg' }
+  } catch {
+    return null
+  }
+}
+
+/** MIME → 安全扩展名（文件名由本模块生成，不采信远端输入）。 */
+function imageExtensionOf(mime: string): string {
+  if (mime === 'image/png') return 'png'
+  if (mime === 'image/webp') return 'webp'
+  if (mime === 'image/gif') return 'gif'
+  if (mime === 'image/bmp') return 'bmp'
+  return 'jpg'
+}
+
+/**
+ * 逐张读取图片文件并生成 multipart 元数据/文件 part。
+ * 单张失败、超单张上限或累计超整单上限时只给该项写 `error`。
+ */
+async function buildMultipartImages(
+  record: RpaRecordContext,
+  deps: RpaBuildDeps,
+): Promise<{ images: MultipartImageMetadata[]; files: MultipartFile[] }> {
+  const images: MultipartImageMetadata[] = []
+  const files: MultipartFile[] = []
+  let totalBytes = 0
+  for (let index = 0; index < record.images.length; index += 1) {
+    const image = record.images[index]
+    if (image === undefined) continue
+    const item: MultipartImageMetadata = {
+      localId: image.localId,
+      createTime: image.createTime,
+      sender: image.sender,
+    }
+    if (image.md5 !== undefined) item.md5 = image.md5
+    try {
+      const decoded = await deps.decodeImage(record.username, image.localId, { fileOnly: true })
+      let bytes: Buffer | null = null
+      let mime = 'image/jpeg'
+      if (typeof decoded.file === 'string' && decoded.file !== '') {
+        if (!isSafeDecodedPath(decoded.file)) {
+          item.error = '图片路径超出解码目录，已省略'
+        } else {
+          const abs = join(deps.decodedDir, decoded.file)
+          const info = await stat(abs)
+          if (!info.isFile()) throw new Error('解码结果不是文件')
+          if (info.size > MULTIPART_IMAGE_MAX_BYTES) {
+            item.error = '图片过大，已省略'
+          } else if (totalBytes + info.size > MULTIPART_TOTAL_MAX_BYTES) {
+            item.error = '图片总量过大，已省略'
+          } else {
+            bytes = await readFile(abs)
+            mime = imageMimeOf(decoded.file)
+          }
+        }
+      } else if (typeof decoded.url === 'string' && decoded.url !== '') {
+        const fallback = bytesFromDataUrl(decoded.url)
+        if (fallback === null) item.error = '图片解码失败'
+        else if (fallback.bytes.length > MULTIPART_IMAGE_MAX_BYTES) item.error = '图片过大，已省略'
+        else if (totalBytes + fallback.bytes.length > MULTIPART_TOTAL_MAX_BYTES) item.error = '图片总量过大，已省略'
+        else {
+          bytes = fallback.bytes
+          mime = fallback.mime
+        }
+      } else {
+        item.error = '图片解码失败'
+      }
+      if (item.error === undefined && bytes !== null) {
+        const filename = `image-${String(index + 1).padStart(2, '0')}.${imageExtensionOf(mime)}`
+        item.fileField = MULTIPART_IMAGE_FIELD
+        item.filename = filename
+        item.contentType = mime
+        item.size = bytes.length
+        item.sha256 = createHash('sha256').update(bytes).digest('hex')
+        totalBytes += bytes.length
+        files.push({ filename, contentType: mime, bytes })
+      }
+    } catch (error) {
+      item.error = errorText(error).slice(0, ERROR_TEXT_MAX)
+    }
+    images.push(item)
+  }
+  return { images, files }
+}
+
+/** 拼装可重放的 multipart 请求体（Buffer 每次重试复用同一份字节）。 */
+function encodeMultipart(payload: MultipartCallbackPayload, files: MultipartFile[]): {
+  body: Buffer
+  contentType: string
+} {
+  const boundary = '----SuperTimeWebhook' + randomUUID().replace(/-/g, '')
+  const chunks: Buffer[] = []
+  const push = (text: string): void => { chunks.push(Buffer.from(text, 'utf8')) }
+  push(`--${boundary}\r\n`)
+  push(`Content-Disposition: form-data; name="${MULTIPART_PAYLOAD_FIELD}"\r\n`)
+  push('Content-Type: application/json; charset=utf-8\r\n\r\n')
+  push(JSON.stringify(payload))
+  push('\r\n')
+  for (const file of files) {
+    push(`--${boundary}\r\n`)
+    push(`Content-Disposition: form-data; name="${MULTIPART_IMAGE_FIELD}"; filename="${file.filename}"\r\n`)
+    push(`Content-Type: ${file.contentType}\r\n\r\n`)
+    chunks.push(file.bytes)
+    push('\r\n')
+  }
+  push(`--${boundary}--\r\n`)
   return {
-    taskId: ctx.taskId,
-    taskName: ctx.taskName,
-    recordId: ctx.recordId,
-    triggeredAt: record.triggeredAt,
-    triggeredAtText: new Date(record.triggeredAt).toLocaleString('zh-CN', { hour12: false }),
-    chat: { username: record.username, name: record.chatName, type: record.chatType },
-    target: { username: record.targetUsername, name: record.targetName },
-    keyword: record.keyword,
-    text: record.text,
-    images,
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  }
+}
+
+/** 组装 multipart 请求（payload JSON + images 原始文件）。 */
+async function buildMultipartRequest(
+  ctx: RpaInvocationContext,
+  deps: RpaBuildDeps,
+): Promise<RpaHttpRequest> {
+  const { images, files } = await buildMultipartImages(ctx.record, deps)
+  const payload: MultipartCallbackPayload = { ...callbackEnvelope(ctx), images }
+  const encoded = encodeMultipart(payload, files)
+  return {
+    method: 'POST',
+    url: '',
+    headers: { 'Content-Type': encoded.contentType },
+    body: '',
+    bodyBytes: encoded.body,
+    contentType: encoded.contentType,
   }
 }
 
 export const adapter: RpaVendorAdapter = {
   descriptor,
   /**
-   * 组装 Webhook 请求：整条触发记录 JSON + 图片 data URL。
+   * 组装 Webhook 请求：按 `config.imageDelivery` 选择 JSON data URL 或 multipart 文件。
    * @param ctx - 投递上下文（text 已过隐私闸）。
    * @param deps - 图片解码依赖。
    * @returns 可直接发送的 POST 请求。
@@ -219,6 +403,10 @@ export const adapter: RpaVendorAdapter = {
     const rawUrl = ctx.config['url']
     const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
     if (url === '') throw new Error('Webhook 投递失败：任务未配置回调地址')
+    if (ctx.config['imageDelivery'] === 'multipart') {
+      const multipart = await buildMultipartRequest(ctx, deps)
+      return { ...multipart, url }
+    }
     const payload = await buildCallbackPayload(ctx, deps)
     return {
       method: 'POST',

@@ -161,9 +161,12 @@ function commonGroups(decryptedDir: string, username: string): Contact360Group[]
 export function queryContact360(decryptedDir: string, username: string): Contact360Snapshot {
   const msg = messageStats(decryptedDir, username)
   const funds = fundsCount(decryptedDir, username)
+  const meta = contactMeta(decryptedDir)
+  const enterpriseName = meta.enterpriseNames.get(username)?.trim()
   return {
     username,
-    displayName: contactMeta(decryptedDir).names.get(username) ?? username,
+    displayName: meta.names.get(username) ?? username,
+    ...(enterpriseName ? { enterpriseName } : {}),
     messages: msg,
     moments: { count: momentsCount(decryptedDir, username) },
     funds,

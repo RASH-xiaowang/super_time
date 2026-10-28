@@ -10,7 +10,7 @@ flowchart TB
   subgraph RENDERER["渲染进程"]
     R1["ui-app 入口壳<br/>引导 → 同意 → 许可证"]
     R2["ui-wechat 数据面板<br/>39 tab / 侧栏 5 组"]
-    R3["panels 167 个视图"]
+    R3["panels 171 个视图"]
     R4["api-*.ts + cache.ts"]
   end
 
@@ -29,7 +29,7 @@ flowchart TB
     K1["wechat-worker.js"]
     K2["wechat-host.js 适配层"]
     K3["Gateway 继承链<br/>219 @Remote"]
-    K4["query/** 157 文件"]
+    K4["query/** 158 文件"]
     K5["keys/** 11 文件"]
     K6["retrieval/** + kb/**"]
     K7["answer-runtime/** + tools/**"]

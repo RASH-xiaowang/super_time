@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { columnsForWidth, gridColumnCount, gridRowCount, gridRowRange, resolveGridColumns } from './files-grid.ts'
-import { CAT_LABEL, fileDisplayName, fileKey, fileSource, fileTitle, isHashLike } from './files-naming.ts'
+import { CAT_LABEL, fileDisplayName, fileKey, fileSource, fileSourceName, fileSourceUsername, fileTitle, isHashLike } from './files-naming.ts'
 
 describe('网格算术', () => {
   it('从解析后的 gridTemplateColumns 数列（浏览器给的是「200px 200px 200px」）', () => {
@@ -77,9 +77,17 @@ describe('文件命名与来源', () => {
 
   it('来源串：会话名优先 message_resource 口径，缺失才用附件目录口径；空值不留分隔符', () => {
     expect(fileSource(f({ sessionName: '甲', sourceTalker: '乙', sourceMonth: '2026-09' }))).toBe('甲 · 2026-09')
+    expect(fileSourceName(f({ sessionName: '甲', sessionEnterpriseName: '甲方公司' }))).toBe('甲（企业：甲方公司）')
+    expect(fileSourceName(f({ sourceTalker: '乙', sourceTalkerEnterpriseName: '乙方公司' }))).toBe('乙（企业：乙方公司）')
     expect(fileSource(f({ sourceTalker: '乙' }))).toBe('乙')
     expect(fileSource(f({ sourceMonth: '2026-09' }))).toBe('2026-09')
     expect(fileSource(f({}))).toBe('')
+  })
+
+  it('头像只用真实 username，并按 message_resource → 附件目录顺序取', () => {
+    expect(fileSourceUsername(f({ sessionUsername: 'wxid_session', sourceUsername: 'wxid_dir' }))).toBe('wxid_session')
+    expect(fileSourceUsername(f({ sourceUsername: 'wxid_dir' }))).toBe('wxid_dir')
+    expect(fileSourceUsername(f({ sessionName: '项目群', sourceTalker: '群主' }))).toBe('')
   })
 
   it('tooltip 给全名 + 来源 + 原始文件名（只在二者不同时重复给）', () => {

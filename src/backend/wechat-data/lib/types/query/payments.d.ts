@@ -16,6 +16,8 @@ export interface PaymentStatus {
     /** redEnvelopeTable */
     redpacket?: {
         sender: string;
+        senderName?: string;
+        senderEnterpriseName?: string;
         hbStatus: number;
         hbType: number;
         receiveStatus: number;

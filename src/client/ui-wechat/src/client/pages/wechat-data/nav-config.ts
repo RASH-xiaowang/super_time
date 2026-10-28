@@ -27,10 +27,10 @@
  * 因此仍留在旧的描边字形上，未一并重画。
  */
 export type WechatTab =
-  | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'kb' | 'monitor' | 'contacts' | 'moments'
+  | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'kb' | 'monitor' | 'contacts' | 'portraits' | 'moments'
   | 'favorites' | 'emoticons' | 'files' | 'records' | 'ledger' | 'storage' | 'bizchats'
   | 'servicechats' | 'kefu' | 'annual' | 'period' | 'dailysummary' | 'hook' | 'privacy'
-  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles' | 'clawbot'
+  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'messagelist' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles' | 'clawbot'
 
 export interface NavItem {
   tab: WechatTab
@@ -149,6 +149,9 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
       // 通讯录：微信官方字形是「人像 + 右侧通讯录条目行」，不是单独一个人像 ——
       // 只画人像会和「联系人」类的其它图标撞脸，右侧三行才是通讯录的语义。
       { tab: 'contacts', label: '通讯录', icon: filled('<path d="M7.2 10.8a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8zM7.2 12.4c-3.3 0-6 2-6 4.6v1.6h12v-1.6c0-2.6-2.7-4.6-6-4.6z"/><path d="M15 5.4h6.4a1.1 1.1 0 0 1 0 2.2H15a1.1 1.1 0 0 1 0-2.2zM15 9.6h4.8a1.1 1.1 0 0 1 0 2.2H15a1.1 1.1 0 0 1 0-2.2zM15 13.8h6.4a1.1 1.1 0 0 1 0 2.2H15a1.1 1.1 0 0 1 0-2.2z"/>') },
+      // 客户画像与标签：证件卡轮廓 + 左侧人像挖空 + 右侧三条信息。它和「通讯录」
+      // 刻意区分：通讯录是开放的人像/条目语法，这里是有边框的“客户档案卡”。
+      { tab: 'portraits', label: '客户画像与标签', icon: filled('<path fill-rule="evenodd" d="M5.2 3.2h13.6A2.2 2.2 0 0 1 21 5.4v13.2a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.6V5.4a2.2 2.2 0 0 1 2.2-2.2zM9.2 8.1a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM5.5 15.4c.4-2.4 1.9-3.8 3.7-3.8s3.3 1.4 3.7 3.8v.7H5.5zM14.6 7.2h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5zM14.6 10.4h3.6a.75.75 0 0 1 0 1.5h-3.6a.75.75 0 0 1 0-1.5zM14.6 13.6h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5z"/>') },
       // ── 社交图谱 2026-09-17 并入「通讯录」─────────────────────────────
       // 两者是**同一批人的两种看法**（联系人列表 / 关系图），所以收进同一个导航项、
       // 由面板顶部段条切换（见 WechatDataPanel 里 contacts|graph 的合并 case）。
@@ -222,6 +225,9 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
       // 图标：三行清单（触发条件）+ 右侧闪电（触发语义）。清单条与闪电之间留出空隙，
       // 17px 下不会糊成一团；闪电坐标落在 15.5~20.9，不与清单条（x ≤ 12.8）相交。
       { tab: 'taskinfo', label: '任务信息', icon: filled('<path d="M3.4 6.2h9.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 11.4h7.2a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 16.6h8.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2z"/><path d="M18.9 3.2l-3.4 6.1h2.4l-1.3 5.3 3.6-6.3h-2.4z"/>') },
+      // 消息列表：三条已发送消息 + 右侧状态勾。它记录「回复发没发出去」，
+      // 与任务信息（配置监听规则）和聊天会话（阅读原始消息）都不是同一件事。
+      { tab: 'messagelist', label: '消息列表', icon: filled('<path d="M5.2 3.2h13.6A2.2 2.2 0 0 1 21 5.4v13.2a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.6V5.4a2.2 2.2 0 0 1 2.2-2.2zM6.6 7.2h7.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 11.2h5.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 15.2h4.2a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM17.1 13.1l1.3 1.3 2.4-2.7 1.4 1.2-3.9 4.3-2.6-2.7z"/>') },
       // 操作日志：填充圆环 + 两根指针（挖空区里再挖出指针，走 evenodd 的三重交叉）
       { tab: 'oplog', label: '操作日志', icon: filled('<path fill-rule="evenodd" d="M12 2.2a9.8 9.8 0 1 0 0 19.6 9.8 9.8 0 0 0 0-19.6zm0 2.4a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8zM11.2 7.2h1.6v5.6h-1.6zM12 11.2h4.4v1.6H12z"/>') },
       // 隐私体检 2026-09 一度也进过弹窗，现按「只读数据视图回主界面」迁回来：

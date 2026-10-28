@@ -104,42 +104,65 @@ describe('总览卡片区：默认 6 张核心卡 + 「更多分析」折叠区'
     for (const comp of [
       '<TrendSection extras={extras} />',
       '<HeatmapSection heatmap={extras.heatmap} />',
-      '<RelationSection ins={ins} onOpenChat={openChat} />',
-      '<ContentAssetsSection ins={ins} official={data.official} />',
-      '<StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />',
-      '<LedgerSection ledger={ledger} onGo={go} />',
+      '<RelationSection className={`col-12 col-xl-6 ${css.overviewRelationColumn}`} ins={ins} onOpenChat={openChat} />',
+      '<ContentAssetsSection className={css.overviewStackCard} ins={ins} official={data.official} />',
+      '<StorageCompositionSection className={css.overviewStackCard} categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />',
+      '<LedgerSection className={css.overviewStackCard} ledger={ledger} onGo={go} />',
     ]) {
       expect(panelCode, `核心卡少了 ${comp}`).toContain(comp)
     }
-    // 核心区只有 3 个栅格行（趋势+热力 / 关系+内容 / 存储+资金）；KPI 行在 KpiSection 里
-    expect(count(panelCode, 'className="row g-2"'), '核心卡栅格行数不对').toBe(3)
+    // 核心区只有 2 个栅格行（趋势+热力 / 关系+右侧三卡纵列）；KPI 行在 KpiSection 里
+    expect(count(panelCode, 'className="row g-2"'), '核心卡栅格行数不对').toBe(2)
+  })
+
+  it('内容构成与资产 / 存储构成 / 资金快照在同一右列按序纵排', () => {
+    expect(panelCode, '右侧三卡没有共用的纵排容器').toContain('className={`col-12 col-xl-6 ${css.overviewRightStack}`}')
+    const contentAt = panelCode.indexOf('<ContentAssetsSection')
+    const storageAt = panelCode.indexOf('<StorageCompositionSection')
+    const ledgerAt = panelCode.indexOf('<LedgerSection')
+    expect(contentAt, '右列缺内容构成与资产').toBeGreaterThan(-1)
+    expect(storageAt, '存储构成不在内容构成与资产之后').toBeGreaterThan(contentAt)
+    expect(ledgerAt, '资金快照不在存储构成之后').toBeGreaterThan(storageAt)
+    // 关系卡与右列同处一个 Bootstrap row，row 默认拉伸使二者底部对齐。
+    expect(panelCode).toMatch(/<RelationSection className=\{`col-12 col-xl-6 \$\{css\.overviewRelationColumn\}`\}[\s\S]*?overviewRightStack/)
+    expect(css).toMatch(/\.overviewRightStack\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s)
+    expect(css).toContain('gap: 0.5rem')
+    expect(css).toMatch(/\.overviewStackCard\s*\{[^}]*width:\s*100%/s)
+    // compact-chrome 的图表卡高度上限特异性更高，关系卡必须在桌面端显式解除整卡/卡身上限。
+    expect(css).toMatch(/@media\s*\(min-width:\s*901px\)[\s\S]*?\.overviewRelationColumn > \.ovSectionCard[\s\S]*?max-height:\s*none\s*!important/)
+    expect(css).toMatch(/\.overviewRelationColumn > \.ovSectionCard > \[class\*='_cardBd_'\][\s\S]*?max-height:\s*none\s*!important/)
   })
 
   it('其余分析收进 MoreAnalysis 折叠区（不再铺成 14 张卡片墙）', () => {
     expect(panelCode, '缺少「更多分析」折叠区').toContain('<MoreAnalysis count={6}>')
     for (const comp of [
       '<InteractionSection ins={ins} />',
+      '<MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />',
       '<WordCloudSection />',
       '<RegionBoard />',
-      '<MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />',
       '<RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />',
       '<HealthSection ins={ins} extras={extras} />',
     ]) {
       expect(panelCode, `「更多分析」里少了 ${comp}`).toContain(comp)
     }
+    // 交互画像与朋友圈活跃都是半宽卡：必须相邻，才能在 xl 档并排且不留下半行空白。
+    const interactionAt = panelCode.indexOf('<InteractionSection')
+    const momentsAt = panelCode.indexOf('<MomentsAuthorsSection')
+    const wordCloudAt = panelCode.indexOf('<WordCloudSection')
+    expect(interactionAt, '「更多分析」缺交互画像').toBeGreaterThan(-1)
+    expect(momentsAt, '朋友圈活跃不在交互画像之后').toBeGreaterThan(interactionAt)
+    expect(wordCloudAt, '整宽的全局热词应排在两张半宽卡之后').toBeGreaterThan(momentsAt)
     // 折叠语义：默认收起（无 open 初值），按钮 aria-expanded 跟随状态
     expect(sectionsCode).toContain('useState(false)')
     expect(sectionsCode).toContain('aria-expanded={open}')
   })
 
-  it('行的列宽分工：KPI 4 列 + 卡片 4/8 与 6/6（成对）', () => {
+  it('行的列宽分工：KPI 4 列 + 趋势 4/8 + 关系与右侧三卡列 6/6', () => {
     for (const cls of ['className="col-6 col-sm-3"', 'className="col-12 col-xl-4"', 'className="col-12 col-xl-8"', 'className="col-12 col-xl-6"']) {
       expect(tsx, `缺少列类 ${cls}`).toContain(cls)
     }
-    // 默认可见的核心卡里 col-xl-6：关系/内容/存储/资金 = 4 张（成对，不会独占一行留空 6 栅格）
-    const six = count(coreCode, 'className="col-12 col-xl-6"')
-    expect(six, `核心区 col-xl-6 卡片 ${six} 张，必须成对`).toBe(4)
-    expect(six % 2, 'col-xl-6 卡片为奇数 ⇒ 会有一行只放一张卡').toBe(0)
+    // 右侧三卡是同一列里的普通卡片，不应再各自硬编码 6 栅格。
+    expect(coreCode, '右侧纵排卡片仍在各自占 Bootstrap 半行').not.toContain('className="col-12 col-xl-6"')
     // 趋势 4 / 热度 8 同处一行
     expect(coreCode).toContain('className="col-12 col-xl-4"')
     expect(coreCode).toContain('className="col-12 col-xl-8"')
@@ -163,6 +186,9 @@ describe('总览卡片区：默认 6 张核心卡 + 「更多分析」折叠区'
     expect(sectionsCode, '地图盒丢了').toContain('css.worldMapBox')
     expect(sectionsCode, '地图懒加载占位丢了').toContain('地图进入可视区后加载')
     expect(css).toContain('.worldMapBox')
+    const worldMapFlex = /\.worldMapFlex\s*\{[^}]*\}/s.exec(css)?.[0]
+    expect(worldMapFlex, '地图自适应规则丢了').toBeTruthy()
+    expect(worldMapFlex, '地图仍有桌面高度上限，无法填满右列对应的卡片高度').toContain('max-height: none')
     // 省份/城市榜仍由 RegionBoard 提供（数据源不新增），只是挪进折叠区
     expect(board).toContain('apiGetRegionMap')
     expect(board).toContain('<RankCard title="省份 Top 10">')

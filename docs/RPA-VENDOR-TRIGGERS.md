@@ -9,6 +9,11 @@
 > 2026-10-21 追加**八爪鱼附加参数**（`mapping.extrasField` 通用机制，隐私 v25）；同日
 > **v1.2.0 移除内置三参数**（`mapping.targets: []` = extras-only，默认 `Params: {}`，参数全部由用户在「附加参数」里显式配置）；
 > 同日新增**八爪鱼 RPA（MCP 工具）**通道（第 8 个适配器，`mcp-rpa.bazhuayu.com`，隐私 v27，见 §3.2）。
+> 2026-10-23（v29）**所有触发方式统一附加参数入口**：影刀 / UiPath / 阿里云 / 来也 / 实在也改为
+> `targets: []` + `extrasField: 'extraParams'`，Webhook 也把用户配置的条目放进请求体 `params`，
+> 不再自动发送 `room_name` / `content` / `at_name`；
+> 旧版厂商 map 字段在读取与投递时自动迁移（见 §4.3.3）。同日起图片可通过显式配置的
+> 短时签名直链传递（§4.3.2）。
 > 调研/核对时间：**2026-10-21（Asia/Shanghai）**。参数、鉴权、回调的原始证据见第 5 节与各厂商小节内引用链接。
 > 背景：任务信息此前只有 `Webhook` 与 `八爪鱼 RPA` 两种触发方式（见 [`TASK-CENTER.md`](TASK-CENTER.md)）。
 > 本方案把它推广为「**统一触发方式选择 + 厂商适配器注册表**」：新增厂商不改核心派发逻辑，只加一份厂商描述。
@@ -26,7 +31,7 @@
 | 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `bazhuayu-mcp` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
 | Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors` / `revealTaskTriggerSecret`（`@Remote` 方法数 217 → **219**） |
 
-> 隐私与文档口径：`PRIVACY_VERSION` **27**、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
+> 隐私与文档口径：`PRIVACY_VERSION` **29**、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
 > [`TASK-CENTER.md`](TASK-CENTER.md) §3.5/§6；出网台账登记 `query/rpa/dispatch.ts#sendRequest`。
 > 设计文档以下内容保留为**调研与设计依据**（不随实现状态更新而删除）。
 
@@ -134,7 +139,7 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 > **(b) 本产品的触发方式配置字段** —— 用户在编辑抽屉里要填的内容（这才是落入 `trigger_config`/`trigger_secret` 的键）。
 > 两家客户端的差异（SaaS/私有化）在「默认值」列体现为可配置 base URL。
 
-### 3.1 八爪鱼 RPA（现有实现，迁移基线；v1.3.0 协议修正）
+### 3.1 八爪鱼 RPA（现有实现，迁移基线；v1.3.0 协议修正，v1.4.0 旧映射迁移）
 
 - 通道：`POST https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`，固定主机。
 - 鉴权：`X-API-Key: <API Key>`（官方 API Key 文档推荐）；官方也接受 `Authorization: Bearer <API Key>`。
@@ -143,17 +148,17 @@ Power Automate。按公开契约完整度与落地成本，建议优先级：
 - 失败响应：常见 HTTP **400**，body 带 `{ code, description, requestId }`；界面「失败原因」展示 **HTTP 状态 + 厂商 `description`**（如 `身份凭证无效，请重新登录`，**不含本地凭据**）。
 - 重试：**不自动重试**（接口无幂等键，避免同一个流程被重复启动）；失败由人工在触发记录里「重新投递」。
 - 回调：无（HTTP 200 只代表「已受理启动」，执行结果需到八爪鱼控制台查看）。
-- 迁移：`triggerMethod='bazhuayu'`，`trigger_config={flowId, extraParams}`（**v1.2.0 丢弃旧 `paramMap`**），`trigger_secret={apiKey}`；升级后默认不发送任何业务参数，需要旧行为（会话名/触发文本/触发对象）可在附加参数里各加一条恢复。
+- 迁移：`triggerMethod='bazhuayu'`，`trigger_config={flowId, extraParams}`（v1.4.0 起读取/投递时把旧 `paramMap` 自动转换为等价附加参数；显式空数组不恢复旧值），`trigger_secret={apiKey}`；新任务默认不发送任何业务参数，需要旧行为（会话名/触发文本/触发对象）时在附加参数里各配一条。
 
 > **2026-10-21 v1.3.0 修正**：旧实现的 `POST /api/bots/scheduling/start`（**少了 `/v1`**）不是公开接口路径，对端会按未认证返回 **HTTP 401「身份凭证无效，请重新登录」**；旧 body 的 PascalCase（`FlowId` / `Params`）也不符合官方契约。v1.3.0 已按官方文档修正 URL、鉴权头（`X-API-Key`）与 camelCase body，并把 `flowProcessNo` 落库、失败时展示厂商 `description`。
 
-**（b）本产品配置字段**（v1.2.0 起无内置参数；v1.3.0 协议修正）
+**（b）本产品配置字段**（v1.2.0 起无内置参数；v1.3.0 协议修正；v1.4.0 兼容旧 `paramMap`）
 
 | 显示名 | 配置键 | 类型 | 必填 | 默认 / 示例 | 说明 |
 |---|---|---|---|---|---|
 | FlowId | `flowId` | string | 是 | `6ad859ccee2df270d53fc6e5` | 控制台流程详情复制；不是凭据，随任务列表返回 |
 | API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 **`X-API-Key`** 请求头，**不参与参数** |
-| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一参数入口**：最多 **20 条**「参数名 → 值来源」；值来源 11 种（见 §4.3）；默认 `params: {}`，要发什么就配什么 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一参数入口**：最多 **20 条**「参数名 → 值来源」；值来源 14 种（见 §4.3）；默认 `params: {}`，要发什么就配什么 |
 
 **来源与核对（2026-10-21 在线核对）**：
 [机器人调度-启动单个应用](https://rpa.bazhuayu.com/helpcenter/features/enterprise/api/robot-scheduling-start-single) ·
@@ -182,7 +187,7 @@ MCP 工具」里添加应用后即可调用，个人版也能用（但**机器�
 - 成功：`result.isError` 缺失 / false，正文（`result.content[].text`，Markdown）里给 **runId**（也可能在 `result.structuredContent.runId`）→ 本应用落 `external_task_id`；runId 只代表「已受理运行」。
 - 失败：`result.isError=true`，Markdown 正文给 `Error Code` / `Error Message`（适配器已提取成可读错误，如 `BotFeatureIsDisabled：…`）；JSON-RPC 层错误看 `error.message`；HTTP 非 200 时展示状态码 + 可提取详情。
 - 无幂等键 → **只发 1 次**（避免重复启动应用），失败人工「重新投递」。
-- **不发图片**（任务里的 `photoLimit` 对它不生效）。
+- **图片默认不发**；附加参数显式选择图片类来源时传短时签名直链或数量（见 §4.3.2）。
 
 **实测结论（2026-10-21）**：`tools/list`、`automation_details`、`bot_online_list` 均 200；`automation_call` 当前返回
 `BotFeatureIsDisabled` —— **协议链路已验证通**，失败原因是**个人版机器人没有执行权益**（账号侧限制；与开放 API 的
@@ -195,7 +200,7 @@ MCP 工具」里添加应用后即可调用，个人版也能用（但**机器�
 | 应用 ID（automation id） | `automationId` | string | 是 | `flow_registration_6ad859ccee2df270d53fc6e5` | MCP 侧应用 id；**不要填裸 FlowId**；随任务配置返回 |
 | API Key | `apiKey` | secret | 是 | — | 只存本机 `trigger_secret`，投递时进 `X-API-Key` 头，**不参与参数** |
 | 机器人 ID | `botId` | string（高级） | 否 | — | 留空 = 自动选择；可先用 `bot_online_list` 查到再填 |
-| 附加参数 | `extraParams` | paramList | 否 | 空 | `automation_call.parameters` 的键值对（默认 `{}`）；最多 20 条，11 种值来源（见 §4.3）；要发会话名 / 触发文本 / 触发对象就各加一条 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | `automation_call.parameters` 的键值对（默认 `{}`）；最多 20 条，14 种值来源（见 §4.3）；要发会话名 / 触发文本 / 触发对象就各加一条 |
 
 **请求示例**（`id` 是本次派发标识 `taskId:recordId`）：
 
@@ -261,7 +266,7 @@ data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"
 | 应用 UUID | `robotUuid` | string | 是 | `73d9a119-…` | — |
 | 机器人账号 | `accountName` | string | 二选一 | `admin@fckj` | — |
 | 机器人分组 UUID | `robotClientGroupUuid` | string | 二选一 | — | — |
-| 参数映射 | `paramMap` | map | 否 | `room_name/content/at_name` | 同左（可改成自己应用的入参名） |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | **唯一业务参数入口**：最多 20 条「参数名 → 值来源」，14 种来源见 §4.3；默认 `params: []`，不配置就不发。旧 `paramMap` 自动迁移 |
 
 **回调（应用运行回调）**：控制台「api 配置」全局配置；请求头仅 `Content-Type: application/json`，**无签名/Token**；payload 含 `jobUuid/dataType/status/msg/startTime/endTime/robotClient*/robotName/idempotentUuid/result[]`；返回 2xx 停止补偿，非 2xx 连续重试 3 次 + 24 小时内每小时补偿；官方建议按 `jobUuid` 幂等、并用查询接口轮询兜底（job/start 后建议 2 分钟级轮询）。
 **限制**：job/start 10 次/秒；回调是全局单点配置，不能按任务区分目的地。
@@ -308,7 +313,7 @@ data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"
 | AppKey | `appKey` | secret | 是 | — | — |
 | AppSecret | `appSecret` | secret | 是 | — | — |
 | 任务 UUID | `jobUuid` | string | 是（模板式） | `UADACDSKKAKSDLLAL` | — |
-| 参数映射 | `inputParamMap` | map | 是 | `room_name/content/at_name` | 同左（键名须与流程引用参数一致） |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | 传给 `inputParam` 的键值对；最多 20 条、14 种来源（§4.3）；默认 `{}`，不配置就不发。旧 `inputParamMap` 自动迁移 |
 | 优先级 | `priority` | select(1/2/3) | 否 | `2` | `2` |
 | 分配方式 | `distributionType` | select(1/2) | 否 | `1` | `1`（自动） |
 
@@ -352,7 +357,7 @@ data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"
 | 流程名 | `flowName` | string | 是 | `finance_report_flow` | — |
 | 分配方式 | `assignType` | select | 是 | `automatic` | `automatic` |
 | 机器人/组 | `workerName`/`workerGroupName` | string | 否 | — | 空 |
-| 参数映射 | `parameterMap` | map | 是 | `room_name/content/at_name` | 同左 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | 传给 `create_task.parameters[]` 的键值对；最多 20 条、14 种来源（§4.3）；默认 `[]`，不配置就不发。旧 `parameterMap` 自动迁移 |
 
 **回调**：管理后台「系统设置 → 应用设置 → 事件推送地址」（6.3.0+）；V6.2 发行说明列出 Webhook 事件（任务已开始/已完成等），但 **payload/签名/重试契约未公开**。**状态查询**：MCP `query_task_result`（`taskId`，状态 pending/running/completed/failed/cancelled/stopped/expired）。
 **来源与核对**（2026-10-21；文档站页头 `V6.7`）：
@@ -397,7 +402,7 @@ data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"
 | PAT | `pat` | secret | pat 时必填 | — | — |
 | OAuth client_id/secret/scope | `clientId`/`clientSecret`/`scope` | secret/string | oauth 时必填 | `OR.Default` | — |
 | Strategy / JobsCount | `strategy` / `jobsCount` | select/int | 否 | `ModernJobsCount` / `1` | `ModernJobsCount` / `1` |
-| 参数映射 | `inputArgumentsMap` | map | 是 | `room_name/content/at_name` | 同左 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | 序列化为 `InputArguments` JSON 文本；最多 20 条、14 种来源（§4.3）；默认 `{}`，不配置就不发。旧 `inputArgumentsMap` 自动迁移 |
 
 **回调（Orchestrator Webhooks）**：`job.completed`/`job.faulted`/`job.stopped` 等；`X-UiPath-Signature: Base64(HMAC-SHA256(secret, rawBody))`；**官方明确不重试/不存储/失败即丢、失败熔断 1 小时、连续 7 天 >50% 失败自动禁用**。**失败/丢失兜底**：用返回的 `Job.Key` 轮询 `GET /odata/Jobs({key})`（单作业不受限流）。
 **来源与核对**（2026-10-21；文档通道 Automation Cloud · latest，页面无最后更新时间）：
@@ -447,7 +452,7 @@ data: {"jsonrpc":"2.0","id":"12:87","result":{"content":[{"type":"text","text":"
 | 机器人/分组 | `robotId`/`packId` | string | 否 | — | — |
 | 优先级 | `taskPriority` | int(1-100) | 否 | `85` | `50` |
 | 回调地址 | `callbackUrl` | string | 否 | `https://…/callback?token=…` | 空 |
-| 参数映射 | `appParamsMap` | map | 是 | `room_name/content/at_name` | 同左 |
+| 附加参数 | `extraParams` | paramList | 否 | 空 | 传给 `AppParams` 的条目数组；最多 20 条、14 种来源（§4.3）；默认 `[]`，不配置就不发。旧 `appParamsMap` 自动迁移 |
 
 **回调**：RPA 服务端 POST，`Content-Type: application/x-www-form-urlencoded`（原文如此），body `taskId` / `taskStatus`（running/complete/terminated）/ `taskResult`（仅 complete，base64）；**无签名**，官方建议 https+token 放 query；超时 5s、最多重试 3 次，失败不再重发。**状态查询**：`ListTasks`、`ListTaskDetails`（TaskIds ≤10/次）。**幂等**：`X-Idempotent-Request-ID`（≤50 字符，180 秒，非强制）。
 **来源与核对**（2026-10-21；多数页面「更新时间」为空）：
@@ -578,11 +583,11 @@ export interface RpaVendorDescriptor {
     exchange?: RpaRequestTemplate  // 影刀/UiPath OAuth 的换 token 请求
   }
   /** 本产品配置字段（UI 自动渲染；required 决定「标记已完善」）。 */
-  fields: RpaField[]           // 非敏感：robotUuid/ReleaseKey/baseUrl/参数映射…
-  /** 语义参数位映射到厂商容器的形状（2026-10-21：`mapField`/`targets` 均可为空 = extras-only）。 */
+  fields: RpaField[]           // 非敏感：robotUuid/ReleaseKey/baseUrl/extraParams…
+  /** 参数容器形状；v29 起 RPA 厂商均为 `targets: []` + `extrasField: 'extraParams'`。 */
   mapping: {
     style: 'object' | 'nameValueArray' | 'nameValueTypeArray' | 'formParams' | 'jsonStringObject'
-    /** 可选：参数映射字段（`type:'map'`，值 `{room,content,at}` 可逐项覆盖 defaultKey）；缺省 = 无映射。 */
+    /** 可选：旧式 map 字段（`type:'map'`）；v29 后仅 Webhook/兼容场景使用。 */
     mapField?: string
     /** 可为空：`targets: []` 表示该厂商**没有内置语义参数**，参数全部走 `extrasField`（八爪鱼 v1.2.0）。 */
     targets: Array<{ semantic: 'room' | 'content' | 'at'; defaultKey: string; label?: string }>
@@ -631,26 +636,28 @@ export interface RpaField {
   help?: string                // 一句话说明/限制
   advanced?: boolean           // 折叠在「高级」
   pattern?: string             // 校验正则（可序列化）
-  /** 仅 type='paramList'：允许的值来源子集（缺省 = 全部 11 种；实验性厂商可收窄）。 */
+  /** 仅 type='paramList'：允许的值来源子集（缺省 = 全部 14 种；实验性厂商可收窄）。 */
   paramSources?: RpaParamSource[]
   /** 仅 type='paramList'：最多允许几条附加参数（缺省 50；八爪鱼 = 20）。 */
   maxItems?: number
 }
 ```
 
-### 4.3.1 附加参数机制（`mapping.extrasField`，2026-10-21 v25）
+### 4.3.1 附加参数机制（`mapping.extrasField`；v29 起所有触发方式采用）
 
 描述符可在 `mapping.mapField` + `mapping.targets` 之外声明 `extrasField`，指向一个
 `type:'paramList'` 的配置字段（如八爪鱼 `extraParams`）。用户在表单里逐条配置
-「参数名 → 值来源」，投递时由通用管道解析成最终字符串，**追加在语义参数之后**
-（同一个参数容器；顺序 = 用户排列顺序）。若 `mapping.targets` 为空（八爪鱼 RPA / 八爪鱼 MCP），
-该容器**只含附加参数**（默认 `{}`），即「extras-only」形态。
+「参数名 → 值来源」，投递时由通用管道解析成最终字符串（同一个参数容器；顺序 = 用户排列顺序）。
+v29 起八爪鱼（开放 API / MCP）、影刀、UiPath、阿里云、来也、实在以及内置 Webhook 的
+`mapping.targets` 都是空数组，该容器**只含附加参数**，即「extras-only」形态；容器本身
+按通道分别保持 `{}` / `[]`，Webhook 使用请求体顶层的 `params: {}`。
 
 ```ts
 export type RpaParamSource =
   | 'room' | 'content' | 'at'                 // 三个语义位（content 已过隐私闸）
   | 'taskName' | 'keyword' | 'triggeredAt'    // 触发记录/任务内置字段
   | 'chatType' | 'taskId' | 'recordId'
+  | 'imagesJson' | 'imageCount' | 'firstImageUrl' // 图片：链接清单 / 数量 / 首张成功链接
   | 'fixed' | 'template'                      // 固定值 / 自定义模板
 
 export interface RpaParamEntry {
@@ -668,43 +675,135 @@ export interface RpaParamEntry {
 插值 / 整值替换，不执行表达式。参数名 ≤64 字；附加参数条数 ≤`maxItems`（八爪鱼 20，
 缺省 50）；空列表合法（等价于不发业务参数）。
 
-> 该机制**通用**：其他厂商后续只需在描述符声明 `extrasField`（+ 一个 `paramList` 字段），
-> 即可复用同一套表单与解析逻辑，核心管道无需改动。
+> 该机制**通用**：所有 RPA 厂商与 Webhook 都只声明 `extrasField`（+ 一个 `paramList` 字段），
+> 复用同一套表单、校验与解析逻辑；Webhook 在 `params` 之外仍保留整条触发记录模式。
+
+### 4.3.2 图片传递（短时签名直链，2026-10-23 v28）
+
+RPA 厂商的触发接口只有字符串/对象参数，直接塞 base64 会膨胀约 4/3，并很容易越过厂商
+8KB–40KB 的参数上限。因此图片不放进请求参数，而是由本机生成一条**临时签名 URL**：
+
+```text
+http://<可达地址>:<api_port>/api/rpa-media/v1.<payload>.<hmac>
+```
+
+三种值来源：
+
+| `source` | 参数值 | 是否解码图片 | 是否要求局域网访问 |
+|---|---|---|---|
+| `imagesJson` | 与触发记录同序的图片数组 JSON | 是 | 是 |
+| `imageCount` | `record.images.length`（十进制字符串，含失败项） | 否 | 否 |
+| `firstImageUrl` | 第一张成功生成的链接；全失败时为空串 | 是 | 是 |
+
+`imagesJson` 的数组项形状：
+
+```json
+[
+  {
+    "localId": 123,
+    "createTime": 1760000000000,
+    "sender": "张三",
+    "md5": "…",
+    "url": "http://192.168.1.10:5032/api/rpa-media/v1.…"
+  },
+  {
+    "localId": 124,
+    "createTime": 1760000000100,
+    "sender": "张三",
+    "error": "图片解码失败"
+  }
+]
+```
+
+**令牌格式与边界**
+
+- `v1.<base64url([recordId, expiresAt, rel])>.<base64url(HMAC-SHA256)>`；
+- HMAC 密钥由 `secrets.json#api_token` 派生；轮换令牌后旧链接立即失效；
+- 默认有效期 **1 小时**，验证上限 **24 小时**；一个令牌只对应 decoded 根内的一张图片；
+- `rel` 必须是白名单图片扩展名、非绝对路径、无 `..` / 反斜杠 / NUL；取文件时还会再走
+  `resolveDecodedFile` 做根内校验；
+- 路由只接受 `GET`，坏令牌 / 过期 / 文件缺失一律返回 **404**，不区分原因；
+- 响应 `Cache-Control: private, no-store`，避免轮换令牌后中间缓存继续提供旧图。
+
+**地址选择**
+
+1. 若 `config.json#rpa_media_base_url` 配置了合法 http(s) 基址，优先用它；
+2. 否则用本机最可能绑定的非回环 IPv4 + `api_port`；
+3. 云端 RPA 无法访问局域网，必须配置反向代理/公网入口，并确保代理转发到本机
+   `/api/rpa-media/*`；
+4. 若首选端口被占用、宿主顺延监听端口，必须把 `rpa_media_base_url` 配成实际可达地址；
+5. 未启用「局域网访问（手机）」或 `api_token` 为空时不生成链接，每张图片在 JSON 中写
+   `error`（`未打开局域网访问…`），不会生成一个注定失败的 URL。
+
+**失败方向**
+
+- 单张图片解码失败、路径越界、文件不在、无可达地址：只影响该数组项，整条 RPA 投递继续；
+- `firstImageUrl` 跳过失败项；一张都没成功时返回空串；
+- `imageCount` 始终表示图片引用总数，不会因为链接生成失败而变小；
+- 机器人取图失败不属于触发请求失败；厂商应把 URL 当作普通 HTTP 资源重试/降级。
+
+**Host 例外**
+
+反向代理/公网入口的 Host 只对 `/api/rpa-media/<token>` 放行；普通 API、SSE 与静态资源
+仍严格接受当前监听地址。这样既能支持云端机器人取图，也不扩大其它接口的 DNS rebinding 面。
+
+### 4.3.3 所有触发方式统一附加参数（2026-10-23 v29）
+
+v29 前只有八爪鱼采用 extras-only，其他厂商仍把三个语义位自动映射到各自容器。v29 起统一为：
+
+| 厂商 | 旧字段（只用于迁移） | 新参数入口 | 默认容器 | 描述符版本 |
+|---|---|---|---|---|
+| 内置 Webhook | 无（旧 `paramMap` 从未生效） | `extraParams` | `params: {}` | `1.2.0` |
+| 八爪鱼 RPA | `paramMap` | `extraParams` | `params: {}` | `1.4.0` |
+| 八爪鱼 RPA（MCP） | 无 | `extraParams` | `parameters: {}` | `1.0.0` |
+| 影刀 RPA | `paramMap` | `extraParams` | `params: []` | `1.1.0` |
+| UiPath Orchestrator | `inputArgumentsMap` | `extraParams` | `InputArguments: "{}"` | `1.1.0` |
+| 阿里云 RPA | `appParamsMap` | `extraParams` | `AppParams: "[]"` | `1.1.0` |
+| 来也 RPA | `parameterMap` | `extraParams` | `parameters: []` | `1.1.0` |
+| 实在智能 RPA | `inputParamMap` | `extraParams` | `inputParam: {}` | `1.1.0` |
+
+统一规则：
+
+- `room_name` / `content` / `at_name` 不再自动发送；需要时分别添加 `room` / `content` / `at`
+  来源，参数名可改成目标流程真实的入参名；
+- 值来源、模板白名单、名称唯一性、长度与条数上限在所有厂商间共用同一份实现；
+- 旧字段**仅在 `extraParams` 完全不存在时**转换，转换成
+  `[{name,source:'room'},{name,source:'content'},{name,source:'at'}]` 并删除旧字段；
+- 如果任务已经显式保存 `extraParams: []`，表示用户主动清空，**不得用旧字段恢复**；
+- Webhook 的旧 `paramMap` 只是无效占位符，**不迁移**；需要对应字段时由用户重新添加，
+  避免升级后突然发送原本从未出网的三个业务参数；
+- 凭据永远走 `trigger_secret` 与厂商规定位置，不进入附加参数。
 
 **影刀描述符示例（节选，示意声明式表达力）**：
 
 ```ts
 const yingdao: RpaVendorAdapter = {
   descriptor: {
-    id: 'yingdao', name: '影刀 RPA', vendor: '影刀 RPA（YingDao，官网 yingdao.com）', version: '1.0.0',
+    id: 'yingdao', name: '影刀 RPA', vendor: '影刀 RPA（YingDao，官网 yingdao.com）', version: '1.1.0',
     docs: { home: 'https://www.yingdao.com/yddoc/rpa/zh-CN/710488569666060288',
             triggerApi: '…/710488569666060288', lastVerifiedAt: '2026-10-21' },
     capabilities: { direction: 'outbound', synchronous: false, completion: 'callback', idempotency: 'vendor-key', deployment: ['cloud', 'onprem'] },
-    auth: {
+    auth: { modes: [{
       strategy: 'token-exchange',
       fields: [{ key: 'accessKeyId', label: 'AccessKeyId', type: 'password', required: true, secret: true },
                { key: 'accessKeySecret', label: 'AccessKeySecret', type: 'password', required: true, secret: true }],
       exchange: { method: 'GET', url: '${config.baseUrl}/oapi/token/v2/token/create',
                   query: { accessKeyId: '${secret.accessKeyId}', accessKeySecret: '${secret.accessKeySecret}' },
-                  // 响应字段名/嵌套以官方页为准（页面只明确「响应含 expiresIn」，未给完整 JSON 示例）→ 联调核对
-                  tokenPath: '（待联调核对）', expiresPath: 'expiresIn', headerPrefix: 'Bearer ' },
-    },
+                  tokenPath: 'data.accessToken', expiresInPath: 'expiresIn', headerPrefix: 'Bearer ' },
+    }] },
     fields: [{ key: 'baseUrl', label: '服务地址', type: 'text', required: true, defaultValue: 'https://api.yingdao.com' },
              { key: 'robotUuid', label: '应用 UUID', type: 'text', required: true, example: '73d9a119-…' },
              { key: 'accountName', label: '机器人账号', type: 'text', required: false, help: '与机器人分组二选一' },
              { key: 'robotClientGroupUuid', label: '机器人分组 UUID', type: 'text', required: false },
-             { key: 'paramMap', label: '参数映射', type: 'map', required: false,
-               defaultValue: { room: 'room_name', content: 'content', at: 'at_name' } }],
-    mapping: { style: 'nameValueTypeArray', targets: [
-      { semantic: 'room', defaultKey: 'room_name' }, { semantic: 'content', defaultKey: 'content' },
-      { semantic: 'at', defaultKey: 'at_name' }] },
+             { key: 'extraParams', label: '附加参数', type: 'paramList', required: false, maxItems: 20 }],
+    mapping: { style: 'nameValueTypeArray', targets: [], extrasField: 'extraParams', legacyMapField: 'paramMap' },
     request: {
       method: 'POST', url: '${config.baseUrl}/oapi/dispatch/v2/job/start',
       headers: { Authorization: '${auth.token}', 'Content-Type': 'application/json' },
       body: { robotUuid: '${config.robotUuid}',
               ...(/* accountName 或 group 二选一由通用渲染器处理 */ {}),
               idempotentUuid: '${invocation.idempotencyKey}',
-              params: '${mapped.nameValueTypeArray}' },
+              params: '${mapped}' },
     },
     response: { okHttpStatus: [200], okPath: 'code', okValue: 200, externalTaskIdPath: 'data.jobUuid', messagePath: 'msg' },
     completion: {
@@ -726,8 +825,8 @@ const yingdao: RpaVendorAdapter = {
   → ② validate(descriptor.fields)   必填/类型/正则/秘密是否已配置 → 缺 → skipped「配置不完整」
   → ③ gate(record.text)             隐私闸（沿用 feature 'task_callback'；两种方式同一口径）
   → ④ render(descriptor.request)    模板上下文：config / secret / record / invocation / mapped
-                                     （mapped = 语义参数 + extrasField 附加参数；targets 为空时
-                                      只有附加参数，见 §4.3.1；占位符白名单，禁止 eval）
+                                     （mapped = extrasField 附加参数；v29 起所有触发方式的
+                                      targets 均为空，见 §4.3.1 / §4.3.3；禁止 eval）
   → ⑤ auth(descriptor.auth)         header/bearer/token-exchange（通用 token 缓存，单飞）
                                      hmac-rpc/custom → 厂商文件内钩子
   → ⑥ send()                        统一 fetchWithRetry；重试策略来自 descriptor.retry；
@@ -739,7 +838,7 @@ const yingdao: RpaVendorAdapter = {
                                      none：sent 即「已受理」，不代表执行成功（UI 文案要区分）
 ```
 
-**模板占位符**（只允许这四个根，且只做「整值替换」或字符串插值，不执行表达式）：
+**模板占位符**（只允许下面五个根，且只做「整值替换」或字符串插值，不执行表达式）：
 
 | 根 | 示例 | 说明 |
 |---|---|---|
@@ -753,16 +852,15 @@ const yingdao: RpaVendorAdapter = {
 
 | style | 形态 | 厂商 |
 |---|---|---|
-| `object` | `{"room_name":"…","content":"…","at_name":"…"}` | 实在 `inputParam`（八爪鱼 `Params` 默认 `{}`，v1.2.0 起全部来自附加参数） |
-| `nameValueArray` | `[{"name":"room_name","value":"…"}]` | 阿里云 `AppParams` |
-| `nameValueTypeArray` | `[{"name":"room_name","value":"…","type":"str"}]` | 影刀 `params[]` |
-| `jsonStringObject` | `"{\"room_name\":\"…\"}"`（JSON 文本再转义） | UiPath `InputArguments` |
-| `formParams` | `room_name=…&content=…`（form-urlencoded） | 阿里云 POST body（若 POC 确认走 body） |
+| `object` | `{"order_no":"A-001"}`（默认 `{}`） | 实在 `inputParam` / 八爪鱼 `params` |
+| `nameValueArray` | `[{"name":"order_no","value":"A-001"}]`（默认 `[]`） | 阿里云 `AppParams` |
+| `nameValueTypeArray` | `[{"name":"order_no","value":"A-001","type":"str"}]`（默认 `[]`） | 影刀 `params[]` |
+| `jsonStringObject` | `"{\"order_no\":\"A-001\"}"`（JSON 文本再转义，默认 `"{}"`） | UiPath `InputArguments` |
+| `formParams` | `order_no=A-001`（form-urlencoded；默认空串） | 自定义 form 厂商 |
 
-> 五种容器**都会在语义参数之后**追加 `mapping.extrasField` 解析出的附加参数
-> （见 §4.3.1）：`object` 加对象键、数组形态加条目、`formParams` 加 `&name=value`；
-> `targets` 为空时容器只含附加参数（八爪鱼 v1.2.0 = extras-only）；
-> 描述符没声明 `extrasField` 的厂商行为不变。该机制通用，其他厂商后续只需声明字段即可。
+> 五种容器都装 `mapping.extrasField` 解析出的附加参数（见 §4.3.1）：`object` 加对象键、
+> 数组形态加条目、`formParams` 加 `&name=value`。v29 起所有触发方式的 `targets` 均为空，
+> 因此容器只含用户显式配置的附加参数；Webhook 把该容器发在整条触发记录的顶层 `params`。
 
 ### 4.5 选择结构（UI）
 
@@ -773,7 +871,7 @@ const yingdao: RpaVendorAdapter = {
   ↓ 选中厂商后，按 descriptor.fields 自动渲染（分组：账号与鉴权 / 流程与参数 / 高级）
 [账号与鉴权]  AccessKeyId   [••••••]        AccessKeySecret [••••••]
 [流程与参数]  应用 UUID     [________________] 示例：73d9a119-…
-              参数映射      room_name / content / at_name（可改）
+              附加参数      [参数名] [值来源] [+ 添加]（默认空）
 [高级]        服务地址、超时、回调地址、私有化地址（默认折叠）
    ↓
 [厂商说明] 官方文档 · 参数核对时间 2026-10-21 · ⚠ 回调无签名，仅作信号
@@ -934,7 +1032,7 @@ for (const adapter of RPA_VENDORS) {
 1. **是否要入站触发（厂商 → 本应用）**：需要用户显式开启入站通道（PRIVACY §H），默认关闭；若要做，建议先统一入口协议再谈厂商差异（§3.9）。
 2. **凭据归属**：按任务独立配置（当前设计），还是增加「厂商账号」全局配置、任务只引用？前者简单、后者便于轮换（UiPath OAuth/影刀 token 都有过期语义，倾向后者作为后续演进）。
 3. **完成状态的产品语义**：`sent`（已受理）与 `completed`（执行完成）是否需要向用户区分展示？本方案建议区分（厂商能力不同，不能假装都一样）。
-4. **长文本/图片**：影刀参数 ≤8000、UiPath InputArguments ≤10,000、阿里云 AppParams ≤40KB；超限时截断还是走「文件/Storage Bucket/OSS」？首版建议截断并在记录里标注。
+4. **长文本 / 厂商原生附件**：本应用已用短时签名直链避开 base64 与参数上限（§4.3.2）；影刀 ≤8000、UiPath InputArguments ≤10,000、阿里云 AppParams ≤40KB 仍限制普通文本参数。若厂商原生要求 Storage Bucket / OSS 文件 ID，需逐家补上传适配器；未实现前不要把大文件塞进字符串参数。
 5. **私有化地址策略**：允许用户填任意 base URL（内网）会扩大 SSRF 面；是否沿用现有 Webhook 的「用户自担」口径，还是增加「私网地址需显式确认」开关？
 6. **是否引入插件包机制**：当前注册表要求改一行代码；若要「第三方厂商包可直接安装」，需要再加一层动态加载/签名校验，建议单独立项。
 

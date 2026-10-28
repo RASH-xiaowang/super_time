@@ -13,6 +13,7 @@ import type { StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryMessages } from './messages.ts'
 import { writeZipAtomic } from './export-io.ts'
+import type { ExportMediaEntry, ExportMediaLinks } from './export-media.ts'
 
 /** Format a unix timestamp as YYYY-MM-DD HH:MM. */
 export function fmtFull(ts: number): string {
@@ -189,6 +190,76 @@ export function htmlEscape(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+function mediaOf(mediaByMessage: ExportMediaLinks | undefined, localId: number): ExportMediaEntry[] {
+  return mediaByMessage?.get(localId) ?? []
+}
+
+function contentMedia(mediaByMessage: ExportMediaLinks | undefined, localId: number): ExportMediaEntry[] {
+  return mediaOf(mediaByMessage, localId).filter((entry) => entry.role !== 'cover')
+}
+
+function resourceText(entry: ExportMediaEntry): string {
+  if (entry.status !== 'ok' || !entry.archivePath) {
+    return entry.label + '未导出' + (entry.error ? '：' + entry.error : '')
+  }
+  return entry.label + '：' + entry.archivePath
+}
+
+function resourceJson(entry: ExportMediaEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    status: entry.status,
+    label: entry.label,
+    ...(entry.archivePath ? { path: entry.archivePath } : {}),
+    ...(entry.posterArchivePath ? { poster: entry.posterArchivePath } : {}),
+    ...(entry.mime ? { mime: entry.mime } : {}),
+    ...(entry.size !== undefined ? { size: entry.size } : {}),
+    ...(entry.error ? { error: entry.error } : {}),
+  }
+}
+
+function mediaHtml(entries: ExportMediaEntry[]): string {
+  const parts: string[] = []
+  for (const entry of entries) {
+    if (entry.status !== 'ok' || !entry.archivePath) {
+      parts.push('<div class="media-missing">' + htmlEscape(resourceText(entry)) + '</div>')
+      continue
+    }
+    const src = htmlEscape(entry.archivePath)
+    if (entry.kind === 'image') {
+      parts.push('<a class="media-image" href="' + src + '" target="_blank"><img src="' + src + '" loading="lazy" alt="' + htmlEscape(entry.label) + '"></a>')
+    } else if (entry.kind === 'sticker') {
+      parts.push('<img class="media-sticker" src="' + src + '" loading="lazy" alt="' + htmlEscape(entry.label) + '">')
+    } else if (entry.kind === 'video') {
+      const poster = entry.posterArchivePath ? ' poster="' + htmlEscape(entry.posterArchivePath) + '"' : ''
+      const type = entry.mime ? ' type="' + htmlEscape(entry.mime) + '"' : ''
+      parts.push('<div class="media-video"><video controls preload="metadata"' + poster + '><source src="' + src + '"' + type + '></video><a href="' + src + '" download>下载视频</a></div>')
+    } else if (entry.kind === 'voice') {
+      parts.push('<div class="media-voice"><audio controls preload="metadata" src="' + src + '"></audio><a href="' + src + '" download>下载语音</a></div>')
+    } else {
+      parts.push('<a class="media-file" href="' + src + '" download><span aria-hidden="true">📎</span><span>' + htmlEscape(entry.label) + '</span></a>')
+    }
+  }
+  return parts.length === 0 ? '' : '<div class="media-list">' + parts.join('') + '</div>'
+}
+
+function mediaStats(mediaByMessage: ExportMediaLinks | undefined): { ok: number; missing: number } {
+  const seen = new Set<string>()
+  let ok = 0
+  let missing = 0
+  if (!mediaByMessage) return { ok, missing }
+  for (const entries of mediaByMessage.values()) {
+    for (const entry of entries) {
+      if (seen.has(entry.id)) continue
+      seen.add(entry.id)
+      if (entry.status === 'ok' && entry.archivePath) ok += 1
+      else missing += 1
+    }
+  }
+  return { ok, missing }
+}
+
 /** Render one message row to export columns. */
 export function rowOf(m: WechatMessage, username: string): { time: string; sender: string; typeLabel: string; text: string } {
   const sender = m.isSender === 1 ? '我' : (m.sender || username)
@@ -199,7 +270,7 @@ export function rowOf(m: WechatMessage, username: string): { time: string; sende
 }
 
 /** txt export body. */
-export function formatTxt(msgs: WechatMessage[], username: string): string {
+export function formatTxt(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string {
   const lines = [`消息导出 (${msgs.length})`]
   lines.push('='.repeat(48))
   lines.push('')
@@ -207,6 +278,7 @@ export function formatTxt(msgs: WechatMessage[], username: string): string {
     const r = rowOf(m, username)
     lines.push(r.time + ' ' + r.sender)
     lines.push(r.typeLabel + ': ' + r.text)
+    for (const entry of contentMedia(mediaByMessage, m.localId)) lines.push(resourceText(entry))
     lines.push('')
   }
   return lines.join('\n')
@@ -250,6 +322,7 @@ export async function* formatTxtChunksAsync(
   msgs: WechatMessage[],
   username: string,
   ctrl?: StreamControl,
+  mediaByMessage?: ExportMediaLinks,
 ): AsyncGenerator<string> {
   let first = true
   /** 把一组行拼成一块；块间补的那个换行正是逐字节兼容的关键。 */
@@ -260,6 +333,7 @@ export async function* formatTxtChunksAsync(
   for (const m of msgs) {
     const r = rowOf(m, username)
     buf.push(r.time + ' ' + r.sender, r.typeLabel + ': ' + r.text, '')
+    for (const entry of contentMedia(mediaByMessage, m.localId)) buf.push(resourceText(entry))
     since += 1
     if (since >= TXT_CHUNK_MSGS) {
       since = 0
@@ -274,16 +348,18 @@ export async function* formatTxtChunksAsync(
 }
 
 /** csv export body. */
-export function formatCsv(msgs: WechatMessage[], username: string): string {
+export function formatCsv(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string {
   const rows = msgs.map((m) => {
     const r = rowOf(m, username)
-    return [r.time, r.sender, r.typeLabel, r.text]
+    return mediaByMessage
+      ? [r.time, r.sender, r.typeLabel, r.text, contentMedia(mediaByMessage, m.localId).map(resourceText).join('\n')]
+      : [r.time, r.sender, r.typeLabel, r.text]
   })
-  return buildCsv(['时间', '发送者', '类型', '内容'], rows)
+  return buildCsv(mediaByMessage ? ['时间', '发送者', '类型', '内容', '资源'] : ['时间', '发送者', '类型', '内容'], rows)
 }
 
 /** html chat-log export body (date dividers + bubbles). */
-export function formatHtml(msgs: WechatMessage[], username: string, now: string): string {
+export function formatHtml(msgs: WechatMessage[], username: string, now: string, mediaByMessage?: ExportMediaLinks): string {
   let body = ''
   let lastDay = ''
   for (const m of msgs) {
@@ -294,14 +370,36 @@ export function formatHtml(msgs: WechatMessage[], username: string, now: string)
       body += '<div class="date-divider"><span>' + htmlEscape(day) + '</span></div>'
     }
     const side = m.isSender === 1 ? 'right' : 'left'
-    const content = m.type === 3 ? '<span class="muted">[图片]</span>' : htmlEscape(r.text)
-    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div><div class="content">' + content + '</div><div class="time">' + htmlEscape(r.time) + '</div></div></div>'
+    const entries = contentMedia(mediaByMessage, m.localId)
+    const content = m.type === 3 && entries.length === 0 ? '<span class="muted">[图片]</span>' : htmlEscape(r.text)
+    const attachment = mediaHtml(entries)
+    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div>'
+      + (content ? '<div class="content">' + content + '</div>' : '')
+      + attachment
+      + '<div class="time">' + htmlEscape(r.time) + '</div></div></div>'
   }
-  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>微信聊天记录导出</title><style>body{font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;background:#ededed;margin:0;padding:24px 12px;color:#1f1f1f}.wrap{max-width:760px;margin:0 auto}.hd{text-align:center;padding:16px 0 8px}.hd h1{font-size:18px;margin:0 0 4px}.hd p{font-size:12px;color:#888;margin:0}.date-divider{text-align:center;margin:18px 0 10px}.date-divider span{background:#c8c8c8;color:#fff;font-size:11px;padding:2px 12px;border-radius:999px}.row{display:flex;margin:10px 0}.row.right{justify-content:flex-end}.bubble{max-width:72%;padding:9px 12px;border-radius:8px;background:#fff;position:relative;box-shadow:0 1px 2px rgba(0,0,0,.08)}.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:3px}.content{font-size:14px;line-height:1.5;word-break:break-word}.time{font-size:10px;color:#aaa;margin-top:4px;text-align:right}.muted{color:#999;font-size:12px}</style></head><body><div class="wrap"><div class="hd"><h1>微信聊天记录</h1><p>共 ' + String(msgs.length) + ' 条消息 · 导出时间 ' + htmlEscape(now) + '</p></div>' + body + '</div></body></html>'
+  const stats = mediaStats(mediaByMessage)
+  const resourceLine = stats.ok + stats.missing > 0
+    ? ' · 资源 ' + String(stats.ok) + ' 个' + (stats.missing > 0 ? '，缺失 ' + String(stats.missing) + ' 个' : '')
+    : ''
+  const style = 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#e9ece8 0%,#dfe3df 100%);margin:0;padding:24px 12px;color:#1f1f1f}'
+    + '.wrap{max-width:820px;margin:0 auto}.hd{text-align:center;padding:16px 0 12px}.hd h1{font-size:20px;margin:0 0 6px}.hd p{font-size:12px;color:#70757a;margin:0}'
+    + '.date-divider{text-align:center;margin:20px 0 10px}.date-divider span{background:rgba(80,88,84,.72);color:#fff;font-size:11px;padding:3px 13px;border-radius:999px}'
+    + '.row{display:flex;margin:12px 0}.row.right{justify-content:flex-end}.bubble{max-width:min(78%,680px);padding:10px 12px;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.09)}'
+    + '.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:4px}.content{font-size:14px;line-height:1.6;word-break:break-word;white-space:pre-wrap}'
+    + '.time{font-size:10px;color:#999;margin-top:6px;text-align:right}.muted{color:#999;font-size:12px}.media-list{margin-top:8px;display:grid;gap:7px}'
+    + '.media-image img{display:block;max-width:100%;max-height:420px;border-radius:7px}.media-sticker{max-width:180px;max-height:180px;object-fit:contain}'
+    + '.media-video video{display:block;width:100%;max-width:520px;max-height:420px;border-radius:7px;background:#111}.media-video a,.media-voice a{display:inline-block;margin-top:4px;color:#576b95;font-size:12px;text-decoration:none}'
+    + '.media-voice audio{width:min(100%,380px)}.media-file{display:flex;gap:7px;align-items:center;padding:9px 10px;border:1px solid #e1e5e2;border-radius:7px;background:#f8faf8;color:#245c8a;text-decoration:none;word-break:break-all}'
+    + '.media-missing{padding:8px 10px;border-radius:7px;background:#fff5e8;color:#8a5a19;font-size:12px}'
+    + '@media(max-width:560px){body{padding:12px 6px}.bubble{max-width:88%}.hd h1{font-size:17px}.media-video video{max-height:300px}}'
+  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>微信聊天记录导出</title><style>'
+    + style + '</style></head><body><div class="wrap"><div class="hd"><h1>微信聊天记录</h1><p>共 ' + String(msgs.length) + ' 条消息 · 导出时间 ' + htmlEscape(now) + resourceLine + '</p></div>'
+    + body + '</div></body></html>'
 }
 
 /** markdown chat-log export body (date dividers + bullets). */
-export function formatMarkdown(msgs: WechatMessage[], username: string): string {
+export function formatMarkdown(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string {
   const lines = ['# 微信聊天记录导出', '', '> 共 ' + String(msgs.length) + ' 条消息 · 导出时间 ' + new Date().toLocaleString(), '']
   let lastDay = ''
   for (const m of msgs) {
@@ -311,13 +409,23 @@ export function formatMarkdown(msgs: WechatMessage[], username: string): string 
       lastDay = day
       lines.push('## ' + day, '')
     }
-    lines.push('**' + r.time + ' ' + r.sender + '**  ', r.typeLabel + '：' + r.text.replace(/\r?\n/g, '  '), '')
+    lines.push('**' + r.time + ' ' + r.sender + '**  ', r.typeLabel + '：' + r.text.replace(/\r?\n/g, '  '))
+    for (const entry of contentMedia(mediaByMessage, m.localId)) {
+      if (entry.status !== 'ok' || !entry.archivePath) {
+        lines.push('_' + resourceText(entry) + '_')
+      } else if (entry.kind === 'image' || entry.kind === 'sticker') {
+        lines.push('![' + entry.label + '](' + entry.archivePath + ')')
+      } else {
+        lines.push('[' + entry.label + '](' + entry.archivePath + ')')
+      }
+    }
+    lines.push('')
   }
   return lines.join('\n')
 }
 
 /** SQL export body (CREATE TABLE + INSERTs). */
-export function formatSql(msgs: WechatMessage[], username: string): string {
+export function formatSql(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string {
   const q = (v: string): string => "'" + v.replace(/'/g, "''") + "'"
   const lines = [
     'CREATE TABLE IF NOT EXISTS chat_messages (',
@@ -327,19 +435,23 @@ export function formatSql(msgs: WechatMessage[], username: string): string {
     '  sender TEXT,',
     '  type_label TEXT,',
     '  content TEXT,',
-    '  local_id INTEGER',
+    mediaByMessage ? '  local_id INTEGER,' : '  local_id INTEGER',
+    ...(mediaByMessage ? ['  resources TEXT'] : []),
     ');',
     '',
   ]
   for (const m of msgs) {
     const r = rowOf(m, username)
-    lines.push('INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (' + q(username) + ', ' + q(r.time) + ', ' + q(r.sender) + ', ' + q(r.typeLabel) + ', ' + q(r.text) + ', ' + String(m.localId) + ');')
+    const resources = contentMedia(mediaByMessage, m.localId).map(resourceText).join('\n')
+    lines.push(mediaByMessage
+      ? 'INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id, resources) VALUES (' + q(username) + ', ' + q(r.time) + ', ' + q(r.sender) + ', ' + q(r.typeLabel) + ', ' + q(r.text) + ', ' + String(m.localId) + ', ' + q(resources) + ');'
+      : 'INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (' + q(username) + ', ' + q(r.time) + ', ' + q(r.sender) + ', ' + q(r.typeLabel) + ', ' + q(r.text) + ', ' + String(m.localId) + ');')
   }
   return lines.join('\n')
 }
 
 /** JSON export body. */
-export function formatJson(msgs: WechatMessage[], username: string): string {
+export function formatJson(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string {
   const items = msgs.map((m) => {
     const r = rowOf(m, username)
     const item: Record<string, unknown> = {
@@ -352,6 +464,8 @@ export function formatJson(msgs: WechatMessage[], username: string): string {
       content: r.text,
     }
     if (m.rich) item.rich = m.rich
+    const resources = contentMedia(mediaByMessage, m.localId).map(resourceJson)
+    if (resources.length > 0) item.resources = resources
     return item
   })
   return JSON.stringify(items, null, 2)
@@ -493,11 +607,16 @@ export async function* xlsxSheetChunksAsync(
 }
 
 /** 消息 → xlsx 行（含表头）。 */
-export function* messageRows(msgs: WechatMessage[], username: string): Generator<string[]> {
-  yield ['时间', '发送者', '类型', '内容', 'localId']
+export function* messageRows(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): Generator<string[]> {
+  yield mediaByMessage
+    ? ['时间', '发送者', '类型', '内容', 'localId', '资源']
+    : ['时间', '发送者', '类型', '内容', 'localId']
   for (const m of msgs) {
     const r = rowOf(m, username)
-    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)]
+    const resources = contentMedia(mediaByMessage, m.localId).map(resourceText).join('\n')
+    yield mediaByMessage
+      ? [r.time, r.sender, r.typeLabel, r.text, String(m.localId), resources]
+      : [r.time, r.sender, r.typeLabel, r.text, String(m.localId)]
   }
 }
 
@@ -511,10 +630,10 @@ export function xlsxSheetXml(rows: Iterable<string[]>, ctrl?: StreamControl): st
  *
  * 行数不可控（整账号/大会话）时走 `writeXlsxStream`：那才是峰值与行数无关的路径。
  */
-export function formatXlsx(msgs: WechatMessage[], username: string, ctrl?: StreamControl): Uint8Array {
+export function formatXlsx(msgs: WechatMessage[], username: string, ctrl?: StreamControl, mediaByMessage?: ExportMediaLinks): Uint8Array {
   return zipFiles([
     ...xlsxStaticParts(),
-    { name: 'xl/worksheets/sheet1.xml', data: xlsxSheetXml(messageRows(msgs, username), ctrl) },
+    { name: 'xl/worksheets/sheet1.xml', data: xlsxSheetXml(messageRows(msgs, username, mediaByMessage), ctrl) },
   ])
 }
 

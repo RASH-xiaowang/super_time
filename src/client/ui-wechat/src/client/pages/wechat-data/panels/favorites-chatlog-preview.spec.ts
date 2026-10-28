@@ -108,6 +108,18 @@ describe('FavoritesChatlogPreview', () => {
     expect(drawer?.textContent).toContain('语音 · 3 秒')
   })
 
+  it('企业微信发送者显示企业名称', async () => {
+    await showAndFlush({
+      item: {
+        ...item,
+        items: [
+          { kind: 'text', text: '第一条', sourceName: '小深', sourceEnterpriseName: '深度求索' },
+        ],
+      },
+    })
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('小深（企业：深度求索）')
+  })
+
   it('聊天记录中的图片/语音/视频等资源复用详情渲染器，不再退化成文字占位', async () => {
     stubs.voice.mockResolvedValue({ url: 'data:audio/wav;base64,voice' })
     await showAndFlush()

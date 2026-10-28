@@ -29,6 +29,12 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
   try { create(db) } finally { db.close() }
 }
 
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
 describe('queryContact360', () => {
   it('aggregates messages, moments, funds, and shared groups', () => {
     const root = tempRoot()
@@ -70,5 +76,21 @@ describe('queryContact360', () => {
     expect(snap.commonGroups).toHaveLength(1)
     expect(snap.commonGroups[0]?.username).toBe('@chatroom_group')
     expect(snap.commonGroups[0]?.memberCount).toBe(1)
+  })
+
+  it('企业微信联系人带出企业名称，但不替换个人显示名', () => {
+    const root = tempRoot()
+    makeDb(join(root, 'contact', 'contact.db'), (db) => {
+      db.exec('CREATE TABLE contact (id INTEGER PRIMARY KEY, username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+      db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?, ?)').run(
+        1, 'wxid_peer@openim', '小深', '顾问', enterpriseBuffer('wording-a'),
+      )
+      db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+      db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-a', '深度求索')
+    })
+
+    const snap = queryContact360(root, 'wxid_peer@openim')
+    expect(snap.displayName).toBe('小深')
+    expect(snap.enterpriseName).toBe('深度求索')
   })
 })

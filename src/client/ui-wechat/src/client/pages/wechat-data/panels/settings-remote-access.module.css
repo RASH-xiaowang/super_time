@@ -16,9 +16,7 @@
   border: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
   border-radius: var(--nm-r-lg, 14px);
   background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
-  /* 尺寸上界（2026-10-18）：设置卡不再随分辨率/内容无限长高，超出卡内滚动。 */
-  max-height: min(60vh, 526px);
-  overflow-y: auto;
+  /* 该页只嵌在设置工作区中：纵向滚动统一交给 .mainScroll，避免卡内第二条轨道。 */
 }
 
 .hd {

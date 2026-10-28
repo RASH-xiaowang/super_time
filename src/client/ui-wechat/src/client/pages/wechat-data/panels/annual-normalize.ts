@@ -39,7 +39,7 @@ export interface NormalizedReview extends Omit<AnnualReviewShape, 'moments' | 'a
  * @returns 缓存键。
  */
 export function annualReviewCacheKey(year: number): string {
-  return `annual-review:v2:${String(year)}`
+  return `annual-review:v3:${String(year)}`
 }
 
 /** 五个新字段的空形状（`available:false` 表示"这个库没读到"，不是"是 0"）。 */
@@ -47,8 +47,8 @@ function emptyExtras(): Pick<AnnualReviewShape, 'moments' | 'assets' | 'money' |
   return {
     moments: { count: 0, topPost: null, topMonth: null, lateNight: 0, available: false },
     assets: { favorites: 0, files: 0, bytes: 0, sentFiles: 0, available: false },
-    money: { count: 0, total: 0, topAmount: 0, topPeerName: '', byPeer: [] },
-    revoke: { count: 0, topPeerName: '', byHour: new Array<number>(24).fill(0) },
+    money: { count: 0, total: 0, topAmount: 0, topPeerName: '', topPeerUsername: '', byPeer: [] },
+    revoke: { count: 0, topPeerName: '', topPeerUsername: '', byHour: new Array<number>(24).fill(0) },
     groups: { messages: 0, share: 0, top: [] },
   }
 }

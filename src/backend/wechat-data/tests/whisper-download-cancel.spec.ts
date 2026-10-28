@@ -43,11 +43,11 @@ describe('W3-5.5 引擎固定 tag', () => {
     expect(mod.WHISPER_ENGINE_TAG).toBe('v1.7.4')
   })
 
-  it('env 为空时回落 latest，保护已经配好镜像的环境（与改动前一致）', async () => {
+  it('env 为空时固定到带 Windows 二进制的 b5454', async () => {
     process.env[envKey] = '   '
     vi.resetModules()
     const mod = await import('../src/query/whisper.ts')
-    expect(mod.WHISPER_ENGINE_TAG).toBe('latest')
+    expect(mod.WHISPER_ENGINE_TAG).toBe('b5454')
   })
 
   it('引擎 URL 由 tag 拼出；裸 releases/latest 已不存在', async () => {

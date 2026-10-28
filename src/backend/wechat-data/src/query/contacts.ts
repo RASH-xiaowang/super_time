@@ -8,6 +8,11 @@ import { DatabaseSync } from './db-open.ts'
 import { cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
 import { join } from 'node:path'
 import type { WechatContact } from '../types.ts'
+import {
+  enterpriseNameFromExtra,
+  isEnterpriseWechatUser,
+  loadOpenimWordingNames,
+} from './openim.ts'
 
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
@@ -64,7 +69,7 @@ function categoryOf(localType: number, username: string, deleteFlag: number): st
   if (isOfficialAccount(username)) return 'official'
   if (isBuiltinAccount(username)) return 'system'
   if (username.endsWith('@kefu.openim')) return 'service'
-  if (username.endsWith('@openim')) return 'enterprise'
+  if (isEnterpriseWechatUser(username)) return 'enterprise'
   if (localType === 1) return 'friend'
   return 'member'
 }
@@ -196,10 +201,12 @@ function computeContacts(
         // `quan_pin` 是昵称的拼音。此前只读后者 —— 于是「桂西北_教练黄剑腾」这类
         // 备注名搜 `guixibeijiaolianhuangjianteng` 一条也搜不到（实测可新解锁 270 人）。
         sel('remark_quan_pin', "''"),
-        sel('big_head_url', "''"), sel('small_head_url', "''"), sel('description', "''"), sel('is_in_chat_room', '0')].join(', '),
+        sel('big_head_url', "''"), sel('small_head_url', "''"), sel('description', "''"), sel('is_in_chat_room', '0'),
+        sel('extra_buffer', 'NULL')].join(', '),
       'FROM contact',
     ].join(' ')
     const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
+    const enterpriseWordingNames = loadOpenimWordingNames(db)
 
     // group info: chat_room owner + member counts (chatroom_member.room_id -> id)
     const roomOwners = new Map<number, string>()
@@ -287,6 +294,10 @@ function computeContacts(
         description: cellString(r[sel('description', '')]),
         inChatRoom: Number(r[sel('is_in_chat_room', '0')] ?? 0) === 1,
         localType,
+      }
+      if (isEnterpriseWechatUser(username)) {
+        const enterpriseName = enterpriseNameFromExtra(r[sel('extra_buffer', 'NULL')], enterpriseWordingNames)
+        if (enterpriseName !== undefined) contact.enterpriseName = enterpriseName
       }
       const avatar = cellString(r[sel('big_head_url', '')]) || cellString(r[sel('small_head_url', '')])
       if (avatar) contact.avatarUrl = avatar

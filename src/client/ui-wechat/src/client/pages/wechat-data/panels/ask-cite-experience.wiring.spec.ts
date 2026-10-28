@@ -40,16 +40,16 @@ describe('引用详情：微信问答 / 会话内问答接线一致', () => {
     }
   })
 
-  it('会话内问答与微信问答使用同一套 PlanLine / RetrMeta，且都放在正文之前', () => {
+  it('会话内问答与微信问答把同一套 PlanLine / RetrMeta 放进统一过程区', () => {
     for (const file of ['Ask.tsx', 'SessionAsk.tsx']) {
       const code = bare(file)
       const planAt = code.indexOf('<PlanLine plan={t.plan} />')
       const retrAt = code.indexOf('<RetrMeta retrieval={t.retrieval} />')
-      const answerAt = code.indexOf('<AnswerBody')
+      const runAt = code.indexOf('<AnswerRunView')
       expect(planAt, `${file} 缺 PlanLine`).toBeGreaterThan(-1)
       expect(retrAt, `${file} 缺 RetrMeta`).toBeGreaterThan(-1)
-      expect(planAt, `${file} 的 PlanLine 必须在正文之前`).toBeLessThan(answerAt)
-      expect(retrAt, `${file} 的 RetrMeta 必须在正文之前`).toBeLessThan(answerAt)
+      expect(planAt, `${file} 的 PlanLine 必须作为运行视图的过程节点`).toBeGreaterThan(runAt)
+      expect(retrAt, `${file} 的 RetrMeta 必须作为运行视图的过程节点`).toBeGreaterThan(runAt)
     }
     expect(bare('SessionAsk.tsx'), '会话内问答要复用微信问答的组件，不能复制一份')
       .toMatch(/import \{[^}]*PlanLine[^}]*RetrMeta[^}]*\} from '\.\/Ask\.tsx'/)

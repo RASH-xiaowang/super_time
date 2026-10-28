@@ -16,6 +16,17 @@ import type {
   AnswerRuntimeResourceCitation,
 } from '../query/answer-runtime/types.ts'
 import type { AnswerStatus, EvidenceBundle } from '../query/answer-runtime/evidence.ts'
+import {
+  CLAWBOT_OUTPUT_PRONOUN_REMINDER,
+  CLAWBOT_UNVERIFIED_VALUE_REPLY,
+  MANUAL_QA_OUTPUT_PRONOUN_REMINDER,
+  WECHAT_QA_SYSTEM_PROMPT,
+  formatConversationHistory,
+  withClawbotPersonaRules,
+  withManualQaPersonaRules,
+} from '../query/answer-runtime/persona.ts'
+import { insufficientReply } from '../query/answer-runtime/replies.ts'
+import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from '../query/clawbot/clawbot-prompt.ts'
 import type { AnswerProfileId } from '../query/tools/profiles.ts'
 import { auditGrounding, groundingRepairHint, stripCitationMarkers } from '../query/grounding.ts'
 import type { GroundingReplyMode } from '../query/grounding.ts'
@@ -47,44 +58,50 @@ export function buildEmptyChatPrompt(
 ): string {
   const historyBlock = history.length > 0
     ? '\n\n此前对话（保持连贯，别把上一轮说过的事当没发生）：\n'
-      + history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content).join('\n')
+      + formatConversationHistory(history, 'clawbot')
     : ''
   const imageBlock = imageNote !== '' ? '\n\n关于图片：' + imageNote : ''
-  return `用户发来一条微信消息：${question}${historyBlock}${imageBlock}
+  return `当前聊天联系人刚发来一条微信消息：${question}${historyBlock}${imageBlock}
 
-  你**没有**任何可参考的材料（知识库里没检索到相关内容）。请按以下要求回一句：
+  本轮**没有**任何可参考的材料（知识库里没检索到相关内容）。请按以下要求回一句：
   1. **像真人发微信那样**：口语、简短、自然，每条不超过 30 字。寒暄就正常寒暄（「在的」「嗯嗯」），问事就说没查到。
-  2. **开场跟着对方的话走**：「在的」只在对方问「在吗 / 在不在」时用；对方说别的就直接接话，不要用万能开场。
-  3. **先回应对方说的内容，再说别的**：对方说「我明天去北京」，先接「出差啊」再往下；不要一上来就说「我这边没查到」。
-  4. **闲聊就闲聊**：对方在开玩笑、发牢骚、说天气，就顺着聊，不要硬往「查资料」上引。不是每句话都需要回答。
+  2. **开场跟着聊天联系人的话走**：「在的」只在聊天联系人问「在吗 / 在不在」时用；聊天联系人说别的就直接接话，不要用万能开场。
+  3. **先回应聊天联系人说的内容，再说别的**：聊天联系人说「我明天去北京」，先接「出差啊」再往下；不要一上来就说「我这边没查到」。
+  4. **闲聊就闲聊**：聊天联系人在开玩笑、发牢骚、说天气，就顺着聊，不要硬往「查资料」上引。不是每句话都需要回答。
   5. **绝对不要编造**具体事实：金额、日期、人名、地址、承诺一律不许猜。不知道就说不知道。
   6. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字。
-  7. **不要提「知识库」「检索」「材料」这类词** —— 对方不知道你在查什么，说了很奇怪。
-  8. **不要解释你自己**：不要写「注：」「说明：」「（不编号了）」这类元信息，也不要提引用、编号、来源。你就是在聊天，不是在写文档。
-  9. 需要本人决定的事（借钱、签约、敏感话题），回一句「这个我得问下本人」比硬答更好。
-  10. 内容确实长时按语义分段（段间空一行），像人连发几条那样。`
+  7. **不要提「知识库」「检索」「材料」这类词** —— 聊天联系人不知道你在查什么，说了很奇怪。
+  8. **不要解释自己**：不要写「注：」「说明：」「（不编号了）」这类元信息，也不要提引用、编号、来源。回复就是在聊天，不是在写文档。
+  9. 需要当前微信账号本人进一步确认的事（借钱、签约、敏感话题），回一句「这个我得先确认一下」比硬答更好。
+  10. 内容确实长时按语义分段（段间空一行），像人连发几条那样。
+  11. ${CLAWBOT_OUTPUT_PRONOUN_REMINDER}`
 }
 
 /** 解析本次问答要用的系统提示词。 */
 export function resolveSystemPrompt(override: string | undefined, dataScope?: AskDataScope): string {
-  if (override !== undefined && override.trim() !== '') return override
-  if (dataScope === 'kb-only') {
-    return '你是用户微信里的自动回复助手。只用下面给出的检索材料回答，像真人发微信一样口语、简短；每段不超过 30 字，不标 [n] 角标；材料里没有的就直说没查到，绝不推测或编造。'
+  if (override !== undefined && override.trim() !== '') {
+    return dataScope === 'kb-only'
+      ? withClawbotPersonaRules(override)
+      : withManualQaPersonaRules(override)
   }
-  return '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。'
+  if (dataScope === 'kb-only') {
+    return DEFAULT_CLAWBOT_SYSTEM_PROMPT
+  }
+  return WECHAT_QA_SYSTEM_PROMPT
 }
 
 /** 构造用户消息里的回答规则。 */
 export function buildSynthRules(dataScope: AskDataScope | undefined, timeGuardRule: string): string {
   if (dataScope === 'kb-only') {
     return `
-  请按以下要求回答（你在**微信里跟人聊天**，不是在写报告）：
+  请按以下要求生成回复（当前微信账号本人正在微信里与聊天联系人对话，不是在写报告）：
   1. **只用材料里的事实**：材料里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期。宁可少说，也不要编。
   2. **像真人发微信那样说话**：口语、简短、自然。不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），不要复述检索过程，不要罗列来源。
   3. **每条不超过 30 字**：这是硬要求。一句话说不完就**分成几条**，每条独立成段（用空行隔开），像人连发几条微信那样。宁可分 3 条短的，也不要写 1 条长的。
   4. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字（如「小何说」）。
   5. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
-  6. **找不到就直说**：材料不足以回答时，直接说「这个我这边没查到」，再问一句要不要换个说法。不要用推测填空。${timeGuardRule}`
+  6. **找不到就直说**：材料不足以回答时，直接说「这个我这边没查到」，再问一句要不要换个说法。不要用推测填空。${timeGuardRule}
+  ${CLAWBOT_OUTPUT_PRONOUN_REMINDER}`
   }
   return `
   请按以下要求回答：
@@ -93,7 +110,8 @@ export function buildSynthRules(dataScope: AskDataScope | undefined, timeGuardRu
   3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
   4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
   5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
-  6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}`
+  6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}
+  ${MANUAL_QA_OUTPUT_PRONOUN_REMINDER}`
 }
 
 /** 「没检索到原文」时的回答文案。 */
@@ -101,6 +119,7 @@ export function emptyAnswerText(
   dataScope: AskDataScope | undefined,
   profile: AnswerProfileId = 'wechat-ask',
 ): string {
+  if (profile === 'clawbot-auto') return insufficientReply(profile)
   if (dataScope === 'kb-only') {
     return '知识库里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词，或在实例设置里换一个知识库。'
   }
@@ -111,7 +130,7 @@ export function emptyAnswerText(
 }
 
 /** 自动回复核对失败后的安全文案。 */
-export const CHAT_WITHHELD_ANSWER = '这个数字我这边没法确认，我先问下本人。'
+export const CHAT_WITHHELD_ANSWER = CLAWBOT_UNVERIFIED_VALUE_REPLY
 
 /** 检索范围（只保留非空字段）。 */
 export function buildAskScope(options: {
@@ -161,11 +180,11 @@ async function admitAskImages(ctx: Context, images: readonly AskImageInput[]): P
     }
   }).attachments
   if (attachments?.admitPromptContent === undefined) {
-    return { blocks: [], note: '（对方发来图片，但当前运行环境没有可用的附件服务，无法识别图片内容。）' }
+    return { blocks: [], note: '（本轮消息附带图片，但当前运行环境没有可用的附件服务，无法识别图片内容。）' }
   }
   try {
     const parts: unknown[] = [
-      { type: 'text', text: '（以下是对方在微信里发来的图片）' },
+      { type: 'text', text: '（以下是本轮微信消息附带的图片）' },
       ...images.slice(0, 2).map(i => ({
         type: 'image',
         data: i.data,
@@ -212,7 +231,7 @@ export async function prepareAskImages(
   if (!vision) {
     return {
       blocks: [],
-      note: '（对方发来图片，但当前对话模型不支持读图，无法识别图片内容；请如实告诉对方看不到图片内容，不要说「没收到图片」。）',
+      note: '（本轮消息附带图片，但当前对话模型不支持读图，无法识别图片内容；请如实告知当前消息发送者看不到图片内容，不要说「没收到图片」。）',
       audit: '',
     }
   }
@@ -225,7 +244,7 @@ export async function prepareAskImages(
 }
 
 /** 图片被供应商拒绝时的说明。 */
-export const IMAGE_UNSUPPORTED_NOTE = '\n\n（注意：当前模型看不到随消息附的图片，无法识别图片内容；请如实告诉对方看不到图片内容，不要说「没收到图片」。）'
+export const IMAGE_UNSUPPORTED_NOTE = '\n\n（注意：当前模型看不到随消息附的图片，无法识别图片内容；请如实告知当前消息发送者看不到图片内容，不要说「没收到图片」。）'
 
 /** 累加一次模型调用的 usage。 */
 export function addTokenUsage(acc: TokenUsage | undefined, next: TokenUsage | undefined): TokenUsage | undefined {
@@ -340,13 +359,14 @@ export function buildToolSelectionSystem(input: {
     input.kbId !== undefined ? `知识库 ${String(input.kbId)}` : '未选择知识库',
     input.dataScope === 'kb-only' ? '数据面仅知识库，禁止访问本机微信数据' : '',
   ].filter(Boolean).join('；')
+  const conversationKind = input.profile === 'clawbot-auto' ? 'clawbot' : 'qa'
   const history = input.history.length > 0
     ? '\n最近对话（只用于理解指代，不得当作事实证据）：\n'
-      + input.history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content).join('\n')
+      + formatConversationHistory(input.history, conversationKind)
     : ''
   const image = input.imageNote !== '' ? `\n图片说明：${input.imageNote}` : ''
   return `今天是 ${today}。你是一个检索工具选择器，不是最终回答器。
-用户问题：${input.question}
+待处理问题：${input.question}
 执行边界：${scope}${history}${image}
 
 你的任务：
@@ -424,11 +444,15 @@ export function buildRuntimeContext(input: {
 export function citationToAskCitation(citation: AnswerRuntimeCitation): AskCitation {
   return {
     name: citation.name,
+    ...(citation.enterpriseName ? { enterpriseName: citation.enterpriseName } : {}),
     time: citation.time,
     snippet: citation.snippet,
     username: citation.username,
     local_id: citation.local_id,
     ...(citation.sender ? { sender: citation.sender } : {}),
+    ...(citation.senderEnterpriseName
+      ? { senderEnterpriseName: citation.senderEnterpriseName }
+      : {}),
     ...(citation.source ? { source: citation.source } : {}),
     ...(citation.kb ? { kb: citation.kb } : {}),
   }
@@ -443,12 +467,14 @@ export function buildSynthesisPrompt(input: {
   dataScope?: AskDataScope
   timeGuardRule: string
 }): string {
+  const conversationKind = input.dataScope === 'kb-only' ? 'clawbot' : 'qa'
   const historyBlock = input.history.length > 0
     ? '此前的对话（保持多轮连贯，但答案必须以本次检索结果为准）：\n'
-      + input.history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content).join('\n') + '\n\n'
+      + formatConversationHistory(input.history, conversationKind) + '\n\n'
     : ''
   const imageHint = input.imageHint !== '' ? '\n关于图片：' + input.imageHint : ''
-  return `${historyBlock}用户本次问题：${input.question}${imageHint}
+  const questionLabel = input.dataScope === 'kb-only' ? '当前聊天联系人本次消息' : '提问者本次问题'
+  return `${historyBlock}${questionLabel}：${input.question}${imageHint}
 
 ${input.contextBlock}
 ${buildSynthRules(input.dataScope, input.timeGuardRule)}`
@@ -600,7 +626,7 @@ export async function resolveGroundedAnswer(input: {
   ${!evidenceUsed ? ' · 上一次的回答没有实际使用任何一条知识库材料中的具体内容。\n' : ''}
    · 仍然只使用检索材料里的事实，像真人发微信一样简短口语化；
    · 不要标 [n]，不要提引用、来源、材料、核对或“上一次回答”；
-   · 如果材料不足以确认关键数字，就说「这个数字我这边没法确认，我先问下本人」。`
+   · 如果材料不足以确认关键数字，就说「${CLAWBOT_UNVERIFIED_VALUE_REPLY}」。`
       : `${input.synthPrompt}
 
   【重要】请重写上一次的回答，逐条修掉下面的问题。
@@ -608,9 +634,7 @@ export async function resolveGroundedAnswer(input: {
    · 语气保持自然口语化，像在微信里转述聊天内容；
    · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
     const second = await input.runChat(
-      auditMode === 'chat'
-        ? input.systemPrompt
-        : '你是用户微信聊天记录里的问答助手。只用给定检索结果回答，自然口语化，每句事实标注 [n]；记录里没有就直说没找到，不要推测或编造。',
+      input.systemPrompt,
       strictPrompt,
       auditMode === 'chat' ? 400 : 1600,
       undefined,
@@ -644,19 +668,19 @@ export async function resolveGroundedAnswer(input: {
     if (grounding.unsupported.length > 0) {
       withheld = true
       finalAnswer = resourceOnly
-        ? '找到的资源内容不足以核对这次回答中的关键数字或日期，因此没有直接采用模型结论。请打开下方资源确认，或换一个更具体的问法。'
+        ? '找到的资源内容不足以核对这次回答中的关键数字或日期，因此没有直接采用 AI 回答。请打开下方资源确认，或换一个更具体的问法。'
         : CHAT_WITHHELD_ANSWER
     }
     grounding = { ...grounding, cited: [] }
     if (!evidenceUsed) {
       withheld = true
       finalAnswer = resourceOnly
-        ? '找到的资源没有在模型回答中被实际使用，因此没有直接采用模型结论。请打开下方资源确认，或换一个更具体的问法。'
+        ? '找到的资源没有在 AI 回答中被实际使用，因此没有直接采用该结论。请打开下方资源确认，或换一个更具体的问法。'
         : CHAT_WITHHELD_ANSWER
     }
   } else if (citedIndexes.length === 0) {
     withheld = true
-    finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
+    finalAnswer = '本机记录中没有找到可据以回答的证据（AI 回答无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
   }
 
   return { answer: finalAnswer, citedIndexes, withheld, grounding, repaired, evidenceUsed }

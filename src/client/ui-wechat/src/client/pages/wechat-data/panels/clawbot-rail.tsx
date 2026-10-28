@@ -27,6 +27,7 @@ import { desktopActionProps } from '../ui/desktop-only.tsx'
 import { useTransientNotice } from './hooks.tsx'
 import { CLAWBOT_STATUS_LABEL, statusClass, statusDot } from './clawbot-status.ts'
 import { ClawbotBindModal } from './clawbot-bind-modal.tsx'
+import { Avatar } from './chats-support.tsx'
 import css from './clawbot.module.css'
 
 /**
@@ -154,7 +155,7 @@ export function ClawbotRail({ instances, slot, snapshot, readError, loadError, o
   const addInstance = async (): Promise<void> => {
     try {
       const r = await apiCreateClawbotInstance()
-      notice.flash(`✓ 已新增实例 ${r.slot}（接着点它的「绑定此号」扫码）`)
+      notice.flash(`✓ 已新增实例 ${r.slot}（接着点该实例的「绑定此号」并扫码）`)
       await onChanged()
     } catch (e) {
       notice.flash('✗ 新增失败：' + (e as Error).message)
@@ -185,7 +186,7 @@ export function ClawbotRail({ instances, slot, snapshot, readError, loadError, o
   }
 
   return (
-    <nav className={css.rail} aria-label="微信实例">
+    <nav className={css.rail} aria-label="ClawBot 实例">
       <span className={css.statusPill} title={readError !== '' ? readError : undefined}>
         <StateDot state={pill.dot} />
         <span className={pill.tone}>{pill.text}</span>
@@ -232,7 +233,15 @@ export function ClawbotRail({ instances, slot, snapshot, readError, loadError, o
                 }}
               >
                 <div className={css.railRowHead}>
-                  <StateDot state={statusDot(it.status)} />
+                  <span className={css.railAvatarWrap}>
+                    <Avatar
+                      name={railLabel(it)}
+                      username={it.wxid ?? ''}
+                      avatarUrl={it.avatar ?? undefined}
+                      size={24}
+                    />
+                    <span className={css.railStateDot}><StateDot state={statusDot(it.status)} /></span>
+                  </span>
                   {isEditing
                     ? (
                       <RailRenameInput
@@ -298,7 +307,7 @@ export function ClawbotRail({ instances, slot, snapshot, readError, loadError, o
           onConfirmed={(b) => {
             const bound = bindQr.slot
             setBindQr(null)
-            notice.flash(`✓ 实例 ${bound} 已绑定 ${b.binding.wxid ?? ''}（在微信里给它发条消息试试）`)
+            notice.flash(`✓ 实例 ${bound} 已绑定 ${b.binding.wxid ?? ''}（在微信里给该 ClawBot 发条消息试试）`)
             void onChanged()
           }}
           onClose={() => { setBindQr(null) }}

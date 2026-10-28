@@ -33,7 +33,7 @@ describe('微信问答空态示例', () => {
       session({ username: 'wxid_scope', displayName: '赵六', lastTimestamp: 100 }),
     ], '赵六')
 
-    expect(cards[0]?.question).toBe('最近和「赵六」聊了些什么？')
+    expect(cards[0]?.question).toBe('最近我和「赵六」聊了些什么？')
   })
 
   it('没有选中范围时取最近的真实会话', () => {
@@ -44,7 +44,7 @@ describe('微信问答空态示例', () => {
       session({ username: 'wxid_new', displayName: '王五', lastTimestamp: 200 }),
     ])
 
-    expect(cards[0]?.question).toBe('最近和「王五」聊了些什么？')
+    expect(cards[0]?.question).toBe('最近我和「王五」聊了些什么？')
   })
 
   it('最近会话是群聊时用群聊问法', () => {
@@ -52,7 +52,7 @@ describe('微信问答空态示例', () => {
       session({ username: '123@chatroom', displayName: '项目组', type: 'group', lastTimestamp: 200 }),
     ])
 
-    expect(cards[0]?.question).toBe('最近「项目组」里聊了些什么？')
+    expect(cards[0]?.question).toBe('最近我在「项目组」里聊了些什么？')
   })
 
   it('过滤公众号、服务号、客服号与系统会话', () => {

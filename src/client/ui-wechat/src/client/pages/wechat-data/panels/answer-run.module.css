@@ -1,0 +1,813 @@
+/*
+ * Shared answer-run view for WeChat Q&A and session-level AI Q&A.
+ *
+ * The component owns behavior and content order. This module only defines the
+ * visual contract: a compact Agent identity/status header, a secondary process
+ * disclosure, and the readable formal answer below the disclosure.
+ *
+ * Optional state hooks used by the component:
+ * - data-phase: queued | thinking | tool_calling | generating | verifying |
+ *   completed | stopped | failed
+ * - data-outcome: ok | degraded | insufficient | needs_clarification |
+ *   blocked | stopped | failed
+ * - data-status / data-tone: state overrides on the status bar or pill
+ * - data-live, data-active, data-collapsed, data-clamp, data-scroll
+ * - aria-expanded on the process header
+ * - hidden on collapsible bodies
+ */
+
+.run {
+  --ar-state: var(--nm-text-3);
+  --ar-state-soft: color-mix(in srgb, var(--nm-text-3) 10%, transparent);
+  --ar-state-text: var(--nm-text-2);
+  --ar-state-line: var(--nm-border);
+  --ar-run-gutter: 24px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+  color: var(--nm-text-1);
+  container-type: inline-size;
+}
+
+/* Agent identity stays on the left while all run content shares one text axis. */
+.runHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.agentMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, var(--nm-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--nm-cyan) 9%, var(--nm-bg-card));
+  color: var(--nm-cyan-text);
+}
+
+.agentMark > svg {
+  width: 11px;
+  height: 11px;
+}
+
+.agentMark[data-live] {
+  color: var(--ar-state);
+  border-color: var(--ar-state-line);
+  background: var(--ar-state-soft);
+}
+
+.agentName {
+  flex: 0 0 auto;
+  color: var(--nm-text-1);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.runBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: calc(100% - var(--ar-run-gutter));
+  min-width: 0;
+  margin-left: var(--ar-run-gutter);
+}
+
+/* Lifecycle states. Outcome rules below intentionally win over these. */
+.run:is([data-phase='queued'], [data-phase='stopped']),
+.statusBar:is([data-status='queued'], [data-status='stopped'], [data-status='pending'], [data-status='skipped']),
+.statusPill:is([data-status='queued'], [data-status='stopped'], [data-status='pending'], [data-status='skipped'], [data-tone='neutral']) {
+  --ar-state: var(--nm-text-3);
+  --ar-state-soft: var(--nm-bg-hover);
+  --ar-state-text: var(--nm-text-2);
+  --ar-state-line: var(--nm-border);
+}
+
+.run[data-phase='thinking'],
+.statusBar:is([data-status='thinking'], [data-status='running']),
+.statusPill:is([data-status='thinking'], [data-status='running'], [data-tone='thinking']) {
+  --ar-state: var(--nm-cyan);
+  --ar-state-soft: var(--nm-cyan-10);
+  --ar-state-text: var(--nm-cyan-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-cyan) 40%, var(--nm-border));
+}
+
+.statusBar:is([data-status='warning'], [data-status='degraded'], [data-status='insufficient'], [data-status='needs_clarification'], [data-status='timeout']),
+.statusPill:is([data-status='warning'], [data-status='degraded'], [data-status='insufficient'], [data-status='needs_clarification'], [data-status='timeout'], [data-tone='warning']) {
+  --ar-state: var(--nm-warning);
+  --ar-state-soft: var(--nm-warning-15);
+  --ar-state-text: var(--nm-warning-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-warning) 40%, var(--nm-border));
+}
+
+.run[data-phase='generating'],
+.run[data-phase='tool_calling'],
+.run[data-phase='preparing'],
+.statusBar:is([data-status='generating'], [data-status='tool_calling']),
+.statusPill:is([data-status='generating'], [data-status='tool_calling']),
+.statusBar[data-status='preparing'],
+.statusPill[data-status='preparing'],
+.statusPill[data-tone='brand'] {
+  --ar-state: var(--nm-brand);
+  --ar-state-soft: color-mix(in srgb, var(--nm-brand) 10%, transparent);
+  --ar-state-text: var(--nm-cyan-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-brand) 40%, var(--nm-border));
+}
+
+.run[data-phase='verifying'],
+.statusBar:is([data-status='verifying'], [data-status='info']),
+.statusPill:is([data-status='verifying'], [data-status='info'], [data-tone='info']) {
+  --ar-state: var(--nm-info);
+  --ar-state-soft: var(--nm-info-15);
+  --ar-state-text: var(--nm-info-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-info) 40%, var(--nm-border));
+}
+
+.run[data-phase='completed'],
+.statusBar:is([data-status='completed'], [data-status='ok'], [data-status='success']),
+.statusPill:is([data-status='completed'], [data-status='ok'], [data-status='success'], [data-tone='success']) {
+  --ar-state: var(--nm-success);
+  --ar-state-soft: var(--nm-success-15);
+  --ar-state-text: var(--nm-success-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-success) 40%, var(--nm-border));
+}
+
+.run[data-phase='failed'],
+.statusBar:is([data-status='failed'], [data-status='error'], [data-status='blocked']),
+.statusPill:is([data-status='failed'], [data-status='error'], [data-status='blocked'], [data-tone='danger']) {
+  --ar-state: var(--nm-danger);
+  --ar-state-soft: var(--nm-danger-15);
+  --ar-state-text: var(--nm-danger-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-danger) 40%, var(--nm-border));
+}
+
+/* Final outcomes override lifecycle colors. */
+.run[data-outcome='ok'] {
+  --ar-state: var(--nm-success);
+  --ar-state-soft: var(--nm-success-15);
+  --ar-state-text: var(--nm-success-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-success) 40%, var(--nm-border));
+}
+
+.run[data-outcome='degraded'],
+.run[data-outcome='insufficient'],
+.run[data-outcome='needs_clarification'] {
+  --ar-state: var(--nm-warning);
+  --ar-state-soft: var(--nm-warning-15);
+  --ar-state-text: var(--nm-warning-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-warning) 40%, var(--nm-border));
+}
+
+.run[data-outcome='blocked'],
+.run[data-outcome='failed'] {
+  --ar-state: var(--nm-danger);
+  --ar-state-soft: var(--nm-danger-15);
+  --ar-state-text: var(--nm-danger-text);
+  --ar-state-line: color-mix(in srgb, var(--nm-danger) 40%, var(--nm-border));
+}
+
+.run[data-outcome='stopped'] {
+  --ar-state: var(--nm-text-3);
+  --ar-state-soft: var(--nm-bg-hover);
+  --ar-state-text: var(--nm-text-2);
+  --ar-state-line: var(--nm-border);
+}
+
+/* Always visible, but deliberately quieter than the answer. */
+.statusBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  gap: 3px 8px;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 10.75px;
+  line-height: 1.5;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ar-state-text);
+  font-size: 10.75px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.statusPill[data-tone='success'] {
+  color: var(--nm-text-2);
+}
+
+.statusIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  color: var(--ar-state);
+}
+
+.statusIcon > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.statusText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.statusMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 5px;
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusMeta > span + span::before {
+  margin-right: 6px;
+  color: var(--nm-text-3);
+  content: '·';
+}
+
+.statusAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 30px;
+  min-height: 22px;
+  margin-left: auto;
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.statusAction:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.statusAction:focus-visible,
+.moreButton:focus-visible,
+.retryBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+
+.processHead:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: -2px;
+}
+
+.answer {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.answerCard {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.answerContent {
+  min-width: 0;
+}
+
+.answer[data-streaming='true'] .answerContent > :where(p, h1, h2, h3, h4, blockquote, pre):last-child::after,
+.answer[data-streaming='true'] .answerContent > :where(ul, ol):last-child > li:last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--nm-cyan);
+  animation: ar-caret 1s step-end infinite;
+}
+
+.emptyAnswer {
+  display: block;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.answerContent > :where(* + *) {
+  margin-top: 8px;
+}
+
+.answerContent > :where(h1, h2, h3, h4):not(:first-child) {
+  margin-top: 12px;
+}
+
+.answer :where(p, h1, h2, h3, h4, ul, ol, blockquote, pre) {
+  margin: 0;
+}
+
+.answer :where(p, li, blockquote) {
+  white-space: pre-wrap;
+}
+
+.answer :where(h1, h2, h3, h4) {
+  color: var(--nm-text-1);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.answer :where(strong) {
+  color: var(--nm-text-1);
+  font-weight: 650;
+}
+
+.answer :where(em) {
+  color: var(--nm-text-1);
+  font-style: italic;
+}
+
+.answer :where(h1, h2) {
+  font-size: 13px;
+}
+
+.answer :where(h3, h4) {
+  font-size: 12.5px;
+}
+
+.answer :where(ul, ol) {
+  padding-left: 18px;
+}
+
+.answer :where(li + li) {
+  margin-top: 3px;
+}
+
+.answer :where(li)::marker {
+  color: var(--nm-text-3);
+}
+
+.answer :where(blockquote) {
+  padding-left: 10px;
+  border-left: 1px solid var(--nm-border-hover);
+  color: var(--nm-text-2);
+}
+
+.answer :where(a) {
+  color: var(--nm-cyan-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.answer :where(code) {
+  padding: 0 4px;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono);
+  font-size: 0.9em;
+}
+
+.answer :where(pre) {
+  max-width: 100%;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  font-family: var(--nm-font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.answer :where(pre code) {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* The inspector precedes the answer and stays visually secondary to it. */
+.process {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 1.6;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.pendingAnswer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.pendingBars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 14px;
+}
+
+.pendingBar {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--ar-state);
+  animation: ar-pending 1s ease-in-out infinite;
+}
+
+.pendingBar:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.pendingBar:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.pendingBar:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+.emptyAnswerState {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-left: 2px solid var(--nm-warning);
+  border-radius: 0 var(--nm-r-sm) var(--nm-r-sm) 0;
+  background: var(--nm-warning-15);
+  color: var(--nm-warning-text);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.emptyAnswerState > svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.processHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 10.75px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.processHead:hover {
+  background: color-mix(in srgb, var(--nm-text-1) 5%, transparent);
+  color: var(--nm-text-1);
+}
+
+.processChevron {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+  transition: transform var(--nm-t-fast);
+}
+
+.processHead[aria-expanded='true'] .processChevron {
+  transform: rotate(90deg);
+}
+
+.processTitle {
+  min-width: 0;
+  color: currentColor;
+  font-weight: 550;
+}
+
+.processMeta {
+  min-width: 0;
+  margin-left: 2px;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  line-height: 1.5;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.processBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding: 0 8px 6px;
+  border-top: 1px solid color-mix(in srgb, var(--nm-border) 42%, transparent);
+}
+
+.processBody[hidden] {
+  display: none;
+}
+
+.moreButton,
+.retryBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: var(--nm-r-sm);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.moreButton {
+  align-self: flex-start;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-3);
+}
+
+.moreButton:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-3) 7%, transparent);
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.notices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.notice > svg {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.noticeWarn {
+  background: var(--nm-warning-15);
+  color: var(--nm-warning-text);
+}
+
+.noticeDanger {
+  background: var(--nm-danger-15);
+  color: var(--nm-danger-text);
+}
+
+.retryBtn {
+  align-self: flex-start;
+  border: 1px solid color-mix(in srgb, var(--nm-brand) 40%, var(--nm-border));
+  background: transparent;
+  color: var(--nm-cyan-text);
+}
+
+.retryBtn:hover {
+  border-color: color-mix(in srgb, var(--nm-brand) 64%, var(--nm-border));
+  background: var(--nm-cyan-10);
+}
+
+.retryBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.retryBtn:disabled:hover {
+  border-color: color-mix(in srgb, var(--nm-brand) 40%, var(--nm-border));
+  background: transparent;
+}
+
+.answer :where(pre) { scrollbar-width: none; }
+
+.answer :where(pre)::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+@container (max-width: 480px) {
+  .run {
+    --ar-run-gutter: 0px;
+  }
+
+  .runBody {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .statusBar {
+    gap: 4px;
+    padding: 2px 0;
+  }
+
+  .statusPill {
+    flex: 1 1 auto;
+  }
+
+  .statusAction {
+    margin-left: auto;
+  }
+
+  .statusMeta {
+    flex-basis: 100%;
+    order: 4;
+    padding-bottom: 4px;
+  }
+
+  .processHead {
+    flex-wrap: wrap;
+    min-height: 28px;
+    padding: 2px 6px;
+  }
+
+  .processTitle {
+    flex: 1 1 auto;
+  }
+
+  .processMeta {
+    flex-basis: 100%;
+    margin-left: 24px;
+    text-align: left;
+  }
+
+  .processBody {
+    padding: 2px 0 0;
+  }
+
+  .notice {
+    padding: 8px;
+  }
+
+  .moreButton {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .retryBtn {
+    width: 100%;
+  }
+}
+
+/* Keep the desktop trace compact while preserving a full touch target on
+   coarse-pointer devices. */
+@media (pointer: coarse) {
+  .processHead,
+  .statusAction,
+  .moreButton,
+  .retryBtn {
+    min-height: 44px;
+  }
+
+  .statusAction {
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processChevron,
+  .statusAction,
+  .moreButton,
+  .retryBtn,
+  .pendingBar {
+    transition: none;
+    animation: none;
+  }
+
+  .answer[data-streaming='true'] .answerContent > :where(p, h1, h2, h3, h4, blockquote, pre):last-child::after,
+  .answer[data-streaming='true'] .answerContent > :where(ul, ol):last-child > li:last-child::after {
+    animation: none;
+  }
+}
+
+@keyframes ar-pending {
+  0%,
+  100% {
+    opacity: 0.32;
+    transform: scale(0.72);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ar-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}

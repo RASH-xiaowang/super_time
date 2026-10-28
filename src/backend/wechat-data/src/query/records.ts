@@ -90,25 +90,49 @@ function findRevokeTable(decryptedDir: string): { file: string; table: string } 
   return { file: '', table: '' }
 }
 
-/** 为记录追加「人类可读」展示字段（显示名）。 */
-function enrichRecords(items: RecordItem[], kind: string, names: Map<string, string>): void {
+/** 为记录追加「人类可读」展示字段（显示名与企业名称）。 */
+function enrichRecords(
+  items: RecordItem[],
+  kind: string,
+  names: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): void {
   const dn = (v: unknown): string => {
     const s = cellString(v)
     return s ? (names.get(s) ?? '') : ''
   }
+  const ent = (v: unknown): string => {
+    const s = cellString(v)
+    return s ? (enterpriseNames.get(s)?.trim() ?? '') : ''
+  }
   for (const it of items) {
-    if (kind === 'revokes') it['session_display'] = dn(it['session_name'])
+    if (kind === 'revokes') {
+      it['session_display'] = dn(it['session_name'])
+      it['session_enterprise'] = ent(it['session_name'])
+    }
     if (kind === 'transfers') {
       it['session_display'] = dn(it['session_name'])
+      it['session_enterprise'] = ent(it['session_name'])
       it['receiver_display'] = dn(it['pay_receiver'])
+      it['receiver_enterprise'] = ent(it['pay_receiver'])
       it['payer_display'] = dn(it['pay_payer'])
+      it['payer_enterprise'] = ent(it['pay_payer'])
     }
     if (kind === 'redpackets') {
       it['session_display'] = dn(it['session_name'])
+      it['session_enterprise'] = ent(it['session_name'])
       it['sender_display'] = dn(it['sender_user_name'])
+      it['sender_enterprise'] = ent(it['sender_user_name'])
     }
-    if (kind === 'finder') it['username_display'] = dn(it['finder_username'])
-    if (kind === 'friendverifications') it['user_display'] = dn(it['user_name_'])
+    if (kind === 'finder') {
+      it['username_display'] = dn(it['finder_username'])
+      it['username_enterprise'] = ent(it['finder_username'])
+    }
+    if (kind === 'friendverifications') {
+      it['user_display'] = dn(it['user_name_'])
+      it['user_enterprise'] = ent(it['user_name_'])
+    }
+    if (kind === 'miniprograms') it['user_enterprise'] = ent(it['user_name'])
   }
 }
 /** Record-type words that are data-source names, not record content (source stopwords). */
@@ -151,7 +175,9 @@ export function queryRecords(
     const to = Math.max(0, opts?.to ?? 0)
     const direction = opts?.direction === 'asc' ? 'asc' : 'desc'
     const esc = (v: string): string => v.replace(/'/g, "''")
-    const names = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const names = meta.names
+    const enterpriseNames = meta.enterpriseNames
 
     // per-kind column sets mirror general_records/lists.rs; the frontend maps
     // them to per-kind tables (会话/类型/收款方/…)
@@ -237,7 +263,7 @@ export function queryRecords(
         } catch { /* not JSON */ }
         it['nickname'] = nickname
       }
-      enrichRecords(items, kind, names)
+      enrichRecords(items, kind, names, enterpriseNames)
       let total = 0
       try {
         total = (db.prepare('SELECT COUNT(*) AS n FROM wacontact w LEFT JOIN WeAppBizAttrSyncBufferTableV02 a ON a.user_name = w.user_name' + whereSql).get() as { n: number }).n
@@ -246,7 +272,7 @@ export function queryRecords(
     }
     const whereSql = combineWhere(s.where ?? '', s.timeCol ? timeSql(s.timeCol) : '')
     const items = queryTable(db, s.table, s.cols, s.order, cap, off, whereSql, direction)
-    enrichRecords(items, kind, names)
+    enrichRecords(items, kind, names, enterpriseNames)
     return { items, total: countWhere(db, s.table, whereSql) }
   } finally {
     db.close()

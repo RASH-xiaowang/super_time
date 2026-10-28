@@ -193,6 +193,8 @@ export declare function knownEntityNames(decryptedDir: string, limit?: number): 
 export declare function knownSessionCatalog(decryptedDir: string, limit?: number): Array<{
     username: string;
     name: string;
+    enterpriseName?: string;
+    aliases?: string[];
 }>;
 export declare function getSearchIndexStatus(decryptedDir: string): {
     exists: boolean;

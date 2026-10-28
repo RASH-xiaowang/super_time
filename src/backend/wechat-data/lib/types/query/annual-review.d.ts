@@ -5,6 +5,7 @@ import { type AnnualGroups, type AnnualMoney, type AnnualRevoke } from './annual
 export interface AnnualRankRow {
     username: string;
     name: string;
+    enterpriseName?: string;
     total: number;
     mine: number;
     theirs: number;
@@ -16,6 +17,8 @@ export interface AnnualBusiestDay {
     ratio: number;
     share: number;
     topName: string;
+    topEnterpriseName?: string;
+    topUsername: string;
     topCount: number;
     firstAt: string;
     firstText: string;
@@ -30,6 +33,7 @@ export interface AnnualBuddy {
     total: number;
     mine: number;
     theirs: number;
+    enterpriseName?: string;
     streakDays: number;
     commonHour: number;
     replyBacks: number;
@@ -41,6 +45,7 @@ export interface AnnualMonthlyStar {
     month: number;
     username: string;
     name: string;
+    enterpriseName?: string;
     count: number;
 }
 /** 深夜卡。 */
@@ -49,6 +54,8 @@ export interface AnnualNight {
     mine: number;
     theirs: number;
     topName: string;
+    topEnterpriseName?: string;
+    topUsername: string;
     topCount: number;
     sampleAt: string;
     sampleText: string;
@@ -81,6 +88,8 @@ export interface AnnualWords {
     voiceMsgSent: number;
     longestVoiceSec: number;
     longestVoiceFrom: string;
+    longestVoiceUsername: string;
+    longestVoiceEnterpriseName?: string;
 }
 /** 年度口头禅。 */
 export interface AnnualCatchphrase {
@@ -100,11 +109,17 @@ export interface AnnualReply {
     medianSec: number;
     p90Sec: number;
     avgPartnerName: string;
+    avgPartnerUsername: string;
     avgPartnerSec: number;
+    avgPartnerEnterpriseName?: string;
     fastestName: string;
+    fastestUsername: string;
     fastestSec: number;
+    fastestEnterpriseName?: string;
     slowestName: string;
+    slowestUsername: string;
     slowestSec: number;
+    slowestEnterpriseName?: string;
 }
 /** 谁先开口。 */
 export interface AnnualOpener {
@@ -112,11 +127,15 @@ export interface AnnualOpener {
     theirs: number;
     share: number;
     mostInitiatedByMe: Array<{
+        username: string;
         name: string;
+        enterpriseName?: string;
         count: number;
     }>;
     mostInitiatedByThem: Array<{
+        username: string;
         name: string;
+        enterpriseName?: string;
         count: number;
     }>;
 }
@@ -140,6 +159,7 @@ export interface AnnualHighlight {
     label: string;
     name: string;
     username: string;
+    enterpriseName?: string;
     value: string;
 }
 /** 完整结果。 */
@@ -166,6 +186,7 @@ export interface AnnualReview {
     starName: string;
     starUsername: string;
     starMonths: number;
+    starEnterpriseName?: string;
     hottestMonth: number;
     hottestMonthCount: number;
     night: AnnualNight;

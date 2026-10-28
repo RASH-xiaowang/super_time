@@ -23,9 +23,13 @@ import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { LazyMount } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
+import { IdentityName } from './identity.tsx'
 import { InfoRow } from './chats-info-rows.tsx'
 import { hasMoreMembers, memberMoreLabel, showsAddTile } from './chats-member-view.ts'
 import { TaskCreateDialog } from './task-create-dialog.tsx'
+import { CustomerPortraitDialog } from './CustomerPortraitDialog.tsx'
+import type { CustomerIdentity } from './customer-profile.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
@@ -65,10 +69,12 @@ function annPreview(ann: string): string {
   return line.length > 16 ? `${line.slice(0, 16)}…` : line
 }
 
-/** 群主显示名：成员表里能对上就用昵称，对不上给 wxid（不谎称昵称）。 */
-function ownerName(info: GroupInfo): string {
+/** 群主身份：成员表里能对上就用昵称，对不上给 wxid（不谎称昵称）。 */
+function ownerValue(info: GroupInfo): React.JSX.Element {
   const owner = info.owner ?? ''
-  return info.members.find((m) => m.username === owner)?.name ?? owner
+  const member = info.members.find((m) => m.username === owner)
+  const name = member ? withEnterprise(member.name, member.enterpriseName) : owner
+  return <IdentityName name={name} username={owner} size={22}>{name}</IdentityName>
 }
 
 /** 公告署名行：编辑者 / 时间，缺哪个省哪个（都不存在时整行不渲染）。 */
@@ -95,12 +101,29 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
   } = props
   /** 底部动作位「新建任务」的弹窗开关（只在点开时渲染，抽屉本身不关心它）。 */
   const [taskOpen, setTaskOpen] = useState(false)
+  /** 点击成员后打开的完整画像；悬浮资料卡仍作为轻量预览保留。 */
+  const [portraitMember, setPortraitMember] = useState<GroupMember | null>(null)
   // 抽屉关掉时顺手收掉弹窗：本组件常驻在渲染树里，不重置的话下次开抽屉会直接弹出旧弹窗。
-  useEffect(() => { if (!open) setTaskOpen(false) }, [open])
+  useEffect(() => {
+    if (open) return
+    setTaskOpen(false)
+    setPortraitMember(null)
+  }, [open])
   if (!open || !isGroup) return null
+  const portraitIdentity: CustomerIdentity | null = portraitMember === null
+    ? null
+    : {
+      username: portraitMember.username,
+      displayName: portraitMember.name,
+      category: 'member',
+      categories: ['member'],
+      ...(portraitMember.enterpriseName ? { enterpriseName: portraitMember.enterpriseName } : {}),
+      ...(portraitMember.signature ? { description: portraitMember.signature } : {}),
+    }
   return (
     <div
       className={csscards.groupInfo}
+      data-side-panel-view=""
       role="dialog"
       aria-modal="true"
       aria-labelledby={groupInfoTitleId}
@@ -146,16 +169,18 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
                       type="button"
                       key={m.username}
                       className={cssrows.memberTile}
-                      title={m.name}
+                      title={`${withEnterprise(m.name, m.enterpriseName)}\n${m.username}`}
                       onMouseEnter={(e) => { showMemberProfile(m, e.currentTarget) }}
                       onMouseLeave={hideMemberProfile}
+                      onClick={() => { hideMemberProfile(); setPortraitMember(m) }}
+                      aria-label={`查看 ${withEnterprise(m.name, m.enterpriseName)} 的客户画像与标签`}
                     >
                       {/* 与会话列表同一套懒挂载：展开到 200 人时不再一次性发起 200 个头像请求（审计 P2-4） */}
                       <LazyMount placeholder={<span className={css.avatarStub} style={{ width: 48, height: 48 }} />} rootMargin="300px 0px">
                         <Avatar name={m.name} username={m.username} size={48} />
                       </LazyMount>
                       {groupInfo.owner === m.username && <span className={cssrows.memberBadge}>群主</span>}
-                      <span className={cssrows.memberName}>{m.name}</span>
+                      <span className={cssrows.memberName}>{withEnterprise(m.name, m.enterpriseName)}</span>
                     </button>
                   ))}
                   {/*
@@ -181,7 +206,11 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
               </button>
             )}
             <div className={cssshell.groupInfoRows}>
-              <InfoRow first label="群聊名称" value={groupInfo.name} />
+              <InfoRow
+                first
+                label="群聊名称"
+                value={<IdentityName name={groupInfo.name} username={groupInfo.username} size={24} />}
+              />
               {groupInfo.announcement !== '' && (
                 <div className={cssshell.groupInfoRowStack}>
                   <div className={cssrows.infoRow}>
@@ -207,7 +236,7 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
                 </div>
               )}
               {groupInfo.owner !== undefined && groupInfo.owner !== '' && (
-                <InfoRow label="群主" value={ownerName(groupInfo)} />
+                <InfoRow label="群主" value={ownerValue(groupInfo)} />
               )}
               <InfoRow label="群成员数" value={String(memberTotal)} />
             </div>
@@ -242,6 +271,16 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
           onClose={() => { setTaskOpen(false) }}
         />
       )}
+      <CustomerPortraitDialog
+        open={portraitMember !== null}
+        identity={portraitIdentity}
+        context={{
+          source: 'group-member',
+          isSelf: portraitMember?.isSelf === true,
+          isGroupOwner: portraitMember !== null && groupInfo?.owner === portraitMember.username,
+        }}
+        onClose={() => { setPortraitMember(null) }}
+      />
     </div>
   )
 }

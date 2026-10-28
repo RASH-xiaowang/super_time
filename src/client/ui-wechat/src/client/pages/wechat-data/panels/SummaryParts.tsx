@@ -10,6 +10,8 @@ import { DateRangeField } from '../ui/kit.tsx'
 import { fmtLocaleMs } from '../utils/format.ts'
 import type { RangePresetKey } from '../utils/date-range.ts'
 import css from './summary-workbench.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /** 一条 toast 提示（`kind` 与 `SummaryTaskDrawer` 的 `ToastKind` 同构）。 */
 export interface ToastItem { id: number; kind: 'ok' | 'err' | 'info'; text: string }
@@ -92,7 +94,7 @@ export interface Stats {
   messages: number
   types: Record<string, number>
   hourly: number[]
-  topSessions: Array<{ username: string; count: number }>
+  topSessions: Array<{ username: string; name?: string; enterpriseName?: string; count: number }>
 }
 
 /**
@@ -331,15 +333,27 @@ export function StatsCard({ stats, label, isSingleDay, nameOf }: {
         )}
 
         {/* Top 会话 */}
-        {stats.topSessions.slice(0, 5).map((s, i) => (
-          <div key={s.username} className={css.barRow}>
-            <span className={css.barLabel} title={s.username}>{i + 1}. {name(s.username)}</span>
-            <div className={css.barTrack}>
-              <div className={css.barFill} style={{ width: `${String((s.count / topBase) * 100)}%` }} />
+        {stats.topSessions.slice(0, 5).map((s, i) => {
+          const label = withEnterprise(s.name || name(s.username), s.enterpriseName)
+          return (
+            <div key={s.username} className={css.barRow}>
+              <IdentityName
+                className={css.barIdentity}
+                textClassName={css.barLabel}
+                name={s.name || name(s.username)}
+                username={s.username}
+                size={22}
+                title={`${label} · ${s.username}`}
+              >
+                {i + 1}. {label}
+              </IdentityName>
+              <div className={css.barTrack}>
+                <div className={css.barFill} style={{ width: `${String((s.count / topBase) * 100)}%` }} />
+              </div>
+              <span className={css.barValue}>{s.count} 条</span>
             </div>
-            <span className={css.barValue}>{s.count} 条</span>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

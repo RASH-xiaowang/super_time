@@ -26,6 +26,7 @@ interface Calls {
   avatarReqs: number
   avatarOptions: Array<{ username: string; nickname?: string }>
   batchReqs: number
+  batchInputs: string[][]
 }
 
 /**
@@ -37,7 +38,7 @@ function stub(opts: {
   local?: Record<string, string>
   resolve?: (u: string) => RemoteImageItem
 } = {}): Calls {
-  const calls: Calls = { proxyBatches: [], avatarReqs: 0, avatarOptions: [], batchReqs: 0 }
+  const calls: Calls = { proxyBatches: [], avatarReqs: 0, avatarOptions: [], batchReqs: 0, batchInputs: [] }
   const resolve = opts.resolve ?? ((u: string) => ({ url: u, dataUrl: PNG }))
   setWechatRemote({
     getAvatar: async (options: { username: string; nickname?: string }) => {
@@ -45,8 +46,9 @@ function stub(opts: {
       calls.avatarOptions.push({ ...options })
       return { ok: true as const, value: opts.avatar ?? { kind: 'none' } }
     },
-    getAvatarsLocal: async () => {
+    getAvatarsLocal: async (batch: { usernames: string[] }) => {
       calls.batchReqs += 1
+      calls.batchInputs.push([...batch.usernames])
       return { ok: true as const, value: opts.local ?? {} }
     },
     getRemoteImages: async ({ urls }: { urls?: string[] }) => {
@@ -113,6 +115,23 @@ describe('M23：头像的远程地址在 api 层就换成本机可画地址', ()
     expect(calls.avatarOptions, '单张回落丢了 nickname，按昵称找联系人不会生效').toEqual([
       { username: 'wxid_nick', nickname: '张三' },
     ])
+  })
+
+  it('同一 tick 的多个头像按 username 去重，不许一起拿到第一个人的结果', async () => {
+    const first = 'data:image/png;base64,FIRST'
+    const second = 'data:image/png;base64,SECOND'
+    const calls = stub({ local: { wxid_first: first, wxid_second: second } })
+
+    const [a, b] = await Promise.all([
+      apiGetAvatarBatched({ username: 'wxid_first', nickname: '甲' }),
+      apiGetAvatarBatched({ username: 'wxid_second', nickname: '乙' }),
+    ])
+
+    expect(calls.batchInputs, '两个不同 username 被错误去重成了同一项').toEqual([
+      ['wxid_first', 'wxid_second'],
+    ])
+    expect(a).toEqual({ kind: 'data', data: first })
+    expect(b, '第二个头像收到了第一个 username 的结果').toEqual({ kind: 'data', data: second })
   })
 
   it('批量头像：远程值换成 data URL、本机值原样保留、键一个都不掉', async () => {

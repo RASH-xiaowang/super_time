@@ -157,14 +157,22 @@ describe('撤回正文直接可见', () => {
       '第五行：这一行是判断是否被截断的关键。',
       '第六行：完整内容必须原样保留。',
     ].join('\n')
-    show(item({ content: text }), false)
+    show(item({
+      content: text,
+      session_name: '测试群',
+      enterpriseName: '示例企业',
+    }), false)
 
     const body = host.querySelector('[data-collapsed]')
     expect(body, '撤回正文没有渲染').not.toBeNull()
     expect(body?.textContent).toBe(text)
     expect(body?.textContent?.split('\n')).toHaveLength(6)
     expect(body?.getAttribute('data-collapsed')).toBe('true')
-    expect(host.textContent).toContain('会话：测试群')
+    // The session identity includes an avatar fallback letter, so assert on the
+    // dedicated text span rather than the whole container's concatenated text.
+    expect([...host.querySelectorAll('span')].some(
+      el => el.textContent === '测试群（企业：示例企业）',
+    )).toBe(true)
   })
 })
 

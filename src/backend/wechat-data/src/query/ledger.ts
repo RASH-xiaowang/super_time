@@ -183,7 +183,9 @@ export async function queryLedger(decryptedDir: string, month?: string, selfUser
  * @param selfUsername - logged-in account wxid (direction labels).
  */
 async function computeLedger(decryptedDir: string, month?: string, selfUsername?: string): Promise<LedgerSnapshot> {
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
+  const enterpriseNames = meta.enterpriseNames
   const self = (selfUsername ?? '').trim()
   const { from, to } = monthRange(month)
   const now = Math.floor(Date.now() / 1000)
@@ -297,7 +299,16 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
       addContact(t.session || t.receiver || t.payer, amount, 'unknown')
     }
     if (t.invalidTime > 0 && t.invalidTime <= now) {
-      warnings.push({ kind: 'transfer-timeout', label: '转账超时/未确认', username: t.session, name: names.get(t.session) ?? t.session, time, amount })
+      const enterpriseName = enterpriseNames.get(t.session)?.trim()
+      warnings.push({
+        kind: 'transfer-timeout',
+        label: '转账超时/未确认',
+        username: t.session,
+        name: names.get(t.session) ?? t.session,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        time,
+        amount,
+      })
     }
   }
 
@@ -327,7 +338,17 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
       addContact(r.sender || r.session, amount, 'unknown')
     }
     if (r.returned) {
-      warnings.push({ kind: 'redpacket-returned', label: '红包已退回', username: r.sender || r.session, name: names.get(r.sender) ?? r.sender, time, amount })
+      const username = r.sender || r.session
+      const enterpriseName = enterpriseNames.get(username)?.trim()
+      warnings.push({
+        kind: 'redpacket-returned',
+        label: '红包已退回',
+        username,
+        name: names.get(username) ?? username,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        time,
+        amount,
+      })
     }
   }
 
@@ -339,6 +360,10 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
   const byContactRows: LedgerContactRow[] = [...contactAgg.values()]
     .sort((a, b) => b.amount - a.amount || b.count - a.count)
     .slice(0, 20)
+    .map((row) => {
+      const enterpriseName = enterpriseNames.get(row.username)?.trim()
+      return { ...row, ...(enterpriseName ? { enterpriseName } : {}) }
+    })
 
   const totalIn = transferInAmount + rpReceivedAmount
   const totalOut = transferOutAmount + rpSentAmount

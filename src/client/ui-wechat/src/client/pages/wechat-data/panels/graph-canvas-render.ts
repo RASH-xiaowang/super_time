@@ -8,6 +8,7 @@
  */
 
 import { DEFAULT_GRAPH_SETTINGS, communityColor, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import { MAX_ZOOM, Point, docColors, edgeStroke, fitCamera, graphTheme, nodeOpacity, nodeRadius, pickNode, worldToScreen } from './graph-canvas-theme.ts'
 import { FONT_STACK, LABEL_FONT, LABEL_MIN_ZOOM, REVEAL_MIN_SCALE, Scene, estimateTextWidth, labelCandidates, screenRadius, selectEdges } from './graph-canvas-geometry.ts'
@@ -339,7 +340,10 @@ export function bubbleText(node: GNode): { title: string; sub: string } {
     return { title: node.label, sub: `模型推断 · 出现在 ${node.sectionFileIds?.length ?? 0} 份文件里（虚线 = 推断，不是文档里写着的）` }
   }
   const kind = node.kind === 'group' ? '群聊' : node.kind === 'self' ? '我' : node.isOfficial ? '公众号' : node.isFriend ? '好友' : '群友'
-  return { title: node.label, sub: `${kind} · 消息量 ${node.intimacy ?? node.weight}` }
+  return {
+    title: withEnterprise(node.label, node.enterpriseName),
+    sub: `${kind} · 消息量 ${node.intimacy ?? node.weight}`,
+  }
 }
 
 /**

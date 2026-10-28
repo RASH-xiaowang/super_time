@@ -32,7 +32,7 @@ const MUST_EMPTYSTATE: ReadonlyArray<{ panel: string; tsx: string; anchor: strin
   { panel: '备份恢复', tsx: 'Backup.tsx', anchor: '!loading && items.length === 0 && (' },
   { panel: '隐私体检', tsx: 'Privacy.tsx', anchor: 'totalHits === 0 && (' },
   { panel: '收藏与表情', tsx: 'Favorites.tsx', anchor: '!loading && !error && filtered.length === 0 && (' },
-  { panel: '聊天信息抽屉', tsx: 'chats-contact-info-view.tsx', anchor: '!loading && !err && !data && (' },
+  { panel: '聊天信息抽屉', tsx: 'chats-contact-info-view.tsx', anchor: '!loading && !err && !contactData && (' },
 ]
 
 /**

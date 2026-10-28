@@ -206,6 +206,9 @@ export async function apiGetAvatarsLocal(options: { usernames: string[] }): Prom
  */
 const avatarQueue = createImageLoadQueue<{ username: string; nickname?: string }, AvatarResult>({
   chunkSize: 200,
+  // 对象 key 的默认 String(key) 全都会变成 "[object Object]"：同一屏头像会
+  // 被错误合并成第一个用户的请求，随后整列都拿到同一张图。头像的唯一身份是 username。
+  keyOf: (k) => k.username,
   onMissing: (k) => ({ kind: 'none' }),
   flush: async (keys) => {
     const map = await apiGetAvatarsLocal({ usernames: keys.map((k) => k.username) })

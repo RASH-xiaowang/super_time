@@ -94,6 +94,9 @@ const REMOTE_SAFE_BY_FAMILY = {
     // 2026-10-21：多 RPA 厂商的触发方式目录也是纯读（注册表描述符，不含凭据），
     // 只读面板要靠它渲染「触发方式」选择器与动态表单。
     'listTaskInfos', 'listTaskTriggers', 'listRpaVendors',
+    // 消息列表的纯读视图：手机端可以查看记录与规则，但写规则、手动插入、重发和
+    // 带令牌的 Webhook 地址读取都在下面的本机写侧 / D 族。
+    'listMessageListRecords', 'listMessageListRules',
   ],
   '知识库': [
     'getKbs', 'getKbFiles', 'getKbFileChunks', 'getNotes', 'saveNote', 'deleteNote',
@@ -180,12 +183,19 @@ const LOCAL_ONLY_BY_FAMILY = {
     // 扫描会把命中记录写进本机库（并且可能触发下一族的回调投递），远程端不该驱动它。
     'saveTaskInfo', 'deleteTaskInfo', 'deleteTaskInfos', 'deleteTaskTriggers',
     'setTaskInfoStatus', 'scanTaskTriggers',
+    // 消息列表写侧：规则与手动插入都落本机库；重发会让内容再次出网。
+    'saveMessageListRule', 'deleteMessageListRule', 'insertMessageListRecord',
+    'resendMessageListRecord',
+    // 该返回值包含可直接调用的入站地址令牌，只允许桌面端本机读取。
+    'getMessageListWebhookInfo',
   ],
   'D 任务回调投递：按用户配置的地址把触发内容发到外部平台': [
     // 与 ClawBot 发消息同属「以用户身份对外产生后果」：一条调用就会把触发文本与图片
     // POST 到用户填的回调地址。远程端（手机/普通浏览器会话）不该有能力触发这次出网；
     // 桌面「打开网页」交接会话走 fullAccess，与桌面端同权（见文件头例外）。
     'dispatchTaskCallback',
+    // 局域网 Webhook 入站同样会把记录投递到用户配置的下游地址。
+    'ingestMessageListWebhook',
   ],
   'D ClawBot 写侧：能以用户身份发消息、能改绑定与实例配置': [
     'createClawbotBindQr', 'unbindClawbot', 'createClawbotInstance',

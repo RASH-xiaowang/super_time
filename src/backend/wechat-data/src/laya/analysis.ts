@@ -26,12 +26,14 @@ const MAX_CONTEXT = 60
 export interface LayaTurn {
   /** 是否本人发送。 */
   self: boolean
+  /** 喂给模型时使用的发言者标签（群聊优先成员昵称，单聊统一为「对方」）。 */
+  speaker: string
   text: string
 }
 
 /** 一段可直接喂给模型的对话上下文。 */
 export interface LayaDialogue {
-  /** `我：…` / `对方：…` 逐行拼接（模型按这个格式读）。 */
+  /** `我：…` / `对方：…` / `群成员昵称：…` 逐行拼接（模型按这个格式读）。 */
   dialogue: string
   /** 被分析的那句（最近一条**对方**消息）。 */
   latestPeer: string
@@ -61,7 +63,11 @@ export function buildDialogueState(
   for (const m of snapshot.messages) {
     const text = messageText(m)
     if (text === '') continue
-    turns.push({ self: m.isSender === 1, text })
+    turns.push({
+      self: m.isSender === 1,
+      speaker: dialogueSpeakerLabel(talker, m),
+      text,
+    })
   }
   let lastPeer = -1
   for (let i = turns.length - 1; i >= 0; i -= 1) {
@@ -71,10 +77,32 @@ export function buildDialogueState(
   if (lastPeer < 0) return { dialogue: '', latestPeer: '', turns: [] }
   const kept = turns.slice(0, lastPeer + 1)
   return {
-    dialogue: budgetDialogue(kept.map((t) => `${t.self ? '我' : '对方'}：${t.text}`)),
+    dialogue: budgetDialogue(kept.map((t) => `${t.speaker}：${t.text}`)),
     latestPeer: kept[kept.length - 1]?.text ?? '',
     turns: kept,
   }
+}
+
+/**
+ * 对话上下文的发言者标签。
+ *
+ * 单聊只有「我 / 对方」两方；群聊里如果仍把所有人写成「对方」，模型会把多个人的话
+ * 当成同一个人的连续表达。这里优先使用成员昵称，其次用成员 username，仍取不到时才
+ * 退到中性称谓「群成员」。
+ * @param talker - 当前会话 `WechatSession.username`。
+ * @param message - 至少需要发送方向与发送者字段。
+ * @returns 可直接拼进对话行的发言者标签。
+ */
+export function dialogueSpeakerLabel(
+  talker: string,
+  message: { isSender: number; sender?: string; senderName?: string },
+): string {
+  if (message.isSender === 1) return '我'
+  if (!talker.endsWith('@chatroom')) return '对方'
+  const name = String(message.senderName ?? '').trim()
+  if (name !== '') return name
+  const sender = String(message.sender ?? '').trim()
+  return sender !== '' ? sender : '群成员'
 }
 
 /**
@@ -125,7 +153,8 @@ export function budgetDialogue(lines: readonly string[], budget: number = MAX_CO
 }
 
 /** 一次分析请求。 */
-export interface LayaAnalysisInput {  decryptedDir: string
+export interface LayaAnalysisInput {
+  decryptedDir: string
   /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string
   selfUsername?: string
@@ -305,6 +334,12 @@ export interface LayaVisibleAnalysisInput {
   /** 关掉缓存（测试用）。 */
   useCache?: boolean
   /**
+   * 忽略已有结果并重新推理，同时用新结果覆盖缓存。
+   *
+   * 用于用户主动点「重新分析」；普通打开面板仍走缓存，避免重复占用本地 CPU。
+   */
+  force?: boolean
+  /**
    * 每分析完一条就回调一次（W3-11.5）。
    *
    * 为什么需要它：整批实测**均 36s / 峰值 110s**，而界面上只有一个「本地分析中…」——
@@ -364,7 +399,7 @@ function collectUpToTarget(
   target: LayaTargetRef,
   limit: number,
   selfUsername?: string,
-): { messages: readonly { localId: number; type?: number; isSender: number; displayText?: string; strContent?: string; msgContent?: string; renderType?: string; serverId?: string }[]; found: boolean } {
+): { messages: readonly { localId: number; type?: number; isSender: number; sender?: string; senderName?: string; displayText?: string; strContent?: string; msgContent?: string; renderType?: string; serverId?: string }[]; found: boolean } {
   // 多取 8 条：同行（同 sort_seq）的消息数量不可预知，截断后再收敛到 limit。
   const snap = queryMessages(decryptedDir, talker, limit + 8, target.sortSeq + 1, selfUsername)
   const idx = snap.messages.findIndex((m) => m.localId === target.localId)
@@ -403,8 +438,9 @@ export async function analyzeVisibleMessages(
   const modelKey = layaModelKey(status.path)
   const targets = input.targets.slice(0, MAX_ANALYZE_BATCH)
   const useCache = input.useCache !== false
+  const readCache = useCache && input.force !== true
 
-  const cached = useCache
+  const cached = readCache
     ? readAnalysisCache(input.decryptedDir, talker, modelKey, targets.map((t) => t.localId))
     : new Map<number, CachedAnalysis>()
 
@@ -503,7 +539,7 @@ export async function analyzeVisibleMessages(
         t = svr === '' ? '' : cachedTranscript(input.decodedDir, svr)
       }
       if (t === '') continue
-      lines.push(`${m.isSender === 1 ? '我' : '对方'}：${t}`)
+      lines.push(`${dialogueSpeakerLabel(talker, m)}：${t}`)
     }
     const dialogue = budgetDialogue(lines)
     if (dialogue === '') {

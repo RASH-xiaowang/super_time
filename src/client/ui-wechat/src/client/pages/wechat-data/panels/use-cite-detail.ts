@@ -38,6 +38,10 @@ export interface ContextMessage {
   key: string
   /** 发送者显示名。 */
   sender: string
+  /** 发送者真实 username；只有消息记录能提供，引用兜底行不伪造。 */
+  senderUsername?: string
+  /** 发送者所属企业名（企业微信用户才有）。 */
+  enterpriseName?: string
   /** 时间（`YYYY-MM-DD HH:mm`）。 */
   time: string
   /** 正文。 */
@@ -52,7 +56,9 @@ export interface CiteContextTarget {
   localId?: number
   time: string
   name: string
+  enterpriseName?: string
   sender?: string
+  senderEnterpriseName?: string
   snippet: string
 }
 
@@ -171,6 +177,9 @@ export async function loadMessageContext(target: CiteContextTarget): Promise<Con
     return [{
       key: `focus:${localId ?? target.snippet}`,
       sender: senderOf(target.name, target.sender),
+      ...(target.senderEnterpriseName || target.enterpriseName
+        ? { enterpriseName: target.senderEnterpriseName || target.enterpriseName }
+        : {}),
       time: target.time,
       text: target.snippet,
       focus: true,
@@ -194,6 +203,8 @@ export async function loadMessageContext(target: CiteContextTarget): Promise<Con
     byId.set(m.localId, {
       key: `m:${m.localId}`,
       sender: senderOf(m.senderName ?? '', m.sender),
+      ...(m.sender ? { senderUsername: m.sender } : {}),
+      ...(m.senderEnterpriseName ? { enterpriseName: m.senderEnterpriseName } : {}),
       time: fmtDateTimeSec(m.createTime, ''),
       text: textOf(m),
       focus: localId !== undefined && m.localId === localId,
@@ -205,6 +216,9 @@ export async function loadMessageContext(target: CiteContextTarget): Promise<Con
     rows.push({
       key: `focus:${localId}`,
       sender: senderOf(target.name, target.sender),
+      ...(target.senderEnterpriseName || target.enterpriseName
+        ? { enterpriseName: target.senderEnterpriseName || target.enterpriseName }
+        : {}),
       time: target.time,
       text: target.snippet,
       focus: true,
@@ -297,7 +311,9 @@ export function useCiteDetail(
       localId,
       time: locateTime(item),
       name: item.name,
+      ...(item.enterpriseName ? { enterpriseName: item.enterpriseName } : {}),
       ...(item.sender ? { sender: item.sender } : {}),
+      ...(item.senderEnterpriseName ? { senderEnterpriseName: item.senderEnterpriseName } : {}),
       snippet: item.snippet,
     })
       .then((rows) => {

@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { searchIndexMessages } from '../search.ts'
 import { loadMessageWindow } from '../search-query.ts'
 import { withDb } from '../db-open.ts'
+import { contactMeta } from '../meta.ts'
 import { searchIndexPath } from '../search-scaffold.ts'
 import { fmtDateTimeSec } from '../../format.ts'
 import {
@@ -37,18 +38,26 @@ function dayEndSec(d: string): number {
   return s === 0 ? 0 : s + 86399
 }
 
-/** 会话显示名（从索引库的 `contact_fts` 取；取不到就用 username）。 */
-function displayNames(decryptedDir: string): Map<string, string> {
-  const out = new Map<string, string>()
-  const p = searchIndexPath(decryptedDir)
-  if (!existsSync(p)) return out
-  try {
-    return withDb(p, (db) => {
-      const rows = db.prepare('SELECT username, name, remark FROM contact_fts').all() as Array<{ username: string; name: string; remark: string }>
-      for (const r of rows) out.set(r.username, (r.remark || r.name || r.username).trim())
-      return out
+interface DisplayIdentity {
+  name: string
+  enterpriseName?: string
+}
+
+/** 会话显示名与企业名；统一从 contact.db 的缓存元数据读取，兼容旧索引库。 */
+function displayNames(decryptedDir: string): Map<string, DisplayIdentity> {
+  const out = new Map<string, DisplayIdentity>()
+  const meta = contactMeta(decryptedDir)
+  for (const [username, name] of meta.names) {
+    out.set(username, { name: name.trim() || username })
+  }
+  for (const [username, enterpriseName] of meta.enterpriseNames) {
+    const current = out.get(username)
+    out.set(username, {
+      name: current?.name || meta.names.get(username)?.trim() || username,
+      enterpriseName,
     })
-  } catch { return out }
+  }
+  return out
 }
 
 /** 关键词检索聊天消息。 */
@@ -104,12 +113,19 @@ export const searchMessagesTool: RetrievalTool = {
         if (lo > 0 && h.create_time < lo) continue
         if (hi > 0 && h.create_time > hi) continue
         seen.add(key)
+        const identity = names.get(h.username)
+        const enterpriseName = h.enterpriseName
+          || identity?.enterpriseName
+        const senderEnterpriseName = h.senderEnterpriseName
+          || (h.sender ? names.get(h.sender)?.enterpriseName : undefined)
         hits.push({
           key,
-          name: names.get(h.username) ?? h.name ?? h.username,
+          name: identity?.name ?? h.name ?? h.username,
+          ...(enterpriseName ? { enterpriseName } : {}),
           time: fmtDateTimeSec(h.create_time),
           snippet: h.snippet,
           ...(h.sender ? { sender: h.sender } : {}),
+          ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
           source: 'msg',
         })
         if (hits.length >= limit) break
@@ -153,7 +169,8 @@ export const getSessionMessagesTool: RetrievalTool = {
     const lo = dayStartSec(from)
     const hi = dayEndSec(to)
     const names = displayNames(ctx.decryptedDir)
-    const name = names.get(username) ?? username
+    const identity = names.get(username)
+    const name = identity?.name ?? username
 
     const p = searchIndexPath(ctx.decryptedDir)
     if (!existsSync(p)) return { tool: 'get_session_messages', ok: false, error: '检索索引不存在', hits: [] }
@@ -164,14 +181,19 @@ export const getSessionMessagesTool: RetrievalTool = {
         if (lo > 0) { parts.push('create_time >= ?'); params.push(lo) }
         if (hi > 0) { parts.push('create_time <= ?'); params.push(hi) }
         return db.prepare(
-          `SELECT local_id, create_time, text FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ASC LIMIT ?`,
-        ).all(...params, limit) as Array<{ local_id: number; create_time: number; text: string }>
+          `SELECT local_id, create_time, text, sender FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ASC LIMIT ?`,
+        ).all(...params, limit) as Array<{ local_id: number; create_time: number; text: string; sender?: string }>
       })
       const hits: ToolHit[] = rows.map(r => ({
         key: username + ':' + r.local_id,
         name,
+        ...(identity?.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
         time: fmtDateTimeSec(r.create_time),
         snippet: r.text.slice(0, 200),
+        ...(r.sender ? { sender: r.sender } : {}),
+        ...(r.sender && names.get(r.sender)?.enterpriseName
+          ? { senderEnterpriseName: names.get(r.sender)?.enterpriseName }
+          : {}),
         source: 'msg',
       }))
       return {
@@ -234,10 +256,16 @@ export const getMessageContextTool: RetrievalTool = {
       })
     const hits: ToolHit[] = win.map(w => ({
       key: username + ':' + w.local_id,
-      name: names.get(username) ?? username,
+      name: names.get(username)?.name ?? username,
+      ...(names.get(username)?.enterpriseName
+        ? { enterpriseName: names.get(username)?.enterpriseName }
+        : {}),
       time: fmtDateTimeSec(w.create_time),
       snippet: w.text.slice(0, 200),
       ...(w.sender ? { sender: w.sender } : {}),
+      ...(w.sender && names.get(w.sender)?.enterpriseName
+        ? { senderEnterpriseName: names.get(w.sender)?.enterpriseName }
+        : {}),
       source: 'msg',
     }))
     return {
@@ -279,13 +307,17 @@ export const listSessionsTool: RetrievalTool = {
         `SELECT username, COUNT(*) AS c, MIN(create_time) AS mn, MAX(create_time) AS mx FROM message_meta${kindWhere} GROUP BY username ORDER BY ${order} LIMIT ?`,
       ).all(limit) as Array<{ username: string; c: number; mn: number; mx: number }>)
       const names = displayNames(ctx.decryptedDir)
-      const hits: ToolHit[] = rows.map(r => ({
-        key: r.username,
-        name: names.get(r.username) ?? r.username,
-        time: fmtDateTimeSec(r.mx),
-        snippet: `${r.c} 条消息（${fmtDateTimeSec(r.mn).slice(0, 10)} ~ ${fmtDateTimeSec(r.mx).slice(0, 10)}）`,
-        source: 'msg',
-      }))
+      const hits: ToolHit[] = rows.map((r) => {
+        const identity = names.get(r.username)
+        return {
+          key: r.username,
+          name: identity?.name ?? r.username,
+          ...(identity?.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
+          time: fmtDateTimeSec(r.mx),
+          snippet: `${r.c} 条消息（${fmtDateTimeSec(r.mn).slice(0, 10)} ~ ${fmtDateTimeSec(r.mx).slice(0, 10)}）`,
+          source: 'msg',
+        }
+      })
       return {
         tool: 'list_sessions', ok: true, hits,
         note: `${hits.length} 个会话（按${orderBy === 'recent' ? '最近活跃' : '消息数'}）`,

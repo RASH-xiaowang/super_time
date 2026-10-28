@@ -17,12 +17,15 @@ import { apiSuggestReplies } from '../api.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { ErrorState, Select } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './session-ask.module.css'
 
 /** 面板所需的最小会话信息（与 `WechatSession` 的前缀兼容）。 */
 export interface ReplyTarget {
   username: string
   displayName?: string
+  enterpriseName?: string
 }
 
 /** `ReplySuggestProps` 的字段说明见各成员注释。 */
@@ -139,10 +142,16 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
       {/* 依据（只读）：说清这次到底看了什么 —— 别笼统写「已参考」 */}
       <div className={css.scopeRow}>
         <span className={css.scopeLabel}>依据</span>
-        <span className={css.scopeName} title={target.username}>
-          {target.displayName || target.username}{basis ? ` · ${String(basis.messages)} 条对话` : ''}
+        <IdentityName
+          className={css.scopeName}
+          name={target.displayName || target.username}
+          username={target.username}
+          size={20}
+          title={target.username}
+        >
+          {withEnterprise(target.displayName || target.username, target.enterpriseName)}{basis ? ` · ${String(basis.messages)} 条对话` : ''}
           {basis && basis.kb > 0 ? ` · 知识库「${kbName}」${String(basis.kb)} 段` : ''}
-        </span>
+        </IdentityName>
         {/* 「换一批」放在这一行尾部：它是内容级动作（重取候选），而头部已归组合层
             `ChatRightPanel`（那里只留面板级的「关闭」），两类动作不该混在一处。 */}
         <button type="button" className={css.iconBtn} title="换一批" aria-label="换一批"

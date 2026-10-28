@@ -19,7 +19,9 @@ import type { SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data
 import { TimeField } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { fmtLocaleMs } from '../utils/format.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import css from './summary-workbench.module.css'
+import { IdentityName } from './identity.tsx'
 
 /** 五种分析格式（与后端口径一致）。 */
 export const FORMATS: ReadonlyArray<{ key: string; label: string; desc: string }> = [
@@ -63,8 +65,8 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
 }): React.JSX.Element {
   const confirm = useConfirm()
   const [form, setForm] = useState<FormState | null>(null)
-  const [groups, setGroups] = useState<readonly { username: string; name: string }[]>([])
-  const [members, setMembers] = useState<readonly { username: string; name: string }[]>([])
+  const [groups, setGroups] = useState<readonly { username: string; name: string; enterpriseName?: string }[]>([])
+  const [members, setMembers] = useState<readonly { username: string; name: string; enterpriseName?: string }[]>([])
   const [busy, setBusy] = useState<string | null>(null)
 
   // Esc 关闭：表单开着先退表单，否则关抽屉。
@@ -76,14 +78,18 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
 
   const loadGroups = useCallback(async (): Promise<void> => {
     try {
-      const cached = readRenderCache<readonly { username: string; name: string }[]>('summary-groups')
+      const cached = readRenderCache<readonly { username: string; name: string; enterpriseName?: string }[]>('summary-groups-v2')
       if (cached) setGroups(cached)
       const env = await apiGetSessions({ limit: 500 })
       const gs = env.sessions
         .filter(s => s.type === 'group' || s.username.endsWith('@chatroom'))
-        .map(s => ({ username: s.username, name: s.displayName || s.username }))
+        .map(s => ({
+          username: s.username,
+          name: s.displayName || s.username,
+          ...(s.enterpriseName ? { enterpriseName: s.enterpriseName } : {}),
+        }))
       setGroups(gs)
-      writeRenderCache('summary-groups', gs)
+      writeRenderCache('summary-groups-v2', gs)
     } catch { /* 保持旧列表 */ }
   }, [])
 
@@ -105,7 +111,11 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
       //    正确判据是 `groupUsernames`（全部所属群）。
       setMembers(env.contacts
         .filter(c => c.groupUsernames?.includes(groupUsername) ?? c.groupUsername === groupUsername)
-        .map(c => ({ username: c.username, name: c.displayName || c.username })))
+        .map(c => ({
+          username: c.username,
+          name: c.displayName || c.username,
+          ...(c.enterpriseName ? { enterpriseName: c.enterpriseName } : {}),
+        })))
     } catch { /* 保持空 */ }
   }, [])
 
@@ -196,7 +206,14 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
               {tasks.map(t => (
                 <div key={t.id} className={css.taskRow}>
                   <div className={css.taskInfo}>
-                    <span className={css.taskName} title={t.groupName || t.groupUsername}>{t.groupName || t.groupUsername}</span>
+                    <IdentityName
+                      className={css.taskIdentity}
+                      textClassName={css.taskName}
+                      name={t.groupName || t.groupUsername}
+                      username={t.groupUsername}
+                      size={24}
+                      title={t.groupUsername}
+                    />
                     <span className={css.taskMeta}>每天 {t.scheduleTime}</span>
                     <span className={css.taskMeta}>{FORMATS.find(f => f.key === t.format)?.label ?? t.format}</span>
                     <span className={css.badge} data-tone={t.enabled ? 'on' : 'off'}>{t.enabled ? '启用' : '停用'}</span>
@@ -244,8 +261,8 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
 function TaskForm({ form, setForm, groups, members, busy, onSave, onCancel, onGroupChange }: {
   form: FormState
   setForm: React.Dispatch<React.SetStateAction<FormState | null>>
-  groups: readonly { username: string; name: string }[]
-  members: readonly { username: string; name: string }[]
+  groups: readonly { username: string; name: string; enterpriseName?: string }[]
+  members: readonly { username: string; name: string; enterpriseName?: string }[]
   busy: string | null
   onSave: () => void
   onCancel: () => void
@@ -257,8 +274,21 @@ function TaskForm({ form, setForm, groups, members, busy, onSave, onCancel, onGr
         <span className={css.formLabel}>群聊</span>
         <select className={css.formSelect} value={form.groupUsername} onChange={(e) => { onGroupChange(e.target.value) }}>
           <option value="">选择群聊…</option>
-          {groups.map(g => <option key={g.username} value={g.username}>{g.name}</option>)}
+          {groups.map(g => <option key={g.username} value={g.username}>{withEnterprise(g.name, g.enterpriseName)}</option>)}
         </select>
+        {form.groupUsername !== '' && (
+          <IdentityName
+            className={css.selectedGroupChip}
+            name={form.groupName || form.groupUsername}
+            username={form.groupUsername}
+            size={22}
+          >
+            {withEnterprise(
+              form.groupName || form.groupUsername,
+              groups.find(g => g.username === form.groupUsername)?.enterpriseName,
+            )}
+          </IdentityName>
+        )}
       </div>
 
       <div className={css.formField}>
@@ -291,7 +321,15 @@ function TaskForm({ form, setForm, groups, members, busy, onSave, onCancel, onGr
                     return { ...f, targetUsers: has ? f.targetUsers.filter(u => u !== m.username) : [...f.targetUsers, m.username] }
                   })
                 }}
-              >{m.name}</button>
+              >
+                <IdentityName
+                  name={m.name}
+                  username={m.username}
+                  size={18}
+                >
+                  {withEnterprise(m.name, m.enterpriseName)}
+                </IdentityName>
+              </button>
             ))}
           </div>
         )}

@@ -16,6 +16,8 @@ import { clickableKey, Drawer, EmptyMaybeSyncing, LinkButton, SearchInput, Segme
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
 import { useAvatarPrewarm } from './contacts-avatar-prewarm.ts'
+import { isEnterpriseWechatUser, withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -45,6 +47,10 @@ function displayName(c: ContactRow): string {
   return c.displayName
 }
 
+function displayIdentity(c: ContactRow): string {
+  return withEnterprise(displayName(c), c.enterpriseName)
+}
+
 /** Format a unix timestamp as YYYY-MM-DD HH:MM. */
 function fmtTs(ts: number | null | undefined): string {
   if (!ts) return ''
@@ -59,7 +65,7 @@ function typeLabel(c: ContactRow): string {
   if (c.localTypeLabel) return c.localTypeLabel
   if (c.username.endsWith('@chatroom')) return '群聊'
   if (c.username.startsWith('gh_')) return '公众号'
-  if (c.username.includes('@openim')) return '企业微信'
+  if (isEnterpriseWechatUser(c.username)) return '企业微信'
   return '联系人'
 }
 
@@ -109,7 +115,7 @@ function ContactsToolbar(props: {
   return (
     <div className={css.toolRow} ref={toolRef}>
       <span className={css.toolTitle}>通讯录</span>
-      <SearchInput value={search} onChange={onSearch} placeholder="搜索昵称 / 备注 / 微信号 / 全拼" ariaLabel="搜索联系人" className={css.toolSearch} />
+      <SearchInput value={search} onChange={onSearch} placeholder="搜索昵称 / 备注 / 微信号 / 企业名称 / 全拼" ariaLabel="搜索联系人" className={css.toolSearch} />
       <span className={css.toolCount}>共 {total.toLocaleString()} 人</span>
       <span className={css.toolSpacer} />
       <div
@@ -208,17 +214,18 @@ function ContactProfileDrawer(props: {
 }): React.JSX.Element {
   const { profile, profile360, profile360Loading, onClose, onCopyUsername, onOpenChat, onOpenMoments, onSendMessage } = props
   return (
-    <Drawer open={profile !== null} onClose={onClose} title={profile ? displayName(profile) : '联系人资料'} width={460}>
+    <Drawer open={profile !== null} onClose={onClose} title={profile ? displayIdentity(profile) : '联系人资料'} width={460}>
       {profile && (
         <>
           <div className={css.profileHd}>
             <ContactAvatar c={profile} size={56} />
             <div className={css.profileNames}>
-              <div className={css.profileName}>{displayName(profile)}</div>
+              <div className={css.profileName}>{displayIdentity(profile)}</div>
               <div className={css.profileType}>{typeLabel(profile)}</div>
             </div>
           </div>
           <div className={css.profileRow}><span>微信号</span><code>{profile.username}</code></div>
+          {profile.enterpriseName && <div className={css.profileRow}><span>企业名称</span><span>{profile.enterpriseName}</span></div>}
           {profile.alias && <div className={css.profileRow}><span>别名</span><span>{profile.alias}</span></div>}
           {profile.remark && <div className={css.profileRow}><span>备注</span><span>{profile.remark}</span></div>}
           {profile.nickName && profile.nickName !== profile.displayName && (
@@ -226,11 +233,20 @@ function ContactProfileDrawer(props: {
           )}
           {profile.description && <div className={css.profileRow}><span>签名</span><span>{profile.description}</span></div>}
           {profile.memberCount != null && <div className={css.profileRow}><span>群成员数</span><span>{profile.memberCount} 人</span></div>}
-          {profile.owner && <div className={css.profileRow}><span>群主</span><span>{profile.owner}</span></div>}
+          {profile.owner && (
+            <div className={css.profileRow}>
+              <span>群主</span>
+              <IdentityName className={css.profileIdentity} name={profile.owner} username={profile.owner} size={18} />
+            </div>
+          )}
           {profile.groupName && (
             <div className={css.profileRow}>
               <span>所在群</span>
-              <LinkButton onClick={() => { onClose(); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</LinkButton>
+              <LinkButton className={css.profileGroupLink} onClick={() => { onClose(); onOpenChat?.(profile.groupUsername ?? '') }}>
+                <IdentityName name={profile.groupName} username={profile.groupUsername ?? ''} size={18}>
+                  {profile.groupName}
+                </IdentityName>
+              </LinkButton>
             </div>
           )}
           {profile360Loading && <div className={css.profileRow}><span>画像</span><span>统计中…</span></div>}
@@ -258,7 +274,9 @@ function ContactProfileDrawer(props: {
                         onClick={() => { onClose(); onOpenChat?.(g.username) }}
                         title={`${g.name} · ${g.memberCount} 人`}
                       >
-                        {g.name} ({g.memberCount})
+                        <IdentityName name={g.name || g.username} username={g.username} size={16}>
+                          {g.name} ({g.memberCount})
+                        </IdentityName>
                       </button>
                     ))}
                   </span>
@@ -391,7 +409,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
       if (!q) return true
       // 加上备注拼音（remarkQuanPin）—— 界面上显示的是备注名，只索引昵称拼音时，
       // 实测 280 个有备注的联系人里 270 人搜不到自己显示出来的名字。
-      return [displayName(c), c.username, c.alias ?? '', c.remark, c.quanPin ?? '', c.remarkQuanPin ?? ''].some(v => v.toLowerCase().includes(q))
+      return [displayName(c), c.username, c.alias ?? '', c.enterpriseName ?? '', c.remark, c.quanPin ?? '', c.remarkQuanPin ?? ''].some(v => v.toLowerCase().includes(q))
     })
     const map = new Map<string, ContactRow[]>()
     for (const c of filtered) {
@@ -538,7 +556,7 @@ function ContactRowItem({ c, onOpen }: { c: ContactRow; onOpen: () => void }): R
         <ContactAvatar c={c} size={34} />
       </LazyMount>
       <div className={css.contactInfo}>
-        <span className={css.contactName} title={displayName(c)}>{displayName(c)}</span>
+        <span className={css.contactName} title={displayIdentity(c)}>{displayIdentity(c)}</span>
         <span className={css.contactMeta} title={meta}>{meta}</span>
       </div>
     </div>

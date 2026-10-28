@@ -269,8 +269,12 @@
 .msgRow:hover:not(:disabled) { background: var(--nm-bg-hover); }
 .msgRow:disabled { cursor: default; }
 
-.msgName {
+.msgIdentity {
   grid-area: name;
+  min-width: 0;
+}
+
+.msgName {
   font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   color: var(--nm-text-2);

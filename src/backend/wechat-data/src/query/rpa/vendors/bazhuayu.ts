@@ -4,7 +4,8 @@
  * 官方接口（2026-10-21 在线核对）：`POST https://api-rpa.bazhuayu.com/api/v1/bots/scheduling/start`
  * （机器人调度-启动单个应用），鉴权 `X-API-Key`（也接受 `Authorization: Bearer`），请求体
  * **camelCase**：`flowId` / `flowContentRetrievalMode` / `params`；成功 HTTP 200 返回
- * `{ flowId, flowProcessNo }`，失败返回 `code/description/requestId`。**不发图片**。
+ * `{ flowId, flowProcessNo }`，失败返回 `code/description/requestId`。图片默认不发；只有
+ * 附加参数显式选择图片类来源时，才把短时签名直链放进 `params`，由机器人自行取图。
  *
  * 版本历史：
  *  · v1.3.0（2026-10-21）：修正真实投递 401 的根因——旧实现 URL 少了 `/v1`
@@ -16,13 +17,8 @@
  *    文本/触发对象时，在附加参数里各加一条（值来源分别选「会话名 / 触发文本 / 触发对象」）。
  */
 import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
 import type { RpaVendorAdapter } from '../types.ts'
-
-/** 附加参数允许的值来源：触发记录/任务的内置字段 + 固定值 + 自定义模板（不含图片）。 */
-const EXTRA_PARAM_SOURCES = [
-  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'fixed', 'template',
-] as const
 
 /** 八爪鱼 API Key（凭据：只存 trigger_secret，投递时进 X-API-Key）。 */
 const apiKeyField: RpaField = {
@@ -39,8 +35,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'bazhuayu',
   name: '八爪鱼 RPA',
   vendor: '八爪鱼 RPA（Bazhuayu）',
-  version: '1.3.0',
-  summary: '把任务「附加参数」逐条映射成八爪鱼流程入参（默认不发业务参数），POST 到八爪鱼固定主机启动流程（不发图片）。',
+  version: '1.4.0',
+  summary: '把任务「附加参数」逐条映射成八爪鱼流程入参（默认不发业务参数），POST 到八爪鱼固定主机启动流程；图片仅在显式选择图片类来源时传短时签名直链。',
   status: 'stable',
   docs: {
     home: 'https://rpa.bazhuayu.com/',
@@ -73,7 +69,7 @@ const descriptor: RpaVendorDescriptor = {
       type: 'paramList',
       required: false,
       maxItems: 20,
-      paramSources: [...EXTRA_PARAM_SOURCES],
+      paramSources: [...RPA_PARAM_SOURCES],
       help: '八爪鱼流程的入参全部在这里配置（默认不发任何业务参数）。参数名必须与流程入参一致；'
         + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
@@ -87,6 +83,7 @@ const descriptor: RpaVendorDescriptor = {
     // 无内置语义参数：Params 完全由附加参数组装（默认 {}）。
     targets: [],
     extrasField: 'extraParams',
+    legacyMapField: 'paramMap',
   },
   request: {
     method: 'POST',
@@ -121,7 +118,7 @@ const descriptor: RpaVendorDescriptor = {
   risks: [
     '接口没有幂等键：网络超时后不会自动重发（避免同一个流程被启动两次），失败请在触发记录里人工重投',
     'HTTP 200 只代表「已受理启动」：执行结果需到八爪鱼控制台查看',
-    '接口没有图片参数：RPA 方式不发图片（任务里的 photoLimit 对它不生效）',
+    '图片默认不发：只有附加参数显式选择 imagesJson / imageCount / firstImageUrl 时，才按所需传签名直链或数量；机器人取图要求本机已打开局域网访问',
     'FlowId 必须属于该 API Key 的授权范围，否则对端返回 401/400',
     '附加参数完全由你配置：值来自触发记录/固定值/自定义模板，发出去之前请确认对端流程能接受这些键',
   ],
@@ -130,7 +127,9 @@ const descriptor: RpaVendorDescriptor = {
     '  不再自动重试（无幂等键）；成功时把 `flowProcessNo` 落到 `external_task_id`，失败时展示厂商 `description`。',
     '2026-10-21（v1.2.0，按用户要求）：移除「三个内置参数」——params 完全由「附加参数」逐条配置，默认 {}；',
     '需要会话名/触发文本/触发对象时，在附加参数里各加一条（值来源分别选「会话名 / 触发文本 / 触发对象」）。',
-    '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/固定值/自定义模板。',
+    '2026-10-23（v1.4.0）：兼容旧版 paramMap——读取/投递时自动转换为「附加参数」，已显式清空的新任务不恢复旧值。',
+    '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/'
+      + '触发图片 JSON 链接清单/图片数量/首张图片链接/固定值/自定义模板。',
     '自定义模板只允许 `${record.<字段>}` / `${task.<字段>}`（字段白名单见 docs/TASK-CENTER.md §6.3）。',
   ],
 }

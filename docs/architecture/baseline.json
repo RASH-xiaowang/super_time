@@ -1,0 +1,21 @@
+{
+  "createdAt": "2026-10-22 20:54",
+  "metrics": {
+    "remote_methods": 219,
+    "ipc_channels": 46,
+    "host_modules": 42,
+    "host_lines": 10787,
+    "query_files": 158,
+    "query_lines": 46545,
+    "retrieval_files": 15,
+    "remotes_files": 29,
+    "gateway_files": 20,
+    "ui_files": 602,
+    "ui_lines": 122079,
+    "panel_tsx": 171,
+    "nav_tabs": 39,
+    "nav_hidden": 23,
+    "outbound_sites": 20,
+    "bundle_kb": 2374
+  }
+}

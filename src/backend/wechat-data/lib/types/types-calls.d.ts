@@ -14,6 +14,8 @@
 export interface CallPeer {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     calls: number;
     connected: number;
     durationSec: number;
@@ -30,6 +32,8 @@ export interface CallMonthRow {
 export interface CallRecord {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     localId: number;
     createTime: number;
     status: string;

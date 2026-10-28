@@ -25,7 +25,7 @@ import { withDb, withDbAsync } from './db-open.ts'
 import { queryContacts } from './contacts.ts'
 
 interface StorageCategory { label: string; count: number; size: number }
-interface MomentsAuthorStat { username: string; name: string; posts: number }
+interface MomentsAuthorStat { username: string; name: string; enterpriseName?: string; posts: number }
 
 /** The one-screen data overview aggregate result. */
 export interface OverviewResult {
@@ -190,8 +190,10 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
         const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
         const uname = cols.has('user_name') ? 'user_name' : 'userName'
         const cname = cols.has('content') ? 'content' : 'Content'
-        const names = contactMeta(dec).names
-        const authorMap = new Map<string, { name: string; posts: number }>()
+        const meta = contactMeta(dec)
+        const names = meta.names
+        const enterpriseNames = meta.enterpriseNames
+        const authorMap = new Map<string, { name: string; enterpriseName?: string; posts: number }>()
         // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，`.all()` 会把整表先物化成数组，
         // 而这里只是逐条累加一个 Map —— 读完即释放。
         const sql = `SELECT ${uname} AS u, ${cname} AS c FROM SnsTimeLine`
@@ -201,13 +203,25 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
           if (!u) continue
           const cur = authorMap.get(u)
           if (cur) cur.posts += 1
-          else authorMap.set(u, { name: names.get(u) || xmlNickname(cellStr(r.c)) || u, posts: 1 })
+          else {
+            const enterpriseName = enterpriseNames.get(u)?.trim()
+            authorMap.set(u, {
+              name: names.get(u) || xmlNickname(cellStr(r.c)) || u,
+              ...(enterpriseName ? { enterpriseName } : {}),
+              posts: 1,
+            })
+          }
           // 2026-09-28：行级让出（同 `wordcloud.ts` 的双阈值口径）。
           sinceYield += 1
           if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
         }
         const sorted = Array.from(authorMap.entries())
-          .map(([username, v]) => ({ username, name: v.name, posts: v.posts }))
+          .map(([username, v]) => ({
+            username,
+            name: v.name,
+            ...(v.enterpriseName ? { enterpriseName: v.enterpriseName } : {}),
+            posts: v.posts,
+          }))
           .sort((a, b) => b.posts - a.posts)
           .slice(0, 20)
         for (const a of sorted) moments_authors.push(a)

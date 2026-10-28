@@ -100,29 +100,44 @@ function parseCall(text: string): { sec: number; connected: boolean } {
 /* ────────────── 结果结构 ────────────── */
 
 /** 榜单条目。 */
-export interface AnnualRankRow { username: string; name: string; total: number; mine: number; theirs: number }
+export interface AnnualRankRow {
+  username: string
+  name: string
+  enterpriseName?: string
+  total: number
+  mine: number
+  theirs: number
+}
 
 /** 最疯的一天。 */
 export interface AnnualBusiestDay {
   date: string; n: number; ratio: number; share: number
-  topName: string; topCount: number
+  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number
   firstAt: string; firstText: string; lastAt: string; lastText: string; spanMin: number
 }
 
 /** 年度搭子（单聊里双方合计最多的一位）。 */
 export interface AnnualBuddy {
   username: string; name: string; total: number; mine: number; theirs: number
+  enterpriseName?: string
   streakDays: number; commonHour: number
   replyBacks: number; fastestSec: number; slowestSec: number
 }
 
 /** 十二个月的主演。 */
-export interface AnnualMonthlyStar { month: number; username: string; name: string; count: number }
+export interface AnnualMonthlyStar {
+  month: number
+  username: string
+  name: string
+  enterpriseName?: string
+  count: number
+}
 
 /** 深夜卡。 */
 export interface AnnualNight {
   share: number; mine: number; theirs: number
-  topName: string; topCount: number; sampleAt: string; sampleText: string
+  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number
+  sampleAt: string; sampleText: string
 }
 
 /** 作息切片。 */
@@ -140,6 +155,7 @@ export interface AnnualWords {
   callSec: number; callCount: number; callConnected: number; callMissed: number
   videoSent: number; voiceMsgSent: number
   longestVoiceSec: number; longestVoiceFrom: string
+  longestVoiceUsername: string; longestVoiceEnterpriseName?: string
 }
 
 /** 年度口头禅。 */
@@ -155,16 +171,19 @@ export interface AnnualCatchphrase {
 /** 回复速度。 */
 export interface AnnualReply {
   medianSec: number; p90Sec: number
-  avgPartnerName: string; avgPartnerSec: number
-  fastestName: string; fastestSec: number
-  slowestName: string; slowestSec: number
+  avgPartnerName: string; avgPartnerUsername: string; avgPartnerSec: number
+  avgPartnerEnterpriseName?: string
+  fastestName: string; fastestUsername: string; fastestSec: number
+  fastestEnterpriseName?: string
+  slowestName: string; slowestUsername: string; slowestSec: number
+  slowestEnterpriseName?: string
 }
 
 /** 谁先开口。 */
 export interface AnnualOpener {
   mine: number; theirs: number; share: number
-  mostInitiatedByMe: Array<{ name: string; count: number }>
-  mostInitiatedByThem: Array<{ name: string; count: number }>
+  mostInitiatedByMe: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
+  mostInitiatedByThem: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
 }
 
 /** 表情宇宙。 */
@@ -176,7 +195,13 @@ export interface AnnualEmoji {
 }
 
 /** 「还有这些人」横向卡片。 */
-export interface AnnualHighlight { label: string; name: string; username: string; value: string }
+export interface AnnualHighlight {
+  label: string
+  name: string
+  username: string
+  enterpriseName?: string
+  value: string
+}
 
 /** 完整结果。 */
 export interface AnnualReview {
@@ -192,6 +217,7 @@ export interface AnnualReview {
   buddy: AnnualBuddy | null
   monthlyStar: AnnualMonthlyStar[]
   starName: string; starUsername: string; starMonths: number
+  starEnterpriseName?: string
   hottestMonth: number; hottestMonthCount: number
   night: AnnualNight
   rhythm: AnnualRhythm
@@ -356,9 +382,28 @@ function chatOf(map: Map<string, ChatAgg>, username: string): ChatAgg {
   return c
 }
 
-/** 是否为「一个人」（单聊）：排除群、公众号、服务号。 */
+/** 是否为「一个人」（单聊）：排除群、公众号与企微客服号；企业微信联系人仍算单聊。 */
 function isPersonChat(u: string): boolean {
-  return !!u && !u.endsWith('@chatroom') && !u.startsWith('gh_') && !u.endsWith('@openim')
+  return !!u && !u.endsWith('@chatroom') && !u.startsWith('gh_') && !u.endsWith('@kefu.openim')
+}
+
+function enterpriseNameOf(enterpriseNames: ReadonlyMap<string, string>, username: string): string | undefined {
+  const name = enterpriseNames.get(username)?.trim() ?? ''
+  return name !== '' ? name : undefined
+}
+
+function identityOf(
+  username: string,
+  names: ReadonlyMap<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): { username: string; name: string; enterpriseName?: string } {
+  // 群聊、公众号与客服号不是企业微信联系人；即使映射里有脏数据也不带企业名。
+  const enterpriseName = isPersonChat(username) ? enterpriseNameOf(enterpriseNames, username) : undefined
+  return {
+    username,
+    name: names.get(username) ?? username,
+    ...(enterpriseName !== undefined ? { enterpriseName } : {}),
+  }
 }
 
 /* ────────────── 主聚合 ────────────── */
@@ -372,7 +417,9 @@ function isPersonChat(u: string): boolean {
  */
 export async function queryAnnualReview(decryptedDir: string, year: number, selfUsername = ''): Promise<AnnualReview> {
   const self = (selfUsername ?? '').trim()
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
+  const enterpriseNames = meta.enterpriseNames
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
   const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1000)
 
@@ -411,6 +458,7 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
   let callConnected = 0
   let longestVoiceSec = 0
   let longestVoiceFrom = ''
+  let longestVoiceUsername = ''
   let firstTs = Number.POSITIVE_INFINITY
   let firstText = ''
   let lastTs = 0
@@ -498,9 +546,15 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
             // `readableText()` 的输出，**XML 标签已被剥掉**，而资金/撤回恰好看的是
             // `<appmsg>` / `<sysmsg type="revokemsg">` 这些标签 —— 传 `text` 会让年度资金恒为 0
             // （纯函数的 30 条用例全绿也救不了接口上的数）。群前缀 `wxid_x: ` 不影响标签解析。
+            const chatEnterpriseName = enterpriseNameOf(enterpriseNames, username)
             extras.onRow(
               { type: lt, ts, text: body0, sender: mine ? '我' : (names.get(username) ?? username), mine },
-              { username, name: names.get(username) ?? username, isGroup: isRoom },
+              {
+                username,
+                name: names.get(username) ?? username,
+                ...(chatEnterpriseName !== undefined ? { enterpriseName: chatEnterpriseName } : {}),
+                isGroup: isRoom,
+              },
             )
             // 当日首尾
             const b = dayBounds.get(dk)
@@ -541,7 +595,11 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
                 voiceSentCount += 1
                 voiceMsgSent += 1
                 voiceSentSec += sec
-                if (sec > longestVoiceSec) { longestVoiceSec = sec; longestVoiceFrom = names.get(username) ?? username }
+                if (sec > longestVoiceSec) {
+                  longestVoiceSec = sec
+                  longestVoiceFrom = names.get(username) ?? username
+                  longestVoiceUsername = username
+                }
               } else { voiceRecvCount += 1; voiceRecvSec += sec }
             } else if (lt === 47) {
               if (mine) {
@@ -571,8 +629,8 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
     year, sent, totalAll, sentDays, allDays, perDayAll, heat, hourAll, workdayCount, weekendCount,
     monthly, mineChars, recvChars, phraseCount, emojiCount, emojiDays, emojiHeat,
     threwStickers, stickerHashes, mediaSent, videoSent, voiceMsgSent, voiceSentCount, voiceSentSec,
-    voiceRecvCount, voiceRecvSec, callSec, callCount, callConnected, longestVoiceSec, longestVoiceFrom,
-    firstTs, firstText, lastTs, lastText, chats, dayChat, dayBounds, chatEarliest, names,
+    voiceRecvCount, voiceRecvSec, callSec, callCount, callConnected, longestVoiceSec, longestVoiceFrom, longestVoiceUsername,
+    firstTs, firstText, lastTs, lastText, chats, dayChat, dayBounds, chatEarliest, names, enterpriseNames,
     extras: extras.done(),
   })
 
@@ -621,6 +679,7 @@ interface Bucket {
   callConnected: number
   longestVoiceSec: number
   longestVoiceFrom: string
+  longestVoiceUsername: string
   firstTs: number
   firstText: string
   lastTs: number
@@ -630,6 +689,7 @@ interface Bucket {
   dayBounds: Map<string, { first: number; firstText: string; last: number; lastText: string }>
   chatEarliest: Map<string, number>
   names: Map<string, string>
+  enterpriseNames: Map<string, string>
   /** 行累加器（资金 / 撤回 / 群聊）在扫描结束后取出的结果。 */
   extras: { money: AnnualMoney; revoke: AnnualRevoke; groups: AnnualGroups }
 }
@@ -650,6 +710,80 @@ function firstLast(b: Bucket): { firstAt: string; firstText: string; lastAt: str
   }
 }
 
+/** 回复速度：把原来内联在 `assemble` 里的逐人聚合抽出来，同时带上人物身份。 */
+function buildReply(
+  personChats: ChatAgg[],
+  names: ReadonlyMap<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): AnnualReply {
+  const rows = personChats
+    .filter(c => c.replyGaps.length > 0)
+    .map(c => ({ ...identityOf(c.username, names, enterpriseNames), gaps: c.replyGaps }))
+  const allGaps = rows.flatMap(r => r.gaps)
+  const replyRows = rows.map(r => ({
+    ...r,
+    n: r.gaps.length,
+    sec: Math.round(r.gaps.reduce((a, x) => a + x, 0) / r.gaps.length),
+    min: Math.min(...r.gaps),
+    max: Math.max(...r.gaps),
+  }))
+  const mainPartner = [...replyRows].sort((x, y) => y.n - x.n)[0]
+  const fastest = [...replyRows].sort((x, y) => x.min - y.min)[0]
+  const slowest = [...replyRows].sort((x, y) => y.max - x.max)[0]
+  return {
+    medianSec: median(allGaps),
+    p90Sec: percentile(allGaps, 0.9),
+    avgPartnerName: mainPartner?.name ?? '',
+    avgPartnerUsername: mainPartner?.username ?? '',
+    avgPartnerSec: mainPartner?.sec ?? 0,
+    ...(mainPartner?.enterpriseName !== undefined ? { avgPartnerEnterpriseName: mainPartner.enterpriseName } : {}),
+    fastestName: fastest?.name ?? '',
+    fastestUsername: fastest?.username ?? '',
+    fastestSec: allGaps.length > 0 ? Math.min(...allGaps) : 0,
+    ...(fastest?.enterpriseName !== undefined ? { fastestEnterpriseName: fastest.enterpriseName } : {}),
+    slowestName: slowest?.name ?? '',
+    slowestUsername: slowest?.username ?? '',
+    slowestSec: allGaps.length > 0 ? Math.max(...allGaps) : 0,
+    ...(slowest?.enterpriseName !== undefined ? { slowestEnterpriseName: slowest.enterpriseName } : {}),
+  }
+}
+
+/** 「还有这些人」：每个人物榜首都通过 `identityOf`，群聊不会套企业名。 */
+function buildHighlights(
+  ranking: AnnualRankRow[],
+  chats: Map<string, ChatAgg>,
+  personChats: ChatAgg[],
+  roomChats: ChatAgg[],
+  names: ReadonlyMap<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): AnnualHighlight[] {
+  const highlights: AnnualHighlight[] = []
+  const add = (label: string, username: string, value: string): void => {
+    highlights.push({ label, ...identityOf(username, names, enterpriseNames), value })
+  }
+  const topPerson = ranking[0]
+  if (topPerson) add('最常联系', topPerson.username, `${topPerson.total} 条`)
+  const topRoom = [...roomChats].sort((x, y) => y.total - x.total)[0]
+  if (topRoom) add('最活跃群聊', topRoom.username, `${topRoom.total} 条`)
+  const topCall = [...chats.values()].filter(c => c.calls > 0).sort((x, y) => y.callSec - x.callSec)[0]
+  if (topCall) add('最常连线', topCall.username, `${topCall.calls} 通 · ${humanDur(topCall.callSec)}`)
+  const topListen = [...personChats].sort((x, y) => y.mine - x.mine)[0]
+  if (topListen) add('最常说给 TA 听', topListen.username, `${topListen.mine} 条`)
+  const topHeard = [...personChats].sort((x, y) => y.theirs - x.theirs)[0]
+  if (topHeard) add('最常听 TA 说', topHeard.username, `${topHeard.theirs} 条`)
+  const topSticker = [...chats.values()].filter(c => (c.stickerMine + c.stickerTheirs) > 0).sort((x, y) => (y.stickerMine + y.stickerTheirs) - (x.stickerMine + x.stickerTheirs))[0]
+  if (topSticker) add('斗图对手', topSticker.username, `${topSticker.stickerMine + topSticker.stickerTheirs} 张`)
+  const balanced = [...personChats]
+    .filter(c => c.mine >= 20 && c.theirs >= 20)
+    .sort((x, y) => {
+      const rx = Math.min(x.mine, x.theirs) / Math.max(x.mine, x.theirs)
+      const ry = Math.min(y.mine, y.theirs) / Math.max(y.mine, y.theirs)
+      return ry - rx
+    })[0]
+  if (balanced) add('势均力敌', balanced.username, `${balanced.mine} : ${balanced.theirs}`)
+  return highlights
+}
+
 /**
  * 把扫描桶组装成完整年报。
  *
@@ -657,7 +791,7 @@ function firstLast(b: Bucket): { firstAt: string; firstText: string; lastAt: str
  * 资金 / 撤回 / 群聊是同一遍扫描里按行累加出来的，直接铺平进结果。
  */
 function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
-  const { year, names, chats } = b
+  const { year, names, chats, enterpriseNames } = b
   const nameOf = (u: string): string => names.get(u) ?? u
 
   // ── 序列类指标：逐会话走一次有序消息（谁先开口 / 接话间隔）──
@@ -710,16 +844,19 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     if (bestDay) {
       const bounds = b.dayBounds.get(bestDay)
       const dc = b.dayChat.get(bestDay)
-      let topName = ''
+      let topUsername = ''
       let topCount = 0
-      if (dc) for (const [u, n] of dc) if (n > topCount) { topCount = n; topName = nameOf(u) }
+      if (dc) for (const [u, n] of dc) if (n > topCount) { topCount = n; topUsername = u }
+      const top = identityOf(topUsername, names, enterpriseNames)
       const dAvg = activeDaysAll > 0 ? b.totalAll / activeDaysAll : 0
       busiest = {
         date: bestDay,
         n: bestN,
         ratio: dAvg > 0 ? Number((bestN / dAvg).toFixed(1)) : 0,
         share: b.totalAll > 0 ? bestN / b.totalAll : 0,
-        topName,
+        topName: top.name,
+        ...(top.enterpriseName !== undefined ? { topEnterpriseName: top.enterpriseName } : {}),
+        topUsername,
         topCount,
         firstAt: bounds ? clock(bounds.first) : '',
         firstText: bounds?.firstText ?? '',
@@ -737,8 +874,7 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     if (top && top.total > 0) {
       const gaps = top.replyGaps
       buddy = {
-        username: top.username,
-        name: nameOf(top.username),
+        ...identityOf(top.username, names, enterpriseNames),
         total: top.total,
         mine: top.mine,
         theirs: top.theirs,
@@ -757,7 +893,7 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   for (let m = 0; m < 12; m += 1) {
     const top = [...personChats].filter(c => (c.byMonth[m] ?? 0) > 0).sort((x, y) => (y.byMonth[m] ?? 0) - (x.byMonth[m] ?? 0))[0]
     if (top) {
-      monthlyStar.push({ month: m + 1, username: top.username, name: nameOf(top.username), count: top.byMonth[m] ?? 0 })
+      monthlyStar.push({ month: m + 1, ...identityOf(top.username, names, enterpriseNames), count: top.byMonth[m] ?? 0 })
       starMonths.set(top.username, (starMonths.get(top.username) ?? 0) + 1)
     }
   }
@@ -766,7 +902,7 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   const hottestMonth = b.monthly.indexOf(hottestMonthCount) + 1
 
   // ⑥ 深夜（0-6 点）
-  let night: AnnualNight = { share: 0, mine: 0, theirs: 0, topName: '', topCount: 0, sampleAt: '', sampleText: '' }
+  let night: AnnualNight = { share: 0, mine: 0, theirs: 0, topName: '', topUsername: '', topCount: 0, sampleAt: '', sampleText: '' }
   {
     const myNight = [...chats.values()].reduce((a, c) => a + c.nightMine, 0)
     night.share = b.sent > 0 ? myNight / b.sent : 0
@@ -776,11 +912,14 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     const top = topMine ?? [...chats.values()].sort((x, y) => (y.nightMine + y.nightTheirs) - (x.nightMine + x.nightTheirs))[0]
     if (top && (top.nightMine + top.nightTheirs) > 0) {
       const t = top.nightSampleTs
+      const identity = identityOf(top.username, names, enterpriseNames)
       night = {
         ...night,
         mine: top.nightMine,
         theirs: top.nightTheirs,
-        topName: nameOf(top.username),
+        topName: identity.name,
+        ...(identity.enterpriseName !== undefined ? { topEnterpriseName: identity.enterpriseName } : {}),
+        topUsername: top.username,
         topCount: top.nightMine + top.nightTheirs,
         sampleAt: t ? `${new Date(t * 1000).getMonth() + 1}月${new Date(t * 1000).getDate()}日 ${clock(t)}` : '',
         sampleText: top.nightSampleText,
@@ -813,6 +952,7 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   }
 
   // ⑧ 你说的话
+  const longestVoiceIdentity = identityOf(b.longestVoiceUsername, names, enterpriseNames)
   const words: AnnualWords = {
     mineChars: b.mineChars,
     receivedChars: b.recvChars,
@@ -829,6 +969,8 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     voiceMsgSent: b.voiceMsgSent,
     longestVoiceSec: b.longestVoiceSec,
     longestVoiceFrom: b.longestVoiceFrom,
+    longestVoiceUsername: b.longestVoiceUsername,
+    ...(longestVoiceIdentity.enterpriseName !== undefined ? { longestVoiceEnterpriseName: longestVoiceIdentity.enterpriseName } : {}),
   }
 
   // ⑨ 口头禅（我发出的 2-8 字整句）
@@ -844,30 +986,7 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   }
 
   // ⑩ 回复速度（单聊）
-  const replyGapRows = personChats
-    .filter(c => c.replyGaps.length > 0)
-    .map(c => ({ name: nameOf(c.username), gaps: c.replyGaps }))
-  const allGaps = replyGapRows.flatMap(r => r.gaps)
-  // 每人一条汇总：接话次数 / 平均 / 最快 / 最慢。
-  // 「平均 X 分钟」取**接话最多**的那位（= 主要对话对象），与需求语义一致。
-  const replyRows = replyGapRows.map(r => ({
-    name: r.name,
-    n: r.gaps.length,
-    sec: Math.round(r.gaps.reduce((a, x) => a + x, 0) / r.gaps.length),
-    min: Math.min(...r.gaps),
-    max: Math.max(...r.gaps),
-  }))
-  const mainPartner = [...replyRows].sort((x, y) => y.n - x.n)[0]
-  const reply: AnnualReply = {
-    medianSec: median(allGaps),
-    p90Sec: percentile(allGaps, 0.9),
-    avgPartnerName: mainPartner?.name ?? '',
-    avgPartnerSec: mainPartner?.sec ?? 0,
-    fastestName: [...replyRows].sort((x, y) => x.min - y.min)[0]?.name ?? '',
-    fastestSec: allGaps.length > 0 ? Math.min(...allGaps) : 0,
-    slowestName: [...replyRows].sort((x, y) => y.max - x.max)[0]?.name ?? '',
-    slowestSec: allGaps.length > 0 ? Math.max(...allGaps) : 0,
-  }
+  const reply = buildReply(personChats, names, enterpriseNames)
 
   // ⑪ 谁先开口（单聊）
   const openMineTotal = personChats.reduce((a, c) => a + c.openMine, 0)
@@ -876,13 +995,13 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     mine: openMineTotal,
     theirs: openTheirsTotal,
     share: (openMineTotal + openTheirsTotal) > 0 ? openMineTotal / (openMineTotal + openTheirsTotal) : 0,
-    mostInitiatedByMe: personChats.map(c => ({ name: nameOf(c.username), count: c.openMine })).sort((x, y) => y.count - x.count).slice(0, 3),
-    mostInitiatedByThem: personChats.map(c => ({ name: nameOf(c.username), count: c.openTheirs })).sort((x, y) => y.count - x.count).slice(0, 3),
+    mostInitiatedByMe: personChats.map(c => ({ ...identityOf(c.username, names, enterpriseNames), count: c.openMine })).sort((x, y) => y.count - x.count).slice(0, 3),
+    mostInitiatedByThem: personChats.map(c => ({ ...identityOf(c.username, names, enterpriseNames), count: c.openTheirs })).sort((x, y) => y.count - x.count).slice(0, 3),
   }
 
   // ⑫ 年度聊天排行（单聊）
   const ranking: AnnualRankRow[] = personChats
-    .map(c => ({ username: c.username, name: nameOf(c.username), total: c.total, mine: c.mine, theirs: c.theirs }))
+    .map(c => ({ ...identityOf(c.username, names, enterpriseNames), total: c.total, mine: c.mine, theirs: c.theirs }))
     .sort((x, y) => y.total - x.total)
     .slice(0, 10)
 
@@ -905,27 +1024,9 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   }
 
   // ⑭ 还有这些人（每项都是「某一维度的第一名」）
-  const highlights: AnnualHighlight[] = []
-  const topPerson = ranking[0]
-  if (topPerson) highlights.push({ label: '最常联系', name: topPerson.name, username: topPerson.username, value: `${topPerson.total} 条` })
-  const topRoom = [...roomChats].sort((x, y) => y.total - x.total)[0]
-  if (topRoom) highlights.push({ label: '最活跃群聊', name: nameOf(topRoom.username), username: topRoom.username, value: `${topRoom.total} 条` })
-  const topCall = [...chats.values()].filter(c => c.calls > 0).sort((x, y) => y.callSec - x.callSec)[0]
-  if (topCall) highlights.push({ label: '最常连线', name: nameOf(topCall.username), username: topCall.username, value: `${topCall.calls} 通 · ${humanDur(topCall.callSec)}` })
-  const topListen = [...personChats].sort((x, y) => y.mine - x.mine)[0]
-  if (topListen) highlights.push({ label: '最常说给 TA 听', name: nameOf(topListen.username), username: topListen.username, value: `${topListen.mine} 条` })
-  const topHeard = [...personChats].sort((x, y) => y.theirs - x.theirs)[0]
-  if (topHeard) highlights.push({ label: '最常听 TA 说', name: nameOf(topHeard.username), username: topHeard.username, value: `${topHeard.theirs} 条` })
-  const topSticker = [...chats.values()].filter(c => (c.stickerMine + c.stickerTheirs) > 0).sort((x, y) => (y.stickerMine + y.stickerTheirs) - (x.stickerMine + x.stickerTheirs))[0]
-  if (topSticker) highlights.push({ label: '斗图对手', name: nameOf(topSticker.username), username: topSticker.username, value: `${topSticker.stickerMine + topSticker.stickerTheirs} 张` })
-  const balanced = [...personChats]
-    .filter(c => c.mine >= 20 && c.theirs >= 20)
-    .sort((x, y) => {
-      const rx = Math.min(x.mine, x.theirs) / Math.max(x.mine, x.theirs)
-      const ry = Math.min(y.mine, y.theirs) / Math.max(y.mine, y.theirs)
-      return ry - rx
-    })[0]
-  if (balanced) highlights.push({ label: '势均力敌', name: nameOf(balanced.username), username: balanced.username, value: `${balanced.mine} : ${balanced.theirs}` })
+  const highlights = buildHighlights(ranking, chats, personChats, roomChats, names, enterpriseNames)
+
+  const star = starEntry ? identityOf(starEntry[0], names, enterpriseNames) : null
 
   return {
     year,
@@ -944,9 +1045,10 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     busiest,
     buddy,
     monthlyStar,
-    starName: starEntry ? nameOf(starEntry[0]) : '',
-    starUsername: starEntry ? starEntry[0] : '',
+    starName: star?.name ?? '',
+    starUsername: star?.username ?? '',
     starMonths: starEntry ? starEntry[1] : 0,
+    ...(star?.enterpriseName !== undefined ? { starEnterpriseName: star.enterpriseName } : {}),
     hottestMonth,
     hottestMonthCount,
     night,
@@ -962,4 +1064,3 @@ function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
     money: b.extras.money, revoke: b.extras.revoke, groups: b.extras.groups,
   }
 }
-

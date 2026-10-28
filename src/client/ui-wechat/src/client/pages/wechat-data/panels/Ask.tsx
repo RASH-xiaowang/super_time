@@ -36,12 +36,13 @@ import { AskEmptyIntro, fmtShortDate } from './ask-scope.tsx'
 import { AskComposer } from './ask-composer.tsx'
 import { useAskSession, type AskTurn } from './use-ask.ts'
 import { useAskOptimize } from './use-ask-optimize.ts'
-import { AskPending } from './ask-pending.tsx'
-import { AskProcess } from './AskProcess.tsx'
-import { AskResources, AskRuntimeMeta, INTENT_LABEL } from './AskRuntimeMeta.tsx'
-import { AnswerBody } from './AnswerBody.tsx'
+import { askThreadContentRevision, useAskThreadAutoScroll } from './use-ask-thread-scroll.ts'
+import { AnswerRunView, useAnswerRunProcessState } from './AnswerRunView.tsx'
+import { AskResources, INTENT_LABEL } from './AskRuntimeMeta.tsx'
 import { CiteDetailPanel } from './CiteDetailPanel.tsx'
 import { loadMessageContext, useCiteDetail } from './use-cite-detail.ts'
+import { identityLabel, sessionDisplayNameWithEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask.module.css'
 import rcss from './retrieval.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -259,14 +260,14 @@ export function AnswerFeedback({ turn, patch }: {
         disabled={busy} onClick={() => { void submit('up') }} title="这次回答有帮助">有帮助</button>
       <button type="button" className={rcss.fbBtn} data-on={marking ? 'down' : undefined}
         disabled={busy} onClick={() => { setMarking(v => !v) }}
-        title="标出哪些引用没用/有用，帮助系统调优检索">
+        title="标出哪些引用没用/有用，帮助改进检索排序">
         待改进{marking ? '（点击收起）' : ''}
       </button>
       {note && <span className={rcss.fbHint}>{note}</span>}
       {marking && (
         <div className={rcss.markPanel}>
           <div className={rcss.rowHint}>
-            点每条的「有用 / 没用」给检索反馈（可只标部分）；提交后系统会据此微调重排权重。
+            点每条的「有用 / 没用」给检索反馈（可只标部分）；提交后，检索排序会据此微调。
           </div>
           <div className={rcss.markGrid}>
             {cites.map((c, ci) => {
@@ -274,9 +275,15 @@ export function AnswerFeedback({ turn, patch }: {
               const cur = marks[idx]
               return (
                 <div key={`${c.username}:${c.local_id}:${ci}`} className={rcss.markRow}>
-                  <span className={rcss.markText} title={c.snippet}>
-                    [{idx}] {(c.sender ? `${c.name} · ${c.sender}` : c.name)}：{c.snippet}
-                  </span>
+                  <IdentityName
+                    className={rcss.markText}
+                    name={c.name || identityLabel(c)}
+                    username={c.username ?? ''}
+                    size={18}
+                    title={c.snippet}
+                  >
+                    [{idx}] {identityLabel(c)}：{c.snippet}
+                  </IdentityName>
                   <button type="button" className={rcss.markToggle} data-on={cur === 'useful' ? 'useful' : undefined}
                     onClick={() => {
                       const next = { ...marks }
@@ -347,11 +354,9 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
   const [to, setTo] = useState('')
   const [question, setQuestion] = useState('')
   /** 当前会话范围的显示名：写进问答历史，历史列表可直接显示而不用再查会话表。 */
-  const scopeDisplayName = scopeUsername
-    ? (sessions.find(s => s.username === scopeUsername)?.displayName || scopeUsername)
-    : ''
+  const scopeDisplayName = sessionDisplayNameWithEnterprise(sessions, scopeUsername)
   /** 多轮对话状态（turns/asking/streamText/error）统一由问答 hook 提供。 */
-  const { turns, asking, streamText, streamReasoning, streamStages, error, ask: askSession, retry: retryTurn, cancel: cancelSession, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, error, ask: askSession, retry: retryTurn, cancel: cancelSession, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     ...(scopeUsername ? { scopeUsername } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
@@ -396,7 +401,6 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [question])
-
   /** 正文滚动容器 + 「贴近底部」跟踪：仅当用户停在底部附近时才自动滚到最新消息。 */
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
@@ -408,13 +412,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     return () => { el.removeEventListener('scroll', onScroll) }
   }, [])
   /** 新内容到达：提问中必滚（用户想看结果）；回答到达时若在底部附近才滚（尊重向上翻阅）。 */
-  useEffect(() => {
-    const el = bodyRef.current
-    if (!el) return
-    if (asking || atBottomRef.current) {
-      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
-    }
-  }, [turns, asking])
+  useAskThreadAutoScroll({ bodyRef, atBottomRef, asking, turns, contentRevision: askThreadContentRevision({ text: streamText, reasoning: streamReasoning, stages: streamStages }) })
 
   /** 提问优化：调后端 LLM 改写问题 + 给改进建议（结果内联展示，不弹窗）。 */
   const optimizeQuestion = useCallback(async (): Promise<void> => {
@@ -467,15 +465,14 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     return ''
   }, [turns])
   const noCorpus = sessionsLoaded && sessions.length === 0
-
   return (
-    <div className={kitCss.panelShell}>
+    <div className={`${kitCss.panelShell} ${css.askShell}`}>
       {/* 单栏布局：检索设置侧栏已移除（检索参数固化为内置默认）。 */}
       <div className={css.askLayout}>
       <div className={css.askPage}>
       <PanelHeader
-        title="问答"
-        desc="只检索本机，回答带来源"
+        title={<span className={css.askTitle}>微信问答</span>}
+        desc={<span className={css.askDesc}>只检索本机，回答带来源</span>}
         actions={(
           <>
             {/* 「历史记录」常驻可见、不受当前对话有无轮次影响 —— 历史是**跨会话累积**的，
@@ -485,7 +482,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
               className={css.headerHistory}
               data-open-ask-history=""
               onClick={() => { setHistoryOpen(true) }}
-              title="查看历史问答记录（每一次问答都会自动保存）"
+              title="查看微信问答历史（每次问答都会自动保存）"
             >
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
@@ -495,7 +492,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
               历史记录
             </button>
             {userTurnCount > 0 && (
-              <button type="button" className={css.headerClear} onClick={clearConversation} title="清空全部对话轮次">
+              <button type="button" className={css.headerClear} onClick={clearConversation} title="清空当前微信问答对话（不影响历史记录）">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M3 6h18" />
                   <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
@@ -513,13 +510,13 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
           超出时 auto 归零、从顶部开始正常滚动。 */}
       <div className={`${kitCss.panelBody} ${css.askBody}`} ref={bodyRef}>
         <div className={css.askMain}>
-        <div className={css.askStack}>
+        <div className={css.askStack} data-empty={userTurnCount === 0 && !asking || undefined}>
           {/* 空态：一张引导卡（图标 + 标题 + 说明 + 示例），示例就在输入框上方，
               点一下即填入并聚焦输入框 —— 不再把引导拆到正文中央、示例另置一处。 */}
           {userTurnCount === 0 && !asking && (
             <AskEmptyIntro
               noCorpus={noCorpus}
-              sessionCount={sessions.length} examples={buildAskExamples(sessions, scopeDisplayName)}
+              sessionCount={sessions.length} examples={buildAskExamples(sessions, scopeUsername || scopeDisplayName)}
               onPick={(ex) => { setQuestion(ex); clearError(); taRef.current?.focus() }}
             />
           )}
@@ -529,6 +526,8 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
             streamText={streamText}
             streamReasoning={streamReasoning}
             streamStages={streamStages}
+            runStartedAt={runStartedAt}
+            runId={runId}
             onStop={cancelSession}
             onRetry={(i) => { void retryTurn(i) }}
             citeDetail={citeDetail}
@@ -542,7 +541,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
 
       {/* ③ 提问区：错误 → 优化建议 → 输入面。三者都属于「本次输入」的上下文，
           紧贴输入框上方，不进入滚动区。 */}
-      {error && <div className={`${kitCss.error} ${css.askError}`} role="alert">{error}</div>}
+      {error && turns[turns.length - 1]?.status !== 'failed' && <div className={`${kitCss.error} ${css.askError}`} role="alert">{error}</div>}
       {optResult && (
         <div className={css.optStrip} role="status">
           <div className={css.optTitle}>优化后的问题</div>
@@ -688,6 +687,7 @@ function AskCiteDetail({ detail, onOpenChat, onOpenKbFile, onArchive }: {
  * @param props.streamText - 生成中的正文（流式）。
  * @param props.streamReasoning - 生成中的思考过程（流式）。
  * @param props.streamStages - 生成中的阶段事件（流式）。
+ * @param props.runStartedAt - 当前在飞轮次的起点。
  * @param props.onStop - 「停止生成」回调。
  * @param props.citeDetail - 引用详情开关（点角标 → 右侧滑出）。
  * @param props.patchTurn - 就地更新某一轮。
@@ -695,12 +695,14 @@ function AskCiteDetail({ detail, onOpenChat, onOpenKbFile, onArchive }: {
  * @param props.onDistill - 「沉淀为笔记」回调。
  * @returns 消息流元素。
  */
-function AskStream({ turns, asking, streamText, streamReasoning, streamStages, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function AskStream({ turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
-  streamStages: React.ComponentProps<typeof AskPending>['streamStages']
+  streamStages: AskTurn['stages']
+  runStartedAt: number
+  runId: string
   onStop: () => void
   onRetry: (index: number) => void
   citeDetail: ReturnType<typeof useCiteDetail>
@@ -712,7 +714,7 @@ function AskStream({ turns, asking, streamText, streamReasoning, streamStages, o
     <AskThread
       turns={turns}
       asking={asking}
-      pendingProps={{ streamText, streamReasoning, streamStages, onStop }}
+      live={{ streamText, streamReasoning, streamStages: streamStages ?? [], runStartedAt, runId, onStop }}
       onRetry={onRetry}
       onOpenCite={citeDetail.toggle}
       activeCite={citeDetail.ref}
@@ -736,10 +738,17 @@ function AskStream({ turns, asking, streamText, streamReasoning, streamStages, o
  * @param props.onDistill - 「沉淀为笔记」的回调（打开编辑器）。
  * @returns 消息流元素；没有轮次时返回 null。
  */
-function AskThread({ turns, asking, pendingProps, onRetry, onOpenCite, activeCite, patchTurn, questionForTurn, onDistill }: {
+function AskThread({ turns, asking, live, onRetry, onOpenCite, activeCite, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
-  pendingProps: React.ComponentProps<typeof AskPending>
+  live: {
+    streamText: string
+    streamReasoning: string
+    streamStages: NonNullable<AskTurn['stages']>
+    runStartedAt: number
+    runId: string
+    onStop: () => void
+  }
   onRetry: (index: number) => void
   /** 点正文角标（轮次下标 + 编号）。 */
   onOpenCite?: ((turn: number, n: number) => void) | undefined
@@ -749,6 +758,7 @@ function AskThread({ turns, asking, pendingProps, onRetry, onOpenCite, activeCit
   questionForTurn: (idx: number) => string
   onDistill: (v: { open: boolean; title?: string; body?: string; question?: string }) => void
 }): React.JSX.Element | null {
+  const processPropsFor = useAnswerRunProcessState()
   if (turns.length === 0) return null
   return (
     <div className={css.thread}>
@@ -759,22 +769,19 @@ function AskThread({ turns, asking, pendingProps, onRetry, onOpenCite, activeCit
           </div>
         ) : (
             <div key={i} className={css.chatAi}>
-              <AskProcess stages={t.stages} reasoning={t.reasoning} />
-              <AskRuntimeMeta
+              <AnswerRunView
                 turn={t}
-                placement="meta"
-                {...(t.status === 'failed' ? { onRetry: () => { onRetry(i) } } : {})}
+                agentLabel="AI 问答"
+                {...processPropsFor(t.runId)}
+                {...(t.status === 'failed' && i === turns.length - 1 && !asking
+                  ? { onRetry: () => { onRetry(i) } }
+                  : {})}
+                {...(t.plan ? { planNode: <PlanLine plan={t.plan} /> } : {})}
+                {...(t.retrieval ? { retrievalNode: <RetrMeta retrieval={t.retrieval} /> } : {})}
+                {...(t.citations ? { citations: t.citations } : {})}
+                {...(onOpenCite ? { onOpenCite: (n: number) => { onOpenCite(i, n) } } : {})}
+                {...(activeCite?.turn === i ? { activeCite: activeCite.n } : {})}
               />
-              <PlanLine plan={t.plan} />
-              <RetrMeta retrieval={t.retrieval} />
-              <div className={css.chatAnswer}>
-                <AnswerBody
-                  text={t.text}
-                  {...(t.citations ? { citations: t.citations } : {})}
-                  {...(onOpenCite ? { onOpenCite: (n) => { onOpenCite(i, n) } } : {})}
-                  {...(activeCite?.turn === i ? { activeCite: activeCite.n } : {})}
-                />
-              </div>
               {/* 回答脚注：依据 + 反馈 + 沉淀合成一行（旧实现三行 ≈ 90px，现 ≈ 24px）。 */}
               <div className={rcss.answerFoot}>
                 <BasisLine basis={t.basis} />
@@ -806,7 +813,21 @@ function AskThread({ turns, asking, pendingProps, onRetry, onOpenCite, activeCit
             </div>
           )
         ))}
-        {asking && <AskPending {...pendingProps} />}
+        {asking && (
+          <div className={css.chatAi}>
+            <AnswerRunView
+              agentLabel="AI 问答"
+              text={live.streamText}
+              reasoning={live.streamReasoning}
+              stages={live.streamStages}
+              runStartedAt={live.runStartedAt}
+              runId={live.runId}
+              {...processPropsFor(live.runId)}
+              streaming
+              onStop={live.onStop}
+            />
+          </div>
+        )}
     </div>
   )
 }

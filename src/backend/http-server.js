@@ -28,7 +28,10 @@
  * ## 传输与鉴权形态
  *
  * - 静态资源**不需要**鉴权（渲染层产物不是秘密，安装包里就有）；
- * - 除 `POST /api/auth` 外的所有 `/api/*` 都要求**有效会话 Cookie**；
+ * - 除 `POST /api/auth`、`GET /api/rpa-media/<token>` 与
+ *   `GET|POST /api/message-webhook/<token>` 外的所有 `/api/*` 都要求**有效会话 Cookie**。
+ *   后两者分别服务 RPA 图片直链与消息列表入站 Webhook：外部系统拿不到 Cookie，凭据只能放在
+ *   URL 里（HMAC 路径令牌，轮换 api_token 即失效）；
  * - 事件通道用 **SSE**（`EventSource`）而不是 WebSocket：7 类事件全是单向 server→client，
  *   `EventSource` 是浏览器内建、自带重连、零依赖（本仓无 express/ws，新增运行时依赖要
  *   逐个登记进打包白名单）。代价是它**不能自定义 header** ⇒ 凭据只能用 Cookie。
@@ -52,6 +55,8 @@ const { createCallQueue, HEAVY_PRIORITY } = require('./http-queue.js');
 const { downgradeHeavyByArgs, shouldBypassCallQueue } = require('./call-priority.js');
 const { NATIVE_CAPABILITIES, REMOTE_DENIED_CODE, isRemoteHeavy, isRemoteSafe } = require('./http-remote-policy.js');
 const { MIME_BY_EXT, resolveDecodedFile } = require('./media-protocol.js');
+const { RPA_MEDIA_PATH_PREFIX, createRpaMediaHandler } = require('./rpa-media.js');
+const { MESSAGE_WEBHOOK_PATH_PREFIX, createMessageWebhookHandler } = require('./message-webhook.js');
 const { resolveStaticFile, sendFile } = require('./http-static.js');
 
 /** 默认端口（配置键 `api_port` 的缺省值，与 `config/wechat-config.ts` 同口径）。 */
@@ -162,12 +167,16 @@ function readJsonSafe(file) {
  *
  * `api_token` 住在 **`secrets.json`** 而不是 `config.json` —— 它在后端的 `SECRET_FIELDS`
  * 里，保存时会被自动分流过去并收紧 ACL。
+ *
+ * 多返回一个 `mediaBaseUrl`（`config.json` 的 `rpa_media_base_url`）：RPA 图片直链要发给
+ * **外部**机器人，局域网地址对云端 RPA 不可达，所以允许用户填一个反代/公网入口；
+ * 它是 Host 例外名单里唯一一个非本机地址（见 `rpa-media.js` 文件头）。
  * @param {string} dataRoot - 数据根（`wechatBoot.info.root`）。
- * @returns `{ enabled, port, token }`。
+ * @returns `{ enabled, port, token, mediaBaseUrl }`。
  */
 function readRemoteAccessConfig(dataRoot) {
   if (typeof dataRoot !== 'string' || dataRoot === '') {
-    return { enabled: false, port: DEFAULT_PORT, token: '' };
+    return { enabled: false, port: DEFAULT_PORT, token: '', mediaBaseUrl: '' };
   }
   const cfg = readJsonSafe(path.join(dataRoot, 'config.json'));
   const secrets = readJsonSafe(path.join(dataRoot, 'secrets.json'));
@@ -176,6 +185,7 @@ function readRemoteAccessConfig(dataRoot) {
     enabled: cfg.api_enabled === true,
     port: Number.isFinite(port) && port > 0 && port < 65536 ? Math.floor(port) : DEFAULT_PORT,
     token: typeof secrets.api_token === 'string' ? secrets.api_token : '',
+    mediaBaseUrl: typeof cfg.rpa_media_base_url === 'string' ? cfg.rpa_media_base_url : '',
   };
 }
 
@@ -191,12 +201,18 @@ function readRemoteAccessConfig(dataRoot) {
  * 回环地址额外接受 `localhost`：开发态与本地测试会用 `http://localhost:<port>`，且该别名
  * 不改变「绑定在回环上」这一暴露面。局域网 IP 不接受任何主机名别名。
  *
+ * `extraHosts` 是**额外**放行的主机名（当前只有 RPA 图片直链用得上，见 `rpa-media.js`
+ * 的「Host 例外名单」）：只比对主机名、**不比端口** —— 反向代理侧的端口通常是 80/443，
+ * 与监听端口无关。名单里只有本机自己的网卡地址与用户显式配置的那一个域名，
+ * 攻击者可控的域名仍然过不了（DNS rebinding 的判据没变）。
+ *
  * @param {string | undefined} authority - 请求的 `Host` 头。
  * @param {string} expectedAddress - 当前监听地址。
  * @param {number} expectedPort - 当前监听端口。
+ * @param {string[]} [extraHosts] - 额外允许的主机名（小写，忽略端口）。
  * @returns {boolean} 允许该 Host 时为 true。
  */
-function isHostAllowed(authority, expectedAddress, expectedPort) {
+function isHostAllowed(authority, expectedAddress, expectedPort, extraHosts = []) {
   if (typeof authority !== 'string') return false;
   const raw = authority.trim();
   if (raw === '' || /[\s,;]/.test(raw)) return false;
@@ -225,6 +241,7 @@ function isHostAllowed(authority, expectedAddress, expectedPort) {
   if (host === '') return false;
   const expected = String(expectedAddress || '').toLowerCase();
   const actual = host.toLowerCase();
+  if (extraHosts.includes(actual)) return true;
   const isLoopback = expected === '127.0.0.1' || expected === '::1';
   if (actual !== expected && !(isLoopback && actual === 'localhost')) return false;
   if (portText === '') return true;
@@ -326,6 +343,22 @@ function createServerContext(deps) {
     pairings: deps.pairings || createPairingStore(),
     queue: deps.callQueue || createCallQueue(),
     limiter: deps.authLimiter || createAuthLimiter(),
+    /**
+     * RPA 图片签名直链（路由 + Host 例外名单）。放这儿而不是 `createRemoteAccessServer`：
+     * 路由的 Host 校验与 `/api/` 分支都要用它，走同一个对象才不会两处各建一份。
+     */
+    rpaMedia: createRpaMediaHandler({
+      getDecodedRoot: () => (typeof deps.getDecodedRoot === 'function' ? String(deps.getDecodedRoot() ?? '') : ''),
+      getMediaConfig: () => readRemoteAccessConfig(deps.getDataRoot()),
+    }),
+    /**
+     * 消息列表局域网 Webhook：同样在会话 Cookie 之前验 URL 令牌；落库与投递仍走
+     * `deps.gatedCall`，与桌面/手机共用同一道后端就绪与许可闸门。
+     */
+    messageWebhook: createMessageWebhookHandler({
+      getApiToken: () => readRemoteAccessConfig(deps.getDataRoot()).token,
+      ingest: (payload) => deps.gatedCall('ingestMessageListWebhook', [payload]),
+    }),
     /** @type {Set<http.ServerResponse>} SSE 客户端 */
     sseClients: new Set(),
     state: {
@@ -572,10 +605,15 @@ function createRequestRouter(deps, ctx, handlers) {
     return ctx.sessions.verify(cookies[SESSION_COOKIE]);
   }
 
-  /** 路由：先 API、后静态。 */
+  /** 路由：先校验 Host，再解析 URL，最后分 API / 静态。 */
   async function onRequest(req, res) {
-    // Host 校验必须排在所有路由之前。
-    if (!isHostAllowed(req.headers.host, ctx.state.address, ctx.state.port)) {
+    // Host 校验仍排在所有业务路由与 URL 解析之前。公网域名/其它本机网卡的例外只对
+    // RPA 图片直链开放；这里先用原始路径判断，避免为了决定例外名单而提前解析 URL。
+    const rawPath = typeof req.url === 'string' ? req.url.split('?', 1)[0] : '';
+    const signedPath = rawPath.startsWith(RPA_MEDIA_PATH_PREFIX)
+      || rawPath.startsWith(MESSAGE_WEBHOOK_PATH_PREFIX);
+    const extraHosts = signedPath ? ctx.rpaMedia.allowedHosts() : [];
+    if (!isHostAllowed(req.headers.host, ctx.state.address, ctx.state.port, extraHosts)) {
       ctx.warn('[remote-access] 拒绝不匹配 Host 头: %s（来自 %s）', req.headers.host || '(缺失)', req.socket.remoteAddress || '未知');
       sendJson(res, 421, { ok: false, error: { message: 'Host 头与监听地址不匹配', code: 'BAD_HOST' } });
       return;
@@ -602,6 +640,37 @@ function createRequestRouter(deps, ctx, handlers) {
       return;
     }
     if (urlPath.startsWith('/api/')) {
+      // RPA 图片签名直链：**凭据在 URL 里**（机器人拿不到会话 Cookie），所以它是
+      // `/api/auth` 之外唯一排在会话校验之前的接口（判据见 `rpa-media.js` 文件头）。
+      if (urlPath.startsWith(RPA_MEDIA_PATH_PREFIX)) {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: { message: '图片直链只接受 GET', code: 'METHOD_NOT_ALLOWED' } });
+          return;
+        }
+        await handlers.handleRpaMedia(res, urlPath.slice(RPA_MEDIA_PATH_PREFIX.length));
+        return;
+      }
+      // 消息列表入站 Webhook：凭据同样在 URL 里，因此排在会话校验之前。
+      if (urlPath.startsWith(MESSAGE_WEBHOOK_PATH_PREFIX)) {
+        const token = urlPath.slice(MESSAGE_WEBHOOK_PATH_PREFIX.length);
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          await handlers.handleMessageWebhookGet(res, token);
+          return;
+        }
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: { message: 'Webhook 只接受 GET / POST', code: 'METHOD_NOT_ALLOWED' } });
+          return;
+        }
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (e) {
+          sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
+          return;
+        }
+        await handlers.handleMessageWebhookPost(res, token, body);
+        return;
+      }
       // 除 /api/auth 外一律要求有效会话（401 而不是 403：不透露端点存在）。
       if (!authorized(req)) {
         sendJson(res, 401, { ok: false, error: { message: '未授权：请先用令牌换取会话', code: 'UNAUTHORIZED' } });
@@ -834,6 +903,9 @@ function createRemoteAccessServer(deps) {
     handleAuth: createAuthHandler(deps, ctx).handleAuth,
     handleCapabilities: createCapabilitiesHandler(deps, ctx).handleCapabilities,
     handleMedia: createMediaHandler(deps).handleMedia,
+    handleRpaMedia: ctx.rpaMedia.handleRpaMedia,
+    handleMessageWebhookGet: ctx.messageWebhook.handleGet,
+    handleMessageWebhookPost: ctx.messageWebhook.handlePost,
     handleNative: createNativeHandler(deps, ctx).handleNative,
     handleCall: createCallHandler(deps, ctx).handleCall,
     handleEvents: createEventsHandler(ctx).handleEvents,

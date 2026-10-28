@@ -10,6 +10,8 @@ import { copyTextToClipboard } from '../utils/misc.ts'
 import { fmtMsgClockSec } from '../utils/format.ts'
 import { Dialog } from '../ui/kit.tsx'
 import { messageSourceText, type MsgMenuItem } from './chats-support.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import csscards from './chats-cards.module.css'
 
 export type MessageToolMode = 'source' | 'info' | 'editText' | 'editSource'
@@ -90,7 +92,12 @@ function richField(m: WechatMessage, keys: readonly string[]): string {
 
 function infoRows(m: WechatMessage, session: WechatSession | null): Array<[string, string]> {
   const source = messageSourceText(m)
-  const sender = [m.senderName, m.sender].filter(Boolean).join(' · ')
+  const directEnterprise = session?.type === 'group' ? undefined : session?.enterpriseName
+  const senderLabel = withEnterprise(m.senderName || m.sender || '', m.senderEnterpriseName || directEnterprise)
+  const sender = [senderLabel, m.senderName ? m.sender : ''].filter(Boolean).join(' · ')
+  const sessionLabel = session
+    ? `${withEnterprise(session.displayName || session.username, session.enterpriseName)} · ${session.username}`
+    : '—'
   const resourceTitle = richField(m, ['title', 'fileName', 'name'])
   const resourceUrl = richField(m, ['url', 'link'])
   const resourceMd5 = richField(m, ['md5'])
@@ -100,7 +107,7 @@ function infoRows(m: WechatMessage, session: WechatSession | null): Array<[strin
     ['呈现类型', m.renderType ?? '—'],
     ['发送方向', m.isSender === 1 ? '我发出' : '对方发送'],
     ['发送者', sender || '—'],
-    ['所属会话', session ? `${session.displayName || session.username} · ${session.username}` : '—'],
+    ['所属会话', sessionLabel],
     ['发送时间', fmtMsgClockSec(m.createTime, '—')],
     ['本地 ID', String(m.localId)],
     ['服务端 ID', m.serverId || '—'],
@@ -129,7 +136,27 @@ function InfoDialog({ m, session }: { m: WechatMessage; session: WechatSession |
       {rows.map(([label, value]) => (
         <div className={csscards.messageInfoRow} key={label}>
           <span className={csscards.messageInfoLabel}>{label}</span>
-          <span className={csscards.messageInfoValue} title={value}>{value}</span>
+          <span className={csscards.messageInfoValue} title={value}>
+            {label === '所属会话' && session ? (
+              <IdentityName
+                className={csscards.messageInfoIdentity}
+                name={session.displayName || session.username}
+                username={session.username}
+                size={20}
+              >
+                {value}
+              </IdentityName>
+            ) : label === '发送者' && m.sender ? (
+              <IdentityName
+                className={csscards.messageInfoIdentity}
+                name={m.senderName || m.sender}
+                username={m.sender}
+                size={20}
+              >
+                {value}
+              </IdentityName>
+            ) : value}
+          </span>
         </div>
       ))}
     </div>

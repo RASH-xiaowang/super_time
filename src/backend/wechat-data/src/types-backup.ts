@@ -65,7 +65,7 @@ export interface DailySummaryResult {
   /** 24h message distribution. */
   hourly: number[]
   /** Top chatrooms by message count. */
-  topSessions: Array<{ username: string; count: number }>
+  topSessions: Array<{ username: string; name?: string; enterpriseName?: string; count: number }>
 }
 
 /** Period summary result (weekly/monthly/custom range): LLM summary + stats. */
@@ -78,7 +78,7 @@ export interface PeriodSummaryResult {
   total: number
   types: Record<string, number>
   hourly: number[]
-  topSessions: Array<{ username: string; count: number }>
+  topSessions: Array<{ username: string; name?: string; enterpriseName?: string; count: number }>
 }
 
 /**

@@ -15,6 +15,8 @@ export interface AnnualRowInput {
 export interface AnnualChatInput {
     username: string;
     name: string;
+    /** 企业名称（仅企业微信单聊；群聊/普通联系人缺省）。 */
+    enterpriseName?: string;
     /** 是否群聊（chatroom）。 */
     isGroup: boolean;
 }
@@ -28,10 +30,15 @@ export interface AnnualMoney {
     topAmount: number;
     /** 最大一笔对应的会话显示名（拿不到就空串）。 */
     topPeerName: string;
+    /** 最大一笔对应的会话 username（拿不到就空串）。 */
+    topPeerUsername: string;
+    /** 最大一笔对应会话的企业名称（仅企业微信单聊）。 */
+    topPeerEnterpriseName?: string;
     /** 往来金额 TOP5（按金额倒序，同额按 username 升序，保证确定性）。 */
     byPeer: Array<{
         username: string;
         name: string;
+        enterpriseName?: string;
         amount: number;
         count: number;
     }>;
@@ -42,6 +49,10 @@ export interface AnnualRevoke {
     count: number;
     /** 撤回最多的会话显示名（拿不到就空串）。 */
     topPeerName: string;
+    /** 撤回最多会话的 username（拿不到就空串）。 */
+    topPeerUsername: string;
+    /** 撤回最多会话的企业名称（仅企业微信单聊）。 */
+    topPeerEnterpriseName?: string;
     /** 24 个时段桶（0..23 点）的撤回条数。 */
     byHour: number[];
 }

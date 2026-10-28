@@ -34,6 +34,7 @@ export interface ChatsHeadActionsProps {
   aiEligible: boolean
   aiOpen: boolean
   setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setAiFull: React.Dispatch<React.SetStateAction<boolean>>
   /** 右栏「推荐回复」（只对单聊出现）。 */
   suggestOpen: boolean
   setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -45,6 +46,7 @@ export interface ChatsHeadActionsProps {
   /** 群聊信息（只对群聊）。 */
   groupInfoOpen: boolean
   openGroupInfo: () => void
+  setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
   /** 单聊「聊天信息」（只对单聊）。 */
   contactInfoOpen: boolean
   setContactInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -76,9 +78,9 @@ export interface ChatsHeadActionsProps {
  */
 export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Element {
   const {
-    curSession, aiEligible, aiOpen, setAiOpen, suggestOpen, setSuggestOpen,
+    curSession, aiEligible, aiOpen, setAiOpen, setAiFull, suggestOpen, setSuggestOpen,
     analysisPaneOpen, setAnalysisPaneOpen, openCalendar, groupInfoOpen, openGroupInfo,
-    contactInfoOpen, setContactInfoOpen, moreOpen, setMoreOpen, exporting, editing, edits,
+    setGroupInfoOpen, contactInfoOpen, setContactInfoOpen, moreOpen, setMoreOpen, exporting, editing, edits,
     setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList,
   } = props
   /** 「新建任务」弹窗（触发式任务：关键词 + 对象 + 照片档位）只在点开时渲染，不占头部布局。 */
@@ -117,7 +119,14 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                   data-active={aiOpen || undefined}
                   aria-expanded={aiOpen}
                   title="AI 问答：基于本会话聊天记录提问，回答附原文出处"
-                  onClick={() => { setAiOpen(v => !v); setSuggestOpen(false) }}
+                  onClick={() => {
+                    setAiOpen(v => !v)
+                    setAiFull(false)
+                    setSuggestOpen(false)
+                    setAnalysisPaneOpen(false)
+                    setContactInfoOpen(false)
+                    setGroupInfoOpen(false)
+                  }}
                 >
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
@@ -142,7 +151,7 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                     {/*
                       右栏两块的展开/折叠（2026-09-26 按用户要求加在这排）。
                       2026-10-19 微信化后它们从头部按钮排移进「更多」菜单：
-                      两块面板改成覆盖式抽屉（不再并排占宽），入口仍在、头部只剩 2 个动作。
+                      两块面板改成右侧停靠栏（与消息流并排），入口仍在、头部只剩 2 个动作。
                       推荐回复只对单聊出现（「回一句」在群里不成立）。
                     */}
                     {curSession.type === 'private' && (
@@ -154,7 +163,17 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                         aria-expanded={suggestOpen}
                         title="推荐回复：显示 / 收起本会话的候选回复"
                         aria-label="推荐回复"
-                        onClick={() => { setMoreOpen(false); setSuggestOpen(v => !v) }}
+                        onClick={() => {
+                          setMoreOpen(false)
+                          if (!suggestOpen) {
+                            setAiOpen(false)
+                            setAiFull(false)
+                            setAnalysisPaneOpen(false)
+                            setContactInfoOpen(false)
+                            setGroupInfoOpen(false)
+                          }
+                          setSuggestOpen(v => !v)
+                        }}
                       >
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4 19.5l1.4-4.2A7.5 7.5 0 1 1 20 11.5Z" />
@@ -171,7 +190,13 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                       aria-expanded={analysisPaneOpen}
                       title="分析：显示 / 收起消息分析面板（在消息流里点选一条对方消息看结论）"
                       aria-label="分析"
-                      onClick={() => { setMoreOpen(false); setAnalysisPaneOpen(v => !v) }}
+                      onClick={() => {
+                        setMoreOpen(false)
+                        if (!analysisPaneOpen) setAiOpen(false)
+                        if (!analysisPaneOpen) setAiFull(false)
+                        if (!analysisPaneOpen) { setContactInfoOpen(false); setGroupInfoOpen(false) }
+                        setAnalysisPaneOpen(v => !v)
+                      }}
                     >
                       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <path d="M4 20h16" />
@@ -183,12 +208,12 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                       <IconCalendar />消息日历
                     </button>
                     {curSession.type === 'group' && (
-                      <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={() => { setMoreOpen(false); openGroupInfo() }}>
+                      <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={() => { setMoreOpen(false); setAiOpen(false); setAiFull(false); setSuggestOpen(false); setAnalysisPaneOpen(false); setContactInfoOpen(false); openGroupInfo() }}>
                         <IconUserOutline16 size={14} />群聊信息
                       </button>
                     )}
                     {curSession.type !== 'group' && (
-                      <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} data-active={contactInfoOpen || undefined} title="聊天信息" onClick={() => { setMoreOpen(false); setContactInfoOpen(true) }}>
+                      <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} data-active={contactInfoOpen || undefined} title="聊天信息" onClick={() => { setMoreOpen(false); setAiOpen(false); setAiFull(false); setSuggestOpen(false); setAnalysisPaneOpen(false); setGroupInfoOpen(false); setContactInfoOpen(true) }}>
                         <IconUserOutline16 size={14} />聊天信息
                       </button>
                     )}

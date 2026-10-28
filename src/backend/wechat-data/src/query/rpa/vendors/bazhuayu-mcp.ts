@@ -23,6 +23,7 @@
  * MCP 接入指南（https://rpa.bazhuayu.com/mcp-guide ）。
  */
 import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
 import { resolveMapped } from '../template.ts'
 import type {
   RpaHttpRequest,
@@ -44,11 +45,6 @@ const API_KEY_FIELD: RpaField = {
   secret: true,
   help: '八爪鱼客户端「开放能力（AI）→ API Key」生成；只存本机，投递时进 X-API-Key 请求头。',
 }
-
-const EXTRA_PARAM_SOURCES = [
-  'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'fixed', 'template',
-] as const
 
 const descriptor: RpaVendorDescriptor = {
   id: 'bazhuayu-mcp',
@@ -96,7 +92,7 @@ const descriptor: RpaVendorDescriptor = {
       type: 'paramList',
       required: false,
       maxItems: 20,
-      paramSources: [...EXTRA_PARAM_SOURCES],
+      paramSources: [...RPA_PARAM_SOURCES],
       help: '传给 automation_call.parameters 的键值对（默认 {}）。参数名必须与八爪鱼应用入参一致；'
         + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
@@ -147,7 +143,7 @@ const descriptor: RpaVendorDescriptor = {
     '接口没有幂等键：网络超时后不会自动重发（避免同一个应用被启动两次），失败请在触发记录里人工重投',
     'MCP 返回 runId 只代表「已受理运行」：执行进度/结果需到八爪鱼客户端或 automation_run_status 查看',
     '应用 ID 必须是 MCP 侧的 automation id（通常形如 flow_registration_<FlowId>），填裸 FlowId 会提示找不到应用',
-    'MCP 方式不发图片（任务里的 photoLimit 对它不生效）',
+    '图片默认不发：只有附加参数显式选择 imagesJson / imageCount / firstImageUrl 时，才按所需传签名直链或数量；机器人取图要求本机已打开局域网访问',
     'MCP Server 的响应是 SSE、工具名/参数可能随官方升级变化：本适配器按 2026-10-21 的 tools/list 契约实现',
     '实验性：虽已按真实 API Key 实测 tools/list 与 automation_call，但官方升级工具参数/响应格式时仍需联调核对',
   ],
@@ -156,7 +152,8 @@ const descriptor: RpaVendorDescriptor = {
     '  automation_call 入参 { id, parameters, botId? }；成功返回 runId，失败在 result.isError 的 Markdown 里给 Error Code/Message。',
     '与「八爪鱼 RPA」的区别：那条是企业版开放 API（/api/v1/bots/scheduling/start），本条目是 MCP 工具通道；',
     '  个人版账号在开放 API 调度上会 FeatureIsDisabled，改用 MCP 工具（并确保机器人有执行权益）可绕开该限制。',
-    '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/固定值/自定义模板。',
+    '附加参数的值来源：会话名/触发文本/触发对象/任务名/关键词/触发时间/会话类型/任务 id/记录 id/'
+      + '触发图片 JSON 链接清单/图片数量/首张图片链接/固定值/自定义模板。',
   ],
 }
 

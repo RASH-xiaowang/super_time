@@ -45,6 +45,16 @@ export declare function parseConfigJson(raw: unknown): RpaTriggerConfig;
  * @returns 白名单化后的配置对象。
  */
 export declare function normalizeConfigInput(raw: unknown): RpaTriggerConfig;
+/**
+ * 旧版 `map` 配置 → 附加参数。
+ *
+ * 只在 `extrasField` **完全不存在**时迁移；如果新字段已经是空数组，表示用户已显式清空，
+ * 不能再用旧键把它恢复出来。转换后删除旧键，保存/派发都只看到新形态。
+ * @param descriptor - 厂商描述符。
+ * @param config - 原始配置。
+ * @returns 迁移后的新配置（不修改入参）。
+ */
+export declare function migrateLegacyMapConfig(descriptor: RpaVendorDescriptor, config: RpaTriggerConfig): RpaTriggerConfig;
 /** 解析库里的 `trigger_secret` JSON（只保留非空字符串值；原文永不返回调用方快照）。 */
 export declare function parseSecretJson(raw: unknown): Record<string, string>;
 /** 凭据原文 → 「是否已配置」快照（值非空即 true；这是唯一能出库的凭据信息）。 */

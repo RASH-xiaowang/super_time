@@ -247,6 +247,7 @@
   color: var(--nm-cyan);
 }
 .evidenceName {
+  flex: 1 1 auto;
   min-width: 0;
   color: var(--nm-text-2);
   font-weight: 560;

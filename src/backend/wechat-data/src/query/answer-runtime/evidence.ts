@@ -162,8 +162,15 @@ function mergeCitation(
 ): CitationShape | undefined {
   if (base === undefined) return incoming
   if (incoming === undefined) return base
+  const enterpriseName = base.enterpriseName || incoming.enterpriseName
+  const senderEnterpriseName = base.senderEnterpriseName || incoming.senderEnterpriseName
   if (base.kb !== undefined && incoming.kb !== undefined) {
-    return { ...base, kb: mergedKbCitation(base.kb, incoming.kb) }
+    return {
+      ...base,
+      ...(enterpriseName === undefined ? {} : { enterpriseName }),
+      ...(senderEnterpriseName === undefined ? {} : { senderEnterpriseName }),
+      kb: mergedKbCitation(base.kb, incoming.kb),
+    }
   }
   return {
     ...base,
@@ -174,9 +181,11 @@ function mergeCitation(
       : base.snippet,
     username: base.username || incoming.username,
     local_id: base.local_id !== 0 ? base.local_id : incoming.local_id,
+    ...(enterpriseName === undefined ? {} : { enterpriseName }),
     ...(base.sender === undefined && incoming.sender !== undefined
       ? { sender: incoming.sender }
       : {}),
+    ...(senderEnterpriseName === undefined ? {} : { senderEnterpriseName }),
   }
 }
 
@@ -196,6 +205,8 @@ function mergeItem(base: EvidenceItem, incoming: EvidenceItem): EvidenceItem {
     : base.snippet
   const time = base.time || incoming.time
   const sender = base.sender || incoming.sender
+  const enterpriseName = base.enterpriseName || incoming.enterpriseName
+  const senderEnterpriseName = base.senderEnterpriseName || incoming.senderEnterpriseName
   const name = base.name || incoming.name
   const key = base.key || incoming.key
   const score = base.score === undefined
@@ -212,8 +223,10 @@ function mergeItem(base: EvidenceItem, incoming: EvidenceItem): EvidenceItem {
     tool,
     tools,
     name,
+    ...(enterpriseName === undefined ? {} : { enterpriseName }),
     time,
     ...(sender === undefined ? {} : { sender }),
+    ...(senderEnterpriseName === undefined ? {} : { senderEnterpriseName }),
     snippet,
     ...(score === undefined ? {} : { score }),
     key,

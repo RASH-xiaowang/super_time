@@ -71,14 +71,20 @@ export interface MomentVideo {
 export interface MomentLike {
   username: string
   nickname: string
+  /** 点赞人的企业名称（仅企业微信联系人）。 */
+  enterpriseName?: string
 }
 
 /** One comment entry. */
 export interface MomentComment {
   username: string
   nickname: string
+  /** 评论人的企业名称（仅企业微信联系人）。 */
+  enterpriseName?: string
   to_username: string
   to_nickname: string
+  /** 被回复人的企业名称（仅企业微信联系人）。 */
+  toEnterpriseName?: string
   content: string
   ts: number
   /**
@@ -107,6 +113,8 @@ export interface MomentEntry {
   username: string
   /** **显示名**（备注 → 昵称 → ID 逐级回退），不是发帖人的微信 ID —— 别拿它去 join 会话（P3-6 实测澄清）。 */
   author: string
+  /** 发帖人的企业名称（仅企业微信联系人）。 */
+  enterpriseName?: string
   text: string
   ts: number
   time: string
@@ -248,6 +256,44 @@ function mediaBlocks(xml: string): string[] {
 function isVideoUrl(u: string): boolean {
   const l = u.toLowerCase()
   return l.includes('snsvideodownload') || l.includes('video.qq.com') || l.includes('.mp4')
+}
+
+function enterpriseNameOf(enterpriseNames: ReadonlyMap<string, string>, username: string): string | undefined {
+  const name = enterpriseNames.get(username)?.trim() ?? ''
+  return name !== '' ? name : undefined
+}
+
+/**
+ * 用当前 contact.db 的企业映射刷新动态里的所有企业微信身份。
+ *
+ * 归档 payload 也会保存企业名，但联系人企业归属以后可能补全/变更；读取时以当前
+ * contact.db 为准，避免旧归档一直显示过期企业名。
+ */
+function applyEnterpriseNames(entry: MomentEntry, enterpriseNames: ReadonlyMap<string, string>): MomentEntry {
+  const authorEnterpriseName = enterpriseNameOf(enterpriseNames, entry.username)
+  if (authorEnterpriseName !== undefined) entry.enterpriseName = authorEnterpriseName
+  else delete entry.enterpriseName
+  entry.likes = entry.likes.map((like) => {
+    const enterpriseName = enterpriseNameOf(enterpriseNames, like.username)
+    return enterpriseName !== undefined ? { ...like, enterpriseName } : { username: like.username, nickname: like.nickname }
+  })
+  entry.comments = entry.comments.map((comment) => {
+    const enterpriseName = enterpriseNameOf(enterpriseNames, comment.username)
+    const toEnterpriseName = enterpriseNameOf(enterpriseNames, comment.to_username)
+    const next: MomentComment = {
+      username: comment.username,
+      nickname: comment.nickname,
+      to_username: comment.to_username,
+      to_nickname: comment.to_nickname,
+      content: comment.content,
+      ts: comment.ts,
+    }
+    if (comment.image !== undefined) next.image = comment.image
+    if (enterpriseName !== undefined) next.enterpriseName = enterpriseName
+    if (toEnterpriseName !== undefined) next.toEnterpriseName = toEnterpriseName
+    return next
+  })
+  return entry
 }
 
 /** Parse one moments content XML (mirror parse_sns_xml). */
@@ -534,7 +580,14 @@ function mergeArchivedEntry(oldPayload: string, next: MomentEntry): MomentEntry 
 }
 
 /** 把一行 XML 解析成完整的 `MomentEntry`（线上/归档共用同一份解析）。 */
-function buildMomentEntry(tid: string, username: string, xml: string, names: Map<string, string>, self: string): MomentEntry {
+function buildMomentEntry(
+  tid: string,
+  username: string,
+  xml: string,
+  names: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+  self: string,
+): MomentEntry {
   const parsed = parseSnsXml(xml)
   const social = parseSnsLikesComments(xml)
   const author = names.get(username) || parsed.nickname || username || '未知'
@@ -563,7 +616,7 @@ function buildMomentEntry(tid: string, username: string, xml: string, names: Map
   if (parsed.country) entry.country = parsed.country
   // 只有真的带坐标才输出（本机 490 条），且已按 moments XML 的**属性反置**修正过
   if (parsed.lat || parsed.lng) { entry.lat = parsed.lat; entry.lng = parsed.lng }
-  return entry
+  return applyEnterpriseNames(entry, enterpriseNames)
 }
 
 /**
@@ -581,14 +634,15 @@ export function ensureMomentsArchiveFresh(decryptedDir: string, force = false): 
   if (!force && now - last < ARCHIVE_SYNC_GAP_MS) return 0
   const live = readLiveMomentRows(decryptedDir)
   if (live === null) return 0
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
   const hashes = readArchivedMomentHashes(decryptedDir)
   const changedRows: Array<{ tid: string; username: string; content: string; contentHash: string; entry: MomentEntry }> = []
   for (const row of live) {
     if (row.tid === '' || row.content === '') continue
     const contentHash = createHash('sha1').update(row.content).digest('hex')
     if (hashes !== null && hashes.get(row.tid) === contentHash) continue
-    const entry = buildMomentEntry(row.tid, row.username, row.content, names, '')
+    const entry = buildMomentEntry(row.tid, row.username, row.content, names, meta.enterpriseNames, '')
     changedRows.push({ tid: row.tid, username: row.username, content: row.content, contentHash, entry })
   }
   const oldPayloads = readArchivedPayloads(decryptedDir, changedRows.map((r) => r.tid))
@@ -638,7 +692,8 @@ export function queryMoments(
   } catch (e) {
     console.warn('[moments-archive] 同步失败：' + (e instanceof Error ? e.message : String(e)))
   }
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
   const archived = readArchivedMoments(decryptedDir, { offset: off, limit: cap, ...(authorUsername !== undefined ? { authorUsername } : {}) })
   // 归档写失败时（库只读/磁盘满）不能拿空列表糊弄：回退到线上表。
   if (archived !== null && (archived.total > 0 || liveRows.length === 0)) {
@@ -649,6 +704,7 @@ export function queryMoments(
         entry.tid = row.tid
         entry.username = row.username
         entry.author = names.get(row.username) || row.author || entry.author || '未知'
+        applyEnterpriseNames(entry, meta.enterpriseNames)
         entry.is_self = row.username === self
         // 相对时间必须按「现在」重算：归档里存的是归档时刻的「3 天前」，一个月后就不对了。
         entry.time = fmtRelativeDaySec(row.ts)
@@ -662,7 +718,7 @@ export function queryMoments(
   // 归档库不存在/不可用 ⇒ 保留原来的线上分页路径，功能不因归档故障而消失。
   const filtered = authorUsername === undefined ? liveRows : liveRows.filter((r) => r.username === authorUsername)
   const page = filtered.slice(off, off + cap)
-  const moments = page.map((row) => buildMomentEntry(row.tid, row.username, row.content, names, self))
+  const moments = page.map((row) => buildMomentEntry(row.tid, row.username, row.content, names, meta.enterpriseNames, self))
   return { moments, total: filtered.length }
 }
 
@@ -670,14 +726,24 @@ export function queryMoments(
  * Author-activity counts across the FULL moments archive (deleted posts included),
  * mapped to display names, ranked by count descending.
  * @param decryptedDir - decrypted data root.
- * @returns author name + moment count, highest first.
+ * @returns author identity + moment count, highest first.
  */
-export function queryMomentsAuthors(decryptedDir: string): Array<{ name: string; count: number }> {
+export function queryMomentsAuthors(decryptedDir: string): Array<{ username: string; name: string; enterpriseName?: string; count: number }> {
   try { ensureMomentsArchiveFresh(decryptedDir) } catch { /* 归档故障时回退线上表 */ }
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
+  const authorRow = (username: string, storedName: string, count: number): { username: string; name: string; enterpriseName?: string; count: number } => {
+    const enterpriseName = enterpriseNameOf(meta.enterpriseNames, username)
+    return {
+      username,
+      name: names.get(username) || storedName || username || '未知',
+      ...(enterpriseName !== undefined ? { enterpriseName } : {}),
+      count,
+    }
+  }
   const archived = readArchivedAuthors(decryptedDir)
   if (archived !== null && archived.length > 0) {
-    return archived.map(r => ({ name: names.get(r.username) || r.author || r.username || '未知', count: r.count }))
+    return archived.map(r => authorRow(r.username, r.author, r.count))
   }
   const dbPath = snsDb(decryptedDir)
   if (dbPath === null) return []
@@ -686,7 +752,7 @@ export function queryMomentsAuthors(decryptedDir: string): Array<{ name: string;
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     const rows = db.prepare(`SELECT ${shape.uname} AS u, COUNT(*) AS n FROM SnsTimeLine GROUP BY ${shape.uname} ORDER BY n DESC`).all() as Array<{ u?: unknown; n?: number }>
-    return rows.map(r => ({ name: names.get(cellString(r.u)) || cellString(r.u) || '未知', count: r.n ?? 0 }))
+    return rows.map(r => authorRow(cellString(r.u), cellString(r.u), r.n ?? 0))
   } finally {
     db.close()
   }

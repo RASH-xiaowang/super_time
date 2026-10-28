@@ -11,6 +11,8 @@ import { describeRange, todayISO } from '../utils/date-range.ts'
 import { useTransientNotice } from './hooks.tsx'
 import css from './period-summary.module.css'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /**
  * Render the period summary panel.
@@ -136,7 +138,9 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
             <span className={`${kitCss.textMeta} ${css.stat}`}><b>{result.messages}</b> 文本行</span>
             {typesText && <span className={css.typesText} title={typesText}>{typesText}</span>}
             {result.topSessions.slice(0, 5).map(s => (
-              <span key={s.username} className={css.topChip}>{s.username} · {s.count}</span>
+              <IdentityName key={s.username} className={css.topChip} name={s.name || s.username} username={s.username} size={18}>
+                {withEnterprise(s.name || s.username, s.enterpriseName)} · {s.count}
+              </IdentityName>
             ))}
           </div>
           <div className={css.summary}>{result.summary}</div>

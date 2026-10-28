@@ -8,6 +8,7 @@ export interface StorageCategory {
 export interface StorageRank {
     username: string;
     name: string;
+    enterpriseName?: string;
     count: number;
     size: number;
 }
@@ -16,6 +17,7 @@ export interface LargeFile {
     name: string;
     username: string;
     sessionName: string;
+    sessionEnterpriseName?: string;
     create_time: number;
     size: number;
 }

@@ -31,8 +31,8 @@ export const MUTATIONS_BATCH3H = [
     id: 'M485-clawbot-history-auto-label-lost',
     why: '来源标签表丢掉 `auto` ⇒ 自动回复的记录在列表里只显示一个裸的 `auto`（用户不知道那是什么），页签上也筛不出这一类。判据：ask-history.wiring.spec.ts 的「来源页签与中文标签都有 auto」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/AskHistoryDialog.tsx',
-    from: "const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: '会话内问答', auto: '自动回复' }",
-    to: "const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: '会话内问答' }",
+    from: "const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: 'AI 问答', auto: 'ClawBot 自动回复' }",
+    to: "const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: 'AI 问答' }",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/ask-history.wiring.spec.ts',
   },
   {

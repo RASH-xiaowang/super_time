@@ -49,8 +49,25 @@ import kitCss from '../ui/kit.module.css'
 import css from './chats.module.css'
 import csscards from './chats-cards.module.css'
 import { avatarColors, fmtBytes, fmtDateTimeSec, fmtMsgClockSec, fmtSessionTimeSec } from '../utils/format.ts'
+import type { AnalysisTargetState } from './analysis-selection.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 
+/** Match visible name, enterprise, and summary in the session list. */
+function sessionMatchesSearch(session: WechatSession, query: string): boolean {
+  return (session.displayName || session.username).toLowerCase().includes(query)
+    || (session.enterpriseName || '').toLowerCase().includes(query)
+    || (session.summary || '').toLowerCase().includes(query)
+}
 
+/** Compact WeCom marker shared by all session rows. */
+function EnterpriseChatBadge({ session }: { session: WechatSession }): React.JSX.Element | null {
+  if (!isEnterpriseChat(session.username)) return null
+  return (
+    <span className={csscards.entBadge} title={session.enterpriseName ? `企业微信 · ${session.enterpriseName}` : '企业微信'}>
+      企微
+    </span>
+  )
+}
 
 
 
@@ -192,7 +209,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
    */
   const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)
   /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
-  const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
+  const [analysisTarget, setAnalysisTarget] = useState<AnalysisTargetState | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
@@ -366,9 +383,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     const base = view === 'chats' ? sessions : sessions.filter(s => sessionInView(s, view))
     const q = search.trim().toLowerCase()
     if (!q) return base
-    return base.filter(s =>
-      (s.displayName || s.username).toLowerCase().includes(q)
-      || (s.summary || '').toLowerCase().includes(q))
+    return base.filter(s => sessionMatchesSearch(s, q))
   }, [sessions, search, view])
 
   const { pinnedList, normalList } = useMemo(() => {
@@ -491,7 +506,7 @@ const {
       data-session-row={s.username}
       className={css.sessionItem}
       data-active={!batchMode && curSession?.username === s.username || undefined}
-      title={`${s.displayName || s.username}\n${s.username}`}
+      title={`${withEnterprise(s.displayName || s.username, s.enterpriseName)}\n${s.username}`}
       onClick={() => { if (batchMode) toggleSelect(s.username); else void openSession(s) }}
     >
       {batchMode && (
@@ -505,9 +520,9 @@ const {
       <div className={css.sessionInfo}>
         <div className={css.sessionTop}>
           <span className={css.sessionNameWrap}>
-            <span className={css.sessionName}>{s.displayName || s.username}</span>
+            <span className={css.sessionName}>{withEnterprise(s.displayName || s.username, s.enterpriseName)}</span>
             {s.hidden && <span className={css.hiddenBadge} title="该会话在微信中被隐藏">已隐藏</span>}
-            {isEnterpriseChat(s.username) && <span className={csscards.entBadge} title="企业微信">企微</span>}
+            <EnterpriseChatBadge session={s} />
           </span>
           <span className={css.sessionTimeGroup}>
             <span className={css.sessionTime}>{fmtSessionTimeSec(s.lastTimestamp)}</span>

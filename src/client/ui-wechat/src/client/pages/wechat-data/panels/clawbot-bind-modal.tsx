@@ -137,7 +137,7 @@ export function ClawbotBindModal({ qr, slot, onConfirmed, onClose }: {
 
   return (
     <Dialog open onClose={onClose} title="扫码绑定微信" className={css.qrDialog}>
-      <p className={css.qrSub}>请用手机微信扫描二维码并确认；绑定后即可在微信里指挥 Super Time。</p>
+      <p className={css.qrSub}>请用手机微信扫描二维码并确认；绑定后即可在微信里与 ClawBot 收发消息。</p>
 
       {state === 'confirmed'
         ? <div className={css.qrDone} role="status">✓ 已绑定</div>

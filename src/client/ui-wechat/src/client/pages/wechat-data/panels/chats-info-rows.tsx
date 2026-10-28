@@ -28,8 +28,8 @@ import cssinfo from './chats-info.module.css'
  * @returns 行元素。
  */
 export function InfoRow({ label, value, first = false, chevron = false, onChevron }: {
-  label: string
-  value?: string
+  label: React.ReactNode
+  value?: React.ReactNode
   first?: boolean
   chevron?: boolean
   onChevron?: () => void
@@ -43,7 +43,7 @@ export function InfoRow({ label, value, first = false, chevron = false, onChevro
         {chevron && (
           interactive
             ? (
-              <button type="button" className={cssinfo.infoChevronBtn} onClick={onChevron} aria-label={`展开${label}`}>
+              <button type="button" className={cssinfo.infoChevronBtn} onClick={onChevron} aria-label={`展开${typeof label === 'string' ? label : '详情'}`}>
                 <span className={cssinfo.infoChevron} aria-hidden="true">›</span>
               </button>
               )

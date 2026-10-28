@@ -24,9 +24,10 @@ function pstring(field: number, value: string): Buffer {
   return Buffer.concat([tag, len, raw])
 }
 
-/** Build a contact.extra_buffer with country(5)/province(6)/city(7). */
-function extra(country?: string, province?: string, city?: string): Buffer {
+/** Build a contact.extra_buffer with wording(2)/country(5)/province(6)/city(7). */
+function extra(country?: string, province?: string, city?: string, wordingId?: string): Buffer {
   const parts: Buffer[] = []
+  if (wordingId) parts.push(pstring(2, wordingId))
   if (country) parts.push(pstring(5, country))
   if (province) parts.push(pstring(6, province))
   if (city) parts.push(pstring(7, city))
@@ -44,6 +45,8 @@ function makeContactDb(): string {
     id INTEGER PRIMARY KEY, username TEXT, local_type INTEGER, alias TEXT, delete_flag INTEGER,
     remark TEXT, nick_name TEXT, big_head_url TEXT, small_head_url TEXT, extra_buffer BLOB
   )`)
+  db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+  db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', '示例企业')
   const ins = db.prepare('INSERT INTO contact (id, username, local_type, remark, nick_name, extra_buffer) VALUES (?, ?, ?, ?, ?, ?)')
   ins.run(1, 'u_gx_nn_a', 1, '南宁甲', '', extra('CN', 'Guangxi', 'Nanning'))
   ins.run(2, 'u_gx_nn_b', 1, '南宁乙', '', extra('CN', 'Guangxi', 'Nanning'))
@@ -55,8 +58,8 @@ function makeContactDb(): string {
   ins.run(7, 'gh_abc', 1, '公众号', '', extra('CN', 'Guangdong', 'Guangzhou'))
   // admin/system excluded
   ins.run(8, 'weixin', 1, '系统', '', extra('CN'))
-  // enterprise / kefu accounts excluded
-  ins.run(9, 'u_ent@openim', 1, '企业', '', extra('CN', 'Guangdong', 'Guangzhou'))
+  // Enterprise friend is included; kefu remains excluded.
+  ins.run(9, 'u_ent@openim', 1, '企业', '', extra('CN', 'Guangdong', 'Guangzhou', 'wording-ent'))
   ins.run(10, 'u_kefu@kefu.openim', 1, '客服', '', extra('CN', 'Guangdong', 'Guangzhou'))
   db.close()
   return root
@@ -66,18 +69,28 @@ describe('queryRegionMap', () => {
   it('builds a world → country → province → city tree with friend lists', () => {
     const root = makeContactDb()
     const env = queryRegionMap(root)
-    expect(env.total).toBe(6)
+    expect(env.total).toBe(7)
     expect(env.unknown).toBe(0)
     expect(env.world.name).toBe('世界')
     const cn = env.world.children.find(c => c.name === '中国')
     expect(cn).toBeDefined()
-    // CN has 5 friends (4 with province + 1 country-only).
-    expect(cn?.count).toBe(5)
+    // CN has 6 friends (5 with province + 1 country-only), including the WeCom friend.
+    expect(cn?.count).toBe(6)
     const gx = cn?.children.find(n => n.name === '广西')
     expect(gx?.count).toBe(3)
     const nn = gx?.children.find(n => n.name === '南宁')
     expect(nn?.count).toBe(2)
     expect(nn?.friends.map(f => f.username)).toEqual(['u_gx_nn_a', 'u_gx_nn_b'])
+    const gd = cn?.children.find(n => n.name === '广东')
+    const gz = gd?.children.find(n => n.name === '广州')
+    expect(gz?.friends.find(f => f.username === 'u_ent@openim')).toMatchObject({
+      displayName: '企业',
+      enterpriseName: '示例企业',
+    })
+    expect(env.world.children.flatMap(country => country.children)
+      .flatMap(province => province.children)
+      .flatMap(city => city.friends)
+      .some(friend => friend.username === 'u_kefu@kefu.openim')).toBe(false)
     const us = env.world.children.find(c => c.name === '美国')
     expect(us?.count).toBe(1)
     // Country-only contact lands under province/city fallback buckets.

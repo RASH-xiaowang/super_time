@@ -25,7 +25,7 @@ const queueMod = require(join(ROOT, 'src', 'backend', 'http-queue.js')) as {
   REMOTE_QUEUE_MAX: number
   HEAVY_QUEUE_MAX: number
   createCallQueue: (opts?: { concurrency?: number, maxQueued?: number, maxQueuedHeavy?: number, waitTimeoutMs?: number, now?: () => number }) => {
-    run: (task: () => unknown, meta?: { channel?: string, method?: string, priority?: number }) => Promise<unknown>
+    run: (task: () => unknown, meta?: { channel?: string, method?: string, priority?: number, args?: unknown[] }) => Promise<unknown>
     drain: (reason?: string, channel?: string) => number
     stats: () => {
       active: number
@@ -266,6 +266,25 @@ describe('并发闸：上限、计数归还、排队与拒绝', () => {
     gate.resolve()
     await running
     expect(await Promise.all(queuedHeavy)).toEqual(['heavy-1', 'heavy-2'])
+  })
+
+  it('fileOnly 批量取图不占重活预算，5 个攒批窗口不会触发 1+4 上限', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1, maxQueuedHeavy: 0 })
+    const gate = deferred()
+    const interactive = q.run(() => gate.promise, { method: 'getSessions', args: [] })
+    const batches = Array.from({ length: 5 }, (_, index) => (
+      q.run(async () => index, {
+        method: 'getImageDataUrlsBatch',
+        args: [{ items: [{ username: 'wxid_a', localId: index }], fileOnly: true }],
+      })
+    ))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(q.stats().queuedHeavy).toBe(0)
+    expect(q.stats().queuedCalls).toHaveLength(5)
+    gate.resolve()
+    await interactive
+    expect(await Promise.all(batches)).toEqual([0, 1, 2, 3, 4])
   })
 
   it('同优先级仍保持 FIFO（优先级只重排不同档，不改写同档先后）', async () => {

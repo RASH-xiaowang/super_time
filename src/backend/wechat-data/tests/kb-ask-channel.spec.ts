@@ -582,7 +582,8 @@ describe('端到端：自动回复的接地协议（2026-10-20）', () => {
     expect(selectionCalls()).toBe(0)
     expect(prompts).toHaveLength(0)
     expect(contents).toHaveLength(0)
-    expect(r.answer).toContain('未选择知识库')
+    expect(r.answer).toBe('这次我这边没弄好，稍后再确认一下再回你。')
+    expect(r.answer).not.toContain('知识库')
     expect(r.status).toBe('blocked')
     expect(r.insufficient).toBe(false)
   })
@@ -609,7 +610,7 @@ describe('端到端：自动回复的接地协议（2026-10-20）', () => {
 
   it('无出处的金额触发一次自然口吻重写，重写轮仍携带原图片', async () => {
     const first = '验收款是 9000 元。'
-    const fixed = '验收款我这边没法确认，我先问下本人。'
+    const fixed = '验收款我这边没法确认，我先核实一下再回你。'
     const { gw, prompts, contents } = await gatewayWith(contractText(), [first, fixed])
     const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
     const r = await ask({
@@ -643,7 +644,7 @@ describe('端到端：自动回复的接地协议（2026-10-20）', () => {
       source: 'auto',
     })
     expect(r.withheld).toBe(true)
-    expect(r.answer).toBe('这个数字我这边没法确认，我先问下本人。')
+    expect(r.answer).toBe('这个数字我这边没法确认，我先核实一下再回你。')
     expect(r.answer).not.toContain('审计')
     expect(r.answer).not.toContain('证据')
     expect(r.answer).not.toContain('9000')

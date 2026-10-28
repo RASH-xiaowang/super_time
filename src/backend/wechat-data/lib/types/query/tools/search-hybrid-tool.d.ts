@@ -43,11 +43,13 @@ export interface HybridSearchRequest {
 /** 与 `AskCitation` 同形的引用（刻意结构化声明，避免工具层依赖 remotes）。 */
 export interface HybridSearchCitation {
     name: string;
+    enterpriseName?: string;
     time: string;
     snippet: string;
     username: string;
     local_id: number;
     sender?: string;
+    senderEnterpriseName?: string;
     source?: 'msg' | 'kb' | 'agg' | 'resource';
     kb?: {
         kbId: number;

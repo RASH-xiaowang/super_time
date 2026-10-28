@@ -130,11 +130,18 @@ async function computeSessions(
     for (const r of rows) {
       const username = bytesToString(r[key('username', '')])
       const displayName = contactNames.get(username) ?? sessionTitles.get(username) ?? username
+      const enterpriseName = meta.enterpriseNames.get(username)?.trim()
       // summary 必须在过滤前算出来：客户端的会话搜索也匹配最后一条消息，
       // 而这里只比 username / displayName ⇒ 那些会话在到达前端之前就被丢掉了，
       // 前端那个 `summary` 分支永远不会命中（实测「2026」后端返回 0、前端本可命中 11）。
       const summary = bytesToString(r[key('summary', 'NULL')])
-      if (q && !username.toLowerCase().includes(q) && !displayName.toLowerCase().includes(q) && !summary.toLowerCase().includes(q)) continue
+      if (
+        q
+        && !username.toLowerCase().includes(q)
+        && !displayName.toLowerCase().includes(q)
+        && !summary.toLowerCase().includes(q)
+        && !(enterpriseName ?? '').toLowerCase().includes(q)
+      ) continue
       const srv = String(r['unread_srv'] ?? '').trim()
       if (srv && srv !== '0') srvIds.set(username, srv)
       const s: WechatSession = {
@@ -151,6 +158,7 @@ async function computeSessions(
         lastMsgSubType: Number(r[key('last_msg_sub_type', '0')] ?? 0),
         lastMsgSender: bytesToString(r[key('last_msg_sender', "''")]).trim(),
         lastMsgSenderName: bytesToString(r[key('last_sender_display_name', "''")]).trim(),
+        ...(enterpriseName ? { enterpriseName } : {}),
       }
       if (username.startsWith('gh_')) {
         const bt = bizTypes.get(username)

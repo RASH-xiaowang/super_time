@@ -157,13 +157,13 @@ describe('AskRuntimeMeta', () => {
     const badge = need('[data-status="insufficient"]')
     expect(badge.textContent).toContain('未采用 · 证据不足')
     expect(host.querySelector('[data-status="ok"]')).toBeNull()
-    expect(host.textContent).toContain('模型内容未通过接地核对，已不予采用')
+    expect(host.textContent).toContain('AI 回答未通过原文核对，因此未予采用')
   })
 
   it('旧响应只有 withheld=true 时也能渲染，不依赖 status 字段', () => {
     show(turn({ withheld: true }))
     expect(host.textContent).toContain('未采用 · 证据不足')
-    expect(host.textContent).toContain('模型内容未通过接地核对，已不予采用')
+    expect(host.textContent).toContain('AI 回答未通过原文核对，因此未予采用')
   })
 
   it('资源区默认折叠，展开后资源只出现一次且不渲染内部 key 与敏感字段', () => {

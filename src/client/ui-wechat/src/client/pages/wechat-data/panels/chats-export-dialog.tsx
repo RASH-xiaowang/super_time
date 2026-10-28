@@ -142,7 +142,7 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
               value={expFilename} onChange={(e) => { setExpFilename(e.target.value) }} />
             <label className={cssshell.exportCheckbox}>
               <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
-              打包为 ZIP（含导出文件与 record_media.json）
+              打包为 ZIP（含正文、图片/视频/语音/文件与 record_media.json）
             </label>
           </div>
           <div className={cssshell.exportSection}>

@@ -1,5 +1,5 @@
 /**
- * Resolve a received message file to a base64 data URL from msg/file.
+ * Resolve a received message file's on-disk path from msg/file.
  *
  * 归属要点：微信把收到的文件平铺在 `msg/file/<月份>/<原文件名>`，**目录不区分会话**，
  * 所以同一账号里同名文件可能有多个副本。旧实现只按文件名全库找、取 mtime 最新的
@@ -13,8 +13,28 @@
  * @param wechatBaseDir - raw WeChat install dir (current account root).
  * @param fileName - original file name (e.g. 测试报告.pdf).
  * @param opts - 归属线索：文件字节数、接收时间与附件 MD5。
- * @returns ImageDataUrlResult-like result.
+ * @returns path/name/mime/size, or a readable error.
  */
+export interface MessageFileResolution {
+    path?: string;
+    name?: string;
+    mime?: string;
+    size?: number;
+    error?: string;
+}
+/**
+ * Locate a received file without reading its bytes into a data URL.
+ *
+ * Export uses this path form so large attachments can be streamed straight into
+ * the ZIP. `resolveMessageFileDataUrl` keeps the existing RPC contract and
+ * reads the already-validated path afterwards.
+ */
+export declare function resolveMessageFilePath(wechatBaseDir: string | undefined, fileName: string, opts?: {
+    size?: number;
+    createTime?: number;
+    fileMd5?: string;
+}): MessageFileResolution;
+/** Resolve a received message file to a base64 data URL from msg/file. */
 export declare function resolveMessageFileDataUrl(wechatBaseDir: string | undefined, fileName: string, opts?: {
     size?: number;
     createTime?: number;

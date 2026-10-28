@@ -10,7 +10,7 @@
  *    `.tmp-e2e/task-center-edit-drawer.png`；
  *  · 触发方式选择器由后端厂商目录（`listRpaVendors`）驱动：选项含 Webhook / 八爪鱼 RPA /
  *    影刀 RPA；切到八爪鱼填旧 aria（`八爪鱼 FlowId`/`八爪鱼 API Key`）→ 读回
- *    `triggerConfig.flowId` + `triggerSecretSet.apiKey`；八爪鱼 v1.2.0 没有「参数映射」区块，
+ *    `triggerConfig.flowId` + `triggerSecretSet.apiKey`；八爪鱼 v1.4.0 没有「参数映射」区块，
  *    5 条附加参数（room_name→会话名、content→触发文本、at_name→触发对象、order_no→固定值 A-001、
  *    kw_template→模板 `${record.keyword}`）→ 严格读回 `triggerConfig.extraParams` 且 `paramMap`
  *    不存在；切到影刀填 `AccessKeyId`/`AccessKeySecret`/`应用 UUID` → 读回 `triggerConfig.robotUuid`
@@ -372,15 +372,47 @@ try {
     '抽屉里显示 Webhook 地址字段',
     webhookPlaceholder ?? '无 placeholder',
   )
+  check(
+    await editDrawer.getByText('参数映射', { exact: true }).count() === 0
+      && await editDrawer.getByLabel('参数映射 · 会话名', { exact: true }).count() === 0,
+    'Webhook v1.2.0 抽屉里没有无效的「参数映射」区块',
+  )
+  await editDrawer.getByRole('button', { name: '添加附加参数', exact: true }).click()
+  await editDrawer.getByLabel('附加参数 参数名 1', { exact: true }).fill('webhook_order_no')
+  await editDrawer.getByLabel('附加参数 值来源 1', { exact: true }).selectOption({ label: '固定值' })
+  await editDrawer.getByLabel('附加参数 固定值 1', { exact: true }).fill('A-001')
   const mentionMeOnly = editDrawer.getByLabel(/仅匹配@我的文本/)
   await mentionMeOnly.waitFor({ state: 'visible' })
   check(await mentionMeOnly.isChecked() === false, '群聊任务默认不勾选「仅匹配@我的文本」')
   await mentionMeOnly.check()
   await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
   await win.getByText('任务配置已保存', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
-  const tasksAfterMention = await remote(win, 'listTaskInfos', [])
-  const savedMentionTask = tasksAfterMention.items?.find((task) => task.id === taskA.id)
-  check(savedMentionTask?.mentionMeOnly === true, '勾选后经真实后端读回 mentionMeOnly=true')
+  const webhookDeadline = Date.now() + 20_000
+  let tasksAfterWebhook = await remote(win, 'listTaskInfos', [])
+  let savedWebhookTask = tasksAfterWebhook.items?.find((task) => task.id === taskA.id)
+  while (
+    !(savedWebhookTask?.mentionMeOnly === true
+      && Array.isArray(savedWebhookTask?.triggerConfig?.extraParams)
+      && savedWebhookTask.triggerConfig.extraParams.length === 1)
+    && Date.now() < webhookDeadline
+  ) {
+    await sleep(250)
+    tasksAfterWebhook = await remote(win, 'listTaskInfos', [])
+    savedWebhookTask = tasksAfterWebhook.items?.find((task) => task.id === taskA.id)
+  }
+  check(savedWebhookTask?.mentionMeOnly === true, '勾选后经真实后端读回 mentionMeOnly=true')
+  check(
+    JSON.stringify(savedWebhookTask?.triggerConfig?.extraParams) === JSON.stringify([
+      { name: 'webhook_order_no', source: 'fixed', fixedValue: 'A-001' },
+    ]),
+    'Webhook 附加参数经真实后端读回',
+    JSON.stringify(savedWebhookTask?.triggerConfig?.extraParams),
+  )
+  check(
+    savedWebhookTask?.triggerConfig?.paramMap === undefined,
+    'Webhook v1.2.0 不再落库无效的 paramMap',
+    JSON.stringify(savedWebhookTask?.triggerConfig?.paramMap),
+  )
 
   // 触发方式选择器由后端厂商目录（listRpaVendors）驱动：选项里应能看到内置 Webhook 与各厂商。
   const vendorSelect = editDrawer.getByLabel('触发方式', { exact: true })
@@ -411,7 +443,7 @@ try {
   const BAZHUAYU_API_KEY = 'e2e-bazhuayu-key-001'
   await flowIdField.fill('6ad859ccee2df270d53fc6e5')
   await apiKeyField.fill(BAZHUAYU_API_KEY)
-  // v1.2.0：八爪鱼没有内置「参数映射」，所有参数都在「附加参数」里显式添加。
+  // v1.4.0：八爪鱼没有内置「参数映射」，所有参数都在「附加参数」里显式添加。
   check(
     await editDrawer.getByText('参数映射', { exact: true }).count() === 0
       && await editDrawer.getByLabel('参数映射 · 会话名', { exact: true }).count() === 0,
@@ -479,7 +511,7 @@ try {
   )
   check(
     savedBazhuayuTask?.triggerConfig?.paramMap === undefined,
-    '八爪鱼 v1.2.0 不再落库 paramMap',
+    '八爪鱼 v1.4.0 不再落库 paramMap',
     JSON.stringify(savedBazhuayuTask?.triggerConfig?.paramMap),
   )
   check(

@@ -13,6 +13,8 @@ import { useElapsedSeconds } from './hooks.tsx'
 import { CACHE_BASE, CACHE_INSIGHTS } from './overview-cache-keys.ts'
 import css from './list-panel.module.css'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /**
  * 体检项：与后端 `query/privacy.ts` 的 CATEGORIES 一一对应（顺序、label、icon 都保持一致，
@@ -244,7 +246,9 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
                     {samples.map((s, i) => (
                       <div key={i} className={css.pvSampleRow}>
                         <div className={css.pvSampleHd}>
-                          <span className={css.pvSampleName}>{s.name || s.username}</span>
+                          <IdentityName className={css.pvSampleName} name={s.name || s.username} username={s.username} size={18}>
+                            {withEnterprise(s.name || s.username, s.enterpriseName)}
+                          </IdentityName>
                           <span className={css.rowTime}>{s.time}</span>
                           {onOpenChat && (
                             <button type="button" className={`${css.catBtn} ${css.pvJump}`} onClick={() =>{  onOpenChat(s.username, s.local_id) }}>跳转 ›</button>
@@ -267,8 +271,10 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
           {data.top_contacts.length > 0 && (
             <Card title="风险联系人 TOP10">
               {data.top_contacts.map((c, i) => (
-                <div key={c.username} className={css.barRow} title={c.name || c.username}>
-                  <span className={css.barLabel}>{i + 1}. {c.name || c.username}</span>
+                <div key={c.username} className={`${css.barRow} ${css.pvRankRow}`} title={withEnterprise(c.name || c.username, c.enterpriseName)}>
+                  <IdentityName className={css.barLabel} name={c.name || c.username} username={c.username} size={20}>
+                    {i + 1}. {withEnterprise(c.name || c.username, c.enterpriseName)}
+                  </IdentityName>
                   <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.count / (data.top_contacts[0]?.count ?? 1)) * 100}%` }} /></div>
                   <span className={css.barValue}>{c.count} 条</span>
                 </div>
@@ -278,8 +284,10 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
           {data.top_groups.length > 0 && (
             <Card title="风险群聊 TOP10">
               {data.top_groups.map((c, i) => (
-                <div key={c.username} className={css.barRow} title={c.name || c.username}>
-                  <span className={css.barLabel}>{i + 1}. {c.name || c.username}</span>
+                <div key={c.username} className={`${css.barRow} ${css.pvRankRow}`} title={withEnterprise(c.name || c.username, c.enterpriseName)}>
+                  <IdentityName className={css.barLabel} name={c.name || c.username} username={c.username} size={20}>
+                    {i + 1}. {withEnterprise(c.name || c.username, c.enterpriseName)}
+                  </IdentityName>
                   <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.count / (data.top_groups[0]?.count ?? 1)) * 100}%` }} /></div>
                   <span className={css.barValue}>{c.count} 条</span>
                 </div>

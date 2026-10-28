@@ -119,10 +119,12 @@ export declare abstract class GatewayRead extends GatewayCore {
     getSelfProfile(): SelfProfile;
     /**
      * Full-history author activity counts (ranked desc).
-     * @returns Array of { name, count } for every moments author.
+     * @returns Array of { name, enterpriseName?, count } for every moments author.
      */
     getMomentsAuthors(): Array<{
+        username: string;
         name: string;
+        enterpriseName?: string;
         count: number;
     }>;
     /**

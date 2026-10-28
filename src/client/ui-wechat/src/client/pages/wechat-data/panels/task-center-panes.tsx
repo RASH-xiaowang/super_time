@@ -52,8 +52,58 @@ import {
   visibleKeywords,
 } from './task-center.ts'
 import type { TaskCenterActions } from './TaskCenter.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './task-center.module.css'
 import kitCss from '../ui/kit.module.css'
+
+/** Task scope: keep the group/target usernames attached to the avatars. */
+function TaskScopeIdentity({ task }: { task: TaskInfo }): React.JSX.Element {
+  const chatName = task.chatName || task.chatUsername || '未知会话'
+  const targetName = task.targetName || task.targetUsername || '未知对象'
+  if (task.chatType === 'private' && chatName === targetName) {
+    return (
+      <IdentityName
+        className={css.taskScope}
+        name={chatName}
+        username={task.chatUsername || task.targetUsername || ''}
+        size={20}
+        title={taskScopeLabel(task)}
+      >
+        {withEnterprise(chatName, task.chatEnterpriseName || task.targetEnterpriseName)}
+      </IdentityName>
+    )
+  }
+  return (
+    <span className={css.taskScope} title={taskScopeLabel(task)}>
+      <IdentityName name={chatName} username={task.chatUsername || ''} size={20}>
+        {withEnterprise(chatName, task.chatEnterpriseName)}
+      </IdentityName>
+      <span className={css.taskScopeArrow} aria-hidden="true">→</span>
+      <IdentityName name={targetName} username={task.targetUsername || ''} size={20}>
+        {withEnterprise(targetName, task.targetEnterpriseName)}
+      </IdentityName>
+    </span>
+  )
+}
+
+/** Trigger-record scope uses both real usernames, never the display names as ids. */
+function TriggerPeople({ record }: { record: TaskTriggerRecord }): React.JSX.Element {
+  const chatName = record.chatName || '未知会话'
+  const targetName = record.targetName || '未知对象'
+  const title = `${withEnterprise(chatName, record.chatEnterpriseName)} / ${withEnterprise(targetName, record.targetEnterpriseName)}`
+  return (
+    <span className={css.triggerPeople} title={title}>
+      <IdentityName name={chatName} username={record.chatUsername} size={20}>
+        {withEnterprise(chatName, record.chatEnterpriseName)}
+      </IdentityName>
+      <span className={css.taskScopeArrow} aria-hidden="true">/</span>
+      <IdentityName name={targetName} username={record.targetUsername} size={20}>
+        {withEnterprise(targetName, record.targetEnterpriseName)}
+      </IdentityName>
+    </span>
+  )
+}
 
 /**
  * 左栏一行：任务名 / 状态 / 会话与目标 / 关键词 chips / 触发方式与照片 / 触发统计 + 编辑按钮。
@@ -128,7 +178,7 @@ function TaskRow({ task, active, editing, batchMode, checked, vendorCatalog, act
       </div>
 
       <div className={css.taskMeta}>
-        <span className={css.taskScope} title={taskScopeLabel(task)}>{taskScopeLabel(task)}</span>
+        <TaskScopeIdentity task={task} />
         <span className={css.taskStat}>{triggerCountLabel(task.triggerCount)}</span>
         <span className={css.taskStat}>{lastTriggeredLabel(task.lastTriggeredAt)}</span>
       </div>
@@ -213,9 +263,7 @@ function TriggerRow({ record, batchMode, checked, onActivate, onToggleSelection 
         <span className={css.triggerTaskName} title={record.taskName}>{record.taskName}</span>
         <Badge tone={callback.tone} title={callback.hint}>{callback.label}</Badge>
       </div>
-      <div className={css.triggerPeople} title={`${record.chatName} / ${record.targetName}`}>
-        {record.chatName || '未知会话'} / {record.targetName || '未知对象'}
-      </div>
+      <TriggerPeople record={record} />
       <div className={css.triggerFoot}>
         <span className={css.triggerKw}>命中「{record.keyword}」</span>
         <span>{recordImageCountLabel(record.images.length)}</span>

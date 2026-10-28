@@ -12,7 +12,9 @@ import css from './list-panel.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import { Avatar } from './chats-support.tsx'
+import { IdentityName } from './identity.tsx'
 import { RevokedContent } from './revoked-content.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 
 /**
  * Render the revoked-messages panel.
@@ -103,12 +105,21 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   }, [items, typeFilter])
 
   const senderTop = useMemo(() => {
-    const m = new Map<string, number>()
+    const m = new Map<string, { username: string; name: string; label: string; count: number }>()
     for (const it of items) {
-      const k = it.sender || '未知'
-      m.set(k, (m.get(k) ?? 0) + 1)
+      const username = it.sender_username ?? ''
+      const name = it.sender || '未知'
+      const key = username || name
+      const current = m.get(key)
+      const label = withEnterprise(name, it.senderEnterpriseName)
+      m.set(key, {
+        username,
+        name,
+        label: current?.label || label,
+        count: (current?.count ?? 0) + 1,
+      })
     }
-    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    return Array.from(m.values()).sort((a, b) => b.count - a.count).slice(0, 5)
   }, [items])
 
   /** 展开状态用稳定记录键，不能跟着筛选后的数组下标走。 */
@@ -181,7 +192,22 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
           <div className={css.hd}>
             <span className={kitCss.textMeta}>共 {total} 条被撤回消息（已加载 {items.length}）</span>
             {senderTop.length > 0 && (
-              <span className={kitCss.textMeta}>撤回最多：{senderTop.map(([k, n]) => `${k} ${n}`).join(' · ')}</span>
+              <span className={`${kitCss.textMeta} ${css.rvTopList}`}>
+                <span>撤回最多：</span>
+                {senderTop.map((it, idx) => (
+                  <span key={`${it.username}-${it.name}-${String(idx)}`} className={css.rvTopItem}>
+                    <IdentityName
+                      className={css.rvTopIdentity}
+                      name={it.name}
+                      username={it.username}
+                      size={16}
+                    >
+                      {it.label}
+                    </IdentityName>
+                    <span className={css.rvTopCount}>{it.count}</span>
+                  </span>
+                ))}
+              </span>
             )}
           </div>
           <div ref={revokedScrollRef} className={`${css.scroll} ${css.rvScroll}`}>
@@ -189,7 +215,11 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
             {filtered.slice(0, rvCount).map((it, idx) => {
               const key = recordKey(it)
               const open = expanded.has(key)
-              const rowLabel = `${it.sender || '未知'} · ${it.type_label}，${open ? '收起' : '展开'}详情`
+              const senderLabel = withEnterprise(it.sender || '未知', it.senderEnterpriseName)
+              const sessionLabel = it.session_name
+                ? withEnterprise(it.session_name, it.enterpriseName)
+                : ''
+              const rowLabel = `${senderLabel} · ${it.type_label}，${open ? '收起' : '展开'}详情`
               return (
                 <div
                   key={`${key}-${idx}`}
@@ -199,9 +229,19 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
                 >
                   <div className={css.rvRowHd}>
                     <Avatar name={it.sender || '未知'} username={it.sender_username ?? ''} size={28} />
-                    <span className={css.rowName}>{it.sender || '未知'}</span>
+                    <span className={css.rowName}>{senderLabel}</span>
                     <span className={css.cite}>{it.type_label}</span>
-                    {it.session_is_group && it.session_name && <span className={css.rvSession}>{it.session_name}</span>}
+                    {it.session_is_group && sessionLabel && (
+                      <IdentityName
+                        className={css.rvSessionIdentity}
+                        textClassName={css.rvSession}
+                        name={it.session_name ?? ''}
+                        username={it.session_username ?? ''}
+                        size={16}
+                      >
+                        {sessionLabel}
+                      </IdentityName>
+                    )}
                     <span className={`${css.rowTime} ${css.rvTimePush}`}>{fmtDateTimeSec(it.create_time)}</span>
                     <span className={css.rvChevron} aria-hidden="true">{open ? '▾' : '▸'}</span>
                   </div>

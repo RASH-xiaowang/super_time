@@ -1,16 +1,27 @@
 import type { RetryFetch } from '../net/fetch-retry.ts';
+import type { RpaMediaLinkFactory } from './rpa/media-links.ts';
 import type { TaskCallbackDispatchResult } from '../types.ts';
 /** 投递依赖：图片解码、隐私闸与 fetch 都由调用方注入（query 层不 import gateway 侧）。 */
 export interface TaskDispatchDeps {
     /**
      * 解码一张图片（`username` + `localId`）。返回 `url`（data URL）或 `file`
      * （相对 `decodedDir` 的路径）之一；两者都没有 = 这张解不出来。
-     * 只有 Webhook 适配器使用（其他厂商不发图片）。
+     * Webhook 适配器解码字节；RPA 厂商只在图片类参数来源需要时用它取得可签直链的文件路径。
      */
-    decodeImage: (username: string, localId: number) => Promise<{
+    decodeImage: (username: string, localId: number, options?: {
+        fileOnly?: boolean;
+    }) => Promise<{
         url?: string;
         file?: string;
     }>;
+    /**
+     * 图片直链工厂（`imagesJson` / `imageCount` / `firstImageUrl` 三种值来源用）。
+     *
+     * 按**触发记录 id** 构造：令牌载荷里要带 `recordId`（见 `net/rpa-media.ts`）。
+     * 由装配层按当前配置现取（`api_token` 派生密钥 + 可达基址）；缺省时那三种来源会
+     * 如实写「未打开局域网访问」，而不是发一个取不到的地址。
+     */
+    mediaLinks?: (recordId: number) => RpaMediaLinkFactory | undefined;
     /** 隐私闸（脱敏 + 审计）；返回可直接发出去的文本。 */
     gate: (feature: string, stats: {
         sessions: number;
@@ -29,7 +40,9 @@ export interface PendingDispatchResult {
  * 手动 / 扫描后投递一条触发记录（按任务的触发方式走注册表）。
  *
  * 前置：任务已完善 + 厂商已注册 + 描述符必填项齐全，否则 skipped + 可读原因。
- * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）；图片只由 Webhook 适配器按需解码。
+ * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）。图片按厂商分流：
+ * Webhook 由适配器按需解码字节；RPA 厂商只在参数用到 `imagesJson` / `imageCount` /
+ * `firstImageUrl` 时预先算好**短时签名直链**（`rpa/media-links.ts`）。
  * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。

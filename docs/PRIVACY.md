@@ -1,14 +1,44 @@
 # Super Time 隐私声明
 
-> 生效版本：**v27**（与 `src/client/ui-app/privacy/consent.ts` 的 `PRIVACY_VERSION` 一致）
+> 生效版本：**v30**（与 `src/client/ui-app/privacy/consent.ts` 的 `PRIVACY_VERSION` 一致）
 > 适用范围：Windows x64 桌面版 Super Time
-> 本次修订：2026-10-21（v27：**任务信息新增第 8 个触发方式「八爪鱼 RPA（MCP）」**）。除
+> 本次修订：2026-10-27（v30：**新增「消息列表」回复台账与局域网入站 Webhook**）。
+> 「消息列表」记录任务首次触发、局域网 Webhook 入站与手动新增的回复；任务首次命中时会先插入
+> 一条问候语（默认「你好」，可按规则配置），并写入 `<数据根>\wechat_task_center.db` 的
+> `message_list_records`。每条记录保存回复 id、会话名、触发对象、触发文本、触发图片引用、
+> 触发时间、来源、状态、备注、下游地址快照与错误原因；规则保存在同库的 `message_list_rules`。
+> 记录匹配规则后，本机会向你为该「会话名 + 触发对象」配置的**下游 Webhook** POST 回复内容
+> （文本、图片与外链）；文本先过 `task_callback` 隐私闸。局域网访问打开时，本机还会在既有监听面
+> 新增 `GET / POST /api/message-webhook/<token>`：GET 只做健康检查，POST 可写入一条台账记录，
+> 路径令牌由长期 `api_token` 域分离派生，轮换令牌后旧地址立即失效。该入站面**默认关闭**、
+> 只随「局域网访问（手机）」开关存在、仍是**明文 HTTP**；拿着完整地址的人可向台账写入记录。
+> 这是新增的内容出网点、入站写入面与本机正文/图片台账，属材料性变更，故 `PRIVACY_VERSION`
+> 由 v29 升至 v30，要求重新同意。逐条口径见第四节 G4 / H.1。
+> 上一次修订：2026-10-23（v29：**所有触发方式统一为「附加参数显式配置」**）。影刀、UiPath、
+> 阿里云、来也、实在智能不再内置自动发送 `room_name` / `content` / `at_name`，默认参数容器
+> 为空；需要发送时由你在「附加参数」里逐条添加参数名与值来源。升级时会把旧版参数映射自动
+> 转换为等价的附加参数，避免既有任务静默漏发；如果你已经显式清空附加参数，不会被旧值恢复。
+> Webhook 也把同一套附加参数放入顶层 `params`；旧 `paramMap` 从未生效，不迁移。
+> 八爪鱼开放 API 与 MCP 继续使用同一套附加参数规则。该变更改变了默认出网内容与用户控制方式，
+> 故 `PRIVACY_VERSION` 由 v28 升至 v29，要求重新同意。逐条口径见第四节 G3。
+> 上一次修订：2026-10-23（v28：**RPA 触发可以携带图片（短时签名直链）**）。此前 RPA 厂商只发
+> 文本参数、不发图片（参数上限 8KB–40KB，base64 会直接撑爆）。现在「附加参数」新增三种值来源：
+> `imagesJson`（整份 JSON 链接清单）/ `imageCount`（数量）/ `firstImageUrl`（首张成功链接）。
+> 只有你显式配置了其中一种，投递前才会解码对应图片并生成
+> `http://<本机局域网地址>:<api_port>/api/rpa-media/<token>`（或你在 `config.json` 里配的
+> `rpa_media_base_url`）。该链接**一小时过期、一个令牌只对应一张图**，凭据是 URL 里的
+> HMAC 签名（不是会话 Cookie）；厂商机器人取图时会连回**本机监听面**，因此必须打开
+> 「局域网访问（手机）」才能生成链接，否则参数里如实写「未打开局域网访问」。这意味着
+> **图片字节可能经本机入站面被厂商读取**（范围仍限于你配置的那几张触发图片），属材料性变更，
+> 故当时 `PRIVACY_VERSION` 由 v27 升至 v28，要求重新同意。逐条口径见第四节 G3 / H。
+> 上一次修订：2026-10-21（v27：**任务信息新增第 8 个触发方式「八爪鱼 RPA（MCP）」**）。除
 > 八爪鱼开放 API 外，你还可以在同一触发方式目录里选**八爪鱼官方 MCP Server** 通道：本机用该
 > 任务保存的八爪鱼 API Key 向**固定主机** `mcp-rpa.bazhuayu.com` 的 `/mcp` 发 JSON-RPC 请求
 > （工具 `automation_call`），只发**应用 id（automationId）** + 你在「附加参数」里配置的键值对
 > （`parameters`，默认 `{}`；值来源与八爪鱼开放 API 相同：会话名 / 触发文本 / 触发对象 /
 > 任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 固定值 / 自定义模板），
-> **不发图片**；成功返回的 `runId` 只代表「已受理运行」，执行结果需到八爪鱼客户端查看。
+> **当时不发图片**（v28 起，配置图片类来源时会另发短时签名直链）；成功返回的 `runId`
+> 只代表「已受理运行」，执行结果需到八爪鱼客户端查看。
 > 这是**新增的出网主机**，属材料性变更，故 `PRIVACY_VERSION` 由 v26 升至 v27，要求重新同意。
 > 该通道为**实验性**：协议已用真实 API Key 实测通，但个人版机器人需开通执行权益（否则返回
 > `BotFeatureIsDisabled`）；它与开放 API 是**两条并存链路**，不是替换。凭据仍只存本机、只进
@@ -18,7 +48,8 @@
 > 影刀 AccessKeySecret / UiPath PAT 等所有 secret 字段），再点隐藏；关闭抽屉 / 切换厂商 /
 > 保存后明文即丢弃。该能力**只对桌面端本机开放**：远程 HTTP 通道（手机 / 普通浏览器）已列入
 > `LOCAL_ONLY`，调用会被拒绝；**不写日志、不做操作留痕**；任务列表 / 触发记录仍只回
-> 「是否已配置」布尔快照。凭据仍只进厂商请求头、不参与参数、不发图片。这改变了此前
+> 「是否已配置」布尔快照。凭据仍只进厂商请求头、不参与参数；当时 RPA 不发图片
+> （v28 起仅在你显式配置图片类来源时发短时签名直链）。这改变了此前
 > 「凭据永不回读」的口径（能看到本机明文的人从「能读任务库的人」扩大到「能操作桌面端的你」），
 > 属材料性变更，故 `PRIVACY_VERSION` 由 v25 升至 v26，要求重新同意。逐条口径见第四节 G3。
 > 上一次修订：2026-10-21（v25：**八爪鱼 RPA 的请求参数改为完全由你显式配置**）。此前八爪鱼方式
@@ -28,13 +59,15 @@
 > （模板只允许引用触发记录与任务的白名单字段，不允许凭据或配置）。这意味着**任务名、触发关键词、
 > 触发时间等也可能随请求发出去** —— 这是内容出网点的**范围扩大**，属材料性变更，故
 > `PRIVACY_VERSION` 由 v24 升至 v25，要求重新同意。边界不变：凭据仍只进 `X-API-Key` 头、
-> **不参与参数**；RPA 接口仍**不发图片**；默认 `params` 为空、**不发任何业务参数**
+> **不参与参数**；当时 RPA 接口仍**不发图片**（v28 起新增图片类来源）；默认 `params`
+> 为空、**不发任何业务参数**
 > （同日按用户要求移除三个内置参数，不扩大范围，版本仍为 v25）。逐条口径见第四节 G3。
 > 上一次修订：2026-10-21（v24：**任务信息的触发方式从「Webhook / 八爪鱼 RPA」扩展为多厂商**）。
 > 你可以在任务编辑抽屉里从后端下发的触发方式目录中选择 **Webhook、八爪鱼 RPA、影刀 RPA、
 > UiPath、阿里云 RPA、来也 RPA、实在智能 RPA**（阿里云 / 来也 / 实在为**实验性**接入，参数待联调）。
 > 所有厂商走**同一条通用出网管道**：任务命中关键词后，把**触发文本**（先过同一个隐私闸）与会话名 /
-> 触发对象按该厂商的参数映射发出去；**除内置 Webhook 外都不发图片**（RPA 接口没有图片参数）。
+> 触发对象按该厂商的参数映射发出去；当时**除内置 Webhook 外都不发图片**（v28 起可显式
+> 配置短时签名直链）。
 > 出网目的地：八爪鱼 / 影刀 / 阿里云 / 实在智能有固定主机（`api-rpa.bazhuayu.com`、
 > `api.yingdao.com`、`console-rpa.aliyun.com`、`z-commander-api.ai-indeed.com`），
 > UiPath（默认 `cloud.uipath.com`）/ 来也 / 私有化部署用你为该任务配置的实例地址
@@ -47,7 +80,7 @@
 > 命中关键词触发，投递目的地从「只支持你填的 Webhook」扩展为二选一：**Webhook**（原有：把整条
 > 触发记录 JSON POST 到你填的地址）或**八爪鱼 RPA**（新增：POST 到固定主机
 > `https://api-rpa.bazhuayu.com/api/bots/scheduling/start`，参数只有 room_name=会话名 /
-> content=触发文本 / at_name=触发对象，**不发图片**）。八爪鱼方式需要你在任务编辑抽屉里为每个
+> content=触发文本 / at_name=触发对象，**当时不发图片**）。八爪鱼方式需要你在任务编辑抽屉里为每个
 > 任务配置 FlowId 与 API Key；Key 作为 `X-Api-Key` 请求头发送，只存本机
 > `<数据根>\wechat_task_center.db`、**不进任务列表返回值**（界面只知道「已保存」）。默认触发方式
 > 仍是 **Webhook**，既有任务行为不变。这是新增的**内容出网点**，属材料性变更，故
@@ -167,15 +200,20 @@
 ## 一句话结论
 
 你的微信数据在本机解析、存储与分析，**不上传到我们的任何服务器**（我们没有任何服务器）。
-唯一会把你**内容**发出去的功能是 AI 问答与总结、ClawBot 发送/自动回复，以及**你自己逐条配置的
-任务触发投递** —— 触发方式由你逐任务选择：Webhook（目的地就是**你填的那个地址**）或某个
+会把你的**内容**发出去的功能是 AI 问答与总结、ClawBot 发送/自动回复、**你自己逐条配置的
+任务触发投递**，以及**消息列表的下游回复投递**。任务触发方式由你逐任务选择：Webhook
+（目的地就是**你填的那个地址**；图片可走
+兼容旧接收端的 JSON data URL，或避免 base64 膨胀的 multipart）或某个
 **RPA 厂商**（八爪鱼（开放 API / MCP 两条通道）/ 影刀 / UiPath / 阿里云 / 来也 / 实在；目的地是厂商固定主机或你配置的
-实例地址，只发会话名 / 触发文本 / 触发对象；八爪鱼的参数**全部由你在「附加参数」里逐条配置**
-（最多 20 条，默认不发业务参数），值来自触发记录 / 固定值 / 自定义模板，**不发图片**），见第四节 G3。除此之外还有几处
+实例地址；所有业务参数**全部由你在「附加参数」里逐条配置**（每个列表最多 20 条，默认不发业务参数），
+值来自触发记录 / 固定值 / 自定义模板；默认**不发图片**，
+只有你显式选择 `imagesJson` / `imageCount` / `firstImageUrl` 时才发**短时签名直链**，由厂商
+机器人经本机入站面取图），见第四节 G3；消息列表只投递给你为「会话名 + 触发对象」配置的
+下游 Webhook，见第四节 G4。除此之外还有几处
 **不涉及聊天内容**的出网点（头像、远程图片/视频、地图底图、语音模型下载，以及只发凭据的
 **连接测试 / 余额查询**），第四节逐条列明。
 
-**入站方向**：本应用**默认不监听任何端口**，别人无法从网络连进来。只有两种需要你显式触发的例外：① 标题栏「打开网页」交接（临时起服务，默认浏览器打开，点卡片返回即停）；② 设置 → 维护与自检 → 局域网访问（手机）的扫码入口（默认关闭，关闭/退出/轮换即停）。两者都见第四节 H；交接会话与桌面端同权限，点卡片返回即恢复「一个端口都不监听」。原来的「远程访问（手机）」设置已移除，扫码入口现在在「维护与自检」里。
+**入站方向**：本应用**默认不监听任何端口**，别人无法从网络连进来。只有两种需要你显式触发的例外：① 标题栏「打开网页」交接（临时起服务，默认浏览器打开，点卡片返回即停）；② 设置 → 维护与自检 → 局域网访问（手机）的扫码入口（默认关闭，关闭/退出/轮换即停）。两者都见第四节 H；交接会话与桌面端同权限，点卡片返回即恢复「一个端口都不监听」。原来的「远程访问（手机）」设置已移除，扫码入口现在在「维护与自检」里。局域网访问开启期间，既有监听面还提供第四节 H.1 的消息列表入站 Webhook；它不另开端口，关掉局域网访问或轮换令牌即失效。
 
 > **应用内已没有任何出网开关**：本声明第四节列出的每一个出网点都会按描述发出请求，
 > 应用里没有可以逐个关掉它们的按钮。要阻止这些请求，只能靠系统防火墙或直接断网
@@ -267,6 +305,19 @@
 供「微信问答 → 历史记录」回看）。三者都只存在本机、按数据根隔离，**不参与任何导出或分享**；
 问答历史与导出记录都可以在界面上逐条删除或整体清空。
 
+### 任务信息与消息列表（`<数据根>\wechat_task_center.db`）
+
+「任务信息」与「消息列表」共用同一个本机 SQLite 库，但表与领域独立：
+
+| 表 | 内容 |
+|---|---|
+| `task_info` / `task_triggers` | 任务配置、触发记录、投递状态与厂商凭据（凭据列不返回普通列表） |
+| `message_list_records` | 回复台账：回复 id、会话与触发对象、**触发文本**、图片引用、触发时间、来源、状态、备注、下游地址快照、错误与尝试次数 |
+| `message_list_rules` | 按「会话名 + 触发对象」匹配的下游 Webhook、问候语与启用状态 |
+
+消息列表的图片只保存微信本地引用、`http(s)` 地址或受限大小的安全 `data:image`，不接受任意
+本机路径。台账与规则都只在本机，不参与 AI 索引或普通导出；删除对应记录请使用界面操作。
+
 ### 微信 ClawBot 集成（`<数据根>\clawbot.db`）
 
 「ClawBot」面板用于把 Super Time 接入微信（官方形态：**手机微信插件 ↔ 桌面端 Agent**
@@ -331,7 +382,7 @@
 
 ## 四、网络暴露面清单（出网点 + 入站监听，与代码逐条对应）
 
-> A–G3 是**出网**（本机向外发请求）；**H 是入站**（本机监听端口、别人向本机发请求）。
+> A–G4 是**出网**（本机向外发请求）；**H 是入站**（本机监听端口、别人向本机发请求）。
 > 两类都登记在这里，因为「我的数据会不会被别的设备看到」这个问题两边都要答。
 
 ### A. AI 调用：LLM chat（发的是**内容**）
@@ -571,25 +622,52 @@
 > 「附加参数」里逐条配置（最多 20 条），值来源包括会话名 / 触发文本 / 触发对象 / 任务名 /
 > 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 固定值 / 自定义模板 —— 即
 > **任务名、关键词、时间等也可能随请求发出去**；默认 `Params` 为空、不发业务参数。
-> 详见下表「八爪鱼附加参数」。
+> 详见下表「附加参数（所有触发方式）」。
 > 2026-10-21（v27）新增**八爪鱼 MCP（实验性，第 8 个触发方式）**：同一触发方式目录里多一条
 > 「八爪鱼 RPA（MCP）」，向固定主机 `mcp-rpa.bazhuayu.com/mcp` 发 JSON-RPC；只发
-> `automationId` + 你在「附加参数」里配置的键值对（`parameters`，默认 `{}`），不发图片。
-> 它与八爪鱼开放 API **并存**，不是替换。详见下表「八爪鱼附加参数」与「目的地（逐家）」。
+> `automationId` + 你在「附加参数」里配置的键值对（`parameters`，默认 `{}`），当时不发图片。
+> 它与八爪鱼开放 API **并存**，不是替换。详见下表「附加参数（所有触发方式）」与「目的地（逐家）」。
+> 2026-10-23（v28）**RPA 触发可以携带图片**：附加参数新增 `imagesJson` / `imageCount` /
+> `firstImageUrl` 三种值来源。只有显式配置时才解码图片并生成**一小时过期、一个令牌一张图**的
+> 签名直链（`/api/rpa-media/<token>`）；图片字节由厂商机器人经**本机局域网监听面**读取，
+> 因此必须先打开「局域网访问（手机）」。没打开时该张图片写 `error`，不会发一个取不到的地址。
+> 云端 RPA 需在 `config.json` 配 `rpa_media_base_url`（反向代理/公网入口）。详见
+> `RPA-VENDOR-TRIGGERS.md` §4.3.2。
+> 2026-10-23（v29）**所有触发方式统一为附加参数显式配置**：影刀 / UiPath / 阿里云 / 来也 /
+> 实在智能移除内置 `room_name` / `content` / `at_name`，默认容器分别为 `[]` / `{}` / `[]` /
+> `[]` / `{}`；Webhook 也把用户配置的附加参数放进顶层 `params: {}`。**不配置就不发额外参数**。
+> 读取与投递时会把 RPA 厂商的旧 `paramMap` /
+> `inputArgumentsMap` / `appParamsMap` / `parameterMap` / `inputParamMap` 自动转换为
+> `extraParams` 条目，既有任务不会静默漏发；已显式保存为空列表的新任务不会被旧值恢复。
+> Webhook 的旧 `paramMap` 从未影响请求体，因此不迁移、不会突然开始发送三个业务参数。
+> 八爪鱼开放 API 与 MCP 也沿用同一套规则。详见 `RPA-VENDOR-TRIGGERS.md` §4.3.3。
 
 | 项 | 说明 |
 |---|---|
 | 触发 | 两种时机会真的发请求：① **后台扫描**（每次微信新消息同步落地即触发，另有每 10 秒兜底；不需要你打开面板）命中关键词后自动投递；② 你在「任务触发记录」里对某条失败记录点「重新投递」。只投「任务标记已完善 + **当前触发方式**的配置齐全」且所属任务仍存在的记录；任务退回「待完善」或删除后不再投递；未知 / 已下线厂商的任务不投递（记录 skipped、不参与自动重试） |
-| 触发方式（目录） | 每个任务在编辑抽屉里从**后端下发的触发方式目录**（`listRpaVendors`）中选一个，**默认 `Webhook`**：<br/>**内置**：Webhook（整条记录 JSON POST 到你填的地址）· 八爪鱼 RPA（固定主机，FlowId + API Key；参数全部由「附加参数」逐条配置，见下一行）· **八爪鱼 RPA（MCP，实验性；固定主机 `mcp-rpa.bazhuayu.com`，应用 ID + API Key；参数同样走「附加参数」）**<br/>**新增厂商**：影刀 RPA · UiPath Orchestrator · 阿里云 RPA（实验性）· 来也 RPA（实验性）· 实在智能 RPA（实验性）<br/>每家的配置字段（账号 / 凭据 / 流程 id / 参数映射 / 实例地址等）、鉴权方式与官方文档入口见 [`RPA-VENDOR-TRIGGERS.md`](RPA-VENDOR-TRIGGERS.md) §3 的厂商参数表；切换方式时**不清空**其它方式已保存的配置 |
-| 八爪鱼附加参数（v25 增强；**八爪鱼开放 API 与 MCP 的唯一参数入口**） | **不再有内置三参数**（v1.2.0 移除 `room_name` / `content` / `at_name` 自动发送）：开放 API 的 `params` / MCP 的 `parameters` 默认都是 `{}`，**不发任何业务参数**；所有参数都由你在「附加参数」里逐条配置（**最多 20 条**「参数名 → 值来源」）。值来源共 11 种：会话名 / 触发文本 / 触发对象 / **任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id** / 固定值 / 自定义模板。想发会话名 / 触发文本 / 触发对象，就各加一条并把值来源选成对应项（如 `room_name` ← 会话名）。自定义模板只允许引用白名单字段：`${record.chatName}` / `${record.targetName}` / `${record.targetUsername}` / `${record.username}` / `${record.keyword}` / `${record.text}` / `${record.chatType}` / `${record.triggeredAt}` / `${task.name}` / `${task.id}`；**不允许凭据（secret）或配置（config），也不允许白名单外字段**。参数名在列表内唯一；附加参数完全由你逐条配置，**不配置就不发**（旧的「参数映射」配置在保存时被丢弃）。**凭据不参与任何参数**（仍只进 `X-API-Key` 头）；仍**不发图片**。失败原因会展示厂商错误描述（开放 API 的 `description` / MCP 的 `Error Code` + `Error Message`，不含本地凭据） |
-| 发出内容 | **Webhook**：命中那一条消息的**触发记录**：任务 id/名称、记录 id、触发时间（毫秒 + 本地时间文本）、会话（username / 名称 / 单聊或群聊）、触发对象（username / 名称）、命中的关键词、触发文本（上限 4,000 字；开启「敏感字段打码」时先脱敏）、该对象**最近 N 张图片**（N = 任务里填的 0–9；逐张解码后以 `data:image/…;base64,…` 放进 JSON，单张超过约 6MB 或解码失败时省略该张并带上 `error`）。<br/>**各 RPA 厂商**：只发三个**语义参数**的映射值 —— 会话名（room）/ 触发文本（content，上限 4,000 字、开启「敏感字段打码」时先脱敏）/ 触发对象（at；单聊没有单独的目标名时回落会话名），外加该厂商要求的流程标识（FlowId / ReleaseKey / 应用 UUID / appId / flowName / jobUuid 等）与凭据。**八爪鱼（开放 API 与 MCP）没有内置参数**：开放 API 只发 `flowId` + 你在「附加参数」里配置的 `params`；MCP 只发 `automationId` + 你在「附加参数」里配置的 `parameters`（见上一行）。**都不发图片**（RPA 接口没有图片参数），也不发任务 id/名称、会话 username、通讯录或数据库。<br/>两种方式都**不发**数据库、不发其它会话、不发通讯录 |
+| 触发方式（目录） | 每个任务在编辑抽屉里从**后端下发的触发方式目录**（`listRpaVendors`）中选一个，**默认 `Webhook`**：<br/>**内置**：Webhook（整条记录 JSON POST 到你填的地址）· 八爪鱼 RPA（固定主机，FlowId + API Key；参数全部由「附加参数」逐条配置）· **八爪鱼 RPA（MCP，实验性；固定主机 `mcp-rpa.bazhuayu.com`，应用 ID + API Key；参数同样走「附加参数」）**<br/>**新增厂商**：影刀 RPA · UiPath Orchestrator · 阿里云 RPA（实验性）· 来也 RPA（实验性）· 实在智能 RPA（实验性）<br/>每家厂商的配置字段、鉴权方式与官方文档入口见 [`RPA-VENDOR-TRIGGERS.md`](RPA-VENDOR-TRIGGERS.md) §3；切换方式时**不清空**其它方式已保存的配置 |
+| 附加参数（所有触发方式，v29 起统一） | 所有触发方式都**没有内置三参数**：`room_name` / `content` / `at_name` 不再自动发送。RPA 厂商的 `params` / `InputArguments` / `AppParams` / `parameters[]` / `inputParam` 与 Webhook 顶层 `params` 默认都是空容器，**不发任何额外业务参数**。所有参数都由你在「附加参数」里逐条配置（**最多 20 条**「参数名 → 值来源」）。值来源共 14 种：会话名 / 触发文本 / 触发对象 / 任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 触发图片（JSON 链接清单）/ 触发图片数量 / 首张图片链接 / 固定值 / 自定义模板。想发会话名 / 触发文本 / 触发对象，就各加一条并把值来源选成对应项（如 `room_name` ← 会话名）。自定义模板只允许引用白名单字段：`${record.chatName}` / `${record.targetName}` / `${record.targetUsername}` / `${record.username}` / `${record.keyword}` / `${record.text}` / `${record.chatType}` / `${record.triggeredAt}` / `${task.name}` / `${task.id}`；**不允许凭据（secret）或配置（config），也不允许白名单外字段**。参数名在列表内唯一；**不配置就不发额外参数**。RPA 厂商的旧版参数映射（`paramMap` / `inputArgumentsMap` / `appParamsMap` / `parameterMap` / `inputParamMap`）读取和投递时自动迁移为等价附加参数，已显式清空的列表不会被恢复；**Webhook 的旧 `paramMap` 从未生效，不迁移**。**凭据不参与任何参数**。图片默认不发；只有显式选择三种图片类来源时才发**签名直链**（一小时过期、一个令牌一张图；图片字节由厂商经本机入站面读取，需先打开局域网访问）。失败原因会展示厂商错误描述（不含本地凭据） |
+| 发出内容 | **Webhook**：命中那一条消息的**触发记录**：任务 id/名称、记录 id、触发时间（毫秒 + 本地时间文本）、会话（username / 名称 / 单聊或群聊）、触发对象（username / 名称）、命中的关键词、触发文本（上限 4,000 字；开启「敏感字段打码」时先脱敏）、**你显式配置的附加参数 `params`**（默认 `{}`）、该对象**最近 N 张图片**（N = 任务里填的 0–9）。图片传输方式由任务里的 `imageDelivery` 决定：默认 `dataUrl` 逐张放 `data:image/…;base64,…`；`multipart` 则把 JSON 放 `payload` part、把图片原始字节放最多 9 个 `images` 文件 part，并在元数据里带 `filename` / `contentType` / `size` / `sha256`，不再生成 base64。两种模式的图片内容范围相同；解码失败或超出上限时省略该张并带上 `error`。<br/>**各 RPA 厂商**：只发送该厂商要求的流程标识、鉴权信息与你配置的**附加参数**；三参数与其他业务字段都不再隐式发送。触发文本作为 `content` 来源时会先过隐私闸（上限 4,000 字、开启「敏感字段打码」时脱敏），只有你显式添加 `content` 来源时才进入参数。开放 API 发 `flowId` + `params`，MCP 发 `automationId` + `parameters`，影刀发 `params[]`，UiPath 发 `InputArguments` JSON 文本，阿里云发 `AppParams`，来也发 `parameters[]`，实在发 `inputParam`；容器默认均为空。**图片默认不发**：只有显式选择 `imagesJson` / `imageCount` / `firstImageUrl` 时，才发送触发图片的签名直链、数量或首张成功链接（需先打开局域网访问；云端 RPA 需可达的 `rpa_media_base_url`）。<br/>两种方式都**不发**数据库、其它会话、通讯录 |
 | 目的地（逐家） | **Webhook**：**你为每个任务填写的地址**（`http(s)`，最长 2048 字符）。应用不内置、不猜测、不代填任何 Webhook 主机。<br/>**各 RPA 厂商**（主机来自厂商描述符白名单；私有化 / 自定义实例地址禁止 localhost、127.0.0.1 与私网 IP）：<br/>八爪鱼 `api-rpa.bazhuayu.com`（固定）· **八爪鱼 MCP `mcp-rpa.bazhuayu.com`（固定，不可自定义基址）** · 影刀 `api.yingdao.com`（SaaS；专有云用你填的实例地址）· UiPath `cloud.uipath.com` / `*.uipath.com` / `*.uipath.us` 或你配置的实例地址（Cloud / Standalone 私有化）· 阿里云 `console-rpa.aliyun.com`（线下部署用你填的实例地址）· 来也 `*.laiye.com`（企业版私有化）或**你配置的 Commander 实例地址** · 实在智能 `z-commander-api.ai-indeed.com`（SaaS）或你填的私有化实例地址 |
-| 凭据与落盘 | 所有厂商的凭据（Webhook 无；八爪鱼 / 八爪鱼 MCP API Key；影刀 AccessKeyId / AccessKeySecret；UiPath PAT 或 OAuth client_secret；阿里云 AccessKeyId / AccessKeySecret；来也个人访问令牌；实在 AppKey / AppSecret）**只存本机** `<数据根>\wechat_task_center.db` 的 `trigger_secret` 列，投递时由后端读出放进请求头 / 请求体（API Key 只进请求头）。**默认只回「是否已配置」**：任务列表 / 触发记录 / 普通 Remote 只拿得到 `triggerSecretSet` 布尔、**不含凭据原文**；**桌面端本机**可在任务编辑抽屉点「眼睛」**按需回读原文**（`revealTaskTriggerSecret`：远程 HTTP 通道列入 `LOCAL_ONLY` 会被拒绝、不写日志 / 不做操作留痕、关闭抽屉即丢弃明文）。非敏感配置（URL / FlowId / ReleaseKey / automationId / 参数映射 / 八爪鱼附加参数等）存 `trigger_config`，随任务列表返回 |
-| 开关 | ⚠️ 没有全局出网开关（与 A/B 同口径）。真正的约束是**每个任务的配置**：选中的触发方式必填项 / 必填凭据没配齐就无法标记「已完善」，因此既不扫描也不投递；八爪鱼（开放 API 与 MCP）默认 `params` / `parameters` 为空、**不发业务参数**，只有你在「附加参数」里配置了才发；把任务退回「待完善」或删掉任务即停止该任务的触发与投递。未知 / 已下线厂商的任务不投递。要彻底不发：删任务，或断网 / 防火墙 |
+| 凭据与落盘 | 所有厂商的凭据（Webhook 无；八爪鱼 / 八爪鱼 MCP API Key；影刀 AccessKeyId / AccessKeySecret；UiPath PAT 或 OAuth client_secret；阿里云 AccessKeyId / AccessKeySecret；来也个人访问令牌；实在 AppKey / AppSecret）**只存本机** `<数据根>\wechat_task_center.db` 的 `trigger_secret` 列，投递时由后端读出放进请求头 / 请求体（API Key 只进请求头）。**默认只回「是否已配置」**：任务列表 / 触发记录 / 普通 Remote 只拿得到 `triggerSecretSet` 布尔、**不含凭据原文**；**桌面端本机**可在任务编辑抽屉点「眼睛」**按需回读原文**（`revealTaskTriggerSecret`：远程 HTTP 通道列入 `LOCAL_ONLY` 会被拒绝、不写日志 / 不做操作留痕、关闭抽屉即丢弃明文）。非敏感配置（URL / FlowId / ReleaseKey / automationId / **附加参数**等）存 `trigger_config`；RPA 厂商旧版映射字段会在读取时转换，Webhook 的无效旧 `paramMap` 会被丢弃，不会进入请求体 |
+| 开关 | ⚠️ 没有全局出网开关（与 A/B 同口径）。真正的约束是**每个任务的配置**：选中的触发方式必填项 / 必填凭据没配齐就无法标记「已完善」，因此既不扫描也不投递；所有触发方式默认附加参数容器为空、**不发额外业务参数**，只有你在「附加参数」里配置了才发；把任务退回「待完善」或删掉任务即停止该任务的触发与投递。未知 / 已下线厂商的任务不投递。要彻底不发：删任务，或断网 / 防火墙 |
 | 审计 | ✅ 所有厂商投递都先过同一个隐私闸（功能名 `task_callback`）：开启「敏感字段打码」时**触发文本**脱敏，并记入本机 AI 出站审计（字符数 / 会话数 / 消息数）。投递结果（sent / failed + 错误原因 + 时间 + 厂商任务 id）落进 `<数据根>\wechat_task_center.db` 的触发记录 |
 | 网络细节 | 所有厂商走**同一个**出网函数（`query/rpa/dispatch.ts#sendRequest`，出网点台账只登记这一处）：单次 15 秒超时；重试策略来自厂商描述符 —— **无幂等键的厂商禁止自动重试**（八爪鱼开放 API / 八爪鱼 MCP / 实在 / 来也 / UiPath 最多 1 次），影刀用 `idempotentUuid`、阿里云用 `X-Idempotent-Request-ID` 时才允许按策略重试；HTTP 状态 + 业务码 / JSON-RPC `result` 决定成败，成功时把厂商任务 id 落到 `external_task_id`（开放 API = `flowProcessNo`；MCP = `runId`）。**v1 不接收厂商回调、不轮询完成状态**：`sent` 只代表厂商已受理，执行结果需到厂商控制台查看（界面文案已区分） |
 | 落盘 | 任务配置与触发记录保存在 `<数据根>\wechat_task_center.db`（与 `wechat_tasks.db` 同级）；任务删除后**触发记录保留**（历史事实），仍可查看，但所属任务已不存在，`pending` / `failed` 记录不能重新投递。凭据同上只存这个库、只由 worker 读出。兼容期保留旧列 `callback_url` / `bazhuayu_flow_id` / `bazhuayu_api_key`（读写双写、读取回退），旧任务迁移后行为不变 |
-| 代码 | `query/rpa/registry.ts`（厂商注册表：8 个适配器，含八爪鱼 MCP 实验性条目）· `query/rpa/dispatch.ts`（通用派发管道 + **唯一**出网函数 `sendRequest`）· `query/rpa/template.ts`（字段校验 / 请求渲染 / 参数映射 / **八爪鱼附加参数的来源解析与模板白名单**）· `query/rpa/auth.ts`（鉴权与 token 缓存）· `query/rpa/vendors/*.ts`（每家一个适配器：描述符 + 可选钩子；`bazhuayu-mcp.ts` 另有 JSON-RPC + SSE 钩子）· `query/task-center.ts`（存储 / 迁移 / 校验 / CRUD）· `query/task-center-secret.ts`（**凭据按需回读 `revealTaskTriggerSecret`**）· `query/task-center-scan.ts`（扫描 / 水位 / 图片引用）· `query/task-center-callback.ts`（投递编排 / 状态回写）· `remotes/task-center.ts`（处理器）· `gateway-taskcenter.ts`（同步事件驱动 + 10 秒兜底定时器 + 11 个 @Remote） |
+| 代码 | `query/rpa/registry.ts`（厂商注册表：8 个适配器，含八爪鱼 MCP 实验性条目）· `query/rpa/dispatch.ts`（通用派发管道 + **唯一**出网函数 `sendRequest`）· `query/rpa/template.ts`（字段校验 / 请求渲染 / 参数映射 / **附加参数来源解析与模板白名单**）· `query/rpa/media-links.ts`（图片类来源 → 签名直链 / JSON 清单 / 数量 / 首图）· `net/rpa-media.ts`（令牌格式、HMAC 签发验签、路径白名单；worker 与宿主共用同源产物）· `query/rpa/auth.ts`（鉴权与 token 缓存）· `query/rpa/vendors/*.ts`（每家一个适配器：描述符 + 可选钩子；`bazhuayu-mcp.ts` 另有 JSON-RPC + SSE 钩子）· `query/task-center.ts`（存储 / 迁移 / 校验 / CRUD）· `query/task-center-secret.ts`（**凭据按需回读 `revealTaskTriggerSecret`**）· `query/task-center-scan.ts`（扫描 / 水位 / 图片引用）· `query/task-center-callback.ts`（投递编排 / 状态回写 / 按需建图片链接）· `remotes/task-center.ts`（处理器）· `gateway-taskcenter.ts`（同步事件驱动 + 10 秒兜底定时器 + 图片直链基址装配）· `src/backend/rpa-media.js`（宿主侧无 Cookie 图片路由） |
+
+### G4. 消息列表回复投递（发的是**内容**：你配置的那条回复）
+
+| 项 | 说明 |
+|---|---|
+| 触发 | ① 任务命中关键词后插入首次触发问候（默认「你好」，按当前规则取 `greetingText`）并在有规则时立即投递；② 外部系统向第四节 H.1 的局域网 Webhook POST 记录后立即投递；③ 你在「消息列表」手动新增后立即投递；④ 对失败或待执行记录点「重发」。任务后台扫描每拍也会尝试投递已有地址快照的 `pending` 记录 |
+| 发出内容 | 一条回复记录：`target`（触发对象）、`message`（触发文本，先过 `task_callback` 隐私闸；开启敏感字段打码时脱敏并写入本机审计）、`attachments`（图片：微信本地图片解码后的 `data:image/...`、安全的 data URL 或外部 `http(s)` 地址）、`recordId`、`replyId`、`chatName`、`targetName`、`source`、`triggeredAt` 与 `note`。会话名、触发对象、备注、外链与图片字节**不在文本脱敏范围内**；不要在这些字段里填写不希望发给下游的内容 |
+| 目的地 | **你为「会话名 + 触发对象」配置的下游 Webhook 地址**（只允许 `http/https`）。匹配顺序：精确「会话 + 对象」→ 同会话任意对象 → 任意会话指定对象 → 全局规则。地址由你填写，应用不内置、不猜测；记录落库时保存地址快照，重发优先走该快照，避免规则改动悄悄改道 |
+| 失败与重试 | HTTP 2xx 记为成功；非 2xx、超时或网络错误记为失败。因为下游通常直接发微信消息，**不自动重试**，避免一条回复被发两次；失败后只由你在台账里点「重发」。没有匹配规则时记录保持 `pending`，**不发任何网络请求**，也不把这次匹配失败算作网络尝试 |
+| 开关 | ⚠️ 没有全局出网开关（与 A/B 同口径）。真正的约束是规则：停用或删除规则后，新记录不再匹配该地址；已有记录保存的地址快照仍可能在你点「重发」时使用。要彻底不发：删除/停用相关规则、不要点重发，或断网 / 防火墙 |
+| 审计与落盘 | 文本过闸时功能名为 `task_callback`，只记录字符数等元数据；投递状态、错误、尝试次数、下游返回摘要和回复 id 写入 `<数据根>\wechat_task_center.db` 的 `message_list_records`。外部入站记录的 `source` 由服务端强制为 `webhook` |
+| 网络细节 | 与任务触发共用 `query/rpa/dispatch.ts#sendRequest`；单次 15 秒超时，`maxAttempts=1`、`retryOn=[]`。下游 JSON 若含 `replyId` / `reply_id` / `id`（或 `data` 内的同名字段），会回写到台账的回复 id |
+| 代码 | `query/message-list-store.ts`（记录 / 规则 / 首次问候 / 地址快照 / 尝试次数）· `query/message-list-dispatch.ts`（隐私闸 / 图片组装 / POST / 状态回写）· `remotes/message-list.ts`（Remote 处理器）· `gateway-message-list.ts`（单飞后台投递与局域网地址）· `net/message-webhook.ts`（路径令牌派生 / 验签）· `src/backend/message-webhook.js`（宿主入站路由）· `src/client/ui-wechat/src/client/pages/wechat-data/panels/MessageListPanel.tsx`（界面） |
 
 ### H. 入站监听：打开网页交接 + 局域网扫码（2026-10-19 v22）—— **不是**出网点，但同属暴露面
 
@@ -613,6 +691,18 @@
 | 落盘 | **不新增任何落盘位置**。会话与配对码只存在于内存（进程退出或停服即失效）；长期 `api_token` 住在既有的 `secrets.json` 里，不写远程访问日志。 |
 | 防火墙 | ⚠️ 应用**没有管理员权限，不能替你添加入站规则**。监听期间 Windows 可能弹出「是否允许访问」——点「取消」浏览器就连不上。手动放行：`netsh advfirewall firewall add rule name="Super Time 远程访问" dir=in action=allow protocol=TCP localport=5032`；要彻底关掉：`netsh advfirewall firewall delete rule name="Super Time 远程访问"`。 |
 | 代码 | `src/backend/browser-handoff.js`（打开网页、右下角卡片、返回即停）· `src/backend/http-server.js`（监听、静态资源、路由、配对码校验、原生能力端点）· `src/backend/http-auth.js`（配对码/会话 Cookie/fullAccess 标记）· `src/backend/handoff-native.js`（交接会话的原生能力代理）· `src/backend/http-control.js`（开关/轮换）· `src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-remote-access.tsx`（局域网扫码界面）· `src/client/ui-app/handoff-boot.ts`（浏览器侧桥）· `src/backend/call-gates.js`（与桌面 IPC 共用同一道许可证闸门）· 界面 `titlebar-status.tsx`（「打开网页」按钮） |
+
+#### H.1 消息列表局域网 Webhook（2026-10-27 v30）
+
+| 项 | 说明 |
+|---|---|
+| 路由 | `GET / POST /api/message-webhook/<token>`。GET（以及 HEAD）只返回服务名、协议版本与 API 版本，用于健康检查；POST 接受截图协议 `{"target":"文件传输助手","message":"你好","attachments":[]}`，也兼容 `targetName` / `text` / `chatName` / `images` 等显式字段 |
+| 何时可达 | **不另开端口**，只在「设置 → 维护与自检 → 局域网访问（手机）」已启用且 `api_token` 非空时随既有监听面可达；默认关闭，关闭开关、退出应用或轮换令牌即不可达。普通「打开网页」交接期间也沿用同一监听面 |
+| 凭据 | 路径里的 `<token>` 是由 `api_token` 做域分离派生的稳定 HMAC，不是会话 Cookie，也不把长期 `api_token` 原样放进 URL。**完整地址等同于写入凭据**：拿到地址的人无需登录即可 POST 记录；轮换 `api_token` 会让旧地址立即失效。地址可能出现在反向代理/服务器访问日志中，请只交给可信系统 |
+| 写入边界 | 路由在会话 Cookie 校验之前只做 Host 校验与路径令牌验签；请求体必须是 JSON 对象，字段在 `message-list-store.ts` 清洗：触发对象必填，文本上限 4,000 字，图片最多 9 张且只接受微信本地引用 / `http(s)` / 安全 `data:image`，不接受任意本机路径。来源由服务端强制为 `webhook` |
+| 返回语义 | 记录成功落库即返回 `200 {ok:true, accepted:true}`；即使下游投递失败也返回 `accepted:true, delivered:false` 并在记录里保留失败原因，调用方重放会造成重复记录。令牌缺失/错误统一 404；坏 JSON 400；Host 不匹配 421 |
+| 传输与暴露 | ⚠️ 与局域网访问相同，是**明文 HTTP、无 TLS**；同网段可嗅探路径令牌与提交内容。Host 头必须匹配当前监听地址（配置了图片直链反代域名时也仅对签名路径开放该域名例外）。只在你信任的局域网使用，用后关闭开关或轮换令牌 |
+| 代码 | `src/backend/http-server.js`（路由排在会话校验之前）· `src/backend/message-webhook.js`（验签 / JSON 路由 / 返回）· `src/backend/wechat-data/src/net/message-webhook.ts`（令牌派生 / 验签）· `query/message-list-store.ts#ingestMessageListWebhook`（清洗 / 强制来源 / 落库）· `query/message-list-dispatch.ts`（落库后立即投递） |
 
 ## 五、如何断网
 
@@ -640,12 +730,14 @@ AI 问答与总结会直接报网络错误。**其余功能（搜索、统计、
   —— 它是**数据范围**开关，不是全局出网开关；
 - 不点那些"按需才发生"的按钮（语音/本地决策模型下载、批量取原图、抽取实体、找链接建议）。
 
-**入站方向是本声明里唯一有应用内开关的一处**：`设置 → 远程访问（手机）`。
+**入站方向是本声明里唯一有应用内开关的一处**：`设置 → 维护与自检 → 局域网访问（手机）`。
 
 - 关掉它 = 本机**立刻停止监听**，局域网里任何设备都连不进来（这是真正的开关，不是数据范围开关）；
 - 「轮换令牌」= 让已经连上的手机失效（旧会话 Cookie 与旧配对码一并作废），二维码与链接随之更换；
 - 上面那三条系统级办法（断网 / 防火墙 / 指向内网）对入站同样有效：**在系统防火墙里禁止
   Super Time 入站**，即使开关是打开的也连不进来。
+- 消息列表的 `/api/message-webhook/<token>` 共用这个监听面，**没有单独开关**：关掉局域网访问
+  或轮换令牌即可让它失效；删除规则只会停止新的下游投递，不会删除已经写入的台账记录。
 
 > 注意口径差别：**出网**没有任何应用内开关（2026-09-30 起全部移除），要断只能靠系统；
 > **入站**有一个真开关，而且**默认就是关的**。
@@ -654,8 +746,8 @@ AI 问答与总结会直接报网络错误。**其余功能（搜索、统计、
 
 `数据边界与出网 → 敏感字段打码` 开启后，出站文本在发送前会把手机号、身份证号、
 银行卡号、邮箱、口令等模式替换为掩码（`src/backend/wechat-data/src/query/privacy.ts`）。
-它作用于 A、B 两条 AI 链路，以及 G3 的任务触发投递 —— G3 只对**触发文本**脱敏，
-任务名 / 会话名 / 触发对象名 / 关键词与图片内容不在脱敏范围内；八爪鱼「附加参数」里
+它作用于 A、B 两条 AI 链路，以及 G3 的任务触发投递与 G4 的消息列表回复投递 —— G3 / G4
+都只对**正文文本**脱敏，任务名 / 会话名 / 触发对象名 / 关键词 / 备注与图片内容不在脱敏范围内；八爪鱼「附加参数」里
 由你选择的固定值、自定义模板渲染结果也同样**不脱敏**（模板能引用的白名单字段本身不在打码范围）。
 
 注意：打码是**模式匹配**，不保证覆盖所有敏感形式。它只是改字节，**不减少出网点** ——
@@ -678,6 +770,7 @@ AI 问答与总结会直接报网络错误。**其余功能（搜索、统计、
 | 不提供密钥 | 不点「自动获取密钥」，改用手动填写；或在设置里清空 |
 | 让某个知识库文件永不出网 | 关闭该文件的「参与语义检索（会出网）」（数据范围开关） |
 | 停止某个任务的触发投递 | 「任务信息」里把该任务「标记待完善」或删除（所有触发方式都停）。见第四节 G3 |
+| 停止消息列表的下游投递 | 「消息列表 → 规则配置」里停用或删除对应规则；没有匹配规则的记录保持「待执行」，不会发请求。要同时停止入站写入，关闭局域网访问或轮换令牌（见 H.1） |
 | 导出你的数据 | 导出（CSV/HTML/TXT/…）、备份管家 |
 | 删除问答历史 / 导出记录 | 「微信问答 → 历史记录」里逐条删除或整体清空；「导出记录」里删除或按策略清理 |
 | 删除全部数据 | 删除 `<userData>\wechat`（含密钥与日志）与数据根目录 |
@@ -693,6 +786,9 @@ AI 问答与总结会直接报网络错误。**其余功能（搜索、统计、
 
 | 版本 | 日期 | 材料性变更 |
 |---|---|---|
+| v30 | 2026-10-27 | **新增「消息列表」回复台账与局域网入站 Webhook**：任务首次触发插入问候；台账保存回复 id、会话、对象、文本、图片引用、时间、来源、状态、备注与下游地址快照；记录匹配「会话名 + 触发对象」规则后向你配置的下游 Webhook POST 内容（文本过 `task_callback` 隐私闸，图片可为 data URL / 外链，失败不自动重试）。局域网访问开启时新增 `/api/message-webhook/<token>` 的 GET / POST，令牌由 `api_token` 域分离派生、轮换即失效，Host 校验保留，链路仍是明文 HTTP；POST 可无 Cookie 写入台账。新增本机正文/图片台账与入站写入面，故升版要求重新同意 |
+| v29 | 2026-10-23 | **所有触发方式统一为「附加参数显式配置」**：影刀 / UiPath / 阿里云 / 来也 / 实在智能移除内置 `room_name` / `content` / `at_name` 自动发送，`params[]` / `InputArguments` / `AppParams` / `parameters[]` / `inputParam` 默认均为空容器；Webhook 也把用户配置的条目放进整条记录顶层的 `params`（默认 `{}`），**不配置就不发额外业务参数**。所有参数改由「附加参数」逐条配置（每个列表最多 20 条、14 种值来源）；RPA 厂商旧版 `paramMap` / `inputArgumentsMap` / `appParamsMap` / `parameterMap` / `inputParamMap` 在读取与投递时自动迁移为等价条目，已显式清空的列表不会被恢复；Webhook 的旧 `paramMap` 从未生效，不迁移。凭据仍不参与参数。这改变了默认出网内容和用户控制方式，故升版要求重新同意 |
+| v28 | 2026-10-23 | **RPA 触发可显式携带图片**：附加参数新增 `imagesJson` / `imageCount` / `firstImageUrl`。只有用户显式选择图片类来源时，才解码对应触发图片并生成**一小时过期、一个令牌一张图**的 HMAC 签名直链；图片字节由厂商机器人经本机局域网监听面读取（云端需配置 `rpa_media_base_url`），未开门监听时在图片项中如实写 `error`，不发送无效地址。这是本声明首次允许**图片字节经本机入站面被厂商读取**，属材料性变更，故升版要求重新同意 |
 | v27 | 2026-10-21 | **新增第 8 个触发方式「八爪鱼 RPA（MCP）」（实验性）**：除开放 API 外，可用八爪鱼官方 MCP Server 通道 —— 本机向**新固定主机** `mcp-rpa.bazhuayu.com/mcp` 发 JSON-RPC（工具 `automation_call`），只发**应用 id（automationId）** + 你在「附加参数」里配置的 `parameters`（默认 `{}`，11 种值来源与开放 API 相同），**不发图片**；成功 `runId` 只代表已受理。属**新增出网主机**，故升版要求重新同意。该通道为实验性：协议已用真实 API Key 实测通（`tools/list` / `automation_details` / `bot_online_list` 200），但 `automation_call` 因个人版机器人无执行权益返回 `BotFeatureIsDisabled`（与开放 API `FeatureIsDisabled` 同根因）；与开放 API 是**两条并存链路**，不是替换 |
 | v26 | 2026-10-21 | **桌面端本机可查看已保存的任务触发凭据原文**（材料性变更）：任务编辑抽屉的凭据字段新增「眼睛」——点击按需回读本机 `trigger_secret` 里该厂商已保存的凭据（八爪鱼 API Key / 影刀 AccessKeySecret / UiPath PAT 等所有 secret 字段），再点隐藏；关闭抽屉 / 切换厂商 / 保存后明文即丢弃。**仅桌面端本机**：`revealTaskTriggerSecret` 已列入远程 HTTP 通道的 `LOCAL_ONLY`（手机 / 普通浏览器调用被拒绝）；**不写日志、不做操作留痕**；任务列表 / 触发记录仍只回 `triggerSecretSet` 布尔、不含原文；凭据仍只进厂商请求头、不参与参数、不发图片。此前「凭据永不回读」的口径改变，故升版要求重新同意 |
 | v25 | 2026-10-21 | **八爪鱼 RPA 参数改为完全由用户显式配置**（v1.2.0；默认发送内容变少、不扩大范围）：**移除三个内置参数**（不再自动发 `room_name` / `content` / `at_name`，默认 `params` 为空、不发业务参数），所有参数都在「附加参数」里逐条添加（最多 20 条，值来源 11 种：会话名 / 触发文本 / 触发对象 / 任务名 / 触发关键词 / 触发时间 / 会话类型 / 任务 id / 触发记录 id / 固定值 / 自定义模板；模板只允许 `${record.<白名单字段>}` / `${task.name}` / `${task.id}`，**不允许 secret / config**）。**任务名、关键词、触发时间等可能随请求发出去**，属内容出网点**范围扩大**，故升版要求重新同意（同日再按用户要求移除内置三参数，版本仍为 v25）。边界不变：凭据只进 `X-API-Key` 头、不参与参数；RPA 仍不发图片；旧任务的 `paramMap` 保存时丢弃，需要发会话名 / 触发文本 / 触发对象时请自行在附加参数里补三条 |

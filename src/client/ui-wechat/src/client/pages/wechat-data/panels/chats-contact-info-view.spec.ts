@@ -81,6 +81,17 @@ describe('单聊「聊天信息」的实时刷新', () => {
     expect(text()).toContain('91')
   })
 
+  it('360 统计读取失败时仍保留客户画像入口', async () => {
+    mocks.apiGetContact360.mockRejectedValueOnce(new Error('统计库暂不可用'))
+    render()
+    await flush()
+    expect(text()).toContain('统计库暂不可用')
+    expect(
+      host.querySelector('[data-st-portrait-entry]'),
+      '统计失败把整个画像入口一起藏掉了',
+    ).not.toBeNull()
+  })
+
   it('开着时宿主数据事件 ⇒ 静默重取并重绘统计', async () => {
     mocks.apiGetContact360.mockResolvedValueOnce(snap('wxid_a', 91))
     render()

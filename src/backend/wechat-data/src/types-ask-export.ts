@@ -12,6 +12,7 @@ import type {
   EvidenceBundle,
 } from './query/answer-runtime/evidence.ts'
 import type {
+  AnswerRuntimeStage,
   AnswerRuntimeResourceCitation,
   ToolCallTrace,
 } from './query/answer-runtime/types.ts'
@@ -26,6 +27,8 @@ export interface VoiceDataUrlResult {
   url?: string
   /** 由 wav 头算出的时长（秒），供界面显示与校验。 */
   durationSec?: number
+  /** 导出链路专用：wav 的本地路径（普通播放 RPC 不返回）。 */
+  file?: string
   error?: string
 }
 
@@ -34,6 +37,10 @@ export interface ExportResult {
   path: string
   filename: string
   count: number
+  /** ZIP 中成功写入的唯一媒体资源数（可选，兼容其它导出入口）。 */
+  mediaCount?: number
+  /** 未能写入 ZIP 的媒体资源数（只影响该资源，不使整次导出失败）。 */
+  mediaMissingCount?: number
 }
 
 /**
@@ -192,6 +199,14 @@ export interface AskResult {
   synthesisError?: string
   /** 本轮真实执行过的工具 trace（不含完整参数正文）。 */
   toolCalls?: ToolCallTrace[]
+  /**
+   * 本轮过程事件的完整快照，按实际发射顺序保留。
+   *
+   * 与实时 `emitStage` 使用同一份事件形状；旧后端可能不返回该字段。
+   */
+  stages?: AnswerRuntimeStage[]
+  /** 本轮问答运行时的端到端耗时（毫秒）；旧后端可能不返回该字段。 */
+  durationMs?: number
   /** 收敛、去重、预算截断后的证据包。 */
   evidence?: EvidenceBundle
   /** 文件/收藏/朋友圈等独立资源的可点击引用。 */
@@ -325,6 +340,8 @@ export interface AskHistoryEntry {
   username: string
   /** 会话显示名（列表直接显示，不必再查会话表）。 */
   usernameName: string
+  /** 企业微信会话所属企业名称（读取时按当前 contact 元数据补充）。 */
+  usernameEnterpriseName?: string
   /** 时间范围（YYYY-MM-DD，空 = 全部时间）。 */
   from: string
   to: string

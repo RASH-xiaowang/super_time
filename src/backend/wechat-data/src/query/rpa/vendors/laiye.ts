@@ -12,24 +12,19 @@
  * 来源：来也官方文档站（2026-10-21）：[MCP 服务](https://documents.laiye.com/automation-commander/docs/MCP)
  * （页面版本 V6.7）、触发器/任务/队列页、用户中心系统设置、V6.2 发行说明、V6.0.0.2211 历史应用管理。
  */
-import type { RpaMappingTarget, RpaSemantic, RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
 import type {
   RpaHttpRequest,
   RpaHttpResponse,
   RpaInvocationContext,
-  RpaRecordContext,
   RpaSendResult,
   RpaVendorAdapter,
 } from '../types.ts'
 
 /** MCP 工具名（v6.7 官方文档）。 */
 const CREATE_TASK_TOOL = 'create_task'
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
-const MAP_FIELD = 'parameterMap'
 
 const tokenField: RpaField = {
   key: 'token',
@@ -45,8 +40,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'laiye',
   name: '来也 RPA',
   vendor: '来也科技（Laiye）· 机器人指挥官 Automation Commander',
-  version: '1.0.0',
-  summary: '通过机器人指挥官 MCP 服务（tools/call create_task）创建任务；实验性：官方未给 JSON-RPC 报文示例。',
+  version: '1.1.0',
+  summary: '通过机器人指挥官 MCP 服务（tools/call create_task）创建任务；业务参数全部由「附加参数」显式配置。实验性：官方未给 JSON-RPC 报文示例。',
   status: 'experimental',
   docs: {
     home: 'https://documents.laiye.com/automation-commander/docs/MCP',
@@ -131,12 +126,14 @@ const descriptor: RpaVendorDescriptor = {
       help: '官方：high/middle/low，默认 middle。',
     },
     {
-      key: 'parameterMap',
-      label: '参数映射',
-      type: 'map',
-      required: true,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '映射成 create_task.parameters[]（parameterName/parameterType/parameterValue，类型仅 string/number/boolean）。',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: 'create_task.parameters[] 全部在这里配置（默认 []，不发任何业务参数）。参数名须与流程入参一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -149,8 +146,9 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'object',
-    mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'parameterMap',
   },
   request: {
     method: 'POST',
@@ -182,12 +180,14 @@ const descriptor: RpaVendorDescriptor = {
     '官方未给 create_task 的 HTTP/JSON-RPC 报文样例：封装格式待联调核对',
     'MCP 响应需二次/三次 JSON 解析（result 是字符串，return.data 可能仍是字符串）',
     '无幂等键：自动重试可能重复创建任务（maxAttempts=1）；版本差异大（6.0→6.7）',
+    '业务参数默认不发；只有「附加参数」显式配置后才进入 parameters[]，请确认参数名与流程入参一致',
   ],
   notes: [
     '官方未给 HTTP 报文示例（只给工具名/参数表/响应示例）→ JSON-RPC 封装待联调核对。',
     'Bearer 个人令牌有效期官方未公开；只能绑个人身份，人员离职/重置令牌会让集成中断。',
     '响应解析按「result 字符串 → return.code/data.taskIds」实现，并兼容 MCP content[].text 形态。',
     'v1 只落库 taskIds[0]（externalTaskId），不实现 query_task_result 轮询。',
+    '2026-10-23（v1.1.0）：移除内置参数映射，统一改为「附加参数」；旧 parameterMap 自动迁移。',
   ],
 }
 
@@ -199,31 +199,19 @@ function configText(ctx: RpaInvocationContext, key: string): string {
   return ''
 }
 
-/** 三个语义参数位的取值（单聊没有触发对象名时回落会话名，与旧实现同口径）。 */
-function semanticValue(record: RpaRecordContext, semantic: RpaSemantic): string {
-  if (semantic === 'room') return record.chatName
-  if (semantic === 'content') return record.text
-  return record.targetName !== '' ? record.targetName : record.chatName
-}
-
-/** `parameters[]`：每项 `parameterName/parameterType: 'string'/parameterValue`。 */
+/** `parameters[]`：把附加参数对象按 create_task 的固定形状展开。 */
 function taskParameters(ctx: RpaInvocationContext): Array<{
   parameterName: string
   parameterType: string
   parameterValue: string
 }> {
-  const raw = ctx.config[MAP_FIELD]
-  const overrides = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}
-  return MAPPING_TARGETS.map((target) => {
-    const custom = overrides[target.semantic]
-    const name = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
-    return {
-      parameterName: name,
-      // 微信侧三个值都是字符串；官方 create_task 的 parameterType 支持 string/number/boolean。
-      parameterType: 'string',
-      parameterValue: semanticValue(ctx.record, target.semantic),
-    }
-  })
+  const mapped = resolveMapped(descriptor, ctx) as Record<string, string>
+  return Object.entries(mapped).map(([parameterName, parameterValue]) => ({
+    parameterName,
+    // 当前附加参数来源均可还原为字符串；官方 create_task 支持 string/number/boolean。
+    parameterType: 'string',
+    parameterValue,
+  }))
 }
 
 /** 尝试解析可能套了多层字符串的 JSON；解析失败返回 undefined。 */

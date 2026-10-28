@@ -65,11 +65,14 @@ export interface PipelineInput {
 export interface PipelineOutput {
     citations: Array<{
         name: string;
+        enterpriseName?: string;
         time: string;
         snippet: string;
         username: string;
         local_id: number;
         sender?: string;
+        senderEnterpriseName?: string;
+        source?: 'msg' | 'kb' | 'agg';
     }>;
     chunks: ReturnType<typeof compressContext>['chunks'];
     terms: string[];

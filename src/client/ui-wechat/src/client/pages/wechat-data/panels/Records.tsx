@@ -11,6 +11,8 @@ import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 type Kind = 'revokes' | 'transfers' | 'redpackets' | 'finder' | 'miniprograms' | 'friendverifications'
 
@@ -88,13 +90,45 @@ function badge(label: string, tone: string, key = 'b', hint?: string): React.JSX
   return <td key={key}><span className={`${css.badge} ${cls}`} title={hint}>{label}</span></td>
 }
 function recordLinkTd(open: (u: string, l?: string | number | boolean | null | undefined) => void, username: string | number | boolean | null | undefined, localId?: string | number | boolean | null, key = 's', label?: string | number | boolean | null): React.JSX.Element {
-  return <td key={key}>{username ? <LinkButton onClick={() => { open(String(username), localId) }} title={String(username)}>{shortUser(label || username)}</LinkButton> : <span className={css.muted}>—</span>}</td>
+  const value = String(username ?? '').trim()
+  if (!value) return <td key={key}><span className={css.muted}>—</span></td>
+  const name = String(label || username)
+  return (
+    <td key={key}>
+      <LinkButton className={css.recordIdentityLink} onClick={() => { open(value, localId) }} title={value}>
+        <IdentityName name={name} username={value} size={20}>{shortUser(name)}</IdentityName>
+      </LinkButton>
+    </td>
+  )
+}
+
+/** A non-navigating identity cell; only real usernames are allowed to request avatars. */
+function identityTd(
+  username: string | number | boolean | null | undefined,
+  displayName: string | number | boolean | null | undefined,
+  enterpriseName: string | number | boolean | null | undefined,
+  key: string,
+  size = 20,
+): React.JSX.Element {
+  const value = String(username ?? '').trim()
+  if (!value) return td(<span className={css.muted}>—</span>, key)
+  const name = identityText(displayName || username, enterpriseName)
+  return td(<IdentityName name={name} username={value} size={size} title={name}>{name}</IdentityName>, key)
 }
 
 function shortUser(u: string | number | boolean | null | undefined): string {
   const s = String(u ?? '').trim()
   if (!s) return '—'
   return s.length > 32 ? s.slice(0, 30) + '…' : s
+}
+
+function identityText(
+  name: string | number | boolean | null | undefined,
+  enterpriseName: string | number | boolean | null | undefined,
+): string {
+  const value = String(name ?? '').trim()
+  if (!value) return '—'
+  return shortUser(withEnterprise(value, String(enterpriseName ?? '')))
 }
 
 function dateToTs(v: string, endOfDay: 0 | 1): number {
@@ -284,42 +318,42 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         return (
           <table className={css.table}>
             {head(['会话', '消息 ID', '批次 ID', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, it.msg_local_id, 's', it.session_display)}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, it.msg_local_id, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'transfers':
         return (
           <table className={css.table}>
             {head(['会话', '类型', '收款方', '付款方', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（该 1–8 场景映射未经本机数据验证）`)}{td(<span className={css.muted}>{shortUser(it.receiver_display || it.pay_receiver)}</span>, 'r')}{td(<span className={css.muted}>{shortUser(it.payer_display || it.pay_payer)}</span>, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（该 1–8 场景映射未经本机数据验证）`)}{identityTd(it.pay_receiver, it.receiver_display || it.pay_receiver, it.receiver_enterprise, 'r')}{identityTd(it.pay_payer, it.payer_display || it.pay_payer, it.payer_enterprise, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'redpackets':
         return (
           <table className={css.table}>
             {head(['会话', '发送者', '状态', '类型', '消息 ID'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{td(<span className={css.muted}>{shortUser(it.sender_display || it.sender_user_name)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.hb_type) === 0 ? '普通红包' : `类型 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{identityTd(it.sender_user_name, it.sender_display || it.sender_user_name, it.sender_enterprise, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.hb_type) === 0 ? '普通红包' : `类型 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'finder':
         return (
           <table className={css.table}>
             {head(['视频号', '直播状态', '回放', '直播 ID'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = liveStatus(it.live_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span className={css.muted}>{shortUser(it.username_display || it.finder_username)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = liveStatus(it.live_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.finder_username, it.username_display || it.finder_username, it.username_enterprise, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'miniprograms':
         return (
           <table className={css.table}>
             {head(['名称', '用户名', 'AppID', '更新时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span>{String(it.nickname ?? '') || '（未命名）'}</span>, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.user_name, it.nickname || it.user_name, it.user_enterprise, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       default:
         return (
           <table className={css.table}>
             {head(['用户', '备注', '验证消息', '类型', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span className={css.muted}>{shortUser(it.user_display || it.user_name_)}</span>, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.user_name_, it.user_display || it.user_name_, it.user_enterprise, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
     }

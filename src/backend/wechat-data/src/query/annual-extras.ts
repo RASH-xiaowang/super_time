@@ -70,6 +70,8 @@ export interface AnnualRowInput {
 export interface AnnualChatInput {
   username: string
   name: string
+  /** 企业名称（仅企业微信单聊；群聊/普通联系人缺省）。 */
+  enterpriseName?: string
   /** 是否群聊（chatroom）。 */
   isGroup: boolean
 }
@@ -84,8 +86,12 @@ export interface AnnualMoney {
   topAmount: number
   /** 最大一笔对应的会话显示名（拿不到就空串）。 */
   topPeerName: string
+  /** 最大一笔对应的会话 username（拿不到就空串）。 */
+  topPeerUsername: string
+  /** 最大一笔对应会话的企业名称（仅企业微信单聊）。 */
+  topPeerEnterpriseName?: string
   /** 往来金额 TOP5（按金额倒序，同额按 username 升序，保证确定性）。 */
-  byPeer: Array<{ username: string; name: string; amount: number; count: number }>
+  byPeer: Array<{ username: string; name: string; enterpriseName?: string; amount: number; count: number }>
 }
 
 /** 年度撤回汇总。 */
@@ -94,6 +100,10 @@ export interface AnnualRevoke {
   count: number
   /** 撤回最多的会话显示名（拿不到就空串）。 */
   topPeerName: string
+  /** 撤回最多会话的 username（拿不到就空串）。 */
+  topPeerUsername: string
+  /** 撤回最多会话的企业名称（仅企业微信单聊）。 */
+  topPeerEnterpriseName?: string
   /** 24 个时段桶（0..23 点）的撤回条数。 */
   byHour: number[]
 }
@@ -255,6 +265,7 @@ function isRevokeRow(row: AnnualRowInput): boolean {
 interface PeerAgg {
   username: string
   name: string
+  enterpriseName?: string
   amount: number
   count: number
 }
@@ -263,6 +274,7 @@ interface PeerAgg {
 interface CountAgg {
   username: string
   name: string
+  enterpriseName?: string
   count: number
 }
 
@@ -272,14 +284,20 @@ interface CountAgg {
  * @param username - 会话标识（唯一键）。
  * @param name - 会话显示名。
  */
-function bumpCount(map: Map<string, CountAgg>, username: string, name: string): void {
+function bumpCount(map: Map<string, CountAgg>, username: string, name: string, enterpriseName?: string): void {
   const cur = map.get(username)
   if (cur === undefined) {
-    map.set(username, { username, name, count: 1 })
+    map.set(username, {
+      username,
+      name,
+      ...(enterpriseName !== undefined ? { enterpriseName } : {}),
+      count: 1,
+    })
     return
   }
   cur.count += 1
   if (cur.name === '') cur.name = name
+  if (cur.enterpriseName === undefined && enterpriseName !== undefined) cur.enterpriseName = enterpriseName
 }
 
 /**
@@ -289,15 +307,28 @@ function bumpCount(map: Map<string, CountAgg>, username: string, name: string): 
  * @param name - 会话显示名。
  * @param amount - 这一笔的金额（元）。
  */
-function bumpMoney(map: Map<string, PeerAgg>, username: string, name: string, amount: number): void {
+function bumpMoney(
+  map: Map<string, PeerAgg>,
+  username: string,
+  name: string,
+  enterpriseName: string | undefined,
+  amount: number,
+): void {
   const cur = map.get(username)
   if (cur === undefined) {
-    map.set(username, { username, name, amount, count: 1 })
+    map.set(username, {
+      username,
+      name,
+      ...(enterpriseName !== undefined ? { enterpriseName } : {}),
+      amount,
+      count: 1,
+    })
     return
   }
   cur.amount += amount
   cur.count += 1
   if (cur.name === '') cur.name = name
+  if (cur.enterpriseName === undefined && enterpriseName !== undefined) cur.enterpriseName = enterpriseName
 }
 
 /* ────────────── 结果装配（只读，不碰内部状态） ────────────── */
@@ -310,7 +341,13 @@ function bumpMoney(map: Map<string, PeerAgg>, username: string, name: string, am
  */
 function topMoneyPeers(map: Map<string, PeerAgg>): AnnualMoney['byPeer'] {
   return [...map.values()]
-    .map((p) => ({ username: p.username, name: p.name, amount: toYuan(p.amount), count: p.count }))
+    .map((p) => ({
+      username: p.username,
+      name: p.name,
+      ...(p.enterpriseName !== undefined ? { enterpriseName: p.enterpriseName } : {}),
+      amount: toYuan(p.amount),
+      count: p.count,
+    }))
     .sort((a, b) => b.amount - a.amount || byUsernameAsc(a.username, b.username))
     .slice(0, TOP_N)
 }
@@ -328,13 +365,17 @@ function topGroups(map: Map<string, CountAgg>): AnnualGroups['top'] {
 }
 
 /**
- * 撤回最多的会话显示名（同数按 username 升序取第一个）。
+ * 撤回最多的会话（同数按 username 升序取第一个）。
  * @param map - 撤回桶表。
- * @returns 会话显示名；一条撤回都没有时返回空串。
+ * @returns 会话 username、显示名与企业名；一条撤回都没有时三者都为空。
  */
-function topRevokePeerName(map: Map<string, CountAgg>): string {
+function topRevokePeer(map: Map<string, CountAgg>): { username: string; name: string; enterpriseName?: string } {
   const best = [...map.values()].sort((a, b) => b.count - a.count || byUsernameAsc(a.username, b.username))[0]
-  return best === undefined ? '' : best.name
+  return {
+    username: best?.username ?? '',
+    name: best?.name ?? '',
+    ...(best?.enterpriseName !== undefined ? { enterpriseName: best.enterpriseName } : {}),
+  }
 }
 
 /**
@@ -366,6 +407,7 @@ export function createAnnualExtras(): {
   let topAmount = 0
   let topPeerUsername = ''
   let topPeerName = ''
+  let topPeerEnterpriseName: string | undefined
   const moneyPeer = new Map<string, PeerAgg>()
   /** 撤回：条数 / 时段桶 / 按会话。 */
   let revokeCount = 0
@@ -377,17 +419,18 @@ export function createAnnualExtras(): {
     if (!Number.isFinite(ts) || ts <= 0) return
     rows += 1
     const name = displayNameOf(chat)
+    const enterpriseName = chat.enterpriseName?.trim() || undefined
 
     if (isGroupChat(chat)) {
       groupMessages += 1
-      bumpCount(groupAgg, chat.username, name)
+      bumpCount(groupAgg, chat.username, name, enterpriseName)
     }
 
     const amount = moneyAmountOf(row.text)
     if (amount !== null) {
       moneyCount += 1
       moneyTotal += amount
-      bumpMoney(moneyPeer, chat.username, name, amount)
+      bumpMoney(moneyPeer, chat.username, name, enterpriseName, amount)
       // 「最大一笔」同额时按 username 升序定主，避免结果依赖行序（分片并行/顺序变化都会改行序）。
       if (!hasTop || amount > topAmount
         || (amount === topAmount && byUsernameAsc(chat.username, topPeerUsername) < 0)) {
@@ -395,6 +438,7 @@ export function createAnnualExtras(): {
         topAmount = amount
         topPeerUsername = chat.username
         topPeerName = name
+        topPeerEnterpriseName = enterpriseName
       }
     }
 
@@ -402,29 +446,36 @@ export function createAnnualExtras(): {
       revokeCount += 1
       const hour = new Date(ts * 1000).getHours()
       revokeByHour[hour] = (revokeByHour[hour] ?? 0) + 1
-      bumpCount(revokePeer, chat.username, name)
+      bumpCount(revokePeer, chat.username, name, enterpriseName)
     }
   }
 
-  const done = (): { money: AnnualMoney; revoke: AnnualRevoke; groups: AnnualGroups } => ({
-    money: {
-      count: moneyCount,
-      total: toYuan(moneyTotal),
-      topAmount: hasTop ? toYuan(topAmount) : 0,
-      topPeerName: hasTop ? topPeerName : '',
-      byPeer: topMoneyPeers(moneyPeer),
-    },
-    revoke: {
-      count: revokeCount,
-      topPeerName: topRevokePeerName(revokePeer),
-      byHour: [...revokeByHour],
-    },
-    groups: {
-      messages: groupMessages,
-      share: rows > 0 ? groupMessages / rows : 0,
-      top: topGroups(groupAgg),
-    },
-  })
+  const done = (): { money: AnnualMoney; revoke: AnnualRevoke; groups: AnnualGroups } => {
+    const revokeTop = topRevokePeer(revokePeer)
+    return {
+      money: {
+        count: moneyCount,
+        total: toYuan(moneyTotal),
+        topAmount: hasTop ? toYuan(topAmount) : 0,
+        topPeerName: hasTop ? topPeerName : '',
+        topPeerUsername: hasTop ? topPeerUsername : '',
+        ...(hasTop && topPeerEnterpriseName !== undefined ? { topPeerEnterpriseName } : {}),
+        byPeer: topMoneyPeers(moneyPeer),
+      },
+      revoke: {
+        count: revokeCount,
+        topPeerName: revokeTop.name,
+        topPeerUsername: revokeTop.username,
+        ...(revokeTop.enterpriseName !== undefined ? { topPeerEnterpriseName: revokeTop.enterpriseName } : {}),
+        byHour: [...revokeByHour],
+      },
+      groups: {
+        messages: groupMessages,
+        share: rows > 0 ? groupMessages / rows : 0,
+        top: topGroups(groupAgg),
+      },
+    }
+  }
 
   return { onRow, done }
 }

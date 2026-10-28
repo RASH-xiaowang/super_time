@@ -1,6 +1,8 @@
 export interface AskSessionCatalogEntry {
     username: string;
     name: string;
+    enterpriseName?: string;
+    aliases?: readonly string[];
 }
 export declare class AskCatalogCache {
     private readonly currentDirectory;

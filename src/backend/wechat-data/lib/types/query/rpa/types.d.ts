@@ -8,6 +8,24 @@
 import type { RpaVendorDescriptor, RpaTriggerConfig } from '../../types-rpa.ts';
 import type { TaskTriggerImage } from '../../types.ts';
 import type { RetryFetch } from '../../net/fetch-retry.ts';
+/**
+ * 一张触发图片的**投递形态**（2026-10-23）：引用 + 短时签名直链。
+ *
+ * 为什么不是字节：RPA 厂商的触发接口只有字符串参数（见 `types-rpa.ts` 的 `RpaParamSource`）。
+ * 只有「图片链接」那三种值来源会读它；Webhook 仍走 `record.images` 自己的解码路径。
+ */
+export interface RpaImageLink {
+    /** 消息 local_id（与触发记录里的引用同源）。 */
+    localId: number;
+    createTime: number;
+    sender: string;
+    /** 图片 md5（有则带上：机器人侧可据此去重/核对）。 */
+    md5?: string;
+    /** 短时签名直链；解不出来时缺省（并带 `error`）。 */
+    url?: string;
+    /** 这张为什么没带上（解码失败 / 未启用局域网访问 / 路径越界）。 */
+    error?: string;
+}
 /** 一条触发记录在投递时的只读快照（`text` 已过隐私闸）。 */
 export interface RpaRecordContext {
     username: string;
@@ -19,7 +37,7 @@ export interface RpaRecordContext {
     text: string;
     keyword: string;
     triggeredAt: number;
-    /** 触发图片引用（Webhook 适配器按需解码；RPA 厂商不发图片）。 */
+    /** 触发图片引用（Webhook 按需解码；RPA 的图片类来源按需签短时直链）。 */
     images: TaskTriggerImage[];
 }
 /** 一次投递的完整上下文（模板占位符的顶层根）。 */
@@ -30,24 +48,41 @@ export interface RpaInvocationContext {
     idempotencyKey: string;
     taskName: string;
     record: RpaRecordContext;
+    /**
+     * 触发图片的签名直链（与 `record.images` 一一对应、顺序相同）。
+     *
+     * 由 `task-center-callback.ts` 在投递前预计算（解码是异步的，而参数解析是同步的）；
+     * 只有 `imagesJson` / `imageCount` / `firstImageUrl` 三种值来源会读它。
+     */
+    imageLinks: RpaImageLink[];
     config: RpaTriggerConfig;
     secrets: Record<string, string>;
 }
 /** 厂商钩子可用的解码依赖（仅 Webhook 适配器需要图片）。 */
 export interface RpaBuildDeps {
     decodedDir: string;
-    decodeImage: (username: string, localId: number) => Promise<{
+    decodeImage: (username: string, localId: number, options?: {
+        fileOnly?: boolean;
+    }) => Promise<{
         url?: string;
         file?: string;
     }>;
 }
-/** 已组装好的 HTTP 请求（body 一定是字符串；contentType 单独给 fetch 用）。 */
+/**
+ * 已组装好的 HTTP 请求。
+ *
+ * 普通请求用字符串 `body`；multipart 等二进制请求把原始字节放在 `bodyBytes`，
+ * `sendRequest` 会优先发送它。使用可重放的字节而不用一次性流，保证自动重试仍能
+ * 发送完全相同的请求体。
+ */
 export interface RpaHttpRequest {
     /** GET 只用于「换 token」（影刀等）；业务触发请求仍是 POST/PUT。 */
     method: 'GET' | 'POST' | 'PUT';
     url: string;
     headers: Record<string, string>;
     body: string;
+    /** 二进制请求体（multipart）；存在时优先于 `body`。 */
+    bodyBytes?: Uint8Array;
     contentType: string;
 }
 /** 一次 HTTP 响应（body 文本，由厂商解析器决定业务成败）。 */

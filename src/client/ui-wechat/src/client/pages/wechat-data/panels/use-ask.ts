@@ -12,7 +12,9 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { apiAskWechat, apiCancelAsk, remote } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
 import { getActiveKbId } from './kb-scope.ts'
-import { appendAskStage, type AskStage } from './ask-stage-merge.ts'
+import type { AskStage } from './ask-stage-merge.ts'
+import { buildAskRunMetrics, type AskRunMetrics, type AskRunTiming } from './ask-run-model.ts'
+import { useAskStreamFeed } from './use-ask-stream-feed.ts'
 import type { AskResult, ThreadState } from '@deepseek-ai/dsh-wechat-data/types'
 
 export type { AskStage } from './ask-stage-merge.ts'
@@ -39,11 +41,19 @@ export interface ToolCallTrace {
   elapsedMs: number
   errorClass?: string
   errorCode?: string
+  /** 后端脱敏后的错误正文；可能比 errorClass/errorCode 更适合直接解释原因。 */
+  errorMessage?: string
   hits: number
   facts: number
   deadlineExceeded?: boolean
   skipped?: boolean
   note?: string
+  /** 脱敏后的结果摘要；旧后端缺省。 */
+  resultSummary?: string
+  /** 脱敏、截断后的结构化结果快照；旧后端缺省。 */
+  resultDetail?: string
+  /** 结果详情是否因条数或长度限制被截断。 */
+  resultTruncated?: boolean
 }
 
 export type EvidenceSource = 'msg' | 'kb' | 'agg' | 'resource'
@@ -99,8 +109,12 @@ export interface EvidenceItem {
   tools: string[]
   source: EvidenceSource
   name: string
+  /** 会话 / 来源所属企业；企业微信会话才有。 */
+  enterpriseName?: string
   time: string
   sender?: string
+  /** 群消息发送者所属企业；单聊发送者使用会话企业名。 */
+  senderEnterpriseName?: string
   snippet: string
   score?: number
   key: string
@@ -178,12 +192,18 @@ interface AskResultRuntimeFields {
   resources?: AnswerRuntimeResourceCitation[]
   threadState?: AskThreadState
   grounding?: AskGrounding
+  /** 后端聚合的端到端耗时；旧后端缺省。 */
+  durationMs?: number
+  /** 后端收集的本轮阶段快照；旧后端缺省时沿用流式快照。 */
+  stages?: AskStage[]
 }
 
 /** 一轮对话（用户提问或助手回答）。 */
 export interface AskTurn {
   role: 'user' | 'assistant'
   text: string
+  /** 客户端轮次标识；流式与完成态共用，用于保留过程区的手动折叠选择。 */
+  runId?: string
   citations?: AskResult['citations']
   plan?: AskResult['plan']
   /** 回答正文里真正引用到的来源序号（1 基）。 */
@@ -244,6 +264,8 @@ export interface AskTurn {
    * 每步有状态（running/done/skipped）与结果摘要。生成中实时更新，完成后定格。
    */
   stages?: AskStage[]
+  /** 本轮的计时与耗时；旧轮次可能没有。 */
+  metrics?: AskRunMetrics
 }
 
 /** hook 选项。 */
@@ -287,6 +309,10 @@ export interface UseAskSessionResult {
   streamReasoning: string
   /** 生成中的**阶段列表**（2026-10-16；「工具调用过程」的实时数据源）。 */
   streamStages: AskStage[]
+  /** 当前在飞轮次的客户端起点；没有在飞轮次时为 0。 */
+  runStartedAt: number
+  /** 当前在飞轮次的稳定客户端 id；没有在飞轮次时为空串。 */
+  runId: string
   error: string | null
   ask: (question: string) => Promise<void>
   /** 停止当前这一轮的生成（W3-6.1）。幂等，没有在跑的轮次时点它也只是空取消。 */
@@ -348,6 +374,7 @@ function inheritedThreadState(
  * @param scopeSignature - 发起请求时的范围签名。
  * @param streamedReasoning - 流式思考兜底文本。
  * @param streamedStages - 流式阶段快照。
+ * @param metrics - 本轮计时快照。
  * @returns 可直接追加到线程的助手轮次。
  */
 function assistantTurnFromResult(
@@ -356,11 +383,15 @@ function assistantTurnFromResult(
   scopeSignature: string,
   streamedReasoning: string,
   streamedStages: AskStage[],
+  metrics: AskRunMetrics,
+  runId: string,
 ): AskTurn {
   const reasoning = r.reasoning ?? streamedReasoning
+  const stages = runtime.stages ?? streamedStages
   return {
     role: 'assistant',
     text: r.answer,
+    runId,
     citations: r.citations,
     plan: r.plan,
     citedIndexes: r.citedIndexes,
@@ -379,52 +410,9 @@ function assistantTurnFromResult(
     scopeSignature,
     ...(runtime.grounding !== undefined ? { grounding: runtime.grounding } : {}),
     ...(reasoning ? { reasoning } : {}),
-    ...(streamedStages.length > 0 ? { stages: streamedStages } : {}),
+    ...(stages.length > 0 ? { stages } : {}),
+    metrics,
   }
-}
-
-/**
- * 订阅回答 / 思考 / 阶段三条流式事件，并统一按当前轮次 id 过滤。
- * @param streamIdRef - 当前轮次 id（迟到事件的过滤器）。
- * @param setStreamText - 回答全文写入器。
- * @param setStreamReasoning - 思考全文写入器。
- * @param setStreamStages - 阶段快照写入器。
- */
-function useAskStreamFeed(
-  streamIdRef: MutableRefObject<string>,
-  setStreamText: Dispatch<SetStateAction<string>>,
-  setStreamReasoning: Dispatch<SetStateAction<string>>,
-  setStreamStages: Dispatch<SetStateAction<AskStage[]>>,
-): void {
-  useEffect(() => {
-    const onDelta = (e: Event): void => {
-      const d = (e as CustomEvent).detail as { id?: string; text?: string } | null
-      if (!d || !d.id || d.id !== streamIdRef.current) return
-      if (typeof d.text === 'string') setStreamText(d.text)
-    }
-    window.addEventListener('dsh-wechat-ask-delta', onDelta)
-    return () => { window.removeEventListener('dsh-wechat-ask-delta', onDelta) }
-  }, [setStreamText, streamIdRef])
-
-  useEffect(() => {
-    const onReasoning = (e: Event): void => {
-      const d = (e as CustomEvent).detail as { id?: string; text?: string } | null
-      if (!d || !d.id || d.id !== streamIdRef.current) return
-      if (typeof d.text === 'string') setStreamReasoning(d.text)
-    }
-    window.addEventListener('dsh-wechat-ask-reasoning', onReasoning)
-    return () => { window.removeEventListener('dsh-wechat-ask-reasoning', onReasoning) }
-  }, [setStreamReasoning, streamIdRef])
-
-  useEffect(() => {
-    const onStage = (e: Event): void => {
-      const d = (e as CustomEvent).detail as ({ id?: string } & Record<string, unknown>) | null
-      if (!d || !d.id || d.id !== streamIdRef.current) return
-      setStreamStages(prev => appendAskStage(prev, d))
-    }
-    window.addEventListener('dsh-wechat-ask-stage', onStage)
-    return () => { window.removeEventListener('dsh-wechat-ask-stage', onStage) }
-  }, [setStreamStages, streamIdRef])
 }
 
 /**
@@ -442,7 +430,9 @@ function finishLocalStream(input: {
   setStreamText: Dispatch<SetStateAction<string>>
   setStreamReasoning: Dispatch<SetStateAction<string>>
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
+  streamStageEventsRef: MutableRefObject<AskStage[]>
   setAsking: Dispatch<SetStateAction<boolean>>
+  timingRef: MutableRefObject<AskRunTiming>
 }): string | undefined {
   const id = input.streamIdRef.current
   if (id === '') return undefined
@@ -452,8 +442,10 @@ function finishLocalStream(input: {
   input.setStreamText('')
   input.setStreamReasoning('')
   input.setStreamStages([])
+  input.streamStageEventsRef.current = []
   input.setAsking(false)
   input.setError(null)
+  input.timingRef.current = { startedAt: 0 }
   return id
 }
 
@@ -463,16 +455,25 @@ function stoppedTurn(input: {
   reasoning: string
   stages: AskStage[]
   scopeSignature: string
+  metrics: AskRunMetrics
+  runId: string
 }): AskTurn {
   const text = input.text.trim()
   return {
     role: 'assistant',
     text: text === '' ? '（已停止生成）' : `${input.text}\n\n（已停止生成）`,
+    runId: input.runId,
     stopped: true,
     scopeSignature: input.scopeSignature,
     ...(input.reasoning.trim() !== '' ? { reasoning: input.reasoning } : {}),
     ...(input.stages.length > 0 ? { stages: input.stages } : {}),
+    metrics: input.metrics,
   }
+}
+
+/** 失败/停止轮次优先保存完整原始事件；旧接线没有原始流时回退到已合并快照。 */
+function stagesForTurn(raw: readonly AskStage[], merged: readonly AskStage[]): AskStage[] {
+  return raw.length > 0 ? [...raw] : [...merged]
 }
 
 /** 失败轮次保留原问题、错误码与部分内容，供用户一键重试。 */
@@ -483,16 +484,20 @@ function failedTurn(input: {
   scopeSignature: string
   code: string
   message: string
+  metrics: AskRunMetrics
+  runId: string
 }): AskTurn {
   return {
     role: 'assistant',
     text: input.text,
+    runId: input.runId,
     status: 'failed',
     statusReason: input.message,
     errorCode: input.code,
     scopeSignature: input.scopeSignature,
     ...(input.reasoning.trim() !== '' ? { reasoning: input.reasoning } : {}),
     ...(input.stages.length > 0 ? { stages: input.stages } : {}),
+    metrics: input.metrics,
   }
 }
 
@@ -514,11 +519,18 @@ function useAskRangeSwitch(input: {
   setStreamReasoning: Dispatch<SetStateAction<string>>
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
   setAsking: Dispatch<SetStateAction<boolean>>
+  timingRef: MutableRefObject<AskRunTiming>
+  streamTextRef: MutableRefObject<string>
+  streamReasoningRef: MutableRefObject<string>
+  streamStagesRef: MutableRefObject<AskStage[]>
+  streamStageEventsRef: MutableRefObject<AskStage[]>
+  activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
   setTurnList: (key: string, updater: (prev: AskTurn[]) => AskTurn[]) => void
 }): void {
   const {
     activeKey, keyRef, gateRef, streamIdRef, streamOwnerRef,
-    setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, setTurnList,
+    setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, timingRef,
+    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, activeTurnRef, setTurnList,
   } = input
   useEffect(() => {
     if (keyRef.current === activeKey) return
@@ -528,27 +540,36 @@ function useAskRangeSwitch(input: {
     const id = streamIdRef.current
     if (!id) return
     if (gateRef.current?.finish(id)) {
+      const active = activeTurnRef.current
+      const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
+      const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
       streamIdRef.current = ''
       streamOwnerRef.current = ''
       setStreamText('')
       setStreamReasoning('')
       setStreamStages([])
+      streamStageEventsRef.current = []
       setAsking(false)
+      timingRef.current = { startedAt: 0 }
+      setTurnList(oldKey, (prev) => {
+        const last = prev[prev.length - 1]
+        if (last?.role !== 'user') return prev
+        return [...prev, stoppedTurn({
+          text: streamTextRef.current,
+          reasoning: streamReasoningRef.current,
+          stages: turnStages,
+          scopeSignature: active.scopeSignature,
+          metrics,
+          runId: id,
+        })]
+      })
+      activeTurnRef.current = { key: '', scopeSignature: '' }
     }
     const pendingCancel = apiCancelAsk({ jobId: id })
-    setTurnList(oldKey, (prev) => {
-      const last = prev[prev.length - 1]
-      if (last?.role !== 'user') return prev
-      return [...prev, {
-        role: 'assistant',
-        text: '（已停止生成）',
-        stopped: true,
-      }]
-    })
     void pendingCancel.catch(() => { /* 旧轮次已释放，取消失败不影响新范围 */ })
     // 线程里已经落下「已停止生成」；错误槽保持为空，避免把正常停止显示成失败。
     setError(null)
-  }, [activeKey, gateRef, keyRef, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef])
+  }, [activeKey, activeTurnRef, gateRef, keyRef, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
 }
 
 interface AskSessionEnvironment {
@@ -570,13 +591,121 @@ interface AskSessionEnvironment {
   failedScopeRef: MutableRefObject<Record<string, string>>
   streamReasoningRef: MutableRefObject<string>
   streamStagesRef: MutableRefObject<AskStage[]>
+  streamStageEventsRef: MutableRefObject<AskStage[]>
   streamTextRef: MutableRefObject<string>
+  timingRef: MutableRefObject<AskRunTiming>
   gateRef: MutableRefObject<AskGate | null>
   activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
   threadsRef: MutableRefObject<Record<string, AskTurn[]>>
   scopeRef: MutableRefObject<Pick<UseAskSessionOptions, 'scopeUsername' | 'from' | 'to' | 'source' | 'scopeUsernameName' | 'useKb' | 'kbId'>>
   keyRef: MutableRefObject<string>
   setTurnList: (key: string, updater: (prev: AskTurn[]) => AskTurn[]) => void
+}
+
+interface AskSessionCommandsInput {
+  key: string
+  runAsk: (question: string, replaceAt?: number) => Promise<void>
+  threadsRef: MutableRefObject<Record<string, AskTurn[]>>
+  failedScopeRef: MutableRefObject<Record<string, string>>
+  scopeRef: MutableRefObject<Pick<UseAskSessionOptions, 'scopeUsername' | 'from' | 'to' | 'source' | 'scopeUsernameName' | 'useKb' | 'kbId'>>
+  streamIdRef: MutableRefObject<string>
+  streamOwnerRef: MutableRefObject<string>
+  streamTextRef: MutableRefObject<string>
+  streamReasoningRef: MutableRefObject<string>
+  streamStagesRef: MutableRefObject<AskStage[]>
+  streamStageEventsRef: MutableRefObject<AskStage[]>
+  gateRef: MutableRefObject<AskGate | null>
+  activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
+  timingRef: MutableRefObject<AskRunTiming>
+  setError: Dispatch<SetStateAction<string | null>>
+  setStreamText: Dispatch<SetStateAction<string>>
+  setStreamReasoning: Dispatch<SetStateAction<string>>
+  setStreamStages: Dispatch<SetStateAction<AskStage[]>>
+  setAsking: Dispatch<SetStateAction<boolean>>
+  setTurnList: (key: string, updater: (prev: AskTurn[]) => AskTurn[]) => void
+}
+
+/** 问答线程的命令面：重试、清空、停止与就地更新。 */
+function useAskSessionCommands(input: AskSessionCommandsInput): {
+  ask: (question: string) => Promise<void>
+  retry: (turnIndex: number) => Promise<void>
+  resetAndCancel: () => void
+  reset: () => void
+  cancel: () => void
+  patchTurn: (index: number, patch: Partial<AskTurn>) => void
+  clearError: () => void
+} {
+  const {
+    key, runAsk, threadsRef, failedScopeRef, scopeRef, streamIdRef, streamOwnerRef,
+    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, gateRef, activeTurnRef,
+    timingRef, setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, setTurnList,
+  } = input
+  const ask = useCallback((question: string): Promise<void> => runAsk(question), [runAsk])
+  const retry = useCallback(async (turnIndex: number): Promise<void> => {
+    if (streamIdRef.current !== '') return
+    const list = threadsRef.current[key] ?? []
+    // 只允许重试线程最后一条失败回答；重试历史失败轮会截断其后的对话。
+    if (turnIndex !== list.length - 1) return
+    const failed = list[turnIndex]
+    const asked = list[turnIndex - 1]
+    if (failed?.role !== 'assistant' || failed.status !== 'failed') return
+    if (asked?.role !== 'user' || asked.text.trim() === '') return
+    await runAsk(asked.text, turnIndex - 1)
+  }, [key, runAsk, streamIdRef, threadsRef])
+  const resetAndCancel = useCallback((): void => {
+    const id = streamIdRef.current
+    failedScopeRef.current[key] = scopeSignatureOf(scopeRef.current)
+    if (id !== '') {
+      gateRef.current?.finish(id)
+      streamIdRef.current = ''
+      streamOwnerRef.current = ''
+      setStreamText('')
+      setStreamReasoning('')
+      setStreamStages([])
+      streamStageEventsRef.current = []
+      setAsking(false)
+      timingRef.current = { startedAt: 0 }
+      void apiCancelAsk({ jobId: id }).catch(() => { /* 旧轮次已作废，取消失败不阻断清空 */ })
+    }
+    setError(null)
+    setTurnList(key, () => [])
+  }, [failedScopeRef, gateRef, key, scopeRef, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamStageEventsRef, timingRef])
+  const reset = useCallback((): void => { setTurnList(key, () => []) }, [key, setTurnList])
+  const cancel = useCallback((): void => {
+    const id = streamIdRef.current
+    if (!id) return
+    const active = activeTurnRef.current
+    if (active.key === key) {
+      const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
+      const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
+      setTurnList(key, prev => [...prev, stoppedTurn({
+        text: streamTextRef.current,
+        reasoning: streamReasoningRef.current,
+        stages: turnStages,
+        scopeSignature: active.scopeSignature,
+        metrics,
+        runId: id,
+      })])
+    }
+    finishLocalStream({
+      gate: gateRef.current,
+      streamIdRef,
+      streamOwnerRef,
+      setError,
+      setStreamText,
+      setStreamReasoning,
+      setStreamStages,
+      streamStageEventsRef,
+      setAsking,
+      timingRef,
+    })
+    void apiCancelAsk({ jobId: id }).catch(() => { /* 这一轮由本地先收尾 */ })
+  }, [activeTurnRef, gateRef, key, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
+  const patchTurn = useCallback((index: number, patch: Partial<AskTurn>): void => {
+    setTurnList(key, prev => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
+  }, [key, setTurnList])
+  const clearError = useCallback((): void => { setError(null) }, [setError])
+  return { ask, retry, resetAndCancel, reset, cancel, patchTurn, clearError }
 }
 
 /** useAskSession 的状态与 ref 环境；拆出后主 hook 只保留编排。 */
@@ -597,8 +726,10 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
   streamReasoningRef.current = streamReasoning
   const streamStagesRef = useRef<AskStage[]>([])
   streamStagesRef.current = streamStages
+  const streamStageEventsRef = useRef<AskStage[]>([])
   const streamTextRef = useRef('')
   streamTextRef.current = streamText
+  const timingRef = useRef<AskRunTiming>({ startedAt: 0 })
   const gateRef = useRef<AskGate | null>(null)
   const activeTurnRef = useRef({ key: '', scopeSignature: '' })
   const threadsRef = useRef(threads)
@@ -618,7 +749,8 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
     streamText, setStreamText, streamReasoning, setStreamReasoning,
     streamStages, setStreamStages, error, setError,
     streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamStagesRef,
-    streamTextRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
+    streamStageEventsRef,
+    streamTextRef, timingRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
   }
 }
 
@@ -633,7 +765,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     streamText, setStreamText, streamReasoning, setStreamReasoning,
     streamStages, setStreamStages, error, setError,
     streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamStagesRef,
-    streamTextRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
+    streamStageEventsRef,
+    streamTextRef, timingRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
   } = useAskSessionEnvironment(options)
 
   useAskRangeSwitch({
@@ -647,11 +780,24 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     setStreamReasoning,
     setStreamStages,
     setAsking,
+    timingRef,
+    streamTextRef,
+    streamReasoningRef,
+    streamStagesRef,
+    streamStageEventsRef,
+    activeTurnRef,
     setTurnList,
   })
 
   // 回答 / 思考 / 阶段三条流式事件统一订阅；每一路都按当前轮次 id 防串台。
-  useAskStreamFeed(streamIdRef, setStreamText, setStreamReasoning, setStreamStages)
+  useAskStreamFeed(
+    streamIdRef,
+    setStreamText,
+    setStreamReasoning,
+    setStreamStages,
+    streamStageEventsRef,
+    timingRef,
+  )
 
   /**
    * 发起一轮问答。
@@ -669,11 +815,13 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     const streamId = gate.tryStart()
     if (!streamId) return
     const k = key
+    timingRef.current = { startedAt: Date.now() }
     setAsking(true)
     setError(null)
     setStreamText('')
     setStreamReasoning('')
     setStreamStages([])
+    streamStageEventsRef.current = []
     streamIdRef.current = streamId
     const requestScope = scopeRef.current
     const requestScopeSignature = scopeSignatureOf(requestScope)
@@ -723,13 +871,22 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
       // 切范围时旧轮次已被主动释放；即使后端迟到返回，也不能写进任何线程。
       if (!gate.isCurrent(streamId)) return
       const runtime = r as AskResult & AskResultRuntimeFields
+      const completedAt = Date.now()
+      const stages = runtime.stages !== undefined && runtime.stages.length > 0
+        ? runtime.stages
+        : streamStageEventsRef.current.length > 0
+          ? streamStageEventsRef.current
+          : streamStagesRef.current
+      const metrics = buildAskRunMetrics(timingRef.current, completedAt, stages, runtime.durationMs)
       delete failedScopeRef.current[k]
       setTurnList(k, prev => [...prev, assistantTurnFromResult(
         r,
         runtime,
         requestScopeSignature,
         streamReasoningRef.current.trim(),
-        streamStagesRef.current,
+        stages,
+        metrics,
+        streamId,
       )])
     } catch (e) {
       if (!gate.isCurrent(streamId)) return
@@ -741,11 +898,15 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         setError(null)
         const active = activeTurnRef.current
         if (active.key === k) {
+          const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
+          const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
           setTurnList(k, prev => [...prev, stoppedTurn({
             text: streamTextRef.current,
             reasoning: streamReasoningRef.current,
-            stages: streamStagesRef.current,
+            stages: turnStages,
             scopeSignature: requestScopeSignature,
+            metrics,
+            runId: streamId,
           })])
         }
       } else {
@@ -754,15 +915,20 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         const message = e instanceof Error ? e.message : String(e)
         const stableCode = typeof code === 'string' && code !== '' ? code : 'ASK_FAILED'
         if (active.key === k) {
+          const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
+          const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
           setTurnList(k, prev => [...prev, failedTurn({
             text: streamTextRef.current,
             reasoning: streamReasoningRef.current,
-            stages: streamStagesRef.current,
+            stages: turnStages,
             scopeSignature: requestScopeSignature,
             code: stableCode,
             message,
+            metrics,
+            runId: streamId,
           })])
         }
+        // hook 公共契约始终暴露错误；界面在失败内容已内联展示时抑制重复错误条。
         if (keyRef.current === k) setError(message)
       }
     } finally {
@@ -776,86 +942,18 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         setStreamText('')
         setStreamReasoning('')
         setStreamStages([])
+        streamStageEventsRef.current = []
         setAsking(false)
+        timingRef.current = { startedAt: 0 }
       }
     }
   }, [key, setTurnList])
 
-  const ask = useCallback((question: string): Promise<void> => runAsk(question), [runAsk])
-
-  /** 失败轮次重试：以该轮前面的用户提问重新跑一次同范围请求。 */
-  const retry = useCallback(async (turnIndex: number): Promise<void> => {
-    const list = threadsRef.current[key] ?? []
-    const failed = list[turnIndex]
-    const asked = list[turnIndex - 1]
-    if (failed?.role !== 'assistant' || failed.status !== 'failed') return
-    if (asked?.role !== 'user' || asked.text.trim() === '') return
-    await runAsk(asked.text, turnIndex - 1)
-  }, [key, runAsk])
-
-  const resetAndCancel = useCallback((): void => {
-    const id = streamIdRef.current
-    failedScopeRef.current[key] = scopeSignatureOf(scopeRef.current)
-    if (id !== '') {
-      /*
-       * 先作废当前轮，再发取消：清空后迟到的回答不能追加到空线程上；
-       * 同步释放闸门也保证用户能立刻开始下一问，而不是等旧请求自然结束。
-       */
-      gateRef.current?.finish(id)
-      streamIdRef.current = ''
-      streamOwnerRef.current = ''
-      setStreamText('')
-      setStreamReasoning('')
-      setStreamStages([])
-      setAsking(false)
-      void apiCancelAsk({ jobId: id }).catch(() => { /* 旧轮次已作废，取消失败不阻断清空 */ })
-    }
-    setError(null)
-    setTurnList(key, () => [])
-  }, [key, setTurnList])
-
-  const reset = useCallback((): void => { setTurnList(key, () => []) }, [key, setTurnList])
-
-  /**
-   * 停止当前这一轮的生成（W3-6.1）。
-   *
-   * 幂等且永远可点：闸门释放后再点也只是一次「找不到那一轮」的空取消（后端会如实说
-   * 它已经结束了），不会抛错。没有在跑的轮次时按钮本就不该出现（由 asking 决定）。
-   */
-  const cancel = useCallback((): void => {
-    const id = streamIdRef.current
-    if (!id) return
-    const active = activeTurnRef.current
-    if (active.key === key) {
-      setTurnList(key, prev => [...prev, stoppedTurn({
-        text: streamTextRef.current,
-        reasoning: streamReasoningRef.current,
-        stages: streamStagesRef.current,
-        scopeSignature: active.scopeSignature,
-      })])
-    }
-    finishLocalStream({
-      gate: gateRef.current,
-      streamIdRef,
-      streamOwnerRef,
-      setError,
-      setStreamText,
-      setStreamReasoning,
-      setStreamStages,
-      setAsking,
-    })
-    void (async (): Promise<void> => {
-      try {
-        await apiCancelAsk({ jobId: id })
-      } catch { /* 取消失败不抛给用户：这一轮自己会跑完，界面照常显示结果 */ }
-    })()
-  }, [key, setTurnList])
-
-  const patchTurn = useCallback((index: number, patch: Partial<AskTurn>): void => {
-    setTurnList(key, prev => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
-  }, [key, setTurnList])
-
-  const clearError = useCallback((): void => { setError(null) }, [])
+  const commands = useAskSessionCommands({
+    key, runAsk, threadsRef, failedScopeRef, scopeRef, streamIdRef, streamOwnerRef,
+    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, gateRef, activeTurnRef,
+    timingRef, setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, setTurnList,
+  })
 
   return {
     turns: threads[key] ?? [],
@@ -863,13 +961,9 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     streamText: streamOwnerRef.current === currentStreamOwner ? streamText : '',
     streamReasoning: streamOwnerRef.current === currentStreamOwner ? streamReasoning : '',
     streamStages: streamOwnerRef.current === currentStreamOwner ? streamStages : [],
+    runStartedAt: asking && streamOwnerRef.current === currentStreamOwner ? timingRef.current.startedAt : 0,
+    runId: asking && streamOwnerRef.current === currentStreamOwner ? streamIdRef.current : '',
     error,
-    ask,
-    retry,
-    cancel,
-    reset,
-    resetAndCancel,
-    patchTurn,
-    clearError,
+    ...commands,
   }
 }

@@ -1,148 +1,274 @@
 /**
- * 右栏（推荐回复**下方**）的「分析」区块 —— 显示**选中的那条消息**的本地决策分析。
+ * 右栏消息分析：把单条消息的本地模型读数排成一份可行动简报。
  *
- * 2026-09-25 从「独立面板（左栏）」改成「区块」：外壳与头部归 `ChatRightPanel`，
- * 本文件只出内容，自己保留一行区块标题（「分析」+ 取消选中）。
- * 为什么从左边搬下来（产品要求）：两块读的都是当前会话，分成左右两栏时
- * 「点消息 → 看分析」的视线要跨过整个消息流；合到一块后分析就贴在手边。
+ * 页面分三层，而不是把六道模型命题平铺出来：
+ *   1. 分析对象：发送者、时间、原文 / 语音转写；
+ *   2. 结论：一句谨慎的判断 + 意图、温度、建议动作；
+ *   3. 依据：三项关键信号和可展开的完整模型读数。
  *
- * 与消息流**逐条推理**的关系：推理仍按可见窗口逐条跑（结果落库缓存），但**展示只在这里**
- * —— 2026-09-26 按用户要求移除了消息流里的逐条内嵌卡（每条消息下再铺一块六命题卡，
- * 消息流被撑得过长），改成「点哪条看哪条」：本区把选中的那条**六项命题全列**，
- * 单列铺开方便逐项细看。块渲染复用 `AnalysisBlocks.tsx` 的 `AnswerBlock`。
- *
- * 数据来自 `useInlineAnalysis` 的按会话缓存（按 localId 取），本区**不自己发请求**：
- * 所以只有消息流已经算过的那条才有内容，没算过的如实说「还没轮到它」——
- * 与「模型缺失是正常路径」同一姿态，不假装有结果。
- *
- * 样式复用 `session-ask.module.css` 的头部与滚动区（与「推荐回复」「AI 问答」同一处视觉语言）；
- * 滚动条在那里显式声明为无边框细条，不依赖全局主题的作用域。
+ * 组件本身不发请求。`useInlineAnalysis` 负责「选中即分析」、排队、缓存与重试，
+ * 这里只消费状态，保证展示层可以独立测试。
  */
-import type { LayaAnswer } from '@deepseek-ai/dsh-wechat-data/types'
+import type { LayaAnswer, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { Avatar } from './chats-support.tsx'
 import { AnswerBlock } from './AnalysisBlocks.tsx'
+import { AnalysisReplySuggest } from './AnalysisReplySuggest.tsx'
+import { buildAnalysisBrief } from './analysis-brief.ts'
 import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
+import { fmtDateTimeSec } from '../utils/format.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import shell from './session-ask.module.css'
 import css from './chat-analysis-panel.module.css'
 
+export interface AnalysisSpeaker {
+  name: string
+  username: string
+  enterpriseName?: string
+}
+
 export interface ChatAnalysisPanelProps {
-  /** 选中消息的 localId；`null` = 还没选。 */
+  /** 选中消息的 localId；`null` = 尚未选择。 */
   targetId: number | null
-  /** 该消息的分析条目（来自 `useInlineAnalysis`）。未选中/还没轮到它是 `undefined`。 */
+  /** 选中消息的本地分析状态。 */
   entry: InlineAnalysisEntry | undefined
-  /** 取消选中。 */
-  onClear: () => void
-  /** W3-11.5：本批分析进度（没有批在跑时为 null）—— 让「本地分析中…」变成可读的等待。 */
-  progress?: { done: number; total: number } | null
-  /** W3-11.5：停止当前那批分析（不给就没有停止按钮）。 */
-  onCancel?: () => void | Promise<void>
-  /** W3-11.5：「已停止（算出 N/M）」的收尾回执。 */
-  stopped?: { done: number; total: number } | null
-  /** W3-11.5：停止没停上的原因（空串 / 不给 = 没有问题）。 */
-  stopError?: string
-  /**
-   * W3-11.5 收尾：重试这一条（不给就没有重试按钮）。
-   *
-   * 为什么需要它：逐条失败（语音没转写、取不到这条消息）此前**只能等下一次自动重跑** ——
-   * 而自动重跑要等这条消息重新进入可见窗口，用户盯着「分析失败」干等。
-   */
+  /** 当前目标消息；用于在分析完成前就展示发送者与原文。 */
+  message?: WechatMessage
+  /** 发送者展示名与真实 username。群聊时必须是消息发送者，而不是群本身。 */
+  speaker?: AnalysisSpeaker
+  /** 群聊消息标出发送者身份；单聊用「对方」。 */
+  isGroup?: boolean
+  /** 当前是否正在跳缓存重算。 */
+  refreshing?: boolean
+  /** 当前会话 username；用于生成针对分析目标的推荐回复。 */
+  replyUsername?: string
+  /** 失败后重试。 */
   onRetry?: (localId: number) => void
+  /** 忽略缓存后重新分析。 */
+  onRefresh?: (localId: number) => void
 }
 
-/** 摘要里的一个小指标。 */
-function Stat({ label, value }: { label: string; value: string }): React.JSX.Element {
-  return <span className={css.stat}>{label} <b>{value}</b></span>
+function previewOf(message: WechatMessage | undefined, sourceText: string): string {
+  if (sourceText.trim() !== '') return sourceText.trim()
+  return String(
+    message?.displayText
+      ?? message?.strContent
+      ?? message?.msgContent
+      ?? '',
+  ).trim()
 }
 
-export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Element {
-  const { targetId, entry, onClear, progress, onCancel, stopped, stopError, onRetry } = props
-  const done = entry !== undefined && entry.state === 'done' ? entry : null
-
-  // 排序：短的命题（noul/score）在前、choice 在后 —— 单列里也让结论先露头
-  const ordered: LayaAnswer[] = done === null ? [] : [
-    ...done.answers.filter((a) => a.kind !== 'choice'),
-    ...done.answers.filter((a) => a.kind === 'choice'),
-  ]
-  const score = done?.answers.find((a) => a.kind === 'score')
-  const intent = done?.answers.find((a) => a.qid === 'real_intent')?.options[0]
-  const action = done?.answers.find((a) => a.qid === 'best_action')?.options[0]
+function MessageSubject(props: {
+  targetId: number
+  message?: WechatMessage
+  entry?: InlineAnalysisEntry
+  speaker?: AnalysisSpeaker
+  isGroup?: boolean
+}): React.JSX.Element {
+  const { targetId, message, entry, speaker, isGroup } = props
+  const done = entry?.state === 'done' ? entry : undefined
+  const text = previewOf(message, done?.sourceText ?? '')
+  const fromVoice = done?.fromVoice === true || message?.renderType === 'voice'
 
   return (
-    <div className={css.sec} aria-label="分析">
-      <div className={shell.head}>
-        <div className={shell.title}>分析</div>
-        <div className={shell.headActions}>
-          {/* W3-11.5：停止按钮只在**真有批在跑**时出现。取消只在每条之间生效，
-              所以点了之后最多再等一条的推理时长（单条 0.5–9s），文案里写明了这一点。 */}
-          {progress !== null && progress !== undefined && onCancel !== undefined && (
-            <button type="button" className={shell.iconBtn} title="停止分析（最多再等当前这一条算完）" aria-label="停止分析" onClick={() => { void onCancel() }}>■</button>
-          )}
-          {targetId !== null && (
-            <button type="button" className={shell.iconBtn} title="取消选中" aria-label="取消选中" onClick={onClear}>×</button>
-          )}
+    <section className={css.subject} aria-label={`分析对象，消息 ${String(targetId)}`}>
+      <div className={css.subjectTop}>
+        <Avatar
+          name={speaker?.name ?? (isGroup ? '群成员' : '对方')}
+          username={speaker?.username ?? ''}
+          size={30}
+        />
+        <div className={css.subjectIdentity}>
+          <strong>{withEnterprise(speaker?.name || (isGroup ? '群成员' : '对方'), speaker?.enterpriseName)}</strong>
+          <span>{isGroup ? '群聊消息' : '对方消息'} · {fmtDateTimeSec(message?.createTime, '时间未知')}</span>
         </div>
+        <span className={css.subjectTag}>分析对象</span>
       </div>
+      <div className={css.quote}>
+        {text || (fromVoice ? '语音消息' : '正在读取消息内容…')}
+      </div>
+      {fromVoice && <span className={css.transcriptTag}>语音转写后分析</span>}
+    </section>
+  )
+}
+
+function LoadingState({ refreshing }: { refreshing?: boolean }): React.JSX.Element {
+  return (
+    <div className={css.loading}>
+      <span className={shell.spinner} aria-hidden="true" />
+      <div>
+        <strong>{refreshing === true ? '正在重新分析' : '正在分析这条消息'}</strong>
+        <span>读取当前会话的前文并运行本地模型，通常需要几秒。</span>
+      </div>
+    </div>
+  )
+}
+
+function ProbabilityBar({ value, tone }: { value: number; tone?: 'brand' | 'warn' }): React.JSX.Element {
+  const width = Math.max(2, Math.min(100, value * 100))
+  return (
+    <span className={css.bar} data-tone={tone}>
+      <span style={{ width: `${String(width)}%` }} />
+    </span>
+  )
+}
+
+/**
+ * 渲染消息分析区。
+ * @param props - 选中消息、分析状态与重试/重算回调。
+ */
+export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Element {
+  const { targetId, entry, message, speaker, isGroup, refreshing, replyUsername, onRetry, onRefresh } = props
+  const done = entry?.state === 'done' ? entry : undefined
+  const brief = done === undefined ? undefined : buildAnalysisBrief(done)
+  const ordered: LayaAnswer[] = done === undefined
+    ? []
+    : [...done.answers.filter((answer) => answer.kind !== 'choice'), ...done.answers.filter((answer) => answer.kind === 'choice')]
+  const tensionPercent = brief === undefined || brief.mood.tensionScale <= 0
+    ? 0
+    : brief.mood.tension / brief.mood.tensionScale
+
+  return (
+    <div className={css.sec} aria-label="消息分析">
       <div className={shell.body}>
         {targetId === null && (
           <div className={css.empty}>
-            <div className={css.emptyTitle}>点选一条消息</div>
-            <div className={css.emptySub}>在消息流里点一下对方的文本或语音消息，这里展开它的六项本地决策分析。</div>
-          </div>
-        )}
-        {targetId !== null && entry === undefined && (
-          <div className={css.empty}>
-            <div className={css.emptyTitle}>还没轮到这条</div>
-            <div className={css.emptySub}>分析是按可见窗口按需跑并落库缓存的 —— 消息流滚到它、算完之后这里就有内容。</div>
-          </div>
-        )}
-        {entry !== undefined && entry.state === 'pending' && (
-          <div className={css.empty}>
+            <span className={css.emptyIcon} aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 5h16v11H8l-4 4V5Z" />
+                <path d="M8 9h8M8 12h5" />
+              </svg>
+            </span>
+            <div className={css.emptyTitle}>选一条消息，读懂言外之意</div>
             <div className={css.emptySub}>
-              本地分析中…{progress ? `（${progress.done}/${progress.total}）` : ''}
+              打开分析后会自动选择最近一条对方文本或语音；也可以直接点击聊天里的消息切换。
+            </div>
+            <div className={css.scopeChips}>
+              <span>文字</span><span>语音转写</span><span>全程本地</span>
             </div>
           </div>
         )}
-        {/* W3-11.5：停止不是失败 —— 已算完的那部分留在上面，收尾在这里说清算了多少。 */}
-        {stopped !== null && stopped !== undefined && (
-          <div className={css.empty}><div className={css.emptySub}>已停止（算出 {stopped.done}/{stopped.total} 条，已算的都已存下）</div></div>
-        )}
-        {stopError !== undefined && stopError !== '' && (
-          <div className={css.empty}><div className={css.emptySub}>没能停止：{stopError}</div></div>
-        )}
-        {entry !== undefined && entry.state === 'error' && (
-          <div className={css.empty}>
-            <div className={css.emptySub}>分析失败：{entry.error}</div>
-            {/* W3-11.5 收尾：失败必须给出路。原先只能等下一次自动重跑，
-                而那要等这条消息重新滚进可见窗口 —— 用户看着干等。 */}
-            {onRetry !== undefined && targetId !== null && (
-              <button type="button" className={css.emptyAction} onClick={() => { onRetry(targetId) }}>
-                重试这一条
-              </button>
-            )}
-          </div>
-        )}
-        {done !== null && (
+
+        {targetId !== null && (
           <>
-            <div className={css.meta}>
-              <span className={css.badge}>
-                本地分析{entry?.state === 'done' && entry.fromVoice ? ' · 语音转写' : ''}
-                {entry?.state === 'done' ? (entry.cached ? ' · 缓存' : ` · ${entry.inferenceMs}ms`) : ''}
-              </span>
-              {score !== undefined && <Stat label="紧张" value={`${(score.score ?? 0).toFixed(1)}/${score.scale ?? 10}`} />}
-            </div>
-            {intent !== undefined && <Stat label="意图" value={`${intent.label} ${(intent.probability * 100).toFixed(0)}%`} />}
-            {action !== undefined && <Stat label="该做" value={`${action.label} ${(action.probability * 100).toFixed(0)}%`} />}
-            {done.sourceText !== '' && <div className={css.source}>{done.sourceText}</div>}
-            {/* 极短消息（「啥」「好，」）上同一模型的选项分布接近均匀 —— 那一栏的答案随机性很大。
-                这里如实标注「判断主要来自上下文」，让用户知道该看的是上下文而不是这句话本身；
-                **不改判断结果本身**，也不隐藏它。判据在后端 `isLowConfidenceText`。 */}
-            {done.lowConfidence === true && (
-              <div className={css.source} title="这条消息本身很短，选项分布接近均匀；换个上下文可能给出别的答案">
-                信息不足，仅供参考（判断主要来自上下文）
+            <MessageSubject
+              targetId={targetId}
+              message={message}
+              entry={entry}
+              speaker={speaker}
+              isGroup={isGroup}
+            />
+
+            {(entry === undefined || entry.state === 'pending') && (
+              <LoadingState refreshing={refreshing} />
+            )}
+
+            {entry?.state === 'error' && (
+              <div className={css.errorBox} role="alert">
+                <strong>这次没有分析成功</strong>
+                <p>{entry.error}</p>
+                {onRetry !== undefined && (
+                  <button type="button" className={css.secondaryBtn} onClick={() => { onRetry(targetId) }}>
+                    重试这条消息
+                  </button>
+                )}
               </div>
             )}
-            <div className={css.blocks}>
-              {ordered.map((a) => <AnswerBlock key={a.qid} a={a} />)}
-            </div>
+
+            {done !== undefined && brief !== undefined && (
+              <>
+                <section className={css.hero}>
+                  <div className={css.heroTop}>
+                    <span className={css.eyebrow}>研判结论</span>
+                    <span className={css.confidence} data-tone={brief.confidenceTone}>
+                      {brief.confidenceLabel}
+                    </span>
+                  </div>
+                  <p className={css.headline}>{brief.headline}</p>
+                  {done.lowConfidence === true && (
+                    <p className={css.caution}>信息不足，仅供参考：这条消息本身很短，判断主要来自前文。</p>
+                  )}
+                </section>
+
+                <div className={css.findingGrid}>
+                  <section className={css.findingCard}>
+                    <div className={css.cardLabel}>对方意图</div>
+                    <strong className={css.cardValue}>{brief.intent.primary.label}</strong>
+                    <div className={css.probabilityLine}>
+                      <ProbabilityBar value={brief.intent.primary.probability} />
+                      <span>{Math.round(brief.intent.primary.probability * 100)}%</span>
+                    </div>
+                    {brief.intent.alternative !== undefined && (
+                      <p className={css.altLine}>
+                        也可能是「{brief.intent.alternative.label}」
+                        {' '}{Math.round(brief.intent.alternative.probability * 100)}%
+                      </p>
+                    )}
+                  </section>
+
+                  <section className={css.findingCard}>
+                    <div className={css.cardLabel}>对话温度</div>
+                    <div className={css.temperatureValue}>
+                      <strong>{brief.mood.label}</strong>
+                      <span>{brief.mood.tension.toFixed(1)} / {brief.mood.tensionScale}</span>
+                    </div>
+                    <ProbabilityBar value={tensionPercent} tone={brief.mood.tension >= 6 ? 'warn' : 'brand'} />
+                    <p className={css.altLine}>{brief.mood.detail}</p>
+                  </section>
+                </div>
+
+                <section className={css.actionCard}>
+                  <div className={css.actionTop}>
+                    <div>
+                      <div className={css.cardLabel}>建议动作</div>
+                      <strong>{brief.action.title}</strong>
+                    </div>
+                    <span>{Math.round(brief.action.probability * 100)}% 倾向</span>
+                  </div>
+                  <p>{brief.action.guidance}</p>
+                  <div className={css.avoid}><b>避免</b>{brief.action.avoid}</div>
+                </section>
+
+                {replyUsername !== undefined && replyUsername !== '' && (
+                  <AnalysisReplySuggest username={replyUsername} targetLocalId={targetId} />
+                )}
+
+                {brief.signals.length > 0 && (
+                  <div className={css.signalGrid} aria-label="关键信号">
+                    {brief.signals.map((signal) => (
+                      <span key={signal.qid} className={css.signal} title={signal.detail}>
+                        <span>{signal.label}</span>
+                        <b>{Math.round(signal.probability * 100)}%</b>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className={css.resultMeta}>
+                  <span>
+                    本地分析
+                    {done.fromVoice ? ' · 语音转写' : ''}
+                    {done.cached ? ' · 命中缓存' : ` · ${String(done.inferenceMs)}ms`}
+                  </span>
+                  {onRefresh !== undefined && (
+                    <button type="button" className={css.textBtn} onClick={() => { onRefresh(targetId) }}>
+                      重新分析
+                    </button>
+                  )}
+                </div>
+
+                <details className={css.details}>
+                  <summary>查看底层判断 · {String(done.answers.length)} 项</summary>
+                  <p className={css.detailsHint}>下面是模型原始概率，不是额外结论。</p>
+                  <div className={css.blocks}>
+                    {ordered.map((answer) => <AnswerBlock key={answer.qid} a={answer} />)}
+                  </div>
+                </details>
+
+                <p className={css.disclaimer}>
+                  结果基于本地聊天上下文，未上传到网络。概率表示模型的判断倾向，不代表事实。
+                </p>
+              </>
+            )}
           </>
         )}
       </div>

@@ -285,11 +285,15 @@ function citationOf(
   index: number,
 ): AnswerRuntimeCitation | undefined {
   const embedded = citationRecord(item.citation)
+  const enterpriseName = item.enterpriseName || stringValue(embedded?.['enterpriseName'])
+  const senderEnterpriseName = item.senderEnterpriseName
+    || stringValue(embedded?.['senderEnterpriseName'])
   const base = {
     index,
     evidenceId: item.evidenceId,
     source: item.source,
     name: item.name,
+    ...(enterpriseName === '' ? {} : { enterpriseName }),
     time: item.time,
     snippet: item.snippet,
   }
@@ -301,6 +305,7 @@ function citationOf(
       ...(item.sender || stringValue(embedded?.['sender'])
         ? { sender: item.sender ?? stringValue(embedded?.['sender']) }
         : {}),
+      ...(senderEnterpriseName === '' ? {} : { senderEnterpriseName }),
       locator: item.locator,
     }
   }
@@ -382,9 +387,14 @@ export function resourcesFromEvidence(evidence: EvidenceBundle): AnswerRuntimeRe
 function fallbackAnswer(evidence: EvidenceBundle): string {
   if (evidence.items.length === 0) return ''
   const lines = evidence.items.slice(0, MAX_FALLBACK_ITEMS).map((item) => {
-    const sender = item.sender ? `${item.sender}：` : ''
+    const sessionName = item.enterpriseName
+      ? `${item.name}（企业：${item.enterpriseName}）`
+      : item.name
+    const sender = item.sender
+      ? `${item.sender}${item.senderEnterpriseName ? `（企业：${item.senderEnterpriseName}）` : ''}：`
+      : ''
     const time = item.time ? `（${item.time}）` : ''
-    return `- [${String(item.evidenceId)}] ${item.name}${time} ${sender}${clip(item.snippet, MAX_FALLBACK_SNIPPET)}`
+    return `- [${String(item.evidenceId)}] ${sessionName}${time} ${sender}${clip(item.snippet, MAX_FALLBACK_SNIPPET)}`
   })
   const omitted = evidence.items.length > MAX_FALLBACK_ITEMS
     ? `\n（另有 ${String(evidence.items.length - MAX_FALLBACK_ITEMS)} 条证据未展开）`
@@ -410,7 +420,7 @@ function emptyEvidence(status: AnswerStatus = 'insufficient'): EvidenceBundle {
 
 /** 状态对应的确定性兜底；所有分支都必须给用户一句可读的话。 */
 function replyForStatus(status: AnswerStatus, profileId: AnswerProfileId, reason = ''): string {
-  if (status === 'blocked') return blockedReply(reason)
+  if (status === 'blocked') return blockedReply(reason, profileId)
   if (status === 'needs_clarification') return clarificationReply(reason, profileId)
   if (status === 'failed') return failedReply(profileId)
   return insufficientReply(profileId)
@@ -614,7 +624,7 @@ export async function runAnswerRuntime(input: AnswerRuntimeInput): Promise<Answe
     emit(input, 'answer:blocked', '检索已阻止', 'skipped', blocked.reason)
     return stoppedResult({
       status: blocked.status,
-      answer: blockedReply(blocked.reason),
+      answer: blockedReply(blocked.reason, profile.id),
       intent: ruleIntent,
       profile,
       context,
@@ -879,7 +889,7 @@ async function finalizeAnswer(stage: {
     return {
       ...base,
       status: 'blocked',
-      answer: blockedReply(reason),
+      answer: blockedReply(reason, profile.id),
       citations: [],
       resources: [],
       synthesized: false,

@@ -37,5 +37,7 @@ export declare function createSummaryRecordRemotes(rc: createSummaryRecordRemote
         username?: string;
         kbId?: number;
         count?: number;
+        /** 分析面板当前选中的消息；缺省时仍按会话最新上下文推荐。 */
+        targetLocalId?: number;
     }): Promise<ReplySuggestResult>;
 };

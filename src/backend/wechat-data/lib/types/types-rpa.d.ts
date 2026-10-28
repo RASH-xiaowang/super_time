@@ -15,9 +15,14 @@ export type RpaFieldType = 'text' | 'password' | 'number' | 'boolean' | 'select'
  *  · 语义位 `room` / `content` / `at`（带隐私闸后的触发文本）；`taskName` / `keyword` /
  *    `triggeredAt` / `chatType` / `taskId` / `recordId` 是触发记录/任务的内置字段；
  *  · `fixed` = 用户填固定值；`template` = 自定义模板（只允许 `${record.xxx}` / `${task.xxx}`，
- *    见 `rpa/template.ts` 的白名单）。
+ *    见 `rpa/template.ts` 的白名单）；
+ *  · `imagesJson` / `imageCount` / `firstImageUrl`（2026-10-23）= **触发图片的短时签名直链**
+ *    （`rpa/media-links.ts` + `net/rpa-media.ts`）。RPA 厂商的触发接口只有字符串参数，
+ *    图片字节塞不进去（base64 体积 ×4/3，且多数厂商参数上限 8KB–40KB），所以参数里只放
+ *    `http://<可达地址>:<端口>/api/rpa-media/<token>`，由机器人自己去取。取图要求本机
+ *    已打开局域网访问；取不到时该张图片写 `error` 而不是让整条投递失败。
  */
-export type RpaParamSource = 'room' | 'content' | 'at' | 'taskName' | 'keyword' | 'triggeredAt' | 'chatType' | 'taskId' | 'recordId' | 'fixed' | 'template';
+export type RpaParamSource = 'room' | 'content' | 'at' | 'taskName' | 'keyword' | 'triggeredAt' | 'chatType' | 'taskId' | 'recordId' | 'imagesJson' | 'imageCount' | 'firstImageUrl' | 'fixed' | 'template';
 /** 一条附加参数（存 `triggerConfig[extrasField]`，随厂商参数容器一起发出去）。 */
 export interface RpaParamEntry {
     /** 参数名（发到厂商的 key；同一列表内唯一，且不得与三个语义映射键重名）。 */
@@ -127,6 +132,11 @@ export interface RpaMapping {
     mapField?: string;
     targets: RpaMappingTarget[];
     extrasField?: string;
+    /**
+     * 旧版 `map` 字段名（升级兼容）：读取/投递时若 `extrasField` 尚不存在，
+     * 把 `{ room, content, at }` 自动转换成「附加参数」条目。
+     */
+    legacyMapField?: string;
 }
 /** 出网主机声明：固定域名（exact）或后缀（suffix，如厂商子域）。 */
 export interface RpaGovernanceHost {

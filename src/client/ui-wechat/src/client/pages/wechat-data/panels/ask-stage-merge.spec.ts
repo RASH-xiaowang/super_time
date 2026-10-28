@@ -87,6 +87,130 @@ describe('mergeAskStage：按 callId 单调合并', () => {
     expect(late[0]).toMatchObject({ attempt: 3, maxAttempts: 4 })
   })
 
+  it('超时失败后重试成功时以第 2 次终态收口，并清掉旧失败诊断', () => {
+    let stages = appendAskStage([], event({ attempt: 1, maxAttempts: 2 }))
+    stages = appendAskStage(stages, event({
+      phase: 'retry',
+      status: 'running',
+      attempt: 1,
+      errorClass: 'timeout',
+      deadlineExceeded: true,
+      detail: '第 1/2 次失败，准备重试',
+    }))
+    stages = appendAskStage(stages, event({
+      phase: 'retry',
+      status: 'running',
+      attempt: 2,
+      detail: '第 2 次尝试',
+    }))
+    stages = appendAskStage(stages, event({
+      phase: 'completed',
+      status: 'done',
+      attempt: 2,
+      elapsedMs: 340,
+      hits: 4,
+      facts: 2,
+      detail: '4 条命中',
+    }))
+
+    expect(stages).toHaveLength(1)
+    expect(stages[0]).toMatchObject({
+      phase: 'completed',
+      status: 'done',
+      attempt: 2,
+      maxAttempts: 2,
+      elapsedMs: 340,
+      hits: 4,
+      facts: 2,
+    })
+    expect(stages[0]?.errorClass).toBeUndefined()
+    expect(stages[0]?.deadlineExceeded).toBeUndefined()
+    expect(stages[0]).not.toHaveProperty('errorClass')
+    expect(stages[0]).not.toHaveProperty('deadlineExceeded')
+  })
+
+  it('更高 attempt 的 running 能结束上一 attempt 的失败态并清掉诊断', () => {
+    const failed = appendAskStage([], event({
+      phase: 'failed',
+      status: 'failed',
+      attempt: 1,
+      errorClass: 'timeout',
+      deadlineExceeded: true,
+    }))
+    const retrying = appendAskStage(failed, event({
+      phase: 'retry',
+      status: 'running',
+      attempt: 2,
+      detail: '第 2 次尝试',
+    }))
+
+    expect(retrying[0]).toMatchObject({
+      phase: 'retry',
+      status: 'running',
+      attempt: 2,
+      maxAttempts: 2,
+      detail: '第 2 次尝试',
+    })
+    expect(retrying[0]?.errorClass).toBeUndefined()
+    expect(retrying[0]?.deadlineExceeded).toBeUndefined()
+  })
+
+  it('较低 attempt 的迟到失败不会把成功或更高 attempt 改回去', () => {
+    const succeeded = appendAskStage([], event({
+      phase: 'completed',
+      status: 'done',
+      attempt: 2,
+      elapsedMs: 200,
+    }))
+    const late = appendAskStage(succeeded, event({
+      phase: 'retry',
+      status: 'running',
+      attempt: 1,
+      errorClass: 'timeout',
+      deadlineExceeded: true,
+      elapsedMs: 20,
+    }))
+
+    expect(late[0]).toMatchObject({
+      phase: 'completed',
+      status: 'done',
+      attempt: 2,
+      elapsedMs: 200,
+    })
+    expect(late[0]?.errorClass).toBeUndefined()
+    expect(late[0]?.deadlineExceeded).toBeUndefined()
+  })
+
+  it('同一 attempt 的最终 failed 不会被迟到 running 或 done 改写', () => {
+    const failed = appendAskStage([], event({
+      phase: 'failed',
+      status: 'failed',
+      attempt: 2,
+      errorClass: 'http',
+    }))
+    const lateRunning = appendAskStage(failed, event({
+      phase: 'retry',
+      status: 'running',
+      attempt: 2,
+      errorClass: 'timeout',
+      deadlineExceeded: true,
+    }))
+    const lateDone = appendAskStage(lateRunning, event({
+      phase: 'completed',
+      status: 'done',
+      attempt: 2,
+      hits: 10,
+    }))
+
+    expect(lateDone[0]).toMatchObject({
+      phase: 'failed',
+      status: 'failed',
+      attempt: 2,
+      errorClass: 'http',
+    })
+    expect(lateDone[0]?.deadlineExceeded).toBeUndefined()
+  })
+
   it('旧后端只有 key/status 时仍兼容，并按 key 合并', () => {
     const first = appendAskStage([], {
       key: 'retrieve',

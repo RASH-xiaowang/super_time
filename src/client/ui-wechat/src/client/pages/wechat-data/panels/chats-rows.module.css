@@ -32,8 +32,8 @@
   box-sizing: border-box;
   padding: 0;
   color: var(--nm-text-1);
-  /* AI / 推荐·分析面板作为**覆盖式抽屉**（宽 400）的定位祖先：
-     右栏不再并排占宽，1280px 下消息区不再被 304+384 挤到 ~460px（NV-07 / DL-11）。 */
+  /* AI 问答与推荐/分析共用右侧停靠栏：作为 flex 子项与消息流并排占宽。
+     极窄窗口由 chats-shell 的 900px 档切换为整栏，避免覆盖聊天记录。 */
   position: relative;
 }
 .searchIcon {
@@ -242,6 +242,9 @@
  * （`.msgBody` 上的 `gap` 保留：它管的是骨架 / 「加载更多」按钮 / 滚动容器这些正常流子项。）
  */
 .msgVRow { padding-bottom: var(--wx-row-gap); }
+
+/* 只标正在分析的单条消息，不给所有可分析消息加描边。 */
+.msgVRow[data-analysis-target] { border-radius: var(--nm-r-sm); background: color-mix(in srgb, var(--nm-cyan) 5%, transparent); box-shadow: inset 2px 0 var(--nm-cyan); }
 
 /* 系统提示 / 撤回 / 拍一拍：微信官方是**居中小字灰字、无底色无圆角**，
    （与日期分隔同款字色与字号）。 */
@@ -453,6 +456,11 @@
 .msgRedpacketBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .msgRedpacketTitle { font-size: 14px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msgPayStatus {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
   font-size: 12px;
   color: inherit;
   opacity: 0.88;
@@ -464,7 +472,12 @@
   color: inherit;
   font-variant-numeric: tabular-nums;
 }
-.msgQuoteWho { flex-shrink: 0; margin-inline-end: 4px; }
+.msgQuoteWho {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  margin-inline-end: 4px;
+}
 .msgQuoteKind { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
 /* 被引用摘要：参考图实测是**两行截断**，不是早先注释里写的「单行省略」——
    图里那条引用行高 58px（2 × 19.2 行高 + 内边距），第二行末尾带省略号。
@@ -890,15 +903,16 @@
   font-variant-numeric: tabular-nums;
 }
 /* ── 合并转发卡：内层预览（微信 12px、单行截断） ───────────────────── */
-.msgChatlogPreview { display: flex; flex-direction: column; gap: 2px; }
+.msgChatlogPreview { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .msgChatlogLine {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-size: 12px;
   color: var(--wx-card-preview);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.4;
 }
+.msgChatlogLineIdentity { flex: 1 1 auto; min-width: 0; }
 .msgMusicCover {
   width: 42px;
   height: 42px;

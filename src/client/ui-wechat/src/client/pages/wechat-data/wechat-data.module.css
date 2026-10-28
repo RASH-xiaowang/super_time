@@ -421,10 +421,10 @@
 /* kit 的 .dialog 是 520px 的确认框尺寸，装不下完整设置页。类名写两遍提高优先级：
    同优先级的单类选择器谁在 CSS 里靠后谁赢，而跨模块文件的顺序不可控。 */
 .settingsDialog.settingsDialog {
-  /* 微信式设置：宽度收到 960，1280×800 下不再顶满屏；高度留出上下呼吸。 */
-  width: min(960px, 94vw);
-  height: min(88vh, 900px);
-  max-height: 88vh;
+  /* 设置页是「目录 + 表单工作区」：桌面档加宽到 1120，窄窗仍保留四周呼吸。 */
+  width: min(1120px, 94vw);
+  height: min(90vh, 920px);
+  max-height: 90vh;
   padding: 0;
   overflow: hidden;
 }
@@ -438,6 +438,10 @@
   font-size: 12px;
   font-weight: 400;
   color: var(--nm-text-2);
+}
+
+@media (max-width: 820px) {
+  .settingsDialogDesc { display: none; }
 }
 /* 让面板拿到确定高度：唯一的滚动容器应当是面板内部的 .mainScroll。
    不这么做的话 .dialogBd 自己也会滚，出现「双滚动条」，而且面板顶部的

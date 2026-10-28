@@ -84,7 +84,7 @@ describe('AskProcess 实时工具卡', () => {
     clickProcessHead()
     expect(host.textContent).toContain('文件检索')
     expect(host.textContent).toContain('超时')
-    expect(host.textContent).toContain('错误分类：timeout')
+    expect(host.textContent).toContain('失败原因类型：timeout')
     expect(host.textContent).toContain('尝试 3/3')
     expect(host.textContent).toContain('耗时 20s')
   })

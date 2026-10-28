@@ -12,6 +12,7 @@ import { describeRange } from '../utils/date-range.ts'
 import { AskScopePicker } from './ask-scope-picker.tsx'
 import { removeScopeTrigger } from './ask-scope-trigger.ts'
 import { useAskScopeTrigger } from './use-ask-scope-trigger.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask.module.css'
 
 /**
@@ -174,7 +175,15 @@ export function AskComposer({
         </button>
         {hasScope && (
           <span className={css.scopeActive} title={`当前检索范围：${scopeLabel} · ${describeRange(from, to)}`}>
-            范围：{scopeLabel} · {describeRange(from, to)}
+            <span>范围：</span>
+            {scopeUsername
+              ? (
+                  <IdentityName className={css.scopeActiveIdentity} name={scopeLabel} username={scopeUsername} size={16}>
+                    {scopeLabel}
+                  </IdentityName>
+                )
+              : scopeLabel}
+            <span> · {describeRange(from, to)}</span>
           </span>
         )}
         <span className={css.actionHint}>输入 @ 选范围 · Enter 发送</span>

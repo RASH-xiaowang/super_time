@@ -75,6 +75,15 @@ describe('文本气泡的可点性约定', () => {
     expect(host.querySelectorAll('a').length, '提及被渲染成了 <a>').toBe(0)
   })
 
+  it('企业微信成员的 @提及带企业名称，但正文匹配仍按原显示名', async () => {
+    const host = await render('辛苦 @张三 复核一下', [
+      { username: 'wxid_zhang@openim', displayName: '张三', enterpriseName: '深度求索' },
+    ])
+    const mention = [...host.querySelectorAll('span')].find((s) => s.textContent?.startsWith('@张三'))
+    expect(mention?.textContent).toBe('@张三（企业：深度求索）')
+    expect(mention?.getAttribute('title')).toBe('wxid_zhang@openim')
+  })
+
   it('只有 http(s) 会被切成链接：伪协议不许生成 <a href>', async () => {
     const host = await render('点 javascript:alert(1)//@张三 看看')
     expect(host.querySelectorAll('a').length, 'javascript: 生成了 <a> ⇒ XSS 入口').toBe(0)

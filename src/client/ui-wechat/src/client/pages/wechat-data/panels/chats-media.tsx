@@ -13,6 +13,7 @@ import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { recallImage, rememberImage } from '../image-cache.ts'
 import { CardFoot } from './chats-card-foot.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
+import { isEnterpriseWechatUser, withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { IconLinkOutline14, IconPlayOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -184,18 +185,19 @@ export function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
   const nick = rich?.nickname || rich?.title || m.displayText || '联系人'
   const uname = rich?.username || ''
   const alias = typeof rich?.alias === 'string' ? rich.alias : ''
+  const displayIdentity = withEnterprise(nick, rich?.enterpriseName)
   // 名片消息里的头像是消息 XML 带来的**原始地址**：不许由渲染层自己去要（M23），
   // 交给后端代理，取不到就退回首字母（与「本机没有这张头像」同一形状）。
   const avatar = typeof rich?.avatar === 'string' ? rich.avatar : ''
   const initial = (nick || uname || '?').slice(0, 1).toUpperCase()
-  const isEnterprise = m.type === 66 || uname.endsWith('@openim')
+  const isEnterprise = m.type === 66 || isEnterpriseWechatUser(uname)
   return (
     <div className={css.msgContactCard}>
       <span className={cssrows.msgContactAvatar}>
         <RemoteImg src={avatar} alt="" loading="lazy" pending={initial} failed={initial} />
       </span>
       <span className={cssrows.msgContactBody}>
-        <span className={cssrows.msgContactNick} title={nick}>{nick}</span>
+        <span className={cssrows.msgContactNick} title={displayIdentity}>{displayIdentity}</span>
         {alias && <span className={kitCss.textCaption}>别名：{alias}</span>}
         {uname && <span className={kitCss.textCaptionTrunc} title={uname}>{uname}</span>}
       </span>

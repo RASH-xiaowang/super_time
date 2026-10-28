@@ -18,6 +18,7 @@ import { createRoot } from 'react-dom/client'
 
 // 永不 resolve：面板会一直停在"首次统计、无缓存"这一帧
 vi.mock('../api.ts', () => ({
+  apiGetAvatarBatched: vi.fn(() => Promise.resolve({ kind: 'none' })),
   apiGetLedger: vi.fn(() => new Promise(() => { /* 永远挂起 */ })),
   readRenderCache: vi.fn(() => null),
   writeRenderCache: vi.fn(() => { /* 不写 */ }),

@@ -11,7 +11,9 @@ import { MessageRenderItem } from '../utils/message-items.ts'
 import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
+import { localImageSrc } from './remote-img.tsx'
 import { MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { isEnterpriseWechatUser } from './enterprise-identity.ts'
 import { useEffect, useState } from 'react'
 /** 16px calendar glyph (kept local; the primitives set has no calendar). */
 /**
@@ -216,16 +218,42 @@ export const AVATAR_CACHE_MAX = 300
  * 此时只渲染首字母占位、不写缓存（宁可没有头像，也不给错的头像）。
  * @param props.name - 展示名（用于首字母、配色；批量未命中时作为单张回落的 nickname）。
  * @param props.username - 真实 wxid；为空表示未知身份。
+ * @param props.avatarUrl - 联系人快照里的头像地址；只有本机可直接绘制的地址才会优先使用。
  * @param props.size - 头像边长（px）。
  * @returns the avatar element.
  */
-export function Avatar({ name, username, size }: { name: string; username: string; size?: number }): React.JSX.Element {
+export function Avatar({ name, username, avatarUrl, size }: {
+  name: string
+  username: string
+  avatarUrl?: string
+  size?: number
+}): React.JSX.Element {
   const key = username
-  const cached = key ? avatarCache.get(key) : undefined
-  const [, force] = useState(0)
+  const px = size ?? 34
+  const fontSize = Math.max(10, Math.round(px * 0.42))
+  const local = localImageSrc(avatarUrl)
+  const [resolved, setResolved] = useState<{ username: string; src: string | null }>(() => {
+    const cached = key ? avatarCache.get(key) : undefined
+    return { username: key, src: typeof cached === 'string' && cached !== '' ? cached : null }
+  })
+  const [failedSrc, setFailedSrc] = useState('')
+
+  useEffect(() => {
+    const cached = key ? avatarCache.get(key) : undefined
+    setResolved({ username: key, src: typeof cached === 'string' && cached !== '' ? cached : null })
+    setFailedSrc('')
+  }, [key, avatarUrl])
+
   useEffect(() => {
     let cancelled = false
-    if (!key || cached !== undefined) return
+    if (!key) return
+    const cached = avatarCache.get(key)
+    if (typeof cached === 'string' && cached !== '') {
+      setResolved({ username: key, src: cached })
+      return
+    }
+    // 本机快照里的头像优先；若它绘制失败，failedSrc 会触发这里继续走代理兜底。
+    if (local !== '' && failedSrc !== local) return
     // W2-10.2：走攒批队列 —— 一屏 N 个 Avatar 合成一次 `getAvatarsLocal`，而不是 N 次
     // `getAvatar`（实测 200 个头像 5.6×，且少 199 次 IPC 往返）。未命中的那几条由队列
     // 内部退回单张 —— 那里还有一级「按昵称找联系人」的回落，批量接口没有这一级。
@@ -234,24 +262,41 @@ export function Avatar({ name, username, size }: { name: string; username: strin
       .then((r) => {
         const value = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, value, AVATAR_CACHE_MAX)
-        if (!cancelled) force(v => v + 1)
+        if (!cancelled) setResolved({ username: key, src: value })
       })
-      .catch(() => { cacheBounded(avatarCache, key, null, AVATAR_CACHE_MAX); if (!cancelled) force(v => v + 1) })
+      .catch(() => { if (!cancelled) setResolved({ username: key, src: null }) })
     return () => { cancelled = true }
-  }, [key, cached])
+  }, [key, name, avatarUrl, local, failedSrc])
+
   const letter = (name || username || '?').slice(0, 1).toUpperCase()
   // 第 88 轮：统一由 avatarColors 给底色 + 文字色（对比度 ≥4.5；四个面板同一套哈希，同一个人同色）
   const av = avatarColors(username || name || '?')
-  const src = cached ?? null
+  const cachedSrc = resolved.username === key ? resolved.src : null
+  const src = local !== '' && failedSrc !== local ? local : cachedSrc
   if (src) {
     return (
-      <div className={cssrows.avatar} style={{ width: size ?? 34, height: size ?? 34, overflow: 'hidden' }}>
-        <img src={src} alt={letter} className={cssrows.avatarImg} width={size ?? 34} height={size ?? 34} />
+      <div className={cssrows.avatar} style={{ width: px, height: px, fontSize, overflow: 'hidden' }}>
+        <img
+          src={src}
+          alt=""
+          className={cssrows.avatarImg}
+          width={px}
+          height={px}
+          loading="lazy"
+          onError={() => {
+            if (src === local) {
+              setFailedSrc(local)
+              return
+            }
+            setResolved({ username: key, src: null })
+            if (key) cacheBounded(avatarCache, key, null, AVATAR_CACHE_MAX)
+          }}
+        />
       </div>
     )
   }
   return (
-    <div className={cssrows.avatar} style={{ width: size ?? 34, height: size ?? 34, background: av.background, color: av.color }}>
+    <div className={cssrows.avatar} style={{ width: px, height: px, fontSize, background: av.background, color: av.color }}>
       {letter}
     </div>
   )
@@ -361,10 +406,11 @@ export function decodeEntities(s: string): string {
  */
 /** Which session view to show: all chats, official accounts, service accounts, or kefu. */
 export type ChatView = 'chats' | 'bizchats' | 'servicechats' | 'kefu'
+export { isEnterpriseWechatUser } from './enterprise-identity.ts'
 /** Enterprise-WeChat conversation detection (@openim / @weclaw / kefu). */
 export function isEnterpriseChat(u: string): boolean {
   const s = (u || '').toLowerCase()
-  return s.endsWith('@openim') || s.endsWith('@weclaw')
+  return isEnterpriseWechatUser(s) || s.endsWith('@weclaw')
     || s.includes('@kefu') || s.includes('openim') && (s.includes('chatroom') || s.includes('@'))
 }
 /** Kefu session detection：真实企业微信/品牌客服会话（不含占位 holder 与 @openim 企业微信用户）。 */

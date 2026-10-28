@@ -193,7 +193,7 @@ type CollectedSummary = {
   total: number
   types: Record<string, number>
   hourly: number[]
-  topSessions: Array<{ username: string; count: number }>
+  topSessions: Array<{ username: string; name?: string; enterpriseName?: string; count: number }>
 }
 
 /** One picked message with its source (for task extraction provenance). */
@@ -245,7 +245,8 @@ function* collectRangeSteps(
   const sessionUsernames = loadSessionUsernames(decryptedDir)
   // 2026-10-17：显示名映射 —— 素材里的 `【wxid_xxx】` 与 `wxid_xxx:` 前缀都要换成可读名字，
   // 否则模型面对一堆 wxid 写不出有主语的总结。
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
   const tableToUser = new Map<string, string>()
   for (const username of sessionUsernames) tableToUser.set(msgTableName(username), username)
   // File-first pass: open each shard once, map its Msg_* tables to sessions.
@@ -330,7 +331,16 @@ function* collectRangeSteps(
     } finally { db.close() }
   }
   const topSessions = Array.from(perSession.entries())
-    .map(([username, count]) => ({ username, count }))
+    .map(([username, count]) => {
+      const name = names.get(username) ?? username
+      const enterpriseName = meta.enterpriseNames.get(username)?.trim()
+      return {
+        username,
+        name,
+        ...(enterpriseName !== undefined && enterpriseName !== '' ? { enterpriseName } : {}),
+        count,
+      }
+    })
     .sort((a, b) => b.count - a.count)
     .slice(0, 8)
   return { lines, count: lines.length, sessions, total, types: Object.fromEntries(types), hourly, topSessions, sources }}

@@ -20,8 +20,12 @@
  * 只认 `[数字]` 这一种写法（模型被提示词约束成这个格式）。`[abc]`、`[1,2]`
  * 这类一律按普通文本渲染 —— 猜错会把正文里的方括号内容变成假链接。
  */
+import { useId, useState } from 'react'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
+import { parseAnswerBlocks, type AnswerBlock } from './answer-blocks.ts'
+import { parseAnswerInline, type AnswerInlineToken } from './answer-inline.ts'
 import css from './ask-cite-detail.module.css'
+import runCss from './answer-run.module.css'
 
 /** 引用条目类型（与 `cite-target.ts` 的 `CiteItem` 同源）。 */
 type CiteItem = NonNullable<AskResult['citations']>[number]
@@ -60,36 +64,221 @@ export function splitCiteMarks(text: string): Piece[] {
  * @param props.activeCite - 当前正在看的那条（高亮它，让用户知道「点的是这条」）。
  * @returns 正文元素。
  */
-export function AnswerBody({ text, citations, onOpenCite, activeCite }: {
+export function AnswerBody({ text, citations, onOpenCite, activeCite, streaming }: {
   text: string
   citations?: CiteItem[]
   onOpenCite?: (n: number) => void
   activeCite?: number
+  streaming?: boolean
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const contentId = useId()
   const pieces = splitCiteMarks(text)
   const total = citations?.length ?? 0
-  return (
-    <div className={css.answerBody}>
-      {pieces.map((p, i) => {
-        if (p.kind === 'text') return <span key={i}>{p.text}</span>
-        // 编号超出实际来源数 ⇒ 模型编了一个不存在的引用。渲染成**不可点**的角标，
-        // 而不是隐藏它 —— 隐藏会让用户以为模型没标引用，而实际是标错了。
-        const valid = p.n >= 1 && p.n <= total
-        return (
+  const citationsPending = streaming === true && total === 0
+  const blocks = parseAnswerBlocks(text)
+  // 流式阶段始终展示最新正文，结束后再按长回答规则折叠。
+  const long = !streaming && (text.length > 1600 || blocks.length > 12)
+  const shown = long && !expanded ? previewBlocks(blocks) : blocks
+
+  const renderCiteGroup = (marks: readonly number[], key: string): React.ReactNode => {
+    const children: React.ReactNode[] = []
+    marks.forEach((n, index) => {
+      const valid = n >= 1 && n <= total
+      const markKey = `${key}:${String(index)}:${String(n)}`
+      if (citationsPending) {
+        children.push(
+          <span
+            key={markKey}
+            className={css.citeMark}
+            data-pending
+            role="status"
+            aria-label={`第 ${n} 条来源正在生成`}
+            title="来源正在生成"
+          >
+            {n}
+          </span>,
+        )
+      } else {
+        children.push(
           <button
-            key={i}
+            key={markKey}
             type="button"
             className={css.citeMark}
             data-valid={valid || undefined}
-            data-active={activeCite === p.n || undefined}
+            data-active={activeCite === n || undefined}
             disabled={!valid}
-            title={valid ? `查看第 ${p.n} 条来源` : `第 ${p.n} 条来源不存在（模型标错了编号）`}
-            onClick={() => { if (valid) onOpenCite?.(p.n) }}
+            title={valid ? `查看第 ${n} 条来源` : `第 ${n} 条来源不存在（AI 标错了编号）`}
+            aria-label={valid ? `查看第 ${n} 条来源` : `第 ${n} 条来源不存在`}
+            onClick={() => { if (valid) onOpenCite?.(n) }}
           >
-            {p.n}
-          </button>
+            {n}
+          </button>,
         )
-      })}
+      }
+      if (index < marks.length - 1) {
+        children.push(<span key={`${markKey}:sep`} className={css.citeSeparator} aria-hidden="true">,</span>)
+      }
+    })
+    return (
+      <span key={key} className={css.citeGroup} data-pending={citationsPending || undefined}>
+        {children}
+      </span>
+    )
+  }
+
+  const inline = (value: string, key: string): React.ReactNode[] => (
+    renderInlineTokens(parseAnswerInline(value), key, renderCiteGroup)
+  )
+
+  return (
+    <div
+      className={`${css.answerBody} ${runCss.answer}`}
+      data-streaming={streaming || undefined}
+      data-collapsed={long && !expanded ? true : undefined}
+    >
+      <div
+        id={contentId}
+        className={runCss.answerContent}
+        data-collapsed={long && !expanded ? true : undefined}
+      >
+        {shown.map((block, index) => renderBlock(block, index, inline))}
+      </div>
+      {long && (
+        <button
+          type="button"
+          className={runCss.moreButton}
+          onClick={() => { setExpanded(value => !value) }}
+          aria-expanded={expanded}
+          aria-controls={contentId}
+        >
+          {expanded ? '收起全文' : `展开全文（共 ${String(text.length)} 字）`}
+        </button>
+      )}
+      {pieces.length === 0 && !streaming && <span className={runCss.emptyAnswer}>（回答为空）</span>}
     </div>
   )
+}
+
+function blockLength(block: AnswerBlock): number {
+  if (block.type === 'list') return block.items.join('').length
+  if (block.type === 'code') return block.code.length
+  return block.text.length
+}
+
+const PREVIEW_BLOCKS = 6
+const PREVIEW_CHARS = 1100
+
+/** 展开前只放有界预览；被省略的引用不会留在不可见的 Tab 顺序里。 */
+function previewBlocks(blocks: readonly AnswerBlock[]): AnswerBlock[] {
+  const out: AnswerBlock[] = []
+  let remaining = PREVIEW_CHARS
+  for (const block of blocks) {
+    if (out.length >= PREVIEW_BLOCKS || remaining <= 0) break
+    const preview = previewBlock(block, remaining)
+    out.push(preview)
+    remaining -= blockLength(preview)
+  }
+  return out.length > 0 ? out : blocks.slice(0, 1).map(block => previewBlock(block, PREVIEW_CHARS))
+}
+
+function clipped(value: string, budget: number): string {
+  if (value.length <= budget) return value
+  return `${value.slice(0, Math.max(0, budget)).trimEnd()}…`
+}
+
+function previewBlock(block: AnswerBlock, budget: number): AnswerBlock {
+  if (blockLength(block) <= budget) return block
+  if (block.type === 'list') {
+    const items: string[] = []
+    let remaining = budget
+    for (const item of block.items) {
+      if (remaining <= 0) break
+      const next = clipped(item, remaining)
+      items.push(next)
+      remaining -= next.length
+    }
+    return { ...block, items: items.length > 0 ? items : [clipped(block.items[0] ?? '', budget)] }
+  }
+  if (block.type === 'code') return { ...block, code: clipped(block.code, budget) }
+  return { ...block, text: clipped(block.text, budget) }
+}
+
+type InlineRenderer = (value: string, key: string) => React.ReactNode[]
+
+type CiteGroupRenderer = (marks: readonly number[], key: string) => React.ReactNode
+
+function renderInlineTokens(
+  tokens: readonly AnswerInlineToken[],
+  key: string,
+  renderCites: CiteGroupRenderer,
+): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  for (let index = 0; index < tokens.length;) {
+    const token = tokens[index]!
+    if (token.kind === 'cite') {
+      const marks: number[] = []
+      let end = index
+      while (end < tokens.length) {
+        const next = tokens[end]
+        if (next?.kind !== 'cite') break
+        marks.push(next.n)
+        end += 1
+      }
+      nodes.push(renderCites(marks, `${key}:cite:${String(index)}`))
+      index = end
+      continue
+    }
+    if (token.kind === 'text') {
+      nodes.push(<span key={`${key}:t:${String(index)}`}>{token.text}</span>)
+    } else if (token.kind === 'code') {
+      nodes.push(<code key={`${key}:code:${String(index)}`}>{token.text}</code>)
+    } else if (token.kind === 'strong') {
+      nodes.push(
+        <strong key={`${key}:strong:${String(index)}`}>
+          {renderInlineTokens(token.children, `${key}:strong:${String(index)}`, renderCites)}
+        </strong>,
+      )
+    } else {
+      nodes.push(
+        <em key={`${key}:em:${String(index)}`}>
+          {renderInlineTokens(token.children, `${key}:em:${String(index)}`, renderCites)}
+        </em>,
+      )
+    }
+    index += 1
+  }
+  return nodes
+}
+
+function renderBlock(
+  block: AnswerBlock,
+  index: number,
+  inline: InlineRenderer,
+): React.ReactNode {
+  const key = `block:${String(index)}`
+  if (block.type === 'heading') {
+    if (block.level === 1) return <h2 key={key}>{inline(block.text, key)}</h2>
+    if (block.level === 2) return <h3 key={key}>{inline(block.text, key)}</h3>
+    return <h4 key={key}>{inline(block.text, key)}</h4>
+  }
+  if (block.type === 'list') {
+    const items = block.items.map((item, itemIndex) => (
+      <li key={`${key}:${String(itemIndex)}`}>{inline(item, `${key}:${String(itemIndex)}`)}</li>
+    ))
+    return block.ordered
+      ? <ol key={key}>{items}</ol>
+      : <ul key={key}>{items}</ul>
+  }
+  if (block.type === 'quote') {
+    return <blockquote key={key}>{inline(block.text, key)}</blockquote>
+  }
+  if (block.type === 'code') {
+    return (
+      <pre key={key} data-language={block.language || undefined}>
+        <code>{block.code}</code>
+      </pre>
+    )
+  }
+  return <p key={key}>{inline(block.text, key)}</p>
 }

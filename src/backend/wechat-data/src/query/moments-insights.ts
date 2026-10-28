@@ -47,17 +47,35 @@ function snsDb(decryptedDir: string): string | null {
   return null
 }
 
-function addInteractor(map: Map<string, { username: string; nickname: string; count: number }>, username: string, nickname: string): void {
+interface InteractorAgg {
+  username: string
+  nickname: string
+  enterpriseName?: string
+  count: number
+}
+
+function addInteractor(
+  map: Map<string, InteractorAgg>,
+  username: string,
+  nickname: string,
+  enterpriseNames: ReadonlyMap<string, string>,
+): void {
   const key = username || nickname || '?'
   const cur = map.get(key)
   if (cur) {
     cur.count += 1
   } else {
-    map.set(key, { username, nickname, count: 1 })
+    const enterpriseName = enterpriseNames.get(username)?.trim() ?? ''
+    map.set(key, {
+      username,
+      nickname,
+      ...(enterpriseName !== '' ? { enterpriseName } : {}),
+      count: 1,
+    })
   }
 }
 
-function sortedTop(map: Map<string, { username: string; nickname: string; count: number }>, cap: number): MomentsInteractorRow[] {
+function sortedTop(map: Map<string, InteractorAgg>, cap: number): MomentsInteractorRow[] {
   return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, cap)
 }
 
@@ -76,7 +94,12 @@ function sortedTop(map: Map<string, { username: string; nickname: string; count:
  * 与「发布量」的区别：同一作者在 SnsTimeLine 里可能有 158 条，但只进过 14 次提醒 ——
  * 提醒列表是**推送窗口**，不是发布总量。
  */
-async function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, string>): Promise<MomentsTopItems> {
+async function computeTopItems(
+  db: DatabaseSync,
+  tidCol: string,
+  names: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): Promise<MomentsTopItems> {
   const empty: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
   try {
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTopItem_1'").get() === undefined) return empty
@@ -117,7 +140,18 @@ async function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<stri
       byUser.set(username, cur)
     }
     const top = Array.from(byUser.entries())
-      .map(([username, v]) => ({ username, name: names.get(username) ?? username, count: v.count, unread: v.unread, vanished: v.vanished, lastRead: v.lastRead }))
+      .map(([username, v]) => {
+        const enterpriseName = enterpriseNames.get(username)?.trim() ?? ''
+        return {
+          username,
+          name: names.get(username) ?? username,
+          ...(enterpriseName !== '' ? { enterpriseName } : {}),
+          count: v.count,
+          unread: v.unread,
+          vanished: v.vanished,
+          lastRead: v.lastRead,
+        }
+      })
       .sort((a, b) => b.count - a.count || a.username.localeCompare(b.username))
       .slice(0, 10)
     return { rows: rows.length, users: byUser.size, unread, vanished, top }
@@ -216,16 +250,17 @@ async function computeGeo(db: DatabaseSync): Promise<MomentsGeo> {
 function computeArchiveInsights(
   rows: ReturnType<typeof readArchivedInsightRows>,
   topItems: MomentsTopItems,
+  enterpriseNames: ReadonlyMap<string, string>,
   author?: string,
 ): MomentsInsightsSnapshot {
   let posts = 0
   let likes = 0
   let comments = 0
-  const likers = new Map<string, { username: string; nickname: string; count: number }>()
-  const commenters = new Map<string, { username: string; nickname: string; count: number }>()
+  const likers = new Map<string, InteractorAgg>()
+  const commenters = new Map<string, InteractorAgg>()
   const monthly = new Map<string, number>()
   const now = new Date()
-  const today: Array<{ tid: string; text: string; ts: number; author: string }> = []
+  const today: Array<{ tid: string; text: string; ts: number; author: string; enterpriseName?: string }> = []
   const cityCount = new Map<string, number>()
   const countryCount = new Map<string, number>()
   const placeCount = new Map<string, { count: number; city: string; lat: number; lng: number }>()
@@ -237,15 +272,22 @@ function computeArchiveInsights(
     posts += 1
     likes += entry.likes?.length ?? 0
     comments += entry.comments?.length ?? 0
-    for (const like of entry.likes ?? []) addInteractor(likers, like.username, like.nickname)
-    for (const cm of entry.comments ?? []) addInteractor(commenters, cm.username, cm.nickname)
+    for (const like of entry.likes ?? []) addInteractor(likers, like.username, like.nickname, enterpriseNames)
+    for (const cm of entry.comments ?? []) addInteractor(commenters, cm.username, cm.nickname, enterpriseNames)
     const ts = entry.ts || row.ts
     if (ts > 0) {
       const d = new Date(ts * 1000)
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
       monthly.set(key, (monthly.get(key) ?? 0) + 1)
       if (d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
-        today.push({ tid: row.tid, text: entry.text, ts, author: row.username })
+        const enterpriseName = enterpriseNames.get(row.username)?.trim() ?? ''
+        today.push({
+          tid: row.tid,
+          text: entry.text,
+          ts,
+          author: row.username,
+          ...(enterpriseName !== '' ? { enterpriseName } : {}),
+        })
       }
     }
     const city = entry.city ?? ''
@@ -318,6 +360,7 @@ async function computeMomentsInsights(decryptedDir: string, author?: string): Pr
     updatedAt: Math.floor(Date.now() / 1000),
   }
   const dbPath = snsDb(decryptedDir)
+  const meta = contactMeta(decryptedDir)
   // 归档优先（2026-10-19）：好友删掉的动态仍要计入发布/互动/月度/地理。
   // 提醒清单只能来自线上表，所以这里单独算它；即使 sns.db 整个不在，归档仍能出洞察。
   const archivedRows = readArchivedInsightRows(decryptedDir, author)
@@ -328,21 +371,21 @@ async function computeMomentsInsights(decryptedDir: string, author?: string): Pr
         topItems = await withDbAsync(dbPath, async (db) => {
           const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
           const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
-          return tidCol === '' ? topItems : computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
+          return tidCol === '' ? topItems : computeTopItems(db, tidCol, meta.names, meta.enterpriseNames)
         })
       } catch { /* 提醒清单失败不影响归档洞察 */ }
     }
-    return computeArchiveInsights(archivedRows, topItems, author)
+    return computeArchiveInsights(archivedRows, topItems, meta.enterpriseNames, author)
   }
   if (dbPath === null) return empty
   let posts = 0
   let likes = 0
   let comments = 0
-  const likers = new Map<string, { username: string; nickname: string; count: number }>()
-  const commenters = new Map<string, { username: string; nickname: string; count: number }>()
+  const likers = new Map<string, InteractorAgg>()
+  const commenters = new Map<string, InteractorAgg>()
   const monthly = new Map<string, number>()
   const now = new Date()
-  const today: Array<{ tid: string; text: string; ts: number; author: string }> = []
+  const today: Array<{ tid: string; text: string; ts: number; author: string; enterpriseName?: string }> = []
   let topItems: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
   let geo: MomentsGeo = { points: 0, cities: [], countries: [], places: [], pointList: [] }
   let early: MomentsInsightsSnapshot | null = null
@@ -354,7 +397,7 @@ async function computeMomentsInsights(decryptedDir: string, author?: string): Pr
       const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
       const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
       // 提醒列表与「按作者过滤」无关：它永远是**我的**提醒清单，所以无条件计算。
-      topItems = await computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
+      topItems = await computeTopItems(db, tidCol, meta.names, meta.enterpriseNames)
       geo = await computeGeo(db)
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
       if (!has) return null
@@ -380,14 +423,22 @@ async function computeMomentsInsights(decryptedDir: string, author?: string): Pr
         const social = parseSnsLikesComments(xml)
         likes += social.likes.length
         comments += social.comments.length
-        for (const like of social.likes) addInteractor(likers, like.username, like.nickname)
-        for (const cm of social.comments) addInteractor(commenters, cm.username, cm.nickname)
+        for (const like of social.likes) addInteractor(likers, like.username, like.nickname, meta.enterpriseNames)
+        for (const cm of social.comments) addInteractor(commenters, cm.username, cm.nickname, meta.enterpriseNames)
         if (parsed.createTime > 0) {
           const d = new Date(parsed.createTime * 1000)
           const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
           monthly.set(key, (monthly.get(key) ?? 0) + 1)
           if (d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
-            today.push({ tid: cellString(r.t), text: parsed.text, ts: parsed.createTime, author: cellString(r.u) })
+            const username = cellString(r.u)
+            const enterpriseName = meta.enterpriseNames.get(username)?.trim() ?? ''
+            today.push({
+              tid: cellString(r.t),
+              text: parsed.text,
+              ts: parsed.createTime,
+              author: username,
+              ...(enterpriseName !== '' ? { enterpriseName } : {}),
+            })
           }
         }
         sinceYield += 1

@@ -223,21 +223,24 @@ check('空态渲染：标题/读取范围（只读）/引导问题/输入区/出
     full: false,
     onToggleFull: () => {},
   }))
-  ok(html.includes('新对话'), '缺少面板标题「新对话」')
+  ok(html.includes('AI 问答'), '缺少面板标题「AI 问答」')
   ok(html.includes('读取范围'), '缺少「读取范围」')
   ok(html.includes('项目组'), '范围里应显示当前会话名')
   ok(html.includes('想从聊天里了解什么？'), '缺少引导标题')
-  for (const s of ['最近讨论了哪些重要的事？', '帮我找一下之前提过的报价', '有哪些事情还没确认？']) {
+  for (const s of [
+    '最近我们在当前会话里讨论了哪些重要的事？',
+    '帮我找一下我们之前提过的报价',
+    '我们还有哪些事情还没确认？',
+  ]) {
     ok(html.includes(s), `缺少引导问题：${s}`)
   }
   ok(html.includes('继续追问这段聊天'), '缺少输入框占位')
-  ok(html.includes('回答附原文出处'), '缺少出处说明')
+  ok(html.includes('回答会附上原文出处'), '缺少出处说明')
   ok(!html.includes('data-full'), '非全屏不该带 data-full')
   // 读取范围必须是只读展示；模型配置已迁到「数据配置」，面板内也不该再有模型下拉
   const combos = (html.match(/role="combobox"/g) || []).length
   ok(combos === 0, `会话 AI 面板内不该有任何下拉（范围只读、模型已迁出），实际 ${combos} 个 combobox`)
   ok(!html.includes('跟随聊天'), '范围锁定后不该再有「跟随聊天」这个只能取单值的控件')
-  ok(html.includes('数据配置'), '应提示模型在「数据配置」中设置')
 })
 check('全屏态带 data-full（消息流让位）', () => {
   const html = renderToStaticMarkup(h(SessionAsk, {
@@ -266,12 +269,11 @@ check('首帧只说「正在生成」，且下拉不许是空白', () => {
     showAnalysis: true,
     analysisTargetId: null,
     analysisEntry: undefined,
-    onClearAnalysis: () => {},
   }))
   // 用元素内容（`>…<`）而不是裸词匹配：关闭按钮的 aria-label 里也有「推荐回复」，
   // 裸词匹配下把标题整块删掉照样绿 —— 变异测试抓过这类假阳性。
   // 两块都开时标题是合并文案（只开一块时会跟着变，见下一个 check）。
-  ok(html.includes('>推荐回复与分析<'), '缺少面板标题')
+  ok(html.includes('>推荐回复与消息分析<'), '缺少面板标题')
   ok(html.includes('正在按这段对话生成候选'), '首帧应显示「正在生成」')
   ok(!html.includes('这个会话还没有可用的对话内容'), '首帧还没有任何数据，那句「没有可用对话」在当时必然是假话')
   ok(html.includes('李四'), '「依据」一行应显示当前会话名')
@@ -279,8 +281,8 @@ check('首帧只说「正在生成」，且下拉不许是空白', () => {
   ok(html.includes('读取知识库…'), '库列表还没到位时，触发器要说明在读，而不是留一块空白')
   ok(!html.includes('请选择…'), '触发器不该停在共享组件那句通用的「请选择…」上')
   // 合并后新钉的两条：两块同容器、下半区未选中时也不许是空白
-  ok(html.includes('>分析<'), '下半区缺少「分析」区块标题')
-  ok(html.includes('点选一条消息'), '未选中消息时分析区要给出提示，而不是一块空白')
+  ok(html.includes('aria-label="消息分析"'), '下半区缺少「消息分析」区块')
+  ok(html.includes('选一条消息，读懂言外之意'), '未选中消息时分析区要给出提示，而不是一块空白')
 })
 
 check('只开分析时：标题跟着内容走，且推荐回复块真的不渲染', () => {
@@ -291,13 +293,12 @@ check('只开分析时：标题跟着内容走，且推荐回复块真的不渲�
     showAnalysis: true,
     analysisTargetId: null,
     analysisEntry: undefined,
-    onClearAnalysis: () => {},
   }))
   // 标题还写「推荐回复」会让人以为上半区被吃掉了 —— 它必须跟着实际内容走。
-  ok(html.includes('>分析<'), '只开分析时标题应是「分析」')
+  ok(html.includes('>消息分析<'), '只开分析时标题应是「消息分析」')
   // 「折叠」必须是**真的不渲染**，否则 DOM 里还在，那块照样在背后取数/跑 effect。
   ok(!html.includes('推荐回复'), '推荐回复块没被真正折叠（DOM 里还在）')
-  ok(html.includes('点选一条消息'), '分析区仍要给出提示')
+  ok(html.includes('选一条消息，读懂言外之意'), '分析区仍要给出提示')
 })
 
 console.log('AiModelConfig（数据配置里的 AI 大模型卡片）')
@@ -464,8 +465,8 @@ console.log('朋友圈（M21 拆 Moments 前的渲染兜底）')
 check('朋友圈：无数据时面板头与工具栏都能渲染（不崩）', () => {
   const html = renderToStaticMarkup(h(MomentsPanel, { author: null }))
   ok(html.includes('朋友圈'), '缺少面板标题')
-  ok(html.includes('本机朋友圈动态'), '缺少面板说明（desc）')
-  for (const t of ['搜索作者 / 内容 / 位置 / 评论', '隐私', '导出', '排序']) {
+  ok(html.includes('aria-label="搜索朋友圈"'), '缺少朋友圈搜索工具栏')
+  for (const t of ['搜索作者 / 内容 / 位置 / 评论', '共 0 条', '更多 ▾']) {
     ok(html.includes(t), `缺少工具栏项：${t}`)
   }
 })

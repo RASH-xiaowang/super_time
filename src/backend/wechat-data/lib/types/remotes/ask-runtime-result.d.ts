@@ -1,4 +1,4 @@
-import type { AnswerRuntimeCitation, AnswerRuntimeResult } from '../query/answer-runtime/types.ts';
+import type { AnswerRuntimeCitation, AnswerRuntimeResult, AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
 import type { AnswerStatus, EvidenceBundle, EvidenceLocator } from '../query/answer-runtime/evidence.ts';
 import type { ThreadState } from '../query/answer-runtime/thread-state.ts';
 import type { AnswerProfileId } from '../query/tools/profiles.ts';
@@ -52,5 +52,7 @@ export declare function askResultFromRuntime(input: {
     question: string;
     grounded?: GroundingSnapshot;
     threadState?: ThreadState;
+    /** 本轮由编排层收集的完整阶段事件；映射时再复制一次，避免调用方后续修改。 */
+    stages?: readonly AnswerRuntimeStage[];
 }): AskRuntimeResult;
 export {};

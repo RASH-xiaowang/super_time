@@ -9,14 +9,16 @@
  * 本文件只守**不需要模型**就能判定的部分。
  * @vitest-environment node
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearAnalysisCache, layaCachePath, layaModelKey, readAnalysisCache, writeAnalysisCache,
 } from '../src/laya/store.ts'
 import { analyzeVisibleMessages } from '../src/laya/analysis.ts'
+import { LAYA_ASSETS, layaModelStatus } from '../src/laya/model-file.ts'
 import type { LayaAnswer } from '../src/laya/runtime.ts'
 
 const dirs: string[] = []
@@ -28,6 +30,25 @@ function makeDecrypted(): string {
   const decrypted = join(root, 'decrypted')
   mkdirSync(decrypted, { recursive: true })
   return decrypted
+}
+
+/** 造一套只过体积下界的稀疏模型文件，让分析层进入逐条循环而不加载 ONNX。 */
+function makeFakeModel(decrypted: string): string {
+  const dir = join(dirname(decrypted), 'laya')
+  for (const asset of LAYA_ASSETS) {
+    const p = join(dir, asset.rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, 'x')
+    truncateSync(p, asset.minBytes)
+  }
+  return dir
+}
+
+/** 空消息库足以验证「读缓存成功」与「force 后转去取实时消息」两条路径。 */
+function makeEmptyMessageDb(decrypted: string): void {
+  mkdirSync(join(decrypted, 'message'), { recursive: true })
+  const db = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  db.close()
 }
 
 afterEach(() => {
@@ -130,5 +151,40 @@ describe('analyzeVisibleMessages 的会话级门禁', () => {
     expect(noTalker.error).toBe('缺少会话')
     const noTarget = await analyzeVisibleMessages({ ...base, talker: 'wxid_a', targets: [] })
     expect(noTarget.error).toBe('没有要分析的消息')
+  })
+})
+
+describe('analyzeVisibleMessages 的强制重算', () => {
+  it('普通读取命中缓存，force=true 会跳过缓存重新读取当前消息', async () => {
+    const decrypted = makeDecrypted()
+    const modelDir = makeFakeModel(decrypted)
+    makeEmptyMessageDb(decrypted)
+    const talker = 'wxid_force'
+    const target = { localId: 701, sortSeq: 1_790_000_000_000 }
+    const modelKey = layaModelKey(layaModelStatus(modelDir, decrypted).path)
+    writeAnalysisCache(decrypted, talker, modelKey, [{
+      localId: target.localId,
+      sourceText: '缓存里的旧文本',
+      fromVoice: false,
+      answers,
+    }])
+    const base = {
+      decryptedDir: decrypted,
+      decodedDir: decrypted,
+      talker,
+      modelDir,
+      targets: [target],
+    }
+
+    const hit = await analyzeVisibleMessages(base)
+    expect(hit.items[0]?.ok).toBe(true)
+    expect(hit.items[0]?.cached).toBe(true)
+    expect(hit.items[0]?.sourceText).toBe('缓存里的旧文本')
+
+    const forced = await analyzeVisibleMessages({ ...base, force: true })
+    expect(forced.items[0]?.cached, 'force 后不许再返回旧缓存').toBe(false)
+    expect(forced.items[0]?.ok, '空消息库应当走实时读取并如实失败').toBe(false)
+    expect(forced.items[0]?.error).toContain('取不到这条消息')
+    expect(readAnalysisCache(decrypted, talker, modelKey, [target.localId]).size).toBe(1)
   })
 })

@@ -92,6 +92,19 @@ describe('callPriorityFor', () => {
       expect(callPriorityFor('askWechat', cdnArgs)).toBe(HEAVY_PRIORITY)
     })
 
+    it('IPC/HTTP 的数组参数也能正确识别 offline，不能把无网解密误降级', () => {
+      expect(callPriorityFor('getSnsImageDataUrl', [{ ...cdnArgs, offline: true }])).toBe(HEAVY_PRIORITY)
+      expect(callPriorityFor('getSnsImageDataUrl', [{ ...cdnArgs, offline: false }])).toBe(NORMAL_PRIORITY)
+    })
+
+    it('fileOnly 批量取图走普通车道；可能回传 base64 的调用仍走重活车道', () => {
+      expect(callPriorityFor('getImageDataUrlsBatch', [{ items: [], fileOnly: true }])).toBe(NORMAL_PRIORITY)
+      expect(callPriorityFor('getImageDataUrlsBatch', { items: [], fileOnly: true })).toBe(NORMAL_PRIORITY)
+      expect(callPriorityFor('getImageDataUrlsBatch', [{ items: [], fileOnly: false }])).toBe(HEAVY_PRIORITY)
+      expect(callPriorityFor('getImageDataUrlsBatch', [{ items: [] }])).toBe(HEAVY_PRIORITY)
+      expect(callPriorityFor('getImageDataUrlsBatch')).toBe(HEAVY_PRIORITY)
+    })
+
     it('降级名单必须是长任务台账的子集（否则这条判据在空转）', () => {
       for (const m of OFFLINE_HEAVY_METHODS) {
         expect(callPriorityFor(m, { offline: true }), `${m} 不在长任务台账里`).toBe(HEAVY_PRIORITY)

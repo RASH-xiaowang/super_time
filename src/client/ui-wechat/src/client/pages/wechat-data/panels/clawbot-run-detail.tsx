@@ -19,6 +19,8 @@ import type {
   ToolCallTrace,
 } from './use-ask.ts'
 import { AskResources, AskRuntimeMeta } from './AskRuntimeMeta.tsx'
+import { identityLabel } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './clawbot.module.css'
 
 /** 发送门禁结果；兼容对象与旧版字符串两种持久化形态。 */
@@ -125,7 +127,7 @@ function evidenceCount(detail: ClawbotRunDetailLike): number {
 
 function citationName(citation: NonNullable<AskTurn['citations']>[number]): string {
   const kb = citation.source === 'kb' ? citation.kb : undefined
-  return kb?.fileName || citation.name || '未命名来源'
+  return kb?.fileName || identityLabel(citation) || '未命名来源'
 }
 
 function citationMeta(citation: NonNullable<AskTurn['citations']>[number]): string {
@@ -137,7 +139,7 @@ function citationMeta(citation: NonNullable<AskTurn['citations']>[number]): stri
       typeof kb.chunkId === 'number' ? `片段 ${String(kb.chunkId)}` : '',
     ].filter(Boolean).join(' · ')
   }
-  return [citation.time, citation.username].filter(Boolean).join(' · ')
+  return citation.time || ''
 }
 
 function asAskTurn(detail: ClawbotRunDetailLike): AskTurn {
@@ -199,13 +201,13 @@ export function ClawbotRunDetail({ detail }: {
       <div className={css.runBody}>
         {sendState === 'blocked' && (
           <div className={css.runNotice} data-tone="warning" role="status">
-            未发送：{sendReason || detail.statusReason || '发送门禁未放行'}
+            未发送：{sendReason || detail.statusReason || '发送条件未满足'}
           </div>
         )}
         {(detail.statusReason || detail.synthesisError || detail.errorCode || error) && (
           <div className={css.runDiagnostic}>
             {detail.statusReason && <span>{detail.statusReason}</span>}
-            {detail.synthesisError && <span>综合生成失败：{detail.synthesisError}</span>}
+            {detail.synthesisError && <span>回答生成失败：{detail.synthesisError}</span>}
             {detail.errorCode && <code>{detail.errorCode}</code>}
             {error && <span>{error}</span>}
           </div>
@@ -220,9 +222,17 @@ export function ClawbotRunDetail({ detail }: {
                   <span className={css.runCitationIndex}>[{String(citation.index ?? index + 1)}]</span>
                   <div className={css.runCitationBody}>
                     <div className={css.runCitationHead}>
-                      <span className={css.runCitationName} title={citationName(citation)}>
-                        {citationName(citation)}
-                      </span>
+                      {citation.source !== 'kb' && citation.username
+                        ? (
+                            <IdentityName className={css.runCitationName} name={citation.name || citation.username} username={citation.username} size={18} title={citationName(citation)}>
+                              {citationName(citation)}
+                            </IdentityName>
+                          )
+                        : (
+                            <span className={css.runCitationName} title={citationName(citation)}>
+                              {citationName(citation)}
+                            </span>
+                          )}
                       <span className={css.runCitationMeta}>{citationMeta(citation)}</span>
                     </div>
                     {citation.snippet && (

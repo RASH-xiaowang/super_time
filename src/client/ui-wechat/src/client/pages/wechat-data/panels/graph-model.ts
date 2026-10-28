@@ -16,6 +16,8 @@ export interface GNode {
   id: string
   label: string
   kind: 'person' | 'group' | 'self' | 'note' | 'stub' | 'file' | 'section' | 'entity'
+  /** 企业微信联系人的企业名称；不拼进 label，避免影响首字分组与社区聚类。 */
+  enterpriseName?: string
   /** 公众号(gh_ 前缀)标记:详情/悬停显示「公众号」,「仅显示好友」时排除 */
   isOfficial?: boolean
   /** 消息量(亲密度代理);好友至少 100、非好友 80,叠加消息量 */
@@ -413,12 +415,12 @@ export function defaultNodeLimit(totalPeople: number): number {
   return Math.max(1, Math.round(Math.max(0, totalPeople) * 0.3))
 }
 
-/** GraphSnapshot → 筛选后的图(people/groups 两模式;社区检测;亲密度拉力)。 */
-export function buildGraph(env: {
+interface GraphBuildInput {
   nodes: Array<{
     id: string
     label: string
     kind: string
+    enterpriseName?: string
     is_friend?: boolean
     msg_count?: number
     group_count?: number
@@ -426,10 +428,13 @@ export function buildGraph(env: {
     shared_count?: number
     group_codes?: string[]
     remark_group?: string
-    shared_members?: Array<{ username: string; name: string; is_friend: boolean; msg_count: number }>
+    shared_members?: Array<{ username: string; name: string; enterpriseName?: string; is_friend: boolean; msg_count: number }>
   }>
   edges: Array<{ source: string; target: string; weight: number }>
-} | null, s: GraphSettings): BuiltGraph {
+}
+
+/** GraphSnapshot → 筛选后的图(people/groups 两模式;社区检测;亲密度拉力)。 */
+export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): BuiltGraph {
   if (!env) return { nodes: [], edges: [], communityCount: 0, kindCounts: {} }
   const selfNode = env.nodes.find(n => n.kind === 'self' && n.id === 'self')
   // 筛选口径与「默认节点上限 = 30%」共用 rawCandidateNodes（两处各写一份必然漂移）。
@@ -462,6 +467,7 @@ export function buildGraph(env: {
       id: n.id,
       label: n.label,
       kind: (n.kind === 'group' ? 'group' : 'person') as GNode['kind'],
+      ...(n.enterpriseName ? { enterpriseName: n.enterpriseName } : {}),
       ...(n.kind === 'official' ? { isOfficial: true } : {}),
       weight: s.mode === 'people'
         ? personWeight(n.is_friend === true, n.msg_count ?? 0)

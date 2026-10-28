@@ -80,7 +80,17 @@ export interface PipelineInput {
 
 /** 流水线输出。 */
 export interface PipelineOutput {
-  citations: Array<{ name: string; time: string; snippet: string; username: string; local_id: number; sender?: string }>
+  citations: Array<{
+    name: string
+    enterpriseName?: string
+    time: string
+    snippet: string
+    username: string
+    local_id: number
+    sender?: string
+    senderEnterpriseName?: string
+    source?: 'msg' | 'kb' | 'agg'
+  }>
   chunks: ReturnType<typeof compressContext>['chunks']
   terms: string[]
   plan: QueryPlan
@@ -120,11 +130,13 @@ function docFromHit(h: SearchHit): RetrievedDoc {
     docKey: h.username + ':' + h.local_id,
     username: h.username,
     name: h.name,
+    ...(h.enterpriseName ? { enterpriseName: h.enterpriseName } : {}),
     local_id: h.local_id,
     create_time: h.create_time,
     text: h.text,
     snippet: h.snippet,
     ...(h.sender ? { sender: h.sender } : {}),
+    ...(h.senderEnterpriseName ? { senderEnterpriseName: h.senderEnterpriseName } : {}),
   }
 }
 

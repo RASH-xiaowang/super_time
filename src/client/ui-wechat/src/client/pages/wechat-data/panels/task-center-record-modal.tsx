@@ -34,6 +34,9 @@ import {
   plainText,
   recordImageCountLabel,
 } from './task-center.ts'
+import { triggerRecordSource } from './task-center-record-source.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './task-center.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -122,26 +125,44 @@ function RecordImages({ record, onZoom }: {
     <div className={css.imageGrid}>
       {record.images.map((img) => {
         const state = images[img.localId]
-        const title = `发送者 ${img.sender} · ${triggerTimeText(img.createTime)}`
+        const sender = img.sender.trim() || '未知发送者'
+        const senderLabel = withEnterprise(sender, img.senderEnterpriseName)
+        const title = `发送者 ${senderLabel} · ${triggerTimeText(img.createTime)}`
+        const senderIdentity = (
+          <IdentityName
+            className={css.imageSender}
+            name={sender}
+            username={img.senderUsername?.trim() ?? ''}
+            size={16}
+            title={img.senderUsername ? `${senderLabel}\n${img.senderUsername}` : senderLabel}
+          >
+            {senderLabel}
+          </IdentityName>
+        )
         if (state !== undefined && state.url !== undefined) {
           const url = state.url
           return (
-            <button
-              key={`${String(img.localId)}-${String(img.createTime)}`}
-              type="button"
-              className={css.imageCell}
-              title={`${title}（点击放大）`}
-              aria-label={`放大触发图片：${title}`}
-              onClick={() => { onZoom(url) }}
-            >
-              <img className={css.image} src={url} alt={title} loading="lazy" draggable={false} />
-            </button>
+            <figure key={`${String(img.localId)}-${String(img.createTime)}`} className={css.imageItem}>
+              <button
+                type="button"
+                className={css.imageCell}
+                title={`${title}（点击放大）`}
+                aria-label={`放大触发图片：${title}`}
+                onClick={() => { onZoom(url) }}
+              >
+                <img className={css.image} src={url} alt={title} loading="lazy" draggable={false} />
+              </button>
+              {senderIdentity}
+            </figure>
           )
         }
         return (
-          <div key={`${String(img.localId)}-${String(img.createTime)}`} className={css.imageCell} title={title}>
-            <span className={css.imageFail}>{state?.error ?? '图片解码失败'}</span>
-          </div>
+          <figure key={`${String(img.localId)}-${String(img.createTime)}`} className={css.imageItem}>
+            <div className={`${css.imageCell} ${css.imageCellError}`} title={title}>
+              <span className={css.imageFail}>{state?.error ?? '图片解码失败'}</span>
+            </div>
+            {senderIdentity}
+          </figure>
         )
       })}
     </div>
@@ -157,6 +178,7 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
   const [result, setResult] = useState<TaskCallbackDispatchResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
+  const [sourceMode, setSourceMode] = useState(false)
   const { notice, flash, hold } = useTransientNotice(4000)
 
   /** Esc 栈：记录弹窗在最下层；图片放大开着时由放大层（后 push）先响应。 */
@@ -167,8 +189,11 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
   useEscapeToClose(zoom !== null, () => { setZoom(null) })
   useDialogFocus(zoom !== null, '[data-st-dialog="task-center-zoom"]')
 
-  // 换到另一条记录时清掉上一次的投递结果（否则徽标会带着上一条的状态）。
-  useEffect(() => { setResult(null) }, [triggerId])
+  // 换到另一条记录时清掉上一次的投递结果与视图模式，避免串记录。
+  useEffect(() => {
+    setResult(null)
+    setSourceMode(false)
+  }, [triggerId])
 
   const redo = useCallback(async (): Promise<void> => {
     if (busy) return
@@ -208,6 +233,18 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
           <span className={css.modalTitle} id="task-record-title">
             {record === null ? '任务触发记录' : `任务触发记录 · ${record.taskName}`}
           </span>
+          {record !== null && (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-pressed={sourceMode}
+              aria-label={sourceMode ? '切换到界面模式' : '切换到源码模式'}
+              title={sourceMode ? '返回可读的触发信息' : '显示编码后的完整触发记录 JSON'}
+              onClick={() => { setSourceMode(value => !value) }}
+            >
+              {sourceMode ? '界面模式' : '源码模式'}
+            </Button>
+          )}
           <button type="button" className={css.modalClose} aria-label="关闭触发记录" onClick={onClose}>×</button>
         </header>
 
@@ -219,6 +256,14 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
                 这条触发记录已不在最新快照里（可能所属任务刚被切换，或记录已被清理）。关闭后重新点开右栏里的记录即可。
               </span>
             </div>
+          ) : sourceMode ? (
+            <section className={css.modalSection} aria-label="触发记录源码">
+              <div className={css.sourceBar}>
+                <span className={css.modalSectionLabel}>触发信息源码</span>
+                <span className={kitCss.textMeta}>完整 JSON · 中文与特殊字符已转换为 Unicode 转义</span>
+              </div>
+              <pre className={css.sourceCode} data-trigger-source="">{triggerRecordSource(record)}</pre>
+            </section>
           ) : (
             <>
               <div className={css.modalGrid}>
@@ -228,11 +273,15 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
                 </section>
                 <section className={css.modalSection}>
                   <span className={css.modalSectionLabel}>触发群聊</span>
-                  <span className={css.modalValue} title={record.chatUsername}>{record.chatName || '未知会话'}</span>
+                  <IdentityName className={css.modalValue} name={record.chatName || '未知会话'} username={record.chatUsername} size={24} title={record.chatUsername}>
+                    {withEnterprise(record.chatName || '未知会话', record.chatEnterpriseName)}
+                  </IdentityName>
                 </section>
                 <section className={css.modalSection}>
                   <span className={css.modalSectionLabel}>触发对象</span>
-                  <span className={css.modalValue} title={record.targetUsername}>{record.targetName || '未知对象'}</span>
+                  <IdentityName className={css.modalValue} name={record.targetName || '未知对象'} username={record.targetUsername} size={24} title={record.targetUsername}>
+                    {withEnterprise(record.targetName || '未知对象', record.targetEnterpriseName)}
+                  </IdentityName>
                 </section>
                 <section className={css.modalSection}>
                   <span className={css.modalSectionLabel}>任务</span>

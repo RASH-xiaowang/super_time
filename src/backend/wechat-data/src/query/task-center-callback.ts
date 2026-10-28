@@ -14,8 +14,14 @@
  */
 import { withWritableDb } from './db-open.ts'
 import { findVendor } from './rpa/registry.ts'
-import { missingReadyFields, migrateLegacySecrets, normalizeTriggerMethod, parseSecretJson } from './rpa/template.ts'
+import {
+  missingReadyFields,
+  migrateLegacySecrets,
+  normalizeTriggerMethod,
+  parseSecretJson,
+} from './rpa/template.ts'
 import { dispatchRpaRecord } from './rpa/dispatch.ts'
+import { buildRpaImageLinks, usesImageParamSources } from './rpa/media-links.ts'
 import {
   clampTaskInt,
   ensureTaskSchema,
@@ -28,7 +34,8 @@ import {
   taskErrorText,
 } from './task-center.ts'
 import type { RetryFetch } from '../net/fetch-retry.ts'
-import type { RpaDispatchOutcome, RpaInvocationContext, RpaRecordContext } from './rpa/types.ts'
+import type { RpaDispatchOutcome, RpaImageLink, RpaInvocationContext, RpaRecordContext } from './rpa/types.ts'
+import type { RpaMediaLinkFactory } from './rpa/media-links.ts'
 import type {
   TaskCallbackDispatchResult,
   TaskInfo,
@@ -46,9 +53,21 @@ export interface TaskDispatchDeps {
   /**
    * 解码一张图片（`username` + `localId`）。返回 `url`（data URL）或 `file`
    * （相对 `decodedDir` 的路径）之一；两者都没有 = 这张解不出来。
-   * 只有 Webhook 适配器使用（其他厂商不发图片）。
+   * Webhook 适配器解码字节；RPA 厂商只在图片类参数来源需要时用它取得可签直链的文件路径。
    */
-  decodeImage: (username: string, localId: number) => Promise<{ url?: string; file?: string }>
+  decodeImage: (
+    username: string,
+    localId: number,
+    options?: { fileOnly?: boolean },
+  ) => Promise<{ url?: string; file?: string }>
+  /**
+   * 图片直链工厂（`imagesJson` / `imageCount` / `firstImageUrl` 三种值来源用）。
+   *
+   * 按**触发记录 id** 构造：令牌载荷里要带 `recordId`（见 `net/rpa-media.ts`）。
+   * 由装配层按当前配置现取（`api_token` 派生密钥 + 可达基址）；缺省时那三种来源会
+   * 如实写「未打开局域网访问」，而不是发一个取不到的地址。
+   */
+  mediaLinks?: (recordId: number) => RpaMediaLinkFactory | undefined
   /** 隐私闸（脱敏 + 审计）；返回可直接发出去的文本。 */
   gate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => string[]
   /** 测试注入用；生产省略 = 全局 `fetch`。 */
@@ -137,23 +156,17 @@ function persistSkipped(file: string, triggerId: number, error: string): void {
 }
 
 /**
- * 组装一次投递的上下文（模板占位符的顶层根）。
+ * 构造触发记录的只读快照（Webhook 与图片直链共用同一份）。
  *
- * `record.chatType` 取任务配置（触发记录只存会话用户名/显示名，没存类型）；
- * `text` 已过隐私闸；`images` 原样带上（只有 Webhook 会解码）。
+ * `chatType` 取任务配置（触发记录只存会话用户名/显示名，没存类型）；
+ * `text` 已过隐私闸；`images` 原样带上（Webhook 按需解码，RPA 厂商只发链接）。
  * @param task - 任务配置。
  * @param record - 触发记录。
- * @param secrets - 凭据原文。
  * @param text - 已过隐私闸的触发文本。
- * @returns 投递上下文。
+ * @returns 记录快照。
  */
-function buildInvocationContext(
-  task: TaskInfo,
-  record: TaskTriggerRecord,
-  secrets: Record<string, string>,
-  text: string,
-): RpaInvocationContext {
-  const recordContext: RpaRecordContext = {
+function buildRecordContext(task: TaskInfo, record: TaskTriggerRecord, text: string): RpaRecordContext {
+  return {
     username: record.chatUsername,
     chatName: record.chatName,
     chatType: task.chatType,
@@ -164,12 +177,31 @@ function buildInvocationContext(
     triggeredAt: record.triggeredAt,
     images: record.images,
   }
+}
+
+/**
+ * 组装一次投递的上下文（模板占位符的顶层根）。
+ * @param task - 任务配置。
+ * @param record - 触发记录。
+ * @param secrets - 凭据原文。
+ * @param recordContext - {@link buildRecordContext} 的结果。
+ * @param imageLinks - 投递前算好的图片直链（与 `record.images` 等长、同序）。
+ * @returns 投递上下文。
+ */
+function buildInvocationContext(
+  task: TaskInfo,
+  record: TaskTriggerRecord,
+  secrets: Record<string, string>,
+  recordContext: RpaRecordContext,
+  imageLinks: RpaImageLink[],
+): RpaInvocationContext {
   return {
     taskId: task.id,
     recordId: record.id,
     idempotencyKey: String(task.id) + ':' + String(record.id),
     taskName: task.name,
     record: recordContext,
+    imageLinks,
     config: task.triggerConfig,
     secrets,
   }
@@ -197,7 +229,9 @@ function outcomeResult(outcome: RpaDispatchOutcome): { result: TaskCallbackDispa
  * 手动 / 扫描后投递一条触发记录（按任务的触发方式走注册表）。
  *
  * 前置：任务已完善 + 厂商已注册 + 描述符必填项齐全，否则 skipped + 可读原因。
- * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）；图片只由 Webhook 适配器按需解码。
+ * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）。图片按厂商分流：
+ * Webhook 由适配器按需解码字节；RPA 厂商只在参数用到 `imagesJson` / `imageCount` /
+ * `firstImageUrl` 时预先算好**短时签名直链**（`rpa/media-links.ts`）。
  * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。
@@ -234,7 +268,15 @@ export async function dispatchTaskCallback(
   const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
   const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
   const text = adapter.descriptor.governance.contentOutbound ? gatedText : ''
-  const ctx = buildInvocationContext(task, record, target.secrets ?? {}, text)
+  const recordContext = buildRecordContext(task, record, text)
+  const imageLinks = usesImageParamSources(adapter.descriptor, task.triggerConfig)
+    ? await buildRpaImageLinks(
+      recordContext,
+      { decodedDir, decodeImage: deps.decodeImage },
+      deps.mediaLinks?.(record.id),
+    )
+    : []
+  const ctx = buildInvocationContext(task, record, target.secrets ?? {}, recordContext, imageLinks)
   let outcome: RpaDispatchOutcome
   try {
     outcome = await dispatchRpaRecord({

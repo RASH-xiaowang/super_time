@@ -224,7 +224,7 @@ async function runClearHistory(
 ): Promise<void> {
   const ok = await confirm({
     title: `确认清除实例 ${String(slot)} 的对话历史？`,
-    message: `将删除该实例的 ${String(total)} 条接入会话（不可恢复）。绑定关系与行为配置不受影响；清空后自动回复不再看到这些旧消息。`,
+    message: `将删除该实例的 ${String(total)} 条接入会话（不可恢复）。绑定关系与行为配置不受影响；清空后，ClawBot 自动回复将不再读取这些旧消息。`,
     tone: 'danger',
     confirmText: '确认清除',
   })
@@ -471,7 +471,7 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
                 ? (
                   <EmptyState
                     title={pager.loading ? '加载中…' : readError !== '' ? '接入会话读不出来' : '还没有接入会话'}
-                    desc={readError !== '' ? undefined : (notBound ? '在「集成设置」完成微信绑定后，用微信发一条消息试试。' : '用微信给 Super Time 发一条消息试试。')}
+                    desc={readError !== '' ? undefined : (notBound ? '完成微信绑定后，在微信里给该 ClawBot 发一条消息试试。' : '在微信里给已绑定的 ClawBot 发一条消息试试。')}
                   />
                   )
                 : <ClawbotThread rows={rows} show={show} media={media} />)
@@ -483,7 +483,7 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
                   scroll={false}
                   loading={pager.loading && rows.length === 0}
                   emptyTitle={pager.loading ? '加载中…' : readError !== '' ? '接入会话读不出来' : '还没有接入会话'}
-                  emptyDesc={readError !== '' ? undefined : (notBound ? '在「集成设置」完成微信绑定后，用微信发一条消息试试。' : '用微信给 Super Time 发一条消息试试。')}
+                  emptyDesc={readError !== '' ? undefined : (notBound ? '完成微信绑定后，在微信里给该 ClawBot 发一条消息试试。' : '在微信里给已绑定的 ClawBot 发一条消息试试。')}
                 />
                 )}
           </div>
@@ -502,7 +502,7 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
         <div className={css.composerCol}>
           <div className={css.composerRow}>
             {/* P9：多实例下发送坞必须明说「以哪个号发送」，否则用户可能以为在 A 号回复、实际发到 B 号。 */}
-            <span className={css.dockSlot} title="当前实例（消息以它的名义发送）">实例 {slot ?? '—'}</span>
+            <span className={css.dockSlot} title="当前 ClawBot 实例（消息以该实例绑定的微信号发送）">实例 {slot ?? '—'}</span>
             <input
               className={css.composerInput}
               value={draft}
@@ -511,16 +511,16 @@ export function ClawbotChatView({ snapshot, slot, onGoSettings }: {
                 // 中文输入法组字期间的回车只确认候选，不发送。
                 if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void send() }
               }}
-              placeholder={notBound ? '完成绑定后可以从这里回复微信' : '给微信发一条消息（回车发送）…'}
+              placeholder={notBound ? '完成绑定后可以从这里回复微信' : '给当前 ClawBot 发一条消息（回车发送）…'}
               disabled={notBound || sending} {...desktopActionProps()}
-              aria-label="发送到微信的消息"
+              aria-label="发送给当前 ClawBot 的消息"
             />
             <Button size="sm" variant="primary" disabled={notBound || sending || draft.trim() === ''} onClick={() => { void send() }} {...desktopActionProps()}>
               {sending ? '发送中…' : '发送'}
             </Button>
             {notBound && <Button size="sm" variant="outline" className={css.dockAction} onClick={onGoSettings}>去绑定微信</Button>}
           </div>
-          <span className={css.muted}>发送经腾讯服务中转；需先在微信里给它发过消息</span>
+          <span className={css.muted}>发送经腾讯服务中转；需先在微信里给该 ClawBot 发过消息</span>
         </div>
       </Card>
 

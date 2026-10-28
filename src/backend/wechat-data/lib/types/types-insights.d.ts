@@ -17,6 +17,8 @@ export interface OverviewStorageCategory {
 export interface OverviewMomentsAuthor {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     posts: number;
 }
 /** One records item (opaque rows, concrete scalar values only). */
@@ -38,6 +40,8 @@ export interface RecordsSnapshot {
 export interface LedgerContactRow {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     count: number;
     amount: number;
     direction: 'in' | 'out' | 'unknown';
@@ -48,6 +52,8 @@ export interface LedgerWarning {
     label: string;
     username?: string;
     name?: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     time?: number;
     amount?: number;
 }
@@ -61,6 +67,8 @@ export interface Contact360Group {
 export interface Contact360Snapshot {
     username: string;
     displayName: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     messages: {
         count: number;
         firstTime: number | null;
@@ -81,11 +89,23 @@ export interface UnifiedSearchContact {
     username: string;
     name: string;
     category: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
+    /** 联系人备注（为空表示未设置）。 */
+    remark?: string;
+    /** 微信昵称（与备注可能不同）。 */
+    nickname?: string;
+    /** 微信号；群聊/公众号通常为空。 */
+    alias?: string;
+    /** 群成员数（仅群聊且本机成员表可读时返回）。 */
+    memberCount?: number;
 }
 /** One moments hit in unified search. */
 export interface UnifiedSearchMoment {
     username: string;
     name: string;
+    /** 企业微信作者所属企业。 */
+    enterpriseName?: string;
     snippet: string;
     /** SnsTimeLine.tid（稳定动态 id；老库缺列时回退 rowid）。 */
     tid: string;
@@ -111,6 +131,10 @@ export interface UnifiedSearchFavorite {
     typeLabel: string;
     serverId?: string;
     sourceId?: string;
+    /** 收藏来源显示名（优先实际会话，其次来源用户）。 */
+    source?: string;
+    /** 收藏来源为用户时的企业名称。 */
+    sourceEnterpriseName?: string;
     /** 首个可打开媒体/文件的种类与元信息。 */
     resourceKind?: string;
     fileName?: string;
@@ -133,6 +157,8 @@ export interface UnifiedSearchFile {
 export interface UnifiedSearchRecord {
     kind: string;
     name: string;
+    /** 记录标题对应用户的企业名称（仅企微联系人）。 */
+    enterpriseName?: string;
     session: string;
     time: string;
     sourceId: string;
@@ -261,6 +287,10 @@ export interface RevokedItem {
     session_username?: string;
     /** 所属会话显示名。 */
     session_name?: string;
+    /** 企业微信会话所属企业名称。 */
+    enterpriseName?: string;
+    /** 企业微信发送者所属企业名称（群聊按发送者、私聊按会话）。 */
+    senderEnterpriseName?: string;
     session_is_group?: boolean;
     /** 消息库里的真实 local_id；旧归档没有时回退 row_key。 */
     local_id?: number;
@@ -334,6 +364,8 @@ export interface EmoticonsSnapshot {
 export interface StorageRank {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     count: number;
     size: number;
 }
@@ -343,6 +375,8 @@ export interface LargeFile {
     username: string;
     /** 所属会话显示名（通讯录解析，空时回退 username）。 */
     sessionName: string;
+    /** 所属企业微信联系人的企业名称。 */
+    sessionEnterpriseName?: string;
     create_time: number;
     size: number;
 }

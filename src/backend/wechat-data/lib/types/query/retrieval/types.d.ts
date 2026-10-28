@@ -111,11 +111,13 @@ export interface RetrievedDoc {
     docKey: string;
     username: string;
     name: string;
+    enterpriseName?: string;
     local_id: number;
     create_time: number;
     text: string;
     snippet: string;
     sender?: string;
+    senderEnterpriseName?: string;
     /**
      * 来源域：`'msg'`（缺省）/ `'kb'` / `'agg'`。
      *
@@ -181,11 +183,13 @@ export interface CompressedChunk {
     name: string;
     anchor: {
         name: string;
+        enterpriseName?: string;
         time: string;
         snippet: string;
         username: string;
         local_id: number;
         sender?: string;
+        senderEnterpriseName?: string;
         /** 与 `RetrievedDoc.source` 一致：KB / 聚合块的锚点没有任何消息字段，必须靠它判别。 */
         source?: 'msg' | 'kb' | 'agg';
         /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */

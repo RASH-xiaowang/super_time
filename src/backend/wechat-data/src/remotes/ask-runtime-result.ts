@@ -13,6 +13,7 @@ import type { AnswerIntentDecision } from '../query/answer-runtime/intent.ts'
 import type {
   AnswerRuntimeCitation,
   AnswerRuntimeResult,
+  AnswerRuntimeStage,
 } from '../query/answer-runtime/types.ts'
 import type {
   AnswerStatus,
@@ -121,13 +122,14 @@ function answerForStatus(
   if (runtime.status === 'needs_clarification') {
     return answer || clarificationReply(runtime.reason, profile)
   }
-  if (runtime.status === 'blocked') return blockedReply(runtime.reason)
+  if (runtime.status === 'blocked') return blockedReply(runtime.reason, profile)
   if (runtime.status === 'failed') return failedReply(profile)
   if (runtime.status === 'insufficient' && profile !== 'clawbot-auto') {
     return insufficientReply(profile)
   }
   if (answer !== '') return answer
   if (runtime.status === 'degraded') {
+    if (profile === 'clawbot-auto') return failedReply(profile)
     return runtime.citations.length > 0 || runtime.resources.length > 0
       ? '检索完成，但最终回答生成未完整通过核对。下方引用与资源仍可打开核对。'
       : failedReply(profile)
@@ -169,6 +171,8 @@ export function askResultFromRuntime(input: {
   question: string
   grounded?: GroundingSnapshot
   threadState?: ThreadState
+  /** 本轮由编排层收集的完整阶段事件；映射时再复制一次，避免调用方后续修改。 */
+  stages?: readonly AnswerRuntimeStage[]
 }): AskRuntimeResult {
   const { runtime, profile, dataScope, scope, question } = input
   const citations = runtime.citations.map(toTraceCitation)
@@ -212,6 +216,10 @@ export function askResultFromRuntime(input: {
     basis,
     insufficient: isInsufficientStatus(finalStatus),
     status: finalStatus,
+    durationMs: runtime.durationMs,
+    ...(input.stages && input.stages.length > 0
+      ? { stages: input.stages.map(stage => ({ ...stage })) }
+      : {}),
     evidence: runtime.evidence,
     toolCalls: runtime.toolCalls,
     resources,

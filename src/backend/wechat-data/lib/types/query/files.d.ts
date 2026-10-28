@@ -6,6 +6,10 @@ interface FileItem {
     category: string;
     /** Source chat display name resolved from message resource, when available. */
     sessionName?: string;
+    /** Source chat username resolved from message resource, when available. */
+    sessionUsername?: string;
+    /** 来源会话用户的企微企业名称。 */
+    sessionEnterpriseName?: string;
     /** Source message create time, when available. */
     sourceTime?: number;
     /**
@@ -19,6 +23,10 @@ interface FileItem {
      * 与 message_resource 口径的 `sessionName` 独立，且对**视频/文件**同样可用。
      */
     sourceTalker?: string;
+    /** 附件目录反查到的来源会话真实 username。 */
+    sourceUsername?: string;
+    /** 附件目录反查来源用户的企微企业名称。 */
+    sourceTalkerEnterpriseName?: string;
 }
 /**
  * Read resource files.

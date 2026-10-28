@@ -15,7 +15,7 @@ import { boundedSet } from './meta.ts'
  * 文件已经下载好了，这条消息却永远显示「本地未找到」，直到重启应用。
  * 60 秒这条线与 `article-cover.ts` 的负缓存同口径（同样是「瞬时失败」而不是「没有这个东西」）。
  */
-const fileCache = new Map<string, { url: string, at: number }>()
+const fileCache = new Map<string, { path: string, at: number }>()
 const NEGATIVE_TTL_MS = 60_000
 
 const FILE_MIME: Record<string, string> = {
@@ -56,7 +56,7 @@ function monthDirOf(createTime: number | undefined): string {
 }
 
 /**
- * Resolve a received message file to a base64 data URL from msg/file.
+ * Resolve a received message file's on-disk path from msg/file.
  *
  * 归属要点：微信把收到的文件平铺在 `msg/file/<月份>/<原文件名>`，**目录不区分会话**，
  * 所以同一账号里同名文件可能有多个副本。旧实现只按文件名全库找、取 mtime 最新的
@@ -70,13 +70,28 @@ function monthDirOf(createTime: number | undefined): string {
  * @param wechatBaseDir - raw WeChat install dir (current account root).
  * @param fileName - original file name (e.g. 测试报告.pdf).
  * @param opts - 归属线索：文件字节数、接收时间与附件 MD5。
- * @returns ImageDataUrlResult-like result.
+ * @returns path/name/mime/size, or a readable error.
  */
-export function resolveMessageFileDataUrl(
+export interface MessageFileResolution {
+  path?: string
+  name?: string
+  mime?: string
+  size?: number
+  error?: string
+}
+
+/**
+ * Locate a received file without reading its bytes into a data URL.
+ *
+ * Export uses this path form so large attachments can be streamed straight into
+ * the ZIP. `resolveMessageFileDataUrl` keeps the existing RPC contract and
+ * reads the already-validated path afterwards.
+ */
+export function resolveMessageFilePath(
   wechatBaseDir: string | undefined,
   fileName: string,
   opts: { size?: number; createTime?: number; fileMd5?: string } = {},
-): { url?: string; error?: string } {
+): MessageFileResolution {
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法定位文件' }
   const name = sanitize(fileName)
   if (!name) return { error: '缺少文件名' }
@@ -91,12 +106,21 @@ export function resolveMessageFileDataUrl(
   // 的文件是另一个目录里的另一份字节 —— 少了这一维，会把上一个账号的文件内容发回界面。
   const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`
   const hit = fileCache.get(cacheKey)
-  if (hit !== undefined && (hit.url !== '' || Date.now() - hit.at < NEGATIVE_TTL_MS)) {
-    return hit.url ? { url: hit.url } : { error: '本地未找到该文件' }
+  if (hit !== undefined && (hit.path !== '' || Date.now() - hit.at < NEGATIVE_TTL_MS)) {
+    if (hit.path !== '') {
+      try {
+        const st = statSync(hit.path)
+        if (st.isFile()) return { path: hit.path, name, mime: mimeOf(name), size: st.size }
+      } catch {
+        // The cache entry can race with WeChat deleting/moving the attachment.
+      }
+      fileCache.delete(cacheKey)
+    }
+    if (hit.path === '') return { error: '本地未找到该文件' }
   }
   const fileRoot = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(fileRoot)) {
-    boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
+    boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
     return { error: 'msg/file 目录不存在，文件尚未下载' }
   }
   try {
@@ -104,10 +128,13 @@ export function resolveMessageFileDataUrl(
       const hits: { path: string; mtime: number; size: number }[] = []
       for (const dir of dirs) {
         const p = join(dir, name)
-        if (!existsSync(p)) continue
-        const st = statSync(p)
-        if (!st.isFile()) continue
-        hits.push({ path: p, mtime: st.mtimeMs, size: st.size })
+        try {
+          const st = statSync(p)
+          if (!st.isFile()) continue
+          hits.push({ path: p, mtime: st.mtimeMs, size: st.size })
+        } catch {
+          // Missing or concurrently removed candidates are simply skipped.
+        }
       }
       return hits
     }
@@ -121,7 +148,7 @@ export function resolveMessageFileDataUrl(
     let hits = monthDirs.length > 0 && fileMd5 === undefined ? scan(monthDirs) : []
     if (hits.length === 0) hits = scan(allDirs)
     if (hits.length === 0) {
-      boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
+      boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
       return { error: '本地未找到该文件（需在微信中先打开/下载）' }
     }
     // 未给 MD5 时体积精确相等优先；给了 MD5 时 MD5 是更强证据，
@@ -132,15 +159,29 @@ export function resolveMessageFileDataUrl(
       ? pool.find(h => hashFile(h.path) === fileMd5)
       : pool.reduce((a, b) => (b.mtime > a.mtime ? b : a), pool[0] as { path: string; mtime: number; size: number })
     if (best === undefined) {
-      boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
+      boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
       return { error: '同名文件未匹配到消息里的 MD5，已停止猜测；请在微信里重新下载该文件' }
     }
-    const bytes = readFileSync(best.path)
-    const url = 'data:' + mimeOf(name) + ';base64,' + bytes.toString('base64')
-    boundedSet(fileCache, cacheKey, { url, at: Date.now() })
-    return { url }
+    boundedSet(fileCache, cacheKey, { path: best.path, at: Date.now() })
+    return { path: best.path, name, mime: mimeOf(name), size: best.size }
   } catch (e) {
-    boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
+    boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
+    return { error: (e as Error).message }
+  }
+}
+
+/** Resolve a received message file to a base64 data URL from msg/file. */
+export function resolveMessageFileDataUrl(
+  wechatBaseDir: string | undefined,
+  fileName: string,
+  opts: { size?: number; createTime?: number; fileMd5?: string } = {},
+): { url?: string; error?: string } {
+  const found = resolveMessageFilePath(wechatBaseDir, fileName, opts)
+  if (!found.path) return { error: found.error ?? '本地未找到该文件' }
+  try {
+    const bytes = readFileSync(found.path)
+    return { url: 'data:' + (found.mime ?? mimeOf(found.name ?? fileName)) + ';base64,' + bytes.toString('base64') }
+  } catch (e) {
     return { error: (e as Error).message }
   }
 }

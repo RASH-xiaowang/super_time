@@ -153,8 +153,8 @@ const CASES: Case[] = [
   {
     name: '空输入：三块全是零（byHour 仍是 24 个 0，share 是 0 不是 NaN）',
     pairs: [],
-    money: { count: 0, total: 0, topAmount: 0, topPeerName: '', byPeer: [] },
-    revoke: { count: 0, topPeerName: '', byHour: new Array<number>(24).fill(0) },
+    money: { count: 0, total: 0, topAmount: 0, topPeerName: '', topPeerUsername: '', byPeer: [] },
+    revoke: { count: 0, topPeerName: '', topPeerUsername: '', byHour: new Array<number>(24).fill(0) },
     groups: { messages: 0, share: 0, top: [] },
   },
   {
@@ -307,8 +307,8 @@ describe('表驱动：输入行 → 三块统计期望', () => {
 
   it('空输入的**完整形状**（键名/键数/空数组，逐字钉住）', () => {
     expect(run([])).toEqual({
-      money: { count: 0, total: 0, topAmount: 0, topPeerName: '', byPeer: [] },
-      revoke: { count: 0, topPeerName: '', byHour: new Array<number>(24).fill(0) },
+      money: { count: 0, total: 0, topAmount: 0, topPeerName: '', topPeerUsername: '', byPeer: [] },
+      revoke: { count: 0, topPeerName: '', topPeerUsername: '', byHour: new Array<number>(24).fill(0) },
       groups: { messages: 0, share: 0, top: [] },
     })
   })
@@ -441,6 +441,7 @@ describe('边界', () => {
       total: 12.34,
       topAmount: 12.34,
       topPeerName: '小爱',
+      topPeerUsername: 'wxid_alice',
       byPeer: [{ username: 'wxid_alice', name: '小爱', amount: 12.34, count: 1 }],
     })
   })

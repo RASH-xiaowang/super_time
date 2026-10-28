@@ -36,7 +36,7 @@
   background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: var(--nm-dense-r);
 }
 .markGrid { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
-.markRow { display: flex; align-items: center; gap: 8px; }
+.markRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .markText {
   flex: 1 1 auto; min-width: 0; font-size: 11px; color: var(--nm-text-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

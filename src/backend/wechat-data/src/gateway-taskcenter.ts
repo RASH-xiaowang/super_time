@@ -29,7 +29,16 @@ import type {
 import { createTaskCenterRemotes } from './remotes/task-center.ts'
 import { rawWechatBase } from './gateway-support.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
-import { GatewayLayaOps } from './gateway-laya-ops.ts'
+import { GatewayMessageList } from './gateway-message-list.ts'
+import { getConfig } from './config/wechat-config.ts'
+import { pickLanIPv4 } from './net/lan-ipv4.ts'
+import {
+  RPA_MEDIA_DEFAULT_TTL_MS,
+  rpaMediaTokenKey,
+  rpaMediaUrl,
+  signRpaMediaToken,
+} from './net/rpa-media.ts'
+import type { RpaMediaLinkFactory } from './query/rpa/media-links.ts'
 
 /** 投递一拍的结果形状（与 `query/task-center-callback.ts` 的 `PendingDispatchResult` 相容）。 */
 interface TaskDispatchOutcome {
@@ -44,8 +53,31 @@ function errorText(e: unknown): string {
   return typeof msg === 'string' && msg !== '' ? msg : String(e)
 }
 
+/** `api_port` 缺省值（与 `config/wechat-config.ts` 的默认配置同口径）。 */
+const DEFAULT_API_PORT = 5032
+
+/**
+ * 规范图片直链基址：只接受 http/https 绝对地址，去掉末尾斜杠。
+ * @param raw - 配置值。
+ * @returns 规范化后的基址；空/非法时为空串。
+ */
+function normalizeMediaBaseUrl(raw: unknown): string {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (text === '') return ''
+  try {
+    const url = new URL(text)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    // 基址可以带反向代理路径前缀，但不能再夹 queries / hash / 账号密码：
+    // 它们会让拼接后的图片地址不可预测，也可能把凭据写进厂商参数。
+    if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') return ''
+    return (url.origin + url.pathname).replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+}
+
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export abstract class GatewayTaskCenter extends GatewayLayaOps {
+export abstract class GatewayTaskCenter extends GatewayMessageList {
   /**
    * 任务列表（最新在前）。
    *
@@ -189,7 +221,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
    * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要回调地址，
    * 八爪鱼要 FlowId + 已保存的 API Key。正文先过隐私闸（`task_callback`：脱敏 + 审计，
    * 两种方式同一口径）；Webhook 才逐张解码图片（单张失败只在请求体里带 `error`），
-   * 八爪鱼方式不发图片。
+   * RPA 图片类参数只传签名直链，不把 base64 塞进厂商参数。
    * @param options.triggerId - 触发记录 id。
    * @returns TaskCallbackDispatchResult：`ok` + `sent`/`failed`/`skipped`；失败带可读 `error`。
    */
@@ -246,6 +278,12 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
       scan = { ok: false, tasks: 0, scanned: 0, created: 0, dispatched: 0, error: errorText(e) }
     }
     if (scan.created > 0) this.emitTaskCenterUpdated(scan.created, 0)
+    if (scan.created > 0) {
+      // 每个新任务触发都会在同一事务路径里插入一条问候；这里只负责把其中有规则地址的
+      // 问候记录推向对应 Webhook。事件先发，界面能立刻看到 pending 记录。
+      this.emitMessageListUpdated(scan.created, 0)
+      void this.scheduleMessageListDispatch()
+    }
     // 投递不 await：先把扫描这一拍收干净，投递 HTTP 在后台单飞跑（慢请求不卡下一拍）。
     void this.scheduleTaskDispatch()
     this._taskScan = Promise.resolve(scan).finally(() => {
@@ -299,6 +337,59 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
   protected _taskCenterRemotes?: ReturnType<typeof createTaskCenterRemotes>
 
   /**
+   * 局域网/公网基址。
+   *
+   * 优先用 `config.json` 的 `rpa_media_base_url`（云端 RPA 必须走反代/公网入口）；
+   * 没配时用宿主最可能绑定的那块网卡 + `api_port`。两方面都与监听面同口径：
+   *  · 地址：{@link pickLanIPv4} 与 `http-server.js#lanAddresses` 的排序规则一致；
+   *  · 端口：宿主从 `api_port` 开始试，正常情况就用它。若首选端口被占用，宿主会顺延
+   *    监听，此时请把 `rpa_media_base_url` 配成设置页显示的实际地址（见文档）。
+   * @param cfg - 当前配置（`getConfig` 的合并视图）。
+   * @returns `http://<地址>:<端口>`；没有可用网卡时为空串。
+   */
+  protected defaultMediaBaseUrl(cfg: Record<string, unknown>): string {
+    const ip = pickLanIPv4()
+    if (ip === '') return ''
+    const rawPort = Number(cfg['api_port'])
+    const port = Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : DEFAULT_API_PORT
+    return 'http://' + ip + ':' + String(port)
+  }
+
+  /**
+   * 按当前配置构造 RPA 图片直链工厂。
+   *
+   * **每次投递都重读配置**：轮换 `api_token` 会让已发出的链接立即失效，改端口/公网入口
+   * 后下一次投递立即生效。局域网访问没开（`api_enabled !== true` 或令牌为空）时返回
+   * `undefined` —— 参数里会如实写「未打开局域网访问」，而不是发一个取不到的地址。
+   * @param recordId - 触发记录 id（写进令牌载荷，便于排查）。
+   * @returns 链接工厂，或 `undefined`（入站面未启用）。
+   */
+  protected rpaMediaLinks(recordId: number): RpaMediaLinkFactory | undefined {
+    const cfg = getConfig(this._dirs.decrypted)
+    const apiToken = typeof cfg['api_token'] === 'string' ? cfg['api_token'] : ''
+    if (cfg['api_enabled'] !== true || apiToken === '') return undefined
+
+    const configured = typeof cfg['rpa_media_base_url'] === 'string' ? cfg['rpa_media_base_url'].trim() : ''
+    const baseUrl = configured === '' ? this.defaultMediaBaseUrl(cfg) : normalizeMediaBaseUrl(configured)
+    if (baseUrl === '') {
+      const reason = configured === ''
+        ? '未找到可用的局域网 IPv4 地址，无法生成图片直链'
+        : '图片直链地址无效：config.json 的 rpa_media_base_url 需为 http/https 绝对地址'
+      return () => ({ error: reason })
+    }
+
+    const key = rpaMediaTokenKey(apiToken)
+    const expiresAt = Date.now() + RPA_MEDIA_DEFAULT_TTL_MS
+    return (rel) => {
+      try {
+        return { url: rpaMediaUrl(baseUrl, signRpaMediaToken(key, { recordId, rel, expiresAt })) }
+      } catch (e) {
+        return { error: '生成图片直链失败：' + errorText(e) }
+      }
+    }
+  }
+
+  /**
    * 任务信息域的处理器（体在 `remotes/task-center.ts`）；这里只组装 ctx 与转发。
    *
    * 图片解码上下文（账号根 + AES/XOR 密钥）按 `gateway-read.ts#createChatCollectTask`
@@ -312,6 +403,7 @@ export abstract class GatewayTaskCenter extends GatewayLayaOps {
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       selfUsername: () => this.selfUsername(),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+      mediaLinks: (recordId) => this.rpaMediaLinks(recordId),
       imageContext: () => {
         const base = rawWechatBase(this._dirs.decrypted)
         const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)

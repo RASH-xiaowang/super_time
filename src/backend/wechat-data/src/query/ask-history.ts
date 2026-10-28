@@ -20,6 +20,7 @@
  * 写入一律 **best-effort**：记录失败绝不能影响问答本身（与 `recordOperation` 同口径）。
  */
 import { DatabaseSync } from './db-open.ts'
+import { contactMeta } from './meta.ts'
 import { dirname, join } from 'node:path'
 import type {
   AskCitation,
@@ -475,18 +476,24 @@ function buildWhere(query: AskHistoryQuery): { sql: string; params: Array<string
 }
 
 /** 行 → 条目。 */
-function rowToEntry(r: Record<string, unknown>): AskHistoryEntry {
+function rowToEntry(
+  r: Record<string, unknown>,
+  enterpriseNames: ReadonlyMap<string, string>,
+): AskHistoryEntry {
   const storedStatus = cleanText(r['status'])
   const knownStatus = ALLOWED_STATUS.has(storedStatus)
   const storedError = cleanText(r['error'])
+  const username = cleanText(r['username'])
+  const usernameEnterpriseName = username === '' ? '' : (enterpriseNames.get(username)?.trim() ?? '')
   return {
     id: Number(r['id'] ?? 0),
     ts: Number(r['ts'] ?? 0),
     question: cleanText(r['question']),
     answer: cleanText(r['answer']),
     source: cleanText(r['source']) || 'ask',
-    username: cleanText(r['username']),
+    username,
     usernameName: cleanText(r['username_name']),
+    ...(usernameEnterpriseName !== '' ? { usernameEnterpriseName } : {}),
     from: cleanText(r['from_day']),
     to: cleanText(r['to_day']),
     model: cleanText(r['model']),
@@ -536,7 +543,13 @@ export function listAskHistory(decryptedDir: string, query: AskHistoryQuery = {}
       for (const r of statusRows) statusCounts[cleanText(r.status)] = Number(r.c ?? 0)
       const sourceCounts: Record<string, number> = {}
       for (const r of sourceRows) sourceCounts[cleanText(r.source)] = Number(r.c ?? 0)
-      return { items: rows.map(rowToEntry), total, statusCounts, sourceCounts }
+      const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
+      return {
+        items: rows.map(row => rowToEntry(row, enterpriseNames)),
+        total,
+        statusCounts,
+        sourceCounts,
+      }
     } finally {
       db.close()
     }

@@ -14,6 +14,8 @@ import { AssetKpiBar } from './files-cell.tsx'
 import { PanelAction } from './asset-ui.tsx'
 import { fmtBytes, fmtSharePct } from '../utils/format.ts'
 import { useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 type StorageStats = StorageSnapshot
 
@@ -91,9 +93,21 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
     {
       id: 'session',
       header: '所属会话',
-      cell: f => (f.username && onOpenChat
-        ? <LinkButton onClick={() => { onOpenChat(f.username) }}>{f.sessionName || f.username}</LinkButton>
-        : (f.sessionName || f.username || '—')),
+      cell: f => {
+        const label = (
+          <IdentityName
+            className={css.sessionCell}
+            name={f.sessionName || f.username || '未知会话'}
+            username={f.username}
+            size={20}
+          >
+            {withEnterprise(f.sessionName || f.username || '—', f.sessionEnterpriseName)}
+          </IdentityName>
+        )
+        return f.username && onOpenChat
+          ? <LinkButton className={css.sessionLink} onClick={() => { onOpenChat(f.username) }}>{label}</LinkButton>
+          : label
+      },
       sortValue: f => f.sessionName || f.username || '',
     },
     {
@@ -143,7 +157,19 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
             { label: '媒体资源总占用', value: fmtBytes(total) },
             { label: '资源总数', value: totalCount.toLocaleString() },
             { label: '平均单项', value: fmtBytes(totalCount > 0 ? total / totalCount : 0) },
-            { label: '最多会话', value: topChat ? `${fmtSharePct(topChat.size, total)}% · ${topChat.name || topChat.username || '—'}` : '—' },
+            {
+              label: '最多会话',
+              value: topChat
+                ? (
+                    <span className={css.kpiTopChat}>
+                      <span className={css.kpiShare}>{fmtSharePct(topChat.size, total)}% ·</span>
+                      <IdentityName name={topChat.name || topChat.username || '未知会话'} username={topChat.username} size={16}>
+                        {withEnterprise(topChat.name || topChat.username || '—', topChat.enterpriseName)}
+                      </IdentityName>
+                    </span>
+                  )
+                : '—',
+            },
           ]} />
 
           <div className={kitCss.cardGrid}>
@@ -167,13 +193,15 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
             {/* 会话排行 */}
             <Card title="会话占用排行（Top 10）">
               {chats.map((c) => {
-                const name = c.name || c.username || '(未知)'
+                const name = withEnterprise(c.name || c.username || '(未知)', c.enterpriseName)
                 return (
                   <div key={`${c.username}_${c.name}_${c.count}`} className={css.barRow}
                     style={onOpenChat ? { cursor: 'pointer' } : undefined}
                     {...(onOpenChat ? clickableKey(() => { onOpenChat(c.username) }) : {})}
                     title={`${name}\n点击打开会话`}>
-                    <span className={css.barLabel}>{name}</span>
+                    <IdentityName className={css.barLabel} name={c.name || c.username || '未知会话'} username={c.username} size={20}>
+                      {name}
+                    </IdentityName>
                     <div className={css.barTrack}><div className={css.barFill} style={{ width: `${String((c.size / maxChat) * 100)}%` }} /></div>
                     <span className={css.barValue}>{fmtBytes(c.size)} · {fmtSharePct(c.size, total)}%</span>
                   </div>
@@ -185,8 +213,10 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
             {/* 发送者排行 */}
             <Card title="发送者排行（Top 10）">
               {senders.map(c => (
-                <div key={`${c.username}_${c.name}_${c.count}`} className={css.barRow} title={c.name || c.username || '(未知)'}>
-                  <span className={css.barLabel}>{c.name || c.username || '(未知)'}</span>
+                <div key={`${c.username}_${c.name}_${c.count}`} className={css.barRow} title={withEnterprise(c.name || c.username || '(未知)', c.enterpriseName)}>
+                  <IdentityName className={css.barLabel} name={c.name || c.username || '未知发送者'} username={c.username} size={20}>
+                    {withEnterprise(c.name || c.username || '(未知)', c.enterpriseName)}
+                  </IdentityName>
                   <div className={css.barTrack}><div className={css.barFill} style={{ width: `${String((c.size / maxSender) * 100)}%` }} /></div>
                   <span className={css.barValue}>{fmtBytes(c.size)} · {fmtSharePct(c.size, total)}%</span>
                 </div>
@@ -199,6 +229,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
           <Card
             title="大文件清单（按体积 Top 20）"
             extra={<span className={kitCss.textCaption}>共 {files.length} 个 · 合计 {fmtBytes(files.reduce((a, f) => a + f.size, 0))}</span>}
+            className={css.fileCard}
             flush
           >
             <DataTable<NonNullable<StorageSnapshot['large_files']>[number]>

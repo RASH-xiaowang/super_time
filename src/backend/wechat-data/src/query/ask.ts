@@ -197,11 +197,13 @@ function buildChunks(
       name: anchor.name,
       anchor: {
         name: anchor.name,
+        ...(anchor.enterpriseName ? { enterpriseName: anchor.enterpriseName } : {}),
         time: anchor.time,
         snippet: anchor.snippet,
         username: anchor.username,
         local_id: anchor.local_id,
         ...(anchor.sender ? { sender: anchor.sender } : {}),
+        ...(anchor.senderEnterpriseName ? { senderEnterpriseName: anchor.senderEnterpriseName } : {}),
       },
       lines,
       score,
@@ -392,11 +394,13 @@ function centerSnippet(text: string, terms: string[], max = 90): string {
 /** 一条候选：原文 + 打分中间量。 */
 interface Candidate {
   name: string
+  enterpriseName?: string
   time: string
   snippet: string
   username: string
   local_id: number
   sender?: string
+  senderEnterpriseName?: string
   create_time: number
   score: number
   matched: string[]
@@ -404,6 +408,54 @@ interface Candidate {
   pref: number
   /** 原始正文（去群前缀）。人物加成要判断「正文里是否点名」，snippet 会被截断不可靠。 */
   body?: string
+}
+
+interface EnterpriseNamedIdentity {
+  name: string
+  enterpriseName?: string
+  sender?: string
+  senderEnterpriseName?: string
+}
+
+/** Add the enterprise suffix without changing the underlying person name. */
+function withEnterpriseDetail(name: string, enterpriseName?: string): string {
+  const display = name.trim()
+  const enterprise = enterpriseName?.trim() ?? ''
+  if (enterprise === '' || enterprise === display) return display
+  const existing = /（企业：([^）]*)）$/.exec(display)
+  if (existing?.[1]?.trim() === enterprise) return display
+  if (existing) return display.slice(0, existing.index).trimEnd() + `（企业：${enterprise}）`
+  return `${display}（企业：${enterprise}）`
+}
+
+/** Format a session/sender pair for model context. */
+function enterpriseIdentityLabel(identity: EnterpriseNamedIdentity, name = identity.name): string {
+  const session = withEnterpriseDetail(name, identity.enterpriseName)
+  const sender = identity.sender?.trim() ?? ''
+  return sender === ''
+    ? session
+    : `${session} · ${withEnterpriseDetail(sender, identity.senderEnterpriseName)}`
+}
+
+/** Person hints match session, sender, enterprise, or raw message body. */
+function mentionsPerson(identity: EnterpriseNamedIdentity, person: string, body = ''): boolean {
+  if (person === '') return false
+  return [
+    identity.name,
+    identity.enterpriseName,
+    identity.sender,
+    identity.senderEnterpriseName,
+    body,
+  ].some(value => (value ?? '').includes(person))
+}
+
+/** Person hints boost session, sender, and body matches after BM25 ranking. */
+function boostPersonMatches(ranked: Candidate[], person: string): void {
+  if (person === '') return
+  for (const candidate of ranked) {
+    if (mentionsPerson(candidate, person, candidate.body)) candidate.score += 1.0
+  }
+  ranked.sort((a, b) => (b.pref - a.pref) || (b.score - a.score) || (b.create_time - a.create_time))
 }
 
 /** 每个词最多取多少条候选（per-term cap，词与词之间互不抢名额）。 */
@@ -521,9 +573,7 @@ export function retrieveAskCitations(
       const matched = allTerms.filter(t => body.includes(t))
       // 问某个人时，三条线索都算命中：会话名、群内发送者、**正文里提到他**。
       // 只认前两条会漏掉「合同表单里写着李四」这类正文提名（而问题往往就是在问它）。
-      const personMatch = Boolean(
-        person && (h.name.includes(person) || (h.sender ?? '').includes(person) || body.includes(person)),
-      )
+      const personMatch = mentionsPerson(h, person, body)
       // who 列命中（问某人 → 命中与他的会话）时正文里可能一个词都没有，不能因此丢掉
       if (matched.length === 0 && !personMatch) continue
       const key = h.username + ':' + h.local_id
@@ -533,6 +583,7 @@ export function retrieveAskCitations(
       candidates += 1
       byKey.set(key, {
         name: h.name,
+        ...(h.enterpriseName ? { enterpriseName: h.enterpriseName } : {}),
         time: h.time,
         snippet: centerSnippet(body || String(h.snippet ?? ''), allTerms),
         username: h.username,
@@ -543,6 +594,7 @@ export function retrieveAskCitations(
         pref: inSoftRange(h.create_time) ? 1 : 0,
         body,
         ...(sender ? { sender } : {}),
+        ...(h.senderEnterpriseName ? { senderEnterpriseName: h.senderEnterpriseName } : {}),
       })
     }
   }
@@ -574,6 +626,7 @@ export function retrieveAskCitations(
         candidates += 1
         c = {
           name: h.name,
+          ...(h.enterpriseName ? { enterpriseName: h.enterpriseName } : {}),
           time: h.time,
           snippet: centerSnippet(body || String(h.snippet ?? ''), effective.map(x => x.t)),
           username: h.username,
@@ -583,6 +636,7 @@ export function retrieveAskCitations(
           matched: [],
           pref: inSoftRange(h.create_time) ? 1 : 0,
           ...(sender ? { sender } : {}),
+          ...(h.senderEnterpriseName ? { senderEnterpriseName: h.senderEnterpriseName } : {}),
         }
         byKey.set(key, c)
       }
@@ -610,6 +664,7 @@ export function retrieveAskCitations(
         const { body } = splitSender(String(h.text ?? ''))
         byKey.set(wkey, {
           name: h.name,
+          ...(h.enterpriseName ? { enterpriseName: h.enterpriseName } : {}),
           time: h.time,
           snippet: body.replace(/\s+/g, ' ').slice(0, 120),
           username: h.username,
@@ -619,6 +674,7 @@ export function retrieveAskCitations(
           matched: [],
           pref: 1,
           ...(h.sender ? { sender: h.sender } : {}),
+          ...(h.senderEnterpriseName ? { senderEnterpriseName: h.senderEnterpriseName } : {}),
         })
       }
     }
@@ -633,12 +689,7 @@ export function retrieveAskCitations(
   })
   // 人物线索加成：会话名 / 群内发送者 / 正文点名的人都优先，且权重要**压过** BM25 的
   // 微小差值 —— 归一化后的 BM25 挤在 0~1，+0.5 不足以把「正文写着李四的合同」顶上去（实测排名反而下降）。
-  if (person) {
-    for (const c of ranked) {
-      if (c.name.includes(person) || (c.sender ?? '').includes(person) || (c.body ?? '').includes(person)) c.score += 1.0
-    }
-    ranked.sort((a, b) => (b.pref - a.pref) || (b.score - a.score) || (b.create_time - a.create_time))
-  }
+  boostPersonMatches(ranked, person)
   // 「最近/最新/最后一次」：在**命中全部规划器内容词**的候选里按时间新→旧。
   // 不能只按 score 排 —— BM25 偏好「短文本 + 该词多次出现」的讨论型消息，
   // 实测「最近一次转账给我的是谁」会把群里讨论转账脚本的消息排在真正的
@@ -780,7 +831,7 @@ export function formatAskContext(
         blocks.push(formatKbBlock(ch, i))
         return
       }
-      const who = ch.anchor.sender ? `${ch.name} · ${ch.anchor.sender}` : ch.name
+      const who = enterpriseIdentityLabel(ch.anchor, ch.name)
       const day = (ch.anchor.time || '').slice(0, 10)
       // 行内只给时钟；**跨天**的行带上自己的日期 —— 否则模型只能拿窗口头那天去猜，
       // 而提示词又要求「写绝对日期」，猜错就把日期编进了回答里（本轮修）。
@@ -805,7 +856,7 @@ export function formatAskContext(
         blocks.push(`[${i + 1}] 【本机统计结果】${c.name}\n${c.snippet}\n    ↑ 这是对**全部 ${'本机消息'}**跑 SQL 统计得到的**准确数字**，不是抽样片段。回答「一共多少 / 哪个最多」这类问题时**必须直接采用这些数字**，并标注 [${i + 1}]。`)
         return
       }
-      const who = c.sender ? `${c.name} · ${c.sender}` : c.name
+      const who = enterpriseIdentityLabel(c)
       blocks.push(`[${i + 1}] ${who} (${c.time}): ${c.snippet}`)
     })
   }

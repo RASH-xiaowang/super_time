@@ -11,6 +11,8 @@ import type { SearchIndexStatus } from './types-panels.ts';
 export interface GroupInsightsMember {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     count: number;
 }
 /** Offline group insights snapshot for one chatroom. */
@@ -112,6 +114,8 @@ export interface DbHealthSnapshot {
 export interface MomentsInteractorRow {
     username: string;
     nickname: string;
+    /** 互动人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     count: number;
 }
 /** "On this day" moment row for the moments insights view. */
@@ -120,12 +124,16 @@ export interface MomentsTodayRow {
     text: string;
     ts: number;
     author: string;
+    /** 发帖人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
 }
 /** One row of the moments "new activity" reminder list (`SnsTopItem_1`). */
 export interface MomentsTopItemRow {
     username: string;
     /** Display name (remark > nickname > username), resolved via contactMeta. */
     name: string;
+    /** 企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     /** How many of this friend's posts entered the reminder list. */
     count: number;
     /** Rows with `is_read = 0`. */

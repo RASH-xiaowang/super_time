@@ -46,12 +46,11 @@
  * 放宽成 `kind !== 'video'`（`moments-media.ts`）—— 否则评论图又被关在门外，且**不报错**。
  * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M417–M427。
  */
-import { Fragment } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
-import { MomentsAvatar } from './moments-support.tsx'
+import { MomentsAvatar, MomentsMiniAvatar } from './moments-support.tsx'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
@@ -59,6 +58,7 @@ import type { MediaKeySpec } from './moments-media.ts'
 import css from './moments.module.css'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
 
 /** 图片/视频的离线解码请求描述定义在媒体层（`moments-media.ts`），卡片只是往那张表里登记。 */
 
@@ -140,6 +140,37 @@ function commentImageSpec(img: { md5?: string; url?: string; token?: string; see
   }
 }
 
+/** Likes wrap as compact avatar + name chips so long names never force horizontal scroll. */
+function MomentLikes({ likes, expanded, onToggle, onSelect }: {
+  likes: MomentItem['likes']
+  expanded: boolean
+  onToggle: () => void
+  onSelect: (name: string | null) => void
+}): React.JSX.Element {
+  const names = expanded ? likes : likes.slice(0, 8)
+  return (
+    <div className={css.likesRow}>
+      <span className={css.likesCount}>❤ {likes.length}</span>
+      <span className={css.likeNames}>
+        {names.map((like, idx) => {
+          const username = like.username || ''
+          const name = withEnterprise(like.nickname || username || '未知', like.enterpriseName)
+          return (
+            <span key={`${username}-${String(idx)}`} className={css.likePerson}>
+              <MomentsMiniAvatar username={username} name={like.nickname || username} />
+              <span className={css.clickableName} title={'只看 ' + name} {...clickableKey(() => { onSelect(like.nickname || username || null) }, { stopPropagation: true })}>{name}</span>
+            </span>
+          )
+        })}
+        {!expanded && likes.length > 8 ? ' 等' : ''}
+        {likes.length > 8 && (
+          <button type="button" className={css.textToggle} onClick={onToggle}>{expanded ? '收起' : '展开全部 ' + String(likes.length) + ' 人'}</button>
+        )}
+      </span>
+    </div>
+  )
+}
+
 
 export function MomentsCard({
   m, privacy, snsImgs, snsErrs,
@@ -171,7 +202,7 @@ export function MomentsCard({
       </div>
       <div className={css.body}>
         <div className={css.meta} title="查看详情" {...clickableKey(() => { setDetail({ m }) })}>
-          <span className={css.author}>{m.author || '未知'}</span>
+          <span className={css.author}>{withEnterprise(m.author || '未知', m.enterpriseName)}</span>
           {m.is_self && <span className={css.selfTag}>我</span>}
         </div>
         {m.text && (
@@ -190,7 +221,7 @@ export function MomentsCard({
               return (
                 <div key={fk}
                   className={css.imgWrap}
-                  {...clickableKey(() => { setViewer({ images: m.images, index: ii, author: m.author }) })}
+                  {...clickableKey(() => { setViewer({ images: m.images, index: ii, author: withEnterprise(m.author || '未知', m.enterpriseName) }) })}
                   title="点击查看大图"
                   data-sns-key={key || undefined}
                   data-sns-md5={im.md5 || undefined}
@@ -316,24 +347,12 @@ export function MomentsCard({
         {(m.likes.length > 0 || m.comments.length > 0) && (
           <div className={css.social}>
             {m.likes.length > 0 && (
-              <div className={css.likesRow}>
-                <span className={css.likesCount}>❤ {m.likes.length}</span>
-                <span className={css.likeNames}>
-                  {(() => {
-                    const names = socialExpanded ? m.likes : m.likes.slice(0, 8)
-                    return names.map((l, idx) => (
-                      <Fragment key={idx}>
-                        <span className={css.clickableName} title={'只看 ' + (l.nickname || l.username)} {...clickableKey(() => { setAuthorFilter(l.nickname || l.username || null) }, { stopPropagation: true })}>{l.nickname || l.username || '未知'}</span>
-                        {idx < names.length - 1 ? '、' : null}
-                      </Fragment>
-                    ))
-                  })()}
-                  {!socialExpanded && m.likes.length > 8 ? ' 等' : ''}
-                  {m.likes.length > 8 && (
-                    <button type="button" className={css.textToggle} onClick={() => { toggleSocial(m.tid) }}>{socialExpanded ? '收起' : '展开全部 ' + String(m.likes.length) + ' 人'}</button>
-                  )}
-                </span>
-              </div>
+              <MomentLikes
+                likes={m.likes}
+                expanded={socialExpanded}
+                onToggle={() => { toggleSocial(m.tid) }}
+                onSelect={name => { setAuthorFilter(name || null) }}
+              />
             )}
             {m.comments.length > 0 && (
               <div className={css.comments}>
@@ -345,7 +364,7 @@ export function MomentsCard({
                         <button type="button" className={css.textToggle} data-on={onlyMineComments || undefined} onClick={() => { setOnlyMineComments(v => !v) }}>仅看我的</button>
                       )}
                       <button type="button" className={css.textToggle} onClick={() => { setCommentSortByCard(prev => ({ ...prev, [m.tid]: commentSort === 'asc' ? 'desc' : 'asc' })) }}>{commentSort === 'asc' ? '最新在前' : '最早在前'}</button>
-                      <button type="button" className={css.textToggle} onClick={() => { copyText(m.comments.map(c => ((c.nickname || c.username) + '：' + (c.content || '')).trim()).join('\n')) }}>复制</button>
+                      <button type="button" className={css.textToggle} onClick={() => { copyText(m.comments.map(c => (withEnterprise(c.nickname || c.username || '未知', c.enterpriseName) + '：' + (c.content || '')).trim()).join('\n')) }}>复制</button>
                     </div>
                   </div>
                 )}
@@ -359,9 +378,16 @@ export function MomentsCard({
                       data-sns-key={c.image?.md5 || undefined}
                       data-sns-md5={c.image?.md5 || undefined}
                     >
-                      <span className={css.commentName} title={'只看 ' + (c.nickname || c.username)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{c.nickname || c.username || '未知'}</span>
+                      <span className={css.commentIdentity}>
+                        <MomentsMiniAvatar username={c.username} name={c.nickname || c.username} />
+                        <span className={css.commentName} title={'只看 ' + withEnterprise(c.nickname || c.username || '未知', c.enterpriseName)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{withEnterprise(c.nickname || c.username || '未知', c.enterpriseName)}</span>
+                      </span>
                       {c.to_username && c.to_username !== m.username && (
-                        <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>
+                        <span className={css.commentReply}>
+                          回复
+                          <MomentsMiniAvatar username={c.to_username} name={c.to_nickname || c.to_username} />
+                          <span className={css.commentReplyName}>{withEnterprise(c.to_nickname || c.to_username, c.toEnterpriseName)}{target ? '：' : ''}</span>
+                        </span>
                       )}
                       {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
                       <span className={css.commentText}>{c.content || ''}</span>
@@ -378,7 +404,7 @@ export function MomentsCard({
                             decoding="async"
                             className={css.commentImg}
                             failed={<span className={css.commentImgFallback}>[图]</span>}
-                            {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })}
+                            {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: withEnterprise(c.nickname || c.username || '', c.enterpriseName) }) }, { label: '查看大图' })}
                           />
                         )
                         // 连地址都没有：留一个 [图] 记号（评论里确实存在只剩文字的图片评论）

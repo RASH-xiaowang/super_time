@@ -22,6 +22,7 @@ export * from './types-laya.ts'
 export * from './types-retrieval.ts'
 export * from './types-kb-wire.ts'
 export * from './types-taskcenter.ts'
+export * from './types-message-list.ts'
 export * from './types-rpa.ts'
 
 /**

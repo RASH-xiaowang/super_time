@@ -1,6 +1,7 @@
 import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSecretRevealResult, TaskTriggerSnapshot } from './types.ts';
 import { createTaskCenterRemotes } from './remotes/task-center.ts';
-import { GatewayLayaOps } from './gateway-laya-ops.ts';
+import { GatewayMessageList } from './gateway-message-list.ts';
+import type { RpaMediaLinkFactory } from './query/rpa/media-links.ts';
 /** 投递一拍的结果形状（与 `query/task-center-callback.ts` 的 `PendingDispatchResult` 相容）。 */
 interface TaskDispatchOutcome {
     dispatched: number;
@@ -8,7 +9,7 @@ interface TaskDispatchOutcome {
     errors?: string[];
 }
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export declare abstract class GatewayTaskCenter extends GatewayLayaOps {
+export declare abstract class GatewayTaskCenter extends GatewayMessageList {
     /**
      * 任务列表（最新在前）。
      *
@@ -115,7 +116,7 @@ export declare abstract class GatewayTaskCenter extends GatewayLayaOps {
      * 只投「任务已完善 + 当前触发方式的下游配置齐全」的记录：Webhook 要回调地址，
      * 八爪鱼要 FlowId + 已保存的 API Key。正文先过隐私闸（`task_callback`：脱敏 + 审计，
      * 两种方式同一口径）；Webhook 才逐张解码图片（单张失败只在请求体里带 `error`），
-     * 八爪鱼方式不发图片。
+     * RPA 图片类参数只传签名直链，不把 base64 塞进厂商参数。
      * @param options.triggerId - 触发记录 id。
      * @returns TaskCallbackDispatchResult：`ok` + `sent`/`failed`/`skipped`；失败带可读 `error`。
      */
@@ -163,6 +164,28 @@ export declare abstract class GatewayTaskCenter extends GatewayLayaOps {
     /** 广播「任务中心已变」，让面板立刻回源（而不是等下一次微信同步事件）。 */
     protected emitTaskCenterUpdated(created: number, dispatched: number): void;
     protected _taskCenterRemotes?: ReturnType<typeof createTaskCenterRemotes>;
+    /**
+     * 局域网/公网基址。
+     *
+     * 优先用 `config.json` 的 `rpa_media_base_url`（云端 RPA 必须走反代/公网入口）；
+     * 没配时用宿主最可能绑定的那块网卡 + `api_port`。两方面都与监听面同口径：
+     *  · 地址：{@link pickLanIPv4} 与 `http-server.js#lanAddresses` 的排序规则一致；
+     *  · 端口：宿主从 `api_port` 开始试，正常情况就用它。若首选端口被占用，宿主会顺延
+     *    监听，此时请把 `rpa_media_base_url` 配成设置页显示的实际地址（见文档）。
+     * @param cfg - 当前配置（`getConfig` 的合并视图）。
+     * @returns `http://<地址>:<端口>`；没有可用网卡时为空串。
+     */
+    protected defaultMediaBaseUrl(cfg: Record<string, unknown>): string;
+    /**
+     * 按当前配置构造 RPA 图片直链工厂。
+     *
+     * **每次投递都重读配置**：轮换 `api_token` 会让已发出的链接立即失效，改端口/公网入口
+     * 后下一次投递立即生效。局域网访问没开（`api_enabled !== true` 或令牌为空）时返回
+     * `undefined` —— 参数里会如实写「未打开局域网访问」，而不是发一个取不到的地址。
+     * @param recordId - 触发记录 id（写进令牌载荷，便于排查）。
+     * @returns 链接工厂，或 `undefined`（入站面未启用）。
+     */
+    protected rpaMediaLinks(recordId: number): RpaMediaLinkFactory | undefined;
     /**
      * 任务信息域的处理器（体在 `remotes/task-center.ts`）；这里只组装 ctx 与转发。
      *

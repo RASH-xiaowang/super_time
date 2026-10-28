@@ -6,6 +6,7 @@
  */
 import type { RegionFriend } from '@deepseek-ai/dsh-wechat-data/types'
 import { localImageSrc } from './remote-img.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import css from './world-map.module.css'
 
 /** Options for the avatar rail component. */
@@ -42,8 +43,9 @@ export function FriendAvatarRail({ side, friends, avatars, mapId }: FriendAvatar
         // 渲染层自己向 CDN 发图片请求的话，两个出网开关都管不到）。
         const src = localImageSrc(avatars[f.username])
         const name = f.displayName || f.remark || f.nickName || f.username
+        const identity = withEnterprise(name, f.enterpriseName)
         return (
-          <div key={f.username} className={css.avatarItem} role="listitem" title={`${name}\n${f.username}`}>
+          <div key={f.username} className={css.avatarItem} role="listitem" title={`${identity}\n${f.username}`}>
             <span className={css.avatarWrap}>
               {src ? (
                 <img className={css.avatar} src={src} alt="" loading="lazy" referrerPolicy="no-referrer" />
@@ -51,7 +53,7 @@ export function FriendAvatarRail({ side, friends, avatars, mapId }: FriendAvatar
                 <span className={css.avatarFallback}>{name.slice(0, 1)}</span>
               )}
             </span>
-            <span className={css.friendLabel}>{name}</span>
+            <span className={css.friendLabel}>{identity}</span>
           </div>
         )
       })}

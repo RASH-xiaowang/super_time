@@ -44,6 +44,69 @@ afterEach(() => {
 })
 
 describe('Avatar 头像身份', () => {
+  it('联系人快照里有本机头像时直接绘制，不再等待批量接口', async () => {
+    act(() => {
+      root.render(createElement(Avatar, {
+        name: '张三',
+        username: 'wxid_a',
+        avatarUrl: 'file:///C:/WeChat/avatar-a.jpg',
+        size: 28,
+      }))
+    })
+    await flush()
+
+    const img = host.querySelector('img')
+    expect(img, '本机 avatarUrl 没有直接显示').not.toBeNull()
+    expect(img?.getAttribute('src')).toBe('file:///C:/WeChat/avatar-a.jpg')
+    expect(mocks.apiGetAvatarBatched).not.toHaveBeenCalled()
+  })
+
+  it('本机头像绘制失败时回退批量接口，仍拿不到才显示首字', async () => {
+    mocks.apiGetAvatarBatched.mockResolvedValue({
+      kind: 'data',
+      data: 'data:image/png;base64,avatar-proxied',
+    })
+
+    act(() => {
+      root.render(createElement(Avatar, {
+        name: '张三',
+        username: 'wxid_a',
+        avatarUrl: 'blob:avatar-broken',
+        size: 28,
+      }))
+    })
+    await flush()
+
+    const localImg = host.querySelector('img')
+    expect(localImg?.getAttribute('src')).toBe('blob:avatar-broken')
+    act(() => { localImg?.dispatchEvent(new Event('error')) })
+    await flush()
+
+    expect(mocks.apiGetAvatarBatched).toHaveBeenCalledWith({ username: 'wxid_a', nickname: '张三' })
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,avatar-proxied')
+  })
+
+  it('HTTP avatarUrl 不交给渲染层直连，只通过头像代理链取图', async () => {
+    mocks.apiGetAvatarBatched.mockResolvedValue({
+      kind: 'data',
+      data: 'data:image/png;base64,avatar-proxied',
+    })
+
+    act(() => {
+      root.render(createElement(Avatar, {
+        name: '张三',
+        username: 'wxid_a',
+        avatarUrl: 'https://wx.qlogo.cn/mmhead/avatar-a/0',
+        size: 28,
+      }))
+    })
+    await flush()
+
+    expect(mocks.apiGetAvatarBatched).toHaveBeenCalledWith({ username: 'wxid_a', nickname: '张三' })
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,avatar-proxied')
+    expect(host.innerHTML).not.toContain('https://wx.qlogo.cn')
+  })
+
   it('真实 username 命中时显示 img，并把展示名作为 nickname 传入', async () => {
     mocks.apiGetAvatarBatched.mockResolvedValue({
       kind: 'data',
@@ -98,5 +161,32 @@ describe('Avatar 头像身份', () => {
     expect(avatarCache.has('同名')).toBe(false)
     const srcs = [...host.querySelectorAll('img')].map((img) => img.getAttribute('src'))
     expect(srcs).toEqual(['data:image/png;base64,avatar-wxid_a', 'data:image/png;base64,avatar-wxid_b'])
+  })
+
+  it('同一节点切换 username 时，新头像返回前不沿用上一人的图片', async () => {
+    let resolveSecond: ((value: { kind: string; data: string }) => void) | undefined
+    mocks.apiGetAvatarBatched.mockImplementation(({ username }: { username: string }) => {
+      if (username === 'wxid_a') {
+        return Promise.resolve({ kind: 'data', data: 'data:image/png;base64,avatar-a' })
+      }
+      return new Promise((resolve) => { resolveSecond = resolve })
+    })
+
+    act(() => {
+      root.render(createElement(Avatar, { name: '甲', username: 'wxid_a' }))
+    })
+    await flush()
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,avatar-a')
+
+    act(() => {
+      root.render(createElement(Avatar, { name: '乙', username: 'wxid_b' }))
+    })
+    await flush(2)
+    expect(host.querySelector('img'), '切换身份后仍在画上一个人的头像').toBeNull()
+    expect(host.textContent).toBe('乙')
+
+    act(() => { resolveSecond?.({ kind: 'data', data: 'data:image/png;base64,avatar-b' }) })
+    await flush()
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,avatar-b')
   })
 })

@@ -1,13 +1,10 @@
-/* 「分析」区块自有的一点样式（右栏合并面板的**下半块**，2026-09-25 从左栏搬来）。
+/* 消息分析区：分析对象 → 结论 → 依据。
  *
- * 外壳（.panel / .head / .title / .iconBtn / .body）与滚动区**复用** session-ask.module.css ——
- * 与「推荐回复」「AI 问答」是同一处视觉语言，不另造一套；无边框滚动条也在那边统一声明。
- * 这里只放区块自己的容器与内容排布。
+ * 外壳、滚动条复用 session-ask.module.css；这里只负责内容层级。
+ * 设计目标是让用户先看到「该注意什么、该怎么做」，原始概率留在折叠区。
+ * 间距与圆角统一走主题令牌，避免新增一套视觉语言。
  */
 
-/* 区块容器：吃掉合并面板里上半块（推荐回复）之后剩下的高度，自己内部滚动。
-   必须 `min-height: 0` —— 否则 flex 子项的默认 `min-height: auto` 会撑到内容高，
-   把滚动条顶到面板外面去（面板本身的 overflow 是 hidden，那部分内容就看不见了）。 */
 .sec {
   flex: 1 1 auto;
   min-height: 0;
@@ -15,100 +12,666 @@
   flex-direction: column;
 }
 
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--nm-s-1) var(--nm-s-3);
-  font-size: 12px;
-  color: var(--nm-text-3);
-  line-height: 1.6;
-}
-
-/* 与逐条分析卡同一款「本地分析」徽章（小圆点 + 文字） */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--nm-s-1);
-  flex: none;
-  color: var(--nm-text-3);
-}
-
-.badge::before {
-  content: '';
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--nm-r-pill);
-  background: var(--nm-cyan);
-}
-
-.stat {
-  font-size: 12px;
-  color: var(--nm-text-3);
-}
-
-.stat b {
-  color: var(--nm-text-1);
-  font-weight: 600;
-}
-
-/* 被分析的原文（语音则是转写文本）—— 让用户确认「看的是哪条」 */
-.source {
-  margin-top: var(--nm-s-2);
-  padding: var(--nm-s-2) var(--nm-s-3);
-  border-radius: var(--nm-r-sm);
-  background: color-mix(in srgb, var(--nm-text-1) 5%, transparent);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--nm-text-2);
-  overflow-wrap: anywhere;
-}
-
-.blocks {
-  display: flex;
-  flex-direction: column;
-  gap: var(--nm-s-2);
-  margin-top: var(--nm-s-2);
-}
-
+/* ── 未选中消息 ── */
 .empty {
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--nm-s-2);
-  padding-top: var(--nm-s-4);
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--nm-s-3);
+  padding: var(--nm-s-4) var(--nm-s-2);
+}
+
+.emptyIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--nm-r-md);
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
 
 .emptyTitle {
-  font-size: 15px;
+  font-size: 17px;
+  line-height: 1.4;
   font-weight: 600;
   color: var(--nm-text-1);
 }
 
 .emptySub {
+  max-width: 36em;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--nm-text-3);
   overflow-wrap: anywhere;
 }
 
-/* W3-11.5 收尾：失败态的「重试这一条」。
-   自对齐（align-self）而不是拉满 —— 面板宽 240px 上下，一个铺满整行的按钮
-   会把「分析失败：…」那行短文案压得像标题。 */
-.emptyAction {
-  align-self: flex-start;
+.scopeChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nm-s-2);
+}
+
+.scopeChips span {
+  padding: var(--nm-s-1) var(--nm-s-2);
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-3);
+  font-size: 11px;
+}
+
+/* ── 分析对象 ── */
+.subject {
+  padding: var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-text-1) 3%, transparent);
+}
+
+.subjectTop {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.subjectIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.subjectIdentity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subjectIdentity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-3);
+  font-size: 11px;
+}
+
+.subjectTag {
+  flex: none;
+  margin-left: auto;
+  padding: 2px var(--nm-s-2);
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+  color: var(--nm-cyan);
+  font-size: 10px;
+}
+
+.quote {
+  margin-top: var(--nm-s-3);
+  padding-left: var(--nm-s-3);
+  border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 48%, transparent);
+  color: var(--nm-text-1);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcriptTag {
+  display: inline-block;
   margin-top: var(--nm-s-2);
+  padding: 1px var(--nm-s-2);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-3);
+  background: var(--nm-bg-hover);
+  font-size: 10px;
+}
+
+/* ── 等待 / 错误 ── */
+.loading {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nm-s-3);
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-3);
+}
+
+.loading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.loading strong {
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.errorBox {
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 28%, var(--nm-border));
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
+}
+
+.errorBox strong {
+  color: var(--nm-text-1);
+  font-size: 13px;
+}
+
+.errorBox p {
+  margin: var(--nm-s-1) 0 0;
+  color: var(--nm-text-3);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.secondaryBtn,
+.textBtn {
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.secondaryBtn {
+  margin-top: var(--nm-s-3);
   padding: var(--nm-s-1) var(--nm-s-3);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
-  line-height: 1.6;
-  cursor: pointer;
 }
 
-.emptyAction:hover {
+.secondaryBtn:hover {
   border-color: var(--nm-border-hover);
   background: var(--nm-bg-hover);
+}
+
+/* ── 研判结论 ── */
+.hero {
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 20%, var(--nm-border));
+  border-radius: var(--nm-r-md);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 9%, transparent), transparent 70%),
+    var(--nm-bg-card);
+}
+
+.heroTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+}
+
+.eyebrow,
+.cardLabel {
+  color: var(--nm-text-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.confidence {
+  padding: 1px var(--nm-s-2);
+  border-radius: var(--nm-r-pill);
+  font-size: 10px;
+}
+
+.confidence[data-tone='high'] {
+  color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 10%, transparent);
+}
+
+.confidence[data-tone='medium'] {
+  color: var(--nm-warning, var(--nm-text-2));
+  background: color-mix(in srgb, var(--nm-warning, var(--nm-text-2)) 10%, transparent);
+}
+
+.confidence[data-tone='low'] {
+  color: var(--nm-text-3);
+  background: var(--nm-bg-hover);
+}
+
+.headline {
+  margin: var(--nm-s-2) 0 0;
+  color: var(--nm-text-1);
+  font-size: 15px;
+  line-height: 1.65;
+  font-weight: 600;
+}
+
+.caution {
+  margin: var(--nm-s-2) 0 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ── 意图 / 温度 ── */
+.findingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-2);
+}
+
+.findingCard,
+.actionCard {
+  min-width: 0;
+  padding: var(--nm-s-3);
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+}
+
+.findingCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+}
+
+.cardValue {
+  color: var(--nm-text-1);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.probabilityLine {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  color: var(--nm-text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-border);
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--nm-cyan);
+}
+
+.bar[data-tone='warn'] > span {
+  background: var(--nm-danger);
+}
+
+.altLine {
+  margin: 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.temperatureValue {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+}
+
+.temperatureValue strong {
+  color: var(--nm-text-1);
+  font-size: 13px;
+}
+
+.temperatureValue span {
+  color: var(--nm-text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 建议动作 ── */
+.actionCard {
+  margin-top: var(--nm-s-2);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--nm-brand) 6%, transparent), transparent 72%),
+    var(--nm-bg-card);
+}
+
+.actionTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+}
+
+.actionTop > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.actionTop strong {
+  color: var(--nm-text-1);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.actionTop > span {
+  flex: none;
+  color: var(--nm-text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.actionCard > p {
+  margin: var(--nm-s-2) 0 0;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.avoid {
+  margin-top: var(--nm-s-2);
+  padding-top: var(--nm-s-2);
+  border-top: 0.5px solid var(--nm-border);
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.avoid b {
+  margin-right: var(--nm-s-2);
+  color: var(--nm-danger);
+  font-weight: 600;
+}
+
+/* ── 针对当前消息的推荐回复 ── */
+.replySection {
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-brand) 24%, var(--nm-border));
+  border-radius: var(--nm-r-md);
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--nm-brand) 8%, transparent), transparent 65%),
+    var(--nm-bg-card);
+}
+
+.replyHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+}
+
+.replyHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.replyHeading strong {
+  color: var(--nm-text-1);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.replyHeading p {
+  margin: 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.textBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.replyLoading {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.replyDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-brand) 14%, transparent);
+}
+
+.replyList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-3);
+}
+
+.replyCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-width: 0;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-text-1) 2%, transparent);
+}
+
+.replyCard:hover {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}
+
+.replyCard p {
+  margin: 0;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.replyIndex {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-brand) 12%, transparent);
+  color: var(--nm-brand);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.copyBtn {
+  padding: 2px var(--nm-s-2);
+  border: 0.5px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-family: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.copyBtn:hover {
+  border-color: var(--nm-border-hover);
+  color: var(--nm-text-1);
+}
+
+.replyBasis {
+  margin: var(--nm-s-2) 0 0;
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.copyError {
+  margin: var(--nm-s-2) 0 0;
+  color: var(--nm-danger);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.replyError {
+  margin-top: var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 25%, var(--nm-border));
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-danger) 5%, transparent);
+}
+
+.replyError strong {
+  color: var(--nm-text-1);
+  font-size: 12px;
+}
+
+.replyError p {
+  margin: var(--nm-s-1) 0 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* ── 关键信号 ── */
+.signalGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-2);
+}
+
+.signal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-s-1);
+  min-width: 0;
+  padding: var(--nm-s-2);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-3);
+  font-size: 10px;
+}
+
+.signal > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal b {
+  flex: none;
+  color: var(--nm-text-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 元信息 / 底层判断 ── */
+.resultMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-2);
+  color: var(--nm-text-3);
+  font-size: 10px;
+}
+
+.textBtn {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: 10px;
+}
+
+.textBtn:hover {
+  color: var(--nm-text-1);
+}
+
+.details {
+  margin-top: var(--nm-s-3);
+  border-top: 0.5px solid var(--nm-border);
+}
+
+.details summary {
+  padding: var(--nm-s-2) 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.details summary:hover {
+  color: var(--nm-text-1);
+}
+
+.detailsHint {
+  margin: 0 0 var(--nm-s-2);
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.blocks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+}
+
+.disclaimer {
+  margin: var(--nm-s-3) 0 0;
+  padding-top: var(--nm-s-2);
+  border-top: 0.5px solid var(--nm-border);
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+@media (max-width: 520px) {
+  .findingGrid,
+  .signalGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 右栏会随消息流让位缩到 300px；按面板自身宽度收列，不能只看视口宽度。 */
+@container (max-width: 390px) {
+  .findingGrid,
+  .signalGrid {
+    grid-template-columns: 1fr;
+  }
 }

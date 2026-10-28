@@ -34,8 +34,8 @@ export const MUTATIONS_BATCH3W = [
     id: 'M548-stack-switch-loses-its-signal',
     why: '根 div 不再写 data-has-session ⇒ CSS 那两条开关没有信号源：手机上点了会话，消息流不出现、列表也不让位（体感是「点了没反应」），桌面端三栏照常、毫无异常。判据：chats-mobile.wiring.spec.ts 的「根 div 上写了 data-has-session」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx',
-    from: '    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined}>',
-    to: '    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>',
+    from: '    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined} data-side-panel={sidePanel}>',
+    to: '    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-side-panel={sidePanel}>',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-mobile.wiring.spec.ts',
   },
   {

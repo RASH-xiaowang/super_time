@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { parseAskOptimize } from '../query/ask.ts'
+import { ASK_OPTIMIZE_SYSTEM_PROMPT, formatConversationHistory } from '../query/answer-runtime/persona.ts'
 import type { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts'
 import { loadRetrievalConfig } from '../query/retrieval/config.ts'
 import { buildVectorIndex } from '../query/retrieval/embedding.ts'
@@ -345,6 +346,8 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           ...(options.threadState !== undefined ? { threadState: options.threadState } : {}),
         })
 
+        const elapsedMs = Date.now() - startedAt
+        runtime.durationMs = elapsedMs
         const retrievalId = trace?.retrievalId
           || `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
         runtime.retrievalId = retrievalId
@@ -354,7 +357,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           scope: '本机记录',
           recency: false,
         }), indexNote }
-        rc.saveAskHistory(options, runtime, Date.now() - startedAt, modelLabel)
+        rc.saveAskHistory(options, runtime, elapsedMs, modelLabel)
         rc.op('task', 'ask_wechat', runtime.status === 'failed' ? 'fail' : 'ok', '', askOpDetail(runtime))
         rememberAskTrace({
           rc,
@@ -452,12 +455,14 @@ async function optimizeAskQuestionIn(
       && (message.role === 'user' || message.role === 'assistant')
       && typeof message.content === 'string')
     .slice(-6)
-  const historyBrief = history.length > 0
-    ? '\n最近对话背景：\n' + history
-      .map(message => (message.role === 'user' ? '用户：' : '助手：') + message.content.slice(0, 200))
-      .join('\n')
+  const historyForPrompt = history.map(message => ({
+    role: message.role,
+    content: message.content.slice(0, 200),
+  }))
+  const historyBrief = historyForPrompt.length > 0
+    ? '\n最近对话背景：\n' + formatConversationHistory(historyForPrompt, 'qa')
     : ''
-  const prompt = `用户原始问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
+  const prompt = `待优化问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
   const [gated] = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])
   const assembler = new BlockAssembler()
   const generate: GenerateOptions = {
@@ -467,7 +472,7 @@ async function optimizeAskQuestionIn(
       content: [{ type: 'text', text: gated ?? prompt }],
       source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
     })],
-    system: '你是微信聊天记录的提问优化器。把用户问题改写得更清晰、更利于全文检索（保留原意，补充隐含的时间/对象等限定，去掉口语口水词），并给出至多 3 条具体的改进建议。只输出一行 JSON：{"optimized":"优化后的问题","suggestions":["建议1","建议2"]}',
+    system: ASK_OPTIMIZE_SYSTEM_PROMPT,
     maxTokens: 512,
   }
   for await (const chunk of ctx.llm.stream(generate)) assembler.push(chunk)

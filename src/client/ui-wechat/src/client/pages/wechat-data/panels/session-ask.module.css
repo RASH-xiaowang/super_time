@@ -1,34 +1,30 @@
-/* 「新对话」会话级 AI 面板。
-   2026-10-19 微信化：从「并排第三栏」改成**覆盖式沉浸抽屉**（默认关、可关闭）。
-   宽度随视口在 440–640px 之间伸缩，窄屏由 `max-width: 100%` 兜底；
-   消息列始终占满剩余宽度；全屏态（data-full）铺满整个会话区。 */
+/* 「AI 问答」会话级面板，同时是推荐/分析共用右栏的外壳。
+   AI 问答打开时接管消息流，形成单栏阅读面，不再和聊天记录左右对半；
+   会话列表默认保留，全屏态（data-full）再收起列表。
+   推荐/分析仍按 320–420px 右栏使用同一外壳。 */
 
 .panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  width: clamp(440px, 46vw, 640px);
-  max-width: 100%;
+  position: relative;
+  flex: 0 0 clamp(320px, 34vw, 420px);
+  width: clamp(320px, 34vw, 420px);
+  min-width: 0;
+  max-width: none;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   border: 0;
   border-left: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
   overflow: hidden;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
-}
-/* 全屏：铺满整个会话区（含左侧会话列之外的画面） */
-.panel[data-full] {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  width: auto;
-  max-width: none;
-  border-radius: 0;
   box-shadow: none;
+  container-type: inline-size;
+}
+/* 全屏：消息流由会话壳隐藏，右栏吃满剩余宽度。 */
+.panel[data-full] {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
 }
 
 /* ── 头 ── */
@@ -37,11 +33,67 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 6px 12px;
   border-bottom: 0.5px solid var(--nm-border);
   flex-shrink: 0;
 }
-.title { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
+.headIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.title { flex: 0 0 auto; font-size: 13px; font-weight: 650; color: var(--nm-text-1); line-height: 1.4; }
+.scopeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(42vw, 320px);
+  padding-left: 8px;
+  border-left: 1px solid var(--nm-border);
+  color: var(--nm-text-3);
+  line-height: 1.4;
+}
+.scopePrefix {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+}
+.scopeChip .scopeName {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scopeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 16px;
+  border-bottom: 0.5px solid var(--nm-border);
+}
+.scopeLabel {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.scopeRow > .scopeName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--nm-text-2);
+}
+.scopeRow > .iconBtn,
+.scopeRow > [data-scope-control] {
+  flex: 0 0 auto;
+}
 .headActions { display: flex; align-items: center; gap: 2px; }
 .iconBtn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -52,58 +104,40 @@
 }
 .iconBtn:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
 
-/* ── 读取范围 ── */
-.scopeRow {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 12px;
-  border-bottom: 0.5px solid var(--nm-border);
-  flex-shrink: 0;
-}
-.scopeLabel { font-size: 12px; color: var(--nm-text-3); flex-shrink: 0; }
-.scopeIcon { color: var(--nm-text-3); flex-shrink: 0; }
-/* 读取范围只展示不可改：范围恒为当前会话，避免出现「问了别的会话」的歧义 */
-.scopeName {
-  flex: 1 1 auto; min-width: 0;
-  font-size: 13px; font-weight: 600; color: var(--nm-text-1);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
 /* ── 主体（唯一滚动区）── */
-.body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 12px; }
-
-/* 无边框滚动条：**在这里显式声明**，不依赖 scifi-theme.css 的全局规则。
- *
- * 为什么显式写：全局 `::-webkit-scrollbar` 只在该主题 CSS 被加载时生效，
- * 而这份外壳现在被三个面板共用（AI 问答 / 推荐回复 / 分析），
- * 「内容过长时是细条、没有轨道底色、没有边框与箭头」是明确的观感要求（2026-09-25）。
- * 轨道与 corner 一律透明；thumb 用与全局同源的令牌（带兜底），
- * 圆角走 `--nm-r-xs` —— 6px 宽的条上它正好是圆头（不能写字面量，几何守卫会咬）。
- * 横向条同样收成 6px：这两栏都是纵向滚动，横条只会在溢出时意外冒出来。 */
-.body::-webkit-scrollbar { width: 6px; height: 6px; }
-.body::-webkit-scrollbar-track { background: transparent; border: none; }
-.body::-webkit-scrollbar-thumb {
-  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 0, 0, 0.18));
-  border: none;
-  border-radius: var(--nm-r-xs);
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px 10px;
+  scrollbar-width: none;
 }
-.body::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 0, 0, 0.28)); }
-.body::-webkit-scrollbar-corner { background: transparent; }
+
+/* 对话区不显示滚动条，但仍保留滚轮、触控板和键盘滚动。 */
+.body::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* 与「微信问答」共用一条居中阅读轴；窄右栏自然收窄，接管/全屏时不超过 720px。 */
+.body > * {
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+}
 
 /* 空态 */
-.intro { display: flex; flex-direction: column; gap: 10px; padding-top: 18px; }
+.intro { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; }
 .introIcon {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border-radius: var(--nm-r-md);
+  width: 30px; height: 30px; border-radius: 9px;
   color: var(--nm-text-2);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
 }
-.introTitle { font-size: 17px; font-weight: 600; color: var(--nm-text-1); }
-.introSub { font-size: 12px; line-height: 1.6; color: var(--nm-text-3); overflow-wrap: anywhere; }
-.sugList { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.introTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
+.introSub { font-size: 11px; line-height: 1.6; color: var(--nm-text-3); overflow-wrap: anywhere; }
+.sugList { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .sugCard {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  width: 100%; padding: 11px 12px; text-align: left;
-  font-size: 13px; color: var(--nm-text-2);
+  width: 100%; padding: 8px 10px; text-align: left;
+  font-size: 11.5px; color: var(--nm-text-2);
   background: transparent;
   border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-md); cursor: pointer;
   transition: var(--nm-t-ui);
@@ -113,18 +147,18 @@
 .sugArrow { flex-shrink: 0; color: var(--nm-text-3); display: inline-flex; }
 
 /* ── 对话流 ── */
-.thread { display: flex; flex-direction: column; gap: 14px; }
+.thread { display: flex; flex-direction: column; gap: 20px; }
 .turnUser { display: flex; justify-content: flex-end; }
 .userBubble {
-  max-width: 88%; padding: 8px 11px;
-  font-size: 13px; line-height: 1.6; color: var(--nm-text-1);
-  background: var(--nm-bg-hover);
-  border: 1px solid var(--nm-border);
-  border-radius: 12px 12px 3px 12px;
+  max-width: min(66%, 420px); padding: 7px 11px;
+  font-size: 12.5px; line-height: 1.6; color: var(--nm-text-1);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
+  border: 0;
+  border-radius: 14px 14px 4px 14px;
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere;
 }
-.turnAi { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.turnAi { display: flex; flex-direction: column; gap: 5px; width: 100%; min-width: 0; }
 .aiAnswer {
   font-size: 13px; line-height: 1.7; color: var(--nm-text-1);
   white-space: pre-wrap; word-break: break-word;
@@ -176,18 +210,22 @@
    实心圆，只有 disabled 时降透明度，于是空输入时也像一盏亮着的按钮。 */
 .composer {
   flex-shrink: 0;
-  margin: 0 12px;
+  width: min(calc(100% - 32px), 720px);
+  margin-inline: auto;
+  padding: 5px 8px 4px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
-  transition: background 0.2s ease;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nm-bg-card) 92%, var(--nm-text-1) 3%);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 5%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 .composer:focus-within {
-  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
+  background: var(--nm-bg-card);
 }
 .input {
-  display: block; width: 100%; padding: 10px 12px 4px;
-  font: inherit; font-size: 13px; line-height: 1.6;
+  display: block; width: 100%; padding: 7px 10px 2px;
+  font: inherit; font-size: 12.5px; line-height: 1.55;
   color: var(--nm-text-1); background: transparent;
   border: none; outline: none; resize: none;
   max-height: 160px; overflow-y: auto;
@@ -198,11 +236,16 @@
    焦点可见性由容器的背景微亮与光标表达，不再叠 outline。 */
 textarea.input:focus-visible { outline: none; }
 .input::placeholder { color: var(--nm-text-3); }
+.input,
+.optStrip { scrollbar-width: none; }
+.input::-webkit-scrollbar,
+.optStrip::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .composerFoot {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 8px 8px;
+  min-height: 22px;
+  padding: 0;
 }
-.footHint { font-size: 11px; color: var(--nm-text-3); }
+.footHint { font-size: 10px; color: var(--nm-text-3); }
 .footSpacer { flex: 1 1 auto; }
 .send {
   flex-shrink: 0;
@@ -269,9 +312,11 @@ textarea.input:focus-visible { outline: none; }
 /* ── 底部说明 ── */
 .note {
   flex-shrink: 0;
-  padding: 8px 12px 10px;
+  width: min(calc(100% - 32px), 720px);
+  margin-inline: auto;
+  padding: 4px 12px 6px;
   text-align: center;
-  font-size: 11px; color: var(--nm-text-3);
+  font-size: 10px; color: var(--nm-text-3);
 }
 
 /* ── 回答脚注行：依据 + 反馈 + 沉淀合成一行（与「微信问答」同一布局）──
@@ -333,7 +378,8 @@ textarea.input:focus-visible { outline: none; }
 /* 优化结果条：紧贴输入框上方（不进入滚动区）。 */
 .optStrip {
   flex-shrink: 0;
-  margin: 0 12px 6px;
+  width: min(calc(100% - 32px), 720px);
+  margin: 0 auto 6px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
   border-radius: var(--nm-r-sm);
@@ -364,7 +410,8 @@ textarea.input:focus-visible { outline: none; }
 }
 .optError {
   flex-shrink: 0;
-  margin: 0 12px 6px;
+  width: min(calc(100% - 32px), 720px);
+  margin: 0 auto 6px;
   font-size: 12px;
   color: var(--nm-danger);
 }

@@ -227,7 +227,7 @@ export async function apiGetSelfProfile(): Promise<SelfProfile> {
   return unwrap(await remote().getSelfProfile())
 }
 /** Fetch full-history author activity counts (ranked descending). */
-export async function apiGetMomentsAuthors(): Promise<Array<{ name: string; count: number }>> {
+export async function apiGetMomentsAuthors(): Promise<Array<{ username: string; name: string; enterpriseName?: string; count: number }>> {
   return unwrap(await remote().getMomentsAuthors())
 }
 /**
@@ -279,7 +279,7 @@ export async function apiAnalyzeMessages(options: { talker: string; contextLimit
  * @param options - talker + targets (localId + sortSeq), up to a dozen per call.
  * @returns Per-message answers; failures are per item, not for the whole batch.
  */
-export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string }): Promise<LayaVisibleAnalysisResult> {
+export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string; force?: boolean }): Promise<LayaVisibleAnalysisResult> {
   return unwrap(await remote().analyzeVisibleMessages(options))
 }
 

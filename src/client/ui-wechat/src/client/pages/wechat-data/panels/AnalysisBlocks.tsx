@@ -35,9 +35,25 @@ const SHORT: Record<string, string> = {
   play_dumb: '先不回',
 }
 
+/**
+ * 底层判断的用户名。原始命题仍保留在 `title` 里，排障时能看清模型究竟问了什么。
+ */
+const QUESTION_LABELS: Record<string, string> = {
+  literal_question: '是否在字面提问',
+  is_testing: '是否在确认记性',
+  is_upset: '是否有不悦信号',
+  real_intent: '意图倾向',
+  tension: '紧张程度',
+  best_action: '建议动作',
+}
+
 /** 取短名，查不到就回落（`title` 上始终是完整文案）。 */
 function short(key: string, fallback: string): string {
   return SHORT[key] ?? fallback
+}
+
+function questionLabel(a: LayaAnswer): string {
+  return QUESTION_LABELS[a.qid] ?? a.question
 }
 
 /**
@@ -51,7 +67,7 @@ export function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
     const p = top?.probability ?? 0
     return (
       <div className={css.block}>
-        <span className={css.q}>{a.question}</span>
+        <span className={css.q} title={a.question}>{questionLabel(a)}</span>
         <span className={css.verdict}>
           <b>{top?.label ?? ''}</b>
           <em>{(p * 100).toFixed(0)}%</em>
@@ -69,7 +85,7 @@ export function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
     const filled = Math.round((v / max) * 10)
     return (
       <div className={css.block}>
-        <span className={css.q}>{a.question}</span>
+        <span className={css.q} title={a.question}>{questionLabel(a)}</span>
         <span className={css.verdict}>
           <b>{v.toFixed(1)}</b>
           <em>/ {max}</em>
@@ -86,7 +102,7 @@ export function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
   const rest = a.options.slice(4).reduce((sum, o) => sum + o.probability, 0)
   return (
     <div className={css.block}>
-      <span className={css.q}>{a.question}</span>
+      <span className={css.q} title={a.question}>{questionLabel(a)}</span>
       <span className={css.bars}>
         {shown.map((o, i) => (
           <span key={o.key} className={css.barRow}>

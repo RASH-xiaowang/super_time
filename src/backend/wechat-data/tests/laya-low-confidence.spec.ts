@@ -63,7 +63,7 @@ describe('接线（源码断言，先剥注释）', () => {
 
   it('⑥ 客户端要把它透传到界面（否则后端标了也看不见）', () => {
     expect(hook.includes('lowConfidence?: boolean'), '客户端镜像类型要有这个字段').toBe(true)
-    expect(hook.includes('lowConfidence: it.lowConfidence === true'), '映射要带上它').toBe(true)
+    expect(hook.includes('lowConfidence: item.lowConfidence === true'), '映射要带上它').toBe(true)
     expect(panel.includes('done.lowConfidence === true'), '面板要按它渲染').toBe(true)
     expect(panel.includes('信息不足，仅供参考'), '这句提示不能被删').toBe(true)
   })

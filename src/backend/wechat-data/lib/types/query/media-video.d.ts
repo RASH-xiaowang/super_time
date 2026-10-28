@@ -20,6 +20,7 @@ export declare function resolveVideoInfo(decryptedDir: string, decodedDir: strin
     available: boolean;
     md5?: string;
     coverUrl?: string;
+    coverPath?: string;
     videoPath?: string;
     error?: string;
 };

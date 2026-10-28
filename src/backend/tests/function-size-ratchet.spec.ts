@@ -57,21 +57,26 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 同日小地图让位（浮层展开时隐藏，`hideMinimap={railOpen}`）⇒ 523 → 524；
   // 同日把按钮/浮层移进 `.stage`（absolute 缺定位祖先会飘到视口顶部、压住手机档搜索条）
   // + 跨断点同步展开态 ⇒ 524 → 541。棘轮只许变小，拆完要回来改数字。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  497',
+  // 2026-10-27：节点搜索浮层抽成 GraphSearchBox，身份行改动不再计入面板函数 ⇒ 497 → 476。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  476',
   // 2026-10-19：会话列表接键盘导航（onKeyDown + data-session-row），压缩同处注释抵消
   // 一行增量 ⇒ 376 → 375。棘轮只许变小，拆完要回来改数字。
   // 2026-10-19（微信化改版）：会话壳去掉霓虹背景/装饰层，375 → 370。成果记账。
   // 2026-10-22：消息工具弹窗抽到 chats-message-tools.tsx ⇒ 370 → 338。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  338',
+  // 2026-10-25：消息分析的选择/自动选中/发送者状态抽到 chats-analysis.ts ⇒ 338 → 337。
+  // 2026-10-27：搜索结果身份行与会话头部企业徽标抽成小组件 ⇒ 337 → 334。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  334',
   // 2026-10-17：`reportIndexAction` / `resolveSystemPrompt` 抽成模块级（系统提示词覆盖 +
   // 索引日志），`emptyAnswerText` / `describeScope` / `normalizeKbId` 同批 ⇒ 519 → 516。
   // 棘轮只许变小，成果要记账。
   // 2026-10-22：问答主链路收敛到统一 answer runtime，`createAskDeepRemotes` 已低于
   // 250 行阈值，按棘轮规则从台账移除；若以后再次越线，必须重新登记并先拆分。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  588',
+  // 2026-10-27：会话/成员标签映射与加载、排行与会话身份行搬到模块级 ⇒ 588 → 564。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  564',
   // 2026-10-19（微信化改版）：对话框/工具栏去掉装饰分支后 458 → 441。棘轮只许变小，成果记账。
   // 2026-10-22：编辑状态移出 useChatsEdit，菜单分发抽成 useChatsMenuAction ⇒ 441 → 431。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  431',
+  // 2026-10-27：会话搜索匹配与企微徽标抽成模块级 ⇒ 431 → 429。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  429',
   // 2026-09-30：重做为「三块可折叠面板」时把子件拆成 ai-model-panel / -profiles / -roles /
   // llm-probe 四个文件，540 → 493；同日「默认全部折叠」又去掉了自动展开的旁路，493 → 488。
   // 棘轮只许变小，改完要回来改数字。
@@ -82,10 +87,13 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-19（微信化改版）：引用角标那套装配随视觉简化收敛，421 → 418。成果记账。
   // 2026-10-22：检索范围改成输入框上方的 @ 浮层，面板不再渲染常驻范围条；
   // 输入面抽成 AskComposer，375 → 325。棘轮只许变小。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  325',
+  // 2026-10-26：线程滚动策略抽成共享 useAskThreadAutoScroll，325 → 319。成果记账。
+  // 2026-10-27：问答范围企业名解析抽成共享展示助手 ⇒ 319 → 317。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  317',
   // 2026-09-30：底部固定区（设置 / 模型余额 / 主题与数据状态）拆成 `SidebarFooter`，
   // 492 → 464。棘轮的方向是「只许变小」，所以拆完要回来改数字。
-  'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  472',
+  // 2026-10-23：按当前工作树实测重新记账 ⇒ 384（只许再变小）。
+  'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  384',
   // 2026-10-17：`openFile` 抽成模块级 `openExportFile`（顺带修「openPath 失败静默」的 bug）
   // ⇒ 461 → 456。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  456',
@@ -131,28 +139,33 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-19（微信化收口 + 局域网访问节回归）：设置项文案/说明与恢复的访问节净增 7 行 ⇒ 292 → 299。
   // ⚠️ 这是**按实测重登记**，不是放宽阈值（LIMIT 仍 250，且该函数仍在台账内、只许再变小）：
   // 设置面板的拆分欠账没消失，下一位改到这里应先抽 `AdvancedSection` 之外的卡片再回头改数字。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsDesktopPanel  299',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  307',
+  // 2026-10-23：导航与页面上下文抽到 settings-workspace.tsx ⇒ 299 → 284。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsDesktopPanel  284',
+  // 2026-10-27：图谱输入类型移出函数签名 ⇒ 307 → 293。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  293',
   // 2026-09-30：给年报加「资金 / 撤回 / 群聊」三个字段时，先把 noteEmoji 与页脚首尾两条
   // 抽成模块级函数腾预算，assemble 308 → 306。棘轮只许变小，拆小了要回来改数字。
-  'src/backend/wechat-data/src/query/annual-review.ts  assemble  306',
+  // 2026-10-27：按当前工作树实测重新记账 ⇒ 306 → 274。
+  'src/backend/wechat-data/src/query/annual-review.ts  assemble  274',
   // 2026-10-19：ContactsPanel 已 237 行（< 250 阈值）⇒ 从本棘轮移除（任务要求删除该条）。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KbRail.tsx  KbRail  291',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-cards.tsx  RichCard  290',
+  // 2026-10-27：卡片 props 类型移出函数签名、红包状态行收为一行 ⇒ 290 → 282。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-cards.tsx  RichCard  269',
   // 2026-10-22：引用清单抽成 HistoryCites（知识库原文可点 + 失败提示），289 → 253。棘轮只许变小。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/AskHistoryDialog.tsx  AskHistoryDialog  253',
-  'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  285',
+  // 2026-10-27：人物命中、加成与引用身份格式化抽成模块级助手 ⇒ 285 → 284。
+  'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  284',
   // 2026-09-29：合并两个 Toolbar 为一行 + 注释精简 ⇒ 279（成果记账，数字改小；只许再变小）
   // 2026-10-18：筛选区拆成两排（分类段条搬成 RecordKindTabs）⇒ 276。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  276',
-  'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
   // 2026-10-21：收藏功能线与性能分支合并后，FavoritesPanel 实测 257 行（两只详情子视图已抽出）。
   // 仍高于 250 阈值 ⇒ 重新登记为「只许变小」；下一次再长必须先拆。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  257',
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',
   // 2026-10-08：图片那一路不再拿 CDN 原始地址当 src（那是 WxIsaac64 密文，原理上渲染不出来），
   // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  264',
+  // 2026-10-27：点赞头像列表抽成 MomentLikes ⇒ 264 → 259。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  259',
   // 2026-10-19（workspace 组收口）：数据健康面板随检查项/文案回归涨到 251 行，刚好越过 250 阈值。
   // 只登记、**不改阈值**（LIMIT 仍 250）：这说明它下一次再长就必须先拆（例如把检查项列表抽出去），
   // 现在先把它纳入「只许变小」的台账，避免它游离在棘轮之外静默变胖。

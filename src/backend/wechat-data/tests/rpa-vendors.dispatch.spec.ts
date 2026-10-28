@@ -14,7 +14,7 @@
  *
  * 所有用例都走真实管道代码（template/auth/dispatch），只有 fetch 是假的。
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -45,6 +45,7 @@ interface HttpCall {
   method: string
   headers: Record<string, string>
   body: string
+  bodyBytes?: Uint8Array
 }
 
 /** mock 响应：`body` 会被 JSON.stringify；或直接给 `rawBody`。 */
@@ -72,6 +73,7 @@ function createTransport(responder: Responder | MockResponse): { deps: RpaDispat
       method: String(init?.method ?? 'GET').toUpperCase(),
       headers,
       body: typeof init?.body === 'string' ? init.body : '',
+      ...(init?.body instanceof Uint8Array ? { bodyBytes: new Uint8Array(init.body) } : {}),
     }
     calls.push(call)
     const spec = typeof responder === 'function' ? responder(call, calls.length - 1) : responder
@@ -100,6 +102,7 @@ function makeCtx(
     taskName: '测试任务',
     config: config as RpaInvocationContext['config'],
     secrets,
+    imageLinks: [],
     record: {
       username: 'wxid_self',
       chatName: '测试群',
@@ -171,7 +174,7 @@ function tokenBodyFields(call: HttpCall): Record<string, string> {
 }
 
 describe('Webhook（内置）', () => {
-  it('成功：整条记录 JSON + 图片 data URL；地址只在 URL，凭据无', async () => {
+  it('成功：整条记录 JSON + 空 params + 图片 data URL；地址只在 URL，凭据无', async () => {
     const transport = createTransport({ status: 200, body: { ok: true } })
     const ctx = makeCtx({ url: 'https://hook.example.com/cb' }, {}, { images: IMAGE_REFS })
     const outcome = await dispatch(webhook, ctx, transport.deps)
@@ -191,6 +194,7 @@ describe('Webhook（内置）', () => {
     expect(body['target']).toEqual({ username: 'wxid_zs', name: '张三' })
     expect(body['keyword']).toBe('RPA')
     expect(body['text']).toBe('你好 RPA')
+    expect(body['params']).toEqual({})
     // 图片逐张解码：第一张成功带 dataUrl，第二张失败只带 error（不让整条回调失败）。
     const images = body['images'] as Array<Record<string, unknown>>
     expect(images).toHaveLength(2)
@@ -199,12 +203,102 @@ describe('Webhook（内置）', () => {
     expect(images[1]?.['error']).toBe('图片解码失败')
   })
 
+  it('附加参数解析到 params：固定值/模板/语义来源，旧 paramMap 不迁移', async () => {
+    const transport = createTransport({ status: 200, body: { ok: true } })
+    const ctx = makeCtx({
+      url: 'https://hook.example.com/cb',
+      paramMap: { room: 'legacy_room', content: 'legacy_content', at: 'legacy_at' },
+      extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'content', source: 'content' },
+        { name: 'at_name', source: 'at' },
+        { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+        { name: 'ticket', source: 'template', template: '${record.keyword}-${task.id}' },
+      ],
+    })
+    const outcome = await dispatch(webhook, ctx, transport.deps)
+    expect(outcome).toEqual({ status: 'sent' })
+    const body = bodyJson(transport.calls[0] as HttpCall)
+    expect(body['params']).toEqual({
+      room_name: '测试群',
+      content: '你好 RPA',
+      at_name: '张三',
+      order_no: 'A-001',
+      ticket: 'RPA-7',
+    })
+    expect(body['params']).not.toHaveProperty('legacy_room')
+  })
+
   it('失败：非 2xx → failed，保留可读错误（400 不重试）', async () => {
     const transport = createTransport({ status: 400, rawBody: 'bad request' })
     const outcome = await dispatch(webhook, makeCtx({ url: 'https://hook.example.com/cb' }), transport.deps)
     expect(outcome.status).toBe('failed')
     expect(outcome.error).toContain('HTTP 400')
     expect(transport.calls).toHaveLength(1)
+  })
+
+  it('multipart：payload JSON + images 原始文件，不再生成 data URL', async () => {
+    const decodedDir = makeDecodedDir()
+    writeFileSync(join(decodedDir, 'one.png'), Buffer.from('image-bytes'))
+    const decodeOptions: Array<{ fileOnly?: boolean } | undefined> = []
+    const buildDeps: RpaBuildDeps = {
+      decodedDir,
+      decodeImage: async (_username, localId, options) => {
+        decodeOptions.push(options)
+        return localId === 101 ? { file: 'one.png' } : {}
+      },
+    }
+    const transport = createTransport((_call, index) => (
+      index === 0 ? { status: 500 } : { status: 200, body: { ok: true } }
+    ))
+    const ctx = makeCtx(
+      {
+        url: 'https://hook.example.com/cb',
+        imageDelivery: 'multipart',
+        extraParams: [
+          { name: 'room_name', source: 'room' },
+          { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+        ],
+      },
+      {},
+      { images: IMAGE_REFS },
+    )
+    const outcome = await dispatch(webhook, ctx, transport.deps, buildDeps)
+    expect(outcome).toEqual({ status: 'sent' })
+    // 5xx 自动重试一次；multipart 字节与 boundary 必须原样复用。
+    expect(transport.calls).toHaveLength(2)
+    expect(transport.calls[0]?.headers['content-type']).toBe(transport.calls[1]?.headers['content-type'])
+    expect(Buffer.from(transport.calls[0]?.bodyBytes ?? [])).toEqual(Buffer.from(transport.calls[1]?.bodyBytes ?? []))
+    const call = transport.calls[1] as HttpCall
+    expect(call.headers['content-type']).toMatch(/^multipart\/form-data; boundary=/)
+    expect(call.body).toBe('')
+    expect(call.bodyBytes).toBeDefined()
+    expect(Buffer.from(call.bodyBytes ?? []).toString('utf8')).not.toContain('data:image')
+    expect(decodeOptions).toEqual([{ fileOnly: true }, { fileOnly: true }])
+
+    const form = await new Response(call.bodyBytes, {
+      headers: { 'content-type': call.headers['content-type'] ?? '' },
+    }).formData()
+    const payload = JSON.parse(String(form.get('payload'))) as Record<string, unknown>
+    expect(payload['taskId']).toBe(7)
+    expect(payload['params']).toEqual({ room_name: '测试群', order_no: 'A-001' })
+    const images = payload['images'] as Array<Record<string, unknown>>
+    expect(images).toHaveLength(2)
+    expect(images[0]).toMatchObject({
+      localId: 101,
+      fileField: 'images',
+      filename: 'image-01.png',
+      contentType: 'image/png',
+      size: 11,
+    })
+    expect(typeof images[0]?.['sha256']).toBe('string')
+    expect(images[0]?.['dataUrl']).toBeUndefined()
+    expect(images[1]?.['error']).toBe('图片解码失败')
+
+    const file = form.get('images')
+    expect(file).toBeInstanceOf(File)
+    expect((file as File).name).toBe('image-01.png')
+    expect(await (file as File).text()).toBe('image-bytes')
   })
 
   it('缺少回调地址 → failed（不发出请求）', async () => {
@@ -264,6 +358,21 @@ describe('八爪鱼 RPA（官方 v1 协议，2026-10-21 修正）', () => {
     expect(outcome.error).toContain('身份凭证无效')
     expect(transport.calls).toHaveLength(1)
   })
+
+  it('旧 paramMap 自动迁移为附加参数（升级后不静默漏发）', async () => {
+    const transport = createTransport({ status: 200, body: { flowProcessNo: 'proc-legacy' } })
+    const ctx = makeCtx({
+      flowId: 'flow-1',
+      paramMap: { room: 'legacy_room', content: 'legacy_content', at: 'legacy_at' },
+    }, { apiKey: API_KEY })
+    const outcome = await dispatch(bazhuayu, ctx, transport.deps)
+    expect(outcome).toEqual({ status: 'sent', externalTaskId: 'proc-legacy' })
+    expect(bodyJson(transport.calls[0] as HttpCall)['params']).toEqual({
+      legacy_room: '测试群',
+      legacy_content: '你好 RPA',
+      legacy_at: '张三',
+    })
+  })
 })
 
 describe('影刀 RPA（token-exchange + 二选一字段）', () => {
@@ -272,6 +381,11 @@ describe('影刀 RPA（token-exchange + 二选一字段）', () => {
     robotUuid: 'robot-1',
     accountName: 'admin@fckj',
     priority: 'middle',
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
   }
   const secrets = { accessKeyId: 'ak-1', accessKeySecret: 'sk-1' }
 
@@ -329,6 +443,15 @@ describe('影刀 RPA（token-exchange + 二选一字段）', () => {
     expect(outcome.status).toBe('failed')
     expect(outcome.error).toContain('服务异常')
   })
+
+  it('未配置额外参数 → params 为空数组，不自动发送三个语义参数', async () => {
+    const transport = createTransport((_call, index) => {
+      if (index === 0) return { status: 200, body: { code: 200, data: { accessToken: 'tok-1', expiresIn: 7200 } } }
+      return { status: 200, body: { code: 200, data: { jobUuid: 'job-empty' } } }
+    })
+    await dispatch(yingdao, makeCtx({ ...config, extraParams: [] }, secrets), transport.deps)
+    expect(bodyJson(transport.calls[1] as HttpCall)['params']).toEqual([])
+  })
 })
 
 describe('UiPath Orchestrator（PAT / OAuth 双模式）', () => {
@@ -341,6 +464,11 @@ describe('UiPath Orchestrator（PAT / OAuth 双模式）', () => {
     releaseKey: 'release-key-1',
     strategy: 'ModernJobsCount',
     jobsCount: 1,
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
   }
   const jobsBody = { value: [{ Key: 'job-key-1', State: 'Pending' }] }
 
@@ -414,6 +542,14 @@ describe('UiPath Orchestrator（PAT / OAuth 双模式）', () => {
     expect(outcome.error).toContain('HTTP 500')
     expect(transport.calls).toHaveLength(1)
   })
+
+  it('未配置额外参数 → InputArguments 为 {}，不自动发送三个语义参数', async () => {
+    const transport = createTransport({ status: 200, body: jobsBody })
+    const ctx = makeCtx({ ...baseConfig, extraParams: [], authMode: 'pat' }, { pat: 'pat-token-1' })
+    await dispatch(uipath, ctx, transport.deps)
+    const startInfo = bodyJson(transport.calls[0] as HttpCall)['startInfo'] as Record<string, unknown>
+    expect(JSON.parse(startInfo['InputArguments'] as string)).toEqual({})
+  })
 })
 
 describe('阿里云 RPA（experimental，HMAC-SHA1 签名）', () => {
@@ -425,7 +561,11 @@ describe('阿里云 RPA（experimental，HMAC-SHA1 签名）', () => {
     allocateMode: 'auto',
     packId: 'pack-1',
     taskPriority: 85,
-    appParamsMap: { room: 'room_name', content: 'content', at: 'at_name' },
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
   }
   const secrets = { accessKeyId: 'ak-1', accessKeySecret: 'sk-secret-1' }
 
@@ -495,6 +635,14 @@ describe('阿里云 RPA（experimental，HMAC-SHA1 签名）', () => {
     expect(outcome.status).toBe('failed')
     expect(outcome.error).toContain('permission.denied')
   })
+
+  it('未配置额外参数 → AppParams 为空数组，不自动发送三个语义参数', async () => {
+    const transport = createTransport({ status: 200, body: { code: 0, data: { TaskId: 'task-empty' } } })
+    await dispatch(aliyunRpa, makeCtx({ ...serviceConfig, extraParams: [] }, secrets), transport.deps)
+    const params: Record<string, string> = {}
+    for (const [key, value] of new URLSearchParams((transport.calls[0] as HttpCall).body)) params[key] = value
+    expect(JSON.parse(params['AppParams'] ?? 'null')).toEqual([])
+  })
 })
 
 describe('来也 RPA（experimental，MCP JSON-RPC）', () => {
@@ -503,7 +651,11 @@ describe('来也 RPA（experimental，MCP JSON-RPC）', () => {
     flowName: 'finance_report_flow',
     assignType: 'automatic',
     priority: 'high',
-    parameterMap: { room: 'room_name', content: 'content', at: 'at_name' },
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
   }
   const secrets = { token: 'rk-company-abc' }
 
@@ -559,6 +711,17 @@ describe('来也 RPA（experimental，MCP JSON-RPC）', () => {
     expect(outcome.status).toBe('failed')
     expect(outcome.error).toContain('出网主机不在允许清单内')
     expect(transport.calls).toHaveLength(0)
+  })
+
+  it('未配置额外参数 → parameters 为空数组，不自动发送三个语义参数', async () => {
+    const transport = createTransport({
+      status: 200,
+      body: { jsonrpc: '2.0', id: '7:11', result: JSON.stringify({ return: { code: '0', data: { taskIds: [1] } } }) },
+    })
+    await dispatch(laiye, makeCtx({ ...config, extraParams: [] }, secrets), transport.deps)
+    const body = bodyJson(transport.calls[0] as HttpCall)
+    const args = (body['params'] as Record<string, unknown>)['arguments'] as Record<string, unknown>
+    expect(args['parameters']).toEqual([])
   })
 })
 
@@ -638,7 +801,11 @@ describe('实在智能 RPA（experimental，header 名待联调）', () => {
     jobUuid: 'job-uuid-1',
     keyHeader: 'X-App-Key',
     secretHeader: 'X-App-Secret',
-    inputParamMap: { room: 'room_name', content: 'content', at: 'at_name' },
+    extraParams: [
+      { name: 'room_name', source: 'room' },
+      { name: 'content', source: 'content' },
+      { name: 'at_name', source: 'at' },
+    ],
   }
   const secrets = { appKey: 'ak-key-1', appSecret: 'as-secret-1' }
 
@@ -678,6 +845,12 @@ describe('实在智能 RPA（experimental，header 名待联调）', () => {
     expect(outcome.status).toBe('failed')
     expect(outcome.error).toContain('HTTP 500')
     expect(transport.calls).toHaveLength(1)
+  })
+
+  it('未配置额外参数 → inputParam 为空对象，不自动发送三个语义参数', async () => {
+    const transport = createTransport({ status: 200, body: { code: 0, data: { works: [{ workUuid: 'work-empty' }] } } })
+    await dispatch(shizai, makeCtx({ ...config, extraParams: [] }, secrets), transport.deps)
+    expect(bodyJson(transport.calls[0] as HttpCall)['inputParam']).toEqual({})
   })
 })
 

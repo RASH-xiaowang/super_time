@@ -149,8 +149,9 @@ const LEDGER: LedgerEntry[] = [
       + '私有化实例地址；私有化地址禁止 localhost/私网 IP），webhook 适配器只允许用户填写的 http(s) 地址；'
       + '请求先按描述符组装并鉴权（API Key / AccessKey / PAT / 令牌等凭据只存本机任务库、不进列表返回值），'
       + '再按描述符的重试策略发送（无幂等键的厂商 maxAttempts=1）。'
-      + '发出去的内容：内置 Webhook 是整条记录 JSON（含按需解码的图片）；各 RPA 厂商只有会话名 / '
-      + '触发文本（先过 `task_callback` 隐私闸）/ 触发对象三个映射参数，**不发图片**。'
+      + '发出去的内容：内置 Webhook 是整条记录 JSON（含按需解码的图片）；各 RPA 厂商按描述符发送'
+      + '流程标识与会话名 / 触发文本（先过 `task_callback` 隐私闸）/ 触发对象等映射参数，'
+      + '图片默认不发，只有附加参数显式选择图片类来源时才传短时签名直链或数量。'
       + '逐家目的地与发送内容见 docs/PRIVACY.md 第四节 G3；失败只记状态（callback_error / external_task_id）。',
   },
   {

@@ -12,6 +12,8 @@ import { CACHE_LEDGER } from './overview-cache-keys.ts'
 import { AssetKpiBar, AssetMoreMenu } from './files-cell.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 const DIR_LABEL: Record<'in' | 'out' | 'unknown', string> = {
   in: '收到',
@@ -83,9 +85,16 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
 
   const exportCsv = useCallback((): void => {
     if (!data) return
-    const lines = ['联系人,方向,笔数,金额']
+    const cell = (value: string): string => `"${value.replace(/"/g, '""')}"`
+    const lines = ['联系人,企业名称,方向,笔数,金额']
     for (const r of data.byContact) {
-      lines.push(`${r.name},${DIR_LABEL[r.direction]},${r.count},${r.amount.toFixed(2)}`)
+      lines.push([
+        cell(r.name),
+        cell(r.enterpriseName ?? ''),
+        cell(DIR_LABEL[r.direction]),
+        String(r.count),
+        r.amount.toFixed(2),
+      ].join(','))
     }
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
@@ -105,8 +114,10 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
       id: 'name',
       header: '联系人',
       cell: r => (r.username
-        ? <LinkButton onClick={() => { onOpenChat?.(r.username) }} title={r.username}>{r.name}</LinkButton>
-        : <CellPrimary>{r.name}</CellPrimary>),
+        ? <LinkButton className={css.contactLink} onClick={() => { onOpenChat?.(r.username) }} title={r.username}>
+            <IdentityName name={r.name} username={r.username} size={22}>{withEnterprise(r.name, r.enterpriseName)}</IdentityName>
+          </LinkButton>
+        : <CellPrimary>{withEnterprise(r.name, r.enterpriseName)}</CellPrimary>),
       sortValue: r => r.name,
     },
     {
@@ -235,7 +246,11 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
                       <div key={`${w.kind}:${i}`} className={css.warn}>
                         <span className={css.warnDot} aria-hidden="true" />
                         <div className={css.warnBody}>
-                          <div className={css.warnTitle}>{w.label} · {w.name || w.username || '—'}</div>
+                          <div className={css.warnTitle}>
+                            <IdentityName name={w.name || w.username || '—'} username={w.username || ''} size={18}>
+                              {w.label} · {withEnterprise(w.name || w.username || '—', w.enterpriseName)}
+                            </IdentityName>
+                          </div>
                           <div className={css.warnMeta}>¥ {fmtMoney(w.amount ?? 0)}</div>
                         </div>
                       </div>

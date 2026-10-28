@@ -24,6 +24,8 @@ export interface ConfigSnapshot {
 export interface PrivacySample {
     username: string;
     name: string;
+    /** 企业微信联系人的企业名称。 */
+    enterpriseName?: string;
     local_id: number;
     ts: number;
     time: string;
@@ -43,11 +45,13 @@ export interface PrivacySnapshot {
     top_contacts: Array<{
         username: string;
         name: string;
+        enterpriseName?: string;
         count: number;
     }>;
     top_groups: Array<{
         username: string;
         name: string;
+        enterpriseName?: string;
         count: number;
     }>;
 }
@@ -68,6 +72,7 @@ export interface GraphSnapshot {
         members: Array<{
             username: string;
             name: string;
+            enterpriseName?: string;
             is_friend: boolean;
             msg_count: number;
         }>;
@@ -76,6 +81,8 @@ export interface GraphSnapshot {
         id: string;
         label: string;
         kind: string;
+        /** 企业微信联系人的企业名称；群、公众号与本人节点不设置。 */
+        enterpriseName?: string;
         is_friend?: boolean;
         msg_count?: number;
         group_count?: number;
@@ -88,6 +95,7 @@ export interface GraphSnapshot {
         shared_members?: Array<{
             username: string;
             name: string;
+            enterpriseName?: string;
             is_friend: boolean;
             msg_count: number;
         }>;
@@ -109,6 +117,7 @@ export interface GraphSnapshot {
         top_relations?: Array<{
             username: string;
             name: string;
+            enterpriseName?: string;
             msg_count: number;
         }>;
     };
@@ -162,6 +171,7 @@ export interface OverviewInsights {
         top: Array<{
             username: string;
             name: string;
+            enterpriseName?: string;
             count: number;
         }>;
     };
@@ -223,10 +233,21 @@ export interface SearchHit {
     create_time: number;
     local_id: number;
     name: string;
+    /** 企业微信会话对应的企业名称（普通会话不返回）。 */
+    enterpriseName?: string;
     time: string;
     snippet: string;
     /** 群聊里这条消息的发送者显示名（单聊为空）。 */
     sender?: string;
+    /**
+     * 群聊里这条消息发送者的原始 username（wxid）。
+     *
+     * `sender` 是给人看的显示名，不能拿去取头像：同名群成员会命中同一张图。
+     * 单聊或原始前缀缺失时不返回。
+     */
+    sender_username?: string;
+    /** 群聊发送者所属企业名称（企业微信成员且本机可解析时返回）。 */
+    senderEnterpriseName?: string;
     /** BM25 相关度（越大越相关；仅自建索引路径提供）。 */
     score?: number;
 }

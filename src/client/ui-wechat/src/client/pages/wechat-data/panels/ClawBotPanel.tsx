@@ -112,7 +112,7 @@ export function ClawBotPanel(): React.JSX.Element {
     <section className={css.root}>
       <PanelHeader
         title="ClawBot集群"
-        desc="在微信里直接指挥它执行任务"
+        desc="在微信里向已绑定的 ClawBot 实例收发消息"
         actions={(
           <Segmented
             options={[{ value: 'settings', label: '集成设置' }, { value: 'chat', label: '接入会话' }]}
@@ -127,7 +127,7 @@ export function ClawBotPanel(): React.JSX.Element {
           挡在门外，是**安全决策**而不是漏配 —— 令牌泄漏不该等于「别人能用你的微信发消息」。
           说明只写在这一处，下面那几个禁用按钮不必各带一句（手机上 tooltip 看不见，禁用态又点不出声）。 */}
       {desktopAction() && (
-        <div className={css.muted} role="note">手机上这里只能查看：新增 / 删除实例、扫码绑定、改实例配置、给机器人发消息都要在电脑上完成。</div>
+        <div className={css.muted} role="note">手机上这里只能查看：新增 / 删除实例、扫码绑定、改实例配置、给 ClawBot 发消息都要在电脑上完成。</div>
       )}
 
       {/*

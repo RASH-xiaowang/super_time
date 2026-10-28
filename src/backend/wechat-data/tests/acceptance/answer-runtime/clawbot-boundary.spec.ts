@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from '../../../src/query/clawbot/clawbot-prompt.ts'
+import { withClawbotPersonaRules } from '../../../src/query/answer-runtime/persona.ts'
 import type { ClawbotAskContext, ClawbotAskFn } from '../../../src/query/clawbot/clawbot-auto-reply.ts'
 
 const captured = vi.hoisted(() => ({
@@ -123,8 +124,8 @@ describe('ClawBot ask 闭包：数据面固定 kb-only', () => {
 
     const options = harness.askWechat.mock.calls[0]?.[0] as AskCall | undefined
     expect(options?.kbId).toBe(7)
-    // 非空提示词按原文透传（当前闭包只判断 trim 后是否为空，不改写用户内容）。
-    expect(options?.systemPromptOverride).toBe('  你是客服小助手  ')
+    // 自定义只改人设；主人/对方/第三方的人称绑定必须由系统固定追加。
+    expect(options?.systemPromptOverride).toBe(withClawbotPersonaRules('  你是客服小助手  '))
     expect(options?.history).toEqual(context.history)
     expect(options?.images).toEqual(context.images)
     expect(options?.source).toBe('auto')

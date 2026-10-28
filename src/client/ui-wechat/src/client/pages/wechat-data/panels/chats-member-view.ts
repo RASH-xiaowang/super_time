@@ -36,7 +36,9 @@ export function memberQueryOf(search: string): string {
 export function filterMembers(members: GroupMember[], query: string): GroupMember[] {
   if (!query) return members
   return members.filter((m) =>
-    m.name.toLowerCase().includes(query) || m.username.toLowerCase().includes(query))
+    m.name.toLowerCase().includes(query)
+    || m.username.toLowerCase().includes(query)
+    || (m.enterpriseName ?? '').toLowerCase().includes(query))
 }
 
 /** 当前该画多少条：折叠 24、展开 200。 */

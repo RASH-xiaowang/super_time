@@ -7,8 +7,9 @@
  * 绝对定位的下拉会被**直接裁掉** —— 这正是 `FoldableBar` 当初要处理的那个坑。
  *
  * 所以结果面板改为 `createPortal` 到 `document.body`，用触发器的实测位置定位：
- *   · 左边缘贴着导航栏右缘（`trigger.right + 8`），向右展开，不受 176px 栏宽限制；
- *   · 宽度取 `min(420, 视口宽 - left - 16)`，窄屏不溢出屏幕；
+ *   · 桌面优先贴着导航栏右缘（`trigger.right + 8`）向右展开；
+ *   · 右侧放不下时改为在视口内左对齐，宽度最多 560px；
+ *   · 手机档搜索条横跨整屏时自动切成「搜索条下方」全宽面板；
  *   · 高度夹在视口内；窗口 resize / 任意祖先滚动时跟随。
  *
  * **结果内容由调用方以 children 传入**：7 个结果分组各有不同的跳转目标
@@ -59,11 +60,20 @@ export function GlobalSearch({ value, onChange, open, onOpenChange, inputRef, ch
     const r = el.getBoundingClientRect()
     const vw = window.innerWidth
     const vh = window.innerHeight
-    // 至少 240px，最多 440px，且不越过视口右缘
-    const left = Math.round(r.right + 8)
-    const width = Math.max(240, Math.min(440, vw - left - 16))
-    const top = Math.round(r.top)
-    setPanel({ left, top, width, maxHeight: Math.max(160, vh - top - 16) })
+    const gap = 12
+    const preferredLeft = Math.round(r.right + 8)
+    const preferredWidth = Math.min(560, vw - preferredLeft - gap)
+    // 右侧不足 300px 时（手机全宽搜索条，或窗口很窄）不要硬挤成一条细柱：
+    // 改为放到视口内并尽量左对齐；手机档自然成为搜索条下方的全宽面板。
+    const useFallback = preferredWidth < 300
+    const width = useFallback
+      ? Math.max(0, Math.min(560, vw - gap * 2))
+      : preferredWidth
+    const left = useFallback
+      ? Math.max(gap, Math.min(Math.round(r.left), vw - width - gap))
+      : preferredLeft
+    const top = Math.min(Math.round(r.bottom + 6), Math.max(0, vh - 160))
+    setPanel({ left, top, width, maxHeight: Math.max(160, vh - top - gap) })
   }, [])
 
   // useLayoutEffect：在绘制前算好，避免面板先落在错位置再跳一下
@@ -144,8 +154,9 @@ export function GlobalSearch({ value, onChange, open, onOpenChange, inputRef, ch
           ref={panelRef}
           className={css.dropdown}
           style={{ left: panel.left, top: panel.top, width: panel.width, maxHeight: panel.maxHeight }}
-          role="listbox"
+          role="region"
           aria-label="搜索结果"
+          data-global-search-results=""
         >
           {children}
         </div>,

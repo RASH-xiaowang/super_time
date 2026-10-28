@@ -17,6 +17,7 @@
 import React from 'react'
 import type { MessageAtUser } from '@deepseek-ai/dsh-wechat-data/types'
 import { parseTextWithEmoji } from './wechat-emojis.ts'
+import { withEnterprise } from '../panels/enterprise-identity.ts'
 import css from '../panels/chats.module.css'
 import csscards from '../panels/chats-cards.module.css'
 import cssshell from '../panels/chats-shell.module.css'
@@ -218,9 +219,10 @@ export function MessageText({ text, atUsers, onOpenLink }: {
           )
         }
         if (seg.type === 'mention') {
+          const mentionLabel = withEnterprise(seg.content, seg.user?.enterpriseName)
           return (
             <span key={idx} className={cssshell.msgMention} title={seg.user?.username}>
-              {seg.content}
+              {mentionLabel}
             </span>
           )
         }

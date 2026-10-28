@@ -7,13 +7,13 @@ import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
 
 interface PrivacyCategory { key: string; label: string; count: number; icon: string; samples: PrivacySample[] }
-interface PrivacySample { username: string; name: string; local_id: number; ts: number; time: string; snippet: string }
-interface PrivacyRank { username: string; name: string; count: number }
+interface PrivacySample { username: string; name: string; enterpriseName?: string; local_id: number; ts: number; time: string; snippet: string }
+interface PrivacyRank { username: string; name: string; enterpriseName?: string; count: number }
 /** 隐私体检快照（`queryPrivacyScan` 的返回形状）。 */
 interface PrivacyScanResult { categories: PrivacyCategory[]; total_hits: number; involved_sessions: number; top_contacts: PrivacyRank[]; top_groups: PrivacyRank[] }
 
@@ -84,27 +84,6 @@ function loadSessionUsernames(decryptedDir: string): string[] {
   return out
 }
 
-/** Contact display names (remark > nick). */
-function loadDisplayNames(decryptedDir: string): Map<string, string> {
-  const map = new Map<string, string>()
-  try {
-    withDb(join(decryptedDir, 'contact', 'contact.db'), (db) => {
-    const cols = new Set((db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name))
-    if (!cols.has('username')) return
-    const remark = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : 'NULL'
-    const nick = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'nickName'
-    // 联系人量级（N8 评估）：随联系人数增长（本机 2143 行），不随消息数
-    const rows = db.prepare(`SELECT username, COALESCE(NULLIF(${remark}, ''), ${nick}) AS n FROM contact`).all() as Array<Record<string, unknown>>
-    for (const r of rows) {
-      const u = cellStr(r['username'] ?? '')
-      const n = cellStr(r['n'] ?? '').trim()
-      if (u && n) map.set(u, n)
-    }
-    })
-  } catch { /* contact db unavailable */ }
-  return map
-}
-
 /** Decode a BLOB/TEXT cell to UTF-8 text. */
 function decodeCell(v: unknown): string {
   if (v == null) return ''
@@ -144,7 +123,9 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
   const hitsByKey = new Map<string, PrivacySample[]>()
   const perContact = new Map<string, number>()
   const usernames = loadSessionUsernames(decryptedDir)
-  const names = loadDisplayNames(decryptedDir)
+  const meta = contactMeta(decryptedDir)
+  const names = meta.names
+  const enterpriseNames = meta.enterpriseNames
 
   let scanned = 0
   let involved = 0
@@ -210,9 +191,11 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
                 const matched = m[0]
                 const samples = hitsByKey.get(cat.key) ?? []
                 if (samples.length < 200) {
+                  const enterpriseName = enterpriseNames.get(username)?.trim()
                   samples.push({
                     username,
                     name: names.get(username) ?? username,
+                    ...(enterpriseName ? { enterpriseName } : {}),
                     local_id: localId,
                     ts,
                     time: fmtFull(ts),
@@ -237,11 +220,27 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
     .filter(([u]) => !u.endsWith('@chatroom') && !u.startsWith('gh_'))
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 10)
-    .map(([username, count]) => ({ username, name: names.get(username) ?? username, count }))
+    .map(([username, count]) => {
+      const enterpriseName = enterpriseNames.get(username)?.trim()
+      return {
+        username,
+        name: names.get(username) ?? username,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count,
+      }
+    })
   const topGroups: PrivacyRank[] = Array.from(perContact.entries())
     .filter(([u]) => u.endsWith('@chatroom'))
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 10)
-    .map(([username, count]) => ({ username, name: names.get(username) ?? username, count }))
+    .map(([username, count]) => {
+      const enterpriseName = enterpriseNames.get(username)?.trim()
+      return {
+        username,
+        name: names.get(username) ?? username,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count,
+      }
+    })
   return { categories, total_hits: totalHits, involved_sessions: involved, top_contacts: topContacts, top_groups: topGroups }
 }

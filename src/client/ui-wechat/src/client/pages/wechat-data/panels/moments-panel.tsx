@@ -167,7 +167,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   // 八个条件全部交给 `moments-scope.ts`：筛选是纯函数，依赖数组只写在那一个地方，
   // 并由 `moments-scope.spec.ts` 的 AST 判据钉住「criteria 每个字段都必须进依赖」——
   // 这里原先连着七个 memo、每个依赖上一个的数组身份，已经因此漏掉过一次日期筛选。
-  const { scoped, insight, topAuthors, monthly, monthMax, monthlyReadError } = useMomentsScope({
+  const { scoped, insight, topAuthors, authorEnterpriseNames, authorUsernames, monthly, monthMax, monthlyReadError } = useMomentsScope({
     moments,
     criteria: {
       search: deferredSearch,
@@ -372,7 +372,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         <MomentsSidebar
           search={search}
           clearFilters={clearFilters}
-          topAuthors={topAuthors}
+          topAuthors={topAuthors} authorEnterpriseNames={authorEnterpriseNames} authorUsernames={authorUsernames}
           showAllAuthors={showAllAuthors}
           setShowAllAuthors={setShowAllAuthors}
           authorFilter={authorFilter}

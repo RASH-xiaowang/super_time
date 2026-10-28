@@ -77,6 +77,7 @@ export function normalizeAskStage(value: unknown): AskStage | null {
   if (key === undefined || label === undefined) return null
   const status = statusOf(value['status']) ?? 'running'
   const phase = phaseOf(value['phase'])
+  const keepFailureDiagnostics = status !== 'done'
   return {
     key,
     label,
@@ -97,10 +98,10 @@ export function normalizeAskStage(value: unknown): AskStage | null {
     ...(nonNegativeNumber(value['elapsedMs']) === undefined
       ? {}
       : { elapsedMs: nonNegativeNumber(value['elapsedMs']) }),
-    ...(optionalString(value['errorClass']) === undefined
+    ...(!keepFailureDiagnostics || optionalString(value['errorClass']) === undefined
       ? {}
       : { errorClass: String(value['errorClass']) }),
-    ...(value['deadlineExceeded'] === true ? { deadlineExceeded: true } : {}),
+    ...(keepFailureDiagnostics && value['deadlineExceeded'] === true ? { deadlineExceeded: true } : {}),
     ...(nonNegativeNumber(value['hits']) === undefined ? {} : { hits: nonNegativeNumber(value['hits']) }),
     ...(nonNegativeNumber(value['facts']) === undefined ? {} : { facts: nonNegativeNumber(value['facts']) }),
   }
@@ -108,6 +109,22 @@ export function normalizeAskStage(value: unknown): AskStage | null {
 
 function terminal(status: AskStageStatus): boolean {
   return status === 'done' || status === 'failed' || status === 'skipped'
+}
+
+function attemptOf(stage: AskStage): number {
+  return stage.attempt ?? 0
+}
+
+/** done/skipped 是成功或安全跳过，不允许后续事件把它们改回运行/失败。 */
+function stickyTerminal(status: AskStageStatus): boolean {
+  return status === 'done' || status === 'skipped'
+}
+
+/** 同一 attempt 内，retry 记录的是该次尝试已经失败，迟到 called 不能覆盖它。 */
+function nonTerminalRank(stage: AskStage): number {
+  if (stage.phase === 'retry') return 2
+  if (stage.phase === 'called') return 1
+  return 0
 }
 
 function mergeAttempt(previous: AskStage, next: AskStage): Pick<AskStage, 'attempt' | 'maxAttempts'> {
@@ -119,47 +136,110 @@ function mergeAttempt(previous: AskStage, next: AskStage): Pick<AskStage, 'attem
   }
 }
 
+function clearFailureDiagnostics(stage: AskStage): AskStage {
+  const merged = { ...stage }
+  delete merged.errorClass
+  delete merged.deadlineExceeded
+  return merged
+}
+
+/** 保留已有状态，只补稳定元数据与单调字段，供迟到/低 attempt 事件使用。 */
+function keepExistingState(previous: AskStage, next: AskStage): AskStage {
+  const elapsedMs =
+    next.elapsedMs === undefined
+      ? previous.elapsedMs
+      : Math.max(previous.elapsedMs ?? 0, next.elapsedMs)
+  const merged: AskStage = {
+    ...previous,
+    ...(previous.callId === undefined && next.callId !== undefined ? { callId: next.callId } : {}),
+    ...(previous.toolName === undefined && next.toolName !== undefined ? { toolName: next.toolName } : {}),
+    ...(previous.argumentsSummary === undefined && next.argumentsSummary !== undefined
+      ? { argumentsSummary: next.argumentsSummary }
+      : {}),
+    ...mergeAttempt(previous, next),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
+  }
+  return previous.status === 'done' ? clearFailureDiagnostics(merged) : merged
+}
+
+/**
+ * 用一个更新的 attempt 状态替换当前状态。
+ *
+ * detail/error/deadline/hits/facts 都属于单次 attempt；旧值不能因新事件没带
+ * 同名字段而继续残留。这与对象展开的“缺字段即继承”语义相反。
+ */
+function replaceAttemptState(previous: AskStage, next: AskStage): AskStage {
+  const elapsedMs =
+    next.elapsedMs === undefined
+      ? previous.elapsedMs
+      : Math.max(previous.elapsedMs ?? 0, next.elapsedMs)
+  const merged: AskStage = {
+    key: next.key,
+    label: next.label,
+    status: next.status,
+    ...(next.detail === undefined ? {} : { detail: next.detail }),
+    ...(next.phase === undefined ? {} : { phase: next.phase }),
+    ...(next.callId === undefined && previous.callId !== undefined ? { callId: previous.callId } : {}),
+    ...(next.callId === undefined ? {} : { callId: next.callId }),
+    ...(next.toolName === undefined && previous.toolName !== undefined ? { toolName: previous.toolName } : {}),
+    ...(next.toolName === undefined ? {} : { toolName: next.toolName }),
+    ...(next.argumentsSummary === undefined && previous.argumentsSummary !== undefined
+      ? { argumentsSummary: previous.argumentsSummary }
+      : {}),
+    ...(next.argumentsSummary === undefined ? {} : { argumentsSummary: next.argumentsSummary }),
+    ...mergeAttempt(previous, next),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
+    ...(next.errorClass === undefined ? {} : { errorClass: next.errorClass }),
+    ...(next.deadlineExceeded === true ? { deadlineExceeded: true } : {}),
+    ...(next.hits === undefined ? {} : { hits: next.hits }),
+    ...(next.facts === undefined ? {} : { facts: next.facts }),
+  }
+  return next.status === 'done' ? clearFailureDiagnostics(merged) : merged
+}
+
 /**
  * 合并同一阶段的两次事件。
  *
  * 规则：
- *   ① 终态优先：`done/failed/skipped` 一经落定，迟到的 `running/called/retry`
- *      只能保留已有终态（可以补充耗时等诊断字段）。
- *   ② 终态之间不互相覆盖：先到的失败不会被迟到的完成改写，反之亦然。
- *   ③ 尝试次数取单调最大值，避免乱序把「第 3 次」改回「第 2 次」。
+ *   ① attempt 单调：低 attempt 迟到时只补稳定元数据，不改变状态/诊断字段。
+ *   ② done/skipped 终态粘滞；failed 终态只允许更高 attempt 继续推进。
+ *   ③ 同 attempt 内先到终态优先，迟到 running 不能把完成/失败改回运行中。
+ *   ④ 同一 attempt 内 retry 高于 called，避免迟到 called 抹掉重试失败原因。
+ *   ⑤ 新 attempt 独占该次尝试的 detail/error/deadline/hits/facts；最终 done
+ *      会清除旧 attempt 留下的 errorClass/deadlineExceeded。
  *
  * @param previous - 已存在的事件（同 key）。
  * @param next - 新到的事件。
  * @returns 合并后的事件。
  */
 export function mergeAskStage(previous: AskStage, next: AskStage): AskStage {
+  const previousAttempt = attemptOf(previous)
+  const nextAttempt = attemptOf(next)
   const previousTerminal = terminal(previous.status)
   const nextTerminal = terminal(next.status)
-  // 旧后端只有 running/done/skipped；done/skipped 仍按终态保护。
-  if (previousTerminal && !nextTerminal) {
-    return {
-      ...previous,
-      ...mergeAttempt(previous, next),
-      ...(next.detail === undefined ? {} : { detail: next.detail }),
-      ...(next.elapsedMs === undefined ? {} : { elapsedMs: Math.max(previous.elapsedMs ?? 0, next.elapsedMs) }),
-      ...(next.argumentsSummary === undefined ? {} : { argumentsSummary: next.argumentsSummary }),
+
+  if (nextAttempt < previousAttempt) {
+    return keepExistingState(previous, next)
+  }
+
+  if (nextAttempt > previousAttempt) {
+    // 已完成/已跳过不可被更高 attempt 回退；失败则可由下一次尝试越过。
+    if (previousTerminal && stickyTerminal(previous.status)) {
+      return keepExistingState(previous, next)
     }
+    return replaceAttemptState(previous, next)
   }
-  if (previousTerminal && nextTerminal) {
-    return {
-      ...previous,
-      ...mergeAttempt(previous, next),
-      ...(next.elapsedMs === undefined ? {} : { elapsedMs: Math.max(previous.elapsedMs ?? 0, next.elapsedMs) }),
-    }
+
+  // 同 attempt：第一个终态是权威结果，终态之间的迟到事件也不互相改写。
+  if (previousTerminal) {
+    return keepExistingState(previous, next)
   }
-  return {
-    ...previous,
-    ...next,
-    ...mergeAttempt(previous, next),
-    ...(previous.elapsedMs !== undefined && next.elapsedMs !== undefined
-      ? { elapsedMs: Math.max(previous.elapsedMs, next.elapsedMs) }
-      : {}),
+
+  if (nextTerminal) return replaceAttemptState(previous, next)
+  if (nonTerminalRank(next) < nonTerminalRank(previous)) {
+    return keepExistingState(previous, next)
   }
+  return replaceAttemptState(previous, next)
 }
 
 /** 工具卡的身份键：新事件用 callId；旧后端只有 key 时退回 key。 */

@@ -109,14 +109,14 @@ describe('单栏栈：JSX 与 CSS 必须成对', () => {
 
 describe('消息流在手机档是**隐藏**，不是卸载', () => {
   it('虚拟化列表始终挂在 JSX 里（条件渲染掉就会每次进出会话都重取一页、丢滚动位置）', () => {
-    const messagesCol = sliceBetween(view, '<div className={cssrows.messages}>', '<ChatsGroupInfoView', '消息列')
+    const messagesCol = sliceBetween(view, '<div className={cssrows.messages} data-chat-messages="">', '<ChatsGroupInfoView', '消息列')
     expect(messagesCol, '消息列里没有虚拟化列表 ⇒ 这一格被搬走或改写了，请重新核对本判据')
       .toContain('msgVirtualizer.getVirtualItems()')
     expect(messagesCol, '消息列的总高度撑开没了（长列表会退化成一次性渲染）')
       .toContain('msgVirtualizer.getTotalSize()')
     // 从根 div 到消息列之间不许出现「有会话才渲染」的条件：手机档靠 CSS 显隐，
     // 一旦改成条件渲染，进出会话就会重挂载虚拟化列表（重取一页 + 丢滚动位置）。
-    const beforeMessages = sliceBetween(view, '<div className={cssrows.panel}', '<div className={cssrows.messages}>', '根 div → 消息列')
+    const beforeMessages = sliceBetween(view, '<div className={cssrows.panel}', '<div className={cssrows.messages} data-chat-messages="">', '根 div → 消息列')
     expect(beforeMessages, '消息列（或它前面的会话列表）被改成了条件渲染 ⇒ 手机上进出会话会丢虚拟化状态')
       .not.toContain('curSession !== null &&')
     expect(phoneRows, '手机档不是用 display:none 隐藏消息列').toContain('display: none')

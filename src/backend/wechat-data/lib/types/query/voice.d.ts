@@ -64,8 +64,11 @@ export declare function silkToWav(silk: Buffer, wavPath: string, options?: {
  * @param localId - message local id.
  * @returns url (base64 wav) + durationSec, or an error description.
  */
-export declare function resolveVoiceDataUrl(decryptedDir: string, decodedDir: string, username?: string, localId?: number, explicitSvrId?: string): Promise<{
+export declare function resolveVoiceDataUrl(decryptedDir: string, decodedDir: string, username?: string, localId?: number, explicitSvrId?: string, options?: {
+    fileOnly?: boolean;
+}): Promise<{
     url?: string;
     durationSec?: number;
+    file?: string;
     error?: string;
 }>;

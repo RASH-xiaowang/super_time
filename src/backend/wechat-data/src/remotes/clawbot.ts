@@ -289,7 +289,7 @@ async function sendClawbotText(
   const toUserId = credentials.ilinkUserId !== '' ? credentials.ilinkUserId : (binding.wxid ?? '')
   if (toUserId === '') return { ok: false, id: null, error: '缺少微信侧用户标识（重新绑定一次试试）' }
   if (sendContextToken === '') {
-    return { ok: false, id: null, error: '还没有可用会话：请先在微信里给它发一条消息，再从这里回复' }
+    return { ok: false, id: null, error: '还没有可用会话：请先在微信里给该 ClawBot 发一条消息，再从这里回复' }
   }
   let resp: IlinkSendResult
   try {

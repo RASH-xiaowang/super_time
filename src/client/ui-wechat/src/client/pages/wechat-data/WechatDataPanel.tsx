@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
  * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **15** 项 + 底栏独立渲染的 `settings`，可路由页签共 **39**（其余 23 项 `hidden`，
+ * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings`，可路由页签共 **41**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -36,12 +36,14 @@ import {
   KbShell,
   LedgerPanel,
   MediaAssetsPanel,
+  MessageListPanel,
   MomentsInsightsPanel,
   MomentsPanel,
   MonitorPanel,
   OfficialAssetsPanel,
   OperationLogPanel,
   OverviewPanel,
+  PortraitsPanel,
   RecordsPanel,
   RevokedPanel,
   SettingsPanelGate,
@@ -56,7 +58,6 @@ import { MergedSections } from './panels/MergedSections.tsx'
 import { setActiveKb } from './panels/kb-scope.ts'
 import { useKeepAlivePanel } from './panels/keep-alive.tsx'
 import css from './wechat-data.module.css'
-import kitCss from './ui/kit.module.css'
 /* Wave D1（docs/UI-DENSITY.md §3 A 层）：全局「紧凑 chrome」覆盖层。
  * 本文件只有「标签 + 属性子串」选择器（不依赖加载顺序），在 shell 挂载时就位，
  * 覆盖 144 个面板视图里的页头/卡片/统计卡/表格/空态。
@@ -72,18 +73,9 @@ import { MobileNavHost } from './ui/mobile-nav.tsx'
 import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
 import { BrandTitle } from './panels/brand-title.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
+import { GlobalSearchResults, type GlobalSearchResultsState } from './panels/global-search-results.tsx'
 import { SEARCH_QUERY_EVENT, searchQueryFromEvent } from './panels/search-events.ts'
-import gs from './panels/global-search.module.css'
-import type {
-  SearchHit,
-  UnifiedSearchContact,
-  UnifiedSearchSnapshot,
-  UnifiedSearchFavorite,
-  UnifiedSearchFile,
-  UnifiedSearchMoment,
-  UnifiedSearchRecord,
-  WechatSession,
-} from '@deepseek-ai/dsh-wechat-data/types'
+import type { UnifiedSearchSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 
 /** 顶部品牌图标：微信风格双气泡。 */
 function IconApp(): React.JSX.Element {
@@ -267,6 +259,7 @@ function renderTab(
         ]}
       />
     )
+    case 'portraits': return <PortraitsPanel onOpenChat={onOpenChat} />
     // 知识图谱与知识库是**同一批笔记的两种看法**（同一个 `wechat_notes.db` 的 notes 表）：
     // 图谱把笔记当「网」看（力导向画布 / [[链接]] 边 / 待补节点），知识库把它当「文档」看
     // （列表 / 详情 / 新建编辑 / 标签 / 关键词搜索）。2026-09-18 起收进同一个导航项，
@@ -349,6 +342,7 @@ function renderTab(
     // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录（双栏）。与「待办日程」是两件事：
     // 待办从聊天文本里提取 TODO，这里的任务是用户显式创建的监听任务（命中关键词 → 记录 → 回调）。
     case 'taskinfo': return <TaskCenterPanel />
+    case 'messagelist': return <MessageListPanel />
     case 'clawbot': return <ClawBotPanel />
     case 'groupinsights':
     case 'monitor': return (
@@ -535,17 +529,9 @@ export function WechatDataPanel(): React.JSX.Element {
   const [searchLoading, setSearchLoading] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const searchSeqRef = useRef(0)
-  const [searchResults, setSearchResults] = useState<{
-    sessions: WechatSession[]
-    hits: SearchHit[]
-    contacts: UnifiedSearchContact[]
-    moments: UnifiedSearchMoment[]
-    favorites: UnifiedSearchFavorite[]
-    files: UnifiedSearchFile[]
-    records: UnifiedSearchRecord[]
-    /** 某个域读失败时的说明（P1-1）：界面上必须与「未找到相关结果」分开显示。 */
-    readError?: string
-  }>({ sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [] })
+  const [searchResults, setSearchResults] = useState<GlobalSearchResultsState>({
+    sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [],
+  })
 
   /** 当前搜索词（渲染作用域）：命中跳转时要把同一个词带进目标面板。 */
   const gsQuery = searchQuery.trim()
@@ -699,15 +685,6 @@ export function WechatDataPanel(): React.JSX.Element {
   )
   const keepAlivePanel = useKeepAlivePanel(active, activePanel)
 
-  const noSearchResults = !searchLoading
-    && searchResults.sessions.length === 0
-    && searchResults.hits.length === 0
-    && searchResults.contacts.length === 0
-    && searchResults.moments.length === 0
-    && searchResults.favorites.length === 0
-    && searchResults.files.length === 0
-    && searchResults.records.length === 0
-
   return (
     /* ConfirmProvider 包在最外层：全应用共用一个应用内确认框实例。
        不用原生 window.confirm（系统白框、不跟主题、阻塞渲染进程）。 */
@@ -751,86 +728,15 @@ export function WechatDataPanel(): React.JSX.Element {
               onOpenChange={setSearchOpen}
               inputRef={searchInputRef}
             >
-              {searchLoading && <div className={gs.empty}>搜索中…</div>}
-              {searchResults.readError && <div className={gs.empty} role="alert">{searchResults.readError}</div>}
-              {noSearchResults && !searchResults.readError && <div className={gs.empty}>未找到相关结果</div>}
-              {searchResults.sessions.length > 0 && (
-                <>
-                  <div className={gs.group}>会话</div>
-                  {searchResults.sessions.map(sec => (
-                    <button key={sec.username} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openChat(sec.username) }}>
-                      <span className={gs.rowName}>{sec.displayName || sec.username}</span>
-                      <span className={kitCss.textCaptionTrunc}>{sec.summary}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.hits.length > 0 && (
-                <>
-                  <div className={gs.group}>消息</div>
-                  {searchResults.hits.map((h, i) => (
-                    <button key={`${h.username}:${h.local_id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openChat(h.username, h.local_id) }}>
-                      <span className={gs.rowName}>{h.name}</span>
-                      <span className={kitCss.textCaptionTrunc}>{h.snippet}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.contacts.length > 0 && (
-                <>
-                  <div className={gs.group}>联系人</div>
-                  {searchResults.contacts.map((c, i) => (
-                    <button key={`c:${c.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); if (c.category === 'contact' || c.category === 'group') openChat(c.username); else seedTo('contacts', gsQuery) }}>
-                      <span className={gs.rowName}>{c.name}</span>
-                      <span className={kitCss.textCaptionTrunc}>{c.category === 'group' ? '群聊' : c.category === 'official' ? '公众号' : '联系人'}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.moments.length > 0 && (
-                <>
-                  <div className={gs.group}>朋友圈</div>
-                  {searchResults.moments.map((m, i) => (
-                    <button key={`m:${m.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openMoments(m.username) }}>
-                      <span className={gs.rowName}>{m.name}</span>
-                      <span className={kitCss.textCaptionTrunc}>{m.snippet}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.favorites.length > 0 && (
-                <>
-                  <div className={gs.group}>收藏</div>
-                  {searchResults.favorites.map((f, i) => (
-                    <button key={`f:${f.id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('favorites', gsQuery) }}>
-                      <span className={gs.rowName}>收藏 #{f.id}</span>
-                      <span className={kitCss.textCaptionTrunc}>{f.snippet}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.files.length > 0 && (
-                <>
-                  <div className={gs.group}>文件</div>
-                  {searchResults.files.map((f, i) => (
-                    <button key={`file:${f.fileName}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('files', gsQuery) }}>
-                      <span className={gs.rowName}>{f.fileName}</span>
-                      <span className={kitCss.textCaptionTrunc}>{f.size > 0 ? `${(f.size / 1024).toFixed(1)} KB` : f.md5}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              {searchResults.records.length > 0 && (
-                <>
-                  <div className={gs.group}>记录</div>
-                  {searchResults.records.map((r, i) => (
-                    <button key={`r:${r.kind}:${r.session}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('records', gsQuery) }}>
-                      <span className={gs.rowName}>{r.name}</span>
-                      <span className={kitCss.textCaptionTrunc}>{r.kind === 'transfers' ? '转账' : '红包'}</span>
-                    </button>
-                  ))}
-                </>
-              )}
+              <GlobalSearchResults
+                query={gsQuery}
+                loading={searchLoading}
+                results={searchResults}
+                onClose={() => { setSearchOpen(false) }}
+                onOpenSession={openChat}
+                onOpenMoments={openMoments}
+                onSeed={seedTo}
+              />
             </GlobalSearch>
           </div>
 
@@ -936,11 +842,6 @@ export function WechatDataPanel(): React.JSX.Element {
     </ConfirmProvider>
   )
 }
-
-
-
-
-
 
 
 

@@ -52,20 +52,22 @@ export type RpaTransportDeps = RpaDispatchDeps
  * @param retry - 描述符的重试策略。
  * @returns 状态码 + 响应文本。
  */
-async function sendRequest(
+export async function sendRequest(
   req: RpaHttpRequest,
   deps: RpaTransportDeps,
   retry: RpaRetrySpec,
 ): Promise<RpaHttpResponse> {
   const doFetch: RetryFetch = deps.fetchImpl ?? fetch
   const headers: Record<string, string> = { ...req.headers }
-  if (!hasHeader(headers, 'content-type') && req.body !== '') headers['content-type'] = req.contentType
+  const body = req.bodyBytes ?? req.body
+  const hasBody = typeof body === 'string' ? body !== '' : body.byteLength > 0
+  if (!hasHeader(headers, 'content-type') && hasBody) headers['content-type'] = req.contentType
   const maxAttempts = Math.min(MAX_ATTEMPTS_LIMIT, Math.max(1, Math.trunc(retry.maxAttempts)))
   const method: string = req.method
   const init: RequestInit = { method, headers }
   // 换 token 可能是 GET：undici 的 fetch 对 GET/HEAD 带 body（哪怕空串）会直接抛
   // `TypeError: Request with GET/HEAD method cannot have body`，所以只在有 body 的非 GET/HEAD 上带。
-  if (method !== 'GET' && method !== 'HEAD' && req.body !== '') init.body = req.body
+  if (method !== 'GET' && method !== 'HEAD' && hasBody) init.body = body as BodyInit
   const res = await fetchWithRetry(doFetch, req.url, init, { maxAttempts, timeoutMs: SEND_TIMEOUT_MS })
   const bodyText = await res.text()
   return { status: res.status, bodyText }

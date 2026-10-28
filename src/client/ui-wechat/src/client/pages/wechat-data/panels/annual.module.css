@@ -114,6 +114,18 @@
 /* 标题：参考图是「深灰小字 + 字重 600」，不是彩色标签。 */
 .cardTitle { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-2); white-space: nowrap; }
 .cardExtra { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 卡头附注里带身份时（年度主演），允许头像与文字在窄卡里换行，而不是整段被省略。 */
+.inlineExtra {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  vertical-align: middle;
+}
 /* 卡片正文：**高度随内容**（参考图的做法），不再固定行高、不再内部滚动。
    ⚠️ 2026-10-17 第三次改：前两版分别试过 `space-between`（内容被拉散）和
    固定行高 + 内部滚动（出现滚动条）。参考图的做法最简单也最好看 ——
@@ -183,6 +195,13 @@
 .calFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
 .calLegend { display: inline-flex; align-items: center; gap: var(--nm-dense-g1); font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
 .calLegend .calCell { width: 9px; aspect-ratio: 1; flex: 0 0 auto; }
+/* 图例里带身份时允许整段折行，头像仍与名字保持同一条基线。 */
+.identityLegend {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
 
 /* ── ③ 最疯的一天 ── */
 .bigDay { display: flex; align-items: baseline; gap: var(--nm-dense-g2); flex-wrap: wrap; }
@@ -202,6 +221,17 @@
    此时 `flex-shrink` 只作用在**纵轴**，横轴由 `align-items: flex-start` + 内容宽决定 ——
    没有 max-width 时那个 283px 的 `<b>` 仍然横着顶出去（768 视口实测 dw=34px）。 */
 .kv b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+/* 「谁先开口」的两组身份列表：每项都有头像，空间不足时按项换行。 */
+.openerValue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
 .quote {
   margin-top: 3px; padding: var(--nm-dense-g1) 8px;
   font-size: var(--nm-dense-fs-sm); line-height: 1.4; color: var(--nm-text-2);
@@ -300,7 +330,6 @@
 .emojiCell b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; flex: 0 0 auto; }
 
 /* ── ⑭ 还有这些人（单行 7 格，压扁成横向小卡）── */
-.moreRow { display: flex; gap: var(--nm-dense-g3); min-width: 0; overflow: hidden; }
 .moreCell {
   flex: 1 1 0; min-width: 0;
   display: flex; align-items: center; gap: var(--nm-dense-g3);
@@ -512,6 +541,15 @@
 .moreRow > span { min-width: 0; }
 .moreRow > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .moreRow > span:last-child { text-align: right; overflow-wrap: anywhere; }
+.moreRowValue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-width: 0;
+  max-width: 100%;
+}
 .moreRowName { display: inline-flex; align-items: center; gap: var(--nm-dense-g2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .moreList { display: flex; flex-direction: column; gap: var(--nm-dense-g1); margin-top: var(--nm-dense-g2); min-width: 0; }
 /* 「年度之最」的 9 项：两列并排（单列会撑破 6 列卡的高度，最后两项被裁）。
@@ -676,8 +714,10 @@
   .heroCell { padding: 1px 4px; }
   .heroCellK, .heroCellV { font-size: var(--nm-dense-fs-xs); }
   .kv { flex-direction: column; align-items: flex-start; gap: 0; }
+  .openerValue { justify-content: flex-start; }
   .moreRow { flex-direction: column; align-items: flex-start; gap: 0; }
   .moreRow > span:last-child { text-align: left; }
+  .moreRowValue { justify-content: flex-start; }
   .row { flex-wrap: wrap; }
   /* heroCell 在窄卡里「标签 ←→ 值」横排只剩 60px，值被裁成「23…」「9…」
      （2026-10-17 真机 800×600 实测）。改成上下两行：标签一行、值一行。 */

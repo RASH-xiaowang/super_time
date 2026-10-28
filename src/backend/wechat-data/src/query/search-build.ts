@@ -15,6 +15,7 @@ import { EnsureIndexResult, INDEX_SCHEMA_VERSION, REFRESHED_KEY, SHARD_WM_PREFIX
 import { searchIndexMessages } from './search-query.ts'
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
+import { contactMeta } from './meta.ts'
 
 /**
  * 保证索引**存在且包含最新的消息**（提问路径的唯一入口）。
@@ -272,21 +273,26 @@ export function listMessagesInRange(
       return db.prepare(sql).all(...args) as Array<Record<string, unknown>>
     })
     const names = loadDisplayNames(decryptedDir)
+    const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
     const hits = rows.map((r) => {
       const text = decodeCell(r['text'])
       const uname = decodeCell(r['username'])
       const ts = Number(r['create_time'] ?? 0)
       // `sender` 列存原始 wxid（构建时切出）；显示名现查 `names`。
       const sender = decodeCell(r['sender'])
+      const enterpriseName = enterpriseNames.get(uname)?.trim()
+      const senderEnterpriseName = enterpriseNames.get(sender)?.trim()
       return {
         text,
         username: uname,
         create_time: ts,
         local_id: Number(r['local_id'] ?? 0),
         name: names.get(uname) ?? uname,
+        ...(enterpriseName ? { enterpriseName } : {}),
         time: fmtDateTimeSec(ts),
         snippet: text.replace(/\s+/g, ' ').slice(0, 120),
         sender: senderLabel(sender, names),
+        ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
       }
     })
     return { hits, ready: true }

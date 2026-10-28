@@ -18,6 +18,7 @@ export interface ExportRemoteCtx {
   /** jobId 归一（网关与这里都要用；留在网关按函数传进来）。 */
   normalizeJobId: (jobId?: unknown) => string
   dirs: () => { decrypted: string; decoded: string }
+  rawWechatBase: (decrypted: string) => string
   ctx: () => Context
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   recordExport: (input: { kind: string; label?: string; format?: string; path: string; rows?: number; status: ExportStatus; error?: string; params?: unknown }) => void
@@ -77,65 +78,72 @@ function failStreamJob(rc: ExportRemoteCtx, jobId: string, action: string, key: 
   rc.op('export', action, 'fail', key, message)
 }
 
+interface SessionExportOptions {
+  username: string
+  format: string
+  count?: number
+  dir?: string
+  types?: number[]
+  richTypes?: string[]
+  from?: number
+  to?: number
+  filename?: string
+  zip?: boolean
+  /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
+  sessionName?: string
+  /** 进度/取消的任务标识（M3）：客户端按它认领 `wechat-export/progress` 事件。 */
+  jobId?: string
+}
+
+/**
+ * 单会话导出的完整记账链路。抽在 `createExportRemotes` 外，避免该函数继续突破
+ * 函数行数棘轮；入参、进度槽清理和导出历史字段均与原实现一致。
+ */
+async function exportSessionMessagesIn(rc: ExportRemoteCtx, options: SessionExportOptions): Promise<ExportResult> {
+  const jobId = rc.normalizeJobId(options?.jobId)
+  try {
+    const dirs = rc.dirs()
+    const rawBase = rc.rawWechatBase(dirs.decrypted)
+    const r = await exportSessionMessagesStreamed(dirs.decrypted, {
+      ...options,
+      decodedDir: dirs.decoded,
+      ...(rawBase ? { wechatBaseDir: rawBase } : {}),
+      ...rc.streamControl(jobId),
+    })
+    rc.finishStreamJob(jobId)
+    rc.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
+    rc.recordExport({
+      kind: 'session',
+      label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
+      format: options.zip ? 'zip' : options.format,
+      path: r.path,
+      rows: r.count,
+      status: 'ok',
+      params: options,
+    })
+    return r
+  } catch (e) {
+    rc.finishStreamJob(jobId, (e as Error).message)
+    rc.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
+    const canceled = /cancel|取消|abort/i.test((e as Error).message)
+    rc.recordExport({
+      kind: 'session',
+      label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
+      format: options.zip ? 'zip' : options.format,
+      path: '',
+      status: canceled ? 'canceled' : 'fail',
+      error: canceled ? '' : (e as Error).message,
+      params: options,
+    })
+    throw e
+  }
+}
+
 export function createExportRemotes(rc: ExportRemoteCtx) {
   const normalizeJobId = rc.normalizeJobId
   return {
-    async exportSessionMessages(options: {
-      username: string
-      format: string
-      count?: number
-      dir?: string
-      types?: number[]
-      richTypes?: string[]
-      from?: number
-      to?: number
-      filename?: string
-      zip?: boolean
-      /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
-      sessionName?: string
-      /** 进度/取消的任务标识（M3）：客户端按它认领 `wechat-export/progress` 事件。 */
-      jobId?: string
-    }): Promise<ExportResult> {
-      const jobId = normalizeJobId(options?.jobId)
-      try {
-        // jobId 一转成 onProgress + AbortController（与 `exportAllSessions` 同一套）：
-        // 不接就等于没接进度 —— 进度条不动、「中止」报「没有该导出任务」。
-        const r = await exportSessionMessagesStreamed(rc.dirs().decrypted, {
-          ...options,
-          ...rc.streamControl(jobId),
-        })
-        rc.finishStreamJob(jobId)
-        rc.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
-        rc.recordExport({
-          kind: 'session',
-          label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-          format: options.zip ? 'zip' : options.format,
-          path: r.path,
-          rows: r.count,
-          status: 'ok',
-          // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
-          params: options,
-        })
-        return r
-      } catch (e) {
-        rc.finishStreamJob(jobId, (e as Error).message)
-        rc.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
-        // 尽力记一条结局。注意 `recordExport` 有一条**已测过的规则**：`path` 为空就不落库
-        // （「没有路径的历史没有可操作性」），所以「收集阶段就失败/被取消」这一类只会留在
-        // 上面的操作日志里，导出历史弹窗看不到 —— 界面靠 `已取消导出` / `导出失败: …` 说话。
-        // 取消与失败分开记：路径已知的中途中断（写盘/压缩失败）不该在历史里显示成红叉。
-        const canceled = /cancel|取消|abort/i.test((e as Error).message)
-        rc.recordExport({
-          kind: 'session',
-          label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-          format: options.zip ? 'zip' : options.format,
-          path: '',
-          status: canceled ? 'canceled' : 'fail',
-          error: canceled ? '' : (e as Error).message,
-          params: options,
-        })
-        throw e
-      }
+    async exportSessionMessages(options: SessionExportOptions): Promise<ExportResult> {
+      return exportSessionMessagesIn(rc, options)
     },
 
     async exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {

@@ -20,6 +20,7 @@ import { MessageBody } from './chats-cards.tsx'
 import { MessageImageGroup } from './chats-media.tsx'
 import { Avatar } from './chats-support.tsx'
 import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import type { MessageRenderKind, MessageRich, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -129,7 +130,9 @@ export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React
           <span className={css.msgTimeChip}>
             {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
           </span>
-          {isGroup && !isSelf && head.sender && <div className={cssrows.msgSender}>{avName}</div>}
+          {isGroup && !isSelf && head.sender && (
+            <div className={cssrows.msgSender}>{withEnterprise(avName, head.senderEnterpriseName)}</div>
+          )}
           {item.kind === 'group' ? (
             <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
               <MessageImageGroup items={item.items} username={curSession.username} onOpenAt={openViewer} />

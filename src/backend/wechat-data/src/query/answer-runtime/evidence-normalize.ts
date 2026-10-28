@@ -305,12 +305,16 @@ function citationFromHit(
   locator: EvidenceLocator,
 ): CitationShape | undefined {
   const sender = safeString(hit.sender)
+  const enterpriseName = safeString(hit.enterpriseName).trim()
+  const senderEnterpriseName = safeString(hit.senderEnterpriseName).trim()
   const base: CitationShape = {
     name: safeString(hit.name),
+    ...(enterpriseName === '' ? {} : { enterpriseName }),
     time: safeString(hit.time),
     snippet: safeString(hit.snippet),
     username: '',
     local_id: 0,
+    ...(senderEnterpriseName === '' ? {} : { senderEnterpriseName }),
     source,
   }
   if (locator.type === 'message') {
@@ -347,6 +351,8 @@ export function itemFromHit(tool: string, hit: ToolHit, ordinal: number): Eviden
   const name = safeString(hit.name)
   const score = safeScore(hit.score)
   const sender = safeString(hit.sender)
+  const enterpriseName = safeString(hit.enterpriseName).trim()
+  const senderEnterpriseName = safeString(hit.senderEnterpriseName).trim()
   const locator = hitLocator(tool, source, key, name, hit)
   const citation = citationFromHit(source, hit, locator)
   return {
@@ -356,8 +362,10 @@ export function itemFromHit(tool: string, hit: ToolHit, ordinal: number): Eviden
     tools: [tool],
     source,
     name,
+    ...(enterpriseName === '' ? {} : { enterpriseName }),
     time: safeString(hit.time),
     ...(sender === '' ? {} : { sender }),
+    ...(senderEnterpriseName === '' ? {} : { senderEnterpriseName }),
     snippet: safeString(hit.snippet),
     ...(score === undefined ? {} : { score }),
     key,
@@ -395,6 +403,8 @@ export function normalizeHit(tool: string, raw: unknown, index: number): Normali
     warnings.push(`${tool}.hits[${String(index)}].source 非法，已按 msg 归一`)
   }
   const sender = safeString(raw.sender)
+  const enterpriseName = safeString(raw.enterpriseName).trim()
+  const senderEnterpriseName = safeString(raw.senderEnterpriseName).trim()
   const score = safeScore(raw.score)
   const trace = isRecord(raw.trace) ? raw.trace as ToolHit['trace'] : undefined
   return {
@@ -404,7 +414,9 @@ export function normalizeHit(tool: string, raw: unknown, index: number): Normali
       time,
       snippet,
       source,
+      ...(enterpriseName === '' ? {} : { enterpriseName }),
       ...(sender === '' ? {} : { sender }),
+      ...(senderEnterpriseName === '' ? {} : { senderEnterpriseName }),
       ...(score === undefined ? {} : { score }),
       ...(trace === undefined ? {} : { trace }),
     },

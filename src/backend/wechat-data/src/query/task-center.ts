@@ -24,22 +24,25 @@
  *     触发记录、并向下游（Webhook / 八爪鱼 RPA）打几百发 POST。
  *  ② **去重**靠 `UNIQUE(task_id, message_local_id)` + `INSERT OR IGNORE`（见 scan 兄弟文件）。
  *  ③ **图片不在扫描时解码**：只记引用（localId/createTime/sender）；Webhook 在投递那一刻解码，
- *     八爪鱼方式不发图片（接口没有对应参数，`photoLimit` 对它不生效）。
+ *     RPA 厂商只在参数显式选择图片类来源时签短时直链（`imageCount` 只数引用）。
  *
  * 连接纪律与 N1 同款：写走 `withWritableDb`、读走 `existsSync` 判断 + `withDb`；
  * 「库不存在」= 确实还没有数据（空 + 无 `readError`），「库打不开」= 带 `readError` + 留痕。
  */
-import { existsSync, mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { withWritableDb } from './db-open.ts'
 import type { DatabaseSync } from './db-open.ts'
 import { queryMessages } from './messages.ts'
+import { contactMeta } from './meta.ts'
 import { findVendor } from './rpa/registry.ts'
+import { storeExists, taskDbPath } from './task-db.ts'
 import {
   applySecretInput,
   defaultConfigFor,
   legacyColumnsFor,
   migrateLegacyConfig,
+  migrateLegacyMapConfig,
   migrateLegacySecrets,
   missingReadyFields,
   normalizeConfigInput,
@@ -70,9 +73,7 @@ export { scanTaskTriggers } from './task-center-scan.ts'
 export type { ScanTaskTriggersOptions } from './task-center-scan.ts'
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts'
 export type { PendingDispatchResult, TaskDispatchDeps } from './task-center-callback.ts'
-
-/** 任务库文件名（建在解密数据根的父目录，与待办/摘要等同族）。 */
-const DB_FILE = 'wechat_task_center.db'
+export { storeExists, taskDbPath }
 /** 单个关键词 trim 后的最大字符数。 */
 const KEYWORD_MAX_LEN = 64
 /** 一个任务最多几个去重后的关键词。 */
@@ -97,16 +98,6 @@ const TRIGGER_SEARCH_COLUMNS = [
 ] as const
 /** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
 export const TASK_BATCH_DELETE_MAX = 500
-
-/** 任务库路径（`decryptedDir` 的父目录下）。 */
-export function taskDbPath(decryptedDir: string): string {
-  return join(dirname(decryptedDir), DB_FILE)
-}
-
-/** 任务库是否存在（读路径据此区分「确实还没有数据」与「库打不开」）。 */
-export function storeExists(decryptedDir: string): boolean {
-  return existsSync(taskDbPath(decryptedDir))
-}
 
 /** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
 export function taskErrorText(e: unknown): string {
@@ -304,6 +295,10 @@ function parseTriggerImages(raw: unknown): TaskTriggerImage[] {
         createTime: taskCellNum(row['createTime']),
         sender: taskCellStr(row['sender']),
       }
+      const senderUsername = taskCellStr(row['senderUsername'])
+      if (senderUsername !== '') image.senderUsername = senderUsername
+      const senderEnterpriseName = taskCellStr(row['senderEnterpriseName'])
+      if (senderEnterpriseName !== '') image.senderEnterpriseName = senderEnterpriseName
       const md5 = taskCellStr(row['md5'])
       if (md5 !== '') image.md5 = md5
       out.push(image)
@@ -341,6 +336,21 @@ export function rowToTrigger(r: Record<string, unknown>): TaskTriggerRecord {
   const externalTaskId = taskCellStr(r['external_task_id'])
   if (externalTaskId !== '') record.externalTaskId = externalTaskId
   return record
+}
+
+/** 给任务/触发记录补只用于展示的企业名称，不修改持久化快照。 */
+function enrichTaskIdentities(
+  decryptedDir: string,
+  items: Array<TaskInfo | TaskTriggerRecord>,
+): void {
+  if (items.length === 0) return
+  const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
+  for (const item of items) {
+    const chatEnterpriseName = enterpriseNames.get(item.chatUsername)?.trim()
+    const targetEnterpriseName = enterpriseNames.get(item.targetUsername)?.trim()
+    if (chatEnterpriseName) item.chatEnterpriseName = chatEnterpriseName
+    if (targetEnterpriseName) item.targetEnterpriseName = targetEnterpriseName
+  }
 }
 
 // ---------------------------------------------------------------- 校验
@@ -388,11 +398,14 @@ function cleanKeywords(raw: unknown): KeywordsResult {
  */
 function rowTriggerConfig(r: Record<string, unknown>, method: string): RpaTriggerConfig {
   const stored = parseConfigJson(r['trigger_config'])
-  if (Object.keys(stored).length > 0) return stored
-  return migrateLegacyConfig(method, {
-    callbackUrl: taskCellStr(r['callback_url']),
-    bazhuayuFlowId: taskCellStr(r['bazhuayu_flow_id']),
-  })
+  const base = Object.keys(stored).length > 0
+    ? stored
+    : migrateLegacyConfig(method, {
+      callbackUrl: taskCellStr(r['callback_url']),
+      bazhuayuFlowId: taskCellStr(r['bazhuayu_flow_id']),
+    })
+  const vendor = findVendor(method)
+  return vendor === undefined ? base : migrateLegacyMapConfig(vendor.descriptor, base)
 }
 
 /**
@@ -484,6 +497,7 @@ export function listTaskInfos(decryptedDir: string): TaskInfoSnapshot {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       const rows = db.prepare('SELECT * FROM task_info ORDER BY id DESC').all() as Array<Record<string, unknown>>
       const items = rows.map(rowToTask)
+      enrichTaskIdentities(decryptedDir, items)
       return { items, total: items.length }
     })
   } catch (e) {
@@ -555,6 +569,7 @@ export function listTaskTriggers(decryptedDir: string, query?: TaskTriggerQuery)
         return taskCellNum(b['id']) - taskCellNum(a['id'])
       })
       const items = rows.map(rowToTrigger)
+      enrichTaskIdentities(decryptedDir, items)
       const last = items[items.length - 1]
       const hasMore = last !== undefined && db.prepare(
         'SELECT 1 AS found FROM task_triggers WHERE 1 = 1' + whereTask + whereSearch +

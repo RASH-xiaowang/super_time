@@ -1,7 +1,7 @@
 /**
  * AI 大模型配置（「数据配置」页面里的一张卡片）。
  *
- * **全应用唯一的模型配置入口**：微信问答、会话内 AI 对话、每日/周期总结、
+ * **全应用唯一的模型配置入口**：微信问答、AI 问答、每日/周期总结、
  * 稠密向量检索全都读 `wechat/llm.json` 这一份。此前同一份配置散落在四个面板
  * （问答页签的侧栏、会话 AI 的下拉、检索设置、总结页签）各配一遍、彼此不一致，
  * 这里收敛成一处：其余界面不再暴露模型选项，改模型只来这里。
@@ -449,7 +449,7 @@ export function AiModelConfig(): React.JSX.Element {
       <div className={setCss.cardBody}>
         <div className={setCss.row}>
           <span className={setCss.rowNote}>
-            全应用共用一份配置：微信问答、会话内 AI 对话、每日/周期总结、稠密向量检索都读这里。
+            全应用共用一份配置：微信问答、AI 问答、每日/周期总结、稠密向量检索都读这里。
           </span>
         </div>
 

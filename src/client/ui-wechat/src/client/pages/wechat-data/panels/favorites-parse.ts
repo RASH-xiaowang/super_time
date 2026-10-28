@@ -226,6 +226,9 @@ export function parseFavParts(content: string): FavItemPart[] {
     const desc = decodeFavText(xmlTagText(body, 'datadesc') ?? '').trim()
     const text = desc || title
     const sourceName = decodeFavText(xmlTagText(body, 'datasrcname') ?? '').trim()
+    const sourceUsername = decodeFavText(
+      xmlTagText(body, 'sourceusername') || xmlTagText(body, 'fromusername') || xmlTagText(body, 'fromusr') || '',
+    ).trim()
     const sourceTime = (xmlTagText(body, 'datasrctime') ?? '').trim()
     const sourceHead = (xmlTagText(body, 'sourceheadurl') ?? '').trim()
     const base = (): FavItemPart => {
@@ -233,6 +236,8 @@ export function parseFavParts(content: string): FavItemPart[] {
       if (title) p.title = title
       if (desc) p.desc = desc
       if (sourceName) p.sourceName = sourceName
+      if (sourceUsername) p.sourceUsername = sourceUsername
+      else if (dataSourceId.toLowerCase().endsWith('@openim')) p.sourceUsername = dataSourceId
       if (sourceTime) p.sourceTime = sourceTime
       if (sourceHead) p.sourceHead = sourceHead
       if (fullSize !== undefined) p.fullSize = fullSize

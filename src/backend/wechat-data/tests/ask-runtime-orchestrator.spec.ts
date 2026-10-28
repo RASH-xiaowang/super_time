@@ -8,8 +8,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { AskModelTurn, RunChatTurnFn } from '../src/remotes/ask-run-chat.ts'
+import type { AskModelTurn, RunChatFn, RunChatTurnFn } from '../src/remotes/ask-run-chat.ts'
 import type { RetrievalTool, ToolContext, ToolName, ToolResult } from '../src/query/tools/index.ts'
+import type { AnswerRuntimeStage } from '../src/query/answer-runtime/types.ts'
 import { askWithRuntime, type AskRuntimeDeps } from '../src/remotes/ask-runtime.ts'
 
 const NOW = new Date('2026-10-22T10:00:00')
@@ -146,6 +147,169 @@ describe('askWithRuntime：profile 与工具边界', () => {
       errorCode: 'scope_violation',
     })
     expect(out.status).toBe('blocked')
+  })
+})
+
+describe('askWithRuntime：过程快照与真实耗时', () => {
+  it('保留完整阶段事件快照，同时继续通知原 emitStage 监听器', async () => {
+    const emitted: AnswerRuntimeStage[] = []
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{
+          id: 'call_snapshot',
+          name: 'search_messages',
+          args: { keywords: ['尾款'] },
+        }],
+      })
+    }) as unknown as RunChatTurnFn
+    try {
+      const out = await askWithRuntime(deps({
+        tools: [fakeTool('search_messages', () => ({
+          tool: 'search_messages' as const,
+          ok: true,
+          hits: [{
+            key: 'wxid_a:31',
+            name: '项目群',
+            time: '2026-10-20 10:00',
+            snippet: '尾款下周一付',
+            source: 'msg' as const,
+          }],
+        }))],
+        runTurn,
+        runChat: undefined,
+        synthesize: async () => {
+          clock.mockReturnValue(1_123)
+          return '尾款下周一付 [1]'
+        },
+        emitStage: stage => { emitted.push(stage) },
+      }), { question: '尾款什么时候付？', source: 'ask' })
+
+      expect(out.stages).toBeDefined()
+      expect(out.stages).toEqual(emitted)
+      expect(out.stages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'answer:tools', status: 'running' }),
+        expect.objectContaining({
+          callId: 'call_snapshot',
+          toolName: 'search_messages',
+          phase: 'completed',
+          status: 'done',
+          hits: 1,
+        }),
+        expect.objectContaining({ key: 'answer:synthesize', status: 'done' }),
+      ]))
+      expect(out.durationMs).toBe(123)
+      expect(out.toolCalls?.[0]).toMatchObject({
+        resultSummary: '1 条命中',
+      })
+      expect(out.toolCalls?.[0]?.resultDetail).toContain('尾款下周一付')
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('没有外部监听器时也返回阶段快照与耗时', async () => {
+    const runTurn = vi.fn() as unknown as RunChatTurnFn
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages')],
+      runTurn,
+    }), { question: '当前会话聊了什么？', source: 'session' })
+
+    expect(out.status).toBe('blocked')
+    expect(runTurn).not.toHaveBeenCalled()
+    expect(out.stages).toEqual([
+      expect.objectContaining({
+        key: 'answer:blocked',
+        status: 'skipped',
+      }),
+    ])
+    expect(out.durationMs).toBeTypeOf('number')
+    expect(out.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('真实综合链路把核对结果的 running/done 同时写入快照与外部事件', async () => {
+    const emitted: AnswerRuntimeStage[] = []
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{ id: 'call_verify_ok', name: 'search_messages', args: { keywords: ['尾款'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:41',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '尾款下周一付',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      runChat: async () => '尾款下周一付 [1]',
+      intentClassifier: async () => null,
+      emitStage: stage => { emitted.push(stage) },
+    }), { question: '尾款什么时候付？', source: 'ask' })
+
+    const verifyStages = out.stages?.filter(stage => stage.key === 'answer:verify')
+    expect(verifyStages).toEqual([
+      { key: 'answer:verify', label: '核对结果', status: 'running' },
+      { key: 'answer:verify', label: '核对结果', status: 'done' },
+    ])
+    expect(emitted.filter(stage => stage.key === 'answer:verify')).toEqual(verifyStages)
+    expect(out.stages).toEqual(emitted)
+  })
+
+  it('核对阶段异常时写入 failed，并继续保留在快照与外部事件中', async () => {
+    const emitted: AnswerRuntimeStage[] = []
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{ id: 'call_verify_failed', name: 'search_messages', args: { keywords: ['合同'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+    const runChat: RunChatFn = vi.fn()
+      .mockResolvedValueOnce('合同金额是 5000.00 元 [1]')
+      .mockRejectedValueOnce(new Error('核对调用失败'))
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:42',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '合同金额是 3000 元',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      runChat,
+      intentClassifier: async () => null,
+      emitStage: stage => { emitted.push(stage) },
+    }), { question: '合同金额是多少？', source: 'ask' })
+
+    const verifyStages = out.stages?.filter(stage => stage.key === 'answer:verify')
+    expect(verifyStages).toHaveLength(2)
+    expect(verifyStages?.[0]).toMatchObject({
+      key: 'answer:verify',
+      label: '核对结果',
+      status: 'running',
+    })
+    expect(verifyStages?.[1]).toMatchObject({
+      key: 'answer:verify',
+      label: '核对结果',
+      status: 'failed',
+      detail: '核对调用失败',
+    })
+    expect(runChat).toHaveBeenCalledTimes(2)
+    expect(emitted.filter(stage => stage.key === 'answer:verify')).toEqual(verifyStages)
+    expect(out.stages).toEqual(emitted)
   })
 })
 

@@ -68,6 +68,10 @@
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   line-height: 1;
@@ -104,6 +108,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.35;
+}
+.msgHeaderIdentity {
+  width: 100%;
+  align-items: center;
 }
 .msgHeaderUser {
   font-size: 11px;
@@ -587,6 +595,10 @@
   color: var(--nm-text-1);
   overflow-wrap: anywhere;
   font-family: var(--nm-font-mono, monospace);
+}
+.messageInfoIdentity {
+  max-width: 100%;
+  font-family: var(--nm-font, sans-serif);
 }
 .messageInfoRow:last-child .messageInfoLabel,
 .messageInfoRow:last-child .messageInfoValue {

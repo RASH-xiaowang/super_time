@@ -3,7 +3,7 @@
    布局规范（本轮整体重排）
    ────────────────────────────────────────────────────────────────────────
    askLayout（单栏，flex:1，不参与滚动；外壳用 kit .panelShell）
-   ├─ askPage      统一内容列 max-width 1080px 居中，flex column，gap 12
+   ├─ askPage      统一阅读列 max-width 720px 居中，flex column，gap 10
    │  ├─ PanelHeader     面板头（固定）
    │  ├─ panelBody       唯一滚动容器
    │  │  └─ askMain / askStack   对话流或空态卡（贴底生长）
@@ -11,8 +11,8 @@
    │  ├─ composer        提问面（固定）：输入行 + 次要动作行
    │  └─ privacyNote     隐私说明（固定）
 
-   设计尺度：字号 11/12/13/14/15；圆角 8/10/14/16/999；间距 4/6/8/10/12/16/24；
-             控件高 32（触屏 40）、发送键 44、输入框最小高 44。
+   设计尺度：正文 12.5、辅助 10–11.5；圆角 8/10/12/14/999；间距 4/6/8/10/12/20；
+             控件高 30（触屏 40）、发送键 32、输入框最小高 32。
    断点：≤760 空态示例单列；≤680 单列 + 触屏尺寸，隐藏快捷键提示。
    ════════════════════════════════════════════════════════════════════════ */
 
@@ -50,17 +50,29 @@
    按剩余空间收缩，`max-width` 仍保证宽窗口下不超过阅读宽度。 */
 .askPage {
   /* `flex-basis: 0`（不是 `auto`）：`auto` 会解析成 `max-content`（内容宽），
-     而 `max-width: 1080px` 把它钉在 1080 —— 此时 `flex-shrink` 虽然按比例分配，
+     而旧的 `max-width: 1080px` 把它钉在 1080 —— 此时 `flex-shrink` 虽然按比例分配，
      但**基准值本身**就是 1080，收缩后仍可能大于可用空间（实测：容器 1230、
      详情 320、间距 12 ⇒ 可用 898，而本列仍是 1080，与详情重叠 320px）。
      `basis: 0` 让本列从 0 开始按 `flex-grow` 分配，`max-width` 只当上限。 */
   flex: 1 1 0;
-  max-width: 1080px;
+  max-width: 720px;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+}
+
+.askTitle {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.askDesc {
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 /* 引用详情是右侧**覆盖式抽屉**（见 ask-cite-detail.module.css），不占本行布局 ⇒
@@ -79,12 +91,12 @@
   flex-direction: column;
 }
 .askStack {
-  margin-top: auto;
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 22px;
 }
+.askStack[data-empty] { margin-top: auto; }
 
 /* ── 空态：引导区（引导 + 示例在同一块里，示例就在输入框上方）──
    刻意**不画卡片壳**：没有背景、没有描边、没有阴影 —— 引导内容直接落在面板底色上。
@@ -103,17 +115,17 @@
   text-align: center;
 }
 .emptyIcon {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
   border-radius: var(--nm-r-lg);
   background: var(--nm-bg-hover);
   color: var(--nm-text-2);
-  font-size: 18px;
+  font-size: 16px;
 }
-.emptyTitle { font-size: 15px; font-weight: 600; color: var(--nm-text-1); margin-top: 2px; }
-.emptySub { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; }
+.emptyTitle { font-size: 13.5px; font-weight: 600; color: var(--nm-text-1); margin-top: 2px; }
+.emptySub { font-size: 11px; color: var(--nm-text-2); line-height: 1.6; }
 .emptySub[data-warn] { color: var(--nm-warning-text); }
 /* 能力行：三条说明，窄屏可换行 */
 .emptyCaps {
@@ -127,7 +139,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 10.5px;
   line-height: 1.5;
   color: var(--nm-text-2);
   user-select: none;
@@ -136,7 +148,7 @@
 .emptyExHead {
   align-self: flex-start;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--nm-text-2);
   user-select: none;
 }
@@ -151,14 +163,14 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  min-height: 96px;
-  padding: 12px 14px;
+  min-height: 84px;
+  padding: 10px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.55;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -176,7 +188,7 @@
   border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   color: var(--nm-cyan);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1.4;
   letter-spacing: 0.04em;
@@ -186,21 +198,21 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.emptyHint { margin-top: 4px; font-size: 12px; color: var(--nm-text-3); }
+.emptyHint { margin-top: 4px; font-size: 11px; color: var(--nm-text-3); }
 
 /* ── 多轮对话 ── */
-.thread { display: flex; flex-direction: column; gap: 16px; }
+.thread { display: flex; flex-direction: column; gap: 20px; }
 /* 面板头「清空对话」：常驻可见（不随对话滚动），ghost 样式 hover 转红 */
 .headerClear {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
-  font-size: 12px;
+  font-size: 10.5px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -213,12 +225,12 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
-  font-size: 12px;
+  font-size: 10.5px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -230,20 +242,21 @@
 .headerHistory svg { flex-shrink: 0; opacity: 0.9; }
 
 .chatUser { display: flex; justify-content: flex-end; }
-/* 用户气泡：宽度随内容（fit-content）+ 上限 620px —— 短问题不再拉成一条长条。 */
+/* 用户气泡与「AI 问答」保持一致：右对齐、无硬描边、右下角收紧。 */
 .chatUserBubble {
-  max-width: min(78%, 620px);
-  padding: 8px 14px;
+  max-width: min(66%, 420px);
+  padding: 7px 11px;
   border-radius: 14px 14px 4px 14px;
-  background: var(--nm-bg-hover);
-  border: 1px solid var(--nm-border);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
+  border: 0;
   color: var(--nm-text-1);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.chatAi { display: flex; flex-direction: column; gap: 8px; min-width: 0; align-items: flex-start; }
+.chatAi { display: flex; flex-direction: column; gap: 5px; width: 100%; min-width: 0; align-items: flex-start; }
 
 /* ── 过程时间线（2026-10-16）─────────────────────────────────────────
    把「思考 + 工具调用步骤」渲染成一条可折叠的时间线。改造前这些信息是两行平铺的
@@ -481,7 +494,7 @@
 }
 .citeBtn {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   /* 兜底：即使内部某项仍算出更宽的最小内容尺寸，也只在自己格子里裁掉，
@@ -526,7 +539,7 @@
 .citeIdx { color: var(--nm-cyan); font-weight: 700; flex-shrink: 0; }
 /* 会话名是这行里唯一「长起来没边」的项，压缩全部由它承担：可收缩 + 省略号。
    团聊时这里是「群名 · 发送者」，可能很长。 */
-.citeName { font-weight: 600; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citeName { font-weight: 600; flex: 0 1 auto; min-width: 0; max-width: 100%; }
 /* 时间定长且信息密度高，保持完整不换行；让位的是会话名与摘要。 */
 .citeTime { color: var(--nm-text-2); flex-shrink: 0; white-space: nowrap; }
 .citeSnippet {
@@ -585,17 +598,19 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 6px;
+  gap: 1px;
+  padding: 7px 9px 4px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
-  transition: background 0.2s ease;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nm-bg-card) 92%, var(--nm-text-1) 3%);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 5%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease;
   flex-shrink: 0;
 }
 /* 聚焦只提亮背景，不动 border 也不加辉光：焦点的可见性交给光标，容器边框始终保持 --nm-border。 */
 .composer:focus-within {
-  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
+  background: var(--nm-bg-card);
 }
 .inputRow {
   display: flex;
@@ -608,14 +623,14 @@
 .composerInput {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 44px;
-  padding: 10px 4px;
+  min-height: 32px;
+  padding: 7px 4px 3px;
   border: 0;
   background: transparent;
   color: var(--nm-text-1);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.55;
   resize: none;
   /* 全局 scifi-theme.css 有一条 `textarea:focus-visible { outline: 2px solid var(--nm-cyan) }`
      （特异性 0-1-1），而这里光写 `.composerInput:focus-visible` 也是 0-1-1 —— 胜负取决于
@@ -633,8 +648,8 @@ textarea.composerInput:focus-visible { outline: none; }
 .send {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   padding: 0;
   border: 1.5px solid color-mix(in srgb, var(--nm-text-1) 20%, transparent);
@@ -660,8 +675,8 @@ textarea.composerInput:focus-visible { outline: none; }
 .sendStop {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   padding: 0;
   border: 1.5px solid color-mix(in srgb, var(--nm-danger) 45%, transparent);
@@ -701,19 +716,19 @@ textarea.composerInput:focus-visible { outline: none; }
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
+  min-height: 22px;
 }
 .optBtn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  height: 22px;
+  padding: 0 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-2);
-  font-size: 12px;
+  font-size: 10.5px;
   font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
@@ -725,24 +740,31 @@ textarea.composerInput:focus-visible { outline: none; }
   color: var(--nm-text-1);
 }
 .optBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.actionHint { margin-left: auto; font-size: 12px; color: var(--nm-text-3); white-space: nowrap; }
+.actionHint { margin-left: auto; font-size: 10px; color: var(--nm-text-3); white-space: nowrap; }
 /* 当前检索范围：不是控件，只是让用户确认「上一轮选的 @ 范围仍生效」。 */
 .scopeActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
   overflow: hidden;
   color: var(--nm-cyan-text);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scopeActiveIdentity {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* 隐私说明：输入面下方次级小字（常驻底部，与上方内容同一条左边线） */
 .privacyNote {
   margin: 0 2px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--nm-text-2);
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--nm-text-3);
   text-align: left;
   flex-shrink: 0;
 }
@@ -799,13 +821,15 @@ textarea.composerInput:focus-visible { outline: none; }
    —— 那个 ≤900px 的「整栏对换」规则失去了触发者，留着只会误导下一个人。 */
 
 /* ── 滚动顺滑度（对话滚动容器 = kit .panelBody + 本类）──
-   overscroll-behavior: contain —— 滚到底/顶时不把滚动链抛给外层（面板在触控板上
-   不会因为继续滑动而整体位移）；scrollbar-gutter: stable —— 滚动条出现/消失不引起
-   内容横向跳动，输入面与面板头始终对齐。 */
-.askBody {
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
+   overscroll-behavior: contain —— 滚到底/顶时不把滚动链抛给外层。
+   视觉上完全隐藏滚动条，但保留滚轮、触控板与键盘滚动能力。 */
+.askShell { overflow: hidden; }
+.askBody { overscroll-behavior: contain; scrollbar-width: none; }
+.askBody::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.composerInput,
+.optStrip { scrollbar-width: none; }
+.composerInput::-webkit-scrollbar,
+.optStrip::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 /* ── 响应式 ─────────────────────────────────────────────────
    ≤760：空态示例单列
@@ -823,7 +847,7 @@ textarea.composerInput:focus-visible { outline: none; }
   .input { width: 100%; }
   .citeGrid { grid-template-columns: 1fr; }
   .modelActions { grid-template-columns: 1fr; }
-  .chatUserBubble { max-width: 88%; }
+  .chatUserBubble { max-width: 84%; }
 }
 
 /* ── 沉淀为笔记：回答脚注行里的次要动作 ──

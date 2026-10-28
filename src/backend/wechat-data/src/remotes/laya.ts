@@ -115,6 +115,8 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       targets?: Array<{ localId: number; sortSeq: number }>
       /** 本批的进度标识（W3-11.5）：带上它才会推送 laya-analysis/progress 事件。 */
       jobId?: string
+      /** 用户主动「重新分析」：跳过读缓存，但仍写回最新结果。 */
+      force?: boolean
     }): Promise<LayaVisibleAnalysisResult> {
       const talker = String(options.talker ?? '').trim()
       const rawTargets = Array.isArray(options.targets) ? options.targets : []
@@ -164,6 +166,7 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
           targets,
           modelDir: dir || undefined,
           transcribe,
+          ...(options.force === true ? { force: true } : {}),
           ...(emitProgress ? { onProgress: emitProgress } : {}),
           ...(ctl ? { signal: ctl.signal } : {}),
         })

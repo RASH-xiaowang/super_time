@@ -802,6 +802,12 @@ export function parseChatlogRecords(recordXml: string, depth = 0): ChatlogRecord
     pos = e + 11
     const datatype = xmlAttr(item, 'dataitem', 'datatype')
     const name = unescapeXmlEntities(xmlTagText(item, 'sourcename'))
+    const sourceUsername = unescapeXmlEntities(
+      xmlTagText(item, 'sourceusername')
+      || xmlTagText(item, 'fromusername')
+      || xmlTagText(item, 'fromusr'),
+    ).trim()
+    const dataSourceId = unescapeXmlEntities(xmlAttr(item, 'dataitem', 'datasourceid')).trim()
     const head = xmlTagText(item, 'sourceheadurl')
     const time = xmlTagText(item, 'sourcetime')
     const datatitle = unescapeXmlEntities(xmlTagText(item, 'datatitle'))
@@ -848,6 +854,8 @@ export function parseChatlogRecords(recordXml: string, depth = 0): ChatlogRecord
       time,
       text: content,
     }
+    if (sourceUsername) rec.sourceUsername = sourceUsername
+    else if (dataSourceId.toLowerCase().endsWith('@openim')) rec.sourceUsername = dataSourceId
     if (head) rec.head = head
     if (datatype) rec.datatype = datatype
     rec.renderType = renderType

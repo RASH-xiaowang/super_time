@@ -122,12 +122,16 @@ export interface ToolHit {
     key: string;
     /** 展示名（会话名 / 文件名 / 联系人名）。 */
     name: string;
+    /** 企业微信会话/联系人对应的企业名称。 */
+    enterpriseName?: string;
     /** 时间（`YYYY-MM-DD HH:mm`；没有发生时间的来源为空串）。 */
     time: string;
     /** 摘要（进上下文的那段文字）。 */
     snippet: string;
     /** 群聊里的发送者显示名（单聊为空）。 */
     sender?: string;
+    /** 企业微信发送者所属企业。 */
+    senderEnterpriseName?: string;
     /** 来源域（与 `RetrievedDoc.source` 同口径）。 */
     source?: 'msg' | 'kb' | 'agg' | 'resource';
     /** 该条在本次结果里的得分（各工具量纲不同，只用于排序展示）。 */

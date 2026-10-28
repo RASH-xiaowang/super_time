@@ -15,6 +15,7 @@ import { annualReviewCacheKey, normalizeReview, type NormalizedReview } from './
 import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
 import { MasonryGrid } from './annual-masonry.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
+import { IdentityName } from './identity.tsx'
 import {
   AssetsCard, CatchphraseTopCard, ExtremesCard, GroupsCard, MediaCallCard, MomentsCard,
   MoneyCard, MonthlyTrendCard, RevokeCard, YearPortrait,
@@ -23,6 +24,7 @@ import { EmptyState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './annual.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 
 
 /** 周一为首的行标签。 */
@@ -221,7 +223,7 @@ function BuddyCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
       <div className={css.row}>
         <Avatar username={b.username} name={b.name} size={AVATAR_SIZE} src={av.get(b.username) ?? undefined} />
         <div className={css.rowMain}>
-          <div className={css.name}>{b.name}</div>
+          <div className={css.name}>{withEnterprise(b.name, b.enterpriseName)}</div>
           <div className={css.sub}>{fmt(b.total)} 条 · 你发 {b.mine} / TA 发 {b.theirs}</div>
         </div>
       </div>
@@ -257,7 +259,15 @@ function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, stri
       span={6}
       tone="pink"
       title="十二个月的主演"
-      extra={r.starName ? `年度主演 ${r.starName} · ${r.starMonths} 个月` : ''}
+      extra={r.starName ? (
+        <span className={css.inlineExtra}>
+          年度主演
+          <IdentityName name={r.starName} username={r.starUsername} size={16}>
+            {withEnterprise(r.starName, r.starEnterpriseName)}
+          </IdentityName>
+          · {r.starMonths} 个月
+        </span>
+      ) : ''}
     >
       <div className={css.starGrid}>
         {Array.from({ length: 12 }, (_, i) => {
@@ -269,7 +279,7 @@ function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, stri
               {s
                 ? <Avatar username={s.username} name={s.name} size={AVATAR_SIZE} src={av.get(s.username) ?? undefined} />
                 : <span className={css.av} style={{ width: 30, height: 30, background: 'transparent', color: 'var(--nm-text-3)', fontSize: 14 }}>—</span>}
-              <span className={css.sub} title={s?.name}>{s ? s.name : '—'}</span>
+              <span className={css.sub} title={s ? withEnterprise(s.name, s.enterpriseName) : ''}>{s ? withEnterprise(s.name, s.enterpriseName) : '—'}</span>
               {/* 每月条数：原先只画头像，卡片下半截全空（填充率 34%）。
                   后端 `monthlyStar[].count` 一直有值，只是没显示。 */}
               <span className={css.starCount}>{s ? fmt(s.count) : ''}</span>
@@ -280,7 +290,15 @@ function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, stri
       {/* 图例补三行：最热月 / 最冷月 / 主演覆盖月数 —— 让卡片下半截有信息而不是空白。 */}
       <div className={css.calFoot}>
         <span className={css.calLegend}>最热 {hot} 月 · {fmt(r.hottestMonthCount)} 条</span>
-        {r.starName && <span className={css.calLegend}>年度主演 {r.starName} · 拿下 {r.starMonths} 个月</span>}
+        {r.starName && (
+          <span className={`${css.calLegend} ${css.identityLegend}`}>
+            年度主演
+            <IdentityName name={r.starName} username={r.starUsername} size={16}>
+              {withEnterprise(r.starName, r.starEnterpriseName)}
+            </IdentityName>
+            · 拿下 {r.starMonths} 个月
+          </span>
+        )}
         <span className={css.calLegend}>
           {r.monthlyStar.length} 个月有单聊记录 · 平均每月 {fmt(Math.round(r.monthlyStar.reduce((a, x) => a + x.count, 0) / Math.max(1, r.monthlyStar.length)))} 条
         </span>
@@ -296,9 +314,9 @@ function NightCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
   return (
     <Card title="深夜" span={3} tone="purple" extra={`陪你完成 ${(n.share * 100).toFixed(1)}% 的深夜`}>
       <div className={css.nightTop}>
-        <Avatar username={n.topName} name={n.topName} size={AVATAR_SIZE} />
+        <Avatar username={n.topUsername} name={n.topName} size={AVATAR_SIZE} />
         <div className={css.rowMain}>
-          <div className={css.name}>{n.topName || '—'}</div>
+          <div className={css.name}>{n.topName ? withEnterprise(n.topName, n.topEnterpriseName) : '—'}</div>
           <div className={css.sub}>0-6 点共 {fmt(n.topCount)} 条</div>
         </div>
       </div>
@@ -454,9 +472,35 @@ function ReplyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
         </span>
       </div>
       <div className={css.heroGrid} style={{ marginTop: 4 }}>
-        {p.avgPartnerName && <div className={css.heroCell}><span className={css.heroCellK}>和 {p.avgPartnerName}</span><span className={css.heroCellV}>{dur(p.avgPartnerSec)}</span></div>}
-        <div className={css.heroCell}><span className={css.heroCellK}>最快回给</span><span className={css.heroCellV}>{p.fastestName || '—'} · {dur(p.fastestSec)}</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>最慢让</span><span className={css.heroCellV}>{p.slowestName || '—'} 等 {dur(p.slowestSec)}</span></div>
+        {p.avgPartnerName && (
+          <div className={css.heroCell}>
+            <span className={css.heroCellK}>和</span>
+            <span className={css.heroCellV}>
+              <IdentityName name={p.avgPartnerName} username={p.avgPartnerUsername} size={16}>
+                {withEnterprise(p.avgPartnerName, p.avgPartnerEnterpriseName)}
+              </IdentityName>
+              {' '}{dur(p.avgPartnerSec)}
+            </span>
+          </div>
+        )}
+        <div className={css.heroCell}>
+          <span className={css.heroCellK}>最快回给</span>
+          <span className={css.heroCellV}>
+            {p.fastestName
+              ? <IdentityName name={p.fastestName} username={p.fastestUsername} size={16}>{withEnterprise(p.fastestName, p.fastestEnterpriseName)}</IdentityName>
+              : '—'}
+            {' '}{dur(p.fastestSec)}
+          </span>
+        </div>
+        <div className={css.heroCell}>
+          <span className={css.heroCellK}>最慢让</span>
+          <span className={css.heroCellV}>
+            {p.slowestName
+              ? <IdentityName name={p.slowestName} username={p.slowestUsername} size={16}>{withEnterprise(p.slowestName, p.slowestEnterpriseName)}</IdentityName>
+              : '—'}
+            {' '}等 {dur(p.slowestSec)}
+          </span>
+        </div>
         <div className={css.heroCell}><span className={css.heroCellK}>中位数</span><span className={css.heroCellV}>{dur(p.medianSec)}</span></div>
         <div className={css.heroCell}><span className={css.heroCellK}>九成</span><span className={css.heroCellV}>{dur(p.p90Sec)}</span></div>
         <div className={css.heroCell}><span className={css.heroCellK}>快慢差</span><span className={css.heroCellV}>{spread > 0 ? `${spread.toFixed(1)} 倍` : '—'}</span></div>
@@ -494,8 +538,30 @@ function OpenerCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
         <span>你先 {fmt(o.mine)} 次 · {((o.mine / total) * 100).toFixed(0)}%</span>
         <span>TA 先 {fmt(o.theirs)} 次 · {((o.theirs / total) * 100).toFixed(0)}%</span>
       </div>
-      <div className={css.kv}><span>你最主动找</span><b>{o.mostInitiatedByMe.map(x => `${x.name} ${x.count}`).join(' / ') || '—'}</b></div>
-      <div className={css.kv}><span>最主动来找你</span><b>{o.mostInitiatedByThem.map(x => `${x.name} ${x.count}`).join(' / ') || '—'}</b></div>
+      <div className={css.kv}>
+        <span>你最主动找</span>
+        <b className={css.openerValue}>
+          {o.mostInitiatedByMe.length > 0
+            ? o.mostInitiatedByMe.map(x => (
+                <IdentityName key={x.username} name={x.name} username={x.username} size={16}>
+                  {withEnterprise(x.name, x.enterpriseName)} {x.count}
+                </IdentityName>
+              ))
+            : '—'}
+        </b>
+      </div>
+      <div className={css.kv}>
+        <span>最主动来找你</span>
+        <b className={css.openerValue}>
+          {o.mostInitiatedByThem.length > 0
+            ? o.mostInitiatedByThem.map(x => (
+                <IdentityName key={x.username} name={x.name} username={x.username} size={16}>
+                  {withEnterprise(x.name, x.enterpriseName)} {x.count}
+                </IdentityName>
+              ))
+            : '—'}
+        </b>
+      </div>
       {/* 补充格子：把「你先/TA 先」的绝对数也列出来（2026-10-17 补，
           原先卡片只有 112px 内容 / 230px 高，填充率 47%）。 */}
       <div className={css.heroGrid} style={{ marginTop: 4 }}>
@@ -525,7 +591,7 @@ function RankingCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string |
         <div key={row.username} className={css.rankRow}>
           <span className={css.rankNo}>{i + 1}</span>
           <Avatar username={row.username} name={row.name} size={AVATAR_SIZE} src={av.get(row.username) ?? undefined} />
-          <div className={css.rowMain}><div className={css.name}>{row.name}</div></div>
+          <div className={css.rowMain}><div className={css.name}>{withEnterprise(row.name, row.enterpriseName)}</div></div>
           <span className={css.rankVal} title={`你发 ${row.mine} / TA 发 ${row.theirs}`}>{fmt(row.total)}</span>
         </div>
       ))}
@@ -580,7 +646,7 @@ function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, strin
             <Avatar username={h.username} name={h.name} size={AVATAR_SIZE} src={av.get(h.username) ?? undefined} />
             <div className={css.moreInfo}>
               <span className={css.moreLabel}>{h.label}</span>
-              <span className={css.name} title={h.name}>{h.name}</span>
+              <span className={css.name} title={withEnterprise(h.name, h.enterpriseName)}>{withEnterprise(h.name, h.enterpriseName)}</span>
               <span className={css.moreVal}>{h.value}</span>
             </div>
           </div>

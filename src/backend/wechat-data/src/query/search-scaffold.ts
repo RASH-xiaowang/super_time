@@ -17,6 +17,7 @@ import { contactMeta, shardCatalog } from './meta.ts'
 import { withDb } from './db-open.ts'
 import { senderLabel } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
+import { isEnterpriseWechatUser } from './openim.ts'
 
 /**
  * WeChat full-text message search index (FTS5), rewritten from st_control
@@ -220,6 +221,7 @@ export function searchIndexBatch(
       const args: Array<string | number> = opts?.username ? [match, opts.username, limit] : [match, limit]
       const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
       const names = loadDisplayNames(decryptedDir)
+      const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
       const hits = rows.map((r) => {
         const text = decodeCell(r['text'])
         const username = decodeCell(r['username'])
@@ -234,9 +236,14 @@ export function searchIndexBatch(
           create_time: createTime,
           local_id: Number(r['local_id'] ?? 0),
           name: names.get(username) ?? username,
+          ...(enterpriseNames.get(username) ? { enterpriseName: enterpriseNames.get(username) } : {}),
           time: fmtDateTimeSec(createTime),
           snippet: text.slice(0, 120),
           sender: senderLabel(sender, names),
+          ...(sender !== '' ? { sender_username: sender } : {}),
+          ...(sender !== '' && enterpriseNames.get(sender)
+            ? { senderEnterpriseName: enterpriseNames.get(sender) }
+            : {}),
           // bm25() 越小越相关，取负号变成「越大越相关」
           score: -Number(r['score'] ?? 0),
         }
@@ -433,6 +440,12 @@ export function knownEntityNames(decryptedDir: string, limit = 500): string[] {
     out.add(v)
     if (out.size >= limit) break
   }
+  for (const n of contactMeta(decryptedDir).enterpriseNames.values()) {
+    const v = String(n || '').trim()
+    if (v.length < 2 || v.length > 24) continue
+    out.add(v)
+    if (out.size >= limit) break
+  }
   return [...out]
 }
 
@@ -452,16 +465,25 @@ export function knownEntityNames(decryptedDir: string, limit = 500): string[] {
 export function knownSessionCatalog(
   decryptedDir: string,
   limit = 2000,
-): Array<{ username: string; name: string }> {
-  const out: Array<{ username: string; name: string }> = []
+): Array<{ username: string; name: string; enterpriseName?: string; aliases?: string[] }> {
+  const out: Array<{ username: string; name: string; enterpriseName?: string; aliases?: string[] }> = []
   const seen = new Set<string>()
+  const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
   for (const [username, name] of loadDisplayNames(decryptedDir)) {
     const u = username.trim()
     const n = String(name || '').trim()
     if (u === '' || n === '' || seen.has(u)) continue
-    if (!/^(?:wxid_[A-Za-z0-9_-]+|gh_[A-Za-z0-9_-]+|[A-Za-z0-9._-]+@chatroom)$/.test(u)) continue
+    if (u.endsWith('@kefu.openim')) continue
+    if (u.endsWith('@openim') && !isEnterpriseWechatUser(u)) continue
+    if (!/^(?:wxid_[A-Za-z0-9_-]+|gh_[A-Za-z0-9_-]+|[A-Za-z0-9._-]+@chatroom|[A-Za-z0-9._-]+@openim)$/.test(u)) continue
     seen.add(u)
-    out.push({ username: u, name: n })
+    const enterpriseName = enterpriseNames.get(u)?.trim()
+    out.push({
+      username: u,
+      name: n,
+      ...(enterpriseName ? { enterpriseName } : {}),
+      ...(enterpriseName && enterpriseName !== n ? { aliases: [enterpriseName] } : {}),
+    })
     if (out.length >= limit) break
   }
   return out

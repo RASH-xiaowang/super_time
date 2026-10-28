@@ -38,7 +38,8 @@ function makeTree(): string {
     local_id INTEGER, type INTEGER, update_time INTEGER, content TEXT,
     fromusr TEXT, realchatname TEXT)`)
   const contact = new DatabaseSync(join(dir, 'contact', 'contact.db'))
-  contact.exec('CREATE TABLE contact (username TEXT, nick_name TEXT, remark TEXT, small_head_url TEXT, big_head_url TEXT)')
+  contact.exec('CREATE TABLE contact (username TEXT, nick_name TEXT, remark TEXT, small_head_url TEXT, big_head_url TEXT, extra_buffer BLOB)')
+  contact.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
   contact.close()
   fav.close()
   return dir
@@ -54,9 +55,21 @@ function insertFavorite(
   db.close()
 }
 
-function setContactAvatar(dir: string, username: string, url: string, nick = username): void {
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
+function setContactAvatar(
+  dir: string,
+  username: string,
+  url: string,
+  nick = username,
+  extraBuffer?: Buffer,
+): void {
   const db = new DatabaseSync(join(dir, 'contact', 'contact.db'))
-  db.prepare('INSERT INTO contact VALUES (?,?,?,?,?)').run(username, nick, '', url, '')
+  db.prepare('INSERT INTO contact VALUES (?,?,?,?,?,?)').run(username, nick, '', url, '', extraBuffer ?? null)
   db.close()
 }
 
@@ -173,5 +186,49 @@ describe('queryFavorites 来源头像', () => {
     })
     expect(byId.get(11)?.meta).toContainEqual({ label: '大小', value: '1024' })
     expect(byId.get(11)?.meta).toContainEqual({ label: '链接', value: 'https://example.com/new' })
+  })
+
+  it('企微好友作为收藏来源时同时返回企业名称', () => {
+    const dir = makeTree()
+    const contact = new DatabaseSync(join(dir, 'contact', 'contact.db'))
+    contact.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', '示例企业')
+    contact.close()
+    setContactAvatar(
+      dir,
+      'wxid_ent@openim',
+      'https://wx.qlogo.cn/ent/132',
+      '企微好友',
+      enterpriseBuffer('wording-ent'),
+    )
+    insertFavorite(dir, {
+      id: 12,
+      type: 1,
+      time: 10,
+      content: '<desc>企业资料</desc>',
+      fromUsr: 'wxid_ent@openim',
+      chatName: '',
+    })
+    insertFavorite(dir, {
+      id: 13,
+      type: 14,
+      time: 20,
+      content: '<favorite><datalist><dataitem datatype="1" datasourceid="wxid_ent@openim">'
+        + '<datasrcname>企微好友</datasrcname><datadesc>合并记录</datadesc>'
+        + '</dataitem></datalist></favorite>',
+      fromUsr: '',
+      chatName: '',
+    })
+
+    const favorites = queryFavorites(dir).favorites
+    expect(favorites.find((f) => f.localId === 12)).toMatchObject({
+      source: '企微好友',
+      sourceEnterpriseName: '示例企业',
+      avatar: 'https://wx.qlogo.cn/ent/132',
+    })
+    expect(favorites.find((f) => f.localId === 13)?.items?.[0]).toMatchObject({
+      sourceName: '企微好友',
+      sourceUsername: 'wxid_ent@openim',
+      sourceEnterpriseName: '示例企业',
+    })
   })
 })

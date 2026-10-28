@@ -9,6 +9,7 @@
 
 import { lazy } from 'react'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import { withEnterprise } from './enterprise-identity.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
 import { fmtBytes, fmtClockMs } from '../utils/format.ts'
@@ -214,7 +215,7 @@ export function buildOverviewReport(
     p('| :-- | :-- | :-- | :-- |')
     data.moments_authors.slice(0, 10).forEach((a, i) => {
       const img = avatars[a.username] ? `![头像](${avatars[a.username]})` : '(无头像)'
-      p(`| ${i + 1} | ${img} | ${a.name} | ${a.posts} |`)
+      p(`| ${i + 1} | ${img} | ${withEnterprise(a.name, a.enterpriseName)} | ${a.posts} |`)
     })
     p('')
   }
@@ -230,7 +231,7 @@ export function buildOverviewReport(
     p('')
     p(`- 好友 ${ins.relations.total} · 有往来 ${ins.relations.active} · 沉默 ${ins.relations.silent} · 有消息的群 ${ins.relations.groupsWithMsg}`)
     if (ins.relations.top.length > 0) {
-      p('- 对话 Top：' + ins.relations.top.map((t, i) => `${i + 1}.${t.name}(${t.count})`).join(' '))
+      p('- 对话 Top：' + ins.relations.top.map((t, i) => `${i + 1}.${withEnterprise(t.name, t.enterpriseName)}(${t.count})`).join(' '))
     }
     p('')
     p('## 内容构成与资产')

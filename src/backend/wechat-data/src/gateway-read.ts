@@ -199,10 +199,10 @@ export abstract class GatewayRead extends GatewayCore {
 
   /**
    * Full-history author activity counts (ranked desc).
-   * @returns Array of { name, count } for every moments author.
+   * @returns Array of { name, enterpriseName?, count } for every moments author.
    */
   @Remote('getMomentsAuthors')
-  getMomentsAuthors(): Array<{ name: string; count: number }> {
+  getMomentsAuthors(): Array<{ username: string; name: string; enterpriseName?: string; count: number }> {
     return queryMomentsAuthors(this._dirs.decrypted)
   }
 

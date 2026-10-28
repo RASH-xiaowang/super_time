@@ -14,11 +14,13 @@ import { type LayaQuestions } from './presets.ts';
 export interface LayaTurn {
     /** 是否本人发送。 */
     self: boolean;
+    /** 喂给模型时使用的发言者标签（群聊优先成员昵称，单聊统一为「对方」）。 */
+    speaker: string;
     text: string;
 }
 /** 一段可直接喂给模型的对话上下文。 */
 export interface LayaDialogue {
-    /** `我：…` / `对方：…` 逐行拼接（模型按这个格式读）。 */
+    /** `我：…` / `对方：…` / `群成员昵称：…` 逐行拼接（模型按这个格式读）。 */
     dialogue: string;
     /** 被分析的那句（最近一条**对方**消息）。 */
     latestPeer: string;
@@ -36,6 +38,21 @@ export interface LayaDialogue {
 export declare function buildDialogueState(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
 talker: string, selfUsername?: string, limit?: number): LayaDialogue;
+/**
+ * 对话上下文的发言者标签。
+ *
+ * 单聊只有「我 / 对方」两方；群聊里如果仍把所有人写成「对方」，模型会把多个人的话
+ * 当成同一个人的连续表达。这里优先使用成员昵称，其次用成员 username，仍取不到时才
+ * 退到中性称谓「群成员」。
+ * @param talker - 当前会话 `WechatSession.username`。
+ * @param message - 至少需要发送方向与发送者字段。
+ * @returns 可直接拼进对话行的发言者标签。
+ */
+export declare function dialogueSpeakerLabel(talker: string, message: {
+    isSender: number;
+    sender?: string;
+    senderName?: string;
+}): string;
 /**
  * 对话上下文的**字数预算**（2026-09-29 实测后加）。
  *
@@ -185,6 +202,12 @@ export interface LayaVisibleAnalysisInput {
     transcribe?: LayaVoiceTranscriber;
     /** 关掉缓存（测试用）。 */
     useCache?: boolean;
+    /**
+     * 忽略已有结果并重新推理，同时用新结果覆盖缓存。
+     *
+     * 用于用户主动点「重新分析」；普通打开面板仍走缓存，避免重复占用本地 CPU。
+     */
+    force?: boolean;
     /**
      * 每分析完一条就回调一次（W3-11.5）。
      *

@@ -76,11 +76,15 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  * `net/fetch-retry.ts` 是网络重试原语（**唯一实现源**）：query 的出网点与宿主层都引用它，
  * 但模块本身不 import 包内任何东西，因此不会把上层依赖反向带进 query。
  *
+ * `net/rpa-media.ts` 同样是叶子模块：只依赖 `node:crypto`，负责 RPA 图片签名直链的
+ * 签发/验签与路径白名单；query 的图片参数层与宿主 HTTP 路由共用同一份算法。放行它不会
+ * 把上层依赖反向带进 query，也能避免两边各写一份导致链接永远验不过。
+ *
  * `types-rpa.ts` 与 `types.ts` 同性质：多 RPA 厂商触发的**纯类型契约**（描述符/目录/配置），
  * 不 import 任何运行时模块，query 层的 task-center / query/rpa 只拿类型。放行它不会把运行时
  * 依赖方向带偏，也不会形成 keys ↔ query 的双向环。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'net/fetch-retry.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {

@@ -36,6 +36,8 @@ import { useConfirm } from '../ui/confirm.tsx'
 import { useTransientNotice } from './hooks.tsx'
 import { ClawbotBindModal } from './clawbot-bind-modal.tsx'
 import { CLAWBOT_STATUS_LABEL, statusClass, statusDot } from './clawbot-status.ts'
+import { Avatar } from './chats-support.tsx'
+import { IdentityName } from './identity.tsx'
 import css from './clawbot.module.css'
 
 /** 官方 FAQ 三条（腾讯云《微信 ClawBot 接入指南》原文口径）。 */
@@ -213,7 +215,7 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
           <span className={css.autoTitle}>AI 自动回复</span>
           <span className={css.autoDesc}>
             开启前必须先在下方开启知识库增强并选择一个有效知识库。开启后：收到微信消息时，
-            Super Time 用设置里的「对话模型」生成回答，且只用该知识库作为事实来源并发送；
+            ClawBot 会调用当前「对话模型」生成回答，且只使用所选知识库作为事实来源并自动发送；
             每次回复写一行操作日志（category=clawbot），可在「行动与维护 → 操作日志」里逐条审计。
           </span>
         </span>
@@ -236,7 +238,7 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         <span className={css.autoText}>
           <span className={css.autoTitle}>知识库增强</span>
           <span className={css.autoDesc}>
-            自动回复的唯一数据来源。开启后请在下方选择一个有效知识库；关闭增强或清空选择时，
+            ClawBot 自动回复只使用所选知识库作为事实来源。开启后请在下方选择一个有效知识库；关闭增强或清空选择时，
             无法继续运行的自动回复会一并关闭，避免显示已开启却不发送。
           </span>
         </span>
@@ -262,7 +264,8 @@ function AutoReplySection({ cfg, kbs, cfgBusy, readError, defaultPrompt, onPatch
         <div className={css.promptHd}>
           <span className={css.autoTitle}>系统提示词</span>
           <span className={css.promptHint}>
-            决定它怎么说话（人设 / 语气 / 风格）。留空则用内置的拟人化默认值 —— 不是「没有提示词」。
+            用于设置 ClawBot 的人设、语气和风格。自动回复中的「我」指当前微信账号本人，「你」指当前聊天联系人，
+            第三方一律写姓名或昵称；留空则使用内置默认值，不是「没有提示词」。
           </span>
         </div>
         <textarea
@@ -341,11 +344,16 @@ function InstanceSection({ snapshot, inst, slot, busy, onBind, onUnbind }: {
 }): React.JSX.Element {
   const binding = snapshot?.binding ?? null
   const status = binding?.status ?? 'unbound'
+  const username = (binding?.wxid ?? inst?.wxid ?? '').trim()
+  const userName = (binding?.userName ?? inst?.userName ?? '').trim()
+  const identityName = inst?.label?.trim() || userName || (slot === null ? 'ClawBot' : `实例 ${slot}`)
+  const avatarUrl = (binding?.avatar ?? inst?.avatar ?? '').trim() || undefined
   return (
     <Section title={`当前实例 · 实例 ${slot ?? '—'}`} hint="扫码即可绑定，无需 App ID / App Secret">
       <div className={css.bindRow}>
-        <div className={css.bindAvatar} aria-hidden="true">{'🦞'}</div>
+        <Avatar name={identityName} username={username} avatarUrl={avatarUrl} size={42} />
         <div className={css.bindGrow}>
+          <div className={css.bindName} title={identityName}>{identityName}</div>
           <div className={css.bindStatus}>
             <StateDot state={statusDot(status)} />
             <span className={statusClass(status)}>{CLAWBOT_STATUS_LABEL[status]}</span>
@@ -377,9 +385,9 @@ function InstanceSection({ snapshot, inst, slot, busy, onBind, onUnbind }: {
             </div>
             <div className={css.kvItem}><span className={css.kvKey}>今日消息</span><span className={css.kvVal}>{snapshot?.todayMessages ?? 0}</span></div>
             <div className={css.kvItem}><span className={css.kvKey}>累计消息</span><span className={css.kvVal}>{snapshot?.totalMessages ?? 0}</span></div>
-            {/* 2026-10-17 补全实例信息：机器人 id（公开标识，非凭证）与最后活跃时间。 */}
+            {/* 2026-10-17 补全实例信息：ClawBot ID（公开标识，非凭证）与最后活跃时间。 */}
             {inst?.botId != null && (
-              <div className={css.kvItem}><span className={css.kvKey}>机器人 id</span><span className={css.kvVal} title={inst.botId}>{inst.botId}</span></div>
+              <div className={css.kvItem}><span className={css.kvKey}>ClawBot ID</span><span className={css.kvVal} title={inst.botId}>{inst.botId}</span></div>
             )}
             <div className={css.kvItem}>
               <span className={css.kvKey}>最后消息</span>
@@ -389,7 +397,16 @@ function InstanceSection({ snapshot, inst, slot, busy, onBind, onUnbind }: {
         )}
         {status === 'unbound-by-user' && (
           <>
-            <div className={css.kvItem}><span className={css.kvKey}>上次绑定</span><span className={css.kvVal}>{binding?.userName ?? binding?.wxid ?? '—'}</span></div>
+            <div className={css.kvItem}>
+              <span className={css.kvKey}>上次绑定</span>
+              <IdentityName
+                className={css.kvVal}
+                name={binding?.userName ?? binding?.wxid ?? '—'}
+                username={binding?.wxid ?? ''}
+                avatarUrl={binding?.avatar ?? undefined}
+                size={20}
+              />
+            </div>
             <div className={css.kvItem}><span className={css.kvKey}>解绑时间</span><span className={css.kvVal}>{stamp(binding?.unboundAt ?? null)}</span></div>
           </>
         )}
@@ -529,8 +546,8 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
     const ok = await confirm({
       title: `确认移除实例 ${slot}？`,
       message: total > 0
-        ? `将删除该实例（${label}）的绑定信息与行为配置，以及它的 ${String(total)} 条接入会话 —— 会话不可恢复。其余实例不受影响。`
-        : `将删除该实例（${label}）的绑定信息与行为配置。它还没有接入会话。其余实例不受影响。`,
+        ? `将删除该实例（${label}）的绑定信息与行为配置，以及该实例的 ${String(total)} 条接入会话 —— 会话不可恢复。其余实例不受影响。`
+        : `将删除该实例（${label}）的绑定信息与行为配置。该实例还没有接入会话。其余实例不受影响。`,
       tone: 'danger',
       confirmText: '确认移除',
     })
@@ -572,7 +589,7 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
               />
               <div className={css.dangerZone}>
                 <Button size="sm" variant="danger" disabled={busy || inst === null} onClick={() => { void doRemove() }} {...desktopActionProps()}>移除该实例</Button>
-                <span className={css.muted}>连带删除它的绑定、行为配置与全部接入会话（不可恢复）。其余实例不受影响。</span>
+                <span className={css.muted}>连带删除该实例的绑定、行为配置与全部接入会话（不可恢复）。其余实例不受影响。</span>
               </div>
             </div>
 
@@ -629,7 +646,7 @@ export function ClawbotSettingsView({ snapshot, slot, onRefresh }: {
           {...(slot === null ? {} : { slot })}
           onConfirmed={(b) => {
             setBindQr(null)
-            notice.flash(`✓ 已绑定 ${b.binding.wxid ?? ''}（在微信里给它发条消息试试）`)
+            notice.flash(`✓ 已绑定 ${b.binding.wxid ?? ''}（在微信里给该 ClawBot 发条消息试试）`)
             void onRefresh()
           }}
           onClose={() => { setBindQr(null) }}

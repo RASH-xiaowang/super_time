@@ -69,6 +69,10 @@ describe('W2-10.2 队列本体', () => {
     expect(api).toContain('const map = await apiGetAvatarsLocal({ usernames: keys.map((k) => k.username) })')
   })
 
+  it('队列按 username 去重（对象默认字符串化会让整屏头像共用第一张）', () => {
+    expect(api).toContain('keyOf: (k) => k.username')
+  })
+
   it('批量没命中的**退回单张**，且把原队列里的 nickname 一起带过去', () => {
     const i = api.indexOf('const avatarQueue = createImageLoadQueue')
     expect(i).toBeGreaterThan(-1)

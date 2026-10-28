@@ -9,7 +9,7 @@
  *   · 会话上下文：当前对话最近若干条（`queryMessages` 已经按时间正序返回，可直接拼）；
  *   · 知识库片段：用户**当前选中的那个库**里与「对方最近那句话」相关的块。
  */
-import { queryMessages } from './messages.ts'
+import { queryMessages, queryMessagesAtOrBefore } from './messages.ts'
 import { searchKb } from './kb-search.ts'
 
 /** 单条消息进提示词前截断到这个长度：推荐回复只需要语义，不需要全文。 */
@@ -23,6 +23,10 @@ export interface ReplyContext {
   latestPeer: string
   /** 参与拼装的条数（供隐私审计的 `messages` 计数用）。 */
   count: number
+  /** 指定了目标消息时，该消息是否仍存在于当前解密快照（缺省 = 未按目标截取）。 */
+  targetFound?: boolean
+  /** 目标消息的发送者标签（单聊为「对方」，群聊为成员名）。 */
+  targetSpeaker?: string
 }
 
 /**
@@ -31,6 +35,7 @@ export interface ReplyContext {
  * @param talker - 会话 username（**范围就是它**，绝不跨会话取）。
  * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
  * @param limit - 取最近多少条（默认 20）。
+ * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
  * @returns 上下文；该会话没有可用文本时 `count` 为 0。
  */
 export function collectReplyContext(
@@ -39,21 +44,50 @@ export function collectReplyContext(
   talker: string,
   selfUsername?: string,
   limit = 20,
+  targetLocalId?: number,
 ): ReplyContext {
   const cap = Math.max(1, Math.min(limit, 60))
-  // `queryMessages` 的第 4、6 个参数才是游标（cursor / cursorLocalId），这里都不传 = 「最新一页」；
-  // 第 5 个是 selfUsername，用来把每条标成「我」还是「对方」（也用于判定发送者）。
-  const snapshot = queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
+  const targetId = Number.isFinite(targetLocalId) && Number(targetLocalId) > 0
+    ? Math.trunc(Number(targetLocalId))
+    : undefined
+  // 无目标时保持原行为（最新一页）；有目标时只取截至该消息的窗口，避免历史消息
+  // 被错误地拿最新一句来推荐回复。
+  const snapshot = targetId === undefined
+    ? queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
+    : queryMessagesAtOrBefore(decryptedDir, talker, targetId, cap, selfUsername)
+  if (targetId !== undefined && 'found' in snapshot && !snapshot.found) {
+    return { lines: [], latestPeer: '', count: 0, targetFound: false }
+  }
   const lines: string[] = []
   let latestPeer = ''
+  let targetSpeaker: string | undefined
+  let targetText = ''
+  const isGroup = talker.endsWith('@chatroom')
   for (const m of snapshot.messages) {
     const text = messageText(m)
     if (text === '') continue
     const self = m.isSender === 1
-    lines.push(`${self ? '我' : '对方'}：${text}`)
+    // 群聊必须保留发言者身份，否则模型会把不同成员揉成同一个「对方」。
+    const speaker = self
+      ? '我'
+      : isGroup
+        ? (m.senderName || m.sender || '群成员')
+        : '对方'
+    lines.push(`${speaker}：${text}`)
+    if (m.localId === targetId) {
+      targetText = text
+      targetSpeaker = speaker
+    }
     if (!self) latestPeer = text
   }
-  return { lines, latestPeer, count: lines.length }
+  if (targetText !== '') latestPeer = targetText
+  return {
+    lines,
+    latestPeer,
+    count: lines.length,
+    ...(targetId === undefined ? {} : { targetFound: true }),
+    ...(targetSpeaker === undefined ? {} : { targetSpeaker }),
+  }
 }
 
 /**
@@ -106,7 +140,7 @@ export function buildReplyPrompt(lines: readonly string[], snippets: readonly st
   }
   parts.push(
     '',
-    `请以上面「对方」最后那句话为主，给出 ${String(Math.max(1, want))} 条我可以直接发送的回复候选。`,
+    `请以上面最后一条消息作为要回复的对象（更早内容只用于理解上下文），给出 ${String(Math.max(1, want))} 条我可以直接发送的回复候选。`,
     '要求：',
     '1) 每条独立成句，口吻自然、像我本人在微信里说话；',
     '2) 三条之间要有差异（例如：直接回答 / 反问确认 / 简短暂缓），不要互相改写；',

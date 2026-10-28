@@ -32,13 +32,19 @@ export interface MomentVideo {
 export interface MomentLike {
     username: string;
     nickname: string;
+    /** 点赞人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
 }
 /** One comment entry. */
 export interface MomentComment {
     username: string;
     nickname: string;
+    /** 评论人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     to_username: string;
     to_nickname: string;
+    /** 被回复人的企业名称（仅企业微信联系人）。 */
+    toEnterpriseName?: string;
     content: string;
     ts: number;
     /**
@@ -66,6 +72,8 @@ export interface MomentEntry {
     username: string;
     /** **显示名**（备注 → 昵称 → ID 逐级回退），不是发帖人的微信 ID —— 别拿它去 join 会话（P3-6 实测澄清）。 */
     author: string;
+    /** 发帖人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     text: string;
     ts: number;
     time: string;
@@ -159,9 +167,11 @@ authorUsername?: string, selfUsername?: string): {
  * Author-activity counts across the FULL moments archive (deleted posts included),
  * mapped to display names, ranked by count descending.
  * @param decryptedDir - decrypted data root.
- * @returns author name + moment count, highest first.
+ * @returns author identity + moment count, highest first.
  */
 export declare function queryMomentsAuthors(decryptedDir: string): Array<{
+    username: string;
     name: string;
+    enterpriseName?: string;
     count: number;
 }>;

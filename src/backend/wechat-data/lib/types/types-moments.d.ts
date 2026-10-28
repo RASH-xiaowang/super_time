@@ -10,8 +10,12 @@
 export interface MomentCommentItem {
     username: string;
     nickname: string;
+    /** 评论人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     to_username: string;
     to_nickname: string;
+    /** 被回复人的企业名称（仅企业微信联系人）。 */
+    toEnterpriseName?: string;
     content: string;
     ts: number;
     /**
@@ -35,6 +39,8 @@ export interface MomentItem {
     tid: string;
     username: string;
     author: string;
+    /** 发帖人的企业名称（仅企业微信联系人）。 */
+    enterpriseName?: string;
     text: string;
     ts: number;
     time: string;
@@ -77,6 +83,7 @@ export interface MomentItem {
     likes: Array<{
         username: string;
         nickname: string;
+        enterpriseName?: string;
     }>;
     comments: Array<MomentCommentItem>;
 }
@@ -141,6 +148,10 @@ export interface FavItemPart {
     svrId?: string;
     format?: string;
     sourceName?: string;
+    /** Sender username when the favorite chat-log item carries one. */
+    sourceUsername?: string;
+    /** Enterprise name for a WeCom sender (display only). */
+    sourceEnterpriseName?: string;
     sourceTime?: string;
     sourceHead?: string;
     /** 未知资源保留的原始可读标签（不会把 XML 整段倒给界面）。 */
@@ -173,6 +184,8 @@ export interface FavorItem {
     chatName: string;
     /** 来源显示名（群名优先，其次发送者，经通讯录解析）。 */
     source: string;
+    /** 来源企微用户所属企业名称（仅能按 realchatname/fromusr 解析时返回）。 */
+    sourceEnterpriseName?: string;
     /**
      * 来源用户头像。
      *
@@ -196,12 +209,20 @@ export interface FileItem {
     category: string;
     /** Source chat display name resolved from message resource when available. */
     sessionName?: string;
+    /** Source chat username resolved from message resource when available. */
+    sessionUsername?: string;
+    /** 来源会话用户的企微企业名称。 */
+    sessionEnterpriseName?: string;
     /** Source message create time when available. */
     sourceTime?: number;
     /** 来源月份（第 84 轮）：`dir1`/`dir2` → `dir2id` 的 `YYYY-MM`，三个表 100% 有值。 */
     sourceMonth?: string;
     /** 来源会话显示名（第 84 轮）：`dir2id` 的值实测是 `md5(username)`，反查得到会话名。 */
     sourceTalker?: string;
+    /** 来源会话真实 username（由 `md5(username)` 反查）。 */
+    sourceUsername?: string;
+    /** 附件目录反查来源用户的企微企业名称。 */
+    sourceTalkerEnterpriseName?: string;
 }
 /** Moments snapshot. */
 export interface MomentsSnapshot {

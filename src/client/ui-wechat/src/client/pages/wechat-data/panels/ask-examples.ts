@@ -77,8 +77,8 @@ export function buildAskExamples(
   const recall = name === ''
     ? '最近一周我和谁聊得最多？'
     : selected?.type === 'group'
-      ? `最近「${name}」里聊了些什么？`
-      : `最近和「${name}」聊了些什么？`
+      ? `最近我在「${name}」里聊了些什么？`
+      : `最近我和「${name}」聊了些什么？`
 
   return [
     { tag: '回顾对话', question: recall },

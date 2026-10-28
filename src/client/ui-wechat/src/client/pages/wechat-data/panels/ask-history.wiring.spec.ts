@@ -104,12 +104,28 @@ describe('问答历史：自动回复（auto）这个来源认得出来', () => 
   it('来源页签与中文标签都有 auto', () => {
     // 标签缺了 ⇒ 列表里只显示一个裸的 `auto`（用户不知道那是什么）；
     // 页签缺了 ⇒ 自动回复的记录只能混在「微信问答」里一起看。
-    expect(dialog, 'SRC_LABEL 没认 auto').toMatch(/auto:\s*'自动回复'/)
-    expect(dialog, 'SRC_TABS 没有 auto 项').toMatch(/value:\s*'auto',\s*label:\s*'自动回复'/)
+    expect(dialog, 'SRC_LABEL 没认 auto，或没有点明是 ClawBot 代回').toMatch(/auto:\s*'ClawBot 自动回复'/)
+    expect(dialog, 'SRC_TABS 没有 auto 项').toMatch(/value:\s*'auto',\s*label:\s*'ClawBot 自动回复'/)
   })
 
   it('auto 有独立配色（与 ask / session 不撞色）', () => {
     expect(dialogCss, 'auto 没有独立配色 ⇒ 三种来源在列表里长得一样')
       .toContain(".srcTag[data-src='auto']")
+  })
+})
+
+describe('问答历史：会话范围带企业名', () => {
+  it('Ask 写入范围名、历史列表读取范围名都统一追加企业', () => {
+    expect(ask).toContain("import { identityLabel, sessionDisplayNameWithEnterprise } from './enterprise-identity.ts'")
+    expect(ask, 'Ask 的检索范围名没带企业').toContain(
+      'sessionDisplayNameWithEnterprise(sessions, scopeUsername)',
+    )
+    expect(ask, '企业后缀破坏了空态示例的会话匹配').toContain(
+      'buildAskExamples(sessions, scopeUsername || scopeDisplayName)',
+    )
+    expect(dialog).toContain("import { identityLabel, withEnterprise } from './enterprise-identity.ts'")
+    expect(dialog, '问答历史范围仍是裸 usernameName').toContain(
+      'withEnterprise(item.usernameName || item.username, item.usernameEnterpriseName)',
+    )
   })
 })

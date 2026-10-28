@@ -1,9 +1,9 @@
 /**
  * 统一问答运行信息的接线守卫。
  *
- * 语义测试只能证明组件本身可用；把两个线程里的 `<AskRuntimeMeta>` 摘掉，
+ * 语义测试只能证明组件本身可用；把两个线程里的 `<AnswerRunView>` 摘掉，
  * 组件测试仍然会全绿。这里按仓库既有的源码级守卫做法，钉住三件事：
- *   ① 微信问答与会话内问答都在过程时间线后渲染运行信息，资源区在正文之后；
+ *   ① 两个入口共用运行视图，主回答在过程详情前，资源区在运行视图后；
  *   ② 请求只在紧邻同范围轮次之间继承 threadState；
  *   ③ 助手轮次确实映射了运行时新增字段。
  * @vitest-environment node
@@ -39,18 +39,20 @@ describe('统一问答运行信息接线', () => {
     expect(gatewayTypes).toContain("'running' | 'done' | 'failed' | 'skipped'")
   })
 
-  it('微信问答和会话内问答都在过程时间线后渲染运行信息，资源在正文之后', () => {
+  it('微信问答和会话内问答共用运行视图，过程在上、正式回答在下、资源在正文之后', () => {
     for (const file of ['Ask.tsx', 'SessionAsk.tsx']) {
       const code = read(file)
-      expect(code, `${file} 必须导入 AskRuntimeMeta 与 AskResources`).toContain("from './AskRuntimeMeta.tsx'")
-      expect(code, `${file} 必须在 AskProcess 后渲染状态/工具/证据`).toMatch(
-        /<AskProcess[^>]*\/>\s*<AskRuntimeMeta[\s\S]*?turn=\{t\}[\s\S]*?placement="meta"/,
-      )
-      const answerAt = code.indexOf('<AnswerBody')
+      expect(code, `${file} 必须导入共享运行视图`).toContain("from './AnswerRunView.tsx'")
+      expect(code, `${file} 必须用 AnswerRunView 渲染已完成轮次`).toContain('<AnswerRunView')
+      expect(code, `${file} 必须在运行中复用同一运行视图`).toMatch(/<AnswerRunView[\s\S]*?streaming/)
+      const runAt = code.indexOf('<AnswerRunView')
       const resourcesAt = code.indexOf('<AskResources turn={t} />')
-      expect(answerAt, `${file} 必须渲染回答正文`).toBeGreaterThan(-1)
-      expect(resourcesAt, `${file} 必须在正文之后渲染资源区`).toBeGreaterThan(answerAt)
+      expect(runAt, `${file} 必须渲染统一运行视图`).toBeGreaterThan(-1)
+      expect(resourcesAt, `${file} 必须在正文之后渲染资源区`).toBeGreaterThan(runAt)
     }
+    const runView = read('AnswerRunView.tsx')
+    expect(runView.indexOf('<AnswerBody')).toBeGreaterThan(-1)
+    expect(runView.indexOf('<ProcessInspector')).toBeLessThan(runView.indexOf('<AnswerBody'))
   })
 
   it('请求只从紧邻且同范围的助手轮次取 threadState，并随请求回传', () => {
@@ -72,30 +74,36 @@ describe('统一问答运行信息接线', () => {
     }
   })
 
-  it('交互目标保留键盘焦点、触控下限与减少动效支持', () => {
-    const styles = read('ask-runtime.module.css')
-    expect(styles).toMatch(/\.sectionHead\s*\{[\s\S]*?min-height:\s*32px/)
-    expect(styles).toMatch(/\.moreBtn\s*\{[\s\S]*?min-height:\s*32px/)
-    expect(styles).toMatch(/@media \(pointer: coarse\)[\s\S]*min-height:\s*44px/)
-    expect(styles).toContain('.sectionHead:focus-visible')
-    expect(styles).toContain('.moreBtn:focus-visible')
+  it('桌面保持紧凑，粗指针设备保留触控下限，并支持键盘焦点与减少动效', () => {
+    const styles = read('answer-run.module.css')
+    expect(styles).toMatch(/\.processHead\s*\{[\s\S]*?min-height:\s*28px/)
+    expect(styles).toMatch(/\.statusAction\s*\{[\s\S]*?min-height:\s*22px/)
+    expect(styles).toMatch(/\.moreButton,[\s\S]*?\.retryBtn\s*\{[\s\S]*?min-height:\s*28px/)
+    const coarse = /@media \(pointer: coarse\) \{[\s\S]*?\n\}/.exec(styles)?.[0] ?? ''
+    expect(coarse, '粗指针设备没有恢复 44px 触控下限').toContain('min-height: 44px')
+    expect(coarse, '触控停止按钮没有恢复 44px 最小宽度').toContain('min-width: 44px')
+    expect(styles).toContain('.processHead:focus-visible')
+    expect(styles).toContain('.moreButton:focus-visible')
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
-  it('会话内问答抽屉使用响应式宽度，全屏仍四边铺满', () => {
+  it('会话内问答右栏参与布局宽度分配，全屏吃满消息流让出的空间', () => {
     const styles = read('session-ask.module.css').replace(/\/\*[\s\S]*?\*\//g, '')
     const panel = /\.panel\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
     const full = /\.panel\[data-full\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
 
-    expect(panel, '找不到会话内问答抽屉的基础宽度').toMatch(/width:\s*clamp\(440px,\s*46vw,\s*640px\)/)
-    expect(panel, '窄屏必须由 max-width 约束，不能横向溢出').toContain('max-width: 100%')
-    expect(styles, '基础宽度不能再写死为旧值').not.toMatch(/\.panel\s*\{[^}]*width:\s*400px/)
+    expect(panel, '右栏必须作为普通 flex 子项参与排版').toContain('position: relative')
+    expect(panel, '右栏宽度必须跟随视口收敛到 320–420px').toMatch(/width:\s*clamp\(320px,\s*34vw,\s*420px\)/)
+    expect(panel, '右栏必须声明对应的 flex basis，不能收缩成 overlay').toMatch(/flex:\s*0 0 clamp\(320px,\s*34vw,\s*420px\)/)
+    expect(panel, '右栏必须允许内部内容先收窄，不能把消息列顶出容器').toContain('min-width: 0')
+    expect(panel, '右栏必须是尺寸查询容器（窄栏内部卡片按自身宽度降列）').toContain('container-type: inline-size')
+    expect(panel, '右栏不能绝对定位覆盖聊天记录').not.toContain('position: absolute')
 
+    expect(full, '全屏必须吃满消息流让出的剩余宽度').toContain('flex: 1 1 auto')
     expect(full, '全屏宽度必须回到 auto').toContain('width: auto')
-    expect(full, '全屏必须贴住左侧').toMatch(/left:\s*0/)
-    expect(full, '全屏必须贴住右侧').toMatch(/right:\s*0/)
     expect(full, '全屏必须解除窄屏最大宽度限制').toContain('max-width: none')
     expect(read('SessionAsk.tsx'), '全屏属性必须仍然接到面板节点').toContain('data-full={full || undefined}')
+    expect(read('SessionAsk.tsx'), '会话 AI 面板必须带统一右栏标记').toContain('data-side-panel-view=""')
   })
 
 })

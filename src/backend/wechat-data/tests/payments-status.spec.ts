@@ -34,7 +34,7 @@ afterEach(() => {
  * @param opts - `onlyRed`/`noTables` 控制建哪张表。
  * @returns 解密根目录。
  */
-function makeRoot(rows: Array<[number, string, number]> = [], reds: Array<[number, string]> = [], opts: { onlyRed?: boolean; noTables?: boolean } = {}): string {
+function makeRoot(rows: Array<[number, string, number]> = [], reds: Array<[number, string, string?]> = [], opts: { onlyRed?: boolean; noTables?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), 'payments-'))
   scratch.push(root)
   mkdirSync(join(root, 'general'), { recursive: true })
@@ -49,10 +49,33 @@ function makeRoot(rows: Array<[number, string, number]> = [], reds: Array<[numbe
     }
     db.exec('CREATE TABLE redEnvelopeTable (message_server_id INTEGER, sender_user_name TEXT, hb_status INTEGER, hb_type INTEGER, receive_status INTEGER, send_id TEXT)')
     const insRed = db.prepare('INSERT INTO redEnvelopeTable VALUES (?,?,3,1,2,?)')
-    for (const [sid, sendId] of reds) insRed.run(sid, 'wxid_sender', sendId)
+    for (const [sid, sendId, sender = 'wxid_sender'] of reds) insRed.run(sid, sender, sendId)
   }
   db.close()
   return root
+}
+
+function protobufString(field: number, value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8')
+  return Buffer.concat([Buffer.from([(field << 3) | 2, bytes.length]), bytes])
+}
+
+function seedEnterpriseContact(root: string, username: string, name: string, enterprise: string): void {
+  mkdirSync(join(root, 'contact'), { recursive: true })
+  const db = new DatabaseSync(join(root, 'contact', 'contact.db'))
+  try {
+    db.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+    db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', enterprise)
+    db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+      username,
+      name,
+      name,
+      protobufString(2, 'wording-ent'),
+    )
+  } finally {
+    db.close()
+  }
 }
 
 describe('queryPaymentStatus：转账', () => {
@@ -101,6 +124,19 @@ describe('queryPaymentStatus：红包与缺表', () => {
     const res = queryPaymentStatus(root, '42')
     expect(res.kind).toBe('redpacket')
     expect(res.redpacket).toMatchObject({ sender: 'wxid_sender', hbStatus: 3, hbType: 1, receiveStatus: 2, sendId: 'SEND42' })
+  })
+
+  it('红包发送者是企微联系人时同时带出显示名与企业名', () => {
+    const username = 'wxid_redpacket@openim'
+    const root = makeRoot([], [[42, 'SEND42', username]], { onlyRed: true })
+    seedEnterpriseContact(root, username, '张三', '甲方公司')
+
+    const res = queryPaymentStatus(root, '42')
+    expect(res.redpacket).toMatchObject({
+      sender: username,
+      senderName: '张三',
+      senderEnterpriseName: '甲方公司',
+    })
   })
 
   it('general.db 不存在 ⇒ found:false，不打日志也不抛（这台机器还没解密）', () => {

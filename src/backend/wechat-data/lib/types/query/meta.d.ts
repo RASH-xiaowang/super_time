@@ -73,6 +73,8 @@ export interface ContactMeta {
     names: Map<string, string>;
     pinned: Set<string>;
     bizTypes: Map<string, number>;
+    /** Enterprise-WeChat username -> enterprise name. */
+    enterpriseNames: Map<string, string>;
 }
 /**
  * `biz_info.type` 是否为**服务号**（否则该 `gh_` 账号是订阅号/公众号）。

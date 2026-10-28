@@ -54,7 +54,7 @@ export interface OverviewInsights {
     active: number
     silent: number
     groupsWithMsg: number
-    top: Array<{ username: string; name: string; count: number }>
+    top: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
   }
   moments: { total: number; images: number; videos: number; likes: number; comments: number }
   assets: { favorites: number; emoticons: number; files: number; fileBytes: number; mediaItems: number; mediaBytes: number }
@@ -365,7 +365,9 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   const dec = decryptedDir
   queryTraceBegin('insights')
   ensureShardCacheHydrated(dec)
-  const names = contactMeta(dec).names
+  const meta = contactMeta(dec)
+  const names = meta.names
+  const enterpriseNames = meta.enterpriseNames
 
   // 反向映射 md5(table suffix) -> 联系人。真实账号来自 contactMeta 与
   // SessionTable（下方合并），不再注入硬编码示例账号。
@@ -511,7 +513,8 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
         // 联系人或会话中没有该账号的可读名称；避免直接展示 hash/长用户名。
         name = /^[0-9a-f]{16,}$/i.test(u) ? '未知联系人' : u
       }
-      return { username: u, name, count }
+      const enterpriseName = enterpriseNames.get(u)?.trim()
+      return { username: u, name, ...(enterpriseName ? { enterpriseName } : {}), count }
     })
 
   const moments = await scanMomentsStats(dec)

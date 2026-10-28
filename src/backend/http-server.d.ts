@@ -35,6 +35,8 @@ export interface RemoteAccessConfig {
   enabled: boolean;
   port: number;
   token: string;
+  /** `config.json` 的 `rpa_media_base_url`（RPA 图片直链可达入口；空 = 用局域网地址）。 */
+  mediaBaseUrl: string;
 }
 
 /** 登录限速器。 */
@@ -99,6 +101,7 @@ export function isHostAllowed(
   authority: string | undefined,
   expectedAddress: string,
   expectedPort: number,
+  extraHosts?: string[],
 ): boolean;
 
 /** 建一个令牌试错滑动窗口限速器。 */

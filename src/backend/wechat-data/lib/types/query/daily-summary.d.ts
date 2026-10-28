@@ -8,6 +8,8 @@ type CollectedSummary = {
     hourly: number[];
     topSessions: Array<{
         username: string;
+        name?: string;
+        enterpriseName?: string;
         count: number;
     }>;
 };

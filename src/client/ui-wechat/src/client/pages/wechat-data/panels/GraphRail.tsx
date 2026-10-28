@@ -24,9 +24,11 @@
  */
 import { useEffect, useState } from 'react'
 import type { BuiltGraph, GNode, GraphSettings } from './graph-model.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import { communityColor } from './graph-model.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import { GraphSelectionDetail } from './GraphSelectionDetail.tsx'
+import { IdentityName } from './identity.tsx'
 import css from './graph.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -72,7 +74,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 /** 一个圈子（`communities` 的元素类型，从 `GraphPanel` 的用法反推）。 */
 interface Community {
   id: number
-  members: ReadonlyArray<{ label: string }>
+  members: ReadonlyArray<{ label: string; enterpriseName?: string }>
 }
 
 /** 选中节点的「同班级」信息。 */
@@ -80,13 +82,13 @@ interface SelectedClass {
   key: string
   total: number
   visibleCount: number
-  members: ReadonlyArray<{ username: string, name: string, visible: boolean }>
+  members: ReadonlyArray<{ username: string, name: string, enterpriseName?: string, visible: boolean }>
 }
 
 /** 选中节点的相连关系（`other` 可能缺失：对端被「仅显示好友」或节点上限挡在图外）。 */
 interface Connection {
   edge: { source: string, target: string, weight: number }
-  other: { id: string, label: string } | null | undefined
+  other: { id: string, label: string, enterpriseName?: string } | null | undefined
 }
 
 export interface GraphRailProps {
@@ -94,6 +96,8 @@ export interface GraphRailProps {
   graph: BuiltGraph
   /** 是否知识图谱模式（决定若干文案与分段）。 */
   isKnowledgeMode: boolean
+  /** 「我」的真实 username（详情里的 self 相连关系用）。 */
+  selfUsername?: string
   /** 当前选中的节点（null = 无）。 */
   selected: GNode | null
   /**
@@ -173,7 +177,7 @@ const KNOWLEDGE_KINDS = new Set(['note', 'stub', 'file', 'section', 'entity'])
  */
 export function GraphRail(p: GraphRailProps): React.JSX.Element {
   const {
-    isKnowledgeMode, selected, detailRequest, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
+    isKnowledgeMode, selfUsername = '', selected, detailRequest, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
     communities, focusCommunity, topFriends, topNotes, knowledge, settings, isDefaultSettings, pinned,
     patch, setMode, selectNode, clearSelection, focusNode, togglePin, setFocusCommunity, setHoverCommunity,
     openNoteEditor, removeNote, newNote, relayout, clearPinned, restoreDefaults, runAnimation, onOpenChat, onClose,
@@ -205,7 +209,9 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
       {view === 'detail' ? (
         selected ? (
           <GraphSelectionDetail
+            isKnowledgeMode={isKnowledgeMode}
             selected={selected}
+            selfUsername={selfUsername}
             selAvatar={selAvatar}
             selectedGroupNames={selectedGroupNames}
             selectedClass={selectedClass}
@@ -233,9 +239,21 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
           <div className={css.railSection}>
             <div className={css.railTitle}>{isKnowledgeMode ? '最关联 · 连接度' : '最亲近 · 消息量'}</div>
             {topFriends.map((n, i) => (
-              <button key={n.id} type="button" className={css.rank} title={n.label} onClick={() => { selectNode(n.id) }}>
+              <button key={n.id} type="button" className={css.rank} title={withEnterprise(n.label, n.enterpriseName)} onClick={() => { selectNode(n.id) }}>
                 <span className={css.rankNum}>{i + 1}</span>
-                <span className={css.rankName}>{n.label}</span>
+                {n.kind === 'person' || n.kind === 'group' ? (
+                  <IdentityName
+                    className={css.rankIdentity}
+                    textClassName={css.rankName}
+                    name={n.label}
+                    username={n.id}
+                    size={22}
+                  >
+                    {withEnterprise(n.label, n.enterpriseName)}
+                  </IdentityName>
+                ) : (
+                  <span className={css.rankName}>{withEnterprise(n.label, n.enterpriseName)}</span>
+                )}
                 <span className={css.rankW}>{n.intimacy ?? n.weight}</span>
               </button>
             ))}
@@ -254,13 +272,13 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
                   type="button"
                   className={css.rank}
                   data-on={focusCommunity === c.id || undefined}
-                  title={`${[...c.members].map(m => m.label).join('、')}（共 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}）`}
+                  title={`${[...c.members].map(m => withEnterprise(m.label, m.enterpriseName)).join('、')}（共 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}）`}
                   onClick={() => { setFocusCommunity(prev => prev === c.id ? null : c.id) }}
                   onMouseEnter={() => { setHoverCommunity(c.id) }}
                   onMouseLeave={() => { setHoverCommunity(null) }}
                 >
                   <span className={css.rankNum} style={{ background: communityColor(c.id), color: readableOn(communityColor(c.id)) }}>{c.members.length}</span>
-                  <span className={css.rankName}>{[...c.members].slice(0, 2).map(m => m.label).join('、')}{c.members.length > 2 ? ` 等 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}` : ''}</span>
+                  <span className={css.rankName}>{[...c.members].slice(0, 2).map(m => withEnterprise(m.label, m.enterpriseName)).join('、')}{c.members.length > 2 ? ` 等 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}` : ''}</span>
                   {focusCommunity === c.id ? <span className={css.rankW}>聚焦中</span> : null}
                 </button>
               ))}

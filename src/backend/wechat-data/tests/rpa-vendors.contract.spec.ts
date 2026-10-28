@@ -32,7 +32,7 @@ const EXPERIMENTAL_IDS = ['bazhuayu-mcp', 'aliyun-rpa', 'laiye', 'shizai']
 /** 附加参数允许的值来源（与 `types-rpa.ts` 的 RpaParamSource 同步）。 */
 const PARAM_SOURCE_SET = new Set([
   'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'fixed', 'template',
+  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template',
 ])
 
 /** 递归遍历描述符里的每个值，用于「不许有 undefined/函数」守卫。 */
@@ -297,11 +297,26 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     const adapter = byId.get('webhook')
     expect(adapter).toBeDefined()
     const descriptor = descriptorOf('webhook')
+    expect(descriptor.version).toBe('1.2.0')
     expect(descriptor.auth.modes).toHaveLength(0)
     expect(typeof adapter?.buildRequest).toBe('function')
     const urlField = descriptor.fields.find((field) => field.key === 'url')
     expect(urlField?.required).toBe(true)
     expect(urlField?.ariaLabel).toBe('Webhook 地址')
+    const delivery = descriptor.fields.find((field) => field.key === 'imageDelivery')
+    expect(delivery?.type).toBe('select')
+    expect(delivery?.defaultValue).toBe('dataUrl')
+    expect(delivery?.options?.map((option) => option.value)).toEqual(['dataUrl', 'multipart'])
+    expect(descriptor.fields.some((field) => field.key === 'paramMap')).toBe(false)
+    expect(descriptor.mapping).toEqual({
+      style: 'object',
+      targets: [],
+      extrasField: 'extraParams',
+    })
+    const extras = descriptor.fields.find((field) => field.key === 'extraParams')
+    expect(extras?.type).toBe('paramList')
+    expect(extras?.maxItems).toBe(20)
+    expect(extras?.paramSources).toEqual([...PARAM_SOURCE_SET])
     expect(descriptor.retry.maxAttempts).toBe(2)
   })
 
@@ -425,7 +440,7 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(descriptor.capabilities.completion).toBe('poll')
     expect(descriptor.retry.maxAttempts).toBe(1)
     expect(descriptor.mapping.style).toBe('object')
-    expect(descriptor.fields.some((field) => field.key === 'parameterMap' && field.type === 'map')).toBe(true)
+    expect(descriptor.fields.some((field) => field.key === 'extraParams' && field.type === 'paramList')).toBe(true)
   })
 
   it('shizai：experimental + 用户配置鉴权 header 名 + 单次尝试', () => {
@@ -444,6 +459,27 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(descriptor.retry.maxAttempts).toBe(1)
     // 官方未公开 header 名：必须写进 notes/risks 提醒联调。
     expect((descriptor.notes ?? []).join('\n')).toMatch(/header 名|header 字段名/)
+  })
+
+  it('Webhook 与所有 RPA 厂商统一走 extraParams，不再声明内置三参数 mapField', () => {
+    const expectedLegacy: Record<string, string | undefined> = {
+      webhook: undefined,
+      bazhuayu: 'paramMap',
+      yingdao: 'paramMap',
+      uipath: 'inputArgumentsMap',
+      'aliyun-rpa': 'appParamsMap',
+      laiye: 'parameterMap',
+      shizai: 'inputParamMap',
+    }
+    for (const descriptor of listVendorDescriptors()) {
+      expect(descriptor.mapping.targets, descriptor.id).toEqual([])
+      expect(descriptor.mapping.mapField, descriptor.id).toBeUndefined()
+      expect(descriptor.mapping.extrasField, descriptor.id).toBe('extraParams')
+      expect(descriptor.mapping.legacyMapField, descriptor.id).toBe(expectedLegacy[descriptor.id])
+      const extras = descriptor.fields.find((field) => field.key === 'extraParams')
+      expect(extras?.type, descriptor.id).toBe('paramList')
+      expect(extras?.paramSources, descriptor.id).toEqual([...PARAM_SOURCE_SET])
+    }
   })
 })
 

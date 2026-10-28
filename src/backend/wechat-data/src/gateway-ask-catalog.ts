@@ -11,6 +11,8 @@ import { knownEntityNames, knownSessionCatalog } from './query/search.ts'
 export interface AskSessionCatalogEntry {
   username: string
   name: string
+  enterpriseName?: string
+  aliases?: readonly string[]
 }
 
 export class AskCatalogCache {

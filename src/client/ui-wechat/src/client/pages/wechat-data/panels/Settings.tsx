@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Input, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createPollRegistry, type PollRegistry } from './poll-registry.ts'
 import { useTransientNotice } from './hooks.tsx'
 import {
@@ -28,6 +28,7 @@ import { SettingsRemoteAccess } from './settings-remote-access.tsx'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { SettingsDbKeySection, SettingsDetectSection, SettingsImgDecodeSection, SettingsImgKeySection, SettingsVoiceSection } from './settings-steps.tsx'
 import { useSettingsState } from './settings-state.tsx'
+import { SettingsNavRail, SettingsWorkspaceHeader } from './settings-workspace.tsx'
 import { css, modelCss, acctCss } from './settings-css.ts'
 import kitCss from '../ui/kit.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
@@ -281,36 +282,20 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
           desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
         />
       )}
-      {/* 左导航 + 右内容：左导航是目录（分组标题 + 单行条目，状态点保留），
-          右侧一次只显示选中的那一节 —— 15 节不再首尾相接铺成一条长滚动。 */}
+      {/* 宽屏左侧目录、窄屏顶部标签；右侧只承载当前一页。 */}
       <div className={css.layout}>
-        <nav className={css.navRail} aria-label="设置导航">
-          {navGroups.map((g) => (
-            <div key={g.label} className={css.navGroup}>
-              <div className={css.navGroupLabel}>{g.label}</div>
-              {g.items.map((it) => (
-                <button
-                  key={it.key}
-                  type="button"
-                  className={clsx(css.navItem, activeKey === it.key && css.navItemActive)}
-                  onClick={() => { goToSection(it.key) }}
-                  aria-current={activeKey === it.key ? 'true' : undefined}
-                  title={it.label}
-                >
-                  <span className={css.navIcon}>{it.icon}</span>
-                  <span className={css.navLabel}>{it.label}</span>
-                  {it.dot ? <StateDot state={it.dot} /> : null}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
+        <SettingsNavRail groups={navGroups} activeKey={activeKey} onSelect={goToSection} />
 
-        <div
-          className={css.mainScroll}
-          ref={paneRef}
-          onWheel={() => { userScrolled.current = true }}
-        >
+        <div className={css.workspace}>
+          <SettingsWorkspaceHeader groups={navGroups} activeKey={activeKey} />
+          <div
+            className={css.mainScroll}
+            ref={paneRef}
+            role="region"
+            aria-label="设置内容"
+            tabIndex={0}
+            onWheel={() => { userScrolled.current = true }}
+          >
 
       {message && (
         <div className={clsx(css.notice, message.kind === 'ok' ? css.toastOk : css.toastErr)}>
@@ -479,8 +464,9 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
           closeDiagPreview={closeDiagPreview}
         />
         </div>
-      </div>
-
+          </div>
+          <span className={css.contentFade} aria-hidden="true" />
+        </div>
       </div>
 
       <div className={acctCss.saveBar}>

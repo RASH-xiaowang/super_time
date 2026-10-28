@@ -1,4 +1,5 @@
 import type { PendingDispatchResult } from '../query/task-center.ts';
+import type { RpaMediaLinkFactory } from '../query/rpa/media-links.ts';
 import type { RetryFetch } from '../net/fetch-retry.ts';
 import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSecretRevealResult, TaskTriggerSnapshot } from '../types.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
@@ -24,6 +25,14 @@ export interface createTaskCenterRemotesInputs {
     }, texts: string[]) => string[];
     /** 图片解码所需的本机上下文（网关侧用 `rawWechatBase` + `resolveImageKeyPair` 组装）。 */
     imageContext: () => TaskCenterImageContext;
+    /**
+     * RPA 图片直链工厂（按触发记录 id 现取）。
+     *
+     * 网关层每次投递都重读 `config.json` / `secrets.json`：这样轮换 `api_token`、改端口或
+     * 改公网入口后，下一次投递就生效。返回 `undefined` = 局域网访问没开，投递参数里会
+     * 如实写「未打开局域网访问」。
+     */
+    mediaLinks?: (recordId: number) => RpaMediaLinkFactory | undefined;
     /** 测试注入的 fetch；生产省略 = 全局 fetch。 */
     fetchImpl?: RetryFetch;
 }

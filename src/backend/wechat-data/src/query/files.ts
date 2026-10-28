@@ -28,6 +28,10 @@ interface FileItem {
   category: string
   /** Source chat display name resolved from message resource, when available. */
   sessionName?: string
+  /** Source chat username resolved from message resource, when available. */
+  sessionUsername?: string
+  /** 来源会话用户的企微企业名称。 */
+  sessionEnterpriseName?: string
   /** Source message create time, when available. */
   sourceTime?: number
   /**
@@ -41,6 +45,10 @@ interface FileItem {
    * 与 message_resource 口径的 `sessionName` 独立，且对**视频/文件**同样可用。
    */
   sourceTalker?: string
+  /** 附件目录反查到的来源会话真实 username。 */
+  sourceUsername?: string
+  /** 附件目录反查来源用户的企微企业名称。 */
+  sourceTalkerEnterpriseName?: string
 }
 
 const FILE_TABLES: ReadonlyArray<[string, string]> = [
@@ -73,8 +81,8 @@ function fileKeyFromPacked(packed: unknown): string | null {
  * @param decryptedDir - decrypted data root.
  * @returns map keyed by the stripped file name.
  */
-function loadFileSources(decryptedDir: string): Map<string, { session: string; time: number }> {
-  const map = new Map<string, { session: string; time: number }>()
+function loadFileSources(decryptedDir: string): Map<string, { session: string; username: string; time: number }> {
+  const map = new Map<string, { session: string; username: string; time: number }>()
   let resDb: DatabaseSync | null = null
   try { resDb = new DatabaseSync(join(decryptedDir, 'message', 'message_resource.db'), { readOnly: true }) } catch { return map }
   try {
@@ -89,7 +97,7 @@ function loadFileSources(decryptedDir: string): Map<string, { session: string; t
       const key = fileKeyFromPacked(row.packed_info)
       if (!key || map.has(key)) continue
       const user = chatMap.get(Number(row.chat_id)) ?? ''
-      map.set(key, { session: nameMap.get(user) || user, time: Number(row.message_create_time) || 0 })
+      map.set(key, { session: nameMap.get(user) || user, username: user, time: Number(row.message_create_time) || 0 })
     }
   } catch {
     // source resolution is best-effort; absence is not an error.
@@ -101,7 +109,11 @@ function loadFileSources(decryptedDir: string): Map<string, { session: string; t
 
 /** 文件来源映射的缓存（30s TTL，按 message_resource.db 签名失效）。 */
 const FILE_SOURCES_TTL_MS = 30_000
-let fileSourcesCache: { sig: string; at: number; map: Map<string, { session: string; time: number }> } | null = null
+let fileSourcesCache: {
+  sig: string
+  at: number
+  map: Map<string, { session: string; username: string; time: number }>
+} | null = null
 
 function fileSourcesSig(decryptedDir: string): string {
   try {
@@ -113,7 +125,7 @@ function fileSourcesSig(decryptedDir: string): string {
   }
 }
 
-function fileSourcesCached(decryptedDir: string): Map<string, { session: string; time: number }> {
+function fileSourcesCached(decryptedDir: string): Map<string, { session: string; username: string; time: number }> {
   const sig = fileSourcesSig(decryptedDir)
   if (fileSourcesCache && fileSourcesCache.sig === sig && Date.now() - fileSourcesCache.at < FILE_SOURCES_TTL_MS) {
     return fileSourcesCache.map
@@ -136,9 +148,19 @@ function fileSourcesCached(decryptedDir: string): Map<string, { session: string;
  * @returns rowid → 月份 / rowid → 会话显示名。
  */
 const DIR_SOURCE_TTL_MS = 30_000
-let dirSourceCache: { sig: string; at: number; month: Map<number, string>; talker: Map<number, string> } | null = null
+let dirSourceCache: {
+  sig: string
+  at: number
+  month: Map<number, string>
+  talker: Map<number, string>
+  username: Map<number, string>
+} | null = null
 
-function dirSourceCached(decryptedDir: string): { month: Map<number, string>; talker: Map<number, string> } {
+function dirSourceCached(decryptedDir: string): {
+  month: Map<number, string>
+  talker: Map<number, string>
+  username: Map<number, string>
+} {
   let sig = ''
   try {
     const st = statSync(join(decryptedDir, 'hardlink', 'hardlink.db'), { bigint: true })
@@ -149,15 +171,20 @@ function dirSourceCached(decryptedDir: string): { month: Map<number, string>; ta
   }
   const month = new Map<number, string>()
   const talker = new Map<number, string>()
+  const username = new Map<number, string>()
   try {
     const db = new DatabaseSync(join(decryptedDir, 'hardlink', 'hardlink.db'), { readOnly: true })
     try {
       const names = contactMeta(decryptedDir).names
       const md5ToName = new Map<string, string>()
+      const md5ToUser = new Map<string, string>()
       for (const [user, display] of names) {
         if (!user) continue
         const h = createHash('md5').update(user, 'utf8').digest('hex')
-        if (!md5ToName.has(h)) md5ToName.set(h, display || user)
+        if (!md5ToName.has(h)) {
+          md5ToName.set(h, display || user)
+          md5ToUser.set(h, user)
+        }
       }
       const rows = db.prepare('SELECT rowid AS rid, username FROM dir2id').all() as Array<{ rid?: number; username?: unknown }>
       for (const r of rows) {
@@ -168,13 +195,17 @@ function dirSourceCached(decryptedDir: string): { month: Map<number, string>; ta
         if (isMd5Loose(v)) {
           // 与既有 sessionName 口径一致：没有显示名时退回 username 本身
           const name = md5ToName.get(v.toLowerCase())
-          if (name) talker.set(rid, name)
+          if (name) {
+            talker.set(rid, name)
+            const user = md5ToUser.get(v.toLowerCase())
+            if (user) username.set(rid, user)
+          }
         }
       }    } finally {
       db.close()
     }
   } catch { /* 来源解析是 best-effort，缺失不算错误 */ }
-  dirSourceCache = { sig, at: Date.now(), month, talker }
+  dirSourceCache = { sig, at: Date.now(), month, talker, username }
   return dirSourceCache
 }
 
@@ -260,6 +291,7 @@ export function queryFiles(
     const size = limit === undefined ? 100 : Math.max(0, limit)
     const page = Math.max(0, offset)
     const files: FileItem[] = []
+    const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
     if (parts.length > 0) {
       try {
         const sql = `SELECT * FROM (${parts.join(' UNION ALL ')}) ORDER BY modify_time DESC LIMIT ? OFFSET ?`
@@ -271,6 +303,8 @@ export function queryFiles(
         for (const r of rows) {
           const dir1 = Number(r.dir1 ?? 0)
           const dir2 = Number(r.dir2 ?? 0)
+          const sourceUsername = dirSource.username.get(dir1) ?? dirSource.username.get(dir2) ?? ''
+          const sourceTalkerEnterpriseName = enterpriseNames.get(sourceUsername)?.trim()
           // dir1/dir2 哪一层是月份、哪一层是 talker 哈希随表而异（见 dirSourceCached 注释），
           // 所以两层都试，取能解析出来的那个。
           const item: FileItem = {
@@ -281,6 +315,8 @@ export function queryFiles(
             category: cellStr(r.category ?? ''),
             sourceMonth: dirSource.month.get(dir1) ?? dirSource.month.get(dir2),
             sourceTalker: dirSource.talker.get(dir1) ?? dirSource.talker.get(dir2),
+            ...(sourceUsername ? { sourceUsername } : {}),
+            ...(sourceTalkerEnterpriseName ? { sourceTalkerEnterpriseName } : {}),
           }
           files.push(item)
         }
@@ -293,7 +329,10 @@ export function queryFiles(
       const src = sources.get(key)
       if (src) {
         f.sessionName = src.session
+        if (src.username) f.sessionUsername = src.username
         f.sourceTime = src.time
+        const sessionEnterpriseName = enterpriseNames.get(src.username)?.trim()
+        if (sessionEnterpriseName) f.sessionEnterpriseName = sessionEnterpriseName
       }
     }
     return { files, total, counts }

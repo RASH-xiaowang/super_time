@@ -189,6 +189,8 @@ export interface WhisperModelInfo {
   id: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3' | 'turbo'
   name: string
   sizeLabel: string
+  /** Exact official ggml file downloaded into the models directory. */
+  file: string
   installed: boolean
 }
 
@@ -274,6 +276,14 @@ export interface WechatConfigPatch {
   api_enabled?: boolean
   api_token?: string
   api_port?: number
+  /**
+   * RPA 图片直链对外的可达基址（默认空 = 用本机局域网 IPv4 + `api_port`）。
+   *
+   * 云端 RPA 厂商拿不到局域网地址，必须填反向代理/公网入口（如
+   * `https://wechat.example.com`）。签名令牌本身仍然只有一小时有效期，
+   * 且一个令牌只对应一张图片（见 `net/rpa-media.ts`）。
+   */
+  rpa_media_base_url?: string
   whisper_device?: 'cpu' | 'gpu'
   whisper_model?: string
   whisper_threads?: number
@@ -361,6 +371,12 @@ declare module '@deepseek-ai/cordis' {
      * @param payload - 本拍新建记录数与投递成功数（面板只据此回源，不把它当数据源）。
      */
     'task-center/updated'(payload: { created: number; dispatched: number }): void
+    /**
+     * 消息列表新增记录或完成一次下游投递。
+     * @mode emit
+     * @param payload - 本拍新增记录数与投递成功数。
+     */
+    'message-list/updated'(payload: { created: number; dispatched: number }): void
     /**
      * 微信问答的流式回答增量：payload 是 `{ id, text }`，`id` 为本次流式请求的标识
      * （由客户端在调用 askWechat 时生成），渲染端按 id 把增量拼起来。

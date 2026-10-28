@@ -119,6 +119,25 @@ talker: string, after: number, limit?: number, selfUsername?: string): MessagesS
 export declare function queryMessages(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
 talker: string, limit?: number, cursor?: number, selfUsername?: string, cursorLocalId?: number): MessagesSnapshot;
+/** 「截至某条消息」的消息窗口；`found=false` 表示目标已不在当前解密快照里。 */
+export interface MessageAtOrBeforeSnapshot {
+    messages: WechatMessage[];
+    found: boolean;
+}
+/**
+ * Read a bounded message window ending at a specific local message.
+ *
+ * 推荐回复原先固定读会话最新 20 条；分析面板选中历史消息时，候选会错答最新一句。
+ * 这里按 `local_id` 找到目标的全局排序键，再取 `(sort_seq, local_id) <= 目标`
+ * 的最后一页，因此无论目标多旧都只读取当前会话，且不会越过目标看到后续消息。
+ * @param decryptedDir - 解密数据根。
+ * @param talker - 会话 username（范围边界）。
+ * @param localId - 目标消息在当前会话内的 local_id。
+ * @param limit - 窗口最多包含多少条消息（含目标）。
+ * @param selfUsername - 登录账号 wxid，用于区分「我」和对方/群成员。
+ * @returns 按时间正序的消息窗口与目标是否存在。
+ */
+export declare function queryMessagesAtOrBefore(decryptedDir: string, talker: string, localId: number, limit?: number, selfUsername?: string): MessageAtOrBeforeSnapshot;
 /**
  * Resolve one message by its server_id (merged chat-log nested pointers).
  * Scans every message shard / Msg table; only type-49 appmsg cards are

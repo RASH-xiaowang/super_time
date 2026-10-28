@@ -61,6 +61,8 @@ export interface DailySummaryResult {
     /** Top chatrooms by message count. */
     topSessions: Array<{
         username: string;
+        name?: string;
+        enterpriseName?: string;
         count: number;
     }>;
 }
@@ -76,6 +78,8 @@ export interface PeriodSummaryResult {
     hourly: number[];
     topSessions: Array<{
         username: string;
+        name?: string;
+        enterpriseName?: string;
         count: number;
     }>;
 }

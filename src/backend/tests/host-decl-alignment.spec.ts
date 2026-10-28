@@ -49,6 +49,8 @@ const MODULES = [
   { name: 'backend-supervisor.js', impl: 'backend-supervisor.js', decl: 'backend-supervisor.d.ts', minExports: 4 },
   { name: 'wechat-host.js', impl: 'wechat-host.js', decl: 'wechat-host.d.ts', minExports: 5 },
   { name: 'http-server.js', impl: 'http-server.js', decl: 'http-server.d.ts', minExports: 10 },
+  { name: 'rpa-media.js', impl: 'rpa-media.js', decl: 'rpa-media.d.ts', minExports: 4 },
+  { name: 'message-webhook.js', impl: 'message-webhook.js', decl: 'message-webhook.d.ts', minExports: 2 },
 ] as const
 
 /**

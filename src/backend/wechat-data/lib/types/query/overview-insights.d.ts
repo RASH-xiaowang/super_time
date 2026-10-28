@@ -36,6 +36,7 @@ export interface OverviewInsights {
         top: Array<{
             username: string;
             name: string;
+            enterpriseName?: string;
             count: number;
         }>;
     };

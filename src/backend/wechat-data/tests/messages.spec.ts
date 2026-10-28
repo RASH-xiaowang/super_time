@@ -28,6 +28,12 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
   try { create(db) } finally { db.close() }
 }
 
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
 describe('queryMessages / queryNewMessages', () => {
   it('pages newest-first across shards and increments by watermark', () => {
     const root = tempRoot()
@@ -90,6 +96,102 @@ describe('queryMessages / queryNewMessages', () => {
     expect(text.found).toBe(true)
     expect(text.message?.localId).toBe(2)
     expect((await queryMessageByServerId(root, '99999')).found).toBe(false)
+  })
+
+  it('resolves the enterprise name for a WeCom contact-card message', () => {
+    const root = tempRoot()
+    const talker = 'wxid_talker'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    makeDb(join(root, 'contact', 'contact.db'), (db) => {
+      db.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+      db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+      db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-a', '深度求索')
+      db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+        'wxid_peer@openim',
+        '小深',
+        '顾问',
+        enterpriseBuffer('wording-a'),
+      )
+    })
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (
+        local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER,
+        real_sender_id INTEGER, message_content TEXT
+      )`)
+      db.prepare(`INSERT INTO "${table}" VALUES (?, ?, ?, ?, ?, ?)`).run(
+        1,
+        1,
+        42,
+        1700000001,
+        1,
+        '<msg><contact username="wxid_peer@openim" nickname="小深" /></msg>',
+      )
+    })
+
+    const snap = queryMessages(root, talker, 20)
+    expect(snap.messages[0]?.rich).toMatchObject({
+      type: 'contact',
+      username: 'wxid_peer@openim',
+      nickname: '小深',
+      enterpriseName: '深度求索',
+    })
+  })
+
+  it('adds enterprise names to WeCom mentions and merged chat-log senders', () => {
+    const root = tempRoot()
+    const talker = '123@chatroom'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    makeDb(join(root, 'contact', 'contact.db'), (db) => {
+      db.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+      db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+      db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-a', '深度求索')
+      db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+        'wxid_peer@openim',
+        '小深',
+        '顾问',
+        enterpriseBuffer('wording-a'),
+      )
+    })
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (
+        local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER,
+        real_sender_id INTEGER, message_content TEXT, source TEXT
+      )`)
+      const insert = db.prepare(`INSERT INTO "${table}" VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      insert.run(
+        1,
+        1,
+        1,
+        1700000001,
+        0,
+        '@小深 看下',
+        '<msgsource><atuserlist><![CDATA[wxid_peer@openim]]></atuserlist></msgsource>',
+      )
+      insert.run(
+        2,
+        2,
+        49,
+        1700000002,
+        0,
+        '<msg><appmsg><title>聊天记录</title><type>19</type><recorditem><![CDATA['
+          + '<recordinfo><datalist><dataitem datatype="1" datasourceid="wxid_peer@openim">'
+          + '<sourcename>小深</sourcename><datadesc>合并记录正文</datadesc>'
+          + '</dataitem></datalist></recordinfo>]]></recorditem></appmsg></msg>',
+        '',
+      )
+    })
+
+    const snap = queryMessages(root, talker, 20)
+    expect(snap.messages[0]?.atUsers?.[0]).toMatchObject({
+      username: 'wxid_peer@openim',
+      displayName: '小深',
+      enterpriseName: '深度求索',
+    })
+    expect(snap.messages[1]?.rich?.records?.[0]).toMatchObject({
+      name: '小深',
+      sourceUsername: 'wxid_peer@openim',
+      enterpriseName: '深度求索',
+    })
   })
 })
 

@@ -32,6 +32,7 @@ import type {
   AnswerRuntimeEmitStage,
   AnswerRuntimeOp,
   AnswerRuntimeResult,
+  AnswerRuntimeStage,
   AnswerSynthesizeFn,
 } from '../query/answer-runtime/types.ts'
 import {
@@ -431,10 +432,11 @@ function gateModelMessages(
   })
 }
 
-function imageNoteFor(prepared: PreparedAskImages): string {
-  return prepared.blocks.length > 0
-    ? '（本轮用户消息里附了图片，请直接看图回答。）'
-    : prepared.note
+function imageNoteFor(prepared: PreparedAskImages, profile: AnswerProfileId): string {
+  if (prepared.blocks.length === 0) return prepared.note
+  return profile === 'clawbot-auto'
+    ? '（当前聊天联系人发来图片，请直接看图回答。）'
+    : '（当前提问者在本轮问题中附了图片，请直接看图回答。）'
 }
 
 function userContent(question: string, blocks: readonly ImageBlock[]): ContentBlock[] {
@@ -526,10 +528,23 @@ interface SynthesizerInput {
   onReasoning: (text: string) => void
   op: AnswerRuntimeOp
   capture: (snapshot: GroundingSnapshot) => void
+  emitStage: AnswerRuntimeEmitStage
 }
 
 function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
-  const { deps, options, scope, question, history, prepared, runChat, onReasoning, op, capture } = input
+  const {
+    deps,
+    options,
+    scope,
+    question,
+    history,
+    prepared,
+    runChat,
+    onReasoning,
+    op,
+    capture,
+    emitStage,
+  } = input
   return async (synthesis) => {
     const citations = reindexCitations(synthesis.evidence)
     const resources = resourcesFromEvidence(synthesis.evidence)
@@ -557,7 +572,7 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
         ...(timeHint ? { timeHint } : {}),
         ...(hintHits !== undefined ? { hintHits } : {}),
       })
-    const imageHint = imageNoteFor(prepared)
+    const imageHint = imageNoteFor(prepared, synthesis.profile.id)
     const prompt = noEvidence && isKb
       ? buildEmptyChatPrompt(question, history, imageHint)
       : buildSynthesisPrompt({
@@ -612,20 +627,33 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
       texts.get(citation.evidenceId)
       ?? `${citation.name} ${citation.sender ?? ''} ${citation.time} ${citation.snippet}`)
     const resourceOnly = !isKb && citations.length === 0 && resources.length > 0
-    const resolved = await resolveGroundedAnswer({
-      mode: isKb ? 'chat' : resourceOnly ? 'resource' : 'cited',
-      answer,
-      citationCount: citations.length,
-      synthPrompt: prompt,
-      evidenceFor: (cited) => {
-        const indexes = cited.length > 0 ? cited : citations.map((_, offset) => offset + 1)
-        return indexes.map(index => citationTexts[index - 1] ?? '')
-      },
-      allEvidence: [...citationTexts, ...resourceTexts(resources)],
-      systemPrompt: system,
-      runChat: gatedChat,
-      ...(prepared.blocks.length > 0 ? { images: prepared.blocks } : {}),
-    })
+    emitStage({ key: 'answer:verify', label: '核对结果', status: 'running' })
+    let resolved: Awaited<ReturnType<typeof resolveGroundedAnswer>>
+    try {
+      resolved = await resolveGroundedAnswer({
+        mode: isKb ? 'chat' : resourceOnly ? 'resource' : 'cited',
+        answer,
+        citationCount: citations.length,
+        synthPrompt: prompt,
+        evidenceFor: (cited) => {
+          const indexes = cited.length > 0 ? cited : citations.map((_, offset) => offset + 1)
+          return indexes.map(index => citationTexts[index - 1] ?? '')
+        },
+        allEvidence: [...citationTexts, ...resourceTexts(resources)],
+        systemPrompt: system,
+        runChat: gatedChat,
+        ...(prepared.blocks.length > 0 ? { images: prepared.blocks } : {}),
+      })
+      emitStage({ key: 'answer:verify', label: '核对结果', status: 'done' })
+    } catch (error) {
+      emitStage({
+        key: 'answer:verify',
+        label: '核对结果',
+        status: 'failed',
+        detail: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
     capture({
       citedIndexes: resolved.citedIndexes,
       withheld: resolved.withheld,
@@ -743,7 +771,7 @@ export async function askWithRuntime(
     ...(kbId !== undefined ? { kbId } : {}),
     question,
     history,
-    imageNote: imageNoteFor(prepared),
+    imageNote: imageNoteFor(prepared, profile),
     now,
   })
   const selectionSystem = gateText(
@@ -774,6 +802,16 @@ export async function askWithRuntime(
     deps.emitReasoning?.(text)
   }
   const op: AnswerRuntimeOp = deps.op ?? noopOp
+  const stages: AnswerRuntimeStage[] = []
+  const emitStage: AnswerRuntimeEmitStage = stage => {
+    // 先落快照，再通知外部监听器；过程展示异常不能中断本轮问答。
+    stages.push({ ...stage })
+    try {
+      deps.emitStage?.(stage)
+    } catch {
+      // 阶段事件是主回答链路的旁路。
+    }
+  }
 
   let grounded: GroundingSnapshot | undefined
   const synthesize: AnswerSynthesizeFn | undefined = deps.synthesize
@@ -789,6 +827,7 @@ export async function askWithRuntime(
         onReasoning,
         op,
         capture: (snapshot) => { grounded = snapshot },
+        emitStage,
       })
       : undefined)
 
@@ -824,7 +863,7 @@ export async function askWithRuntime(
     ...(deps.toolDeadlineMs !== undefined ? { toolDeadlineMs: deps.toolDeadlineMs } : {}),
     ...(deps.modelDeadlineMs !== undefined ? { modelDeadlineMs: deps.modelDeadlineMs } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
-    ...(deps.emitStage ? { emitStage: deps.emitStage } : {}),
+    emitStage,
     ...(deps.op ? { op: deps.op } : {}),
     onReasoning,
   })
@@ -836,6 +875,7 @@ export async function askWithRuntime(
     scope: effectiveScope,
     question,
     ...(grounded ? { grounded } : {}),
+    stages,
   })
   // 线程状态保存的是公开映射后的回答；运行时可能只返回状态兜底前的空串。
   const nextThread = threadWithResult(threadState, question, runtime, result.answer, appliedThread)

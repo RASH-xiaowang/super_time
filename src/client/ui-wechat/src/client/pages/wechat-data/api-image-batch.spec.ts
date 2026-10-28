@@ -13,7 +13,7 @@
  * 能证明什么、不能证明什么：这里证明「api 层真的合并成一次批量调用」；**面板里的实际渲染
  * 行为（图片是否显示、读取失败提示是否出现）没有浏览器验证**（仓库没有组件测试环境）。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apiCancelExportJob,
   apiCreateEncryptedBackup,
@@ -101,6 +101,47 @@ describe('N16：列表型取图走批量入口（合并窗口在 api 层）', ()
     expect(stub.batches.map(b => b.items.length).sort((x, y) => y - x)).toEqual([200, 1])
     expect(all.length).toBe(n)
     expect(all.every(r => Boolean(r.url))).toBe(true)
+  })
+
+  it('单张与显式批量入口共用去重队列：同一张图只请求一次', async () => {
+    const stub = stubRemote()
+    const [single, rows] = await Promise.all([
+      apiGetImageDataUrl({ username: 'wxid_a', localId: 1 }),
+      apiGetImageDataUrlsBatch([
+        { username: 'wxid_a', localId: 1 },
+        { username: 'wxid_a', localId: 2 },
+      ]),
+    ])
+    expect(stub.batches).toHaveLength(1)
+    expect(stub.batches[0]!.items).toEqual([
+      { username: 'wxid_a', localId: 1 },
+      { username: 'wxid_a', localId: 2 },
+    ])
+    expect(single.url).toContain('1')
+    expect(rows.map(row => row.localId)).toEqual([1, 2])
+  })
+
+  it('队列繁忙时做有限退避重试，用户不需要手动刷新', async () => {
+    let attempts = 0
+    setWechatRemote({
+      getImageDataUrlsBatch: async ({ items }: { items: Array<{ username: string; localId: number }> }) => {
+        attempts += 1
+        if (attempts === 1) {
+          return {
+            ok: false as const,
+            error: { code: 'REMOTE_BUSY', message: '重任务排队已满（已有 0 个在跑、4 个在排队）' },
+          }
+        }
+        return {
+          ok: true as const,
+          value: { items: items.map(item => ({ ...item, url: 'data:image/png;base64,retry' })) },
+        }
+      },
+    } as unknown as WechatRemote)
+
+    const result = await apiGetImageDataUrl({ username: 'wxid_retry', localId: 9 })
+    expect(attempts).toBe(2)
+    expect(result.url).toContain('retry')
   })
 
   it('批量 RPC 整块失败 → 每一个待回填的调用各自 reject（不静默变成空图）', async () => {

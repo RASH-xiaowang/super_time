@@ -16,16 +16,16 @@ export function clarificationReply(
 ): string {
   if (/参数|关键词|检索条件|query|keywords/i.test(reason)) {
     return profile === 'clawbot-auto'
-      ? '这轮检索条件不完整：请补充要查的关键词、文件名或具体问题，我再查一次。'
+      ? '我还需要再确认一下具体要找什么。你再补充一下：是哪件事、哪个人或哪份文件？'
       : '这轮检索条件不完整：请补充要查的关键词、会话或时间范围，我再查一次。'
   }
   if (/代词|指代|对象|他|她|对方/.test(reason)) {
     return profile === 'clawbot-auto'
-      ? '请问你具体想查哪份资料或哪件事？补充一下对象我再帮你查。'
+      ? '你问的是哪个人、哪件事？补充一下我再看看。'
       : '请问你指的是哪位联系人，或在哪个会话里？补充一下对象我再帮你查。'
   }
   return profile === 'clawbot-auto'
-    ? '还需要你再补充一点信息：请说明要查的关键词、文件名或具体问题，我再帮你查。'
+    ? '还需要你再补充一点：具体是哪个人、哪件事？我再看看。'
     : '还需要你再补充一点信息：请说明具体会话、联系人或时间范围，我再帮你查。'
 }
 
@@ -34,7 +34,7 @@ export function insufficientReply(
   profile: AnswerProfileId = 'wechat-ask',
 ): string {
   if (profile === 'clawbot-auto') {
-    return '这个我这边没查到相关的知识库内容，可以换个关键词或确认一下知识库范围再试。'
+    return '这个我这边没查到，可以换个说法再问我。'
   }
   if (profile === 'session-ask') {
     return '当前会话里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词，或补充更具体的时间与人物。'
@@ -46,16 +46,17 @@ export function insufficientReply(
 export function failedReply(
   profile: AnswerProfileId = 'wechat-ask',
 ): string {
-  const target = profile === 'clawbot-auto'
-    ? '知识库检索'
-    : profile === 'session-ask'
-      ? '当前会话检索'
-      : '本机记录检索'
+  if (profile === 'clawbot-auto') return '这次我这边暂时没查成，稍后再帮你看看。'
+  const target = profile === 'session-ask' ? '当前会话检索' : '本机记录检索'
   return `${target}暂时失败了，这次没有拿到可用结果。可以稍后再试；如果连续失败，请检查检索索引或模型配置。`
 }
 
 /** 请求在进入检索前就被范围门禁拦截时的可读原因。 */
-export function blockedReply(reason: string | undefined): string {
+export function blockedReply(
+  reason: string | undefined,
+  profile: AnswerProfileId = 'wechat-ask',
+): string {
+  if (profile === 'clawbot-auto') return '这次我这边没弄好，稍后再确认一下再回你。'
   const detail = reason?.trim() || '当前范围不满足检索条件'
   return `这次没法开始检索：${detail}。请先补齐范围后再试。`
 }

@@ -24,17 +24,19 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransient
 import { apiClearAskHistory, apiDeleteAskHistory, apiGetAskHistory } from '../api.ts'
 import type { AskHistoryEntry, AskHistoryQuery, AskHistoryStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget } from './cite-target.ts'
+import { identityLabel, withEnterprise } from './enterprise-identity.ts'
 import { readableCiteError } from './use-cite-detail.ts'
 import { Badge, Dialog, EmptyState, ErrorState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './ask-history.module.css'
 import { fmtTodayOrLocaleMs } from '../utils/format.ts'
+import { IdentityName } from './identity.tsx'
 
 /** 状态 → 中文标签 + 色调 + 一句话解释（回看历史时最需要知道的就是「这条当时答上了没有」）。 */
 const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'amber' | 'purple' | 'red'; hint: string }> = {
-  ok: { label: '已回答', tone: 'green', hint: '回答至少引用了一条原文' },
-  insufficient: { label: '未检索到', tone: 'amber', hint: '本机记录里没有相关原文，未调用模型' },
-  withheld: { label: '未采用', tone: 'purple', hint: '模型内容无法对应到任何原文，已不予采用' },
+  ok: { label: '已回答', tone: 'green', hint: 'AI 回答至少引用了一条原文' },
+  insufficient: { label: '未检索到', tone: 'amber', hint: '没有找到可据以回答的相关原文，未调用 AI' },
+  withheld: { label: '未采用', tone: 'purple', hint: 'AI 回答无法对应到任何原文，已不予采用' },
   fail: { label: '失败', tone: 'red', hint: '这次问答没能完成' },
 }
 
@@ -45,7 +47,7 @@ const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'am
  * 「**用户没问、模型答了**」的记录：不标出来，用户会把它当成自己问过的，
  * 排查「为什么自动回了这么一句」也就没了依据。
  */
-const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: '会话内问答', auto: '自动回复' }
+const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: 'AI 问答', auto: 'ClawBot 自动回复' }
 
 const STATUS_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部' },
@@ -57,8 +59,8 @@ const STATUS_TABS: ReadonlyArray<{ value: string; label: string }> = [
 const SRC_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部来源' },
   { value: 'ask', label: '微信问答' },
-  { value: 'session', label: '会话内' },
-  { value: 'auto', label: '自动回复' },
+  { value: 'session', label: 'AI 问答' },
+  { value: 'auto', label: 'ClawBot 自动回复' },
 ]
 
 /** 「清空全部」要求逐字确认的记录条数门槛：低于它只做普通二次确认。 */
@@ -154,10 +156,12 @@ function HistoryCites({ cites, citedIndexes, onOpenCitation, onOpenKbFile, onErr
             onClick={() => { if (target?.kind === 'msg') onOpenCitation?.(target.username, target.localId) }}
             title={target === null
               ? '这条旧记录缺少可定位信息，只能查看摘要'
-              : `${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
+              : `${identityLabel(c)} · ${c.time} · ${c.snippet}`}
           >
             <span className={css.citeIdx}>[{ci + 1}]</span>
-            <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
+            <IdentityName className={css.citeName} name={c.name} username={c.username ?? ''} size={18}>
+              {identityLabel(c)}
+            </IdentityName>
             <span className={css.citeTime}>{c.time}</span>
             <span className={css.citeSnippet}>{c.snippet}</span>
           </button>
@@ -167,14 +171,27 @@ function HistoryCites({ cites, citedIndexes, onOpenCitation, onOpenKbFile, onErr
   )
 }
 
-/** 展开区的元信息行：模型 / 意图 / 检索词 / 耗时。 */
+/** 展开区的元信息行：AI 模型 / 意图 / 检索词 / 耗时。 */
 function metaOf(it: AskHistoryEntry): string {
   const parts: string[] = []
-  if (it.model) parts.push(`模型 ${it.model}`)
+  if (it.model) parts.push(`AI 模型 ${it.model}`)
   if (it.intent) parts.push(`意图 ${it.intent}`)
   if (it.terms.length > 0) parts.push(`检索词 ${it.terms.join(' / ')}`)
   if (it.elapsedMs > 0) parts.push(`耗时 ${it.elapsedMs} ms`)
   return parts.join(' · ')
+}
+
+/** 范围标签只在历史里展示企业后缀，持久化的 usernameName 保持原样。 */
+function HistoryScopeTag({ item }: { item: AskHistoryEntry }): React.JSX.Element | null {
+  if (!item.usernameName) return null
+  return (
+    <span className={css.scopeTag}>
+      范围：
+      <IdentityName name={item.usernameName || item.username} username={item.username} size={18}>
+        {withEnterprise(item.usernameName || item.username, item.usernameEnterpriseName)}
+      </IdentityName>
+    </span>
+  )
 }
 
 /**
@@ -358,7 +375,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
             title={filtered ? '没有匹配的问答记录' : '还没有问答记录'}
             desc={filtered
               ? '换个关键词，或把状态/来源筛选切回「全部」再试。'
-              : '在「微信问答」里提问后，每一次问答都会自动保存在这里。'}
+              : '在「微信问答」或「AI 问答」提问，或 ClawBot 自动回复后，记录会显示在这里。'}
           />
         </div>
       ) : (
@@ -374,7 +391,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
                   <span className={css.time}>{fmtTodayOrLocaleMs(it.ts)}</span>
                   <Badge tone={meta.tone} title={meta.hint}>{meta.label}</Badge>
                   <span className={css.srcTag} data-src={it.source}>{SRC_LABEL[it.source] ?? it.source}</span>
-                  {it.usernameName && <span className={css.scopeTag}>范围：{it.usernameName}</span>}
+                  <HistoryScopeTag item={it} />
                   {(it.from || it.to) && (
                     <span className={css.scopeTag}>时间：{it.from || '…'} → {it.to || '…'}</span>
                   )}

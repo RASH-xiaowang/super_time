@@ -45,11 +45,13 @@ export interface HybridSearchRequest {
 /** 与 `AskCitation` 同形的引用（刻意结构化声明，避免工具层依赖 remotes）。 */
 export interface HybridSearchCitation {
   name: string
+  enterpriseName?: string
   time: string
   snippet: string
   username: string
   local_id: number
   sender?: string
+  senderEnterpriseName?: string
   source?: 'msg' | 'kb' | 'agg' | 'resource'
   kb?: {
     kbId: number
@@ -233,9 +235,11 @@ function citationsToHits(citations: readonly HybridSearchCitation[]): ToolHit[] 
     hits.push({
       key,
       name: c.name,
+      ...(c.enterpriseName ? { enterpriseName: c.enterpriseName } : {}),
       time: c.time,
       snippet: c.snippet,
       ...(c.sender ? { sender: c.sender } : {}),
+      ...(c.senderEnterpriseName ? { senderEnterpriseName: c.senderEnterpriseName } : {}),
       source: 'msg',
       score,
       trace: { kind: 'msg', username: c.username, localId: c.local_id },

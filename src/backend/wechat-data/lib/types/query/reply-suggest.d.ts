@@ -6,6 +6,10 @@ export interface ReplyContext {
     latestPeer: string;
     /** 参与拼装的条数（供隐私审计的 `messages` 计数用）。 */
     count: number;
+    /** 指定了目标消息时，该消息是否仍存在于当前解密快照（缺省 = 未按目标截取）。 */
+    targetFound?: boolean;
+    /** 目标消息的发送者标签（单聊为「对方」，群聊为成员名）。 */
+    targetSpeaker?: string;
 }
 /**
  * 取当前会话最近的对话上下文。
@@ -13,11 +17,12 @@ export interface ReplyContext {
  * @param talker - 会话 username（**范围就是它**，绝不跨会话取）。
  * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
  * @param limit - 取最近多少条（默认 20）。
+ * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
  * @returns 上下文；该会话没有可用文本时 `count` 为 0。
  */
 export declare function collectReplyContext(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
-talker: string, selfUsername?: string, limit?: number): ReplyContext;
+talker: string, selfUsername?: string, limit?: number, targetLocalId?: number): ReplyContext;
 /**
  * 取当前选中知识库里与 `query` 相关的片段（用于让推荐回复「有据可依」）。
  * @param decryptedDir - 解密数据根。

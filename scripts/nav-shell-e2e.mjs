@@ -76,7 +76,7 @@ try {
   const apiTag = sidebar.locator('span[data-status]')
   // 文案是 apiTag 里最后一个 span（前一个是状态圆点）—— 不取 last() 会同时命中两个而触发 strict 报错
   const apiText = sidebar.locator('span[data-status] > span').last()
-  const dropdown = win.locator('[role="listbox"][aria-label="搜索结果"]')
+  const dropdown = win.locator('[role="region"][aria-label="搜索结果"]')
 
   // ── ① 默认展开态 ─────────────────────────────────────────────
   // 2026-09-30 用户要求「主界面的导航栏默认为展开」：默认态从 58px 窄轨换成 176px。
@@ -184,7 +184,7 @@ try {
       check(dd.width >= 240, '下拉宽度 ≥ 240px（没被 176px 导航宽限制）', `${Math.round(dd.width)}px`)
     }
     const inAside = await sidebar.evaluate((el) => {
-      const dd = document.querySelector('[role="listbox"][aria-label="搜索结果"]')
+      const dd = document.querySelector('[role="region"][aria-label="搜索结果"]')
       return !!(dd && el.contains(dd))
     })
     check(!inAside, '下拉不在导航栏 DOM 内（走的是 Portal 到 body）')

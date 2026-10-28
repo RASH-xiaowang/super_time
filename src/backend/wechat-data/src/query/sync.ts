@@ -882,6 +882,15 @@ export function startRealtimeSync(
       const fallbackKey = typeof cfg['db_enc_key'] === 'string' ? cfg['db_enc_key'] : ''
       const shardRes = await syncChangedShards(raw, dec, lastState)
       const synced = shardRes.synced
+      // VoiceInfo lives in media_*.db; without this, voice bubbles advance
+      // with message_*.db while playback/transcription read a frozen snapshot.
+      const media = cachedDirEntries(join(raw, 'message'))
+      for (const file of media.error === undefined ? media.files : []) {
+        if (!/^media_\d+\.db$/.test(file)) continue
+        synced.push(...await syncPlainDatabase(
+          raw, dec, 'message', file, 'message/' + file, fallbackKey, keyFormat, lastState,
+        ))
+      }
       synced.push(...await syncSessionDb(raw, dec, lastState, fallbackKey, keyFormat))
       synced.push(...await syncContactDb(raw, dec, lastState, fallbackKey, keyFormat))
       for (const [sub, dbName, label] of [

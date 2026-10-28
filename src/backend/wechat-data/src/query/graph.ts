@@ -264,7 +264,9 @@ async function computeGraph(decryptedDir: string, selfUsername?: string): Promis
     } catch { /* no sessions */ }
   }
 
-  const names = contactMeta(decryptedDir).names
+  const contactMetas = contactMeta(decryptedDir)
+  const names = contactMetas.names
+  const enterpriseNames = contactMetas.enterpriseNames
   const counts = await loadMessageCounts(decryptedDir, talkers)
   const meta = loadContactMeta(decryptedDir)
   const roomData = loadRoomData(decryptedDir)
@@ -276,15 +278,23 @@ async function computeGraph(decryptedDir: string, selfUsername?: string): Promis
   // 备注「班级」名册：键 → 全库成员。刻意在**好友过滤 / nodeLimit 之前**收集 ——
   // 详情面板要靠它说明「本班全库 N 人、当前视图只显示 M 人」，
   // 而这正是「同前缀却没有连线」最常见的原因（人被挡在图外，不是关系缺失）。
-  const classRoster = new Map<string, Array<{ username: string; name: string; is_friend: boolean; msg_count: number }>>()
+  const classRoster = new Map<string, Array<{
+    username: string
+    name: string
+    enterpriseName?: string
+    is_friend: boolean
+    msg_count: number
+  }>>()
   for (const [u, info] of meta) {
     if (selfWxid && cleanWxid(u) === selfWxid) continue
     const kind = u.startsWith('gh_') ? 'official' : 'contact'
     const groups = Array.from(roomData.memberGroups.get(u) ?? []).sort()
+    const enterpriseName = enterpriseNames.get(u)?.trim()
     const node: GraphSnapshot['nodes'][number] = {
       id: u,
       label: names.get(u) || u,
       kind,
+      ...(enterpriseName ? { enterpriseName } : {}),
       msg_count: counts.get(u) ?? 0,
       group_count: groups.length,
       group_codes: groups,
@@ -296,7 +306,13 @@ async function computeGraph(decryptedDir: string, selfUsername?: string): Promis
       node.remark_group = classKey
       let roster = classRoster.get(classKey)
       if (!roster) { roster = []; classRoster.set(classKey, roster) }
-      roster.push({ username: u, name: node.label, is_friend: info.isFriend, msg_count: node.msg_count ?? 0 })
+      roster.push({
+        username: u,
+        name: node.label,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        is_friend: info.isFriend,
+        msg_count: node.msg_count ?? 0,
+      })
     }
     persons.push(node)
     personIds.add(u)
@@ -308,10 +324,23 @@ async function computeGraph(decryptedDir: string, selfUsername?: string): Promis
   for (const u of talkers) {
     if (!u.endsWith('@chatroom')) continue
     const members = roomData.roomMembers.get(u) ?? new Set<string>()
-    const shared: Array<{ username: string; name: string; is_friend: boolean; msg_count: number }> = []
+    const shared: Array<{
+      username: string
+      name: string
+      enterpriseName?: string
+      is_friend: boolean
+      msg_count: number
+    }> = []
     for (const m of members) {
       if (!personIds.has(m)) continue
-      shared.push({ username: m, name: names.get(m) || m, is_friend: meta.get(m)?.isFriend ?? false, msg_count: counts.get(m) ?? 0 })
+      const enterpriseName = enterpriseNames.get(m)?.trim()
+      shared.push({
+        username: m,
+        name: names.get(m) || m,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        is_friend: meta.get(m)?.isFriend ?? false,
+        msg_count: counts.get(m) ?? 0,
+      })
     }
     shared.sort((a, b) => b.msg_count - a.msg_count || a.username.localeCompare(b.username))
     const node: GraphSnapshot['nodes'][number] = {
@@ -336,7 +365,12 @@ async function computeGraph(decryptedDir: string, selfUsername?: string): Promis
   const friendCount = persons.filter(n => n.is_friend).length
   const groupNames: Record<string, string> = {}
   for (const g of groups) groupNames[g.id] = g.label
-  const topRelations = persons.slice(0, 8).map(n => ({ username: n.id, name: n.label, msg_count: n.msg_count ?? 0 }))
+  const topRelations = persons.slice(0, 8).map(n => ({
+    username: n.id,
+    name: n.label,
+    ...(n.enterpriseName ? { enterpriseName: n.enterpriseName } : {}),
+    msg_count: n.msg_count ?? 0,
+  }))
 
   // 只有 ≥2 人的键才构成「班级」（单例不产生任何关系，前端也会直接跳过）
   const remarkGroups = [...classRoster.entries()]

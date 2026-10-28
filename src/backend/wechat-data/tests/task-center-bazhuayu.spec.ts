@@ -14,7 +14,7 @@
  * 投递注入假 fetch，不联网。
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -82,7 +82,11 @@ interface SeedRow {
   sortSeq: number
   createTime: number
   sender: keyof typeof SENDER_ROWID
+  /** 缺省 1 = 文本；3 = 图片。 */
+  type?: number
   text?: string
+  /** 图片消息的 md5（写进 `<img md5="…">`）。 */
+  md5?: string
 }
 
 /** 测试里直接开库造消息夹具（生产代码才受连接棘轮约束）。 */
@@ -103,7 +107,11 @@ function openFixtureDb(): DatabaseSync {
 /** 一条消息的原始 `message_content`：群聊带 `wxid:\n` 前缀（微信真实形状）。 */
 function contentOf(row: SeedRow, talker: string): string {
   const isGroup = talker.endsWith('@chatroom')
-  return (isGroup && row.sender !== 'self' ? row.sender + ':\n' : '') + (row.text ?? '')
+  const prefix = isGroup && row.sender !== 'self' ? row.sender + ':\n' : ''
+  if ((row.type ?? 1) === 3) {
+    return prefix + (row.text ?? '') + '<?xml version="1.0"?><msg><img md5="' + (row.md5 ?? '') + '"/></msg>'
+  }
+  return prefix + (row.text ?? '')
 }
 
 /** 往某会话的 `Msg_` 表追加消息。 */
@@ -126,7 +134,7 @@ function seedMessages(talker: string, rows: SeedRow[]): void {
     )
     for (const row of rows) {
       insert.run(
-        row.localId, row.sortSeq, 1, row.createTime,
+        row.localId, row.sortSeq, row.type ?? 1, row.createTime,
         SENDER_ROWID[row.sender] ?? 1, contentOf(row, talker), '',
       )
     }
@@ -615,6 +623,92 @@ describe('八爪鱼投递（注册表管道）', () => {
       tpl: '报价群/群报价任务',
     })
     expect(bodies[0]?.['flowId']).toBe(FLOW_ID)
+  })
+
+  it('图片参数：只有配置了图片类来源才解码并签直链，链接与记录 id 一起进 Params', async () => {
+    seedMessages(GROUP_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', type: 3, md5: 'md5_img' },
+    ])
+    expect(saveTaskInfo(decrypted, groupBazhuayuInput({
+      photoLimit: 1,
+      triggerConfig: {
+        flowId: FLOW_ID,
+        extraParams: [
+          { name: 'first', source: 'firstImageUrl' },
+          { name: 'images', source: 'imagesJson' },
+        ],
+      },
+    })).ok).toBe(true)
+    seedMessages(GROUP_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_target', text: '报价 带图' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const triggerId = firstTriggerId()
+    mkdirSync(join(decoded, 'wxid_target'), { recursive: true })
+    writeFileSync(join(decoded, 'wxid_target', 'md5_img.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+    const bodies: Array<Record<string, unknown>> = []
+    const decodedIds: number[] = []
+    const factories: number[] = []
+    const deps = dispatchDeps({
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      },
+      decodeImage: async (_username, localId) => {
+        decodedIds.push(localId)
+        return { file: 'wxid_target/md5_img.jpg' }
+      },
+      mediaLinks: (recordId) => {
+        factories.push(recordId)
+        return () => ({ url: 'http://192.168.1.10:5032/api/rpa-media/token-' + String(recordId) })
+      },
+    })
+    expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).ok).toBe(true)
+    // 解码只发生在投递前，且拿的是触发记录里的那张图。
+    expect(decodedIds).toEqual([1])
+    expect(factories).toEqual([triggerId])
+    const params = bodies[0]?.['params'] as Record<string, string> | undefined
+    expect(params?.['first']).toBe('http://192.168.1.10:5032/api/rpa-media/token-' + String(triggerId))
+    expect(params?.['images']).toContain('"localId":1')
+    expect(params?.['images']).not.toContain('data:image')
+  })
+
+  it('只配置图片数量时不走解码/监听面，仍能回报图片引用总数', async () => {
+    seedMessages(GROUP_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_target', type: 3, md5: 'md5_img' },
+    ])
+    expect(saveTaskInfo(decrypted, groupBazhuayuInput({
+      photoLimit: 1,
+      triggerConfig: {
+        flowId: FLOW_ID,
+        extraParams: [{ name: 'count', source: 'imageCount' }],
+      },
+    })).ok).toBe(true)
+    seedMessages(GROUP_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_target', text: '报价 带图' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const bodies: Array<Record<string, unknown>> = []
+    let decodes = 0
+    let factories = 0
+    const deps = dispatchDeps({
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      },
+      decodeImage: async () => {
+        decodes += 1
+        return { file: 'should-not-be-used.jpg' }
+      },
+      mediaLinks: () => {
+        factories += 1
+        return () => ({ url: 'http://should-not-be-used' })
+      },
+    })
+    expect((await dispatchTaskCallback(decrypted, decoded, firstTriggerId(), deps)).ok).toBe(true)
+    expect(decodes).toBe(0)
+    expect(factories).toBe(0)
+    expect((bodies[0]?.['params'] as Record<string, string> | undefined)?.['count']).toBe('1')
   })
 
   it('失败：非 2xx ⇒ failed + 错误落库', async () => {

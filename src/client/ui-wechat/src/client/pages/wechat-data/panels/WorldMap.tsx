@@ -33,6 +33,7 @@ import { GeoEchartsMap } from './GeoEchartsMap.tsx'
 import { ProvinceMap } from './ProvinceMap.tsx'
 import { WORLD_GEO_URLS, fetchFirstJson, worldChildByName, worldFeatureName } from './world-map-data.ts'
 import { collectSubtreeFriends } from './region-friends.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import {
   provinceAdcode,
 } from './world-geo.ts'
@@ -40,7 +41,7 @@ import css from './world-map.module.css'
 
 /** Pick the display name for a friend. */
 function friendName(f: RegionFriend): string {
-  return f.displayName || f.remark || f.nickName
+  return withEnterprise(f.displayName || f.remark || f.nickName, f.enterpriseName)
 }
 
 /**
@@ -479,7 +480,6 @@ function WorldEchartsStage({ onWorldMap, world, focused, geo, leftFriends, right
     </MapStage>
   )
 }
-
 
 
 

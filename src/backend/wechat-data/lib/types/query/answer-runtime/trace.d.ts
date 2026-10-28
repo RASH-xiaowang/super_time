@@ -52,6 +52,9 @@ export interface ToolCallTraceInput {
     deadlineExceeded?: boolean;
     skipped?: boolean;
     note?: string;
+    resultSummary?: string;
+    resultDetail?: string;
+    resultTruncated?: boolean;
 }
 /**
  * 构造一条 trace；统一把 attempts/retries 口径写在这里。

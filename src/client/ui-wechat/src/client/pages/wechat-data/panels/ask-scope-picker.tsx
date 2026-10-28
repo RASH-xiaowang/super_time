@@ -8,7 +8,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { DateRangeField, Segmented, useEscapeToClose } from '../ui/kit.tsx'
 import { describeRange, type RangePresetKey } from '../utils/date-range.ts'
-import { Avatar } from './chats-support.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask-scope-picker.module.css'
 
 const PRESETS: readonly RangePresetKey[] = ['today', 'week', 'month', 'last-7', 'last-30']
@@ -17,11 +18,18 @@ const PRESETS: readonly RangePresetKey[] = ['today', 'week', 'month', 'last-7', 
  * 判断会话是否命中搜索词。
  * @param session - 待检查会话。
  * @param query - 已转小写并去空白的搜索词。
- * @returns 是否命中会话名或 username。
+ * @returns 是否命中会话名、企业名称或 username。
  */
 function matchesSession(session: WechatSession, query: string): boolean {
   if (!query) return true
-  return session.displayName.toLowerCase().includes(query) || session.username.toLowerCase().includes(query)
+  return session.displayName.toLowerCase().includes(query)
+    || (session.enterpriseName ?? '').toLowerCase().includes(query)
+    || session.username.toLowerCase().includes(query)
+}
+
+/** 会话行的补充信息：类型。企业名跟在显示名后用统一格式展示。 */
+function sessionMeta(session: WechatSession): string {
+  return session.type === 'group' ? '群聊会话' : '单聊会话'
 }
 
 /**
@@ -98,9 +106,11 @@ export function AskScopePicker({
   const visibleSessions = useMemo(() => sessions.filter(s => matchesSession(s, query)), [sessions, query])
   if (!open) return null
 
+  const selectedSession = scopeUsername ? sessions.find(s => s.username === scopeUsername) : undefined
   const sessionName = scopeUsername
-    ? (sessions.find(s => s.username === scopeUsername)?.displayName || scopeUsername)
+    ? (selectedSession?.displayName || scopeUsername)
     : '全部会话'
+  const scopeSummary = withEnterprise(sessionName, selectedSession?.enterpriseName)
   const rangeName = describeRange(from, to)
 
   return (
@@ -114,7 +124,21 @@ export function AskScopePicker({
       <div className={css.head}>
         <div className={css.headText}>
           <div className={css.title}>检索范围</div>
-          <div className={css.summary}>{sessionName} · {rangeName}</div>
+          <div className={css.summary}>
+            {selectedSession
+              ? (
+                  <IdentityName
+                    className={css.summaryIdentity}
+                    name={sessionName}
+                    username={selectedSession.username}
+                    size={18}
+                  >
+                    {scopeSummary}
+                  </IdentityName>
+                )
+              : scopeSummary}
+            <span> · {rangeName}</span>
+          </div>
         </div>
         <button type="button" className={css.close} onClick={() => { onClose(true) }} aria-label="关闭检索范围">×</button>
       </div>
@@ -143,7 +167,7 @@ export function AskScopePicker({
                 className={css.searchInput}
                 value={filter}
                 onChange={(event) => { setFilter(event.target.value) }}
-                placeholder="搜索会话名或微信号"
+                placeholder="搜索会话名、企业名称或微信号"
                 aria-label="搜索会话"
               />
             </div>
@@ -182,11 +206,16 @@ export function AskScopePicker({
                 data-active={scopeUsername === session.username ? '' : undefined}
                 onClick={() => { onPickSession(session.username) }}
               >
-                <Avatar name={session.displayName || session.username} username={session.username} size={28} />
-                <span className={css.rowText}>
-                  <span className={css.rowName}>{session.displayName || session.username}</span>
-                  <span className={css.rowMeta}>{session.type === 'group' ? '群聊会话' : '单聊会话'}</span>
-                </span>
+                <IdentityName
+                  className={css.rowIdentity}
+                  textClassName={css.rowText}
+                  name={session.displayName || session.username}
+                  username={session.username}
+                  size={24}
+                >
+                  <span className={css.rowName}>{withEnterprise(session.displayName || session.username, session.enterpriseName)}</span>
+                  <span className={css.rowMeta}>{sessionMeta(session)}</span>
+                </IdentityName>
                 <span className={css.kind} data-kind={session.type}>{session.type === 'group' ? '群聊' : '单聊'}</span>
                 {scopeUsername === session.username && <CheckMark />}
               </button>

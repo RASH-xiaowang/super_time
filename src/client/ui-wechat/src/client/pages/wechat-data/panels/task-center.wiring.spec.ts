@@ -75,7 +75,8 @@ describe('导航与懒加载：taskinfo 是一个可见入口', () => {
     const tabs = [...union.matchAll(/'([a-z]+)'/g)].map((m) => m[1] ?? '')
     const nHidden = [...nav.matchAll(/hidden: true/g)].length
     expect(shell, 'WechatDataPanel 头注的页签数没跟着 nav-config 改').toContain(`可路由页签共 **${String(tabs.length)}**（其余 ${String(nHidden)} 项`)
-    expect(shell, 'WechatDataPanel 头注的侧栏可见数没跟着改').toContain('侧栏可见 **15** 项')
+    const visible = tabs.length - nHidden - 1
+    expect(shell, 'WechatDataPanel 头注的侧栏可见数没跟着改').toContain(`侧栏可见 **${String(visible)}** 项`)
   })
 })
 
@@ -342,6 +343,15 @@ describe('记录弹窗：完整内容五组 + 图片按需解码 + 可访问性'
     expect(code).toContain('重新投递')
   })
 
+  it('源码模式可切换，并展示完整 Unicode 转义 JSON', () => {
+    expect(code).toContain('源码模式')
+    expect(code).toContain('界面模式')
+    expect(code).toContain('aria-pressed={sourceMode}')
+    expect(code).toContain('setSourceMode(value => !value)')
+    expect(code).toContain('triggerRecordSource(record)')
+    expect(code).toContain('data-trigger-source=""')
+  })
+
   it('重新投递在手机端降级（会向外部地址出网）', () => {
     expect(code).toContain('desktopActionProps()')
   })
@@ -551,7 +561,9 @@ describe('样式与 SSR 冒烟', () => {
 
   it('SSR 冒烟覆盖 catalog 注入、影刀动态表单、任务行摘要与目录失败/未知厂商降级', () => {
     const script = readText(join(ROOT, 'scripts', 'task-center-ssr.tsx'))
-    expect(script, 'SSR 没有注入厂商目录 fixture').toContain('RpaVendorCatalog')
+    const fixture = readText(join(ROOT, 'scripts', 'task-center-ssr-vendors.ts'))
+    const scriptAndFixture = `${script}\n${fixture}`
+    expect(fixture, 'SSR 没有注入厂商目录 fixture').toContain('RpaVendorCatalog')
     for (const text of [
       'aria-label="编辑任务：客户报价跟进"',
       '触发方式',
@@ -575,7 +587,7 @@ describe('样式与 SSR 冒烟', () => {
       '触发方式不可用（厂商已下线）',
       '读取触发方式目录失败',
     ]) {
-      expect(script, `SSR 冒烟没有断言「${text}」`).toContain(text)
+      expect(scriptAndFixture, `SSR 冒烟没有断言「${text}」`).toContain(text)
     }
     expect(script, 'SSR 主场景没有用 bazhuayu fixture 断言任务行摘要').toContain('八爪鱼 RPA · ')
     expect(script, 'SSR 没有断言八爪鱼 v1.2.0 不再渲染「参数映射」').toContain("!bazhuayuFormHtml.includes('参数映射')")

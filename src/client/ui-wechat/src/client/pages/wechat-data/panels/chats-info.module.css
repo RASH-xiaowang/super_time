@@ -16,8 +16,8 @@
   border-top: 1px solid var(--wx-card-divider, var(--nm-border));
 }
 .infoRowFirst { border-top: none; }
-.infoLabel { flex-shrink: 0; font-size: var(--wx-info-meta, 12px); color: var(--nm-text-2); }
-.infoValueWrap { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.infoLabel { flex-shrink: 0; min-width: 0; max-width: 58%; font-size: var(--wx-info-meta, 12px); color: var(--nm-text-2); }
+.infoValueWrap { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 .infoValue {
   min-width: 0;
   font-size: var(--wx-info-text, 14px);

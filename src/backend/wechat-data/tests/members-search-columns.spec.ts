@@ -57,6 +57,29 @@ function makeRoot(): string {
   return decrypted
 }
 
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  expect(value.length).toBeLessThan(128)
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
+function makeEnterpriseRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'members-enterprise-'))
+  scratch.push(root)
+  const decrypted = join(root, 'decrypted')
+  mkdirSync(join(decrypted, 'contact'), { recursive: true })
+  const cdb = new DatabaseSync(join(decrypted, 'contact', 'contact.db'))
+  cdb.exec('CREATE TABLE contact (id INTEGER PRIMARY KEY, username TEXT, remark TEXT, nick_name TEXT, alias TEXT, quan_pin TEXT, extra_buffer BLOB)')
+  cdb.exec('CREATE TABLE openim_wording (wording_id TEXT PRIMARY KEY, wording TEXT)')
+  cdb.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-deepseek', '深度求索')
+  cdb.prepare('INSERT INTO contact VALUES (?,?,?,?,?,?,?)').run(
+    1, 'wxid_enterprise@openim', '', '顾问小深', '', '', enterpriseBuffer('wording-deepseek'),
+  )
+  cdb.close()
+  return decrypted
+}
+
 /**
  * 造出「索引库已存在、但 `contact_fts` 还没建」的状态 —— 这正是 `searchGlobalMembers`
  * 会去建表并走 FTS 的前提（索引库文件不存在时它压根不试，直接 LIKE）。
@@ -93,7 +116,9 @@ function aliasSearchable(decrypted: string): boolean {
 }
 
 afterEach(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true })
+  for (const d of scratch) {
+    try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }) } catch { /* Windows file handle release */ }
+  }
   scratch.length = 0
 })
 
@@ -166,7 +191,7 @@ describe('存量 v1 索引必须被认出来并重建', () => {
       expect(n.c).toBe(3)
       // 版本号没落进 meta ⇒ 下一次运行又会把这张表当成旧 schema 反复丢掉重建
       const meta = db.prepare("SELECT value FROM meta WHERE key='contact_fts_schema'").get() as { value?: string } | undefined
-      expect(meta?.value, 'schema 版本没写进 meta').toBe('2')
+      expect(meta?.value, 'schema 版本没写进 meta').toBe('3')
     } finally {
       db.close()
     }
@@ -183,6 +208,33 @@ describe('存量 v1 索引必须被认出来并重建', () => {
     expect(existsSync(searchIndexPath(d))).toBe(false)
     expect(searchMembers(d, 'lilei-alias').source).toBe('like')
     expect(usernames('lilei-alias', d)).toEqual(['wxid_alias'])
+  })
+})
+
+describe('企业微信名称会同时进入展示字段与 contact_fts', () => {
+  it('FTS 与 LIKE 都能按企业名称搜到人，并带出 enterpriseName', () => {
+    const d = makeEnterpriseRoot()
+    touchIndex(d)
+    const fts = searchMembers(d, '深度求索')
+    expect(fts.source).toBe('fts')
+    expect(fts.items).toEqual([
+      expect.objectContaining({
+        username: 'wxid_enterprise@openim',
+        name: '顾问小深',
+        enterpriseName: '深度求索',
+      }),
+    ])
+
+    rmSync(searchIndexPath(d), { force: true })
+    const like = searchMembers(d, '深度求索')
+    expect(like.source).toBe('like')
+    expect(like.items).toEqual([
+      expect.objectContaining({
+        username: 'wxid_enterprise@openim',
+        name: '顾问小深',
+        enterpriseName: '深度求索',
+      }),
+    ])
   })
 })
 

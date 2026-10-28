@@ -1,5 +1,5 @@
 /**
- * 「新对话」——会话级 AI 问答面板（群聊 / 单聊内嵌）。
+ * 「AI 问答」——会话级 AI 问答面板（群聊 / 单聊内嵌）。
  *
  * 与「微信问答」页签的区别只在**范围绑定**：这里把检索范围固定到当前会话
  * （`username`），于是问的是「这段聊天」。检索、多轮、流式、引用、反馈全部复用
@@ -13,24 +13,25 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ErrorState } from '../ui/kit.tsx'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { BasisLine, AnswerFeedback, PlanLine, RetrMeta } from './Ask.tsx'
-import { AnswerBody } from './AnswerBody.tsx'
-import { AskPending } from './ask-pending.tsx'
-import { AskProcess } from './AskProcess.tsx'
-import { AskResources, AskRuntimeMeta } from './AskRuntimeMeta.tsx'
+import { AnswerRunView, useAnswerRunProcessState } from './AnswerRunView.tsx'
+import { AskResources } from './AskRuntimeMeta.tsx'
 import { AskHistoryDialog } from './AskHistoryDialog.tsx'
 import { CiteDetailPanel } from './CiteDetailPanel.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { useKbScope } from './kb-scope.ts'
 import { loadMessageContext, openKbFileFromCitation, useCiteDetail } from './use-cite-detail.ts'
 import { useAskSession, type AskTurn } from './use-ask.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import { useAskOptimize } from './use-ask-optimize.ts'
+import { askThreadContentRevision, useAskThreadAutoScroll } from './use-ask-thread-scroll.ts'
+import { IdentityName } from './identity.tsx'
 import css from './session-ask.module.css'
 
 /** 空态引导问题（与截图一致，且对任意会话都成立）。 */
 const SUGGESTIONS = [
-  '最近讨论了哪些重要的事？',
-  '帮我找一下之前提过的报价',
-  '有哪些事情还没确认？',
+  '最近我们在当前会话里讨论了哪些重要的事？',
+  '帮我找一下我们之前提过的报价',
+  '我们还有哪些事情还没确认？',
 ]
 
 /** 面板属性。 */
@@ -50,8 +51,13 @@ function nameOf(s: WechatSession): string {
   return s.displayName || s.username
 }
 
+/** 会话范围标签：保留会话名，并在企业微信联系人后补上企业名称。 */
+function scopeNameOf(s: WechatSession): string {
+  return withEnterprise(nameOf(s), s.enterpriseName)
+}
+
 /**
- * 面板头（标题 + 历史记录 / 新对话 / 全屏 / 关闭）。
+ * 面板头（标题 + 历史记录 / 新 AI 问答 / 全屏 / 关闭）。
  *
  * 抽出来的理由与 `SessionThread` / `SessionIntro` 相同：`SessionAsk` 受函数体棘轮
  * 管着（250 行上限）。四个按钮的 SVG 就占 20 行，而它们与面板状态无关。
@@ -60,29 +66,41 @@ function nameOf(s: WechatSession): string {
  * @param props.onToggleFull - 切换全屏。
  * @param props.onClose - 关闭面板。
  * @param props.onHistory - 打开历史记录弹窗。
- * @param props.onNewChat - 开始新对话（清空本会话的 AI 对话）。
+ * @param props.onNewChat - 开始新的 AI 问答（清空本会话的问答记录）。
+ * @param props.scopeName - 当前会话显示名（只读检索范围）。
+ * @param props.scopeUsername - 当前会话 username（用于悬停提示）。
  * @returns 头部元素。
  */
-function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat }: {
+function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat, scopeName, scopeUsername }: {
   full: boolean
   onToggleFull: () => void
   onClose: () => void
   onHistory: () => void
   onNewChat: () => void
+  scopeName: string
+  scopeUsername: string
 }): React.JSX.Element {
   return (
     <div className={css.head}>
-      <span className={css.title}>新对话</span>
+      <div className={css.headIdentity}>
+        <span className={css.title}>AI 问答</span>
+        <span className={css.scopeChip} title={`读取范围：${scopeUsername}`}>
+          <span className={css.scopePrefix}>范围</span>
+          <IdentityName className={css.scopeName} name={scopeName} username={scopeUsername} size={18}>
+            {scopeName}
+          </IdentityName>
+        </span>
+      </div>
       <div className={css.headActions}>
         {/* 「历史记录」：与「微信问答」同一件弹窗（内容由后端在每次回答产出时自动累积）。 */}
-        <button type="button" className={css.iconBtn} title="查看历史问答记录（每一次问答都会自动保存）"
+        <button type="button" className={css.iconBtn} title="查看 AI 问答历史（每次问答都会自动保存）"
           aria-label="历史记录" onClick={onHistory}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" />
           </svg>
         </button>
-        <button type="button" className={css.iconBtn} title="开始新对话（清空本会话的 AI 对话）"
-          aria-label="开始新对话" onClick={onNewChat}>
+        <button type="button" className={css.iconBtn} title="开始新的 AI 问答（清空本会话的问答记录）"
+          aria-label="开始新的 AI 问答" onClick={onNewChat}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
           </svg>
@@ -100,7 +118,7 @@ function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat }: {
             </svg>
           )}
         </button>
-        <button type="button" className={css.iconBtn} title="关闭 AI 对话" aria-label="关闭 AI 对话" onClick={onClose}>
+        <button type="button" className={css.iconBtn} title="关闭 AI 问答" aria-label="关闭 AI 问答" onClick={onClose}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M18 6 6 18" /><path d="m6 6 12 12" />
           </svg>
@@ -134,7 +152,7 @@ function SessionIntro({ targetName, onPick }: {
       </div>
       <div className={css.introTitle}>想从聊天里了解什么？</div>
       <div className={css.introSub}>
-        查找消息、梳理进展、或继续追问。<br />从 {targetName} 开始，回答附上原文出处。
+        查找消息、梳理进展、或继续追问。<br />检索范围限定为当前会话「{targetName}」，回答会附上原文出处。
       </div>
       <div className={css.sugList}>
         {SUGGESTIONS.map(s => (
@@ -163,6 +181,7 @@ function SessionIntro({ targetName, onPick }: {
  * @param props.streamText - 生成中的正文（流式）。
  * @param props.streamReasoning - 生成中的思考过程（流式）。
  * @param props.streamStages - 生成中的阶段事件（流式）。
+ * @param props.runStartedAt - 当前在飞轮次的起点。
  * @param props.onStop - 「停止生成」回调。
  * @param props.citeDetail - 引用详情开关（点角标 → 右侧滑出）。
  * @param props.patchTurn - 就地更新某一轮（反馈回写）。
@@ -170,12 +189,14 @@ function SessionIntro({ targetName, onPick }: {
  * @param props.onDistill - 「沉淀为笔记」回调（打开编辑器）。
  * @returns 消息流元素。
  */
-function SessionThread({ turns, asking, streamText, streamReasoning, streamStages, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function SessionThread({ turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
-  streamStages: React.ComponentProps<typeof AskPending>['streamStages']
+  streamStages: AskTurn['stages']
+  runStartedAt: number
+  runId: string
   onStop: () => void
   onRetry: (index: number) => void
   citeDetail: ReturnType<typeof useCiteDetail>
@@ -183,6 +204,7 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
   questionForTurn: (idx: number) => string
   onDistill: (v: { open: boolean; title?: string; body?: string; question?: string }) => void
 }): React.JSX.Element {
+  const processPropsFor = useAnswerRunProcessState()
   return (
     <div className={css.thread}>
       {turns.map((t, i) => (
@@ -192,24 +214,19 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
           </div>
         ) : (
           <div key={i} className={css.turnAi}>
-            {/* 过程时间线（与「微信问答」同一套）：思考 + 工具调用步骤，放在答案之前。 */}
-            <AskProcess stages={t.stages} reasoning={t.reasoning} />
-            <AskRuntimeMeta
+            <AnswerRunView
               turn={t}
-              placement="meta"
-              {...(t.status === 'failed' ? { onRetry: () => { onRetry(i) } } : {})}
+              agentLabel="AI 问答"
+              {...processPropsFor(t.runId)}
+              {...(t.status === 'failed' && i === turns.length - 1 && !asking
+                ? { onRetry: () => { onRetry(i) } }
+                : {})}
+              {...(t.plan ? { planNode: <PlanLine plan={t.plan} /> } : {})}
+              {...(t.retrieval ? { retrievalNode: <RetrMeta retrieval={t.retrieval} /> } : {})}
+              {...(t.citations ? { citations: t.citations } : {})}
+              onOpenCite={(n) => { citeDetail.toggle(i, n) }}
+              {...(citeDetail.ref?.turn === i ? { activeCite: citeDetail.ref.n } : {})}
             />
-            {/* 规划与检索漏斗：与「微信问答」同一套组件，放进滚动区，不挤输入框。 */}
-            <PlanLine plan={t.plan} />
-            <RetrMeta retrieval={t.retrieval} />
-            <div className={css.aiAnswer}>
-              <AnswerBody
-                text={t.text}
-                {...(t.citations ? { citations: t.citations } : {})}
-                onOpenCite={(n) => { citeDetail.toggle(i, n) }}
-                {...(citeDetail.ref?.turn === i ? { activeCite: citeDetail.ref.n } : {})}
-              />
-            </div>
             {/* 回答脚注：依据 + 反馈 + 沉淀合成一行（与「微信问答」同一件、同一布局）。 */}
             <div className={css.answerFoot}>
               <BasisLine basis={t.basis} />
@@ -240,15 +257,19 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
         )
       ))}
       {asking && (
-        /* 生成中那一块**直接复用「微信问答」的 `AskPending`**（过程时间线 + 流式正文 +
-           停止按钮）。旧实现自己写了一套，而它把 `AskProcess` 塞在 `streamText ?` 分支里 ——
-           检索阶段（还没开始吐字）恰恰是「工具调用过程」最该显示的时候，却一条都看不到。 */
-        <AskPending
-          streamText={streamText}
-          streamReasoning={streamReasoning}
-          streamStages={streamStages}
-          onStop={onStop}
-        />
+        <div className={css.turnAi}>
+          <AnswerRunView
+            agentLabel="AI 问答"
+            text={streamText}
+            reasoning={streamReasoning}
+            stages={streamStages ?? []}
+            runStartedAt={runStartedAt}
+            runId={runId}
+            {...processPropsFor(runId)}
+            streaming
+            onStop={onStop}
+          />
+        </div>
       )}
     </div>
   )
@@ -271,9 +292,9 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
 
   // 每个会话一份线程：键即 username。
   // source/scopeUsernameName 只用于**问答历史**：让历史列表能区分「在哪问的」并直接显示会话名。
-  const { turns, asking, streamText, streamReasoning, streamStages, error, ask, retry: retryTurn, cancel, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, error, ask, retry: retryTurn, cancel, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     scopeUsername: target.username,
-    scopeUsernameName: nameOf(target),
+    scopeUsernameName: scopeNameOf(target),
     source: 'session',
     threadKey: target.username,
   })
@@ -299,11 +320,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => { el.removeEventListener('scroll', onScroll) }
   }, [])
-  useEffect(() => {
-    const el = bodyRef.current
-    if (!el) return
-    if (asking || atBottomRef.current) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
-  }, [turns, asking])
+  useAskThreadAutoScroll({ bodyRef, atBottomRef, asking, turns, contentRevision: askThreadContentRevision({ text: streamText, reasoning: streamReasoning, stages: streamStages }) })
 
   // 输入框随内容增高（上限后内部滚动）
   useEffect(() => {
@@ -340,14 +357,16 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
     return ''
   }, [turns])
 
-  const targetName = nameOf(target)
+  const targetName = scopeNameOf(target)
 
   return (
-    <section className={css.panel} data-full={full || undefined} aria-label="会话 AI 对话">
+    <section className={css.panel} data-side-panel-view="" data-full={full || undefined} aria-label="会话 AI 问答">
       <SessionHead
         full={full}
         onToggleFull={onToggleFull}
         onClose={onClose}
+        scopeName={targetName}
+        scopeUsername={target.username}
         onHistory={() => { setHistoryOpen(true) }}
         onNewChat={() => {
           resetThread()
@@ -357,16 +376,6 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
           setQuestion('')
         }}
       />
-
-      {/* 读取范围（只读） */}
-      <div className={css.scopeRow}>
-        <span className={css.scopeLabel}>读取范围</span>
-        <svg className={css.scopeIcon} viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
-        </svg>
-        {/* 范围恒为当前会话：只展示，不提供切换（避免「问了之外的那段聊天」） */}
-        <span className={css.scopeName} title={target.username}>{targetName}</span>
-      </div>
 
       <div className={css.body} ref={bodyRef}>
         {turns.length === 0 && !asking ? (
@@ -381,6 +390,8 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             streamText={streamText}
             streamReasoning={streamReasoning}
             streamStages={streamStages}
+            runStartedAt={runStartedAt}
+            runId={runId}
             onStop={cancel}
             onRetry={(i) => { void retryTurn(i) }}
             citeDetail={citeDetail}
@@ -391,7 +402,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         )}
       </div>
 
-      {error && <ErrorState message={error} />}
+      {error && turns[turns.length - 1]?.status !== 'failed' && <ErrorState message={error} />}
 
       {/* 引用详情：**覆盖式**（本面板宽度随视口伸缩，切不出侧栏）——
           左侧对话原样留着当上下文，看完关掉即可继续追问。 */}

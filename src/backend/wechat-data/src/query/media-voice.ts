@@ -29,7 +29,7 @@ function messageShardFiles(decryptedDir: string): string[] {
  * server_id for (username, local_id) from the message shards.
  * @returns the server id as text (bigints exceed the safe-integer range).
  */
-function messageServerId(decryptedDir: string, username: string, localId: number): string | null {
+export function messageServerIdByLocal(decryptedDir: string, username: string, localId: number): string | null {
   const table = msgTableName(username)
   for (const shard of messageShardFiles(decryptedDir)) {
     let db: DatabaseSync | null = null
@@ -78,7 +78,7 @@ export function resolveVoiceInfo(
       let svrId = row?.svr_id
       // 2. svr_id fallback
       if (!row) {
-        const sid = messageServerId(decryptedDir, username, localId)
+        const sid = messageServerIdByLocal(decryptedDir, username, localId)
         if (sid !== null) {
           row = db.prepare('SELECT CAST(svr_id AS TEXT) AS svr_id, length(voice_data) AS len FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1').get(sid)
           svrId = sid

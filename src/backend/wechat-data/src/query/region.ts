@@ -40,11 +40,16 @@ export interface ContactExtra {
   country?: string
   province?: string
   city?: string
+  /** Protobuf field 2 when encoded as a varint. */
   gender?: number
+  /** Protobuf field 2 when encoded as a string; enterprise-WeChat wording id. */
   wordingId?: string
 }
 
-/** Parse contact.extra_buffer protobuf: 2=性别, 4=签名, 5=国家, 6=省, 7=市. */
+/**
+ * Parse contact.extra_buffer protobuf:
+ * 2=性别(varint) / 企业 ID(string), 4=签名, 5=国家, 6=省, 7=市.
+ */
 export function parseContactExtra(raw: Buffer): ContactExtra {
   const out: ContactExtra = {}
   let idx = 0

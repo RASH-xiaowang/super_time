@@ -72,7 +72,7 @@
   box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
 .taskInfo { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: var(--nm-dense-g3); }
-.taskName { flex: 0 1 auto; max-width: 42%; font-size: var(--nm-dense-fs); font-weight: 650; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.taskName { flex: 1 1 190px; max-width: 440px; font-size: var(--nm-dense-fs); font-weight: 650; color: var(--nm-text-1); }
 .taskMeta { flex: 0 1 auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .taskChips { display: flex; align-items: center; flex-wrap: wrap; gap: var(--nm-dense-g2); margin-top: 0; flex: 0 1 auto; }
 .taskActions { display: flex; align-items: center; gap: var(--nm-dense-g2); flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
@@ -183,8 +183,8 @@
 
 /* 排行条形 */
 .barRow { display: flex; align-items: center; gap: var(--nm-dense-g3); margin-bottom: var(--nm-dense-g2); font-size: var(--nm-dense-fs-sm); }
-.barLabel { width: 128px; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.barTrack { flex: 1; height: 6px; border-radius: var(--nm-r-xs); background: var(--nm-bg-hover); overflow: hidden; }
+.barLabel { flex: 1 1 150px; max-width: 48%; color: var(--nm-text-1); }
+.barTrack { flex: 1 1 88px; min-width: 56px; height: 6px; border-radius: var(--nm-r-xs); background: var(--nm-bg-hover); overflow: hidden; }
 .barFill {
   height: 100%; border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
@@ -261,7 +261,9 @@
 .dsFormHd { margin-top: var(--nm-dense-g3); }
 .dsHdTop { margin-top: var(--nm-dense-g3); }
 .dsInlineLabel { display: flex; align-items: center; gap: 6px; }
+.dsSelectedGroup { display: flex; align-items: center; min-width: 0; }
 .dsMemberPick { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g3); max-height: 104px; overflow-y: auto; padding: var(--nm-dense-g2); }
+.dsMemberPick .catBtn { display: inline-flex; align-items: center; padding: 2px 8px; }
 .dsFormatGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--nm-dense-g2); }
 .dsFormatCardLocal { cursor: pointer; padding: var(--nm-dense-g3); border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r); }
 .dsRadioHidden { display: none; }
@@ -320,3 +322,9 @@
 
 /* 阅览页的空态：给一个「去生成」的出口，而不是一句『还没有历史总结』就结束。 */
 .dsEmptyRecords { display: flex; flex-direction: column; align-items: center; gap: var(--nm-dense-g3); padding: var(--nm-dense-g3) 0 var(--nm-dense-g5); }
+
+@media (max-width: 560px) {
+  .taskName { flex-basis: 100%; max-width: 100%; }
+  .taskActions { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .barLabel { flex-basis: 132px; max-width: 55%; }
+}

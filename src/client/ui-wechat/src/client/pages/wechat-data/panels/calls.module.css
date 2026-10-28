@@ -99,8 +99,11 @@
   color: var(--nm-text-2);
 }
 .rankNo[data-top='1'] { color: var(--nm-cyan); }
+.rankIdentity {
+  flex: 0 1 142px;
+  min-width: 96px;
+}
 .rankName {
-  flex: 0 0 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -123,7 +126,11 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
+  max-width: 104px;
+  row-gap: 2px;
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
@@ -201,9 +208,13 @@
 /* ── 最近通话 ─────────────────────────────────────────────── */
 .recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;  }
 .recentRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'dir name time'
+    'dir status time';
   align-items: center;
-  gap: 10px;
+  gap: 2px 10px;
   width: 100%;
   padding: 6px 10px;
   border: 1px solid transparent;
@@ -217,19 +228,23 @@
 }
 .recentRow:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
 .recentDir {
-  flex: 0 0 34px;
+  grid-area: dir;
   font-size: 11px;
   color: var(--nm-text-2);
+  align-self: center;
 }
 .recentDir[data-out='1'] { color: var(--nm-cyan); }
+.recentIdentity {
+  grid-area: name;
+  min-width: 0;
+}
 .recentName {
-  flex: 0 0 110px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .recentStatus {
-  flex: 1 1 auto;
+  grid-area: status;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -237,7 +252,7 @@
 }
 .recentRow[data-state='missed'] .recentStatus { color: var(--nm-warning); }
 .recentTime {
-  flex: 0 0 auto;
+  grid-area: time;
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 11px;

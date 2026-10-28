@@ -12,6 +12,7 @@ import { stripCdata } from './parse-xml.ts'
 import { fmtDateTimeSec } from '../format.ts'
 import { resolveAvatarsLocal } from './avatar.ts'
 import type { FavItemPart } from '../types.ts'
+import { createEnterpriseDisplayIndex, withFavoritePartEnterprise } from './enterprise-display.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -318,6 +319,9 @@ export function parseFavParts(xml: string): FavRawPart[] {
     const desc = decodeFavText(xmlTagText(body, 'datadesc') ?? '').trim()
     const text = desc || title
     const sourceName = decodeFavText(xmlTagText(body, 'datasrcname') ?? '').trim()
+    const sourceUsername = decodeFavText(
+      xmlTagText(body, 'sourceusername') || xmlTagText(body, 'fromusername') || xmlTagText(body, 'fromusr') || '',
+    ).trim()
     const sourceTime = (xmlTagText(body, 'datasrctime') ?? '').trim()
     const sourceHead = (xmlTagText(body, 'sourceheadurl') ?? '').trim()
     const metaPart = (): FavRawPart => {
@@ -325,6 +329,8 @@ export function parseFavParts(xml: string): FavRawPart[] {
       if (title) p.title = title
       if (desc) p.desc = desc
       if (sourceName) p.sourceName = sourceName
+      if (sourceUsername) p.sourceUsername = sourceUsername
+      else if (dataSourceId.toLowerCase().endsWith('@openim')) p.sourceUsername = dataSourceId
       if (sourceTime) p.sourceTime = sourceTime
       if (sourceHead) p.sourceHead = sourceHead
       if (fullSize !== undefined) p.fullSize = fullSize
@@ -474,6 +480,7 @@ interface FavorItem {
   fromUsr: string
   chatName: string
   source: string
+  sourceEnterpriseName?: string
   /**
    * 来源头像：本机 data URL、contact 表头像地址，或 32 位头像 MD5。
    * MD5 由客户端交给 `apiGetSnsImageDataUrl` 解出本机图（与收藏图片同一条缓存链）。
@@ -530,7 +537,9 @@ export function queryFavorites(
     ].join(' ')
     const rows = db.prepare(sql).all(...kwParams, cap, offset) as Array<Record<string, unknown>>
     const total = (db.prepare('SELECT COUNT(*) AS n FROM fav_db_item' + whereSql).get(...kwParams) as { n: number } | undefined)?.n ?? rows.length
-    const names = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const names = meta.names
+    const enterpriseIndex = createEnterpriseDisplayIndex(names, meta.enterpriseNames)
     const avatarUsers: string[] = []
     const avatarUserSet = new Set<string>()
     const parsedRows = rows.map((r) => {
@@ -554,6 +563,11 @@ export function queryFavorites(
       const type = Number(r[sel('type', '0')] ?? 0)
       const parsed = parseFavContent(type, xml)
       const source = chatName ? (names.get(chatName) ?? chatName) : (fromUsr ? (names.get(fromUsr) ?? fromUsr) : '')
+      const sourceEnterpriseName = (
+        (chatName ? meta.enterpriseNames.get(chatName) : undefined)
+        || (fromUsr ? meta.enterpriseNames.get(fromUsr) : undefined)
+        || ''
+      ).trim()
       const updateTime = Number(r[sel('update_time', '0')] ?? 0)
       const serverId = cellStr(r.server_id ?? '')
       const sourceId = cellStr(r.source_id ?? '')
@@ -576,8 +590,9 @@ export function queryFavorites(
         fromUsr,
         chatName,
         source,
+        ...(sourceEnterpriseName !== '' ? { sourceEnterpriseName } : {}),
         avatar,
-        items: parseFavParts(xml),
+        items: withFavoritePartEnterprise(parseFavParts(xml), enterpriseIndex),
       }
     })
     return { favorites, total }

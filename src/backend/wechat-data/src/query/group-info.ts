@@ -4,10 +4,14 @@
  * member grid (chatroom_member joined to contact for names/avatars).
  */
 import { DatabaseSync } from './db-open.ts'
-import { withDb } from './db-open.ts'
 import { join } from 'node:path'
 import type { GroupInfo, GroupInfoSnapshot, GroupMember } from '../types.ts'
 import { buildRegion, cellText, parseContactExtra, readVarint } from './region.ts'
+import {
+  enterpriseNameFromExtra,
+  isEnterpriseWechatUser,
+  loadOpenimWordingNames,
+} from './openim.ts'
 
 /** Strip the WeChat instance suffix (wxid_xxx_f312 -> wxid_xxx). */
 function cleanWxid(username: string): string {
@@ -91,27 +95,6 @@ export function parseChatRoomExtBuffer(raw: Buffer): ChatRoomSnapshotMember[] {
   return out
 }
 
-/** Enterprise WeChat official wording map: wording_id(@im.wxwork) -> wording. */
-let _openimNames: { dir: string; map: Map<string, string> } | null = null
-function openimNames(decryptedDir: string): Map<string, string> {
-  if (_openimNames && _openimNames.dir === decryptedDir) return _openimNames.map
-  const map = new Map<string, string>()
-  try {
-    withDb(join(decryptedDir, 'contact', 'contact.db'), (db) => {
-      try {
-        const rows = db.prepare('SELECT wording_id AS id, wording AS w FROM openim_wording').all() as Array<{ id: unknown; w: unknown }>
-        for (const r of rows) {
-          const id = cellText(r.id).trim()
-          const w = cellText(r.w).trim()
-          if (id && w) map.set(id, w)
-        }
-      } catch { /* table absent */ }
-    })
-  } catch { /* contact db unavailable */ }
-  _openimNames = { dir: decryptedDir, map }
-  return map
-}
-
 /** Clean a profile text that may carry a protobuf prefix + JSON (enterprise WeChat). */
 function cleanProfileText(raw: string): string {
   const start = raw.indexOf('{')
@@ -171,6 +154,7 @@ export function queryGroupInfo(
     db = new DatabaseSync(dbPath, { readOnly: true })
     const row = db.prepare('SELECT username, nick_name, remark, chat_room_notify, flag FROM contact WHERE username=?').get(username) as Record<string, unknown> | undefined
     if (!row) return { group: null }
+    const enterpriseWordingNames = loadOpenimWordingNames(db)
 
     const name = cellText(row['nick_name']).trim() || username
     const remark = cellText(row['remark']).trim()
@@ -220,9 +204,11 @@ export function queryGroupInfo(
             const clean = cleanProfileText(extra.signature)
             if (clean) member.signature = clean
           }
-          if (mUsername.endsWith('@openim') && member.name === mUsername && extra.wordingId) {
-            const w = openimNames(decryptedDir).get(extra.wordingId)
-            if (w) member.name = w
+          if (isEnterpriseWechatUser(mUsername)) {
+            const enterpriseName = enterpriseNameFromExtra(ebBuf, enterpriseWordingNames)
+            if (enterpriseName !== undefined) {
+              member.enterpriseName = enterpriseName
+            }
           }
           if (extra.gender !== undefined) member.gender = extra.gender
           const region = buildRegion(extra.country ?? '', extra.province ?? '', extra.city ?? '')

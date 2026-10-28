@@ -22,8 +22,8 @@ import { FIRST_RUN_STEPS, QUESTION_CARDS } from '../onboarding-content.tsx'
  * 三处都按这两个数字现算，改了它会一起红。
  */
 const FACTS = [
-  { k: 'MODULES', v: '15' },
-  { k: 'REMOTE API', v: '219' },
+  { k: 'MODULES', v: '17' },
+  { k: 'REMOTE API', v: '227' },
 ] as const
 
 /** 一次「高频问法」点击：跳去功能引导那一页（把问句对上侧栏分组）。 */

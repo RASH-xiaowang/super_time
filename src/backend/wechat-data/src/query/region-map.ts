@@ -12,6 +12,7 @@ import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
 import type { RegionMapSnapshot, RegionNode } from '../types.ts'
 import { parseContactExtra, regionLabel } from './region.ts'
+import { isEnterpriseWechatUser, loadOpenimEnterpriseNamesFromDb } from './openim.ts'
 
 /** One parsed contact row with its region. */
 interface RegionRow {
@@ -19,6 +20,7 @@ interface RegionRow {
   displayName: string
   remark: string
   nickName: string
+  enterpriseName?: string
   avatarUrl?: string
   country: string
   province: string
@@ -49,15 +51,16 @@ export function queryRegionMap(decryptedDir: string): RegionMapSnapshot {
           has('nick_name'), has('big_head_url'), has('small_head_url'), has('extra_buffer')].join(', ') +
         ' FROM contact'
       const raw = db.prepare(sql).all() as Array<Record<string, unknown>>
+      const enterpriseNames = loadOpenimEnterpriseNamesFromDb(db)
       for (const r of raw) {
         const username = str(r[has('username')])
         if (!username) continue
         const localType = Number(r[has('local_type')] ?? 0)
         const deleteFlag = Number(r[has('delete_flag')] ?? 0)
-        // 只统计「联系人」：非官方 / 非群 / 非系统 / 非企业，local_type=1。
+        // 只统计「联系人」：非官方 / 非群 / 非系统，local_type=1；企微好友也属于联系人。
         if (deleteFlag !== 0 || localType !== 1) continue
-        // 排除群聊 / 公众号 / 企业微信 / 客服 / 系统账号，只保留个人好友。
-        if (username.endsWith('@chatroom') || username.includes('gh_') || username.includes('@kefu.openim') || username.endsWith('@openim') || /^(weixin|notifymessage|fmessage|newsapp)/.test(username)) continue
+        // 排除群聊 / 公众号 / 客服 / 系统账号；普通企微好友保留。
+        if (username.endsWith('@chatroom') || username.includes('gh_') || username.includes('@kefu.openim') || /^(weixin|notifymessage|fmessage|newsapp)/.test(username)) continue
         const extraBuf = toBuffer(r[has('extra_buffer')])
         const extra = extraBuf.length > 0 ? parseContactExtra(extraBuf) : null
         const country = regionLabel('country', extra?.country ?? '')
@@ -75,6 +78,10 @@ export function queryRegionMap(decryptedDir: string): RegionMapSnapshot {
           country,
           province,
           city,
+        }
+        if (isEnterpriseWechatUser(username)) {
+          const enterpriseName = enterpriseNames.get(username)?.trim()
+          if (enterpriseName) row.enterpriseName = enterpriseName
         }
         const head = str(r[has('small_head_url')]).trim() || str(r[has('big_head_url')]).trim()
         if (head) row.avatarUrl = head
@@ -115,6 +122,7 @@ export function queryRegionMap(decryptedDir: string): RegionMapSnapshot {
       displayName: row.displayName,
       remark: row.remark,
       nickName: row.nickName,
+      ...(row.enterpriseName ? { enterpriseName: row.enterpriseName } : {}),
       ...(row.avatarUrl ? { avatarUrl: row.avatarUrl } : {}),
     })
   }

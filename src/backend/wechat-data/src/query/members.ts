@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { searchIndexPath, withIndexWrite } from './search.ts'
 import type { MemberSearchHit, MemberSearchSnapshot } from '../types.ts'
+import { loadOpenimDirectoryFromDb, type OpenimDirectory } from './openim.ts'
 
 const CONTACT_FTS_META = 'contact_rows'
 /**
@@ -22,9 +23,10 @@ const CONTACT_FTS_META = 'contact_rows'
  * **索引健康时永远搜不到**，只有降级走 LIKE 才搜得到（第 96 轮那次修复只补到了 LIKE 那两条 SQL，
  * FTS 这条一直没补上）。同一句查询因索引在不在给出不同结果，比"两边都搜不到"更坏。
  * v2 把 `alias` 与 `quanpin` 也建成可检索列，并在查询里显式点名这三列。
+ * v3 再加入企业微信的 `enterprise`，让企业名称既能展示也能参与搜索。
  * 版本变了就把旧的派生表丢掉重建（索引库任何时候都可从 contact.db 重算，无需保留）。
  */
-const CONTACT_FTS_SCHEMA = 2
+const CONTACT_FTS_SCHEMA = 3
 const CONTACT_FTS_SCHEMA_META = 'contact_fts_schema'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
@@ -45,8 +47,23 @@ function tableExists(db: DatabaseSync, table: string): boolean {
   }
 }
 
+/** Column names for an existing table; an empty set means unusable/absent. */
+function tableColumns(db: DatabaseSync, table: string): Set<string> {
+  try {
+    return new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(row => row.name),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
 /** Map raw contact rows to member-search hits. */
-function hitsFromRows(rows: Array<Record<string, unknown>>, roomName?: string): MemberSearchHit[] {
+function hitsFromRows(
+  rows: Array<Record<string, unknown>>,
+  roomName?: string,
+  enterpriseNames: ReadonlyMap<string, string> = new Map(),
+): MemberSearchHit[] {
   const out: MemberSearchHit[] = []
   for (const r of rows) {
     const username = cellText(r['username']).trim()
@@ -62,6 +79,8 @@ function hitsFromRows(rows: Array<Record<string, unknown>>, roomName?: string): 
     if (sig) hit.signature = sig
     const region = cellText(r['region']).trim()
     if (region) hit.region = region
+    const enterpriseName = cellText(r['enterprise']).trim() || enterpriseNames.get(username)?.trim()
+    if (enterpriseName) hit.enterpriseName = enterpriseName
     out.push(hit)
   }
   return out
@@ -96,10 +115,19 @@ function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'una
   if (!existsSync(contactPath)) return 'unavailable'
   let cdb: DatabaseSync | null = null
   let rows: Array<Record<string, unknown>>
+  let directory: OpenimDirectory = { wordingNames: new Map(), enterpriseNames: new Map() }
   try {
     cdb = new DatabaseSync(contactPath, { readOnly: true })
     if (!tableExists(cdb, 'contact')) return 'unavailable'
-    rows = cdb.prepare('SELECT username, remark, nick_name, alias, quan_pin FROM contact').all() as Array<Record<string, unknown>>
+    const cols = new Set(
+      (cdb.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map((row) => row.name),
+    )
+    const sel = (name: string): string => (cols.has(name) ? name : 'NULL')
+    rows = cdb.prepare(
+      `SELECT ${sel('username')} AS username, ${sel('remark')} AS remark, ${sel('nick_name')} AS nick_name, ` +
+      `${sel('alias')} AS alias, ${sel('quan_pin')} AS quan_pin, ${sel('extra_buffer')} AS extra_buffer FROM contact`,
+    ).all() as Array<Record<string, unknown>>
+    directory = loadOpenimDirectoryFromDb(cdb)
   } catch (e) {
     console.warn('[members] contact.db 读不到，本次成员搜索回退 LIKE：' + (e as Error).message)
     return 'unavailable'
@@ -112,14 +140,21 @@ function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'una
       // 旧 schema 的表是派生数据，丢掉重建比「留着但搜不到」诚实。
       db.exec('DROP TABLE contact_fts')
     }
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias, quanpin, local_type UNINDEXED, tokenize='unicode61')")
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias, quanpin, enterprise, local_type UNINDEXED, tokenize='unicode61')")
     db.exec('BEGIN')
     try {
-      const ins = db.prepare('INSERT INTO contact_fts(name, username, remark, alias, quanpin, local_type) VALUES(?, ?, ?, ?, ?, 0)')
+      const ins = db.prepare('INSERT INTO contact_fts(name, username, remark, alias, quanpin, enterprise, local_type) VALUES(?, ?, ?, ?, ?, ?, 0)')
       for (const r of rows) {
         const username = cellText(r['username']).trim()
         if (!username) continue
-        ins.run(cellText(r['remark']).trim() || cellText(r['nick_name']).trim() || username, username, cellText(r['remark']).trim(), cellText(r['alias']).trim(), cellText(r['quan_pin']).trim())
+        ins.run(
+          cellText(r['remark']).trim() || cellText(r['nick_name']).trim() || username,
+          username,
+          cellText(r['remark']).trim(),
+          cellText(r['alias']).trim(),
+          cellText(r['quan_pin']).trim(),
+          directory.enterpriseNames.get(username) ?? '',
+        )
       }
       db.exec('COMMIT')
     } catch (e) {
@@ -180,9 +215,20 @@ function searchGlobalMembers(decryptedDir: string, term: string, cap: number): M
       if (state === 'ready') {
         // 三列分别点名：`name`（备注‖昵称‖username）、`alias`（别名）、`quanpin`（备注全拼）。
         // 只写 `"词"` 会退化成"只搜 name"，那正是 v1 搜不到全拼/别名的原因。
+        const ftsCols = tableColumns(db, 'contact_fts')
+        const searchable = ['name', 'alias', 'quanpin', 'enterprise'].filter(col => ftsCols.has(col))
+        if (searchable.length === 0) {
+          console.warn('[members] contact_fts 缺少可检索列，本次成员搜索回退 LIKE')
+          return searchGlobalLike(decryptedDir, term, cap)
+        }
         const phrase = '"' + term.replace(/"/g, '""') + '"'
-        const match = `name:${phrase} OR alias:${phrase} OR quanpin:${phrase}`
-        const rows = db.prepare('SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?').all(match, cap * 4) as Array<Record<string, unknown>>
+        const match = searchable.map(col => `${col}:${phrase}`).join(' OR ')
+        const select = (col: string): string => (ftsCols.has(col) ? col : 'NULL')
+        const rows = db.prepare(
+          `SELECT ${select('name')} AS name, ${select('username')} AS username, ` +
+          `${select('remark')} AS remark, ${select('alias')} AS alias, ${select('enterprise')} AS enterprise ` +
+          'FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?',
+        ).all(match, cap * 4) as Array<Record<string, unknown>>
         // 空命中**不**直接返回空：FTS5 是整词匹配，半截全拼（"wangxiaomi"）在索引里天然命中不了，
         // 得让 LIKE 兜一层，否则"装了索引"反而比没装搜得更少。代价是每次空命中多扫一遍 contact.db。
         if (rows.length > 0) {
@@ -190,12 +236,21 @@ function searchGlobalMembers(decryptedDir: string, term: string, cap: number): M
           const cdbPath = join(decryptedDir, 'contact', 'contact.db')
           let cdb: DatabaseSync | null = null
           try { cdb = new DatabaseSync(cdbPath, { readOnly: true }) } catch { cdb = null }
-          const headStmt = cdb && tableExists(cdb, 'contact') ? cdb.prepare('SELECT small_head_url, big_head_url FROM contact WHERE username=?') : null
+          const cdbCols = cdb && tableExists(cdb, 'contact') ? tableColumns(cdb, 'contact') : new Set<string>()
+          const headSelect = cdbCols.has('username')
+            ? [cdbCols.has('small_head_url') ? 'small_head_url' : 'NULL AS small_head_url',
+              cdbCols.has('big_head_url') ? 'big_head_url' : 'NULL AS big_head_url'].join(', ')
+            : ''
+          const headStmt = cdb && headSelect !== ''
+            ? cdb.prepare(`SELECT ${headSelect} FROM contact WHERE username=?`)
+            : null
           try {
             for (const r of rows) {
               const username = cellText(r['username']).trim()
               if (!username) continue
               const hit: MemberSearchHit = { username, name: cellText(r['name']).trim() || username }
+              const enterpriseName = cellText(r['enterprise']).trim()
+              if (enterpriseName) hit.enterpriseName = enterpriseName
               if (headStmt) {
                 try {
                   const hr = headStmt.get(username) as { small_head_url?: unknown; big_head_url?: unknown } | undefined
@@ -228,10 +283,30 @@ function searchGlobalLike(decryptedDir: string, term: string, cap: number): Memb
     const db = new DatabaseSync(p, { readOnly: true })
     try {
       if (!tableExists(db, 'contact')) return { items: [], total: 0, source: 'like' }
+      const cols = tableColumns(db, 'contact')
+      if (!cols.has('username')) return { items: [], total: 0, source: 'like' }
+      const directory = loadOpenimDirectoryFromDb(db)
       const like = '%' + term + '%'
-      const sql = 'SELECT username, remark, nick_name, alias, small_head_url, big_head_url FROM contact WHERE remark LIKE ? OR nick_name LIKE ? OR username LIKE ? OR alias LIKE ? OR quan_pin LIKE ? ORDER BY remark, nick_name LIMIT ?'
-      const rows = db.prepare(sql).all(like, like, like, like, like, cap) as Array<Record<string, unknown>>
-      return { items: hitsFromRows(rows), total: rows.length, source: 'like' }
+      const enterpriseUsers = [...directory.enterpriseNames]
+        .filter(([, name]) => name.toLocaleLowerCase().includes(term.toLocaleLowerCase()))
+        .map(([username]) => username)
+      const enterpriseSql = enterpriseUsers.length > 0
+        ? ` OR username IN (${enterpriseUsers.map(() => '?').join(', ')})`
+        : ''
+      const searchable = ['remark', 'nick_name', 'username', 'alias', 'quan_pin'].filter(col => cols.has(col))
+      if (searchable.length === 0) return { items: [], total: 0, source: 'like' }
+      const likeClauses = searchable.map(col => `${col} LIKE ?`).join(' OR ')
+      const sel = (col: string): string => (cols.has(col) ? col : 'NULL')
+      const order = [cols.has('remark') ? 'remark' : '', cols.has('nick_name') ? 'nick_name' : ''].filter(Boolean)
+      const sql = `SELECT ${sel('username')} AS username, ${sel('remark')} AS remark, ` +
+        `${sel('nick_name')} AS nick_name, ${sel('alias')} AS alias, ` +
+        `${sel('small_head_url')} AS small_head_url, ${sel('big_head_url')} AS big_head_url ` +
+        `FROM contact WHERE (${likeClauses}${enterpriseSql})` +
+        (order.length > 0 ? ` ORDER BY ${order.join(', ')}` : '') + ' LIMIT ?'
+      const rows = db.prepare(sql).all(
+        ...searchable.map(() => like), ...enterpriseUsers, cap,
+      ) as Array<Record<string, unknown>>
+      return { items: hitsFromRows(rows, undefined, directory.enterpriseNames), total: rows.length, source: 'like' }
     } finally {
       db.close()
     }
@@ -250,9 +325,15 @@ function searchRoomMembers(decryptedDir: string, roomUsername: string, term: str
       if (!tableExists(db, 'chat_room') || !tableExists(db, 'chatroom_member') || !tableExists(db, 'contact')) {
         return { items: [], total: 0, source: 'like' }
       }
+      const directory = loadOpenimDirectoryFromDb(db)
       const room = db.prepare('SELECT id FROM chat_room WHERE username=?').get(roomUsername) as { id?: number } | undefined
       if (room?.id === undefined) return { items: [], total: 0, source: 'like' }
-      const display = db.prepare('SELECT nick_name, remark FROM contact WHERE username=?').get(roomUsername) as { nick_name?: unknown; remark?: unknown } | undefined
+      const cols = tableColumns(db, 'contact')
+      if (!cols.has('username') || !cols.has('id')) return { items: [], total: 0, source: 'like' }
+      const sel = (col: string): string => (cols.has(col) ? col : 'NULL')
+      const display = db.prepare(
+        `SELECT ${sel('nick_name')} AS nick_name, ${sel('remark')} AS remark FROM contact WHERE username=?`,
+      ).get(roomUsername) as { nick_name?: unknown; remark?: unknown } | undefined
       const roomName = (display ? cellText(display.remark).trim() || cellText(display.nick_name).trim() : '') || roomUsername
       const like = '%' + term + '%'
       // 第 96 轮：这里原先只有 remark / nick_name / username，**漏了备注全拼 `quan_pin` 与别名 `alias`**，
@@ -263,9 +344,27 @@ function searchRoomMembers(decryptedDir: string, roomUsername: string, term: str
       // 而它声称守着的 FTS 路径当时也确实没被任何用例碰过。
       // 群内这条**只有 LIKE、没有 FTS 分支**，所以上面那处 v1「可检索列」缺陷与它无关 ——
       // 别照着全库那条给这里"补索引"，这里要补的一向只是列清单。
-      const sql = 'SELECT c.username, c.remark, c.nick_name, c.small_head_url, c.big_head_url, cr.username AS room FROM chatroom_member m JOIN contact c ON c.id=m.member_id JOIN chat_room cr ON cr.id=m.room_id WHERE m.room_id=? AND (c.remark LIKE ? OR c.nick_name LIKE ? OR c.username LIKE ? OR c.alias LIKE ? OR c.quan_pin LIKE ?) ORDER BY c.remark, c.nick_name LIMIT ?'
-      const rows = db.prepare(sql).all(room.id, like, like, like, like, like, cap) as Array<Record<string, unknown>>
-      return { items: hitsFromRows(rows, roomName), total: rows.length, source: 'like' }
+      const enterpriseUsers = [...directory.enterpriseNames]
+        .filter(([, name]) => name.toLocaleLowerCase().includes(term.toLocaleLowerCase()))
+        .map(([username]) => username)
+      const enterpriseSql = enterpriseUsers.length > 0
+        ? ` OR c.username IN (${enterpriseUsers.map(() => '?').join(', ')})`
+        : ''
+      const searchable = ['remark', 'nick_name', 'username', 'alias', 'quan_pin'].filter(col => cols.has(col))
+      if (searchable.length === 0) return { items: [], total: 0, source: 'like' }
+      const likeClauses = searchable.map(col => `c.${col} LIKE ?`).join(' OR ')
+      const order = [cols.has('remark') ? 'c.remark' : '', cols.has('nick_name') ? 'c.nick_name' : ''].filter(Boolean)
+      const selC = (col: string): string => (cols.has(col) ? `c.${col}` : 'NULL')
+      const sql = `SELECT ${selC('username')} AS username, ${selC('remark')} AS remark, ` +
+        `${selC('nick_name')} AS nick_name, ${selC('small_head_url')} AS small_head_url, ` +
+        `${selC('big_head_url')} AS big_head_url, cr.username AS room ` +
+        'FROM chatroom_member m JOIN contact c ON c.id=m.member_id JOIN chat_room cr ON cr.id=m.room_id ' +
+        `WHERE m.room_id=? AND (${likeClauses}${enterpriseSql})` +
+        (order.length > 0 ? ` ORDER BY ${order.join(', ')}` : '') + ' LIMIT ?'
+      const rows = db.prepare(sql).all(
+        room.id, ...searchable.map(() => like), ...enterpriseUsers, cap,
+      ) as Array<Record<string, unknown>>
+      return { items: hitsFromRows(rows, roomName, directory.enterpriseNames), total: rows.length, source: 'like' }
     } finally {
       db.close()
     }

@@ -24,6 +24,7 @@ import { querySessions } from './sessions.ts'
 import { yieldToLoop } from './search-build.ts'
 import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
 import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatTxtChunksAsync, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
+import { buildSessionMediaManifest, emptySessionMediaArchive, prepareSessionMediaArchive, writeSessionMediaArchive, type ExportMediaLinks, type SessionMediaArchive } from './export-media.ts'
 
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>> {
@@ -161,13 +162,13 @@ export function planSessionExport(
 }
 
 /** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
-export function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string): string {
-  if (format === 'csv') return formatCsv(msgs, username)
-  if (format === 'html') return formatHtml(msgs, username, now)
-  if (format === 'md') return formatMarkdown(msgs, username)
-  if (format === 'sql') return formatSql(msgs, username)
-  if (format === 'json') return formatJson(msgs, username)
-  return formatTxt(msgs, username)
+export function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string, mediaByMessage?: ExportMediaLinks): string {
+  if (format === 'csv') return formatCsv(msgs, username, mediaByMessage)
+  if (format === 'html') return formatHtml(msgs, username, now, mediaByMessage)
+  if (format === 'md') return formatMarkdown(msgs, username, mediaByMessage)
+  if (format === 'sql') return formatSql(msgs, username, mediaByMessage)
+  if (format === 'json') return formatJson(msgs, username, mediaByMessage)
+  return formatTxt(msgs, username, mediaByMessage)
 }
 
 export function exportSessionMessages(
@@ -228,8 +229,14 @@ export async function exportSessionMessagesStreamed(
     to?: number
     filename?: string
     zip?: boolean
+    /** Decoded image cache; defaults to the sibling `decoded_images` directory. */
+    decodedDir?: string
+    /** Raw WeChat account root; normally supplied by the gateway. */
+    wechatBaseDir?: string
+    aesKey?: string
+    xorKey?: number
   } & StreamControl,
-): Promise<{ path: string; filename: string; count: number }> {
+): Promise<{ path: string; filename: string; count: number; mediaCount: number; mediaMissingCount: number }> {
   const ctrl: StreamControl = { onProgress: options.onProgress, signal: options.signal }
   // 收集这一段是整条导出里最耗时的同步循环 ⇒ 走**会让出**的版本：不让出时 4 万条会把
   // 后端事件循环独占 2.5 秒，期间别的面板一个查询都进不来（H8 验收项，实测见
@@ -240,6 +247,19 @@ export async function exportSessionMessagesStreamed(
     options.types, options.richTypes, options.from, options.to, options.filename, options.zip, ctrl, collected,
   )
   const { msgs } = plan
+  const mediaArchive: SessionMediaArchive = options.zip
+    ? await prepareSessionMediaArchive({
+      decryptedDir,
+      decodedDir: options.decodedDir || join(dirname(decryptedDir), 'decoded_images'),
+      username: options.username,
+      msgs,
+      ...(options.wechatBaseDir ? { wechatBaseDir: options.wechatBaseDir } : {}),
+      ...(options.aesKey ? { aesKey: options.aesKey } : {}),
+      ...(options.xorKey !== undefined ? { xorKey: options.xorKey } : {}),
+      ctrl,
+    })
+    : emptySessionMediaArchive()
+  const mediaLinks: ExportMediaLinks | undefined = mediaArchive.entries.length > 0 ? mediaArchive.links : undefined
   if (plan.isXlsx && !options.zip) {
     // 大行数的正路：sheet 逐块产出 → 流式 deflate → temp+rename。
     // 行数此刻已经知道（消息都已收集），把它报给流式层 ⇒ 'format' 阶段才有 done/total，
@@ -248,23 +268,35 @@ export async function exportSessionMessagesStreamed(
   } else if (plan.isXlsx) {
     // zip 包裹时内层必须是完整的 xlsx 字节：仍走内存版（多一层流式需要再落一次临时文件，
     // 而单会话上限 5 万条、内层 xlsx 本身是压缩数据，收益不抵复杂度）。
-    const content = formatXlsx(msgs, options.username, ctrl)
     await writeZipAtomic(plan.outPath, async (zip) => {
+      await writeSessionMediaArchive(zip, mediaArchive, ctrl)
+      const content = formatXlsx(msgs, options.username, ctrl, mediaLinks)
       await zip.addFile(plan.innerName, content)
-      await zip.addFile('record_media.json', JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2))
+      await zip.addFile('record_media.json', buildSessionMediaManifest(
+        options.username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
+      ))
     })
   } else {
-    const content = formatTextBody(plan.format, msgs, options.username, plan.now)
     if (options.zip) {
       await writeZipAtomic(plan.outPath, async (zip) => {
+        await writeSessionMediaArchive(zip, mediaArchive, ctrl)
+        const content = formatTextBody(plan.format, msgs, options.username, plan.now, mediaLinks)
         await zip.addFile(plan.innerName, content)
-        await zip.addFile('record_media.json', JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2))
+        await zip.addFile('record_media.json', buildSessionMediaManifest(
+          options.username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
+        ))
       })
     } else {
-      writeFileAtomicSync(plan.outPath, content)
+      writeFileAtomicSync(plan.outPath, formatTextBody(plan.format, msgs, options.username, plan.now))
     }
   }
-  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length }
+  return {
+    path: plan.outPath,
+    filename: plan.filenameOut,
+    count: msgs.length,
+    mediaCount: mediaArchive.mediaCount,
+    mediaMissingCount: mediaArchive.mediaMissingCount,
+  }
 }
 /**
  * Export a data category to CSV under the exports dir.
@@ -303,7 +335,7 @@ export async function exportCsv(
     //  备注/昵称 分开保留，便于在表格里按备注筛选
     //  首字母/全拼 保留，便于排序与做搜索表
     //  群成员数/群主/所在群 只有对应类目才有值，留空即可
-    header = ['显示名', '备注', '昵称', '微信号', '别名', '类型', '首字母', '全拼', '群成员数', '群主', '所在群']
+    header = ['显示名', '备注', '昵称', '微信号', '别名', '企业名称', '类型', '首字母', '全拼', '群成员数', '群主', '所在群']
     const env = queryContacts(decryptedDir, category ? { category } : undefined)
     for (const c of env.contacts) {
       // 取消检查点：每行一次。CSV 的行数可以是几万（收藏上限 5000、记录 5000、
@@ -315,6 +347,7 @@ export async function exportCsv(
         c.nickName ?? '',
         c.username ?? '',
         c.alias ?? '',
+        c.enterpriseName ?? '',
         c.localTypeLabel ?? c.category ?? '',
         c.initial ?? '',
         c.quanPin ?? '',
@@ -351,12 +384,12 @@ export async function exportCsv(
       rows.push([m.tid, m.username, m.author, m.time, m.text, m.media_desc])
     }
   } else if (kind === 'privacy') {
-    header = ['类别', '会话', '联系人', '时间', '片段']
+    header = ['类别', '会话', '联系人', '企业名称', '时间', '片段']
     const env = await queryPrivacyScan(decryptedDir)
     for (const c of env.categories) {
       throwIfCancelled(ctrl?.signal)
       for (const s of c.samples) {
-        rows.push([c.label, s.username, s.name, s.time, s.snippet])
+        rows.push([c.label, s.username, s.name, s.enterpriseName ?? '', s.time, s.snippet])
       }
     }
   } else {

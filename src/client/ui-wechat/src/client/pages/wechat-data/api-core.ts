@@ -158,6 +158,16 @@ import type {
   TaskTriggerSecretRevealResult,
   TaskTriggerSnapshot,
 } from '@deepseek-ai/dsh-wechat-data/types'
+import type {
+  MessageListMutationResult,
+  MessageListQuery,
+  MessageListRecordInput,
+  MessageListRecordResult,
+  MessageListRuleInput,
+  MessageListRuleSnapshot,
+  MessageListSnapshot,
+  MessageListWebhookInfo,
+} from '@deepseek-ai/dsh-wechat-data/types'
 import {
   SNAPSHOT_REFRESHED_EVENT,
   cachedFetch,
@@ -317,6 +327,18 @@ export interface WechatRemote {
   scanTaskTriggers(): Promise<RemoteResult<TaskTriggerScanResult>>
   /** 手动重投一条触发记录的回调。 */
   dispatchTaskCallback(options: { triggerId: number }): Promise<RemoteResult<TaskCallbackDispatchResult>>
+  /** 消息列表（最新在前；读失败用 readError 与「确无记录」区分）。 */
+  listMessageListRecords(query?: MessageListQuery): Promise<RemoteResult<MessageListSnapshot>>
+  /** 按会话名 + 触发对象配置的下游 Webhook 规则。 */
+  listMessageListRules(): Promise<RemoteResult<MessageListRuleSnapshot>>
+  saveMessageListRule(options: MessageListRuleInput): Promise<RemoteResult<MessageListMutationResult>>
+  deleteMessageListRule(options: { id: number }): Promise<RemoteResult<MessageListMutationResult>>
+  /** 手动插入一条回复记录；若匹配到规则会立即尝试投递。 */
+  insertMessageListRecord(options: MessageListRecordInput): Promise<RemoteResult<MessageListRecordResult>>
+  /** 重发一条记录（优先使用记录内的 Webhook 地址快照）。 */
+  resendMessageListRecord(options: { id: number }): Promise<RemoteResult<MessageListRecordResult>>
+  /** 局域网 Webhook 地址与示例（含令牌，仅桌面端可调用）。 */
+  getMessageListWebhookInfo(): Promise<RemoteResult<MessageListWebhookInfo>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>
   getSelfUsername(): Promise<RemoteResult<{ username: string }>>
   /**
@@ -324,12 +346,12 @@ export interface WechatRemote {
    * 未解密/取不到时 name 为空串（界面回退品牌名）。
    */
   getSelfProfile(): Promise<RemoteResult<SelfProfile>>
-  getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
+  getMomentsAuthors(): Promise<RemoteResult<Array<{ username: string; name: string; enterpriseName?: string; count: number }>>>
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlySnapshot>>
   getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number; canceled?: boolean }>>
   analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<RemoteResult<LayaAnalysisView>>
-  analyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string }): Promise<RemoteResult<LayaVisibleAnalysisResult>>
+  analyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string; force?: boolean }): Promise<RemoteResult<LayaVisibleAnalysisResult>>
   getLayaStatus(): Promise<RemoteResult<LayaStatus>>
   downloadLayaModel(options?: { jobId?: string }): Promise<RemoteResult<LayaDownloadOutcome>>
   cancelLayaDownload(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
@@ -427,7 +449,12 @@ export interface WechatRemote {
   searchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<RemoteResult<SearchSnapshot>>
   cancelSearch(options?: { jobId?: string }): Promise<RemoteResult<{ ok: boolean }>>
   searchUnified(options: { query: string; limit?: number }): Promise<RemoteResult<UnifiedSearchSnapshot>>
-  suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<RemoteResult<ReplySuggestResult>>
+  suggestReplies(options: {
+    username?: string
+    kbId?: number
+    count?: number
+    targetLocalId?: number
+  }): Promise<RemoteResult<ReplySuggestResult>>
   askWechat(options: {
     question: string
     username?: string

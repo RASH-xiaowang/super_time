@@ -8,6 +8,7 @@
  */
 import { type StreamControl } from './zip.ts';
 import type { WechatMessage } from '../types.ts';
+import { type ExportMediaLinks } from './export-media.ts';
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export declare function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>>;
 /** Filter by message types and/or rich sub-types (empty lists = keep all). */
@@ -55,7 +56,7 @@ export declare function planSessionExport(decryptedDir: string, username: string
  */
 preCollected?: WechatMessage[]): SessionExportPlan;
 /** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
-export declare function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string): string;
+export declare function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string, mediaByMessage?: ExportMediaLinks): string;
 export declare function exportSessionMessages(decryptedDir: string, username: string, format: string, count?: number, dir?: string, types?: number[], richTypes?: string[], from?: number, to?: number, filename?: string, zip?: boolean, ctrl?: StreamControl): {
     path: string;
     filename: string;
@@ -84,10 +85,18 @@ export declare function exportSessionMessagesStreamed(decryptedDir: string, opti
     to?: number;
     filename?: string;
     zip?: boolean;
+    /** Decoded image cache; defaults to the sibling `decoded_images` directory. */
+    decodedDir?: string;
+    /** Raw WeChat account root; normally supplied by the gateway. */
+    wechatBaseDir?: string;
+    aesKey?: string;
+    xorKey?: number;
 } & StreamControl): Promise<{
     path: string;
     filename: string;
     count: number;
+    mediaCount: number;
+    mediaMissingCount: number;
 }>;
 /**
  * Export a data category to CSV under the exports dir.

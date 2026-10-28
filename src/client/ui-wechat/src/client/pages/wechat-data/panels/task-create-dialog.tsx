@@ -27,6 +27,7 @@ import {
   photoHint, pickMembers, removeKeyword, validateTaskCreate,
   type TaskCreateForm, type TaskCreateSession,
 } from './task-create.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import cssrows from './chats-rows.module.css'
@@ -143,7 +144,7 @@ function MemberPicker(props: MemberPickerProps): React.JSX.Element {
         <div className={cssrows.searchIcon}><IconSearchOutline16 size={13} /></div>
         <input
           type="text"
-          placeholder="搜索昵称或微信号"
+          placeholder="搜索昵称、微信号或企业名称"
           value={query}
           onChange={(e) => { onQueryChange(e.target.value) }}
         />
@@ -165,7 +166,7 @@ function MemberPicker(props: MemberPickerProps): React.JSX.Element {
               onClick={() => { onSelect(member) }}
             >
               <Avatar name={member.name} username={member.username} size={26} />
-              <span className={css.memberName}>{member.name}</span>
+              <span className={css.memberName}>{withEnterprise(member.name, member.enterpriseName)}</span>
               <span className={css.memberUser}>{member.username}</span>
             </button>
           ))}
@@ -277,7 +278,7 @@ function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element
           <div className={css.chatRow}>
             <Avatar name={session.displayName} username={session.username} size={32} />
             <div className={css.chatMain}>
-              <div className={css.chatName}>{session.displayName || session.username}</div>
+              <div className={css.chatName}>{withEnterprise(session.displayName || session.username, session.enterpriseName)}</div>
               <div className={css.chatMeta}>{session.username}</div>
             </div>
           </div>
@@ -443,7 +444,12 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
   }
 
   const selectMember = (member: GroupMember): void => {
-    setForm((prev) => ({ ...prev, targetUsername: member.username, targetName: member.name }))
+    setForm((prev) => ({
+      ...prev,
+      targetUsername: member.username,
+      targetName: member.name,
+      targetEnterpriseName: member.enterpriseName,
+    }))
     setError('')
   }
 
@@ -498,7 +504,9 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
   }, [desktop, form, session, onCreated])
 
   const keywordCount = form.keywords.length
-  const targetLabel = form.targetName || form.targetUsername
+  const targetLabel = form.targetName
+    ? withEnterprise(form.targetName, form.targetEnterpriseName)
+    : form.targetUsername
   const nameExample = defaultTaskName({
     chatName: session.displayName,
     chatType: session.type,

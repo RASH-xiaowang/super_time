@@ -9,6 +9,7 @@
     "gateway-voice-ops.ts",
     "gateway-config-ops.ts",
     "gateway-laya-ops.ts",
+    "gateway-message-list.ts",
     "gateway-taskcenter.ts",
     "gateway-db-health.ts",
     "gateway-clawbot.ts",
@@ -25,6 +26,7 @@
     "api-config.ts",
     "api-status.ts",
     "api-clawbot.ts",
-    "api-task-center.ts"
+    "api-task-center.ts",
+    "api-message-list.ts"
   ]
 }

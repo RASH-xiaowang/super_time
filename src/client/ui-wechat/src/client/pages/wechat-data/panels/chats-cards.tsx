@@ -18,11 +18,18 @@ import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessage
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { CardFoot } from './chats-card-foot.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import { IconDataOutline16, IconLinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MpArticle, MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { ChatlogRecord, MpArticle, MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
 /** Authoritative transfer/redpacket status line from general.db. */
-export function PayStatusLine({ serverId }: { serverId: string }): React.JSX.Element | null {
+export function PayStatusLine({ serverId, senderName, senderUsername, senderEnterpriseName }: {
+  serverId: string
+  senderName?: string
+  senderUsername?: string
+  senderEnterpriseName?: string
+}): React.JSX.Element | null {
   const [pay, setPay] = useState<PaymentStatus | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -37,10 +44,23 @@ export function PayStatusLine({ serverId }: { serverId: string }): React.JSX.Ele
     : rp.receiveStatus === 3 ? '已被领取'
       : rp.receiveStatus === 2 ? '已领取'
         : '待领取'
+  const sender = withEnterprise(
+    senderName || rp.senderName || rp.sender,
+    senderEnterpriseName || rp.senderEnterpriseName,
+  )
+  const avatarUsername = senderUsername?.trim() ?? ''
   return (
     <div className={cssrows.msgPayStatus} data-kind={pay.kind}>
-      {rp.sender ? '来自 ' + rp.sender + ' · ' : ''}{state}
-      {rp.hbType === 1 ? ' · 群红包' : ''}
+      {sender && (
+        avatarUsername ? (
+          <>
+            <span>来自</span>
+            <IdentityName name={senderName || rp.senderName || rp.sender} username={avatarUsername} size={14} />
+            <span aria-hidden="true">·</span>
+          </>
+        ) : <span>{'来自 ' + sender + ' · '}</span>
+      )}
+      <span>{state}{rp.hbType === 1 ? ' · 群红包' : ''}</span>
     </div>
   )
 }
@@ -169,6 +189,32 @@ export function mpArticlesOf(rich: MessageRich): MpArticle[] {
   if (!Array.isArray(raw)) return []
   return raw.filter((a): a is MpArticle => !!a && typeof a === 'object')
 }
+
+/** 合并转发卡的内层预览：发送者带头像，正文仍保持单行省略。 */
+function ChatlogPreview({ records }: { records: ChatlogRecord[] }): React.JSX.Element | null {
+  const lines = records.slice(0, 4)
+  if (lines.length === 0) return null
+  return (
+    <span className={cssrows.msgChatlogPreview}>
+      {lines.map((record, idx) => {
+        const name = withEnterprise(record.name, record.enterpriseName)
+        const text = `${record.name ? `${name}：` : ''}${record.text || ''}`.trim()
+        return (
+          <span key={idx} className={cssrows.msgChatlogLine} title={text}>
+            <IdentityName
+              className={cssrows.msgChatlogLineIdentity}
+              name={record.name || record.sourceUsername || '群成员'}
+              username={record.sourceUsername ?? ''}
+              size={14}
+            >
+              {text}
+            </IdentityName>
+          </span>
+        )
+      })}
+    </span>
+  )
+}
 /**
  * 公众号推送卡（官方形态，用户参考图）：**大图封面**在卡片顶部，
  * 单篇推送在封面下方给标题；多篇推送则把次条排成一行一篇（标题 + 右小方图），
@@ -290,6 +336,52 @@ export const CARD_KINDS = new Set<RenderKind>([
   'card', 'note', 'sticker', 'announcement', 'solitaire', 'chatlog',
   'transfer', 'redpacket', 'unsupported', 'unknown',
 ])
+
+interface RichCardProps {
+  rich: MessageRich
+  fallback: string
+  self?: boolean
+  onOpenChatlog?: (rich: MessageRich) => void
+  serverId?: string
+  /** 本条消息的接收时间（秒）—— 文件卡按它缩小到月份目录。 */
+  createTime?: number
+  senderName?: string
+  senderUsername?: string
+  senderEnterpriseName?: string
+}
+
+/** Quote preview under a message bubble; only probe avatars for a real referrer username. */
+function QuoteStrip({ name, username, summary, typeLabel, icon, thumb }: {
+  name: string
+  username: string
+  summary: string
+  typeLabel: string
+  icon: React.ReactNode
+  thumb: string
+}): React.JSX.Element | null {
+  if (!summary && !name && !typeLabel) return null
+  const thumbOpen = /^https?:\/\//i.test(thumb)
+  return (
+    <div className={css.msgQuoteStrip} title={name ? `${name}：${summary}` : summary}>
+      {name && (
+        username
+          ? <IdentityName className={cssrows.msgQuoteWho} name={name} username={username} size={16} title={username}>{name}:</IdentityName>
+          : <span className={cssrows.msgQuoteWho}>{name}:</span>
+      )}
+      {icon && <span className={cssrows.msgQuoteKind} aria-hidden="true">{icon}</span>}
+      <span className={cssrows.msgQuoteWhat}>{summary || `[${typeLabel}]`}</span>
+      {thumb && (
+        <span
+          className={`${cssrows.msgQuoteThumbWrap} ${thumbOpen ? cssrows.msgQuoteThumbOpen : ''}`}
+          {...(thumbOpen ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' }) : {})}
+        >
+          <RemoteImg className={cssrows.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+        </span>
+      )}
+    </div>
+  )
+}
+
 /**
  * Render a rich media card (file/link/quote/miniapp/...) inside a bubble.
  *
@@ -298,15 +390,7 @@ export const CARD_KINDS = new Set<RenderKind>([
  * @param props - the parsed rich descriptor + render context.
  * @returns the card element.
  */
-export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId, createTime }: {
-  rich: MessageRich
-  fallback: string
-  self?: boolean
-  onOpenChatlog?: (rich: MessageRich) => void
-  serverId?: string
-  /** 本条消息的接收时间（秒）—— 文件卡按它缩小到月份目录。 */
-  createTime?: number
-}): React.JSX.Element {
+export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId, createTime, senderName, senderUsername, senderEnterpriseName }: RichCardProps): React.JSX.Element {
   const title = decodeEntities(rich.title || fallback || '')
   const desc = decodeEntities(rich.desc || '')
   const url = rich.url || ''
@@ -335,7 +419,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           <div className={cssrows.msgRedpacketBody}>
             <div className={cssrows.msgRedpacketTitle}>{greet}</div>
             {amount && <div className={cssrows.msgRedpacketAmount}>{amount}</div>}
-            {serverId && <PayStatusLine serverId={serverId} />}
+            {serverId && <PayStatusLine serverId={serverId} {...(senderName ? { senderName } : {})} {...(senderUsername ? { senderUsername } : {})} {...(senderEnterpriseName ? { senderEnterpriseName } : {})} />}
           </div>
           <CardFoot label="微信红包" />
         </div>
@@ -423,7 +507,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       // 判据：参考图里那条引用行宽 138px，而同一条绿色气泡只有 40px ——
       // 引用行比气泡还宽，它不可能是气泡的子元素。
       const quoted = desc || ''
-      const refName = rich.referName || ''
+      const refUsername = rich.referUsername?.trim() ?? ''
       const thumb = proxyableSrc(rich.thumb)
       const qType = quoteTypeLabel(rich.referType)
       const appType = typeof rich.referAppType === 'number' ? rich.referAppType : 0
@@ -431,25 +515,17 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       // 引用行已经画了类型图标，摘要就不再重复一遍类型词
       // （官方参考图是「⊙微信转账」，不是「⊙ [转账] 微信转账」）。
       const summary = appType === 2000 ? quoted.replace(/^\[转账\]\s*/, '') : quoted
-      const thumbOpen = /^https?:\/\//i.test(thumb)
       return (
         <>
           <div className={css.msgBubble}>{title}</div>
-          {(quoted || refName || qType) && (
-            <div className={css.msgQuoteStrip} title={refName ? `${refName}：${summary}` : summary}>
-              {refName && <span className={cssrows.msgQuoteWho}>{refName}:</span>}
-              {kindIcon && <span className={cssrows.msgQuoteKind} aria-hidden="true">{kindIcon}</span>}
-              <span className={cssrows.msgQuoteWhat}>{summary || `[${qType}]`}</span>
-              {thumb && (
-                <span
-                  className={`${cssrows.msgQuoteThumbWrap} ${thumbOpen ? cssrows.msgQuoteThumbOpen : ''}`}
-                  {...(thumbOpen ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' }) : {})}
-                >
-                  <RemoteImg className={cssrows.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                </span>
-              )}
-            </div>
-          )}
+          <QuoteStrip
+            name={rich.referName || refUsername}
+            username={refUsername}
+            summary={summary}
+            typeLabel={qType}
+            icon={kindIcon}
+            thumb={thumb}
+          />
         </>
       )
     }
@@ -457,7 +533,6 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       return <OpenFileCard title={title} size={rich.fileSize ?? ''} {...(createTime !== undefined ? { createTime } : {})} />
     case 'chatlog': {
       const records = Array.isArray(rich.records) ? rich.records : []
-      const preview = records.slice(0, 4).map(r => `${r.name || ''}${r.name ? '：' : ''}${r.text || ''}`.trim()).filter(Boolean)
       return (
         <button type="button" className={css.msgChatlogCard}
           onClick={onOpenChatlog ? () => { onOpenChatlog(rich) } : undefined}
@@ -466,11 +541,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
             <span className={cssrows.msgChatlogIcon}><IconDataOutline16 size={15} /></span>
             <span className={cssrows.msgChatlogBody}>
               <span className={cssrows.msgChatlogTitle}>{title || '群聊的聊天记录'}</span>
-              {preview.length > 0 && (
-                <span className={cssrows.msgChatlogPreview}>
-                  {preview.map((line, i) => <span key={i} className={cssrows.msgChatlogLine} title={line}>{line}</span>)}
-                </span>
-              )}
+              <ChatlogPreview records={records} />
             </span>
           </span>
           <CardFoot label={records.length > 0 ? `聊天记录 · 共 ${records.length} 条` : '聊天记录'} />
@@ -651,6 +722,8 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
     return (
       <RichCard rich={rich} fallback={text} self={m.isSender === 1}
         createTime={m.createTime}
+        {...(m.senderName ? { senderName: m.senderName } : {})} {...(m.sender ? { senderUsername: m.sender } : {})}
+        {...(m.senderEnterpriseName ? { senderEnterpriseName: m.senderEnterpriseName } : {})}
         {...(onOpenChatlog ? { onOpenChatlog } : {})}
         {...(m.serverId ? { serverId: m.serverId } : {})} />
     )

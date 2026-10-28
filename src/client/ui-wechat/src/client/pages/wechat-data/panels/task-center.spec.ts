@@ -85,6 +85,7 @@ import {
   withVendorDefaults,
   type TaskEditDraft,
 } from './task-center.ts'
+import { triggerRecordSource } from './task-center-record-source.ts'
 import { flattenConfigValues } from './task-center-param-list.ts'
 import {
   canRevealSecret,
@@ -134,12 +135,13 @@ function makeDescriptor(overrides: Partial<RpaVendorDescriptor> = {}): RpaVendor
   }
 }
 
-/** 内置 Webhook 描述符（字段：url + 高级 paramMap）。 */
+/** 内置 Webhook 描述符（字段：url + extraParams + 高级 imageDelivery）。 */
 const WEBHOOK: RpaVendorDescriptor = makeDescriptor({
   id: 'webhook',
   name: 'Webhook',
   vendor: '内置',
-  summary: '把整条触发记录 JSON POST 到你填写的地址（含图片）',
+  version: '1.2.0',
+  summary: '把整条触发记录 POST 到你填写的地址；附加参数放进 params',
   fields: [
     {
       key: 'url',
@@ -150,8 +152,32 @@ const WEBHOOK: RpaVendorDescriptor = makeDescriptor({
       example: 'https://example.com/webhook',
       pattern: '^https?://',
     },
-    { key: 'paramMap', label: '参数映射', type: 'map', required: false, advanced: true },
+    {
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: ['room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType', 'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template'],
+    },
+    {
+      key: 'imageDelivery',
+      label: '图片传输方式',
+      type: 'select',
+      required: false,
+      advanced: true,
+      defaultValue: 'dataUrl',
+      options: [
+        { value: 'dataUrl', label: 'JSON data URL' },
+        { value: 'multipart', label: 'multipart/form-data' },
+      ],
+    },
   ],
+  mapping: {
+    style: 'object',
+    targets: [],
+    extrasField: 'extraParams',
+  },
 })
 
 /** 八爪鱼描述符（v1.2.0）：flowId（summary）+ extraParams（paramList）+ apiKey（auth secret）。
@@ -195,7 +221,7 @@ const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
   },
 })
 
-/** 影刀描述符：baseUrl（advanced+默认值）/ robotUuid（必填+summary）/ 两个 secret / map。 */
+/** 影刀描述符：baseUrl（advanced+默认值）/ robotUuid（必填+summary）/ 两个 secret / 附加参数。 */
 const YINGDAO: RpaVendorDescriptor = makeDescriptor({
   id: 'yingdao',
   name: '影刀 RPA',
@@ -212,7 +238,14 @@ const YINGDAO: RpaVendorDescriptor = makeDescriptor({
       options: [{ value: 'middle', label: '中' }, { value: 'high', label: '高' }],
       defaultValue: 'middle',
     },
-    { key: 'paramMap', label: '参数映射', type: 'map', required: false },
+    {
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: ['room', 'content', 'at', 'fixed', 'template'],
+    },
   ],
   auth: {
     modes: [{
@@ -222,6 +255,12 @@ const YINGDAO: RpaVendorDescriptor = makeDescriptor({
         { key: 'accessKeySecret', label: 'AccessKeySecret', type: 'password', required: true, secret: true },
       ],
     }],
+  },
+  mapping: {
+    style: 'object',
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'paramMap',
   },
 })
 
@@ -367,6 +406,26 @@ describe('文本摘要与关键词折叠', () => {
   })
 })
 
+describe('触发记录源码模式', () => {
+  it('输出完整合法 JSON，并把中文与 emoji 都转成 Unicode 转义', () => {
+    const record = makeRecord({
+      taskName: '报价任务',
+      text: '@你在干嘛呢？😀',
+      images: [{ localId: 7, createTime: 1700000000000, sender: '张三', md5: 'abc' }],
+      callbackStatus: 'sent',
+      callbackAt: 1700000001000,
+      externalTaskId: 'run-1',
+    })
+    const source = triggerRecordSource(record)
+
+    expect(source).not.toMatch(/[^\x00-\x7F]/)
+    expect(source).toMatch(/\\u[0-9a-f]{4}/)
+    expect(JSON.parse(source)).toEqual(record)
+    expect(source).toContain('"images"')
+    expect(source).toContain('"externalTaskId": "run-1"')
+  })
+})
+
 describe('Webhook 地址辅助（旧展示口径仍是任务行 Webhook 摘要的来源）', () => {
   it('只认 http/https，且必须能解析出主机名', () => {
     expect(isHttpCallbackUrl('http://example.com/hook')).toBe(true)
@@ -452,7 +511,7 @@ describe('触发方式目录：描述符查询与字段分组', () => {
     expect(bazhuayuFields.map((f) => f.key)).toEqual(['flowId', 'extraParams', 'apiKey'])
     expect(bazhuayuFields.find((f) => f.key === 'apiKey')?.secret).toBe(true)
     const yingdaoFields = vendorFields(YINGDAO).map((f) => f.key)
-    expect(yingdaoFields).toEqual(['baseUrl', 'robotUuid', 'accountName', 'priority', 'paramMap', 'accessKeyId', 'accessKeySecret'])
+    expect(yingdaoFields).toEqual(['baseUrl', 'robotUuid', 'accountName', 'priority', 'extraParams', 'accessKeyId', 'accessKeySecret'])
     // 同一个凭据字段同时出现在 fields 与 auth.fields 时不应重复。
     const duplicated = makeDescriptor({
       fields: [{ key: 'token', label: 'Token', type: 'password', required: true, secret: true }],
@@ -468,7 +527,8 @@ describe('触发方式目录：描述符查询与字段分组', () => {
     expect(groups.advanced.map((f) => f.key)).toEqual(['baseUrl'])
     const webhookGroups = groupVendorFields(vendorFields(WEBHOOK))
     expect(webhookGroups.auth).toEqual([])
-    expect(webhookGroups.advanced.map((f) => f.key)).toEqual(['paramMap'])
+    expect(webhookGroups.config.map((f) => f.key)).toEqual(['url', 'extraParams'])
+    expect(webhookGroups.advanced.map((f) => f.key)).toEqual(['imageDelivery'])
   })
 
   it('字段可访问名：ariaLabel 优先，缺省 label（与后端 fieldAriaLabel 同口径）', () => {
@@ -477,8 +537,9 @@ describe('触发方式目录：描述符查询与字段分组', () => {
     expect(fieldAriaLabel({ key: 'x', label: 'X 字段', type: 'text', required: false })).toBe('X 字段')
   })
 
-  it('参数映射三个语义位：默认中文标签 + targets.defaultKey', () => {
-    expect(vendorMapTargets(YINGDAO)).toEqual([
+  it('参数映射三个语义位：Webhook 为空；有内置映射的厂商仍按 targets.defaultKey', () => {
+    expect(vendorMapTargets(WEBHOOK)).toEqual([])
+    expect(vendorMapTargets(makeDescriptor())).toEqual([
       { semantic: 'room', label: '会话名', defaultKey: 'room_name' },
       { semantic: 'content', label: '触发文本', defaultKey: 'content' },
       { semantic: 'at', label: '触发对象', defaultKey: 'at_name' },
@@ -499,7 +560,11 @@ describe('触发方式目录：默认值、草稿与摘要', () => {
     expect(defaultVendorConfig(YINGDAO)).toEqual({
       baseUrl: 'https://api.yingdao.com',
       priority: 'middle',
-      paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
+      extraParams: [],
+    })
+    expect(defaultVendorConfig(WEBHOOK)).toEqual({
+      extraParams: [],
+      imageDelivery: 'dataUrl',
     })
     const custom = makeDescriptor({
       fields: [{
@@ -513,14 +578,14 @@ describe('触发方式目录：默认值、草稿与摘要', () => {
     expect(defaultVendorConfig(custom).paramMap).toEqual({ room: 'roomName', content: 'content', at: 'at_name' })
   })
 
-  it('withVendorDefaults：缺键补默认、已有值优先、map 按键合并', () => {
+  it('withVendorDefaults：缺键补默认、已有附加参数原样保留', () => {
     const merged = withVendorDefaults(YINGDAO, {
       robotUuid: '73d9a119-7ec7',
-      paramMap: { room: 'my_room' },
+      extraParams: [{ name: 'my_room', source: 'room' }],
     })
     expect(merged.robotUuid).toBe('73d9a119-7ec7')
     expect(merged.baseUrl).toBe('https://api.yingdao.com')
-    expect(merged.paramMap).toEqual({ room: 'my_room', content: 'content', at: 'at_name' })
+    expect(merged.extraParams).toEqual([{ name: 'my_room', source: 'room' }])
   })
 
   it('draftFromTask：配置按目录补默认值、凭据输入恒为空；未知厂商原样保留配置', () => {
@@ -637,7 +702,10 @@ describe('触发方式目录：保存入参', () => {
         baseUrl: ' https://custom.yingdao.com ',
         robotUuid: ' 73d9a119-7ec7 ',
         priority: 'high',
-        paramMap: { room: ' my_room ', content: 'content', at: 'at_name' },
+        extraParams: [
+          { name: ' room_name ', source: 'room' },
+          { name: 'content', source: 'content' },
+        ],
       },
       secretInputs: { accessKeyId: ' ak-1 ', accessKeySecret: '   ' },
     })
@@ -648,7 +716,10 @@ describe('触发方式目录：保存入参', () => {
       baseUrl: 'https://custom.yingdao.com',
       robotUuid: '73d9a119-7ec7',
       priority: 'high',
-      paramMap: { room: 'my_room', content: 'content', at: 'at_name' },
+      extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'content', source: 'content' },
+      ],
     })
     // 空白凭据输入 = 没改，必须缺省（缺省 = 后端保留旧值）。
     expect(input.triggerSecret).toEqual({ accessKeyId: 'ak-1' })
@@ -656,11 +727,22 @@ describe('触发方式目录：保存入参', () => {
     const noSecret = taskSaveInput(task, makeDraft({ triggerMethod: 'yingdao', config: { robotUuid: 'r' } }), YINGDAO)
     expect(noSecret.triggerSecret).toBeUndefined()
 
-    // webhook：url trim 后带上；map 字段按 targets.defaultKey 补全三键。
-    const webhookInput = taskSaveInput(makeTask(), makeDraft({ config: { url: ' https://example.com/h ' } }), WEBHOOK)
+    // webhook：url trim 后带上；业务参数只来自用户配置的附加参数。
+    const webhookInput = taskSaveInput(makeTask(), makeDraft({
+      config: {
+        url: ' https://example.com/h ',
+        extraParams: [
+          { name: ' room_name ', source: 'room' },
+          { name: 'order_no', source: 'fixed', fixedValue: ' A-001 ' },
+        ],
+      },
+    }), WEBHOOK)
     expect(webhookInput.triggerConfig).toEqual({
       url: 'https://example.com/h',
-      paramMap: { room: 'room_name', content: 'content', at: 'at_name' },
+      extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+      ],
     })
     expect(webhookInput.triggerMethod).toBe('webhook')
     expect(webhookInput.triggerSecret).toBeUndefined()

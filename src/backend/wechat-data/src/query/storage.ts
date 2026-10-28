@@ -18,9 +18,16 @@ import { classifyPacked, classifyType, parsePackedName } from './resource-classi
 /** Storage category aggregate (label + count + size). */
 export interface StorageCategory { label: string; count: number; size: number }
 /** Storage rank entry (chat or sender: username + display name + count + size). */
-export interface StorageRank { username: string; name: string; count: number; size: number }
+export interface StorageRank { username: string; name: string; enterpriseName?: string; count: number; size: number }
 /** One large file entry (name + owning session + size). */
-export interface LargeFile { name: string; username: string; sessionName: string; create_time: number; size: number }
+export interface LargeFile {
+  name: string
+  username: string
+  sessionName: string
+  sessionEnterpriseName?: string
+  create_time: number
+  size: number
+}
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -203,6 +210,7 @@ export async function queryStorageStats(
   const sig = [
     fileSigOf(path),
     fileNamesSig(wechatBaseDir ? join(wechatBaseDir, 'msg', 'file') : ''),
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
   ].join('|')
   return cachedBySigAsync('storage-stats:' + decryptedDir, sig, () => computeStorageStats(decryptedDir, wechatBaseDir))
 }
@@ -248,7 +256,9 @@ async function computeStorageStats(
     const categories: StorageCategory[] = Array.from(catMap.entries()).map(([label, v]) => ({ label, count: v.count, size: v.size }))
     storageMark('types', typeRows.length)
 
-    const names = contactMeta(decryptedDir).names
+    const meta = contactMeta(decryptedDir)
+    const names = meta.names
+    const enterpriseNames = meta.enterpriseNames
     storageMark('contacts', names.size)
 
     // chat ranking: join detail -> info -> ChatName2Id (chat_id is a rowid)
@@ -258,7 +268,16 @@ async function computeStorageStats(
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       GROUP BY i.chat_id ORDER BY SUM(d.size) DESC LIMIT 50`).all() as Array<{ u: string; n: number; s: number }>
-    const chats: StorageRank[] = chatRows.map(r => ({ username: r.u, name: names.get(r.u) ?? '', count: r.n, size: r.s }))
+    const chats: StorageRank[] = chatRows.map(r => {
+      const enterpriseName = enterpriseNames.get(r.u)?.trim()
+      return {
+        username: r.u,
+        name: names.get(r.u) ?? '',
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count: r.n,
+        size: r.s,
+      }
+    })
     storageMark('chats', chatRows.length)
 
     // sender ranking
@@ -268,7 +287,16 @@ async function computeStorageStats(
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN SenderName2Id s ON s.rowid = i.sender_id
       GROUP BY i.sender_id ORDER BY SUM(d.size) DESC LIMIT 50`).all() as Array<{ u: string; n: number; s: number }>
-    const senders: StorageRank[] = senderRows.map(r => ({ username: r.u, name: names.get(r.u) ?? '', count: r.n, size: r.s }))
+    const senders: StorageRank[] = senderRows.map(r => {
+      const enterpriseName = enterpriseNames.get(r.u)?.trim()
+      return {
+        username: r.u,
+        name: names.get(r.u) ?? '',
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count: r.n,
+        size: r.s,
+      }
+    })
     storageMark('senders', senderRows.length)
 
     // large files (top 100, real names + owning session)
@@ -295,7 +323,15 @@ async function computeStorageStats(
         else if (r.di && r.di !== '0') name = r.di + '.dat'
         else name = '(未知文件名)'
       }
-      large_files.push({ name, username: r.u, sessionName: names.get(r.u) ?? '', create_time: r.ct, size: r.s })
+      const sessionEnterpriseName = enterpriseNames.get(r.u)?.trim()
+      large_files.push({
+        name,
+        username: r.u,
+        sessionName: names.get(r.u) ?? '',
+        ...(sessionEnterpriseName ? { sessionEnterpriseName } : {}),
+        create_time: r.ct,
+        size: r.s,
+      })
     }
     storageMark('large-files', large_files.length)
 

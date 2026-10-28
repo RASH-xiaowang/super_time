@@ -18,6 +18,7 @@ import type { ChatlogRecord } from '@deepseek-ai/dsh-wechat-data/types'
 import { RemoteImg } from './remote-img.tsx'
 import { openLink } from './chats-support.tsx'
 import { chatlogBodyOf, chatlogFallbackChar, chatlogKindOf, chatlogLinkOf, chatlogNestedLabel, type ChatlogFrame } from './chats-chatlog.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 
@@ -61,6 +62,7 @@ export function ChatsChatlogView(props: ChatsChatlogViewProps): React.JSX.Elemen
           {records.map((r, idx) => {
             const kind = chatlogKindOf(r)
             const link = chatlogLinkOf(r)
+            const senderIdentity = withEnterprise(r.name, r.enterpriseName)
             // head 是**未校验的原始地址**（见文件头第 ③ 条）：只交给后端代理，取不到就回退首字母。
             const headFallback = <span>{chatlogFallbackChar(r)}</span>
             return (
@@ -71,7 +73,7 @@ export function ChatsChatlogView(props: ChatsChatlogViewProps): React.JSX.Elemen
                 </div>
                 <div className={cssshell.chatlogMain}>
                   <div className={cssshell.chatlogTop}>
-                    <span className={cssshell.chatlogName}>{r.name}</span>
+                    <span className={cssshell.chatlogName}>{senderIdentity}</span>
                     <span className={cssshell.chatlogTime}>{r.time}</span>
                   </div>
                   {kind === 'chatHistory' && (

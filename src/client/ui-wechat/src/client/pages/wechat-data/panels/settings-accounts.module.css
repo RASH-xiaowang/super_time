@@ -2,22 +2,20 @@
    账号列表 / 底部保存条 / 状态行「详情」链接 / 图片解密详情弹窗。
    规则逐字未改 —— 只是换了文件；类名经 CSS Modules 处理，引用侧同时改前缀。 */
 
-/* account list — 固定高度占位区,账号列表出现/切换不改变卡片布局 */
+/* account list — 在单页工作区里随内容展开；整页由 .mainScroll 统一滚动，
+   不再在卡片内部制造第二条滚动轨道。 */
 .accounts {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 8px 4px 0;
-  height: 252px;
-  overflow-y: auto;
   min-height: 0;
 }
 .accountsEmpty {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 1;
-  min-height: 0;
+  min-height: 104px;
   font-size: 12px;
   color: var(--nm-text-2);
   opacity: 0.85;

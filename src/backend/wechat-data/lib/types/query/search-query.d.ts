@@ -38,7 +38,7 @@ export declare function loadMessageWindow(decryptedDir: string, username: string
  * covers text AND image messages, mapping session_id back through name2id.
  * @returns hits (empty when the built-in index is absent/empty).
  */
-export declare function searchWechatFts(decryptedDir: string, q: string, cap: number, names: Map<string, string>, scopeUsername?: string): {
+export declare function searchWechatFts(decryptedDir: string, q: string, cap: number, names: Map<string, string>, scopeUsername?: string, enterpriseNames?: ReadonlyMap<string, string>): {
     hits: SearchHit[];
 };
 /**
@@ -62,7 +62,7 @@ export declare const YIELD_EVERY_MS = 25;
  */
 export declare function hitFromRow(row: Record<string, unknown>, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
-talker: string, qLower: string, names: Map<string, string>): SearchHit | null;
+talker: string, qLower: string, names: Map<string, string>, enterpriseNames?: ReadonlyMap<string, string>): SearchHit | null;
 /**
  * 索引与内置 FTS 两条快路径。都没命中时返回 null —— 由调用方决定要不要走兜底扫描。
  * @param decryptedDir - decrypted data root.

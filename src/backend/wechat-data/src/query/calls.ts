@@ -165,7 +165,13 @@ function monthOf(sec: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: number, recentLimit: number): CallsSnapshot {
+function buildSnapshot(
+  raw: RawCall[],
+  names: ReadonlyMap<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+  topPeers: number,
+  recentLimit: number,
+): CallsSnapshot {
   const byPeer = new Map<string, { calls: number; connected: number; durationSec: number; lastTime: number }>()
   const byMonth = new Map<string, { calls: number; connected: number; durationSec: number }>()
   const byHour = new Array<number>(24).fill(0)
@@ -210,7 +216,15 @@ function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: num
   }
 
   const peers: CallPeer[] = [...byPeer.entries()]
-    .map(([username, p]) => ({ username, name: names.get(username) ?? username, ...p }))
+    .map(([username, p]) => {
+      const enterpriseName = enterpriseNames.get(username)?.trim()
+      return {
+        username,
+        name: names.get(username) ?? username,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        ...p,
+      }
+    })
     .sort((a, b) => b.calls - a.calls || b.durationSec - a.durationSec)
   const months: CallMonthRow[] = [...byMonth.entries()]
     .map(([month, m]) => ({ month, ...m }))
@@ -219,16 +233,20 @@ function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: num
     .filter(c => c.createTime > 0)
     .sort((a, b) => b.createTime - a.createTime)
     .slice(0, recentLimit)
-    .map(c => ({
-      username: c.username,
-      name: names.get(c.username) ?? c.username,
-      localId: c.localId,
-      createTime: c.createTime,
-      status: c.status,
-      connected: c.connected,
-      outgoing: c.outgoing,
-      ...(c.durationSec !== undefined ? { durationSec: c.durationSec } : {}),
-    }))
+    .map(c => {
+      const enterpriseName = enterpriseNames.get(c.username)?.trim()
+      return {
+        username: c.username,
+        name: names.get(c.username) ?? c.username,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        localId: c.localId,
+        createTime: c.createTime,
+        status: c.status,
+        connected: c.connected,
+        outgoing: c.outgoing,
+        ...(c.durationSec !== undefined ? { durationSec: c.durationSec } : {}),
+      }
+    })
 
   return {
     total,
@@ -266,11 +284,11 @@ export async function queryCalls(decryptedDir: string, selfUsername?: string, to
   // 通话快照里的对端昵称来自 contact.db，所以它也必须进签名：原先只签分片 + self，
   // 靠「事件后整表清空」兜住（M8 去掉那层兜底后必须补上真正读了的东西）。
   const sig = shardCatalogSig(decryptedDir, ['message']) + '|' + self + '|' + fileSigOf(join(decryptedDir, 'contact', 'contact.db'))
-  const names = contactMeta(decryptedDir).names
+  const meta = contactMeta(decryptedDir)
   // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 87ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
   return cachedBySigAsync('calls:' + decryptedDir, sig, async () => {
     const raw = await scanCalls(decryptedDir, self)
-    return buildSnapshot(raw, names, topPeers, recentLimit)
+    return buildSnapshot(raw, meta.names, meta.enterpriseNames, topPeers, recentLimit)
   }, 60_000)
 }

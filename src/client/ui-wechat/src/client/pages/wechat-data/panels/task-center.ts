@@ -40,6 +40,7 @@ import {
   paramEntriesOf,
   validateParamListConfig,
 } from './task-center-param-list.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 
 /** Badge 支持的颜色档（与 `ui/kit-shell.tsx` 的 `Tone` 同集，避免纯逻辑层 import React 模块）。 */
 export type TaskCenterTone = 'default' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue'
@@ -990,8 +991,10 @@ export function triggerPaneTitle(task: TaskInfo | null): string {
  * @returns 展示文案。
  */
 export function taskScopeLabel(task: TaskInfo): string {
-  const chat = task.chatName || task.chatUsername || '未知会话'
-  const target = task.targetName || task.targetUsername || '未知对象'
-  if (task.chatType === 'private' && chat === target) return chat
-  return `${chat} → ${target}`
+  const chatName = task.chatName || task.chatUsername || '未知会话'
+  const targetName = task.targetName || task.targetUsername || '未知对象'
+  if (task.chatType === 'private' && chatName === targetName) {
+    return withEnterprise(chatName, task.chatEnterpriseName || task.targetEnterpriseName)
+  }
+  return `${withEnterprise(chatName, task.chatEnterpriseName)} → ${withEnterprise(targetName, task.targetEnterpriseName)}`
 }

@@ -101,15 +101,17 @@
 .filterToLabel { width: auto; }
 .filterChips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .authorChip {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px; min-width: 0;
   padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card); color: var(--nm-text-1); font-size: var(--nm-fs-sm); cursor: pointer;
   transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
 .authorChip:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
 .authorChip[data-on] { border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); }
+.chipIdentity { flex: 1 1 auto; }
 .chipName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
 .chipCount { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.clearMark { flex: 0 0 auto; }
 .segTrack {
   display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill); background: var(--nm-bg-input);
@@ -136,6 +138,8 @@
 }
 .monthCard:hover { border-color: var(--nm-border-hover); }
 .monthTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.monthTitleLead { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.monthAuthor { margin: 0 2px; }
 .monthHint { font-size: 11px; font-weight: 400; color: var(--nm-text-2); }
 
 /* 月份柱状图：多行换行、最多约 6 行（超出在该区域纵向滚动） */
@@ -248,9 +252,11 @@
 .commentsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .commentsHeadActs { display: flex; gap: 8px; align-items: center; }
 .commentsTitle { font-size: 11px; color: var(--nm-text-2); font-weight: 600; }
-.comment { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; line-height: 1.5; }
-.commentName { font-weight: 600; margin-right: 4px; color: var(--nm-blue); }
-.commentReply { color: var(--nm-text-2); margin-right: 4px; }
+.comment { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; line-height: 1.5; min-width: 0; }
+.commentIdentity { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; margin-right: 4px; }
+.commentName { font-weight: 600; color: var(--nm-blue); min-width: 0; max-width: min(240px, 70vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commentReply { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; color: var(--nm-text-2); margin-right: 4px; }
+.commentReplyName { min-width: 0; max-width: min(180px, 55vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .commentImg { width: 44px; height: 44px; border-radius: var(--nm-r-sm); object-fit: cover; display: inline-block; vertical-align: middle; margin-left: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 .commentImgFallback { color: var(--nm-text-2); font-size: 11px; margin-left: 4px; }
 .timeRow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-2); }
@@ -285,6 +291,8 @@
   box-shadow: var(--nm-shadow-popup);
 }
 .lightboxHead { display: flex; align-items: center; justify-content: space-between; color: var(--nm-text-1); font-size: 13px; }
+.detailAuthor { display: inline-flex; align-items: center; min-width: 0; max-width: calc(100% - 34px); }
+.detailAuthorText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lightboxImg { max-width: 100%; max-height: 68vh; object-fit: contain; border-radius: var(--nm-dense-r); background: #000; width: auto; align-self: center; }
 .lightboxNav { display: flex; gap: 8px; justify-content: center; }
 .exportForm { display: flex; flex-direction: column; gap: 10px; min-width: 360px; }
@@ -320,9 +328,10 @@
 }
 
 /* 点赞数量徽标 + 可展开名字 */
-.likesRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; font-size: 12px; color: var(--nm-text-1); }
+.likesRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--nm-text-1); min-width: 0; }
 .likesCount { font-weight: 700; color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
-.likeNames { color: var(--nm-text-1); }
+.likeNames { display: inline-flex; flex: 1 1 240px; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; color: var(--nm-text-1); }
+.likePerson { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
 .commentText { color: var(--nm-text-1); }
 .commentTime { color: var(--nm-text-2); font-size: 11px; white-space: nowrap; }
 
@@ -461,5 +470,3 @@
   word-break: break-word;
 }
 .imgFallbackHint { font-size: 10px; }
-
-

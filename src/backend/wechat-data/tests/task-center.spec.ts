@@ -36,11 +36,16 @@ import {
   TASK_BATCH_DELETE_MAX,
 } from '../src/query/task-center.ts'
 import type { TaskDispatchDeps } from '../src/query/task-center.ts'
+import {
+  listMessageListRecords,
+  saveMessageListRule,
+} from '../src/query/message-list-store.ts'
 import type { TaskInfoInput } from '../src/types.ts'
 
 const SELF = 'wxid_self'
 const PRIVATE_TALKER = 'wxid_lisi'
 const GROUP_TALKER = 'room@chatroom'
+const ENTERPRISE_TALKER = 'wxid_ent@openim'
 
 let root = ''
 let decrypted = ''
@@ -68,6 +73,7 @@ const SENDER_ROWID: Record<string, number> = {
   wxid_target: 3,
   wxid_other: 4,
   wxid_self: 5,
+  'wxid_ent@openim': 6,
 }
 
 /** 一条合成消息。 */
@@ -105,6 +111,31 @@ function openFixtureDb(): DatabaseSync {
     }
   }
   return db
+}
+
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
+/** Add a WeCom contact whose enterprise name is resolved through `openim_wording`. */
+function seedEnterpriseContact(username: string, name: string, enterpriseName: string): void {
+  mkdirSync(join(decrypted, 'contact'), { recursive: true })
+  const db = new DatabaseSync(join(decrypted, 'contact', 'contact.db'))
+  try {
+    db.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+    db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', enterpriseName)
+    db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+      username,
+      name,
+      name,
+      enterpriseBuffer('wording-ent'),
+    )
+  } finally {
+    db.close()
+  }
 }
 
 /** 一条消息的原始 `message_content`：群聊带 `wxid:\n` 前缀（微信真实形状）。 */
@@ -506,6 +537,44 @@ describe('触发扫描：水位、命中与去重', () => {
     expect(listTaskTriggers(decrypted).items).toHaveLength(1)
   })
 
+  it('任务首次触发后写入一条问候语，sourceRef 保证重复扫描不重复插入', () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_lisi', text: '历史' },
+    ])
+    const created = saveTaskInfo(decrypted, taskInput({ name: '问候任务' }))
+    expect(created.ok).toBe(true)
+    expect(saveMessageListRule(decrypted, {
+      chatName: '李四',
+      targetName: '',
+      webhookUrl: 'https://downstream.example/greeting',
+      greetingText: '您好，已收到您的消息',
+    }).ok).toBe(true)
+
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 20, sender: 'wxid_lisi', text: '发票 已发' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const trigger = listTaskTriggers(decrypted).items[0]
+    const greetings = listMessageListRecords(decrypted)
+    expect(greetings.items).toHaveLength(1)
+    expect(greetings.items[0]).toMatchObject({
+      chatName: '李四',
+      targetName: '',
+      text: '您好，已收到您的消息',
+      source: 'first_trigger',
+      status: 'pending',
+      webhookUrl: 'https://downstream.example/greeting',
+      taskId: created.id,
+      triggerId: trigger?.id,
+      sourceRef: 'task-trigger:' + String(trigger?.id),
+    })
+    expect(greetings.items[0]?.note).toContain('问候任务')
+
+    // 同一触发记录再次入队时，唯一 sourceRef 只返回原问候，不再新增。
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(0)
+    expect(listMessageListRecords(decrypted).total).toBe(1)
+  })
+
   it('群聊只触发目标成员的消息；单聊触发对象过滤同时生效', () => {
     seedMessages(GROUP_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_other', text: '历史 报销' },
@@ -738,6 +807,31 @@ describe('触发图片：按 photoLimit 取最近 N 张并按时间正序', () =
     expect(record?.images[1]?.md5).toBe('md5_second')
     // 单聊消息不写 `sender`（那是群聊成员字段），显示名退回「对方」。
     expect(record?.images[1]?.sender).toBe('对方')
+  })
+
+  it('企业微信私聊图片持久化并读回发送者 username 与企业名称', () => {
+    seedEnterpriseContact(ENTERPRISE_TALKER, '小企', '示例企业')
+    seedMessages(ENTERPRISE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_ent@openim', type: 3, md5: 'md5_ent' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({
+      chatUsername: ENTERPRISE_TALKER,
+      chatName: '小企',
+      photoLimit: 1,
+    })).ok).toBe(true)
+    seedMessages(ENTERPRISE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'wxid_ent@openim', text: '发票 已送达' },
+    ])
+
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const image = listTaskTriggers(decrypted).items[0]?.images[0]
+    expect(image).toMatchObject({
+      localId: 1,
+      sender: '对方',
+      senderUsername: ENTERPRISE_TALKER,
+      senderEnterpriseName: '示例企业',
+      md5: 'md5_ent',
+    })
   })
 })
 

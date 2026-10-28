@@ -15,6 +15,12 @@ afterEach(() => {
   scratch.length = 0
 })
 
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
+}
+
 /** Contact db at <root>/contact/contact.db; no chat_room/biz_info (skipped). */
 function makeContactDb(): string {
   const root = mkdtempSync(join(tmpdir(), 'wx-contacts-'))
@@ -158,6 +164,40 @@ describe('queryContacts 分类过滤发生在分页之前', () => {
     const env = queryContacts(root, { limit: 200, offset: 0, category: 'friendd' })
     expect(env.contacts.length).toBe(0)
     expect(env.total).toBe(0)
+  })
+})
+
+describe('queryContacts 企业微信', () => {
+  it('返回企业名称，并把 @kefu.openim 保持为客服账号', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-contacts-openim-'))
+    scratch.push(root)
+    const dir = join(root, 'contact')
+    mkdirSync(dir, { recursive: true })
+    const db = new DatabaseSync(join(dir, 'contact.db'))
+    db.exec(`CREATE TABLE contact (
+      id INTEGER, username TEXT, local_type INTEGER, delete_flag INTEGER,
+      remark TEXT, nick_name TEXT, quan_pin TEXT, extra_buffer BLOB
+    )`)
+    db.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    db.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-a', '深度求索')
+    const ins = db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    ins.run(1, 'wxid_peer@openim', 0, 0, '小深', '', 'xiaoshen', enterpriseBuffer('wording-a'))
+    ins.run(2, 'wxid_service@kefu.openim', 0, 0, '客服助手', '', '', enterpriseBuffer('wording-a'))
+    db.close()
+
+    const env = queryContacts(root)
+    expect(env.stats.enterprise).toBe(1)
+    expect(env.stats.service).toBe(1)
+    expect(env.contacts.find(c => c.username === 'wxid_peer@openim')).toMatchObject({
+      displayName: '小深',
+      category: 'enterprise',
+      enterpriseName: '深度求索',
+    })
+    expect(env.contacts.find(c => c.username === 'wxid_service@kefu.openim')).toMatchObject({
+      displayName: '客服助手',
+      category: 'service',
+    })
+    expect(env.contacts.find(c => c.username === 'wxid_service@kefu.openim')?.enterpriseName).toBeUndefined()
   })
 })
 

@@ -170,7 +170,8 @@ describe('统一请求与重试转发', () => {
 describe('宿主重试模块的加载边界', () => {
   it('构建出独立的小 bundle，宿主优先加载它，完整网关 bundle 仅作未构建回退', () => {
     expect(bundleBuildSource).toContain("fetch-retry.ts")
-    expect(bundleBuildSource).toContain('entryPoints: [entry, fetchRetryEntry]')
+    expect(bundleBuildSource).toContain('rpa-media.ts')
+    expect(bundleBuildSource).toContain('entryPoints: [entry, fetchRetryEntry, rpaMediaEntry]')
 
     const smallImport = llmHttpSource.indexOf("import('./wechat-data/lib/net/fetch-retry.js')")
     const fullImport = llmHttpSource.indexOf("import('./wechat-data/lib/index.js')")

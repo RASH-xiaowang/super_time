@@ -62,7 +62,7 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('AI 问答与总结'), '没有说明 AI 出网')
   ok(html.includes('腾讯图片 CDN') || html.includes('头像'), '没有说明头像出网')
   // 2026-10-21（v24）：任务触发从「Webhook / 八爪鱼」扩到多厂商 —— 同意屏必须如实列出
-  // 每家厂商的出网主机（固定主机 + 可配置实例地址）与「不发图片 / 实验性」口径。
+  // 每家厂商的出网主机（固定主机 + 可配置实例地址）与「实验性」口径。
   ok(html.includes('多家 RPA 厂商'), '没有说明任务触发的多厂商方式')
   for (const host of [
     'api-rpa.bazhuayu.com', 'mcp-rpa.bazhuayu.com', 'api.yingdao.com', 'console-rpa.aliyun.com',
@@ -73,11 +73,20 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('实例地址'), '没有说明 UiPath / 来也 / 私有化部署用你配置的实例地址')
   ok(html.includes('实验性'), '没有说清阿里云 / 来也 / 实在为实验性接入')
   ok(html.includes('八爪鱼 RPA（MCP）'), '没有说明八爪鱼 MCP 这条实验性通道')
-  ok(html.includes('不发图片'), '没有说清 RPA 厂商方式不发图片')
-  // 2026-10-21（v25 / 八爪鱼 v1.2.0）：参数改为全部在「附加参数」里显式配置，默认不发业务参数，
-  // 同意屏必须点明「附加参数逐条配置 + 默认不发业务参数 + 值来源 + 不含凭据」。
-  ok(html.includes('附加参数'), '没有说明八爪鱼参数在「附加参数」中逐条配置')
-  ok(html.includes('默认不发业务参数'), '没有说明八爪鱼默认不发业务参数')
+  ok(html.includes('消息列表回复投递'), '没有说明消息列表的下游回复投递')
+  ok(html.includes('task_callback'), '没有说明消息列表文本会过隐私闸')
+  // 2026-10-23（v29）：所有 RPA 厂商默认不发业务参数；图片仅在显式配置三类来源后发直链。
+  // 必须同时说明默认边界、三种来源和取图所需的局域网监听面，不能只写“可发图片”。
+  ok(html.includes('默认都不发业务参数'), '没有说清 RPA 厂商默认不发业务参数')
+  ok(
+    html.includes('imagesJson / imageCount / firstImageUrl'),
+    '没有说明三种图片类参数来源',
+  )
+  ok(html.includes('短时签名直链'), '没有说明图片通过短时签名直链传递')
+  ok(html.includes('局域网访问'), '没有说明机器人取图需要打开局域网访问')
+  // 2026-10-23（v29）：全部 RPA 厂商统一在「附加参数」里显式配置，默认不发业务参数。
+  ok(html.includes('附加参数'), '没有说明参数在「附加参数」中逐条配置')
+  ok(html.includes('默认不发业务参数'), '没有说明默认不发业务参数')
   ok(html.includes('自定义模板'), '没有说明附加参数支持自定义模板')
   ok(html.includes('不含凭据'), '没有说清附加参数不含凭据')
   // 2026-10-21（v26）：凭据「眼睛」按需回读 —— 仅桌面端本机，手机 / 浏览器不可调用。
@@ -85,9 +94,9 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('手机/浏览器不可调用'), '没有说清手机 / 浏览器不可调用凭据回读')
 })
 
-check('出网点开关口径与文档一致（应用内已无任何出网开关：6 条无开关 + 1 条仅点击时下载）', () => {
+check('出网点开关口径与文档一致（应用内已无任何出网开关：7 条无开关 + 1 条仅点击时下载）', () => {
   // 2026-09-30：出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
-  // 其余六个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
+  // 其余七个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
   // （2026-10-21：新增「任务触发（Webhook / 多家 RPA 厂商）」；它没有应用内开关，
   // 约束是每个任务的触发方式配置 —— 不配置就不发送。）
   //
@@ -102,8 +111,8 @@ check('出网点开关口径与文档一致（应用内已无任何出网开关�
     .map((c) => c.slice(0, c.indexOf('"')))
     .filter((k) => k === 'none' || k === 'manual')
   const ORDER = [
-    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）', '头像图片',
-    '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
+    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）',
+    '消息列表回复投递', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
   ]
   /** 唯一一条「仅点击时下载」的出网点；其余出网点都应当是「无开关」。 */
   const MANUAL = '语音模型下载'
@@ -130,13 +139,21 @@ check('重点被单独框出：一句话结论 + 那句「没有任何出网开�
   // 与清单里 data-switch="none" 的颗数一致。写死数字的守则会自己过期（它曾经就是硬写着 2）。
   const noneCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('none')).length
   const manualCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('manual')).length
-  ok(/共[\s\S]{0,40}?7[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 7 个出网点」')
+  ok(/共[\s\S]{0,40}?8[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 8 个出网点」')
   ok(new RegExp(`${String(noneCount)}[\\s\\S]{0,20}?条无开关`).test(html),
     `统计行里的「无开关」条数应与清单一致（${String(noneCount)} 条）`)
   ok(new RegExp(`${String(manualCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(html),
     `统计行里的「只在你要用时发生」条数应与清单一致（${String(manualCount)} 条）`)
   ok(html.includes('诚实说明'), '缺少「别把关开关读成完全离线」的说明')
   ok(html.includes('系统防火墙') || html.includes('断网'), '没有给出完全离线的办法')
+})
+
+check('入站清单单列局域网消息 Webhook，并说明令牌与明文 HTTP 边界', () => {
+  ok(html.includes('消息列表局域网 Webhook'), '没有列出消息列表入站 Webhook')
+  ok(html.includes('/api/message-webhook/'), '没有写明入站路由')
+  ok(html.includes('完整 Webhook 地址等同于写入凭据'), '没有说明路径地址即写入凭据')
+  ok(html.includes('轮换令牌'), '没有说明轮换令牌会失效')
+  ok(html.includes('明文 HTTP'), '没有说明链路仍是明文 HTTP')
 })
 
 check('未勾选时「同意并继续」是禁用态（显式同意不是走过场）', () => {

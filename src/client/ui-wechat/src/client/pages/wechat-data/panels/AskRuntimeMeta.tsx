@@ -26,6 +26,8 @@ import type {
   ToolCallTrace,
 } from './use-ask.ts'
 import { ResourceCard } from './resource-card.tsx'
+import { identityLabel, withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask-runtime.module.css'
 
 const STATUS_LABEL: Readonly<Record<string, string>> = {
@@ -191,14 +193,26 @@ function ToolRow({ call }: { call: ToolCallTrace }): React.JSX.Element {
 
 function EvidenceItemRow({ item }: { item: EvidenceItem }): React.JSX.Element {
   const tools = Array.isArray(item.tools) ? item.tools : item.tool ? [item.tool] : []
+  const username = item.locator.type === 'message' ? item.locator.username : ''
+  const name = withEnterprise(item.name || '未命名来源', item.enterpriseName)
   return (
     <li className={css.evidenceRow}>
       <div className={css.evidenceHead}>
         <span className={css.evidenceKind}>{evidenceHeading(item)}</span>
-        <span className={css.evidenceName} title={item.name}>{item.name || '未命名来源'}</span>
+        {username
+          ? (
+              <IdentityName className={css.evidenceName} name={item.name || username} username={username} size={18} title={identityLabel(item)}>
+                {name}
+              </IdentityName>
+            )
+          : <span className={css.evidenceName} title={identityLabel(item)}>{name}</span>}
         {item.time && <span className={css.evidenceTime}>{item.time}</span>}
       </div>
-      {item.sender && <div className={css.evidenceSender}>{item.sender}</div>}
+      {item.sender && (
+        <div className={css.evidenceSender}>
+          {withEnterprise(item.sender, item.senderEnterpriseName)}
+        </div>
+      )}
       <div className={css.evidenceSnippet} title={item.snippet}>{item.snippet}</div>
       <div className={css.evidenceMeta}>
         {tools.map(tool => toolLabel(tool)).join(' / ')}
@@ -398,15 +412,15 @@ export function AskRuntimeMeta({ turn, placement = 'all', onRetry }: {
         <div className={css.notices}>
           {withheld && (
             <span className={css.notice} data-tone="warning">
-              模型内容未通过接地核对，已不予采用
+              AI 回答未通过原文核对，因此未予采用
             </span>
           )}
           {synthesisError && (
             <span className={css.notice} data-tone="warning" title={synthesisError}>
-              综合生成失败，已返回可核对的证据
+              回答生成失败，已返回可核对的证据
             </span>
           )}
-          {grounding?.repaired && <span className={css.notice}>接地核对后已自动修订</span>}
+          {grounding?.repaired && <span className={css.notice}>已按原文自动修订</span>}
           {unsupported.length > 0 && (
             <span className={css.notice} data-tone="warning" title={unsupported.join('、')}>
               {String(unsupported.length)} 个数值未在原文中找到

@@ -18,6 +18,8 @@ import { Button, Card, EmptyState, LoadingState, PanelHeader } from '../ui/kit.t
 import kitCss from '../ui/kit.module.css'
 import css from './calls.module.css'
 import { fmtLocaleSec } from '../utils/format.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /** Cache key for the render cache (survives panel remounts). */
 const CACHE_KEY = 'calls'
@@ -148,10 +150,19 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                       type="button"
                       className={css.rankRow}
                       onClick={onOpenChat ? () => { onOpenChat(p.username) } : undefined}
-                      title={onOpenChat ? `打开与 ${p.name} 的聊天` : p.username}
+                      title={onOpenChat ? `打开与 ${withEnterprise(p.name, p.enterpriseName)} 的聊天` : p.username}
                     >
                       <span className={css.rankNo} data-top={i < 3 ? '1' : '0'}>{i + 1}</span>
-                      <span className={css.rankName} title={p.username}>{p.name}</span>
+                      <IdentityName
+                        className={css.rankIdentity}
+                        textClassName={css.rankName}
+                        name={p.name}
+                        username={p.username}
+                        size={24}
+                        title={p.username}
+                      >
+                        {withEnterprise(p.name, p.enterpriseName)}
+                      </IdentityName>
                       <span className={css.rankBarWrap}>
                         <span className={css.rankBar} style={{ width: `${Math.max(3, Math.round((p.calls / peerMax) * 100))}%` }} />
                       </span>
@@ -197,7 +208,16 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                     title={onOpenChat ? '在聊天记录中定位这条通话' : r.username}
                   >
                     <span className={css.recentDir} data-out={r.outgoing ? '1' : '0'}>{r.outgoing ? '呼出' : '呼入'}</span>
-                    <span className={css.recentName}>{r.name}</span>
+                    <IdentityName
+                      className={css.recentIdentity}
+                      textClassName={css.recentName}
+                      name={r.name}
+                      username={r.username}
+                      size={22}
+                      title={r.username}
+                    >
+                      {withEnterprise(r.name, r.enterpriseName)}
+                    </IdentityName>
                     <span className={css.recentStatus}>{r.status}</span>
                     <span className={css.recentTime}>{fmtLocaleSec(r.createTime)}</span>
                   </button>

@@ -8,7 +8,9 @@
 import { useState } from 'react'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget, type CiteItem } from './cite-target.ts'
+import { identityLabel } from './enterprise-identity.ts'
 import { auditAnswerGrounding, groundingWarning } from './utils/grounding.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask.module.css'
 
 /** 知识库来源的面包屑：`第 3 页 · 第二章 › 违约条款`（没有的项直接不出现，不留空段）。 */
@@ -35,7 +37,9 @@ function CiteFacts({ c, index }: { c: CiteItem; index: number }): React.JSX.Elem
   return (
     <>
       <span className={css.citeIdx}>[{index}]</span>
-      <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
+      <IdentityName className={css.citeName} name={c.name} username={c.username ?? ''} size={18}>
+        {identityLabel(c)}
+      </IdentityName>
       <span className={css.citeTime}>{c.time}</span>
       <span className={css.citeSnippet}>{c.snippet}</span>
     </>
@@ -123,7 +127,7 @@ export function CiteList({ items, cited, onOpen, onOpenKbFile, answer }: {
               data-cited={citedMark}
               data-src={target === null ? 'unknown' : undefined}
               onClick={() => { if (target?.kind === 'msg') onOpen?.(target.username, target.localId) }}
-              title={`${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
+              title={`${identityLabel(c)} · ${c.time} · ${c.snippet}`}
             >
               {facts}
             </button>

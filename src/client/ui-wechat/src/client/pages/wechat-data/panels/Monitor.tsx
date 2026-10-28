@@ -15,6 +15,8 @@ import css from './monitor.module.css'
 import { GroupToolRow } from './GroupInsights.tsx'
 import { buildHeatDays, HeatCalendar } from './monitor-heat.tsx'
 import { fmtDateTimeSec } from '../utils/format.ts'
+import { IdentityName } from './identity.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 
 const REFRESH_VISIBLE_MS = 3000
 const REFRESH_HIDDEN_MS = 10_000
@@ -166,6 +168,9 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
             options={groups.map(g => ({ value: g.username, label: g.displayName || g.username }))}
             placeholder="选择群聊…"
             ariaLabel="选择群聊"
+            valueContent={selGroup
+              ? <IdentityName name={selGroup.displayName || selGroup.username} username={selGroup.username} size={22} />
+              : undefined}
           />
         )}
         extra={(
@@ -223,7 +228,16 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
                   disabled={!onOpenChat}
                   title={onOpenChat ? '跳转到该消息' : undefined}
                 >
-                  <span className={css.msgName}>{m.senderName || (m.isSender ? '我' : '成员')}</span>
+                  <IdentityName
+                    className={css.msgIdentity}
+                    textClassName={css.msgName}
+                    name={m.senderName || (m.isSender ? '我' : '成员')}
+                    username={m.sender ?? ''}
+                    size={22}
+                    title={m.sender ?? ''}
+                  >
+                    {withEnterprise(m.senderName || (m.isSender ? '我' : '成员'), m.senderEnterpriseName)}
+                  </IdentityName>
                   <span className={css.msgTime}>{fmtDateTimeSec(m.createTime)}</span>
                   <span className={css.msgText}>{m.displayText ?? m.msgContent ?? ''}</span>
                 </button>

@@ -77,8 +77,8 @@ describe('normalizeReview：缺字段的旧载荷不许把面板打黑', () => {
     expect(r.groups.share).toBe(0.12)
   })
 
-  it('缓存键带载荷版本（v2）：形状变了就换键，不读旧键', () => {
-    expect(annualReviewCacheKey(2025)).toBe('annual-review:v2:2025')
+  it('缓存键带载荷版本（v3）：形状变了就换键，不读旧键', () => {
+    expect(annualReviewCacheKey(2025)).toBe('annual-review:v3:2025')
     expect(annualReviewCacheKey(2025), '旧键（不带版本）不许再出现').not.toBe('annual-review:2025')
   })
 })

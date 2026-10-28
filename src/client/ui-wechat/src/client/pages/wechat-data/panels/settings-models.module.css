@@ -292,3 +292,497 @@
 .whisperSkip:hover {
   color: var(--nm-sky);
 }
+
+/* ── 2026-10-23 语音转写面板重做 ─────────────────────────────────────────
+   模型不再藏在单一原生下拉里：六份真实 ggml 文件各有卡片、安装状态、
+   下载进度与停止入口；运行环境与任务操作拆成三个清晰层级。 */
+.voiceHero {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 10px 4px 4px;
+  padding: 14px 16px 14px 19px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-brand) 4%, var(--nm-bg-hover));
+  overflow: hidden;
+}
+.voiceHero::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--nm-brand);
+}
+.voiceHeroContent {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.voiceHeroKicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--nm-brand);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.voiceHeroKicker::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.voiceHeroTitle {
+  color: var(--nm-text-1);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
+}
+.voiceHeroDesc {
+  max-width: 560px;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 17px;
+}
+.voiceHeroStats {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.voiceStat {
+  min-width: 92px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--nm-s-2, 8px) 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-card);
+}
+.voiceStatLabel {
+  color: var(--nm-text-3);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+.voiceStatValue {
+  color: var(--nm-text-1);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.voiceStatOk { color: var(--nm-success); }
+.voiceStatWarn { color: var(--nm-amber); }
+.voiceRefresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1, 4px);
+  padding: var(--nm-s-2, 8px) var(--nm-s-2, 8px);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.voiceRefresh:hover:not(:disabled) {
+  color: var(--nm-text-1);
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-active);
+}
+.voiceRefresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.voiceRuntimeGrid {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 4px 0;
+}
+.voiceRuntimeCard {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+}
+.voiceRuntimeHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.voiceRuntimeTitle {
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 700;
+}
+.voiceRuntimeBadge {
+  margin-left: auto;
+  color: var(--nm-text-2);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.voiceEngineState {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2, 8px);
+  min-width: 0;
+}
+.voiceEngineName {
+  color: var(--nm-text-1);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.voiceEnginePath {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voiceControlRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.voiceControlLabel {
+  flex: 0 0 auto;
+  color: var(--nm-text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.voiceControlHint {
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 10px;
+  line-height: 15px;
+}
+.voiceControlHintOk { color: var(--nm-success); }
+.voiceControlHintWarn { color: var(--nm-amber); }
+.voicePathInput {
+  flex: 1 1 190px;
+  min-width: 0;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 10.5px;
+}
+.voiceThreadsInput {
+  width: 58px;
+  flex: none;
+  text-align: center;
+}
+
+.voiceLibrary {
+  flex: none;
+  margin: 12px 4px 0;
+}
+.voiceLibraryHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.voiceLibraryHeading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-s-2, 8px);
+  flex-wrap: wrap;
+}
+.voiceLibraryTitle {
+  color: var(--nm-text-1);
+  font-size: 13px;
+  font-weight: 700;
+}
+.voiceLibraryHint {
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+}
+.voiceLibraryCount {
+  padding: 3px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.voiceModelGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: var(--nm-s-2, 8px);
+}
+.voiceModelCard {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.voiceModelCard:hover {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}
+.voiceModelCardSelected {
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 7%, var(--nm-bg-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nm-brand) 24%, transparent);
+}
+.voiceModelCardInstalled {
+  border-color: color-mix(in srgb, var(--nm-success) 42%, var(--nm-border));
+}
+.voiceModelCardDownloading {
+  border-color: var(--nm-cyan);
+}
+.voiceModelSelect {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--nm-s-1, 4px);
+  padding: 11px 11px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.voiceModelSelect:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--nm-brand) 55%, transparent);
+  outline-offset: -2px;
+}
+.voiceModelTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.voiceModelName {
+  color: var(--nm-text-1);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 18px;
+}
+.voiceModelTags {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.voiceModelRecommended,
+.voiceModelInstalled {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px var(--nm-s-1, 4px);
+  border-radius: var(--nm-r-pill);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  white-space: nowrap;
+}
+.voiceModelRecommended {
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
+}
+.voiceModelInstalled {
+  border: 1px solid color-mix(in srgb, var(--nm-success) 35%, transparent);
+  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
+  color: var(--nm-success);
+}
+.voiceModelSummary {
+  color: var(--nm-text-1);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.voiceModelDetail {
+  min-height: 32px;
+  color: var(--nm-text-2);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.voiceModelMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  color: var(--nm-text-2);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.voiceModelMeta > span + span {
+  padding-left: 8px;
+  border-left: 1px solid var(--nm-border);
+}
+.voiceModelFile {
+  overflow: hidden;
+  color: var(--nm-text-3);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voiceModelFoot {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--nm-s-2, 8px) var(--nm-s-2, 8px);
+  border-top: 1px solid var(--nm-border);
+  background: color-mix(in srgb, var(--nm-bg-hover) 76%, transparent);
+}
+.voiceModelReady {
+  color: var(--nm-success);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.voiceModelDownload {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--nm-s-1, 4px);
+  padding: var(--nm-s-1, 4px) var(--nm-s-2, 8px);
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+.voiceModelDownload:hover:not(:disabled) { filter: brightness(0.96); }
+.voiceModelDownload:disabled { opacity: 0.48; cursor: not-allowed; }
+.voiceModelProgressTrack {
+  flex: 1;
+  min-width: 34px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-active);
+  overflow: hidden;
+}
+.voiceModelProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--nm-cyan);
+  transition: width 0.25s ease;
+}
+.voiceModelProgressPct {
+  color: var(--nm-cyan);
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.voiceModelStop {
+  padding: 2px var(--nm-s-2, 8px);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 42%, transparent);
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  color: var(--nm-cyan);
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.voiceModelSource {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  padding: var(--nm-s-2, 8px) 1px 0;
+  color: var(--nm-text-3);
+  font-size: 9.5px;
+  line-height: 15px;
+}
+
+.voiceActionBox {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 12px 4px 0;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+}
+.voiceActionCopy {
+  flex: 1 1 270px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.voiceActionTitle {
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 700;
+}
+.voiceActionDesc {
+  color: var(--nm-text-2);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.voiceActionControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.voiceThreadControl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--nm-text-2);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.voiceActionButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

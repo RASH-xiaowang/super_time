@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 const ROOT = process.cwd()
 const PANELS = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
 const WDP = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx')
+const GLOBAL_RESULTS = join(PANELS, 'global-search-results.tsx')
 
 const read = (p: string): string => readFileSync(p, 'utf8')
 const panel = (name: string): string => read(join(PANELS, name))
@@ -92,11 +93,12 @@ describe('表情：表情包也参与搜索', () => {
 })
 
 describe('全局搜索：命中跳转带关键词', () => {
-  const src = read(WDP)
+  const panelSrc = read(WDP)
+  const resultsSrc = read(GLOBAL_RESULTS)
 
   it('四个面板都收到 seedQuery', () => {
     // 注意：这些 JSX 的行里带 `=>`，`[^>]*` 跨不过去 —— 所以按行判断而不是整段正则。
-    const lines = src.split('\n')
+    const lines = panelSrc.split('\n')
     for (const name of ['FilesPanel', 'FavoritesPanel', 'RecordsPanel', 'ContactsPanel']) {
       const hit = lines.filter(l => l.includes('<' + name) && l.includes('seedQuery='))
       expect(hit.length, name + ' 没有收到 seedQuery').toBeGreaterThan(0)
@@ -105,14 +107,14 @@ describe('全局搜索：命中跳转带关键词', () => {
 
   it('命中点击走 seedTo（而不是只切页签的 setActive）', () => {
     for (const tab of ['contacts', 'favorites', 'files', 'records']) {
-      expect(src, `${tab} 的命中点击没有带关键词`).toMatch(new RegExp("seedTo\\('" + tab + "', gsQuery\\)"))
+      expect(resultsSrc, `${tab} 的命中点击没有带关键词`).toMatch(new RegExp("onSeed\\('" + tab + "', query\\)"))
     }
     // 「只切页签」的老写法必须消失（会话/消息/朋友圈仍走各自的定位，不算）
-    expect(src).not.toMatch(/setSearchOpen\(false\); setActive\('files'\)/)
+    expect(resultsSrc).not.toMatch(/setSearchOpen\(false\); setActive\('files'\)/)
   })
 
   it('seed 带 nonce：同一个词连点两次也能重新种入', () => {
-    expect(src).toMatch(/setSeed\(\{ tab, q, nonce: Date\.now\(\) \}\)/)
+    expect(panelSrc).toMatch(/setSeed\(\{ tab, q, nonce: Date\.now\(\) \}\)/)
     for (const name of ['Files.tsx', 'Favorites.tsx', 'Records.tsx', 'Contacts.tsx']) {
       expect(panel(name), `${name} 没有按 nonce 重新种入`).toMatch(/\[seedQuery\?\.nonce\]/)
     }

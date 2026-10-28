@@ -216,6 +216,7 @@ try {
   for (const rel of [
     '/src/backend/wechat-data/lib/index.js',        // 后端运行时 bundle
     '/src/backend/wechat-data/lib/net/fetch-retry.js', // 宿主层 LLM 重试原语（独立小 bundle）
+    '/src/backend/wechat-data/lib/net/rpa-media.js', // RPA 图片签名直链的验签算法（宿主层独立小 bundle）
     '/src/backend/wechat-data/package.json',        // lib/index.js 是 ESM，靠它解析（缺了会 CJS 解析失败）
     '/src/backend/wechat-worker.js',                // 后端子进程入口
     '/src/shared/llm-defaults.json',                // 宿主与前端共用的 LLM 默认值

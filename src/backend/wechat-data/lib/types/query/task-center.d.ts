@@ -1,15 +1,13 @@
 import type { DatabaseSync } from './db-open.ts';
+import { storeExists, taskDbPath } from './task-db.ts';
 import type { TaskBatchMutationResult, TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerRecord, TaskTriggerSnapshot } from '../types.ts';
 export { scanTaskTriggers } from './task-center-scan.ts';
 export type { ScanTaskTriggersOptions } from './task-center-scan.ts';
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts';
 export type { PendingDispatchResult, TaskDispatchDeps } from './task-center-callback.ts';
+export { storeExists, taskDbPath };
 /** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
 export declare const TASK_BATCH_DELETE_MAX = 500;
-/** 任务库路径（`decryptedDir` 的父目录下）。 */
-export declare function taskDbPath(decryptedDir: string): string;
-/** 任务库是否存在（读路径据此区分「确实还没有数据」与「库打不开」）。 */
-export declare function storeExists(decryptedDir: string): boolean;
 /** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
 export declare function taskErrorText(e: unknown): string;
 export declare function taskCellStr(v: unknown): string;

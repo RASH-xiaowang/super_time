@@ -17,9 +17,9 @@
   button { background: #161d26; color: #cbd5e1; border: 1px solid #2b3542; border-radius: 7px;
     padding: 5px 11px; font-size: 12px; cursor: pointer; font-family: inherit; }
   button:hover { border-color: #4b5a6d; color: #fff; }
-  #stage { position: absolute; inset: 52px 0 0 0; overflow: hidden; cursor: grab; }
+  #stage { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }
   #stage.drag { cursor: grabbing; }
-  #wrap { transform-origin: 0 0; width: 1680px; height: 1406px; }
+  #wrap { transform-origin: 0 0; width: 1680px; height: 1406px; will-change: transform; }
   #wrap svg { display: block; }
   #hint { position: fixed; right: 16px; bottom: 14px; font-size: 11px; color: #5c6b7d;
     background: rgba(11,15,20,.85); padding: 6px 10px; border-radius: 6px; border: 1px solid #1e2732; }
@@ -55,17 +55,30 @@
   function apply() {
     wrap.style.transform = `translate(${tx}px,${ty}px) scale(${s})`;
   }
+  /** 视口尺寸：用 clientWidth/clientHeight，避免读到 transform 后的包围盒。 */
+  function viewport() {
+    return { w: stage.clientWidth || window.innerWidth, h: stage.clientHeight || (window.innerHeight - 52) };
+  }
+  /** 整图适应窗口（宽高都装下，居中）。 */
   function fit() {
-    const r = stage.getBoundingClientRect();
-    s = Math.min((r.width - 32) / W, (r.height - 32) / H);
-    tx = (r.width - W * s) / 2;
-    ty = (r.height - H * s) / 2;
+    const v = viewport();
+    s = Math.min((v.w - 32) / W, (v.h - 32) / H);
+    tx = (v.w - W * s) / 2;
+    ty = (v.h - H * s) / 2;
+    apply();
+  }
+  /** 按宽度适配、顶部对齐：长图更适合从标题往下读。 */
+  function fitWidth() {
+    const v = viewport();
+    s = (v.w - 32) / W;
+    tx = (v.w - W * s) / 2;
+    ty = 16;
     apply();
   }
   function zoom(f, cx, cy) {
-    const r = stage.getBoundingClientRect();
-    cx = cx === undefined ? r.width / 2 : cx;
-    cy = cy === undefined ? r.height / 2 : cy;
+    const v = viewport();
+    cx = cx === undefined ? v.w / 2 : cx;
+    cy = cy === undefined ? v.h / 2 : cy;
     const ns = Math.min(4, Math.max(0.12, s * f));
     tx = cx - (cx - tx) * (ns / s);
     ty = cy - (cy - ty) * (ns / s);
@@ -98,8 +111,9 @@
     else { s = 1; tx = 20; ty = 20; apply(); }
   });
 
-  addEventListener('resize', fit);
-  fit();
+  addEventListener('resize', () => fitWidth());
+  // 初始按宽度适配、顶部对齐：长图从标题往下读，而不是被缩成一条细线
+  fitWidth();
 })();
 </script>
 </body>

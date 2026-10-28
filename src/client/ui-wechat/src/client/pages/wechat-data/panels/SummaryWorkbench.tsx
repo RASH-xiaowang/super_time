@@ -37,6 +37,7 @@ import type { SummaryRecord, SummaryTask } from '@deepseek-ai/dsh-wechat-data/ty
 import { ErrorState, PanelHeader } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { describeRange, todayISO } from '../utils/date-range.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import { TaskDrawer } from './SummaryTaskDrawer.tsx'
 import {
   HistoryPanel, recordKind, SummaryEmpty,
@@ -68,23 +69,38 @@ function readSavedFormat(): string {
  * @returns 解析函数（拿不到就退回 username）。
  */
 function useSessionNames(): (username: string) => string {
-  const [map, setMap] = useState<ReadonlyMap<string, string>>(new Map())
+  const [map, setMap] = useState<ReadonlyMap<string, { name: string; enterpriseName?: string }>>(new Map())
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const cached = readRenderCache<readonly { username: string; name: string }[]>('summary-groups')
-        if (cached && !cancelled) setMap(new Map(cached.map(g => [g.username, g.name])))
+        const cached = readRenderCache<readonly { username: string; name: string; enterpriseName?: string }[]>('summary-sessions-v2')
+        if (cached && !cancelled) {
+          setMap(new Map(cached.map(s => [
+            s.username,
+            { name: s.name, ...(s.enterpriseName ? { enterpriseName: s.enterpriseName } : {}) },
+          ])))
+        }
         const env = await apiGetSessions({ limit: 500 })
         if (cancelled) return
-        const gs = env.sessions.map(s => ({ username: s.username, name: s.displayName || s.username }))
-        setMap(new Map(gs.map(g => [g.username, g.name])))
-        writeRenderCache('summary-groups', gs)
+        const sessions = env.sessions.map(s => ({
+          username: s.username,
+          name: s.displayName || s.username,
+          ...(s.enterpriseName ? { enterpriseName: s.enterpriseName } : {}),
+        }))
+        setMap(new Map(sessions.map(s => [
+          s.username,
+          { name: s.name, ...(s.enterpriseName ? { enterpriseName: s.enterpriseName } : {}) },
+        ])))
+        writeRenderCache('summary-sessions-v2', sessions)
       } catch { /* 拿不到就退回 username */ }
     })()
     return () => { cancelled = true }
   }, [])
-  return useCallback((u: string): string => map.get(u) ?? u, [map])
+  return useCallback((u: string): string => {
+    const label = map.get(u)
+    return label ? withEnterprise(label.name, label.enterpriseName) : u
+  }, [map])
 }
 
 /**

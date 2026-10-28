@@ -14,6 +14,8 @@ import css from './group-insights.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import { ListSkeleton, useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 function fmtTs(ts?: number | null): string {
   if (!ts) return '—'
@@ -87,6 +89,7 @@ export function GroupInsightsPanel({
 
   /** 第一名条数（条宽按它归一，让「相对差距」看得出来）。 */
   const maxCount = data && data.topMembers.length > 0 ? Math.max(...data.topMembers.map(m => m.count)) : 1
+  const selectedGroup = groups.find(g => g.username === username)
 
   return (
     <div className={kitCss.panelShell}>
@@ -103,6 +106,9 @@ export function GroupInsightsPanel({
             options={groups.map(g => ({ value: g.username, label: g.displayName || g.username }))}
             placeholder="选择群聊…"
             ariaLabel="选择群聊"
+            valueContent={selectedGroup
+              ? <IdentityName name={selectedGroup.displayName || selectedGroup.username} username={selectedGroup.username} size={22} />
+              : undefined}
           />
         )}
         refreshing={loading}
@@ -189,7 +195,16 @@ export function GroupInsightsPanel({
                           <span className={css.rankNo}>{String(i + 1)}</span>
                           <div className={css.rankBody}>
                             <div className={css.rankHead}>
-                              <span className={css.rankName} title={m.name}>{m.name}</span>
+                              <IdentityName
+                                className={css.rankIdentity}
+                                textClassName={css.rankName}
+                                name={m.name}
+                                username={m.username}
+                                size={24}
+                                title={m.username}
+                              >
+                                {withEnterprise(m.name, m.enterpriseName)}
+                              </IdentityName>
                               <span className={css.rankCount}>
                                 <span className={css.rankPct}>{`${pct.toFixed(1)}%`}</span>
                                 {`${m.count.toLocaleString()} 条`}

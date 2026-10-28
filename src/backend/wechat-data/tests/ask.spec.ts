@@ -92,4 +92,21 @@ describe('formatAskContext：逐行日期（跨天窗口）', () => {
     const out = formatAskContext([citation], {}, chunks)
     expect(out).toContain('（2026-09-02，命中时间 00:05）')
   })
+
+  it('会话与发送者都带企业名，且不影响无 chunks 的引用格式化', () => {
+    const enterpriseCitation = {
+      ...citation,
+      enterpriseName: '甲方公司',
+      sender: '王五',
+      senderEnterpriseName: '乙方公司',
+    }
+    const enterpriseChunk: AskChunk = {
+      ...chunks[0]!,
+      anchor: enterpriseCitation,
+    }
+    const withChunk = formatAskContext([enterpriseCitation], {}, [enterpriseChunk])
+    const direct = formatAskContext([enterpriseCitation])
+    expect(withChunk).toContain('李四（企业：甲方公司） · 王五（企业：乙方公司）')
+    expect(direct).toContain('李四（企业：甲方公司） · 王五（企业：乙方公司）')
+  })
 })

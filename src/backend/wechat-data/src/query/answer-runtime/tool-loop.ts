@@ -288,6 +288,7 @@ async function executeTool(input: ExecuteInput): Promise<ExecuteOutcome> {
 
   const final = result ?? failureResult(input.name, 'upstream_failure', '工具未执行')
   const classified = final.ok ? undefined : classifyFailure(final)
+  const resultFields = resultTraceFields(final)
   const trace = createToolCallTrace({
     index: input.traceIndex,
     round: input.round,
@@ -304,6 +305,7 @@ async function executeTool(input: ExecuteInput): Promise<ExecuteOutcome> {
     facts: final.facts?.length ?? 0,
     ...(deadlineExceeded ? { deadlineExceeded: true } : {}),
     ...(final.note ? { note: final.note } : {}),
+    ...resultFields,
   })
   return { result: final, trace, maxAttempts }
 }
@@ -468,6 +470,7 @@ async function executeCall(input: {
   const cached = input.cache.get(key)
   if (cached) {
     const stageKey = `tool:${String(input.traceIndex)}:${call.name}`
+    const resultFields = resultTraceFields(cached.result)
     const trace = createToolCallTrace({
       index: input.traceIndex,
       round: input.round,
@@ -482,6 +485,7 @@ async function executeCall(input: {
       ...(cached.result.errorCode ? { errorCode: cached.result.errorCode } : {}),
       note: '复用相同工具与参数的本次结果',
       ...(cached.result.ok ? {} : { errorMessage: cached.result.error }),
+      ...resultFields,
     })
     emitToolStage(loop.emitStage, {
       key: stageKey,
@@ -496,7 +500,7 @@ async function executeCall(input: {
       ...(trace.errorClass === undefined ? {} : { errorClass: trace.errorClass }),
       hits: trace.hits,
       facts: trace.facts,
-      detail: '复用相同工具与参数的本次结果',
+      detail: resultFields.resultSummary ?? '复用相同工具与参数的本次结果',
     })
     return { result: cached.result, trace, maxAttempts: 1, cacheKey: key }
   }
@@ -511,6 +515,7 @@ async function executeCall(input: {
     loop,
     deadlineMs: input.deadlineMs,
   })
+  const resultFields = resultTraceFields(outcome.result)
   emitToolStage(loop.emitStage, {
     key: stageKey,
     label: call.name,
@@ -527,7 +532,7 @@ async function executeCall(input: {
     hits: outcome.trace.hits,
     facts: outcome.trace.facts,
     detail: outcome.result.ok
-      ? `${String(outcome.result.hits.length)} 条命中`
+      ? resultFields.resultSummary ?? `${String(outcome.result.hits.length)} 条命中`
       : traceFailureMessage(outcome.trace),
   })
   safeOp(
@@ -555,6 +560,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 过程展示与操作日志只使用已脱敏的失败摘要。 */
 function traceFailureMessage(trace: ToolCallTrace): string {
   return trace.errorMessage ?? trace.note ?? '失败'
+}
+
+/** 成功工具的可展示结果快照；沿用回放层的脱敏、条数与长度上限。 */
+function resultTraceFields(result: ToolResult): Pick<
+  ToolCallTrace,
+  'resultSummary' | 'resultDetail' | 'resultTruncated'
+> {
+  if (!result.ok) return {}
+  const hits = Array.isArray(result.hits) ? result.hits.length : 0
+  const facts = Array.isArray(result.facts) ? result.facts.length : 0
+  const detail = serializeResult(result)
+  const summary = [
+    hits > 0 ? `${String(hits)} 条命中` : '未命中原文',
+    facts > 0 ? `${String(facts)} 条事实` : '',
+    result.note?.trim() ?? '',
+  ].filter(Boolean).join(' · ')
+  return {
+    resultSummary: summary,
+    resultDetail: detail,
+    ...(hits > 12 || facts > 4 || detail.endsWith('…') ? { resultTruncated: true } : {}),
+  }
 }
 
 /**

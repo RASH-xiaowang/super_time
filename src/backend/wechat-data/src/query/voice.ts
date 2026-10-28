@@ -9,11 +9,12 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { onDiskPath } from '../asar-path.ts'
 import { withDb } from './db-open.ts'
+import { messageServerIdByLocal } from './media-voice.ts'
 
 /** One VoiceInfo row with its chat username. */
 export interface VoiceSource {
@@ -76,11 +77,18 @@ export function svrIdByChatLocal(decryptedDir: string, username: string, localId
       const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1').get(username) as { rowid?: number | bigint } | undefined
       return chat && typeof chat.rowid === 'number' ? chat.rowid : null
     })
-    if (chatRowId === null) return ''
-    return withDb(dbPath, (db) => {
-      const row = db.prepare('SELECT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chatRowId, localId) as { s?: string | null } | undefined
-      return row?.s ?? ''
-    })
+    if (chatRowId !== null) {
+      const direct = withDb(dbPath, (db) => {
+        const row = db.prepare('SELECT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chatRowId, localId) as { s?: string | null } | undefined
+        return row?.s ?? ''
+      })
+      if (direct) return direct
+    }
+    // A stale/missing Name2Id row must not make playback and transcription
+    // disagree with resolveVoiceInfo(), which already falls back to the
+    // message shard's server_id.
+    const serverId = messageServerIdByLocal(decryptedDir, username, localId)
+    return serverId && serverId !== '0' ? serverId : ''
   } catch {
     return ''
   }
@@ -228,7 +236,8 @@ export async function resolveVoiceDataUrl(
   username = '',
   localId?: number,
   explicitSvrId = '',
-): Promise<{ url?: string; durationSec?: number; error?: string }> {
+  options: { fileOnly?: boolean } = {},
+): Promise<{ url?: string; durationSec?: number; file?: string; error?: string }> {
   const svrId = explicitSvrId.trim()
     || (localId === undefined ? '' : svrIdByChatLocal(decryptedDir, username, localId))
   if (!svrId) return { error: '未找到语音消息' }
@@ -240,11 +249,14 @@ export async function resolveVoiceDataUrl(
     if (!decoded.ok) return { error: decoded.error ?? 'silk 解码失败' }
   }
   try {
+    const info = await stat(wavPath)
+    if (!info.isFile() || info.size <= WAV_HEADER_BYTES) return { error: '语音数据为空' }
+    const durationSec = Math.round((info.size - WAV_HEADER_BYTES) / WAV_BYTES_PER_SEC)
+    if (options.fileOnly) return { file: wavPath, durationSec }
     const bytes = await readFile(wavPath)
-    if (bytes.length <= WAV_HEADER_BYTES) return { error: '语音数据为空' }
     return {
       url: 'data:audio/wav;base64,' + bytes.toString('base64'),
-      durationSec: Math.round((bytes.length - WAV_HEADER_BYTES) / WAV_BYTES_PER_SEC),
+      durationSec,
     }
   } catch (e) {
     return { error: (e as Error).message }

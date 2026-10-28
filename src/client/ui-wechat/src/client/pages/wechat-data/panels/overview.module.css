@@ -18,6 +18,29 @@
   gap: 0.5rem;
 }
 
+/* 关系与地区占左列；右侧三卡同列纵排。Bootstrap row 默认拉伸左右两列，
+ * 因而关系卡会与右侧整列等高，世界地图吃掉差额。 */
+.overviewRightStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.overviewStackCard {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+}
+/* compact-chrome 对含地图/图表的卡片有更高特异度的 82vh 高度上限。
+ * 关系卡要靠右列三卡总高拉伸，因此桌面端必须显式解除整卡与卡身上限；
+ * 手机档保留上限，避免长地图和 Top 列表把单卡撑得过高。 */
+@media (min-width: 901px) {
+  .overviewRelationColumn > .ovSectionCard,
+  .overviewRelationColumn > .ovSectionCard > [class*='_cardBd_'] {
+    max-height: none !important;
+  }
+}
+
 /* ── 页头动作 ─────────────────────────────────────────────── */
 .refresh {
   display: inline-flex;
@@ -259,12 +282,12 @@
   overflow: hidden;
   background: var(--nm-bg-0);
 }
-/* 让地图吃掉「关系与地区」卡里的剩余高度，同时给一个上界避免把卡撑得过长 */
+/* 让地图吃掉「关系与地区」卡里的剩余高度；桌面不设上界，由右列三卡总高决定。 */
 .worldMapFlex {
   flex: 1 1 auto;
   height: auto;
   min-height: 220px;
-  max-height: 340px;
+  max-height: none;
 }
 .worldMapBox > * { height: 100%; }
 .worldMapBox [class*='wrap'],
@@ -330,10 +353,11 @@
 }
 .topRow:hover { background: var(--nm-bg-hover); }
 .topRank { width: 16px; font-weight: 600; color: var(--nm-text-3); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.topName { width: 120px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
+.topIdentity { flex: 0 1 150px; min-width: 0; }
+.topName { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
 .topTrack { flex: 1; height: 4px; border-radius: var(--nm-r-pill); background: var(--nm-bg-active); overflow: hidden; }
 .topFill { height: 100%; border-radius: var(--nm-r-pill); background: var(--nm-text-3); }
-.topCount { width: 64px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
+.topCount { min-width: 52px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 .topRow:hover .topFill { background: var(--nm-text-2); }
 
 /* ── 消息构成（内容卡里的唯一一处收发/类型统计）────────────── */

@@ -19,12 +19,13 @@
  * ListTasks/ListTaskDetails、集成服务型机器人、幂等调用、调用限制。多数页面「更新时间」为空。
  */
 import { createHmac, randomUUID } from 'node:crypto'
-import type { RpaMappingTarget, RpaSemantic, RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import type { RpaVendorDescriptor, RpaField } from '../../../types-rpa.ts'
+import { RPA_PARAM_SOURCES } from '../param-sources.ts'
+import { resolveMapped } from '../template.ts'
 import type {
   RpaHttpRequest,
   RpaHttpResponse,
   RpaInvocationContext,
-  RpaRecordContext,
   RpaSendResult,
   RpaVendorAdapter,
 } from '../types.ts'
@@ -37,13 +38,6 @@ const API_VERSION = '20200430'
 const DEFAULT_TASK_PRIORITY = 50
 /** `AppParams` 官方上限 40KB。 */
 const APP_PARAMS_MAX = 40_000
-
-const MAPPING_TARGETS: RpaMappingTarget[] = [
-  { semantic: 'room', defaultKey: 'room_name' },
-  { semantic: 'content', defaultKey: 'content' },
-  { semantic: 'at', defaultKey: 'at_name' },
-]
-const MAP_FIELD = 'appParamsMap'
 
 const accessKeyIdField: RpaField = {
   key: 'accessKeyId',
@@ -66,8 +60,8 @@ const descriptor: RpaVendorDescriptor = {
   id: 'aliyun-rpa',
   name: '阿里云 RPA',
   vendor: '阿里云 机器人流程自动化（RPA，原码栈）',
-  version: '1.0.0',
-  summary: '调用阿里云 RPA OpenAPI 创建任务（服务型/本地型两套接口，HMAC-SHA1 签名）。实验性：签名位置待 POC。',
+  version: '1.1.0',
+  summary: '调用阿里云 RPA OpenAPI 创建任务（服务型/本地型两套接口，HMAC-SHA1 签名）；业务参数全部由「附加参数」显式配置。实验性：签名位置待 POC。',
   status: 'experimental',
   docs: {
     home: 'https://help.aliyun.com/zh/rpa/developer-reference/',
@@ -170,12 +164,14 @@ const descriptor: RpaVendorDescriptor = {
       help: '可选。官方回调无签名，建议 https + 随机 token 放 query；v1 只把 TaskId 落库。',
     },
     {
-      key: 'appParamsMap',
-      label: '参数映射',
-      type: 'map',
-      required: true,
-      defaultValue: { room: 'room_name', content: 'content', at: 'at_name' },
-      help: '映射成 AppParams 的 name/value 数组（键名须与 RPA 应用入参名一致）。',
+      key: 'extraParams',
+      label: '附加参数',
+      type: 'paramList',
+      required: false,
+      maxItems: 20,
+      paramSources: [...RPA_PARAM_SOURCES],
+      help: 'AppParams 全部在这里配置（默认 []，不发任何业务参数）。参数名须与 RPA 应用入参名一致；'
+        + '需要会话名/触发文本/触发对象时，各加一条并把值来源选成对应项。',
     },
   ],
   auth: {
@@ -189,8 +185,9 @@ const descriptor: RpaVendorDescriptor = {
   },
   mapping: {
     style: 'nameValueArray',
-    mapField: MAP_FIELD,
-    targets: MAPPING_TARGETS,
+    targets: [],
+    extrasField: 'extraParams',
+    legacyMapField: 'appParamsMap',
   },
   request: {
     method: 'POST',
@@ -222,12 +219,14 @@ const descriptor: RpaVendorDescriptor = {
     '服务型/本地型是两套大小写敏感接口，参数不可混用；AppVersion 默认语义多处冲突',
     '成本与开通门槛高（机器人授权 5,000 元/年起 + 编辑器授权；服务型需无影云电脑 + 主账号授权）',
     'AK 来源是 RPA 控制台「系统设置」，不是阿里云 RAM AccessKey（与 RAM/STS 关系官方未说明）',
+    '业务参数默认不发；只有「附加参数」显式配置后才进入 AppParams，请确认参数名与应用入参一致',
   ],
   notes: [
     '官方未公开：全局限流 QPS、本地型回调协议细节（超时/重试/payload）。本适配器不承诺这两项。',
     '签名实现按官方 HTTP 调用说明（HMAC-SHA1 / SignatureVersion=1.0 / Version=20200430）把公共参数与业务参数都放 form body；官方示例 body/query 签名位置矛盾，待联调（POC）核对。',
     '服务型 CreateTask 支持 X-Idempotent-Request-ID（≤50 字符、180 秒窗口、非强制）：本适配器用触发记录级 id 注入。',
     '回调无签名 → v1 只落库 externalTaskId（TaskId），不接收回调；状态查询留待后续（ListTasks/ListTaskDetails）。',
+    '2026-10-23（v1.1.0）：移除内置参数映射，统一改为「附加参数」；旧 appParamsMap 自动迁移。',
   ],
 }
 
@@ -288,30 +287,13 @@ function configNumber(ctx: RpaInvocationContext, key: string, fallback: number):
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-/** 三个语义参数位的取值（单聊没有触发对象名时回落会话名，与旧实现同口径）。 */
-function semanticValue(record: RpaRecordContext, semantic: RpaSemantic): string {
-  if (semantic === 'room') return record.chatName
-  if (semantic === 'content') return record.text
-  return record.targetName !== '' ? record.targetName : record.chatName
-}
-
-/** `AppParams` 的 `[{name,value}]` 数组：映射键可被配置里的 map 字段逐项覆盖。 */
-function appParams(ctx: RpaInvocationContext): Array<{ name: string; value: string }> {
-  const raw = ctx.config[MAP_FIELD]
-  const overrides = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}
-  return MAPPING_TARGETS.map((target) => {
-    const custom = overrides[target.semantic]
-    const name = typeof custom === 'string' && custom.trim() !== '' ? custom.trim() : target.defaultKey
-    return { name, value: semanticValue(ctx.record, target.semantic) }
-  })
-}
-
 /** 组装业务参数（未签名）：服务型大写参数 / 本地型小写参数。 */
 function businessParams(ctx: RpaInvocationContext, family: 'service' | 'local'): Record<string, string> {
   const appId = configText(ctx, 'appId')
   if (appId === '') throw new Error('阿里云 RPA 投递失败：任务未配置应用 ID')
   const appVersion = configText(ctx, 'appVersion')
-  const paramsText = JSON.stringify(appParams(ctx))
+  const paramsText = JSON.stringify(resolveMapped(descriptor, ctx))
+  if (paramsText === undefined) throw new Error('阿里云 RPA 投递失败：AppParams 无法序列化')
   if (paramsText.length > APP_PARAMS_MAX) {
     throw new Error('阿里云 RPA 投递失败：AppParams 超过 40KB 上限')
   }

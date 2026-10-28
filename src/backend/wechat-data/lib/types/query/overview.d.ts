@@ -6,6 +6,7 @@ interface StorageCategory {
 interface MomentsAuthorStat {
     username: string;
     name: string;
+    enterpriseName?: string;
     posts: number;
 }
 /** The one-screen data overview aggregate result. */

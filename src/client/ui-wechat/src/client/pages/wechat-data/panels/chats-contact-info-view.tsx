@@ -22,9 +22,13 @@ import { EmptyState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import { ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
 import { infoRefreshApplies } from './chats-info-live.ts'
-import { Avatar } from './chats-support.tsx'
+import { Avatar, isEnterpriseWechatUser } from './chats-support.tsx'
 import { InfoRow, SectionTitle } from './chats-info-rows.tsx'
 import { TaskCreateDialog } from './task-create-dialog.tsx'
+import { CustomerPortraitDialog } from './CustomerPortraitDialog.tsx'
+import type { CustomerIdentity } from './customer-profile.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import { fmtDateSec } from '../utils/format.ts'
 import css from './chats-contact-info.module.css'
 import cssrows from './chats-rows.module.css'
@@ -51,9 +55,14 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [taskOpen, setTaskOpen] = useState(false)
+  const [portraitOpen, setPortraitOpen] = useState(false)
   const titleId = useId()
   // 抽屉关掉时收掉弹窗：本组件常驻渲染树，不重置的话下次开抽屉会直接弹出旧弹窗。
-  useEffect(() => { if (!open) setTaskOpen(false) }, [open])
+  useEffect(() => {
+    if (open) return
+    setTaskOpen(false)
+    setPortraitOpen(false)
+  }, [open])
 
   /*
    * Esc 关闭 + 焦点陷阱（R7 补齐，审计 P1-7 的同族缺口）。
@@ -106,10 +115,25 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   useWechatDataUpdated(refreshContact360)
 
   if (!open || !session || session.type === 'group') return null
+  // 会话本身已经能提供画像所需的最小身份。这样即使 360 统计读取失败，用户仍能从
+  // 画像抽屉单独重试并查看标签，不会因为上方统计错误而失去整个入口。
+  const contactData = data?.username === session.username ? data : null
+  const enterpriseName = contactData?.enterpriseName?.trim() || session.enterpriseName?.trim() || ''
+  const contactDisplayName = contactData?.displayName?.trim() || session.displayName?.trim() || session.username
+  const contactDisplayIdentity = withEnterprise(contactDisplayName, enterpriseName)
+  const portraitIdentity: CustomerIdentity = {
+    username: session.username,
+    displayName: contactDisplayName,
+    ...(enterpriseName !== '' ? { enterpriseName } : {}),
+    ...(isEnterpriseWechatUser(session.username)
+      ? { category: 'enterprise', categories: ['enterprise'] }
+      : {}),
+  }
 
   return (
     <div
       className={css.drawer}
+      data-side-panel-view=""
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -120,37 +144,55 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         <button type="button" className={css.close} title="关闭" aria-label="关闭" onClick={onClose}><IconCloseOutline16 size={15} /></button>
       </div>
       <div className={css.body}>
+        <button
+          type="button"
+          className={css.portraitEntry}
+          data-st-portrait-entry=""
+          onClick={() => { setPortraitOpen(true) }}
+        >
+          <span>
+            <strong>客户画像与标签</strong>
+            <small>身份、互动、资金与社交事实</small>
+          </span>
+          <span className={css.portraitChevron} aria-hidden="true">›</span>
+        </button>
         {loading && <ListSkeleton rows={4} />}
         {err && <div className={kitCss.error} role="alert">⚠️ {err}</div>}
-        {!loading && !err && data && (
+        {!loading && !err && contactData && (
           <>
             <div className={css.zones}>
               {/* 区① 联系人 tile：与群成员网格同一语法（D5）—— 头像 48 + 名下昵称，取代原 profile 横排块。 */}
               <div className={cssshell.memberGrid}>
-                <div className={cssrows.memberTile} data-static="true" title={data.displayName}>
-                  <Avatar name={data.displayName} username={data.username} size={48} />
-                  <span className={cssrows.memberName}>{data.displayName}</span>
+                <div className={cssrows.memberTile} data-static="true" title={contactDisplayIdentity}>
+                  <Avatar name={contactData.displayName} username={contactData.username} size={48} />
+                  <span className={cssrows.memberName}>{contactDisplayIdentity}</span>
                 </div>
               </div>
 
               {/* 区② 资料行（官方行语法；微信号/朋友圈只读，不给箭头） */}
-              <InfoRow first label="微信号" value={data.username} />
-              <InfoRow label="朋友圈" value={`${data.moments.count.toLocaleString()} 条`} />
+              <InfoRow first label="微信号" value={contactData.username} />
+              {enterpriseName !== '' && <InfoRow label="企业名称" value={enterpriseName} />}
+              <InfoRow label="朋友圈" value={`${contactData.moments.count.toLocaleString()} 条`} />
 
               {/* 区④ 本机统计：工作台自有数据，独立分组、官方行语法（D6） */}
               <SectionTitle>本机统计</SectionTitle>
-              <InfoRow first label="消息总数" value={data.messages.count.toLocaleString()} />
-              <InfoRow label="首次联系" value={fmtDateSec(data.messages.firstTime)} />
-              <InfoRow label="最近联系" value={fmtDateSec(data.messages.lastTime)} />
-              {data.funds.transfers > 0 && <InfoRow label="转账往来" value={`${data.funds.transfers} 次`} />}
-              {data.funds.redpackets > 0 && <InfoRow label="红包往来" value={`${data.funds.redpackets} 次`} />}
+              <InfoRow first label="消息总数" value={contactData.messages.count.toLocaleString()} />
+              <InfoRow label="首次联系" value={fmtDateSec(contactData.messages.firstTime)} />
+              <InfoRow label="最近联系" value={fmtDateSec(contactData.messages.lastTime)} />
+              {contactData.funds.transfers > 0 && <InfoRow label="转账往来" value={`${contactData.funds.transfers} 次`} />}
+              {contactData.funds.redpackets > 0 && <InfoRow label="红包往来" value={`${contactData.funds.redpackets} 次`} />}
 
               {/* 区⑤ 关联：共同的群（无则整块不渲染） */}
-              {data.commonGroups.length > 0 && (
+              {contactData.commonGroups.length > 0 && (
                 <>
-                  <SectionTitle>{`共同的群（${data.commonGroups.length}）`}</SectionTitle>
-                  {data.commonGroups.map((g, i) => (
-                    <InfoRow key={g.username} first={i === 0} label={g.name || g.username} value={`${g.memberCount} 人`} />
+                  <SectionTitle>{`共同的群（${contactData.commonGroups.length}）`}</SectionTitle>
+                  {contactData.commonGroups.map((g, i) => (
+                    <InfoRow
+                      key={g.username}
+                      first={i === 0}
+                      label={<IdentityName name={g.name || g.username} username={g.username} size={20}>{g.name || g.username}</IdentityName>}
+                      value={`${g.memberCount} 人`}
+                    />
                   ))}
                 </>
               )}
@@ -169,7 +211,7 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
             </div>
           </>
         )}
-        {!loading && !err && !data && (
+        {!loading && !err && !contactData && (
           <div className={css.empty}>
             <EmptyState
               icon="🧑"
@@ -180,6 +222,12 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         )}
       </div>
       {taskOpen && <TaskCreateDialog session={session} onClose={() => { setTaskOpen(false) }} />}
+      <CustomerPortraitDialog
+        open={portraitOpen}
+        identity={portraitIdentity}
+        context={{ source: 'session' }}
+        onClose={() => { setPortraitOpen(false) }}
+      />
     </div>
   )
 }

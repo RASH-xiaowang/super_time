@@ -12,6 +12,7 @@ import { readStripped, sliceBetween } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const state = readStripped(join(HERE, 'settings-state.tsx'))
+const steps = readStripped(join(HERE, 'settings-steps.tsx'))
 const download = sliceBetween(state, 'const whisperDownload = ', '\n  const batchTranscribe', 'whisperDownload 回调体')
 const install = sliceBetween(state, 'const installEngine = ', '\n  const save = ', 'installEngine 回调体')
 
@@ -43,5 +44,21 @@ describe('Whisper 下载 jobId 接线', () => {
     expect(state).toContain('whisperDownloadCanceller(() => whisperJobId.current, setWhisperDirMsg)')
     expect(download).toMatch(/finally \{[\s\S]{0,120}whisperJobId\.current = ''/)
     expect(install).toMatch(/finally \{[\s\S]{0,120}whisperJobId\.current = ''/)
+  })
+
+  it('语音设置使用六卡模型库，并完整接上选择、下载和停止回调', () => {
+    expect(steps).toContain('<WhisperModelLibrary')
+    expect(steps, '原生下拉不应再出现在语音设置里').not.toMatch(/<Select\b/)
+    expect(steps).toContain('setWhisperModel(model.id)')
+    expect(steps).toContain('void whisperDownload(model)')
+    expect(steps).toContain('onCancel={() => { void cancelWhisperDownload() }}')
+    expect(steps).toContain('onSelect={setWhisperModel}')
+  })
+
+  it('下载完成与手动刷新都绕过 60 秒状态缓存', () => {
+    expect(state).toMatch(/const refreshWhisper = async \(force = false\)/)
+    expect(download).toContain('await refreshWhisper(true)')
+    expect(install).toContain('await refreshWhisper(true)')
+    expect(steps).toContain('void refreshWhisper(true)')
   })
 })

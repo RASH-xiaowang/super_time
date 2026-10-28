@@ -227,6 +227,7 @@
   gap: var(--nm-dense-g3);
   font-size: var(--nm-dense-fs-sm);
 }
+.barIdentity { min-width: 0; }
 .barLabel { color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barTrack { height: 6px; border-radius: var(--nm-r-xs); background: var(--nm-bg-0); overflow: hidden; }
 .barFill { height: 100%; border-radius: var(--nm-r-xs); background: var(--nm-purple); }
@@ -429,7 +430,8 @@
   background: var(--nm-bg-card);
 }
 .taskInfo { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: var(--nm-dense-g2); }
-.taskName { font-size: var(--nm-dense-fs-sm); font-weight: 650; color: var(--nm-text-1); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.taskIdentity { min-width: 0; max-width: 45%; }
+.taskName { font-size: var(--nm-dense-fs-sm); font-weight: 650; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .taskMeta { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .taskActions { display: flex; gap: 2px; margin-left: auto; flex: 0 0 auto; }
 
@@ -466,6 +468,14 @@
 .formSelect option { background: var(--nm-bg-1); color: var(--nm-text-1); }
 :root[class~='theme-light'] .formSelect { color-scheme: light; }
 :root[class~='theme-light'] .formSelect option { background: var(--nm-bg-card); color: var(--nm-text-1); }
+.selectedGroupChip {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-card);
+}
 
 .formatGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--nm-dense-g2); }
 .formatCard {
@@ -487,6 +497,9 @@
 
 .memberPick { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow-y: auto; }
 .memberChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
   padding: 2px 8px;
   font-size: var(--nm-dense-fs-xs);
   color: var(--nm-text-2);

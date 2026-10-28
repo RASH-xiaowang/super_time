@@ -38,6 +38,8 @@ export declare abstract class GatewayLayaOps extends GatewayConfigOps {
         }>;
         /** W3-11.5：进度标识；带上它才会推送 `laya-analysis/progress`（渲染层按它认领本批）。 */
         jobId?: string;
+        /** 跳过旧缓存并重算（用户在分析面板主动刷新时使用）。 */
+        force?: boolean;
     }): Promise<LayaVisibleAnalysisResult>;
     /**
      * 停止一批正在跑的逐条本地分析（W3-11.5）。

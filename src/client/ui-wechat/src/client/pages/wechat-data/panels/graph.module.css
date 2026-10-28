@@ -129,6 +129,7 @@
   white-space: nowrap;
   font-weight: 600;
 }
+.nodeContextIdentity { flex: 1; min-width: 0; }
 .nodeContextKind {
   flex: none;
   padding: 1px 8px;
@@ -223,6 +224,8 @@
   text-align: left;
 }
 .searchHit:hover { background: var(--nm-bg-hover); }
+.searchHitIdentity { flex: 1 1 auto; }
+.searchHitName { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .searchHitId { color: var(--nm-text-3); font-size: var(--nm-fs-xs); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .searchEmpty { padding: 8px 10px; color: var(--nm-text-2); font-size: var(--nm-fs-sm); }
 
@@ -441,6 +444,9 @@
 .detailSub { font-size: var(--nm-fs-xs); font-weight: 600; color: var(--nm-text-2); }
 .detailChips { display: flex; flex-wrap: wrap; gap: 4px; }
 .detailChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -454,6 +460,8 @@
   cursor: pointer;
   transition: background-color var(--nm-t-fast), border-color var(--nm-t-fast), color var(--nm-t-fast);
 }
+.detailChipIdentity { min-width: 0; max-width: 100%; }
+.detailChipLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detailChip:hover { background: var(--nm-bg-active); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 /* 同班级名册里「被挡在图外」的成员：不可点，压暗提示它没参与连边 */
 .detailChip[data-dim] { opacity: 0.45; cursor: default; }
@@ -479,6 +487,7 @@
 .rank:hover { background: var(--nm-bg-hover); }
 .rank[data-on] { background: var(--nm-cyan-10); }
 .rankNum { width: 18px; text-align: center; font-weight: 600; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.rankIdentity { flex: 1 1 auto; }
 .rankName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rankW { color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 

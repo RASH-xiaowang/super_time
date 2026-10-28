@@ -155,6 +155,16 @@ describe('三种数据形态', () => {
     expect(rows[0]?.textContent).toContain('09:01')
     expect(rows[1]?.textContent).toContain('😀 [表情]')
   })
+
+  it('企业微信发送者显示企业名称', () => {
+    show({
+      frame: {
+        title: '聊天记录',
+        records: [rec({ name: '小深', enterpriseName: '深度求索', text: '合作愉快' })],
+      },
+    })
+    expect(host.textContent).toContain('小深（企业：深度求索）')
+  })
 })
 
 describe('头像只能走代理', () => {

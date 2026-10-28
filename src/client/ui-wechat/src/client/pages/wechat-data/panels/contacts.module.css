@@ -295,6 +295,14 @@
 }
 .profileRow span:first-child { color: var(--nm-text-2); flex-shrink: 0; width: 56px; }
 .profileRow code { word-break: break-all; }
+.profileIdentity { flex: 1 1 auto; min-width: 0; }
+.profileGroupLink {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+}
 
 .profileSection {
   margin-top: 10px;

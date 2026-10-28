@@ -10,6 +10,8 @@ import { clickableKey, DateRangeField, Segmented } from '../ui/kit.tsx'
 import { MEDIA_LABELS, type MediaFilter } from './moments-support.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 /** 月份直方图的一根柱。 */
 export interface MonthBar { key: string; label: string; count: number }
@@ -21,6 +23,8 @@ export interface MomentsSidebarProps {
   search: string
   clearFilters: () => void
   topAuthors: ReadonlyArray<[string, number]>
+  authorEnterpriseNames: ReadonlyMap<string, string>
+  authorUsernames: ReadonlyMap<string, string>
   showAllAuthors: boolean
   setShowAllAuthors: React.Dispatch<React.SetStateAction<boolean>>
   authorFilter: string | null
@@ -45,7 +49,8 @@ export interface MomentsSidebarProps {
 }
 
 export function MomentsSidebar({
-  search, clearFilters, topAuthors,
+  search, clearFilters, topAuthors, authorEnterpriseNames,
+  authorUsernames,
   showAllAuthors, setShowAllAuthors, authorFilter,
   setAuthorFilter, mediaFilter, setMediaFilter,
   mineFilter, setMineFilter, sortOrder,
@@ -64,15 +69,36 @@ export function MomentsSidebar({
             <span className={css.filterLabel}>作者</span>
             <div className={css.filterChips}>
               {(showAllAuthors ? topAuthors : topAuthors.slice(0, 8)).map(([name, count]) => (
-                <button key={name} type="button" className={css.authorChip} data-on={authorFilter === name || undefined} title={authorFilter === name ? '清除 ' + name : '只看 ' + name} onClick={() => { setAuthorFilter(authorFilter === name ? null : name) }}>
-                  <span className={css.chipName}>{name}</span>
+                <button key={name} type="button" className={css.authorChip} data-on={authorFilter === name || undefined} title={authorFilter === name ? '清除 ' + withEnterprise(name, authorEnterpriseNames.get(name)) : '只看 ' + withEnterprise(name, authorEnterpriseNames.get(name))} onClick={() => { setAuthorFilter(authorFilter === name ? null : name) }}>
+                  <IdentityName
+                    className={css.chipIdentity}
+                    textClassName={css.chipName}
+                    name={name}
+                    username={authorUsernames.get(name) ?? ''}
+                    size={18}
+                  >
+                    {withEnterprise(name, authorEnterpriseNames.get(name))}
+                  </IdentityName>
                   <span className={css.chipCount}>{String(count)}</span>
                 </button>
               ))}
               {topAuthors.length > 8 && (
                 <button type="button" className={css.authorChip} onClick={() => { setShowAllAuthors(v => !v) }} title={showAllAuthors ? '收起作者' : '更多作者'}>{showAllAuthors ? '↑ 收起' : '… 更多作者'}</button>
               )}
-              {authorFilter && <button type="button" className={css.authorChip} data-on="" onClick={() => { setAuthorFilter(null) }} title="清除作者筛选">✕ {authorFilter}</button>}
+              {authorFilter && (
+                <button type="button" className={css.authorChip} data-on="" onClick={() => { setAuthorFilter(null) }} title="清除作者筛选">
+                  <span className={css.clearMark}>✕</span>
+                  <IdentityName
+                    className={css.chipIdentity}
+                    textClassName={css.chipName}
+                    name={authorFilter}
+                    username={authorUsernames.get(authorFilter) ?? ''}
+                    size={18}
+                  >
+                    {withEnterprise(authorFilter, authorEnterpriseNames.get(authorFilter))}
+                  </IdentityName>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -138,7 +164,24 @@ export function MomentsSidebar({
       {/* monthly histogram (click a bar to filter that month) */}
       <div className={css.monthCard}>
         <div className={css.monthTitle}>
-          <span>全部月份动态{authorFilter ? '（作者：' + authorFilter + '）' : ''}（{monthly.length} 个月）</span>
+          <span className={css.monthTitleLead}>
+            全部月份动态
+            {authorFilter && (
+              <>
+                （作者：
+                <IdentityName
+                  className={css.monthAuthor}
+                  name={authorFilter}
+                  username={authorUsernames.get(authorFilter) ?? ''}
+                  size={16}
+                >
+                  {withEnterprise(authorFilter, authorEnterpriseNames.get(authorFilter))}
+                </IdentityName>
+                ）
+              </>
+            )}
+            （{monthly.length} 个月）
+          </span>
           <span className={css.monthHint}>点击柱条按月份筛选</span>
           {monthFilter && <span className={css.monthHint}>{loadedCount < total ? '（结果仅覆盖已加载部分）' : null}</span>}
           {monthFilter && <button type="button" className={css.textToggle} onClick={() => { setMonthFilter(null) }}>✕ 清除 {monthFilter}</button>}

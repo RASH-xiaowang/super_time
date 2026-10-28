@@ -56,8 +56,6 @@ export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boole
   // 回调与 AbortSignal 都过不了传输层，所以进度只能这样推 —— 少中继这一条，
   // 界面上就只有一个「导出中…」的按钮在空转。
   { from: 'wechat-export/progress', to: 'dsh-wechat-export-progress', detail: true },
-  // 逐条本地分析的进度（jobId 由 hook 生成，后端按它认领本批）
-  { from: 'laya-analysis/progress', to: 'dsh-laya-analysis-progress', detail: true },
   // 搜索索引构建的进度（同样是回调过不了传输层，只能推事件再认领）
   { from: 'search-index/progress', to: 'dsh-search-index-progress', detail: true },
   // ClawBot 接入会话有新消息（幂等提示：detail 是 { lastId, delta }，不含正文）
@@ -67,6 +65,8 @@ export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boole
   // 任务触发扫描新建了记录 / 投递了回调（2026-10-19 提速）：payload { created, dispatched }。
   // 面板靠它回源；没有这一条就只能等下一次微信同步事件（约 10s）才看到新记录。
   { from: 'task-center/updated', to: 'dsh-wechat-task-center-updated', detail: true },
+  // 消息列表新增记录或完成一次下游投递：payload { created, dispatched }。
+  { from: 'message-list/updated', to: 'dsh-wechat-message-list-updated', detail: true },
 ]
 
 /** 按名字查表（表很小，线性查即可；不做 Map 是为了让它保持可读的字面量）。 */

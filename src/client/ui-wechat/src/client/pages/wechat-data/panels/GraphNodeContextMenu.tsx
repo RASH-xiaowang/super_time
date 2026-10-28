@@ -15,6 +15,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { buildNodeMenuItems, groupNodeMenuItems, placeContextMenu, type GraphNodeMenuAction } from './graph-context-menu-model.ts'
 import type { GNode } from './graph-model.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './graph.module.css'
 
 export interface GraphNodeContextMenuProps {
@@ -23,6 +25,8 @@ export interface GraphNodeContextMenuProps {
   pinned: boolean
   knowledge: boolean
   canOpenChat: boolean
+  /** 「我」的真实 wxid，仅 self 节点查头像时使用。 */
+  selfUsername?: string
   onClose: () => void
   /** 菜单关闭时是否把焦点还给画布（Escape / 外部点击 / 动作执行共用）。 */
   restoreFocus?: boolean
@@ -35,7 +39,7 @@ export interface GraphNodeContextMenuProps {
  * @returns portal 菜单；未挂载时返回 null。
  */
 export function GraphNodeContextMenu({
-  target, pinned, knowledge, canOpenChat, onClose, restoreFocus = true, onAction,
+  target, pinned, knowledge, canOpenChat, selfUsername = '', onClose, restoreFocus = true, onAction,
 }: GraphNodeContextMenuProps): React.JSX.Element | null {
   const menuRef = useRef<HTMLDivElement | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
@@ -43,6 +47,8 @@ export function GraphNodeContextMenu({
   const firstItemRef = useRef<HTMLButtonElement | null>(null)
   const items = buildNodeMenuItems({ node: target.node, pinned, knowledge, canOpenChat })
   const groups = groupNodeMenuItems(items)
+  const displayName = withEnterprise(target.node.label, target.node.enterpriseName)
+  const identityUsername = target.node.kind === 'self' ? selfUsername : target.node.id
 
   // 先渲染到右键点，再按实际尺寸夹到视口内。用 layout effect 是为了避免首帧闪到屏幕外。
   useLayoutEffect(() => {
@@ -111,12 +117,25 @@ export function GraphNodeContextMenu({
       className={css.nodeContextMenu}
       style={{ left: pos.x, top: pos.y }}
       role="menu"
-      aria-label={`${target.node.label} 的节点操作`}
+      aria-label={`${displayName} 的节点操作`}
       onKeyDown={onMenuKeyDown}
       onContextMenu={(ev) => { ev.preventDefault() }}
     >
       <div className={css.nodeContextHead}>
-        <span className={css.nodeContextTitle} title={target.node.label}>{target.node.label}</span>
+        {target.node.kind === 'person' || target.node.kind === 'group' || target.node.kind === 'self' ? (
+          <IdentityName
+            className={css.nodeContextIdentity}
+            textClassName={css.nodeContextTitle}
+            name={target.node.label}
+            username={identityUsername}
+            size={18}
+            title={displayName}
+          >
+            {displayName}
+          </IdentityName>
+        ) : (
+          <span className={css.nodeContextTitle} title={displayName}>{displayName}</span>
+        )}
         <span className={css.nodeContextKind}>{kindLabel(target.node)}</span>
       </div>
       {groups.map((group, gi) => (

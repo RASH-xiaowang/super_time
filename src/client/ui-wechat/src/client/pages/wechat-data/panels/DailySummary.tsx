@@ -22,12 +22,14 @@ import {
   readRenderCache,
   writeRenderCache,
 } from '../api.ts'
-import type { SummaryRecord, SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data/types'
+import type { SummaryRecord, SummaryTask, SummaryTaskInput, WechatContact, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, DateField, ErrorState, PanelHeader, TimeField, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './daily-summary.module.css'
 import { fmtLocaleMs } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 
 const FORMATS: ReadonlyArray<{ key: string; label: string; desc: string }> = [
   { key: 'brief', label: '简洁总结', desc: '3–5 句话概括当天聊天的重点内容' },
@@ -58,8 +60,14 @@ interface DailyStats {
   total: number
   types: Record<string, number>
   hourly: number[]
-  topSessions: Array<{ username: string; count: number }>
+  topSessions: Array<{ username: string; name?: string; enterpriseName?: string; count: number }>
   sessions: number
+}
+
+interface SessionLabel {
+  username: string
+  name: string
+  enterpriseName?: string
 }
 
 /**
@@ -70,6 +78,147 @@ interface DailyStats {
 function useDailySummaryTasks(reload: () => Promise<void>): void {
   useEffect(() => { void reload() }, [reload])
   useWechatDataUpdated(() => { void reload() })
+}
+
+/** Build display-only labels while preserving the original session usernames. */
+function sessionLabelsFrom(sessions: readonly WechatSession[]): { all: SessionLabel[]; groups: SessionLabel[] } {
+  const all = sessions.map(s => ({
+    username: s.username,
+    name: s.displayName || s.username,
+    ...(s.enterpriseName ? { enterpriseName: s.enterpriseName } : {}),
+  }))
+  const groupUsernames = new Set(
+    sessions
+      .filter(s => s.type === 'group' || s.username.endsWith('@chatroom'))
+      .map(s => s.username),
+  )
+  return { all, groups: all.filter(s => groupUsernames.has(s.username)) }
+}
+
+/** Read cached labels first, then refresh them from the sessions API. */
+async function loadDailySummarySessions(
+  setGroups: (labels: readonly SessionLabel[]) => void,
+  setSessionLabels: (labels: readonly SessionLabel[]) => void,
+): Promise<void> {
+  try {
+    const cached = readRenderCache<readonly SessionLabel[]>('daily-summary-groups-v2')
+    if (cached) setGroups(cached)
+    const cachedSessions = readRenderCache<readonly SessionLabel[]>('daily-summary-sessions-v2')
+    if (cachedSessions) setSessionLabels(cachedSessions)
+    const env = await apiGetSessions({ limit: 500 })
+    const { all, groups } = sessionLabelsFrom(env.sessions)
+    setSessionLabels(all)
+    setGroups(groups)
+    writeRenderCache('daily-summary-groups-v2', groups)
+    writeRenderCache('daily-summary-sessions-v2', all)
+  } catch { /* keep */ }
+}
+
+/** Load the selected group's members without changing their stored names. */
+async function loadDailySummaryMembers(
+  groupUsername: string,
+  setMembers: (labels: readonly SessionLabel[]) => void,
+): Promise<void> {
+  setMembers([])
+  if (!groupUsername) return
+  try {
+    const env = await apiGetContacts()
+    const labels = env.contacts
+      .filter(c => c.groupUsernames?.includes(groupUsername) ?? c.groupUsername === groupUsername)
+      .map((c: WechatContact) => ({
+        username: c.username,
+        name: c.displayName || c.username,
+        ...(c.enterpriseName ? { enterpriseName: c.enterpriseName } : {}),
+      }))
+    setMembers(labels)
+  } catch { /* keep */ }
+}
+
+/** Resolve a top-session label from the latest API result, then cached session data. */
+function topSessionLabel(item: DailyStats['topSessions'][number], labels: readonly SessionLabel[]): string {
+  const cached = labels.find(label => label.username === item.username)
+  return withEnterprise(
+    item.name || cached?.name || item.username,
+    item.enterpriseName || cached?.enterpriseName,
+  )
+}
+
+/** Native selects cannot host avatars; show the selected group as an identity chip below it. */
+function GroupPickerPreview({ group }: { group: SessionLabel | undefined }): React.JSX.Element | null {
+  if (!group) return null
+  return (
+    <div className={css.dsSelectedGroup}>
+      <IdentityName name={group.name} username={group.username} size={22}>
+        {withEnterprise(group.name, group.enterpriseName)}
+      </IdentityName>
+    </div>
+  )
+}
+
+/** One member toggle with the real username behind its avatar. */
+function MemberPickButton({ member, active, onClick }: {
+  member: SessionLabel
+  active: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button type="button" className={css.catBtn} data-active={active || undefined} onClick={onClick}>
+      <IdentityName name={member.name} username={member.username} size={18}>
+        {withEnterprise(member.name, member.enterpriseName)}
+      </IdentityName>
+    </button>
+  )
+}
+
+/** A ranked session row whose avatar does not consume the bar's flexible width. */
+function TopSessionBar({ item, rank, max, labels }: {
+  item: DailyStats['topSessions'][number]
+  rank: number
+  max: number
+  labels: readonly SessionLabel[]
+}): React.JSX.Element {
+  const name = topSessionLabel(item, labels)
+  return (
+    <div className={css.barRow}>
+      <IdentityName className={css.barLabel} name={name} username={item.username} size={22} title={name}>
+        {rank + 1}. {name}
+      </IdentityName>
+      <div className={css.barTrack}>
+        <div className={css.barFill} style={{ width: `${(item.count / max) * 100}%` }} />
+      </div>
+      <span className={css.barValue}>{item.count} 条</span>
+    </div>
+  )
+}
+
+/** Ranked session block with the shared avatar row so the panel body stays compact. */
+function TopSessionBars({ items, labels }: {
+  items: DailyStats['topSessions']
+  labels: readonly SessionLabel[]
+}): React.JSX.Element {
+  const max = items[0]?.count ?? 1
+  return (
+    <>
+      <div className={css.subHd}>最活跃的会话</div>
+      {items.slice(0, 5).map((item, rank) => (
+        <TopSessionBar key={item.username} item={item} rank={rank} max={max} labels={labels} />
+      ))}
+    </>
+  )
+}
+
+/** A task/record session name that keeps its real username for avatar lookup. */
+function SummarySessionIdentity({ name, username, suffix }: {
+  name?: string | undefined
+  username: string
+  suffix?: string | undefined
+}): React.JSX.Element {
+  const label = name || username
+  return (
+    <IdentityName className={css.taskName} name={label} username={username} size={24}>
+      {withEnterprise(label)}{suffix ? ` / ${suffix}` : ''}
+    </IdentityName>
+  )
 }
 
 /**
@@ -86,8 +235,9 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
 
   const [tasks, setTasks] = useState<readonly SummaryTask[]>([])
   const [records, setRecords] = useState<readonly SummaryRecord[]>([])
-  const [groups, setGroups] = useState<readonly { username: string; name: string }[]>([])
-  const [members, setMembers] = useState<readonly { username: string; name: string }[]>([])
+  const [groups, setGroups] = useState<readonly SessionLabel[]>([])
+  const [sessionLabels, setSessionLabels] = useState<readonly SessionLabel[]>([])
+  const [members, setMembers] = useState<readonly SessionLabel[]>([])
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [formOpen, setFormOpen] = useState(false)
   // 手写任务表单弹窗的 Esc 关闭
@@ -142,18 +292,10 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
     } catch { /* keep */ }
   }, [])
 
-  const loadGroups = useCallback(async (): Promise<void> => {
-    try {
-      const cached = readRenderCache<readonly { username: string; name: string }[]>('daily-summary-groups')
-      if (cached) setGroups(cached)
-      const env = await apiGetSessions({ limit: 500 })
-      const gs = env.sessions
-        .filter(s => s.type === 'group' || s.username.endsWith('@chatroom'))
-        .map(s => ({ username: s.username, name: s.displayName || s.username }))
-      setGroups(gs)
-      writeRenderCache('daily-summary-groups', gs)
-    } catch { /* keep */ }
-  }, [])
+  const loadGroups = useCallback(
+    (): Promise<void> => loadDailySummarySessions(setGroups, setSessionLabels),
+    [],
+  )
 
   useDailySummaryTasks(loadTasks)
 
@@ -175,17 +317,10 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
   // 模型选择已移除 —— 统一走「数据配置 → AI 大模型」里的全局默认模型。
   useEffect(() => { if (view === 'generate') void loadGroups() }, [view, loadGroups])
 
-  const loadMembers = useCallback(async (groupUsername: string): Promise<void> => {
-    setMembers([])
-    if (!groupUsername) return
-    try {
-      const env = await apiGetContacts()
-      const list = env.contacts
-        .filter(c => c.category === 'member' && c.groupUsername === groupUsername)
-        .map(c => ({ username: c.username, name: c.displayName || c.username }))
-      setMembers(list)
-    } catch { /* keep */ }
-  }, [])
+  const loadMembers = useCallback(
+    (groupUsername: string): Promise<void> => loadDailySummaryMembers(groupUsername, setMembers),
+    [],
+  )
 
   const generate = async (): Promise<void> => {
     setError(null)
@@ -421,7 +556,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
               {tasks.map(t => (
                 <div key={t.id} className={css.taskRow}>
                   <div className={css.taskInfo}>
-                    <div className={css.taskName}>{t.groupName || t.groupUsername}</div>
+                    <SummarySessionIdentity name={t.groupName} username={t.groupUsername} />
                     <div className={css.taskMeta}>⏰ {t.scheduleTime} · {FORMATS.find(f => f.key === t.format)?.label ?? t.format}</div>
                     <div className={css.taskChips}>
                       <span className={[css.statBadge, t.enabled ? css.on : css.off].join(' ')}>{t.enabled ? '启用' : '停用'}</span>
@@ -459,7 +594,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
                   {records.map(r => (
                     <div key={r.id} className={css.taskRow}>
                       <div className={css.taskInfo}>
-                        <div className={css.taskName}>{r.groupName || r.groupUsername} / {r.summaryDate}</div>
+                        <SummarySessionIdentity name={r.groupName} username={r.groupUsername} suffix={r.summaryDate} />
                         <div className={css.taskMeta}>{r.messageCount} 条 · {r.status}</div>
                         <div className={css.taskChips}>
                           <span className={[css.statBadge, r.status === 'done' ? css.done : r.status === 'error' ? css.fail : css.on].join(' ')}>{r.status === 'done' ? '已完成' : r.status === 'error' ? '失败' : r.status}</span>
@@ -528,22 +663,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
                       {(dailyStats.types['链接'] ?? 0) > 0 && <span className={css.statChip}>链接 <b>{dailyStats.types['链接']}</b></span>}
                     </div>
                     {dailyStats.topSessions.length > 0 && (
-                      <>
-                        <div className={css.subHd}>最活跃的会话</div>
-                        {dailyStats.topSessions.slice(0, 5).map((ts, i) => {
-                          const name = groups.find(g => g.username === ts.username)?.name ?? ts.username
-                          const base = dailyStats.topSessions[0]?.count ?? 1
-                          return (
-                            <div key={ts.username} className={css.barRow}>
-                              <span className={css.barLabel} title={name}>{i + 1}. {name}</span>
-                              <div className={css.barTrack}>
-                                <div className={css.barFill} style={{ width: `${(ts.count / base) * 100}%` }} />
-                              </div>
-                              <span className={css.barValue}>{ts.count} 条</span>
-                            </div>
-                          )
-                        })}
-                      </>
+                      <TopSessionBars items={dailyStats.topSessions} labels={sessionLabels} />
                     )}
                     <div className={css.subHd}>24 小时活跃分布</div>
                     <div className={css.dsHourBars}>
@@ -597,8 +717,9 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
                 }}
               >
                 <option value="">选择群聊…</option>
-                {groups.map(g => <option key={g.username} value={g.username}>{g.name}</option>)}
+                {groups.map(g => <option key={g.username} value={g.username}>{withEnterprise(g.name, g.enterpriseName)}</option>)}
               </select>
+              <GroupPickerPreview group={groups.find(g => g.username === form.groupUsername)} />
 
               <div className={`${css.formHd} ${css.dsFormHd}`}><span className={kitCss.textMeta}>关注成员</span></div>
               <label className={`${kitCss.textCaption} ${css.dsInlineLabel}`}>
@@ -609,8 +730,12 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
                 <div className={css.dsMemberPick}>
                   {members.length === 0 && <span className={kitCss.textCaption}>未读取到群成员，可重新选择群聊重试</span>}
                   {members.map(m => (
-                    <button key={m.username} type="button" className={css.catBtn} data-active={form.targetUsers.includes(m.username) || undefined}
-                      onClick={() => { toggleTarget(m.username) }}>{m.name}</button>
+                    <MemberPickButton
+                      key={m.username}
+                      member={m}
+                      active={form.targetUsers.includes(m.username)}
+                      onClick={() => { toggleTarget(m.username) }}
+                    />
                   ))}
                 </div>
               )}

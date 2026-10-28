@@ -319,15 +319,15 @@ describe('18 格异常矩阵：每个格都必须有可读回答且状态一致'
 
       if (cell.anomaly === 'empty') {
         expect(answer).toMatch(/没有检索到|没查到/)
-        expect(answer).not.toContain('暂时失败')
+        expect(answer).not.toMatch(/暂时失败|暂时没查成/)
       }
       if (cell.anomaly === 'tool_error' || cell.anomaly === 'tool_timeout' || cell.anomaly === 'malformed_result') {
-        expect(answer).toContain('暂时失败')
+        expect(answer).toContain(cell.profile === 'clawbot-auto' ? '暂时没查成' : '暂时失败')
         expect(answer).not.toContain('没有检索到')
         expect(result.evidence?.status).toBe('failed')
       }
       if (cell.anomaly === 'scope_violation') {
-        expect(answer).toContain('没法开始检索')
+        expect(answer).toContain(cell.profile === 'clawbot-auto' ? '没弄好' : '没法开始检索')
         expect(result.evidence?.items).toEqual([])
       }
       if (cell.anomaly === 'invalid_arguments') {
@@ -355,7 +355,7 @@ describe('正常链路：三个入口都能稳定给出带依据的回答', () =
       expect(result.status).toBe('ok')
       expect(result.answer.trim()).not.toBe('')
       expect(result.citations.length + (result.resources?.length ?? 0)).toBeGreaterThan(0)
-      expect(result.answer).not.toContain('暂时失败')
+      expect(result.answer).not.toMatch(/暂时失败|暂时没查成/)
       expect(result.basis).toContain('依据')
     },
   )
@@ -549,7 +549,7 @@ describe('模型与综合生成异常兜底', () => {
 
     expect(synthesize).not.toHaveBeenCalled()
     expect(result.status).toBe('failed')
-    expect(result.answer).toContain('暂时失败')
+    expect(result.answer).toContain('暂时没查成')
     expect(result.answer.trim()).not.toBe('')
   })
 

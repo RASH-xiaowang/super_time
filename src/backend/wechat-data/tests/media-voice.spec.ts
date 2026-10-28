@@ -3,13 +3,14 @@
  * node:sqlite's "value too large" error.
  * @vitest-environment node
  */
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveVoiceInfo } from '../src/query/media-voice.ts'
-import { voiceDataBySvr } from '../src/query/voice.ts'
+import { svrIdByChatLocal, voiceDataBySvr } from '../src/query/voice.ts'
 
 /** Scratch dirs removed after each test. */
 const scratch: string[] = []
@@ -64,5 +65,23 @@ describe('voiceDataBySvr', () => {
     const root = makeMediaDb()
     const svrId = '6939560591294896016'
     expect(voiceDataBySvr(root, svrId)).toEqual(Buffer.from([0x02, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+  })
+})
+
+describe('svrIdByChatLocal', () => {
+  it('falls back to the message shard server_id when Name2Id is missing', () => {
+    const root = makeMediaDb()
+    const username = 'wxid_test@chatroom'
+    const media = new DatabaseSync(join(root, 'message', 'media_0.db'))
+    media.exec('DELETE FROM Name2Id')
+    media.close()
+
+    const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+    const messages = new DatabaseSync(join(root, 'message', 'message_0.db'))
+    messages.exec(`CREATE TABLE "${table}" (local_id INTEGER, server_id INTEGER)`)
+    messages.exec(`INSERT INTO "${table}" VALUES (4, 12345)`)
+    messages.close()
+
+    expect(svrIdByChatLocal(root, username, 4)).toBe('12345')
   })
 })

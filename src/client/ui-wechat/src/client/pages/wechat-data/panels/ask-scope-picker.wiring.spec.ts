@@ -25,7 +25,9 @@ describe('问答检索范围浮层', () => {
 
   it('浮层保留会话头像、类型、搜索与时间范围', () => {
     const picker = read('ask-scope-picker.tsx')
-    expect(picker).toContain('Avatar')
+    expect(picker).toContain("import { IdentityName } from './identity.tsx'")
+    expect(picker).toContain('<IdentityName')
+    expect(picker).toContain('username={session.username}')
     expect(picker).toContain('全部会话')
     expect(picker).toContain('群聊')
     expect(picker).toContain('单聊')

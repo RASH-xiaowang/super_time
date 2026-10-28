@@ -26,6 +26,8 @@ import { searchIndexMessages } from './search.ts'
 import { contactMeta } from './meta.ts'
 import { favTypeLabel, parseFavContent, parseFavParts } from './favorites.ts'
 import { parseSnsXml } from './moments.ts'
+import { resolveSelfUsername } from '../config/resolve.ts'
+import { isEnterpriseWechatUser, loadOpenimDirectoryFromDb } from './openim.ts'
 
 /** Safe display wrapper: never throw; fall back to the raw username. */
 function cellString(v: unknown): string {
@@ -39,6 +41,30 @@ function cellString(v: unknown): string {
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   return new Set(rows.map(r => r.name))
+}
+
+/** Session titles provide a group/contact fallback when contact.db has no display name. */
+function loadRecordSessionTitles(decryptedDir: string): Map<string, string> {
+  const titles = new Map<string, string>()
+  const path = join(decryptedDir, 'session', 'session.db')
+  if (!existsSync(path)) return titles
+  try {
+    withDb(path, (db) => {
+      const has = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='SessionNoContactInfoTable'",
+      ).get() !== undefined
+      if (!has) return
+      const rows = db.prepare(
+        'SELECT username, session_title FROM SessionNoContactInfoTable',
+      ).all() as Array<{ username: unknown; session_title: unknown }>
+      for (const row of rows) {
+        const username = cellString(row.username).trim()
+        const title = cellString(row.session_title).trim()
+        if (username !== '' && title !== '') titles.set(username, title)
+      }
+    })
+  } catch { /* session.db schema drift: records still use contact/participant fallbacks */ }
+  return titles
 }
 
 function like(q: string): string {
@@ -95,14 +121,63 @@ function searchContacts(
       const likeClauses = searchCols.map(c => `${c} LIKE ?`).join(' OR ')
       if (!likeClauses) return []
       const params = searchCols.map(() => like(q))
+      const enterpriseNames = loadOpenimDirectoryFromDb(db).enterpriseNames
+      const matchedEnterpriseUsers = [...enterpriseNames]
+        .filter(([, name]) => name.toLocaleLowerCase().includes(q.toLocaleLowerCase()))
+        .map(([contactUsername]) => contactUsername)
+      const enterpriseSql = matchedEnterpriseUsers.length > 0
+        ? ` OR ${userCol} IN (${matchedEnterpriseUsers.map(() => '?').join(', ')})`
+        : ''
       const userSql = username ? ` AND ${userCol} = ?` : ''
       const userParam = username ? [username] : []
-      const rows = db.prepare(`SELECT ${userCol} AS u, ${remarkCol || 'NULL'} AS r, ${nickCol || 'NULL'} AS n, ${aliasCol || 'NULL'} AS a FROM contact WHERE (${likeClauses})${userSql} LIMIT ?`).all(...params, ...userParam, cap) as Array<Record<string, unknown>>
-      return rows.map(r => ({
-        username: cellString(r.u),
-        name: cellString(r.r) || cellString(r.n) || cellString(r.a) || cellString(r.u),
-        category: cellString(r.u).endsWith('@chatroom') ? 'group' : cellString(r.u).startsWith('gh_') ? 'official' : 'contact',
-      }))
+      const rows = db.prepare(`SELECT ${userCol} AS u, ${remarkCol || 'NULL'} AS r, ${nickCol || 'NULL'} AS n, ${aliasCol || 'NULL'} AS a FROM contact WHERE (${likeClauses}${enterpriseSql})${userSql} LIMIT ?`).all(...params, ...matchedEnterpriseUsers, ...userParam, cap) as Array<Record<string, unknown>>
+      // 群人数只服务群聊结果。一次把 room → count 读成 Map，避免每行再开一次查询。
+      const memberCounts = new Map<string, number>()
+      try {
+        const roomTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_room'").get()
+        const memberTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chatroom_member'").get()
+        if (roomTable !== undefined && memberTable !== undefined) {
+          const rooms = db.prepare('SELECT id, username FROM chat_room').all() as Array<{ id: unknown; username: unknown }>
+          const roomUsers = new Map<number, string>()
+          for (const room of rooms) {
+            const id = Number(room.id ?? 0)
+            const roomUsername = cellString(room.username).trim()
+            if (id > 0 && roomUsername !== '') roomUsers.set(id, roomUsername)
+          }
+          const counts = db.prepare('SELECT room_id, COUNT(*) AS c FROM chatroom_member GROUP BY room_id').all() as Array<{ room_id: unknown; c: unknown }>
+          for (const row of counts) {
+            const roomUsername = roomUsers.get(Number(row.room_id ?? 0))
+            if (roomUsername !== undefined) memberCounts.set(roomUsername, Number(row.c ?? 0))
+          }
+        }
+      } catch { /* 群表缺失或版本不同：不阻断联系人主结果 */ }
+      return rows.map((r) => {
+        const contactUsername = cellString(r.u)
+        const remark = cellString(r.r).trim()
+        const nickname = cellString(r.n).trim()
+        const alias = cellString(r.a).trim()
+        const memberCount = contactUsername.endsWith('@chatroom') ? memberCounts.get(contactUsername) : undefined
+        const enterpriseName = enterpriseNames.get(contactUsername)?.trim()
+        const category = contactUsername.endsWith('@chatroom')
+          ? 'group'
+          : contactUsername.startsWith('gh_')
+            ? 'official'
+            : contactUsername.endsWith('@kefu.openim')
+              ? 'service'
+              : isEnterpriseWechatUser(contactUsername)
+                ? 'enterprise'
+                : 'contact'
+        return {
+          username: contactUsername,
+          name: remark || nickname || alias || contactUsername,
+          category,
+          ...(enterpriseName ? { enterpriseName } : {}),
+          ...(remark !== '' ? { remark } : {}),
+          ...(nickname !== '' ? { nickname } : {}),
+          ...(alias !== '' ? { alias } : {}),
+          ...(memberCount !== undefined ? { memberCount } : {}),
+        }
+      })
     })
   } catch (e) {
     noteFailure(sink, '联系人', 'contacts', e)
@@ -186,12 +261,18 @@ function searchMoments(
         // 作者显示名也要能搜：朋友圈面板内是按 `m.author`（解析后的显示名）过滤的，
         // 而这里原先只比正文 ⇒ 同一个词「面板内筛得出 57 条、全局搜索 0 条」。
         // 显示名存在通讯录里，做法是先把匹配的用户名算出来，再用 IN 精确命中。
-        const names = contactMeta(decryptedDir).names
+        const meta = contactMeta(decryptedDir)
+        const names = meta.names
+        const enterpriseNames = meta.enterpriseNames
         const lower = q.trim().toLowerCase()
-        const authorUsers = [...names.entries()]
-          .filter(([, n]) => String(n).toLowerCase().includes(lower))
-          .map(([u]) => u)
-          .slice(0, 50)
+        const matchedAuthors = new Set<string>()
+        for (const [username, name] of names) {
+          if (String(name).toLowerCase().includes(lower)) matchedAuthors.add(username)
+        }
+        for (const [username, enterpriseName] of enterpriseNames) {
+          if (enterpriseName.toLowerCase().includes(lower)) matchedAuthors.add(username)
+        }
+        const authorUsers = [...matchedAuthors].slice(0, 50)
         const kw = like(q)
         const inSql = authorUsers.length > 0 ? ' OR ' + uname + ' IN (' + authorUsers.map(() => '?').join(', ') + ')' : ''
         if (range && timeCol === '') {
@@ -218,9 +299,11 @@ function searchMoments(
           const time = Number(r.t ?? 0) > 0
             ? fmtDateTimeSec(Number(r.t))
             : fmtDateTimeSec(parsed.createTime)
+          const enterpriseName = enterpriseNames.get(username)?.trim()
           return {
             username,
             name: names.get(username) ?? parsed.nickname ?? username,
+            ...(enterpriseName ? { enterpriseName } : {}),
             snippet: parsed.text || xml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
             tid: cellString(r.i),
             time,
@@ -268,6 +351,8 @@ function searchFavorites(
       const timeCol = cols2.has('update_time') ? 'update_time' : '0'
       const serverCol = cols2.has('server_id') ? 'CAST(server_id AS TEXT)' : "''"
       const sourceCol = cols2.has('source_id') ? 'CAST(source_id AS TEXT)' : "''"
+      const fromExpr = fromCol || "''"
+      const chatExpr = chatCol || "''"
       const extraSql = [fromCol, chatCol].filter(Boolean).map(c => ' OR ' + c + ' LIKE ?').join('')
       const extraParams = [fromCol, chatCol].filter(Boolean).map(() => like(q))
       if (username && fromCol === '' && chatCol === '') {
@@ -293,8 +378,9 @@ function searchFavorites(
         return []
       }
       const rangeFilter = range ? rangeClause(timeCol, range) : { sql: '', params: [] }
-      const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c, ${typeCol} AS ty, ${timeCol} AS t, ${serverCol} AS sid, ${sourceCol} AS src FROM fav_db_item WHERE (${contentCol} LIKE ?${extraSql})${userSql}${rangeFilter.sql} LIMIT ?`)
-        .all(like(q), ...extraParams, ...userParams, ...rangeFilter.params, cap) as Array<{ id: unknown; c: unknown; ty: unknown; t: unknown; sid: unknown; src: unknown }>
+      const meta = contactMeta(decryptedDir)
+      const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c, ${typeCol} AS ty, ${timeCol} AS t, ${serverCol} AS sid, ${sourceCol} AS src, ${fromExpr} AS fu, ${chatExpr} AS cn FROM fav_db_item WHERE (${contentCol} LIKE ?${extraSql})${userSql}${rangeFilter.sql} LIMIT ?`)
+        .all(like(q), ...extraParams, ...userParams, ...rangeFilter.params, cap) as Array<{ id: unknown; c: unknown; ty: unknown; t: unknown; sid: unknown; src: unknown; fu: unknown; cn: unknown }>
       return rows.map((r) => {
         const xml = cellString(r.c)
         const type = Number(r.ty ?? 0)
@@ -302,6 +388,16 @@ function searchFavorites(
         const parts = parseFavParts(xml)
         const media = parts.find(part => part.kind !== 'text' && (part.fullMd5 || part.md5 || part.name || part.url))
         const contentMd5 = media?.md5 || media?.fullMd5 || media?.thumbMd5 || ''
+        const fromUsr = cellString(r.fu).trim()
+        const chatName = cellString(r.cn).trim()
+        const source = chatName
+          ? (meta.names.get(chatName) ?? chatName)
+          : (fromUsr ? (meta.names.get(fromUsr) ?? fromUsr) : '')
+        const sourceEnterpriseName = (
+          (chatName ? meta.enterpriseNames.get(chatName) : undefined)
+          || (fromUsr ? meta.enterpriseNames.get(fromUsr) : undefined)
+          || ''
+        ).trim()
         return {
           id: Number(r.id ?? 0),
           snippet: parsed.desc || parsed.title || xml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
@@ -312,6 +408,8 @@ function searchFavorites(
           typeLabel: favTypeLabel(type),
           ...(cellString(r.sid) ? { serverId: cellString(r.sid) } : {}),
           ...(cellString(r.src) ? { sourceId: cellString(r.src) } : {}),
+          ...(source ? { source } : {}),
+          ...(sourceEnterpriseName ? { sourceEnterpriseName } : {}),
           ...(media ? {
             resourceKind: media.kind,
             ...(media.name ? { fileName: media.name } : {}),
@@ -400,6 +498,69 @@ function searchFiles(
   }
 }
 
+/**
+ * Resolve a transfer/red-packet session to a human-readable title.
+ *
+ * `contactMeta` intentionally stores the raw username when a contact has no
+ * remark or nickname, so "name === username" must still count as unresolved.
+ * For private chats we only use a participant as a fallback when the logged-in
+ * account is known: this lets us ignore "self" and avoids putting the user's
+ * own name on a record whose peer is still unknown.
+ */
+function recordIdentity(
+  session: string,
+  names: Map<string, string>,
+  enterpriseNames: ReadonlyMap<string, string>,
+  sessionTitles: ReadonlyMap<string, string>,
+  participants: string[],
+  selfUsername: string,
+): { name: string; enterpriseName?: string } {
+  const direct = names.get(session)?.trim() ?? ''
+  const sessionEnterpriseName = enterpriseNames.get(session)?.trim()
+  if (direct !== '' && direct !== session) {
+    return {
+      name: direct,
+      ...(sessionEnterpriseName ? { enterpriseName: sessionEnterpriseName } : {}),
+    }
+  }
+
+  const sessionTitle = sessionTitles.get(session)?.trim() ?? ''
+  if (sessionTitle !== '' && sessionTitle !== session) {
+    return {
+      name: sessionTitle,
+      ...(sessionEnterpriseName ? { enterpriseName: sessionEnterpriseName } : {}),
+    }
+  }
+
+  if (/^wxid_/i.test(session) && selfUsername !== '') {
+    const candidates = new Map<string, string>()
+    for (const participant of participants) {
+      const id = participant.trim()
+      if (id === '' || id === session || id === selfUsername) continue
+      const name = names.get(id)?.trim() ?? ''
+      if (name !== '' && name !== id) candidates.set(id, name)
+    }
+    if (candidates.size === 1) {
+      const [username, name] = [...candidates.entries()][0] ?? []
+      if (username !== undefined && name !== undefined) {
+        const enterpriseName = enterpriseNames.get(username)?.trim()
+        return {
+          name,
+          ...(enterpriseName ? { enterpriseName } : {}),
+        }
+      }
+    }
+  }
+
+  if (session.endsWith('@chatroom')) return { name: '未知群聊' }
+  if (/^gh_/i.test(session)) return { name: '未知公众号' }
+  if (/^wxid_/i.test(session)) return { name: '未知联系人' }
+  return {
+    name: session,
+    ...(sessionEnterpriseName ? { enterpriseName: sessionEnterpriseName } : {}),
+  }
+}
+
 /** Transfers/red packets whose session matches the query. */
 function searchRecords(
   sink: DomainFailure[],
@@ -414,6 +575,10 @@ function searchRecords(
   try {
     return withDb(p, (db) => {
       const out: UnifiedSearchRecord[] = []
+      const meta = contactMeta(decryptedDir)
+      const names = meta.names
+      const sessionTitles = loadRecordSessionTitles(decryptedDir)
+      let selfUsername: string | undefined
       for (const [table, kind] of [['transferTable', 'transfers'], ['redEnvelopeTable', 'redpackets']] as const) {
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
         if (!has) continue
@@ -430,6 +595,9 @@ function searchRecords(
           : (cols.has('last_update_time') ? 'last_update_time' : '0')
         const serverCol = cols.has('message_server_id') ? 'CAST(message_server_id AS TEXT)' : "''"
         const transferCol = kind === 'transfers' && cols.has('transfer_id') ? 'transfer_id' : "''"
+        const payerCol = kind === 'transfers' && cols.has('pay_payer') ? 'pay_payer' : "''"
+        const receiverCol = kind === 'transfers' && cols.has('pay_receiver') ? 'pay_receiver' : "''"
+        const senderCol = kind === 'redpackets' && cols.has('sender_user_name') ? 'sender_user_name' : "''"
         if (range && timeCol === '0') {
           sink.push({
             domain: '转账红包',
@@ -439,7 +607,7 @@ function searchRecords(
           continue
         }
         const rangeFilter = range ? rangeClause(timeCol, range) : { sql: '', params: [] }
-        const displayName = username ? contactMeta(decryptedDir).names.get(username) : undefined
+        const displayName = username ? names.get(username) : undefined
         const userSql = username
           ? ` AND (${sessionCol} = ?${displayName && displayName !== username ? ` OR ${sessionCol} = ?` : ''})`
           : ''
@@ -448,16 +616,36 @@ function searchRecords(
           : []
         // `session_name LIKE ... OR transfer_id LIKE ...` 必须整体加括号，
         // 否则日期/会话条件只约束第二个分支。
-        const rows = db.prepare(`SELECT ${sessionCol} AS s, ${timeCol} AS t, ${serverCol} AS sid, ${transferCol} AS tid FROM ${table} WHERE (${sessionCol} LIKE ?${idCol ? ` OR ${idCol} LIKE ?` : ''})${userSql}${rangeFilter.sql} LIMIT ?`)
-          .all(like(q), ...extraParam, ...userParam, ...rangeFilter.params, cap - out.length) as Array<{ s: unknown; t: unknown; sid: unknown; tid: unknown }>
+        const rows = db.prepare(`SELECT ${sessionCol} AS s, ${timeCol} AS t, ${serverCol} AS sid, ${transferCol} AS tid, ${payerCol} AS payer, ${receiverCol} AS receiver, ${senderCol} AS sender FROM ${table} WHERE (${sessionCol} LIKE ?${idCol ? ` OR ${idCol} LIKE ?` : ''})${userSql}${rangeFilter.sql} LIMIT ?`)
+          .all(like(q), ...extraParam, ...userParam, ...rangeFilter.params, cap - out.length) as Array<{ s: unknown; t: unknown; sid: unknown; tid: unknown; payer: unknown; receiver: unknown; sender: unknown }>
         for (const r of rows) {
           const session = cellString(r.s)
           if (!session) continue
           const messageServerId = cellString(r.sid)
           const transferId = cellString(r.tid)
+          const participants = [cellString(r.payer), cellString(r.receiver), cellString(r.sender)]
+            .map(value => value.trim())
+            .filter(Boolean)
+          const directName = names.get(session)?.trim() ?? ''
+          if (
+            participants.length > 0
+            && selfUsername === undefined
+            && (directName === '' || directName === session)
+          ) {
+            selfUsername = resolveSelfUsername(decryptedDir).trim()
+          }
+          const identity = recordIdentity(
+            session,
+            names,
+            meta.enterpriseNames,
+            sessionTitles,
+            participants,
+            selfUsername ?? '',
+          )
           out.push({
             kind,
-            name: session,
+            name: identity.name,
+            ...(identity.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
             session,
             time: fmtDateTimeSec(Number(r.t ?? 0)),
             sourceId: transferId || messageServerId || `${kind}:${session}:${fmtDateTimeSec(Number(r.t ?? 0))}`,

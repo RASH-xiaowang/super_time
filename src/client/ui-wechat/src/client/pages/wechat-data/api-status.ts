@@ -128,22 +128,25 @@ export async function apiGetAnnualReport(options: { year: number }): Promise<Ann
 // ─────────────────────────────────────────────────────────────
 
 /** 榜单条目。 */
-export interface AnnualRankRow { username: string; name: string; total: number; mine: number; theirs: number }
+export interface AnnualRankRow { username: string; name: string; enterpriseName?: string; total: number; mine: number; theirs: number }
 /** 最疯的一天。 */
 export interface AnnualBusiestDay {
   date: string; n: number; ratio: number; share: number
-  topName: string; topCount: number; firstAt: string; firstText: string; lastAt: string; lastText: string; spanMin: number
+  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number
+  firstAt: string; firstText: string; lastAt: string; lastText: string; spanMin: number
 }
 /** 年度搭子。 */
 export interface AnnualBuddy {
   username: string; name: string; total: number; mine: number; theirs: number
+  enterpriseName?: string
   streakDays: number; commonHour: number; replyBacks: number; fastestSec: number; slowestSec: number
 }
 /** 十二个月的主演。 */
-export interface AnnualMonthlyStar { month: number; username: string; name: string; count: number }
+export interface AnnualMonthlyStar { month: number; username: string; name: string; enterpriseName?: string; count: number }
 /** 深夜卡。 */
 export interface AnnualNight {
-  share: number; mine: number; theirs: number; topName: string; topCount: number; sampleAt: string; sampleText: string
+  share: number; mine: number; theirs: number
+  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number; sampleAt: string; sampleText: string
 }
 /** 作息切片。 */
 export interface AnnualRhythm {
@@ -156,6 +159,7 @@ export interface AnnualWords {
   voiceSentCount: number; voiceSentSec: number; voiceRecvCount: number; voiceRecvSec: number
   callSec: number; callCount: number; callConnected: number; callMissed: number
   videoSent: number; voiceMsgSent: number; longestVoiceSec: number; longestVoiceFrom: string
+  longestVoiceUsername: string; longestVoiceEnterpriseName?: string
 }
 /** 年度口头禅。 */
 export interface AnnualCatchphrase {
@@ -164,14 +168,15 @@ export interface AnnualCatchphrase {
 /** 回复速度。 */
 export interface AnnualReply {
   medianSec: number; p90Sec: number
-  avgPartnerName: string; avgPartnerSec: number
-  fastestName: string; fastestSec: number; slowestName: string; slowestSec: number
+  avgPartnerName: string; avgPartnerUsername: string; avgPartnerSec: number; avgPartnerEnterpriseName?: string
+  fastestName: string; fastestUsername: string; fastestSec: number; slowestName: string; slowestUsername: string; slowestSec: number
+  fastestEnterpriseName?: string; slowestEnterpriseName?: string
 }
 /** 谁先开口。 */
 export interface AnnualOpener {
   mine: number; theirs: number; share: number
-  mostInitiatedByMe: Array<{ name: string; count: number }>
-  mostInitiatedByThem: Array<{ name: string; count: number }>
+  mostInitiatedByMe: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
+  mostInitiatedByThem: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
 }
 /** 表情宇宙。 */
 export interface AnnualEmoji {
@@ -179,8 +184,8 @@ export interface AnnualEmoji {
   peakDow: number; peakHour: number; peakCount: number
   top: Array<{ emoji: string; count: number }>
 }
-/** 「还有这些人」。`username` 用于点头像/跳会话（后端 annual-review.ts 一直在发，这里漏了）。 */
-export interface AnnualHighlight { label: string; name: string; username: string; value: string }
+/** 「还有这些人」。`username` 用于点头像/跳会话。 */
+export interface AnnualHighlight { label: string; name: string; username: string; enterpriseName?: string; value: string }
 
 /**
  * 朋友圈年度（形状与后端 `query/annual-moments.ts` 的 `AnnualMoments` 对齐）。
@@ -216,13 +221,17 @@ export interface AnnualMoney {
   total: number
   topAmount: number
   topPeerName: string
-  byPeer: Array<{ username: string; name: string; amount: number; count: number }>
+  topPeerUsername: string
+  topPeerEnterpriseName?: string
+  byPeer: Array<{ username: string; name: string; enterpriseName?: string; amount: number; count: number }>
 }
 
 /** 年度撤回（形状与后端 `AnnualRevoke` 对齐）。 */
 export interface AnnualRevoke {
   count: number
   topPeerName: string
+  topPeerUsername: string
+  topPeerEnterpriseName?: string
   /** 24 个时段桶（0..23 点）。 */
   byHour: number[]
 }

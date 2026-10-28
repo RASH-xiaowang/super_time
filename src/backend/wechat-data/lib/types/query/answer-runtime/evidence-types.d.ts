@@ -77,8 +77,12 @@ export interface EvidenceItem {
     tools: string[];
     source: EvidenceSource;
     name: string;
+    /** 企业微信群/单聊会话对应的企业名称。 */
+    enterpriseName?: string;
     time: string;
     sender?: string;
+    /** 企业微信发送者所属企业。 */
+    senderEnterpriseName?: string;
     snippet: string;
     score?: number;
     /** 工具结果里的稳定键（事实证据使用 `fact:<tool>:<slug>`）。 */
@@ -205,11 +209,13 @@ export interface BuildEvidenceOptions {
 /** 可直接进入引用列表的可点击来源。 */
 export interface CitationShape {
     name: string;
+    enterpriseName?: string;
     time: string;
     snippet: string;
     username: string;
     local_id: number;
     sender?: string;
+    senderEnterpriseName?: string;
     source: EvidenceSource;
     kb?: {
         kbId: number;

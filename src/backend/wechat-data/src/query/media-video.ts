@@ -48,7 +48,14 @@ export function resolveVideoInfo(
   localId: number,
   wechatBaseDir?: string,
   md5Hint?: string,
-): { available: boolean; md5?: string; coverUrl?: string; videoPath?: string; error?: string } {
+): {
+  available: boolean
+  md5?: string
+  coverUrl?: string
+  coverPath?: string
+  videoPath?: string
+  error?: string
+} {
   const hasLocator = username.trim() !== '' && Number.isFinite(localId) && localId > 0
   const locatorMd5 = hasLocator ? normalizeMd5(resolveVideoMd5(decryptedDir, username, localId)) : undefined
   const md5 = locatorMd5 ?? normalizeMd5(md5Hint)
@@ -63,7 +70,7 @@ export function resolveVideoInfo(
   for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
     const p = join(decodedDir, md5 + '.' + ext)
     if (!existsSync(p)) continue
-    try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
+    try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), coverPath: p, ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
   }
   // 2. 会话内的解码缓存（旧产物路径）
   const userDir = username.trim() !== '' ? join(decodedDir, username) : ''
@@ -71,7 +78,7 @@ export function resolveVideoInfo(
     for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
       const p = join(userDir, md5 + '.' + ext)
       if (!existsSync(p)) continue
-      try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
+      try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), coverPath: p, ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
     }
     if (existsSync(join(userDir, md5 + '.hevc'))) {
       if (found.video) return { available: false, md5, videoPath: found.video, error: 'hevc-unsupported' }
@@ -81,7 +88,7 @@ export function resolveVideoInfo(
   // 3. 真实微信目录的封面（最强来源）
   if (found.thumb) {
     try {
-      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(found.thumb), 'jpg'), ...(found.video ? { videoPath: found.video } : {}) }
+      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(found.thumb), 'jpg'), coverPath: found.thumb, ...(found.video ? { videoPath: found.video } : {}) }
     } catch { /* 落到兜底 */ }
   }
   // 4. 没有封面但有实体：仍把路径交出去，界面可以交给系统播放器

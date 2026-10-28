@@ -17,6 +17,7 @@ import type { DatabaseSync } from './db-open.ts'
 import { findVendor } from './rpa/registry.ts'
 import { missingReadyFields } from './rpa/template.ts'
 import { queryMessages, queryNewMessages } from './messages.ts'
+import { insertTaskTriggerGreeting } from './message-list-store.ts'
 import {
   ensureTaskSchema,
   rowToTask,
@@ -145,6 +146,12 @@ function collectTriggerImages(
         createTime: msg.createTime * 1000,
         sender: imageSenderOf(msg),
       }
+      const senderUsername = msg.sender?.trim()
+        || (msg.isSender === 1
+          ? selfUsername
+          : (task.chatType === 'private' ? (task.targetUsername || task.chatUsername) : ''))
+      if (senderUsername) image.senderUsername = senderUsername
+      if (msg.senderEnterpriseName) image.senderEnterpriseName = msg.senderEnterpriseName
       if (msg.rich?.md5 !== undefined && msg.rich.md5 !== '') image.md5 = msg.rich.md5
       out.push(image)
     }
@@ -211,7 +218,7 @@ export function scanTaskTriggers(decryptedDir: string, opts?: ScanTaskTriggersOp
         const task = rowToTask(row)
         try {
           // 水位不在 `TaskInfo` 契约里（它是扫描内部状态），直接从行上取。
-          scanOneTask(db, decryptedDir, task, taskCellNum(row['last_scan_seq']), selfUsername, result)
+          scanOneTask(db, decryptedDir, task, taskCellNum(row['last_scan_seq']), selfUsername, result, errors)
         } catch (e) {
           pushScanError(errors, '任务「' + task.name + '」扫描失败：' + errorText(e))
         }
@@ -243,6 +250,7 @@ function errorText(e: unknown): string {
  * @param lastScanSeq - 该任务已处理到的 `sort_seq` 水位（来自 `task_info.last_scan_seq`）。
  * @param selfUsername - 登录账号 wxid。
  * @param result - 累计结果（就地累加 scanned/created）。
+ * @param errors - 逐任务/逐问候失败原因收集器（最多 10 条）。
  */
 function scanOneTask(
   db: DatabaseSync,
@@ -251,6 +259,7 @@ function scanOneTask(
   lastScanSeq: number,
   selfUsername: string,
   result: TaskTriggerScanResult,
+  errors: string[],
 ): void {
   if (task.keywords.length === 0) return
   let after = lastScanSeq
@@ -293,6 +302,24 @@ function scanOneTask(
         result.created += 1
         taskCreated += 1
         if (match.triggeredAt > lastTriggeredAt) lastTriggeredAt = match.triggeredAt
+        try {
+          const greeting = insertTaskTriggerGreeting(db, {
+            taskId: task.id,
+            triggerId: taskCellNum(info.lastInsertRowid),
+            taskName: task.name,
+            chatName: task.chatName,
+            chatUsername: task.chatUsername,
+            targetName: task.targetName,
+            targetUsername: task.targetUsername,
+            images,
+            triggeredAt: match.triggeredAt,
+          })
+          if (!greeting.ok && greeting.error !== undefined) {
+            pushScanError(errors, '任务「' + task.name + '」问候语写入失败：' + greeting.error)
+          }
+        } catch (e) {
+          pushScanError(errors, '任务「' + task.name + '」问候语写入失败：' + errorText(e))
+        }
       }
     }
     if (messages.length < SCAN_PAGE_SIZE) break

@@ -10,8 +10,7 @@
  * ① **答案块只有一个宿主**：`AnswerBlock` 曾与内嵌卡同住 `InlineMessageAnalysis.tsx`，
  *    内嵌卡删除后单独成 `AnalysisBlocks.tsx`（名字指向的东西必须存在）。
  *
- * ② **展开顺序先短后长**：choice 块最高（4–6 个选项），按「短命题在前、choice 在后」排
- *    才能让两列/末行配平；顺序一反就出空洞。
+ * ② **展开顺序先短后长**：底层判断仍按 noul/score → choice 排列，长分布放最后。
  *
  * ③ **选项短名必须覆盖后端全部 criteria**：`SHORT` 是前端硬编码后端 key（`laya/presets.ts`）。
  *    漏一个就回落到长文案 ——「先搜索历史聊天记录，确认对方之前说过什么」有 20 字，
@@ -32,6 +31,7 @@ const TSX = read('AnalysisBlocks.tsx')
 const CSS = read('analysis-blocks.module.css')
 const PANEL = read('ChatAnalysisPanel.tsx')
 const VIEW = read('chats-view.tsx')
+const CONTROLLER = read('chats-analysis.ts')
 /** panels → wechat-data → pages → client → src(ui-wechat) → ui-wechat → client(src) → src(项目) */
 const PRESETS = read('..', '..', '..', '..', '..', '..', '..', 'backend', 'wechat-data', 'src', 'laya', 'presets.ts')
 
@@ -48,7 +48,7 @@ describe('本地分析 · 渲染不变量', () => {
     expect(TSX, '答案块用自己的样式文件').toContain("from './analysis-blocks.module.css'")
   })
 
-  it('② 展开顺序按「短命题在前、choice 在后」', () => {
+  it('② 底层判断按「短命题在前、choice 在后」', () => {
     const at = PANEL.indexOf('const ordered')
     expect(at, '找不到排序（右栏分析区）').toBeGreaterThan(-1)
     const seg = PANEL.slice(at, at + 220)
@@ -65,13 +65,14 @@ describe('本地分析 · 渲染不变量', () => {
     expect(missing, '这些选项没有短名，20 字的中文标签在窄版面必然截断').toEqual([])
   })
 
-  it('④ 命题句用后端原文（三种题型都要渲染 a.question）', () => {
-    // 必须盯住**每一处**：同一段 JSX 出现 3 次（noul/score/choice），
-    // 只断言 toContain 的话「改掉其中一处」照样绿 —— 变异测试抓过这类假阳性。
-    const hits = TSX.split('<span className={css.q}>{a.question}</span>').length - 1
-    expect(hits, '三种题型的标题都要渲染 a.question').toBe(3)
+  it('④ 底层判断用用户能读懂的名称，原始命题留在 title 里', () => {
+    // 三处题型都必须走同一个 questionLabel，避免某个分支又把模型原命题直接铺出来。
+    const hits = TSX.split('title={a.question}>{questionLabel(a)}').length - 1
+    expect(hits, '三种题型的标题都要经过 questionLabel').toBe(3)
+    expect(TSX).toContain("is_testing: '是否在确认记性'")
+    expect(TSX).toContain("best_action: '建议动作'")
+    expect(TSX, '不要直接显示模型原命题').not.toContain('<span className={css.q}>{a.question}</span>')
     expect(TSX, 'qid 不该出现短名替换').not.toContain('short(a.qid')
-    expect(TSX, 'qid 不该再进短名表').not.toContain('literal_question:')
   })
 
   it('⑤ 选项标签不与概率条争宽度（标签独占一行、条整行铺开）', () => {
@@ -85,17 +86,14 @@ describe('本地分析 · 渲染不变量', () => {
     }
   })
 
-  it('⑦ 工具区的决策开关已移除，推理恒开（2026-09-26 用户选择）', () => {
-    // 移除的原因：那个按钮与「右栏面板开不开」互不知情 —— 实测关掉右栏后推理照跑，
-    // 结果无人看（白烧 CPU）。分析的唯一展示位置是右栏面板，它自带开关就够了。
+  it('⑦ 推理只在分析区可见且选中目标时运行', () => {
     expect(VIEW, '按钮与它的文案已移除，不该再加回来').not.toContain('本地决策分析')
     expect(VIEW, 'setter 也要一起消失，否则是个没人调用的死 state').not.toContain('setAnalysisOpen')
-    expect(VIEW, '移除的是开关、不是能力：逐条推理仍要在').toContain('useInlineAnalysis({')
+    expect(VIEW, '会话页要接上分析控制器').toContain('useChatsAnalysis({')
+    expect(CONTROLLER, '分析能力仍要通过 hook 接线').toContain('useInlineAnalysis({')
     const hook = read('use-inline-analysis.ts')
-    // 用 `\benabled\s*:` 而不是裸词：注释里为了说明历史会提到「曾有个 enabled 参数」，
-    // 裸词匹配会把注释也算进去（这条假阳性在同一轮里已经吃过一次）。
-    expect(hook, 'hook 里那个恒真的 enabled 旋钮已删 —— 留着会让人以为这里能关').not.toMatch(/\benabled\s*:/)
-    expect(hook, '也不该再有基于它的 early return').not.toContain('!enabled')
-    expect(hook, '恒开的依据要留在注释里，免得后人再加一个只管一半的开关').toContain('关于开关')
+    expect(hook, '目标为 null 时必须不推理').toContain('targetId === null')
+    expect(hook, '不应该再按可见窗口主动扫消息').not.toContain('virtualizer')
+    expect(hook, '选中即分析的口径要留在注释里').toContain('选中即分析')
   })
 })

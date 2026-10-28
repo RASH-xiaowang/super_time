@@ -38,6 +38,8 @@ export interface WechatSession {
     bizType?: number;
     /** 账号类型：official=公众号(订阅号)，service=服务号（gh_ 账号生效）。 */
     accountKind?: 'official' | 'service' | 'kefu' | 'unknown';
+    /** 企业微信联系人的企业名称（仅 `@openim` 会话且本机映射可解析时返回）。 */
+    enterpriseName?: string;
     /**
      * 最早一条未读消息的时间（epoch 秒）。
      * 由 `SessionTable.unread_first_msg_srv_id` 反查该会话的 `Msg_*` 得到；
@@ -49,6 +51,10 @@ export interface WechatSession {
 /** One inner record of a merged chat log (聊天记录卡片). */
 export interface ChatlogRecord {
     name: string;
+    /** Sender username when the merged-chat XML carries one. */
+    sourceUsername?: string;
+    /** Enterprise name for a WeCom sender (display only). */
+    enterpriseName?: string;
     head?: string;
     time: string;
     text: string;
@@ -93,6 +99,8 @@ export interface MessageRich {
     url?: string;
     username?: string;
     nickname?: string;
+    /** 企业微信名片联系人所属企业（由 username 对应的 contact 元数据补充）。 */
+    enterpriseName?: string;
     md5?: string;
     paysubtype?: string;
     /** Source account display name (appmsg cards, e.g. 公众号名). */
@@ -193,6 +201,8 @@ export type MessageRenderKind = 'text' | 'image' | 'voice' | 'video' | 'emoji' |
 export interface MessageAtUser {
     username: string;
     displayName: string;
+    /** Enterprise name for a WeCom member (display only). */
+    enterpriseName?: string;
 }
 /** One message row. */
 export interface WechatMessage {
@@ -212,6 +222,8 @@ export interface WechatMessage {
     rich?: MessageRich;
     sender?: string;
     senderName?: string;
+    /** 企业微信发送者所属企业（群聊按发送者、单聊按会话解析）。 */
+    senderEnterpriseName?: string;
     /**
      * 归一化后的**呈现种类**（界面唯一 switch 依据，见 `parse.ts` 的
      * `classifyRender`）。与 `type`/`rich.type` 的区别：它是「该用哪个渲染器」
@@ -255,6 +267,8 @@ export interface WechatContact {
     displayName: string;
     alias?: string;
     category?: string;
+    /** 企业微信联系人的企业名称（从 contact.extra_buffer + openim_wording 解析）。 */
+    enterpriseName?: string;
     description?: string;
     localType?: number;
     localTypeLabel?: string;
@@ -321,6 +335,10 @@ export interface PaymentStatus {
     };
     redpacket?: {
         sender: string;
+        /** 红包发送者显示名（由 contact 元数据解析，取不到时省略）。 */
+        senderName?: string;
+        /** 红包发送者所属企业（仅企业微信联系人）。 */
+        senderEnterpriseName?: string;
         hbStatus: number;
         hbType: number;
         receiveStatus: number;
@@ -346,6 +364,8 @@ export interface RegionFriend {
     displayName: string;
     remark: string;
     nickName: string;
+    /** 企业微信联系人所属企业名称。 */
+    enterpriseName?: string;
     /** CDN avatar url (small first), when resolvable. */
     avatarUrl?: string;
 }
@@ -384,6 +404,8 @@ export interface GroupMember {
     signature?: string;
     /** 性别: 1=男 2=女 0=未知 (extra_buffer field 2). */
     gender?: number;
+    /** 企业微信成员所属企业名称。 */
+    enterpriseName?: string;
 }
 /** Group chat info (群聊信息) opened from the chat header. */
 export interface GroupInfo {
@@ -428,6 +450,8 @@ export interface MemberSearchHit {
     signature?: string;
     /** 地区 (province + city, resolved via region resource). */
     region?: string;
+    /** 企业微信成员所属企业名称。 */
+    enterpriseName?: string;
 }
 /** Member search snapshot returned by the gateway. */
 export interface MemberSearchSnapshot {

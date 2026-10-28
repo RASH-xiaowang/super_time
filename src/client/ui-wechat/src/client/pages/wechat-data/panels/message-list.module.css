@@ -1,0 +1,717 @@
+/*
+ * 消息列表 / Webhook 规则台账。
+ *
+ * 视觉沿用任务信息面板的暗色控制台语气：低饱和卡片、单色状态条、表格优先。
+ * 颜色、圆角、间距只使用 --nm-* 令牌，浅色主题随同一套变量切换。
+ */
+
+.root {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.headActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.switchRow {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.tinyHint {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.notice {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+}
+
+.noticeOk {
+  border-color: color-mix(in srgb, var(--nm-success) 30%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+  color: var(--nm-success-text);
+}
+
+.noticeWarn {
+  border-color: color-mix(in srgb, var(--nm-warning) 32%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-warning) 8%, transparent);
+  color: var(--nm-warning-text);
+}
+
+.noticeErr {
+  border-color: color-mix(in srgb, var(--nm-danger) 32%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger-text);
+}
+
+/* ── 局域网 Webhook 卡片 ─────────────────────────────────────────────── */
+.webhookCard {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, var(--nm-border));
+  border-radius: var(--nm-r-lg);
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 46%),
+    var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-card);
+  overflow: hidden;
+}
+
+.webhookLead {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.webhookLeadActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.webhookChevron {
+  margin-left: 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.webhookMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-card));
+  color: var(--nm-cyan-text);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.webhookTitle {
+  font-size: var(--nm-fs-md);
+  font-weight: 650;
+  color: var(--nm-text-1);
+}
+
+.webhookDesc {
+  margin-top: 2px;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-2);
+}
+
+.webhookBody {
+  padding: 12px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-bg-2) 74%, transparent);
+}
+
+.inlineWarn {
+  margin-bottom: 8px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-warning-text);
+}
+
+.urlLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.urlCode {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.examples {
+  margin-top: 10px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.examples summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--nm-text-2);
+}
+
+.examples summary:hover {
+  color: var(--nm-text-1);
+}
+
+.exampleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.exampleLabel {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.codeBlock {
+  display: block;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-0);
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.exampleHint {
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+
+.exampleHint code {
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono, monospace);
+}
+
+/*
+ * 折叠后变成贴住面板底边的一条紧凑栏。左右/底部负边距抵消内容区 padding，
+ * 让底边与屏幕边缘之间不再留 16px 空白。
+ */
+.webhookCardCollapsed {
+  margin-right: calc(-1 * var(--nm-s-4, 16px));
+  margin-bottom: calc(-1 * var(--nm-s-4, 16px));
+  margin-left: calc(-1 * var(--nm-s-4, 16px));
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: var(--nm-r-lg) var(--nm-r-lg) 0 0;
+  box-shadow: none;
+}
+
+.webhookCardCollapsed .webhookLead {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.webhookCardCollapsed .webhookMark {
+  width: 28px;
+  height: 28px;
+}
+
+.webhookCardCollapsed .webhookDesc {
+  display: none;
+}
+
+/* ── 统计与筛选 ─────────────────────────────────────────────────────── */
+.statStrip {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.statStrip b {
+  margin-right: 3px;
+  color: var(--nm-text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.statPending b {
+  color: var(--nm-warning-text);
+}
+
+.statSuccess b {
+  color: var(--nm-success-text);
+}
+
+.statFailed b {
+  color: var(--nm-danger-text);
+}
+
+.filters {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+/* ── 记录表 ─────────────────────────────────────────────────────────── */
+.tableShell {
+  flex: 1;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-card);
+  overflow: hidden;
+}
+
+.tableShell > :first-child {
+  flex: 1;
+}
+
+.tableScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 1320px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--nm-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--nm-bg-2) 94%, var(--nm-bg-card));
+  color: var(--nm-text-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table th:nth-child(1) { width: 76px; }
+.table th:nth-child(2) { width: 148px; }
+.table th:nth-child(3) { width: 140px; }
+.table th:nth-child(4) { width: 140px; }
+.table th:nth-child(5) { width: 230px; }
+.table th:nth-child(6) { width: 126px; }
+.table th:nth-child(7) { width: 158px; }
+.table th:nth-child(8) { width: 94px; }
+.table th:nth-child(9) { width: 108px; }
+.table th:nth-child(10) { width: 94px; }
+.table th:nth-child(11) { width: 180px; }
+
+.table tbody tr {
+  transition: background var(--nm-t-fast);
+}
+
+.table tbody tr:hover {
+  background: var(--nm-bg-hover);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.numCell {
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.replyId {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono, monospace);
+}
+
+.nameCell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.textCellHead,
+.textCell {
+  white-space: normal;
+}
+
+.textCell {
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+}
+
+.textCell span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.timeCell {
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.attempts {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.noteCellHead,
+.noteCell {
+  white-space: normal;
+}
+
+.noteCell {
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.rowError {
+  color: var(--nm-danger-text);
+}
+
+.muted {
+  color: var(--nm-text-2);
+}
+
+/* 触发图片：最多展示三张 28px 缩略图，余数用 +N。 */
+.imageStack {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+}
+
+.thumb {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-hover);
+  object-fit: cover;
+}
+
+.imageChip,
+.imageMore {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 24px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.imageMore {
+  color: var(--nm-cyan-text);
+}
+
+/* ── 规则配置 ───────────────────────────────────────────────────────── */
+.rulesPane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rulesHead {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.rulesTitle {
+  margin: 0;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-1);
+}
+
+.rulesDesc {
+  margin: 4px 0 0;
+  max-width: 760px;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-2);
+}
+
+.ruleList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ruleRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+}
+
+.ruleRow[data-disabled] {
+  opacity: 0.66;
+}
+
+.ruleMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ruleScope {
+  font-size: var(--nm-fs-sm);
+  font-weight: 650;
+  color: var(--nm-text-1);
+}
+
+.ruleUrl {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+}
+
+.ruleMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.ruleGreeting {
+  max-width: min(100%, 720px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ruleActions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ── 手动新增 / 规则弹窗 ────────────────────────────────────────────── */
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.formPair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.required {
+  color: var(--nm-danger-text);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-family: inherit;
+  font-size: var(--nm-fs-sm);
+  outline: none;
+  transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
+}
+
+.input {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.textarea {
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: var(--nm-lh-body);
+  resize: vertical;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--nm-text-3);
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: var(--nm-border-active);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+
+.formHint {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-2);
+}
+
+.checkLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  cursor: pointer;
+}
+
+.checkLine input {
+  margin: 0;
+  accent-color: var(--nm-cyan);
+}
+
+@media (max-width: 900px) {
+  .exampleGrid,
+  .formPair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .webhookLead {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .webhookLead > :last-child {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .webhookCardCollapsed .webhookLead {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .webhookCardCollapsed .webhookLead > :last-child {
+    grid-column: auto;
+    justify-self: end;
+  }
+
+  .urlLine,
+  .rulesHead,
+  .ruleRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ruleActions {
+    justify-content: flex-start;
+  }
+
+  .search {
+    flex-basis: 100%;
+  }
+}

@@ -10,19 +10,19 @@
  * 把它们变成一堆道具。
 */
 import { useEffect, useState } from 'react'
-import type { WechatConfigFull } from '@deepseek-ai/dsh-wechat-data/types'
+import type { WechatConfigFull, WhisperModelInfo } from '@deepseek-ai/dsh-wechat-data/types'
 import { apiGetAvatar } from '../api.ts'
 import { avatarColors } from '../utils/format.ts'
 import { css, acctCss } from './settings-css.ts'
 
 /** 模型目录探测器尚未就绪时的本地目录兜底(安装状态以 getWhisperStatus 为准)。 */
-export const WHISPER_MODEL_FALLBACK: ReadonlyArray<{ id: string; name: string; sizeLabel: string; installed: boolean }> = [
-  { id: 'tiny', name: 'Tiny', sizeLabel: '约 75 MB · 最快', installed: false },
-  { id: 'base', name: 'Base', sizeLabel: '约 145 MB · 很快', installed: false },
-  { id: 'small', name: 'Small', sizeLabel: '约 466 MB · 较快', installed: false },
-  { id: 'medium', name: 'Medium', sizeLabel: '约 1.5 GB · 中等', installed: false },
-  { id: 'large-v3', name: 'Large v3', sizeLabel: '约 3.1 GB · 较慢', installed: false },
-  { id: 'turbo', name: 'Turbo', sizeLabel: '约 1.6 GB · 快', installed: false },
+export const WHISPER_MODEL_FALLBACK: ReadonlyArray<WhisperModelInfo> = [
+  { id: 'tiny', name: 'Tiny', sizeLabel: '约 75 MB · 最快', file: 'ggml-tiny.bin', installed: false },
+  { id: 'base', name: 'Base', sizeLabel: '约 145 MB · 很快', file: 'ggml-base.bin', installed: false },
+  { id: 'small', name: 'Small', sizeLabel: '约 466 MB · 较快', file: 'ggml-small.bin', installed: false },
+  { id: 'medium', name: 'Medium', sizeLabel: '约 1.5 GB · 中等', file: 'ggml-medium.bin', installed: false },
+  { id: 'large-v3', name: 'Large v3', sizeLabel: '约 3.1 GB · 较慢', file: 'ggml-large-v3.bin', installed: false },
+  { id: 'turbo', name: 'Turbo', sizeLabel: '约 1.6 GB · 快', file: 'ggml-large-v3-turbo.bin', installed: false },
 ]
 
 /** Module-level avatar cache (wxid -> data/remote URL, null when none). */
@@ -277,4 +277,3 @@ export interface Notice {
   text: string
   details?: readonly string[]
 }
-

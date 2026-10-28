@@ -10,7 +10,9 @@ import type { AnnualReviewShape } from '../api.ts'
 import type { NormalizedReview } from './annual-normalize.ts'
 import type { CardTone } from './Annual.tsx'
 import { fmtBytes } from '../utils/format.ts'
-import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
+import { AVATAR_SIZE, dur, fmt } from './annual-common.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './annual.module.css'
 
 /**
@@ -73,11 +75,23 @@ export function MoneyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
           <div className={css.moreList}>
             <div className={css.moreRow}>
               <span>最大一笔</span>
-              <span>¥{m.topAmount.toFixed(2)}{m.topPeerName ? ` · ${m.topPeerName}` : ''}</span>
+              <span className={css.moreRowValue}>
+                ¥{m.topAmount.toFixed(2)}
+                {m.topPeerName ? (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <IdentityName name={m.topPeerName} username={m.topPeerUsername} size={16}>
+                      {withEnterprise(m.topPeerName, m.topPeerEnterpriseName)}
+                    </IdentityName>
+                  </>
+                ) : null}
+              </span>
             </div>
             {m.byPeer.slice(0, 5).map((p) => (
               <div key={p.username} className={css.moreRow}>
-                <span>{p.name || p.username}</span>
+                <IdentityName className={css.moreRowName} name={p.name || p.username} username={p.username} size={18}>
+                  {withEnterprise(p.name || p.username, p.enterpriseName)}
+                </IdentityName>
                 <span>¥{p.amount.toFixed(2)} · {String(p.count)} 笔</span>
               </div>
             ))}
@@ -110,7 +124,11 @@ export function RevokeCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
           {v.topPeerName && (
             <div className={css.moreRow}>
               <span>撤回最多</span>
-              <span>{v.topPeerName}</span>
+              <span className={css.moreRowValue}>
+                <IdentityName name={v.topPeerName} username={v.topPeerUsername} size={16}>
+                  {withEnterprise(v.topPeerName, v.topPeerEnterpriseName)}
+                </IdentityName>
+              </span>
             </div>
           )}
           <div className={css.moreRow}>
@@ -140,10 +158,15 @@ export function GroupsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, st
           <div className={css.moreList}>
             {g.top.slice(0, 5).map((c) => (
               <div key={c.username} className={css.moreRow}>
-                <span className={css.moreRowName}>
-                  <Avatar username={c.username} name={c.name} size={AVATAR_SIZE} src={av.get(c.username) ?? undefined} />
+                <IdentityName
+                  className={css.moreRowName}
+                  name={c.name || c.username}
+                  username={c.username}
+                  avatarUrl={av.get(c.username) ?? undefined}
+                  size={AVATAR_SIZE}
+                >
                   {c.name || c.username}
-                </span>
+                </IdentityName>
                 <span>{String(c.count)} 条</span>
               </div>
             ))}
@@ -172,17 +195,27 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
   if (r.sentDailyAvg >= 80) bits.push(`日均发出 ${String(r.sentDailyAvg)} 条，是个话痨`)
   if (r.money.total >= 100000) bits.push(`聊天里的转账/红包合计 ¥${r.money.total.toFixed(0)} —— 这里头有大半是生意`)
   if (r.catchphrase.phrase) bits.push(`口头禅是「${r.catchphrase.phrase}」，说了 ${fmt(r.catchphrase.count)} 次`)
-  if (r.buddy) bits.push(`今年最常聊的是 ${r.buddy.name}`)
+  if (r.buddy) bits.push(`今年最常聊的是 ${withEnterprise(r.buddy.name, r.buddy.enterpriseName)}`)
 
   // 右侧关键指标：把画像里提到的数字**单独列出来**，让 6 列宽的卡片右侧不再空着
   // （2026-10-17：原先只有一段文字，右侧 60% 面积全空）。
-  const stats: Array<{ k: string; v: string }> = [
-    { k: '全年发出', v: `${fmt(r.sent)} 条` },
-    { k: '日均', v: `${String(r.sentDailyAvg)} 条` },
-    { k: '活跃天数', v: `${String(r.activeDaysMine)} 天` },
-    { k: '最长连续', v: `${String(r.longestStreak)} 天` },
-    { k: '深夜占比', v: `${(r.rhythm.nightShare * 100).toFixed(1)}%` },
-    { k: '最常聊', v: r.buddy?.name ?? '—' },
+  const stats: Array<{ k: string; v: React.ReactNode; title: string }> = [
+    { k: '全年发出', v: `${fmt(r.sent)} 条`, title: `${fmt(r.sent)} 条` },
+    { k: '日均', v: `${String(r.sentDailyAvg)} 条`, title: `${String(r.sentDailyAvg)} 条` },
+    { k: '活跃天数', v: `${String(r.activeDaysMine)} 天`, title: `${String(r.activeDaysMine)} 天` },
+    { k: '最长连续', v: `${String(r.longestStreak)} 天`, title: `${String(r.longestStreak)} 天` },
+    { k: '深夜占比', v: `${(r.rhythm.nightShare * 100).toFixed(1)}%`, title: `${(r.rhythm.nightShare * 100).toFixed(1)}%` },
+    {
+      k: '最常聊',
+      v: r.buddy
+        ? (
+            <IdentityName name={r.buddy.name} username={r.buddy.username} size={16}>
+              {withEnterprise(r.buddy.name, r.buddy.enterpriseName)}
+            </IdentityName>
+          )
+        : '—',
+      title: r.buddy ? withEnterprise(r.buddy.name, r.buddy.enterpriseName) : '—',
+    },
   ]
 
   return (
@@ -200,7 +233,7 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
             {stats.map((s) => (
               <div key={s.k} className={css.portraitStat}>
                 <span className={css.portraitStatK}>{s.k}</span>
-                <span className={css.portraitStatV} title={s.v}>{s.v}</span>
+                <span className={css.portraitStatV} title={s.title}>{s.v}</span>
               </div>
             ))}
           </div>
@@ -269,13 +302,58 @@ export function MonthlyTrendCard({ r }: { r: NormalizedReview }): React.JSX.Elem
  * 只是原先藏在各自卡片的小字里 —— 汇总一处能一眼看完，不用来回找。
  */
 export function ExtremesCard({ r }: { r: NormalizedReview }): React.JSX.Element {
-  const items: Array<{ k: string; v: string }> = []
+  const items: Array<{ k: string; v: React.ReactNode }> = []
   if (r.busiest) items.push({ k: '消息最多的一天', v: `${r.busiest.date} · ${fmt(r.busiest.n)} 条` })
   if (r.longestStreak > 0) items.push({ k: '最长连续聊天', v: `${String(r.longestStreak)} 天` })
   if (r.longestSpanFrom && r.longestSpanTo) items.push({ k: '最长的一段', v: `${r.longestSpanFrom} → ${r.longestSpanTo}` })
-  if (r.words.longestVoiceSec > 0) items.push({ k: '最长的一条语音', v: `${dur(r.words.longestVoiceSec)}${r.words.longestVoiceFrom ? ` · ${r.words.longestVoiceFrom}` : ''}` })
-  if (r.reply.fastestName) items.push({ k: '回得最快', v: `${r.reply.fastestName} · ${dur(r.reply.fastestSec)}` })
-  if (r.reply.slowestName) items.push({ k: '让 TA 等最久', v: `${r.reply.slowestName} · ${dur(r.reply.slowestSec)}` })
+  if (r.words.longestVoiceSec > 0) {
+    items.push({
+      k: '最长的一条语音',
+      v: (
+        <span className={css.moreRowValue}>
+          {dur(r.words.longestVoiceSec)}
+          {r.words.longestVoiceFrom ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <IdentityName
+                name={r.words.longestVoiceFrom}
+                username={r.words.longestVoiceUsername}
+                size={16}
+              >
+                {withEnterprise(r.words.longestVoiceFrom, r.words.longestVoiceEnterpriseName)}
+              </IdentityName>
+            </>
+          ) : null}
+        </span>
+      ),
+    })
+  }
+  if (r.reply.fastestName) {
+    items.push({
+      k: '回得最快',
+      v: (
+        <span className={css.moreRowValue}>
+          <IdentityName name={r.reply.fastestName} username={r.reply.fastestUsername} size={16}>
+            {withEnterprise(r.reply.fastestName, r.reply.fastestEnterpriseName)}
+          </IdentityName>
+          <span>· {dur(r.reply.fastestSec)}</span>
+        </span>
+      ),
+    })
+  }
+  if (r.reply.slowestName) {
+    items.push({
+      k: '让 TA 等最久',
+      v: (
+        <span className={css.moreRowValue}>
+          <IdentityName name={r.reply.slowestName} username={r.reply.slowestUsername} size={16}>
+            {withEnterprise(r.reply.slowestName, r.reply.slowestEnterpriseName)}
+          </IdentityName>
+          <span>· {dur(r.reply.slowestSec)}</span>
+        </span>
+      ),
+    })
+  }
   items.push({ k: '最安静的时段', v: `${String(r.rhythm.quietestHour)}:00 · ${fmt(r.rhythm.quietestCount)} 条` })
   items.push({ k: '深夜占比', v: `${(r.rhythm.nightShare * 100).toFixed(1)}%` })
   if (r.lastText) items.push({ k: '最后一句', v: `${r.lastAt} · ${r.lastText}` })
@@ -411,5 +489,3 @@ export function AssetsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
     </MoreCard>
   )
 }
-
-

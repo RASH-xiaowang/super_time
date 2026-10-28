@@ -220,15 +220,15 @@ def fig_architecture():
     ])
 
     # ── 渲染进程 ──
-    b1 = Band("ui", "渲染进程  Renderer", "React 18 · Vite 5 · 588 个 ts/tsx / 约 12.0 万行",
+    b1 = Band("ui", "渲染进程  Renderer", "React 18 · Vite 5 · 602 个 ts/tsx / 约 12.2 万行",
               y, cols=3, box_h=132)
     b1.row([
         ("ui-app  打包入口壳",
          ["ui-entry.tsx → 引导四页 → 隐私同意 → 许可证 → 主界面", "三道闸顺序由 e2e:h14-consent 在真机钉住", "capabilities / browser-gate / http-remote 分流"]),
         ("ui-wechat  数据面板",
          ["WechatDataPanel：39 个可路由 tab（15 可见 + 23 hidden + 设置）", "侧栏 5 组 · keep-alive 切页签不卸载", "nav-config.ts 是导航唯一注册表"]),
-        ("panels/**  167 个视图分片",
-         ["chats 63 · graph 33 · kb 28 · moments 26", "task 19 · clawbot 17 · overview 15 · ask 15", "37 个 React.lazy 边界 → 62 个 js chunk"]),
+        ("panels/**  171 个视图分片",
+         ["chats 22 · clawbot 8 · kb 7 · moments 7", "task 7 · settings 6 · ask 5 · favorites 5", "37 个 React.lazy 边界 → 62 个 js chunk"]),
     ])
     b1.row([
         ("前端数据层  api-*.ts",
@@ -247,7 +247,7 @@ def fig_architecture():
          ["单实例锁 · userData 隔离（安装版 %APPDATA%\\Super Time）", "装配 42 个宿主模块 · 三道启动闸", "打包态剥离 --inspect / --remote-debugging-port"]),
         ("窗口与安全边界",
          ["main-window.js · navigation-policy.js", "ipc-trust.js（sender + frame URL 双校验）", "media-protocol.js（wechat-media:// 流式读图）"]),
-        ("IPC 注册面（39 通道）",
+        ("IPC 注册面（46 通道）",
          ["ipc-misc 21 · ipc-wechat 9", "ipc-remote-access 4 · ipc-update 5", "全部经 ipcTrust.wrap 收口"]),
         ("调用闸门  call-gates.js",
          ["① 等后端就绪 20s（不报假错）", "② 调试豁免（打包态恒 false）", "③ 许可证 authorizeCall（抛错即拒）"]),
@@ -274,7 +274,7 @@ def fig_architecture():
     ])
 
     # ── 后端 worker ──
-    b3 = Band("worker", "后端 worker  utilityProcess", "ESM 单文件 bundle 2.3MB · 219 个 @Remote 方法 · query 层 157 文件 / 46,359 行",
+    b3 = Band("worker", "后端 worker  utilityProcess", "ESM 单文件 bundle 2.3MB · 219 个 @Remote 方法 · query 层 158 文件 / 46,545 行",
               y, cols=4, box_h=108)
     b3.row([
         ("wechat-worker.js  进程入口",
@@ -283,7 +283,7 @@ def fig_architecture():
          ["737 行 · 方法名枚举 · 参数守卫两档", "结果缓存 300 条 / 64MB（含负缓存）", "cancelPlan 映射 jobId · 慢调用落审计"]),
         ("Gateway 继承链（11 层）",
          ["Core→Read→AskOps→MediaOps→ExportOps→VoiceOps", "→ConfigOps→LayaOps→TaskCenter→DbHealth→Clawbot", "装饰器落在最派生原型，方法面唯一出处"]),
-        ("remotes/**  28 个域处理器",
+        ("remotes/**  29 个域处理器",
          ["ask · kb · media · export · backup · summary", "task-center · graphsearch · voicellm", "annual-narr · clawbot · wordcloud …"]),
     ])
     b3.row([
@@ -322,7 +322,7 @@ def fig_architecture():
         ("配置与密钥落点",
          ["<userData>/wechat：config.json · llm.json · logs/", "数据根：secrets.json（密钥）· keys.json · all_keys.json", "config.json 恒不保留密钥字段（保存即改写）"]),
         ("随包原生资产",
-         ["wechat/whisper：84MB（ggml-tiny.bin 77.7MB）", "resources/win32/x64/wx_silk.exe（必须解包，不能从 asar 执行）", "native/weflow-isaac64（朋友圈视频解密 WASM）"]),
+         ["wechat/whisper：84 MiB（ggml-tiny.bin 74 MiB）", "resources/win32/x64/wx_silk.exe（必须解包，不能从 asar 执行）", "native/weflow-isaac64（朋友圈视频解密 WASM）"]),
         ("微信原始数据源（只读）",
          ["xwechat_files/<wxid>/db_storage：加密分片", "cache/<月>/Sns/{Img,Video} · msg/attach", "只扫描内存取密钥，不改微信任何数据"]),
     ])
@@ -364,7 +364,7 @@ def fig_architecture():
 
     specs = [
         (b0, "contextBridge（deepFreeze 冻结桥面）→ ipcRenderer.invoke", ACCENT["ui"], "a-violet"),
-        (b1, "ipcMain.handle（39 通道，全部经 ipcTrust 收口）", ACCENT["main"], "a-blue"),
+        (b1, "ipcMain.handle（46 个唯一通道，全部经 ipcTrust 收口）", ACCENT["main"], "a-blue"),
         (b2, "utilityProcess.postMessage（RPC seq 配平 + 分级超时）", ACCENT["worker"], "a-teal"),
         (b3, "node:sqlite（同步 API · WAL · 只读/写连接分档）", ACCENT["data"], "a-amber"),
         (b4, "HTTPS（仅后端发出；渲染层 CSP 不放行外站）", ACCENT["ext"], "a-pink"),
@@ -533,7 +533,7 @@ def fig_build():
         ("源码", [
             ("src/backend/wechat-data/src/**", "gateway*.ts · query/** · keys/** · remotes/**", ACCENT["worker"]),
             ("src/backend/*.js", "宿主层 42 个 CommonJS 模块", ACCENT["main"]),
-            ("src/client/ui-wechat + ui-app", "588 个 ts/tsx", ACCENT["ui"]),
+            ("src/client/ui-wechat + ui-app", "602 个 ts/tsx", ACCENT["ui"]),
             ("src/license/** · preload.js · main.js", "授权与桥面", ACCENT["main"]),
         ]),
         ("构建命令", [
@@ -643,9 +643,9 @@ def viewer(title, svg_text, w, h, note):
   button {{ background: #161d26; color: #cbd5e1; border: 1px solid #2b3542; border-radius: 7px;
     padding: 5px 11px; font-size: 12px; cursor: pointer; font-family: inherit; }}
   button:hover {{ border-color: #4b5a6d; color: #fff; }}
-  #stage {{ position: absolute; inset: 52px 0 0 0; overflow: hidden; cursor: grab; }}
+  #stage {{ position: fixed; top: 52px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }}
   #stage.drag {{ cursor: grabbing; }}
-  #wrap {{ transform-origin: 0 0; width: {w}px; height: {h}px; }}
+  #wrap {{ transform-origin: 0 0; width: {w}px; height: {h}px; will-change: transform; }}
   #wrap svg {{ display: block; }}
   #hint {{ position: fixed; right: 16px; bottom: 14px; font-size: 11px; color: #5c6b7d;
     background: rgba(11,15,20,.85); padding: 6px 10px; border-radius: 6px; border: 1px solid #1e2732; }}
@@ -673,17 +673,30 @@ def viewer(title, svg_text, w, h, note):
   function apply() {{
     wrap.style.transform = `translate(${{tx}}px,${{ty}}px) scale(${{s}})`;
   }}
+  /** 视口尺寸：用 clientWidth/clientHeight，避免读到 transform 后的包围盒。 */
+  function viewport() {{
+    return {{ w: stage.clientWidth || window.innerWidth, h: stage.clientHeight || (window.innerHeight - 52) }};
+  }}
+  /** 整图适应窗口（宽高都装下，居中）。 */
   function fit() {{
-    const r = stage.getBoundingClientRect();
-    s = Math.min((r.width - 32) / W, (r.height - 32) / H);
-    tx = (r.width - W * s) / 2;
-    ty = (r.height - H * s) / 2;
+    const v = viewport();
+    s = Math.min((v.w - 32) / W, (v.h - 32) / H);
+    tx = (v.w - W * s) / 2;
+    ty = (v.h - H * s) / 2;
+    apply();
+  }}
+  /** 按宽度适配、顶部对齐：长图更适合从标题往下读。 */
+  function fitWidth() {{
+    const v = viewport();
+    s = (v.w - 32) / W;
+    tx = (v.w - W * s) / 2;
+    ty = 16;
     apply();
   }}
   function zoom(f, cx, cy) {{
-    const r = stage.getBoundingClientRect();
-    cx = cx === undefined ? r.width / 2 : cx;
-    cy = cy === undefined ? r.height / 2 : cy;
+    const v = viewport();
+    cx = cx === undefined ? v.w / 2 : cx;
+    cy = cy === undefined ? v.h / 2 : cy;
     const ns = Math.min(4, Math.max(0.12, s * f));
     tx = cx - (cx - tx) * (ns / s);
     ty = cy - (cy - ty) * (ns / s);
@@ -716,8 +729,9 @@ def viewer(title, svg_text, w, h, note):
     else {{ s = 1; tx = 20; ty = 20; apply(); }}
   }});
 
-  addEventListener('resize', fit);
-  fit();
+  addEventListener('resize', () => fitWidth());
+  // 初始按宽度适配、顶部对齐：长图从标题往下读，而不是被缩成一条细线
+  fitWidth();
 }})();
 </script>
 </body>
@@ -738,7 +752,7 @@ flowchart TB
   subgraph RENDERER["渲染进程"]
     R1["ui-app 入口壳<br/>引导 → 同意 → 许可证"]
     R2["ui-wechat 数据面板<br/>39 tab / 侧栏 5 组"]
-    R3["panels 167 个视图"]
+    R3["panels 171 个视图"]
     R4["api-*.ts + cache.ts"]
   end
 
@@ -757,7 +771,7 @@ flowchart TB
     K1["wechat-worker.js"]
     K2["wechat-host.js 适配层"]
     K3["Gateway 继承链<br/>219 @Remote"]
-    K4["query/** 157 文件"]
+    K4["query/** 158 文件"]
     K5["keys/** 11 文件"]
     K6["retrieval/** + kb/**"]
     K7["answer-runtime/** + tools/**"]

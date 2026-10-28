@@ -52,6 +52,77 @@ describe('N16：取图合并队列', () => {
     expect(await Promise.all(p)).toEqual(['url:1', 'url:2', 'url:3'])
   })
 
+  it('相同 key 在同一窗口内只请求一次，多个调用点共享结果', async () => {
+    const q = manualQueue(200, async (batch) => batch.map(k => 'url:' + String(k)))
+    const p1 = q.enqueue(1)
+    const p2 = q.enqueue(1)
+    await q.flush()
+    expect(q.batches).toEqual([[1]])
+    expect(await Promise.all([p1, p2])).toEqual(['url:1', 'url:1'])
+  })
+
+  it('相同 key 在上一块还在飞时不重复发请求', async () => {
+    let release!: (rows: readonly string[]) => void
+    const q = manualQueue(200, async () => new Promise<readonly string[]>((resolve) => { release = resolve }))
+    const first = q.enqueue(1)
+    const flushing = q.flush()
+    const second = q.enqueue(1)
+    await flushing
+    expect(q.batches).toEqual([[1]])
+    release(['url:1'])
+    expect(await Promise.all([first, second])).toEqual(['url:1', 'url:1'])
+  })
+
+  it('maxInFlight 限制同时执行的 chunk，后续 chunk 等前一块结束后再发', async () => {
+    const runs: Array<() => void> = []
+    const releases: Array<(rows: readonly string[]) => void> = []
+    const started: number[][] = []
+    const queue = createImageLoadQueue<number, string>({
+      chunkSize: 1,
+      maxInFlight: 1,
+      schedule: (run) => { runs.push(run) },
+      onMissing: (key) => 'missing:' + String(key),
+      flush: async (batch) => {
+        started.push([...batch])
+        return new Promise<readonly string[]>((resolve) => { releases.push(resolve) })
+      },
+    })
+    const all = [queue.enqueue(1), queue.enqueue(2), queue.enqueue(3)]
+    runs.shift()?.()
+    await Promise.resolve()
+    expect(started).toEqual([[1]])
+    releases.shift()?.(['url:1'])
+    await vi.waitFor(() => { expect(started).toEqual([[1], [2]]) })
+    releases.shift()?.(['url:2'])
+    await vi.waitFor(() => { expect(started).toEqual([[1], [2], [3]]) })
+    releases.shift()?.(['url:3'])
+    expect(await Promise.all(all)).toEqual(['url:1', 'url:2', 'url:3'])
+  })
+
+  it('可重试错误按配置重试，成功后再回填整块结果', async () => {
+    const runs: Array<() => void> = []
+    let attempts = 0
+    const queue = createImageLoadQueue<number, string>({
+      chunkSize: 2,
+      schedule: (run) => { runs.push(run) },
+      onMissing: (key) => 'missing:' + String(key),
+      retry: {
+        retries: 1,
+        shouldRetry: (error) => String(error).includes('busy'),
+        delayMs: () => 0,
+      },
+      flush: async (batch) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('busy')
+        return batch.map((key) => 'url:' + String(key))
+      },
+    })
+    const all = [queue.enqueue(1), queue.enqueue(2)]
+    runs.shift()?.()
+    expect(await Promise.all(all)).toEqual(['url:1', 'url:2'])
+    expect(attempts).toBe(2)
+  })
+
   it('下一个窗口是新一轮 flush（窗口不是一次性的）', async () => {
     const q = manualQueue(200, async (batch) => batch.map(k => 'url:' + String(k)))
     const p1 = q.enqueue(1)

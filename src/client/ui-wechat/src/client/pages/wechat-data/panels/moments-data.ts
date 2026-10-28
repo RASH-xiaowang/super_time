@@ -50,7 +50,7 @@ export function useMomentsData(input: MomentsDataInput): {
   monthlySnap: MomentsMonthlySnapshot
   monthlySnapForAuthor: MomentsMonthlySnapshot
   selfUsername: string | null
-  fullAuthors: Array<{ name: string; count: number }> | null
+  fullAuthors: Array<{ username: string; name: string; enterpriseName?: string; count: number }> | null
   countRef: React.MutableRefObject<number>
   totalRef: React.MutableRefObject<number>
   moreInFlight: React.MutableRefObject<boolean>
@@ -64,7 +64,7 @@ export function useMomentsData(input: MomentsDataInput): {
   const [total, setTotal] = useState(0)
   const [monthlySnap, setMonthlySnap] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [selfUsername, setSelfUsername] = useState<string | null>(null)
-  const [fullAuthors, setFullAuthors] = useState<Array<{ name: string; count: number }> | null>(null)
+  const [fullAuthors, setFullAuthors] = useState<Array<{ username: string; name: string; enterpriseName?: string; count: number }> | null>(null)
   const [monthlySnapForAuthor, setMonthlySnapForAuthor] = useState<MomentsMonthlySnapshot>({ months: [] })
   const countRef = useRef(0)
   const totalRef = useRef(0)

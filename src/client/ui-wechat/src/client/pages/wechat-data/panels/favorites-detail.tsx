@@ -9,6 +9,8 @@ import kitCss from '../ui/kit.module.css'
 import { FavoriteAvatar } from './favorites-avatar.tsx'
 import { FavoritePart } from './favorites-media.tsx'
 import { parseFavItem } from './favorites-parse.ts'
+import { withEnterprise } from './enterprise-identity.ts'
+import { IdentityName } from './identity.tsx'
 import css from './list-panel.module.css'
 
 export interface FavoriteDetailProps {
@@ -25,19 +27,34 @@ export interface FavoriteDetailProps {
  */
 export function FavoriteDetail({ item, thumbs }: FavoriteDetailProps): React.JSX.Element {
   const d = parseFavItem(item)
+  const sourceIdentity = withEnterprise(d.source, item.sourceEnterpriseName)
   return (
     <div className={css.formBody}>
       <div className={css.favSource}>
         <FavoriteAvatar avatar={item.avatar} name={d.source} />
         <div className={css.favSourceMeta}>
-          <div className={css.favSourceName}>{d.source || '未知来源'}</div>
+          <div className={css.favSourceName}>{d.source ? sourceIdentity : '未知来源'}</div>
           <div className={kitCss.textMeta}>{d.typeLabel + ' · ' + d.time}</div>
         </div>
       </div>
       <div className={css.favDetail}>
         {d.items.length > 0 ? d.items.map((it, idx) => (
           <div key={idx} className={css.favPart}>
-            {(it.sourceName || it.sourceTime) && <div className={css.favPartMeta}>{[it.sourceName, it.sourceTime].filter(Boolean).join(' · ')}</div>}
+            {(it.sourceName || it.sourceTime) && (
+              <div className={css.favPartMeta}>
+                {it.sourceName && (
+                  <IdentityName
+                    name={it.sourceName}
+                    username={it.sourceUsername ?? ''}
+                    size={18}
+                  >
+                    {withEnterprise(it.sourceName, it.sourceEnterpriseName)}
+                  </IdentityName>
+                )}
+                {it.sourceName && it.sourceTime && <span className={css.favPartMetaSep}>·</span>}
+                {it.sourceTime && <span>{it.sourceTime}</span>}
+              </div>
+            )}
             <FavoritePart part={it} updateTime={item.updateTime} thumbs={thumbs} />
           </div>
         )) : <div className={css.favPartText}>{d.desc || ''}</div>}

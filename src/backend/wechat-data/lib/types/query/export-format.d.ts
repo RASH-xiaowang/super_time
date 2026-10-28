@@ -8,6 +8,7 @@
  */
 import type { StreamControl } from './zip.ts';
 import type { WechatMessage } from '../types.ts';
+import type { ExportMediaLinks } from './export-media.ts';
 /** Format a unix timestamp as YYYY-MM-DD HH:MM. */
 export declare function fmtFull(ts: number): string;
 /**
@@ -61,7 +62,7 @@ export declare function rowOf(m: WechatMessage, username: string): {
     text: string;
 };
 /** txt export body. */
-export declare function formatTxt(msgs: WechatMessage[], username: string): string;
+export declare function formatTxt(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string;
 /**
  * `formatTxt` 的**流式**版本：逐块产出，拼起来与 `formatTxt(...)` **逐字节相同**。
  *
@@ -88,17 +89,17 @@ export declare function formatTxt(msgs: WechatMessage[], username: string): stri
  * @param ctrl - 可选的进度/取消。
  * @returns 文本块序列。
  */
-export declare function formatTxtChunksAsync(msgs: WechatMessage[], username: string, ctrl?: StreamControl): AsyncGenerator<string>;
+export declare function formatTxtChunksAsync(msgs: WechatMessage[], username: string, ctrl?: StreamControl, mediaByMessage?: ExportMediaLinks): AsyncGenerator<string>;
 /** csv export body. */
-export declare function formatCsv(msgs: WechatMessage[], username: string): string;
+export declare function formatCsv(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string;
 /** html chat-log export body (date dividers + bubbles). */
-export declare function formatHtml(msgs: WechatMessage[], username: string, now: string): string;
+export declare function formatHtml(msgs: WechatMessage[], username: string, now: string, mediaByMessage?: ExportMediaLinks): string;
 /** markdown chat-log export body (date dividers + bullets). */
-export declare function formatMarkdown(msgs: WechatMessage[], username: string): string;
+export declare function formatMarkdown(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string;
 /** SQL export body (CREATE TABLE + INSERTs). */
-export declare function formatSql(msgs: WechatMessage[], username: string): string;
+export declare function formatSql(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string;
 /** JSON export body. */
-export declare function formatJson(msgs: WechatMessage[], username: string): string;
+export declare function formatJson(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): string;
 /** XML-escape a value for OOXML. */
 export declare function xmlEsc(v: string): string;
 /** sheet 的头部（`<sheetData>` 之前）—— 内存/流式两条路径必须拼出完全相同的字符串。 */
@@ -145,7 +146,7 @@ export declare function xlsxSheetChunks(rows: Iterable<string[]>, ctrl?: StreamC
  */
 export declare function xlsxSheetChunksAsync(rows: Iterable<string[]> | AsyncIterable<string[]>, ctrl?: StreamControl, total?: number): AsyncGenerator<string>;
 /** 消息 → xlsx 行（含表头）。 */
-export declare function messageRows(msgs: WechatMessage[], username: string): Generator<string[]>;
+export declare function messageRows(msgs: WechatMessage[], username: string, mediaByMessage?: ExportMediaLinks): Generator<string[]>;
 /** 内存版 sheet XML（与流式路径同一套分块规则，保证解出来的字节一致）。 */
 export declare function xlsxSheetXml(rows: Iterable<string[]>, ctrl?: StreamControl): string;
 /**
@@ -153,7 +154,7 @@ export declare function xlsxSheetXml(rows: Iterable<string[]>, ctrl?: StreamCont
  *
  * 行数不可控（整账号/大会话）时走 `writeXlsxStream`：那才是峰值与行数无关的路径。
  */
-export declare function formatXlsx(msgs: WechatMessage[], username: string, ctrl?: StreamControl): Uint8Array;
+export declare function formatXlsx(msgs: WechatMessage[], username: string, ctrl?: StreamControl, mediaByMessage?: ExportMediaLinks): Uint8Array;
 /**
  * 把「一行一条记录」的流写成 .xlsx 文件（流式，峰值与行数无关）。
  *

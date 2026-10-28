@@ -40,6 +40,8 @@ export interface TaskCreateSession {
   username: string
   displayName: string
   type: 'private' | 'group'
+  /** 企业名称（仅企业微信单聊；群聊缺省）。 */
+  enterpriseName?: string
 }
 
 /** 弹窗表单态（受控）。 */
@@ -58,6 +60,8 @@ export interface TaskCreateForm {
   targetUsername: string
   /** 目标成员显示名（点击成员时一起存，避免提交时再去列表里翻）。 */
   targetName: string
+  /** 目标成员所属企业（仅用于界面展示，不写入任务名）。 */
+  targetEnterpriseName?: string
 }
 
 /**
@@ -286,7 +290,7 @@ export interface MemberPickResult {
 }
 
 /**
- * 群成员搜索 + 截断。昵称与微信号都参与匹配（与群信息抽屉的 `filterMembers` 同口径）。
+ * 群成员搜索 + 截断。昵称、微信号与企业名称都参与匹配（与群信息抽屉同口径）。
  *
  * 为什么在弹窗里也要截断：目标用户是**单选**，一次画上千行既慢又没人会滚到底；
  * 超过 {@link MEMBER_FILTER_THRESHOLD} 位时更该做的是让用户搜索，而不是把滚动条塞满。
@@ -299,7 +303,10 @@ export function pickMembers(members: readonly GroupMember[], rawQuery: string, l
   const query = rawQuery.trim().toLowerCase()
   const matched = query === ''
     ? [...members]
-    : members.filter((m) => m.name.toLowerCase().includes(query) || m.username.toLowerCase().includes(query))
+    : members.filter((m) =>
+      m.name.toLowerCase().includes(query)
+      || m.username.toLowerCase().includes(query)
+      || (m.enterpriseName ?? '').toLowerCase().includes(query))
   const items = matched.slice(0, Math.max(1, limit))
   return {
     items,

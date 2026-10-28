@@ -36,7 +36,7 @@ import {
   RPA_VENDORS,
 } from '../src/query/rpa/registry.ts'
 import { createTaskCenterRemotes } from '../src/remotes/task-center.ts'
-import { rowToTrigger } from '../src/query/task-center.ts'
+import { rowToTask, rowToTrigger } from '../src/query/task-center.ts'
 import type {
   RpaField,
   RpaTriggerConfig,
@@ -89,6 +89,7 @@ function ctxOf(over: Partial<RpaInvocationContext> = {}): RpaInvocationContext {
     idempotencyKey: '1:2',
     taskName: '测试任务',
     record: recordOf(),
+    imageLinks: [],
     config: {},
     secrets: {},
     ...over,
@@ -245,6 +246,57 @@ describe('模板层：默认值 / 校验 / 必填 / 凭据合并', () => {
     expect(validateVendorConfig(fieldsDescriptor(), { priority: 'nope' }).errors[0]).toContain('不是可选值')
     expect(validateVendorConfig(fieldsDescriptor(), { url: 'ftp://x/y' }).errors).toContain('回调地址必须是合法的 http/https 地址')
     expect(validateVendorConfig(fieldsDescriptor(), { baseUrl: 'not-a-url' }).errors[0]).toContain('服务地址')
+  })
+
+  it('旧厂商 map 自动迁移为 extraParams；显式空数组不恢复旧值', () => {
+    for (const adapter of RPA_VENDORS) {
+      const legacyField = adapter.descriptor.mapping.legacyMapField
+      if (legacyField === undefined) continue
+      const legacy = { room: 'old_room', content: 'old_content', at: 'old_at' }
+      const migrated = validateVendorConfig(adapter.descriptor, {
+        [legacyField]: legacy,
+      } as RpaTriggerConfig)
+      expect(migrated.errors, adapter.descriptor.id).toEqual([])
+      expect(migrated.config['extraParams'], adapter.descriptor.id).toEqual([
+        { name: 'old_room', source: 'room' },
+        { name: 'old_content', source: 'content' },
+        { name: 'old_at', source: 'at' },
+      ])
+      expect(migrated.config[legacyField], adapter.descriptor.id).toBeUndefined()
+
+      const explicitlyEmpty = validateVendorConfig(adapter.descriptor, {
+        extraParams: [],
+        [legacyField]: legacy,
+      } as RpaTriggerConfig)
+      expect(explicitlyEmpty.config['extraParams'], adapter.descriptor.id).toEqual([])
+    }
+  })
+
+  it('Webhook：extraParams 正常校验；旧 paramMap 保存时丢弃且不会变成 params', () => {
+    const webhook = findVendor('webhook')
+    expect(webhook).toBeDefined()
+    if (webhook === undefined) return
+
+    const saved = validateVendorConfig(webhook.descriptor, {
+      url: 'https://example.test/hook',
+      extraParams: [
+        { name: 'room_name', source: 'room' },
+        { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+      ],
+    })
+    expect(saved.errors).toEqual([])
+    expect(saved.config['extraParams']).toEqual([
+      { name: 'room_name', source: 'room' },
+      { name: 'order_no', source: 'fixed', fixedValue: 'A-001' },
+    ])
+
+    const legacy = validateVendorConfig(webhook.descriptor, {
+      url: 'https://example.test/hook',
+      paramMap: { room: 'legacy_room', content: 'legacy_content', at: 'legacy_at' },
+    })
+    expect(legacy.errors).toEqual([])
+    expect(legacy.config['paramMap']).toBeUndefined()
+    expect(legacy.config['extraParams']).toEqual([])
   })
 
   it('missingReadyFields：必填文本/select/凭据缺失；false 布尔不算缺', () => {
@@ -849,6 +901,38 @@ describe('派发管道：主机校验 / 响应解析 / 失败分类 / 重试', (
 })
 
 describe('存储派生：externalTaskId 往返', () => {
+  it('rowToTask 读取旧 map 配置时自动返回 extraParams，避免 UI 显示为空', () => {
+    const task = rowToTask({
+      id: 9,
+      name: '旧影刀任务',
+      chat_username: 'wxid_group',
+      chat_name: '群',
+      chat_type: 'group',
+      target_username: 'wxid_target',
+      target_name: '目标',
+      keywords: '["报价"]',
+      photo_limit: 0,
+      mention_me_only: 0,
+      trigger_method: 'yingdao',
+      trigger_config: JSON.stringify({
+        robotUuid: 'robot-1',
+        paramMap: { room: 'old_room', content: 'old_content', at: 'old_at' },
+      }),
+      trigger_secret: '{}',
+      trigger_vendor_version: '1.0.0',
+      status: 'ready',
+      created_at: 1,
+      updated_at: 2,
+      trigger_count: 0,
+    })
+    expect(task.triggerConfig['extraParams']).toEqual([
+      { name: 'old_room', source: 'room' },
+      { name: 'old_content', source: 'content' },
+      { name: 'old_at', source: 'at' },
+    ])
+    expect(task.triggerConfig['paramMap']).toBeUndefined()
+  })
+
   it('rowToTrigger 解析 external_task_id；空值不出现该字段', () => {
     const base: Record<string, unknown> = {
       id: 1,

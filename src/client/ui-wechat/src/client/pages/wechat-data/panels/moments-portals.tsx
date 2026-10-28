@@ -19,6 +19,7 @@ import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { apiGetSnsImageDataUrl } from '../api.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
+import { withEnterprise } from './enterprise-identity.ts'
 
 /** 查看器里的一张图（与面板里 `useState` 的内联类型同构）。 */
 export interface ViewerImage { thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }
@@ -254,7 +255,10 @@ export function MomentsDetail({
       <div className={css.overlay} data-st-dialog="moments-detail" onClick={() => { setDetail(null) }} role="dialog" aria-modal="true">
         <div className={css.detailCard} onClick={(e) => { e.stopPropagation() }}>
           <div className={css.lightboxHead}>
-            <span>{detail.m.author || '未知'} · {detail.m.time}</span>
+            <span className={css.detailAuthor}>
+              <MomentsMiniAvatar username={detail.m.username} name={detail.m.author || detail.m.username} />
+              <span className={css.detailAuthorText}>{withEnterprise(detail.m.author || '未知', detail.m.enterpriseName)} · {detail.m.time}</span>
+            </span>
             <button type="button" className={css.btn} onClick={() => { setDetail(null) }} aria-label="关闭">×</button>
           </div>
           <div className={css.detailBody}>
@@ -267,7 +271,7 @@ export function MomentsDetail({
                   // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
                   // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：给占位，不留空。
                   return (
-                    <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: detail.m.author }) })}>
+                    <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: withEnterprise(detail.m.author || '未知', detail.m.enterpriseName) }) })}>
                       <RemoteImg
                         src={dataSrc || ''}
                         alt=""
@@ -345,7 +349,7 @@ export function MomentsDetail({
                   {detail.m.likes.map((l, idx) => (
                     <Fragment key={idx}>
                       <MomentsMiniAvatar username={l.username} name={l.nickname || l.username} />
-                      <span className={css.clickableName} title={'只看 ' + (l.nickname || l.username)} {...clickableKey(() => { setAuthorFilter(l.nickname || l.username || null) }, { stopPropagation: true })}>{l.nickname || l.username || '未知'}</span>
+                      <span className={css.clickableName} title={'只看 ' + withEnterprise(l.nickname || l.username || '未知', l.enterpriseName)} {...clickableKey(() => { setAuthorFilter(l.nickname || l.username || null) }, { stopPropagation: true })}>{withEnterprise(l.nickname || l.username || '未知', l.enterpriseName)}</span>
                       {idx < detail.m.likes.length - 1 ? '、' : null}
                     </Fragment>
                   ))}
@@ -372,12 +376,18 @@ export function MomentsDetail({
                        data URL 之前画的是占位而不是 <img>，挂它身上这一格就永远不会被观察到。 */
                     <div key={ci} className={css.comment} data-sns-key={img?.md5 || undefined} data-sns-md5={img?.md5 || undefined}>
                       <MomentsMiniAvatar username={c.username} name={c.nickname || c.username} />
-                      <span className={css.commentName} title={'只看 ' + (c.nickname || c.username)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{c.nickname || c.username || '未知'}</span>
-                      {c.to_username && c.to_username !== detail.m.username && <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>}
+                      <span className={css.commentName} title={'只看 ' + withEnterprise(c.nickname || c.username || '未知', c.enterpriseName)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{withEnterprise(c.nickname || c.username || '未知', c.enterpriseName)}</span>
+                      {c.to_username && c.to_username !== detail.m.username && (
+                        <span className={css.commentReply}>
+                          回复
+                          <MomentsMiniAvatar username={c.to_username} name={c.to_nickname || c.to_username} />
+                          <span className={css.commentReplyName}>{withEnterprise(c.to_nickname || c.to_username, c.toEnterpriseName)}{target ? '：' : ''}</span>
+                        </span>
+                      )}
                       {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
                       <span className={css.commentText}>{c.content || ''}</span>
                       {img && cdata && (
-                        <RemoteImg key={'img' + String(ci)} src={cdata} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
+                        <RemoteImg key={'img' + String(ci)} src={cdata} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: withEnterprise(c.nickname || c.username || '', c.enterpriseName) }) }, { label: '查看大图' })} />
                       )}
                       {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTimeSec(c.ts)}</span>}
                     </div>

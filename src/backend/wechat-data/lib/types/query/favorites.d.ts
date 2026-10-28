@@ -47,6 +47,7 @@ interface FavorItem {
     fromUsr: string;
     chatName: string;
     source: string;
+    sourceEnterpriseName?: string;
     /**
      * 来源头像：本机 data URL、contact 表头像地址，或 32 位头像 MD5。
      * MD5 由客户端交给 `apiGetSnsImageDataUrl` 解出本机图（与收藏图片同一条缓存链）。

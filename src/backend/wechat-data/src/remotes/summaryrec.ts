@@ -241,11 +241,29 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       return { summary: finalSummary, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
     },
 
-    async suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<ReplySuggestResult> {
+    async suggestReplies(options: {
+      username?: string
+      kbId?: number
+      count?: number
+      /** 分析面板当前选中的消息；缺省时仍按会话最新上下文推荐。 */
+      targetLocalId?: number
+    }): Promise<ReplySuggestResult> {
       const talker = String(options.username ?? '').trim()
       if (talker === '') return { ok: false, error: '缺少会话' }
       const want = Math.max(1, Math.min(Math.trunc(options.count ?? 3), 5))
-      const { lines, latestPeer, count } = collectReplyContext(rc.dirs().decrypted, talker, rc.selfUsername())
+      const rawTarget = options.targetLocalId
+      if (rawTarget !== undefined && (!Number.isFinite(Number(rawTarget)) || Number(rawTarget) <= 0)) {
+        return { ok: false, error: '分析对象无效，请重新选择消息' }
+      }
+      const targetLocalId = rawTarget === undefined ? undefined : Math.trunc(Number(rawTarget))
+      const { lines, latestPeer, count, targetFound } = collectReplyContext(
+        rc.dirs().decrypted,
+        talker,
+        rc.selfUsername(),
+        20,
+        targetLocalId,
+      )
+      if (targetFound === false) return { ok: false, error: '这条消息已不在当前会话中，请重新选择' }
       if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
       const kbId = Math.trunc(Number(options.kbId ?? 0))
       const snippets = kbId > 0
@@ -280,7 +298,13 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         rc.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
         return { ok: false, error: '模型没给出可用的候选回复' }
       }
-      rc.op('task', 'suggest_replies', 'ok', talker, `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`)
+      rc.op(
+        'task',
+        'suggest_replies',
+        'ok',
+        targetLocalId === undefined ? talker : `${talker}#${String(targetLocalId)}`,
+        `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`,
+      )
       const base: ReplySuggestResult = { ok: true, replies, messageCount: count, kbSnippetCount: snippets.length }
       return snippets.length === 0 && kbId > 0
         ? { ...base, degraded: '知识库里没有相关内容，这次只用了会话上下文' }

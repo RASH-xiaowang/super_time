@@ -15,6 +15,8 @@ import type { EvidenceLocator } from './answer-runtime/evidence.ts';
  */
 export interface AskCitation {
     name: string;
+    /** 企业微信会话对应的企业名称（普通会话为空）。 */
+    enterpriseName?: string;
     time: string;
     snippet: string;
     username: string;
@@ -27,6 +29,8 @@ export interface AskCitation {
     locator?: EvidenceLocator;
     /** 群聊里这条消息的发送者显示名（单聊为空）。 */
     sender?: string;
+    /** 企业微信发送者所属企业（群聊按发送者、单聊按会话）。 */
+    senderEnterpriseName?: string;
     /** 来源域：消息（缺省）、知识库、聚合事实或资源。 */
     source?: 'msg' | 'kb' | 'agg' | 'resource';
     /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */

@@ -46,12 +46,16 @@ export interface TaskInfo {
     chatUsername: string;
     /** 会话显示名（创建时快照；群名/昵称后续变化不回写）。 */
     chatName: string;
+    /** 会话对应的企微企业名称（仅展示，不写入任务快照）。 */
+    chatEnterpriseName?: string;
     /** 会话类型：群聊必须指定目标用户。 */
     chatType: TaskInfoChatType;
     /** 触发对象：单聊 = 会话对象本身；群聊 = 群内被监听的那个成员。 */
     targetUsername: string;
     /** 触发对象显示名。 */
     targetName: string;
+    /** 触发对象对应的企微企业名称（仅展示，不写入任务快照）。 */
+    targetEnterpriseName?: string;
     /** 触发关键词（任意一个命中即触发）。 */
     keywords: string[];
     /** 触发时携带「该对象最近 M 张图片」的张数（0 = 不带图片）。 */
@@ -169,6 +173,10 @@ export interface TaskTriggerImage {
     createTime: number;
     /** 发送者显示名。 */
     sender: string;
+    /** 发送者 username（新扫描记录才写入；旧记录可能没有）。 */
+    senderUsername?: string;
+    /** 发送者所属企业（新扫描记录才写入；旧记录可能没有）。 */
+    senderEnterpriseName?: string;
     /** 图片 md5（有则带上，便于排查/去重）。 */
     md5?: string;
 }
@@ -180,8 +188,12 @@ export interface TaskTriggerRecord {
     taskName: string;
     chatUsername: string;
     chatName: string;
+    /** 会话对应企微企业名称（仅展示）。 */
+    chatEnterpriseName?: string;
     targetUsername: string;
     targetName: string;
+    /** 触发对象对应企微企业名称（仅展示）。 */
+    targetEnterpriseName?: string;
     /** 命中的关键词（保留用户配置里的原文）。 */
     keyword: string;
     /** 触发文本（命中那条消息的可读正文）。 */
@@ -288,6 +300,8 @@ export interface TaskCallbackPayload {
     };
     keyword: string;
     text: string;
+    /** 用户显式配置的附加参数（Webhook 默认空对象；不参与三参数隐式映射）。 */
+    params: Record<string, string>;
     images: Array<{
         localId: number;
         createTime: number;
@@ -306,7 +320,8 @@ export interface TaskCallbackPayload {
  *  · `Params.room_name` ← 会话名；`Params.content` ← 触发文本（过隐私闸后）；
  *  · `Params.at_name` ← 触发对象显示名；单聊回落会话名 `chatName`。
  *
- * 说明：RPA 方式**不发图片**（接口没有对应参数），`photoLimit` 对它不生效。
+ * 说明：该旧类型只保留兼容形状；当前 RPA 的图片类参数走短时签名直链，
+ * `photoLimit` 决定记录里最多收集几张图片引用。
  *
  * @deprecated 厂商协议已由描述符承载，新代码不要直接引用该类型。
  */

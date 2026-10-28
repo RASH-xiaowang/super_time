@@ -23,7 +23,9 @@
 import { useEffect, useState } from 'react'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget, type CiteItem } from './cite-target.ts'
+import { identityLabel, withEnterprise } from './enterprise-identity.ts'
 import { readableCiteError, type CiteContextStatus, type ContextMessage } from './use-cite-detail.ts'
+import { IdentityName } from './identity.tsx'
 import css from './ask-cite-detail.module.css'
 
 /** 知识库来源的面包屑：`第 3 页 · 第二章 › 违约条款`。 */
@@ -94,9 +96,13 @@ export function CiteDetailPanel({
     <aside className={css.citeDetail} data-overlay={overlay || undefined} aria-label={`第 ${index} 条来源详情`}>
       <div className={css.citeDetailHead}>
         <span className={css.citeDetailIdx}>[{index}]</span>
-        <span className={css.citeDetailTitle}>
-          {kb ? kb.fileName : (item.sender ? `${item.name} · ${item.sender}` : item.name)}
-        </span>
+        {kb
+          ? <span className={css.citeDetailTitle}>{kb.fileName}</span>
+          : (
+              <IdentityName className={css.citeDetailTitle} name={item.name} username={item.username ?? ''} size={22}>
+                {identityLabel(item)}
+              </IdentityName>
+            )}
         <button type="button" className={css.citeDetailClose} onClick={onClose} title="关闭详情（对话仍在左侧）" aria-label="关闭详情">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" />
@@ -164,7 +170,9 @@ export function CiteDetailPanel({
           <div className={css.citeDetailCtxList}>
             {ctx.map(m => (
               <div key={m.key} className={css.citeDetailCtxRow} data-focus={m.focus || undefined}>
-                <span className={css.citeDetailCtxWho}>{m.sender}</span>
+                <IdentityName className={css.citeDetailCtxWho} name={m.sender} username={m.senderUsername ?? ''} size={18}>
+                  {withEnterprise(m.sender, m.enterpriseName)}
+                </IdentityName>
                 <span className={css.citeDetailCtxTime}>{m.time}</span>
                 <span className={css.citeDetailCtxText}>{m.text}</span>
               </div>

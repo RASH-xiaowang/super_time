@@ -13,6 +13,7 @@ import type { useConfirm } from '../ui/confirm.tsx'
 import { apiClearAllSessionDrafts, apiClearSessionDraft, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useActionNotice } from './use-action-notice.tsx'
+import { withEnterprise } from './enterprise-identity.ts'
 import type { EditedMessageRecord, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsEditInputs {
@@ -91,8 +92,12 @@ const reloadCurrent = useCallback(async (): Promise<void> => {
 const sessionListRef = useRef<HTMLDivElement | null>(null)
 const clearDraft = useCallback(async (): Promise<void> => {
   if (!curSession || !curSession.draft) return
+  const sessionLabel = withEnterprise(
+    curSession.displayName || curSession.username,
+    curSession.enterpriseName,
+  )
   const ok = await confirm({
-    title: `清空「${curSession.displayName || curSession.username}」的草稿？`,
+    title: `清空「${sessionLabel}」的草稿？`,
     message: '清空的是本地解密副本里的草稿，不影响微信本身。',
     tone: 'danger',
   })

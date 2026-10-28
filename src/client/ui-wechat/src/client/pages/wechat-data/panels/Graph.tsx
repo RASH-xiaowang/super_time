@@ -12,15 +12,17 @@ import { useFreshData } from './use-fresh-data.ts'
 import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
 import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, defaultNodeLimit, eligibleCandidateCount, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import { withEnterprise } from './enterprise-identity.ts'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { GraphRail } from './GraphRail.tsx'
 import { GraphExportMenu } from './GraphExportMenu.tsx'
 import { GraphNodeMenuController } from './GraphNodeMenuController.tsx'
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas.tsx'
+import { IdentityName } from './identity.tsx'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import { useGraphNodeMenu } from './use-graph-node-menu.ts'
 import { useGraphNoteActions } from './use-graph-note-actions.ts'
-import { useGraphNodeSearch } from './use-graph-node-search.ts'
+import { useGraphNodeSearch, type GraphNodeSearch } from './use-graph-node-search.ts'
 import { useGraphDetailRequest } from './use-graph-detail-request.ts'
 import { useGraphExportActions } from './use-graph-export-actions.ts'
 import { readableOn } from '../utils/theme-color.ts'
@@ -67,6 +69,47 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
  * `!== 'note' && !== 'stub' && …`，加一类就漏一处，于是拿 `ent:person:张三` 去查头像。
  */
 const KNOWLEDGE_KINDS = new Set<GNode['kind']>(['note', 'stub', 'file', 'section', 'entity'])
+
+/** Search results are identity rows, except for knowledge entries which are not contacts. */
+function GraphSearchBox({ search, onLocate, selfUsername = '' }: {
+  search: GraphNodeSearch
+  onLocate: (id: string) => void
+  selfUsername?: string
+}): React.JSX.Element {
+  return (
+    <div className={css.searchWrap}>
+      {/* 搜索只覆盖「当前这张图」的节点（社交图谱与知识图谱彼此独立），最多给出 8 个候选。 */}
+      <input
+        type="text"
+        value={search.search}
+        onChange={(e) => { search.setSearch(e.target.value) }}
+        placeholder="搜索节点…"
+        title="仅搜索当前图谱的节点（好友 / 群组 / 知识各自独立），最多给出 8 个候选"
+        aria-label="搜索节点（仅当前图谱，最多 8 个候选）"
+        className={css.searchInput}
+      />
+      {search.hits.length > 0 && (
+        <div className={css.searchDrop}>
+          {search.hits.map(hit => (
+            <button key={hit.id} type="button" className={css.searchHit} onClick={() => { onLocate(hit.id); search.clear() }}>
+              {KNOWLEDGE_KINDS.has(hit.kind) ? (
+                <span className={css.searchHitName}>{withEnterprise(hit.label, hit.enterpriseName)}</span>
+              ) : (
+                <IdentityName className={css.searchHitIdentity} name={hit.label} username={hit.kind === 'self' ? selfUsername : hit.id} size={18}>
+                  {withEnterprise(hit.label, hit.enterpriseName)}
+                </IdentityName>
+              )}
+              <span className={css.searchHitId}>{hit.id}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {search.terms && search.hits.length === 0 && (
+        <div className={css.searchDrop}><span className={css.searchEmpty}>无匹配节点</span></div>
+      )}
+    </div>
+  )
+}
 
 /**
  * 社交关系图谱加载画面 — 微信风格：一行旋转指示 + 两行说明。
@@ -373,32 +416,10 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
         title={isKnowledgeMode
           ? '知识图谱 · 知识网络'
           : (settings.mode === 'groups' ? '社交图谱 · 群组网络' : '社交图谱 · 好友网络')}
-        desc={selected ? selected.label + ' · ' + String(selected.intimacy ?? selected.weight) + ' 条消息' : `${graph.nodes.length} 节点 · ${graph.edges.length} 连线 · ${graph.communityCount} 圈子`}
+        desc={selected ? withEnterprise(selected.label, selected.enterpriseName) + ' · ' + String(selected.intimacy ?? selected.weight) + ' 条消息' : `${graph.nodes.length} 节点 · ${graph.edges.length} 连线 · ${graph.communityCount} 圈子`}
         actions={(
           <>
-            <div className={css.searchWrap}>
-              {/* 搜索只覆盖「当前这张图」的节点（社交图谱与知识图谱彼此独立），
-              且最多给出 8 个候选 —— 不说清会让用户以为「搜不到 = 数据里没有」。 */}
-          <input
-            type="text"
-            value={nodeSearch.search}
-            onChange={(e) => { nodeSearch.setSearch(e.target.value) }}
-            placeholder="搜索节点…"
-            title="仅搜索当前图谱的节点（好友 / 群组 / 知识各自独立），最多给出 8 个候选"
-            aria-label="搜索节点（仅当前图谱，最多 8 个候选）"
-            className={css.searchInput}
-          />
-              {nodeSearch.hits.length > 0 && (
-                <div className={css.searchDrop}>
-                  {nodeSearch.hits.map(hit => (
-                    <button key={hit.id} type="button" className={css.searchHit} onClick={() => { locateSearch(hit.id); nodeSearch.clear() }}>{hit.label}<span className={css.searchHitId}>{hit.id}</span></button>
-                  ))}
-                </div>
-              )}
-              {nodeSearch.terms && nodeSearch.hits.length === 0 && (
-                <div className={css.searchDrop}><span className={css.searchEmpty}>无匹配节点</span></div>
-              )}
-            </div>
+          <GraphSearchBox search={nodeSearch} selfUsername={data?.self ?? ''} onLocate={locateSearch} />
             <button type="button" className={css.chip} onClick={() => { void load() }}>{loading ? '刷新中…' : '刷新'}</button>
             {/* 导出相关的 5 个控件收进一个「导出」下拉（2026-10-17 用户要求「压缩这里的空间」）。
                 改前它们平铺在页头，加上搜索/刷新/主题/适应视图/选中节点共 9 个控件，
@@ -477,7 +498,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 hideMinimap={railOpen}
               />
               <GraphNodeMenuController
-                target={nodeMenu.target}
+                target={nodeMenu.target} selfUsername={data?.self ?? ''}
                 knowledge={isKnowledgeMode}
                 pinned={pinned}
                 onOpenChat={onOpenChat}
@@ -535,6 +556,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
             <GraphRail
               graph={graph}
               isKnowledgeMode={isKnowledgeMode}
+              selfUsername={data?.self ?? ''}
               selected={selected}
               detailRequest={detailRequest.request}
               selAvatar={selAvatar}

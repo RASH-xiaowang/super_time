@@ -18,6 +18,7 @@
  *   · 关键词里的 `%` / `_` 必须转义，否则被当成 SQL 通配符。
  * @vitest-environment node
  */
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,6 +50,12 @@ function db(dec: string, rel: string): DatabaseSync {
   const p = join(dec, rel)
   mkdirSync(join(p, '..'), { recursive: true })
   return new DatabaseSync(p)
+}
+
+/** Build `contact.extra_buffer` with protobuf field 2 = enterprise wording id. */
+function enterpriseBuffer(wordingId: string): Buffer {
+  const value = Buffer.from(wordingId, 'utf8')
+  return Buffer.concat([Buffer.from([0x12, value.length]), value])
 }
 
 // ── ① 文件 ───────────────────────────────────────────────────────────────
@@ -106,6 +113,38 @@ describe('文件搜索：服务端过滤 + md5 可搜', () => {
     seedFiles(dec)
     expect(queryFiles(dec, 100, 0, undefined, '%').total).toBe(0)
     expect(queryFiles(dec, 100, 0, undefined, '_').total).toBe(0)
+  })
+
+  it('文件来源是企微好友时带出来源企业名', () => {
+    const dec = makeRoot()
+    const username = 'wxid_ent@openim'
+    const contact = db(dec, join('contact', 'contact.db'))
+    contact.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+    contact.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    contact.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', '示例企业')
+    contact.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)').run(
+      username,
+      '企微好友',
+      '',
+      enterpriseBuffer('wording-ent'),
+    )
+    contact.close()
+
+    const hardlink = db(dec, join('hardlink', 'hardlink.db'))
+    hardlink.exec(`CREATE TABLE file_hardlink_info_v4 (
+      md5 TEXT, file_name TEXT, file_size INTEGER, modify_time INTEGER, dir1 INTEGER, dir2 INTEGER)`)
+    hardlink.exec('CREATE TABLE dir2id (username TEXT)')
+    hardlink.prepare('INSERT INTO dir2id (rowid, username) VALUES (?, ?)').run(1, '2026-10')
+    hardlink.prepare('INSERT INTO dir2id (rowid, username) VALUES (?, ?)')
+      .run(2, createHash('md5').update(username, 'utf8').digest('hex'))
+    hardlink.prepare('INSERT INTO file_hardlink_info_v4 VALUES (?, ?, ?, ?, ?, ?)')
+      .run('a'.repeat(32), '企业资料.pdf', 100, 30, 1, 2)
+    hardlink.close()
+
+    expect(queryFiles(dec).files[0]).toMatchObject({
+      sourceTalker: '企微好友',
+      sourceTalkerEnterpriseName: '示例企业',
+    })
   })
 })
 
@@ -271,6 +310,51 @@ describe('记录：total 与 items 必须一致（不能再出现「有 total �
       const r = queryRecords(dec, kind, 20, 0)
       if (r.total > 0) expect(r.items.length).toBeGreaterThan(0)
     }
+  })
+
+  it('转账记录的会话/收款方/付款方分别带出企微企业名', () => {
+    const dec = makeRoot()
+    const contact = db(dec, join('contact', 'contact.db'))
+    contact.exec('CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, extra_buffer BLOB)')
+    contact.exec('CREATE TABLE openim_wording (wording_id TEXT, wording TEXT)')
+    contact.prepare('INSERT INTO openim_wording VALUES (?, ?)').run('wording-ent', '示例企业')
+    const insContact = contact.prepare('INSERT INTO contact VALUES (?, ?, ?, ?)')
+    insContact.run('wxid_session@openim', '会话好友', '', enterpriseBuffer('wording-ent'))
+    insContact.run('wxid_receiver@openim', '收款好友', '', enterpriseBuffer('wording-ent'))
+    insContact.run('wxid_payer@openim', '付款好友', '', enterpriseBuffer('wording-ent'))
+    contact.close()
+
+    const general = db(dec, join('general', 'general.db'))
+    general.exec(`CREATE TABLE transferTable (
+      transfer_id TEXT, transcation_id TEXT, message_server_id INTEGER, second_message_server_id INTEGER,
+      session_name TEXT, pay_sub_type INTEGER, pay_receiver TEXT, pay_payer TEXT,
+      begin_transfer_time INTEGER, last_modified_time INTEGER, invalid_time INTEGER,
+      last_update_time INTEGER, delay_confirm_flag INTEGER)`)
+    general.prepare('INSERT INTO transferTable VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+      'T1',
+      'X',
+      1,
+      2,
+      'wxid_session@openim',
+      1,
+      'wxid_receiver@openim',
+      'wxid_payer@openim',
+      30,
+      30,
+      0,
+      30,
+      0,
+    )
+    general.close()
+
+    expect(queryRecords(dec, 'transfers', 20, 0).items[0]).toMatchObject({
+      session_display: '会话好友',
+      session_enterprise: '示例企业',
+      receiver_display: '收款好友',
+      receiver_enterprise: '示例企业',
+      payer_display: '付款好友',
+      payer_enterprise: '示例企业',
+    })
   })
 })
 

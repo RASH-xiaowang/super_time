@@ -7,9 +7,10 @@ import { ListSentinel, useProgressiveList } from './hooks.tsx'
 import { apiGetOfficialAssets } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { OfficialAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, CellPrimary, LoadingState, Mono, PanelHeader } from '../ui/kit.tsx'
+import { Card, LoadingState, Mono, PanelHeader } from '../ui/kit.tsx'
 import { AssetKpiBar } from './files-cell.tsx'
 import { PanelAction } from './asset-ui.tsx'
+import { IdentityName } from './identity.tsx'
 import css from './official-assets.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -67,7 +68,9 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
                 data.rows.slice(0, rowCount).map(r => (
                   <button key={r.username} type="button" className={css.row} onClick={() => { onOpenChat?.(r.username) }} title="打开会话">
                     <span className={css.colName}>
-                      <CellPrimary>{r.name}</CellPrimary>
+                      <IdentityName className={css.rowIdentity} name={r.name} username={r.username} size={22}>
+                        {r.name}
+                      </IdentityName>
                       <span className={css.rowUser}>{r.username}</span>
                     </span>
                     <span className={css.colNum}>{r.messages.toLocaleString()}</span>

@@ -90,8 +90,14 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
   },
   {
     label: '任务触发（Webhook / 多家 RPA 厂商）',
-    text: '任务命中关键词后投递触发记录：Webhook 发整条记录 JSON；RPA 厂商只发会话名/触发文本/触发对象（都不发图片）。八爪鱼参数在附加参数中逐条配置（默认不发业务参数；值来自触发记录 / 固定值 / 自定义模板；不含凭据或图片）。另有实验性「八爪鱼 RPA（MCP）」通道（mcp-rpa.bazhuayu.com，参数同样在附加参数中配置）。默认不配置不发送；阿里云 / 来也 / 实在为实验性接入。凭据可在本机编辑抽屉点眼睛查看（仅桌面端，手机/浏览器不可调用）',
+    text: '任务命中关键词后投递触发记录：Webhook 会发整条记录，并把你在「附加参数」里配置的条目额外放进请求体 params，图片可选 JSON data URL 或 multipart 原始文件（发送的数据范围相同）；RPA 厂商默认都不发业务参数（Webhook 的 params 默认不发业务参数），只有你逐条配置参数名与值来源，才会把会话名 / 触发文本 / 触发对象 / 任务信息 / 固定值 / 自定义模板等对应内容发出去（不含凭据）。RPA 厂商显式选择 imagesJson / imageCount / firstImageUrl 时才发图片的短时签名直链（一小时过期、一个令牌一张图），图片字节由厂商机器人经本机局域网监听面读取，需先打开「局域网访问（手机）」。八爪鱼开放 API 与实验性「八爪鱼 RPA（MCP）」（mcp-rpa.bazhuayu.com）遵循同一套附加参数规则；Webhook 的旧 paramMap 从未生效，不会自动迁移。阿里云 / 来也 / 实在为实验性接入。凭据可在本机编辑抽屉点眼睛查看（仅桌面端，手机/浏览器不可调用）',
     host: '你配置的 Webhook 地址；api-rpa.bazhuayu.com、mcp-rpa.bazhuayu.com、api.yingdao.com、console-rpa.aliyun.com、z-commander-api.ai-indeed.com；UiPath（默认 cloud.uipath.com，云区域名 uipath.com / uipath.us）/ 来也（laiye.com）/ 私有化部署用你配置的实例地址',
+    kind: 'none',
+  },
+  {
+    label: '消息列表回复投递',
+    text: '任务首次触发会先插入一条问候语；任务触发、局域网 Webhook、手动新增或重发产生的消息记录，在匹配「会话名 + 触发对象」规则后，会把 target / message / attachments 等 JSON POST 到你为该规则配置的下游 Webhook。message 先过 task_callback 隐私闸；会话名、触发对象、备注、外链与图片字节不脱敏。没有规则时记录保持待执行、不发请求；失败不自动重试，避免下游重复发微信消息',
+    host: '你按规则配置的下游 Webhook 地址（http/https，不内置固定主机）',
     kind: 'none',
   },
   {
@@ -130,11 +136,18 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
  */
 const INBOUND: ReadonlyArray<SurfaceEntry> = [
   {
-    label: '「打开网页」交接（临时入站监听）',
-    text: '只有点击标题栏「打开网页」时，本机才在局域网临时监听一个端口（默认 5032），让默认浏览器打开同一套界面。浏览器会话与桌面端同权限（可能读到模型 API Key 等配置）；点右下角卡片返回即停服、作废会话。普通「远程访问（手机）」开关已移除',
-    host: '本机局域网 IPv4:5032（仅交接期间临时监听）',
+    label: '局域网访问 / 「打开网页」交接',
+    text: '默认不监听。只有你点标题栏「打开网页」或设置 → 维护与自检 → 局域网访问（手机）并显式启用后，本机才在局域网 IPv4 临时监听一个端口（默认 5032）。打开网页交接的浏览器会话与桌面端同权限；局域网访问关闭、退出或轮换令牌即停服并作废会话',
+    host: '本机局域网 IPv4:5032（仅显式开启期间监听）',
     kind: 'off',
-    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到交接码与你查阅的数据。交接期间请把浏览器窗口当作桌面端本人；用完点卡片返回即停。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则浏览器连不上。',
+    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到配对码、路径令牌与你查阅的数据。交接期间请把浏览器窗口当作桌面端本人；用完点卡片返回即停。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则浏览器连不上。',
+  },
+  {
+    label: '消息列表局域网 Webhook',
+    text: '局域网访问开启期间，既有监听面提供 GET|POST /api/message-webhook/<token>：GET 只做健康检查，POST 无需会话 Cookie、凭 URL 路径里的派生令牌即可写入一条消息台账记录；记录成功后立即尝试投递到规则配置的下游地址。它不另开端口，关闭局域网访问或轮换令牌后旧地址立即失效',
+    host: '本机局域网 IPv4:5032（与局域网访问共用监听面）',
+    kind: 'off',
+    note: '⚠ 完整 Webhook 地址等同于写入凭据：拿到地址的人可向台账写入内容，地址也可能进入代理/访问日志。该链路仍是明文 HTTP；Host 头必须匹配监听地址。只把地址交给可信系统，用后关闭开关或轮换令牌。',
   },
 ]
 
@@ -234,7 +247,8 @@ export function PrivacyConsentGate({
           <ul className={css.verdictList}>
             <li>数据不出本机：解析、检索、统计、导出全部在你自己的电脑上完成。</li>
             <li>
-              唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 发给你<b>自己配置</b>的模型接口。
+              会把你<b>内容</b>发出去的是 AI 问答与总结、ClawBot、任务触发，以及消息列表回复投递
+              —— 目的地都是<b>你自己配置</b>的模型或 Webhook / RPA 服务。
             </li>
             <li>
               其余出网点都不涉及聊天内容，已在下面逐条列明；应用内已<b>没有任何出网开关</b>，

@@ -120,6 +120,29 @@ const OFFLINE_HEAVY_METHODS = Object.freeze(new Set([
 ]));
 
 /**
+ * 只在本地落盘文件、不回传大段 base64 的批量媒体读。
+ *
+ * `getImageDataUrlsBatch(fileOnly:true)` 仍是批量读+解密，但结果走
+ * `wechat-media://`/HTTP 文件流，RPC 只回传路径。它属于用户可见的列表读，
+ * 不应占 `1 运行 + 4 排队` 的长任务车道；否则一屏图片的多个攒批窗口就会
+ * 互相把重活队列挤满。客户端同时把 chunk 串成单车道，因此普通车道最多只占
+ * 一个并发槽，另一个仍留给会话/消息等交互读。
+ *
+ * 未传 `fileOnly` 时仍按重活处理：那种调用可能把图片 base64 全量放进 IPC。
+ */
+const FILE_ONLY_HEAVY_METHODS = Object.freeze(new Set([
+  'getImageDataUrlsBatch',
+]));
+
+/**
+ * 桌面 IPC/HTTP 都把方法参数包在数组里，而直接调用方可能传单项对象。
+ * 统一取第一项，避免 `args.offline` / `args.fileOnly` 在数组形态下永远读不到。
+ */
+function firstCallArg(args) {
+  return Array.isArray(args) ? args[0] : args;
+}
+
+/**
  * 按入参决定是否把某个重活方法降级。
  *
  * @param {unknown} method - `@Remote` 方法名。
@@ -127,12 +150,15 @@ const OFFLINE_HEAVY_METHODS = Object.freeze(new Set([
  * @returns 该降级则为 true（调用方据此改用 {@link NORMAL_PRIORITY}）。
  */
 function downgradeHeavyByArgs(method, args) {
-  if (typeof method !== 'string' || !OFFLINE_HEAVY_METHODS.has(method)) return false;
+  if (typeof method !== 'string') return false;
+  const value = firstCallArg(args);
   // 入参不是对象（或没给）时**不降级**：宁可保守地当重活，也不要让一次无网解密
   // 混进普通车道把交互请求堵住。
-  if (args === null || typeof args !== 'object') return false;
+  if (value === null || typeof value !== 'object') return false;
+  if (FILE_ONLY_HEAVY_METHODS.has(method)) return value.fileOnly === true;
+  if (!OFFLINE_HEAVY_METHODS.has(method)) return false;
   // 无网 ⇒ 本机解密（慢），不降级。
-  if (args.offline === true) return false;
+  if (value.offline === true) return false;
   // 在线 ⇒ 本地优先：归档/缓存通常毫秒级；即使落到本机解密也只是一张，普通车道足够。
   return true;
 }

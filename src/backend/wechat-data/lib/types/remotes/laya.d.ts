@@ -62,6 +62,8 @@ export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
         }>;
         /** 本批的进度标识（W3-11.5）：带上它才会推送 laya-analysis/progress 事件。 */
         jobId?: string;
+        /** 用户主动「重新分析」：跳过读缓存，但仍写回最新结果。 */
+        force?: boolean;
     }): Promise<LayaVisibleAnalysisResult>;
     /**
      * 停止一批正在跑的逐条分析（W3-11.5）。

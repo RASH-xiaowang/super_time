@@ -32,6 +32,13 @@ const outfile = path.join(defaultOutdir, 'index.js');
 // 网关 bundle。这里把同一份 TS 实现再产出一个约 3KB 的独立 ESM 产物。
 const fetchRetryEntry = path.join(pkgSrc, 'net', 'fetch-retry.ts');
 const fetchRetryOutfile = path.join(defaultOutdir, 'net', 'fetch-retry.js');
+// 同款理由的第二份：RPA 图片签名直链的算法由后端签发、宿主层 HTTP 服务验签
+// （`src/backend/rpa-media.js` 动态 import 本产物）。算法只写一份，两边不可能漂。
+const rpaMediaEntry = path.join(pkgSrc, 'net', 'rpa-media.ts');
+const rpaMediaOutfile = path.join(defaultOutdir, 'net', 'rpa-media.js');
+// 消息列表局域网 Webhook：宿主验签与后端签发共用同一份派生算法。
+const messageWebhookEntry = path.join(pkgSrc, 'net', 'message-webhook.ts');
+const messageWebhookOutfile = path.join(defaultOutdir, 'net', 'message-webhook.js');
 
 /**
  * 从 esbuild 的 metafile 里取产物字节数（N3）。
@@ -58,18 +65,20 @@ function outputBytes(metafile, outfile) {
 }
 
 /**
- * 把两份后端产物构建到指定目录。默认写回仓库，但一致性门禁会传临时目录，
+ * 把三份后端产物构建到指定目录。默认写回仓库，但一致性门禁会传临时目录，
  * 这样“检查是否过期”不会先把工作树里的生成文件改掉。
  *
  * @param {{ outdir?: string, log?: boolean }} [opts]
- * @returns {Promise<{ result: import('esbuild').BuildResult, outfile: string, fetchRetryOutfile: string }>}
+ * @returns {Promise<{ result: import('esbuild').BuildResult, outfile: string, fetchRetryOutfile: string, rpaMediaOutfile: string, messageWebhookOutfile: string }>}
  */
 async function buildBundle(opts = {}) {
   const targetOutdir = opts.outdir || defaultOutdir;
   const targetOutfile = path.join(targetOutdir, 'index.js');
   const targetFetchRetryOutfile = path.join(targetOutdir, 'net', 'fetch-retry.js');
+  const targetRpaMediaOutfile = path.join(targetOutdir, 'net', 'rpa-media.js');
+  const targetMessageWebhookOutfile = path.join(targetOutdir, 'net', 'message-webhook.js');
   const result = await esbuild.build({
-    entryPoints: [entry, fetchRetryEntry],
+    entryPoints: [entry, fetchRetryEntry, rpaMediaEntry, messageWebhookEntry],
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -89,16 +98,32 @@ async function buildBundle(opts = {}) {
     },
     metafile: true,
   });
-  if (opts.log === false) return { result, outfile: targetOutfile, fetchRetryOutfile: targetFetchRetryOutfile };
+  if (opts.log === false) {
+    return {
+      result,
+      outfile: targetOutfile,
+      fetchRetryOutfile: targetFetchRetryOutfile,
+      rpaMediaOutfile: targetRpaMediaOutfile,
+      messageWebhookOutfile: targetMessageWebhookOutfile,
+    };
+  }
   // 源码行数最多的产物，报体积时带上字节数，避免 KB 四舍五入后与 esbuild 的读数对不上时无从核对。
   for (const [label, output] of [
     ['后端 bundle', targetOutfile],
     ['宿主 fetch-retry bundle', targetFetchRetryOutfile],
+    ['宿主 rpa-media bundle', targetRpaMediaOutfile],
+    ['宿主 message-webhook bundle', targetMessageWebhookOutfile],
   ]) {
     const bytes = outputBytes(result.metafile, output);
     console.log(`✅ ${label}已重建: ${path.relative(root, output)} (${(bytes / 1024).toFixed(1)} KB / ${bytes} B)`);
   }
-  return { result, outfile: targetOutfile, fetchRetryOutfile: targetFetchRetryOutfile };
+  return {
+    result,
+    outfile: targetOutfile,
+    fetchRetryOutfile: targetFetchRetryOutfile,
+    rpaMediaOutfile: targetRpaMediaOutfile,
+    messageWebhookOutfile: targetMessageWebhookOutfile,
+  };
 }
 
 async function main() {
@@ -120,4 +145,8 @@ module.exports = {
   entry,
   fetchRetryEntry,
   fetchRetryOutfile,
+  rpaMediaEntry,
+  rpaMediaOutfile,
+  messageWebhookEntry,
+  messageWebhookOutfile,
 };

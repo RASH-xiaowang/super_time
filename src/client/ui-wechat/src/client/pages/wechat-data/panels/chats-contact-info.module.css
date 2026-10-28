@@ -66,6 +66,58 @@
   text-align: center;
 }
 
+/* 单聊抽屉里的客户画像入口：整行可点，与下方只读资料行明确分层。 */
+.portraitEntry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+  margin: var(--nm-s-2) 0 var(--nm-s-3);
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-cyan-20);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-cyan-6);
+  color: var(--nm-text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.portraitEntry:hover {
+  border-color: var(--nm-cyan-35);
+  background: var(--nm-cyan-10);
+}
+
+.portraitEntry:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 1px;
+}
+
+.portraitEntry > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.portraitEntry strong {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+}
+
+.portraitEntry small {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.portraitChevron {
+  flex: 0 0 auto;
+  color: var(--nm-cyan-text);
+  font-size: var(--nm-fs-xl);
+  line-height: 1;
+}
+
 /* 导出入口：胶囊次级按钮（联动既有导出对话框） */
 .exportRow {
   /* 区⑥ 底部动作位：贴底（内容不足一屏时也被推到底边，官方底部按钮槽）。 */

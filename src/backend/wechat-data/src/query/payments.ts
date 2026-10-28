@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
+import { contactMeta } from './meta.ts'
 
 export interface PaymentStatus {
   found: boolean
@@ -25,6 +26,8 @@ export interface PaymentStatus {
   /** redEnvelopeTable */
   redpacket?: {
     sender: string
+    senderName?: string
+    senderEnterpriseName?: string
     hbStatus: number
     hbType: number
     receiveStatus: number
@@ -112,12 +115,20 @@ export function queryPaymentStatus(decryptedDir: string, serverId: string): Paym
     }
     const r = getRow(db, RED_SQL, sid, decryptedDir)
     if (r) {
+      const sender = readText(r.snd)
+      const meta = contactMeta(decryptedDir)
+      const senderName = meta.names.get(sender)?.trim()
+      const senderEnterpriseName = meta.enterpriseNames.get(sender)?.trim()
       return {
         found: true,
         kind: 'redpacket',
         serverId: sid,
         redpacket: {
-          sender: readText(r.snd),
+          sender,
+          ...(senderName !== undefined && senderName !== '' ? { senderName } : {}),
+          ...(senderEnterpriseName !== undefined && senderEnterpriseName !== ''
+            ? { senderEnterpriseName }
+            : {}),
           hbStatus: Number(r.hs ?? 0),
           hbType: Number(r.ht ?? 0),
           receiveStatus: Number(r.rs ?? 0),

@@ -14,36 +14,69 @@
    该有的样子。用 `vertical-align: super` + 缩小字号，行高不变（不撑开行距）。 */
 /* 正文容器：只负责让角标与文字在同一行内正确对齐（`white-space: pre-wrap`
    由外层 `.chatAnswer` 提供，这里不重复设 —— 重复设会让换行行为有两处真源）。 */
-.answerBody { display: inline; }
-.citeMark {
-  display: inline-block;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  margin: 0 1px;
-  border: 0;
-  border-radius: var(--nm-r-pill, 999px);
-  background: color-mix(in srgb, var(--nm-cyan) 16%, transparent);
-  color: var(--nm-cyan);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
+.answerBody { display: block; min-width: 0; white-space: normal; }
+.citeGroup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  margin: 0 3px;
+  padding: 0 4px;
+  border-radius: var(--nm-r-xs);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  color: var(--nm-text-3);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.45;
   vertical-align: super;
+  white-space: nowrap;
+}
+.citeGroup[data-pending] { background: var(--nm-bg-hover); }
+.citeSeparator {
+  color: var(--nm-text-3);
+  font-size: 8.5px;
+  line-height: inherit;
+}
+.citeMark {
+  display: inline;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  text-align: center;
+  vertical-align: baseline;
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.15s, color 0.15s;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.citeMark:hover { background: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
+.citeMark:hover {
+  background: transparent;
+  color: var(--nm-cyan-text);
+}
+.citeMark[data-pending] {
+  background: transparent;
+  color: var(--nm-text-3);
+  cursor: default;
+}
 /* 正在看的那条：实心高亮，让用户知道「右侧面板显示的就是它」。 */
 .citeMark[data-active] {
   background: var(--nm-cyan);
-  color: var(--nm-bg-1);
+  color: var(--nm-bg-card);
+  border-radius: var(--nm-r-xs);
 }
 /* 模型标了不存在的编号（超出来源数）：不可点，但**仍然显示** ——
    隐藏会让用户以为模型没标引用，而实际是标错了。 */
 .citeMark:disabled {
-  background: color-mix(in srgb, var(--nm-danger) 14%, transparent);
+  background: transparent;
   color: var(--nm-danger);
   cursor: default;
   text-decoration: line-through;
@@ -72,8 +105,10 @@
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   overflow-y: auto;
+  scrollbar-width: none;
   box-shadow: var(--nm-shadow-popup);
 }
+.citeDetail::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .citeDetailHead {
   display: flex;
@@ -163,7 +198,7 @@
      长消息会把整行撑开、进而把面板撑宽（实测 427px）。 */
   grid-template-columns: auto auto minmax(0, 1fr);
   gap: 6px;
-  align-items: baseline;
+  align-items: center;
   padding: 4px 6px;
   border-radius: var(--nm-r-sm);
   font-size: 11.5px;
@@ -175,7 +210,7 @@
   background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
   color: var(--nm-text-1);
 }
-.citeDetailCtxWho { font-weight: 600; flex-shrink: 0; }
+.citeDetailCtxWho { min-width: 0; max-width: 112px; font-weight: 600; }
 .citeDetailCtxTime { color: var(--nm-text-3); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .citeDetailCtxText {
   min-width: 0;

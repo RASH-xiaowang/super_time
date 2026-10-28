@@ -183,4 +183,23 @@ describe('撤回行', () => {
     expect(rows, '头像没有使用真实 sender_username').toContain("username={it.sender_username ?? ''}")
     expect(rows, '头像没有使用发送者展示名').toContain("name={it.sender || '未知'}")
   })
+
+  it('发送者、企业名、排行与会话名都走统一企业展示', () => {
+    expect(REVOKED, '撤回面板没接企业展示 helper').toContain(
+      "import { withEnterprise } from './enterprise-identity.ts'",
+    )
+    expect(REVOKED, '发送者展示名没带企业').toContain(
+      "withEnterprise(it.sender || '未知', it.senderEnterpriseName)",
+    )
+    expect(REVOKED, '撤回排行又退回裸发送者名').toContain(
+      'withEnterprise(it.sender || \'未知\', it.senderEnterpriseName)',
+    )
+    expect(REVOKED, '群会话名没带企业').toContain(
+      'withEnterprise(it.session_name, it.enterpriseName)',
+    )
+    const content = read('revoked-content.tsx')
+    expect(content, '撤回详情 footer 的会话名没带企业').toContain(
+      'withEnterprise(item.session_name, item.enterpriseName)',
+    )
+  })
 })

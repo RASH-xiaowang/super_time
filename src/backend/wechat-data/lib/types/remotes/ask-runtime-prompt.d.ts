@@ -43,7 +43,7 @@ export declare function buildSynthRules(dataScope: AskDataScope | undefined, tim
 /** 「没检索到原文」时的回答文案。 */
 export declare function emptyAnswerText(dataScope: AskDataScope | undefined, profile?: AnswerProfileId): string;
 /** 自动回复核对失败后的安全文案。 */
-export declare const CHAT_WITHHELD_ANSWER = "\u8FD9\u4E2A\u6570\u5B57\u6211\u8FD9\u8FB9\u6CA1\u6CD5\u786E\u8BA4\uFF0C\u6211\u5148\u95EE\u4E0B\u672C\u4EBA\u3002";
+export declare const CHAT_WITHHELD_ANSWER = "\u8FD9\u4E2A\u6570\u5B57\u6211\u8FD9\u8FB9\u6CA1\u6CD5\u786E\u8BA4\uFF0C\u6211\u5148\u6838\u5B9E\u4E00\u4E0B\u518D\u56DE\u4F60\u3002";
 /** 检索范围（只保留非空字段）。 */
 export declare function buildAskScope(options: {
     username?: string;
@@ -71,7 +71,7 @@ export declare function prepareAskImages(ctx: Context, llm: {
     }>;
 } | undefined, provider: string, model: string, images: readonly AskImageInput[]): Promise<PreparedAskImages>;
 /** 图片被供应商拒绝时的说明。 */
-export declare const IMAGE_UNSUPPORTED_NOTE = "\n\n\uFF08\u6CE8\u610F\uFF1A\u5F53\u524D\u6A21\u578B\u770B\u4E0D\u5230\u968F\u6D88\u606F\u9644\u7684\u56FE\u7247\uFF0C\u65E0\u6CD5\u8BC6\u522B\u56FE\u7247\u5185\u5BB9\uFF1B\u8BF7\u5982\u5B9E\u544A\u8BC9\u5BF9\u65B9\u770B\u4E0D\u5230\u56FE\u7247\u5185\u5BB9\uFF0C\u4E0D\u8981\u8BF4\u300C\u6CA1\u6536\u5230\u56FE\u7247\u300D\u3002\uFF09";
+export declare const IMAGE_UNSUPPORTED_NOTE = "\n\n\uFF08\u6CE8\u610F\uFF1A\u5F53\u524D\u6A21\u578B\u770B\u4E0D\u5230\u968F\u6D88\u606F\u9644\u7684\u56FE\u7247\uFF0C\u65E0\u6CD5\u8BC6\u522B\u56FE\u7247\u5185\u5BB9\uFF1B\u8BF7\u5982\u5B9E\u544A\u77E5\u5F53\u524D\u6D88\u606F\u53D1\u9001\u8005\u770B\u4E0D\u5230\u56FE\u7247\u5185\u5BB9\uFF0C\u4E0D\u8981\u8BF4\u300C\u6CA1\u6536\u5230\u56FE\u7247\u300D\u3002\uFF09";
 /** 累加一次模型调用的 usage。 */
 export declare function addTokenUsage(acc: TokenUsage | undefined, next: TokenUsage | undefined): TokenUsage | undefined;
 /** 图片被供应商拒绝时按纯文本重试。 */

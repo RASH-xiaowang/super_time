@@ -18,6 +18,8 @@ export interface GraphNodeMenuControllerProps {
   knowledge: boolean
   /** 当前已固定节点。 */
   pinned: ReadonlySet<string>
+  /** 「我」的真实 wxid，仅 self 节点查头像时使用。 */
+  selfUsername?: string
   /** 社交聊天入口。 */
   onOpenChat?: ((username: string) => void) | undefined
   /** 关闭菜单。 */
@@ -86,6 +88,7 @@ export function GraphNodeMenuController(p: GraphNodeMenuControllerProps): React.
       pinned={p.pinned.has(p.target.node.id)}
       knowledge={p.knowledge}
       canOpenChat={p.onOpenChat !== undefined}
+      selfUsername={p.selfUsername ?? ''}
       onClose={p.onClose}
       onAction={run}
     />
