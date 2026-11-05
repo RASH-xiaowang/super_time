@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Super Time · 让聊天记录成为你自己的数据资产</title>
-<meta name="description" content="Super Time 是面向微信 4.x 本地数据的 Windows 桌面工作台：混合检索 RAG、本地语音转写、聊天回放、任务中心与 8 个 RPA / Webhook 触发适配器。本地优先，数据默认不出本机。">
+<title>Super Time · 本机微信数据工作台</title>
+<meta name="description" content="Super Time 是面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：提供会话与媒体回看、混合检索、带引用问答、知识库、微信原生 OCR、洞察和消息触发自动化。AI 与外部投递均为可选配置。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Super Time">
-<meta property="og:title" content="Super Time · 把聊天记录变成你自己的数据资产">
-<meta property="og:description" content="面向微信 4.x 本地数据的桌面工作台：AI 问答、洞察、媒体回放，以及由新消息触发的 RPA 自动化。">
+<meta property="og:title" content="Super Time · 本机微信数据工作台">
+<meta property="og:description" content="面向 Windows 10/11 x64 的微信 4.x 本机数据工作台：会话检索、带引用问答、知识库、原生 OCR、洞察与消息触发自动化。">
 <meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#04050a">
+<!-- Remote API 方法数以 docs/API.md 为准。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070a13'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%2322d3ee' stroke-width='4'/%3E%3Cpath d='M32 18v15l9 6' fill='none' stroke='%23a78bfa' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 /* ==========================================================================
@@ -359,7 +360,7 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 
 /* ---------- 亮点 ---------- */
 .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
-/* 解决方案：4 张卡（个人 / 助理 / 团队 / 创作者）—— 宽屏 4 列，中屏 2 列，窄屏 1 列。 */
+/* 适用场景：4 张卡（个人 / 项目 / 自动化 / 资料）—— 宽屏 4 列，中屏 2 列，窄屏 1 列。 */
 .grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px}
 .hl h3{margin:20px 0 10px;font-size:19px;font-weight:650;letter-spacing:-.01em}
 .hl p{margin:0;color:var(--txt-2);font-size:14.3px}
@@ -425,7 +426,7 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .sol ul li::before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:2px;background:var(--grad);box-shadow:0 0 10px rgba(139,92,246,.9)}
 .sol .glow{position:absolute;inset:auto -30% -60% -30%;height:190px;background:radial-gradient(ellipse at 50% 0%,rgba(139,92,246,.22),transparent 70%);pointer-events:none}
 
-/* ---------- 客户案例 ---------- */
+/* ---------- 使用场景示例 ---------- */
 .cases-section{overflow:hidden}
 .cases-section::before{
   content:"";position:absolute;left:-18%;right:-18%;top:8%;height:420px;
@@ -462,7 +463,8 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 }
 .case-card[hidden]{display:none}
 .case-card[data-category="team"]{--case-rgb:139,92,246}
-.case-card[data-category="operations"]{--case-rgb:244,114,182}
+.case-card[data-category="automation"]{--case-rgb:244,114,182}
+.case-card[data-category="knowledge"]{--case-rgb:94,234,212}
 .case-card[data-category="personal"]{--case-rgb:10,201,122}
 .case-card::before{
   content:"";position:absolute;left:8%;right:8%;top:0;height:2px;border-radius:0 0 3px 3px;
@@ -502,7 +504,7 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .case-pain p{margin:6px 0 0;color:var(--txt-2);font-size:13.2px;line-height:1.72}
 .case-metrics{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:18px}
 .case-metric{padding:11px 10px;border:1px solid var(--line);border-top-color:rgba(var(--case-rgb),.42);border-radius:10px;background:rgba(255,255,255,.018)}
-.case-metric b{display:block;font-family:var(--mono);font-size:19px;font-weight:620;line-height:1.25;color:#ecfaff;letter-spacing:-.02em}
+.case-metric b{display:block;font-family:var(--mono);font-size:13.5px;font-weight:620;line-height:1.35;color:#ecfaff;letter-spacing:-.01em}
 .case-metric span{display:block;margin-top:4px;font-size:10.5px;line-height:1.45;color:var(--txt-3)}
 .case-toggle{
   position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -521,10 +523,10 @@ section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
 .case-block{padding-top:15px;border-top:1px solid var(--line)}
 .case-block:first-child{padding-top:0;border-top:0}
 .case-block p{margin:7px 0 0;color:var(--txt-2);font-size:13.2px;line-height:1.75}
-.case-solution ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:8px}
-.case-solution li{position:relative;padding-left:16px;color:var(--txt-2);font-size:13px;line-height:1.68}
-.case-solution li::before{content:"";position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:2px;background:rgba(var(--case-rgb),.95);box-shadow:0 0 9px rgba(var(--case-rgb),.8)}
-.case-effect p{border-radius:10px;padding:11px 12px;background:rgba(var(--case-rgb),.055);border:1px solid rgba(var(--case-rgb),.2)}
+.case-approach ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:8px}
+.case-approach li{position:relative;padding-left:16px;color:var(--txt-2);font-size:13px;line-height:1.68}
+.case-approach li::before{content:"";position:absolute;left:0;top:9px;width:6px;height:6px;border-radius:2px;background:rgba(var(--case-rgb),.95);box-shadow:0 0 9px rgba(var(--case-rgb),.8)}
+.case-boundary p{border-radius:10px;padding:11px 12px;background:rgba(var(--case-rgb),.055);border:1px solid rgba(var(--case-rgb),.2)}
 .case-footnote{margin:18px 0 0;color:var(--txt-3);font-size:11.2px;line-height:1.75;text-align:right}
 .case-noscript{color:var(--txt-2);font-size:14px}
 
@@ -690,7 +692,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .case-filter{flex:none}
   .case-count{align-self:flex-end}
   .case-card{padding:20px 18px}
-  .case-metric b{font-size:17px}
+  .case-metric b{font-size:13.5px}
   .case-metric span{font-size:10px}
   .case-footnote{text-align:left}
   .hero-cta{gap:12px}
@@ -724,7 +726,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   .card{padding:20px 17px}
   .case-metrics{grid-template-columns:minmax(0,1fr);gap:7px}
   .case-metric{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:8px 10px}
-  .case-metric b{font-size:16px}
+  .case-metric b{font-size:13px}
   .case-metric span{margin-top:0;text-align:right}
   .hl h3{font-size:17.5px;margin-top:16px}
   .hl p{font-size:13.8px}
@@ -816,11 +818,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <a href="#home" class="active">首页</a>
       <a href="#highlights">产品亮点</a>
       <a href="#features">核心功能</a>
-      <a href="#clawbot">微信接入</a>
-      <a href="#solutions">解决方案</a>
-      <a href="#cases">客户案例</a>
+      <a href="#solutions">适用场景</a>
+      <a href="#scenarios">场景示例</a>
       <a href="#tech">技术架构</a>
-      <a href="#about">关于我们</a>
+      <a href="#about">适用边界</a>
     </nav>
     <div class="nav-act">
       <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
@@ -837,11 +838,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <a href="#home">首页</a>
   <a href="#highlights">产品亮点</a>
   <a href="#features">核心功能</a>
-  <a href="#clawbot">微信接入</a>
-  <a href="#solutions">解决方案</a>
-  <a href="#cases">客户案例</a>
+  <a href="#solutions">适用场景</a>
+  <a href="#scenarios">场景示例</a>
   <a href="#tech">技术架构</a>
-  <a href="#about">关于我们</a>
+  <a href="#about">适用边界</a>
   <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">获取桌面版</a>
 </div>
 
@@ -854,43 +854,42 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="hero-grid">
       <div>
-        <span class="chip rv"><span class="dot"></span>v1.1.0 已发布 · 本地优先 · 数据不出本机</span>
+        <span class="chip rv"><span class="dot"></span>v1.1.2 · Windows x64 · 本机解析 · AI 可选</span>
         <h1 class="rv" style="--d:80ms">
-          <span class="line">把聊天记录</span>
-          <span class="line grad-txt">变成你自己的数据资产</span>
+          <span class="line">把本机微信数据</span>
+          <span class="line grad-txt">变成可检索的工作台</span>
         </h1>
         <p class="lead rv" style="--d:160ms">
-          Super Time 是面向 <b>微信 4.x 本地数据</b>的 Windows 桌面工作台：
-          直接读取本机数据目录，用混合检索 RAG 让 13 万条消息<br class="hide-sm">
-          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案；
-          现在还能用任务中心把命中关键词的新消息投递到 8 个 RPA / Webhook 适配器。
+          Super Time 面向 <b>Windows 10/11 x64 上的微信 4.x</b>，读取你拥有合法访问权的本机数据目录，
+          提供会话与媒体回看、混合检索、<span class="typed" id="typed">可检索、可追溯、可引用</span> 的问答、
+          知识库、微信原生 OCR、洞察和消息触发任务。AI 与外部投递均为可选配置，不登录微信，也不需要账号密码。
         </p>
         <div class="hero-cta rv" style="--d:240ms">
           <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
             获取桌面版
           </a>
-          <a class="btn btn-ghost" href="#features">
+          <a class="btn btn-ghost" href="#about">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>
-            看看能做什么
+            先看能力边界
           </a>
         </div>
         <div class="hero-facts rv" style="--d:320ms">
-          <span class="chip"><b>0</b> 字节默认上传</span>
-          <span class="chip"><b>219</b> 个数据接口</span>
-          <span class="chip">Windows x64 · 单机运行</span>
-          <span class="chip">无需填写微信账号密码</span>
+          <span class="chip"><b>234</b> 个 Remote 方法</span>
+          <span class="chip"><b>8</b> 个消息触发通道</span>
+          <span class="chip">Windows 10/11 x64</span>
+          <span class="chip">无需微信账号密码</span>
         </div>
       </div>
 
       <!-- 控制台预览 -->
       <div class="mock-wrap rv" style="--d:200ms">
         <div class="mock-ring" aria-hidden="true"></div>
-        <div class="mock" role="img" aria-label="Super Time 控制台界面预览">
+        <div class="mock" role="img" aria-label="Super Time 控制台界面示意，展示的是示例数据">
           <div class="mock-bar">
             <i></i><i></i><i></i>
             <span class="t">super-time — 微信数据工作台</span>
-            <span class="live">LOCAL ONLY</span>
+            <span class="live">DEMO DATA</span>
           </div>
           <div class="mock-body">
             <div class="mock-rail">
@@ -902,9 +901,9 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
             </div>
             <div class="mock-main">
               <div class="kpis">
-                <div class="kpi"><em>消息总量</em><b class="c1" data-count="135482">0</b></div>
-                <div class="kpi"><em>会话数</em><b class="c2" data-count="1436">0</b></div>
-                <div class="kpi"><em>时间跨度</em><b class="c3">2018–2026</b></div>
+                <div class="kpi"><em>示例消息</em><b class="c1" data-count="135482">0</b></div>
+                <div class="kpi"><em>示例会话</em><b class="c2" data-count="1436">0</b></div>
+                <div class="kpi"><em>示例跨度</em><b class="c3">2018–2026</b></div>
               </div>
               <div class="panel-sm">
                 <h4>月度消息分布</h4>
@@ -922,11 +921,11 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         </div>
         <div class="float-badge f1">
           <svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg>
-          数据边界可逐条审计
+          界面示意 · 示例数据
         </div>
         <div class="float-badge f2">
           <svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/><circle cx="12" cy="12" r="9"/></svg>
-          本地向量索引就绪
+          本机解析与索引
         </div>
       </div>
     </div>
@@ -937,10 +936,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 <div class="band">
   <div class="wrap">
     <div class="stats">
-      <div class="stat rv"><b data-count="219">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
-      <div class="stat rv" style="--d:90ms"><b data-count="6000" data-suffix="+">0</b><span>自动化测试用例</span><em>600+ TEST FILES</em></div>
-      <div class="stat rv" style="--d:180ms"><b data-count="100" data-suffix="%">0</b><span>检索召回率 R@10</span><em>合成评测集</em></div>
-      <div class="stat rv" style="--d:270ms"><b data-count="135" data-suffix="k+">0</b><span>单机可检索消息量</span><em>LOCAL INDEX</em></div>
+      <div class="stat rv"><b data-count="234">0</b><span>Remote 方法</span><em>API SURFACE</em></div>
+      <div class="stat rv" style="--d:90ms"><b data-count="8">0</b><span>消息触发通道</span><em>WEBHOOK + RPA</em></div>
+      <div class="stat rv" style="--d:180ms"><b>本机存储</b><span>解析 / 索引 / 派生数据</span><em>ON DEVICE</em></div>
+      <div class="stat rv" style="--d:270ms"><b>AI 可选</b><span>模型与外部投递</span><em>OPT-IN</em></div>
     </div>
   </div>
 </div>
@@ -950,20 +949,21 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="release-card rv">
       <div class="release-meta">
-        <span class="release-ver">v1.1.0</span>
-        <time datetime="2026-10-22">2026.10.22</time>
+        <span class="release-ver">v1.1.2</span>
+        <time datetime="2026-11-05">2026.11.05</time>
       </div>
       <div class="release-copy">
-        <h2 id="releaseTitle">任务中心上线：让新消息直接触发自动化</h2>
-        <p>新增 8 个 Webhook / RPA 触发适配器，覆盖八爪鱼 API 与 MCP、影刀、UiPath、阿里云 RPA、来也、实在。命中关键词即可投递，失败可人工重投。</p>
+        <h2 id="releaseTitle">v1.1.2 · Windows x64 桌面版</h2>
+        <p>当前版本提供 234 个 Remote 方法、8 个消息触发通道，并整合会话与媒体回看、带引用问答、知识库、微信原生 OCR 与消息列表。安装包与逐版本说明见 GitHub Release。</p>
         <div class="release-points">
-          <span><b>219</b> 个后端接口</span>
-          <span><b>8</b> 个触发适配器</span>
-          <span><b>本机</b> 凭据按需回读</span>
+          <span><b>Windows x64</b> 桌面安装包</span>
+          <span><b>234</b> 个 Remote 方法</span>
+          <span><b>8</b> 个触发通道</span>
+          <span><b>AI</b> 可选配置</span>
         </div>
       </div>
-      <a class="release-link" href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.1.0">
-        查看更新
+      <a class="release-link" href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.1.2">
+        查看发布说明
         <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
       </a>
     </div>
@@ -975,57 +975,57 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-eyebrow">PRODUCT HIGHLIGHTS</div>
-      <h2>数据的价值应该留在<span class="grad-txt">数据产生的地方</span></h2>
-      <p>不做云端上传，不碰账号凭据。Super Time 把解析、索引、检索、生成四件事全部放在本机完成，只有在你自己打开模型通道时才出网。</p>
+      <h2>本机优先，也把<span class="grad-txt">边界说清楚</span></h2>
+      <p>本地解析、全文索引与检索在本机完成，Super Time 没有接收你数据的中转服务器。AI、模型下载、更新检查、远程媒体与外部投递仍有各自的出网点，逐条列在隐私声明里。</p>
     </div>
 
     <div class="grid-3">
       <div class="card hl js-tilt rv">
         <div class="num">01</div>
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></div>
-        <h3>数据不出本机</h3>
-        <p>读取本地数据目录、本地解密、本地建索引。默认不出网：只有你主动配置模型通道时才会发出检索到的少量上下文，且会联网的地方在「数据边界与出网」里逐条列明。</p>
-        <div class="tags"><i>联网位置可审计</i><i>脱敏审计</i><i>只读访问</i></div>
+        <h3>本机解析，出网边界透明</h3>
+        <p>读取本地数据目录、本地解密并建立索引。需要联网的位置会说明用途与目的地；应用没有全局出网开关，要求彻底离线时应配合系统防火墙或直接断网。</p>
+        <div class="tags"><i>本机索引</i><i>出网位置清单</i><i>无全局断网开关</i></div>
       </div>
 
       <div class="card hl js-tilt rv" style="--d:110ms">
         <div class="num">02</div>
         <div class="ico"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M11 8v6M8 11h6"/></svg></div>
         <h3>一句话读懂聊天史</h3>
-        <p>意图路由 + 稀疏 / 向量 / 结构化三通道召回 + RRF 融合 + 交叉特征重排。每条回答都带引用来源与检索漏斗，可回溯、可验证。</p>
+        <p>意图路由、稀疏 / 向量 / 结构化召回、RRF 融合与重排共同工作。回答保留稳定引用，可回到原消息或知识库片段核对，不把模型生成内容当成无来源事实。</p>
         <div class="tags"><i>intent-router</i><i>RRF fusion</i><i>可追溯引用</i></div>
       </div>
 
       <div class="card hl js-tilt rv" style="--d:220ms">
         <div class="num">03</div>
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg></div>
-        <h3>对齐官方视觉的回放</h3>
-        <p>文本、图片、语音、视频、引用、合并转发、表情包、公众号推送逐类型还原；本地语音转写让语音消息直接变成可搜索的文字。</p>
-        <div class="tags"><i>whisper.cpp</i><i>12+ 消息类型</i><i>就地播放</i></div>
+        <h3>媒体可看，语音与图片可搜</h3>
+        <p>文本、图片、语音、视频、引用、合并转发、表情包与公众号推送按类型呈现；whisper.cpp 在本机转写语音，聊天图片可通过微信原生 OCR 提取文字。</p>
+        <div class="tags"><i>whisper.cpp</i><i>微信原生 OCR</i><i>就地播放</i></div>
       </div>
 
       <div class="card hl js-tilt rv">
         <div class="num">04</div>
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div>
-        <h3>时间维度洞察</h3>
-        <p>日历热力图、年度报告、群聊活跃洞察、足迹地图。让「我们这两年聊了什么」从模糊感受变成可读的图形。</p>
-        <div class="tags"><i>年度报告</i><i>热力图</i><i>地理足迹</i></div>
+        <h3>年度、群聊与资金视图</h3>
+        <p>年度回顾、周期报告、群聊分析、朋友圈洞察、资金往来、日历热力图与足迹地图，把不同时间尺度的数据整理成可浏览的视图。</p>
+        <div class="tags"><i>年度报告</i><i>群聊分析</i><i>资金往来</i></div>
       </div>
 
       <div class="card hl js-tilt rv" style="--d:110ms">
         <div class="num">05</div>
         <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7.5 10 10m4 0 3-2.5M7 16.5 10 14m4 0 3 2.5"/></svg></div>
-        <h3>洞察沉淀为知识</h3>
-        <p>知识图谱串联人、群、话题与时间；转账台账、群聊洞察、每日 / 周期总结自动成文，可继续二次编辑。</p>
-        <div class="tags"><i>knowledge graph</i><i>台账</i><i>周期总结</i></div>
+        <h3>知识库与知识图谱</h3>
+        <p>同一知识库内管理笔记、文件与文档实体，以关键词和向量两路检索；知识图谱展示笔记之间的 [[...]] 链接与待解析节点，不把通讯录关系混进来。</p>
+        <div class="tags"><i>笔记 / 文件</i><i>knowledge graph</i><i>带引用问答</i></div>
       </div>
 
       <div class="card hl js-tilt rv" style="--d:220ms">
         <div class="num">06</div>
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h9M4 12h6M4 18h5"/><path d="m15 5 4 4-4 4"/><path d="m15 11 4 4-4 4"/></svg></div>
-        <h3>新消息触发任务自动化</h3>
-        <p>任务中心监听你指定的会话与关键词，把命中消息投递到 Webhook 或 8 个 RPA 适配器。触发记录保留原文与投递状态，失败可人工重投。</p>
-        <div class="tags"><i>8 个适配器</i><i>失败重投</i><i>本机凭据</i></div>
+        <h3>新消息进入可追溯的任务链</h3>
+        <p>任务中心只检查创建或启用之后的新消息，命中后写入触发记录并投递到 8 个触发通道（含 Webhook）；消息列表保留回复与投递状态。可选 AI 回复默认关闭，需要另行部署 Feather 兼容发送端。</p>
+        <div class="tags"><i>8 个触发通道</i><i>消息列表</i><i>Feather 可选</i></div>
       </div>
     </div>
   </div>
@@ -1036,34 +1036,30 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-eyebrow">CORE CAPABILITIES</div>
-      <h2>六大模块，覆盖<span class="grad-txt">从读取到行动</span>的完整链路</h2>
-      <p>每个模块都建立在同一份本地索引之上 —— 不是六个彼此割裂的小工具，而是一条贯通数据、问答与自动化的管线。</p>
+      <h2>五个能力域，覆盖<span class="grad-txt">从读取到行动</span>的完整链路</h2>
+      <p>每个能力域使用本机数据，或使用你显式配置的外部服务。需要联网的问答、模型索引、图片解析与投递都有明确入口，不能联网时部分本地检索与视图仍可继续使用。</p>
     </div>
 
     <div class="tabs rv" role="tablist" aria-label="核心功能">
       <button class="tab on" role="tab" aria-selected="true" data-pane="p1">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.6"/><rect x="14" y="3" width="7" height="5" rx="1.6"/><rect x="14" y="12" width="7" height="9" rx="1.6"/><rect x="3" y="16" width="7" height="5" rx="1.6"/></svg>
-        数据看板
+        会话与媒体
       </button>
       <button class="tab" role="tab" aria-selected="false" data-pane="p2">
         <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg>
-        AI 问答与检索
+        检索与引用问答
       </button>
       <button class="tab" role="tab" aria-selected="false" data-pane="p3">
-        <svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg>
-        隐私与合规
+        <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+        洞察与回顾
       </button>
       <button class="tab" role="tab" aria-selected="false" data-pane="p4">
-        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
-        媒体资产
+        <svg viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5z"/><path d="M8 7h6M8 11h6"/></svg>
+        知识库 · OCR
       </button>
       <button class="tab" role="tab" aria-selected="false" data-pane="p5">
-        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg>
-        微信接入
-      </button>
-      <button class="tab" role="tab" aria-selected="false" data-pane="p6">
         <svg viewBox="0 0 24 24"><path d="M4 6h8M4 12h5M4 18h4"/><path d="m14 5 5 4-5 4"/><path d="m14 11 5 4-5 4"/></svg>
-        任务中心 · RPA
+        任务中心 · 消息列表
       </button>
     </div>
 
@@ -1071,24 +1067,24 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="pane on" id="p1" role="tabpanel">
       <div class="pane-grid">
         <div>
-          <h3>把聊天记录翻成一页一页的图表</h3>
-          <p class="desc">会话、消息、联系人、群聊、通话、撤回、文件、收藏被拆成独立视图，同一套筛选与搜索贯穿其中。</p>
+          <h3>会话、朋友圈、收藏与文件，按时间线重新组织</h3>
+          <p class="desc">从本机微信数据目录读取已解密副本，在同一套界面里浏览会话、消息与各类媒体。应用不登录微信，普通浏览路径不修改原始数据库。</p>
           <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>总览与健康</b>：消息总量、活跃时段、存储占用、数据完整性自检</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>会话与记录</b>：按类型 / 时间 / 关键词筛选，视觉语言对齐官方客户端</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>群聊洞察</b>：发言人分布、活跃度曲线、话题集中度</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>时间与地理</b>：日历热力图、年度报告、城市 / 世界足迹地图</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>会话与消息</b>：文本、图片、语音、视频、引用、合并转发、表情包与公众号推送按类型呈现，支持筛选和搜索</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>朋友圈、收藏与文件</b>：朋友圈时间线、收藏与表情、文件与媒体资产分域浏览；本机缓存缺失时，部分媒体会从腾讯 CDN 按需取回</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音与存储</b>：whisper.cpp 在本机转写语音；文件网格、媒体资产与存储分析帮助定位占用</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>只读优先</b>：不需要微信账号密码；自动取密钥通常要求微信正在运行，也可手动填写。实验性原图自动下载默认关闭</span></li>
           </ul>
         </div>
         <div class="visual">
-          <div class="vhead"><b>SESSIONS / OVERVIEW</b><span>● LIVE</span></div>
+          <div class="vhead"><b>SESSIONS / MEDIA</b><span>● LOCAL INDEX</span></div>
           <div class="vrow">
-            <div class="vcell"><span class="av">产</span><span class="tx"><b>产品攻坚群</b><span>散会，明天同步下版本节奏</span></span><span class="mt">21:04</span></div>
-            <div class="vcell"><span class="av">李</span><span class="tx"><b>李工</b><span>[语音] 23″ · 已转写</span></span><span class="mt">20:41</span></div>
-            <div class="vcell"><span class="av">财</span><span class="tx"><b>财务通知</b><span>微信转账 收到转账 3,500.00 元</span></span><span class="mt">18:12</span></div>
-            <div class="vcell"><span class="av">王</span><span class="tx"><b>王总</b><span>合同差额 2000 的客户是谁来着？</span></span><span class="mt">昨天</span></div>
+            <div class="vcell"><span class="av">会</span><span class="tx"><b>会话与消息</b><span>文本 · 图片 · 语音 · 引用 · 合并转发</span></span></div>
+            <div class="vcell"><span class="av">圈</span><span class="tx"><b>朋友圈</b><span>时间线浏览 · 本地优先 · CDN 兜底</span></span></div>
+            <div class="vcell"><span class="av">藏</span><span class="tx"><b>收藏与表情</b><span>按类型归档 · 媒体详情</span></span></div>
+            <div class="vcell"><span class="av">文</span><span class="tx"><b>文件与语音</b><span>文件网格 · whisper.cpp 本地转写</span></span></div>
           </div>
-          <div class="tagline"><i>1436 会话</i><i>135,482 条消息</i><i>2018–2026</i></div>
+          <div class="tagline"><i>会话流</i><i>朋友圈</i><i>收藏与表情</i><i>文件与媒体</i></div>
         </div>
       </div>
     </div>
@@ -1097,39 +1093,24 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="pane" id="p2" role="tabpanel">
       <div class="pane-grid">
         <div>
-          <h3>不是「搜关键词」，是「问一句话」</h3>
-          <p class="desc">同一条问题，先判意图再决定策略；三路召回各自擅长不同的问法，融合后按 6 个特征重排，最后压缩成上下文交给模型。</p>
+          <h3>先找证据，再让模型回答问题</h3>
+          <p class="desc">问题先经过意图与范围判断，再由词法、语义和结构化检索取证；融合后的证据带有稳定引用，可回到原消息或知识库片段核对。</p>
           <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>意图路由</b>：最近一次 / 问某人 / 时间区间 / 聚合 / 对比 / 开放问答，各走各的参数</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>三通道召回</b>：BM25 词法精确、向量语义泛化、结构化实体与时间窗</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>会话内直问</b>：在群聊 / 单聊里边看边问，范围恒等于当前会话，不必来回切换</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>反馈闭环</b>：赞 / 踩与逐条引用标注回流成权重调整，越用越贴合你的语料</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>混合检索</b>：SQLite FTS5 / BM25、向量余弦与结构化时间 / 实体过滤并行，RRF 融合后重排</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>引用可回放</b>：消息与知识库片段使用稳定键定位，结论可以回到原始证据查看上下文</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>范围受限</b>：支持微信问答、会话内提问和当前知识库检索；会话内问答不会自动扩大到其它会话</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>模型可选</b>：可接入 OpenAI 兼容接口或本地模型；向量索引、摘要和生成会按具体调用使用你配置的服务</span></li>
           </ul>
         </div>
         <div class="visual">
-          <div class="vhead"><b>RETRIEVAL PIPELINE</b><span>● DENSE ACTIVE</span></div>
-          <div class="flowmap">
-            <div class="row"><span class="node hot">意图路由</span><span class="arw">→</span><span class="node">查询改写</span><span class="arw">→</span><span class="node v">稀疏 BM25</span><span class="node v">稠密向量</span><span class="node v">结构化</span></div>
-            <div class="row"><span class="arw">↓ RRF 融合与去重</span></div>
-            <div class="row"><span class="node hot">交叉特征重排</span><span class="arw">→</span><span class="node">上下文压缩</span><span class="arw">→</span><span class="node hot">生成与引用</span></div>
+          <div class="vhead"><b>RETRIEVAL / EVIDENCE</b><span>● TRACEABLE</span></div>
+          <div class="vrow">
+            <div class="vcell"><span class="av">意</span><span class="tx"><b>意图与范围</b><span>当前会话 / 时间 / 人物 / 聚合 / 开放问答</span></span></div>
+            <div class="vcell"><span class="av">检</span><span class="tx"><b>三路取证</b><span>BM25 · 向量余弦 · 结构化过滤</span></span></div>
+            <div class="vcell"><span class="av">融</span><span class="tx"><b>融合与重排</b><span>RRF · 去重 · 交叉特征重排</span></span></div>
+            <div class="vcell"><span class="av">引</span><span class="tx"><b>引用与回放</b><span>原消息 / 知识库块 · 稳定键 · 可核对</span></span></div>
           </div>
-          <div class="meter" style="margin-top:16px">
-            <div class="lbl"><span>Recall@10</span><b>100%</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>MRR</span><b>1.000</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>NDCG@10</span><b>0.967</b></div>
-            <div class="track"><div class="fill" data-w="96"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>意图分类准确率</span><b>7 / 7</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="tagline"><i>合成评测集</i><i>可一键复现</i><i>混合 vs 纯稀疏可消融</i></div>
+          <div class="tagline"><i>证据优先</i><i>范围受限</i><i>降级可解释</i><i>引用回原文</i></div>
         </div>
       </div>
     </div>
@@ -1138,24 +1119,24 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="pane" id="p3" role="tabpanel">
       <div class="pane-grid">
         <div>
-          <h3>先划清边界，再谈能力</h3>
-          <p class="desc">所有出网点都经过统一闸门：拦截即拒绝、脱敏即改写并记账。任何一步失败都不阻断主流程，而是逐级降级。</p>
+          <h3>从消息流里读出时间、关系与资金脉络</h3>
+          <p class="desc">年度报告、群聊分析、朋友圈洞察、资金往来和日历视图共享本机数据，但各自使用不同的聚合口径；页面会说明统计范围，而不是把展示结果包装成效果承诺。</p>
           <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>数据边界可审计</b>：会联网的位置逐条列明（域名 / 用途 / 触发条件），关掉模型通道就地降级为纯本地检索</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>敏感字段脱敏</b>：发送前改写手机号、证件号、卡号等，并写入隐私审计</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>凭据只在本机</b>：模型与密钥存入本地配置，不随应用分发、不进版本库</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>许可与审计</b>：本地许可闸门控制功能可见性，操作日志留存关键动作</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>年度与周期报告</b>：按年度聚合消息、关系与高光内容，生成可继续编辑的回顾材料</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>群聊与朋友圈分析</b>：成员活跃、消息分布、朋友圈时间线与互动洞察，分别使用对应数据域</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>资金往来</b>：从转账、红包等消息中整理台账与明细，结果以本机原始消息为依据</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>日历与地理</b>：按日期热力图与足迹地图查看时间、城市分布；地图底图属于网络出网点</span></li>
           </ul>
         </div>
         <div class="visual">
-          <div class="vhead"><b>PRIVACY TRUST</b><span>● GATE ON</span></div>
+          <div class="vhead"><b>INSIGHTS / REVIEW</b><span>● LOCAL AGGREGATION</span></div>
           <div class="vrow">
-            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#5eead4,#22d3ee)">✓</span><span class="tx"><b>数据边界</b><span>联网位置逐条可审计</span></span></div>
-            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#5eead4,#22d3ee)">✓</span><span class="tx"><b>敏感字段脱敏</b><span>12 类规则 · 命中即改写</span></span></div>
-            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">i</span><span class="tx"><b>向量索引</b><span>全部在本机构建与查询</span></span></div>
-            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">i</span><span class="tx"><b>审计日志</b><span>关键动作可回溯</span></span></div>
+            <div class="vcell"><span class="av">年</span><span class="tx"><b>年度回顾</b><span>按年聚合 · 可编辑叙述</span></span></div>
+            <div class="vcell"><span class="av">群</span><span class="tx"><b>群聊分析</b><span>成员分布 · 活跃度 · 话题视图</span></span></div>
+            <div class="vcell"><span class="av">账</span><span class="tx"><b>资金往来</b><span>转账 / 红包 · 按月汇总与明细</span></span></div>
+            <div class="vcell"><span class="av">历</span><span class="tx"><b>日历与足迹</b><span>时间热力 · 城市地图</span></span></div>
           </div>
-          <div class="tagline"><i>local-first</i><i>fail-soft</i><i>audit-trail</i></div>
+          <div class="tagline"><i>年度报告</i><i>群聊分析</i><i>资金台账</i><i>日历与足迹</i></div>
         </div>
       </div>
     </div>
@@ -1164,40 +1145,24 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="pane" id="p4" role="tabpanel">
       <div class="pane-grid">
         <div>
-          <h3>图片、语音、视频、朋友圈，一个都不少</h3>
-          <p class="desc">本地解码让沉睡在缓存目录里的媒体重新变得可看、可听、可搜索；转写后的语音与视频直接进入同一条检索链路。</p>
+          <h3>文件、笔记和图片文字，进入同一套证据链</h3>
+          <p class="desc">知识库按库隔离笔记、文件与知识图谱；聊天图片的微信原生 OCR 与 AI 图片解析是两个独立入口，前者在本机执行，后者只有你点击时才会把图片交给配置好的多模态模型。</p>
           <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>朋友圈时间线</b>：图片与视频就地解密播放，按人 / 按月回看</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音转文字</b>：内置 whisper.cpp，离线转写，随消息一起被检索</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>表情与收藏</b>：表情包、收藏夹、文件按类型归档</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>导出与备份</b>：导出结构化数据，配置与索引可整体备份迁移</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>知识库</b>：导入文件后解析、分块，以 FTS5 与向量两路检索；语义索引和文件摘要会使用你配置的模型</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>知识图谱</b>：展示同一知识库内的笔记、wiki 链接、未解析节点和文档实体，不混入通讯录关系</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>微信原生 OCR</b>：点击图片旁 <b>?</b> 后调用本机 WeChatOcr 插件，不上传图片；需要兼容的 Windows x64 微信 4.x 与已下载插件</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>AI 图片解析</b>：点击 <b>AI</b> 才会把图片发给当前多模态模型，可提取结构化 JSON；模型必须支持读图，结果需人工核对</span></li>
           </ul>
         </div>
         <div class="visual">
-          <div class="vhead"><b>MEDIA ASSETS</b><span>● 4 TYPES</span></div>
-          <div class="vrow" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
-              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#7ef0ff;fill:none;stroke-width:1.7"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
-              <span style="font-size:11.5px;color:#9aa6c9">图片</span>
-            </div>
-            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
-              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#c4b5fd;fill:none;stroke-width:1.7"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M18 11a6 6 0 0 1-12 0M12 17v4"/></svg>
-              <span style="font-size:11.5px;color:#9aa6c9">语音</span>
-            </div>
-            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
-              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#f9a8d4;fill:none;stroke-width:1.7"><rect x="2.5" y="5" width="14" height="14" rx="2.5"/><path d="m17 10 4.5-3v10L17 14z"/></svg>
-              <span style="font-size:11.5px;color:#9aa6c9">视频</span>
-            </div>
+          <div class="vhead"><b>KNOWLEDGE / NATIVE OCR</b><span>● ON DEMAND</span></div>
+          <div class="vrow">
+            <div class="vcell"><span class="av">库</span><span class="tx"><b>文件与笔记</b><span>解析 · 分块 · FTS5 + 向量检索</span></span></div>
+            <div class="vcell"><span class="av">图</span><span class="tx"><b>知识图谱</b><span>wiki 链接 · 未解析节点 · 文档实体</span></span></div>
+            <div class="vcell"><span class="av">?</span><span class="tx"><b>微信原生 OCR</b><span>本机插件 · 不调用云端识图</span></span></div>
+            <div class="vcell"><span class="av">AI</span><span class="tx"><b>AI 图片解析</b><span>显式点击 · 图片发往当前多模态模型</span></span></div>
           </div>
-          <div class="meter" style="margin-top:16px">
-            <div class="lbl"><span>本地转写引擎</span><b>whisper.cpp</b></div>
-            <div class="track"><div class="fill" data-w="88"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>朋友圈视频解密</span><b>WASM 本地</b></div>
-            <div class="track"><div class="fill" data-w="80"></div></div>
-          </div>
-          <div class="tagline"><i>offline decode</i><i>可检索媒体</i><i>一键导出</i></div>
+          <div class="tagline"><i>按库隔离</i><i>OCR 不上传</i><i>AI 图片出网</i><i>结果可核对</i></div>
         </div>
       </div>
     </div>
@@ -1206,137 +1171,29 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="pane" id="p5" role="tabpanel">
       <div class="pane-grid">
         <div>
-          <h3>让 AI 替你收发微信消息</h3>
-          <p class="desc">扫码绑定后，本机常驻一条长轮询通道。收到的消息落进本地会话库，AI 按你写的人设自动回复；回复内容与检索范围都受同一套闸门约束。</p>
+          <h3>把命中消息变成可检查的任务记录</h3>
+          <p class="desc">任务中心只监听创建或启用之后的新消息。命中后先生成触发记录，再按你选择的 Webhook 或 RPA 厂商投递；消息列表负责记录生成、附件与投递状态。</p>
           <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>扫码绑定</b>：一次扫码完成接入，不需要 App ID / App Secret，也不要求账号密码</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>多实例</b>：一个微信号 = 一个实例，各自的通道、会话与行为配置互不干扰</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>人设可写</b>：每个实例一份系统提示词，内置拟人化默认值，长回复按语义分段发出</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>数据面收窄</b>：自动回复只检索你选的知识库，不碰本机微信数据；默认关闭、逐条审计</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>触发条件</b>：指定会话、群成员与关键词；群聊可选仅匹配 @我，不回扫历史消息</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>8 个触发通道</b>：Webhook、八爪鱼开放 API / MCP、影刀、UiPath、阿里云、来也、实在；其中四个厂商通道标记为实验性</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>消息列表</b>：保存任务问候、手动与入站记录、附件和投递状态；失败可按规则重投，触发原文与图片引用留在本机台账</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>可选 AI 回复</b>：默认关闭、仅单聊，依赖额外部署的 Feather 兼容发送端；生成正文先写入消息列表，再由你配置的下游投递</span></li>
           </ul>
         </div>
         <div class="visual">
-          <div class="vhead"><b>CLAWBOT PIPELINE</b><span>● 长轮询中</span></div>
+          <div class="vhead"><b>TASK CENTER / MESSAGE LIST</b><span>● NEW MESSAGES ONLY</span></div>
           <div class="flowmap">
-            <div class="row"><span class="node hot">扫码绑定</span><span class="arw">→</span><span class="node">长轮询收消息</span><span class="arw">→</span><span class="node v">落本地会话库</span></div>
-            <div class="row"><span class="arw">↓ 附件自动取回 · 本地解密</span></div>
-            <div class="row"><span class="node hot">AI 生成回复</span><span class="arw">→</span><span class="node">语义分段</span><span class="arw">→</span><span class="node hot">经 iLink 回发</span></div>
+            <div class="row"><span class="node hot">新消息</span><span class="arw">→</span><span class="node">对象 / @我</span><span class="arw">→</span><span class="node">关键词命中</span><span class="arw">→</span><span class="node v">触发记录</span></div>
+            <div class="row"><span class="arw">↓ 隐私闸 · 显式参数映射 · 消息列表台账</span></div>
+            <div class="row"><span class="node hot">Webhook / RPA</span><span class="arw">或</span><span class="node">消息列表</span><span class="arw">→</span><span class="node v">Feather 可选</span></div>
           </div>
-          <div class="meter" style="margin-top:16px">
-            <div class="lbl"><span>数据面</span><b>仅知识库</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
+          <div class="vrow" style="margin-top:12px">
+            <div class="vcell"><span class="av">新</span><span class="tx"><b>仅新消息</b><span>创建 / 启用之后开始监听，不回扫历史</span></span></div>
+            <div class="vcell"><span class="av">状</span><span class="tx"><b>状态可追溯</b><span>触发原文 · 投递状态 · 可读错误 · 重投</span></span></div>
+            <div class="vcell"><span class="av">达</span><span class="tx"><b>受理不等于送达</b><span>HTTP 2xx 或 queued 仍需等待下游终态</span></span></div>
           </div>
-          <div class="meter">
-            <div class="lbl"><span>默认状态</span><b>关闭</b></div>
-            <div class="track"><div class="fill" data-w="0"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>每次回复</span><b>写操作日志</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>单条回复上限</span><b>2000 字</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="tagline"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
+          <div class="tagline"><i>仅新消息</i><i>8 个通道</i><i>消息列表</i><i>queued ≠ 已送达</i></div>
         </div>
-      </div>
-    </div>
-
-    <!-- P6 -->
-    <div class="pane" id="p6" role="tabpanel">
-      <div class="pane-grid">
-        <div>
-          <h3>命中关键词，自动执行下一步</h3>
-          <p class="desc">任务中心只监听创建或启用之后的新消息。命中后先生成一条可追溯的触发记录，再按你选择的 Webhook 或 RPA 厂商投递。</p>
-          <ul class="flist">
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>关键词触发</b>：指定会话、群成员与关键词；群聊可选仅匹配@我，不回扫历史消息</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>8 个触发适配器</b>：Webhook、八爪鱼 API / MCP、影刀、UiPath、阿里云 RPA、来也、实在</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>失败可追溯</b>：保留触发原文、投递状态与可读错误；失败记录支持人工重新投递</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>凭据不出设备</b>：敏感字段只存本机，仅桌面端可按需查看；远程浏览器通道拒绝读取</span></li>
-          </ul>
-        </div>
-        <div class="visual">
-          <div class="vhead"><b>TASK CENTER · DISPATCH</b><span>● WATCHING</span></div>
-          <div class="flowmap">
-            <div class="row"><span class="node hot">新消息</span><span class="arw">→</span><span class="node">对象 / @我</span><span class="arw">→</span><span class="node v">关键词命中</span></div>
-            <div class="row"><span class="arw">↓ 隐私闸 · 参数映射</span></div>
-            <div class="row"><span class="node hot">Webhook / RPA</span><span class="arw">→</span><span class="node">厂商已受理</span><span class="arw">→</span><span class="node v">失败重投</span></div>
-          </div>
-          <div class="meter" style="margin-top:16px">
-            <div class="lbl"><span>触发方式</span><b>8 个适配器</b></div>
-            <div class="track"><div class="fill" data-w="100"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>凭据范围</span><b>仅本机</b></div>
-            <div class="track"><div class="fill" data-w="72"></div></div>
-          </div>
-          <div class="meter">
-            <div class="lbl"><span>历史回扫</span><b>不提供</b></div>
-            <div class="track"><div class="fill" data-w="0"></div></div>
-          </div>
-          <div class="tagline"><i>消息驱动</i><i>参数显式配置</i><i>结果可追溯</i></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 微信接入（ClawBot） ============ -->
-<section id="clawbot">
-  <div class="wrap">
-    <div class="sec-head rv">
-      <div class="sec-eyebrow">WECHAT BRIDGE · CLAWBOT</div>
-      <h2>把微信接进来，让 AI <span class="grad-txt">替你收发消息</span></h2>
-      <p>扫码绑定一个微信号，本机常驻一条长轮询通道：收到的消息落进本地会话库，AI 可以按你写的人设自动回复。全程不填账号密码，不碰微信数据面。</p>
-    </div>
-
-    <div class="grid-3">
-      <div class="card hl js-tilt rv">
-        <div class="num">01</div>
-        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
-        <h3>扫码即绑定，无需密钥</h3>
-        <p>用微信扫一次码就完成接入，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到。</p>
-        <div class="tags"><i>iLink 协议</i><i>凭证不出本机</i><i>可随时解绑</i></div>
-      </div>
-
-      <div class="card hl js-tilt rv" style="--d:110ms">
-        <div class="num">02</div>
-        <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg></div>
-        <h3>AI 自动回复，人设由你定</h3>
-        <p>每个实例一份系统提示词，内置一套拟人化默认值（像真人发微信那样口语、简短、自然）。长回复按语义切成几条依次发出，不会一条几千字刷屏。</p>
-        <div class="tags"><i>自定义人设</i><i>语义分段</i><i>逐条审计</i></div>
-      </div>
-
-      <div class="card hl js-tilt rv" style="--d:220ms">
-        <div class="num">03</div>
-        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></div>
-        <h3>数据面刻意收窄</h3>
-        <p>自动回复只检索你为它选的知识库，<b>不碰本机微信数据</b>。默认关闭、开关就在实例卡上、每次回复写一行操作日志 —— 无人值守出网必须你显式开启。</p>
-        <div class="tags"><i>仅知识库</i><i>默认关闭</i><i>操作日志</i></div>
-      </div>
-    </div>
-
-    <div class="pane-grid rv" style="margin-top:26px">
-      <div>
-        <h3>一个微信号 = 一个实例，可以同时管几个</h3>
-        <p class="desc">每个实例有独立的通道、会话与行为配置：各自的自动回复开关、各自的知识库、各自的提示词。实例轨常驻左侧，点一下就能切换。</p>
-        <ul class="flist">
-          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>接入会话</b>：收到的消息按会话留存，支持筛选、导出 TXT / CSV、清除历史</span></li>
-          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>附件自动取回</b>：图片 / 语音 / 视频 / 文件收到即从 CDN 取回并本地解密缓存</span></li>
-          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音转写</b>：优先用微信自带的转写文本，没有则留占位与时长</span></li>
-          <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>环境自检</b>：通道状态、绑定详情、常见问题排障指引都在设置页</span></li>
-        </ul>
-      </div>
-      <div class="visual">
-        <div class="vhead"><b>CLAWBOT · 接入会话</b><span>● 长轮询中</span></div>
-        <div class="vrow">
-          <div class="vcell"><span class="av">李</span><span class="tx"><b>李工</b><span>明天那个方案能出个初稿吗？</span></span><span class="mt">21:04</span></div>
-          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>可以，我今晚先把框架搭出来，明早发你过一遍。</span></span><span class="mt">21:04</span></div>
-          <div class="vcell"><span class="av">王</span><span class="tx"><b>王总</b><span>[语音] 18″ · 已转写</span></span><span class="mt">20:41</span></div>
-          <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">AI</span><span class="tx"><b>Super Time（自动回复）</b><span>收到，我按您说的顺序调整一下。</span></span><span class="mt">20:41</span></div>
-        </div>
-        <div class="tagline"><i>仅知识库检索</i><i>默认关闭</i><i>逐条可审计</i></div>
       </div>
     </div>
   </div>
@@ -1347,8 +1204,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-eyebrow">SOLUTIONS</div>
-      <h2>谁在用 Super Time</h2>
-      <p>共同点是：数据属于自己，又确实需要被重新读一遍。所有场景都要求你使用对数据拥有合法访问权的账号。</p>
+      <h2>这些工作流适合用它</h2>
+      <p>下面描述的是适用场景，不是客户证言或收益承诺。所有场景都要求你只处理自己拥有合法访问权的数据，并提前核对系统、模型和下游通道的配置。</p>
     </div>
 
     <div class="grid-4">
@@ -1357,12 +1214,12 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></div>
           <span class="plan">PERSONAL</span>
         </div>
-        <h3>个人数据资产化</h3>
-        <p>几年的聊天记录不该只躺在硬盘角落里。把它变成能检索、能回看、能带走的个人档案。</p>
+        <h3>个人记忆与资料回溯</h3>
+        <p>适合希望重新检索自己多年聊天记录、把重要节点整理成个人档案的用户。原始数据在本机解析与存储，AI 与外部投递按需配置。</p>
         <ul>
-          <li>年度 / 月度回顾自动成文</li>
-          <li>重要约定与账单快速定位</li>
-          <li>导出结构化数据长期留存</li>
+          <li>按人物、时间或话题检索历史消息</li>
+          <li>回答带引用，可回原消息核对</li>
+          <li>年度回顾与结构化导出</li>
         </ul>
         <div class="glow"></div>
       </div>
@@ -1370,29 +1227,30 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <div class="card sol js-tilt rv" style="--d:110ms">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
-          <span class="plan">ASSISTANT</span>
+          <span class="plan">PROJECT</span>
         </div>
-        <h3>微信里的 AI 助理</h3>
-        <p>扫码把微信接进来，让 AI 按你写的人设替你回消息 —— 出差、开会、睡觉时也不漏掉重要的人。</p>
+        <h3>项目复盘与交接</h3>
+        <p>适合咨询、交付与自由职业场景，在受控工作站上复盘自己有权限访问的客户沟通记录。当前是单机工具，不承诺多人云协作。</p>
         <ul>
-          <li>自定义人设与语气，长回复按语义分段发出</li>
-          <li>只检索你选的知识库，不碰本机微信数据</li>
-          <li>默认关闭、逐条审计，随时可解绑</li>
+          <li>跨会话检索需求、承诺与修改意见</li>
+          <li>关键结论保留引用，方便交接核对</li>
+          <li>备份与导出用于本地归档</li>
         </ul>
         <div class="glow"></div>
       </div>
 
       <div class="card sol js-tilt rv" style="--d:220ms">
         <div class="top">
-          <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9.5 21v-6h5v6"/></svg></div>
-          <span class="plan">TEAM</span>
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h9M4 12h6M4 18h5"/><path d="m15 5 4 4-4 4"/><path d="m15 11 4 4-4 4"/></svg></div>
+          <span class="plan">AUTOMATION</span>
         </div>
-        <h3>团队内部数据治理</h3>
-        <p>用自有账号授权的工作沟通记录做内部复盘与合规自查，全程离线，敏感内容不出办公网络。</p>
+        <h3>消息触发与流程衔接</h3>
+        <p>适合已有 Webhook、CRM、工单或 RPA 流程，希望把指定微信新消息接入现有系统的运营、销售与客服团队。</p>
         <ul>
-          <li>联网位置可审计，敏感内容可先跑隐私体检再决定是否开模型通道</li>
-          <li>关键操作留痕，满足内部审计</li>
-          <li>许可闸门控制功能可见范围</li>
+          <li>按会话、对象与关键词匹配新消息</li>
+          <li>Webhook 与 7 个 RPA 适配器，共 8 个触发通道</li>
+          <li>消息列表保留投递状态，失败可重投</li>
+          <li>部分 RPA 通道为实验性，需要自行准备厂商权限</li>
         </ul>
         <div class="glow"></div>
       </div>
@@ -1400,14 +1258,15 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <div class="card sol js-tilt rv" style="--d:220ms">
         <div class="top">
           <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5z"/><path d="M8 7h6M8 11h6"/></svg></div>
-          <span class="plan">CREATOR</span>
+          <span class="plan">KNOWLEDGE</span>
         </div>
-        <h3>创作者与研究者的资料库</h3>
-        <p>把社群对话、访谈、素材群沉淀成可被提问的知识底稿，写作时直接问，不必再爬聊天记录。</p>
+        <h3>资料整理与图片文字提取</h3>
+        <p>适合需要整理笔记、文档、截图和聊天图片的个人或小型团队。图片 OCR 在本机执行；AI 字段提取是另一条显式出网路径。</p>
         <ul>
-          <li>知识图谱串联人 / 群 / 话题</li>
-          <li>会话内直接提问与追问问答</li>
-          <li>总结可直接进入二次编辑</li>
+          <li>知识库内混合检索笔记与文件</li>
+          <li>微信原生 OCR 提取图片文字</li>
+          <li>可选用多模态模型提取结构化字段</li>
+          <li>OCR 需微信插件兼容，AI 结果需人工核对</li>
         </ul>
         <div class="glow"></div>
       </div>
@@ -1415,125 +1274,117 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   </div>
 </section>
 
-<!-- ============ 客户案例 ============ -->
-<section id="cases" class="cases-section" aria-labelledby="casesTitle">
+<!-- ============ 场景示例 ============ -->
+<section id="scenarios" class="cases-section" aria-labelledby="scenariosTitle">
   <div class="wrap">
     <div class="sec-head rv">
-      <div class="sec-eyebrow">CASE STUDIES</div>
-      <h2 id="casesTitle">真实工作流里，数据开始产生结果</h2>
-      <p>以下案例来自脱敏后的客户使用记录与回访。客户名称、群名和原始消息均已隐去，保留的是问题、做法与可核对的结果。</p>
+      <div class="sec-eyebrow">SCENARIO EXAMPLES</div>
+      <h2 id="scenariosTitle">四个可以落地的工作流</h2>
+      <p>以下是为说明产品能力而整理的场景示例，不是客户案例、客户证言或实测收益。展开后可查看适用对象、使用前提、操作路径与明确边界。</p>
     </div>
 
     <div class="case-toolbar rv">
-      <div class="case-filters" role="group" aria-label="按场景筛选客户案例">
-        <button class="case-filter on" type="button" data-filter="all" aria-pressed="true">全部案例</button>
-        <button class="case-filter" type="button" data-filter="creator" aria-pressed="false">内容创作</button>
-        <button class="case-filter" type="button" data-filter="team" aria-pressed="false">咨询团队</button>
-        <button class="case-filter" type="button" data-filter="operations" aria-pressed="false">电商运营</button>
-        <button class="case-filter" type="button" data-filter="personal" aria-pressed="false">个人效率</button>
+      <div class="case-filters" role="group" aria-label="按使用场景筛选">
+        <button class="case-filter on" type="button" data-filter="all" aria-pressed="true">全部场景</button>
+        <button class="case-filter" type="button" data-filter="personal" aria-pressed="false">个人回顾</button>
+        <button class="case-filter" type="button" data-filter="team" aria-pressed="false">项目复盘</button>
+        <button class="case-filter" type="button" data-filter="automation" aria-pressed="false">消息自动化</button>
+        <button class="case-filter" type="button" data-filter="knowledge" aria-pressed="false">资料整理</button>
       </div>
-      <div class="case-count" id="caseCount" aria-live="polite"><b>4</b> 个脱敏案例</div>
+      <div class="case-count" id="scenarioCount" aria-live="polite"><b>4</b> 个场景示例</div>
     </div>
 
-    <div class="case-grid" id="caseGrid" aria-label="客户案例列表"></div>
-    <noscript><p class="case-noscript">请启用 JavaScript 查看可筛选、可展开的客户案例。</p></noscript>
-    <p class="case-footnote rv">案例均经匿名化处理；耗时与比例来自实际使用记录的区间整理，具体结果会随数据规模、设备与配置而变化。</p>
+    <div class="case-grid" id="scenarioGrid" aria-label="使用场景示例列表"></div>
+    <noscript><p class="case-noscript">请启用 JavaScript 查看可筛选、可展开的使用场景示例。</p></noscript>
+    <p class="case-footnote rv">场景示例不构成效果保证。实际可用性取决于本机数据、微信版本、索引完整度、模型与 RPA 配置、网络环境及你获得的授权。</p>
   </div>
 </section>
 
-<script type="application/json" id="caseData">
+<script type="application/json" id="scenarioData">
 [
   {
     "order": 1,
-    "category": "creator",
-    "categoryLabel": "内容创作",
-    "title": "写了一年没复用的素材，终于能被重新找到",
-    "summary": "读者群里的真实提问，原本是选题金矿；现在它们成了可追问、可引用的长期知识库。",
-    "client": {
-      "role": "独立内容创作者",
-      "scale": "3 年 · 86 个读者 / 素材群 · 约 42 万条消息"
-    },
-    "pain": "选题灵感散落在群聊、收藏和旧文档里。每次写长文都要靠关键词反复翻记录，前置研究常要 1–2 小时，很多旧素材写完一次就沉底。",
-    "solution": [
-      "把已授权的群聊与本地素材统一建立全文、向量混合索引，不改变原始文件。",
-      "用自然语言追问主题、时间线和真实案例，答案附带原消息引用。",
-      "将高价值问答与引用归档到选题清单，形成可复用的资料底稿。"
+    "category": "personal",
+    "categoryLabel": "个人回顾",
+    "title": "跨年查找旧约定时，先找到原文再下结论",
+    "summary": "把分散在会话、时间和人物线索里的历史消息重新组织，用带引用的问答回到原始上下文。",
+    "audience": "个人用户 / 数据本人",
+    "prerequisites": "Windows 10/11 x64 · PC 微信 4.x · 对本机数据拥有合法访问权",
+    "problem": "旧约定、交付节点和付款信息散落在多年聊天里；关键词搜索只能命中片段，很难确认上下文。",
+    "capabilities": [
+      "跨会话检索",
+      "引用回原文",
+      "年度回顾"
     ],
-    "effect": "选题研究从“翻聊天”变成“先提问再核查”，历史案例能够在几秒内定位并回到原文。",
-    "metrics": [
-      { "value": "2 分钟", "label": "定位一组旧素材" },
-      { "value": "12 篇", "label": "季度内复用成稿" },
-      { "value": "0", "label": "默认上传字节" }
-    ]
+    "approach": [
+      "完成隐私同意、许可证与本机数据目录配置，建立全文索引；需要语义检索时再配置向量索引。",
+      "用“何时、和谁、约定了什么”等自然语言提问，并逐条打开引用核对上下文。",
+      "把确认过的结果导出为个人归档；模型不可用时仍可使用本地搜索与结构化视图。"
+    ],
+    "boundary": "可检索范围取决于本机数据与索引完整度；模型生成的归纳需要回到引用核对，不能替代原件。"
   },
   {
     "order": 2,
     "category": "team",
-    "categoryLabel": "咨询团队",
-    "title": "人员轮换后，项目上下文没有跟着消失",
-    "summary": "客户需求、承诺和修改意见不再锁在个人会话里，交接也终于有了可追溯的证据链。",
-    "client": {
-      "role": "本地咨询工作室",
-      "scale": "6 人团队 · 18 个在途项目 · 2 年约 9 万条沟通"
-    },
-    "pain": "需求、承诺和修改意见分散在成员各自的会话里。人员轮换时只能靠截图和口头交接，复盘证据难找，又担心客户资料进入云端。",
-    "solution": [
-      "在受控 Windows 工作站上建立项目级索引，按客户、时间和关键词还原沟通过程。",
-      "关键结论要求带引用，交付复盘和交接文档可逐条回到原消息核对。",
-      "先用隐私体检识别敏感内容，再决定是否启用模型通道。"
+    "categoryLabel": "项目复盘",
+    "title": "项目交接前，把需求与承诺整理成可核对证据",
+    "summary": "以时间、会话和关键词还原沟通过程，让复盘材料能够回到原始消息，而不是只靠记忆。",
+    "audience": "咨询、交付与自由职业者",
+    "prerequisites": "受控 Windows 工作站 · 仅处理本人有权的会话 · 单机使用",
+    "problem": "需求、修改意见和承诺分散在不同会话里；交接时常用截图与口头说明，证据链不完整。",
+    "capabilities": [
+      "按会话 / 时间检索",
+      "带引用复盘",
+      "本地备份导出"
     ],
-    "effect": "交接从“凭记忆讲一遍”变成带证据的项目手册，新成员能在一小时内补齐关键上下文。",
-    "metrics": [
-      { "value": "1 小时", "label": "新成员补齐上下文" },
-      { "value": "100%", "label": "关键结论可回溯原文" },
-      { "value": "本机", "label": "原始沟通默认留存" }
-    ]
+    "approach": [
+      "在受控工作站上建立本机索引，按客户、时间和关键词定位沟通过程。",
+      "让关键结论附带原文引用，交接文档逐条回到消息核对。",
+      "先用隐私设置检查数据范围，再决定是否启用模型或外部投递。"
+    ],
+    "boundary": "它不是团队云协作或集中式知识库；不同成员的数据不会自动汇总，权限与合规责任由使用者承担。"
   },
   {
     "order": 3,
-    "category": "operations",
-    "categoryLabel": "电商运营",
-    "title": "夜间进来的高意向消息，不再第二天才看到",
-    "summary": "从关键词命中到 CRM 或工单系统，消息触发链路把漏接风险变成了可检查的任务记录。",
-    "client": {
-      "role": "小型跨境电商运营团队",
-      "scale": "3 个业务微信号 · 每月约 5,000 条咨询 · 售前 / 售后混合"
-    },
-    "pain": "订单、售后和高意向咨询全在聊天流里。晚班没人盯时容易漏消息，人工把信息抄进 CRM 又会重复录入，任务失败后也缺少可查记录。",
-    "solution": [
-      "任务中心按关键词、联系人和消息类型配置触发条件。",
-      "命中后通过 Webhook 写入 CRM，或调用 RPA 自动建工单、发通知。",
-      "每次触发保留执行结果与失败原因，支持人工重投。"
+    "category": "automation",
+    "categoryLabel": "消息自动化",
+    "title": "用新消息触发 Webhook 或 RPA 流程",
+    "summary": "把指定会话中命中的新消息变成可追溯的触发记录，再交给已有下游系统处理。",
+    "audience": "已有下游系统的运营、销售或客服团队",
+    "prerequisites": "可用的 Webhook 或厂商账号 / 凭据 · 任务配置 · 部分 RPA 需对应权益",
+    "problem": "订单、售后或高意向咨询混在消息流里；人工转抄容易遗漏，失败后也缺少可查记录。",
+    "capabilities": [
+      "仅监听新消息",
+      "8 个触发通道",
+      "状态与失败重投"
     ],
-    "effect": "售前线索在流入后自动分流，运营早上先处理异常任务，而不是重新翻一遍所有会话。",
-    "metrics": [
-      { "value": "< 5 分钟", "label": "高意向线索进入 CRM" },
-      { "value": "80%", "label": "重复录入动作减少" },
-      { "value": "可重投", "label": "失败任务逐条处理" }
-    ]
+    "approach": [
+      "在任务信息中选择会话或群成员、关键词、触发方式与显式附加参数。",
+      "任务完善后，只检查启用之后的新消息；命中时先写触发记录，再向所选下游投递。",
+      "在触发记录与消息列表中检查状态，失败时由你决定是否重新投递。"
+    ],
+    "boundary": "HTTP 2xx、queued 或 running 不等于微信已送达；阿里云、来也、实在与八爪鱼 MCP 为实验性接入。"
   },
   {
     "order": 4,
-    "category": "personal",
-    "categoryLabel": "个人效率",
-    "title": "八年的重要约定，终于可以按问题直接核对",
-    "summary": "合同尾款、交付节点和旧承诺不必再靠记忆，个人聊天记录变成了可检索、可引用的数据资产。",
-    "client": {
-      "role": "自由职业者 / 个人用户",
-      "scale": "8 年 · 约 13.5 万条消息 · 跨工作、生活与交易"
-    },
-    "pain": "合同尾款、交付节点和旧承诺都藏在历史聊天里。微信搜索只能找词，无法回答“上次约定什么时候交付”，更不愿意把这些内容交给在线工具。",
-    "solution": [
-      "本地混合检索遵循时间、会话和语义三重线索，支持聚合类问题。",
-      "回答展示引用来源，可直接跳回原消息查看上下文。",
-      "生成月度、年度回顾并导出结构化结果，作为个人档案留存。"
+    "category": "knowledge",
+    "categoryLabel": "资料整理",
+    "title": "把文件与聊天图片整理成可检索、可核对的资料",
+    "summary": "知识库负责文档与笔记，微信原生 OCR 负责本机图片文字，AI 图片入口负责可选的字段提取。",
+    "audience": "需要整理文档、截图与聊天图片的个人或小型团队",
+    "prerequisites": "本机文件与兼容的微信 4.x OCR 插件 · AI 图片解析需配置多模态模型",
+    "problem": "资料散落在文件、笔记和图片里；普通搜索找不到跨来源内容，证件或票据图片还需要手工抄录。",
+    "capabilities": [
+      "知识库全文 / 向量检索",
+      "微信原生 OCR",
+      "AI 图片字段提取"
     ],
-    "effect": "从“记得好像有这件事”到“几秒内找到原话、日期和相关上下文”，个人数据第一次真正可管理。",
-    "metrics": [
-      { "value": "3 年+", "label": "跨时间线上下文召回" },
-      { "value": "5 分钟", "label": "完成一次月度复盘" },
-      { "value": "本地", "label": "解析、索引与检索" }
-    ]
+    "approach": [
+      "在知识库中导入文件，解析分块后按库检索；需要语义检索时再配置 embedding。",
+      "对聊天图片点 ?，由微信 WeChatOcr 插件在本机识别文字，不调用云端识图。",
+      "需要结构化字段时点 AI，把图片交给当前多模态模型，并在得到结果后人工核对。"
+    ],
+    "boundary": "OCR 不上传但需要微信插件兼容；AI 图片入口会向模型端点发送图片；识别与模型输出都不能替代原件核验。"
   }
 ]
 </script>
@@ -1544,7 +1395,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="sec-head rv">
       <div class="sec-eyebrow">ARCHITECTURE</div>
       <h2>桌面端的分层架构</h2>
-      <p>主进程负责数据与安全边界，渲染进程只拿到经过许可闸门允许的结果；两者通过受控的预加载桥通信。</p>
+      <p>主进程负责数据、权限与后端进程监管，渲染进程只拿到经过许可闸门允许的结果；两者通过受控的 preload 桥通信。</p>
     </div>
 
     <div class="arch">
@@ -1552,41 +1403,42 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="lrow rv"><span class="k">UI LAYER</span><span class="v"><i>React 18</i><i>TypeScript</i><i>Vite</i><i>ECharts</i><i>深浅双主题</i></span></div>
         <div class="lrow rv" style="--d:90ms"><span class="k">QUERY</span><span class="v"><i>会话 / 记录</i><i>朋友圈</i><i>媒体资产</i><i>台账</i><i>地图足迹</i><i>年度报告</i></span></div>
         <div class="lrow rv" style="--d:180ms"><span class="k">RETRIEVAL</span><span class="v"><i>意图路由</i><i>查询改写</i><i>BM25</i><i>向量余弦</i><i>结构化过滤</i><i>RRF 融合</i><i>交叉重排</i><i>上下文压缩</i></span></div>
-        <div class="lrow rv" style="--d:270ms"><span class="k">BRIDGE</span><span class="v"><i>iLink 长轮询</i><i>扫码绑定</i><i>多实例</i><i>AI 自动回复</i><i>附件自动取回</i></span></div>
-        <div class="lrow rv" style="--d:360ms"><span class="k">AUTOMATION</span><span class="v"><i>关键词触发</i><i>Webhook</i><i>8 个 RPA 适配器</i><i>八爪鱼 MCP</i><i>失败重投</i></span></div>
-        <div class="lrow rv" style="--d:450ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
-        <div class="lrow rv" style="--d:540ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
+        <div class="lrow rv" style="--d:270ms"><span class="k">AUTOMATION</span><span class="v"><i>关键词触发</i><i>Webhook</i><i>8 个触发适配器</i><i>消息列表</i><i>失败重投</i></span></div>
+        <div class="lrow rv" style="--d:360ms"><span class="k">NATIVE</span><span class="v"><i>WeChatOcr</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
+        <div class="lrow rv" style="--d:450ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>按域作用域</i><i>备份与导出</i></span></div>
+        <div class="lrow rv" style="--d:540ms"><span class="k">TRUST</span><span class="v"><i>隐私闸脱敏</i><i>出网清单</i><i>许可闸门</i><i>操作日志</i><i>局域网访问默认关闭</i></span></div>
       </div>
 
       <div class="tech">
         <div class="rv"><b>Electron 44</b><span>主进程 / preload 沙箱</span></div>
         <div class="rv" style="--d:80ms"><b>React 18 + Vite 5</b><span>前端构建与热更新</span></div>
         <div class="rv" style="--d:160ms"><b>SQLite FTS5</b><span>本地全文索引</span></div>
-        <div class="rv" style="--d:240ms"><b>whisper.cpp</b><span>离线语音转写</span></div>
-        <div class="rv" style="--d:320ms"><b>WASM + koffi</b><span>媒体解密 / 原生调用</span></div>
+        <div class="rv" style="--d:240ms"><b>whisper.cpp + OCR</b><span>离线语音转写 / 微信原生 OCR</span></div>
+        <div class="rv" style="--d:320ms"><b>WASM + koffi</b><span>媒体解密 / 原生进程调用</span></div>
         <div class="rv" style="--d:400ms"><b>Webhook + RPA</b><span>8 个触发适配器 · 描述符驱动</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============ 关于我们 ============ -->
+<!-- ============ 适用边界 ============ -->
 <section id="about">
   <div class="wrap">
     <div class="sec-head rv">
-      <div class="sec-eyebrow">ABOUT US</div>
-      <h2>我们只做一件事：把数据主权还回去</h2>
-      <p>Super Time 是一支做本地优先桌面工具的小团队。我们相信，最私密的数据应该由产生它的人自己保管、自己读取、自己决定去留。</p>
+      <div class="sec-eyebrow">SCOPE &amp; LIMITS</div>
+      <h2>能力有边界，<span class="grad-txt">前提先说清楚</span></h2>
+      <p>Super Time 处理的是本机已有的微信数据，不是微信客户端替代品，也不是开箱即用的云端 AI 服务。下面这些条件会直接影响能否使用与结果是否可靠。</p>
     </div>
 
     <div class="about">
       <div class="rv">
-        <h3 style="margin:0;font-size:21px;font-weight:670">为什么做这件事</h3>
+        <h3 style="margin:0;font-size:21px;font-weight:670">使用前需要确认</h3>
         <div class="tl">
-          <div class="it"><b>起点</b><p>十年聊天记录只能靠手指一直往上滑 —— 明明数据在自己电脑里，却读不出来。</p></div>
-          <div class="it"><b>取舍</b><p>市面上大多数方案要你把数据交出去。我们反过来：解析、索引、检索全放本机，宁可牺牲一点效果。</p></div>
-          <div class="it"><b>打磨</b><p>把 RAG 做成可评估、可调参、可降级的工程系统：有评测集，有消融对照，有回归护栏。</p></div>
-          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，并让 AI 从「读你的数据」走到「替你收发消息」—— 让「看得懂」和「信得过」同时成立。</p></div>
+          <div class="it"><b>PLATFORM</b><p>仅支持 Windows 10/11 x64 与 PC 微信 4.x。macOS、Linux、32 位 Windows 与手机端不在支持范围内。</p></div>
+          <div class="it"><b>DATA ACCESS</b><p>只处理你有合法访问权的数据。应用不登录微信、不需要账号密码；自动获取密钥通常要求微信正在运行，也可以手动填写。</p></div>
+          <div class="it"><b>NETWORK</b><p>本机解析不代表全程离线。AI、模型下载、更新检查、远程媒体、任务投递等都有出网点；应用没有全局出网开关，彻底断网需依赖系统防火墙或断开网络。</p></div>
+          <div class="it"><b>FIRST RUN</b><p>首次使用需要完成引导、隐私同意、许可证与微信数据目录配置。AI 模型与向量索引不是首次启动时自动完成的，需要你按需配置。</p></div>
+          <div class="it"><b>THIRD PARTY</b><p>Feather 发送端不在安装包内；RPA 厂商需要对应账号、凭据和权益。阿里云、来也、实在与八爪鱼 MCP 仍标记为实验性接入。</p></div>
         </div>
       </div>
 
@@ -1594,19 +1446,19 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="vals">
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/></svg></div>
-            <div><b>隐私不是功能，是前提</b><p>任何新增的出网点都必须先过闸门、先有审计、先能关闭。</p></div>
+            <div><b>本地优先，不等于全程离线</b><p>本地解析、全文索引、检索与派生库在本机运行；需要联网的模型和媒体路径会单独说明。</p></div>
           </div>
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-            <div><b>可验证，才可信</b><p>评测指标、检索漏斗、引用来源全部摊开给用户看，不靠形容词。</p></div>
+            <div><b>外部通道要自行准备</b><p>模型、Webhook、RPA 凭据与 Feather 发送端由使用者配置，可用性取决于其服务与网络。</p></div>
           </div>
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div>
-            <div><b>细节即体验</b><p>一条引用行、一个头像圆角、一次降级提示，都按可用标准做，而不是差不多就行。</p></div>
+            <div><b>OCR 与 AI 图片是两条路</b><p>微信原生 OCR 在本机识别；点击 AI 会把图片发给当前多模态模型，结果需要人工核对。</p></div>
           </div>
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg></div>
-            <div><b>说人话</b><p>不夸大能力，不隐藏边界；做不到的地方，直接写在文档里。</p></div>
+            <div><b>非腾讯官方产品</b><p>Super Time 与腾讯无关联，未获其授权或背书；请遵守当地法律、微信用户协议与数据授权要求。</p></div>
           </div>
         </div>
       </div>
@@ -1624,31 +1476,31 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="faq">
       <div class="q rv">
         <button type="button">我的聊天数据会被上传到云端吗？</button>
-        <div class="ans"><p>默认不会。解析、索引、检索都在本机完成。仅当你主动配置模型通道用于生成时，才会把检索到的少量上下文发给该模型服务。应用不提供"一键封锁出网"的开关 —— 我们不做黑箱拦截，而是把会联网的地方集中在一页里（数据边界与出网）让你逐条看清：发到哪个域名、为什么需要、关掉模型通道后就地降级为纯本地检索，问答与检索照常可用。</p></div>
+        <div class="ans"><p>Super Time 没有接收你数据的中转服务器；本机导入的数据、全文索引与派生库存储在本机。但应用不是全程离线：使用 AI 问答、向量索引、文件摘要或 AI 图片解析时，内容会发给你配置的模型端点；模型下载、更新检查、远程媒体、Webhook 与 RPA 投递也各有出网点。应用没有全局出网开关，逐条清单见隐私声明；要彻底断网，请使用系统防火墙或直接断开网络。</p></div>
       </div>
       <div class="q rv" style="--d:80ms">
         <button type="button">需要提供微信账号或密码吗？</button>
-        <div class="ans"><p>不需要。Super Time 不登录你的微信，只读取本机数据目录并做本地解密。请仅在你拥有合法访问权的设备与账号上使用。</p></div>
+        <div class="ans"><p>不需要。Super Time 不登录你的微信，只读取本机数据目录并做本地解密。自动获取数据库密钥通常要求 PC 微信正在运行；无法自动获取时，也可以手动填写密钥。请仅在你拥有合法访问权的设备与账号上使用。</p></div>
       </div>
       <div class="q rv" style="--d:160ms">
         <button type="button">AI 问答可以用哪家的模型？</button>
-        <div class="ans"><p>任何 OpenAI 兼容接口都可以，也可以指向本地部署的模型。模型、密钥与接口地址只保存在你本机的配置文件里，不随应用分发，也不进入版本库。</p></div>
+        <div class="ans"><p>可以接入 OpenAI 兼容接口，也可以指向本地部署的模型；图片解析需要所选模型支持多模态输入。模型、密钥与接口地址保存在本机配置中，不随应用分发。模型能力的差异、调用费用、可用性与数据处理规则由对应服务提供方决定，建议先用小范围数据验证。</p></div>
       </div>
       <div class="q rv" style="--d:240ms">
         <button type="button">支持什么系统？数据规模上有限制吗？</button>
-        <div class="ans"><p>当前为 Windows x64 桌面客户端。索引采用增量构建，实测在 13 万条量级消息上检索延迟以百毫秒计；更大的语料可调大候选池并采用分批增量构建。</p></div>
+        <div class="ans"><p>当前仅支持 Windows 10/11 x64，数据源要求本机安装并登录 PC 微信 4.x。索引支持增量构建，但不同数据量、磁盘、内存、向量模型与查询复杂度都会影响速度；官网不承诺固定消息条数或固定延迟，建议先用自己的数据规模完成一次导入与检索验证。</p></div>
       </div>
       <div class="q rv" style="--d:320ms">
-        <button type="button">微信接入（ClawBot）需要提供账号密码吗？</button>
-        <div class="ans"><p>不需要。用微信扫一次码就完成绑定，不需要 App ID / App Secret，也不要求你交出账号密码。绑定凭证只存在本机数据库，只有后台进程读得到，可随时解绑。</p></div>
+        <button type="button">任务中心会把哪些内容发到外部？</button>
+        <div class="ans"><p>只有你显式创建、配置并启用任务后，命中关键词的新消息才会触发投递。Webhook 会发送触发记录，并可按配置附带图片；RPA 只发送你在“附加参数”中显式配置的内容，图片类来源需要单独选择。部分厂商属于实验性接入。出网主机、请求字段与凭据用途列在隐私声明中，失败记录保留在本机供检查。</p></div>
       </div>
       <div class="q rv" style="--d:400ms">
-        <button type="button">AI 自动回复会读我的聊天记录吗？</button>
-        <div class="ans"><p>不会。自动回复的数据面被刻意收窄为「只检索你为它选的知识库」，不碰本机微信数据。它默认关闭，开关就在实例卡上，每次回复都写一行操作日志 —— 无人值守出网必须你显式开启。</p></div>
+        <button type="button">微信原生 OCR 和图片旁的 AI 入口有什么区别？</button>
+        <div class="ans"><p>点击图片旁的“?”，图片只在本机交给微信 WeChatOcr 插件，不上传到云端；需要已安装兼容的 Windows x64 微信 4.x 与已下载的 OCR 插件。点击“AI”是另一条显式出网路径，会把同一张图片发给当前配置的多模态模型并要求返回结构化结果。两者输出都应回到原图核对，且不会对所有聊天图片自动后台识别。</p></div>
       </div>
       <div class="q rv" style="--d:480ms">
-        <button type="button">任务中心会把哪些内容发到外部？</button>
-        <div class="ans"><p>只有当你显式创建、配置并启用任务后，命中关键词的新消息才会触发投递。Webhook 会发送整条触发记录，并可按配置附带图片；RPA 适配器只发送你显式配置的参数，不发送图片。出网主机、请求字段与凭据用途都会在隐私声明中逐条列明，失败记录留在本机供你检查。</p></div>
+        <button type="button">首次启动需要准备什么？</button>
+        <div class="ans"><p>首次启动需要依次完成使用引导、隐私同意、许可证校验与微信数据目录配置；没有有效许可证时业务功能会被拒绝。AI 模型、语义索引与外部投递均为后续按需配置，不会在首次启动时自动完成。安装、许可证与排障说明见仓库中的部署文档。</p></div>
       </div>
     </div>
   </div>
@@ -1659,14 +1511,14 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="cta-band rv">
       <div class="glow"></div>
-      <h2>让你的聊天记录，<span class="grad-txt">重新开口说话</span></h2>
-      <p>下载桌面版，首次启动即完成本地索引。不注册账号，不上传数据。</p>
+      <h2>先确认前提，<span class="grad-txt">再开始检索你的数据</span></h2>
+      <p>适用于 Windows 10/11 x64。首次启动需完成引导、隐私同意、许可证与微信数据目录配置；AI、语义索引与外部投递均为可选。</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
           获取 Windows 桌面版
         </a>
-        <a class="btn btn-ghost" href="#faq">先看常见问题</a>
+        <a class="btn btn-ghost" href="#about">查看安装前提</a>
       </div>
     </div>
   </div>
@@ -1687,34 +1539,37 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           </span>
           <span class="brand-txt"><b>Super<em>Time</em></b><i>WECHAT DATA</i></span>
         </a>
-        <p>面向微信 4.x 本地数据的 Windows 桌面工作台：洞察、AI 问答、媒体回放与任务自动化。本地优先，数据默认不出本机。</p>
+        <p>面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：会话检索、带引用问答、知识库、原生 OCR、洞察与消息触发。AI 与外部投递为可选配置。</p>
       </div>
       <div>
         <h5>产品</h5>
         <a href="#highlights">产品亮点</a>
         <a href="#features">核心功能</a>
-        <a href="#cases">客户案例</a>
-        <a href="#tech">技术架构</a>
+        <a href="#solutions">适用场景</a>
+        <a href="#scenarios">场景示例</a>
         <a href="#faq">常见问题</a>
       </div>
       <div>
-        <h5>方案</h5>
-        <a href="#solutions">个人数据资产化</a>
-        <a href="#solutions">团队数据治理</a>
-        <a href="#solutions">创作者资料库</a>
+        <h5>文档</h5>
+        <a href="https://github.com/RASH-xiaowang/super_time/blob/main/docs/PRIVACY.md">隐私声明</a>
+        <a href="https://github.com/RASH-xiaowang/super_time/blob/main/docs/DEPLOYMENT.md">部署文档</a>
+        <a href="https://github.com/RASH-xiaowang/super_time/blob/main/docs/API.md">API 参考</a>
+        <a href="https://github.com/RASH-xiaowang/super_time/blob/main/docs/FEATHER-INTEGRATION.md">Feather 接入</a>
       </div>
       <div>
-        <h5>联系</h5>
-        <a href="#about">关于我们</a>
-        <a href="mailto:contact@supertime.app">contact@supertime.app</a>
+        <h5>项目</h5>
+        <a href="https://github.com/RASH-xiaowang/super_time/releases/latest">最新版本</a>
+        <a href="https://github.com/RASH-xiaowang/super_time">GitHub 仓库</a>
+        <a href="https://github.com/RASH-xiaowang/super_time/issues">问题反馈</a>
+        <a href="#about">适用边界</a>
       </div>
     </div>
     <p class="disc">
-      免责声明：Super Time 为本地数据管理工具，仅可用于处理使用者本人拥有合法访问权的数据。请在使用前确认你已获得相应授权，并遵守所在地法律法规与相关服务条款。本页面所展示的评测数据来自项目内置的合成评测集，仅用于说明检索链路能力，不代表真实语料下的效果。
+      免责声明：Super Time 为本地数据管理工具，仅可用于处理使用者本人拥有合法访问权的数据。请在使用前确认你已获得相应授权，并遵守所在地法律法规与相关服务条款。Super Time 与腾讯无关联，未获其授权或背书。页面中的功能数量来自当前代码与文档，场景说明不构成效果保证。
     </p>
     <div class="fbot">
       <span>© 2026 Super Time. All rights reserved.</span>
-      <span class="mono">v1.1.0 · Windows x64 · Electron Desktop</span>
+      <span class="mono">v1.1.2 · Windows x64 · Electron Desktop</span>
     </div>
   </div>
 </footer>
@@ -1728,10 +1583,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   "use strict";
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* ---------- 客户案例：数据渲染 / 筛选 / 展开 ---------- */
-  var caseGrid = document.getElementById("caseGrid");
-  var caseDataNode = document.getElementById("caseData");
-  var caseCount = document.getElementById("caseCount");
+  /* ---------- 使用场景：数据渲染 / 筛选 / 展开 ---------- */
+  var caseGrid = document.getElementById("scenarioGrid");
+  var caseDataNode = document.getElementById("scenarioData");
+  var caseCount = document.getElementById("scenarioCount");
   var caseFilters = [].slice.call(document.querySelectorAll(".case-filter"));
 
   function escapeCaseHtml(value){
@@ -1743,10 +1598,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   function caseTemplate(item, index){
     var caseId = "case-" + item.category + "-" + item.order;
     var detailId = caseId + "-detail";
-    var metrics = item.metrics.map(function(metric){
-      return '<div class="case-metric"><b>' + escapeCaseHtml(metric.value) + '</b><span>' + escapeCaseHtml(metric.label) + '</span></div>';
+    var capabilities = item.capabilities.map(function(capability){
+      return '<div class="case-metric"><b>' + escapeCaseHtml(capability) + '</b></div>';
     }).join("");
-    var solution = item.solution.map(function(point){
+    var approach = item.approach.map(function(point){
       return "<li>" + escapeCaseHtml(point) + "</li>";
     }).join("");
     var delay = Math.min(index * 70, 280);
@@ -1754,19 +1609,19 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     return [
       '<article class="case-card rv" data-category="' + escapeCaseHtml(item.category) + '" data-case-id="' + caseId + '" aria-labelledby="' + caseId + '-title" style="--d:' + delay + 'ms">',
         '<div class="case-head">',
-          '<div class="case-kicker"><span class="case-index">CASE / ' + (item.order < 10 ? "0" + item.order : item.order) + '</span><span class="case-category">' + escapeCaseHtml(item.categoryLabel) + '</span></div>',
-          '<span class="case-proof">匿名案例</span>',
+          '<div class="case-kicker"><span class="case-index">SCENE / ' + (item.order < 10 ? "0" + item.order : item.order) + '</span><span class="case-category">' + escapeCaseHtml(item.categoryLabel) + '</span></div>',
+          '<span class="case-proof">场景示例</span>',
         '</div>',
         '<h3 id="' + caseId + '-title">' + escapeCaseHtml(item.title) + '</h3>',
         '<p class="case-summary">' + escapeCaseHtml(item.summary) + '</p>',
-        '<div class="case-client"><span>客户背景 / CONTEXT</span><b>' + escapeCaseHtml(item.client.role) + '</b><p>' + escapeCaseHtml(item.client.scale) + '</p></div>',
-        '<div class="case-pain"><span class="case-label">核心痛点 / PAIN</span><p>' + escapeCaseHtml(item.pain) + '</p></div>',
-        '<div class="case-metrics">' + metrics + '</div>',
-        '<button class="case-toggle" type="button" aria-expanded="false" aria-controls="' + detailId + '"><span class="case-toggle-label">查看解决方案与成效</span><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>',
+        '<div class="case-client"><span>适用对象 / AUDIENCE</span><b>' + escapeCaseHtml(item.audience) + '</b><p>' + escapeCaseHtml(item.prerequisites) + '</p></div>',
+        '<div class="case-pain"><span class="case-label">常见问题 / PROBLEM</span><p>' + escapeCaseHtml(item.problem) + '</p></div>',
+        '<div class="case-metrics">' + capabilities + '</div>',
+        '<button class="case-toggle" type="button" aria-expanded="false" aria-controls="' + detailId + '"><span class="case-toggle-label">查看操作路径与边界</span><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>',
         '<div class="case-detail" id="' + detailId + '" aria-hidden="true">',
           '<div class="case-detail-inner">',
-            '<div class="case-block case-solution"><span class="case-label">解决方案 / APPROACH</span><ul>' + solution + '</ul></div>',
-            '<div class="case-block case-effect"><span class="case-label">使用成效 / OUTCOME</span><p>' + escapeCaseHtml(item.effect) + '</p></div>',
+            '<div class="case-block case-approach"><span class="case-label">可以怎么做 / APPROACH</span><ul>' + approach + '</ul></div>',
+            '<div class="case-block case-boundary"><span class="case-label">使用边界 / LIMITS</span><p>' + escapeCaseHtml(item.boundary) + '</p></div>',
           '</div>',
         '</div>',
       '</article>'
@@ -1775,8 +1630,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 
   if (caseGrid && caseDataNode){
     try {
-      var caseItems = JSON.parse(caseDataNode.textContent || "[]");
-      caseGrid.innerHTML = caseItems.map(caseTemplate).join("");
+      var scenarioItems = JSON.parse(caseDataNode.textContent || "[]");
+      caseGrid.innerHTML = scenarioItems.map(caseTemplate).join("");
 
       var caseCards = [].slice.call(caseGrid.querySelectorAll(".case-card"));
       function setCaseOpen(card, open){
@@ -1787,7 +1642,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         card.classList.toggle("open", open);
         button.setAttribute("aria-expanded", open ? "true" : "false");
         detail.setAttribute("aria-hidden", open ? "false" : "true");
-        if (label) label.textContent = open ? "收起案例" : "查看解决方案与成效";
+        if (label) label.textContent = open ? "收起场景说明" : "查看操作路径与边界";
         detail.style.maxHeight = open ? detail.scrollHeight + "px" : "0px";
       }
 
@@ -1819,7 +1674,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
               setCaseOpen(card, false);
             }
           });
-          if (caseCount) caseCount.innerHTML = "<b>" + visible + "</b> 个脱敏案例";
+          if (caseCount) caseCount.innerHTML = "<b>" + visible + "</b> 个场景示例";
         });
       });
 
@@ -1831,7 +1686,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         });
       });
     } catch (err) {
-      caseGrid.innerHTML = '<p class="case-noscript">案例数据暂时无法加载，请稍后再试。</p>';
+      caseGrid.innerHTML = '<p class="case-noscript">场景数据暂时无法加载，请稍后再试。</p>';
     }
   }
 

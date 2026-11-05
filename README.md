@@ -4,15 +4,15 @@ Super Time 是面向微信 4.x 本地数据的 Windows 桌面工作台。本仓�
 
 ## 下载
 
-- 最新版：**Super Time 1.1.0**
+- 最新版：**Super Time 1.1.2**
 - 平台：Windows x64
-- [下载安装包](https://github.com/RASH-xiaowang/super_time/releases/download/v1.1.0/Super-Time-Setup-1.1.0.exe)
+- [下载安装包](https://github.com/RASH-xiaowang/super_time/releases/download/v1.1.2/Super-Time-Setup-1.1.2.exe)
 - [查看全部发布内容](https://github.com/RASH-xiaowang/super_time/releases/latest)
 
 安装包 SHA256：
 
 ```text
-33AE3A1FB0CC7880FED4D3E8B98C125A5D6B925EFA40BA7F9CD11C2CD735DCBC
+5061ED6EF2ADE12B7F1245C5C95F3283E96A7BFEF601AE0EF17A0E94C978FF04
 ```
 
 ## 官网
