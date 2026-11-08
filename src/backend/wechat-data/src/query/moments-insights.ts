@@ -11,6 +11,7 @@ import { parseSnsLikesComments, parseSnsXml, type MomentEntry } from './moments.
 import { momentsArchivePath, readArchivedInsightRows } from './moments-archive.ts'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { displayNameForUsername } from './message-identity.ts'
 
 /**
  * 朋友圈表的**字符级**让出阈值（本模块专用；`search-build.ts` 那个 `YIELD_EVERY_CHARS` 更小，不适用）。
@@ -144,7 +145,7 @@ async function computeTopItems(
         const enterpriseName = enterpriseNames.get(username)?.trim() ?? ''
         return {
           username,
-          name: names.get(username) ?? username,
+          name: displayNameForUsername(username, names),
           ...(enterpriseName !== '' ? { enterpriseName } : {}),
           count: v.count,
           unread: v.unread,

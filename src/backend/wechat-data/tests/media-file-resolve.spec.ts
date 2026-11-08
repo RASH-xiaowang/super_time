@@ -27,7 +27,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveMessageFileDataUrl } from '../src/query/media-file.ts'
+import { MESSAGE_FILE_DATA_URL_MAX_BYTES, resolveMessageFileDataUrl } from '../src/query/media-file.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** 仓库根：用来证明「测试没在仓库里落东西」。 */
@@ -265,5 +265,20 @@ describe('resolveMessageFileDataUrl：同名副本里挑出属于这条消息的
     const r = resolveMessageFileDataUrl(root, '坏键.pdf', { fileMd5: 'not-an-md5' })
     expect(r.url).toBeUndefined()
     expect(r.error).toBe('文件 MD5 格式不正确，无法校验同名文件')
+  })
+})
+
+describe('resolveMessageFileDataUrl：同步 data URL 读取有硬预算', () => {
+  it('超过上限的文件不整读、不生成 base64，返回可操作错误', () => {
+    const root = makeRoot('too-large')
+    putFile(root, '2024-06', '超大附件.bin', '')
+    const path = join(root, 'msg', 'file', '2024-06', '超大附件.bin')
+    writeFileSync(path, Buffer.alloc(MESSAGE_FILE_DATA_URL_MAX_BYTES + 1))
+
+    const r = resolveMessageFileDataUrl(root, '超大附件.bin', { createTime: tsLocal(2024, 6, 10) })
+
+    expect(r.url).toBeUndefined()
+    expect(r.error).toContain('文件过大')
+    expect(r.error).toContain('打开文件')
   })
 })

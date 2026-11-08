@@ -65,7 +65,12 @@ const HEADING_RE = /^ {0,3}(#{1,3})(?:[ \t]+(.*))?$/
 const FENCE_START_RE = /^ {0,3}(`{3,})(.*)$/
 const FENCE_END_RE = /^ {0,3}(`{3,})[ \t]*$/
 const QUOTE_RE = /^ {0,3}>[ \t]?(.*)$/
-const UNORDERED_LIST_RE = /^ {0,3}[-*][ \t]+(.*)$/
+/**
+ * Models often emit a literal bullet (`•`) instead of Markdown `-`.
+ * Treat the common Unicode bullets as list markers so long chronology dumps
+ * become separate rows instead of one dense paragraph.
+ */
+const UNORDERED_LIST_RE = /^ {0,3}(?:[-*•·‣▪◦⁃])[ \t]+(.*)$/
 const ORDERED_LIST_RE = /^ {0,3}\d+\.[ \t]+(.*)$/
 
 function isBlank(line: string): boolean {
@@ -216,8 +221,9 @@ function readParagraph(
 /**
  * Parse supported answer Markdown into ordered, plain-text blocks.
  *
- * Supported blocks are ATX headings (# through ###), unordered lists (- or *),
- * ordered lists (1.), quotes (>), fenced code blocks (```), and paragraphs.
+ * Supported blocks are ATX headings (# through ###), unordered lists
+ * (`-`, `*`, or common Unicode bullets), ordered lists (1.), quotes (>),
+ * fenced code blocks (```), and paragraphs.
  * Blank lines separate paragraphs. CRLF and CR newlines are normalized to LF.
  *
  * The parser intentionally has no length limit and never drops trailing

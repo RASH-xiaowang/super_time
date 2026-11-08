@@ -27,7 +27,12 @@ describe('N18：消息流虚拟化的接线', () => {
   it('用 @tanstack/react-virtual 的 useVirtualizer 渲染消息流', () => {
     expect(chatsSrc).toContain("from '@tanstack/react-virtual'")
     expect(chatsSrc).toContain('useVirtualizer({')
-    expect(chatsSrc).toContain('getScrollElement: () => msgScrollRef.current')
+    // 虚拟器允许随同组件拆到独立 hook：滚动容器可以由调用方以 `scrollRef` 注入。
+    expect(chatsSrc).toMatch(/getScrollElement:\s*\(\)\s*=>\s*(?:msgScrollRef|scrollRef)\.current/)
+    expect(chatsSrc, 'key 没加会话命名空间，切会话会串用旧行高').toContain('scopedMsgItemKey(')
+    expect(chatsSrc, '虚拟列表前导偏移没交给 TanStack').toContain('scrollMargin: msgScrollMargin')
+    expect(chatsSrc, '行定位没扣除滚动容器前导偏移').toContain('vi.start - messageVirtualization.scrollMargin')
+    expect(chatsSrc, '切会话后没有清动态测高缓存').toContain('msgVirtualizer.measure()')
     expect(chatsSrc).toContain('measureElement')          // 动态测高（变高消息）
     expect(chatsSrc).toContain('getVirtualItems()')        // 只挂载视口附近
     expect(chatsSrc).toContain('msgVirtualizer.getTotalSize()')
@@ -47,8 +52,12 @@ describe('N18：消息流虚拟化的接线', () => {
   })
 
   it('既有交互仍在：深链 id、跳到某条消息、回到底部、加载更多的锚定', () => {
-    expect(chatsSrc, '深链锚点没了').toContain('id={`msg-${head.localId}`}')
+    // 普通流仍以 `msg-` 为前缀；海报预览用独立前缀，避免同一消息出现重复 DOM id。
+    expect(chatsSrc, '深链锚点没了').toContain('id={`${idPrefix}${head.localId}`}')
+    expect(chatsSrc, '普通流的深链前缀被改掉了').toContain("options.idPrefix ?? 'msg-'")
     expect(chatsSrc, '跳转能力没了').toContain('scrollToIndex')
+    expect(chatsSrc, '异步定位又退回固定延时，目标行尚未渲染时会静默失败').toContain('pending.scopeKey')
+    expect(chatsSrc, '定位请求要等虚拟列表换帧后再精确对齐').toContain('requestAnimationFrame')
     expect(chatsSrc, '末尾哨兵没了（回到底部会失效）').toContain('ref={msgEndRef}')
     expect(chatsSrc, '加载更多的锚定逻辑没了（会跳位）').toContain('prependAnchorRef')
     expect(chatsSrc, '滚动容器没有 ref（虚拟化拿不到滚动元素）').toMatch(/ref=\{msgScrollRef\}|scrollRef=\{msgScrollRef\}/)

@@ -20,6 +20,7 @@ const {
   NON_CANCELLABLE_LONG_CALLS,
   longCallsWithoutCancelPolicy,
   cancelPlanFor,
+  connectionCancelPlanFor,
   injectFallbackJobId,
   jobIdFromCall,
   jobIdForCall,
@@ -38,11 +39,32 @@ describe('wechat-cancel：超时调用的取消计划', () => {
       method: 'cancelSearch',
       jobId: 'search-1',
     })
+    expect(cancelPlanFor('searchUnified', [{ jobId: 'unified-1' }])).toEqual({
+      ok: true,
+      method: 'cancelSearch',
+      jobId: 'unified-1',
+    })
     expect(cancelPlanFor('askWechat', [{ jobId: 'ask-1' }])).toEqual({
       ok: true,
       method: 'cancelAsk',
       jobId: 'ask-1',
     })
+    expect(cancelPlanFor('createBackup', [{ jobId: 'backup-1' }])).toEqual({
+      ok: true,
+      method: 'cancelExportJob',
+      jobId: 'backup-1',
+    })
+    for (const method of [
+      'exportSnsVideo', 'exportSnsImage', 'exportChatImage', 'exportChatVideo', 'exportChatFile',
+      'exportFileImage', 'exportFileVideo', 'exportFileAttachment',
+      'exportFavoriteImage', 'exportFavoriteVideo', 'exportFavoriteFile',
+    ]) {
+      expect(cancelPlanFor(method, [{ jobId: 'media-' + method }]), `${method} 没复用导出取消槽`).toEqual({
+        ok: true,
+        method: 'cancelExportJob',
+        jobId: 'media-' + method,
+      })
+    }
   })
 
   it('没有 jobId 或方法不在策略表时明确说不能取消，不假装成功', () => {
@@ -51,6 +73,21 @@ describe('wechat-cancel：超时调用的取消计划', () => {
       ok: false,
       reason: 'method-not-cancellable',
     })
+  })
+
+  it('HTTP 断连可额外取消带 jobId 的会话关键词查询，但不改变长任务窗口策略', () => {
+    expect(connectionCancelPlanFor('getSessions', [{ jobId: 'sessions-1' }])).toEqual({
+      ok: true,
+      method: 'cancelSearch',
+      jobId: 'sessions-1',
+    })
+    expect(connectionCancelPlanFor('getSessions', [{}])).toEqual({
+      ok: false,
+      reason: 'no-job-id',
+      method: 'cancelSearch',
+      jobId: '',
+    })
+    expect(CALL_CANCEL_METHODS.getSessions).toBeUndefined()
   })
 
   it('jobId 只接受字符串、去空白并限长（与后端 normalizeJobId 同纪律）', () => {
@@ -102,6 +139,7 @@ describe('wechat-cancel：超时调用的取消计划', () => {
     expect(jobIdForCall('exportAllSessions', [{ dir: 'D:/out', jobId: 'user-id' }], '42')).toBe('user-id')
     expect(injectFallbackJobId('askWechat', [{ question: 'hello' }], '7')).toEqual([{ question: 'hello', jobId: 'rpc:7' }])
     expect(injectFallbackJobId('installWhisperEngine', [], '9')).toEqual([{ jobId: 'rpc:9' }])
+    expect(injectFallbackJobId('createBackup', [], '10')).toEqual([{ jobId: 'rpc:10' }])
     expect(injectFallbackJobId('getSessions', [], '9')).toEqual([])
     expect(injectFallbackJobId('askWechat', [{ question: 'hello', jobId: 'user-id' }], '7')).toEqual([{ question: 'hello', jobId: 'user-id' }])
   })

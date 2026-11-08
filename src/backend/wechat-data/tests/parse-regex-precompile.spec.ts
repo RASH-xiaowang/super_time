@@ -72,6 +72,26 @@ const MP_NEWS = '<appmsg appid="wx123" sdkver="0"><item>'
   + '<item><title>次条二</title><url>https://mp.weixin.qq.com/s/third</url><cover>https://cdn/c2.jpg</cover></item>'
   + '</category></mmreader></item></appmsg>'
 
+/** 平安银行类交易提醒：有 `<mmreader>`，但 category type=0，不是公众号多图文。 */
+const BANK_NOTICE = '<msg><appmsg><title>交易提醒</title>'
+  + '<des>账号：尾号4818的账户\n交易时间：2026年10月29日18:49\n'
+  + '交易类型：财付通快捷支付\n交易币种：人民币\n交易金额：11.85</des>'
+  + '<type>5</type><url></url>'
+  + '<mmreader><category type="0" count="1"><name>平安银行</name></category></mmreader>'
+  + '</appmsg></msg>'
+
+/** 腾讯新闻类根 `<mmreader>`：头条在 item，后续文章在多个 newitem。 */
+const ROOT_MP_NEWS = '<mmreader><category type="20" count="5"><name>腾讯新闻</name>'
+  + '<topnew><cover>https://cdn/tencent-top.jpg</cover></topnew>'
+  + '<item><title>头条新闻</title><url>https://view.inews.qq.com/a/top</url>'
+  + '<digest>头条摘要</digest><cover>https://cdn/tencent-item.jpg</cover></item>'
+  + '<newitem><title>头条新闻</title><url>https://view.inews.qq.com/a/top</url></newitem>'
+  + '<newitem><title>第二条</title><url>https://view.inews.qq.com/a/2</url></newitem>'
+  + '<newitem><title>第三条</title><url>https://view.inews.qq.com/a/3</url></newitem>'
+  + '<newitem><title>第四条</title><url>https://view.inews.qq.com/a/4</url></newitem>'
+  + '<newitem><title>第五条</title><url>https://view.inews.qq.com/a/5</url></newitem>'
+  + '</category></mmreader>'
+
 describe('L11 行为等价：parseSystemMessage', () => {
   it('噪声节点（id/时间）被剥掉，保留可读文本', () => {
     expect(parseSystemMessage(REVOKE_NOISE_ONLY)).toEqual({ text: '对方撤回了', kind: 'revoke' })
@@ -110,6 +130,28 @@ describe('L11 行为等价：xmlTagBlocks（多图文次条）', () => {
 
     const second = parseMessageContent(49, MP_NEWS)
     expect(second.rich?.mpArticles?.map(a => a.title)).toEqual(['次条一', '次条二'])
+  })
+})
+
+describe('公众号与普通模板消息的区分', () => {
+  it('category type=0 的交易提醒不标成多图文，完整 des 保留', () => {
+    const parsed = parseMessageContent(49, BANK_NOTICE)
+    expect(parsed.rich?.type).toBe('link')
+    expect(parsed.rich?.mpNews).not.toBe(true)
+    expect(parsed.rich?.desc).toContain('交易时间：2026年10月29日18:49')
+    expect(parsed.rich?.desc).toContain('交易金额：11.85')
+  })
+
+  it('根 mmreader 解析封面、来源、头条摘要和全部 newitem', () => {
+    const parsed = parseMessageContent(1, ROOT_MP_NEWS)
+    expect(parsed.rich?.mpNews).toBe(true)
+    expect(parsed.rich?.title).toBe('头条新闻')
+    expect(parsed.rich?.desc).toBe('头条摘要')
+    expect(parsed.rich?.source).toBe('腾讯新闻')
+    expect(parsed.rich?.thumb).toBe('https://cdn/tencent-top.jpg')
+    expect(parsed.rich?.mpArticles?.map(article => article.title)).toEqual([
+      '第二条', '第三条', '第四条', '第五条',
+    ])
   })
 })
 

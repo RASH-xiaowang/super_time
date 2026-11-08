@@ -151,6 +151,9 @@
 }
 /* 折叠按钮：文字按钮（灰），展开态才用主色 —— 与全站 kit 一致 */
 .ovCollapse {
+  min-height: 24px;
+  height: 24px;
+  box-sizing: border-box;
   padding: 2px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
@@ -550,6 +553,11 @@
 .revokeNote { font-size: 11px; color: var(--nm-text-2); margin: 0; line-height: 1.6; }
 
 /* ── KPI 条（仅总览指标条内生效）────────────────────────── */
+.ovKpiLink {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
 [data-st-ov-hero] [class*='_statCard_'] {
   padding: 10px 12px;
   gap: 4px;
@@ -571,6 +579,47 @@
 [data-st-ov-hero] [class*='_statLabel_'] {
   font-size: 11px;
   color: var(--nm-text-2);
+}
+
+/* The strip is a flex child of the panel body. Its mobile overflow makes the
+ * automatic minimum height zero, so without this the gameplay row collapses
+ * to the 2px gutter and the KPI cards paint over the first content card. */
+[data-st-ov-hero] {
+  flex-shrink: 0;
+}
+
+/* 手机档：4 项 KPI 收成一条可横滑的指标带。
+ *
+ * 2×2 排列本身没有错，但它会额外占一行，而在 390px 下首屏真正需要先看的是
+ * 「会话 / 消息 / 好友 / 群聊」四个总量，不是把每项铺成 170px 宽的卡面。
+ * 保留 Bootstrap 的 `col-6 col-sm-3` 语义（桌面端仍是一行四列），只在手机档
+ * 覆盖列宽；四张卡都能通过横向滑动到达，没有删减。 */
+@media (max-width: 560px) {
+  [data-st-ov-hero] {
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    padding-bottom: 2px;
+  }
+
+  [data-st-ov-hero]::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  [data-st-ov-hero] > [class*='col-'] {
+    flex: 0 0 44%;
+    max-width: 44%;
+    scroll-snap-align: start;
+  }
+
+  [data-st-ov-hero] [class*='_statCard_'] {
+    min-height: 72px;
+    padding: 8px 10px;
+  }
 }
 
 /* ── 骨架屏 ──────────────────────────────────────────────── */

@@ -26,15 +26,28 @@ import cssnewmsg from './chats-new-msg.module.css'
 import csscards from './chats-cards.module.css'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import cssshell from './chats-shell.module.css'
-import { ListSentinel, ListSkeleton } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, ProgressiveListSpacer } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { ChatsExportDialog, type ChatsExportDialogProps } from './chats-export-dialog.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import type { ExportTaskState } from './export-task.ts'
 import { ChatsGroupInfoView, type ChatsGroupInfoViewProps } from './chats-group-info-view.tsx'
 import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
 import { ChatsCalendarDialog, type ChatsCalendarDialogProps } from './chats-calendar-dialog.tsx'
 import { ChatsEditedDialog, type ChatsEditedDialogProps } from './chats-edited-dialog.tsx'
 import { ChatsMsgMenu } from './chats-msg-menu.tsx'
 import { ChatsMessageTools, type ChatsMessageToolsController } from './chats-message-tools.tsx'
+import {
+  ChatsPosterOverlay,
+  ChatsPosterSelectionBar,
+  posterItemHead,
+  posterItemLocalId,
+  posterItemsForSelection,
+  posterMessageCount,
+  type ChatsPosterController,
+} from './chats-poster.tsx'
+import type { MsgRowRenderer } from './chats-msg-row.tsx'
+import cssposter from './chats-poster.module.css'
 import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useImagePreload } from './use-image-preload.ts'
@@ -48,11 +61,15 @@ import type { MessageRenderItem } from '../utils/message-items.ts'
 import { isAnalyzableMessage, type AnalysisTargetState } from './analysis-selection.ts'
 import { useChatsAnalysis } from './chats-analysis.ts'
 import { withEnterprise } from './enterprise-identity.ts'
+import { shouldShowEnterpriseBadge } from './session-list.ts'
 import { IdentityName } from './identity.tsx'
+import type { MessageFileSaveTask } from './message-file-save.ts'
 
 export interface ChatsViewProps {
   /** Right-click tools (source/info/editors) live outside the state bag. */
   messageTools: ChatsMessageToolsController
+  /** Multi-message poster selection and preview state, outside the state bag. */
+  messagePoster: ChatsPosterController
   /**
    * 一次性动作回执（W3-11.1）：编辑/草稿/复制/打开文件的结果，一行会自动消失的小字。
    *
@@ -69,12 +86,54 @@ export interface ChatsViewProps {
   indexProgress?: { done: number; total: number; rows: number } | null
   /** 停止在跑的索引构建（W3-11.5）。不给就没有「停止」按钮。 */
   onCancelIndexBuild?: () => void | Promise<void>
+  /** 停止在跑的消息搜索（N9）。搜索中才渲染，取消结果经面板操作回执显示。 */
+  onCancelMsgSearch?: () => void
   /**
    * 手机档（≤560）「返回会话列表」。**袋外独立 prop**，理由与上面两条相同：
    * `state` 袋的平铺字段卡在 96 件的棘轮上（`chats-state-bag.wiring.spec.ts`），
    * 一件都加不进去；而这一项只有一个消费方（头部那枚返回按钮），也不是任何一袋弹窗的道具。
    */
   onBackToList?: () => void
+  /** 会话级 AI 回复开关（袋外独立 prop，避免扩大状态袋）。 */
+  aiReply?: {
+    visible: boolean
+    enabled: boolean
+    stage: string
+    busy: boolean
+    ready: boolean
+    error?: string
+    lastRunAt?: number
+    recordId?: number
+    personaName: string
+    personaPrompt: string
+    splitReply: boolean
+    onToggle: () => void
+    onScanNow: () => void
+    onSavePersona: (input: { name: string; prompt: string; splitReply: boolean }) => Promise<boolean>
+  }
+  /** 会话列表的 AI 回复徽标与筛选；与当前会话的 aiReply 开关分开。 */
+  aiReplyFilter: {
+    enabledUsernames: ReadonlySet<string>
+    aiOnly: boolean
+    count: number
+    loading: boolean
+    error?: string
+    onToggle: () => void
+  }
+  /** Right-click "open file" save lifecycle; rendered directly under the message header. */
+  messageFileSave: MessageFileSaveTask
+  /** 左侧批量导出的统一任务状态；只给会话列表工具行消费。 */
+  batchExport: {
+    state: ExportTaskState | null
+    running: boolean
+    finishing: boolean
+    onCancel: () => void
+  }
+  /** 消息虚拟列表的 DOM 挂点与滚动容器前导偏移。袋外独立 prop，避免扩大状态袋。 */
+  messageVirtualization: {
+    listRef: React.MutableRefObject<HTMLDivElement | null>
+    scrollMargin: number
+  }
   /**
    * 面板作用域里那批状态/回调，收成一个对象（摊到调用点就是一百多行道具字面量）。
    * 前四件是**按消费方分的组**：类型直接写弹窗自己的 props，加一件道具就必须两处同时供得上，
@@ -93,9 +152,7 @@ export interface ChatsViewProps {
       aiFull: boolean
       aiOpen: boolean
       aiTarget: WechatSession | null
-      batchExporting: boolean
       batchMode: boolean
-      batchMsg: string | null
       buildIndex: (silent?: boolean) => Promise<void>
       changeView: (next: ChatView) => void
       chatlogOpen: ChatlogFrame | null
@@ -148,14 +205,19 @@ export interface ChatsViewProps {
       pollStatus: string
       profileMember: GroupMember | null
       profilePos: { left: number; top: number } | null
-      renderMsgItem: (item: MessageRenderItem) => React.JSX.Element | null
-      renderSession: (s: WechatSession) => React.JSX.Element
+      renderMsgItem: MsgRowRenderer
+      renderSession: (s: WechatSession, itemIndex?: number) => React.JSX.Element
       runMenuAction: (item: MsgMenuItem, m: WechatMessage) => void
+      /** Esc/点空白关闭消息菜单，并把焦点还给消息行。 */
+      dismissMsgMenu: () => void
       search: string
       searchMode: 'session' | 'message'
       selected: Set<string>
+      sessBeforeHeight: number
       sessCount: number
       sessSentinel: (el: HTMLDivElement | null) => void
+      sessStart: number
+      sessTopSentinel: (el: HTMLDivElement | null) => void
       sessionListRef: React.MutableRefObject<HTMLDivElement | null>
       sessionSearching: boolean
       sessionsLoadMoreRef: (el: HTMLDivElement | null) => void
@@ -189,15 +251,29 @@ function CapNote({ loaded, total }: { loaded: number; total: number }): React.JS
  * 消息区外壳：滚动容器 + 「N 条新消息」浮标（2026-10-18）。
  * 浮标只在用户翻历史且轮询追加了新消息时出现；点击跳回最新，不抢正常阅读的滚动。
  */
-function MsgScrollArea({ scrollRef, newMsgCount, onJump, children }: {
+function MsgScrollArea({ scrollRef, newMsgCount, onJump, children, interactionLocked = false }: {
   scrollRef: React.MutableRefObject<HTMLDivElement | null>
   newMsgCount: number
   onJump: () => void
   children: React.ReactNode
+  interactionLocked?: boolean
 }): React.JSX.Element {
+  // 捕获阶段只拦点击，不用 pointer-events:none：滚轮和触摸滚动必须保持可用。
   return (
     <div className={cssnewmsg.msgWrap}>
-      <div className={cssrows.msgBody} ref={scrollRef}>{children}</div>
+      <div
+        className={cssrows.msgBody}
+        ref={scrollRef}
+        data-message-interaction-locked={interactionLocked || undefined}
+        onClickCapture={interactionLocked
+          ? (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }
+          : undefined}
+      >
+        {children}
+      </div>
       {newMsgCount > 0 && (
         <button
           type="button"
@@ -234,6 +310,7 @@ function SearchHitIdentity({ hit }: { hit: SearchHit }): React.JSX.Element {
 
 /** Current session heading with the same display-only enterprise suffix as the list. */
 function ChatSessionHeading({ session }: { session: WechatSession }): React.JSX.Element {
+  const showEnterpriseBadge = shouldShowEnterpriseBadge(session, isEnterpriseChat(session.username))
   return (
     <IdentityName
       className={csscards.msgHeaderIdentity}
@@ -243,7 +320,7 @@ function ChatSessionHeading({ session }: { session: WechatSession }): React.JSX.
       size={36}
     >
       <span>{withEnterprise(session.displayName || session.username, session.enterpriseName)}</span>
-      {isEnterpriseChat(session.username) && (
+      {showEnterpriseBadge && (
         <span className={csscards.entBadge} title={session.enterpriseName ? `企业微信 · ${session.enterpriseName}` : '企业微信'}>
           企微
         </span>
@@ -252,22 +329,41 @@ function ChatSessionHeading({ session }: { session: WechatSession }): React.JSX.
   )
 }
 
-export function ChatsView({ state, messageTools, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
-  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
-  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
-  // 推荐回复只对单聊成立（群聊“回一句”无意义）；分析读写当前会话，群聊也适用。
-  const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
-  const sidePanel = aiOpen && aiEligible && aiTarget ? 'ai' : groupInfoOpen ? 'group' : contactInfoOpen ? 'contact' : (suggestVisible || analysisPaneOpen) ? 'chat' : undefined
-  const { selectedLocalId, targetMessage, speaker, inlineAnalysis, openMessageAnalysis } = useChatsAnalysis({
-    curSession, msgItems, analysisPaneOpen, analysisTarget,
-    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setContactInfoOpen, setGroupInfoOpen: groupInfo.setGroupInfoOpen,
-  })
-  // 图片预取：可见窗口上下若干行的图片提前低优先批量取回并写内存缓存，滚动时首帧命中、不闪占位。
-  useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
+/** Left pane: search mode switch, session filters, paged sessions, and global message hits. */
+function ChatsSessionPane({
+  state,
+  batchExport,
+  indexProgress,
+  onCancelIndexBuild,
+  onCancelMsgSearch,
+  aiReplyFilter,
+}: {
+  state: ChatsViewProps['state']
+  batchExport: ChatsViewProps['batchExport']
+  indexProgress?: { done: number; total: number; rows: number } | null
+  onCancelIndexBuild?: () => void | Promise<void>
+  onCancelMsgSearch?: () => void
+  aiReplyFilter: ChatsViewProps['aiReplyFilter']
+}): React.JSX.Element {
+  const {
+    batchMode, buildIndex, changeView, error, exportBatch, filtered,
+    indexBuilding, loading, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched,
+    normalList, onSearchInput, openSessionAndLocate, pinnedCollapsed, pinnedList, renderSession,
+    search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart,
+    sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager,
+    setBatchMode, setSearch, setSearchMode, setSelected, stats, togglePinned, view,
+  } = state
+  const aiFilterBlocked = aiReplyFilter.count === 0
+    && (aiReplyFilter.loading || aiReplyFilter.error !== undefined)
+  const emptyText = aiReplyFilter.aiOnly && view === 'chats'
+    ? '暂无开启 AI 回复的会话'
+    : view === 'chats'
+      ? '暂无会话'
+      : '暂无' + (view === 'kefu' ? '客服会话' : '订阅会话')
+
   return (
-    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined} data-side-panel={sidePanel}>
-      {/* left: session list */}
-      <div className={csscards.sidebar} data-chat-sidebar="">
+    <div className={csscards.sidebar} data-chat-sidebar="">
+      <div className={csscards.filterStrip}>
         <div className={csscards.search}>
           <SearchInput
             className={csscards.searchField}
@@ -294,104 +390,275 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
             type="button"
             className={csscards.searchActionBtn}
             data-active={batchMode || undefined}
-            title="批量导出会话"
+            title="批量导出会话原文件 ZIP"
             onClick={() => { setBatchMode(v => !v); setSelected(new Set()) }}
-          >{batchMode ? '退出批量' : '批量'}</button>
+          >{batchMode ? '退出批量' : '批量原文件'}</button>
         </div>
-        {searchMode === 'session' ? (
-          <>
-            <div className={csscards.typeFilter}>
-              <Segmented
-                options={[
-                  { value: 'chats', label: '全部' },
-                  { value: 'bizchats', label: '公众号' },
-                  { value: 'servicechats', label: '服务号' },
-                  { value: 'kefu', label: '客服' },
-                ]}
-                value={view}
-                onChange={(v) => { changeView(v as ChatView) }}
-                ariaLabel="会话分类"
-              />
-              <div className={csscards.stats}>
-                {batchMode ? (
-                  <>
-                    <button type="button" className={csscards.batchBtn} onClick={() => { setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
-                    <button type="button" className={csscards.batchBtn} onClick={() =>{  setSelected(new Set()) }}>清空</button>
-                    <span className={cssshell.statUnread}>已选 {selected.size}</span>
-                    <button type="button" className={csscards.batchBtn} onClick={() => { void exportBatch() }} disabled={batchExporting || selected.size === 0}>
-                      {batchExporting ? '导出中…' : '导出所选'}
-                    </button>
-                    {batchMsg && <span className={cssshell.batchMsg}>{batchMsg}</span>}
-                  </>
-                ) : (
-                  <>
-                    <span>好友 {stats.friends}</span>
-                    <span>群聊 {stats.groups}</span>
-                    {stats.unread > 0 && <span className={cssshell.statUnread}>未读 {stats.unread}</span>}
-                  </>
-                )}
-              </div>
-            </div>
-            <div ref={sessionListRef} className={cssshell.list} onKeyDown={(event) => { focusListRow(event, sessionListRef.current, '[data-session-row]') }}>
-              {loading && <ListSkeleton rows={10} />}
-              {error && <div className={kitCss.error} role="alert">{error}</div>}
-              {!loading && !error && filtered.length === 0 && <EmptyMaybeSyncing text={view === 'chats' ? '暂无会话' : '暂无' + (view === 'kefu' ? '客服会话' : '订阅会话')} />}
-              {!loading && !error && pinnedList.length > 0 && (
-                <div className={cssshell.pinSection}>
-                  {!pinnedCollapsed && pinnedList.map(s => renderSession(s))}
-                  <button type="button" className={csscards.pinToggle} onClick={togglePinned}>
-                    <span className={css.pinMark}><IconPin /> 置顶（{pinnedList.length}）</span>
-                    <span className={cssshell.pinArrow}>{pinnedCollapsed ? '▸' : '▾'}</span>
+        {searchMode === 'session' && (
+          <div className={csscards.typeFilter}>
+            <Segmented
+              options={[
+                { value: 'chats', label: '全部' },
+                { value: 'bizchats', label: '公众号' },
+                { value: 'servicechats', label: '服务号' },
+                { value: 'kefu', label: '客服' },
+              ]}
+              value={view}
+              onChange={(v) => { changeView(v as ChatView) }}
+              ariaLabel="会话分类"
+            />
+            {view === 'chats' && (
+              <button
+                type="button"
+                className={csscards.aiFilter}
+                data-active={aiReplyFilter.aiOnly || undefined}
+                aria-pressed={aiReplyFilter.aiOnly}
+                aria-label={aiReplyFilter.aiOnly ? '显示全部会话' : '只看开启 AI 回复的会话'}
+                disabled={aiFilterBlocked}
+                title={aiReplyFilter.error ?? (aiReplyFilter.aiOnly ? '显示全部会话' : '只看开启 AI 回复的会话')}
+                onClick={aiReplyFilter.onToggle}
+              >
+                <span className={csscards.aiFilterMark} aria-hidden="true">AI</span>
+                <span>回复</span>
+                <span className={csscards.aiFilterCount}>
+                  {aiReplyFilter.loading && aiReplyFilter.count === 0 ? '…' : aiReplyFilter.count}
+                </span>
+              </button>
+            )}
+            <div className={csscards.stats}>
+              {batchMode ? (
+                <>
+                  <button type="button" className={csscards.batchBtn} onClick={() => { setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
+                  <button type="button" className={csscards.batchBtn} onClick={() => { setSelected(new Set()) }}>清空</button>
+                  <span className={cssshell.statUnread}>已选 {selected.size}</span>
+                  <button
+                    type="button"
+                    className={csscards.batchBtn}
+                    onClick={() => { void exportBatch() }}
+                    disabled={batchExport.running || selected.size === 0}
+                    title={!batchExport.running && selected.size === 0 ? '先选择至少一个会话' : undefined}
+                  >
+                    {batchExport.finishing ? '完成中…' : batchExport.running ? '导出中…' : '导出所选 ZIP'}
                   </button>
-                </div>
+                </>
+              ) : (
+                <>
+                  <span>好友 {stats.friends}</span>
+                  <span>群聊 {stats.groups}</span>
+                  {stats.unread > 0 && <span className={cssshell.statUnread}>未读 {stats.unread}</span>}
+                </>
               )}
-              {!loading && !error && normalList.slice(0, sessCount).map(s => renderSession(s))}
-              {!loading && !error && normalList.length > sessCount && <ListSentinel refFn={sessSentinel} />}
-              {!loading && !error && !sessionSearching && (sessionsPager.capped ? <CapNote loaded={normalList.length} total={sessionsPager.total} /> : sessionsPager.hasMore && <ListSentinel refFn={sessionsLoadMoreRef} />)}
             </div>
-          </>
-        ) : (
-          <div className={cssshell.list}>
-            {!msgIndexed && (
-              <div className={csscards.searchIndexHint}>
-                <span>消息搜索索引尚未构建（当前为全表扫描）</span>
-                {indexBuilding ? (
-                  // W3-11.5：秒级起步的构建不该只有一个禁用的「构建中…」——
-                  // 说清跑到哪个分片、已入库多少条，并给一条退路。
-                  <>
-                    <span className={csscards.searchIndexProgress}>
-                      正在构建{indexProgress && indexProgress.total > 0
-                        ? `（第 ${indexProgress.done}/${indexProgress.total} 个分片 · 已入库 ${indexProgress.rows} 条）`
-                        : '…'}
-                    </span>
-                    <button type="button" className={csscards.loadMore} onClick={() => { void onCancelIndexBuild?.() }}>停止</button>
-                  </>
-                ) : (
-                  <button type="button" className={csscards.loadMore} onClick={() => { void buildIndex() }} {...desktopActionProps()}>{desktopAction() ? '构建索引（仅电脑）' : '构建索引'}</button>
-                )}
-              </div>
-            )}
-            {msgSearchLoading && <LoadingState variant="compact" label="搜索中…" />}
-            {msgSearchError && <ErrorState message={msgSearchError} />}
-            {!msgSearchLoading && msgSearched && msgHits.length === 0 && !msgSearchError && <div className={kitCss.emptyInline}>未找到相关消息</div>}
-            {!msgSearchLoading && msgHits.length > 0 && (
-              <>
-                <div className={cssshell.searchHitCount}>命中 {msgHits.length} 条 · 点击定位到原消息</div>
-                {msgHits.map(hit => (
-                  <button key={`${hit.username}:${hit.local_id}`} type="button" className={csscards.searchHit} onClick={() => { void openSessionAndLocate(hit.username, hit.local_id) }}>
-                    <div className={cssshell.searchHitTop}>
-                      <SearchHitIdentity hit={hit} />
-                      <span className={cssshell.searchHitTime}>{hit.time}</span>
-                    </div>
-                    <div className={cssshell.searchHitSnippet}>{hit.snippet}</div>
-                  </button>
-                ))}
-              </>
-            )}
-            {!msgSearchLoading && !msgSearched && !msgSearchError && <div className={kitCss.emptyInline}>输入关键词搜索全部消息</div>}
           </div>
         )}
       </div>
+      {searchMode === 'session' ? (
+        <>
+          {batchMode && batchExport.state && (
+            <div className={cssshell.batchProgress}>
+              <ExportProgressStatus state={batchExport.state} onCancel={batchExport.onCancel} compact />
+            </div>
+          )}
+          <div ref={sessionListRef} className={cssshell.list} onKeyDown={(event) => { focusListRow(event, sessionListRef.current, '[data-session-row]') }}>
+            {loading && <ListSkeleton rows={10} />}
+            {error && <div className={kitCss.error} role="alert">{error}</div>}
+            {!loading && !error && filtered.length === 0 && <EmptyMaybeSyncing text={emptyText} />}
+            {!loading && !error && pinnedList.length > 0 && (
+              <div className={cssshell.pinSection}>
+                {!pinnedCollapsed && pinnedList.map(s => renderSession(s))}
+                <button type="button" className={csscards.pinToggle} onClick={togglePinned}>
+                  <span className={css.pinMark}><IconPin /> 置顶（{pinnedList.length}）</span>
+                  <span className={cssshell.pinArrow}>{pinnedCollapsed ? '▸' : '▾'}</span>
+                </button>
+              </div>
+            )}
+            {!loading && !error && <ProgressiveListSpacer height={sessBeforeHeight} topSentinelRef={sessTopSentinel} />}
+            {!loading && !error && normalList.slice(sessStart, sessCount).map((s, idx) => renderSession(s, sessStart + idx))}
+            {!loading && !error && normalList.length > sessCount && <ListSentinel refFn={sessSentinel} />}
+            {!loading && !error && !sessionSearching && (sessionsPager.capped ? <CapNote loaded={normalList.length} total={sessionsPager.total} /> : sessionsPager.hasMore && <ListSentinel refFn={sessionsLoadMoreRef} />)}
+          </div>
+        </>
+      ) : (
+        <div className={cssshell.list}>
+          {!msgIndexed && (
+            <div className={csscards.searchIndexHint}>
+              <span>消息搜索索引尚未构建（当前为全表扫描）</span>
+              {indexBuilding ? (
+                <>
+                  <span className={csscards.searchIndexProgress}>
+                    正在构建{indexProgress && indexProgress.total > 0
+                      ? `（第 ${indexProgress.done}/${indexProgress.total} 个分片 · 已入库 ${indexProgress.rows} 条）`
+                      : '…'}
+                  </span>
+                  <button type="button" className={csscards.loadMore} onClick={() => { void onCancelIndexBuild?.() }}>停止</button>
+                </>
+              ) : (
+                <button type="button" className={csscards.loadMore} onClick={() => { void buildIndex() }} {...desktopActionProps()}>{desktopAction() ? '构建索引（仅电脑）' : '构建索引'}</button>
+              )}
+            </div>
+          )}
+          {msgSearchLoading && (
+            <>
+              <LoadingState variant="compact" label="搜索中…" />
+              {onCancelMsgSearch && (
+                <button type="button" className={csscards.loadMore} onClick={onCancelMsgSearch}>
+                  停止搜索
+                </button>
+              )}
+            </>
+          )}
+          {msgSearchError && <ErrorState message={msgSearchError} />}
+          {!msgSearchLoading && msgSearched && msgHits.length === 0 && !msgSearchError && <div className={kitCss.emptyInline}>未找到相关消息</div>}
+          {!msgSearchLoading && msgHits.length > 0 && (
+            <>
+              <div className={cssshell.searchHitCount}>命中 {msgHits.length} 条 · 点击定位到原消息</div>
+              {msgHits.map(hit => (
+                <button key={`${hit.username}:${hit.local_id}`} type="button" className={csscards.searchHit} onClick={() => { void openSessionAndLocate(hit.username, hit.local_id) }}>
+                  <div className={cssshell.searchHitTop}>
+                    <SearchHitIdentity hit={hit} />
+                    <span className={cssshell.searchHitTime}>{hit.time}</span>
+                  </div>
+                  <div className={cssshell.searchHitSnippet}>{hit.snippet}</div>
+                </button>
+              ))}
+            </>
+          )}
+          {!msgSearchLoading && !msgSearched && !msgSearchError && <div className={kitCss.emptyInline}>输入关键词搜索全部消息</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface ChatsMessageStreamProps {
+  messages: readonly WechatMessage[]
+  messagesMatchSession: boolean
+  hasMore: boolean
+  msgLoading: boolean
+  msgError: string | null
+  msgItems: MessageRenderItem[]
+  msgVirtualizer: Virtualizer<HTMLDivElement, Element>
+  messageVirtualization: ChatsViewProps['messageVirtualization']
+  msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
+  msgEndRef: React.MutableRefObject<HTMLDivElement | null>
+  newMsgCount: number
+  jumpToLatest: () => void
+  loadMore: () => Promise<void>
+  selectedLocalId: number | null
+  suggestionInteractionLocked: boolean
+  messagePoster: ChatsPosterController
+  renderMsgItem: MsgRowRenderer
+  openMessageAnalysis: (message: WechatMessage) => void
+}
+
+/** 消息流本体；与标题栏/右栏拆开，保证会话面板只负责装配而不是承载整棵虚拟列表。 */
+function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
+  const {
+    messages, messagesMatchSession, hasMore, msgLoading, msgError, msgItems,
+    msgVirtualizer, messageVirtualization, msgScrollRef, msgEndRef, newMsgCount,
+    jumpToLatest, loadMore, selectedLocalId, suggestionInteractionLocked,
+    messagePoster, renderMsgItem, openMessageAnalysis,
+  } = props
+  return (
+    <MsgScrollArea
+      scrollRef={msgScrollRef}
+      newMsgCount={newMsgCount}
+      onJump={jumpToLatest}
+      interactionLocked={suggestionInteractionLocked}
+    >
+      {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
+      {!messagesMatchSession && <ListSkeleton rows={8} />}
+      {messagesMatchSession && hasMore && (
+        <button type="button" className={csscards.loadMore} onClick={() => { void loadMore() }}>
+          {msgLoading ? '加载中…' : '加载更多'}
+        </button>
+      )}
+      {messagesMatchSession && msgError && <ErrorState message={msgError} />}
+      {messagesMatchSession && !msgLoading && !msgError && messages.length === 0 && (
+        <div className={csscards.msgEmptyState} role="status">
+          <div className={csscards.msgEmptyTitle}>暂无可显示的消息</div>
+          <div className={csscards.msgEmptyText}>该会话可能尚未同步，或微信本地没有可读取的消息记录。</div>
+        </div>
+      )}
+      {messagesMatchSession && (
+        /*
+         * 虚拟化（N18）：外层按总高度撑开滚动条，行按各自偏移绝对定位。
+         * 只挂载视口附近（`overscan`）+ 动态测高（`measureElement`），
+         * 所以 DOM 节点数与已加载的历史长度**解耦**（实测 1 万条消息从 9,700 个节点降到几十个）。
+         * `id="msg-<localId>"` 仍在行上，深链与 `locateMessage` 照旧可用。
+         */
+        <div ref={messageVirtualization.listRef} style={{ height: msgVirtualizer.getTotalSize(), position: 'relative', flex: '0 0 auto' }}>
+          {msgVirtualizer.getVirtualItems().map((vi) => {
+            const item = msgItems[vi.index]
+            if (!item) return null
+            const posterId = posterItemLocalId(item)
+            const posterHead = posterItemHead(item)
+            const posterSelected = posterId > 0 && messagePoster.selectedIds.has(posterId)
+            return (
+              <div
+                key={vi.key}
+                data-index={vi.index}
+                ref={msgVirtualizer.measureElement}
+                className={cssrows.msgVRow}
+                data-analysis-target={!suggestionInteractionLocked && item.kind === 'msg' && selectedLocalId === item.m.localId || undefined}
+                data-message-interaction-locked={suggestionInteractionLocked || undefined}
+                data-poster-selectable={messagePoster.active && posterId > 0 || undefined}
+                data-poster-selected={messagePoster.active && posterSelected || undefined}
+                data-poster-self={messagePoster.active && posterHead?.isSender === 1 || undefined}
+                onClickCapture={messagePoster.active && posterId > 0
+                  ? (event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      messagePoster.toggle(posterId)
+                    }
+                  : undefined}
+                onClick={!suggestionInteractionLocked && !messagePoster.active && item.kind === 'msg' && isAnalyzableMessage(item.m)
+                  ? () => { openMessageAnalysis(item.m) }
+                  : undefined}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start - messageVirtualization.scrollMargin}px)` }}
+              >
+                {messagePoster.active && posterId > 0 && (
+                  <span className={cssposter.selectMark} data-on={posterSelected || undefined} aria-hidden="true">
+                    {posterSelected ? '✓' : ''}
+                  </span>
+                )}
+                {renderMsgItem(item)}
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
+      <div ref={msgEndRef} />
+    </MsgScrollArea>
+  )
+}
+
+export function ChatsView({ state, batchExport, messageTools, messagePoster, notice, indexProgress, onCancelIndexBuild, onCancelMsgSearch, onBackToList, aiReply, aiReplyFilter, messageFileSave, messageVirtualization }: ChatsViewProps): React.JSX.Element {
+  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
+  dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
+  // 推荐回复只对单聊成立（群聊“回一句”无意义）；分析读写当前会话，群聊也适用。
+  const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
+  // 右栏一次只渲染一个内容域。分析优先，避免历史状态残留时两块同时出现。
+  const chatRightMode = analysisPaneOpen ? 'analysis' as const : suggestVisible ? 'suggest' as const : undefined
+  // 只有推荐回复真的占据右栏时才锁消息点击；AI 问答/资料抽屉临时占位时不能误锁。
+  const chatRightPanelSuppressed = (aiOpen && aiEligible && aiTarget !== null) || groupInfoOpen || contactInfoOpen
+  const suggestionInteractionLocked = chatRightMode === 'suggest' && !chatRightPanelSuppressed && !messagePoster.active
+  const posterSelectedItems = messagePoster.active
+    ? posterItemsForSelection(msgItems, messagePoster.selectedIds)
+    : []
+  const posterSelectedCount = posterMessageCount(posterSelectedItems)
+  const sidePanel = aiOpen && aiEligible && aiTarget ? 'ai' : groupInfoOpen ? 'group' : contactInfoOpen ? 'contact' : chatRightMode !== undefined ? 'chat' : undefined
+  const { selectedLocalId, targetMessage, speaker, inlineAnalysis, openMessageAnalysis } = useChatsAnalysis({
+    curSession, msgItems, analysisPaneOpen, analysisTarget, suggestionInteractionLocked,
+    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setSuggestOpen,
+    setContactInfoOpen, setGroupInfoOpen: groupInfo.setGroupInfoOpen,
+  })
+  // 图片预取：可见窗口上下若干行的图片提前低优先批量取回并写内存缓存，滚动时首帧命中、不闪占位。
+  useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
+  return (
+    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined} data-side-panel={sidePanel}>
+      <ChatsSessionPane state={state} batchExport={batchExport} indexProgress={indexProgress} onCancelIndexBuild={onCancelIndexBuild} onCancelMsgSearch={onCancelMsgSearch} aiReplyFilter={aiReplyFilter} />
 
       {/* right: message stream */}
       <div className={cssrows.messages} data-chat-messages="">
@@ -432,15 +699,25 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                 setContactInfoOpen={setContactInfoOpen}
                 moreOpen={moreOpen}
                 setMoreOpen={setMoreOpen}
-                exporting={exportDialog.exporting}
+                exporting={exportDialog.exportState.status === 'running'}
                 editing={edited.editing}
                 edits={edited.edits}
                 setExportOpen={exportDialog.setExportOpen}
                 openEdits={openEdits}
                 clearAllDrafts={clearAllDrafts}
                 clearDraft={clearDraft}
+                aiReply={aiReply}
               />
             </div>
+            {messageFileSave.state.status !== 'idle' && (
+              <div className={csscards.msgFileSaveStatus}>
+                <ExportProgressStatus
+                  compact
+                  state={messageFileSave.state}
+                  onCancel={() => { void messageFileSave.cancel() }}
+                />
+              </div>
+            )}
             {/*
               类型统计 chip 行此前在 .msgHeader 内，与标题行/动作行争宽 —— 实测头部因此在
               1664px 就有 94.6px 高、到 960px 涨到 195px 且 chip 被挤成三行竖排（审计 P1-9）。
@@ -456,47 +733,35 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
                 )}
               </div>
             )}
-            <MsgScrollArea scrollRef={msgScrollRef} newMsgCount={newMsgCount} onJump={jumpToLatest}>
-              {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
-              {!messagesMatchSession && <ListSkeleton rows={8} />}
-              {messagesMatchSession && hasMore && (
-                <button type="button" className={csscards.loadMore} onClick={() => { void loadMore() }}>
-                  {msgLoading ? '加载中…' : '加载更多'}
-                </button>
-              )}
-              {messagesMatchSession && msgError && <ErrorState message={msgError} />}
-              {messagesMatchSession && (
-                /*
-                 * 虚拟化（N18）：外层按总高度撑开滚动条，行按各自偏移绝对定位。
-                 * 只挂载视口附近（`overscan`）+ 动态测高（`measureElement`），
-                 * 所以 DOM 节点数与已加载的历史长度**解耦**（实测 1 万条消息从 9,700 个节点降到几十个）。
-                 * `id="msg-<localId>"` 仍在行上，深链与 `locateMessage` 照旧可用。
-                 */
-                <div style={{ height: msgVirtualizer.getTotalSize(), position: 'relative', flex: '0 0 auto' }}>
-                  {msgVirtualizer.getVirtualItems().map((vi) => {
-                    const item = msgItems[vi.index]
-                    if (!item) return null
-                    return (
-                      <div
-                        key={vi.key}
-                        data-index={vi.index}
-                        ref={msgVirtualizer.measureElement}
-                        className={cssrows.msgVRow}
-                        data-analysis-target={item.kind === 'msg' && selectedLocalId === item.m.localId || undefined}
-                        onClick={item.kind === 'msg' && isAnalyzableMessage(item.m)
-                          ? () => { openMessageAnalysis(item.m) }
-                          : undefined}
-                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
-                      >
-                        {renderMsgItem(item)}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
-              <div ref={msgEndRef} />
-            </MsgScrollArea>
+            {messagePoster.active && (
+              <ChatsPosterSelectionBar
+                count={posterSelectedCount}
+                busy={messagePoster.busy}
+                onCancel={messagePoster.cancel}
+                onGenerate={() => { void messagePoster.generate(msgItems) }}
+              />
+            )}
+            <ChatsMessageStream
+              messages={messages}
+              messagesMatchSession={messagesMatchSession}
+              hasMore={hasMore}
+              msgLoading={msgLoading}
+              msgError={msgError}
+              msgItems={msgItems}
+              msgVirtualizer={msgVirtualizer}
+              messageVirtualization={messageVirtualization}
+              msgScrollRef={msgScrollRef}
+              msgEndRef={msgEndRef}
+              newMsgCount={newMsgCount}
+              jumpToLatest={jumpToLatest}
+              loadMore={loadMore}
+              selectedLocalId={selectedLocalId}
+              suggestionInteractionLocked={suggestionInteractionLocked}
+              messagePoster={messagePoster}
+              renderMsgItem={renderMsgItem}
+              openMessageAnalysis={openMessageAnalysis}
+            />
+            <ChatsPosterOverlay controller={messagePoster} session={curSession} renderItem={renderMsgItem} />
           </>
         )}
       </div>
@@ -530,6 +795,7 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
         msgMenu={msgMenu}
         items={msgMenu ? buildMsgMenu(msgMenu.m, msgMenu.kind) : []}
         onClose={() => { setMsgMenu(null) }}
+        onDismiss={dismissMsgMenu}
         onPick={runMenuAction}
       />
 
@@ -542,16 +808,15 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
       {/* 已编辑消息浮层：JSX 在 chats-edited-dialog.tsx（遮罩那一判在那里） */}
       <ChatsEditedDialog {...edited} />
 
-      {/* 右栏 = 推荐回复与消息分析的合并面板：
+      {/* 右栏 = 推荐回复 / 消息分析二选一：
           · 分析只跑当前点选的一条，结果来自本地模型；
           · 群聊没有推荐回复，但仍可单独打开消息分析；
           · AI 问答打开时顶替整个右栏，点击消息会先关闭 AI 问答再切回分析。 */}
-      {curSession !== null && (suggestVisible || analysisPaneOpen) && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (
+      {curSession !== null && chatRightMode !== undefined && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (
         <ChatRightPanel
           target={curSession}
           onClose={() => { setSuggestOpen(false); setAnalysisPaneOpen(false) }}
-          showSuggest={suggestVisible}
-          showAnalysis={analysisPaneOpen}
+          mode={chatRightMode}
           analysisTargetId={selectedLocalId}
           analysisEntry={selectedLocalId === null ? undefined : inlineAnalysis.get(selectedLocalId)}
           analysisMessage={targetMessage}
@@ -563,10 +828,10 @@ export function ChatsView({ state, messageTools, notice, indexProgress, onCancel
         />
       )}
 
-      {aiOpen && aiEligible && aiTarget && !groupInfoOpen && !contactInfoOpen && (
+      {aiEligible && aiTarget && (
         <SessionAsk
-          key={aiTarget.username}
           target={aiTarget}
+          hidden={!aiOpen || groupInfoOpen || contactInfoOpen}
           onClose={() => { setAiOpen(false); setAiFull(false) }}
           onOpenMessage={(u, id) => { void openSessionAndLocate(u, id > 0 ? id : undefined) }}
           full={aiFull}

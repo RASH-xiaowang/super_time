@@ -1,38 +1,18 @@
 import type { DatabaseSync } from './db-open.ts';
 import { storeExists, taskDbPath } from './task-db.ts';
 import type { TaskBatchMutationResult, TaskInfo, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerRecord, TaskTriggerSnapshot } from '../types.ts';
+export { cleanTaskBatchIds, clampTaskInt, taskCellNum, taskCellStr, taskErrorText, TASK_BATCH_DELETE_MAX, } from './task-center-utils.ts';
 export { scanTaskTriggers } from './task-center-scan.ts';
 export type { ScanTaskTriggersOptions } from './task-center-scan.ts';
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts';
-export type { PendingDispatchResult, TaskDispatchDeps } from './task-center-callback.ts';
+export type { PendingDispatchResult, TaskDispatchDeps, TaskDispatchOptions } from './task-center-callback.ts';
 export { storeExists, taskDbPath };
-/** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
-export declare const TASK_BATCH_DELETE_MAX = 500;
-/** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
-export declare function taskErrorText(e: unknown): string;
-export declare function taskCellStr(v: unknown): string;
-export declare function taskCellNum(v: unknown): number;
-/** 整数夹取（非数字按 fallback，其余夹到 [min, max]）。 */
-export declare function clampTaskInt(v: unknown, fallback: number, min: number, max: number): number;
-/**
- * 清洗批量删除 id：只保留唯一正整数，并拒绝空选择和过大批次。
- *
- * Remote 入参来自序列化 JSON，不能只靠 TypeScript 类型；重复 id 去重后返回，
- * 超过上限时整单拒绝而不是截断 —— 用户勾了 501 条却只删 500 条更难排查。
- * @param raw - 入参里的 ids（运行时可能不是数组）。
- * @param max - 允许的最大条数。
- * @returns 清洗后的 id 或中文错误。
- */
-export declare function cleanTaskBatchIds(raw: unknown, max?: number): {
-    ids: number[];
-    error?: string;
-};
 /** 建表语句（两张表一次建齐；`IF NOT EXISTS` ⇒ 可在每个写连接里重复执行）。 */
 export declare function ensureTaskSchema(db: DatabaseSync): void;
 /** `task_triggers` 行 → 契约里的 `TaskTriggerRecord`。 */
-export declare function rowToTrigger(r: Record<string, unknown>): TaskTriggerRecord;
+export declare function rowToTrigger(r: Record<string, unknown>, decryptedDir?: string): TaskTriggerRecord;
 /** `task_info` 行 → 契约里的 `TaskInfo`（`last_scan_seq` 是扫描内部状态，不进契约）。 */
-export declare function rowToTask(r: Record<string, unknown>): TaskInfo;
+export declare function rowToTask(r: Record<string, unknown>, decryptedDir?: string): TaskInfo;
 /**
  * 任务列表（id DESC，最新在前）。
  *

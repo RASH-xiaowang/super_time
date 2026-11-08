@@ -35,6 +35,53 @@ export interface BackendEvent {
   args?: unknown[]
 }
 
+/** 微信原生 OCR 返回的一行文字及其在图片中的像素坐标。 */
+export interface ImageOcrLine {
+  text: string
+  left: number
+  top: number
+  right: number
+  bottom: number
+  rate: number
+}
+
+/**
+ * 图片文字识别结果。
+ *
+ * `engine` 是能力来源的判别字段：界面只展示微信原生 OCR，不能用系统 OCR
+ * 或第三方模型冒充同一结果。
+ */
+export interface ImageOcrResult {
+  engine: 'wechat-native'
+  text: string
+  lines: ImageOcrLine[]
+  width: number
+  height: number
+  elapsedMs: number
+}
+
+/** `wechat:ocr-image` 在迁移期可返回裸结果或标准 Remote 信封。 */
+export type ImageOcrBridgeResult = ImageOcrResult | RemoteEnvelope<ImageOcrResult>
+
+/** 当前配置的大模型从图片中提炼出的结构化字段。 */
+export type ImageAiJsonObject = Record<string, unknown>
+
+/**
+ * 图片文字 AI 识别结果。
+ *
+ * `engine` 固定为 `configured-llm`，避免把云端模型结果误当成微信原生 OCR；
+ * `json` 是交给界面展示和复制的实际 JSON 数据。
+ */
+export interface ImageAiJsonResult {
+  engine: 'configured-llm'
+  model: string
+  json: ImageAiJsonObject
+  elapsedMs: number
+}
+
+/** `wechat:image-ai-json` 的 IPC 返回形状。 */
+export type ImageAiJsonBridgeResult = ImageAiJsonResult | RemoteEnvelope<ImageAiJsonResult>
+
 /** 主进程 `license:status` 返回的授权状态。 */
 export interface LicenseStatus {
   state: string
@@ -47,6 +94,7 @@ export interface LicenseStatus {
     issuedTo?: { name?: string, company?: string, email?: string }
     expiresAt?: string | null
     features?: string[]
+    featureSchemaVersion?: number | null
     seats?: number
   } | null
   device?: {
@@ -55,6 +103,8 @@ export interface LicenseStatus {
   }
   daysToExpiry?: number | null
   licensePath?: string
+  featureLabels?: Record<string, string>
+  featureSchemaVersion?: number
 }
 
 /** 主进程 `remote-access:state` / `rotate` / `toggle` 返回的远程访问状态。 */

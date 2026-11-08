@@ -5,8 +5,7 @@
  * 合并逻辑本身由 `ask-stage-merge.spec.ts` 覆盖；这里只钉住用户能看见的部分：
  * 过程默认折叠、工具卡显示中文动作/状态/尝试/耗时/命中，失败时自动展开。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AskProcess } from './AskProcess.tsx'

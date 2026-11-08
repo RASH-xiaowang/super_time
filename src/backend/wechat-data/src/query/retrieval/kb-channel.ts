@@ -118,6 +118,14 @@ const DEFAULT_FUSION_K = 60
 /** 知识库通道的选项：**全都不传 = T3 那条纯关键词老路**（降级说明会如实说「仅关键词」）。 */
 export interface KbChannelOptions {
   /**
+   * 稀疏通道专用查询词。缺省沿用 `query`。
+   *
+   * 推荐回复的场景里，自然语言上下文适合给稠密通道做语义匹配；FTS5 则更适合
+   * 一组去停用词后的内容词。两条通道用不同形态的查询，比强行让一句话同时适配
+   * 「语义理解」和「逐字短语」更可靠。
+   */
+  sparseQuery?: string
+  /**
    * embedding 函数。缺省 ⇒ 稠密子路径不跑。
    *
    * ⚠ 传进来只代表「**有能力**」，是否**该**跑还要看 `denseEnabled`（见下）。
@@ -248,6 +256,7 @@ export async function kbChannel(
   const kb = kbId as number
   const embed = opts.embedFn
   const useDense = opts.denseEnabled === true && typeof embed === 'function'
+  const sparseQuery = (opts.sparseQuery ?? q).trim()
 
   // 稀疏一路。**包在 try 里**：`searchKb` 是同步的，它抛错时不能连累稠密那一路。
   const sparseTask = (async (): Promise<{
@@ -257,7 +266,7 @@ export async function kbChannel(
     degraded?: { reason: string; label: string }
   }> => {
     try {
-      const res: KbSearchResult = searchKb(decryptedDir, kb, { query: q, topK, onlyRag: true })
+      const res: KbSearchResult = searchKb(decryptedDir, kb, { query: sparseQuery, topK, onlyRag: true })
       // 三种「没搜成」必须分开报，别合并成一句「没有匹配」：`error` 是请求本身无效
       //（重试无用），`readError` 是库临时打不开（重试可能成功），两者都要能让运维看出来。
       if (res.error) return { hits: [], failed: '知识库检索无效：' + res.error }

@@ -6,8 +6,9 @@
  * （`chats-contact-info-view.tsx`）。三处只传会话/群信息，弹窗自己拉群成员、自己提交。
  *
  * 为什么默认对象不用选：任务监听的就是**当前窗口这个会话**。单聊的触发对象是会话对象
- * 本身；群聊的触发对象是群内某个成员（群消息里发信人是谁很关键），所以只有群聊多一步
- * 「选目标用户」——那一步用 `apiGetGroupInfo` 的成员表，可搜索、单选、未选不许提交。
+ * 本身；群聊的触发对象是群内一个或多个成员（群消息里发信人是谁很关键），所以只有群聊多一步
+ * 「选目标用户」——那一步用 `apiGetGroupInfo` 的成员表，可搜索、多选、未选不许提交。
+ * 多选提交时每个成员各生成一条任务，目标与任务名分别落库，避免多人共用一条任务后串内容。
  *
  * 创建完的状态固定是「待完善」：任务信息面板（右侧「编辑」抽屉）里补触发方式配置
  * （Webhook 地址或八爪鱼 RPA）并标记已完善后才参与触发与回调投递。`apiSaveTaskInfo`
@@ -22,10 +23,10 @@ import { LoadingState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { IconCloseOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Avatar } from './chats-support.tsx'
 import {
-  KEYWORD_MAX_COUNT, KEYWORD_MAX_LEN, PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN,
-  addKeywordBatch, buildTaskInfoInput, chatTypeLabel, clampPhotoLimit, defaultTaskName, initialTaskCreateForm,
-  photoHint, pickMembers, removeKeyword, validateTaskCreate,
-  type TaskCreateForm, type TaskCreateSession,
+  GROUP_TARGET_REQUIRED, KEYWORD_MAX_COUNT, KEYWORD_MAX_LEN, PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN,
+  TASK_NAME_MAX_LEN, addKeywordBatch, buildTaskInfoInputs, chatTypeLabel, clampPhotoLimit, defaultTaskName,
+  initialTaskCreateForm, photoHint, pickMembers, removeKeyword, removeTaskTarget, toggleTaskTarget,
+  validateTaskCreate, type TaskCreateForm, type TaskCreateSession, type TaskCreateTarget,
 } from './task-create.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
@@ -39,7 +40,7 @@ export interface TaskCreateDialogProps {
   session: TaskCreateSession
   /** 关闭弹窗（取消 / 关闭按钮 / 遮罩 / Esc 共用）。 */
   onClose: () => void
-  /** 创建成功后回调（成功面板已经就地显示，这里只给调用方做额外联动）。 */
+  /** 每个任务创建成功后回调（成功面板已经就地显示，这里只给调用方做额外联动）。 */
   onCreated?: (result: TaskInfoMutationResult) => void
 }
 
@@ -112,22 +113,24 @@ interface MemberPickerProps {
   loading: boolean
   error: string
   query: string
-  selected: string
+  selected: readonly TaskCreateTarget[]
+  disabled: boolean
   onQueryChange: (query: string) => void
-  onSelect: (member: GroupMember) => void
+  onToggle: (member: GroupMember) => void
   onRetry: () => void
 }
 
 /**
- * 群聊的「目标用户」选择器：搜索框 + 单选成员列表。
+ * 群聊的「目标用户」选择器：搜索框 + 多选成员列表。
  *
  * 三个状态都不能省：加载中（否则空列表像"群里没人"）、加载失败（带重试，不能吞错）、
  * 搜索无结果（给清空入口）。超过 50 行只画前 50 行并提示继续搜索 —— 千人群不该一次铺开。
- * @param props - 成员表/加载态/错误/查询词/选中项与回调。
+ * 选中状态按 username 判断，不依赖当前搜索页，所以切换搜索词不会丢已选成员。
+ * @param props - 成员表/加载态/错误/查询词/已选列表与回调。
  * @returns 选择器。
  */
 function MemberPicker(props: MemberPickerProps): React.JSX.Element {
-  const { members, loading, error, query, selected, onQueryChange, onSelect, onRetry } = props
+  const { members, loading, error, query, selected, disabled, onQueryChange, onToggle, onRetry } = props
   if (loading) return <LoadingState variant="compact" label="群成员加载中…" />
   if (error !== '') {
     return (
@@ -138,6 +141,7 @@ function MemberPicker(props: MemberPickerProps): React.JSX.Element {
     )
   }
   const result = pickMembers(members, query)
+  const selectedSet = new Set(selected.map((target) => target.username))
   return (
     <>
       <div className={cssrows.memberSearchBox}>
@@ -154,22 +158,29 @@ function MemberPicker(props: MemberPickerProps): React.JSX.Element {
           {query.trim() === '' ? '这个群读不到成员列表' : `没有匹配「${query.trim()}」的成员`}
         </p>
       ) : (
-        <div className={css.memberList} role="listbox" aria-label="选择触发对象">
-          {result.items.map((member) => (
-            <button
-              key={member.username}
-              type="button"
-              role="option"
-              aria-selected={selected === member.username}
-              className={css.memberRow}
-              data-active={selected === member.username || undefined}
-              onClick={() => { onSelect(member) }}
-            >
-              <Avatar name={member.name} username={member.username} size={26} />
-              <span className={css.memberName}>{withEnterprise(member.name, member.enterpriseName)}</span>
-              <span className={css.memberUser}>{member.username}</span>
-            </button>
-          ))}
+        <div className={css.memberList} role="listbox" aria-label="选择触发对象" aria-multiselectable="true">
+          {result.items.map((member) => {
+            const checked = selectedSet.has(member.username)
+            return (
+              <button
+                key={member.username}
+                type="button"
+                role="option"
+                aria-selected={checked}
+                className={css.memberRow}
+                data-active={checked || undefined}
+                disabled={disabled}
+                onClick={() => { onToggle(member) }}
+              >
+                <span className={css.memberCheck} data-checked={checked || undefined} aria-hidden="true">
+                  {checked ? '✓' : ''}
+                </span>
+                <Avatar name={member.name} username={member.username} size={26} />
+                <span className={css.memberName}>{withEnterprise(member.name, member.enterpriseName)}</span>
+                <span className={css.memberUser}>{member.username}</span>
+              </button>
+            )
+          })}
         </div>
       )}
       {result.needQuery && <p className={css.hint}>群成员较多（共 {members.length} 位），输入昵称或微信号搜索</p>}
@@ -179,25 +190,96 @@ function MemberPicker(props: MemberPickerProps): React.JSX.Element {
 }
 
 /**
- * 创建成功后的就地成功面板（不再弹第二个框）。
- * @param props.name - 任务名。
- * @param props.keywords - 关键词（让用户当场核对）。
- * @param props.onClose - 「知道啦」关闭。
- * @returns 成功面板。
+ * 已选触发对象摘要。
+ *
+ * 搜索框只画当前匹配的成员；这里单独展示整批选择，用户切到别的搜索词后仍能看见
+ * 自己已经选了谁，并能逐条撤销或一次清空。
  */
-function TaskCreatedPanel({ name, keywords, onClose }: {
-  name: string
+function SelectedTargets({ targets, disabled, onRemove, onClear }: {
+  targets: readonly TaskCreateTarget[]
+  disabled: boolean
+  onRemove: (username: string) => void
+  onClear: () => void
+}): React.JSX.Element | null {
+  if (targets.length === 0) return null
+  return (
+    <div className={css.targetSelection} data-st-region="task-create-targets">
+      <div className={css.targetSummary}>
+        <span>已选 {targets.length} 人 · 将分别创建 {targets.length} 个任务</span>
+        <button type="button" className={css.targetClear} disabled={disabled} onClick={onClear}>清空</button>
+      </div>
+      <div className={css.targetChips}>
+        {targets.map((target) => (
+          <span key={target.username} className={css.targetChip}>
+            <span className={css.targetChipName}>{withEnterprise(target.name || target.username, target.enterpriseName)}</span>
+            <button
+              type="button"
+              className={css.targetChipRemove}
+              title={`移除触发对象「${target.name || target.username}」`}
+              aria-label={`移除触发对象「${target.name || target.username}」`}
+              disabled={disabled}
+              onClick={() => { onRemove(target.username) }}
+            >×</button>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** 一个触发对象的创建结果（成功或失败都保留，便于部分失败时逐项交代）。 */
+interface TaskCreateOutcome {
+  targetUsername: string
+  targetLabel: string
+  taskName: string
+  ok: boolean
+  error?: string
+}
+
+/**
+ * 创建完成后的就地结果面板（不再弹第二个框）。
+ *
+ * 批量创建允许部分成功：不能因为第 3 个人失败就把前 2 个已落库的任务藏起来。
+ * 面板逐项展示成员、任务名与失败原因，用户能明确知道哪些已创建、哪些还需要重试。
+ * @param props.outcomes - 每个触发对象的结果。
+ * @param props.keywords - 本批共用关键词（让用户当场核对）。
+ * @param props.onClose - 「知道啦」关闭。
+ * @returns 成功/部分失败面板。
+ */
+function TaskCreatedPanel({ outcomes, keywords, onClose }: {
+  outcomes: readonly TaskCreateOutcome[]
   keywords: readonly string[]
   onClose: () => void
 }): React.JSX.Element {
+  const okCount = outcomes.filter((item) => item.ok).length
+  const failedCount = outcomes.length - okCount
   return (
-    <div className={css.success} data-st-region="task-create-success" role="status">
-      <div className={css.successTitle}>已加入任务信息 · 待完善</div>
+    <div
+      className={css.success}
+      data-st-region="task-create-success"
+      role={failedCount > 0 ? 'alert' : 'status'}
+    >
+      <div className={css.successTitle}>
+        {failedCount > 0 ? `批量创建完成 · ${String(failedCount)} 个失败` : '已加入任务信息 · 待完善'}
+      </div>
       <p className={css.successDesc}>
-        任务「{name}」已创建。完善触发方式后启用：到「任务信息」里点「编辑」，配置 Webhook 地址或八爪鱼 RPA 并标记已完善，
-        命中关键词时才会把触发记录投递出去。
+        已创建 {okCount} 个独立任务{failedCount > 0 ? `，${String(failedCount)} 个未创建` : ''}。
+        完善触发方式后启用：到「任务信息」里分别点「编辑」，配置 Webhook 地址或八爪鱼 RPA 并标记已完善，
+        命中各自目标的消息时才会投递。
       </p>
-      <p className={css.successMeta}>触发关键词：{keywords.join('、')}</p>
+      <div className={css.resultList}>
+        {outcomes.map((item) => (
+          <div key={item.targetUsername} className={css.resultRow} data-ok={item.ok || undefined}>
+            <span className={css.resultBadge}>{item.ok ? '已创建' : '失败'}</span>
+            <span className={css.resultMain}>
+              <span className={css.resultTarget}>{item.targetLabel}</span>
+              <span className={css.resultName}>{item.taskName}</span>
+              {!item.ok && item.error !== undefined && <span className={css.resultError}>{item.error}</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className={css.successMeta}>共用触发关键词：{keywords.join('、')}</p>
       <div className={css.successActions}>
         <button type="button" className={csscards.exportBtnPrimary} onClick={onClose}>知道啦</button>
       </div>
@@ -240,11 +322,12 @@ interface TaskCreateFormPanelProps {
   membersError: string
   memberQuery: string
   busy: boolean
+  busyProgress: { done: number; total: number } | null
   error: string
   desktop: boolean
   keywordRef: React.MutableRefObject<HTMLInputElement | null>
   keywordCount: number
-  targetLabel: string
+  targets: readonly TaskCreateTarget[]
   nameExample: string
   onKeywordDraftChange: (value: string) => void
   onKeywordKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
@@ -253,7 +336,9 @@ interface TaskCreateFormPanelProps {
   onPhotoLimitChange: (value: number) => void
   onNameChange: (value: string) => void
   onMemberQueryChange: (value: string) => void
-  onSelectMember: (member: GroupMember) => void
+  onToggleMember: (member: GroupMember) => void
+  onRemoveTarget: (username: string) => void
+  onClearTargets: () => void
   onRetryMembers: () => void
   onClose: () => void
   onSubmit: () => void
@@ -284,20 +369,33 @@ function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element
           </div>
           {isGroup ? (
             <>
-              <p className={cssshell.exportHint}>群聊里只有所选目标用户的消息参与触发，请先选一个成员。</p>
+              <p className={cssshell.exportHint}>
+                可多选触发对象。每个成员会独立创建一个任务，关键词和照片配置共用，但目标消息、触发记录与启停状态互不混合。
+              </p>
               <MemberPicker
                 members={props.members}
                 loading={props.membersLoading}
                 error={props.membersError}
                 query={props.memberQuery}
-                selected={form.targetUsername}
+                selected={props.targets}
+                disabled={props.busy}
                 onQueryChange={props.onMemberQueryChange}
-                onSelect={props.onSelectMember}
+                onToggle={props.onToggleMember}
                 onRetry={props.onRetryMembers}
               />
-              {form.targetUsername === ''
+              <SelectedTargets
+                targets={props.targets}
+                disabled={props.busy}
+                onRemove={props.onRemoveTarget}
+                onClear={props.onClearTargets}
+              />
+              {props.targets.length === 0
                 ? <p className={css.warn}>群聊需选择目标用户</p>
-                : <p className={css.hint}>触发对象：{props.targetLabel}</p>}
+                : (
+                  <p className={css.hint}>
+                    已选 {props.targets.length} 人；提交后会按每个人分别生成任务。
+                  </p>
+                )}
             </>
           ) : (
             <p className={cssshell.exportHint}>单聊：触发对象就是当前会话对象本身。</p>
@@ -339,7 +437,9 @@ function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element
         <div className={cssshell.exportSection}>
           <div className={cssshell.exportSectionHead}>
             <span className={csscards.exportSectionTitle}>任务名</span>
-            <span className={cssshell.exportHint}>可选，留空自动生成</span>
+            <span className={cssshell.exportHint}>
+              {props.targets.length > 1 ? '可选；多选时自动追加成员名' : '可选，留空自动生成'}
+            </span>
           </div>
           <div className={cssshell.exportField}>
             <input
@@ -347,24 +447,35 @@ function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element
               className={csscards.exportInput}
               placeholder={`留空自动生成：${props.nameExample}`}
               value={form.name}
-              maxLength={60}
+              maxLength={TASK_NAME_MAX_LEN}
               onChange={(e) => { props.onNameChange(e.target.value) }}
             />
           </div>
         </div>
 
         {props.error !== '' && <p className={kitCss.error} role="alert">{props.error}</p>}
+        {props.busyProgress !== null && (
+          <p className={css.hint} role="status">
+            正在创建 {props.busyProgress.done}/{props.busyProgress.total} 个任务…
+          </p>
+        )}
         {props.desktop && <p className={css.warn}>新建任务需要桌面端（要写本机数据库）。</p>}
       </div>
       <div className={cssshell.exportActions}>
-        <button type="button" className={csscards.exportBtnGhost} onClick={props.onClose}>取消</button>
+        <button type="button" className={csscards.exportBtnGhost} disabled={props.busy} onClick={props.onClose}>取消</button>
         <button
           type="button"
           className={csscards.exportBtnPrimary}
           disabled={props.busy || props.desktop}
           onClick={props.onSubmit}
           {...desktopActionProps()}
-        >{props.busy ? '创建中…' : '创建任务'}</button>
+        >{
+          props.busy
+            ? (props.busyProgress === null
+              ? '创建中…'
+              : `创建中 ${String(props.busyProgress.done)}/${String(props.busyProgress.total)}…`)
+            : (props.targets.length > 1 ? `创建 ${String(props.targets.length)} 个任务` : '创建任务')
+        }</button>
       </div>
     </>
   )
@@ -384,14 +495,19 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
   const [membersError, setMembersError] = useState('')
   const [memberQuery, setMemberQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [busyProgress, setBusyProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState('')
-  const [created, setCreated] = useState<{ name: string; keywords: string[] } | null>(null)
+  const [created, setCreated] = useState<{ outcomes: TaskCreateOutcome[]; keywords: string[] } | null>(null)
   const keywordRef = useRef<HTMLInputElement | null>(null)
   const aliveRef = useRef(true)
   /** 手机/浏览器态没有本机数据库：创建动作沿用旧弹窗的 `desktopAction()` 降级。 */
   const desktop = desktopAction()
 
-  useEscapeToClose(true, onClose)
+  const requestClose = useCallback((): void => {
+    if (!busy) onClose()
+  }, [busy, onClose])
+
+  useEscapeToClose(!busy, requestClose)
   // 选择器写成**字面量**：`dialog-a11y.wiring.spec.ts` 按字面量扫「谁为这个 dialog 装了焦点陷阱」，
   // 传常量会让它查无此人（该守卫的口径见那份文件头；同目录的记录弹窗也是字面量写法）。
   useDialogFocus(true, '[data-st-dialog="task-create"]')
@@ -443,12 +559,14 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
     }
   }
 
-  const selectMember = (member: GroupMember): void => {
+  const toggleMember = (member: GroupMember): void => {
     setForm((prev) => ({
       ...prev,
-      targetUsername: member.username,
-      targetName: member.name,
-      targetEnterpriseName: member.enterpriseName,
+      targets: toggleTaskTarget(prev.targets, {
+        username: member.username,
+        name: member.name,
+        enterpriseName: member.enterpriseName,
+      }),
     }))
     setError('')
   }
@@ -465,7 +583,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
     }
     const problem = validateTaskCreate({
       chatType: session.type,
-      targetUsername: form.targetUsername,
+      targetCount: session.type === 'group' ? form.targets.length : 1,
       keywords: merged.keywords,
       photoLimit: form.photoLimit,
     })
@@ -473,63 +591,102 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
       setError(problem)
       return
     }
-    const target = form.targetUsername === ''
-      ? null
-      : { username: form.targetUsername, name: form.targetName }
-    const input = buildTaskInfoInput({
+    const inputs = buildTaskInfoInputs({
       chat: session,
-      target,
+      targets: form.targets,
       keywords: merged.keywords,
       photoLimit: form.photoLimit,
       mentionMeOnly: form.mentionMeOnly,
       name: form.name,
     })
+    if (inputs.length === 0) {
+      setError(GROUP_TARGET_REQUIRED)
+      return
+    }
     setBusy(true)
+    setBusyProgress({ done: 0, total: inputs.length })
     setError('')
     try {
-      const result = await apiSaveTaskInfo(input)
-      if (!result.ok) {
-        // 后端校验失败必须原样回显：吞掉它会让用户以为"点了没反应"。
-        setError(result.error ?? '创建任务失败')
-        return
+      const outcomes: TaskCreateOutcome[] = []
+      for (const [index, input] of inputs.entries()) {
+        if (!aliveRef.current) return
+        const targetLabel = input.targetName || input.targetUsername || session.displayName
+        let saved: TaskInfoMutationResult | null = null
+        try {
+          const result = await apiSaveTaskInfo(input)
+          saved = result
+          outcomes.push({
+            targetUsername: input.targetUsername ?? `target-${String(index)}`,
+            targetLabel,
+            taskName: input.name ?? '',
+            ok: result.ok,
+            error: result.error,
+          })
+        } catch (e) {
+          outcomes.push({
+            targetUsername: input.targetUsername ?? `target-${String(index)}`,
+            targetLabel,
+            taskName: input.name ?? '',
+            ok: false,
+            error: (e as Error).message,
+          })
+        }
+        if (saved?.ok === true) {
+          // 回调属于宿主联动，不能让它的异常把已经成功的任务误报成失败。
+          try {
+            onCreated?.(saved)
+          } catch (e) {
+            console.warn('[task-create] onCreated 回调失败：' + (e as Error).message)
+          }
+        }
+        if (aliveRef.current) setBusyProgress({ done: index + 1, total: inputs.length })
       }
       if (!aliveRef.current) return
-      setCreated({ name: input.name ?? '', keywords: merged.keywords })
-      onCreated?.(result)
+      const okCount = outcomes.filter((item) => item.ok).length
+      if (okCount === 0) {
+        // 全部失败时留在表单上，按成员逐条回显原因，方便改配置后直接重试。
+        setError(outcomes
+          .map((item) => `${item.targetLabel}：${item.error ?? '创建任务失败'}`)
+          .join('；'))
+        return
+      }
+      setCreated({ outcomes, keywords: merged.keywords })
     } catch (e) {
       if (aliveRef.current) setError((e as Error).message)
     } finally {
-      if (aliveRef.current) setBusy(false)
+      if (aliveRef.current) {
+        setBusy(false)
+        setBusyProgress(null)
+      }
     }
   }, [desktop, form, session, onCreated])
 
   const keywordCount = form.keywords.length
-  const targetLabel = form.targetName
-    ? withEnterprise(form.targetName, form.targetEnterpriseName)
-    : form.targetUsername
+  const firstTarget = form.targets[0]
   const nameExample = defaultTaskName({
     chatName: session.displayName,
     chatType: session.type,
-    targetName: form.targetName,
+    targetName: firstTarget?.name,
     keywords: form.keywords,
   })
 
   return (
     <div
-      className={csscards.calOverlay}
+      className={cssshell.calOverlay}
       data-st-dialog="task-create"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      aria-busy={busy || undefined}
+      onClick={(e) => { if (e.target === e.currentTarget) requestClose() }}
     >
       <div className={`${csscards.exportDialog} ${css.dialog}`}>
         <div className={cssshell.calHeader}>
-          <span className={csscards.calTitle} id={titleId}>新建任务</span>
-          <button type="button" className={csscards.calClose} title="关闭" aria-label="关闭" onClick={onClose}><IconCloseOutline16 size={15} /></button>
+          <span className={cssshell.calTitle} id={titleId}>新建任务</span>
+          <button type="button" className={cssshell.calClose} title="关闭" aria-label="关闭" disabled={busy} onClick={requestClose}><IconCloseOutline16 size={15} /></button>
         </div>
         {created !== null ? (
-          <TaskCreatedPanel name={created.name} keywords={created.keywords} onClose={onClose} />
+          <TaskCreatedPanel outcomes={created.outcomes} keywords={created.keywords} onClose={onClose} />
         ) : (
           <TaskCreateFormPanel
             session={session}
@@ -540,11 +697,12 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
             membersError={membersError}
             memberQuery={memberQuery}
             busy={busy}
+            busyProgress={busyProgress}
             error={error}
             desktop={desktop}
             keywordRef={keywordRef}
             keywordCount={keywordCount}
-            targetLabel={targetLabel}
+            targets={form.targets}
             nameExample={nameExample}
             onKeywordDraftChange={(keywordDraft) => { setForm((prev) => ({ ...prev, keywordDraft })) }}
             onKeywordKeyDown={onKeywordKeyDown}
@@ -553,9 +711,17 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
             onPhotoLimitChange={(photoLimit) => { setForm((prev) => ({ ...prev, photoLimit })) }}
             onNameChange={(name) => { setForm((prev) => ({ ...prev, name })) }}
             onMemberQueryChange={setMemberQuery}
-            onSelectMember={selectMember}
+            onToggleMember={toggleMember}
+            onRemoveTarget={(username) => {
+              setForm((prev) => ({ ...prev, targets: removeTaskTarget(prev.targets, username) }))
+              setError('')
+            }}
+            onClearTargets={() => {
+              setForm((prev) => ({ ...prev, targets: [] }))
+              setError('')
+            }}
             onRetryMembers={() => { void loadMembers() }}
-            onClose={onClose}
+            onClose={requestClose}
             onSubmit={() => { void submit() }}
           />
         )}

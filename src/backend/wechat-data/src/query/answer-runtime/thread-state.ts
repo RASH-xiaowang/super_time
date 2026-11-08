@@ -16,6 +16,7 @@
 import type { AnswerIntentKind } from './intent.ts'
 import {
   classifyAnswerIntent,
+  resolvePrivateSessionContact,
   resolveAnswerTimeRange,
   type AnswerHistoryMessage,
   type AnswerMessageReference,
@@ -101,6 +102,10 @@ export interface ApplyThreadStateOptions {
   knownSessions?: string[]
   /** 当前会话（会话内问答由服务端强制传入）。 */
   currentSession?: string
+  /** 当前会话显示名；单聊里用于消解「他/她/对方」。 */
+  currentSessionName?: string
+  /** 当前会话类型；缺省时按 username 的 `@chatroom` 后缀判断。 */
+  currentSessionKind?: 'private' | 'group'
 }
 
 /** 用户本轮显式覆盖的字段。 */
@@ -472,8 +477,14 @@ export function applyThreadState(
     .filter(value => value.length >= 2 && q.includes(value))
     .sort((a, b) => b.length - a.length)[0]
   const pronoun = REFERENCE_PRONOUN_RE.test(q)
+  const sessionContact = resolvePrivateSessionContact({
+    ...(opts.currentSession ? { username: opts.currentSession } : {}),
+    ...(opts.currentSessionName ? { displayName: opts.currentSessionName } : {}),
+    ...(opts.currentSessionKind ? { kind: opts.currentSessionKind } : {}),
+  })
+  const inheritedPronounContact = state.activeContact ?? state.lastEntity ?? sessionContact
   const contact = namedContact
-    || (pronoun ? state.activeContact ?? state.lastEntity : undefined)
+    || (pronoun ? inheritedPronounContact : undefined)
     || state.activeContact
     || state.lastEntity
   if (namedContact) {
@@ -481,9 +492,15 @@ export function applyThreadState(
     reason.push(`显式联系人：${namedContact}`)
   } else if (pronoun) {
     overrides.push('contact')
+    const fromCurrentSession = contact !== undefined
+      && contact === sessionContact
+      && state.activeContact === undefined
+      && state.lastEntity === undefined
     reason.push(contact
-      ? `代词继承联系人：${contact}`
-      : '出现代词「他/她/对方」，但历史中没有可继承的联系人（需要澄清）')
+      ? fromCurrentSession
+        ? `代词继承当前单聊联系人：${contact}`
+        : `代词继承联系人：${contact}`
+      : '出现代词「他/她/对方」，但历史与当前会话中都没有可继承的联系人（需要澄清）')
   } else if (state.activeContact) {
     reason.push(`联系人沿用上一轮：${state.activeContact}`)
   }
@@ -506,6 +523,8 @@ export function applyThreadState(
     knownEntities: knownContacts,
     ...(opts.knownSessions ? { knownSessions: opts.knownSessions } : {}),
     ...(session ? { currentSession: session } : {}),
+    ...(opts.currentSessionName ? { currentSessionName: opts.currentSessionName } : {}),
+    ...(opts.currentSessionKind ? { currentSessionKind: opts.currentSessionKind } : {}),
     history: state.history ?? [],
     context: {
       ...(session ? { activeSession: session } : {}),

@@ -6,7 +6,7 @@
  * `setNotice(x); setTimeout(() => { setNotice(null) }, 3000)`，原语的用例会全绿
  * （M13 复审实测过这一步：整文件退回改动前，全量用例零变红）。
  * 本仓库没有组件/DOM 测试环境（jsdom / react-test-renderer / testing-library 都不在依赖里，
- * `vitest.config.ts` 只收纯逻辑模块），所以这一层只能靠源码形状钉住。
+ * `vitest.config.mts` 只收纯逻辑模块），所以这一层只能靠源码形状钉住。
  *
  * ⚠️ **本守卫能证明什么、不能证明什么**：它只保证「形状正确」——
  * 面板的**运行期行为（计时是否真的 3 秒消失、卸载是否真的不写 state、连出两条提示是否
@@ -41,7 +41,11 @@ function readCode(file: string): string {
   const stem = file.replace(/\.tsx?$/, '')
   // 注意大小写：拆分后的模块可能用小写前缀（Overview.tsx → overview-panel.tsx），匹配必须不区分大小写
   const siblings = readdirSync(HERE).filter((f) => new RegExp('^' + stem + '(-[a-z]+)?\.(ts|tsx)$', 'i').test(f))
-  const target = siblings.length > 0 ? siblings.sort() : [file]
+  // 面板行为拆进 hook 后，hook 不一定沿用面板前缀（Overview.tsx → use-overview-report-export.ts）。
+  // 这类实现文件同样属于该面板的接线面，不能因为文件名换了就漏扫。
+  const companions = stem.toLowerCase() === 'overview' ? ['use-overview-report-export.ts'] : []
+  const targets = [...siblings, ...companions.filter((f) => !siblings.includes(f))]
+  const target = targets.length > 0 ? targets.sort() : [file]
   return target.map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split(/\r?\n/)
@@ -56,7 +60,7 @@ const MIGRATED: ReadonlyArray<{ file: string; hook: string; render: string; flas
   { file: 'Favorites.tsx', hook: 'useTransientNotice(4000)', render: 'notice', flash: 1, hold: 0 },
   { file: 'Health.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
   { file: 'Ledger.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
-  { file: 'Moments.tsx', hook: 'useTransientNotice(6000)', render: 'hint', flash: 3, hold: 9 },
+  { file: 'moments', hook: 'useTransientNotice(6000)', render: 'hint', flash: 3, hold: 9 },
   // R4：notice 的渲染类从本面板的 `css.error` 改成 kit 的 `kitCss.emptyInline`
   // （notice 是「提示/说明」语义，此前用错误样式渲染是遗留错配）。
   // 注：`render` 现在是**完整的类引用表达式**（含 `css.` / `kitCss.` 前缀）。
@@ -106,10 +110,10 @@ describe('L20 接线守卫（源码级；面板运行期行为未在浏览器验
 
   it('失败类提示走 hold（改前它们不带定时器，一致性不能被破坏）', () => {
     // 抽一个代表：Moments 的复制结果与 Overview 的后台刷新失败
-    expect(readCode('Moments.tsx')).toContain("hold('已复制')")
+    expect(readCode('moments-panel.tsx')).toContain("hold('已复制')")
     expect(readCode('Overview.tsx')).toContain('hold(')
     // 用 flash 顶掉失败提示会把它变成「6 秒后自己消失」，那是行为变更
-    expect(readCode('Moments.tsx')).not.toContain("flash('导出失败")
+    expect(readCode('moments-panel.tsx')).not.toContain("flash('导出失败")
     expect(readCode('Overview.tsx')).not.toContain("flash('归档失败")
   })
 

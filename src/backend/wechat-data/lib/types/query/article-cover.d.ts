@@ -5,6 +5,8 @@
  * 而 `moments-media.ts` 两边都有。返回非空字符串表示**本机确实有**（值本身只用于日志）。
  */
 export type LocalCoverProbe = (contentUrl: string) => Promise<string | undefined>;
+/** 单次批量封面的硬上限：超出部分不发起网络请求，直接返回可见错误。 */
+export declare const MAX_ARTICLE_COVERS_PER_CALL = 100;
 /**
  * Resolve a 公众号 article cover to a base64 data URL（本地缓存优先，再走网络并落盘）。
  * @param contentUrl - mp.weixin.qq.com article URL from the moments XML.

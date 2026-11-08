@@ -97,8 +97,8 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
     console.log(`[算料] 3 会话 × 2 分片：开合 ${String(few.opens)} 次；9 会话 × 2 分片：开合 ${String(many.opens)} 次`)
     expect(many.opens, `会话从 3 涨到 9，句柄开合从 ${String(few.opens)} 涨到 ${String(many.opens)} ⇒ 又退回逐表开库`)
       .toBe(few.opens)
-    // 顺带钉住「按分片走仍然读全」：每个会话取到它那张 `Msg_*` 表的行数
-    // （同一会话在两个分片里都有表时按 file-first 只算第一个 —— 既有语义，本次不动它）。
+    // 顺带钉住「按分片走仍然读全」：同一会话在两个分片里出现的重复消息
+    // 由稳定 server_id 去重，而不是取第一个文件后把后续分片整张丢掉。
     const persons = (n: number): number => n
     expect(few.out.nodes.filter(x => x.kind !== 'self').length).toBe(persons(3))
     expect(many.out.nodes.filter(x => x.kind !== 'self').length).toBe(persons(9))
@@ -123,6 +123,59 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
     console.log(`[算料|yield] 图谱 ${String(opens)} 次开合（含会话/通讯录库）：探针 ticks=${String(ticks)}`)
     expect(opens, '夹具没真的开过库 ⇒ 这条判据是空转').toBeGreaterThan(0)
     expect(ticks, '一次都不让出 ⇒ 冷跑的图谱把承载全部查询的那条循环钉到底').toBeGreaterThanOrEqual(2)
+  })
+
+  it('同名消息表跨分片按稳定身份合并，不丢后续分片的新消息', async () => {
+    const decrypted = makeFixture('graph-union', 1)
+    const secondShard = new DatabaseSync(join(decrypted, 'message', SHARDS[1] ?? ''), { readOnly: false })
+    try {
+      secondShard.prepare(`UPDATE "${tableOf('wxid_0')}" SET server_id = server_id + 100`).run()
+    } finally {
+      secondShard.close()
+    }
+    const snap = await queryGraph(decrypted, 'wxid_self')
+    expect(snap.nodes.find(node => node.id === 'wxid_0')?.msg_count).toBe(10)
+  })
+
+  it('server_id=0 的跨分片复制行不依赖 rowid，缺列也不会拆成两条', async () => {
+    const decrypted = makeFixture('graph-fallback-identity', 1)
+    const table = tableOf('wxid_0')
+
+    const firstShard = new DatabaseSync(join(decrypted, 'message', SHARDS[0] ?? ''))
+    try {
+      firstShard.prepare(`UPDATE "${table}" SET server_id = 0`).run()
+    } finally {
+      firstShard.close()
+    }
+
+    const secondShard = new DatabaseSync(join(decrypted, 'message', SHARDS[1] ?? ''))
+    try {
+      // 同名表在旧/新分片可能缺列，同时复制行的 rowid 也可能不同。
+      // 身份必须取两边都有的稳定列，且绝不能把 rowid 算进去。
+      secondShard.exec(`ALTER TABLE "${table}" RENAME TO "${table}_old"`)
+      secondShard.exec(`CREATE TABLE "${table}" (
+        local_id INTEGER,
+        sort_seq INTEGER,
+        local_type INTEGER,
+        is_sender INTEGER,
+        create_time INTEGER,
+        message_content TEXT,
+        server_id INTEGER,
+        compress_content TEXT
+      )`)
+      secondShard.prepare(`INSERT INTO "${table}"
+        (rowid, local_id, sort_seq, local_type, is_sender, create_time,
+         message_content, server_id, compress_content)
+        SELECT rowid + 100, local_id, sort_seq, local_type, is_sender,
+               create_time, message_content, 0, compress_content
+          FROM "${table}_old"`).run()
+      secondShard.exec(`DROP TABLE "${table}_old"`)
+    } finally {
+      secondShard.close()
+    }
+
+    const snap = await queryGraph(decrypted, 'wxid_self')
+    expect(snap.nodes.find(node => node.id === 'wxid_0')?.msg_count).toBe(5)
   })
 
   it('第二次调用一次库都不开（签名没变 ⇒  cachedBySig 直接回同一份）', async () => {

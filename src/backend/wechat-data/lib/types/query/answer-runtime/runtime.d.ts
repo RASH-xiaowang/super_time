@@ -1,7 +1,7 @@
 import { type AnswerStatus, type EvidenceBundle } from './evidence.ts';
 import type { AnswerRuntimeCitation, AnswerRuntimeInput, AnswerRuntimeResourceCitation, AnswerRuntimeResult } from './types.ts';
 import { type AnswerProfile } from '../tools/profiles.ts';
-import type { ToolContext } from '../tools/types.ts';
+import { type ToolContext } from '../tools/types.ts';
 /** 把三个入口的上下文边界收敛到执行层。 */
 export interface ResolvedAnswerContext {
     profile: AnswerProfile;
@@ -15,7 +15,7 @@ export interface ResolvedAnswerContext {
 /**
  * 归一 profile 与工具上下文。
  *
- * session-ask 强制当前会话；clawbot-auto 强制关闭本机微信数据并要求 kbId。
+ * session-ask 强制当前会话；只读知识库的 profile 会关闭本机微信数据。
  * 返回 blocked 而不是抛错，便于调用方把「缺会话 / 缺知识库」如实展示。
  * @param input - 运行时输入。
  * @returns 归一结果。

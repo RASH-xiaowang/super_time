@@ -6,8 +6,7 @@
  * 这里钉住两端：动作只按白名单生成，外部链接只放行 http(s)；界面既不
  * 把内部键渲染成文本，也不为无法安全打开的资源伪造按钮。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnswerRuntimeResourceCitation } from './use-ask.ts'
@@ -19,6 +18,9 @@ const stubs = vi.hoisted(() => {
     fileImage: vi.fn((_options: unknown) => Promise.resolve(empty())),
     messageFile: vi.fn((_options: unknown) => Promise.resolve(empty())),
     snsImage: vi.fn((_options: unknown) => Promise.resolve(empty())),
+    saveDialog: vi.fn(),
+    fileExport: vi.fn(),
+    favoriteFileExport: vi.fn(),
     openLink: vi.fn((_url: string): void => {}),
   }
 })
@@ -28,6 +30,10 @@ vi.mock('../api.ts', () => ({
   apiGetFileImageDataUrl: (options: unknown) => stubs.fileImage(options),
   apiGetMessageFile: (options: unknown) => stubs.messageFile(options),
   apiGetSnsImageDataUrl: (options: unknown) => stubs.snsImage(options),
+  apiSaveFileDialog: stubs.saveDialog,
+  apiExportFileAttachment: stubs.fileExport,
+  apiExportFavoriteFile: stubs.favoriteFileExport,
+  runtimeCapabilities: () => ({ isBrowser: false, desktopEquivalent: false }),
 }))
 
 vi.mock('./chats-support.tsx', () => ({
@@ -96,6 +102,12 @@ beforeEach(() => {
   stubs.messageFile.mockResolvedValue({})
   stubs.snsImage.mockReset()
   stubs.snsImage.mockResolvedValue({})
+  stubs.saveDialog.mockReset()
+  stubs.saveDialog.mockResolvedValue({ canceled: false, path: 'D:\\exports\\chosen.docx' })
+  stubs.fileExport.mockReset()
+  stubs.fileExport.mockResolvedValue({ ok: true, path: 'D:\\exports\\合同.docx' })
+  stubs.favoriteFileExport.mockReset()
+  stubs.favoriteFileExport.mockResolvedValue({ ok: true, path: 'D:\\exports\\合同.docx' })
   stubs.openLink.mockReset()
   host = document.createElement('div')
   document.body.append(host)
@@ -138,13 +150,13 @@ describe('resourceActionKind', () => {
     expect(resourceActionKind(resource({
       resourceKind: 'favorite',
       mediaKind: 'file',
-      md5: 'favorite-file-md5',
+      fullMd5: 'f'.repeat(32),
     }))).toBe('favorite-file')
     expect(resourceActionKind(resource({
       resourceKind: 'favorite',
       mediaKind: 'file',
       fileName: '报价.pdf',
-    }))).toBe('favorite-file')
+    }))).toBe('none')
   })
 
   it('文件库图片与普通文件分别走预览和下载', () => {
@@ -247,6 +259,32 @@ describe('ResourceCard', () => {
     expect(image, '取回成功后必须渲染图片').not.toBeNull()
     expect(image?.getAttribute('src')).toBe(url)
     expect(image?.getAttribute('alt')).toBe('报价截图.png')
+  })
+
+  it('收藏文件只走后端原文件导出，成功显示最终 path，不创建 data URL 下载', async () => {
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    show(resource({
+      resourceKind: 'favorite',
+      mediaKind: 'file',
+      fullMd5: 'f'.repeat(32),
+      fileName: '合同.docx',
+      size: 4096,
+    }, { name: '合同.docx' }))
+
+    await click('保存原文件')
+
+    expect(stubs.saveDialog).toHaveBeenCalledWith(expect.objectContaining({ title: '保存原文件' }))
+    expect(stubs.favoriteFileExport).toHaveBeenCalledWith(expect.objectContaining({
+      fullMd5: 'f'.repeat(32),
+      kind: 'file',
+      dest: 'D:\\exports\\chosen.docx',
+      jobId: expect.stringMatching(/^resource-file-/),
+    }))
+    expect(stubs.fileExport).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('已保存原文件 → D:\\exports\\合同.docx')
+    expect(anchorClick).not.toHaveBeenCalled()
+    expect(stubs.messageFile).not.toHaveBeenCalled()
+    anchorClick.mockRestore()
   })
 
   it('可见内容不泄露 key、token、seed、md5 与其他内部定位值', () => {

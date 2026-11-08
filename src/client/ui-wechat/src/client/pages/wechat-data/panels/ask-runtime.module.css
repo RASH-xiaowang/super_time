@@ -221,7 +221,7 @@
   overflow-wrap: anywhere;
 }
 .toolArgs {
-  font-family: var(--nm-font-mono, ui-monospace, Consolas, monospace);
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
   font-size: 10px;
 }
 .errorCode { color: var(--nm-danger); }

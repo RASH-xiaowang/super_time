@@ -10,8 +10,7 @@
  * 客户端源码看着完全正确，正则守卫全绿。行为层把客户端这一半的语义钉死，
  * 另一半由 `src/backend/wechat-data/tests/export-progress-job.spec.ts` 钉。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -43,10 +42,14 @@ function Harness(): React.JSX.Element {
     setPinnedCollapsed: () => {},
   })
   hookRef = hook
-  const p = hook.exportProgress
+  const p = hook.exportState.progress
+  const batchProgress = hook.batchExportState?.progress
   return createElement('div', {
     'data-progress': p ? `${p.phase} ${p.done}/${p.total}` : 'none',
     'data-exporting': String(hook.exporting),
+    'data-dialog-status': hook.exportState.status,
+    'data-batch-running': String(hook.batchExporting),
+    'data-batch-progress': batchProgress ? `${batchProgress.phase} ${batchProgress.done}/${batchProgress.total}` : 'none',
     'data-msg': hook.exportMsg ?? '',
   })
 }
@@ -133,6 +136,62 @@ describe('useChatsExport：导出进度与取消（行为）', () => {
     expect(attr('data-msg')).toBe('导出失败: 磁盘已满')
     expect(attr('data-exporting')).toBe('false')
     expect(attr('data-progress')).toBe('none')
+  })
+
+  it('批量任务不会串到单会话弹窗的状态卡', async () => {
+    let resolve!: (value: { path: string; filename: string; count: number }) => void
+    mocks.apiExportSessionMessages.mockImplementation(() => new Promise((r) => { resolve = r }))
+    act(() => { hookRef?.toggleSelect('wxid_hook') })
+
+    await act(async () => {
+      void hookRef?.exportBatch()
+      await Promise.resolve()
+    })
+    expect(attr('data-batch-running')).toBe('true')
+    expect(attr('data-dialog-status'), '批量任务不应出现在单会话导出弹窗').toBe('idle')
+
+    await act(async () => { resolve({ path: 'D:/x/b.zip', filename: 'b.zip', count: 3 }) })
+    expect(attr('data-batch-running')).toBe('false')
+    expect(attr('data-dialog-status')).toBe('idle')
+  })
+
+  it('批量中的每个会话使用独立 jobId，避免上一项迟到事件覆盖批量进度', async () => {
+    const pending: Array<{
+      resolve: (value: { path: string; filename: string; count: number }) => void
+    }> = []
+    mocks.apiExportSessionMessages.mockImplementation(() => new Promise((resolve) => {
+      pending.push({ resolve })
+    }))
+    act(() => {
+      hookRef?.toggleSelect('wxid_a')
+      hookRef?.toggleSelect('wxid_b')
+    })
+
+    await act(async () => {
+      void hookRef?.exportBatch()
+      await Promise.resolve()
+    })
+    const first = (mocks.apiExportSessionMessages.mock.calls[0]![0] as { jobId: string }).jobId
+    expect(first).toMatch(/-item-1$/)
+
+    await act(async () => {
+      pending[0]!.resolve({ path: 'D:/x/a.zip', filename: 'a.zip', count: 2 })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const second = (mocks.apiExportSessionMessages.mock.calls[1]![0] as { jobId: string }).jobId
+    expect(second).toMatch(/-item-2$/)
+    expect(second).not.toBe(first)
+
+    emitProgress({ jobId: first, phase: 'write', done: 999, total: 1000 })
+    expect(attr('data-batch-progress'), '上一项迟到的进度覆盖了当前批量状态').toBe('batch 1/2')
+
+    await act(async () => {
+      pending[1]!.resolve({ path: 'D:/x/b.zip', filename: 'b.zip', count: 3 })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(attr('data-batch-running')).toBe('false')
   })
 
   it('没有任务在跑时点中止不发 RPC（不给后端造「无此任务」的错误）', () => {

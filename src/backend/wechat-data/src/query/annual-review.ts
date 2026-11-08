@@ -14,12 +14,43 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
-import { createHash } from 'node:crypto'
 import { contactMeta, shardCatalogDirs } from './meta.ts'
+import { displayNameForUsername, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { queryAnnualMoments, type AnnualMoments } from './annual-moments.ts'
 import { queryAnnualAssets, type AnnualAssets } from './annual-assets.ts'
 import { createAnnualExtras, type AnnualGroups, type AnnualMoney, type AnnualRevoke } from './annual-extras.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import type {
+  AnnualBuddy,
+  AnnualBusiestDay,
+  AnnualCatchphrase,
+  AnnualEmoji,
+  AnnualHighlight,
+  AnnualMonthlyStar,
+  AnnualNight,
+  AnnualOpener,
+  AnnualRankRow,
+  AnnualReply,
+  AnnualReview,
+  AnnualRhythm,
+  AnnualWords,
+} from './annual-review-types.ts'
+
+export type {
+  AnnualBuddy,
+  AnnualBusiestDay,
+  AnnualCatchphrase,
+  AnnualEmoji,
+  AnnualHighlight,
+  AnnualMonthlyStar,
+  AnnualNight,
+  AnnualOpener,
+  AnnualRankRow,
+  AnnualReply,
+  AnnualReview,
+  AnnualRhythm,
+  AnnualWords,
+} from './annual-review-types.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** 会话内「新一次对话」的间隔阈值（秒）：超过视为新一轮，用于「谁先开口」。 */
@@ -95,152 +126,6 @@ function parseCall(text: string): { sec: number; connected: boolean } {
   const m = status.match(/(\d+):(\d+)/)
   const sec = m ? Number(m[1]) * 60 + Number(m[2]) : 0
   return { sec, connected: sec > 0 || RE_ANSWERED_ELSEWHERE.test(status) }
-}
-
-/* ────────────── 结果结构 ────────────── */
-
-/** 榜单条目。 */
-export interface AnnualRankRow {
-  username: string
-  name: string
-  enterpriseName?: string
-  total: number
-  mine: number
-  theirs: number
-}
-
-/** 最疯的一天。 */
-export interface AnnualBusiestDay {
-  date: string; n: number; ratio: number; share: number
-  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number
-  firstAt: string; firstText: string; lastAt: string; lastText: string; spanMin: number
-}
-
-/** 年度搭子（单聊里双方合计最多的一位）。 */
-export interface AnnualBuddy {
-  username: string; name: string; total: number; mine: number; theirs: number
-  enterpriseName?: string
-  streakDays: number; commonHour: number
-  replyBacks: number; fastestSec: number; slowestSec: number
-}
-
-/** 十二个月的主演。 */
-export interface AnnualMonthlyStar {
-  month: number
-  username: string
-  name: string
-  enterpriseName?: string
-  count: number
-}
-
-/** 深夜卡。 */
-export interface AnnualNight {
-  share: number; mine: number; theirs: number
-  topName: string; topEnterpriseName?: string; topUsername: string; topCount: number
-  sampleAt: string; sampleText: string
-}
-
-/** 作息切片。 */
-export interface AnnualRhythm {
-  heat: number[]
-  brightestDow: number; brightestHour: number; brightestCount: number
-  quietestHour: number; quietestCount: number
-  nightShare: number; workWeekendRatio: number
-}
-
-/** 你说的话。 */
-export interface AnnualWords {
-  mineChars: number; receivedChars: number; keystrokes: number
-  voiceSentCount: number; voiceSentSec: number; voiceRecvCount: number; voiceRecvSec: number
-  callSec: number; callCount: number; callConnected: number; callMissed: number
-  videoSent: number; voiceMsgSent: number
-  longestVoiceSec: number; longestVoiceFrom: string
-  longestVoiceUsername: string; longestVoiceEnterpriseName?: string
-}
-
-/** 年度口头禅。 */
-export interface AnnualCatchphrase {
-  phrase: string; count: number
-  top: Array<{ phrase: string; count: number }>
-  /** 出现过的短表达（去重）数量。 */
-  shortTotal: number
-  /** 其中够格当「口头禅」的（出现 >= CATCH_MIN_COUNT 次）。 */
-  catchTotal: number
-}
-
-/** 回复速度。 */
-export interface AnnualReply {
-  medianSec: number; p90Sec: number
-  avgPartnerName: string; avgPartnerUsername: string; avgPartnerSec: number
-  avgPartnerEnterpriseName?: string
-  fastestName: string; fastestUsername: string; fastestSec: number
-  fastestEnterpriseName?: string
-  slowestName: string; slowestUsername: string; slowestSec: number
-  slowestEnterpriseName?: string
-}
-
-/** 谁先开口。 */
-export interface AnnualOpener {
-  mine: number; theirs: number; share: number
-  mostInitiatedByMe: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
-  mostInitiatedByThem: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
-}
-
-/** 表情宇宙。 */
-export interface AnnualEmoji {
-  /** 贴纸：甩出张数 / 攒下种数。 */
-  threw: number; kept: number; perDay: number; days: number
-  peakDow: number; peakHour: number; peakCount: number
-  top: Array<{ emoji: string; count: number }>
-}
-
-/** 「还有这些人」横向卡片。 */
-export interface AnnualHighlight {
-  label: string
-  name: string
-  username: string
-  enterpriseName?: string
-  value: string
-}
-
-/** 完整结果。 */
-export interface AnnualReview {
-  year: number
-  // ① Hero（我发出的）
-  sent: number; sentTo: number; sentDailyAvg: number; activeDaysMine: number
-  longestStreak: number; newFriends: number; mediaSent: number
-  longestSpanFrom: string; longestSpanTo: string
-  // ② 日历（全部消息）
-  calendar: Array<{ d: string; n: number }>; activeDaysAll: number; maxDayAll: number
-  // ③~⑮
-  busiest: AnnualBusiestDay | null
-  buddy: AnnualBuddy | null
-  monthlyStar: AnnualMonthlyStar[]
-  starName: string; starUsername: string; starMonths: number
-  starEnterpriseName?: string
-  hottestMonth: number; hottestMonthCount: number
-  night: AnnualNight
-  rhythm: AnnualRhythm
-  words: AnnualWords
-  catchphrase: AnnualCatchphrase
-  reply: AnnualReply
-  opener: AnnualOpener
-  ranking: AnnualRankRow[]
-  emoji: AnnualEmoji
-  highlights: AnnualHighlight[]
-  firstAt: string; firstText: string; lastAt: string; lastText: string
-  /* ── ⑯ 起：第二段「更多」长页（2026-09-30 用户要求加内容；版式从一屏海报改成长页）──
-     这几块**不属于**聊天正文那一遍扫描：朋友圈是另一个库（sns.db）、收藏/文件只做总量盘点，
-     所以由各自的模块单独查，在这里汇总。`available=false` 表示"这个库没读到"，
-     界面必须据此显示"未读取到"，**不许拿 0 当真实值**。 */
-  moments: AnnualMoments
-  assets: AnnualAssets
-  /* ⑱~⑳：资金 / 撤回 / 群聊 —— 这三块**不需要新扫描**：它们读的就是上面那遍聊天正文
-     （转账红包是消息、撤回是 sysmsg、群聊就是 username 以 @chatroom 结尾的会话），
-     所以挂在同一次遍历上按行累加（`annual-extras.ts` 的纯函数累加器）。 */
-  money: AnnualMoney
-  revoke: AnnualRevoke
-  groups: AnnualGroups
 }
 
 /* ────────────── 小工具 ────────────── */
@@ -401,7 +286,7 @@ function identityOf(
   const enterpriseName = isPersonChat(username) ? enterpriseNameOf(enterpriseNames, username) : undefined
   return {
     username,
-    name: names.get(username) ?? username,
+    name: displayNameForUsername(username, names),
     ...(enterpriseName !== undefined ? { enterpriseName } : {}),
   }
 }
@@ -415,18 +300,25 @@ function identityOf(
  * @param selfUsername - 登录账号 wxid（「我发出的」归属判据）。
  * @returns 年度回顾结果。
  */
+function selfRowIdInShard(
+  tables: Map<string, { name2id: Map<number, string> }>,
+  self: string,
+): number | undefined {
+  const first = tables.values().next().value
+  if (!first) return undefined
+  for (const [id, name] of first.name2id) if (name === self) return id
+  for (const [id, name] of first.name2id) if (name === '') return id
+  return undefined
+}
+
 export async function queryAnnualReview(decryptedDir: string, year: number, selfUsername = ''): Promise<AnnualReview> {
   const self = (selfUsername ?? '').trim()
   const meta = contactMeta(decryptedDir)
-  const names = meta.names
+  const identity = messageIdentityIndex(decryptedDir, ['message', 'bizchat'])
+  const names = mergeDisplayNames(decryptedDir, identity.usernames)
   const enterpriseNames = meta.enterpriseNames
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
   const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1000)
-
-  // 会话归属：md5(username) → username。一次建表，避免每张 Msg_ 表都反查（O(N²)）。
-  const md5ToUser = new Map<string, string>()
-  const noteUser = (u: string): void => { if (u) md5ToUser.set(createHash('md5').update(u, 'utf8').digest('hex'), u) }
-  for (const u of names.keys()) noteUser(u)
 
   let sent = 0
   let totalAll = 0
@@ -465,35 +357,35 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
   let lastText = ''
   const chats = new Map<string, ChatAgg>()
   /** 年度资金 / 撤回 / 群聊的累加器（纯函数；结果在扫描结束后 `done()` 取出）。 */
-  const extras = createAnnualExtras()
+  const extras = createAnnualExtras({
+    selfUsername: self,
+    names,
+    enterpriseNames,
+  })
   const dayChat = new Map<string, Map<string, number>>()
   const dayBounds = new Map<string, { first: number; firstText: string; last: number; lastText: string }>()
   const chatEarliest = new Map<string, number>()
 
   for (const sh of shardCatalogDirs(decryptedDir, ['message', 'bizchat'])) {
     // 「我」在本分片的 rowid（每个分片有自己的 Name2Id 空间）
-    let selfRowId: number | undefined
-    if (self) {
-      const first = sh.tables.values().next().value
-      if (first) {
-        for (const [id, name] of first.name2id) if (name === self) { selfRowId = id; break }
-        if (selfRowId === undefined) for (const [id, name] of first.name2id) if (name === '') { selfRowId = id; break }
-        // 顺手补齐 md5→用户名（分片 Name2Id 里有会话名）
-        for (const name of first.name2id.values()) if (name) noteUser(name)
-      }
-    }
+    const selfRowId = self ? selfRowIdInShard(sh.tables, self) : undefined
     let db: DatabaseSync | null = null
     try { db = new DatabaseSync(sh.file, { readOnly: true }) } catch { continue }
     try {
       for (const [table, meta] of sh.tables) {
         if (!meta.cols.has('create_time') || !meta.cols.has('local_type')) continue
-        const username = md5ToUser.get(table.slice(4)) ?? ''
+        // Only tables with a proven owner participate in the report. Falling
+        // back to the md5 suffix would rank that synthetic value as a person.
+        const username = identity.tableToUsername.get(table) ?? ''
         if (!username) continue
         try {
           const minRow = db.prepare('SELECT MIN(create_time) AS m FROM "' + table + '"').get() as { m: number | null } | undefined
           if (minRow?.m) chatEarliest.set(username, minRow.m)
           const hasSender = meta.cols.has('real_sender_id')
-          const cols = 'create_time, local_type, message_content' + (hasSender ? ', real_sender_id' : '')
+          const hasServerId = meta.cols.has('server_id')
+          const cols = 'create_time, local_type, message_content'
+            + (hasSender ? ', real_sender_id' : '')
+            + (hasServerId ? ', CAST(server_id AS TEXT) AS server_id_text' : '')
           // 2026-09-28：`.all()` → 游标 + 行级让出。真实 @Remote 探针实测
           // `getAnnualReview` 冷跑 **2150ms 且一次都不让出**（`working/probe-remote.txt`）。
           // 与 `annual-report.ts` 同一病：整年消息逐条 CPU 重活（bigram/emoji/heat），
@@ -512,7 +404,12 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
             if (!ts) continue
             const lt = normType(Number(r['local_type'] ?? 0))
             const raw = decodeCell(r['message_content'])
-            const mine = hasSender && selfRowId !== undefined && Number(r['real_sender_id'] ?? -1) === selfRowId
+            const senderRowId = hasSender ? Number(r['real_sender_id'] ?? -1) : -1
+            const senderUsername = senderRowId > 0 ? meta.name2id.get(senderRowId) ?? '' : ''
+            const mine = hasSender && (
+              (self !== '' && senderUsername === self)
+              || (selfRowId !== undefined && senderRowId === selfRowId)
+            )
             const d = new Date(ts * 1000)
             const hour = d.getHours()
             const dow = d.getDay()
@@ -548,10 +445,26 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
             // （纯函数的 30 条用例全绿也救不了接口上的数）。群前缀 `wxid_x: ` 不影响标签解析。
             const chatEnterpriseName = enterpriseNameOf(enterpriseNames, username)
             extras.onRow(
-              { type: lt, ts, text: body0, sender: mine ? '我' : (names.get(username) ?? username), mine },
+              {
+                type: lt,
+                ts,
+                text: body0,
+                sender: mine
+                  ? '我'
+                  : displayNameForUsername(
+                    senderUsername,
+                    names,
+                    displayNameForUsername(username, names),
+                  ),
+                mine,
+                ...(senderUsername !== '' ? { senderUsername } : {}),
+                ...(hasServerId && r['server_id_text'] !== undefined
+                  ? { serverId: String(r['server_id_text']) }
+                  : {}),
+              },
               {
                 username,
-                name: names.get(username) ?? username,
+                name: displayNameForUsername(username, names),
                 ...(chatEnterpriseName !== undefined ? { enterpriseName: chatEnterpriseName } : {}),
                 isGroup: isRoom,
               },
@@ -597,7 +510,7 @@ export async function queryAnnualReview(decryptedDir: string, year: number, self
                 voiceSentSec += sec
                 if (sec > longestVoiceSec) {
                   longestVoiceSec = sec
-                  longestVoiceFrom = names.get(username) ?? username
+                  longestVoiceFrom = displayNameForUsername(username, names)
                   longestVoiceUsername = username
                 }
               } else { voiceRecvCount += 1; voiceRecvSec += sec }
@@ -792,7 +705,7 @@ function buildHighlights(
  */
 function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   const { year, names, chats, enterpriseNames } = b
-  const nameOf = (u: string): string => names.get(u) ?? u
+  const nameOf = (u: string): string => displayNameForUsername(u, names)
 
   // ── 序列类指标：逐会话走一次有序消息（谁先开口 / 接话间隔）──
   for (const c of chats.values()) {

@@ -86,6 +86,13 @@ async function buildBundle(opts = {}) {
     packages: 'external',
     outdir: targetOutdir,
     outbase: pkgSrc,
+    // 发行产物不保留可读的变量名、空白与模块注释。keepNames 保留类和函数名，
+    // 因为服务注册、反射与错误栈仍会用到它们；不开启属性名混淆，避免破坏
+    // Native/第三方对象与装饰器注册。
+    minify: true,
+    keepNames: true,
+    legalComments: 'none',
+    sourcemap: false,
     logLevel: opts.log === false ? 'silent' : 'info',
     logLimit: 30,
     // 显式关闭 experimentalDecorators，走 TC39 标准装饰器（@Remote 依赖它）。

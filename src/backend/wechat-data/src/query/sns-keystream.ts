@@ -43,21 +43,11 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * `import.meta.url` 在**构建产物**里指向 `src/backend/wechat-data/lib/index.js`（源码布局是
  * `src/query/`），两者上溯的级数不同 —— 所以按候选逐个探测，而不是写死一个相对路径。
  */
-/**
- * `process.resourcesPath` 只有 Electron 主进程有（@types/node 里没有这个字段）。
- * 后端 bundle 也会在纯 Node 下被跑（测试/冒烟），所以取不到时返回空串。
- */
-function processResourcesPath(): string {
-  const p = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  return typeof p === 'string' ? p : ''
-}
-
 function resolveAssetDir(): string {
   const candidates = [
-    // 打包态主路径：native/** 已在 asarUnpack 里，资源落在 app.asar.unpacked 下。
-    // 排在第一位是**有意的** —— 从 asar 里读要经 Electron 的 fs 补丁、每次冷启动都
-    // 解压 3.8MB；unpacked 目录是真实文件，读起来才是设计意图。
-    join(processResourcesPath(), 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'native', 'weflow-isaac64'),
+    // 打包态 HERE 指向 app.asar 内，Electron 的 fs 补丁会直接从归档体读取。
+    // 资产必须留在 asar 内以受 ASAR integrity 覆盖；不要回退到 app.asar.unpacked，
+    // 否则攻击者只要在磁盘上放一份同名文件，就能优先于完整性保护的归档执行代码。
     join(HERE, '..', 'native', 'weflow-isaac64'), // 构建产物：lib/ → wechat-data/native
     join(HERE, '..', '..', 'native', 'weflow-isaac64'), // 源码布局：src/query/ → wechat-data/native
   ]

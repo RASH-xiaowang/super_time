@@ -16,10 +16,7 @@
  *
  * 第四份起改按**主题**切：`mutations-registry.batch3d.mjs`（M417 起）是 2026-10-09 那批
  * 「评论图 / 视频封面 / CDN 密文」的十四条，自成一族、头注要能说清「这一批守的是什么」；
- * 2026-10-12 的微信 ClawBot 集成（M444 起）沿用同一做法，新开 `mutations-registry.batch3e.mjs`；
- * 2026-10-13 的 ClawBot **AI 自动回复**（M478 起）再开 `mutations-registry.batch3g.mjs`
- * （主题=无人值守的模型调用）；同日 M5（来源区分 + 当前实例标记）开 `batch3h.mjs`；
- * 同日 iLink 绑定通道接入再开 `mutations-registry.batch3f.mjs`（M458 起，主题=出网与生命周期）。
+ * 同日 M5（来源区分 + 当前实例标记）开 `batch3h.mjs`。
  * 2026-10-13 的聊天信息抽屉**实时刷新**（M496 起）开 `mutations-registry.batch3j.mjs`
  * （主题=抽屉开着时的静默重取与落地归属闸）。
  * 同日的同步 **WAL 实时推送**（M500 起）开 `mutations-registry.batch3k.mjs`
@@ -71,9 +68,6 @@ import { MUTATIONS_BATCH3 } from './mutations-registry.batch3.mjs'
 import { MUTATIONS_BATCH3B } from './mutations-registry.batch3b.mjs'
 import { MUTATIONS_BATCH3C } from './mutations-registry.batch3c.mjs'
 import { MUTATIONS_BATCH3D } from './mutations-registry.batch3d.mjs'
-import { MUTATIONS_BATCH3E } from './mutations-registry.batch3e.mjs'
-import { MUTATIONS_BATCH3F } from './mutations-registry.batch3f.mjs'
-import { MUTATIONS_BATCH3G } from './mutations-registry.batch3g.mjs'
 import { MUTATIONS_BATCH3H } from './mutations-registry.batch3h.mjs'
 import { MUTATIONS_BATCH3I } from './mutations-registry.batch3i.mjs'
 import { MUTATIONS_BATCH3J } from './mutations-registry.batch3j.mjs'
@@ -245,13 +239,8 @@ const MUTATIONS_BATCH12 = [
     file: 'src/client/README.md',
     // 2026-10-09（W3-11.5，`cancelLayaAnalysis` 是第 174 个 Remote）：锚点跟计数一起走。
     // 2026-10-11（W2-8.6，`generateAnnualNarrative` 是第 179 个）：再跟一次。
-    // 2026-10-12（ClawBot 集成 +6 → 186；同日「可发可收」+1；同日「媒体可见」+1 → 188）：第五次跟。
-    // 2026-10-13（ClawBot 多实例 +4 → 192）：第六次跟。
     // 2026-10-13（W3-11.7 损坏库修复链路 +2 → 194）：第七次跟。
     // 2026-10-14（地图 GeoJSON 后端代理 +1 → 195）：第八次跟。
-    // 2026-10-16（ClawBot 实例别名 +1 → 196）：第九次跟。
-    // 2026-10-17（ClawBot 清除对话历史 +1 → 197）：第十次跟。
-    // 2026-10-17（ClawBot 默认提示词 +1 → 198）：第十一次跟。
     // 2026-10-17（原图自动收割：四个动作合成一个 `originalHarvest` → 199）：第十二次跟。
     // 2026-10-17（收割状态拆成独立 `getOriginalHarvestStatus` → 200）：第十三次跟。
     // 2026-10-17（第三方原图服务额度 `getWxcdnQuota` → 201）：第十四次跟。
@@ -261,7 +250,8 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-19（任务信息 / 触发记录 / 回调 +7 → 212）：第十八次跟。
     // 2026-10-20（任务配置 / 触发记录批量删除 +2 → 214）：第十九次跟。
     // 2026-10-22（统一问答运行时新增 Remote 方法 → 219）：第二十次跟。
-    from: '219 个 Remote 方法）',
+    // 2026-10-30（AI 回复 / 消息列表投递方法面 → 224）：第二十一次跟。
+    from: '224 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -269,8 +259,9 @@ const MUTATIONS_BATCH12 = [
     id: 'M19-wdp-tab-count-drift',
     why: '把主容器头注的页签数改回旧的 32 —— 「导航计数以 nav-config 为真源」必须发现',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    // 2026-10-19（任务信息页签 +1 → 39）：锚点跟着真源走。
-    from: '可路由页签共 **39**（其余 23 项',
+    // 2026-10-19（任务信息页签 +1 → 39）、2026-10-30（新增页签 → 41）；
+    // 退役一个可见入口后（→ 40）：锚点跟着真源走。
+    from: '可路由页签共 **40**（其余 23 项',
     to: '可路由页签共 **32**（其余 23 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -970,7 +961,7 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC, ...MUTATIONS_BATCH3ZD]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC, ...MUTATIONS_BATCH3ZD]
 
 /** 全量条数唯一来源：门禁文案与预算不要再各自抄一个会腐坏的数字。 */
 export const MUTATION_COUNT = MUTATIONS.length

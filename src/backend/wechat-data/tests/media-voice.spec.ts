@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveVoiceInfo } from '../src/query/media-voice.ts'
+import { messageServerIdByLocal, resolveVoiceInfo } from '../src/query/media-voice.ts'
 import { svrIdByChatLocal, voiceDataBySvr } from '../src/query/voice.ts'
 
 /** Scratch dirs removed after each test. */
@@ -52,6 +52,31 @@ describe('resolveVoiceInfo', () => {
     expect(r.length).toBe(2)
   })
 
+  it('uses the selected server_id when local_id was reused', () => {
+    const root = makeMediaDb()
+    const media = new DatabaseSync(join(root, 'message', 'media_0.db'))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 111, ?, 2000)').run(new Uint8Array([1]))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 222, ?, 3000)').run(new Uint8Array([2, 3, 4]))
+    media.close()
+
+    const r = resolveVoiceInfo(root, 'wxid_test@chatroom', 5, '222')
+    expect(r.available).toBe(true)
+    expect(r.svrId).toBe('222')
+    expect(r.length).toBe(3)
+  })
+
+  it('does not guess when one local_id has multiple voice candidates', () => {
+    const root = makeMediaDb()
+    const media = new DatabaseSync(join(root, 'message', 'media_0.db'))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 111, ?, 2000)').run(new Uint8Array([1]))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 222, ?, 3000)').run(new Uint8Array([2, 3, 4]))
+    media.close()
+
+    const r = resolveVoiceInfo(root, 'wxid_test@chatroom', 5)
+    expect(r.available).toBe(false)
+    expect(r.error).toContain('不唯一')
+  })
+
   it('reports missing data without crashing', () => {
     const root = makeMediaDb()
     const r = resolveVoiceInfo(root, 'nobody@chatroom', 99)
@@ -69,6 +94,11 @@ describe('voiceDataBySvr', () => {
 })
 
 describe('svrIdByChatLocal', () => {
+  it('prefers the selected message server_id over a reused local_id', () => {
+    const root = makeMediaDb()
+    expect(svrIdByChatLocal(root, 'wxid_test@chatroom', 4, '222')).toBe('222')
+  })
+
   it('falls back to the message shard server_id when Name2Id is missing', () => {
     const root = makeMediaDb()
     const username = 'wxid_test@chatroom'
@@ -83,5 +113,45 @@ describe('svrIdByChatLocal', () => {
     messages.close()
 
     expect(svrIdByChatLocal(root, username, 4)).toBe('12345')
+  })
+
+  it('only falls back to local_id when VoiceInfo has one candidate', () => {
+    const root = makeMediaDb()
+    const media = new DatabaseSync(join(root, 'message', 'media_0.db'))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 111, ?, 2000)').run(new Uint8Array([1]))
+    media.prepare('INSERT INTO VoiceInfo (chat_name_id, local_id, svr_id, voice_data, create_time) VALUES (1, 5, 222, ?, 3000)').run(new Uint8Array([2, 3, 4]))
+    media.close()
+
+    expect(svrIdByChatLocal(root, 'wxid_test@chatroom', 5)).toBe('')
+  })
+})
+
+describe('messageServerIdByLocal', () => {
+  it('ignores non-voice rows and returns a unique voice server_id', () => {
+    const root = makeMediaDb()
+    const username = 'wxid_test@chatroom'
+    const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+    const messages = new DatabaseSync(join(root, 'message', 'message_0.db'))
+    messages.exec(`CREATE TABLE "${table}" (local_id INTEGER, local_type INTEGER, server_id INTEGER)`)
+    messages.exec(`INSERT INTO "${table}" VALUES (9, 3, 111), (9, 34, 222)`)
+    messages.close()
+
+    expect(messageServerIdByLocal(root, username, 9)).toBe('222')
+  })
+
+  it('refuses to pick one when voice rows reused the same local_id', () => {
+    const root = makeMediaDb()
+    const username = 'wxid_test@chatroom'
+    const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+    const first = new DatabaseSync(join(root, 'message', 'message_0.db'))
+    first.exec(`CREATE TABLE "${table}" (local_id INTEGER, local_type INTEGER, server_id INTEGER)`)
+    first.exec(`INSERT INTO "${table}" VALUES (9, 34, 111)`)
+    first.close()
+    const second = new DatabaseSync(join(root, 'message', 'message_1.db'))
+    second.exec(`CREATE TABLE "${table}" (local_id INTEGER, local_type INTEGER, server_id INTEGER)`)
+    second.exec(`INSERT INTO "${table}" VALUES (9, 34, 222)`)
+    second.close()
+
+    expect(messageServerIdByLocal(root, username, 9)).toBeNull()
   })
 })

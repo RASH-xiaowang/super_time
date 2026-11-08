@@ -17,7 +17,6 @@
 .box:focus-within {
   border-color: var(--nm-cyan);
   color: var(--nm-cyan);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
 }
 
 .icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -46,11 +45,9 @@
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-3);
-  font-size: 13px;
-  line-height: 1;
   cursor: pointer;
 }
 .clear:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
@@ -69,12 +66,8 @@
   container-type: inline-size;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--nm-cyan) 5%, transparent), transparent 96px),
-    var(--nm-bg-2);
-  box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.2),
-    0 2px 8px rgba(0, 0, 0, 0.08);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
 }
 
 /* 下面这几个类由调用方（WechatDataPanel）用在 children 里，所以也放在本模块，
@@ -94,8 +87,7 @@
   margin: -6px -6px 4px;
   padding: 10px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 78%, transparent);
-  background: color-mix(in srgb, var(--nm-bg-2) 94%, transparent);
-  backdrop-filter: blur(14px);
+  background: var(--nm-bg-card);
 }
 
 .overviewIcon {
@@ -104,10 +96,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 24%, var(--nm-border));
-  border-radius: var(--nm-r-lg);
-  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-active));
-  color: var(--nm-cyan-text);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-active);
+  color: var(--nm-text-2);
 }
 
 .overviewText {
@@ -135,8 +127,8 @@
 
 .overviewCount {
   color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -145,12 +137,10 @@
   height: 7px;
   border-radius: var(--nm-r-pill);
   background: var(--nm-cyan);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--nm-cyan) 42%, transparent);
-  animation: searchPulse 1.15s ease-out infinite;
 }
 
 .resultGroup + .resultGroup {
-  margin-top: 5px;
+  margin-top: 4px;
 }
 
 .group {
@@ -168,7 +158,7 @@
   flex: 1;
   height: 1px;
   margin-left: 2px;
-  background: linear-gradient(90deg, var(--nm-border), transparent);
+  background: var(--nm-border);
 }
 
 .groupIcon {
@@ -183,13 +173,13 @@
 }
 
 .groupName {
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .groupCount {
   color: var(--nm-text-3);
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 9px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .row {
@@ -201,40 +191,21 @@
   width: 100%;
   padding: var(--nm-s-2, 8px) 10px;
   border: 1px solid transparent;
-  border-radius: var(--nm-r-xl);
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-1);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--nm-t-fast, 120ms), border-color var(--nm-t-fast, 120ms), transform var(--nm-t-fast, 120ms);
-}
-.row::before {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: 12px;
-  bottom: 12px;
-  width: 2px;
-  border-radius: var(--nm-r-xs);
-  background: var(--nm-cyan);
-  opacity: 0;
-  transform: scaleY(0.55);
-  transition: opacity var(--nm-t-fast, 120ms), transform var(--nm-t-fast, 120ms);
+  transition: background var(--nm-t-fast, 120ms), border-color var(--nm-t-fast, 120ms);
 }
 .row:hover {
-  border-color: color-mix(in srgb, var(--nm-border-hover) 82%, transparent);
-  background: color-mix(in srgb, var(--nm-bg-hover) 84%, transparent);
-}
-.row:hover::before,
-.row:focus-visible::before {
-  opacity: 1;
-  transform: scaleY(1);
+  border-color: var(--nm-border);
+  background: var(--nm-bg-hover);
 }
 .row:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--nm-cyan) 72%, var(--nm-border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 1px;
 }
 
 .avatarSlot {
@@ -252,7 +223,7 @@
   justify-content: center;
   flex-shrink: 0;
   overflow: visible;
-  border-radius: var(--nm-r-xl);
+  border-radius: var(--nm-r-md);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
   font-size: 14px;
   font-weight: 750;
@@ -291,26 +262,20 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-xl);
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 70%),
-    var(--nm-bg-input);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
   color: var(--nm-text-2);
 }
 
 .glyphTile[data-kind='record'] {
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--nm-success) 9%, transparent), transparent 70%),
-    var(--nm-bg-input);
+  background: var(--nm-bg-input);
 }
 
 .glyphMain {
   max-width: 26px;
   overflow: hidden;
-  font-family: var(--nm-font-mono, monospace);
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -350,7 +315,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -361,7 +326,7 @@
   display: -webkit-box;
   overflow: hidden;
   color: var(--nm-text-2);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -397,8 +362,8 @@
 
 .rowTime {
   color: var(--nm-text-3);
-  font-family: var(--nm-font-mono, monospace);
-  font-size: 9px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -452,12 +417,12 @@
   align-items: center;
   justify-content: center;
   padding: 0 var(--nm-s-1, 4px);
-  border-radius: var(--nm-r-lg);
+  border-radius: var(--nm-r-sm);
   background: #fa5151;
   color: #fff;
-  font-family: var(--nm-font-mono, monospace);
   font-size: 9px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   box-sizing: border-box;
 }
 
@@ -483,7 +448,6 @@
   justify-content: center;
   border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-danger) 16%, transparent);
-  font-family: var(--nm-font-mono, monospace);
   font-size: 10px;
   font-weight: 800;
 }
@@ -560,29 +524,11 @@
   width: 45%;
 }
 
-.skeletonAvatar,
-.skeletonLine {
-  background-image: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nm-text-1) 7%, transparent), transparent);
-  background-size: 180% 100%;
-  animation: searchShimmer 1.35s linear infinite;
-}
-
 .empty {
   padding: 14px;
   text-align: center;
   font-size: 12px;
   color: var(--nm-text-3);
-}
-
-@keyframes searchPulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--nm-cyan) 38%, transparent); opacity: 0.55; }
-  70% { box-shadow: 0 0 0 6px transparent; opacity: 1; }
-  100% { box-shadow: 0 0 0 0 transparent; opacity: 0.55; }
-}
-
-@keyframes searchShimmer {
-  from { background-position: 120% 0; }
-  to { background-position: -80% 0; }
 }
 
 @container (max-width: 420px) {
@@ -641,15 +587,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .row,
-  .row::before {
+  .row {
     transition: none;
-  }
-
-  .loadingDot,
-  .skeletonAvatar,
-  .skeletonLine {
-    animation: none;
   }
 }
 

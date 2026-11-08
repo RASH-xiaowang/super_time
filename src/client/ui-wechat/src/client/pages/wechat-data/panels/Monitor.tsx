@@ -17,6 +17,7 @@ import { buildHeatDays, HeatCalendar } from './monitor-heat.tsx'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import { IdentityName } from './identity.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
+import { useKeepAliveActive } from './keep-alive.tsx'
 
 const REFRESH_VISIBLE_MS = 3000
 const REFRESH_HIDDEN_MS = 10_000
@@ -29,6 +30,10 @@ const HEAT_DAYS = 30
  * @returns the monitor element tree.
  */
 export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const wasActiveRef = useRef(active)
   const [groups, setGroups] = useState<WechatSession[]>([])
   const [selected, setSelected] = useState('')
   /** 日计数，按 `YYYY-M` 分组（跨月窗口要两个月的数据，纯日号会互相覆盖）。 */
@@ -117,8 +122,18 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
   useEffect(() => { selectedRef.current = selected }, [selected])
   useEffect(() => { if (selected) void loadGroup(selected) }, [selected, loadGroup])
 
+  // 分段重新显示时补一拍，避免隐藏期间自动刷新关闭、WAL 监听又被暂停后长期停旧数据。
+  useEffect(() => {
+    const resumed = active && !wasActiveRef.current
+    wasActiveRef.current = active
+    if (!resumed) return
+    void loadGroups()
+    if (selectedRef.current) void loadGroup(selectedRef.current)
+  }, [active, loadGroup, loadGroups])
+
   useEffect(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+    if (!active) return undefined
     const start = (): void => {
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
       if (!auto || !selected) return
@@ -132,13 +147,14 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
       document.removeEventListener('visibilitychange', onVis)
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     }
-  }, [auto, selected, loadGroup])
+  }, [active, auto, selected, loadGroup])
 
   // Host push: the realtime sync decrypted a WAL increment into the snapshot —
   // refresh the selected group (and the roster) immediately, independent of the
   // auto poll, so fresh counts/messages appear without waiting for the interval.
   useEffect(() => {
     const onUpdated = (): void => {
+      if (!activeRef.current) return
       void loadGroups()
       if (selectedRef.current) void loadGroup(selectedRef.current)
     }
@@ -213,7 +229,7 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
             title="近期消息"
             className={css.fillCard}
             extra={selGroup ? (
-              <button type="button" className={css.headBtn} onClick={() => { onOpenChat?.(selGroup.username) }} disabled={!onOpenChat}>
+              <button type="button" className={css.headBtn} onClick={() => { onOpenChat?.(selGroup.username) }} disabled={!onOpenChat} title={onOpenChat ? undefined : '当前视图未提供会话跳转'}>
                 打开完整会话
               </button>
             ) : undefined}

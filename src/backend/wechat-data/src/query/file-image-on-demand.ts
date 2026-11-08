@@ -25,8 +25,9 @@
  *  - 同时最多 {@link MAX_CONCURRENT_DECODES} 张在解（保护 UI 线程响应）；
  *  - 找不到附件目录 / 索引里没有 → 返回 `error`，界面保留图标兜底。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { promises as fs } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { collectImageDatFilesAsync, groupImageDatsByMd5 } from './decrypt-images.ts'
 import { decodeDatBytesAsync } from './media-image-async.ts'
@@ -82,6 +83,24 @@ export function decodedFileRel(decodedDir: string, key: string): string | null {
     }
   }
   return null
+}
+
+/**
+ * Locate only the original-quality cache slot.
+ *
+ * `.t.` entries are deliberately excluded: exporting a thumbnail while calling
+ * it an original is worse than reporting that the original is unavailable.
+ */
+export function decodedOriginalFileRel(decodedDir: string, key: string): string | null {
+  for (const ext of RENDERABLE_EXTS) {
+    const rel = key + '.' + ext
+    if (existsSync(join(decodedDir, rel))) return rel
+  }
+  return null
+}
+
+function plaintextMd5(bytes: Uint8Array): string {
+  return createHash('md5').update(bytes).digest('hex')
 }
 
 /** `msg/attach` 索引：md5 → 该 md5 的 `.dat` 路径（`groupImageDatsByMd5` 已按档位从优到劣排序）。 */
@@ -238,23 +257,30 @@ export async function ensureFileImageDecoded(args: {
 }): Promise<FileImageHit> {
   const key = String(args.key ?? '').trim().toLowerCase()
   if (!isMd5(key)) return { error: '缺少图片 MD5' }
+  const thumbFirst = args.thumbFirst === true
   const cached = decodedFileRel(args.decodedDir, key)
-  if (cached !== null) {
-    const thumb = cached.includes('.t.')
+  const cachedThumb = cached !== null && cached.includes('.t.')
+    ? { file: cached, format: cached.slice(cached.lastIndexOf('.') + 1), thumb: true }
+    : undefined
+  // A thumbnail is a complete answer for grid previews, but never for the
+  // lightbox: when thumbFirst=false, keep looking for an original .dat tier.
+  if (cached !== null && (thumbFirst || !cached.includes('.t.'))) {
     const format = cached.slice(cached.lastIndexOf('.') + 1)
-    return { file: cached, format, thumb }
+    return { file: cached, format, ...(cached.includes('.t.') ? { thumb: true } : {}) }
   }
-  if (args.rawBase === '') return { error: '未配置微信数据目录（db_dir），无法定位附件原图' }
-  const flightKey = args.rawBase + '|' + key + '|' + (args.thumbFirst === true ? 't' : 'f')
+  if (args.rawBase === '') {
+    return cachedThumb ?? { error: '未配置微信数据目录（db_dir），无法定位附件原图' }
+  }
+  const flightKey = args.rawBase + '|' + key + '|' + (thumbFirst ? 't' : 'f')
   const existing = inFlight.get(flightKey)
   if (existing) return await existing
   const work = (async (): Promise<FileImageHit> => {
     const candidates = await locateFileDats(args.rawBase, key)
     if (candidates.length === 0) {
-      return { error: '未找到附件原图（msg/attach 里没有该 md5 的 .dat）' }
+      return cachedThumb ?? { error: '未找到附件原图（msg/attach 里没有该 md5 的 .dat）' }
     }
     // 档位顺序：灯箱走原图优先（groupImageDatsByMd5 已排好）；网格只要「能看」就先 `_t`。
-    const ordered = args.thumbFirst === true
+    const ordered = thumbFirst
       ? [...candidates].sort((a, b) => Number(isThumbTier(b)) - Number(isThumbTier(a)) || datTierRank(a) - datTierRank(b))
       : candidates
     await acquireDecodeSlot()
@@ -279,7 +305,7 @@ export async function ensureFileImageDecoded(args: {
           return { file: rel, format: ext, thumb: tier }
         } catch { /* 该档读不动/解不开：试下一档 */ }
       }
-      return { error: '附件原图解密失败（档位都不可渲染）' }
+      return cachedThumb ?? { error: '附件原图解密失败（档位都不可渲染）' }
     } finally {
       releaseDecodeSlot()
     }
@@ -289,5 +315,73 @@ export async function ensureFileImageDecoded(args: {
     return await work
   } finally {
     inFlight.delete(flightKey)
+  }
+}
+
+/**
+ * Resolve a file-library image from original-quality tiers only.
+ *
+ * A decoded image is accepted only when its plaintext MD5 matches the WeChat
+ * attachment key. That check rejects `.t.` thumbnails even if an older build
+ * accidentally wrote one into the main cache slot.
+ */
+export async function ensureFileImageOriginalDecoded(args: {
+  decryptedDir: string
+  decodedDir: string
+  rawBase: string
+  key: string
+  aesKey?: string | Uint8Array
+  xorKey?: number
+}): Promise<FileImageHit> {
+  const key = String(args.key ?? '').trim().toLowerCase()
+  if (!isMd5(key)) return { error: '缺少图片 MD5' }
+
+  const cached = decodedOriginalFileRel(args.decodedDir, key)
+  if (cached !== null) {
+    try {
+      const bytes = readFileSync(join(args.decodedDir, cached))
+      if (plaintextMd5(bytes) === key) {
+        const format = cached.slice(cached.lastIndexOf('.') + 1)
+        return { file: cached, format }
+      }
+    } catch {
+      // Fall through and try the source attachment.
+    }
+  }
+
+  if (args.rawBase === '') return { error: '未配置微信数据目录（db_dir），无法定位附件原图' }
+  const all = await locateFileDats(args.rawBase, key)
+  const originals = all.filter(file => !isThumbTier(file))
+  if (originals.length === 0) {
+    return {
+      error: all.length > 0
+        ? '本机只有微信缩略图，原图尚未下载；请在微信中打开该图片后再导出'
+        : '未找到附件原图（msg/attach 里没有该 md5 的 .dat）',
+    }
+  }
+
+  await acquireDecodeSlot()
+  try {
+    for (const file of originals) {
+      try {
+        const st = await fs.stat(file)
+        if (st.size > MAX_DAT_BYTES) continue
+        const source = await fs.readFile(file)
+        const dec = await decodeDatBytesAsync(new Uint8Array(source), args.aesKey ?? null, args.xorKey ?? 0xff)
+        if ('error' in dec || dec.format === 'hevc') continue
+        const ext = dec.format === 'jpeg' ? 'jpg' : dec.format
+        if (!WRITE_EXTS.has(ext)) continue
+        if (plaintextMd5(dec.bytes) !== key) continue
+        const rel = key + '.' + ext
+        await fs.mkdir(args.decodedDir, { recursive: true })
+        await fs.writeFile(join(args.decodedDir, rel), Buffer.from(dec.bytes))
+        return { file: rel, format: ext }
+      } catch {
+        // Try the next non-thumbnail source tier.
+      }
+    }
+    return { error: '附件原图解密失败或内容校验不通过' }
+  } finally {
+    releaseDecodeSlot()
   }
 }

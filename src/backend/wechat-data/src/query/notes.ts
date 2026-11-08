@@ -29,6 +29,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, KnowledgeNote, KnowledgeSnapshot, NoteMutationResult, NotesSnapshot } from '../types.ts'
 import { withWritableDb } from './db-open.ts'
+import { displayNameForUsername, resolveTalkerUsername } from './message-identity.ts'
 
 /**
  * 默认知识库的 id。**只在这里定义一处。**
@@ -250,7 +251,22 @@ function parseTags(raw: string): string[] {
   return out
 }
 
-function rowToNote(r: Record<string, unknown>): KnowledgeNote {
+/**
+ * Resolve a persisted source-chat field at the read/write boundary.
+ * Legacy notes may contain the physical 32-char message-table suffix; that is
+ * never a valid navigation target. Unknown hashes become empty instead of
+ * leaking into the note detail or story graph.
+ * @param decryptedDir - decrypted data root.
+ * @param value - raw username from input or SQLite.
+ * @returns canonical username, or an empty string for an unresolved hash.
+ */
+function canonicalSourceUsername(decryptedDir: string, value: string): string {
+  const raw = value.trim()
+  if (!raw) return ''
+  return resolveTalkerUsername(decryptedDir, raw)
+}
+
+function rowToNote(r: Record<string, unknown>, decryptedDir: string): KnowledgeNote {
   const body = cellStr(r['body'] ?? '')
   const rawKind = cellStr(r['source_kind'] ?? 'manual')
   const note: KnowledgeNote = {
@@ -266,7 +282,7 @@ function rowToNote(r: Record<string, unknown>): KnowledgeNote {
     createdAt: Number(r['created_at'] ?? 0),
     updatedAt: Number(r['updated_at'] ?? 0),
   }
-  const username = cellStr(r['source_username'] ?? '')
+  const username = canonicalSourceUsername(decryptedDir, cellStr(r['source_username'] ?? ''))
   if (username) note.sourceUsername = username
   const question = cellStr(r['source_question'] ?? '')
   if (question) note.sourceQuestion = question
@@ -536,7 +552,7 @@ export function listNotes(decryptedDir: string, kbId: number, options?: { query?
       } else {
         rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?').all(id, limit) as Array<Record<string, unknown>>
       }
-      const items = rows.map(rowToNote)
+      const items = rows.map(row => rowToNote(row, decryptedDir))
       // total 必须是**本库**的总数：改前是 `COUNT(*)`，多库之后会显示成「12 / 37」这种跨库数。
       const totalRow = db.prepare('SELECT COUNT(*) AS n FROM notes WHERE kb_id = ?').get(id) as { n?: number } | undefined
       return { items, total: Number(totalRow?.n ?? items.length) }
@@ -580,6 +596,9 @@ export function saveNote(
   const tags = Array.isArray(input.tags) ? parseTags(input.tags.join(',')) : parseTags(String(input.tags ?? ''))
   const sourceKind = input.sourceKind === 'ask' ? 'ask' : input.sourceKind === 'file' ? 'file' : 'manual'
   const sourceFileId = Math.max(0, Math.trunc(Number(input.sourceFileId ?? 0)))
+  const sourceUsername = input.sourceUsername === undefined
+    ? undefined
+    : canonicalSourceUsername(decryptedDir, String(input.sourceUsername))
   const noteId = input.id === undefined ? undefined : Math.trunc(Number(input.id))
   try {
     return withNotesStore(decryptedDir, (db) => {
@@ -600,14 +619,14 @@ export function saveNote(
         // 会静默改掉甲库那篇（id 是全局自增的）。加上它之后这种情况返回「笔记不存在」。
         const raw = db.prepare('SELECT * FROM notes WHERE id = ? AND kb_id = ?').get(noteId, id) as Record<string, unknown> | undefined
         if (raw === undefined) return { ok: false, error: '笔记不存在' }
-        const prev = rowToNote(raw)
+        const prev = rowToNote(raw, decryptedDir)
         const r = db.prepare('UPDATE notes SET title = ?, body = ?, tags = ?, source_kind = ?, source_username = ?, source_question = ?, source_file_id = ?, updated_at = ? WHERE id = ? AND kb_id = ?')
           .run(
             title,
             input.body === undefined ? prev.body : body,
             input.tags === undefined ? prev.tags.join(',') : tags.join(','),
             input.sourceKind === undefined ? prev.sourceKind : sourceKind,
-            input.sourceUsername === undefined ? (prev.sourceUsername ?? '') : String(input.sourceUsername),
+            sourceUsername === undefined ? (prev.sourceUsername ?? '') : sourceUsername,
             input.sourceQuestion === undefined ? (prev.sourceQuestion ?? '') : String(input.sourceQuestion),
             input.sourceFileId === undefined ? (prev.sourceFileId ?? 0) : sourceFileId,
             ts,
@@ -618,7 +637,7 @@ export function saveNote(
         return { ok: true, id: noteId }
       }
       const r = db.prepare('INSERT INTO notes(kb_id, title, body, tags, source_kind, source_username, source_question, source_file_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, title, body, tags.join(','), sourceKind, input.sourceUsername ?? '', input.sourceQuestion ?? '', sourceFileId, ts, ts)
+        .run(id, title, body, tags.join(','), sourceKind, sourceUsername ?? '', input.sourceQuestion ?? '', sourceFileId, ts, ts)
       return { ok: true, id: Number(r.lastInsertRowid) }
     })
   } catch (e) {
@@ -702,7 +721,7 @@ export function buildKnowledgeGraph(decryptedDir: string, kbId: number, names: M
     console.warn('[notes] 知识图谱读取失败（与「确无笔记」不同）：' + dbPath(decryptedDir) + ': ' + readError)
     return { ...empty, readError }
   }
-  const all = rows.map(rowToNote)
+  const all = rows.map(row => rowToNote(row, decryptedDir))
   const idByKey = new Map<string, number>()
   for (const n of all) {
     const key = normalizeTitle(n.title)
@@ -747,28 +766,33 @@ export function buildKnowledgeGraph(decryptedDir: string, kbId: number, names: M
     }
   }
 
-  const notes: KnowledgeSnapshot['notes'] = all.map(n => ({
-    id: n.id,
-    title: n.title,
-    excerpt: excerptOf(n.body),
-    tags: n.tags,
-    sourceKind: n.sourceKind,
-    ...(n.sourceUsername ? { sourceUsername: n.sourceUsername } : {}),
-    ...(n.sourceQuestion ? { sourceQuestion: n.sourceQuestion } : {}),
-    createdAt: n.createdAt,
-    updatedAt: n.updatedAt,
-    outLinks: outKeys.get(n.id)?.size ?? 0,
-    backLinks: backLinks.get(n.id) ?? 0,
-  }))
+  const notes: KnowledgeSnapshot['notes'] = all.map(n => {
+    const sourceUsername = n.sourceUsername
+      ? resolveTalkerUsername(decryptedDir, n.sourceUsername)
+      : ''
+    return {
+      id: n.id,
+      title: n.title,
+      excerpt: excerptOf(n.body),
+      tags: n.tags,
+      sourceKind: n.sourceKind,
+      ...(sourceUsername ? { sourceUsername } : {}),
+      ...(n.sourceQuestion ? { sourceQuestion: n.sourceQuestion } : {}),
+      createdAt: n.createdAt,
+      updatedAt: n.updatedAt,
+      outLinks: outKeys.get(n.id)?.size ?? 0,
+      backLinks: backLinks.get(n.id) ?? 0,
+    }
+  })
 
   const stubs = [...stubMeta.entries()]
     .map(([key, s]) => ({ key, label: s.label, refCount: s.refCount, referencedBy: [...s.referencedBy].sort((a, b) => a - b) }))
     .sort((a, b) => b.refCount - a.refCount || a.label.localeCompare(b.label))
 
   const sessionNames: Record<string, string> = {}
-  for (const n of all) {
+  for (const n of notes) {
     if (!n.sourceUsername || sessionNames[n.sourceUsername] !== undefined) continue
-    sessionNames[n.sourceUsername] = names.get(n.sourceUsername) || n.sourceUsername
+    sessionNames[n.sourceUsername] = displayNameForUsername(n.sourceUsername, names)
   }
 
   edges.sort((a, b) => b.weight - a.weight || a.source.localeCompare(b.source) || a.target.localeCompare(b.target))

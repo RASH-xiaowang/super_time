@@ -17,9 +17,22 @@
  * @module moments-viewer
  */
 import { useEffect, useRef, useState } from 'react'
+import type { MomentLiveMedia } from './moments-live.tsx'
 
 /** 灯箱里可被点开的那张图的形状（与 `MomentsImageViewer` 传进来的兼容）。 */
-export interface ViewerImageLike { thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }
+export interface ViewerImageLike {
+  thumb?: string
+  url?: string
+  md5?: string
+  timelineId?: string
+  id?: string
+  mediaId?: string
+  seed?: string
+  key?: string
+  token?: string
+  livePhoto?: MomentLiveMedia
+  live?: MomentLiveMedia
+}
 
 /** 灯箱整体状态。 */
 export interface MomentsViewerState { images: ViewerImageLike[]; index: number; author: string }

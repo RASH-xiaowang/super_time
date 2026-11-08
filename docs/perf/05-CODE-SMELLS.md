@@ -179,8 +179,7 @@
    在 Electron 主进程里 `new Worker(...)` 直接抛 `Cannot transfer object of unsupported type`（实测）。
    本仓对 CPU 密集段的正确解法是 `yieldToLoop` 分片（46 个文件、122 处），继续沿用它。
    且**图谱布局早已不在主线程**：`graph-layout.ts:516 new Worker(new URL('./graph-layout-worker.ts'))` —— 别重复改造。
-2. **不要给 `api-clawbot.ts`（15 个函数）/`api-task-center.ts`（9 个）整体套 `cachedFetch`。** 这些几乎都是动作/变更
-   （`apiCreateClawbotInstance`、`apiSendClawbotMessage`、`apiDeleteClawbotInstance`…），缓存即改语义。
+2. **不要给任务中心等动作型 API 整体套 `cachedFetch`。** 这些调用几乎都是动作/变更，缓存即改语义。
    `cachedFetch` 的正确用法已示范在 `api-read.ts:155/188/214`（只包幂等读 + 明确 TTL）。
 3. **不要动 `article-cover.ts:435-441` 的 `existsSync` 循环**：整段在 `if (trace)`（`:416`，环境变量 `SUPERTIME_COVER_TRACE`）里，
    生产不执行。这是 grep 计数最容易骗人的一类。

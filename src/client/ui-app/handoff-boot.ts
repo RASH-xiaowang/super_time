@@ -11,7 +11,8 @@
  * ## 这条桥是什么、不是什么
  *
  * 它**不是** Electron preload：没有 Node、没有 IPC，只有 `fetch('/api/native/<action>')`。
- * 服务端只对「交接会话」放行这些动作；普通手机配对码的会话调同一批端点会得到 403。
+ * 服务端只对 fullAccess 会话放行这些动作；当前「打开网页」与设置页扫码都是
+ * fullAccess，长期 api_token 登录得到的非 fullAccess 会话会得到 403。
  * `wechat` 字段刻意缺席 —— 后端调用仍走 HTTP remote（`createHttpRemote`），
  * 这样桌面端与浏览器端只有一条业务数据通道，不会出现两套。
  *
@@ -51,7 +52,7 @@ async function native(action: string, payload: Record<string, unknown> = {}): Pr
     body: JSON.stringify(payload),
   })
   if (res.status === 401) throw new Error('会话已失效，请重新从桌面端打开网页')
-  if (res.status === 403) throw new Error('该操作只对桌面交接会话开放')
+  if (res.status === 403) throw new Error('该操作需要 fullAccess 会话')
   const body = (await res.json().catch(() => null)) as
     { ok?: boolean, value?: unknown, error?: { message?: string } } | null
   if (!body) throw new Error(`原生操作无返回（HTTP ${String(res.status)}）`)

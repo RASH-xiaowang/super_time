@@ -10,10 +10,10 @@ import { describe, expect, it } from 'vitest'
 import type { GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   DEFAULT_PHOTO_LIMIT, GROUP_TARGET_REQUIRED, KEYWORD_MAX_COUNT, KEYWORD_MAX_LEN, MEMBER_RENDER_LIMIT,
-  PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN, addKeywordBatch, buildTaskInfoInput, chatTypeLabel, clampPhotoLimit,
-  defaultTaskName, initialTaskCreateForm, isValidPhotoLimit, parseKeywordInput, photoHint, pickMembers,
-  removeKeyword, validateTaskCreate,
-  type TaskCreateSession,
+  PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN, TASK_NAME_MAX_LEN, addKeywordBatch, buildTaskInfoInput,
+  buildTaskInfoInputs, chatTypeLabel, clampPhotoLimit, defaultTaskName, initialTaskCreateForm,
+  isValidPhotoLimit, parseKeywordInput, photoHint, pickMembers, removeKeyword, removeTaskTarget,
+  toggleTaskTarget, validateTaskCreate, type TaskCreateSession, type TaskCreateTarget,
 } from './task-create.ts'
 
 const PRIVATE: TaskCreateSession = { username: 'wxid_a', displayName: '张三', type: 'private' }
@@ -108,15 +108,15 @@ describe('照片数量（2026-10-19：档位 → 可输入）', () => {
 })
 
 describe('提交前校验', () => {
-  const base = { chatType: 'private' as const, targetUsername: '', keywords: ['报价'], photoLimit: 3 }
+  const base = { chatType: 'private' as const, targetCount: 1, keywords: ['报价'], photoLimit: 3 }
 
   it('单聊不需要目标用户；合法表单没有错误', () => {
     expect(validateTaskCreate(base)).toBeNull()
   })
 
   it('群聊未选目标用户 ⇒ 第一条就报错（不能"先校验关键词"把它遮住）', () => {
-    expect(validateTaskCreate({ ...base, chatType: 'group', keywords: [] })).toBe(GROUP_TARGET_REQUIRED)
-    expect(validateTaskCreate({ ...base, chatType: 'group', targetUsername: 'wxid_b' })).toBeNull()
+    expect(validateTaskCreate({ ...base, chatType: 'group', targetCount: 0, keywords: [] })).toBe(GROUP_TARGET_REQUIRED)
+    expect(validateTaskCreate({ ...base, chatType: 'group', targetCount: 2 })).toBeNull()
   })
 
   it('关键词为空 / 超数量 / 超长都能被拦下', () => {
@@ -169,6 +169,74 @@ describe('任务名与写接口入参', () => {
     expect(input.targetName).toBe('李四')
     expect(input.photoLimit).toBe(6)
     expect(input.name).toBe('项目回款')
+  })
+
+  it('批量构建：每个成员一条独立任务，目标字段不串线', () => {
+    const targets: TaskCreateTarget[] = [
+      { username: 'wxid_li', name: '李四', enterpriseName: '甲公司' },
+      { username: 'wxid_wang', name: '王五' },
+    ]
+    const inputs = buildTaskInfoInputs({
+      chat: GROUP,
+      targets,
+      keywords: ['合同'],
+      photoLimit: 3,
+      mentionMeOnly: true,
+    })
+    expect(inputs).toHaveLength(2)
+    expect(inputs.map((item) => item.targetUsername)).toEqual(['wxid_li', 'wxid_wang'])
+    expect(inputs.map((item) => item.targetName)).toEqual(['李四', '王五'])
+    expect(inputs.map((item) => item.name)).toEqual(['项目群 · 李四 · 合同', '项目群 · 王五 · 合同'])
+    for (const item of inputs) {
+      expect(item.chatUsername).toBe(GROUP.username)
+      expect(item.keywords).toEqual(['合同'])
+      expect(item.photoLimit).toBe(3)
+      expect(item.mentionMeOnly).toBe(true)
+      expect(item.status).toBe('incomplete')
+    }
+  })
+
+  it('批量自定义任务名会追加成员名，且仍受任务名长度上限约束', () => {
+    const longName = '回款任务'.repeat(20)
+    const inputs = buildTaskInfoInputs({
+      chat: GROUP,
+      targets: [
+        { username: 'wxid_li', name: '李四' },
+        { username: 'wxid_wang', name: '王五' },
+      ],
+      keywords: ['回款'],
+      photoLimit: 0,
+      name: longName,
+    })
+    expect(inputs[0]?.name).toContain('李四')
+    expect(inputs[1]?.name).toContain('王五')
+    expect(inputs[0]?.name).not.toBe(inputs[1]?.name)
+    for (const item of inputs) expect((item.name ?? '').length).toBeLessThanOrEqual(TASK_NAME_MAX_LEN)
+  })
+
+  it('批量构建会去重空/重复成员；单聊始终只有一条并回填会话对象', () => {
+    const groupInputs = buildTaskInfoInputs({
+      chat: GROUP,
+      targets: [
+        { username: 'wxid_li', name: '李四' },
+        { username: 'wxid_li', name: '重复李四' },
+        { username: '  ', name: '空账号' },
+      ],
+      keywords: ['合同'],
+      photoLimit: 0,
+    })
+    expect(groupInputs).toHaveLength(1)
+    expect(groupInputs[0]?.targetName).toBe('李四')
+
+    const privateInputs = buildTaskInfoInputs({
+      chat: PRIVATE,
+      targets: [{ username: 'ignored', name: '不应使用' }],
+      keywords: ['报价'],
+      photoLimit: 0,
+    })
+    expect(privateInputs).toHaveLength(1)
+    expect(privateInputs[0]?.targetUsername).toBe(PRIVATE.username)
+    expect(privateInputs[0]?.targetName).toBe(PRIVATE.displayName)
   })
 
   it('群聊勾选「仅匹配@我的文本」时提交 true；未勾选/单聊始终为 false', () => {
@@ -248,16 +316,35 @@ describe('群成员搜索与截断', () => {
   })
 })
 
+describe('多选触发对象', () => {
+  const li: TaskCreateTarget = { username: 'wxid_li', name: '李四', enterpriseName: '甲公司' }
+  const wang: TaskCreateTarget = { username: 'wxid_wang', name: '王五' }
+
+  it('按点击顺序添加，重复点击取消，不改原数组', () => {
+    const first = toggleTaskTarget([], li)
+    expect(first).toEqual([li])
+    const both = toggleTaskTarget(first, wang)
+    expect(both.map((item) => item.username)).toEqual(['wxid_li', 'wxid_wang'])
+    expect(toggleTaskTarget(both, li).map((item) => item.username)).toEqual(['wxid_wang'])
+    expect(first).toEqual([li])
+  })
+
+  it('空 username 不进入选择；移除按 username 精确处理', () => {
+    expect(toggleTaskTarget([], { username: '  ', name: '脏数据' })).toEqual([])
+    expect(removeTaskTarget([li, wang], 'wxid_li')).toEqual([wang])
+    expect(removeTaskTarget([li, wang], 'missing')).toEqual([li, wang])
+  })
+})
+
 describe('表单初值', () => {
-  it('空关键词、默认 3 张、空任务名、未选目标', () => {
+  it('空关键词、默认 3 张、空任务名、未选目标数组', () => {
     expect(initialTaskCreateForm()).toEqual({
       keywords: [],
       keywordDraft: '',
       photoLimit: 3,
       mentionMeOnly: false,
       name: '',
-      targetUsername: '',
-      targetName: '',
+      targets: [],
     })
   })
 })

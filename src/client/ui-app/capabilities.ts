@@ -38,7 +38,7 @@ export const isDesktop: boolean = typeof b?.wechat?.call === 'function'
  *
  * 交接态由 `handoff-boot.ts` 在 capabilities 求值前立标记并装原生代理桥；它**不是**桌面端
  * （`isDesktop` 仍为 false，业务调用照旧走 HTTP + SSE），但界面的权限判据要与桌面端一致：
- * 选目录、导出、截图、ClawBot 写侧等全部放开。
+ * 选目录、导出、截图等全部放开。
  */
 export const desktopEquivalent: boolean = typeof window !== 'undefined'
   && window.__SUPERTIME_FULL__ === true

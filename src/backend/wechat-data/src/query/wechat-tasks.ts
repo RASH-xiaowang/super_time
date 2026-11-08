@@ -12,6 +12,7 @@ import { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { TasksSnapshot, TaskMutationResult, WechatTask } from '../types.ts'
+import { resolveTalkerUsername } from './message-identity.ts'
 
 function dbPath(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'wechat_tasks.db')
@@ -55,7 +56,13 @@ function cellStr(v: unknown): string {
   return ''
 }
 
-function rowToTask(r: Record<string, unknown>): WechatTask {
+/** Resolve a task's persisted source chat to its canonical username. */
+function canonicalSourceUsername(decryptedDir: string, value: string): string {
+  const raw = value.trim()
+  return raw ? resolveTalkerUsername(decryptedDir, raw) : ''
+}
+
+function rowToTask(r: Record<string, unknown>, decryptedDir: string): WechatTask {
   const status = cellStr(r['status'] ?? 'open') === 'done' ? 'done' : 'open'
   const task: WechatTask = {
     id: Number(r['id'] ?? 0),
@@ -65,7 +72,8 @@ function rowToTask(r: Record<string, unknown>): WechatTask {
     updatedAt: Number(r['updated_at'] ?? 0),
   }
   if (r['due_at'] != null) task.dueAt = Number(r['due_at'])
-  if (r['source_username']) task.sourceUsername = cellStr(r['source_username'])
+  const sourceUsername = canonicalSourceUsername(decryptedDir, cellStr(r['source_username']))
+  if (sourceUsername) task.sourceUsername = sourceUsername
   if (r['source_local_id'] != null) task.sourceLocalId = Number(r['source_local_id'])
   if (r['message_time'] != null) task.messageTime = Number(r['message_time'])
   return task
@@ -89,7 +97,7 @@ export function listTasks(decryptedDir: string): TasksSnapshotRead {
     const db = openStore(decryptedDir)
     const rows = db.prepare('SELECT * FROM tasks ORDER BY id DESC').all() as Array<Record<string, unknown>>
     db.close()
-    const items = rows.map(rowToTask)
+    const items = rows.map(row => rowToTask(row, decryptedDir))
     return { items, total: items.length }
   } catch (e) {
     const readError = errorText(e)
@@ -105,6 +113,7 @@ export function insertTask(
 ): TaskMutationResult {
   try {
     const db = openStore(decryptedDir)
+    const sourceUsername = canonicalSourceUsername(decryptedDir, task.sourceUsername ?? '')
     const exists = db.prepare("SELECT id FROM tasks WHERE title = ? AND status = 'open' LIMIT 1").get(task.title)
     if (exists) {
       db.close()
@@ -112,7 +121,7 @@ export function insertTask(
     }
     const ts = Date.now()
     const r = db.prepare('INSERT INTO tasks(title, status, due_at, source_username, source_local_id, message_time, created_at, updated_at) VALUES (?, \'open\', ?, ?, ?, ?, ?, ?)').run(
-      task.title, task.dueAt ?? null, task.sourceUsername ?? '', task.sourceLocalId ?? null, task.messageTime ?? null, ts, ts,
+      task.title, task.dueAt ?? null, sourceUsername, task.sourceLocalId ?? null, task.messageTime ?? null, ts, ts,
     )
     const id = Number(r.lastInsertRowid)
     db.close()

@@ -216,6 +216,22 @@ const TOOL_NUMERIC_POLICIES: Readonly<Record<string, Readonly<Record<string, Num
 }
 
 const TOOL_ENUM_ALIASES: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> = {
+  get_session_messages: {
+    order: {
+      '最新': 'desc',
+      '最新优先': 'desc',
+      '最近': 'desc',
+      '倒序': 'desc',
+      '时间倒序': 'desc',
+      'descending': 'desc',
+      'newest': 'desc',
+      '最早': 'asc',
+      '正序': 'asc',
+      '时间正序': 'asc',
+      'ascending': 'asc',
+      'oldest': 'asc',
+    },
+  },
   list_sessions: {
     orderBy: {
       '消息数': 'count',

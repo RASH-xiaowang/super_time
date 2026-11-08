@@ -17,8 +17,8 @@
  *   ③ 白名单 ⊆ 注册表（改名后不许留下永不命中的死条目 —— 死条目会制造假的安全感：
  *      清单看着覆盖了，实际那条方法已经不存在，而真正的同名新方法没被审过）。
  *
- * 另外逐族点名排除**最不该开放**的几类：模型 API Key、许可证、备份还原、配置写入、
- * ClawBot 发消息。这几条不是「碰巧没列进来」，而是**必须**列不进来。
+ * 另外逐族点名排除**最不该开放**的几类：模型 API Key、许可证、备份还原、配置写入。
+ * 这几条不是「碰巧没列进来」，而是**必须**列不进来。
  *
  * @vitest-environment node
  */
@@ -122,6 +122,17 @@ describe('远程访问白名单：完整二分 + 逐族排除', () => {
       ['deleteBackup', '删除备份文件'],
       ['exportCsv', '导出落盘'],
       ['exportAllSessions', '批量导出落盘'],
+      ['exportSnsVideo', '导出朋友圈视频落盘'],
+      ['exportSnsImage', '导出朋友圈原图落盘'],
+      ['exportChatImage', '导出聊天原图落盘'],
+      ['exportChatVideo', '导出聊天视频落盘'],
+      ['exportChatFile', '导出聊天文件落盘'],
+      ['exportFileImage', '导出文件库原图落盘'],
+      ['exportFileVideo', '导出文件库视频落盘'],
+      ['exportFileAttachment', '导出文件库附件落盘'],
+      ['exportFavoriteImage', '导出收藏原图落盘'],
+      ['exportFavoriteVideo', '导出收藏原视频落盘'],
+      ['exportFavoriteFile', '导出收藏原文件落盘'],
       ['addKbFiles', '入参是本机文件路径'],
       ['openPath', '打开本机资源管理器'],
       ['openConfig', '打开本机配置文件'],
@@ -132,10 +143,6 @@ describe('远程访问白名单：完整二分 + 逐族排除', () => {
       ['transcribeVoiceBatch', '批量转写'],
       ['downloadWhisperModel', '模型下载'],
       // D 对外后果 / 销毁问责留痕
-      ['sendClawbotMessage', '能以用户身份给联系人发消息'],
-      ['createClawbotBindQr', '改绑定'],
-      ['unbindClawbot', '解绑'],
-      ['setClawbotInstanceConfig', '改实例配置（含 AI 自动回复开关）'],
       ['clearOperationLog', '清空操作日志（问责留痕）'],
       ['clearPrivacyAudit', '清空出站审计（问责留痕）'],
     ]
@@ -156,9 +163,6 @@ describe('远程访问白名单：完整二分 + 逐族排除', () => {
       // 2026-10-14 M10 审计：转账/红包状态是本地库的纯读（名字里的 payment 指微信账单，不是许可证）。
       // 它曾被判为 A 类凭据，症状是手机上聊天里的转账/红包卡片读不出状态。
       'getPaymentStatus',
-      // 2026-10-17：内置的拟人化默认提示词是**常量**（不读库、不碰微信数据、无副作用），
-      // 手机上要能看得到默认值长什么样 —— 否则设置面板的输入框永远是空的。
-      'getClawbotDefaultPrompt',
     ]
     for (const m of mustAllow) {
       expect(registry.has(m), `${m} 已不在注册表里`).toBe(true)

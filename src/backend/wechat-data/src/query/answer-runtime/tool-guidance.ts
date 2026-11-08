@@ -24,8 +24,14 @@ export function profileToolHints(
 }
 
 /** 把可用工具写成简短排序建议，仍要求模型按问题自行选择。 */
-export function buildToolHintBlock(tools: readonly string[]): string {
+export function buildToolHintBlock(
+  tools: readonly string[],
+  profile?: AnswerProfile,
+): string {
+  const guidance = profile?.id === 'session-ask'
+    ? '本入口只查当前会话的聊天消息；没有证据就如实说明，不要改查联系人、文件、收藏、朋友圈、账单或其他全局资源。'
+    : '若问题明确是文件/收藏/朋友圈/联系人/统计，不要用泛化检索替代对应工具。'
   return `\n\n本轮建议优先检查的工具（只是排序建议，仍按问题选择）：${tools.join('、')}。`
-    + '若问题明确是文件/收藏/朋友圈/联系人/统计，不要用泛化检索替代对应工具；'
+    + guidance
     + '拿到足够证据后停止调用。'
 }

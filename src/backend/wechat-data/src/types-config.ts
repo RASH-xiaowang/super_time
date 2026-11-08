@@ -6,6 +6,8 @@
  *
  * @module types-config
  */
+import type { DataRevision } from './query/sync-status.ts'
+
 /** Detected WeChat account. */
 export interface WechatAccount {
   wxid: string
@@ -136,7 +138,7 @@ export type { HarvestResult, HarvestStatus } from './query/original-harvester.ts
  * 「实时同步修订」的对外类型（真源在 `query/sync-status.ts`）。
  * 同上：query 不能 import 本文件（M24 分层守卫），所以由这里再导出给 Remote 客户端。
  */
-export type { DataRevision } from './query/sync-status.ts'
+export type { DataRevision }
 
 /**
  * 「第三方原图服务」的额度类型（真源在 `query/wxcdn-original.ts`）。
@@ -359,9 +361,10 @@ declare module '@deepseek-ai/cordis' {
      * decrypted snapshot (a WAL increment or a full re-decrypt). Panels
      * refresh on it instead of waiting for the next polling tick.
      * @mode emit
-     * @param shards - message shard file names that were updated.
+     * @param revision - 本拍的结构化修订快照；`shards` 是变过的库/分片，
+     *   `messageChanged` 决定聊天面板是否值得拉消息增量。
      */
-    'wechat-data/updated'(shards: string[]): void
+    'wechat-data/updated'(revision: DataRevision): void
     /**
      * 任务触发扫描新建了记录 / 投递了回调（2026-10-19 提速）。
      *
@@ -386,15 +389,29 @@ declare module '@deepseek-ai/cordis' {
      */
     'wechat-ask/delta'(payload: { id: string; text: string }): void
     /**
-     * 微信问答的**思考过程增量**（2026-10-16）：payload 是 `{ id, text }`，
-     * `text` 是**已生成的思考全文**（与 delta 同一套「推全文」约定）。
+     * 微信问答的**思考过程增量**（2026-10-16）：`text` 保持旧契约，表示
+     * **所有已完成分段聚合后的思考全文**；新客户端读取 `segmentText` 获取
+     * 当前分段的全文，并按 `segmentId` 归组。
      *
      * 为什么与 `wechat-ask/delta` 分开两条事件：模型可能先吐一大段 reasoning 再吐正文，
      * 混在一条里渲染端就没法把「思考过程」单独折叠展示（用户要的是「像问答产品一样」）。
      * @mode emit
-     * @param payload - 流式标识与已生成的思考全文。
+     * @param payload - 流式标识、聚合思考全文与当前分段快照。
      */
-    'wechat-ask/reasoning'(payload: { id: string; text: string }): void
+    'wechat-ask/reasoning'(payload: {
+      id: string
+      text: string
+      /** 当前 segmentId 的全文；旧客户端可忽略。 */
+      segmentText?: string
+      /** 思考分段稳定 id；旧后端缺省时前端按单段兼容。 */
+      segmentId?: string
+      phase?: 'tool_selection' | 'synthesis'
+      round?: number
+      /** 同一 segmentId 的内容版本；用于拒绝迟到旧快照。 */
+      version?: number
+      /** 分段创建顺序；用于跨分段稳定排序。 */
+      seq?: number
+    }): void
     /**
      * 微信问答的**阶段事件**（2026-10-16）：payload 是
      * `{ id, key, label, status, detail?, phase?, callId?, ... }`。
@@ -413,6 +430,7 @@ declare module '@deepseek-ai/cordis' {
       label: string
       status: 'running' | 'done' | 'failed' | 'skipped'
       detail?: string
+      round?: number
       phase?: 'called' | 'completed' | 'failed' | 'retry'
       callId?: string
       toolName?: string
@@ -436,21 +454,5 @@ declare module '@deepseek-ai/cordis' {
      * @param payload - 任务标识与本次进度。
      */
     'wechat-export/progress'(payload: { jobId: string; phase: string; done: number; total: number }): void
-    /**
-     * 微信 ClawBot 接入会话有新增消息（写入后即发）。
-     *
-     * 载荷是 `{ lastId, delta }` —— **只带位置与数量、不带正文**：事件是幂等提示，
-     * 渲染端收到后调 `listClawbotMessages({ afterId: lastId })` 拉增量并按 id 去重合并
-     * （丢事件也不丢数据，见 types-ops.ts 的 ClawbotMessage 说明）。
-     * @mode emit
-     * @param payload - 最新消息 id 与本批次新增条数。
-     */
-    'clawbot/message'(payload: { lastId: number; delta: number }): void
-    /**
-     * ClawBot 绑定状态迁移（申请二维码 / 绑定成功 / 解绑）。
-     * @mode emit
-     * @param payload - 迁移前后状态与被绑定的 wxid（未绑定时为 null）。
-     */
-    'clawbot/binding-changed'(payload: { from: 'unbound' | 'binding' | 'bound' | 'unbound-by-user'; to: 'unbound' | 'binding' | 'bound' | 'unbound-by-user'; wxid: string | null }): void
   }
 }

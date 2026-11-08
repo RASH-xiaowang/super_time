@@ -35,16 +35,16 @@ const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
  *
  * ## 为什么要有白名单，而不是「列全部可见条目」
  *
- * 桌面侧栏有 17 个可见条目（含设置），那是**桌面**的信息架构：屏幕宽、鼠标精确、可以并排看。
- * 手机上照搬会得到一张 16 格的 sheet，其中一半是**在手机上读不动或没意义**的：
+ * 桌面侧栏有 16 个可见条目（含设置），那是**桌面**的信息架构：屏幕宽、鼠标精确、可以并排看。
+ * 手机上照搬会得到一张 15 格的 sheet，其中一半是**在手机上读不动或没意义**的：
  *
  *   · `oplog`（操作日志）—— 审计长表，手机上横向溢出 104 处（实测 640px 表格塞进 556px 视口），
  *     而且「翻查审计记录」本来就是坐在电脑前做的事；
  *   · `annual` / `period`（年度 / 周期报告）—— 长报告，手机上读不动（它们本来就是 hidden，
  *     由「总结」页内的分段条到达，手机沿用同一口径）。
  *
- * 保留的 10 条都是**手机上真的会看**的：朋友圈、收藏与表情、文件与存储、资金往来、
- * 群聊分析、知识库、总结、待办日程、ClawBot、客户画像与标签。
+ * 保留的 9 条都是**手机上真的会看**的：朋友圈、收藏与表情、文件与存储、资金往来、
+ * 群聊分析、知识库、总结、待办日程、客户画像与标签。
  *
  * ⚠️ 2026-10-17：`momentsinsights`（并入朋友圈）、`privacy`（并入设置）、`calls`（并入聊天会话）
  * 三块已转 hidden —— 它们不再占任何导航条目，由父项的分段条到达，所以从白名单里去掉。
@@ -59,7 +59,7 @@ const PRIMARY: readonly WechatTab[] = ['chats', 'overview', 'ask', 'contacts']
  */
 const PHONE_KEEP: readonly WechatTab[] = [
   'moments', 'portraits', 'favorites', 'files', 'ledger', 'groupinsights',
-  'kb', 'dailysummary', 'tasks', 'clawbot',
+  'kb', 'dailysummary', 'tasks',
 ]
 
 /**
@@ -125,17 +125,6 @@ function MoreIcon(): React.JSX.Element {
   )
 }
 
-/** 设置那一格的图标（桌面端它在侧栏页脚，不在 NAV_GROUPS 里）。 */
-function SettingsIcon(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.7a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.1 4.7a1.7 1.7 0 0 1 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9v.09A1.7 1.7 0 0 0 20.9 10H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
 /**
  * 底部标签栏。
  *
@@ -154,6 +143,7 @@ export function MobileNav({
 }): React.JSX.Element {
   const [moreOpen, setMoreOpen] = useState(false)
   const groups = sheetGroups()
+  const settingsItem = ITEM_BY_TAB.get('settings')
 
   // 从「更多」里选完就关掉 sheet； Esc 也能关（手机上更常见的是点遮罩，两个都给）。
   const pick = useCallback((tab: WechatTab) => {
@@ -181,7 +171,9 @@ export function MobileNav({
             <header className={css.sheetHd}>
               <span className={css.sheetTitle}>全部功能</span>
               <button type="button" className={css.sheetClose} onClick={() => setMoreOpen(false)} aria-label="关闭">
-                ✕
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
               </button>
             </header>
             <div className={css.sheetBody}>
@@ -204,12 +196,12 @@ export function MobileNav({
                   </div>
                 </section>
               ))}
-              {onOpenSettings && (
+              {onOpenSettings && settingsItem && (
                 <section className={css.sheetGroup}>
                   <h3 className={css.sheetGroupLabel}>配置</h3>
                   <div className={css.sheetGrid}>
                     <button type="button" className={css.sheetItem} onClick={() => { setMoreOpen(false); onOpenSettings() }}>
-                      <SettingsIcon />
+                      <NavIcon fragment={settingsItem.icon} size={22} />
                       <span className={css.sheetItemLabel}>设置</span>
                     </button>
                   </div>

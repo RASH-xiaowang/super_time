@@ -15,7 +15,7 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { generateKeyPair, signPayload, verifyPayload } = require('../src/license/crypto')
 const { getDeviceFingerprint } = require('../src/license/fingerprint')
-const { validatePayload, evaluatePayload, PRODUCT_ID } = require('../src/license/schema')
+const { validatePayload, evaluatePayload, PRODUCT_ID, FEATURE_SCHEMA_VERSION } = require('../src/license/schema')
 
 /** 仓库里那份**正式**内嵌公钥（注入前先读出来，用于下面的反向断言）。 */
 const PUBLIC_KEY_PATH = require.resolve('../src/license/public-key')
@@ -83,6 +83,7 @@ function main() {
     notBefore: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 365 * 864e5).toISOString(),
     features: ['wechat-data', 'ai-ask'],
+    featureSchemaVersion: FEATURE_SCHEMA_VERSION,
     seats: 1,
     appVersionMin: '1.0.0',
   }
@@ -103,6 +104,7 @@ function main() {
     assert(r.ok, `importLicense 成功${r.error ? ` (${r.error})` : ''}`)
     assert(r.status?.licensed === true, '状态为已授权')
     assert(r.status?.payload?.features?.includes('ai-ask'), '功能列表正确')
+    assert(r.status?.payload?.featureSchemaVersion === FEATURE_SCHEMA_VERSION, '新版功能目录版本随许可证保留')
     const st = service.getLicenseStatus(tmp, '1.0.0')
     assert(st.licensed && st.code === 'OK', '二次读取状态 OK')
   })

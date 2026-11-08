@@ -358,6 +358,31 @@ try {
   await editButton.click()
   const editDrawer = win.getByRole('dialog')
   await editDrawer.waitFor({ state: 'visible' })
+  const titlebarHit = await win.evaluate(() => {
+    const close = document.getElementById('tb-close')
+    if (close === null) return null
+    const rect = close.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return {
+      top: rect.top,
+      bottom: rect.bottom,
+      hit: hit === close || close.contains(hit),
+    }
+  })
+  const editDrawerBox = await editDrawer.boundingBox()
+  check(
+    titlebarHit?.hit === true,
+    '右抽屉打开后标题栏按钮仍可命中（没有被遮罩或抽屉盖住）',
+    JSON.stringify(titlebarHit),
+  )
+  check(
+    titlebarHit !== null
+      && editDrawerBox !== null
+      && editDrawerBox.y >= titlebarHit.bottom - 1,
+    '右抽屉从自绘标题栏下方开始',
+    `titlebar.bottom=${String(titlebarHit?.bottom)} drawer.top=${String(editDrawerBox?.y)}`,
+  )
+  await win.screenshot({ path: join(EVIDENCE_DIR, 'task-center-edit-drawer-window.png') })
   const drawerText = await editDrawer.innerText()
   check(
     /编辑任务 · 华东客户跟进/.test(drawerText),

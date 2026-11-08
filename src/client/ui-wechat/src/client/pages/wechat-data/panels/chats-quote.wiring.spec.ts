@@ -23,6 +23,8 @@ const read = (p: string): string => readText(join(HERE, p))
 
 const ROWS = read('chats-rows.module.css')
 const MSG = read('chats.module.css')
+const CARDS = read('chats-cards.tsx')
+const MSG_ROW = read('chats-msg-row.tsx')
 
 describe('引用行显示', () => {
   it('① 引用行限宽走 --wx-quote-maxw，不得用 100%', () => {
@@ -55,5 +57,15 @@ describe('引用行显示', () => {
     const m = /--wx-bubble-maxw:\s*([^;]+);/.exec(ROWS)
     expect(m, '找不到 --wx-bubble-maxw 的定义').not.toBeNull()
     expect(m![1], '气泡上界不能退成按百分比算的窄条（引用行才是窄的那一方）').toContain('var(--wx-read-maxw)')
+  })
+
+  it('④ 引用条是键盘可操作的按钮，并把点击透传到消息流', () => {
+    expect(CARDS, '引用卡要接收打开原消息的回调').toContain('onOpenQuote?: (rich: MessageRich) => void')
+    expect(CARDS, '引用条可点击时必须用 button，而不是无键盘通路的 div').toMatch(
+      /<button[\s\S]*?className=\{`\$\{css\.msgQuoteStrip\}[\s\S]*?msgQuoteStripOpen/,
+    )
+    expect(CARDS, '点击引用条不能冒泡成“选中本条消息做分析”').toContain('event.stopPropagation()')
+    expect(MSG_ROW, '消息行要把 openQuote 透传给 MessageBody').toContain('onOpenQuote: openQuote')
+    expect(MSG, '可点击引用条要有焦点样式').toContain('.msgQuoteStripOpen:focus-visible')
   })
 })

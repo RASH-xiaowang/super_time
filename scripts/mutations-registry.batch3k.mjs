@@ -32,10 +32,10 @@ export const MUTATIONS_BATCH3K = [
   },
   {
     id: 'M502-sync-watch-rate-limit-bypassed',
-    why: '限频闸被绕过 ⇒ 活跃会话期间每次写入簇都拍一拍（最坏每秒数十次全前端推送），防抖只能合并单簇、拦不住持续高频。判据：sync-watch.spec.ts 的「WATCH_MIN_GAP_MS 内的第二次触发被限频跳过」。（2026-10-18 限频 600 → 250ms，锚点仍认 `WATCH_MIN_GAP_MS`。）',
+    why: '限频闸被绕过 ⇒ 活跃会话期间每次写入簇都拍一拍（最坏每秒数十次全前端推送），防抖只能合并单簇、拦不住持续高频。判据：sync-watch.spec.ts 的「WATCH_MIN_GAP_MS 内的第二次写入改为尾随补发」。（2026-11-05 限频窗口内的触发改为尾随补发，锚点跟随。）',
     file: 'src/backend/wechat-data/src/query/sync-watch.ts',
-    from: 'if (at - lastTriggerAt < WATCH_MIN_GAP_MS) return',
-    to: 'if (false) return',
+    from: '    if (wait > 0) {',
+    to: '    if (false) {',
     spec: 'src/backend/wechat-data/tests/sync-watch.spec.ts',
   },
 ]

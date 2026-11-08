@@ -101,10 +101,11 @@ export const aggregateMessagesTool: RetrievalTool = {
     })
     const range = win.lo === 0 && win.hi === 0 ? '全部时间'
       : `${new Date(win.lo * 1000).toISOString().slice(0, 10)} ~ ${new Date(win.hi * 1000).toISOString().slice(0, 10)}`
+    const scopeLabel = username ? `会话 ${username}` : '全库'
     return {
       tool: 'aggregate_messages', ok: true, hits: [],
       facts: facts.map(f => ({ title: f.title, body: f.body })),
-      note: `统计维度 ${dim} · ${range} · 全库 ${facts[0]?.total ?? 0} 条消息`,
+      note: `统计维度 ${dim} · ${range} · ${scopeLabel} ${facts[0]?.total ?? 0} 条消息`,
       elapsedMs: Date.now() - started,
     }
   },

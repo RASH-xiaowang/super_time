@@ -9,8 +9,7 @@
  * ④ 星期表头「一→日」+ 前置空格数一起决定"1 号落在哪一列"，错一位整月的气泡就错位。
  * 算术本身在 `chats-calendar.spec.ts`，这里只管它长成什么样。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatsCalendarDialogProps } from './chats-calendar-dialog.tsx'

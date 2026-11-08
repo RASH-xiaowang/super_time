@@ -1,4 +1,4 @@
-import { StreamControl } from '../query/zip.ts';
+import type { ManagedStreamControl } from '../gateway-jobs.ts';
 import type { Context } from '@deepseek-ai/cordis';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
@@ -9,8 +9,8 @@ export interface createAnnualNarrRemotesInputs {
         decoded: string;
     };
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
-    streamControl: (jobId?: string) => StreamControl;
-    finishStreamJob: (jobId: string, error?: string) => void;
+    streamControl: (jobId?: string) => ManagedStreamControl;
+    finishStreamJob: (jobId: string, error?: string, token?: symbol, canceled?: boolean) => void;
     ctx: () => Context;
     privacyGate: PrivacyGateFn;
 }

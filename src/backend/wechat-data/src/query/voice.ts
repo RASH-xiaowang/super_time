@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { onDiskPath } from '../asar-path.ts'
 import { withDb } from './db-open.ts'
 import { messageServerIdByLocal } from './media-voice.ts'
+import { resolveTalkerUsername } from './message-identity.ts'
 
 /** One VoiceInfo row with its chat username. */
 export interface VoiceSource {
@@ -68,27 +69,41 @@ export function voiceDataBySvr(decryptedDir: string, svrId: string): Buffer | nu
   }
 }
 
-/** VoiceInfo svr_id for (username, local_id) — direct Name2Id mapping. */
-export function svrIdByChatLocal(decryptedDir: string, username: string, localId: number): string {
+/**
+ * VoiceInfo svr_id for one selected message.
+ *
+ * Prefer the message's server_id: `local_id` is reused across rebuilt history.
+ * The local_id-only fallback is kept for old callers but must resolve uniquely.
+ */
+export function svrIdByChatLocal(decryptedDir: string, username: string, localId: number, explicitSvrId = ''): string {
+  const selectedSvrId = explicitSvrId.trim()
+  if (selectedSvrId && selectedSvrId !== '0') return selectedSvrId
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return ''
   const dbPath = mediaDbPath(decryptedDir)
   if (!existsSync(dbPath)) return ''
   try {
+    // A message-shard server_id is the stable identity. Only accept it when
+    // every matching voice row agrees; otherwise the UI must pass its own id.
+    const serverId = messageServerIdByLocal(decryptedDir, canonical, localId)
+    if (serverId && serverId !== '0') {
+      const hasVoice = withDb(dbPath, (db) =>
+        db.prepare('SELECT 1 AS ok FROM VoiceInfo WHERE CAST(svr_id AS TEXT) = ? LIMIT 1').get(serverId) !== undefined)
+      if (hasVoice) return serverId
+    }
     const chatRowId = withDb(dbPath, (db) => {
-      const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1').get(username) as { rowid?: number | bigint } | undefined
+      const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1').get(canonical) as { rowid?: number | bigint } | undefined
       return chat && typeof chat.rowid === 'number' ? chat.rowid : null
     })
     if (chatRowId !== null) {
       const direct = withDb(dbPath, (db) => {
-        const row = db.prepare('SELECT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chatRowId, localId) as { s?: string | null } | undefined
-        return row?.s ?? ''
+        const rows = db.prepare('SELECT DISTINCT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ?').all(chatRowId, localId) as Array<{ s?: string | null }>
+        const ids = new Set(rows.map(row => row.s).filter((id): id is string => Boolean(id)))
+        return ids.size === 1 ? [...ids][0]! : ''
       })
       if (direct) return direct
     }
-    // A stale/missing Name2Id row must not make playback and transcription
-    // disagree with resolveVoiceInfo(), which already falls back to the
-    // message shard's server_id.
-    const serverId = messageServerIdByLocal(decryptedDir, username, localId)
-    return serverId && serverId !== '0' ? serverId : ''
+    return ''
   } catch {
     return ''
   }

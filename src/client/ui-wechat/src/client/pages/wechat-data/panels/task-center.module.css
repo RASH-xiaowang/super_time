@@ -912,3 +912,22 @@
     max-height: 92vh;
   }
 }
+
+@media (max-width: 560px) {
+  .root [class*='_panelHeader_'] {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .root [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .root [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+}

@@ -105,7 +105,7 @@ export interface ToolContext {
      * 是否允许访问本机微信数据。
      *
      * 缺省 `true`（手工问答的既有行为）；`false` 时 `search_hybrid` 的
-     * `messages/auto` 模式必须拒绝执行（ClawBot 的 kb-only 边界）。
+     * `messages/auto` 模式必须拒绝执行（只读知识库的边界）。
      */
     wechatDataEnabled?: boolean;
     /**

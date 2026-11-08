@@ -178,10 +178,10 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
     }
   })
 
-  it('订阅 TASK_CENTER_UPDATED_EVENT 并回源**两栏**；宿主事件也接了', () => {
+  it('订阅 TASK_CENTER_UPDATED_EVENT 并回源**两栏**；宿主 WAL 只保留 hook 内的一条刷新路径', () => {
     expect(code).toContain('TASK_CENTER_UPDATED_EVENT')
     expect(code, '没有监听 TASK_CENTER_UPDATED_EVENT').toContain('window.addEventListener(TASK_CENTER_UPDATED_EVENT')
-    expect(code, '没有用宿主 WAL 推送的订阅').toContain('useWechatDataUpdated(')
+    expect(code, '宿主 WAL 又接了一条显式刷新，会和 liveRefresh 形成双查').not.toContain('useWechatDataUpdated(')
     expect(code, '事件后应同时重取两栏（否则左栏变了右栏不刷）').toContain('Promise.all([reloadTasks(), reloadTriggers()])')
   })
 

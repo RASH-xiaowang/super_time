@@ -2,7 +2,6 @@
  * Official account content assets: for each public account (gh_*), count total
  * messages, article-type (local_type 49) messages and the latest article time.
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
@@ -11,6 +10,7 @@ import { decompress } from 'fzstd'
 import { cachedBySigAsync, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { OfficialAssetsSnapshot, OfficialAssetRow } from '../types.ts'
+import { displayNameForUsername, messageTableName } from './message-identity.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -106,7 +106,7 @@ async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAsse
       try {
         const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all() as Array<{ name: string }>).map(r => r.name)
         for (const table of tables) {
-          const username = usernames.find(u => 'Msg_' + createHash('md5').update(u, 'utf8').digest('hex') === table)
+          const username = usernames.find(u => messageTableName(u) === table)
           if (!username) continue
           const cols = tableColumns(db, table)
           if (!cols.has('create_time') || !cols.has('local_type')) continue
@@ -139,7 +139,7 @@ async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAsse
     }
   }
   const rows: OfficialAssetRow[] = Array.from(per.entries())
-    .map(([username, v]) => ({ username, name: names.get(username) ?? username, ...v }))
+    .map(([username, v]) => ({ username, name: displayNameForUsername(username, names), ...v }))
     .filter(r => r.messages > 0)
     .sort((a, b) => b.messages - a.messages)
     .slice(0, 100)

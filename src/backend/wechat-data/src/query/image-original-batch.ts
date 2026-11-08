@@ -44,7 +44,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from './db-open.ts'
-import { createHash } from 'node:crypto'
+import { messageIdentityIndex } from './message-identity.ts'
 import { decompress } from 'fzstd'
 import { collectImageDatFiles } from './decrypt-images.ts'
 import { isWecomFileEndpoint } from './cdn-hosts.ts'
@@ -162,32 +162,6 @@ function messageDbFiles(dir: string, out: string[] = []): string[] {
   return out
 }
 
-/**
- * `Msg_<md5(username)>` 表名里的 hash → username 反查表。
- *
- * 为什么要反查：表名只有 hash，而报告与操作记录里写「哪个会话的哪张图」才有排障价值。
- * 来源是 `message_resource.db` 的 `ChatName2Id`（本机 175 行，代价可忽略）。
- * 找不到（如公众号的 `biz_message_*`）就留空串 —— 取回路径不依赖它。
- * @param decryptedDir - 解密数据根。
- * @returns `md5(username) → username`。
- */
-function talkerByTableHash(decryptedDir: string): Map<string, string> {
-  const out = new Map<string, string>()
-  const dbPath = join(decryptedDir, 'message', 'message_resource.db')
-  if (!existsSync(dbPath)) return out
-  let db: DatabaseSync | null = null
-  try { db = new DatabaseSync(dbPath, { readOnly: true }) } catch { return out }
-  try {
-    for (const r of db.prepare('SELECT user_name FROM ChatName2Id').all() as Array<{ user_name: unknown }>) {
-      const name = cellText(r.user_name).trim().replace(/^"|"$/g, '')
-      if (name !== '') out.set(createHash('md5').update(name, 'utf8').digest('hex'), name)
-    }
-  } catch { /* 读不动就没有名字，不影响取回 */ } finally {
-    try { db.close() } catch { /* 已关 */ }
-  }
-  return out
-}
-
 /** 本机已有 `_h` 档（原图）的 md5 集合 —— 这些**不需要联网**。 */
 function localOriginalMd5s(rawRoot: string): Set<string> {
   const out = new Set<string>()
@@ -258,7 +232,7 @@ export function* scanImageOriginalPlanSteps(
 ): Generator<void, { plan: OriginalFetchPlan; candidates: ImageOriginalCandidate[] }, void> {
   const hasHd = localOriginalMd5s(rawRoot)
   const fetched = readFetchedOriginals(decodedDir)
-  const names = talkerByTableHash(decryptedDir)
+  const tableToUser = messageIdentityIndex(decryptedDir).tableToUsername
 
   let messages = 0
   let loginRequired = 0
@@ -293,7 +267,7 @@ export function* scanImageOriginalPlanSteps(
             + (packedCol === undefined ? '' : ', "' + packedCol + '" AS packed')
             + ' FROM "' + table + '" WHERE (local_type & 4294967295) = 3').all() as Array<Record<string, unknown>>
         } catch { continue }
-        const username = names.get(table.replace(/^Msg_/, '').toLowerCase()) ?? ''
+        const username = tableToUser.get(table) ?? ''
         for (const row of rows) {
           messages += 1
           const md5 = extractMd5FromPacked(row['packed'])

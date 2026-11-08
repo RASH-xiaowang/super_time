@@ -11,8 +11,13 @@ export declare function usernameByChatId(decryptedDir: string, chatId: string): 
 export declare function recentVoiceMessages(decryptedDir: string, limit: number): VoiceSource[];
 /** The raw silk voice_data bytes for a svr_id. */
 export declare function voiceDataBySvr(decryptedDir: string, svrId: string): Buffer | null;
-/** VoiceInfo svr_id for (username, local_id) — direct Name2Id mapping. */
-export declare function svrIdByChatLocal(decryptedDir: string, username: string, localId: number): string;
+/**
+ * VoiceInfo svr_id for one selected message.
+ *
+ * Prefer the message's server_id: `local_id` is reused across rebuilt history.
+ * The local_id-only fallback is kept for old callers but must resolve uniquely.
+ */
+export declare function svrIdByChatLocal(decryptedDir: string, username: string, localId: number, explicitSvrId?: string): string;
 /**
  * Resolve the wx_silk decoder binary: env pin, bundled resources, '' when none.
  *

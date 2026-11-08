@@ -27,7 +27,7 @@
   box-sizing: border-box;
   background: var(--nm-bg-0, #ededed);
   color: var(--nm-text-2, #464646);
-  font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  font-family: var(--nm-font-sans, system-ui, sans-serif);
 }
 
 .card {

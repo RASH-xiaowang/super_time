@@ -25,6 +25,8 @@ import { FavoritesChatlogPreview } from './favorites-chatlog-preview.tsx'
 import { FavoriteDetail } from './favorites-detail.tsx'
 import { ListFilter, PanelAction } from './asset-ui.tsx'
 import { rememberThumb } from '../utils/thumb-cache.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 
 /** 卡片高度的初值（真实高度由 `measureElement` 回灌）：独立卡片 + 两行摘要 + 底栏。 */
 const FAV_CARD_ESTIMATE_PX = 114
@@ -46,11 +48,12 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
   const [selected, setSelected] = useState<Set<number>>(new Set())
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice(4000)
-  const [exporting, setExporting] = useState(false)
+  const exportTask = useExportTask()
   const [detail, setDetail] = useState<FavorItem | null>(null)
   const [favImgs, setFavImgs] = useState<Record<string, string>>({})
   const favImgFetched = useRef(new Set<string>())
   const favThumbOrder = useRef<string[]>([])
+  const alive = useRef(true)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   // 类型仍在本端筛（后端没有该参数）；关键字已由服务端过滤，这里不再重复做一遍 ——
@@ -120,6 +123,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
       } catch {
         // 本地收藏缓存未命中时继续走旧的 SNS 图片链。
       }
+      if (!alive.current) return
       if (url === '') {
         try {
           const sns = await apiGetSnsImageDataUrl({ md5 })
@@ -128,6 +132,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
           // 两条链都失败时撤掉“已请求”标记，下次重新挂载可重试。
         }
       }
+      if (!alive.current) return
       if (url === '') {
         favImgFetched.current.delete(md5)
         return
@@ -142,6 +147,16 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
       favImgFetched.current = next.fetched
       setFavImgs(next.thumbs)
     })()
+  }, [])
+
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      favThumbsRef.current = {}
+      favThumbOrder.current = []
+      favImgFetched.current.clear()
+    }
   }, [])
 
   // 打开收藏详情时按需解码该条目的封面/缩略图（图片、视频、小程序等都共用）。
@@ -167,15 +182,18 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
   }, [items])
 
   const doExport = async (): Promise<void> => {
-    setExporting(true)
-    try {
-      const r = await apiExportCsv({ kind: 'favorites' })
-      notify(`已导出 ${r.count} 项收藏 → ${r.path}`)
-    } catch (e) {
-      notify('导出失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
+    if (exportTask.running) return
+    const outcome = await exportTask.run(async ({ jobId }) => apiExportCsv({ kind: 'favorites', jobId }), {
+      idPrefix: 'favorites-export',
+      label: '导出收藏清单',
+      successMessage: (r) => `已导出 ${r.count} 条收藏清单（不含媒体本体）→ ${r.path}`,
+    })
+    if (outcome.ok) notify(outcome.message)
+    else if (!outcome.canceled) notify('导出失败: ' + outcome.error)
+  }
+
+  const cancelExport = (): void => {
+    void exportTask.cancel()
   }
 
   const doDelete = async (): Promise<void> => {
@@ -215,7 +233,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         actions={(
           <>
             <PanelAction active={selectMode} onClick={() => { setSelectMode(v => !v); setSelected(new Set()) }}>{selectMode ? '退出批量' : '批量'}</PanelAction>
-            <PanelAction onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出（仅电脑）' : '导出'}</PanelAction>
+            <PanelAction onClick={() => { void doExport() }} disabled={exportTask.running} {...desktopActionProps()}>{exportTask.finishing ? '完成中…' : exportTask.running ? '导出中…' : desktopAction() ? '导出清单 CSV（仅电脑）' : '导出清单 CSV'}</PanelAction>
             {selectMode && <PanelAction active onClick={() => { void doDelete() }} disabled={selected.size === 0}>删除所选 ({selected.size})</PanelAction>}
           </>
         )}
@@ -231,6 +249,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         ariaLabel="收藏分类"
       />
       {notice && <div className={css.notice}>{notice}</div>}
+      <ExportProgressStatus state={exportTask.state} onCancel={cancelExport} />
       <div className={css.scroll + ' ' + css.favScroll} ref={scrollRef}>
         {loading && <ListSkeleton rows={8} />}
         {error && <div className={kitCss.error} role="alert">收藏数据接口尚未就绪（{error}）</div>}

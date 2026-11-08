@@ -234,13 +234,19 @@ describe('闸门只有一份实现：IPC 与 HTTP 共用 call-gates', () => {
     const body = bodyOf(sf, 'handleCall')
     expect(body, '找不到 handleCall 的实现').not.toBe('')
     const policyAt = body.indexOf('isRemoteSafe(method)')
-    const callAt = body.indexOf('gatedCall(')
+    // handleCall 里还有断连取消的 gatedCall；这里必须精确匹配业务调用本身，
+    // 否则取消 RPC 会被误当成“调用后端”的位置。
+    const callAt = body.indexOf('deps.gatedCall(method, args)')
+    const queueAt = body.indexOf('ctx.queue.run(runBackend, meta)')
     expect(policyAt, 'handleCall 里没有白名单判定').toBeGreaterThan(-1)
-    expect(callAt, 'handleCall 里没有调用 gatedCall').toBeGreaterThan(-1)
+    expect(callAt, 'handleCall 里没有实际业务 gatedCall').toBeGreaterThan(-1)
     expect(policyAt, '白名单判定排在了调用后端之后 —— 顺序反了就等于没拦').toBeLessThan(callAt)
-    // 排队闸也要在真实调用外面（否则并发上限形同虚设）
-    expect(body.indexOf('queue.run('), 'handleCall 没有经过并发闸').toBeGreaterThan(-1)
-    expect(body.indexOf('queue.run(')).toBeLessThan(callAt)
+    // 排队闸必须包住 runBackend；不能拿源码先后顺序判断，因为回调体定义在
+    // viaQueue 之前，真正的执行顺序仍由 ctx.queue.run 决定。
+    expect(queueAt, 'handleCall 没有经过并发闸').toBeGreaterThan(-1)
+    expect(body, '并发闸没有包住业务执行体').toContain('const viaQueue = () => ctx.queue.run(runBackend, meta)')
+    expect(body.slice(body.indexOf('const runBackend'), callAt), 'gatedCall 不在排队执行体内')
+      .toContain('cancelGuard.isDisconnected()')
   })
 
   it('HTTP 侧：除 /api/auth 外的 /api/* 都要过会话校验', () => {

@@ -65,6 +65,8 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
 
   const monthMax = snap ? Math.max(1, ...snap.months.map((m) => m.calls)) : 1
   const hourMax = snap ? Math.max(1, ...snap.byHour) : 1
+  const hourTotal = snap ? snap.byHour.reduce((sum, n) => sum + n, 0) : 0
+  const peakHour = snap && hourTotal > 0 ? snap.byHour.indexOf(hourMax) : null
   const peerMax = snap && snap.peers.length > 0 ? snap.peers[0]!.calls : 1
 
   return (
@@ -134,6 +136,16 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                     <span className={css.hourLabel}>{h % 3 === 0 ? h : ''}</span>
                   </div>
                 ))}
+              </div>
+              <div className={css.hourSummary}>
+                {peakHour === null ? (
+                  <span>通话时间信息不足，暂无可用时段峰值。</span>
+                ) : (
+                  <>
+                    <span>24 小时共 <b>{hourTotal} 通</b></span>
+                    <span>高峰 <b>{String(peakHour).padStart(2, '0')}:00–{String(peakHour).padStart(2, '0')}:59</b> · <b>{hourMax} 通</b></span>
+                  </>
+                )}
               </div>
             </Card>
           </div>

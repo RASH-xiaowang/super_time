@@ -80,20 +80,23 @@ function apiWrappersReturning(names: string[]): Array<{ fn: string; type: string
 }
 
 /**
- * ③ 要守的界面文件：`panels/*`（`.ts` 与 `.tsx` 都算）+ 面板根目录那层的 `.tsx` 组件。
+ * ③ 要守的界面文件：`panels/*`（`.ts` 与 `.tsx` 都算）+ 面板根目录那层的界面模块。
  *
  * `panels/` 为什么也要收 `.ts`：#18 把取数搬进了 `moments-data.ts` 这类钩子模块，
  * 只扫 `.tsx` 的话「谁调了这个接口」直接查无此人（实测红过一次）。
- * 根目录那层为什么**不**收 `.ts`：那里住的是 `api-*.ts` 传输层，
- * 函数定义行 `export async function apiGetMomentsMonthly(` 会被「调用」的正则认成调用点，
- * 于是判据开始投诉「声明处没读 readError」——那是另一件事（②已经在管类型口径了）。
+ * 根目录那层要收 `use-global-search.ts` 这类钩子（统一搜索已经搬出 JSX），
+ * 但必须排除 `api-*.ts` 传输层：函数定义行 `export async function apiGetMomentsMonthly(`
+ * 会被「调用」的正则认成调用点，于是判据开始投诉声明处没读 `readError`。
  */
 function uiFiles(): string[] {
   const inPanels = readdirSync(PANELS)
     .filter((f) => /\.(ts|tsx)$/.test(f) && !f.includes('.spec.') && !f.endsWith('.d.ts'))
     .map(f => join(PANELS, f))
   const atRoot = readdirSync(HERE)
-    .filter((f) => f.endsWith('.tsx') && !f.includes('.spec.'))
+    .filter((f) => /\.(ts|tsx)$/.test(f)
+      && !f.includes('.spec.')
+      && !f.endsWith('.d.ts')
+      && !/^api(?:-|\.ts$)/.test(f))
     .map(f => join(HERE, f))
   return [...inPanels, ...atRoot].sort()
 }

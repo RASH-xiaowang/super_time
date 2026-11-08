@@ -291,4 +291,31 @@ describe('内容类工具：范围过滤与域失败契约', () => {
     expect(result.ok, result.error ?? '').toBe(true)
     expect(result.hits.map(hit => hit.key)).toEqual(['wxid_m:2'])
   })
+
+  it('get_session_messages 的 order=desc 在超过 limit 时返回最新消息', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'session-latest-'))
+    scratch.push(base)
+    const decryptedDir = join(base, 'data')
+    mkdirSync(decryptedDir)
+    const start = Math.floor(new Date(2023, 10, 15, 8, 0, 0).getTime() / 1000)
+    makeDb(searchIndexPath(decryptedDir), (db) => {
+      db.exec('CREATE TABLE message_meta (rowid INTEGER PRIMARY KEY, text TEXT, username TEXT, local_id INTEGER, create_time INTEGER, sender TEXT)')
+      const ins = db.prepare('INSERT INTO message_meta(text, username, local_id, create_time, sender) VALUES (?, ?, ?, ?, ?)')
+      for (let i = 1; i <= 5; i += 1) {
+        ins.run(`消息 ${String(i)}`, 'wxid_m', i, start + i * 60, '')
+      }
+    })
+
+    const result = await runTool(allTools, 'get_session_messages', {
+      username: 'wxid_m',
+      from: '2023-11-15',
+      to: '2023-11-15',
+      order: 'desc',
+      limit: 2,
+    }, { decryptedDir })
+
+    expect(result.ok, result.error ?? '').toBe(true)
+    expect(result.hits.map(hit => hit.key)).toEqual(['wxid_m:5', 'wxid_m:4'])
+    expect(result.note ?? '').toContain('最新优先')
+  })
 })

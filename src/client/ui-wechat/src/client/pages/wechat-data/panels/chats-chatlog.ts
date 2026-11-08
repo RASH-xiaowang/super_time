@@ -60,31 +60,31 @@ function durationSuffix(raw: string | undefined, divisor: number, unit: string):
 }
 
 /**
- * 嵌套那行按钮的整段文案：`📋 标题（N 条）` 或 `📋 标题（点击查看）`。
+ * 嵌套那行按钮的整段文案：`标题（N 条）` 或 `标题（点击查看）`。
  * 标题为空时退到「聊天记录」—— 实测确有只有 server id 指针、没有 text 的内层卡片。
  */
 export function chatlogNestedLabel(r: ChatlogRecord): string {
   const n = chatlogNestedCount(r)
-  return `📋 ${r.text || '聊天记录'}（${n > 0 ? `${n} 条` : '点击查看'}）`
+  return `${r.text || '聊天记录'}（${n > 0 ? `${n} 条` : '点击查看'}）`
 }
 
 /**
  * 一行的正文（链接那一支由 JSX 换成 `<a>`，这里给的是同一个文案）。
  * @param r - 一条内层记录。
- * @returns 带图标前缀的整行文本。
+ * @returns 与微信一致的纯文本占位；不暴露字节数或内部资源标识。
  */
 export function chatlogBodyOf(r: ChatlogRecord): string {
   switch (chatlogKindOf(r)) {
     case 'link':
       return r.text || chatlogLinkOf(r)
     case 'voice':
-      return `🎤 ${r.text || '[语音]'}${durationSuffix(r.duration, VOICE_TICK_MS, '"')}`
+      return `${r.text || '[语音]'}${durationSuffix(r.duration, VOICE_TICK_MS, '"')}`
     case 'video':
-      return `🎬 ${r.text || '[视频]'}${durationSuffix(r.duration, VIDEO_MS, 's')}`
+      return `${r.text || '[视频]'}${durationSuffix(r.duration, VIDEO_MS, 's')}`
     case 'emoji':
-      return `😀 ${r.text || '[表情]'}`
+      return r.text || '[表情]'
     case 'image':
-      return `🖼️ [图片]${r.datasize ? ` (${r.datasize} 字节)` : ''}`
+      return '[图片]'
     default:
       return r.text || ''
   }

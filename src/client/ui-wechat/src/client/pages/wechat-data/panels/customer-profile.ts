@@ -122,6 +122,22 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 /**
+ * Keep a real personal signature, but never render a structured enterprise
+ * profile envelope. The backend performs the full extraction; this guard also
+ * protects the UI from stale caches and older backend responses.
+ * @param value - raw contact description/signature.
+ * @returns display-safe signature text, or undefined when it is not personal.
+ */
+export function cleanCustomerSignature(value: string | undefined): string | undefined {
+  const text = nonEmpty(value)
+  if (text === undefined) return undefined
+  if (/^[{\[]/.test(text) || /^<[^>]+>/.test(text) || /"custom_info"\s*:/i.test(text)) {
+    return undefined
+  }
+  return text.slice(0, 200)
+}
+
+/**
  * 合并三个分页/分类结果，并按 username 去重。
  *
  * 同一个人可能既是好友又是群成员。合并后保留更具体的关系优先级，同时把分类与
@@ -148,7 +164,7 @@ export function mergeCustomerCandidates(batches: ReadonlyArray<ReadonlyArray<Wec
           nickName: nonEmpty(contact.nickName) ?? '',
           remark: nonEmpty(contact.remark) ?? '',
           alias: nonEmpty(contact.alias),
-          description: nonEmpty(contact.description),
+          description: cleanCustomerSignature(contact.description),
           avatarUrl: nonEmpty(contact.avatarUrl),
           groupName: nonEmpty(contact.groupName),
           categories: [category],
@@ -168,7 +184,7 @@ export function mergeCustomerCandidates(batches: ReadonlyArray<ReadonlyArray<Wec
         nickName: nonEmpty(prev.nickName) ?? nonEmpty(contact.nickName) ?? '',
         remark: nonEmpty(prev.remark) ?? nonEmpty(contact.remark) ?? '',
         alias: nonEmpty(prev.alias) ?? nonEmpty(contact.alias),
-        description: nonEmpty(prev.description) ?? nonEmpty(contact.description),
+        description: cleanCustomerSignature(prev.description) ?? cleanCustomerSignature(contact.description),
         avatarUrl: nonEmpty(prev.avatarUrl) ?? nonEmpty(contact.avatarUrl),
         enterpriseName: nonEmpty(prev.enterpriseName) ?? nonEmpty(contact.enterpriseName),
         groupName: nonEmpty(prev.groupName) ?? nonEmpty(contact.groupName),
@@ -193,7 +209,7 @@ export function customerIdentityOf(record: CustomerRecord): CustomerIdentity {
     nickName: nonEmpty(record.nickName),
     remark: nonEmpty(record.remark),
     alias: nonEmpty(record.alias),
-    description: nonEmpty(record.description),
+    description: cleanCustomerSignature(record.description),
     category: record.category,
     categories: record.categories,
     avatarUrl: nonEmpty(record.avatarUrl),

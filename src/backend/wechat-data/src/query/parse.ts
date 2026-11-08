@@ -1,6 +1,6 @@
 import { extractXmlTextNodes, stripCdata, stripXmlTags, unescapeXmlEntities, xmlAttr, xmlTagOrAttr, xmlTagText } from './parse-xml.ts'
 import { CALL_ANSWERED_ELSEWHERE, classifyCallStatus, parseCallDuration, parseVoipKind } from './parse-call.ts'
-import { cleanRichText, parseAppmsg, parseImageGroup, richFallbackLabel } from './parse-rich.ts'
+import { cleanRichText, parseAppmsg, parseImageGroup, parseMpNewsRich, richFallbackLabel } from './parse-rich.ts'
 import { parseSystemMessage } from './parse-system.ts'
 import type { ChatlogRecord, MessageRich as RichMedia, MpArticle, SolitaireMember } from '../types.ts'
 /* ------------------------------------------------------------------ *
@@ -111,9 +111,10 @@ export function parseMessageContent(
   switch (msgType) {
     case 1: {
       const text = body.replace(/^\n+/, '')
-      if (text.includes('<mmreader>')) {
-        const rich: RichMedia = { type: 'newsfeed', title: xmlTagText(text, 'title'), desc: xmlTagText(text, 'digest'), url: xmlTagText(text, 'url') }
-        return { text: '', rich }
+      if (text.includes('<mmreader')) {
+        const rich = parseMpNewsRich(text)
+        if (rich) return { text: '', rich }
+        // category type=0 的普通通知不能冒充公众号多图文；继续走通用 XML 文本提取。
       }
       if (text.startsWith('<')) {
         // 先看 XML 里到底是什么载荷（表情/视频/语音…），能给 rich 就给 rich
@@ -339,5 +340,5 @@ export {
   xmlTagText,
 } from './parse-xml.ts'
 export { CALL_ANSWERED_ELSEWHERE, VoipKind, classifyCallStatus, parseCallDuration, parseVoipKind } from './parse-call.ts'
-export { IMAGE_GROUP_ID, QUOTE_APP_LABEL, RENDER_LABEL, RICH_TO_RENDER, RenderKind, TYPE_TO_RENDER, applyMpNews, channelsRich, classifyLinkShare, classifyRender, cleanRichText, parseAppmsg, parseAppmsgType, parseChatlogRecords, parseFileAttach, parseImageGroup, parseSolitaire, quoteTypePlaceholder, quotedAppType, quotedThumbUrl, richFallbackLabel, stripQuotedGroupPrefix, stripRefMsgText, summarizeQuotedXml } from './parse-rich.ts'
+export { IMAGE_GROUP_ID, QUOTE_APP_LABEL, RENDER_LABEL, RICH_TO_RENDER, RenderKind, TYPE_TO_RENDER, applyMpNews, channelsRich, classifyLinkShare, classifyRender, cleanRichText, parseAppmsg, parseAppmsgType, parseChatlogRecords, parseFileAttach, parseImageGroup, parseMpNewsRich, parseSolitaire, quoteTypePlaceholder, quotedAppType, quotedThumbUrl, richFallbackLabel, stripQuotedGroupPrefix, stripRefMsgText, summarizeQuotedXml } from './parse-rich.ts'
 export { SYS_NOISE_TAGS, SYS_NOISE_TAGS_UNIQUE, parseAtUsernames, parseChatroomTop, parseMsgsourceSignature, parseSystemMessage, stripSystemNoise } from './parse-system.ts'

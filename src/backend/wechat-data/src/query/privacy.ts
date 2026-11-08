@@ -4,10 +4,10 @@
  * TOP contact/group rankings (mirror of wechat/privacy.rs).
  */
 import { DatabaseSync } from './db-open.ts'
-import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
+import { displayNameForUsername, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
 
@@ -55,35 +55,6 @@ function fmtFull(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-/** Coerce a DB cell to a string (null -> '', else String()). */
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  return ''
-}
-
-/** Message table names from the session db (source annual::load_session_usernames). */
-function loadSessionUsernames(decryptedDir: string): string[] {
-  const out: string[] = []
-  try {
-    withDb(join(decryptedDir, 'session', 'session.db'), (db) => {
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
-    if (!has) return
-    const cols = new Set((db.prepare('PRAGMA table_info(SessionTable)').all() as Array<{ name: string }>).map(r => r.name))
-    const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-    if (!userCol) return
-    // 会话量级（N8 评估）：随会话数增长，不随消息数
-    const rows = db.prepare(`SELECT ${userCol} AS u FROM SessionTable`).all() as Array<{ u?: unknown }>
-    for (const r of rows) {
-      const u = cellStr(r.u ?? '')
-      if (u) out.push(u)
-    }
-    })
-  } catch { /* session db unavailable */ }
-  return out
-}
-
 /** Decode a BLOB/TEXT cell to UTF-8 text. */
 function decodeCell(v: unknown): string {
   if (v == null) return ''
@@ -107,6 +78,7 @@ export async function queryPrivacyScan(decryptedDir: string, rowBudget = 600000)
     shardCatalogSig(decryptedDir, ['message']),
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    fileSigOf(join(decryptedDir, 'message', 'message_resource.db')),
   ].join('|')
   return cachedBySigAsync('privacy-scan:' + decryptedDir + '|' + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget))
 }
@@ -122,9 +94,9 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
   const categories: PrivacyCategory[] = CATEGORIES.map(c => ({ key: c.key, label: c.label, count: 0, icon: c.icon, samples: [] }))
   const hitsByKey = new Map<string, PrivacySample[]>()
   const perContact = new Map<string, number>()
-  const usernames = loadSessionUsernames(decryptedDir)
+  const identity = messageIdentityIndex(decryptedDir, ['message'])
   const meta = contactMeta(decryptedDir)
-  const names = meta.names
+  const names = mergeDisplayNames(decryptedDir, identity.usernames)
   const enterpriseNames = meta.enterpriseNames
 
   let scanned = 0
@@ -132,9 +104,8 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
   if (existsSync(msgDir)) {
     const shards = readdirSync(msgDir).filter(f => f.endsWith('.db') && !f.includes('_shm') && !f.includes('_wal') && !f.includes('tmp'))
     // File-first pass: open each shard once, map its Msg_* tables to sessions.
-    const targetUsernames = usernames.slice(0, 800)
-    const tableToUser = new Map<string, string>()
-    for (const username of targetUsernames) tableToUser.set('Msg_' + createHash('md5').update(username, 'utf8').digest('hex'), username)
+    const targetUsernames = new Set([...identity.usernames].slice(0, 800))
+    const tableToUser = identity.tableToUsername
     const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
     for (const file of shards) {
       // P1-2：探测阶段每个分片开一次库，也要在分片之间让出（实测机器上 80+ 个分片）。
@@ -145,7 +116,7 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
           const tables: Array<[string, string]> = []
           for (const n of names) {
             const u = tableToUser.get(n)
-            if (u) tables.push([n, u])
+            if (u && targetUsernames.has(u)) tables.push([n, u])
           }
           if (tables.length > 0) fileInfos.push({ path: join(msgDir, file), tables })
         })
@@ -194,7 +165,7 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
                   const enterpriseName = enterpriseNames.get(username)?.trim()
                   samples.push({
                     username,
-                    name: names.get(username) ?? username,
+                    name: displayNameForUsername(username, names),
                     ...(enterpriseName ? { enterpriseName } : {}),
                     local_id: localId,
                     ts,
@@ -224,7 +195,7 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
       const enterpriseName = enterpriseNames.get(username)?.trim()
       return {
         username,
-        name: names.get(username) ?? username,
+        name: displayNameForUsername(username, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         count,
       }
@@ -237,7 +208,7 @@ async function computePrivacyScan(decryptedDir: string, rowBudget: number): Prom
       const enterpriseName = enterpriseNames.get(username)?.trim()
       return {
         username,
-        name: names.get(username) ?? username,
+        name: displayNameForUsername(username, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         count,
       }

@@ -13,190 +13,111 @@ import { apiAskWechat, apiCancelAsk, remote } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
 import { getActiveKbId } from './kb-scope.ts'
 import type { AskStage } from './ask-stage-merge.ts'
-import { buildAskRunMetrics, type AskRunMetrics, type AskRunTiming } from './ask-run-model.ts'
+import {
+  mergeReasoningSegment,
+  reasoningSegmentsOf,
+  type AskReasoningSegment,
+} from './answer-run-trace.ts'
+import { buildAskRunMetrics, type AskRunTiming } from './ask-run-model.ts'
 import { useAskStreamFeed } from './use-ask-stream-feed.ts'
-import type { AskResult, ThreadState } from '@deepseek-ai/dsh-wechat-data/types'
+import type {
+  AnswerRuntimeResourceCitation,
+  AnswerStatus,
+  AskGrounding,
+  AskResultRuntimeFields,
+  AskThreadState,
+  AskTurnMetrics,
+  EvidenceBundle,
+  EvidenceLocator,
+  ToolCallTrace,
+} from './ask-result-types.ts'
+import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
+
+const LATE_REASONING_WINDOW_MS = 3_000
+const MAX_LATE_REASONING_TARGETS = 8
+
+interface LateReasoningTarget {
+  threadKey: string
+  expiresAt: number
+}
+
+function clearLateReasoningTarget(
+  runId: string,
+  targets: Map<string, LateReasoningTarget>,
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+): void {
+  const timer = timers.get(runId)
+  if (timer !== undefined) clearTimeout(timer)
+  timers.delete(runId)
+  targets.delete(runId)
+}
+
+function clearLateReasoningTargets(
+  targets: Map<string, LateReasoningTarget>,
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+): void {
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+  targets.clear()
+}
+
+/** Keep a bounded ownership window for post-cancel reasoning flushes. */
+function rememberLateReasoningTarget(
+  runId: string,
+  threadKey: string,
+  targets: Map<string, LateReasoningTarget>,
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+): void {
+  if (runId === '') return
+  clearLateReasoningTarget(runId, targets, timers)
+  const now = Date.now()
+  for (const [id, target] of targets) {
+    if (target.expiresAt <= now) clearLateReasoningTarget(id, targets, timers)
+  }
+  while (targets.size >= MAX_LATE_REASONING_TARGETS) {
+    const oldest = targets.keys().next().value
+    if (oldest === undefined) break
+    clearLateReasoningTarget(oldest, targets, timers)
+  }
+  targets.set(runId, { threadKey, expiresAt: now + LATE_REASONING_WINDOW_MS })
+  const timer = setTimeout(() => {
+    const target = targets.get(runId)
+    if (target !== undefined && target.expiresAt <= Date.now()) {
+      clearLateReasoningTarget(runId, targets, timers)
+    }
+  }, LATE_REASONING_WINDOW_MS)
+  timers.set(runId, timer)
+}
+
+function sameReasoningSegments(
+  left: readonly AskReasoningSegment[],
+  right: readonly AskReasoningSegment[],
+): boolean {
+  return left.length === right.length && left.every((segment, index) => {
+    const other = right[index]
+    return other !== undefined
+      && segment.key === other.key
+      && segment.text === other.text
+      && segment.version === other.version
+      && segment.round === other.round
+      && segment.phase === other.phase
+      && segment.seq === other.seq
+  })
+}
 
 export type { AskStage } from './ask-stage-merge.ts'
-
-/**
- * 统一问答运行时的新增结果字段。
- *
- * 本文件的类型入口来自 `build:types` 生成的宿主声明。统一运行时已经返回这些
- * 字段，但生成声明可能落后一个构建周期；这里只做**读侧**的兼容声明，请求与
- * 映射仍走同一份运行时契约，避免前端为了显示过程信息去修改生成物。
- */
-export type AnswerStatus = 'ok' | 'insufficient' | 'needs_clarification' | 'degraded' | 'blocked' | 'failed'
-
-export interface ToolCallTrace {
-  index: number
-  round: number
-  callId: string
-  name: string
-  argumentsSummary: string
-  ok: boolean
-  deduplicated: boolean
-  attempts: number
-  retries: number
-  elapsedMs: number
-  errorClass?: string
-  errorCode?: string
-  /** 后端脱敏后的错误正文；可能比 errorClass/errorCode 更适合直接解释原因。 */
-  errorMessage?: string
-  hits: number
-  facts: number
-  deadlineExceeded?: boolean
-  skipped?: boolean
-  note?: string
-  /** 脱敏后的结果摘要；旧后端缺省。 */
-  resultSummary?: string
-  /** 脱敏、截断后的结构化结果快照；旧后端缺省。 */
-  resultDetail?: string
-  /** 结果详情是否因条数或长度限制被截断。 */
-  resultTruncated?: boolean
-}
-
-export type EvidenceSource = 'msg' | 'kb' | 'agg' | 'resource'
-
-export type EvidenceLocator =
-  | { type: 'message'; username: string; localId: number; key: string }
-  | {
-    type: 'kb'
-    kbId: number
-    fileId: number
-    chunkId: number
-    key: string
-    fileName: string
-    fileExt: string
-    ordinal: number
-    page: number
-    heading: string
-  }
-  | { type: 'fact'; tool: string; index?: number; title?: string; bodyDigest?: string; key?: string }
-  | {
-    type: 'resource'
-    tool: string
-    key: string
-    stableKey?: string
-    resourceKind?: 'file' | 'favorite' | 'moment' | 'record'
-    time?: string
-    session?: string
-    sourceId?: string
-    fileName?: string
-    size?: number
-    category?: string
-    md5?: string
-    thumbMd5?: string
-    fullMd5?: string
-    favoriteId?: number
-    serverId?: string
-    transferId?: string
-    messageServerId?: string
-    timelineId?: string
-    username?: string
-    mediaId?: string
-    mediaKind?: string
-    url?: string
-    token?: string
-    seed?: string
-    recordType?: 'transfers' | 'redpackets'
-  }
-
-export interface EvidenceItem {
-  evidenceId: string
-  kind: 'hit' | 'fact'
-  tool: string
-  tools: string[]
-  source: EvidenceSource
-  name: string
-  /** 会话 / 来源所属企业；企业微信会话才有。 */
-  enterpriseName?: string
-  time: string
-  sender?: string
-  /** 群消息发送者所属企业；单聊发送者使用会话企业名。 */
-  senderEnterpriseName?: string
-  snippet: string
-  score?: number
-  key: string
-  locator: EvidenceLocator
-  truncated?: boolean
-  fact?: boolean
-}
-
-export interface EvidenceBundleStats {
-  count: number
-  messages: number
-  kb: number
-  sessions: number
-  candidateCount: number
-  total: number
-  hitCount: number
-  factCount: number
-  duplicateCount: number
-  droppedByBudget: number
-  truncated: boolean
-  snippetChars: number
-  /** 旧后端不返回 resource 计数，因此除三类既有来源外保持可选。 */
-  sourceCounts: Record<'msg' | 'kb' | 'agg', number> & { resource?: number }
-  toolCounts: Record<string, number>
-  failedTools: string[]
-  attemptedTools: number
-  successfulTools: number
-  malformedResults?: number
-  malformedHits?: number
-  malformedFacts?: number
-  normalizationWarnings?: string[]
-}
-
-export interface EvidenceBundle {
-  items: EvidenceItem[]
-  facts: Array<{ title: string; body: string }>
-  status: AnswerStatus
-  missing: string[]
-  stats: EvidenceBundleStats
-  assessment: {
-    status: 'missing' | 'insufficient' | 'sufficient'
-    sufficient: boolean
-    usableItems: number
-    reason: string
-  }
-}
-
-export interface AnswerRuntimeResourceCitation {
-  evidenceId: string
-  tool: string
-  key: string
-  name: string
-  time: string
-  snippet: string
-  locator: EvidenceLocator
-}
-
-/** 可序列化的多轮线程状态；直接复用后端生成的宿主契约，避免前后端枚举漂移。 */
-export type AskThreadState = ThreadState
-
-export interface AskGrounding {
-  checked: number
-  unsupported: string[]
-  cited: number
-  repaired: boolean
-}
-
-/** 统一运行时附加到 `AskResult` 上的读侧字段。 */
-interface AskResultRuntimeFields {
-  status?: AnswerStatus
-  statusReason?: string
-  synthesisError?: string
-  toolCalls?: ToolCallTrace[]
-  evidence?: EvidenceBundle
-  resources?: AnswerRuntimeResourceCitation[]
-  threadState?: AskThreadState
-  grounding?: AskGrounding
-  /** 后端聚合的端到端耗时；旧后端缺省。 */
-  durationMs?: number
-  /** 后端收集的本轮阶段快照；旧后端缺省时沿用流式快照。 */
-  stages?: AskStage[]
-}
+export type {
+  AnswerRuntimeResourceCitation,
+  AnswerStatus,
+  AskGrounding,
+  AskThreadState,
+  EvidenceBundle,
+  EvidenceBundleStats,
+  EvidenceItem,
+  EvidenceLocator,
+  EvidenceSource,
+  ToolCallTrace,
+} from './ask-result-types.ts'
 
 /** 一轮对话（用户提问或助手回答）。 */
 export interface AskTurn {
@@ -257,6 +178,8 @@ export interface AskTurn {
    * 只在模型真的产出 reasoning 时才有值（多数非推理模型没有）。
    */
   reasoning?: string
+  /** 按工具轮次拆分的思考；旧轮次缺省时回退到 `reasoning`。 */
+  reasoningSegments?: AskReasoningSegment[]
   /**
    * 流水线各阶段的执行记录（2026-10-16 新增）。
    *
@@ -265,7 +188,7 @@ export interface AskTurn {
    */
   stages?: AskStage[]
   /** 本轮的计时与耗时；旧轮次可能没有。 */
-  metrics?: AskRunMetrics
+  metrics?: AskTurnMetrics
 }
 
 /** hook 选项。 */
@@ -307,6 +230,8 @@ export interface UseAskSessionResult {
   streamText: string
   /** 生成中的**思考全文**（2026-10-16；与 streamText 分开的一条流）。 */
   streamReasoning: string
+  /** 生成中的分段思考；每段可在对应工具轮次下方渲染。 */
+  streamReasoningSegments: AskReasoningSegment[]
   /** 生成中的**阶段列表**（2026-10-16；「工具调用过程」的实时数据源）。 */
   streamStages: AskStage[]
   /** 当前在飞轮次的客户端起点；没有在飞轮次时为 0。 */
@@ -382,11 +307,16 @@ function assistantTurnFromResult(
   runtime: AskResult & AskResultRuntimeFields,
   scopeSignature: string,
   streamedReasoning: string,
+  streamedReasoningSegments: readonly AskReasoningSegment[],
   streamedStages: AskStage[],
-  metrics: AskRunMetrics,
+  metrics: AskTurnMetrics,
   runId: string,
 ): AskTurn {
   const reasoning = r.reasoning ?? streamedReasoning
+  const reasoningSegments = reasoningSegmentsOf(
+    runtime.reasoningSegments ?? streamedReasoningSegments,
+    reasoning,
+  )
   const stages = runtime.stages ?? streamedStages
   return {
     role: 'assistant',
@@ -410,6 +340,7 @@ function assistantTurnFromResult(
     scopeSignature,
     ...(runtime.grounding !== undefined ? { grounding: runtime.grounding } : {}),
     ...(reasoning ? { reasoning } : {}),
+    ...(reasoningSegments.length > 0 ? { reasoningSegments } : {}),
     ...(stages.length > 0 ? { stages } : {}),
     metrics,
   }
@@ -429,7 +360,9 @@ function finishLocalStream(input: {
   setError: Dispatch<SetStateAction<string | null>>
   setStreamText: Dispatch<SetStateAction<string>>
   setStreamReasoning: Dispatch<SetStateAction<string>>
+  setStreamReasoningSegments: Dispatch<SetStateAction<AskReasoningSegment[]>>
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
+  streamReasoningSegmentsRef: MutableRefObject<AskReasoningSegment[]>
   streamStageEventsRef: MutableRefObject<AskStage[]>
   setAsking: Dispatch<SetStateAction<boolean>>
   timingRef: MutableRefObject<AskRunTiming>
@@ -441,7 +374,9 @@ function finishLocalStream(input: {
   input.streamOwnerRef.current = ''
   input.setStreamText('')
   input.setStreamReasoning('')
+  input.setStreamReasoningSegments([])
   input.setStreamStages([])
+  input.streamReasoningSegmentsRef.current = []
   input.streamStageEventsRef.current = []
   input.setAsking(false)
   input.setError(null)
@@ -453,12 +388,14 @@ function finishLocalStream(input: {
 function stoppedTurn(input: {
   text: string
   reasoning: string
+  reasoningSegments: AskReasoningSegment[]
   stages: AskStage[]
   scopeSignature: string
-  metrics: AskRunMetrics
+  metrics: AskTurnMetrics
   runId: string
 }): AskTurn {
   const text = input.text.trim()
+  const reasoningSegments = reasoningSegmentsOf(input.reasoningSegments, input.reasoning)
   return {
     role: 'assistant',
     text: text === '' ? '（已停止生成）' : `${input.text}\n\n（已停止生成）`,
@@ -466,6 +403,7 @@ function stoppedTurn(input: {
     stopped: true,
     scopeSignature: input.scopeSignature,
     ...(input.reasoning.trim() !== '' ? { reasoning: input.reasoning } : {}),
+    ...(reasoningSegments.length > 0 ? { reasoningSegments } : {}),
     ...(input.stages.length > 0 ? { stages: input.stages } : {}),
     metrics: input.metrics,
   }
@@ -480,13 +418,15 @@ function stagesForTurn(raw: readonly AskStage[], merged: readonly AskStage[]): A
 function failedTurn(input: {
   text: string
   reasoning: string
+  reasoningSegments: AskReasoningSegment[]
   stages: AskStage[]
   scopeSignature: string
   code: string
   message: string
-  metrics: AskRunMetrics
+  metrics: AskTurnMetrics
   runId: string
 }): AskTurn {
+  const reasoningSegments = reasoningSegmentsOf(input.reasoningSegments, input.reasoning)
   return {
     role: 'assistant',
     text: input.text,
@@ -496,6 +436,7 @@ function failedTurn(input: {
     errorCode: input.code,
     scopeSignature: input.scopeSignature,
     ...(input.reasoning.trim() !== '' ? { reasoning: input.reasoning } : {}),
+    ...(reasoningSegments.length > 0 ? { reasoningSegments } : {}),
     ...(input.stages.length > 0 ? { stages: input.stages } : {}),
     metrics: input.metrics,
   }
@@ -517,11 +458,13 @@ function useAskRangeSwitch(input: {
   setError: Dispatch<SetStateAction<string | null>>
   setStreamText: Dispatch<SetStateAction<string>>
   setStreamReasoning: Dispatch<SetStateAction<string>>
+  setStreamReasoningSegments: Dispatch<SetStateAction<AskReasoningSegment[]>>
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
   setAsking: Dispatch<SetStateAction<boolean>>
   timingRef: MutableRefObject<AskRunTiming>
   streamTextRef: MutableRefObject<string>
   streamReasoningRef: MutableRefObject<string>
+  streamReasoningSegmentsRef: MutableRefObject<AskReasoningSegment[]>
   streamStagesRef: MutableRefObject<AskStage[]>
   streamStageEventsRef: MutableRefObject<AskStage[]>
   activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
@@ -529,8 +472,9 @@ function useAskRangeSwitch(input: {
 }): void {
   const {
     activeKey, keyRef, gateRef, streamIdRef, streamOwnerRef,
-    setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, timingRef,
-    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, activeTurnRef, setTurnList,
+    setError, setStreamText, setStreamReasoning, setStreamReasoningSegments, setStreamStages,
+    setAsking, timingRef, streamTextRef, streamReasoningRef, streamReasoningSegmentsRef,
+    streamStagesRef, streamStageEventsRef, activeTurnRef, setTurnList,
   } = input
   useEffect(() => {
     if (keyRef.current === activeKey) return
@@ -543,11 +487,18 @@ function useAskRangeSwitch(input: {
       const active = activeTurnRef.current
       const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
       const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
+      // React state updater may run after finally clears the live refs. Snapshot the
+      // turn first so a stopped turn keeps the reasoning/tool trace that was visible.
+      const turnText = streamTextRef.current
+      const turnReasoning = streamReasoningRef.current
+      const turnReasoningSegments = [...streamReasoningSegmentsRef.current]
       streamIdRef.current = ''
       streamOwnerRef.current = ''
       setStreamText('')
       setStreamReasoning('')
+      setStreamReasoningSegments([])
       setStreamStages([])
+      streamReasoningSegmentsRef.current = []
       streamStageEventsRef.current = []
       setAsking(false)
       timingRef.current = { startedAt: 0 }
@@ -555,8 +506,9 @@ function useAskRangeSwitch(input: {
         const last = prev[prev.length - 1]
         if (last?.role !== 'user') return prev
         return [...prev, stoppedTurn({
-          text: streamTextRef.current,
-          reasoning: streamReasoningRef.current,
+          text: turnText,
+          reasoning: turnReasoning,
+          reasoningSegments: turnReasoningSegments,
           stages: turnStages,
           scopeSignature: active.scopeSignature,
           metrics,
@@ -569,7 +521,7 @@ function useAskRangeSwitch(input: {
     void pendingCancel.catch(() => { /* 旧轮次已释放，取消失败不影响新范围 */ })
     // 线程里已经落下「已停止生成」；错误槽保持为空，避免把正常停止显示成失败。
     setError(null)
-  }, [activeKey, activeTurnRef, gateRef, keyRef, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
+  }, [activeKey, activeTurnRef, gateRef, keyRef, setAsking, setError, setStreamReasoning, setStreamReasoningSegments, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamReasoningSegmentsRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
 }
 
 interface AskSessionEnvironment {
@@ -582,6 +534,8 @@ interface AskSessionEnvironment {
   setStreamText: Dispatch<SetStateAction<string>>
   streamReasoning: string
   setStreamReasoning: Dispatch<SetStateAction<string>>
+  streamReasoningSegments: AskReasoningSegment[]
+  setStreamReasoningSegments: Dispatch<SetStateAction<AskReasoningSegment[]>>
   streamStages: AskStage[]
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
   error: string | null
@@ -590,11 +544,14 @@ interface AskSessionEnvironment {
   streamOwnerRef: MutableRefObject<string>
   failedScopeRef: MutableRefObject<Record<string, string>>
   streamReasoningRef: MutableRefObject<string>
+  streamReasoningSegmentsRef: MutableRefObject<AskReasoningSegment[]>
   streamStagesRef: MutableRefObject<AskStage[]>
   streamStageEventsRef: MutableRefObject<AskStage[]>
   streamTextRef: MutableRefObject<string>
   timingRef: MutableRefObject<AskRunTiming>
   gateRef: MutableRefObject<AskGate | null>
+  lateReasoningTargetsRef: MutableRefObject<Map<string, LateReasoningTarget>>
+  lateReasoningTimersRef: MutableRefObject<Map<string, ReturnType<typeof setTimeout>>>
   activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
   threadsRef: MutableRefObject<Record<string, AskTurn[]>>
   scopeRef: MutableRefObject<Pick<UseAskSessionOptions, 'scopeUsername' | 'from' | 'to' | 'source' | 'scopeUsernameName' | 'useKb' | 'kbId'>>
@@ -612,14 +569,18 @@ interface AskSessionCommandsInput {
   streamOwnerRef: MutableRefObject<string>
   streamTextRef: MutableRefObject<string>
   streamReasoningRef: MutableRefObject<string>
+  streamReasoningSegmentsRef: MutableRefObject<AskReasoningSegment[]>
   streamStagesRef: MutableRefObject<AskStage[]>
   streamStageEventsRef: MutableRefObject<AskStage[]>
   gateRef: MutableRefObject<AskGate | null>
+  lateReasoningTargetsRef: MutableRefObject<Map<string, LateReasoningTarget>>
+  lateReasoningTimersRef: MutableRefObject<Map<string, ReturnType<typeof setTimeout>>>
   activeTurnRef: MutableRefObject<{ key: string, scopeSignature: string }>
   timingRef: MutableRefObject<AskRunTiming>
   setError: Dispatch<SetStateAction<string | null>>
   setStreamText: Dispatch<SetStateAction<string>>
   setStreamReasoning: Dispatch<SetStateAction<string>>
+  setStreamReasoningSegments: Dispatch<SetStateAction<AskReasoningSegment[]>>
   setStreamStages: Dispatch<SetStateAction<AskStage[]>>
   setAsking: Dispatch<SetStateAction<boolean>>
   setTurnList: (key: string, updater: (prev: AskTurn[]) => AskTurn[]) => void
@@ -637,8 +598,10 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
 } {
   const {
     key, runAsk, threadsRef, failedScopeRef, scopeRef, streamIdRef, streamOwnerRef,
-    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, gateRef, activeTurnRef,
-    timingRef, setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, setTurnList,
+    streamTextRef, streamReasoningRef, streamReasoningSegmentsRef, streamStagesRef,
+    streamStageEventsRef, gateRef, lateReasoningTargetsRef, lateReasoningTimersRef,
+    activeTurnRef, timingRef, setError, setStreamText,
+    setStreamReasoning, setStreamReasoningSegments, setStreamStages, setAsking, setTurnList,
   } = input
   const ask = useCallback((question: string): Promise<void> => runAsk(question), [runAsk])
   const retry = useCallback(async (turnIndex: number): Promise<void> => {
@@ -654,6 +617,10 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
   }, [key, runAsk, streamIdRef, threadsRef])
   const resetAndCancel = useCallback((): void => {
     const id = streamIdRef.current
+    clearLateReasoningTargets(
+      lateReasoningTargetsRef.current,
+      lateReasoningTimersRef.current,
+    )
     failedScopeRef.current[key] = scopeSignatureOf(scopeRef.current)
     if (id !== '') {
       gateRef.current?.finish(id)
@@ -661,7 +628,9 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
       streamOwnerRef.current = ''
       setStreamText('')
       setStreamReasoning('')
+      setStreamReasoningSegments([])
       setStreamStages([])
+      streamReasoningSegmentsRef.current = []
       streamStageEventsRef.current = []
       setAsking(false)
       timingRef.current = { startedAt: 0 }
@@ -669,7 +638,7 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
     }
     setError(null)
     setTurnList(key, () => [])
-  }, [failedScopeRef, gateRef, key, scopeRef, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamStageEventsRef, timingRef])
+  }, [failedScopeRef, gateRef, key, lateReasoningTargetsRef, lateReasoningTimersRef, scopeRef, setAsking, setError, setStreamReasoning, setStreamReasoningSegments, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningSegmentsRef, streamStageEventsRef, timingRef])
   const reset = useCallback((): void => { setTurnList(key, () => []) }, [key, setTurnList])
   const cancel = useCallback((): void => {
     const id = streamIdRef.current
@@ -678,14 +647,24 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
     if (active.key === key) {
       const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
       const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
+      const turnText = streamTextRef.current
+      const turnReasoning = streamReasoningRef.current
+      const turnReasoningSegments = [...streamReasoningSegmentsRef.current]
       setTurnList(key, prev => [...prev, stoppedTurn({
-        text: streamTextRef.current,
-        reasoning: streamReasoningRef.current,
+        text: turnText,
+        reasoning: turnReasoning,
+        reasoningSegments: turnReasoningSegments,
         stages: turnStages,
         scopeSignature: active.scopeSignature,
         metrics,
         runId: id,
       })])
+      rememberLateReasoningTarget(
+        id,
+        key,
+        lateReasoningTargetsRef.current,
+        lateReasoningTimersRef.current,
+      )
     }
     finishLocalStream({
       gate: gateRef.current,
@@ -694,13 +673,15 @@ function useAskSessionCommands(input: AskSessionCommandsInput): {
       setError,
       setStreamText,
       setStreamReasoning,
+      setStreamReasoningSegments,
       setStreamStages,
+      streamReasoningSegmentsRef,
       streamStageEventsRef,
       setAsking,
       timingRef,
     })
     void apiCancelAsk({ jobId: id }).catch(() => { /* 这一轮由本地先收尾 */ })
-  }, [activeTurnRef, gateRef, key, setAsking, setError, setStreamReasoning, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
+  }, [activeTurnRef, gateRef, key, lateReasoningTargetsRef, lateReasoningTimersRef, setAsking, setError, setStreamReasoning, setStreamReasoningSegments, setStreamStages, setStreamText, setTurnList, streamIdRef, streamOwnerRef, streamReasoningRef, streamReasoningSegmentsRef, streamStageEventsRef, streamStagesRef, streamTextRef, timingRef])
   const patchTurn = useCallback((index: number, patch: Partial<AskTurn>): void => {
     setTurnList(key, prev => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
   }, [key, setTurnList])
@@ -717,6 +698,7 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
   const [asking, setAsking] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [streamReasoning, setStreamReasoning] = useState('')
+  const [streamReasoningSegments, setStreamReasoningSegments] = useState<AskReasoningSegment[]>([])
   const [streamStages, setStreamStages] = useState<AskStage[]>([])
   const [error, setError] = useState<string | null>(null)
   const streamIdRef = useRef('')
@@ -724,6 +706,8 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
   const failedScopeRef = useRef<Record<string, string>>({})
   const streamReasoningRef = useRef('')
   streamReasoningRef.current = streamReasoning
+  const streamReasoningSegmentsRef = useRef<AskReasoningSegment[]>([])
+  streamReasoningSegmentsRef.current = streamReasoningSegments
   const streamStagesRef = useRef<AskStage[]>([])
   streamStagesRef.current = streamStages
   const streamStageEventsRef = useRef<AskStage[]>([])
@@ -731,6 +715,8 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
   streamTextRef.current = streamText
   const timingRef = useRef<AskRunTiming>({ startedAt: 0 })
   const gateRef = useRef<AskGate | null>(null)
+  const lateReasoningTargetsRef = useRef<Map<string, LateReasoningTarget>>(new Map())
+  const lateReasoningTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const activeTurnRef = useRef({ key: '', scopeSignature: '' })
   const threadsRef = useRef(threads)
   threadsRef.current = threads
@@ -747,10 +733,12 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
   return {
     key, currentStreamOwner: key, threads, asking, setAsking,
     streamText, setStreamText, streamReasoning, setStreamReasoning,
+    streamReasoningSegments, setStreamReasoningSegments,
     streamStages, setStreamStages, error, setError,
-    streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamStagesRef,
+    streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamReasoningSegmentsRef, streamStagesRef,
     streamStageEventsRef,
-    streamTextRef, timingRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
+    streamTextRef, timingRef, gateRef, lateReasoningTargetsRef, lateReasoningTimersRef,
+    activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
   }
 }
 
@@ -759,15 +747,66 @@ function useAskSessionEnvironment(options: UseAskSessionOptions): AskSessionEnvi
  * @param options - 检索范围与线程键。
  * @returns 线程状态与操作。
  */
+function useAcceptLateReasoning({
+  lateReasoningTargetsRef,
+  lateReasoningTimersRef,
+  setTurnList,
+}: Pick<AskSessionEnvironment, 'lateReasoningTargetsRef' | 'lateReasoningTimersRef' | 'setTurnList'>): (
+  runId: string,
+  segment: AskReasoningSegment,
+) => void {
+  return useCallback((runId: string, segment: AskReasoningSegment): void => {
+    const targets = lateReasoningTargetsRef.current
+    const target = targets.get(runId)
+    if (target === undefined) return
+    if (target.expiresAt <= Date.now()) {
+      clearLateReasoningTarget(runId, targets, lateReasoningTimersRef.current)
+      return
+    }
+    setTurnList(target.threadKey, (prev) => {
+      const index = prev.findIndex(turn =>
+        turn.role === 'assistant' && turn.stopped === true && turn.runId === runId)
+      const turn = prev[index]
+      if (turn === undefined) return prev
+      const currentSegments = reasoningSegmentsOf(turn.reasoningSegments, turn.reasoning)
+      const nextSegments = mergeReasoningSegment(currentSegments, segment)
+      if (sameReasoningSegments(currentSegments, nextSegments)) return prev
+      const reasoning = nextSegments.map(item => item.text.trim()).filter(Boolean).join('\n\n')
+      const next = prev.slice()
+      next[index] = {
+        ...turn,
+        reasoningSegments: nextSegments,
+        ...(reasoning === '' ? {} : { reasoning }),
+      }
+      return next
+    })
+  }, [lateReasoningTargetsRef, lateReasoningTimersRef, setTurnList])
+}
+
 export function useAskSession(options: UseAskSessionOptions = {}): UseAskSessionResult {
   const {
     key, currentStreamOwner, threads, asking, setAsking,
     streamText, setStreamText, streamReasoning, setStreamReasoning,
+    streamReasoningSegments, setStreamReasoningSegments,
     streamStages, setStreamStages, error, setError,
-    streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamStagesRef,
+    streamIdRef, streamOwnerRef, failedScopeRef, streamReasoningRef, streamReasoningSegmentsRef, streamStagesRef,
     streamStageEventsRef,
-    streamTextRef, timingRef, gateRef, activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
+    streamTextRef, timingRef, gateRef, lateReasoningTargetsRef, lateReasoningTimersRef,
+    activeTurnRef, threadsRef, scopeRef, keyRef, setTurnList,
   } = useAskSessionEnvironment(options)
+
+  const acceptLateReasoning = useAcceptLateReasoning({
+    lateReasoningTargetsRef,
+    lateReasoningTimersRef,
+    setTurnList,
+  })
+
+  useEffect(() => () => {
+    clearLateReasoningTargets(
+      lateReasoningTargetsRef.current,
+      lateReasoningTimersRef.current,
+    )
+  }, [lateReasoningTargetsRef, lateReasoningTimersRef])
 
   useAskRangeSwitch({
     activeKey: key,
@@ -778,11 +817,13 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     setError,
     setStreamText,
     setStreamReasoning,
+    setStreamReasoningSegments,
     setStreamStages,
     setAsking,
     timingRef,
     streamTextRef,
     streamReasoningRef,
+    streamReasoningSegmentsRef,
     streamStagesRef,
     streamStageEventsRef,
     activeTurnRef,
@@ -794,9 +835,12 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     streamIdRef,
     setStreamText,
     setStreamReasoning,
+    setStreamReasoningSegments,
     setStreamStages,
+    streamReasoningSegmentsRef,
     streamStageEventsRef,
     timingRef,
+    acceptLateReasoning,
   )
 
   /**
@@ -820,7 +864,9 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     setError(null)
     setStreamText('')
     setStreamReasoning('')
+    setStreamReasoningSegments([])
     setStreamStages([])
+    streamReasoningSegmentsRef.current = []
     streamStageEventsRef.current = []
     streamIdRef.current = streamId
     const requestScope = scopeRef.current
@@ -878,12 +924,17 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
           ? streamStageEventsRef.current
           : streamStagesRef.current
       const metrics = buildAskRunMetrics(timingRef.current, completedAt, stages, runtime.durationMs)
+      const reasoningSegments = runtime.reasoningSegments !== undefined
+        && runtime.reasoningSegments.length > 0
+        ? runtime.reasoningSegments
+        : streamReasoningSegmentsRef.current
       delete failedScopeRef.current[k]
       setTurnList(k, prev => [...prev, assistantTurnFromResult(
         r,
         runtime,
         requestScopeSignature,
         streamReasoningRef.current.trim(),
+        reasoningSegments,
         stages,
         metrics,
         streamId,
@@ -900,9 +951,13 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         if (active.key === k) {
           const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
           const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
+          const turnText = streamTextRef.current
+          const turnReasoning = streamReasoningRef.current
+          const turnReasoningSegments = [...streamReasoningSegmentsRef.current]
           setTurnList(k, prev => [...prev, stoppedTurn({
-            text: streamTextRef.current,
-            reasoning: streamReasoningRef.current,
+            text: turnText,
+            reasoning: turnReasoning,
+            reasoningSegments: turnReasoningSegments,
             stages: turnStages,
             scopeSignature: requestScopeSignature,
             metrics,
@@ -917,9 +972,13 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         if (active.key === k) {
           const metrics = buildAskRunMetrics(timingRef.current, Date.now(), streamStagesRef.current)
           const turnStages = stagesForTurn(streamStageEventsRef.current, streamStagesRef.current)
+          const turnText = streamTextRef.current
+          const turnReasoning = streamReasoningRef.current
+          const turnReasoningSegments = [...streamReasoningSegmentsRef.current]
           setTurnList(k, prev => [...prev, failedTurn({
-            text: streamTextRef.current,
-            reasoning: streamReasoningRef.current,
+            text: turnText,
+            reasoning: turnReasoning,
+            reasoningSegments: turnReasoningSegments,
             stages: turnStages,
             scopeSignature: requestScopeSignature,
             code: stableCode,
@@ -941,7 +1000,9 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         streamOwnerRef.current = ''
         setStreamText('')
         setStreamReasoning('')
+        setStreamReasoningSegments([])
         setStreamStages([])
+        streamReasoningSegmentsRef.current = []
         streamStageEventsRef.current = []
         setAsking(false)
         timingRef.current = { startedAt: 0 }
@@ -951,8 +1012,10 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
 
   const commands = useAskSessionCommands({
     key, runAsk, threadsRef, failedScopeRef, scopeRef, streamIdRef, streamOwnerRef,
-    streamTextRef, streamReasoningRef, streamStagesRef, streamStageEventsRef, gateRef, activeTurnRef,
-    timingRef, setError, setStreamText, setStreamReasoning, setStreamStages, setAsking, setTurnList,
+    streamTextRef, streamReasoningRef, streamReasoningSegmentsRef, streamStagesRef,
+    streamStageEventsRef, gateRef, lateReasoningTargetsRef, lateReasoningTimersRef,
+    activeTurnRef, timingRef, setError, setStreamText,
+    setStreamReasoning, setStreamReasoningSegments, setStreamStages, setAsking, setTurnList,
   })
 
   return {
@@ -960,6 +1023,9 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     asking: asking && streamOwnerRef.current === currentStreamOwner,
     streamText: streamOwnerRef.current === currentStreamOwner ? streamText : '',
     streamReasoning: streamOwnerRef.current === currentStreamOwner ? streamReasoning : '',
+    streamReasoningSegments: streamOwnerRef.current === currentStreamOwner
+      ? streamReasoningSegments
+      : [],
     streamStages: streamOwnerRef.current === currentStreamOwner ? streamStages : [],
     runStartedAt: asking && streamOwnerRef.current === currentStreamOwner ? timingRef.current.startedAt : 0,
     runId: asking && streamOwnerRef.current === currentStreamOwner ? streamIdRef.current : '',

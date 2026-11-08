@@ -2,8 +2,7 @@
 /**
  * 提问优化的范围隔离：旧范围迟到的优化结果既不能显示，也不能被一键采用。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AskOptimizeState, AskOptimizeScope } from './use-ask-optimize.ts'

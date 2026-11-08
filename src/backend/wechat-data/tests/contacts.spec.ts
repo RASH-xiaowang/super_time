@@ -21,6 +21,19 @@ function enterpriseBuffer(wordingId: string): Buffer {
   return Buffer.concat([Buffer.from([0x12, value.length]), value])
 }
 
+/** Build contact.extra_buffer: field 2 gender, field 4 signature, field 5 country. */
+function profileBuffer(gender: number, signature: string, country: string): Buffer {
+  const textField = (tag: number, value: string): Buffer => {
+    const bytes = Buffer.from(value, 'utf8')
+    return Buffer.concat([Buffer.from([tag, bytes.length]), bytes])
+  }
+  return Buffer.concat([
+    Buffer.from([0x10, gender]),
+    textField(0x22, signature),
+    textField(0x2a, country),
+  ])
+}
+
 /** Contact db at <root>/contact/contact.db; no chat_room/biz_info (skipped). */
 function makeContactDb(): string {
   const root = mkdtempSync(join(tmpdir(), 'wx-contacts-'))
@@ -286,5 +299,76 @@ describe('queryContacts 首字母：群成员也要能分到字母组', () => {
     // 且字母组之间是有序的（用码点比较，不依赖 locale 对标点的排序）
     const letters = initials.filter(i => i !== '#')
     expect(letters).toEqual([...letters].sort())
+  })
+})
+
+describe('queryContacts profile fields', () => {
+  it('企业微信 custom_info JSON 不作为个性签名', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-contacts-enterprise-signature-'))
+    scratch.push(root)
+    const dir = join(root, 'contact')
+    mkdirSync(dir, { recursive: true })
+    const db = new DatabaseSync(join(dir, 'contact.db'))
+    db.exec(`CREATE TABLE contact (
+      id INTEGER, username TEXT, local_type INTEGER, delete_flag INTEGER,
+      remark TEXT, nick_name TEXT, quan_pin TEXT, description TEXT, extra_buffer BLOB
+    )`)
+    const enterpriseProfile = JSON.stringify({
+      custom_info: [
+        { title: '来自', detail: [{ desc: '企业微信' }] },
+        { title: '企业', detail: [{ desc: '70A3D965@im.wxwork' }] },
+      ],
+      title: '王国宁',
+    })
+    db.prepare('INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      1,
+      '25984981860470680@openim',
+      0,
+      0,
+      '王国宁',
+      '王国宁',
+      'wangguoning',
+      '',
+      profileBuffer(0, '\u0008\u0001\u0012' + enterpriseProfile + '\u0000tail', ''),
+    )
+    db.close()
+
+    const contact = queryContacts(root).contacts[0]
+    expect(contact?.description).toBe('')
+    expect(contact?.description).not.toContain('custom_info')
+  })
+
+  it('reads signature fallback, gender and region from extra_buffer', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-contacts-profile-'))
+    scratch.push(root)
+    const dir = join(root, 'contact')
+    mkdirSync(dir, { recursive: true })
+    const db = new DatabaseSync(join(dir, 'contact.db'))
+    db.exec(`CREATE TABLE contact (
+      id INTEGER, username TEXT, local_type INTEGER, alias TEXT, delete_flag INTEGER,
+      remark TEXT, nick_name TEXT, description TEXT, extra_buffer BLOB
+    )`)
+    db.prepare(`INSERT INTO contact
+      (id, username, local_type, alias, delete_flag, remark, nick_name, description, extra_buffer)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        1,
+        'wxid_profile',
+        1,
+        'profile_wechat',
+        0,
+        'Alice',
+        'Y.M',
+        '',
+        profileBuffer(2, '\u6211\u662f\u4e00\u53ea\u5927\u871c\u8702\u3002', 'BE'),
+      )
+    db.close()
+
+    const contact = queryContacts(root).contacts.find(c => c.username === 'wxid_profile')
+    expect(contact).toMatchObject({
+      description: '\u6211\u662f\u4e00\u53ea\u5927\u871c\u8702\u3002',
+      gender: 2,
+      region: '\u6bd4\u5229\u65f6',
+    })
   })
 })

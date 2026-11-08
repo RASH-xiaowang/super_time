@@ -22,9 +22,10 @@ import {
   IconFullscreenOutline16,
   IconPlusOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { clampZoom, counterText, DEFAULT_MAX_ZOOM, DEFAULT_MIN_ZOOM, percentOf, wrapIndex, zoomStep } from './viewer-model.ts'
+import { centeredWindow, clampZoom, counterText, DEFAULT_MAX_ZOOM, DEFAULT_MIN_ZOOM, percentOf, VIEWER_THUMB_WINDOW_RADIUS, wrapIndex, zoomStep } from './viewer-model.ts'
 import { useViewerCache } from './use-viewer-cache.ts'
 import type { ViewerSource } from './viewer-types.ts'
+import { ViewerVideo } from './ViewerVideo.tsx'
 import css from './media-viewer.module.css'
 
 export type { ViewerSource } from './viewer-types.ts'
@@ -46,6 +47,8 @@ export interface MediaViewerProps {
   maxZoom?: number
   /** 底部额外工具（旋转等）。 */
   extraToolbar?: ReactNode
+  /** 查看器内保存任务的统一进度/终态卡。 */
+  statusOverlay?: ReactNode
   /** 旋转角度（度）；由调用方控制（朋友圈的旋转按钮）。 */
   rotate?: number
 }
@@ -57,26 +60,32 @@ export interface MediaViewerProps {
  */
 export function MediaViewer({
   sources, index, onIndexChange, onClose, dialogName, headerActions, showThumbnails = false,
-  minZoom = DEFAULT_MIN_ZOOM, maxZoom = DEFAULT_MAX_ZOOM, extraToolbar, rotate = 0,
+  minZoom = DEFAULT_MIN_ZOOM, maxZoom = DEFAULT_MAX_ZOOM, extraToolbar, statusOverlay, rotate = 0,
 }: MediaViewerProps): React.JSX.Element {
   const current = sources[wrapIndex(sources.length, index, 0)]
   const [reloadTick, setReloadTick] = useState(0)
-  const { getEntry, retry: clearEntry } = useViewerCache(sources, index, reloadTick)
+  const { getEntry, retry: clearEntry, reportError } = useViewerCache(sources, index, reloadTick)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
+  const [downloadBusy, setDownloadBusy] = useState(false)
+  const [downloadError, setDownloadError] = useState('')
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const downloadSeqRef = useRef(0)
 
   useDialogFocus(true, `[data-st-dialog="${dialogName}"]`)
   useEscapeToClose(true, onClose)
 
   // 换图重置视图。
   useEffect(() => {
+    downloadSeqRef.current += 1
     setZoom(1)
     setPan({ x: 0, y: 0 })
     setDragging(false)
+    setDownloadBusy(false)
+    setDownloadError('')
     dragRef.current = null
   }, [current?.key])
 
@@ -122,6 +131,13 @@ export function MediaViewer({
   const error = entry?.error ?? ''
   const thumb = current?.thumb && current.thumb !== src ? current.thumb : ''
   const loading = !src && !error
+  // Never save the currently rendered source as an "original": it may be a
+  // thumbnail or decoded preview. The owning panel must opt in via onDownload.
+  const downloadDisabled = current?.downloadDisabled === true || current?.onDownload === undefined
+  const downloadTitle = downloadDisabled
+    ? current?.downloadDisabledReason
+      ?? (current?.onDownload === undefined ? '该资源未提供原文件保存链路，已禁用下载' : '当前环境不支持保存这个文件')
+    : downloadBusy ? '正在保存原始文件…' : '下载'
 
   const retry = (): void => {
     if (!current) return
@@ -129,22 +145,36 @@ export function MediaViewer({
     setReloadTick((t) => t + 1)
   }
 
-  const download = (): void => {
-    if (!current || !src) return
-    if (current.onDownload) { current.onDownload(src); return }
-    const a = document.createElement('a')
-    a.href = src
-    a.download = current.downloadName ?? (current.kind === 'video' ? 'video.mp4' : 'image.jpg')
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+  const download = async (): Promise<void> => {
+    if (!current || !src || downloadBusy) return
+    const seq = downloadSeqRef.current + 1
+    downloadSeqRef.current = seq
+    setDownloadError('')
+    try {
+      if (current.onDownload) {
+        setDownloadBusy(true)
+        await current.onDownload(src)
+        return
+      }
+      throw new Error('该资源未提供原文件保存链路')
+    } catch (e) {
+      if (seq !== downloadSeqRef.current) return
+      const message = e instanceof Error ? e.message : String(e || '未知错误')
+      setDownloadError('保存失败：' + message)
+    } finally {
+      if (seq === downloadSeqRef.current) setDownloadBusy(false)
+    }
   }
 
   const hasMany = sources.length > 1
   const transform = `translate(${String(pan.x)}px, ${String(pan.y)}px) scale(${String(zoom)}) rotate(${String(rotate)}deg)`
-  const thumbStrip = showThumbnails
+  const allThumbStrip = showThumbnails
     ? sources.map((source, i) => ({ source, i })).filter(({ source }) => Boolean(source.thumb))
     : []
+  const currentSourceIndex = wrapIndex(sources.length, index, 0)
+  const currentThumbIndex = allThumbStrip.findIndex(({ i }) => i === currentSourceIndex)
+  const thumbRange = centeredWindow(allThumbStrip.length, currentThumbIndex, VIEWER_THUMB_WINDOW_RADIUS)
+  const thumbStrip = currentThumbIndex < 0 ? [] : allThumbStrip.slice(thumbRange.start, thumbRange.end)
 
   return createPortal(
     <div className={css.overlay} data-st-dialog={dialogName} role="dialog" aria-modal="true" aria-label={current?.title ?? '资源预览'}>
@@ -157,8 +187,16 @@ export function MediaViewer({
         <div className={css.headCenter}>{hasMany ? <span className={css.counter}>{counterText(index, sources.length)}</span> : null}</div>
         <div className={css.headActions}>
           {headerActions}
-          <button type="button" className={css.iconBtn} title="下载" aria-label="下载" onClick={download} disabled={!src}>
-            <span aria-hidden="true" className={css.downloadGlyph}>↓</span>
+          <button
+            type="button"
+            className={css.iconBtn}
+            title={downloadTitle}
+            aria-label={downloadDisabled ? downloadTitle : downloadBusy ? '正在保存' : '下载'}
+            aria-busy={downloadBusy || undefined}
+            onClick={() => { void download() }}
+            disabled={!src || downloadBusy || downloadDisabled}
+          >
+            <span aria-hidden="true" className={css.downloadGlyph}>{downloadBusy ? '…' : '↓'}</span>
           </button>
           <button type="button" className={css.iconBtn} title="关闭" aria-label="关闭" onClick={onClose}>
             <IconCloseOutline16 size={16} />
@@ -217,7 +255,11 @@ export function MediaViewer({
           </div>
         ) : null}
         {src && current?.kind === 'video' ? (
-          <video className={css.media} src={src} controls autoPlay playsInline />
+          <ViewerVideo
+            src={src}
+            source={current}
+            onError={(message) => { reportError(current.key, message) }}
+          />
         ) : src ? (
           <img className={css.media} src={src} alt={current?.title ?? '资源预览'} draggable={false}
             decoding="async" style={{ transform }} onLoad={() => { setDragging(false) }} />
@@ -254,6 +296,8 @@ export function MediaViewer({
           <button type="button" className={css.toolBtn} title="适应窗口 / 1:1" aria-label="重置视图" onClick={reset}><IconFullscreenOutline16 size={15} /></button>
           {extraToolbar}
         </div>
+        {statusOverlay ? <div className={css.statusOverlay}>{statusOverlay}</div> : null}
+        {downloadError ? <div className={css.downloadError} role="alert">{downloadError}</div> : null}
         <span className={css.hint}>← → 切换 · 滚轮缩放 · 双击还原 · Esc 关闭</span>
       </footer>
     </div>,

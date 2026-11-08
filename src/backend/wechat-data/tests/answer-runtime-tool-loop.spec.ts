@@ -8,7 +8,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, Message, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
 import type { AskModelTurn, RunChatTurnFn } from '../src/remotes/ask-run-chat.ts'
 import {
   ANSWER_PROFILES,
@@ -814,9 +814,11 @@ describe('runToolLoop：失败、重试与边界', () => {
       profileTools: [fakeTool('search_messages', run)],
       toolContext: { decryptedDir: '/fake', now: NOW, scope: { username: 'wxid_locked' } },
       runTurn,
+      fallbackTools: ['search_messages'],
     }))
 
     expect(run).not.toHaveBeenCalled()
+    expect(out.fallbackUsed).toBe(false)
     expect(out.toolCalls[0]).toMatchObject({
       ok: false,
       errorClass: 'scope_blocked',
@@ -824,44 +826,7 @@ describe('runToolLoop：失败、重试与边界', () => {
     })
   })
 
-  it('ClawBot 只拿到 search_kb schema，且只执行白名单工具', async () => {
-    const kb = vi.fn((_args: Record<string, unknown>) => hitResult('search_kb', [
-      {
-        key: 'kb:7:88',
-        name: '合同.pdf',
-        time: '',
-        snippet: '验收款 30%',
-        source: 'kb',
-        trace: { kind: 'kb', kbId: 7, fileId: 3, chunkId: 88, ordinal: 2, page: 5, heading: '付款' },
-      },
-    ]))
-    const message = vi.fn(() => hitResult('search_messages', []))
-    const schemas: ToolSchema[][] = []
-    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
-      schemas.push(input.tools ?? [])
-      if (input.messages.some(m => m.content.some(block => block.type === 'tool-result'))) {
-        return turn({ text: '验收款是 30%。' })
-      }
-      return turn({ calls: [{ id: 'call_kb', name: 'search_kb', args: { query: '验收款' } }] })
-    }) as unknown as RunChatTurnFn
-
-    const out = await runToolLoop(loopInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [
-        fakeTool('search_kb', kb),
-        fakeTool('search_messages', message),
-      ],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW, wechatDataEnabled: false },
-      runTurn,
-    }))
-
-    expect(schemas[0]?.map(schema => schema.name)).toEqual(['search_kb'])
-    expect(kb).toHaveBeenCalledTimes(1)
-    expect(message).not.toHaveBeenCalled()
-    expect(out.toolResults).toHaveLength(1)
-  })
-
-  it('最多轮次与每轮最多调用数都有硬上限', async () => {
+  it('第二轮全部命中缓存时确定性停止，不再多问一次模型', async () => {
     let round = 0
     const runTurn = vi.fn(async () => {
       round += 1
@@ -887,6 +852,32 @@ describe('runToolLoop：失败、重试与边界', () => {
     expect(out.toolCalls.filter(trace => trace.deduplicated)).toHaveLength(2)
     expect(out.toolCalls.filter(trace => trace.skipped)).toHaveLength(12)
     expect(out.toolCalls.filter(trace => !trace.skipped)).toHaveLength(4)
+    expect(out.exhausted).toBe(false)
+    expect(out.stopReason).toBe('deduplicated')
+  })
+
+  it('每轮都有新参数时仍受 maxRounds 硬上限', async () => {
+    let round = 0
+    const runTurn = vi.fn(async () => {
+      round += 1
+      return turn({
+        calls: [{
+          id: `call_round_${String(round)}`,
+          name: 'search_messages',
+          args: { keywords: [`第${String(round)}轮`] },
+        }],
+      })
+    }) as unknown as RunChatTurnFn
+    const run = vi.fn(() => hitResult('search_messages', []))
+
+    const out = await runToolLoop(loopInput({
+      profileTools: [fakeTool('search_messages', run)],
+      runTurn,
+      maxRounds: 2,
+    }))
+
+    expect(runTurn).toHaveBeenCalledTimes(2)
+    expect(run).toHaveBeenCalledTimes(2)
     expect(out.exhausted).toBe(true)
     expect(out.stopReason).toBe('max-rounds')
   })
@@ -923,36 +914,6 @@ describe('runToolLoop：失败、重试与边界', () => {
     expect(hybrid).toHaveBeenCalledTimes(1)
     expect(out.fallbackUsed).toBe(true)
     expect(out.toolResults).toHaveLength(1)
-    expect(out.stopReason).toBe('no-tool-call')
-  })
-
-  it('ClawBot 没有 search_hybrid 时回退唯一允许的 search_kb', async () => {
-    const kb = vi.fn(() => hitResult('search_kb', [
-      {
-        key: 'kb:7:99',
-        name: '合同.pdf',
-        time: '',
-        snippet: '验收款 30%',
-        source: 'kb',
-        trace: { kind: 'kb', kbId: 7, fileId: 3, chunkId: 99 },
-      },
-    ]))
-    const runTurn = vi.fn(async () => turn({ text: '我想先说一句。' })) as unknown as RunChatTurnFn
-
-    const out = await runToolLoop(loopInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [fakeTool('search_kb', kb)],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW, wechatDataEnabled: false },
-      runTurn,
-    }))
-
-    expect(kb).toHaveBeenCalledTimes(1)
-    expect(kb).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.stringContaining('合同') }),
-      expect.anything(),
-    )
-    expect(out.fallbackUsed).toBe(true)
-    expect(out.toolCalls[0]?.name).toBe('search_kb')
     expect(out.stopReason).toBe('no-tool-call')
   })
 

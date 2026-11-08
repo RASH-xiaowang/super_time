@@ -7,10 +7,10 @@
  * @module moments-panelx
  */
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTransientNotice } from './hooks.tsx'
-import { apiOpenPath } from '../api.ts'
+import { runtimeCapabilities } from '../api.ts'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { Drawer, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
@@ -19,17 +19,32 @@ import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
 import { buildMomentRows, momentsEmptyText, type MomentRow } from './moments-rows.ts'
 import { MomentsTimeline } from './moments-timeline.tsx'
-import { imageDownloadName, pickImageSrc, toggleInSet } from './moments-actions.ts'
+import { pickImageSrc, toggleInSet } from './moments-actions.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import { MediaFilter, groupByDate, imgKey } from './moments-support.tsx'
 import { fmtHourMinuteMs } from '../utils/format.ts'
 import { useMomentsScope } from './moments-scope.ts'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 /** 一行的估计高度：日期标签一行、卡片按"头像 + 正文两行"量级（真实高度由 `measureElement` 回灌）。 */
 const MOMENT_DAY_ROW_PX = 30
 const MOMENT_CARD_PX = 220
+
+/** 在文件管理器中打开朋友圈导出文件所在目录，并选中刚导出的文件。 */
+async function revealExportPath(path: string, hold: (text: string) => void): Promise<void> {
+  const api = window.electronAPI
+  if (!runtimeCapabilities().shellOpen || !api?.showInFolder) {
+    hold('打开文件目录仅支持电脑端')
+    return
+  }
+  try {
+    await api.showInFolder(path)
+  } catch (e) {
+    hold('打开文件目录失败：' + (e as Error).message)
+  }
+}
 
 /**
  * 时间线虚拟化的稳定行 key。
@@ -53,7 +68,8 @@ function momentRowKey(row: MomentRow | undefined): string {
 import { useMomentsMedia } from './moments-media.ts'
 import { useMomentsExport } from './moments-export.ts'
 import { useMomentsVideos } from './moments-videos.ts'
-import { imageExtOf, useMomentsViewer } from './moments-viewer.ts'
+import { useMomentsViewer } from './moments-viewer.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
 import { useMomentsData } from './moments-data.ts'
 
 /**
@@ -78,23 +94,9 @@ function MomentsToolbar(props: {
 }): React.JSX.Element {
   const { search, onSearch, total, author, onClearAuthor, privacy, loading, syncing, lastSync, onTogglePrivacy, onRefresh, onSync, openExport, onOpenFilter } = props
   const [moreOpen, setMoreOpen] = useState(false)
-  const barRef = useRef<HTMLDivElement | null>(null)
-  // 点外面 / 按 Esc 关闭「更多」菜单。
-  useEffect(() => {
-    if (!moreOpen) return
-    const onDown = (e: MouseEvent): void => {
-      if (barRef.current !== null && !barRef.current.contains(e.target as Node)) setMoreOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMoreOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [moreOpen])
+  const { rootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, () => { setMoreOpen(false) })
   return (
-    <div className={css.momentBar} ref={barRef}>
+    <div className={css.momentBar} ref={rootRef}>
       <SearchInput value={search} onChange={onSearch} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" className={css.hdSearch} />
       <span className={css.countText}>共 {total} 条</span>
       {author && onClearAuthor && (
@@ -103,6 +105,7 @@ function MomentsToolbar(props: {
       <span className={css.barSpacer} />
       <div className={css.moreWrap}>
         <button
+          ref={moreTriggerRef}
           type="button"
           className={css.btn}
           aria-haspopup="menu"
@@ -230,12 +233,15 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     notify: { flash, hold, clear },
   })
   const { exportOpen, setExportOpen, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo,
-    expDir, setExpDir, expImages, setExpImages, expZip, setExpZip, syncing, lastSync, pickingDir,
-    exporting, exportedPath, setExportedPath, openExport, doSync, pickDir, doExport } = exp
+    expDir, setExpDir, expImages, setExpImages, expZip, setExpZip,
+    expIncludeImages, setExpIncludeImages, expIncludeVideos, setExpIncludeVideos,
+    expIncludeLivePhotos, setExpIncludeLivePhotos, syncing, lastSync, pickingDir,
+    exportState, exporting, finishing, cancelExport, exportedPath, setExportedPath,
+    openExport, doSync, pickDir, doExport } = exp
 
   // 视频本体交给 moments-videos.ts（保存成功的落盘路径仍要记回面板那一行）。
-  const { videoSrcs, videoFailed, videoErr, videoMeta, setVideoMeta, loadVideo, closeVideo,
-    fullscreenVideo, saveVideo } = useMomentsVideos({ notify: { flash, hold, clear }, onSavedPath: setExportedPath })
+  const { videoSrcs, videoLoading, videoFailed, videoErr, videoMeta, setVideoMeta, loadVideo, reportVideoError, closeVideo,
+    fullscreenVideo, saveVideo, exportState: videoExportState, cancelExport: cancelVideoExport } = useMomentsVideos({ notify: { flash, hold, clear }, onSavedPath: setExportedPath })
   const moreRef = useRef<HTMLDivElement | null>(null)
 
   // 滚动到底部附近时自动加载下一页朋友圈（懒加载分页）。
@@ -263,18 +269,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   /** 灯箱当前那张图的两个源；两个动作各取一个当首选（口径与理由见 `moments-actions.ts`）。 */
   const viewerLocalSrc = (): string => (curImg ? snsImgs[imgKey(curImg)] || '' : '')
   const viewerRemoteSrc = (): string => proxyableSrc(curImg?.url, curImg?.thumb) || ''
-
-  // Save the currently displayed image (data URL → download).
-  const saveCurrentImage = (): void => {
-    const src = pickImageSrc(viewerLocalSrc(), viewerRemoteSrc(), 'local')
-    if (!src) return
-    const a = document.createElement('a')
-    a.href = src
-    a.download = imageDownloadName(viewer?.index ?? 0, imageExtOf(src))
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
 
   // Copy the currently displayed image's source (CDN url preferred, else data URL).
   const copyCurrentLink = (): void => {
@@ -337,28 +331,20 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
               privacy={privacy}
               snsImgs={snsImgs} snsErrs={snsErrs}
               articleCovers={articleCovers}
-              expandedTextByCard={expandedTextByCard}
-              expandedSocialByCard={expandedSocialByCard}
-              commentCounts={commentCounts}
-              commentSortByCard={commentSortByCard}
+              expandedTextByCard={expandedTextByCard} expandedSocialByCard={expandedSocialByCard}
+              commentCounts={commentCounts} commentSortByCard={commentSortByCard}
               onlyMineComments={onlyMineComments}
               selfUsername={selfUsername}
-              videoSrcs={videoSrcs}
-              videoMeta={videoMeta}
-              setVideoMeta={setVideoMeta}
-              videoFailed={videoFailed}
-              videoErr={videoErr}
+              videoSrcs={videoSrcs} videoLoading={videoLoading} videoMeta={videoMeta}
+              setVideoMeta={setVideoMeta} videoFailed={videoFailed} videoErr={videoErr}
               mediaKeySpec={mediaKeySpec}
-              setViewer={setViewer}
-              setDetail={setDetail}
-              setAuthorFilter={setAuthorFilter}
-              setOnlyMineComments={setOnlyMineComments}
-              setCommentCounts={setCommentCounts}
-              setCommentSortByCard={setCommentSortByCard}
+              setViewer={setViewer} setDetail={setDetail} setAuthorFilter={setAuthorFilter}
+              setOnlyMineComments={setOnlyMineComments} setCommentCounts={setCommentCounts} setCommentSortByCard={setCommentSortByCard}
               toggleText={toggleText}
               toggleSocial={toggleSocial}
               copyText={copyText}
               loadVideo={loadVideo}
+              reportVideoError={reportVideoError}
               saveVideo={saveVideo}
               fullscreenVideo={fullscreenVideo}
               closeVideo={closeVideo}
@@ -396,11 +382,16 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
           insight={insight}
         />
       </Drawer>
+      <ExportProgressStatus
+        compact
+        state={videoExportState}
+        onCancel={() => { void cancelVideoExport() }}
+      />
       {notice && <div className={css.hint}>{notice}</div>}
       {exportedPath && (
         <div className={css.exportResult}>
           <span className={css.exportResultPath} title={exportedPath}>{exportedPath}</span>
-          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).then((r) => { if (!r.ok) hold(r.error ?? '无法打开文件') }).catch(() => { hold('无法打开文件') }) }} {...desktopActionProps()}>打开导出文件</button>
+          <button type="button" className={css.btn} onClick={() => { void revealExportPath(exportedPath, hold) }} {...desktopActionProps()}>打开文件目录</button>
         </div>
       )}
 
@@ -412,9 +403,21 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         curImg={curImg}
         snsImgs={snsImgs}
         copyCurrentLink={copyCurrentLink}
-        saveCurrentImage={saveCurrentImage}
         viewRotate={viewRotate}
         setViewRotate={setViewRotate}
+        videoSrcs={videoSrcs}
+        videoFailed={videoFailed}
+        videoErr={videoErr}
+        loadVideo={loadVideo}
+        closeVideo={closeVideo}
+        onLiveVideoSaved={(path, bytes) => {
+          setExportedPath(path)
+          flash('已保存实况原视频' + (bytes ? `（${String(Math.round(bytes / 1048576))} MB）` : ''))
+        }}
+        onImageSaved={(path, bytes) => {
+          setExportedPath(path)
+          flash('已保存朋友圈原图' + (bytes ? `（${String(Math.max(1, Math.round(bytes / 1024)))} KB）` : ''))
+        }}
       />
 
       {/* 单条动态详情 */}
@@ -426,18 +429,20 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         snsImgs={snsImgs}
         mediaKeySpec={mediaKeySpec}
         videoSrcs={videoSrcs}
+        videoLoading={videoLoading}
         videoMeta={videoMeta}
         setVideoMeta={setVideoMeta}
         videoFailed={videoFailed}
         videoErr={videoErr}
         loadVideo={loadVideo}
+        reportVideoError={reportVideoError}
         saveVideo={saveVideo}
         fullscreenVideo={fullscreenVideo}
         closeVideo={closeVideo}
       />
 
       <MomentsExportDialog
-        {...{ exportOpen, setExportOpen, authorFilter, author, search, mediaFilter, monthFilter, mineFilter, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo, expDir, pickDir, pickingDir, expImages, setExpImages, expZip, setExpZip, doExport, exporting }}
+        {...{ exportOpen, setExportOpen, authorFilter, author, search, mediaFilter, monthFilter, mineFilter, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo, expDir, pickDir, pickingDir, expImages, setExpImages, expZip, setExpZip, expIncludeImages, setExpIncludeImages, expIncludeVideos, setExpIncludeVideos, expIncludeLivePhotos, setExpIncludeLivePhotos, doExport, exportState, exporting, finishing, cancelExport }}
       />
     </div>
   )

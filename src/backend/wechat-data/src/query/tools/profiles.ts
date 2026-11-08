@@ -3,10 +3,9 @@
  *
  * ## 为什么要有 profile
  *
- * 同一套工具会被三个入口复用，但它们的数据边界不同：
+ * 同一套工具会被多个入口复用，但它们的数据边界不同：
  *   · 微信问答：可以查本机微信数据与当前知识库；
- *   · 会话内 AI 问答：**只能**查当前会话，跨会话结果就是泄漏；
- *   · ClawBot 自动回复：`kb-only`，禁止碰任何本机微信数据。
+ *   · 会话内 AI 问答：**只能**查当前会话，跨会话结果就是泄漏。
  *
  * 只在提示词里写「不要查别的会话」不够：模型可能选错工具、填错 username，
  * 甚至被外部消息诱导。所以白名单与范围必须落在**执行层**，而不是只过滤 schema。
@@ -31,7 +30,9 @@ import {
 import type { HybridSearchMode } from './search-hybrid-tool.ts'
 
 /** profile 标识（调用方用稳定字符串选择边界）。 */
-export type AnswerProfileId = 'wechat-ask' | 'session-ask' | 'clawbot-auto'
+export type AnswerProfileId =
+  | 'wechat-ask'
+  | 'session-ask'
 
 /** 一个问答入口的工具与数据边界。 */
 export interface AnswerProfile {
@@ -44,7 +45,7 @@ export interface AnswerProfile {
   allowWechatData: boolean
   /** 是否允许访问知识库。 */
   allowKnowledgeBase: boolean
-  /** `true` = 整个入口就是 kb-only（ClawBot）。 */
+  /** `true` = 整个入口只能使用知识库。 */
   kbOnly: boolean
   /** 是否要求执行上下文里必须有 kbId。 */
   requireKb: boolean
@@ -54,6 +55,12 @@ export interface AnswerProfile {
   hybridModes?: readonly HybridSearchMode[]
   /** 工具是否只读；未来若加入有副作用工具，重试器据此禁止自动重放。 */
   sideEffectTools?: readonly ToolName[]
+  /** 单次问答的工具循环硬上限；缺省沿用运行时的通用预算。 */
+  maxRounds?: number
+  /** 每轮最多执行的工具调用数；缺省沿用运行时的通用预算。 */
+  maxCallsPerRound?: number
+  /** 确定性兜底最多执行几个工具；缺省沿用运行时的通用预算。 */
+  maxFallbackCalls?: number
 }
 
 /** 会话内问答可用的工具：只覆盖「消息检索 + 上下文 + 聚合 + 混合兜底」。 */
@@ -65,9 +72,6 @@ const SESSION_TOOLS: readonly ToolName[] = [
   'aggregate_messages',
   'search_hybrid',
 ]
-
-/** ClawBot 唯一允许的工具。 */
-const CLAWBOT_TOOLS: readonly ToolName[] = ['search_kb']
 
 /** 微信问答的完整工具集：现有 13 个工具 + search_hybrid。 */
 const WECHAT_TOOLS: readonly ToolName[] = [
@@ -87,7 +91,7 @@ const WECHAT_TOOLS: readonly ToolName[] = [
   'search_kb',
 ]
 
-/** 三个入口的边界定义。 */
+/** 各入口的边界定义。 */
 export const ANSWER_PROFILES: Readonly<Record<AnswerProfileId, AnswerProfile>> = {
   'wechat-ask': {
     id: 'wechat-ask',
@@ -109,16 +113,11 @@ export const ANSWER_PROFILES: Readonly<Record<AnswerProfileId, AnswerProfile>> =
     requireKb: false,
     forceUsername: true,
     hybridModes: ['messages'],
-  },
-  'clawbot-auto': {
-    id: 'clawbot-auto',
-    label: 'ClawBot 集群 AI 自动回复',
-    allowedTools: CLAWBOT_TOOLS,
-    allowWechatData: false,
-    allowKnowledgeBase: true,
-    kbOnly: true,
-    requireKb: true,
-    forceUsername: false,
+    // 会话范围已经锁定，正常问题 1-2 次调用即可；不允许模型继续围绕同一
+    // 会话反复换词检索，避免一次回答拖成多轮长链路。
+    maxRounds: 2,
+    maxCallsPerRound: 3,
+    maxFallbackCalls: 2,
   },
 }
 
@@ -126,13 +125,12 @@ export const ANSWER_PROFILES: Readonly<Record<AnswerProfileId, AnswerProfile>> =
 export const ALL_ANSWER_PROFILES: readonly AnswerProfile[] = [
   ANSWER_PROFILES['wechat-ask'],
   ANSWER_PROFILES['session-ask'],
-  ANSWER_PROFILES['clawbot-auto'],
 ]
 
-/** 取 profile（不存在时回退到权限最小的 clawbot-auto，而不是全量权限）。 */
+/** 取 profile（不存在时回退到权限最小的现存 profile，而不是全量权限）。 */
 export function getAnswerProfile(id: string): AnswerProfile {
   const found = (ANSWER_PROFILES as Record<string, AnswerProfile | undefined>)[id]
-  return found ?? ANSWER_PROFILES['clawbot-auto']
+  return found ?? ANSWER_PROFILES['session-ask']
 }
 
 /** 工具是否在该 profile 的白名单内（纯判断，不执行）。 */
@@ -555,7 +553,7 @@ export async function runProfileTool(
   return runTool(buildProfileTools(profile, tools), name, args ?? {}, ctx)
 }
 
-/** profile 的数据面描述（写进日志/依据行，避免把 kb-only 说成全库）。 */
+/** profile 的数据面描述（写进日志/依据行，避免把仅知识库范围说成全库）。 */
 export function profileDataScope(profileRef: AnswerProfile | AnswerProfileId): {
   wechatDataEnabled: boolean
   kbOnly: boolean

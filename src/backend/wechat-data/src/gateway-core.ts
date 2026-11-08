@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 227 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 224 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -32,7 +32,7 @@ import { createAskDeepRemotes } from './remotes/askdeep.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
-import type { StreamControl } from './query/zip.ts'
+import type { ManagedStreamControl } from './gateway-jobs.ts'
 import { getConfig } from './query/config.ts'
 import { recordExport } from './query/export-history.ts'
 import { recordAsk } from './query/ask-history.ts'
@@ -45,10 +45,10 @@ import {
 } from './query/kb/model-config.ts'
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts'
-import type { AnswerRuntimeEmitStage } from './query/answer-runtime/types.ts'
+import type { AnswerReasoningEmitter } from './query/answer-runtime/types.ts'
 import { recordOperation } from './query/operation-log.ts'
 import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
-import { publishDataRevision } from './query/sync-status.ts'
+import { publishDataRevision, readDataRevision } from './query/sync-status.ts'
 import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
 import { createSummaryScheduler, type SummaryScheduler } from './gateway-scheduler.ts'
@@ -64,6 +64,12 @@ import { PREWARM_PROBE_MS, prewarmBudgetMs, pumpSnsDecodeCache } from './query/s
 import { prewarmAfterInit, prewarmIsNotable } from './query/startup-prewarm.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
 import { AskCatalogCache } from './gateway-ask-catalog.ts'
+import {
+  makeAskDeltaEmitter,
+  makeAskReasoningEmitter,
+  makeAskStageEmitter,
+} from './gateway-core-ask-events.ts'
+import { cleanupMessageListAttachmentSpool } from './query/message-list-store.ts'
 
 /** 网关的「核」：状态、生命周期、共享私有辅助与 16 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export abstract class GatewayCore extends TypertRemoteService {
@@ -192,7 +198,7 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
    * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
    */
-  protected streamControl(jobId?: string): StreamControl {
+  protected streamControl(jobId?: string): ManagedStreamControl {
     return streamControlFor(this._streamJobs, (detail) => { this._ctx.emit(EXPORT_PROGRESS_EVENT, detail) }, jobId)
   }
 
@@ -200,25 +206,26 @@ export abstract class GatewayCore extends TypertRemoteService {
    * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
    * @param jobId - 任务标识。
    * @param error - 失败/取消原因；成功时省略。
+   * @param token - 本轮代次；旧任务晚到的收尾不会误伤复用同一 jobId 的新任务。
+   * @param canceled - 是否明确为用户取消。
    */
-  protected finishStreamJob(jobId: string, error?: string): void {
-    finishStreamJobIn(this._streamJobs, jobId, error)
+  protected finishStreamJob(jobId: string, error?: string, token?: symbol, canceled?: boolean): void {
+    finishStreamJobIn(this._streamJobs, jobId, error, token, canceled)
   }
-
-  /**
-   * 子类钩子：网关构造完成后（`setImmediate` 里）拉起 ClawBot 接收通道
-   * （体在 `gateway-clawbot.ts`；默认实现什么都不做 —— ClawBot 组装在更派生的层）。
-   */
-  protected bootClawbotChannel(): void { /* 默认无 */ }
 
   /**
    * 子类钩子：任务触发扫描的一拍（体在 `gateway-taskcenter.ts`；默认实现什么都不做 ——
    * 任务信息域的组装在更派生的层）。
    *
-   * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。与 `bootClawbotChannel` 分开的理由：那个是「拉起长轮询」，
-   * 这个是「周期扫描」，生命周期与失败语义都不同（前者启动一次，后者每拍都可能失败）。
+   * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。
    */
   protected scanTaskTriggersBackground(): void { /* 默认无 */ }
+
+  /**
+   * 子类钩子：会话级 AI 回复扫描的一拍（体在 `gateway-chat-ai-reply.ts`）。
+   * 与任务触发扫描分开，避免 AI 模型/投递延迟影响关键词任务。
+   */
+  protected scanChatAiRepliesBackground(): void { /* 默认无 */ }
 
   constructor(ctx: Context) {
     super(ctx, 'wechatData')
@@ -245,9 +252,10 @@ export abstract class GatewayCore extends TypertRemoteService {
       // 对外修订（2026-10-18）：心跳级轻量读，renderer 轮询它决定要不要拉消息增量。
       // 必须在 emit 之前发布：事件到达前端时，前端马上读修订就能读到同一拍。
       publishDataRevision(synced)
+      const revision = readDataRevision()
       // 事件先发（2026-10-18）：聊天窗口/会话列表的可见延迟只取决于这一行；
       // 归档、SNS 预热、密钥解析都排在它后面，不许挡在通知前面。
-      try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
+      try { ctx.emit('wechat-data/updated', revision) } catch { /* event best-effort */ }
       /**
        * 任务触发扫描（2026-10-19 提速）：新分片到达即刻扫，不再等 30s 定时器。
        * 放在 `emit` 之后 + `setTimeout(0)`：聊天刷新事件先出去，扫描的 SQL 不挡它；
@@ -257,6 +265,9 @@ export abstract class GatewayCore extends TypertRemoteService {
         setTimeout(() => {
           try { this.scanTaskTriggersBackground() } catch (e) {
             console.warn('[task-trigger] 扫描触发失败:', (e as Error).message)
+          }
+          try { this.scanChatAiRepliesBackground() } catch (e) {
+            console.warn('[chat-ai-reply] 扫描触发失败:', (e as Error).message)
           }
         }, 0)
       }
@@ -305,6 +316,15 @@ export abstract class GatewayCore extends TypertRemoteService {
     // 共用一颗时任何一侧的异常/长耗时都会把另一侧一起拖住。
     const taskScanTimer = setInterval(() => { this.scanTaskTriggersBackground() }, SYNC_INTERVAL_MS)
     ctx.effect(() => () => { clearInterval(taskScanTimer) }, 'wechat-data: task trigger scanner')
+    // AI 回复独立兜底节拍：WAL 监听不可用时仍能处理新消息。
+    const aiReplyTimer = setInterval(() => { this.scanChatAiRepliesBackground() }, SYNC_INTERVAL_MS)
+    ctx.effect(() => () => { clearInterval(aiReplyTimer) }, 'wechat-data: chat ai reply scanner')
+    // 本机消息列表附件 spool 每天做一次低频清理；只删 7 天且无记录引用的文件。
+    void cleanupMessageListAttachmentSpool(decrypted).catch(() => undefined)
+    const attachmentCleanupTimer = setInterval(() => {
+      void cleanupMessageListAttachmentSpool(decrypted).catch(() => undefined)
+    }, 24 * 60 * 60 * 1000)
+    ctx.effect(() => () => { clearInterval(attachmentCleanupTimer) }, 'wechat-data: message attachment cleanup')
     // 知识库文件库的崩溃恢复：把上一个进程留下的 parsing / chunking / embedding 打回 queued。
     // **只在启动时做这一次** —— `recoverInterrupted` 自己按数据根记住「本进程已做过」，
     // 重复调用直接跳过。把这件事放进「读列表」的路径是这类功能最常见的走捷径写法，
@@ -359,20 +379,6 @@ export abstract class GatewayCore extends TypertRemoteService {
       }
     }).catch((e: unknown) => {
       console.warn('[kb-queue] 启动清扫异常：' + (e instanceof Error ? e.message : String(e)))
-    })
-    /**
-     * ClawBot 接收通道：绑定后随网关常驻（收消息是宿主职责，不该等用户打开面板）。
-     *
-     * 放进 `setImmediate` 的理由与上面的预热同款 —— 启动路径不该为了「读一次绑定库、
-     * 起一条长轮询」多等一下；晚一拍也确保继承链上的组装槽已就绪。
-     * 未绑定/无凭证时钩子内部直接返回，**不会有任何出网**。
-     */
-    setImmediate(() => {
-      try {
-        this.bootClawbotChannel()
-      } catch (e) {
-        console.warn('[clawbot] 通道启动失败：' + (e instanceof Error ? e.message : String(e)))
-      }
     })
   }
 
@@ -577,7 +583,7 @@ export abstract class GatewayCore extends TypertRemoteService {
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       recordExport: (input) => this.recordExport(input),
       streamControl: (jobId) => this.streamControl(jobId),
-      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      finishStreamJob: (jobId, error, token, canceled) => this.finishStreamJob(jobId, error, token, canceled),
       normalizeJobId: (jobId) => normalizeJobId(jobId),
       streamJobs: this._streamJobs,
     }))
@@ -612,7 +618,7 @@ export abstract class GatewayCore extends TypertRemoteService {
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       streamControl: (jobId) => this.streamControl(jobId),
-      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      finishStreamJob: (jobId, error, token, canceled) => this.finishStreamJob(jobId, error, token, canceled),
       normalizeJobId: (jobId) => normalizeJobId(jobId),
     }))
   }
@@ -681,6 +687,8 @@ export abstract class GatewayCore extends TypertRemoteService {
       selfUsername: () => this.selfUsername(),
       getSchedBusy: () => this.summaryScheduler().busy(),
       setSchedBusy: (v) => { this.summaryScheduler().setBusy(v) },
+      makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
+      kbModel: (kbId, role) => this.kbModel(kbId, role),
     }))
   }
 
@@ -690,7 +698,7 @@ export abstract class GatewayCore extends TypertRemoteService {
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       streamControl: (jobId) => this.streamControl(jobId),
-      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      finishStreamJob: (jobId, error, token, canceled) => this.finishStreamJob(jobId, error, token, canceled),
       normalizeJobId: (jobId) => normalizeJobId(jobId),
       ctx: () => this._ctx,
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
@@ -877,16 +885,7 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @returns 增量回调（text 为**已生成的全文**）。
    */
   protected makeDeltaEmitter(streamId?: string): ((text: string) => void) | undefined {
-    const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
-    if (!id) return undefined
-    const ctx = this._ctx
-    let last = 0
-    return (text: string): void => {
-      const now = Date.now()
-      if (now - last < 80) return
-      last = now
-      try { ctx.emit('wechat-ask/delta', { id, text }) } catch { /* 事件尽力而为，失败不影响生成 */ }
-    }
+    return makeAskDeltaEmitter(this._ctx, streamId)
   }
 
   /**
@@ -900,19 +899,11 @@ export abstract class GatewayCore extends TypertRemoteService {
    * 后端此前把 `reasoning-delta` 直接丢掉（`runChat` 只认 `text-delta`），
    * 于是界面上永远看不到思考 —— 不是没生成，是没接。
    * @param streamId - 客户端生成的流式标识；为空表示不推送。
-   * @returns 增量回调（text 为**已生成的思考全文**）。
+   * @returns 分段快照发射器；回调接收 `AnswerReasoningMeta`，并带 flush/dispose。
+   *          gateway 事件中的旧字段 `text` 聚合全部分段，`segmentText` 保留当前分段全文。
    */
-  protected makeReasoningEmitter(streamId?: string): ((text: string) => void) | undefined {
-    const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
-    if (!id) return undefined
-    const ctx = this._ctx
-    let last = 0
-    return (text: string): void => {
-      const now = Date.now()
-      if (now - last < 80) return
-      last = now
-      try { ctx.emit('wechat-ask/reasoning', { id, text }) } catch { /* 尽力而为 */ }
-    }
+  protected makeReasoningEmitter(streamId?: string): AnswerReasoningEmitter | undefined {
+    return makeAskReasoningEmitter(this._ctx, streamId)
   }
 
   /**
@@ -927,13 +918,8 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @param streamId - 客户端生成的流式标识；为空表示不推送。
    * @returns 阶段回调。
    */
-  protected makeStageEmitter(streamId?: string): AnswerRuntimeEmitStage | undefined {
-    const id = typeof streamId === 'string' ? streamId.slice(0, 64) : ''
-    if (!id) return undefined
-    const ctx = this._ctx
-    return (stage): void => {
-      try { ctx.emit('wechat-ask/stage', { id, ...stage }) } catch { /* 尽力而为 */ }
-    }
+  protected makeStageEmitter(streamId?: string): ReturnType<typeof makeAskStageEmitter> {
+    return makeAskStageEmitter(this._ctx, streamId)
   }
 
   /**
@@ -975,6 +961,9 @@ export abstract class GatewayCore extends TypertRemoteService {
         insufficient: result.insufficient === true, withheld: result.withheld === true,
         runtimeStatus: result.status, statusReason: result.statusReason, synthesisError: result.synthesisError,
         evidence: result.evidence, toolCalls: result.toolCalls, resources: result.resources,
+        ...(result.reasoning === undefined ? {} : { reasoning: result.reasoning }),
+        ...(result.reasoningSegments === undefined ? {} : { reasoningSegments: result.reasoningSegments }),
+        ...(result.stages === undefined ? {} : { stages: result.stages }),
         ...(result.retrieval ? { retrieval: result.retrieval } : {}),
         elapsedMs,
       })

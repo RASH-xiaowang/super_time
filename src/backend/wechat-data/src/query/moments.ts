@@ -16,6 +16,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
 import { stripCdata } from './parse-xml.ts'
+import { displayNameForUsername } from './message-identity.ts'
 import {
   readArchivedAuthors,
   readArchivedMomentHashes,
@@ -52,6 +53,8 @@ export interface MomentMedia {
   id?: string
   /** Timeline <id> (SnsDataItem/TimelineObject id). */
   timelineId?: string
+  /** 这张静态图附带的实况视频；普通图片没有该字段。 */
+  livePhoto?: MomentLivePhoto
 }
 
 /** One video media entry parsed from the XML. */
@@ -65,6 +68,18 @@ export interface MomentVideo {
   id?: string
   /** Timeline <id> (SnsDataItem/TimelineObject id). */
   timelineId?: string
+}
+
+/**
+ * 实况照片内嵌的视频段（`<LivePhoto><liveMedia>`）。
+ *
+ * 实况照片在朋友圈 XML 里**不是一个独立的 `<media>`**：外层 `<media>` 是静态图，
+ * 动态部分嵌在它的 `<LivePhoto><liveMedia>` 里。字段口径与普通视频一致，
+ * `stillImageTimeMs` 是微信给的静态帧时刻（用于播放时对齐封面）。
+ */
+export interface MomentLivePhoto extends MomentVideo {
+  /** `<liveStillImageTimeMs>`，单位毫秒。 */
+  stillImageTimeMs?: number
 }
 
 /** One like entry. */
@@ -191,6 +206,28 @@ function xmlTagAttr(xml: string, tag: string, attr: string): string | null {
   return tagStr.slice(v, e)
 }
 
+/**
+ * 取一个元素的**原始内部 XML**（不剥 CDATA、不做实体反转义）。
+ *
+ * 实况照片必须按层级取块：外层 `<media>` 里同时有图片的 `<url>/<enc>` 和
+ * `<LivePhoto><liveMedia>` 里视频的 `<url>/<enc>`。`xmlTagText/xmlTagAttr`
+ * 只找第一个同名标签，直接作用于外层块会把视频字段误当成图片字段（或反过来）；
+ * 所以先用本函数精确切出嵌套块，再在块内解析。
+ */
+function xmlElementInner(xml: string, tag: string): string | null {
+  const openExact = '<' + tag + '>'
+  const openAttr = '<' + tag + ' '
+  const exactAt = xml.indexOf(openExact)
+  const attrAt = xml.indexOf(openAttr)
+  const start = exactAt >= 0 ? exactAt : attrAt
+  if (start < 0) return null
+  const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
+  if (contentStart <= start) return null
+  const close = xml.indexOf('</' + tag + '>', contentStart)
+  if (close < 0) return null
+  return xml.slice(contentStart, close)
+}
+
 /** Extract text of the first nested tag inside a parent tag. */
 function xmlNestedText(xml: string, parent: string, child: string): string | null {
   const open = '<' + parent + '>'
@@ -256,6 +293,40 @@ function mediaBlocks(xml: string): string[] {
 function isVideoUrl(u: string): boolean {
   const l = u.toLowerCase()
   return l.includes('snsvideodownload') || l.includes('video.qq.com') || l.includes('.mp4')
+}
+
+/**
+ * 从外层图片 `<media>` 中提取实况视频。
+ *
+ * 真实 XML（2026-11 本机 235 条样本）形如：
+ * `<media>…图片 url/enc…<LivePhoto><liveMedia>…视频 url/enc…</liveMedia></LivePhoto></media>`。
+ * 视频的 `<id>` 是占位值 `0`，不能拿它当媒体 id；能用的是视频 `<url md5>` 与
+ * `<enc key>`，这与现有 `getSnsVideoDataUrl` 的本机/远程两条通路完全对齐。
+ */
+function parseMomentLivePhoto(inner: string, timelineId?: string): MomentLivePhoto | undefined {
+  const livePhotoXml = xmlElementInner(inner, 'LivePhoto') ?? xmlElementInner(inner, 'livePhoto')
+  if (livePhotoXml === null) return undefined
+  const liveXml = xmlElementInner(livePhotoXml, 'liveMedia')
+    ?? xmlElementInner(livePhotoXml, 'LiveMedia')
+    ?? livePhotoXml
+
+  const url = tagTextFirst(liveXml, ['url', 'Url'])
+  const md5 = xmlTagAttr(liveXml, 'url', 'md5') ?? ''
+  if (url === '' && md5 === '') return undefined
+
+  const thumb = tagTextFirst(liveXml, ['thumb', 'Thumb', 'coverUrl', 'coverurl'])
+  const key = xmlTagAttr(liveXml, 'enc', 'key')
+    ?? xmlTagAttr(liveXml, 'thumb', 'key')
+    ?? xmlTagAttr(liveXml, 'url', 'key')
+    ?? ''
+  const duration = Number.parseFloat(tagTextFirst(liveXml, ['videoDuration'])) || 0
+  const stillImageTimeMs = Number.parseFloat(tagTextFirst(liveXml, ['liveStillImageTimeMs']))
+  const live: MomentLivePhoto = { url, thumb, key, md5, duration }
+  if (Number.isFinite(stillImageTimeMs) && stillImageTimeMs >= 0) live.stillImageTimeMs = stillImageTimeMs
+  if (timelineId) live.timelineId = timelineId
+  const liveId = tagTextFirst(liveXml, ['id', 'Id'])
+  if (liveId !== '' && liveId !== '0') live.id = liveId
+  return live
 }
 
 function enterpriseNameOf(enterpriseNames: ReadonlyMap<string, string>, username: string): string | undefined {
@@ -329,14 +400,14 @@ export function parseSnsXml(xml: string): {
 } {
   const text = tagTextFirst(xml, ['contentDesc', 'ContentDesc'])
   const createTime = Number.parseInt(tagTextFirst(xml, ['createTime', 'CreateTime']), 10) || 0
-  const mediaCount = xml.split('<media>').length - 1 + xml.split('<media ').length - 1
-  const hasVideo = xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')
-  const mediaDesc = mediaCount === 0 ? '' : hasVideo ? '视频' : `图片×${mediaCount}`
+  const blocks = mediaBlocks(xml)
+  const mediaCount = blocks.length
 
   const images: MomentMedia[] = []
   const videos: MomentVideo[] = []
+  let hasVideo = false
   const timelineId = tagTextFirst(xml, ['id', 'Id']) || undefined
-  for (const inner of mediaBlocks(xml)) {
+  for (const inner of blocks) {
     const url = tagTextFirst(inner, ['url', 'Url', 'cdnUrl', 'cdnurl'])
     const thumb = tagTextFirst(inner, ['thumb', 'Thumb', 'cdnThumbUrl', 'cdnthumburl', 'thumbUrl', 'thumburl', 'coverUrl', 'coverurl'])
     const key = xmlTagAttr(inner, 'enc', 'key') ?? xmlTagAttr(inner, 'thumb', 'key') ?? xmlTagAttr(inner, 'url', 'key') ?? ''
@@ -345,18 +416,25 @@ export function parseSnsXml(xml: string): {
     const token = xmlTagAttr(inner, 'url', 'token') ?? xmlTagAttr(inner, 'thumb', 'token') ?? ''
     const mediaId = tagTextFirst(inner, ['id', 'Id']) || undefined
     const duration = Number.parseFloat(tagTextFirst(inner, ['videoDuration'])) || 0
-    if (url && isVideoUrl(url)) {
+    // The first <type> belongs to the outer media block; the nested <liveMedia><type>6</type>
+    // must not turn a live photo into a standalone video tile.
+    const mediaType = Number.parseInt(tagTextFirst(inner, ['type', 'Type']), 10) || 0
+    if (url && (mediaType === 4 || mediaType === 6 || mediaType === 15 || isVideoUrl(url))) {
       const videoEntry: MomentVideo = { url, thumb, key, md5, duration }
       if (mediaId) videoEntry.id = mediaId
       if (timelineId) videoEntry.timelineId = timelineId
       videos.push(videoEntry)
+      hasVideo = true
     } else if (url) {
       const mediaEntry: MomentMedia = { thumb, url, key, md5, token }
       if (mediaId) mediaEntry.id = mediaId
       if (timelineId) mediaEntry.timelineId = timelineId
+      const livePhoto = parseMomentLivePhoto(inner, timelineId)
+      if (livePhoto !== undefined) mediaEntry.livePhoto = livePhoto
       images.push(mediaEntry)
     }
   }
+  const mediaDesc = mediaCount === 0 ? '' : hasVideo ? '视频' : `图片×${mediaCount}`
   const location = xmlTagAttr(xml, 'location', 'poiName') ?? xmlTagAttr(xml, 'location', 'poiname') ?? ''
   const city = xmlTagAttr(xml, 'location', 'city') ?? ''
   const country = xmlTagAttr(xml, 'location', 'country') ?? ''
@@ -498,6 +576,19 @@ interface LiveMomentRow {
 /** 一次同步节流：同一目录 1.5s 内不重复读全表（分页/增量刷新会连着调）。 */
 const ARCHIVE_SYNC_GAP_MS = 1_500
 const LAST_ARCHIVE_SYNC = new Map<string, number>()
+/**
+ * 解析 payload 的版本盐。
+ *
+ * 归档同步原本只看 XML 的 sha1；解析器升级后线上 XML 没变 ⇒ 旧 payload 永远不会
+ * 重算，新字段（本次的 `livePhoto`）在已有安装上永远不可见。把版本写进 hash，
+ * 升级后每条线上动态只重放一次，之后恢复按内容去重。
+ */
+const ARCHIVE_PARSE_VERSION = 'moments-parser-2026-11-02-live-photo-v1'
+
+/** 归档去重 hash：解析器版本 + 原始 XML。 */
+function momentContentHash(xml: string): string {
+  return createHash('sha1').update(ARCHIVE_PARSE_VERSION).update('\u0000').update(xml).digest('hex')
+}
 
 /** 线上 sns.db 是否存在（含表结构探测结果）。 */
 function liveMomentsAvailable(dbPath: string): { tid: string; uname: string; content: string } | null {
@@ -537,17 +628,50 @@ function readLiveMomentRows(decryptedDir: string): LiveMomentRow[] | null {
   }
 }
 
-/** 按 key 去重（保留先出现的，用于合并归档里比线上多出来的点赞/评论/图片）。 */
-function unionBy<T>(oldList: readonly T[], nextList: readonly T[], keyOf: (item: T) => string): T[] {
-  const seen = new Set<string>()
-  const out: T[] = []
-  for (const item of [...oldList, ...nextList]) {
+/**
+ * 按 key 去重，保留 old 的顺序与「线上已删除但归档里还有」的条目。
+ *
+ * 同一 key 同时存在时默认仍保留 old（防撤回）；调用方可以传 `mergeSame`，把
+ * 新解析器补出的同一条元数据合并进来。图片的实况视频正需要这条路径：
+ * old-first 如果只是丢弃 next，旧归档里的图片会永远没有 `livePhoto`。
+ */
+function unionBy<T>(
+  oldList: readonly T[],
+  nextList: readonly T[],
+  keyOf: (item: T) => string,
+  mergeSame?: (oldItem: T, nextItem: T) => T,
+): T[] {
+  const byKey = new Map<string, T>()
+  for (const item of oldList) {
     const key = keyOf(item)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(item)
+    if (!byKey.has(key)) byKey.set(key, item)
   }
-  return out
+  for (const item of nextList) {
+    const key = keyOf(item)
+    const old = byKey.get(key)
+    if (old === undefined) byKey.set(key, item)
+    else if (mergeSame !== undefined) byKey.set(key, mergeSame(old, item))
+  }
+  return [...byKey.values()]
+}
+
+/**
+ * 同一条图片在归档与线上都出现时，以更完整的线上字段补全旧快照。
+ *
+ * 不改图片的身份（id/md5/顺序仍由归档决定），只覆盖非空元数据，并优先采用
+ * 新解析器从 `<LivePhoto>` 提取出的视频段。
+ */
+function mergeMomentMedia(oldImage: MomentMedia, nextImage: MomentMedia): MomentMedia {
+  const merged: MomentMedia = { ...oldImage }
+  if (nextImage.thumb !== '') merged.thumb = nextImage.thumb
+  if (nextImage.url !== '') merged.url = nextImage.url
+  if (nextImage.key !== '') merged.key = nextImage.key
+  if (nextImage.md5 !== '') merged.md5 = nextImage.md5
+  if (nextImage.token !== undefined && nextImage.token !== '') merged.token = nextImage.token
+  if (nextImage.id !== undefined && nextImage.id !== '') merged.id = nextImage.id
+  if (nextImage.timelineId !== undefined && nextImage.timelineId !== '') merged.timelineId = nextImage.timelineId
+  if (nextImage.livePhoto !== undefined) merged.livePhoto = nextImage.livePhoto
+  return merged
 }
 
 /**
@@ -568,7 +692,12 @@ function mergeArchivedEntry(oldPayload: string, next: MomentEntry): MomentEntry 
     text: next.text === '' ? old.text : next.text,
     likes: unionBy(old.likes ?? [], next.likes, (l) => l.username + '|' + l.nickname),
     comments: unionBy(old.comments ?? [], next.comments, (c) => JSON.stringify(c)),
-    images: unionBy(old.images ?? [], next.images, (m) => (m.md5 || '') + '|' + (m.timelineId ?? '') + '|' + (m.id ?? '')),
+    images: unionBy(
+      old.images ?? [],
+      next.images,
+      (m) => (m.md5 || '') + '|' + (m.timelineId ?? '') + '|' + (m.id ?? ''),
+      mergeMomentMedia,
+    ),
     videos: unionBy(old.videos ?? [], next.videos, (v) => (v.md5 || '') + '|' + (v.timelineId ?? '') + '|' + (v.id ?? '')),
   }
   if (merged.location === '' && old.location !== '') merged.location = old.location
@@ -590,7 +719,7 @@ function buildMomentEntry(
 ): MomentEntry {
   const parsed = parseSnsXml(xml)
   const social = parseSnsLikesComments(xml)
-  const author = names.get(username) || parsed.nickname || username || '未知'
+  const author = displayNameForUsername(username, names, parsed.nickname)
   const entry: MomentEntry = {
     tid,
     username,
@@ -640,7 +769,7 @@ export function ensureMomentsArchiveFresh(decryptedDir: string, force = false): 
   const changedRows: Array<{ tid: string; username: string; content: string; contentHash: string; entry: MomentEntry }> = []
   for (const row of live) {
     if (row.tid === '' || row.content === '') continue
-    const contentHash = createHash('sha1').update(row.content).digest('hex')
+    const contentHash = momentContentHash(row.content)
     if (hashes !== null && hashes.get(row.tid) === contentHash) continue
     const entry = buildMomentEntry(row.tid, row.username, row.content, names, meta.enterpriseNames, '')
     changedRows.push({ tid: row.tid, username: row.username, content: row.content, contentHash, entry })
@@ -703,7 +832,7 @@ export function queryMoments(
         const entry = JSON.parse(row.payload) as MomentEntry
         entry.tid = row.tid
         entry.username = row.username
-        entry.author = names.get(row.username) || row.author || entry.author || '未知'
+        entry.author = displayNameForUsername(row.username, names, row.author || entry.author)
         applyEnterpriseNames(entry, meta.enterpriseNames)
         entry.is_self = row.username === self
         // 相对时间必须按「现在」重算：归档里存的是归档时刻的「3 天前」，一个月后就不对了。
@@ -736,7 +865,7 @@ export function queryMomentsAuthors(decryptedDir: string): Array<{ username: str
     const enterpriseName = enterpriseNameOf(meta.enterpriseNames, username)
     return {
       username,
-      name: names.get(username) || storedName || username || '未知',
+      name: displayNameForUsername(username, names, storedName),
       ...(enterpriseName !== undefined ? { enterpriseName } : {}),
       count,
     }

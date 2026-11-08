@@ -2,7 +2,7 @@
 /**
  * 验收矩阵的元测试：防止文档漂移。
  *
- * 矩阵是给三条问答入口共用的验收契约。若 profile 增减、异常名改动或阈值被
+ * 矩阵是给两个问答入口共用的验收契约。若 profile 增减、异常名改动或阈值被
  * 删掉，这里必须先红，而不是等到运行时跑出一条“看起来还行”的答案。
  */
 import { describe, expect, it } from 'vitest'
@@ -45,7 +45,6 @@ interface AcceptanceMatrix {
   version: number
   statusSemantics: Record<string, { meaning: string, values: unknown[] }>
   profiles: Record<string, {
-    dataScope: string
     allowedTools: string[]
     forbiddenTools: string[]
     sessionScope: string
@@ -69,7 +68,7 @@ interface AcceptanceMatrix {
 }
 
 const data = matrix as unknown as AcceptanceMatrix
-const profileIds = ['wechat-ask', 'session-ask', 'clawbot-auto'] as const
+const profileIds = ['wechat-ask', 'session-ask'] as const
 const anomalyIds = [
   'empty',
   'tool_error',
@@ -102,7 +101,7 @@ describe('问答运行时验收矩阵', () => {
     }
   })
 
-  it('恰好覆盖三个 profile × 六类异常，且没有重复格', () => {
+  it('恰好覆盖两个 profile × 六类异常，且没有重复格', () => {
     expect(Object.keys(data.profiles).sort()).toEqual([...profileIds].sort())
     expect(Object.keys(data.anomalies).sort()).toEqual([...anomalyIds].sort())
     expect(data.matrix).toHaveLength(profileIds.length * anomalyIds.length)
@@ -171,21 +170,6 @@ describe('问答运行时验收矩阵', () => {
     }
   })
 
-  it('ClawBot 的矩阵格固定 kb-only，且白名单与 profile contract 一致', () => {
-    const clawbot = data.profiles['clawbot-auto']
-    expect(clawbot).toBeDefined()
-    if (!clawbot) return
-    expect(clawbot.dataScope).toBe('kb-only')
-    expect(clawbot.allowedTools).toEqual(['search_kb'])
-    expect(clawbot.sessionScope).toBe('none')
-    expect(clawbot.kbMode).toBe('required')
-    for (const cell of data.matrix.filter(item => item.profile === 'clawbot-auto')) {
-      // 每格必须至少点名知识库、search_kb 或“不得回退到消息工具”三者之一。
-      expect(cell.acceptance).toMatch(/知识库|search_kb|消息工具/)
-      expect(cell.acceptance).not.toContain('全库检索')
-    }
-  })
-
   it('六个异常都有可执行阈值，不是只有文字说明', () => {
     const required = [
       'intentScopeAccuracy',
@@ -203,7 +187,6 @@ describe('问答运行时验收矩阵', () => {
       'sixAnomalyCoverage',
       'toolLoopP95Ms',
       'latencyRegression',
-      'clawbotCitationViolations',
       'evidenceKeyStability',
       'profileWhitelistExactness',
     ]
@@ -218,7 +201,6 @@ describe('问答运行时验收矩阵', () => {
     expect(data.thresholds['sixAnomalyCoverage']?.value).toBe(1)
     expect(data.thresholds['sessionCrossScopeLeaks']?.value).toBe(0)
     expect(data.thresholds['zeroEvidenceFabrication']?.value).toBe(0)
-    expect(data.thresholds['clawbotCitationViolations']?.value).toBe(0)
   })
 
   it('质量阈值明确标记为尚未实测，且不以 pendingRuntime 掩盖缺口', () => {

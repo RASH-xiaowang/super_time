@@ -25,7 +25,7 @@ export declare function listBackups(decryptedDir: string): {
  * @param decryptedDir - decrypted data root.
  * @returns the created backup entry.
  */
-export declare function createBackup(decryptedDir: string): Promise<BackupEntry>;
+export declare function createBackup(decryptedDir: string, ctrl?: StreamControl): Promise<BackupEntry>;
 /**
  * Create an encrypted `.wcb` backup bundle.
  *

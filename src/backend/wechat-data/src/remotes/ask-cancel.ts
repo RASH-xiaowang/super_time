@@ -35,9 +35,18 @@ export interface AskCancelCtl {
  * @param rc - 持有槽位的宿主（gateway）。
  * @param jobId - 渲染层传进来的轮次标识（就是那轮的 streamId）。
  */
-export function beginAskCancel(rc: AskCancelHost, jobId?: string): AskCancelCtl {
+export function beginAskCancel(
+  rc: AskCancelHost,
+  jobId?: string,
+  externalSignal?: AbortSignal,
+): AskCancelCtl {
   const ctl = rc.askSignal(jobId)
-  const signal = ctl?.signal
+  const internalSignal = ctl?.signal
+  const signal = externalSignal === undefined
+    ? internalSignal
+    : internalSignal === undefined
+      ? externalSignal
+      : AbortSignal.any([internalSignal, externalSignal])
   const throwIfCanceled = (): void => {
     if (signal?.aborted === true) {
       throw Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' })

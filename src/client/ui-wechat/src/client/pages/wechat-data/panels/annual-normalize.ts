@@ -39,7 +39,7 @@ export interface NormalizedReview extends Omit<AnnualReviewShape, 'moments' | 'a
  * @returns 缓存键。
  */
 export function annualReviewCacheKey(year: number): string {
-  return `annual-review:v3:${String(year)}`
+  return `annual-review:v4:${String(year)}`
 }
 
 /** 五个新字段的空形状（`available:false` 表示"这个库没读到"，不是"是 0"）。 */

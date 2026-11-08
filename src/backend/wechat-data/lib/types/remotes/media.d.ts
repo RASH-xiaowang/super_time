@@ -2,6 +2,8 @@ import { type WxcdnQuota } from '../query/wxcdn-original.ts';
 import { type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts';
 import type { RemoteImageResult } from '../query/remote-image.ts';
 import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VoiceInfoResult } from '../types.ts';
+import { type SnsMediaInput } from '../query/export-sns-media.ts';
+import { type StreamControl } from '../query/zip.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -155,13 +157,64 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         url?: string;
         key?: string;
         dest: string;
-    }): Promise<{
+        jobId?: string;
+    }, ctrl?: StreamControl): Promise<{
         ok: boolean;
+        path?: string;
         bytes?: number;
+        format?: string;
+        source?: "local" | "cdn";
+        error?: string;
+    }>;
+    /**
+     * Save one Moments still image at its original quality.
+     *
+     * The long-term archive and decoded original cache are checked first; the
+     * CDN fallback is the `/0` original endpoint and its decrypted bytes must
+     * pass an image magic check before anything is written.
+     */
+    exportSnsImage(options: SnsMediaInput & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl): Promise<{
+        ok: boolean;
+        path?: string;
+        bytes?: number;
+        format?: string;
+        source?: "local" | "cdn";
+        error?: string;
+    }>;
+    /**
+     * Save one chat image after proving the decoded result is not a thumbnail.
+     * The existing best local tier and the user-authorized original fetch are
+     * tried first; if only a thumbnail remains, nothing is written.
+     */
+    exportChatImage(options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl): Promise<{
+        ok: boolean;
+        path?: string;
+        bytes?: number;
+        format?: string;
         source?: string;
         error?: string;
     }>;
     getFavoriteMediaDataUrl: (options: import("./media-favorites.ts").FavoriteMediaOptions) => ImageDataUrlResult;
+    exportFavoriteImage: (options: import("./media-favorites.ts").FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportFavoriteVideo: (options: import("./media-favorites.ts").FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportFavoriteFile: (options: import("./media-favorites.ts").FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
     getFileImageDataUrl: (options: {
         md5: string;
         thumbFirst?: boolean;
@@ -199,9 +252,55 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     }>;
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
+    exportChatVideo: (options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportChatFile: (options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportFileImage: (options: {
+        md5: string;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportFileVideo: (options: {
+        md5: string;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
+    exportFileAttachment: (options: {
+        fileName: string;
+        size?: number;
+        createTime?: number;
+        md5
+        /**
+         * 批量取表情时的**出网并发上限**（E1，2026-09-28）。
+         *
+         * 为什么是 8：与封面的 `COVER_CONCURRENCY`（`article-cover.ts`）取同一个数 ——
+         * 两条链的出网特性一样（都是向 CDN 取一张小图、失败可忽略），同一个数便于统一调参。
+         * 表情图比封面小得多，理论上可以更高，但**不为了跑分调高**：并发上去了对端更容易限流，
+         * 而这条链失败一次的代价是用户看到占位芯片。
+         */
+        /**
+         * 远程图片代理一次最多收多少个地址。
+         *
+         * 真正的取回上限（40 张）在 `query/remote-image.ts` 里；这一道只是**RPC 载荷护栏** ——
+         * 传进来一万个地址时，宁可在这里截断，也不要把几 MB 的字符串数组搬过进程边界。
+         */
+        ?: string;
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
     getVoiceInfo: (options: {
         username: string;
         localId: number;
+        svrId?: string;
     }) => VoiceInfoResult;
     getVoiceDataUrl: (options: {
         username?: string;

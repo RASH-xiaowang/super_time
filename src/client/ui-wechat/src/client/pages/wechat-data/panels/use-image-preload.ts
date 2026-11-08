@@ -22,6 +22,7 @@ import { useEffect, useRef } from 'react'
 import { apiGetImageDataUrlsBatch } from '../api.ts'
 import { renderKindOf, type MessageRenderItem } from '../utils/message-items.ts'
 import { recallImage, rememberImage } from '../image-cache.ts'
+import { useKeepAliveActive } from './keep-alive.tsx'
 
 export interface ImagePreloadOption {
   /** 会话 username；换会话作废在途预取。 */
@@ -35,14 +36,14 @@ export interface ImagePreloadOption {
 }
 
 /**
- * 预取余量（行）。8 行 ≈ 一屏多一点：滚一屏基本都能命中，又不至于把整个会话都拉下来。
- * 这个数字是「命中率 / 无谓请求」的折中，不是性能上限。
+ * 预取余量（行）。只多看两行：虚拟列表自身的 overscan 已经覆盖可见区，
+ * 外层再扩 8 行会在图片密集会话里一次拉起几十张图，直接抬高原生位图峰值。
  */
-export const LOOKAHEAD = 8
+export const LOOKAHEAD = 2
 /** 滚动停止多久后才开始预取（滚动中反复重置，避免打出一串半途作废的请求）。 */
 export const PREFETCH_DEBOUNCE_MS = 150
 /** 一次批量请求最多几项（与后端批量入口的量级一致；超出的分多批串行发）。 */
-const BATCH_LIMIT = 200
+const BATCH_LIMIT = 32
 
 /** 空闲调度：优先真空闲回调，退化为短延时（jsdom / 老内核没有 requestIdleCallback）。 */
 function onIdle(run: () => void): () => void {
@@ -64,8 +65,9 @@ function onIdle(run: () => void): () => void {
  */
 export function useImagePreload(option: ImagePreloadOption): void {
   const lookahead = option.lookahead ?? LOOKAHEAD
+  const active = useKeepAliveActive()
   /** 已经在飞的 key：跨 effect 重跑去重（滚动会不停重跑本 effect）。 */
-  const inflight = useRef<Set<string>>(new Set())
+  const inflight = useRef<Map<string, symbol>>(new Map())
   /** 换会话作废旧结果（与 use-inline-analysis 同一手法）。 */
   const epoch = useRef(0)
   const { talker, items, virtualizer } = option
@@ -76,9 +78,19 @@ export function useImagePreload(option: ImagePreloadOption): void {
   }, [talker])
 
   useEffect(() => {
-    if (talker === '') return
+    if (talker === '' || !active) return
     let cancelled = false
     const myEpoch = epoch.current
+    const myToken = Symbol('image-preload')
+    const claimed: string[] = []
+    let disposeIdle: (() => void) | null = null
+
+    /** 只释放本轮占住的键；旧轮次不得删掉新轮次刚登记的同名任务。 */
+    const releaseClaims = (): void => {
+      for (const key of claimed) {
+        if (inflight.current.get(key) === myToken) inflight.current.delete(key)
+      }
+    }
 
     const timer = window.setTimeout(() => {
       // 1) 收集：可见窗口 ± lookahead 内的图片消息，且还没进缓存、也不在飞
@@ -103,26 +115,35 @@ export function useImagePreload(option: ImagePreloadOption): void {
       if (targets.length === 0) return
 
       // 2) 空闲时发（不与视口内的请求抢后端）
-      for (const t of targets) inflight.current.add(`${t.username}:${String(t.localId)}`)
-      onIdle(() => {
-        if (cancelled || myEpoch !== epoch.current) return
+      for (const t of targets) {
+        const key = `${t.username}:${String(t.localId)}`
+        inflight.current.set(key, myToken)
+        claimed.push(key)
+      }
+      disposeIdle = onIdle(() => {
+        if (cancelled || myEpoch !== epoch.current) {
+          releaseClaims()
+          return
+        }
         void (async () => {
-          for (let i = 0; i < targets.length; i += BATCH_LIMIT) {
-            if (cancelled || myEpoch !== epoch.current) break
-            const chunk = targets.slice(i, i + BATCH_LIMIT)
-            try {
-              const rows = await apiGetImageDataUrlsBatch(chunk)
-              for (const row of rows) {
-                if (row.url) rememberImage(talker, row.localId, { url: row.url, thumb: row.thumb === true })
+          try {
+            for (let i = 0; i < targets.length; i += BATCH_LIMIT) {
+              if (cancelled || myEpoch !== epoch.current) break
+              const chunk = targets.slice(i, i + BATCH_LIMIT)
+              try {
+                const rows = await apiGetImageDataUrlsBatch(chunk)
+                if (cancelled || myEpoch !== epoch.current) break
+                for (const row of rows) {
+                  if (row.url) rememberImage(talker, row.localId, { url: row.url, thumb: row.thumb === true })
+                }
+              } catch {
+                // 预取失败就当没预取：**不写缓存**（下次滚到还会再试一次），也不打扰用户。
+                // 这与「组件自己那条路径」的错误呈现分工不同 —— 那里是用户正看着的图，必须说话。
               }
-            } catch {
-              // 预取失败就当没预取：**不写缓存**（下次滚到还会再试一次），也不打扰用户。
-              // 这与「组件自己那条路径」的错误呈现分工不同 —— 那里是用户正看着的图，必须说话。
             }
+          } finally {
+            releaseClaims()
           }
-          // 收尾：整批从 inflight 摘掉（无论成功、失败还是中途取消）。
-          // 注意**失败的条目不写缓存**，所以下次滚到还会再试一次 —— 预取失败不该被记成「已知没图」。
-          for (const t of targets) inflight.current.delete(`${t.username}:${String(t.localId)}`)
         })()
       })
     }, PREFETCH_DEBOUNCE_MS)
@@ -130,6 +151,8 @@ export function useImagePreload(option: ImagePreloadOption): void {
     return () => {
       cancelled = true
       window.clearTimeout(timer)
+      disposeIdle?.()
+      releaseClaims()
     }
-  }, [talker, items, virtualizer, lookahead])
+  }, [talker, items, virtualizer, lookahead, active])
 }

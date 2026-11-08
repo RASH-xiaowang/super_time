@@ -38,7 +38,9 @@ const ROOT = findRoot(HERE)
 
 const panel = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
 const css = readFileSync(join(HERE, 'graph.module.css'), 'utf8')
-const model = readFileSync(join(HERE, 'graph-model.ts'), 'utf8')
+const model = ['graph-model.ts', 'graph-settings.ts']
+  .map((file) => readFileSync(join(HERE, file), 'utf8'))
+  .join('\n')
 const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const budget = readFileSync(join(HERE, 'graph-budget.ts'), 'utf8')
 
@@ -74,7 +76,21 @@ describe('首字连边：画布与建模接线', () => {
   })
 
   it('边类型联合里含 initial，并说明它的语义', () => {
-    expect(model).toMatch(/kind:\s*'intimacy' \| 'common' \| 'wiki' \| 'source' \| 'class' \| 'initial'/)
+    expect(model).toMatch(/export type GEdgeKind\s*=[\s\S]*?\| 'initial'/)
+    expect(model).toContain('initial=首字相同')
+  })
+
+  it('后端扩展的互动类型有独立绿实线语义，图例与画布主题同源', () => {
+    expect(model).toMatch(/group_owner:\s*'common'/)
+    expect(model).toMatch(/invite:\s*'social'/)
+    expect(model).toMatch(/reply:\s*'social'/)
+    expect(model).toMatch(/mention_user:\s*'social'/)
+    expect(model).toContain("social: '社交互动'")
+    expect(panel).toContain('绿实线 = 好友 / 邀请 / 回复 / @提及等互动')
+    expect(panel).toContain('css.legendLineGreen')
+    expect(css).toMatch(/\.legendLineGreen\s*\{[^}]*var\(--nm-green\)/)
+    expect(canvas).toMatch(/theme\.edgeSocial/)
+    expect((canvas.match(/edgeSocial:/g) ?? []).length).toBeGreaterThanOrEqual(3)
   })
 
   it('★ 建模层与绘制层共用同一个 edgeBudget（各写一份就会「有边没画」）', () => {
@@ -94,21 +110,23 @@ describe('首字连边：画布与建模接线', () => {
     expect(model).toMatch(/s\.mode === 'people' && s\.firstChar/)
   })
 
-  it('去重：class 与 initial 共用同一个点对集合（否则同两点两条边）', () => {
-    // 只有一个 paired 集合，addInferred 是唯一的写入口（class / initial 都走它）
-    expect((model.match(/const paired = new Set\(edgeW\.keys\(\)\)/g) ?? []).length).toBe(1)
+  it('去重：class 与 initial 共用同一个视觉点对桶，但各自关系明细不丢', () => {
+    // 一个节点对只产生一条 GEdge；多种关系聚合进 relations。
+    expect((model.match(/const pairBuckets = new Map<string, PairBucket>\(\)/g) ?? []).length).toBe(1)
+    expect(model).toMatch(/relations: Map<string, RelationRecord>/)
     expect(model).toMatch(/const addInferred = \(a: string, b: string, kind: 'class' \| 'initial'\)/)
   })
 
-  it('★ 计算余量时必须按「已产出的观测层」计，不能按原始条数（否则大图余量被算成 0）', () => {
-    // 观测层先被 min(OBSERVED_EDGE_CAP, edgeDensityCap(n)) 夹过，余量基于**夹过的**条数。
-    // 用原始条数（`edges.length`）去算，在全量视图上会得到 0 余量 —— 首字层实测 +0 条。
-    expect(model).toMatch(/edgeHeadroom\(nodes\.length, observed\.length \+ inferred\.length\)/)
-    expect(model).toMatch(/const observed = \[\.\.\.intimacy, \.\.\.edges\]/)
-    expect(model).toMatch(/\.slice\(0, Math\.min\(OBSERVED_EDGE_CAP, edgeDensityCap\(nodes\.length\)\)\)/)
+  it('★ 计算余量时必须按「已产出的视觉边」计，不能按原始候选条数', () => {
+    // 推导观测层受 observedCap 限制，推断层只拿 pairBuckets.size 之后剩下的额度。
+    expect(model).toMatch(/const observedCap = Math\.min\(OBSERVED_EDGE_CAP, edgeDensityCap\(nodes\.length\)\)/)
+    expect(model).toMatch(/pairBuckets\.size >= observedCap/)
+    expect(model).toMatch(/edgeHeadroom\(nodes\.length, pairBuckets\.size\)/)
+    // 后端观测边直接 addRelation，不经过 observedCap，因此不会被推导层上限误删。
+    expect(model).toMatch(/for \(const raw of env\.edges \?\? \[\]\)/)
+    expect(model).toMatch(/origin: 'backend'/)
     // 老写法（把 intimacy/edges/inferred 一起夹在硬编码 6000）必须不再出现
     expect(model).not.toMatch(/slice\(0, Math\.max\(0, 6000 - intimacy\.length\)\)/)
-    expect(model).not.toMatch(/derived/)
   })
 
   it('★ 观测层上限与密度上限由 graph-budget 单点定义（建模层只 import，不自带整数）', () => {
@@ -121,10 +139,13 @@ describe('首字连边：画布与建模接线', () => {
     )
   })
 
-  it('★ 观测层与推断层分开夹（合在一起夹就会把推断层整批切掉）', () => {
-    // 推断层接在观测层之后拼接，不再进同一批 sort 后整体截断
-    expect(model).toMatch(/edges: \[\.\.\.observed, \.\.\.inferred\]/)
-    // class 层也必须按余量截断（否则它会独自吃掉额度、把首字层挤成 0）
-    expect(model).toMatch(/let left = edgeHeadroom\(nodes\.length, observed\.length \+ inferred\.length\)/)
+  it('★ 后端观测边完整保留；推断关系只合并进点对或使用剩余视觉额度', () => {
+    // 最终边来自聚合桶，不存在 observed/inferred 两数组拼接后被整体 slice 的路径。
+    expect(model).toMatch(/const edges: GEdge\[\] = \[\.\.\.pairBuckets\.values\(\)\]\.map/)
+    expect(model).not.toMatch(/edges: \[\.\.\.observed, \.\.\.inferred\]/)
+    // class 层与首字层都以当前视觉边数问余量。
+    expect(model).toMatch(/let left = edgeHeadroom\(nodes\.length, pairBuckets\.size\)/)
+    expect(model).toMatch(/const headroom = edgeHeadroom\(nodes\.length, pairBuckets\.size\)/)
+    expect(model).toMatch(/if \(!pairBuckets\.has\(key\) && pairBuckets\.size >= edgeDensityCap\(nodes\.length\)\) return 'ignored'/)
   })
 })

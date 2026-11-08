@@ -202,7 +202,14 @@ export function WordCloudCard({ scope, username, year, title, limit, height, fil
    */
   const laidHeight = layout === null ? null : layout.height
 
-  const words = (placed ?? cloudWords) as ReadonlyArray<CloudWordInput & { tone?: CloudTone; x?: number; y?: number; vertical?: boolean }>
+  const words = (placed ?? cloudWords) as ReadonlyArray<CloudWordInput & {
+    tone?: CloudTone
+    x?: number
+    y?: number
+    width?: number
+    height?: number
+    vertical?: boolean
+  }>
   /* 条件先算好再渲染：渲染分支里不再出现 `error` 字样 —— R4 守卫会扫"同时出现 error 与空态样式"
      的行并判定那是"用空态样式渲染错误态"。 */
   const showEmpty = !loading && error === null && words.length === 0
@@ -243,7 +250,14 @@ export function WordCloudCard({ scope, username, year, title, limit, height, fil
                  */
                 data-vertical={w.vertical === true ? '1' : undefined}
                 style={placed
-                  ? { position: 'absolute', left: `${String(w.x ?? 0)}px`, top: `${String(w.y ?? 0)}px`, fontSize: `${String(step)}px` }
+                  ? {
+                      position: 'absolute',
+                      left: `${String(w.x ?? 0)}px`,
+                      top: `${String(w.y ?? 0)}px`,
+                      width: `${String(w.width)}px`,
+                      height: `${String(w.height)}px`,
+                      fontSize: `${String(step)}px`,
+                    }
                   : { fontSize: `${String(step)}px` }}
                 title={`${w.text} · ${String(w.count)} 次 · 点击在全局搜索中查找`}
               >

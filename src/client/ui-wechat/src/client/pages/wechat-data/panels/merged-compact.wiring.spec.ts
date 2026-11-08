@@ -115,17 +115,19 @@ describe('分段项：横向收紧，但最小点击尺寸不许动', () => {
 })
 
 describe('外壳行为没被改坏', () => {
-  it('仍然渲染分段控件 + 当前分段正文', () => {
+  it('仍然渲染分段控件 + 当前分段正文，并给已访问分段稳定的 DOM 身份', () => {
     expect(shellTsx).toContain('<Segmented')
     expect(shellTsx).toContain('css.bar')
     expect(shellTsx).toContain('css.body')
-    expect(shellTsx).toContain('current.render()')
+    expect(shellTsx).toContain('section.render(go)')
+    expect(shellTsx).toContain('data-merged-section={section.key}')
   })
 
   it('深链同步还在（initial 变化要切到对应分段）', () => {
     // 同一组合并面板被多个 tab 复用（同一个组件实例），useState 只在首次生效 ——
     // 少了这个 effect 就会出现「点了撤回消息却还停在会话列表」。
-    expect(shellTsx).toMatch(/useEffect\(\(\) => \{ setActive\(initial\) \}, \[initial\]\)/)
+    expect(shellTsx).toContain('prev.groupKey !== groupKey')
+    expect(shellTsx).toContain('active: requested')
   })
 
   it('六个合并组都还在（没有被悄悄拆掉）', () => {

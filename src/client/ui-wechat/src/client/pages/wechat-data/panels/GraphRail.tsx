@@ -23,9 +23,9 @@
  * @module panels/GraphRail
  */
 import { useEffect, useState } from 'react'
-import type { BuiltGraph, GNode, GraphSettings } from './graph-model.ts'
+import type { BuiltGraph, GEdge, GNode, GraphSettings } from './graph-model.ts'
 import { withEnterprise } from './enterprise-identity.ts'
-import { communityColor } from './graph-model.ts'
+import { communityColor, formatGraphForceMultiplier, GRAPH_FORCE_CONTROLS } from './graph-model.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import { GraphSelectionDetail } from './GraphSelectionDetail.tsx'
 import { IdentityName } from './identity.tsx'
@@ -54,7 +54,8 @@ function Slider({ label, value, min, max, step, onChange, fmt, disabled }: {
         step={step}
         value={value}
         disabled={disabled}
-        onChange={(e) => { onChange(Number(e.target.value)) }}
+        aria-valuetext={fmt ? fmt(value) : String(value)}
+        onInput={(e) => { onChange(Number(e.currentTarget.value)) }}
       />
       <span className={css.ctlValue}>{fmt ? fmt(value) : String(value)}</span>
     </label>
@@ -87,8 +88,8 @@ interface SelectedClass {
 
 /** 选中节点的相连关系（`other` 可能缺失：对端被「仅显示好友」或节点上限挡在图外）。 */
 interface Connection {
-  edge: { source: string, target: string, weight: number }
-  other: { id: string, label: string, enterpriseName?: string } | null | undefined
+  edge: GEdge
+  other: GNode | null | undefined
 }
 
 export interface GraphRailProps {
@@ -299,11 +300,12 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
               <div className={css.seg}>
                 <button type="button" className={css.segBtn} data-on={settings.mode === 'people' || undefined} onClick={() => { setMode('people') }}>好友网络</button>
                 <button type="button" className={css.segBtn} data-on={settings.mode === 'groups' || undefined} onClick={() => { setMode('groups') }}>群组网络</button>
+                <button type="button" className={css.segBtn} data-on={settings.mode === 'all' || undefined} onClick={() => { setMode('all') }}>综合网络</button>
               </div>
             )}
             <Slider label="节点上限" value={settings.nodeLimit} min={1} max={10000} step={1} onChange={(v) => { patch({ nodeLimit: v }) }} fmt={v => v >= 10000 ? '全部' : String(v)} />
-            {(settings.mode === 'people' || settings.mode === 'groups') && (
-              <Slider label={settings.mode === 'people' ? '共同群阈值 ≥' : '共同成员阈值 ≥'} value={settings.minCommon} min={1} max={10} step={1} onChange={(v) => { patch({ minCommon: v }) }} />
+            {(settings.mode === 'people' || settings.mode === 'groups' || settings.mode === 'all') && (
+              <Slider label={settings.mode === 'people' ? '共同群阈值 ≥' : settings.mode === 'groups' ? '共同成员阈值 ≥' : '共同关系阈值 ≥'} value={settings.minCommon} min={1} max={10} step={1} onChange={(v) => { patch({ minCommon: v }) }} />
             )}
             {settings.mode === 'people' && (
               <>
@@ -368,14 +370,14 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
         </div>
         <button type="button" className={css.miniBtn} disabled={isDefaultSettings} onClick={restoreDefaults}>恢复默认参数</button>
         <Toggle label="锁定布局" checked={settings.lockLayout} onChange={(v) => { patch({ lockLayout: v }) }} />
-        <Slider label="节点间距" value={settings.nodeGap} min={0.4} max={3.5} step={0.05} onChange={(v) => { patch({ nodeGap: v }) }} fmt={v => v.toFixed(2) + '×'} disabled={settings.lockLayout} />
-        <Slider label="圈子分离度" value={settings.communitySeparation} min={0.3} max={5} step={0.1} onChange={(v) => { patch({ communitySeparation: v }) }} fmt={v => v.toFixed(1) + '×'} disabled={settings.lockLayout} />
-        <Slider label="图谱向心力" value={settings.forceCentripetal} min={0} max={5} step={0.05} onChange={(v) => { patch({ forceCentripetal: v }) }} fmt={v => v.toFixed(2) + '×'} disabled={settings.lockLayout} />
-        <Slider label="节点间的排斥力" value={settings.forceRepulsion} min={0.1} max={12} step={0.1} onChange={(v) => { patch({ forceRepulsion: v }) }} fmt={v => v.toFixed(1) + '×'} disabled={settings.lockLayout} />
-        <Slider label="相连节点的吸引力" value={settings.forceAttraction} min={0.1} max={5} step={0.05} onChange={(v) => { patch({ forceAttraction: v }) }} fmt={v => v.toFixed(2) + '×'} disabled={settings.lockLayout} />
-        <Slider label="连线长度" value={settings.forceEdgeLength} min={0.2} max={4} step={0.05} onChange={(v) => { patch({ forceEdgeLength: v }) }} fmt={v => v.toFixed(2) + '×'} disabled={settings.lockLayout} />
+        <Slider label="节点间距" value={settings.nodeGap} {...GRAPH_FORCE_CONTROLS.nodeGap} onChange={(v) => { patch({ nodeGap: v }) }} fmt={v => formatGraphForceMultiplier('nodeGap', v)} disabled={settings.lockLayout} />
+        <Slider label="圈子分离度" value={settings.communitySeparation} {...GRAPH_FORCE_CONTROLS.communitySeparation} onChange={(v) => { patch({ communitySeparation: v }) }} fmt={v => formatGraphForceMultiplier('communitySeparation', v)} disabled={settings.lockLayout} />
+        <Slider label="图谱向心力" value={settings.forceCentripetal} {...GRAPH_FORCE_CONTROLS.forceCentripetal} onChange={(v) => { patch({ forceCentripetal: v }) }} fmt={v => formatGraphForceMultiplier('forceCentripetal', v)} disabled={settings.lockLayout} />
+        <Slider label="节点间的排斥力" value={settings.forceRepulsion} {...GRAPH_FORCE_CONTROLS.forceRepulsion} onChange={(v) => { patch({ forceRepulsion: v }) }} fmt={v => formatGraphForceMultiplier('forceRepulsion', v)} disabled={settings.lockLayout} />
+        <Slider label="相连节点的吸引力" value={settings.forceAttraction} {...GRAPH_FORCE_CONTROLS.forceAttraction} onChange={(v) => { patch({ forceAttraction: v }) }} fmt={v => formatGraphForceMultiplier('forceAttraction', v)} disabled={settings.lockLayout} />
+        <Slider label="连线长度" value={settings.forceEdgeLength} {...GRAPH_FORCE_CONTROLS.forceEdgeLength} onChange={(v) => { patch({ forceEdgeLength: v }) }} fmt={v => formatGraphForceMultiplier('forceEdgeLength', v)} disabled={settings.lockLayout} />
         {settings.lockLayout && <div className={css.railHint}>布局已锁定，力度/间距滑杆暂不可调；关闭「锁定布局」后恢复。</div>}
-        <div className={css.railHint}>拖拽节点调整布局；「我」固定在图谱中，锁定后禁止拖拽与自动重排。</div>
+        <div className={css.railHint}>数值是相对默认力度的倍率。拖动时逐帧预览，松手后平滑收敛；「我」固定在图谱中，锁定后禁止拖拽与自动重排。</div>
       </div>
 
       <div className={css.railHint}>点击节点选中并高亮相邻节点与连线；拖拽节点调整布局；滚轮缩放、拖拽空白平移；顶部「适应视图」缩放至全图。</div>

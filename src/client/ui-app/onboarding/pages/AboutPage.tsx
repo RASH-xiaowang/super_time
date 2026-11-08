@@ -70,7 +70,8 @@ export function AboutPage({ versions }: AboutPageProps): React.JSX.Element {
             打开数据目录
           </button>
           <span className={cssstages.contactDesc}>
-            应用内已没有任何出网开关：断网或在系统防火墙里禁止本应用出站，即可让所有请求都不发生。
+            应用内没有全局出网开关；会话级「AI回复」默认关闭，可在聊天「更多」菜单逐会话关闭。
+            断网或在系统防火墙里禁止本应用出站，即可让所有请求都不发生。
           </span>
         </div>
       </section>

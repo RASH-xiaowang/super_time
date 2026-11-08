@@ -4,7 +4,6 @@
  * from the message-content prefix (`wxid_xxx:\n`) which is reliable for
  * 4.x chatroom rows; Name2Id resolution can be added later.
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
@@ -12,6 +11,13 @@ import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import type { GroupInsightsMember, GroupInsightsSnapshot } from '../types.ts'
 import { cachedBySig, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
+import {
+  displayNameForUsername,
+  fallbackChatDisplayName,
+  mergeDisplayNames,
+  messageTableName,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -36,7 +42,7 @@ function tableColumns(db: DatabaseSync, table: string): Set<string> {
 }
 
 function groupDisplayName(decryptedDir: string, username: string): string {
-  return contactMeta(decryptedDir).names.get(username) || username
+  return mergeDisplayNames(decryptedDir).get(username) ?? fallbackChatDisplayName(username)
 }
 
 function memberCount(decryptedDir: string, username: string): number {
@@ -138,10 +144,26 @@ export function queryGroupInsights(decryptedDir: string, username: string): Grou
  * @returns 洞察快照。
  */
 export function computeGroupInsights(decryptedDir: string, username: string): GroupInsightsSnapshot {
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) {
+    return {
+      username: '',
+      name: '未命名群聊',
+      memberCount: 0,
+      total: 0,
+      activeDays: 0,
+      from: null,
+      to: null,
+      avgPerDay: 0,
+      announcement: '',
+      announcementTime: null,
+      topMembers: [],
+    }
+  }
   const meta = contactMeta(decryptedDir)
-  const names = meta.names
+  const names = mergeDisplayNames(decryptedDir)
   const enterpriseNames = meta.enterpriseNames
-  const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  const table = messageTableName(canonical)
   const dir = join(decryptedDir, 'message')
   let total = 0
   let minTime: number | null = null
@@ -185,19 +207,19 @@ export function computeGroupInsights(decryptedDir: string, username: string): Gr
       const enterpriseName = enterpriseNames.get(u)?.trim()
       return {
         username: u,
-        name: names.get(u) ?? u,
+        name: displayNameForUsername(u, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         count,
       }
     })
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
-  const ann = announcement(decryptedDir, username)
+  const ann = announcement(decryptedDir, canonical)
   const spanDays = (minTime != null && maxTime != null) ? Math.max(1, Math.ceil((maxTime - minTime) / 86400)) : 0
   return {
-    username,
-    name: groupDisplayName(decryptedDir, username),
-    memberCount: memberCount(decryptedDir, username),
+    username: canonical,
+    name: groupDisplayName(decryptedDir, canonical),
+    memberCount: memberCount(decryptedDir, canonical),
     total,
     activeDays,
     from: minTime,

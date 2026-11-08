@@ -130,6 +130,7 @@ import {
 import { createImageLoadQueue } from './image-batch.ts'
 import { remote, unwrap } from './api-core.ts'
 import { apiGetRemoteImageUrl } from './api-media.ts'
+import type { RemoteAccessState, RemoteEnvelope } from '../../contracts.ts'
 
 export type {
   RetrievalConfig as RetrievalConfigShape,
@@ -138,6 +139,32 @@ export type {
   RetrievalStatus,
   VectorBuildResult,
   RetrievalFeedbackItem,
+}
+
+/**
+ * 读局域网访问监听状态。
+ *
+ * 渲染层不应直接判断 `window.electronAPI` 是否存在：环境决策统一走能力表，
+ * 桥的存在性只是传输层细节。没有桥时返回失败信封，让调用方展示同一条可读错误。
+ */
+export async function apiRemoteAccessState(): Promise<RemoteEnvelope<RemoteAccessState>> {
+  const bridge = typeof window === 'undefined' ? undefined : window.electronAPI?.remoteAccess
+  if (!bridge) {
+    return { ok: false, error: { code: 'ENVIRONMENT', message: '当前环境无法控制监听，请使用桌面端操作' } }
+  }
+  return bridge.state()
+}
+
+/**
+ * 开关局域网访问监听。
+ * @param enabled - 是否开启监听。
+ */
+export async function apiToggleRemoteAccess(enabled: boolean): Promise<RemoteEnvelope<RemoteAccessState>> {
+  const bridge = typeof window === 'undefined' ? undefined : window.electronAPI?.remoteAccess
+  if (!bridge) {
+    return { ok: false, error: { code: 'ENVIRONMENT', message: '当前环境无法控制监听，请使用桌面端操作' } }
+  }
+  return bridge.toggle(enabled)
 }
 
 /** 本机地址（能直接画）；与 `panels/remote-img.tsx` 的 `localImageSrc` 同一判据。 */
@@ -513,18 +540,18 @@ export async function apiTranscribeVoiceBatch(options?: { limit?: number }): Pro
 }
 /**
  * Cached transcript for one voice message.
- * @param options - username + local_id.
+ * @param options - username, local_id, and the selected message's server id.
  * @returns VoiceTranscriptResult.
  */
-export async function apiGetVoiceTranscript(options: { username: string; localId: number }): Promise<VoiceTranscriptResult> {
+export async function apiGetVoiceTranscript(options: { username: string; localId: number; svrId?: string }): Promise<VoiceTranscriptResult> {
   return unwrap(await remote().getVoiceTranscript(options))
 }
 /**
  * Transcribe one voice message on demand (chat bubble 语音转文字).
- * @param options - username + local_id.
+ * @param options - username, local_id, and the selected message's server id.
  * @returns VoiceTranscribeOneResult: ok + text, or error.
  */
-export async function apiTranscribeVoiceMessage(options: { username: string; localId: number }): Promise<VoiceTranscribeOneResult> {
+export async function apiTranscribeVoiceMessage(options: { username: string; localId: number; svrId?: string }): Promise<VoiceTranscribeOneResult> {
   return unwrap(await remote().transcribeVoiceMessage(options))
 }
 /**

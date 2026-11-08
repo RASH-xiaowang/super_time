@@ -73,6 +73,20 @@
   corner-shape: round;
 }
 .sessionNameWrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.aiReplyBadge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--nm-success) 28%, transparent);
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-success-15);
+  color: var(--nm-success-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+}
 .hiddenBadge {
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
@@ -326,21 +340,24 @@
 }
 .msgVoiceIcon svg { display: block; }
 .msgVoiceIcon path { transition: opacity 0.15s ease; }
-/* ── 群接龙（appmsg type 53）：事由 + 参与者名单 ───────────────────
-   微信把接龙当纯文本渲染、名单根本不可见；本项目已解析出名单，故保留名单卡，
-   但外形套微信卡片（232px + 底栏）。 */
-.msgSolitaireCard {
-  --wx-card-pad: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 232px;
-  max-width: 232px;
-  padding: 10px 12px 0;
+.msgVoiceErr {
+  font-size: 12px;
+  color: var(--nm-danger);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msgVoiceText {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--wx-quote-text);
+  background: var(--wx-quote-bg);
   border-radius: var(--wx-radius);
-  border: none;
-  background: var(--wx-card-bg);
-  box-sizing: border-box;
+  padding: 6px 10px;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 340px;
 }
 /* ── 其它 appmsg 子类型：微信 232px 小卡（群公告 / 笔记 / 卡片 / 商品） ── */
 .msgAppmsgCard {
@@ -427,7 +444,7 @@
 .msgRow:not(.msgRowSelf) .msgTransferCard::before { left: -4px; background: var(--wx-transfer); }
 .msgRowSelf .msgTransferCard::after { right: -4px; background: var(--wx-transfer); }
 .msgTransferArrow {
-  grid-row: 1 / span 2;
+  grid-row: 1;
   align-self: center;
   width: 36px;
   height: 36px;
@@ -439,12 +456,6 @@
   justify-content: center;
   flex-shrink: 0;
 }
-/* 已退回 / 已过期退回：微信用淡米色 + 深褐色 */
-.msgTransferCard[data-state='refunded'] { background: var(--wx-transfer-returned); color: var(--wx-transfer-returned-text); }
-.msgTransferCard[data-state='refunded'] .msgTransferArrow { background: rgba(138, 106, 69, 0.14); }
-.msgRow:not(.msgRowSelf) .msgTransferCard[data-state='refunded']::before { background: var(--wx-transfer-returned); }
-.msgRowSelf .msgTransferCard[data-state='refunded']::after { background: var(--wx-transfer-returned); }
-.msgRow:not(.msgRowSelf) .msgTransferCard[data-state='refunded'] .msgCardFoot { color: var(--wx-transfer-returned-text); }
 /* 红包卡：微信官方**扁平**红橙 #FA9D3B（去掉自造渐变）+ 底栏「微信红包」。 */
 .msgRedpacketCard {
   --wx-card-pad: 12px;
@@ -493,11 +504,26 @@
   max-width: var(--wx-quote-maxw);
   min-width: 0;
   box-sizing: border-box;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
   padding-inline-end: 10px;
   border-inline-end: 2px solid var(--wx-card-divider);
   font-size: 12px;
   line-height: 1.6;
   color: var(--wx-quote-text);
+}
+.msgQuoteStripOpen { cursor: pointer; border-radius: var(--nm-r-xs); }
+.msgQuoteStripOpen:hover .msgQuoteWhat {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.msgQuoteStripOpen:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
 }
 .msgRow:not(.msgRowSelf) .msgQuoteStrip {
   padding-inline-end: 0;
@@ -509,7 +535,7 @@
 .msgFileCard {
   --wx-card-pad: 12px;
   display: grid;
-  grid-template-columns: 40px 1fr auto;
+  grid-template-columns: 40px 1fr;
   grid-template-rows: auto auto;
   gap: 6px 12px;
   width: 210px;
@@ -527,7 +553,6 @@
 .msgFileCard:hover { background: var(--wx-card-hover); }
 .msgFileCard .msgFileIcon { grid-row: 1; grid-column: 1; }
 .msgFileCard .msgFileBody { grid-row: 1; grid-column: 2; }
-.msgFileCard .msgFileExt { grid-row: 1; grid-column: 3; align-self: start; }
 /* 文件卡的底栏是 grid 子项，要独占一行 */
 .msgFileCard .msgCardFoot { grid-column: 1 / -1; }
 .msgFileIcon {
@@ -542,6 +567,7 @@
   align-items: center;
   justify-content: center;
 }
+.msgFileIcon svg { width: 24px; height: 24px; display: block; }
 /* 文件类型图标：微信按类型给不同色的扁平小方标。全部走语义令牌（深浅主题各有一套）。 */
 .msgFileIcon[data-kind='pdf'] { background: var(--nm-danger-15); color: var(--nm-danger); }
 .msgFileIcon[data-kind='word'] { background: var(--nm-info-15); color: var(--nm-info); }
@@ -555,16 +581,6 @@
 .msgFileIcon[data-kind='text'] { background: color-mix(in srgb, var(--nm-text-2) 14%, transparent); color: var(--nm-text-2); }
 .msgFileIcon[data-kind='file'] { background: color-mix(in srgb, var(--nm-text-2) 14%, transparent); color: var(--nm-text-2); }
 .msgFileBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgFileExt {
-  flex-shrink: 0;
-  font-size: var(--nm-fs-xs, 11px);
-  font-weight: 700;
-  color: var(--wx-card-footer);
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-}
 /* 小程序卡片 —— 微信原生 210×270，来源行 + 标题 + 页面预览 + 23px 底栏 */
 .msgMiniappCard {
   --wx-card-pad: 12px;
@@ -580,6 +596,7 @@
   background: var(--wx-card-bg);
   border: none;
 }
+.msgMiniappCard[data-no-cover] { height: auto; }
 .msgMiniappApp {
   display: inline-flex;
   align-items: center;
@@ -660,10 +677,14 @@
   border: none;
   color: var(--wx-card-title);
 }
-.msgLocationCard .msgLocationBody { order: 0; flex: 1 1 100%; padding-bottom: 8px; }
-.msgLocationCard .msgLocationMap { order: 1; }
-.msgLocationCard .msgCardFoot { order: 2; }
-.msgLocationBody { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.msgLocationBody {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-bottom: 8px;
+}
 /* 合并转发卡：微信 210px「标题 + 预览 + 底栏『聊天记录』」。 */
 .msgChatlogCard {
   --wx-card-pad: 12px;
@@ -686,7 +707,6 @@
   transition: background 0.15s ease;
 }
 .msgChatlogCard:hover { background: var(--wx-card-hover); }
-.msgChatlogFoot { font-size: 11px; color: var(--wx-card-footer); }
 .msgSystem[data-kind='empty'] { opacity: 0.7; }
 /* ── 卡片通用：底部类型条 ────────────────────────────────────────
    微信原生卡片底部那一行（「微信转账」「微信红包」「聊天记录」「微信电脑版」）。
@@ -728,7 +748,6 @@
 .msgMediaCard .msgCardFoot { height: 26px; flex-basis: auto; }
 .msgContactCard .msgCardFoot { height: 28px; }
 .msgMiniappCard .msgCardFoot { height: 23px; font-size: var(--nm-fs-xs, 11px); flex-basis: auto; }
-.msgSolitaireCard .msgCardFoot { flex-basis: auto; }
 .msgMusicCard .msgCardFoot { height: 27px; }
 /* ── 通用小卡的跳转态与缩略图 ──────────────────────────────────── */
 .msgAppmsgCardOpen { cursor: pointer; }
@@ -739,10 +758,10 @@
    封面式链接卡（公众号大图）是唯一没有尖角的。
    转账 / 红包的尖角各自定义（尺寸与位置不同，见上文）。 */
 .msgRow:not(.msgRowSelf) :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard,
-    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard,
+    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard,
     .msgLocationCard)::before,
 .msgRowSelf :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard,
-    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard,
+    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard,
     .msgLocationCard)::after {
   content: '';
   position: absolute;
@@ -755,17 +774,17 @@
   background: var(--wx-card-bg);
 }
 .msgRow:not(.msgRowSelf) :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard,
-    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard,
+    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard,
     .msgLocationCard)::before { left: -4px; }
 .msgRowSelf :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard,
-    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard,
+    .msgContactCard, .msgAppmsgCard, .msgMediaCard, .msgMusicCard,
     .msgLocationCard)::after { right: -4px; }
 /* 封面式链接卡无尖角 */
 .msgRow:not(.msgRowSelf) .msgLinkCover::before,
 .msgRowSelf .msgLinkCover::after { content: none; }
 /* 卡片本身是 relative 才能挂尖角（`.msgFileCard` / `.msgChatlogCard` 等已是相对定位源）。 */
 :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard, .msgContactCard,
-  .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard, .msgLocationCard) { position: relative; }
+  .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgLocationCard) { position: relative; }
 /* ── 视频号 / 直播卡片：微信「封面 135×185 满宽 + 标题 + 底栏」 ──────
    视频号在微信里是 135px 竖版封面卡；直播是 232px、封面 16:9。 */
 .msgMediaCard {
@@ -859,52 +878,69 @@
 .msgMpCover { display: block; position: relative; aspect-ratio: 16 / 9; background: var(--wx-card-hover); }
 .msgMpCoverImg { width: 100%; height: 100%; object-fit: cover; display: block; }
 .msgMpCover.msgMpClickable:hover .msgMpCoverImg { opacity: 0.92; }
-.msgMpTitle {
-  display: -webkit-box;
-  padding: 10px 12px 12px;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.45;
-  word-break: break-word;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgMpTitle.msgMpClickable:hover { color: var(--wx-link-hover); }
-.msgMpRow {
+.msgMpHead {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--wx-card-divider);
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
 }
-.msgMpRowTitle {
-  flex: 1;
-  min-width: 0;
-  display: -webkit-box;
+.msgMpSource {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--wx-card-footer);
+}
+.msgMpTitle {
   font-size: 14px;
   font-weight: 400;
   line-height: 1.45;
   word-break: break-word;
+  white-space: pre-wrap;
+  display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.msgMpRow.msgMpClickable:hover .msgMpRowTitle { color: var(--wx-link-hover); }
-/* ── 位置卡：地图 98px 满宽，落在文字区下方（微信官方位置卡结构） ──── */
-.msgLocationMap {
-  position: relative;
-  width: calc(100% + 24px);
-  margin: 0 -12px;
-  height: 98px;
-  flex-shrink: 0;
-  border-radius: 0;
-  overflow: hidden;
-  background: var(--wx-card-hover);
-  border: none;
-  display: grid;
-  place-items: center;
+.msgMpDesc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--wx-card-preview);
+  word-break: break-word;
+  white-space: pre-wrap;
 }
+.msgMpHead.msgMpClickable:hover .msgMpTitle { color: var(--wx-link-hover); }
+.msgMpRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--wx-card-divider);
+}
+.msgMpRowBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.msgMpRowTitle {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgMpRowDesc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--wx-card-preview);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.msgMpRow.msgMpClickable:hover .msgMpRowTitle { color: var(--wx-link-hover); }
 /* ── 音乐卡：微信把音乐按链接卡渲染（210px + 底栏） ────────────────── */
 .msgMusicCard {
   --wx-card-pad: 10px;

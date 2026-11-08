@@ -23,6 +23,8 @@ import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
 
 type RevokedMedia = NonNullable<RevokedItem['media']>
 
@@ -209,8 +211,7 @@ function MediaVoice({ item, media }: { item: RevokedItem; media: RevokedMedia })
 }
 
 function MediaFile({ item, media }: { item: RevokedItem; media: RevokedMedia }): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const fileSave = useMediaSaveTask()
   const name = media.name ?? media.title ?? '未命名文件'
   const size = media.size !== undefined && Number.isFinite(media.size) && media.size > 0
     ? fmtBytes(media.size)
@@ -218,27 +219,37 @@ function MediaFile({ item, media }: { item: RevokedItem; media: RevokedMedia }):
   const detail = [media.ext ? media.ext.toUpperCase() : '', size].filter(Boolean).join(' · ')
 
   const save = async (): Promise<void> => {
-    setBusy(true)
-    setError('')
-    const message = await downloadMessageFile(name, {
-      ...(media.size !== undefined ? { size: media.size } : {}),
-      createTime: item.create_time,
-      ...((media.fileMd5 ?? '').trim() !== '' ? { fileMd5: media.fileMd5 } : {}),
+    const username = String(item.session_username ?? '').trim()
+    const localId = Number(item.local_id ?? 0)
+    await fileSave.save<{ path?: string }>({
+      idPrefix: 'revoked-file',
+      label: '保存撤回原文件',
+      successMessage: (r) => `已保存原文件 → ${r.path ?? ''}`,
+      run: async (jobId) => {
+        if (username === '' || !Number.isSafeInteger(localId) || localId <= 0) {
+          throw new Error('缺少消息定位信息，无法确认撤回文件归属')
+        }
+        const result = await downloadMessageFile(name, { username, localId, jobId })
+        if (result.error) throw new Error(result.error)
+        return result.path ? result : null
+      },
     })
-    if (message !== '') setError(message)
-    setBusy(false)
   }
 
   return (
     <div className={css.rvMediaCard} data-kind="file">
       <div className={css.rvMediaRow}>
         <span className={css.rvMediaTitle} title={name}>📎 {name}</span>
-        <button type="button" className={css.rvMediaBtn} disabled={busy} onClick={(e) => { stopClick(e); void save() }}>
-          {busy ? '读取中…' : '下载文件'}
+        <button type="button" className={css.rvMediaBtn} disabled={fileSave.running} onClick={(e) => { stopClick(e); void save() }}>
+          {fileSave.finishing ? '完成中…' : fileSave.running ? '保存中…' : '下载文件'}
         </button>
       </div>
       {detail !== '' && <div className={css.rvMediaMeta}>{detail}</div>}
-      {error !== '' && <div className={css.rvMediaError} role="alert">{error}</div>}
+      <ExportProgressStatus
+        compact
+        state={fileSave.state}
+        onCancel={() => { void fileSave.cancel() }}
+      />
     </div>
   )
 }

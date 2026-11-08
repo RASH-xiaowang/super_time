@@ -242,7 +242,7 @@ describe('errors：分类与安全重试', () => {
       ['没有这个工具：no_such_tool', 'not_found'],
       ['当前没有选中知识库', 'not_found'],
       ['未授权访问', 'unauthorized'],
-      ['kb-only 已阻止访问本机微信数据', 'scope_blocked'],
+      ['隐私闸门阻止访问本机微信数据', 'scope_blocked'],
       ['文件检索不支持按会话过滤（无法应用范围）', 'scope_blocked'],
     ] as const) {
       const r = classifyToolError(input, 'search_messages')

@@ -20,6 +20,8 @@ export interface LlmRequestOptions {
   apiKey?: string;
   headers?: Record<string, string>;
   body?: unknown;
+  /** OpenCode 等厂商的稳定会话标识种子；不会自动泄露到其它厂商请求。 */
+  sessionId?: string;
   timeoutMs?: number;
   maxAttempts?: number;
   signal?: AbortSignal;
@@ -31,6 +33,16 @@ export interface LlmRequestOptions {
 }
 
 export function parseLlmBaseUrl(input: unknown): ParsedLlmBaseUrl;
+/**
+ * 返回模型列表地址。OpenCode 的模型列表前缀与 chat/completions 不同，
+ * 其余厂商保持 `{base}/models`。
+ */
+export function llmModelListUrl(input: unknown): string;
+/** 返回目标厂商要求的额外请求头（当前为 OpenCode 的 User-Agent / session）。 */
+export function llmVendorHeaders(
+  targetUrl: unknown,
+  options?: { sessionId?: unknown },
+): Record<string, string>;
 /**
  * 把「基础 URL」与「端点路径」拼成完整 URL，并容忍用户把完整端点填进基础 URL。
  *

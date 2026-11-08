@@ -16,8 +16,14 @@ export const PORT_ATTEMPTS: number;
 /** SSE 心跳间隔（毫秒）。 */
 export const SSE_HEARTBEAT_MS: number;
 
+/** 主进程原子写入、后端 worker 读取的无凭据监听快照文件名。 */
+export const REMOTE_ACCESS_RUNTIME_FILE: string;
+
 /** 请求体上限（字节）。 */
 export const MAX_BODY_BYTES: number;
+
+/** 入站消息 Webhook 的 JSON 请求体上限（字节，覆盖 20 MB 附件 base64 膨胀）。 */
+export const MESSAGE_WEBHOOK_BODY_BYTES: number;
 
 /** 接收完整请求的硬时限（毫秒）。 */
 export const REQUEST_TIMEOUT_MS: number;
@@ -66,7 +72,7 @@ export interface RemoteAccessDeps {
   /** 后端解析出的 decoded_images 根；浏览器端 `/api/media/...` 流式读图用。 */
   getDecodedRoot?: () => string;
   gatedCall: (method: string, args: unknown[]) => Promise<unknown>;
-  /** 桌面交接会话的原生能力代理（目录/文件对话框、截图、许可证、诊断、更新等）。 */
+  /** fullAccess 会话的原生能力代理（目录/文件对话框、截图、许可证、诊断、更新等）。 */
   nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   callQueue?: unknown;
   pairings?: unknown;

@@ -50,6 +50,58 @@ bootTrace('worker:requires-done');
 // 界面上只表现成「功能不可用」；有一条带 pid 的启动行才好判断。
 console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=' + process.versions.node);
 
+/**
+ * 打包态冒烟：在真正的 utilityProcess 里用 ASAR 内资产生成一次固定密钥流。
+ * 仅当主进程确认当前包是构建期标记的测试包、并显式传入两个变量时执行；
+ * 正式包不安装这些测试钩子，启动者也伪造不了 `SUPERTIME_TEST_HOOKS`。
+ */
+async function runSnsKeystreamProbeIfRequested() {
+  if (process.env.SUPERTIME_TEST_HOOKS !== '1'
+    || process.env.SUPERTIME_SNS_KEYSTREAM_PROBE !== '1') return;
+  try {
+    const { createHash } = require('node:crypto');
+    const { wxIsaac64Keystream } = await import('./wechat-data/lib/index.js');
+    const stream = await wxIsaac64Keystream('4096', 131072);
+    const sha256 = createHash('sha256').update(stream).digest('hex');
+    console.log('[sns-keystream-probe] ' + JSON.stringify({ ok: true, bytes: stream.length, sha256 }));
+  } catch (e) {
+    console.error('[sns-keystream-probe] ' + JSON.stringify({
+      ok: false,
+      error: String(e && e.message ? e.message : e),
+    }));
+  }
+}
+void runSnsKeystreamProbeIfRequested();
+
+/**
+ * 打包态原生依赖探针：验证 koffi 与 onnxruntime-node 能从最终布局加载。
+ * 同 SNS 探针一样只在构建期标记的测试包 + 主进程显式门控下运行。
+ */
+async function runNativeRuntimeProbeIfRequested() {
+  if (process.env.SUPERTIME_TEST_HOOKS !== '1'
+    || process.env.SUPERTIME_NATIVE_PROBE !== '1') return;
+  const result = { ok: false };
+  try {
+    const koffi = (await import('koffi')).default;
+    const kernel32 = koffi.load('kernel32.dll');
+    result.koffi = typeof kernel32.func === 'function';
+  } catch (e) {
+    result.koffi = false;
+    result.koffiError = String(e && e.message ? e.message : e);
+  }
+  try {
+    const ort = await import('onnxruntime-node');
+    result.onnxruntime = typeof ort.InferenceSession?.create === 'function';
+  } catch (e) {
+    result.onnxruntime = false;
+    result.onnxruntimeError = String(e && e.message ? e.message : e);
+  }
+  result.ok = result.koffi === true && result.onnxruntime === true;
+  const sink = result.ok ? console.log : console.error;
+  sink('[native-runtime-probe] ' + JSON.stringify(result));
+}
+void runNativeRuntimeProbeIfRequested();
+
 // W3-1.2：内存哨兵。每 60 秒一行 rss/heap/external 进诊断日志，连续 3 次超过
 // 1.2GB 才 mem-warn —— **只告警，不重启**（重启会打断用户正在等的导出/解密，
 // 而涨的原因可能只是一次性的全量年报）。逻辑与判据见 worker-mem-sentinel.js

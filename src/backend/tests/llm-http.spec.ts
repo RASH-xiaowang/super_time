@@ -20,6 +20,8 @@ const {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_TIMEOUT_MS,
   parseLlmBaseUrl,
+  llmModelListUrl,
+  llmVendorHeaders,
   joinLlmEndpoint,
   headersFor,
   llmRequest,
@@ -43,6 +45,38 @@ describe('LLM base URL 卫生', () => {
     expect(() => parseLlmBaseUrl('https://user:secret@api.example.com/v1')).toThrow(/用户名或密码/)
     expect(() => parseLlmBaseUrl('https://api.example.com/v1?model=m')).toThrow(/查询参数/)
     expect(() => parseLlmBaseUrl('https://api.example.com/v1#fragment')).toThrow(/查询参数或片段/)
+  })
+})
+
+describe('厂商协议适配', () => {
+  it('OpenCode 的模型列表从 chat base 映射到独立前缀，其它厂商仍是 {base}/models', () => {
+    expect(llmModelListUrl('https://opencode.ai/inference/go/openai/v1'))
+      .toBe('https://opencode.ai/inference/go/v1/models')
+    expect(llmModelListUrl('https://opencode.ai/inference/go/openai/v1/chat/completions'))
+      .toBe('https://opencode.ai/inference/go/v1/models')
+    expect(llmModelListUrl('https://opencode.ai/inference/openai/v1'))
+      .toBe('https://opencode.ai/inference/v1/models')
+    expect(llmModelListUrl('https://openrouter.ai/api/v1'))
+      .toBe('https://openrouter.ai/api/v1/models')
+    expect(llmModelListUrl('https://api.cerebras.ai/v1'))
+      .toBe('https://api.cerebras.ai/v1/models')
+  })
+
+  it('OpenCode 请求带产品 User-Agent 与稳定、不可逆的会话标识', () => {
+    const a = llmVendorHeaders('https://opencode.ai/inference/go/openai/v1/chat/completions', {
+      sessionId: 'supertime:ai-reply:wxid_self:wxid_peer',
+    })
+    const b = llmVendorHeaders('https://opencode.ai/inference/go/v1/models', {
+      sessionId: 'supertime:ai-reply:wxid_self:wxid_peer',
+    })
+    expect(a['user-agent']).toMatch(/^SuperTime\/\d+\.\d+\.\d+/)
+    expect(a['x-opencode-session']).toMatch(/^supertime-[a-f0-9]{32}$/)
+    expect(b['x-opencode-session']).toBe(a['x-opencode-session'])
+    expect(llmVendorHeaders('https://opencode.ai/inference/go/v1/models', {
+      sessionId: 'another-session',
+    })['x-opencode-session']).not.toBe(a['x-opencode-session'])
+    expect(a['x-opencode-session']).not.toContain('wxid')
+    expect(llmVendorHeaders('https://api.deepseek.com/v1')).toEqual({})
   })
 })
 
@@ -153,6 +187,19 @@ describe('统一请求与重试转发', () => {
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ model: 'm', messages: [] })
   })
 
+  it('OpenCode 的厂商请求头由统一传输层自动补齐（调用方显式头优先）', async () => {
+    const calls = fetchProbe([{ status: 200, json: { data: [] } }])
+    await llmRequest('https://opencode.ai/inference/go/v1/models', {
+      sessionId: 'stable-chat-session',
+      headers: { 'user-agent': 'CallerAgent/9.9.9' },
+      timeoutMs: 5000,
+    })
+    expect(calls[0]!.init?.headers).toMatchObject({
+      'user-agent': 'CallerAgent/9.9.9',
+      'x-opencode-session': expect.stringMatching(/^supertime-[a-f0-9]{32}$/),
+    })
+  })
+
   it('默认快速失败（交互式探针与余额查询仍是一次尝试）', async () => {
     expect(DEFAULT_MAX_ATTEMPTS).toBe(1)
     expect(DEFAULT_TIMEOUT_MS).toBe(20_000)
@@ -171,7 +218,8 @@ describe('宿主重试模块的加载边界', () => {
   it('构建出独立的小 bundle，宿主优先加载它，完整网关 bundle 仅作未构建回退', () => {
     expect(bundleBuildSource).toContain("fetch-retry.ts")
     expect(bundleBuildSource).toContain('rpa-media.ts')
-    expect(bundleBuildSource).toContain('entryPoints: [entry, fetchRetryEntry, rpaMediaEntry]')
+    expect(bundleBuildSource).toContain('message-webhook.ts')
+    expect(bundleBuildSource).toContain('entryPoints: [entry, fetchRetryEntry, rpaMediaEntry, messageWebhookEntry]')
 
     const smallImport = llmHttpSource.indexOf("import('./wechat-data/lib/net/fetch-retry.js')")
     const fullImport = llmHttpSource.indexOf("import('./wechat-data/lib/index.js')")

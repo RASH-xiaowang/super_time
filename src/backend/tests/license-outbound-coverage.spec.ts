@@ -216,6 +216,16 @@ describe('出网方法必须登记 license 功能位', () => {
     expect(stale, `这些功能位登记指向不存在的方法：${stale.join(', ')}`).toEqual([])
   })
 
+  it('单资源原图导出统一登记为 export 功能位', () => {
+    for (const method of [
+      'exportSnsVideo', 'exportSnsImage', 'exportChatImage', 'exportChatVideo', 'exportChatFile',
+      'exportFileImage', 'exportFileVideo', 'exportFileAttachment', 'exportFavoriteImage',
+      'exportFavoriteVideo', 'exportFavoriteFile',
+    ]) {
+      expect(service.METHOD_FEATURE[method], `${method} 必须登记为 export`).toBe('export')
+    }
+  })
+
   it('判据真的在工作（防空转）：已知出网方法与刚补的 4 个都在集合里', () => {
     // 少于 10 个说明扫描逻辑已经失效，上面几条会变成恒真。
     expect(outbound.length).toBeGreaterThanOrEqual(10)

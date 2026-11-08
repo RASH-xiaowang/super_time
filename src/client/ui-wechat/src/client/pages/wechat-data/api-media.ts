@@ -141,6 +141,136 @@ function useHttpMedia(): boolean {
 import { ImageDataUrlBatchItem, remote, unwrap } from './api-core.ts'
 // 类型单独一行：`isolatedModules` 下 esbuild 不会替我们从混合行里删掉类型（M21 踩过，见 RELEASE-PLAN）
 import type { RemoteImageItem } from './api-core.ts'
+import type {
+  ImageAiJsonBridgeResult,
+  ImageAiJsonObject,
+  ImageAiJsonResult,
+  ImageOcrBridgeResult,
+  ImageOcrLine,
+  ImageOcrResult,
+} from '../../contracts.ts'
+
+function asImageOcrResult(value: unknown): ImageOcrResult | null {
+  if (value === null || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (raw.engine !== 'wechat-native' || typeof raw.text !== 'string') return null
+  const lines: ImageOcrLine[] = Array.isArray(raw.lines)
+    ? raw.lines.flatMap((line): ImageOcrLine[] => {
+        if (line === null || typeof line !== 'object') return []
+        const item = line as Record<string, unknown>
+        if (typeof item.text !== 'string') return []
+        const n = (key: string): number => typeof item[key] === 'number' ? item[key] : 0
+        return [{
+          text: item.text,
+          left: n('left'),
+          top: n('top'),
+          right: n('right'),
+          bottom: n('bottom'),
+          rate: n('rate'),
+        }]
+      })
+    : []
+  return {
+    engine: 'wechat-native',
+    text: raw.text,
+    lines,
+    width: typeof raw.width === 'number' ? raw.width : 0,
+    height: typeof raw.height === 'number' ? raw.height : 0,
+    elapsedMs: typeof raw.elapsedMs === 'number' ? raw.elapsedMs : 0,
+  }
+}
+
+/**
+ * 调用微信 4.x 原生 OCR 插件识别图片文字。
+ *
+ * 只在 Electron 桌面端可用：手机浏览器与网页交接态没有本机微信 OCR 插件，
+ * 界面也不应显示入口。结果必须是 `engine: 'wechat-native'`，不允许静默换成
+ * Windows OCR 或云端模型。
+ * @param source - 图片 data URL 或 wechat-media URL。
+ * @returns 标准化后的微信原生 OCR 结果。
+ */
+export async function apiOcrImage(source: string): Promise<ImageOcrResult> {
+  const image = source.trim()
+  if (!image) throw new Error('图片尚未加载完成，请稍后重试')
+  const bridge = typeof window === 'undefined' ? undefined : window.electronAPI?.wechat
+  if (!bridge?.ocrImage) throw new Error('微信原生 OCR 仅在电脑桌面端可用')
+  let response: ImageOcrBridgeResult
+  try {
+    response = await bridge.ocrImage(image)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(message.trim() || '微信原生 OCR 调用失败')
+  }
+  const isEnvelope = response !== null
+    && typeof response === 'object'
+    && 'ok' in response
+    && typeof (response as { ok?: unknown }).ok === 'boolean'
+  if (isEnvelope) {
+    const envelope = response as Exclude<ImageOcrBridgeResult, ImageOcrResult>
+    if (!envelope.ok) {
+      throw new Error(envelope.error?.message?.trim() || envelope.error?.code || '微信原生 OCR 识别失败')
+    }
+    const normalized = asImageOcrResult(envelope.value)
+    if (!normalized) throw new Error('微信原生 OCR 返回了无法识别的结果')
+    return normalized
+  }
+  const normalized = asImageOcrResult(response)
+  if (!normalized) throw new Error('微信原生 OCR 返回了无法识别的结果')
+  return normalized
+}
+
+function asImageAiJsonResult(value: unknown): ImageAiJsonResult | null {
+  if (value === null || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (raw.engine !== 'configured-llm' || typeof raw.model !== 'string') return null
+  if (raw.json === null || typeof raw.json !== 'object' || Array.isArray(raw.json)) return null
+  const data = raw.json as Record<string, unknown>
+  if (Object.keys(data).length === 0) return null
+  const json = data as ImageAiJsonObject
+  return {
+    engine: 'configured-llm',
+    model: raw.model,
+    json,
+    elapsedMs: typeof raw.elapsedMs === 'number' ? raw.elapsedMs : 0,
+  }
+}
+
+/**
+ * 用当前配置的多模态模型识别图片文字，返回严格 JSON。
+ *
+ * 只在 Electron 桌面端可用；响应必须带 `engine: 'configured-llm'`，
+ * 不允许把微信原生 OCR 或其它本地引擎的结果冒充成 AI 输出。
+ * @param source - 图片 data URL 或 wechat-media URL。
+ */
+export async function apiImageAiJson(source: string): Promise<ImageAiJsonResult> {
+  const image = source.trim()
+  if (!image) throw new Error('图片尚未加载完成，请稍后重试')
+  const bridge = typeof window === 'undefined' ? undefined : window.electronAPI?.wechat
+  if (!bridge?.imageAiJson) throw new Error('AI 图片识别仅在电脑桌面端可用')
+  let response: ImageAiJsonBridgeResult
+  try {
+    response = await bridge.imageAiJson(image)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(message.trim() || '大模型图片识别调用失败')
+  }
+  const isEnvelope = response !== null
+    && typeof response === 'object'
+    && 'ok' in response
+    && typeof (response as { ok?: unknown }).ok === 'boolean'
+  if (isEnvelope) {
+    const envelope = response as Exclude<ImageAiJsonBridgeResult, ImageAiJsonResult>
+    if (!envelope.ok) {
+      throw new Error(envelope.error?.message?.trim() || envelope.error?.code || '大模型图片识别失败')
+    }
+    const normalized = asImageAiJsonResult(envelope.value)
+    if (!normalized) throw new Error('大模型返回了无法识别的结果')
+    return normalized
+  }
+  const normalized = asImageAiJsonResult(response)
+  if (!normalized) throw new Error('大模型返回了无法识别的结果')
+  return normalized
+}
 
 /**
  * Resolve an image message to a data URL.
@@ -240,6 +370,7 @@ export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: s
  */
 const emoticonQueue = createImageLoadQueue<{ md5: string; emojiUrl?: string }, ImageDataUrlResult>({
   chunkSize: 200,
+  keyOf: (k) => k.md5 + '\u0000' + (k.emojiUrl ?? ''),
   onMissing: (k) => ({ error: '批量接口未返回该表情 (MD5=' + k.md5 + ')' }),
   flush: async (keys) => {
     const byMd5 = await apiGetEmoticonDataUrls(keys.map(k => k.emojiUrl ? { md5: k.md5, emojiUrl: k.emojiUrl } : { md5: k.md5 }))
@@ -616,10 +747,15 @@ export async function apiGetSnsVideoCoverDataUrl(options: SnsCoverKey): Promise<
     key: options.key,
     offline: options.offline,
   })
-  const item = await snsCoverQueue.enqueue(md5)
-  coverHints.delete(md5)
-  return item
-}/**
+  try {
+    return await snsCoverQueue.enqueue(md5)
+  } finally {
+    // enqueue 失败也必须删；否则每张独一无二的坏封面都会在这张表里留一条永久记录。
+    coverHints.delete(md5)
+  }
+}
+
+/**
  * Resolve a moments video body to an offline data URL for inline playback.
  * @param options - media md5 / timeline id / media id.
  * @returns ImageDataUrlResult.
@@ -628,16 +764,7 @@ export async function apiGetSnsVideoDataUrl(options: { md5?: string; timelineId?
   return unwrap(await remote().getSnsVideoDataUrl(options))
 }
 
-/**
- * 把一条朋友圈视频写到用户选定路径（本机缓存优先，否则 CDN 取回+解密，都在后端完成）。
- * @param options - 缓存键 / 远端地址与 `<enc key>` / 目标路径。
- * @returns ok + 字节数，或错误说明。
- */
-export async function apiExportSnsVideo(options: {
-  md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
-}): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
-  return unwrap(await remote().exportSnsVideo(options))
-}
+export * from './api-media-original-export.ts'
 
 /** 弹出保存对话框并返回选定路径（写盘由后端做）。 */
 /**

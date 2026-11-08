@@ -63,6 +63,28 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
     expect(bad.unsupported[0]).toMatchObject({ kind: 'date', value: '2026-09-03' })
   })
 
+  it('用户问题或范围里已写明的日期允许被回答复述', () => {
+    const a = auditGrounding(
+      '你问的 2026-10-27 到 2026-11-02 这段时间里，群里主要聊了接口和报错 [1]。',
+      ['项目群 2026-10-27 10:00\n大家在聊接口和报错'],
+      1,
+      { allowValuesFrom: ['最近 2026-10-27 到 2026-11-02 聊了什么？'] },
+    )
+    expect(a.unsupported).toEqual([])
+    expect(a.ok).toBe(true)
+  })
+
+  it('用户给出的范围日期不会被要求补引用角标', () => {
+    const a = auditGrounding(
+      '你问的 2026-10-27 到 2026-11-02 这段时间里，群里的重点是接口问题。\n- 有人反馈连接失败 [1]。',
+      ['项目群 2026-10-27 10:00\n有人反馈连接失败'],
+      1,
+      { allowValuesFrom: ['最近 2026-10-27 到 2026-11-02 群里聊了什么？'] },
+    )
+    expect(a.unsupported).toEqual([])
+    expect(a.uncited).toBe(0)
+  })
+
   it('日期里的数字不会被当成金额出处（2026 元 不能靠 2026-09-05 蒙混）', () => {
     const a = auditGrounding('他转了 2026 元 [1]。', EVIDENCE, 3)
     expect(a.ok).toBe(false)
@@ -87,7 +109,7 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
     expect(a.ok).toBe(true)
   })
 
-  it('自动回复模式不要求角标，但高风险值仍逐项核对', () => {
+  it('无角标模式不要求引用标记，但高风险值仍逐项核对', () => {
     const good = auditGrounding(
       '老陈转来 3500.00 元。',
       EVIDENCE,
@@ -106,20 +128,20 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
     expect(bad.unsupported.map(v => v.value)).toEqual(['5000.00元'])
   })
 
-  it('自动回复的核对提示不要求角标，并要求无法确认时自然兜底', () => {
+  it('无角标模式的核对提示仍要求无法确认时自然兜底', () => {
     const a = auditGrounding(
       '老陈转来 5000.00 元。',
       EVIDENCE,
       3,
       { requireCitationMarkers: false },
     )
-    const hint = groundingRepairHint(a, 'chat')
+    const hint = groundingRepairHint(a, 'plain')
     expect(hint).toContain('5000.00元')
     expect(hint).toContain('不要标 [n]')
     expect(hint).toContain('这个数字我这边没法确认')
   })
 
-  it('误加的 [n] 角标在自动回复发送前被确定性清除', () => {
+  it('无角标模式会在发送前确定性清除误加的 [n]', () => {
     expect(stripCitationMarkers('收到 13.00 元 [1][2]，明天到账。')).toBe('收到 13.00 元，明天到账。')
     expect(stripCitationMarkers('收到 13.00 元 [ 1 ][  22 ]，明天到账。'))
       .toBe('收到 13.00 元，明天到账。')
@@ -330,6 +352,25 @@ describe('端到端：核对不通过会带着「具体哪个值不对」回炉�
     // 首答由调用方直接传入，只有回炉这一步会调用 runChat。
     expect(runChat.mock.calls[0]?.[0]).toBe('统一角色提示')
   })
+
+  it('复述用户给出的范围日期不触发无意义的回炉', async () => {
+    const runChat = vi.fn().mockResolvedValue('不应调用')
+    const result = await resolveGroundedAnswer({
+      mode: 'cited',
+      answer: '你在 2026-10-27 到 2026-11-02 问的这段时间里，群里的重点是接口问题。\n- 有人反馈连接失败 [1]。',
+      citationCount: 1,
+      synthPrompt: '材料：项目群 2026-10-27 在聊接口问题。',
+      evidenceFor: () => ['项目群 2026-10-27 10:00\n大家在聊接口问题'],
+      allEvidence: ['项目群 2026-10-27 10:00\n大家在聊接口问题'],
+      trustedValueText: '最近 2026-10-27 到 2026-11-02 群里聊了什么？',
+      systemPrompt: '统一角色提示',
+      runChat,
+    })
+
+    expect(result.repaired).toBe(false)
+    expect(result.grounding.unsupported).toEqual([])
+    expect(runChat).not.toHaveBeenCalled()
+  })
 })
 
 describe('证据使用校验：有引用还必须真的使用材料', () => {
@@ -341,21 +382,4 @@ describe('证据使用校验：有引用还必须真的使用材料', () => {
     expect(hasEvidenceSupport('付款节点是签约后 30 日内。', ['合同编号 HT-2026\n付款节点为签约后 30 日内。'])).toBe(true)
   })
 
-  it('自动回复未使用材料时回炉；修正稿仍未使用时 withheld', async () => {
-    const runChat = vi.fn(async () => '可以，我稍后回复你。')
-    const result = await resolveGroundedAnswer({
-      mode: 'chat',
-      answer: '可以，我稍后回复你。',
-      citationCount: 1,
-      synthPrompt: '只使用材料回答',
-      evidenceFor: () => ['合同编号 HT-2026\n付款节点为签约后 30 日内。'],
-      allEvidence: ['合同编号 HT-2026\n付款节点为签约后 30 日内。'],
-      systemPrompt: '系统',
-      runChat,
-    })
-    expect(runChat).toHaveBeenCalledTimes(1)
-    expect(result.evidenceUsed).toBe(false)
-    expect(result.withheld).toBe(true)
-    expect(result.answer).not.toContain('稍后回复')
-  })
 })

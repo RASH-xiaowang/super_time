@@ -14,8 +14,7 @@
  * `section > header + div(hidden)` 变成 `section(card) > div(cardHd) + div(cardBd) > div.ovSectionBd[hidden]`，
  * 判据同步到新结构；`hidden` 的 display:none 兜底规则看 `overview.module.css` 的 `.ovSectionBd[hidden]`。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'

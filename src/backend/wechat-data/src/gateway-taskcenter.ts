@@ -1,7 +1,7 @@
 /**
  * WechatDataGateway 方法面 · **任务信息 / 任务触发记录 / 触发投递**（2026-10-19）。
  *
- * 单独成环的理由与 db-health / clawbot 同款：这一族方法（任务配置 + 触发记录 + 投递）
+ * 单独成环的理由与 db-health 同款：这一族方法（任务配置 + 触发记录 + 投递）
  * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
  * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
  * 对外方法面逐名增加 11 个（`gateway-remote-surface.spec.ts` / 契约用例守；2026-10-21
@@ -29,7 +29,7 @@ import type {
 import { createTaskCenterRemotes } from './remotes/task-center.ts'
 import { rawWechatBase } from './gateway-support.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
-import { GatewayMessageList } from './gateway-message-list.ts'
+import { GatewayChatAiReply } from './gateway-chat-ai-reply.ts'
 import { getConfig } from './config/wechat-config.ts'
 import { pickLanIPv4 } from './net/lan-ipv4.ts'
 import {
@@ -77,7 +77,7 @@ function normalizeMediaBaseUrl(raw: unknown): string {
 }
 
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export abstract class GatewayTaskCenter extends GatewayMessageList {
+export abstract class GatewayTaskCenter extends GatewayChatAiReply {
   /**
    * 任务列表（最新在前）。
    *

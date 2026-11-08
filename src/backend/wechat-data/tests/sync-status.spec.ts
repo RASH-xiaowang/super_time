@@ -5,6 +5,7 @@
  * 只认消息分片**（否则每拍都拉消息增量，等于没优化）。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { forgetDataRevision, publishDataRevision, readDataRevision } from '../src/query/sync-status.ts'
 
 beforeEach(() => { forgetDataRevision() })
@@ -58,5 +59,17 @@ describe('shards 封顶：诊断字段不许无限增长', () => {
     const r = readDataRevision()
     expect(r.shards).toHaveLength(32)
     expect(r.messageChanged, '封顶截掉的尾部里有消息分片也必须算到').toBe(true)
+  })
+})
+
+describe('wechat-data/updated 的结构化修订载荷', () => {
+  it('gateway-core 在 emit 前发布并读取同一拍快照', () => {
+    const core = readFileSync(new URL('../src/gateway-core.ts', import.meta.url), 'utf8')
+    const published = core.indexOf('publishDataRevision(synced)')
+    const snapshot = core.indexOf('const revision = readDataRevision()')
+    const emitted = core.indexOf("ctx.emit('wechat-data/updated', revision)")
+    expect(published).toBeGreaterThan(-1)
+    expect(snapshot).toBeGreaterThan(published)
+    expect(emitted).toBeGreaterThan(snapshot)
   })
 })

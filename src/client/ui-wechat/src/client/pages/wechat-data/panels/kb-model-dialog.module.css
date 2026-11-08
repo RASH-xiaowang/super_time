@@ -72,7 +72,7 @@
    本库指定时染成青色，继承全局时保持灰 —— 一眼能分开「跟着走」和「自己定」。 */
 .effective {
   font-size: var(--nm-dense-fs-xs);
-  font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
   color: var(--nm-text-3);
   white-space: nowrap;
 }

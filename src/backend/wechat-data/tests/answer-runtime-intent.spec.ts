@@ -91,6 +91,9 @@ describe('classifyAnswerIntent 中文相对时间', () => {
     expect(decision.scopeHints?.to).toBe('2026-10-13')
     expect(decision.scopeHints?.timeRange?.source).toBe('progression')
     expect(decision.kind).toBe('timeline')
+    // 「上周」是确定的时间范围递进，不是「最近一次」这种排序语义。
+    // 不能因为上一轮带了 recency 就把本轮也按最新优先截断。
+    expect(decision.recency).toBe(false)
   })
 
   it('「最近一次」是排序而非时间窗', () => {
@@ -169,6 +172,49 @@ describe('classifyAnswerIntent 会话 / 联系人 / 消息引用', () => {
     expect(ambiguous.toolHints).toEqual([])
   })
 
+  it('单聊范围可直接消解「她」，群聊仍不把群本身当联系人', () => {
+    const privateDecision = classifyAnswerIntent('我给她转了多少钱？', {
+      currentSession: 'wxid_emin',
+      currentSessionName: 'e敏',
+      currentSessionKind: 'private',
+      now: NOW,
+    })
+    expect(privateDecision.kind).not.toBe('clarify')
+    expect(privateDecision.needsClarification).toBeUndefined()
+    expect(privateDecision.scopeHints?.contact).toBe('e敏')
+    expect(privateDecision.signals).toContain('contact:current-session')
+
+    const groupDecision = classifyAnswerIntent('我给她转了多少钱？', {
+      currentSession: 'team@chatroom',
+      currentSessionName: '项目群',
+      currentSessionKind: 'group',
+      now: NOW,
+    })
+    expect(groupDecision.kind).toBe('clarify')
+    expect(groupDecision.needsClarification).toBe(true)
+    expect(groupDecision.scopeHints?.contact).toBeUndefined()
+  })
+
+  it('显式联系人或上一轮联系人优先于当前单聊默认联系人', () => {
+    const explicit = classifyAnswerIntent('王五最近发了什么？', {
+      knownEntities: ['王五'],
+      currentSession: 'wxid_emin',
+      currentSessionName: 'e敏',
+      currentSessionKind: 'private',
+      now: NOW,
+    })
+    expect(explicit.scopeHints?.contact).toBe('王五')
+
+    const inherited = classifyAnswerIntent('她最近发了什么？', {
+      currentSession: 'wxid_emin',
+      currentSessionName: 'e敏',
+      currentSessionKind: 'private',
+      context: { activeContact: '李四' },
+      now: NOW,
+    })
+    expect(inherited.scopeHints?.contact).toBe('李四')
+  })
+
   it('「刚才那个文件」继承媒体引用并保留会话', () => {
     const decision = classifyAnswerIntent('刚才那个文件里写了什么？', {
       currentSession: 'team@chatroom',
@@ -211,6 +257,7 @@ describe('classifyAnswerIntent 结构化问法', () => {
     expect(classifyAnswerIntent('上周三我和李四聊了什么？', { knownEntities: ['李四'], now: NOW }).kind).toBe('timeline')
     expect(classifyAnswerIntent('这份合同有什么风险？', { now: NOW }).kind).toBe('open_qa')
     expect(classifyAnswerIntent('你好', { now: NOW }).kind).toBe('open_qa')
+    expect(classifyAnswerIntent('你好', { now: NOW }).recency).toBe(false)
   })
 
   it('空问题要求澄清，不产生工具调用', () => {
@@ -295,6 +342,40 @@ describe('buildThreadState / applyThreadState', () => {
     expect(applied.contact).toBeUndefined()
     expect(applied.from).toBe('2026-10-01')
     expect(applied.reason.some(reason => reason.includes('需要澄清'))).toBe(true)
+  })
+
+  it('空历史的当前单聊仍能把代词落到会话联系人，群聊继续澄清', () => {
+    const privateState = buildThreadState(
+      [],
+      undefined,
+      { username: 'wxid_emin' },
+      NOW,
+    )
+    const privateApplied = applyThreadState('我给她转了多少钱？', privateState, {
+      currentSession: 'wxid_emin',
+      currentSessionName: 'e敏',
+      currentSessionKind: 'private',
+      now: NOW,
+    })
+    expect(privateApplied.contact).toBe('e敏')
+    expect(privateApplied.intent).not.toBe('clarify')
+    expect(privateApplied.reason.join('\n')).toContain('当前单聊联系人')
+
+    const groupState = buildThreadState(
+      [],
+      undefined,
+      { username: 'team@chatroom' },
+      NOW,
+    )
+    const groupApplied = applyThreadState('我给她转了多少钱？', groupState, {
+      currentSession: 'team@chatroom',
+      currentSessionName: '项目群',
+      currentSessionKind: 'group',
+      now: NOW,
+    })
+    expect(groupApplied.contact).toBeUndefined()
+    expect(groupApplied.intent).toBe('clarify')
+    expect(groupApplied.reason.join('\n')).toContain('需要澄清')
   })
 
   it('「那上周呢」相对上一轮时间窗递进', () => {

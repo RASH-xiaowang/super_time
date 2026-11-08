@@ -7,9 +7,8 @@
  * 「只在真机脚本里被证明过的行为，随时可以在 CI 全绿的情况下被改回去」⇒ 这类
  * 「一行就能翻转、翻转就是远程代码执行原语」的配置恰恰最该有守卫。
  *
- * 顺带把 P0-4 的搬迁钉住：窗口本体现在住在 `src/backend/main-window.js`，
- * 「全仓只有一处 `new BrowserWindow(`」这条一旦破了，说明有人另开了一个
- * 不受这套 webPreferences 约束的窗口。
+ * 顺带把 P0-4 的搬迁钉住：主窗口与浏览器交接卡片都必须显式写出安全基线，
+ * 且不允许出现第二份偷偷放宽的 `webPreferences`。
  * @vitest-environment node
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
@@ -19,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const WINDOW_MODULE = 'src/backend/main-window.js'
+const HANDOFF_MODULE = 'src/backend/browser-handoff.js'
 /** 排除：vendored 依赖、构建产物、测试夹具。 */
 const EXCLUDED_PREFIXES = ['src/backend/deps/', 'src/backend/wechat-data/lib/', 'src/client/ui-dist/', 'node_modules/']
 
@@ -57,6 +57,13 @@ describe('Electron 窗口安全基线', () => {
     expect(body).toContain('nodeIntegration: false')
     expect(body).toContain('sandbox: true')
     expect(body.match(/contextIsolation/g)?.length, 'contextIsolation 出现多于一处').toBe(1)
+    expect(body).toContain('devTools: !app.isPackaged')
+    expect(body).toContain('webSecurity: true')
+    expect(body).toContain('allowRunningInsecureContent: false')
+    expect(body).toContain('webviewTag: false')
+    expect(body).toContain('nodeIntegrationInSubFrames: false')
+    expect(body).toContain('nodeIntegrationInWorker: false')
+    expect(body).toContain('navigateOnDragDrop: false')
   })
 
   it('全仓不许出现关掉基线的写法（含「新加的第二份 webPreferences」）', () => {
@@ -65,8 +72,11 @@ describe('Electron 窗口安全基线', () => {
       /contextIsolation *: *false/,
       /sandbox *: *false/,
       /webSecurity *: *false/,
-      /allowRunningInsecureContent/,
+      /allowRunningInsecureContent *: *true/,
       /webviewTag *: *true/,
+      /nodeIntegrationInSubFrames *: *true/,
+      /nodeIntegrationInWorker *: *true/,
+      /navigateOnDragDrop *: *true/,
     ]
     const hits: string[] = []
     for (const rel of files) {
@@ -78,13 +88,17 @@ describe('Electron 窗口安全基线', () => {
     expect(hits, '渲染进程安全基线被翻转：\n  ' + hits.join('\n  ')).toEqual([])
   })
 
-  it('全仓只有一处 new BrowserWindow(（另开窗口就得复用这套守卫）', () => {
+  it('所有 BrowserWindow 创建点都在受审模块里，且卡片窗口显式关闭 DevTools', () => {
     const sites: string[] = []
     for (const rel of files) {
-      const n = (read(rel).match(/new BrowserWindow\(/g) ?? []).length
+      const n = (read(rel).match(/new\s+(?:deps\.)?BrowserWindow\s*\(/g) ?? []).length
       if (n > 0) sites.push(...Array<string>(n).fill(rel))
     }
-    expect(sites, `建窗口的地方不止一处：${sites.join(', ')}`).toEqual([WINDOW_MODULE])
+    expect([...new Set(sites)].sort(), `存在未受审的建窗点：${sites.join(', ')}`).toEqual(
+      [HANDOFF_MODULE, WINDOW_MODULE].sort(),
+    )
+    const handoff = read(HANDOFF_MODULE)
+    expect(handoff).toContain('contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: false')
   })
 
   it('导航/开窗判定仍走 navigation-policy（守卫不许在别处重写一份）', () => {

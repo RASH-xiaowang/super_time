@@ -1,19 +1,16 @@
 @echo off
-rem Super Time launcher - delegates to the "latest code" launcher in THIS tree.
-rem The perf branch has been merged into this workspace (release/v1.0.9 + merge),
-rem so the latest build is built and launched from here. Latest.cmd / scripts\launch-latest.mjs
-rem rebuild when sources are newer, close stale dev instances, then start Electron.
-rem Pass --no-launch / --force-build / --skip-build through it.
+rem Super Time - the single Windows launcher for building and starting the app.
+rem The Node launcher rebuilds when sources are newer, closes stale dev instances,
+rem then starts Electron. Pass --no-launch / --force-build / --skip-build through it.
 rem ASCII only (cmd codepage); Chinese status lines are printed by the Node launcher.
 rem IMPORTANT: keep this file LF-safe: no parenthesized blocks / labels, only single-line ifs.
 setlocal
-set "ROOT=%~dp0"
-if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
-set "LATEST=%ROOT%\Latest.cmd"
-if not exist "%LATEST%" echo [ERROR] Latest launcher not found: "%LATEST%"
-if not exist "%LATEST%" echo         Restore Latest.cmd, or run: npm run dev
-if not exist "%LATEST%" pause
-if not exist "%LATEST%" exit /b 1
-call "%LATEST%" %*
+chcp 65001 >nul
+cd /d "%~dp0"
+node scripts\launch-latest.mjs %*
 set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" echo.
+if not "%RC%"=="0" echo [Super Time] launch failed, exit code %RC%
+if not "%RC%"=="0" pause
+endlocal
 exit /b %RC%

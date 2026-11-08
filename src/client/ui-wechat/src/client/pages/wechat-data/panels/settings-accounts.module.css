@@ -118,6 +118,10 @@
   background: var(--nm-bg-card);
   border-top: 0.5px solid var(--nm-border);
 }
+
+.saveBar[hidden] {
+  display: none;
+}
 .saveMeta {
   font-size: 11px;
   color: var(--nm-text-2);

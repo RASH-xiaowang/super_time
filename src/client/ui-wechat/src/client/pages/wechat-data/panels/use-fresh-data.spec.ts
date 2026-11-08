@@ -7,8 +7,7 @@
  *   ② 成功写回（把最新资源保存好）；
  *   ③ 失败回退 + `stale` 标注（不许把缓存当最新）。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,6 +16,7 @@ vi.mock('../api.ts', () => ({ readRenderCache: mocks.readRenderCache, writeRende
 
 // eslint-disable-next-line import/first -- mock 必须先于被测模块
 import { useFreshData } from './use-fresh-data.ts'
+import { KeepAliveActiveProvider } from './keep-alive.tsx'
 
 let container: HTMLDivElement | null = null
 let root: Root | null = null
@@ -47,16 +47,24 @@ function Probe({ k, fetcher, opts, n }: { k: string; fetcher: () => Promise<unkn
   })
 }
 
-function render(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }): void {
+function ActiveProbe(props: { k: string; fetcher: () => Promise<unknown>; opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }; n?: number; active: boolean }): React.JSX.Element {
+  return createElement(
+    KeepAliveActiveProvider,
+    { active: props.active },
+    createElement(Probe, { k: props.k, fetcher: props.fetcher, opts: props.opts, n: props.n }),
+  )
+}
+
+function render(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }, active = true): void {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  act(() => { root?.render(createElement(Probe, { k, fetcher, opts })) })
+  act(() => { root?.render(createElement(ActiveProbe, { k, fetcher, opts, active })) })
 }
 
 /** 再渲染一次（换 `n`：强制走渲染，模拟父组件无关状态变化）。 */
-function rerender(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }, n = 1): void {
-  act(() => { root?.render(createElement(Probe, { k, fetcher, opts, n })) })
+function rerender(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }, n = 1, active = true): void {
+  act(() => { root?.render(createElement(ActiveProbe, { k, fetcher, opts, n, active })) })
 }
 
 /** 派发一条 WAL 推送并串行越过 useWechatDataUpdated 的 300ms 合并窗。 */
@@ -182,6 +190,24 @@ describe('useFreshData：opts 稳定性与 WAL 实时刷新（2026-10-13）', ()
     expect(fetcher, '推送后必须重查').toHaveBeenCalledTimes(2)
     expect(attr('data-v'), '新值必须上屏').toBe('{"v":"second"}')
     expect(attr('data-loading'), '静默重查不许翻 loading（按钮/骨架会闪）').toBe('false')
+  })
+
+  it('keep-alive 隐藏时 WAL 不发起查询；重新显示时补一次静默回源', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockResolvedValueOnce({ v: 'second' })
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L-hidden', fetcher, { liveRefresh: true })
+    await flush()
+
+    rerender('L-hidden', fetcher, { liveRefresh: true }, 1, false)
+    await firePush()
+    expect(fetcher, '隐藏面板收到 WAL 后仍在后台查询').toHaveBeenCalledTimes(1)
+
+    rerender('L-hidden', fetcher, { liveRefresh: true }, 2, true)
+    await flush()
+    expect(fetcher, '重新显示时没有补一次静默回源').toHaveBeenCalledTimes(2)
+    expect(attr('data-v')).toBe('{"v":"second"}')
   })
 
   it('liveRefresh 开但静默重查失败 ⇒ 保留旧值、不端出错误（与缓存后台复验同一降级口径）', async () => {

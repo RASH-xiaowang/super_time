@@ -1,7 +1,7 @@
 /**
  * 数据面板的按需加载入口。
  *
- * `WechatDataPanel` 只需要外壳与导航，具体页签不应在首屏把 127 个面板模块全部拉进来。
+ * `WechatDataPanel` 只需要外壳与导航，具体页签不应在首屏把所有面板模块全部拉进来。
  * 这里把会随 `renderTab` 出现的面板统一包成 React.lazy；`WechatDataPanel` 外层已经用
  * Suspense 包住 `activePanel`，所以切页签时只加载目标页签自己的 chunk。
  */
@@ -12,12 +12,11 @@ import { ErrorBoundary } from './ui/error-boundary.tsx'
 export const OverviewPanel = lazy(() => import('./panels/Overview.tsx').then(({ OverviewPanel }) => ({ default: OverviewPanel })))
 export const PrivacyPanel = lazy(() => import('./panels/Privacy.tsx').then(({ PrivacyPanel }) => ({ default: PrivacyPanel })))
 export const OperationLogPanel = lazy(() => import('./panels/OperationLogPanel.tsx').then(({ OperationLogPanel }) => ({ default: OperationLogPanel })))
-export const ClawBotPanel = lazy(() => import('./panels/ClawBotPanel.tsx').then(({ ClawBotPanel }) => ({ default: ClawBotPanel })))
 export const AskPanel = lazy(() => import('./panels/Ask.tsx').then(({ AskPanel }) => ({ default: AskPanel })))
 export const ChatsPanel = lazy(() => import('./panels/Chats.tsx').then(({ ChatsPanel }) => ({ default: ChatsPanel })))
 export const ContactsPanel = lazy(() => import('./panels/Contacts.tsx').then(({ ContactsPanel }) => ({ default: ContactsPanel })))
 export const PortraitsPanel = lazy(() => import('./panels/Portraits.tsx').then(({ PortraitsPanel }) => ({ default: PortraitsPanel })))
-export const MomentsPanel = lazy(() => import('./panels/MomentsOptimized.tsx').then(({ MomentsPanel }) => ({ default: MomentsPanel })))
+export const MomentsPanel = lazy(() => import('./panels/moments-panel.tsx').then(({ MomentsPanel }) => ({ default: MomentsPanel })))
 export const FavoritesPanel = lazy(() => import('./panels/Favorites.tsx').then(({ FavoritesPanel }) => ({ default: FavoritesPanel })))
 export const EmoticonsPanel = lazy(() => import('./panels/Emoticons.tsx').then(({ EmoticonsPanel }) => ({ default: EmoticonsPanel })))
 export const FilesPanel = lazy(() => import('./panels/Files.tsx').then(({ FilesPanel }) => ({ default: FilesPanel })))
@@ -38,11 +37,7 @@ export const CallsPanel = lazy(() => import('./panels/Calls.tsx').then(({ CallsP
 export const RevokedPanel = lazy(() => import('./panels/Revoked.tsx').then(({ RevokedPanel }) => ({ default: RevokedPanel })))
 export const MonitorPanel = lazy(() => import('./panels/Monitor.tsx').then(({ MonitorPanel }) => ({ default: MonitorPanel })))
 export const AnnualPanel = lazy(() => import('./panels/Annual.tsx').then(({ AnnualPanel }) => ({ default: AnnualPanel })))
-// 2026-10-17：`DailySummaryPanel` / `PeriodSummaryPanel` 已合并为 `SummaryWorkbench`。
-// 两个旧 loader 保留（`panel-loaders` 的导出面被 `api-module-split.spec.ts` 等守卫盯着，
-// 删导出会连带改一堆断言），但**不再有调用点** —— 真正的入口是下面这个。
-export const DailySummaryPanel = lazy(() => import('./panels/DailySummary.tsx').then(({ DailySummaryPanel }) => ({ default: DailySummaryPanel })))
-export const PeriodSummaryPanel = lazy(() => import('./panels/PeriodSummary.tsx').then(({ PeriodSummaryPanel }) => ({ default: PeriodSummaryPanel })))
+// 每日/周期总结已合并为一个由时间范围驱动的工作台。
 export const SummaryWorkbench = lazy(() => import('./panels/SummaryWorkbench.tsx').then(({ SummaryWorkbench }) => ({ default: SummaryWorkbench })))
 export const GraphPanel = lazy(() => import('./panels/Graph.tsx').then(({ GraphPanel }) => ({ default: GraphPanel })))
 export const SettingsPanel = lazy(() => import('./panels/Settings.tsx').then(({ SettingsPanel }) => ({ default: SettingsPanel })))

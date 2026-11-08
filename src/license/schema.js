@@ -3,17 +3,19 @@
  *
  * 回答授权六问：产品/客户/设备/期限/额度/停止条件。
  */
-const PRODUCT_ID = 'super-time-wechat'
+const {
+  FEATURE_SCHEMA_VERSION,
+  KNOWN_FEATURES,
+  REQUIRED_FEATURES,
+  FEATURE_CATALOG,
+  FEATURE_GROUPS,
+  FEATURE_LABELS,
+  GRANULAR_FEATURES,
+  featureLabel,
+  isKnownFeature,
+} = require('./features')
 
-const KNOWN_FEATURES = [
-  'wechat-data',
-  'ai-ask',
-  'ai-summary',
-  'export',
-  'backup',
-  'privacy-audit',
-  'voice-transcribe',
-]
+const PRODUCT_ID = 'super-time-wechat'
 
 function isIsoDate(v) {
   return typeof v === 'string' && !Number.isNaN(Date.parse(v))
@@ -52,6 +54,16 @@ function validatePayload(payload) {
   }
   for (const f of p.features) {
     if (typeof f !== 'string') return { ok: false, reason: 'bad_feature' }
+  }
+  if (p.featureSchemaVersion != null && p.featureSchemaVersion !== FEATURE_SCHEMA_VERSION) {
+    return { ok: false, reason: 'unsupported_feature_schema' }
+  }
+  if (p.featureSchemaVersion === FEATURE_SCHEMA_VERSION) {
+    const unknown = p.features.filter((feature) => !isKnownFeature(feature))
+    if (unknown.length) return { ok: false, reason: `unknown_feature:${unknown[0]}` }
+    for (const required of REQUIRED_FEATURES) {
+      if (!p.features.includes(required)) return { ok: false, reason: `missing_required_feature:${required}` }
+    }
   }
 
   const seats = p.seats
@@ -106,7 +118,15 @@ function compareSemver(a, b) {
 
 module.exports = {
   PRODUCT_ID,
+  FEATURE_SCHEMA_VERSION,
   KNOWN_FEATURES,
+  REQUIRED_FEATURES,
+  FEATURE_CATALOG,
+  FEATURE_GROUPS,
+  FEATURE_LABELS,
+  GRANULAR_FEATURES,
+  featureLabel,
+  isKnownFeature,
   validatePayload,
   evaluatePayload,
   compareSemver,

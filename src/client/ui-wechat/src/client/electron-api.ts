@@ -16,6 +16,8 @@ import type {
 } from './pages/wechat-data/llm-config.ts'
 import type {
   BackendEvent,
+  ImageAiJsonBridgeResult,
+  ImageOcrBridgeResult,
   LicenseStatus,
   RemoteAccessState,
   RemoteAccessRotation,
@@ -25,6 +27,8 @@ import type {
 
 export type {
   BackendEvent,
+  ImageAiJsonBridgeResult,
+  ImageOcrBridgeResult,
   LicenseStatus,
   RemoteAccessState,
   RemoteAccessRotation,
@@ -244,6 +248,10 @@ export interface WechatBridge {
   activateLlmProfile(id: string): Promise<RemoteEnvelope<LlmProfilesSnapshot>>
   saveLlmProfile(options: LlmProfileOptions): Promise<RemoteEnvelope<LlmProfilesSnapshot>>
   deleteLlmProfile(id: string): Promise<RemoteEnvelope<LlmProfilesSnapshot>>
+  /** 用微信 4.x 自带的 OCR 插件识别一张 data URL / wechat-media URL。 */
+  ocrImage(source: string): Promise<ImageOcrBridgeResult>
+  /** 用当前配置的多模态模型识别图片文字，并返回结构化 JSON。 */
+  imageAiJson(source: string): Promise<ImageAiJsonBridgeResult>
   backendState(): Promise<RemoteEnvelope<BackendStatus>>
   onEvent(listener: (payload: BackendEvent) => void): () => void
 }

@@ -365,7 +365,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
          */
         jobId?: string;
         /**
-         * 随问题一起送模型的图片（2026-10-18，ClawBot 自动回复的「识别图中内容」）：
+         * 随问题一起送模型的图片：
          * canonical base64 + MIME，最多 2 张。ask 管道按当前对话模型是否声明 `image`
          * 输入模态决定是否真的发送；不支持时会改为一句「看不到图片内容」的说明，
          * 绝不让模型以为「对方没发过图」。

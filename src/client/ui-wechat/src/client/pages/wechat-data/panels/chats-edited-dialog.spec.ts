@@ -8,8 +8,7 @@
  * 现在与日历/导出弹窗同一口径：只有点遮罩**本身**才关。
  * 另一半规矩是 `editing` 期间锁住「恢复原文」（两次恢复会打架，第二次会盖掉第一次的结果）。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditedMessageRecord } from '@deepseek-ai/dsh-wechat-data/types'

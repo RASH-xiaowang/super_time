@@ -2,8 +2,8 @@
  * 公众号 — gh_* 账号的消息/文章规模与最近文章时间，支持跳转会话查看原文。
  * 全部本机离线统计。与「文件 / 媒体 / 存储」共用页头语言与内联 KPI 条。
  */
-import { useCallback } from 'react'
-import { ListSentinel, useProgressiveList } from './hooks.tsx'
+import { useCallback, useRef } from 'react'
+import { ListSentinel, ProgressiveListSpacer, useProgressiveList } from './hooks.tsx'
 import { apiGetOfficialAssets } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { OfficialAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
@@ -31,7 +31,14 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
   const load = useCallback((): Promise<OfficialAssetsSnapshot> => apiGetOfficialAssets(), [])
   const { data, loading, error, reload } = useFreshData<OfficialAssetsSnapshot>('official-assets', load, { liveRefresh: true })
 
-  const { count: rowCount, sentinelRef } = useProgressiveList(data?.rows.length ?? 0, 100)
+  const tableRef = useRef<HTMLDivElement | null>(null)
+  const {
+    start: rowStart,
+    count: rowCount,
+    beforeHeight: rowBeforeHeight,
+    sentinelRef,
+    topSentinelRef: rowTopSentinel,
+  } = useProgressiveList(data?.rows.length ?? 0, 100, { maxCount: 300, listRef: tableRef })
 
   return (
     <div className={kitCss.panelShell}>
@@ -55,7 +62,7 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
             { label: '有文章账号', value: data.rows.filter(r => r.articles > 0).length.toLocaleString() },
           ]} />
           <Card flush title="公众号明细" className={css.fillCard}>
-            <div className={css.table}>
+            <div ref={tableRef} className={css.table}>
               <div className={css.head} aria-hidden="true">
                 <span className={css.colName}>公众号</span>
                 <span className={css.colNum}>消息</span>
@@ -65,8 +72,10 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
               {data.rows.length === 0 ? (
                 <div className={kitCss.emptyInline}>暂无公众号内容 —— 请确认公众号会话已入库</div>
               ) : (
-                data.rows.slice(0, rowCount).map(r => (
-                  <button key={r.username} type="button" className={css.row} onClick={() => { onOpenChat?.(r.username) }} title="打开会话">
+                <>
+                  <ProgressiveListSpacer height={rowBeforeHeight} topSentinelRef={rowTopSentinel} />
+                  {data.rows.slice(rowStart, rowCount).map((r, idx) => (
+                  <button key={r.username} type="button" className={css.row} data-progressive-item={rowStart + idx} onClick={() => { onOpenChat?.(r.username) }} title="打开会话">
                     <span className={css.colName}>
                       <IdentityName className={css.rowIdentity} name={r.name} username={r.username} size={22}>
                         {r.name}
@@ -77,7 +86,8 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
                     <span className={css.colNum}>{r.articles.toLocaleString()}</span>
                     <Mono>{fmtTs(r.lastArticleTime)}</Mono>
                   </button>
-                ))
+                  ))}
+                </>
               )}
               {data.rows.length > rowCount && <ListSentinel refFn={sentinelRef} />}
             </div>

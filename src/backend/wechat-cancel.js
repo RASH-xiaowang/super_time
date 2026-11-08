@@ -20,9 +20,22 @@ const CALL_CANCEL_METHODS = Object.freeze({
   exportAnnualReport: 'cancelExportJob',
   exportAllSessions: 'cancelExportJob',
   exportMoments: 'cancelExportJob',
+  exportSnsVideo: 'cancelExportJob',
+  exportSnsImage: 'cancelExportJob',
+  exportChatImage: 'cancelExportJob',
+  exportChatVideo: 'cancelExportJob',
+  exportChatFile: 'cancelExportJob',
+  exportFileImage: 'cancelExportJob',
+  exportFileVideo: 'cancelExportJob',
+  exportFileAttachment: 'cancelExportJob',
+  exportFavoriteImage: 'cancelExportJob',
+  exportFavoriteVideo: 'cancelExportJob',
+  exportFavoriteFile: 'cancelExportJob',
+  createBackup: 'cancelExportJob',
   createEncryptedBackup: 'cancelExportJob',
   generateAnnualNarrative: 'cancelExportJob',
   searchMessages: 'cancelSearch',
+  searchUnified: 'cancelSearch',
   askWechat: 'cancelAsk',
   analyzeVisibleMessages: 'cancelLayaAnalysis',
   downloadLayaModel: 'cancelLayaDownload',
@@ -30,6 +43,17 @@ const CALL_CANCEL_METHODS = Object.freeze({
   buildKbVectorIndex: 'cancelKbIndexBuild',
   downloadWhisperModel: 'cancelWhisperDownload',
   installWhisperEngine: 'cancelWhisperDownload',
+});
+
+/**
+ * HTTP 客户端断连时额外允许取消的短任务。
+ *
+ * 这些方法没有长 RPC 窗口，不应进入 `CALL_CANCEL_METHODS`（否则宿主会在普通
+ * 60 秒超时策略上误以为它们需要长窗口）。但它们确实支持可选 jobId，并且是全局
+ * 搜索并行链路的一部分；连接断开后继续跑只会白白占用 worker。
+ */
+const CONNECTION_CANCEL_METHODS = Object.freeze({
+  getSessions: 'cancelSearch',
 });
 
 /**
@@ -46,12 +70,10 @@ const NON_CANCELLABLE_LONG_CALLS = Object.freeze(new Set([
   'autoGetDbKey',
   'autoGetImageKey',
   'buildRagVectorIndex',
-  'createBackup',
   'decryptAllDatabases',
   'decryptAllImages',
   'deleteBackup',
   'evaluateRetrieval',
-  'exportSnsVideo',
   'extractKbEntities',
   'extractTasks',
   'fetchOriginalImagesBatch',
@@ -65,7 +87,6 @@ const NON_CANCELLABLE_LONG_CALLS = Object.freeze(new Set([
   'getAnnualReview',
   'getArticleCover',
   'getArticleCovers',
-  'getClawbotBindState',
   'getEmoticonDataUrl',
   'getFileImageDataUrl',
   'getImageDataUrl',
@@ -136,6 +157,23 @@ function cancelPlanFor(method, args) {
 }
 
 /**
+ * HTTP 断连专用的取消计划：先走通用长任务策略，再补短任务白名单。
+ * @param {string} method - 原 HTTP 调用方法。
+ * @param {unknown[]} [args] - 原调用参数。
+ * @returns {{ ok: true, method: string, jobId: string } |
+ *   { ok: false, reason: string, method?: string, jobId?: string }}
+ */
+function connectionCancelPlanFor(method, args) {
+  const regular = cancelPlanFor(method, args);
+  if (regular.ok) return regular;
+  const cancelMethod = CONNECTION_CANCEL_METHODS[method];
+  if (!cancelMethod) return regular;
+  const jobId = jobIdFromCall(args);
+  if (!jobId) return { ok: false, reason: 'no-job-id', method: cancelMethod, jobId: '' };
+  return { ok: true, method: cancelMethod, jobId };
+}
+
+/**
  * 在调用方没有 jobId 时，用 RPC 调用序号造一个稳定的内部 jobId。
  *
  * 网关只按 jobId 找取消槽，因此“用户没传 jobId”原本就等于不可取消。宿主既然
@@ -174,9 +212,11 @@ function injectFallbackJobId(method, args, callHandle) {
 
 module.exports = {
   CALL_CANCEL_METHODS,
+  CONNECTION_CANCEL_METHODS,
   NON_CANCELLABLE_LONG_CALLS,
   longCallsWithoutCancelPolicy,
   cancelPlanFor,
+  connectionCancelPlanFor,
   jobIdFromCall,
   jobIdForCall,
   injectFallbackJobId,

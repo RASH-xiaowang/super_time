@@ -28,6 +28,7 @@ import { DEFAULT_KB_ID, useKbScope } from './kb-scope.ts'
 import { KbModelDialog } from './KbModelDialog.tsx'
 import css from './kb-rail.module.css'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 /**
  * 删掉 `goneId` 之后该停在哪个库。
@@ -68,14 +69,101 @@ interface DeleteState {
   target: number
 }
 
+interface KbRailRowProps {
+  k: KbMeta
+  active: boolean
+  open: boolean
+  onPick: (id: number) => void
+  onMenuChange: (id: number | null) => void
+  onRename: (k: KbMeta) => void
+  onDelete: (k: KbMeta) => void
+}
+
+/** 一个知识库行；菜单管理留在行内，避免 rail 主组件继续变长。 */
+function KbRailRow({ k, active, open, onPick, onMenuChange, onRename, onDelete }: KbRailRowProps): React.JSX.Element {
+  const { rootRef, triggerRef } = useMenuDismiss(open, () => { onMenuChange(null) })
+  return (
+    <div className={css.kbItem} ref={rootRef}>
+      <button
+        type="button"
+        className={css.kbRow}
+        data-on={active ? '1' : undefined}
+        aria-current={active ? 'true' : undefined}
+        onClick={() => { onMenuChange(null); onPick(k.id) }}
+      >
+        <span className={css.kbName} title={k.name}>{k.name}</span>
+        {/* 只写「0 条」会让人以为这个库是空的 —— 库里可能有几百份文件。 */}
+        <span className={css.kbMeta}>
+          {k.noteCount} 条{k.fileCount > 0 ? ` · ${k.fileCount} 个文件` : ''}
+        </span>
+      </button>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={css.rowBtn}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`管理「${k.name}」`}
+        title="重命名 / 删除"
+        onClick={() => { onMenuChange(open ? null : k.id) }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className={css.rowMenu} role="menu" aria-label={`管理「${k.name}」`}>
+          <button type="button" className={css.rowMenuItem} role="menuitem" onClick={() => { onMenuChange(null); onRename(k) }}>
+            重命名…
+          </button>
+          <button
+            type="button"
+            className={`${css.rowMenuItem} ${css.rowMenuItemDanger}`}
+            role="menuitem"
+            disabled={k.id === DEFAULT_KB_ID}
+            title={k.id === DEFAULT_KB_ID ? '默认知识库不可删除（它是老数据迁移的兜底），可以重命名' : undefined}
+            onClick={() => { onMenuChange(null); onDelete(k) }}
+          >
+            删除…
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KbRailList({ kbs, kbId, loading, onPick, onRename, onDelete }: {
+  kbs: readonly KbMeta[]
+  kbId: number
+  loading: boolean
+  onPick: (id: number) => void
+  onRename: (k: KbMeta) => void
+  onDelete: (k: KbMeta) => void
+}): React.JSX.Element {
+  const [menuFor, setMenuFor] = useState<number | null>(null)
+  if (kbs.length === 0 && loading) return <div className={css.hint}>读取知识库…</div>
+  return (
+    <nav className={css.kbList}>
+      {kbs.map(k => (
+        <KbRailRow
+          key={k.id}
+          k={k}
+          active={k.id === kbId}
+          open={menuFor === k.id}
+          onPick={onPick}
+          onMenuChange={setMenuFor}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      ))}
+    </nav>
+  )
+}
+
 /**
  * 库 rail：库列表 + 库级动作。
  * @returns 一栏知识库选择器。
  */
 export function KbRail(): React.JSX.Element {
   const { kbId, kbs, readError, loading, setKb, reloadKbs } = useKbScope()
-  /** 展开了行内菜单的那个库（同时只可能有一个；null = 都没展开）。 */
-  const [menuFor, setMenuFor] = useState<number | null>(null)
   const [form, setForm] = useState<FormState | null>(null)
   const [del, setDel] = useState<DeleteState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -101,26 +189,22 @@ export function KbRail(): React.JSX.Element {
   const canMove = canMoveInstead(delCounts)
 
   const closeAll = useCallback((): void => {
-    setMenuFor(null)
     setForm(null)
     setDel(null)
     setErr(null)
   }, [])
 
   const openCreate = useCallback((): void => {
-    setMenuFor(null)
     setErr(null)
     setForm({ mode: 'create', name: '' })
   }, [])
 
   const openRename = useCallback((k: KbMeta): void => {
-    setMenuFor(null)
     setErr(null)
     setForm({ mode: 'rename', id: k.id, name: k.name })
   }, [])
 
   const openDelete = useCallback((k: KbMeta): void => {
-    setMenuFor(null)
     setErr(null)
     setDel({ id: k.id, name: k.name, noteCount: k.noteCount, fileCount: k.fileCount, target: 0 })
   }, [])
@@ -215,57 +299,7 @@ export function KbRail(): React.JSX.Element {
         )}
       </div>
 
-      {kbs.length === 0 && loading
-        ? <div className={css.hint}>读取知识库…</div>
-        : (
-          <nav className={css.kbList}>
-            {kbs.map(k => (
-              <div key={k.id} className={css.kbItem}>
-                <button
-                  type="button"
-                  className={css.kbRow}
-                  data-on={k.id === kbId ? '1' : undefined}
-                  aria-current={k.id === kbId ? 'true' : undefined}
-                  onClick={() => { setKb(k.id) }}
-                >
-                  <span className={css.kbName} title={k.name}>{k.name}</span>
-                  {/* 只写「0 条」会让人以为这个库是空的 —— 库里可能有几百份文件。 */}
-                  <span className={css.kbMeta}>
-                    {k.noteCount} 条{k.fileCount > 0 ? ` · ${k.fileCount} 个文件` : ''}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className={css.rowBtn}
-                  aria-haspopup="menu"
-                  aria-expanded={menuFor === k.id}
-                  aria-label={`管理「${k.name}」`}
-                  title="重命名 / 删除"
-                  onClick={() => { setMenuFor(v => (v === k.id ? null : k.id)); setErr(null) }}
-                >
-                  ⋯
-                </button>
-                {menuFor === k.id && (
-                  <div className={css.rowMenu} role="menu">
-                    <button type="button" className={css.rowMenuItem} role="menuitem" onClick={() => { openRename(k) }}>
-                      重命名…
-                    </button>
-                    <button
-                      type="button"
-                      className={`${css.rowMenuItem} ${css.rowMenuItemDanger}`}
-                      role="menuitem"
-                      disabled={k.id === DEFAULT_KB_ID}
-                      title={k.id === DEFAULT_KB_ID ? '默认知识库不可删除（它是老数据迁移的兜底），可以重命名' : undefined}
-                      onClick={() => { openDelete(k) }}
-                    >
-                      删除…
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </nav>
-        )}
+      <KbRailList kbs={kbs} kbId={kbId} loading={loading} onPick={setKb} onRename={openRename} onDelete={openDelete} />
 
       {/* 模型芯片：当前库的模型来源。**不放进每行的 ⋯ 里** —— 那个菜单是破坏性操作的位置
           （重命名 / 删除），而模型配置是日常查看与调整；藏进 hover 才显形的菜单等于没有。

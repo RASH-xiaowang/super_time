@@ -13,10 +13,28 @@
  * 为什么抽成模块而不是塞进 WechatDataPanel：面板函数已贴着长函数棘轮（473 行），
  * 且 keep-alive 的缓存语义可以脱离 React 用纯函数测。
  */
-import React, { useRef } from 'react'
+import React, { createContext, useContext, useRef } from 'react'
 
 /** 试点面板；刻意只放两个，验证收益后再扩。 */
 const KEEP_ALIVE_TABS = new Set(['chats', 'taskinfo'])
+const PanelActiveContext = createContext(true)
+
+/** 当前面板是否正在显示；独立渲染的面板默认 true。 */
+export function useKeepAliveActive(): boolean {
+  return useContext(PanelActiveContext)
+}
+
+/** 测试与嵌套面板用：显式声明子树当前是否处于显示状态。 */
+export function KeepAliveActiveProvider(props: {
+  active: boolean
+  children?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <PanelActiveContext.Provider value={props.active}>
+      {props.children}
+    </PanelActiveContext.Provider>
+  )
+}
 
 /** 是否为 keep-alive 试点面板（导出给判据）。 */
 export function isKeepAliveTab(tab: string): boolean {
@@ -81,7 +99,9 @@ export function KeepAlivePanes({ panes, active }: { panes: KeepAliveView['panes'
           aria-hidden={tab === active ? undefined : true}
           style={{ display: tab === active ? 'contents' : 'none' }}
         >
-          {node}
+          <KeepAliveActiveProvider active={tab === active}>
+            {node}
+          </KeepAliveActiveProvider>
         </div>
       ))}
     </>

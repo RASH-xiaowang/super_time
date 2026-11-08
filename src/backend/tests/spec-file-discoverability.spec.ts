@@ -7,7 +7,7 @@
  * 很自然会想到 `.tsx`）。`npx vitest run <该文件>` 的输出是
  * **`No test files found` + 退出码 1** —— 手工指名还能看见；
  * 而 `npm test` 全量跑的时候它只是**安静地不存在**，绿照给。
- * 根 `vitest.config.ts` 的 include 只列了 `.spec.ts`。
+ * 根 `vitest.config.mts` 的 include 只列了 `.spec.ts`。
  *
  * ## 判据
  *
@@ -22,13 +22,13 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const CONFIG = 'vitest.config.ts'
+const CONFIG = 'vitest.config.mts'
 
 /**
  * 不纳入判据的目录。
  *
  * `src/backend/deps/` 是随包签进来的**上游/自有依赖副本**（cordis、zod、koffi、dsh-*…），
- * 那里也有 `tests/*.spec.ts`，但 `vitest.config.ts` 的口径写得很明白：本项目的单测范围是
+ * 那里也有 `tests/*.spec.ts`，但 `vitest.config.mts` 的口径写得很明白：本项目的单测范围是
  * 「后端包 + 宿主层 + 前端纯逻辑」，依赖自带用例不在其中（它们跟着依赖版本走，不是本仓库的契约）。
  * 这个豁免是**有意的边界**，不是把问题扫到地毯下：判据要盯的是「我们自己写的用例没人跑」。
  */

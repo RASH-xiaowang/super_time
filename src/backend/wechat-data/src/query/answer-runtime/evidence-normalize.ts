@@ -185,7 +185,7 @@ export function boundaryViolation(
   }
   if (options.kbOnly === true) {
     if (source !== 'kb') {
-      return `${tool} 返回了非知识库来源（${source}），kb-only 入口只接受知识库证据`
+      return `${tool} 返回了非知识库来源（${source}），仅知识库入口只接受知识库证据`
     }
     if (locator.type !== 'kb') {
       return `${tool} 的知识库命中缺少可验证定位，已拒绝`
@@ -221,7 +221,7 @@ export function allowsFact(
   options: BuildEvidenceOptions,
 ): string | undefined {
   if (options.kbOnly === true) {
-    return `${tool} 返回了统计事实，kb-only 入口只接受知识库证据`
+    return `${tool} 返回了统计事实，仅知识库入口只接受知识库证据`
   }
   if (
     options.allowedKbId !== undefined

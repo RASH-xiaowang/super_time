@@ -14,7 +14,7 @@
        由 query/remote-image.ts / query/map-geo.ts 取回 data URL 或 JSON；渲染层不直接 fetch 任意 https。
        `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: file: wechat-media:; media-src 'self' data: blob: wechat-media:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file:" />
+    content="default-src 'self'; img-src 'self' data: blob: file: wechat-media:; media-src 'self' data: blob: wechat-media:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'self' blob:; form-action 'none'; base-uri 'self'; manifest-src 'self'; connect-src 'self' data: blob: file:" />
   <title>Super Time</title>
 </head>
 <body>
@@ -67,7 +67,7 @@
   <div id="root">
     <!-- 首帧占位（React 挂载后即被替换）：微信灰底 + 系统字体，避免一闪而过的青蓝屏。
          这里只能写内联样式 —— 此刻主题 CSS 还没加载（`titlebar.css` 等由 ui-entry 引入）。 -->
-    <div style="display:flex;align-items:center;justify-content:center;height:100%;background:#ededed;color:#7f7f7f;font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px">
+    <div style="display:flex;align-items:center;justify-content:center;height:100%;background:#ededed;color:#7f7f7f;font-family:system-ui,sans-serif;font-size:13px">
       正在加载 Super Time 界面…
     </div>
   </div>

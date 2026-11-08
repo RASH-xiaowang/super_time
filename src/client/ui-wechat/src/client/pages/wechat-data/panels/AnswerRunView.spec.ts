@@ -3,8 +3,7 @@
  * Shared answer-run behavior: status priority, process-before-answer ordering,
  * and collapse rules for live, completed, failed and long-running turns.
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AnswerRunView, useAnswerRunProcessState, type AnswerRunViewProps } from './AnswerRunView.tsx'
@@ -100,6 +99,39 @@ function RunHarness({ completed }: { completed: boolean }): React.JSX.Element {
   })
 }
 
+function FailedRunHarness({ completed }: { completed: boolean }): React.JSX.Element {
+  const processPropsFor = useAnswerRunProcessState()
+  const stages = [{
+    key: 'tool:search_messages',
+    label: 'search_messages',
+    status: 'failed' as const,
+    phase: 'failed' as const,
+    callId: 'run-failed-preserved',
+    toolName: 'search_messages',
+    errorClass: 'timeout' as const,
+  }]
+  if (completed) {
+    return createElement(AnswerRunView, {
+      turn: turn({
+        text: '',
+        status: 'failed',
+        statusReason: '失败终态',
+        runId: 'run-failed-preserved',
+        stages,
+      }),
+      ...processPropsFor('run-failed-preserved'),
+    })
+  }
+  return createElement(AnswerRunView, {
+    streaming: true,
+    text: '',
+    reasoning: '正在处理。',
+    runId: 'run-failed-preserved',
+    stages,
+    ...processPropsFor('run-failed-preserved'),
+  })
+}
+
 beforeEach(() => {
   ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   host = document.createElement('div')
@@ -132,10 +164,122 @@ describe('AnswerRunView 实时状态', () => {
     expect(host.querySelector('[data-phase="tool_calling"]')).not.toBeNull()
     expect(host.textContent).toContain('调用工具 · 消息检索')
     expect(host.textContent).toContain('已用')
-    expect(host.textContent).toContain('正在调用工具检索原文')
-    expect(host.textContent).toContain('先确认问题里的时间范围')
+    expect(host.textContent).not.toContain('正在调用工具检索原文')
+    expect(host.textContent).not.toContain('先确认问题里的时间范围')
+    expect(host.textContent).not.toContain('调用参数')
+    expect(button('本轮思考 · 调用前').getAttribute('aria-expanded')).toBe('false')
+    expect(button('消息检索').getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelectorAll('[role="status"]')).toHaveLength(1)
     expect(processBody().hidden).toBe(false)
     expect(button('停止')).toBeDefined()
+  })
+
+  it('实时状态只在顶部状态条出现一次，思考子节点不再重复“思考中”', () => {
+    render({ streaming: true, reasoning: '先确认问题范围。' })
+
+    const status = host.querySelector('[class*="statusText"]')
+    const thought = host.querySelector('[data-variant="trace"]')
+    expect(status?.textContent).toBe('思考中')
+    expect(thought?.textContent).toContain('本轮思考 · 调用前')
+    expect(thought?.textContent).not.toContain('思考中')
+    expect(thought?.textContent).not.toContain('先确认问题范围')
+  })
+
+  it('已结束轮次的思考不会在下一轮工具运行时继续显示“思考中”', () => {
+    render({
+      streaming: true,
+      text: '',
+      reasoningSegments: [{
+        key: 'reasoning:tool:1',
+        round: 1,
+        phase: 'tool_selection',
+        text: '第一轮思考',
+      }],
+      stages: [
+        {
+          key: 'answer:round:1',
+          label: '工具选择（第 1 轮）',
+          status: 'done',
+          round: 1,
+        },
+        {
+          key: 'tool:first',
+          label: 'search_messages',
+          status: 'done',
+          phase: 'completed',
+          round: 1,
+          callId: 'first',
+          toolName: 'search_messages',
+        },
+        {
+          key: 'answer:round:2',
+          label: '工具选择（第 2 轮）',
+          status: 'running',
+          round: 2,
+        },
+        {
+          key: 'tool:second',
+          label: 'get_message_context',
+          status: 'running',
+          phase: 'called',
+          round: 2,
+          callId: 'second',
+          toolName: 'get_message_context',
+        },
+      ],
+    })
+
+    const thought = host.querySelector('[data-variant="trace"]')
+    expect(thought?.getAttribute('data-status')).toBeNull()
+    expect(thought?.getAttribute('data-thinking-state')).toBe('closed')
+    expect(thought?.textContent).not.toContain('第一轮思考')
+    expect(host.textContent).not.toContain('思考中 ·')
+  })
+
+  it('迟到的上一轮思考不会抢走当前轮次的实时标记', () => {
+    render({
+      streaming: true,
+      text: '',
+      reasoningSegments: [
+        {
+          key: 'reasoning:tool:2',
+          round: 2,
+          phase: 'tool_selection',
+          text: '第二轮正在分析',
+          version: 1,
+        },
+        {
+          key: 'reasoning:tool:1',
+          round: 1,
+          phase: 'tool_selection',
+          text: '第一轮迟到快照',
+          version: 2,
+        },
+      ],
+      stages: [
+        {
+          key: 'answer:round:2',
+          label: '工具选择（第 2 轮）',
+          status: 'running',
+          round: 2,
+        },
+        {
+          key: 'tool:second',
+          label: 'get_message_context',
+          status: 'running',
+          phase: 'called',
+          round: 2,
+          callId: 'second',
+          toolName: 'get_message_context',
+        },
+      ],
+    })
+
+    const thoughts = host.querySelectorAll('[data-variant="trace"]')
+    expect(thoughts[0]?.getAttribute('data-status')).toBeNull()
+    expect(thoughts[1]?.getAttribute('data-status')).toBe('running')
+    expect(thoughts[1]?.getAttribute('data-thinking-state')).toBe('closed')
+    expect(host.textContent).not.toContain('第二轮正在分析')
   })
 
   it('工具重试中显示独立状态，不只报“进行中”', () => {
@@ -156,6 +300,8 @@ describe('AnswerRunView 实时状态', () => {
     })
     expect(host.textContent).toContain('重试中')
     expect(host.textContent).not.toContain('进行中')
+    expect(host.textContent).not.toContain('尝试 2/3')
+    click('消息检索')
     expect(host.textContent).toContain('尝试 2/3')
   })
 
@@ -192,7 +338,7 @@ describe('AnswerRunView 实时状态', () => {
     expect(host.querySelector('[data-phase="preparing"]')).not.toBeNull()
     expect(host.textContent).toContain('准备回答')
     expect(host.textContent).not.toContain('调用工具 ·')
-    expect(host.textContent).toContain('正在准备回答')
+    expect(host.textContent).not.toContain('正在准备回答')
   })
 
   it('正文一到就自动收起过程，但用户手动展开后保持展开', () => {
@@ -210,7 +356,7 @@ describe('AnswerRunView 实时状态', () => {
     })
     expect(host.querySelector('[data-phase="generating"]')).not.toBeNull()
     expect(processBody().hidden).toBe(true)
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(processBody().hidden).toBe(false)
     rerender({
       streaming: true,
@@ -221,46 +367,32 @@ describe('AnswerRunView 实时状态', () => {
     expect(processBody().hidden).toBe(false)
   })
 
-  it('实时长思考展示完整最新内容，不沿用完成态的六行截断', () => {
+  it('实时思考默认完全折叠，正文不进入 DOM，显式展开后才可见', () => {
     const reasoning = `开头。\n${'持续追加的思考内容。'.repeat(90)}\n最新结论。`
     render({ streaming: true, reasoning })
-    const thinking = host.querySelector('[class*="thinkingText"]')
-    expect(thinking?.getAttribute('data-clamp')).toBeNull()
-    expect(thinking?.getAttribute('data-scroll')).toBe('true')
-    expect(thinking?.getAttribute('tabindex')).toBe('0')
-    expect(thinking?.getAttribute('aria-label')).toContain('实时思考过程')
-    expect(thinking?.textContent).toContain('最新结论')
-    const section = thinking?.closest('section')
-    expect(section).not.toBeNull()
-    expect([...(section?.querySelectorAll('button') ?? [])]
-      .some(item => item.textContent?.includes('展开完整思考'))).toBe(false)
+    const toggle = button('本轮思考 · 调用前')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
+    expect(host.textContent).not.toContain('最新结论')
+    expect(host.querySelector('[data-scroll="true"]')).toBeNull()
+
+    click('本轮思考 · 调用前')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector('[class*="thinkingText"]')?.textContent).toBe(reasoning)
+
+    click('本轮思考 · 调用前')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
+    expect(host.textContent).not.toContain('最新结论')
   })
 
-  it('实时长思考只在接近底部时跟随；用户上翻后回到最新需主动触发', () => {
-    const reasoning = `开头。\n${'持续追加的思考内容。'.repeat(90)}`
+  it('流式思考更新后仍保持折叠，不因内容增长自动露出', () => {
+    const reasoning = '第一段思考内容。'
     render({ streaming: true, reasoning })
-    const thinking = host.querySelector('[class*="thinkingText"]') as HTMLDivElement
-    Object.defineProperty(thinking, 'scrollHeight', { configurable: true, value: 1_000 })
-    Object.defineProperty(thinking, 'clientHeight', { configurable: true, value: 320 })
-    act(() => {
-      thinking.scrollTop = 680
-      thinking.dispatchEvent(new Event('scroll'))
-    })
-    rerender({ streaming: true, reasoning: `${reasoning}\n新增一段。` })
-    expect(thinking.scrollTop).toBe(680)
-
-    act(() => {
-      thinking.scrollTop = 120
-      thinking.dispatchEvent(new Event('scroll'))
-    })
-    expect(button('回到最新')).toBeDefined()
-    rerender({ streaming: true, reasoning: `${reasoning}\n又新增一段。` })
-    expect(thinking.scrollTop).toBe(120)
-
-    click('回到最新')
-    expect(thinking.scrollTop).toBe(680)
-    expect([...host.querySelectorAll('button')]
-      .some(item => item.textContent?.includes('回到最新'))).toBe(false)
+    rerender({ streaming: true, reasoning: `${reasoning}\n第二段新增思考内容。` })
+    expect(button('本轮思考 · 调用前').getAttribute('aria-expanded')).toBe('false')
+    expect(host.textContent).not.toContain('第一段思考内容')
+    expect(host.textContent).not.toContain('第二段新增思考内容')
   })
 
   it('流式期间 busy 只包裹回答正文，不阻断状态摘要播报', () => {
@@ -297,7 +429,7 @@ describe('AnswerRunView 已完成轮次', () => {
     expect(groups[0]?.querySelectorAll('[class*="citeMark"]')).toHaveLength(2)
   })
 
-  it('思考与执行过程在正式回答之前，完成后显示耗时、首字与工具统计', () => {
+  it('执行轨迹在正式回答之前，完成后显示耗时、首字与工具统计', () => {
     render({
       turn: turn({
         text: '结论在正文里。',
@@ -348,13 +480,13 @@ describe('AnswerRunView 已完成轮次', () => {
     expect(host.textContent).toContain('思考 800ms')
     expect(host.textContent).toContain('工具耗时 2.0s')
     expect(host.querySelector('[class*="processMeta"]')?.textContent?.trim())
-      .toBe('思考 800ms · 1 个工具')
+      .toBe('1 个工具 · 思考 800ms')
     const answerAt = host.textContent?.indexOf('结论在正文里') ?? -1
-    const processAt = host.textContent?.indexOf('思考与执行过程') ?? -1
+    const processAt = host.textContent?.indexOf('执行轨迹') ?? -1
     expect(processAt).toBeGreaterThan(-1)
     expect(answerAt).toBeGreaterThan(processAt)
     expect(processBody().hidden).toBe(true)
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(host.textContent).not.toContain('调用参数')
     click('消息检索')
     expect(host.textContent).toContain('调用参数')
@@ -441,7 +573,7 @@ describe('AnswerRunView 已完成轮次', () => {
       }],
     })
     expect(processBody().hidden).toBe(false)
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(processBody().hidden).toBe(true)
     rerender({
       turn: turn({
@@ -461,6 +593,91 @@ describe('AnswerRunView 已完成轮次', () => {
     })
     expect(processBody().hidden).toBe(false)
     expect(host.textContent).toContain('工具最终超时')
+  })
+
+  it('异常自动展开后用户收起，失败完成态不会再次强制展开', () => {
+    render({
+      streaming: true,
+      reasoning: '先检索。',
+      stages: [{
+        key: 'tool:search_messages',
+        label: 'search_messages',
+        status: 'failed',
+        phase: 'failed',
+        callId: 'kept-closed',
+        toolName: 'search_messages',
+        errorClass: 'timeout',
+      }],
+    })
+    expect(processBody().hidden).toBe(false)
+    click('执行轨迹')
+    expect(processBody().hidden).toBe(true)
+
+    rerender({
+      turn: turn({
+        text: '',
+        status: 'failed',
+        statusReason: '工具最终失败',
+        runId: 'kept-closed',
+        stages: [{
+          key: 'tool:search_messages',
+          label: 'search_messages',
+          status: 'failed',
+          phase: 'failed',
+          callId: 'kept-closed',
+          toolName: 'search_messages',
+          errorClass: 'timeout',
+        }],
+      }),
+    })
+
+    expect(processBody().hidden).toBe(true)
+  })
+
+  it('异常展开后用户收起，流式完成重挂载仍保持收起', () => {
+    act(() => { root.render(createElement(FailedRunHarness, { completed: false })) })
+    expect(processBody().hidden).toBe(false)
+    click('执行轨迹')
+    expect(processBody().hidden).toBe(true)
+
+    act(() => { root.render(createElement(FailedRunHarness, { completed: true })) })
+    expect(processBody().hidden).toBe(true)
+  })
+
+  it('短暂异常自动展开后成功收敛，轨迹不会残留强制展开', () => {
+    render({
+      streaming: true,
+      reasoning: '先检索。',
+      stages: [{
+        key: 'tool:search_messages',
+        label: 'search_messages',
+        status: 'failed',
+        phase: 'failed',
+        callId: 'recovered',
+        toolName: 'search_messages',
+        errorClass: 'timeout',
+      }],
+    })
+    expect(processBody().hidden).toBe(false)
+
+    rerender({
+      turn: turn({
+        text: '重试后已得到正常回答。',
+        status: 'ok',
+        runId: 'recovered-run',
+        stages: [{
+          key: 'tool:search_messages',
+          label: 'search_messages',
+          status: 'done',
+          phase: 'completed',
+          callId: 'recovered',
+          toolName: 'search_messages',
+        }],
+      }),
+    })
+
+    expect(processBody().hidden).toBe(true)
+    expect(host.textContent).toContain('重试后已得到正常回答')
   })
 
   it('旧轮次只有 trace 时仍展示脱敏参数与错误正文', () => {
@@ -533,6 +750,22 @@ describe('AnswerRunView 已完成轮次', () => {
     expect(host.querySelector('[class*="toolStatus"]')?.textContent).toBe('超时')
     expect(host.textContent).toContain('1 个异常')
     expect(processBody().hidden).toBe(false)
+  })
+
+  it('模型超时原因与回答生成异常相同时只显示一条中文提示', () => {
+    const raw = 'The operation was aborted due to timeout'
+    render({
+      turn: turn({
+        text: '',
+        status: 'failed',
+        statusReason: raw,
+        synthesisError: raw,
+      }),
+    })
+
+    expect(host.textContent).toContain('模型响应超时')
+    expect(host.textContent).not.toContain('The operation was aborted due to timeout')
+    expect(host.textContent?.match(/模型响应超时/g)).toHaveLength(1)
   })
 
   it('重试成功后主卡显示完成，原始尝试记录仍可展开核对', () => {
@@ -612,7 +845,7 @@ describe('AnswerRunView 已完成轮次', () => {
         }],
       }),
     })
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(host.querySelector('[class*="toolStatus"]')?.textContent).toBe('完成')
     expect(host.textContent).not.toContain('1 个异常')
     click('消息检索')
@@ -644,7 +877,7 @@ describe('AnswerRunView 已完成轮次', () => {
     render({
       turn: turn({ text: '已生成的部分', status: 'ok', stopped: true, stages: [runningStage] }),
     })
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(host.textContent).toContain('已中止')
     expect(host.textContent).not.toContain('进行中')
     expect(host.querySelector('[data-status="aborted"]')).not.toBeNull()
@@ -675,7 +908,7 @@ describe('AnswerRunView 长内容与证据', () => {
     const answer = host.querySelector('[class*="answerBody"]')
     const content = host.querySelector('[class*="answerContent"]')
     expect(answer?.getAttribute('data-collapsed')).toBe('true')
-    expect(content?.textContent?.length).toBeLessThan(1300)
+    expect(content?.textContent?.length).toBeLessThan(500)
     const expand = button('展开全文')
     click('展开全文')
     expect(answer?.getAttribute('data-collapsed')).toBeNull()
@@ -697,13 +930,13 @@ describe('AnswerRunView 长内容与证据', () => {
   it('用户手动展开后，流式完成并替换为历史轮次仍保持展开', () => {
     act(() => { root.render(createElement(RunHarness, { completed: false })) })
     expect(processBody().hidden).toBe(true)
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(processBody().hidden).toBe(false)
     act(() => { root.render(createElement(RunHarness, { completed: true })) })
     expect(processBody().hidden).toBe(false)
   })
 
-  it('长思考先给有界预览，展开后保留全文', () => {
+  it('完成态思考默认完全折叠，展开后保留全文', () => {
     const reasoning = '思考段落。'.repeat(180)
     render({
       turn: turn({
@@ -713,16 +946,20 @@ describe('AnswerRunView 长内容与证据', () => {
         metrics: { startedAt: 1_000, completedAt: 3_000, totalMs: 2_000, reasoningMs: 1_200 },
       }),
     })
-    click('思考与执行过程')
-    const thinking = host.querySelector('[class*="thinkingText"]')
-    expect(thinking?.getAttribute('data-clamp')).toBe('true')
-    const toggle = button('展开完整思考')
-    expect(toggle.getAttribute('aria-controls')).toBe(thinking?.id)
+    click('执行轨迹')
+    const toggle = button('本轮思考 · 调用前')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    click('展开完整思考')
-    expect(thinking?.getAttribute('data-clamp')).toBeNull()
+    expect(toggle.getAttribute('aria-controls')).toBeTruthy()
+    expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
+    expect(host.textContent).not.toContain('思考段落')
+
+    click('本轮思考 · 调用前')
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(thinking?.textContent).toBe(reasoning)
+    expect(host.querySelector('[class*="thinkingText"]')?.textContent).toBe(reasoning)
+
+    click('本轮思考 · 调用前')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
   })
 
   it('证据默认显示 6 条，可展开全部且保留完整摘要', () => {
@@ -738,7 +975,7 @@ describe('AnswerRunView 长内容与证据', () => {
         },
       }),
     })
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(host.querySelectorAll('[class*="evidenceItem"]')).toHaveLength(6)
     expect(host.textContent).toContain('第 1 条完整证据内容')
     expect(host.textContent).toContain('未在原文找到')
@@ -763,7 +1000,7 @@ describe('AnswerRunView 长内容与证据', () => {
         },
       }),
     })
-    click('思考与执行过程')
+    click('执行轨迹')
     expect(host.textContent).toContain('证据 1（企业：甲方公司）')
     expect(host.textContent).toContain('李四（企业：乙方公司）')
   })
@@ -781,7 +1018,7 @@ describe('AnswerRunView 长内容与证据', () => {
         }],
       }),
     })
-    click('思考与执行过程')
+    click('执行轨迹')
     const details = host.querySelector('details[class*="stageDetails"]')
     expect(details).not.toBeNull()
     expect(details?.querySelector('summary')?.textContent).toContain('查看完整步骤说明')

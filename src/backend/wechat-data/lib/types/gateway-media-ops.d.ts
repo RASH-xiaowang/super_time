@@ -4,13 +4,25 @@
  * 与其它 gateway-* 壳共同构成继承链；装饰器标记会落到最派生原型上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：gateway-remote-surface.spec.ts）。
  */
-import type { FileImageDataUrlsResult, AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
+import type { FileImageDataUrlsResult, AvatarResult, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, MediaOriginalExportResult, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from './types.ts';
 import { type ImageBatchItem, type SnsVideoCoverBatchOptions, type SnsVideoCoverBatchResult } from './remotes/media.ts';
 import type { HarvestResult, HarvestStatus } from './query/original-harvester.ts';
 import type { WxcdnQuota } from './query/wxcdn-original.ts';
 import { type WechatImageAutoDownloadAction, type WechatImageAutoDownloadStatus } from './query/wechat-image-autodownload.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
+import { type ManagedStreamControl } from './gateway-jobs.ts';
 export declare abstract class GatewayMediaOps extends GatewayAskOps {
+    /**
+     * 单文件媒体导出的统一任务壳。
+     *
+     * 所有返回值都带 `ok`，所以失败不能只靠 throw 表达：这里把 `{ok:false}` 也结算成
+     * error 终态，成功则在真正写完/改名之后才结算成功。媒体域原先没有 jobId 槽位，
+     * 大视频复制期间既看不到进度也无法取消；现在复用导出域的同一套 StreamControl。
+     */
+    protected runMediaExportJob<T extends {
+        ok: boolean;
+        error?: string;
+    }>(rawJobId: unknown, run: (ctrl: ManagedStreamControl) => Promise<T>): Promise<T>;
     /**
      * Custom emoticons.
      * @param options - Optional limit/offset for incremental loading.
@@ -33,12 +45,13 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     }): FilesSnapshot;
     /**
      * Look up one voice message (silk decode degrades in Node).
-     * @param options - username and localId of the voice message.
+     * @param options - username, localId, and the selected message's svrId when available.
      * @returns VoiceInfoResult: voice metadata / decoded file info.
      */
     getVoiceInfo(options: {
         username: string;
         localId: number;
+        svrId?: string;
     }): VoiceInfoResult;
     /**
      * Resolve one voice message to an inline-playable wav data URL.
@@ -390,12 +403,136 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         url?: string;
         key?: string;
         dest: string;
+        jobId?: string;
     }): Promise<{
         ok: boolean;
+        path?: string;
         bytes?: number;
+        format?: string;
+        source?: 'local' | 'cdn';
+        error?: string;
+    }>;
+    /**
+     * 把一条朋友圈图片按**原图**写到用户选定路径。
+     *
+     * 顺序为长期归档 → 解码原图缓存 → 本机非缩略图 → CDN `/0` 原图；CDN
+     * 解密后再次校验图片魔数。缩略图和未解密密文一律不落盘。
+     *
+     * @param options - 媒体 md5/定位信息、可选 CDN 三件套与目标路径。
+     * @returns ok + 字节数/格式/来源，或错误说明。
+     */
+    exportSnsImage(options: {
+        md5: string;
+        timelineId?: string;
+        mediaId?: string;
+        url?: string;
+        token?: string;
+        seed?: string;
+        key?: string;
+        dest: string;
+        jobId?: string;
+    }): Promise<{
+        ok: boolean;
+        path?: string;
+        bytes?: number;
+        format?: string;
+        source?: 'local' | 'cdn';
+        error?: string;
+    }>;
+    /**
+     * 把一条聊天图片按**原图**写到用户选定路径。
+     *
+     * 解码结果带 `thumb: true` 时先走原图升级；仍只有缩略图则拒绝写盘。
+     * 该入口只处理已经解密的本机图片字节，不会把 CDN 密文保存成图片。
+     *
+     * @param options - 会话 username、消息 localId 与目标路径。
+     * @returns ok + 字节数/格式，或不可导出原因。
+     */
+    exportChatImage(options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }): Promise<{
+        ok: boolean;
+        path?: string;
+        bytes?: number;
+        format?: string;
         source?: string;
         error?: string;
     }>;
+    /**
+     * Save a chat video by copying the exact local `msg/video` file.
+     *
+     * The resolver never downloads a different rendition: if the original video
+     * is absent, the user receives an actionable "open it in WeChat first" error.
+     */
+    exportChatVideo(options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /**
+     * Save a chat file by resolving `(username, localId)` in the local message DB.
+     *
+     * Only the exact `msg/file` bytes are copied. File name, size and MD5 come
+     * from the canonical message row, never from renderer-supplied card props.
+     */
+    exportChatFile(options: {
+        username: string;
+        localId: number;
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save one file-library image from its original (non-thumbnail) tier. */
+    exportFileImage(options: {
+        md5: string;
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save one file-library video from the exact local `msg/video` entity. */
+    exportFileVideo(options: {
+        md5: string;
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save one non-media attachment from `msg/file` without transcoding. */
+    exportFileAttachment(options: {
+        fileName: string;
+        size?: number;
+        createTime?: number;
+        md5?: string;
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save a favorite image only from its declared full-content MD5 tier. */
+    exportFavoriteImage(options: {
+        fullMd5?: string;
+        md5?: string;
+        thumbMd5?: string;
+        kind?: 'image';
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save a favorite video only from its declared full-content MD5 tier. */
+    exportFavoriteVideo(options: {
+        fullMd5?: string;
+        md5?: string;
+        thumbMd5?: string;
+        kind?: 'video';
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
+    /** Save a favorite attachment from the exact `business/favorite` cache. */
+    exportFavoriteFile(options: {
+        fullMd5?: string;
+        md5?: string;
+        thumbMd5?: string;
+        kind?: 'file';
+        dest: string;
+        jobId?: string;
+    }): Promise<MediaOriginalExportResult>;
     /**
      * 微信原图自动下载（实验）：`start` 打开开关并让微信开始下载新图片的原图 /
      * `stop` 关闭并还原微信进程 / `status` 只读状态（界面轮询用）。

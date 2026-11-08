@@ -21,7 +21,7 @@
  * @module llm-balance
  */
 
-const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js')
+const { parseLlmBaseUrl, llmModelListUrl, llmRequest } = require('./llm-http.js')
 const { resolveLlmConfig } = require('./llm-config-store.js')
 
 /** 单次请求超时（与 `wechat:llm-models` 保持一致）。 */
@@ -260,8 +260,9 @@ async function testLlmEndpoint(opts) {
     return { ms, detail, url }
   }
 
-  // chat：沿用 /models（最便宜、无副作用，且能同时证明"是 OpenAI 兼容接口"）
-  const url = base + '/models'
+  // chat：沿用模型列表（最便宜、无副作用，且能同时证明"是 OpenAI 兼容接口"）。
+  // OpenCode 的列表前缀与聊天前缀不同，由统一传输层负责映射。
+  const url = llmModelListUrl(base)
   const t0 = Date.now()
   const res = await getJson(url, apiKey, host)
   const ms = Date.now() - t0

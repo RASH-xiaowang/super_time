@@ -424,7 +424,7 @@ function seedChatData(): void {
  * 只提供 askWechat 真正用到的表面（`llm.stream` + 默认模型）。
  *
  * 带工具清单的是工具选择轮：微信问答留空，交给运行时用 `search_hybrid` 兜底；
- * ClawBot 只允许 `search_kb`，因此显式产出一个知识库检索调用。只有不带工具
+ * 仅暴露 `search_kb` 的受限工具集会显式产出一个知识库检索调用。只有不带工具
  * 清单的综合轮才进入 `replies`，这样回炉调用不会被工具选择分支吞掉。
  */
 function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[][]>, usage?: { inputTokens: number, outputTokens: number, totalTokens?: number }): { ctx: Context; prompts: string[]; contents: Array<Array<{ type?: string, text?: string, data?: string, mediaType?: string }>>; selectionCalls: () => number } {
@@ -445,7 +445,7 @@ function makeCtx(replies: string[], embed?: (texts: string[]) => Promise<number[
       const toolNames = (opts.tools ?? []).map(tool => String(tool.name ?? ''))
       if (toolNames.length > 0) {
         selections += 1
-        // ClawBot 没有 search_hybrid 兜底，必须显式选择唯一允许的 search_kb。
+        // 受限工具集没有 search_hybrid 兜底，必须显式选择唯一允许的 search_kb。
         if (toolNames.includes('search_kb') && !toolNames.includes('search_hybrid')) {
           const question = opts.messages?.[0]?.content?.[0]?.text ?? ''
           // 模拟模型构造可命中的检索词：关键词索引不接受整句自然语言。
@@ -522,25 +522,19 @@ describe('端到端：模型 usage 记账（2026-10-19）', () => {
   })
 })
 
-describe('端到端：自动回复的图片（2026-10-18）', () => {
+describe('端到端：问答图片输入', () => {
   it('mini 宿主没有附件服务：图片块直接进用户消息，由 llm-bridge 投影成 image_url', async () => {
     const { gw, contents } = await gatewayWith(contractText())
-    // 网关类的公开类型只暴露客户端会传的字段；`dataScope`/`source` 是 ClawBot 自动回复
-    // 直接走 `askDeep.askWechat` 的内部参数，这里用同一形状做白盒断言。
+    // 网关类的公开类型只暴露客户端会传的字段，这里用同一形状做白盒断言。
     const ask = gw.askWechat.bind(gw) as unknown as (o: {
       question: string
       kbId?: number
-      dataScope?: 'wechat' | 'kb-only'
-      source?: string
       history?: Array<{ role: 'user' | 'assistant', content: string }>
       images?: Array<{ data: string, mediaType: string, name?: string }>
     }) => Promise<unknown>
-    // dataScope kb-only + 一句「看这张图」：这是 ClawBot 自动回复的真实入口参数形状。
     await ask({
-      question: '分析一下图中右边那辆车是什么车？',
+      question: '蓝鲸协议第七附则里的验收款是多少？顺便分析图中右边那辆车是什么车。',
       kbId: 1,
-      dataScope: 'kb-only',
-      source: 'auto',
       history: [
         { role: 'user', content: '[图片]' },
         { role: 'assistant', content: '你好呀，有事吗' },
@@ -552,102 +546,6 @@ describe('端到端：自动回复的图片（2026-10-18）', () => {
     expect(imageParts.length).toBeGreaterThan(0)
     expect(imageParts[0]?.data).toBe('aGVsbG8=')
     expect(imageParts[0]?.mediaType).toBe('image/png')
-  })
-})
-
-describe('端到端：自动回复的接地协议（2026-10-20）', () => {
-  type AutoAsk = (o: {
-    question: string
-    kbId?: number
-    dataScope?: 'wechat' | 'kb-only'
-    source?: string
-    images?: Array<{ data: string, mediaType: string, name?: string }>
-  }) => Promise<{
-    answer: string
-    basis?: string
-    insufficient?: boolean
-    status?: string
-    withheld?: boolean
-    grounding?: { checked: number, unsupported: string[], cited: number, repaired: boolean }
-  }>
-
-  it('未启用知识库时在工具选择前阻断，不调用模型或工具', async () => {
-    const { gw, prompts, contents, selectionCalls } = await gatewayWith(contractText(), '不应被调用')
-    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
-    const r = await ask({
-      question: '在吗',
-      dataScope: 'kb-only',
-      source: 'auto',
-    })
-    expect(selectionCalls()).toBe(0)
-    expect(prompts).toHaveLength(0)
-    expect(contents).toHaveLength(0)
-    expect(r.answer).toBe('这次我这边没弄好，稍后再确认一下再回你。')
-    expect(r.answer).not.toContain('知识库')
-    expect(r.status).toBe('blocked')
-    expect(r.insufficient).toBe(false)
-  })
-
-  it('禁止角标的自然回复不再被强制回炉或拒答，金额仍能通过接地核对', async () => {
-    const natural = '验收款是 12000 元，签约后三十日内支付。'
-    const { gw, prompts } = await gatewayWith(contractText(), natural)
-    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
-    const r = await ask({
-      question: '蓝鲸协议第七附则里的验收款是多少',
-      kbId: 1,
-      dataScope: 'kb-only',
-      source: 'auto',
-    })
-    // 工具选择调用不计入 prompts；这里只有一次综合生成，说明没有因缺 [n] 而回炉。
-    expect(prompts).toHaveLength(1)
-    expect(r.answer).toBe(natural)
-    expect(r.answer).not.toMatch(/\[\d+\]/)
-    expect(r.withheld).toBeUndefined()
-    expect(r.grounding?.unsupported).toEqual([])
-    expect(r.basis).toContain('依据知识库')
-    expect(r.basis).not.toContain('依据本机记录')
-  })
-
-  it('无出处的金额触发一次自然口吻重写，重写轮仍携带原图片', async () => {
-    const first = '验收款是 9000 元。'
-    const fixed = '验收款我这边没法确认，我先核实一下再回你。'
-    const { gw, prompts, contents } = await gatewayWith(contractText(), [first, fixed])
-    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
-    const r = await ask({
-      question: '蓝鲸协议第七附则里的验收款是多少',
-      kbId: 1,
-      dataScope: 'kb-only',
-      source: 'auto',
-      images: [{ data: 'aGVsbG8=', mediaType: 'image/png', name: 'wx-image-9' }],
-    })
-    expect(prompts).toHaveLength(2)
-    expect(prompts[1]).not.toContain('必须紧跟对应的 [n]')
-    expect(r.answer).toBe(fixed)
-    expect(r.grounding?.repaired).toBe(true)
-    expect(r.grounding?.unsupported).toEqual([])
-    expect(r.withheld).toBeUndefined()
-    // 首答与回炉都必须带图；否则视觉问题在重写时已经看不到原图。
-    expect(contents).toHaveLength(2)
-    for (const content of contents) {
-      expect(content.some(p => p.type === 'image' && p.data === 'aGVsbG8=')).toBe(true)
-    }
-  })
-
-  it('重写后仍有编造数字时不把内部审计文案发到微信，改用自然兜底', async () => {
-    const ghost = '验收款是 9000 元。'
-    const { gw } = await gatewayWith(contractText(), [ghost, ghost])
-    const ask = gw.askWechat.bind(gw) as unknown as AutoAsk
-    const r = await ask({
-      question: '蓝鲸协议第七附则里的验收款是多少',
-      kbId: 1,
-      dataScope: 'kb-only',
-      source: 'auto',
-    })
-    expect(r.withheld).toBe(true)
-    expect(r.answer).toBe('这个数字我这边没法确认，我先核实一下再回你。')
-    expect(r.answer).not.toContain('审计')
-    expect(r.answer).not.toContain('证据')
-    expect(r.answer).not.toContain('9000')
   })
 })
 
@@ -767,10 +665,10 @@ describe('默认配置：kb 是条件通道', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// H. dataScope=kb-only：聚合通道不得读本机消息，知识库通道仍须工作
+// H. 禁用本机微信数据：聚合通道不得读本机消息，知识库通道仍须工作
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('kb-only 数据面隔离：聚合通道', () => {
+describe('禁用本机微信数据时，知识库通道仍可工作', () => {
   it('聚合意图不执行 runAggregate，知识库命中照常返回', async () => {
     seedChatData()
     expect((await buildSearchIndex(decrypted, true)).status).toBe('ok')
@@ -790,12 +688,12 @@ describe('kb-only 数据面隔离：聚合通道', () => {
     expect(wechat.stats.intent).toBe('aggregation')
     expect(wechat.stats.channels.some(c => c.channel === 'agg')).toBe(true)
 
-    const kbOnly = await runRetrievalPipeline({ ...base, wechatDataEnabled: false })
-    expect(kbOnly.stats.intent).toBe('aggregation')
-    expect(kbOnly.stats.channels.some(c => c.channel === 'agg')).toBe(false)
-    expect(kbOnly.stats.channels.find(c => c.channel === 'kb')?.active).toBe(true)
-    expect(kbOnly.citations.length).toBeGreaterThan(0)
+    const withoutWechat = await runRetrievalPipeline({ ...base, wechatDataEnabled: false })
+    expect(withoutWechat.stats.intent).toBe('aggregation')
+    expect(withoutWechat.stats.channels.some(c => c.channel === 'agg')).toBe(false)
+    expect(withoutWechat.stats.channels.find(c => c.channel === 'kb')?.active).toBe(true)
+    expect(withoutWechat.citations.length).toBeGreaterThan(0)
     // PipelineOutput.citations 的公开形状不带 source；KB 引用的 username 恒为 `kb:<id>:<fileId>`。
-    expect(kbOnly.citations.every(c => c.username.startsWith('kb:1:'))).toBe(true)
+    expect(withoutWechat.citations.every(c => c.username.startsWith('kb:1:'))).toBe(true)
   })
 })

@@ -59,7 +59,7 @@ const FLOOR: Record<string, number> = {
   // 深色 text-3 低于 AA 是**既有且已被评审接受**的状态（见头注引用的 kit.module.css 说明），
   // 所以这里登记实测下限而不是 4.5。
   'dark:text-3:bg-0': 4.15, 'dark:text-3:bg-1': 3.93, 'dark:text-3:bg-2': 3.75,
-  'light:text-1:bg-0': 16.78, 'light:text-1:bg-1': 15.77, 'light:text-1:bg-2': 17.85,
+  'light:text-1:bg-0': 15.02, 'light:text-1:bg-1': 16.41, 'light:text-1:bg-2': 17.58,
   'light:text-2:bg-0': 7.12, 'light:text-2:bg-1': 6.69, 'light:text-2:bg-2': 7.58,
   'light:text-3:bg-0': 5.10, 'light:text-3:bg-1': 4.79, 'light:text-3:bg-2': 5.43,
 }
@@ -320,6 +320,25 @@ describe('主题对比度门禁（令牌算出来的，不依赖截图）', () =
     expect(fails, '浅色端出现低于 AA 的对（浅色主题下这些文字读不清）：' + fails.join(', ')).toEqual([])
   })
 
+  it('浅色端最弱一档 text-4 也过 AA（占位符/时间戳/辅助文案仍可读）', () => {
+    // text-4 不进入上面的 3×3 网格：深色端它本来就是禁用/占位层级，不承诺正文可读性。
+    // 浅色端则用它承载时间戳、空态与辅助说明，必须在所有浅色面上达到 AA。
+    const t = tokensOf(DARK_CSS + '\n' + LIGHT_CSS)
+    const fg = colorOf('--nm-text-4', t)
+    if (fg === null) throw new Error('浅色 text-4 解析不出颜色')
+    const fails: string[] = []
+    for (const bgName of SURFACE) {
+      const bg = colorOf(bgName, t)
+      if (bg === null) {
+        fails.push(`${bgName} 解析失败`)
+        continue
+      }
+      const ratio = contrast(fg, bg)
+      if (ratio < 4.5) fails.push(`${bgName}=${ratio.toFixed(2)}`)
+    }
+    expect(fails, '浅色 text-4 低于 AA：' + fails.join(', ')).toEqual([])
+  })
+
   /**
    * 语义色与状态层（2026-09-29 第二轮）：`text × bg` 那 9 对覆盖不到的三类隐患。
    *
@@ -345,6 +364,9 @@ describe('主题对比度门禁（令牌算出来的，不依赖截图）', () =
     { label: 'warning-text / bg-2', fg: '--nm-warning-text', bg: '--nm-bg-2' },
     { label: 'warning-text / bg-0', fg: '--nm-warning-text', bg: '--nm-bg-0' },
     { label: 'on-accent / cyan', fg: '--nm-on-accent', bg: '--nm-cyan' },
+    { label: 'on-accent / brand-fill', fg: '--nm-on-accent', bg: '--nm-brand-fill' },
+    { label: 'on-accent / brand-fill-hover', fg: '--nm-on-accent', bg: '--nm-brand-fill-hover' },
+    { label: 'on-accent / brand-fill-active', fg: '--nm-on-accent', bg: '--nm-brand-fill-active' },
   ]
 
   /** 悬停行/中性悬停层压在底色上之后，正文与次要文字还读得清吗。 */

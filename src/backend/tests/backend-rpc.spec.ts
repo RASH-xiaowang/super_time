@@ -263,39 +263,77 @@ describe('createWorkerChannel · 进程死亡', () => {
 
   it('dispose 先等 worker 回包再 kill（收尾不能被信号截断）', async () => {
     const { child, channel } = makeChannel(5000)
-    let disposed = false
-    channel.dispose(() => { disposed = true })
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
     // 发出去了，但还没回包：此时绝不能 kill
     expect(child.posted.some((m) => m.type === 'dispose')).toBe(true)
     expect(child.killed).toBe(false)
-    expect(disposed).toBe(false)
+    expect(outcomes).toEqual([])
     expect(channel.pendingCount).toBe(1)
     // worker 做完收尾回包，才允许 kill + 通知调用方
     child.reply(child.posted[0]!.id, { ok: true })
     await new Promise((r) => setTimeout(r, 10))
     expect(child.killed).toBe(true)
-    expect(disposed).toBe(true)
+    expect(outcomes).toEqual([{ acknowledged: true, reason: 'ack', value: { ok: true } }])
+    expect(channel.pendingCount).toBe(0)
+  })
+
+  it.each([
+    ['明确失败', { ok: false }],
+    ['缺少 ok', {}],
+    ['非对象响应', null],
+    ['ok 不是布尔 true', { ok: 'true' }],
+  ])('dispose 遇到%s时不是 ACK', (_label, response) => {
+    const { child, channel } = makeChannel(5000)
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
+
+    child.reply(child.posted[0]!.id, response)
+
+    expect(outcomes).toEqual([{
+      acknowledged: false,
+      reason: 'error',
+      value: response,
+    }])
+    expect(child.killed).toBe(true)
+    expect(channel.pendingCount).toBe(0)
+  })
+
+  it('dispose 的 error 回包也不当成 ACK', () => {
+    const { child, channel } = makeChannel(5000)
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
+
+    child.replyError(child.posted[0]!.id, 'restore failed')
+
+    expect(outcomes).toEqual([{ acknowledged: false, reason: 'error' }])
+    expect(child.killed).toBe(true)
     expect(channel.pendingCount).toBe(0)
   })
 
   it('dispose 回包晚到/不到时按超时上限兜底 kill（退出路径不能挂住）', async () => {
-    const { child, channel } = makeChannel(5000, { disposeTimeoutMs: 30 })
-    let disposed = false
-    channel.dispose(() => { disposed = true })
+    const warnings: string[] = []
+    const { child, channel } = makeChannel(5000, {
+      disposeTimeoutMs: 30,
+      logger: { warn: (...args: unknown[]) => warnings.push(args.map(String).join(' ')), error: () => {}, log: () => {} },
+    })
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
     expect(child.killed).toBe(false)
     await new Promise((r) => setTimeout(r, 60))
     expect(child.killed).toBe(true)
-    expect(disposed).toBe(true)
+    expect(outcomes).toEqual([{ acknowledged: false, reason: 'timeout' }])
+    expect(warnings[0]).toContain('30 毫秒未收到 ACK')
     expect(channel.pendingCount).toBe(0)
   })
 
   it('dispose 时 worker 已死（postMessage 抛错）也立刻收摊', () => {
     const { child, channel } = makeChannel(5000)
     child.throwOnPost = true
-    let disposed = false
-    channel.dispose(() => { disposed = true })
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
     expect(child.killed).toBe(true)
-    expect(disposed).toBe(true)
+    expect(outcomes).toEqual([{ acknowledged: false, reason: 'send-failed' }])
     expect(channel.pendingCount).toBe(0)
   })
 
@@ -307,12 +345,12 @@ describe('createWorkerChannel · 进程死亡', () => {
 
   it('dispose 在 worker 回包前就 exit，也不会二次 kill 或漏通知', async () => {
     const { child, channel } = makeChannel(5000)
-    let disposed = 0
-    channel.dispose(() => { disposed += 1 })
+    const outcomes: unknown[] = []
+    channel.dispose((outcome: unknown) => { outcomes.push(outcome) })
     child.exit(0)
     await new Promise((r) => setTimeout(r, 10))
     // 死亡路径 failAll 已 reject 掉在途请求（含 dispose），回调仍然只跑一次
-    expect(disposed).toBe(1)
+    expect(outcomes).toEqual([{ acknowledged: false, reason: 'worker-exited' }])
     expect(channel.pendingCount).toBe(0)
   })
 })

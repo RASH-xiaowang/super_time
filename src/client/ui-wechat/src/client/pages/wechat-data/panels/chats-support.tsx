@@ -5,7 +5,7 @@
  * 这些原先都是 Chats.tsx 里的顶层函数/组件（不吃面板状态，只吃道具）—— 整段原样搬出，
  * 面板按需 import。依赖由脚本从「这块里真实用到的面板 import」生成。
  */
-import { apiGetAvatar, apiGetMessageFile, apiGetAvatarBatched } from '../api.ts'
+import { apiExportChatFile, apiExportFileAttachment, apiGetAvatar, apiGetAvatarBatched, apiSaveFileDialog } from '../api.ts'
 import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
 import { MessageRenderItem } from '../utils/message-items.ts'
 import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
@@ -15,6 +15,8 @@ import { localImageSrc } from './remote-img.tsx'
 import { MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { isEnterpriseWechatUser } from './enterprise-identity.ts'
 import { useEffect, useState } from 'react'
+import { desktopAction } from '../ui/desktop-only.tsx'
+import { mediaExportJobId } from './media-export-job.ts'
 /** 16px calendar glyph (kept local; the primitives set has no calendar). */
 /**
  * 未读角标的悬停说明（第 67 轮）。
@@ -43,21 +45,6 @@ export function unreadTitle(n: number, since?: number): string {
 /** 复制一段文本，结果走一行回执（成功/失败都说，失败给手动补救）。 */
 export function copyTextWithNotice(text: string, flash: (t: string) => void): void {
   void copyTextToClipboard(text).then((ok) => { flash(ok ? '文本已复制' : '复制失败，请手动选中后复制') })
-}
-
-/**
- * 右键菜单「打开文件」：把消息自带的体积/时间透传给后端，
- * 否则同名文件会在别的会话里随便挑一份。
- * @param fileName - 文件名。
- * @param m - 该消息（取 fileSize 与 createTime 作为归属线索）。
- * @param flash - 回执写入。
- */
-export function openMessageFileWithNotice(fileName: string, m: WechatMessage, flash: (t: string) => void): void {
-  const bytes = Number(m.rich?.fileSize)
-  const opts: { size?: number; createTime?: number } = {}
-  if (Number.isFinite(bytes) && bytes > 0) opts.size = bytes
-  if (m.createTime) opts.createTime = m.createTime
-  void downloadMessageFile(fileName, opts).then((err) => { if (err) flash('打开失败：' + err) })
 }
 
 export function IconCalendar(): React.JSX.Element {
@@ -117,32 +104,28 @@ export function openLink(url: string): void {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
-/** Wechat transfer state label (mirrors st_control transfer_status_label). */
-export function transferStatusLabel(self: boolean, paySub: string | undefined): string {
-  switch (paySub) {
-    case '3': case '8': return self ? '已被接收' : '已收款'
-    case '4': case '9': return '已退还'
-    case '5': case '10': return '已过期退回'
-    case '7': return '待领取'
-    case '1': return self ? '等待对方领取' : '待收款'
-    default: return ''
-  }
+/** Convert a transfer-card amount to a display string without inventing `¥0.00`. */
+export function transferAmountLabel(raw: string | undefined): string {
+  const value = (raw ?? '').trim()
+  if (value === '') return ''
+  const match = /^(?:CNY|RMB|人民币)?\s*[¥￥]?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*(?:元|圆)?$/i.exec(value)
+  if (match === null) return ''
+  return `¥${match[1] ?? ''}`
 }
-/** Transfer visual state bucket: pending (arrow) / accepted (check) / refunded (muted). */
-export function transferStateKey(paySub: string | undefined): 'pending' | 'accepted' | 'refunded' {
-  switch (paySub) {
-    case '1': case '7': return 'pending'
-    case '4': case '5': case '9': case '10': return 'refunded'
-    default: return 'accepted'
+/**
+ * 把原图获取失败收敛成用户可理解的提示。
+ *
+ * HTTP 状态、网络异常名、允许清单等只留在操作日志；消息气泡只说明用户下一步
+ * 能做什么，避免把实现细节当成聊天内容展示。
+ * @param reason - backend error or note, which may contain technical diagnostics.
+ * @returns a short user-facing sentence.
+ */
+export function imageOriginalFailureText(reason?: string): string {
+  const value = (reason ?? '').trim()
+  if (/本机只有缩略图|在微信里打开|查看原图/i.test(value)) {
+    return '请先在微信中查看原图，再回来重试'
   }
-}
-/** White check glyph: transfer received/accepted state. */
-export function TransferCheckGlyph(): React.JSX.Element {
-  return (
-    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="m4 8.4 2.6 2.6L12 5.6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
+  return '原图暂不可用，请稍后重试'
 }
 /** White transfer arrow glyph inside the wechat transfer card. */
 export function TransferArrowGlyph(): React.JSX.Element {
@@ -301,78 +284,244 @@ export function Avatar({ name, username, avatarUrl, size }: {
     </div>
   )
 }
-/** 不同扩展名的图标风格（kind + emoji），便于按类型区分样式。 */
-export const FILE_STYLE: Record<string, { kind: string; emoji: string }> = {
-  pdf: { kind: 'pdf', emoji: '📄' },
-  doc: { kind: 'word', emoji: '📝' }, docx: { kind: 'word', emoji: '📝' },
-  xls: { kind: 'excel', emoji: '📊' }, xlsx: { kind: 'excel', emoji: '📊' }, csv: { kind: 'excel', emoji: '📊' },
-  ppt: { kind: 'ppt', emoji: '📽️' }, pptx: { kind: 'ppt', emoji: '📽️' },
-  png: { kind: 'image', emoji: '🖼️' }, jpg: { kind: 'image', emoji: '🖼️' }, jpeg: { kind: 'image', emoji: '🖼️' }, gif: { kind: 'image', emoji: '🖼️' }, webp: { kind: 'image', emoji: '🖼️' }, bmp: { kind: 'image', emoji: '🖼️' },
-  mp4: { kind: 'video', emoji: '🎬' }, mov: { kind: 'video', emoji: '🎬' }, avi: { kind: 'video', emoji: '🎬' },
-  mp3: { kind: 'audio', emoji: '🎵' }, wav: { kind: 'audio', emoji: '🎵' }, m4a: { kind: 'audio', emoji: '🎵' },
-  zip: { kind: 'archive', emoji: '🗜️' }, rar: { kind: 'archive', emoji: '🗜️' }, '7z': { kind: 'archive', emoji: '🗜️' }, tar: { kind: 'archive', emoji: '🗜️' }, gz: { kind: 'archive', emoji: '🗜️' },
-  js: { kind: 'code', emoji: '💻' }, ts: { kind: 'code', emoji: '💻' }, py: { kind: 'code', emoji: '💻' }, sql: { kind: 'code', emoji: '💻' }, html: { kind: 'code', emoji: '💻' }, css: { kind: 'code', emoji: '💻' }, json: { kind: 'code', emoji: '💻' }, yaml: { kind: 'code', emoji: '💻' }, yml: { kind: 'code', emoji: '💻' }, ini: { kind: 'code', emoji: '💻' }, xml: { kind: 'code', emoji: '💻' }, bat: { kind: 'code', emoji: '💻' }, ps1: { kind: 'code', emoji: '💻' }, sh: { kind: 'code', emoji: '💻' }, java: { kind: 'code', emoji: '💻' },
-  txt: { kind: 'text', emoji: '📃' }, md: { kind: 'text', emoji: '📃' }, log: { kind: 'text', emoji: '📃' }, rtf: { kind: 'text', emoji: '📃' },
+/** 文件类型只决定颜色和图形，不再使用依赖系统字体的 emoji。 */
+const fileKind = (kind: string): { kind: string } => ({ kind })
+export const FILE_STYLE: Record<string, { kind: string }> = {
+  pdf: fileKind('pdf'),
+  doc: fileKind('word'), docx: fileKind('word'),
+  xls: fileKind('excel'), xlsx: fileKind('excel'), csv: fileKind('excel'),
+  ppt: fileKind('ppt'), pptx: fileKind('ppt'),
+  png: fileKind('image'), jpg: fileKind('image'), jpeg: fileKind('image'),
+  gif: fileKind('image'), webp: fileKind('image'), bmp: fileKind('image'),
+  mp4: fileKind('video'), mov: fileKind('video'), avi: fileKind('video'),
+  mp3: fileKind('audio'), wav: fileKind('audio'), m4a: fileKind('audio'),
+  zip: fileKind('archive'), rar: fileKind('archive'), '7z': fileKind('archive'),
+  tar: fileKind('archive'), gz: fileKind('archive'),
+  js: fileKind('code'), ts: fileKind('code'), py: fileKind('code'), sql: fileKind('code'),
+  html: fileKind('code'), css: fileKind('code'), json: fileKind('code'), yaml: fileKind('code'),
+  yml: fileKind('code'), ini: fileKind('code'), xml: fileKind('code'), bat: fileKind('code'),
+  ps1: fileKind('code'), sh: fileKind('code'), java: fileKind('code'),
+  txt: fileKind('text'), md: fileKind('text'), log: fileKind('text'), rtf: fileKind('text'),
 }
-export function fileStyle(fileName: string): { kind: string; emoji: string } {
-  const ext = (fileName.split('.').pop() || '').toLowerCase()
-  return FILE_STYLE[ext] || { kind: 'file', emoji: '📁' }
+export function fileStyle(fileName: string, declaredExt?: string): { kind: string } {
+  const declared = (declaredExt ?? '').replace(/^\./, '').trim().toLowerCase()
+  if (/^[a-z0-9]{1,12}$/.test(declared)) return FILE_STYLE[declared] ?? fileKind('file')
+  const base = fileName.split(/[\\/]/).pop() ?? fileName
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 && dot < base.length - 1 ? base.slice(dot + 1).toLowerCase() : ''
+  return FILE_STYLE[ext] ?? fileKind('file')
 }
+/** 24px 文档图标；颜色由文件卡的 `data-kind` 提供。 */
+export function FileKindIcon({ kind }: { kind: string }): React.JSX.Element {
+  const common = {
+    width: 24,
+    height: 24,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    'aria-hidden': true,
+  } as const
+  switch (kind) {
+    case 'image':
+      return (
+        <svg {...common}>
+          <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+          <circle cx="8" cy="9" r="1.6" fill="currentColor" />
+          <path d="m4.5 18 5-5 3 3 2.5-2.5 4.5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'video':
+      return (
+        <svg {...common}>
+          <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+          <path d="m10 9 5 3-5 3V9Z" fill="currentColor" />
+        </svg>
+      )
+    case 'audio':
+      return (
+        <svg {...common}>
+          <path d="M10 17V7l8-2v10" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <ellipse cx="7.5" cy="17.5" rx="2.5" ry="2" fill="currentColor" />
+          <ellipse cx="15.5" cy="15.5" rx="2.5" ry="2" fill="currentColor" />
+        </svg>
+      )
+    case 'archive':
+      return (
+        <svg {...common}>
+          <path d="M4 7h16v12H4V7Zm-1-3h18v3H3V4Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M9 11h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      )
+    case 'excel':
+      return (
+        <svg {...common}>
+          <rect x="4" y="3" width="16" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M4 9h16M4 15h16M12 3v18" stroke="currentColor" strokeWidth="1.3" />
+        </svg>
+      )
+    case 'ppt':
+      return (
+        <svg {...common}>
+          <rect x="3" y="4" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M12 17v3m-4 0h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          <path d="m10 8 5 2.5-5 2.5V8Z" fill="currentColor" />
+        </svg>
+      )
+    case 'code':
+      return (
+        <svg {...common}>
+          <path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    default:
+      return (
+        <svg {...common}>
+          <path d="M6 3h8l4 4v14H6V3Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M14 3v5h5M9 12h6M9 16h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      )
+  }
+}
+/** 微信红包的小红包图形，避免系统 emoji 在 Windows 上呈现成完全不同的样式。 */
+export function RedPacketGlyph(): React.JSX.Element {
+  return (
+    <svg width="32" height="36" viewBox="0 0 32 36" fill="none" aria-hidden="true">
+      <rect x="2.5" y="1.5" width="27" height="33" rx="3.5" fill="#C94A3F" stroke="#F4C771" strokeWidth="1.2" />
+      <path d="M3 4.5c7.8 6.6 18.2 6.6 26 0v8.8c-7.8 5.8-18.2 5.8-26 0V4.5Z" fill="#E66555" />
+      <circle cx="16" cy="17.2" r="5.2" fill="#F2C45E" stroke="#FFE7A9" strokeWidth="1.1" />
+      <path d="M16 14.4v5.6M14.2 17.2h3.6" stroke="#C38C24" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M9 27.5h14" stroke="#8C2F2A" strokeWidth="1" strokeLinecap="round" opacity=".55" />
+    </svg>
+  )
+}
+/** 非文件卡的小图标，统一为 SVG，避免 emoji 跨机器字体漂移。 */
+export function AppCardIcon({ kind }: { kind: 'announcement' | 'note' | 'card' | 'product' | 'unsupported' | 'message' | 'music' | 'play' | 'live' }): React.JSX.Element {
+  const common = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true } as const
+  switch (kind) {
+    case 'announcement':
+      return (
+        <svg {...common}>
+          <path d="M4 13v-2l11-5v12L4 13Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M15 9.5c2 1 2 4 0 5M7 14l1 5h3l-1-4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      )
+    case 'note':
+      return (
+        <svg {...common}>
+          <path d="M5 3h10l4 4v14H5V3Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M15 3v5h4M8 12h8M8 16h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      )
+    case 'product':
+      return (
+        <svg {...common}>
+          <path d="M5 8h14l-1 13H6L5 8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M9 9V6a3 3 0 0 1 6 0v3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      )
+    case 'unsupported':
+      return (
+        <svg {...common}>
+          <path d="M12 3 22 21H2L12 3Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M12 9v5m0 3h.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )
+    case 'music':
+      return (
+        <svg {...common}>
+          <path d="M10 17V7l8-2v10" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <ellipse cx="7.5" cy="17.5" rx="2.5" ry="2" fill="currentColor" />
+          <ellipse cx="15.5" cy="15.5" rx="2.5" ry="2" fill="currentColor" />
+        </svg>
+      )
+    case 'play':
+      return <svg {...common}><path d="m8 5 11 7-11 7V5Z" fill="currentColor" /></svg>
+    case 'live':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+          <path d="M7.5 8a6 6 0 0 0 0 8m9-8a6 6 0 0 1 0 8M4.5 5a10 10 0 0 0 0 14m15-14a10 10 0 0 1 0 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      )
+    case 'card':
+      return (
+        <svg {...common}>
+          <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M3 10h18M8 15h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      )
+    default:
+      return (
+        <svg {...common}>
+          <path d="M4 5h16v11H9l-5 4V5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M8 9h8M8 12h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      )
+  }
+}
+export interface MessageFileSaveResult {
+  path?: string
+  error?: string
+}
+
 /**
- * 从 `msg/file` 本地缓存取回收到的文件并触发下载。
+ * Copy a received file from `msg/file` through the backend's original-file RPC.
  *
- * 抽成模块级函数的唯一原因：文件卡的点击区与右键菜单的「打开文件」
- * 都要走同一条链路，不能各写一份（两份实现迟早会在错误文案上分叉）。
- * @param fileName - 消息里的文件名。
- * @param opts - 归属线索：消息里的文件字节数、接收时间与附件 MD5。
- *   `msg/file` 只按月份分目录，同名文件可能属于别的会话；同名同大小时
- *   `fileMd5` 是唯一可靠的消歧键。
- * @returns 成功返回空串，失败返回可展示的错误文案。
+ * The old data-URL download could not carry files above 16 MB and sent a full
+ * base64 copy through the renderer. The save dialog now selects a destination
+ * and the backend copies the source bytes, rejecting ambiguous same-name files
+ * when no MD5 is available.
+ * @param fileName - message attachment name.
+ * @param opts - size/time/hash used to disambiguate the source file.
+ * @returns saved path, a displayable error, or neither when the user cancels.
  */
 export async function downloadMessageFile(
   fileName: string,
-  opts: { size?: number; createTime?: number; fileMd5?: string } = {},
-): Promise<string> {
+  opts: {
+    username?: string
+    localId?: number
+    size?: number
+    createTime?: number
+    fileMd5?: string
+    jobId?: string
+  } = {},
+): Promise<MessageFileSaveResult> {
   try {
-    const r = await apiGetMessageFile({
-      fileName,
-      ...(opts.size !== undefined ? { size: opts.size } : {}),
-      ...(opts.createTime !== undefined ? { createTime: opts.createTime } : {}),
-      ...(opts.fileMd5 !== undefined ? { fileMd5: opts.fileMd5 } : {}),
+    if (desktopAction()) return { error: '原文件保存仅支持电脑端' }
+    const username = String(opts.username ?? '').trim()
+    const localId = Number(opts.localId ?? 0)
+    const hasMessageContext = username !== '' || opts.localId !== undefined
+    if (hasMessageContext && (username === '' || !Number.isSafeInteger(localId) || localId <= 0)) {
+      return { error: '缺少消息定位信息，无法确认原文件归属' }
+    }
+    const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_').trim() || '微信文件'
+    const dot = safeName.lastIndexOf('.')
+    const ext = dot > 0 ? safeName.slice(dot + 1).toLowerCase() : ''
+    const picked = await apiSaveFileDialog({
+      defaultName: safeName,
+      title: '保存微信原文件',
+      filters: [
+        ...(ext && ext.length <= 12 ? [{ name: ext.toUpperCase() + ' 文件', extensions: [ext] }] : []),
+        { name: '全部文件', extensions: ['*'] },
+      ],
     })
-    if (!r.url) return r.error ?? '文件不可用'
-    const a = document.createElement('a')
-    a.href = r.url
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    return ''
+    if (picked.canceled || !picked.path) return {}
+    const jobId = opts.jobId || mediaExportJobId('chat-file')
+    const result = username !== ''
+      ? await apiExportChatFile({ username, localId, dest: picked.path, jobId })
+      : await apiExportFileAttachment({
+        fileName,
+        ...(opts.size !== undefined ? { size: opts.size } : {}),
+        ...(opts.createTime !== undefined ? { createTime: opts.createTime } : {}),
+        ...(opts.fileMd5 !== undefined ? { md5: opts.fileMd5 } : {}),
+        dest: picked.path,
+        jobId,
+      })
+    if (!result.ok) return { error: result.error || '原文件写入失败' }
+    return { path: result.path ?? picked.path }
   } catch (e) {
-    return (e as Error).message
+    console.warn('[chats] 保存原文件失败：', e)
+    return { error: e instanceof Error ? e.message : '文件暂不可用' }
   }
-}
-/**
- * 引用消息里被引用类型 → 中文短标签（后端已写好 `rich.referType`）。
- *
- * 微信 refermsg 的 type 与消息 local_type 同一编码族：媒体用本类型号，
- * 应用消息多在 49 族。没有映射时返回空串，界面不硬造标签。
- * @param t - refermsg <type>.
- * @returns 中文标签（''）。
- */
-export function quoteTypeLabel(t: number | undefined): string {
-  if (!t || typeof t !== 'number') return ''
-  if (t === 1) return '文本'
-  if (t === 3) return '图片'
-  if (t === 34) return '语音'
-  if (t === 43) return '视频'
-  if (t === 47) return '表情'
-  if (t === 48) return '位置'
-  if (t === 42 || t === 66) return '名片'
-  if (t === 49 || t === 5 || t === 68) return '链接'
-  if (t === 53) return '接龙'
-  if (t === 50) return '通话'
-  return ''
 }
 /** 直播状态文案：`<livestatus>` 各版本取值不同，做一次归一。 */
 export function liveStatusText(raw?: string): string {
@@ -442,10 +591,10 @@ export const POLL_VISIBLE_MS = 1000
 export const POLL_HIDDEN_MS = 5000
 /**
  * 会话列表是「新消息进来第一眼就要变」的界面：它没有轮询兜底，完全靠
- * `dsh-wechat-data-updated` 推送驱动（WAL 实时触发，活跃聊天时约每 1.5–7s 一次）。
+ * `dsh-wechat-data-updated` 推送驱动（WAL 实时触发，后端限频后最快约每 250ms 一次）。
  * 口径（2026-10-13 用户要求「updated 一出来就立刻刷」）：**节流闸归零**——每次推送
- * 都立即刷新（一次只是一页 `getSessions`，120 条），风暴由 50ms 合并窗吸收；
- * 后端推送本身已带 1.5s 限频，所以最坏也只是每 1.5s 一次刷新，负载无压力。
+ * 都立即刷新（一次只是一页 `getSessions`，120 条）；后端 WAL 监听已经按写簇合并，
+ * 前端不再叠加合并窗，负载仍有上界。
  */
 export const SESSIONS_REFRESH_MIN_INTERVAL_MS = 0
 /**
@@ -466,8 +615,22 @@ export function itemLocalId(item: MessageRenderItem | undefined): number {
 export function msgItemKey(item: MessageRenderItem | undefined): string {
   if (!item) return 'nil'
   if (item.kind === 'day') return item.key
-  if (item.kind === 'group') return 'grp-' + item.gid + '-' + String(item.items[0]?.localId ?? '')
-  return 'msg-' + String(item.m.localId)
+  const stableId = (m: WechatMessage | undefined): string =>
+    String(m?.localId ?? '') + '-' + String(m?.serverId ?? m?.createTime ?? '')
+  if (item.kind === 'group') return 'grp-' + item.gid + '-' + stableId(item.items[0])
+  return 'msg-' + stableId(item.m)
+}
+/**
+ * 给虚拟列表 key 加会话命名空间。
+ *
+ * `local_id` 只在单个会话内唯一；不同会话复用同一个虚拟器时，仅按 `local_id`
+ * 作 key 会把上一个会话的动态行高缓存套到当前会话，表现为巨大空白或消息重叠。
+ * @param scope - 会话与打开代次组成的命名空间。
+ * @param item - `buildMessageItems` 的产物。
+ * @returns 跨会话唯一的虚拟项 key。
+ */
+export function scopedMsgItemKey(scope: string, item: MessageRenderItem | undefined): string {
+  return scope + '\u0000' + msgItemKey(item)
 }
 /**
  * 虚拟化的初始高度估算（真实高度由 `measureElement` 量完回填）。

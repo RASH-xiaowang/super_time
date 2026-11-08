@@ -90,7 +90,6 @@ describe('② 事件映射只有一份：两条传输路都交给 dispatchWechat
     expect(code, 'ui-entry 里又出现了手写的事件名分支（映射必须只有一份）')
       .not.toContain("'dsh-wechat-data-updated'")
     expect(code).not.toContain("'dsh-wechat-ask-delta'")
-    expect(code).not.toContain("'dsh-clawbot-message'")
   })
 
   it('SSE 那条路也走同一张表（http-remote 的缺省派发器就是 dispatchWechatEvent）', () => {

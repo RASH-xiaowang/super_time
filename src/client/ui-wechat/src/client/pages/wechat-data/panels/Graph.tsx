@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
-import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GraphEdgeType, GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
 import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, defaultNodeLimit, eligibleCandidateCount, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
 import { withEnterprise } from './enterprise-identity.ts'
@@ -25,6 +25,7 @@ import { useGraphNoteActions } from './use-graph-note-actions.ts'
 import { useGraphNodeSearch, type GraphNodeSearch } from './use-graph-node-search.ts'
 import { useGraphDetailRequest } from './use-graph-detail-request.ts'
 import { useGraphExportActions } from './use-graph-export-actions.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
 import { readableOn } from '../utils/theme-color.ts'
 import { PanelHeader, Select } from '../ui/kit.tsx'
 import { toggleThemeMode, useThemeMode } from '../theme.ts'
@@ -48,7 +49,7 @@ function Slider({ label, value, min, max, step, onChange, fmt, disabled }: {
   return (
     <label className={css.ctlRow} data-disabled={disabled || undefined}>
       <span className={css.ctlLabel}>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => { onChange(Number(e.target.value)) }} className={css.ctlRange} disabled={disabled || undefined} />
+      <input type="range" min={min} max={max} step={step} value={value} aria-valuetext={fmt ? fmt(value) : String(value)} onInput={(e) => { onChange(Number(e.currentTarget.value)) }} className={css.ctlRange} disabled={disabled || undefined} />
       <span className={css.ctlValue}>{fmt ? fmt(value) : String(value)}</span>
     </label>
   )
@@ -69,6 +70,29 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
  * `!== 'note' && !== 'stub' && …`，加一类就漏一处，于是拿 `ent:person:张三` 去查头像。
  */
 const KNOWLEDGE_KINDS = new Set<GNode['kind']>(['note', 'stub', 'file', 'section', 'entity'])
+
+const GRAPH_EDGE_TYPE_LABELS: Partial<Record<GraphEdgeType, string>> = {
+  common_group: '共同群',
+  common_member: '共同成员',
+  reply: '回复',
+  mention_user: '@提及',
+  moment_comment: '朋友圈评论',
+  transfer: '转账',
+  redpacket: '红包',
+}
+
+function droppedEdgeTypesText(
+  dropped: Partial<Record<GraphEdgeType, number>> | undefined,
+): string {
+  const entries = Object.entries(dropped ?? {})
+    .filter((entry): entry is [GraphEdgeType, number] => Number(entry[1]) > 0)
+    .sort((a, b) => b[1] - a[1])
+  if (entries.length === 0) return ''
+  const shown = entries.slice(0, 4)
+    .map(([type, count]) => `${GRAPH_EDGE_TYPE_LABELS[type] ?? type} ${count}`)
+    .join('、')
+  return `（${shown}${entries.length > 4 ? ' 等' : ''}）`
+}
 
 /** Search results are identity rows, except for knowledge entries which are not contacts. */
 function GraphSearchBox({ search, onLocate, selfUsername = '' }: {
@@ -402,7 +426,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     canvasRef.current?.centerOn(id)
   }
 
-  const { exporting, exportSvg: doExportSvg, exportPng: doExportPng, exportPoster: doExportPoster } = useGraphExportActions({
+  const { exportState, exporting, exportSvg: doExportSvg, exportPng: doExportPng, exportPoster: doExportPoster } = useGraphExportActions({
     canvasRef,
     posterStyle,
     posterRatio,
@@ -415,7 +439,9 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
       <PanelHeader
         title={isKnowledgeMode
           ? '知识图谱 · 知识网络'
-          : (settings.mode === 'groups' ? '社交图谱 · 群组网络' : '社交图谱 · 好友网络')}
+          : settings.mode === 'all'
+            ? '社交图谱 · 综合网络'
+            : (settings.mode === 'groups' ? '社交图谱 · 群组网络' : '社交图谱 · 好友网络')}
         desc={selected ? withEnterprise(selected.label, selected.enterpriseName) + ' · ' + String(selected.intimacy ?? selected.weight) + ' 条消息' : `${graph.nodes.length} 节点 · ${graph.edges.length} 连线 · ${graph.communityCount} 圈子`}
         actions={(
           <>
@@ -440,7 +466,9 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
             <button type="button" className={css.chip} data-on={selectedId !== null} onClick={() => { setSelectedId(null) }}>{selectedId ? '清除选中' : '选中节点'}</button>
           </>
         )}
-      /><ActionNoticeLine notice={actionNotice} />
+      />
+      <ActionNoticeLine notice={actionNotice} />
+      <ExportProgressStatus state={exportState} />
       <div className={css.statBar}>
         <div className={css.statBox}><span className={css.statNum}>{graph.nodes.length}</span><span className={kitCss.textCaption}>节点</span></div>
         <div className={css.statBox}><span className={css.statNum}>{graph.edges.length}</span><span className={kitCss.textCaption}>连线</span></div>
@@ -461,6 +489,67 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
           </>
         )}
       </div>
+      {!isKnowledgeMode && graph.coverage
+        && (graph.coverage.droppedNodes > 0
+          || graph.coverage.droppedEdges > 0
+          || graph.coverage.droppedEdgeEndpoints > 0
+          || graph.coverage.derived?.truncated) && (
+        <div className={kitCss.textMeta} role="status">
+          当前视图受节点上限/模式约束：隐藏 {graph.coverage.droppedNodes} 个节点
+          {graph.coverage.droppedEdgeEndpoints > 0 ? `、${graph.coverage.droppedEdgeEndpoints} 条关系` : ''}
+          {graph.coverage.droppedEdges > 0 ? `、${graph.coverage.droppedEdges} 条显示边` : ''}。
+          切换到「综合网络」或提高节点上限可查看跨人/群关系。
+        </div>
+      )}
+      {!isKnowledgeMode && graph.coverage?.derived
+        && (graph.coverage.derived.truncated
+          || graph.coverage.derived.commonSuppressedByAuthoritative > 0) && (
+        <div className={kitCss.textMeta} role="status">
+          客户端关系补位有界：共同群候选 {graph.coverage.derived.commonGroup.candidatePairs} 对、
+          检查 {graph.coverage.derived.commonGroup.consideredPairs} 对
+          {graph.coverage.derived.commonGroup.truncatedSources > 0
+            ? `（${graph.coverage.derived.commonGroup.truncatedSources} 个群超成员上限）`
+            : ''}；
+          共同成员候选 {graph.coverage.derived.commonMember.candidatePairs} 对、
+          检查 {graph.coverage.derived.commonMember.consideredPairs} 对
+          {graph.coverage.derived.commonMember.truncatedSources > 0
+            ? `（${graph.coverage.derived.commonMember.truncatedSources} 个成员关系来源超上限）`
+            : ''}。
+          {graph.coverage.derived.pairWorkExhausted ? ' 已达到客户端配对预算。' : ''}
+          {graph.coverage.derived.commonSuppressedByAuthoritative > 0
+            ? ` 后端权威关系已替代 ${graph.coverage.derived.commonSuppressedByAuthoritative} 次推导。`
+            : ''}
+          {graph.coverage.derived.commonDroppedByEdgeBudget > 0
+            ? ` 显示边预算再忽略 ${graph.coverage.derived.commonDroppedByEdgeBudget} 条共同关系。`
+            : ''}
+        </div>
+      )}
+      {!isKnowledgeMode && graph.coverage?.server && (
+        graph.coverage.server.derived_pairs?.truncated
+        || (graph.coverage.server.message_relations?.truncated_scopes ?? 0) > 0
+        || (graph.coverage.server.observed_edges?.dropped ?? 0) > 0
+        || (graph.coverage.server.message_relations?.dropped_records ?? 0) > 0
+        || (graph.coverage.server.unresolved_actors?.total ?? 0) > 0
+      ) && (
+        <div className={kitCss.textMeta} role="status">
+          后端关系查询有界：共同关系候选 {graph.coverage.server.derived_pairs?.common_group.candidates ?? 0}
+          {' / '}
+          {graph.coverage.server.derived_pairs?.common_member.candidates ?? 0} 对，扫描消息{' '}
+          {graph.coverage.server.message_relations?.scanned ?? 0} 行
+          {graph.coverage.server.observed_edges
+            ? `，观测边返回 ${graph.coverage.server.observed_edges.returned}/${graph.coverage.server.observed_edges.cap}`
+            : ''}
+          {(graph.coverage.server.observed_edges?.dropped ?? 0) > 0
+            ? `、因上限丢弃 ${graph.coverage.server.observed_edges?.dropped ?? 0} 条${droppedEdgeTypesText(graph.coverage.server.observed_edges?.dropped_by_type)}`
+            : ''}
+          {(graph.coverage.server.message_relations?.dropped_records ?? 0) > 0
+            ? `、回复/提及聚合达 ${graph.coverage.server.message_relations?.record_budget ?? 0} 条后丢弃 ${graph.coverage.server.message_relations?.dropped_records ?? 0} 条`
+            : ''}
+          {(graph.coverage.server.unresolved_actors?.total ?? 0) > 0
+            ? `；另有 ${graph.coverage.server.unresolved_actors?.total ?? 0} 条权威引用因未在通讯录/会话中获得稳定人物节点而未连线（成员 ${graph.coverage.server.unresolved_actors?.membership ?? 0}、群主 ${graph.coverage.server.unresolved_actors?.owner ?? 0}、邀请 ${graph.coverage.server.unresolved_actors?.invite ?? 0}、回复/提及 ${graph.coverage.server.unresolved_actors?.message_relation ?? 0}）`
+            : ''}。
+        </div>
+      )}
 
       <div className={css.body}>
         <div className={css.stage}>
@@ -528,11 +617,13 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 ) : (
                   <>
                     <span><i className={css.legendDot} />颜色 = 圈子(社区)</span>
-                    <span><i className={css.legendLine} />灰线 = 共同群数</span>
+                    <span><i className={css.legendLine} />灰线 = 共同群 / 群结构</span>
+                    <span><i className={css.legendLineGreen} />绿实线 = 好友 / 邀请 / 回复 / @提及等互动</span>
                     <span><i className={css.legendLineGold} />金虚线 = 同备注编号</span>
                     <span><i className={css.legendLineBlueDash} />蓝虚线 = 首字相同</span>
                     <span><i className={css.legendLineBlue} />蓝实线 = 与我亲密度</span>
                     <span><i className={css.legendBar} />半径 = 消息量</span>
+                    <span>点选节点 = 查看全部关系、方向与权重</span>
                   </>
                 )}
               </div>

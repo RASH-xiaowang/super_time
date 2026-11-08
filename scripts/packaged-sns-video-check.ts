@@ -2,16 +2,15 @@
  * 打包环境下的朋友圈视频密钥流自检（H12 验收的最后一格）。
  *
  * 要回答的问题很窄：`check:sns-video` 那 18 项断言跑的是**开发态**，而打包版真正加载的是
- * `dist/win-unpacked/resources/app.asar.unpacked/.../weflow-isaac64/` 里那份 3.8MB WASM。
+ * `dist/win-unpacked/resources/app.asar` 归档体内的那份 WASM。
  * 残留风险只有一句：「打包环境下这份资产 + 胶水能不能实例化，并产出与开发态**逐字节相同**的密钥流」。
  *
  * 这里不重复解密的业务断言，只做两件事，另一件交给 runner：
  *   ① 本文件：用**真实模块**（`query/sns-keystream.ts`，不是复刻的胶水）生成固定种子的密钥流，
  *      在两种运行时下各跑一次，把 sha256 交出去；
- *   ② runner：另外直接对两份资产文件求 sha256 —— 开发态那份与打包 `app.asar.unpacked` 那份
- *      必须逐字节相同。于是「同一份字节 × 同版本 Electron 运行时」这两件事一起成立，
- *      而不需要真的从 `Super Time.exe` 里跑（打包后的 exe 把应用烤进了 asar，
- *      命令行传脚本路径不会替换它 —— 实测它会照常启动主程序去查更新）。
+ *   ② runner：从 `app.asar` 解出两份资产求 sha256，并另行启动真正的 `Super Time.exe`，
+ *      由测试包内的后端 utilityProcess 直接从 ASAR 生成同一份密钥流。这样「归档体里的字节」
+ *      ×「同版本 Electron 运行时」×「真实打包布局」三件事一起被覆盖。
  *
  * 由 `scripts/packaged-sns-video-check.js` 用 esbuild 打成临时 ESM，
  * 分别在 `node` 与 `node_modules/electron/dist/electron.exe` 里跑。

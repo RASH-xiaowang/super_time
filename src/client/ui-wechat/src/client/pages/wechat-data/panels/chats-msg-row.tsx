@@ -29,10 +29,23 @@ export interface MsgRowDeps {
   curSession: WechatSession | null
   editedIds: ReadonlySet<number>
   openChatlog: (rich: MessageRich) => void
+  openQuote: (rich: MessageRich) => void
   openMsgMenu: (ev: MsgMenuAnchor, m: WechatMessage, kind: MessageRenderKind) => void
   openViewer: (m: WechatMessage) => void
   selfWxid: string
 }
+
+export interface MsgRowRenderOptions {
+  /** Prefix for the row anchor. The normal stream keeps the default `msg-`. */
+  idPrefix?: string
+  /** Poster previews render the same content without menu/long-press handlers. */
+  interactive?: boolean
+}
+
+export type MsgRowRenderer = (
+  item: MessageRenderItem,
+  options?: MsgRowRenderOptions,
+) => React.JSX.Element | null
 
 /** 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。 */
 const CENTERED_KINDS: readonly string[] = ['system', 'revoke', 'pat', 'empty']
@@ -69,19 +82,26 @@ function cancelLongPress(): void {
  * @param deps - 会话与回调（每次渲染重建一份，与拆前「内联函数捕获闭包」同形）。
  * @returns 渲染函数：日期分隔 / 系统行 / 普通气泡 / 图片组。
  */
-export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React.JSX.Element | null {
-  const { curSession, editedIds, openChatlog, openMsgMenu, openViewer, selfWxid } = deps
-  return function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
+export function makeMsgRow(deps: MsgRowDeps): MsgRowRenderer {
+  const { curSession, editedIds, openChatlog, openQuote, openMsgMenu, openViewer, selfWxid } = deps
+  return function renderMsgItem(item: MessageRenderItem, options: MsgRowRenderOptions = {}): React.JSX.Element | null {
     if (item.kind === 'day') {
       return <div className={cssrows.msgDayDivider}><span>{item.label}</span></div>
     }
     const head = item.kind === 'group' ? item.items[0] : item.m
     if (!head || !curSession) return null
     const kind = renderKindOf(head)
+    const idPrefix = options.idPrefix ?? 'msg-'
+    const interactive = options.interactive ?? true
     if (CENTERED_KINDS.includes(kind)) {
       return (
-        <div id={`msg-${head.localId}`} className={cssrows.msgRowSystem}>
-          <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />
+        <div id={`${idPrefix}${head.localId}`} className={cssrows.msgRowSystem}>
+          <MessageBody
+            m={head}
+            selfName={curSession.username}
+            sessionUsername={curSession.username}
+            onOpenImage={openViewer}
+          />
         </div>
       )
     }
@@ -104,24 +124,25 @@ export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React
     const isEdited = editedIds.has(head.localId)
     return (
       <div
-        id={`msg-${head.localId}`}
+        id={`${idPrefix}${head.localId}`}
         className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
-        onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
-        onPointerDown={(ev) => {
+        tabIndex={interactive ? -1 : undefined}
+        onContextMenu={interactive ? (ev) => { openMsgMenu(ev, head, kind) } : undefined}
+        onPointerDown={interactive ? (ev) => {
           if (ev.pointerType === 'mouse') return
           pressX = ev.clientX; pressY = ev.clientY; pressFired = false
           cancelLongPress()
           pressTimer = setTimeout(() => {
             pressTimer = null; pressFired = true
-            openMsgMenu({ preventDefault() { /* 长按没有默认行为要取消 */ }, clientX: pressX, clientY: pressY }, head, kind)
+            openMsgMenu({ preventDefault() { /* 长按没有默认行为要取消 */ }, clientX: pressX, clientY: pressY, currentTarget: ev.currentTarget }, head, kind)
           }, LONG_PRESS_MS)
-        }}
-        onPointerMove={(ev) => {
+        } : undefined}
+        onPointerMove={interactive ? (ev) => {
           if (pressTimer !== null && Math.hypot(ev.clientX - pressX, ev.clientY - pressY) > LONG_PRESS_SLOP_PX) cancelLongPress()
-        }}
-        onPointerUp={(ev) => { if (pressFired) { pressFired = false; ev.preventDefault() } else cancelLongPress() }}
-        onPointerCancel={() => { pressFired = false; cancelLongPress() }}
-        onPointerLeave={() => { cancelLongPress() }}
+        } : undefined}
+        onPointerUp={interactive ? (ev) => { if (pressFired) { pressFired = false; ev.preventDefault() } else cancelLongPress() } : undefined}
+        onPointerCancel={interactive ? () => { pressFired = false; cancelLongPress() } : undefined}
+        onPointerLeave={interactive ? () => { cancelLongPress() } : undefined}
       >
         {/* 头像尺寸与 --wx-avatar 令牌同源（微信桌面端官方值 40px），别在两处各写一个数 */}
         <Avatar name={avName} username={avUsername} size={40} />
@@ -141,8 +162,10 @@ export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React
             <MessageBody
               m={item.m}
               selfName={curSession.username}
+              sessionUsername={curSession.username}
               onOpenImage={openViewer}
               onOpenChatlog={openChatlog}
+              {...(interactive ? { onOpenQuote: openQuote } : {})}
             />
           )}
         </div>

@@ -3,11 +3,11 @@
  * freshness, computed over the same decrypted shards the overview reads.
  * Cached by file signature so it stays cheap on the live dashboard.
  */
-import { DatabaseSync } from './db-open.ts'
-import { createHash } from 'node:crypto'
+import { DatabaseSync, withDb } from './db-open.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig, dataGenerationSig } from './meta.ts'
+import { shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig, dataGenerationSig } from './meta.ts'
+import { mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
 import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
@@ -20,15 +20,6 @@ import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
  */
 function extrasCachePath(dec: string): string {
   return join(dirname(dec), 'cache', 'overview-extras.v1.json')
-}
-
-
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  if (v instanceof Uint8Array) return new TextDecoder('utf-8', { fatal: false }).decode(v)
-  return ''
 }
 
 function dayKey(sec: number): string {
@@ -79,23 +70,10 @@ function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
   const day14 = now - 14 * 86400
   const day90 = now - 90 * 86400
 
-  const names = contactMeta(dec).names
-  const md5ToUser = new Map<string, string>()
-  for (const u of names.keys()) md5ToUser.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
-  try {
-    const sp = join(dec, 'session', 'session.db')
-    if (existsSync(sp)) {
-      const db = new DatabaseSync(sp, { readOnly: true })
-      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined) {
-        for (const r of db.prepare('SELECT username FROM SessionTable').all() as Array<Record<string, unknown>>) {
-          const u = cellStr(r['username'])
-          if (u) md5ToUser.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
-        }
-      }
-      db.close()
-    }
-  } catch { /* ignore */ }
-  queryTraceMark('extras', 'contacts', md5ToUser.size)
+  const identity = messageIdentityIndex(dec, ['message', 'bizchat'])
+  const names = mergeDisplayNames(dec, identity.usernames)
+  const tableToUser = identity.tableToUsername
+  queryTraceMark('extras', 'contacts', tableToUser.size)
 
   const dayCounts = new Map<string, number>()
   let m7 = 0; let m30 = 0; let m60 = 0; let prev7 = 0; let prev30 = 0
@@ -115,7 +93,10 @@ function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
             'SELECT create_time / 86400 AS d, COUNT(*) AS n FROM ' + table + ' WHERE create_time >= ? GROUP BY d',
           ).all(day90) as Array<{ d: number; n: number }>
           if (rows.length === 0) continue
-          const talker = md5ToUser.get(table.slice(4)) ?? table.slice(4)
+          // Skip unowned tables instead of classifying an md5 suffix as a
+          // contact. A false contact here also feeds the 7/30-day KPI cards.
+          const talker = tableToUser.get(table)
+          if (!talker) continue
           const isGroup = talker.includes('@chatroom')
           for (const r of rows) {
             const day = r.d * 86400
@@ -148,15 +129,15 @@ function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
   const rp = join(dec, 'message', 'message_resource.db')
   if (existsSync(rp)) {
     try {
-      const db = new DatabaseSync(rp, { readOnly: true })
-      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined) {
-        const cols = new Set((db.prepare('PRAGMA table_info(MessageResourceDetail)').all() as Array<{ name: string }>).map(r => r.name))
-        if (cols.has('create_time')) {
-          const r = db.prepare('SELECT COALESCE(SUM(size), 0) AS s FROM MessageResourceDetail WHERE create_time >= ?').get(day30) as { s: number } | undefined
-          storageBytes30 = r?.s ?? 0
+      withDb(rp, (db) => {
+        if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined) {
+          const cols = new Set((db.prepare('PRAGMA table_info(MessageResourceDetail)').all() as Array<{ name: string }>).map(r => r.name))
+          if (cols.has('create_time')) {
+            const r = db.prepare('SELECT COALESCE(SUM(size), 0) AS s FROM MessageResourceDetail WHERE create_time >= ?').get(day30) as { s: number } | undefined
+            storageBytes30 = r?.s ?? 0
+          }
         }
-      }
-      db.close()
+      })
     } catch { /* ignore */ }
   }
   queryTraceMark('extras', 'resource', storageBytes30)

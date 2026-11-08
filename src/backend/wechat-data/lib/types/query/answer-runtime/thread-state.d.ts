@@ -82,6 +82,10 @@ export interface ApplyThreadStateOptions {
     knownSessions?: string[];
     /** 当前会话（会话内问答由服务端强制传入）。 */
     currentSession?: string;
+    /** 当前会话显示名；单聊里用于消解「他/她/对方」。 */
+    currentSessionName?: string;
+    /** 当前会话类型；缺省时按 username 的 `@chatroom` 后缀判断。 */
+    currentSessionKind?: 'private' | 'group';
 }
 /** 用户本轮显式覆盖的字段。 */
 export type ThreadScopeField = 'session' | 'contact' | 'timeRange' | 'referencedMessage' | 'mediaTypes';

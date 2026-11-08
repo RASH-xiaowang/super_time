@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_GRAPH_SETTINGS, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
-import { fa2Settings, graphDataKey, isolatedStripPositions, layoutIterations, runLayout } from './graph-layout.ts'
+import { fa2Settings, graphDataKey, isolatedStripPositions, layoutIterations, previewLayout, runLayout, warmLayoutIterations } from './graph-layout.ts'
 
 /** 造一个节点：只写关心的字段，其余给中性默认。 */
 function node(id: string, over: Partial<GNode> = {}): GNode {
@@ -88,6 +88,53 @@ describe('迭代分档', () => {
 
   it('非法节点数（负数）也落在最低档，不返回 NaN/undefined', () => {
     expect(layoutIterations(-5)).toBe(140)
+  })
+})
+
+describe('热启动与力度预览', () => {
+  it('热启动档位明显低于首次布局，且随节点数单调不增', () => {
+    let previous = Number.POSITIVE_INFINITY
+    for (const count of [1, 100, 250, 251, 600, 601, 1200, 1201, 2500, 2501, 9000]) {
+      const warm = warmLayoutIterations(count)
+      expect(warm).toBeGreaterThan(0)
+      expect(warm).toBeLessThanOrEqual(layoutIterations(count))
+      expect(warm).toBeLessThanOrEqual(previous)
+      previous = warm
+    }
+  })
+
+  it('预览从当前坐标前进几轮 FA2，不修改输入坐标，也不返回孤立节点', () => {
+    const graph = chainGraph(8, 'preview')
+    const positions = new Map(graph.nodes.map((n, i) => [n.id, { x: i * 10, y: (i % 2) * 5 }]))
+    const before = JSON.stringify([...positions])
+    const next = previewLayout({ graph, settings: s(), positions })
+    expect(next.size).toBe(8)
+    expect(JSON.stringify([...positions])).toBe(before)
+    for (const n of graph.nodes) {
+      const pos = next.get(n.id)
+      expect(Number.isFinite(pos?.x)).toBe(true)
+      expect(Number.isFinite(pos?.y)).toBe(true)
+    }
+    // 预览必须真的动起来；否则滑杆按住时仍然没有反馈。
+    expect([...next].some(([id, pos]) => {
+      const old = positions.get(id)
+      return !!old && (Math.abs(pos.x - old.x) > 1e-9 || Math.abs(pos.y - old.y) > 1e-9)
+    })).toBe(true)
+  })
+
+  it('预览对无边节点不强行造坐标（由调用方保留它们当前的位置）', () => {
+    const graph: BuiltGraph = {
+      nodes: [node('a'), node('b'), node('lonely')],
+      edges: [edge('a', 'b', 2)],
+      communityCount: 0,
+      kindCounts: {},
+    }
+    const next = previewLayout({
+      graph,
+      settings: s(),
+      positions: new Map([['a', { x: 0, y: 0 }], ['b', { x: 20, y: 0 }], ['lonely', { x: 100, y: 100 }]]),
+    })
+    expect([...next.keys()].sort()).toEqual(['a', 'b'])
   })
 })
 

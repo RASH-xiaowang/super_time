@@ -8,15 +8,29 @@
  * `total<=0` 只能是不确定态（不然会画出一条停在 0% 的假进度）、导出中必须同时锁住主按钮
  * 并给出「中止」。这些改前**一条用例都没有**（只有一份 `chats-export-hook.spec.ts` 管钩子那一半）。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatsExportDialogProps } from './chats-export-dialog.tsx'
 import { ChatsExportDialog } from './chats-export-dialog.tsx'
+import type { ExportTaskProgress, ExportTaskState } from './export-task.ts'
 
 const FORMATS = [{ value: 'txt', label: 'TXT' }, { value: 'html', label: 'HTML' }, { value: 'md', label: 'Markdown' }]
 const TYPES = [{ key: 'text', label: '文本', types: [1] }, { key: 'image', label: '图片', types: [3] }]
+const IDLE_STATE: ExportTaskState = {
+  status: 'idle', label: '', progress: null, message: '', canceling: false, cancelable: false,
+}
+
+function runningState(progress: ExportTaskProgress | null): ExportTaskState {
+  return {
+    status: 'running',
+    label: '导出聊天记录',
+    progress,
+    message: '',
+    canceling: false,
+    cancelable: true,
+  }
+}
 
 let host: HTMLDivElement
 let root: Root
@@ -49,9 +63,9 @@ function props(over: Partial<ChatsExportDialogProps> = {}): ChatsExportDialogPro
     expTypes: [],
     expZip: false,
     exportOpen: true,
-    exportProgress: null,
+    exportState: IDLE_STATE,
     exportSession: sink.exportSession,
-    exporting: false,
+    finishing: false,
     pickingDir: false,
     setExpCount: sink.setExpCount,
     setExpFilename: sink.setExpFilename,
@@ -79,11 +93,8 @@ const click = (el: Element | null | undefined): void => {
 /** 按钮的 `disabled` 在 DOM 上是属性， jsdom 会同步反映。 */
 const disabled = (el: Element | null | undefined): boolean => el?.hasAttribute('disabled') ?? false
 const textOf = (sel: string): string => q(sel)?.textContent ?? ''
-/**
- * 进度标签。`textCaptionTrunc` 在树上出现两次（目录那一格也用它），
- * 只按类名查会拿到前面那条 ⇒ 必须按"进度块里 exportField 的直接子节点"定位。
- */
-const PROGRESS_LABEL = '[class*="exportField"] > [class*="textCaptionTrunc"]'
+/** 统一状态卡的详情行（阶段 + 完成数）。 */
+const PROGRESS_LABEL = '[data-export-status] [class*="detail"]'
 /**
  * 条数那四格。`class*=` 是子串匹配 ⇒ 光写 `exportChip` 会同时捞到容器 `exportChips`
  * 和类型那批 `exportChipCheck`，所以限定 `button` 并把 Check 变体排掉。
@@ -274,46 +285,69 @@ describe('时间范围、文件名与目录', () => {
 
 describe('进度与导出中', () => {
   it('没有进度 ⇒ 一条假进度杠都不画', () => {
-    show({ exportProgress: null })
+    show({ exportState: IDLE_STATE })
     expect(q('[role="progressbar"]')).toBeNull()
+    expect(q('[data-export-status]')).toBeNull()
   })
 
   it('total>0 ⇒ 按百分比；done 超过 total 时封顶 100', () => {
-    show({ exportProgress: { phase: 'writing', done: 3, total: 12 } })
+    show({ exportState: runningState({ phase: 'write', done: 3, total: 12 }) })
     expect(q('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('25')
-    expect(textOf(PROGRESS_LABEL)).toBe('writing · 3 / 12')
-    show({ exportProgress: { phase: 'writing', done: 99, total: 12 } })
+    expect(textOf(PROGRESS_LABEL)).toBe('正在写入文件 · 3 / 12 个文件')
+    show({ exportState: runningState({ phase: 'write', done: 99, total: 12 }) })
     expect(q('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('100')
   })
 
   it('total<=0 ⇒ 不确定态（没有总数时停在 0% 是在谎报"没动"）', () => {
-    show({ exportProgress: { phase: 'packing', done: 7, total: 0 } })
+    show({ exportState: runningState({ phase: 'packing', done: 7, total: 0 }) })
     const bar = q('[role="progressbar"]')
     expect(bar?.hasAttribute('data-indeterminate'), 'total=0 却按 0% 画').toBe(true)
     expect(bar?.hasAttribute('aria-valuenow'), '不确定态不该报一个具体百分比').toBe(false)
-    expect(textOf(PROGRESS_LABEL)).toBe('packing · 7')
+    expect(textOf(PROGRESS_LABEL)).toBe('packing · 7 条')
   })
 
   it('phase 为空时退回「导出中」（不给用户看一个空标签）', () => {
-    show({ exportProgress: { phase: '', done: 1, total: 2 } })
-    expect(textOf(PROGRESS_LABEL)).toBe('导出中 · 1 / 2')
+    show({ exportState: runningState({ phase: '', done: 1, total: 2 }) })
+    expect(textOf(PROGRESS_LABEL)).toBe('导出中 · 1 / 2 条')
   })
 
-  it('导出中：主按钮锁住换文案，并出现「中止导出」；没在导出时不给中止按钮', () => {
-    show({ exporting: false })
+  it('导出中：主按钮锁住换文案，并出现取消入口；没在导出时不给取消按钮', () => {
+    show({ exportState: IDLE_STATE })
     const primary = qa('[class*="exportBtnPrimary"]')[0]
     expect(primary?.textContent).toBe('导出')
     expect(disabled(primary)).toBe(false)
-    expect(textOf('[class*="exportActions"]')).not.toContain('中止导出')
+    expect(qa('button').find((b) => b.textContent === '取消导出') ?? null).toBeNull()
     click(primary ?? null)
     expect(sink.exportSession).toHaveBeenCalledTimes(1)
 
-    show({ exporting: true })
+    show({ exportState: runningState({ phase: 'collect', done: 1, total: 10 }) })
     const p2 = qa('[class*="exportBtnPrimary"]')[0]
     expect(p2?.textContent).toBe('导出中…')
     expect(disabled(p2), '导出中还能再点一次 ⇒ 两个任务同时写同一个目录').toBe(true)
-    const stop = qa('[class*="exportBtnGhost"]').find((b) => b.textContent === '中止导出')
+    const stop = qa('button').find((b) => b.textContent === '取消导出')
     click(stop ?? null)
     expect(sink.cancelExport).toHaveBeenCalledTimes(1)
+  })
+
+  it('进度已满但 Promise 未返回 ⇒ 主按钮显示「完成中…」，不继续谎报「导出中…」', () => {
+    show({ exportState: runningState({ phase: 'write', done: 10, total: 10 }), finishing: true })
+    expect(qa('[class*="exportBtnPrimary"]')[0]?.textContent).toBe('完成中…')
+    expect(textOf('[data-export-status]')).toContain('正在收尾')
+  })
+
+  it('成功、失败、取消都复用同一张状态卡', () => {
+    show({ exportState: { ...IDLE_STATE, status: 'success', label: '导出聊天记录', message: '已导出 3 条' } })
+    expect(q('[data-export-status="success"]')).not.toBeNull()
+    expect(textOf('[data-export-status]')).toContain('导出完成')
+    expect(textOf('[data-export-status]')).toContain('已导出 3 条')
+
+    show({ exportState: { ...IDLE_STATE, status: 'error', label: '导出聊天记录', message: '磁盘已满' } })
+    expect(q('[data-export-status="error"]')).not.toBeNull()
+    expect(textOf('[data-export-status]')).toContain('导出失败')
+    expect(textOf('[data-export-status]')).toContain('磁盘已满')
+
+    show({ exportState: { ...IDLE_STATE, status: 'canceled', label: '导出聊天记录', message: '任务已停止' } })
+    expect(q('[data-export-status="canceled"]')).not.toBeNull()
+    expect(textOf('[data-export-status]')).toContain('已取消')
   })
 })

@@ -21,7 +21,8 @@ import {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const require = createRequire(import.meta.url)
-const { createRemoteAccessServer } = require(join(ROOT, 'src', 'backend', 'http-server.js')) as {
+const { createRemoteAccessServer, MESSAGE_WEBHOOK_BODY_BYTES } = require(join(ROOT, 'src', 'backend', 'http-server.js')) as {
+  MESSAGE_WEBHOOK_BODY_BYTES: number
   createRemoteAccessServer: (deps: {
     getDataRoot: () => string
     getUiDistDir: () => string
@@ -112,6 +113,31 @@ function rawGet(base: string, path: string, host: string): Promise<{ status: num
   })
 }
 
+function rawBodylessPost(
+  base: string,
+  path: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  const url = new URL(base)
+  return new Promise((resolve, reject) => {
+    const req = request({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      path,
+      method: 'POST',
+      headers: { Host: url.host, Connection: 'close', ...headers },
+    }, (res) => {
+      res.setEncoding('utf8')
+      let body = ''
+      res.on('data', (chunk) => { body += String(chunk) })
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 describe('消息列表局域网 Webhook 路由', () => {
   it('GET 使用稳定路径令牌通检；错误令牌统一 404', async () => {
     const f = await fixture(async () => ({ ok: false }))
@@ -136,8 +162,33 @@ describe('消息列表局域网 Webhook 路由', () => {
       return {
         ok: true,
         value: deliveryOk
-          ? { ok: true, id: 7, record: { id: 7, replyId: 'r-7' } }
-          : { ok: false, error: '未匹配到 Webhook', id: 8, record: { id: 8, replyId: 'r-8' } },
+          ? {
+              ok: true,
+              id: 7,
+              created: true,
+              record: {
+                id: 7,
+                status: 'success',
+                created: true,
+                attempts: 1,
+                replyId: 'r-7',
+                webhookUrl: 'http://192.0.2.10/webhook/secret-path-token',
+              },
+            }
+          : {
+              ok: false,
+              error: '未匹配到 Webhook: http://192.0.2.10/webhook/secret-path-token?key=secret-query',
+              id: 8,
+              created: false,
+              record: {
+                id: 8,
+                status: 'pending',
+                created: false,
+                attempts: 0,
+                replyId: 'r-8',
+                webhookUrl: 'http://192.0.2.10/webhook/secret-path-token',
+              },
+            },
       }
     })
     const payload = {
@@ -151,12 +202,20 @@ describe('消息列表局域网 Webhook 路由', () => {
       body: JSON.stringify(payload),
     })
     expect(accepted.status).toBe(200)
-    expect(await accepted.json()).toMatchObject({
+    const acceptedBody = await accepted.json() as Record<string, unknown>
+    expect(acceptedBody).toMatchObject({
       ok: true,
       accepted: true,
       delivered: true,
-      record: { id: 7 },
+      record: { id: 7, status: 'success', created: true, attempts: 1 },
     })
+    expect(acceptedBody.record).toEqual({
+      id: 7,
+      status: 'success',
+      created: true,
+      attempts: 1,
+    })
+    expect(JSON.stringify(acceptedBody)).not.toMatch(/webhookUrl|replyId|secret-path-token/)
     expect(f.calls).toEqual([{ method: 'ingestMessageListWebhook', args: [payload] }])
 
     deliveryOk = false
@@ -166,13 +225,22 @@ describe('消息列表局域网 Webhook 路由', () => {
       body: JSON.stringify(payload),
     })
     expect(pending.status).toBe(200)
-    expect(await pending.json()).toMatchObject({
+    const pendingBody = await pending.json() as Record<string, unknown>
+    expect(pendingBody).toMatchObject({
       ok: true,
       accepted: true,
       delivered: false,
-      record: { id: 8 },
-      deliveryError: '未匹配到 Webhook',
+      record: { id: 8, status: 'pending', created: false, attempts: 0 },
     })
+    expect(pendingBody.record).toEqual({
+      id: 8,
+      status: 'pending',
+      created: false,
+      attempts: 0,
+    })
+    expect(pendingBody.deliveryError).toContain('未匹配到 Webhook')
+    expect(JSON.stringify(pendingBody))
+      .not.toMatch(/webhookUrl|replyId|secret-path-token|secret-query/)
   })
 
   it('Host 校验先于业务路由：伪造 Host 返回 421 且不触发 gatedCall', async () => {
@@ -191,6 +259,37 @@ describe('消息列表局域网 Webhook 路由', () => {
       body: '{not-json',
     })
     expect(result.status).toBe(400)
+    expect(f.calls).toEqual([])
+  })
+
+  it('入站 Webhook 严格要求 application/json 与 JSON 对象', async () => {
+    const f = await fixture(async () => ({ ok: false }))
+    const text = await fetch(f.url + f.path, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ target: '张三', message: '你好' }),
+    })
+    expect(text.status).toBe(415)
+    expect(await text.json()).toMatchObject({ error: { code: 'UNSUPPORTED_MEDIA_TYPE' } })
+
+    const array = await fetch(f.url + f.path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '[]',
+    })
+    expect(array.status).toBe(400)
+    expect(await array.json()).toMatchObject({ error: { code: 'BAD_JSON_SHAPE' } })
+    expect(f.calls).toEqual([])
+  })
+
+  it('声明的 Content-Length 超过 30MB 时在读取正文前返回 413', async () => {
+    const f = await fixture(async () => ({ ok: false }))
+    const result = await rawBodylessPost(f.url, f.path, {
+      'content-type': 'application/json',
+      'content-length': String(MESSAGE_WEBHOOK_BODY_BYTES + 1),
+    })
+    expect(result.status).toBe(413)
+    expect(result.body).toContain('BODY_TOO_LARGE')
     expect(f.calls).toEqual([])
   })
 })

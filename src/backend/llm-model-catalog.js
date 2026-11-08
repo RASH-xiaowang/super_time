@@ -58,6 +58,27 @@ const CATALOG = [
     vendor: 'OpenAI',
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'o3-mini'],
   },
+  {
+    hosts: ['opencode.ai'],
+    vendor: 'OpenCode Go',
+    // 2026-10-29 取自 https://opencode.ai/inference/go/v1/models。
+    // 默认优先列非 DeepSeek 模型，避免工作区 Region 隐私设置未放行时直接调用失败。
+    models: [
+      'glm-5.3-flash', 'glm-5.3', 'kimi-k3', 'qwen3.8-max', 'qwen3.8-flash',
+      'gpt-6-luna', 'minimax-m3', 'deepseek-v4.1-flash', 'deepseek-v4-pro',
+    ],
+  },
+  {
+    hosts: ['openrouter.ai'],
+    vendor: 'OpenRouter',
+    // OpenRouter 的列表很大且持续变化；内置清单只放一个已验证的稳定别名。
+    models: ['~openai/gpt-sol-latest'],
+  },
+  {
+    hosts: ['api.cerebras.ai'],
+    vendor: 'Cerebras',
+    models: ['qwen-3.8-27b', 'gpt-oss-120b'],
+  },
 ];
 
 /**

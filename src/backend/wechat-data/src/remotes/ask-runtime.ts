@@ -2,8 +2,8 @@
  * 问答运行时 v2 的生产编排层。
  *
  * 运行时（`query/answer-runtime/*`）只负责意图、工具循环、证据与状态；这里把
- * 三个入口的装配细节接起来：
- *   · 微信问答 / 会话内问答 / ClawBot 自动回复共用同一套编排；
+ * 两个入口的装配细节接起来：
+ *   · 微信问答 / 会话内问答共用同一套编排；
  *   · 工具选择阶段只看到规则与范围，证据在综合阶段才出网；
  *   · 所有真正发给模型的文本都先过隐私闸门；
  *   · 最终结果仍保持旧 `AskResult` 形状，新增字段只做附加。
@@ -29,6 +29,7 @@ import {
   type AnswerIntentLlmSuggestion,
 } from '../query/answer-runtime/intent.ts'
 import type {
+  AnswerReasoningMeta,
   AnswerRuntimeEmitStage,
   AnswerRuntimeOp,
   AnswerRuntimeResult,
@@ -40,12 +41,11 @@ import {
   resolveExplicitDateRange,
 } from '../query/answer-runtime/explicit-time-range.ts'
 import type { AnswerStatus } from '../query/answer-runtime/evidence.ts'
-import type { AnswerProfileId } from '../query/tools/profiles.ts'
+import { getAnswerProfile, type AnswerProfileId } from '../query/tools/profiles.ts'
 import { askToolContext } from './ask-retrieval.ts'
 import {
   IMAGE_UNSUPPORTED_NOTE,
   buildAskScope,
-  buildEmptyChatPrompt,
   buildRuntimeContext,
   buildSynthesisPrompt,
   buildTimeGuardRule,
@@ -54,13 +54,13 @@ import {
   evidenceTexts,
   normalizeKbId,
   prepareAskImages,
+  replaceAnswerIdentities,
   resolveGroundedAnswer,
   runChatWithImagesFallback,
   resolveSystemPrompt,
   resourceTexts,
   selectAskProfile,
   trimAskHistory,
-  type AskDataScope,
   type AskImageInput,
   type AskScope,
   type PreparedAskImages,
@@ -80,6 +80,7 @@ import {
   type AskRuntimeResult,
   type GroundingSnapshot,
 } from './ask-runtime-result.ts'
+import { createAskReasoningCollector } from './ask-runtime-reasoning.ts'
 
 export {
   askResultFromRuntime,
@@ -133,7 +134,7 @@ export interface AskRuntimeDeps {
   /** 本轮取消信号；用于唤醒工具重试退避。 */
   cancelSignal?: AbortSignal
   emitDelta?: (text: string) => void
-  emitReasoning?: (text: string) => void
+  emitReasoning?: (text: string, meta?: AnswerReasoningMeta) => void
   emitStage?: AnswerRuntimeEmitStage
   op?: AnswerRuntimeOp
   now?: Date
@@ -143,6 +144,8 @@ export interface AskRuntimeDeps {
   toolDeadlineMs?: number
   /** 单次模型轮次 deadline；缺省由运行时取 120000ms，0 = 关闭。 */
   modelDeadlineMs?: number
+  /** 首版回答之后的核对/修复 deadline，默认 20000ms；0 = 关闭。 */
+  answerVerifyDeadlineMs?: number
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -156,7 +159,6 @@ export interface AskRuntimeOptions {
   source?: string
   usernameName?: string
   kbId?: number
-  dataScope?: AskDataScope
   images?: readonly AskImageInput[]
   systemPromptOverride?: string
   streamId?: string
@@ -184,6 +186,7 @@ function resolveThreadScope(
     // 已知会话这里传的是显示名；applyThreadState 只把它当文本线索，
     // 真正的 username 仍必须由显式 scope 或调用方解析后提供。
     ...(scope.username ? { currentSession: scope.username } : {}),
+    ...(scope.displayName ? { currentSessionName: scope.displayName } : {}),
   })
 }
 
@@ -213,6 +216,7 @@ function mergeScopeWithThread(
   const explicitTo = restatedTime ? applied.to : undefined
   return {
     ...(session ? { username: session } : {}),
+    ...(scope.displayName ? { displayName: scope.displayName } : {}),
     ...(explicitFrom || scope.from
       ? { from: explicitFrom ?? scope.from }
       : applied.from
@@ -275,12 +279,155 @@ function sessionCatalogOf(
   return out
 }
 
+type SessionCatalogEntry = {
+  username: string
+  name?: string
+  aliases?: readonly string[]
+}
+
+const QUOTED_TEXT_RE = /[「『“"]([^」』”"]{2,120})[」』”"]/g
+
+function normalizedSessionLabel(value: string): string {
+  return value
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/^[「『“"']|[」』”"']$/g, '')
+    .toLowerCase()
+}
+
+function quotedTexts(question: string): string[] {
+  const out: string[] = []
+  for (const match of question.matchAll(QUOTED_TEXT_RE)) {
+    const text = match[1]?.trim() ?? ''
+    if (text !== '') out.push(text)
+  }
+  return out
+}
+
+/**
+ * 用户用引号点名一个已知会话时，直接收敛到真实 username。
+ *
+ * 这一步只接受结构化目录里的精确名称/别名，且要求本轮只有一个引号名称，
+ * 避免「对比 A 群和 B 群」被错误锁到第一个会话。提前锁定后，
+ * `get_session_messages` 的 username 可由服务端注入，不必先查联系人/会话列表。
+ */
+function resolveQuotedSessionScope(
+  scope: AskScope,
+  question: string,
+  catalog: readonly SessionCatalogEntry[],
+): AskScope {
+  if (scope.username || catalog.length === 0) return scope
+  const quoted = quotedTexts(question)
+  if (quoted.length !== 1) return scope
+  const target = normalizedSessionLabel(quoted[0] ?? '')
+  if (target === '') return scope
+  const matches = catalog.filter((entry) => {
+    const labels = [entry.name ?? '', entry.username, ...(entry.aliases ?? [])]
+    return labels.some(label => normalizedSessionLabel(label) === target)
+  })
+  if (matches.length !== 1) return scope
+  const match = matches[0]
+  if (!match) return scope
+  return {
+    ...scope,
+    username: match.username,
+    ...(match.name ? { displayName: match.name } : {}),
+  }
+}
+
 function noopOp(_category: 'task', _action: string, _status: 'ok' | 'fail' | 'skip', _target: string, _detail?: string): void {
   // 编排层的日志是旁路，调用方可以完全不注入。
 }
 
+/** profile 预算只能收紧调用方设置，不能被调用方放大。 */
+function boundedBudget(limit: number | undefined, requested: number | undefined): number | undefined {
+  if (limit === undefined) return requested
+  if (requested === undefined) return limit
+  return Math.max(1, Math.min(limit, requested))
+}
+
 function safeThrowIfCanceled(deps: AskRuntimeDeps): void {
   deps.throwIfCanceled?.()
+}
+
+const DEFAULT_ANSWER_VERIFY_DEADLINE_MS = 20_000
+
+/**
+ * 回答核对/修复的独立硬截止。
+ *
+ * 首版回答已经通过 `emitDelta` 送到界面；如果第二次模型调用（核对修复）一直不
+ * 收口，用户会看到正文完整但「综合生成 / 核对结果」永远转圈。这里同时监听用户
+ * 取消与内部 deadline：用户主动停止必须继续向底层请求传播，内部超时则返回
+ * `timedOut`，由调用方保留首版回答做确定性降级。
+ */
+async function runVerificationWithDeadline<T>(input: {
+  deadlineMs: number
+  cancelSignal?: AbortSignal
+  throwIfCanceled: () => void
+  run: (signal?: AbortSignal) => Promise<T>
+}): Promise<{ timedOut: false; value: T } | { timedOut: true }> {
+  input.throwIfCanceled()
+  if (input.deadlineMs <= 0) {
+    const value = await input.run(input.cancelSignal)
+    input.throwIfCanceled()
+    return { timedOut: false, value }
+  }
+
+  const deadlineController = new AbortController()
+  const signal = input.cancelSignal === undefined
+    ? deadlineController.signal
+    : AbortSignal.any([input.cancelSignal, deadlineController.signal])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onCancel: (() => void) | undefined
+  let timedOut = false
+
+  const timeout = new Promise<{ timedOut: true }>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      deadlineController.abort(Object.assign(
+        new Error(`回答核对超时（${String(input.deadlineMs)}ms）`),
+        { code: 'answer_verify_timeout', category: 'timeout' },
+      ))
+      resolve({ timedOut: true })
+    }, input.deadlineMs)
+  })
+  const canceled = new Promise<never>((_resolve, reject) => {
+    if (input.cancelSignal === undefined) return
+    onCancel = () => {
+      try {
+        input.throwIfCanceled()
+      } catch (error) {
+        reject(error)
+        return
+      }
+      reject(Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' }))
+    }
+    if (input.cancelSignal.aborted) onCancel()
+    else input.cancelSignal.addEventListener('abort', onCancel, { once: true })
+  })
+  const work = Promise.resolve().then(() => input.run(signal))
+  // deadline/取消先返回后，底层请求仍可能晚到；挂空 catch 防 unhandled rejection。
+  work.catch(() => undefined)
+
+  try {
+    const outcome = await Promise.race([
+      work.then(value => ({ timedOut: false as const, value })),
+      timeout,
+      canceled,
+    ])
+    if (outcome.timedOut) input.throwIfCanceled()
+    return outcome
+  } catch (error) {
+    if (timedOut) {
+      input.throwIfCanceled()
+      return { timedOut: true }
+    }
+    throw error
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (onCancel !== undefined && input.cancelSignal !== undefined) {
+      input.cancelSignal.removeEventListener('abort', onCancel)
+    }
+  }
 }
 
 function parseIntentSuggestion(raw: string): AnswerIntentLlmSuggestion | null {
@@ -432,11 +579,9 @@ function gateModelMessages(
   })
 }
 
-function imageNoteFor(prepared: PreparedAskImages, profile: AnswerProfileId): string {
+function imageNoteFor(prepared: PreparedAskImages): string {
   if (prepared.blocks.length === 0) return prepared.note
-  return profile === 'clawbot-auto'
-    ? '（当前聊天联系人发来图片，请直接看图回答。）'
-    : '（当前提问者在本轮问题中附了图片，请直接看图回答。）'
+  return '（当前提问者在本轮问题中附了图片，请直接看图回答。）'
 }
 
 function userContent(question: string, blocks: readonly ImageBlock[]): ContentBlock[] {
@@ -493,6 +638,7 @@ function createRunFns(
       provider: deps.provider,
       model: deps.model,
       throwIfCanceled: () => safeThrowIfCanceled(deps),
+      ...(deps.cancelSignal ? { signal: deps.cancelSignal } : {}),
     })
   }
   if (!runTurn) throw new Error('未配置问答模型调用（runTurn）')
@@ -502,6 +648,9 @@ function createRunFns(
     return runTurn({
       ...input,
       messages: gateModelMessages(input.messages, deps, sessions),
+      ...(input.signal ?? deps.cancelSignal
+        ? { signal: input.signal ?? deps.cancelSignal }
+        : {}),
     })
   }
 
@@ -512,9 +661,19 @@ function createRunFns(
       provider: deps.provider,
       model: deps.model,
       throwIfCanceled: () => safeThrowIfCanceled(deps),
+      ...(deps.cancelSignal ? { signal: deps.cancelSignal } : {}),
     })
   }
   return { runTurn: gatedTurn, ...(runChat ? { runChat } : {}) }
+}
+
+function isAskCanceledError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true
+    || (
+      typeof error === 'object'
+      && error !== null
+      && (error as { code?: unknown }).code === 'ASK_CANCELED'
+    )
 }
 
 interface SynthesizerInput {
@@ -525,7 +684,7 @@ interface SynthesizerInput {
   history: ReturnType<typeof trimAskHistory>
   prepared: PreparedAskImages
   runChat: RunChatFn
-  onReasoning: (text: string) => void
+  onReasoning: (text: string, meta?: AnswerReasoningMeta) => void
   op: AnswerRuntimeOp
   capture: (snapshot: GroundingSnapshot) => void
   emitStage: AnswerRuntimeEmitStage
@@ -548,7 +707,6 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
   return async (synthesis) => {
     const citations = reindexCitations(synthesis.evidence)
     const resources = resourcesFromEvidence(synthesis.evidence)
-    const isKb = synthesis.profile.id === 'clawbot-auto'
     const noEvidence = synthesis.evidence.items.length === 0
     const range = synthesis.intent.scopeHints?.timeRange
     const from = range?.from || range?.to || ''
@@ -568,24 +726,19 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
         intent: synthesis.intent,
         terms: extractAskTerms(question).slice(0, 8),
         scope: describeAskScope(scope, synthesis.profile.id),
-        recency: synthesis.intent.legacy === 'recency_lookup',
+        recency: synthesis.intent.recency === true,
         ...(timeHint ? { timeHint } : {}),
         ...(hintHits !== undefined ? { hintHits } : {}),
       })
-    const imageHint = imageNoteFor(prepared, synthesis.profile.id)
-    const prompt = noEvidence && isKb
-      ? buildEmptyChatPrompt(question, history, imageHint)
-      : buildSynthesisPrompt({
-        question,
-        history,
-        imageHint,
-        contextBlock,
-        dataScope: options.dataScope,
-        timeGuardRule: buildTimeGuardRule(synthesis.intent, synthesis.evidence),
-      })
-    const system = isKb
-      ? resolveSystemPrompt(options.systemPromptOverride, 'kb-only')
-      : resolveSystemPrompt(options.systemPromptOverride, options.dataScope)
+    const imageHint = imageNoteFor(prepared)
+    const prompt = buildSynthesisPrompt({
+      question,
+      history,
+      imageHint,
+      contextBlock,
+      timeGuardRule: buildTimeGuardRule(synthesis.intent, synthesis.evidence),
+    })
+    const system = resolveSystemPrompt(options.systemPromptOverride)
     const counts = {
       sessions: new Set(citations.map(c => c.username).filter(Boolean)).size,
       messages: citations.length,
@@ -597,7 +750,9 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
       onDelta,
       onReasoningDelta,
       images = prepared.blocks,
+      signal,
     ) => {
+      safeThrowIfCanceled(deps)
       const gatedSystem = gateText(deps, counts, sys)
       const gatedText = gateText(deps, counts, text)
       const finalText = images.length === 0 && prepared.note !== '' && !noEvidence
@@ -612,40 +767,67 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
         onDelta,
         onReasoningDelta,
         images,
+        signal ?? deps.cancelSignal,
       )
     }
     const answer = await gatedChat(
       system,
       prompt,
-      isKb ? 400 : 1200,
+      1200,
       deps.emitDelta,
-      onReasoning,
+      text => onReasoning(text, { phase: 'synthesis', mode: 'snapshot' }),
       prepared.blocks,
     )
     const texts = evidenceTexts(synthesis.evidence)
     const citationTexts = citations.map(citation =>
       texts.get(citation.evidenceId)
       ?? `${citation.name} ${citation.sender ?? ''} ${citation.time} ${citation.snippet}`)
-    const resourceOnly = !isKb && citations.length === 0 && resources.length > 0
+    const resourceOnly = citations.length === 0 && resources.length > 0
     emitStage({ key: 'answer:verify', label: '核对结果', status: 'running' })
     let resolved: Awaited<ReturnType<typeof resolveGroundedAnswer>>
     try {
-      resolved = await resolveGroundedAnswer({
-        mode: isKb ? 'chat' : resourceOnly ? 'resource' : 'cited',
-        answer,
-        citationCount: citations.length,
-        synthPrompt: prompt,
-        evidenceFor: (cited) => {
-          const indexes = cited.length > 0 ? cited : citations.map((_, offset) => offset + 1)
-          return indexes.map(index => citationTexts[index - 1] ?? '')
-        },
-        allEvidence: [...citationTexts, ...resourceTexts(resources)],
-        systemPrompt: system,
-        runChat: gatedChat,
-        ...(prepared.blocks.length > 0 ? { images: prepared.blocks } : {}),
+      const verify = (allowRepair: boolean, signal?: AbortSignal) =>
+        resolveGroundedAnswer({
+          mode: resourceOnly ? 'resource' : 'cited',
+          answer,
+          citationCount: citations.length,
+          synthPrompt: prompt,
+          evidenceFor: (cited) => {
+            const indexes = cited.length > 0 ? cited : citations.map((_, offset) => offset + 1)
+            return indexes.map(index => citationTexts[index - 1] ?? '')
+          },
+          allEvidence: [...citationTexts, ...resourceTexts(resources)],
+          trustedValueText: [
+            question,
+            ...(timeHint ? [timeHint] : []),
+          ].join('\n'),
+          systemPrompt: system,
+          runChat: gatedChat,
+          ...(prepared.blocks.length > 0 ? { images: prepared.blocks } : {}),
+          ...(signal !== undefined ? { signal } : {}),
+          allowRepair,
+        })
+      const verification = await runVerificationWithDeadline({
+        deadlineMs: deps.answerVerifyDeadlineMs ?? DEFAULT_ANSWER_VERIFY_DEADLINE_MS,
+        ...(deps.cancelSignal !== undefined ? { cancelSignal: deps.cancelSignal } : {}),
+        throwIfCanceled: () => safeThrowIfCanceled(deps),
+        run: signal => verify(true, signal),
       })
-      emitStage({ key: 'answer:verify', label: '核对结果', status: 'done' })
+      if (verification.timedOut) {
+        // 首版正文已经流给用户，核对超时只能降级，不能把整段回答换成证据兜底。
+        resolved = await verify(false)
+        emitStage({
+          key: 'answer:verify',
+          label: '核对结果',
+          status: 'done',
+          detail: '核对超时，已保留首版回答',
+        })
+      } else {
+        resolved = verification.value
+        emitStage({ key: 'answer:verify', label: '核对结果', status: 'done' })
+      }
     } catch (error) {
+      if (isAskCanceledError(error, deps.cancelSignal)) throw error
       emitStage({
         key: 'answer:verify',
         label: '核对结果',
@@ -661,7 +843,7 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
       repaired: resolved.repaired,
       evidenceUsed: resolved.evidenceUsed,
     })
-    return { answer: resolved.answer, citations }
+    return { answer: replaceAnswerIdentities(resolved.answer, citations), citations }
   }
 }
 
@@ -681,7 +863,10 @@ export async function askWithRuntime(
   const question = String(options.question ?? '').trim()
   const scope = buildAskScope(options)
   const history = trimAskHistory(options.history)
-  const profile = selectAskProfile({ source: options.source, dataScope: options.dataScope })
+  const profile = selectAskProfile({ source: options.source })
+  const profileBudget = getAnswerProfile(profile)
+  const maxRounds = boundedBudget(profileBudget.maxRounds, deps.maxRounds)
+  const maxCallsPerRound = boundedBudget(profileBudget.maxCallsPerRound, deps.maxCallsPerRound)
   const kbId = normalizeKbId(options.kbId)
   const prepared = await resolvePreparedImages(deps, options)
   if (prepared.audit !== '') {
@@ -710,7 +895,11 @@ export async function askWithRuntime(
     knownEntities,
     now,
   )
-  const effectiveScope = mergeScopeWithThread(scope, appliedThread, question)
+  const effectiveScope = resolveQuotedSessionScope(
+    mergeScopeWithThread(scope, appliedThread, question),
+    question,
+    sessionEntries,
+  )
   const toolBuildInput: AskRuntimeToolBuildInput = {
     profile,
     plan: {
@@ -722,7 +911,7 @@ export async function askWithRuntime(
     },
     scope: effectiveScope,
     ...(kbId !== undefined ? { kbId } : {}),
-    wechatDataEnabled: profile !== 'clawbot-auto',
+    wechatDataEnabled: true,
     knownEntities,
     now,
   }
@@ -741,7 +930,6 @@ export async function askWithRuntime(
     },
     scope: effectiveScope,
     ...(kbId !== undefined ? { kbId } : {}),
-    ...(profile === 'clawbot-auto' ? { wechatDataEnabled: false } : {}),
     indexNote: '',
     scopeDescText: describeAskScope(effectiveScope, profile),
     op: deps.op ?? noopOp,
@@ -759,19 +947,17 @@ export async function askWithRuntime(
     ...(kbId !== undefined ? { kbId } : {}),
     // UI/服务端显式范围优先于工具基础上下文；继承范围只补空缺。
     scope: { ...(deps.toolContext?.scope ?? {}), ...effectiveScope },
-    ...(profile === 'clawbot-auto' ? { wechatDataEnabled: false } : {}),
     knownEntities,
     now,
   }
 
   const selectionSystemRaw = buildToolSelectionSystem({
     profile,
-    dataScope: options.dataScope,
     scope: effectiveScope,
     ...(kbId !== undefined ? { kbId } : {}),
     question,
     history,
-    imageNote: imageNoteFor(prepared, profile),
+    imageNote: imageNoteFor(prepared),
     now,
   })
   const selectionSystem = gateText(
@@ -796,11 +982,8 @@ export async function askWithRuntime(
         counts: { sessions: effectiveScope.username ? 1 : 0, messages: history.length },
       })
       : undefined)
-  let reasoning = ''
-  const onReasoning = (text: string): void => {
-    reasoning = text
-    deps.emitReasoning?.(text)
-  }
+  const reasoning = createAskReasoningCollector(deps.emitReasoning)
+  const { onReasoning } = reasoning
   const op: AnswerRuntimeOp = deps.op ?? noopOp
   const stages: AnswerRuntimeStage[] = []
   const emitStage: AnswerRuntimeEmitStage = stage => {
@@ -843,22 +1026,26 @@ export async function askWithRuntime(
     ...(deps.cancelSignal ? { cancelSignal: deps.cancelSignal } : {}),
     runTurn,
     ...(synthesize ? { synthesize } : {}),
-    synthesizeOnInsufficient: profile === 'clawbot-auto',
-    clarifyBeforeSearch: profile !== 'clawbot-auto',
+    synthesizeOnInsufficient: false,
+    clarifyBeforeSearch: true,
     ...(intentClassifier ? { intentClassifier } : {}),
     intentClassifierDeadlineMs: deps.intentClassifierDeadlineMs ?? 4_000,
     intentOptions: {
       history,
       knownEntities,
       knownSessions: sessionEntries.map(entry => entry.name ?? entry.username),
+      ...(scope.displayName ? { currentSessionName: scope.displayName } : {}),
     },
     knownSessions: [...knownSessions, ...sessionEntries.map(entry => entry.username)],
     ...(sessionEntries.length > 0 ? { knownSessionCatalog: sessionEntries } : {}),
     knownContacts: knownEntities,
     threadState,
     now,
-    ...(deps.maxRounds !== undefined ? { maxRounds: deps.maxRounds } : {}),
-    ...(deps.maxCallsPerRound !== undefined ? { maxCallsPerRound: deps.maxCallsPerRound } : {}),
+    ...(maxRounds !== undefined ? { maxRounds } : {}),
+    ...(maxCallsPerRound !== undefined ? { maxCallsPerRound } : {}),
+    ...(profileBudget.maxFallbackCalls !== undefined
+      ? { maxFallbackCalls: profileBudget.maxFallbackCalls }
+      : {}),
     ...(deps.maxTokens !== undefined ? { maxTokens: deps.maxTokens } : {}),
     ...(deps.toolDeadlineMs !== undefined ? { toolDeadlineMs: deps.toolDeadlineMs } : {}),
     ...(deps.modelDeadlineMs !== undefined ? { modelDeadlineMs: deps.modelDeadlineMs } : {}),
@@ -871,18 +1058,22 @@ export async function askWithRuntime(
   const result = askResultFromRuntime({
     runtime,
     profile,
-    dataScope: options.dataScope,
     scope: effectiveScope,
     question,
     ...(grounded ? { grounded } : {}),
     stages,
+    reasoningSegments: reasoning.segments,
   })
   // 线程状态保存的是公开映射后的回答；运行时可能只返回状态兜底前的空串。
   const nextThread = threadWithResult(threadState, question, runtime, result.answer, appliedThread)
   result.threadState = nextThread
   result.appliedThreadState = appliedThread
   if (grounded?.evidenceUsed === false) result.evidenceUsed = false
-  if (reasoning !== '') result.reasoning = reasoning
+  const combinedReasoning = reasoning.text()
+  if (combinedReasoning !== '') {
+    result.reasoning = combinedReasoning
+    result.reasoningSegments = reasoning.snapshot()
+  }
 
   return result
 }

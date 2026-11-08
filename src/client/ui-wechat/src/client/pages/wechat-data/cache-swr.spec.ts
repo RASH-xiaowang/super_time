@@ -110,4 +110,16 @@ describe('cachedFetch 命中即返回', () => {
     expect(fetched).toBe(true)
     expect(v).toEqual({ items: ['新'], total: 1 })
   })
+
+  it('实时数据事件先失效聊天持久缓存，避免刷新又拿到 30 秒旧会话', async () => {
+    await cachedFetch('sessions:live', async () => ({ items: ['旧会话'], total: 1 }), 30_000)
+    await cachedFetch('messages:live', async () => ({ items: ['旧消息'], total: 1 }), 5_000)
+    await cachedFetch('moments:live', async () => ({ items: ['朋友圈'], total: 1 }))
+
+    window.dispatchEvent(new Event('dsh-wechat-data-updated'))
+
+    expect(localStorage.getItem(PREFIX + 'sessions:live'), '会话缓存没被失效').toBeNull()
+    expect(localStorage.getItem(PREFIX + 'messages:live'), '消息缓存没被失效').toBeNull()
+    expect(localStorage.getItem(PREFIX + 'moments:live'), '非聊天缓存被误伤').not.toBeNull()
+  })
 })

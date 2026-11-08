@@ -30,7 +30,7 @@
 }
 .moreSummary::-webkit-details-marker { display: none; }
 .moreSummary:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
-.more[open] > .moreSummary { background: var(--nm-bg-hover); }
+.moreSummary[aria-expanded='true'] { background: var(--nm-bg-hover); }
 .moreMenu {
   position: absolute;
   right: 0;
@@ -94,14 +94,78 @@
   align-items: center;
   gap: 12px;
   min-height: 44px;
-  padding: 6px 4px;
+  padding: 6px 8px;
   border-bottom: 0.5px solid var(--nm-border);
   background: transparent;
+  transition: background 0.12s ease;
 }
 .taskRow:last-child { border-bottom: 0; }
+.taskRow:hover { background: var(--nm-bg-hover); }
 .taskRow[data-status='done'] { opacity: 0.6; }
 .taskInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .taskTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); word-break: break-word; }
 .taskRow[data-status='done'] .taskTitle { text-decoration: line-through; }
 .taskMeta { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--nm-text-2); }
-.taskActions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.taskActions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 44px; flex-shrink: 0; }
+
+/* 完成态是行首的圆形勾选，和微信「待办」的语义一致；不再让每行都常驻两个文字按钮。 */
+.check {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--nm-border-hover);
+  border-radius: 50%;
+  background: var(--nm-bg-card);
+  color: transparent;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.taskRow:hover .check,
+.taskRow:focus-within .check {
+  border-color: var(--nm-brand);
+  color: var(--nm-brand);
+}
+.check[data-checked] {
+  border-color: var(--nm-brand-fill);
+  background: var(--nm-brand-fill);
+  color: var(--nm-on-accent);
+}
+.check[data-checked]:hover { background: var(--nm-brand-fill-hover); border-color: var(--nm-brand-fill-hover); }
+.check:focus-visible { outline: 2px solid var(--nm-brand); outline-offset: 2px; }
+.check:disabled { cursor: wait; opacity: 0.7; }
+.checkSpin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--nm-brand) 24%, transparent);
+  border-top-color: var(--nm-brand);
+  border-radius: 50%;
+  animation: taskSpin 0.8s linear infinite;
+}
+
+/* 删除是低频危险动作：默认收起，悬停/键盘聚焦时才出现；触屏设备常驻，避免无法发现。 */
+.deleteBtn {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-danger-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.taskRow:hover .deleteBtn,
+.taskRow:focus-within .deleteBtn { opacity: 1; }
+.deleteBtn:hover:not(:disabled) { background: color-mix(in srgb, var(--nm-danger) 9%, transparent); }
+.deleteBtn:focus-visible { outline: 2px solid var(--nm-danger); outline-offset: 1px; opacity: 1; }
+.deleteBtn:disabled { cursor: wait; opacity: 0.45; }
+
+@keyframes taskSpin { to { transform: rotate(360deg); } }
+
+@media (hover: none) {
+  .deleteBtn { opacity: 1; }
+}

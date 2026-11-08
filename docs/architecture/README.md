@@ -14,9 +14,9 @@
 | 文件 | 内容 | 形态 |
 |---|---|---|
 | `system-architecture.svg` | **主图**：六层系统架构，含调用下行与数据上行 | 矢量源文件（可编辑） |
-| `system-architecture.png` | 同上，1.4× 位图导出（贴文档/PPT 用） | 643 KB |
-| `request-data-flow.svg` / `.png` | **一次调用的 14 步** + 反向实时刷新链（6 步） | 矢量 / 位图 |
-| `build-pipeline.svg` / `.png` | 构建链：源码 → 产物 → 一致性闸门 → 发布 | 矢量 / 位图 |
+| `system-architecture.png` | 同上，1.4× 位图导出（贴文档/PPT 用） | 628 KB |
+| `request-data-flow.svg` / `.png` | **一次调用的 14 步** + 反向实时刷新链（6 步） | 22 KB / 246 KB |
+| `build-pipeline.svg` / `.png` | 构建链：源码 → 产物 → 一致性闸门 → 发布 | 18 KB / 148 KB |
 | `*.html` | 可缩放/拖拽的交互查看器（滚轮缩放、双击复位） | 自包含，离线可用 |
 | `architecture.mmd` | Mermaid 源（可移植版本，供其他工具重渲染） | 文本 |
 | `gen-arch.py` | **生成器**：改数据 → 重跑 → 三张图一起更新 | Python 3，零第三方依赖 |
@@ -69,9 +69,9 @@ build-pipeline.svg        看「改了代码怎么变成产物」   → 交付�
 | 层 | 职责 | 规模 | 关键文件 |
 |---|---|---|---|
 | **入口层** | 三类调用来源：桌面窗口 / 手机浏览器 / RPA·Webhook | 3 个入口 | `main-window.js`、`http-server.js`、`query/rpa/**` |
-| **渲染进程** | React 18 面板、启动三站、前端缓存与图表 | 602 个 ts/tsx，约 12.2 万行 | `ui-app/ui-entry.tsx`、`WechatDataPanel.tsx`、`api-core.ts` |
-| **主进程（宿主层）** | 窗口与安全、IPC、三道闸、RPC、并发、配置、LLM 传输、更新、许可 | 42 个模块 / 10,787 行 | `main.js`(581)、`call-gates.js`、`backend-rpc.js`、`backend-supervisor.js` |
-| **后端 worker** | 219 个 `@Remote` 方法、业务查询、密钥、检索、本地模型 | 158 个 query 模块 / 46,545 行 | `wechat-worker.js`、`wechat-host.js`、`gateway*.ts` |
+| **渲染进程** | React 18 面板、启动三站、前端缓存与图表 | 702 个 ts/tsx，约 13.1 万行 | `ui-app/ui-entry.tsx`、`WechatDataPanel.tsx`、`api-core.ts` |
+| **主进程（宿主层）** | 窗口与安全、IPC、三道闸、RPC、并发、配置、LLM 传输、更新、许可 | 45 个模块 / 11,305 行 | `main.js`(581)、`call-gates.js`、`backend-rpc.js`、`backend-supervisor.js` |
+| **后端 worker** | 224 个 `@Remote` 方法、业务查询、密钥、检索、本地模型 | 174 个 query 模块 / 50,959 行 | `wechat-worker.js`、`wechat-host.js`、`gateway*.ts` |
 | **数据层** | 解密快照、派生索引、媒体缓存、配置与密钥 | 22 个解密库 + 14 个派生库 | `query/decrypt-all.ts`、`query/sync.ts`、`query/db-open.ts` |
 | **外部接口** | LLM、微信 CDN、地图、模型下载、更新、RPA | 16 个出网点 | `llm-http.js`、`query/cdn-hosts.ts`、`query/map-geo.ts` |
 
@@ -97,21 +97,23 @@ build-pipeline.svg        看「改了代码怎么变成产物」   → 交付�
 ```
 TypertRemoteService
   └─ GatewayCore          运行时状态 / 构造 / 实时同步接线
-      └─ GatewayRead     58 个 @Remote（读）
-          └─ GatewayAskOps        44（问答）
-              └─ GatewayMediaOps  30（媒体）
-                  └─ GatewayExportOps 17（导出/备份）
-                      └─ GatewayVoiceOps 8（语音）
-                          └─ GatewayConfigOps 34（配置/任务）
-                              └─ GatewayLayaOps 9（本地模型）
-                                  └─ GatewayTaskCenter 12（任务中心）
-                                      └─ GatewayDbHealth 3（体检）
-                                          └─ GatewayClawbot 16（ClawBot）
-                                              └─ WechatDataGateway（叶子，空类）
+      └─ GatewayRead          读查询
+          └─ GatewayAskOps        问答
+              └─ GatewayMediaOps  媒体
+                  └─ GatewayExportOps 导出/备份
+                      └─ GatewayVoiceOps 语音
+                          └─ GatewayConfigOps 配置/任务
+                              └─ GatewayLayaOps 本地模型
+                                  └─ GatewayMessageList 消息列表
+                                      └─ GatewayChatAiReply 会话 AI 回复
+                                          └─ GatewayTaskCenter 任务中心
+                                              └─ GatewayDbHealth 体检
+                                                  └─ WechatDataGateway（叶子，空类）
 ```
 
 **为什么要这么拆**：协议层按「最派生原型的自有描述子」枚举方法面，所以方法壳可以放在任意一层的基类里，
-对外接口一字不变。`gateway.ts` 只剩一个空叶子类。总数 **219**，由 `docs:api:check` 守住。
+对外接口一字不变。`gateway.ts` 只剩一个空叶子类。方法总数以 `docs/API.md` 为准，并由
+`npm run audit:remote-types` 与 `docs:api:check` 守住。
 
 ---
 
@@ -226,28 +228,28 @@ WAL 变更 → sync-watch → sync-trigger 合并器 → 页级补丁/尾部追�
 
 | 事实 | 值 | 出处 / 核对方式 |
 |---|---|---|
-| Remote 方法数 | **219** | `docs/API.md`（`npm run docs:api` 生成）；`grep -c @Remote gateway*.ts` |
-| Gateway 继承层级 | **11 层基类 + 1 叶子** | `grep -n "class Gateway" src/backend/wechat-data/src/gateway*.ts` |
-| `remotes/**` 域处理器 | 29 文件 | `ls src/backend/wechat-data/src/remotes/*.ts \| wc -l` |
-| query 层 | 158 文件 / 46,545 行 | `ls src/.../query/*.ts \| wc -l`；`cat ... \| wc -l` |
+| Remote 方法数 | **224** | `npm run audit:remote-types`（服务端与前端契约一致） |
+| Gateway 继承层级 | **12 层基类 + 1 叶子** | `grep -n "class Gateway" src/backend/wechat-data/src/gateway*.ts` |
+| `remotes/**` 域处理器 | 31 文件 | `ls src/backend/wechat-data/src/remotes/*.ts \| wc -l` |
+| query 层 | 174 文件 / 50,959 行 | `ls src/.../query/*.ts \| wc -l`；`cat ... \| wc -l` |
 | retrieval 层 | 15 文件 / 4,591 行 | `ls src/.../query/retrieval/` |
-| 宿主层直属模块 | 42 文件 / 10,787 行 | `ls src/backend/*.js \| wc -l` |
+| 宿主层直属模块 | 45 文件 / 11,305 行 | `ls src/backend/*.js \| wc -l` |
 | `main.js` | 581 行（体积棘轮 1000 行上限） | `wc -l main.js` |
 | `preload.js` | 179 行 | `wc -l preload.js` |
 | IPC 唯一通道 | **46**（47 个调用点，`browser-handoff:restore` 同时有 handle 与 on） | `grep -oE "handleIpc\('([^']+)'" ...` 去重 |
-| 前端 ts/tsx | 602 文件 / 约 12.2 万行 | `find src/client/ui-wechat/src -name "*.ts*" \| wc -l` |
-| panels 视图分片 | **171** 个 .tsx | `ls .../panels/*.tsx \| wc -l` |
-| 导航 | 39 可路由 tab / 5 组 / 15 可见（+设置）/ 23 hidden | `nav-config.ts` 的 `WechatTab` 联合类型 |
+| 前端 ts/tsx | 702 文件 / 约 13.1 万行 | `find src/client/ui-wechat/src -name "*.ts*" \| wc -l` |
+| panels 视图分片 | **182** 个 .tsx | `ls .../panels/*.tsx \| wc -l` |
+| 导航 | 40 可路由 tab / 5 组 / 16 正文入口 + 设置 / 23 hidden | `nav-config.ts` 的 `WechatTab` 联合类型 |
 | 前端 chunk | 37 个 `React.lazy` → 62 个 js chunk | `panel-loaders.tsx`；`ui-dist/assets` |
 | 设计令牌 | 140 个 `--nm-*`；圆角 6 档 / 间距 7 档 | `scifi-theme.css` |
-| 后端 bundle | `lib/index.js` 2.32 MiB / 2374 KB（ESM 单文件） | `du -h` |
+| 后端 bundle | `lib/index.js` 约 2.5 MiB / 2507 KB（ESM 单文件） | `du -h` |
 | 解密参数 | PBKDF2-HMAC-SHA512 × 256000；页 4096B | `query/decrypt-all.ts`、`query/sqlcipher-page.ts` |
 | 派生库 | 14 个（search / fts / kb / tasks / privacy / summary…） | `grep -rhoE "'[a-z_]+\.db'" query/*.ts \| sort -u` |
 | 出网点 | **16** 个（台账 20 条，其中 4 条是同源相对路径） | `src/backend/tests/outbound-site-coverage.spec.ts` |
 | RPA 适配器 | 8 家 | `ls src/.../query/rpa/vendors/` |
 | 超时 | 普通 60s / 长任务 600s / dispose 5s | `backend-rpc.js:21-37` |
 | 并发闸 | 并发 2 / 排队 32 / 重活 4 / 等待 240s | `http-queue.js:36-59` |
-| 重启策略 | 最多 3 次，退避 500/1500/4500ms，就绪等待 20s | `backend-supervisor.js:15-17` |
+| 重启策略 | 最多 3 次，退避 500/1500/4500ms，稳定运行 30s 后才清零，就绪等待 20s | `backend-supervisor.js:15-19` |
 | 随包语音资产 | whisper 84 MiB（ggml-tiny 74 MiB）+ 引擎 9.6 MiB | `du -sh wechat/whisper` |
 
 **被这次核对纠正的两处**（原计划的旧口径，已按代码改）：
@@ -256,7 +258,7 @@ WAL 变更 → sync-watch → sync-trigger 合并器 → 页级补丁/尾部追�
 |---|---|---|
 | 设计令牌 | 「7 档圆角 / 17 档间距」 | 圆角 **6 档**、间距 **7 档**（140 个 `--nm-*`） |
 | IPC 通道 | 「39」 | **46** 个唯一通道 |
-| 面板分族 | 「chats 63 · graph 33 · kb 28」 | 那是 `panels/` 下**所有文件类型**的计数；只看 `.tsx` 是 171 个，分族为 chats 22 · clawbot 8 · kb 7 · moments 7 |
+| 面板分族 | 「chats 63 · graph 33 · kb 28」 | 那是 `panels/` 下**所有文件类型**的计数；只看 `.tsx` 是 182 个，分族为 chats 22 · kb 7 · moments 7 |
 | 出网点 | 「19 个」 | 台账 20 条，其中 4 条是同源相对路径 → 实际 **16** 个 |
 
 ---
@@ -294,4 +296,4 @@ WAL 变更 → sync-watch → sync-trigger 合并器 → 页级补丁/尾部追�
 
 ---
 
-*生成器：`gen-arch.py`（零依赖）· 图像核对：Chrome headless 截图 · 事实核对时间：2026-10-22*
+*生成器：`gen-arch.py`（零依赖）· 图像核对：Chrome headless 截图 · 事实核对时间：2026-10-31*

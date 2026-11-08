@@ -9,13 +9,13 @@
 
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiBuildSearchIndex, apiCancelSearchIndexBuild, apiGetSearchIndexStatus, apiSearchMessages } from '../api.ts'
+import { apiBuildSearchIndex, apiCancelSearch, apiCancelSearchIndexBuild, apiGetSearchIndexStatus, apiSearchMessages } from '../api.ts'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import type { SearchHit } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsMsgSearchInputs {
-  cancelActiveSearch: () => void
+  notify: (text: string) => void
   chatlogStack: ReadonlyArray<ChatlogFrame>
   editedOpen: boolean
   exportOpen: boolean
@@ -25,7 +25,7 @@ export interface useChatsMsgSearchInputs {
 }
 
 export function useChatsMsgSearch(inputs: useChatsMsgSearchInputs) {
-  const { cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen } = inputs
+  const { notify, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen } = inputs
 const [msgHits, setMsgHits] = useState<readonly SearchHit[]>([])
 const [msgSearchLoading, setMsgSearchLoading] = useState(false)
 const [msgSearchError, setMsgSearchError] = useState<string | null>(null)
@@ -50,6 +50,27 @@ const msgSearchSeqRef = useRef(0)
  * 后端兜底扫描最长可达秒级，不打断就白占着 worker（用户已经不看结果了）。
  */
 const activeSearchJobRef = useRef<string | null>(null)
+
+/**
+ * 收回在跑搜索的令牌。自动换词/清空/卸载时静默；用户点「停止搜索」时才给回执。
+ */
+const cancelActiveSearch = useCallback((showNotice = false): void => {
+  const jobId = activeSearchJobRef.current
+  activeSearchJobRef.current = null
+  if (jobId === null) {
+    if (showNotice) notify('当前没有正在执行的消息搜索')
+    return
+  }
+  void apiCancelSearch({ jobId })
+    .then((result) => {
+      if (showNotice) notify(result.ok ? '已停止消息搜索' : '消息搜索已经结束')
+    })
+    .catch((e: unknown) => {
+      if (showNotice) notify('停止消息搜索失败：' + (e as Error).message)
+    })
+}, [notify])
+
+const cancelMsgSearch = useCallback((): void => { cancelActiveSearch(true) }, [cancelActiveSearch])
 
 /** 进度事件：后端按 jobId 推，只认当前这一次构建。 */
 useEffect(() => {
@@ -132,6 +153,7 @@ const onSearchInput = useCallback((q: string): void => {
   // 远程被拒的只是「建」这一半：`searchMessages` 在白名单里，未建索引时后端自己退化成兜底扫描。
   if (!msgIndexed && !indexBuilding && !desktopAction()) void buildIndex(true)
   msgSearchTimer.current = setTimeout(async () => {
+    msgSearchTimer.current = null
     setMsgSearchLoading(true)
     setMsgSearchError(null)
     const jobId = 'chats-search-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
@@ -153,8 +175,16 @@ const onSearchInput = useCallback((q: string): void => {
   }, 350)
 }, [msgIndexed, indexBuilding, buildIndex, cancelActiveSearch])
 
-// 离开面板时打断在跑的搜索（N9；与上面那条「新搜索打断旧搜索」同一套 token）
-useEffect(() => () => { cancelActiveSearch() }, [cancelActiveSearch])
+// 离开面板时同时清掉尚未触发的防抖计时器并作废序号：
+// 只取消在飞任务不够——350ms 内切走时，回调仍会在卸载后发请求并写状态。
+useEffect(() => () => {
+  if (msgSearchTimer.current !== null) {
+    clearTimeout(msgSearchTimer.current)
+    msgSearchTimer.current = null
+  }
+  msgSearchSeqRef.current += 1
+  cancelActiveSearch()
+}, [cancelActiveSearch])
 
 // ── message calendar (A8) ──
 const [calOpen, setCalOpen] = useState(false)
@@ -171,5 +201,5 @@ useDialogFocus(editedOpen, '[data-st-dialog="chats-edited"]')
   // 离开面板时不打断构建：它是**派生数据**、中断的代价（回滚 + 下次重来）比让它跑完大。
   // 这条与上面「离开面板打断搜索」是有意不同 —— 搜索的结果用户已经不看 了，
   // 而构建跑完就一劳永逸。取消由用户在面板里显式点。
-  return { activeSearchJobRef, buildIndex, cancelIndexBuild, indexProgress, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen }
+  return { buildIndex, cancelIndexBuild, cancelMsgSearch, indexProgress, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen }
 }

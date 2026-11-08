@@ -156,10 +156,10 @@ export async function apiGetDbHealth(): Promise<DbHealthSnapshot> {
 }
 /**
  * Fetch voice message info.
- * @param options - Query options: username and message localId.
+ * @param options - Query options: username, message localId, and stable server id when available.
  * @returns VoiceInfoResult.
  */
-export async function apiGetVoiceInfo(options: { username: string; localId: number }): Promise<VoiceInfoResult> {
+export async function apiGetVoiceInfo(options: { username: string; localId: number; svrId?: string }): Promise<VoiceInfoResult> {
   return unwrap(await remote().getVoiceInfo(options))
 }
 /**
@@ -220,10 +220,11 @@ export async function apiPreviewBackup(options: { name: string }): Promise<Backu
 }
 /**
  * Create a new backup.
+ * @param options - optional export job id for progress and cancellation.
  * @returns BackupMutationResult.
  */
-export async function apiCreateBackup(): Promise<BackupMutationResult> {
-  return unwrap(await remote().createBackup())
+export async function apiCreateBackup(options?: { jobId?: string }): Promise<BackupMutationResult> {
+  return unwrap(await remote().createBackup(options))
 }
 /**
  * Create an encrypted `.wcb` backup bundle.
@@ -347,6 +348,9 @@ export async function apiExportMoments(options?: {
   month?: string
   mine?: string
   zip?: boolean
+  includeImages?: boolean
+  includeVideos?: boolean
+  includeLivePhotos?: boolean
   from?: number
   to?: number
   dir?: string

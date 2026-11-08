@@ -6,15 +6,15 @@
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
 import { createBackup as createBackupEntry, createEncryptedBackup, deleteBackup as deleteBackupEntry, listBackups as listBackupEntries, previewBackup as previewBackupEntry, restoreEncryptedBackup } from '../query/backup.ts'
-import { StreamControl } from '../query/zip.ts'
+import { isCancelMessage, type ManagedStreamControl } from '../gateway-jobs.ts'
 import { BackupMutationResult, BackupPreviewSnapshot, BackupRestoreResult, BackupSnapshot, OperationCategory, OperationStatus } from '../types.ts'
 
 export interface createBackupRemotesInputs {
   normalizeJobId: (jobId?: unknown) => string
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  streamControl: (jobId?: string) => StreamControl
-  finishStreamJob: (jobId: string, error?: string) => void
+  streamControl: (jobId?: string) => ManagedStreamControl
+  finishStreamJob: (jobId: string, error?: string, token?: symbol, canceled?: boolean) => void
 }
 
 export function createBackupRemotes(rc: createBackupRemotesInputs) {
@@ -28,15 +28,21 @@ export function createBackupRemotes(rc: createBackupRemotesInputs) {
       return previewBackupEntry(rc.dirs().decrypted, options.name)
     },
 
-    async createBackup(): Promise<BackupMutationResult> {
+    async createBackup(options?: { jobId?: string }): Promise<BackupMutationResult> {
+      const jobId = normalizeJobId(options?.jobId)
+      let ctrl: ManagedStreamControl | undefined
       try {
         // 2026-09-28：`createBackup` 改 async（逐子目录 `cpSync` 要让出，实测独占 206ms）。
-        const e = await createBackupEntry(rc.dirs().decrypted)
+        ctrl = rc.streamControl(jobId)
+        const e = await createBackupEntry(rc.dirs().decrypted, ctrl)
+        rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
         rc.op('backup', 'create_backup', 'ok', e.name)
         return { ok: true, name: e.name }
       } catch (err) {
-        rc.op('backup', 'create_backup', 'fail', '', (err as Error).message)
-        return { ok: false, error: (err as Error).message }
+        const message = (err as Error).message
+        rc.finishStreamJob(jobId, message, ctrl?.jobToken, isCancelMessage(message))
+        rc.op('backup', 'create_backup', 'fail', '', message)
+        return { ok: false, error: message }
       }
     },
 
@@ -54,18 +60,21 @@ export function createBackupRemotes(rc: createBackupRemotesInputs) {
 
     async createEncryptedBackup(options: { password: string; jobId?: string }): Promise<BackupMutationResult> {
       const jobId = normalizeJobId(options?.jobId)
+      let ctrl: ManagedStreamControl | undefined
       try {
         // M3：加密备份同样支持进度/取消（同一套 jobId → 本地 onProgress + AbortController）。
-        const entry = await createEncryptedBackup(rc.dirs().decrypted, options.password, rc.streamControl(jobId))
-        rc.finishStreamJob(jobId)
+        ctrl = rc.streamControl(jobId)
+        const entry = await createEncryptedBackup(rc.dirs().decrypted, options.password, ctrl)
+        rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
         rc.op('backup', 'create_encrypted_backup', 'ok', entry.name)
         return { ok: true, name: entry.name }
       } catch (e) {
-        rc.finishStreamJob(jobId, (e as Error).message)
-        rc.op('backup', 'create_encrypted_backup', 'fail', '', (e as Error).message)
+        const message = (e as Error).message
+        rc.finishStreamJob(jobId, message, ctrl?.jobToken, isCancelMessage(message))
+        rc.op('backup', 'create_encrypted_backup', 'fail', '', message)
         // 注意：这里**不能**把失败吞掉 —— `createBackup` 现在对「部分子目录复制失败」直接抛错
         // （不再是「静默报成功」），所以本 catch 是那条错误的唯一出口，转成可读的 { ok:false }。
-        return { ok: false, error: (e as Error).message }
+        return { ok: false, error: message }
       }
     },
 

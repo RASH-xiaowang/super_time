@@ -7,22 +7,45 @@
  *   · 原来读模块作用域的 `css` / `MEDIA_LABELS` 等改成从 support 模块 import（值一样）。
  * @module moments-portals
  */
-import { Fragment } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { videoCoverKey, type MediaKeySpec } from './moments-media.ts'
-import { RemoteImg, localImageSrc } from './remote-img.tsx'
-import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
+import { RemoteImg } from './remote-img.tsx'
+import { MediaViewer, type ViewerSource } from '../media-viewer/MediaViewer.tsx'
 import { apiGetSnsImageDataUrl } from '../api.ts'
+import { MomentLiveAction, MomentLiveBadge, momentLiveKey, momentLivePhoto, type MomentLiveMedia } from './moments-live.tsx'
+import { saveMomentsLiveVideo } from './moments-live-download.ts'
+import { saveMomentImageOriginal } from './moments-original-export.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
+import { pickImageSrc } from './moments-actions.ts'
+import { proxyableSrc } from '../utils/url.ts'
+import { MomentsVideoTile } from './moments-video-tile.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 import { withEnterprise } from './enterprise-identity.ts'
+import type { ExportTaskState } from './export-task.ts'
 
 /** 查看器里的一张图（与面板里 `useState` 的内联类型同构）。 */
-export interface ViewerImage { thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }
+export interface ViewerImage {
+  thumb?: string
+  url?: string
+  md5?: string
+  timelineId?: string
+  id?: string
+  mediaId?: string
+  token?: string
+  seed?: string
+  key?: string
+  livePhoto?: MomentLiveMedia
+  live?: MomentLiveMedia
+}
+const EMPTY_VIEWER_IMAGES: ViewerImage[] = []
 
 /** 图片查看器的打开态：整组图 + 当前下标 + 作者。 */
 export interface ViewerState { images: ViewerImage[]; index: number; author: string }
@@ -53,8 +76,17 @@ export interface MomentsExportDialogProps {
   setExpImages: (v: boolean) => void
   expZip: boolean
   setExpZip: (v: boolean) => void
+  expIncludeImages: boolean
+  setExpIncludeImages: (v: boolean) => void
+  expIncludeVideos: boolean
+  setExpIncludeVideos: (v: boolean) => void
+  expIncludeLivePhotos: boolean
+  setExpIncludeLivePhotos: (v: boolean) => void
   doExport: () => unknown
+  exportState: ExportTaskState
   exporting: boolean
+  finishing: boolean
+  cancelExport: () => void
 }
 
 /**
@@ -66,7 +98,9 @@ export interface MomentsExportDialogProps {
 export function MomentsExportDialog({
   exportOpen, setExportOpen, authorFilter, author, search, mediaFilter, monthFilter, mineFilter,
   expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo, expDir, pickDir, pickingDir,
-  expImages, setExpImages, expZip, setExpZip, doExport, exporting,
+  expImages, setExpImages, expZip, setExpZip,
+  expIncludeImages, setExpIncludeImages, expIncludeVideos, setExpIncludeVideos,
+  expIncludeLivePhotos, setExpIncludeLivePhotos, doExport, exportState, exporting, finishing, cancelExport,
 }: MomentsExportDialogProps): React.JSX.Element | null {
   if (!exportOpen) return null
   return (
@@ -124,17 +158,37 @@ export function MomentsExportDialog({
           <div className={css.exportField}>
             <span className={css.exportLabel}>媒体</span>
             <div className={css.exportChips}>
-              <label className={css.exportCheck} title="HTML 导出时内嵌离线解码图片（base64），体积较大">
+              <label className={css.exportCheck} title="默认开启。HTML 会内嵌离线解码后的原图；关闭后只显示图片数量，不再输出不可用的 CDN 破图">
                 <input type="checkbox" checked={expImages} onChange={(e) => { setExpImages(e.target.checked) }} disabled={expFormat !== 'html'} />
-                <span>HTML 内嵌离线图片</span>
+                <span>HTML 内嵌离线图片（推荐）</span>
               </label>
               <label className={css.exportCheck} title="把动态 JSON + 离线图片/视频打包成一个 ZIP（媒体较多时体积大）">
                 <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
                 <span>ZIP 含媒体</span>
               </label>
+              {expZip && (
+                <>
+                  <span className={css.exportHint}>包含原始：</span>
+                  <label className={css.exportCheck} title="导出朋友圈中的原始图片文件">
+                    <input type="checkbox" checked={expIncludeImages} onChange={(e) => { setExpIncludeImages(e.target.checked) }} />
+                    <span>图片</span>
+                  </label>
+                  <label className={css.exportCheck} title="导出朋友圈中的原始视频文件">
+                    <input type="checkbox" checked={expIncludeVideos} onChange={(e) => { setExpIncludeVideos(e.target.checked) }} />
+                    <span>视频</span>
+                  </label>
+                  <label className={css.exportCheck} title="导出实况照片中的原始视频文件">
+                    <input type="checkbox" checked={expIncludeLivePhotos} onChange={(e) => { setExpIncludeLivePhotos(e.target.checked) }} />
+                    <span>实况图</span>
+                  </label>
+                </>
+              )}
             </div>
           </div>
-          <button type="button" className={`${css.btn} ${css.btnBottom}`} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出'}</button>
+          <ExportProgressStatus state={exportState} onCancel={cancelExport} />
+          <button type="button" className={`${css.btn} ${css.btnBottom}`} onClick={() => { void doExport() }} disabled={exporting}>
+            {finishing ? '完成中…' : exporting ? '导出中…' : '导出'}
+          </button>
         </div>
       </div>
     </div>
@@ -162,40 +216,165 @@ export interface MomentsImageViewerProps {
   curImg: ViewerImage | undefined
   snsImgs: Record<string, string>
   copyCurrentLink: () => void
-  saveCurrentImage: () => void
   viewRotate: number
   setViewRotate: React.Dispatch<React.SetStateAction<number>>
+  videoSrcs: Record<string, string>
+  videoFailed: Set<string>
+  videoErr: Map<string, string>
+  loadVideo: (vk: string, v: SnsVideoRef) => void
+  closeVideo: (vk: string) => void
+  onLiveVideoSaved?: (path: string, bytes?: number) => void
+  onImageSaved?: (path: string, bytes?: number) => void
 }
 
 export function MomentsImageViewer({
-  viewer, setViewer, setViewerIndex, curImg, snsImgs, copyCurrentLink, saveCurrentImage,
-  viewRotate, setViewRotate,
+  viewer, setViewer, setViewerIndex, curImg, snsImgs, copyCurrentLink,
+  viewRotate, setViewRotate, videoSrcs, videoFailed, videoErr, loadVideo, closeVideo,
+  onLiveVideoSaved, onImageSaved,
 }: MomentsImageViewerProps): React.JSX.Element | null {
+  const [activeLiveKey, setActiveLiveKey] = useState('')
+  const activeLiveKeyRef = useRef('')
+  const snsImgsRef = useRef(snsImgs)
+  snsImgsRef.current = snsImgs
+  const imageSave = useMediaSaveTask()
+  const liveSave = useMediaSaveTask()
+
+  useEffect(() => { activeLiveKeyRef.current = activeLiveKey }, [activeLiveKey])
+
+  // 查看器换图时退出实况播放，避免上一张的动态画面挂到下一张静态图上。
+  useEffect(() => {
+    const key = activeLiveKeyRef.current
+    if (key === '') return
+    closeVideo(key)
+    activeLiveKeyRef.current = ''
+    setActiveLiveKey('')
+  }, [viewer?.index, closeVideo])
+
+  // 关闭灯箱/组件卸载时一并释放视频 blob 与诊断状态。
+  useEffect(() => () => {
+    const key = activeLiveKeyRef.current
+    if (key !== '') closeVideo(key)
+  }, [closeVideo])
+
+  const currentImage = viewer?.images[viewer.index]
+  const currentLive = momentLivePhoto(currentImage)
+  const currentLiveKey = currentLive === null || currentImage === undefined ? '' : momentLiveKey(currentImage, viewer?.index ?? 0)
+  const liveActive = currentLiveKey !== '' && activeLiveKey === currentLiveKey
+  const liveSrc = liveActive ? (videoSrcs[activeLiveKey] ?? '') : ''
+  const liveFailed = liveActive && videoFailed.has(activeLiveKey)
+  const liveLoading = liveActive && liveSrc === '' && !liveFailed
+  const liveError = liveActive ? (videoErr.get(activeLiveKey) ?? '') : ''
+  const viewerImages = viewer?.images ?? EMPTY_VIEWER_IMAGES
+  const sources: ViewerSource[] = useMemo(() => viewerImages.map((im, i) => {
+    const imageKey = imgKey(im)
+    const imageLive = momentLivePhoto(im)
+    const thumb = snsImgsRef.current[imageKey] ?? im.thumb ?? undefined
+    if (i === viewer?.index && liveActive && liveSrc !== '') {
+      const onDownload = imageLive === null ? undefined : async (): Promise<void> => {
+        if (desktopAction()) throw new Error('实况原视频仅支持电脑端保存')
+        const outcome = await liveSave.save<{ path?: string; bytes?: number }>({
+          idPrefix: 'moment-live-video',
+          label: '保存朋友圈实况原视频',
+          successMessage: (r) => `已保存实况原视频 → ${r.path ?? ''}`,
+          run: async (jobId) => {
+            const saved = await saveMomentsLiveVideo(imageLive, jobId)
+            return saved.canceled ? null : saved
+          },
+        })
+        if (outcome.ok) onLiveVideoSaved?.(outcome.result.path ?? '', outcome.result.bytes)
+      }
+      return {
+        key: activeLiveKey,
+        thumb,
+        title: viewer.author,
+        subtitle: '实况照片',
+        kind: 'video' as const,
+        downloadName: '朋友圈实况-' + (imageLive?.md5 || 'video').slice(0, 8) + '.mp4',
+        downloadDisabled: desktopAction(),
+        downloadDisabledReason: '实况原视频保存仅支持电脑端',
+        ...(imageLive?.stillTimeMs !== undefined ? { startAtMs: imageLive.stillTimeMs } : {}),
+        ...(onDownload ? { onDownload } : {}),
+        load: async (): Promise<string> => liveSrc,
+      }
+    }
+    return {
+      key: imageKey || `${String(i)}-${String(im.md5 ?? im.id ?? '')}`,
+      thumb,
+      title: viewer?.author ?? '',
+      subtitle: imageLive === null ? undefined : '实况照片',
+      onDownload: async (src: string): Promise<void> => {
+        const outcome = await imageSave.save<{ path?: string; bytes?: number }>({
+          idPrefix: 'moment-image',
+          label: '保存朋友圈原图',
+          successMessage: (r) => `已保存朋友圈原图 → ${r.path ?? ''}`,
+          run: (jobId) => saveMomentImageOriginal(im, src, jobId, i),
+        })
+        if (outcome.ok) onImageSaved?.(outcome.result.path ?? '', outcome.result.bytes)
+      },
+      downloadDisabled: desktopAction(),
+      downloadDisabledReason: '朋友圈原图保存仅支持电脑端',
+      load: async (): Promise<string> => {
+        const local = snsImgsRef.current[imageKey]
+        if (local) return local
+        const r = await apiGetSnsImageDataUrl({
+          md5: im.md5 ?? '',
+          ...(im.timelineId ? { timelineId: im.timelineId } : {}),
+          ...(im.id || im.mediaId ? { mediaId: im.id ?? im.mediaId } : {}),
+          ...(im.url ? { url: im.url } : {}),
+          ...(im.token ? { token: im.token } : {}),
+          ...(im.seed || im.key ? { seed: im.seed ?? im.key } : {}),
+        })
+        if (r.url) return r.url
+        throw new Error(r.error ?? '图片暂不可用')
+      },
+    }
+  }), [viewerImages, viewer?.index, viewer?.author, liveActive, liveSrc, activeLiveKey, liveSave.save, imageSave.save, onLiveVideoSaved, onImageSaved])
+
   if (!viewer) return null
-  const sources = viewer.images.map((im) => ({
-    key: imgKey(im) || `${String(viewer.index)}-${String(im.md5 ?? im.id ?? '')}`,
-    thumb: snsImgs[imgKey(im)] ?? im.thumb ?? undefined,
-    title: viewer.author,
-    load: async (): Promise<string> => {
-      const local = snsImgs[imgKey(im)]
-      if (local) return local
-      const r = await apiGetSnsImageDataUrl({
-        md5: im.md5 ?? '',
-        ...(im.timelineId ? { timelineId: im.timelineId } : {}),
-        ...(im.id ? { mediaId: im.id } : {}),
-      })
-      if (r.url) return r.url
-      throw new Error(r.error ?? '图片暂不可用')
-    },
-  }))
+
+  const stopLive = (): void => {
+    const key = activeLiveKeyRef.current
+    if (key !== '') closeVideo(key)
+    activeLiveKeyRef.current = ''
+    setActiveLiveKey('')
+  }
+
+  const changeIndex = (next: number): void => {
+    stopLive()
+    setViewerIndex(next)
+  }
+
+  const toggleLive = (): void => {
+    if (currentLive === null || currentLiveKey === '') return
+    if (liveActive) {
+      stopLive()
+      if (!liveFailed) return
+    }
+    if (activeLiveKeyRef.current !== '') stopLive()
+    activeLiveKeyRef.current = currentLiveKey
+    setActiveLiveKey(currentLiveKey)
+    loadVideo(currentLiveKey, currentLive)
+  }
+
   const canCopy = Boolean(curImg?.url || (curImg ? snsImgs[imgKey(curImg)] : '') || curImg?.thumb)
   const canSave = canCopy
+  const saveCurrentImage = async (): Promise<void> => {
+    if (!curImg || !canSave) return
+    const src = pickImageSrc(snsImgsRef.current[imgKey(curImg)] ?? '', proxyableSrc(curImg.url, curImg.thumb) ?? '', 'local')
+    const outcome = await imageSave.save<{ path?: string; bytes?: number }>({
+      idPrefix: 'moment-image',
+      label: '保存朋友圈原图',
+      successMessage: (r) => `已保存朋友圈原图 → ${r.path ?? ''}`,
+      run: (jobId) => saveMomentImageOriginal(curImg, src, jobId, viewer.index),
+    })
+    if (outcome.ok) onImageSaved?.(outcome.result.path ?? '', outcome.result.bytes)
+  }
   return (
     <MediaViewer
       sources={sources}
       index={viewer.index}
-      onIndexChange={setViewerIndex}
-      onClose={() => { setViewer(null) }}
+      onIndexChange={changeIndex}
+      onClose={() => { stopLive(); setViewer(null) }}
       dialogName="moments-viewer"
       showThumbnails={viewer.images.length > 1}
       minZoom={1}
@@ -204,11 +383,36 @@ export function MomentsImageViewer({
       headerActions={(
         <>
           <button type="button" className={css.btn} onClick={copyCurrentLink} disabled={!canCopy} title="复制链接">复制</button>
-          <button type="button" className={css.btn} onClick={saveCurrentImage} disabled={!canSave} title="保存到本地">保存</button>
+          <button type="button" className={css.btn} onClick={() => { void saveCurrentImage() }} disabled={!canSave || imageSave.running} title="保存到本地" {...desktopActionProps()}>保存</button>
         </>
       )}
       extraToolbar={(
-        <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
+        <>
+          <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
+          {currentLive !== null && currentLiveKey !== '' && (
+            <MomentLiveAction
+              active={liveActive}
+              loading={liveLoading}
+              failed={liveFailed}
+              error={liveError}
+              onToggle={toggleLive}
+            />
+          )}
+        </>
+      )}
+      statusOverlay={(
+        <>
+          <ExportProgressStatus
+            compact
+            state={imageSave.state}
+            onCancel={() => { void imageSave.cancel() }}
+          />
+          <ExportProgressStatus
+            compact
+            state={liveSave.state}
+            onCancel={() => { void liveSave.cancel() }}
+          />
+        </>
       )}
     />
   )
@@ -227,11 +431,13 @@ export interface MomentsDetailProps {
   setAuthorFilter: React.Dispatch<React.SetStateAction<string | null>>
   snsImgs: Record<string, string>
   videoSrcs: Record<string, string>
+  videoLoading: Set<string>
   videoMeta: Record<string, { w: number; h: number }>
   setVideoMeta: React.Dispatch<React.SetStateAction<Record<string, { w: number; h: number }>>>
   videoFailed: Set<string>
   videoErr: Map<string, string>
   loadVideo: (vk: string, v: SnsVideoRef) => void
+  reportVideoError: (vk: string, message: string) => void
   saveVideo: (v: SnsVideoRef) => void
   fullscreenVideo: (tile: Element | null) => void
   closeVideo: (vk: string) => void
@@ -247,8 +453,8 @@ export interface MomentsDetailProps {
 
 export function MomentsDetail({
   detail, setDetail, setViewer, setAuthorFilter, snsImgs, mediaKeySpec,
-  videoSrcs, videoMeta, setVideoMeta, videoFailed, videoErr,
-  loadVideo, saveVideo, fullscreenVideo, closeVideo,
+  videoSrcs, videoLoading, videoMeta, setVideoMeta, videoFailed, videoErr,
+  loadVideo, reportVideoError, saveVideo, fullscreenVideo, closeVideo,
 }: MomentsDetailProps): React.JSX.Element | null {
   if (!detail) return null
   return createPortal(
@@ -268,10 +474,15 @@ export function MomentsDetail({
                 {detail.m.images.map((im, ii) => {
                   const key = imgKey(im)
                   const dataSrc = key ? snsImgs[key] : undefined
+                  const live = momentLivePhoto(im)
                   // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
                   // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：给占位，不留空。
                   return (
-                    <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: withEnterprise(detail.m.author || '未知', detail.m.enterpriseName) }) })}>
+                    <div key={ii} className={css.imgWrap} title={live ? '点击查看大图（实况）' : '点击查看大图'} {...clickableKey(() => {
+                      // 详情浮层与查看器都是 body portal；先收起层级更高的详情，查看器才能可见、可操作。
+                      setDetail(null)
+                      setViewer({ images: detail.m.images, index: ii, author: withEnterprise(detail.m.author || '未知', detail.m.enterpriseName) })
+                    })}>
                       <RemoteImg
                         src={dataSrc || ''}
                         alt=""
@@ -280,6 +491,7 @@ export function MomentsDetail({
                         pending={<div className={css.imgFallback}>加载中</div>}
                         failed={<div className={css.imgFallback}>图片加载失败</div>}
                       />
+                      {live && <MomentLiveBadge />}
                     </div>
                   )
                 })}
@@ -290,43 +502,25 @@ export function MomentsDetail({
                 {detail.m.videos.map((v, vi) => {
                   const vk = videoCoverKey(v)
                   const vCover = vk ? snsImgs[vk] : undefined
-                  const src = vk ? videoSrcs[vk] : undefined
-                  const playing = !!src
-                  const meta = vk ? videoMeta[vk] : undefined
                   return (
-                    <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : '', playing ? css.videoTileDetail : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
-                      style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
-                      {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}>
-                      {playing
-                        ? <>
-                          <video
-                            className={css.videoPlayer}
-                            src={src}
-                            controls
-                            autoPlay
-                            poster={localImageSrc(vCover)}
-                            onLoadedMetadata={(e) => {
-                              const el = e.currentTarget
-                              if (!vk || !el.videoWidth || !el.videoHeight) return
-                              setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
-                            }}
-                          />
-                          <div className={css.videoActions}>
-                            <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
-                            <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
-                            <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
-                          </div>
-                        </>
-                        : vCover
-                          ? <><RemoteImg className={css.videoCover} src={vCover} alt="" loading="lazy" /><span className={css.videoPlayBadge}>▶</span>{v.duration > 0 && (
-                            <span className={css.videoDur}>{Math.round(v.duration)}s</span>
-                          )}</>
-                          : <>{videoFailed.has(vk)
-                            ? <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>本机未缓存<em>微信里播一次后可看</em></span>
-                            : <span className={css.videoBadge}>▶</span>}{v.duration > 0 && (
-                            <span className={css.videoDur}>{Math.round(v.duration)}s</span>
-                          )}</>}
-                    </div>
+                    <MomentsVideoTile
+                      key={vi}
+                      v={v}
+                      vk={vk}
+                      cover={vCover}
+                      src={vk ? videoSrcs[vk] : undefined}
+                      meta={vk ? videoMeta[vk] : undefined}
+                      loading={videoLoading.has(vk)}
+                      failed={videoFailed.has(vk)}
+                      error={videoErr.get(vk)}
+                      detail
+                      setVideoMeta={setVideoMeta}
+                      loadVideo={loadVideo}
+                      reportVideoError={reportVideoError}
+                      saveVideo={saveVideo}
+                      fullscreenVideo={fullscreenVideo}
+                      closeVideo={closeVideo}
+                    />
                   )
                 })}
               </div>
@@ -387,7 +581,21 @@ export function MomentsDetail({
                       {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
                       <span className={css.commentText}>{c.content || ''}</span>
                       {img && cdata && (
-                        <RemoteImg key={'img' + String(ci)} src={cdata} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: withEnterprise(c.nickname || c.username || '', c.enterpriseName) }) }, { label: '查看大图' })} />
+                        <RemoteImg key={'img' + String(ci)} src={cdata} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => {
+                          setDetail(null)
+                          setViewer({
+                            images: [{
+                              thumb: img.thumb,
+                              url: img.url,
+                              md5: img.md5,
+                              mediaId: img.mediaId,
+                              token: img.token,
+                              seed: img.seed,
+                            }],
+                            index: 0,
+                            author: withEnterprise(c.nickname || c.username || '', c.enterpriseName),
+                          })
+                        }, { label: '查看大图' })} />
                       )}
                       {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTimeSec(c.ts)}</span>}
                     </div>

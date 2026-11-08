@@ -23,7 +23,11 @@ export interface BackendUtilityProcess {
 /** backend-rpc 返回的工作通道。 */
 export interface BackendWorkerChannel {
   init(): Promise<unknown>;
-  dispose(): void;
+  dispose(onDisposeDone: (outcome?: {
+    acknowledged: boolean;
+    reason: 'ack' | 'timeout' | 'worker-exited' | 'error' | 'send-failed';
+    value?: unknown;
+  }) => void): void;
   call(method: string, args: unknown[]): Promise<unknown>;
 }
 
@@ -63,6 +67,7 @@ export interface BackendSupervisorDeps {
   longTimeoutMs?: number;
   restartMax?: number;
   restartBackoffMs?: number[];
+  restartStableMs?: number;
   readyWaitMs?: number;
   setTimeoutFn?: (handler: () => void, timeout?: number) => unknown;
   clearTimeoutFn?: (handle: unknown) => void;
@@ -77,6 +82,14 @@ export interface BackendStatus {
   lastError: unknown;
 }
 
+/** bootstrap / restart 的启动结果。 */
+export interface BackendBootstrapResult {
+  ok: boolean;
+  backend?: BackendWorkerChannel;
+  boot?: Record<string, unknown>;
+  error?: unknown;
+}
+
 /** 监管器句柄：启动、恢复与停止后端，并暴露只读状态。 */
 export interface BackendSupervisor {
   readonly backend: BackendWorkerChannel | null;
@@ -84,15 +97,16 @@ export interface BackendSupervisor {
   readonly status: BackendStatus;
   readonly isStopping: boolean;
   waitUntilReady(timeoutMs?: number): Promise<boolean>;
-  bootstrap(
-    userData: string,
-  ): Promise<{
-    ok: boolean;
-    backend?: BackendWorkerChannel;
-    boot?: Record<string, unknown>;
-    error?: unknown;
-  }>;
-  stop(): void;
+  bootstrap(userData: string): Promise<BackendBootstrapResult>;
+  /**
+   * 停止并等待 worker 收尾；超时由 backend-rpc 兜底。
+   *
+   * 返回值保留了一个恢复入口，安装失败时调用方可以重新拉起后端。
+   * 停止完成后内部终态会被清理，后续 stop() 仍可安全重复调用。
+   */
+  stop(): Promise<{ restart: () => Promise<BackendBootstrapResult> }>;
+  /** 显式重新启动已停止的后端；未完成 bootstrap 时拒绝。 */
+  restart(reason?: string): Promise<BackendBootstrapResult>;
   _test: {
     start: (userData: string) => Promise<BackendWorkerChannel>;
     scheduleRestart: (reason: string) => void;
@@ -107,6 +121,9 @@ export const BACKEND_RESTART_MAX: number;
 
 /** 连续重启的退避毫秒序列；越界取最后一项。 */
 export const RESTART_BACKOFF_MS: number[];
+
+/** 连续重启计数清零前要求的稳定运行时长（毫秒）。 */
+export const BACKEND_RESTART_STABLE_MS: number;
 
 /** 有调用等待后端就绪时使用的默认上限（毫秒）。 */
 export const BACKEND_CALL_READY_WAIT_MS: number;

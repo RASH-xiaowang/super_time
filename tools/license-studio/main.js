@@ -18,7 +18,15 @@ const crypto = require('node:crypto')
 
 const ROOT = path.join(__dirname, '..', '..')
 const { generateKeyPair, signPayload, verifyPayload } = require(path.join(ROOT, 'src', 'license', 'crypto'))
-const { PRODUCT_ID, KNOWN_FEATURES, validatePayload } = require(path.join(ROOT, 'src', 'license', 'schema'))
+const {
+  PRODUCT_ID,
+  FEATURE_CATALOG,
+  FEATURE_GROUPS,
+  FEATURE_SCHEMA_VERSION,
+  REQUIRED_FEATURES,
+  validatePayload,
+  isKnownFeature,
+} = require(path.join(ROOT, 'src', 'license', 'schema'))
 
 const VENDOR_DIR = path.join(ROOT, 'vendor-keys')
 const PUB_PATH = path.join(VENDOR_DIR, 'license-public.pem')
@@ -93,12 +101,12 @@ function loadPrivate() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 980,
-    height: 760,
-    minWidth: 720,
-    minHeight: 560,
+    width: 1180,
+    height: 900,
+    minWidth: 760,
+    minHeight: 620,
     backgroundColor: '#0b1220',
-    title: 'Super Time License Studio',
+    title: 'Super Time 授权签发台',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -111,6 +119,19 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle('studio:keys', () => readKeys())
+
+  ipcMain.handle('studio:meta', () => ({
+    product: PRODUCT_ID,
+    featureSchemaVersion: FEATURE_SCHEMA_VERSION,
+    requiredFeatures: REQUIRED_FEATURES,
+    featureCatalog: FEATURE_CATALOG,
+    featureGroups: FEATURE_GROUPS,
+    editions: [
+      { value: 'pro', label: '专业版' },
+      { value: 'standard', label: '标准版' },
+      { value: 'trial-ext', label: '试用扩展版' },
+    ],
+  }))
 
   ipcMain.handle('studio:generate-keys', async () => {
     const { response } = await dialog.showMessageBox(win, {
@@ -190,17 +211,27 @@ module.exports = { PUBLIC_KEY_PEM }
   ipcMain.handle('studio:issue', async (_e, form) => {
     try {
       const fingerprint = String(form?.fingerprint || '').trim()
-      if (fingerprint.length < 32) {
-        return { ok: false, error: '设备指纹无效（至少 32 位 hex）' }
+      if (!/^[a-fA-F0-9]{32,}$/.test(fingerprint)) {
+        return { ok: false, error: '设备指纹无效：应为至少 32 位的十六进制字符' }
       }
       const name = String(form?.name || '').trim()
       if (!name) return { ok: false, error: '客户名称必填' }
 
-      const features = Array.isArray(form?.features) && form.features.length
-        ? form.features.map(String)
-        : KNOWN_FEATURES.slice()
+      const picked = Array.isArray(form?.features) ? [...new Set(form.features.map(String))] : []
+      const unknown = picked.filter((feature) => !isKnownFeature(feature))
+      if (unknown.length) {
+        return { ok: false, error: `存在未知功能项：${unknown.join('、')}` }
+      }
+      for (const required of REQUIRED_FEATURES) {
+        if (!picked.includes(required)) picked.push(required)
+      }
+      const features = FEATURE_CATALOG
+        .filter((feature) => picked.includes(feature.id))
+        .map((feature) => feature.id)
+      if (!features.length) return { ok: false, error: '至少需要选择“基础数据访问”功能' }
+
       const seats = Number.isInteger(form?.seats) && form.seats >= 1 ? form.seats : 1
-      const days = Number.isFinite(form?.days) ? form.days : 365
+      const days = Number.isInteger(form?.days) && form.days >= 0 ? form.days : 365
       const now = new Date()
       const expiresAt = days > 0
         ? new Date(now.getTime() + days * 24 * 3600 * 1000).toISOString()
@@ -223,6 +254,7 @@ module.exports = { PUBLIC_KEY_PEM }
         notBefore: now.toISOString(),
         expiresAt,
         features,
+        featureSchemaVersion: FEATURE_SCHEMA_VERSION,
         seats,
         appVersionMin: String(form?.appVersionMin || '1.0.0'),
         notes: String(form?.notes || ''),
@@ -275,6 +307,7 @@ module.exports = { PUBLIC_KEY_PEM }
         error: sig.ok ? undefined : sig.reason,
         path: picked.filePaths[0],
         payload: doc.payload,
+        featureSchemaVersion: doc.payload.featureSchemaVersion ?? null,
         checkedAt: new Date().toISOString(),
       }
     } catch (err) {

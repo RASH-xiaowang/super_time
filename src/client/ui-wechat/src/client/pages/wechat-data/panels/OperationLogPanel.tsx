@@ -12,12 +12,17 @@ import { Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, S
 import { useConfirm } from '../ui/confirm.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 import css from './oplog.module.css'
 import kitCss from '../ui/kit.module.css'
 
 const OP_CATEGORY_LABEL: Record<OperationCategory, string> = {
   settings: '设置', keys: '密钥', sync: '解密/同步', export: '导出', delete: '删除',
-  backup: '备份', edit: '编辑', task: '任务', error: '异常', clawbot: 'ClawBot',
+  backup: '备份', edit: '编辑', task: '任务', error: '异常',
+  // 兼容历史日志分类；当前产品不再产生该分类。
+  clawbot: '已退役功能',
 }
 const OP_STATUS_LABEL: Record<OperationStatus, string> = { ok: '成功', fail: '失败', skip: '跳过' }
 const STATUS_FILTERS: ReadonlyArray<{ value: '' | OperationStatus; label: string }> = [
@@ -82,6 +87,7 @@ function statusClass(status: OperationStatus): string {
 export function OperationLogPanel(): React.JSX.Element {
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
+  const exportTask = useExportTask()
   const [opRows, setOpRows] = useState<readonly OperationLogEntry[]>([])
   const [opTotal, setOpTotal] = useState(0)
   const [opLoading, setOpLoading] = useState(false)
@@ -153,6 +159,21 @@ export function OperationLogPanel(): React.JSX.Element {
   // 关键字已在服务端过滤（见 buildQuery 的 q）；这里刻意不再过滤一遍 ——
   // 本端过滤只会作用在「已加载的那一页」上，是此前覆盖率只有 23% 的根因。
   const rows = opRows
+
+  const exportOpLog = (format: 'txt' | 'csv'): void => {
+    if (exportTask.running || rows.length === 0) return
+    void exportTask.run(async () => {
+      if (format === 'txt') exportOpLogTxt(rows)
+      else exportOpLogCsv(rows)
+      return rows.length
+    }, {
+      idPrefix: 'operation-log-export',
+      label: format === 'txt' ? '导出操作日志 TXT' : '导出操作日志 CSV',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (count) => `已导出 ${count} 条操作日志（${format.toUpperCase()}）`,
+    })
+  }
 
   const clearOpLog = async (): Promise<void> => {
     const ok = await confirm({
@@ -226,11 +247,12 @@ export function OperationLogPanel(): React.JSX.Element {
         actions={(
           <ActionMenu
             busy={opLoading}
+            exporting={exportTask.running}
             canExport={rows.length > 0}
-            canClear={!opLoading && opTotal > 0}
+            canClear={!opLoading && !exportTask.running && opTotal > 0}
             onRefresh={refresh}
-            onExportTxt={() => { exportOpLogTxt(rows) }}
-            onExportCsv={() => { exportOpLogCsv(rows) }}
+            onExportTxt={() => { exportOpLog('txt') }}
+            onExportCsv={() => { exportOpLog('csv') }}
             onClear={() => { void clearOpLog() }}
           />
         )}
@@ -263,16 +285,17 @@ export function OperationLogPanel(): React.JSX.Element {
             onChange={(v) => { setOpStatus(v as '' | OperationStatus) }}
             ariaLabel="结果筛选"
           />
+        </div>
+        <div className={css.filterSearchRow}>
+          <SearchInput className={css.searchFlex} value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
           <span className={css.statText}>
             成功 {summary.ok} · 失败 {summary.fail} · 跳过 {summary.skip} · 共 {opTotal} 条
           </span>
         </div>
-        <div className={css.filterSearchRow}>
-          <SearchInput className={css.searchFlex} value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
-        </div>
       </div>
 
       {opMsg && <div className={clsx(css.notice, opMsg.kind === 'ok' ? css.noticeOk : css.noticeErr)}>{opMsg.text}</div>}
+      <ExportProgressStatus state={exportTask.state} />
 
       <Card className={css.tableCard} flush>
         {opReadError && <div className={kitCss.error} role="alert">⚠️ {opReadError}</div>}
@@ -281,6 +304,7 @@ export function OperationLogPanel(): React.JSX.Element {
           rows={rows}
           getRowId={r => String(r.id)}
           loading={opLoading && rows.length === 0}
+          resizable
           emptyTitle={opLoading ? '加载中…' : opReadError ? '操作日志读不出来' : '暂无操作日志，点击「刷新」后分页显示'}
         />
         {/* 触到 500 条上界时明说，而不是让用户以为「下面没有了」。 */}
@@ -305,8 +329,9 @@ export function OperationLogPanel(): React.JSX.Element {
  *      也违反「别用隐藏元素装内容」的纪律。
  * 动作一个不少：刷新 / 导出 TXT / 导出 CSV / 清空（清空仍受桌面动作门控）。
  */
-function ActionMenu({ busy, canExport, canClear, onRefresh, onExportTxt, onExportCsv, onClear }: {
+function ActionMenu({ busy, exporting, canExport, canClear, onRefresh, onExportTxt, onExportCsv, onClear }: {
   busy: boolean
+  exporting: boolean
   canExport: boolean
   canClear: boolean
   onRefresh: () => void
@@ -315,23 +340,29 @@ function ActionMenu({ busy, canExport, canClear, onRefresh, onExportTxt, onExpor
   onClear: () => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const close = useCallback((): void => { setOpen(false) }, [])
+  const { rootRef, triggerRef } = useMenuDismiss(open, close)
   return (
-    <div className={css.moreMenu}>
+    <div className={css.moreMenu} ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={css.moreBtn}
         aria-label="更多操作"
+        aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => { setOpen(v => !v) }}
+        disabled={busy || exporting}
+        title={busy ? '正在读取操作日志' : exporting ? '正在导出操作日志' : undefined}
       >
         更多 ▾
       </button>
       {open && (
-        <div className={css.morePanel} onMouseLeave={() => { setOpen(false) }}>
-          <Button size="sm" variant="outline" icon={busy ? <span className={css.spin} /> : undefined} onClick={() => { setOpen(false); onRefresh() }} disabled={busy}>{busy ? '加载中…' : '刷新'}</Button>
-          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onExportTxt() }} disabled={!canExport}>导出 TXT</Button>
-          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onExportCsv() }} disabled={!canExport}>导出 CSV</Button>
-          <Button size="sm" variant="outline" onClick={() => { setOpen(false); onClear() }} disabled={!canClear} {...desktopActionProps()}>清空</Button>
+        <div className={css.morePanel} role="menu" aria-label="操作日志更多操作" onMouseLeave={close}>
+          <Button role="menuitem" size="sm" variant="outline" icon={busy ? <span className={css.spin} /> : undefined} onClick={() => { close(); onRefresh() }} disabled={busy}>{busy ? '加载中…' : '刷新'}</Button>
+          <Button role="menuitem" size="sm" variant="outline" onClick={() => { close(); onExportTxt() }} disabled={!canExport || exporting} title={!canExport ? '当前没有可导出的日志' : undefined}>{exporting ? '导出中…' : '导出 TXT'}</Button>
+          <Button role="menuitem" size="sm" variant="outline" onClick={() => { close(); onExportCsv() }} disabled={!canExport || exporting} title={!canExport ? '当前没有可导出的日志' : undefined}>{exporting ? '导出中…' : '导出 CSV'}</Button>
+          <Button role="menuitem" size="sm" variant="outline" onClick={() => { close(); onClear() }} disabled={!canClear} title={!canClear ? '当前没有可清空的日志' : undefined} {...desktopActionProps()}>清空</Button>
         </div>
       )}
     </div>

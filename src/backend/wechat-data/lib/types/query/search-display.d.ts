@@ -21,7 +21,7 @@ export declare function splitGroupPrefix(text: string, username: string): {
 };
 /** Strip the group-message sender prefix (wxid_xxx:\n) from display text. */
 export declare function stripGroupPrefix(text: string, username: string): string;
-/** 群内发送者的显示名（联系人表里有就用名字，否则退回 wxid）。 */
+/** 群内发送者的显示名；无映射时走不泄漏内部 ID 的安全兜底。 */
 export declare function senderLabel(sender: string, names: Map<string, string>): string;
 /**
  * 从 appmsg / 系统消息的 XML 里抽出可读文本。

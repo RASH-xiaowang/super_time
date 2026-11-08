@@ -1,7 +1,7 @@
 /*
  * 消息列表 / Webhook 规则台账。
  *
- * 视觉沿用任务信息面板的暗色控制台语气：低饱和卡片、单色状态条、表格优先。
+ * 视觉沿用微信式浅色工作台：中性卡片、1px 分隔线、状态色仅用于小面积提示。
  * 颜色、圆角、间距只使用 --nm-* 令牌，浅色主题随同一套变量切换。
  */
 
@@ -12,6 +12,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-inline: calc(-1 * var(--nm-s-4, 16px));
+  padding-inline: var(--nm-s-4, 16px);
 }
 
 .headActions {
@@ -27,7 +29,7 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: 8px 12px;
 }
 
 .tinyHint {
@@ -35,43 +37,75 @@
   color: var(--nm-text-2);
 }
 
-.notice {
-  flex-shrink: 0;
-  padding: 8px 12px;
+.noticeToast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1200;
+  width: fit-content;
+  max-width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 10px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-2);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
+  color: var(--nm-text-1);
   font-size: var(--nm-fs-sm);
   line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  animation: noticeToastIn 160ms ease-out;
 }
 
 .noticeOk {
   border-color: color-mix(in srgb, var(--nm-success) 30%, var(--nm-border));
-  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+  background: color-mix(in srgb, var(--nm-success) 7%, var(--nm-bg-card));
   color: var(--nm-success-text);
 }
 
 .noticeWarn {
   border-color: color-mix(in srgb, var(--nm-warning) 32%, var(--nm-border));
-  background: color-mix(in srgb, var(--nm-warning) 8%, transparent);
+  background: color-mix(in srgb, var(--nm-warning) 8%, var(--nm-bg-card));
   color: var(--nm-warning-text);
 }
 
 .noticeErr {
   border-color: color-mix(in srgb, var(--nm-danger) 32%, var(--nm-border));
-  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 8%, var(--nm-bg-card));
   color: var(--nm-danger-text);
+}
+
+.inlineNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+@keyframes noticeToastIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* ── 局域网 Webhook 卡片 ─────────────────────────────────────────────── */
 .webhookCard {
   flex-shrink: 0;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, var(--nm-border));
+  border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
-  background:
-    linear-gradient(115deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 46%),
-    var(--nm-bg-card);
+  background: var(--nm-bg-card);
   box-shadow: var(--nm-shadow-card);
   overflow: hidden;
 }
@@ -81,7 +115,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 12px;
 }
 
 .webhookLeadActions {
@@ -126,8 +160,8 @@
 }
 
 .webhookBody {
-  padding: 12px 14px;
-  border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, var(--nm-border));
+  padding: 12px;
+  border-top: 1px solid var(--nm-border);
   background: color-mix(in srgb, var(--nm-bg-2) 74%, transparent);
 }
 
@@ -292,6 +326,67 @@
   min-width: 220px;
 }
 
+/*
+ * 1280 档内容区约 1100px，状态与来源两组分段、搜索和批量入口刚好差几十像素。
+ * 不让整组折行，改为压缩搜索框与分段项的内边距；控件高度保持 32px 不变。
+ */
+@media (min-width: 1200px) {
+  .filters {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .filters .search {
+    flex: 1 1 190px;
+    min-width: 160px;
+  }
+
+  .filters [class*='_seg_'] {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .filters [class*='_segItem_'] {
+    padding-inline: 8px;
+  }
+}
+
+.batchBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+}
+
+.batchSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.batchSummary b {
+  color: var(--nm-text-1);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.batchActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* ── 记录表 ─────────────────────────────────────────────────────────── */
 .tableShell {
   flex: 1;
@@ -317,7 +412,7 @@
 
 .table {
   width: 100%;
-  min-width: 1320px;
+  min-width: 1378px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -327,7 +422,7 @@
 
 .table th,
 .table td {
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--nm-border);
   text-align: left;
   vertical-align: middle;
@@ -343,34 +438,105 @@
   white-space: nowrap;
 }
 
-.table th:nth-child(1) { width: 76px; }
-.table th:nth-child(2) { width: 148px; }
-.table th:nth-child(3) { width: 140px; }
-.table th:nth-child(4) { width: 140px; }
-.table th:nth-child(5) { width: 230px; }
-.table th:nth-child(6) { width: 126px; }
-.table th:nth-child(7) { width: 158px; }
-.table th:nth-child(8) { width: 94px; }
-.table th:nth-child(9) { width: 108px; }
-.table th:nth-child(10) { width: 94px; }
-.table th:nth-child(11) { width: 180px; }
+.table th:nth-child(1) { width: 50px; }
+.table th:nth-child(2) { width: 110px; }
+.table th:nth-child(3) { width: 100px; }
+.table th:nth-child(4) { width: 150px; }
+.table th:nth-child(5) { width: 200px; }
+.table th:nth-child(6) { width: 120px; }
+.table th:nth-child(7) { width: 200px; }
+.table th:nth-child(8) { width: 80px; }
+.table th:nth-child(9) { width: 140px; }
+.table th:nth-child(10) { width: 90px; }
+.table th:nth-child(11) { width: 138px; }
 
 .table tbody tr {
   transition: background var(--nm-t-fast);
+}
+
+.recordRow,
+.recordRow > td {
+  height: 32px;
+}
+
+/* compact-chrome 的 `table[class*='_table_'] tbody tr td` 会覆盖单类选择器的
+   `padding-block`；用表级类提高优先级，桌面档才能稳定落在 32px 行高。 */
+.table .recordRow > td {
+  box-sizing: border-box;
+  padding-block: 2px;
 }
 
 .table tbody tr:hover {
   background: var(--nm-bg-hover);
 }
 
+.table tbody tr[aria-hidden='true']:hover {
+  background: transparent;
+}
+
 .table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.virtualPad {
+  height: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  line-height: 0;
+}
+
+.loadBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--nm-border);
+  background: color-mix(in srgb, var(--nm-bg-2) 74%, var(--nm-bg-card));
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.loadBar b {
+  color: var(--nm-text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.loadHint {
+  color: var(--nm-text-2);
+}
+
+.loadError {
+  flex: 1 1 240px;
+  color: var(--nm-danger-text);
+  overflow-wrap: anywhere;
 }
 
 .numCell {
   color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
+}
+
+.numCellInner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rowCheckbox {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--nm-cyan);
+  cursor: pointer;
+}
+
+.rowCheckbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .replyId {
@@ -390,25 +556,28 @@
 
 .textCellHead,
 .textCell {
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .textCell {
   color: var(--nm-text-2);
-  line-height: var(--nm-lh-body);
+  line-height: 18px;
 }
 
 .textCell span {
-  display: -webkit-box;
+  display: block;
   overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .timeCell {
   color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.statusCell {
   white-space: nowrap;
 }
 
@@ -420,18 +589,58 @@
   white-space: nowrap;
 }
 
+.rowActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.rowActions > * {
+  flex: 0 0 auto;
+}
+
 .noteCellHead,
 .noteCell {
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .noteCell {
   color: var(--nm-text-2);
-  line-height: var(--nm-lh-body);
-  overflow-wrap: anywhere;
+  line-height: 18px;
+  overflow: hidden;
 }
 
-.rowError {
+.noteLine {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.noteLine[data-error='true']::before {
+  content: '!';
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nm-danger) 18%, transparent);
+  color: var(--nm-danger-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.noteText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noteLine[data-error='true'] .noteText {
   color: var(--nm-danger-text);
 }
 
@@ -493,8 +702,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
@@ -526,8 +735,9 @@
 .ruleRow {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 14px;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
@@ -541,11 +751,17 @@
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .ruleScope {
+  flex: 0 1 280px;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--nm-fs-sm);
   font-weight: 650;
   color: var(--nm-text-1);
@@ -553,6 +769,8 @@
 
 .ruleUrl {
   display: block;
+  flex: 1 1 320px;
+  min-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -562,18 +780,30 @@
 }
 
 .ruleMeta {
+  flex: 0 1 240px;
+  min-width: 100px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow: hidden;
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
 }
 
 .ruleGreeting {
-  max-width: min(100%, 720px);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ruleNote {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-3);
 }
 
 .ruleActions {
@@ -581,8 +811,9 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  white-space: nowrap;
 }
 
 /* ── 手动新增 / 规则弹窗 ────────────────────────────────────────────── */
@@ -596,7 +827,7 @@
 .form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .formPair {
@@ -623,17 +854,17 @@
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-sm);
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
   color: var(--nm-text-1);
   font-family: inherit;
-  font-size: var(--nm-fs-sm);
+  font-size: var(--nm-fs-md);
   outline: none;
   transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
 }
 
 .input {
-  height: 34px;
+  height: 32px;
   padding: 0 10px;
 }
 
@@ -662,6 +893,54 @@
   color: var(--nm-text-2);
 }
 
+.attachmentRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.attachmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachmentList li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.attachmentName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+}
+
+.attachmentRemove {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-danger-text);
+  font: inherit;
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+}
+
 .checkLine {
   display: flex;
   align-items: center;
@@ -674,6 +953,10 @@
 .checkLine input {
   margin: 0;
   accent-color: var(--nm-cyan);
+}
+
+.dialogWide.dialogWide {
+  width: min(680px, calc(100vw - 32px));
 }
 
 @media (max-width: 900px) {
@@ -711,7 +994,108 @@
     justify-content: flex-start;
   }
 
+  .batchActions {
+    width: 100%;
+  }
+
   .search {
     flex-basis: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .root {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+
+  /* 页头曾因父级 flex 空间不足被压成 0 高，动作组会与切换行重叠。
+     这里固定页头高度，动作组回到同一行；标题说明负责省略。 */
+  .root [class*='_panelHeader_'] {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
+  .root [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .root [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .headActions {
+    flex-wrap: nowrap;
+  }
+
+  .statStrip {
+    flex-wrap: nowrap;
+    gap: 4px 10px;
+    padding: 6px 10px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .statStrip::-webkit-scrollbar {
+    height: 0;
+  }
+
+  .statStrip > * {
+    flex: 0 0 auto;
+  }
+
+  /* 搜索、状态、来源与批量入口并成一条可横滑的筛选带；
+     通过时不再让 8 个状态项各自换行，吃掉半屏高度。 */
+  .filters {
+    flex-wrap: nowrap;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .filters::-webkit-scrollbar {
+    height: 0;
+  }
+
+  .filters > * {
+    flex: 0 0 auto;
+  }
+
+  .filters .search {
+    flex: 0 0 240px;
+    min-width: 220px;
+  }
+
+  .filters [class*='_seg_'] {
+    flex-wrap: nowrap;
+    max-width: none;
+  }
+
+  /* 表格本身可横滑，行内操作是密集数据控件；28px 仍高于 WCAG 2.5.8 的 24px 下限，
+     同时把行高从 49px 拉回 32–34px。 */
+  .table .recordRow button {
+    min-height: 28px;
+  }
+
+  .webhookCardCollapsed {
+    margin-right: -12px;
+    margin-left: -12px;
+  }
+
+  .dialogWide.dialogWide {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .noticeToast {
+    right: 16px;
+    bottom: 16px;
+    max-width: calc(100vw - 32px);
   }
 }

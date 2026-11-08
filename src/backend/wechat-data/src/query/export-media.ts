@@ -7,23 +7,33 @@
  * One unreadable attachment becomes a manifest entry with `missing`/`error`;
  * it never aborts the whole transcript export.
  */
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type { ChatlogRecord, WechatMessage } from '../types.ts'
 import type { StreamControl } from './zip.ts'
 import { reportProgress, throwIfCancelled } from './zip.ts'
 import { decodeDatBytesAsync, decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync } from './media-image-async.ts'
-import { fetchEmoticonRemote, RENDERABLE_EXTS, resolveImageFilePathsByMd5 } from './media-image.ts'
+import { fetchEmoticonRemote, findDatFiles, isThumbTier, msgTableName, RENDERABLE_EXTS, resolveImageFilePathsByMd5 } from './media-image.ts'
 import { resolveVideoInfo } from './media-video.ts'
 import { resolveVoiceDataUrl } from './voice.ts'
 import { resolveMessageFilePath } from './media-file.ts'
 import { exportMediaCtx } from './export-io.ts'
 import type { ZipFileWriter } from './zip.ts'
+import { tryUpgradeToOriginal } from './image-auto-upgrade.ts'
 
 export type ExportMediaKind = 'image' | 'sticker' | 'video' | 'voice' | 'file'
 export type ExportMediaStatus = 'ok' | 'missing' | 'error'
 export type ExportMediaRole = 'content' | 'cover'
+/**
+ * How faithful an archived resource is to the source stored by WeChat.
+ *
+ * `original` means the bytes came from a non-thumbnail source file and were
+ * copied without transcoding. `thumbnail` is deliberately separate: callers
+ * must never present a `.t.` cache entry as an original image.
+ */
+export type ExportMediaQuality = 'original' | 'thumbnail' | 'preview' | 'unknown'
 
 /** A resource reference used by formatters and the ZIP manifest. */
 export interface ExportMediaEntry {
@@ -42,6 +52,9 @@ export interface ExportMediaEntry {
   sourceName?: string
   mime?: string
   size?: number
+  quality?: ExportMediaQuality
+  /** The only local candidate was WeChat's thumbnail tier; it was not written. */
+  thumbnailOnly?: boolean
   error?: string
   recordIndex?: number
 }
@@ -91,6 +104,33 @@ function extOfPath(path: string): string {
   return /^\.[a-z0-9]{1,8}$/.test(raw) ? raw : ''
 }
 
+function qualityOfDecodedPath(path: string): ExportMediaQuality {
+  return /\.t\.[a-z0-9]+$/i.test(basename(path)) ? 'thumbnail' : 'original'
+}
+
+function qualityOfDatPath(path: string): ExportMediaQuality {
+  const name = basename(path).toLowerCase()
+  if (name.endsWith('_t.dat') || /_[a-z]\.dat$/.test(name)) return 'thumbnail'
+  // `_h.dat` is WeChat's high-resolution copy; the unsuffixed `.dat` is the
+  // best non-thumbnail source the chat itself retained. Neither is transcoded.
+  return 'original'
+}
+
+/** Whether a thumbnail cache entry has a better local `.dat` tier worth re-decoding. */
+function hasBetterLocalImageSource(
+  decryptedDir: string,
+  wechatBaseDir: string | undefined,
+  username: string,
+  md5: string | undefined,
+): boolean {
+  const key = String(md5 ?? '').trim().toLowerCase()
+  if (!wechatBaseDir || !/^[a-f0-9]{32}$/.test(key)) return false
+  const attach = join(wechatBaseDir, 'msg', 'attach', msgTableName(username).replace(/^Msg_/, ''))
+  if (findDatFiles(attach, key).some((path) => !isThumbTier(path))) return true
+  const indexed = resolveImageFilePathsByMd5(decryptedDir, wechatBaseDir, [key]).get(key)
+  return indexed !== undefined && !isThumbTier(indexed)
+}
+
 function asciiStem(value: string): string {
   const stem = value.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
   return stem.slice(0, 42)
@@ -111,6 +151,33 @@ function existingFile(path: string): { path: string; size: number; mime: string 
   }
 }
 
+function fileMd5(path: string): string {
+  const hash = createHash('md5')
+  const fd = openSync(path, 'r')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  try {
+    let bytesRead = 0
+    do {
+      bytesRead = readSync(fd, buffer, 0, buffer.length, null)
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead))
+    } while (bytesRead > 0)
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
+}
+
+/** A claimed original must match the MD5 recorded by WeChat when one is available. */
+function matchesClaimedMd5(path: string, expected: string | undefined): boolean {
+  const want = String(expected ?? '').trim().toLowerCase()
+  if (!/^[a-f0-9]{32}$/.test(want)) return true
+  try {
+    return fileMd5(path) === want
+  } catch {
+    return false
+  }
+}
+
 function decodedPath(decodedDir: string, file: string | undefined): string {
   if (!file) return ''
   const abs = isAbsolute(file) ? file : join(decodedDir, file)
@@ -119,13 +186,18 @@ function decodedPath(decodedDir: string, file: string | undefined): string {
   return abs
 }
 
-function cachedImage(decodedDir: string, username: string, rawMd5: string | undefined): string {
+function cachedImage(
+  decodedDir: string,
+  username: string,
+  rawMd5: string | undefined,
+  allowThumbnail = false,
+): string {
   const md5 = String(rawMd5 ?? '').trim().toLowerCase()
   if (!/^[a-f0-9]{32}$/.test(md5)) return ''
   for (const dir of [decodedDir, username ? join(decodedDir, username) : '']) {
     if (!dir) continue
     for (const ext of RENDERABLE_EXTS) {
-      for (const suffix of ['.', '.t.']) {
+      for (const suffix of allowThumbnail ? ['.', '.t.'] : ['.']) {
         const hit = existingFile(join(dir, md5 + suffix + ext))
         if (hit) return hit.path
       }
@@ -142,20 +214,20 @@ async function decodeImageByMd5(
   md5: string | undefined,
   aesKey: string | undefined,
   xorKey: number,
-): Promise<string> {
+): Promise<{ path: string; quality: ExportMediaQuality } | null> {
   const cached = cachedImage(decodedDir, username, md5)
-  if (cached) return cached
+  if (cached) return { path: cached, quality: qualityOfDecodedPath(cached) }
   const key = String(md5 ?? '').trim().toLowerCase()
-  if (!wechatBaseDir || !/^[a-f0-9]{32}$/.test(key)) return ''
+  if (!wechatBaseDir || !/^[a-f0-9]{32}$/.test(key)) return null
   const dat = resolveImageFilePathsByMd5(decryptedDir, wechatBaseDir, [key]).get(key)
-  if (!dat) return ''
+  if (!dat || isThumbTier(dat)) return null
   const decoded = await decodeDatBytesAsync(new Uint8Array(readFileSync(dat)), aesKey ?? null, xorKey)
-  if ('error' in decoded || decoded.format === 'hevc') return ''
+  if ('error' in decoded || decoded.format === 'hevc') return null
   const dir = join(decodedDir, username || '_export')
   const out = join(dir, key + (decoded.format === 'jpeg' ? '.jpg' : '.' + decoded.format))
   await mkdir(dir, { recursive: true })
   await writeFile(out, Buffer.from(decoded.bytes))
-  return out
+  return { path: out, quality: qualityOfDatPath(dat) }
 }
 
 class MediaPlanner {
@@ -217,7 +289,11 @@ class MediaPlanner {
     label: string,
     recordIndex?: number,
     mimeHint?: string,
+    quality?: ExportMediaQuality,
   ): ExportMediaEntry | null {
+    // Original-only export: a thumbnail is never a valid archive member. Keep
+    // this guard in the central add path as defence in depth for future callers.
+    if (quality === 'thumbnail') return null
     const file = existingFile(sourcePath)
     if (!file) return null
     const key = role + '|' + file.path.toLowerCase()
@@ -241,6 +317,7 @@ class MediaPlanner {
       sourceName: basename(file.path),
       mime: mimeHint || file.mime,
       size: file.size,
+      ...(quality !== undefined ? { quality } : {}),
       ...(recordIndex !== undefined ? { recordIndex } : {}),
     }
     this.entries.push(entry)
@@ -274,23 +351,67 @@ class MediaPlanner {
     return entry
   }
 
+  private addThumbnailOnly(
+    kind: ExportMediaKind,
+    message: WechatMessage,
+    label: string,
+    recordIndex?: number,
+  ): ExportMediaEntry {
+    const entry = this.addMissing(
+      kind,
+      message,
+      label,
+      'thumbnail_only: 本机只有缩略图，未写入 ZIP；请先在微信中打开原图后重试',
+      recordIndex,
+    )
+    entry.thumbnailOnly = true
+    entry.quality = 'thumbnail'
+    return entry
+  }
+
   async image(message: WechatMessage, localId: number, md5: string | undefined, label: string, recordIndex?: number): Promise<void> {
-    const direct = localId > 0
+    let direct = localId > 0
       ? await decodeImageDataUrlAsync(
         this.decryptedDir, this.decodedDir, this.username, localId,
         this.wechatBaseDir, this.aesKey, this.xorKey, { fileOnly: true },
       )
       : { error: '缺少图片消息定位信息' }
+    // A ZIP is an explicit export request: before accepting a thumbnail, try
+    // the larger local `.dat` tier. This never goes to the network.
+    if (
+      direct.file && direct.thumb === true
+      && hasBetterLocalImageSource(this.decryptedDir, this.wechatBaseDir, this.username, md5)
+    ) {
+      const upgraded = await tryUpgradeToOriginal(
+        this.decryptedDir, this.decodedDir, this.username, localId,
+        this.wechatBaseDir, this.aesKey, this.xorKey ?? 0xff, false, { fileOnly: true },
+      )
+      if (upgraded.format !== undefined) {
+        direct = await decodeImageDataUrlAsync(
+          this.decryptedDir, this.decodedDir, this.username, localId,
+          this.wechatBaseDir, this.aesKey, this.xorKey, { fileOnly: true },
+        )
+      }
+    }
     const directPath = decodedPath(this.decodedDir, direct.file)
-    if (directPath) {
-      this.addFile('image', 'content', message, directPath, label, recordIndex)
-      return
+    if (directPath && direct.thumb !== true && matchesClaimedMd5(directPath, md5)) {
+      const added = this.addFile(
+        'image', 'content', message, directPath, label, recordIndex, undefined,
+        'original',
+      )
+      if (added) return
     }
     const fallback = await decodeImageByMd5(
       this.decryptedDir, this.decodedDir, this.username, this.wechatBaseDir, md5, this.aesKey, this.xorKey,
     )
-    if (fallback) {
-      this.addFile('image', 'content', message, fallback, label, recordIndex)
+    if (fallback && matchesClaimedMd5(fallback.path, md5)) {
+      const added = this.addFile('image', 'content', message, fallback.path, label, recordIndex, undefined, fallback.quality)
+      if (added) return
+    }
+    const thumbnailOnly = direct.thumb === true
+      || cachedImage(this.decodedDir, this.username, md5, true) !== ''
+    if (thumbnailOnly) {
+      this.addThumbnailOnly('image', message, label, recordIndex)
       return
     }
     this.addMissing('image', message, label, direct.error || '本地未找到可导出的图片', recordIndex)
@@ -306,8 +427,8 @@ class MediaPlanner {
     if (local.url) {
       const path = cachedImage(this.decodedDir, this.username, key)
       if (path) {
-        this.addFile('sticker', 'content', message, path, '表情', recordIndex)
-        return
+        const added = this.addFile('sticker', 'content', message, path, '表情', recordIndex, undefined, qualityOfDecodedPath(path))
+        if (added) return
       }
     }
     if (emojiUrl && /^[a-f0-9]{32}$/.test(key)) {
@@ -316,9 +437,13 @@ class MediaPlanner {
       })
       const path = remote.url ? cachedImage(this.decodedDir, this.username, key) : ''
       if (path) {
-        this.addFile('sticker', 'content', message, path, '表情', recordIndex)
-        return
+        const added = this.addFile('sticker', 'content', message, path, '表情', recordIndex, undefined, qualityOfDecodedPath(path))
+        if (added) return
       }
+    }
+    if (cachedImage(this.decodedDir, this.username, key, true) !== '') {
+      this.addThumbnailOnly('sticker', message, '表情', recordIndex)
+      return
     }
     this.addMissing('sticker', message, '表情', local.error || '本地未找到可导出的表情', recordIndex)
   }
@@ -328,14 +453,23 @@ class MediaPlanner {
       this.decryptedDir, this.decodedDir, this.username, localId, this.wechatBaseDir, md5,
     )
     const cover = info.coverPath
-      ? this.addFile('image', 'cover', message, info.coverPath, '视频封面', recordIndex)
+      ? this.addFile('image', 'cover', message, info.coverPath, '视频封面', recordIndex, undefined, 'preview')
       : null
-    const video = info.videoPath
-      ? this.addFile('video', 'content', message, info.videoPath, '视频', recordIndex)
+    const videoMatches = info.videoPath !== undefined && matchesClaimedMd5(info.videoPath, info.md5)
+    const video = info.videoPath && videoMatches
+      ? this.addFile('video', 'content', message, info.videoPath, '视频', recordIndex, undefined, 'original')
       : null
     if (video && cover?.archivePath) video.posterArchivePath = cover.archivePath
     if (!video) {
-      const missing = this.addMissing('video', message, '视频', info.error || '本地未找到视频文件', recordIndex)
+      const missing = this.addMissing(
+        'video',
+        message,
+        '视频',
+        info.videoPath && !videoMatches
+          ? '视频内容 MD5 与消息记录不一致，已拒绝写入'
+          : (info.error || '本地未找到视频文件'),
+        recordIndex,
+      )
       if (cover?.archivePath) missing.posterArchivePath = cover.archivePath
     }
   }
@@ -346,7 +480,7 @@ class MediaPlanner {
       localId > 0 ? localId : undefined, explicitSvrId, { fileOnly: true },
     )
     if (info.file && existingFile(info.file)) {
-      this.addFile('voice', 'content', message, info.file, '语音', recordIndex)
+      this.addFile('voice', 'content', message, info.file, '语音', recordIndex, undefined, 'original')
       return
     }
     this.addMissing('voice', message, '语音', info.error || '本地未找到语音文件', recordIndex)
@@ -359,7 +493,10 @@ class MediaPlanner {
       ...(fileMd5 ? { fileMd5 } : {}),
     })
     if (found.path) {
-      this.addFile('file', 'content', message, found.path, fileName || found.name || '文件', recordIndex, found.mime)
+      this.addFile(
+        'file', 'content', message, found.path, fileName || found.name || '文件',
+        recordIndex, found.mime, 'original',
+      )
       return
     }
     this.addMissing('file', message, fileName || '文件', found.error || '本地未找到文件', recordIndex)
@@ -437,12 +574,12 @@ export async function prepareSessionMediaArchive(
     }
     reportProgress(ctrl, 'media', i + 1, msgs.length)
   }
-  const mediaCount = planner.entries.filter((entry) => entry.status === 'ok').length
+  const mediaCount = planner.entries.filter((entry) => entry.status === 'ok' && entry.quality === 'original').length
   return {
     entries: planner.entries,
     links: planner.links,
     mediaCount,
-    mediaMissingCount: planner.entries.length - mediaCount,
+    mediaMissingCount: planner.entries.filter((entry) => entry.status !== 'ok').length,
   }
 }
 
@@ -461,7 +598,12 @@ export async function writeSessionMediaArchive(
   for (let i = 0; i < total; i += 1) {
     const entry = archive.entries[i]!
     throwIfCancelled(ctrl?.signal)
-    if (entry.status === 'ok' && entry.archivePath && entry.sourcePath) {
+    if (entry.status === 'ok' && entry.quality === 'thumbnail') {
+      entry.status = 'missing'
+      entry.thumbnailOnly = true
+      entry.error = 'thumbnail_only: 缩略图不写入导出包'
+      delete entry.archivePath
+    } else if (entry.status === 'ok' && entry.archivePath && entry.sourcePath) {
       try {
         await zip.addStream(entry.archivePath, createReadStream(entry.sourcePath), ctrl)
       } catch (e) {
@@ -475,8 +617,8 @@ export async function writeSessionMediaArchive(
     }
     reportProgress(ctrl, 'media', i + 1, total)
   }
-  archive.mediaCount = archive.entries.filter((entry) => entry.status === 'ok').length
-  archive.mediaMissingCount = archive.entries.length - archive.mediaCount
+  archive.mediaCount = archive.entries.filter((entry) => entry.status === 'ok' && entry.quality === 'original').length
+  archive.mediaMissingCount = archive.entries.filter((entry) => entry.status !== 'ok').length
 }
 
 function manifestEntry(entry: ExportMediaEntry): Record<string, unknown> {
@@ -496,6 +638,8 @@ function manifestEntry(entry: ExportMediaEntry): Record<string, unknown> {
     ...(entry.sourceName ? { sourceName: entry.sourceName } : {}),
     ...(entry.mime ? { mime: entry.mime } : {}),
     ...(entry.size !== undefined ? { size: entry.size } : {}),
+    ...(entry.quality ? { quality: entry.quality } : {}),
+    ...(entry.thumbnailOnly ? { thumbnailOnly: true } : {}),
     ...(entry.error ? { error: entry.error } : {}),
   }
 }
@@ -509,14 +653,18 @@ export function buildSessionMediaManifest(
   chatlogMedia: Array<Record<string, unknown>>,
 ): string {
   return JSON.stringify({
-    version: 2,
+    version: 3,
     username,
     exportedAt,
     total,
     archive: {
       mediaRoot: 'media',
-      resourceCount: archive.mediaCount,
+      resourceCount: archive.entries.filter((entry) => entry.status === 'ok' && entry.archivePath).length,
       missingCount: archive.mediaMissingCount,
+      originalCount: archive.entries.filter((entry) => entry.status === 'ok' && entry.quality === 'original').length,
+      thumbnailCount: archive.entries.filter((entry) => entry.status === 'ok' && entry.quality === 'thumbnail').length,
+      previewCount: archive.entries.filter((entry) => entry.status === 'ok' && entry.quality === 'preview').length,
+      thumbnailOnlyCount: archive.entries.filter((entry) => entry.thumbnailOnly === true).length,
     },
     resources: archive.entries.map(manifestEntry),
     media: chatlogMedia,

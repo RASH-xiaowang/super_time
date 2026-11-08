@@ -184,7 +184,7 @@ export async function runAskRetrieval(input: AskRetrievalInput): Promise<AskRetr
   /** 旧单通道检索：灰度对照 / 回滚 / 流水线异常时的降级路径。 */
   const legacyRetrieve = (): void => {
     if (input.wechatDataEnabled === false) {
-      op('task', 'ask_wechat', 'skip', 'retrieval_legacy', 'kb-only 已阻止回退到本机微信检索')
+      op('task', 'ask_wechat', 'skip', 'retrieval_legacy', '已禁用本机微信数据，阻止回退检索')
       return
     }
     const legacy = retrieveAskCitations(
@@ -483,7 +483,7 @@ export function makeAskHybridExecutor(input: AskRetrievalInput): HybridSearchExe
   }
 }
 
-/** 混合检索的范围描述（写进运行时日志，避免把 kb-only 说成全库）。 */
+/** 混合检索的范围描述（写进运行时日志，避免把仅知识库范围说成全库）。 */
 function describeHybridScope(
   scope: { username?: string; from?: string; to?: string },
   mode: HybridSearchRequest['mode'],

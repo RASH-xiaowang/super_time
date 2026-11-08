@@ -17,6 +17,11 @@ import { boundedSet } from './meta.ts'
  */
 const fileCache = new Map<string, { path: string, at: number }>()
 const NEGATIVE_TTL_MS = 60_000
+/**
+ * IPC/HTTP 仍把文件作为 base64 data URL 传递，必须给同步整读设硬上限。
+ * 超过上限应走系统“打开文件”而不是把几十/几百 MB 扩展 4/3 后塞进 worker 内存。
+ */
+export const MESSAGE_FILE_DATA_URL_MAX_BYTES = 16 * 1024 * 1024
 
 const FILE_MIME: Record<string, string> = {
   pdf: 'application/pdf',
@@ -90,7 +95,7 @@ export interface MessageFileResolution {
 export function resolveMessageFilePath(
   wechatBaseDir: string | undefined,
   fileName: string,
-  opts: { size?: number; createTime?: number; fileMd5?: string } = {},
+  opts: { size?: number; createTime?: number; fileMd5?: string; requireUnique?: boolean } = {},
 ): MessageFileResolution {
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法定位文件' }
   const name = sanitize(fileName)
@@ -99,12 +104,13 @@ export function resolveMessageFilePath(
   const size = Number.isFinite(opts.size) && (opts.size ?? 0) > 0 ? Math.trunc(opts.size as number) : 0
   const rawFileMd5 = String(opts.fileMd5 ?? '').trim()
   const fileMd5 = normalizeMd5(rawFileMd5)
+  const requireUnique = opts.requireUnique === true
   if (rawFileMd5 !== '' && fileMd5 === undefined) {
     return { error: '文件 MD5 格式不正确，无法校验同名文件' }
   }
   // 缓存键要带上**当前账号的根目录**：换账号 / 改 `wechat_base_dir` 之后，同名同大小同月
   // 的文件是另一个目录里的另一份字节 —— 少了这一维，会把上一个账号的文件内容发回界面。
-  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`
+  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}|${requireUnique ? 'unique' : 'latest'}`
   const hit = fileCache.get(cacheKey)
   if (hit !== undefined && (hit.path !== '' || Date.now() - hit.at < NEGATIVE_TTL_MS)) {
     if (hit.path !== '') {
@@ -154,7 +160,15 @@ export function resolveMessageFilePath(
     // 未给 MD5 时体积精确相等优先；给了 MD5 时 MD5 是更强证据，
     // 不再让可能失真的体积线索排除正确副本。
     const sized = size > 0 ? hits.filter(h => h.size === size) : []
+    if (size > 0 && sized.length === 0 && requireUnique && fileMd5 === undefined) {
+      boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
+      return { error: '没有与消息记录大小一致的本地文件，已停止猜测' }
+    }
     const pool = fileMd5 !== undefined ? hits : (sized.length > 0 ? sized : hits)
+    if (fileMd5 === undefined && requireUnique && pool.length !== 1) {
+      boundedSet(fileCache, cacheKey, { path: '', at: Date.now() })
+      return { error: '找到多个同名同大小文件，缺少 MD5，无法确认原文件；已停止猜测' }
+    }
     const best = fileMd5 !== undefined
       ? pool.find(h => hashFile(h.path) === fileMd5)
       : pool.reduce((a, b) => (b.mtime > a.mtime ? b : a), pool[0] as { path: string; mtime: number; size: number })
@@ -179,6 +193,11 @@ export function resolveMessageFileDataUrl(
   const found = resolveMessageFilePath(wechatBaseDir, fileName, opts)
   if (!found.path) return { error: found.error ?? '本地未找到该文件' }
   try {
+    const size = found.size ?? statSync(found.path).size
+    if (size > MESSAGE_FILE_DATA_URL_MAX_BYTES) {
+      const mb = (size / (1024 * 1024)).toFixed(1)
+      return { error: `文件过大（${mb} MB），请使用“打开文件”直接访问，避免 base64 传输占满内存` }
+    }
     const bytes = readFileSync(found.path)
     return { url: 'data:' + (found.mime ?? mimeOf(found.name ?? fileName)) + ';base64,' + bytes.toString('base64') }
   } catch (e) {

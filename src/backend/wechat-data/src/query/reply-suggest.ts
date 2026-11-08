@@ -10,15 +10,23 @@
  *   · 知识库片段：用户**当前选中的那个库**里与「对方最近那句话」相关的块。
  */
 import { queryMessages, queryMessagesAtOrBefore } from './messages.ts'
-import { searchKb } from './kb-search.ts'
+import {
+  contextualMessageText,
+  visualKindOf,
+} from './ai-reply/inbound-trigger.ts'
 
 /** 单条消息进提示词前截断到这个长度：推荐回复只需要语义，不需要全文。 */
 const MAX_LINE_CHARS = 300
+
+/** 推荐回复固定携带的最近消息窗口；超过这个量只会稀释最后一句的回复意图。 */
+export const REPLY_SUGGEST_CONTEXT_LIMIT = 60
 
 /** `collectReplyContext` 的结果。 */
 export interface ReplyContext {
   /** 按时间正序的对话行（`我：…` / `对方：…`）；空行已剔除。 */
   lines: string[]
+  /** 当前窗口内可交给多模态模型的图片/表情消息定位信息。 */
+  imageCandidates?: ReplyImageCandidate[]
   /** 对方最近的一条非空消息 —— 就是「要回的那句」；没有则为空串。 */
   latestPeer: string
   /** 参与拼装的条数（供隐私审计的 `messages` 计数用）。 */
@@ -27,6 +35,22 @@ export interface ReplyContext {
   targetFound?: boolean
   /** 目标消息的发送者标签（单聊为「对方」，群聊为成员名）。 */
   targetSpeaker?: string
+  /**
+   * 本轮唯一需要回复的那一行。
+   *
+   * 会话级推荐取上下文最后一行；分析面板指定历史消息时取该消息，
+   * 这样提示词不必再让模型自己猜“最后一条”是哪条。
+   */
+  targetLine: string
+}
+
+/** 视觉消息只暴露会话内定位键；真实图片/表情字节由上层按需解码。 */
+export interface ReplyImageCandidate {
+  localId: number
+  /** 缺省按普通图片处理；自定义表情/表情包显式标记为 sticker。 */
+  kind?: 'image' | 'sticker'
+  md5?: string
+  emojiUrl?: string
 }
 
 /**
@@ -34,7 +58,7 @@ export interface ReplyContext {
  * @param decryptedDir - 解密数据根。
  * @param talker - 会话 username（**范围就是它**，绝不跨会话取）。
  * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
- * @param limit - 取最近多少条（默认 20）。
+ * @param limit - 取最近多少条（默认 60）。
  * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
  * @returns 上下文；该会话没有可用文本时 `count` 为 0。
  */
@@ -43,7 +67,7 @@ export function collectReplyContext(
   /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   selfUsername?: string,
-  limit = 20,
+  limit = REPLY_SUGGEST_CONTEXT_LIMIT,
   targetLocalId?: number,
 ): ReplyContext {
   const cap = Math.max(1, Math.min(limit, 60))
@@ -56,24 +80,48 @@ export function collectReplyContext(
     ? queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
     : queryMessagesAtOrBefore(decryptedDir, talker, targetId, cap, selfUsername)
   if (targetId !== undefined && 'found' in snapshot && !snapshot.found) {
-    return { lines: [], latestPeer: '', count: 0, targetFound: false }
+    return { lines: [], latestPeer: '', count: 0, targetFound: false, targetLine: '' }
   }
   const lines: string[] = []
+  const imageCandidates: ReplyImageCandidate[] = []
+  const seenVisual = new Set<number>()
   let latestPeer = ''
+  let latestLine = ''
   let targetSpeaker: string | undefined
   let targetText = ''
   const isGroup = talker.endsWith('@chatroom')
   for (const m of snapshot.messages) {
-    const text = messageText(m)
+    // 所有对话类型都进入上下文；媒体/卡片缺少展示字段时由同一条规则合成占位。
+    const text = messageText({ ...m, displayText: contextualMessageText(m) })
     if (text === '') continue
+    const visualKind = visualKindOf(m)
+    if (visualKind !== null && m.localId > 0 && !seenVisual.has(m.localId)) {
+      seenVisual.add(m.localId)
+      imageCandidates.push({
+        localId: m.localId,
+        ...(visualKind === 'sticker'
+          ? {
+              kind: 'sticker' as const,
+              ...(m.rich?.md5 ? { md5: m.rich.md5 } : {}),
+              ...(m.rich?.emojiUrl ? { emojiUrl: m.rich.emojiUrl } : {}),
+            }
+          : {}),
+      })
+    }
     const self = m.isSender === 1
     // 群聊必须保留发言者身份，否则模型会把不同成员揉成同一个「对方」。
+    const rawSenderName = String(m.senderName ?? '').trim()
+    const senderName = /^(?:未知联系人|未知成员|群成员|成员)$/.test(rawSenderName)
+      ? ''
+      : rawSenderName
     const speaker = self
       ? '我'
       : isGroup
-        ? (m.senderName || m.sender || '群成员')
+        ? (senderName || m.sender || '群成员')
         : '对方'
-    lines.push(`${speaker}：${text}`)
+    const line = `${speaker}：${text}`
+    lines.push(line)
+    latestLine = line
     if (m.localId === targetId) {
       targetText = text
       targetSpeaker = speaker
@@ -81,39 +129,18 @@ export function collectReplyContext(
     if (!self) latestPeer = text
   }
   if (targetText !== '') latestPeer = targetText
+  const targetLine = targetText !== '' && targetSpeaker !== undefined
+    ? `${targetSpeaker}：${targetText}`
+    : latestLine
   return {
     lines,
+    ...(imageCandidates.length === 0 ? {} : { imageCandidates }),
     latestPeer,
     count: lines.length,
+    targetLine,
     ...(targetId === undefined ? {} : { targetFound: true }),
     ...(targetSpeaker === undefined ? {} : { targetSpeaker }),
   }
-}
-
-/**
- * 取当前选中知识库里与 `query` 相关的片段（用于让推荐回复「有据可依」）。
- * @param decryptedDir - 解密数据根。
- * @param kbId - 知识库 id（用户当前选中的那个）。
- * @param query - 检索词（一般传对方最近那句话）。
- * @param topK - 最多取几段。
- * @returns 形如 `《文件名》片段` 的字符串数组；库为空/未命中时返回空数组。
- */
-export function collectReplyKbSnippets(
-  decryptedDir: string,
-  kbId: number,
-  query: string,
-  topK = 3,
-): string[] {
-  const q = query.trim()
-  if (q === '' || !Number.isFinite(kbId) || kbId <= 0) return []
-  const r = searchKb(decryptedDir, Math.trunc(kbId), { query: q, topK: Math.max(1, Math.min(topK, 5)) })
-  const out: string[] = []
-  for (const hit of r.hits) {
-    const snippet = String(hit.snippet ?? '').trim().replace(/\s+/g, ' ')
-    if (snippet === '') continue
-    out.push(`《${String(hit.fileName ?? '')}》${snippet}`)
-  }
-  return out
 }
 
 /**
@@ -127,24 +154,42 @@ export function collectReplyKbSnippets(
  *     「知识库 N 段」说明）；
  *   · 没选库/没命中时不编造「参考资料」，直接说只有对话上下文。
  * @param lines - `collectReplyContext` 产出的对话行（时间正序）。
- * @param snippets - `collectReplyKbSnippets` 产出的片段。
+ * @param snippets - 知识库混合检索产出的片段。
  * @param want - 要几条候选。
+ * @param targetLine - 唯一要回复的目标行；缺省时取上下文最后一行。
  * @returns 提示词全文。
  */
-export function buildReplyPrompt(lines: readonly string[], snippets: readonly string[], want: number): string {
-  const parts = ['以下是微信聊天的最近对话（时间正序，标注了每句是谁说的）：', '', ...lines]
+export function buildReplyPrompt(
+  lines: readonly string[],
+  snippets: readonly string[],
+  want: number,
+  targetLine = '',
+): string {
+  const target = String(targetLine).trim() || (lines[lines.length - 1] ?? '').trim()
+  const parts = [
+    `以下是微信聊天的最近 ${String(lines.length)} 条对话（时间正序，标注了每句是谁说的）：`,
+    '',
+    ...lines,
+  ]
   if (snippets.length > 0) {
-    parts.push('', '可参考的知识库片段（来自用户当前选中的知识库）：', ...snippets.map((s, i) => `${String(i + 1)}. ${s}`))
+    parts.push('', '本轮必须结合的知识库片段（来自用户当前选中的知识库）：', ...snippets.map((s, i) => `${String(i + 1)}. ${s}`))
   } else {
     parts.push('', '（本次没有可用的知识库片段，只依据上面这段对话。）')
   }
+  if (target !== '') {
+    parts.push(
+      '',
+      `本次唯一要回复的目标消息：${target}`,
+      '更早的消息只用于理解上下文和检索依据；不要逐条回复、总结或延续其中的其他话题。',
+    )
+  }
   parts.push(
     '',
-    `请以上面最后一条消息作为要回复的对象（更早内容只用于理解上下文），给出 ${String(Math.max(1, want))} 条我可以直接发送的回复候选。`,
+    `请只针对上述目标消息，给出 ${String(Math.max(1, want))} 条我可以直接发送的回复候选。`,
     '要求：',
     '1) 每条独立成句，口吻自然、像我本人在微信里说话；',
     '2) 三条之间要有差异（例如：直接回答 / 反问确认 / 简短暂缓），不要互相改写；',
-    '3) 需要用到知识库信息时按片段里的事实写，不要编造；',
+    '3) 结合与目标消息相关的知识库事实作答；片段无关时不要强行引用，更不要编造；',
     '4) 只输出 JSON 字符串数组，形如 ["第一条","第二条","第三条"]，不要任何解释。',
   )
   return parts.join('\n')

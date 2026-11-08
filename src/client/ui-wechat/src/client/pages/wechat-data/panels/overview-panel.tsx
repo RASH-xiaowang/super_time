@@ -18,7 +18,7 @@
  * @module overview-panelx
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   apiExportAllSessions,
   apiGetLedger,
@@ -34,7 +34,10 @@ import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
 import { fmtClockMs } from '../utils/format.ts'
-import { buildOverviewReport, downloadText, exportElementImage } from './overview-export.ts'
+import { exportElementImage } from './overview-export.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask, type ExportTask } from './export-task.ts'
+import { useOverviewReportExport, type OverviewReportExport } from './use-overview-report-export.ts'
 import { RegionBoard } from './RegionBoard.tsx'
 import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
 import {
@@ -52,6 +55,65 @@ import {
   TrendSection,
   WordCloudSection,
 } from './overview-sections.tsx'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
+
+/** 总览的统计查询单次约 1–2 秒；WAL 高频推送只做合并限频，避免每几秒重复全量重算。 */
+export const OVERVIEW_AUTO_REFRESH_MIN_MS = 30_000
+
+async function archiveAllSessions(
+  task: Pick<ExportTask, 'running' | 'run'>,
+  flash: (message: string) => void,
+  hold: (message: string) => void,
+): Promise<void> {
+  if (task.running) return
+  const outcome = await task.run(async ({ jobId }) => apiExportAllSessions({ jobId }), {
+    idPrefix: 'overview-archive',
+    label: '归档全部会话',
+    successMessage: (r) => '已归档 ' + String(r.count) + ' 条消息 → ' + r.path,
+  })
+  if (outcome.ok) flash(outcome.message)
+  else if (!outcome.canceled) hold('归档失败: ' + outcome.error)
+}
+
+function overviewImageStamp(now: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}`
+}
+
+async function exportOverviewImage(input: {
+  format: 'md' | 'json' | 'png' | 'jpg'
+  hasData: boolean
+  root: HTMLDivElement | null
+  closeMenu: () => void
+  imageTask: ExportTask
+  reportExport: OverviewReportExport
+  hold: (message: string) => void
+}): Promise<void> {
+  const { format, hasData, root, closeMenu, imageTask, reportExport, hold } = input
+  if (!hasData || imageTask.running || reportExport.running) return
+  if (format === 'json' || format === 'md') {
+    await reportExport.exportText(format)
+    return
+  }
+  closeMenu()
+  await new Promise((resolve) => { setTimeout(resolve, 40) })
+  if (!root) {
+    hold('图片导出失败：页面尚未就绪')
+    return
+  }
+  const filename = `微信数据总览-${overviewImageStamp(new Date())}.${format}`
+  const outcome = await imageTask.run(
+    async () => exportElementImage(root, format, filename),
+    {
+      idPrefix: 'overview-image',
+      label: '导出总览图片',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: () => `已导出 ${format.toUpperCase()}`,
+    },
+  )
+  if (!outcome.ok) hold('图片导出失败: ' + outcome.error)
+}
 
 /**
  * Render the WeChat data overview panel (space-capsule cockpit).
@@ -73,16 +135,20 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [exporting, setExporting] = useState(false)
+  const archiveTask = useExportTask()
+  const imageTask = useExportTask()
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 6000 / 2500)` 已由 hook 统一管理。
   // 失败类提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold } = useTransientNotice(6000)
   const [lastUpdated, setLastUpdated] = useState<number | null>(() => readCache(CACHE_TIME) as number | null)
+  const reportExport = useOverviewReportExport({ data, insights: ins, ledger, storage: stor, lastUpdated, flash, hold })
   const [done, setDone] = useState(false)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   // 「更多 ▾」菜单：导出报告/数据/图片 + 归档全部会话（页头动作 3→2 后收进来的）。
   const [moreOpen, setMoreOpen] = useState(false)
+  const closeMore = useCallback((): void => { setMoreOpen(false) }, [])
+  const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, closeMore)
 
   const load = async (): Promise<void> => {
     const hadData = data !== null
@@ -121,15 +187,54 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       ])
       setLedger(lg)
       setStor(st)
-      writeCache(CACHE_LEDGER, lg)
+      if (lg.readError) hold('资金台账读取不完整：' + lg.readError)
+      else writeCache(CACHE_LEDGER, lg)
       writeCache(CACHE_STOR, st)
-    } catch {
-      /* 保留已有缓存/数据 */
+    } catch (e) {
+      // 保留已有缓存，但资金读取失败不能伪装成“没有资金记录”。
+      hold('资金台账或存储统计失败，当前显示缓存数据：' + (e as Error).message)
     }
   }
 
-  useEffect(() => { void load() }, [])
-  useWechatDataUpdated(() => { void load() })
+  const loadRef = useRef(load)
+  loadRef.current = load
+  const loadInFlightRef = useRef<Promise<void> | null>(null)
+  const autoRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastAutoRefreshAtRef = useRef(0)
+
+  /** 所有入口共用同一在途任务；刷新期间再收到事件只复用它，不并发发起第二份重查询。 */
+  const runLoad = (): Promise<void> => {
+    if (loadInFlightRef.current !== null) return loadInFlightRef.current
+    const task = loadRef.current().finally(() => {
+      if (loadInFlightRef.current === task) loadInFlightRef.current = null
+    })
+    loadInFlightRef.current = task
+    return task
+  }
+
+  const scheduleAutoRefresh = (): void => {
+    const wait = Math.max(0, OVERVIEW_AUTO_REFRESH_MIN_MS - (Date.now() - lastAutoRefreshAtRef.current))
+    if (wait === 0) {
+      lastAutoRefreshAtRef.current = Date.now()
+      void runLoad()
+      return
+    }
+    if (autoRefreshTimerRef.current !== null) return
+    autoRefreshTimerRef.current = setTimeout(() => {
+      autoRefreshTimerRef.current = null
+      lastAutoRefreshAtRef.current = Date.now()
+      void runLoad()
+    }, wait)
+  }
+
+  useEffect(() => {
+    lastAutoRefreshAtRef.current = Date.now()
+    void runLoad()
+    return () => {
+      if (autoRefreshTimerRef.current !== null) clearTimeout(autoRefreshTimerRef.current)
+    }
+  }, [])
+  useWechatDataUpdated(scheduleAutoRefresh)
   // 朋友圈活跃作者头像改为逐行懒加载：作者卡片进入可视区附近时才请求头像。
 
   const go = (tab: string): void => { onNavigate?.(tab) }
@@ -139,46 +244,18 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const extras = ins?.extras
 
   const exportAll = async (): Promise<void> => {
-    setExporting(true)
-    try {
-      const r = await apiExportAllSessions()
-      flash('已归档 ' + String(r.count) + ' 条消息 → ' + r.path)
-    } catch (e) {
-      hold('归档失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
+    await archiveAllSessions(archiveTask, flash, hold)
   }
   const doExport = async (format: 'md' | 'json' | 'png' | 'jpg'): Promise<void> => {
-    if (!data) return
-    const now = new Date()
-    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-    if (format === 'json') {
-      const payload = {
-        exportedAt: now.toISOString(),
-        updatedAt: lastUpdated ? new Date(lastUpdated).toISOString() : null,
-        snapshot: data,
-        insights: ins,
-        ledger,
-        storage: stor,
-      }
-      downloadText(`微信数据总览-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json')
-    } else if (format === 'md') {
-      downloadText(`微信数据总览报告-${stamp}.md`, buildOverviewReport(data, ins, ledger, stor, now, lastUpdated), 'text/markdown;charset=utf-8')
-    } else {
-      setMoreOpen(false)
-      await new Promise((r) => { setTimeout(r, 40) })
-      const root = rootRef.current
-      if (root) {
-        try {
-          await exportElementImage(root, format, `微信数据总览-${stamp}.${format}`)
-        } catch (e) {
-          hold('图片导出失败: ' + (e as Error).message)
-          return
-        }
-      }
-    }
-    flash('已导出报告', 2500)
+    await exportOverviewImage({
+      format,
+      hasData: data !== null,
+      root: rootRef.current,
+      closeMenu: () => { setMoreOpen(false) },
+      imageTask,
+      reportExport,
+      hold,
+    })
   }
 
   const largeFiles = stor?.large_files?.slice(0, 4) ?? []
@@ -198,25 +275,34 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         actions={(
           <>
             {/* 页头只留两个动作（微信化层级）：刷新 + 更多。导出与归档收进「更多 ▾」。 */}
-            <button type="button" className={css.refresh} onClick={() => { void load() }} disabled={loading || refreshing}>
+            <button type="button" className={css.refresh} onClick={() => { lastAutoRefreshAtRef.current = Date.now(); void runLoad() }} disabled={loading || refreshing}>
               {(loading || refreshing)
                 ? <><span className={css.spinner} /> {loading ? '统计中…' : '更新中…'}</>
                 : done ? '✓ 已更新' : '刷新'}
             </button>
-            <div className={css.exportWrap}>
-              <button type="button" className={css.refresh} aria-expanded={moreOpen} onClick={() => { setMoreOpen(v => !v) }} disabled={!data}>
+            <div className={css.exportWrap} ref={moreRootRef}>
+              <button
+                ref={moreTriggerRef}
+                type="button"
+                className={css.refresh}
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                onClick={() => { setMoreOpen(v => !v) }}
+                disabled={!data}
+                title={!data && !loading ? '数据加载完成后可导出' : undefined}
+              >
                 更多 ▾
               </button>
               {moreOpen && (
                 <>
                   <div className={css.exportBackdrop} onClick={() => { setMoreOpen(false) }} />
                   <div className={css.exportMenu} role="menu" aria-label="更多操作">
-                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('md'); setMoreOpen(false) }}>导出报告 · Markdown</button>
-                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('json'); setMoreOpen(false) }}>导出数据 · JSON</button>
-                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('png'); setMoreOpen(false) }}>导出图片 · PNG</button>
-                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('jpg'); setMoreOpen(false) }}>导出图片 · JPG</button>
-                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void exportAll() }} disabled={exporting} {...desktopActionProps()}>
-                      {exporting ? '归档中…' : desktopAction() ? '归档全部会话 ZIP（仅电脑）' : '归档全部会话 ZIP'}
+                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('md'); setMoreOpen(false) }} disabled={reportExport.running || imageTask.running}>{reportExport.running ? '报告导出中…' : '导出报告 · Markdown'}</button>
+                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('json'); setMoreOpen(false) }} disabled={reportExport.running || imageTask.running}>{reportExport.running ? '数据导出中…' : '导出数据 · JSON'}</button>
+                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('png'); setMoreOpen(false) }} disabled={reportExport.running || imageTask.running}>{imageTask.running ? '图片导出中…' : '导出图片 · PNG'}</button>
+                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void doExport('jpg'); setMoreOpen(false) }} disabled={reportExport.running || imageTask.running}>{imageTask.running ? '图片导出中…' : '导出图片 · JPG'}</button>
+                    <button type="button" className={css.exportItem} role="menuitem" onClick={() => { void exportAll() }} disabled={archiveTask.running} {...desktopActionProps()}>
+                      {archiveTask.finishing ? '完成中…' : archiveTask.running ? '归档中…' : desktopAction() ? '归档全部会话文本 ZIP（仅电脑）' : '归档全部会话文本 ZIP'}
                     </button>
                   </div>
                 </>
@@ -229,6 +315,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       {/* 正文独立滚动：页头（含「更多」菜单）保持可见（见 kit.module.css 的 .panelBody） */}
       <div className={kitCss.panelBody}>
         {notice && <div className={kitCss.emptyInline}>{notice}</div>}
+        <ExportProgressStatus state={archiveTask.state} onCancel={() => { void archiveTask.cancel() }} />
+        <ExportProgressStatus state={imageTask.state} />
+        <ExportProgressStatus state={reportExport.state} />
         {!debugSkeleton && error && data !== null && <ErrorState message="后台刷新失败（正在展示缓存数据）" />}
         {data === null || debugSkeleton ? <SkeletonOverview /> : null}
 

@@ -53,9 +53,9 @@ describe('W2-8.2 exportCsv 的检查点位置', () => {
   const body = bodyOf(flows, 'export async function exportCsv(')
   const checks = body.match(/throwIfCancelled\(ctrl\?\.signal\)/g) ?? []
 
-  it('每个拼行分支都有一处取消检查（六种导出类型一个都不能少）', () => {
-    // contacts / favorites / records / moments / privacy 五个 for 循环 + 函数开头 + 写盘前 = 7。
-    expect(checks.length, '取消检查点比预期少 ⇒ 有某条导出路径停不下来').toBe(7)
+  it('每个拼行分支都有一处取消检查（七种导出类型一个都不能少）', () => {
+    // contacts / favorites / files / records / moments / privacy 六个分支 + 函数开头 + 写盘前 = 8。
+    expect(checks.length, '取消检查点比预期少 ⇒ 有某条导出路径停不下来').toBe(8)
     const loops = ['for (const c of env.contacts) {', 'for (const f of env.favorites) {', 'for (const it of env.items) {', 'for (const m of env.moments) {', 'for (const c of env.categories) {']
     for (const l of loops) {
       const i = body.indexOf(l)
@@ -63,6 +63,9 @@ describe('W2-8.2 exportCsv 的检查点位置', () => {
       const seg = body.slice(i, i + 260)
       expect(seg, '这个分支里没有取消检查 ⇒ 几万行的那几种 CSV 停不下来：' + l).toContain('throwIfCancelled(ctrl?.signal)')
     }
+    const files = body.indexOf("} else if (kind === 'files') {")
+    expect(files, '文件清单导出分支不见了').toBeGreaterThan(-1)
+    expect(body.slice(files, files + 320), '文件清单分页没有取消检查').toContain('throwIfCancelled(ctrl?.signal)')
   })
 
   it('写盘前那一道必须在（取消 ⇒ 一个字节都不落盘）', () => {
@@ -127,11 +130,13 @@ describe('W2-8.2 年报扫描内部', () => {
 })
 
 describe('W2-8.2 gateway 接线', () => {
-  it('两条入口都经 withStreamJob 传 streamControl，并在成功/失败两条路径上清在飞槽', () => {
-    // withStreamJob 是模块级助手：它在 finally 里清在飞槽 —— 少这一步，
-    // 同一个 jobId 的下一次调用会撞上「上一个还在跑」。
+  it('两条入口都经 withStreamJob 传 streamControl，并在成功/失败两条路径上按本轮 token 结算', () => {
+    // withStreamJob 是模块级助手：成功与异常都必须收尾，而且要把本轮 token 传回去，
+    // 否则复用同一个 jobId 时旧任务晚到的 finish 会误伤新任务。
     expect(remotes).toContain('rc.streamControl(jobId)')
-    expect(remotes).toMatch(/finally \{[\s\S]{0,80}rc\.finishStreamJob\(jobId\)/)
+    const helper = bodyOf(remotes, 'async function withStreamJob<T>')
+    expect(helper).toContain('rc.finishStreamJob(jobId, undefined, ctrl.jobToken)')
+    expect(helper).toContain('rc.finishStreamJob(jobId, message, ctrl.jobToken, isCancelMessage(message))')
     const ar = bodyOf(remotes, 'async exportAnnualReport(')
     expect(ar).toContain('withStreamJob(rc, normalizeJobId(options?.jobId)')
     expect(ar, '年报的失败路径没清在飞槽').toContain("failStreamJob(rc, normalizeJobId(options?.jobId), 'export_annual_report'")

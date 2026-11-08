@@ -16,6 +16,8 @@ import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
 import { MasonryGrid } from './annual-masonry.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { IdentityName } from './identity.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 import {
   AssetsCard, CatchphraseTopCard, ExtremesCard, GroupsCard, MediaCallCard, MomentsCard,
   MoneyCard, MonthlyTrendCard, RevokeCard, YearPortrait,
@@ -669,6 +671,16 @@ function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, strin
 /** WAL 实时刷新的最小间隔：年报是逐条扫一年消息的重查询（无 api 层缓存），无感 ≠ 每秒重算。 */
 const ANNUAL_LIVE_MIN_INTERVAL_MS = 60_000
 
+function avatarUsernamesForReview(data: NormalizedReview): string[] {
+  return [...new Set([
+    ...data.ranking.map(x => x.username),
+    ...data.monthlyStar.map(x => x.username),
+    ...(data.buddy ? [data.buddy.username] : []),
+    ...(data.starUsername ? [data.starUsername] : []),
+    ...data.highlights.map(x => x.username),
+  ].filter(Boolean))].slice(0, 60)
+}
+
 export function AnnualPanel(): React.JSX.Element {
   const [years, setYears] = useState<readonly number[]>([])
   const [year, setYear] = useState<number | null>(null)
@@ -676,10 +688,11 @@ export function AnnualPanel(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [av, setAv] = useState<Map<string, string | null>>(new Map())
-  const [exporting, setExporting] = useState(false)
-  const [exportMsg, setExportMsg] = useState('')
+  const exportTask = useExportTask()
   /** 面板根节点：导出时量它的矩形做截图（含标题栏/工具栏/页脚，不含左侧导航与顶部栏）。 */
   const shellRef = useRef<HTMLDivElement | null>(null)
+  /** 年份切换和 WAL 刷新可能重叠：只允许最后发起的一次请求提交状态。 */
+  const loadSeqRef = useRef(0)
   /**
    * 2026-09-30 删掉了「一屏海报」那套自适应：`bodyRef` + `compact` 状态 + 被切检测 +
    * 那套被切标记属性 全没了。理由是用户要求「将下段卡片全部迁移到上段卡片中」——
@@ -702,21 +715,23 @@ export function AnnualPanel(): React.JSX.Element {
   useEffect(() => { void loadYears() }, [loadYears])
 
   const load = useCallback(async (y: number): Promise<void> => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     // 先出缓存秒开（首次扫描要逐条读一年消息，较慢）。
     // ⚠️ 缓存必须过 `normalizeReview`：旧版本写下的缓存没有底部五个新字段，
     // 直接喂给卡片会在渲染期抛 TypeError（`undefined.count`）⇒ 整窗黑屏。见 `annual-normalize.ts`。
     const cached = readRenderCache<AnnualReviewShape>(annualReviewCacheKey(y))
-    if (cached) setData(normalizeReview(cached))
+    if (seq === loadSeqRef.current && cached) setData(normalizeReview(cached))
     try {
       const r = await apiGetAnnualReview(y)
+      if (seq !== loadSeqRef.current) return
       setData(normalizeReview(r as AnnualReviewShape))
       writeRenderCache(annualReviewCacheKey(y), r)
     } catch (e) {
-      if (!cached) setError((e as Error).message)
+      if (seq === loadSeqRef.current && !cached) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [])
 
@@ -736,13 +751,7 @@ export function AnnualPanel(): React.JSX.Element {
   // 头像批量拉取（一次 Remote，避免每张卡片各拉一遍）
   useEffect(() => {
     if (!data) return
-    const users = [...new Set([
-      ...data.ranking.map(x => x.username),
-      ...data.monthlyStar.map(x => x.username),
-      ...(data.buddy ? [data.buddy.username] : []),
-      ...(data.starUsername ? [data.starUsername] : []),
-      ...data.highlights.map(x => x.username),
-    ].filter(Boolean))].slice(0, 60)
+    const users = avatarUsernamesForReview(data)
     if (users.length === 0) return
     void apiGetAvatarsLocal({ usernames: users })
       .then((map) => { setAv(new Map(Object.entries(map).filter(([, v]) => typeof v === 'string'))) })
@@ -750,31 +759,39 @@ export function AnnualPanel(): React.JSX.Element {
   }, [data])
 
   const doExport = useCallback(async (): Promise<void> => {
-    if (year === null || exporting) return
+    if (year === null || exportTask.running) return
     const el = shellRef.current
-    if (!el) { setExportMsg('导出失败：找不到面板'); return }
-    setExporting(true)
-    setExportMsg('')
-    try {
+    if (!el) return
+    await exportTask.run(async () => {
       // 所见即所存：直接量面板矩形的 CSS 像素坐标交给主进程 capturePage，
       // 不另写报告模板 —— 导出的 PNG 与界面逐像素一致。
-      const r = el.getBoundingClientRect()
-      const res = await apiCapturePanel({
-        x: r.left,
-        y: r.top,
-        width: r.width,
-        height: r.height,
-        filename: `微信年度报告-${year}.png`,
-      })
-      if (!res.ok) setExportMsg('导出失败：' + (res.message || '未知错误'))
-      else if (res.canceled) setExportMsg('已取消导出')
-      else setExportMsg(`已导出 PNG（${res.width}×${res.height}）→ ${res.path}`)
-    } catch (e) {
-      setExportMsg('导出失败：' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
-  }, [year, exporting])
+      const hidden = Array.from(el.querySelectorAll<HTMLElement>('[data-export-exclude]'))
+      const previousDisplay = hidden.map(node => node.style.display)
+      hidden.forEach(node => { node.style.display = 'none' })
+      try {
+        await new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve() }) })
+        const r = el.getBoundingClientRect()
+        const res = await apiCapturePanel({
+          x: r.left,
+          y: r.top,
+          width: r.width,
+          height: r.height,
+          filename: `微信年度报告-${year}.png`,
+        })
+        if (res.canceled) throw new Error('已取消导出')
+        if (!res.ok) throw new Error(res.message || '未知错误')
+        return res
+      } finally {
+        hidden.forEach((node, index) => { node.style.display = previousDisplay[index] ?? '' })
+      }
+    }, {
+      idPrefix: 'annual-image',
+      label: '导出年度报告',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (res) => `已导出 PNG（${res.width}×${res.height}）→ ${res.path}`,
+    })
+  }, [year, exportTask])
 
   /**
    * 数据覆盖范围（只在**只有一个年份**时用）。
@@ -829,14 +846,14 @@ export function AnnualPanel(): React.JSX.Element {
                 {years.map(y => <option key={y} value={y}>{y} 年</option>)}
               </select>
             )}
-            <button type="button" className={css.toolBtn} onClick={() => { void doExport() }} disabled={exporting || year === null || !runtimeCapabilities().capturePanel} title="把年度回顾截成 PNG —— 截的是这台电脑上的这块屏">
-              {exporting ? '导出中…' : runtimeCapabilities().capturePanel ? '导出报告' : '导出报告（仅电脑）'}
+            <button type="button" className={css.toolBtn} onClick={() => { void doExport() }} disabled={exportTask.running || year === null || !runtimeCapabilities().capturePanel} title="把年度回顾截成 PNG —— 截的是这台电脑上的这块屏">
+              {exportTask.running ? '导出中…' : runtimeCapabilities().capturePanel ? '导出报告' : '导出报告（仅电脑）'}
             </button>
           </div>
         )}
       />
       <div className={`${kitCss.panelBody} ${css.scrollBody}`}>
-        {exportMsg && <div className={css.hint}>{exportMsg}</div>}
+        <ExportProgressStatus state={exportTask.state} />
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {/* 加载骨架屏：与真实卡片**同构**（同一个 12 列网格 + 同样的 span/rows 分布），
             加载完成时只有内容替换、没有布局跳变。见 `annual-skeleton.tsx` 的说明。 */}

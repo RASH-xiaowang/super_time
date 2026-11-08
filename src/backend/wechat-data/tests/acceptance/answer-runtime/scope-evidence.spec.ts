@@ -34,7 +34,7 @@ describe('引用 evidence 的稳定 key', () => {
   })
 })
 
-describe('ClawBot 回复不携带 [n] 角标', () => {
+describe('聊天回复不携带 [n] 角标', () => {
   it('确定性清理覆盖单词、连续与带空格角标', () => {
     expect(stripCitationMarkers('收到 13.00 元 [1][2]，明天到账。'))
       .toBe('收到 13.00 元，明天到账。')

@@ -18,7 +18,6 @@
  * 全部是纯函数、可离线，因此可以单测与回归。
  */
 import { parseCitedIndexes } from './ask.ts'
-import { CLAWBOT_UNVERIFIED_VALUE_REPLY } from './answer-runtime/persona.ts'
 
 /** 高风险值类型。 */
 export type GroundingKind = 'amount' | 'date' | 'digits'
@@ -44,17 +43,25 @@ export interface GroundingAudit {
   ok: boolean
 }
 
-/** 回答面向的展示场景：界面问答要引用角标，自动回复禁止角标。 */
-export type GroundingReplyMode = 'cited' | 'chat'
+/** 回答面向的展示场景：普通问答要引用角标，独立资源回答禁止角标。 */
+export type GroundingReplyMode = 'cited' | 'plain'
 
 /** 接地审计选项。 */
 export interface GroundingAuditOptions {
   /**
    * 是否要求事实句带 `[n]` 角标，缺省 true。
-   * 自动回复在微信里没有可点击角标，必须显式关闭这项要求；
+   * 独立资源回答没有可点击角标，必须显式关闭这项要求；
    * 关闭后金额/日期/长数字仍会逐项核对，不会降低事实校验强度。
    */
   requireCitationMarkers?: boolean
+  /**
+   * 允许作为高风险值出处的用户输入文本。
+   *
+   * 用户问题里已经写明的日期/金额不是模型编造；回答复述这些值时应放行，
+   * 否则「2026-10-27 ~ 2026-11-02」这类范围端点会被误判为无出处日期，
+   * 每次都触发一次昂贵的整段重写。
+   */
+  allowValuesFrom?: readonly string[]
 }
 
 /** 最多回报几条违规值（避免把提示词塞满）。 */
@@ -225,6 +232,29 @@ function digitsSupported(value: string, pool: readonly string[]): boolean {
   return false
 }
 
+/** 句子里的高风险值是否全部由用户问题/固定范围直接给出。 */
+function onlyTrustedRiskValues(text: string, trusted: ValuePools | undefined): boolean {
+  if (trusted === undefined) return false
+  const values = scanValues(text)
+  if (values.length === 0) return false
+  for (const value of values) {
+    let supported = false
+    if (value.kind === 'date') {
+      const date = normDate(value.raw)
+      supported = date !== '' && trusted.dates.has(date)
+    } else if (value.kind === 'amount') {
+      const cents = amountToCents(value.raw)
+      supported = Number.isFinite(cents)
+        && (trusted.cents.has(cents) || trusted.sums.has(cents))
+    } else {
+      const digits = digitsOnly(value.raw)
+      supported = digits.length >= 7 && digitsSupported(digits, trusted.digits)
+    }
+    if (!supported) return false
+  }
+  return true
+}
+
 /**
  * 审计一轮回答的接地情况。
  * @param answer - 回答正文。
@@ -240,6 +270,9 @@ export function auditGrounding(
 ): GroundingAudit {
   const text = String(answer || '')
   const pools = buildValuePools(evidenceTexts)
+  const trusted = options.allowValuesFrom && options.allowValuesFrom.length > 0
+    ? buildValuePools(options.allowValuesFrom)
+    : undefined
 
   const seen = new Set<string>()
   const unsupported: GroundingViolation[] = []
@@ -251,17 +284,21 @@ export function auditGrounding(
       const d = normDate(v.raw)
       if (!d) continue
       key = 'date:' + d
-      supported = pools.dates.has(d)
+      supported = pools.dates.has(d) || trusted?.dates.has(d) === true
     } else if (v.kind === 'amount') {
       const c = amountToCents(v.raw)
       if (!Number.isFinite(c)) continue
       key = 'amount:' + c
-      supported = pools.cents.has(c) || pools.sums.has(c)
+      supported = pools.cents.has(c)
+        || pools.sums.has(c)
+        || trusted?.cents.has(c) === true
+        || trusted?.sums.has(c) === true
     } else {
       const s = digitsOnly(v.raw)
       if (s.length < 7) continue
       key = 'digits:' + s
       supported = digitsSupported(s, pools.digits)
+        || (trusted !== undefined && digitsSupported(s, trusted.digits))
     }
     if (seen.has(key)) continue
     seen.add(key)
@@ -278,6 +315,9 @@ export function auditGrounding(
   if (options.requireCitationMarkers !== false) {
     for (const sentence of text.match(SENTENCE_RE) ?? []) {
       if (scanValues(sentence).length === 0) continue
+      // 用户问题里已经写明的日期/金额不需要模型再为它标证据角标；
+      // 否则「你问的 X 到 Y……」这种复述会每次都触发一次昂贵重写。
+      if (onlyTrustedRiskValues(sentence, trusted)) continue
       if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1
     }
   }
@@ -295,13 +335,13 @@ export function auditGrounding(
 export function groundingRepairHint(audit: GroundingAudit, mode: GroundingReplyMode = 'cited'): string {
   if (audit.unsupported.length === 0) return ''
   const list = audit.unsupported.map(v => `「${v.value}」`).join('、')
-  if (mode === 'chat') {
-    return `【核对未通过】你写的 ${list} 在检索材料里找不到出处。请按微信聊天口吻改写：\n`
+  if (mode === 'plain') {
+    return `【核对未通过】你写的 ${list} 在检索材料里找不到出处。请改写：\n`
       + ' · 如果它们是**合计**，写明由哪几条相加得出（如「3500+3500=7000」）；\n'
       + ' · 如果不是合计，就删掉，或改成材料里**原样出现**的值；\n'
       + ' · 日期只能写材料里出现过的日期，不要自己换算或推测；\n'
       + ' · 不要标 [n]，不要提引用、来源、材料或核对过程；\n'
-      + ` · 实在无法确认这个数字，就直说「${CLAWBOT_UNVERIFIED_VALUE_REPLY}」。`
+      + ' · 实在无法确认这个数字，就直说「这个数字我这边没法确认」。'
   }
   return `【核对未通过】你写的 ${list} 在你引用的原文里找不到出处。请改写：\n`
     + ' · 如果它们是**合计**，写明由哪几条相加得出（如「3500+3500=7000」）；\n'
@@ -309,7 +349,7 @@ export function groundingRepairHint(audit: GroundingAudit, mode: GroundingReplyM
     + ' · 日期只能写原文里出现过的日期，不要自己换算或推测。'
 }
 
-/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的微信自动回复）。 */
+/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的独立资源回答）。 */
 export function stripCitationMarkers(text: string): string {
   return String(text || '').replace(/[ \t]*\[[ \t]*\d{1,3}[ \t]*\]/g, '').trim()
 }

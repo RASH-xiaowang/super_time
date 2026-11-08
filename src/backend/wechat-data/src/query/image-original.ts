@@ -32,7 +32,6 @@
  * 这里的 `md5` 必须是 `packed_info_data` 里那份，**不是** XML 的 `md5=`：实测后者与
  * `msg/attach` 下的文件名 0% 命中（4.x 它不是文件身份），只有前者 100% 命中。
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -41,6 +40,7 @@ import { fetchWithRetry } from '../net/fetch-retry.ts'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { resolveImageResourceHint } from './media-image.ts'
 import { shardCatalogDirs } from './meta.ts'
+import { resolveMessageTable } from './message-identity.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 
@@ -103,10 +103,12 @@ export function resolveImageOriginalLink(
   username: string,
   localId: number,
 ): ImageOriginalLink | null {
-  const hint = resolveImageResourceHint(decryptedDir, username, localId)
+  const resolved = resolveMessageTable(decryptedDir, username)
+  if (!resolved) return null
+  const hint = resolveImageResourceHint(decryptedDir, resolved.username, localId)
   const md5 = hint.md5
   if (!md5) return null
-  const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  const table = resolved.table
   for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
     const meta = shard.tables.get(table)
     if (!meta) continue

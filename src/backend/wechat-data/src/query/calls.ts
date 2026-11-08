@@ -22,11 +22,11 @@
  * 所以它在拿到时长分布证据后按 **0=语音 / 1=视频** 判定 —— 判据与反例都写在
  * `parse.ts` 的 `parseVoipKind` 注释里。
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { join } from 'node:path'
 import { contactMeta, shardCatalog, shardCatalogSig, cachedBySigAsync, fileSigOf } from './meta.ts'
+import { displayNameForUsername, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { CallRecord, CallPeer, CallMonthRow, CallsSnapshot } from '../types.ts'
 
@@ -80,14 +80,6 @@ function parseDuration(text: string): number | undefined {
   return m[3] === undefined ? a * 60 + b : a * 3600 + b * 60 + Number(m[3])
 }
 
-/** md5(username) → username, for the `Msg_<md5>` table names. */
-function md5Index(decryptedDir: string): Map<string, string> {
-  const names = contactMeta(decryptedDir).names
-  const map = new Map<string, string>()
-  for (const u of names.keys()) map.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
-  return map
-}
-
 interface RawCall {
   username: string
   localId: number
@@ -101,7 +93,7 @@ interface RawCall {
 
 /** Scan every message shard for type-50 rows and decode the voip XML. */
 async function scanCalls(decryptedDir: string, selfUsername: string): Promise<RawCall[]> {
-  const byMd5 = md5Index(decryptedDir)
+  const identity = messageIdentityIndex(decryptedDir, ['message'])
   const self = (selfUsername ?? '').trim()
   const out: RawCall[] = []
   for (const shard of shardCatalog(decryptedDir)) {
@@ -123,7 +115,7 @@ async function scanCalls(decryptedDir: string, selfUsername: string): Promise<Ra
             `SELECT local_id AS l, create_time AS t, real_sender_id AS s, message_content AS c FROM "${table}" WHERE (local_type & 4294967295) = 50`,
           ).iterate() as Iterable<Record<string, unknown>>
         } catch { continue }
-        const talker = byMd5.get(table.slice(4)) ?? ''
+        const talker = identity.tableToUsername.get(table) ?? ''
         let sinceYield = 0
         for (const r of rows) {
           const xml = decodeContent(r['c'])
@@ -220,7 +212,7 @@ function buildSnapshot(
       const enterpriseName = enterpriseNames.get(username)?.trim()
       return {
         username,
-        name: names.get(username) ?? username,
+        name: displayNameForUsername(username, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         ...p,
       }
@@ -237,7 +229,7 @@ function buildSnapshot(
       const enterpriseName = enterpriseNames.get(c.username)?.trim()
       return {
         username: c.username,
-        name: names.get(c.username) ?? c.username,
+        name: displayNameForUsername(c.username, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         localId: c.localId,
         createTime: c.createTime,
@@ -255,7 +247,7 @@ function buildSnapshot(
     durationSec,
     avgSec: connectedDurations.length > 0 ? Math.round(durationSec / connectedDurations.length) : 0,
     longestSec,
-    longestPeer: longestPeer ? (names.get(longestPeer) ?? longestPeer) : '',
+    longestPeer: longestPeer ? displayNameForUsername(longestPeer, names) : '',
     outgoing,
     incoming: total - outgoing,
     ackElsewhere: raw.filter(c => !c.durationSec && ANSWERED_ELSEWHERE.test(c.status)).length,
@@ -283,12 +275,25 @@ export async function queryCalls(decryptedDir: string, selfUsername?: string, to
   const self = selfUsername ?? ''
   // 通话快照里的对端昵称来自 contact.db，所以它也必须进签名：原先只签分片 + self，
   // 靠「事件后整表清空」兜住（M8 去掉那层兜底后必须补上真正读了的东西）。
-  const sig = shardCatalogSig(decryptedDir, ['message']) + '|' + self + '|' + fileSigOf(join(decryptedDir, 'contact', 'contact.db'))
+  const sig = [
+    shardCatalogSig(decryptedDir, ['message']),
+    self,
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    fileSigOf(join(decryptedDir, 'message', 'message_resource.db')),
+    fileSigOf(join(decryptedDir, 'session', 'session.db')),
+  ].join('|')
   const meta = contactMeta(decryptedDir)
+  const identity = messageIdentityIndex(decryptedDir, ['message'])
   // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 87ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
   return cachedBySigAsync('calls:' + decryptedDir, sig, async () => {
     const raw = await scanCalls(decryptedDir, self)
-    return buildSnapshot(raw, meta.names, meta.enterpriseNames, topPeers, recentLimit)
+    return buildSnapshot(
+      raw,
+      mergeDisplayNames(decryptedDir, identity.usernames),
+      meta.enterpriseNames,
+      topPeers,
+      recentLimit,
+    )
   }, 60_000)
 }

@@ -52,7 +52,7 @@ import {
   apiSetTaskInfoStatus,
 } from '../api-task-center.ts'
 import { TASK_CENTER_UPDATED_EVENT } from '../task-center-events.ts'
-import { useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
+import { useTransientNotice } from './hooks.tsx'
 import { useFreshData } from './use-fresh-data.ts'
 import {
   Button,
@@ -271,7 +271,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
           <>
             <Button
               size="sm"
-              variant="pill"
+              variant="outline"
               aria-label="刷新任务信息"
               aria-busy={refreshBusy}
               onClick={actions.onRefresh}
@@ -283,7 +283,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
                 微信化：写操作加一次二次确认，避免与「刷新」并排时误点。 */}
             <Button
               size="sm"
-              variant="pill"
+              variant="primary"
               onClick={() => {
                 void (async () => {
                   const ok = await confirm({
@@ -295,6 +295,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
                 })()
               }}
               disabled={props.scanning}
+              title={props.scanning ? '正在扫描新消息，请稍候' : undefined}
               {...desktopActionProps()}
             >
               {props.scanning ? '检查中…' : '立即检查'}
@@ -415,9 +416,6 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
 
 /** 两个事件源共用的刷新调度窗（毫秒）：合并同一批变更，别让两个事件各打一轮。 */
 const TASK_CENTER_DEBOUNCE_MS = 150
-/** 宿主 WAL 推送的显式回源延迟：它本身约 10 秒一次，晚一点合并进同一轮即可。 */
-const HOST_REFRESH_DEBOUNCE_MS = 800
-
 /**
  * 面板写动作（从容器拆出，控制单函数行数；取数/刷新调度仍在 `TaskCenterPanel` 里）。
  *
@@ -620,8 +618,8 @@ export function TaskCenterPanel(): React.JSX.Element {
     window.addEventListener(TASK_CENTER_UPDATED_EVENT, onTaskCenterUpdated)
     return () => { window.removeEventListener(TASK_CENTER_UPDATED_EVENT, onTaskCenterUpdated) }
   }, [scheduleRefresh])
-  // ③ 宿主 WAL 推送：`liveRefresh` 已静默重查一次；这条显式回源保证两栏一定同源刷新。
-  useWechatDataUpdated(() => { scheduleRefresh(HOST_REFRESH_DEBOUNCE_MS) }, 'dsh-wechat-data-updated', 300)
+  // ③ 宿主 WAL 推送由两栏各自的 `useFreshData(..., { liveRefresh: true })` 订阅；
+  // 这里不再额外 refreshBoth，否则每次推送会把任务和触发记录各读两遍。
 
   // 选中/展开项只在任务仍存在时有效：被删则回「全部记录」/收起表单，并提示一次。
   const taskData = taskState.data

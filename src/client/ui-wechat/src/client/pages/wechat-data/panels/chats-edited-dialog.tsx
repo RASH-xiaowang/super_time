@@ -31,15 +31,15 @@ export function ChatsEditedDialog(props: ChatsEditedDialogProps): React.JSX.Elem
   const { doReset, editedOpen, editing, edits, setEditedOpen } = props
   if (!editedOpen) return null
   return (
-    <div className={csscards.calOverlay} data-st-dialog="chats-edited"
+    <div className={cssshell.calOverlay} data-st-dialog="chats-edited"
       onClick={(e) => { if (e.target === e.currentTarget) setEditedOpen(false) }}
       role="dialog" aria-modal="true">
-      <div className={csscards.calDialog}>
+      <div className={cssshell.calDialog}>
         <div className={cssshell.calHeader}>
-          <span className={csscards.calTitle}>本会话已编辑消息</span>
-          <button type="button" className={csscards.calClose} onClick={() => { setEditedOpen(false) }} aria-label="关闭">×</button>
+          <span className={cssshell.calTitle}>本会话已编辑消息</span>
+          <button type="button" className={cssshell.calClose} onClick={() => { setEditedOpen(false) }} aria-label="关闭">×</button>
         </div>
-        <div className={csscards.calBody}>
+        <div className={cssshell.calBody}>
           {edits.length === 0 ? (
             <div className={kitCss.emptyInline}>暂无编辑记录（修改仅写入本地解密副本）</div>
           ) : (

@@ -240,8 +240,13 @@ describe('按缺失数据域定向补查', () => {
     }))
 
     expect(searchFiles).toHaveBeenCalledTimes(1)
-    expect(out.toolCalls.find(call => call.name === 'search_files')?.callId)
-      .toContain('supplement_')
+    expect(out.toolCalls.find(call => call.name === 'search_files')).toMatchObject({
+      callId: expect.stringContaining('supplement_'),
+      round: 3,
+    })
+    expect(out.rounds).toBe(3)
+    expect(out.toolCalls.every(call => call.round <= out.rounds)).toBe(true)
+    expect(stages.every(stage => stage.round === undefined || stage.round <= out.rounds)).toBe(true)
     expect(out.status).toBe('ok')
     expect(out.resources.some(resource => resource.tool === 'search_files')).toBe(true)
     expect(stages.find(stage =>
@@ -250,7 +255,10 @@ describe('按缺失数据域定向补查', () => {
       status: 'done',
       hits: 1,
       callId: expect.stringContaining('supplement_'),
+      round: 3,
     })
+    expect(stages.find(stage => stage.key === 'answer:supplement' && stage.status === 'running'))
+      .toMatchObject({ round: 3 })
   })
 
   it('缺少账单域时补一次 search_records', async () => {
@@ -295,38 +303,4 @@ describe('按缺失数据域定向补查', () => {
     expect(out.toolCalls.some(call => call.name === 'search_files')).toBe(false)
   })
 
-  it('clawbot-auto 保持 kb-only，不补 search_files', async () => {
-    const searchKb = vi.fn(() => ({
-      tool: 'search_kb' as const,
-      ok: true,
-      hits: [{
-        key: 'kb:7:1',
-        name: '合同.pdf',
-        time: '',
-        snippet: '知识库里的合同内容',
-        source: 'kb' as const,
-        trace: { kind: 'kb' as const, kbId: 7, fileId: 1, chunkId: 1, ordinal: 0, page: 0, heading: '' },
-      }],
-    }))
-    const searchFiles = vi.fn(() => resourceHit('search_files'))
-    const schemas: string[][] = []
-    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
-      schemas.push((input.tools ?? []).map(schema => schema.name))
-      if (hasToolResult(input)) return turn({ text: '检索完成' })
-      return turn({ call: { id: 'call_kb', name: 'search_kb', args: { query: '合同' } } })
-    }) as unknown as RunChatTurnFn
-
-    await runAnswerRuntime(baseInput({
-      question: '合同文件里写了什么',
-      messages: [userMessage('合同文件里写了什么')],
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [fakeTool('search_kb', searchKb), fakeTool('search_files', searchFiles)],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW },
-      runTurn,
-    }))
-
-    expect(schemas[0]).toEqual(['search_kb'])
-    expect(searchKb).toHaveBeenCalledTimes(1)
-    expect(searchFiles).not.toHaveBeenCalled()
-  })
 })

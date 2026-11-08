@@ -2,8 +2,8 @@
  * 问答运行时 v2 的生产编排层。
  *
  * 运行时（`query/answer-runtime/*`）只负责意图、工具循环、证据与状态；这里把
- * 三个入口的装配细节接起来：
- *   · 微信问答 / 会话内问答 / ClawBot 自动回复共用同一套编排；
+ * 两个入口的装配细节接起来：
+ *   · 微信问答 / 会话内问答共用同一套编排；
  *   · 工具选择阶段只看到规则与范围，证据在综合阶段才出网；
  *   · 所有真正发给模型的文本都先过隐私闸门；
  *   · 最终结果仍保持旧 `AskResult` 形状，新增字段只做附加。
@@ -13,10 +13,10 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type ThreadState } from '../query/answer-runtime/thread-state.ts';
 import { type AnswerIntentLlmClassifier } from '../query/answer-runtime/intent.ts';
-import type { AnswerRuntimeEmitStage, AnswerRuntimeOp, AnswerSynthesizeFn } from '../query/answer-runtime/types.ts';
+import type { AnswerReasoningMeta, AnswerRuntimeEmitStage, AnswerRuntimeOp, AnswerSynthesizeFn } from '../query/answer-runtime/types.ts';
 import type { AnswerStatus } from '../query/answer-runtime/evidence.ts';
-import type { AnswerProfileId } from '../query/tools/profiles.ts';
-import { type AskDataScope, type AskImageInput, type AskScope, type PreparedAskImages } from './ask-runtime-prompt.ts';
+import { type AnswerProfileId } from '../query/tools/profiles.ts';
+import { type AskImageInput, type AskScope, type PreparedAskImages } from './ask-runtime-prompt.ts';
 import { type RunChatFn, type RunChatTurnFn } from './ask-run-chat.ts';
 import type { RetrievalTool, ToolContext } from '../query/tools/types.ts';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
@@ -73,7 +73,7 @@ export interface AskRuntimeDeps {
     /** 本轮取消信号；用于唤醒工具重试退避。 */
     cancelSignal?: AbortSignal;
     emitDelta?: (text: string) => void;
-    emitReasoning?: (text: string) => void;
+    emitReasoning?: (text: string, meta?: AnswerReasoningMeta) => void;
     emitStage?: AnswerRuntimeEmitStage;
     op?: AnswerRuntimeOp;
     now?: Date;
@@ -83,6 +83,8 @@ export interface AskRuntimeDeps {
     toolDeadlineMs?: number;
     /** 单次模型轮次 deadline；缺省由运行时取 120000ms，0 = 关闭。 */
     modelDeadlineMs?: number;
+    /** 首版回答之后的核对/修复 deadline，默认 20000ms；0 = 关闭。 */
+    answerVerifyDeadlineMs?: number;
     sleep?: (ms: number) => Promise<void>;
 }
 /** 单次问答选项（与旧 `askWechat` 入参保持一致）。 */
@@ -98,7 +100,6 @@ export interface AskRuntimeOptions {
     source?: string;
     usernameName?: string;
     kbId?: number;
-    dataScope?: AskDataScope;
     images?: readonly AskImageInput[];
     systemPromptOverride?: string;
     streamId?: string;

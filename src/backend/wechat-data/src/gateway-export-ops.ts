@@ -64,11 +64,12 @@ export abstract class GatewayExportOps extends GatewayMediaOps {
 
   /**
    * Create a local backup snapshot.
+   * @param options - optional jobId for progress and cancellation.
    * @returns BackupMutationResult: ok + backup name, or error.
    */
   @Remote('createBackup')
-  async createBackup(): Promise<BackupMutationResult> {
-    return this.backupRemotes().createBackup()
+  async createBackup(options?: { jobId?: string }): Promise<BackupMutationResult> {
+    return this.backupRemotes().createBackup(options)
   }
 
 
@@ -133,6 +134,8 @@ async exportAnnualReport(options: { year: number; format: string; dir?: string; 
     done: number
     total: number
     finished: boolean
+    status: 'running' | 'ok' | 'error' | 'canceled'
+    cancelRequested: boolean
     error?: string
   } {
   return this.exportRemotes().getExportProgress(options)
@@ -155,6 +158,9 @@ async exportAnnualReport(options: { year: number; format: string; dir?: string; 
     month?: string
     mine?: string
     zip?: boolean
+    includeImages?: boolean
+    includeVideos?: boolean
+    includeLivePhotos?: boolean
     from?: number
     to?: number
     dir?: string

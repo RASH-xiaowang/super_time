@@ -12,7 +12,19 @@
  */
 const { verifyPayload } = require('./crypto')
 const { getDeviceFingerprint } = require('./fingerprint')
-const { validatePayload, evaluatePayload, PRODUCT_ID, KNOWN_FEATURES } = require('./schema')
+const {
+  validatePayload,
+  evaluatePayload,
+  PRODUCT_ID,
+  KNOWN_FEATURES,
+  FEATURE_SCHEMA_VERSION,
+  REQUIRED_FEATURES,
+  FEATURE_CATALOG,
+  FEATURE_GROUPS,
+  FEATURE_LABELS,
+  GRANULAR_FEATURES,
+  featureLabel,
+} = require('./schema')
 const { readLicenseFile, writeLicenseFile, deleteLicenseFile, licensePath } = require('./store')
 const { PUBLIC_KEY_PEM } = require('./public-key')
 
@@ -36,6 +48,10 @@ function getLicenseStatus(userDataDir, appVersion) {
     },
     licensePath: licensePath(userDataDir),
     knownFeatures: KNOWN_FEATURES,
+    featureSchemaVersion: FEATURE_SCHEMA_VERSION,
+    featureGroups: FEATURE_GROUPS,
+    featureCatalog: FEATURE_CATALOG,
+    featureLabels: FEATURE_LABELS,
     mode: 'hybrid-local',
   }
 
@@ -111,6 +127,7 @@ function getLicenseStatus(userDataDir, appVersion) {
       seats: doc.payload.seats,
       appVersionMin: doc.payload.appVersionMin ?? null,
       notes: doc.payload.notes ?? '',
+      featureSchemaVersion: doc.payload.featureSchemaVersion ?? null,
     },
     importedAt: doc.importedAt ?? null,
     // 到期前提示
@@ -169,48 +186,135 @@ function hasFeature(status, feature) {
 
 /**
  * Remote 方法 → 所需 License 功能位。
- * 未列出的方法默认要求 wechat-data。
+ * 表中的方法必须逐一登记；未列出的方法默认要求 wechat-data。
+ *
+ * 一张证书里只有被签名的 features 列表有效。`FEATURE_METHODS` 按功能分组维护，
+ * 构建 `METHOD_FEATURE` 时若同名方法出现在两个功能位会直接抛错，避免静默覆盖。
  */
-const METHOD_FEATURE = {
-  askWechat: 'ai-ask',
-  optimizeAskQuestion: 'ai-ask',
-  generateDailySummary: 'ai-summary',
-  generatePeriodSummary: 'ai-summary',
-  // 文件摘要与日/周期总结同一档：都是「把内容交给模型换一段概括」，
-  // 不该比问答要更高的授权，也不该混进 ai-ask（那样关掉摘要功能位就停不掉它）。
-  summarizeKbFile: 'ai-summary',
-  // 实体抽取与链接建议同上：都是「把内容交给模型换一段产出」，不产生新权利。
-  // 漏登记的后果不是「谁都能用」而是**反的** —— fail-closed 回落到 wechat-data 档，
-  // 只买了数据浏览没买 AI 授权的人反而能调它出网（`authorizeCall` 的默认分支）。
-  extractKbEntities: 'ai-summary',
-  suggestKbLinks: 'ai-summary',
-  // 建索引与语义检索：三者都把正文/查询交给向量模型，且都是「不可读的中间态」——
-  // 索引本身不给用户看，产出只服务于检索。故归 ai-ask 而不是 ai-summary：
-  // 放进 ai-summary 会让「只买摘要档」的授权建得出索引、却用不了检索，
-  // 而关掉 ai-ask 也停不掉这三处的出网。
-  buildKbVectorIndex: 'ai-ask',
-  // 会话内「推荐回复」：把该会话最近若干条对话（+ 选中知识库片段）交给模型换候选回复，
-  // 与 askWechat 同档（它就是「问答」的一种形态）。
-  suggestReplies: 'ai-ask',
-  buildRagVectorIndex: 'ai-ask',
-  searchKb: 'ai-ask',
-  // 周期总结任务：与 generateDailySummary / generatePeriodSummary 同档。
-  runSummaryTask: 'ai-summary',
-  exportSessionMessages: 'export',
-  exportCsv: 'export',
-  exportAnnualReport: 'export',
-  exportAllSessions: 'export',
-  exportMoments: 'export',
-  createBackup: 'backup',
-  createEncryptedBackup: 'backup',
-  restoreBackup: 'backup',
-  deleteBackup: 'backup',
-  transcribeVoiceBatch: 'voice-transcribe',
-  getPrivacyScan: 'privacy-audit',
-  getPrivacyState: 'privacy-audit',
-  setPrivacyState: 'privacy-audit',
-  getPrivacyAuditRows: 'privacy-audit',
-  clearPrivacyAudit: 'privacy-audit',
+const FEATURE_METHODS = {
+  'wechat-data': [
+    'autoGetDbKey', 'autoGetImageKey', 'detectWechatAccounts', 'getArticleCover',
+    'getArticleCovers', 'getAvatar', 'getAvatarsLocal', 'getDataRevision',
+    'getRemoteImages', 'getSelfProfile', 'getSelfUsername', 'getWechatConfig',
+    'getWechatConfigFull', 'getWechatKeysInfo', 'getWxcdnQuota',
+    'listLlmModels', 'listLlmProviders', 'openConfig', 'openPath',
+    'saveWechatConfig', 'verifyDatabaseKey', 'verifyImageKey',
+    'generateKeysFile', 'decryptAllDatabases', 'decryptAllImages', 'getDecryptStatus',
+  ],
+  overview: [
+    'getDailyCounts', 'getMapGeoJson', 'getOverview', 'getOverviewInsights',
+    'getRegionMap', 'getWordCloud',
+  ],
+  chats: [
+    'clearAllSessionDrafts', 'clearSessionDraft', 'editChatMessage', 'getCalls',
+    'getGroupInfo', 'getImageDataUrl', 'getImageDataUrlsBatch', 'getImageOriginal',
+    'getMessageFile', 'getMessages', 'getNewMessages', 'getRevoked', 'getSessions',
+    'getVideoInfo', 'getVoiceDataUrl', 'getVoiceInfo', 'listEditedMessages',
+    'resetEditedMessage', 'resolveChatHistory', 'searchMessages',
+  ],
+  contacts: ['getContact360', 'getContacts', 'getGraph', 'searchMembers'],
+  moments: [
+    'getMoments', 'getMomentsAuthors', 'getMomentsInsights', 'getMomentsMonthly',
+    'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoCoversBatch',
+    'getSnsVideoDataUrl',
+  ],
+  favorites: [
+    'deleteFavoriteItems', 'getAssetInsights', 'getEmoticonDataUrl',
+    'getEmoticonDataUrls', 'getEmoticons', 'getFavoriteMediaDataUrl', 'getFavorites',
+  ],
+  files: [
+    'fetchOriginalImagesBatch', 'getFileImageDataUrl', 'getFileImageDataUrls',
+    'getFiles', 'getMediaAssets', 'getOfficialAssets', 'getOriginalHarvestStatus',
+    'getStorageStats', 'originalHarvest', 'planOriginalFetch',
+  ],
+  ledger: ['getLedger', 'getPaymentStatus', 'getRecords'],
+  'group-insights': ['getGroupInsights'],
+  'knowledge-base': [
+    'addKbFiles', 'createKb', 'deleteKb', 'deleteKbFile', 'deleteNote', 'getKbFileChunks',
+    'getKbFiles', 'getKbModelConfig', 'getKbs', 'getKnowledgeGraph', 'getNotes',
+    'renameKb', 'saveNote', 'setKbFileRag',
+  ],
+  'annual-report': ['generateAnnualNarrative', 'getAnnual', 'getAnnualReport', 'getAnnualReview'],
+  search: [
+    'buildSearchIndex', 'cancelSearch', 'cancelSearchIndexBuild', 'getSearchIndexStatus',
+    'searchUnified',
+  ],
+  tasks: [
+    'addTask', 'deleteTask', 'extractTasks', 'getHandoffReminds', 'listTasks',
+    'setTaskStatus', 'syncHandoffTasks',
+  ],
+  'task-center': [
+    'createChatCollectTask', 'deleteTaskInfo', 'deleteTaskInfos', 'deleteTaskTriggers',
+    'dispatchTaskCallback', 'listChatCollectTasks', 'listRpaVendors', 'listTaskInfos',
+    'listTaskTriggers', 'revealTaskTriggerSecret', 'saveTaskInfo', 'scanTaskTriggers',
+    'setTaskInfoStatus',
+  ],
+  'message-list': [
+    'batchDeleteMessageListRecords', 'batchResendMessageListRecords',
+    'deleteMessageListRule', 'getMessageListWebhookInfo', 'ingestMessageListWebhook',
+    'insertMessageListRecord', 'listMessageListRecords', 'listMessageListRules',
+    'probeMessageListWebhook', 'queryMessageListWebhookJob', 'resendMessageListRecord',
+    'saveMessageListRule', 'stageMessageListAttachment',
+  ],
+  'operation-log': ['clearOperationLog', 'getOperationLog'],
+  'ai-ask': [
+    'askWechat', 'buildKbVectorIndex', 'buildRagVectorIndex', 'cancelAsk',
+    'cancelKbIndexBuild', 'clearAskHistory', 'deleteAskHistory', 'evaluateRetrieval',
+    'getAskHistory', 'getKbVectorIndex', 'getRetrievalStatus', 'listRetrievalFeedback',
+    'optimizeAskQuestion', 'resetRetrievalWeights', 'saveRetrievalConfig', 'searchKb',
+    'setKbModelConfig', 'submitAskFeedback', 'suggestReplies',
+  ],
+  'ai-summary': [
+    'deleteSummaryRecord', 'deleteSummaryTask', 'extractKbEntities', 'generateDailySummary',
+    'generatePeriodSummary', 'listSummaryRecords', 'listSummaryTasks', 'runSummaryTask',
+    'saveSummaryTask', 'suggestKbLinks', 'summarizeKbFile', 'toggleSummaryTask',
+  ],
+  'ai-reply': [
+    'getChatAiReplyDefaultWebhook', 'getChatAiReplyState', 'listEnabledChatAiReplyStates',
+    'saveChatAiReplyDefaultWebhook', 'scanChatAiReplyNow', 'setChatAiReplyEnabled',
+    'setChatAiReplyPersona',
+  ],
+  'local-analysis': [
+    'adoptLayaModel', 'analyzeMessages', 'analyzeVisibleMessages', 'cancelLayaAnalysis',
+    'cancelLayaDownload', 'downloadLayaModel', 'getLayaStatus', 'unloadLaya',
+  ],
+  'voice-transcribe': [
+    'cancelWhisperDownload', 'downloadWhisperModel', 'getVoiceTranscript',
+    'getWhisperStatus', 'installWhisperEngine', 'transcribeVoiceBatch',
+    'transcribeVoiceMessage',
+  ],
+  'image-ocr': [],
+  'image-ai': [],
+  export: [
+    'cancelExportJob', 'deleteExportHistory', 'exportAllSessions', 'exportAnnualReport',
+    'exportChatFile', 'exportChatImage', 'exportChatVideo', 'exportCsv',
+    'exportFavoriteFile', 'exportFavoriteImage', 'exportFavoriteVideo',
+    'exportFileAttachment', 'exportFileImage', 'exportFileVideo', 'exportMoments',
+    'exportSessionMessages', 'exportSnsImage', 'exportSnsVideo', 'getExportHistory',
+    'getExportProgress', 'pruneExportHistory',
+  ],
+  backup: [
+    'createBackup', 'createEncryptedBackup', 'deleteBackup', 'listBackups',
+    'previewBackup', 'restoreBackup',
+  ],
+  'privacy-audit': [
+    'clearPrivacyAudit', 'getPrivacyAuditRows', 'getPrivacyScan', 'getPrivacyState',
+    'setPrivacyState',
+  ],
+  maintenance: [
+    'checkDbIntegrity', 'getDbHealth', 'getDbStatus', 'repairCorruptDbs',
+    'upgradeDecodedImages', 'wechatImageAutoDownload',
+  ],
+}
+
+const METHOD_FEATURE = {}
+for (const [feature, methods] of Object.entries(FEATURE_METHODS)) {
+  for (const method of methods) {
+    if (METHOD_FEATURE[method]) {
+      throw new Error(`License 功能位重复登记：${method} → ${METHOD_FEATURE[method]} / ${feature}`)
+    }
+    METHOD_FEATURE[method] = feature
+  }
 }
 
 /** 可用状态：必须是有效正式证。 */
@@ -219,10 +323,16 @@ function isUsableStatus(status) {
 }
 
 /**
- * 校验一次 Remote 调用是否放行。
+ * 校验某项功能是否放行。
+ *
+ * 新许可证（featureSchemaVersion=2）严格按 features 列表判定；旧许可证没有该字段，
+ * 为了让已签发的客户继续可用，保留「旧证的基础位可调用新增数据功能」的兼容行为。
+ * 旧证里原有 7 个功能位（AI/导出/备份/转写/隐私）仍必须显式存在。
+ *
  * @returns {{ ok: true } | { ok: false, code: string, message: string }}
  */
-function authorizeCall(status, method) {
+function authorizeFeature(status, feature) {
+  const required = String(feature || REQUIRED_FEATURES[0] || 'wechat-data')
   if (!isUsableStatus(status)) {
     const code = status?.code || 'LICENSE_REQUIRED'
     const msg = {
@@ -235,15 +345,28 @@ function authorizeCall(status, method) {
     }[code] || '需要有效许可证才能使用'
     return { ok: false, code, message: msg }
   }
-  const feature = METHOD_FEATURE[method] || 'wechat-data'
-  if (!hasFeature(status, feature)) {
-    return {
-      ok: false,
-      code: 'FEATURE_DENIED',
-      message: `当前授权未包含功能「${feature}」（方法 ${method}）`,
-    }
+
+  const licensedFeatures = Array.isArray(status.payload?.features) ? status.payload.features : []
+  const legacy = status.payload?.featureSchemaVersion !== FEATURE_SCHEMA_VERSION
+  const legacyBase = legacy && licensedFeatures.includes('wechat-data')
+  if (licensedFeatures.includes(required) || (legacyBase && GRANULAR_FEATURES.has(required))) {
+    return { ok: true }
   }
-  return { ok: true }
+
+  return {
+    ok: false,
+    code: 'FEATURE_DENIED',
+    message: `当前授权未包含「${featureLabel(required)}」功能，请联系厂商续开该功能`,
+  }
+}
+
+/**
+ * 校验一次 Remote 调用是否放行。
+ * @returns {{ ok: true } | { ok: false, code: string, message: string }}
+ */
+function authorizeCall(status, method) {
+  const feature = METHOD_FEATURE[method] || 'wechat-data'
+  return authorizeFeature(status, feature)
 }
 
 /**
@@ -271,5 +394,7 @@ module.exports = {
   getActivationRequest,
   isUsableStatus,
   authorizeCall,
+  authorizeFeature,
   METHOD_FEATURE,
+  FEATURE_METHODS,
 }

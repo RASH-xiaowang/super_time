@@ -69,13 +69,25 @@ describe('右侧功能栏不覆盖聊天记录', () => {
     expect(shellCss, 'AI 阅读轴没有设置 720px 上界').toContain('max-width: 720px')
   })
 
+  it('切换会话不重建 SessionAsk，线程由 threadKey 继续保留', () => {
+    expect(view).toContain('<SessionAsk')
+    expect(view).toContain('target={aiTarget}')
+    expect(view).not.toContain('key={aiTarget.username}')
+    expect(view).toContain('hidden={!aiOpen || groupInfoOpen || contactInfoOpen}')
+    expect(ask).toContain('threadKey: target.username')
+    expect(ask).toContain('hidden={hidden || undefined}')
+    expect(ask).toContain('scopeUsername={target.username}')
+    expect(ask).toContain('useEffect(() => {\n    setQuestion(\'\')')
+    expect(shellCss).toContain('.panel[hidden] { display: none; }')
+  })
+
   it('根节点把 AI / 群聊信息 / 聊天信息 / 推荐分析都汇总为 side-panel 信号', () => {
     const root = view.slice(view.indexOf('<div className={cssrows.panel}'), view.indexOf('>', view.indexOf('<div className={cssrows.panel}')))
     expect(root).toContain('data-side-panel={sidePanel}')
     expect(view).toContain("aiOpen && aiEligible && aiTarget ? 'ai'")
     expect(view).toContain("groupInfoOpen ? 'group'")
     expect(view).toContain("contactInfoOpen ? 'contact'")
-    expect(view).toContain('(suggestVisible || analysisPaneOpen) ?')
+    expect(view).toContain("chatRightMode !== undefined ? 'chat'")
     expect(view, '会话列表缺少让位标记').toContain('data-chat-sidebar=""')
     expect(view, '消息流缺少让位标记').toContain('data-chat-messages=""')
   })
@@ -84,9 +96,21 @@ describe('右侧功能栏不覆盖聊天记录', () => {
     expect(head, 'AI 问答入口没有关闭推荐分析').toContain('setSuggestOpen(false)')
     expect(head, 'AI 问答入口没有退出全屏').toContain('setAiFull(false)')
     expect(head, '推荐回复入口没有关闭聊天信息').toContain('setContactInfoOpen(false)')
+    const analysisAt = head.indexOf('aria-label="分析"')
+    expect(analysisAt, '找不到分析入口').toBeGreaterThan(-1)
+    expect(head.slice(analysisAt, analysisAt + 900), '分析入口没有关闭推荐回复').toContain('setSuggestOpen(false)')
     expect(head, '群聊信息入口没有关闭推荐分析').toContain('setAnalysisPaneOpen(false)')
+    expect(analysis, '点消息分析时没有关闭推荐回复').toContain('setSuggestOpen(false)')
     expect(analysis, '点消息分析时没有关闭聊天信息').toContain('setContactInfoOpen(false)')
     expect(analysis, '点消息分析时没有关闭群聊信息').toContain('setGroupInfoOpen(false)')
+  })
+
+  it('右栏只渲染一个内容域，不能把推荐回复和分析上下叠在一起', () => {
+    expect(right).toContain("mode: 'suggest' | 'analysis'")
+    expect(right).toContain("{mode === 'suggest' && (")
+    expect(right).toContain("{mode === 'analysis' && (")
+    expect(right).not.toContain('showSuggest && showAnalysis')
+    expect(right).not.toContain('推荐回复与消息分析')
   })
 
   it('右栏窄到 390px 以下时分析卡按面板宽度降为单列', () => {

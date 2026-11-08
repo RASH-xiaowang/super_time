@@ -50,23 +50,23 @@ export function ChatsCalendarDialog(props: ChatsCalendarDialogProps): React.JSX.
   useWechatDataUpdated(() => { if (calOpen) void refreshCurrentMonth() })
   if (!calOpen) return null
   return (
-    <div className={csscards.calOverlay} data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">
-      <div className={csscards.calDialog}>
+    <div className={cssshell.calOverlay} data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">
+      <div className={cssshell.calDialog}>
         <div className={cssshell.calHeader}>
-          <span className={csscards.calTitle}>消息日历</span>
-          <button type="button" className={csscards.calClose} onClick={() => { setCalOpen(false) }}><IconCloseOutline16 size={15} /></button>
+          <span className={cssshell.calTitle}>消息日历</span>
+          <button type="button" className={cssshell.calClose} title="关闭" aria-label="关闭" onClick={() => { setCalOpen(false) }}><IconCloseOutline16 size={15} /></button>
         </div>
-        <div className={csscards.calBody}>
+        <div className={cssshell.calBody}>
           <div className={cssshell.calNav}>
             <button type="button" className={csscards.loadMore} onClick={() => { void switchCalMonth(-1) }} aria-label="上一月">‹</button>
-            <span className={csscards.calMonthTitle}>{calYear} 年 {calMonth} 月</span>
+            <span className={cssshell.calMonthTitle}>{calYear} 年 {calMonth} 月</span>
             <button type="button" className={csscards.loadMore} onClick={() => { void switchCalMonth(1) }} aria-label="下一月">›</button>
           </div>
           {calLoading ? (
             <LoadingState variant="compact" label="加载中…" />
           ) : (
             <>
-              <div className={csscards.calStats}>
+              <div className={cssshell.calStats}>
                 <span className={cssshell.calStat}>本月共 <b>{calTotal}</b> 条消息</span>
                 <span className={cssshell.calStat}>活跃 <b>{calActiveDays}</b> 天</span>
                 <span className={cssshell.calStat}>日均 <b>{calAvg}</b> 条</span>
@@ -81,11 +81,11 @@ export function ChatsCalendarDialog(props: ChatsCalendarDialogProps): React.JSX.
                   const day = i + 1
                   const cnt = calCounts[String(day)] ?? 0
                   return (
-                    <button key={day} type="button" className={csscards.calDay} style={{ background: calHeat(cnt) }}
+                    <button key={day} type="button" className={cssshell.calDay} style={{ background: calHeat(cnt) }}
                       title={cnt ? `${calMonth}月${day}日：${cnt} 条消息` : `${calMonth}月${day}日：无消息`}
                       onClick={() => { jumpToDay(day) }}>
                       <span className={cssshell.calDayNum}>{day}</span>
-                      {cnt > 0 && <span className={csscards.calDayCnt}>{cnt}</span>}
+                      {cnt > 0 && <span className={cssshell.calDayCnt}>{cnt}</span>}
                     </button>
                   )
                 })}

@@ -65,7 +65,14 @@ export function KpiSection({ data, ins, onGo }: {
           : (data[card.key as keyof OverviewSnapshot] as number).toLocaleString()
         return (
           <div key={card.key} className="col-6 col-sm-3">
-            <StatCard icon={<OvIcon name={card.icon} />} value={value} label={card.label} onClick={() => { onGo(card.tab) }} title={`查看${card.label}`} />
+            <a
+              className={css.ovKpiLink}
+              href={`#${card.tab}`}
+              title={`查看${card.label}`}
+              onClick={(event) => { event.preventDefault(); onGo(card.tab) }}
+            >
+              <StatCard icon={<OvIcon name={card.icon} />} value={value} label={card.label} />
+            </a>
           </div>
         )
       })}
@@ -246,13 +253,25 @@ export function LedgerSection({ ledger, onGo, className }: {
   const ls = ledger?.summary
   return (
     <OvSection className={className} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('ledger') }}>详情 →</button>}>
-      {ls ? (
-        <div className={css.metricGrid} data-st-ledger-money="1">
-          <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
-          <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>支出</span></div>
-          <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>
-          <div className={css.metric}><span className={css.metricValue}>{ls.redpacketsSent + ls.redpacketsReceived}</span><span className={kitCss.textCaption}>红包收/发</span></div>
+      {ledger?.readError && (
+        <div className={kitCss.error} role="alert">
+          资金台账读取不完整：{ledger.readError}
         </div>
+      )}
+      {ls ? (
+        <>
+          <div className={css.metricGrid} data-st-ledger-money="1">
+            <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>已知收入</span></div>
+            <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>已知支出</span></div>
+            <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>
+            <div className={css.metric}><span className={css.metricValue}>{ls.redpacketsSent + ls.redpacketsReceived}</span><span className={kitCss.textCaption}>红包收/发</span></div>
+          </div>
+          {(ls.amountUnknownCount ?? 0) > 0 && (
+            <div className={kitCss.emptyInline}>
+              另有 {ls.amountUnknownCount} 笔金额未知，未计入以上合计。
+            </div>
+          )}
+        </>
       ) : <div className={kitCss.emptyInline}>暂无资金记录</div>}
     </OvSection>
   )

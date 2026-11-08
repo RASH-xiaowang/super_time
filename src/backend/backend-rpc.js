@@ -207,28 +207,45 @@ function createWorkerChannel(child, options = {}) {
       }
       let settled = false;
       const id = ++seq;
-      const finish = () => {
+      const finish = (outcome) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         pending.delete(id);
         try { child.kill(); } catch { /* 已退出 */ }
-        onDisposeDone();
+        onDisposeDone(outcome);
       };
       // 超时兜底：worker 卡死时不能把退出路径无限挂住。此时 worker 自己没做完收尾，
       // marker 会在下次启动时如实报 cleanupUnconfirmed（见 query/wechat-image-autodownload.ts）。
       const timer = setTimeout(() => {
-        logger.warn('[backend-rpc] dispose 等待超时，直接结束 worker（收尾可能未完成）');
-        finish();
+        logger.warn(
+          `[backend-rpc] dispose 等待超时（${describeBudget(disposeTimeoutMs)}未收到 ACK），`
+          + '直接结束 worker（收尾可能未完成）',
+        );
+        finish({ acknowledged: false, reason: 'timeout' });
       }, disposeTimeoutMs);
-      // 回包 = worker 侧收尾（还原注入、清 marker）已做完。
-      pending.set(id, { resolve: finish, reject: finish, timer });
+      // 只有显式 `{ ok: true }` 才能证明 worker 侧收尾（还原注入、清 marker）做完。
+      // `{ ok: false }`、缺字段或其它异常形态都必须保留为未确认，不能误报注入已还原。
+      pending.set(id, {
+        resolve: (value) => {
+          if (value?.ok === true) {
+            finish({ acknowledged: true, reason: 'ack', value });
+            return;
+          }
+          finish({ acknowledged: false, reason: 'error', value });
+        },
+        reject: () => finish({
+          acknowledged: false,
+          reason: deadReason === null ? 'error' : 'worker-exited',
+        }),
+        timer,
+      });
       try {
         child.postMessage({ id, type: 'dispose', payload: {} });
       } catch (e) {
         // 进程刚好死了：没有收尾可等，直接收摊。
         logger.warn('[backend-rpc] 发送 dispose 失败（worker 可能已退出）：', e?.message ?? e);
-        finish();
+        finish({ acknowledged: false, reason: 'send-failed' });
       }
     },
     /** 是否已判定死亡（含被动收到 exit）。 */

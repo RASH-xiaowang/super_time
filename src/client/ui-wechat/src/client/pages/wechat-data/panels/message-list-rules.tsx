@@ -70,13 +70,15 @@ export function MessageListRules(props: {
             return (
               <article key={rule.id} className={css.ruleRow} data-disabled={!rule.enabled || undefined}>
                 <div className={css.ruleMain}>
-                  <div className={css.ruleScope}>{ruleScope(rule)}</div>
+                  <div className={css.ruleScope} title={ruleScope(rule)}>{ruleScope(rule)}</div>
                   <code className={css.ruleUrl} title={rule.webhookUrl}>{rule.webhookUrl}</code>
                   <div className={css.ruleMeta}>
                     <span className={css.ruleGreeting} title={rule.greetingText || '你好'}>
                       首次触发：{rule.greetingText || '你好'}
                     </span>
-                    {rule.note && <span>备注：{rule.note}</span>}
+                    {rule.note && (
+                      <span className={css.ruleNote} title={rule.note}>备注：{rule.note}</span>
+                    )}
                   </div>
                 </div>
                 <div className={css.ruleActions}>

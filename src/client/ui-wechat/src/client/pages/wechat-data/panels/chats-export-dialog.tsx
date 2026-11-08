@@ -5,13 +5,15 @@
  * 遮罩点击的判断（`e.target === e.currentTarget`）写错一次，就是"点在对话框里也关掉"，
  * 而格式/类型/时间范围/目录全是当场选的、没有第二处能看见。它的另一组规则也全是"看着小、
  * 直接影响导出文件里有什么"：类型一个都没选时是**全部**（不是 0 类）、`0` 那格代表「全部」、
- * 导出中必须同时给出「中止」并把主按钮锁住、进度在 `total<=0` 时只能是不确定态。
+ * 导出中必须同时给出「取消」并把主按钮锁住、进度在 `total<=0` 时只能是不确定态。
  *
  * JSX 是逐行搬来的，道具名与原作用域同名 ⇒ 搬动本身不改变渲染；改的是**能不能测**。
  */
 import kitCss from '../ui/kit.module.css'
-import { DateRangeField, LinkButton, ProgressBar } from '../ui/kit.tsx'
+import { DateRangeField, LinkButton } from '../ui/kit.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import type { ExportTaskState } from './export-task.ts'
 import csscards from './chats-cards.module.css'
 import cssrows from './chats-rows.module.css'
 import cssshell from './chats-shell.module.css'
@@ -31,9 +33,9 @@ export interface ChatsExportDialogProps {
   expTypes: readonly string[]
   expZip: boolean
   exportOpen: boolean
-  exportProgress: { phase: string; done: number; total: number } | null
+  exportState: ExportTaskState
   exportSession: () => Promise<void>
-  exporting: boolean
+  finishing: boolean
   pickingDir: boolean
   setExpCount: React.Dispatch<React.SetStateAction<number>>
   setExpFilename: React.Dispatch<React.SetStateAction<string>>
@@ -45,11 +47,6 @@ export interface ChatsExportDialogProps {
   setExportOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
 
-/** 进度条那一格：没有进度就整块不渲染（弹窗不该凭空长出一条 0% 的杠）。 */
-function pctOf(progress: { done: number; total: number }): number {
-  return progress.total > 0 ? Math.min(100, (progress.done / progress.total) * 100) : 0
-}
-
 /**
  * 导出消息弹窗。
  * @param props - 弹窗要读的表单值与写回它们的 setter（都来自 `useChatsExport`）。
@@ -58,16 +55,17 @@ function pctOf(progress: { done: number; total: number }): number {
 export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Element | null {
   const {
     EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat,
-    expFrom, expTo, expTypes, expZip, exportOpen, exportProgress, exportSession, exporting, pickingDir,
+    expFrom, expTo, expTypes, expZip, exportOpen, exportState, exportSession, finishing, pickingDir,
     setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen,
   } = props
   if (!exportOpen) return null
+  const exporting = exportState.status === 'running'
   return (
-    <div className={csscards.calOverlay} data-st-dialog="chats-export" onClick={(e) => { if (e.target === e.currentTarget) setExportOpen(false) }} role="dialog" aria-modal="true">
+    <div className={cssshell.calOverlay} data-st-dialog="chats-export" onClick={(e) => { if (e.target === e.currentTarget) setExportOpen(false) }} role="dialog" aria-modal="true">
       <div className={csscards.exportDialog}>
         <div className={cssshell.calHeader}>
-          <span className={csscards.calTitle}>导出消息</span>
-          <button type="button" className={csscards.calClose} onClick={() => { setExportOpen(false) }}><IconCloseOutline16 size={15} /></button>
+          <span className={cssshell.calTitle}>导出消息</span>
+          <button type="button" className={cssshell.calClose} title="关闭" aria-label="关闭" onClick={() => { setExportOpen(false) }}><IconCloseOutline16 size={15} /></button>
         </div>
         <div className={cssshell.exportBody}>
           <div className={cssshell.exportSection}>
@@ -140,9 +138,12 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
             </div>
             <input type="text" className={csscards.exportInput} placeholder="例如：微信聊天记录_2026-07-11"
               value={expFilename} onChange={(e) => { setExpFilename(e.target.value) }} />
-            <label className={cssshell.exportCheckbox}>
+            <label
+              className={cssshell.exportCheckbox}
+              title="优先导出微信保存的原文件且不做转码；若本机仅有缩略图，record_media.json 会明确标记"
+            >
               <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
-              打包为 ZIP（含正文、图片/视频/语音/文件与 record_media.json）
+              打包为 ZIP（原文件媒体：图片/视频/语音/文件 + record_media.json）
             </label>
           </div>
           <div className={cssshell.exportSection}>
@@ -159,25 +160,14 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
               </button>
             </div>
           </div>
-          {/* 实时进度（M3）：后端按 jobId 推 `wechat-export/progress`，
-              没有这一段时用户只有一个「导出中…」的按钮可以看，取消也无从下手。 */}
-          {exportProgress ? (
-            <div className={cssshell.exportField}>
-              <ProgressBar value={pctOf(exportProgress)} indeterminate={exportProgress.total <= 0} />
-              <span className={kitCss.textCaptionTrunc}>
-                {(exportProgress.phase || '导出中') + ' · ' + exportProgress.done + (exportProgress.total ? ' / ' + exportProgress.total : '')}
-              </span>
-            </div>
-          ) : null}
+          {/* 后端按 jobId 推进度；成功/失败/取消也沿用同一块位置。 */}
+          <ExportProgressStatus state={exportState} onCancel={cancelExport} />
         </div>
         {/* 底部动作固定（不随正文滚动）：微信化弹窗统一「头部 / 单滚动正文 / 固定底栏」。 */}
         <div className={cssshell.exportActions}>
           <button type="button" className={csscards.exportBtnGhost} onClick={() => { setExportOpen(false) }}>取消</button>
-          {exporting ? (
-            <button type="button" className={csscards.exportBtnGhost} onClick={cancelExport}>中止导出</button>
-          ) : null}
           <button type="button" className={csscards.exportBtnPrimary} onClick={() => { void exportSession() }} disabled={exporting}>
-            {exporting ? '导出中…' : '导出'}
+            {finishing ? '完成中…' : exporting ? '导出中…' : '导出'}
           </button>
         </div>
       </div>

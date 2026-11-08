@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { __testing as autoUpgradeTesting, autoUpgradeMemorySize, clearAutoUpgradeMemory } from '../src/query/image-auto-upgrade.ts'
 
 const HERE = import.meta.dirname
 const SRC = readFileSync(join(HERE, '..', 'src', 'query', 'image-auto-upgrade.ts'), 'utf8')
@@ -54,6 +55,18 @@ describe('自动取原图：只在需要时升级', () => {
     expect(CODE, '要有 TTL 常量').toContain('RETRY_TTL_MS')
     expect(CODE, '失败要写进记忆').toContain('triedAt.set(key, Date.now())')
     expect(CODE, 'TTL 内要跳过').toContain('Date.now() - last < RETRY_TTL_MS')
+  })
+
+  it('④-1 失败记忆有固定条数上限，长列表滚动不会无界增长', () => {
+    clearAutoUpgradeMemory()
+    try {
+      for (let i = 0; i < autoUpgradeTesting.TRIED_MAX_ENTRIES + 25; i += 1) {
+        autoUpgradeTesting.triedAt.set('wxid_cache_' + String(i) + '|1', Date.now())
+      }
+      expect(autoUpgradeMemorySize()).toBe(autoUpgradeTesting.TRIED_MAX_ENTRIES)
+    } finally {
+      clearAutoUpgradeMemory()
+    }
   })
 
   it('⑤ 用户显式点「取原图」时清掉记忆（否则按钮像没反应）', () => {

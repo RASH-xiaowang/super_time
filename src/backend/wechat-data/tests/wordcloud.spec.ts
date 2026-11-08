@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { queryWordCloud } from '../src/query/wordcloud.ts'
 import { invalidateWechatMeta } from '../src/query/meta.ts'
+import { cacheBudgetSnapshot } from '../src/query/cache-budget.ts'
 
 let temp: string | null = null
 
@@ -79,6 +80,20 @@ describe('queryWordCloud', () => {
     // 只验证不抛错（空目录下 limit 不影响结果形态）
     await expect(queryWordCloud(root, { scope: 'global', limit: -5 })).resolves.toBeDefined()
     await expect(queryWordCloud(root, { scope: 'global', limit: 99999 })).resolves.toBeDefined()
+  })
+
+  it('分片词频缓存同时受条数与字节预算约束', async () => {
+    const root = seedMessages('u-cache', [{ type: 1, content: '缓存 预算 测试' }])
+    await queryWordCloud(root, { scope: 'global' })
+
+    const row = cacheBudgetSnapshot().find((entry) => entry.label === 'wordcloud-shard-scan')
+    expect(row).toMatchObject({
+      maxEntries: 64,
+      maxTotal: 32 * 1024 * 1024,
+      maxEntry: 8 * 1024 * 1024,
+    })
+    expect(row?.entries).toBeGreaterThan(0)
+    expect(row?.bytes).toBeLessThanOrEqual(row?.maxTotal ?? 0)
   })
 
   /**

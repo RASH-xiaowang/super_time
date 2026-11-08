@@ -23,6 +23,7 @@ const read = (...p: string[]): string => readFileSync(join(...p), 'utf8')
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 
 const panel = strip(read(WD, 'panels', 'llm-probe.tsx'))
+const overview = strip(read(WD, 'panels', 'ai-model-overview.tsx'))
 const sidebar = strip(read(WD, 'panels', 'SidebarBalance.tsx'))
 const shell = strip(read(WD, 'WechatDataPanel.tsx'))
 const llmConfig = strip(read(WD, 'llm-config.ts'))
@@ -31,8 +32,8 @@ describe('面板：三类端点各走各的接口（向量 / 精排的地址·Ke
   it('三条测试都调 apiTestLlmConnection，但带各自的 kind / path / model', () => {
     expect(panel).toContain('apiTestLlmConnection({ apiUrl: ep.apiUrl, apiKey: ep.apiKey, kind, path: ep.path, model: ep.model })')
     expect(panel, '按钮的 kind 要跟着自己那一块走（锚点 data-test-llm={kind}）').toContain('data-test-llm={kind}')
-    // 三块面板各挂一条（chat 在主卡片里，embed/rerank 在各自己的面板体里）
-    expect(read(WD, 'panels', 'AiModelConfig.tsx')).toContain('<LlmProbeButton kind="chat"')
+    // 三块面板各挂一条（chat 在当前连接区，embed/rerank 在各自面板体里）
+    expect(overview).toContain('<LlmProbeButton kind="chat"')
     expect(read(WD, 'panels', 'ai-model-roles.tsx')).toContain('<LlmProbeButton kind="embed"')
     expect(read(WD, 'panels', 'ai-model-roles.tsx')).toContain('<LlmProbeButton kind="rerank"')
     expect(panel, '余额查询仍走 apiGetLlmBalance（不许与测试按钮混用）').toContain('apiGetLlmBalance({ apiUrl: cfg.apiUrl, apiKey: cfg.apiKey })')
@@ -66,10 +67,11 @@ describe('面板：三类端点各走各的接口（向量 / 精排的地址·Ke
     expect(panel, '余额按钮缺锚点').toContain('data-balance-llm=""')
   })
 
-  it('三块面板由可折叠外壳包着，且各挂一条探针（结构清晰 = 面板 + 自己的测试）', () => {
-    const card = read(WD, 'panels', 'AiModelConfig.tsx')
-    for (const id of ['id="chat"', 'id="embed"', 'id="rerank"']) expect(card, `缺面板 ${id}`).toContain(id)
-    expect(card).toContain('<LlmBalanceButton cfg={llmConfig} />')
+  it('对话编辑器始终可见，高级面板折叠；三类探针与余额各在对应区域', () => {
+    expect(read(WD, 'panels', 'ai-model-editor.tsx')).toContain('id="chat"')
+    const advanced = read(WD, 'panels', 'ai-model-advanced.tsx')
+    for (const id of ['id="embed"', 'id="rerank"']) expect(advanced, `缺面板 ${id}`).toContain(id)
+    expect(overview).toContain('<LlmBalanceButton cfg={draftConfig} />')
   })
 
   it('api 层把两个函数与结果类型转发出去（调用方只从 ../api.ts 取）', () => {

@@ -1,5 +1,5 @@
 /* ============================================================
- * NEON MATRIX — 主容器 shell 样式
+ * WeChat Neutral — 主容器 shell 样式
  * 本地微信数据管理 的顶层布局、左侧导航栏、内容区
  * （顶栏已于 2026-09 取消：品牌 / 搜索迁入导航栏；
  *   主题 / 模型余额 / 数据状态 2026-10-17 迁到标题栏右上角）
@@ -16,12 +16,12 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--dsw-alias-bg-layer-2, var(--nm-bg-0, var(--nm-bg-0)));
+  background: var(--nm-bg-0);
   border: 1px solid var(--nm-border);
   border-radius: 0;
   overflow: hidden;
   box-sizing: border-box;
-  font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  font-family: var(--nm-font-sans, system-ui, sans-serif);
 }
 
 /* 背景：纯微信灰底，不再叠加网格/纹理装饰 */
@@ -208,8 +208,7 @@
 }
 .navToggle:hover .navIcon,
 .sidebar[data-open] .navToggle .navIcon { opacity: 0.9; }
-/* 导航轨定位容器：滚动条已隐藏（见下），可滚动方向改用「边缘渐隐 + 箭头」提示。
-   渐隐遮罩与箭头全部是 absolute 覆盖层 —— 不占布局，不会引起条目位移。 */
+/* 导航轨定位容器：滚动条已隐藏，保留纯滚动，不再叠加渐隐/箭头装饰。 */
 .navWrap {
   position: relative;
   flex: 1;
@@ -217,44 +216,7 @@
   display: flex;
   flex-direction: column;
 }
-/* 边缘渐隐：对应方向还有被滚出的内容时亮起，暗示「这边还有」。
-   渐变色取侧栏底色 var(--nm-bg-1)，与 .sidebar 背景无缝衔接。 */
-.navWrap::before,
-.navWrap::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 22px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--nm-t-normal);
-  z-index: 2;
-}
-.navWrap::before { top: 0; background: linear-gradient(to bottom, var(--nm-bg-1), transparent); }
-.navWrap::after { bottom: 0; background: linear-gradient(to top, var(--nm-bg-1), transparent); }
-.navWrap[data-more-top]::before,
-.navWrap[data-more-bottom]::after { opacity: 1; }
-/* 微型箭头：比渐隐更明确的「可以往这边滚」信号，带轻微上下浮动动画。 */
-.navHint {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 14px;
-  color: var(--nm-cyan);
-  opacity: 0.6;
-  pointer-events: none;
-  z-index: 3;
-}
-.navHint[data-dir='up'] { top: 1px; --bob: -2px; }
-.navHint[data-dir='down'] { bottom: 1px; --bob: 2px; }
-@media (prefers-reduced-motion: reduce) {
-  .navHint { animation: none; }
-}
+.navHint { display: none; }
 .nav {
   display: flex;
   flex-direction: column;
@@ -298,10 +260,9 @@
 }
 .navGroupLabel {
   font-size: var(--nm-fs-xs, 11px);
-  font-weight: 700;
-  letter-spacing: 0.14em;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--nm-text-2);
-  text-transform: uppercase;
   padding: 4px 10px 6px;
   /* 折叠态：透明度归零，**同时把高度与上下内边距一起收掉**（overflow 裁切）。
      早先只设 opacity: 0 而保留占位，4 个分组之间因此各空出约 54px，
@@ -333,7 +294,7 @@
   font-size: 12.5px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s, gap var(--nm-t-normal);
+  transition: background 0.15s, color 0.15s, gap var(--nm-t-normal);
   position: relative;
   width: 100%;
   box-sizing: border-box;

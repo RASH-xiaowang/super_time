@@ -54,9 +54,10 @@ describe('边的线型', () => {
   const theme = graphTheme(true)
   const stubIds = new Set(['kb:x'])
 
-  it('五种边各有自己的颜色，与图例一致', () => {
+  it('六种边各有自己的颜色，与图例一致', () => {
     expect(edgeStroke(edge('a', 'b', 'common'), theme, S, stubIds).color).toBe(theme.edgeCommon)
     expect(edgeStroke(edge('a', 'b', 'intimacy'), theme, S, stubIds).color).toBe(theme.edgeIntimacy)
+    expect(edgeStroke(edge('a', 'b', 'social'), theme, S, stubIds).color).toBe(theme.edgeSocial)
     expect(edgeStroke(edge('a', 'b', 'wiki'), theme, S, stubIds).color).toBe(theme.edgeWiki)
     expect(edgeStroke(edge('a', 'b', 'source'), theme, S, stubIds).color).toBe(theme.edgeSource)
     expect(edgeStroke(edge('a', 'b', 'class'), theme, S, stubIds).color).toBe(theme.edgeClass)
@@ -83,6 +84,7 @@ describe('边的线型', () => {
     expect(edgeStroke(edge('a', 'b', 'class'), theme, S, stubIds).dashed).toBe(true)
     expect(edgeStroke(edge('a', 'b', 'initial'), theme, S, stubIds).dashed).toBe(true)
     expect(edgeStroke(edge('a', 'b', 'common'), theme, S, stubIds).dashed).toBe(false)
+    expect(edgeStroke(edge('a', 'b', 'social'), theme, S, stubIds).dashed).toBe(false)
     // 知识侧同理：mention（笔记标题出现在正文里）与 suggest（模型抽出的实体）都是猜的，
     // 而 contain（这一节确实在这份文件里）是结构事实 —— 虚实这条线不能画错，
     // 否则用户会把一次模型幻觉当成文档里写着的引用关系去转述。

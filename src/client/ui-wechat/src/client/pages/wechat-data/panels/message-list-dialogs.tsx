@@ -7,6 +7,8 @@ export function RecordFormDialog(props: {
   form: RecordForm | null
   saving: boolean
   onChange: (form: RecordForm) => void
+  onChooseAttachments: () => void
+  onRemoveAttachment: (stagedId: string) => void
   onClose: () => void
   onSubmit: () => void
 }): React.JSX.Element {
@@ -16,6 +18,7 @@ export function RecordFormDialog(props: {
       open={form !== null}
       onClose={() => { if (!props.saving) props.onClose() }}
       title="手动新增消息记录"
+      className={css.dialogWide}
       footer={(
         <div className={css.dialogActions}>
           <Button size="sm" variant="ghost" onClick={props.onClose} disabled={props.saving}>取消</Button>
@@ -65,6 +68,31 @@ export function RecordFormDialog(props: {
               placeholder="https://… 或 data:image/jpeg;base64,…"
             />
           </label>
+          <div className={css.field}>
+            <span>本机附件（跨机发送时自动上传到发送端）</span>
+            <div className={css.attachmentRow}>
+              <Button size="sm" variant="outline" onClick={props.onChooseAttachments} disabled={props.saving || form.stagedAttachments.length >= 9}>
+                选择附件
+              </Button>
+              <span className={css.formHint}>单个 ≤ 20 MB，最多 9 个；附件记录不能同时带正文。</span>
+            </div>
+            {form.stagedAttachments.length > 0 && (
+              <ul className={css.attachmentList}>
+                {form.stagedAttachments.map((attachment) => (
+                  <li key={attachment.stagedId}>
+                    <span className={css.attachmentName} title={attachment.name}>{attachment.name ?? 'attachment.bin'}</span>
+                    <button
+                      type="button"
+                      className={css.attachmentRemove}
+                      onClick={() => { if (attachment.stagedId !== undefined) props.onRemoveAttachment(attachment.stagedId) }}
+                    >
+                      移除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <label className={css.field}>
             <span>备注</span>
             <textarea
@@ -95,6 +123,7 @@ export function RuleFormDialog(props: {
       open={form !== null}
       onClose={() => { if (!props.saving) props.onClose() }}
       title={form?.id === undefined ? '新增 Webhook 规则' : '编辑 Webhook 规则'}
+      className={css.dialogWide}
       footer={(
         <div className={css.dialogActions}>
           <Button size="sm" variant="ghost" onClick={props.onClose} disabled={props.saving}>取消</Button>
@@ -135,20 +164,26 @@ export function RuleFormDialog(props: {
               placeholder="http://192.168.1.20:8080/reply"
             />
           </label>
-          <label className={css.field}>
-            <span>首次触发文本（问候语）</span>
-            <textarea
-              className={css.textarea}
-              rows={3}
-              maxLength={4000}
-              value={form.greetingText}
-              onChange={(e) => { props.onChange({ ...form, greetingText: e.target.value }) }}
-              placeholder="例如：您好，已收到，我会尽快处理。留空时使用“你好”。"
-            />
-            <span className={css.formHint}>
-              文本按当前“会话名 + 触发对象”匹配，不同触发对象可以分别设置不同内容。
-            </span>
-          </label>
+          {form.recordSource === 'ai_reply' ? (
+            <p className={css.formHint} role="note">
+              AI 回复来源直接使用下游 Webhook，无需配置首次触发文本；已有问候语会保留。
+            </p>
+          ) : (
+            <label className={css.field}>
+              <span>首次触发文本（问候语）</span>
+              <textarea
+                className={css.textarea}
+                rows={3}
+                maxLength={4000}
+                value={form.greetingText}
+                onChange={(e) => { props.onChange({ ...form, greetingText: e.target.value }) }}
+                placeholder="例如：您好，已收到，我会尽快处理。留空时使用“你好”。"
+              />
+              <span className={css.formHint}>
+                文本按当前“会话名 + 触发对象”匹配，不同触发对象可以分别设置不同内容。
+              </span>
+            </label>
+          )}
           <label className={css.field}>
             <span>备注</span>
             <textarea

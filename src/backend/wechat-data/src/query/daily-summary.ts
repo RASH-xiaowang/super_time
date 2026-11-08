@@ -4,49 +4,17 @@
  * Collection is pure; the LLM call lives in the gateway (needs ctx.llm).
  */
 import { DatabaseSync } from './db-open.ts'
-import { withDb } from './db-open.ts'
 import { contactMeta } from './meta.ts'
+import { displayNameForUsername, mergeDisplayNames, messageIdentityIndex, resolveTalkerUsername } from './message-identity.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-
-/** Msg_<md5(username)> table name for a talker. */
-function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
-}
 
 /** Message shard DB files under <decrypted>/message. */
 function messageShardFiles(decryptedDir: string): string[] {
   const dir = join(decryptedDir, 'message')
   if (!existsSync(dir)) return []
   return readdirSync(dir).filter(f => f.endsWith('.db') && !f.includes('_shm') && !f.includes('_wal') && !f.includes('monitor_cache')).sort().map(f => join(dir, f))
-}
-
-/** Session usernames from session.db (SessionTable or Session). */
-function loadSessionUsernames(decryptedDir: string): string[] {
-  const dbPath = join(decryptedDir, 'session', 'session.db')
-  if (!existsSync(dbPath)) return []
-  const out: string[] = []
-  try {
-    withDb(dbPath, (db) => {
-      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-      if (table) {
-        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-        for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
-      }
-    })
-  } catch { /* session db unavailable */ }
-  return out
-}
-
-/** Coerce a DB cell to a string (null -> '', else String()). */
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  return ''
 }
 
 /** zstd magic bytes (WCDB compressed blobs). */
@@ -137,7 +105,7 @@ function cleanSenderPrefix(text: string, names: ReadonlyMap<string, string>): st
   if (!/^[A-Za-z0-9_@.\-]+$/.test(who)) return text
   const rest = text.slice(m[0].length).trim()
   if (!rest) return text
-  const display = names.get(who) ?? (who.includes('@chatroom') ? '群成员' : '某人')
+  const display = displayNameForUsername(who, names, who.includes('@chatroom') ? '群成员' : '某人')
   return display + '：' + rest
 }
 
@@ -242,13 +210,13 @@ function* collectRangeSteps(
   const hourly = new Array<number>(24).fill(0)
   const types = new Map<string, number>()
   const perSession = new Map<string, number>()
-  const sessionUsernames = loadSessionUsernames(decryptedDir)
+  const identity = messageIdentityIndex(decryptedDir, ['message'])
   // 2026-10-17：显示名映射 —— 素材里的 `【wxid_xxx】` 与 `wxid_xxx:` 前缀都要换成可读名字，
   // 否则模型面对一堆 wxid 写不出有主语的总结。
   const meta = contactMeta(decryptedDir)
-  const names = meta.names
-  const tableToUser = new Map<string, string>()
-  for (const username of sessionUsernames) tableToUser.set(msgTableName(username), username)
+  const names = mergeDisplayNames(decryptedDir, identity.usernames)
+  const tableToUser = identity.tableToUsername
+  const wantedGroup = groupUsername ? resolveTalkerUsername(decryptedDir, groupUsername) : ''
   // File-first pass: open each shard once, map its Msg_* tables to sessions.
   const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
   for (const shard of messageShardFiles(decryptedDir)) {
@@ -275,7 +243,7 @@ function* collectRangeSteps(
     try { db = new DatabaseSync(fi.path, { readOnly: true }) } catch { continue }
     try {
       for (const [table, username] of fi.tables) {
-        if (groupUsername && username !== groupUsername) continue
+        if (wantedGroup && username !== wantedGroup) continue
         const picked: Array<{ t: number; text: string }> = []
         try {
           const statRows = db.prepare('SELECT COUNT(*) c, CAST(strftime(\'%H\', datetime(create_time, \'unixepoch\')) AS INTEGER) h, local_type lt FROM "' + table + '" WHERE create_time >= ? AND create_time < ? GROUP BY h, lt').all(start, end) as Array<{ c: number; h: number; lt: number }>
@@ -324,7 +292,7 @@ function* collectRangeSteps(
         if (picked.length > 0) {
           sessions += 1
           // 会话标题也用显示名（`【wxid_xxx】` 对模型毫无意义）。
-          lines.push('【' + (names.get(username) ?? username) + '】')
+          lines.push('【' + displayNameForUsername(username, names) + '】')
           for (const p of picked) lines.push(p.text)
         }
       }
@@ -332,7 +300,7 @@ function* collectRangeSteps(
   }
   const topSessions = Array.from(perSession.entries())
     .map(([username, count]) => {
-      const name = names.get(username) ?? username
+      const name = displayNameForUsername(username, names)
       const enterpriseName = meta.enterpriseNames.get(username)?.trim()
       return {
         username,

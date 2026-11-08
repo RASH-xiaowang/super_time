@@ -7,8 +7,7 @@
  * （没有图片的条目）。另外卡片在「批量选择」模式下语义是复选框，这一条以前就存在，
  * 搬进组件之后如果丢掉，键盘用户与读屏会静默失去状态播报，所以一起钉。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'

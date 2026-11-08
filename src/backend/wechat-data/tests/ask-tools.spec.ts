@@ -185,6 +185,29 @@ describe('工具执行：真实数据路径', () => {
     }
   })
 
+  it('消息工具把发送者原始 ID 统一换成备注或昵称', async () => {
+    const dec = makeDataDir()
+    const session = await runTool(
+      allTools,
+      'get_session_messages',
+      { username: '123@chatroom' },
+      { decryptedDir: dec },
+    )
+    expect(session.ok).toBe(true)
+    expect(session.hits.every(hit => hit.sender === '房东老陈')).toBe(true)
+    expect(JSON.stringify(session)).not.toContain('wxid_a')
+
+    const search = await runTool(
+      allTools,
+      'search_messages',
+      { keywords: ['开会'] },
+      { decryptedDir: dec },
+    )
+    expect(search.ok).toBe(true)
+    expect(search.hits[0]?.sender).toBe('房东老陈')
+    expect(JSON.stringify(search)).not.toContain('wxid_a')
+  })
+
   it('search_messages 的时间范围是硬过滤（填了就该生效）', async () => {
     const dec = makeDataDir()
     // 数据都在 2023-11-14；限定到 2024 年应当 0 条
@@ -209,7 +232,8 @@ describe('工具执行：真实数据路径', () => {
     const r = await runTool(allTools, 'aggregate_messages', { dimension: 'session' }, { decryptedDir: dec })
     expect(r.ok).toBe(true)
     expect(r.facts![0]!.title).toContain('按会话统计')
-    expect(r.facts![0]!.body).toContain('123@chatroom')
+    expect(r.facts![0]!.body).toContain('群聊 123')
+    expect(r.facts![0]!.body).not.toContain('123@chatroom')
   })
 
   it('list_sessions 按消息数排序并带条数', async () => {

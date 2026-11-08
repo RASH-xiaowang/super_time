@@ -63,9 +63,9 @@ function makeLayaTranscriber(
   talker: string,
 ): ((localId: number, serverId: string) => Promise<{ ok: boolean; text?: string; error?: string }>) | undefined {
   if (engine === '') return undefined
-  return async (localId: number, _serverId: string) => {
+  return async (localId: number, serverId: string) => {
     const t = await transcribeOneVoiceAsync(decryptedDir, decodedDir, modelsDir,
-      whisperModel, engine, talker, localId)
+      whisperModel, engine, talker, localId, serverId)
     return { ok: t.ok, text: t.text, error: t.error }
   }
 }

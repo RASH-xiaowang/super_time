@@ -79,8 +79,9 @@ describe('表情：表情包也参与搜索', () => {
 
   it('packages 走过滤后的集合，不再直接 slice 全量', () => {
     expect(src).toMatch(/filteredPackages/)
-    expect(src).toMatch(/filteredPackages\.slice\(0, pkgCount\)/)
-    expect(src).not.toMatch(/packages\.slice\(0, pkgCount\)/)
+    // 渐进列表保留前导高度（pkgStart），所以不能退回只从 0 开始切片。
+    expect(src).toMatch(/filteredPackages\.slice\(pkgStart, pkgCount\)/)
+    expect(src).not.toMatch(/\bpackages\.slice\(/)
   })
 
   it('过滤条件是表情包名称', () => {

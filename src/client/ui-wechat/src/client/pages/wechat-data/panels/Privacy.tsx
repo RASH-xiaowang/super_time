@@ -9,6 +9,8 @@ import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { PrivacySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, clickableKey, EmptyState, PanelHeader, ProgressBar, Toolbar } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 import { useElapsedSeconds } from './hooks.tsx'
 import { CACHE_BASE, CACHE_INSIGHTS } from './overview-cache-keys.ts'
 import css from './list-panel.module.css'
@@ -137,6 +139,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [showMore, setShowMore] = useState<ReadonlySet<string>>(new Set())
   const { notice: exportNotice, flash: flashExport } = useActionNotice()
+  const exportTask = useExportTask()
 
   const scan = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -180,12 +183,14 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
   }
 
   const exportCsv = async (): Promise<void> => {
-    try {
-      const r = await apiExportCsv({ kind: 'privacy' })
-      flashExport(`已导出风险清单 ${r.count} 条 → ${r.path}`)
-    } catch (e) {
-      flashExport('导出失败: ' + (e as Error).message)
-    }
+    if (exportTask.running) return
+    const outcome = await exportTask.run(async ({ jobId }) => apiExportCsv({ kind: 'privacy', jobId }), {
+      idPrefix: 'privacy-export',
+      label: '导出隐私报告',
+      successMessage: (r) => `已导出风险清单 ${r.count} 条 → ${r.path}`,
+    })
+    if (outcome.ok) flashExport(outcome.message)
+    else if (!outcome.canceled) flashExport('导出失败: ' + outcome.error)
   }
 
   const involved = data?.involved_sessions ?? 0
@@ -202,7 +207,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
               <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
                 {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
               </button>
-              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
+              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} disabled={exportTask.running} {...desktopActionProps()}>{exportTask.finishing ? '完成中…' : exportTask.running ? '导出中…' : desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
             </>
           )}
         />
@@ -215,7 +220,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
               <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
                 {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
               </button>
-              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
+              {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} disabled={exportTask.running} {...desktopActionProps()}>{exportTask.finishing ? '完成中…' : exportTask.running ? '导出中…' : desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
             </>
           )}
         />
@@ -224,6 +229,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
       {/* 导出回执（W3-11.1）：与 `error`（扫描没跑成）分开——一个是「这次导出成没成」，
           一个是「这个面板的整体扫描读不到」。混在一行会把导出失败说成扫描失败。 */}
       <ActionNoticeLine notice={exportNotice} />
+      <ExportProgressStatus state={exportTask.state} onCancel={() => { void exportTask.cancel() }} />
       {/* 落地态与扫描中共用同一套结构：扫描期间把范围/体检项留着，
           用户知道"在扫什么、还要等什么"，而不是盯着一个词加满屏空白。 */}
       {!error && !data && <PrivacyLanding scanning={loading} elapsed={scanElapsed} />}

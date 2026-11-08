@@ -1,6 +1,12 @@
-# 性能优化专项 · 团队共享简报（唯一事实来源）
+# 性能优化专项（已完成 · 2026-10-21 历史快照）
 
-> 所有角色开工前**先读本文件**，再读自己的任务卡。发现问题先按自己角色范围写进报告，不要直接改产品代码。
+> **状态说明**：本目录记录 2026-10 性能专项的分析、实施与结果，不再代表当前工作树状态。
+> 当前架构与规模以 [`../architecture/README.md`](../architecture/README.md) 和
+> [`../ARCHITECTURE.md`](../ARCHITECTURE.md) 为准。`working/perf/` 原始日志与旧 `dist/`
+> 产物已在清理中移除；下列结论保留用于追溯，但部分证据不能按原路径复跑。
+>
+> 新的性能改动请使用仍在维护的 `scripts/perf/` 工具与 `npm run measure:quick` /
+> `npm run measure:slow`，并遵循 [`../CONTRIBUTING.md`](../CONTRIBUTING.md) 的证据纪律。
 
 ## 1. 任务边界（重要）
 
@@ -11,14 +17,16 @@
 - 本次只做**性能**：内存占用、资源加载/呈现耗时、按需获取与缓存/释放、低效代码替换。
   **不改变业务行为、接口契约、用户可见逻辑**。
 
-## 2. 仓库现状（已核实，2026-10-21）
+## 2. 当时的仓库现状（快照：2026-10-21）
 
-- 分支 `release/v1.0.9`，HEAD `70c3ca6`；**工作区有 132 个已修改文件 + 59 个未跟踪文件**（在途功能开发：收藏、ClawBot、图谱右键菜单、KB 批处理等）。
+- 分支 `release/v1.0.9`，HEAD `70c3ca6`；**工作区有 132 个已修改文件 + 59 个未跟踪文件**（在途功能开发：收藏、图谱右键菜单、KB 批处理等）。
   → 因此：**分析阶段只读**；实施阶段在独立 git worktree 进行，绝不碰在途改动。
 - 规模：`src/backend` 约 33.9 万行、`src/client` 约 9.7 万行、`scripts` 约 2.3 万行；813 个 `*.spec.ts`；75 个 e2e/审计脚本。
 - 技术栈：Electron 44 + Node 24.20.0；后端 `src/backend/wechat-data`（node:sqlite 只读微信库 + SQLCipher 解密）；前端 React 18 + Vite 5；构建 `npm run build:all`（backend esbuild → types → ui vite）。
-- 打包：`dist\Super Time Setup 1.0.9.exe`、`dist\win-unpacked\`（存在，可做打包态验证）。
-- 运行时配置：`wechat\config.json`、`wechat\llm.json` 存在（**含真实密钥，禁止读取内容或写入报告**）；`src\client\ui-dist\` 已构建。
+- 打包：当时存在 `dist\Super Time Setup 1.0.9.exe` 与 `dist\win-unpacked\`；这些可再生
+  构建产物现已被清理，需要时重新执行 `npm run dist`。
+- 运行时配置：当时 `wechat\config.json`、`wechat\llm.json` 存在（**含真实密钥，禁止读取内容
+  或写入报告**）。当前仓库不提交这两份本机配置；如需本地运行，按 `wechat/*.example.json` 创建。
 - 启动：`node scripts/launch-app.mjs`（唯一入口，会摘掉 `ELECTRON_RUN_AS_NODE`；支持 `--inspect=9229` 透传）。
 
 ## 3. 该读的既有资产（避免重复造轮子）
@@ -30,7 +38,8 @@
 - UI 预算门禁：`npm run ui:interactive-budget`、`ui:theme-budget`、`ui:responsive-gate`、`ui:density-gate`、`css:bundle-diff`。
 - 长列表虚拟化 e2e：`npm run ui:longlist-e2e`（`scripts/longlist-virtualization-e2e.mjs`）。
 - 架构：`docs\ARCHITECTURE.md`、`docs\API.md`（111KB，grep 用）、`docs\DEPLOYMENT.md`。
-- 既有性能探针样例：`working\mem-log-probe.mjs`（内存日志探针）。
+- 既有性能探针样例：`working\mem-log-probe.mjs`（已随历史工作目录清理；探针思路保留在
+  `scripts/perf/perf-baseline.mjs` 与 `scripts/perf/analyze-heap.mjs`）。
 
 ## 4. 已知的性能相关机制（改造时要尊重，不要重复实现）
 

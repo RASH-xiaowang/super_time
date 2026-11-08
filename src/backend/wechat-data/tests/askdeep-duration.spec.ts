@@ -90,7 +90,6 @@ describe('askWechat：端到端耗时', () => {
 
     const result = await createAskDeepRemotes(rc).askWechat({
       question: '尾款什么时候付？',
-      dataScope: 'kb-only',
     })
 
     expect(result.durationMs).toBe(400)
@@ -103,5 +102,91 @@ describe('askWechat：端到端耗时', () => {
     expect(savedResult.durationMs).toBe(400)
     expect(elapsedMs).toBe(400)
     expect(model).toBe('mock · mock')
+  })
+
+  it('取消或失败时先 flush 再 dispose 思考发射器', async () => {
+    const flush = vi.fn()
+    const dispose = vi.fn()
+    const emitter = Object.assign(vi.fn(), { flush, dispose })
+    const done = vi.fn()
+    const controller = new AbortController()
+    mocks.askWithRuntime.mockImplementation(async () => {
+      controller.abort()
+      throw Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' })
+    })
+
+    const rc = {
+      dirs: () => ({ decrypted: 'D:/fake', decoded: 'D:/fake/decoded_images' }),
+      op: vi.fn(),
+      ctx: () => ({
+        agentDefaultModel: {
+          currentSelection: () => ({ provider: 'mock', model: 'mock' }),
+        },
+        llm: {},
+      }) as unknown as Context,
+      askTrace: new Map(),
+      privacyGate: (_feature: string, _stats: unknown, texts: string[]) => texts,
+      embedModelName: () => 'mock-embed',
+      makeEmbedFn: () => undefined,
+      makeRerankFn: () => undefined,
+      makeDeltaEmitter: () => undefined,
+      makeReasoningEmitter: () => emitter,
+      makeStageEmitter: () => undefined,
+      kbModel: () => ({ provider: 'mock', model: 'mock' }),
+      askKnownEntities: () => [],
+      askKnownSessions: () => [],
+      saveAskHistory: vi.fn(),
+      askSignal: () => ({ signal: controller.signal, done }),
+      cancelAskJob: () => false,
+    } as unknown as createAskDeepRemotesInputs
+
+    await expect(createAskDeepRemotes(rc).askWechat({
+      question: '继续吗？',
+    })).rejects.toMatchObject({ code: 'ASK_CANCELED' })
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(flush.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0] ?? 0)
+    expect(done).toHaveBeenCalledTimes(1)
+  })
+
+  it('运行异常时也先 flush 再 dispose 思考发射器', async () => {
+    const flush = vi.fn()
+    const dispose = vi.fn()
+    const emitter = Object.assign(vi.fn(), { flush, dispose })
+    mocks.askWithRuntime.mockImplementation(async () => {
+      throw new Error('模型失败')
+    })
+
+    const rc = {
+      dirs: () => ({ decrypted: 'D:/fake', decoded: 'D:/fake/decoded_images' }),
+      op: vi.fn(),
+      ctx: () => ({
+        agentDefaultModel: {
+          currentSelection: () => ({ provider: 'mock', model: 'mock' }),
+        },
+        llm: {},
+      }) as unknown as Context,
+      askTrace: new Map(),
+      privacyGate: (_feature: string, _stats: unknown, texts: string[]) => texts,
+      embedModelName: () => 'mock-embed',
+      makeEmbedFn: () => undefined,
+      makeRerankFn: () => undefined,
+      makeDeltaEmitter: () => undefined,
+      makeReasoningEmitter: () => emitter,
+      makeStageEmitter: () => undefined,
+      kbModel: () => ({ provider: 'mock', model: 'mock' }),
+      askKnownEntities: () => [],
+      askKnownSessions: () => [],
+      saveAskHistory: vi.fn(),
+      askSignal: () => undefined,
+      cancelAskJob: () => false,
+    } as unknown as createAskDeepRemotesInputs
+
+    await expect(createAskDeepRemotes(rc).askWechat({
+      question: '还在吗？',
+    })).rejects.toThrow('模型失败')
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(flush.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0] ?? 0)
   })
 })

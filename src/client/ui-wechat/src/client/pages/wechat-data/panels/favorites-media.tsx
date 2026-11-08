@@ -5,11 +5,10 @@
  * 本组件把「取数」和「展示」收在一处：媒体存本机时按需取回，远程封面统一交给
  * `RemoteImg` 走后端代理；未知类型也至少把标题、描述、链接和元信息如实展示。
  */
-import type { FavItemPart } from '@deepseek-ai/dsh-wechat-data/types'
+import type { FavItemPart, MediaOriginalExportResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
 import {
   apiGetFavoriteMediaDataUrl,
-  apiGetMessageFile,
   apiGetSnsImageDataUrl,
   apiGetSnsVideoCoverDataUrl,
   apiGetSnsVideoDataUrl,
@@ -17,11 +16,19 @@ import {
 } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
 import { clickableKey } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import { openLink } from './chats-support.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import css from './list-panel.module.css'
+import {
+  saveFavoriteFileOriginal,
+  saveFavoriteImageOriginal,
+  saveFavoriteVideoOriginal,
+} from './favorites-original-export.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
 
 export interface FavoritePartProps {
   part: FavItemPart
@@ -39,11 +46,6 @@ interface LoadedUrl {
 interface LoadedText {
   key: string
   text: string
-}
-
-/** 收藏更新时间是秒；文件查找接口要的也是秒。 */
-function fileCreateTime(updateTime: number): number | undefined {
-  return Number.isFinite(updateTime) && updateTime > 0 ? updateTime : undefined
 }
 
 /** 32 位十六进制 MD5；未知资源只给 `md5` 时也用它走本机解码。 */
@@ -74,6 +76,7 @@ function FavoriteImage({ part, thumbs }: {
   const [loaded, setLoaded] = useState<LoadedUrl | null>(null)
   const [failed, setFailed] = useState<LoadedText | null>(null)
   const [zoom, setZoom] = useState(false)
+  const imageSave = useMediaSaveTask()
   const src = loaded?.key === cacheKey ? loaded.url : initial
   useEffect(() => {
     setLoaded(null)
@@ -139,12 +142,28 @@ function FavoriteImage({ part, thumbs }: {
               thumb: src,
               title: '收藏图片',
               load: async () => src,
-              downloadName: 'favorite-image.jpg',
+              onDownload: async () => {
+                await imageSave.save<MediaOriginalExportResult>({
+                  idPrefix: 'favorite-image',
+                  label: '保存收藏原图',
+                  successMessage: (r) => `已保存收藏原图 → ${r.path ?? ''}`,
+                  run: (jobId) => saveFavoriteImageOriginal(part, src, jobId),
+                })
+              },
+              downloadDisabled: desktopAction(),
+              downloadDisabledReason: '收藏原图保存仅支持电脑端',
             }]}
             index={0}
             onIndexChange={() => { /* 单张 */ }}
             onClose={() => { setZoom(false) }}
             dialogName="favorites-media"
+            statusOverlay={(
+              <ExportProgressStatus
+                compact
+                state={imageSave.state}
+                onCancel={() => { void imageSave.cancel() }}
+              />
+            )}
           />
         )}
       </>
@@ -227,6 +246,7 @@ function FavoriteVideo({ part }: { part: FavItemPart }): React.JSX.Element {
   const [video, setVideo] = useState<LoadedUrl | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const videoSave = useMediaSaveTask()
   const videoKey = part.fullMd5 ?? part.md5 ?? ''
   const coverKey = part.thumbMd5 ?? part.fullMd5 ?? part.md5 ?? ''
   useEffect(() => {
@@ -290,6 +310,14 @@ function FavoriteVideo({ part }: { part: FavItemPart }): React.JSX.Element {
     }
   }
   const duration = part.duration && part.duration > 0 ? ` · ${String(Math.round(part.duration))} 秒` : ''
+  const saveOriginal = async (): Promise<void> => {
+    await videoSave.save<MediaOriginalExportResult>({
+      idPrefix: 'favorite-video',
+      label: '保存收藏原视频',
+      successMessage: (r) => `已保存收藏原视频 → ${r.path ?? ''}`,
+      run: (jobId) => saveFavoriteVideoOriginal(part, jobId),
+    })
+  }
   return (
     <div className={css.favMediaCard}>
       <div className={css.favMediaHeader}>
@@ -307,76 +335,70 @@ function FavoriteVideo({ part }: { part: FavItemPart }): React.JSX.Element {
           <span className={css.favVideoPlay}>{loading ? '加载中…' : videoKey === '' ? '无视频文件' : '播放视频'}</span>
         </button>
       )}
+      <button
+        type="button"
+        className={css.favOriginalSave}
+        disabled={videoSave.running || desktopAction()}
+        onClick={() => { void saveOriginal() }}
+        {...desktopActionProps()}
+      >
+        {videoSave.finishing ? '完成中…' : videoSave.running ? '保存中…' : '保存原视频'}
+      </button>
+      <ExportProgressStatus
+        compact
+        state={videoSave.state}
+        onCancel={() => { void videoSave.cancel() }}
+      />
       {error !== '' && <div className={kitCss.textMeta} role="alert">{error}</div>}
     </div>
   )
 }
 
 /**
- * 收藏文件：点击时走与聊天附件相同的 `msg/file` 查找与浏览器下载。
- * @param props - 文件条目与收藏更新时间。
+ * 收藏文件：只接受完整内容 MD5，并交给后端写盘和校验；不再用 data URL 假下载。
+ * @param props - 文件条目。
  * @returns 文件资源卡。
  */
-function FavoriteFile({ part, updateTime }: { part: FavItemPart; updateTime: number }): React.JSX.Element {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+function FavoriteFile({ part }: { part: FavItemPart }): React.JSX.Element {
+  const fileSave = useMediaSaveTask()
   const name = part.name || part.title || '未命名文件'
-  const createTime = fileCreateTime(updateTime)
+  const fullMd5 = /^[0-9a-f]{32}$/i.test(part.fullMd5 ?? '') ? part.fullMd5 ?? '' : ''
   const download = async (): Promise<void> => {
-    if (loading) return
-    setLoading(true)
-    setError('')
-    try {
-      const favorite = await apiGetFavoriteMediaDataUrl({
-        ...(part.fullMd5 ? { fullMd5: part.fullMd5 } : {}),
-        ...(part.md5 ? { md5: part.md5 } : {}),
-        kind: 'file',
-        ...(part.ext ? { ext: part.ext } : {}),
-        ...(name ? { fileName: name } : {}),
-        ...(part.size !== undefined ? { size: part.size } : {}),
-      }).catch(() => ({ error: '收藏缓存未命中' }))
-      if ('url' in favorite && typeof favorite.url === 'string' && favorite.url !== '') {
-        const anchor = document.createElement('a')
-        anchor.href = favorite.url
-        anchor.download = name
-        document.body.appendChild(anchor)
-        anchor.click()
-        anchor.remove()
-        return
-      }
-      const result = await apiGetMessageFile({
-        fileName: name,
-        ...(part.size !== undefined ? { size: part.size } : {}),
-        ...(createTime !== undefined ? { createTime } : {}),
-      })
-      if (!result.url) {
-        setError(result.error ?? '本地未找到该文件')
-        return
-      }
-      const anchor = document.createElement('a')
-      anchor.href = result.url
-      anchor.download = name
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '文件下载失败')
-    } finally {
-      setLoading(false)
-    }
+    if (!fullMd5) return
+    await fileSave.save<MediaOriginalExportResult>({
+      idPrefix: 'favorite-file',
+      label: '保存收藏原文件',
+      successMessage: (r) => `已保存收藏原文件 → ${r.path ?? ''}`,
+      run: (jobId) => saveFavoriteFileOriginal(part, jobId),
+    })
   }
   const meta = [part.ext?.toUpperCase(), part.size ? fmtBytes(part.size) : ''].filter(Boolean).join(' · ')
   return (
     <div className={css.favMediaCard}>
-      <button type="button" className={css.favFileCard} onClick={() => { void download() }} disabled={loading}>
+      <button
+        type="button"
+        className={css.favFileCard}
+        onClick={() => { void download() }}
+        disabled={fileSave.running || !fullMd5 || desktopAction()}
+        {...desktopActionProps()}
+      >
         <span className={css.favFileIcon} aria-hidden="true">{part.ext?.toLowerCase() === 'pdf' ? 'PDF' : '▤'}</span>
         <span className={css.favMediaBody}>
           <span className={css.favMediaTitle}>{name}</span>
-          <span className={css.favMediaMeta}>{loading ? '正在查找…' : meta || '点击下载'}</span>
+          <span className={css.favMediaMeta}>
+            {fileSave.finishing ? '正在完成…'
+              : fileSave.running ? '正在保存…'
+              : !fullMd5 ? '缺少原文件 MD5，无法确认原片'
+                : meta ? meta + ' · 点击保存原文件' : '点击保存原文件'}
+          </span>
         </span>
-        <span className={css.favFileAction} aria-hidden="true">{loading ? '…' : '↓'}</span>
+        <span className={css.favFileAction} aria-hidden="true">{fileSave.running ? '…' : '⤓'}</span>
       </button>
-      {error !== '' && <div className={kitCss.textMeta} role="alert">{error}</div>}
+      <ExportProgressStatus
+        compact
+        state={fileSave.state}
+        onCancel={() => { void fileSave.cancel() }}
+      />
     </div>
   )
 }
@@ -428,14 +450,14 @@ function FavoriteResourceCover({ part, src }: { part: FavItemPart; src: string }
  * @param props - 资源条目、收藏更新时间与图片缓存。
  * @returns 对应类型的详情内容。
  */
-export function FavoritePart({ part, updateTime, thumbs }: FavoritePartProps): React.JSX.Element {
+export function FavoritePart({ part, thumbs }: FavoritePartProps): React.JSX.Element {
   if (part.kind === 'text') {
     return <div className={css.favPartText}>{part.text || part.desc || part.title || ''}</div>
   }
   if (part.kind === 'image') return <FavoriteImage part={part} thumbs={thumbs} />
   if (part.kind === 'voice') return <FavoriteVoice part={part} />
   if (part.kind === 'video') return <FavoriteVideo part={part} />
-  if (part.kind === 'file') return <FavoriteFile part={part} updateTime={updateTime} />
+  if (part.kind === 'file') return <FavoriteFile part={part} />
   if (part.kind === 'link') return <FavoriteLink part={part} />
   if (part.kind === 'location') {
     const meta = [

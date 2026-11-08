@@ -1,6 +1,6 @@
 import type { RpaVendorCatalog, TaskCallbackDispatchResult, TaskBatchMutationResult, TaskInfoInput, TaskInfoMutationResult, TaskInfoSnapshot, TaskInfoStatus, TaskTriggerQuery, TaskTriggerScanResult, TaskTriggerSecretRevealResult, TaskTriggerSnapshot } from './types.ts';
 import { createTaskCenterRemotes } from './remotes/task-center.ts';
-import { GatewayMessageList } from './gateway-message-list.ts';
+import { GatewayChatAiReply } from './gateway-chat-ai-reply.ts';
 import type { RpaMediaLinkFactory } from './query/rpa/media-links.ts';
 /** 投递一拍的结果形状（与 `query/task-center-callback.ts` 的 `PendingDispatchResult` 相容）。 */
 interface TaskDispatchOutcome {
@@ -9,7 +9,7 @@ interface TaskDispatchOutcome {
     errors?: string[];
 }
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export declare abstract class GatewayTaskCenter extends GatewayMessageList {
+export declare abstract class GatewayTaskCenter extends GatewayChatAiReply {
     /**
      * 任务列表（最新在前）。
      *

@@ -4,10 +4,15 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
-import type { WechatSession } from '../types.ts'
+import type { SessionsSnapshot, WechatSession } from '../types.ts'
 import { contactMeta, cachedBySigAsync, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'
 import { msgCreateTimeByServerId } from './messages.ts'
 import { yieldToLoop } from './search-build.ts'
+import {
+  fallbackChatDisplayName,
+  isMessageTableHash,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 
 /**
  * 每解析这么多条「未读最早时间」就让出一次。
@@ -35,14 +40,27 @@ function bytesToString(v: unknown): string {
   return ''
 }
 
-/** Session titles from SessionNoContactInfoTable (display name source 2). */
-function loadSessionTitles(db: DatabaseSync): Map<string, string> {
+/**
+ * Session titles from SessionNoContactInfoTable (display name source 2).
+ *
+ * The same legacy table may key a title by either the real username or the
+ * `Msg_<md5>` suffix, depending on how the row was first written. Canonicalize
+ * both keys before lookup so the hash never wins over the readable title.
+ * @param db - open session database.
+ * @param decryptedDir - decrypted data root, used for the identity index.
+ * @returns canonical username -> session title.
+ */
+function loadSessionTitles(db: DatabaseSync, decryptedDir: string): Map<string, string> {
   const map = new Map<string, string>()
   try {
     const rows = db.prepare('SELECT username, session_title FROM SessionNoContactInfoTable').all() as Array<Record<string, unknown>>
     for (const r of rows) {
-      const u = bytesToString(r.username)
-      if (u) map.set(u, bytesToString(r.session_title))
+      const stored = bytesToString(r.username).trim()
+      const username = stored ? resolveTalkerUsername(decryptedDir, stored) : ''
+      const title = bytesToString(r.session_title).trim()
+      if (username && title && title !== stored && !isMessageTableHash(title)) {
+        map.set(username, title)
+      }
     }
   } catch {
     // table may be absent
@@ -50,10 +68,62 @@ function loadSessionTitles(db: DatabaseSync): Map<string, string> {
   return map
 }
 
+/**
+ * Collapse two SessionTable rows that canonicalize to the same conversation.
+ *
+ * Old upgrades can leave a real-username row and a hash-keyed row side by side.
+ * Keeping both renders duplicate chats; keeping only the tail row loses unread
+ * or draft metadata from the other one. Prefer the newer row, then fill gaps.
+ * @param previous - row already collected for this canonical username.
+ * @param incoming - duplicate row from SessionTable.
+ * @returns one merged row in the UI shape.
+ */
+function mergeDuplicateSession(previous: WechatSession, incoming: WechatSession): WechatSession {
+  const newer = incoming.lastTimestamp >= previous.lastTimestamp ? incoming : previous
+  const older = newer === incoming ? previous : incoming
+  return {
+    ...older,
+    ...newer,
+    summary: newer.summary || older.summary,
+    draft: newer.draft || older.draft,
+    unreadCount: Math.max(newer.unreadCount, older.unreadCount),
+    pinned: newer.pinned || older.pinned,
+    hidden: newer.hidden || older.hidden,
+    lastMsgSender: newer.lastMsgSender || older.lastMsgSender,
+    lastMsgSenderName: newer.lastMsgSenderName || older.lastMsgSenderName,
+    lastMsgType: newer.lastMsgType || older.lastMsgType,
+    lastMsgSubType: newer.lastMsgSubType || older.lastMsgSubType,
+    ...((newer.enterpriseName ?? older.enterpriseName)
+      ? { enterpriseName: newer.enterpriseName ?? older.enterpriseName }
+      : {}),
+    ...((newer.bizType ?? older.bizType) !== undefined
+      ? { bizType: newer.bizType ?? older.bizType }
+      : {}),
+    ...((newer.accountKind ?? older.accountKind)
+      ? { accountKind: newer.accountKind ?? older.accountKind }
+      : {}),
+  }
+}
+
 /** 客服会话识别（真实企业微信/品牌客服会话，排除占位 holder）。 */
 function isKefuLike(u: string): boolean {
   const s = u.toLowerCase()
   return s.includes('@weclaw') || s.includes('@kefu.openim') || s.includes('opencustomerservicemsg')
+}
+
+/**
+ * 公众号/服务号聚合占位会话。
+ *
+ * 它们只承载入口摘要，没有对应的 `Msg_<md5(username)>` 消息表；真实内容在
+ * `gh_*` 账号会话里。保留在普通会话列表会让用户点进一个永远为空的聊天页。
+ */
+const SYNTHETIC_SESSION_HOLDERS = new Set([
+  'brandsessionholder',
+  'brandservicesessionholder',
+])
+
+export function isSyntheticSessionHolder(username: string): boolean {
+  return SYNTHETIC_SESSION_HOLDERS.has((username ?? '').trim().toLowerCase())
 }
 
 /**
@@ -68,7 +138,7 @@ export async function querySessions(
   keyword?: string,
   limit?: number,
   offset?: number,
-): Promise<{ sessions: WechatSession[]; total: number }> {
+): Promise<SessionsSnapshot> {
   const key = `sessions:${decryptedDir}:${keyword ?? ''}:${limit ?? ''}:${offset ?? ''}`
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
@@ -83,12 +153,33 @@ export async function querySessions(
   return cachedBySigAsync(key, sig, () => computeSessions(decryptedDir, keyword, limit, offset))
 }
 
+/**
+ * 界面全局搜索使用的可取消会话查询。
+ *
+ * 普通调用仍走按文件签名缓存；带 signal 的操作不能复用缓存 Promise，也不能把
+ * 中途取消的部分结果写回缓存，否则下一次同一关键词会命中残缺快照。这里直接
+ * 计算并在分片解析的让出点检查取消。
+ */
+export async function querySessionsCancellable(
+  decryptedDir: string,
+  keyword?: string,
+  limit?: number,
+  offset?: number,
+  signal?: AbortSignal,
+): Promise<SessionsSnapshot> {
+  if (signal === undefined) return querySessions(decryptedDir, keyword, limit, offset)
+  if (signal.aborted) return { sessions: [], total: 0, cancelled: true }
+  return computeSessions(decryptedDir, keyword, limit, offset, signal)
+}
+
 async function computeSessions(
   decryptedDir: string,
   keyword?: string,
   limit?: number,
   offset: number = 0,
-): Promise<{ sessions: WechatSession[]; total: number }> {
+  signal?: AbortSignal,
+): Promise<SessionsSnapshot> {
+  if (signal?.aborted) return { sessions: [], total: 0, cancelled: true }
   const dbPath = join(decryptedDir, 'session', 'session.db')
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
@@ -113,7 +204,7 @@ async function computeSessions(
 
     const meta = contactMeta(decryptedDir)
     const contactNames = meta.names
-    const sessionTitles = loadSessionTitles(db)
+    const sessionTitles = loadSessionTitles(db, decryptedDir)
     const pinned = meta.pinned
     const bizTypes = meta.bizTypes
     const q = (keyword ?? '').trim().toLowerCase()
@@ -124,12 +215,19 @@ async function computeSessions(
     const rows = db.prepare(sql).all(fetchLimit) as Array<Record<string, unknown>>
     const key = (cand: string, dft: string): string => (cols.has(cand) ? cand : dft)
 
-    const sessions: WechatSession[] = []
+    const sessionsByUsername = new Map<string, WechatSession>()
     /** username → unread_first_msg_srv_id（TEXT，供「未读从何时开始」解析用） */
     const srvIds = new Map<string, string>()
     for (const r of rows) {
-      const username = bytesToString(r[key('username', '')])
-      const displayName = contactNames.get(username) ?? sessionTitles.get(username) ?? username
+      const storedUsername = bytesToString(r[key('username', '')]).trim()
+      const username = storedUsername ? resolveTalkerUsername(decryptedDir, storedUsername) : ''
+      // A hash-shaped SessionTable row without a known owner cannot open a
+      // real Msg_ table. Drop it instead of surfacing the hash as a chat.
+      if (!username) continue
+      if (isSyntheticSessionHolder(username)) continue
+      const displayName = contactNames.get(username)?.trim()
+        || sessionTitles.get(username)?.trim()
+        || fallbackChatDisplayName(username)
       const enterpriseName = meta.enterpriseNames.get(username)?.trim()
       // summary 必须在过滤前算出来：客户端的会话搜索也匹配最后一条消息，
       // 而这里只比 username / displayName ⇒ 那些会话在到达前端之前就被丢掉了，
@@ -143,7 +241,15 @@ async function computeSessions(
         && !(enterpriseName ?? '').toLowerCase().includes(q)
       ) continue
       const srv = String(r['unread_srv'] ?? '').trim()
-      if (srv && srv !== '0') srvIds.set(username, srv)
+      // Rows arrive newest-first. If two legacy rows canonicalize to the same
+      // chat, keep the newest non-empty unread pointer instead of letting an
+      // older duplicate overwrite it.
+      if (srv && srv !== '0' && !srvIds.has(username)) srvIds.set(username, srv)
+      const lastMsgSender = bytesToString(r[key('last_msg_sender', "''")]).trim()
+      const storedSenderName = bytesToString(r[key('last_sender_display_name', "''")]).trim()
+      const lastMsgSenderName = storedSenderName
+        || contactNames.get(lastMsgSender)?.trim()
+        || (lastMsgSender ? fallbackChatDisplayName(lastMsgSender) : '')
       const s: WechatSession = {
         username,
         displayName,
@@ -156,8 +262,10 @@ async function computeSessions(
         hidden: Number(r[key('is_hidden', '0')] ?? 0) === 1,
         lastMsgType: Number(r[key('last_msg_type', '0')] ?? 0),
         lastMsgSubType: Number(r[key('last_msg_sub_type', '0')] ?? 0),
-        lastMsgSender: bytesToString(r[key('last_msg_sender', "''")]).trim(),
-        lastMsgSenderName: bytesToString(r[key('last_sender_display_name', "''")]).trim(),
+        lastMsgSender,
+        // 老库 / 部分企业微信会话的 display_name 列为空；用通讯录映射补一次，
+        // 否则非文本消息的预览只能显示裸 wxid，群聊里读不出“谁发的”。
+        lastMsgSenderName,
         ...(enterpriseName ? { enterpriseName } : {}),
       }
       if (username.startsWith('gh_')) {
@@ -168,12 +276,22 @@ async function computeSessions(
       } else if (isKefuLike(username)) {
         s.accountKind = 'kefu'
       }
-      sessions.push(s)
+      const previous = sessionsByUsername.get(username)
+      sessionsByUsername.set(
+        username,
+        previous === undefined ? s : mergeDuplicateSession(previous, s),
+      )
     }
-    // pinned-first ordering (stable: keeps sort_timestamp DESC within groups)
-    sessions.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
+    const sessions = [...sessionsByUsername.values()]
+    // Pinned first, then newest. Sort explicitly because deduplication can
+    // replace an earlier Map value with a row that arrived later in SQL order.
+    sessions.sort((a, b) => (
+      (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)
+      || b.lastTimestamp - a.lastTimestamp
+    ))
     const total = sessions.length
     const page = limit === undefined ? sessions : sessions.slice(offset, offset + limit)
+    if (signal?.aborted) return { sessions: page, total, cancelled: true }
     /*
      * 「未读从什么时候开始」（第 67 轮）。
      *
@@ -187,7 +305,7 @@ async function computeSessions(
     let sinceYield = 0
     for (const s of page) {
       if (budget <= 0) break
-      if ((s.unreadCount ?? 0) <= 0 || s.username === 'brandsessionholder') continue
+      if ((s.unreadCount ?? 0) <= 0 || isSyntheticSessionHolder(s.username)) continue
       const sid = srvIds.get(s.username)
       if (!sid || sid === '0') continue
       budget -= 1
@@ -199,7 +317,11 @@ async function computeSessions(
       // 41 次连做就是几十毫秒的**不间断同步执行**（`working/probe-stall.txt` 里它是
       // 仅剩两个"让出 0"的接口之一）。原文注释只量了"约 7ms"，那是单次热缓存的数。
       sinceYield += 1
-      if (sinceYield >= YIELD_EVERY_UNREAD_LOOKUPS) { sinceYield = 0; await yieldToLoop() }
+      if (sinceYield >= YIELD_EVERY_UNREAD_LOOKUPS) {
+        sinceYield = 0
+        await yieldToLoop()
+        if (signal?.aborted) return { sessions: page, total, cancelled: true }
+      }
     }
     return { sessions: page, total }
   } finally {

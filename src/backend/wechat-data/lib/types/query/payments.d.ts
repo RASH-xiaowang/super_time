@@ -5,6 +5,8 @@ export interface PaymentStatus {
     /** transferTable */
     transfer?: {
         transferId: string;
+        /** The id that actually matched (primary or secondary card). */
+        matchedServerId: string;
         paySubType: number;
         receiver: string;
         payer: string;
@@ -22,6 +24,11 @@ export interface PaymentStatus {
         hbType: number;
         receiveStatus: number;
         sendId: string;
+        /**
+         * Claim state proved by a local system message. When absent, the UI must
+         * show the raw pair `(hbStatus, receiveStatus)` instead of guessing.
+         */
+        claimEvidence?: 'self-claimed' | 'other-claimed' | 'returned';
     };
 }
 /**
@@ -30,4 +37,4 @@ export interface PaymentStatus {
  * @param serverId - server_id as string (may exceed 2^53).
  * @returns authoritative status (found=false when absent).
  */
-export declare function queryPaymentStatus(decryptedDir: string, serverId: string): PaymentStatus;
+export declare function queryPaymentStatus(decryptedDir: string, serverId: string): Promise<PaymentStatus>;

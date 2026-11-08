@@ -21,14 +21,14 @@ export interface VoiceVideoRemoteCtx {
  * @returns 三个方法与拆分前完全一致。
  */
 export function createVoiceVideoRemotes(rc: VoiceVideoRemoteCtx): {
-  getVoiceInfo: (options: { username: string; localId: number }) => VoiceInfoResult
+  getVoiceInfo: (options: { username: string; localId: number; svrId?: string }) => VoiceInfoResult
   getVoiceDataUrl: (options: { username?: string; localId?: number; svrId?: string }) => Promise<VoiceDataUrlResult>
   getVideoInfo: (options: { username?: string; localId?: number; md5?: string }) => VideoInfoResult
 } {
   const rawWechatBase = rc.rawWechatBase
   return {
-    getVoiceInfo(options: { username: string; localId: number }): VoiceInfoResult {
-      return resolveVoiceInfo(rc.dirs().decrypted, options.username, options.localId)
+    getVoiceInfo(options: { username: string; localId: number; svrId?: string }): VoiceInfoResult {
+      return resolveVoiceInfo(rc.dirs().decrypted, options.username, options.localId, options.svrId ?? '')
     },
 
     async getVoiceDataUrl(options: { username?: string; localId?: number; svrId?: string }): Promise<VoiceDataUrlResult> {

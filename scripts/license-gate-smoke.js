@@ -8,8 +8,8 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { authorizeCall, hasFeature, getLicenseStatus, isUsableStatus } = require('../src/license/service')
-const { PRODUCT_ID } = require('../src/license/schema')
+const { authorizeCall, authorizeFeature, hasFeature, getLicenseStatus, isUsableStatus } = require('../src/license/service')
+const { PRODUCT_ID, validatePayload } = require('../src/license/schema')
 
 function assert(cond, msg) {
   if (!cond) {
@@ -27,6 +27,15 @@ const licensed = {
 }
 const expired = { state: 'expired', licensed: false, code: 'EXPIRED' }
 const unlicensed = { state: 'unlicensed', licensed: false, code: 'LICENSE_REQUIRED' }
+const licensedV2 = {
+  state: 'licensed',
+  licensed: true,
+  code: 'OK',
+  payload: {
+    features: ['wechat-data', 'chats', 'ai-ask'],
+    featureSchemaVersion: 2,
+  },
+}
 
 assert(authorizeCall(licensed, 'getSessions').ok, '正式证允许基础查询')
 assert(authorizeCall(licensed, 'askWechat').ok, '正式证允许 ai-ask')
@@ -35,12 +44,44 @@ assert(!authorizeCall(expired, 'getSessions').ok, '过期拒绝一切业务调�
 assert(authorizeCall(expired, 'getSessions').code === 'EXPIRED', '过期 code=EXPIRED')
 assert(!authorizeCall(unlicensed, 'getSessions').ok, '无证拒绝一切业务调用')
 assert(authorizeCall(unlicensed, 'getSessions').code === 'LICENSE_REQUIRED', '无证 code=LICENSE_REQUIRED')
+// 新版证书严格按逐项功能位判定；
+assert(authorizeCall(licensedV2, 'getSessions').ok, '新版证书含“聊天会话”时允许查询会话')
+assert(!authorizeCall(licensedV2, 'getAnnualReview').ok, '新版证书未含年度报告时拒绝年度报告')
+assert(authorizeCall(licensedV2, 'getAnnualReview').message.includes('年度报告'), '拒绝理由使用中文功能名')
+assert(!authorizeFeature(licensedV2, 'image-ai').ok, '新版证书未含图片智能理解时拒绝直连 IPC 功能')
+// 旧证没有功能目录版本，基础位继续兼容新增的数据模块（不改变已签发客户的用法）。
+assert(authorizeCall(licensed, 'getAnnualReview').ok, '旧证的基础位兼容新增数据功能')
+assert(authorizeFeature(licensed, 'image-ai').ok, '旧证的基础位兼容已有直连能力')
 assert(!isUsableStatus(unlicensed) && isUsableStatus(licensed), 'isUsableStatus 只认 licensed')
 // 旧版的试用态即使被伪造进状态对象也不得放行
 assert(!isUsableStatus({ state: 'trial', licensed: false }), '伪造的 trial 态不放行')
 assert(!authorizeCall({ state: 'trial', licensed: false, code: 'TRIAL' }, 'getSessions').ok, '伪造的 trial 态被拒绝')
 assert(hasFeature(licensed, 'export') && !hasFeature(licensed, 'backup'), 'hasFeature 按 features 列表')
 assert(hasFeature(licensed, 'wechat-data'), 'hasFeature 命中 wechat-data')
+const v2MissingBase = validatePayload({
+  product: PRODUCT_ID,
+  licenseId: 'LIC-V2-NO-BASE',
+  edition: 'pro',
+  issuedTo: { name: '测试客户' },
+  device: { fingerprint: 'f'.repeat(40) },
+  issuedAt: '2026-01-01T00:00:00.000Z',
+  features: ['chats'],
+  featureSchemaVersion: 2,
+  seats: 1,
+})
+assert(!v2MissingBase.ok && v2MissingBase.reason.includes('wechat-data'), '新版许可证缺少基础功能位时结构校验拒绝')
+const v2UnknownFeature = validatePayload({
+  product: PRODUCT_ID,
+  licenseId: 'LIC-V2-UNKNOWN-FEATURE',
+  edition: 'pro',
+  issuedTo: { name: '测试客户' },
+  device: { fingerprint: 'f'.repeat(40) },
+  issuedAt: '2026-01-01T00:00:00.000Z',
+  features: ['wechat-data', 'typo-feature'],
+  featureSchemaVersion: 2,
+  seats: 1,
+})
+assert(!v2UnknownFeature.ok && v2UnknownFeature.reason.includes('unknown_feature'), '新版许可证包含未登记功能位时结构校验拒绝')
 
 // ── 真实状态：空 userData 必须落到 unlicensed，且不落任何试用文件 ──
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'st-license-gate-'))

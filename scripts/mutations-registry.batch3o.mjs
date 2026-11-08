@@ -43,8 +43,8 @@ export const MUTATIONS_BATCH3O = [
     id: 'M517-sessions-push-immediate-refresh-lost',
     why: '会话列表的「推送即刷」接线被拆（合并窗参数不再透传）⇒ 又回到 300ms 合并窗 + 节流闸排队：updated 事件出来到侧栏重排多出几百毫秒（用户要求「updated 一出来就立刻刷」的口径回退）。判据：paged-list.spec.ts 的「刷新节流间隔可被面板覆盖」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/hooks.tsx',
-    from: "'dsh-wechat-data-updated', refreshDebounceMs ?? 300)",
-    to: "'dsh-wechat-data-updated', 300)",
+    from: "'dsh-wechat-data-updated', refreshDebounceMs ?? 300,",
+    to: "'dsh-wechat-data-updated', 300,",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list.spec.ts',
   },
 ]

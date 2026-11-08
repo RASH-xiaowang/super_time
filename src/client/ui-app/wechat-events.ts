@@ -39,7 +39,7 @@ export type { BackendEvent }
  */
 export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boolean }> = [
   // 解密数据有更新：WAL 实时刷新链的源头（会话列表、消息列表、群信息抽屉都订它）
-  { from: 'wechat-data/updated', to: 'dsh-wechat-data-updated' },
+  { from: 'wechat-data/updated', to: 'dsh-wechat-data-updated', detail: true },
   // 微信问答的**流式回答增量**：payload 是 { id, text }，text 是「已生成的全文」
   // （不是片段），渲染端整体替换即可。
   { from: 'wechat-ask/delta', to: 'dsh-wechat-ask-delta', detail: true },
@@ -58,10 +58,6 @@ export const EVENT_MAP: ReadonlyArray<{ from: string, to: string, detail?: boole
   { from: 'wechat-export/progress', to: 'dsh-wechat-export-progress', detail: true },
   // 搜索索引构建的进度（同样是回调过不了传输层，只能推事件再认领）
   { from: 'search-index/progress', to: 'dsh-search-index-progress', detail: true },
-  // ClawBot 接入会话有新消息（幂等提示：detail 是 { lastId, delta }，不含正文）
-  { from: 'clawbot/message', to: 'dsh-clawbot-message', detail: true },
-  // ClawBot 绑定状态迁移（申请二维码 / 绑定成功 / 解绑）
-  { from: 'clawbot/binding-changed', to: 'dsh-clawbot-binding-changed', detail: true },
   // 任务触发扫描新建了记录 / 投递了回调（2026-10-19 提速）：payload { created, dispatched }。
   // 面板靠它回源；没有这一条就只能等下一次微信同步事件（约 10s）才看到新记录。
   { from: 'task-center/updated', to: 'dsh-wechat-task-center-updated', detail: true },

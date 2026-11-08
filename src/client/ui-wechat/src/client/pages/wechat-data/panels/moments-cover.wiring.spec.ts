@@ -37,13 +37,12 @@ function findRoot(start: string): string {
   throw new Error('找不到仓库根')
 }
 const ROOT = findRoot(HERE)
-// M21 第二十二/二十四刀把 Moments.tsx 拆成 support + panel + portals + 转发桶
-// ⇒ 读**该前缀的全部模块的联合**（断言一条没改；源码搬到哪份都算数）。
+// M21 把朋友圈拆成 support + panel + portals 等模块后，统一读**该前缀的全部模块**，
+// 断言不受源码搬到哪一份影响。
 // 用 readdir 扫描而不是手写清单：下次再拆一刀不必回来补名字（troubleshoot 过一次：
 // 第二十四刀搬走详情弹层后，手写清单漏了 portals，`setFailedImgs(prev => …add(dfk))` 当场变红）。
 const moments = readdirSync(HERE)
   .filter((f) => /^moments-[a-z-]+\.tsx$/.test(f))
-  .concat(['Moments.tsx'])
   .sort()
   .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const momentsCss = readFileSync(join(HERE, 'moments.module.css'), 'utf8')
@@ -72,13 +71,17 @@ function remoteImgSites(file: string): Array<{ attrs: string[]; text: string }> 
   visit(src)
   return out
 }
-const sites = [join(HERE, 'moments-card.tsx'), join(HERE, 'moments-portals.tsx')].flatMap(remoteImgSites)
+const sites = [
+  join(HERE, 'moments-card.tsx'),
+  join(HERE, 'moments-portals.tsx'),
+  join(HERE, 'moments-video-tile.tsx'),
+].flatMap(remoteImgSites)
 
 describe('朋友圈：图片失败要有占位，不能留空格子', () => {
   it('每个固定尺寸的图框都带 failed 占位（视频封面/灯箱缩略图条除外），旧的 display:none 与 failedImgs 一律不许回来', () => {
-    // 灯箱缩略图条已迁到共享 MediaViewer（data URL 经 API 取回），因此这里剩 7 个
-    // 仍由 RemoteImg 承载的远程图面位；数量下限跟着真实架构走，但继续防止扫描面塌空。
-    expect(sites.length, '朋友圈里没有 RemoteImg？前提不成立（图没走代理）').toBeGreaterThanOrEqual(7)
+    // 灯箱缩略图条已迁到共享 MediaViewer（data URL 经 API 取回）；视频封面也抽成
+    // 卡片/详情共用的一份 MomentsVideoTile，因此这里剩 6 个不同的 RemoteImg 面位。
+    expect(sites.length, '朋友圈里没有 RemoteImg？前提不成立（图没走代理）').toBeGreaterThanOrEqual(6)
     // 两类例外与旧口径同样有理由：视频封面（.videoTile 自带背景 + ▶ 徽标）、灯箱缩略图条
     // （取不到就收起那一格，容器本身仍有意义）—— 都不会留下"没有意义的空格子"。
     const collapseOk = ['videoCover', 'lightboxThumb']
@@ -97,7 +100,10 @@ describe('朋友圈：图片失败要有占位，不能留空格子', () => {
     // 反例：`display = 'none'` 正是留空格子的写法；failedImgs 那台状态机已被代理的确定信号取代
     expect(moments, '仍有把 img 藏掉的旧写法').not.toMatch(/style\.display = 'none'/)
     expect(moments, 'failedImgs 已被 RemoteImg 的 pending/failed 取代').not.toMatch(/failedImgs/)
-    expect(moments, '渲染层不该再用 onError 兜远程图：失败原因现在由代理给出').not.toMatch(/onError=/)
+    expect(
+      sites.filter((s) => s.attrs.includes('#onError')),
+      'RemoteImg 不该再用 onError 兜远程图：失败原因现在由代理给出',
+    ).toEqual([])
   })
 
   it('`.linkCover` 是固定尺寸的框 —— 这正是必须给占位的原因', () => {

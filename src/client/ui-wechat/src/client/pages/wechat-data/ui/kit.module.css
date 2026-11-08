@@ -25,7 +25,7 @@
   font-size: var(--nm-fs-xl);
   font-weight: 600;
   color: var(--nm-text-1);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 /* 层级说明（第 23 轮，实测依据）
@@ -86,6 +86,7 @@
   pointer-events: none;
   display: inline-flex;
 }
+.searchIcon svg { display: block; }
 
 .searchInput {
   width: 100%;
@@ -116,9 +117,8 @@
   color: var(--nm-text-2);
   background: transparent;
   border: none;
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-md);
   cursor: pointer;
-  font-size: var(--nm-fs-sm);
 }
 
 .searchClear:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
@@ -214,9 +214,10 @@
 }
 
 .statValue {
-  font-size: var(--nm-fs-2xl);
-  font-weight: 700;
-  font-family: var(--nm-font-mono);
+  font-size: var(--nm-fs-xl);
+  font-weight: 600;
+  font-family: var(--nm-font-sans);
+  font-variant-numeric: tabular-nums;
   color: var(--nm-text-1);
   line-height: var(--nm-lh-tight);
 }
@@ -265,9 +266,10 @@
 }
 
 .cellMono {
-  font-family: var(--nm-font-mono);
+  font-family: inherit;
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .cellPrimary { color: var(--nm-text-1); font-weight: 500; }
@@ -278,9 +280,9 @@
   padding: 6px 10px;
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-1);
-  background: var(--nm-bg-2);
+  background: var(--nm-bg-card);
   border: 1px solid var(--nm-border-hover);
-  border-radius: var(--nm-r-sm);
+  border-radius: var(--nm-r-md);
   box-shadow: var(--nm-shadow-popup);
   line-height: var(--nm-lh-tight);
   z-index: 80;
@@ -293,7 +295,7 @@
   gap: 4px;
   padding: 1px 8px;
   font-size: var(--nm-fs-xs, 11px);
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-sm);
   border: 1px solid transparent;
   line-height: 18px;
   white-space: nowrap;
@@ -347,7 +349,7 @@
  * 定义**逐字节相同**的 `.btn` 及其 hover / :disabled / [data-active]（第 29 轮重复审计：
  * 共 16 条规则、15 处用法）；第 29 轮收敛为本文件的 `.btnPill` 类，第 34 轮再收敛到
  * `ui-primitives-shim` 的 `<Button variant="pill">` —— 也就是项目里原先**两套按钮外观**
- * 的正式合并点：面板胶囊（r999、1px 描边、卡片底、7px 14px、12px）现在是组件的一个变体，
+ * 的正式合并点：面板次级按钮（6px 圆角、1px 描边、卡片底、12px）现在是组件的一个变体，
  * 而不是又一处本地 CSS。规则本体见 `Button.module.css` 的 `.button.pill`，请勿在
  * 面板里重新定义；新增面板按钮直接写 `<Button variant="pill">`。
  */
@@ -474,7 +476,7 @@
   padding: 0 10px;
   font-size: var(--nm-fs-md);
   color: var(--nm-text-1);
-  background: var(--nm-bg-input);
+  background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   cursor: pointer;
@@ -482,15 +484,15 @@
 }
 
 .selectTrigger:hover { border-color: var(--nm-border-hover); }
-.selectTrigger:focus-visible { border-color: var(--nm-border-active); box-shadow: var(--nm-glow-sm); }
+.selectTrigger:focus-visible { border-color: var(--nm-border-active); outline: 2px solid var(--nm-border-active); outline-offset: 1px; }
 
 .selectContent {
   z-index: 90;
   min-width: var(--radix-select-trigger-width);
   padding: 4px;
-  background: var(--nm-bg-1);
+  background: var(--nm-bg-card);
   border: 1px solid var(--nm-border-hover);
-  border-radius: var(--nm-r-md);
+  border-radius: var(--nm-r-lg);
   box-shadow: var(--nm-shadow-popup);
   max-height: 320px;
   overflow: auto;
@@ -529,7 +531,7 @@
   font-family: inherit;
   font-size: var(--nm-fs-md);
   color: var(--nm-text-1);
-  background: var(--nm-bg-input);
+  background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   outline: none;
@@ -537,7 +539,7 @@
   font-variant-numeric: tabular-nums;
 }
 .dateField:hover { border-color: var(--nm-border-hover); }
-.dateField:focus-visible { border-color: var(--nm-border-active); box-shadow: var(--nm-glow-sm); }
+.dateField:focus-visible { border-color: var(--nm-border-active); outline: 2px solid var(--nm-border-active); outline-offset: 1px; }
 /* 空值时原生渲染的「年 / 月 / 日」占位由 color-scheme 决定色，这里只压淡未填写的观感：
    靠 :placeholder-shown 无效（date 没有 placeholder），改用「值为空」时的 data 属性在
    组件侧打标。 */
@@ -561,14 +563,14 @@
 
 .dateRangePresets { display: flex; flex-wrap: wrap; gap: 6px; }
 .datePresetChip {
-  height: 24px;
+  height: 28px;
   padding: 0 10px;
   font-family: inherit;
   font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   background: transparent;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill);
+  border-radius: var(--nm-r-md);
   cursor: pointer;
   transition: var(--nm-t-ui, color .15s, border-color .15s, background .15s);
 }
@@ -619,6 +621,10 @@
 .skelMeta { display: block; width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
 /* 列表哨兵：2px 占位，靠 IntersectionObserver 触发下一页。 */
 .sentinel { height: 2px; flex-shrink: 0; }
+/* 渐进列表回收头部后的等高占位；grid 下一行占满，flex/block 下保持全宽。 */
+.windowSpacer { width: 100%; min-height: 0; flex: 0 0 auto; pointer-events: none; grid-column: 1 / -1; }
+/* 顶部回收哨兵：向上滚回时按区间恢复已卸载条目，grid 下独占一行。 */
+.windowTopSentinel { width: 100%; height: 2px; flex: 0 0 auto; pointer-events: none; grid-column: 1 / -1; }
 
 .vlistRow {
   position: absolute;
@@ -921,8 +927,8 @@
  * 统一在这里补上，焦点环用主题强调色，深浅两套主题都清晰可见。
  * ──────────────────────────────────────────── */
 .searchClear:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 1px;
 }
 
 /* ────────────────────────────────────────────

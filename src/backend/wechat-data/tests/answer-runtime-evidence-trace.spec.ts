@@ -263,7 +263,7 @@ describe('evidence：KB citation 八字段', () => {
         key: 'kb:8:5',
         trace: { kind: 'kb', kbId: 8, fileId: 1, chunkId: 5, ordinal: 0, page: 0, heading: '' },
       })],
-    }], { kbOnly: true, allowedKbId: 7 })
+    }], { allowedKbId: 7 })
     expect(wrongKb.items).toEqual([])
     expect(wrongKb.status).toBe('blocked')
     expect(wrongKb.stats.rejectedCount).toBe(1)
@@ -275,10 +275,10 @@ describe('evidence：KB citation 八字段', () => {
         key: 'wxid_a:1',
         name: '项目群',
         time: '',
-        snippet: '消息不能进入自动回复证据',
+        snippet: '消息不能进入仅知识库证据',
         source: 'msg',
       }],
-    }], { kbOnly: true, allowedKbId: 7 })
+    }], { allowedKbId: 7 })
     expect(nonKb.items).toEqual([])
     expect(nonKb.status).toBe('failed')
     expect(nonKb.stats.malformedHits).toBe(1)
@@ -546,7 +546,7 @@ describe('evidence：范围能力不足与越界阻断分离', () => {
     const bundle = buildEvidenceBundle([{
       tool: 'search_messages',
       ok: false,
-      error: 'kb-only 已阻止访问本机微信数据',
+      error: '隐私闸门阻止访问本机微信数据',
       errorCode: 'data_scope_blocked',
       hits: [],
     }])
@@ -554,6 +554,6 @@ describe('evidence：范围能力不足与越界阻断分离', () => {
     expect(bundle.status).toBe('blocked')
     expect(bundle.missing).toContain('scope')
     expect(bundle.stats.scopeBlockedResults).toBe(1)
-    expect(bundle.stats.rejectionNotes?.[0]).toContain('search_messages：kb-only')
+    expect(bundle.stats.rejectionNotes?.[0]).toContain('search_messages：隐私闸门阻止访问本机微信数据')
   })
 })

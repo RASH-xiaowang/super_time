@@ -27,7 +27,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--nm-dense-g3);
-  padding: var(--nm-dense-g3) var(--nm-dense-g4);
+  padding: 6px 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
@@ -65,7 +65,7 @@
   padding: 0 14px;
   font-size: var(--nm-dense-fs-sm);
   font-weight: 650;
-  color: var(--nm-bg-0);
+  color: var(--nm-on-accent);
   background: var(--nm-cyan);
   border: 1px solid var(--nm-cyan);
   border-radius: var(--nm-dense-r);
@@ -146,24 +146,24 @@
   display: flex;
   align-items: baseline;
   gap: var(--nm-dense-g3);
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--nm-border);
 }
 .cardTitle { font-size: var(--nm-dense-fs); font-weight: 700; color: var(--nm-text-1); }
 .cardExtra { margin-left: auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); font-variant-numeric: tabular-nums; }
-.cardBody { padding: 10px 12px; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
+.cardBody { padding: 8px 10px; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
 
 /* ── 统计条：一排大数字 ───────────────────────────────────────── */
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
-  gap: var(--nm-dense-g3);
+  gap: 6px;
 }
 .stat {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: var(--nm-bg-0);
@@ -171,7 +171,7 @@
 }
 .statK { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
 .statV {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--nm-text-1);
   font-variant-numeric: tabular-nums;
@@ -182,7 +182,7 @@
   white-space: nowrap;
 }
 .statV[data-tone='cyan'] { color: var(--nm-cyan); }
-.statV[data-tone='purple'] { color: var(--nm-purple); }
+.statV[data-tone='purple'] { color: var(--nm-text-2); }
 .statV[data-tone='pink'] { color: var(--nm-pink); }
 
 /* ── 24 小时分布 ──────────────────────────────────────────────── */
@@ -190,7 +190,7 @@
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: 56px;
+  height: 48px;
   padding-top: 4px;
 }
 .hourCol {
@@ -230,7 +230,7 @@
 .barIdentity { min-width: 0; }
 .barLabel { color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barTrack { height: 6px; border-radius: var(--nm-r-xs); background: var(--nm-bg-0); overflow: hidden; }
-.barFill { height: 100%; border-radius: var(--nm-r-xs); background: var(--nm-purple); }
+.barFill { height: 100%; border-radius: var(--nm-r-xs); background: var(--nm-text-3); }
 .barValue { text-align: right; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 
 /* ── 总结正文 ─────────────────────────────────────────────────── */
@@ -276,6 +276,61 @@
   letter-spacing: 0.02em;
 }
 .emptyActions { display: flex; align-items: center; gap: var(--nm-dense-g3); margin-top: var(--nm-dense-g2); flex-wrap: wrap; justify-content: center; }
+
+@media (max-width: 560px) {
+  .panel [class*='_panelHeader_'] {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .panel [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .panel [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    gap: 4px;
+    padding: 4px 6px;
+    scrollbar-width: thin;
+  }
+
+  .toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  .toolbarRange.toolbarRange {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+    width: max-content;
+  }
+
+  .toolbar [class*='_dateRangePresets_'],
+  .toolbar [class*='_dateRangeRow_'] {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .toolbarSpacer {
+    display: none;
+  }
+
+  .cardExtra {
+    margin-left: 0;
+    font-size: 10px;
+  }
+}
 
 /* ── 历史抽屉 ─────────────────────────────────────────────────── */
 .historyDrawer {
@@ -367,7 +422,7 @@
   border: 1px solid var(--nm-border);
   white-space: nowrap;
 }
-.historyKind[data-kind='period'] { color: var(--nm-purple); border-color: color-mix(in srgb, var(--nm-purple) 35%, transparent); }
+.historyKind[data-kind='period'] { color: var(--nm-text-2); border-color: var(--nm-border); }
 .historyMeta { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .historyPreview { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .historyActions { display: flex; gap: 2px; margin-left: auto; flex: 0 0 auto; }

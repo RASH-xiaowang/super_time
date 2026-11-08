@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { decodeImageDataUrlAsync } from './media-image-async.ts'
 import { queryMessages } from './messages.ts'
+import { resolveChatIdentity } from './message-identity.ts'
 import type {
   ChatCollectTask, ChatCollectTaskResult, ChatCollectTaskSnapshot, WechatMessage,
 } from '../types.ts'
@@ -84,11 +85,18 @@ function cellNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
-function rowToTask(r: Record<string, unknown>): ChatCollectTask {
+function rowToTask(decryptedDir: string, r: Record<string, unknown>): ChatCollectTask {
+  const storedUsername = cellStr(r['username'])
+  const identity = resolveChatIdentity(decryptedDir, storedUsername)
+  const storedDisplayName = cellStr(r['display_name']).trim()
   return {
     id: cellNum(r['id']),
-    username: cellStr(r['username']),
-    displayName: cellStr(r['display_name']),
+    username: identity.username,
+    // Old task rows may have persisted the physical table hash as both the
+    // username and display name. Never replay that implementation detail.
+    displayName: storedDisplayName && storedDisplayName !== storedUsername
+      ? storedDisplayName
+      : identity.displayName,
     textLimit: cellNum(r['text_limit']),
     imageLimit: cellNum(r['image_limit']),
     textCount: cellNum(r['text_count']),
@@ -135,7 +143,7 @@ export function listChatCollectTasks(decryptedDir: string): ChatCollectTaskSnaps
     const db = openStore(decryptedDir)
     try {
       const rows = db.prepare('SELECT * FROM chat_collect_tasks ORDER BY id DESC LIMIT 50').all() as Array<Record<string, unknown>>
-      return { items: rows.map(rowToTask), total: rows.length }
+      return { items: rows.map((row) => rowToTask(decryptedDir, row)), total: rows.length }
     } finally {
       db.close()
     }
@@ -205,11 +213,19 @@ export async function createChatCollectTask(
   decodedDir: string,
   options: ChatCollectOptions,
 ): Promise<ChatCollectTaskResult> {
-  const username = typeof options.username === 'string' ? options.username.trim() : ''
-  if (username === '') return { ok: false, error: '未指定会话' }
+  const requestedUsername = typeof options.username === 'string' ? options.username.trim() : ''
+  if (requestedUsername === '') return { ok: false, error: '未指定会话' }
+  const identity = resolveChatIdentity(decryptedDir, requestedUsername)
+  if (!identity.username) return { ok: false, error: '无法解析会话身份；旧消息表 hash 已失效' }
+  const username = identity.username
   const textLimit = clampInt(options.textLimit, TEXT_LIMIT_DEFAULT, 1, TEXT_LIMIT_MAX)
   const imageLimit = clampInt(options.imageLimit, IMAGE_LIMIT_DEFAULT, 0, IMAGE_LIMIT_MAX)
-  const displayName = (options.displayName ?? '').trim()
+  const requestedDisplayName = (options.displayName ?? '').trim()
+  // A navigation target may still carry the old hash as its display label.
+  // Keep a real caller-supplied title, otherwise derive the canonical one.
+  const displayName = requestedDisplayName && requestedDisplayName !== requestedUsername
+    ? requestedDisplayName
+    : identity.displayName
   const selfUsername = (options.selfUsername ?? '').trim()
   const texts: CollectTextItem[] = []
   const images: CollectImageItem[] = []

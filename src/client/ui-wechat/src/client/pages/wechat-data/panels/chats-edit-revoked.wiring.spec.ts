@@ -70,6 +70,14 @@ function mediaBlockOf(css: string, condition: string, needle: string): string {
   return ''
 }
 
+/** 撤回行已从「取前 N 条」改为渐进窗口；锚点只认 map 到后备哨兵之间的真实行体。 */
+function revokedRowsOf(): { start: number; end: number; rows: string } {
+  const match = /filtered\.slice\([^)]*rvCount[^)]*\)\.map/.exec(REVOKED)
+  const start = match?.index ?? -1
+  const end = start >= 0 ? REVOKED.indexOf('{filtered.length > rvCount', start) : -1
+  return { start, end, rows: start >= 0 && end > start ? REVOKED.slice(start, end) : '' }
+}
+
 describe('编辑消息弹窗', () => {
   it('仍把 editDialog 接到 Dialog 上，并把 editArea 接到 textarea 上', () => {
     const start = TOOLS.indexOf('<Dialog')
@@ -151,11 +159,9 @@ describe('撤回行', () => {
   })
 
   it('每一行都直接渲染 RevokedContent，不等展开才出现', () => {
-    const start = REVOKED.indexOf('filtered.slice(0, rvCount).map')
-    const end = REVOKED.indexOf('{filtered.length > rvCount', start)
+    const { start, end, rows } = revokedRowsOf()
     expect(start, '找不到撤回行 map').toBeGreaterThan(-1)
     expect(end, '找不到撤回行 map 的结束位置').toBeGreaterThan(start)
-    const rows = REVOKED.slice(start, end)
 
     expect(rows, '撤回正文/资源不是每行都渲染').toContain('<RevokedContent item={it} open={open} />')
     expect(rows, '撤回正文/资源又被包在展开条件里').not.toMatch(/\{open\s*&&/)
@@ -164,9 +170,9 @@ describe('撤回行', () => {
   })
 
   it('头像、昵称、类型、时间与展开指示的结构保持', () => {
-    const start = REVOKED.indexOf('filtered.slice(0, rvCount).map')
-    const end = REVOKED.indexOf('{filtered.length > rvCount', start)
-    const rows = REVOKED.slice(start, end)
+    const { start, end, rows } = revokedRowsOf()
+    expect(start, '找不到撤回行 map').toBeGreaterThan(-1)
+    expect(end, '找不到撤回行 map 的结束位置').toBeGreaterThan(start)
     const headerAt = rows.indexOf('<div className={css.rvRowHd}>')
     const avatarAt = rows.indexOf('<Avatar')
     const nameAt = rows.indexOf('<span className={css.rowName}>')

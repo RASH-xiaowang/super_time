@@ -23,7 +23,7 @@ const NORMAL_PRIORITY = 1;
 const HEAVY_PRIORITY = 2;
 
 /**
- * 首屏/导航/状态读取。名单短一点：错放进交互档只会让它插队，不会造成越权。
+ * 首屏/导航/状态读取与直接播放控制。名单短一点：错放进交互档只会让它插队，不会造成越权。
  *
  * `getMapGeoJson`（2026-10-18）：世界地图底图**本地优先**，正常路径是读
  * `resources/geo/world.zh.json`（毫秒级、不出网）；但它和首屏请求同时发车，
@@ -50,10 +50,11 @@ const INTERACTIVE_METHODS = Object.freeze(new Set([
   'getPrivacyState',
   'getSearchIndexStatus',
   'getMapGeoJson',
-  'listClawbotMessages',
-  'getClawbotBinding',
-  'getClawbotBindState',
-  'checkClawbotEnv',
+  /*
+   * 语音首解最坏可达 120s，仍在 LONG_CALL_METHODS 里保留长 RPC 窗口；
+   * 但它由用户点击直接触发，必须排在自动内联分析之前，不能被重活车道阻塞。
+   */
+  'getVoiceDataUrl',
 ]));
 
 const CANCEL_METHODS = Object.freeze(new Set(Object.values(CALL_CANCEL_METHODS)));
@@ -174,10 +175,11 @@ function callPriorityFor(method, args) {
   if (CANCEL_METHODS.has(method)) {
     return INTERACTIVE_PRIORITY;
   }
+  // 交互优先级先于长任务分类：播放请求仍享受长 RPC 窗口，但不进入重活车道。
+  if (INTERACTIVE_METHODS.has(method)) return INTERACTIVE_PRIORITY;
   if (LONG_CALL_METHODS.has(method)) {
     return downgradeHeavyByArgs(method, args) ? NORMAL_PRIORITY : HEAVY_PRIORITY;
   }
-  if (INTERACTIVE_METHODS.has(method)) return INTERACTIVE_PRIORITY;
   return NORMAL_PRIORITY;
 }
 

@@ -905,3 +905,39 @@ describe('无幂等键厂商只发一次（不自动重试）', () => {
     })
   }
 })
+
+describe('出网前标记', () => {
+  it('同一请求链只标记一次；标记失败时一个字节也不发出', async () => {
+    const retried = createTransport((_call, index) => (
+      index === 0 ? { status: 500, rawBody: 'retry' } : { status: 200, body: { ok: true } }
+    ))
+    let marked = 0
+    const sent = await dispatch(
+      webhook,
+      makeCtx({ url: 'https://hook.example.com/cb' }),
+      {
+        ...retried.deps,
+        onOutboundAttempt: async () => {
+          marked += 1
+        },
+      },
+    )
+    expect(sent.status).toBe('sent')
+    expect(retried.calls).toHaveLength(2)
+    expect(marked).toBe(1)
+
+    const blocked = createTransport({ status: 200, body: { ok: true } })
+    const failed = await dispatch(
+      webhook,
+      makeCtx({ url: 'https://hook.example.com/cb' }),
+      {
+        ...blocked.deps,
+        onOutboundAttempt: async () => {
+          throw new Error('投递租约已失效')
+        },
+      },
+    )
+    expect(failed).toMatchObject({ status: 'failed', error: expect.stringContaining('租约已失效') })
+    expect(blocked.calls).toHaveLength(0)
+  })
+})

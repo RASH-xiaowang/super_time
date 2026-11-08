@@ -5,8 +5,7 @@
  *  · username 缺失时只显示首字母，不按昵称猜图、不写缓存；
  *  · 同昵称不同 username 不能共享缓存。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

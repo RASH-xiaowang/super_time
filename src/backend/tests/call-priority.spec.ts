@@ -30,6 +30,9 @@ const {
   downgradeHeavyByArgs: (method: unknown, args: unknown) => boolean
   callPriorityFor: (method: unknown, args?: unknown) => number
 }
+const { LONG_CALL_METHODS } = require('../remote-policy.js') as {
+  LONG_CALL_METHODS: ReadonlySet<string>
+}
 
 describe('callPriorityFor', () => {
   it('首屏读与取消动作进交互档', () => {
@@ -43,6 +46,12 @@ describe('callPriorityFor', () => {
     expect(callPriorityFor('exportAllSessions')).toBe(HEAVY_PRIORITY)
     expect(callPriorityFor('fetchOriginalImagesBatch')).toBe(HEAVY_PRIORITY)
     expect(callPriorityFor('askWechat')).toBe(HEAVY_PRIORITY)
+  })
+
+  it('语音播放优先于内联分析，但保留长 RPC 超时窗口', () => {
+    expect(callPriorityFor('getVoiceDataUrl')).toBe(INTERACTIVE_PRIORITY)
+    expect(callPriorityFor('analyzeVisibleMessages')).toBe(HEAVY_PRIORITY)
+    expect(LONG_CALL_METHODS.has('getVoiceDataUrl')).toBe(true)
   })
 
   it('未知/非字符串方法回普通档（不猜测）', () => {

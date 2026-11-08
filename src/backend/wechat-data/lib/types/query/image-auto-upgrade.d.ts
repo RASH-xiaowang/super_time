@@ -76,7 +76,8 @@ export declare function autoUpgradeMemorySize(): number;
 /** 供测试注入时间（避免等 10 分钟）。 */
 export declare const __testing: {
     RETRY_TTL_MS: number;
-    triedAt: Map<string, number>;
+    TRIED_MAX_ENTRIES: number;
+    triedAt: import("./cache-budget.ts").BoundedCache<string, number>;
     existsSync: typeof existsSync;
     join: (...paths: string[]) => string;
 };

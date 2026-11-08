@@ -15,6 +15,8 @@ export interface MomentMedia {
     id?: string;
     /** Timeline <id> (SnsDataItem/TimelineObject id). */
     timelineId?: string;
+    /** 这张静态图附带的实况视频；普通图片没有该字段。 */
+    livePhoto?: MomentLivePhoto;
 }
 /** One video media entry parsed from the XML. */
 export interface MomentVideo {
@@ -27,6 +29,17 @@ export interface MomentVideo {
     id?: string;
     /** Timeline <id> (SnsDataItem/TimelineObject id). */
     timelineId?: string;
+}
+/**
+ * 实况照片内嵌的视频段（`<LivePhoto><liveMedia>`）。
+ *
+ * 实况照片在朋友圈 XML 里**不是一个独立的 `<media>`**：外层 `<media>` 是静态图，
+ * 动态部分嵌在它的 `<LivePhoto><liveMedia>` 里。字段口径与普通视频一致，
+ * `stillImageTimeMs` 是微信给的静态帧时刻（用于播放时对齐封面）。
+ */
+export interface MomentLivePhoto extends MomentVideo {
+    /** `<liveStillImageTimeMs>`，单位毫秒。 */
+    stillImageTimeMs?: number;
 }
 /** One like entry. */
 export interface MomentLike {

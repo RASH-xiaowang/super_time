@@ -4,7 +4,7 @@
  * ## 为什么用 tick 数而不是用时间
  *
  * 让出型查询的判据若写成「这段时间里别的任务动了多久」，在 CI 上必然假红 ——
- * runner 比本机慢一个量级（`vitest.config.ts` 的 `testTimeout` 就是因为这个从 30s 提到 180s）。
+ * runner 比本机慢一个量级（`vitest.config.mts` 的 `testTimeout` 就是因为这个从 30s 提到 180s）。
  *
  * ## 为什么这个数是**结构性**的
  *

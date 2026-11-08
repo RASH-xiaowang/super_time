@@ -1,6 +1,6 @@
 {
   "name": "super-time-electron",
-  "version": "1.1.0",
+  "version": "1.1.3",
   "description": "Super Time —— 把本机微信数据变成可检索、可分析、可导出的 Electron 桌面工作台（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
@@ -9,10 +9,12 @@
     "dev:only": "node scripts/launch-app.mjs",
     "dev:pair-link": "node scripts/dev-pair-link.mjs",
     "prestart": "npm run build:all",
-    "build:all": "npm run build:backend && npm run build:types && npm run build:ui",
+    "build:all": "npm run build:backend && npm run build:types && npm run build:ui && npm run font:check",
     "build:ui": "vite build",
     "build:backend": "node scripts/build-wechat-bundle.js",
     "build:types": "node scripts/build-types.js",
+    "clean:local": "node scripts/clean-local-artifacts.mjs",
+    "clean:local:apply": "node scripts/clean-local-artifacts.mjs --apply",
     "check:backend": "node scripts/check-generated-artifacts.js --backend",
     "check:types": "node scripts/check-generated-artifacts.js --types",
     "typecheck:server": "tsc -p src/backend/wechat-data/tsconfig.json --noEmit",
@@ -28,6 +30,9 @@
     "audit:remote-types": "node tools/audit-remote-types.mjs",
     "security-guard:smoke": "node scripts/security-guard-smoke.js",
     "security-guard:smoke:packaged": "node scripts/security-guard-smoke.js --packaged",
+    "security:artifacts": "node scripts/check-release-artifacts.js --source",
+    "security:artifacts:packaged": "node scripts/check-release-artifacts.js --packaged",
+    "security:release": "node scripts/verify-release-signature.js",
     "test": "vitest run",
     "test:answer-replies": "vitest run src/backend/wechat-data/tests/acceptance/answer-runtime/reply-contract.spec.ts",
     "test:affected": "node scripts/affected-tests.mjs",
@@ -41,6 +46,8 @@
     "deps-provenance:write": "node scripts/deps-provenance.mjs --write",
     "deps-provenance:import": "node scripts/deps-provenance.mjs --import",
     "check:wx-tokens": "node scripts/check-wx-tokens.js",
+    "font:check": "node scripts/font-compliance-check.mjs --source-only",
+    "font:check:packaged": "node scripts/font-compliance-check.mjs --packaged",
     "rag:check": "node scripts/rag-retrieval-check.js",
     "check:whisper-paths": "node scripts/whisper-paths-check.js",
     "check:sns-video": "node scripts/sns-video-check.js",
@@ -73,11 +80,11 @@
     "renderer-console:e2e": "node scripts/renderer-console-capture-e2e.mjs",
     "e2e:backup-progress": "node scripts/backup-progress-e2e.mjs",
     "e2e:export-nonblocking": "node scripts/export-nonblocking-e2e.mjs",
-    "package:smoke": "node scripts/packaged-smoke.js",
+    "package:smoke": "npm run font:check:packaged && node scripts/packaged-smoke.js",
     "package:sns-video:smoke": "node scripts/packaged-sns-video-check.js",
     "m1-secrets:smoke": "node scripts/m1-secrets-migration-smoke.js",
     "epipe:smoke": "node scripts/epipe-smoke.js",
-    "pack": "npm run build:all && electron-builder --dir",
+    "pack": "npm run build:all && electron-builder --dir --config electron-builder.test.config.js",
     "dist": "npm run build:all && electron-builder --win nsis",
     "license-studio": "electron tools/license-studio",
     "license-keygen": "node scripts/license-keygen.js",
@@ -145,6 +152,7 @@
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0",
     "@typescript-eslint/parser": "^8.70.1",
+    "ajv": "^8.20.0",
     "clsx": "^2.0.0",
     "echarts": "^6.1.0",
     "electron": "^44.3.0",
@@ -154,6 +162,7 @@
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
     "jsdom": "^30.0.1",
+    "js-yaml": "^4.3.2",
     "playwright": "^1.63.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -175,6 +184,8 @@
         "releaseType": "release"
       }
     ],
+    "afterPack": "scripts/electron-builder-after-pack.js",
+    "afterAllArtifactBuild": "scripts/electron-builder-after-all.js",
     "files": [
       "main.js",
       "preload.js",
@@ -207,6 +218,7 @@
       "!node_modules/sharp/**",
       "!node_modules/@img/**",
       "node_modules/pdfjs-dist/**/*",
+      "!node_modules/pdfjs-dist/standard_fonts/**",
       "!node_modules/pdfjs-dist/**/*.map",
       "!node_modules/pdfjs-dist/build/**",
       "!node_modules/pdfjs-dist/legacy/web/**",
@@ -221,14 +233,37 @@
       "!node_modules/xlsx/bin/**",
       "!node_modules/xlsx/types/**",
       "node_modules/zod/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.map",
+      "!**/*.ts",
+      "!**/*.tsx",
+      "!**/*.cts",
+      "!**/*.mts",
+      "!**/*.tsbuildinfo",
+      "!**/tsconfig*.json",
+      "!**/tests/**",
+      "!**/test/**",
+      "!**/__tests__/**",
+      "!**/*.spec.js",
+      "!**/*.test.js",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/.npmrc",
+      "!**/*.pem",
+      "!**/*.pfx",
+      "!**/*.p12",
+      "!**/*.ppk",
+      "!**/wechat/config.json",
+      "!**/wechat/llm.json",
+      "!**/license.json",
+      "!**/activation-request*.json"
     ],
     "asarUnpack": [
-      "node_modules/koffi/**",
       "node_modules/@koromix/**",
       "node_modules/onnxruntime-node/bin/napi-v6/win32/x64/**",
-      "src/backend/wechat-data/native/**",
-      "src/backend/wechat-data/resources/**",
+      "src/backend/wechat-data/native/**/*.dll",
+      "src/backend/wechat-data/native/**/*.exe",
+      "src/backend/wechat-data/resources/**/*.exe",
       "wechat/README.md",
       "wechat/whisper/**"
     ],
@@ -237,10 +272,18 @@
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false,
       "enableEmbeddedAsarIntegrityValidation": true,
-      "onlyLoadAppFromAsar": true
+      "onlyLoadAppFromAsar": true,
+      "enableCookieEncryption": true
     },
     "win": {
       "icon": "build/icon.ico",
+      "verifyUpdateCodeSignature": true,
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      },
       "target": [
         {
           "target": "nsis",
@@ -248,8 +291,7 @@
             "x64"
           ]
         }
-      ],
-      "signExecutable": false
+      ]
     },
     "nsis": {
       "oneClick": false,

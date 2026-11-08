@@ -46,8 +46,8 @@ export interface GraphNodeMenuInput {
   canOpenChat: boolean
 }
 
-/** 知识类节点没有“查看聊天”（它们是库里的内容，不是通讯录对象）。 */
-const KNOWLEDGE_KINDS = new Set<GNode['kind']>(['note', 'stub', 'file', 'section', 'entity'])
+/** 只有真实的单聊好友与群聊有会话；知识节点和「我」节点都不是可打开的 username。 */
+const CHAT_KINDS = new Set<GNode['kind']>(['person', 'group'])
 /** 可固定的是社交布局锚点；“我”始终固定，知识节点不是布局锚点。 */
 const PINNABLE_KINDS = new Set<GNode['kind']>(['person', 'group'])
 
@@ -85,7 +85,7 @@ export function buildNodeMenuItems(input: GraphNodeMenuInput): GraphNodeMenuItem
     { id: 'copy-id', label: '复制节点 ID', group: 'copy' },
   )
 
-  if (!knowledge && canOpenChat && !KNOWLEDGE_KINDS.has(node.kind)) {
+  if (!knowledge && canOpenChat && CHAT_KINDS.has(node.kind)) {
     items.push({ id: 'open-chat', label: '查看聊天', group: 'content' })
   }
 

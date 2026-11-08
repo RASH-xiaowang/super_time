@@ -76,18 +76,31 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   useEscapeToClose(open, onClose)
   useDialogFocus(open, '[data-st-dialog="chats-contactinfo"]')
 
+  const requestSeqRef = useRef(0)
+  const sessionUsername = session?.username ?? ''
+  const sessionType = session?.type
   useEffect(() => {
     if (!open || !session) return
+    const requestSeq = ++requestSeqRef.current
     let alive = true
     setLoading(true)
     setErr(null)
     setData(null)
     void apiGetContact360(session.username)
-      .then((r) => { if (alive) setData(r) })
-      .catch((e: unknown) => { if (alive) setErr((e as Error).message) })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [open, session])
+      .then((r) => {
+        if (alive && requestSeq === requestSeqRef.current) setData(r)
+      })
+      .catch((e: unknown) => {
+        if (alive && requestSeq === requestSeqRef.current) setErr((e as Error).message)
+      })
+      .finally(() => {
+        if (alive && requestSeq === requestSeqRef.current) setLoading(false)
+      })
+    return () => {
+      alive = false
+      requestSeqRef.current += 1
+    }
+  }, [open, sessionUsername, sessionType])
 
   /*
    * 数据事件后的静默重取。静默 = 不置 loading、不清已画的数据（清掉会闪骨架屏）；
@@ -103,8 +116,10 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
     const target = sessionRef.current
     if (!target || target.type === 'group') return
     const fetchedFor = target.username
+    const requestSeq = ++requestSeqRef.current
     void apiGetContact360(fetchedFor)
       .then((r) => {
+        if (requestSeq !== requestSeqRef.current) return
         const cur = sessionRef.current
         if (!infoRefreshApplies(openRef.current, fetchedFor, cur?.username ?? null)) return
         setData(r)

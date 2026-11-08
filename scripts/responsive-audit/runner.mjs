@@ -227,7 +227,7 @@ export async function run () {
     /**
      * 深度链接进入一个页签：写 hash → reload。
      * WechatDataPanel 只在挂载时读 `location.hash`（没有 hashchange 监听），所以必须 reload；
-     * 这也正是深链（#ledger / #graph / #settings…）的进入姿势，41 个可路由状态都能覆盖。
+     * 这也正是深链（#ledger / #graph / #settings…）的进入姿势，40 个可路由状态都能覆盖。
      */
     const goto = async (tab) => {
       let lastErr = null

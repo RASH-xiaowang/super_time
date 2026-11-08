@@ -81,7 +81,11 @@
 /* ── Drawer（Radix Dialog，右侧抽屉） ─────── */
 .drawerOverlay {
   position: fixed;
-  inset: 0;
+  /* Portal 在 body 下，必须自己让开 Electron 的自绘标题栏；浏览器态变量为 0。 */
+  top: var(--st-titlebar-h, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 60;
   background: rgba(0, 0, 0, 0.4);
 }
@@ -90,7 +94,7 @@
 
 .drawer {
   position: fixed;
-  top: 0;
+  top: var(--st-titlebar-h, 0px);
   right: 0;
   bottom: 0;
   z-index: 61;
@@ -180,7 +184,7 @@
   flex-direction: column;
   background: var(--nm-bg-2);
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-xl);
+  border-radius: var(--nm-r-lg);
   box-shadow: var(--nm-shadow-popup);
   outline: none;
 }
@@ -209,8 +213,8 @@
 .tabTrigger:focus-visible,
 .segItem:focus-visible,
 .drawerClose:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 1px;
 }
 
 /* ============================================================
@@ -250,7 +254,7 @@
     max-height: 88dvh;
     border-left: none;
     border-top: 1px solid var(--nm-border);
-    border-radius: var(--nm-r-lg, 14px);
+    border-radius: var(--nm-r-xl);
   }
 
   .dialog {
@@ -262,7 +266,7 @@
     max-width: 100%;
     max-height: 88dvh;
     transform: none;
-    border-radius: var(--nm-r-lg, 14px);
+    border-radius: var(--nm-r-xl);
     /* 手势条那一段留白，免得底部按钮压在系统手势区里点不到 */
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }

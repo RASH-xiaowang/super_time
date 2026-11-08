@@ -132,7 +132,6 @@ const RADIUS_BASELINE: Record<string, Record<string, number>> = {
 }
 
 const ODD_SPACING_BASELINE: Record<string, number> = {
-  'ui-primitives-shim/src/Button.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 3,
 }

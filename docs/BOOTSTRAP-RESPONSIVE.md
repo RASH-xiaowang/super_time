@@ -213,7 +213,6 @@
 |---|---|---|
 | `railToggle`（知识图谱/知识库「⚙ 参数」） | 窄屏显示按钮、宽屏隐藏 | 宽屏右栏内联常驻；窄屏才需要按钮切换右栏 |
 | kb/kbfiles `detailPane` | 无选中项时隐藏 | 详情区没有内容可显示，不是丢数据 |
-| clawbot `_sectionBd` | 折叠的 `<details>` 内容隐藏 | 用户折叠态，可展开 |
 | chats 家族侧栏 `_stats`（好友/群聊计数） | 手机档随侧栏整体收起 | 手机档侧栏只保留搜索条，导航由底部标签栏接管（wechat-data.module.css ≤560 档） |
 | overview 世界地图 `_title`（「🌍 好友地区分布」） | 所有视口 display:none | 父卡片头已有同名标题，地图工具栏内的是重复标签 |
 | overview `_avatarRailLeft/Right` | 部分视口隐藏 | 地图两侧的头像栏在窄地图上会遮挡地图主体，属降级 |

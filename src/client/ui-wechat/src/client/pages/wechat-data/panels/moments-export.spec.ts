@@ -12,15 +12,24 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildExportOptions, type ExportForm, type ExportScope } from './moments-export.ts'
+import { DEFAULT_EMBED_HTML_IMAGES, buildExportOptions, type ExportForm, type ExportScope } from './moments-export.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FILE = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-export.ts'
 
-const FORM: ExportForm = { format: 'html', from: '', to: '', dir: '', images: false, zip: false }
+const FORM: ExportForm = {
+  format: 'html', from: '', to: '', dir: '', images: false, zip: false,
+  includeImages: true, includeVideos: true, includeLivePhotos: true,
+}
 const SCOPE: ExportScope = { search: '', media: 'all', month: null, mine: 'all' }
 
 describe('buildExportOptions：逐键「给了才带」', () => {
+  it('HTML 默认内嵌离线图片，避免导出后全是 CDN 破图', () => {
+    expect(DEFAULT_EMBED_HTML_IMAGES).toBe(true)
+    const source = readFileSync(FILE, 'utf8')
+    expect(source).toContain('useState(DEFAULT_EMBED_HTML_IMAGES)')
+  })
+
   it('什么都没筛 ⇒ 只剩 format（少一个键 = 后端按全量口径导）', () => {
     expect(buildExportOptions(FORM, SCOPE)).toEqual({ format: 'html' })
   })
@@ -31,8 +40,31 @@ describe('buildExportOptions：逐键「给了才带」', () => {
     expect(buildExportOptions(FORM, { ...SCOPE, month: '2026-09' })).toEqual({ format: 'html', month: '2026-09' })
     expect(buildExportOptions(FORM, { ...SCOPE, mine: 'mine' })).toEqual({ format: 'html', mine: 'mine' })
     expect(buildExportOptions({ ...FORM, images: true }, SCOPE)).toEqual({ format: 'html', images: true })
+    expect(buildExportOptions({ ...FORM, format: 'json', images: true }, SCOPE)).toEqual({ format: 'json' })
     expect(buildExportOptions({ ...FORM, zip: true }, SCOPE)).toEqual({ format: 'html', zip: true })
     expect(buildExportOptions({ ...FORM, dir: 'D:/out' }, SCOPE)).toEqual({ format: 'html', dir: 'D:/out' })
+  })
+
+  it('ZIP 媒体默认全含；只把明确关闭的原图类型传 false', () => {
+    expect(buildExportOptions({ ...FORM, zip: true }, SCOPE)).toEqual({ format: 'html', zip: true })
+    expect(buildExportOptions({
+      ...FORM,
+      zip: true,
+      includeImages: false,
+      includeLivePhotos: false,
+    }, SCOPE)).toEqual({
+      format: 'html',
+      zip: true,
+      includeImages: false,
+      includeLivePhotos: false,
+    })
+    expect(buildExportOptions({
+      ...FORM,
+      zip: false,
+      includeImages: false,
+      includeVideos: false,
+      includeLivePhotos: false,
+    }, SCOPE)).toEqual({ format: 'html' })
   })
 
   it('media/mine 的 all 是「不设筛」，不许当成值发出去', () => {
@@ -71,6 +103,7 @@ describe('buildExportOptions：逐键「给了才带」', () => {
 
 describe('接线：导出只有这一条路', () => {
   const panel = readFileSync(join(HERE, 'moments-panel.tsx'), 'utf8')
+  const portals = readFileSync(join(HERE, 'moments-portals.tsx'), 'utf8')
 
   it('面板走钩子，且不再自己持有表单状态', () => {
     expect(panel).toContain('useMomentsExport')
@@ -80,11 +113,26 @@ describe('接线：导出只有这一条路', () => {
     }
   })
 
-  it('全仓只有这一层真的调 `apiExportMoments`', () => {
+  it('导出结果按钮打开文件所在目录，而不是直接打开导出文件', () => {
+    expect(panel).toContain('revealExportPath(exportedPath, hold)')
+    expect(panel).toContain('api.showInFolder(path)')
+    expect(panel).toContain('>打开文件目录</button>')
+    expect(panel).not.toContain('apiOpenPath(exportedPath)')
+  })
+
+  it('朋友圈导出与历史重放是仅有的两个 `apiExportMoments` 调用点', () => {
     const callers = readdirSync(HERE, { withFileTypes: true })
       .filter((e) => e.isFile() && /\.(ts|tsx)$/.test(e.name) && !e.name.includes('.spec.'))
       .filter((e) => readFileSync(join(HERE, e.name), 'utf8').includes('apiExportMoments('))
       .map((e) => e.name)
-    expect(callers, `调用点不该散开：${callers.join(', ') || '（一个都没有 ⇒ 判据在空转）'}`).toEqual(['moments-export.ts'])
+      .sort()
+    expect(callers, `调用点不该散开：${callers.join(', ') || '（一个都没有 ⇒ 判据在空转）'}`).toEqual(['ExportHistoryDialog.tsx', 'moments-export.ts'])
+  })
+
+  it('ZIP 选中后才显示原图/原视频/实况图三个开关', () => {
+    expect(portals).toContain('{expZip && (')
+    for (const label of ['包含原始：', '<span>图片</span>', '<span>视频</span>', '<span>实况图</span>']) {
+      expect(portals).toContain(label)
+    }
   })
 })

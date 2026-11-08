@@ -28,11 +28,11 @@ const MOD_MARKS = [
   'if (!exportOpen) return null',
   'e.target === e.currentTarget',
   'expTypes.length === 0 ? ',
-  'progress.total > 0',
-  'Math.min(100,',
-  'indeterminate={exportProgress.total <= 0}',
-  'onClick={cancelExport}',
+  '<ExportProgressStatus state={exportState} onCancel={cancelExport} />',
+  "finishing ? '完成中…'",
+  'exportState.status === \'running\'',
   'disabled={exporting}',
+  'void exportSession()',
 ] as const
 
 describe('导出弹窗的接线', () => {
@@ -83,7 +83,7 @@ describe('导出弹窗的接线', () => {
     expect(view).toContain('exportDialog: ChatsExportDialogProps')
     expect(panel).toContain('exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir,')
     // 逐件传参不许长回来：长回来就是第二份清单，下次加格式必漏一处
-    for (const back of ['expFrom={', 'exportProgress={', 'EXPO_TYPES={']) {
+    for (const back of ['expFrom={', 'exportState={', 'EXPO_TYPES={']) {
       expect(view, `导出调用点又出现逐件写法 ${back}`).not.toContain(back)
     }
   })

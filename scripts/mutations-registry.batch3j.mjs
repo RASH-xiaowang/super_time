@@ -41,7 +41,7 @@ export const MUTATIONS_BATCH3J = [
     id: 'M499-chats-group-info-state-bag-drops-live-hook',
     why: '群信息状态袋不再调用 useGroupInfoLive ⇒ 刷新件整套成死代码（面板侧没有任何别的接线点），抽屉又回到「打开时取一次」的旧缺陷，而它自己的 spec 全绿。判据：chats-group-info-view.wiring.spec.ts 的「状态袋接上 useGroupInfoLive」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-group-info.tsx',
-    from: 'useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, setGroupInfo, setGroupInfoErr })',
+    from: 'useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, requestGate: groupInfoRequestGate, setGroupInfo, setGroupInfoErr })',
     to: '',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-group-info-view.wiring.spec.ts',
   },

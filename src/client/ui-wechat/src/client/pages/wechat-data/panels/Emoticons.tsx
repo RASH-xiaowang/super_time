@@ -15,9 +15,9 @@
  *
  * 搜索对三个页签都生效（按 caption / MD5 / 包名）。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { copyTextToClipboard } from '../utils/misc.ts'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, ProgressiveListSpacer, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetEmoticons } from '../api.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { EmptyMaybeSyncing, SearchInput, Select, Toolbar } from '../ui/kit.tsx'
@@ -117,8 +117,18 @@ export function EmoticonsPanel(): React.JSX.Element {
   }, [packages, q])
 
   const shown = tab === 'mine' ? filteredMine : tab === 'others' ? filteredOthers : []
-  const { count: emoCount, sentinelRef: emoSentinel } = useProgressiveList(shown.length, 150)
-  const { count: pkgCount, sentinelRef: pkgSentinel } = useProgressiveList(tab === 'packages' ? filteredPackages.length : 0, 150)
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const windowKey = `${tab}\u0000${q}`
+  const { start: emoStart, count: emoCount, beforeHeight: emoBefore, sentinelRef: emoSentinel, topSentinelRef: emoTopSentinel } = useProgressiveList(
+    shown.length,
+    150,
+    { maxCount: 300, resetKey: windowKey, listRef: gridRef },
+  )
+  const { start: pkgStart, count: pkgCount, beforeHeight: pkgBefore, sentinelRef: pkgSentinel, topSentinelRef: pkgTopSentinel } = useProgressiveList(
+    tab === 'packages' ? filteredPackages.length : 0,
+    150,
+    { maxCount: 300, resetKey: windowKey, listRef: gridRef },
+  )
 
   const copyMd5 = (md5: string): void => {
     void copyTextToClipboard(md5).then((ok) => { notify(ok ? '已复制 MD5: ' + md5.slice(0, 8) + '…' : '复制失败') })
@@ -159,7 +169,7 @@ export function EmoticonsPanel(): React.JSX.Element {
         )}
       />
       {notice && <div className={css.notice}>{notice}</div>}
-      <div className={css.grid}>
+      <div ref={gridRef} className={css.grid}>
         {loading && <ListSkeleton rows={10} grid />}
         {error && <div className={kitCss.error} role="alert">⚠️ 表情数据加载失败（{error}）</div>}
 
@@ -174,8 +184,9 @@ export function EmoticonsPanel(): React.JSX.Element {
                 : '其他表情来自聊天记录里别人发过的表情。取到图后会永久保存到本地缓存，下次打开直接显示。'}
           />
         )}
-        {!loading && !error && tab !== 'packages' && shown.slice(0, emoCount).map((e: EmoticonItem) => (
-          <EmoticonCell key={e.md5} e={e} onCopy={copyMd5} />
+        {!loading && !error && tab !== 'packages' && <ProgressiveListSpacer height={emoBefore} topSentinelRef={emoTopSentinel} />}
+        {!loading && !error && tab !== 'packages' && shown.slice(emoStart, emoCount).map((e: EmoticonItem, idx) => (
+          <EmoticonCell key={e.md5} e={e} onCopy={copyMd5} itemIndex={emoStart + idx} />
         ))}
         {!loading && !error && tab !== 'packages' && shown.length > emoCount && <ListSentinel refFn={emoSentinel} />}
         {/* 个人表情还有下一页时才挂分页哨兵；「其他表情」是一次性返回的完整列表。 */}
@@ -190,8 +201,9 @@ export function EmoticonsPanel(): React.JSX.Element {
               : '表情包来自微信「表情商店」的本地缓存：没下载/收藏过表情包，或刚启动后台仍在同步（首次约 1–2 分钟）时都会是空的。'}
           />
         )}
-        {!loading && !error && tab === 'packages' && filteredPackages.slice(0, pkgCount).map(p => (
-          <PackageCell key={p.name} name={p.name} count={p.count} />
+        {!loading && !error && tab === 'packages' && <ProgressiveListSpacer height={pkgBefore} topSentinelRef={pkgTopSentinel} />}
+        {!loading && !error && tab === 'packages' && filteredPackages.slice(pkgStart, pkgCount).map((p, idx) => (
+          <PackageCell key={p.name} name={p.name} count={p.count} itemIndex={pkgStart + idx} />
         ))}
         {!loading && !error && tab === 'packages' && filteredPackages.length > pkgCount && <ListSentinel refFn={pkgSentinel} />}
       </div>

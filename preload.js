@@ -75,6 +75,10 @@ const electronAPI = deepFreeze({
     activateLlmProfile: (id) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'activate', id }),
     saveLlmProfile: (options) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'save', ...(options || {}) }),
     deleteLlmProfile: (id) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'delete', id }),
+    /** 微信原生 OCR（仅桌面端）：图片 data URL / wechat-media URL → 识别结果。 */
+    ocrImage: (source) => ipcRenderer.invoke('wechat:ocr-image', { source }),
+    /** 图片文字 AI 识别：交给当前配置的多模态模型，并返回结构化 JSON。 */
+    imageAiJson: (source) => ipcRenderer.invoke('wechat:image-ai-json', { source }),
     /** 后端进程状态快照：渲染端挂载后补一次，避免错过首启期间的状态事件。 */
     backendState: () => ipcRenderer.invoke('wechat:backend-state'),
     onEvent: (listener) => {

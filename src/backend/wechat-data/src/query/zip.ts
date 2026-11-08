@@ -522,7 +522,7 @@ export class ZipFileWriter {
         throwIfCancelled(ctrl?.signal)
         await this.write(chunk)
         copied += chunk.length
-        reportProgress(ctrl, 'write', copied, csize)
+        reportProgress(ctrl, 'zip-write', copied, csize)
       }
       this.centrals.push(Buffer.concat([
         u32(0x02014b50), u16(20), u16(20), u16(0), u16(METHOD_DEFLATE), u16(0), u16(0),

@@ -17,8 +17,7 @@
  *  · 灯箱那张缺图的按需解析只发生一次。
  * @module moments-media-spec
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -37,7 +36,18 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('../api.ts', () => mocks)
 
-const { collectMediaKeys, pendingCovers, useMomentsMedia, videoCoverKey } = await import('./moments-media.ts')
+const {
+  BoundedMediaSet,
+  MOMENTS_MEDIA_KEY_CACHE_MAX,
+  MOMENTS_MEDIA_QUEUE_MAX,
+  collectMediaKeys,
+  createCancellableHeavyRpcLane,
+  enqueueIntersecting,
+  pendingCovers,
+  requeueAfterDelay,
+  useMomentsMedia,
+  videoCoverKey,
+} = await import('./moments-media.ts')
 type Media = ReturnType<typeof useMomentsMedia>
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -131,11 +141,167 @@ describe('pendingCovers：只为本机没有的文章链接去打网络', () => 
     expect(pendingCovers([art], {}, {}, attempts)).toEqual(['https://x/1'])
   })
 
-  it('最多试 3 次，第 4 轮就不许再打（否则一个永久失败的链接会一直出网）', () => {
+  it('候选筛选不消耗尝试次数；调用方只按已发送次数限制到 3 次', () => {
     const attempts = new Map<string, number>()
-    for (let i = 0; i < 3; i += 1) expect(pendingCovers([art], {}, {}, attempts)).toEqual(['https://x/1'])
+    for (let i = 0; i < 4; i += 1) expect(pendingCovers([art], {}, {}, attempts)).toEqual(['https://x/1'])
+    expect(attempts.size, 'pendingCovers 不应提前消耗重试预算').toBe(0)
+    attempts.set('https://x/1', 2)
+    expect(pendingCovers([art], {}, {}, attempts)).toEqual(['https://x/1'])
+    attempts.set('https://x/1', 3)
     expect(pendingCovers([art], {}, {}, attempts), '试满 3 次之后还在重试').toEqual([])
-    expect(attempts.get('https://x/1')).toBe(3)
+  })
+
+  it('已经在飞的文章链接不会在 effect 重跑时重复入队', () => {
+    const inflight = new Set(['https://x/1'])
+    expect(pendingCovers([art], {}, {}, new Map(), inflight)).toEqual([])
+  })
+})
+
+describe('媒体元数据上限', () => {
+  it('卡片登记过的媒体键只保留最近 4000 条，长列表不会让 spec 表无限增长', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver')
+    class FakeIntersectionObserver {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return [] }
+    }
+    Object.defineProperty(globalThis, 'IntersectionObserver', {
+      configurable: true,
+      writable: true,
+      value: FakeIntersectionObserver,
+    })
+    try {
+      const specs = Array.from(
+        { length: MOMENTS_MEDIA_KEY_CACHE_MAX + 8 },
+        (_, i) => img('bounded-' + String(i)),
+      )
+      render({ specs })
+      expect(media?.mediaKeySpec.current.size).toBe(MOMENTS_MEDIA_KEY_CACHE_MAX)
+      expect(media?.mediaKeySpec.current.has('bounded-0')).toBe(false)
+      expect(media?.mediaKeySpec.current.has('bounded-' + String(MOMENTS_MEDIA_KEY_CACHE_MAX + 7))).toBe(true)
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'IntersectionObserver', descriptor)
+      else Reflect.deleteProperty(globalThis, 'IntersectionObserver')
+    }
+  })
+
+  it('待解密队列按视口优先级截断到硬上限，被挤掉的键可以再次入队', () => {
+    const specOf = new Map<string, { md5: string; kind: 'img' }>()
+    const entries = Array.from({ length: MOMENTS_MEDIA_QUEUE_MAX + 25 }, (_, i) => {
+      const key = 'queued-' + String(i)
+      specOf.set(key, { md5: key, kind: 'img' })
+      return {
+        isIntersecting: true,
+        target: {
+          dataset: { snsKey: key },
+          getBoundingClientRect: () => ({ top: 0, bottom: 10 }),
+        },
+      }
+    })
+    const active = new Set<string>()
+    const fetched = new BoundedMediaSet<string>(MOMENTS_MEDIA_KEY_CACHE_MAX, () => active)
+    const queue = { current: [] as Array<{ key: string; md5: string; kind: 'img' }> }
+
+    expect(enqueueIntersecting(
+      entries as unknown as IntersectionObserverEntry[],
+      specOf,
+      fetched,
+      active,
+      queue,
+      null,
+    )).toBe(true)
+    expect(queue.current.length).toBe(MOMENTS_MEDIA_QUEUE_MAX)
+    expect(active.size).toBe(MOMENTS_MEDIA_QUEUE_MAX)
+    expect(fetched.size).toBe(MOMENTS_MEDIA_QUEUE_MAX)
+    expect(queue.current.every((item) => active.has(item.key) && fetched.has(item.key))).toBe(true)
+    expect(fetched.has('queued-' + String(MOMENTS_MEDIA_QUEUE_MAX + 24))).toBe(false)
+
+    const droppedKey = 'queued-' + String(MOMENTS_MEDIA_QUEUE_MAX + 24)
+    expect(enqueueIntersecting(
+      [{
+        isIntersecting: true,
+        target: {
+          dataset: { snsKey: droppedKey },
+          getBoundingClientRect: () => ({ top: 0, bottom: 10 }),
+        },
+      }] as unknown as IntersectionObserverEntry[],
+      specOf,
+      fetched,
+      active,
+      queue,
+      null,
+    )).toBe(true)
+    expect(queue.current.some((item) => item.key === droppedKey), '被挤出队列的键没有再次入队').toBe(true)
+    expect(fetched.has(droppedKey)).toBe(true)
+  })
+
+})
+
+describe('媒体队列与重活车道恢复', () => {
+  it('队列满时淘汰队尾预取项，重试项立即入队且只触发一次 timer', () => {
+    vi.useFakeTimers()
+    try {
+      const queue = {
+        current: Array.from(
+          { length: MOMENTS_MEDIA_QUEUE_MAX },
+          (_, i) => ({ key: 'queued-' + String(i), md5: String(i), kind: 'img' as const }),
+        ),
+      }
+      const active = new Set(queue.current.map((item) => item.key))
+      const fetched = new Set(active)
+      const timers = { current: new Set<number>() }
+      const unmounted = { current: false }
+      const drain = vi.fn()
+      const retry = { key: 'retry-me', md5: 'retry-me', kind: 'img' as const }
+      active.add(retry.key)
+      fetched.add(retry.key)
+      const droppedKey = queue.current[queue.current.length - 1]!.key
+
+      requeueAfterDelay(retry, queue, active, fetched, unmounted, timers, drain)
+      expect(vi.getTimerCount()).toBe(1)
+      act(() => { vi.advanceTimersByTime(1500) })
+      expect(queue.current.length).toBe(MOMENTS_MEDIA_QUEUE_MAX)
+      expect(queue.current[0]?.key).toBe('retry-me')
+      expect(queue.current.some((item) => item.key === droppedKey), '队尾预取项没有被淘汰').toBe(false)
+      expect(active.has(droppedKey)).toBe(false)
+      expect(fetched.has(droppedKey)).toBe(false)
+      expect(active.has(retry.key)).toBe(true)
+      expect(fetched.has(retry.key)).toBe(true)
+      expect(drain).toHaveBeenCalledTimes(1)
+      expect(timers.current.size).toBe(0)
+      expect(vi.getTimerCount(), '队列满时发生了递归续期').toBe(0)
+
+      act(() => { vi.advanceTimersByTime(5000) })
+      expect(drain).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('重活车道取消后跳过已排队但尚未开始的任务', async () => {
+    let cancelled = false
+    let releaseFirst!: () => void
+    let firstStarted = false
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const lane = createCancellableHeavyRpcLane(() => cancelled)
+    const first = lane(async () => {
+      firstStarted = true
+      await firstGate
+      return 'first'
+    })
+    const secondTask = vi.fn(async () => 'second')
+    const second = lane(secondTask)
+
+    await Promise.resolve()
+    expect(firstStarted).toBe(true)
+    cancelled = true
+    releaseFirst()
+
+    await expect(first).resolves.toBe('first')
+    await expect(second).rejects.toThrow('朋友圈媒体请求已取消')
+    expect(secondTask).not.toHaveBeenCalled()
   })
 })
 
@@ -163,13 +329,17 @@ function Harness(props: {
 
 const img = (md5: string): [string, { md5: string; kind: 'img' }] => [md5, { md5, kind: 'img' }]
 
-const render = (props: { moments?: readonly MomentItem[]; viewer?: Parameters<typeof useMomentsMedia>[0]['viewer']; specs?: Array<[string, { md5: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }]> } = {}): void => {
+const render = (
+  props: { moments?: readonly MomentItem[]; viewer?: Parameters<typeof useMomentsMedia>[0]['viewer']; specs?: Array<[string, { md5: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }]> } = {},
+  strict = false,
+): void => {
   act(() => {
-    root.render(createElement(Harness, {
+    const harness = createElement(Harness, {
       moments: props.moments ?? [],
       viewer: props.viewer ?? null,
       specs: props.specs ?? [],
-    }))
+    })
+    root.render(strict ? createElement(StrictMode, null, harness) : harness)
   })
 }
 
@@ -187,7 +357,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  root.unmount()
+  act(() => { root.unmount() })
   host.remove()
 })
 
@@ -390,6 +560,180 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     render({ viewer })
     await flush()
     expect(mocks.apiGetSnsImageDataUrl, '同一张灯箱图被解了两次').toHaveBeenCalledTimes(1)
+  })
+
+  it('其他图片上屏不会取消并重启正在进行的灯箱请求', async () => {
+    let releaseLightbox: ((value: { url: string }) => void) | null = null
+    mocks.snsMediaCacheGet.mockResolvedValue(null)
+    mocks.apiGetSnsImageDataUrl.mockImplementation(({ md5 }: { md5: string }) => {
+      if (md5 === 'lightbox-slow') {
+        return new Promise((resolve) => {
+          releaseLightbox = resolve
+        })
+      }
+      return Promise.resolve({ url: 'data:' + md5 })
+    })
+    const viewer = { images: [{ md5: 'lightbox-slow', url: 'u', thumb: 't' }], index: 0, author: '张三' }
+
+    render({ viewer, specs: [img('other-fast')] })
+    await flush()
+    await flush()
+    const lightboxCalls = (): number => mocks.apiGetSnsImageDataUrl.mock.calls
+      .filter((call) => (call[0] as { md5: string }).md5 === 'lightbox-slow')
+      .length
+    expect(imgs()).toContain('other-fast')
+    expect(lightboxCalls()).toBe(1)
+
+    releaseLightbox!({ url: 'data:lightbox-slow' })
+    await flush()
+    await flush()
+    expect(lightboxCalls(), '无关图片更新重启了灯箱请求').toBe(1)
+    expect(imgs()).toContain('lightbox-slow')
+  })
+})
+
+describe('useMomentsMedia：失败重试状态的生命周期', () => {
+  it('卸载时取消尚未触发的重试 timer，回调不再持有面板或继续请求', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      mocks.snsMediaCacheGet.mockResolvedValue(null)
+      mocks.apiGetSnsImageDataUrl.mockRejectedValue(new Error('暂时失败'))
+
+      render({ specs: [img('unmounted-retry')] })
+      await flush()
+      expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(1)
+
+      act(() => { root.unmount() })
+      expect(vi.getTimerCount(), '卸载后仍有延迟重试 timer 持有面板闭包').toBe(0)
+      host.remove()
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      root = createRoot(host)
+      act(() => { vi.advanceTimersByTime(5000) })
+      await flush()
+      expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('永久失败不留下计数；重新挂载后从头获得完整重试预算', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      mocks.snsMediaCacheGet.mockResolvedValue(null)
+      mocks.apiGetSnsImageDataUrl.mockRejectedValue(new Error('永久失败'))
+
+      render({ specs: [img('retry-reset')] })
+      await flush()
+      for (let i = 0; i < 2; i += 1) {
+        act(() => { vi.advanceTimersByTime(1500) })
+        await flush()
+      }
+      expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(3)
+
+      act(() => { root.unmount() })
+      host.remove()
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      root = createRoot(host)
+
+      render({ specs: [img('retry-reset')] })
+      await flush()
+      for (let i = 0; i < 2; i += 1) {
+        act(() => { vi.advanceTimersByTime(1500) })
+        await flush()
+      }
+      expect(mocks.apiGetSnsImageDataUrl, '失败计数跨挂载残留，第二次只试了一次').toHaveBeenCalledTimes(6)
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('封面 effect 取消后的迟到回包不写 state，也不安排新的 retry timer', async () => {
+    vi.useFakeTimers()
+    let releaseCover!: (value: { items: Array<{ url: string; dataUrl?: string; error?: string }> }) => void
+    mocks.apiGetArticleCovers.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseCover = resolve
+    }))
+    const article = mk({ tid: 'cover-late', contentType: 3, link_url: 'https://x/late' })
+    try {
+      render({ moments: [article] })
+      await flush()
+      expect(mocks.apiGetArticleCovers).toHaveBeenCalledTimes(1)
+
+      render({ moments: [] })
+      releaseCover({
+        items: [
+          { url: 'https://x/late', dataUrl: 'data:late-cover' },
+          { url: 'https://x/missed', error: 'no cover' },
+        ],
+      })
+      await flush()
+      await flush()
+
+      expect(media?.articleCovers['https://x/late'], '已取消 effect 的回包仍写入了封面').toBeUndefined()
+      expect(vi.getTimerCount(), '已取消 effect 的迟到回包仍安排了重试 timer').toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('封面包被依赖变化取消后，仍会唤醒新 effect 重新认领该 URL', async () => {
+    vi.useFakeTimers()
+    let releaseFirst!: (value: { items: Array<{ url: string; error?: string }> }) => void
+    mocks.apiGetArticleCovers
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve }))
+      .mockResolvedValueOnce({ items: [{ url: 'https://x/reclaim', dataUrl: 'data:reclaimed' }] })
+    const article = mk({ tid: 'cover-reclaim', contentType: 3, link_url: 'https://x/reclaim' })
+    try {
+      render({ moments: [article] })
+      await flush()
+      expect(mocks.apiGetArticleCovers).toHaveBeenCalledTimes(1)
+
+      render({ moments: [article] })
+      releaseFirst({ items: [{ url: 'https://x/reclaim', error: 'cancelled' }] })
+      await flush()
+      await flush()
+      await flush()
+
+      expect(mocks.apiGetArticleCovers, '取消后的 URL 没有重新被认领').toHaveBeenCalledTimes(2)
+      expect(media?.articleCovers['https://x/reclaim']).toBe('data:reclaimed')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('封面 panel retry timer 在卸载时清理', async () => {
+    vi.useFakeTimers()
+    try {
+      render({ moments: [mk({ tid: 'cover-timer', contentType: 3, link_url: 'https://x/timer' })] })
+      await flush()
+      expect(mocks.apiGetArticleCovers).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(1)
+
+      act(() => { root.unmount() })
+      expect(vi.getTimerCount(), '封面 retry timer 仍持有面板闭包').toBe(0)
+      host.remove()
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      root = createRoot(host)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('StrictMode 的 effect 假卸载不会把灯箱请求永久记为已取过', async () => {
+    const viewer = { images: [{ md5: 'strict-lightbox', url: 'u', thumb: 't' }], index: 0, author: '张三' }
+    render({ viewer }, true)
+    await flush()
+    await flush()
+    expect(imgs(), '第一轮请求被 cleanup 作废后，第二轮没有重新认领这个键').toContain('strict-lightbox')
   })
 })
 

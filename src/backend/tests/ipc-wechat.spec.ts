@@ -34,7 +34,7 @@ const mutationGate = require(join(HERE, '..', 'mutation-gate.js')) as {
 const CHANNELS = [
   'wechat:list-methods', 'wechat:info', 'wechat:call', 'wechat:backend-state',
   'wechat:llm-get', 'wechat:llm-save', 'wechat:llm-profiles', 'wechat:llm-models',
-  'wechat:llm-test', 'wechat:llm-balance',
+  'wechat:llm-test', 'wechat:llm-balance', 'wechat:ocr-image', 'wechat:image-ai-json',
 ]
 
 /** 后端 `call()` 的回包（成功时是 `{ ok: true, value }`，见 wechat-host.js）。 */
@@ -52,7 +52,13 @@ function makeCtx(backend: BackendStub = null) {
       wrapOn: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
     },
     app: { getVersion: () => '0.0.0', getPath: () => '/tmp' },
-    licenseService: { status: () => ({ state: 'ok' }), verify: async () => ({ ok: true }), METHOD_FEATURE: {} },
+    licenseService: {
+      status: () => ({ state: 'ok' }),
+      verify: async () => ({ ok: true }),
+      getLicenseStatus: () => ({ state: 'licensed', licensed: true, payload: { features: ['wechat-data'] } }),
+      authorizeFeature: () => ({ ok: true }),
+      METHOD_FEATURE: {},
+    },
     debugGates: () => ({ packaged: false, skipGates: true }),
     awaitBackendReady: async () => true,
     findModelCatalog: (url: string) => (/deepseek/i.test(String(url))
@@ -76,6 +82,24 @@ function makeCtx(backend: BackendStub = null) {
     upsertLlmProfile: () => ({ ok: true }),
     activateLlmProfile: () => ({ ok: true }),
     deleteLlmProfile: () => ({ ok: true }),
+    wechatOcr: {
+      recognize: async (source: unknown) => ({
+        engine: 'wechat-native',
+        text: String(source || ''),
+        lines: [],
+        width: 0,
+        height: 0,
+        elapsedMs: 1,
+      }),
+    },
+    wechatImageAi: {
+      recognize: async (source: unknown) => ({
+        engine: 'configured-llm',
+        model: 'vision-test',
+        json: { text: String(source || ''), lines: [] },
+        elapsedMs: 1,
+      }),
+    },
   }
   return { ctx, handled, scheduled }
 }
@@ -214,6 +238,40 @@ describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西
       mutationGate.resetMutationGate()
     }
   })
+
+  it('OCR / 图片理解直连 IPC 受功能位约束，拒绝时不调用服务', async () => {
+    const { ctx, handled } = makeCtx()
+    ;(ctx as { debugGates: () => { packaged: boolean, skipGates: boolean } }).debugGates =
+      () => ({ packaged: false, skipGates: false })
+    let ocrCalls = 0
+    let imageCalls = 0
+    ;(ctx as { wechatOcr: { recognize: () => Promise<unknown> } }).wechatOcr = {
+      recognize: async () => { ocrCalls += 1; return { text: '不该被调用' } },
+    }
+    ;(ctx as { wechatImageAi: { recognize: () => Promise<unknown> } }).wechatImageAi = {
+      recognize: async () => { imageCalls += 1; return { json: {} } },
+    }
+    ;(ctx as {
+      licenseService: { authorizeFeature: (status: unknown, feature: string) => unknown }
+    }).licenseService.authorizeFeature = (_status, feature) => (
+      feature === 'image-ocr'
+        ? { ok: false, code: 'FEATURE_DENIED', message: '当前授权未包含「图片文字识别（OCR）」功能' }
+        : { ok: true }
+    )
+    registerWechatIpc(ctx)
+
+    const ocr = await handled.get('wechat:ocr-image')?.({}, { source: 'data:image/png;base64,AA==' }) as
+      { ok: boolean, error?: { code?: string, message?: string } }
+    expect(ocr.ok).toBe(false)
+    expect(ocr.error?.code).toBe('FEATURE_DENIED')
+    expect(ocr.error?.message).toContain('OCR')
+    expect(ocrCalls, '被拒后仍调用了 OCR 服务').toBe(0)
+
+    const imageAi = await handled.get('wechat:image-ai-json')?.({}, { source: 'data:image/png;base64,AA==' }) as
+      { ok: boolean, value?: unknown }
+    expect(imageAi.ok).toBe(true)
+    expect(imageCalls, '允许后没有调用图片理解服务').toBe(1)
+  })
 })
 
 /**
@@ -240,6 +298,19 @@ describe('wechat:llm-test / wechat:llm-balance：包装层与出网行为', () =
     expect(r.ok).toBe(true)
     expect(r.value.models).toBe(2)
     expect(typeof r.value.ms).toBe('number')
+  })
+
+  it('llm-test：OpenCode 使用独立模型列表路径和专用请求头', async () => {
+    const probe = fetchProbe({ json: { data: [{ id: 'glm-5.3-flash' }] } })
+    const r = await run('wechat:llm-test', {
+      baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+      apiKey: 'sk-opencode',
+    })
+    expect(probe.called.map(c => c.url)).toEqual(['https://opencode.ai/inference/go/v1/models'])
+    expect(probe.called[0]?.headers['user-agent']).toMatch(/^SuperTime\//)
+    expect(probe.called[0]?.headers['x-opencode-session']).toMatch(/^supertime-[a-f0-9]{32}$/)
+    expect(r.ok).toBe(true)
+    expect(r.value.models).toBe(1)
   })
 
   it('llm-test：kind/path/model 要透传到端点（向量与精排是另外两套地址·路径）', async () => {
@@ -315,6 +386,22 @@ describe('wechat:llm-models：按 base_url 请求 /models（应用内已无出�
     expect(JSON.stringify(r.value)).toContain('live')
   })
 
+  it('OpenCode Go 请求其独立的 /inference/go/v1/models，并带 User-Agent 与会话头', async () => {
+    const { ctx, handled } = makeCtx()
+    const probe = fetchProbe({ json: { data: [{ id: 'glm-5.3-flash' }, { id: 'kimi-k3' }] } })
+    const run = handler(ctx, handled)
+    const r = await run({}, {
+      baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+      apiKey: 'sk-opencode',
+    })
+    expect(probe.called.map(c => c.url)).toEqual(['https://opencode.ai/inference/go/v1/models'])
+    expect(probe.called[0]?.headers.authorization).toBe('Bearer sk-opencode')
+    expect(probe.called[0]?.headers['user-agent']).toMatch(/^SuperTime\//)
+    expect(probe.called[0]?.headers['x-opencode-session']).toMatch(/^supertime-[a-f0-9]{32}$/)
+    expect(r.ok).toBe(true)
+    expect(JSON.stringify(r.value)).toContain('glm-5.3-flash')
+  })
+
   it('没填 Key 时不发 Authorization 头（别把空凭据送出去）', async () => {
     const { ctx, handled } = makeCtx()
     const probe = fetchProbe({ json: { data: [{ id: 'qwen-plus' }] } })
@@ -375,5 +462,76 @@ describe('wechat:llm-models：按 base_url 请求 /models（应用内已无出�
     expect(called, 'llm-models 又去读隐私开关了 —— 出网开关已于 2026-09-30 全部移除').not.toContain('getPrivacyState')
     expect(probe.called, '照常出网，不该被任何闸门拦下').toHaveLength(1)
     expect(r.ok).toBe(true)
+  })
+})
+
+describe('wechat:ocr-image：只做 RemoteEnvelope 包装', () => {
+  const run = async (recognize: (source: unknown) => Promise<unknown>, source: unknown) => {
+    const { ctx, handled } = makeCtx()
+    ;(ctx as { wechatOcr: { recognize: typeof recognize } }).wechatOcr = { recognize }
+    registerWechatIpc(ctx)
+    const fn = handled.get('wechat:ocr-image')
+    expect(fn, 'wechat:ocr-image 没注册').toBeTruthy()
+    return (fn as (e: unknown, opts: unknown) => Promise<unknown>)({}, { source })
+  }
+
+  it('成功时返回 {ok:true,value}', async () => {
+    const seen: unknown[] = []
+    const h = await run(async (source) => {
+      seen.push(source)
+      return { engine: 'wechat-native', text: 'x', lines: [], width: 1, height: 2, elapsedMs: 3 }
+    }, 'wechat-media://decoded/a.jpg')
+    expect(seen).toEqual(['wechat-media://decoded/a.jpg'])
+    expect(h).toEqual({
+      ok: true,
+      value: { engine: 'wechat-native', text: 'x', lines: [], width: 1, height: 2, elapsedMs: 3 },
+    })
+  })
+
+  it('失败时保留可操作 message 与 code', async () => {
+    const h = await run(async () => {
+      throw Object.assign(new Error('未找到微信原生 OCR 组件'), { code: 'OCR_PLUGIN_NOT_FOUND' })
+    }, 'data:image/png;base64,eA==')
+    expect(h).toEqual({
+      ok: false,
+      error: { message: '未找到微信原生 OCR 组件', code: 'OCR_PLUGIN_NOT_FOUND' },
+    })
+  })
+})
+
+describe('wechat:image-ai-json：只做 RemoteEnvelope 包装', () => {
+  const run = async (recognize: (source: unknown) => Promise<unknown>, source: unknown) => {
+    const { ctx, handled } = makeCtx()
+    ;(ctx as { wechatImageAi: { recognize: typeof recognize } }).wechatImageAi = { recognize }
+    registerWechatIpc(ctx)
+    const fn = handled.get('wechat:image-ai-json')
+    expect(fn, 'wechat:image-ai-json 没注册').toBeTruthy()
+    return (fn as (e: unknown, opts: unknown) => Promise<unknown>)({}, { source })
+  }
+
+  it('成功时返回 {ok:true,value}', async () => {
+    const seen: unknown[] = []
+    const value = {
+      engine: 'configured-llm',
+      model: 'vision-test',
+      json: { text: '第一行', lines: ['第一行'] },
+      elapsedMs: 3,
+    }
+    const h = await run(async (source) => {
+      seen.push(source)
+      return value
+    }, 'wechat-media://decoded/a.jpg')
+    expect(seen).toEqual(['wechat-media://decoded/a.jpg'])
+    expect(h).toEqual({ ok: true, value })
+  })
+
+  it('失败时保留可操作 message 与 code', async () => {
+    const h = await run(async () => {
+      throw Object.assign(new Error('当前配置的大模型不支持图片输入'), { code: 'IMAGE_AI_MODEL_UNSUPPORTED' })
+    }, 'data:image/png;base64,eA==')
+    expect(h).toEqual({
+      ok: false,
+      error: { message: '当前配置的大模型不支持图片输入', code: 'IMAGE_AI_MODEL_UNSUPPORTED' },
+    })
   })
 })

@@ -13,8 +13,14 @@
  *
  * @module panels/GraphSelectionDetail
  */
-import type { GNode } from './graph-model.ts'
-import { communityColor } from './graph-model.ts'
+import type { GEdge, GNode } from './graph-model.ts'
+import {
+  communityColor,
+  edgeDirectionSymbol,
+  edgeKindLabel,
+  edgeRelationLabel,
+  edgeRelationLines,
+} from './graph-model.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import css from './graph.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -37,12 +43,12 @@ interface SelectedClass {
 
 /** 选中节点的相连关系（`other` 可能缺失：对端被「仅显示好友」或节点上限挡在图外）。 */
 interface Connection {
-  edge: { source: string, target: string, weight: number }
-  other: { id: string, label: string, enterpriseName?: string } | null | undefined
+  edge: GEdge
+  other: GNode | null | undefined
 }
 
-/** 知识类节点（笔记 / 待补 / 文件 / 章节 / 实体）没有「查看聊天」。 */
-const KNOWLEDGE_KINDS = new Set(['note', 'stub', 'file', 'section', 'entity'])
+/** 只有真实的单聊好友与群聊有会话；知识节点和「我」节点都不能拿去当 username。 */
+const CHAT_KINDS = new Set(['person', 'group'])
 
 export interface GraphSelectionDetailProps {
   /** 是否知识图谱（知识节点的 id 不是微信 username，不能拿去查头像）。 */
@@ -128,8 +134,11 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
                     // 详情里再拼一遍「实体 · N 份文件」反而把它最要紧的半句丢了。
                     : selected.kind === 'entity'
                       ? (selected.excerpt || '模型推断的实体')
-                      : `${selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 ${selected.intimacy ?? selected.weight}`}
+                      : selected.kind === 'group' && selected.membershipStatus === 'unknown'
+                        ? `群聊 · 消息量 ${selected.intimacy ?? selected.weight} · 成员快照缺失（不代表 0 人）`
+                        : `${selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 ${selected.intimacy ?? selected.weight}`}
             {selected.sharedCount !== undefined ? ` · 共同 ${selected.sharedCount}` : ''}
+            {selected.membersTotal !== undefined ? ` · 成员 ${selected.membersTotal}${selected.membersTruncated ? '（详情已截断）' : ''}` : ''}
           </span>
         </div>
         <button type="button" className={css.detailClose} onClick={clearSelection} aria-label="关闭详情">×</button>
@@ -152,14 +161,14 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
         {selected.kind === 'stub' && (
           <button type="button" className={css.miniBtn} onClick={newNote}>创建这篇笔记</button>
         )}
-        {onOpenChat && !KNOWLEDGE_KINDS.has(selected.kind) && (
+        {onOpenChat && CHAT_KINDS.has(selected.kind) && (
           <button type="button" className={css.miniBtn} onClick={() => { onOpenChat(selected.id) }}>查看聊天</button>
         )}
       </div>
       {selectedGroupNames.length > 0 && (
         <>
           <div className={css.detailSub}>共同群</div>
-          <div className={css.detailChips}>
+          <div className={`${css.detailChips} ${css.detailConnections}`}>
             {selectedGroupNames.map((g, gi) => (
               <span key={gi} className={css.detailChip} title={g}>{g.length > 12 ? g.slice(0, 12) + '…' : g}</span>
             ))}
@@ -198,35 +207,59 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
           </div>
         </>
       )}
-      <div className={css.detailSub}>相连关系 ({selectedConnections.length})</div>
-      <div className={css.detailChips}>
-        {selectedConnections.map(ce => (
-          <button
-            key={ce.edge.source + ce.edge.target}
-            type="button"
-            className={css.detailChip}
-            onClick={() => { selectNode(ce.other?.id ?? '') }}
-            title={ce.other ? withEnterprise(ce.other.label, ce.other.enterpriseName) : ''}
-          >
-            {ce.other
-              ? isKnowledgeMode ? (
-                  <span className={css.detailChipLabel}>
-                    {withEnterprise(ce.other.label, ce.other.enterpriseName)}
-                  </span>
-                ) : (
-                  <IdentityName
-                    className={css.detailChipIdentity}
-                    name={ce.other.label}
-                    username={connectionUsername(ce.other.id)}
-                    size={16}
-                  >
-                    {withEnterprise(ce.other.label, ce.other.enterpriseName)}
-                  </IdentityName>
-                )
-              : '?'}
-            <span className={css.rankW}>{ce.edge.weight}</span>
-          </button>
-        ))}
+      <div className={css.detailSub}>相连关系 ({selectedConnections.length} 条边)</div>
+      <div className={css.detailEdgeHint}>线条样式由主关系决定；悬停任一项可查看该边的全部关系、方向、权重与证据。</div>
+      <div className={`${css.detailChips} ${css.detailConnections}`}>
+        {selectedConnections.map((ce) => {
+          const other = ce.other
+          const names = new Map<string, string>()
+          names.set(selected.id, selected.label)
+          if (other) names.set(other.id, withEnterprise(other.label, other.enterpriseName))
+          names.set('self', '我')
+          const labelOf = (id: string): string => names.get(id) ?? id
+          const lines = edgeRelationLines(ce.edge, labelOf)
+          const relations = ce.edge.relations ?? []
+          const kinds = [...new Set(relations.map(edgeRelationLabel))]
+          const kindSummary = kinds.length === 0
+            ? edgeKindLabel(ce.edge.kind)
+            : kinds.slice(0, 2).join(' / ') + (kinds.length > 2 ? ` 等 ${kinds.length} 种` : '')
+          const title = other
+            ? [withEnterprise(other.label, other.enterpriseName), ...lines].join('\n')
+            : '对端节点不在当前视图'
+          return (
+            <button
+              key={JSON.stringify([ce.edge.source, ce.edge.target])}
+              type="button"
+              className={`${css.detailChip} ${css.detailEdgeChip}`}
+              data-edge
+              disabled={!other}
+              onClick={() => { if (other) selectNode(other.id) }}
+              title={title}
+              aria-label={title}
+            >
+              <span className={css.detailEdgeTop}>
+                {other
+                  ? isKnowledgeMode ? (
+                      <span className={css.detailChipLabel}>{withEnterprise(other.label, other.enterpriseName)}</span>
+                    ) : (
+                      <IdentityName
+                        className={css.detailChipIdentity}
+                        name={other.label}
+                        username={connectionUsername(other.id)}
+                        size={16}
+                      >
+                        {withEnterprise(other.label, other.enterpriseName)}
+                      </IdentityName>
+                    )
+                  : <span className={css.detailChipLabel}>对端不在当前视图</span>}
+              </span>
+              <span className={css.detailEdgeMeta}>
+                {kindSummary} {edgeDirectionSymbol(ce.edge)} · 权重 {ce.edge.weight}
+                {relations.length > 1 ? ` · ${relations.length} 种关系` : ''}
+              </span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )

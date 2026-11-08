@@ -23,7 +23,7 @@ const esbuild = require('esbuild');
 
 const root = path.resolve(__dirname, '..');
 /**
- * 与 `vite.config.js` 的 `resolve.alias` **同一份口径**（M17 / 手机端 M0–M4）。
+ * 与 `vite.config.mjs` 的 `resolve.alias` **同一份口径**（M17 / 手机端 M0–M4）。
  *
  * 为什么必须在这里也写一遍：`@deepseek-ai/dsh-client-ui-wechat/*` 是**子路径导出**，
  * 而 npm 对 `file:` 依赖装的是真实目录拷贝 —— 子路径能不能解析取决于那份拷贝的
@@ -32,7 +32,7 @@ const root = path.resolve(__dirname, '..');
  * `Could not resolve "@deepseek-ai/dsh-client-ui-wechat/notice"` 而红。
  *
  * 口径与 vite 一致：**直接指向源码文件**，不走 node_modules 里那份拷贝。
- * 新增子路径导出时，两处都要加（`vite.config.js` 与这里）。
+ * 新增子路径导出时，两处都要加（`vite.config.mjs` 与这里）。
  */
 const UI_WECHAT_SRC = path.join(root, 'src', 'client', 'ui-wechat', 'src', 'client');
 const SHIM_SRC = path.join(root, 'src', 'client', 'ui-primitives-shim', 'src');

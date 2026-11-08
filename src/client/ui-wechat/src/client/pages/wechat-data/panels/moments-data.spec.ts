@@ -14,8 +14,7 @@
  *  · **月度分布失败要留 `readError`**（P1-1 那条契约）—— 空数组会被读成「这个人一条动态都没有」。
  * @module moments-data-spec
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

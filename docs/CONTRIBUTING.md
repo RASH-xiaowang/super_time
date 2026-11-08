@@ -102,6 +102,9 @@ npm run check:mutation -- --only M5   # 前缀匹配；--only 省略则跑全表
   产物必须 `git diff` 回读；"脚本报成功"不算——它可能 exit 0 而一个字没改。
   ⚠️ `working/` 里的东西**不入库**，所以它随时可以被清掉；清掉前确认没有还想留的产物
   （它历史上堆过 1.29 GB：13 个 `_trash-*`、全量测试日志、`.asar` 探针产物）。
+- 临时截图与 CI 日志分别落在 `.tmp-e2e/`、`ci-evidence/`，两者都不入库。日常先用
+  `npm run clean:local` 查看可清理项，确认后执行 `npm run clean:local:apply`；该命令不会动
+  `working/`、`vendor-keys/`、`wechat/config.json` 或 `wechat/llm.json`。
 
 ## 6. 分层与目录
 

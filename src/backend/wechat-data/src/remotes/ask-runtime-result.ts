@@ -12,6 +12,7 @@ import { extractAskTerms } from '../query/ask.ts'
 import type { AnswerIntentDecision } from '../query/answer-runtime/intent.ts'
 import type {
   AnswerRuntimeCitation,
+  AnswerReasoningSegment,
   AnswerRuntimeResult,
   AnswerRuntimeStage,
 } from '../query/answer-runtime/types.ts'
@@ -35,7 +36,6 @@ import {
   citationToAskCitation,
   describeAskScope,
   isInsufficientStatus,
-  type AskDataScope,
   type AskScope,
 } from './ask-runtime-prompt.ts'
 import type { AskCitation, AskPlan, AskResult } from '../types.ts'
@@ -50,6 +50,7 @@ export interface AskCitationWithTrace extends AskCitation {
 /** 生产编排结果：旧字段保持不变，新增字段用于过程解释与反馈归因。 */
 export interface AskRuntimeResult extends AskResult {
   status: AnswerStatus
+  reasoningSegments?: AnswerReasoningSegment[]
   evidence?: EvidenceBundle
   toolCalls?: AnswerRuntimeResultLike['toolCalls']
   resources?: AnswerRuntimeResultLike['resources']
@@ -58,8 +59,10 @@ export interface AskRuntimeResult extends AskResult {
   /** 本轮实际采用的继承/递进范围（便于诊断为什么查到这些数据）。 */
   appliedThreadState?: {
     session?: string
+    contact?: string
     from?: string
     to?: string
+    referencedMessage?: string
     reason: string[]
   }
 }
@@ -124,12 +127,9 @@ function answerForStatus(
   }
   if (runtime.status === 'blocked') return blockedReply(runtime.reason, profile)
   if (runtime.status === 'failed') return failedReply(profile)
-  if (runtime.status === 'insufficient' && profile !== 'clawbot-auto') {
-    return insufficientReply(profile)
-  }
+  if (runtime.status === 'insufficient') return insufficientReply(profile)
   if (answer !== '') return answer
   if (runtime.status === 'degraded') {
-    if (profile === 'clawbot-auto') return failedReply(profile)
     return runtime.citations.length > 0 || runtime.resources.length > 0
       ? '检索完成，但最终回答生成未完整通过核对。下方引用与资源仍可打开核对。'
       : failedReply(profile)
@@ -166,19 +166,20 @@ function usageOf(usages: readonly TokenUsage[]): TokenUsage | undefined {
 export function askResultFromRuntime(input: {
   runtime: AnswerRuntimeResult
   profile: AnswerProfileId
-  dataScope?: AskDataScope
   scope: AskScope
   question: string
   grounded?: GroundingSnapshot
   threadState?: ThreadState
+  /** 由编排层收集的思考分段；与实时事件使用同一份快照。 */
+  reasoningSegments?: readonly AnswerReasoningSegment[]
   /** 本轮由编排层收集的完整阶段事件；映射时再复制一次，避免调用方后续修改。 */
   stages?: readonly AnswerRuntimeStage[]
 }): AskRuntimeResult {
-  const { runtime, profile, dataScope, scope, question } = input
+  const { runtime, profile, scope, question } = input
   const citations = runtime.citations.map(toTraceCitation)
   const resources = runtime.resources
   const citedIndexes = input.grounded?.citedIndexes ?? []
-  const basisBase = askBasisLine(citations, dataScope, resources.length)
+  const basisBase = askBasisLine(citations, resources.length)
   const basis = citedIndexes.length > 0
     ? `${basisBase}（回答引用了其中 ${String(citedIndexes.length)} 条：[${citedIndexes.join('][')}]）`
     : basisBase
@@ -189,9 +190,7 @@ export function askResultFromRuntime(input: {
    */
   const withheld = input.grounded?.withheld === true
   const hasCitations = citations.length > 0
-  // ClawBot 的 `chat` 模式按要求不标 [n]，不能把「没有角标」当成未引用。
-  const uncited = profile !== 'clawbot-auto'
-    && !withheld
+  const uncited = !withheld
     && runtime.synthesisError === undefined
     && hasCitations
     && citedIndexes.length === 0
@@ -219,6 +218,14 @@ export function askResultFromRuntime(input: {
     durationMs: runtime.durationMs,
     ...(input.stages && input.stages.length > 0
       ? { stages: input.stages.map(stage => ({ ...stage })) }
+      : {}),
+    ...(input.reasoningSegments && input.reasoningSegments.length > 0
+      ? {
+        reasoningSegments: input.reasoningSegments.map(segment => ({
+          ...segment,
+          ...(segment.round === undefined ? {} : { round: segment.round }),
+        })),
+      }
       : {}),
     evidence: runtime.evidence,
     toolCalls: runtime.toolCalls,

@@ -25,6 +25,21 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
 
+# 由 refresh.py 对照当前工作树核对；改这里后必须重跑刷新并同步 README 事实表。
+FACTS = {
+    "remote": 224,
+    "ui_files": 702,
+    "ui_lines_wan": "13.1",
+    "panel_tsx": 182,
+    "tabs": 40,
+    "host_modules": 45,
+    "host_lines": "11,305",
+    "query_files": 174,
+    "query_lines": "50,959",
+    "remotes_files": 31,
+    "bundle_mb": "2.5MB",
+}
+
 
 def _cw(ch: str) -> float:
     """粗估字符宽度（单位 em）：全角 1.0、半角约 0.56、窄标点更小。"""
@@ -95,8 +110,8 @@ ACCENT = {
     "ext": "#f472b6",
 }
 
-FONT = '"Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif'
-MONO = '"Cascadia Code", "Consolas", monospace'
+FONT = "system-ui, sans-serif"
+MONO = "ui-monospace, monospace"
 
 
 def esc(s: str) -> str:
@@ -220,19 +235,19 @@ def fig_architecture():
     ])
 
     # ── 渲染进程 ──
-    b1 = Band("ui", "渲染进程  Renderer", "React 18 · Vite 5 · 602 个 ts/tsx / 约 12.2 万行",
+    b1 = Band("ui", "渲染进程  Renderer", f"React 18 · Vite 5 · {FACTS['ui_files']} 个 ts/tsx / 约 {FACTS['ui_lines_wan']} 万行",
               y, cols=3, box_h=132)
     b1.row([
         ("ui-app  打包入口壳",
          ["ui-entry.tsx → 引导四页 → 隐私同意 → 许可证 → 主界面", "三道闸顺序由 e2e:h14-consent 在真机钉住", "capabilities / browser-gate / http-remote 分流"]),
         ("ui-wechat  数据面板",
-         ["WechatDataPanel：39 个可路由 tab（15 可见 + 23 hidden + 设置）", "侧栏 5 组 · keep-alive 切页签不卸载", "nav-config.ts 是导航唯一注册表"]),
-        ("panels/**  171 个视图分片",
-         ["chats 22 · clawbot 8 · kb 7 · moments 7", "task 7 · settings 6 · ask 5 · favorites 5", "37 个 React.lazy 边界 → 62 个 js chunk"]),
+         [f"WechatDataPanel：{FACTS['tabs']} 个可路由 tab（16 正文入口 + 设置 + 23 hidden）", "侧栏 5 组 · keep-alive 切页签不卸载", "nav-config.ts 是导航唯一注册表"]),
+        (f"panels/**  {FACTS['panel_tsx']} 个视图分片",
+         ["chats 22 · kb 7 · moments 7", "task 7 · settings 6 · ask 5 · favorites 5", "37 个 React.lazy 边界 → 62 个 js chunk"]),
     ])
     b1.row([
         ("前端数据层  api-*.ts",
-         ["api-core：WechatRemote 手写镜像 219 方法 + unwrap", "api.ts 仅 export * 转发 10 个分域文件", "cache.ts（SWR 快照 + 订阅）· image/media-cache"]),
+         [f"api-core：WechatRemote 手写镜像 {FACTS['remote']} 方法 + unwrap", "api.ts 仅 export * 转发 10 个分域文件", "cache.ts（SWR 快照 + 订阅）· image/media-cache"]),
         ("UI 原语与设计令牌",
          ["ui-primitives-shim（Radix 封装，构建期 alias 直读源码）", "scifi-theme.css：140 个 --nm-* 令牌", "圆角 6 档 / 间距 7 档 · --wx-* 为面板局部变量"]),
         ("实时刷新链",
@@ -240,11 +255,11 @@ def fig_architecture():
     ])
 
     # ── 主进程 ──
-    b2 = Band("main", "Electron 主进程  宿主层（CommonJS）", "42 个直属模块 / 10,787 行 · main.js 581 行（组合根 + 体积棘轮）",
+    b2 = Band("main", "Electron 主进程  宿主层（CommonJS）", f"{FACTS['host_modules']} 个直属模块 / {FACTS['host_lines']} 行 · main.js 581 行（组合根 + 体积棘轮）",
               y, cols=4, box_h=104)
     b2.row([
         ("main.js  组合根",
-         ["单实例锁 · userData 隔离（安装版 %APPDATA%\\Super Time）", "装配 42 个宿主模块 · 三道启动闸", "打包态剥离 --inspect / --remote-debugging-port"]),
+         ["单实例锁 · userData 隔离（安装版 %APPDATA%\\Super Time）", f"装配 {FACTS['host_modules']} 个宿主模块 · 三道启动闸", "打包态剥离 --inspect / --remote-debugging-port"]),
         ("窗口与安全边界",
          ["main-window.js · navigation-policy.js", "ipc-trust.js（sender + frame URL 双校验）", "media-protocol.js（wechat-media:// 流式读图）"]),
         ("IPC 注册面（46 通道）",
@@ -274,17 +289,17 @@ def fig_architecture():
     ])
 
     # ── 后端 worker ──
-    b3 = Band("worker", "后端 worker  utilityProcess", "ESM 单文件 bundle 2.3MB · 219 个 @Remote 方法 · query 层 158 文件 / 46,545 行",
+    b3 = Band("worker", "后端 worker  utilityProcess", f"ESM 单文件 bundle {FACTS['bundle_mb']} · {FACTS['remote']} 个 @Remote 方法 · query 层 {FACTS['query_files']} 文件 / {FACTS['query_lines']} 行",
               y, cols=4, box_h=108)
     b3.row([
         ("wechat-worker.js  进程入口",
          ["212 行 · 协议 init / call / cancel / dispose", "activeCalls 认领取消 · 内存哨兵 60s", "fatal → 上报父进程 → exit(1) 交给监管器"]),
         ("wechat-host.js  适配层",
          ["737 行 · 方法名枚举 · 参数守卫两档", "结果缓存 300 条 / 64MB（含负缓存）", "cancelPlan 映射 jobId · 慢调用落审计"]),
-        ("Gateway 继承链（11 层）",
-         ["Core→Read→AskOps→MediaOps→ExportOps→VoiceOps", "→ConfigOps→LayaOps→TaskCenter→DbHealth→Clawbot", "装饰器落在最派生原型，方法面唯一出处"]),
-        ("remotes/**  29 个域处理器",
-         ["ask · kb · media · export · backup · summary", "task-center · graphsearch · voicellm", "annual-narr · clawbot · wordcloud …"]),
+        ("Gateway 继承链（12 层）",
+         ["Core→Read→AskOps→MediaOps→ExportOps→VoiceOps", "→ConfigOps→LayaOps→MessageList→ChatAiReply", "→TaskCenter→DbHealth · 方法面唯一出处"]),
+        (f"remotes/**  {FACTS['remotes_files']} 个域处理器",
+         ["ask · kb · media · export · backup · summary", "task-center · graphsearch · voicellm", "annual-narr · wordcloud …"]),
     ])
     b3.row([
         ("query/**  业务主干",
@@ -532,8 +547,8 @@ def fig_build():
     cols = [
         ("源码", [
             ("src/backend/wechat-data/src/**", "gateway*.ts · query/** · keys/** · remotes/**", ACCENT["worker"]),
-            ("src/backend/*.js", "宿主层 42 个 CommonJS 模块", ACCENT["main"]),
-            ("src/client/ui-wechat + ui-app", "602 个 ts/tsx", ACCENT["ui"]),
+            ("src/backend/*.js", f"宿主层 {FACTS['host_modules']} 个 CommonJS 模块", ACCENT["main"]),
+            ("src/client/ui-wechat + ui-app", f"{FACTS['ui_files']} 个 ts/tsx", ACCENT["ui"]),
             ("src/license/** · preload.js · main.js", "授权与桥面", ACCENT["main"]),
         ]),
         ("构建命令", [
@@ -546,7 +561,7 @@ def fig_build():
             ("wechat-data/lib/index.js", "2.3MB 单文件 · 运行时只加载它", ACCENT["worker"]),
             ("wechat-data/lib/types/**", "前端只从这里取后端类型", ACCENT["worker"]),
             ("src/client/ui-dist/**", "不入仓（.gitignore）", ACCENT["ui"]),
-            ("docs/API.md", "219 个方法 · 自动生成", ACCENT["worker"]),
+            ("docs/API.md", f"{FACTS['remote']} 个方法 · 自动生成", ACCENT["worker"]),
         ]),
         ("一致性闸门", [
             ("check:backend / check:types", "临时目录重建后与工作树逐字节比对", ACCENT["data"]),
@@ -633,7 +648,7 @@ def viewer(title, svg_text, w, h, note):
   :root {{ color-scheme: dark; }}
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; background: #0b0f14; color: #e6edf3;
-    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; overflow: hidden; }}
+    font-family: system-ui, sans-serif; overflow: hidden; }}
   #bar {{ position: fixed; inset: 0 0 auto 0; height: 52px; display: flex; align-items: center;
     gap: 14px; padding: 0 18px; background: rgba(11,15,20,.92); border-bottom: 1px solid #1e2732;
     backdrop-filter: blur(8px); z-index: 10; }}
@@ -751,8 +766,8 @@ flowchart TB
 
   subgraph RENDERER["渲染进程"]
     R1["ui-app 入口壳<br/>引导 → 同意 → 许可证"]
-    R2["ui-wechat 数据面板<br/>39 tab / 侧栏 5 组"]
-    R3["panels 171 个视图"]
+    R2["ui-wechat 数据面板<br/>40 tab / 侧栏 5 组"]
+    R3["panels 182 个视图"]
     R4["api-*.ts + cache.ts"]
   end
 
@@ -770,8 +785,8 @@ flowchart TB
   subgraph WORKER["后端 worker（utilityProcess）"]
     K1["wechat-worker.js"]
     K2["wechat-host.js 适配层"]
-    K3["Gateway 继承链<br/>219 @Remote"]
-    K4["query/** 158 文件"]
+    K3["Gateway 继承链<br/>224 @Remote"]
+    K4["query/** 174 文件"]
     K5["keys/** 11 文件"]
     K6["retrieval/** + kb/**"]
     K7["answer-runtime/** + tools/**"]

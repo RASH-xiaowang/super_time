@@ -1,7 +1,7 @@
 /**
  * 问答引用的共享纯类型契约。
  *
- * 原定义住在 `types-ask-export.ts`（胶水层）；ClawBot 查询层需要同一形状的引用，
+ * 原定义住在 `types-ask-export.ts`（胶水层）；查询层需要同一形状的引用，
  * 但不能反向依赖胶水层，因此把声明下沉到 query 层，原模块继续原路径转发。
  *
  * @module query/ask-citation-types

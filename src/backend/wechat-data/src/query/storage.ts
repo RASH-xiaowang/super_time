@@ -4,7 +4,6 @@
  * sender rankings via MessageResourceInfo + name2id rowid maps / large files
  * with protobuf-parsed packed_info names.
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { raiseAnalyticsCache } from '../sqlite-connection.ts'
 import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
@@ -14,6 +13,7 @@ import { decompress } from 'fzstd'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
 import { classifyPacked, classifyType, parsePackedName } from './resource-classify.ts'
+import { displayNameForUsername, messageTableName, resolveTalkerUsername } from './message-identity.ts'
 
 /** Storage category aggregate (label + count + size). */
 export interface StorageCategory { label: string; count: number; size: number }
@@ -71,7 +71,9 @@ function xmlTitle(xml: string): string {
 
 /** 找到包含指定会话消息表的 shard（db + table）。走共享分片目录缓存，不再逐库开句柄探测。 */
 function findMsgShard(dec: string, username: string): { db: string; table: string } | null {
-  const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  const canonical = resolveTalkerUsername(dec, username)
+  if (!canonical) return null
+  const table = messageTableName(canonical)
   for (const sh of shardCatalogDirs(dec, ['message', 'bizchat'])) {
     if (sh.tables.has(table)) return { db: sh.file, table }
   }
@@ -272,7 +274,7 @@ async function computeStorageStats(
       const enterpriseName = enterpriseNames.get(r.u)?.trim()
       return {
         username: r.u,
-        name: names.get(r.u) ?? '',
+        name: displayNameForUsername(r.u, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         count: r.n,
         size: r.s,
@@ -291,7 +293,7 @@ async function computeStorageStats(
       const enterpriseName = enterpriseNames.get(r.u)?.trim()
       return {
         username: r.u,
-        name: names.get(r.u) ?? '',
+        name: displayNameForUsername(r.u, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         count: r.n,
         size: r.s,
@@ -327,7 +329,7 @@ async function computeStorageStats(
       large_files.push({
         name,
         username: r.u,
-        sessionName: names.get(r.u) ?? '',
+        sessionName: displayNameForUsername(r.u, names),
         ...(sessionEnterpriseName ? { sessionEnterpriseName } : {}),
         create_time: r.ct,
         size: r.s,

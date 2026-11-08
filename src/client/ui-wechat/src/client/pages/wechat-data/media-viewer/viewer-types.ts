@@ -12,8 +12,14 @@ export interface ViewerSource {
   subtitle?: string | undefined
   /** 资源类型（默认 image）。 */
   kind?: 'image' | 'video' | undefined
+  /** 视频开始播放时的定位点（毫秒）；实况照片用它对齐静态帧。 */
+  startAtMs?: number | undefined
   /** 下载文件名（默认按 key 猜一个）。 */
   downloadName?: string | undefined
-  /** 自定义下载动作（例如文件面板的协议下载）；不给则用 `<a download>`。 */
-  onDownload?: ((src: string) => void) | undefined
+  /** 自定义下载动作（例如后端原文件写盘）；不给则用 `<a download>`。 */
+  onDownload?: ((src: string) => void | Promise<void>) | undefined
+  /** 当前环境不能执行这个下载动作时禁用按钮（例如手机端保存原文件）。 */
+  downloadDisabled?: boolean | undefined
+  /** 禁用下载时给用户的明确原因。 */
+  downloadDisabledReason?: string | undefined
 }

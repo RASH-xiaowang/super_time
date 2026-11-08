@@ -31,19 +31,19 @@ import { describe, expect, it } from 'vitest'
 import { copyTextToClipboard } from './misc.ts'
 
 /**
- * 仓库根：往上找到 `vitest.config.ts` 为止。
+ * 仓库根：往上找到 `vitest.config.mts` 为止。
  * 两个坑都实测踩过：① 数 `'..'` 的层数会少数一层（第一版扫到 `src/src/client` 直接 ENOENT）；
  * ② 以 `package.json` 为标记会停在 `ui-wechat` 子包上（那里也有一份），扫描面只剩一半。
  */
 function findRoot(from: string): string {
   let dir = from
   for (let i = 0; i < 12; i += 1) {
-    if (statSync(join(dir, 'vitest.config.ts'), { throwIfNoEntry: false })?.isFile()) return dir
+    if (statSync(join(dir, 'vitest.config.mts'), { throwIfNoEntry: false })?.isFile()) return dir
     const up = resolve(dir, '..')
     if (up === dir) break
     dir = up
   }
-  throw new Error('找不到仓库根（一路上没有 vitest.config.ts）')
+  throw new Error('找不到仓库根（一路上没有 vitest.config.mts）')
 }
 
 const ROOT = findRoot(dirname(fileURLToPath(import.meta.url)))

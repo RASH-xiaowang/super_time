@@ -6,8 +6,7 @@
  * 请求了就是白敲后端）、没有缩略图时留的是扩展名图标而不是破图、`title` 里始终是全文
  * （格位只有 124px 可用，靠 CSS 省略号截断，用户要能复制到全名）。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'

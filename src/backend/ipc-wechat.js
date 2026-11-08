@@ -1,9 +1,9 @@
 /**
  * 主进程 IPC：微信数据后端（M21 第二十一刀自 main.js 的 whenReady 回调里拆出）。
  *
- * 10 个频道：`wechat:list-methods` / `wechat:info` / `wechat:call` / `wechat:backend-state` /
+ * 12 个频道：`wechat:list-methods` / `wechat:info` / `wechat:call` / `wechat:backend-state` /
  * `wechat:llm-get` / `wechat:llm-save` / `wechat:llm-profiles` / `wechat:llm-models` /
- * `wechat:llm-test` / `wechat:llm-balance`。
+ * `wechat:llm-test` / `wechat:llm-balance` / `wechat:ocr-image` / `wechat:image-ai-json`。
  * 后两个（2026-09-30 加）是「连接测试 / 余额查询」：地址推导与解析在 `llm-balance.js`
  * （纯函数、可单测），本文件只做 IPC 包装 —— 与 `llm-models` 同一条接缝，
  * 渲染页跨域会被 CORS 拦，主进程的 Node fetch 不受限。
@@ -18,7 +18,7 @@
  *   （后几个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
 const { humanizeNetworkError, testLlmEndpoint, queryLlmBalance } = require('./llm-balance.js');
-const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js');
+const { parseLlmBaseUrl, llmModelListUrl, llmRequest } = require('./llm-http.js');
 // 「一次后端调用要过哪几道闸」的唯一出处：HTTP 那条路（局域网远程访问）也调它，
 // 两边不许各写一份 —— 最可能的漂法是少抄那个 catch，于是许可校验一抛异常就变成放行。
 const { gatedWechatCall } = require('./call-gates.js');
@@ -28,13 +28,70 @@ const { gatedWechatCall } = require('./call-gates.js');
 const { shouldBypassCallQueue } = require('./call-priority.js');
 const { observeBackendStatus, beginMutation, checkMutation, bumpMutationEpoch, mutationGateStats } = require('./mutation-gate.js');
 
+async function imageAiJsonResponse(wechatImageAi, opts = {}) {
+  try {
+    if (!wechatImageAi || typeof wechatImageAi.recognize !== 'function') {
+      throw new Error('大模型图片识别服务未初始化');
+    }
+    return { ok: true, value: await wechatImageAi.recognize(opts?.source) };
+  } catch (e) {
+    const code = typeof e?.code === 'string' ? e.code : undefined;
+    return {
+      ok: false,
+      error: {
+        message: e?.message || '大模型图片识别失败',
+        ...(code === undefined ? {} : { code }),
+      },
+    };
+  }
+}
+
+/**
+ * 直连 IPC（不走 wechat:call 的功能）使用同一份许可证目录做校验。
+ *
+ * 失败必须关死：许可证模块缺失、读盘/验签抛错都返回可展示的拒绝信封，
+ * 不能因为「这里不是 Remote 方法」就绕过授权。
+ * @param {object} ctx - 注册上下文。
+ * @param {string} feature - FEATURE_CATALOG 里的功能位。
+ * @returns {null | { ok: false, error: { message: string, code?: string, details?: object } }}
+ */
+function directFeatureGate(ctx, feature) {
+  try {
+    if (ctx.debugGates?.().skipGates) return null;
+    const service = ctx.licenseService;
+    if (!service || typeof service.getLicenseStatus !== 'function' || typeof service.authorizeFeature !== 'function') {
+      throw new Error('许可证服务不可用');
+    }
+    const status = service.getLicenseStatus(ctx.app.getPath('userData'), ctx.APP_VERSION);
+    const gate = service.authorizeFeature(status, feature);
+    if (gate.ok) return null;
+    return {
+      ok: false,
+      error: {
+        message: gate.message,
+        code: gate.code,
+        details: { feature, licenseState: status?.state },
+      },
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: {
+        message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
+        code: 'LICENSE_CHECK_FAILED',
+        details: { feature },
+      },
+    };
+  }
+}
+
 function registerWechatIpc(ctx) {
   // 闸门相关的那几个字段（app / licenseService / debugGates / awaitBackendReady /
   // getWechatBackend / BACKEND_CALL_READY_WAIT_MS / APP_VERSION）**刻意不在这里解构**：
   // `wechat:call` 已经把整个 ctx 交给 `gatedWechatCall`，那份实现是 IPC 与 HTTP
   // （局域网远程访问）两条路共用的唯一出处（见 call-gates.js）。
   // 在这儿再解构一遍只会多出一份「看起来还在用、其实已经搬走」的绑定。
-  const { ipcMain, ipcTrust, findModelCatalog, getWechatBoot, getBackendStatus,
+  const { ipcMain, ipcTrust, wechatOcr, wechatImageAi, findModelCatalog, getWechatBoot, getBackendStatus,
     scheduleWechatCall, getCallQueueStats, getRpcStats,
     loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile } = ctx;
   const handleIpc = (channel, handler) => ipcMain.handle(channel, ipcTrust.wrap(channel, handler));
@@ -152,7 +209,8 @@ function registerWechatIpc(ctx) {
       return { ok: false, error: { message: e && e.message ? e.message : String(e) } };
     }
   });
-  // —— 通过 base_url 拉取官方模型列表（OpenAI 兼容 GET {base_url}/models）。
+  // —— 通过 base_url 拉取官方模型列表（OpenAI 兼容 GET {base_url}/models；
+  //     OpenCode 使用其独立的 /inference/.../v1/models 路径）。
   //     放在主进程执行：file:// 渲染页跨域 fetch 会被 CORS 拦，Node fetch 不受限。 ——
   handleIpc('wechat:llm-models', async (_event, opts = {}) => {
     const baseUrl = String(opts.baseUrl || '').trim();
@@ -160,7 +218,7 @@ function registerWechatIpc(ctx) {
     try {
       const parsed = parseLlmBaseUrl(baseUrl);
       const host = parsed.host;
-      const url = parsed.base + '/models';
+      const url = llmModelListUrl(parsed.base);
       /** 未填 Key 时的兜底：命中内置清单则返回清单而非报错。
        *  填了 Key 的失败不发生回退 —— 用户已有凭据，真错误更有价值。 */
       const catalogFallback = (note) => {
@@ -239,6 +297,37 @@ function registerWechatIpc(ctx) {
     } catch (e) {
       return { ok: false, error: { message: e?.message || String(e) } };
     }
+  });
+
+  // —— 微信原生 OCR（2026-11-03）——
+  // 只接受 data:image/*;base64 与 wechat-media://decoded/<rel>；来源校验、临时文件
+  // 清理和 isolated utilityProcess 生命周期都在 wechat-ocr.js。这里仅保持 RemoteEnvelope。
+  handleIpc('wechat:ocr-image', async (_event, opts = {}) => {
+    try {
+      const denied = directFeatureGate(ctx, 'image-ocr');
+      if (denied) return denied;
+      if (!wechatOcr || typeof wechatOcr.recognize !== 'function') {
+        throw new Error('微信原生 OCR 服务未初始化');
+      }
+      return { ok: true, value: await wechatOcr.recognize(opts?.source) };
+    } catch (e) {
+      const code = typeof e?.code === 'string' ? e.code : undefined;
+      return {
+        ok: false,
+        error: {
+          message: e?.message || '微信原生 OCR 识别失败',
+          ...(code === undefined ? {} : { code }),
+        },
+      };
+    }
+  });
+
+  // —— 图片文字 AI 识别（2026-11-03）——
+  // 使用当前生效的模型配置；后端负责图片来源校验、调用大模型和严格 JSON 解析。
+  // 与微信原生 OCR 完全独立，失败时也不静默换引擎。
+  handleIpc('wechat:image-ai-json', (_event, opts = {}) => {
+    const denied = directFeatureGate(ctx, 'image-ai');
+    return denied || imageAiJsonResponse(wechatImageAi, opts);
   });
 }
 

@@ -24,11 +24,11 @@ class FakeWindow {
   handlers: Record<string, (...args: any[]) => void> = {}
   ready: (() => void) | null = null
   url = ''
-  webContents: { id: number }
+  webContents: { id: number, mainFrame: { id: number } }
 
   constructor(opts: Record<string, any>) {
     this.opts = opts
-    this.webContents = { id: FakeWindow.all.length + 1 }
+    this.webContents = { id: FakeWindow.all.length + 1, mainFrame: { id: FakeWindow.all.length + 1 } }
     FakeWindow.all.push(this)
   }
 
@@ -213,18 +213,22 @@ describe('浏览器交接：点卡片返回桌面', () => {
     expect(remote.calls.synced).toBeGreaterThanOrEqual(1)
   })
 
-  it('卡片 IPC 只接受卡片自己的 webContents（别的窗口伪造一律忽略）', async () => {
+  it('卡片 IPC 只接受卡片自己的主 frame（别的窗口/子 frame 伪造一律忽略）', async () => {
     const h = harness()
     await h.handoff.open()
     const card = h.FakeWindow.all[0]!
     const listener = h.ipcListeners.get('browser-handoff:restore')!
     expect(typeof listener).toBe('function')
     // 伪造发送者：不应恢复
-    listener({ sender: { id: 999 } })
+    listener({ sender: { id: 999 }, senderFrame: { id: 999 } })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(h.main.state.shown).toBe(0)
-    // 真卡片：恢复
-    listener({ sender: card.webContents })
+    // 同一个 webContents 的其它 frame 也不能恢复
+    listener({ sender: card.webContents, senderFrame: { id: 1000 } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(h.main.state.shown).toBe(0)
+    // 真卡片主 frame：恢复
+    listener({ sender: card.webContents, senderFrame: card.webContents.mainFrame })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(h.main.state.shown).toBe(1)
   })

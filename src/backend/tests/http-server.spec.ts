@@ -23,16 +23,29 @@
  *
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { request } from 'node:http'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer as createNodeServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
-import { afterEach, describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  cleanupFixtures,
+  fixture,
+  randomPort,
+  rawGet,
+  rawRequest,
+  scratch,
+  servers,
+  TOKEN,
+  type State,
+} from './helpers/http-server-fixture.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const require = createRequire(import.meta.url)
+const nodeFs = require('node:fs') as typeof import('node:fs')
 const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostAllowed, lanAddresses } = require(join(ROOT, 'src', 'backend', 'http-server.js')) as {
   createAuthLimiter: () => {
     ok: (ip: string) => boolean
@@ -48,6 +61,11 @@ const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostA
     getDecodedRoot?: () => string
     appVersion: string
     bindHost?: string
+    callQueue?: {
+      run: (task: () => Promise<unknown>, meta?: Record<string, unknown>) => Promise<unknown>
+      stats: () => unknown
+      drain: (reason: string, channel?: string) => number
+    }
     authLimiter?: {
       ok: (ip: string) => boolean
       fail: (ip: string) => void
@@ -69,101 +87,9 @@ const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostA
   isHostAllowed: (authority: string | undefined, expectedAddress: string, expectedPort: number) => boolean
   lanAddresses: () => Array<{ address: string, family: string, iface: string }>
 }
-interface State {
-  running: boolean
-  port: number
-  configuredPort: number
-  address: string
-  enabled: boolean
-  hasToken: boolean
-  tokenMasked: string
-  pairingCodes?: number
-}
-
-const TOKEN = 'spec-token-0123456789abcdef'
-const scratch: string[] = []
-const servers: Array<{ stop: () => Promise<unknown> }> = []
-
 afterEach(async () => {
-  while (servers.length > 0) {
-    const s = servers.pop()
-    try { await s?.stop() } catch { /* 已经停了 */ }
-  }
-  while (scratch.length > 0) {
-    const p = scratch.pop()
-    if (p) { try { rmSync(p, { recursive: true, force: true }) } catch { /* 忽略 */ } }
-  }
+  await cleanupFixtures()
 })
-
-/** 搭一份「数据根 + 静态目录」的夹具。@returns 建服务所需的 deps 与目录。 */
-function fixture(opts: { enabled?: boolean, token?: string, port?: number, nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>, authLimiter?: {
-  ok: (ip: string) => boolean
-  fail: (ip: string) => void
-  succeed: (ip: string) => void
-  reset: () => void
-} } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'ra-spec-'))
-  scratch.push(dir)
-  const dataRoot = join(dir, 'wechat-data')
-  const uiDist = join(dir, 'ui-dist')
-  const decodedDir = join(dataRoot, 'decoded_images')
-  mkdirSync(join(decodedDir, 'wxid_a'), { recursive: true })
-  writeFileSync(join(decodedDir, 'wxid_a', 'x.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
-  mkdirSync(dataRoot, { recursive: true })
-  mkdirSync(join(uiDist, 'assets'), { recursive: true })
-  writeFileSync(join(dataRoot, 'config.json'), JSON.stringify({
-    api_enabled: opts.enabled ?? true,
-    api_port: opts.port ?? randomPort(),
-  }))
-  const token = opts.token === undefined ? TOKEN : opts.token
-  if (token !== '') writeFileSync(join(dataRoot, 'secrets.json'), JSON.stringify({ api_token: token }))
-  writeFileSync(join(uiDist, 'index.html'), '<!doctype html><title>probe</title>')
-  writeFileSync(join(uiDist, 'assets', 'app.js'), 'console.log(1)')
-  // 根目录**外**放一个文件，用来证明穿越读不到它
-  writeFileSync(join(dir, 'outside.txt'), 'SECRET-OUTSIDE')
-
-  const calls: string[] = []
-  const srv = createRemoteAccessServer({
-    getDataRoot: () => dataRoot,
-    getUiDistDir: () => uiDist,
-    getDecodedRoot: () => decodedDir,
-    gatedCall: async (method, args) => { calls.push(method); return { ok: true, value: { method, args } } },
-    ...(opts.nativeCall ? { nativeCall: opts.nativeCall } : {}),
-    appVersion: 'spec',
-    bindHost: '127.0.0.1',
-    authLimiter: opts.authLimiter,
-    log: () => undefined,
-    warn: () => undefined,
-  })
-  servers.push(srv)
-  return { srv, calls, dataRoot, uiDist, outside: join(dir, 'outside.txt') }
-}
-
-/**
- * 取一个**本进程内不重复**的高位端口。
- *
- * 2026-10-15 改（两轮）：
- *   ① 原来是 `20000 + Math.random() * 30000`（纯随机猜）。它在 CI 上偶发红 ——
- *      `up()` 里 `srv.start()` 返回 `running: false`，报出来的是「夹具默认应当能启动」，
- *      而真因是随机端口恰好落在被占用的区间、且服务自身的 11 次顺移（`PORT_ATTEMPTS`）
- *      也全被占满。随机猜端口是**结构性**的 flake 源。
- *   ② 第一版改成 `spawnSync` 起子进程去 `listen(0)` 探空闲端口 —— 那在 CI 上更糟：
- *      本文件有 ~30 个 `fixture()`，每个都同步起一个 Node 子进程，在共享 runner 上
- *      每次几百毫秒，累计把单测步拖到 30 分钟（实测 1799 秒）并触发 vitest 的
- *      `onTaskUpdate` 超时。**同步阻塞的子进程调用不能放进测试夹具**。
- *
- * 现在改成**进程内递增**：从一个高位基址开始，每次 +1。同一进程内的用例因此拿到
- * 互不相同的端口（不会自己撞自己），而「被别的进程占用」由服务自身的 11 次顺移兜底。
- * 零子进程、零随机、零阻塞。
- *
- * 基址取 30000 而不是 20000：Windows 的动态端口范围默认是 49152–65535，
- * 30000 起既避开常见服务端口，也离动态段有足够距离。
- */
-let nextPortSeed = 30000
-function randomPort(): number {
-  nextPortSeed += 1
-  return nextPortSeed
-}
 
 /** 启动并返回 base URL。 */
 async function up(f: ReturnType<typeof fixture>): Promise<string> {
@@ -184,26 +110,16 @@ async function login(base: string, token: string = TOKEN): Promise<string> {
   return setCookie.split(';')[0] ?? ''
 }
 
-/** 手工发 GET，让用例可以控制 Host 头（浏览器 fetch 不允许伪造这一项）。 */
-function rawGet(base: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
-  const url = new URL(base)
-  return new Promise((resolve, reject) => {
-    const req = request({
-      protocol: url.protocol,
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'GET',
-      setHost: false,
-      headers: { Connection: 'close', ...headers },
-    }, (res) => {
-      res.setEncoding('utf8')
-      let body = ''
-      res.on('data', (chunk) => { body += String(chunk) })
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
-    })
-    req.on('error', reject)
-    req.end()
+/** 发送 JSON 请求；浏览器桥与生产客户端都使用同一媒体类型。 */
+function postJson(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
   })
 }
 
@@ -236,6 +152,43 @@ describe('默认不监听：两个条件都要成立', () => {
     expect(st.port).toBeGreaterThan(0)
     expect(st.address).toBe('127.0.0.1')
     expect(st.tokenMasked, '状态里只该有掩码').not.toContain(TOKEN)
+  })
+
+  it('首选端口被占用时，无凭据监听快照记录顺延后的实际端口', async () => {
+    const blocker = createNodeServer((_req, res) => res.end())
+    await new Promise<void>((resolve, reject) => {
+      blocker.once('error', reject)
+      blocker.listen(0, '127.0.0.1', resolve)
+    })
+    const address = blocker.address()
+    if (address === null || typeof address === 'string') throw new Error('测试占位服务没有拿到 TCP 端口')
+    const preferredPort = address.port
+    try {
+      const f = fixture({ port: preferredPort })
+      const st = await f.srv.start()
+      expect(st.running).toBe(true)
+      expect(st.port).toBe(preferredPort + 1)
+      const snapshot = JSON.parse(readFileSync(join(f.dataRoot, 'http-runtime.json'), 'utf8')) as Record<string, unknown>
+      expect(snapshot).toMatchObject({
+        version: 1,
+        pid: process.pid,
+        running: true,
+        address: '127.0.0.1',
+        port: st.port,
+        preferredPort,
+      })
+      expect(JSON.stringify(snapshot)).not.toContain(TOKEN)
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
+  })
+
+  it('停止监听后快照立即标记为未运行，避免崩溃窗口暴露旧端口', async () => {
+    const f = fixture()
+    await up(f)
+    await f.srv.stop()
+    const snapshot = JSON.parse(readFileSync(join(f.dataRoot, 'http-runtime.json'), 'utf8')) as Record<string, unknown>
+    expect(snapshot).toMatchObject({ running: false, address: '', port: 0, startedAt: 0 })
   })
 
   it('syncWithConfig：界面关掉开关后立刻停止监听，再打开又起来', async () => {
@@ -391,6 +344,24 @@ describe('静态资源：不需要会话，但读不出根目录', () => {
     expect(js.headers.get('content-type')).toContain('javascript')
   })
 
+  it('HTML 响应带框架隔离与 CSP；HEAD 与 GET 的 MIME/长度一致且无响应体', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const html = await fetch(`${base}/`)
+    expect(html.headers.get('x-frame-options')).toBe('DENY')
+    expect(html.headers.get('content-security-policy')).toContain("frame-ancestors 'none'")
+    expect(html.headers.get('permissions-policy')).toContain('camera=()')
+
+    const get = await fetch(`${base}/assets/app.js`)
+    const getBody = await get.text()
+    expect(get.headers.get('content-length')).toBe(String(Buffer.byteLength(getBody)))
+    const head = await fetch(`${base}/assets/app.js`, { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-type')).toContain('javascript')
+    expect(head.headers.get('content-length')).toBe(get.headers.get('content-length'))
+    expect(await head.text()).toBe('')
+  })
+
   it('入口 no-cache、带哈希的产物可长缓存（否则升级后手机加载旧 JS → 白屏）', async () => {
     const f = fixture()
     const base = await up(f)
@@ -433,7 +404,7 @@ describe('鉴权：令牌换会话', () => {
   it('错令牌 → 401 BAD_TOKEN，且不下发 Cookie', async () => {
     const f = fixture()
     const base = await up(f)
-    const r = await fetch(`${base}/api/auth`, { method: 'POST', body: JSON.stringify({ token: 'wrong' }) })
+    const r = await postJson(`${base}/api/auth`, { token: 'wrong' })
     expect(r.status).toBe(401)
     expect((await r.json()).error?.code).toBe('BAD_TOKEN')
     expect(r.headers.get('set-cookie'), '失败的登录不该下发会话').toBeNull()
@@ -443,7 +414,7 @@ describe('鉴权：令牌换会话', () => {
     const f = fixture()
     const base = await up(f)
     for (const body of [{ token: '' }, {}, { token: null }, { token: 123 }, { token: [TOKEN] }]) {
-      const r = await fetch(`${base}/api/auth`, { method: 'POST', body: JSON.stringify(body) })
+      const r = await postJson(`${base}/api/auth`, body)
       expect(r.status, `${JSON.stringify(body)} 竟然登录成功了`).toBe(401)
     }
   })
@@ -451,16 +422,52 @@ describe('鉴权：令牌换会话', () => {
   it('对令牌 → 200 + HttpOnly/SameSite 会话 Cookie', async () => {
     const f = fixture()
     const base = await up(f)
-    const r = await fetch(`${base}/api/auth`, { method: 'POST', body: JSON.stringify({ token: TOKEN }) })
+    const r = await postJson(`${base}/api/auth`, { token: TOKEN })
     expect(r.status).toBe(200)
     const c = r.headers.get('set-cookie') ?? ''
     expect(c).toContain('HttpOnly')
     expect(c).toContain('SameSite=Lax')
     expect(c).not.toContain('Secure') // 明文 HTTP 下加了 Secure 会让 Cookie 完全不生效
+    expect(r.headers.get('x-frame-options')).toBe('DENY')
+    expect(r.headers.get('referrer-policy')).toBe('no-referrer')
     const value = (await r.json()).value as { version: string, native: Record<string, boolean>, tokenMasked: string }
     expect(value.version).toBe('spec')
     expect(value.native.titlebar).toBe(false)
     expect(value.tokenMasked).not.toContain(TOKEN)
+  })
+
+  it('非 JSON Content-Type → 415（即使 body 本身是合法 JSON）', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const r = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ token: TOKEN }),
+    })
+    expect(r.status).toBe(415)
+    expect((await r.json()).error?.code).toBe('BAD_REQUEST')
+  })
+
+  it('浏览器 Origin 必须与当前 Host 同源；Origin:null 也拒绝', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const host = new URL(base).host
+    const body = JSON.stringify({ token: TOKEN })
+    for (const origin of ['http://attacker.example', 'http://127.0.0.1:1', 'null']) {
+      const r = await rawRequest(`${base}/api/auth`, {
+        method: 'POST',
+        headers: { Host: host, Origin: origin, 'Content-Type': 'application/json' },
+        body,
+      })
+      expect(r.status, `Origin=${origin} 不应进入令牌校验`).toBe(403)
+      expect(JSON.parse(r.body).error?.code).toBe('ORIGIN_DENIED')
+    }
+    const sameOrigin = await rawRequest(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { Host: host, Origin: base, 'Content-Type': 'application/json' },
+      body,
+    })
+    expect(sameOrigin.status).toBe(200)
   })
 
   it('新配对码能登录且只许用一次，长期令牌仍可登录', async () => {
@@ -529,7 +536,7 @@ describe('鉴权：令牌换会话', () => {
     const base = await up(f)
     let saw429 = false
     for (let i = 0; i < 12; i += 1) {
-      const r = await fetch(`${base}/api/auth`, { method: 'POST', body: JSON.stringify({ token: `bad-${String(i)}` }) })
+      const r = await postJson(`${base}/api/auth`, { token: `bad-${String(i)}` })
       if (r.status === 429) { saw429 = true; break }
     }
     expect(saw429, '连续试错 12 次都没被限速').toBe(true)
@@ -570,7 +577,7 @@ describe('调用：白名单在闸门之前，信封原样透传', () => {
     const f = fixture()
     const base = await up(f)
     const cookie = await login(base)
-    for (const m of ['getWechatConfig', 'saveWechatConfig', 'sendClawbotMessage', 'createBackup', 'openPath', 'clearPrivacyAudit']) {
+    for (const m of ['getWechatConfig', 'saveWechatConfig', 'createBackup', 'openPath', 'clearPrivacyAudit']) {
       const r = await fetch(`${base}/api/wechat/call`, {
         method: 'POST',
         headers: { cookie, 'content-type': 'application/json' },
@@ -582,6 +589,154 @@ describe('调用：白名单在闸门之前，信封原样透传', () => {
       expect(j.error?.message, '错误信息要能让界面显示「仅桌面端可用」').toContain('不开放远程访问')
     }
     expect(f.calls, '被拒的方法不该碰到后端（否则远程探测会在后端留下调用痕迹）').toEqual([])
+  })
+
+  it('HTTP 连接在搜索途中断开 → 按 jobId 发出一次 cancelSearch', async () => {
+    let searchStarted!: () => void
+    let releaseSearch!: (value: unknown) => void
+    let cancelSeen!: (args: unknown[]) => void
+    const started = new Promise<void>((resolve) => { searchStarted = resolve })
+    const searchDone = new Promise<unknown>((resolve) => { releaseSearch = resolve })
+    const canceled = new Promise<unknown[]>((resolve) => { cancelSeen = resolve })
+    const f = fixture({
+      gatedCall: async (method, args) => {
+        if (method === 'searchUnified') {
+          searchStarted()
+          return searchDone
+        }
+        if (method === 'cancelSearch') {
+          cancelSeen(args)
+          return { ok: true, value: { ok: true } }
+        }
+        return { ok: true, value: { method, args } }
+      },
+    })
+    const base = await up(f)
+    const cookie = await login(base)
+    const ac = new AbortController()
+    const requestOutcome = fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'searchUnified', args: [{ query: 'needle', jobId: 'disconnect-1' }] }),
+      signal: ac.signal,
+    }).then(() => 'response', () => 'aborted')
+
+    await started
+    ac.abort()
+    await expect(canceled).resolves.toEqual([{ jobId: 'disconnect-1' }])
+    releaseSearch({ ok: true, value: { cancelled: true } })
+    await expect(requestOutcome).resolves.toBe('aborted')
+    expect(f.calls, '断连取消只能发一次，且必须指向原 search job').toEqual(['searchUnified', 'cancelSearch'])
+  })
+
+  it('搜索仍在队列中时断连 → 出队后不再启动 worker 搜索', async () => {
+    let releaseQueue!: () => void
+    const queued = new Promise<void>((resolve) => { releaseQueue = resolve })
+    let enteredQueue!: () => void
+    const inQueue = new Promise<void>((resolve) => { enteredQueue = resolve })
+    const f = fixture({
+      callQueue: {
+        run: async (task) => {
+          enteredQueue()
+          await queued
+          return task()
+        },
+      },
+    })
+    const base = await up(f)
+    const cookie = await login(base)
+    const ac = new AbortController()
+    const requestOutcome = fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'searchUnified', args: [{ query: 'needle', jobId: 'queued-disconnect-1' }] }),
+      signal: ac.signal,
+    }).then(() => 'response', () => 'aborted')
+
+    await inQueue
+    ac.abort()
+    const deadline = Date.now() + 2_000
+    while (!f.calls.includes('cancelSearch') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(f.calls, '服务端应先观察到断连并发出取消').toContain('cancelSearch')
+    releaseQueue()
+    await expect(requestOutcome).resolves.toBe('aborted')
+    expect(f.calls, '已断连的排队搜索不应再进入 worker').toEqual(['cancelSearch'])
+  })
+
+  it('断连早于 worker job 注册 → 释放闸门后重放取消，且不重复取消已确认的 job', async () => {
+    let releaseGate!: () => void
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve })
+    let enteredGate!: () => void
+    const inGate = new Promise<void>((resolve) => { enteredGate = resolve })
+    let firstCancelSeen!: () => void
+    const firstCancel = new Promise<void>((resolve) => { firstCancelSeen = resolve })
+    let retryCancelSeen!: () => void
+    const retriedCancel = new Promise<void>((resolve) => { retryCancelSeen = resolve })
+    let aborted!: () => void
+    const searchAborted = new Promise<void>((resolve) => { aborted = resolve })
+    let searchFinished!: () => void
+    const searchDone = new Promise<void>((resolve) => { searchFinished = resolve })
+    let registered = false
+    let expensiveSearchStarted = false
+    let cancelAttempts = 0
+
+    const f = fixture({
+      gatedCall: async (method, args) => {
+        if (method === 'searchUnified') {
+          enteredGate()
+          await gate
+          // 模拟 gatedCall 已返回、worker 此刻才注册 job；真实查询必须等取消信号。
+          registered = true
+          const cancelledBeforeWork = await Promise.race([
+            searchAborted.then(() => true),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
+          ])
+          if (!cancelledBeforeWork) expensiveSearchStarted = true
+          searchFinished()
+          return { ok: true, value: { cancelled: true } }
+        }
+        if (method === 'cancelSearch') {
+          cancelAttempts += 1
+          if (cancelAttempts === 1) {
+            firstCancelSeen()
+            expect(args).toEqual([{ jobId: 'gate-disconnect-1' }])
+            return { ok: true, value: { ok: false } }
+          }
+          retryCancelSeen()
+          expect(registered, '取消重放应发生在 worker 注册 job 之后').toBe(true)
+          aborted()
+          return { ok: true, value: { ok: true } }
+        }
+        return { ok: true, value: { method, args } }
+      },
+    })
+    const base = await up(f)
+    const cookie = await login(base)
+    const ac = new AbortController()
+    const requestOutcome = fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'searchUnified', args: [{ query: 'needle', jobId: 'gate-disconnect-1' }] }),
+      signal: ac.signal,
+    }).then(() => 'response', () => 'aborted')
+
+    await inGate
+    ac.abort()
+    await firstCancel
+    releaseGate()
+    await retriedCancel
+    await Promise.race([
+      searchDone,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('取消重放未终止搜索')), 2_000)),
+    ])
+    await expect(requestOutcome).resolves.toBe('aborted')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(expensiveSearchStarted, '真实查询不应在取消确认后继续执行').toBe(false)
+    expect(cancelAttempts, '取消成功确认后不得继续重放').toBe(2)
+    expect(f.calls).toEqual(['searchUnified', 'cancelSearch', 'cancelSearch'])
   })
 
   it('未知方法 / 缺 method / args 不是数组 → 一律拒或规整，不抛', async () => {
@@ -632,9 +787,42 @@ describe('调用：白名单在闸门之前，信封原样透传', () => {
     const f = fixture()
     const base = await up(f)
     const cookie = await login(base)
-    const r = await fetch(`${base}/api/wechat/call`, { method: 'POST', headers: { cookie }, body: '{not json' })
+    const r = await fetch(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{not json',
+    })
     expect(r.status).toBe(400)
     expect((await r.json()).error?.code).toBe('BAD_REQUEST')
+  })
+
+  it('非 JSON Content-Type 与错误 Origin 在进后端前被拒', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const cookie = await login(base)
+    const host = new URL(base).host
+    const body = JSON.stringify({ method: 'getSessions', args: [] })
+
+    const text = await rawRequest(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: { Host: host, Cookie: cookie, 'Content-Type': 'text/plain' },
+      body,
+    })
+    expect(text.status).toBe(415)
+
+    const crossOrigin = await rawRequest(`${base}/api/wechat/call`, {
+      method: 'POST',
+      headers: {
+        Host: host,
+        Origin: 'http://attacker.example',
+        Cookie: cookie,
+        'Content-Type': 'application/json',
+      },
+      body,
+    })
+    expect(crossOrigin.status).toBe(403)
+    expect(JSON.parse(crossOrigin.body).error?.code).toBe('ORIGIN_DENIED')
+    expect(f.calls, '被媒体类型/Origin 守卫拒绝的请求不能进入后端').toEqual([])
   })
 
   it('没有这个接口 → 404（授权之后才判路由，不透露端点清单）', async () => {
@@ -757,7 +945,7 @@ describe('令牌原文不出现在任何响应里', () => {
       }
     }
     // 登录成功那一响应也不许回显令牌（回显就等于把它送进浏览器可读的地方）
-    const loginRes = await fetch(`${base}/api/auth`, { method: 'POST', body: JSON.stringify({ token: TOKEN }) })
+    const loginRes = await postJson(`${base}/api/auth`, { token: TOKEN })
     expect(await loginRes.text()).not.toContain(TOKEN)
   })
 
@@ -823,6 +1011,34 @@ describe('「打开网页」交接会话：浏览器与桌面端同权限', () =
     expect(traversal.status).toBe(404)
     const outside = await fetch(`${base}/api/media/decoded/wxid_a/../../outside.txt`, { headers: { cookie } })
     expect(outside.status).toBe(404)
+  })
+
+  it('媒体响应提前关闭时销毁底层文件流，客户端断连不会继续读完整大文件', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const cookie = await login(base)
+    const source = new PassThrough()
+    source.write('x')
+    const createReadStream = vi.spyOn(nodeFs, 'createReadStream')
+      .mockReturnValue(source as unknown as ReturnType<typeof nodeFs.createReadStream>)
+    const ac = new AbortController()
+    try {
+      const response = await fetch(`${base}/api/media/decoded/wxid_a/x.jpg`, {
+        headers: { cookie },
+        signal: ac.signal
+      })
+      expect(response.status).toBe(200)
+      expect(createReadStream).toHaveBeenCalledTimes(1)
+      expect(source.destroyed).toBe(false)
+
+      ac.abort()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(source.destroyed).toBe(true)
+    } finally {
+      ac.abort()
+      createReadStream.mockRestore()
+      source.destroy()
+    }
   })
 
   it('原生能力端点：交接会话可用，普通会话 403', async () => {

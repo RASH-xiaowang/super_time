@@ -231,8 +231,8 @@ export function quoteTypePlaceholder(type: number): string {
 
 /** appmsg 子类型 → 引用占位标签（被引用的是卡片型消息时）。 */
 export const QUOTE_APP_LABEL: Record<number, string> = {
-  2: '商品', 3: '音乐', 4: '视频号', 5: '链接', 6: '文件', 8: '表情', 19: '聊天记录',
-  24: '笔记', 33: '小程序', 36: '小程序', 42: '名片', 50: '版本不支持', 51: '视频号',
+  2: '商品', 3: '音乐', 4: '链接', 5: '链接', 6: '文件', 8: '表情', 19: '聊天记录',
+  24: '笔记', 33: '小程序', 36: '卡片', 42: '名片', 50: '版本不支持', 51: '视频号',
   53: '接龙', 57: '引用', 62: '拍一拍', 63: '直播', 68: '链接', 74: '文件',
   87: '群公告', 88: '直播', 2000: '转账', 2001: '红包', 2003: '红包',
 }
@@ -283,7 +283,7 @@ export function summarizeQuotedXml(xml: string): string {
     const title = cleanRichText(xmlTagText(text, 'title'))
     if (appType === 2000) return title ? `[转账] ${title}` : '[转账]'
     if (appType === 2001 || appType === 2003) return title ? `[红包] ${title}` : '[红包]'
-    const label = QUOTE_APP_LABEL[appType]
+    const label = appType === 4 && /<finderFeed\b/i.test(text) ? '视频号' : QUOTE_APP_LABEL[appType]
     if (label) {
       const summary = title || cleanRichText(xmlTagText(text, 'des'))
       return summary ? `[${label}] ${summary}` : `[${label}]`
@@ -446,22 +446,98 @@ export function channelsRich(
   return rich
 }
 
+/** `<mmreader>` 的统一解析结果（根节点与 `<appmsg>` 内嵌形态共用）。 */
+interface ParsedMpReader {
+  categoryType: number
+  source: string
+  cover: string
+  desc: string
+  articles: MpArticle[]
+}
+
+/**
+ * 解析公众号 `<mmreader>`，同时覆盖两种真实结构：
+ * - appmsg 内嵌：文章在 `<item>`，头条还会与 appmsg 的 title/url 重复；
+ * - 根 `<mmreader>`：腾讯新闻等文本消息直接以它开头，次条使用 `<newitem>`。
+ *
+ * 只有 `category type=20` 或实际存在至少两篇文章才算公众号推送。银行交易提醒
+ * 也会带 `<mmreader><category type="0" count="1">`，不能仅凭标签名把它吞成大图卡。
+ * @param xml - message XML containing an `<mmreader>` block.
+ * @returns parsed metadata/articles, or null when no reader block exists.
+ */
+function parseMpReader(xml: string): ParsedMpReader | null {
+  if (!xml || !/<mmreader\b/i.test(xml)) return null
+  const reader = xmlTagText(xml, 'mmreader')
+  if (!reader) return null
+  const categoryType = Number(xmlAttr(reader, 'category', 'type')) || 0
+  const source = unescapeXmlEntities(xmlTagText(reader, 'name')).trim()
+  const topnew = xmlTagText(reader, 'topnew')
+  const cover = unescapeXmlEntities(topnew ? xmlTagText(topnew, 'cover') : '').trim()
+  const desc = unescapeXmlEntities(
+    topnew ? (xmlTagText(topnew, 'digest') || xmlTagText(topnew, 'summary')) : '',
+  ).trim()
+  const articles: MpArticle[] = []
+  const seen = new Set<string>()
+  const re = cachedRe(
+    'mpreader:articles',
+    () => /<(item|newitem)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+  )
+  re.lastIndex = 0
+  for (const match of reader.matchAll(re)) {
+    const block = match[2] ?? ''
+    const title = unescapeXmlEntities(
+      xmlTagText(block, 'title_v2')
+      || xmlTagText(block, 'title')
+      || (/^[^<]+$/.test(block.trim()) ? block.trim() : ''),
+    ).trim()
+    const url = unescapeXmlEntities(xmlTagText(block, 'url') || xmlTagText(block, 'link')).trim()
+    if (!title && !url) continue
+    const key = url ? `u:${url}` : `t:${title}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const article: MpArticle = { title, url }
+    const articleCover = unescapeXmlEntities(
+      xmlTagText(block, 'cover') || xmlTagText(block, 'cover_url'),
+    ).trim()
+    if (articleCover) article.cover = articleCover
+    const summary = unescapeXmlEntities(
+      xmlTagText(block, 'summary') || xmlTagText(block, 'digest'),
+    ).trim()
+    if (summary) article.summary = summary
+    articles.push(article)
+  }
+  return { categoryType, source, cover, desc, articles }
+}
+
+/** 严格判断一个 `<mmreader>` 是否真的是公众号图文推送。 */
+function isMpNewsReader(reader: ParsedMpReader): boolean {
+  return reader.categoryType === 20 || reader.articles.length >= 2
+}
+
+/** 判断 reader 里的文章是否与外层 appmsg 的头条重复。 */
+function isSameMpTop(article: MpArticle, title: string, url: string): boolean {
+  if (url && article.url && article.url === url) return true
+  return title !== '' && article.title === title
+}
+
+/** 按 URL（优先）或标题去重，保留文档顺序。 */
+function uniqueMpArticles(articles: readonly MpArticle[]): MpArticle[] {
+  const seen = new Set<string>()
+  const out: MpArticle[] = []
+  for (const article of articles) {
+    const key = article.url ? `u:${article.url}` : `t:${article.title}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(article)
+  }
+  return out
+}
+
 /**
  * 公众号推送（`<mmreader>`）→ 大图封面 + 次条列表。
  *
- * 实测结构（`biz_message_0.db` 里 gh_ 会话，2026-09）：
- * ```xml
- * <mmreader><category type="20" count="2"><name>公众号名</name>
- *   <topnew><cover>头条封面</cover><width>0</width><height>0</height></topnew>
- *   <item>…头条自身（title/url 与 appmsg 完全重复）…</item>
- *   <item>…次条：title/title_v2/url/cover/summary…</item>
- * </category></mmreader>
- * ```
- * 判据：`items[0]` 与 appmsg 自身的 title/url 相同（实测 #9/#10/#11 三条一致），
- * 所以按「标题或链接与头条相同」跳过它，**次条从第 2 个 item 起**。
- * 界面按官方形态渲染：单篇 = 大图 + 标题在下方；多篇 = 大图（头条）+ 每篇次条一行（标题 + 小方图）。
- *
- * `width`/`height` 实测恒为 0，别拿它算比例；封面统一按 16:9 裁。
+ * `category type=0` 是普通应用通知（例如银行交易提醒），必须保留 `desc` 并按
+ * 普通链接/应用消息渲染；只有 type=20 或至少两篇有效文章才进入多图文卡。
  * @param link - the link descriptor to enrich (mutated in place).
  * @param app - the appmsg XML.
  * @param firstTitle - the appmsg-level title (the top article's).
@@ -469,29 +545,51 @@ export function channelsRich(
  * @param fallbackCover - `thumburl`, used when `<topnew><cover>` is absent.
  */
 export function applyMpNews(link: RichMedia, app: string, firstTitle: string, firstUrl: string, fallbackCover: string): void {
-  if (!app.includes('<mmreader')) return
-  const reader = xmlTagText(app, 'mmreader') || app
-  const topnew = xmlTagText(reader, 'topnew')
-  const topCover = unescapeXmlEntities(topnew ? xmlTagText(topnew, 'cover') : '')
-  const cover = topCover || unescapeXmlEntities(fallbackCover)
-  const secondary: MpArticle[] = []
-  for (const it of xmlTagBlocks(reader, 'item')) {
-    const title = unescapeXmlEntities(xmlTagText(it, 'title_v2') || xmlTagText(it, 'title'))
-    const url = unescapeXmlEntities(xmlTagText(it, 'url'))
-    if (!title || title === firstTitle || (url && url === firstUrl)) continue
-    const art: MpArticle = { title, url }
-    const c = unescapeXmlEntities(xmlTagText(it, 'cover'))
-    if (c) art.cover = c
-    const summary = unescapeXmlEntities(xmlTagText(it, 'summary'))
-    if (summary) art.summary = summary
-    secondary.push(art)
-  }
+  const parsed = parseMpReader(app)
+  if (!parsed || !isMpNewsReader(parsed)) return
+  const top = parsed.articles.find(article => isSameMpTop(article, firstTitle, firstUrl))
+  const secondary = uniqueMpArticles(
+    parsed.articles.filter(article => article !== top && !isSameMpTop(article, firstTitle, firstUrl)),
+  )
   link.mpNews = true
-  // 公众号推送一律走大图卡：`linkStyle` 的既有启发式（摘要带话题标签 / PC 信息流）
-  // 对推送无效，实测这些推送的 des 是空的，会被判成小链接卡。
+  link.linkType = 'official_article'
+  // 公众号推送一律走大图卡：既有 linkStyle 启发式对空摘要推送无效。
   link.linkStyle = 'cover'
+  if (!link.title && top) link.title = top.title
+  if (!link.url && top) link.url = top.url
+  if (!link.desc && (top?.summary || parsed.desc)) link.desc = top?.summary || parsed.desc
+  if (!link.source && parsed.source) link.source = parsed.source
+  const cover = parsed.cover || top?.cover || unescapeXmlEntities(fallbackCover)
   if (cover) link.thumb = cover
   if (secondary.length) link.mpArticles = secondary
+}
+
+/**
+ * 解析根节点就是 `<mmreader>` 的公众号/资讯推送（微信 local_type=1）。
+ * 第一篇有效文章作为头条，其余 `<item>/<newitem>` 完整进入 `mpArticles`。
+ * @param xml - root message XML.
+ * @returns rich link descriptor, or null when it is not a real MP push.
+ */
+export function parseMpNewsRich(xml: string): RichMedia | null {
+  const parsed = parseMpReader(xml)
+  if (!parsed || !isMpNewsReader(parsed)) return null
+  const [top, ...rest] = parsed.articles
+  if (!top) return null
+  const rich: RichMedia = {
+    type: 'link',
+    title: top.title,
+    url: top.url,
+    linkType: 'official_article',
+    linkStyle: 'cover',
+    mpNews: true,
+  }
+  if (top.summary || parsed.desc) rich.desc = top.summary || parsed.desc
+  if (parsed.source) rich.source = parsed.source
+  const cover = parsed.cover || top.cover
+  if (cover) rich.thumb = cover
+  const secondary = uniqueMpArticles(rest)
+  if (secondary.length) rich.mpArticles = secondary
+  return rich
 }
 
 /**
@@ -612,7 +710,16 @@ export function parseAppmsg(xml: string): RichMedia | null {
       if (referAppType) rich.referAppType = referAppType
       if (referTime) rich.referTime = referTime
       if (referSvrId) rich.referSvrId = referSvrId
-      const referUser = refer ? (xmlTagText(refer, 'fromusr') || xmlTagText(refer, 'chatusr')).trim() : ''
+      // Group replies often carry `<fromusr>群 ID</fromusr>` and
+      // `<chatusr>实际成员 ID</chatusr>` at the same time. Keep both fields so
+      // the graph layer can prefer a resolvable member and fall back to the
+      // room/peer id instead of silently turning the quoted member into the
+      // chatroom node.
+      const referChatUser = refer ? xmlTagText(refer, 'chatusr').trim() : ''
+      const referFromUser = refer ? xmlTagText(refer, 'fromusr').trim() : ''
+      if (referChatUser) rich.referChatUsername = referChatUser
+      if (referFromUser) rich.referFromUsername = referFromUser
+      const referUser = referChatUser || referFromUser
       if (referUser) rich.referUsername = referUser
       return rich
     }
@@ -737,8 +844,8 @@ export function parseAppmsg(xml: string): RichMedia | null {
       return card
     }
     case 2000: {
-      // wcpayinfo: feedesc carries the amount (￥0.01); the state label is
-      // derived client-side from paysubtype + is_sender (st_control mapping).
+      // wcpayinfo.feedesc carries the amount (￥0.01). Keep the raw payment
+      // fields for records, but do not infer a visible state in the message card.
       const feedesc = unescapeXmlEntities(xmlTagOrAttr(app, 'feedesc'))
       const amount = feedesc || title || ''
       const paySub = xmlTagOrAttr(app, 'paysubtype')
@@ -754,11 +861,16 @@ export function parseAppmsg(xml: string): RichMedia | null {
     case 2003: {
       // wcpayinfo.feedesc carries the red packet amount (￥8.88).
       const amount = unescapeXmlEntities(xmlTagOrAttr(app, 'feedesc'))
-      const greet = unescapeXmlEntities(title || des || xmlTagText(app, 'sendertitle') || xmlTagText(app, 'receivertitle') || '')
+      const senderTitle = unescapeXmlEntities(xmlTagText(app, 'sendertitle'))
+      const receiverTitle = unescapeXmlEntities(xmlTagText(app, 'receivertitle'))
+      // `title` is the generic "微信红包" on most real rows; the greeting users
+      // actually see in WeChat lives in sendertitle/receivertitle.
+      const generic = (value: string): boolean => /^\[?微信红包\]?$/.test(value.trim())
+      const greet = [senderTitle, receiverTitle, title, des].find(value => value.trim() !== '' && !generic(value)) ?? ''
       const cover = xmlTagText(app, 'receiverc2cshowsourceurl')
       const rp: RichMedia = { type: 'redpacket', title: '微信红包' }
       if (greet) rp.desc = greet
-      if (amount) rp.amount = amount.replace(/^\s*[Y￥]/, '')
+      if (amount) rp.amount = amount.replace(/^\s*[Y¥￥]/, '')
       if (cover) rp.thumb = cover
       if (appType !== 2001) rp.paysubtype = String(appType)
       return { ...rp, ...base }

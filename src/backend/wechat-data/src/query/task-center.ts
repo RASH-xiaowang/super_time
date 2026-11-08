@@ -35,6 +35,7 @@ import { withWritableDb } from './db-open.ts'
 import type { DatabaseSync } from './db-open.ts'
 import { queryMessages } from './messages.ts'
 import { contactMeta } from './meta.ts'
+import { canonicalChatReference, isMessageTableHash } from './message-identity.ts'
 import { findVendor } from './rpa/registry.ts'
 import { storeExists, taskDbPath } from './task-db.ts'
 import {
@@ -67,12 +68,28 @@ import type {
   TaskTriggerRecord,
   TaskTriggerSnapshot,
 } from '../types.ts'
+import {
+  cleanTaskBatchIds,
+  clampTaskInt,
+  taskCellNum,
+  taskCellStr,
+  taskErrorText,
+} from './task-center-utils.ts'
+
+export {
+  cleanTaskBatchIds,
+  clampTaskInt,
+  taskCellNum,
+  taskCellStr,
+  taskErrorText,
+  TASK_BATCH_DELETE_MAX,
+} from './task-center-utils.ts'
 
 // 扫描与投递的实现在兄弟文件里；这里统一再导出，调用方只需认 `query/task-center.ts`。
 export { scanTaskTriggers } from './task-center-scan.ts'
 export type { ScanTaskTriggersOptions } from './task-center-scan.ts'
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts'
-export type { PendingDispatchResult, TaskDispatchDeps } from './task-center-callback.ts'
+export type { PendingDispatchResult, TaskDispatchDeps, TaskDispatchOptions } from './task-center-callback.ts'
 export { storeExists, taskDbPath }
 /** 单个关键词 trim 后的最大字符数。 */
 const KEYWORD_MAX_LEN = 64
@@ -96,59 +113,6 @@ const TRIGGER_SEARCH_COLUMNS = [
   'target_username',
   'callback_error',
 ] as const
-/** 一次批量删除最多处理多少条；超过时整单拒绝，避免静默只删一部分。 */
-export const TASK_BATCH_DELETE_MAX = 500
-
-/** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
-export function taskErrorText(e: unknown): string {
-  const msg = (e as { message?: unknown } | null | undefined)?.message
-  return typeof msg === 'string' && msg !== '' ? msg : String(e)
-}
-
-export function taskCellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  return ''
-}
-
-export function taskCellNum(v: unknown): number {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : 0
-}
-
-/** 整数夹取（非数字按 fallback，其余夹到 [min, max]）。 */
-export function clampTaskInt(v: unknown, fallback: number, min: number, max: number): number {
-  const n = typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : fallback
-  return Math.min(max, Math.max(min, n))
-}
-
-/**
- * 清洗批量删除 id：只保留唯一正整数，并拒绝空选择和过大批次。
- *
- * Remote 入参来自序列化 JSON，不能只靠 TypeScript 类型；重复 id 去重后返回，
- * 超过上限时整单拒绝而不是截断 —— 用户勾了 501 条却只删 500 条更难排查。
- * @param raw - 入参里的 ids（运行时可能不是数组）。
- * @param max - 允许的最大条数。
- * @returns 清洗后的 id 或中文错误。
- */
-export function cleanTaskBatchIds(raw: unknown, max = TASK_BATCH_DELETE_MAX): { ids: number[]; error?: string } {
-  if (!Array.isArray(raw) || raw.length === 0) return { ids: [], error: '请至少选择一条记录' }
-  const ids: number[] = []
-  const seen = new Set<number>()
-  for (const value of raw) {
-    const id = Math.trunc(Number(value))
-    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue
-    seen.add(id)
-    ids.push(id)
-  }
-  if (ids.length === 0) return { ids: [], error: '请至少选择一条有效记录' }
-  if (ids.length > max) {
-    return { ids: [], error: '一次最多删除 ' + String(max) + ' 条，请分批操作' }
-  }
-  return { ids }
-}
-
 /** 生成 `?, ?, ?` 形式的 SQL 占位符（调用方已限制 id 数量上限）。 */
 function sqlPlaceholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
@@ -212,6 +176,9 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     callback_at INTEGER,
     callback_error TEXT NOT NULL DEFAULT '',
     external_task_id TEXT NOT NULL DEFAULT '',
+    callback_lease_owner TEXT NOT NULL DEFAULT '',
+    callback_lease_until INTEGER NOT NULL DEFAULT 0,
+    callback_lease_fence INTEGER NOT NULL DEFAULT 0,
     UNIQUE(task_id, message_local_id)
   )`)
   // 老库升级：CREATE TABLE IF NOT EXISTS 不会补列，缺列时逐列 ALTER（见下表）。
@@ -220,6 +187,8 @@ export function ensureTaskSchema(db: DatabaseSync): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task ON task_triggers(task_id, triggered_at DESC)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_task_order ON task_triggers(task_id, triggered_at DESC, id DESC)')
   db.exec('CREATE INDEX IF NOT EXISTS idx_task_triggers_order ON task_triggers(triggered_at DESC, id DESC)')
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_triggers_dispatch_queue
+    ON task_triggers(callback_status, callback_lease_until, triggered_at, id)`)
 }
 
 /**
@@ -239,9 +208,12 @@ const TASK_INFO_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['trigger_vendor_version', "ALTER TABLE task_info ADD COLUMN trigger_vendor_version TEXT NOT NULL DEFAULT ''"],
 ]
 
-/** `task_triggers` 的历史补列清单（多厂商接入新增 `external_task_id`）。 */
+/** `task_triggers` 的历史补列清单（外部任务 id + 派发租约/围栏）。 */
 const TASK_TRIGGER_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['external_task_id', "ALTER TABLE task_triggers ADD COLUMN external_task_id TEXT NOT NULL DEFAULT ''"],
+  ['callback_lease_owner', "ALTER TABLE task_triggers ADD COLUMN callback_lease_owner TEXT NOT NULL DEFAULT ''"],
+  ['callback_lease_until', 'ALTER TABLE task_triggers ADD COLUMN callback_lease_until INTEGER NOT NULL DEFAULT 0'],
+  ['callback_lease_fence', 'ALTER TABLE task_triggers ADD COLUMN callback_lease_fence INTEGER NOT NULL DEFAULT 0'],
 ]
 
 /**
@@ -255,12 +227,21 @@ function ensureSchemaColumns(
   table: 'task_info' | 'task_triggers',
   migrations: ReadonlyArray<readonly [string, string]>,
 ): void {
-  const columns = new Set(
+  const readColumns = (): Set<string> => new Set(
     (db.prepare('PRAGMA table_info(' + table + ')').all() as Array<Record<string, unknown>>)
       .map((row) => taskCellStr(row['name'])),
   )
+  const columns = readColumns()
   for (const [name, sql] of migrations) {
-    if (!columns.has(name)) db.exec(sql)
+    if (columns.has(name)) continue
+    try {
+      db.exec(sql)
+      columns.add(name)
+    } catch (e) {
+      // 另一个进程可能刚补完同一列；以 PRAGMA 的最新事实为准，而不是把 duplicate-column 当故障。
+      if (!readColumns().has(name)) throw e
+      columns.add(name)
+    }
   }
 }
 
@@ -310,10 +291,15 @@ function parseTriggerImages(raw: unknown): TaskTriggerImage[] {
 }
 
 /** `task_triggers` 行 → 契约里的 `TaskTriggerRecord`。 */
-export function rowToTrigger(r: Record<string, unknown>): TaskTriggerRecord {
+export function rowToTrigger(
+  r: Record<string, unknown>,
+  decryptedDir = '',
+): TaskTriggerRecord {
   const statusText = taskCellStr(r['callback_status'])
   const callbackStatus: TaskTriggerCallbackStatus =
-    statusText === 'sent' || statusText === 'failed' || statusText === 'skipped' ? statusText : 'pending'
+    statusText === 'sent' || statusText === 'failed' || statusText === 'skipped' || statusText === 'sent_unconfirmed'
+      ? statusText
+      : 'pending'
   const record: TaskTriggerRecord = {
     id: taskCellNum(r['id']),
     taskId: taskCellNum(r['task_id']),
@@ -335,6 +321,15 @@ export function rowToTrigger(r: Record<string, unknown>): TaskTriggerRecord {
   if (callbackError !== '') record.callbackError = callbackError
   const externalTaskId = taskCellStr(r['external_task_id'])
   if (externalTaskId !== '') record.externalTaskId = externalTaskId
+  if (decryptedDir !== '') {
+    const chat = canonicalChatReference(decryptedDir, record.chatUsername, '触发记录会话')
+    record.chatUsername = chat.error === undefined ? chat.username : ''
+    if ((record.chatName === '' || isMessageTableHash(record.chatName)) && chat.error === undefined) {
+      record.chatName = chat.displayName
+    }
+    const target = canonicalChatReference(decryptedDir, record.targetUsername, '触发对象')
+    record.targetUsername = target.error === undefined ? target.username : ''
+  }
   return record
 }
 
@@ -427,7 +422,10 @@ function configTextOf(config: RpaTriggerConfig, key: string): string {
 }
 
 /** `task_info` 行 → 契约里的 `TaskInfo`（`last_scan_seq` 是扫描内部状态，不进契约）。 */
-export function rowToTask(r: Record<string, unknown>): TaskInfo {
+export function rowToTask(
+  r: Record<string, unknown>,
+  decryptedDir = '',
+): TaskInfo {
   const triggerMethod = normalizeTriggerMethod(r['trigger_method'])
   const triggerConfig = rowTriggerConfig(r, triggerMethod)
   const secretSet: RpaTriggerSecretSet = secretSetOf(rowTriggerSecrets(r, triggerMethod))
@@ -457,6 +455,16 @@ export function rowToTask(r: Record<string, unknown>): TaskInfo {
   }
   if (r['last_triggered_at'] !== null && r['last_triggered_at'] !== undefined) {
     task.lastTriggeredAt = taskCellNum(r['last_triggered_at'])
+  }
+  if (decryptedDir !== '') {
+    const chat = canonicalChatReference(decryptedDir, task.chatUsername, '任务会话')
+    task.chatUsername = chat.error === undefined ? chat.username : ''
+    task.chatType = chat.error === undefined ? chat.type : task.chatType
+    if ((task.chatName === '' || isMessageTableHash(task.chatName)) && chat.error === undefined) {
+      task.chatName = chat.displayName
+    }
+    const target = canonicalChatReference(decryptedDir, task.targetUsername, '任务触发对象')
+    task.targetUsername = target.error === undefined ? target.username : ''
   }
   return task
 }
@@ -496,7 +504,7 @@ export function listTaskInfos(decryptedDir: string): TaskInfoSnapshot {
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       const rows = db.prepare('SELECT * FROM task_info ORDER BY id DESC').all() as Array<Record<string, unknown>>
-      const items = rows.map(rowToTask)
+      const items = rows.map((row) => rowToTask(row, decryptedDir))
       enrichTaskIdentities(decryptedDir, items)
       return { items, total: items.length }
     })
@@ -568,7 +576,7 @@ export function listTaskTriggers(decryptedDir: string, query?: TaskTriggerQuery)
         if (at !== bt) return bt - at
         return taskCellNum(b['id']) - taskCellNum(a['id'])
       })
-      const items = rows.map(rowToTrigger)
+        const items = rows.map((row) => rowToTrigger(row, decryptedDir))
       enrichTaskIdentities(decryptedDir, items)
       const last = items[items.length - 1]
       const hasMore = last !== undefined && db.prepare(
@@ -666,19 +674,25 @@ function resolveTriggerConfig(
  * @returns 完整字段或中文校验错误。
  */
 function resolveTaskFields(
+  decryptedDir: string,
   input: TaskInfoInput,
   existing: Record<string, unknown> | undefined,
 ): { fields?: ResolvedTaskFields; error?: string } {
-  const chatUsername = typeof input?.chatUsername === 'string' ? input.chatUsername.trim() : ''
-  if (chatUsername === '') return { error: '未指定会话' }
-  const existingChatType = existing === undefined ? '' : taskCellStr(existing['chat_type'])
-  const chatType: TaskInfoChatType = input?.chatType === undefined
-    ? (existingChatType === 'group' ? 'group' : 'private')
-    : (input.chatType === 'group' ? 'group' : 'private')
+  const inputChat = typeof input?.chatUsername === 'string' ? input.chatUsername.trim() : ''
+  const existingChat = existing === undefined ? '' : taskCellStr(existing['chat_username'])
+  const rawChatUsername = inputChat || existingChat
+  if (rawChatUsername === '') return { error: '未指定会话' }
+  const canonicalChat = canonicalChatReference(decryptedDir, rawChatUsername, '任务会话')
+  if (canonicalChat.error !== undefined) return { error: canonicalChat.error }
+  const chatUsername = canonicalChat.username
+  const chatType: TaskInfoChatType = canonicalChat.type
   const existingTarget = existing === undefined ? '' : taskCellStr(existing['target_username'])
-  const targetUsername = input?.targetUsername === undefined
+  const rawTargetUsername = input?.targetUsername === undefined
     ? existingTarget
     : (typeof input.targetUsername === 'string' ? input.targetUsername.trim() : '')
+  const canonicalTarget = canonicalChatReference(decryptedDir, rawTargetUsername, '任务触发对象')
+  if (canonicalTarget.error !== undefined) return { error: canonicalTarget.error }
+  const targetUsername = canonicalTarget.username
   if (chatType === 'group' && targetUsername === '') {
     return { error: '群聊任务必须选择群内目标用户' }
   }
@@ -686,9 +700,14 @@ function resolveTaskFields(
   if (cleanedKeywords.error !== undefined) return { error: cleanedKeywords.error }
   const keywords = cleanedKeywords.keywords
   const existingChatName = existing === undefined ? '' : taskCellStr(existing['chat_name'])
-  const chatName = input?.chatName === undefined
-    ? existingChatName
+  const inputChatName = input?.chatName === undefined
+    ? ''
     : (typeof input.chatName === 'string' ? input.chatName.trim() : '')
+  const chatName = inputChatName !== '' && !isMessageTableHash(inputChatName)
+    ? inputChatName
+    : (existingChatName !== '' && !isMessageTableHash(existingChatName)
+      ? existingChatName
+      : canonicalChat.displayName)
   const existingTargetName = existing === undefined ? '' : taskCellStr(existing['target_name'])
   const targetName = input?.targetName === undefined
     ? existingTargetName
@@ -793,7 +812,7 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
         ? db.prepare('SELECT * FROM task_info WHERE id = ?').get(id) as Record<string, unknown> | undefined
         : undefined
       if (id > 0 && existing === undefined) return { ok: false, error: '任务不存在' }
-      const resolved = resolveTaskFields(input, existing)
+      const resolved = resolveTaskFields(decryptedDir, input, existing)
       if (resolved.fields === undefined) return { ok: false, error: resolved.error ?? '任务配置无效' }
       const fields = resolved.fields
       const now = Date.now()
@@ -871,7 +890,7 @@ export function setTaskInfoStatus(
       const existedReady = taskCellStr(row['status']) === 'ready'
       if (status === 'ready') {
         // 与保存同一条判据：注册表 + 描述符的「必填项」；未知厂商也要拦住。
-        const task = rowToTask(row)
+        const task = rowToTask(row, decryptedDir)
         const vendor = findVendor(task.triggerMethod)
         if (vendor === undefined) return { ok: false, error: '触发方式不可用：' + task.triggerMethod }
         const missing = missingReadyFields(vendor.descriptor, task.triggerConfig, task.triggerSecretSet)

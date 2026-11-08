@@ -6,7 +6,7 @@
  *
  * @module export-io
  */
-import { ZipFileWriter } from './zip.ts';
+import { ZipFileWriter, type StreamControl } from './zip.ts';
 /** Decode a base64 data URL to bytes (returns null when not a base64 data URL). */
 /**
  * moments 打包的媒体条目上限。
@@ -24,6 +24,36 @@ export declare const MAX_MOMENT_MEDIA = 5000;
  * 同目录 rename 在 Windows 上同样是原子的（同一卷内不发生拷贝）。
  */
 export declare function writeFileAtomicSync(filePath: string, data: string | Uint8Array): void;
+/**
+ * Copy a local media file into its destination without transcoding.
+ *
+ * Videos can be hundreds of megabytes, so buffering the whole source before
+ * writing is unnecessary. The temporary-file + rename sequence keeps a failed
+ * copy from leaving a truncated file that looks valid.
+ */
+export declare function copyFileAtomicSync(sourcePath: string, destinationPath: string): void;
+/**
+ * Copy, verify the copied snapshot, then atomically rename it.
+ *
+ * Verifying the source before `copyFileSync` leaves a TOCTOU window while
+ * WeChat may still be writing the source. The verifier runs on the completed
+ * temporary copy instead, so the final destination is exactly the snapshot
+ * whose bytes passed validation. The verifier returns the final destination
+ * so callers can correct an extension from the copied container format.
+ */
+export declare function copyFileVerifiedAtomicSync(sourcePath: string, requestedDestination: string, verify: (temporaryPath: string) => Promise<string> | string): Promise<string>;
+/**
+ * 异步分块复制并校验。大视频/附件复制期间可以上报字节进度，也能在每个块边界取消。
+ *
+ * 与 `copyFileVerifiedAtomicSync` 的区别只在传输实现：验证仍在临时文件完成后进行，
+ * 因而微信同时写源文件时不会把“读了一部分”的字节当成已经校验过的快照。
+ */
+export declare function copyFileVerifiedAtomic(sourcePath: string, requestedDestination: string, verify: (temporaryPath: string) => Promise<string> | string, ctrl?: StreamControl): Promise<string>;
+/**
+ * 异步原子写内存中的导出字节，并在分块落盘时上报进度/响应取消。
+ * `Buffer` 本身已在内存里，这里解决的是大视频一次性同步写盘会独占事件循环的问题。
+ */
+export declare function writeFileAtomicWithProgress(filePath: string, data: string | Uint8Array, ctrl?: StreamControl): Promise<void>;
 /**
  * 流式产出一个 ZIP 并原子落地。
  *

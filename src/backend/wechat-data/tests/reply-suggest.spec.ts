@@ -13,7 +13,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildReplyPrompt, collectReplyContext, parseReplyCandidates } from '../src/query/reply-suggest.ts'
+import {
+  buildReplyPrompt,
+  collectReplyContext,
+  parseReplyCandidates,
+  REPLY_SUGGEST_CONTEXT_LIMIT,
+} from '../src/query/reply-suggest.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -121,8 +126,28 @@ describe('collectReplyContext', () => {
     expect(ctx.lines).toEqual(['对方：早上好', '我：早，刚起', '对方：我也起来了'])
     expect(ctx.lines.join('\n')).not.toContain('中午一起吃饭')
     expect(ctx.latestPeer).toBe('我也起来了')
+    expect(ctx.targetLine).toBe('对方：我也起来了')
     expect(ctx.targetFound).toBe(true)
     expect(ctx.count).toBe(3)
+  })
+
+  it('会话级推荐只带最近 60 条，并把最后一句显式定为目标', () => {
+    const dir = makeFixture(Array.from({ length: 61 }, (_, index) => {
+      const localId = index + 1
+      return { talker: PEER, localId, text: `消息 ${String(localId)}`, fromSelf: false }
+    }))
+    const ctx = collectReplyContext(
+      dir,
+      PEER,
+      SELF,
+      REPLY_SUGGEST_CONTEXT_LIMIT,
+    )
+
+    expect(ctx.count).toBe(60)
+    expect(ctx.lines).toHaveLength(60)
+    expect(ctx.lines[0]).toBe('对方：消息 2')
+    expect(ctx.lines[ctx.lines.length - 1]).toBe('对方：消息 61')
+    expect(ctx.targetLine).toBe('对方：消息 61')
   })
 
   it('目标消息不存在时明确返回 targetFound=false，不偷偷回退到最新消息', () => {
@@ -151,17 +176,26 @@ describe('collectReplyContext', () => {
 
 describe('buildReplyPrompt', () => {
   it('带上对话行、条数与 JSON 要求；没有知识库片段时如实说明', () => {
-    const p = buildReplyPrompt(['对方：报价多少', '我：在的'], [], 3)
+    const p = buildReplyPrompt(['对方：报价多少', '我：在的', '对方：能便宜点吗'], [], 3, '对方：能便宜点吗')
     expect(p).toContain('对方：报价多少')
     expect(p).toContain('我：在的')
+    expect(p).toContain('本次唯一要回复的目标消息：对方：能便宜点吗')
+    expect(p).toContain('更早的消息只用于理解上下文')
     expect(p).toContain('3 条')
     expect(p).toContain('JSON')
     expect(p).toContain('没有可用的知识库片段')
   })
 
+  it('未显式传目标时仍以最后一行作为唯一回复对象', () => {
+    const p = buildReplyPrompt(['对方：第一句', '我：第二句'], [], 3)
+    expect(p).toContain('本次唯一要回复的目标消息：我：第二句')
+    expect(p).not.toContain('本次唯一要回复的目标消息：对方：第一句')
+  })
+
   it('有知识库片段时带文件名，且不再说「没有片段」', () => {
     const p = buildReplyPrompt(['对方：报价多少'], ['《报价单.md》单价 120 元'], 3)
     expect(p).toContain('《报价单.md》单价 120 元')
+    expect(p).toContain('本轮必须结合的知识库片段')
     expect(p).not.toContain('没有可用的知识库片段')
   })
 })

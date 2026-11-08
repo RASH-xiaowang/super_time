@@ -44,12 +44,15 @@ describe('节点上限：初始默认 = 可显示总人数 30%', () => {
     expect(eligibleCandidateCount(data, { mode: 'people', friendsOnly: true })).toBe(1)
     expect(eligibleCandidateCount(data, { mode: 'people', friendsOnly: false })).toBe(3)
     expect(eligibleCandidateCount(data, { mode: 'groups', friendsOnly: true })).toBe(1)
+    expect(eligibleCandidateCount(data, { mode: 'all', friendsOnly: true })).toBe(2)
+    expect(eligibleCandidateCount(data, { mode: 'all', friendsOnly: false })).toBe(4)
     expect(eligibleCandidateCount(null, { mode: 'people', friendsOnly: true })).toBe(0)
   })
 
   it('buildGraph 与默认值共用同一份筛选实现（各写一份必然漂移）', () => {
     const src = read('graph-model.ts')
-    expect(src).toMatch(/const rawNodes = rawCandidateNodes\(env, s\)/)
+    expect(src).toMatch(/const normalizedEnv = \{ \.\.\.env, nodes: uniqueNodes \}/)
+    expect(src).toMatch(/const rawNodes = rawCandidateNodes\(normalizedEnv, s\)/)
   })
 
   it('Graph.tsx 等 data 落地后按 30% 覆盖默认哨兵；用户拖过滑杆则不覆盖；恢复默认同规则', () => {

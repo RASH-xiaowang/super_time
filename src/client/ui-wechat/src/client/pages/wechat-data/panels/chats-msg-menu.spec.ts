@@ -7,8 +7,7 @@
  * 都会和还挂着的菜单抢位置 —— 用户看到菜单盖在新界面上，关不掉。
  * 所以这里用一条 call log 把先后钉死，而不是只断言"两个都被调用"。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
@@ -24,6 +23,7 @@ const items: MsgMenuItem[] = [
 
 const calls: string[] = []
 const onClose = vi.fn((): void => { calls.push('close') })
+const onDismiss = vi.fn((): void => { calls.push('dismiss') })
 const onPick = vi.fn((_item: MsgMenuItem, _m: WechatMessage): void => { calls.push('pick') })
 
 let host: HTMLDivElement
@@ -31,7 +31,7 @@ let root: Root
 
 function show(over: Partial<ChatsMsgMenuProps> = {}): void {
   act(() => {
-    root.render(createElement(ChatsMsgMenu, { msgMenu: open(), items, onClose, onPick, ...over }))
+    root.render(createElement(ChatsMsgMenu, { msgMenu: open(), items, onClose, onDismiss, onPick, ...over }))
   })
 }
 
@@ -51,6 +51,7 @@ beforeEach(() => {
   ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   calls.length = 0
   onClose.mockClear()
+  onDismiss.mockClear()
   onPick.mockClear()
   host = document.createElement('div')
   document.body.append(host)
@@ -88,9 +89,21 @@ describe('ChatsMsgMenu', () => {
   it('点空白处关掉菜单；点菜单本体不许关（否则第一项都点不到）', () => {
     show()
     down(need(q('[role="menu"]'), '菜单本体'))
+    expect(onDismiss).not.toHaveBeenCalled()
+    const outside = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    act(() => { host.firstElementChild?.dispatchEvent(outside) })
+    expect(onDismiss, '点遮罩必须走 dismiss（面板据此归还焦点）').toHaveBeenCalledTimes(1)
+    expect(outside.defaultPrevented, '遮罩默认聚焦会把焦点从消息行抢走').toBe(true)
     expect(onClose).not.toHaveBeenCalled()
-    down(host.firstElementChild as Element)
-    expect(onClose, '点遮罩必须关掉菜单').toHaveBeenCalledTimes(1)
+  })
+
+  it('Esc 只走一次覆盖层栈关闭，并交给 dismiss 归还焦点', () => {
+    show()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(onDismiss).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('菜单项来自传入的 items（菜单内容仍由 buildMsgMenu 决定，这里不自己判类型）', () => {

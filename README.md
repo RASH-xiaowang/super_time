@@ -5,6 +5,7 @@
 
 - **平台**：Windows 10/11 **x64**（唯一支持的目标，理由见 [`src/backend/README.md`](src/backend/README.md)）
 - **许可**：MIT（[`LICENSE`](LICENSE)）；随包第三方资产见 [`src/backend/VENDORED-LICENSES.md`](src/backend/VENDORED-LICENSES.md)
+- **字体**：只引用系统字体，不随包分发 UI 字体；PDF.js 高风险标准字体已排除，见 [`docs/FONT-LICENSING.md`](docs/FONT-LICENSING.md)
 - **隐私**：先读 [`docs/PRIVACY.md`](docs/PRIVACY.md) —— 出网点、内存扫描、如何关闭出网都写在那里
 - **实施与上线状态**：见 [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md)（阶段 0–4 的高优先级项已闭环；仍未闭环的调查项在该文档里逐条登记，**别照抄本文档里的旧结论**）
 
@@ -43,7 +44,8 @@ npm start         # 构建前端 + 后端 bundle，然后启动应用
 几条容易踩的点：
 
 - `npm ci` 不会下载 Electron 二进制（`node_modules/electron` 没有 postinstall）。若 `node_modules/electron/dist/electron.exe` 不存在，先执行 `node node_modules/electron/install.js`（CI 里也是这样做的）。
-- 仓库根的 `SuperTime.cmd` 只是直接启动**已构建好**的应用，不会先构建：第一次请先跑 `npm start`，或手动执行 `npm run build:all`。
+- 仓库根的 `SuperTime.cmd` 是 Windows 下的统一启动入口：源码比产物新时自动 `build:all`，
+  然后关闭本项目旧的开发实例并启动 Electron；支持 `--no-launch`、`--force-build`、`--skip-build`。
 - 环境里若带着 `ELECTRON_RUN_AS_NODE=1`，Electron 会退化成纯 Node 并报 `app` 未定义。`npm start` / `npm run dev` / `npm run dev:only` 与 `SuperTime.cmd` 都会摘掉这个变量（见 [`scripts/launch-app.mjs`](scripts/launch-app.mjs)）；直接写 `electron .` 时需要自己摘。
 
 ### 首次启动会依次经过三道闸门
@@ -101,6 +103,7 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 | `npm run check:backend-restart` | 杀掉后端 worker → 自动重建 → 功能恢复（端到端） |
 | `npm run docs:api` / `npm run docs:api:check` | 生成 / 校验 Remote 接口参考（见 [`docs/API.md`](docs/API.md)） |
 | `npm run check:deps-provenance` | `file:` 本地依赖的来源表（`src/backend/deps/PROVENANCE.json`）一致性 |
+| `npm run font:check` / `npm run font:check:packaged` | 字体合规门禁：源码/官网/工具与打包产物中的专有字体、远程字体和未登记字体资产 |
 | `npm run license-studio` | 许可签发 GUI（`tools/license-studio`，Electron 窗口） |
 | `npm run ui:accept` | 人工验收脚本（需要真实数据与许可证，手动运行） |
 | `npm run theme:live-audit -- --all-tabs` | 真机主题审计**全部 37 个页签**（默认 17 个可见页签） |
@@ -115,7 +118,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest
 |---|---|---|
 | 1（PR 门禁） | 每次 push / PR（`ci.yml` 的 `verify`） | 类型检查与一致性门禁（产物、接口参考、lint、依赖来源）、18 个快基准（约 27 秒）、起真 Electron 的 e2e 与冒烟、**增量**变异自证 |
 | 2（nightly） | 每天 03:17（`nightly.yml`） | **全量**变异自证 + 慢基准（`export-memory`，约 13 分钟）+ 两条真机 e2e + **打包冒烟**（`npm run pack` 之后） |
-| 3（发版前） | 打 `v*` tag（`release.yml`） | 发布门禁（类型检查 + `npm test` + tag 与 `package.json` 版本一致）+ 打包态检查，且必须在 `--publish always` **之前** |
+| 3（发版前） | 打 `v*` tag（`release.yml`） | 发布门禁（类型检查 + `npm test` + tag 与 `package.json` 版本一致 + 强制 Authenticode 签名/更新摘要校验）+ 打包态检查；先上传草稿，核对大小与 SHA-512 后才公开 |
 
 `ci.yml` 里还有几条起真 Electron 的检查（如 `security-guard:smoke`、`check:backend-restart`、`e2e:h14-consent`）
 没有出现在 `scripts/ci-tiers.mjs` 的 TIER1 表里 —— 以 workflow 文件为准。
@@ -149,7 +152,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest
 ```
 main.js                  Electron 主进程：窗口、IPC 分发、授权闸门、后端进程监管
 preload.js               contextBridge 暴露面（沙箱下运行）
-SuperTime.cmd            直接启动已构建应用的 Windows 启动器（不构建）
+SuperTime.cmd            Windows 统一启动器：按需构建、关闭旧实例并启动 Electron
 src/backend/             宿主层：后端进程监管、RPC 超时、配置与路径、安全策略、诊断日志
   wechat-data/           后端包（gateway.ts 是 Remote 方法面的入口，gateway-*.ts 是按域拆开的网关类）
     src/query/           查询层：消息、会话、朋友圈、导出、备份、隐私体检…
@@ -164,57 +167,66 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 180 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 191 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
 wechat/                  随包只读资产：语音引擎与预置模型（`wechat/whisper/`）、配置模板（`*.example.json`）
 build/                   应用图标（`icon.ico` 供安装包使用）
 vendor-keys/             许可证**公钥**（私钥不在仓库里；本目录已 gitignore）
-tools/                   laya 模型导出与验证脚本、许可签发 GUI（license-studio）、视觉审计脚本
+tools/                   Remote 审计、Laya 模型工具、许可签发 GUI、视觉审计（见 tools/README.md）
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本、CI 分档表（ci-tiers.mjs）、变异登记表
 website/                 官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
-docs/                    十八份当前有效的文档（见下方索引）
+docs/                    十五份当前有效的文档 + 归档目录（见下方索引）
 .github/workflows/       CI（ci.yml）、夜间（nightly.yml）、发版（release.yml）、官网（pages.yml）
 ```
 
+本机生成的 `node_modules/`、`src/client/ui-dist/`、`working/`、`.tmp-e2e/`、`ci-evidence/`
+均不作为源码维护：前两者由安装/构建生成，`working/` 放一次性探针，`.tmp-e2e/` 与
+`ci-evidence/` 放测试截图和 CI 日志。运行 `npm run clean:local` 可预览清理项，
+`npm run clean:local:apply` 才会实际删除安全的临时产物；不会清理 `working/`、`vendor-keys/`
+或本机配置。
+
 ## 文档索引
 
-`docs/` 下只保留**十八份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
+`docs/` 顶层只保留**十八份**当前有效的文档。其余阶段性台账（性能逐项验收账、知识库分阶段计划、
 代码审计报告、覆盖矩阵等）已随 2026-10-08 的文档精简删除，**原文都在 git 历史里**（见本节末尾的取回方法）。
-正在实施的重设计提案按「当届有效」保留一份（当前：全站微信主题改版）；已落地收口的提案（ClawBot 指挥台 v2）
-保留为已交付设计记录，上一届之前的原文在 git 历史里。
+已完成的全站微信主题改版方案、Alpha AI 助手调研、清理台账与历史产品评估已移入
+[`docs/archive/`](docs/archive/)。`docs/archive/` 只用于追溯，不作为当前实现规范。
 
 | 文档 | 内容 |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构总览：三个进程、依赖方向、一次调用的完整路径、哪些不变量有机检 |
-| [`docs/ANSWER-RUNTIME-V2.md`](docs/ANSWER-RUNTIME-V2.md) | 问答运行时 V2：三个入口的数据边界、意图与工具循环、参数修复、失败重试、证据接地与验收矩阵 |
+| [`docs/ANSWER-RUNTIME-V2.md`](docs/ANSWER-RUNTIME-V2.md) | 问答运行时 V2：两个入口的数据边界、意图与工具循环、参数修复、失败重试、证据接地与验收矩阵 |
 | [`docs/ASK-RUN-UI.md`](docs/ASK-RUN-UI.md) | 微信问答 / AI 问答运行过程 UI：状态语义、信息层级、完整思考与工具轨迹、折叠规则、无障碍与验收标准 |
-| [`docs/alpha-ai-assistant-study.md`](docs/alpha-ai-assistant-study.md) | Alpha「AI 助手」能力调研：可借鉴的问答编排、工具调用、上下文与前端交互设计 |
 | [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | 改这个仓库的规矩：收口链顺序、四件套、棘轮只许变小、判据怎么写 |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署与发布：构建、打包、许可证签发、装完之后怎么验 |
+| [`docs/SECURITY-HARDENING.md`](docs/SECURITY-HARDENING.md) | 安全加固与发布基线：威胁模型、已实施控制、签名门禁、残余风险与自检命令 |
+| [`docs/FONT-LICENSING.md`](docs/FONT-LICENSING.md) | 字体合规：系统字体边界、PDF.js 标准字体排除、字体资产登记与自动门禁 |
 | [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
+| [`docs/WECHAT-NATIVE-OCR.md`](docs/WECHAT-NATIVE-OCR.md) | 微信 4.x 原生 OCR：隔离进程、AI JSON 独立入口、打包路径、隐私边界与许可证风险 |
+| [`docs/FEATHER-INTEGRATION.md`](docs/FEATHER-INTEGRATION.md) | Feather（“大肥鱼”）发送端：安装配置、Webhook 协议、AI 回复主链路、跨机附件 spool 与验收边界 |
 | [`docs/TASK-CENTER.md`](docs/TASK-CENTER.md) | 任务信息：关键词触发任务的界面、状态机、扫描与回调链路、权限边界、已知风险与代码地图 |
 | [`docs/RPA-VENDOR-TRIGGERS.md`](docs/RPA-VENDOR-TRIGGERS.md) | 多 RPA 厂商触发（已实现，8 个适配器）：八爪鱼（开放 API / MCP）、影刀、实在、来也、UiPath、阿里云的触发参数与鉴权、描述符注册表与扩展机制、来源/版本/核对时间与风险清单 |
 | [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md) | 响应式与 Bootstrap 适配：npm 引入方式、栅格/断点规约、五类组件策略、验收清单与审计门禁 |
 | [`docs/UI-DENSITY.md`](docs/UI-DENSITY.md) | UI 密度规范：固定内容/空白率指标与目标、卡片与组件紧凑化规则、实施分层与验收清单 |
 | [`docs/CARD-SIZE.md`](docs/CARD-SIZE.md) | 卡片尺寸规范：每张卡的宽高上界、卡内滚动、视觉卡例外与全站卡片审计工具 |
-| [`docs/UI-WECHAT-REDESIGN-PLAN.md`](docs/UI-WECHAT-REDESIGN-PLAN.md) | 全站 UI 改版方案：微信官方主题定调、设计令牌、界面清单、逐屏改造与验收口径 |
-| [`docs/UI-WECHAT-REDESIGN-INVENTORY.md`](docs/UI-WECHAT-REDESIGN-INVENTORY.md) | 全量界面清单：外壳/闸门/侧栏 5 组 15 项与合并分段/主要弹层的逐屏现状与改造建议 |
-| [`docs/UI-WECHAT-REDESIGN-CONSTRAINTS.md`](docs/UI-WECHAT-REDESIGN-CONSTRAINTS.md) | 改版约束与门禁：主题令牌、对比度、几何棘轮、聊天皮肤 `--wx-*` 与验证命令序列 |
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
+| [`docs/architecture/README.md`](docs/architecture/README.md) | 架构图集：系统全景、请求数据流、构建流水线及可重建的生成器 |
+| [`docs/perf/README.md`](docs/perf/README.md) | 2026-10 性能专项历史快照：基线、资源与内存分析、优化计划、实施记录与结果总账；当前事实以架构文档为准 |
+| [`docs/archive/`](docs/archive/) | 历史归档：Alpha 调研、微信化改版方案、清理台账与历史产品评估；仅追溯，不是当前规范 |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
 | [`src/backend/wechat-data/README.md`](src/backend/wechat-data/README.md) | 后端包：子目录职责、Remote 方法面的分组、派生库与缓存 |
 | [`src/client/README.md`](src/client/README.md) | 数据面板结构、导航注册表真源、测试辅助的落位 |
 | [`src/backend/VENDORED-LICENSES.md`](src/backend/VENDORED-LICENSES.md) | 随包第三方资产的许可与来源 |
 | [`wechat/README.md`](wechat/README.md) | 配置说明：配置落在哪、`config.json` / `llm.json` 字段、开发态迁移（模板见 `wechat/*.example.json`） |
 | [`wechat/whisper/README.md`](wechat/whisper/README.md) | 语音转写引擎与模型的目录约定 |
+| [`tools/README.md`](tools/README.md) | 工具目录：根级审计脚本、子目录职责、产物落点与维护规则 |
 | [`tools/visual-audit/README.md`](tools/visual-audit/README.md) | 视觉审计脚本的前置条件与用法 |
 | [`website/tests/smoke.js`](website/tests/smoke.js) | 官网冒烟脚本（jsdom + 自写 CSS 解释器校验布局） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |
-| [`CLEANUP.md`](CLEANUP.md) | 冗余清理记录：每一轮删了什么、为什么删、验证结果 |
 
 **已删文档的取回**：代码注释、台账与 `CLEANUP.md` 里还会提到一批已经不在仓库中的文档（如 `CODE-AUDIT-2026-09-26`、
 `PERF-AUDIT-172`、`PERF-THEME-LEDGER`、`UI-REDESIGN-2026-09-28.md`、`rag/RAG-ARCHITECTURE.md`、`compose/spec/*`、`archive/*`）。

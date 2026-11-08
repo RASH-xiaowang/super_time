@@ -65,7 +65,7 @@ describe('insights-shard-store', () => {
     const dir = tempDir()
     const path = insightsShardCachePath(join(dir, 'decrypted'))
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, '{"version":1,"entries":[{"key":', 'utf8')
+    writeFileSync(path, '{"version":2,"entries":[{"key":', 'utf8')
     expect(() => loadInsightsShardCache(path)).not.toThrow()
     expect(loadInsightsShardCache(path).size).toBe(0)
     writeFileSync(path, 'not json at all', 'utf8')
@@ -77,11 +77,22 @@ describe('insights-shard-store', () => {
     const path = insightsShardCachePath(join(dir, 'decrypted'))
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify({
-      version: 1,
+      version: 2,
       entries: [{ key: 'ok', sig: 's', agg: { n: 1 } }, { key: 'no-sig', agg: {} }, { sig: 'no-key', agg: {} }, null],
     }), 'utf8')
     const loaded = loadInsightsShardCache(path)
     expect([...loaded.keys()]).toEqual(['ok'])
+  })
+
+  it('旧版缓存 ⇒ 整体拒绝（旧聚合里的哈希会话键不能继续喂给界面）', () => {
+    const dir = tempDir()
+    const path = insightsShardCachePath(join(dir, 'decrypted'))
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      entries: [{ key: 'old', sig: 's', agg: { n: 1 } }],
+    }), 'utf8')
+    expect(loadInsightsShardCache(path).size).toBe(0)
   })
 
   it('写失败只返回 false，不抛（缓存写不进去不能影响查询）', () => {
@@ -89,7 +100,7 @@ describe('insights-shard-store', () => {
     const blocker = join(dir, 'blocker')
     writeFileSync(blocker, 'x', 'utf8')
     // 让父目录是一个文件 ⇒ mkdirSync 失败
-    const path = join(blocker, 'cache', 'insights-shards.v1.json')
+    const path = join(blocker, 'cache', 'insights-shards.v2.json')
     expect(() => saveInsightsShardCache(path, [])).not.toThrow()
     expect(saveInsightsShardCache(path, [])).toBe(false)
   })

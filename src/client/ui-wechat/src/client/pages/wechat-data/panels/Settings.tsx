@@ -28,6 +28,8 @@ import { SettingsRemoteAccess } from './settings-remote-access.tsx'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { SettingsDbKeySection, SettingsDetectSection, SettingsImgDecodeSection, SettingsImgKeySection, SettingsVoiceSection } from './settings-steps.tsx'
 import { useSettingsState } from './settings-state.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import type { ExportTaskState } from './export-task.ts'
 import { SettingsNavRail, SettingsWorkspaceHeader } from './settings-workspace.tsx'
 import { css, modelCss, acctCss } from './settings-css.ts'
 import kitCss from '../ui/kit.module.css'
@@ -155,6 +157,8 @@ function SecretMigrationNotice(props: {
  */
 function AdvancedSection(props: {
   cfg: WechatConfigFull | CachedSettingsConfig | null
+  diagExportState: ExportTaskState
+  diagExporting: boolean
   diagInfo: { dir: string; bytes: number } | null
   diagPreview: { text: string; chars: number; truncated: boolean; files: string[] } | null
   exportDiagLog: () => Promise<void>
@@ -163,7 +167,7 @@ function AdvancedSection(props: {
   copyDiagLogPath: () => Promise<void>
   closeDiagPreview: () => void
 }): React.JSX.Element {
-  const { cfg, diagInfo, diagPreview, exportDiagLog, revealDiagLog, previewDiagLog, copyDiagLogPath, closeDiagPreview } = props
+  const { cfg, diagExportState, diagExporting, diagInfo, diagPreview, exportDiagLog, revealDiagLog, previewDiagLog, copyDiagLogPath, closeDiagPreview } = props
   return (
     <section className={css.card} data-settings-section="advanced">
       <header className={css.cardHd}>
@@ -193,8 +197,8 @@ function AdvancedSection(props: {
         {/* 诊断日志（M6）：GUI 态 stdout 会被管道丢弃，crash/报障时只有这份落盘日志 */}
         <div className={css.row}>
           <span className={css.rowName}>诊断日志</span>
-          <button type="button" className={modelCss.whisperSkip} onClick={() => { void exportDiagLog() }}>
-            导出…
+          <button type="button" className={modelCss.whisperSkip} onClick={() => { void exportDiagLog() }} disabled={diagExporting}>
+            {diagExporting ? '导出中…' : '导出…'}
           </button>
           <button type="button" className={modelCss.whisperSkip} onClick={() => { void revealDiagLog() }}>
             打开所在目录
@@ -203,6 +207,7 @@ function AdvancedSection(props: {
             {diagInfo ? `${diagInfo.dir} · ${Math.round(diagInfo.bytes / 1024)} KB` : '读取中…'}
           </span>
           <button type="button" className={modelCss.whisperSkip} onClick={() => { void previewDiagLog() }}>预览…</button><button type="button" className={modelCss.whisperSkip} onClick={() => { void copyDiagLogPath() }}>复制路径</button></div><DiagLogPreview data={diagPreview} onClose={closeDiagPreview} />
+        <ExportProgressStatus state={diagExportState} />
         <div className={css.row}>
           <span className={css.rowName}>启动引导</span>
           <button
@@ -252,7 +257,7 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
     cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
-    closeDiagPreview, copyDiagLogPath, detectMsg, detecting, diagInfo, diagPreview, exportDiagLog, goToSection, imgAes,
+    closeDiagPreview, copyDiagLogPath, detectMsg, detecting, diagExportState, diagExporting, diagInfo, diagPreview, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
     cancelWhisperDownload, imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     nativeTranscribe, navGroups, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath, pickDbDir,
@@ -455,6 +460,8 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
         <div hidden={activeKey !== 'advanced'}>
         <AdvancedSection
           cfg={cfg}
+          diagExportState={diagExportState}
+          diagExporting={diagExporting}
           diagInfo={diagInfo}
           diagPreview={diagPreview}
           exportDiagLog={exportDiagLog}
@@ -469,7 +476,7 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
         </div>
       </div>
 
-      <div className={acctCss.saveBar}>
+      <div className={acctCss.saveBar} hidden={activeKey === 'ai'}>
         <span
           className={acctCss.saveMeta}
           title={pathConfigPath ? `打开路径配置文件：${pathConfigPath}` : '读取路径配置文件…'}

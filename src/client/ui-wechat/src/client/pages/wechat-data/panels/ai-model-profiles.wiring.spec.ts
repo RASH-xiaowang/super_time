@@ -24,6 +24,10 @@ function codeOf(file: string): string {
 }
 
 const card = codeOf('AiModelConfig.tsx')
+const templates = codeOf('ai-model-templates.ts')
+const templatesRaw = readFileSync(join(HERE, 'ai-model-templates.ts'), 'utf8')
+const editor = codeOf('ai-model-editor.tsx')
+const advanced = codeOf('ai-model-advanced.tsx')
 /**
  * 快速切换条本体（2026-09-30 重做：从 `AiModelConfig.tsx` 搬到 `ai-model-profiles.tsx`，
  * 定位改成对话模型面板里的「快速切换」）。判据跟着代码搬、**强度不放宽**，
@@ -45,13 +49,14 @@ describe('已配置模型：切换条接线', () => {
   it('切换条里有芯片与新增入口', () => {
     expect(profiles).toContain('data-llm-profiles')
     expect(profiles).toContain('data-add-llm-profile')
-    // 重做后这块的标题从「已配置模型」改成「快速切换」（它是对话模型面板里的一段）
-    expect(profiles).toContain('快速切换')
+    // 2026-10-29 重设计后标题是「已保存的连接」，说明仍保留立即切换语义
+    expect(profiles).toContain('已保存的连接')
+    expect(profiles).toContain('点击卡片立即切换')
   })
 
   it('点击芯片真的走切换（不是只改草稿）', () => {
-    expect(profiles).toContain('data-activate-llm-profile={p.id}')
-    expect(profiles).toMatch(/onClick=\{\(\) => \{ onSwitch\(p\) \}\}/)
+    expect(profiles).toContain('data-activate-llm-profile={profile.id}')
+    expect(profiles).toMatch(/onClick=\{\(\) => \{ onSwitch\(profile\) \}\}/)
     // 切换必须真写盘：一次 IPC 落到 apiActivateLlmProfile（实现在主卡片里）
     expect(card).toMatch(/await apiActivateLlmProfile\(p\.id\)/)
   })
@@ -93,6 +98,17 @@ describe('已配置模型：新增与编辑是两条路径', () => {
     expect(card).toMatch(/onCancelNew=\{cancelNewProfile\}/)
   })
 
+  it('新建时清空 Key 不会让模型上下文 effect 立即吃掉提示', () => {
+    const start = card.indexOf('const startNewProfile')
+    const end = card.indexOf('const cancelNewProfile', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const body = card.slice(start, end)
+    expect(body).toContain("const clearsModelContext = llmConfig.apiKey !== ''")
+    expect(body).toMatch(/if \(clearsModelContext\) keepMsgRef\.current = true[\s\S]{0,160}?setLlmConfig/)
+    expect(body).toMatch(/setLlmMsg\(\{ kind: 'ok', text: '已进入新建模式/)
+  })
+
   it('草稿态保存 → 另存为一条新配置（不覆盖现有配置）', () => {
     expect(card).toMatch(/if \(draftNew\) \{[\s\S]{0,200}?await apiSaveLlmProfile\(\{ config: llmConfig \}\)/)
   })
@@ -118,10 +134,28 @@ describe('已配置模型：新增与编辑是两条路径', () => {
       expect(card, `缺少单飞闸：${marker}`).toContain(marker)
     }
   })
+
+  it('切换配置或套用模板前，如果有未保存草稿会先确认', () => {
+    expect(card).toContain('const confirmDiscard = useCallback')
+    expect(card).toMatch(/if \(!\(await confirmDiscard\('切换配置'\)\)\) return/)
+    expect(card).toMatch(/if \(!\(await confirmDiscard\('套用厂商模板'\)\)\) return/)
+    expect(card).toContain('尚未保存的修改会被放弃')
+  })
 })
 
 describe('模板与厂商：换厂商必须清空 Key（401 陷阱的根因）', () => {
+  it('内置模板包含 OpenCode Go、OpenRouter 与 Cerebras，并使用已验证的默认模型', () => {
+    expect(templates).toContain("label: 'OpenCode Go'")
+    expect(templatesRaw).toContain("apiUrl: 'https://opencode.ai/inference/go/openai/v1'")
+    expect(templates).toContain("model: 'glm-5.3-flash'")
+    expect(templates).toContain("label: 'OpenRouter'")
+    expect(templates).toContain("model: '~openai/gpt-sol-latest'")
+    expect(templates).toContain("label: 'Cerebras'")
+    expect(templates).toContain("model: 'qwen-3.8-27b'")
+  })
+
   it('按 host 判断是否换厂商，换了就清空 API Key', () => {
+    expect(templates).toContain('export function sameHost')
     expect(card).toContain('sameHost')
     expect(card).toMatch(/const changedVendor = !sameHost\(/)
     expect(card).toMatch(/\.\.\.\(changedVendor \? \{ apiKey: '' \} : \{\}\)/)
@@ -174,16 +208,15 @@ describe('三个角色：三块面板与字段成套', () => {
   const roles = codeOf('ai-model-roles.tsx')
 
   it('三块面板都在（对话 / 嵌入 / 重排序），且各自说明了自己是干什么的', () => {
-    for (const id of ['id="chat"', 'id="embed"', 'id="rerank"']) {
-      expect(card, `卡片里缺面板 ${id}`).toContain(id)
-    }
-    expect(card).toContain('对话模型')
-    expect(card).toContain('嵌入模型')
-    expect(card).toContain('重排序模型')
+    expect(editor, '主编辑器里缺对话模型').toContain('id="chat"')
+    for (const id of ['id="embed"', 'id="rerank"']) expect(advanced, `高级能力里缺面板 ${id}`).toContain(id)
+    expect(editor).toContain('对话模型')
+    expect(advanced).toContain('嵌入模型')
+    expect(advanced).toContain('重排序模型')
     // 换嵌入模型的代价必须写在面板上，而不是等用户点保存才弹窗拦
     expect(card + roles).toContain('重建')
     // 精排「填了即启用」是决策 D3：界面要说清留空会退回本地排序
-    expect(card + roles).toContain('本地加权排序')
+    expect(advanced + roles).toContain('本地加权排序')
   })
 
   it('七个角色字段接进了表单；两个接口路径**刻意不暴露**但必须被带着走', () => {
@@ -201,21 +234,21 @@ describe('三个角色：三块面板与字段成套', () => {
       expect(llmApi, `WechatLlmConfig 丢了 ${k}`).toContain(k)
       expect(roles, `${k} 要有可选覆盖输入`).toContain(`${k}: v }`)
     }
-    const from = card.indexOf('function configOf')
+    const from = templates.indexOf('export function configOf')
     expect(from).toBeGreaterThan(0)
-    const body = card.slice(from, from + 900)
+    const body = templates.slice(from, from + 900)
     // 编辑一条已存配置时，表单提交的就是 configOf 挑出来的那个对象 ——
     // 少列一个键 = 该键被清成默认值，而界面上没有任何提示。所以逐个点名。
-    // （四个 chat 字段是显式写的 `provider: p.provider`，八个角色字段走循环 ⇒ 两种写法各查各的。）
+    // （四个 chat 字段显式写出，八个角色字段走循环 ⇒ 两种写法各查各的。）
     for (const k of ['provider', 'model', 'apiKey', 'apiUrl']) {
-      expect(body, `configOf 漏挑 ${k}`).toContain(`${k}: p.${k}`)
+      expect(body, `configOf 漏挑 ${k}`).toContain(`${k}: profile.${k}`)
     }
     for (const k of ['embeddingModel', 'embedPath', 'embeddingApiUrl', 'embeddingApiKey',
       'rerankModel', 'rerankPath', 'rerankApiUrl', 'rerankApiKey']) {
       expect(body, `configOf 漏挑 ${k}`).toContain(`'${k}'`)
     }
     // 超时是数值，与上面那些字符串键不同型 ⇒ 必须分开写
-    expect(body).toContain('picked.rerankTimeoutMs = p.rerankTimeoutMs')
+    expect(body).toContain('picked.rerankTimeoutMs = profile.rerankTimeoutMs')
     // 不许整体展开 profile：那会把 id/label/usedAt 一起提交进「配置」里
     expect(body).not.toMatch(/\.\.\.p\b/)
   })

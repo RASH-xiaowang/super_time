@@ -123,6 +123,20 @@ function resultCacheCharsOf(result) {
   return typeof payload === 'string' ? payload.length : 0;
 }
 
+/**
+ * 媒体查询把「文件不在本地」作为**成功调用的业务错误**返回：
+ * `{ ok: true, value: { error: '...' } }`。这种条目也要在数据更新后失效，
+ * 否则文件随后下载完成，界面仍会一直命中旧 miss，直到 LRU 淘汰或重启。
+ */
+function resultCacheIsNegative(result) {
+  if (!result) return false;
+  if (result.ok === false) return true;
+  const value = result.value;
+  if (!value || typeof value !== 'object') return false;
+  const hasPayload = typeof value.url === 'string' || typeof value.data === 'string';
+  return !hasPayload && typeof value.error === 'string' && value.error.trim() !== '';
+}
+
 /** 删除单条并同步总字符计数。 */
 function deleteResultCacheEntry(key) {
   if (!resultCache.has(key)) return;
@@ -151,7 +165,7 @@ function clearStaleResultCache() {
   for (const [key, result] of [...resultCache]) {
     const sep = key.indexOf('\u0000');
     const method = sep < 0 ? key : key.slice(0, sep);
-    if (VOLATILE_CACHE_METHODS.has(method) || (result && result.ok === false)) deleteResultCacheEntry(key);
+    if (VOLATILE_CACHE_METHODS.has(method) || resultCacheIsNegative(result)) deleteResultCacheEntry(key);
   }
 }
 

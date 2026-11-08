@@ -30,6 +30,8 @@ const MENU_MARKS = [
   'data-st-msg-menu',
   'e.stopPropagation()',
   'onClick={() => { onClose(); onPick(item, msg) }}',
+  'onMouseDown={(e) => { e.preventDefault(); onDismiss() }}',
+  'useEscapeToClose(msgMenu !== null, onDismiss)',
 ] as const
 
 /** 资料浮层必须在场的：`!pos` 与两处「有才画」。 */
@@ -44,6 +46,8 @@ describe('第八刀两块浮层的接线', () => {
   const view = readStripped(join(HERE, 'chats-view.tsx'))
   const menu = readStripped(join(HERE, 'chats-msg-menu.tsx'))
   const profile = readStripped(join(HERE, 'chats-member-profile.tsx'))
+  const chats = readStripped(join(HERE, 'Chats.tsx'))
+  const row = readStripped(join(HERE, 'chats-msg-row.tsx'))
 
   it('三张清单与三份文件都得真拿到东西（清空/读空会让上面那些「不含」恒真）', () => {
     expect(OLD_SHAPES.length).toBeGreaterThanOrEqual(6)
@@ -69,7 +73,7 @@ describe('第八刀两块浮层的接线', () => {
 
   it('调用点道具名齐全：菜单那三项缺一项目就点不动，浮层那两项缺一项就永远不画', () => {
     const call = view.slice(view.indexOf('<ChatsMsgMenu'), view.indexOf('/>', view.indexOf('<ChatsMsgMenu')))
-    for (const prop of ['msgMenu={msgMenu}', 'onClose={() => { setMsgMenu(null) }}', 'onPick={runMenuAction}']) {
+    for (const prop of ['msgMenu={msgMenu}', 'onClose={() => { setMsgMenu(null) }}', 'onDismiss={dismissMsgMenu}', 'onPick={runMenuAction}']) {
       expect(call, `菜单调用点少了 ${prop}`).toContain(prop)
     }
     // 菜单项仍由 chats-view 侧的 buildMsgMenu 决定：搬进组件就等于把类型判断拆成两份
@@ -95,10 +99,22 @@ describe('第八刀两块浮层的接线', () => {
     expect(menu).not.toContain('onPick(item, msg); onClose()')
   })
 
-  it('这一份不许自己再加一遍 Esc 监听（两处各监听一次会让共享弹窗栈多算一层）', () => {
+  it('Esc 只由消息菜单的覆盖层栈监听，面板不再加第二份 keydown', () => {
+    expect(menu.match(/useEscapeToClose\(/g), 'Esc 应当只有一个结构化入口').toHaveLength(1)
     expect(menu).not.toContain("addEventListener('keydown'")
-    expect(menu).not.toContain('Escape')
+    expect(chats).not.toContain("window.addEventListener('keydown', onKey)")
+    expect(chats).not.toContain("if (e.key === 'Escape') close()")
     expect(profile).not.toContain("addEventListener('keydown'")
+  })
+
+  it('消息行可程序聚焦，Esc/外点关闭后由面板把焦点还给记录的触发元素', () => {
+    expect(row).toContain('tabIndex={interactive ? -1 : undefined}')
+    expect(chats).toContain('msgMenuTriggerRef.current = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null')
+    expect(chats).toContain('const dismissMsgMenu = useCallback')
+    expect(chats).toContain('msgMenuRestoreFocusRef.current = true')
+    expect(chats).toContain('requestAnimationFrame(() => {')
+    expect(chats).toContain('trigger.focus({ preventScroll: true })')
+    expect(chats).toContain('cancelAnimationFrame(frame)')
   })
 
   it('反例自证：明知含指纹的合成源码必须被同一个判据抓住', () => {

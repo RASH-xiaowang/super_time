@@ -212,7 +212,7 @@ void (async (): Promise<void> => {
     bar.setAttribute(
       'style',
       'flex:0 0 auto;padding:6px 12px;background:#b91c1c;color:#fff;'
-        + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+        + 'font:600 12px/1.4 system-ui,sans-serif;'
         + 'text-align:center;letter-spacing:.02em',
     )
     document.body.insertBefore(bar, document.getElementById('root'))
@@ -268,7 +268,7 @@ void (async (): Promise<void> => {
   const bannerStyle = (failed: boolean): string =>
     'flex:0 0 auto;padding:6px 12px;color:#fff;'
     + `background:${failed ? '#b91c1c' : '#b45309'};`
-    + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+    + 'font:600 12px/1.4 system-ui,sans-serif;'
     + 'text-align:center;letter-spacing:.02em'
 
   try {
@@ -367,7 +367,7 @@ function WechatApp(): React.JSX.Element {
     bar.setAttribute(
       'style',
       'flex:0 0 auto;padding:6px 12px;background:#7c3aed;color:#fff;'
-        + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+        + 'font:600 12px/1.4 system-ui,sans-serif;'
         + 'text-align:center;letter-spacing:.02em',
     )
     document.body.insertBefore(bar, document.getElementById('root'))

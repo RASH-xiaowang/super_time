@@ -20,6 +20,7 @@
  */
 import { collectAnnualSegments } from '../query/annual-segments.ts'
 import { StreamControl, throwIfCancelled } from '../query/zip.ts'
+import type { ManagedStreamControl } from '../gateway-jobs.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -33,8 +34,8 @@ export interface createAnnualNarrRemotesInputs {
   normalizeJobId: (jobId?: unknown) => string
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  streamControl: (jobId?: string) => StreamControl
-  finishStreamJob: (jobId: string, error?: string) => void
+  streamControl: (jobId?: string) => ManagedStreamControl
+  finishStreamJob: (jobId: string, error?: string, token?: symbol, canceled?: boolean) => void
   ctx: () => Context
   privacyGate: PrivacyGateFn
 }
@@ -69,17 +70,20 @@ export function createAnnualNarrRemotes(rc: createAnnualNarrRemotesInputs) {
     async generateAnnualNarrative(options: { year: number; jobId?: string }): Promise<AnnualNarrativeResult> {
       const year = options.year
       const jobId = rc.normalizeJobId(options?.jobId)
-      const ctrl = rc.streamControl(jobId)
+      let ctrl: ManagedStreamControl | undefined
       try {
+        const control = rc.streamControl(jobId)
+        ctrl = control
         // ── 取材（纯 CPU，有让出与取消）──
-        ctrl.onProgress?.({ phase: 'collect', done: 0, total: 0 })
+        control.onProgress?.({ phase: 'collect', done: 0, total: 0 })
         const collected = await collectAnnualSegments(rc.dirs().decrypted, year, {
-          signal: ctrl.signal,
-          onScanProgress: (rows) => { ctrl.onProgress?.({ phase: 'scan', done: rows, total: 0 }) },
+          signal: control.signal,
+          onScanProgress: (rows) => { control.onProgress?.({ phase: 'scan', done: rows, total: 0 }) },
         })
-        throwIfCancelled(ctrl.signal)
+        throwIfCancelled(control.signal)
         const total = collected.segments.length
         if (total === 0) {
+          rc.finishStreamJob(jobId, undefined, control.jobToken)
           rc.op('task', 'annual_narrative', 'ok', String(year), '该年没有可总结的文本消息')
           return { ok: true, year, segments: [], text: '', truncated: false }
         }
@@ -94,36 +98,36 @@ export function createAnnualNarrRemotes(rc: createAnnualNarrRemotesInputs) {
         let cancelled = false
         for (let i = 0; i < collected.segments.length; i += 1) {
           // 每个段边界查取消：这是用户按下「停止」时**唯一**保证不会白烧一整段 LLM 的地方。
-          if (ctrl.signal?.aborted === true) { cancelled = true; break }
+          if (control.signal?.aborted === true) { cancelled = true; break }
           const seg = collected.segments[i]
           if (!seg) continue
-          ctrl.onProgress?.({ phase: 'segment', done: i, total })
+          control.onProgress?.({ phase: 'segment', done: i, total })
           const prompt = '下面是 ' + String(year) + ' 年' + seg.label + '的微信聊天片段，请用中文写一段简洁的月度小结（不超过 120 字）：\n\n' + seg.lines.join('\n')
-          out.push(await runSegment(rc, ctrl, llm, sel, prompt, seg.lines.length, seg.label))
-          ctrl.onProgress?.({ phase: 'segment', done: i + 1, total })
+          out.push(await runSegment(rc, control, llm, sel, prompt, seg.lines.length, seg.label))
+          control.onProgress?.({ phase: 'segment', done: i + 1, total })
         }
         if (cancelled) {
           // 取消：一个字节都不写，直接以 AbortError 结束（界面据此不弹错误框）。
-          throwIfCancelled(ctrl.signal)
+          throwIfCancelled(control.signal)
         }
         const text = out.filter(s => s.ok).map(s => s.text).join('\n\n')
         const failed = out.filter(s => !s.ok).length
         rc.op('task', 'annual_narrative', 'ok', String(year),
           `${out.length} 段${failed > 0 ? '（' + String(failed) + ' 段失败）' : ''}${collected.truncated ? ' · 已截断' : ''}`)
+        rc.finishStreamJob(jobId, undefined, control.jobToken)
         return { ok: failed === 0, year, segments: out, text, truncated: collected.truncated }
       } catch (e) {
-        const canceled = ctrl.signal?.aborted === true
+        const canceled = ctrl?.signal?.aborted === true
+        const message = (e as Error).message
+        rc.finishStreamJob(jobId, message, ctrl?.jobToken, canceled)
         // OperationStatus 只有 ok | fail | skip —— **没有 canceled**。
         // 「用户取消」不该被记成一次失败：操作日志是给人看「哪里坏了」的，
         // 把取消混进去会让真正的失败被噪音埋掉。（M3 那边把取消态放在
         // 导出历史的 status 字段里，这里是操作日志，两处口径不同。）
         rc.op('task', 'annual_narrative', canceled ? 'skip' : 'fail', String(year),
-          canceled ? '用户取消' : (e as Error).message)
+          canceled ? '用户取消' : message)
         if (canceled) throw e
-        return { ok: false, year, segments: [], text: '', truncated: false, error: (e as Error).message }
-      } finally {
-        // 两种路径都要清在飞槽：取消也不例外（否则下一次同名 jobId 会撞上「上一个还在跑」）。
-        rc.finishStreamJob(jobId)
+        return { ok: false, year, segments: [], text: '', truncated: false, error: message }
       }
     },
   }

@@ -1,13 +1,12 @@
 /**
- * 聊天界面**右栏**的合并面板：上半「推荐回复」、下半「消息分析」，**共用一个面板容器**。
+ * 聊天界面**右栏**：在「推荐回复」与「消息分析」之间二选一。
  *
- * 为什么合并（2026-09-25 产品调整）：两块内容读取的都是**当前会话**，但一个占一栏时
- * 每一栏都过窄 —— 分析被拆到左栏之后，消息区两侧各挂一块，「选中消息 → 看分析」的眼睛
- * 还要跨过整个消息流。合成一块之后：分析紧贴在推荐回复下方、与它同一套边框/底色/滚动条，
- * 点选消息就在这块面板的下半部分展开。
+ * 两块内容读取的都是当前会话，但语义不同：推荐回复面向会话最新上下文，分析面向
+ * 用户点选的一条消息。此前允许同时打开，结果两套内容、两个滚动区互相挤压，且用户
+ * 很难判断当前操作的是哪一块。现在由入口保证互斥，组件也只在单一模式下渲染。
  *
  * 组件分工：
- *   · 本文件 —— **唯一**的面板外壳（`.panel` / `.head` / 关闭）+ 上下分区与分隔线；
+ *   · 本文件 —— **唯一**的面板外壳（`.panel` / `.head` / 关闭）与模式分派；
  *   · `ReplySuggest` / `ChatAnalysisPanel` —— 只渲染各自区块的内容，不再自带外壳
  *     （以前各自带一份 `.panel`，合并时会出现「面板套面板」的双层边框）。
  *
@@ -25,12 +24,10 @@ import css from './chat-right-panel.module.css'
 export interface ChatRightPanelProps {
   /** 目标会话（推荐回复的读取范围就是它）。 */
   target: ReplyTarget
-  /** 关闭整个右栏面板（两块一起收起）。 */
+  /** 关闭整个右栏面板。 */
   onClose: () => void
-  /** 上区「推荐回复」是否显示（只有单聊才可能为 true —— 群聊里「回一句」不成立）。 */
-  showSuggest: boolean
-  /** 下区「分析」是否显示（群聊也能单独开）。 */
-  showAnalysis: boolean
+  /** 右栏唯一激活的内容；推荐回复只可能来自单聊，分析单聊/群聊均可。 */
+  mode: 'suggest' | 'analysis'
   /** 分析区：选中消息的 `localId`（`null` = 还没选）。 */
   analysisTargetId: number | null
   /** 分析区：该消息的分析条目（来自消息流那份 `useInlineAnalysis` 缓存）。 */
@@ -56,13 +53,12 @@ export interface ChatRightPanelProps {
  */
 export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
   const {
-    target, onClose, showSuggest, showAnalysis, analysisTargetId, analysisEntry,
+    target, onClose, mode, analysisTargetId, analysisEntry,
     analysisMessage, analysisSpeaker, analysisIsGroup, analysisRefreshing,
     onRetryAnalysis, onRefreshAnalysis,
   } = props
 
-  // 标题跟着**实际显示的内容**走：只开了分析还写「推荐回复」，会让人以为上区被吃掉了。
-  const title = showSuggest && showAnalysis ? '推荐回复与消息分析' : showSuggest ? '推荐回复' : '消息分析'
+  const title = mode === 'suggest' ? '推荐回复' : '消息分析'
 
   return (
     <div className={shell.panel} data-side-panel-view="" aria-label={title}>
@@ -77,17 +73,13 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
         </div>
       </div>
 
-      {/* 两块各自条件渲染（2026-09-26 起可在消息头部的按钮排里独立折叠）。
-          只剩一块时不再画分隔线 —— 单块面板里一条孤零零的横线只会让人以为下面还有内容。 */}
-      {showSuggest && (
+      {mode === 'suggest' && (
         <div className={css.top}>
           <ReplySuggest target={target} />
         </div>
       )}
 
-      {showSuggest && showAnalysis && <div className={css.divider} />}
-
-      {showAnalysis && (
+      {mode === 'analysis' && (
         <ChatAnalysisPanel
           targetId={analysisTargetId}
           entry={analysisEntry}

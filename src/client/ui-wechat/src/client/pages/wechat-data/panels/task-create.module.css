@@ -3,7 +3,7 @@
  *
  * 只服务于 `task-create-dialog.tsx` 与两个抽屉的底部动作位。弹窗主体（遮罩 / 头部 / 分节 /
  * 按钮 / 输入框 / 档位 chips）复用 chats-cards / chats-shell / chats-rows 的既有皮肤，
- * 这里只补三块它们没有的：关键词 chips、群成员单选列表、错误/成功行。
+ * 这里只补三块它们没有的：关键词 chips、群成员多选列表、错误/成功行。
  */
 .dialog { width: 560px; }
 
@@ -125,7 +125,7 @@
 }
 .chipRemove:hover { background: var(--nm-bg-hover, rgba(255, 255, 255, 0.08)); color: var(--nm-danger, #ff6b6b); }
 
-/* ── 群成员单选列表 ────────────────────────────────────────────────────── */
+/* ── 群成员多选列表 ────────────────────────────────────────────────────── */
 .memberList {
   display: flex;
   flex-direction: column;
@@ -153,10 +153,30 @@
   cursor: pointer;
 }
 .memberRow:hover { background: var(--nm-bg-hover, rgba(255, 255, 255, 0.05)); }
+.memberRow:disabled { cursor: default; opacity: 0.5; }
 .memberRow[data-active='true'] {
   background: var(--nm-cyan-10, rgba(0, 229, 255, 0.1));
   border-color: var(--nm-cyan);
   color: var(--nm-cyan);
+}
+.memberCheck {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--nm-border-hover, #4b5363);
+  border-radius: var(--nm-r-sm, 4px);
+  background: transparent;
+  color: var(--nm-bg-base, #11151d);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+.memberCheck[data-checked='true'] {
+  border-color: var(--nm-cyan);
+  background: var(--nm-cyan);
 }
 .memberName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memberUser {
@@ -190,6 +210,75 @@
 }
 .retryBtn:hover { background: var(--nm-bg-hover, rgba(255, 255, 255, 0.06)); border-color: var(--nm-border-hover); }
 
+/* ── 跨搜索保留的已选触发对象 ─────────────────────────────────────────── */
+.targetSelection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border, #2a2f3a);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+}
+.targetSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--nm-text-2, #c4cad8);
+}
+.targetClear {
+  flex: none;
+  padding: 1px var(--nm-s-2, 8px);
+  border: none;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3, #8b93a7);
+  font-size: 11px;
+  cursor: pointer;
+}
+.targetClear:hover { background: var(--nm-bg-hover, rgba(255, 255, 255, 0.06)); color: var(--nm-text-1, #e8eaf0); }
+.targetClear:disabled { cursor: default; opacity: 0.5; }
+.targetChips { display: flex; flex-wrap: wrap; gap: var(--nm-s-1, 4px); }
+.targetChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  border-radius: var(--nm-r-pill, 999px);
+  background: var(--nm-cyan-10, rgba(0, 229, 255, 0.1));
+  color: var(--nm-text-1, #e8eaf0);
+  font-size: 11px;
+}
+.targetChipName {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.targetChipRemove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2, #c4cad8);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.targetChipRemove:hover { background: var(--nm-bg-hover, rgba(255, 255, 255, 0.08)); color: var(--nm-danger, #ff6b6b); }
+.targetChipRemove:disabled { cursor: default; opacity: 0.5; }
+
 /* ── 提示/错误/成功行 ─────────────────────────────────────────────────── */
 .muted { margin: 0; font-size: 12px; color: var(--nm-text-2, #c4cad8); }
 .hint { margin: 2px 0 0; font-size: 11px; color: var(--nm-text-2, #c4cad8); }
@@ -210,6 +299,56 @@
 }
 .successDesc { margin: 0; font-size: 12px; line-height: 1.7; color: var(--nm-text-1, #e8eaf0); }
 .successMeta { margin: 0; font-size: 11px; color: var(--nm-text-2, #c4cad8); font-family: var(--nm-font-mono, monospace); }
+.resultList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  max-height: 230px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--nm-border, #2a2f3a);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  scrollbar-width: thin;
+}
+.resultRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: var(--nm-s-2, 8px);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 28%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
+}
+.resultRow[data-ok='true'] {
+  border-color: color-mix(in srgb, var(--nm-success) 28%, transparent);
+  background: color-mix(in srgb, var(--nm-success) 6%, transparent);
+}
+.resultBadge {
+  flex: none;
+  min-width: 3.5em;
+  padding: 1px var(--nm-s-1, 4px);
+  border-radius: var(--nm-r-pill, 999px);
+  background: color-mix(in srgb, var(--nm-danger) 15%, transparent);
+  color: var(--nm-danger, #ff6b6b);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.resultRow[data-ok='true'] .resultBadge {
+  background: color-mix(in srgb, var(--nm-success) 15%, transparent);
+  color: var(--nm-success, #00ff88);
+}
+.resultMain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.resultTarget { font-size: 12px; font-weight: 600; color: var(--nm-text-1, #e8eaf0); }
+.resultName {
+  font-size: 11px;
+  color: var(--nm-text-2, #c4cad8);
+  font-family: var(--nm-font-mono, monospace);
+  overflow-wrap: anywhere;
+}
+.resultError { font-size: 11px; color: var(--nm-danger, #ff6b6b); overflow-wrap: anywhere; }
 .successActions { display: flex; justify-content: flex-end; width: 100%; margin-top: 4px; }
 
 /* ── 两个抽屉的底部动作位：新建任务 + 导出并排 ─────────────────────────── */

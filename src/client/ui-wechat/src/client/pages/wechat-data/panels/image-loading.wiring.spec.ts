@@ -74,8 +74,9 @@ describe('图片加载流程', () => {
     const at = HOOK.indexOf('} catch {')
     expect(at, '找不到预取的失败分支').toBeGreaterThan(-1)
     expect(HOOK.slice(at, at + 400), '失败分支里不许写缓存').not.toContain('rememberImage')
-    // 组件自己那条路径相反：那是用户正看着的图，失败必须说话
-    expect(MEDIA, '组件路径失败要显示原因（不能静默）').toContain("setImgErr(r.error ?? '图片不可用')")
+    // 组件自己那条路径相反：失败仍要有可读回执，但只能展示脱敏后的固定文案。
+    expect(MEDIA, '组件路径失败要显示固定用户文案').toContain("setImgErr('图片暂不可用')")
+    expect(MEDIA, '后端原始错误不能直接进入消息卡').not.toContain("setImgErr(r.error")
   })
 
   it('⑦ 就绪后淡入，抹平「骨架 → 图片」的突变', () => {

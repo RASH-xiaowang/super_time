@@ -156,8 +156,21 @@ export function snapshotDelete(key: string): void {
 
 if (typeof window !== 'undefined') {
   // The ui-wechat plugin relays the host realtime sync signal as this DOM event;
-  // new decrypted data means every cached snapshot is stale, so drop them all.
-  window.addEventListener('dsh-wechat-data-updated', () => { invalidateSnapshotCache() })
+  // new decrypted data means every in-memory snapshot is stale. The persistent
+  // `cachedFetch` entries need to be invalidated as well: otherwise the refresh
+  // triggered by this same event hits the 30s sessions cache and paints the old
+  // list again while a background revalidation writes the new value for the
+  // *next* event. Only the WeChat-data families are touched; unrelated caches
+  // (knowledge base, task center, user preferences) stay warm.
+  window.addEventListener('dsh-wechat-data-updated', (event) => {
+    invalidateWechatCache('sessions:')
+    // Older hosts (and synthetic resume events) do not carry detail. Treat that
+    // as "unknown" and invalidate messages too; only skip when the structured
+    // revision explicitly says no message shard changed.
+    const detail = (event as CustomEvent<{ messageChanged?: unknown }>).detail
+    if (detail?.messageChanged !== false) invalidateWechatCache('messages:')
+    invalidateSnapshotCache()
+  })
 }
 
 const RENDER_CACHE_PREFIX = 'wxdata-render-cache:'
@@ -242,6 +255,50 @@ const CACHE_PREFIX = 'dsh-wechat-cache-v1:'
 /** 总览面板沿用裸 localStorage 的旧键族，也归同一个失效契约管。 */
 export const OVERVIEW_CACHE_PREFIX = 'dsh-wechat-overview-'
 const CACHE_TTL_DEFAULT = 60_000
+
+/**
+ * 微信实体身份判定的缓存代际。
+ *
+ * 32 位 `Msg_<md5>` 后缀曾被误当成会话 username 写进会话/消息渲染缓存。
+ * 后端修复后，如果升级后的首帧仍先读旧 localStorage，用户会短暂看到哈希标题，
+ * 甚至继续用哈希打开一个空会话。这个标记做一次性、命名空间内的清理：
+ * 只丢弃可再生的微信数据缓存，不动主题、布局等用户偏好。
+ */
+const WECHAT_CACHE_SCHEMA_KEY = 'dsh-wechat-cache-schema'
+const WECHAT_CACHE_SCHEMA = 'message-identity-v3'
+const WECHAT_CACHE_NAMESPACES = [
+  'dsh-wechat-cache:',
+  CACHE_PREFIX,
+  RENDER_CACHE_PREFIX,
+  OVERVIEW_CACHE_PREFIX,
+  'chat-msgs:',
+] as const
+
+/**
+ * 确保本地缓存属于当前身份 schema；首次升级时丢弃旧快照。
+ * @returns 执行清理后为 true；存储不可用或写入标记失败时为 false。
+ */
+export function ensureWechatCacheSchema(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    if (localStorage.getItem(WECHAT_CACHE_SCHEMA_KEY) === WECHAT_CACHE_SCHEMA) return true
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i)
+      if (!key || key === WECHAT_CACHE_SCHEMA_KEY) continue
+      if (WECHAT_CACHE_NAMESPACES.some(prefix => key.startsWith(prefix))) {
+        localStorage.removeItem(key)
+      }
+    }
+    localStorage.setItem(WECHAT_CACHE_SCHEMA_KEY, WECHAT_CACHE_SCHEMA)
+    return true
+  } catch {
+    // 隐私模式 / 配额异常：缓存本来就是可丢弃的，读取路径仍会做身份兜底。
+    return false
+  }
+}
+
+// 模块加载即迁移。升级后的第一帧不能用旧哈希快照抢在真实数据之前显示。
+ensureWechatCacheSchema()
 
 interface CacheEnvelope { at: number; v: unknown }
 

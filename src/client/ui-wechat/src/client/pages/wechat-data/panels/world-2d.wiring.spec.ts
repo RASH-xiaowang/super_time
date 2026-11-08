@@ -27,6 +27,7 @@ import { atLeast, findRoot, readStripped } from '../../../test-helpers/wiring-ki
 const HERE = import.meta.dirname
 const MAP = readStripped(join(HERE, 'WorldMap.tsx'))
 const DATA = readStripped(join(HERE, 'world-map-data.ts'))
+const ECHARTS = readStripped(join(HERE, 'GeoEchartsMap.tsx'))
 
 /** 被 2026-09-28 那次「改回 2D」删掉的 3D 专属文件：一个都不许回来。 */
 const REMOVED_3D_FILES = [
@@ -100,6 +101,12 @@ describe('世界层：2D 平面渲染器接得对', () => {
     for (const f of ['ChinaMap.tsx', 'ProvinceMap.tsx', 'CityMap.tsx']) {
       expect(readStripped(join(HERE, f)).includes("from './GeoEchartsMap.tsx'"), `${f} 不该改：它还在用 GeoEchartsMap`).toBe(true)
     }
+  })
+
+  it('ResizeObserver 不把零尺寸容器交给 ECharts（390→768 过渡帧会抛空矩阵）', () => {
+    expect(ECHARTS).toMatch(/echarts\.init\(el, undefined, \{[\s\S]{0,180}width: Math\.max\(1, el\.clientWidth\)[\s\S]{0,100}height: Math\.max\(1, el\.clientHeight\)/)
+    expect(ECHARTS).toMatch(/ResizeObserver\(\(\) => \{[\s\S]{0,320}el\.clientWidth <= 0[\s\S]{0,120}el\.clientHeight <= 0/)
+    expect(ECHARTS).toMatch(/!alive \|\| !el\.isConnected \|\| chart === null/)
   })
 })
 

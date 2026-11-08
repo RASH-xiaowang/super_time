@@ -36,7 +36,7 @@
   gap: var(--nm-s-2);
   padding: var(--nm-s-2) var(--nm-s-3);
   border-bottom: 1px solid var(--nm-border);
-  background: color-mix(in srgb, var(--nm-bg-card) 88%, var(--nm-cyan-4));
+  background: var(--nm-bg-card);
 }
 
 .directoryTitle {
@@ -133,9 +133,7 @@
 
 .customerRow[data-active] {
   border-color: var(--nm-cyan-35);
-  background:
-    linear-gradient(90deg, var(--nm-cyan-10), transparent 68%),
-    var(--nm-cyan-4);
+  background: var(--nm-cyan-4);
   box-shadow: inset 2px 0 0 var(--nm-cyan);
 }
 
@@ -263,9 +261,7 @@
   gap: var(--nm-s-3);
   padding: var(--nm-s-2) var(--nm-s-3);
   border-bottom: 1px solid var(--nm-border);
-  background:
-    linear-gradient(120deg, var(--nm-cyan-4), transparent 42%),
-    var(--nm-bg-card);
+  background: var(--nm-bg-card);
 }
 
 .boardTitle {
@@ -305,24 +301,7 @@
   overflow: hidden;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
-  background:
-    radial-gradient(circle at 88% -20%, var(--nm-cyan-12), transparent 34%),
-    linear-gradient(110deg, var(--nm-cyan-6), transparent 52%),
-    var(--nm-bg-card);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nm-text-1) 5%, transparent);
-}
-
-.profileSummary::after {
-  content: '';
-  position: absolute;
-  right: 16%;
-  bottom: 0;
-  width: 150px;
-  height: 42px;
-  border: 1px solid var(--nm-cyan-10);
-  border-bottom: 0;
-  border-radius: var(--nm-r-pill);
-  pointer-events: none;
+  background: var(--nm-bg-card);
 }
 
 .summaryIdentity {
@@ -817,6 +796,23 @@
     gap: var(--nm-s-2);
   }
 
+  .panel [class*='_panelHeader_'] {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .panel [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .panel [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
   .workspace {
     gap: var(--nm-s-2);
   }
@@ -915,11 +911,12 @@
   }
 
   .summarySide {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-between;
   }
 
   .primaryAction {
-    width: 100%;
+    width: auto;
   }
 }

@@ -68,7 +68,7 @@ function emoTypeLabel(t: number | undefined): string {
   return ''
 }
 
-export function EmoticonCell({ e, onCopy, onUnavailable }: {
+export function EmoticonCell({ e, onCopy, onUnavailable, itemIndex }: {
   e: EmoticonItem
   onCopy: (md5: string) => void
   /**
@@ -77,8 +77,10 @@ export function EmoticonCell({ e, onCopy, onUnavailable }: {
    * 为什么需要：消息库里扫出的「其他表情」只有 md5，本地 `.dat` 缓存可能早已被微信清掉
    * （本机实测 500 个里 478 个取不到）。这些格子显示成 😀 占位符会让用户以为在加载，
    * 父组件收到回调后把它们从列表里摘掉，只留真正能看的表情。
-   */
+  */
   onUnavailable?: (md5: string) => void
+  /** 渐进窗口的原始索引，用于回收头部时测量真实高度。 */
+  itemIndex?: number
 }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -118,6 +120,7 @@ export function EmoticonCell({ e, onCopy, onUnavailable }: {
     <div
       className={css.emoCell}
       data-emo-md5={e.md5}
+      data-progressive-item={itemIndex}
       title={title}
       {...clickableKey(() => { onCopy(e.md5) })}
     >
@@ -133,9 +136,9 @@ export function EmoticonCell({ e, onCopy, onUnavailable }: {
   )
 }
 
-export function PackageCell({ name, count }: { name: string; count: number }): React.JSX.Element {
+export function PackageCell({ name, count, itemIndex }: { name: string; count: number; itemIndex?: number }): React.JSX.Element {
   return (
-    <div className={css.fileCell} title={name}>
+    <div className={css.fileCell} data-progressive-item={itemIndex} title={name}>
       <span className={css.fileIcon}>📦</span>
       <span className={css.fileName}>{name}</span>
       <span className={css.fileMeta}>{count} 个表情</span>

@@ -48,6 +48,29 @@
 }
 
 /*
+ * 访问过的分段保持挂载：active 用 contents 让出布局，其余分段只隐藏、不卸载。
+ * display:none 会暂停 IntersectionObserver/绘制，同时 React state、搜索词、滚动位置
+ * 和展开态都留在原处；首访仍未发生的分段不会挂载（见 MergedSections 的 visited）。
+ */
+.sectionPane[data-active] {
+  display: contents;
+}
+
+/*
+ * display:contents 的 wrapper 不再是 flex item，原来的 `.body > *` 选不中实际
+ * 参与布局的子面板。显式把同一组伸缩约束补到子节点上，保证与未加 wrapper 时的
+ * “面板铺满剩余高度、内部自己滚动”完全一致。
+ */
+.sectionPane[data-active] > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sectionPane:not([data-active]) {
+  display: none;
+}
+
+/*
  * 分段条右侧插槽（知识库的库切换器）。
  *
  * `margin-left: auto` 把它推到最右：分段条本身宽度是内容宽，插槽若紧跟其后会贴在

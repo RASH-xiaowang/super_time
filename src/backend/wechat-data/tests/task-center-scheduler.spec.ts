@@ -119,7 +119,10 @@ describe('任务触发扫描调度器（提速后的单飞/合并）', () => {
 
     const scanPromise = gw.scheduleTaskTriggerScan()
     await scanPromise
-    expect(events, '扫描完成时应立刻广播记录已变（不等投递）').toEqual([
+    expect(
+      events.filter((event) => event.name === 'task-center/updated'),
+      '扫描完成时应立刻广播记录已变（不等投递）',
+    ).toEqual([
       { name: 'task-center/updated', args: [{ created: 2, dispatched: 0 }] },
     ])
     // 先抓住正在跑的那一拍投递（不通过 scheduleTaskDispatch 再请求一次，否则会置 pending
@@ -129,7 +132,7 @@ describe('任务触发扫描调度器（提速后的单飞/合并）', () => {
 
     resolveDispatch!({ dispatched: 1, failed: 0 })
     await inFlight
-    expect(events).toEqual([
+    expect(events.filter((event) => event.name === 'task-center/updated')).toEqual([
       { name: 'task-center/updated', args: [{ created: 2, dispatched: 0 }] },
       { name: 'task-center/updated', args: [{ created: 0, dispatched: 1 }] },
     ])
@@ -164,7 +167,9 @@ describe('任务触发扫描调度器（提速后的单飞/合并）', () => {
     const second = await gw.scheduleTaskTriggerScan()
     expect(second.ok).toBe(true)
     expect(second.created).toBe(1)
-    expect(events).toEqual([{ name: 'task-center/updated', args: [{ created: 1, dispatched: 0 }] }])
+    expect(events.filter((event) => event.name === 'task-center/updated')).toEqual([
+      { name: 'task-center/updated', args: [{ created: 1, dispatched: 0 }] },
+    ])
   })
 
   it('投递抛错不把调度器卡死：转成 failed 摘要，下一拍仍能正常跑', async () => {

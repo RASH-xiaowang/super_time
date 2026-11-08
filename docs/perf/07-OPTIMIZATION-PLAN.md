@@ -11,7 +11,7 @@
 - **不做**：`getVideoInfosBatch` / `getVoiceInfosBatch` 等新增 Remote 方法（调用方代理 T4 提议）——属对外契约增面，
   本轮排除；需要时单独立项。
 - **不做**：图片解码/索引/词云搬 `worker_threads`（`kb/parse-pdf.ts:12-13` 真机记录 Electron 主进程 `new Worker` 抛错）；
-  `article-cover.ts` trace 分支、`settings-state.tsx` 只读 gBCR、`api-clawbot`/`api-task-center` 套 `cachedFetch` 等假阳性项。
+  `article-cover.ts` trace 分支、`settings-state.tsx` 只读 gBCR、动作型 API 套 `cachedFetch` 等假阳性项。
 - **不动**：`image-cache.ts` 48MB 上限、`meta.ts` 家族限界、`wechat-host` 定向失效策略、导出流式/搜索 iterate 等历史已修形态。
 
 ## 1. 量化目标（可验证口径）

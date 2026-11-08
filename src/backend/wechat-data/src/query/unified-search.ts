@@ -22,12 +22,20 @@ import type {
   UnifiedSearchSnapshot,
 } from '../types.ts'
 import { withDb } from './db-open.ts'
-import { searchIndexMessages } from './search.ts'
+import { searchIndexMessages, searchIndexMessagesCancellable, type SearchControl } from './search.ts'
 import { contactMeta } from './meta.ts'
 import { favTypeLabel, parseFavContent, parseFavParts } from './favorites.ts'
 import { parseSnsXml } from './moments.ts'
 import { resolveSelfUsername } from '../config/resolve.ts'
 import { isEnterpriseWechatUser, loadOpenimDirectoryFromDb } from './openim.ts'
+import {
+  displayNameForUsername,
+  isMessageTableHash,
+  messageTableHash,
+  messageTableName,
+  resolveChatIdentity,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 
 /** Safe display wrapper: never throw; fall back to the raw username. */
 function cellString(v: unknown): string {
@@ -58,9 +66,12 @@ function loadRecordSessionTitles(decryptedDir: string): Map<string, string> {
         'SELECT username, session_title FROM SessionNoContactInfoTable',
       ).all() as Array<{ username: unknown; session_title: unknown }>
       for (const row of rows) {
-        const username = cellString(row.username).trim()
+        const stored = cellString(row.username).trim()
+        const username = stored ? resolveTalkerUsername(decryptedDir, stored) : ''
         const title = cellString(row.session_title).trim()
-        if (username !== '' && title !== '') titles.set(username, title)
+        if (username !== '' && title !== '' && title !== stored && !isMessageTableHash(title)) {
+          titles.set(username, title)
+        }
       }
     })
   } catch { /* session.db schema drift: records still use contact/participant fallbacks */ }
@@ -69,6 +80,18 @@ function loadRecordSessionTitles(decryptedDir: string): Map<string, string> {
 
 function like(q: string): string {
   return '%' + q + '%'
+}
+
+/** Stored references may predate canonical identities: accept both the real
+ * username and the physical message-table forms when scoping a query. */
+function storedChatAliases(username: string, displayName?: string): string[] {
+  const aliases = [
+    username,
+    messageTableHash(username),
+    messageTableName(username),
+    displayName?.trim() ?? '',
+  ].filter(Boolean)
+  return [...new Set(aliases)]
 }
 
 /**
@@ -302,7 +325,7 @@ function searchMoments(
           const enterpriseName = enterpriseNames.get(username)?.trim()
           return {
             username,
-            name: names.get(username) ?? parsed.nickname ?? username,
+            name: displayNameForUsername(username, names, parsed.nickname),
             ...(enterpriseName ? { enterpriseName } : {}),
             snippet: parsed.text || xml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100),
             tid: cellString(r.i),
@@ -363,11 +386,17 @@ function searchFavorites(
         })
         return []
       }
+      const meta = contactMeta(decryptedDir)
+      const scopeAliases = username
+        ? storedChatAliases(username, meta.names.get(username))
+        : []
       const userSql = username
-        ? ` AND (${[fromCol ? `${fromCol} = ?` : '', chatCol ? `${chatCol} = ?` : ''].filter(Boolean).join(' OR ')})`
+        ? ` AND (${[fromCol, chatCol].filter(Boolean).flatMap(col =>
+          scopeAliases.map(() => `${col} = ?`),
+        ).join(' OR ')})`
         : ''
       const userParams = username
-        ? [fromCol, chatCol].filter(Boolean).map(() => username)
+        ? [fromCol, chatCol].filter(Boolean).flatMap(() => scopeAliases)
         : []
       if (range && timeCol === '0') {
         sink.push({
@@ -378,7 +407,6 @@ function searchFavorites(
         return []
       }
       const rangeFilter = range ? rangeClause(timeCol, range) : { sql: '', params: [] }
-      const meta = contactMeta(decryptedDir)
       const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c, ${typeCol} AS ty, ${timeCol} AS t, ${serverCol} AS sid, ${sourceCol} AS src, ${fromExpr} AS fu, ${chatExpr} AS cn FROM fav_db_item WHERE (${contentCol} LIKE ?${extraSql})${userSql}${rangeFilter.sql} LIMIT ?`)
         .all(like(q), ...extraParams, ...userParams, ...rangeFilter.params, cap) as Array<{ id: unknown; c: unknown; ty: unknown; t: unknown; sid: unknown; src: unknown; fu: unknown; cn: unknown }>
       return rows.map((r) => {
@@ -388,14 +416,16 @@ function searchFavorites(
         const parts = parseFavParts(xml)
         const media = parts.find(part => part.kind !== 'text' && (part.fullMd5 || part.md5 || part.name || part.url))
         const contentMd5 = media?.md5 || media?.fullMd5 || media?.thumbMd5 || ''
-        const fromUsr = cellString(r.fu).trim()
-        const chatName = cellString(r.cn).trim()
-        const source = chatName
-          ? (meta.names.get(chatName) ?? chatName)
-          : (fromUsr ? (meta.names.get(fromUsr) ?? fromUsr) : '')
+        const storedFromUsr = cellString(r.fu).trim()
+        const storedChatName = cellString(r.cn).trim()
+        const fromIdentity = storedFromUsr ? resolveChatIdentity(decryptedDir, storedFromUsr) : undefined
+        const chatIdentity = storedChatName ? resolveChatIdentity(decryptedDir, storedChatName) : undefined
+        const source = chatIdentity?.resolved
+          ? chatIdentity.displayName
+          : (fromIdentity?.resolved ? fromIdentity.displayName : '')
         const sourceEnterpriseName = (
-          (chatName ? meta.enterpriseNames.get(chatName) : undefined)
-          || (fromUsr ? meta.enterpriseNames.get(fromUsr) : undefined)
+          (chatIdentity?.username ? meta.enterpriseNames.get(chatIdentity.username) : undefined)
+          || (fromIdentity?.username ? meta.enterpriseNames.get(fromIdentity.username) : undefined)
           || ''
         ).trim()
         return {
@@ -515,6 +545,7 @@ function recordIdentity(
   participants: string[],
   selfUsername: string,
 ): { name: string; enterpriseName?: string } {
+  if (session === '') return { name: '未命名会话' }
   const direct = names.get(session)?.trim() ?? ''
   const sessionEnterpriseName = enterpriseNames.get(session)?.trim()
   if (direct !== '' && direct !== session) {
@@ -608,19 +639,22 @@ function searchRecords(
         }
         const rangeFilter = range ? rangeClause(timeCol, range) : { sql: '', params: [] }
         const displayName = username ? names.get(username) : undefined
+        const scopeAliases = username ? storedChatAliases(username, displayName) : []
         const userSql = username
-          ? ` AND (${sessionCol} = ?${displayName && displayName !== username ? ` OR ${sessionCol} = ?` : ''})`
+          ? ` AND (${scopeAliases.map(() => `${sessionCol} = ?`).join(' OR ')})`
           : ''
         const userParam = username
-          ? [username, ...(displayName && displayName !== username ? [displayName] : [])]
+          ? scopeAliases
           : []
         // `session_name LIKE ... OR transfer_id LIKE ...` 必须整体加括号，
         // 否则日期/会话条件只约束第二个分支。
         const rows = db.prepare(`SELECT ${sessionCol} AS s, ${timeCol} AS t, ${serverCol} AS sid, ${transferCol} AS tid, ${payerCol} AS payer, ${receiverCol} AS receiver, ${senderCol} AS sender FROM ${table} WHERE (${sessionCol} LIKE ?${idCol ? ` OR ${idCol} LIKE ?` : ''})${userSql}${rangeFilter.sql} LIMIT ?`)
           .all(like(q), ...extraParam, ...userParam, ...rangeFilter.params, cap - out.length) as Array<{ s: unknown; t: unknown; sid: unknown; tid: unknown; payer: unknown; receiver: unknown; sender: unknown }>
         for (const r of rows) {
-          const session = cellString(r.s)
-          if (!session) continue
+          const storedSession = cellString(r.s)
+          if (!storedSession) continue
+          const chatIdentity = resolveChatIdentity(decryptedDir, storedSession)
+          const session = chatIdentity.username
           const messageServerId = cellString(r.sid)
           const transferId = cellString(r.tid)
           const participants = [cellString(r.payer), cellString(r.receiver), cellString(r.sender)]
@@ -634,8 +668,8 @@ function searchRecords(
           ) {
             selfUsername = resolveSelfUsername(decryptedDir).trim()
           }
-          const identity = recordIdentity(
-            session,
+          const displayIdentity = recordIdentity(
+            session || chatIdentity.displayName,
             names,
             meta.enterpriseNames,
             sessionTitles,
@@ -644,11 +678,11 @@ function searchRecords(
           )
           out.push({
             kind,
-            name: identity.name,
-            ...(identity.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
+            name: displayIdentity.name,
+            ...(displayIdentity.enterpriseName ? { enterpriseName: displayIdentity.enterpriseName } : {}),
             session,
             time: fmtDateTimeSec(Number(r.t ?? 0)),
-            sourceId: transferId || messageServerId || `${kind}:${session}:${fmtDateTimeSec(Number(r.t ?? 0))}`,
+            sourceId: transferId || messageServerId || `${kind}:${session || '未命名会话'}:${fmtDateTimeSec(Number(r.t ?? 0))}`,
             ...(transferId ? { transferId } : {}),
             ...(messageServerId ? { messageServerId } : {}),
           })
@@ -664,60 +698,61 @@ function searchRecords(
   }
 }
 
-/**
- * Run the unified local search.
- * @param decryptedDir - decrypted data root.
- * @param query - search term.
- * @param limit - max hits per domain (default 6).
- * @param options - optional hard scope (`from` / `to` / `username`).
- * @returns the unified snapshot.
- */
-export function searchUnified(
-  decryptedDir: string,
-  query: string,
-  limit?: number,
-  options: { from?: string; to?: string; username?: string } = {},
-): UnifiedSearchSnapshot {
-  const q = (query || '').trim()
-  const cap = Math.min(limit ?? 6, 12)
-  const failures: DomainFailure[] = []
-  const from = (options.from ?? '').trim()
-  const to = (options.to ?? '').trim()
-  const username = (options.username ?? '').trim()
-  const fromValid = from === '' || validDay(from)
-  const toValid = to === '' || validDay(to)
-  const domainErrors: Partial<Record<UnifiedSearchResourceDomain, UnifiedSearchDomainError>> = {}
+interface UnifiedSearchPreparation {
+  ok: true
+  q: string
+  cap: number
+  range?: TimeRange
+  failures: DomainFailure[]
+  domainErrors: Partial<Record<UnifiedSearchResourceDomain, UnifiedSearchDomainError>>
+}
 
-  const invalidScope = (): UnifiedSearchSnapshot => ({
-    query: q,
+type UnifiedSearchPrepared =
+  | UnifiedSearchPreparation
+  | { ok: false; snapshot: UnifiedSearchSnapshot }
+
+function emptyUnifiedSnapshot(
+  query: string,
+  domainErrors: Partial<Record<UnifiedSearchResourceDomain, UnifiedSearchDomainError>>,
+): UnifiedSearchSnapshot {
+  return {
+    query,
     messages: [],
     contacts: [],
     moments: [],
     favorites: [],
     files: [],
     records: [],
-    domainErrors,
-  })
+    ...(Object.keys(domainErrors).length > 0 ? { domainErrors } : {}),
+  }
+}
+
+/**
+ * 同步与可取消入口共享同一份范围校验，避免两条链路对非法日期/会话范围给出不同答案。
+ */
+function prepareUnifiedSearch(
+  query: string,
+  limit?: number,
+  options: { from?: string; to?: string; username?: string } = {},
+): UnifiedSearchPrepared {
+  const q = (query || '').trim()
+  const cap = Math.min(limit ?? 6, 12)
+  const failures: DomainFailure[] = []
+  const from = (options.from ?? '').trim()
+  const to = (options.to ?? '').trim()
+  const fromValid = from === '' || validDay(from)
+  const toValid = to === '' || validDay(to)
+  const domainErrors: Partial<Record<UnifiedSearchResourceDomain, UnifiedSearchDomainError>> = {}
 
   if (!fromValid || !toValid || (from !== '' && to !== '' && from > to)) {
     const message = '日期范围必须是合法的 YYYY-MM-DD，且 from 不能晚于 to'
     for (const key of ['contacts', 'moments', 'favorites', 'files', 'records'] as const) {
       domainErrors[key] = { code: 'unsupported_scope', message }
     }
-    return invalidScope()
+    return { ok: false, snapshot: emptyUnifiedSnapshot(q, domainErrors) }
   }
 
   const range = from !== '' || to !== '' ? dayRange(from, to) : undefined
-  // 时间过滤在消息层是后置的：先多取一些原始命中，避免前 cap 条全在范围外
-  // 时把范围内的结果错误地截掉。
-  const messageCap = range ? Math.min(Math.max(cap * 10, cap), 300) : cap
-  const messages = q ? searchIndexMessages(decryptedDir, q, messageCap, username || undefined).hits : []
-  const filteredMessages = range
-    ? messages.filter(hit =>
-      (range.fromSec === 0 || hit.create_time >= range.fromSec)
-      && (range.toSec === 0 || hit.create_time <= range.toSec),
-    ).slice(0, cap)
-    : messages
   // 联系人没有可过滤的时间列：带日期范围时必须明确报不支持，不能返回未过滤的联系人。
   if (q && range) {
     failures.push({
@@ -726,15 +761,15 @@ export function searchUnified(
       reason: 'unsupported_scope: 联系人检索没有时间列，无法应用日期范围',
     })
   }
-  const snapshot: UnifiedSearchSnapshot = {
-    query: q,
-    messages: filteredMessages,
-    contacts: q && !range ? searchContacts(failures, decryptedDir, q, cap, username || undefined) : [],
-    moments: q ? searchMoments(failures, decryptedDir, q, cap, range, username || undefined) : [],
-    favorites: q ? searchFavorites(failures, decryptedDir, q, cap, range, username || undefined) : [],
-    files: q ? searchFiles(failures, decryptedDir, q, cap, range, username || undefined) : [],
-    records: q ? searchRecords(failures, decryptedDir, q, cap, range, username || undefined) : [],
-  }
+  return { ok: true, q, cap, range, failures, domainErrors }
+}
+
+/** 把域失败映射成统一快照诊断；同步/异步入口只共用这一份收尾逻辑。 */
+function finishUnifiedSnapshot(
+  snapshot: UnifiedSearchSnapshot,
+  failures: DomainFailure[],
+  domainErrors: Partial<Record<UnifiedSearchResourceDomain, UnifiedSearchDomainError>>,
+): UnifiedSearchSnapshot {
   for (const failure of failures) {
     const unsupported = failure.reason.startsWith('unsupported_scope:')
     domainErrors[failure.key] = {
@@ -756,6 +791,141 @@ export function searchUnified(
     snapshot.readError = `${parts.join('、')}读取失败（${readFailures[0]?.reason ?? '库打不开'}）—— 这不是「没有结果」`
   }
   return snapshot
+}
+
+/**
+ * 在资源域之间让出 worker 消息泵。
+ *
+ * node:sqlite 是同步 API，单条查询内部无法被 AbortSignal 抢占；这里保证每个域执行前后
+ * 都至少让事件循环跑一次，使 `cancelSearch` RPC 能及时进入 worker，并在进入下一个域前收尾。
+ * 消息兜底扫描另有逐行取消点，见 `searchIndexMessagesCancellable`。
+ */
+async function yieldUnifiedSearch(ctrl?: SearchControl): Promise<boolean> {
+  if (ctrl?.signal?.aborted) return true
+  await new Promise<void>((resolve) => { setImmediate(resolve) })
+  return ctrl?.signal?.aborted === true
+}
+
+/**
+ * Run the unified local search synchronously for existing query/tool callers.
+ * @param decryptedDir - decrypted data root.
+ * @param query - search term.
+ * @param limit - max hits per domain (default 6).
+ * @param options - optional hard scope (`from` / `to` / `username`).
+ * @returns the unified snapshot.
+ */
+export function searchUnified(
+  decryptedDir: string,
+  query: string,
+  limit?: number,
+  options: { from?: string; to?: string; username?: string } = {},
+): UnifiedSearchSnapshot {
+  const prepared = prepareUnifiedSearch(query, limit, options)
+  if (!prepared.ok) return prepared.snapshot
+  const { q, cap, range, failures, domainErrors } = prepared
+  const requestedUsername = (options.username ?? '').trim()
+  const username = requestedUsername ? resolveTalkerUsername(decryptedDir, requestedUsername) : ''
+  // A legacy hash with no owner must not silently broaden the search to every
+  // conversation. Return a scoped empty result instead.
+  if (requestedUsername && !username) {
+    return finishUnifiedSnapshot(emptyUnifiedSnapshot(q, domainErrors), failures, domainErrors)
+  }
+  // 时间过滤在消息层是后置的：先多取一些原始命中，避免前 cap 条全在范围外
+  // 时把范围内的结果错误地截掉。
+  const messageCap = range ? Math.min(Math.max(cap * 10, cap), 300) : cap
+  const messages = q ? searchIndexMessages(decryptedDir, q, messageCap, username || undefined).hits : []
+  const filteredMessages = range
+    ? messages.filter(hit =>
+      (range.fromSec === 0 || hit.create_time >= range.fromSec)
+      && (range.toSec === 0 || hit.create_time <= range.toSec),
+    ).slice(0, cap)
+    : messages
+  const snapshot: UnifiedSearchSnapshot = {
+    query: q,
+    messages: filteredMessages,
+    contacts: q && !range ? searchContacts(failures, decryptedDir, q, cap, username || undefined) : [],
+    moments: q ? searchMoments(failures, decryptedDir, q, cap, range, username || undefined) : [],
+    favorites: q ? searchFavorites(failures, decryptedDir, q, cap, range, username || undefined) : [],
+    files: q ? searchFiles(failures, decryptedDir, q, cap, range, username || undefined) : [],
+    records: q ? searchRecords(failures, decryptedDir, q, cap, range, username || undefined) : [],
+  }
+  return finishUnifiedSnapshot(snapshot, failures, domainErrors)
+}
+
+/**
+ * 可取消的全局搜索（界面链路专用）。
+ *
+ * 取消后返回**已扫描域的部分结果**并带 `cancelled: true`，不会把未扫描域伪装成
+ * 「确实没有命中」。不带令牌时结果与 {@link searchUnified} 相同，只是异步执行。
+ * @param decryptedDir - decrypted data root.
+ * @param query - search term.
+ * @param limit - max hits per domain (default 6).
+ * @param options - optional hard scope (`from` / `to` / `username`).
+ * @param ctrl - optional AbortSignal-backed search control.
+ * @returns unified snapshot, with `cancelled: true` when interrupted.
+ */
+export async function searchUnifiedCancellable(
+  decryptedDir: string,
+  query: string,
+  limit?: number,
+  options: { from?: string; to?: string; username?: string } = {},
+  ctrl?: SearchControl,
+): Promise<UnifiedSearchSnapshot> {
+  const prepared = prepareUnifiedSearch(query, limit, options)
+  if (!prepared.ok) return prepared.snapshot
+  const { q, cap, range, failures, domainErrors } = prepared
+  const snapshot = emptyUnifiedSnapshot(q, domainErrors)
+  if (q === '') return finishUnifiedSnapshot(snapshot, failures, domainErrors)
+
+  if (ctrl?.signal?.aborted) {
+    snapshot.cancelled = true
+    return finishUnifiedSnapshot(snapshot, failures, domainErrors)
+  }
+
+  const requestedUsername = (options.username ?? '').trim()
+  const username = requestedUsername ? resolveTalkerUsername(decryptedDir, requestedUsername) : ''
+  if (requestedUsername && !username) {
+    return finishUnifiedSnapshot(snapshot, failures, domainErrors)
+  }
+  const messageCap = range ? Math.min(Math.max(cap * 10, cap), 300) : cap
+  const messageResult = await searchIndexMessagesCancellable(
+    decryptedDir,
+    q,
+    messageCap,
+    username || undefined,
+    ctrl,
+  )
+  snapshot.messages = range
+    ? messageResult.hits.filter(hit =>
+      (range.fromSec === 0 || hit.create_time >= range.fromSec)
+      && (range.toSec === 0 || hit.create_time <= range.toSec),
+    ).slice(0, cap)
+    : messageResult.hits
+
+  let cancelled = messageResult.cancelled === true
+  if (!cancelled) cancelled = await yieldUnifiedSearch(ctrl)
+  if (!cancelled && q && !range) {
+    snapshot.contacts = searchContacts(failures, decryptedDir, q, cap, username || undefined)
+    cancelled = await yieldUnifiedSearch(ctrl)
+  }
+  if (!cancelled) {
+    snapshot.moments = searchMoments(failures, decryptedDir, q, cap, range, username || undefined)
+    cancelled = await yieldUnifiedSearch(ctrl)
+  }
+  if (!cancelled) {
+    snapshot.favorites = searchFavorites(failures, decryptedDir, q, cap, range, username || undefined)
+    cancelled = await yieldUnifiedSearch(ctrl)
+  }
+  if (!cancelled) {
+    snapshot.files = searchFiles(failures, decryptedDir, q, cap, range, username || undefined)
+    cancelled = await yieldUnifiedSearch(ctrl)
+  }
+  if (!cancelled) {
+    snapshot.records = searchRecords(failures, decryptedDir, q, cap, range, username || undefined)
+    cancelled = await yieldUnifiedSearch(ctrl)
+  }
+  if (cancelled) snapshot.cancelled = true
+  return finishUnifiedSnapshot(snapshot, failures, domainErrors)
 }
 
 /** hardlink 表 → 文件大类。 */

@@ -8,8 +8,7 @@
  * 渲染层自己去要它就把主机白名单 / 出网开关 / 操作记录整套绕过了（M23）。
  * 一条记录怎么读成一行字在 `chats-chatlog.spec.ts`，这里只管它长成什么样。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatsChatlogViewProps } from './chats-chatlog-dialog.tsx'
@@ -153,7 +152,7 @@ describe('三种数据形态', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]?.textContent).toContain('甲')
     expect(rows[0]?.textContent).toContain('09:01')
-    expect(rows[1]?.textContent).toContain('😀 [表情]')
+    expect(rows[1]?.textContent).toContain('[表情]')
   })
 
   it('企业微信发送者显示企业名称', () => {
@@ -185,7 +184,7 @@ describe('嵌套与链接', () => {
     const nested = rec({ renderType: 'chatHistory', text: '群聊记录', nested: [rec(), rec()] })
     show({ frame: { title: '聊天记录', records: [nested] } })
     const btn = need(q('button[class*="chatlogNested"]'), '嵌套记录按钮')
-    expect(btn.textContent).toBe('📋 群聊记录（2 条）')
+    expect(btn.textContent).toBe('群聊记录（2 条）')
     click(btn)
     expect(sink.openNestedChatlog).toHaveBeenCalledTimes(1)
     expect(sink.openNestedChatlog.mock.calls[0]?.[0]).toBe(nested)

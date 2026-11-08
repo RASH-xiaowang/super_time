@@ -24,6 +24,9 @@
   color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
 }
+.batchProgress {
+  padding: 0 12px 10px;
+}
 /*
  * 窄列收敛规则（审计 P0-2 / P1-9）。
  * 960px 窗口下消息列只有 222px，四个按钮并排必然放不下；
@@ -90,6 +93,83 @@
   font-family: var(--nm-font-mono, monospace);
 }
 .searchHitSnippet { font-size: 12px; color: var(--nm-text-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ── 消息日历弹窗 ─────────────────────────────────────────────── */
+.calOverlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  /* 覆盖层自己可滚：窗口比弹窗矮时（小屏 / 缩放 / CI）按钮不会被推到视口外；子元素用 margin:auto 居中。 */
+  overflow: auto; overscroll-behavior: contain; padding: 16px;
+  /* 微信化：纯 40% 黑遮罩，无毛玻璃（PLAN §1.3 弹窗口径）。 */
+  background: rgba(0, 0, 0, 0.4);
+}
+.calOverlay > * { margin: auto; }
+.calDialog {
+  width: 420px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--nm-r-xl, 12px);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  overflow: hidden;
+  box-shadow: var(--nm-shadow-popup);
+}
+.calTitle { font-size: 14px; font-weight: 600; color: var(--nm-text-1); }
+.calClose {
+  border: none;
+  background: transparent;
+  color: var(--nm-text-2);
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: var(--nm-r-sm);
+  display: inline-flex;
+  transition: var(--nm-t-ui);
+}
+.calClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+.calBody { padding: 14px 16px; flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.calMonthTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  min-width: 110px;
+  text-align: center;
+  font-family: var(--nm-font-mono, monospace);
+}
+.calStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+}
+.calDay {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  position: relative;
+  padding: 0;
+  transition: var(--nm-t-ui);
+}
+.calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.calDayCnt {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-cyan);
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 1px;
+  font-family: var(--nm-font-mono, monospace);
+}
 .calHeader {
   display: flex;
   align-items: center;
@@ -225,7 +305,7 @@
   line-height: 1.55;
 }
 .memberProfileMono {
-  font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
   color: var(--nm-text-1);
   word-break: break-all;
   text-align: right;

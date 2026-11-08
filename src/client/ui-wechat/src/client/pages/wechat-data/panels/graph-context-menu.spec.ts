@@ -60,6 +60,16 @@ describe('节点右键菜单：按类型与能力给动作', () => {
     }
   })
 
+  it('“我”节点不出现“查看聊天”（self 不是微信 username）', () => {
+    const items = buildNodeMenuItems({
+      node: node({ id: 'self', label: '我', kind: 'self' }),
+      pinned: false,
+      knowledge: false,
+      canOpenChat: true,
+    })
+    expect(items.some(i => i.id === 'open-chat')).toBe(false)
+  })
+
   it('没有聊天回调时不出现“查看聊天”，避免点了没反应的入口', () => {
     const items = buildNodeMenuItems({ node: node(), pinned: false, knowledge: false, canOpenChat: false })
     expect(items.some(i => i.id === 'open-chat')).toBe(false)

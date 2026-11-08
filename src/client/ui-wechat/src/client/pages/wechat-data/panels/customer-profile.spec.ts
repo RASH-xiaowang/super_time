@@ -13,6 +13,7 @@ import {
   customerDisplayName,
   customerIdentityOf,
   customerRelation,
+  cleanCustomerSignature,
   mergeCustomerCandidates,
   type CustomerIdentity,
 } from './customer-profile.ts'
@@ -59,6 +60,20 @@ function identity(overrides: Partial<CustomerIdentity> = {}): CustomerIdentity {
 }
 
 describe('客户目录合并', () => {
+  it('企业微信自定义资料 JSON 不会冒充个性签名', () => {
+    const raw = JSON.stringify({
+      custom_info: [{ title: '来自', detail: [{ desc: '企业微信' }] }],
+      title: '王国宁',
+    })
+    expect(cleanCustomerSignature(raw)).toBeUndefined()
+    expect(cleanCustomerSignature('  保持热爱，认真生活。  ')).toBe('保持热爱，认真生活。')
+
+    const [row] = mergeCustomerCandidates([[contact('wxid_enterprise', 'enterprise', {
+      description: raw,
+    })]])
+    expect(row?.description).toBeUndefined()
+  })
+
   it('合并好友 + 群成员身份，保留更具体分类与全部群，不产生重复客户', () => {
     const rows = mergeCustomerCandidates([
       [contact('wxid_a', 'friend', { groupUsernames: ['room_1'] })],

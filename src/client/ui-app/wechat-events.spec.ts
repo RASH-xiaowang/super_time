@@ -55,12 +55,10 @@ function clientSources(): string[] {
   return out
 }
 
-describe('事件映射表：10 条，逐条钉住', () => {
-  it('哨兵：表非空，且就是那 10 条（多一条少一条都要在这里过一遍脑子）', () => {
-    expect(EVENT_MAP.length).toBe(10)
+describe('事件映射表：8 条，逐条钉住', () => {
+  it('哨兵：表非空，且就是那 8 条（多一条少一条都要在这里过一遍脑子）', () => {
+    expect(EVENT_MAP.length).toBe(8)
     expect(EVENT_MAP.map((e) => e.from).sort()).toEqual([
-      'clawbot/binding-changed',
-      'clawbot/message',
       'message-list/updated',
       'search-index/progress',
       'task-center/updated',
@@ -74,14 +72,12 @@ describe('事件映射表：10 条，逐条钉住', () => {
 
   it('每条的 DOM 事件名与「带不带 detail」都对得上抽出内联 if-else 之前的口径', () => {
     const expected: ReadonlyArray<readonly [string, string, boolean]> = [
-      ['wechat-data/updated', 'dsh-wechat-data-updated', false],
+      ['wechat-data/updated', 'dsh-wechat-data-updated', true],
       ['wechat-ask/delta', 'dsh-wechat-ask-delta', true],
       ['wechat-ask/reasoning', 'dsh-wechat-ask-reasoning', true],
       ['wechat-ask/stage', 'dsh-wechat-ask-stage', true],
       ['wechat-export/progress', 'dsh-wechat-export-progress', true],
       ['search-index/progress', 'dsh-search-index-progress', true],
-      ['clawbot/message', 'dsh-clawbot-message', true],
-      ['clawbot/binding-changed', 'dsh-clawbot-binding-changed', true],
       ['task-center/updated', 'dsh-wechat-task-center-updated', true],
       ['message-list/updated', 'dsh-wechat-message-list-updated', true],
     ]
@@ -111,20 +107,23 @@ describe('dispatchWechatEvent 的行为', () => {
     expect(t.events).toEqual([{ type: 'dsh-wechat-ask-delta', detail: { id: 'a1', text: '全文' } }])
 
     const t2 = fakeTarget()
-    dispatchWechatEvent({ name: 'clawbot/message' }, t2)
-    expect(t2.events[0]?.type).toBe('dsh-clawbot-message')
+    dispatchWechatEvent({ name: 'message-list/updated' }, t2)
+    expect(t2.events[0]?.type).toBe('dsh-wechat-message-list-updated')
     expect(t2.events[0]?.detail, '取不到 args[0] 时应当是 null（既有面板按 ?? null 写的）').toBeNull()
   })
 
-  it('不带 detail 的那条不会把 args 泄漏成 detail（与抽出内联 if-else 之前逐字一致）', () => {
-    // 原来那行是 `new CustomEvent('dsh-wechat-data-updated')`（不传 init）。
-    // 注意 DOM 并不区分「没传 detail」与「detail: null」——`detail` 是原型上的访问器，
-    // 不传时读出来也是 null —— 所以这里钉的是**可观测**的那一半：args 不许被当成 detail 转发。
+  it('wechat-data/updated 转发结构化修订，供聊天链路跳过额外 RPC', () => {
     const t = fakeTarget()
-    dispatchWechatEvent({ name: 'wechat-data/updated', args: [{ unexpected: true }] }, t)
+    const detail = {
+      revision: 12,
+      updatedAt: 1700000000000,
+      shards: ['message_0.db:wal(0p/w1)'],
+      messageChanged: true,
+    }
+    dispatchWechatEvent({ name: 'wechat-data/updated', args: [detail] }, t)
     expect(t.events.length).toBe(1)
     expect(t.events[0]?.type).toBe('dsh-wechat-data-updated')
-    expect(t.events[0]?.detail, 'wechat-data/updated 把 args 泄漏成 detail 了').toBeNull()
+    expect(t.events[0]?.detail).toEqual(detail)
   })
 
   it('表里没有的事件一律忽略（后端会推只给主进程用的事件，渲染层不该乱转发）', () => {

@@ -45,15 +45,15 @@ export function ChatsChatlogView(props: ChatsChatlogViewProps): React.JSX.Elemen
   if (!frame) return null
   const records = frame.records
   return (
-    <div className={csscards.calOverlay} data-st-dialog="chats-chatlog" onClick={(e) => { if (e.target === e.currentTarget) onCloseAll() }} role="dialog" aria-modal="true">
+    <div className={cssshell.calOverlay} data-st-dialog="chats-chatlog" onClick={(e) => { if (e.target === e.currentTarget) onCloseAll() }} role="dialog" aria-modal="true">
       <div className={csscards.chatlogDialog}>
         <div className={cssshell.calHeader}>
-          <span className={csscards.calTitle}>{frame.title}</span>
+          <span className={cssshell.calTitle}>{frame.title}</span>
           <span className={cssshell.calHeaderActions}>
             {depth > 1 && (
-              <button type="button" className={csscards.calClose} title="返回上一级" onClick={onBack} aria-label="返回上一级">‹</button>
+              <button type="button" className={cssshell.calClose} title="返回上一级" onClick={onBack} aria-label="返回上一级">‹</button>
             )}
-            <button type="button" className={csscards.calClose} title="关闭" aria-label="关闭" onClick={onCloseAll}><IconCloseOutline16 size={15} /></button>
+            <button type="button" className={cssshell.calClose} title="关闭" aria-label="关闭" onClick={onCloseAll}><IconCloseOutline16 size={15} /></button>
           </span>
         </div>
         <div className={cssshell.chatlogBody}>

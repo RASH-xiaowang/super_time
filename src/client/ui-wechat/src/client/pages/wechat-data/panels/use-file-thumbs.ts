@@ -62,12 +62,17 @@ export function useFileThumbnails(options: FileThumbnailsOptions): FileThumbnail
   const prefetchQueue = useRef<string[]>([])
   const visibleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const alive = useRef(true)
+  /** 卸载/StrictMode 重建时递增：旧挂载发出的缩略图回包不得再写回。 */
+  const generation = useRef(0)
 
   /** 发一批并写回 LRU（失败留图标兜底；这些 key 已记 fetched，不重试）。 */
   const flush = useCallback((keys: string[]): void => {
     if (keys.length === 0) return
+    const myGeneration = generation.current
     for (const key of keys) queued.current.delete(key)
     void fetchFileThumbUrls(keys, widthRef.current).then((urls) => {
+      if (!alive.current || myGeneration !== generation.current) return
       const entries = Object.entries(urls)
       if (entries.length === 0) return
       let next = cache.current
@@ -115,10 +120,21 @@ export function useFileThumbnails(options: FileThumbnailsOptions): FileThumbnail
     }, PREFETCH_FLUSH_MS)
   }, [enqueue, flush])
 
-  // 卸载时清 timer（发出去的请求由 promise 自行结束，不会写回已卸载组件以外的东西）。
-  useEffect(() => () => {
-    if (visibleTimer.current !== null) clearTimeout(visibleTimer.current)
-    if (prefetchTimer.current !== null) clearTimeout(prefetchTimer.current)
+  // 卸载时同时撤销未发出的批次和在飞回包的写入资格，并释放已解码的 data URL。
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      generation.current += 1
+      if (visibleTimer.current !== null) clearTimeout(visibleTimer.current)
+      if (prefetchTimer.current !== null) clearTimeout(prefetchTimer.current)
+      visibleTimer.current = null
+      prefetchTimer.current = null
+      visibleQueue.current = []
+      prefetchQueue.current = []
+      queued.current.clear()
+      cache.current = emptyThumbCache()
+    }
   }, [])
 
   return { thumbs, request, prefetch }

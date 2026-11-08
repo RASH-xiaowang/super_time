@@ -120,6 +120,8 @@ export function LicenseSection(): React.JSX.Element {
   const expires = st?.payload?.expiresAt
     ? new Date(st.payload.expiresAt).toLocaleDateString('zh-CN')
     : st?.state === 'licensed' ? '永久' : '—'
+  const featureNames = (st?.payload?.features ?? [])
+    .map((feature) => st?.featureLabels?.[feature] ?? feature)
 
   // 浏览器态整节换成降级卡（hooks 之后判定，hook 数量恒定）。
   const blocked = desktopOnlyGate('license')
@@ -169,7 +171,7 @@ export function LicenseSection(): React.JSX.Element {
         <div className={css.row}>
           <span className={css.rowName}>开放功能</span>
           <span className={css.rowMeta}>
-            {st?.licensed ? (st.payload?.features ?? []).join(', ') || '—' : '—'}
+            {st?.licensed ? featureNames.join('、') || '—' : '—'}
           </span>
         </div>
         {st?.reason && !st.licensed ? (

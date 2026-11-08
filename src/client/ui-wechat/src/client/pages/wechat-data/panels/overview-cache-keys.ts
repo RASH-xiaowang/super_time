@@ -6,6 +6,6 @@ import { OVERVIEW_CACHE_PREFIX } from '../cache.ts'
  */
 export const CACHE_BASE = OVERVIEW_CACHE_PREFIX + 'base-v1'
 export const CACHE_INSIGHTS = OVERVIEW_CACHE_PREFIX + 'insights-v1'
-export const CACHE_LEDGER = OVERVIEW_CACHE_PREFIX + 'ledger-v1'
+export const CACHE_LEDGER = OVERVIEW_CACHE_PREFIX + 'ledger-v2'
 export const CACHE_STOR = OVERVIEW_CACHE_PREFIX + 'storage-v1'
 export const CACHE_TIME = OVERVIEW_CACHE_PREFIX + 'last-updated-v1'

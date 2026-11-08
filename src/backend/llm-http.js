@@ -1,5 +1,8 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const { version: APP_VERSION } = require('../../package.json');
+
 /**
  * LLM 出网传输的唯一实现源。
  *
@@ -8,6 +11,7 @@
  * 翻译，导致重试、超时和错误形状逐渐漂移；这里只保留：
  *   - 地址归一化与主机卫生（拒绝非 http(s)、URL 凭据、query/hash）
  *   - 统一的 JSON 请求头与 Bearer 凭据
+ *   - 厂商级协议差异（例如 OpenCode Go 的模型列表路径与会话请求头）
  *   - 唯一的 `fetchWithRetry` 调用点
  *
  * 重试策略仍由各调用方显式传 `maxAttempts`：内容型 LLM 请求沿用 M7 的三次有界重试，
@@ -90,6 +94,69 @@ function parseLlmBaseUrl(input) {
   };
 }
 
+/** OpenCode 官方域名（含未来可能出现的子域）。 */
+function isOpenCodeHost(host) {
+  const value = String(host || '').toLowerCase();
+  return value === 'opencode.ai' || value.endsWith('.opencode.ai');
+}
+
+/**
+ * OpenCode 的模型列表路径与聊天路径不在同一个前缀下：
+ *   chat  base: https://opencode.ai/inference/go/openai/v1
+ *   model list: https://opencode.ai/inference/go/v1/models
+ *
+ * 通用推理端点同理：`/inference/openai/v1` → `/inference/v1/models`。
+ * 其它厂商继续使用统一的 `{base}/models`。
+ *
+ * @param {unknown} input - 用户配置的 LLM base URL（也容忍完整 chat/models 端点）。
+ * @returns {string} 模型列表接口地址。
+ */
+function llmModelListUrl(input) {
+  const parsed = parseLlmBaseUrl(input);
+  const url = new URL(parsed.base);
+  if (isOpenCodeHost(url.hostname)) {
+    const path = url.pathname.replace(/\/+$/, '');
+    const withoutEndpoint = path.replace(/\/(?:chat\/completions|models)$/i, '');
+    const match = /^(.*)\/openai\/v1$/i.exec(withoutEndpoint);
+    if (match) {
+      url.pathname = `${match[1]}/v1/models`;
+      return url.toString().replace(/\/+$/, '');
+    }
+  }
+  return joinLlmEndpoint(parsed.base, '/models');
+}
+
+/**
+ * OpenCode 要求第三方客户端主动标识自己，并为请求携带稳定的会话 ID。
+ * 这里把调用方的会话种子散列成不泄露账号/联系人原值的稳定标识。
+ */
+function stableOpenCodeSessionId(seed) {
+  const value = String(seed ?? '').trim() || 'supertime:app';
+  return `supertime-${crypto.createHash('sha256').update(value).digest('hex').slice(0, 32)}`;
+}
+
+/**
+ * 按目标地址补充厂商协议要求的请求头。当前只有 OpenCode 需要特殊处理；
+ * 其它 OpenAI 兼容厂商返回空对象，不改变既有请求。
+ *
+ * @param {unknown} targetUrl - 完整请求地址或 base URL。
+ * @param {{ sessionId?: unknown }} [options] - 稳定的会话种子。
+ * @returns {Record<string, string>} 需要合并进请求的厂商头。
+ */
+function llmVendorHeaders(targetUrl, options = {}) {
+  let host = '';
+  try {
+    host = new URL(String(targetUrl)).hostname;
+  } catch {
+    return {};
+  }
+  if (!isOpenCodeHost(host)) return {};
+  return {
+    'user-agent': `SuperTime/${APP_VERSION}`,
+    'x-opencode-session': stableOpenCodeSessionId(options.sessionId),
+  };
+}
+
 /**
  * 组装 LLM 请求头。apiKey 为空时绝不写 Authorization，避免把空凭据送出去。
  *
@@ -111,13 +178,16 @@ function headersFor(apiKey = '', extra = {}) {
  * 发一次 LLM HTTP 请求。
  *
  * @param {string} url - 已拼好的目标地址。
- * @param {object} [options] - method/apiKey/headers/body/timeoutMs/maxAttempts/signal
+ * @param {object} [options] - method/apiKey/headers/body/sessionId/timeoutMs/maxAttempts/signal
  *   /onRetry/sleep/random/fetchImpl。
  * @returns {Promise<Response>} fetch 响应；非 2xx 由调用方自己决定如何解释。
  */
 async function llmRequest(url, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
-  const headers = headersFor(options.apiKey, options.headers || {});
+  const headers = headersFor(options.apiKey, {
+    ...llmVendorHeaders(url, { sessionId: options.sessionId }),
+    ...(options.headers || {}),
+  });
   const init = {
     method,
     headers,
@@ -197,6 +267,8 @@ module.exports = {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_TIMEOUT_MS,
   parseLlmBaseUrl,
+  llmModelListUrl,
+  llmVendorHeaders,
   joinLlmEndpoint,
   headersFor,
   llmRequest,

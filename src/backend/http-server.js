@@ -8,11 +8,11 @@
  * 它不是「另一个后端」：所有调用最终都走 `call-gates.js` 的同一道闸门序列
  * （后端就绪等待 → 调试豁免 → 许可证授权），再进同一个单线程 worker。
  *
- * 所以手机上能看到什么，完全由两件事决定：**令牌**（是不是主人给的）与
- * **方法白名单**（`http-remote-policy.js` 的 `REMOTE_SAFE_METHODS`）。
+ * 所以手机上能看到什么，由**令牌**（是不是主人给的）与**会话权限标记**决定：
+ * 非 fullAccess 会话走 `http-remote-policy.js` 的方法白名单；fullAccess 会话与桌面同权。
  *
- * 例外：标题栏「打开网页」交接码换来的会话带 `fullAccess`，与桌面端同权限
- * （全部方法 + `/api/native/*`）；普通手机配对码仍严格走白名单。
+ * 当前标题栏「打开网页」交接码与设置页局域网扫码都会签发 `fullAccess` 会话
+ * （全部方法 + `/api/native/*`）；长期 `api_token` 登录得到的会话按白名单收口。
  *
  * ## 默认关闭，且需要两个条件同时成立
  *
@@ -41,7 +41,6 @@
  */
 const fs = require('node:fs');
 const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
 const {
   SESSION_COOKIE,
@@ -54,281 +53,36 @@ const {
 const { createCallQueue, HEAVY_PRIORITY } = require('./http-queue.js');
 const { downgradeHeavyByArgs, shouldBypassCallQueue } = require('./call-priority.js');
 const { NATIVE_CAPABILITIES, REMOTE_DENIED_CODE, isRemoteHeavy, isRemoteSafe } = require('./http-remote-policy.js');
-const { MIME_BY_EXT, resolveDecodedFile } = require('./media-protocol.js');
+const { connectionCancelPlanFor } = require('./wechat-cancel.js');
+const { MIME_BY_EXT, ensureThumb, parseThumbWidth, resolveDecodedFile } = require('./media-protocol.js');
 const { RPA_MEDIA_PATH_PREFIX, createRpaMediaHandler } = require('./rpa-media.js');
 const { MESSAGE_WEBHOOK_PATH_PREFIX, createMessageWebhookHandler } = require('./message-webhook.js');
 const { resolveStaticFile, sendFile } = require('./http-static.js');
+const { allowBrowserRequest } = require('./http-request-guard.js');
+const { writeFileAtomic } = require('./atomic-json.js');
 
-/** 默认端口（配置键 `api_port` 的缺省值，与 `config/wechat-config.ts` 同口径）。 */
-const DEFAULT_PORT = 5032;
+const {
+  DEFAULT_PORT,
+  MAX_BODY_BYTES,
+  MESSAGE_WEBHOOK_BODY_BYTES,
+  REQUEST_TIMEOUT_MS,
+  ADDRESS_WATCH_MS,
+  lanAddresses,
+  readRemoteAccessConfig,
+  isHostAllowed,
+  sendJson,
+  readBody,
+  createAuthLimiter,
+} = require('./http-network-config.js');
 
 /** 端口被占用时往后试多少个（5032…5042）。 */
 const PORT_ATTEMPTS = 11;
 
+/** 无凭据的运行期监听快照；后端 worker 用它生成可达的 Webhook / 媒体直链。 */
+const REMOTE_ACCESS_RUNTIME_FILE = 'http-runtime.json';
+
 /** SSE 心跳间隔：比常见代理/移动网络的空闲断开阈值短，让连接不被中间设备掐掉。 */
 const SSE_HEARTBEAT_MS = 25_000;
-
-/** 请求体上限：调用参数是 JSON（方法名 + 参数），4MB 已经很宽；图片是**返回**方向，不受此限。 */
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
-
-/**
- * 接收完整请求的硬时限。`server.timeout` 必须覆盖 10 分钟档的长任务响应，所以不能拿它
- * 防慢连接；`requestTimeout` 只管「请求头 + 最多 4MB body 必须在这段时间内收完」，
- * 与响应耗时无关，30 秒足够且能把只发 header 后慢慢滴 body 的连接挡在门外。
- */
-const REQUEST_TIMEOUT_MS = 30_000;
-
-/** 令牌试错的限速窗口与上限：令牌有 192 位、猜不出来，限速只是顺手挡掉脚本乱撞。 */
-const AUTH_WINDOW_MS = 60_000;
-const AUTH_MAX_FAILURES = 8;
-
-/** 网卡地址变化的复查间隔：DHCP 换址后自动重绑，否则手机会静默连不上。 */
-const ADDRESS_WATCH_MS = 60_000;
-
-/**
- * 明显是虚拟/隧道/回环型网卡的名字特征。
- *
- * 名单只做「排序与默认选择」，不把地址从 `lanAddresses()` 里删掉：状态页仍要完整列出
- * 候选，让用户知道机器上还有哪些地址。真正的默认绑定只取排序后的第一名。
- */
-const VIRTUAL_IFACE_HINTS = [
-  /vethernet/i,
-  /vmware/i,
-  /virtualbox/i,
-  /hyper-v/i,
-  /docker/i,
-  /wsl/i,
-  /zerotier/i,
-  /tailscale/i,
-  /wireguard/i,
-  /openvpn/i,
-  /(^|[^a-z])vpn($|[^a-z])/i,
-  /teredo/i,
-  /isatap/i,
-  /loopback/i,
-  /bluetooth/i,
-];
-
-/**
- * 给一个 IPv4 网卡地址打分：分数越高越适合当远程访问的默认地址。
- *
- * 只看本机可静态判断的特征，不猜测路由表；这里的目标是把「VMware/Hyper-V 恰好排在
- * Wi-Fi 前面」这类确定性事故消掉。
- */
-function lanAddressScore(iface, addr) {
-  let score = 0
-  if (VIRTUAL_IFACE_HINTS.some((re) => re.test(iface))) score -= 1000
-  if (typeof addr.mac === 'string' && addr.mac !== '' && addr.mac !== '00:00:00:00:00:00') score += 20
-  if (/(^|[^a-z])(wi-?fi|wlan|wireless)([^a-z]|$)/i.test(iface)) score += 30
-  if (/ethernet|以太网|本地连接/i.test(iface)) score += 20
-  if (/^169\.254\./.test(addr.address)) score -= 500
-  if (addr.address === '0.0.0.0') score -= 900
-  return score
-}
-
-/**
- * 本机可用于局域网访问的 IPv4 地址。
- *
- * 只取**非 internal 的 IPv4**：IPv6 在手机与路由器的组合下经常不可达（而报错很难懂），
- * internal 是回环。虚拟网卡（VMware / Hyper-V / WSL）也是非 internal 的，会一并列出 ——
- * 绑定用排序后的第一个，其余经 capabilities 报出，界面上可以看见「绑的是哪一个」。
- * 排序把物理 Wi-Fi/以太网排在虚拟网卡和 APIPA 前面，避免某台机器的虚拟适配器
- * 恰好成为默认监听地址，把服务暴露到手机根本不在的那个网络里。
- * @returns 形如 `[{ address, family, iface }]` 的数组。
- */
-function lanAddresses() {
-  const out = [];
-  const ifaces = os.networkInterfaces();
-  for (const [iface, addrs] of Object.entries(ifaces)) {
-    for (const a of addrs || []) {
-      if (a.family !== 'IPv4' || a.internal) continue;
-      out.push({ address: a.address, family: 'IPv4', iface, score: lanAddressScore(iface, a) });
-    }
-  }
-  out.sort((a, b) => b.score - a.score);
-  return out;
-}
-
-/** 读一个 JSON 文件；读不到 / 解析失败一律返回 `{}`（缺配置不等于报错）。 */
-function readJsonSafe(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-/**
- * 读远程访问的三个配置项。
- *
- * 直接读文件而不经后端：① 这段逻辑要在**后端就绪之前**就能判断「该不该监听」；
- * ② 读是安全的（写才需要走后端的原子写 + 备份语义，见 `saveWechatConfig`）。
- * 主进程已有直接读 `config.json` 的先例（`main.js` 的 `migrateSecretsAndTightenAcl`）。
- *
- * `api_token` 住在 **`secrets.json`** 而不是 `config.json` —— 它在后端的 `SECRET_FIELDS`
- * 里，保存时会被自动分流过去并收紧 ACL。
- *
- * 多返回一个 `mediaBaseUrl`（`config.json` 的 `rpa_media_base_url`）：RPA 图片直链要发给
- * **外部**机器人，局域网地址对云端 RPA 不可达，所以允许用户填一个反代/公网入口；
- * 它是 Host 例外名单里唯一一个非本机地址（见 `rpa-media.js` 文件头）。
- * @param {string} dataRoot - 数据根（`wechatBoot.info.root`）。
- * @returns `{ enabled, port, token, mediaBaseUrl }`。
- */
-function readRemoteAccessConfig(dataRoot) {
-  if (typeof dataRoot !== 'string' || dataRoot === '') {
-    return { enabled: false, port: DEFAULT_PORT, token: '', mediaBaseUrl: '' };
-  }
-  const cfg = readJsonSafe(path.join(dataRoot, 'config.json'));
-  const secrets = readJsonSafe(path.join(dataRoot, 'secrets.json'));
-  const port = Number(cfg.api_port);
-  return {
-    enabled: cfg.api_enabled === true,
-    port: Number.isFinite(port) && port > 0 && port < 65536 ? Math.floor(port) : DEFAULT_PORT,
-    token: typeof secrets.api_token === 'string' ? secrets.api_token : '',
-    mediaBaseUrl: typeof cfg.rpa_media_base_url === 'string' ? cfg.rpa_media_base_url : '',
-  };
-}
-
-/**
- * Host 头只接受当前监听地址，挡住 DNS rebinding 这类「浏览器从恶意域名连回本机」的打法。
- *
- * 为什么不是宽松匹配：这个服务只绑定一个具体局域网 IPv4（`startNow()` 从不绑 `0.0.0.0`），
- * 手机与页面地址都来自设置页上那个 IP。任何域名形状的 Host 都说明请求不是从正常入口来的
- * （DNS rebinding 正是靠 `attacker.example → 192.168.x.x` 把浏览器里的跨域脚本带到内网）。
- * 端口如果给出了就必须等于实际监听端口；省略端口仍允许，因为 HTTP 缺省端口语义与主机名
- * 校验是两件独立的事，这里真正要钉住的是「主机名必须等于当前监听 IP」。
- *
- * 回环地址额外接受 `localhost`：开发态与本地测试会用 `http://localhost:<port>`，且该别名
- * 不改变「绑定在回环上」这一暴露面。局域网 IP 不接受任何主机名别名。
- *
- * `extraHosts` 是**额外**放行的主机名（当前只有 RPA 图片直链用得上，见 `rpa-media.js`
- * 的「Host 例外名单」）：只比对主机名、**不比端口** —— 反向代理侧的端口通常是 80/443，
- * 与监听端口无关。名单里只有本机自己的网卡地址与用户显式配置的那一个域名，
- * 攻击者可控的域名仍然过不了（DNS rebinding 的判据没变）。
- *
- * @param {string | undefined} authority - 请求的 `Host` 头。
- * @param {string} expectedAddress - 当前监听地址。
- * @param {number} expectedPort - 当前监听端口。
- * @param {string[]} [extraHosts] - 额外允许的主机名（小写，忽略端口）。
- * @returns {boolean} 允许该 Host 时为 true。
- */
-function isHostAllowed(authority, expectedAddress, expectedPort, extraHosts = []) {
-  if (typeof authority !== 'string') return false;
-  const raw = authority.trim();
-  if (raw === '' || /[\s,;]/.test(raw)) return false;
-
-  let host = '';
-  let portText = '';
-  if (raw.startsWith('[')) {
-    const end = raw.indexOf(']');
-    if (end < 0) return false;
-    host = raw.slice(1, end);
-    const rest = raw.slice(end + 1);
-    if (rest !== '' && !/^:\d+$/.test(rest)) return false;
-    portText = rest.slice(1);
-  } else {
-    const colon = raw.lastIndexOf(':');
-    const tail = colon >= 0 ? raw.slice(colon + 1) : '';
-    if (tail !== '') {
-      if (!/^\d+$/.test(tail)) return false;
-      host = raw.slice(0, colon);
-      portText = tail;
-    } else {
-      host = raw;
-    }
-  }
-
-  if (host === '') return false;
-  const expected = String(expectedAddress || '').toLowerCase();
-  const actual = host.toLowerCase();
-  if (extraHosts.includes(actual)) return true;
-  const isLoopback = expected === '127.0.0.1' || expected === '::1';
-  if (actual !== expected && !(isLoopback && actual === 'localhost')) return false;
-  if (portText === '') return true;
-  return Number(portText) === expectedPort;
-}
-
-/** 发一个 JSON 响应。 */
-function sendJson(res, status, payload) {
-  const body = Buffer.from(JSON.stringify(payload), 'utf8');
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': String(body.length),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(body);
-}
-
-/**
- * 读请求体（带上限）。
- *
- * 超限**立刻销毁连接**而不是读完再拒：读满一个几 GB 的 body 本身就是攻击面。
- * @param {http.IncomingMessage} req
- * @returns JSON 解析结果；失败时 reject（带 `status`）。
- */
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > MAX_BODY_BYTES) {
-        const err = new Error('请求体过大');
-        err.status = 413;
-        reject(err);
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      try {
-        const buffer = Buffer.concat(chunks);
-        resolve(buffer.length === 0 ? {} : JSON.parse(buffer.toString('utf8')));
-      } catch {
-        const err = new Error('请求体不是合法 JSON');
-        err.status = 400;
-        reject(err);
-      }
-    });
-    req.on('error', (e) => reject(e));
-  });
-}
-
-/**
- * 令牌试错的滑动窗口限速（按来源 IP）。
- * @returns `{ ok(ip), fail(ip), reset() }`。
- */
-function createAuthLimiter() {
-  /** @type {Map<string, number[]>} ip → 失败时刻列表 */
-  const hits = new Map();
-  return {
-    /** 这个 IP 现在还能不能试。 */
-    ok(ip) {
-      const list = hits.get(ip);
-      if (!list) return true;
-      const cutoff = Date.now() - AUTH_WINDOW_MS;
-      const recent = list.filter((t) => t > cutoff);
-      if (recent.length === 0) hits.delete(ip);
-      else hits.set(ip, recent);
-      return recent.length < AUTH_MAX_FAILURES;
-    },
-    /** 记一次失败。 */
-    fail(ip) {
-      const list = hits.get(ip) || [];
-      list.push(Date.now());
-      hits.set(ip, list);
-    },
-    succeed(ip) {
-      hits.delete(ip);
-    },
-    reset() {
-      hits.clear();
-    },
-  };
-}
-
 /**
  * 运行期共享状态：路由、生命周期与组合根之间只经这一个对象通信，
  * 不再把几十个闭包变量全部塞进 `createRemoteAccessServer`。
@@ -389,6 +143,7 @@ function writeSse(sseClients, res, payload) {
 /** 令牌换会话的 `/api/auth` 处理器。 */
 function createAuthHandler(deps, ctx) {
   async function handleAuth(req, res) {
+    if (!allowBrowserRequest(req, res, sendJson, '令牌交换')) return;
     const ip = req.socket.remoteAddress || '';
     if (!ctx.limiter.ok(ip)) {
       sendJson(res, 429, { ok: false, error: { message: '令牌试错次数过多，请一分钟后再试', code: 'TOO_MANY_ATTEMPTS' } });
@@ -397,7 +152,7 @@ function createAuthHandler(deps, ctx) {
     const cfg = readRemoteAccessConfig(deps.getDataRoot());
     let body;
     try {
-      body = await readBody(req);
+      body = await readBody(req, { requireJson: true, requireObject: true });
     } catch (e) {
       sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
       return;
@@ -415,7 +170,8 @@ function createAuthHandler(deps, ctx) {
     }
     // 只清当前 IP 的失败窗口。任意一次登录成功都不该抹掉其他来源 IP 的限速记录。
     ctx.limiter.succeed(ip);
-    // 交接码（「打开网页」）换来的会话是**桌面同权限**；普通手机配对码不是。
+    // fullAccess 配对码（当前「打开网页」与设置页扫码都会签发）换来的会话是桌面同权限；
+    // 长期 api_token 登录得到的会话不是。
     // 这个标记只存在于内存里的会话表：重启、轮换或点卡片返回都会随 stop() 一起清空。
     const fullAccess = pairing.fullAccess === true;
     const session = ctx.sessions.create({ fullAccess });
@@ -448,19 +204,21 @@ function createCapabilitiesHandler(deps, ctx) {
 }
 
 /**
- * 桌面交接会话的原生能力代理（`POST /api/native/<action>`）。
+ * fullAccess 会话的原生能力代理（`POST /api/native/<action>`）。
  *
  * 只有 **fullAccess 会话**能进：目录/文件对话框、截图、许可证、诊断、更新、远程访问设置
- * 都是「这台电脑上的动作」。普通手机配对码仍然拿不到这些（403），所以交接结束后
- * 浏览器里残留的 Cookie 再也调不动它们。
+ * 都是「这台电脑上的动作」。当前设置页扫码与「打开网页」交接都会签发 fullAccess，
+ * 二者与桌面同权；只有长期 api_token 登录的非 fullAccess 会话会得到 403。停服/轮换
+ * 后内存会话失效，残留 Cookie 再也调不动这些动作。
  * @param {object} deps - `nativeCall` 由 main.js 注入。
  * @param {object} ctx - 服务上下文（会话表）。
  */
 function createNativeHandler(deps, ctx) {
   async function handleNative(req, res, action) {
+    if (!allowBrowserRequest(req, res, sendJson, '原生能力')) return;
     const cookie = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (!ctx.sessions.isFull(cookie)) {
-      sendJson(res, 403, { ok: false, error: { message: '该操作只对桌面交接会话开放', code: 'FULL_ACCESS_REQUIRED' } });
+      sendJson(res, 403, { ok: false, error: { message: '该操作需要 fullAccess 会话', code: 'FULL_ACCESS_REQUIRED' } });
       return;
     }
     if (typeof deps.nativeCall !== 'function') {
@@ -469,7 +227,7 @@ function createNativeHandler(deps, ctx) {
     }
     let body;
     try {
-      body = await readBody(req);
+      body = await readBody(req, { requireJson: true, requireObject: true });
     } catch (e) {
       sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
       return;
@@ -495,17 +253,21 @@ function createNativeHandler(deps, ctx) {
  * @returns {{handleMedia: Function}} 路由处理器。
  */
 function createMediaHandler(deps) {
-  function handleMedia(req, res, rel) {
+  function handleMedia(req, res, rel, thumbWidth = null) {
     const root = typeof deps.getDecodedRoot === 'function' ? String(deps.getDecodedRoot() ?? '') : '';
     const abs = resolveDecodedFile(root, rel);
     if (abs === null) {
       sendJson(res, 404, { ok: false, error: { message: '图片不存在', code: 'MEDIA_NOT_FOUND' } });
       return;
     }
-    const mime = MIME_BY_EXT[path.extname(abs).toLowerCase()] || 'application/octet-stream';
+    const thumb = thumbWidth === null ? null : ensureThumb(abs, thumbWidth);
+    const serve = thumb ?? abs;
+    const mime = thumb === null
+      ? MIME_BY_EXT[path.extname(abs).toLowerCase()] || 'application/octet-stream'
+      : 'image/jpeg';
     let stat;
     try {
-      stat = fs.statSync(abs);
+      stat = fs.statSync(serve);
     } catch {
       sendJson(res, 404, { ok: false, error: { message: '图片不存在', code: 'MEDIA_NOT_FOUND' } });
       return;
@@ -513,22 +275,117 @@ function createMediaHandler(deps) {
     res.writeHead(200, {
       'Content-Type': mime,
       'Content-Length': stat.size,
-      'Cache-Control': 'private, max-age=60',
+      'Cache-Control': thumb === null ? 'private, max-age=60' : 'private, max-age=604800, immutable',
       'X-Content-Type-Options': 'nosniff',
     });
-    const stream = fs.createReadStream(abs);
-    stream.on('error', () => { try { res.destroy(); } catch { /* 忽略 */ } });
+    const stream = fs.createReadStream(serve);
+    const destroyStream = () => {
+      if (!stream.destroyed) stream.destroy();
+    };
+    stream.once('error', () => { try { res.destroy(); } catch { /* 忽略 */ } });
+    // res 的 close 在正常完成和客户端断连时都会触发；正常完成时流的 close 已经
+    // 在附近，destroy 是幂等的。关键是客户端提前断开时不能继续读完整张大图。
+    res.once('close', destroyStream);
+    res.once('error', destroyStream);
     stream.pipe(res);
   }
   return { handleMedia };
 }
 
+/** 断连取消首次重放的间隔；后端 job 通常在这之前完成注册。 */
+const DISCONNECT_CANCEL_RETRY_MS = 25;
+/** 断连取消退避上限，避免后端启动/排队较久时高频打扰 worker。 */
+const DISCONNECT_CANCEL_RETRY_MAX_MS = 1_000;
+
+/** 只把明确的后端成功信封当作“取消已命中”，未知形状一律继续重放。 */
+function cancellationConfirmed(result) {
+  return Boolean(result
+    && typeof result === 'object'
+    && result.ok === true
+    && result.value
+    && typeof result.value === 'object'
+    && result.value.ok === true);
+}
+
+/**
+ * 管理一次 HTTP 调用的断连取消。
+ *
+ * 首次取消可能早于 worker 里的 `searchSignal(jobId)` 注册，因而返回 `ok:false`。
+ * 排队阶段只需记住断连并禁止出队；一旦 `gatedCall` 已启动，就按退避重放取消，
+ * 直到后端明确确认、原调用结束或客户端并未断连。重放始终复用同一个 jobId，且
+ * 同一时刻只允许一个取消 RPC 在飞，成功确认后立即停止。
+ */
+function createDisconnectCancellation(deps, ctx, cancelPlan) {
+  let stopped = false;
+  let disconnected = false;
+  let backendStarted = false;
+  let confirmed = false;
+  let attemptInFlight = false;
+  let retryTimer = null;
+  let retryDelay = DISCONNECT_CANCEL_RETRY_MS;
+
+  const clearRetry = () => {
+    if (retryTimer === null) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+
+  const scheduleRetry = () => {
+    if (stopped || !disconnected || !backendStarted || confirmed || !cancelPlan.ok || retryTimer !== null) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void attemptCancel();
+    }, retryDelay);
+    if (typeof retryTimer.unref === 'function') retryTimer.unref();
+    retryDelay = Math.min(retryDelay * 2, DISCONNECT_CANCEL_RETRY_MAX_MS);
+  };
+
+  const attemptCancel = async () => {
+    if (stopped || !disconnected || confirmed || !cancelPlan.ok || attemptInFlight) return;
+    attemptInFlight = true;
+    try {
+      const result = await deps.gatedCall(cancelPlan.method, [{ jobId: cancelPlan.jobId }]);
+      if (cancellationConfirmed(result)) {
+        confirmed = true;
+        clearRetry();
+        return;
+      }
+      scheduleRetry();
+    } catch (e) {
+      if (!stopped) ctx.warn('[remote-access] 断连取消失败: %s', e?.message ?? e);
+      scheduleRetry();
+    } finally {
+      attemptInFlight = false;
+    }
+  };
+
+  return {
+    disconnect() {
+      if (stopped || disconnected) return;
+      disconnected = true;
+      if (cancelPlan.ok) void attemptCancel();
+    },
+    beforeBackendCall() {
+      backendStarted = true;
+      if (disconnected) void attemptCancel();
+    },
+    stop() {
+      stopped = true;
+      clearRetry();
+    },
+    isDisconnected() {
+      return disconnected;
+    },
+  };
+}
+
 /** 白名单 → 排队 → 过闸 → 原样回信封的 `/api/wechat/call` 处理器。 */
 function createCallHandler(deps, ctx) {
   async function handleCall(req, res) {
+    if (!allowBrowserRequest(req, res, sendJson, '远程方法调用')) return;
     let body;
     try {
-      body = await readBody(req);
+      body = await readBody(req, { requireJson: true, requireObject: true });
     } catch (e) {
       sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
       return;
@@ -551,6 +408,26 @@ function createCallHandler(deps, ctx) {
       });
       return;
     }
+    // HTTP 客户端断开只代表「没人再等这个响应」，worker 里的搜索不会因此自动停。
+    // 首次取消可能早于后端 job 注册，因此由 cancelGuard 在原调用仍存活时重放。
+    const cancelPlan = connectionCancelPlanFor(method, args);
+    let settled = false;
+    const cancelGuard = createDisconnectCancellation(deps, ctx, cancelPlan);
+    const cancelOnDisconnect = () => {
+      if (settled) return;
+      cancelGuard.disconnect();
+    };
+    const onResponseClose = () => {
+      if (!res.writableEnded) cancelOnDisconnect();
+    };
+    const detachDisconnect = () => {
+      settled = true;
+      cancelGuard.stop();
+      req.off('aborted', cancelOnDisconnect);
+      res.off('close', onResponseClose);
+    };
+    req.once('aborted', cancelOnDisconnect);
+    res.once('close', onResponseClose);
     try {
       // `args` 一并传给队列：朋友圈取图有网时是纯网络 IO，不该占重活名额
       // （判据见 `call-priority.js` 的 `downgradeHeavyByArgs`）。
@@ -564,16 +441,31 @@ function createCallHandler(deps, ctx) {
       // 许可/后端就绪闸仍由 deps.gatedCall 走完整流程（见 call-priority.js 的
       // QUEUE_BYPASS_METHODS）。先定义排队执行体，保证「queue.run 包住真实调用」的
       // 结构仍是可静态核对的（http-server.wiring.spec 会查顺序）。
-      const viaQueue = () => ctx.queue.run(() => deps.gatedCall(method, args), meta);
+      const runBackend = () => {
+        // 断连可能发生在排队期间。此时 cancelSearch 先到、搜索 job 尚未建立，
+        // 取消只能返回 false；若仍出队执行，搜索会无主跑完。出队后必须再次检查。
+        if (cancelGuard.isDisconnected()) {
+          const error = new Error('客户端已断开，取消排队调用');
+          error.code = 'CLIENT_DISCONNECTED';
+          throw error;
+        }
+        cancelGuard.beforeBackendCall();
+        return deps.gatedCall(method, args);
+      };
+      const viaQueue = () => ctx.queue.run(runBackend, meta);
       const result = shouldBypassCallQueue(method)
-        ? await deps.gatedCall(method, args)
+        ? await runBackend()
         : await viaQueue();
-      sendJson(res, 200, result);
+      detachDisconnect();
+      if (!cancelGuard.isDisconnected() && !res.destroyed && !res.writableEnded) sendJson(res, 200, result);
     } catch (e) {
-      sendJson(res, 200, {
-        ok: false,
-        error: { message: e?.message ?? String(e), code: e?.code || 'REMOTE_CALL_FAILED' },
-      });
+      detachDisconnect();
+      if (!cancelGuard.isDisconnected() && !res.destroyed && !res.writableEnded) {
+        sendJson(res, 200, {
+          ok: false,
+          error: { message: e?.message ?? String(e), code: e?.code || 'REMOTE_CALL_FAILED' },
+        });
+      }
     }
   }
   return { handleCall };
@@ -587,6 +479,8 @@ function createEventsHandler(ctx) {
       'Cache-Control': 'no-store',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
     });
     res.write('retry: 3000\n\n');
     ctx.sseClients.add(res);
@@ -663,9 +557,13 @@ function createRequestRouter(deps, ctx, handlers) {
         }
         let body;
         try {
-          body = await readBody(req);
+          body = await readBody(req, {
+            maxBytes: MESSAGE_WEBHOOK_BODY_BYTES,
+            requireJson: true,
+            requireObject: true,
+          });
         } catch (e) {
-          sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: 'BAD_REQUEST' } });
+          sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: e.code || 'BAD_REQUEST' } });
           return;
         }
         await handlers.handleMessageWebhookPost(res, token, body);
@@ -677,7 +575,11 @@ function createRequestRouter(deps, ctx, handlers) {
         return;
       }
       if (urlPath === '/api/capabilities' && req.method === 'GET') { handlers.handleCapabilities(req, res); return; }
-      if (urlPath.startsWith('/api/media/decoded/') && req.method === 'GET') { handlers.handleMedia(req, res, urlPath.slice('/api/media/decoded/'.length)); return; }
+      if (urlPath.startsWith('/api/media/decoded/') && req.method === 'GET') {
+        const thumbWidth = parseThumbWidth('http://local' + String(req.url ?? ''));
+        handlers.handleMedia(req, res, urlPath.slice('/api/media/decoded/'.length), thumbWidth);
+        return;
+      }
       if (urlPath.startsWith('/api/native/') && req.method === 'POST') { await handlers.handleNative(req, res, urlPath.slice('/api/native/'.length)); return; }
       if (urlPath === '/api/wechat/call' && req.method === 'POST') { await handlers.handleCall(req, res); return; }
       if (urlPath === '/api/wechat/events' && req.method === 'GET') { handlers.handleEvents(req, res); return; }
@@ -694,8 +596,7 @@ function createRequestRouter(deps, ctx, handlers) {
       sendJson(res, 404, { ok: false, error: { message: '没有这个资源', code: 'NOT_FOUND' } });
       return;
     }
-    if (req.method === 'HEAD') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(); return; }
-    sendFile(res, found.file, target);
+    sendFile(res, found.file, target, req.method === 'HEAD');
   }
 
   /** 把一个后端事件推给所有 SSE 客户端。 */
@@ -726,6 +627,30 @@ function snapshotRemoteState(deps, ctx) {
 
 /** 监听启停、配置对齐、DHCP 换址重绑的生命周期。 */
 function createHttpLifecycle(deps, ctx, onRequest) {
+  /** 原子写无凭据监听快照；写失败只降级展示，不影响监听本身。 */
+  function persistRuntimeState() {
+    const dataRoot = String(deps.getDataRoot() || '');
+    if (dataRoot === '') return;
+    const target = path.join(dataRoot, REMOTE_ACCESS_RUNTIME_FILE);
+    const state = ctx.state;
+    const snapshot = {
+      version: 1,
+      pid: process.pid,
+      running: state.running === true,
+      address: state.running === true ? state.address : '',
+      port: state.running === true ? state.port : 0,
+      preferredPort: state.preferredPort,
+      startedAt: state.running === true ? state.startedAt : 0,
+      updatedAt: Date.now(),
+    };
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      writeFileAtomic(target, JSON.stringify(snapshot) + '\n');
+    } catch (e) {
+      ctx.warn('[remote-access] 监听快照写入失败：%s', e?.message ?? e);
+    }
+  }
+
   /** 串行化所有「启 / 停 / 重绑 / 与配置对齐」操作。 */
   function enqueueLifecycle(task) {
     const run = ctx.lifecycleTail.then(task, task);
@@ -771,18 +696,21 @@ function createHttpLifecycle(deps, ctx, onRequest) {
     if (ctx.state.running) return getState();
     if (!cfg.enabled || cfg.token === '') {
       ctx.state = { ...ctx.state, running: false, enabled: cfg.enabled, hasToken: cfg.token !== '' };
+      persistRuntimeState();
       return getState();
     }
     const host = deps.bindHost || (lanAddresses()[0] || {}).address || '127.0.0.1';
     const port = await listenOn(host, cfg.port);
     if (port === 0) {
       ctx.warn('[remote-access] 端口 %d–%d 都不可用，未启动监听', cfg.port, cfg.port + PORT_ATTEMPTS - 1);
+      persistRuntimeState();
       return getState();
     }
     ctx.state = {
       running: true, port, address: host, preferredPort: cfg.port,
       enabled: true, hasToken: true, startedAt: Date.now(),
     };
+    persistRuntimeState();
     ctx.heartbeat = setInterval(() => {
       for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { name: 'remote-access/heartbeat', args: [] });
     }, SSE_HEARTBEAT_MS);
@@ -823,6 +751,7 @@ function createHttpLifecycle(deps, ctx, onRequest) {
         await stopNow();
       }
       ctx.state = { ...ctx.state, enabled: cfg.enabled, hasToken: cfg.token !== '' };
+      persistRuntimeState();
       return getState();
     }
     if (!ctx.state.running) return startNow();
@@ -855,6 +784,7 @@ function createHttpLifecycle(deps, ctx, onRequest) {
     const srv = ctx.server;
     ctx.server = null;
     ctx.state = { ...ctx.state, running: false, port: 0, address: '', startedAt: 0 };
+    persistRuntimeState();
     if (!srv) return getState();
     await new Promise((resolve) => {
       srv.close(() => resolve());
@@ -928,7 +858,9 @@ module.exports = {
   DEFAULT_PORT,
   PORT_ATTEMPTS,
   SSE_HEARTBEAT_MS,
+  REMOTE_ACCESS_RUNTIME_FILE,
   MAX_BODY_BYTES,
+  MESSAGE_WEBHOOK_BODY_BYTES,
   REQUEST_TIMEOUT_MS,
   lanAddresses,
   readRemoteAccessConfig,

@@ -275,6 +275,26 @@ describe('会话搜索：keyword 必须包含 summary', () => {
   })
 })
 
+describe('会话列表：公众号/服务号聚合占位会话', () => {
+  it('过滤无消息表的 holder，分页总数只统计真实会话', async () => {
+    const dec = makeRoot()
+    const d = db(dec, join('session', 'session.db'))
+    d.exec(`CREATE TABLE SessionTable (
+      username TEXT, summary BLOB, last_timestamp INTEGER, sort_timestamp INTEGER,
+      unread_count INTEGER, is_hidden INTEGER, last_msg_type INTEGER,
+      last_msg_sub_type INTEGER, last_msg_sender TEXT, last_sender_display_name TEXT, draft TEXT)`)
+    const ins = d.prepare(`INSERT INTO SessionTable VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    ins.run('brandsessionholder', Buffer.from('公众号入口', 'utf-8'), 300, 300, 0, 0, 49, 5, 'gh_a', '公众号A', '')
+    ins.run('brandservicesessionholder', Buffer.from('服务号入口', 'utf-8'), 200, 200, 0, 0, 49, 5, 'gh_b', '服务号B', '')
+    ins.run('gh_real', Buffer.from('真实消息', 'utf-8'), 100, 100, 0, 0, 1, 0, '', '', '')
+    d.close()
+
+    const page = await querySessions(dec, undefined, 1, 0)
+    expect(page.total).toBe(1)
+    expect(page.sessions.map(session => session.username)).toEqual(['gh_real'])
+  })
+})
+
 // ── ⑤ 记录：total 与 items 的一致性 ──────────────────────────────────────
 describe('记录：total 与 items 必须一致（不能再出现「有 total 却 0 行」）', () => {
   it('视频号：finder_live_id 是越界 int64 也必须读得出来', () => {

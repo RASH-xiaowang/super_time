@@ -35,7 +35,12 @@ const MEDIA_ENTRY_V = 2
  * 症状是每次进入都在重解。按字节算才与真实占用对上。
  */
 const MEDIA_MAX_BYTES = 512 * 1024 * 1024
+/** 持续运行时的裁剪节流：避免每写一张图就全库扫一遍。 */
+const MEDIA_TRIM_INTERVAL_MS = 30_000
+const MEDIA_TRIM_WRITE_BYTES = 32 * 1024 * 1024
 let mediaDb: Promise<IDBDatabase> | null = null
+let lastMediaTrimAt = 0
+let mediaBytesSinceTrim = 0
 
 export function openMediaDb(): Promise<IDBDatabase> {
   if (mediaDb) return mediaDb
@@ -54,7 +59,12 @@ export function openMediaDb(): Promise<IDBDatabase> {
       // 留着只能靠猜，猜错就是把一张渲染不了的图永久缓存下来。
       if (ev.oldVersion > 0 && ev.oldVersion < MEDIA_DB_VERSION) store.clear()
     }
-    req.onsuccess = () => { resolve(req.result); void trimMediaCache(req.result) }
+    req.onsuccess = () => {
+      lastMediaTrimAt = Date.now()
+      mediaBytesSinceTrim = 0
+      resolve(req.result)
+      void trimMediaCache(req.result)
+    }
     req.onerror = () => { mediaDb = null; reject(req.error ?? new Error('open media db failed')) }
   })
   return mediaDb
@@ -91,29 +101,36 @@ function entrySize(e: MediaEntry | undefined): number {
  */
 export async function trimMediaCache(db: IDBDatabase): Promise<void> {
   try {
-    await new Promise<void>((resolve) => {
+    const total = await new Promise<number>((resolve) => {
       const tx = db.transaction(MEDIA_STORE, 'readonly')
-      const store = tx.objectStore(MEDIA_STORE)
-      const keysReq = store.getAllKeys()
-      const valsReq = store.getAll()
-      let keys: IDBValidKey[] = []
-      let vals: MediaEntry[] = []
-      keysReq.onsuccess = () => { keys = keysReq.result }
-      valsReq.onsuccess = () => { vals = valsReq.result as MediaEntry[] }
-      tx.oncomplete = () => {
-        const rows = keys.map((key, i) => ({ key, at: vals[i]?.at ?? 0, size: entrySize(vals[i]) }))
-        let total = rows.reduce((n, r) => n + r.size, 0)
-        if (total <= MEDIA_MAX_BYTES || rows.length === 0) { resolve(); return }
-        rows.sort((a, b) => a.at - b.at)
-        const dtx = db.transaction(MEDIA_STORE, 'readwrite')
-        for (const r of rows) {
-          if (total <= MEDIA_MAX_BYTES) break
-          dtx.objectStore(MEDIA_STORE).delete(r.key)
-          total -= r.size
-        }
-        dtx.oncomplete = () => { resolve() }
-        dtx.onerror = () => { resolve() }
+      const index = tx.objectStore(MEDIA_STORE).index('by_at')
+      let sum = 0
+      const cursorReq = index.openCursor()
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result
+        if (!cursor) return
+        sum += entrySize(cursor.value as MediaEntry)
+        cursor.continue()
       }
+      // 游标逐条读取，峰值只保留当前记录，不再 getAll() 把整个 512MB 桶物化到 JS 堆。
+      tx.oncomplete = () => { resolve(sum) }
+      tx.onerror = () => { resolve(0) }
+    })
+    if (total <= MEDIA_MAX_BYTES) return
+
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(MEDIA_STORE, 'readwrite')
+      const index = tx.objectStore(MEDIA_STORE).index('by_at')
+      const cursorReq = index.openCursor()
+      let remaining = total
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result
+        if (!cursor || remaining <= MEDIA_MAX_BYTES) return
+        remaining -= entrySize(cursor.value as MediaEntry)
+        cursor.delete()
+        cursor.continue()
+      }
+      tx.oncomplete = () => { resolve() }
       tx.onerror = () => { resolve() }
     })
   } catch { /* best-effort */ }
@@ -190,6 +207,16 @@ export async function snsMediaCacheSet(key: string, url: string, thumb = false):
       tx.oncomplete = () => { resolve() }
       tx.onerror = () => { resolve() }
     })
+    // 打开库时只裁剪一次，持续运行会不断写入新图。按时间或写入量节流，
+    // 既不每次写入都全库扫描，也不会让缓存永久越过 512MB 预算。
+    mediaBytesSinceTrim += url.length
+    if (
+      mediaBytesSinceTrim >= MEDIA_TRIM_WRITE_BYTES
+      || Date.now() - lastMediaTrimAt >= MEDIA_TRIM_INTERVAL_MS
+    ) {
+      lastMediaTrimAt = Date.now()
+      mediaBytesSinceTrim = 0
+      await trimMediaCache(db)
+    }
   } catch { /* best-effort */ }
 }
-

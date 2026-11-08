@@ -269,6 +269,211 @@ describe('问答历史：记录与读取', () => {
     expect(serialized).not.toContain('snippet')
   })
 
+  it('完整运行轨迹往返：分段思考、两轮工具、回答整理与核对阶段都能恢复', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '轨迹往返',
+      reasoningSegments: [
+        { key: 'reasoning:tool:1', round: 1, phase: 'tool_selection', text: '先确认要查哪类消息', seq: 1 },
+        { key: 'reasoning:tool:2', round: 2, phase: 'tool_selection', text: '再补查上下文', seq: 2 },
+        { key: 'reasoning:synthesis', phase: 'synthesis', text: '把两轮结果合并成回答', seq: 3 },
+      ],
+      stages: [
+        { key: 'answer:intent', label: '理解问题', status: 'done' },
+        {
+          key: 'tool:search:1', label: 'search_messages', status: 'done', round: 1,
+          phase: 'completed', callId: 'call-1', toolName: 'search_messages',
+          argumentsSummary: '不应进入历史轨迹的参数', elapsedMs: 12, hits: 2,
+        },
+        {
+          key: 'tool:context:2', label: 'get_message_context', status: 'done', round: 2,
+          phase: 'completed', callId: 'call-2', toolName: 'get_message_context',
+          argumentsSummary: '也不应进入历史轨迹的参数', elapsedMs: 18, hits: 1,
+        },
+        { key: 'answer:synthesize', label: '综合生成', status: 'done' },
+        { key: 'answer:verify', label: '核对结果', status: 'done', detail: '金额与时间均来自原文' },
+      ],
+      toolCalls: [
+        {
+          index: 0, round: 1, callId: 'call-1', name: 'search_messages', ok: true,
+          deduplicated: false, attempts: 1, retries: 0, elapsedMs: 12, hits: 2, facts: 0,
+          argumentsSummary: '不应进入轨迹的参数',
+        },
+        {
+          index: 1, round: 2, callId: 'call-2', name: 'get_message_context', ok: true,
+          deduplicated: true, attempts: 0, retries: 0, elapsedMs: 18, hits: 1, facts: 1,
+          argumentsSummary: '也不应进入轨迹的参数',
+        },
+      ],
+    })
+
+    const trace = listAskHistory(dec, {}).items[0]!.runtimeTrace
+    expect(trace).toBeDefined()
+    expect(trace).toMatchObject({ version: 1, truncated: false, toolCallTotal: 2 })
+    expect(trace!.reasoningSegments.map(segment => segment.round)).toEqual([1, 2, undefined])
+    expect(trace!.reasoningSegments[2]).toMatchObject({
+      key: 'reasoning:synthesis',
+      phase: 'synthesis',
+      text: '把两轮结果合并成回答',
+    })
+    expect(trace!.stages.map(stage => stage.key)).toEqual([
+      'answer:intent',
+      'tool:search:1',
+      'tool:context:2',
+      'answer:synthesize',
+      'answer:verify',
+    ])
+    expect(trace!.stages.find(stage => stage.key === 'answer:verify')).toMatchObject({
+      label: '核对结果',
+      status: 'done',
+      detail: '金额与时间均来自原文',
+    })
+    expect(trace!.toolCalls).toEqual([
+      {
+        index: 0, round: 1, callId: 'call-1', name: 'search_messages', ok: true,
+        deduplicated: false, attempts: 1, retries: 0, elapsedMs: 12, hits: 2, facts: 0,
+      },
+      {
+        index: 1, round: 2, callId: 'call-2', name: 'get_message_context', ok: true,
+        deduplicated: true, attempts: 0, retries: 0, elapsedMs: 18, hits: 1, facts: 1,
+      },
+    ])
+    expect(JSON.stringify(trace)).not.toContain('不应进入历史轨迹的参数')
+    expect(JSON.stringify(trace)).not.toContain('argumentsSummary')
+  })
+
+  it('没有分段思考时把旧式 reasoning 记为回答整理段，保证旧调用方也能回看', () => {
+    const dec = makeRoot()
+    seed(dec, { question: '旧式思考', reasoning: '这是一段旧版单段思考' })
+    expect(listAskHistory(dec, {}).items[0]!.runtimeTrace?.reasoningSegments).toEqual([{
+      key: 'reasoning:legacy',
+      phase: 'synthesis',
+      text: '这是一段旧版单段思考',
+      seq: 1,
+    }])
+  })
+
+  it('损坏的 runtime_trace 只丢轨迹，不影响问题、回答、引用与状态读取', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '坏轨迹',
+      answer: '主记录仍然可读 [1]',
+      citations: [{ name: '甲', time: '2026-10-01 10:00', snippet: '原文', username: 'wxid_a', local_id: 7 }],
+      reasoningSegments: [{ key: 'r', phase: 'synthesis', text: '会被破坏', seq: 1 }],
+    })
+    const db = new DatabaseSync(join(dec, '..', 'wechat_privacy.db'))
+    try {
+      db.prepare("UPDATE ask_history SET runtime_trace = '{broken'").run()
+    } finally {
+      db.close()
+    }
+    const row = listAskHistory(dec, {}).items[0]!
+    expect(row).toMatchObject({
+      question: '坏轨迹',
+      answer: '主记录仍然可读 [1]',
+      status: 'ok',
+    })
+    expect(row.citations[0]).toMatchObject({ username: 'wxid_a', local_id: 7 })
+    expect(row.runtimeTrace).toBeUndefined()
+  })
+
+  it('超长轨迹按段数、总思考字数和 JSON 预算截断，并明确标记 truncated', () => {
+    const dec = makeRoot()
+    seed(dec, {
+      question: '预算',
+      reasoningSegments: Array.from({ length: 40 }, (_, i) => ({
+        key: `r-${String(i)}`,
+        round: i + 1,
+        phase: 'tool_selection',
+        text: `第${String(i)}段` + '想'.repeat(2_000),
+        seq: i + 1,
+      })),
+      stages: Array.from({ length: 200 }, (_, i) => ({
+        key: `stage-${String(i)}`,
+        label: `步骤 ${String(i)}`,
+        status: 'done',
+        detail: `detail-${String(i)}-` + '细'.repeat(2_000),
+      })),
+      toolCalls: Array.from({ length: 40 }, (_, i) => ({
+        index: i,
+        round: i + 1,
+        callId: `call-${String(i)}`,
+        name: 'search_messages',
+        ok: true,
+        attempts: 1,
+        retries: 0,
+        elapsedMs: i,
+        hits: i,
+        facts: 0,
+      })),
+    })
+    const trace = listAskHistory(dec, {}).items[0]!.runtimeTrace!
+    expect(trace.truncated).toBe(true)
+    expect(trace.reasoningSegments.length).toBeLessThanOrEqual(24)
+    expect(trace.reasoningSegments.reduce((sum, segment) => sum + segment.text.length, 0))
+      .toBeLessThanOrEqual(24_000)
+    expect(trace.stages.length).toBeLessThanOrEqual(120)
+    expect(trace.toolCalls.length).toBeLessThanOrEqual(24)
+    expect(trace.toolCallTotal).toBe(40)
+    expect(JSON.stringify(trace).length).toBeLessThanOrEqual(64_000)
+  })
+
+  it('旧库没有 runtime_trace 时自动补列，旧记录可读且新记录能立即写入轨迹', () => {
+    const dec = makeRoot()
+    const legacyDb = new DatabaseSync(join(dec, '..', 'wechat_privacy.db'))
+    try {
+      legacyDb.exec(`CREATE TABLE ask_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        source TEXT NOT NULL,
+        username TEXT,
+        username_name TEXT,
+        from_day TEXT,
+        to_day TEXT,
+        model TEXT,
+        intent TEXT,
+        terms TEXT,
+        citations TEXT,
+        cited_indexes TEXT,
+        basis TEXT,
+        status TEXT NOT NULL,
+        error TEXT,
+        retrieval TEXT,
+        elapsed_ms INTEGER
+      )`)
+      legacyDb.prepare(`INSERT INTO ask_history
+        (ts, question, answer, source, username, username_name, from_day, to_day, model,
+         intent, terms, citations, cited_indexes, basis, status, error, retrieval, elapsed_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          1_000, '旧记录', '旧回答', 'ask', '', '', '', '', '', '',
+          '[]', '[]', '[]', '', 'ok', '', '', 10,
+        )
+    } finally {
+      legacyDb.close()
+    }
+
+    const oldRow = listAskHistory(dec, {}).items[0]!
+    expect(oldRow).toMatchObject({ question: '旧记录', answer: '旧回答' })
+    expect(oldRow.runtimeTrace).toBeUndefined()
+    const migrated = new DatabaseSync(join(dec, '..', 'wechat_privacy.db'))
+    try {
+      const columns = migrated.prepare('PRAGMA table_info(ask_history)').all() as Array<{ name?: string }>
+      expect(columns.some(column => column.name === 'runtime_trace')).toBe(true)
+    } finally {
+      migrated.close()
+    }
+
+    seed(dec, {
+      question: '新记录',
+      reasoningSegments: [{ key: 'r', phase: 'synthesis', text: '补列后写入', seq: 1 }],
+    })
+    const newest = listAskHistory(dec, { q: '新记录' }).items[0]!
+    expect(newest.runtimeTrace?.reasoningSegments[0]?.text).toBe('补列后写入')
+  })
+
   it('超长 retrieval 退化为最小状态摘要，运行状态不会丢', () => {
     const dec = makeRoot()
     seed(dec, {
@@ -364,6 +569,21 @@ describe('问答历史：搜索 / 筛选 / 排序 / 分页', () => {
     expect(onlySession.total).toBe(2)
     expect(onlySession.sourceCounts['session']).toBe(2)
     expect(listAskHistory(dec, {}).sourceCounts['ask']).toBe(1)
+  })
+
+  it('会话筛选只返回该会话的记录，分页计数也随范围收口', () => {
+    const dec = makeRoot()
+    seed(dec, { question: 'A1', source: 'session', username: 'wxid_a', ts: 1000 })
+    seed(dec, { question: 'A2', source: 'session', username: 'wxid_a', ts: 2000 })
+    seed(dec, { question: 'B1', source: 'session', username: 'wxid_b', ts: 3000 })
+    seed(dec, { question: '全局', source: 'ask', username: '', ts: 4000 })
+
+    const scoped = listAskHistory(dec, { username: 'wxid_a', limit: 1 })
+    expect(scoped.total).toBe(2)
+    expect(scoped.items).toHaveLength(1)
+    expect(scoped.items.every(item => item.username === 'wxid_a')).toBe(true)
+    expect(scoped.sourceCounts).toEqual({ session: 2 })
+    expect(listAskHistory(dec, {}).total).toBe(4)
   })
 
   it('默认最新优先；order=asc 可翻成最早优先', () => {

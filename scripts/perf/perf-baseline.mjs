@@ -92,7 +92,6 @@ const PANEL_ID_TO_LABEL = {
   favorites: '收藏与表情',
   files: '文件与存储',
   ledger: '资金往来',
-  clawbot: 'ClawBot集群',
   tasks: '待办日程',
   taskinfo: '任务信息',
   oplog: '操作日志',

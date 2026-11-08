@@ -16,6 +16,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         keyword?: string;
         limit?: number;
         offset?: number;
+        jobId?: string;
     }): Promise<SessionsSnapshot>;
     /**
      * Contact book.
@@ -143,19 +144,26 @@ export declare abstract class GatewayRead extends GatewayCore {
      * @returns MessagesSnapshot: message items for the talker.
      */
     getMessages(options: {
+        /** 会话微信 ID —— 正名见 `WechatSession.username`。 */
         talker: string;
         limit?: number;
         cursor?: number;
         cursorLocalId?: number;
+        beforeLocalId?: number;
     }): MessagesSnapshot;
     /**
-     * Incremental messages newer than a sort_seq watermark (real-time polling).
-     * @param options - talker, after watermark, optional limit.
-     * @returns MessagesSnapshot with only the newer messages.
+     * Incremental messages newer than a `(sort_seq, local_id)` watermark
+     * (real-time polling).
+     * @param options - talker, sort_seq watermark, optional local_id watermark
+     *   and page limit. `afterLocalId` is optional for backward compatibility.
+     * @returns MessagesSnapshot with newer messages, `hasMore`, and the next
+     *   `cursor` / `cursorLocalId` pair.
      */
     getNewMessages(options: {
+        /** 会话微信 ID —— 正名见 `WechatSession.username`。 */
         talker: string;
         after: number;
+        afterLocalId?: number;
         limit?: number;
     }): MessagesSnapshot;
     /**
@@ -205,12 +213,13 @@ export declare abstract class GatewayRead extends GatewayCore {
      * Authoritative transfer/redpacket status by message server_id.
      * @param options - the message server_id (string, may exceed 2^53).
      * @returns PaymentStatus: found flag plus authoritative fields.
-     */
+    */
     getPaymentStatus(options: {
         serverId: string;
-    }): PaymentStatus;
+    }): Promise<PaymentStatus>;
     resolveChatHistory(options: {
         serverId: string;
+        talker?: string;
     }): Promise<ChatHistoryResolveResult>;
     /**
      * Per-day message counts for one month (chat calendar heatmap).
@@ -325,21 +334,23 @@ export declare abstract class GatewayRead extends GatewayCore {
     }>;
     /**
      * Cached transcript for one voice message (if already transcribed).
-     * @param options - message username + local_id.
+     * @param options - message username + local_id + the selected server_id.
      * @returns VoiceTranscriptResult: text or an error.
      */
     getVoiceTranscript(options: {
         username: string;
         localId: number;
+        svrId?: string;
     }): VoiceTranscriptResult;
     /**
      * Transcribe one voice message on demand (chat bubble 语音转文字).
-     * @param options - message username + local_id.
+     * @param options - message username + local_id + the selected server_id.
      * @returns VoiceTranscribeOneResult: ok + text, or an error.
      */
     transcribeVoiceMessage(options: {
         username: string;
         localId: number;
+        svrId?: string;
     }): Promise<VoiceTranscribeOneResult>;
     /**
      * Delete favorite items by local_id.
@@ -408,8 +419,17 @@ export declare abstract class GatewayRead extends GatewayCore {
         authorName?: string;
     }): Promise<MomentsMonthlySnapshot>;
     getOfficialAssets(): Promise<OfficialAssetsSnapshot>;
+    /**
+     * 跨消息、联系人、朋友圈等资源域执行全局搜索。
+     *
+     * 传入 `jobId` 后可通过 `cancelSearch` 取消；取消时返回已扫描域的部分结果，
+     * 并以 `cancelled: true` 区分「尚未扫描」和「确实没有命中」。
+     * @param options - 搜索词、单域上限和可选的取消任务标识。
+     * @returns UnifiedSearchSnapshot：各域命中、诊断信息及可选取消标记。
+     */
     searchUnified(options: {
         query: string;
         limit?: number;
-    }): UnifiedSearchSnapshot;
+        jobId?: string;
+    }): Promise<UnifiedSearchSnapshot>;
 }

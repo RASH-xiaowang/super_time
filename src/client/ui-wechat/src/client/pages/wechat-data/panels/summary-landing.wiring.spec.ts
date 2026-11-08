@@ -76,7 +76,7 @@ describe('总结工作台：空态把"怎么开始"说清楚', () => {
     //   · `seed`        —— 全局搜索命中带关键词跳转
     //   · `openKbFile`  —— 知识库引用点开跳「知识库 · 文件」分段
     //   · `kbFocus`     —— 跳过去之后要高亮的那个文件（含 nonce，便于同文件再点一次也能触发）
-    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings, seed, openKbFile, kbFocus\)/)
+    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings, seed, openKbFile, kbFocus\)/)
   })
 
   it('历史侧栏空态给一个出口（不是"还没有历史总结"就结束）', () => {
@@ -120,7 +120,7 @@ describe('定时任务收进抽屉', () => {
   })
 
   it('抽屉支持 Esc 关闭（表单开着先退表单）', () => {
-    expect(drawer).toMatch(/e\.key === 'Escape'/)
+    expect(drawer).toContain('useEscapeToClose(true')
     expect(drawer).toMatch(/if \(form\) setForm\(null\); else onClose\(\)/)
   })
 })

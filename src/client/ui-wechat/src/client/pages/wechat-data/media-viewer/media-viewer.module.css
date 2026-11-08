@@ -380,6 +380,22 @@
   background: rgba(255, 255, 255, 0.14);
 }
 
+.downloadError {
+  max-width: min(520px, 88vw);
+  padding: 6px 12px;
+  border-radius: var(--nm-r-lg);
+  color: #ffd9d9;
+  background: rgba(118, 28, 35, 0.78);
+  border: 1px solid rgba(255, 128, 136, 0.35);
+  font-size: 12px;
+  word-break: break-word;
+  text-align: center;
+}
+
+.statusOverlay {
+  width: min(520px, 88vw);
+}
+
 .hint {
   font-size: 11px;
   color: rgba(233, 236, 243, 0.42);

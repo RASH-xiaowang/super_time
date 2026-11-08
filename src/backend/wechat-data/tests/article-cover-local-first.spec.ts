@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
-import { resolveArticleCoverDataUrl, resolveArticleCoversDataUrls } from '../src/query/article-cover.ts'
+import { MAX_ARTICLE_COVERS_PER_CALL, resolveArticleCoverDataUrl, resolveArticleCoversDataUrls } from '../src/query/article-cover.ts'
 import { findSnsMediaDataUrlByIndex } from '../src/query/sns-image.ts'
 
 /** 一份「本机已有」的封面（2×2 PNG 魔数）。 */
@@ -125,6 +125,19 @@ describe('A4 批量版：探测要真的传下去（漏传就静默失效）', (
     expect(fetchCalls.length).toBe(2)
     expect(fetchCalls[0], '出网的应当是未命中的那条文章页').toContain('miss')
     expect(fetchCalls[1], '第二次应当是封面图地址（不是又抓了一遍文章页）').not.toContain('mp.weixin.qq.com')
+  })
+
+  it('超过单次业务上限的链接不发网络请求，返回可见错误', async () => {
+    const cacheDir = tempRoot()
+    const urls = Array.from(
+      { length: MAX_ARTICLE_COVERS_PER_CALL + 2 },
+      (_, i) => ARTICLE + '?limit=' + String(i),
+    )
+    const items = await resolveArticleCoversDataUrls(urls, cacheDir, async () => dataUrlOf(LOCAL_PNG))
+    expect(items).toHaveLength(urls.length)
+    expect(items.filter((item) => item.dataUrl !== undefined)).toHaveLength(MAX_ARTICLE_COVERS_PER_CALL)
+    expect(items.filter((item) => item.error?.includes('请分批请求'))).toHaveLength(2)
+    expect(fetchCalls, '超限条目不得出网').toEqual([])
   })
 })
 

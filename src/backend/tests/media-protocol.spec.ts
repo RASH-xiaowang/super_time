@@ -3,11 +3,15 @@
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MIME_BY_EXT, mediaResponse, parseDecodedUrl, parseThumbWidth, resolveDecodedFile } from '../media-protocol.js'
 
+const require = createRequire(import.meta.url)
+const nodeFs = require('node:fs') as typeof import('node:fs')
 const scratch: string[] = []
 afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -73,6 +77,31 @@ describe('mediaResponse：流式返回图片，404 不泄露路径', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe(MIME_BY_EXT['.png'])
     expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('png-bytes')
+  })
+
+  it('请求 abort 时销毁底层文件流，避免取消后的读取继续占用句柄', async () => {
+    const root = tempRoot()
+    writeFileSync(join(root, 'a.png'), 'png-bytes')
+    const source = new PassThrough()
+    const createReadStream = vi.spyOn(nodeFs, 'createReadStream')
+      .mockReturnValue(source as unknown as ReturnType<typeof nodeFs.createReadStream>)
+    const ac = new AbortController()
+    try {
+      const response = (mediaResponse as (
+        rootDir: string,
+        rawUrl: string,
+        signal?: AbortSignal
+      ) => Response)(root, 'wechat-media://decoded/a.png', ac.signal)
+      expect(createReadStream).toHaveBeenCalledTimes(1)
+      expect(source.destroyed).toBe(false)
+
+      ac.abort()
+      expect(source.destroyed).toBe(true)
+      await response.body?.cancel().catch(() => undefined)
+    } finally {
+      createReadStream.mockRestore()
+      source.destroy()
+    }
   })
 
   it('非法 URL / 越界 / 根未就绪都是 404，且不回显请求路径', async () => {

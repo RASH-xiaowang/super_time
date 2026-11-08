@@ -72,4 +72,21 @@ describe('导出记录：旧的设置侧接线已清干净', () => {
       expect(dialog, `导出记录弹窗缺少 ${marker}`).toContain(marker)
     }
   })
+
+  it('朋友圈记录走 apiExportMoments，而不是 CSV 重放分支', () => {
+    const dialog = codeOf('ExportHistoryDialog.tsx')
+    expect(dialog).toContain("if (r.kind === 'moments') {")
+    expect(dialog).toContain('apiExportMoments(buildMomentsReplayOptions(r, savePath, jobId))')
+    expect(dialog).toContain("r.kind === 'contacts' || r.kind === 'favorites' || r.kind === 'files' || r.kind === 'records' || r.kind === 'privacy'")
+  })
+
+  it('所有重放入口都复用共享 jobId，并显示同一条进度/取消状态', () => {
+    const dialog = codeOf('ExportHistoryDialog.tsx')
+    expect(dialog).toContain('const exportTask = useExportTask()')
+    expect(dialog).toContain('exportTask.run(async ({ jobId })')
+    expect(dialog).toContain('<ExportProgressStatus state={exportTask.state}')
+    for (const marker of ['dest: savePath,\n          jobId,', 'filename: savePath,\n          jobId,', 'apiExportAllSessions({ filename: savePath, jobId })']) {
+      expect(dialog, `重放入口漏了 ${marker}`).toContain(marker)
+    }
+  })
 })

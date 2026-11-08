@@ -36,7 +36,7 @@ export interface AnswerTimeRange {
     source: AnswerTimeSource;
     label: string;
 }
-/** 历史消息的最小形状（与 Ask / ClawBot 的 history 对齐）。 */
+/** 历史消息的最小形状（与 Ask 的 history 对齐）。 */
 export interface AnswerHistoryMessage {
     role: 'user' | 'assistant';
     content: string;
@@ -60,6 +60,10 @@ export interface ClassifyAnswerIntentOptions {
     history?: ReadonlyArray<AnswerHistoryMessage>;
     /** 当前会话 username；用于解析「这个群 / 当前会话」。 */
     currentSession?: string;
+    /** 当前会话显示名；单聊里用于把「他/她/对方」解析成联系人本人。 */
+    currentSessionName?: string;
+    /** 当前会话类型；缺省时按 username 的 `@chatroom` 后缀判断。 */
+    currentSessionKind?: 'private' | 'group';
     /** 已知会话名或 username，用于显式会话点名。 */
     knownSessions?: string[];
     /** 已知联系人名。 */
@@ -108,6 +112,8 @@ export interface AnswerIntentDecision {
     kind: AnswerIntentKind;
     /** 可直接传给旧检索流水线的意图。 */
     legacy: IntentKind;
+    /** 问题是否带「最近 / 最新 / 这几天」等时间排序语义。 */
+    recency: boolean;
     /** 0~1；越高越不应让 LLM 覆盖。 */
     confidence: number;
     /** 可解释依据。 */
@@ -168,6 +174,19 @@ export declare function toLegacyIntent(kind: AnswerIntentKind, options?: {
 }): IntentKind;
 /** 判断一个值是否是统一意图。 */
 export declare function isAnswerIntentKind(value: unknown): value is AnswerIntentKind;
+/**
+ * 当前单聊本身是否足以确定「他/她/对方」是谁。
+ *
+ * 群聊不能把群名当成某位成员；公众号、服务号等也不是第三人称联系人。
+ * 单聊则相反：用户已经选中某个人，问题里的第三人称默认就是这位联系人。
+ * @param input - 当前会话 username、显示名与可选类型。
+ * @returns 可用于代词消解的联系人显示名；非单聊返回 undefined。
+ */
+export declare function resolvePrivateSessionContact(input: {
+    username?: string;
+    displayName?: string;
+    kind?: 'private' | 'group';
+}): string | undefined;
 /**
  * 把问题里的时间表达解析成绝对范围。
  *

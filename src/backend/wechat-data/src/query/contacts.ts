@@ -13,6 +13,8 @@ import {
   isEnterpriseWechatUser,
   loadOpenimWordingNames,
 } from './openim.ts'
+import { readableProfileSignature } from './profile-signature.ts'
+import { buildRegion, parseContactExtra } from './region.ts'
 
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
@@ -26,6 +28,11 @@ function cellString(v: unknown): string {
   if (v instanceof Uint8Array) return new TextDecoder('utf-8', { fatal: false }).decode(v)
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
   return ''
+}
+
+/** SQLite BLOB may arrive as Buffer or Uint8Array; anything else is empty profile data. */
+function cellBuffer(v: unknown): Buffer {
+  return v instanceof Uint8Array ? Buffer.from(v) : Buffer.alloc(0)
 }
 
 /** Official-account check: gh_ prefix (source is_official_account). */
@@ -278,6 +285,10 @@ function computeContacts(
         quanPin,
         displayName,
       )
+      const extraRaw = r[sel('extra_buffer', 'NULL')]
+      const extra = parseContactExtra(cellBuffer(extraRaw))
+      const region = buildRegion(extra.country ?? '', extra.province ?? '', extra.city ?? '').trim()
+      const gender = extra.gender === 1 || extra.gender === 2 ? extra.gender : undefined
       stats[category] = (stats[category] ?? 0) + 1
       const isGroup = category === 'group'
       const contact: WechatContact = {
@@ -291,12 +302,15 @@ function computeContacts(
         initial,
         quanPin,
         remarkQuanPin,
-        description: cellString(r[sel('description', '')]),
+        description: readableProfileSignature(cellString(r[sel('description', '')]))
+          || readableProfileSignature(extra.signature),
+        ...(region === '' ? {} : { region }),
+        ...(gender === undefined ? {} : { gender }),
         inChatRoom: Number(r[sel('is_in_chat_room', '0')] ?? 0) === 1,
         localType,
       }
       if (isEnterpriseWechatUser(username)) {
-        const enterpriseName = enterpriseNameFromExtra(r[sel('extra_buffer', 'NULL')], enterpriseWordingNames)
+        const enterpriseName = enterpriseNameFromExtra(extraRaw, enterpriseWordingNames)
         if (enterpriseName !== undefined) contact.enterpriseName = enterpriseName
       }
       const avatar = cellString(r[sel('big_head_url', '')]) || cellString(r[sel('small_head_url', '')])

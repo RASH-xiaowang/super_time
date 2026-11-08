@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { searchIndexPath, withIndexWrite } from './search.ts'
 import type { MemberSearchHit, MemberSearchSnapshot } from '../types.ts'
 import { loadOpenimDirectoryFromDb, type OpenimDirectory } from './openim.ts'
+import { readableProfileSignature } from './profile-signature.ts'
 
 const CONTACT_FTS_META = 'contact_rows'
 /**
@@ -75,7 +76,7 @@ function hitsFromRows(
     const room = cellText(r['room']).trim()
     if (room) hit.roomUsername = room
     if (roomName) hit.roomName = roomName
-    const sig = cellText(r['signature']).trim()
+    const sig = readableProfileSignature(cellText(r['signature']))
     if (sig) hit.signature = sig
     const region = cellText(r['region']).trim()
     if (region) hit.region = region

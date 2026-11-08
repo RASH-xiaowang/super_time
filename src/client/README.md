@@ -12,10 +12,10 @@
 | UI 原语（Button/Input/Pill/StateDot/图标等，仅保留实际用到的子集） | `packages/client/ui-primitives` | `src/client/ui-primitives-shim/` |
 | 构建入口（Electron 挂载壳） | 新增 | `src/client/ui-app/ui-entry.tsx` |
 | 构建模板 | 新增 | `src/client/ui-app/index.html` |
-| Vite 构建配置 | 新增 | `vite.config.js` |
+| Vite 构建配置 | 新增 | `vite.config.mjs` |
 | 构建产物（每次启动/打包前生成，不入库） | 由 `npm run build:ui` 生成 | `src/client/ui-dist/` |
 
-## 功能界面（17 个侧栏正文入口 / 41 个可路由页签，227 个 Remote 方法）
+## 功能界面（16 个侧栏正文入口 / 40 个可路由页签，224 个 Remote 方法）
 
 > 本节数字与结构于 2026-09-15 按 `panels/nav-config.ts` 实测重写：此前写「12 个侧栏入口 / 34 个页签」，
 > 方法数也早已过期（图谱拆成两个入口后侧栏变 16 项）—— 三项全错，且没有任何东西会发现。
@@ -132,4 +132,4 @@ Electron 主进程 `main.js` 优先加载 `src/client/ui-dist/index.html`，
 dsh-client-ui-primitives、dsh-wechat-data types 等）集中在
 `package.json` 的 `devDependencies`，仅用于 `build:ui` 编译；
 运行时打包进 `src/client/ui-dist`，不随应用分发 node_modules。
-vite 构建直接读本仓源码（`vite.config.js` 的 alias），不依赖 pnpm workspace 的版本 override。
+vite 构建直接读本仓源码（`vite.config.mjs` 的 alias），不依赖 pnpm workspace 的版本 override。

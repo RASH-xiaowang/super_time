@@ -7,7 +7,7 @@
  *
  * 三条与后端有关的边界（与 `types-taskcenter.ts` 的注释同源）：
  *  · 关键词「任一命中即触发」⇒ 去重按**大小写不敏感**，但保留用户输入的原样大小写；
- *  · 触发对象：单聊 = 会话对象本身，群聊 = 群内被监听的那个成员（未选不许提交）；
+ *  · 触发对象：单聊 = 会话对象本身，群聊 = 群内被监听的一个或多个成员（未选不许提交）；
  *  · 照片数量是「触发时取该对象最近 N 张」，不是创建时快照 —— 所以它只是一档配置。
  */
 import type { GroupMember, TaskInfoInput } from '@deepseek-ai/dsh-wechat-data/types'
@@ -28,6 +28,8 @@ export const MEMBER_RENDER_LIMIT = 50
 export const MEMBER_FILTER_THRESHOLD = 200
 /** 群聊未选目标用户时的提示语（弹窗与校验共用一份，避免两处文案漂移）。 */
 export const GROUP_TARGET_REQUIRED = '群聊需选择目标用户'
+/** 任务名最大字符数（与弹窗输入框上限、批量时追加成员名后的截断口径一致）。 */
+export const TASK_NAME_MAX_LEN = 60
 
 /**
  * 弹窗只需要的会话字段。
@@ -44,6 +46,13 @@ export interface TaskCreateSession {
   enterpriseName?: string
 }
 
+/** 群聊触发对象；批量创建时每个对象各自生成一条独立任务。 */
+export interface TaskCreateTarget {
+  username: string
+  name: string
+  enterpriseName?: string
+}
+
 /** 弹窗表单态（受控）。 */
 export interface TaskCreateForm {
   /** 已确认的关键词（回车/逗号/失焦不提交，只认显式添加）。 */
@@ -56,12 +65,8 @@ export interface TaskCreateForm {
   mentionMeOnly: boolean
   /** 任务名（空 = 自动生成，提交时补默认名）。 */
   name: string
-  /** 群聊所选目标成员；单聊保持空串（提交时回填成会话对象）。 */
-  targetUsername: string
-  /** 目标成员显示名（点击成员时一起存，避免提交时再去列表里翻）。 */
-  targetName: string
-  /** 目标成员所属企业（仅用于界面展示，不写入任务名）。 */
-  targetEnterpriseName?: string
+  /** 群聊所选目标成员（按选择顺序）；单聊保持空数组（提交时回填成会话对象）。 */
+  targets: TaskCreateTarget[]
 }
 
 /**
@@ -75,9 +80,42 @@ export function initialTaskCreateForm(): TaskCreateForm {
     photoLimit: DEFAULT_PHOTO_LIMIT,
     mentionMeOnly: false,
     name: '',
-    targetUsername: '',
-    targetName: '',
+    targets: [],
   }
+}
+
+/**
+ * 切换一个群成员的选中状态。
+ *
+ * 已选列表按点击顺序保存；跨搜索时列表本身不重建，因此切到别的搜索词再回来仍保留选择。
+ * 同一 username 只保留一条，空 username 的脏数据直接忽略。
+ * @param list - 当前已选成员。
+ * @param target - 被点击的成员。
+ * @returns 新数组（不修改入参）。
+ */
+export function toggleTaskTarget(
+  list: readonly TaskCreateTarget[],
+  target: TaskCreateTarget,
+): TaskCreateTarget[] {
+  const username = target.username.trim()
+  if (username === '') return [...list]
+  if (list.some((item) => item.username === username)) {
+    return list.filter((item) => item.username !== username)
+  }
+  return [...list, { ...target, username }]
+}
+
+/**
+ * 从已选列表移除一个成员。
+ * @param list - 当前已选成员。
+ * @param username - 要移除的成员账号。
+ * @returns 新数组（不修改入参）。
+ */
+export function removeTaskTarget(
+  list: readonly TaskCreateTarget[],
+  username: string,
+): TaskCreateTarget[] {
+  return list.filter((item) => item.username !== username)
 }
 
 /**
@@ -209,7 +247,7 @@ export function defaultTaskName(options: DefaultTaskNameOptions): string {
 /** 校验输入（与表单解耦，单测可逐格喂）。 */
 export interface TaskCreateValidationInput {
   chatType: 'private' | 'group'
-  targetUsername: string
+  targetCount: number
   keywords: readonly string[]
   photoLimit: number
 }
@@ -220,7 +258,7 @@ export interface TaskCreateValidationInput {
  * @returns 错误文案；可以提交时为 null。
  */
 export function validateTaskCreate(input: TaskCreateValidationInput): string | null {
-  if (input.chatType === 'group' && input.targetUsername.trim() === '') return GROUP_TARGET_REQUIRED
+  if (input.chatType === 'group' && input.targetCount <= 0) return GROUP_TARGET_REQUIRED
   if (input.keywords.length === 0) return '请至少填写 1 个触发关键词'
   if (input.keywords.length > KEYWORD_MAX_COUNT) return `触发关键词最多 ${String(KEYWORD_MAX_COUNT)} 个`
   if (input.keywords.some((kw) => kw.length > KEYWORD_MAX_LEN)) return `单个触发关键词不能超过 ${String(KEYWORD_MAX_LEN)} 个字符`
@@ -277,6 +315,71 @@ export function buildTaskInfoInput(options: BuildTaskInfoInputOptions): TaskInfo
   }
 }
 
+/** 批量构建 `TaskInfoInput` 的输入。 */
+export interface BuildTaskInfoInputsOptions {
+  chat: TaskCreateSession
+  /** 群聊目标成员；单聊忽略并回填成会话对象。 */
+  targets?: readonly TaskCreateTarget[]
+  keywords: readonly string[]
+  photoLimit: number
+  mentionMeOnly?: boolean
+  /** 用户填的任务名；空串 = 每个对象各自自动生成。 */
+  name?: string
+}
+
+/**
+ * 批量创建时给自定义任务名追加成员名。
+ *
+ * 只追加到「多选且用户手填任务名」的情况：自动任务名本来已经包含成员名；
+ * 单选时保留用户原文，避免无端改变旧行为。
+ */
+function customNameForTarget(rawName: string, target: TaskCreateTarget): string {
+  const base = rawName.trim()
+  if (base === '') return ''
+  const member = (target.name.trim() === '' ? target.username : target.name).trim()
+  const suffix = ` · ${member}`
+  const room = Math.max(0, TASK_NAME_MAX_LEN - suffix.length)
+  if (room === 0) return suffix.slice(0, TASK_NAME_MAX_LEN)
+  return base.slice(0, room).trimEnd() + suffix
+}
+
+/**
+ * 把一次多选表单折成多条写接口入参：**每个触发对象一条任务**。
+ *
+ * 关键词、照片数量和 @ 条件由本批任务共用；`targetUsername` / `targetName` 各自独立，
+ * 因此后续触发扫描、记录归属和启停状态不会在成员之间串线。重复或空 username 会被丢弃。
+ * @param options - 会话/目标列表/关键词/照片档位/任务名。
+ * @returns 可直接逐条交给 `apiSaveTaskInfo` 的入参；单聊永远只有一条。
+ */
+export function buildTaskInfoInputs(options: BuildTaskInfoInputsOptions): TaskInfoInput[] {
+  if (options.chat.type !== 'group') {
+    return [buildTaskInfoInput({
+      chat: options.chat,
+      target: null,
+      keywords: options.keywords,
+      photoLimit: options.photoLimit,
+      mentionMeOnly: options.mentionMeOnly,
+      name: options.name,
+    })]
+  }
+  const seen = new Set<string>()
+  const targets = (options.targets ?? []).filter((target) => {
+    const username = target.username.trim()
+    if (username === '' || seen.has(username)) return false
+    seen.add(username)
+    return true
+  })
+  const appendMember = targets.length > 1
+  return targets.map((target) => buildTaskInfoInput({
+    chat: options.chat,
+    target,
+    keywords: options.keywords,
+    photoLimit: options.photoLimit,
+    mentionMeOnly: options.mentionMeOnly,
+    name: appendMember ? customNameForTarget(options.name ?? '', target) : options.name,
+  }))
+}
+
 /** 成员列表的渲染投影。 */
 export interface MemberPickResult {
   /** 真正要画的成员（最多 {@link MEMBER_RENDER_LIMIT} 行）。 */
@@ -292,7 +395,7 @@ export interface MemberPickResult {
 /**
  * 群成员搜索 + 截断。昵称、微信号与企业名称都参与匹配（与群信息抽屉同口径）。
  *
- * 为什么在弹窗里也要截断：目标用户是**单选**，一次画上千行既慢又没人会滚到底；
+ * 为什么在弹窗里也要截断：目标用户虽可多选，一次画上千行仍既慢又没人会滚到底；
  * 超过 {@link MEMBER_FILTER_THRESHOLD} 位时更该做的是让用户搜索，而不是把滚动条塞满。
  * @param members - 群成员全量。
  * @param rawQuery - 搜索框原文（空 = 不过滤）。

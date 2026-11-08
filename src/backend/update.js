@@ -83,6 +83,38 @@ const PROGRESS_STEP_PERCENT = 1;
  */
 const DISABLE_UPDATE_CHECK_ENV = 'SUPERTIME_DISABLE_UPDATE_CHECK';
 
+/**
+ * 安装器会替换仍被 worker 持有的文件，必须先等 stop() 的 dispose ACK/超时。
+ * @param {() => unknown} install - 实际的 quitAndInstall 调用。
+ * @param {(() => Promise<unknown> | unknown) | null} stopBackend - main 注入的停止函数。
+ * @param {(() => Promise<unknown> | unknown) | null} restartBackend - 停止成功但安装失败时的恢复钩子。
+ */
+async function installAfterBackendStop(install, stopBackend, restartBackend) {
+  if (typeof install !== 'function') throw new TypeError('installAfterBackendStop: install 必须是函数');
+  if (typeof stopBackend !== 'function') {
+    throw new Error('后端停止钩子未接入，已拒绝启动安装器');
+  }
+  const stopped = await stopBackend();
+  try {
+    return await install();
+  } catch (err) {
+    // supervisor.stop() 会在返回值里带上 restart；这样 main.js 不需要再额外接线，
+    // 也能在“后端已收尾、但安装器没启动”时把 worker 拉回来。
+    const restart = typeof restartBackend === 'function'
+      ? restartBackend
+      : (stopped && typeof stopped.restart === 'function' ? stopped.restart : null);
+    if (typeof restart !== 'function') throw err;
+    try {
+      await restart();
+    } catch (restartErr) {
+      if (err && typeof err === 'object') {
+        try { err.recoveryError = restartErr; } catch { /* 原始错误不可写时仍抛出它 */ }
+      }
+    }
+    throw err;
+  }
+}
+
 /** 空状态。`currentVersion` 由调用方给（main.js 取的是打包的 version）。 */
 function blankUpdateState(currentVersion) {
   return {
@@ -364,6 +396,26 @@ function toUpdaterLogger(log) {
   };
 }
 
+/** 把 electron-updater 事件接到状态机；从服务工厂拆出以控制单函数体积。 */
+function wireUpdaterEvents(autoUpdater, wired, callbacks) {
+  const wire = (name, handler) => {
+    autoUpdater.on(name, handler);
+    wired.push([name, handler]);
+  };
+  wire('checking-for-update', () => {
+    callbacks.resetProgress();
+    callbacks.commit({ type: 'checking', manual: callbacks.manual() });
+  });
+  wire('update-available', (info) => {
+    callbacks.resetProgress();
+    callbacks.commit({ type: 'available', info });
+  });
+  wire('update-not-available', (info) => callbacks.commit({ type: 'not-available', info }));
+  wire('download-progress', (progress) => callbacks.commitProgress(progress));
+  wire('update-downloaded', (info) => callbacks.commit({ type: 'downloaded', info }));
+  wire('error', (err) => callbacks.commit({ type: 'error', error: err }));
+}
+
 /**
  * 建一个更新服务。
  *
@@ -375,6 +427,8 @@ function toUpdaterLogger(log) {
  *   onState?: (state: object) => void,      状态每次变化时回调（main.js 用它广播给渲染进程）
  *   env?: Record<string, string | undefined>,
  *   autoCheckDelayMs?: number,
+ *   stopBackend?: () => Promise<unknown> | unknown, 手动安装前等待 worker dispose ACK/超时。
+ *   restartBackend?: () => Promise<unknown> | unknown, 停止成功但安装失败时的恢复钩子。
  * }} opts
  * @returns {{
  *   getState: () => object,
@@ -391,6 +445,8 @@ function createUpdateService(opts = {}) {
   const log = typeof opts.log === 'function' ? opts.log : () => {};
   const onState = typeof opts.onState === 'function' ? opts.onState : () => {};
   const env = opts.env || process.env;
+  const stopBackend = typeof opts.stopBackend === 'function' ? opts.stopBackend : null;
+  const restartBackend = typeof opts.restartBackend === 'function' ? opts.restartBackend : null;
   const delayMs = Number.isFinite(opts.autoCheckDelayMs) && opts.autoCheckDelayMs >= 0
     ? opts.autoCheckDelayMs
     : DEFAULT_AUTO_CHECK_DELAY_MS;
@@ -404,6 +460,8 @@ function createUpdateService(opts = {}) {
   const wired = [];
   /** W2-12.2：下载失败后的自动重试计时器。 */
   let retryTimer = null;
+  /** 安装只允许启动一次；并发点击不能各排一个 stop/quitAndInstall。 */
+  let installStarted = false;
 
   /** 清掉自动重试计时器（手动重试 / dispose / 下载成功都要清）。 */
   const clearRetryTimer = () => {
@@ -488,25 +546,14 @@ function createUpdateService(opts = {}) {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.logger = toUpdaterLogger(log);
-
-    const wire = (name, handler) => {
-      autoUpdater.on(name, handler);
-      wired.push([name, handler]);
-    };
-    wire('checking-for-update', () => {
-      lastEmittedPercent = -1;
+    wireUpdaterEvents(autoUpdater, wired, {
+      commit,
+      commitProgress,
+      resetProgress: () => { lastEmittedPercent = -1; },
       // `manual` 由调用 check() 的那一方决定；electron-updater 开始拉取时自己也会发
       // 一次这个事件，这里只做幂等重申，不能把用户手动触发的标记冲掉。
-      commit({ type: 'checking', manual: state.manual === true });
+      manual: () => state.manual === true,
     });
-    wire('update-available', (info) => {
-      lastEmittedPercent = -1;
-      commit({ type: 'available', info });
-    });
-    wire('update-not-available', (info) => commit({ type: 'not-available', info }));
-    wire('download-progress', (progress) => commitProgress(progress));
-    wire('update-downloaded', (info) => commit({ type: 'downloaded', info }));
-    wire('error', (err) => commit({ type: 'error', error: err }));
   }
 
   const service = {
@@ -546,15 +593,20 @@ function createUpdateService(opts = {}) {
       if (state.phase !== 'downloaded') {
         return { ok: false, error: '当前没有已下载的更新' };
       }
+      if (installStarted) return { ok: true };
+      installStarted = true;
       log('info', ['用户要求重启并安装 v' + (state.version || '?')]);
       // 放到下一个 tick：先把 { ok: true } 回给渲染进程，再让 quitAndInstall 走 quit 流程。
       // 同步调用的话主进程可能在 IPC 响应发出去之前就开始退出。
       setImmediate(() => {
-        try {
-          autoUpdater.quitAndInstall(false, true);
-        } catch (err) {
-          log('error', ['quitAndInstall 失败', err]);
-        }
+        void installAfterBackendStop(
+          () => autoUpdater.quitAndInstall(false, true),
+          stopBackend,
+          restartBackend,
+        ).catch((err) => {
+          installStarted = false;
+          log('error', ['等待后端收尾或 quitAndInstall 失败，未启动安装器', err]);
+        });
       });
       return { ok: true };
     },

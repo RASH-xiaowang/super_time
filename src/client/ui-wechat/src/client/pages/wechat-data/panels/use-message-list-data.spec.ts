@@ -5,8 +5,7 @@
  * 验证三件事：定时回查不翻 loading；静默失败保留旧内容；页面隐藏时停表、
  * 可见时立即补一次，卸载后不再发请求。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MessageListRecord, MessageListSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
@@ -16,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   apiGetMessageListWebhookInfo: vi.fn(),
   apiListMessageListRecords: vi.fn(),
   apiListMessageListRules: vi.fn(),
+  apiQueryMessageListWebhookJob: vi.fn(),
 }))
 
 vi.mock('../api.ts', () => mocks)
@@ -24,6 +24,7 @@ import {
   MESSAGE_LIST_POLL_MS,
   useMessageListData,
 } from './use-message-list-data.ts'
+import { MESSAGE_LIST_UPDATED_EVENT } from '../message-list-events.ts'
 
 function record(status: MessageListRecord['status'], updatedAt: number): MessageListRecord {
   return {
@@ -96,6 +97,7 @@ beforeEach(() => {
   latest = null
   mocks.apiGetImageDataUrlsBatch.mockReset().mockResolvedValue([])
   mocks.apiListMessageListRules.mockReset().mockResolvedValue({ items: [], total: 0 })
+  mocks.apiQueryMessageListWebhookJob.mockReset()
   mocks.apiGetMessageListWebhookInfo.mockReset().mockResolvedValue({
     enabled: true,
     url: 'http://127.0.0.1/api/message-webhook/token',
@@ -118,6 +120,75 @@ afterEach(() => {
 })
 
 describe('消息列表自动无感刷新', () => {
+  it('事件回源在飞时手动刷新复用同一首屏请求，不重复全页读取', async () => {
+    await mount()
+    expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(1)
+
+    let finish: ((snapshot: MessageListSnapshot) => void) | null = null
+    mocks.apiListMessageListRecords.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+
+    await act(async () => {
+      window.dispatchEvent(new Event(MESSAGE_LIST_UPDATED_EVENT))
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(2)
+
+    let manualRefresh: Promise<void> | null = null
+    await act(async () => {
+      manualRefresh = latest?.refreshRecords() ?? null
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords, '手动刷新必须附着在途首屏请求').toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      finish?.({ items: [record('success', 300)], total: 1 })
+      await manualRefresh
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords, '不能为首屏刷新再并发打一次库').toHaveBeenCalledTimes(2)
+    expect(attr('data-status')).toBe('success')
+    expect(attr('data-loading')).toBe('false')
+  })
+
+  it('请求在飞时连续到达的更新事件合并成一次尾部补刷，不丢失最后一拍', async () => {
+    await mount()
+    expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(1)
+
+    let finish: ((snapshot: MessageListSnapshot) => void) | null = null
+    mocks.apiListMessageListRecords.mockResolvedValue({
+      items: [record('success', 200)],
+      total: 1,
+    })
+    mocks.apiListMessageListRecords.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+
+    await act(async () => {
+      window.dispatchEvent(new Event(MESSAGE_LIST_UPDATED_EVENT))
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      window.dispatchEvent(new Event(MESSAGE_LIST_UPDATED_EVENT))
+      window.dispatchEvent(new Event(MESSAGE_LIST_UPDATED_EVENT))
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords, '在飞期间不能并发叠请求').toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      finish?.({ items: [record('pending', 100)], total: 1 })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.apiListMessageListRecords, '最后一个事件必须触发尾部补刷').toHaveBeenCalledTimes(3)
+    expect(attr('data-status')).toBe('success')
+  })
+
   it('到点静默回查并原位更新，请求期间不翻 loading', async () => {
     await mount()
     expect(attr('data-status')).toBe('pending')
@@ -133,6 +204,7 @@ describe('消息列表自动无感刷新', () => {
       await Promise.resolve()
     })
     expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(2)
+    expect(mocks.apiListMessageListRules, '兜底回源也必须覆盖规则，事件丢失时不能长期显示旧规则').toHaveBeenCalledTimes(2)
     expect(attr('data-loading'), '自动回查期间旧列表必须保持可见').toBe('false')
     expect(attr('data-status')).toBe('pending')
 
@@ -143,6 +215,31 @@ describe('消息列表自动无感刷新', () => {
     })
     expect(attr('data-status')).toBe('success')
     expect(attr('data-loading')).toBe('false')
+  })
+
+  it('queued/running 记录带 jobId 时自动查询任务，终态后回源更新台账', async () => {
+    const queued = record('queued', 100)
+    queued.jobId = 'job-auto-1'
+    mocks.apiListMessageListRecords
+      .mockResolvedValueOnce({ items: [queued], total: 1 })
+      .mockResolvedValueOnce({ items: [record('success', 200)], total: 1 })
+    mocks.apiQueryMessageListWebhookJob.mockResolvedValue({
+      ok: true,
+      state: 'succeeded',
+      endpoint: 'http://127.0.0.1/webhook/***',
+    })
+
+    await mount()
+    expect(attr('data-status')).toBe('queued')
+    await act(async () => {
+      vi.advanceTimersByTime(1_500)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.apiQueryMessageListWebhookJob).toHaveBeenCalledWith({ recordId: 1 })
+    expect(mocks.apiListMessageListRecords).toHaveBeenCalledTimes(2)
+    expect(attr('data-status')).toBe('success')
   })
 
   it('静默刷新失败时保留旧列表和错误状态，不把用户切到错误页', async () => {
@@ -177,6 +274,7 @@ describe('消息列表自动无感刷新', () => {
       await Promise.resolve()
     })
     expect(mocks.apiListMessageListRecords, '回到前台应立即补一次').toHaveBeenCalledTimes(2)
+    expect(mocks.apiListMessageListRules, '回到前台时规则也要补刷').toHaveBeenCalledTimes(2)
 
     act(() => { root.unmount() })
     mounted = false

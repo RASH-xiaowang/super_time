@@ -19,8 +19,8 @@ export const MUTATIONS_BATCH3B = [
     id: "M223-member-filter-drops-username",
     why: "只按昵称过滤 ⇒ 微信号搜不到人（微信自己的群成员搜索就是拿微信号兜底的），100 人的群里输 wxid_7 得到一片空态",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-member-view.ts",
-    from: "m.name.toLowerCase().includes(query) || m.username.toLowerCase().includes(query)",
-    to: "m.name.toLowerCase().includes(query)",
+    from: "    || m.username.toLowerCase().includes(query)",
+    to: "    || false",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-member-view.spec.ts",
   },
   {

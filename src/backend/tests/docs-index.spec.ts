@@ -33,8 +33,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const NEW_DOCS = ['docs/ARCHITECTURE.md', 'docs/CONTRIBUTING.md', 'docs/DEPLOYMENT.md', 'docs/ERROR-CODES.md']
 /** 领域说明文档：同样随功能交付，必须和基础文档一起参与引用校验。 */
 const DOMAIN_DOCS = ['docs/TASK-CENTER.md']
-/** 引用扫描的语料：四份新文档 + 领域文档 + README（文档索引的宿主，也是别人进来的第一扇门）。 */
-const CORPUS = [...NEW_DOCS, ...DOMAIN_DOCS, 'README.md']
+/** 引用扫描的语料：四份新文档 + 领域文档 + 工具目录说明 + README（文档索引的宿主，也是别人进来的第一扇门）。 */
+const CORPUS = [...NEW_DOCS, ...DOMAIN_DOCS, 'tools/README.md', 'README.md']
 
 /** 只有以这些顶层目录开头的反引号片段才当"仓库内引用"（`utils/format.ts` 那种简写有歧义，不猜）。 */
 const ROOTED = /^(?:src|docs|scripts|tools|tests|wechat|\.github)\//
@@ -218,7 +218,7 @@ describe('文档索引与文档里的引用', () => {
    * 顶层 21 份文档里索引了 8 份（差 13 份），视图数写的是 90（实测 102）。补完之后由这两条守住：
    * 只补不守 = 下次照样烂 —— 而这正是本仓对其他"数字"的一贯口径（见 CONTRIBUTING 的棘轮一节）。
    */
-  it('README 的文档索引覆盖 docs/ 顶层每一份文档（新增一份就得同时补索引）', () => {
+  it('README 的文档索引覆盖 docs/ 顶层每一份文档，并收录归档目录（新增一份就得同时补索引）', () => {
     const top = readdirSync(join(ROOT, 'docs'), { withFileTypes: true })
       .filter((e) => e.isFile() && /\.(md|html)$/.test(e.name))
       .map((e) => `docs/${e.name}`)
@@ -229,12 +229,18 @@ describe('文档索引与文档里的引用', () => {
     expect(top.length, '顶层文档数少得太离谱 ⇒ 扫描目标没读到，下面那条"全覆盖"是恒真').toBeGreaterThanOrEqual(7)
     // 反例自证：哨兵本身不是恒真 —— 低于下限就红
     expect(6).toBeLessThan(7)
+    const archive = readdirSync(join(ROOT, 'docs/archive'), { withFileTypes: true })
+      .filter((e) => e.isFile() && /\.(md|html)$/.test(e.name))
+      .map((e) => `docs/archive/${e.name}`)
+    expect(archive.length, '归档目录空得太离谱 => 扫描目标没读到').toBeGreaterThan(0)
     const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
     const at = readme.indexOf('## 文档索引')
     const next = readme.indexOf('\n## ', at + 5)
     const rows = readme.slice(at, next < 0 ? readme.length : next).split('\n').filter((l) => l.startsWith('|') && !l.includes('---'))
     const targets = rows.flatMap((r) => relativeLinks(r))
-    const missing = top.filter((d) => !targets.includes(d))
+    const archiveIndexed = targets.includes('docs/archive/')
+    const missing = [...top.filter((d) => !targets.includes(d)),
+      ...(archiveIndexed ? [] : archive.map((d) => `docs/archive/ (未收录，含 ${d})`))]
     expect(missing, `这些文档在 docs/ 顶层躺着、README 索引里没有：${missing.join(', ')}`).toEqual([])
     // 反例自证：凭空多出一份文档，必须被同一条判据点出来
     expect([...top, 'docs/BRAND-NEW-NOT-INDEXED.md'].filter((d) => !targets.includes(d)),

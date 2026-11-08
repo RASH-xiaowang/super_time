@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('studioAPI', {
   keys: () => ipcRenderer.invoke('studio:keys'),
+  meta: () => ipcRenderer.invoke('studio:meta'),
   generateKeys: () => ipcRenderer.invoke('studio:generate-keys'),
   syncClientPub: () => ipcRenderer.invoke('studio:sync-client-pub'),
   importRequest: () => ipcRenderer.invoke('studio:import-request'),

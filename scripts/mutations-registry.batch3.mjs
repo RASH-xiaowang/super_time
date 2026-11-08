@@ -330,8 +330,8 @@ export const MUTATIONS_BATCH3 = [
     id: "M157-invalidate-contract-full-clear-no-notify",
     why: "全量分支只清持久层就返回 ⇒ 恢复备份之后八个面板继续画恢复前的快照（这条是实测最刺眼的一处）",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/cache.ts",
-    from: "    invalidateSnapshotCache()",
-    to: "    // 不标陈旧、不通知",
+    from: "    invalidateSnapshotCache()\n    return",
+    to: "    return",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/cache-invalidate-contract.spec.ts",
   },
   {
@@ -346,8 +346,8 @@ export const MUTATIONS_BATCH3 = [
     id: "M159-members-fts-quanpin-column-dropped",
     why: "FTS 查询里少点名一列（`quanpin`）⇒ 「按备注全拼搜人」又只在降级路径里成立；这条咬的就是第 96 轮漏掉的那半处修复",
     file: "src/backend/wechat-data/src/query/members.ts",
-    from: "        const match = `name:${phrase} OR alias:${phrase} OR quanpin:${phrase}`",
-    to: "        const match = `name:${phrase} OR alias:${phrase}`",
+    from: "        const searchable = ['name', 'alias', 'quanpin', 'enterprise'].filter",
+    to: "        const searchable = ['name', 'alias', 'enterprise'].filter",
     spec: "src/backend/wechat-data/tests/members-search-columns.spec.ts",
   },
   {
@@ -410,8 +410,8 @@ export const MUTATIONS_BATCH3 = [
     id: "M167-poll-cache-writes-delta-only",
     why: "渲染缓存改写增量那一批 ⇒ 下次打开这个会话时秒开出来的只有新消息，旧消息要等后端整趟回来才补上",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-polling.ts",
-    from: "        writeRenderCache(RENDER_CACHE_PREFIX + talker, merged)",
-    to: "        writeRenderCache(RENDER_CACHE_PREFIX + talker, add)",
+    from: "  writeRenderCache(RENDER_CACHE_PREFIX + talker, tail)",
+    to: "  writeRenderCache(RENDER_CACHE_PREFIX + talker, [])",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-polling.spec.ts",
   },
   {

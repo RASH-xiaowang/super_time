@@ -301,7 +301,7 @@ describe('总览内容：标题与实际条目一致', () => {
     expect(panelCode, '页头缺刷新').toContain(": done ? '✓ 已更新' : '刷新'")
     expect(panelCode, '页头缺更多菜单').toContain('更多 ▾')
     expect(panelCode, '旧的页头归档按钮文案还在').not.toContain('导出全部会话 ZIP')
-    for (const item of ['导出报告 · Markdown', '导出数据 · JSON', '导出图片 · PNG', '导出图片 · JPG', '归档全部会话 ZIP']) {
+    for (const item of ['导出报告 · Markdown', '导出数据 · JSON', '导出图片 · PNG', '导出图片 · JPG', '归档全部会话文本 ZIP']) {
       expect(panelCode, `更多菜单少了「${item}」`).toContain(item)
     }
   })

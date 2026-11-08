@@ -41,33 +41,33 @@ describe('链接与嵌套', () => {
   })
 
   it('嵌套文案：有内层数据报条数，没有报「点击查看」，标题为空退到「聊天记录」', () => {
-    expect(chatlogNestedLabel(rec({ text: '群聊记录', nested: [rec(), rec(), rec()] }))).toBe('📋 群聊记录（3 条）')
-    expect(chatlogNestedLabel(rec({ text: '群聊记录' }))).toBe('📋 群聊记录（点击查看）')
-    expect(chatlogNestedLabel(rec({ text: '' }))).toBe('📋 聊天记录（点击查看）')
+    expect(chatlogNestedLabel(rec({ text: '群聊记录', nested: [rec(), rec(), rec()] }))).toBe('群聊记录（3 条）')
+    expect(chatlogNestedLabel(rec({ text: '群聊记录' }))).toBe('群聊记录（点击查看）')
+    expect(chatlogNestedLabel(rec({ text: '' }))).toBe('聊天记录（点击查看）')
   })
 })
 
 describe('时长换算（这一族最容易写反的一条）', () => {
   it('语音是 20 毫秒一格 ⇒ 除以 20；视频是毫秒 ⇒ 除以 1000', () => {
-    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '100' }))).toBe('🎤 正文5"')
-    expect(chatlogBodyOf(rec({ renderType: 'video', duration: '100000' }))).toBe('🎬 正文100s')
-    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '30' }))).toBe('🎤 正文2"')
+    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '100' }))).toBe('正文5"')
+    expect(chatlogBodyOf(rec({ renderType: 'video', duration: '100000' }))).toBe('正文100s')
+    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '30' }))).toBe('正文2"')
   })
 
   it('没有 duration ⇒ 尾巴整个没有（不是 NaN、也不是 0）；0 是合法值', () => {
-    expect(chatlogBodyOf(rec({ renderType: 'voice' }))).toBe('🎤 正文')
-    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '0' }))).toBe('🎤 正文0"')
-    expect(chatlogBodyOf(rec({ renderType: 'voice', text: '' }))).toBe('🎤 [语音]')
-    expect(chatlogBodyOf(rec({ renderType: 'video', text: '' }))).toBe('🎬 [视频]')
+    expect(chatlogBodyOf(rec({ renderType: 'voice' }))).toBe('正文')
+    expect(chatlogBodyOf(rec({ renderType: 'voice', duration: '0' }))).toBe('正文0"')
+    expect(chatlogBodyOf(rec({ renderType: 'voice', text: '' }))).toBe('[语音]')
+    expect(chatlogBodyOf(rec({ renderType: 'video', text: '' }))).toBe('[视频]')
   })
 })
 
 describe('整行正文', () => {
   it('表情/图片/文本/嵌套各有自己的形状', () => {
-    expect(chatlogBodyOf(rec({ renderType: 'emoji', text: '' }))).toBe('😀 [表情]')
-    expect(chatlogBodyOf(rec({ renderType: 'emoji', text: '[坏表情]' }))).toBe('😀 [坏表情]')
-    expect(chatlogBodyOf(rec({ isImage: true, datasize: '20480' }))).toBe('🖼️ [图片] (20480 字节)')
-    expect(chatlogBodyOf(rec({ isImage: true }))).toBe('🖼️ [图片]')
+    expect(chatlogBodyOf(rec({ renderType: 'emoji', text: '' }))).toBe('[表情]')
+    expect(chatlogBodyOf(rec({ renderType: 'emoji', text: '[坏表情]' }))).toBe('[坏表情]')
+    expect(chatlogBodyOf(rec({ isImage: true, datasize: '20480' }))).toBe('[图片]')
+    expect(chatlogBodyOf(rec({ isImage: true }))).toBe('[图片]')
     expect(chatlogBodyOf(rec({ renderType: 'chatHistory', text: '' }))).toBe('')
     expect(chatlogBodyOf(rec({ text: '' }))).toBe('')
   })

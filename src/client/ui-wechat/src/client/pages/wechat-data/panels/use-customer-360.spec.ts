@@ -3,8 +3,7 @@
  * 客户 360 共享加载器的行为守卫：实时刷新、失败降级和切人时丢弃旧响应。
  * 页面与聊天侧画像抽屉都消费这个 hook，因此这里失败会同时影响两个入口。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Contact360Snapshot } from '@deepseek-ai/dsh-wechat-data/types'

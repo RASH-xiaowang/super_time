@@ -11,6 +11,8 @@ import kitCss from '../ui/kit.module.css'
 import css from './privacy-trust.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 
 const LOCAL_FEATURES = [
   '搜索 / 全库统一搜索', '统计与总览', '导出（CSV/HTML/TXT 等）', '关系图谱',
@@ -76,6 +78,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   const rows = rowsData ?? []
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const exportTask = useExportTask()
 
   /** 合并重查（既有调用点原样可用）。 */
   const load = useCallback(async (): Promise<void> => {
@@ -96,16 +99,26 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   }, [])
 
   const exportAudit = useCallback((): void => {
+    if (exportTask.running || rows.length === 0) return
     const header = 'id,feature,ts,chars,sessions,messages'
     const lines = rows.map(r => `${r.id},${r.feature},${r.ts},${r.chars},${r.sessions},${r.messages}`)
-    const blob = new Blob(['\uFEFF' + header + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'wechat-privacy-audit.csv'
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [rows])
+    void exportTask.run(async () => {
+      const blob = new Blob(['\uFEFF' + header + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'wechat-privacy-audit.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+      return rows.length
+    }, {
+      idPrefix: 'privacy-audit-export',
+      label: '导出隐私审计 CSV',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (count) => `已导出 ${count} 条隐私审计记录`,
+    })
+  }, [exportTask, rows])
 
   const clearAudit = useCallback(async (): Promise<void> => {
     try {
@@ -120,6 +133,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   return (
     <div className={embedded ? css.embedded : kitCss.panelShell}>
       <PanelHeader title="数据边界与出网" desc="数据边界 · AI 出网说明 · 敏感信息扫描结果" />
+      <ExportProgressStatus state={exportTask.state} />
 
       <Card title="数据边界">
         <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用 AI 功能时，只有检索到的聊天片段会发送到所选 LLM 模型，可在模型设置中更换或调整。</p>
@@ -178,7 +192,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
           </div>
         )}
         <div className={css.auditActions}>
-          <Button variant="pill" onClick={exportAudit} disabled={rows.length === 0}>导出审计 CSV</Button>
+          <Button variant="pill" onClick={exportAudit} disabled={rows.length === 0 || exportTask.running}>{exportTask.running ? '导出中…' : '导出审计 CSV'}</Button>
           <Button variant="pill" onClick={() => { void clearAudit() }} disabled={state?.audit.total === 0} {...desktopActionProps()}>清空审计</Button>
         </div>
       </Card>

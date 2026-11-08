@@ -40,6 +40,12 @@ export interface RecordAskInput {
     evidence?: unknown;
     /** 工具 trace；只落脱敏后的有界字段，不落完整参数。 */
     toolCalls?: unknown;
+    /** 旧式单段思考；仅在没有分段思考时作为回退写入轨迹。 */
+    reasoning?: string;
+    /** 按工具轮次/综合阶段拆分的可展示思考。 */
+    reasoningSegments?: unknown;
+    /** 运行阶段事件；只保留稳定字段，明确丢弃 argumentsSummary。 */
+    stages?: unknown;
     /** 资源引用；只落条数与来源工具。 */
     resources?: unknown;
     /** 多阶段检索统计（结构化存 JSON）。 */

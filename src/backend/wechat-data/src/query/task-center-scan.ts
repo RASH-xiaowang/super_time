@@ -215,7 +215,7 @@ export function scanTaskTriggers(decryptedDir: string, opts?: ScanTaskTriggersOp
       const rows = db.prepare("SELECT * FROM task_info WHERE status = 'ready' ORDER BY id ASC").all() as Array<Record<string, unknown>>
       result.tasks = rows.length
       for (const row of rows) {
-        const task = rowToTask(row)
+        const task = rowToTask(row, decryptedDir)
         try {
           // 水位不在 `TaskInfo` 契约里（它是扫描内部状态），直接从行上取。
           scanOneTask(db, decryptedDir, task, taskCellNum(row['last_scan_seq']), selfUsername, result, errors)
@@ -303,7 +303,7 @@ function scanOneTask(
         taskCreated += 1
         if (match.triggeredAt > lastTriggeredAt) lastTriggeredAt = match.triggeredAt
         try {
-          const greeting = insertTaskTriggerGreeting(db, {
+      const greeting = insertTaskTriggerGreeting(decryptedDir, db, {
             taskId: task.id,
             triggerId: taskCellNum(info.lastInsertRowid),
             taskName: task.name,

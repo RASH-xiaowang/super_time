@@ -24,11 +24,15 @@ import type { DataColumn } from '../ui/kit.tsx'
 import css from './export-history.module.css'
 import kitCss from '../ui/kit.module.css'
 import { fmtBytes, fmtLocaleMs } from '../utils/format.ts'
+import { buildMomentsReplayOptions } from './export-history-replay.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 
 /** 导出种类 → 中文名。未知种类原样显示（后端可能先于前端新增种类）。 */
 const KIND_LABEL: Record<string, string> = {
   contacts: '通讯录',
   favorites: '收藏',
+  files: '文件',
   records: '记录',
   moments: '朋友圈',
   privacy: '隐私扫描',
@@ -114,6 +118,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set())
   const [busy, setBusy] = useState(false)
+  const exportTask = useExportTask()
   /** 后端读不动记录库时带回来的原因（P1-1/#9）：空列表与「读不到」是两件事。 */
   const [readError, setReadError] = useState('')
   const { notice, flash, hold } = useTransientNotice(4000)
@@ -183,6 +188,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   }, [pager.items, onlyMissing])
 
   const refresh = useCallback((): void => { pager.reset() }, [pager])
+  const busyNow = busy || exportTask.running
 
   const toggleOne = useCallback((id: number): void => {
     setSelected((prev) => {
@@ -235,40 +241,74 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const reExport = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
     const params = parseParams(r.params)
     if (!params) { hold('这条记录缺少可重跑的参数'); return }
-    const ext = r.format || 'csv'
-    const picked = await apiSaveFileDialog({
-      defaultName: r.filename || `export.${ext}`,
-      title: '重新导出到…',
-    })
-    if (picked.canceled || !picked.path) return
-    setBusy(true)
-    try {
-      // 每种导出把自己的参数与「新目标路径」拼起来；种类不匹配时明确报错，
-      // 不猜测用户意图。
-      if (r.kind === 'contacts' || r.kind === 'favorites' || r.kind === 'records' || r.kind === 'moments' || r.kind === 'privacy') {
-        const res = await apiExportCsv({ ...(params as { kind: string; recordsKind?: string; category?: string }), dest: picked.path })
-        flash(`已重新导出 ${res.count} 行`)
-      } else if (r.kind === 'annual') {
-        const res = await apiExportAnnualReport({ ...(params as { year: number; format: string }), dir: undefined, filename: picked.path })
-        flash(`已重新导出 ${res.count} 条`)
-      } else if (r.kind === 'session') {
-        const res = await apiExportSessionMessages({ ...(params as { username: string; format: string }), dir: undefined, filename: picked.path })
-        flash(`已重新导出 ${res.count} 条`)
-      } else if (r.kind === 'all_sessions') {
-        const res = await apiExportAllSessions({ filename: picked.path })
-        flash(`已重新导出 ${res.count} 条`)
-      } else if (r.kind === 'backup') {
-        hold('备份请在「备份管家」里重新创建（备份包含加密口令，不能从历史重放）')
-      } else {
-        hold(`暂不支持重新导出「${KIND_LABEL[r.kind] ?? r.kind}」`)
-      }
-      refresh()
-    } catch (e) {
-      hold('重新导出失败：' + (e as Error).message)
-    } finally {
-      setBusy(false)
+    if (r.kind === 'backup') {
+      hold('备份请在「备份管家」里重新创建（备份包含加密口令，不能从历史重放）')
+      return
     }
-  }, [flash, hold, refresh])
+    if (!['moments', 'contacts', 'favorites', 'files', 'records', 'privacy', 'annual', 'session', 'all_sessions'].includes(r.kind)) {
+      hold(`暂不支持重新导出「${KIND_LABEL[r.kind] ?? r.kind}」`)
+      return
+    }
+    const ext = r.format || 'csv'
+    let picked: Awaited<ReturnType<typeof apiSaveFileDialog>>
+    try {
+      picked = await apiSaveFileDialog({
+        defaultName: r.filename || `export.${ext}`,
+        title: '重新导出到…',
+      })
+    } catch (e) {
+      hold('选择保存路径失败：' + (e as Error).message)
+      return
+    }
+    if (picked.canceled || !picked.path) return
+    const savePath = picked.path
+    // 每种导出把自己的参数与「新目标路径」拼起来；种类不匹配时明确报错，
+    // 不猜测用户意图。
+    const outcome = await exportTask.run(async ({ jobId }) => {
+      if (r.kind === 'moments') {
+        const res = await apiExportMoments(buildMomentsReplayOptions(r, savePath, jobId))
+        return { count: res.count, unit: '条朋友圈' }
+      }
+      if (r.kind === 'contacts' || r.kind === 'favorites' || r.kind === 'files' || r.kind === 'records' || r.kind === 'privacy') {
+        const res = await apiExportCsv({
+          ...(params as { kind: string; recordsKind?: string; category?: string }),
+          dest: savePath,
+          jobId,
+        })
+        return { count: res.count, unit: '行' }
+      }
+      if (r.kind === 'annual') {
+        const res = await apiExportAnnualReport({
+          ...(params as { year: number; format: string }),
+          dir: undefined,
+          filename: savePath,
+          jobId,
+        })
+        return { count: res.count, unit: '条' }
+      }
+      if (r.kind === 'session') {
+        const res = await apiExportSessionMessages({
+          ...(params as { username: string; format: string }),
+          dir: undefined,
+          filename: savePath,
+          jobId,
+        })
+        return { count: res.count, unit: '条' }
+      }
+      const res = await apiExportAllSessions({ filename: savePath, jobId })
+      return { count: res.count, unit: '条' }
+    }, {
+      idPrefix: 'export-history-replay',
+      label: `重新导出${KIND_LABEL[r.kind] ?? r.kind}`,
+      successMessage: (res) => `已重新导出 ${res.count} ${res.unit}`,
+    })
+    if (outcome.ok) {
+      flash(outcome.message)
+      refresh()
+    } else if (!outcome.canceled) {
+      hold('重新导出失败：' + outcome.error)
+    }
+  }, [flash, hold, refresh, exportTask])
 
   const deleteSelected = useCallback(async (alsoFiles: boolean): Promise<void> => {
     const ids = [...selected]
@@ -446,7 +486,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
           <button
             type="button"
             className={css.opBtn}
-            disabled={busy || parseParams(r.params) === null}
+            disabled={busyNow || parseParams(r.params) === null}
             onClick={() => { void reExport(r) }}
             title={parseParams(r.params) === null ? '这条记录缺少可重跑的参数' : '按原参数重新导出（会让你选新路径）'}
           >重新导出</button>
@@ -454,7 +494,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
         </span>
       ),
     },
-  ], [rows, selected, busy, toggleAllLoaded, toggleOne, openFile, revealFile, copyPath, reExport, deleteOne])
+  ], [rows, selected, busyNow, toggleAllLoaded, toggleOne, openFile, revealFile, copyPath, reExport, deleteOne])
 
   const kindOptions = useMemo(() => {
     const keys = Object.keys(counts.kindCounts).sort()
@@ -486,24 +526,25 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       footer={(
         <div className={css.footerRow}>
           <div className={css.footerGroup}>
-            <Button size="sm" variant="outline" disabled={busy || selected.size === 0} onClick={() => { void deleteSelected(false) }}>
+            <Button size="sm" variant="outline" disabled={busyNow || selected.size === 0} onClick={() => { void deleteSelected(false) }}>
               删除选中记录
             </Button>
-            <Button size="sm" variant="outline" disabled={busy || selected.size === 0} onClick={() => { void deleteSelected(true) }}>
+            <Button size="sm" variant="outline" disabled={busyNow || selected.size === 0} onClick={() => { void deleteSelected(true) }}>
               删除并删文件
             </Button>
           </div>
           <div className={css.footerGroup}>
             <span className={css.footerHint}>清理：</span>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { void prune('missing', false) }}>失效记录</Button>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { void prune('30d', false) }}>30 天前</Button>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { void prune('keep50', false) }}>只留最近 50 条</Button>
+            <Button size="sm" variant="ghost" disabled={busyNow} onClick={() => { void prune('missing', false) }}>失效记录</Button>
+            <Button size="sm" variant="ghost" disabled={busyNow} onClick={() => { void prune('30d', false) }}>30 天前</Button>
+            <Button size="sm" variant="ghost" disabled={busyNow} onClick={() => { void prune('keep50', false) }}>只留最近 50 条</Button>
             <Button size="sm" variant="outline" onClick={onClose}>关闭</Button>
           </div>
         </div>
       )}
     >
       {notice && <div className={css.notice}>{notice}</div>}
+      <ExportProgressStatus state={exportTask.state} onCancel={() => { void exportTask.cancel() }} />
       {/* 筛选行：不用 kit 的 Toolbar（它内部套了一个面板盒子，悬在表格上方像一块
           漂浮的卡片）。这里排成一行，与表格连成一体。 */}
       <div className={css.filterRow}>

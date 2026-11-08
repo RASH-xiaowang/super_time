@@ -382,7 +382,7 @@ export function formatHtml(msgs: WechatMessage[], username: string, now: string,
   const resourceLine = stats.ok + stats.missing > 0
     ? ' · 资源 ' + String(stats.ok) + ' 个' + (stats.missing > 0 ? '，缺失 ' + String(stats.missing) + ' 个' : '')
     : ''
-  const style = 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#e9ece8 0%,#dfe3df 100%);margin:0;padding:24px 12px;color:#1f1f1f}'
+  const style = 'body{font-family:system-ui,sans-serif;background:linear-gradient(180deg,#e9ece8 0%,#dfe3df 100%);margin:0;padding:24px 12px;color:#1f1f1f}'
     + '.wrap{max-width:820px;margin:0 auto}.hd{text-align:center;padding:16px 0 12px}.hd h1{font-size:20px;margin:0 0 6px}.hd p{font-size:12px;color:#70757a;margin:0}'
     + '.date-divider{text-align:center;margin:20px 0 10px}.date-divider span{background:rgba(80,88,84,.72);color:#fff;font-size:11px;padding:3px 13px;border-radius:999px}'
     + '.row{display:flex;margin:12px 0}.row.right{justify-content:flex-end}.bubble{max-width:min(78%,680px);padding:10px 12px;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.09)}'

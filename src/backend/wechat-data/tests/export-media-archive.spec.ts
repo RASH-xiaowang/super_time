@@ -20,19 +20,20 @@ import { crc32 } from '../src/query/zip.ts'
 
 const USER = 'wxid_export_media'
 const CREATE_TIME = Math.floor(Date.UTC(2023, 10, 15, 8, 0, 0) / 1000)
-const IMAGE_MD5 = '11111111111111111111111111111111'
-const MISSING_IMAGE_MD5 = '22222222222222222222222222222222'
-const VIDEO_MD5 = '33333333333333333333333333333333'
-const STICKER_MD5 = '44444444444444444444444444444444'
-const VOICE_SVR_ID = '9876543210123'
-
 const IMAGE_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9])
+const IMAGE_THUMB_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 9, 9, 0xff, 0xd9])
 const COVER_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 9, 8, 7, 0xff, 0xd9])
 const VIDEO_BYTES = Buffer.from('real-video-bytes-for-export')
 const FILE_BYTES = Buffer.from('real-pdf-attachment-bytes')
 const STICKER_BYTES = Buffer.from('GIF89a-real-sticker')
 const WAV_BYTES = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(96, 7)])
 const THUMB_BYTES = COVER_BYTES
+
+const IMAGE_MD5 = createHash('md5').update(IMAGE_BYTES).digest('hex')
+const MISSING_IMAGE_MD5 = '22222222222222222222222222222222'
+const VIDEO_MD5 = createHash('md5').update(VIDEO_BYTES).digest('hex')
+const STICKER_MD5 = createHash('md5').update(STICKER_BYTES).digest('hex')
+const VOICE_SVR_ID = '9876543210123'
 
 const scratch: string[] = []
 
@@ -179,7 +180,7 @@ describe('session export writes real media files into the ZIP', () => {
     })
     expect(existsSync(result.path)).toBe(true)
     expect(result.count).toBe(7)
-    expect(result.mediaCount).toBe(6)
+    expect(result.mediaCount).toBe(5)
     expect(result.mediaMissingCount).toBe(1)
 
     const entries = unzip(readFileSync(result.path))
@@ -193,13 +194,29 @@ describe('session export writes real media files into the ZIP', () => {
 
     const manifest = JSON.parse(entry(entries, 'record_media.json').data.toString('utf8')) as {
       version: number
-      archive: { resourceCount: number; missingCount: number }
-      resources: Array<{ kind: string; status: string; archivePath?: string; messageLocalId: number }>
+      archive: {
+        resourceCount: number
+        missingCount: number
+        originalCount: number
+        thumbnailCount: number
+        previewCount: number
+        thumbnailOnlyCount: number
+      }
+      resources: Array<{ kind: string; status: string; quality?: string; archivePath?: string; messageLocalId: number }>
     }
-    expect(manifest.version).toBe(2)
-    expect(manifest.archive).toEqual({ mediaRoot: 'media', resourceCount: 6, missingCount: 1 })
+    expect(manifest.version).toBe(3)
+    expect(manifest.archive).toEqual({
+      mediaRoot: 'media',
+      resourceCount: 6,
+      missingCount: 1,
+      originalCount: 5,
+      thumbnailCount: 0,
+      previewCount: 1,
+      thumbnailOnlyCount: 0,
+    })
     const missing = manifest.resources.find((it) => it.status === 'missing')
     expect(missing).toMatchObject({ kind: 'image', messageLocalId: 6 })
+    expect(manifest.resources.find((it) => it.kind === 'video' && it.messageLocalId === 2)?.quality).toBe('original')
     for (const item of manifest.resources.filter((it) => it.status === 'ok')) {
       expect(item.archivePath).toBeTruthy()
       expect(entries.some((it) => it.name === item.archivePath)).toBe(true)
@@ -213,6 +230,63 @@ describe('session export writes real media files into the ZIP', () => {
     expect(html).toContain('class="media-file"')
     expect(html).toContain('media-missing')
     expect(html).not.toContain('[图片]</span>')
+  })
+
+  it('never writes a .t thumbnail and reports thumbnail_only without aborting the ZIP', async () => {
+    const fixture = createFixture()
+    rmSync(join(fixture.decoded, USER, IMAGE_MD5 + '.jpg'), { force: true })
+    writeFileSync(join(fixture.decoded, USER, IMAGE_MD5 + '.t.jpg'), IMAGE_THUMB_BYTES)
+    const result = await exportSessionMessagesStreamed(fixture.decrypted, {
+      username: USER,
+      format: 'html',
+      count: 0,
+      dir: fixture.out,
+      filename: 'thumb',
+      zip: true,
+      decodedDir: fixture.decoded,
+      wechatBaseDir: fixture.raw,
+    })
+    expect(result.mediaCount).toBe(4)
+    expect(result.mediaMissingCount).toBe(2)
+    const entries = unzip(readFileSync(result.path))
+    const manifest = JSON.parse(entry(entries, 'record_media.json').data.toString('utf8')) as {
+      archive: {
+        resourceCount: number
+        missingCount: number
+        originalCount: number
+        thumbnailCount: number
+        previewCount: number
+        thumbnailOnlyCount: number
+      }
+      resources: Array<{
+        kind: string
+        status: string
+        messageLocalId: number
+        quality?: string
+        archivePath?: string
+        thumbnailOnly?: boolean
+        error?: string
+      }>
+    }
+    const image = manifest.resources.find((it) => it.kind === 'image' && it.messageLocalId === 1)
+    expect(image).toMatchObject({
+      status: 'missing',
+      quality: 'thumbnail',
+      thumbnailOnly: true,
+    })
+    expect(image?.archivePath).toBeUndefined()
+    expect(image?.error).toContain('thumbnail_only')
+    expect(entries.some((it) => it.name.startsWith('media/images/'))).toBe(false)
+    expect(entries.some((it) => it.data.equals(IMAGE_THUMB_BYTES))).toBe(false)
+    expect(manifest.archive).toEqual({
+      mediaRoot: 'media',
+      resourceCount: 5,
+      missingCount: 2,
+      originalCount: 4,
+      thumbnailCount: 0,
+      previewCount: 1,
+      thumbnailOnlyCount: 1,
+    })
   })
 
   it('writes resource paths into JSON and keeps CSV UTF-8 BOM/resource column', async () => {

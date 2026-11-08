@@ -47,7 +47,7 @@
   padding: var(--nm-s-4);
   background: var(--nm-bg-2);
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-xl, 12px);
+  border-radius: var(--nm-r-lg, 8px);
   box-shadow: var(--nm-shadow-popup);
   animation: confirmPop 0.15s ease-out;
 }
@@ -135,7 +135,7 @@
 }
 
 .challengeWord {
-  font-family: var(--nm-font-mono, monospace);
+  font-family: inherit;
   font-size: var(--nm-fs-sm, 12px);
   font-weight: 700;
   color: var(--nm-danger-text, var(--nm-danger));
@@ -149,25 +149,27 @@
    落在外层 span 上，这里需要直接控制 input 本身的宽度与聚焦样式）。 */
 .challengeInput {
   width: 100%;
+  height: 32px;
   box-sizing: border-box;
-  padding: 6px 10px;
-  font-family: var(--nm-font-mono, monospace);
+  padding: 0 10px;
+  font-family: inherit;
   font-size: var(--nm-fs-sm, 12px);
   color: var(--nm-text-1);
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border-hover);
-  border-radius: var(--nm-r-sm, 6px);
+  border-radius: var(--nm-r-md, 6px);
   outline: none;
-  transition: var(--nm-t-fast, 0.15s);
+  transition: border-color var(--nm-t-fast, 0.15s);
 }
 .challengeInput::placeholder { color: var(--nm-text-3); }
 .challengeInput:focus {
   border-color: var(--nm-cyan);
-  box-shadow: 0 0 0 3px var(--nm-cyan-10);
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 1px;
 }
 .challengeInput[aria-invalid='true'] {
   border-color: var(--nm-danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-danger) 12%, transparent);
+  outline-color: var(--nm-danger);
 }
 
 /* ── 底栏 ───────────────────────────────────────────── */

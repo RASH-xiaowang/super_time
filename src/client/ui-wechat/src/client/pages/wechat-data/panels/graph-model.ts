@@ -8,9 +8,25 @@
  * 还没写」的待补目标。曾经有过一个 `mode='fused'` 把来源会话（人/群）也叠进这张图，
  * 那会把通讯录数据混进知识图谱，已按产品要求移除 —— 别再加回来。
  */
-import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GraphCoverage, GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
 import { edgeDensityCap, edgeHeadroom, OBSERVED_EDGE_CAP } from './graph-budget.ts'
+import type { GraphSettings } from './graph-settings.ts'
+
+export {
+  DEFAULT_GRAPH_SETTINGS,
+  GRAPH_FORCE_CONTROLS,
+  GRAPH_FORCE_FACTOR_MAX,
+  GRAPH_FORCE_FACTOR_MIN,
+  GRAPH_FORCE_KEYS,
+  formatGraphForceMultiplier,
+  graphForceMultiplier,
+} from './graph-settings.ts'
+export type {
+  GraphForceControl,
+  GraphForceKey,
+  GraphSettings,
+} from './graph-settings.ts'
 
 export interface GNode {
   id: string
@@ -31,6 +47,10 @@ export interface GNode {
   isFriend?: boolean
   /** 群成员数/共同成员数(群节点详情) */
   sharedCount?: number
+  /** Group membership snapshot availability; unknown is not the same as zero. */
+  membershipStatus?: 'known' | 'unknown'
+  membersTotal?: number
+  membersTruncated?: boolean
   /** 共同群 code 列表(详情展示共同群名) */
   groupCodes?: string[]
   /** 备注里的班级/批次键(宜州一中404);详情面板据此列出同班名册 */
@@ -62,6 +82,49 @@ export interface GNode {
   fy: number | null
 }
 
+export type GEdgeKind =
+  | 'intimacy'
+  | 'social'
+  | 'common'
+  | 'wiki'
+  | 'source'
+  | 'class'
+  | 'initial'
+  | 'contain'
+  | 'mention'
+  | 'suggest'
+  | 'custom'
+
+/**
+ * 一条视觉边里承载的一种语义关系。
+ *
+ * 图上一个节点对只画一条线，避免物理仿真重复受力、详情 key 冲突和视觉双线；
+ * 但同一对节点完全可能同时是「同群」「同班」「同首字」。这些语义不能像旧实现
+ * 那样靠 `paired` 静默丢掉，因此聚合成关系明细。`source/target/bidirectional`
+ * 是**这条关系自己的方向**，不是视觉边的主方向。
+ */
+export interface GEdgeRelation {
+  kind: GEdgeKind
+  /** 后端原始类型。未知类型归入 custom 时仍原样保留，避免信息损失。 */
+  rawKind?: string
+  /** 后端给出的可读关系名（如「同事」「同项目」）。 */
+  label?: string
+  source: string
+  target: string
+  bidirectional: boolean
+  /** 聚合后的关系权重。同源重复记录按规则累加，推断重复不虚增。 */
+  weight: number
+  /** 合并了多少条原始关系记录。 */
+  count: number
+  /** 证据摘要（去重、有界），完整数量见 evidenceCount。 */
+  evidence?: string[]
+  evidenceCount?: number
+  /** 关系来自后端观测边，还是客户端从节点字段推导。 */
+  origin: 'backend' | 'derived'
+  strength?: number
+  dist?: number
+}
+
 export interface GEdge {
   source: string
   target: string
@@ -69,16 +132,23 @@ export interface GEdge {
   dist: number
   /** 可选边强度(「我」的枢纽边随亲密度变化;普通边默认 1/min(度)) */
   strength?: number
-  /** intimacy=我↔好友(消息量);common=好友↔好友(共同群数);
+  /** intimacy=我↔好友(消息量);social=好友/邀请/回复/提及/朋友圈/资金等直接互动;
+   *  common=好友↔好友(共同群数);
    *  wiki=笔记↔笔记([[链接]]);source=笔记↔来源会话(**已停用**:随「节点只来自知识库」
    *  的约束一并删除,不再有任何产出方;保留枚举只是不动画布现有的取色分支);
    *  class=同备注编号(同班级/同批次,由用户自己的备注结构推得);
    *  initial=首字相同(网名/备注的第一个字符一样,见 firstCharKey);
    *  contain=文件↔章节(这一节确实在这份文件里,是**结构事实**,归观测层);
    *  mention=笔记↔文件(笔记标题作为连续子串出现在文件正文里,是**推断**,归推断层)。 */
-  kind: 'intimacy' | 'common' | 'wiki' | 'source' | 'class' | 'initial' | 'contain' | 'mention' | 'suggest'
+  kind: GEdgeKind
   /** 双向连接:好友/群关系是互惠的,渲染时两端都显示箭头/参与邻居计算。 */
   bidirectional?: boolean
+  /** 同一节点对聚合后的全部关系；第一项是决定线条样式的主关系。 */
+  relations?: GEdgeRelation[]
+  /** 关系种类数（不是线数）。 */
+  relationCount?: number
+  /** 至少含一条后端提供的观测边。 */
+  authoritative?: boolean
 }
 
 export interface BuiltGraph {
@@ -88,10 +158,63 @@ export interface BuiltGraph {
   communityCount: number
   /** 各类节点的个数（一次遍历数完，见 countByKind）—— 缺某种就是没出现过，不是 0。 */
   kindCounts: GraphKindCounts
+  /** Visibility/truncation facts so a node limit is not mistaken for missing data. */
+  coverage?: GraphBuildCoverage
 }
 
 /** 每种节点各多少个（缺某种就是 `undefined`，调用点自己按 0 处理）。 */
 export type GraphKindCounts = Partial<Record<GNode['kind'], number>>
+
+/**
+ * One client-side pair source (common group or common member). Candidate counts
+ * use every retained member; considered counts are the pair checks the bounded
+ * fallback actually performed. This keeps a capped fallback auditable instead
+ * of presenting a partial graph as complete.
+ */
+export interface GraphPairSourceCoverage {
+  sources: number
+  truncatedSources: number
+  candidatePairs: number
+  consideredPairs: number
+  skippedPairs: number
+}
+
+/**
+ * Machine-readable bounds for relations the client derives when an older or
+ * incomplete backend snapshot has no authoritative edge for the pair.
+ */
+export interface GraphClientDerivationCoverage {
+  pairMemberLimit: number
+  pairWorkBudget: number
+  pairWorkUsed: number
+  pairWorkExhausted: boolean
+  commonGroup: GraphPairSourceCoverage
+  commonMember: GraphPairSourceCoverage
+  commonGeneratedPairs: number
+  commonBelowThresholdPairs: number
+  commonEmittedEdges: number
+  commonMergedEdges: number
+  commonSuppressedByAuthoritative: number
+  commonDroppedByEdgeBudget: number
+  intimacyGeneratedEdges: number
+  intimacyEmittedEdges: number
+  intimacyMergedEdges: number
+  intimacySuppressedByAuthoritative: number
+  intimacyDroppedByEdgeBudget: number
+  truncated: boolean
+}
+
+export interface GraphBuildCoverage {
+  candidateNodes: number
+  retainedNodes: number
+  droppedNodes: number
+  droppedEdges: number
+  droppedEdgeEndpoints: number
+  /** Client-side fallback derivation bounds and authoritative suppression. */
+  derived?: GraphClientDerivationCoverage
+  /** Backend limits (pair budget, reply/@ window) retained for the UI audit line. */
+  server?: GraphCoverage
+}
 
 /**
  * 一次遍历数出各类节点的个数（审计 P3-14）。
@@ -110,73 +233,6 @@ export function countByKind(nodes: readonly Pick<GNode, 'kind'>[]): GraphKindCou
 /** 实体类别 → 中文。详情与气泡里要说「模型推断的人名」，而不是裸的 `person`。 */
 export const ENTITY_KIND_LABEL: Record<string, string> = {
   person: '人名', org: '机构', product: '产品', place: '地名', topic: '主题词',
-}
-
-export interface GraphSettings {
-  /** `knowledge` = 知识网络（节点全部来自笔记库）；没有「融合」档 —— 见文件头注释。 */
-  mode: 'people' | 'groups' | 'knowledge'
-  /** 节点上限：**初始默认 = 社交候选总人数 × 30%**（见 `defaultNodeLimit`）；用户拖过滑杆后以用户值为准。 */
-  nodeLimit: number
-  minCommon: number
-  friendsOnly: boolean
-  /** 同备注编号连边(同班级/同批次):people 模式下的结构推断层,可关 */
-  remarkClass: boolean
-  /** 首字连边(网名/备注第一个字符相同):推断层,默认开、可关 */
-  firstChar: boolean
-  nodeScale: number
-  /** 外观 */
-  labelOpacity: number
-  edgeWidth: number
-  showArrows: boolean
-  showLabels: boolean
-  showGrid: boolean
-  /** 头像模糊强度(px,0=关闭):只对**头像位图**做高斯模糊;名字/圆点/描边环/连线保持清晰 */
-  blurNodes: number
-  /** 深度过滤:0=全部;>0=围绕选中节点的 hop 局部图 */
-  depth: number
-  /** 力度 */
-  forceCentripetal: number
-  forceRepulsion: number
-  forceAttraction: number
-  forceEdgeLength: number
-  /** 节点间距倍率:碰撞/硬分离/弹簧下限的公共间距系数(1=默认舒适间距) */
-  nodeGap: number
-  /** 圈子分离度:不同社区节点对之间的额外排斥(圈与圈之间有留白) */
-  communitySeparation: number
-  /** 锁定布局:拖动节点不带动邻居,参数变化不自动重排 */
-  lockLayout: boolean
-}
-
-export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
-  mode: 'people',
-  // `250` 是「自动」哨兵：载入数据后由 Graph.tsx 替换为「候选总人数 × 30%」
-  // （见 defaultNodeLimit；用户拖动滑杆后不再覆盖）。保留 250 而不是 0 是为了
-  // 兼容已持久化的旧设置与 `nodeLimit === DEFAULT_GRAPH_SETTINGS.nodeLimit` 判断。
-  nodeLimit: 250,
-  // 共同群阈值 =1:同一个群的人彼此有边,力导向直接聚团(参考实现默认)
-  minCommon: 1,
-  friendsOnly: true,
-  // 同班级连边:默认开 —— 它把「同一批人」这类用户自建的组织结构画出来
-  remarkClass: true,
-  // 首字连边:默认开 —— 备注/网名首字相同的人往往同属一类(法院_*、工商银行_*、亲戚_*)
-  firstChar: true,
-  // 性能优先:节点默认最小(降低重叠/渲染更轻),连线略细;默认关闭模糊/箭头/标签
-  nodeScale: 0.4,
-  labelOpacity: 0.9,
-  edgeWidth: 1.3,
-  showArrows: false,
-  showLabels: false,
-  showGrid: true,
-  blurNodes: 0,
-  depth: 0,
-  // 力度:向心默认最大(整体聚合更紧),斥力/间距稍大让节点与圈子疏朗、连线略舒展
-  forceCentripetal: 5,
-  forceRepulsion: 4,
-  forceAttraction: 0.25,
-  forceEdgeLength: 1.05,
-  nodeGap: 1.7,
-  communitySeparation: 1.6,
-  lockLayout: false,
 }
 
 /** 「我」节点 id(与 host 一致) */
@@ -199,6 +255,74 @@ export function communityColor(community: number): string {
   if (community < 0) return '#9aa0a6'
   const c = COMMUNITY_COLORS[community % COMMUNITY_COLORS.length]
   return c ?? '#9aa0a6'
+}
+
+/** 关系类型 → 中文。未知类型不伪装成「共同群」，详情会展示后端原值。 */
+export const EDGE_KIND_LABEL: Record<GEdgeKind, string> = {
+  intimacy: '亲密度',
+  social: '社交互动',
+  common: '共同群 / 共同成员',
+  wiki: '笔记链接',
+  source: '内容来源',
+  class: '同备注编号',
+  initial: '首字相同',
+  contain: '文件包含章节',
+  mention: '笔记标题被提及',
+  suggest: '模型推断实体',
+  custom: '其他关系',
+}
+
+/** 关系类型的中文名；运行期收到未知字符串时回退「其他关系」。 */
+export function edgeKindLabel(kind: GEdgeKind): string {
+  return EDGE_KIND_LABEL[kind] ?? EDGE_KIND_LABEL.custom
+}
+
+/**
+ * 关系的可读名称。
+ * @param relation - 聚合关系。
+ * @returns 后端标签优先，否则使用内置中文类型名。
+ */
+export function edgeRelationLabel(relation: Pick<GEdgeRelation, 'kind' | 'label' | 'rawKind'>): string {
+  const own = relation.label?.trim()
+  if (own) return own
+  const rawLabel = relation.rawKind ? BACKEND_EDGE_TYPE_LABEL[relation.rawKind] : undefined
+  if (rawLabel) return rawLabel
+  if (relation.kind === 'custom' && relation.rawKind) return relation.rawKind
+  return EDGE_KIND_LABEL[relation.kind] ?? EDGE_KIND_LABEL.custom
+}
+
+/**
+ * 视觉边的主方向符号。
+ * @param edge - 聚合边。
+ * @returns `↔` 双向、`⇄` 双向但由两条有向关系组成、`→` 单向。
+ */
+export function edgeDirectionSymbol(edge: Pick<GEdge, 'bidirectional' | 'relations'>): '↔' | '⇄' | '→' {
+  const relations = edge.relations ?? []
+  const hasUndirected = relations.some(r => r.bidirectional)
+  if (hasUndirected) return '↔'
+  if (edge.bidirectional) return '⇄'
+  return '→'
+}
+
+/**
+ * 展开一条视觉边里的全部语义，供详情 tooltip / 无障碍文本使用。
+ * @param edge - 聚合边。
+ * @param labelOf - 节点 id → 可读名称。
+ * @returns 每种关系一行，含方向、权重、合并记录数与证据摘要。
+ */
+export function edgeRelationLines(
+  edge: Pick<GEdge, 'relations'>,
+  labelOf: (id: string) => string,
+): string[] {
+  if (!edge.relations || edge.relations.length === 0) return []
+  return edge.relations.map((r) => {
+    const arrow = r.bidirectional ? '↔' : '→'
+    const count = r.count > 1 ? ` · ${r.count} 条记录` : ''
+    const evidence = r.evidence && r.evidence.length > 0
+      ? ` · 证据：${r.evidence.join('、')}${(r.evidenceCount ?? r.evidence.length) > r.evidence.length ? ` 等 ${r.evidenceCount ?? r.evidence.length} 项` : ''}`
+      : ''
+    return `${edgeRelationLabel(r)} · ${labelOf(r.source)} ${arrow} ${labelOf(r.target)} · 权重 ${r.weight}${count}${evidence}`
+  })
 }
 
 /** 好友基准权重(消息量为 0 时仍可辨识),非好友较低 */
@@ -385,6 +509,14 @@ export function rawCandidateNodes<T extends { kind: string; is_friend?: boolean 
 ): T[] {
   if (!env) return []
   return env.nodes.filter((n) => {
+    if (s.mode === 'all') {
+      // The mixed network is the only mode that can display real
+      // person->group facts (owner, membership, invite, group activity).
+      if (n.kind === 'self') return false
+      if (n.kind === 'group') return true
+      if (s.friendsOnly) return n.kind !== 'official' && n.is_friend === true
+      return true
+    }
     if (s.mode === 'people') {
       // 「仅显示好友」:排除群、公众号与未标记好友的联系人
       if (n.kind === 'group' || n.kind === 'self') return false
@@ -415,6 +547,28 @@ export function defaultNodeLimit(totalPeople: number): number {
   return Math.max(1, Math.round(Math.max(0, totalPeople) * 0.3))
 }
 
+interface RawGraphEdgeInput {
+  source: string
+  target: string
+  weight: number
+  /** 后端新增的带类型观测边字段；旧快照缺省时仍按无类型观测边处理。 */
+  kind?: string
+  type?: string
+  relation?: string
+  label?: string
+  relation_label?: string
+  bidirectional?: boolean
+  directed?: boolean
+  direction?: string
+  strength?: number
+  dist?: number
+  evidence?: string | string[]
+  evidences?: string[]
+  evidence_details?: Array<{ source?: string; ref?: string; count?: number }>
+  evidence_count?: number
+  count?: number
+}
+
 interface GraphBuildInput {
   nodes: Array<{
     id: string
@@ -426,33 +580,328 @@ interface GraphBuildInput {
     group_count?: number
     member_count?: number
     shared_count?: number
+    membership_status?: 'known' | 'unknown'
+    members_total?: number
+    members_returned?: number
+    members_truncated?: boolean
     group_codes?: string[]
     remark_group?: string
     shared_members?: Array<{ username: string; name: string; enterpriseName?: string; is_friend: boolean; msg_count: number }>
   }>
-  edges: Array<{ source: string; target: string; weight: number }>
+  edges: RawGraphEdgeInput[]
+  group_names?: Record<string, string>
+  coverage?: GraphCoverage
+}
+
+interface RelationDraft {
+  kind: GEdgeKind
+  rawKind?: string
+  label?: string
+  source: string
+  target: string
+  bidirectional: boolean
+  weight: number
+  origin: GEdgeRelation['origin']
+  evidence?: readonly string[]
+  evidenceCount?: number
+  strength?: number
+  dist?: number
+  recordCount?: number
+}
+
+interface RelationRecord extends GEdgeRelation {
+  strength?: number
+  dist?: number
+}
+
+interface PairBucket {
+  first: string
+  second: string
+  relations: Map<string, RelationRecord>
+}
+
+interface RelationAddResult {
+  pairAdded: boolean
+  relationAdded: boolean
+  suppressedByAuthoritative: boolean
+}
+
+const KNOWN_EDGE_KINDS = new Set<GEdgeKind>([
+  'intimacy', 'social', 'common', 'wiki', 'source', 'class', 'initial', 'contain', 'mention', 'suggest', 'custom',
+])
+
+const EDGE_KIND_ALIASES: Record<string, GEdgeKind> = {
+  intimacy: 'intimacy',
+  message: 'intimacy',
+  chat: 'intimacy',
+  direct_conversation: 'intimacy',
+  common: 'common',
+  common_group: 'common',
+  group_conversation: 'common',
+  group_membership: 'common',
+  group_activity: 'common',
+  shared_group: 'common',
+  same_group: 'common',
+  co_group: 'common',
+  group: 'common',
+  member: 'common',
+  shared_member: 'common',
+  common_member: 'common',
+  group_owner: 'common',
+  group_admin: 'common',
+  friend: 'social',
+  friend_request: 'social',
+  invite: 'social',
+  invitation: 'social',
+  reply: 'social',
+  quote_reply: 'social',
+  mention_user: 'social',
+  mention_member: 'social',
+  at_user: 'social',
+  call: 'social',
+  moment_like: 'social',
+  moment_comment: 'social',
+  moment_reply: 'social',
+  transfer: 'social',
+  redpacket: 'social',
+  wiki: 'wiki',
+  link: 'wiki',
+  source: 'source',
+  provenance: 'source',
+  class: 'class',
+  school: 'class',
+  batch: 'class',
+  remark_class: 'class',
+  initial: 'initial',
+  first_char: 'initial',
+  contain: 'contain',
+  section: 'contain',
+  mention: 'mention',
+  suggest: 'suggest',
+  entity: 'suggest',
+}
+
+/** 后端 GraphEdge.type → 中文关系名。未知扩展类型仍由 rawKind 原样保留。 */
+const BACKEND_EDGE_TYPE_LABEL: Record<string, string> = {
+  friend: '好友',
+  friend_request: '好友申请',
+  direct_conversation: '单聊消息',
+  group_conversation: '群聊消息',
+  group_membership: '群成员',
+  group_activity: '群内发言',
+  group_owner: '群主',
+  group_admin: '群管理员',
+  common_group: '共同群',
+  common_member: '共同成员',
+  invite: '邀请入群',
+  invitation: '邀请入群',
+  reply: '回复',
+  quote_reply: '引用回复',
+  mention_user: '@提及',
+  mention_member: '@群成员',
+  at_user: '@提及',
+  call: '通话',
+  moment_like: '朋友圈点赞',
+  moment_comment: '朋友圈评论',
+  moment_reply: '朋友圈回复',
+  transfer: '转账',
+  redpacket: '红包',
+}
+
+const DIRECTED_EDGE_KINDS = new Set<GEdgeKind>(['wiki', 'source'])
+/**
+ * 后端动作型关系：即使调用方漏传 direction，也不能按无向关系画成双向。
+ * GraphEdge 正常总会带 direction；这里是旧缓存/跨版本数据的兼容兜底。
+ */
+const DIRECTED_RAW_TYPES = new Set([
+  'group_conversation', 'group_membership', 'group_activity', 'group_owner', 'group_admin', 'friend_request',
+  'invite', 'invitation', 'reply', 'quote_reply', 'mention_user', 'mention_member', 'at_user',
+  'call', 'moment_like', 'moment_comment', 'moment_reply', 'transfer', 'redpacket',
+])
+const MAX_EDGE_EVIDENCE = 12
+const OBSERVED_EDGE_KINDS = new Set<GEdgeKind>(['intimacy', 'social', 'common', 'wiki', 'source', 'contain'])
+/** 「共同群阈值」只约束共同群/共同成员计数，不误伤群成员、群聊消息等同为 common 视觉类型的事实边。 */
+const COMMON_THRESHOLD_TYPES = new Set([
+  '', 'common', 'common_group', 'common_member', 'shared_group', 'same_group',
+  'co_group', 'group', 'member', 'shared_member',
+])
+/**
+ * 派生关系只是后端缺失时的兼容补位。若同一 pair 已有等价后端语义，
+ * 不再新增一条看起来像“第二种关系”的合成关系；后端的 rawKind/证据继续作为唯一明细。
+ */
+const DERIVED_BACKEND_EQUIVALENTS: Partial<Record<GEdgeKind, ReadonlySet<string>>> = {
+  intimacy: new Set(['intimacy', 'direct_conversation', 'message', 'chat']),
+  common: new Set([
+    'common', 'common_group', 'common_member', 'shared_group', 'same_group', 'co_group',
+    'group', 'member', 'shared_member',
+  ]),
+}
+const CLIENT_COMMON_PAIR_MEMBER_LIMIT = 80
+const CLIENT_COMMON_PAIR_WORK_BUDGET = 120_000
+const RELATION_KIND_RANK: Record<GEdgeKind, number> = {
+  intimacy: 0,
+  social: 1,
+  common: 2,
+  wiki: 3,
+  contain: 4,
+  source: 5,
+  class: 6,
+  mention: 7,
+  suggest: 8,
+  initial: 9,
+  custom: 10,
+}
+
+/** 稳定的无序点对键：用 JSON 编码，避免 username 含 `|` 时两组端点拼成同一个键。 */
+function pairKey(a: string, b: string): string {
+  return a < b ? JSON.stringify([a, b]) : JSON.stringify([b, a])
+}
+
+function combinationsOfTwo(count: number): number {
+  const safe = Math.max(0, Math.floor(count))
+  return safe * (safe - 1) / 2
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function rawEdgeTypeKey(raw: RawGraphEdgeInput): string {
+  return (raw.kind ?? raw.type ?? raw.relation ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+}
+
+function normalizeRawEdgeKind(raw: RawGraphEdgeInput): Pick<RelationRecord, 'kind' | 'rawKind' | 'label'> {
+  const rawKind = (raw.kind ?? raw.type ?? raw.relation ?? '').trim()
+  const key = rawEdgeTypeKey(raw)
+  const mapped = !key
+    ? 'common'
+    : EDGE_KIND_ALIASES[key] ?? (KNOWN_EDGE_KINDS.has(key as GEdgeKind) ? key as GEdgeKind : 'custom')
+  const label = (raw.label ?? raw.relation_label ?? '').trim()
+  return {
+    kind: mapped,
+    // common_group / common_member 等后端类型会落到同一视觉分类，但仍是不同语义。
+    // rawKind 必须参与关系去重键，否则同一点对的它们会被静默合并。
+    ...(key && key !== mapped ? { rawKind: key } : {}),
+    ...(label ? { label } : {}),
+  }
+}
+
+function normalizeDirection(raw: RawGraphEdgeInput, kind: GEdgeKind): {
+  source: string
+  target: string
+  bidirectional: boolean
+} {
+  const hint = (raw.direction ?? '').trim().toLowerCase()
+  const rawType = rawEdgeTypeKey(raw)
+  const source = raw.source
+  let target = raw.target
+  let bidirectional = typeof raw.bidirectional === 'boolean'
+    ? raw.bidirectional
+    : raw.directed === true
+      ? false
+      : raw.directed === false
+        ? true
+        : !DIRECTED_EDGE_KINDS.has(kind) && !DIRECTED_RAW_TYPES.has(rawType)
+  if (hint === 'both' || hint === 'undirected' || hint === 'bidirectional') bidirectional = true
+  if (hint === 'reverse' || hint === 'in' || hint === 'incoming') {
+    bidirectional = false
+    target = source
+    return { source: raw.target, target, bidirectional }
+  }
+  if (hint === 'forward' || hint === 'out' || hint === 'outgoing' || hint === 'directed') bidirectional = false
+  return { source, target, bidirectional }
+}
+
+function relationEvidence(raw: RawGraphEdgeInput): { values: string[]; count: number } {
+  const details = (raw.evidence_details ?? [])
+    .map((item) => {
+      const source = (item.source ?? '').trim()
+      if (!source) return ''
+      const ref = (item.ref ?? '').trim()
+      const count = finiteNumber(item.count, 0)
+      return source + (ref ? ':' + ref : '') + (count > 1 ? '#' + String(count) : '')
+    })
+    .filter(Boolean)
+  const candidates = [
+    ...(typeof raw.evidence === 'string' ? [raw.evidence] : raw.evidence ?? []),
+    ...(raw.evidences ?? []),
+    ...details,
+  ]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue
+    const text = value.trim()
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    if (out.length < MAX_EDGE_EVIDENCE) out.push(text)
+  }
+  const detailCount = (raw.evidence_details ?? []).reduce(
+    (sum, item) => sum + Math.max(1, Math.round(finiteNumber(item.count, 1))),
+    0,
+  )
+  return { values: out, count: Math.max(out.length, detailCount) }
 }
 
 /** GraphSnapshot → 筛选后的图(people/groups 两模式;社区检测;亲密度拉力)。 */
 export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): BuiltGraph {
   if (!env) return { nodes: [], edges: [], communityCount: 0, kindCounts: {} }
-  const selfNode = env.nodes.find(n => n.kind === 'self' && n.id === 'self')
+  /**
+   * 稳定 id 是边能落到正确节点的前提。后端正常不会重复，但缓存/合并快照可能重复；
+   * 这里保留首条，避免 React key、布局表和边端点各自指向不同副本。
+   */
+  const selfNode = env.nodes.find(n => n.kind === 'self' && n.id === SELF_ID)
+  const seenNodeIds = new Set<string>()
+  const uniqueNodes: GraphBuildInput['nodes'] = []
+  if (selfNode) {
+    uniqueNodes.push(selfNode)
+    seenNodeIds.add(selfNode.id)
+  }
+  for (const node of env.nodes) {
+    if (!node.id || seenNodeIds.has(node.id)) continue
+    seenNodeIds.add(node.id)
+    uniqueNodes.push(node)
+  }
+  const normalizedEnv = { ...env, nodes: uniqueNodes }
   // 筛选口径与「默认节点上限 = 30%」共用 rawCandidateNodes（两处各写一份必然漂移）。
-  const rawNodes = rawCandidateNodes(env, s)
+  const rawNodes = rawCandidateNodes(normalizedEnv, s)
   // 排序:好友优先(内部按共同群数),其后群友;再整体截前 nodeLimit(参考实现语义)
   const weightOf = (n: {
     msg_count?: number
     shared_count?: number
     group_count?: number
-  }): number => n.msg_count ?? n.shared_count ?? n.group_count ?? 1
-  const top = [...rawNodes]
-    .sort((a, b) => {
-      const fa = s.mode === 'people' ? Number(a.is_friend === true) : 0
-      const fb = s.mode === 'people' ? Number(b.is_friend === true) : 0
-      if (fa !== fb) return fb - fa
-      return weightOf(b) - weightOf(a)
-    })
-    .slice(0, s.nodeLimit)
+  }): number => Math.max(
+    n.msg_count ?? 0,
+    n.shared_count ?? 0,
+    n.group_count ?? 0,
+    1,
+  )
+  const rankNode = (a: (typeof rawNodes)[number], b: (typeof rawNodes)[number]): number => {
+    const fa = s.mode === 'people' ? Number(a.is_friend === true) : 0
+    const fb = s.mode === 'people' ? Number(b.is_friend === true) : 0
+    if (fa !== fb) return fb - fa
+    return weightOf(b) - weightOf(a) || a.id.localeCompare(b.id)
+  }
+  const rawById = new Map(rawNodes.map(node => [node.id, node]))
+  const priorityIds = new Set<string>()
+  // Backend edges are authoritative facts. Retain their endpoints before the
+  // ordinary density ranking so a small node limit cannot silently erase a
+  // group owner/member/reply edge.
+  for (const raw of env.edges ?? []) {
+    if (typeof raw.source !== 'string' || typeof raw.target !== 'string') continue
+    if (rawById.has(raw.source)) priorityIds.add(raw.source)
+    if (rawById.has(raw.target)) priorityIds.add(raw.target)
+  }
+  const priorityNodes = [...priorityIds]
+    .map(id => rawById.get(id))
+    .filter((node): node is (typeof rawNodes)[number] => node !== undefined)
+    .sort(rankNode)
+  const selected = new Map<string, (typeof rawNodes)[number]>()
+  for (const node of [...priorityNodes, ...rawNodes.slice().sort(rankNode)]) {
+    if (selected.size >= Math.max(0, s.nodeLimit)) break
+    selected.set(node.id, node)
+  }
+  const top = [...selected.values()]
   const nodes: GNode[] = [
     ...(selfNode ? [{
       id: SELF_ID,
@@ -469,33 +918,234 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       kind: (n.kind === 'group' ? 'group' : 'person') as GNode['kind'],
       ...(n.enterpriseName ? { enterpriseName: n.enterpriseName } : {}),
       ...(n.kind === 'official' ? { isOfficial: true } : {}),
-      weight: s.mode === 'people'
-        ? personWeight(n.is_friend === true, n.msg_count ?? 0)
-        : Math.max(1, weightOf(n)),
+      weight: n.kind === 'group'
+        ? Math.max(1, weightOf(n))
+        : personWeight(n.is_friend === true, n.msg_count ?? 0),
       // 基础半径(不乘 nodeScale):节点大小作为外观参数,由画布侧统一应用
-      radius: s.mode === 'people'
-        ? radiusByIntimacy(personWeight(n.is_friend === true, n.msg_count ?? 0))
-        : radiusBySqrt(n.shared_count ?? 0, 8, 9, 18),
+      radius: n.kind === 'group'
+        ? radiusBySqrt(n.shared_count ?? 0, 8, 9, 18)
+        : radiusByIntimacy(personWeight(n.is_friend === true, n.msg_count ?? 0)),
       community: -1,
       x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
       ...(n.msg_count !== undefined ? { intimacy: n.msg_count } : {}),
       ...(n.is_friend !== undefined ? { isFriend: n.is_friend } : {}),
       ...(n.shared_count !== undefined || n.member_count !== undefined ? { sharedCount: n.shared_count ?? n.member_count } : {}),
+      ...(n.membership_status ? { membershipStatus: n.membership_status } : {}),
+      ...(n.members_total !== undefined ? { membersTotal: n.members_total } : {}),
+      ...(n.members_truncated !== undefined ? { membersTruncated: n.members_truncated } : {}),
       ...(n.group_codes && n.group_codes.length > 0 ? { groupCodes: n.group_codes } : {}),
       ...(n.remark_group ? { remarkGroup: n.remark_group } : {}),
     })),
   ]
-  // 边派生:people=共同群数交集;groups=共同成员数交集
+  const visibleIds = new Set(nodes.map(n => n.id))
+  const graphCoverage: GraphBuildCoverage = {
+    candidateNodes: rawNodes.length,
+    retainedNodes: top.length,
+    droppedNodes: Math.max(0, rawNodes.length - top.length),
+    droppedEdges: 0,
+    droppedEdgeEndpoints: 0,
+    derived: {
+      pairMemberLimit: CLIENT_COMMON_PAIR_MEMBER_LIMIT,
+      pairWorkBudget: CLIENT_COMMON_PAIR_WORK_BUDGET,
+      pairWorkUsed: 0,
+      pairWorkExhausted: false,
+      commonGroup: {
+        sources: 0,
+        truncatedSources: 0,
+        candidatePairs: 0,
+        consideredPairs: 0,
+        skippedPairs: 0,
+      },
+      commonMember: {
+        sources: 0,
+        truncatedSources: 0,
+        candidatePairs: 0,
+        consideredPairs: 0,
+        skippedPairs: 0,
+      },
+      commonGeneratedPairs: 0,
+      commonBelowThresholdPairs: 0,
+      commonEmittedEdges: 0,
+      commonMergedEdges: 0,
+      commonSuppressedByAuthoritative: 0,
+      commonDroppedByEdgeBudget: 0,
+      intimacyGeneratedEdges: 0,
+      intimacyEmittedEdges: 0,
+      intimacyMergedEdges: 0,
+      intimacySuppressedByAuthoritative: 0,
+      intimacyDroppedByEdgeBudget: 0,
+      truncated: false,
+    },
+  }
+  const derivedCoverage = graphCoverage.derived!
+  /**
+   * 同一节点对只保留一条视觉边，但关系语义全部进入 `relations`。
+   * 这同时解决旧实现的两个问题：
+   *   · 后端带类型边被完全忽略；
+   *   · `paired` 去重会让同群 + 同班 + 同首字的语义只剩最先插入的一种。
+   */
+  const pairBuckets = new Map<string, PairBucket>()
+  const relationIdentity = (r: RelationDraft): string => JSON.stringify([
+    r.kind,
+    r.rawKind ?? '',
+    r.label ?? '',
+    r.source,
+    r.target,
+    r.bidirectional,
+  ])
+
+  const addRelation = (draft: RelationDraft): RelationAddResult => {
+    if (!draft.source || !draft.target || draft.source === draft.target) {
+      return { pairAdded: false, relationAdded: false, suppressedByAuthoritative: false }
+    }
+    if (!visibleIds.has(draft.source) || !visibleIds.has(draft.target)) {
+      return { pairAdded: false, relationAdded: false, suppressedByAuthoritative: false }
+    }
+    const key = pairKey(draft.source, draft.target)
+    let bucket = pairBuckets.get(key)
+    const pairAdded = bucket === undefined
+    if (!bucket) {
+      bucket = {
+        first: draft.source < draft.target ? draft.source : draft.target,
+        second: draft.source < draft.target ? draft.target : draft.source,
+        relations: new Map(),
+      }
+      pairBuckets.set(key, bucket)
+    }
+
+    if (draft.origin === 'derived') {
+      const equivalents = DERIVED_BACKEND_EQUIVALENTS[draft.kind]
+      if (equivalents) {
+        for (const relation of bucket.relations.values()) {
+          if (
+            relation.origin === 'backend'
+            && (relation.rawKind === undefined || equivalents.has(relation.rawKind))
+          ) {
+            return { pairAdded: false, relationAdded: false, suppressedByAuthoritative: true }
+          }
+        }
+      }
+    }
+
+    // 无向关系反向重复上报要合并，但有向关系必须保留 A→B 与 B→A 两条语义。
+    const identityDraft: RelationDraft = draft.bidirectional
+      ? {
+          ...draft,
+          source: draft.source < draft.target ? draft.source : draft.target,
+          target: draft.source < draft.target ? draft.target : draft.source,
+        }
+      : draft
+    const ident = relationIdentity(identityDraft)
+    const existing = bucket.relations.get(ident)
+    const weight = Math.max(0, finiteNumber(draft.weight, 1))
+    const recordCount = Math.max(1, Math.round(finiteNumber(draft.recordCount, 1)))
+    const evidence = [...new Set(draft.evidence ?? [])].filter(Boolean).slice(0, MAX_EDGE_EVIDENCE)
+    const evidenceCount = Math.max(
+      evidence.length,
+      draft.evidenceCount ?? 0,
+    )
+    if (!existing) {
+      bucket.relations.set(ident, {
+        kind: draft.kind,
+        ...(draft.rawKind ? { rawKind: draft.rawKind } : {}),
+        ...(draft.label ? { label: draft.label } : {}),
+        source: draft.source,
+        target: draft.target,
+        bidirectional: draft.bidirectional,
+        weight,
+        count: recordCount,
+        ...(evidence.length > 0 ? { evidence } : {}),
+        ...(evidenceCount > 0 ? { evidenceCount } : {}),
+        origin: draft.origin,
+        ...(draft.strength !== undefined ? { strength: draft.strength } : {}),
+        ...(draft.dist !== undefined ? { dist: draft.dist } : {}),
+      })
+      return { pairAdded, relationAdded: true, suppressedByAuthoritative: false }
+    }
+
+    // 同一关系重复上报：权重可累加；后端观测覆盖客户端推导时以观测为准，避免双计。
+    if (existing.origin === 'backend' && draft.origin === 'backend') {
+      existing.weight += weight
+    } else if (existing.origin !== 'backend' && draft.origin === 'backend') {
+      existing.origin = 'backend'
+      existing.weight = Math.max(existing.weight, weight)
+    } else if (existing.origin !== draft.origin) {
+      existing.weight = Math.max(existing.weight, weight)
+    }
+    existing.count += recordCount
+    existing.evidenceCount = Math.max(
+      existing.evidenceCount ?? existing.evidence?.length ?? 0,
+      (existing.evidenceCount ?? 0) + evidenceCount,
+    )
+    if (evidence.length > 0) {
+      const merged = [...(existing.evidence ?? [])]
+      const seen = new Set(merged)
+      for (const item of evidence) {
+        if (seen.has(item) || merged.length >= MAX_EDGE_EVIDENCE) continue
+        seen.add(item)
+        merged.push(item)
+      }
+      if (merged.length > 0) existing.evidence = merged
+    }
+    if (draft.strength !== undefined) {
+      existing.strength = Math.max(existing.strength ?? 0, draft.strength)
+    }
+    if (draft.dist !== undefined && existing.dist === undefined) existing.dist = draft.dist
+    return { pairAdded: false, relationAdded: false, suppressedByAuthoritative: false }
+  }
+
+  // ① 后端观测边优先消费。旧实现完全忽略 env.edges；这里不依赖 group_codes 再猜一遍。
+  const authoritativeCommonPairs = new Set<string>()
+  const authoritativeIntimacyPairs = new Set<string>()
+  for (const raw of env.edges ?? []) {
+    if (!raw || typeof raw.source !== 'string' || typeof raw.target !== 'string') continue
+    if (!visibleIds.has(raw.source) || !visibleIds.has(raw.target)) {
+      graphCoverage.droppedEdgeEndpoints += 1
+      continue
+    }
+    const info = normalizeRawEdgeKind(raw)
+    const weight = Math.max(0, finiteNumber(raw.weight, 1))
+    const rawType = rawEdgeTypeKey(raw)
+    if (info.kind === 'common' && COMMON_THRESHOLD_TYPES.has(rawType) && weight < s.minCommon) continue
+    if (info.kind === 'common' && (rawType === '' || DERIVED_BACKEND_EQUIVALENTS.common?.has(rawType))) {
+      authoritativeCommonPairs.add(pairKey(raw.source, raw.target))
+    }
+    if (info.kind === 'intimacy' && (rawType === '' || DERIVED_BACKEND_EQUIVALENTS.intimacy?.has(rawType))) {
+      authoritativeIntimacyPairs.add(pairKey(raw.source, raw.target))
+    }
+    const dir = normalizeDirection(raw, info.kind)
+    const evidence = relationEvidence(raw)
+    const evidenceTotal = Math.max(
+      evidence.count,
+      typeof raw.evidence === 'string' ? 1 : raw.evidence?.length ?? 0,
+      raw.evidences?.length ?? 0,
+      finiteNumber(raw.evidence_count, 0),
+    )
+    addRelation({
+      ...info,
+      ...dir,
+      weight,
+      origin: 'backend',
+      ...(evidence.values.length > 0 ? { evidence: evidence.values } : {}),
+      ...(evidenceTotal > 0 ? { evidenceCount: evidenceTotal } : {}),
+      ...(raw.strength !== undefined ? { strength: finiteNumber(raw.strength, 0) } : {}),
+      ...(raw.dist !== undefined ? { dist: finiteNumber(raw.dist, 0) } : {}),
+      recordCount: Math.max(1, Math.round(finiteNumber(raw.count, 1))),
+    })
+  }
+
+  // ② 客户端兼容推导：people=共同群数交集；groups=共同成员数交集。
   const byGroup = new Map<string, string[]>()
   const byMember = new Map<string, string[]>()
   for (const n of top) {
-    if (s.mode === 'people') {
+    if (s.mode === 'people' || s.mode === 'all') {
       for (const c of n.group_codes ?? []) {
         let arr = byGroup.get(c)
         if (!arr) { arr = []; byGroup.set(c, arr) }
         arr.push(n.id)
       }
-    } else {
+    }
+    if (s.mode === 'groups' || s.mode === 'all') {
       for (const m of n.shared_members ?? []) {
         let arr = byMember.get(m.username)
         if (!arr) { arr = []; byMember.set(m.username, arr) }
@@ -503,102 +1153,201 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       }
     }
   }
-  // 群内配对预算:每个群只取权重最高的 80 名成员参与配对
-  // (大群全配对是 O(G²) 灾难:500 人群 12.5 万对、1 万人群 5 千万对;
-  //  且同群内边权重多为 1,截掉弱尾部不影响结构)
-  const GROUP_PAIR_MEMBERS = 80
-  const edgeW = new Map<string, number>()
-  for (const [, list] of (s.mode === 'people' ? byGroup : byMember)) {
-    if (list.length < 2) continue
-    const members = list.length > GROUP_PAIR_MEMBERS ? list.slice(0, GROUP_PAIR_MEMBERS) : list
+  /*
+   * 每群/每成员仍保留前 80 人，避免大群全配对造成 O(G²) 卡顿；但人员上限和
+   * 全局 pair-work 预算都写入 coverage。后端已有同义权威关系时不再生成客户端
+   * 副本，既避免重复边，也让“权威数据覆盖了多少推导”可审计。
+   */
+  interface CommonPairAccumulator { first: string; second: string; weight: number; evidence: Set<string> }
+  const commonPairs = new Map<string, CommonPairAccumulator>()
+  const addDerivedPairs = (
+    rawList: readonly string[],
+    evidence: string,
+    sourceCoverage: GraphPairSourceCoverage,
+  ): void => {
+    const list = [...new Set(rawList)]
+    if (list.length < 2) return
+    sourceCoverage.sources += 1
+    sourceCoverage.candidatePairs += combinationsOfTwo(list.length)
+    const members = list.length > CLIENT_COMMON_PAIR_MEMBER_LIMIT
+      ? list.slice(0, CLIENT_COMMON_PAIR_MEMBER_LIMIT)
+      : list
+    let truncated = members.length < list.length
+    pairLoop:
     for (let i = 0; i < members.length; i++) {
       const ai = members[i]
       if (!ai) continue
       for (let j = i + 1; j < members.length; j++) {
         const bj = members[j]
         if (!bj) continue
-        const key = ai < bj ? ai + '|' + bj : bj + '|' + ai
-        edgeW.set(key, (edgeW.get(key) ?? 0) + 1)
+        if (derivedCoverage.pairWorkUsed >= CLIENT_COMMON_PAIR_WORK_BUDGET) {
+          derivedCoverage.pairWorkExhausted = true
+          truncated = true
+          break pairLoop
+        }
+        derivedCoverage.pairWorkUsed += 1
+        sourceCoverage.consideredPairs += 1
+        const key = pairKey(ai, bj)
+        if (authoritativeCommonPairs.has(key)) {
+          derivedCoverage.commonSuppressedByAuthoritative += 1
+          continue
+        }
+        const acc = commonPairs.get(key)
+        if (acc) {
+          acc.weight += 1
+          acc.evidence.add(evidence)
+        } else {
+          commonPairs.set(key, {
+            first: ai < bj ? ai : bj,
+            second: ai < bj ? bj : ai,
+            weight: 1,
+            evidence: new Set([evidence]),
+          })
+        }
       }
     }
+    if (truncated) sourceCoverage.truncatedSources += 1
   }
-  const edges: GEdge[] = [...edgeW.entries()]
-    .map(([key, w]) => {
-      const [a, b] = key.split('|')
+  for (const [groupId, list] of byGroup) {
+    addDerivedPairs(list, env.group_names?.[groupId] || groupId, derivedCoverage.commonGroup)
+  }
+  if (s.mode === 'groups' || s.mode === 'all') {
+    for (const [memberId, list] of byMember) addDerivedPairs(list, memberId, derivedCoverage.commonMember)
+  }
+  for (const sourceCoverage of [derivedCoverage.commonGroup, derivedCoverage.commonMember]) {
+    sourceCoverage.skippedPairs = Math.max(0, sourceCoverage.candidatePairs - sourceCoverage.consideredPairs)
+  }
+  const derivedCommon = [...commonPairs.values()]
+    .filter((pair) => pair.weight >= s.minCommon)
+    .sort((a, b) => b.weight - a.weight || a.first.localeCompare(b.first) || a.second.localeCompare(b.second))
+  derivedCoverage.commonGeneratedPairs = derivedCommon.length
+  derivedCoverage.commonBelowThresholdPairs = Math.max(0, commonPairs.size - derivedCommon.length)
+  derivedCoverage.truncated = derivedCoverage.pairWorkExhausted
+    || derivedCoverage.commonGroup.truncatedSources > 0
+    || derivedCoverage.commonMember.truncatedSources > 0
+
+  /**
+   * 推导层只占后端观测边之外的余量。观测边本身是权威数据，不因 6000 条显示上限被删；
+  * 若后端一次返回超过上限，模型仍完整保留，画布可选择截断绘制。
+  */
+  const observedCap = Math.min(OBSERVED_EDGE_CAP, edgeDensityCap(nodes.length))
+  const addObservedDerived = (draft: RelationDraft): RelationAddResult & { droppedByEdgeBudget: boolean } => {
+    const key = pairKey(draft.source, draft.target)
+    if (!pairBuckets.has(key) && pairBuckets.size >= observedCap) {
+      graphCoverage.droppedEdges += 1
       return {
-        source: a ?? '', target: b ?? '', weight: w,
-        // 基础目标距离只随权重变化;「连线长度」由仿真侧统一应用(避免二次方)
-        dist: (s.mode === 'people' ? 200 : 220) / Math.sqrt(Math.max(w, 1)),
-        kind: 'common' as const,
-        bidirectional: true,
+        pairAdded: false,
+        relationAdded: false,
+        suppressedByAuthoritative: false,
+        droppedByEdgeBudget: true,
       }
-    })
-    .filter(e => e.source && e.target && e.weight >= s.minCommon)
-  edges.sort((a, b) => b.weight - a.weight)
-  // 「我」→ 每个节点的亲密度连线(消息量→距离/强度指数衰减,参照参考实现 intimacyPull)
-  const intimacy: GEdge[] = []
+    }
+    return { ...addRelation(draft), droppedByEdgeBudget: false }
+  }
+
+  // ③ 「我」→ 每个节点的亲密度连线(消息量→距离/强度指数衰减,参照参考实现 intimacyPull)
   if (selfNode) {
     for (const n of top) {
-      const w = s.mode === 'people'
-        ? personWeight(n.is_friend === true, n.msg_count ?? 0)
-        : Math.max(1, weightOf(n))
-      const t = 1 - Math.exp(-w / (s.mode === 'people' ? 600 : 60))
-      intimacy.push({
+      const isGroup = n.kind === 'group'
+      const w = isGroup
+        ? Math.max(1, weightOf(n))
+        : personWeight(n.is_friend === true, n.msg_count ?? 0)
+      const t = 1 - Math.exp(-w / (isGroup ? 60 : 600))
+      derivedCoverage.intimacyGeneratedEdges += 1
+      if (authoritativeIntimacyPairs.has(pairKey(SELF_ID, n.id))) {
+        derivedCoverage.intimacySuppressedByAuthoritative += 1
+        continue
+      }
+      const result = addObservedDerived({
         source: SELF_ID, target: n.id,
-        weight: n.is_friend === true && s.mode === 'people' ? Math.max(1, n.group_count ?? 0) : Math.max(1, n.msg_count ?? 0),
+        weight: n.is_friend === true && !isGroup ? Math.max(1, n.group_count ?? 0) : Math.max(1, n.msg_count ?? 0),
         // 亲密度距离只随亲密度变化;「连线长度」由仿真侧统一应用
         dist: 340 - t * 260,
         strength: 0.02 + t * 0.16,
         kind: 'intimacy',
         bidirectional: true,
+        origin: 'derived',
       })
+      if (result.suppressedByAuthoritative) {
+        derivedCoverage.intimacySuppressedByAuthoritative += 1
+      } else if (result.droppedByEdgeBudget) {
+        derivedCoverage.intimacyDroppedByEdgeBudget += 1
+      } else if (result.relationAdded) {
+        derivedCoverage.intimacyEmittedEdges += 1
+      } else {
+        derivedCoverage.intimacyMergedEdges += 1
+      }
     }
   }
-  // ── 观测层额度：亲密度 + 共同群/成员 ───────────────────────────────────────
-  // 这两类是**真实观测**到的关系（不是推断），所以「有多少画多少」，只受两道上限约束：
-  //   min(OBSERVED_EDGE_CAP, edgeDensityCap(n))
-  //   - `edgeDensityCap`：绘制层这一帧到底能容纳多少条（小图 251 节点 → 1255，这才是真约束）；
-  //   - `OBSERVED_EDGE_CAP=6000`：大图上共同群点对是 O(G²) 的（真机全量视图实测**原始 34953 条**），
-  //     到这个量级图已经糊到看不出结构，按 `edges` 既有的权重降序保留最强的那些。
-  // **这里只夹观测层，不夹推断层** —— 老代码写的是 `[...edges, ...inferred].slice(0, 6000 - intimacy)`，
-  // 把两类合在一起夹：全量视图里观测层独占满 6000 条，共用的那道切片就把推断层整批切掉
-  // （实测首字层 +0 条）。分开之后观测层仍是 6000 条，而 6000 与密度上限之间的差额
-  // （真机 13030 − 6000 = 7030）留给推断层 —— 那是**绘制层本来就能画、原来却没人生成**的额度。
-  const observed = [...intimacy, ...edges]
-    .slice(0, Math.min(OBSERVED_EDGE_CAP, edgeDensityCap(nodes.length)))
+  for (const p of derivedCommon) {
+    const result = addObservedDerived({
+      source: p.first,
+      target: p.second,
+      weight: p.weight,
+      dist: (s.mode === 'people' ? 200 : 220) / Math.sqrt(Math.max(p.weight, 1)),
+      kind: 'common',
+      bidirectional: true,
+      origin: 'derived',
+      evidence: [...p.evidence],
+      evidenceCount: p.evidence.size,
+    })
+    if (result.suppressedByAuthoritative) {
+      derivedCoverage.commonSuppressedByAuthoritative += 1
+    } else if (result.droppedByEdgeBudget) {
+      derivedCoverage.commonDroppedByEdgeBudget += 1
+    } else if (result.relationAdded) {
+      derivedCoverage.commonEmittedEdges += 1
+    } else {
+      derivedCoverage.commonMergedEdges += 1
+    }
+  }
 
   // ── 推断层（虚线）：同备注编号(class) 与 首字相同(initial) 共用同一套机制 ─────────
   // 两类都停在「锚点生成树 + 按余量截断」，而不是完全图。首字层实测：默认视图同首字组
   // 34 个、候选点对 1534 条，而**未被使用的余量只有 224 条**（见 graph-budget 的 edgeHeadroom）
   // —— 完全图根本画不下，硬画就会按分桶把「共同群」这类真实观测边挤掉。
   const degOf = new Map<string, number>()
-  for (const key of edgeW.keys()) {
-    const [a, b] = key.split('|')
-    if (a) degOf.set(a, (degOf.get(a) ?? 0) + 1)
-    if (b) degOf.set(b, (degOf.get(b) ?? 0) + 1)
+  for (const bucket of pairBuckets.values()) {
+    degOf.set(bucket.first, (degOf.get(bucket.first) ?? 0) + 1)
+    degOf.set(bucket.second, (degOf.get(bucket.second) ?? 0) + 1)
   }
-  /**
-   * 已占用的点对。**两类推断边共用这一个集合**，这是「避免重复」的唯一机制：
-   * 一对节点在图上只能有一条边，否则详情面板的 React key 会撞、度数统计虚高。
-   * 优先级由插入顺序决定：共同群（观测）> 同备注编号（用户自建结构）> 首字（启发式）。
-   */
-  const paired = new Set(edgeW.keys())
-  const inferred: GEdge[] = []
+  /** 一对节点只占一个视觉槽位；不同推断关系的语义仍会合并进该槽位。 */
+  const pairHasRelation = (key: string, kind: GEdgeKind): boolean => {
+    const bucket = pairBuckets.get(key)
+    if (!bucket) return false
+    for (const relation of bucket.relations.values()) {
+      if (relation.kind === kind) return true
+    }
+    return false
+  }
   /** 已经有「首字边」的节点：只用于 `coverAll` 的兜底扫描。 */
   const initialCovered = new Set<string>()
+  type InferredAddResult = 'added' | 'merged' | 'ignored'
   /**
-   * 加一条推断边（无向：`source`/`target` 只由 id 字典序决定，不代表方向）。
-   * @returns 是否真的新增（已存在同点对、或自连时为 `false`）。
+   * 加一条推断关系（无向）。
+   *
+   * 返回 `added` 表示新增视觉点对，`merged` 表示该点对已有观测/其他关系但本次语义
+   * 已成功并入，`ignored` 才是非法端点、自连、重复关系或额度已满。
    */
-  const addInferred = (a: string, b: string, kind: 'class' | 'initial'): boolean => {
-    // 自连守卫：同一节点不成边（分组时已按 id 去重，这里是最后一道）
-    if (!a || !b || a === b) return false
-    const key = a < b ? a + '|' + b : b + '|' + a
-    if (paired.has(key)) return false
-    paired.add(key)
-    inferred.push({ source: a, target: b, weight: 1, dist: 200, kind, bidirectional: true })
-    if (kind === 'initial') { initialCovered.add(a); initialCovered.add(b) }
-    return true
+  const addInferred = (a: string, b: string, kind: 'class' | 'initial'): InferredAddResult => {
+    if (!a || !b || a === b) return 'ignored'
+    const key = pairKey(a, b)
+    if (!pairBuckets.has(key) && pairBuckets.size >= edgeDensityCap(nodes.length)) return 'ignored'
+    const result = addRelation({
+      source: a,
+      target: b,
+      weight: 1,
+      dist: 200,
+      kind,
+      bidirectional: true,
+      origin: 'derived',
+    })
+    if (!result.relationAdded && !pairHasRelation(key, kind)) return 'ignored'
+    if (kind === 'initial') {
+      initialCovered.add(a)
+      initialCovered.add(b)
+    }
+    return result.pairAdded ? 'added' : 'merged'
   }
   /**
    * 按 key 分组（只保留 ≥2 个成员的组），组内按「已有点度数」降序 ——
@@ -624,21 +1373,21 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
    *   首字层需要它：真机默认视图实测，只要不加这一层，34 个首字组里只有 **22 个**能靠
    *   首字边自己连通 —— 剩下的组里有人「这层一条线都没有」（他与组内某人的关系已经被
    *   更优先的边占了，于是那一条被去重掉）。`class` 层不用它：那边 `n-1` 是硬约束。
-   * @returns 实际新增的条数（已存在的点对会被 `addInferred` 跳过）。
+   * @returns 实际新增的**视觉边**条数；合并到已有点对的语义不占额度。
    */
   const addAnchorTree = (ids: string[], kind: 'class' | 'initial', coverAll = false): number => {
     // 锚点数 ≥1 且 ≤ n-1：保证「锚之间串起来 + 其余各挂一条」正好是 n-1 条
     const anchors = ids.slice(0, Math.min(CLASS_ANCHORS, Math.max(1, ids.length - 1)))
-    const before = inferred.length
+    const before = pairBuckets.size
     for (let i = 1; i < anchors.length; i++) addInferred(anchors[0] as string, anchors[i] as string, kind)
     const rest = ids.slice(anchors.length)
     rest.forEach((id, i) => {
       const preferred = anchors[i % anchors.length] as string
-      if (addInferred(preferred, id, kind)) return
+      if (addInferred(preferred, id, kind) !== 'ignored') return
       if (!coverAll) return
       // 首选锚点已连通 → 依次试其余锚点
       for (let k = 1; k < anchors.length; k++) {
-        if (addInferred(anchors[(i + k) % anchors.length] as string, id, kind)) return
+        if (addInferred(anchors[(i + k) % anchors.length] as string, id, kind) !== 'ignored') return
       }
     })
     // coverAll 兜底扫描：**锚点链本身也可能整条被更强边占掉**（真机实测：不加这一步，
@@ -648,11 +1397,11 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       for (const id of ids) {
         if (initialCovered.has(id)) continue
         for (const other of ids) {
-          if (other !== id && addInferred(other, id, kind)) break
+          if (other !== id && addInferred(other, id, kind) !== 'ignored') break
         }
       }
     }
-    return inferred.length - before
+    return pairBuckets.size - before
   }
 
   // 同备注编号边(class)：同样按余量截断。真机全量视图 class 上限只有 77 条、远没到额度，
@@ -660,7 +1409,7 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
   // 独自吃掉整个额度、把后面的首字层挤成 0。整组放不下就跳过**整组**（用 continue 而不是
   // break：后面还有小组合适放），这样「每个被处理的组恰好 n−1 条」这条硬约束不会被从中间截断。
   if (s.mode === 'people' && s.remarkClass) {
-    let left = edgeHeadroom(nodes.length, observed.length + inferred.length)
+    let left = edgeHeadroom(nodes.length, pairBuckets.size)
     for (const ids of keyedGroups(n => n.remark_group)) {
       if (ids.length - 1 > left) continue
       left -= addAnchorTree(ids, 'class')
@@ -670,13 +1419,8 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
   // 首字连边(initial)：先问余量，再决定生成多少 —— 额度来自 graph-budget（与绘制层同源）。
   if (s.mode === 'people' && s.firstChar) {
     const groups = keyedGroups(n => firstCharKey(n.label))
-    // 余量 = 密度上限 − **已经真正产出的全部边**（夹过的观测层 + 同备注编号层）。
-    // 关键是「产出」而不是「原始」：观测层被 OBSERVED_EDGE_CAP 夹掉的那些**不占额度**，
-    // 用原始条数去算会把余量算成 0（真机全量视图：原始观测 37558 → 余量 0 → 首字层 +0）。
-    // 同时观测层仍必须**算进来**：漏掉它会高估余量、刚好越过上限一条，
-    // 让绘制层从尾部截掉一条真实关系。
-    const headroom = edgeHeadroom(nodes.length, observed.length + inferred.length)
-    const start = inferred.length
+    // 余量 = 密度上限 − 已经真正产出的视觉边（后端观测 + 推导观测 + 班级层）。
+    const headroom = edgeHeadroom(nodes.length, pairBuckets.size)
     let left = headroom
     // ① 生成树保底：每个首字组的成员至少有一条蓝虚线，且组内连通
     for (const ids of groups) {
@@ -691,8 +1435,8 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
           for (let j = i + 1; j < ids.length; j++) {
             const a = ids[i] as string
             const b = ids[j] as string
-            const key = a < b ? a + '|' + b : b + '|' + a
-            if (paired.has(key)) continue
+            const key = pairKey(a, b)
+            if (pairBuckets.has(key)) continue
             cand.push({ a, b, score: (degOf.get(a) ?? 0) + (degOf.get(b) ?? 0) })
           }
         }
@@ -700,32 +1444,65 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       cand.sort((x, y) => y.score - x.score || x.a.localeCompare(y.a) || x.b.localeCompare(y.b))
       for (const c of cand) {
         if (left <= 0) break
-        if (addInferred(c.a, c.b, 'initial')) left--
+        if (addInferred(c.a, c.b, 'initial') === 'added') left--
       }
     }
-    // ③ 硬夹一次：①的「保覆盖」是逐组独立判断的，累计可能小幅越过余量（②是按 `left` 递减的，不会越）。
-    //   首字边是最后 push 的一批，直接截尾即可 —— 截掉的都是自己推断出来的边，
-    //   不会动到观测层。这一夹同时是「模型边总数 ≤ 密度上限」这条不变量的最后一道保证。
-    //   `paired` 里会残留几个「已配对但无边」的键 —— 它此后不再被读取，无影响。
-    const over = inferred.length - start - headroom
-    if (over > 0) inferred.length = start + headroom
   }
 
-  // 社区检测跑在「共同群/共同成员/同班级」边上(「我」的枢纽亲密度边不参与),
-  // 否则标签会把所有人吸进同一个圈子;self 无共同边 → 自然保持中性灰。
-  // 首字层**刻意不参与**社区检测:它是启发式的粗粒度规则(「宜」会把两个不同的班并成一组),
-  // 让它去改圈子归属会把观测到的结构带偏;蓝虚线跨圈子穿过反而正好说明「这里是推断关系」。
-  const communityCount = detectCommunities(nodes, [...edges, ...inferred.filter(e => e.kind !== 'initial')])
-  // 拼接顺序 = 并列时的优先级：观测层（亲密度 → 共同群，权重降序）在前，推断层在后。
-  // 不再有「按 weight 排序后整体切 6000」这一步 —— 那是上一版「两边额度不一致」的根源：
-  // 排序把推断边混进同一批里切，切到谁全看权重并列时的稳定性，等于用一道天花板
-  // 悄悄吃掉另一个模块算好的额度。
-  // 现在的不变量（可由 edgeHeadroom 的语义直接推出）：
-  //   观测层 ≤ min(OBSERVED_EDGE_CAP, edgeDensityCap(n))
-  //   推断层 ≤ edgeDensityCap(n) − 观测层
-  //   ⇒ 模型边总数 ≤ edgeDensityCap(n) ≤ 绘制层 edgeBudget 的下限
-  //   ⇒ **模型里的边一条都不会被绘制层裁掉**。
-  return { nodes, edges: [...observed, ...inferred], communityCount, kindCounts: countByKind(nodes) }
+  const relationRank = (r: GEdgeRelation): number =>
+    (r.origin === 'backend' ? 0 : 10) + RELATION_KIND_RANK[r.kind]
+  const observedRelation = (r: GEdgeRelation): boolean =>
+    r.origin === 'backend' || OBSERVED_EDGE_KINDS.has(r.kind)
+  const edges: GEdge[] = [...pairBuckets.values()].map((bucket) => {
+    const relations = [...bucket.relations.values()].sort((a, b) =>
+      relationRank(a) - relationRank(b)
+      || b.weight - a.weight
+      || edgeRelationLabel(a).localeCompare(edgeRelationLabel(b))
+      || a.source.localeCompare(b.source)
+      || a.target.localeCompare(b.target))
+    const primary = relations[0]
+    if (!primary) {
+      throw new Error('graph edge bucket without relation')
+    }
+    const directedPairs = new Set(
+      relations.filter(r => !r.bidirectional).map(r => JSON.stringify([r.source, r.target])),
+    )
+    const hasBothDirections = relations.some(r =>
+      !r.bidirectional && directedPairs.has(JSON.stringify([r.target, r.source])))
+    const bidirectional = relations.some(r => r.bidirectional) || hasBothDirections
+    const source = primary.source
+    const target = primary.target
+    const fallbackDist = primary.kind === 'intimacy'
+      ? 340
+      : (s.mode === 'people' ? 200 : 220) / Math.sqrt(Math.max(primary.weight, 1))
+    return {
+      source,
+      target,
+      weight: Math.max(0, primary.weight),
+      dist: Math.max(1, primary.dist ?? fallbackDist),
+      kind: primary.kind,
+      ...(bidirectional ? { bidirectional: true } : {}),
+      relations,
+      relationCount: relations.length,
+      ...(relations.some(r => r.origin === 'backend') ? { authoritative: true } : {}),
+      ...(primary.strength !== undefined ? { strength: primary.strength } : {}),
+    }
+  })
+  edges.sort((a, b) =>
+    Number(b.authoritative === true) - Number(a.authoritative === true)
+    || Number((b.relations ?? []).some(observedRelation)) - Number((a.relations ?? []).some(observedRelation))
+    || RELATION_KIND_RANK[a.kind] - RELATION_KIND_RANK[b.kind]
+    || b.weight - a.weight
+    || a.source.localeCompare(b.source)
+    || a.target.localeCompare(b.target))
+
+  // 社区检测跑在「共同群/共同成员/同班级」等无向结构边上；首字层刻意不参与，
+  // 避免一个粗粒度首字把观测到的圈子结构带偏。
+  const communityCount = detectCommunities(nodes, edges.filter(e => e.kind !== 'initial'))
+  derivedCoverage.truncated = derivedCoverage.truncated
+    || derivedCoverage.intimacyDroppedByEdgeBudget > 0
+    || derivedCoverage.commonDroppedByEdgeBudget > 0
+  return { nodes, edges, communityCount, kindCounts: countByKind(nodes), coverage: { ...graphCoverage, ...(normalizedEnv.coverage ? { server: normalizedEnv.coverage } : {}) } }
 }
 
 /** 节点邻居集合(悬停高亮用)。 */
@@ -775,31 +1552,39 @@ export function groupCommunities(graph: BuiltGraph): Array<{ id: number; members
     .sort((a, b) => b.members.length - a.members.length)
 }
 
-/** 与指定节点相连的边(按权重降序,含对端节点解析;默认取前 12)。 */
+/**
+ * 与指定节点相连的边（按权重降序，含对端节点解析）。
+ *
+ * 默认返回全部：详情面板过去只取前 12 条却把结果长度标成「相连关系 (12)」，
+ * 大群/高连接节点看起来像少了关系。显示层用可滚动区承载，不再从数据层静默截断。
+ */
 export function connectedEdgesOf(
   graph: BuiltGraph,
   nodeId: string,
-  limit = 12,
+  limit = Number.POSITIVE_INFINITY,
 ): Array<{ edge: GEdge; other: GNode | undefined }> {
-  return graph.edges
+  const byId = new Map(graph.nodes.map(n => [n.id, n]))
+  const out = graph.edges
     .filter(e => e.source === nodeId || e.target === nodeId)
     .map(e => ({
       edge: e,
-      other: graph.nodes.find(x => x.id === (e.source === nodeId ? e.target : e.source)),
+      other: byId.get(e.source === nodeId ? e.target : e.source),
     }))
-    .sort((a, b) => b.edge.weight - a.edge.weight)
-    .slice(0, limit)
+    .sort((a, b) =>
+      b.edge.weight - a.edge.weight
+      || (b.edge.relationCount ?? 1) - (a.edge.relationCount ?? 1))
+  return Number.isFinite(limit) ? out.slice(0, Math.max(0, limit)) : out
 }
 
-/** 共同群名(详情展示,群名缺失时回退 code)。 */
+/** 共同群名（详情展示，群名缺失时回退 code）；默认返回全部，避免详情只显示前 6 个却无提示。 */
 export function sharedGroupNames(
   n: GNode,
   groupNames: Record<string, string> | undefined,
-  limit = 6,
+  limit = Number.POSITIVE_INFINITY,
 ): string[] {
-  return (n.groupCodes ?? [])
+  const out = (n.groupCodes ?? [])
     .map(c => groupNames?.[c] || c)
-    .slice(0, limit)
+  return Number.isFinite(limit) ? out.slice(0, Math.max(0, limit)) : out
 }
 
 /* rankNodes / communityOf 曾服务于已删除的 canvas 版图渲染器 graph-canvas.tsx(零引用),

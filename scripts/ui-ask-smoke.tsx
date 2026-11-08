@@ -26,7 +26,7 @@ import { DailySummaryPanel } from '../src/client/ui-wechat/src/client/pages/wech
 import { PeriodSummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/PeriodSummary.tsx'
 import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx'
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
-import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
+import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx'
 import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
 import { setCapabilities } from '../src/client/ui-wechat/src/client/pages/wechat-data/api.ts'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
@@ -250,47 +250,38 @@ check('全屏态带 data-full（消息流让位）', () => {
   ok(html.includes('data-full'), '全屏应带 data-full')
 })
 
-console.log('ChatRightPanel（右栏：上推荐回复 / 下分析）')
+console.log('ChatRightPanel（右栏：推荐回复 / 分析二选一）')
 check('首帧只说「正在生成」，且下拉不许是空白', () => {
   // SSR 渲染的就是挂载那一帧（effect 不跑），所以这里能真实复现「首帧到底说了什么」。
   // 两条判别式都做过变异验证：`loading` 初值改回 false → 第三条变红；把 `Select` 的 value
   // 改回 `String(kbId)`（Radix 在选中项未挂载时渲染空白，连 placeholder 都不给）→ 第四条变红。
   // 库名本身**不在这里断言**：Radix 要把选中项渲染过一次才拿得到文字，静态渲染测不到真实浏览器
   // 挂载后的那一帧 —— 拿 SSR 的空白当「用户看到的空白」是个假结论。
-  // 2026-09-25 二次调整：推荐回复与「分析」合并进组合层 `ChatRightPanel`
-  //（面板标题与关闭按钮随之移到组合层），所以这里渲染组合层 ——
-  // 顺带多钉两条：下半区必须有区块标题、未选中时给的是提示而不是一块空白。
+  // 推荐回复与「分析」共用组合层 `ChatRightPanel`，但一次只渲染一个内容域。
   const html = renderToStaticMarkup(h(ChatRightPanel, {
     target: { username: 'wxid_a', displayName: '李四' },
     onClose: () => {},
-    // 2026-09-26：两块各自可折叠（消息头部按钮排里那两个图标按钮），
-    // 所以组合层多了两个可见性开关。这个调用点渲染的是「两块都开」的默认形态。
-    showSuggest: true,
-    showAnalysis: true,
+    mode: 'suggest',
     analysisTargetId: null,
     analysisEntry: undefined,
   }))
   // 用元素内容（`>…<`）而不是裸词匹配：关闭按钮的 aria-label 里也有「推荐回复」，
   // 裸词匹配下把标题整块删掉照样绿 —— 变异测试抓过这类假阳性。
-  // 两块都开时标题是合并文案（只开一块时会跟着变，见下一个 check）。
-  ok(html.includes('>推荐回复与消息分析<'), '缺少面板标题')
+  ok(html.includes('>推荐回复<'), '缺少面板标题')
   ok(html.includes('正在按这段对话生成候选'), '首帧应显示「正在生成」')
   ok(!html.includes('这个会话还没有可用的对话内容'), '首帧还没有任何数据，那句「没有可用对话」在当时必然是假话')
   ok(html.includes('李四'), '「依据」一行应显示当前会话名')
   ok((html.match(/role="combobox"/g) || []).length === 1, `面板里应有且只有一个知识库下拉，实际 ${String((html.match(/role="combobox"/g) || []).length)} 个`)
   ok(html.includes('读取知识库…'), '库列表还没到位时，触发器要说明在读，而不是留一块空白')
   ok(!html.includes('请选择…'), '触发器不该停在共享组件那句通用的「请选择…」上')
-  // 合并后新钉的两条：两块同容器、下半区未选中时也不许是空白
-  ok(html.includes('aria-label="消息分析"'), '下半区缺少「消息分析」区块')
-  ok(html.includes('选一条消息，读懂言外之意'), '未选中消息时分析区要给出提示，而不是一块空白')
+  ok(!html.includes('aria-label="消息分析"'), '推荐回复模式下不该同时渲染分析区')
 })
 
 check('只开分析时：标题跟着内容走，且推荐回复块真的不渲染', () => {
   const html = renderToStaticMarkup(h(ChatRightPanel, {
     target: { username: 'wxid_a', displayName: '李四' },
     onClose: () => {},
-    showSuggest: false,
-    showAnalysis: true,
+    mode: 'analysis',
     analysisTargetId: null,
     analysisEntry: undefined,
   }))
@@ -305,9 +296,8 @@ console.log('AiModelConfig（数据配置里的 AI 大模型卡片）')
 check('渲染为「数据配置」里的卡片（标题 + 状态徽标）', () => {
   const html = renderToStaticMarkup(h(AiModelConfig, {}))
   ok(html.includes('AI 大模型'), '缺少卡片标题')
-  ok(html.includes('全应用共用一份配置'), '缺少说明文案')
-  // SSR 下 apiGetLlmConfig 的 effect 不执行 → 停在读取态
-  ok(html.includes('读取配置中') || html.includes('模型供应商'), `卡片内容异常：${html.slice(0, 200)}`)
+  // SSR 下 apiGetLlmProfiles 的 effect 不执行，停在明确的读取态。
+  ok(html.includes('正在读取模型配置'), `卡片内容异常：${html.slice(0, 200)}`)
 })
 
 console.log('回答接地审计（回答里的金额 vs 所引原文）')

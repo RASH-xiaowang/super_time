@@ -63,6 +63,14 @@ export interface InlineAnalysisApi {
 /** 两个分析任务之间至少留出的让路时间。单条推理已经会占满一次 ONNX forward。 */
 export const ANALYSIS_GAP_MS = 120
 
+/**
+ * 单会话最多保留多少条分析结果。
+ *
+ * 分析结果里带原文与多条答案；长会话里逐条点开时，没有上界会让 state 一直涨到退出面板。
+ * 保留最近一段足够来回对照，超出后从最早写入的那条开始淘汰。
+ */
+export const INLINE_ANALYSIS_CACHE_LIMIT = 160
+
 /** 全应用同时只允许一个本地分析在飞。 */
 let analyzeInFlight = false
 /** 上一单结束时刻；0 表示还没跑过。 */
@@ -92,6 +100,32 @@ function errorEntry(error: unknown): InlineAnalysisEntry {
 }
 
 /**
+ * 写入一条分析结果并把缓存限制在上界内。
+ * @param previous - 当前结果表。
+ * @param localId - 消息在会话内的局部 id。
+ * @param entry - 新状态；已有同 id 时移到最近使用位置。
+ * @param limit - 最多保留条数。
+ * @returns 新的有界结果表。
+ */
+export function rememberInlineAnalysis(
+  previous: ReadonlyMap<number, InlineAnalysisEntry>,
+  localId: number,
+  entry: InlineAnalysisEntry,
+  limit = INLINE_ANALYSIS_CACHE_LIMIT,
+): Map<number, InlineAnalysisEntry> {
+  const next = new Map(previous)
+  next.delete(localId)
+  next.set(localId, entry)
+  const max = Math.max(1, Math.trunc(limit))
+  while (next.size > max) {
+    const oldest = next.keys().next().value
+    if (oldest === undefined) break
+    next.delete(oldest)
+  }
+  return next
+}
+
+/**
  * 分析当前选中消息。
  * @param option - 会话与目标消息；目标为 null 时不发起请求。
  */
@@ -102,6 +136,18 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
   const inflight = useRef<Set<number>>(new Set())
   /** 用户明确要求跳过缓存的目标；成功后才移除。 */
   const forced = useRef<Set<number>>(new Set())
+  const alive = useRef(false)
+
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      // 卸载也算一代结束：在飞请求迟到时既不能再写 state，也不能再推进排队闸门。
+      epoch.current += 1
+      inflight.current.clear()
+      forced.current.clear()
+    }
+  }, [])
 
   useEffect(() => {
     epoch.current += 1
@@ -136,9 +182,7 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
       inflight.current.add(targetId)
       analyzeInFlight = true
       setMap((previous) => {
-        const next = new Map(previous)
-        next.set(targetId, { state: 'pending' })
-        return next
+        return rememberInlineAnalysis(previous, targetId, { state: 'pending' })
       })
 
       void apiAnalyzeVisibleMessages({
@@ -147,12 +191,11 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
         ...(force ? { force: true } : {}),
       })
         .then((result) => {
-          if (myEpoch !== epoch.current) return
+          if (!alive.current || myEpoch !== epoch.current) return
           const item = result.items.find((candidate) => candidate.localId === targetId)
           setMap((previous) => {
-            const next = new Map(previous)
             if (result.ok && item?.ok === true && item.answers.length > 0) {
-              next.set(targetId, {
+              return rememberInlineAnalysis(previous, targetId, {
                 state: 'done',
                 answers: item.answers,
                 sourceText: item.sourceText,
@@ -161,21 +204,17 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
                 cached: item.cached,
                 lowConfidence: item.lowConfidence === true,
               })
-            } else {
-              next.set(targetId, {
-                state: 'error',
-                error: item?.error ?? result.error ?? '本地分析没有返回结果',
-              })
             }
-            return next
+            return rememberInlineAnalysis(previous, targetId, {
+              state: 'error',
+              error: item?.error ?? result.error ?? '本地分析没有返回结果',
+            })
           })
         })
         .catch((error: unknown) => {
-          if (myEpoch !== epoch.current) return
+          if (!alive.current || myEpoch !== epoch.current) return
           setMap((previous) => {
-            const next = new Map(previous)
-            next.set(targetId, errorEntry(error))
-            return next
+            return rememberInlineAnalysis(previous, targetId, errorEntry(error))
           })
         })
         .finally(() => {
@@ -186,7 +225,7 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
           // 满足 mustRefresh，形成「失败 → 自动重试 → 再失败」的无限循环。
           forced.current.delete(targetId)
           // 目标可能已经切换；推进一次重渲染，让排队中的那一条接着发。
-          setGateTick((value) => value + 1)
+          if (alive.current && myEpoch === epoch.current) setGateTick((value) => value + 1)
         })
     }
 

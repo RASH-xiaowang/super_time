@@ -91,15 +91,17 @@ describe('确认框：必须挂在应用根部', () => {
     const close = panel.indexOf('</ConfirmProvider>')
     expect(open).toBeGreaterThan(0)
     expect(close).toBeGreaterThan(open)
-    // 面板的实体内容必须夹在中间。以「设置弹窗」的**渲染点**为界做抽样 ——
+    // 面板的实体内容必须夹在中间。以「设置弹窗」的**调用点**为界做抽样 ——
     // 不能再拿 `settingsOpen` 这个词判位置：它最早出现在 hooks 段的 useState 里，
     // 会比 Provider 还靠前，那样的断言是错的（第一版就是这么写错的）。
-    const settingsDialog = panel.indexOf('<div className={css.settingsDialogBody}>')
+    // 设置弹窗已经拆成 DataPanelSettingsDialog：组件定义里的 settingsDialogBody
+    // 出现在主 return 之前，不能再拿它当渲染点。
+    const settingsDialog = panel.indexOf('<DataPanelSettingsDialog', open)
     expect(settingsDialog, '找不到设置弹窗的渲染点，断言失去参照').toBeGreaterThan(open)
     expect(settingsDialog).toBeLessThan(close)
     // 侧栏与主内容区同样在 Provider 内
-    expect(panel.indexOf('className={css.sidebar}')).toBeGreaterThan(open)
-    expect(panel.indexOf('className={css.content}')).toBeGreaterThan(open)
+    expect(panel.indexOf('<DataPanelSidebar', open), '侧栏不在 Provider 内').toBeGreaterThan(open)
+    expect(panel.indexOf('<main className={css.content}>', open), '主内容区不在 Provider 内').toBeGreaterThan(open)
   })
 
   it('每个面板都用 useConfirm() 而不是自带原生框', () => {

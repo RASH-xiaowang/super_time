@@ -8,8 +8,7 @@
  * 公告未展开时被夹住且展开入口只在真能展开时出现。关掉本文件时先想想第六条：
  * 那条是一次真 bug 的回归位，不是装饰。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatsGroupInfoViewProps } from './chats-group-info-view.tsx'

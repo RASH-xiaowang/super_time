@@ -31,6 +31,7 @@ import { useConfirm } from '../ui/confirm.tsx'
 import css from './ask-history.module.css'
 import { fmtTodayOrLocaleMs } from '../utils/format.ts'
 import { IdentityName } from './identity.tsx'
+import { AskHistoryRuntimeTraceView } from './AskHistoryRuntimeTrace.tsx'
 
 /** 状态 → 中文标签 + 色调 + 一句话解释（回看历史时最需要知道的就是「这条当时答上了没有」）。 */
 const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'amber' | 'purple' | 'red'; hint: string }> = {
@@ -40,14 +41,8 @@ const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'am
   fail: { label: '失败', tone: 'red', hint: '这次问答没能完成' },
 }
 
-/**
- * 入口来源的中文名。未知来源原样显示（后端可能先于前端新增来源）。
- *
- * `auto` = ClawBot 的 **AI 自动回复**（2026-10-13）。它是这里唯一一条
- * 「**用户没问、模型答了**」的记录：不标出来，用户会把它当成自己问过的，
- * 排查「为什么自动回了这么一句」也就没了依据。
- */
-const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: 'AI 问答', auto: 'ClawBot 自动回复' }
+/** 入口来源的中文名。未知来源原样显示（后端可能先于前端新增来源）。 */
+const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: 'AI 问答' }
 
 const STATUS_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部' },
@@ -60,7 +55,6 @@ const SRC_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部来源' },
   { value: 'ask', label: '微信问答' },
   { value: 'session', label: 'AI 问答' },
-  { value: 'auto', label: 'ClawBot 自动回复' },
 ]
 
 /** 「清空全部」要求逐字确认的记录条数门槛：低于它只做普通二次确认。 */
@@ -109,7 +103,7 @@ function HistoryCites({ cites, citedIndexes, onOpenCitation, onOpenKbFile, onErr
     }
   }
   return (
-    <div className={css.cites}>
+    <div className={css.cites} data-ask-history-evidence="">
       {cites.map((c, ci) => {
         const citedMark = citedSet.has(ci + 1) || undefined
         // 「点了去哪」与问答面板共用同一份判定（cite-target.ts），
@@ -202,13 +196,17 @@ function HistoryScopeTag({ item }: { item: AskHistoryEntry }): React.JSX.Element
  * @param props.onAskAgain - 把某条历史的问题交回面板（面板负责填入输入框，**不**自动发送）。
  * @returns 弹窗元素。
  */
-export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, onAskAgain }: {
+export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, onAskAgain, scopeUsername, scopeName }: {
   open: boolean
   onClose: () => void
   onOpenCitation?: (username: string, localId?: number) => void
   /** 打开知识库原文；返回 Promise 时失败会被弹窗归一成可读提示。 */
   onOpenKbFile?: (kbId: number, fileId: number) => void | Promise<void>
   onAskAgain?: (question: string) => void
+  /** 会话内问答传入时，只读取该会话的历史记录。 */
+  scopeUsername?: string
+  /** 当前会话名，仅用于标题与空态文案。 */
+  scopeName?: string
 }): React.JSX.Element {
   const [rawQ, setRawQ] = useState('')
   const q = useDebouncedValue(rawQ, 250)
@@ -237,11 +235,13 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
 
   const buildQuery = useCallback((offset: number, limit: number): AskHistoryQuery => {
     const query: AskHistoryQuery = { limit, offset, sort: 'ts', order: 'desc' }
+    const scopedUsername = (scopeUsername ?? '').trim()
     if (q.trim() !== '') query.q = q.trim()
     if (status !== '') query.status = status as AskHistoryStatus
     if (source !== '') query.sources = [source]
+    if (scopedUsername !== '') query.username = scopedUsername
     return query
-  }, [q, status, source])
+  }, [q, scopeUsername, status, source])
 
   const { items, total, loading, loadingMore, error, hasMore, loadMore, reset } = usePagedList<AskHistoryEntry>({
     pageSize: 50,
@@ -261,7 +261,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
     setOpenId(null)
     reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, q, status, source])
+  }, [open, q, scopeUsername, status, source])
 
   const loadMoreRef = useLazySentinel(() => { if (hasMore && !loadingMore) loadMore() }, '400px 0px', undefined, items.length)
 
@@ -326,7 +326,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
     <Dialog
       open={open}
       onClose={onClose}
-      title="问答历史记录"
+      title={scopeUsername ? `${scopeName || '当前会话'}的问答历史` : '问答历史记录'}
       className={css.dialogWide}
       footer={(
         <div className={css.listFoot}>
@@ -351,16 +351,18 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
             {loading && items.length === 0 ? '读取中…' : `共 ${total} 条`}
             {filtered && items.length > 0 ? `（当前筛选，已回答 ${scopeCount} 条）` : ''}
           </span>
-          <button
-            type="button"
-            className={css.dangerBtn}
-            data-clear-ask-history=""
-            disabled={busy || total === 0}
-            onClick={() => { void clearAll() }}
-            title="删除本机保存的全部问答历史（不可恢复）"
-          >
-            清空全部
-          </button>
+          {!scopeUsername && (
+            <button
+              type="button"
+              className={css.dangerBtn}
+              data-clear-ask-history=""
+              disabled={busy || total === 0}
+              onClick={() => { void clearAll() }}
+              title="删除本机保存的全部问答历史（不可恢复）"
+            >
+              清空全部
+            </button>
+          )}
         </div>
         {notice && <div className={css.notice} data-error={notice.error ? '' : undefined}>{notice.text}</div>}
         {error && <ErrorState message={`读取失败：${readableCiteError(error, '请稍后重试')}`} />}
@@ -375,7 +377,9 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
             title={filtered ? '没有匹配的问答记录' : '还没有问答记录'}
             desc={filtered
               ? '换个关键词，或把状态/来源筛选切回「全部」再试。'
-              : '在「微信问答」或「AI 问答」提问，或 ClawBot 自动回复后，记录会显示在这里。'}
+              : scopeUsername
+                ? '在这个会话里提问后，记录会显示在这里。'
+                : '在「微信问答」或「AI 问答」提问后，记录会显示在这里。'}
           />
         </div>
       ) : (
@@ -430,12 +434,11 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
                   </span>
                 </div>
                 <div className={css.question}>{it.question.trim() !== '' ? it.question : '（未记录问题）'}</div>
-                {it.answer.trim() !== ''
-                  ? (expanded
-                    ? <div className={css.answerFull}>{it.answer}</div>
-                    : <div className={css.answer}>{it.answer}</div>)
-                  : <div className={css.answer}>（这次没有产生回答）</div>}
-                {expanded && it.basis && <div className={css.basis}>{it.basis}</div>}
+                {expanded && metaText && <div className={css.metaLine} data-ask-history-meta="">{metaText}</div>}
+                {expanded && <AskHistoryRuntimeTraceView trace={it.runtimeTrace} />}
+                {expanded && it.basis && (
+                  <div className={css.basis} data-ask-history-evidence="">{it.basis}</div>
+                )}
                 {expanded && cites.length > 0 && (
                   <HistoryCites
                     cites={cites}
@@ -445,7 +448,11 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
                     onError={(text) => { hold({ text, error: true }) }}
                   />
                 )}
-                {expanded && metaText && <div className={css.metaLine}>{metaText}</div>}
+                {it.answer.trim() !== ''
+                  ? (expanded
+                    ? <div className={css.answerFull} data-ask-history-answer="">{it.answer}</div>
+                    : <div className={css.answer} data-ask-history-answer="">{it.answer}</div>)
+                  : <div className={css.answer} data-ask-history-answer="">（这次没有产生回答）</div>}
               </div>
             )
           })}

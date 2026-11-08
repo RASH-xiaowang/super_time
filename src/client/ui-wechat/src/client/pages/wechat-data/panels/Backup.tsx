@@ -2,17 +2,22 @@
  * 备份管家面板 — React 版，忠实迁移 BackupManager：备份列表 + 创建/删除。
  * 走 Remote（listBackups / createBackup / deleteBackup），无 HTTP 依赖。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ListSkeleton } from './hooks.tsx'
-import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup } from '../api.ts'
+import { apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, EmptyState, PanelHeader, ProgressBar, Toolbar } from '../ui/kit.tsx'
+import { Dialog, EmptyState, PanelHeader, Toolbar } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import { desktopOnlyGate } from '../ui/desktop-only.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
+
+const PLAIN_BACKUP_LABEL = '创建备份'
+const ENCRYPTED_BACKUP_LABEL = '创建加密备份'
 
 /**
  * Render the backup-manager panel.
@@ -38,28 +43,10 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   const [password, setPassword] = useState('')
   const [preview, setPreview] = useState<{ name: string; items: BackupPreviewItem[]; total: number } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
-
-  /* 加密备份的实时进度（M3）：`createEncryptedBackup` 收 jobId，后端按它推
-     `wechat-export/progress`（经 ui-entry 中继成 DOM 事件）—— 不认领就只有一个 busy 布尔。 */
-  const [encProgress, setEncProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
-  const encJobRef = useRef('')
-
-  useEffect(() => {
-    const onProgress = (e: Event): void => {
-      const p = (e as CustomEvent<{ jobId?: string; phase?: string; done?: number; total?: number }>).detail
-      if (!p || p.jobId !== encJobRef.current) return
-      setEncProgress({ phase: String(p.phase ?? ''), done: Number(p.done ?? 0), total: Number(p.total ?? 0) })
-    }
-    window.addEventListener('dsh-wechat-export-progress', onProgress)
-    return (): void => { window.removeEventListener('dsh-wechat-export-progress', onProgress) }
-  }, [])
-
-  /** 中止正在跑的加密备份：只发取消信号，终态由后端的槽记着，收尾在 finally。 */
-  const cancelEncrypted = useCallback((): void => {
-    const jobId = encJobRef.current
-    if (!jobId) return
-    void apiCancelExportJob(jobId).catch(() => { /* 取消失败：不谎报，让 finally 收尾 */ })
-  }, [])
+  const backupTask = useExportTask()
+  const busyNow = busy || backupTask.running
+  const plainBackupRunning = backupTask.running && backupTask.state.label === PLAIN_BACKUP_LABEL
+  const encryptedBackupRunning = backupTask.running && backupTask.state.label === ENCRYPTED_BACKUP_LABEL
 
   const openPreview = async (name: string): Promise<void> => {
     setPreview({ name, items: [], total: 0 })
@@ -93,16 +80,18 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   }
 
   const create = async (): Promise<void> => {
-    setBusy(true)
+    if (backupTask.running) return
     setError(null)
-    try {
-      const r = await apiCreateBackup()
-      await finishWith(r.ok ? null : (r.error ?? '创建备份失败'))
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
+    const outcome = await backupTask.run(async ({ jobId }) => {
+      const r = await apiCreateBackup({ jobId })
+      if (!r.ok) throw new Error(r.error ?? '创建备份失败')
+      return r
+    }, {
+      idPrefix: 'backup-plain',
+      label: PLAIN_BACKUP_LABEL,
+      successMessage: () => '普通备份已创建',
+    })
+    if (outcome.ok) await refresh()
   }
 
   const remove = async (name: string): Promise<void> => {
@@ -125,28 +114,21 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   }
 
   const createEncrypted = async (): Promise<void> => {
+    if (backupTask.running) return
     if (!password.trim()) { setError('请输入备份密码'); return }
-    setBusy(true)
     setError(null)
-    const jobId = 'backup-enc-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
-    encJobRef.current = jobId
-    setEncProgress(null)
-    try {
+    const outcome = await backupTask.run(async ({ jobId }) => {
       const r = await apiCreateEncryptedBackup({ password: password.trim(), jobId })
-      if (r.ok) setPassword('')
-      // 失败/取消都要留着密码：用户多半是改一下参数重试，而清空输入框会连带把这条消息顶掉
-      await finishWith(r.ok ? null : (() => {
-        const msg = r.error ?? '加密备份失败'
-        // 「中止」是用户按的，不是失败 —— 与后端 canceled 同一口径
-        return /取消|cancel|abort/i.test(msg) ? '已取消加密备份' : msg
-      })())
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      // 终态（含被取消）由后端记在槽里；这里只保证别再显示旧进度
-      encJobRef.current = ''
-      setEncProgress(null)
-      setBusy(false)
+      if (!r.ok) throw new Error(r.error ?? '加密备份失败')
+      return r
+    }, {
+      idPrefix: 'backup-enc',
+      label: ENCRYPTED_BACKUP_LABEL,
+      successMessage: () => '加密备份已创建',
+    })
+    if (outcome.ok) {
+      setPassword('')
+      await refresh()
     }
   }
 
@@ -186,11 +168,11 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
           right={(
             <>
               <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
-              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busy}>
-                {busy ? '处理中…' : '创建备份'}
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busyNow}>
+                {plainBackupRunning ? (backupTask.finishing ? '完成中…' : '备份中…') : busy ? '处理中…' : '创建备份'}
               </button>
-              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busy}>
-                加密备份
+              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busyNow}>
+                {encryptedBackupRunning ? (backupTask.finishing ? '完成中…' : '加密中…') : '加密备份'}
               </button>
             </>
           )}
@@ -202,25 +184,17 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
           actions={(
             <>
               <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
-              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busy}>
-                {busy ? '处理中…' : '创建备份'}
+              <button type="button" className={css.catBtn} data-active="true" onClick={() => { void create() }} disabled={busyNow}>
+                {plainBackupRunning ? (backupTask.finishing ? '完成中…' : '备份中…') : busy ? '处理中…' : '创建备份'}
               </button>
-              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busy}>
-                加密备份
+              <button type="button" className={css.catBtn} onClick={() => { void createEncrypted() }} disabled={busyNow}>
+                {encryptedBackupRunning ? (backupTask.finishing ? '完成中…' : '加密中…') : '加密备份'}
               </button>
             </>
           )}
         />
       )}
-      {encProgress ? (
-        <div className={css.backupProgress}>
-          <span className={css.backupProgressBar}>
-            <ProgressBar value={encProgress.total > 0 ? Math.min(100, (encProgress.done / encProgress.total) * 100) : 0} indeterminate={encProgress.total <= 0} />
-          </span>
-          <span className={css.backupProgressLabel}>{(encProgress.phase || '加密中') + ' · ' + encProgress.done + (encProgress.total ? ' / ' + encProgress.total : '')}</span>
-          <button type="button" className={css.catBtn} onClick={cancelEncrypted}>中止</button>
-        </div>
-      ) : null}
+      <ExportProgressStatus state={backupTask.state} onCancel={() => { void backupTask.cancel() }} />
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
       <div className={css.scroll}>
         {loading && <ListSkeleton rows={4} />}
@@ -238,8 +212,8 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
             <span className={css.fileName}>{b.name}</span>
             <span className={css.fileMeta}>{fmtBytes(b.size)} · {b.summary || (b.kind === 'enc' ? '加密' : '目录')} · {fmtDateTimeSec(b.modified)}{b.ok !== undefined ? (b.ok ? ' · ✓ 完整' : ' · ⚠️ 校验异常') : ''}</span>
             <button type="button" className={css.catBtn} onClick={() => { void openPreview(b.name) }} disabled={previewLoading}>预览</button>
-            {b.kind === 'enc' && <button type="button" className={css.catBtn} onClick={() => { void restore(b.name) }} disabled={busy || !b.ok}>恢复</button>}
-            <button type="button" className={css.catBtn} onClick={() => { void remove(b.name) }} disabled={busy}>删除</button>
+            {b.kind === 'enc' && <button type="button" className={css.catBtn} onClick={() => { void restore(b.name) }} disabled={busyNow || !b.ok}>恢复</button>}
+            <button type="button" className={css.catBtn} onClick={() => { void remove(b.name) }} disabled={busyNow}>删除</button>
           </div>
         ))}
       </div>

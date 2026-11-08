@@ -113,6 +113,24 @@ describe('N13：远端表情取图（media-image）', () => {
 })
 
 describe('N13：朋友圈视频/封面（sns-video）', () => {
+  it('大于 1 MiB 的视频按 3 字节对齐分块编码，浏览器能解码出完整字节', async () => {
+    const largeMp4 = Buffer.concat([
+      Buffer.from([0x00, 0x00, 0x00, 0x18]),
+      Buffer.from('ftypisom', 'latin1'),
+      Buffer.alloc(2 * 1024 * 1024 + 123, 0x5a),
+    ])
+    scriptedFetch([{ bytes: largeMp4 }])
+
+    const r = await fetchSnsVideoDataUrl('https://cdn.example/n13-large.mp4')
+    expect(r.url).toMatch(/^data:video\/mp4;base64,/)
+
+    const encoded = r.url?.slice(r.url.indexOf(',') + 1) ?? ''
+    const decoded = Buffer.from(encoded, 'base64')
+    expect(decoded.length).toBe(largeMp4.length)
+    expect(decoded.equals(largeMp4)).toBe(true)
+    expect(encoded.slice(0, -8)).not.toContain('=')
+  })
+
   it('503 后重试到成功', async () => {
     const calls = scriptedFetch([{ status: 503 }, { bytes: MP4 }])
     const r = await fetchSnsVideoDataUrl('https://cdn.example/n13-v.mp4')

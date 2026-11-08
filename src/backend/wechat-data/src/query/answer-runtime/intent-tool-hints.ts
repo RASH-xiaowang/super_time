@@ -43,7 +43,6 @@ export function toolHintsFor(kind: AnswerIntentKind, ctx: ToolHintContext): stri
       return unique([
         ...(ctx.hasSession ? ['get_session_messages'] : ['list_sessions']),
         'search_messages',
-        ...(ctx.hasTime ? ['aggregate_messages'] : []),
       ])
     case 'content_media':
       return unique([

@@ -40,6 +40,7 @@ import { startSyncWatch } from './sync-watch.ts'
 import { createSyncTrigger } from './sync-trigger.ts'
 import { DIFF_RETRY_AFTER_MS, notePageDiffRejected, notePageDiffSuccess, pageDiffSuppressed } from './sync-diff-adaptive.ts'
 import { fullDecryptFile } from './sync-decrypt.ts'
+import { pageHashCache } from './sync-page-hash-cache.ts'
 
 export { fullDecryptFile }
 
@@ -802,9 +803,6 @@ export async function syncPlainDatabase(
     return []
   }
 }
-
-/** 主库页指纹缓存：`源签名 → 指纹列表`。进程内有效（重启后首次主库变化退回全量并重建）。 */
-const pageHashCache = new Map<string, { sig: string; hashes: Buffer[] }>()
 
 /**
  * Real-time sync loop: first run immediately, then poll on an interval.

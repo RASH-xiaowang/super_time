@@ -10,7 +10,7 @@
  *
  * ## 为什么写死串行
  *
- * CI 的 `maxWorkers: 1`（见 `vitest.config.ts`）。本机并行跑与它**不可比** ——
+ * CI 的 `maxWorkers: 1`（见 `vitest.config.mts`）。本机并行跑与它**不可比** ——
  * 同一个文件并行 2.4 秒、串行 586 毫秒。所以这里不带 `--no-file-parallelism` 就等于产出一份
  * 会把 B 类误判成 A 类的基线。
  *

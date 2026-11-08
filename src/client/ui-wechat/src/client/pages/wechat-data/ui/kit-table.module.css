@@ -42,7 +42,7 @@
 }
 
 /*
- * 静态包装：调用方自己当滚动容器时用（clawbot B0 —— 面板内只准一个滚动容器）。
+ * 静态包装：调用方自己当滚动容器时用（面板内只保留一个滚动容器）。
  * 与 .tableWrap 的差别只有「不滚」：overflow 与 max-height 都交还给外层，
  * 表头 sticky 随之改相对外层的滚动容器生效。
  */
@@ -59,9 +59,8 @@
   padding: var(--nm-s-2) var(--nm-s-3);
   text-align: left;
   font-weight: 600;
-  font-size: var(--nm-fs-xs, 11px);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--nm-fs-sm);
+  letter-spacing: 0;
   color: var(--nm-text-2);
   background: var(--nm-table-header-bg);
   border-bottom: 1px solid var(--nm-border);
@@ -105,6 +104,50 @@
 .thArrow { opacity: 0; font-size: var(--nm-fs-xs, 11px); }
 .thSortable[data-sorted] .thArrow { opacity: 1; }
 
+/* 表头右边缘的列宽拖拽手柄。放在 th 内、右对齐，避免被表格的 paint containment 裁掉。 */
+.colResizeHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.colResizeHandle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  right: 3px;
+  bottom: 20%;
+  width: 2px;
+  border-radius: var(--nm-r-pill);
+  background: transparent;
+  transition: background-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
+}
+
+.table thead th:hover .colResizeHandle::after {
+  background: var(--nm-border-hover);
+}
+
+.colResizeHandle:hover::after,
+.colResizeHandle:focus-visible::after,
+.colResizeHandle[data-resizing='true']::after {
+  background: var(--nm-text-2);
+  box-shadow: none;
+}
+
+.colResizeHandle:focus-visible {
+  outline: none;
+}
+
+.table[data-column-resizing='true'] {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .table tbody td {
   padding: var(--nm-s-2) var(--nm-s-3);
   border-bottom: 1px solid var(--nm-border);
@@ -115,8 +158,6 @@
   text-overflow: ellipsis;
   max-width: 480px;
 }
-
-.table tbody tr:nth-child(even) { background: var(--nm-table-row-stripe); }
 
 .table tbody tr:last-child td { border-bottom: none; }
 
@@ -136,7 +177,7 @@
  *
  * 为什么不用虚拟化：表格行高由内容决定且列宽要跨行对齐，虚拟化要自己接管
  * 表头对齐与 sticky，收益不抵复杂度；`content-visibility` 是浏览器原生实现，
- * 且对 `:nth-child(even)` 条纹、`:hover`、`aria-sort` 全部无影响。
+ * 且对 `:hover`、`aria-sort` 等交互样式无影响。
  * 真正把长帧压到 0 的是上面 `.table` 的 `contain`（见那条注释的实测数据）。
  */
 .table tbody tr {
@@ -154,10 +195,10 @@
    表格有 640px 的最小宽度（第 89 轮定的：窄窗口下每列才都可达、弹性列不会被压成 32px），
    而手机上滚动容器只有 349px（2026-10-14 真数据实测：资金往来 / 操作日志）⇒ 横滚 291px
    之后不知道这一行是谁的。把首列钉在左边。
-   底色必须**不透明**：td/th 原本全透明，斑马纹与表头都是半透明叠色（实测
-   `--nm-table-row-stripe` = rgba(255,255,255,.015)、`--nm-table-header-bg` = rgba(0,240,255,.04)），
-   直接贴上去会让内容从粘住的列底下穿出来。所以：卡片底色 `--nm-bg-card`（实测 #0f172a 与卡片同色）
-   打底，再把原本那层半透明叠色用渐变原样叠回去 —— 粘住的列与其余格子才同色。 */
+   底色必须**不透明**：td/th 原本全透明，表头是半透明叠色（实测
+   `--nm-table-header-bg` = rgba(0,240,255,.04)），直接贴上去会让内容从粘住的列底下穿出来。
+   所以：卡片底色 `--nm-bg-card`（实测 #0f172a 与卡片同色）打底，
+   再把表头那层半透明叠色用渐变原样叠回去 —— 粘住的列与其余格子才同色。 */
 @media (max-width: 560px) {
   .table thead th:first-child,
   .table tbody td:first-child {
@@ -171,10 +212,6 @@
     background-image: linear-gradient(var(--nm-table-header-bg), var(--nm-table-header-bg));
   }
   .table tbody td:first-child { z-index: 2; }
-  .table tbody tr:nth-child(even) td:first-child {
-    background-image: linear-gradient(var(--nm-table-row-stripe), var(--nm-table-row-stripe));
-  }
-
   /* 手机档：把 640px 的最小宽度收掉，让列按内容自适应。
    *
    * 为什么（2026-10-16 实测）：640px 是**桌面窄窗口**的校准值（第 89 轮），

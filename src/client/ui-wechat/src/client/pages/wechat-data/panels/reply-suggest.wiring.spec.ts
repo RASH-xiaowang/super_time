@@ -1,8 +1,8 @@
 /**
  * 「推荐回复」的接线守卫：入口只在单聊、面板挂在消息流右侧、读取范围只给当前会话。
  *
- * 2026-09-25 二次调整：推荐回复不再独占一栏 —— 它与「分析」合并进 `ChatRightPanel`
- * （上推荐回复 / 下分析）。本文件里两条「挂载点」断言随之指向组合层，其余（只对单聊、
+ * 2026-09-25 二次调整：推荐回复不再独占一栏 —— 它与「分析」共用 `ChatRightPanel`，
+ * 但两者严格二选一。本文件里两条「挂载点」断言随之指向组合层，其余（只对单聊、
  * 必须有入口、读取范围、知识库下拉、复制走共享助手）语义未变。
  *
  * 起因：这是 2026-09-20 新增的单聊功能（头部按钮 → 第三栏面板 → 3 条候选回复）。
@@ -27,6 +27,7 @@ const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(
 const chats = strip(readChatsSource())
 const panel = readFileSync(join(HERE, 'ReplySuggest.tsx'), 'utf8')
 const data = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'reply-suggest.ts'), 'utf8')
+const remotes = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'remotes', 'summaryrec.ts'), 'utf8')
 
 describe('推荐回复的接线', () => {
   it('入口是「右栏常驻面板」而不是「头部按钮」（2026-09-25 改），且仍只对单聊出现', () => {
@@ -35,17 +36,13 @@ describe('推荐回复的接线', () => {
     // 否则同一功能会有两个入口（一个按钮 + 一个已经常驻的面板）。
     // 守卫的语义没变：**只对单聊出现**（群聊里「回一句」不成立）+ **必须有一个入口**。
     expect(chats.includes('推荐回复：按这段对话'), '头部按钮已随需求移除，不该再加回来').toBe(false)
-    // 2026-09-25 二次调整：推荐回复与「分析」合并成一块面板（组合层 `ChatRightPanel`），
-    // 挂载点因而从 `<ReplySuggest>` 变成组合层 —— 本条断言的**语义没变**：
-    // 只对单聊出现 + 有一个由状态控制的常驻入口。
+    // 推荐回复与「分析」共用组合层，但组合层一次只显示一个内容域。
     const at = chats.indexOf('<ChatRightPanel')
     expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
     const around = chats.slice(Math.max(0, at - 420), at)
-    // 2026-09-26：右栏挂载条件从「只有单聊」改成「两块各自判定」—— 群聊不给推荐回复
-    // （「回一句」不成立），但仍可**单独打开分析**（分析读当前会话，群聊同样是会话）。
-    // 所以「只对单聊」这条不变量从**挂载条件**移到了 `suggestVisible` 的**定义处**，
-    // 语义没变：本用例仍然钉着它，只是锚点跟着代码搬了家。
-    expect(around.includes('suggestVisible'), '右栏挂载由 suggestVisible 参与决定').toBe(true)
+    // 右栏先由 `suggestVisible` 判定单聊可见性，再收敛为唯一的 `chatRightMode`。
+    // 这样即使历史状态里两个开关同时为真，挂载条件也只会渲染一个内容域。
+    expect(around.includes('chatRightMode'), '右栏挂载必须由互斥模式参与决定').toBe(true)
     expect(chats.includes("const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'"),
       '推荐回复仍只对单聊出现（「回一句」在群里不成立）').toBe(true)
   })
@@ -57,7 +54,9 @@ describe('推荐回复的接线', () => {
     const around = chats.slice(Math.max(0, at - 300), at + 400)
     expect(around.includes('target={curSession}'), '面板必须拿到当前会话（否则读取范围会退化成「没有范围」）').toBe(true)
     // 「只对单聊」不再写在挂载条件里（群聊要能单独看分析）⇒ 改钉组合层的渲染条件。
-    expect(around.includes('showSuggest={suggestVisible}'), '推荐回复块仍只对单聊渲染').toBe(true)
+    expect(around.includes('mode={chatRightMode}'), '右栏模式必须由当前内容决定').toBe(true)
+    expect(chats.includes("analysisPaneOpen ? 'analysis' as const : suggestVisible ? 'suggest' as const : undefined"),
+      '两块同时有状态时也必须只选一个内容域').toBe(true)
   })
 
   it('数据层按 talker 取上下文（跨会话隔离靠它）', () => {
@@ -67,6 +66,37 @@ describe('推荐回复的接线', () => {
     const body = m?.[1] ?? ''
     expect(body.includes('queryMessages('), '上下文必须来自 queryMessages（不要自己开库）').toBe(true)
     expect(/\bqueryMessages\([^)]*talker/.test(body), 'queryMessages 的第一个业务参数必须是 talker').toBe(true)
+  })
+
+  it('知识库走最近对话的混合检索，不只拿最后一句话做短语匹配', () => {
+    expect(remotes).toContain('collectReplyKbSnippetsHybrid({')
+    expect(remotes).toContain('lines,')
+    expect(remotes).toContain('latestPeer,')
+    expect(remotes).toContain("makeEmbedFn: (model, feature) => rc.makeEmbedFn(model, feature)")
+    expect(data, '旧的同步 FTS-only 路径不应留在推荐回复数据层').not.toContain('searchKb(')
+  })
+
+  it('会话级推荐固定使用最近 60 条，并把唯一目标行交给提示词', () => {
+    expect(data).toContain('export const REPLY_SUGGEST_CONTEXT_LIMIT = 60')
+    expect(remotes).toContain('REPLY_SUGGEST_CONTEXT_LIMIT')
+    expect(remotes).toContain('buildReplyPrompt(lines, snippets, want, targetLine)')
+    expect(data).toContain('const targetLine = targetText !== \'\' && targetSpeaker !== undefined')
+  })
+
+  it('推荐回复打开时锁住消息区点击，不能切到分析面板', () => {
+    expect(chats).toContain(
+      "const suggestionInteractionLocked = chatRightMode === 'suggest' && !chatRightPanelSuppressed && !messagePoster.active",
+    )
+    expect(chats).toContain('interactionLocked={suggestionInteractionLocked}')
+    expect(chats).toContain('data-message-interaction-locked={interactionLocked || undefined}')
+    expect(chats).toContain('event.preventDefault()')
+    expect(chats).toContain('event.stopPropagation()')
+    expect(chats).toContain(
+      "onClick={!suggestionInteractionLocked && !messagePoster.active && item.kind === 'msg'",
+    )
+    const analysis = readFileSync(join(HERE, 'chats-analysis.ts'), 'utf8')
+    expect(analysis).toContain('if (suggestionInteractionLocked) return')
+    expect(analysis).toContain('suggestionInteractionLocked,')
   })
 
   it('面板里有知识库下拉：默认跟随全局、可改、且有「不用知识库」', () => {

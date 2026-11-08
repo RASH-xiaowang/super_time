@@ -45,6 +45,11 @@
   --nm-cyan-60: rgba(14, 122, 60, 0.60);
   --nm-cyan-70: rgba(14, 122, 60, 0.70);
   --nm-brand: #0e7a3c;
+  /* 实心操作面用深一档的微信绿：#07c160 保留给描边/选中/图标；
+     白字压官方亮绿只有 2.38:1，不满足 WCAG AA。 */
+  --nm-brand-fill: #0e7a3c;
+  --nm-brand-fill-hover: #0b6732;
+  --nm-brand-fill-active: #095a2b;
 
   /* ── 链接 / 次强调：微信灰蓝 ──────────────────────────────── */
   --nm-purple: #576b95;
@@ -78,10 +83,10 @@
   --nm-info-15: rgba(87, 107, 149, 0.12);
 
   /* ── 文字：四档灰阶（对比度均高于旧浅色实测下限） ─────────── */
-  --nm-text-1: #0a0a0a;
+  --nm-text-1: #191919;
   --nm-text-2: #464646;
   --nm-text-3: #606060;
-  --nm-text-4: #8c8c8c;
+  --nm-text-4: #6a6a6a;
   --nm-on-accent: #ffffff;
 
   /* ── 面 / 罩 / 中性 hover ─────────────────────────────────── */
@@ -123,7 +128,6 @@
   /* ── dsw alias tokens：跟随微信浅色 ─────────────────────────── */
   --dsw-alias-bg-mask-1: rgba(0, 0, 0, 0.40);
   --dsw-alias-bg-overlay: rgba(255, 255, 255, 0.94);
-  --dsw-alias-button-primary-fill: #07c160;
   --dsw-alias-interactive-bg-hover-danger: rgba(250, 81, 81, 0.10);
   --dsw-alias-markdown-code-block: #f2f2f2;
   --dsw-alias-markdown-code-block-banner: #e8e8e8;

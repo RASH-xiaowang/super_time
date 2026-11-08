@@ -44,6 +44,8 @@ const search = read(WD, 'panels', 'global-search.tsx')
 /** kit 的搜索框组件与样式：面板内的搜索框同样要排除（见下面那条用例）。 */
 const kitShell = read(WD, 'ui', 'kit-shell.tsx')
 const kit = read(WD, 'ui', 'kit.module.css')
+/** 全站紧凑 chrome：手机页头动作组在溢出时必须从起点可滚动。 */
+const chrome = read(WD, 'ui', 'compact-chrome.module.css')
 
 /**
  * 取某个文件里手机档那一段的内容。
@@ -156,6 +158,17 @@ describe('外壳各处在 560 下做了什么', () => {
       .toContain('.segItem { min-height: 36px; }')
     expect(overlay.slice(0, overlay.indexOf(PHONE)), '段条基础档被顺手改成 36px ⇒ 桌面档也变高，且 merged-compact 的 24px 判据会红')
       .not.toContain('.segItem { min-height: 36px; }')
+  })
+
+  it('手机页头动作组溢出时从起点可滚动，不用裸 flex-end 把首项推到负坐标', () => {
+    const b = phoneBlock(chrome)
+    expect(b, '手机页头动作组没有横向滚动').toContain('overflow-x: auto')
+    expect(b, '手机页头动作组仍用裸 flex-end：内容超宽时首项会落在负坐标').not.toMatch(
+      /justify-content:\s*flex-end\s*;/,
+    )
+    expect(b, '手机页头动作组缺少安全的起点对齐回退').toMatch(
+      /justify-content:\s*(?:flex-start|safe flex-end)\s*;/,
+    )
   })
 
   it('抽屉与弹窗转全屏底部 sheet，且宽度覆盖带 !important（宽度是内联 style）', () => {

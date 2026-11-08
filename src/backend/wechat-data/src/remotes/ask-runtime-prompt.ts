@@ -17,20 +17,19 @@ import type {
 } from '../query/answer-runtime/types.ts'
 import type { AnswerStatus, EvidenceBundle } from '../query/answer-runtime/evidence.ts'
 import {
-  CLAWBOT_OUTPUT_PRONOUN_REMINDER,
-  CLAWBOT_UNVERIFIED_VALUE_REPLY,
   MANUAL_QA_OUTPUT_PRONOUN_REMINDER,
   WECHAT_QA_SYSTEM_PROMPT,
   formatConversationHistory,
-  withClawbotPersonaRules,
   withManualQaPersonaRules,
 } from '../query/answer-runtime/persona.ts'
-import { insufficientReply } from '../query/answer-runtime/replies.ts'
-import { DEFAULT_CLAWBOT_SYSTEM_PROMPT } from '../query/clawbot/clawbot-prompt.ts'
 import type { AnswerProfileId } from '../query/tools/profiles.ts'
 import { auditGrounding, groundingRepairHint, stripCitationMarkers } from '../query/grounding.ts'
-import type { GroundingReplyMode } from '../query/grounding.ts'
 import type { AskCitation } from '../types.ts'
+import {
+  isInternalWechatId,
+  readableIdentityLabel,
+  replaceWechatIds,
+} from '../query/message-identity.ts'
 import type { RunChatFn } from './ask-run-chat.ts'
 
 /** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
@@ -40,106 +39,61 @@ export interface AskImageInput {
   name?: string
 }
 
-/** 本轮问答的数据面。 */
-export type AskDataScope = 'wechat' | 'kb-only'
-
 /** 一次问答的范围。 */
 export interface AskScope {
   username?: string
+  /** 会话显示名；用于让模型把单聊里的「他/她/对方」对应到当前联系人。 */
+  displayName?: string
   from?: string
   to?: string
 }
 
-/** 自动回复的聊天兜底提示词。 */
-export function buildEmptyChatPrompt(
-  question: string,
-  history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }> = [],
-  imageNote = '',
-): string {
-  const historyBlock = history.length > 0
-    ? '\n\n此前对话（保持连贯，别把上一轮说过的事当没发生）：\n'
-      + formatConversationHistory(history, 'clawbot')
-    : ''
-  const imageBlock = imageNote !== '' ? '\n\n关于图片：' + imageNote : ''
-  return `当前聊天联系人刚发来一条微信消息：${question}${historyBlock}${imageBlock}
-
-  本轮**没有**任何可参考的材料（知识库里没检索到相关内容）。请按以下要求回一句：
-  1. **像真人发微信那样**：口语、简短、自然，每条不超过 30 字。寒暄就正常寒暄（「在的」「嗯嗯」），问事就说没查到。
-  2. **开场跟着聊天联系人的话走**：「在的」只在聊天联系人问「在吗 / 在不在」时用；聊天联系人说别的就直接接话，不要用万能开场。
-  3. **先回应聊天联系人说的内容，再说别的**：聊天联系人说「我明天去北京」，先接「出差啊」再往下；不要一上来就说「我这边没查到」。
-  4. **闲聊就闲聊**：聊天联系人在开玩笑、发牢骚、说天气，就顺着聊，不要硬往「查资料」上引。不是每句话都需要回答。
-  5. **绝对不要编造**具体事实：金额、日期、人名、地址、承诺一律不许猜。不知道就说不知道。
-  6. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字。
-  7. **不要提「知识库」「检索」「材料」这类词** —— 聊天联系人不知道你在查什么，说了很奇怪。
-  8. **不要解释自己**：不要写「注：」「说明：」「（不编号了）」这类元信息，也不要提引用、编号、来源。回复就是在聊天，不是在写文档。
-  9. 需要当前微信账号本人进一步确认的事（借钱、签约、敏感话题），回一句「这个我得先确认一下」比硬答更好。
-  10. 内容确实长时按语义分段（段间空一行），像人连发几条那样。
-  11. ${CLAWBOT_OUTPUT_PRONOUN_REMINDER}`
-}
-
 /** 解析本次问答要用的系统提示词。 */
-export function resolveSystemPrompt(override: string | undefined, dataScope?: AskDataScope): string {
+export function resolveSystemPrompt(override: string | undefined): string {
   if (override !== undefined && override.trim() !== '') {
-    return dataScope === 'kb-only'
-      ? withClawbotPersonaRules(override)
-      : withManualQaPersonaRules(override)
-  }
-  if (dataScope === 'kb-only') {
-    return DEFAULT_CLAWBOT_SYSTEM_PROMPT
+    return withManualQaPersonaRules(override)
   }
   return WECHAT_QA_SYSTEM_PROMPT
 }
 
 /** 构造用户消息里的回答规则。 */
-export function buildSynthRules(dataScope: AskDataScope | undefined, timeGuardRule: string): string {
-  if (dataScope === 'kb-only') {
-    return `
-  请按以下要求生成回复（当前微信账号本人正在微信里与聊天联系人对话，不是在写报告）：
-  1. **只用材料里的事实**：材料里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期。宁可少说，也不要编。
-  2. **像真人发微信那样说话**：口语、简短、自然。不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），不要复述检索过程，不要罗列来源。
-  3. **每条不超过 30 字**：这是硬要求。一句话说不完就**分成几条**，每条独立成段（用空行隔开），像人连发几条微信那样。宁可分 3 条短的，也不要写 1 条长的。
-  4. **不要标 [n] 角标**：微信里没有可点的角标，标了就是乱码。要说明是谁说的，直接写名字（如「小何说」）。
-  5. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
-  6. **找不到就直说**：材料不足以回答时，直接说「这个我这边没查到」，再问一句要不要换个说法。不要用推测填空。${timeGuardRule}
-  ${CLAWBOT_OUTPUT_PRONOUN_REMINDER}`
-  }
+export function buildSynthRules(timeGuardRule: string): string {
   return `
   请按以下要求回答：
   1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。金额、日期、电话/卡号这类值**只能原样照抄**材料里的写法 —— 要说合计就写明由哪几条相加（如「3500+3500=7000」），不要自行换算单位或推算日期。
-  2. **像微信里跟人说话那样自然**：口语化中文，直接把事情讲清楚，不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），也不要复述检索过程。要罗列多条时可以分点，但每条都要像在转述聊天内容。
-  3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
-  4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
-  5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
-  6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}
+  2. **先结论后要点**：第一段先用一句话直接回答问题；随后用 \`- \` 列 2-4 条关键事实。除非提问者明确要求完整过程，否则不要按消息逐条倾倒记录。
+  3. **排版简单**：每条只讲一个主题，控制在 1-2 句；相近消息合并，只保留代表性事实。不要使用大标题、表格、嵌套列表或连续加粗。
+  4. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
+  5. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述；日期放在条目开头。
+  6. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
+  7. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。
+  8. **联系人只用网名或备注**：提到聊天对象或群成员时，必须使用材料里的备注、群昵称或会话显示名。严禁输出 \`wxid_*\`、\`*@chatroom\`、\`gh_*\` 或其他 username、消息 key 等技术标识；显示名缺失时写「某位成员」或「该群聊」，不得把内部标识当成人名。${timeGuardRule}
+  **效率要求**：材料可能很多，先筛出与问题直接相关的少量证据，不要逐条分析或枚举全部记录；除非提问者明确要求完整清单，否则只保留 2-4 个主题。
   ${MANUAL_QA_OUTPUT_PRONOUN_REMINDER}`
 }
 
 /** 「没检索到原文」时的回答文案。 */
 export function emptyAnswerText(
-  dataScope: AskDataScope | undefined,
   profile: AnswerProfileId = 'wechat-ask',
 ): string {
-  if (profile === 'clawbot-auto') return insufficientReply(profile)
-  if (dataScope === 'kb-only') {
-    return '知识库里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词，或在实例设置里换一个知识库。'
-  }
   if (profile === 'session-ask') {
     return '当前会话里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词，或补充更具体的时间与人物。'
   }
   return '本机记录里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词、收窄时间范围，或指定某个会话再问。'
 }
 
-/** 自动回复核对失败后的安全文案。 */
-export const CHAT_WITHHELD_ANSWER = CLAWBOT_UNVERIFIED_VALUE_REPLY
-
 /** 检索范围（只保留非空字段）。 */
 export function buildAskScope(options: {
   username?: string
+  usernameName?: string
   from?: string
   to?: string
 }): AskScope {
   return {
     username: typeof options.username === 'string' && options.username ? options.username : undefined,
+    displayName: typeof options.usernameName === 'string' && options.usernameName
+      ? options.usernameName
+      : undefined,
     from: typeof options.from === 'string' && options.from ? options.from : undefined,
     to: typeof options.to === 'string' && options.to ? options.to : undefined,
   }
@@ -271,14 +225,34 @@ export async function runChatWithImagesFallback(
   onDelta?: (text: string) => void,
   onReasoning?: (text: string) => void,
   images?: readonly ImageBlock[],
+  signal?: AbortSignal,
 ): Promise<string> {
-  if (images === undefined || images.length === 0) return runChat(system, userText, maxTokens, onDelta, onReasoning)
-  try {
-    return await runChat(system, userText, maxTokens, onDelta, onReasoning, images)
-  } catch (e) {
-    op('task', 'ask_wechat', 'fail', 'image_send', '图片未能送模型，已按纯文本重试：' + (e instanceof Error ? e.message : String(e)))
-    return runChat(system, userText + IMAGE_UNSUPPORTED_NOTE, maxTokens, onDelta, onReasoning)
+  if (images === undefined || images.length === 0) {
+    return runChat(system, userText, maxTokens, onDelta, onReasoning, undefined, signal)
   }
+  try {
+    return await runChat(system, userText, maxTokens, onDelta, onReasoning, images, signal)
+  } catch (e) {
+    // A user stop is not an image-capability failure. Retrying here would
+    // consume another request and can surface stale deltas after cancellation.
+    if (signal?.aborted === true || isAskCanceledError(e)) throw e
+    op('task', 'ask_wechat', 'fail', 'image_send', '图片未能送模型，已按纯文本重试：' + (e instanceof Error ? e.message : String(e)))
+    return runChat(
+      system,
+      userText + IMAGE_UNSUPPORTED_NOTE,
+      maxTokens,
+      onDelta,
+      onReasoning,
+      undefined,
+      signal,
+    )
+  }
+}
+
+function isAskCanceledError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && (error as { code?: unknown }).code === 'ASK_CANCELED'
 }
 
 /**
@@ -294,7 +268,6 @@ export function askBasisLine(
     kb?: { fileId?: number; fileName?: string }
     snippet?: string
   }>,
-  dataScope?: AskDataScope,
   resourceCount = 0,
 ): string {
   if (citations.length === 0 && resourceCount === 0) return ''
@@ -320,7 +293,7 @@ export function askBasisLine(
   }
   if (aggItems.length > 0) parts.push(`${aggItems.length} 条统计事实`)
   if (resourceCount > 0) parts.push(`${resourceCount} 个相关资源`)
-  return `${dataScope === 'kb-only' ? '依据知识库' : '依据本机记录'}：${parts.join(' · ')}${span}`
+  return `依据本机记录：${parts.join(' · ')}${span}`
 }
 
 /** 归一知识库 id。 */
@@ -331,17 +304,14 @@ export function normalizeKbId(kbId: number | undefined): number | undefined {
 /** 选择入口 profile。 */
 export function selectAskProfile(options: {
   source?: string
-  dataScope?: AskDataScope
 }): AnswerProfileId {
   if (options.source === 'session') return 'session-ask'
-  if (options.dataScope === 'kb-only' || options.source === 'auto') return 'clawbot-auto'
   return 'wechat-ask'
 }
 
 /** 工具选择阶段的系统提示：只讲规则与范围，不塞原始证据。 */
 export function buildToolSelectionSystem(input: {
   profile: AnswerProfileId
-  dataScope?: AskDataScope
   scope: AskScope
   kbId?: number
   question: string
@@ -350,26 +320,39 @@ export function buildToolSelectionSystem(input: {
   now: Date
 }): string {
   const today = `${input.now.getFullYear()}-${String(input.now.getMonth() + 1).padStart(2, '0')}-${String(input.now.getDate()).padStart(2, '0')}`
+  const lockedUsername = input.scope.username ?? ''
+  const lockedName = input.scope.displayName?.trim() || lockedUsername
   const scope = [
     input.profile === 'session-ask'
-      ? `当前会话已锁定为 ${input.scope.username ?? '（缺失）'}，不得查询其他会话`
-      : input.scope.username ? `会话限定 ${input.scope.username}` : '会话不限',
+      ? `当前会话已锁定为 ${lockedName || '（缺失）'}${lockedName && lockedUsername && lockedName !== lockedUsername ? `（username=${lockedUsername}）` : ''}，不得查询其他会话`
+      : input.scope.username
+        ? `会话限定 ${lockedName}${lockedName !== lockedUsername ? `（username=${lockedUsername}）` : ''}`
+        : '会话不限',
     input.scope.from ? `起始 ${input.scope.from}` : '',
     input.scope.to ? `截止 ${input.scope.to}` : '',
-    input.kbId !== undefined ? `知识库 ${String(input.kbId)}` : '未选择知识库',
-    input.dataScope === 'kb-only' ? '数据面仅知识库，禁止访问本机微信数据' : '',
+    input.profile === 'session-ask'
+      ? ''
+      : input.kbId !== undefined ? `知识库 ${String(input.kbId)}` : '未选择知识库',
   ].filter(Boolean).join('；')
-  const conversationKind = input.profile === 'clawbot-auto' ? 'clawbot' : 'qa'
   const history = input.history.length > 0
     ? '\n最近对话（只用于理解指代，不得当作事实证据）：\n'
-      + formatConversationHistory(input.history, conversationKind)
+      + formatConversationHistory(input.history)
     : ''
   const image = input.imageNote !== '' ? `\n图片说明：${input.imageNote}` : ''
-  return `今天是 ${today}。你是一个检索工具选择器，不是最终回答器。
-待处理问题：${input.question}
-执行边界：${scope}${history}${image}
-
-你的任务：
+  const lockedHint = lockedUsername !== ''
+    ? input.profile === 'session-ask'
+      ? '\n当前会话已锁定：会话与日期范围由系统自动注入，不要为了确认会话身份额外检索或切换范围。'
+      : '\n会话范围已锁定：会话类工具的 username 会由系统自动注入，不要为了确认会话身份额外调用 search_contacts 或 list_sessions。'
+    : ''
+  const taskRules = input.profile === 'session-ask'
+    ? `你的任务：
+1. 只在当前会话内收集聊天消息证据；会话身份已经确定，不要再确认或切换会话；
+2. 明确关键词优先 search_messages；“最近聊了什么”优先 get_session_messages；关键词检索不足时，再用一次 search_hybrid（mode=messages）或 search_semantic 补充语义召回；
+3. 只有明确的数量、排名或日期统计才用 aggregate_messages；只有需要某条消息前后上下文时才用 get_message_context；
+4. 不要改查联系人、会话列表、文件、收藏、朋友圈、转账账单、知识库或其他全局资源。问题提到这些词时，只把它们当作当前会话中的消息内容来检索；找不到就如实说明；
+5. 同一工具同一参数不要重复调用。通常控制在 1-2 次工具调用，拿到足够证据后立即停止，不要为了“再确认”反复检索；
+6. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
+    : `你的任务：
 1. 只选择并调用必要的检索工具，收集能回答问题的原文或确定性统计；
 2. 不要臆造工具结果，不要把常识当成本机记录；
 3. 如果问题适合综合检索，优先用 search_hybrid；明确统计用 aggregate_messages；明确会话内上下文用 get_session_messages 或 get_message_context；
@@ -377,13 +360,22 @@ export function buildToolSelectionSystem(input: {
 5. 明确问文件用 search_files、收藏用 search_favorites、朋友圈用 search_moments、转账红包用 search_records、联系人用 search_contacts；
 6. 不要用一个泛化检索工具替代这些明确的数据域；对应工具没有命中时再考虑 search_hybrid；
 7. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
+  return `今天是 ${today}。你是一个检索工具选择器，不是最终回答器。
+待处理问题：${input.question}
+执行边界：${scope}${lockedHint}${history}${image}
+
+${taskRules}`
 }
 
 /** 本轮工具范围的人话描述。 */
 export function describeAskScope(scope: AskScope, profile: AnswerProfileId): string {
-  if (profile === 'clawbot-auto') return '仅知识库'
+  const sessionName = scope.displayName?.trim() || scope.username
   const parts = [
-    profile === 'session-ask' ? '当前会话' : scope.username ? '会话限定' : '全库',
+    profile === 'session-ask'
+      ? sessionName ? `当前会话（${sessionName}）` : '当前会话'
+      : scope.username
+        ? sessionName ? `会话限定（${sessionName}）` : '会话限定'
+        : '全库',
     scope.from ? `起 ${scope.from}` : '',
     scope.to ? `止 ${scope.to}` : '',
   ].filter(Boolean)
@@ -402,9 +394,9 @@ export function buildTimeGuardRule(intent: AnswerIntentDecision, evidence: Evide
   }).length
   const label = from === to ? from : `${from} ~ ${to}`
   if (hits > 0) {
-    return `\n7. **时间范围**：材料里有 ${String(hits)} 条落在 ${label} 内，可以按该范围陈述。`
+    return `\n9. **时间范围**：材料里有 ${String(hits)} 条落在 ${label} 内，可以按该范围陈述。`
   }
-  return `\n7. **时间范围（重要）**：检索在 ${label} 内**一条都没找到**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${label} 这段时间没有找到相关记录」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`
+  return `\n9. **时间范围（重要）**：检索在 ${label} 内**一条都没找到**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${label} 这段时间没有找到相关记录」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`
 }
 
 /** 资源证据不伪装成消息引用，而是作为独立材料块给模型。 */
@@ -464,20 +456,17 @@ export function buildSynthesisPrompt(input: {
   history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>
   imageHint: string
   contextBlock: string
-  dataScope?: AskDataScope
   timeGuardRule: string
 }): string {
-  const conversationKind = input.dataScope === 'kb-only' ? 'clawbot' : 'qa'
   const historyBlock = input.history.length > 0
     ? '此前的对话（保持多轮连贯，但答案必须以本次检索结果为准）：\n'
-      + formatConversationHistory(input.history, conversationKind) + '\n\n'
+      + formatConversationHistory(input.history) + '\n\n'
     : ''
   const imageHint = input.imageHint !== '' ? '\n关于图片：' + input.imageHint : ''
-  const questionLabel = input.dataScope === 'kb-only' ? '当前聊天联系人本次消息' : '提问者本次问题'
-  return `${historyBlock}${questionLabel}：${input.question}${imageHint}
+  return `${historyBlock}提问者本次问题：${input.question}${imageHint}
 
 ${input.contextBlock}
-${buildSynthRules(input.dataScope, input.timeGuardRule)}`
+${buildSynthRules(input.timeGuardRule)}`
 }
 
 /** 运行时的证据正文，按 evidenceId 索引。 */
@@ -488,6 +477,29 @@ export function evidenceTexts(evidence: EvidenceBundle): Map<string, string> {
     out.set(item.evidenceId, `${head}\n${item.snippet}`)
   }
   return out
+}
+
+/**
+ * Final-answer safety net: replace any remaining internal identities with the
+ * citation's real display name (or a neutral human label when it is unknown).
+ */
+export function replaceAnswerIdentities(
+  answer: string,
+  citations: readonly AnswerRuntimeCitation[],
+): string {
+  const aliases = new Map<string, string>()
+  for (const citation of citations) {
+    const raw = citation.username.trim()
+    const label = readableIdentityLabel(citation.name, raw)
+    if (raw === '' || label === '' || !isInternalWechatId(raw)) continue
+    aliases.set(raw, label)
+    aliases.set(raw.toLowerCase(), label)
+  }
+  return replaceWechatIds(
+    answer,
+    raw => aliases.get(raw) ?? aliases.get(raw.toLowerCase()),
+    raw => raw.toLowerCase().endsWith('@chatroom') ? '该群聊' : '某位联系人',
+  )
 }
 
 /** 资源正文（参与接地审计，但不计入 [n]）。 */
@@ -507,12 +519,12 @@ function compactText(text: string): string {
 /**
  * 回答是否实际使用了给定证据。
  *
- * 自动回复没有 [n] 角标，仅“存在引用”不能证明模型真的用了材料：模型完全
+ * 资源回答没有 [n] 角标，仅“存在引用”不能证明模型真的用了材料：模型完全
  * 可能返回一段通用话术。这里用确定性的内容重合做保守校验：
  *   · 回答里 ≥4 个连续汉字原样出现在证据中，直接通过；
  *   · 否则比较去噪后的汉字二元组，短回答至少重合 1 个、长回答至少 2 个；
  *   · 英文/型号词至少重合 1 个长度 ≥3 的词。
- * 这不能替代语义审查，但能拦住“有引用、回答却完全无关”的无人值守发送。
+ * 这不能替代语义审查，但能拦住“有引用、回答却完全无关”的结论。
  */
 export function hasEvidenceSupport(answer: string, evidenceTexts: readonly string[]): boolean {
   const evidence = evidenceTexts.filter(Boolean).join('\n')
@@ -553,65 +565,62 @@ export function hasEvidenceSupport(answer: string, evidenceTexts: readonly strin
   return false
 }
 
-/**
- * 按场景完成接地核对与最多一次回炉。
- *
- * 与旧实现保持同一协议：手动问答要求 [n]；自动回复禁止 [n]，但高风险值仍核对。
- */
+/** 按普通问答或独立资源模式完成接地核对与最多一次回炉。 */
 export async function resolveGroundedAnswer(input: {
-  /**
-   * `resource` 只用于「文件/收藏/朋友圈等资源」作为唯一证据的回答：
-   * 它和自动回复一样禁止 [n]，但不套用微信闲聊口吻。
-   */
-  mode: GroundingReplyMode | 'resource'
+  /** `resource` 用于「文件/收藏/朋友圈等资源」作为唯一证据的回答。 */
+  mode: 'cited' | 'resource'
   answer: string
   citationCount: number
   synthPrompt: string
   evidenceFor: (cited: number[]) => string[]
   allEvidence: string[]
+  /** 用户问题/范围里已经明确给出的值；复述这些值不算编造。 */
+  trustedValueText?: string
   systemPrompt: string
   runChat: RunChatFn
   images?: readonly ImageBlock[]
+  /** 取消/内部 deadline；修复调用必须沿用，不能让超时请求继续占着供应商连接。 */
+  signal?: AbortSignal
+  /** 超时降级时关闭第二次模型调用，只对首版回答做确定性核对。 */
+  allowRepair?: boolean
 }): Promise<{
   answer: string
   citedIndexes: number[]
   withheld: boolean
   grounding: ReturnType<typeof auditGrounding>
   repaired: boolean
-  /** 回答是否与证据有可验证的内容重合（`chat` / `resource` 模式使用）。 */
+  /** 回答是否与证据有可验证的内容重合（`resource` 模式使用）。 */
   evidenceUsed: boolean
 }> {
-  const auditMode: GroundingReplyMode = input.mode === 'cited' ? 'cited' : 'chat'
   const resourceOnly = input.mode === 'resource'
-  // 完全没有证据时走的是聊天兜底，不能用「回答必须使用证据」把正常寒暄撤回。
-  const chatFallbackWithoutEvidence = !resourceOnly
-    && !input.allEvidence.some(text => text.trim() !== '')
   const auditFor = (text: string, cited: number[]): ReturnType<typeof auditGrounding> =>
     auditGrounding(
       text,
-      auditMode === 'chat' ? input.allEvidence : input.evidenceFor(cited),
+      resourceOnly ? input.allEvidence : input.evidenceFor(cited),
       input.citationCount,
-      { requireCitationMarkers: auditMode === 'cited' },
+      {
+        requireCitationMarkers: !resourceOnly,
+        ...(input.trustedValueText ? { allowValuesFrom: [input.trustedValueText] } : {}),
+      },
     )
 
-  let citedIndexes = parseCitedIndexes(input.answer, input.citationCount)
+  let citedIndexes = resourceOnly ? [] : parseCitedIndexes(input.answer, input.citationCount)
   let grounding = auditFor(input.answer, citedIndexes)
-  let evidenceUsed = auditMode === 'chat'
-    ? chatFallbackWithoutEvidence || hasEvidenceSupport(input.answer, input.allEvidence)
+  let evidenceUsed = resourceOnly
+    ? hasEvidenceSupport(input.answer, input.allEvidence)
     : true
-  const protocolNeedsRepair = input.mode === 'cited'
+  const protocolNeedsRepair = !resourceOnly
     && (citedIndexes.length === 0 || grounding.uncited > 0)
   const needsRepair = protocolNeedsRepair
     || grounding.unsupported.length > 0
-    || (auditMode === 'chat' && !evidenceUsed)
+    || (resourceOnly && !evidenceUsed)
   let finalAnswer = input.answer
   let repaired = false
 
-  if (needsRepair) {
-    const repairHint = groundingRepairHint(grounding, auditMode)
-    const strictPrompt = auditMode === 'chat'
-      ? resourceOnly
-        ? `${input.synthPrompt}
+  if (needsRepair && input.allowRepair !== false) {
+    const repairHint = groundingRepairHint(grounding, resourceOnly ? 'plain' : 'cited')
+    const strictPrompt = resourceOnly
+      ? `${input.synthPrompt}
 
   【重要】请重写上一次的回答，只修事实与表达，不要解释你正在重写。
   ${repairHint}
@@ -619,37 +628,30 @@ export async function resolveGroundedAnswer(input: {
    · 这些资源没有消息角标，不要标 [n]，需要提及时直接写资源名称；
    · 不要提引用、来源、材料或核对过程；
    · 日期与金额只能写资源材料里原样出现的值。`
-        : `${input.synthPrompt}
-
-  【重要】请重写上一次的微信自动回复，只修事实与表达，不要解释你正在重写。
-  ${repairHint}
-  ${!evidenceUsed ? ' · 上一次的回答没有实际使用任何一条知识库材料中的具体内容。\n' : ''}
-   · 仍然只使用检索材料里的事实，像真人发微信一样简短口语化；
-   · 不要标 [n]，不要提引用、来源、材料、核对或“上一次回答”；
-   · 如果材料不足以确认关键数字，就说「${CLAWBOT_UNVERIFIED_VALUE_REPLY}」。`
       : `${input.synthPrompt}
 
   【重要】请重写上一次的回答，逐条修掉下面的问题。
   ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] 来源**。\n' : ''}${repairHint ? repairHint + '\n' : ''} · 每一句事实性陈述后面都必须紧跟对应的 [n]，且只标真正支持这句话的那几条；
-   · 语气保持自然口语化，像在微信里转述聊天内容；
+   · 语气保持自然口语化，像在微信里转述聊天内容，并保持「先结论、后要点」的结构；
    · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
     const second = await input.runChat(
       input.systemPrompt,
       strictPrompt,
-      auditMode === 'chat' ? 400 : 1600,
+      resourceOnly ? 400 : 1600,
       undefined,
       undefined,
       input.images,
+      input.signal,
     )
-    const secondCited = parseCitedIndexes(second, input.citationCount)
+    const secondCited = resourceOnly ? [] : parseCitedIndexes(second, input.citationCount)
     const secondAudit = auditFor(second, secondCited)
-    const secondUsed = auditMode === 'chat'
-      ? chatFallbackWithoutEvidence || hasEvidenceSupport(second, input.allEvidence)
+    const secondUsed = resourceOnly
+      ? hasEvidenceSupport(second, input.allEvidence)
       : true
-    const protocolOk = auditMode === 'chat' || secondCited.length > 0
+    const protocolOk = resourceOnly || secondCited.length > 0
     const fewerUnsupported = secondAudit.unsupported.length < grounding.unsupported.length
     const supportImproved = secondUsed && !evidenceUsed
-    const sameUnsupportedWithMoreCitations = auditMode === 'cited'
+    const sameUnsupportedWithMoreCitations = !resourceOnly
       && secondAudit.unsupported.length === grounding.unsupported.length
       && secondCited.length > citedIndexes.length
     if (protocolOk && (fewerUnsupported || sameUnsupportedWithMoreCitations || supportImproved)) {
@@ -662,21 +664,17 @@ export async function resolveGroundedAnswer(input: {
   }
 
   let withheld = false
-  if (auditMode === 'chat') {
+  if (resourceOnly) {
     finalAnswer = stripCitationMarkers(finalAnswer)
     citedIndexes = []
     if (grounding.unsupported.length > 0) {
       withheld = true
-      finalAnswer = resourceOnly
-        ? '找到的资源内容不足以核对这次回答中的关键数字或日期，因此没有直接采用 AI 回答。请打开下方资源确认，或换一个更具体的问法。'
-        : CHAT_WITHHELD_ANSWER
+      finalAnswer = '找到的资源内容不足以核对这次回答中的关键数字或日期，因此没有直接采用 AI 回答。请打开下方资源确认，或换一个更具体的问法。'
     }
     grounding = { ...grounding, cited: [] }
     if (!evidenceUsed) {
       withheld = true
-      finalAnswer = resourceOnly
-        ? '找到的资源没有在 AI 回答中被实际使用，因此没有直接采用该结论。请打开下方资源确认，或换一个更具体的问法。'
-        : CHAT_WITHHELD_ANSWER
+      finalAnswer = '找到的资源没有在 AI 回答中被实际使用，因此没有直接采用该结论。请打开下方资源确认，或换一个更具体的问法。'
     }
   } else if (citedIndexes.length === 0) {
     withheld = true

@@ -27,7 +27,7 @@
  *   "面板卡住"。本工具因此带**断言**：面板文本少于阈值就直接报错退出。
  *
  * 用法：`npm run theme:live-audit`（17 个可见页签）/ `npm run theme:live-audit -- --all-tabs`
- *      （**全部 37 个页签**：17 可见 + 20 隐藏，后者按 hash 路由 + reload 进入）。
+ *      （**全部 40 个页签**：17 可见（含设置）+ 23 隐藏，后者按 hash 路由 + reload 进入）。
  * 退出码：0 = 两套主题都验完；2 = 前置缺失；3 = 主题没生效或数据根没生效。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

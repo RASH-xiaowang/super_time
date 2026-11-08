@@ -15,8 +15,7 @@
  * 恢复真计时器分成独立 await 的阶段，不让未 await 的 act 交错（交错会让后续的
  * `act(render)` 静默不生效，实测踩过：守卫全对、断言照样红）。
  */
-import { createElement, useRef, useState } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement, useRef, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GroupInfo } from '@deepseek-ai/dsh-wechat-data/types'
@@ -28,7 +27,14 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('../api.ts', () => mocks)
 
-const { infoRefreshApplies, useGroupInfoLive } = await import('./chats-info-live.ts')
+const {
+  beginGroupInfoRequest,
+  groupInfoRequestApplies,
+  groupInfoRequestGateFor,
+  infoRefreshApplies,
+  invalidateGroupInfoRequests,
+  useGroupInfoLive,
+} = await import('./chats-info-live.ts')
 
 const G1 = { name: '群一', members: [] } as unknown as GroupInfo
 const G2 = { name: '群二', members: [] } as unknown as GroupInfo
@@ -43,6 +49,7 @@ function Harness(): React.JSX.Element {
   talkerRef.current = bag.talker
   const epochRef = useRef(bag.epoch)
   epochRef.current = bag.epoch
+  const requestGate = groupInfoRequestGateFor(epochRef)
   const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null)
   // 初值非空：让「刷新成功后清掉上一次的错误」这件事可观察（null → null 看不出有没有做）。
   const [groupInfoErr, setGroupInfoErr] = useState<string | null>('旧错误')
@@ -53,6 +60,7 @@ function Harness(): React.JSX.Element {
     talkerRef,
     sessionAlive: (e, t) => epochRef.current === e && talkerRef.current === t,
     sessionEpochRef: epochRef,
+    requestGate,
     setGroupInfo,
     setGroupInfoErr,
   })
@@ -99,6 +107,53 @@ describe('落地闸 infoRefreshApplies（两个抽屉共用的归属校验）', 
     expect(infoRefreshApplies(true, 'a', 'b'), '会话切走要丢弃').toBe(false)
     expect(infoRefreshApplies(true, null, 'a'), '空 talker 要丢弃').toBe(false)
   })
+
+  it('打开请求还要比较序号：关闭后重开同一个群，旧响应也不能落地', () => {
+    expect(groupInfoRequestApplies(2, 2, true), '当前请求且会话未切走才落地').toBe(true)
+    expect(groupInfoRequestApplies(1, 2, true), '更早的响应必须丢弃').toBe(false)
+    expect(groupInfoRequestApplies(2, 2, false), '会话已切走必须丢弃').toBe(false)
+  })
+
+  it('旧打开请求慢于后发实时刷新 ⇒ 打开响应失效、刷新响应仍可落地', () => {
+    const gate = groupInfoRequestGateFor({})
+    const openSeq = beginGroupInfoRequest(gate)
+    const refreshSeq = beginGroupInfoRequest(gate)
+    expect(groupInfoRequestApplies(openSeq, gate.current, true), '旧打开响应必须失效').toBe(false)
+    expect(groupInfoRequestApplies(refreshSeq, gate.current, true), '后发刷新响应必须可落地').toBe(true)
+  })
+
+  it('关闭后立即重开同一群 ⇒ 旧打开响应失效、新打开响应可落地', () => {
+    const gate = groupInfoRequestGateFor({})
+    const firstOpenSeq = beginGroupInfoRequest(gate)
+    invalidateGroupInfoRequests(gate)
+    const secondOpenSeq = beginGroupInfoRequest(gate)
+    expect(groupInfoRequestApplies(firstOpenSeq, gate.current, true), '关闭前的打开响应必须失效').toBe(false)
+    expect(groupInfoRequestApplies(secondOpenSeq, gate.current, true), '重开后的打开响应应可落地').toBe(true)
+  })
+
+  it('A→B→A ⇒ 第一次 A 的打开响应即使迟到也失效', () => {
+    const gate = groupInfoRequestGateFor({})
+    let epoch = 1
+    let talker = 'A'
+    const alive = (requestEpoch: number, requestTalker: string): boolean => (
+      requestEpoch === epoch && requestTalker === talker
+    )
+    const firstA = beginGroupInfoRequest(gate)
+
+    epoch = 2
+    talker = 'B'
+    invalidateGroupInfoRequests(gate)
+    const requestB = beginGroupInfoRequest(gate)
+
+    epoch = 3
+    talker = 'A'
+    invalidateGroupInfoRequests(gate)
+    const secondA = beginGroupInfoRequest(gate)
+
+    expect(groupInfoRequestApplies(firstA, gate.current, alive(1, 'A')), '第一次 A 的响应必须失效').toBe(false)
+    expect(groupInfoRequestApplies(requestB, gate.current, alive(2, 'B')), 'B 的响应也必须失效').toBe(false)
+    expect(groupInfoRequestApplies(secondA, gate.current, alive(3, 'A')), '回到 A 后的新响应应可落地').toBe(true)
+  })
 })
 
 describe('群信息抽屉的实时刷新', () => {
@@ -140,6 +195,26 @@ describe('群信息抽屉的实时刷新', () => {
     await act(async () => { late?.({ group: G1 }); await Promise.resolve(); await Promise.resolve() })
     await flush()
     expect(lastGroup, '切走后旧响应仍落地了').toBeNull()
+  })
+
+  it('关闭后马上重开同一个群 ⇒ 旧刷新响应仍丢弃', async () => {
+    render()
+    let late: ((v: { group: GroupInfo }) => void) | null = null
+    mocks.apiGetGroupInfo.mockReturnValueOnce(new Promise((res) => { late = res }))
+    vi.useFakeTimers()
+    act(() => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+    await act(async () => { vi.advanceTimersByTime(320) })
+    vi.useRealTimers()
+    await act(async () => { await Promise.resolve() })
+
+    bag.open = false
+    render()
+    bag.open = true
+    render()
+    await act(async () => { late?.({ group: G1 }); await Promise.resolve(); await Promise.resolve() })
+    await flush()
+
+    expect(lastGroup, '关闭再重开后旧响应仍落地了').toBeNull()
   })
 
   it('刷新失败保留旧值、也不报错吓人（下一次事件再试）', async () => {

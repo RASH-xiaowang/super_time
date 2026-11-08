@@ -5,8 +5,8 @@
  * 把 scripts/packaged-sns-video-check.ts 打成临时 ESM，跑两遍并比对：
  *   ① 纯 `node`（开发态用的运行时）；
  *   ② 同版本的 `node_modules/electron/dist/electron.exe`（打包版跑的就是这份运行时）。
- * 再直接对两份 vendored 资产求 sha256：仓库里那份与打进 `app.asar.unpacked` 的那份必须
- * 逐字节相同 —— 于是「打包目录里那份字节」×「Electron 运行时」两件事一起被覆盖到。
+ * 再从 `app.asar` 解出 WxIsaac64 资产，跑同一套密钥流测试，并与仓库那份求 sha256：
+ * 打包进归档体的字节必须逐字节相同 —— 于是「打包字节」×「Electron 运行时」一起被覆盖。
  *
  * 为什么不干脆从 `Super Time.exe` 里跑：打包后的 exe 把应用烤进了 `resources/app.asar`，
  * 命令行再传脚本路径**不会**替换它（实测它照常启动主程序、去查更新）。
@@ -16,19 +16,23 @@
  */
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const esbuild = require('esbuild');
+const asar = require('@electron/asar');
 
 const root = path.resolve(__dirname, '..');
 const entry = path.join(root, 'scripts', 'packaged-sns-video-check.ts');
-// 输出到 lib/ 下：sns-keystream.ts 按「构建产物在 lib/ 下」定位 vendored 资产（见其 resolveAssetDir）。
-const out = path.join(root, 'src', 'backend', 'wechat-data', 'lib', '.tmp-packaged-sns-video-check.mjs');
 const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
-const ASSET = path.join('src', 'backend', 'wechat-data', 'native', 'weflow-isaac64');
-const devDir = path.join(root, ASSET);
-const unpackedDir = path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar.unpacked', ASSET);
+const packagedExe = path.join(root, 'dist', 'win-unpacked', 'Super Time.exe');
+const ASSET = 'src/backend/wechat-data/native/weflow-isaac64';
+const devDir = path.join(root, ...ASSET.split('/'));
+const resourcesDir = path.join(root, 'dist', 'win-unpacked', 'resources');
+const asarPath = path.join(resourcesDir, 'app.asar');
 const FILES = ['wasm_video_decode.wasm', 'wasm_video_decode.js'];
+/** @electron/asar 在 Windows 上要求无前导分隔符的反斜杠路径。 */
+const asarRelative = (rel) => rel.split('/').join(path.sep);
 
 const sha256 = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 
@@ -78,7 +82,54 @@ function run(cmd, args, expectMode) {
   return res;
 }
 
+/**
+ * 在真正打包后的 utilityProcess 里跑同一个固定种子，验证 Electron 的 ASAR fs
+ * 补丁确实让后端从归档体读到 WASM/胶水，而不是只在“人工解包后的副本”上通过。
+ * @returns {{ ok: boolean, bytes?: number, sha256?: string, native?: object, output: string }}
+ */
+function runPackagedProbe() {
+  const shot = path.join(os.tmpdir(), `supertime-sns-probe-${Date.now()}.png`);
+  const userData = path.join(os.tmpdir(), `supertime-sns-userdata-${Date.now()}`);
+  const r = spawnSync(packagedExe, [], {
+    cwd: path.dirname(packagedExe),
+    encoding: 'utf8',
+    timeout: 180_000,
+    env: {
+      ...process.env,
+      SUPERTIME_SNS_KEYSTREAM_PROBE: '1',
+      SUPERTIME_NATIVE_PROBE: '1',
+      SUPERTIME_SCREENSHOT: shot,
+      SUPERTIME_USER_DATA_DIR: userData,
+      SUPERTIME_DISABLE_UPDATE_CHECK: '1',
+    },
+  });
+  const output = `${r.stdout || ''}\n${r.stderr || ''}`;
+  try { fs.rmSync(shot, { force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(userData, { recursive: true, force: true }); } catch { /* ignore */ }
+  const lines = output.split(/\r?\n/);
+  const line = lines.find((l) => l.includes('[sns-keystream-probe] '));
+  const nativeLine = lines.find((l) => l.includes('[native-runtime-probe] '));
+  if (!line) return { ok: false, output };
+  try {
+    const parsed = JSON.parse(line.slice(line.indexOf('{')));
+    const native = nativeLine
+      ? JSON.parse(nativeLine.slice(nativeLine.indexOf('{')))
+      : { ok: false, error: 'missing native probe output' };
+    return { ok: parsed.ok === true, bytes: parsed.bytes, sha256: parsed.sha256, native, output };
+  } catch {
+    return { ok: false, output };
+  }
+}
+
 (async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'supertime-sns-'));
+  const outDir = path.join(tempRoot, 'src', 'backend', 'wechat-data', 'lib');
+  const assetOut = path.join(tempRoot, ...ASSET.split('/'));
+  const out = path.join(outDir, '.tmp-packaged-sns-video-check.mjs');
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(assetOut, { recursive: true });
+  for (const f of FILES) fs.copyFileSync(path.join(devDir, f), path.join(assetOut, f));
+
   await esbuild.build({
     entryPoints: [entry],
     bundle: true,
@@ -95,6 +146,32 @@ function run(cmd, args, expectMode) {
   /** 跳过资产字节比对（没有打包件）—— 不算通过，但也不算失败。 */
   let skipped = false;
   try {
+    if (!fs.existsSync(asarPath)) {
+      console.log('⏭️  跳过打包资产比对：没有 dist/win-unpacked/resources/app.asar（先跑 npm run pack）');
+      console.log('    这一条**不算通过** —— 只是本机暂时没有打包件可比。');
+      skipped = true;
+    } else {
+      const rawHeader = asar.getRawHeader(asarPath).header;
+      const header = typeof rawHeader === 'string' ? JSON.parse(rawHeader) : rawHeader;
+      const entryOf = (rel) => rel.split('/').reduce((node, seg) => node?.files?.[seg], header);
+      for (const f of FILES) {
+        const rel = `${ASSET}/${f}`;
+        const node = entryOf(rel);
+        if (!node || node.unpacked === true || node.offset === undefined) {
+          console.error(`❌ ${rel} 不在 app.asar 归档体内（unpacked=${String(node?.unpacked)}）`);
+          failed = 1;
+          continue;
+        }
+        const bytes = asar.extractFile(asarPath, asarRelative(rel));
+        fs.writeFileSync(path.join(assetOut, f), bytes);
+      }
+      for (const f of FILES) {
+        if (!fs.existsSync(path.join(resourcesDir, 'app.asar.unpacked', ...ASSET.split('/'), f))) continue;
+        console.error(`❌ ${f} 仍落在 app.asar.unpacked，绕过 ASAR integrity`);
+        failed = 1;
+      }
+    }
+
     const node = run(process.execPath, [out, '--mode=node'], 'node');
     const electron = run(electronExe, [out, '--mode=electron'], 'electron');
     if (node.sha256 !== electron.sha256 || node.bytes !== electron.bytes) {
@@ -102,35 +179,41 @@ function run(cmd, args, expectMode) {
       failed = 1;
     }
 
-    if (!fs.existsSync(path.join(unpackedDir, FILES[0]))) {
-      console.log('⏭️  跳过资产字节比对：没有 dist/win-unpacked 下的 app.asar.unpacked 产物（先跑 npm run pack）');
-      console.log('    这一条**不算通过** —— 只是本机暂时没有打包件可比。');
-      // ⚠️ 这里原来直接 `process.exit(failed)` —— 它在 `try` 内部，会**跳过 finally**，
-      // 于是 esbuild 产出的 `.tmp-packaged-sns-video-check.mjs` 留在
-      // `src/backend/wechat-data/lib/` 下；而 `src/**/*` 会被打进包
-      // （`packaging-content.spec.ts` 正是为这条存在的守卫，实测它会当场变红）。
-      // 改成「记下结论 → 走完 finally → 最后再退」。
-      skipped = true;
-    }
     if (!skipped) {
+      for (const f of FILES) {
+        const a = sha256(path.join(devDir, f));
+        const b = sha256(path.join(assetOut, f));
+        const same = a === b;
+        console.log(`   ${same ? '✅' : '❌'} app.asar 内的 ${f} 与仓库里那份${same ? '逐字节相同' : '**不同**'}（${a.slice(0, 12)}… vs ${b.slice(0, 12)}…）`);
+        if (!same) failed = 1;
+      }
+      console.log(failed === 0
+        ? '✅ app.asar 内的 WxIsaac64 资产在 Electron 运行时下能实例化，且密钥流与 node 逐字节一致'
+        : '❌ 见上面的不一致');
 
-    for (const f of FILES) {
-      const a = sha256(path.join(devDir, f));
-      const b = sha256(path.join(unpackedDir, f));
-      const same = a === b;
-      console.log(`   ${same ? '✅' : '❌'} 打包产物里的 ${f} 与仓库里那份${same ? '逐字节相同' : '**不同**'}（${a.slice(0, 12)}… vs ${b.slice(0, 12)}…）`);
-      if (!same) failed = 1;
-    }
-    console.log(failed === 0
-      ? '✅ 打包版加载的正是这份被验过的 WxIsaac64 资产，且它在 Electron 运行时下能实例化并产出与 node 相同的密钥流'
-      : '❌ 见上面的不一致');
+      const packaged = runPackagedProbe();
+      if (!packaged.ok || packaged.sha256 !== electron.sha256 || packaged.bytes !== electron.bytes) {
+        console.error('❌ 打包后的 utilityProcess 未能从 ASAR 生成同一份密钥流'
+          + `（ok=${String(packaged.ok)} bytes=${String(packaged.bytes)} sha256=${String(packaged.sha256)}）`);
+        console.error(packaged.output.slice(-1200));
+        failed = 1;
+      } else {
+        console.log('   ✅ 打包后的 utilityProcess 从 app.asar 读取 WASM，密钥流与 Electron/node 一致');
+      }
+      if (!packaged.native?.ok) {
+        console.error('❌ 打包后的 koffi / onnxruntime 原生依赖加载失败：'
+          + JSON.stringify(packaged.native ?? null));
+        console.error(packaged.output.slice(-1200));
+        failed = 1;
+      } else {
+        console.log('   ✅ koffi 与 onnxruntime-node 在打包后的 utilityProcess 中加载成功');
+      }
     }
   } finally {
-    try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   }
   process.exit(failed);
 })().catch((e) => {
   console.error('❌ 校验执行失败:', e && e.message ? e.message : e);
-  try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
   process.exit(1);
 });

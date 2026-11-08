@@ -181,6 +181,14 @@ export interface UnifiedSearchDomainError {
 /** Unified search snapshot over several local data domains. */
 export interface UnifiedSearchSnapshot {
     /**
+     * The scan stopped because the caller cancelled it.
+     *
+     * This is distinct from an empty result: domains that had already completed are
+     * still present, while later domains may not have run. The UI must discard a
+     * cancelled response when it belongs to a stale query.
+     */
+    cancelled?: boolean;
+    /**
      * 某个域**读失败**（库打不开 / 损坏 / 缺表）时的说明。
      *
      * P1-1：这条链此前把「读失败」和「确实没有结果」压成同一个形状（catch 里 return []），
@@ -220,6 +228,12 @@ export interface LedgerSnapshot {
         redpacketAmountReceived: number;
         totalAmountIn: number;
         totalAmountOut: number;
+        /** Rows included in counts whose amount could not be proven from local data. */
+        amountUnknownCount?: number;
+        /** Incoming red packets without a local claim message. Never inferred as income. */
+        redpacketUnconfirmedCount?: number;
+        /** Records in general.db that do not involve the current account. */
+        transferThirdPartyCount?: number;
     };
     byContact: LedgerContactRow[];
     redpacket: {
@@ -229,8 +243,14 @@ export interface LedgerSnapshot {
         receivedAmount: number;
         bestAmount: number;
         avgAmount: number;
+        /** Included red packets whose amount is not present in the local card. */
+        amountUnknownCount?: number;
+        /** Incoming red packets without explicit local claim evidence. */
+        statusUnknownCount?: number;
     };
     warnings: LedgerWarning[];
+    /** Partial/failed reads. An empty snapshot with this field is not "no records". */
+    readError?: string;
     updatedAt: number;
 }
 /** 撤回原文的媒体/卡片种类（前端据此选预览器，不再自己猜 XML）。 */

@@ -58,7 +58,7 @@ function sourceFiles(): string[] {
   }
   for (const d of SCAN_DIRS) walk(d)
   // 根目录的宿主层入口不在 `src/` 下，但恰恰是被最多判据读的那几个文件
-  for (const f of ['main.js', 'preload.js', 'vitest.config.ts']) if (existsSync(join(ROOT, f))) out.push(f)
+  for (const f of ['main.js', 'preload.js', 'vitest.config.mts']) if (existsSync(join(ROOT, f))) out.push(f)
   return out.sort()
 }
 

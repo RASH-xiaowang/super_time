@@ -5,8 +5,7 @@
  * · 已安装、当前选择、下载中三种状态必须能区分；
  * · 下载和停止按钮必须接到真实回调。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WHISPER_MODEL_FALLBACK } from './settings-common.tsx'

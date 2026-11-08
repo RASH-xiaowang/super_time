@@ -106,10 +106,10 @@ describe('ui-app 对 ui-wechat 的包边界', () => {
       expect(paths[key]?.length ?? 0, `ui-app tsconfig 缺少 ${key}`).toBeGreaterThan(0)
     }
 
-    const vite = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
+    const vite = readFileSync(join(ROOT, 'vite.config.mjs'), 'utf8')
     const escapedPackage = PACKAGE.replaceAll('/', '\\/')
     for (const subpath of ALLOWED_SUBPATHS) {
-      expect(vite, `vite.config.js 缺少 ${PACKAGE}/${subpath}`).toContain(`${escapedPackage}\\/${subpath}`)
+      expect(vite, `vite.config.mjs 缺少 ${PACKAGE}/${subpath}`).toContain(`${escapedPackage}\\/${subpath}`)
     }
 
     const pkg = JSON.parse(readFileSync(join(UI_WECHAT_SRC, '..', 'package.json'), 'utf8')) as {

@@ -111,6 +111,21 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(LOGIC, '成员列表没有"最多画 50 行"的上限').toContain('MEMBER_RENDER_LIMIT = 50')
   })
 
+  it('群聊支持多选触发对象，并按成员逐个生成独立任务', () => {
+    expect(DIALOG, '成员列表没有多选语义').toContain('aria-multiselectable="true"')
+    expect(DIALOG, '弹窗没有解释多选会逐人建任务').toContain('每个成员会独立创建一个任务')
+    expect(DIALOG, '已选成员没有跨搜索摘要').toContain('<SelectedTargets')
+    expect(DIALOG, '多选后没有逐条构建写接口入参').toContain('buildTaskInfoInputs(')
+    expect(DIALOG, '批量提交没有逐个调用保存接口').toContain('for (const [index, input] of inputs.entries())')
+    expect(DIALOG, '部分失败没有逐对象结果面板').toContain('outcomes.map((item) =>')
+    expect(LOGIC, '缺少批量构建入参的纯逻辑').toContain('export function buildTaskInfoInputs(')
+    expect(LOGIC, '批量任务名没有追加成员名').toContain('customNameForTarget')
+    expect(LOGIC, '批量任务名没有长度上限').toContain('TASK_NAME_MAX_LEN = 60')
+    expect(CSS, '多选勾选框缺少样式').toContain('.memberCheck {')
+    expect(CSS, '已选成员摘要缺少样式').toContain('.targetSelection {')
+    expect(CSS, '批量结果行缺少样式').toContain('.resultRow {')
+  })
+
   it('群聊创建支持勾选「仅匹配@我的文本」，且单聊逻辑强制不生效', () => {
     expect(DIALOG, '创建弹窗没有渲染「仅匹配@我的文本」').toContain('仅匹配@我的文本')
     expect(DIALOG, '勾选项没有只在群聊显示').toContain('{isGroup && (')
@@ -126,7 +141,7 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(DIALOG, '弹窗没有焦点陷阱').toContain('useDialogFocus(')
     expect(DIALOG, '打开时焦点没有落到关键词输入框').toContain('keywordRef.current?.focus()')
     expect(DIALOG, '点遮罩没判 e.target === e.currentTarget（点弹窗内容会把弹窗关掉）')
-      .toContain('if (e.target === e.currentTarget) onClose()')
+      .toContain('if (e.target === e.currentTarget) requestClose()')
     expect(DIALOG, '缺少 dialog 标识（useDialogFocus 按它找宿主）').toContain('data-st-dialog="task-create"')
   })
 

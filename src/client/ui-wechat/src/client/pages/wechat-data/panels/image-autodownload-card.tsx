@@ -39,7 +39,10 @@ const POLL_MS = 5000
 function statusText(status: WechatImageAutoDownloadStatus | null): string {
   if (status === null) return '读取状态中…'
   if (status.supported !== true) return '当前系统不支持（仅 Windows x64，且安装包需包含原图下载组件）'
-  if (status.cleanupUnconfirmed) return `⚠️ ${status.message === '' ? '上次退出未确认清理：请先重启微信，再重新开启' : status.message}`
+  if (status.cleanupUnconfirmed) {
+    if (status.enabled !== true) return '⚠️ 自动下载已关闭；微信进程上次注入尚未确认还原，请重启微信完成清理'
+    return '⚠️ 上次退出未确认清理：请重启微信完成还原；当前仍可先关闭自动下载'
+  }
   if (status.enabled !== true) {
     return '未开启 · 开启后由微信自己下载新收到的图片原图（只影响开启之后收到的图片，历史图片仍需在微信里点开）'
   }
@@ -86,15 +89,17 @@ export function ImageAutoDownloadCard(): React.JSX.Element {
     setBusy(true)
     setMsg(null)
     try {
-      const next = status?.enabled !== true
-      const updated = await apiWechatImageAutoDownload(next ? 'start' : 'stop')
+      const shouldStop = status?.enabled === true || status?.hooked === true
+      const updated = await apiWechatImageAutoDownload(shouldStop ? 'stop' : 'start')
       setStatus(updated)
-      setMsg({
-        kind: 'ok',
-        text: next
-          ? '已开启：之后新收到的图片由微信自己下载原图（历史图片仍需在微信里点开）'
-          : '已关闭：已请求还原微信进程',
-      })
+      if (!updated.cleanupUnconfirmed) {
+        setMsg({
+          kind: 'ok',
+          text: shouldStop
+            ? '已关闭：已请求还原微信进程'
+            : '已开启：之后新收到的图片由微信自己下载原图（历史图片仍需在微信里点开）',
+        })
+      }
     } catch (e) {
       setMsg({ kind: 'err', text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -103,7 +108,18 @@ export function ImageAutoDownloadCard(): React.JSX.Element {
   }, [status])
 
   const enabled = status?.enabled === true
-  const blocked = busy || status === null || status.supported !== true || status.cleanupUnconfirmed
+  const canStop = enabled || status?.hooked === true
+  const blocked = busy || status === null || status.supported !== true
+    || (status.cleanupUnconfirmed && !canStop)
+  const actionText = busy
+    ? '处理中…'
+    : enabled
+      ? (status.cleanupUnconfirmed ? '关闭自动下载' : '关闭并还原')
+      : status?.hooked === true
+        ? '重试还原'
+        : status?.cleanupUnconfirmed === true
+          ? '等待重启微信'
+          : '开启'
 
   return (
     <>
@@ -124,7 +140,7 @@ export function ImageAutoDownloadCard(): React.JSX.Element {
           onClick={() => { void toggle() }}
           disabled={blocked}
         >
-          {busy ? '处理中…' : enabled ? '关闭并还原' : '开启'}
+          {actionText}
         </Button>
       </div>
       <div className={css.row}>

@@ -33,6 +33,13 @@
 import { existsSync } from 'node:fs'
 import { withDb } from '../db-open.ts'
 import { searchIndexPath } from '../search.ts'
+import {
+  displayNameForUsername,
+  mergeDisplayNames,
+  messageTableHash,
+  messageTableName,
+  resolveTalkerUsername,
+} from '../message-identity.ts'
 import type { RetrievedDoc } from './types.ts'
 
 /** 一条聚合事实。 */
@@ -186,12 +193,15 @@ function indexDbPath(decryptedDir: string): string {
 }
 
 /** 拼 WHERE 子句与参数。 */
-function whereOf(win: Window, scopeUsername?: string): { sql: string; params: Array<string | number> } {
+function whereOf(win: Window, scopeAliases?: readonly string[]): { sql: string; params: Array<string | number> } {
   const parts: string[] = []
   const params: Array<string | number> = []
   if (win.lo > 0) { parts.push('create_time >= ?'); params.push(win.lo) }
   if (win.hi > 0) { parts.push('create_time <= ?'); params.push(win.hi) }
-  if (scopeUsername) { parts.push('username = ?'); params.push(scopeUsername) }
+  if (scopeAliases && scopeAliases.length > 0) {
+    parts.push(`username IN (${scopeAliases.map(() => '?').join(', ')})`)
+    params.push(...scopeAliases)
+  }
   return { sql: parts.length > 0 ? ' WHERE ' + parts.join(' AND ') : '', params }
 }
 
@@ -214,9 +224,24 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
   if (!existsSync(p)) return []
   const win = resolveWindow(input)
   const dim = pickDimension(input.question)
-  const { sql: where, params } = whereOf(win, input.scope?.username)
+  const requestedScope = input.scope?.username?.trim() ?? ''
+  const scopedUsername = requestedScope
+    ? resolveTalkerUsername(input.decryptedDir, requestedScope)
+    : ''
+  if (requestedScope && !scopedUsername) return []
+  const scopeAliases = scopedUsername
+    ? [...new Set([
+      requestedScope,
+      scopedUsername,
+      messageTableHash(scopedUsername),
+      messageTableName(scopedUsername),
+    ])]
+    : []
+  const { sql: where, params } = whereOf(win, scopeAliases)
   const label = windowLabel(win)
+  const totalScopeLabel = scopedUsername ? '当前范围' : '全库'
   const facts: AggregateFact[] = []
+  const names = mergeDisplayNames(input.decryptedDir)
 
   try {
     return withDb(p, (db) => {
@@ -224,23 +249,31 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
       const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM message_meta${where}`).get(...params) as { c?: number } | undefined
       const total = Number(totalRow?.c ?? 0)
       if (total === 0) return []
+      const groupedRows = db.prepare(
+        `SELECT username, COUNT(*) AS c, MIN(create_time) AS mn, MAX(create_time) AS mx
+         FROM message_meta${where} GROUP BY username`,
+      ).all(...params) as Array<{ username: string; c: number; mn: number; mx: number }>
+      const sessions = new Map<string, { c: number; mn: number; mx: number }>()
+      for (const row of groupedRows) {
+        const username = resolveTalkerUsername(input.decryptedDir, row.username)
+        if (!username) continue
+        const previous = sessions.get(username)
+        sessions.set(username, {
+          c: (previous?.c ?? 0) + Number(row.c ?? 0),
+          mn: previous ? Math.min(previous.mn, Number(row.mn ?? 0)) : Number(row.mn ?? 0),
+          mx: previous ? Math.max(previous.mx, Number(row.mx ?? 0)) : Number(row.mx ?? 0),
+        })
+      }
 
       if (dim === 'distinct') {
         // 去重计数：「我总共跟多少人聊过天」的**唯一诚实答案来源**。
         // 分两类报：群聊（`@chatroom`）与单聊 —— 用户问「多少人」时通常想知道的是人，
         // 而群聊不是「人」。两类都给，让模型按问题措辞选用。
-        const row = db.prepare(
-          `SELECT
-             COUNT(DISTINCT username) AS all_sessions,
-             COUNT(DISTINCT CASE WHEN username LIKE '%@chatroom' THEN username END) AS groups,
-             COUNT(DISTINCT CASE WHEN username NOT LIKE '%@chatroom' THEN username END) AS singles
-           FROM message_meta${where}`,
-        ).get(...params) as { all_sessions?: number; groups?: number; singles?: number } | undefined
-        const all = Number(row?.all_sessions ?? 0)
-        const groups = Number(row?.groups ?? 0)
-        const singles = Number(row?.singles ?? 0)
+        const all = sessions.size
+        const groups = [...sessions.keys()].filter(username => username.endsWith('@chatroom')).length
+        const singles = all - groups
         facts.push({
-          title: `去重会话数（${label}，共 ${total} 条消息）`,
+          title: `去重会话数（${label}，${totalScopeLabel}共 ${total} 条消息）`,
           body: [
             `  · 有聊天记录的会话总数（去重）：${all} 个`,
             `  · 其中群聊：${groups} 个`,
@@ -249,17 +282,16 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
           total,
         })
       } else if (dim === 'session') {
-        const rows = db.prepare(
-          `SELECT username, COUNT(*) AS c, MIN(create_time) AS mn, MAX(create_time) AS mx
-           FROM message_meta${where} GROUP BY username ORDER BY c DESC LIMIT 15`,
-        ).all(...params) as Array<{ username: string; c: number; mn: number; mx: number }>
-        const lines = rows.map((r, i) => {
+        const rows = [...sessions.entries()]
+          .sort((a, b) => b[1].c - a[1].c)
+          .slice(0, 15)
+        const lines = rows.map(([username, r], i) => {
           const d1 = new Date(r.mn * 1000).toISOString().slice(0, 10)
           const d2 = new Date(r.mx * 1000).toISOString().slice(0, 10)
-          return `  ${i + 1}. ${r.username}：${r.c} 条（${d1} ~ ${d2}）`
+          return `  ${i + 1}. ${displayNameForUsername(username, names)}：${r.c} 条（${d1} ~ ${d2}）`
         })
         facts.push({
-          title: `按会话统计消息数（${label}，共 ${total} 条消息 / ${rows.length} 个会话上榜）`,
+          title: `按会话统计消息数（${label}，${totalScopeLabel}共 ${total} 条消息 / ${rows.length} 个会话上榜）`,
           body: lines.join('\n'),
           total,
         })
@@ -270,7 +302,7 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
         ).all(...params) as Array<{ d: string; c: number }>
         const lines = rows.map((r, i) => `  ${i + 1}. ${r.d}：${r.c} 条`)
         facts.push({
-          title: `按天统计消息数（${label}，共 ${total} 条消息 / ${rows.length} 天上榜）`,
+          title: `按天统计消息数（${label}，${totalScopeLabel}共 ${total} 条消息 / ${rows.length} 天上榜）`,
           body: lines.join('\n'),
           total,
         })
@@ -292,7 +324,7 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
             lines.push(`  · 含「${t}」：${Number(r?.c ?? 0)} 条`)
           }
           facts.push({
-            title: `按关键词统计消息条数（${label}，全库共 ${total} 条消息）`,
+            title: `按关键词统计消息条数（${label}，${totalScopeLabel}共 ${total} 条消息）`,
             body: lines.join('\n'),
             total,
           })

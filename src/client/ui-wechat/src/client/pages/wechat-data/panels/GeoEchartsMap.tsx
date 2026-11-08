@@ -131,7 +131,13 @@ export function GeoEchartsMap(props: GeoEchartsMapProps): React.JSX.Element {
           })),
         } as GeoInput
         echarts.registerMap(mapName, registered)
-        chart = echarts.init(el)
+        // 设置弹窗会把背景总览放在零高度区域里；ECharts 以 0×0 初始化后，后续 resize
+        // 会因内部变换矩阵尚未建立而抛错。先给 1×1 兜底，等 ResizeObserver 拿到非零尺寸
+        // 再同步成真实大小。
+        chart = echarts.init(el, undefined, {
+          width: Math.max(1, el.clientWidth),
+          height: Math.max(1, el.clientHeight),
+        })
         const labelBy = new Map<string, string>()
         for (const f of features) {
           const name = featureName(f)
@@ -283,7 +289,12 @@ export function GeoEchartsMap(props: GeoEchartsMapProps): React.JSX.Element {
         if (alive) onFallback()
       }
     })()
-    const ro = new ResizeObserver(() => { chart?.resize() })
+    const ro = new ResizeObserver(() => {
+      // 390→768 的过渡帧里容器会短暂塌成 0×0。ECharts 此时 resize 会读取空变换矩阵，
+      // 抛出 `Cannot read properties of null (reading '0')`；等下一次非零尺寸回调再同步即可。
+      if (!alive || !el.isConnected || chart === null || el.clientWidth <= 0 || el.clientHeight <= 0) return
+      chart.resize()
+    })
     ro.observe(el)
     return () => {
       alive = false

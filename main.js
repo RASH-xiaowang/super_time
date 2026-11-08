@@ -3,7 +3,7 @@
 // SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
 if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
 
-const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, shell, utilityProcess, protocol, nativeTheme } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, session, shell, utilityProcess, protocol, nativeTheme, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -100,12 +100,17 @@ const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = requ
 const { createUpdateService } = require('./src/backend/update');
 const { registerMiscIpc } = require('./src/backend/ipc-misc');
 const { registerWechatIpc } = require('./src/backend/ipc-wechat');
+const { createWechatOcrService } = require('./src/backend/wechat-ocr');
+const { createWechatImageAiService } = require('./src/backend/wechat-image-ai');
+const { createVisionImageOptimizer } = require('./src/backend/wechat-image-input');
 const { registerRemoteAccessIpc } = require('./src/backend/ipc-remote-access');
 const { createBrowserHandoff } = require('./src/backend/browser-handoff');
 const { createRemoteAccessControl } = require('./src/backend/http-control');
 const { createHandoffNative } = require('./src/backend/handoff-native');
 const { registerUpdateIpc } = require('./src/backend/ipc-update');
 const { createIpcTrust } = require('./src/backend/ipc-trust');
+const { installSessionHardening } = require('./src/backend/session-hardening');
+const { isPackagedTestHooksEnabled } = require('./src/backend/test-hooks');
 // 局域网远程访问（手机端）：HTTP 服务 + 与 IPC 共用的那道闸门。
 const { createRemoteAccessServer } = require('./src/backend/http-server');
 const { createCallQueue } = require('./src/backend/http-queue');
@@ -126,6 +131,19 @@ const { installScreenshotAutomation } = require('./src/backend/main-debug-automa
  * 豁免范围与「打包态不得豁免」的依据见 `src/backend/debug-gates.js`。
  */
 const debugGates = () => resolveDebugGates({ isPackaged: app.isPackaged, env: process.env });
+/** 正式包不执行截图/安全探针；打包态冒烟使用带独立构建标记的测试包。 */
+const testHooksEnabled = isPackagedTestHooksEnabled({
+  isPackaged: app.isPackaged,
+  packageMetadata: require('./package.json'),
+});
+/**
+ * 后端进程的环境副本：测试钩子标记只能由主进程在确认当前包允许钩子后注入。
+ * 不能直接把 `process.env` 传给 worker —— 否则正式包的启动者只要自己设置
+ * `SUPERTIME_TEST_HOOKS=1`，就能绕过包元数据门控。
+ */
+const backendEnv = { ...process.env };
+delete backendEnv.SUPERTIME_TEST_HOOKS;
+if (testHooksEnabled) backendEnv.SUPERTIME_TEST_HOOKS = '1';
 
 // ── userData 隔离（必须在任何 getPath / 单实例锁之前）────────────────────
 // 安装版原本和开发态共用 `<APPDATA>\super-time-electron`（package.json 没有顶层
@@ -263,7 +281,7 @@ function broadcastWechatEvent(name, args) {
  */
 const backendSupervisor = createBackendSupervisor({
   isPackaged: app.isPackaged,
-  env: process.env,
+  env: backendEnv,
   utilityProcess,
   diagLog,
   resolveHangMethods,
@@ -281,6 +299,8 @@ const backendSupervisor = createBackendSupervisor({
   callTimeoutMs: CALL_TIMEOUT_MS,
   longTimeoutMs: LONG_CALL_TIMEOUT_MS,
 });
+let backendShutdown = null;
+let quitReady = false;
 
 function broadcastUpdateState(state) {
   broadcastToWindows(windowCtx, 'update:event', state);
@@ -307,6 +327,8 @@ function createUpdateServiceSafe() {
     autoUpdater,
     isPackaged: app.isPackaged,
     currentVersion: APP_VERSION,
+    // 手动安装前必须先等 worker dispose ACK/超时，避免安装器抢跑替换被占用的文件。
+    stopBackend: () => backendSupervisor.stop(),
     onState: broadcastUpdateState,
     // 走 console.* 而不是直接写 diagLog：上面 installConsoleCapture 已把 console
     // 接进文件日志，这里再写一次会在同一行上出现两份。
@@ -318,7 +340,13 @@ function createUpdateServiceSafe() {
 }
 
 function createWindow() {
-  mainWindow = createMainWindow(windowCtx);
+  const win = createMainWindow(windowCtx);
+  mainWindow = win;
+  // BrowserWindow 关闭后 Electron 仍可能持有 webContents/监听器直到下一次 GC；
+  // 这里及时断开 mainWindow 这条强引用，避免 activate 重建窗口时旧窗口被根对象留住。
+  win.once('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 }
 
 function installWebContentsGuards(contents) {
@@ -333,9 +361,19 @@ function installWebContentsGuards(contents) {
 app.whenReady().then(async () => {
   // 未获单实例锁的重复实例不做任何初始化（app.quit 已在上面调用）。
   if (!singleInstanceLock) return;
+  // 默认会话只保留剪贴板写入；摄像头/麦克风/屏幕采集/定位/USB 等一律拒绝。
+  // 放在建窗之前，避免首帧阶段的权限请求绕过处理器注册。
+  installSessionHardening(session.defaultSession, {
+    log: console.warn,
+    isTrustedContents: (contents) => Boolean(
+      mainWindow
+      && !mainWindow.isDestroyed()
+      && contents === mainWindow.webContents
+    ),
+  });
   // 读取根由后端 init 解析（用户可能把 decoded_image_dir 配到非默认位置）；未就绪时 404。
   protocol.handle(WECHAT_MEDIA_SCHEME, (request) =>
-    mediaResponse(String(backendSupervisor.boot?.info?.decoded ?? ''), request.url));
+    mediaResponse(String(backendSupervisor.boot?.info?.decoded ?? ''), request.url, request.signal));
   // 入口路径只解析一次：IPC 信任与窗口 loadFile 必须用同一份路径。
   // 若两处各自再调 uiEntryHtml，构建产物恰好出现/消失时会出现「信任旧入口、
   // 却加载回退入口」的竞态。
@@ -363,8 +401,17 @@ app.whenReady().then(async () => {
   // 两个传输层也都把「过闸后的调用」放进同一把并发闸：worker 是单线程，桌面端若绕过
   // 队列继续无限压请求，远程端的 32 条排队上限就会被桌面请求随意绕过。
   const backendCallQueue = createCallQueue();
+  const wechatOcr = createWechatOcrService({
+    utilityProcess,
+    getDecodedRoot: () => String(backendSupervisor.boot?.info?.decoded ?? ''),
+  });
+  const optimizeVisionImage = createVisionImageOptimizer({ nativeImage });
+  const wechatImageAi = createWechatImageAiService({
+    getDecodedRoot: () => String(backendSupervisor.boot?.info?.decoded ?? ''),
+    optimizeImage: optimizeVisionImage,
+  });
   const gateCtx = {
-    ipcMain, ipcTrust, app, licenseService, debugGates,
+    ipcMain, ipcTrust, wechatOcr, wechatImageAi, app, licenseService, debugGates,
     awaitBackendReady: (timeoutMs) => backendSupervisor.waitUntilReady(timeoutMs),
     findModelCatalog, APP_VERSION,
     getWechatBackend: () => backendSupervisor.backend,
@@ -470,7 +517,7 @@ app.whenReady().then(async () => {
   // 必须在这里注册（不能挪到下面 await 之后）：did-finish-load 会在后端 init 的
   // await 期间就触发，那时再注册就永远等不到了。
   // 断言脚本：scripts/security-guard-smoke.js
-  if (process.env.SUPERTIME_SECURITY_PROBE === '1') {
+  if (testHooksEnabled && process.env.SUPERTIME_SECURITY_PROBE === '1') {
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         const urlBefore = mainWindow.webContents.getURL();
@@ -543,7 +590,7 @@ app.whenReady().then(async () => {
 
   // 截图/主题/页签/点击/地图/滚动等调试自动化已抽到
   // src/backend/main-debug-automation.js；这里只保留启动末尾的挂载点。
-  installScreenshotAutomation({ getWindow: () => mainWindow, app });
+  if (testHooksEnabled) installScreenshotAutomation({ getWindow: () => mainWindow, app });
 
   // 安全守卫的端到端探针已挪到 createWindow() 之后（见那处注释）：
   // did-finish-load 会在后端 init 的 await 期间触发，注册晚了就永远等不到。
@@ -553,9 +600,20 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // worker 的 dispose 是异步握手。先拦住本次退出，收尾完成（或 5 秒兜底超时）后再 quit，
+  // 否则 Electron 会在 ACK 回来前销毁主进程，注入还原与 marker 清理仍有被截断的窗口。
+  if (!quitReady) {
+    event.preventDefault();
+    if (backendShutdown === null) {
+      backendShutdown = backendSupervisor.stop();
+      void backendShutdown.finally(() => {
+        quitReady = true;
+        app.quit();
+      });
+    }
+  }
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
-  backendSupervisor.stop();
   // 浏览器交接态的卡片窗口先关掉；HTTP 服务由下面那行统一停。
   if (browserHandoff) { browserHandoff.dispose(); browserHandoff = null; }
   // 远程访问先停：它是唯一**对外**的入口，退出时应当立刻不再接受连接（而不是等进程销毁

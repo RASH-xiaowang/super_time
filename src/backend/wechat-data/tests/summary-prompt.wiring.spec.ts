@@ -89,7 +89,7 @@ describe('总结素材：必须清洗后再喂模型', () => {
   })
 
   it('会话标题也用显示名（`【wxid_xxx】` 对模型毫无意义）', () => {
-    expect(collect, '会话标题还在用 username').toMatch(/lines\.push\('【' \+ \(names\.get\(username\) \?\? username\) \+ '】'\)/)
+    expect(collect, '会话标题还在用 username').toMatch(/lines\.push\('【' \+ displayNameForUsername\(username, names\) \+ '】'\)/)
   })
 
   it('机器人 / 广告 / 系统播报要丢掉（它们会挤掉真实对话）', () => {
@@ -102,6 +102,8 @@ describe('总结素材：必须清洗后再喂模型', () => {
   })
 
   it('显示名映射来自 contactMeta（不是自己再查一遍库）', () => {
-    expect(collect).toMatch(/contactMeta\(decryptedDir\)\.names/)
+    expect(collect).toMatch(/const meta = contactMeta\(decryptedDir\)/)
+    expect(collect).toMatch(/const names = mergeDisplayNames\(decryptedDir, identity\.usernames\)/)
+    expect(collect, '联系人元数据仍负责企业名').toContain('meta.enterpriseNames')
   })
 })

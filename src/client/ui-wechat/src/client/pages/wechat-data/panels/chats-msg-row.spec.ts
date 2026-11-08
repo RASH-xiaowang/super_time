@@ -12,8 +12,7 @@
  * `renderKindOf` 用真的 —— 「哪一类消息走居中行」正是本行组件依赖的分类口径，
  * 自己 mock 一份就等于把这条契约从测试里删掉了。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MsgRowDeps } from './chats-msg-row.tsx'
@@ -37,6 +36,7 @@ vi.mock('./chats-cards.tsx', () => ({
     return createElement('div', {
       'data-body': String((p.m as { localId?: number })?.localId ?? ''),
       'data-chatlog': p.onOpenChatlog ? '1' : '0',
+      'data-quote': p.onOpenQuote ? '1' : '0',
       'data-selfname': String(p.selfName ?? ''),
     })
   },
@@ -59,6 +59,7 @@ let root: Root
 const menu = vi.fn()
 const viewer = vi.fn()
 const chatlog = vi.fn()
+const quote = vi.fn()
 
 const msg = (over: Partial<WechatMessage>): WechatMessage =>
   ({ localId: 7, createTime: 1700000000, type: 1, isSender: 0, ...over } as WechatMessage)
@@ -72,6 +73,7 @@ function renderRow(item: MessageRenderItem, deps: Partial<MsgRowDeps> = {}): Ele
     curSession: PRIVATE,
     editedIds: new Set<number>(),
     openChatlog: chatlog,
+    openQuote: quote,
     openMsgMenu: menu,
     openViewer: viewer,
     selfWxid: SELF,
@@ -91,6 +93,7 @@ beforeEach(() => {
   menu.mockReset()
   viewer.mockReset()
   chatlog.mockReset()
+  quote.mockReset()
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -144,6 +147,8 @@ describe('行结构（深链与守卫都认这些锚点）', () => {
     expect(attrOf('[data-body]', 'data-chatlog')).toBe('1')
     expect(stubs.bodies[0]?.onOpenChatlog).toBe(chatlog)
     expect(stubs.bodies[0]?.onOpenImage, '开原图的回调要透传').toBe(viewer)
+    expect(attrOf('[data-body]', 'data-quote'), '引用跳转的回调要透传给正文').toBe('1')
+    expect(stubs.bodies[0]?.onOpenQuote).toBe(quote)
   })
 })
 

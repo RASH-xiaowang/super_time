@@ -40,7 +40,8 @@ import {
   paramEntriesOf,
   validateParamListConfig,
 } from './task-center-param-list.ts'
-import { withEnterprise } from './enterprise-identity.ts'
+
+export { taskScopeLabel, triggerPaneTitle } from './task-center-scope-labels.ts'
 
 /** Badge 支持的颜色档（与 `ui/kit-shell.tsx` 的 `Tone` 同集，避免纯逻辑层 import React 模块）。 */
 export type TaskCenterTone = 'default' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue'
@@ -74,6 +75,11 @@ export const CALLBACK_STATUS_META: Record<TaskTriggerCallbackStatus, TaskCenterM
   sent: { label: '已投递', tone: 'green', hint: '已成功投递到任务配置的触发目标（Webhook / 八爪鱼 RPA）' },
   failed: { label: '投递失败', tone: 'red', hint: '触发目标请求失败（可在弹窗里重新投递）' },
   skipped: { label: '未配置', tone: 'default', hint: '任务没有填写当前触发方式所需的 Webhook 地址或八爪鱼配置，因此不投递' },
+  sent_unconfirmed: {
+    label: '已发送·未确认',
+    tone: 'amber',
+    hint: '请求可能已经到达远端，但本地未确认终态；后台不会自动重投，请先到厂商控制台核对',
+  },
 }
 
 /**
@@ -969,32 +975,12 @@ export function scanResultText(result: TaskTriggerScanResult): string {
  * @returns 用户可读的一句话。
  */
 export function dispatchResultText(result: TaskCallbackDispatchResult): string {
+  if (result.status === 'sent_unconfirmed') {
+    return result.error ?? '投递结果未确认，请核对后手动重投'
+  }
   if (!result.ok) {
     const extra = result.error !== undefined && result.error !== '' ? `：${result.error}` : ''
     return `重新投递失败${extra}`
   }
   return result.status === 'sent' ? '已重新投递' : `投递结果：${callbackStatusMeta(result.status).label}`
-}
-
-/**
- * 右栏标题（选中任务时带上任务名，用户才知道列表被筛过）。
- * @param task - 当前选中的任务（null = 未选中）。
- * @returns 标题文案。
- */
-export function triggerPaneTitle(task: TaskInfo | null): string {
-  return task === null ? '任务触发记录' : `任务触发记录 · ${task.name}`
-}
-
-/**
- * 选中任务的会话/目标一行（`chatName → targetName`；单聊且同名时不重复）。
- * @param task - 任务。
- * @returns 展示文案。
- */
-export function taskScopeLabel(task: TaskInfo): string {
-  const chatName = task.chatName || task.chatUsername || '未知会话'
-  const targetName = task.targetName || task.targetUsername || '未知对象'
-  if (task.chatType === 'private' && chatName === targetName) {
-    return withEnterprise(chatName, task.chatEnterpriseName || task.targetEnterpriseName)
-  }
-  return `${withEnterprise(chatName, task.chatEnterpriseName)} → ${withEnterprise(targetName, task.targetEnterpriseName)}`
 }

@@ -1,6 +1,6 @@
-import { StreamControl } from '../query/zip.ts';
 import { ExportHistoryDeleteResult, ExportHistoryPruneOptions, ExportHistoryQuery, ExportHistorySnapshot, ExportResult, ExportStatus, OperationCategory, OperationStatus } from '../types.ts';
 import type { StreamJob } from '../gateway.ts';
+import { type ManagedStreamControl } from '../gateway-jobs.ts';
 import type { Context } from '@deepseek-ai/cordis';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface ExportRemoteCtx {
@@ -23,8 +23,8 @@ export interface ExportRemoteCtx {
         error?: string;
         params?: unknown;
     }) => void;
-    streamControl: (jobId?: string) => StreamControl;
-    finishStreamJob: (jobId: string, error?: string) => void;
+    streamControl: (jobId?: string) => ManagedStreamControl;
+    finishStreamJob: (jobId: string, error?: string, token?: symbol, canceled?: boolean) => void;
     streamJobs: Map<string, StreamJob>;
 }
 interface SessionExportOptions {
@@ -71,6 +71,8 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         done: number;
         total: number;
         finished: boolean;
+        status: "running" | "ok" | "error" | "canceled";
+        cancelRequested: boolean;
         error?: string;
     };
     exportMoments(options?: {
@@ -83,6 +85,9 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         month?: string;
         mine?: string;
         zip?: boolean;
+        includeImages?: boolean;
+        includeVideos?: boolean;
+        includeLivePhotos?: boolean;
         from?: number;
         to?: number;
         dir?: string;

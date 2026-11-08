@@ -39,8 +39,10 @@ describe('N9：搜索可中断的客户端接线', () => {
     const body = chatsSrc.slice(at, at + 2600)
     // 清空分支 + 新一轮：各一次
     expect((body.match(/cancelActiveSearch\(\)/g) ?? []).length, '清空/新搜索两条路径都要发取消').toBeGreaterThanOrEqual(2)
-    // 卸载清理
-    expect(chatsSrc).toContain('useEffect(() => () => { cancelActiveSearch() }, [cancelActiveSearch])')
+    // 卸载清理：先清防抖计时器、作废迟到结果，再取消在飞任务。
+    expect(chatsSrc).toMatch(
+      /useEffect\(\(\) => \(\) => \{[\s\S]{0,240}clearTimeout\(msgSearchTimer\.current\)[\s\S]{0,240}msgSearchSeqRef\.current \+= 1[\s\S]{0,120}cancelActiveSearch\(\)/,
+    )
     // 取消真的打到后端
     expect(chatsSrc).toContain('apiCancelSearch({ jobId })')
   })
@@ -51,6 +53,14 @@ describe('N9：搜索可中断的客户端接线', () => {
     for (const c of calls) {
       expect(c, `调用点少了 jobId：${c}`).toContain('jobId')
     }
+  })
+
+  it('搜索中提供可见的停止入口，并把手动取消结果接到操作回执', () => {
+    expect(chatsSrc, '搜索结果区没有「停止搜索」入口').toContain('停止搜索')
+    expect(chatsSrc, '停止入口没有接到 cancelMsgSearch').toContain('onCancelMsgSearch={cancelMsgSearch}')
+    expect(chatsSrc, '手动取消没有成功/已结束回执').toContain(
+      "notify(result.ok ? '已停止消息搜索' : '消息搜索已经结束')",
+    )
   })
 
   it('后端行为侧的门（search-cancel.spec.ts）仍在，且覆盖三条命题', () => {

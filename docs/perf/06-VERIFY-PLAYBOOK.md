@@ -7,7 +7,7 @@
 ## 0. 结论（先看这 6 条）
 
 1. **perf 改动最该跑的 5 条**：`npm run test:affected`（26.9s）→ `npm run typecheck`（24.6s）→ `npm run measure:quick`（28.3s）→ `npm run ui:longlist-e2e`（33.8s，长列表 DOM 上界）→ `npm run ui:interactive-budget`（需先跑一次 `theme:live-audit -- --stress`）。合计约 2 分钟（interactive-budget 前置另计）。
-2. **全量 `npm test` 不跑**：仓内口径"约 26 分钟"来自 **CI 串行**（`vitest.config.ts:109` `maxWorkers: CI ? 1 : undefined`）。本机并行下 `test:affected` 覆盖**全部 624 个**纳入 vitest 的测试文件仅 26.9s，因此**本地全量大概率远低于 26 分钟**——但本任务按要求未跑全量，此句只作推断，不当基线。
+2. **全量 `npm test` 不跑**：仓内口径"约 26 分钟"来自 **CI 串行**（`vitest.config.mts:109` `maxWorkers: CI ? 1 : undefined`）。本机并行下 `test:affected` 覆盖**全部 624 个**纳入 vitest 的测试文件仅 26.9s，因此**本地全量大概率远低于 26 分钟**——但本任务按要求未跑全量，此句只作推断，不当基线。
 3. **当前脏工作树本身就有 15 个失败 spec / 21 条失败用例**（`test:affected` 实测；见 §2.2 清单）。后续验证必须比对"失败集合"，不能以"全绿"为判据。
 4. **CI 单测步的假红已归因并自动化**：`scripts/ci-unit-step.mjs` 只对"退出码非 0 + 日志有 `Timeout calling \"onTaskUpdate\"` + 没有任何失败文件/用例"三条同时成立的情况做**一次带记录重跑**（`src/backend/tests/helpers/ci-unit-retry.ts:17`；CI 把上限调到 3，见 `.github/workflows/ci.yml:79-96`）。本机不得把这套重试当成"再跑一遍"的理由。
 5. **性能门禁有前置条件**：`ui:interactive-budget` 缺 `.tmp-e2e/interactive-timings.json` 时 **exit 2**（需先跑 `npm run theme:live-audit -- --stress`，本机实测 **172s**）；补齐后 **0.2s exit 0**：16 个面板全部在预算内，未登记为已知慢的 14 个 **505–519ms**（预算 1200ms）。`css:bundle-diff` 直接跑也 **exit 2**（需要 `--save`/`--check` 两段式 + `npm run build:ui`）。两者都不是"红"，是"没验"。
@@ -30,7 +30,7 @@ npm run test:affected          # = node scripts/affected-tests.mjs
 npm run test:affected:list     # 只看将跑哪些输入文件
 ```
 - 选择规则（`scripts/affected-tests.mjs` + `scripts/mutation-scope.mjs:103`）：取 `git diff <base>...HEAD` ∪ unstaged ∪ staged ∪ **untracked** 的并集，剔除 `working/`、`.tmp*`、`node_modules/`、`src/backend/wechat-data/lib/`、`src/client/ui-dist/`，再交给 `vitest related --run`（**只按 import 关系**，不覆盖"读源码做断言"的守卫）。
-- 本机实测（脏树 192 文件）：可测源码 **163** 个 → 选中并跑完 **624 个测试文件**（= `vitest include` 全集：`wechat-data/tests` 255 + `backend/tests` 115 + `ui-wechat/src/client` 245 + `ui-app` 9；另有 21 个 `src/backend/deps/**` spec 不在 include）、6341 条用例，**26.9s**，exit 1（15 个既有失败 spec，见 §2.2）；`[耗时榜]` 榜首 `clawbot-reply-durable.spec.ts` 20.2s（距 60s 线 2.97×）。
+- 本机实测（脏树 192 文件）：可测源码 **163** 个 → 选中并跑完 **624 个测试文件**（= `vitest include` 全集：`wechat-data/tests` 255 + `backend/tests` 115 + `ui-wechat/src/client` 245 + `ui-app` 9；另有 21 个 `src/backend/deps/**` spec 不在 include）、6341 条用例，**26.9s**，exit 1（15 个既有失败 spec，见 §2.2）；`[耗时榜]` 榜首为历史最长用例 20.2s（距 60s 线 2.97×）。
 - 注意：工作树越脏，它越接近"全部 624 个"；干净小改动才会显著变快（`related` 只按 import 关系选）。
 
 ### 1.3 类型 / 生成物门禁（后端 src 一改必跑）
@@ -145,7 +145,7 @@ E2E 基线红：`ui:loading-e2e` 2/10、`ui:nav-e2e` 5/28（在途 UI 改动 + �
 
 ## 4. 已知假红与陷阱（按踩坑频率排序）
 
-1. **`Timeout calling "onTaskUpdate"`（N36）**：形状=`Test Files/Tests 全 passed` + `Errors 1 error` + 退出码 1。机制：birpc `DEFAULT_TIMEOUT=6e4` 硬编码在 worker 自己的事件循环上（`vitest.config.ts` 注释与 `docs/RELEASE-PLAN.md` N36）。处置：本机**不要盲目重跑**，先看同一份日志的 `[耗时榜]`（单文件越 60s 线即"环境停顿"候选）；CI 才允许**一次带记录重试**——`scripts/ci-unit-step.mjs:55-89`（默认 `SUPERTIME_UNIT_MAX_RETRIES=1`；CI/发布链按 N36 把上限提到 3，但判据不放宽：退出码非 0 + 有征兆 + 无失败用例，任一不成立立即红），重跑记录写 `$GITHUB_STEP_SUMMARY` 供 PR 页复核（`src/backend/tests/helpers/ci-unit-retry.ts:97-117`）。
+1. **`Timeout calling "onTaskUpdate"`（N36）**：形状=`Test Files/Tests 全 passed` + `Errors 1 error` + 退出码 1。机制：birpc `DEFAULT_TIMEOUT=6e4` 硬编码在 worker 自己的事件循环上（`vitest.config.mts` 注释与 `docs/RELEASE-PLAN.md` N36）。处置：本机**不要盲目重跑**，先看同一份日志的 `[耗时榜]`（单文件越 60s 线即"环境停顿"候选）；CI 才允许**一次带记录重试**——`scripts/ci-unit-step.mjs:55-89`（默认 `SUPERTIME_UNIT_MAX_RETRIES=1`；CI/发布链按 N36 把上限提到 3，但判据不放宽：退出码非 0 + 有征兆 + 无失败用例，任一不成立立即红），重跑记录写 `$GITHUB_STEP_SUMMARY` 供 PR 页复核（`src/backend/tests/helpers/ci-unit-retry.ts:97-117`）。
 2. **`ELECTRON_RUN_AS_NODE=1`（本机 harness 注入）**：所有把 `...process.env` 传给 `_electron.launch` 的脚本 0.5s 就报 `Process failed to launch!`（本次 `ui:e2e-smoke`/`ui:loading-e2e` 首轮即此）。修复：运行前 `Remove-Item Env:ELECTRON_RUN_AS_NODE`。自带剥离的脚本：`launch-app.mjs:87`、`panel-audit.mjs:138`、`theme-live-audit.mjs:322`、`responsive-audit-browser.mjs:394`、`ui-density-audit.mjs:710`、`mutation-check.mjs:192`。
 3. **并发 Electron/探针污染计时**：README 与 `scripts/ui-verify.mjs` 都要求串行；2026-09-29 曾泄漏 20 个 Electron → 截图从 12s 级劣化。本次 `ui:nav-e2e` 5.8s→184.4s 就是并发探针所致。跑计时类 e2e 前先数进程。
 4. **脏工作树让 `test:affected` 近似全量且自带 15 红**（§2.2）。永远先存基线失败集合。
@@ -156,7 +156,7 @@ E2E 基线红：`ui:loading-e2e` 2/10、`ui:nav-e2e` 5/28（在途 UI 改动 + �
 9. **编码**：PowerShell 读中文必须 `-Encoding UTF8`（否则乱码）；`Tee-Object -FilePath` 默认写 UTF-16（本次 timing 文件第一次就是 UTF-16 乱码），统一用 `Out-File/Add-Content -Encoding utf8`；git 的 CRLF 警告是 stderr 噪声，不影响退出码。
 10. **机器相关绝对路径**：`working/mem-log-probe.mjs:3` 硬编码 `C:/Users/Administrator/...`；`m8-cache-storm-bench` 默认 `%APPDATA%` 数据根；e2e 的临时 userData 在 `%TEMP%/st-*`。报告/结论里引用路径要注明来源机器。
 11. **`interactive-budget` 的 knownSlow 不是失败**：`收藏与表情`/`朋友圈洞察` 登记 61000ms（队列积压已归因），删登记前它们会按 1200ms 判红。
-12. **超时=180s**：`vitest.config.ts:82` 把 test/hook 超时提到 180s，真死循环会晚 3 分钟才报；"慢"与"挂"要分开看。
+12. **超时=180s**：`vitest.config.mts:82` 把 test/hook 超时提到 180s，真死循环会晚 3 分钟才报；"慢"与"挂"要分开看。
 13. **Windows 临时目录 `EPERM`（N26）**：`node:sqlite` 未 finalize 的语句会让 `rmSync` 偶发失败，spec 内靠重试容忍——不要当成产品回归。
 14. **`css:bundle-diff` 基线版本**：旧版基线（无 `mods` 字段）会被拒绝并 exit 2；拆 CSS 前必须用当前工具重存基线。
 15. **N33 导出进度中继偶发（CI）**：CI 上 `e2e:export-progress` 曾红在"中继事件 0 条"，而本机 22/22 全绿（本次 5.5s）。脚本自带 `[N33 计数]`（本次 `阶段① DOM事件=6 主进程到达=150 回调抛错=0 额外加载=0 页面异常=0`）——红了先读这行，不要当成本机可复现的产品缺陷（`docs/RELEASE-PLAN.md` N33）。
@@ -164,7 +164,7 @@ E2E 基线红：`ui:loading-e2e` 2/10、`ui:nav-e2e` 5/28（在途 UI 改动 + �
 ## 5. 不做什么
 
 - 不跑全量 `npm test`（CI 口径 26 分钟）；本地用 §1.1/§1.2 收敛。
-- 不改 `vitest.config.ts`、不改产品代码；不新增依赖。
+- 不改 `vitest.config.mts`、不改产品代码；不新增依赖。
 - 不把"重跑后绿"当证据（除 §4.1 的 CI 政策外）。
 - 不在并发 Electron/多人探针时做计时结论。
 

@@ -74,6 +74,16 @@ describe('结果缓存的定向失效（M8）', () => {
     expect(cacheStats(h).chars).toBe('data:image/png;base64,AAA'.length)
   })
 
+  it('成功调用里的业务 miss 也要失效（媒体文件随后可能才下载完成）', () => {
+    const h = freshCache()
+    const miss = h.key('getImageDataUrl', [{ username: 'wxid_a', localId: 7 }])
+    h.write(miss, { ok: true, value: { error: '找不到 .dat' } })
+
+    h.clearStale()
+
+    expect(h.read(miss), '业务 miss 被当成永久成功缓存了').toBe(null)
+  })
+
   it('内容会变的方法（头像/远程封面）在数据更新时被丢掉', () => {
     const h = freshCache()
     const avatar = h.key('getAvatar', [{ username: 'wxid_a' }])

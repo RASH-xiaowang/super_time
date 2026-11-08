@@ -85,6 +85,26 @@ describe('parseAnswerBlocks', () => {
     ])
   })
 
+  it('turns literal Unicode bullets into real list rows', () => {
+    const source = [
+      '先说结论：最近主要是评估和审批任务。',
+      '• 2026-10-29：机器人完成一批报价评估。[1]',
+      '• 2026-10-30：批量处理车辆评估。[2]',
+    ].join('\n')
+
+    expect(parseAnswerBlocks(source)).toEqual([
+      { type: 'paragraph', text: '先说结论：最近主要是评估和审批任务。' },
+      {
+        type: 'list',
+        ordered: false,
+        items: [
+          '2026-10-29：机器人完成一批报价评估。[1]',
+          '2026-10-30：批量处理车辆评估。[2]',
+        ],
+      },
+    ])
+  })
+
   it('keeps HTML as plain text instead of interpreting it', () => {
     const source = [
       '<div onclick="alert(1)">hello</div>',

@@ -821,19 +821,23 @@ const yingdao: RpaVendorAdapter = {
 
 ```text
 任务触发记录（pending）
-  → ① resolve(triggerMethod)        未注册/停用 → skipped + 可读原因
-  → ② validate(descriptor.fields)   必填/类型/正则/秘密是否已配置 → 缺 → skipped「配置不完整」
-  → ③ gate(record.text)             隐私闸（沿用 feature 'task_callback'；两种方式同一口径）
-  → ④ render(descriptor.request)    模板上下文：config / secret / record / invocation / mapped
+  → ① claim(taskId,recordId)        BEGIN IMMEDIATE；owner + fence + lease 单飞
+  → ② resolve(triggerMethod)        未注册/停用 → skipped + 可读原因
+  → ③ validate(descriptor.fields)   必填/类型/正则/秘密是否已配置 → 缺 → skipped「配置不完整」
+  → ④ gate(record.text)             隐私闸（沿用 feature 'task_callback'；两种方式同一口径）
+  → ⑤ render(descriptor.request)    模板上下文：config / secret / record / invocation / mapped
                                      （mapped = extrasField 附加参数；v29 起所有触发方式的
                                       targets 均为空，见 §4.3.1 / §4.3.3；禁止 eval）
-  → ⑤ auth(descriptor.auth)         header/bearer/token-exchange（通用 token 缓存，单飞）
+  → ⑥ auth(descriptor.auth)         header/bearer/token-exchange（通用 token 缓存，单飞）
                                      hmac-rpc/custom → 厂商文件内钩子
-  → ⑥ send()                        统一 fetchWithRetry；重试策略来自 descriptor.retry；
+  → ⑦ send()                        首次出网前写 sent_unconfirmed；heartbeat 原子续租；
+                                     续租失败 abort fetch；统一 fetchWithRetry；
+                                     重试策略来自 descriptor.retry；
                                      厂商支持幂等键时注入（影刀 idempotentUuid / 阿里云 X-Idempotent-Request-ID）
-  → ⑦ parse(descriptor.response)    HTTP 状态 + 业务码 + 外部任务 id；成功/失败/可重试分类
-  → ⑧ persist()                     callback_status / external_task_id / callback_error / attempt
-  → ⑨ completion                    callback：只当信号 → 校验 → 用 poll 二次确认
+  → ⑧ parse(descriptor.response)    HTTP 状态 + 业务码 + 外部任务 id；成功/失败/可重试分类
+  → ⑨ persist()                     owner/fence 匹配才写 callback_status / external_task_id /
+                                     callback_error；终态写失败保留 sent_unconfirmed，不自动重投
+  → ⑩ completion                    callback：只当信号 → 校验 → 用 poll 二次确认
                                      poll：按 RpaPollSpec 轮询（单作业/运行记录）→ 映射终态
                                      none：sent 即「已受理」，不代表执行成功（UI 文案要区分）
 ```
@@ -956,7 +960,7 @@ for (const adapter of RPA_VENDORS) {
 | 出网目的地 | 描述符声明 `hosts`；通用管道校验 `url` 的 host 在允许清单内（固定域名或 `*.厂商域` 模板）；私有化自定义 base URL 需用户显式勾选「私有化地址」并受「禁止 localhost/私网」默认策略约束（与现有 Webhook 的 http/https 口径衔接） |
 | 隐私版本 | 新增厂商=新增内容出网点 → `PRIVACY_VERSION` +1 并重新同意；同意屏出网清单补「任务触发（Webhook / 你选择的 RPA 厂商）」，具体主机以 `docs/PRIVACY.md` G3 为准 |
 | 出网台账 | 通用管道只有一个 `fetch` 调用点；台账登记该点，并在 `why` 里说明「主机来自注册表描述符，逐家已登记隐私声明」；新增厂商触发 `outbound-site-coverage` 的注册表一致性守卫（描述符 hosts ⊆ 隐私文档） |
-| 幂等/重试 | 仅 `idempotency='vendor-key'`（影刀/阿里云）允许网络/5xx 自动重试；`none`（八爪鱼开放 API / 八爪鱼 MCP / 实在/来也/UiPath/PA）默认**不自动重试**，失败留给人工「重新投递」；重试前先查本地派发记录防重复 |
+| 幂等/重试 | 服务端对每条 `task_triggers` 做 owner + lease + fence claim，后台/人工/多进程并发时只允许一个 owner 出网；租约过期可接管，旧 owner 晚到结果不能覆盖。仅 `idempotency='vendor-key'`（影刀/阿里云）允许网络/5xx 自动重试；`none`（八爪鱼开放 API / 八爪鱼 MCP / 实在/来也/UiPath/PA）默认**不自动重试**，失败留给人工「重新投递」 |
 | 入站 | 默认不监听；仅在用户显式开启「局域网访问」后挂回调/触发端点；每厂商鉴权策略独立，无签名厂商的 payload 不得直接写业务状态 |
 
 ### 4.9 迁移计划（分阶段，可回滚）

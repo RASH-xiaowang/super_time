@@ -5,8 +5,7 @@
  * 这两件事都只能靠行为测试钉住：字段映射漏一个，界面就少一块证据；
  * threadState 不回传，下一轮就会出现「这个群」指代丢失而界面看起来一切正常。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UseAskSessionOptions, UseAskSessionResult } from './use-ask.ts'
@@ -241,7 +240,13 @@ describe('useAskSession：运行时结果与多轮状态', () => {
         detail: { id: (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId, text: '已经写了一半' },
       }))
       window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
-        detail: { id: (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId, text: '思考片段' },
+        detail: {
+          id: (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId,
+          text: '思考片段',
+          segmentId: 'reasoning:tool:1',
+          phase: 'tool_selection',
+          round: 1,
+        },
       }))
       window.dispatchEvent(new CustomEvent('dsh-wechat-ask-stage', {
         detail: {
@@ -257,6 +262,14 @@ describe('useAskSession：运行时结果与多轮状态', () => {
     expect(stopped).toMatchObject({ role: 'assistant', stopped: true })
     expect(stopped?.text).toContain('已经写了一半')
     expect(stopped?.reasoning).toBe('思考片段')
+    expect(stopped?.reasoningSegments).toEqual([
+      expect.objectContaining({
+        key: 'reasoning:tool:1',
+        round: 1,
+        phase: 'tool_selection',
+        text: '思考片段',
+      }),
+    ])
     expect(stopped?.stages?.[0]).toMatchObject({ callId: 'c1', status: 'failed' })
     expect(hook?.asking).toBe(false)
     expect(mocks.apiCancelAsk).toHaveBeenCalledTimes(1)
@@ -266,6 +279,133 @@ describe('useAskSession：运行时结果与多轮状态', () => {
       await asking
     })
     expect(hook?.turns.map(t => t.text)).toEqual(['会停止的问题', '已经写了一半\n\n（已停止生成）'])
+  })
+
+  it('停止后把同一 runId 的迟到 reasoning 合并进对应的 stopped turn', async () => {
+    let resolveAsk: ((value: unknown) => void) | null = null
+    let resolveNext: ((value: unknown) => void) | null = null
+    mocks.apiAskWechat
+      .mockImplementationOnce(() => new Promise(resolve => { resolveAsk = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNext = resolve }))
+
+    let asking: Promise<void> | undefined
+    act(() => { asking = hook?.ask('停止后还有尾随思考') })
+    const streamId = (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
+        detail: {
+          id: streamId,
+          text: '已收到的思考',
+          segmentId: 'reasoning:synthesis',
+          phase: 'synthesis',
+          version: 1,
+          seq: 1,
+        },
+      }))
+    })
+    act(() => { hook?.cancel() })
+    expect(hook?.turns.at(-1)?.reasoningSegments).toEqual([
+      expect.objectContaining({ key: 'reasoning:synthesis', text: '已收到的思考', version: 1, seq: 1 }),
+    ])
+
+    let nextAsking: Promise<void> | undefined
+    act(() => { nextAsking = hook?.ask('下一轮问题') })
+    const nextStreamId = (mocks.apiAskWechat.mock.calls[1]?.[0] as { streamId: string }).streamId
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
+        detail: {
+          id: streamId,
+          text: '远端 flush 的尾段',
+          segmentId: 'reasoning:synthesis',
+          phase: 'synthesis',
+          version: 2,
+          seq: 1,
+        },
+      }))
+    })
+
+    const stopped = hook?.turns.find(turn => turn.runId === streamId && turn.stopped === true)
+    expect(hook?.turns).toHaveLength(3)
+    expect(stopped).toMatchObject({
+      role: 'assistant',
+      runId: streamId,
+      stopped: true,
+      reasoning: '远端 flush 的尾段',
+      reasoningSegments: [expect.objectContaining({
+        key: 'reasoning:synthesis',
+        text: '远端 flush 的尾段',
+        version: 2,
+        seq: 1,
+      })],
+    })
+    expect(hook?.streamReasoning).toBe('')
+    expect(hook?.streamReasoningSegments).toEqual([])
+
+    await act(async () => {
+      resolveAsk?.({ answer: '迟到的完整回答', citations: [] })
+      await asking
+    })
+    expect(hook?.turns).toHaveLength(3)
+    expect(hook?.turns.find(turn => turn.runId === streamId)?.reasoning).toBe('远端 flush 的尾段')
+
+    await act(async () => {
+      resolveNext?.({ answer: '下一轮回答', citations: [] })
+      await nextAsking
+    })
+    expect(hook?.turns.find(turn => turn.runId === streamId)?.reasoning).toBe('远端 flush 的尾段')
+    expect(hook?.turns.find(turn => turn.runId === nextStreamId && turn.role === 'assistant'))
+      .not.toHaveProperty('reasoningSegments')
+  })
+
+  it('停止后忽略其他 runId 的迟到 reasoning', async () => {
+    let resolveAsk: ((value: unknown) => void) | null = null
+    mocks.apiAskWechat.mockImplementationOnce(() => new Promise(resolve => { resolveAsk = resolve }))
+
+    let asking: Promise<void> | undefined
+    act(() => { asking = hook?.ask('只接受本轮尾随思考') })
+    const streamId = (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
+        detail: {
+          id: streamId,
+          text: '本轮思考',
+          segmentId: 'reasoning:tool:1',
+          phase: 'tool_selection',
+          round: 1,
+          version: 1,
+          seq: 1,
+        },
+      }))
+    })
+    act(() => { hook?.cancel() })
+    const before = hook?.turns.at(-1)?.reasoningSegments
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
+        detail: {
+          id: `${streamId}-other`,
+          text: '其他轮次的迟到思考',
+          segmentId: 'reasoning:synthesis',
+          phase: 'synthesis',
+          version: 1,
+          seq: 2,
+        },
+      }))
+    })
+
+    expect(hook?.turns).toHaveLength(2)
+    expect(hook?.turns.at(-1)?.reasoningSegments).toEqual(before)
+    expect(hook?.turns.at(-1)?.reasoning).toBe('本轮思考')
+    expect(hook?.streamReasoningSegments).toEqual([])
+
+    await act(async () => {
+      resolveAsk?.({ answer: '迟到的完整回答', citations: [] })
+      await asking
+    })
+    expect(hook?.turns).toHaveLength(2)
   })
 
   it('请求失败时保留工具重试的原始阶段序列，供过程记录展开', async () => {
@@ -356,6 +496,39 @@ describe('useAskSession：运行时结果与多轮状态', () => {
     })
   })
 
+  it('按 threadKey 切到另一个会话再切回来，仍能看到原会话的轮次', async () => {
+    mocks.apiAskWechat
+      .mockResolvedValueOnce({ answer: 'A 会话回答', citations: [] })
+      .mockResolvedValueOnce({ answer: 'B 会话回答', citations: [] })
+
+    setOptions({
+      source: 'session',
+      threadKey: 'wxid_a',
+      scopeUsername: 'wxid_a',
+      scopeUsernameName: '会话 A',
+    })
+    await act(async () => { await hook?.ask('A 会话问题') })
+    expect(hook?.turns.map(turn => turn.text)).toEqual(['A 会话问题', 'A 会话回答'])
+
+    setOptions({
+      source: 'session',
+      threadKey: 'wxid_b',
+      scopeUsername: 'wxid_b',
+      scopeUsernameName: '会话 B',
+    })
+    expect(hook?.turns).toEqual([])
+    await act(async () => { await hook?.ask('B 会话问题') })
+    expect(hook?.turns.map(turn => turn.text)).toEqual(['B 会话问题', 'B 会话回答'])
+
+    setOptions({
+      source: 'session',
+      threadKey: 'wxid_a',
+      scopeUsername: 'wxid_a',
+      scopeUsernameName: '会话 A',
+    })
+    expect(hook?.turns.map(turn => turn.text)).toEqual(['A 会话问题', 'A 会话回答'])
+  })
+
   it('清空对话时作废在飞回答、释放闸门并立即允许下一问', async () => {
     let resolveFirst: ((value: unknown) => void) | null = null
     mocks.apiAskWechat
@@ -387,11 +560,31 @@ describe('useAskSession：运行时结果与多轮状态', () => {
 
     let firstAsk: Promise<void> | undefined
     act(() => { firstAsk = hook?.ask('A 范围问题') })
+    const streamId = (mocks.apiAskWechat.mock.calls[0]?.[0] as { streamId: string }).streamId
+    act(() => {
+      window.dispatchEvent(new CustomEvent('dsh-wechat-ask-reasoning', {
+        detail: {
+          id: streamId,
+          text: '旧范围第一轮思考',
+          segmentId: 'reasoning:tool:1',
+          phase: 'tool_selection',
+          round: 1,
+        },
+      }))
+    })
     setOptions({ source: 'ask', threadKey: 'spec', scopeUsername: 'wxid_b' })
     await act(async () => { await hook?.ask('B 范围问题') })
 
     setOptions({ source: 'ask', threadKey: 'spec' })
     expect(hook?.turns.map(t => t.text)).toEqual(['A 范围问题', '（已停止生成）'])
+    expect(hook?.turns.at(-1)?.reasoningSegments).toEqual([
+      expect.objectContaining({
+        key: 'reasoning:tool:1',
+        round: 1,
+        phase: 'tool_selection',
+        text: '旧范围第一轮思考',
+      }),
+    ])
 
     await act(async () => {
       resolveFirst?.({ answer: '迟到的 A 回答', citations: [] })

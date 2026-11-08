@@ -39,6 +39,9 @@ interface ProgressEvent {
   phase: string
   done: number
   total: number
+  finished?: boolean
+  status?: 'ok' | 'error' | 'canceled'
+  error?: string
 }
 
 let root = ''
@@ -195,5 +198,73 @@ describe('M3：导出/备份的进度与取消（gateway 接线）', () => {
     // 半成品备份目录也不能留下
     const backups = join(root, 'backups')
     expect(existsSync(backups) ? readdirSync(backups) : []).toEqual([])
+  })
+
+  it('普通备份带 jobId 时推送可轮询的成功终态', async () => {
+    makeRoot(false)
+    const events: ProgressEvent[] = []
+    const gw = gateway((event, payload) => { if (event === 'wechat-export/progress') events.push(payload) })
+
+    const r = await gw.createBackup({ jobId: 'plain-backup-ok' })
+    expect(r.ok).toBe(true)
+    expect(events.filter(e => e.jobId === 'plain-backup-ok').some(e => e.phase === 'files')).toBe(true)
+    expect(events.at(-1)).toMatchObject({
+      jobId: 'plain-backup-ok',
+      phase: 'done',
+      finished: true,
+      status: 'ok',
+    })
+    expect(gw.getExportProgress({ jobId: 'plain-backup-ok' })).toMatchObject({
+      found: true,
+      finished: true,
+      status: 'ok',
+      cancelRequested: false,
+    })
+  })
+
+  it('普通备份失败时留下 error 终态，而不是只有 RPC 返回值', async () => {
+    makeRoot(true)
+    const events: ProgressEvent[] = []
+    const gw = gateway((event, payload) => { if (event === 'wechat-export/progress') events.push(payload) })
+
+    const r = await gw.createBackup({ jobId: 'plain-backup-error' })
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('备份不完整')
+    expect(gw.getExportProgress({ jobId: 'plain-backup-error' })).toMatchObject({
+      found: true,
+      finished: true,
+      status: 'error',
+      error: r.error,
+    })
+    expect(events.at(-1)).toMatchObject({ finished: true, status: 'error', error: r.error })
+  })
+
+  it('普通备份在子目录边界响应取消，并清理半成品', async () => {
+    makeRoot(false)
+    const events: ProgressEvent[] = []
+    let gw: InstanceType<typeof WechatDataGateway>
+    let cancelled = false
+    gw = gateway((event, payload) => {
+      if (event !== 'wechat-export/progress') return
+      events.push(payload)
+      if (!cancelled && payload.jobId === 'plain-backup-cancel' && payload.phase === 'files' && payload.done > 0) {
+        cancelled = true
+        expect(gw.cancelExportJob({ jobId: payload.jobId })).toEqual({ ok: true })
+      }
+    })
+
+    const r = await gw.createBackup({ jobId: 'plain-backup-cancel' })
+    expect(cancelled, '没有 files 进度事件，取消用例失去意义').toBe(true)
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/取消|cancel|abort/i)
+    const backups = join(root, 'backups')
+    expect(existsSync(backups) ? readdirSync(backups) : []).toEqual([])
+    expect(gw.getExportProgress({ jobId: 'plain-backup-cancel' })).toMatchObject({
+      found: true,
+      finished: true,
+      status: 'canceled',
+      cancelRequested: false,
+    })
+    expect(events.at(-1)).toMatchObject({ finished: true, status: 'canceled' })
   })
 })

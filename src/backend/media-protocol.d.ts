@@ -20,5 +20,8 @@ export function resolveDecodedFile(root: string, rel: string): string | null
 /** 解析 `?w=<px>` 缩略图宽度（64–1024 整数）；缺失/非法返回 null（回原图）。 */
 export function parseThumbWidth(rawUrl: string): number | null
 
+/** 按宽度生成/复用落盘缩略图；非 Electron 或解码失败返回 null（调用方回原图）。 */
+export function ensureThumb(abs: string, width: number): string | null
+
 /** 为一个 `wechat-media://` 请求构造流式响应（200 或 404）。 */
 export function mediaResponse(root: string, rawUrl: string): Response

@@ -34,10 +34,23 @@ export interface StreamJob {
         total: number;
     } | null;
     finished: boolean;
+    /** 本轮代次；旧任务晚到的收尾不能把复用同一 jobId 的新一轮误标为结束。 */
+    generation: symbol;
+    /** 终态类型；运行中为 running。 */
+    status: 'running' | 'ok' | 'error' | 'canceled';
+    /** 用户已请求取消，但任务尚未跑到检查点。 */
+    cancelRequested?: boolean;
+    /** 终态产生时间，供过期清理使用。 */
+    settledAt?: number;
     error?: string;
 }
 /** 控制槽上限：槽位只服务「正在跑 + 刚跑完」的任务，超出先丢最老的。 */
 export declare const STREAM_JOB_CAP = 20;
+/**
+ * 终态保留时长。轮询要能读到刚结束的任务，但没必要把 AbortController 永久留在内存里；
+ * 终态事件已经把结果推给在线界面，过期后 `found:false` 才是诚实的。
+ */
+export declare const STREAM_JOB_TERMINAL_TTL_MS: number;
 /** 导出/备份进度事件名（渲染层按 jobId 过滤）。 */
 export declare const EXPORT_PROGRESS_EVENT = "wechat-export/progress";
 /**

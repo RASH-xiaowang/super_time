@@ -6,6 +6,7 @@
 import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { messageTableHash, resolveTalkerUsername } from './message-identity.ts'
 
 /** Open the decrypted session.db read-write. */
 function openSessionDb(decryptedDir: string): DatabaseSync | null {
@@ -46,7 +47,20 @@ export function clearSessionDraft(decryptedDir: string, username: string): { ok:
     // 再 close() 会抛 `ERR_INVALID_STATE` —— 在 finally 里抛会把上面这条人话错误吞掉，
     // 用户在界面上看到的是「database is not open」，真实原因（没有 SessionTable）反而丢了。
     if (!has) return { ok: false, updated: 0, error: 'SessionTable 不存在' }
-    const r = db.prepare('UPDATE SessionTable SET draft = ? WHERE username = ?').run('', username)
+    const requested = username.trim()
+    const canonical = requested ? resolveTalkerUsername(decryptedDir, requested) : ''
+    // Older SessionTable rows may be keyed by either the real username or the
+    // physical Msg_<md5> suffix. The UI now only has the canonical value, so
+    // clear both aliases in one statement.
+    const aliases = [...new Set([
+      requested,
+      canonical,
+      ...(canonical ? [messageTableHash(canonical)] : []),
+    ].filter(Boolean))]
+    if (aliases.length === 0) return { ok: true, updated: 0 }
+    const r = db.prepare(
+      `UPDATE SessionTable SET draft = ? WHERE username IN (${aliases.map(() => '?').join(', ')})`,
+    ).run('', ...aliases)
     return { ok: true, updated: Number(r.changes) }
   } catch (e) {
     return { ok: false, updated: 0, error: (e as Error).message }
@@ -70,7 +84,13 @@ export function clearAllSessionDrafts(
     // 同上：早退分支交给 `finally` 关连接，自己再 close() 会抛 ERR_INVALID_STATE 并掩盖真实原因
     if (!has) return { ok: false, cleared: [], count: 0, error: 'SessionTable 不存在' }
     const rows = db.prepare('SELECT username, draft FROM SessionTable WHERE draft IS NOT NULL AND length(draft) > 0').all() as Array<Record<string, unknown>>
-    const cleared = rows.map(r => ({ username: cellStr(r['username'] ?? ''), draft: draftText(r['draft']) }))
+    const cleared = rows.map((r) => {
+      const stored = cellStr(r['username'] ?? '').trim()
+      // Never return a physical message-table hash as an undo/navigation id.
+      // An unresolved legacy hash is cleared but intentionally has no username.
+      const username = stored ? resolveTalkerUsername(decryptedDir, stored) : ''
+      return { username, draft: draftText(r['draft']) }
+    })
     db.prepare('UPDATE SessionTable SET draft = ? WHERE draft IS NOT NULL AND length(draft) > 0').run('')
     return { ok: true, cleared, count: cleared.length }
   } catch (e) {

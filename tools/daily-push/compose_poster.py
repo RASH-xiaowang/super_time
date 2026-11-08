@@ -24,6 +24,7 @@ spec.json（UTF-8，缺省字段可省）：
 }
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -40,9 +41,38 @@ TXT2 = (154, 166, 201)
 TXT3 = (99, 112, 143)
 
 MARGIN = 64
+
+
+def _commercial_font(env_name: str, fallbacks: tuple[str, ...]) -> Path:
+    """只接受可商用再分发的字体；默认找 Noto Sans SC / Source Han Sans SC（OFL-1.1）。
+
+    不把字体文件提交进仓库：海报是字形栅格化产物，字体本身不随项目分发。
+    需要换字体时通过环境变量显式指定，避免再次误用系统专有字体。
+    """
+    configured = os.environ.get(env_name, "").strip() or os.environ.get("SUPERTIME_POSTER_FONT", "").strip()
+    candidates = ([Path(configured)] if configured else []) + [Path(p) for p in fallbacks]
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise SystemExit(
+        f"缺少可商用中文字体：请安装 Noto Sans SC 或 Source Han Sans SC（OFL-1.1），"
+        f"或用 {env_name} / SUPERTIME_POSTER_FONT 指定字体文件路径。"
+    )
+
+
 FONT_DIR = Path("C:/Windows/Fonts")
-F_BOLD = FONT_DIR / "msyhbd.ttc"
-F_REG = FONT_DIR / "msyh.ttc"
+F_BOLD = _commercial_font("SUPERTIME_POSTER_FONT_BOLD", (
+    str(FONT_DIR / "NotoSansSC-Bold.otf"),
+    str(FONT_DIR / "NotoSansSC-VF.ttf"),
+    str(FONT_DIR / "SourceHanSansSC-Bold.otf"),
+    "assets/fonts/NotoSansSC-Bold.otf",
+))
+F_REG = _commercial_font("SUPERTIME_POSTER_FONT_REGULAR", (
+    str(FONT_DIR / "NotoSansSC-Regular.otf"),
+    str(FONT_DIR / "NotoSansSC-VF.ttf"),
+    str(FONT_DIR / "SourceHanSansSC-Regular.otf"),
+    "assets/fonts/NotoSansSC-Regular.otf",
+))
 
 
 def font(path: Path, size: int) -> ImageFont.FreeTypeFont:

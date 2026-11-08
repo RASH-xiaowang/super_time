@@ -8,6 +8,7 @@
  * 范围**不做选择**：面板与右侧消息流是同一个会话，两者必须一致 ——
  * 一旦允许改范围，就会出现「看着 A 的聊天、问的却是 B」这种用户无法自证的错位。
  * 切换到别的会话时面板自然跟着换（每个会话各留一份对话上下文，按 username 分线程）。
+ * 注意不要在父层用 `key={target.username}` 重建组件，否则切换会话时线程会被销毁。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ErrorState } from '../ui/kit.tsx'
@@ -38,6 +39,8 @@ const SUGGESTIONS = [
 export interface SessionAskProps {
   /** 读取范围：**恒为当前打开的会话**（单聊/群聊），不做切换。 */
   target: WechatSession
+  /** 暂时被其他右栏替代时仍保持挂载，保留当前会话线程。 */
+  hidden?: boolean
   onClose: () => void
   /** 点击引用跳转到原文。 */
   onOpenMessage: (username: string, localId: number) => void
@@ -189,11 +192,12 @@ function SessionIntro({ targetName, onPick }: {
  * @param props.onDistill - 「沉淀为笔记」回调（打开编辑器）。
  * @returns 消息流元素。
  */
-function SessionThread({ turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function SessionThread({ turns, asking, streamText, streamReasoning, streamReasoningSegments, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
+  streamReasoningSegments: AskTurn['reasoningSegments']
   streamStages: AskTurn['stages']
   runStartedAt: number
   runId: string
@@ -262,6 +266,7 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
             agentLabel="AI 问答"
             text={streamText}
             reasoning={streamReasoning}
+            reasoningSegments={streamReasoningSegments ?? []}
             stages={streamStages ?? []}
             runStartedAt={runStartedAt}
             runId={runId}
@@ -281,7 +286,7 @@ function SessionThread({ turns, asking, streamText, streamReasoning, streamStage
  * @returns panel element tree.
  */
 export function SessionAsk(props: SessionAskProps): React.JSX.Element {
-  const { target, onClose, onOpenMessage, full, onToggleFull } = props
+  const { target, hidden = false, onClose, onOpenMessage, full, onToggleFull } = props
   const [question, setQuestion] = useState('')
   /** 「沉淀为笔记」编辑器（与「微信问答」同一件，prefill 标题/正文/来源问题）。 */
   const [distill, setDistill] = useState<{ open: boolean; title?: string; body?: string; question?: string }>({ open: false })
@@ -292,7 +297,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
 
   // 每个会话一份线程：键即 username。
   // source/scopeUsernameName 只用于**问答历史**：让历史列表能区分「在哪问的」并直接显示会话名。
-  const { turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, error, ask, retry: retryTurn, cancel, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamReasoningSegments, streamStages, runStartedAt, runId, error, ask, retry: retryTurn, cancel, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     scopeUsername: target.username,
     scopeUsernameName: scopeNameOf(target),
     source: 'session',
@@ -312,15 +317,15 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement | null>(null)
   /** 是否停在底部附近：只有停在底部才自动跟随新内容，向上翻阅时不被拽走。 */
   const atBottomRef = useRef(true)
-
-  useEffect(() => {
-    const el = bodyRef.current
-    if (!el) return
-    const onScroll = (): void => { atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => { el.removeEventListener('scroll', onScroll) }
-  }, [])
   useAskThreadAutoScroll({ bodyRef, atBottomRef, asking, turns, contentRevision: askThreadContentRevision({ text: streamText, reasoning: streamReasoning, stages: streamStages }) })
+
+  // 线程本身按 username 保留；输入框和弹层属于当前会话的临时 UI，切换时清掉。
+  useEffect(() => {
+    setQuestion('')
+    setDistill({ open: false })
+    setHistoryOpen(false)
+    atBottomRef.current = true
+  }, [target.username])
 
   // 输入框随内容增高（上限后内部滚动）
   useEffect(() => {
@@ -334,6 +339,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
     const q = question.trim()
     if (!q || asking) return
     setQuestion('')
+    atBottomRef.current = true
     void ask(q)
   }, [question, asking, ask])
 
@@ -360,7 +366,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
   const targetName = scopeNameOf(target)
 
   return (
-    <section className={css.panel} data-side-panel-view="" data-full={full || undefined} aria-label="会话 AI 问答">
+    <section className={css.panel} data-side-panel-view="" data-full={full || undefined} hidden={hidden || undefined} aria-label="会话 AI 问答">
       <SessionHead
         full={full}
         onToggleFull={onToggleFull}
@@ -389,6 +395,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             asking={asking}
             streamText={streamText}
             streamReasoning={streamReasoning}
+            streamReasoningSegments={streamReasoningSegments}
             streamStages={streamStages}
             runStartedAt={runStartedAt}
             runId={runId}
@@ -504,6 +511,8 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
       <AskHistoryDialog
         open={historyOpen}
         onClose={() => { setHistoryOpen(false) }}
+        scopeUsername={target.username}
+        scopeName={targetName}
         onOpenCitation={(u, id) => { onOpenMessage(u, id ?? 0) }}
         onOpenKbFile={openKbFileFromCitation}
         onAskAgain={(q) => {

@@ -29,14 +29,20 @@ import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOp
 import { createFavoriteMediaRemotes } from './media-favorites.ts'
 import { createVoiceVideoRemotes } from './media-voice.ts'
 import { createFileImageRemotes } from './media-file-images.ts'
+import { createOriginalMediaExportRemotes, originalExportDestination } from './media-original-exports.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { fetchMapGeoJson } from '../query/map-geo.ts'
 import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrlsAsync, resolveSnsVideoCoverDataUrlAsync, resolveSnsVideoDataUrlAsync } from '../query/sns-video.ts'
 import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VoiceInfoResult } from '../types.ts'
-import { readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { isAbsolute, join, relative } from 'node:path'
+import { canonicalChatReference } from '../query/message-identity.ts'
+import { dataUrlToBuffer, writeFileAtomicSync, writeFileAtomicWithProgress } from '../query/export-io.ts'
+import { loadSnsImageOriginalBytes, sniffExportMediaBytes, type SnsMediaInput } from '../query/export-sns-media.ts'
+import { reportProgress, throwIfCancelled, type StreamControl } from '../query/zip.ts'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
@@ -152,6 +158,64 @@ function messageFileDataUrl(
   })
 }
 
+/**
+ * Resolve one chat image for disk export without ever accepting a thumbnail.
+ * If the first decode is the `.t.` tier, force the normal original-upgrade
+ * route and re-check the result before returning bytes.
+ */
+async function resolveChatOriginalImage(
+  rc: MediaRemoteCtx,
+  username: string,
+  localId: number,
+): Promise<{ bytes?: Buffer; format?: string; error?: string }> {
+  const decrypted = rc.dirs().decrypted
+  const decoded = rc.dirs().decoded
+  const base = rc.rawWechatBase(decrypted) || undefined
+  const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
+  const read = async () => decodeImageDataUrlAsync(
+    decrypted, decoded, username, localId, base, aesKey, xorKey, { fileOnly: true },
+  )
+
+  let result = await read()
+  let upgradeError = ''
+  if (result.thumb === true) {
+    forgetAutoUpgradeAttempt(username, localId)
+    const upgraded = await tryUpgradeToOriginal(
+      decrypted, decoded, username, localId, base, aesKey, xorKey, true, { fileOnly: true },
+    )
+    if (upgraded.format) result = await read()
+    else upgradeError = upgraded.error ?? ''
+  }
+  if (result.thumb === true) {
+    return { error: '本机只有缩略图，未导出任何文件' + (upgradeError ? '：' + upgradeError : '') }
+  }
+
+  let bytes: Buffer | null = null
+  if (result.file) {
+    const absolute = isAbsolute(result.file) ? result.file : join(decoded, result.file)
+    const rel = relative(decoded, absolute)
+    if (rel.startsWith('..') || isAbsolute(rel)) return { error: '图片缓存路径越界，已拒绝读取' }
+    try {
+      bytes = readFileSync(absolute)
+    } catch (e) {
+      return { error: '读取原图失败：' + ((e as Error)?.message ?? String(e)) }
+    }
+  } else if (result.url) {
+    bytes = dataUrlToBuffer(result.url)
+  }
+  if (!bytes) return { error: result.error ?? '本机未找到可导出的原图' }
+  const media = sniffExportMediaBytes(bytes, 'image')
+  if (!media) return { error: '解码结果不是可识别的图片，已拒绝写入' }
+  const expectedMd5 = resolveImageResourceHint(decrypted, username, localId).md5
+  if (expectedMd5 && /^[a-f0-9]{32}$/i.test(expectedMd5)) {
+    const actualMd5 = createHash('md5').update(bytes).digest('hex')
+    if (actualMd5 !== expectedMd5.toLowerCase()) {
+      return { error: '图片内容 MD5 与消息记录不一致，已拒绝导出' }
+    }
+  }
+  return { bytes, format: media.format }
+}
+
 export function createMediaRemotes(rc: MediaRemoteCtx) {
   // 网关本地的类型（delegation 签名也用它）—— 纯类型导入，无运行期环
   const rawWechatBase = rc.rawWechatBase
@@ -165,6 +229,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
     ...createVoiceVideoRemotes(rc),
+    ...createOriginalMediaExportRemotes(rc),
 
     getAvatar(options: { username: string; nickname?: string }): AvatarResult {
       return avatarWithArchive(rc, options)
@@ -241,7 +306,13 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
     async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
-      const talker = String(options.username ?? '').trim()
+      const chat = canonicalChatReference(
+        rc.dirs().decrypted,
+        String(options.username ?? ''),
+        '图片会话',
+      )
+      if (chat.error !== undefined) return { ok: false, error: chat.error }
+      const talker = chat.username
       const localId = Math.trunc(Number(options.localId))
       if (talker === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
       // 用户显式点了「取原图」⇒ 清掉自动升级的「已试过」记忆，让这次一定真的重试
@@ -276,7 +347,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
           rc.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (local.format ?? '?') + '）')
           return { ok: true, format: local.format, note: '本机已重解到更大的那一份，这次没有联网' }
         }
-        return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
+        return { ok: false, error: '本机只有缩略图，请先在微信中查看原图，再回来重试。' }
       }
       const r = await fetchImageOriginalToCache(link, rc.dirs().decoded)
       if (r.bytes === undefined) {
@@ -285,10 +356,10 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         const local = await localFallback()
         if (local !== null) {
           rc.op('task', 'image_original_fetch', 'ok', talker, '直链失效，改用本机那份（' + (local.format ?? '?') + '）')
-          return { ok: true, format: local.format, note: '直链已失效（' + (r.error ?? '取回失败') + '），已改用本机那份，这次没有联网' }
+          return { ok: true, format: local.format, note: '直链已失效，已改用本机更清晰的一份' }
         }
         rc.op('task', 'image_original_fetch', 'fail', talker, r.error ?? '取回失败')
-        return { ok: false, error: r.error ?? '原图取回失败' }
+        return { ok: false, error: '原图暂不可用，请稍后重试。' }
       }
       // 记进续跑索引：批量入口据此跳过「已经取回过」的图，不会为了同一张反复联网。
       recordFetchedOriginal(rc.dirs().decoded, link.md5)
@@ -419,10 +490,13 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
     async exportSnsVideo(options: {
-      md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
-    }): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
+      md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string; jobId?: string
+    }, ctrl?: StreamControl): Promise<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }> {
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'locate', 0, 1)
       const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
       if (!dest) return { ok: false, error: '未指定保存路径' }
+      reportProgress(ctrl, 'read', 0, 0)
       const loaded = await loadSnsVideoBytes({
         base: rawWechatBase(rc.dirs().decrypted) || undefined,
         md5: options.md5,
@@ -432,19 +506,119 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         seed: options.key,
         version: weixinVersion(),
       })
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'read', 1, 1)
       if (loaded.error || !loaded.bytes) {
         rc.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')
         return { ok: false, error: loaded.error ?? '取不到视频字节' }
       }
+      const media = sniffExportMediaBytes(loaded.bytes, 'video')
+      if (!media) {
+        rc.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', '取回内容不是视频容器')
+        return { ok: false, error: '取回内容不是 MP4/MOV/M4V 视频容器，已拒绝写入' }
+      }
+      const finalDest = originalExportDestination(dest, media.format)
       try {
-        writeFileSync(dest, loaded.bytes)
+        await writeFileAtomicWithProgress(finalDest, loaded.bytes, ctrl)
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e)
         rc.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', msg)
         return { ok: false, error: `写入失败：${msg}` }
       }
+      const source = loaded.source === 'remote' ? 'cdn' : 'local'
       rc.op('task', 'export_sns_video', 'ok', options.md5?.slice(0, 8) ?? '', `${loaded.bytes.length} 字节 · ${loaded.source}`)
-      return { ok: true, bytes: loaded.bytes.length, source: loaded.source }
+      return { ok: true, path: finalDest, bytes: loaded.bytes.length, format: media.format, source }
+    },
+
+    /**
+     * Save one Moments still image at its original quality.
+     *
+     * The long-term archive and decoded original cache are checked first; the
+     * CDN fallback is the `/0` original endpoint and its decrypted bytes must
+     * pass an image magic check before anything is written.
+     */
+    async exportSnsImage(options: SnsMediaInput & { dest: string; jobId?: string }, ctrl?: StreamControl): Promise<{
+      ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string
+    }> {
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'locate', 0, 1)
+      const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
+      if (!dest) return { ok: false, error: '未指定保存路径' }
+      reportProgress(ctrl, 'read', 0, 0)
+      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
+      const loaded = await loadSnsImageOriginalBytes({
+        base: rawWechatBase(rc.dirs().decrypted) || undefined,
+        decodedDir: rc.dirs().decoded,
+        ...(aesKey ? { aesKey } : {}),
+        xorKey,
+        weixinVersion: weixinVersion(),
+      }, options)
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'read', 1, 1)
+      if (!loaded.bytes) {
+        rc.op('task', 'export_sns_image', 'fail', String(options.md5 ?? '').slice(0, 8), loaded.error ?? '')
+        return { ok: false, error: loaded.error ?? '取不到朋友圈原图' }
+      }
+      const finalDest = originalExportDestination(dest, loaded.format ?? 'bin')
+      try {
+        await writeFileAtomicWithProgress(finalDest, loaded.bytes, ctrl)
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e)
+        rc.op('task', 'export_sns_image', 'fail', String(options.md5 ?? '').slice(0, 8), msg)
+        return { ok: false, error: `写入失败：${msg}` }
+      }
+      rc.op('task', 'export_sns_image', 'ok', String(options.md5 ?? '').slice(0, 8),
+        `${loaded.bytes.length} 字节 · ${loaded.source ?? 'unknown'} · ${loaded.format ?? '?'}`)
+      return {
+        ok: true,
+        path: finalDest,
+        bytes: loaded.bytes.length,
+        ...(loaded.format ? { format: loaded.format } : {}),
+        ...(loaded.source ? { source: loaded.source } : {}),
+      }
+    },
+
+    /**
+     * Save one chat image after proving the decoded result is not a thumbnail.
+     * The existing best local tier and the user-authorized original fetch are
+     * tried first; if only a thumbnail remains, nothing is written.
+     */
+    async exportChatImage(options: { username: string; localId: number; dest: string; jobId?: string }, ctrl?: StreamControl): Promise<{
+      ok: boolean; path?: string; bytes?: number; format?: string; source?: string; error?: string
+    }> {
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'locate', 0, 1)
+      const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
+      if (!dest) return { ok: false, error: '未指定保存路径' }
+      const chat = canonicalChatReference(rc.dirs().decrypted, String(options.username ?? ''), '图片会话')
+      if (chat.error !== undefined) return { ok: false, error: chat.error }
+      const localId = Math.trunc(Number(options.localId))
+      if (chat.username === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
+      reportProgress(ctrl, 'read', 0, 0)
+      const resolved = await resolveChatOriginalImage(rc, chat.username, localId)
+      throwIfCancelled(ctrl?.signal)
+      reportProgress(ctrl, 'read', 1, 1)
+      if (!resolved.bytes) {
+        rc.op('task', 'export_chat_image', 'fail', chat.username, resolved.error ?? '')
+        return { ok: false, error: resolved.error ?? '取不到聊天原图' }
+      }
+      const finalDest = originalExportDestination(dest, resolved.format ?? 'bin')
+      try {
+        await writeFileAtomicWithProgress(finalDest, resolved.bytes, ctrl)
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e)
+        rc.op('task', 'export_chat_image', 'fail', chat.username, msg)
+        return { ok: false, error: `写入失败：${msg}` }
+      }
+      rc.op('task', 'export_chat_image', 'ok', chat.username,
+        `${resolved.bytes.length} 字节 · ${resolved.format ?? '?'}`)
+      return {
+        ok: true,
+        path: finalDest,
+        bytes: resolved.bytes.length,
+        ...(resolved.format ? { format: resolved.format } : {}),
+        source: 'local',
+      }
     },
 
   }
@@ -615,14 +789,34 @@ async function imagesBatchWithAutoUpgrade(
 ): Promise<{ items: ImageBatchItem[] }> {
   const decrypted = rc.dirs().decrypted
   const decoded = rc.dirs().decoded
-  const items = (Array.isArray(rawItems) ? rawItems : []).slice(0, IMAGE_BATCH_MAX)
-  const hints: ImageResourceHint[] = resolveImageResourceHintsBatch(decrypted, items)
+  const prepared = (Array.isArray(rawItems) ? rawItems : [])
+    .slice(0, IMAGE_BATCH_MAX)
+    .map((item) => {
+      const chat = canonicalChatReference(decrypted, item.username, '图片会话')
+      return {
+        username: chat.username,
+        localId: item.localId,
+        ...(chat.error === undefined ? {} : { error: chat.error }),
+      }
+    })
+  const validIndexes: number[] = []
+  const validItems: Array<{ username: string; localId: number }> = []
+  prepared.forEach((item, index) => {
+    if (item.error !== undefined || item.username === '') return
+    validIndexes.push(index)
+    validItems.push({ username: item.username, localId: item.localId })
+  })
+  const hints: ImageResourceHint[] = resolveImageResourceHintsBatch(decrypted, validItems)
+  const hintAt = new Map(validIndexes.map((index, at) => [index, hints[at]]))
   const md5s = hints.map(hint => hint.md5 ?? '')
-  if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey ?? 0xff, md5s)
+  if (base) await rc.warmDecodedImages(decrypted, decoded, base, validItems, aesKey, xorKey ?? 0xff, md5s)
   return {
-    items: await mapWithConcurrency(items, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
+    items: await mapWithConcurrency(prepared, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
+      if (it.error !== undefined || it.username === '') {
+        return { username: it.username, localId: it.localId, error: it.error ?? '缺少会话 username' }
+      }
       const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {
-        hint: hints[index],
+        hint: hintAt.get(index),
         fileOnly,
       })
       return { username: it.username, localId: it.localId, ...r }

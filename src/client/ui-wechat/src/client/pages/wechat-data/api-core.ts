@@ -35,18 +35,6 @@ import type {
   ChatCollectTaskResult,
   ChatCollectTaskSnapshot,
   ChatHistoryResolveResult,
-  ClawbotBindQr,
-  ClawbotBindStateSnapshot,
-  ClawbotBindingSnapshot,
-  ClawbotEnvSnapshot,
-  ClawbotInstanceConfig,
-  ClawbotInstanceCreated,
-  ClawbotInstanceDeleted,
-  ClawbotInstancesSnapshot,
-  ClawbotMediaResult,
-  ClawbotMessageQuery,
-  ClawbotMessageSnapshot,
-  ClawbotSendResult,
   ConfigSnapshot,
   Contact360Snapshot,
   ContactsSnapshot,
@@ -61,6 +49,7 @@ import type {
   DecryptImagesResult,
   DecryptStatus,
   ImageUpgradeResult,
+  MediaOriginalExportResult,
   OriginalBatchResult,
   OriginalFetchPlan,
   HarvestResult,
@@ -142,6 +131,7 @@ import type {
   LayaStatus,
   LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
+
 // 任务信息 / 触发记录（2026-10-19）：类型单一真源在后端 `types-taskcenter.ts`，
 // 这里只转发，不在前端镜像字段。单独一条 import 而不是塞进上面那一大坨，
 // 是为了让「这一域新增了什么类型」在 diff 里一眼可见。
@@ -158,15 +148,29 @@ import type {
   TaskTriggerSecretRevealResult,
   TaskTriggerSnapshot,
 } from '@deepseek-ai/dsh-wechat-data/types'
+import type { CaptureResult } from './api-runtime.ts'
 import type {
   MessageListMutationResult,
+  MessageListBatchDeleteResult,
+  MessageListBatchResendResult,
   MessageListQuery,
   MessageListRecordInput,
   MessageListRecordResult,
+  MessageListAttachmentStageInput,
+  MessageListAttachmentStageResult,
   MessageListRuleInput,
   MessageListRuleSnapshot,
   MessageListSnapshot,
   MessageListWebhookInfo,
+  MessageListWebhookJob,
+  MessageListWebhookPayload,
+  MessageListWebhookProbe,
+  ChatAiReplyMutationResult,
+  ChatAiReplyDefaultWebhookMutationResult,
+  ChatAiReplyDefaultWebhookState,
+  ChatAiReplyEnabledChatsResult,
+  ChatAiReplyScanResult,
+  ChatAiReplyState,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   SNAPSHOT_REFRESHED_EVENT,
@@ -286,16 +290,34 @@ export interface ExportProgressSnapshot {
   done: number
   total: number
   finished: boolean
+  status: 'running' | 'ok' | 'error' | 'canceled'
+  cancelRequested: boolean
   error?: string
 }
 
 /** Remote face injected by ui-pages apply (ctx.remote.wechatData). */
 export interface WechatRemote {
-  getSessions(options?: { keyword?: string; limit?: number; offset?: number }): Promise<RemoteResult<SessionsSnapshot>>
+  getSessions(options?: {
+    keyword?: string
+    limit?: number
+    offset?: number
+    jobId?: string
+  }): Promise<RemoteResult<SessionsSnapshot>>
   getContacts(options?: { limit?: number; offset?: number; category?: string }): Promise<RemoteResult<ContactsSnapshot>>
   getContact360(options: { username: string }): Promise<RemoteResult<Contact360Snapshot>>
-  getMessages(options: { talker: string; limit?: number; cursor?: number; cursorLocalId?: number }): Promise<RemoteResult<MessagesSnapshot>>
-  getNewMessages(options: { talker: string; after: number; limit?: number }): Promise<RemoteResult<MessagesSnapshot>>
+  getMessages(options: {
+    talker: string
+    limit?: number
+    cursor?: number
+    cursorLocalId?: number
+    beforeLocalId?: number
+  }): Promise<RemoteResult<MessagesSnapshot>>
+  getNewMessages(options: {
+    talker: string
+    after: number
+    afterLocalId?: number
+    limit?: number
+  }): Promise<RemoteResult<MessagesSnapshot>>
   /** 新建聊天素材收集任务（保留会话最近 N 条文本 + M 张图片）。 */
   createChatCollectTask(options: { username: string; displayName?: string; textLimit?: number; imageLimit?: number }): Promise<RemoteResult<ChatCollectTaskResult>>
   /** 收集任务列表（最新在前）。 */
@@ -328,15 +350,70 @@ export interface WechatRemote {
   /** 手动重投一条触发记录的回调。 */
   dispatchTaskCallback(options: { triggerId: number }): Promise<RemoteResult<TaskCallbackDispatchResult>>
   /** 消息列表（最新在前；读失败用 readError 与「确无记录」区分）。 */
-  listMessageListRecords(query?: MessageListQuery): Promise<RemoteResult<MessageListSnapshot>>
+  listMessageListRecords(options?: MessageListQuery): Promise<RemoteResult<MessageListSnapshot>>
   /** 按会话名 + 触发对象配置的下游 Webhook 规则。 */
   listMessageListRules(): Promise<RemoteResult<MessageListRuleSnapshot>>
+  /** 对已保存的记录/规则地址做 GET 健康检查（仅桌面端，结果地址脱敏）。 */
+  probeMessageListWebhook(options: {
+    recordId?: number
+    ruleId?: number
+  }): Promise<RemoteResult<MessageListWebhookProbe>>
+  /** 查询记录的异步发送任务（仅桌面端；job id 由记录提供或显式传入）。 */
+  queryMessageListWebhookJob(options: {
+    recordId: number
+    jobId?: string
+  }): Promise<RemoteResult<MessageListWebhookJob>>
   saveMessageListRule(options: MessageListRuleInput): Promise<RemoteResult<MessageListMutationResult>>
   deleteMessageListRule(options: { id: number }): Promise<RemoteResult<MessageListMutationResult>>
   /** 手动插入一条回复记录；若匹配到规则会立即尝试投递。 */
   insertMessageListRecord(options: MessageListRecordInput): Promise<RemoteResult<MessageListRecordResult>>
+  stageMessageListAttachment(options: MessageListAttachmentStageInput): Promise<RemoteResult<MessageListAttachmentStageResult>>
+  /** 入站 Webhook：写入记录并在匹配到规则时立即尝试投递。 */
+  ingestMessageListWebhook(payload: MessageListWebhookPayload): Promise<RemoteResult<MessageListRecordResult>>
   /** 重发一条记录（优先使用记录内的 Webhook 地址快照）。 */
   resendMessageListRecord(options: { id: number }): Promise<RemoteResult<MessageListRecordResult>>
+  /** 按记录 id 顺序批量重发；后台逐条复用单条投递链路。 */
+  batchResendMessageListRecords(options: {
+    ids: number[]
+  }): Promise<RemoteResult<MessageListBatchResendResult>>
+  /** 批量删除消息记录；投递中的记录由服务端跳过。 */
+  batchDeleteMessageListRecords(options: {
+    ids: number[]
+  }): Promise<RemoteResult<MessageListBatchDeleteResult>>
+  /** 会话级 AI 回复的持久化设置与最近运行状态。 */
+  getChatAiReplyState(options: { chatUsername: string; chatName?: string }): Promise<RemoteResult<ChatAiReplyState>>
+  /** 读取当前会话默认大肥鱼 Webhook 的脱敏端点；完整 token 不下发渲染层。 */
+  getChatAiReplyDefaultWebhook(options: {
+    chatUsername: string
+    chatName?: string
+  }): Promise<RemoteResult<ChatAiReplyDefaultWebhookState>>
+  /** 保存默认 Webhook 并自动绑定缺失规则；仅桌面端可写。 */
+  saveChatAiReplyDefaultWebhook(options: {
+    chatUsername: string
+    chatName?: string
+    webhookUrl: string
+  }): Promise<RemoteResult<ChatAiReplyDefaultWebhookMutationResult>>
+  /** 当前账号已开启 AI 回复的单聊摘要（用于会话列表徽标与筛选）。 */
+  listEnabledChatAiReplyStates(): Promise<RemoteResult<ChatAiReplyEnabledChatsResult>>
+  /** 开启/关闭会话级 AI 回复；revision 用于防旧请求覆盖新值。 */
+  setChatAiReplyEnabled(options: {
+    chatUsername: string
+    chatName?: string
+    enabled: boolean
+    provider?: 'dsh-wechat-bridge' | 'custom-webhook'
+    expectedRevision?: number
+  }): Promise<RemoteResult<ChatAiReplyMutationResult>>
+  /** 保存当前会话的人格与回复风格；写入会推进 revision 并取消旧任务。 */
+  setChatAiReplyPersona(options: {
+    chatUsername: string
+    chatName?: string
+    personaName: string
+    personaPrompt: string
+    splitReply?: boolean
+    expectedRevision?: number
+  }): Promise<RemoteResult<ChatAiReplyMutationResult>>
+  /** 立即扫描一次（桌面端诊断用）。 */
+  scanChatAiReplyNow(): Promise<RemoteResult<ChatAiReplyScanResult>>
   /** 局域网 Webhook 地址与示例（含令牌，仅桌面端可调用）。 */
   getMessageListWebhookInfo(): Promise<RemoteResult<MessageListWebhookInfo>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>
@@ -380,26 +457,6 @@ export interface WechatRemote {
   clearPrivacyAudit(): Promise<RemoteResult<PrivacyAuditClearResult>>
   getOperationLog(options?: OperationLogQuery): Promise<RemoteResult<OperationLogSnapshot>>
   clearOperationLog(): Promise<RemoteResult<OperationLogClearResult>>
-  // ── 微信 ClawBot 集成（多实例，2026-10-13；iLink 通道 2026-10-12 接入，可发可收）──
-  // Super Time 自己就是被绑定的桌面端宿主；**一个微信号 = 一个实例**，可同时管几个。
-  // 实例管理与行为配置（自动回复 / 知识库）只读写下本机 `clawbot.db`，**不出网**；
-  // 会出网的仍是绑定与会话那几条，中继在 `query/clawbot/clawbot-ilink.ts`（取码 / 状态轮询 / 发送），
-  // 媒体按需取数在 `query/clawbot/clawbot-media.ts`；每实例一条接收通道，随网关常驻。
-  listClawbotInstances(): Promise<RemoteResult<ClawbotInstancesSnapshot>>
-  createClawbotInstance(): Promise<RemoteResult<ClawbotInstanceCreated>>
-  deleteClawbotInstance(options: { slot: number }): Promise<RemoteResult<ClawbotInstanceDeleted>>
-  setClawbotInstanceConfig(options: { slot: number, autoReply?: boolean, kbEnabled?: boolean, kbId?: number | null, systemPrompt?: string, splitReply?: boolean }): Promise<RemoteResult<ClawbotInstanceConfig>>
-  renameClawbotInstance(options: { slot: number, label: string }): Promise<RemoteResult<ClawbotBindingSnapshot>>
-  getClawbotBinding(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindingSnapshot>>
-  createClawbotBindQr(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindQr>>
-  getClawbotBindState(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindStateSnapshot>>
-  unbindClawbot(options?: { slot?: number }): Promise<RemoteResult<ClawbotBindingSnapshot>>
-  listClawbotMessages(options?: ClawbotMessageQuery): Promise<RemoteResult<ClawbotMessageSnapshot>>
-  clearClawbotMessages(options?: { slot?: number }): Promise<RemoteResult<{ removed: number, messages: ClawbotMessageSnapshot }>>
-  getClawbotDefaultPrompt(): Promise<RemoteResult<{ prompt: string }>>
-  checkClawbotEnv(options?: { slot?: number }): Promise<RemoteResult<ClawbotEnvSnapshot>>
-  sendClawbotMessage(options: { text: string, slot?: number }): Promise<RemoteResult<ClawbotSendResult>>
-  getClawbotMedia(options: { id: number }): Promise<RemoteResult<ClawbotMediaResult>>
   getGraph(): Promise<RemoteResult<GraphSnapshot>>
   // ── 知识笔记 / 知识图谱 ──
   // `kbId` 是**必填的位置参数、不给默认值**：一个库 = 一批笔记 + 一个链接解析域 + 一张图，
@@ -448,7 +505,7 @@ export interface WechatRemote {
   buildSearchIndex(options?: { force?: boolean; jobId?: string }): Promise<RemoteResult<SearchBuildResult>>
   searchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<RemoteResult<SearchSnapshot>>
   cancelSearch(options?: { jobId?: string }): Promise<RemoteResult<{ ok: boolean }>>
-  searchUnified(options: { query: string; limit?: number }): Promise<RemoteResult<UnifiedSearchSnapshot>>
+  searchUnified(options: { query: string; limit?: number; jobId?: string }): Promise<RemoteResult<UnifiedSearchSnapshot>>
   suggestReplies(options: {
     username?: string
     kbId?: number
@@ -463,7 +520,7 @@ export interface WechatRemote {
     history?: Array<{ role: 'user' | 'assistant'; content: string }>
     /** 流式标识：带上它后端会推送 wechat-ask/delta 增量事件。 */
     streamId?: string
-    /** 入口来源（'ask' / 'session' / 'auto'，后者 = ClawBot 自动回复）与会话显示名：写进问答历史，供列表区分与直显。 */
+    /** 入口来源（如 'ask' / 'session'）与会话显示名：写进问答历史，供列表区分与直显。 */
     source?: string
     usernameName?: string
     /**
@@ -479,7 +536,7 @@ export interface WechatRemote {
      * 不传 = 这一轮不可取消（旧客户端行为，与改动前一致）。
      */
     jobId?: string
-    /** 随问题送模型的图片（2026-10-18，ClawBot 自动回复的「识别图中内容」；手动问答不传）。 */
+    /** 随问题送模型的图片（用于需要识别图中内容的问答入口）。 */
     images?: Array<{ data: string; mediaType: string; name?: string }>
     /** 上一轮返回的结构化线程状态；用于跨请求继承会话、联系人与时间窗。 */
     threadState?: ThreadState
@@ -526,7 +583,7 @@ export interface WechatRemote {
   getGroupInfo(options: { username: string }): Promise<RemoteResult<GroupInfoSnapshot>>
   getGroupInsights(options: { username: string }): Promise<RemoteResult<GroupInsightsSnapshot>>
   searchMembers(options: { q: string; limit?: number; roomUsername?: string }): Promise<RemoteResult<MemberSearchSnapshot>>
-  resolveChatHistory(options: { serverId: string }): Promise<RemoteResult<ChatHistoryResolveResult>>
+  resolveChatHistory(options: { serverId: string; talker?: string }): Promise<RemoteResult<ChatHistoryResolveResult>>
   getPaymentStatus(options: { serverId: string }): Promise<RemoteResult<PaymentStatus>>
   getDailyCounts(options: { username: string; year: number; month: number }): Promise<RemoteResult<CalendarSnapshot>>
   getImageDataUrl(options: { username: string; localId: number; fileOnly?: boolean }): Promise<RemoteResult<ImageDataUrlResult>>
@@ -605,7 +662,7 @@ export interface WechatRemote {
    * 显式动作（「重新检查 / 修复」时才打），不随健康快照自动跑。
    */
   checkDbIntegrity(): Promise<RemoteResult<DbIntegrityResult>>
-  getVoiceInfo(options: { username: string; localId: number }): Promise<RemoteResult<VoiceInfoResult>>
+  getVoiceInfo(options: { username: string; localId: number; svrId?: string }): Promise<RemoteResult<VoiceInfoResult>>
   /**
    * 语音消息的可播放 wav（data URL）—— 就地播放用，见后端 resolveVoiceDataUrl。
    * 普通消息传 username + localId；收藏语音没有会话上下文，改传 svrId。
@@ -630,7 +687,7 @@ export interface WechatRemote {
   }): Promise<RemoteResult<ExportResult>>
   listBackups(): Promise<RemoteResult<BackupSnapshot>>
   previewBackup(options: { name: string }): Promise<RemoteResult<BackupPreviewSnapshot>>
-  createBackup(): Promise<RemoteResult<BackupMutationResult>>
+  createBackup(options?: { jobId?: string }): Promise<RemoteResult<BackupMutationResult>>
   createEncryptedBackup(options: { password: string; jobId?: string }): Promise<RemoteResult<BackupMutationResult>>
   restoreBackup(options: { name: string; password: string }): Promise<RemoteResult<BackupRestoreResult>>
   deleteBackup(options: { name: string }): Promise<RemoteResult<BackupMutationResult>>
@@ -668,6 +725,9 @@ export interface WechatRemote {
     month?: string
     mine?: string
     zip?: boolean
+    includeImages?: boolean
+    includeVideos?: boolean
+    includeLivePhotos?: boolean
     from?: number
     to?: number
     dir?: string
@@ -676,8 +736,44 @@ export interface WechatRemote {
   }): Promise<RemoteResult<ExportResult>>
   /** 导出朋友圈视频到指定路径（后端负责解密与写盘）。 */
   exportSnsVideo(options: {
-    md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
-  }): Promise<RemoteResult<{ ok: boolean; bytes?: number; source?: string; error?: string }>>
+    md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string; jobId?: string
+  }): Promise<RemoteResult<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>>
+  /** 导出朋友圈单张原图到指定路径（缩略图和密文不会被写盘）。 */
+  exportSnsImage(options: {
+    md5: string; timelineId?: string; mediaId?: string; url?: string; token?: string; seed?: string; key?: string; dest: string; jobId?: string
+  }): Promise<RemoteResult<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>>
+  /** 导出单张聊天原图到指定路径（只有缩略图时拒绝写盘）。 */
+  exportChatImage(options: {
+    username: string; localId: number; dest: string; jobId?: string
+  }): Promise<RemoteResult<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: string; error?: string }>>
+  /** 导出聊天视频原文件（只复制本机 msg/video 实体，不转码）。 */
+  exportChatVideo(options: {
+    username: string; localId: number; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 导出聊天文件原文件（后端按会话 + localId 从消息库确认归属）。 */
+  exportChatFile(options: {
+    username: string; localId: number; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 导出文件库图片原图（缩略档与 MD5 不匹配的内容不会落盘）。 */
+  exportFileImage(options: { md5: string; dest: string; jobId?: string }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 导出文件库视频原文件（只复制本机 msg/video 实体，不转码）。 */
+  exportFileVideo(options: { md5: string; dest: string; jobId?: string }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 导出文件库普通附件原文件。 */
+  exportFileAttachment(options: {
+    fileName: string; size?: number; createTime?: number; md5?: string; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 收藏图片只按完整内容 MD5 保存，缺少原图 MD5 时拒绝。 */
+  exportFavoriteImage(options: {
+    fullMd5?: string; md5?: string; thumbMd5?: string; kind?: 'image'; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 收藏视频只按完整内容 MD5 保存，缺少原视频 MD5 时拒绝。 */
+  exportFavoriteVideo(options: {
+    fullMd5?: string; md5?: string; thumbMd5?: string; kind?: 'video'; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
+  /** 收藏文件只从收藏缓存按完整内容 MD5 保存。 */
+  exportFavoriteFile(options: {
+    fullMd5?: string; md5?: string; thumbMd5?: string; kind?: 'file'; dest: string; jobId?: string
+  }): Promise<RemoteResult<MediaOriginalExportResult>>
   clearSessionDraft(options: { username: string }): Promise<RemoteResult<DraftClearResult>>
   clearAllSessionDrafts(): Promise<RemoteResult<DraftsClearResult>>
   listSummaryTasks(): Promise<RemoteResult<SummaryTaskSnapshotRead>>
@@ -749,8 +845,8 @@ export interface WechatRemote {
   cancelWhisperDownload(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
   installWhisperEngine(options?: { jobId?: string }): Promise<RemoteResult<WhisperDownloadResult>>
   transcribeVoiceBatch(options?: { limit?: number }): Promise<RemoteResult<VoiceTranscribeResult>>
-  getVoiceTranscript(options: { username: string; localId: number }): Promise<RemoteResult<VoiceTranscriptResult>>
-  transcribeVoiceMessage(options: { username: string; localId: number }): Promise<RemoteResult<VoiceTranscribeOneResult>>
+  getVoiceTranscript(options: { username: string; localId: number; svrId?: string }): Promise<RemoteResult<VoiceTranscriptResult>>
+  transcribeVoiceMessage(options: { username: string; localId: number; svrId?: string }): Promise<RemoteResult<VoiceTranscribeOneResult>>
   deleteFavoriteItems(options: { ids: number[] }): Promise<RemoteResult<DeleteFavoriteResult>>
   getAnnualReport(options: { year: number }): Promise<RemoteResult<AnnualReport>>
   getAnnualReview(options: { year: number }): Promise<RemoteResult<AnnualReviewShape>>
@@ -761,68 +857,6 @@ export interface RemoteResult<T> {
   ok: boolean
   value?: T
   error?: { code: string; message: string }
-}
-
-let _remote: (() => WechatRemote) | null = null
-
-/**
- * Rewrite a session-authentication failure (HTTP 401 from the API channel,
- * which is the browser cookie gate) into an actionable message. The raw
- * transport text ("transport failure for ...: HTTP 401") leaves the user with
- * no idea that reopening the app re-authenticates.
- * @param e - the thrown error from a remote call.
- * @returns an Error with a user-facing message when the failure is HTTP 401.
- */
-export function actionableRemoteError(e: unknown): Error {
-  const msg = e instanceof Error ? e.message : String(e)
-  if (/HTTP 401\b/.test(msg)) {
-    return new Error('本地会话认证已失效（HTTP 401）：请关闭并重新打开本页面；若仍失败，请用「dsh web」启动时打印的带 token 的地址重新打开应用以完成重新认证')
-  }
-  return e instanceof Error ? e : new Error(msg)
-}
-
-/**
- * Install the Remote client (called from ui-pages apply).
- * @param remote - The Remote client to install.
- */
-export function setWechatRemote(remote: WechatRemote | (() => WechatRemote)): void {
-  const base = typeof remote === 'function' ? remote : () => remote
-  // Wrap every method so transport failures (HTTP 401 session expiry) surface an
-  // actionable message across all panels, not only explicit catch sites.
-  _remote = () => new Proxy(base(), {
-    get(target, prop, receiver) {
-      const v = Reflect.get(target, prop, receiver)
-      if (typeof v !== 'function') return v
-      return (...args: unknown[]) => {
-        try {
-          const r = (v as (...a: unknown[]) => unknown).apply(target, args)
-          return r instanceof Promise
-            ? r.catch((e: unknown) => { throw actionableRemoteError(e) })
-            : r
-        } catch (e) {
-          throw actionableRemoteError(e)
-        }
-      }
-    },
-  }) as WechatRemote
-}
-
-export function remote(): WechatRemote {
-  if (_remote === null) throw new Error('wechat-data remote not installed')
-  return _remote()
-}
-
-let _pickDirectory: (() => Promise<string | null>) | null = null
-
-/** Install the host directory chooser (ui-pages apply injects ctx.workspaces). */
-export function setDirectoryPicker(pick: () => Promise<string | null>): void {
-  _pickDirectory = pick
-}
-
-/** 打开原生目录选择框；取消返回 null。 */
-export async function pickDirectory(): Promise<string | null> {
-  if (_pickDirectory === null) return null
-  return _pickDirectory()
 }
 
 /**
@@ -861,19 +895,6 @@ export function runtimeCapabilities(): RuntimeCapabilities {
   return _caps ?? { isDesktop: false, isBrowser: true, desktopEquivalent: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false }
 }
 
-/** 面板截图导出的结果。 */
-export interface CaptureResult {
-  ok: boolean
-  /** 用户在保存对话框里取消了。 */
-  canceled?: boolean
-  /** 落盘路径（成功时）。 */
-  path?: string
-  bytes?: number
-  width?: number
-  height?: number
-  message?: string
-}
-
 /**
  * 把界面上的一个矩形区域导出成 PNG（主进程 capturePage + 保存对话框）。
  * 坐标用 `element.getBoundingClientRect()` 直接传即可（同为视口 CSS 像素）。
@@ -889,14 +910,12 @@ export async function apiCapturePanel(rect: {
   return r ?? { ok: false, message: '截图导出无返回' }
 }
 
-export function unwrap<T>(r: RemoteResult<T>): T {
-  if (!r.ok) {
-    // 错误码必须跟着一起抛：调用方要靠它区分「用户主动停止」与「真失败」——
-    // 两者对用户是两回事（ask 的取消、导出的取消都是这个形态）。只带 message 的话，
-    // 面板只能把一次正常的取消显示成红色错误。
-    const err = new Error(r.error?.message ?? r.error?.code ?? 'remote call failed') as Error & { code?: string }
-    if (typeof r.error?.code === 'string') err.code = r.error.code
-    throw err
-  }
-  return r.value as T
-}
+export {
+  actionableRemoteError,
+  setWechatRemote,
+  remote,
+  setDirectoryPicker,
+  pickDirectory,
+  unwrap,
+} from './api-runtime.ts'
+export type { CaptureResult } from './api-runtime.ts'

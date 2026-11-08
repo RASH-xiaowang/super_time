@@ -4,7 +4,7 @@
   * 2026-09-24 从 `search-cursor.spec.ts` 拆出来：N36 ① 的判据是**单个文件**里那段同步不让出的时间
  * （CI 那条假红的线是 vitest 硬编码的 60 秒 RPC 超时），而这个文件里两条重夹具用例占了它自身耗时的 92%
  * —— 一份文件装着四个互不相干的命题，榜首就永远是它。拆开不减少总工作量，减的是**单文件的累计**，
- * 正是 `vitest.config.ts` 里记着的那条机制。造数据的夹具两边共用（`search-spec-fixtures.ts`），
+ * 正是 `vitest.config.mts` 里记着的那条机制。造数据的夹具两边共用（`search-spec-fixtures.ts`），
  * 不复制一份 —— 复制会让「同一句 FTS 成本没被低估」有两种含义。
  * 
  * 本文件管：① 兜底搜索 `iterate` 与 `all` 的命中集合一致 + RSS；② 让出预算覆盖「被跳过的行」与「批量写入」。
@@ -103,4 +103,3 @@ describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
     expect(maxGapMs, `单块最长阻塞 ${maxGapMs}ms（预算 ${gapBudgetMs}ms）`).toBeLessThan(gapBudgetMs)
   })
 })
-

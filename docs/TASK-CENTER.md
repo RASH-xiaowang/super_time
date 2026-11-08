@@ -44,7 +44,7 @@ Webhook，其余为注册表里的 RPA 厂商，见 §3.5/§6）：内置 Webhoo
 |---|---|---|
 | 任务 / 任务信息 | 一条监听配置：会话、触发对象、关键词、@我限制、图片张数、**触发方式（method id）与对应配置 / 凭据**、状态 | `TaskInfo` |
 | 会话 | 被监听的单聊对象或群；存 `chatUsername` 和创建时的显示名 `chatName` | `TaskInfo.chatUsername` |
-| 触发对象 | 单聊里是对方；群聊里是所选的那位群成员 | `TaskInfo.targetUsername` |
+| 触发对象 | 单聊里是对方；群聊里是所选群成员之一。新建任务可多选，但每个成员落一条独立任务 | `TaskInfo.targetUsername` |
 | 触发记录 | 一条新消息命中关键词后留下的事实快照，独立于任务配置 | `TaskTriggerRecord` |
 | 仅匹配@我的文本 | 群聊可选条件：只处理结构化 `atuserlist` 包含登录账号的消息；`notify@all` 不算 | `TaskInfo.mentionMeOnly` |
 | 水位 | 每个任务已扫描到的消息 `sort_seq`，只存在于 `task_info.last_scan_seq`，不返回前端 | `query/task-center.ts` |
@@ -72,8 +72,11 @@ Webhook，其余为注册表里的 RPA 厂商，见 §3.5/§6）：内置 Webhoo
 2. 群信息抽屉底部「新建任务」；
 3. 单聊聊天信息抽屉底部「新建任务」。
 
-弹窗里选择会话、关键词、照片数量（0–9）和可选任务名；群聊再选一个目标成员，并可勾选
-「仅匹配@我的文本」。创建结果固定为**待完善**，这里不填投递配置（Webhook 地址或某个 RPA
+弹窗里选择会话、关键词、照片数量（0–9）和可选任务名；群聊可多选目标成员，并可勾选
+「仅匹配@我的文本」。多选提交时按成员逐条调用保存接口，每人生成独立任务：关键词 / 照片 / @
+条件共用，但 `targetUsername`、任务名（手填名自动追加成员名）、触发记录与启停状态各自独立；
+部分失败时逐项显示成功与失败结果，不会把已成功任务回滚或隐藏。创建结果固定为**待完善**，
+这里不填投递配置（Webhook 地址或某个 RPA
 厂商的账号/凭据/参数都由任务信息页的**编辑抽屉**负责），因此
 “新建完还要去任务信息里启用”是设计路径，不是漏了一步。
 
@@ -213,17 +216,23 @@ flowchart TD
     H -- 是 --> I[INSERT OR IGNORE 一条触发记录<br/>图片只存引用]
     I --> I2[同库写入消息列表问候<br/>sourceRef=task-trigger:id]
     I2 --> J[立即广播 task-center/updated]
-    J --> K[后台单飞投递 pending 记录]
-    K --> L{任务仍 ready<br/>且当前触发方式配置齐全?}
+    J --> K[后台批投 / 人工单条投递]
+    K --> K2[BEGIN IMMEDIATE claim<br/>owner + fence + lease]
+    K2 -- 已被其它 worker 持有 --> K3[记录失败并写可读原因<br/>不重复出网]
+    K2 -- 抢到租约 --> L{任务仍 ready<br/>且当前触发方式配置齐全?}
     L -- 否 --> M[skipped，等待人工处理]
     L -- 是 --> N[隐私闸处理触发文本]
-    N --> O{触发方式?}
+    N --> N2[出网前写 sent_unconfirmed<br/>启动 owner/fence 心跳]
+    N2 --> O{触发方式?}
     O -- 内置 Webhook --> P[按需解码图片<br/>POST 整条记录 JSON]
     O -- RPA 厂商 --> Q[按描述符渲染请求 + 鉴权<br/>只发映射/附加参数<br/>图片类来源才签短时直链]
     P --> R{HTTP / 业务码成功?}
     Q --> R
-    R -- 是 --> S[sent<br/>external_task_id 落库]
+    R -- 是 --> S[sent<br/>external_task_id 落库<br/>按 owner/fence 释放租约]
     R -- 否 --> T[failed<br/>人工重新投递]
+    S --> U{终态写成功?}
+    T --> U
+    U -- 否 / 进程中断 --> V[sent_unconfirmed<br/>后台不自动重投<br/>人工核对后重投]
 ```
 
 投递分支的判定顺序：先看任务是否仍「已完善」且**当前触发方式**的必填配置/凭据齐全
@@ -233,6 +242,11 @@ flowchart TD
 只有配置 `imagesJson` / `firstImageUrl` 时才解码图片并签短时直链，`imageCount` 只数引用、
 不解码。所有方式都由同一个隐私闸处理触发文本；失败都只记状态、可人工重新投递。
 `sent` 只代表厂商已受理（v1 不接收厂商回调、不轮询完成状态）。
+
+投递开始前会先在任务库内用 `BEGIN IMMEDIATE` 原子抢占记录的 owner + fence 租约。
+请求期间每 20 秒续租一次（默认租约 120 秒）；续租必须同时匹配 owner 和 fence，否则
+立即中止在途 `fetch`。首次真正出网前会把状态写成 `sent_unconfirmed`，因此进程在请求
+前后崩溃、或远端成功但本地终态写入失败时，都不会留下可被后台自动重投的 `pending`。
 
 上图的 `I2` 是任务域与「消息列表」的唯一写入接缝：触发记录先落库，随后通过
 `insertTaskTriggerGreeting` 写一条 `source: 'first_trigger'` 的问候。问候的 Webhook
@@ -330,26 +344,38 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> pending: 命中且任务配置齐全
     [*] --> skipped: 命中但任务未配置当前触发方式的必填项
-    pending --> sent: 投递得到 2xx
-    pending --> failed: 网络/超时/非 2xx
+    pending --> sent_unconfirmed: claim 后、首次出网前写前标记
+    pending --> failed: 出网前准备/标记失败
+    sent_unconfirmed --> sent: 同一 owner 收到成功终态
+    sent_unconfirmed --> failed: 同一 owner 收到失败终态
+    sent_unconfirmed --> sent: 人工核对后重投成功
+    sent_unconfirmed --> failed: 人工核对后重投失败
+    sent_unconfirmed --> sent_unconfirmed: 续租失败 / 终态写失败 / 崩溃
     failed --> sent: 人工重新投递成功
     failed --> failed: 人工重新投递失败
     note right of pending
         任务待完善或删除后，后台查询会跳过；
         记录本身仍保持 pending，不自动改状态。
     end note
+    note right of sent_unconfirmed
+        后台批投只认 pending；
+        sent_unconfirmed 只能人工核对后重投。
+    end note
 ```
 
-四种状态的中文口径：
+五种状态的中文口径：
 
 | 状态 | 界面文案 | 含义 |
 |---|---|---|
 | `pending` | 待投递 | 生成时配置齐全，等待后台或人工投递 |
 | `sent` | 已投递 | 已收到 2xx |
 | `failed` | 投递失败 | 请求已尝试，但失败原因已落库 |
+| `sent_unconfirmed` | 已发送·未确认 | 已写入“准备出网”标记，但本地没有可确认的终态；可能已受理、正在发送或进程中断 |
 | `skipped` | 未配置 | 记录生成时任务没有当前触发方式的必填配置/凭据（或该厂商未知/已下线） |
 
-`skipped` 不会因为后来补上配置而自动转成 `pending`；后台批量投递只捞 `pending`。
+`skipped` 不会因为后来补上配置而自动转成 `pending`；后台批量投递只捞
+`pending`。`sent_unconfirmed` 不会被后台自动重投，必须由用户先到厂商控制台核对，
+再通过记录弹窗人工重投。活跃请求期间的短暂 `sent_unconfirmed` 是刻意保守的写前标记。
 
 ## 6. 投递协议（多厂商）
 
@@ -785,10 +811,15 @@ payload 变成第二份数据源。
 
 ### 10.1 高优先级
 
-1. **投递没有幂等协议。** 请求没有幂等键；后台批量投递与人工「重新投递」也没有数据库
-   抢占/租约。慢请求期间若同一记录被另一条路径再次选中，对端可能收到重复请求。
-   各厂商的幂等能力差异见 §6.4：影刀 / 阿里云有厂商幂等键可注入，实在 / 来也 / UiPath
-   没有（描述符 `retry.maxAttempts=1`，但**人工重新投递仍可能重复触发**）。
+1. **厂商级幂等仍不完整，但本地重复派发已收口。** `task_triggers` 现以
+   `callback_lease_owner / callback_lease_until / callback_lease_fence` 做服务端
+   per-record claim：后台批投、人工「重新投递」和多进程同时命中同一记录时，只有一个
+   owner 能进入 HTTP；完成回写必须匹配 owner + fence，租约过期被接管后旧 owner 的晚到
+   结果不会覆盖新状态。默认租约 120 秒、心跳 20 秒，续租失败会立即中止在途请求；进程
+   崩溃时租约过期后可接管。首次出网前先写 `sent_unconfirmed`，因此请求前后崩溃或终态
+   写失败都不会被后台自动重投。请求会带本地 `taskId:recordId` 的
+   `invocation.idempotencyKey`，但只有支持该键的厂商能做远端幂等；实在 / 来也 / UiPath
+   等厂商仍无法识别“网络已到达但对端未返回”的重发。失败后仍只允许人工重投，不自动重试。
 2. **内置 Webhook 地址没有 SSRF/私网防护。** 只校验 `http/https`、主机名非空和长度 ≤2048；
    不拒绝回环、私网、链路本地地址，也没有签名或鉴权。能编辑任务的人可以诱导本机后端
    向任意 HTTP(S) 目标发请求，接收方也无法验证请求确实来自本应用。RPA 厂商的请求主机受
@@ -869,7 +900,7 @@ payload 变成第二份数据源。
 ### 10.5 文档漂移
 
 21. [`PRIVACY.md`](PRIVACY.md) 与生成的 [`API.md`](API.md) 已按实际按钮「重新投递」和
-    精确重试白名单修正；[`UI-WECHAT-REDESIGN-INVENTORY.md`](UI-WECHAT-REDESIGN-INVENTORY.md) 的 DL-09 行
+    精确重试白名单修正；[`UI-WECHAT-REDESIGN-INVENTORY.md`](archive/UI-WECHAT-REDESIGN-INVENTORY.md) 的 DL-09 行
     也标明创建弹窗没有 Webhook 地址字段。
 
 ## 11. 修改时的决策清单
@@ -955,6 +986,12 @@ payload 变成第二份数据源。
 - [ ] 列表返回值与 `JSON.stringify` 里不含任何厂商凭据原文（`triggerSecretSet` 只回布尔）。
 - [ ] `revealTaskTriggerSecret`：返回 `{ ok, triggerMethod, secrets }`（没有凭据的字段不出现、任务不存在/未配置给可读错误）；**仅桌面端本机可调**——`http-remote-policy.js` 的 `LOCAL_ONLY` 命中远程/手机通道并拒绝；**不写操作日志 / 不做操作留痕**；列表与触发记录仍只回 `triggerSecretSet`。
 - [ ] `listRpaVendors` 返回目录（`items` + `registryVersion`），不含凭据/钩子；未知 id 不崩。
+- [ ] 老 `task_triggers` 自动补 `callback_lease_owner` / `callback_lease_until` /
+      `callback_lease_fence` 三列，默认值分别为空串 / 0 / 0；补列后旧 pending 可正常投递。
+- [ ] 同一记录被后台批投与人工重投同时命中时最多发出一个 HTTP；重复调用已 `sent` 的记录
+      会被拒绝且不重发；`failed` 记录可人工重投一次。
+- [ ] 租约过期允许新 owner 接管；旧 owner 若晚到，只能得到“租约已失效”，不能覆盖新
+      `sent` / `failed` 状态。
 - [ ] 投递成功写 `sent`（厂商返回 id 时落 `external_task_id`），失败写 `failed` + 错误；命中时配置缺失 ⇒ 记录 `skipped`，后台批量投递只捞 `pending`。
 - [ ] 投递时任务已退回待完善 / 已删除 ⇒ 返回 `skipped`，不改变记录已有状态。
 - [ ] Webhook 投递：假 fetch 收到的地址 / body 保留既有 `TaskCallbackPayload` 字段，并新增顶层 `params`（附加参数，默认 `{}`；含图片），记录状态 `sent`。
@@ -973,6 +1010,7 @@ payload 变成第二份数据源。
 ```powershell
 npx vitest run src/backend/wechat-data/tests/task-center.spec.ts `
   src/backend/wechat-data/tests/task-center-scheduler.spec.ts `
+  src/backend/wechat-data/tests/task-center-dispatch-lease.spec.ts `
   src/backend/wechat-data/tests/task-center-bazhuayu.spec.ts `
   src/backend/wechat-data/tests/task-center-rpa.spec.ts `
   src/backend/wechat-data/tests/rpa-vendors.contract.spec.ts `
@@ -1020,6 +1058,7 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 | 厂商契约测试 | [`../src/backend/wechat-data/tests/rpa-vendors.contract.spec.ts`](../src/backend/wechat-data/tests/rpa-vendors.contract.spec.ts) | 描述符完整性（id 唯一 / 必填字段有示例 / secret 声明 / hosts 非空 / 风险非空） |
 | 厂商派发测试 | [`../src/backend/wechat-data/tests/rpa-vendors.dispatch.spec.ts`](../src/backend/wechat-data/tests/rpa-vendors.dispatch.spec.ts) | 逐家 mock：URL/鉴权/映射/凭据不进 body/重试策略 |
 | 调度测试 | [`../src/backend/wechat-data/tests/task-center-scheduler.spec.ts`](../src/backend/wechat-data/tests/task-center-scheduler.spec.ts) | 单飞、合并、事件与扫描/投递解耦 |
+| 租约并发测试 | [`../src/backend/wechat-data/tests/task-center-dispatch-lease.spec.ts`](../src/backend/wechat-data/tests/task-center-dispatch-lease.spec.ts) | 服务端 claim、并发仅一次 HTTP、过期接管、晚到 fencing、重复调用、失败重投与旧库补列 |
 | 前端测试 | [`../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-center.wiring.spec.ts`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/task-center.wiring.spec.ts) | 导航、懒加载、接线、弹窗无障碍与 SSR |
 
 ## 14. 现有测试覆盖与空档
@@ -1050,7 +1089,7 @@ npx vitest run src/backend/tests/docs-index.spec.ts
 
 仍未覆盖的关键空档：
 
-- 没有并发投递的行为判据（同一记录同时被后台和人工投递）。
+- 并发投递已有同库竞态、过期接管和晚到 fencing 行为判据；尚未做真实多进程断电/混沌注入。
 - 没有真实厂商环境的联调判据（阿里云/来也/实在参数待联调；所有派发测试都是 fetch mock）。
 - 没有回调接收端 / 完成状态轮询的判据（v1 未实现，`sent` 只代表已受理）。
 - 没有凭据轮换 / 清空的界面路径判据（当前表单只能覆盖保存）。

@@ -65,12 +65,61 @@ export async function sendRequest(
   const maxAttempts = Math.min(MAX_ATTEMPTS_LIMIT, Math.max(1, Math.trunc(retry.maxAttempts)))
   const method: string = req.method
   const init: RequestInit = { method, headers }
+  if (deps.signal !== undefined) init.signal = deps.signal
   // 换 token 可能是 GET：undici 的 fetch 对 GET/HEAD 带 body（哪怕空串）会直接抛
   // `TypeError: Request with GET/HEAD method cannot have body`，所以只在有 body 的非 GET/HEAD 上带。
   if (method !== 'GET' && method !== 'HEAD' && hasBody) init.body = body as BodyInit
+  await deps.onOutboundAttempt?.()
   const res = await fetchWithRetry(doFetch, req.url, init, { maxAttempts, timeoutMs: SEND_TIMEOUT_MS })
+  if (req.responseType === 'bytes') {
+    const bytes = await readBinaryResponse(
+      res,
+      Math.max(1, Math.trunc(req.maxResponseBytes ?? 1_048_576)),
+    )
+    return { status: res.status, bodyText: '', bodyBytes: bytes }
+  }
   const bodyText = await res.text()
   return { status: res.status, bodyText }
+}
+
+async function readBinaryResponse(res: Response, maxBytes: number): Promise<Uint8Array> {
+  const header = res.headers.get('content-length')
+  const declared = header === null ? undefined : Number(header)
+  if (declared !== undefined && Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error('下游二进制响应超过大小上限')
+  }
+  let bytes: Uint8Array
+  if (res.body === null) {
+    bytes = new Uint8Array()
+  } else {
+    const reader = res.body.getReader()
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      for (;;) {
+        const part = await reader.read()
+        if (part.done) break
+        if (part.value.byteLength > maxBytes - size) {
+          await reader.cancel().catch(() => undefined)
+          throw new Error('下游二进制响应超过大小上限')
+        }
+        chunks.push(part.value)
+        size += part.value.byteLength
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+  }
+  if (declared !== undefined && Number.isFinite(declared) && bytes.byteLength !== declared) {
+    throw new Error('下游二进制响应不完整')
+  }
+  return bytes
 }
 
 /** header 是否已存在（大小写不敏感）。 */

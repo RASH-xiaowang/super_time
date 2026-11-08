@@ -21,7 +21,7 @@ export type LlmBridgeConfigOverrides = Partial<LlmBridgeConfig> & { apiUrl?: str
 export type LlmBridgeContentPart = {
   text?: string
   type?: string
-  /** 图片块：canonical base64（ClawBot 自动回复从本机媒体缓存读出）。 */
+  /** 图片块：canonical base64（会话 AI 回复从本机媒体缓存读出）。 */
   data?: string
   /** 图片块：MIME（`image/jpeg` 等）。 */
   mediaType?: string
@@ -42,6 +42,8 @@ export interface LlmBridgeGenerateOptions extends Partial<GenerateOptions> {
   messages?: ReadonlyArray<LlmBridgeMessage>
   model?: string
   maxTokens?: number
+  /** OpenAI / DeepSeek 兼容的思考开关；不支持的厂商会由桥接层自动回退。 */
+  thinking?: { type?: 'enabled' | 'disabled' }
 }
 
 export interface LlmBridge {

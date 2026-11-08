@@ -20,6 +20,9 @@
  *   ③ **`standardFontDataUrl` 不传只会 warning，不影响抽文本**：本用途只取文字、
  *      不渲染字形，标准字体根本用不到。但那条 warning 每次开文档都刷一行，
  *      所以用 `verbosity: 0`（只留 error）压掉 —— 不是把错误一起关掉。
+ *      打包时也据此把 `pdfjs-dist/standard_fonts/**` 整体排除：该目录里的
+ *      LiberationSans 是 GPLv2 + 字体例外，不能当作 PDF.js 的 Apache-2.0 资产
+ *      随闭源商业包分发。排除后文本抽取路径不变（真机已回归）。
  *   ④ **`cMapUrl` 必须传，否则中文 PDF 一个字都抽不出来**（阶段 D 收尾实测，见下）：
  *      汉字 PDF 常用 CID 字体（`/Encoding /UniGB-UCS2-H`、CIDSystemInfo 的 `/Ordering (GB1)`），
  *      而它**不带 ToUnicode** —— 此时「字节 → 汉字」的唯一依据就是 pdfjs 自带的

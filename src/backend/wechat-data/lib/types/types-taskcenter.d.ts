@@ -35,8 +35,14 @@ export type TaskInfoChatType = 'private' | 'group';
  * 只在投递时 skipped 并显示可读原因。
  */
 export type TaskTriggerMethod = string;
-/** 一条触发记录的回调投递状态。 */
-export type TaskTriggerCallbackStatus = 'pending' | 'sent' | 'failed' | 'skipped';
+/**
+ * 一条触发记录的回调投递状态。
+ *
+ * `sent_unconfirmed` 表示已经持久化“准备出网”标记，但本地尚未得到可落库的终态：
+ * 可能正在投递、进程在投递中崩溃，或远端已受理但终态写入失败。后台批投不会自动
+ * 重试该状态，只允许用户核对后人工重投。
+ */
+export type TaskTriggerCallbackStatus = 'pending' | 'sent' | 'failed' | 'skipped' | 'sent_unconfirmed';
 /** 一条任务配置。 */
 export interface TaskInfo {
     id: number;

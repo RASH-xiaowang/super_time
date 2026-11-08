@@ -94,13 +94,35 @@ export function startSyncWatch(
   let watcher: SyncWatcherLike | null = null
   let watchedDir = ''
   let debounce: ReturnType<typeof setTimeout> | null = null
+  let trailing: ReturnType<typeof setTimeout> | null = null
   let lastTriggerAt = -Infinity
   let errorNoted = false
 
   const fire = (): void => {
     debounce = null
     const at = now()
-    if (at - lastTriggerAt < WATCH_MIN_GAP_MS) return
+    const wait = WATCH_MIN_GAP_MS - (at - lastTriggerAt)
+    if (wait > 0) {
+      // 限频窗口内的写入不能直接丢：保留一个尾随触发，窗口结束后补一拍。
+      // 多个事件共用同一个尾随定时器；真正执行时取消尚未落地的 debounce，
+      // 因为那一拍扫描的是整个 raw 树，已经覆盖这些事件。
+      if (trailing === null) {
+        trailing = setTimeout(() => {
+          trailing = null
+          if (debounce !== null) {
+            clearTimeout(debounce)
+            debounce = null
+          }
+          lastTriggerAt = now()
+          opts.onTrigger()
+        }, wait)
+      }
+      return
+    }
+    if (trailing !== null) {
+      clearTimeout(trailing)
+      trailing = null
+    }
     lastTriggerAt = at
     opts.onTrigger()
   }
@@ -156,6 +178,8 @@ export function startSyncWatch(
     stop() {
       if (debounce !== null) clearTimeout(debounce)
       debounce = null
+      if (trailing !== null) clearTimeout(trailing)
+      trailing = null
       detach()
     },
   }

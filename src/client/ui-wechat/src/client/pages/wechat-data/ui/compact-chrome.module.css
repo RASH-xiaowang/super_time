@@ -50,6 +50,49 @@ div[class*='_panelHeader_'] {
   min-height: 0;
 }
 
+/* 手机档把「标题 / 说明」与动作收进同一行。
+ *
+ * 目的不是单纯压高度：手机上页头若占两行，第一屏会被页头、工具栏、筛选条连续
+ * 吃掉三到四段纵向空间，真正的内容只剩半屏。标题与低优先级动作并排后，长说明
+ * 自动省略，动作组在自身范围内横向滚动 —— 不隐藏任何按钮，也不缩小主操作。 */
+@media (max-width: 560px) {
+  div[class*='_panelHeader_'] {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  div[class*='_panelTitleWrap_'] {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  div[class*='_panelActions_'] {
+    flex: 0 1 auto;
+    max-width: 58%;
+    margin-left: auto;
+    flex-wrap: nowrap;
+    /* 裸 flex-end 在内容超过 max-width 时会把首个按钮推到负坐标，横向滚动也
+     * 无法回到左侧（Graph 的搜索框实测 x=-120）。先给不支持 safe 的内核一个
+     * 可回退的起点对齐；支持 safe 时仍保持「放得下靠右、放不下从起点滚动」。 */
+    justify-content: flex-start;
+    justify-content: safe flex-end;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  div[class*='_panelActions_']::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  div[class*='_panelActions_'] > * {
+    flex: 0 0 auto;
+  }
+}
+
 /* 标题与说明并排：原来是 column（标题一行、说明一行），页头因此 51px 起。 */
 div[class*='_panelTitleWrap_'] {
   flex-direction: row;
@@ -79,6 +122,14 @@ div[class*='_panelActions_'] {
   flex-wrap: wrap;
 }
 
+/* Keep the mobile single-line action rail above: this base rule intentionally
+ * follows the media block, so the phone override must be repeated here. */
+@media (max-width: 560px) {
+  div[class*='_panelActions_'] {
+    flex-wrap: nowrap;
+  }
+}
+
 /* ============================================================
  * 2. 工具栏（Toolbar）—— 只收行内间距，不改控件高度
  * ============================================================ */
@@ -89,6 +140,30 @@ div[class*='_toolbar_'] {
 div[class*='_toolbarLeft_'],
 div[class*='_toolbarRight_'] {
   gap: 6px;
+}
+
+/* 手机档的复合筛选「一排横向滚动」，不再折成多行。
+ * 日期、排序、导出等控件都保留；只是把纵向堆叠改成横向可达，避免筛选条
+ * 从 44px 膨胀到 140px 以上。 */
+@media (max-width: 560px) {
+  div[class*='_toolbar_'] {
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  div[class*='_toolbar_']::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  div[class*='_toolbarLeft_'],
+  div[class*='_toolbarRight_'] {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
 }
 
 /* ============================================================
@@ -125,77 +200,6 @@ div[class*='_panelEmbed_'] {
 /* --nm-panel-pad 是 `16px 0`：只收上下，左右保持 0（面板内容整宽）。 */
 div[class*='_panelShell_'] {
   padding: 12px 0;
-}
-
-/* ============================================================
- * 4. 统计卡（StatCard）→ 单行内联 KPI
- *
- * 结构：icon / value / label / (hint)。原来 column + 16px padding + 2xl 数值
- * ⇒ 每卡 110px；审计里 6 张卡墙占 272–316px、1280 折成两排。
- * 现在：icon 20px 占左侧整两行；数值 15px / 标签 10.5px 叠在中间列；hint 10px 靠右
- * ——整条 44px 左右，6 张卡在 1280 内容宽（~1070px）下一排排下。
- *
- * 用 `:has(> [class*='_statIcon_'])` 精确命中 kit 的 StatCard：Oplog 等面板也有
- * 自己的 `_statCard_<hash>` 局部类（结构不同），不在全局层强行套网格，交给面板层。
- * ============================================================ */
-div[class*='_statGrid_'] {
-  gap: 6px;
-}
-
-div[class*='_statCard_']:has(> div[class*='_statIcon_']),
-button[class*='_statCard_']:has(> span[class*='_statIcon_']) {
-  /* 120 而不是 140：设置弹窗里的「数据健康中心」内容宽约 840px，6 张 140 的卡
-     （6×140+5×6=870）会折成两排 97.8px；120 时 750px 一排排下，statH 45.9。 */
-  flex: 1 1 120px;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 20px minmax(0, auto) minmax(0, 1fr);
-  grid-template-areas:
-    'icon value hint'
-    'icon label hint';
-  grid-template-rows: auto auto;
-  align-items: center;
-  column-gap: 8px;
-  row-gap: 0;
-  padding: 6px 10px;
-}
-
-div[class*='_statIcon_'] {
-  grid-area: icon;
-  width: 20px;
-  height: 20px;
-  font-size: 12px;
-}
-
-div[class*='_statValue_'] {
-  grid-area: value;
-  font-size: 15px;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-div[class*='_statLabel_'] {
-  grid-area: label;
-  font-size: 10.5px;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-div[class*='_statHint_'] {
-  grid-area: hint;
-  font-size: 10px;
-  line-height: 1.25;
-  color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
 }
 
 /* ============================================================

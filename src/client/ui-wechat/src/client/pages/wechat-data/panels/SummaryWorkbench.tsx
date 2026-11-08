@@ -45,6 +45,7 @@ import {
   useSummaryToasts, type Stats,
 } from './SummaryParts.tsx'
 import css from './summary-workbench.module.css'
+import { useWechatDataUpdated } from './hooks.tsx'
 
 /** 历史筛选：全部 / 每日 / 周期。 */
 type HistoryFilter = 'all' | 'daily' | 'period'
@@ -157,6 +158,10 @@ export function SummaryWorkbench({ onOpenSettings }: { onOpenSettings?: (section
   }, [])
 
   useEffect(() => { void loadRecords(); void loadTasks() }, [loadRecords, loadTasks])
+  useWechatDataUpdated(() => {
+    void loadRecords()
+    void loadTasks()
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -238,14 +243,6 @@ export function SummaryWorkbench({ onOpenSettings }: { onOpenSettings?: (section
     setFormat(key)
     writeRenderCache(FORMAT_CACHE_KEY, { key })
   }, [])
-
-  /** 历史抽屉：Esc 关闭。 */
-  useEffect(() => {
-    if (!historyOpen) return
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setHistoryOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey) }
-  }, [historyOpen])
 
   return (
     <div className={css.panel}>

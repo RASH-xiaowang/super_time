@@ -34,7 +34,9 @@ const ROOT = findRoot(HERE)
 
 const panel = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
 const css = readFileSync(join(HERE, 'graph.module.css'), 'utf8')
-const model = readFileSync(join(HERE, 'graph-model.ts'), 'utf8')
+const model = ['graph-model.ts', 'graph-settings.ts']
+  .map((file) => readFileSync(join(HERE, file), 'utf8'))
+  .join('\n')
 const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const backendGraph = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'graph.ts'), 'utf8')
 
@@ -171,14 +173,16 @@ describe('模型实体层：图例 / 统计 / 详情 / 头像挡位', () => {
   const panelCode = code(panelAll)
   const modelCode = code(model)
 
-  it('知识侧五类节点收进一份名单，两处判定共用（加一类不会只改一处）', () => {
+  it('头像挡位复用知识名单；「查看聊天」只允许真实好友/群节点', () => {
     const m = /const KNOWLEDGE_KINDS = new Set<GNode\['kind']>\(\[([^\]]*)\]\)/.exec(panelCode)
     expect(m, 'KNOWLEDGE_KINDS 的定义形状变了').not.toBeNull()
     const kinds = (m?.[1] ?? '').split(',').map(s => s.trim().replace(/^'|'$/g, ''))
     expect([...kinds].sort()).toEqual(['entity', 'file', 'note', 'section', 'stub'])
-    // 头像挡位与「查看聊天」按钮都走它
+    // 头像挡位仍走知识名单；聊天入口反过来只认真实会话节点，
+    // 否则「我」节点的 id=self 也会被当成 username 打开一个不存在的会话。
     expect(panelCode).toContain('KNOWLEDGE_KINDS.has(selected.kind)')
-    expect(panelCode).toContain('!KNOWLEDGE_KINDS.has(selected.kind)')
+    expect(panelCode).toContain('const CHAT_KINDS = new Set([\'person\', \'group\'])')
+    expect(panelCode).toContain('CHAT_KINDS.has(selected.kind)')
     // 不许再残留手写的 kind 串：那正是「加一类漏一处」的来源
     const inline = (panelCode.match(/selected\.kind !== '/g) ?? []).length
     expect(inline, `还有 ${inline} 处手写的 selected.kind !== 判定没收进名单`).toBe(0)

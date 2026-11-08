@@ -114,10 +114,13 @@ def regenerate(do_png: bool):
 def collect_metrics() -> dict:
     m = {}
 
-    # Remote 方法：以自动生成的 docs/API.md 为准（它由源码重建，CI 会校验一致性）
-    txt = read(ROOT / "docs" / "API.md")
-    hit = re.search(r"当前共\s*\*\*(\d+)\*\*\s*个\s*Remote\s*方法", txt)
-    m["remote_methods"] = int(hit.group(1)) if hit else None
+    # Remote 方法：直接复用契约审计的计数，避免把 docs/API.md 的滞后当成事实源。
+    audit = subprocess.run(
+        ["node", str(ROOT / "tools" / "audit-remote-types.mjs")],
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    hit = re.search(r"backend\s+(\d+)\s+client\s+(\d+)\s+diffs\s+(\d+)", audit.stdout)
+    m["remote_methods"] = int(hit.group(1)) if audit.returncode == 0 and hit else None
 
     # IPC 唯一通道
     pat = re.compile(r"(?:reg\.)?(?:handleIpc|onIpc)\(\s*'([^']+)'|ipcMain\.(?:handle|on)\(\s*'([^']+)'")

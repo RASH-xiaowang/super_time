@@ -218,7 +218,7 @@ export interface BuildEvidenceOptions {
    * 证据层必须再做一次输出侧校验，越界条目不得进入引用列表。
    */
   allowedUsername?: string
-  /** 只接受知识库来源；消息、聚合、资源与事实全部拒绝（ClawBot kb-only）。 */
+  /** 只接受知识库来源；消息、聚合、资源与事实全部拒绝。 */
   kbOnly?: boolean
   /** 只接受该知识库的 KB 证据；与 {@link kbOnly} 一起构成发送前复核。 */
   allowedKbId?: number

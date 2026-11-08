@@ -120,25 +120,6 @@ const LEDGER: LedgerEntry[] = [
       + ' 的 http(s) 校验，且拒绝 URL 凭据与 query/hash；余额无 Key 时调用方直接不发请求。',
   },
   {
-    site: 'src/backend/wechat-data/src/query/clawbot/clawbot-ilink.ts#requestJson',
-    control: '主机写死（腾讯 iLink 服务）+ 接收侧只发控制面、发送侧只发你主动写的那条正文',
-    anchor: 'src/backend/wechat-data/src/query/clawbot/clawbot-ilink.ts', marker: 'ilinkai.weixin.qq.com',
-    why: '微信 ClawBot 绑定通道（2026-10-12 接入）：取码 / 状态轮询 / 消息长轮询 / 发送四条都经这一个函数。'
-      + '接收侧请求体里只有同步游标与渠道版本号；发送侧（`sendTextMessage`）body = 路由字段 + '
-      + '一条文本条目，正文 = 面板输入框原文、由用户逐条触发（没有自动/定时发送）。'
-      + '服务端回传的 `baseurl` 会在 `resolveBaseUrl` 再收敛一层（只许 https 的 weixin.qq.com 域）。'
-      + '逐条口径见 docs/PRIVACY.md 的 G2 节。',
-  },
-  {
-    site: 'src/backend/wechat-data/src/query/clawbot/clawbot-media.ts#downloadBytes',
-    control: '主机写死（腾讯 iLink CDN）+ 收到附件消息即自动取回（无人值守；正文型 url 先过腾讯系白名单）',
-    anchor: 'src/backend/wechat-data/src/query/clawbot/clawbot-media.ts', marker: 'novac2c.cdn.weixin.qq.com',
-    why: 'ClawBot 媒体可见（2026-10-12 接入；同日改自动取回）：收到带附件的消息后由队列'
-      + '自动下载 + 解密 + 落 `<数据根>/clawbot-media/`（无人值守；失败在下一次同步 / 启动补扫重试）。'
-      + '加密引用走固定 CDN 基址；图片自带的明文 URL 先过 `wechatCdnHostAllowed` 才发请求。'
-      + '单份上限 32MB；逐条口径见 docs/PRIVACY.md 的 G2 节。',
-  },
-  {
     site: 'src/backend/wechat-data/src/query/rpa/dispatch.ts#sendRequest',
     control: '主机来自厂商描述符白名单（governance.hosts）；webhook 仅允许用户填写 http(s)',
     anchor: 'src/backend/wechat-data/src/query/rpa/dispatch.ts', marker: 'sendRequest',

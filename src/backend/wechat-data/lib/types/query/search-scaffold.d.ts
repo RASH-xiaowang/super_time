@@ -33,8 +33,12 @@ export declare const ZSTD_MAGIC: Buffer<ArrayBuffer>;
  * `5`：`message_fts` 改成 FTS5 的**无内容表**（`content=''`）。这是索引的物理布局变了 ——
  * 老索引的内容列还在，新代码不会再往里读，但**留着它也没有任何收益**（重建走 DROP + 建表），
  * 所以升版本让所有存量索引在下次构建时重建成小一半的库（实测同夹具 372MB → 175MB）。
+ *
+ * `6 → 7`：会话身份来源改为「SessionTable + 消息分片身份映射」。老群可能只存在于
+ * Name2Id/ChatName2Id，旧索引既可能完全漏掉它们，也可能把 `Msg_<md5>` 的后缀直接
+ * 当成用户名。水位线已经推进过，无法靠增量补齐这些历史行，因此必须强制重建一次。
  */
-export declare const INDEX_SCHEMA_VERSION = "6";
+export declare const INDEX_SCHEMA_VERSION = "7";
 /** 索引最近一次构建/同步完成的时刻（毫秒 epoch，来自 Date.now()）。 */
 export declare const REFRESHED_KEY = "refreshed_ms";
 /** 每个消息分片的增量水位线（已入索引的最大 sort_seq，毫秒）在 meta 里的键前缀。 */

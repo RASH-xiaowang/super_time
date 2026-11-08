@@ -6,8 +6,7 @@
  * 图片/视频/语音/文件/链接要能直接取到实体，且媒体按钮不能冒泡触发整行折叠。
  * 定位键缺失时也必须给出可读提示，不能静默剩下一个空卡片。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -24,7 +23,12 @@ const stubs = vi.hoisted(() => ({
     error?: string
   }> => Promise.resolve({})),
   voice: vi.fn((_options: unknown): Promise<{ url?: string; error?: string }> => Promise.resolve({})),
-  messageFile: vi.fn((_options: unknown): Promise<{ url?: string; error?: string }> => Promise.resolve({})),
+  chatFile: vi.fn((_options: unknown): Promise<{ ok: boolean; path?: string; error?: string }> => (
+    Promise.resolve({ ok: false, error: 'fixture missing' })
+  )),
+  saveDialog: vi.fn((_options: unknown): Promise<{ canceled: boolean; path?: string }> => (
+    Promise.resolve({ canceled: false, path: 'D:\\exports\\报价单.pdf' })
+  )),
   openPath: vi.fn((_path: string): Promise<{ ok: boolean; path: string; error?: string }> => (
     Promise.resolve({ ok: true, path: _path })
   )),
@@ -37,7 +41,8 @@ vi.mock('../api.ts', () => ({
   apiGetEmoticonDataUrl: (options: unknown) => stubs.emoticon(options),
   apiGetFileImageDataUrl: (options: unknown) => stubs.fileImage(options),
   apiGetImageDataUrl: (options: unknown) => stubs.image(options),
-  apiGetMessageFile: (options: unknown) => stubs.messageFile(options),
+  apiExportChatFile: (options: unknown) => stubs.chatFile(options),
+  apiSaveFileDialog: (options: unknown) => stubs.saveDialog(options),
   apiGetVideoInfo: (options: unknown) => stubs.videoInfo(options),
   apiGetVoiceDataUrl: (options: unknown) => stubs.voice(options),
   apiOpenPath: (path: string) => stubs.openPath(path),
@@ -53,6 +58,7 @@ vi.mock('./chats-support.tsx', async (importOriginal) => {
 
 // 测试按桌面态跑：资源动作必须真的可点，才能验证它调到了哪个接口。
 vi.mock('../ui/desktop-only.tsx', () => ({
+  desktopAction: () => false,
   desktopActionProps: () => ({}),
 }))
 
@@ -129,8 +135,10 @@ beforeEach(() => {
   stubs.videoInfo.mockResolvedValue({})
   stubs.voice.mockReset()
   stubs.voice.mockResolvedValue({})
-  stubs.messageFile.mockReset()
-  stubs.messageFile.mockResolvedValue({})
+  stubs.chatFile.mockReset()
+  stubs.chatFile.mockResolvedValue({ ok: true, path: 'D:\\exports\\报价单.pdf' })
+  stubs.saveDialog.mockReset()
+  stubs.saveDialog.mockResolvedValue({ canceled: false, path: 'D:\\exports\\报价单.pdf' })
   stubs.openPath.mockReset()
   stubs.openPath.mockImplementation((path: string) => Promise.resolve({ ok: true, path }))
   stubs.openLink.mockReset()
@@ -321,7 +329,6 @@ describe('视频、语音、文件与链接', () => {
   })
 
   it('文件下载把文件名、体积与时间交给 msg/file，并阻止父行折叠', async () => {
-    stubs.messageFile.mockResolvedValue({ url: 'data:application/pdf;base64,ZmFrZS1maWxl' })
     const parentClick = vi.fn()
     show(item({
       type_label: '文件',
@@ -340,13 +347,17 @@ describe('视频、语音、文件与链接', () => {
     expect(host.textContent).toContain('PDF')
     await click('下载文件')
 
-    expect(stubs.messageFile).toHaveBeenCalledWith({
-      fileName: '报价单.pdf',
-      size: 2048,
-      createTime: 1_700_000_000,
-      fileMd5: MD5,
-    })
-    expect(anchorClick).toHaveBeenCalledTimes(1)
+    expect(stubs.chatFile).toHaveBeenCalledWith(expect.objectContaining({
+      username: 'wxid_room',
+      localId: 101,
+      dest: 'D:\\exports\\报价单.pdf',
+      jobId: expect.stringMatching(/^revoked-file-/),
+    }))
+    expect(stubs.saveDialog).toHaveBeenCalledWith(expect.objectContaining({
+      defaultName: '报价单.pdf',
+      title: '保存微信原文件',
+    }))
+    expect(anchorClick).not.toHaveBeenCalled()
     expect(parentClick, '文件按钮冒泡触发了父行折叠').not.toHaveBeenCalled()
     expect(host.querySelector('[role="alert"]')).toBeNull()
   })

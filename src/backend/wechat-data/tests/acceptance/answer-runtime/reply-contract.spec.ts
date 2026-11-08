@@ -1,16 +1,16 @@
 // @vitest-environment node
 /**
- * 三个问答入口的回复契约（黑盒）。
+ * 两个问答入口的回复契约（黑盒）。
  *
  * 这里不测内部函数，而是从生产编排入口 `askWithRuntime()` 跑完整链路：
- *   · 18 个「入口 × 异常」矩阵格都必须有可读回答，不能空串；
+ *   · 12 个「入口 × 异常」矩阵格都必须有可读回答，不能空串；
  *   · 状态与话术必须一致：failed 不能说成没数据，insufficient 不能说成故障；
  *   · 空结果、工具异常、超时、越权、参数错误、畸形结果都要可收敛；
  *   · 重复执行、并发执行、多轮继承与会话/知识库边界都不能互相污染。
  *
  * @vitest-environment node
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import matrix from './acceptance-matrix.json'
@@ -27,7 +27,7 @@ import type {
 
 const NOW = new Date('2026-10-22T10:00:00')
 
-type ProfileId = 'wechat-ask' | 'session-ask' | 'clawbot-auto'
+type ProfileId = 'wechat-ask' | 'session-ask'
 type Anomaly =
   | 'normal'
   | 'empty'
@@ -70,23 +70,6 @@ const SESSION_HIT: ToolHit = {
   source: 'msg',
 }
 
-const KB_HIT: ToolHit = {
-  key: 'kb:7:1',
-  name: '合同.pdf',
-  time: '',
-  snippet: '知识库里写明了验收标准',
-  source: 'kb',
-  trace: {
-    kind: 'kb',
-    kbId: 7,
-    fileId: 1,
-    chunkId: 1,
-    ordinal: 0,
-    page: 0,
-    heading: '',
-  },
-}
-
 const PROFILES: Record<ProfileId, ProfileCase> = {
   'wechat-ask': {
     options: { question: '合同尾款什么时候付？', source: 'ask' },
@@ -103,17 +86,6 @@ const PROFILES: Record<ProfileId, ProfileCase> = {
     tool: 'search_messages',
     callArgs: { keywords: ['合同尾款'] },
     hit: SESSION_HIT,
-  },
-  'clawbot-auto': {
-    options: {
-      question: '合同里写明的验收标准是什么？',
-      source: 'auto',
-      dataScope: 'kb-only',
-      kbId: 7,
-    },
-    tool: 'search_kb',
-    callArgs: { query: '验收标准' },
-    hit: KB_HIT,
   },
 }
 
@@ -234,12 +206,7 @@ function makeRunChat(profile: ProfileId): RunChatFn {
     if (system.includes('意图分类器')) {
       return '{"kind":"lookup","confidence":0.98,"reason":"查找问题"}'
     }
-    if (profile === 'clawbot-auto') {
-      if (userText.includes('可参考的材料')) {
-        return '这个我这边没查到相关的知识库内容。'
-      }
-      return '合同里写明了验收标准。'
-    }
+    void userText
     return '合同尾款下周一支付 [1]'
   }) as RunChatFn
 }
@@ -251,13 +218,6 @@ function makeDeps(
   onRun?: (ctx: ToolContext) => void,
 ): AskRuntimeDeps {
   const tools = [makeTool(profile, anomaly, onRun)]
-  if (profile === 'clawbot-auto') {
-    tools.push(fakeTool('search_messages', () => ({
-      tool: 'search_messages',
-      ok: true,
-      hits: [MESSAGE_HIT],
-    })))
-  }
   return {
     decryptedDir: '/fake',
     provider: 'test',
@@ -276,9 +236,6 @@ function makeDeps(
 
 function optionsFor(profile: ProfileId, anomaly: Anomaly): AskRuntimeOptions {
   const base = PROFILES[profile].options
-  if (profile === 'clawbot-auto' && anomaly === 'scope_violation') {
-    return { ...base, kbId: undefined }
-  }
   return { ...base }
 }
 
@@ -322,12 +279,12 @@ describe('18 格异常矩阵：每个格都必须有可读回答且状态一致'
         expect(answer).not.toMatch(/暂时失败|暂时没查成/)
       }
       if (cell.anomaly === 'tool_error' || cell.anomaly === 'tool_timeout' || cell.anomaly === 'malformed_result') {
-        expect(answer).toContain(cell.profile === 'clawbot-auto' ? '暂时没查成' : '暂时失败')
+        expect(answer).toContain('暂时失败')
         expect(answer).not.toContain('没有检索到')
         expect(result.evidence?.status).toBe('failed')
       }
       if (cell.anomaly === 'scope_violation') {
-        expect(answer).toContain(cell.profile === 'clawbot-auto' ? '没弄好' : '没法开始检索')
+        expect(answer).toContain('没法开始检索')
         expect(result.evidence?.items).toEqual([])
       }
       if (cell.anomaly === 'invalid_arguments') {
@@ -347,8 +304,8 @@ describe('18 格异常矩阵：每个格都必须有可读回答且状态一致'
   )
 })
 
-describe('正常链路：三个入口都能稳定给出带依据的回答', () => {
-  it.each(['wechat-ask', 'session-ask', 'clawbot-auto'] as const)(
+describe('正常链路：两个入口都能稳定给出带依据的回答', () => {
+  it.each(['wechat-ask', 'session-ask'] as const)(
     '%s 正常命中时可回答且保留引用/资源',
     async (profile) => {
       const result = await runCell(profile, 'normal')
@@ -459,24 +416,6 @@ describe('多轮上下文与边界', () => {
     expect(seen).toEqual(Array.from({ length: 10 }, () => 'wxid_locked'))
   })
 
-  it('ClawBot 只向模型暴露 search_kb，消息工具不会进入调用清单', async () => {
-    const schemas: string[][] = []
-    const runTurn = (async (input: Parameters<RunChatTurnFn>[0]) => {
-      schemas.push((input.tools ?? []).map(schema => schema.name))
-      if (hasToolResult(input)) return turn({ text: '工具阶段完成。' })
-      return turn({ calls: [{ id: 'call_kb', name: 'search_kb', args: { query: '验收标准' } }] })
-    }) as RunChatTurnFn
-    const result = await askWithRuntime(
-      makeDeps('clawbot-auto', 'normal', { runTurn }),
-      PROFILES['clawbot-auto'].options,
-    )
-
-    expect(result.status).toBe('ok')
-    expect(schemas.length).toBeGreaterThan(0)
-    expect(schemas.every(names => names.length === 1 && names[0] === 'search_kb')).toBe(true)
-    expect(result.citations).toHaveLength(1)
-    expect(result.citations[0]?.source).toBe('kb')
-  })
 })
 
 describe('模型与综合生成异常兜底', () => {
@@ -540,32 +479,4 @@ describe('模型与综合生成异常兜底', () => {
     expect(result.synthesisError).toContain('模型不可用')
   })
 
-  it('ClawBot 检索失败时不再走普通聊天综合兜底', async () => {
-    const synthesize = vi.fn(async () => '不应采用的聊天回答')
-    const result = await askWithRuntime(
-      makeDeps('clawbot-auto', 'tool_error', { synthesize }),
-      PROFILES['clawbot-auto'].options,
-    )
-
-    expect(synthesize).not.toHaveBeenCalled()
-    expect(result.status).toBe('failed')
-    expect(result.answer).toContain('暂时没查成')
-    expect(result.answer.trim()).not.toBe('')
-  })
-
-  it('ClawBot 综合生成抛错时仍返回知识库范围的可读兜底', async () => {
-    const result = await askWithRuntime(
-      makeDeps('clawbot-auto', 'empty', {
-        synthesize: async () => {
-          throw new Error('模型不可用')
-        },
-      }),
-      PROFILES['clawbot-auto'].options,
-    )
-
-    expect(result.status).toBe('insufficient')
-    expect(result.answer.trim()).not.toBe('')
-    expect(result.synthesisError).toContain('模型不可用')
-    expect(result.answer).toMatch(/没查到|没有检索到/)
-  })
 })

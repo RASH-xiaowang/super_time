@@ -20,7 +20,7 @@
  * （用户点「查看原图」时落盘 `<md5>_h.dat`，实测本机 1,459 个且仍在新增）。
  * 本 hook 就盯住这个落盘动作：微信负责下载，我们负责收割 —— 不联网、不碰凭据、不注入进程。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGetOriginalHarvestStatus, apiOriginalHarvest } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import type { HarvestResult, HarvestStatus } from '@deepseek-ai/dsh-wechat-data/types'
@@ -52,22 +52,43 @@ export function useOriginalHarvest(notify: HarvestNotify): OriginalHarvestState 
   const [busy, setBusy] = useState<HarvestAction | null>(null)
   const [result, setResult] = useState<HarvestResult | null>(null)
   const [status, setStatus] = useState<HarvestStatus | null>(null)
+  const alive = useRef(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (pollRef.current !== null) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [])
 
   const run = useCallback(async (action: HarvestAction): Promise<void> => {
+    if (!alive.current) return
     setBusy(action)
     setResult(null)
     // 手动收割要 69 秒（本机 1,459 个 `_h.dat`）：期间每 1.5 秒读一次进度，
     // 否则界面只能显示「收割中…」干等一分钟，用户会以为卡死了。
     // 走 `apiGetOriginalHarvestStatus`（普通队列）而不是 `originalHarvest('status')`
     // —— 后者会被归成重任务，而收割本身占着唯一的重任务槽，读进度会被拒。
-    let poll: ReturnType<typeof setInterval> | undefined
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
     if (action === 'now') {
-      poll = setInterval(() => {
-        void apiGetOriginalHarvestStatus().then(setStatus).catch(() => { /* 轮询失败不影响主流程 */ })
+      pollRef.current = setInterval(() => {
+        if (!alive.current) return
+        void apiGetOriginalHarvestStatus()
+          .then((next) => { if (alive.current) setStatus(next) })
+          .catch(() => { /* 轮询失败不影响主流程 */ })
       }, 1500)
     }
     try {
       const r = await apiOriginalHarvest(action)
+      if (!alive.current) return
       if (action === 'start' || action === 'now') {
         const res = r as HarvestResult
         setResult(res)
@@ -81,12 +102,16 @@ export function useOriginalHarvest(notify: HarvestNotify): OriginalHarvestState 
       } else {
         notify('ok', '已停止自动收割')
       }
-      setStatus(await apiGetOriginalHarvestStatus())
+      const next = await apiGetOriginalHarvestStatus()
+      if (alive.current) setStatus(next)
     } catch (e) {
-      notify('err', (e as Error).message)
+      if (alive.current) notify('err', (e as Error).message)
     } finally {
-      if (poll !== undefined) clearInterval(poll)
-      setBusy(null)
+      if (pollRef.current !== null) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      if (alive.current) setBusy(null)
     }
   }, [notify])
 
@@ -99,7 +124,7 @@ export function useOriginalHarvest(notify: HarvestNotify): OriginalHarvestState 
    */
   useEffect(() => {
     void apiGetOriginalHarvestStatus()
-      .then(setStatus)
+      .then((next) => { if (alive.current) setStatus(next) })
       .catch(() => { /* 读不到就保持 null，界面显示引导文案 */ })
   }, [])
 

@@ -3,7 +3,8 @@
  *
  * 2026-10-22 起，`askWechat` 不再自己维护「LLM 规划器 + 固定检索 + 综合生成」
  * 三段式实现，而是统一交给 `askWithRuntime()`：
- *   · `wechat-ask` / `session-ask` / `clawbot-auto` 共用同一套工具循环；
+ *   · `wechat-ask` / `session-ask`
+ *     共用同一套工具循环；
  *   · 工具选择、参数修复、范围守卫、重试与证据收敛都在运行时内完成；
  *   · 本文件只保留宿主接线：取消、流式事件、图片、索引新鲜度与历史落库。
  *
@@ -17,7 +18,7 @@ import type { AskOptimizeResult, AskResult, OperationCategory, OperationStatus }
 import type { VectorBuildResult } from '../types-retrieval.ts';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
 import type { ThreadState } from '../query/answer-runtime/thread-state.ts';
-import type { AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
+import type { AnswerReasoningEmitter, AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
 /** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
 interface AskImageInput {
     data: string;
@@ -44,7 +45,7 @@ export interface createAskDeepRemotesInputs {
     makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined;
     makeDeltaEmitter: (streamId?: string) => ((text: string) => void) | undefined;
     /** 思考过程发射器：与可见正文分开推，界面单独折叠展示。 */
-    makeReasoningEmitter: (streamId?: string) => ((text: string) => void) | undefined;
+    makeReasoningEmitter: (streamId?: string) => AnswerReasoningEmitter | undefined;
     /** 阶段事件发射器：把意图 / 工具 / 综合生成的进度推给界面。 */
     makeStageEmitter: (streamId?: string) => ((stage: AnswerRuntimeStage) => void) | undefined;
     kbModel: (kbId: number, role: KbModelRole) => ResolvedModel;
@@ -81,21 +82,21 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
         }>;
         /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
         streamId?: string;
-        /** 入口来源：`ask` = 微信问答页签，`session` = 会话内问答，`auto` = ClawBot。 */
+        /** 入口来源：`ask` = 微信问答页签，`session` = 会话内问答。 */
         source?: string;
         /** 会话显示名：历史列表直接显示。 */
         usernameName?: string;
         /** 当前知识库 id；缺省不检索知识库。 */
         kbId?: number;
         jobId?: string;
-        /** 数据面：`wechat`（缺省）或 `kb-only`（ClawBot 自动回复）。 */
-        dataScope?: "wechat" | "kb-only";
         /** 随问题一起送模型的图片（canonical base64，最多 2 张）。 */
         images?: AskImageInput[];
         /** 系统提示词覆盖；检索材料与「不编造」规则仍由运行时追加。 */
         systemPromptOverride?: string;
         /** 上一轮问答返回的结构化线程状态；跨请求继承会话/联系人与时间窗。 */
         threadState?: ThreadState;
+        /** 调用方取消时中止底层模型请求。 */
+        signal?: AbortSignal;
     }): Promise<AskResult>;
     cancelAsk: (options: {
         jobId: string;

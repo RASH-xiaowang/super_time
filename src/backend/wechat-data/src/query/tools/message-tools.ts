@@ -21,6 +21,16 @@ import { contactMeta } from '../meta.ts'
 import { searchIndexPath } from '../search-scaffold.ts'
 import { fmtDateTimeSec } from '../../format.ts'
 import {
+  fallbackChatDisplayName,
+  isInternalWechatId,
+  mergeDisplayNames,
+  messageTableHash,
+  messageTableName,
+  readableIdentityLabel,
+  replaceWechatIds,
+  resolveTalkerUsername,
+} from '../message-identity.ts'
+import {
   argInt, argString, argStringArray,
   type RetrievalTool, type ToolContext, type ToolHit, type ToolResult,
 } from './types.ts'
@@ -43,21 +53,68 @@ interface DisplayIdentity {
   enterpriseName?: string
 }
 
-/** 会话显示名与企业名；统一从 contact.db 的缓存元数据读取，兼容旧索引库。 */
+/** 会话显示名与企业名；统一从身份索引 + contact.db 读取，兼容旧索引库。 */
 function displayNames(decryptedDir: string): Map<string, DisplayIdentity> {
   const out = new Map<string, DisplayIdentity>()
   const meta = contactMeta(decryptedDir)
-  for (const [username, name] of meta.names) {
-    out.set(username, { name: name.trim() || username })
+  for (const [username, name] of mergeDisplayNames(decryptedDir)) {
+    out.set(username, { name: name.trim() || fallbackChatDisplayName(username) })
   }
   for (const [username, enterpriseName] of meta.enterpriseNames) {
     const current = out.get(username)
     out.set(username, {
-      name: current?.name || meta.names.get(username)?.trim() || username,
+      name: current?.name || meta.names.get(username)?.trim() || fallbackChatDisplayName(username),
       enterpriseName,
     })
   }
   return out
+}
+
+function mappedIdentityName(
+  names: Map<string, DisplayIdentity>,
+  raw: string,
+): string {
+  const direct = names.get(raw)?.name
+    ?? names.get(raw.toLowerCase())?.name
+    ?? ''
+  return readableIdentityLabel(direct, raw)
+}
+
+/** Resolve a stored sender at the tool boundary; never expose an internal ID. */
+function readableSender(
+  sender: string,
+  names: Map<string, DisplayIdentity>,
+  preferred: string,
+): string {
+  const raw = sender.trim()
+  if (raw === '') return ''
+  // Search indexes built by newer versions already store display labels.
+  if (!isInternalWechatId(raw)) return raw
+  const mapped = mappedIdentityName(names, raw)
+  if (mapped !== '') return mapped
+  const preferredLabel = readableIdentityLabel(preferred, raw)
+  if (preferredLabel !== '') return preferredLabel
+  return raw.toLowerCase().endsWith('@chatroom') ? '某个群聊' : '某位成员'
+}
+
+/** Sanitize message bodies before snippets enter the synthesis prompt. */
+function readableMessageText(
+  text: string,
+  names: Map<string, DisplayIdentity>,
+  chatUsername: string,
+  chatName: string,
+): string {
+  const ownChat = readableIdentityLabel(chatName, chatUsername)
+    || (chatUsername.endsWith('@chatroom') ? '某个群聊' : fallbackChatDisplayName(chatUsername))
+  return replaceWechatIds(
+    text,
+    raw => mappedIdentityName(names, raw),
+    (raw) => {
+      if (raw === chatUsername) return ownChat
+      if (raw.toLowerCase().endsWith('@chatroom')) return '某个群聊'
+      return chatUsername.endsWith('@chatroom') ? '某位成员' : '某位联系人'
+    },
+  )
 }
 
 /** 关键词检索聊天消息。 */
@@ -89,7 +146,13 @@ export const searchMessagesTool: RetrievalTool = {
     if (keywords.length === 0) return { tool: 'search_messages', ok: false, error: '缺少 keywords', hits: [] }
     const limit = argInt(args['limit'], 24, 1, 60)
     // `ctx.scope` 是服务端锁定的硬范围，优先级高于模型参数。
-    const username = ctx.scope?.username || argString(args['username'])
+    const requestedUsername = ctx.scope?.username || argString(args['username'])
+    const username = requestedUsername
+      ? resolveTalkerUsername(ctx.decryptedDir, requestedUsername)
+      : ''
+    if (requestedUsername && !username) {
+      return { tool: 'search_messages', ok: false, error: '无法解析会话身份', hits: [] }
+    }
     const from = ctx.scope?.from || argString(args['from'])
     const to = ctx.scope?.to || argString(args['to'])
     const lo = dayStartSec(from)
@@ -118,13 +181,19 @@ export const searchMessagesTool: RetrievalTool = {
           || identity?.enterpriseName
         const senderEnterpriseName = h.senderEnterpriseName
           || (h.sender ? names.get(h.sender)?.enterpriseName : undefined)
+        const name = identity?.name ?? h.name ?? fallbackChatDisplayName(h.username)
+        const sender = readableSender(
+          h.sender ?? '',
+          names,
+          h.username.endsWith('@chatroom') ? '' : name,
+        )
         hits.push({
           key,
-          name: identity?.name ?? h.name ?? h.username,
+          name,
           ...(enterpriseName ? { enterpriseName } : {}),
           time: fmtDateTimeSec(h.create_time),
-          snippet: h.snippet,
-          ...(h.sender ? { sender: h.sender } : {}),
+          snippet: readableMessageText(h.snippet, names, h.username, name),
+          ...(sender ? { sender } : {}),
           ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
           source: 'msg',
         })
@@ -140,29 +209,37 @@ export const searchMessagesTool: RetrievalTool = {
   },
 }
 
-/** 取某个会话在某时段的消息（按时间升序）。 */
+/** 取某个会话在某时段的消息（默认按时间升序，可显式取最新优先）。 */
 export const getSessionMessagesTool: RetrievalTool = {
   name: 'get_session_messages',
   category: 'message',
   description:
-    '取**指定会话**在指定时间段内的消息（按时间升序）。'
+    '取**指定会话**在指定时间段内的消息（默认按时间升序，order=desc 时最新优先）。'
     + '适用于「X 群上周聊了什么」「我和张三 9 月 3 号说了什么」这类**已知会话与时间**的问题。'
     + '与 search_messages 的区别：它不需要关键词，直接按会话 + 时间取。',
   parameters: {
     type: 'object',
     properties: {
-      username: { type: 'string', description: '会话标识（群是 xxx@chatroom，单聊是 wxid_xxx）' },
+      username: { type: 'string', description: '会话标识（群是 xxx@chatroom，单聊是 wxid_xxx；会话已锁定时可省略）' },
       from: { type: 'string', description: '起始日期 YYYY-MM-DD' },
       to: { type: 'string', description: '截止日期 YYYY-MM-DD' },
       limit: { type: 'number', description: '最多返回几条（默认 40，上限 200）' },
+      order: {
+        type: 'string',
+        enum: ['asc', 'desc'],
+        description: '返回顺序：asc = 按时间正序（默认）；desc = 最新优先，问「最近/最新」时使用',
+      },
     },
     required: ['username'],
   },
   run: (args, ctx): ToolResult => {
     const started = Date.now()
-    const username = ctx.scope?.username || argString(args['username'])
-    if (!username) return { tool: 'get_session_messages', ok: false, error: '缺少 username', hits: [] }
+    const requestedUsername = ctx.scope?.username || argString(args['username'])
+    if (!requestedUsername) return { tool: 'get_session_messages', ok: false, error: '缺少 username', hits: [] }
+    const username = resolveTalkerUsername(ctx.decryptedDir, requestedUsername)
+    if (!username) return { tool: 'get_session_messages', ok: false, error: '无法解析会话身份', hits: [] }
     const limit = argInt(args['limit'], 40, 1, 200)
+    const order = argString(args['order']).trim().toLowerCase() === 'desc' ? 'desc' : 'asc'
     // 服务端固定范围必须兜底：漏填 `from/to` 时不能退化成「查全历史」。
     const from = ctx.scope?.from || argString(args['from'])
     const to = ctx.scope?.to || argString(args['to'])
@@ -170,35 +247,48 @@ export const getSessionMessagesTool: RetrievalTool = {
     const hi = dayEndSec(to)
     const names = displayNames(ctx.decryptedDir)
     const identity = names.get(username)
-    const name = identity?.name ?? username
+    const name = identity?.name ?? fallbackChatDisplayName(username)
 
     const p = searchIndexPath(ctx.decryptedDir)
     if (!existsSync(p)) return { tool: 'get_session_messages', ok: false, error: '检索索引不存在', hits: [] }
     try {
       const rows = withDb(p, (db) => {
-        const parts = ['username = ?']
-        const params: Array<string | number> = [username]
+        const aliases = [...new Set([
+          requestedUsername,
+          username,
+          messageTableHash(username),
+          messageTableName(username),
+        ])]
+        const parts = [`username IN (${aliases.map(() => '?').join(', ')})`]
+        const params: Array<string | number> = [...aliases]
         if (lo > 0) { parts.push('create_time >= ?'); params.push(lo) }
         if (hi > 0) { parts.push('create_time <= ?'); params.push(hi) }
         return db.prepare(
-          `SELECT local_id, create_time, text, sender FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ASC LIMIT ?`,
+          `SELECT local_id, create_time, text, sender FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ${order === 'desc' ? 'DESC' : 'ASC'}, local_id ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ?`,
         ).all(...params, limit) as Array<{ local_id: number; create_time: number; text: string; sender?: string }>
       })
-      const hits: ToolHit[] = rows.map(r => ({
-        key: username + ':' + r.local_id,
-        name,
-        ...(identity?.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
-        time: fmtDateTimeSec(r.create_time),
-        snippet: r.text.slice(0, 200),
-        ...(r.sender ? { sender: r.sender } : {}),
-        ...(r.sender && names.get(r.sender)?.enterpriseName
-          ? { senderEnterpriseName: names.get(r.sender)?.enterpriseName }
-          : {}),
-        source: 'msg',
-      }))
+      const hits: ToolHit[] = rows.map((r) => {
+        const sender = readableSender(
+          r.sender ?? '',
+          names,
+          username.endsWith('@chatroom') ? '' : name,
+        )
+        return {
+          key: username + ':' + r.local_id,
+          name,
+          ...(identity?.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
+          time: fmtDateTimeSec(r.create_time),
+          snippet: readableMessageText(r.text, names, username, name).slice(0, 200),
+          ...(sender ? { sender } : {}),
+          ...(r.sender && names.get(r.sender)?.enterpriseName
+            ? { senderEnterpriseName: names.get(r.sender)?.enterpriseName }
+            : {}),
+          source: 'msg',
+        }
+      })
       return {
         tool: 'get_session_messages', ok: true, hits,
-        note: `${name} · ${hits.length} 条${lo > 0 || hi > 0 ? `（${from || '不限'} ~ ${to || '不限'}）` : ''}`,
+        note: `${name} · ${hits.length} 条${order === 'desc' ? ' · 最新优先' : ''}${lo > 0 || hi > 0 ? `（${from || '不限'} ~ ${to || '不限'}）` : ''}`,
         elapsedMs: Date.now() - started,
       }
     } catch (e) {
@@ -229,7 +319,9 @@ export const getMessageContextTool: RetrievalTool = {
     const key = argString(args['key'])
     const at = key.lastIndexOf(':')
     if (at <= 0) return { tool: 'get_message_context', ok: false, error: 'key 形状不对（应为 username:local_id）', hits: [] }
-    const username = key.slice(0, at)
+    const requestedUsername = key.slice(0, at)
+    const username = resolveTalkerUsername(ctx.decryptedDir, requestedUsername)
+    if (!username) return { tool: 'get_message_context', ok: false, error: '无法解析会话身份', hits: [] }
     const localId = Number(key.slice(at + 1))
     if (!Number.isFinite(localId)) return { tool: 'get_message_context', ok: false, error: 'key 里的 local_id 不是数字', hits: [] }
     const spanMin = argInt(args['spanMinutes'], 15, 1, 120)
@@ -240,8 +332,15 @@ export const getMessageContextTool: RetrievalTool = {
     if (!existsSync(p)) return { tool: 'get_message_context', ok: false, error: '检索索引不存在', hits: [] }
     let centerSec = 0
     try {
-      const row = withDb(p, (db) => db.prepare('SELECT create_time FROM message_meta WHERE username = ? AND local_id = ? LIMIT 1')
-        .get(username, localId) as { create_time?: number } | undefined)
+      const aliases = [...new Set([
+        requestedUsername,
+        username,
+        messageTableHash(username),
+        messageTableName(username),
+      ])]
+      const row = withDb(p, (db) => db.prepare(
+        `SELECT create_time FROM message_meta WHERE username IN (${aliases.map(() => '?').join(', ')}) AND local_id = ? LIMIT 1`,
+      ).get(...aliases, localId) as { create_time?: number } | undefined)
       centerSec = Number(row?.create_time ?? 0)
     } catch { /* 取不到就报错 */ }
     if (centerSec <= 0) return { tool: 'get_message_context', ok: false, error: '找不到这条消息（key 可能过期）', hits: [] }
@@ -254,20 +353,28 @@ export const getMessageContextTool: RetrievalTool = {
         const day = fmtDateTimeSec(w.create_time).slice(0, 10)
         return (from === '' || day >= from) && (to === '' || day <= to)
       })
-    const hits: ToolHit[] = win.map(w => ({
-      key: username + ':' + w.local_id,
-      name: names.get(username)?.name ?? username,
-      ...(names.get(username)?.enterpriseName
-        ? { enterpriseName: names.get(username)?.enterpriseName }
-        : {}),
-      time: fmtDateTimeSec(w.create_time),
-      snippet: w.text.slice(0, 200),
-      ...(w.sender ? { sender: w.sender } : {}),
-      ...(w.sender && names.get(w.sender)?.enterpriseName
-        ? { senderEnterpriseName: names.get(w.sender)?.enterpriseName }
-        : {}),
-      source: 'msg',
-    }))
+    const name = names.get(username)?.name ?? fallbackChatDisplayName(username)
+    const hits: ToolHit[] = win.map((w) => {
+      const sender = readableSender(
+        w.sender ?? '',
+        names,
+        username.endsWith('@chatroom') ? '' : name,
+      )
+      return {
+        key: username + ':' + w.local_id,
+        name,
+        ...(names.get(username)?.enterpriseName
+          ? { enterpriseName: names.get(username)?.enterpriseName }
+          : {}),
+        time: fmtDateTimeSec(w.create_time),
+        snippet: readableMessageText(w.text, names, username, name).slice(0, 200),
+        ...(sender ? { sender } : {}),
+        ...(w.sender && names.get(w.sender)?.enterpriseName
+          ? { senderEnterpriseName: names.get(w.sender)?.enterpriseName }
+          : {}),
+        source: 'msg',
+      }
+    })
     return {
       tool: 'get_message_context', ok: true, hits,
       note: `上下文 ${hits.length} 条（±${spanMin} 分钟）`,
@@ -300,18 +407,32 @@ export const listSessionsTool: RetrievalTool = {
     const p = searchIndexPath(ctx.decryptedDir)
     if (!existsSync(p)) return { tool: 'list_sessions', ok: false, error: '检索索引不存在', hits: [] }
     try {
-      const kindWhere = kind === 'group' ? " WHERE username LIKE '%@chatroom'"
-        : kind === 'single' ? " WHERE username NOT LIKE '%@chatroom'" : ''
       const order = orderBy === 'recent' ? 'MAX(create_time) DESC' : 'COUNT(*) DESC'
       const rows = withDb(p, (db) => db.prepare(
-        `SELECT username, COUNT(*) AS c, MIN(create_time) AS mn, MAX(create_time) AS mx FROM message_meta${kindWhere} GROUP BY username ORDER BY ${order} LIMIT ?`,
-      ).all(limit) as Array<{ username: string; c: number; mn: number; mx: number }>)
+        `SELECT username, COUNT(*) AS c, MIN(create_time) AS mn, MAX(create_time) AS mx FROM message_meta GROUP BY username ORDER BY ${order} LIMIT ?`,
+      ).all(5000) as Array<{ username: string; c: number; mn: number; mx: number }>)
       const names = displayNames(ctx.decryptedDir)
-      const hits: ToolHit[] = rows.map((r) => {
-        const identity = names.get(r.username)
+      const grouped = new Map<string, { c: number; mn: number; mx: number }>()
+      for (const row of rows) {
+        const username = resolveTalkerUsername(ctx.decryptedDir, row.username)
+        if (!username) continue
+        if (kind === 'group' && !username.endsWith('@chatroom')) continue
+        if (kind === 'single' && username.endsWith('@chatroom')) continue
+        const previous = grouped.get(username)
+        grouped.set(username, {
+          c: (previous?.c ?? 0) + Number(row.c ?? 0),
+          mn: previous ? Math.min(previous.mn, Number(row.mn ?? 0)) : Number(row.mn ?? 0),
+          mx: previous ? Math.max(previous.mx, Number(row.mx ?? 0)) : Number(row.mx ?? 0),
+        })
+      }
+      const canonicalRows = [...grouped.entries()]
+        .sort((a, b) => orderBy === 'recent' ? b[1].mx - a[1].mx : b[1].c - a[1].c)
+        .slice(0, limit)
+      const hits: ToolHit[] = canonicalRows.map(([username, r]) => {
+        const identity = names.get(username)
         return {
-          key: r.username,
-          name: identity?.name ?? r.username,
+          key: username,
+          name: identity?.name ?? fallbackChatDisplayName(username),
           ...(identity?.enterpriseName ? { enterpriseName: identity.enterpriseName } : {}),
           time: fmtDateTimeSec(r.mx),
           snippet: `${r.c} 条消息（${fmtDateTimeSec(r.mn).slice(0, 10)} ~ ${fmtDateTimeSec(r.mx).slice(0, 10)}）`,

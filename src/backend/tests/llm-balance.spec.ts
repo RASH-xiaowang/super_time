@@ -96,6 +96,16 @@ describe('连接测试', () => {
     expect(called[0]!.headers.authorization).toBe('Bearer sk-x')
   })
 
+  it('OpenCode：连接测试使用独立模型列表路径和专用请求头', async () => {
+    const { called } = fetchProbe({ json: { data: [{ id: 'glm-5.3-flash' }] } })
+    const r = await testLlmConnection('https://opencode.ai/inference/go/openai/v1', 'sk-opencode')
+    expect(called[0]!.url).toBe('https://opencode.ai/inference/go/v1/models')
+    expect(called[0]!.headers.authorization).toBe('Bearer sk-opencode')
+    expect(called[0]!.headers['user-agent']).toMatch(/^SuperTime\//)
+    expect(called[0]!.headers['x-opencode-session']).toMatch(/^supertime-[a-f0-9]{32}$/)
+    expect(r.models).toBe(1)
+  })
+
   it('401/403：区分「Key 无效」与「Key 为空」', async () => {
     fetchProbe({ ok: false, status: 401, statusText: 'Unauthorized' })
     await expect(testLlmConnection('https://a.example/v1', 'sk-bad')).rejects.toThrow(/无效或无权限/)

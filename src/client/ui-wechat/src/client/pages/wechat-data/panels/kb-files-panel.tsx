@@ -22,12 +22,14 @@ import { kbCacheKey, useKbScope } from './kb-scope.ts'
 import { useKbIndexBuild } from './kb-index-build.ts'
 import { KbFileDetailPane, type KbFileReaderState } from './kb-files-detail.tsx'
 import { KbProcessingEntry } from './kb-processing-panel.tsx'
-import { KbBatchActionButtons } from './kb-batch-actions.tsx'
+import { KbToolsMenu } from './kb-batch-actions.tsx'
 import { useKbFilesBatch } from './use-kb-files-batch.ts'
+import { useKbIndexPolling, useKbParsePolling } from './use-kb-files-polling.ts'
 import { useKbFilesSnapshot } from './use-kb-files-snapshot.ts'
+import { useKeepAliveActive } from './keep-alive.tsx'
 import css from './kbfiles.module.css'
 import kitCss from '../ui/kit.module.css'
-import { AddReport, FILTERS, KbTitleRow, PARSE_LOOK, PARSE_POLL_MAX_MS, PARSE_POLL_MS, SnippetText, StateFilter, baseName, cachedFiles, formatBytes, indexLabel, reasonText } from './kb-files-support.tsx'
+import { AddReport, FILTERS, KbTitleRow, PARSE_LOOK, SnippetText, StateFilter, baseName, cachedFiles, formatBytes, indexLabel, reasonText } from './kb-files-support.tsx'
 
 /**
  * 知识库文件面板。
@@ -66,10 +68,22 @@ export function channelCountLine(res: KbSearchResult): string {
     .join(' · ')
 }
 
+function KbFilesLoadingPane(): React.JSX.Element {
+  return (
+    <div className={css.loadingPane}>
+      <ListSkeleton rows={6} />
+      <div className={kitCss.loadingHint}>
+        正在读取本地文件索引，完成后会自动显示；解析状态与处理进度会随结果更新。
+      </div>
+    </div>
+  )
+}
+
 export function KbFilesPanel({ focusFileId, focusNonce }: {
   focusFileId?: number | null
   focusNonce?: number
 } = {}): React.JSX.Element {
+  const active = useKeepAliveActive()
   // 「当前是哪个库」由分段条右侧的切换器决定，而切换器在合并外壳里 —— 不是本组件的父级，
   // 所以走订阅（`useKbScope`）而不是 props（与 KnowledgeBasePanel 同口径）。
   const { kbId, kbs } = useKbScope()
@@ -233,18 +247,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    *     永远每 1.5 秒查一次库。到点停下、留用户点「刷新」—— 停下比「悄悄一直查」
    *     诚实，也比显示一个假的「正在跑」好。
    */
-  useEffect(() => {
-    if (pendingKey === '') return
-    let alive = true
-    let ticks = 0
-    const maxTicks = Math.ceil(PARSE_POLL_MAX_MS / PARSE_POLL_MS)
-    const timer = setInterval(() => {
-      ticks += 1
-      if (ticks > maxTicks) { clearInterval(timer); return }
-      if (alive) void load({ silent: true })
-    }, PARSE_POLL_MS)
-    return () => { alive = false; clearInterval(timer) }
-  }, [pendingKey, load])
+  useKbParsePolling(active, pendingKey, load)
 
   /**
    * 读一次本库的向量索引状态。
@@ -277,11 +280,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    * 卸载重挂过），只看本地状态会让按钮在「其实还在跑」时提前恢复可点。
    */
   const indexJobKey = indexView?.job ? `${indexView.kbId}:${indexView.job.done}` : ''
-  useEffect(() => {
-    if (indexJobKey === '') return
-    const timer = setInterval(() => { void loadIndex() }, PARSE_POLL_MS)
-    return () => { clearInterval(timer) }
-  }, [indexJobKey, loadIndex])
+  useKbIndexPolling(active, indexJobKey, loadIndex)
 
   /**
    * 关键词**同时**过滤文件名与正文（设计稿 §8.4：用户不选模式，系统决定）。
@@ -555,26 +554,18 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
               <Button variant="primary" onClick={() => { void addFiles() }} disabled={adding}>
                 {adding ? '添加中…' : '＋ 添加文件'}
               </Button>
-              {/* 语义索引：把「提问时顺手建」这个隐式行为变成一个看得见、点得动的入口。
-                  它会把本库 `include_in_rag=1` 文件的正文发给向量模型，所以提示语写明会出网。 */}
-              <Button
-                variant="ghost"
-                onClick={() => { void runIndex(false) }}
-                disabled={indexing || batchJobs.runningId !== null} {...desktopActionProps()}
-                title="把本库参与语义检索的文件正文发给向量模型，建/补齐向量索引（会出网）"
-              >
-                {indexing ? '建索引中…' : '语义索引'}
-              </Button>
-              <KbBatchActionButtons
+              {/* 低频文档动作收进菜单：页头只保留「添加文件」这一个主操作。
+                  语义索引会把本库 `include_in_rag=1` 文件的正文发给向量模型，菜单项标注「会出网」。 */}
+              <KbToolsMenu
                 run={batchJobs.run}
                 runningId={batchJobs.runningId}
                 indexing={indexing}
+                loading={loading}
+                onIndex={() => { void runIndex(false) }}
                 onSummaries={() => { void batchJobs.batchSummaries() }}
                 onEntities={() => { void batchJobs.batchEntities() }}
+                onRefresh={() => { void load() }}
               />
-              <Button variant="ghost" onClick={() => { void load() }} disabled={loading}>
-                {loading ? '读取中…' : '刷新'}
-              </Button>
             </>
           )}
         />
@@ -692,7 +683,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           {/* 左：文件列表 */}
           <Card flush className={clsx(css.listPane, css.fillCard, visible.length === 0 && css.listPaneWide)}>
             {loading && files.length === 0 ? (
-              <ListSkeleton rows={6} />
+              <KbFilesLoadingPane />
             ) : visible.length === 0 ? emptyNode : (
               <div className={css.list}>
                 {visible.map((f) => {

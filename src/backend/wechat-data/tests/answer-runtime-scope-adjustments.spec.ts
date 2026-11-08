@@ -107,6 +107,122 @@ describe('工具范围守卫：日期参数可收敛', () => {
     expect(out.toolCalls[0]?.errorCode).toBeUndefined()
   })
 
+  it('不同原始日期收敛到同一固定范围时只执行一次', async () => {
+    const run = vi.fn(() => ({
+      tool: 'search_messages' as const,
+      ok: true,
+      hits: [{
+        key: 'wxid_a:2',
+        name: '项目群',
+        time: '2026-10-03 10:00',
+        snippet: '合同已确认。',
+        source: 'msg' as const,
+      }],
+    }))
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '同一范围内只查一次。' })
+      }
+      return turn({
+        calls: [
+          {
+            id: 'call_date_a',
+            name: 'search_messages',
+            args: { keywords: ['合同'], from: '2026-09-01', to: '2026-09-30' },
+          },
+          {
+            id: 'call_date_b',
+            name: 'search_messages',
+            args: { keywords: ['合同'], from: '2026-08-01', to: '2026-08-31' },
+          },
+        ],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop({
+      system: '系统提示',
+      messages: [userMessage('查合同')],
+      question: '查合同',
+      profile: ANSWER_PROFILES['wechat-ask'],
+      profileTools: [tool(run)],
+      toolContext: {
+        decryptedDir: '/fake',
+        now: NOW,
+        scope: { from: '2026-10-01', to: '2026-10-07' },
+      },
+      runTurn,
+      now: NOW,
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(out.toolCalls).toHaveLength(2)
+    expect(out.toolCalls[0]?.deduplicated).toBe(false)
+    expect(out.toolCalls[1]?.deduplicated).toBe(true)
+    expect(out.toolResults).toHaveLength(1)
+  })
+
+  it('「最近」语义自动让会话消息按最新优先取，并复用锁定会话', async () => {
+    const run = vi.fn((args: Record<string, unknown>) => {
+      expect(args).toMatchObject({
+        username: 'wxid_locked',
+        order: 'desc',
+        limit: 20,
+      })
+      return {
+        tool: 'get_session_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_locked:9',
+          name: '项目群',
+          time: '2026-10-21 18:00',
+          snippet: '最新消息',
+          source: 'msg' as const,
+        }],
+      }
+    })
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '看最新消息。' })
+      }
+      return turn({
+        calls: [{
+          id: 'call_latest',
+          name: 'get_session_messages',
+          args: { limit: 20 },
+        }],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop({
+      system: '系统提示',
+      messages: [userMessage('最近群里聊了什么')],
+      question: '最近群里聊了什么',
+      profile: ANSWER_PROFILES['wechat-ask'],
+      profileTools: [{
+        name: 'get_session_messages',
+        category: 'message',
+        description: 'get_session_messages 测试替身（说明长度足够）',
+        parameters: { type: 'object', properties: {} },
+        run,
+      }],
+      toolContext: {
+        decryptedDir: '/fake',
+        now: NOW,
+        scope: { username: 'wxid_locked' },
+      },
+      runTurn,
+      recency: true,
+      now: NOW,
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(out.toolCalls[0]).toMatchObject({
+      name: 'get_session_messages',
+      ok: true,
+      deduplicated: false,
+    })
+  })
+
   it('真实越权仍然硬失败：会话改写与跨会话消息 key', async () => {
     const run = vi.fn(() => ({ tool: 'search_messages' as const, ok: true, hits: [] }))
     const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {

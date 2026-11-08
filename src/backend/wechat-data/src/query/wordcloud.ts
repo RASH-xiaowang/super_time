@@ -14,11 +14,12 @@
 import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
 import { buildEntityMatcher, countText, entityNamesOf, pruneFragmentWords, type EntityMatcher } from './word-match.ts'
 import { YIELD_EVERY_CHARS, YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { messageTableName, resolveTalkerUsername } from './message-identity.ts'
+import { createBoundedCache } from './cache-budget.ts'
 
 export interface WordCloudOptions {
   scope?: 'global' | 'chat' | 'moments'
@@ -46,7 +47,7 @@ export interface WordCloudResult {
 
 /** Msg_<md5(username)> table name（与 annual-report 同式）。 */
 function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  return messageTableName(username)
 }
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
@@ -83,16 +84,35 @@ function stripXml(x: string): string {
  * 只在**不带年份过滤**时启用：带年份时取的行集合不同，同一个分片会算出不同的词频，
  * 用同一个键会串味。年份过滤那条路本来就只扫一个子集，代价小得多。
  */
-const shardScanCache = new Map<string, { sig: string, counts: Map<string, number>, scanned: number }>()
+const SHARD_CACHE_MAX = 64
+const SHARD_CACHE_MAX_BYTES = 32 * 1024 * 1024
+const SHARD_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024
+
+interface ShardScanCacheEntry {
+  sig: string
+  counts: Map<string, number>
+  scanned: number
+}
 
 /**
- * 最多缓存多少个分片，超出按插入顺序淘汰最早的。
+ * 估算单个分片缓存的常驻成本。
  *
- * 本机只有 4 个分片；但代码注释里记着别的机器上 "一次 global 要开 300+ 个库" ——
- * 那种规模下无上限缓存会把内存撑起来（每个分片几万词条），所以给个硬上限。
- * 淘汰最旧的而不是拒收新的：新分片才是接下来最可能被命中的。
+ * 每个词条不只是字符串本身：Map entry、字符串头和 number 槽都会占内存。这里用
+ * 保守常量计入开销，避免「只限 64 个分片，但每个分片几万唯一词」仍然突破预算。
  */
-const SHARD_CACHE_MAX = 64
+function shardScanCacheBytes(entry: ShardScanCacheEntry): number {
+  let bytes = 64 + entry.sig.length * 2
+  for (const word of entry.counts.keys()) bytes += 32 + word.length * 2
+  return bytes
+}
+
+const shardScanCache = createBoundedCache<string, ShardScanCacheEntry>({
+  label: 'wordcloud-shard-scan',
+  maxEntries: SHARD_CACHE_MAX,
+  maxTotal: SHARD_CACHE_MAX_BYTES,
+  maxEntry: SHARD_CACHE_MAX_ENTRY_BYTES,
+  sizeOf: shardScanCacheBytes,
+})
 
 /** 把一个分片的词频并进总数。 */
 function mergeCounts (into: Map<string, number>, from: Map<string, number>): void {
@@ -182,10 +202,6 @@ async function scanMessages(decryptedDir: string, opts: { username?: string; yea
     } finally { db.close() }
     if (useShardCache) {
       mergeCounts(counts, local)
-      if (shardScanCache.size >= SHARD_CACHE_MAX) {
-        const oldest = shardScanCache.keys().next().value
-        if (oldest !== undefined) shardScanCache.delete(oldest)
-      }
       shardScanCache.set(cacheKey, { sig: fileSigOf(path), counts: local, scanned: localScanned })
     }
     // 分片级让出：一次 global 要开 300+ 个库，库与库之间必须交还控制权。
@@ -320,9 +336,13 @@ export async function queryWordCloud(decryptedDir: string, options?: WordCloudOp
   // 上限 200 → 400（2026-09-30）：全屏画布约 2350px 宽，按前端「宽度 / 9.7」要 ~243 个词才
   // 填得满，200 会在右边留一片空。缓存本来就有 `MAX_CACHED_WORDS` 个词，放宽只是多切一些。
   const limit = Math.max(1, Math.min(400, Math.floor(options?.limit ?? 60)))
-  const username = (options?.username ?? '').trim()
-  if (scope === 'chat' && username === '') {
+  const requestedUsername = (options?.username ?? '').trim()
+  if (scope === 'chat' && requestedUsername === '') {
     throw new Error('scope=chat 需要 username（会话的 talker）')
+  }
+  const username = scope === 'chat' ? resolveTalkerUsername(decryptedDir, requestedUsername) : ''
+  if (scope === 'chat' && username === '') {
+    throw new Error('无法解析会话身份；旧消息表 hash 已失效')
   }
   const year = options?.year
   // 缓存签名：消息侧用分片目录的 mtime+size（新消息落库即失效）；朋友圈用 sns.db。

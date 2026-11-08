@@ -17,6 +17,10 @@
 import { useCallback, useState } from 'react'
 import { apiDecryptAllDatabases, apiExportMoments, pickDirectory } from '../api.ts'
 import type { MediaFilter, MomentsNoticeSink } from './moments-support.tsx'
+import { useExportTask, type ExportTaskState } from './export-task.ts'
+
+/** HTML 是默认格式；图片也默认内嵌，避免导出后只剩一排破图。 */
+export const DEFAULT_EMBED_HTML_IMAGES = true
 
 /** 弹窗里用户直接填的那几项。 */
 export interface ExportForm {
@@ -26,6 +30,9 @@ export interface ExportForm {
   dir: string
   images: boolean
   zip: boolean
+  includeImages: boolean
+  includeVideos: boolean
+  includeLivePhotos: boolean
 }
 
 /** 从面板当前的筛选状态透传过来的口径（导出必须与屏幕一致）。 */
@@ -51,6 +58,9 @@ export interface MomentsExportOptions {
   month?: string
   mine?: string
   zip?: boolean
+  includeImages?: boolean
+  includeVideos?: boolean
+  includeLivePhotos?: boolean
   from?: number
   to?: number
   dir?: string
@@ -81,8 +91,15 @@ export function buildExportOptions(form: ExportForm, scope: ExportScope): Moment
   if (scope.media !== 'all') opts.media = scope.media
   if (scope.month) opts.month = scope.month
   if (scope.mine !== 'all') opts.mine = scope.mine
-  if (form.images) opts.images = true
-  if (form.zip) opts.zip = true
+  if (form.format === 'html' && form.images) opts.images = true
+  if (form.zip) {
+    opts.zip = true
+    // ZIP 媒体的默认口径是全部包含；只有用户明确关掉时才把 false 发下去。
+    // HTML 的 images 仍只表示“内嵌离线图片”，与这三个 ZIP 开关不是同一语义。
+    if (!form.includeImages) opts.includeImages = false
+    if (!form.includeVideos) opts.includeVideos = false
+    if (!form.includeLivePhotos) opts.includeLivePhotos = false
+  }
   const from = dayStart(form.from)
   const to = dayEnd(form.to)
   if (from !== undefined) opts.from = from
@@ -120,10 +137,19 @@ export function useMomentsExport(input: MomentsExportInput): {
   setExpImages: (v: boolean) => void
   expZip: boolean
   setExpZip: (v: boolean) => void
+  expIncludeImages: boolean
+  setExpIncludeImages: (v: boolean) => void
+  expIncludeVideos: boolean
+  setExpIncludeVideos: (v: boolean) => void
+  expIncludeLivePhotos: boolean
+  setExpIncludeLivePhotos: (v: boolean) => void
   syncing: boolean
   lastSync: number
   pickingDir: boolean
+  exportState: ExportTaskState
   exporting: boolean
+  finishing: boolean
+  cancelExport: () => void
   exportedPath: string | null
   setExportedPath: (v: string | null) => void
   openExport: () => void
@@ -137,13 +163,17 @@ export function useMomentsExport(input: MomentsExportInput): {
   const [expFrom, setExpFrom] = useState('')
   const [expTo, setExpTo] = useState('')
   const [expDir, setExpDir] = useState('')
-  const [expImages, setExpImages] = useState(false)
+  const [expImages, setExpImages] = useState(DEFAULT_EMBED_HTML_IMAGES)
   const [expZip, setExpZip] = useState(false)
+  const [expIncludeImages, setExpIncludeImages] = useState(true)
+  const [expIncludeVideos, setExpIncludeVideos] = useState(true)
+  const [expIncludeLivePhotos, setExpIncludeLivePhotos] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [lastSync, setLastSync] = useState(0)
   const [pickingDir, setPickingDir] = useState(false)
-  const [exporting, setExporting] = useState(false)
   const [exportedPath, setExportedPath] = useState<string | null>(null)
+  const exportTask = useExportTask()
+  const cancelExport = useCallback((): void => { void exportTask.cancel() }, [exportTask])
 
   // 手动重新同步：触发宿主重解密并派发更新事件（面板随后刷新）。
   // 派发那条 DOM 事件是**唯一**让其它面板也丢掉旧快照的通道，别换成直接调它们的接口。
@@ -176,30 +206,46 @@ export function useMomentsExport(input: MomentsExportInput): {
   }, [pickingDir])
 
   const doExport = useCallback(async (): Promise<void> => {
-    setExporting(true)
+    if (exportTask.running) return
     notify.clear()
-    try {
+    const outcome = await exportTask.run(async ({ jobId }) => {
       const opts = buildExportOptions(
-        { format: expFormat, from: expFrom, to: expTo, dir: expDir, images: expImages, zip: expZip },
+        {
+          format: expFormat,
+          from: expFrom,
+          to: expTo,
+          dir: expDir,
+          images: expImages,
+          zip: expZip,
+          includeImages: expIncludeImages,
+          includeVideos: expIncludeVideos,
+          includeLivePhotos: expIncludeLivePhotos,
+        },
         scope,
       )
-      const r = await apiExportMoments(opts)
-      notify.flash('已导出 ' + String(r.count) + ' 条动态 → ' + r.path)
-      setExportedPath(r.path)
-      setExportOpen(false)
-    } catch (e) {
-      notify.hold('导出失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
+      return apiExportMoments({ ...opts, jobId })
+    }, {
+      idPrefix: 'moments-export',
+      label: '导出朋友圈',
+      successMessage: (r) => '已导出 ' + String(r.count) + ' 条动态 → ' + r.path,
+    })
+    if (outcome.ok) {
+      notify.flash(outcome.message)
+      setExportedPath(outcome.result.path)
+    } else if (!outcome.canceled) {
+      notify.hold('导出失败: ' + outcome.error)
     }
-  }, [expFormat, expFrom, expTo, expDir, expImages, expZip, scope, notify])
+  }, [expFormat, expFrom, expTo, expDir, expImages, expZip, expIncludeImages, expIncludeVideos, expIncludeLivePhotos, scope, notify, exportTask])
 
   const openExport = useCallback((): void => { setExportOpen(true) }, [])
 
   return {
     exportOpen, setExportOpen, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo,
     expDir, setExpDir, expImages, setExpImages, expZip, setExpZip,
-    syncing, lastSync, pickingDir, exporting, exportedPath, setExportedPath,
-    openExport, doSync, pickDir, doExport,
+    expIncludeImages, setExpIncludeImages, expIncludeVideos, setExpIncludeVideos,
+    expIncludeLivePhotos, setExpIncludeLivePhotos,
+    syncing, lastSync, pickingDir, exportedPath, setExportedPath,
+    exportState: exportTask.state, exporting: exportTask.running, finishing: exportTask.finishing,
+    cancelExport, openExport, doSync, pickDir, doExport,
   }
 }

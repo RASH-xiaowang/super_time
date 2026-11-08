@@ -1,8 +1,8 @@
-import type { AnswerRuntimeCitation, AnswerRuntimeResult, AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
+import type { AnswerRuntimeCitation, AnswerReasoningSegment, AnswerRuntimeResult, AnswerRuntimeStage } from '../query/answer-runtime/types.ts';
 import type { AnswerStatus, EvidenceBundle, EvidenceLocator } from '../query/answer-runtime/evidence.ts';
 import type { ThreadState } from '../query/answer-runtime/thread-state.ts';
 import type { AnswerProfileId } from '../query/tools/profiles.ts';
-import { type AskDataScope, type AskScope } from './ask-runtime-prompt.ts';
+import { type AskScope } from './ask-runtime-prompt.ts';
 import type { AskCitation, AskResult } from '../types.ts';
 /** 与旧引用同形，并把运行时的证据定位信息一并带回（旧客户端会忽略多出来的字段）。 */
 export interface AskCitationWithTrace extends AskCitation {
@@ -13,6 +13,7 @@ export interface AskCitationWithTrace extends AskCitation {
 /** 生产编排结果：旧字段保持不变，新增字段用于过程解释与反馈归因。 */
 export interface AskRuntimeResult extends AskResult {
     status: AnswerStatus;
+    reasoningSegments?: AnswerReasoningSegment[];
     evidence?: EvidenceBundle;
     toolCalls?: AnswerRuntimeResultLike['toolCalls'];
     resources?: AnswerRuntimeResultLike['resources'];
@@ -21,8 +22,10 @@ export interface AskRuntimeResult extends AskResult {
     /** 本轮实际采用的继承/递进范围（便于诊断为什么查到这些数据）。 */
     appliedThreadState?: {
         session?: string;
+        contact?: string;
         from?: string;
         to?: string;
+        referencedMessage?: string;
         reason: string[];
     };
 }
@@ -47,11 +50,12 @@ export declare function reindexCitations(evidence: EvidenceBundle): AnswerRuntim
 export declare function askResultFromRuntime(input: {
     runtime: AnswerRuntimeResult;
     profile: AnswerProfileId;
-    dataScope?: AskDataScope;
     scope: AskScope;
     question: string;
     grounded?: GroundingSnapshot;
     threadState?: ThreadState;
+    /** 由编排层收集的思考分段；与实时事件使用同一份快照。 */
+    reasoningSegments?: readonly AnswerReasoningSegment[];
     /** 本轮由编排层收集的完整阶段事件；映射时再复制一次，避免调用方后续修改。 */
     stages?: readonly AnswerRuntimeStage[];
 }): AskRuntimeResult;

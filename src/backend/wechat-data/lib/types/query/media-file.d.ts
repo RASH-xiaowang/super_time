@@ -1,4 +1,9 @@
 /**
+ * IPC/HTTP 仍把文件作为 base64 data URL 传递，必须给同步整读设硬上限。
+ * 超过上限应走系统“打开文件”而不是把几十/几百 MB 扩展 4/3 后塞进 worker 内存。
+ */
+export declare const MESSAGE_FILE_DATA_URL_MAX_BYTES: number;
+/**
  * Resolve a received message file's on-disk path from msg/file.
  *
  * 归属要点：微信把收到的文件平铺在 `msg/file/<月份>/<原文件名>`，**目录不区分会话**，
@@ -33,6 +38,7 @@ export declare function resolveMessageFilePath(wechatBaseDir: string | undefined
     size?: number;
     createTime?: number;
     fileMd5?: string;
+    requireUnique?: boolean;
 }): MessageFileResolution;
 /** Resolve a received message file to a base64 data URL from msg/file. */
 export declare function resolveMessageFileDataUrl(wechatBaseDir: string | undefined, fileName: string, opts?: {

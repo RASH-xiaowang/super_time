@@ -37,6 +37,11 @@ function ok(cond: unknown, msg: string): void {
 }
 
 const html = renderToStaticMarkup(h(PrivacyConsentGate, { onAccepted: () => {}, onExit: () => {} }))
+const outboundStart = html.indexOf('会出网的地方（逐条）')
+const inboundStart = html.indexOf('会被连进来的地方（入站）')
+const outboundHtml = outboundStart >= 0 && inboundStart > outboundStart
+  ? html.slice(outboundStart, inboundStart)
+  : ''
 
 console.log('隐私同意闸门 SSR 冒烟')
 
@@ -94,9 +99,10 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('手机/浏览器不可调用'), '没有说清手机 / 浏览器不可调用凭据回读')
 })
 
-check('出网点开关口径与文档一致（应用内已无任何出网开关：7 条无开关 + 1 条仅点击时下载）', () => {
-  // 2026-09-30：出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
-  // 其余七个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
+check('出网点开关口径与文档一致（7 条无开关 + 1 条仅点击时下载 + 1 条默认关闭可关）', () => {
+  // 2026-09-30：全局出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
+  // 其余出网点没有全局开关；2026-10-30（v32）新增的「AI回复」是出网侧的 off 档
+  // （默认关闭、按单聊开启）。要断网仍只能靠系统防火墙或断网。
   // （2026-10-21：新增「任务触发（Webhook / 多家 RPA 厂商）」；它没有应用内开关，
   // 约束是每个任务的触发方式配置 —— 不配置就不发送。）
   //
@@ -105,45 +111,55 @@ check('出网点开关口径与文档一致（应用内已无任何出网开关�
   //
   // 2026-10-15：手机端（M0–M4）新增了**入站监听面**（`kind: 'off'`，局域网远程访问）。
   // 它刻意与出网点分开列、**不并进「共 N 个出网点」**（方向相反：本机监听、别的设备连进来）。
-  // 所以这里必须只数**出网侧**的两种档位（none / manual），把 off 排除掉 ——
-  // 否则这条断言会把入站那条算进来，报「应为 7 个，实际 8 个」。
-  const kinds = html.split('data-switch="').slice(1)
+  // 因此解析时必须先截出「出网」到「入站」之间的片段；否则入站的两条 off 会把总数算多。
+  ok(outboundStart >= 0 && inboundStart > outboundStart, '无法定位出网清单与入站清单的边界')
+  const kinds = outboundHtml.split('data-switch="').slice(1)
     .map((c) => c.slice(0, c.indexOf('"')))
-    .filter((k) => k === 'none' || k === 'manual')
+    .filter((k) => k === 'none' || k === 'manual' || k === 'off')
   const ORDER = [
     'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）',
-    '消息列表回复投递', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
+    '消息列表回复投递', 'AI回复', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
   ]
   /** 唯一一条「仅点击时下载」的出网点；其余出网点都应当是「无开关」。 */
   const MANUAL = '语音模型下载'
-  const at = ORDER.map((l) => html.indexOf(`>${l}<`))
+  /** 默认关闭、按单聊开启的出网点。 */
+  const OFF = 'AI回复'
+  const at = ORDER.map((l) => outboundHtml.indexOf(`>${l}<`))
   ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => (at[i] ?? -1) < 0).join('、')}`)
   // 取不到前一项就当 NaN：任何与 NaN 的比较都是 false ⇒ 宁可判错位，不许悄悄放过
   ok(at.every((v, i) => i === 0 || v > (at[i - 1] ?? Number.NaN)), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
   ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
   const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
   ok(kindOf[MANUAL] === 'manual', `${MANUAL}应标为「仅点击时下载」，实际 ${kindOf[MANUAL]}`)
-  for (const l of ORDER.filter((l) => l !== MANUAL)) ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
-  ok(kinds.filter((k) => k === 'none').length === ORDER.length - 1, `无开关的应当且仅当 ${ORDER.length - 1} 条（${MANUAL}除外）`)
+  ok(kindOf[OFF] === 'off', `${OFF}应标为「默认关闭 · 可关」，实际 ${kindOf[OFF]}`)
+  for (const l of ORDER.filter((l) => l !== MANUAL && l !== OFF)) {
+    ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
+  }
+  ok(kinds.filter((k) => k === 'none').length === ORDER.length - 2, `无开关的应当且仅当 ${ORDER.length - 2} 条（${MANUAL}、${OFF}除外）`)
   ok(kinds.filter((k) => k === 'manual').length === 1, '「仅点击时下载」的应当且仅当 1 条')
+  ok(kinds.filter((k) => k === 'off').length === 1, '「默认关闭 · 可关」的出网点应当且仅当 1 条')
   // 标记文字与 data-switch 同源，这里再按渲染结果数一遍（防「值对但标签写错」）。
-  ok((html.match(/>无开关</g) ?? []).length === ORDER.length - 1, `渲染出的「无开关」标记不是 ${ORDER.length - 1} 个`)
-  ok((html.match(/>仅点击时下载</g) ?? []).length === 1, '渲染出的「仅点击时下载」标记不是 1 个')
+  ok((outboundHtml.match(/>无开关</g) ?? []).length === ORDER.length - 2, `渲染出的「无开关」标记不是 ${ORDER.length - 2} 个`)
+  ok((outboundHtml.match(/>仅点击时下载</g) ?? []).length === 1, '渲染出的「仅点击时下载」标记不是 1 个')
+  ok((outboundHtml.match(/>默认关闭 · 可关</g) ?? []).length === 1, '渲染出的「默认关闭 · 可关」出网标记不是 1 个')
 })
 
-check('重点被单独框出：一句话结论 + 那句「没有任何出网开关」+ 完全离线的诚实说明', () => {
+check('重点被单独框出：一句话结论 + 那句「没有全局出网开关」+ 完全离线的诚实说明', () => {
   ok(html.includes('一句话结论'), '缺少顶部结论块')
-  // 结论块自己说「应用内已没有任何出网开关」——这是全页最容易被误读的一点。
-  ok(html.includes('没有任何出网开关'), '结论块没点明「应用内已没有任何出网开关」')
+  // 结论块自己说「应用内没有全局出网开关」——这是全页最容易被误读的一点。
+  ok(html.includes('没有全局出网开关'), '结论块没点明「应用内没有全局出网开关」')
   // 统计行里的条数是界面自己算出来的（blocked.length），这里核对的是**它算得对**：
   // 与清单里 data-switch="none" 的颗数一致。写死数字的守则会自己过期（它曾经就是硬写着 2）。
-  const noneCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('none')).length
-  const manualCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('manual')).length
-  ok(/共[\s\S]{0,40}?8[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 8 个出网点」')
-  ok(new RegExp(`${String(noneCount)}[\\s\\S]{0,20}?条无开关`).test(html),
+  const noneCount = outboundHtml.split('data-switch="').slice(1).filter((c) => c.startsWith('none')).length
+  const nonNoneCount = outboundHtml.split('data-switch="').slice(1)
+    .filter((c) => c.startsWith('manual') || c.startsWith('off')).length
+  const totalCount = noneCount + nonNoneCount
+  ok(new RegExp(`共[\\s\\S]{0,40}?${String(totalCount)}[\\s\\S]{0,40}?个出网点`).test(outboundHtml),
+    `统计行没写「共 ${totalCount} 个出网点」`)
+  ok(new RegExp(`${String(noneCount)}[\\s\\S]{0,20}?条无开关`).test(outboundHtml),
     `统计行里的「无开关」条数应与清单一致（${String(noneCount)} 条）`)
-  ok(new RegExp(`${String(manualCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(html),
-    `统计行里的「只在你要用时发生」条数应与清单一致（${String(manualCount)} 条）`)
+  ok(new RegExp(`${String(nonNoneCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(outboundHtml),
+    `统计行里的「只在你要用时发生」条数应与出网侧非 none 档一致（${String(nonNoneCount)} 条）`)
   ok(html.includes('诚实说明'), '缺少「别把关开关读成完全离线」的说明')
   ok(html.includes('系统防火墙') || html.includes('断网'), '没有给出完全离线的办法')
 })

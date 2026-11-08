@@ -152,6 +152,66 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+@media (max-width: 560px) {
+  .root [class*='_panelHeader_'] {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .root [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .root [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .filterRow,
+  .filterSearchRow {
+    gap: 4px;
+  }
+
+  .filterRow {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  .filterRow > *,
+  .filterRow [class*='_dateRangeInline_'] > * {
+    flex: 0 0 auto;
+  }
+
+  .filterRow [class*='_dateRangeInline_'] {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+    width: max-content;
+  }
+
+  .filterRow [class*='_dateRangePresets_'],
+  .filterRow [class*='_dateRangeRow_'] {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
+  .filterSearchRow .searchFlex {
+    flex: 1 1 120px;
+    min-width: 120px;
+  }
+
+  .statText {
+    margin-left: 0;
+    font-size: 10px;
+  }
+}
 .tableCard {
   margin: 12px 0 14px;
   overflow: hidden;
@@ -175,8 +235,8 @@
 .tdType { width: 72px; }
 .tdAction { width: 200px; }
 .tdTarget {
-  width: 70px;
-  min-width: 60px;
-  max-width: 90px;
+  width: 200px;
+  min-width: 160px;
+  max-width: 220px;
 }
 .tdStatus { width: 76px; }

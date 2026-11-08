@@ -7,11 +7,19 @@
  *
  * @module panels/records-virtual
  */
+import { useCallback } from 'react'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import type { RecordItem } from './Records.tsx'
 
-/** 一行的估计高度（真实高度由 measureElement 回灌）：8 列那种最宽的表格也就 40px 上下。 */
-export const RECORD_ROW_PX = 36
+/** 一行固定 32px；Records 的 tr/td 明确使用同一高度，不依赖浏览器的动态测量。 */
+export const RECORD_ROW_PX = 32
+
+/**
+ * Rows are deliberately fixed-height. Measuring table rows creates a native-layout
+ * feedback loop here: measurement changes the tail spacer, which can change which
+ * row is `:last-child`, and therefore changes the row's border height by ~1px.
+ */
+const estimateRecordRow = (): number => RECORD_ROW_PX
 
 /** 视口里的一个行（含它在 `items` 里的**真实**下标）。 */
 export interface VisibleRow {
@@ -36,12 +44,14 @@ export function useRecordRowVirtualizer(
   keyPrefix: string,
   scrollRef: React.RefObject<HTMLDivElement | null>,
 ): Virtualizer<HTMLDivElement, Element> {
+  const getScrollElement = useCallback(() => scrollRef.current, [scrollRef])
+  const getItemKey = useCallback((i: number) => keyPrefix + '/' + String(i), [keyPrefix])
   return useVirtualizer({
     count,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => RECORD_ROW_PX,
+    getScrollElement,
+    estimateSize: estimateRecordRow,
     overscan: 8,
-    getItemKey: (i) => keyPrefix + '/' + String(i),
+    getItemKey,
   })
 }
 
@@ -78,8 +88,7 @@ export interface RecordPads {
  * 共同算出来的，行一旦脱离普通流，表头与行的列就会对不齐（破相），`sticky` 表头也会失效。
  * 撑杆是普通流里的空 tr，浏览器照常让它参与列宽计算。
  *
- * 高度取自 `getTotalSize()`（虚拟器累计的**真实**高度），不是「行数 × 估计值」——
- * 后者会在 `measureElement` 回灌之后集体缩水，整表跳一下。
+ * 高度取自 `getTotalSize()`，行高固定，因此滚动过程中不会出现测量与撑杆互相改写。
  * @param virtualizer - 行虚拟器。
  * @returns 上下撑杆高度。
  */

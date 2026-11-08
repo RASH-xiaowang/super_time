@@ -34,6 +34,18 @@ export interface MomentCommentItem {
         seed?: string;
     };
 }
+/** One live-photo video embedded in a moments image (`<LivePhoto><liveMedia>`). */
+export interface MomentLivePhotoItem {
+    url: string;
+    thumb: string;
+    key: string;
+    md5: string;
+    duration: number;
+    /** `<liveStillImageTimeMs>`：静态帧时刻，单位毫秒。 */
+    stillImageTimeMs?: number;
+    id?: string;
+    timelineId?: string;
+}
 /** One moments (朋友圈) entry (content XML parsed; CDN media URLs unresolved). */
 export interface MomentItem {
     tid: string;
@@ -54,6 +66,8 @@ export interface MomentItem {
         token?: string;
         id?: string;
         timelineId?: string;
+        /** 实况照片的动态部分；普通图片没有该字段。 */
+        livePhoto?: MomentLivePhotoItem;
     }>;
     videos: Array<{
         url: string;
@@ -223,6 +237,20 @@ export interface FileItem {
     sourceUsername?: string;
     /** 附件目录反查来源用户的企微企业名称。 */
     sourceTalkerEnterpriseName?: string;
+}
+/**
+ * Result of saving one local media item as an original file.
+ *
+ * `path` is the final destination after the backend corrected the extension
+ * to the sniffed container format (for example a PNG picked as `.jpg`).
+ */
+export interface MediaOriginalExportResult {
+    ok: boolean;
+    path?: string;
+    bytes?: number;
+    format?: string;
+    source?: 'local';
+    error?: string;
 }
 /** Moments snapshot. */
 export interface MomentsSnapshot {

@@ -15,6 +15,8 @@
  * @module search-display
  */
 
+import { displayNameForUsername } from './message-identity.ts'
+
 /** Split the group-message sender prefix (`wxid_xxx:\n`) into sender id + body. */
 export function splitGroupPrefix(text: string, username: string): { sender: string; body: string } {
   if (!username.endsWith('@chatroom')) return { sender: '', body: text }
@@ -27,10 +29,10 @@ export function stripGroupPrefix(text: string, username: string): string {
   return splitGroupPrefix(text, username).body
 }
 
-/** 群内发送者的显示名（联系人表里有就用名字，否则退回 wxid）。 */
+/** 群内发送者的显示名；无映射时走不泄漏内部 ID 的安全兜底。 */
 export function senderLabel(sender: string, names: Map<string, string>): string {
   if (!sender) return ''
-  return names.get(sender) ?? sender
+  return displayNameForUsername(sender, names)
 }
 
 /**

@@ -110,7 +110,11 @@
 
 @media (max-width: 900px) {
   .gridTop,
-  .gridBottom { grid-template-columns: minmax(0, 1fr); }
+  .gridBottom {
+    flex: 0 0 auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
   .gridTop > * { height: 300px; }
   .gridBottom > * { height: 360px; }
 }

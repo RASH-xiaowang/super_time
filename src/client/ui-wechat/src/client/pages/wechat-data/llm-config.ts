@@ -144,7 +144,8 @@ export async function apiDeleteLlmProfile(id: string): Promise<LlmProfilesSnapsh
 }
 
 /**
- * 通过 base_url 拉取官方模型列表（OpenAI 兼容 GET {base_url}/models）。
+ * 通过 base_url 拉取官方模型列表（多数厂商是 OpenAI 兼容 GET {base_url}/models；
+ * OpenCode 由主进程自动映射到其独立的模型列表路径）。
  * 实际请求在主进程发出（渲染页 file:// 跨域 fetch 会被 CORS 拦截）；
  * 未填 API Key 时后端会按厂商回退内置参考清单（source='catalog'）。
  * @param options - 地址与凭据（用当前表单的草稿值，不必先保存）。

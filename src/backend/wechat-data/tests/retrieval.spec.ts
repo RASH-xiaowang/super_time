@@ -697,6 +697,36 @@ describe('聚合通道：维度判定与时间窗', () => {
     expect(runAggregate({ decryptedDir: makeMissingDecryptedDir(), question: '哪个群最多' })).toEqual([])
   })
 
+  it('会话范围聚合只统计当前会话，不串入其他会话', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-aggregate-scope-'))
+    scratch.push(root)
+    const decryptedDir = join(root, 'decrypted')
+    mkdirSync(decryptedDir, { recursive: true })
+    const db = new DatabaseSync(join(root, 'wechat_search.db'))
+    try {
+      db.exec('CREATE TABLE message_meta (text TEXT, username TEXT, local_id INTEGER, create_time INTEGER)')
+      const insert = db.prepare('INSERT INTO message_meta VALUES (?, ?, ?, ?)')
+      insert.run('合同一', 'wxid_a', 1, 1700000000)
+      insert.run('合同二', 'wxid_a', 2, 1700000100)
+      insert.run('合同三', 'wxid_b', 3, 1700000200)
+    } finally {
+      db.close()
+    }
+
+    const facts = runAggregate({
+      decryptedDir,
+      question: '哪个会话消息最多',
+      scope: { username: 'wxid_a' },
+    })
+    expect(facts).toHaveLength(1)
+    expect(facts[0]?.total).toBe(2)
+    expect(facts[0]?.body).toContain('2 条')
+    expect(facts[0]?.body).not.toContain('3 条')
+    expect(facts[0]?.body).not.toContain('wxid_b')
+    expect(facts[0]?.title).toContain('共 2 条消息')
+    expect(facts[0]?.title).toContain('当前范围')
+  })
+
   /**
    * 方向词组合（2026-10-16 实测踩到）。
    *

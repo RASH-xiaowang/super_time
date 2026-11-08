@@ -57,11 +57,13 @@ export function MoreCard({ title, extra, zone, span = 4, tone = 'cyan', children
 /**
  * 年度资金：全年转账 / 红包的笔数、总额、最大一笔与往来 TOP。
  *
- * 口径写清了两件事，避免被误读：**读不出金额的那笔不计入**（不许用 0 冒充一笔），
- * 以及"不是账单"——它只统计聊天里的转账/红包消息，不含支付账单或群收款之外的流水。
+ * 口径写清两件事：读不出金额的那笔不计入合计（显示未知），红包只认本机系统消息
+ * 证实的领取，转账按业务 id 去重。它不是支付账单，不把聊天卡片冒充完整流水。
  */
 export function MoneyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const m = r.money
+  const unknown = m.amountUnknownCount ?? 0
+  const knownAmount = m.count > 0 && unknown === m.count
   return (
     <MoreCard span={3} tone="green" zone="财务与资产" title="年度资金" extra={m.count > 0 ? `${String(m.count)} 笔` : undefined}>
       {m.count === 0 ? (
@@ -69,14 +71,26 @@ export function MoneyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
       ) : (
         <>
           <div className={css.moreRow}>
-            <span>合计</span>
-            <span className={css.moreNum}>¥{m.total.toFixed(2)}</span>
+            <span>已知金额合计</span>
+            <span className={css.moreNum}>{knownAmount ? '金额未知' : `¥${m.total.toFixed(2)}`}</span>
           </div>
+          {unknown > 0 && (
+            <div className={css.moreRow}>
+              <span>金额未知</span>
+              <span className={css.moreRowValue}>{unknown} 笔未计入合计</span>
+            </div>
+          )}
+          {(m.unconfirmedRedpacketCount ?? 0) > 0 && (
+            <div className={css.moreRow}>
+              <span>红包待核实</span>
+              <span className={css.moreRowValue}>{m.unconfirmedRedpacketCount} 个无本机领取证据，未计入</span>
+            </div>
+          )}
           <div className={css.moreList}>
             <div className={css.moreRow}>
               <span>最大一笔</span>
               <span className={css.moreRowValue}>
-                ¥{m.topAmount.toFixed(2)}
+                {knownAmount ? '金额未知' : `¥${m.topAmount.toFixed(2)}`}
                 {m.topPeerName ? (
                   <>
                     <span aria-hidden="true">·</span>
@@ -193,7 +207,7 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
   if (r.rhythm.nightShare >= 0.2) bits.push(`你是「深夜型选手」：${(r.rhythm.nightShare * 100).toFixed(1)}% 的消息发生在 0–6 点`)
   else if (r.rhythm.nightShare > 0 && r.rhythm.nightShare < 0.05) bits.push('你几乎不熬夜：0–6 点只占不到 5% 的消息')
   if (r.sentDailyAvg >= 80) bits.push(`日均发出 ${String(r.sentDailyAvg)} 条，是个话痨`)
-  if (r.money.total >= 100000) bits.push(`聊天里的转账/红包合计 ¥${r.money.total.toFixed(0)} —— 这里头有大半是生意`)
+  if (r.money.total >= 100000) bits.push(`已核对的聊天转账合计 ¥${r.money.total.toFixed(0)}`)
   if (r.catchphrase.phrase) bits.push(`口头禅是「${r.catchphrase.phrase}」，说了 ${fmt(r.catchphrase.count)} 次`)
   if (r.buddy) bits.push(`今年最常聊的是 ${withEnterprise(r.buddy.name, r.buddy.enterpriseName)}`)
 

@@ -8,9 +8,9 @@
  */
 
 import type { ChatlogFrame } from './chats-chatlog.ts'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiCancelExportJob, apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
-import { useExportProgressRelay } from './export-progress-relay.ts'
+import { useCallback, useState } from 'react'
+import { apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
+import { isCanceledExportError, useExportTask, type ExportTaskState } from './export-task.ts'
 import type { ChatlogRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 /**
@@ -23,6 +23,15 @@ export type ExpFormat = 'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'
 
 /** 导出弹窗里「消息类型」那一张表的列定义（`EXPO_TYPES`）。 */
 export type ExpoType = { key: string; label: string; types?: readonly number[]; rich?: readonly string[] }
+
+const IDLE_EXPORT_STATE: ExportTaskState = {
+  status: 'idle',
+  label: '',
+  progress: null,
+  message: '',
+  canceling: false,
+  cancelable: false,
+}
 
 export interface useChatsExportInputs {
   EXPO_TYPES: ReadonlyArray<ExpoType>
@@ -37,38 +46,16 @@ export function useChatsExport(inputs: useChatsExportInputs) {
   const { EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed } = inputs
 const [batchMode, setBatchMode] = useState(false)
 const [selected, setSelected] = useState<Set<string>>(new Set())
-const [batchExporting, setBatchExporting] = useState(false)
-const [batchMsg, setBatchMsg] = useState<string | null>(null)
 const [, setAvatarVersion] = useState(0)
-
-/* 单次导出的实时进度（M3）：回调与 AbortSignal 都过不了 IPC，后端只能把进度**推**出来
-   （`wechat-export/progress` → ui-entry 中继成 DOM 事件），所以这里按 jobId 认领。 */
-const [exportProgress, setExportProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
-const exportJobRef = useRef('')
-/**
- * W2-10.4：推断了就拉（`getExportProgress`）。推是主路，这条只是兜底 ——
- * 推送静默 2.5 秒以上、且确实有任务在飞时才会发请求，见 `export-progress-relay.ts`。
- */
-const noteExportPush = useExportProgressRelay(exportJobRef, setExportProgress)
-
-useEffect(() => {
-  const onProgress = (e: Event): void => {
-    const p = (e as CustomEvent<{ jobId?: string; phase?: string; done?: number; total?: number }>).detail
-    if (!p || p.jobId !== exportJobRef.current) return
-    setExportProgress({ phase: String(p.phase ?? ''), done: Number(p.done ?? 0), total: Number(p.total ?? 0) })
-    // 推送通了：告诉兜底那条路先歇着（否则它会一直拉到任务结束）。
-    noteExportPush()
-  }
-  window.addEventListener('dsh-wechat-export-progress', onProgress)
-  return () => { window.removeEventListener('dsh-wechat-export-progress', onProgress) }
-}, [noteExportPush])
-
-/** 取消正在跑的导出：只发取消信号，收尾仍由 `exportSession` 的 finally 做（终态由后端记）。 */
-const cancelExport = useCallback((): void => {
-  const jobId = exportJobRef.current
-  if (!jobId) return
-  void apiCancelExportJob(jobId).catch(() => { /* 取消失败：让 finally 收尾，不谎报 */ })
-}, [])
+const SINGLE_EXPORT_LABEL = '导出聊天记录'
+const BATCH_EXPORT_LABEL = '批量导出会话'
+const exportTask = useExportTask()
+const exporting = exportTask.running && exportTask.state.label === SINGLE_EXPORT_LABEL
+const batchExporting = exportTask.running && exportTask.state.label === BATCH_EXPORT_LABEL
+const singleExportState = exportTask.state.label === SINGLE_EXPORT_LABEL ? exportTask.state : IDLE_EXPORT_STATE
+const batchExportState = exportTask.state.label === BATCH_EXPORT_LABEL ? exportTask.state : null
+/** 取消只发信号，终态仍由当前 RPC 的返回/异常决定。 */
+const cancelExport = useCallback((): void => { void exportTask.cancel() }, [exportTask])
 
 const toggleSelect = (username: string): void => {
   setSelected((prev) => {
@@ -81,25 +68,43 @@ const toggleSelect = (username: string): void => {
 
 const exportBatch = useCallback(async (): Promise<void> => {
   const list = [...selected]
-  if (list.length === 0) return
-  setBatchExporting(true)
-  setBatchMsg(null)
-  let done = 0
-  const errors: string[] = []
-  try {
-    for (const username of list) {
+  if (list.length === 0 || exportTask.running) return
+  await exportTask.run(async ({ jobId, bindJobId, cancelRequested, report }) => {
+    let done = 0
+    const errors: string[] = []
+    report({ phase: 'batch', done, total: list.length })
+    for (const [index, username] of list.entries()) {
+      if (cancelRequested()) throw new Error('任务已取消')
+      // 每个会话使用独立后端 jobId：上一项迟到的事件不会覆盖下一项或批量汇总。
+      // 取消仍通过 bindJobId 找到当前正在跑的那一项。
+      bindJobId(`${jobId}-item-${String(index + 1)}`)
       try {
-        await apiExportSessionMessages({ username, format: 'txt', count: 0 })
+        // 批量模式也走会话媒体包，不再只交付 TXT 而把图片/视频留在本机。
+        await apiExportSessionMessages({
+          username,
+          format: 'txt',
+          count: 0,
+          zip: true,
+          jobId: `${jobId}-item-${String(index + 1)}`,
+        })
+        if (cancelRequested()) throw new Error('任务已取消')
         done += 1
+        report({ phase: 'batch', done, total: list.length })
       } catch (e) {
+        if (cancelRequested() || isCanceledExportError(e)) throw e
         errors.push(username + ': ' + (e as Error).message)
+        report({ phase: 'batch', done: done + errors.length, total: list.length })
       }
     }
-    setBatchMsg(`已导出 ${done}/${list.length} 个会话${errors.length ? `，失败 ${errors.length} 个` : ''}`)
-  } finally {
-    setBatchExporting(false)
-  }
-}, [selected])
+    return { done, total: list.length, errors }
+  }, {
+    idPrefix: 'chats-export-batch',
+    label: BATCH_EXPORT_LABEL,
+    progress: { phase: 'batch', done: 0, total: list.length },
+    cooperativeCancel: true,
+    successMessage: (r) => `已导出 ${r.done}/${r.total} 个会话原文件 ZIP${r.errors.length ? `，失败 ${r.errors.length} 个` : ''}`,
+  })
+}, [selected, exportTask])
 
 const togglePinned = (): void => {
   setPinnedCollapsed((v) => {
@@ -110,7 +115,6 @@ const togglePinned = (): void => {
 }
 
 /** Open the lightbox at a message image (strip = all type-3 messages loaded). */
-const [exporting, setExporting] = useState(false)
 const [exportMsg, setExportMsg] = useState<string | null>(null)
 // export dialog state
 const [exportOpen, setExportOpen] = useState(false)
@@ -129,18 +133,14 @@ const EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'excel', label: 'Excel' }, { value: 'sql', label: 'SQL' }, { value: 'json', label: 'JSON' },
 ]
 const exportSession = useCallback(async (): Promise<void> => {
-  if (!curSession || exporting) return
-  setExporting(true)
+  if (!curSession || exportTask.running) return
   setExportMsg(null)
-  try {
-    const jobId = 'chats-export-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
-    exportJobRef.current = jobId
-    setExportProgress(null)
-    const chosen = EXPO_TYPES.filter(c => expTypes.includes(c.key))
-    const types = chosen.flatMap(c => [...(c.types ?? [])])
-    const richTypes = chosen.flatMap(c => [...(c.rich ?? [])])
-    const fromSec = expFrom ? Math.floor(new Date(expFrom + 'T00:00:00').getTime() / 1000) : 0
-    const toSec = expTo ? Math.floor(new Date(expTo + 'T23:59:59').getTime() / 1000) : 0
+  const chosen = EXPO_TYPES.filter(c => expTypes.includes(c.key))
+  const types = chosen.flatMap(c => [...(c.types ?? [])])
+  const richTypes = chosen.flatMap(c => [...(c.rich ?? [])])
+  const fromSec = expFrom ? Math.floor(new Date(expFrom + 'T00:00:00').getTime() / 1000) : 0
+  const toSec = expTo ? Math.floor(new Date(expTo + 'T23:59:59').getTime() / 1000) : 0
+  const outcome = await exportTask.run(async ({ jobId }) => {
     const opts: {
       username: string
       format: string
@@ -153,11 +153,13 @@ const exportSession = useCallback(async (): Promise<void> => {
       to?: number
       filename?: string
       zip?: boolean
+      sessionName?: string
     } = {
       username: curSession.username,
       format: expFormat,
       count: expCount,
       jobId,
+      sessionName: curSession.displayName,
     }
     if (expDir.trim()) opts.dir = expDir.trim()
     if (types.length > 0) opts.types = types
@@ -166,22 +168,18 @@ const exportSession = useCallback(async (): Promise<void> => {
     if (toSec > 0) opts.to = toSec
     if (expFilename.trim()) opts.filename = expFilename.trim()
     if (expZip) opts.zip = true
-    const r = await apiExportSessionMessages(opts)
-    const media = r.mediaCount && r.mediaCount > 0 ? `、${r.mediaCount} 个资源` : ''
-    const missing = r.mediaMissingCount && r.mediaMissingCount > 0 ? `（${r.mediaMissingCount} 个资源本地缺失，已写入清单）` : ''
-    setExportMsg(`已导出 ${r.count} 条${media}${missing} → ${r.path}`)
-    setExportOpen(false)
-  } catch (e) {
-    const msg = String((e as Error)?.message ?? e)
-    // 「中止」是用户自己按的，不是失败：后端按 canceled 记账，这里也不能报成「导出失败」
-    setExportMsg(/取消|cancel|abort/i.test(msg) ? '已取消导出' : '导出失败: ' + msg)
-  } finally {
-    // 终态（含被取消）由后端记在槽里；这里只管「别再显示进度条」
-    exportJobRef.current = ''
-    setExportProgress(null)
-    setExporting(false)
-  }
-}, [curSession, exporting, expFormat, expCount, expDir, expTypes, expFrom, expTo, expFilename, expZip])
+    return apiExportSessionMessages(opts)
+  }, {
+    idPrefix: 'chats-export',
+    label: SINGLE_EXPORT_LABEL,
+    successMessage: (r) => {
+      const media = r.mediaCount && r.mediaCount > 0 ? `、${r.mediaCount} 个资源` : ''
+      const missing = r.mediaMissingCount && r.mediaMissingCount > 0 ? `（${r.mediaMissingCount} 个资源本地缺失，已写入清单）` : ''
+      return `已导出 ${r.count} 条${media}${missing} → ${r.path}`
+    },
+  })
+  setExportMsg(outcome.ok ? outcome.message : outcome.canceled ? '已取消导出' : '导出失败: ' + outcome.error)
+}, [curSession, exportTask, expFormat, expCount, expDir, expTypes, expFrom, expTo, expFilename, expZip])
 
 const chooseExportDir = async (): Promise<void> => {
   if (pickingDir) return
@@ -189,6 +187,8 @@ const chooseExportDir = async (): Promise<void> => {
   try {
     const dir = await pickDirectory()
     if (dir) setExpDir(dir)
+  } catch (e) {
+    setExportMsg('选择目录失败：' + (e as Error).message)
   } finally {
     setPickingDir(false)
   }
@@ -220,5 +220,5 @@ const openNestedChatlog = async (rec: ChatlogRecord): Promise<void> => {
 }
 
 // ── message edit (C5) ──
-  return { EXPO_FORMATS, batchExporting, batchMode, batchMsg, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect }
+  return { EXPO_FORMATS, batchExporting, batchExportState, batchFinishing: batchExporting && exportTask.finishing, batchMode, cancelBatchExport: cancelExport, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exportState: singleExportState, exporting, finishing: exporting && exportTask.finishing, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect }
 }

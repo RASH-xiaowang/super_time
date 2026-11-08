@@ -29,6 +29,8 @@ function codeOf(file: string): string {
 const ask = codeOf('Ask.tsx')
 const dialog = codeOf('AskHistoryDialog.tsx')
 const dialogCss = codeOf('ask-history.module.css')
+const runtimeTrace = codeOf('AskHistoryRuntimeTrace.tsx')
+const runtimeAdapter = codeOf('ask-history-runtime-trace.ts')
 
 describe('问答历史：入口挂在「微信问答」面板头', () => {
   it('弹窗组件存在且被 Ask.tsx import', () => {
@@ -65,6 +67,32 @@ describe('问答历史：入口挂在「微信问答」面板头', () => {
     // 读接口不能被缓存住：刚问完就打开必须能看到那一条
     expect(dialog).toContain('usePagedList')
   })
+
+  it('展开记录时接入持久化执行轨迹，旧记录 undefined 时静默不渲染', () => {
+    expect(dialog).toContain("from './AskHistoryRuntimeTrace.tsx'")
+    expect(dialog).toContain('<AskHistoryRuntimeTraceView trace={it.runtimeTrace} />')
+    expect(dialog).toMatch(/\{expanded && <AskHistoryRuntimeTraceView/)
+    expect(runtimeTrace).toContain('askHistoryTraceViewOf(trace)')
+    expect(runtimeTrace).toContain('if (view === null) return null')
+    expect(runtimeTrace).toContain('<RunTraceTimeline')
+    expect(runtimeTrace).toContain('streaming={false}')
+    expect(runtimeTrace).toContain('过程记录已按本机存储预算截断')
+  })
+
+  it('历史轨迹复用实时轮次分组，而不是另写一份 reasoning 平铺', () => {
+    expect(runtimeAdapter).toContain('traceGroupsOf({ stages, tools, reasoning })')
+    expect(runtimeAdapter).toContain('normalizeAskStage')
+    expect(runtimeAdapter).toContain('normalizeAskReasoningSegment')
+    expect(runtimeAdapter).toContain('toolViewsOf')
+    expect(dialogCss).toContain('.runtimeTrace')
+    expect(dialogCss).toContain('.traceNotice')
+  })
+
+  it('吸顶筛选条盖住滚动区顶部内边距，避免列表内容从上方缝隙露出', () => {
+    expect(dialogCss).toMatch(
+      /\.head\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?box-shadow:\s*0\s+calc\(-1\s*\*\s*var\(--nm-s-4\)\)\s+0\s+var\(--nm-bg-card\)/,
+    )
+  })
 })
 
 describe('问答历史：三条行为契约', () => {
@@ -97,20 +125,6 @@ describe('问答历史：三条行为契约', () => {
     expect(dialog).toMatch(/const ok = await confirm\(/)
     // 危险动作单独一行（避免用户筛着筛着顺手点掉全库历史）
     expect(dialog).toContain('data-clear-ask-history')
-  })
-})
-
-describe('问答历史：自动回复（auto）这个来源认得出来', () => {
-  it('来源页签与中文标签都有 auto', () => {
-    // 标签缺了 ⇒ 列表里只显示一个裸的 `auto`（用户不知道那是什么）；
-    // 页签缺了 ⇒ 自动回复的记录只能混在「微信问答」里一起看。
-    expect(dialog, 'SRC_LABEL 没认 auto，或没有点明是 ClawBot 代回').toMatch(/auto:\s*'ClawBot 自动回复'/)
-    expect(dialog, 'SRC_TABS 没有 auto 项').toMatch(/value:\s*'auto',\s*label:\s*'ClawBot 自动回复'/)
-  })
-
-  it('auto 有独立配色（与 ask / session 不撞色）', () => {
-    expect(dialogCss, 'auto 没有独立配色 ⇒ 三种来源在列表里长得一样')
-      .toContain(".srcTag[data-src='auto']")
   })
 })
 

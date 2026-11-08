@@ -19,16 +19,24 @@ export interface GroundingAudit {
     /** 是否通过（只有「引用原文里没有的硬值」才算不通过）。 */
     ok: boolean;
 }
-/** 回答面向的展示场景：界面问答要引用角标，自动回复禁止角标。 */
-export type GroundingReplyMode = 'cited' | 'chat';
+/** 回答面向的展示场景：普通问答要引用角标，独立资源回答禁止角标。 */
+export type GroundingReplyMode = 'cited' | 'plain';
 /** 接地审计选项。 */
 export interface GroundingAuditOptions {
     /**
      * 是否要求事实句带 `[n]` 角标，缺省 true。
-     * 自动回复在微信里没有可点击角标，必须显式关闭这项要求；
+     * 独立资源回答没有可点击角标，必须显式关闭这项要求；
      * 关闭后金额/日期/长数字仍会逐项核对，不会降低事实校验强度。
      */
     requireCitationMarkers?: boolean;
+    /**
+     * 允许作为高风险值出处的用户输入文本。
+     *
+     * 用户问题里已经写明的日期/金额不是模型编造；回答复述这些值时应放行，
+     * 否则「2026-10-27 ~ 2026-11-02」这类范围端点会被误判为无出处日期，
+     * 每次都触发一次昂贵的整段重写。
+     */
+    allowValuesFrom?: readonly string[];
 }
 /** 引用原文侧的比对池。 */
 interface ValuePools {
@@ -54,6 +62,6 @@ export declare function buildValuePools(evidenceTexts: readonly string[]): Value
 export declare function auditGrounding(answer: string, evidenceTexts: readonly string[], citationCount: number, options?: GroundingAuditOptions): GroundingAudit;
 /** 把违规值转成「回炉重写」的具体指令；没有违规时返回空串。 */
 export declare function groundingRepairHint(audit: GroundingAudit, mode?: GroundingReplyMode): string;
-/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的微信自动回复）。 */
+/** 去掉模型误加的 `[n]` 角标（仅用于明确禁止角标的独立资源回答）。 */
 export declare function stripCitationMarkers(text: string): string;
 export {};

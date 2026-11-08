@@ -13,6 +13,7 @@ export interface ToolStageInput {
   key: string
   label: string
   status: AnswerRuntimeStage['status']
+  round?: number
   callId: string
   toolName: string
   argumentsSummary: string
@@ -47,8 +48,15 @@ export function emitStage(
   label: string,
   status: AnswerRuntimeStage['status'],
   detail?: string,
+  round?: number,
 ): void {
-  safeEmit(emit, { key, label, status, ...(detail === undefined ? {} : { detail }) })
+  safeEmit(emit, {
+    key,
+    label,
+    status,
+    ...(detail === undefined ? {} : { detail }),
+    ...(round === undefined ? {} : { round }),
+  })
 }
 
 /** 发射工具阶段；只组装结构化白名单字段。 */
@@ -60,6 +68,7 @@ export function emitToolStage(
     key: input.key,
     label: input.label,
     status: input.status,
+    ...(input.round === undefined ? {} : { round: input.round }),
     phase: input.phase,
     callId: input.callId,
     toolName: input.toolName,

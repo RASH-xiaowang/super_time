@@ -19,9 +19,9 @@ const releaseWorkflow = readFileSync(join(ROOT, '.github', 'workflows', 'release
 const buildTypesSource = readFileSync(join(ROOT, 'scripts', 'build-types.js'), 'utf8')
 
 describe('构建与打包命令覆盖全部入库产物', () => {
-  it('build:all 按 backend → types → ui 的顺序一次构建全部产物', () => {
+  it('build:all 按 backend → types → ui 的顺序构建，并跑字体门禁', () => {
     expect(pkg.scripts['build:all'])
-      .toBe('npm run build:backend && npm run build:types && npm run build:ui')
+      .toBe('npm run build:backend && npm run build:types && npm run build:ui && npm run font:check')
   })
 
   it('build:types 先清空生成目录再重建，删除/改名源文件不会留下旧声明', () => {

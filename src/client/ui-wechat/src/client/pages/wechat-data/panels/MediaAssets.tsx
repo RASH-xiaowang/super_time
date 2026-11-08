@@ -3,8 +3,8 @@
  * 空间治理的可执行动作（去重/清理）为后续项；本页只读盘点，与「存储」分段共用
  * 页头语言（标题 + ≤2 动作）与内联 KPI 条。
  */
-import { useCallback } from 'react'
-import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
+import { useCallback, useRef } from 'react'
+import { ListSentinel, ListSkeleton, ProgressiveListSpacer, useElapsedSeconds, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetMediaAssets } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { MediaAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
@@ -27,7 +27,14 @@ export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) =>
   // WAL 增量推送到达后静默重取（不翻 loading）：实时刷新接线由 wechat-live-refresh spec 钉住。
   useWechatDataUpdated(() => { void reload() })
 
-  const { count: dupCount, sentinelRef } = useProgressiveList(data?.duplicates.length ?? 0, 100)
+  const dupListRef = useRef<HTMLDivElement | null>(null)
+  const {
+    start: dupStart,
+    count: dupCount,
+    beforeHeight: dupBeforeHeight,
+    sentinelRef,
+    topSentinelRef: dupTopSentinel,
+  } = useProgressiveList(data?.duplicates.length ?? 0, 100, { maxCount: 300, listRef: dupListRef })
   // 首次盘点走秒（口径见 hooks.tsx#useElapsedSeconds）
   const elapsed = useElapsedSeconds(loading && data === null)
 
@@ -74,9 +81,10 @@ export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) =>
 
           <Card title="重复资产（md5 相同，待去重）" flush>
             {data.duplicates.length === 0 ? <div className={kitCss.emptyInline}>未发现重复资产</div> : (
-              <div className={css.dupList}>
-                {data.duplicates.slice(0, dupCount).map(d => (
-                  <div key={d.md5} className={css.dupRow}>
+              <div ref={dupListRef} className={css.dupList}>
+                <ProgressiveListSpacer height={dupBeforeHeight} topSentinelRef={dupTopSentinel} />
+                {data.duplicates.slice(dupStart, dupCount).map((d, idx) => (
+                  <div key={d.md5} className={css.dupRow} data-progressive-item={dupStart + idx}>
                     <span className={css.dupHash}><Mono>{d.md5}</Mono></span>
                     <span className={css.dupCount}>{d.count} 份 · {fmtBytes(d.size)}</span>
                     <span className={css.dupReclaim}>可回收 {fmtBytes(d.reclaimBytes)}</span>

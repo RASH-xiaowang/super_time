@@ -35,6 +35,8 @@ export interface GraphTheme {
   /** 连线 */
   edgeCommon: string
   edgeIntimacy: string
+  /** 好友、邀请、回复、@提及、朋友圈与资金往来等直接互动。 */
+  edgeSocial: string
   edgeWiki: string
   edgeSource: string
   /** 同备注编号(同班级):画虚线,语义上比「共同群」弱一档 */
@@ -72,6 +74,7 @@ export interface GraphTheme {
  * 关系层级（观测 / 推断 / 事实），不再用色相做装饰：
  *   · 共同群 / 沉淀来源 / [[链接]] = 中性灰，靠 alpha 与线宽分层；
  *   · 与我亲密度 = 灰蓝实线（图例「蓝实线」，--nm-blue #576B95 同族）；
+ *   · 好友 / 邀请 / 回复 / @提及等直接互动 = 微信绿实线（比共同群更明确，但不抢亲密度视线）；
  *   · 推断层 = 虚线：同备注编号琥珀、首字相同灰蓝（图例「金/蓝虚线」，与文字一致）；
  *   · 唯一的品牌强调色是微信绿：只给「我」节点与选中环，面积很小。
  * 深色值对齐 --nm-text-* / --nm-border 的取值，浅色值对齐浅色令牌（画布是位图，
@@ -83,6 +86,7 @@ export function graphTheme(dark: boolean): GraphTheme {
         bg: '#111111',
         edgeCommon: 'rgba(160,168,180,0.30)',
         edgeIntimacy: 'rgba(125,144,169,0.85)',
+        edgeSocial: 'rgba(46,190,122,0.68)',
         edgeWiki: 'rgba(200,204,210,0.36)',
         edgeSource: 'rgba(140,148,160,0.40)',
         edgeClass: 'rgba(250,157,59,0.55)',
@@ -107,6 +111,7 @@ export function graphTheme(dark: boolean): GraphTheme {
         bg: '#ededed',
         edgeCommon: 'rgba(140,146,156,0.36)',
         edgeIntimacy: 'rgba(87,107,149,0.80)',
+        edgeSocial: 'rgba(6,150,84,0.62)',
         edgeWiki: 'rgba(120,128,140,0.42)',
         edgeSource: 'rgba(150,156,166,0.40)',
         edgeClass: 'rgba(217,130,43,0.60)',
@@ -371,6 +376,7 @@ export function edgeStroke(
   const isInitial = edge.kind === 'initial'
   const isContain = edge.kind === 'contain'
   const isMention = edge.kind === 'mention'
+  const isSocial = edge.kind === 'social'
   // suggest（模型抽出的实体 ↔ 文件）也是推断层：虚线、细，与 mention 同档。
   const isSuggest = edge.kind === 'suggest'
   // 三个推断层用同一档线宽（都比共同群细），首字层是三者里最粗粒度的规则
@@ -384,7 +390,7 @@ export function edgeStroke(
       ? Math.max(0.4, settings.edgeWidth * 0.7)
       : isInferred
         ? Math.max(0.35, settings.edgeWidth * 0.6)
-        : Math.max(0.3, settings.edgeWidth * (edge.kind === 'intimacy' ? 1.25 : 0.8))
+        : Math.max(0.3, settings.edgeWidth * (edge.kind === 'intimacy' ? 1.25 : isSocial ? 0.95 : 0.8))
   // 刻意**复用**已有的主题色而不是新增两个 token：新增就得同时给深色与浅色两套值，
   // 而这两类边在图上的身份（事实 / 推断）已经由线宽与虚实表达清楚了。
   const color = isFactual
@@ -397,7 +403,9 @@ export function edgeStroke(
           ? theme.edgeInitial
           : edge.kind === 'intimacy'
             ? theme.edgeIntimacy
-            : theme.edgeCommon
+            : isSocial
+              ? theme.edgeSocial
+              : theme.edgeCommon
   return { width, color, dashed: (isWiki && stubIds.has(edge.target)) || isInferred }
 }
 

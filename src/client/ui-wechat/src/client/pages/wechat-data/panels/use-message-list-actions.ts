@@ -9,23 +9,30 @@ import type {
   MessageListRecord,
   MessageListRule,
   MessageListRuleInput,
-  MessageListWebhookInfo,
+  MessageListImage,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   apiDeleteMessageListRule,
   apiInsertMessageListRecord,
-  apiResendMessageListRecord,
+  apiOpenFileDialog,
   apiSaveMessageListRule,
+  apiStageMessageListAttachment,
 } from '../api.ts'
 import { useConfirm } from '../ui/confirm.tsx'
 import {
   EMPTY_RECORD_FORM,
   EMPTY_RULE_FORM,
   httpOrDataImages,
+  ruleFormForRecord,
+  ruleFormFromRule,
   type Notice,
   type RecordForm,
   type RuleForm,
 } from './message-list-view.ts'
+import { useTransientNotice } from './hooks.tsx'
+import { useMessageListBatchActions } from './use-message-list-batch-actions.ts'
+import { useMessageListDeliveryActions } from './use-message-list-delivery-actions.ts'
+import { useMessageListWebhookActions } from './use-message-list-webhook-actions.ts'
 
 export function useMessageListActions(input: {
   refreshRecords: () => Promise<void>
@@ -36,89 +43,35 @@ export function useMessageListActions(input: {
   const [recordForm, setRecordForm] = useState<RecordForm | null>(null)
   const [ruleForm, setRuleForm] = useState<RuleForm | null>(null)
   const [saving, setSaving] = useState(false)
-  const [resendingId, setResendingId] = useState<number | null>(null)
   const [ruleBusyId, setRuleBusyId] = useState<number | null>(null)
-  const [listeningBusy, setListeningBusy] = useState(false)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const { notice, flash: setNotice, clear: clearNotice } = useTransientNotice<Notice>(2000)
+  const batchActions = useMessageListBatchActions({
+    refreshRecords: input.refreshRecords,
+    setNotice,
+  })
+  const deliveryActions = useMessageListDeliveryActions({
+    refreshRecords: input.refreshRecords,
+    setNotice,
+  })
+  const webhookActions = useMessageListWebhookActions({
+    refreshWebhookInfo: input.refreshWebhookInfo,
+    setNotice,
+  })
 
   const openRecordForm = (): void => {
-    setNotice(null)
+    clearNotice()
     setRecordForm({ ...EMPTY_RECORD_FORM })
   }
 
   const openRuleForm = (rule?: MessageListRule): void => {
-    setNotice(null)
-    setRuleForm(rule === undefined
-      ? { ...EMPTY_RULE_FORM }
-      : {
-          id: rule.id,
-          chatName: rule.chatName,
-          targetName: rule.targetName,
-          webhookUrl: rule.webhookUrl,
-          greetingText: rule.greetingText || '你好',
-          note: rule.note,
-          enabled: rule.enabled,
-        })
+    clearNotice()
+    setRuleForm(rule === undefined ? { ...EMPTY_RULE_FORM } : ruleFormFromRule(rule))
   }
 
-  const copyWebhook = async (info: MessageListWebhookInfo | null): Promise<void> => {
-    const url = info?.url ?? ''
-    if (url === '') return
-    try {
-      await navigator.clipboard.writeText(url)
-      setNotice({ kind: 'ok', text: 'Webhook 地址已复制' })
-    } catch {
-      setNotice({ kind: 'err', text: '复制失败，请手动选择地址' })
-    }
-  }
-
-  const toggleListening = async (enabled: boolean): Promise<void> => {
-    if (listeningBusy) return
-    const bridge = typeof window === 'undefined' ? undefined : window.electronAPI?.remoteAccess
-    if (!bridge) {
-      setNotice({ kind: 'err', text: '当前环境无法控制监听，请使用桌面端操作' })
-      return
-    }
-    setListeningBusy(true)
-    try {
-      if (enabled) {
-        const current = await bridge.state()
-        if (!current.ok) {
-          setNotice({ kind: 'err', text: current.error?.message ?? '读取监听状态失败' })
-          return
-        }
-        if (!current.value.hasToken) {
-          setNotice({
-            kind: 'warn',
-            text: '请先在“设置 → 维护与自检 → 局域网访问（手机）”生成访问令牌',
-          })
-          return
-        }
-      }
-
-      const result = await bridge.toggle(enabled)
-      if (!result.ok) {
-        setNotice({ kind: 'err', text: result.error?.message ?? (enabled ? '开启监听失败' : '关闭监听失败') })
-        return
-      }
-      await input.refreshWebhookInfo()
-      if (enabled && !result.value.running) {
-        setNotice({ kind: 'warn', text: '配置已开启，但监听未启动，请检查端口占用或局域网地址' })
-      } else if (!enabled && result.value.running) {
-        setNotice({ kind: 'warn', text: '配置已关闭，但监听仍在运行，请稍后重试' })
-      } else {
-        setNotice({
-          kind: 'ok',
-          text: enabled
-            ? '监听已开启，外部 Webhook 与手机局域网访问已生效'
-            : '监听已关闭，外部 Webhook 与手机局域网访问已停止',
-        })
-      }
-    } catch (e) {
-      setNotice({ kind: 'err', text: (enabled ? '开启监听失败：' : '关闭监听失败：') + (e as Error).message })
-    } finally {
-      setListeningBusy(false)
-    }
+  /** 记录行「配置规则」：带会话名/触发对象直达表单，已有精确规则则编辑原规则。 */
+  const openRuleFormForRecord = (record: MessageListRecord, existing?: MessageListRule): void => {
+    clearNotice()
+    setRuleForm(ruleFormForRecord(record, existing))
   }
 
   const submitRecord = async (): Promise<void> => {
@@ -130,7 +83,10 @@ export function useMessageListActions(input: {
         targetName: recordForm.targetName,
         text: recordForm.text,
         note: recordForm.note,
-        images: httpOrDataImages(recordForm.imageUrls),
+        images: [
+          ...httpOrDataImages(recordForm.imageUrls),
+          ...recordForm.stagedAttachments,
+        ].slice(0, 9),
       })
       if (result.record) {
         setRecordForm(null)
@@ -148,19 +104,53 @@ export function useMessageListActions(input: {
     }
   }
 
-  const resend = async (record: MessageListRecord): Promise<void> => {
-    setResendingId(record.id)
+  const chooseAttachments = async (): Promise<void> => {
+    if (recordForm === null) return
+    setSaving(true)
     try {
-      const result = await apiResendMessageListRecord({ id: record.id })
-      setNotice(result.ok
-        ? { kind: 'ok', text: '回复 ' + String(record.id) + ' 已重发成功' }
-        : { kind: 'err', text: '重发失败：' + (result.error ?? '未知错误') })
-      void input.refreshRecords()
+      const picked = await apiOpenFileDialog({
+        title: '选择要发送的附件',
+        filters: [
+          { name: '附件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'zip', 'rar'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+      if (picked.error) {
+        setNotice({ kind: 'err', text: '文件选择失败：' + picked.error })
+        return
+      }
+      if (picked.canceled) return
+      const remaining = Math.max(0, 9 - recordForm.stagedAttachments.length)
+      const files = picked.files.slice(0, remaining)
+      const staged: MessageListImage[] = []
+      for (const file of files) {
+        const result = await apiStageMessageListAttachment({ path: file })
+        if (!result.ok || result.attachment === undefined) {
+          setNotice({ kind: 'err', text: result.error ?? '附件暂存失败' })
+          return
+        }
+        staged.push(result.attachment)
+      }
+      if (picked.files.length > files.length) {
+        setNotice({ kind: 'warn', text: '单条记录最多 9 个附件，超出部分未加入' })
+      }
+      setRecordForm((current) => current === null
+        ? null
+        : { ...current, stagedAttachments: [...current.stagedAttachments, ...staged] })
     } catch (e) {
-      setNotice({ kind: 'err', text: '重发失败：' + (e as Error).message })
+      setNotice({ kind: 'err', text: '附件选择失败：' + (e as Error).message })
     } finally {
-      setResendingId(null)
+      setSaving(false)
     }
+  }
+
+  const removeStagedAttachment = (stagedId: string): void => {
+    setRecordForm((current) => current === null
+      ? null
+      : {
+          ...current,
+          stagedAttachments: current.stagedAttachments.filter((attachment) => attachment.stagedId !== stagedId),
+        })
   }
 
   const submitRule = async (): Promise<void> => {
@@ -241,17 +231,28 @@ export function useMessageListActions(input: {
     ruleForm,
     setRuleForm,
     saving,
-    resendingId,
+    resendingId: deliveryActions.resendingId,
+    batchBusy: batchActions.busy,
     ruleBusyId,
-    listeningBusy,
+    listeningBusy: webhookActions.listeningBusy,
+    probeBusyId: deliveryActions.probeBusyId,
+    jobBusyId: deliveryActions.jobBusyId,
     notice,
+    chooseAttachments,
+    removeStagedAttachment,
     openRecordForm,
     openRuleForm,
-    copyWebhook,
-    toggleListening,
+    openRuleFormForRecord,
+    copyWebhook: webhookActions.copyWebhook,
+    toggleListening: webhookActions.toggleListening,
     submitRecord,
     submitRule,
-    resend,
+    resend: deliveryActions.resend,
+    batchResend: batchActions.batchResend,
+    batchProbe: batchActions.batchProbe,
+    batchDelete: batchActions.batchDelete,
+    probeRecord: deliveryActions.probeRecord,
+    queryJob: deliveryActions.queryJob,
     toggleRule,
     removeRule,
   }

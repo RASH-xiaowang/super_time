@@ -64,15 +64,15 @@
 }
 
 .askTitle {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
-  letter-spacing: 0.01em;
+  line-height: 1.25;
 }
 
 .askDesc {
   color: var(--nm-text-3);
-  font-size: 10px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 /* 引用详情是右侧**覆盖式抽屉**（见 ask-cite-detail.module.css），不占本行布局 ⇒
@@ -207,6 +207,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-height: 24px;
   padding: 3px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
@@ -225,6 +226,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-height: 24px;
   padding: 3px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
@@ -245,7 +247,7 @@
 /* 用户气泡与「AI 问答」保持一致：右对齐、无硬描边、右下角收紧。 */
 .chatUserBubble {
   max-width: min(66%, 420px);
-  padding: 7px 11px;
+  padding: var(--nm-s-2) 11px;
   border-radius: 14px 14px 4px 14px;
   background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
   border: 0;
@@ -256,7 +258,7 @@
   word-break: break-word;
   overflow-wrap: anywhere;
 }
-.chatAi { display: flex; flex-direction: column; gap: 5px; width: 100%; min-width: 0; align-items: flex-start; }
+.chatAi { display: flex; flex-direction: column; gap: var(--nm-s-1); width: 100%; min-width: 0; align-items: flex-start; }
 
 /* ── 过程时间线（2026-10-16）─────────────────────────────────────────
    把「思考 + 工具调用步骤」渲染成一条可折叠的时间线。改造前这些信息是两行平铺的
@@ -517,23 +519,23 @@
   border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
-.citeBtn[data-cited] .citeIdx { text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
-/* 知识库来源：换用紫色系。
+.citeBtn[data-cited] .citeIdx { color: var(--nm-cyan); }
+/* 知识库来源：用中性灰蓝区分。
    两类来源在同一条列表里，但点开的去向完全不同（文件 → 知识库·文件；消息 → 会话），
    只靠名字区分太弱 —— 用户点之前就该看出这条不是聊天记录。 */
 .citeBtn[data-src='kb'] {
-  border-color: color-mix(in srgb, var(--nm-purple) 32%, transparent);
-  background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
+  border-color: color-mix(in srgb, var(--nm-sky) 32%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-sky) 6%, transparent);
 }
-.citeBtn[data-src='kb'] .citeIdx { color: var(--nm-purple); }
+.citeBtn[data-src='kb'] .citeIdx { color: var(--nm-sky); }
 .citeBtn[data-src='kb']:hover {
-  border-color: color-mix(in srgb, var(--nm-purple) 55%, transparent);
+  border-color: color-mix(in srgb, var(--nm-sky) 55%, var(--nm-border));
 }
 .citeBtn[data-src='kb'][data-cited] {
-  border-color: color-mix(in srgb, var(--nm-purple) 60%, transparent);
-  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nm-sky) 60%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-sky) 12%, transparent);
 }
-.citeBtn[data-src='kb'][data-cited] .citeIdx { text-shadow: 0 0 8px color-mix(in srgb, var(--nm-purple) 55%, transparent); }
+.citeBtn[data-src='kb'][data-cited] .citeIdx { color: var(--nm-sky); }
 /* 无法跳转的来源（如缺 username 的残缺引用）：不给指针，别骗点击。 */
 .citeBtn[data-src='unknown'] { cursor: default; }
 .citeIdx { color: var(--nm-cyan); font-weight: 700; flex-shrink: 0; }
@@ -585,7 +587,7 @@
 .chatDots {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-text-3);
   flex-shrink: 0;
 }
@@ -599,9 +601,9 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 7px 9px 4px;
+  padding: var(--nm-s-2) var(--nm-s-2) var(--nm-s-1);
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-xl);
   background: color-mix(in srgb, var(--nm-bg-card) 92%, var(--nm-text-1) 3%);
   box-shadow: 0 1px 2px color-mix(in srgb, #000 5%, transparent);
   transition: background 0.2s ease, border-color 0.2s ease;
@@ -624,7 +626,7 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 32px;
-  padding: 7px 4px 3px;
+  padding: var(--nm-s-2) var(--nm-s-1) 3px;
   border: 0;
   background: transparent;
   color: var(--nm-text-1);
@@ -653,7 +655,7 @@ textarea.composerInput:focus-visible { outline: none; }
   flex-shrink: 0;
   padding: 0;
   border: 1.5px solid color-mix(in srgb, var(--nm-text-1) 20%, transparent);
-  border-radius: 50%;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
   color: color-mix(in srgb, var(--nm-text-1) 55%, transparent);
   cursor: pointer;
@@ -680,7 +682,7 @@ textarea.composerInput:focus-visible { outline: none; }
   flex-shrink: 0;
   padding: 0;
   border: 1.5px solid color-mix(in srgb, var(--nm-danger) 45%, transparent);
-  border-radius: 50%;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
   color: var(--nm-danger);
   cursor: pointer;
@@ -703,7 +705,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .sendSpinner {
   width: 14px;
   height: 14px;
-  border-radius: 50%;
+  border-radius: var(--nm-r-pill);
   border: 2px solid color-mix(in srgb, var(--nm-on-accent) 35%, transparent);
   border-top-color: var(--nm-on-accent);
   animation: send-spin 0.8s linear infinite;
@@ -762,9 +764,9 @@ textarea.composerInput:focus-visible { outline: none; }
 /* 隐私说明：输入面下方次级小字（常驻底部，与上方内容同一条左边线） */
 .privacyNote {
   margin: 0 2px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.55;
-  color: var(--nm-text-3);
+  color: var(--nm-text-2);
   text-align: left;
   flex-shrink: 0;
 }
@@ -840,7 +842,23 @@ textarea.composerInput:focus-visible { outline: none; }
   .emptyExCard { min-height: 0; flex-direction: row; align-items: center; }
 }
 @media (max-width: 680px) {
+  .askPage [class*='_panelHeader_'] {
+    align-items: center;
+  }
+
+  .askPage [class*='_panelTitleWrap_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .askPage [class*='_panelActions_'] {
+    width: auto;
+    margin-left: auto;
+  }
+
   .optBtn { height: 36px; }
+  .send,
+  .sendStop { width: 40px; height: 40px; }
   /* 快捷键提示：页脚允许换行，提示掉到第二行也不隐藏（窄屏最多折成两行）。 */
   .composerFooter { flex-wrap: wrap; row-gap: 4px; }
   .actionHint { white-space: normal; font-size: 11px; line-height: 1.4; text-align: right; }

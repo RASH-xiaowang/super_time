@@ -225,10 +225,11 @@ export function listBackups(decryptedDir: string): { items: BackupEntry[]; total
  * @param decryptedDir - decrypted data root.
  * @returns the created backup entry.
  */
-export async function createBackup(decryptedDir: string): Promise<BackupEntry> {
+export async function createBackup(decryptedDir: string, ctrl?: StreamControl): Promise<BackupEntry> {
   const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 14)
   const name = 'wechat_backup_' + ts
   const dir = backupDir(decryptedDir)
+  reportProgress(ctrl, 'prepare', 0, 0)
   mkdirSync(dir, { recursive: true })
   const target = join(dir, name)
   const tmp = partialPath(target)
@@ -236,19 +237,26 @@ export async function createBackup(decryptedDir: string): Promise<BackupEntry> {
   const failed: string[] = []
   try {
     if (existsSync(decryptedDir)) {
-      for (const sub of readdirSync(decryptedDir, { withFileTypes: true })) {
-        if (!sub.isDirectory()) continue
-        if (sub.name.startsWith('.')) continue
+      const subs = readdirSync(decryptedDir, { withFileTypes: true })
+        .filter((sub) => sub.isDirectory() && !sub.name.startsWith('.'))
+      reportProgress(ctrl, 'files', 0, subs.length)
+      for (let i = 0; i < subs.length; i += 1) {
+        const sub = subs[i]!
+        throwIfCancelled(ctrl?.signal)
         // 2026-09-28：逐个子目录让出。真实 @Remote 探针实测 `createBackup` 冷跑
         // **206ms 且一次都不让出**（`working/probe-remote.txt`，当时最长的独占项）——
         // `cpSync` 是同步阻塞的整树复制，本机一个 `message` 目录就有 350MB 级的分片。
         // 放在**每次复制之前**：让出的是"上一轮已经干完的活"。
         await yieldToLoop()
+        throwIfCancelled(ctrl?.signal)
         try {
           cpSync(join(decryptedDir, sub.name), join(tmp, sub.name), { recursive: true })
         } catch (e) {
+          throwIfCancelled(ctrl?.signal)
           failed.push(sub.name + '（' + (e as Error).message + '）')
         }
+        throwIfCancelled(ctrl?.signal)
+        reportProgress(ctrl, 'files', i + 1, subs.length)
       }
     }
     if (failed.length > 0) {
@@ -266,6 +274,7 @@ export async function createBackup(decryptedDir: string): Promise<BackupEntry> {
     throw e
   }
   const st = statSync(target)
+  reportProgress(ctrl, 'done', 1, 1)
   return { name, path: target, size: dirSize(target), modified: Math.floor(st.mtimeMs / 1000), kind: 'dir' }
 }
 
@@ -308,7 +317,7 @@ export async function createEncryptedBackup(decryptedDir: string, password: stri
     const put = async (buf: Buffer): Promise<void> => {
       await sink.write(buf)
       written += buf.length
-      reportProgress(ctrl, 'write', written, 0)
+      reportProgress(ctrl, 'encrypt', written, 0)
     }
     await put(MAGIC)
     await put(salt)
@@ -347,6 +356,7 @@ export async function createEncryptedBackup(decryptedDir: string, password: stri
     throw e
   }
   const st = statSync(target)
+  reportProgress(ctrl, 'done', 1, 1)
   return { name, path: target, size: st.size, modified: Math.floor(st.mtimeMs / 1000), kind: 'enc' }
 }
 

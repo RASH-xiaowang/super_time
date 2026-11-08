@@ -12,6 +12,7 @@ import {
   CUSTOMER_RELATION_LABELS,
   CUSTOMER_TAG_CATEGORIES,
   buildCustomerTags,
+  cleanCustomerSignature,
   confidenceLabel,
   customerActivity,
   customerDisplayName,
@@ -22,6 +23,7 @@ import {
 } from './customer-profile.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import { fmtDateTimeSec } from '../utils/format.ts'
 import css from './portraits.module.css'
 
 export interface CustomerPortraitViewProps {
@@ -33,13 +35,6 @@ export interface CustomerPortraitViewProps {
   context?: CustomerProfileContext
   onOpenChat?: (() => void) | undefined
   compact?: boolean
-}
-
-function fmtDate(timestamp: number | null): string {
-  if (timestamp === null || timestamp <= 0) return '暂无'
-  const d = new Date(timestamp * 1000)
-  if (Number.isNaN(d.getTime())) return '暂无'
-  return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 function categoryText(identity: CustomerIdentity): string {
@@ -133,6 +128,7 @@ function ProfileBoard({
   identity, snapshot, loading, error, onRetry, context,
 }: Omit<CustomerPortraitViewProps, 'compact'>): React.JSX.Element {
   const activity = customerActivity(snapshot, context)
+  const signature = cleanCustomerSignature(identity.description)
   const headingId = useId()
 
   return (
@@ -158,7 +154,7 @@ function ProfileBoard({
           <Fact label="微信号" value={identity.username} />
           <Fact label="别名" value={identity.alias?.trim() || '未设置'} />
           <Fact label="所属群" value={groupFactText(identity, snapshot)} />
-          {identity.description?.trim() && <Fact label="个性签名" value={identity.description.trim()} />}
+          <Fact label="个性签名" value={signature || '未设置'} />
         </div>
       </div>
 
@@ -187,12 +183,12 @@ function ProfileBoard({
             </div>
             <div className={css.metricGrid}>
               <Metric label="消息总数" value={snapshot.messages.count.toLocaleString()} />
-              <Metric label="最近联系" value={fmtDate(snapshot.messages.lastTime)} />
+              <Metric label="最近联系" value={fmtDateTimeSec(snapshot.messages.lastTime, '暂无')} />
               <Metric label="朋友圈内容" value={snapshot.moments.count.toLocaleString()} />
               <Metric label="共同群" value={snapshot.commonGroups.length.toLocaleString()} />
             </div>
             <div className={css.secondaryStats}>
-              <span><small>首次联系</small><strong>{fmtDate(snapshot.messages.firstTime)}</strong></span>
+              <span><small>首次联系</small><strong>{fmtDateTimeSec(snapshot.messages.firstTime, '暂无')}</strong></span>
               <span><small>转账往来</small><strong>{snapshot.funds.transfers.toLocaleString()}</strong></span>
               <span><small>红包往来</small><strong>{snapshot.funds.redpackets.toLocaleString()}</strong></span>
             </div>
@@ -214,7 +210,7 @@ function ProfileBoard({
               </div>
             )}
             <p className={css.sourceNote}>
-              统计更新时间：{fmtDate(snapshot.updatedAt)}。消息、朋友圈、资金与共同群分别读取本机对应数据库。
+              统计更新时间：{fmtDateTimeSec(snapshot.updatedAt, '暂无')}。消息、朋友圈、资金与共同群分别读取本机对应数据库。
             </p>
           </>
         )}

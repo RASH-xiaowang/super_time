@@ -122,7 +122,8 @@ export function buildMessageItems(messages: readonly WechatMessage[], start = 0)
     const m = messages[i]
     if (!m) continue
     const divider = dividerLabelBefore(i > 0 ? messages[i - 1] : undefined, m)
-    if (divider) items.push({ kind: 'day', label: divider, key: `day-${i}` })
+    // 向上加载历史后下标会整体后移；日期分隔 key 必须跟着真实消息，不能跟 index。
+    if (divider) items.push({ kind: 'day', label: divider, key: `day-${String(m.localId)}` })
     if (renderKindOf(m) === 'image') {
       const gid = m.rich?.groupId ?? ''
       if (gid && groupCountOf(m) > 0) {

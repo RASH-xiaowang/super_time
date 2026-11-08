@@ -9,7 +9,12 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { MD5_FIND_RE, isMd5Loose } from '../md5.ts'
 import { sqliteChangeCounter } from './file-sig.ts'
-import { createHash } from 'node:crypto'
+import {
+  displayNameForUsername,
+  mergeDisplayNames,
+  messageIdentityIndex,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 import { contactMeta } from './meta.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
@@ -90,14 +95,19 @@ function loadFileSources(decryptedDir: string): Map<string, { session: string; u
     const chatRows = resDb.prepare('SELECT rowid, user_name FROM ChatName2Id').all() as Array<Record<string, unknown>>
     for (const r of chatRows) chatMap.set(Number(r.rowid), cellStr(r.user_name))
 
-    const nameMap = contactMeta(decryptedDir).names
+    const nameMap = mergeDisplayNames(decryptedDir)
 
     const infos = resDb.prepare('SELECT chat_id, message_create_time, packed_info FROM MessageResourceInfo ORDER BY message_create_time DESC LIMIT 3000').all() as Array<Record<string, unknown>>
     for (const row of infos) {
       const key = fileKeyFromPacked(row.packed_info)
       if (!key || map.has(key)) continue
-      const user = chatMap.get(Number(row.chat_id)) ?? ''
-      map.set(key, { session: nameMap.get(user) || user, username: user, time: Number(row.message_create_time) || 0 })
+      const storedUser = chatMap.get(Number(row.chat_id)) ?? ''
+      const user = storedUser ? resolveTalkerUsername(decryptedDir, storedUser) : ''
+      map.set(key, {
+        session: user ? displayNameForUsername(user, nameMap) : '',
+        username: user,
+        time: Number(row.message_create_time) || 0,
+      })
     }
   } catch {
     // source resolution is best-effort; absence is not an error.
@@ -175,14 +185,13 @@ function dirSourceCached(decryptedDir: string): {
   try {
     const db = new DatabaseSync(join(decryptedDir, 'hardlink', 'hardlink.db'), { readOnly: true })
     try {
-      const names = contactMeta(decryptedDir).names
+      const identity = messageIdentityIndex(decryptedDir)
+      const names = mergeDisplayNames(decryptedDir, identity.usernames)
       const md5ToName = new Map<string, string>()
       const md5ToUser = new Map<string, string>()
-      for (const [user, display] of names) {
-        if (!user) continue
-        const h = createHash('md5').update(user, 'utf8').digest('hex')
+      for (const [h, user] of identity.hashToUsername) {
         if (!md5ToName.has(h)) {
-          md5ToName.set(h, display || user)
+          md5ToName.set(h, displayNameForUsername(user, names))
           md5ToUser.set(h, user)
         }
       }

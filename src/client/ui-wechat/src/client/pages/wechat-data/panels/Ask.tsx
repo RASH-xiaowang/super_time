@@ -356,7 +356,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
   /** 当前会话范围的显示名：写进问答历史，历史列表可直接显示而不用再查会话表。 */
   const scopeDisplayName = sessionDisplayNameWithEnterprise(sessions, scopeUsername)
   /** 多轮对话状态（turns/asking/streamText/error）统一由问答 hook 提供。 */
-  const { turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, error, ask: askSession, retry: retryTurn, cancel: cancelSession, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, streamReasoning, streamReasoningSegments, streamStages, runStartedAt, runId, error, ask: askSession, retry: retryTurn, cancel: cancelSession, resetAndCancel: resetThread, patchTurn, clearError } = useAskSession({
     ...(scopeUsername ? { scopeUsername } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
@@ -404,14 +404,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
   /** 正文滚动容器 + 「贴近底部」跟踪：仅当用户停在底部附近时才自动滚到最新消息。 */
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
-  useEffect(() => {
-    const el = bodyRef.current
-    if (!el) return
-    const onScroll = (): void => { atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => { el.removeEventListener('scroll', onScroll) }
-  }, [])
-  /** 新内容到达：提问中必滚（用户想看结果）；回答到达时若在底部附近才滚（尊重向上翻阅）。 */
+  /** 新内容到达：仅在用户仍贴底时跟随；滚轮上翻或滚回上方会立即暂停。 */
   useAskThreadAutoScroll({ bodyRef, atBottomRef, asking, turns, contentRevision: askThreadContentRevision({ text: streamText, reasoning: streamReasoning, stages: streamStages }) })
 
   /** 提问优化：调后端 LLM 改写问题 + 给改进建议（结果内联展示，不弹窗）。 */
@@ -443,6 +436,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     const q = text.trim()
     if (!q || asking) return
     setQuestion('')
+    atBottomRef.current = true
     await askSession(q)
   }, [asking, askSession])
 
@@ -525,6 +519,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
             asking={asking}
             streamText={streamText}
             streamReasoning={streamReasoning}
+            streamReasoningSegments={streamReasoningSegments}
             streamStages={streamStages}
             runStartedAt={runStartedAt}
             runId={runId}
@@ -695,11 +690,12 @@ function AskCiteDetail({ detail, onOpenChat, onOpenKbFile, onArchive }: {
  * @param props.onDistill - 「沉淀为笔记」回调。
  * @returns 消息流元素。
  */
-function AskStream({ turns, asking, streamText, streamReasoning, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
+function AskStream({ turns, asking, streamText, streamReasoning, streamReasoningSegments, streamStages, runStartedAt, runId, onStop, onRetry, citeDetail, patchTurn, questionForTurn, onDistill }: {
   turns: AskTurn[]
   asking: boolean
   streamText: string
   streamReasoning: string
+  streamReasoningSegments: AskTurn['reasoningSegments']
   streamStages: AskTurn['stages']
   runStartedAt: number
   runId: string
@@ -714,7 +710,15 @@ function AskStream({ turns, asking, streamText, streamReasoning, streamStages, r
     <AskThread
       turns={turns}
       asking={asking}
-      live={{ streamText, streamReasoning, streamStages: streamStages ?? [], runStartedAt, runId, onStop }}
+      live={{
+        streamText,
+        streamReasoning,
+        streamReasoningSegments: streamReasoningSegments ?? [],
+        streamStages: streamStages ?? [],
+        runStartedAt,
+        runId,
+        onStop,
+      }}
       onRetry={onRetry}
       onOpenCite={citeDetail.toggle}
       activeCite={citeDetail.ref}
@@ -744,6 +748,7 @@ function AskThread({ turns, asking, live, onRetry, onOpenCite, activeCite, patch
   live: {
     streamText: string
     streamReasoning: string
+    streamReasoningSegments: NonNullable<AskTurn['reasoningSegments']>
     streamStages: NonNullable<AskTurn['stages']>
     runStartedAt: number
     runId: string
@@ -819,6 +824,7 @@ function AskThread({ turns, asking, live, onRetry, onOpenCite, activeCite, patch
               agentLabel="AI 问答"
               text={live.streamText}
               reasoning={live.streamReasoning}
+              reasoningSegments={live.streamReasoningSegments}
               stages={live.streamStages}
               runStartedAt={live.runStartedAt}
               runId={live.runId}

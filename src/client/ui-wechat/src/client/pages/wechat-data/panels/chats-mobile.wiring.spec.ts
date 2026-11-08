@@ -44,6 +44,7 @@ const PHONE = '@media (max-width: 560px)'
 const CONTAINER = '@container (max-width: 560px)'
 
 const view = readStripped(join(HERE, 'chats-view.tsx'))
+const messageStream = sliceBetween(view, 'function ChatsMessageStream', 'export function ChatsView', '消息流本体')
 const panel = readStripped(join(HERE, 'Chats.tsx'))
 const headActions = readStripped(join(HERE, 'chats-head-actions.tsx'))
 const msgRow = readStripped(join(HERE, 'chats-msg-row.tsx'))
@@ -110,9 +111,11 @@ describe('单栏栈：JSX 与 CSS 必须成对', () => {
 describe('消息流在手机档是**隐藏**，不是卸载', () => {
   it('虚拟化列表始终挂在 JSX 里（条件渲染掉就会每次进出会话都重取一页、丢滚动位置）', () => {
     const messagesCol = sliceBetween(view, '<div className={cssrows.messages} data-chat-messages="">', '<ChatsGroupInfoView', '消息列')
-    expect(messagesCol, '消息列里没有虚拟化列表 ⇒ 这一格被搬走或改写了，请重新核对本判据')
+    expect(messagesCol, '消息列没有挂 ChatsMessageStream')
+      .toContain('<ChatsMessageStream')
+    expect(messageStream, '消息流本体里没有虚拟化列表 ⇒ 这一格被搬走或改写了，请重新核对本判据')
       .toContain('msgVirtualizer.getVirtualItems()')
-    expect(messagesCol, '消息列的总高度撑开没了（长列表会退化成一次性渲染）')
+    expect(messageStream, '消息流本体的总高度撑开没了（长列表会退化成一次性渲染）')
       .toContain('msgVirtualizer.getTotalSize()')
     // 从根 div 到消息列之间不许出现「有会话才渲染」的条件：手机档靠 CSS 显隐，
     // 一旦改成条件渲染，进出会话就会重挂载虚拟化列表（重取一页 + 丢滚动位置）。
@@ -120,6 +123,20 @@ describe('消息流在手机档是**隐藏**，不是卸载', () => {
     expect(beforeMessages, '消息列（或它前面的会话列表）被改成了条件渲染 ⇒ 手机上进出会话会丢虚拟化状态')
       .not.toContain('curSession !== null &&')
     expect(phoneRows, '手机档不是用 display:none 隐藏消息列').toContain('display: none')
+  })
+
+  it('右键「打开文件」的保存状态紧贴消息头，手机档收窄且取消接到同一任务', () => {
+    const saveStatus = sliceBetween(
+      view,
+      "{messageFileSave.state.status !== 'idle' && (",
+      'typeStats.length > 0 && (',
+      '消息文件保存状态',
+    )
+    expect(saveStatus, '保存状态没有渲染统一进度卡').toContain('<ExportProgressStatus')
+    expect(saveStatus, '保存状态没有读取统一任务终态').toContain('state={messageFileSave.state}')
+    expect(saveStatus, '进度卡取消按钮没有接回保存任务').toContain('void messageFileSave.cancel()')
+    expect(classBlock(cardsCss, 'msgFileSaveStatus'), '桌面档缺少保存状态容器').toContain('padding')
+    expect(phoneCards, '手机档没有收窄保存状态内边距').toContain('.msgFileSaveStatus')
   })
 })
 
@@ -161,6 +178,10 @@ describe('返回按钮：只在手机档出现，且接的是 closeCurrentSessio
     const closer = sliceBetween(panel, 'const closeCurrentSession', 'watermarkRef.current = 0', 'closeCurrentSession')
     expect(closer, 'closeCurrentSession 不再作废归属令牌 ⇒ 返回按钮会把「别人的会话」留在屏幕上')
       .toContain('sessionEpochRef.current += 1')
+    expect(closer, 'closeCurrentSession 没有同步响应式令牌 ⇒ 会话级 AI 回复状态可能沿用旧会话')
+      .toContain('setSessionEpoch(sessionEpochRef.current)')
+    expect(panel, '会话开始没有发布新令牌 ⇒ 重开同一单聊不会刷新 AI 回复状态')
+      .toContain('onSessionBegin: setSessionEpoch')
   })
 })
 

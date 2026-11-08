@@ -5,8 +5,7 @@
  * ② 头像只交给 RemoteImg（原始 `sourceheadurl` 不得直接进 `<img>`）；
  * ③ 外层是 kit 右侧抽屉，逐条内容仍完整渲染。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'

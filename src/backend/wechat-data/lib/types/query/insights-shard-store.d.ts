@@ -5,7 +5,7 @@ export interface InsightsShardCacheEntry<T> {
     agg: T;
 }
 /**
- * 分片聚合磁盘缓存的位置：`<数据根>/cache/insights-shards.v1.json`
+ * 分片聚合磁盘缓存的位置：`<数据根>/cache/insights-shards.v2.json`
  * （`dec` 是 `<数据根>/decrypted`）。
  * @param dec - 已解密数据根。
  * @returns 缓存文件绝对路径。

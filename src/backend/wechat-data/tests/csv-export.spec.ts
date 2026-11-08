@@ -181,8 +181,29 @@ describe('CSV 导出：内容', () => {
     expect(text).not.toContain('工作群')
   })
 
+  it('files 导出真实文件索引清单，而不是报未知类型', async () => {
+    const [root] = makeContactDb()
+    const hardlinkDir = join(root, 'hardlink')
+    mkdirSync(hardlinkDir, { recursive: true })
+    const db = new DatabaseSync(join(hardlinkDir, 'hardlink.db'))
+    db.exec(`CREATE TABLE image_hardlink_info_v4 (
+      md5 TEXT, file_name TEXT, file_size INTEGER, modify_time INTEGER, dir1 INTEGER, dir2 INTEGER
+    )`)
+    db.prepare('INSERT INTO image_hardlink_info_v4 VALUES (?, ?, ?, ?, ?, ?)')
+      .run('a'.repeat(32), 'original-image.dat', 2048, 1700000000, 1, 2)
+    db.close()
+
+    const dest = join(tempDir('wx-dest-'), 'files.csv')
+    const r = await exportCsv(root, 'files', undefined, dest)
+    expect(r.count).toBe(1)
+    const text = readFileSync(dest, 'utf8')
+    expect(text).toContain('MD5')
+    expect(text).toContain('original-image.dat')
+    expect(text).toContain('image')
+  })
+
   it('未知 kind 仍然抛错（不静默产出空文件）', async () => {
     const [root, dataRoot] = makeContactDb()
-    await expect(exportCsv(root, 'files')).rejects.toThrow(/未知导出类型/)
+    await expect(exportCsv(root, 'bogus')).rejects.toThrow(/未知导出类型/)
   })
 })

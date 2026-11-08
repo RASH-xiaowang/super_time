@@ -35,7 +35,7 @@ export interface AskCancelCtl {
  * @param rc - 持有槽位的宿主（gateway）。
  * @param jobId - 渲染层传进来的轮次标识（就是那轮的 streamId）。
  */
-export declare function beginAskCancel(rc: AskCancelHost, jobId?: string): AskCancelCtl;
+export declare function beginAskCancel(rc: AskCancelHost, jobId?: string, externalSignal?: AbortSignal): AskCancelCtl;
 /**
  * `cancelAsk` Remote 的实现。
  *

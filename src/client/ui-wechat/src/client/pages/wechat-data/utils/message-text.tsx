@@ -221,7 +221,7 @@ export function MessageText({ text, atUsers, onOpenLink }: {
         if (seg.type === 'mention') {
           const mentionLabel = withEnterprise(seg.content, seg.user?.enterpriseName)
           return (
-            <span key={idx} className={cssshell.msgMention} title={seg.user?.username}>
+            <span key={idx} className={cssshell.msgMention}>
               {mentionLabel}
             </span>
           )

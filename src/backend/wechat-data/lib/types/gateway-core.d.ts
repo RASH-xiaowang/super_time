@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 227 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 224 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -26,14 +26,15 @@ import { createAskDeepRemotes } from './remotes/askdeep.ts';
 import { createKbRemotes } from './remotes/kb.ts';
 import { createMediaRemotes } from './remotes/media.ts';
 import { createExportRemotes } from './remotes/export.ts';
-import type { StreamControl } from './query/zip.ts';
+import type { ManagedStreamControl } from './gateway-jobs.ts';
 import { type EmbedFn } from './query/retrieval/embedding.ts';
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts';
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts';
-import type { AnswerRuntimeEmitStage } from './query/answer-runtime/types.ts';
+import type { AnswerReasoningEmitter } from './query/answer-runtime/types.ts';
 import { type SummaryScheduler } from './gateway-scheduler.ts';
 import { ResolvedDirs, StreamJob } from './gateway-support.ts';
 import type { EmbedFeature } from './gateway-llm-factory.ts';
+import { makeAskStageEmitter } from './gateway-core-ask-events.ts';
 /** 网关的「核」：状态、生命周期、共享私有辅助与 16 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export declare abstract class GatewayCore extends TypertRemoteService {
     /** 由派生的方法面层实现（`@Remote` 入口）；这里的排程必须经实例派发 —— 见 `summary-run-due.spec.ts` 打的桩。 */
@@ -146,26 +147,27 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
      * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
      */
-    protected streamControl(jobId?: string): StreamControl;
+    protected streamControl(jobId?: string): ManagedStreamControl;
     /**
      * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
      * @param jobId - 任务标识。
      * @param error - 失败/取消原因；成功时省略。
+     * @param token - 本轮代次；旧任务晚到的收尾不会误伤复用同一 jobId 的新任务。
+     * @param canceled - 是否明确为用户取消。
      */
-    protected finishStreamJob(jobId: string, error?: string): void;
-    /**
-     * 子类钩子：网关构造完成后（`setImmediate` 里）拉起 ClawBot 接收通道
-     * （体在 `gateway-clawbot.ts`；默认实现什么都不做 —— ClawBot 组装在更派生的层）。
-     */
-    protected bootClawbotChannel(): void;
+    protected finishStreamJob(jobId: string, error?: string, token?: symbol, canceled?: boolean): void;
     /**
      * 子类钩子：任务触发扫描的一拍（体在 `gateway-taskcenter.ts`；默认实现什么都不做 ——
      * 任务信息域的组装在更派生的层）。
      *
-     * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。与 `bootClawbotChannel` 分开的理由：那个是「拉起长轮询」，
-     * 这个是「周期扫描」，生命周期与失败语义都不同（前者启动一次，后者每拍都可能失败）。
+     * 由实时同步回调（有新分片变化时）与 10s 兜底定时器调用。
      */
     protected scanTaskTriggersBackground(): void;
+    /**
+     * 子类钩子：会话级 AI 回复扫描的一拍（体在 `gateway-chat-ai-reply.ts`）。
+     * 与任务触发扫描分开，避免 AI 模型/投递延迟影响关键词任务。
+     */
+    protected scanChatAiRepliesBackground(): void;
     constructor(ctx: Context);
     /**
      * Append one operation-log row. Metadata only — never message bodies or
@@ -443,9 +445,10 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * 后端此前把 `reasoning-delta` 直接丢掉（`runChat` 只认 `text-delta`），
      * 于是界面上永远看不到思考 —— 不是没生成，是没接。
      * @param streamId - 客户端生成的流式标识；为空表示不推送。
-     * @returns 增量回调（text 为**已生成的思考全文**）。
+     * @returns 分段快照发射器；回调接收 `AnswerReasoningMeta`，并带 flush/dispose。
+     *          gateway 事件中的旧字段 `text` 聚合全部分段，`segmentText` 保留当前分段全文。
      */
-    protected makeReasoningEmitter(streamId?: string): ((text: string) => void) | undefined;
+    protected makeReasoningEmitter(streamId?: string): AnswerReasoningEmitter | undefined;
     /**
      * 构造「阶段」事件推送器（2026-10-16 新增）。
      *
@@ -458,7 +461,7 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @param streamId - 客户端生成的流式标识；为空表示不推送。
      * @returns 阶段回调。
      */
-    protected makeStageEmitter(streamId?: string): AnswerRuntimeEmitStage | undefined;
+    protected makeStageEmitter(streamId?: string): ReturnType<typeof makeAskStageEmitter>;
     /**
      * 把一次问答落进「历史记录」。
      *

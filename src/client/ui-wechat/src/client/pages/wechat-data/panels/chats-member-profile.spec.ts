@@ -7,8 +7,7 @@
  * 位置是点头像时算的，没有位置就浮在 (0,0) 盖住导航栏。
  * `Avatar` 装假：它自己会发 IPC，而本文件要断的是浮层的行集合。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import csscards from './chats-cards.module.css'

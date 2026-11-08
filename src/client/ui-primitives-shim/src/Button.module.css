@@ -1,6 +1,4 @@
-/* Capsule geometry from the figma Button component (1:155 instances:
- * h36, pad 14/7, gap 4, r18; the wide New Session form is r24 at h38 —
- * owners with the wide form set their own radius/width). */
+/* 统一按钮：32px 中号 / 28px 小号，6px 圆角，系统字体。 */
 .button {
   display: inline-flex;
   align-items: center;
@@ -9,11 +7,11 @@
   border: none;
   border-radius: var(--nm-r-md, 6px);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-primary);
   background: transparent;
-  padding: 0 14px;
+  padding: 0 12px;
 }
 
 .button:disabled {
@@ -21,15 +19,13 @@
   opacity: 0.5;
 }
 
-/* 键盘可达性：全套按钮此前都没有焦点样式，键盘用户看不到焦点位置。
-   用双层 box-shadow 在任意背景上都可见（外圈用主题强调色）。 */
 .button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1), 0 0 0 4px var(--nm-border-active);
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 1px;
 }
 
 .md {
-  height: 36px;
+  height: 32px;
 }
 
 /* Compact height for dense rows; no dedicated figma node (Icon_container
@@ -39,7 +35,7 @@
   font-size: 12px;
   line-height: 18px;
   padding: 0 10px;
-  border-radius: var(--nm-r-sm, 4px);
+  border-radius: var(--nm-r-md, 6px);
 }
 
 /* 纯图标按钮：正方形、无内边距。面板里有大量裸图标按钮，统一到这里。 */
@@ -47,7 +43,7 @@
   padding: 0;
 }
 .iconOnly.md {
-  width: 36px;
+  width: 32px;
 }
 .iconOnly.sm {
   width: 28px;
@@ -62,6 +58,10 @@
   background: var(--dsw-alias-button-primary-hover);
 }
 
+.primary:active:not(:disabled) {
+  background: var(--nm-brand-fill-active);
+}
+
 .ghost:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -72,7 +72,7 @@
 
 /* Dialog Cancel (figma 451:18655): bordered capsule on transparent fill. */
 .outline {
-  border: 0.5px solid var(--dsw-alias-border-l3);
+  border: 1px solid var(--dsw-alias-border-l3);
   background: transparent;
 }
 
@@ -104,21 +104,19 @@
  * （第 29 轮收敛为 kit 的 `.btnPill` 类）。第 34 轮进一步统一到**组件**：
  * 这里是同一套外观的唯一实现，面板改用 `<Button variant="pill">`。
  *
- * 与其它变体的区别：完全圆角（999px）+ 1px 描边 + 卡片底 + 12px 字号 + 7px 14px 内边距，
- * 且**不指定高度**（由内容撑开，约 34px）—— 因此用 `.button.pill` 的双类选择器压过
- * 尺寸类 `.md` 的 `height: 36px`。
+ * 与其它变体的区别：1px 描边 + 卡片底 + 12px 字号；圆角统一为 6px。
  */
 .button.pill {
-  height: auto;
-  padding: 7px 14px;
+  height: 32px;
+  padding: 0 12px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-pill, 999px);
+  border-radius: var(--nm-r-md, 6px);
   background: var(--nm-bg-card);
   color: var(--nm-text-1);
   font-size: 12px;
-  line-height: normal;
+  line-height: 20px;
   corner-shape: round;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .button.pill:hover:not(:disabled) {
@@ -138,7 +136,7 @@
 }
 
 .danger:focus-visible {
-  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1), 0 0 0 4px var(--nm-danger);
+  outline-color: var(--nm-danger);
 }
 
 .icon {

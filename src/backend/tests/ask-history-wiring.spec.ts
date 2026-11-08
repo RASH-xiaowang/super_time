@@ -60,6 +60,7 @@ describe('问答历史：网关自动保存', () => {
       // 运行状态不能被旧四态吞掉：原始状态/原因与有界证据摘要都要交给 ask-history 归一。
       'runtimeStatus: result.status', 'statusReason: result.statusReason', 'synthesisError: result.synthesisError',
       'evidence: result.evidence', 'toolCalls: result.toolCalls', 'resources: result.resources',
+      'result.reasoningSegments', 'result.stages',
     ]) {
       expect(body, `saveAskHistory 没写 ${marker}`).toContain(marker)
     }
@@ -104,22 +105,5 @@ describe('问答历史：三个 Remote 方法', () => {
     for (const marker of ['exportCsv', 'exportAllSessions', 'exportSessionMessages', 'zip']) {
       expect(store, `问答历史不该出现在 ${marker} 的链路里`).not.toContain(marker)
     }
-  })
-})
-
-describe('问答历史：自动回复的问答必须与「用户自己问的」分得开', () => {
-  it("ClawBot 的自动回复落 source='auto'（不带就落成缺省的 'ask'）", () => {
-    // 缺省是 'ask'（= 用户手动问，见 query/ask-history.ts 的 `cleanText(input.source) || 'ask'`），
-    // 所以「忘了传 source」的后果不是报错，而是历史里冒出一条用户没问过的记录 ——
-    // 这是本仓第一处「用户没点击、模型也答了」的问答，来源是它唯一的判别位。
-    expect(gateway, "自动回复不带 source ⇒ 历史里与用户自己问的分不开")
-      .toMatch(/askWechat\(\{[^}]*source:\s*'auto'/)
-  })
-
-  it('自动回复走的是注入的 ask 能力（模型统一由「对话模型」决定）', () => {
-    // 2026-10-17：签名加了第 4 参 `systemPrompt`（实例的系统提示词）。
-    // 2026-10-18：加第 5 参 `context`（最近对话 + 图片），「统一模型」不变。
-    expect(gateway, '自动回复没有注入点 ⇒ 它会另找一条模型路径，「统一模型」就守不住了')
-      .toMatch(/ask:\s*async \(slot, text, kbId, systemPrompt(?:, context)?\)/)
   })
 })

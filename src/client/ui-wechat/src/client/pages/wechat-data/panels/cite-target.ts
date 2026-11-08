@@ -16,6 +16,7 @@
  * （要求逐字节稳定），这边是「用户点了以后去哪」（要求字段齐全、可缺省）。
  */
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
+import { isLegacyChatId } from '../utils/chat-identity.ts'
 
 /** 点击目标。`null` = 这条引用的信息不全（无法安全跳转），界面应渲染成只读块。 */
 export type CiteTarget =
@@ -62,6 +63,9 @@ export function citeTarget(c: CiteLike): CiteTarget | null {
   const username = (c.username ?? '').trim()
   // 空 username 是「无来源」而不是「某个会话」：点它会打开空白面板。
   if (username === '') return null
+  // 旧问答历史可能保存了物理消息表哈希；必须先由会话加载器重新解析，
+  // 不能从这里直接把哈希当成可跳转 username。
+  if (isLegacyChatId(username)) return null
   return typeof c.local_id === 'number' && Number.isFinite(c.local_id)
     ? { kind: 'msg', username, localId: c.local_id }
     : { kind: 'msg', username }

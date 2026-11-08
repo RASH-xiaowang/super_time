@@ -176,10 +176,10 @@ export async function apiCancelAsk(options: { jobId: string }): Promise<{ ok: bo
 }
 /**
  * Run the unified local search across several data domains.
- * @param options - Query options: query text, optional per-domain limit.
+ * @param options - Query options: query text, optional per-domain limit and cancellation jobId.
  * @returns UnifiedSearchSnapshot.
  */
-export async function apiSearchUnified(options: { query: string; limit?: number }): Promise<UnifiedSearchSnapshot> {
+export async function apiSearchUnified(options: { query: string; limit?: number; jobId?: string }): Promise<UnifiedSearchSnapshot> {
   return unwrap(await remote().searchUnified(options))
 }
 /**
@@ -211,7 +211,7 @@ export async function apiAskWechat(options: {
   /** 流式标识：带上它，后端会在生成过程中推送 wechat-ask/delta 增量事件
    *  （渲染端监听 dsh-wechat-ask-delta）。不传则退化为一次性返回。 */
   streamId?: string
-  /** 入口来源（'ask' / 'session' / 'auto'，后者 = ClawBot 自动回复）与会话显示名：写进问答历史，供列表区分与直显。 */
+  /** 入口来源（如 'ask' / 'session'）与会话显示名：写进问答历史，供列表区分与直显。 */
   source?: string
   usernameName?: string
   /** 当前知识库 id（见 Remote 接口上的说明）：知识库文件块参与本轮检索。 */
@@ -256,9 +256,15 @@ export async function apiGetGroupInsights(username: string): Promise<GroupInsigh
   return unwrap(await remote().getGroupInsights({ username }))
 }
 
-/** Resolve a nested merged chat-log pointer by its server_id. */
-export async function apiResolveChatHistory(serverId: string): Promise<ChatHistoryResolveResult> {
-  return unwrap(await remote().resolveChatHistory({ serverId }))
+/**
+ * Resolve a message by server_id. Passing a talker scopes the lookup to the
+ * current conversation and allows quoted text/media messages to be found.
+ */
+export async function apiResolveChatHistory(serverId: string, talker?: string): Promise<ChatHistoryResolveResult> {
+  return unwrap(await remote().resolveChatHistory({
+    serverId,
+    ...(talker ? { talker } : {}),
+  }))
 }
 
 /** Authoritative transfer/redpacket status by message server_id. */

@@ -34,6 +34,9 @@
   padding-bottom: var(--nm-s-3);
   margin: calc(-1 * var(--nm-s-1)) 0 0;
   background: var(--nm-bg-card);
+  /* dialogBd 的 16px 顶部内边距不在 sticky 的吸附范围内；列表滚动后会从
+     工具条上方露出一行。用同色无模糊阴影把这条缝一起盖住。 */
+  box-shadow: 0 calc(-1 * var(--nm-s-4)) 0 var(--nm-bg-card);
   border-bottom: 1px solid var(--nm-border);
 }
 
@@ -191,6 +194,47 @@
   border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
   background: var(--nm-bg-input);
   border-radius: 0 var(--nm-r-sm) var(--nm-r-sm) 0;
+}
+
+/* 历史执行轨迹：沿用实时问答的轮次组件，只补一层历史卡片边界。 */
+.runtimeTrace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  min-width: 0;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-bg-input) 72%, transparent);
+}
+
+.traceHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.traceTitle {
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+}
+
+.traceMeta {
+  margin-left: auto;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs, 11px);
+  font-variant-numeric: tabular-nums;
+}
+
+.traceNotice {
+  padding: 4px 8px;
+  border-radius: var(--nm-r-xs);
+  background: color-mix(in srgb, var(--nm-warning) 9%, transparent);
+  color: var(--nm-warning-text);
+  font-size: var(--nm-fs-xs, 11px);
 }
 
 .basis {

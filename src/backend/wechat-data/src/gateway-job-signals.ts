@@ -32,11 +32,19 @@ export interface AbortJobSignal {
 export function jobSignalFor(jobs: AbortJobSlots, jobId?: string): AbortJobSignal | undefined {
   const id = normalizeJobId(jobId)
   if (id === '') return undefined
+  // 同一个 jobId 再次取号代表新一轮任务；旧任务不能继续无主运行。
+  // 先取消再覆盖，旧令牌的 done() 仍会因身份不同而无法删掉新槽。
+  jobs.get(id)?.abort()
   const ctrl = new AbortController()
   jobs.set(id, ctrl)
+  let released = false
   return {
     signal: ctrl.signal,
-    done: () => { if (jobs.get(id) === ctrl) jobs.delete(id) },
+    done: () => {
+      if (released) return
+      released = true
+      if (jobs.get(id) === ctrl) jobs.delete(id)
+    },
   }
 }
 
@@ -53,6 +61,9 @@ export function cancelJobIn(jobs: AbortJobSlots, jobId?: string): boolean {
   if (id === '') return false
   const ctrl = jobs.get(id)
   if (!ctrl) return false
+  // 先摘槽再 abort：取消本身立即完成释放，重复取消返回 false；
+  // abort 监听里若立刻复用同一 id，也不会被旧槽覆盖。
+  jobs.delete(id)
   ctrl.abort()
   return true
 }

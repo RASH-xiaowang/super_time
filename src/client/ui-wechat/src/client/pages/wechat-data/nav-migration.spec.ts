@@ -29,6 +29,8 @@ function codeOf(file: string): string {
 }
 
 const panel = codeOf('WechatDataPanel.tsx')
+/** 搜索请求、Ctrl+K 与词云事件订阅已收进独立状态机；源码守护跟着实现走。 */
+const searchState = codeOf('use-global-search.ts')
 const css = readFileSync(join(HERE, 'wechat-data.module.css'), 'utf8')
 
 /** 导航栏（`<aside class="sidebar">`）那一段 JSX —— 迁入的元素必须落在这个区间里。 */
@@ -197,10 +199,10 @@ describe('收起态（58px 轨）不能出现半截元素', () => {
 
 describe('Ctrl+K 与展开态的联动', () => {
   it('快捷键先把导航展开再聚焦（收起态搜索框是 display:none，直接 focus 会静默失败）', () => {
-    expect(panel).toMatch(/setNavOpen\(true\)[\s\S]{0,200}requestAnimationFrame[\s\S]{0,80}searchInputRef\.current\?\.focus\(\)/)
+    expect(searchState).toMatch(/setNavOpen\(true\)[\s\S]{0,200}requestAnimationFrame[\s\S]{0,80}searchInputRef\.current\?\.focus\(\)/)
   })
 
   it('导航收起时一并关掉结果面板（否则会拿全零矩形定位，飘到左上角）', () => {
-    expect(panel).toMatch(/if\s*\(!navOpen\)\s*setSearchOpen\(false\)/)
+    expect(searchState).toMatch(/if\s*\(!navOpen\)\s*setSearchOpen\(false\)/)
   })
 })

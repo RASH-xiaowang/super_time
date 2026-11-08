@@ -23,6 +23,7 @@ function overviewCachePath(dec: string): string {
 import { classifyPacked } from './resource-classify.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { queryContacts } from './contacts.ts'
+import { displayNameForUsername } from './message-identity.ts'
 
 interface StorageCategory { label: string; count: number; size: number }
 interface MomentsAuthorStat { username: string; name: string; enterpriseName?: string; posts: number }
@@ -206,7 +207,7 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
           else {
             const enterpriseName = enterpriseNames.get(u)?.trim()
             authorMap.set(u, {
-              name: names.get(u) || xmlNickname(cellStr(r.c)) || u,
+              name: displayNameForUsername(u, names, xmlNickname(cellStr(r.c))),
               ...(enterpriseName ? { enterpriseName } : {}),
               posts: 1,
             })

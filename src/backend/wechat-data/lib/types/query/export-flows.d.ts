@@ -31,6 +31,8 @@ export declare function filterMessages(msgs: WechatMessage[], types?: number[], 
  */
 /** Sanitize a user-supplied file basename (no separators / invalid chars). */
 export declare function sanitizeBasename(name: string): string;
+/** Resolve a legacy message-table hash before any export path, filename, or manifest is written. */
+export declare function canonicalExportUsername(decryptedDir: string, value: string): string;
 /** 单会话导出的「计划」：收集 + 过滤 + 算出所有输出名（同步/流式两条入口共用）。 */
 export interface SessionExportPlan {
     msgs: WechatMessage[];
@@ -154,6 +156,12 @@ export declare function exportMoments(decryptedDir: string, opts?: {
     month?: string;
     mine?: string;
     zip?: boolean;
+    /** ZIP only; defaults to true for backward compatibility. */
+    includeImages?: boolean;
+    /** ZIP only; defaults to true for backward compatibility. */
+    includeVideos?: boolean;
+    /** ZIP only; defaults to true and writes both the still frame and motion clip. */
+    includeLivePhotos?: boolean;
     from?: number;
     to?: number;
     dir?: string;

@@ -36,6 +36,8 @@ import {
   type ToolName,
   type ToolResult,
 } from '../src/query/tools/index.ts'
+import { buildToolHintBlock } from '../src/query/answer-runtime/tool-guidance.ts'
+import { buildToolSelectionSystem } from '../src/remotes/ask-runtime-prompt.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TOOLS_DIR = resolve(HERE, '..', 'src', 'query', 'tools')
@@ -132,26 +134,41 @@ describe('AnswerProfile：白名单与边界', () => {
     }
   })
 
-  it('clawbot-auto 只能用 search_kb（任何本机微信工具都被拒）', () => {
-    const profile = ANSWER_PROFILES['clawbot-auto']
-    expect(profile.allowedTools).toEqual(['search_kb'])
-    expect(profile.kbOnly).toBe(true)
-    expect(profile.allowWechatData).toBe(false)
-    for (const name of TOOL_NAMES) {
-      // search_kb 是唯一例外；其余（含 search_hybrid）都不能被自动回复调用
-      expect(isToolAllowed(profile, name), `${name} 不该被允许`).toBe(name === 'search_kb')
-    }
-  })
-
-  it('未知 profile 回退到权限最小的 clawbot-auto（不是全量权限）', () => {
-    expect(getAnswerProfile('no-such-profile').id).toBe('clawbot-auto')
+  it('未知 profile 回退到受限的 session-ask（不是全量权限）', () => {
+    const fallback = getAnswerProfile('no-such-profile')
+    expect(fallback.id).toBe('session-ask')
+    expect(fallback.allowedTools).toEqual(ANSWER_PROFILES['session-ask'].allowedTools)
   })
 
   it('buildProfileTools 过滤后的清单与白名单一致', () => {
     const tools = buildTools()
-    expect(buildProfileTools('clawbot-auto', tools).map(t => t.name)).toEqual(['search_kb'])
     expect(buildProfileTools('session-ask', tools).map(t => t.name).sort())
       .toEqual([...ANSWER_PROFILES['session-ask'].allowedTools].sort())
+    expect(buildProfileTools('wechat-ask', tools).map(t => t.name).sort())
+      .toEqual([...ANSWER_PROFILES['wechat-ask'].allowedTools].sort())
+  })
+
+  it('session-ask 的工具提示只围绕当前会话消息，不把模型引向全局资源', () => {
+    const system = buildToolSelectionSystem({
+      profile: 'session-ask',
+      scope: { username: '123@chatroom', displayName: '项目群' },
+      question: '我们在这个会话里提过哪些文件？',
+      history: [],
+      imageNote: '',
+      now: new Date('2026-10-22T10:00:00'),
+    })
+    expect(system).toContain('只在当前会话内收集聊天消息证据')
+    expect(system).toContain('通常控制在 1-2 次工具调用')
+    expect(system).not.toContain('明确问文件用 search_files')
+    expect(system).not.toContain('search_contacts')
+    expect(system).not.toContain('list_sessions')
+
+    const sessionHint = buildToolHintBlock(['search_messages'], ANSWER_PROFILES['session-ask'])
+    expect(sessionHint).toContain('只查当前会话的聊天消息')
+    expect(sessionHint).not.toContain('文件/收藏/朋友圈/联系人/统计')
+
+    const globalHint = buildToolHintBlock(['search_files'], ANSWER_PROFILES['wechat-ask'])
+    expect(globalHint).toContain('文件/收藏/朋友圈/联系人/统计')
   })
 })
 
@@ -362,10 +379,16 @@ describe('AnswerProfile：执行期范围强制', () => {
     expect(d.error.errorCode).toBe('scope_violation')
   })
 
-  it('ClawBot 直接调用越界工具被执行层拒绝，且不会触发工具实现', async () => {
-    const run = vi.fn((): ToolResult => ({ tool: 'search_messages', ok: true, hits: [] }))
-    const tools = [fakeTool('search_messages', run)]
-    const r = await runProfileTool('clawbot-auto', tools, 'search_messages', { keywords: ['合同'] }, ctx())
+  it('受限 profile 直接调用越界工具在执行前被拒绝', async () => {
+    const run = vi.fn((): ToolResult => ({ tool: 'search_kb', ok: true, hits: [] }))
+    const tools = [fakeTool('search_kb', run)]
+    const r = await runProfileTool(
+      'session-ask',
+      tools,
+      'search_kb',
+      { query: '合同' },
+      ctx('123@chatroom'),
+    )
     expect(r.ok).toBe(false)
     expect(r.errorCode).toBe('tool_not_allowed')
     expect(run).not.toHaveBeenCalled()
@@ -374,13 +397,6 @@ describe('AnswerProfile：执行期范围强制', () => {
     const unknown = await runProfileTool('wechat-ask', tools, 'no_such_tool', {}, ctx())
     expect(unknown.ok).toBe(false)
     expect(unknown.errorCode).toBe('tool_not_allowed')
-  })
-
-  it('ClawBot 未选知识库时 search_kb 明确报错（不是去搜本机消息）', async () => {
-    const tools = buildTools()
-    const r = await runProfileTool('clawbot-auto', tools, 'search_kb', { query: '合同' }, ctx())
-    expect(r.ok).toBe(false)
-    expect(r.errorCode).toBe('not_configured')
   })
 })
 
@@ -550,7 +566,7 @@ describe('search_hybrid：参数与结果映射', () => {
       { query: '合同', mode: 'auto', aggregate: true },
     ]) {
       const r = await runTool([tool], 'search_hybrid', args, blockedCtx)
-      expect(r.ok, `${JSON.stringify(args)} 在 kb-only 下不该成功`).toBe(false)
+      expect(r.ok, `${JSON.stringify(args)} 在禁用本机微信数据时不该成功`).toBe(false)
       expect(r.errorCode).toBe('data_scope_blocked')
     }
     expect(executor).not.toHaveBeenCalled()

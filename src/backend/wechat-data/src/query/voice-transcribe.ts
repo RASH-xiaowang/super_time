@@ -209,13 +209,14 @@ export async function transcribeOneVoiceAsync(
   engineBin: string,
   username: string,
   localId: number,
+  explicitSvrId = '',
 ): Promise<{ ok: boolean; text?: string; error?: string }> {
   const modelFile = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)?.[1]
   if (!modelFile) return { ok: false, error: '未知模型: ' + modelId }
   const modelPath = join(modelsDir, modelFile)
   if (!existsSync(modelPath)) return { ok: false, error: `模型未安装: ${modelFile}` }
   if (!existsSync(engineBin)) return { ok: false, error: '未找到 whisper.cpp 引擎: ' + engineBin }
-  const svrId = svrIdByChatLocal(decryptedDir, username, localId)
+  const svrId = svrIdByChatLocal(decryptedDir, username, localId, explicitSvrId)
   if (!svrId) return { ok: false, error: '未找到语音消息' }
   const r = await transcribeVoiceTextAsync(decryptedDir, decodedDir, modelPath, engineBin, svrId, pickAliasBase(decodedDir))
   return r.text ? { ok: true, text: r.text } : { ok: false, error: r.error ?? '转写失败' }

@@ -497,74 +497,6 @@ describe('runAnswerRuntime', () => {
     expect(out.status).toBe('blocked')
   })
 
-  it('ClawBot 无 kb 返回 blocked 且不调用模型/工具', async () => {
-    const runTurn = vi.fn() as unknown as RunChatTurnFn
-    const out = await runAnswerRuntime(baseInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [fakeTool('search_kb', () => ({ tool: 'search_kb', ok: true, hits: [] }))],
-      toolContext: { decryptedDir: '/fake', now: NOW },
-      runTurn,
-    }))
-
-    expect(out.status).toBe('blocked')
-    expect(out.reason).toContain('未选择知识库')
-    expect(out.context.wechatDataEnabled).toBe(false)
-    expect(runTurn).not.toHaveBeenCalled()
-    expect(out.toolCalls).toEqual([])
-  })
-
-  it('ClawBot 有 kb 时只暴露 search_kb 并生成可引用证据', async () => {
-    const kb = vi.fn(() => ({
-      tool: 'search_kb' as const,
-      ok: true,
-      hits: [{
-        key: 'kb:7:88',
-        name: '合同.pdf',
-        time: '',
-        snippet: '验收款应支付 30%',
-        source: 'kb' as const,
-        trace: { kind: 'kb' as const, kbId: 7, fileId: 3, chunkId: 88, ordinal: 2, page: 5, heading: '付款' },
-      }],
-    }))
-    const schemas: string[][] = []
-    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
-      schemas.push((input.tools ?? []).map(schema => schema.name))
-      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
-        return turn({ text: '知识库找到验收款 30%。' })
-      }
-      return turn({ call: { id: 'call_kb', name: 'search_kb', args: { query: '验收款' } } })
-    }) as unknown as RunChatTurnFn
-
-    const out = await runAnswerRuntime(baseInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [
-        fakeTool('search_kb', kb),
-        fakeTool('search_messages', () => ({ tool: 'search_messages', ok: true, hits: [] })),
-      ],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW, wechatDataEnabled: true },
-      runTurn,
-      synthesize: () => '验收款是 30%。',
-    }))
-
-    expect(schemas[0]).toEqual(['search_kb'])
-    expect(out.context.wechatDataEnabled).toBe(false)
-    expect(out.status).toBe('ok')
-    expect(out.answer).toBe('验收款是 30%。')
-    expect(out.citations[0]).toMatchObject({
-      source: 'kb',
-      kb: {
-        kbId: 7,
-        fileId: 3,
-        chunkId: 88,
-        fileName: '合同.pdf',
-        fileExt: 'pdf',
-        ordinal: 2,
-        page: 5,
-        heading: '付款',
-      },
-    })
-  })
-
   it('session-ask 工具输出越界：其他会话的消息不得进入证据或引用', async () => {
     const run = vi.fn(() => ({
       tool: 'search_messages' as const,
@@ -605,66 +537,19 @@ describe('runAnswerRuntime', () => {
     expect(synthesize).not.toHaveBeenCalled()
   })
 
-  it('ClawBot 工具输出越界：消息/其他 kbId 均拒绝，状态 blocked', async () => {
-    const run = vi.fn(() => ({
-      tool: 'search_kb' as const,
-      ok: true,
-      hits: [
-        {
-          key: 'kb:8:11',
-          name: '别的库.md',
-          time: '',
-          snippet: '来自另一个知识库的内容',
-          source: 'kb' as const,
-          trace: { kind: 'kb' as const, kbId: 8, fileId: 1, chunkId: 11, ordinal: 0, page: 0, heading: '' },
-        },
-        {
-          key: 'wxid_a:1',
-          name: '项目群',
-          time: '',
-          snippet: '不该出现在自动回复里的消息',
-          source: 'msg' as const,
-          trace: { kind: 'msg' as const, username: 'wxid_a', localId: 1 },
-        },
-      ],
-    }))
-    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
-      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
-        return turn({ text: '不应综合生成。' })
-      }
-      return turn({ call: { id: 'call_kb_leak', name: 'search_kb', args: { query: '验收款' } } })
-    }) as unknown as RunChatTurnFn
-
-    const out = await runAnswerRuntime(baseInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [fakeTool('search_kb', run)],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW },
-      runTurn,
-      synthesize: () => '不应调用。',
-    }))
-
-    expect(out.status).toBe('blocked')
-    expect(out.evidence.items).toEqual([])
-    expect(out.citations).toEqual([])
-    // 非知识库来源在归一阶段就按畸形命中拒绝；kbId 不匹配计入边界拒绝。
-    expect(out.evidence.stats.rejectedCount).toBe(1)
-    expect(out.evidence.stats.malformedHits).toBe(1)
-    expect(out.reason).toContain('知识库')
-  })
-
-  it('证据不足时可显式允许综合生成（ClawBot 聊天兜底）', async () => {
+  it('证据不足时可显式允许综合生成', async () => {
     const runTurn = vi.fn(async () => turn({ text: '我先按对话内容回答。' })) as unknown as RunChatTurnFn
     const synthesize = vi.fn(() => '聊天兜底回答。')
 
     const out = await runAnswerRuntime(baseInput({
-      profile: ANSWER_PROFILES['clawbot-auto'],
-      profileTools: [fakeTool('search_kb', () => ({
-        tool: 'search_kb' as const,
+      profile: ANSWER_PROFILES['wechat-ask'],
+      profileTools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
         ok: true,
         hits: [],
         note: '没有命中',
       }))],
-      toolContext: { decryptedDir: '/fake', kbId: 7, now: NOW },
+      toolContext: { decryptedDir: '/fake', now: NOW },
       runTurn,
       synthesize,
       synthesizeOnInsufficient: true,
@@ -749,6 +634,53 @@ describe('runAnswerRuntime', () => {
     expect(out.synthesized).toBe(false)
     expect(out.synthesisError).toContain('模型不可用')
     expect(out.answer).toContain('合同原文已确认')
+  })
+
+  it('综合生成遇到用户取消时继续向上抛，不降级成证据文本', async () => {
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '工具完成。' })
+      }
+      return turn({ call: { id: 'call_cancel', name: 'search_messages', args: { keywords: ['合同'] } } })
+    }) as unknown as RunChatTurnFn
+    const synthesize = vi.fn(() => {
+      throw Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' })
+    })
+
+    await expect(runAnswerRuntime(baseInput({
+      profileTools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:16',
+          name: '项目群',
+          time: '',
+          snippet: '合同原文已确认。',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      synthesize,
+    }))).rejects.toMatchObject({ code: 'ASK_CANCELED' })
+
+    expect(synthesize).toHaveBeenCalledTimes(1)
+  })
+
+  it('工具循环在第 1 轮失败时，结果 rounds 仍覆盖已经展示的轮次', async () => {
+    const stages: Array<{ round?: number }> = []
+    const runTurn = vi.fn(async () => {
+      throw new Error('模型不可用')
+    }) as unknown as RunChatTurnFn
+
+    const out = await runAnswerRuntime(baseInput({
+      runTurn,
+      emitStage: stage => { stages.push(stage) },
+    }))
+
+    expect(out.status).toBe('failed')
+    expect(out.rounds).toBe(1)
+    expect(stages.some(stage => stage.round === 1)).toBe(true)
+    expect(stages.every(stage => stage.round === undefined || stage.round <= out.rounds)).toBe(true)
   })
 
   it('citationsFromEvidence 只给消息/知识库/事实生成引用', () => {

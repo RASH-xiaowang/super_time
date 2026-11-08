@@ -5,27 +5,13 @@
  * top contacts/groups, and first/last sentences.
  */
 import { DatabaseSync } from './db-open.ts'
-import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { ANNUAL_TTL_MS, cachedBySigAsync, contactMeta, shardCatalogSig } from './meta.ts'
+import { ANNUAL_TTL_MS, cachedBySigAsync, shardCatalogSig } from './meta.ts'
+import { displayNameForUsername, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { YIELD_EVERY_CHARS, YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import { throwIfCancelled, type StreamControl, type StreamProgress } from './zip.ts'
-
-/** Msg_<md5(username)> table name. */
-function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
-}
-
-/** Coerce a DB cell to a string (null -> '', else String()). */
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  return ''
-}
 
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -139,8 +125,7 @@ async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: St
   if (!existsSync(msgDir)) return { year, total: 0 }
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
   const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1000)
-  // gather sessions
-  const usernames = loadUsernames(decryptedDir)
+  const identity = messageIdentityIndex(decryptedDir, ['message'])
   const perSender = new Map<string, number>()
   const perChat = new Map<string, number>()
   const heat = new Array<number>(7 * 24).fill(0)
@@ -167,8 +152,7 @@ async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: St
 
   // File-first indexing: open each shard once and map its Msg_* tables to
   // session usernames, so the per-session loop never reopens a file.
-  const tableToUser = new Map<string, string>()
-  for (const username of usernames) tableToUser.set(msgTableName(username), username)
+  const tableToUser = identity.tableToUsername
   const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
   for (const file of files) {
     let probe: DatabaseSync | null = null
@@ -288,9 +272,9 @@ async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: St
   const morningShare = total > 0 ? morningCount / total : 0
   const weekendShare = total > 0 ? weekendCount / total : 0
   const groupShare = total > 0 ? groupCount / total : 0
-  const nameMap = contactMeta(decryptedDir).names
-  const topContacts = Array.from(perSender.entries()).filter(([u]) => !u.endsWith('@chatroom') && !u.startsWith('gh_')).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10)
-  const topGroups = Array.from(perChat.entries()).filter(([u]) => u.endsWith('@chatroom')).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10)
+  const nameMap = mergeDisplayNames(decryptedDir, identity.usernames)
+  const topContacts = Array.from(perSender.entries()).filter(([u]) => !u.endsWith('@chatroom') && !u.startsWith('gh_')).map(([username, count]) => ({ username, name: displayNameForUsername(username, nameMap), count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10)
+  const topGroups = Array.from(perChat.entries()).filter(([u]) => u.endsWith('@chatroom')).map(([username, count]) => ({ username, name: displayNameForUsername(username, nameMap), count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10)
   const topEmoji = Array.from(emojiCount.entries()).map(([e, n]) => ({ emoji: e, count: n })).sort((a, b) => b.count - a.count).slice(0, 8)
   const topPhrases = Array.from(phraseCount.entries())
     .map(([p, n]) => ({ phrase: p, count: n }))
@@ -318,24 +302,6 @@ async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: St
   }
   if (firstMsg) out.first_message = cleanMessage(firstMsg)
   if (lastMsg) out.last_message = cleanMessage(lastMsg)
-  return out
-}
-
-/** Load session usernames. */
-function loadUsernames(decryptedDir: string): string[] {
-  const p = join(decryptedDir, 'session', 'session.db')
-  if (!existsSync(p)) return []
-  const out: string[] = []
-  try {
-    withDb(p, (db) => {
-      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-      if (table) {
-        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-        for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
-      }
-    })
-  } catch { /* skip */ }
   return out
 }
 

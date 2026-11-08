@@ -90,7 +90,7 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     expect(onTrigger, '一个簇只该合并成一次').toHaveBeenCalledTimes(1)
   })
 
-  it('WATCH_MIN_GAP_MS 内的第二次触发被限频跳过；越过窗口后恢复', () => {
+  it('WATCH_MIN_GAP_MS 内的第二次写入改为尾随补发，不会被直接丢掉', () => {
     const fw = makeFakeWatch()
     const onTrigger = vi.fn()
     const h = startSyncWatch({ onTrigger }, { watchDir: fw.watchDir })
@@ -99,17 +99,17 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
     expect(onTrigger).toHaveBeenCalledTimes(1)
-    // 触发时刻是 t=WATCH_DEBOUNCE_MS；下面这次距上次不足 WATCH_MIN_GAP_MS ⇒ 跳过。
-    // 用「限频窗口的一半」推进，保证无论常量取多少都落在窗口内。
-    vi.advanceTimersByTime(Math.floor(WATCH_MIN_GAP_MS / 2))
+    // 第一次触发后立刻再写：防抖结束时仍落在限频窗口内，必须排成尾随补发。
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
-    expect(onTrigger, '限频窗口内的触发必须跳过').toHaveBeenCalledTimes(1)
-    // 再推一个完整窗口 ⇒ 距上次已超过 WATCH_MIN_GAP_MS ⇒ 恢复
+    expect(onTrigger, '限频窗口内先不许立即触发').toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(WATCH_MIN_GAP_MS - WATCH_DEBOUNCE_MS)
+    expect(onTrigger, '窗口结束前必须补发这一次写入').toHaveBeenCalledTimes(2)
+    // 尾随补发后，再越过一个完整窗口应该恢复即时触发。
     vi.advanceTimersByTime(WATCH_MIN_GAP_MS)
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
-    expect(onTrigger, '越过窗口后必须恢复').toHaveBeenCalledTimes(2)
+    expect(onTrigger, '越过窗口后必须恢复').toHaveBeenCalledTimes(3)
   })
 
   it('refresh 换目录 ⇒ 旧监听关闭、新目录重挂；同目录重复 refresh 是空操作', () => {
@@ -161,15 +161,20 @@ describe('WAL 监听的触发纪律（注入假 watch + 假时钟）', () => {
     expect(String(onWatchError.mock.calls[0]?.[0])).toContain('挂载失败')
   })
 
-  it('stop ⇒ 未到防抖的定时器清掉、监听关闭（卸载后一个死回调都不留）', () => {
+  it('stop ⇒ 防抖/尾随定时器都清掉、监听关闭（卸载后一个死回调都不留）', () => {
     const fw = makeFakeWatch()
     const onTrigger = vi.fn()
     const h = startSyncWatch({ onTrigger }, { watchDir: fw.watchDir })
     h.refresh('C:/wx/raw')
     fw.watchers[0]!.fire('change', 'MSG0.db-wal')
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
+    expect(onTrigger).toHaveBeenCalledTimes(1)
+    fw.watchers[0]!.fire('change', 'MSG0.db-wal')
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS)
+    expect(onTrigger, '尾随还在等待限频窗口').toHaveBeenCalledTimes(1)
     h.stop()
     vi.advanceTimersByTime(10_000)
-    expect(onTrigger, 'stop 后防抖定时器不许再触发').not.toHaveBeenCalled()
+    expect(onTrigger, 'stop 后防抖/尾随定时器都不许再触发').toHaveBeenCalledTimes(1)
     expect(fw.watchers[0]?.closed, 'stop 必须关闭监听').toBe(true)
   })
 })

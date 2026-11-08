@@ -1,0 +1,230 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-family: inherit;
+  font-size: var(--nm-fs-md);
+  outline: none;
+  transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
+}
+
+.input {
+  height: 32px;
+  padding: 0 10px;
+}
+
+.textarea {
+  min-height: 180px;
+  padding: 8px 10px;
+  line-height: var(--nm-lh-body);
+  resize: vertical;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--nm-text-3);
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: var(--nm-border-active);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+
+.hint,
+.counter {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+.hint {
+  color: var(--nm-text-2);
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-bg-1) 88%, var(--nm-cyan) 12%);
+  cursor: pointer;
+}
+
+.toggleCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.toggleLabel {
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-weight: 650;
+}
+
+.toggleHint {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+.toggleInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggleSwitch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: none;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-input);
+  transition: border-color var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.toggleSwitch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+  content: '';
+  transition: transform var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.toggleInput:checked + .toggleSwitch {
+  border-color: var(--nm-border-active);
+  background: color-mix(in srgb, var(--nm-cyan) 24%, var(--nm-bg-input));
+}
+
+.toggleInput:checked + .toggleSwitch::after {
+  background: var(--nm-cyan);
+  transform: translateX(16px);
+}
+
+.toggleInput:focus-visible + .toggleSwitch {
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 2px;
+}
+
+.toggleInput:disabled + .toggleSwitch,
+.toggleRow:has(.toggleInput:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.webhookSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionTitle {
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-md);
+  font-weight: 650;
+}
+
+.webhookStatus {
+  margin-left: auto;
+  padding: 2px var(--nm-s-2);
+  border: 1px solid color-mix(in srgb, var(--nm-amber) 42%, var(--nm-border));
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-warning-text);
+  background: color-mix(in srgb, var(--nm-amber) 12%, transparent);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.35;
+}
+
+.webhookStatus[data-configured='true'] {
+  border-color: color-mix(in srgb, var(--nm-green) 42%, var(--nm-border));
+  color: var(--nm-success-text);
+  background: color-mix(in srgb, var(--nm-green) 12%, transparent);
+}
+
+.webhookRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.webhookRow .input {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
+  font-size: var(--nm-fs-sm);
+}
+
+.counter {
+  align-self: flex-end;
+  color: var(--nm-text-3);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.footerSpacer {
+  flex: 1;
+}
+
+/* 双类名提权，稳过 kit Dialog 的 520px 默认宽度。 */
+.settingsDialog.settingsDialog {
+  width: min(680px, calc(100vw - 32px));
+}
+
+@media (max-width: 560px) {
+  .settingsDialog.settingsDialog {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .webhookRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -98,7 +98,6 @@ const MUST_HAVE = [
   'rotate(45deg)',
   // ── 卡片扁平官方色 ──
   '--wx-transfer: #f79c46',
-  '--wx-transfer-returned: #fde1c3',
   '--wx-redpacket: #fa9d3b',
   '--wx-redpacket-footer: #faecda',
   '--wx-live-badge: rgba(250, 81, 81, .92)',
@@ -111,7 +110,6 @@ const MUST_HAVE = [
   // ── 底部类型条 / 位置卡地图 / 图片组 / 视频角标 ──
   'height:27px',
   'height:23px',
-  'height:98px',
   'gap:2px',
   'right:8px',
   // ── 右键菜单令牌（深浅各一份） ──
@@ -127,6 +125,10 @@ const MUST_NOT_HAVE = [
   'linear-gradient(145deg,#fa9d3b',
   'linear-gradient(145deg,#fa5151',
   'linear-gradient(145deg,#b0a695',
+  // 转账状态没有可靠映射，对应的推测态色令牌也不应重新出现
+  '--wx-transfer-returned',
+  // 本地没有地图瓦片时不再用渐变网格伪造位置卡地图
+  'height:98px',
   // 旧的「靠近尖角那一角收小」令牌
   '--wx-radius-tip',
   // 旧的气泡描边令牌

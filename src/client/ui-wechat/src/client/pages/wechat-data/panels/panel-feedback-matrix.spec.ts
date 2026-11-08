@@ -100,6 +100,111 @@ const EXEMPT: Array<{ file: string; call: string; why: string }> = [
     call: 'apiSaveWechatConfig',
     why: '模块级助手 writeSecretMigrationAck 里的确认位写入，失败经 report 回调落到 setSaveMsg 提示条',
   },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export.tsx',
+    call: 'apiExportSessionMessages',
+    why: '批量循环把逐会话失败聚合成 errors 并返回；exportBatch 的 successMessage 报成功/失败数，宿主 chats-view.tsx 用 ExportProgressStatus 渲染 batchExportState',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-media.tsx',
+    call: 'apiSaveFileDialog',
+    why: '图片与视频保存都由宿主 ImageViewer/MessageVideo 的 useMediaSaveTask 调起，保存对话框异常会进入 task 的 error 状态并渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-media.tsx',
+    call: 'apiExportChatImage',
+    why: 'saveChatOriginal 由 ImageViewer 的 imageSave.save 调起；失败抛出后 useMediaSaveTask 写入 error，ImageViewer 的 statusOverlay 渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-media.tsx',
+    call: 'apiExportChatVideo',
+    why: 'MessageVideo 的 saveVideo 经 videoSave.save 调起，失败由 useMediaSaveTask 收口，组件内 saveStatus 渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-support.tsx',
+    call: 'apiSaveFileDialog',
+    why: 'downloadMessageFile 的保存框异常被助手转成 error；OpenFileCard、message-file-save 与 revoked-content 三个宿主都走 useMediaSaveTask 并渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-support.tsx',
+    call: 'apiExportChatFile',
+    why: 'downloadMessageFile 把写入失败转成 error，调用宿主的 useMediaSaveTask 将其显示在 ExportProgressStatus 终态',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-support.tsx',
+    call: 'apiExportFileAttachment',
+    why: '无会话归属时的附件写入失败同样由 downloadMessageFile 转成 error，调用宿主的 useMediaSaveTask 渲染统一状态卡',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/export-task.ts',
+    call: 'apiCancelExportJob',
+    why: '取消 RPC 失败会写入 state.message 并恢复 canceling；所有 useExportTask 宿主都用 ExportProgressStatus 渲染运行中与终态消息',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/favorites-original-export.ts',
+    call: 'apiSaveFileDialog',
+    why: '三个收藏原文件助手都由 favorites-media.tsx 的 useMediaSaveTask 调起，保存框异常进入 task 状态，由 FavoriteImage/Video/File 的 ExportProgressStatus 渲染',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/favorites-original-export.ts',
+    call: 'apiExportFavoriteImage',
+    why: 'FavoriteImage 的 imageSave.save 调起该助手，失败由 useMediaSaveTask 收口并在 MediaViewer statusOverlay 的 ExportProgressStatus 显示',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/favorites-original-export.ts',
+    call: 'apiExportFavoriteVideo',
+    why: 'FavoriteVideo 的 videoSave.save 调起该助手，失败由 useMediaSaveTask 收口，组件内 ExportProgressStatus 显示',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/favorites-original-export.ts',
+    call: 'apiExportFavoriteFile',
+    why: 'FavoriteFile 的 fileSave.save 调起该助手，失败由 useMediaSaveTask 收口，组件内 ExportProgressStatus 显示',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/files-original-export.ts',
+    call: 'apiSaveFileDialog',
+    why: 'saveFileOriginal 由 Files.tsx 的 FileDetailSaveAction 与 FilesLightbox 通过 useMediaSaveTask 调起，保存框异常进入 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/files-original-export.ts',
+    call: 'apiExportFileImage',
+    why: '文件库图片保存失败抛回 useMediaSaveTask，Files.tsx 两处宿主都渲染 ExportProgressStatus 终态',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/files-original-export.ts',
+    call: 'apiExportFileVideo',
+    why: '文件库视频保存失败抛回 useMediaSaveTask，Files.tsx 两处宿主都渲染 ExportProgressStatus 终态',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/files-original-export.ts',
+    call: 'apiExportFileAttachment',
+    why: '文件库附件保存失败抛回 useMediaSaveTask，Files.tsx 两处宿主都渲染 ExportProgressStatus 终态',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-live-download.ts',
+    call: 'apiSaveFileDialog',
+    why: 'saveMomentsLiveVideo 由 moments-portals.tsx 的 liveSave.save 调起，保存框异常进入 useMediaSaveTask，MediaViewer statusOverlay 渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-live-download.ts',
+    call: 'apiExportSnsVideo',
+    why: '实况视频写入失败抛回 moments-portals.tsx 的 liveSave.save，统一 ExportProgressStatus 显示错误',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-original-export.ts',
+    call: 'apiSaveFileDialog',
+    why: 'saveMomentImageOriginal 由 moments-portals.tsx 的 imageSave.save 调起，保存框异常进入 useMediaSaveTask，statusOverlay 渲染 ExportProgressStatus',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-original-export.ts',
+    call: 'apiExportSnsImage',
+    why: '朋友圈原图写入失败抛回 moments-portals.tsx 的 imageSave.save，统一 ExportProgressStatus 显示错误',
+  },
+  {
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/use-diag-log-export.ts',
+    call: 'apiExportDiagLog',
+    why: 'hook 只暴露 useExportTask 的 state；Settings.tsx 在诊断区块渲染 ExportProgressStatus，成功与失败均由该状态卡显示',
+  },
 ]
 
 function panelFiles(): string[] {

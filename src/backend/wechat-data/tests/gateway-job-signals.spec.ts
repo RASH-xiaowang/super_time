@@ -40,6 +40,7 @@ describe('取号', () => {
     const second = jobSignalFor(jobs, 'job-a')!
     expect(second.signal).not.toBe(first.signal)
     expect(second.signal.aborted).toBe(false)
+    expect(first.signal.aborted, '同 id 再取号时旧任务必须被取消，不能继续无主运行').toBe(true)
   })
 })
 
@@ -58,6 +59,15 @@ describe('归还', () => {
     ctl.done()
     expect(jobs.size).toBe(0)
   })
+
+  it('done() 幂等：重复归还不会影响后续同 id 的新令牌', () => {
+    const ctl = jobSignalFor(jobs, 'done-twice')!
+    ctl.done()
+    ctl.done()
+    const fresh = jobSignalFor(jobs, 'done-twice')!
+    expect(fresh.signal.aborted).toBe(false)
+    expect(jobs.get('done-twice')?.signal).toBe(fresh.signal)
+  })
 })
 
 describe('取消', () => {
@@ -75,6 +85,17 @@ describe('取消', () => {
     const ctl = jobSignalFor(jobs, 'running')!
     expect(cancelJobIn(jobs, 'running')).toBe(true)
     expect(ctl.signal.aborted).toBe(true)
-    expect(jobs.has('running'), '取消后槽位由任务自己的 finally/done 归还').toBe(true)
+    expect(jobs.has('running'), '取消即释放槽位，不能等一个可能永远不返回的任务来归还').toBe(false)
+  })
+
+  it('重复取消幂等：第二次返回 false，且旧 done() 不会碰后来复用同一 id 的新令牌', () => {
+    const old = jobSignalFor(jobs, 'repeat')!
+    expect(cancelJobIn(jobs, 'repeat')).toBe(true)
+    expect(cancelJobIn(jobs, 'repeat')).toBe(false)
+
+    const fresh = jobSignalFor(jobs, 'repeat')!
+    old.done()
+    expect(jobs.get('repeat')?.signal).toBe(fresh.signal)
+    expect(fresh.signal.aborted).toBe(false)
   })
 })

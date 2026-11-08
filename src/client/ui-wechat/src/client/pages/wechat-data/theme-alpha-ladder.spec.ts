@@ -112,7 +112,7 @@ describe('R1 令牌层：中性色阶第四档 + 品牌身份色', () => {
     const d = darkValue('--nm-text-4')
     const l = lightValue('--nm-text-4')
     expect(d).toBe('#5e5e5e')
-    expect(l).toBe('#8c8c8c')
+    expect(l).toBe('#6a6a6a')
     /**
      * 2026-09-28（R3）反转了这条断言。
      *

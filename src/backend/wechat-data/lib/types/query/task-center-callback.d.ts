@@ -36,21 +36,15 @@ export interface PendingDispatchResult {
     failed: number;
     errors?: string[];
 }
-/**
- * 手动 / 扫描后投递一条触发记录（按任务的触发方式走注册表）。
- *
- * 前置：任务已完善 + 厂商已注册 + 描述符必填项齐全，否则 skipped + 可读原因。
- * 文本先过**同一个**隐私闸（feature 仍是 `task_callback`）。图片按厂商分流：
- * Webhook 由适配器按需解码字节；RPA 厂商只在参数用到 `imagesJson` / `imageCount` /
- * `firstImageUrl` 时预先算好**短时签名直链**（`rpa/media-links.ts`）。
- * 失败不抛异常：`{ok:false, status:'failed', error}` 并落进记录，供前端重试。
- * @param decryptedDir - 解密数据根。
- * @param decodedDir - 图片解码缓存根（仅 Webhook 方式使用）。
- * @param triggerId - 触发记录 id。
- * @param deps - 解码 / 隐私闸 / fetch 注入。
- * @returns 投递结果（含 skipped 的几种可读原因）。
- */
-export declare function dispatchTaskCallback(decryptedDir: string, decodedDir: string, triggerId: number, deps: TaskDispatchDeps): Promise<TaskCallbackDispatchResult>;
+/** 测试可注入时钟/owner/租期；生产调用不传。 */
+export interface TaskDispatchOptions {
+    now?: number;
+    leaseMs?: number;
+    /** 心跳周期；0 = 关闭（只用于模拟进程已死亡/测试过期接管）。 */
+    heartbeatMs?: number;
+    owner?: string;
+}
+export declare function dispatchTaskCallback(decryptedDir: string, decodedDir: string, triggerId: number, deps: TaskDispatchDeps, options?: TaskDispatchOptions): Promise<TaskCallbackDispatchResult>;
 /**
  * 投递一批 `pending` 记录。
  *

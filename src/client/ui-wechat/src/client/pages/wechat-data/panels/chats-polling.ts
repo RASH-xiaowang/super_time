@@ -14,16 +14,31 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SNAPSHOT_REFRESHED_EVENT, apiGetDataRevision, apiGetMessages, apiGetNewMessages, writeRenderCache } from '../api.ts'
 import { POLL_HIDDEN_MS, POLL_VISIBLE_MS } from './chats-support.tsx'
-import type { WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { useKeepAliveActive } from './keep-alive.tsx'
+import type { DataRevision, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { canCacheChatId, canonicalChatId } from '../utils/chat-identity.ts'
 
 /** 渲染缓存与后端快照共用的键前缀（拆开前后是同一个字符串，改这里要一起改缓存版本）。 */
 const RENDER_CACHE_PREFIX = 'chat-msgs:v2:'
+/**
+ * 渲染缓存只保留最新窗口。首次打开会话无论如何都会权威拉取最近 100 条，
+ * 历史消息由“加载更多”分页取；把用户本次加载的几千条全量写 localStorage
+ * 只会在每次新消息时同步 JSON 序列化数 MB，且最终还会撞上 1.5MB 上限被丢弃。
+ */
+export const CHAT_RENDER_CACHE_MAX_MESSAGES = 300
 
 /** 对账限频：`getMessages(50)` 冷跑要扫统计（实测百毫秒级），新消息显示不靠它。 */
 const RECONCILE_MIN_GAP_MS = 2_000
 
 /** 距底多少像素以内算「正在看最新消息」；超过就只出提示、不抢滚动。 */
 export const NEAR_BOTTOM_PX = 80
+
+function persistChatRenderCache(talker: string, messages: readonly WechatMessage[]): void {
+  const tail = messages.length > CHAT_RENDER_CACHE_MAX_MESSAGES
+    ? messages.slice(-CHAT_RENDER_CACHE_MAX_MESSAGES)
+    : messages
+  writeRenderCache(RENDER_CACHE_PREFIX + talker, tail)
+}
 
 /**
  * 滚动容器是否已接近底部 —— 决定新消息到达时「跟随滚到底」还是「只提示」。
@@ -47,13 +62,21 @@ export function isNearBottom(box: HTMLDivElement | null | undefined): boolean {
  */
 export function pinScrollToBottom(box: HTMLDivElement | null | undefined, frames = 6): void {
   if (!box) return
+  const previous = scrollPinGenerations.get(box)
+  const generation = (previous ?? 0) + 1
+  scrollPinGenerations.set(box, generation)
   let left = frames
   const step = (): void => {
+    // 后一次 pin 会让前一条 rAF 链失效，避免「贴底」在图片/测高回调里叠出几十条链。
+    if (scrollPinGenerations.get(box) !== generation) return
     box.scrollTop = box.scrollHeight
     if (left-- > 0) requestAnimationFrame(step)
+    else scrollPinGenerations.delete(box)
   }
   requestAnimationFrame(step)
 }
+
+const scrollPinGenerations = new WeakMap<HTMLDivElement, number>()
 
 export interface ChatsPollingInputs {
   curSession: WechatSession | null
@@ -63,12 +86,72 @@ export interface ChatsPollingInputs {
   msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
   /** 已加载消息条数：变化时若用户贴底就把视口钉回最新（虚拟列表逐帧测高）。 */
   messagesLen: number
+  /** 虚拟消息列表节点：高度变化比滚动容器更直接，避免观察整棵子节点树。 */
+  msgListRef?: React.MutableRefObject<HTMLDivElement | null>
   sessionAlive: (epoch: number, talker: string) => boolean
   sessionEpochRef: React.MutableRefObject<number>
   setMessages: React.Dispatch<React.SetStateAction<readonly WechatMessage[]>>
   setPollStatus: React.Dispatch<React.SetStateAction<string>>
   setWatermarkFrom: (list: readonly WechatMessage[]) => void
   watermarkRef: React.MutableRefObject<number>
+  /** 与 `watermarkRef` 成对的 local_id；sort_seq 重复时靠它继续向后读。 */
+  watermarkLocalIdRef: React.MutableRefObject<number>
+}
+
+/**
+ * 从宿主事件里读结构化修订。
+ *
+ * 旧宿主/远程重连的合成事件可能没有 detail（或仍是数组），这时返回 null，
+ * 调用方退回一次轻量 `getDataRevision` RPC，保持兼容。
+ */
+function revisionDetailOf(event: Event): DataRevision | null {
+  const detail = (event as CustomEvent<unknown>).detail
+  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) return null
+  const record = detail as Record<string, unknown>
+  const revision = record['revision']
+  if (!Number.isSafeInteger(revision) || (revision as number) < 0) return null
+  const shards = Array.isArray(record['shards'])
+    ? record['shards'].filter((item): item is string => typeof item === 'string')
+    : []
+  return {
+    revision: revision as number,
+    updatedAt: typeof record['updatedAt'] === 'number' ? record['updatedAt'] : 0,
+    shards,
+    messageChanged: record['messageChanged'] === true,
+  }
+}
+
+/**
+ * 对账时判断同一条消息是否需要换行。
+ *
+ * 不能让「对象引用不同」直接算变化：后端每拍都会重建消息对象，那样每次推送都会
+ * 替换整个可见窗口并重写渲染缓存。也不能只看 `type`/`sortSeq`：编辑消息、撤回文案
+ * 和部分就地修改不会推进 `sort_seq`，但正文/系统子类型已经变了。
+ */
+function sameJson(left: unknown, right: unknown): boolean {
+  return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+function sameMessageRow(a: WechatMessage, b: WechatMessage): boolean {
+  return a.localId === b.localId
+    && a.type === b.type
+    && a.subType === b.subType
+    && a.sortSeq === b.sortSeq
+    && a.isSender === b.isSender
+    && a.createTime === b.createTime
+    && a.serverId === b.serverId
+    && a.msgContent === b.msgContent
+    && a.strContent === b.strContent
+    && a.typeLabel === b.typeLabel
+    && a.displayText === b.displayText
+    && a.renderType === b.renderType
+    && a.renderLabel === b.renderLabel
+    && a.sysKind === b.sysKind
+    && a.sender === b.sender
+    && a.senderName === b.senderName
+    && a.senderEnterpriseName === b.senderEnterpriseName
+    && sameJson(a.rich, b.rich)
+    && sameJson(a.atUsers, b.atUsers)
 }
 
 /**
@@ -77,7 +160,7 @@ export interface ChatsPollingInputs {
  *   以及「翻历史时收到的新消息」浮标数据（newMsgCount / jumpToLatest）。
  */
 export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Promise<number>; reconcileRecent: () => Promise<void>; newMsgCount: number; jumpToLatest: () => void } {
-  const { curSession, inFlightRef, messagesLen, msgScrollRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef } = inputs
+  const { curSession, inFlightRef, messagesLen, msgListRef, msgScrollRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef, watermarkLocalIdRef } = inputs
   /** 用户正在翻历史时收到、还没看的新消息条数（0 = 不显示浮标）。 */
   const [newMsgCount, setNewMsgCount] = useState(0)
   /** 是否贴着底部（用户滚进历史即 false）：布局继续长高时只有贴底才继续钉。 */
@@ -113,17 +196,23 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
   useEffect(() => {
     const box = msgScrollRef.current
     if (!box || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      if (stickRef.current) pinScrollToBottom(box, 1)
-    })
-    const observeAll = (): void => {
-      for (const child of Array.from(box.children)) ro.observe(child)
+    let frame: number | null = null
+    const schedulePin = (): void => {
+      if (!stickRef.current || frame !== null) return
+      frame = requestAnimationFrame(() => {
+        frame = null
+        if (stickRef.current) pinScrollToBottom(box, 1)
+      })
     }
-    observeAll()
-    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(observeAll)
-    mo?.observe(box, { childList: true })
-    return () => { ro.disconnect(); mo?.disconnect() }
-  }, [curSession?.username, msgScrollRef])
+    const ro = new ResizeObserver(schedulePin)
+    ro.observe(box)
+    const list = msgListRef?.current
+    if (list && list !== box) ro.observe(list)
+    return () => {
+      ro.disconnect()
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+  }, [curSession?.username, messagesLen, msgListRef, msgScrollRef])
 
   /** 点「N 条新消息」浮标：跳回最新并清空提示。 */
   const jumpToLatest = useCallback((): void => {
@@ -132,7 +221,12 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     pinScrollToBottom(msgScrollRef.current, 8)
   }, [msgScrollRef])
 
-  /** 增量轮询一次；返回「本拍候选新消息条数」（0 = 没有新消息）。 */
+  /**
+   * 增量轮询一次；返回「本拍候选新消息条数」（0 = 没有新消息）。
+   *
+   * 后端按 `(sort_seq, local_id)` 复合游标返回；`hasMore` 为真时继续排空，
+   * 直到这一拍没有下一页或触到页数上限。`sort_seq` 重复的边界因此不会漏行。
+   */
   const pollNew = useCallback(async (): Promise<number> => {
     if (!curSession || inFlightRef.current) return 0
     const talker = curSession.username
@@ -141,11 +235,34 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     if (!after) return 0
     inFlightRef.current = true
     try {
-      const env = await apiGetNewMessages({ talker, after, limit: 200 })
-      // 切走之后到达的响应必须丢弃：否则会把上一个会话的新消息追加进当前会话，
-      // 并且写进**上一个会话**的渲染缓存（缓存被污染后重开也还是错的）。
+      let cursorAfter = after
+      let cursorLocalId = watermarkLocalIdRef.current > 0 ? watermarkLocalIdRef.current : undefined
+      const fresh: WechatMessage[] = []
+      let canonicalUsername: string | undefined
+      // 上限只是防异常后端无限返回；正常一拍最多 200 条。
+      for (let page = 0; page < 20; page += 1) {
+        const env = await apiGetNewMessages({
+          talker,
+          after: cursorAfter,
+          ...(cursorLocalId === undefined ? {} : { afterLocalId: cursorLocalId }),
+          limit: 200,
+        })
+        // 切走之后到达的响应必须丢弃：否则会把上一个会话的新消息追加进当前会话，
+        // 并且写进**上一个会话**的渲染缓存（缓存被污染后重开也还是错的）。
+        if (!sessionAlive(epoch, talker)) return 0
+        fresh.push(...env.messages)
+        canonicalUsername = env.canonicalUsername ?? canonicalUsername
+        if (env.hasMore !== true) break
+        const nextAfter = env.cursor
+        const nextLocalId = env.cursorLocalId
+        if (nextAfter === undefined || nextLocalId === undefined) break
+        // 同一游标再次返回 ⇒ 后端没有前进；宁可停一拍，也不能死循环。
+        if (nextAfter === cursorAfter && nextLocalId === cursorLocalId) break
+        cursorAfter = nextAfter
+        cursorLocalId = nextLocalId
+      }
       if (!sessionAlive(epoch, talker)) return 0
-      const fresh = env.messages
+      const cacheTalker = canonicalChatId(talker, canonicalUsername)
       setPollStatus(`✓ ${new Date().toLocaleTimeString()} · ${fresh.length} 条新消息`)
       if (fresh.length === 0) return 0
       setMessages((prev) => {
@@ -154,11 +271,24 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
         const seen = new Set(prev.map(m => key(m)))
         const add = fresh.filter(m => !seen.has(key(m)))
         if (add.length === 0) return prev
+        let nextWatermark = watermarkRef.current
+        let nextLocalId = watermarkLocalIdRef.current
+        for (const message of add) {
+          const seq = message.sortSeq ?? 0
+          if (seq > nextWatermark) {
+            nextWatermark = seq
+            nextLocalId = message.localId
+          } else if (seq === nextWatermark) {
+            nextLocalId = Math.max(nextLocalId, message.localId)
+          }
+        }
+        watermarkRef.current = nextWatermark
+        watermarkLocalIdRef.current = nextLocalId
         setWatermarkFrom(add)
         // Keep the render cache current so a session reopen paints the same
         // newest messages before the authoritative fetch returns.
         const merged = [...prev, ...add]
-        writeRenderCache(RENDER_CACHE_PREFIX + talker, merged)
+        if (canCacheChatId(cacheTalker)) persistChatRenderCache(cacheTalker, merged)
         return merged
       })
       // 用户就在底部附近 ⇒ 跟随到最新消息；正在翻历史 ⇒ 只在窗口里提示，不抢滚动。
@@ -187,7 +317,9 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     const epoch = sessionEpochRef.current
     reconcileRef.current = true
     try {
-      const env = await apiGetMessages({ talker, limit: 50 })
+      // 事件驱动对账必须绕过 5s SWR：撤回/编辑不会推进 sort_seq，
+      // 命中旧缓存会让界面继续挂着上一版内容。
+      const env = await apiGetMessages({ talker, limit: 50, fresh: true })
       // 对账按 localId 匹配，而 local_id 只在会话内唯一 —— 切走后拿另一个会话的
       // 行去替换当前会话的行，等于按编号把别人的消息安到这个会话上，必须丢弃。
       if (!sessionAlive(epoch, talker)) return
@@ -198,12 +330,13 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
         if (!sessionAlive(epoch, talker)) return prev
         const next = prev.map((m) => {
           const cur = byId.get(m.localId)
-          if (cur && (cur.type !== m.type || (cur.sortSeq ?? 0) !== (m.sortSeq ?? 0))) return cur
+          if (cur && !sameMessageRow(m, cur)) return cur
           return m
         })
         const changed = next.some((m, i) => m !== prev[i])
         if (!changed) return prev
-        writeRenderCache(RENDER_CACHE_PREFIX + talker, next)
+        const cacheTalker = canonicalChatId(talker, env.canonicalUsername)
+        if (canCacheChatId(cacheTalker)) persistChatRenderCache(cacheTalker, next)
         return next
       })
     } catch { /* 保持当前视图，等待下一次推送对账 */ } finally {
@@ -211,12 +344,32 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     }
   }, [curSession])
 
+  useChatsLiveRefresh(curSession, pollNew, reconcileRecent)
+
+  return { jumpToLatest, newMsgCount, pollNew, reconcileRecent }
+}
+
+/** 把定时器、宿主推送与 SWR 广播三条入口接到增量与对账上。 */
+function useChatsLiveRefresh(
+  curSession: WechatSession | null,
+  pollNew: () => Promise<number>,
+  reconcileRecent: () => Promise<void>,
+): void {
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const wasActiveRef = useRef(active)
+
   /** 最近一次已处理的后端修订（纯内存读，见后端 `getDataRevision`）。 */
   const revisionRef = useRef(0)
+  /** 修订对应的时间戳：后端重启后 revision 会归零，靠它识别“同一编号的新进程”。 */
+  const revisionAtRef = useRef(0)
   /** 最近一次对账时刻（对账限频用）。 */
   const lastReconcileAtRef = useRef(0)
   /** 续订闸门：宿主推送与定时器可能同时到达，只允许一个 refresh 在途。 */
   const refreshingRef = useRef(false)
+  /** 在途期间又来了一拍：结束后必须补跑，不能直接丢。 */
+  const pendingRefreshRef = useRef(false)
   /**
    * 修订闸门：先读一次后端「实时同步修订」，只有 `revision` 真的变了、且这一拍
    * 动了消息分片（`messageChanged`）才拉增量与对账。
@@ -225,24 +378,45 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
    * 每秒查一次消息分片、`reconcileRecent` 每次推送再查 50 条 —— 原来这两件事
    * 不管数据有没有变都在跑；现在「没变」的绝大多数节拍只花一次内存读。
    */
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!curSession || refreshingRef.current) return
+  const refresh = useCallback(async (detail?: DataRevision | null): Promise<void> => {
+    if (!curSession) return
+    if (refreshingRef.current) {
+      pendingRefreshRef.current = true
+      return
+    }
     refreshingRef.current = true
     try {
       let revision = 0
       let messageChanged = false
-      try {
-        const r = await apiGetDataRevision()
-        revision = r.revision
-        messageChanged = r.messageChanged
-      } catch {
-        // 修订读不到只说明这次判断做不了，保持当前视图，等下一次推送/轮询。
-        return
+      let updatedAt = 0
+      if (detail !== null && detail !== undefined) {
+        // 宿主事件已经把同一拍的 revision 带过来了，省掉一次 RPC。
+        revision = detail.revision
+        messageChanged = detail.messageChanged
+        updatedAt = detail.updatedAt
+      } else {
+        try {
+          const r = await apiGetDataRevision()
+          revision = r.revision
+          messageChanged = r.messageChanged
+          updatedAt = r.updatedAt
+        } catch {
+          // 修订读不到只说明这次判断做不了，保持当前视图，等下一次推送/轮询。
+          return
+        }
       }
-      if (revision === revisionRef.current) return
+      const previousRevision = revisionRef.current
+      const previousUpdatedAt = revisionAtRef.current
+      const rewound = revision < previousRevision
+        || (revision === previousRevision && updatedAt > previousUpdatedAt)
+      if (revision === previousRevision && !rewound) return
+      // 事件丢失（revision 跳号）时不能相信这一拍的 messageChanged：
+      // 漏掉的那拍可能正好动了消息库，保守补一次增量。
+      const gap = rewound || (previousRevision > 0 && revision > previousRevision + 1)
       revisionRef.current = revision
+      revisionAtRef.current = Math.max(previousUpdatedAt, updatedAt)
       // 只动了会话/通讯录/朋友圈等库时不必拉消息增量（各自的推送会刷新各自的界面）。
-      if (!messageChanged) return
+      if (!messageChanged && !gap) return
       const added = await pollNew()
       const at = Date.now()
       // 对账要拉最近 50 条（冷跑要扫统计）；新消息不靠它显示。
@@ -253,11 +427,15 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
       }
     } finally {
       refreshingRef.current = false
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false
+        if (activeRef.current) queueMicrotask(() => { void refresh() })
+      }
     }
   }, [curSession, pollNew, reconcileRecent])
 
   useEffect(() => {
-    if (!curSession) return
+    if (!curSession || !active) return
     let timer: ReturnType<typeof setInterval> | null = null
     const start = (): void => {
       if (timer !== null) clearInterval(timer)
@@ -271,14 +449,22 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
       document.removeEventListener('visibilitychange', onVis)
       if (timer !== null) clearInterval(timer)
     }
-  }, [curSession, refresh])
+  }, [curSession, refresh, active])
+
+  // keep-alive 隐藏期间不轮询；重新显示时先补一拍，再恢复定时器。
+  useEffect(() => {
+    const resumed = active && !wasActiveRef.current
+    wasActiveRef.current = active
+    if (resumed) void refresh()
+  }, [active, refresh])
 
   // Host push: a WAL increment was decrypted into the snapshot — refresh the
   // open chat immediately, reconcile in-place edits (revoke/delete), and
   // coalesce the session-list refresh.
   useEffect(() => {
-    const onUpdated = (): void => {
-      void refresh()
+    const onUpdated = (event: Event): void => {
+      if (!activeRef.current) return
+      void refresh(revisionDetailOf(event))
       // 会话列表**不在这里刷**：`usePagedList` 内部已订阅同一事件并做非破坏性 refresh，
       // 这里再刷一次只会重复取数；而原先这里走的是 `reset()`，每约 10 秒把列表清空重画，
       // 表现就是「有新消息时会话列表跳动一次」。
@@ -287,7 +473,11 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     // SWR 的另一半（P0-3）：`apiGetMessages` 命中缓存时先画旧快照、后台才刷新，
     // 新值落地后按接口族广播 —— 不订阅它，界面就会一直停在「上一次打开时的那份」。
     // 这一路是「同一份快照重放」而不是「又有新数据」，所以直接增量+对账，不经过修订闸门。
-    const onSnapshot = (): void => { void pollNew(); void reconcileRecent() }
+    const onSnapshot = (): void => {
+      if (!activeRef.current) return
+      void pollNew()
+      void reconcileRecent()
+    }
     window.addEventListener(`${SNAPSHOT_REFRESHED_EVENT}:messages`, onSnapshot)
     return () => {
       window.removeEventListener('dsh-wechat-data-updated', onUpdated)
@@ -295,5 +485,4 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
     }
   }, [refresh, pollNew, reconcileRecent])
 
-  return { jumpToLatest, newMsgCount, pollNew, reconcileRecent }
 }

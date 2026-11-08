@@ -36,8 +36,9 @@ import { downloadOriginalByFileid } from './wxcdn-original.ts'
 import { getConfig } from '../config/wechat-config.ts'
 import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
-import { createHash } from 'node:crypto'
 import { shardCatalogDirs } from './meta.ts'
+import { messageTableName, resolveTalkerUsername } from './message-identity.ts'
+import { createBoundedCache } from './cache-budget.ts'
 
 /** zstd magic（4.x 的 `message_content` 是压缩的）。 */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
@@ -84,7 +85,7 @@ function cellText(v: unknown): string {
  * @returns `{ fileid, aesKey, md5 }`；拿不到时 null。
  */
 function readCdnFileid(decryptedDir: string, username: string, localId: number): { fileid: string; aesKey: string; md5: string } | null {
-  const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  const table = messageTableName(username)
   for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
     const meta = shard.tables.get(table)
     if (!meta) continue
@@ -150,8 +151,16 @@ async function tryWxcdnUpgrade(
 /** 「已试过且失败」的记忆保留多久（毫秒）。用户中途点开原图后，过了这个时间会自动再试。 */
 const RETRY_TTL_MS = 10 * 60 * 1000
 
+/** 失败记忆的固定容量；超过后淘汰最久未访问的条目，避免长期浏览把进程内存推高。 */
+const TRIED_MAX_ENTRIES = 4096
+
 /** 进程内记忆：`<username>|<localId>` → 上次失败的时间戳。 */
-const triedAt = new Map<string, number>()
+const triedAt = createBoundedCache<string, number>({
+  label: 'image-auto-upgrade-tried',
+  maxEntries: TRIED_MAX_ENTRIES,
+  maxTotal: TRIED_MAX_ENTRIES,
+  sizeOf: () => 1,
+})
 
 /** 自动升级的结果（给调用方决定要不要替换返回值）。 */
 export interface AutoUpgradeResult {
@@ -201,18 +210,20 @@ export async function tryUpgradeToOriginal(
   allowNetwork = true,
   options: { hint?: ImageResourceHint; fileOnly?: boolean } = {},
 ): Promise<AutoUpgradeResult> {
-  const key = username + '|' + String(localId)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return { error: '无法解析会话身份' }
+  const key = canonical + '|' + String(localId)
   const last = triedAt.get(key)
   if (last !== undefined && Date.now() - last < RETRY_TTL_MS) return { error: '最近试过，跳过' }
 
-  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId)
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, canonical, localId)
   if (!hint.md5) return { error: '拿不到 md5' }
 
   // ① 本机重解：清掉占坑的缩略图缓存，按本机最好的一档重解。
   //    这是本机数据上**唯一有效**的路径（用户点开过原图 ⇒ attach 里有 `_h.dat`）。
-  clearDecodedImageCache(decodedDir, username, hint.md5)
+  clearDecodedImageCache(decodedDir, canonical, hint.md5)
   const redone = await decodeImageDataUrlAsync(
-    decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey,
+    decryptedDir, decodedDir, canonical, localId, wechatBaseDir, aesKey, xorKey,
     { hint, fileOnly: options.fileOnly },
   )
   if ((redone.url !== undefined || redone.file !== undefined) && redone.thumb !== true) {
@@ -222,7 +233,7 @@ export async function tryUpgradeToOriginal(
 
   // ② CDN 直链：只有 XML 带 `tphdurl`/`tpurl` 且不是企业微信端点时才可能成功。
   if (allowNetwork) {
-    const link = resolveImageOriginalLink(decryptedDir, username, localId)
+    const link = resolveImageOriginalLink(decryptedDir, canonical, localId)
     if (link !== null) {
       const r = await fetchImageOriginalToCache(link, decodedDir)
       if (r.bytes !== undefined) {
@@ -234,7 +245,7 @@ export async function tryUpgradeToOriginal(
     // ③ WxCDN：用 `cdnbigimgurl` 的 fileid 走第三方服务（按流量计费，需用户开启）。
     //    这是本机数据上**唯一能覆盖那 81.6%** 的通路（实测 6/6 成功，拿到真原图）。
     if (wechatBaseDir !== undefined && isWxcdnEnabled(decryptedDir)) {
-      const wx = await tryWxcdnUpgrade(decryptedDir, decodedDir, username, localId, wechatBaseDir, hint.md5)
+      const wx = await tryWxcdnUpgrade(decryptedDir, decodedDir, canonical, localId, wechatBaseDir, hint.md5)
       if (wx.format !== undefined) {
         triedAt.delete(key)
         return wx
@@ -259,8 +270,8 @@ export function clearAutoUpgradeMemory(): void {
  * @returns 当前记住的失败条目数。
  */
 export function autoUpgradeMemorySize(): number {
-  return triedAt.size
+  return triedAt.size()
 }
 
 /** 供测试注入时间（避免等 10 分钟）。 */
-export const __testing = { RETRY_TTL_MS, triedAt, existsSync, join }
+export const __testing = { RETRY_TTL_MS, TRIED_MAX_ENTRIES, triedAt, existsSync, join }

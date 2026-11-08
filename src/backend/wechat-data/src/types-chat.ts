@@ -184,8 +184,12 @@ export interface MessageRich {
   referTime?: number
   /** 被引用消息的 server_id（可据此精确取回原消息）。 */
   referSvrId?: string
-  /** 被引用消息的发送者 wxid（`<refermsg><fromusr>`）。 */
+  /** Preferred stable reply target, kept for backward compatibility. */
   referUsername?: string
+  /** `<refermsg><chatusr>`: the actual member who authored the quoted message. */
+  referChatUsername?: string
+  /** `<refermsg><fromusr>`: group id or, in private chats, the peer id. */
+  referFromUsername?: string
   [key: string]: string | number | boolean | ChatlogRecord[] | SolitaireMember[] | MpArticle[] | undefined
 }
 
@@ -266,7 +270,9 @@ export interface MessageTypeStat {
 export interface MessagesSnapshot {
   messages: WechatMessage[]
   total: number
+  /** True when another incremental page remains after `cursor`/`cursorLocalId`. */
   hasMore?: boolean
+  /** Next-page sort_seq watermark (incremental: last returned row). */
   cursor?: number
   /**
    * 复合游标的第二段：上一页最后一行的 local_id。
@@ -276,6 +282,15 @@ export interface MessagesSnapshot {
   typeStats?: MessageTypeStat[]
   /** Logged-in account wxid, for rendering the sender's own avatar. */
   selfWxid?: string
+  /**
+   * Canonical real username after resolving legacy `Msg_<md5>` references.
+   * Empty when the caller supplied a hash that cannot be resolved.
+   */
+  canonicalUsername?: string
+  /** Readable conversation name; never a 32-character table hash. */
+  chatDisplayName?: string
+  /** Canonical conversation kind after resolving an old navigation target. */
+  chatType?: 'private' | 'group'
 }
 
 /** One contact. */
@@ -288,7 +303,12 @@ export interface WechatContact {
   category?: string
   /** 企业微信联系人的企业名称（从 contact.extra_buffer + openim_wording 解析）。 */
   enterpriseName?: string
+  /** 个性签名。优先 contact.description，缺失时回退 extra_buffer field 4。 */
   description?: string
+  /** 地区（中国显示省+市，海外显示国家+省+市）。 */
+  region?: string
+  /** 性别：1=男，2=女；未知时不返回。 */
+  gender?: number
   localType?: number
   localTypeLabel?: string
   inChatRoom?: boolean
@@ -331,14 +351,8 @@ export interface ContactBook {
 export interface SessionsSnapshot {
   sessions: WechatSession[]
   total: number
-}
-
-/** Messages snapshot returned by the gateway. */
-export interface MessagesSnapshot {
-  messages: WechatMessage[]
-  total: number
-  hasMore?: boolean
-  cursor?: number
+  /** 可取消的会话搜索被中断时显式标记；普通快照不带该字段。 */
+  cancelled?: boolean
 }
 
 /** Authoritative transfer/redpacket status by message server_id. */
@@ -348,6 +362,8 @@ export interface PaymentStatus {
   serverId?: string
   transfer?: {
     transferId: string
+    /** The primary or secondary message id that matched this row. */
+    matchedServerId: string
     paySubType: number
     receiver: string
     payer: string
@@ -366,6 +382,8 @@ export interface PaymentStatus {
     hbType: number
     receiveStatus: number
     sendId: string
+    /** Only set when a local system message explicitly proves the state. */
+    claimEvidence?: 'self-claimed' | 'other-claimed' | 'returned'
   }
 }
 

@@ -10,8 +10,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react'
 import { apiGetAvatarsLocal } from '../api.ts'
 import { createRestartableTimer, type RestartableTimer } from './timers.ts'
-import { loadSavedPositions, runLayout, savePositions, type GridPos } from './graph-layout.ts'
+import { loadSavedPositions, previewLayout, runLayout, savePositions, warmLayoutIterations, type GridPos } from './graph-layout.ts'
 import { SELF_ID, communityColor, groupCommunities, neighboursOf, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import { PARAM_PREVIEW_BLEND, blendPositions, createPositionMotion, forcePreviewIntervalMs, stepPositionMotion, type PositionMotion } from './graph-motion.ts'
 import {
   avatarBudget,
   avatarCandidates,
@@ -52,6 +53,7 @@ import { buildPoster, getPosterLayout, posterToDataUrl, type PosterCommunity, ty
 import css from './graph.module.css'
 import { DragSimState, DragState, EMPTY_SET, EXPORT_BG, EXPORT_SIZES, GraphCanvasHandle, GraphCanvasProps, MiniTransform, PERSIST_SETTLE_MS, POSITION_CACHE_MAX, RELAYOUT_SETTLE_MS, REST_STEP, SETTLE_MS, avatarAssets, forceKeyOf, styleIsDark } from './graph-canvas-support.ts'
 import { disposeLayoutWorker } from './graph-layout.ts'
+import { drawGraphMinimap } from './graph-canvas-minimap.ts'
 
 /**
  * 渲染图谱画布。
@@ -99,6 +101,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
    * 于是第一次的陈旧结果会盖掉新的 —— 表现是「滑杆拖回去之后图又跳回上一档的形状」。
    */
   const layoutSeqRef = useRef(0)
+  /** 力度滑杆的逐帧轻量预览（与完整布局定时器分开）。 */
+  const previewFrameRef = useRef(0)
+  /** 上一次预览的开始时刻与下一次允许预览的最小间隔（按真实计算耗时自适应）。 */
+  const previewLastAtRef = useRef(Number.NEGATIVE_INFINITY)
+  const previewIntervalRef = useRef(0)
+  /** 正在执行的坐标过渡；拖拽、换库或新布局开始时直接作废。 */
+  const motionRef = useRef<PositionMotion | null>(null)
 
   const nodeCount = graph.nodes.length
 
@@ -199,62 +208,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     return out
   }, [])
 
-  /**
-   * 小地图：把全部坐标按比例缩进右下角的小画布，并画出**当前视口矩形**。
-   *
-   * 改前的小地图只有节点点阵、没有视口框 —— 用户看不出「我现在在图谱的哪一块」，
-   * 而那恰是小地图存在的理由；补上视口框后点击跳转才有参照。
-   */
+  /** 小地图绘制放在纯模块中；这里只把成功结果同步给点击跳转使用。 */
   const drawMinimap = useCallback((scene: Scene): void => {
-    const mini = miniRef.current
-    const mctx = mini?.getContext('2d')
-    if (!mini || !mctx) return
-    const dpr = dprRef.current
-    const W = mini.width / dpr
-    const H = mini.height / dpr
-    mctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    mctx.clearRect(0, 0, W, H)
-    const nodes = scene.nodes
-    if (nodes.length === 0) return
-    let minX = Infinity
-    let minY = Infinity
-    let maxX = -Infinity
-    let maxY = -Infinity
-    for (const n of nodes) {
-      const p = scene.positions.get(n.id)
-      if (!p) continue
-      if (p.x < minX) minX = p.x
-      if (p.x > maxX) maxX = p.x
-      if (p.y < minY) minY = p.y
-      if (p.y > maxY) maxY = p.y
-    }
-    if (!Number.isFinite(minX)) return
-    const pad = 6
-    const spanX = Math.max(1e-6, maxX - minX)
-    const spanY = Math.max(1e-6, maxY - minY)
-    const s = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY)
-    const ox = pad + (W - pad * 2 - spanX * s) / 2
-    const oy = pad + (H - pad * 2 - spanY * s) / 2
-    minimapRef.current = { minX, minY, s, ox, oy }
-    const px = (x: number): number => ox + (x - minX) * s
-    const py = (y: number): number => oy + (y - minY) * s
-    mctx.globalAlpha = 0.8
-    for (const n of nodes) {
-      const p = scene.positions.get(n.id)
-      if (!p) continue
-      mctx.beginPath()
-      mctx.arc(px(p.x), py(p.y), Math.max(1, Math.min(3, (scene.radii.get(n.id) ?? 8) * s)), 0, Math.PI * 2)
-      mctx.fillStyle = n.community >= 0 ? communityColor(n.community) : 'rgba(150,160,180,0.7)'
-      mctx.fill()
-    }
-    mctx.globalAlpha = 1
-    // 视口框：当前相机看到的世界矩形
-    const cam = scene.camera
-    const halfW = scene.size.w / 2 / cam.k
-    const halfH = scene.size.h / 2 / cam.k
-    mctx.strokeStyle = 'rgba(34,211,238,0.85)'
-    mctx.lineWidth = 1
-    mctx.strokeRect(px(cam.x - halfW), py(cam.y - halfH), halfW * 2 * s, halfH * 2 * s)
+    const transform = drawGraphMinimap(miniRef.current, dprRef.current, scene)
+    if (transform !== null) minimapRef.current = transform
   }, [])
 
   /** 指针下的节点（世界坐标命中测试）。拖拽过程中不做命中，避免悬停状态跟着手抖。 */
@@ -281,6 +238,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const { w, h } = sizeRef.current
     if (w <= 0 || h <= 0) return
     const p = propsRef.current
+    // 力度/结构布局的稳态过渡：每帧向目标插值，过渡期间继续排帧。
+    const motion = motionRef.current
+    if (motion) {
+      const stepped = stepPositionMotion(positionsRef.current, motion, performance.now())
+      if (stepped.done) {
+        motionRef.current = null
+        persistTimerRef.current?.restart()
+      } else {
+        scheduleFrame()
+      }
+    }
     // 拖拽跟随 + 碰撞都放在 rAF 帧里推进（不在 pointermove 里做）：
     // 高采样率鼠标一秒几百次 move，逐次做既白烧主线程，又让手感随鼠标轮询率变化。
     const sim = simRef.current
@@ -370,37 +338,55 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const relayoutNow = useCallback(async (fresh: boolean): Promise<void> => {
     const p = propsRef.current
     if (p.graph.nodes.length === 0) return
+    // 完整收敛开始后不再补一帧旧参数的预览，避免它把刚开始的平滑过渡打断。
+    if (previewFrameRef.current !== 0) {
+      cancelAnimationFrame(previewFrameRef.current)
+      previewFrameRef.current = 0
+    }
     const seq = ++layoutSeqRef.current
+    const graphAtStart = p.graph
+    const forceAtStart = forceKeyOf(p.settings)
     const pinned = p.pinnedIds ?? EMPTY_SET
     const pinnedSnapshot = new Map<string, Point>()
     for (const id of pinned) {
       const pos = positionsRef.current.get(id)
       if (pos) pinnedSnapshot.set(id, { x: pos.x, y: pos.y })
     }
+    // 自动布局从当前坐标热启动，没必要跑满首次布局的迭代数；手动「重新布局」仍跑完整档位。
+    const iterations = fresh || needsFitRef.current ? undefined : warmLayoutIterations(p.graph.nodes.length)
     const result = await runLayout({
       graph: p.graph,
       settings: p.settings,
       ...(fresh ? { fresh: true } : { saved: positionsRef.current }),
+      ...(iterations !== undefined ? { iterations } : {}),
     })
-    // 期间又发起了新的布局（或组件已切走）：这份结果已经过期，丢掉 —— 否则会把更新的布局盖回旧形状
-    if (seq !== layoutSeqRef.current) return
+    // 期间又发起了新的布局、参数变化或结构变化：这份结果已经过期，丢掉。
+    // 只比较 seq 不够：旧结果可能在新请求的 90ms 静默期内返回，仍会把图盖回旧形状。
+    const current = propsRef.current
+    if (
+      seq !== layoutSeqRef.current ||
+      current.graph !== graphAtStart ||
+      forceKeyOf(current.settings) !== forceAtStart
+    ) return
+
+    // 先在目标副本上完成尺度归一、固定节点还原与碰撞松弛，再一次性开始过渡。
+    // 直接改 positionsRef 会让画面在目标计算到一半时短暂停留在半成品坐标上。
+    const target = new Map<string, Point>()
     for (const n of p.graph.nodes) {
       const pos = result.positions.get(n.id)
-      if (pos) positionsRef.current.set(n.id, { x: pos.x, y: pos.y })
+      if (pos) target.set(n.id, { x: pos.x, y: pos.y })
     }
     // 把坐标尺度校准到「按节点半径表达的间距」。FA2 的坐标是无量纲的：节点少时自然尺度极小
     // （2 个节点约 ±6 单位），而节点半径是 5~23px，两个圆会直接叠住，画布的自适应缩放又有上限补不回来。
     // 这一步必须在还原固定节点**之前**做，否则固定节点会与其余节点失去相对一致性。
-    const scale = spacingScale(p.graph.nodes, radiiRef.current, positionsRef.current, p.settings.nodeGap)
+    const scale = spacingScale(p.graph.nodes, radiiRef.current, target, p.settings.nodeGap)
     if (Math.abs(scale - 1) > 1e-6) {
-      for (const n of p.graph.nodes) {
-        const pos = positionsRef.current.get(n.id)
-        if (!pos) continue
+      for (const pos of target.values()) {
         pos.x *= scale
         pos.y *= scale
       }
     }
-    for (const [id, pos] of pinnedSnapshot) positionsRef.current.set(id, pos)
+    for (const [id, pos] of pinnedSnapshot) target.set(id, pos)
     // 布局落定后再松弛一次：FA2 只保证「不挤成一团」，不保证圆不相交；
     // 固定节点在上面已经还原到位，这里让它们作为障碍把别人推开而自己不动。
     //
@@ -409,18 +395,84 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // 2 轮 7 对 / 4 轮 **3 对** / 8 轮 0 对 / 16 轮 0 对 / 24 轮 0 对且最小间距比 1.078
     // （目标 1.08，等于已收敛）/ 32 轮 1.080。松弛是网格化 Jacobi，250 节点一轮 <1ms，
     // 多出来的二十轮远小于前面 FA2 那 70ms；而 4 轮会把「压缩」的收益又用重叠赔回去。
-    relaxCollisions(p.graph.nodes, positionsRef.current, radiiRef.current, { iterations: 24, skip: p.pinnedIds })
-    if (needsFitRef.current) {
+    relaxCollisions(p.graph.nodes, target, radiiRef.current, { iterations: 24, skip: p.pinnedIds })
+    if (needsFitRef.current || positionsRef.current.size === 0) {
+      // 首次布局没有“上一帧”可过渡：直接落到目标并取景。
+      for (const [id, pos] of target) positionsRef.current.set(id, { x: pos.x, y: pos.y })
       needsFitRef.current = false
+      motionRef.current = null
       fitView()
+    } else {
+      // 自动布局的目标通常与当前坐标有几十到几百单位的差；插值让这段变化成为
+      // 可见的连续运动，而不是一帧内整体跳过去。
+      motionRef.current = createPositionMotion(
+        positionsRef.current,
+        target,
+        performance.now(),
+        undefined,
+        p.pinnedIds ?? EMPTY_SET,
+      )
     }
     persistTimerRef.current?.restart()
     scheduleFrame()
   }, [fitView, scheduleFrame])
 
+  /**
+   * 拖动六个力度滑杆时，先用少量 FA2 迭代做一帧预览。
+   *
+   * 这不是最终布局：它只让用户在按住滑杆期间看到连续反馈；停止拖动 90ms 后仍由
+   * `relayoutNow(false)` 用当前坐标热启动做一次完整收敛，再由 `PositionMotion` 平滑过去。
+   * 预览与完整布局分开，避免每个 input 事件都跑满迭代数把主线程钉住。
+   */
+  const runForcePreview = useCallback((): void => {
+    if (previewFrameRef.current !== 0) return
+    if (performance.now() - previewLastAtRef.current < previewIntervalRef.current) return
+    previewFrameRef.current = requestAnimationFrame(() => {
+      previewFrameRef.current = 0
+      const p = propsRef.current
+      if (needsFitRef.current || p.settings.lockLayout || simRef.current || p.graph.nodes.length < 2) return
+      const startedAt = performance.now()
+      const next = previewLayout({
+        graph: p.graph,
+        settings: p.settings,
+        positions: positionsRef.current,
+      })
+      previewLastAtRef.current = startedAt
+      previewIntervalRef.current = forcePreviewIntervalMs({
+        nodeCount: p.graph.nodes.length,
+        elapsedMs: performance.now() - startedAt,
+      })
+      if (next.size === 0) return
+      // 新滑杆值到来时，旧的完整布局过渡必须让位给实时预览；否则旧目标会覆盖这一帧。
+      motionRef.current = null
+      const moved = blendPositions(positionsRef.current, next, PARAM_PREVIEW_BLEND, p.pinnedIds ?? EMPTY_SET)
+      if (moved > 0) scheduleFrame()
+    })
+  }, [scheduleFrame])
+
   // 布局调度：结构（图 / 六个力度参数）变了才重排，并合并连续变化。
   const forceKey = forceKeyOf(settings)
+  // 初值必须是 null：GraphCanvas 只在数据落地后才挂载，若把首帧 graph 当成“上一次”，
+  // 首次布局永远不会被调度。后续再比较引用即可区分结构变化与力度变化。
+  const previousGraphRef = useRef<BuiltGraph | null>(null)
+  const previousForceKeyRef = useRef<string | null>(null)
   useEffect(() => {
+    const graphChanged = previousGraphRef.current !== graph
+    const forceChanged = previousForceKeyRef.current !== forceKey
+    previousGraphRef.current = graph
+    previousForceKeyRef.current = forceKey
+    if (!graphChanged && !forceChanged) return
+    // 结构变化时旧过渡的节点 id 已经不可信；力度变化时先由预览接管。
+    if (graphChanged) {
+      motionRef.current = null
+      if (previewFrameRef.current !== 0) {
+        cancelAnimationFrame(previewFrameRef.current)
+        previewFrameRef.current = 0
+      }
+    }
+    if (forceChanged && !graphChanged && !propsRef.current.settings.lockLayout) runForcePreview()
+    // 锁定布局只禁止自动重排，不阻止图结构自己完成首次安置。
+    if (forceChanged && !graphChanged && propsRef.current.settings.lockLayout) return
     if (!layoutTimerRef.current) {
       layoutTimerRef.current = createRestartableTimer({
         delayMs: RELAYOUT_SETTLE_MS,
@@ -428,12 +480,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       })
     }
     layoutTimerRef.current.restart()
-  }, [graph, forceKey, relayoutNow])
+  }, [graph, forceKey, relayoutNow, runForcePreview])
   // 卸载要做两件事：① 清掉**这一张图**的排程；② 关掉**共享的**布局 worker。
   // P3-13：`disposeLayoutWorker()` 早就定义了，但全仓没有一处调用 ——
   // 于是每开一次图谱就多一个活着的 worker（模块级实例 + 线程），关掉页签也不释放。
   useEffect(() => () => {
     layoutTimerRef.current?.dispose()
+    if (previewFrameRef.current !== 0) cancelAnimationFrame(previewFrameRef.current)
     disposeLayoutWorker()
   }, [])
 
@@ -474,6 +527,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   useEffect(() => {
     if (scopeRef.current === positionScope) return
     scopeRef.current = positionScope
+    motionRef.current = null
+    previewLastAtRef.current = Number.NEGATIVE_INFINITY
+    previewIntervalRef.current = 0
+    if (previewFrameRef.current !== 0) {
+      cancelAnimationFrame(previewFrameRef.current)
+      previewFrameRef.current = 0
+    }
     positionsRef.current = new Map(loadSavedPositions(positionScope))
     needsFitRef.current = true
   }, [positionScope])
@@ -589,6 +649,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // 只处理主键。右键会随后触发 contextmenu，若这里也建拖拽/选中状态，
     // 菜单打开时节点会被右键“顺手”拖住，而且指针捕获会让菜单点击变迟钝。
     if (ev.button !== 0) return
+    // 用户开始直接拖图时，参数过渡必须立刻停下，否则 rAF 会继续把节点拉向旧目标。
+    if (previewFrameRef.current !== 0) {
+      cancelAnimationFrame(previewFrameRef.current)
+      previewFrameRef.current = 0
+    }
+    motionRef.current = null
     const p = propsRef.current
     const lp = localPoint(ev)
     pointerRef.current = lp
@@ -866,7 +932,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         : `中心：我 · ${p.settings.friendsOnly ? '仅好友' : '全部联系人'} · 共同群 ≥ ${String(p.settings.minCommon)}`
       const legendItems: PosterLegendItem[] = [
         { kind: 'dot', color: '#36c08f', label: '颜色 = 圈子' },
-        { kind: 'line', color: '#8a94a8', label: '灰线 = 共同群数' },
+        { kind: 'line', color: '#8a94a8', label: '灰线 = 共同群/群结构' },
+        { kind: 'line', color: '#12a45f', label: '绿线 = 好友/邀请/回复/@提及' },
         { kind: 'line', color: '#3b82f6', label: '蓝线 = 亲密度' },
         { kind: 'dot', color: '#c9a227', label: '半径 = 消息量' },
       ]
@@ -883,7 +950,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         communities,
         legendItems,
         blurNodes: p.settings.blurNodes,
-        legend: '颜色 = 圈子 · 灰线 = 共同群数 · 蓝线 = 与我亲密度 · 半径 = 消息量',
+        legend: '颜色 = 圈子 · 灰线 = 共同群/群结构 · 绿线 = 好友/邀请/回复/@提及 · 蓝线 = 与我亲密度 · 半径 = 消息量',
         footer: `由 DSH 本地生成 · ${new Date().toLocaleDateString()}`,
         scale: 2,
       }

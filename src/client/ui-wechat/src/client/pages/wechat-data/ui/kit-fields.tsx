@@ -375,7 +375,7 @@ export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaL
    * 预设与日期区间**并排一行**（默认上下两行）。
    *
    * 默认的上下堆叠在「筛选条只有这一件工具」时没问题，但放进**一行式筛选条**
-   * （ClawBot 接入会话）就会把整条撑成两行 —— 那里预设与区间是同一件事的两半，
+   * （例如一行式筛选条）就会把整条撑成两行 —— 那里预设与区间是同一件事的两半，
    * 并排才读得通（2026-10-17）。
    */
   inline?: boolean

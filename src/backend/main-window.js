@@ -17,6 +17,35 @@ function uiEntryHtml(ctx) {
   return ctx.path.join(ctx.rootDir, 'src', 'index.html');
 }
 
+/** 渲染进程崩溃后的自动恢复策略：只处理可恢复原因，并限制单个窗口的重载次数。 */
+const RECOVERABLE_RENDER_GONE_REASONS = new Set(['oom', 'crashed']);
+const RENDER_RECOVERY_DELAY_MS = 1500;
+const MAX_RENDER_RECOVERIES = 2;
+
+/**
+ * 判断主窗口当前是否还能安全接收 IPC。
+ *
+ * `webContents.isDestroyed()` 不足以覆盖「窗口还在、渲染帧已经销毁」的 OOM 现场；
+ * 此时直接 send 会由 Electron 反复打印 `Render frame was disposed ...`。主帧的
+ * `isDestroyed()` 才是真正的发送边界。访问 mainFrame 本身也可能抛错，所以同样兜住。
+ */
+function canSendToWindow(win) {
+  if (!win || win.isDestroyed()) return false;
+  const contents = win.webContents;
+  if (!contents) return false;
+  try {
+    if (typeof contents.isDestroyed === 'function' && contents.isDestroyed()) return false;
+    if (typeof contents.isCrashed === 'function' && contents.isCrashed()) return false;
+    const frame = contents.mainFrame;
+    if (!frame) return false;
+    if (typeof frame.isDestroyed === 'function' && frame.isDestroyed()) return false;
+    return true;
+  } catch {
+    // mainFrame getter 在帧销毁竞态里会抛错，这正是需要静默丢弃事件的时刻。
+    return false;
+  }
+}
+
 /**
  * 向可信主窗口发送一个通道（`wechat:event` / `update:event` 共用）。
  *
@@ -25,12 +54,118 @@ function uiEntryHtml(ctx) {
  */
 function broadcastToWindows(ctx, channel, payload) {
   const win = ctx.getMainWindow();
-  if (!win || win.isDestroyed()) return;
+  if (!canSendToWindow(win)) return;
   try {
     win.webContents.send(channel, payload);
   } catch {
     /* 窗口可能刚销毁，忽略 */
   }
+}
+
+/**
+ * 为一次 renderer 崩溃安排延迟 reload。
+ *
+ * OOM 后立刻 reload 往往会在资源尚未回收时再次撞上同一峰值；固定延迟给 Chromium
+ * 留出回收窗口。计时器同时充当防重入门闩：崩溃事件在延迟期内重复到达不会叠加任务。
+ * 次数按窗口生命周期封顶，避免坏页面形成 reload/crash 无限循环。
+ */
+function installRendererRecovery(win, contents) {
+  let recoveryTimer = null;
+  let recoveryAttempts = 0;
+  let disposed = false;
+
+  const clearRecoveryTimer = () => {
+    if (recoveryTimer === null) return;
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+  };
+
+  const scheduleReload = (details) => {
+    const reason = details && details.reason;
+    if (!RECOVERABLE_RENDER_GONE_REASONS.has(reason)) return;
+    if (recoveryTimer !== null) return;
+    if (win.isDestroyed() || contents.isDestroyed()) return;
+    if (recoveryAttempts >= MAX_RENDER_RECOVERIES) {
+      console.error(`[renderer-recovery] ${reason}: 已达到 ${MAX_RENDER_RECOVERIES} 次自动恢复上限，停止 reload`);
+      return;
+    }
+
+    recoveryAttempts += 1;
+    const attempt = recoveryAttempts;
+    console.error(
+      `[renderer-recovery] ${reason}: ${RENDER_RECOVERY_DELAY_MS}ms 后执行第 ${attempt}/${MAX_RENDER_RECOVERIES} 次 reload`
+    );
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = null;
+      if (win.isDestroyed() || contents.isDestroyed()) return;
+      try {
+        contents.reload();
+        console.warn(`[renderer-recovery] 第 ${attempt}/${MAX_RENDER_RECOVERIES} 次 reload 已触发`);
+      } catch (error) {
+        console.error('[renderer-recovery] reload 失败：' + String(error && error.message ? error.message : error));
+      }
+    }, RENDER_RECOVERY_DELAY_MS);
+    if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
+  };
+
+  const onRenderProcessGone = (_event, details) => {
+    console.error('[render-process-gone]', JSON.stringify(details));
+    scheduleReload(details);
+  };
+  contents.on('render-process-gone', onRenderProcessGone);
+
+  // closed 与 destroyed 都要监听：不同关闭路径上的触发顺序并不固定。清理时同时
+  // 移除监听器，避免窗口对象或已经销毁的 webContents 继续保留崩溃恢复闭包。
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    clearRecoveryTimer();
+    contents.removeListener('render-process-gone', onRenderProcessGone);
+    win.removeListener('closed', dispose);
+    contents.removeListener('destroyed', dispose);
+  };
+  win.once('closed', dispose);
+  contents.once('destroyed', dispose);
+  return dispose;
+}
+
+/**
+ * 安装可选的事件循环延迟诊断，并返回幂等清理函数。
+ *
+ * `unref()` 只保证计时器不单独撑住进程，不会在窗口关闭时解绑消息泵；窗口重建后
+ * 每套 interval/histogram 都会继续存活。诊断必须跟窗口生命周期绑定。
+ */
+function installEventLoopDiagnostics(win, contents, env) {
+  if (!env || env.SUPERTIME_ELD !== '1') return () => {};
+  const { monitorEventLoopDelay } = require('node:perf_hooks');
+  const histogram = monitorEventLoopDelay({ resolution: 20 });
+  histogram.enable();
+  const timer = setInterval(() => {
+    const max = histogram.max / 1e6;
+    const p99 = histogram.percentile(99) / 1e6;
+    if (max > 200) {
+      console.log(`[eld] 主进程事件循环阻塞 ${max.toFixed(0)}ms (p99=${p99.toFixed(0)}ms) @ ${new Date().toISOString()}`);
+    }
+    histogram.reset();
+  }, 5000);
+  if (typeof timer.unref === 'function') timer.unref();
+
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    clearInterval(timer);
+    try {
+      histogram.disable();
+    } catch {
+      // 已经关闭或运行时正在销毁，清理失败不影响窗口退出。
+    }
+    win.removeListener('closed', dispose);
+    contents.removeListener('destroyed', dispose);
+  };
+  win.once('closed', dispose);
+  contents.once('destroyed', dispose);
+  return dispose;
 }
 
 /**
@@ -93,6 +228,15 @@ function createMainWindow(ctx) {
       // 开着的意义：渲染进程即使是 XSS 也在 OS 级沙箱里，拿不到 Node 原语。
       // 回归由 scripts/packaged-smoke.js 兜（它会真的启动打包产物断言后端就绪+出图）。
       sandbox: true,
+      // 发行包不提供 DevTools 入口。打包态的远程调试开关还会被 main.js 剥掉；
+      // 两处一起收紧，避免“能改快捷方式就能挂 CDP”。
+      devTools: !app.isPackaged,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      navigateOnDragDrop: false,
       spellcheck: false,
       backgroundThrottling: true
     }
@@ -133,30 +277,11 @@ function createMainWindow(ctx) {
       console.log(`[renderer:${level}]`, String(message).slice(0, 500), `(${sourceId}:${line})`);
     });
   }
-  win.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[render-process-gone]', JSON.stringify(details));
-  });
+  installRendererRecovery(win, win.webContents);
+  installEventLoopDiagnostics(win, win.webContents, env);
   win.webContents.on('did-fail-load', (_event, code, desc, url) => {
     console.error('[did-fail-load]', code, desc, url);
   });
-
-  // 事件循环阻塞诊断（SUPERTIME_ELD=1）。主进程里所有 Remote 方法都用同步的
-  // node:sqlite，一旦某个查询跑得久，窗口消息泵就被卡住 —— 这正是
-  // 「应用未响应」的来源。这里按 5 秒窗口统计事件循环延迟的最大值。
-  if (env.SUPERTIME_ELD === '1') {
-    const { monitorEventLoopDelay } = require('node:perf_hooks');
-    const histogram = monitorEventLoopDelay({ resolution: 20 });
-    histogram.enable();
-    const timer = setInterval(() => {
-      const max = histogram.max / 1e6;
-      const p99 = histogram.percentile(99) / 1e6;
-      if (max > 200) {
-        console.log(`[eld] 主进程事件循环阻塞 ${max.toFixed(0)}ms (p99=${p99.toFixed(0)}ms) @ ${new Date().toISOString()}`);
-      }
-      histogram.reset();
-    }, 5000);
-    if (timer.unref) timer.unref();
-  }
 
   win.once('ready-to-show', () => {
     win.show();

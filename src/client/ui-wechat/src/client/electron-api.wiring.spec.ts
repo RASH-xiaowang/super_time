@@ -25,7 +25,7 @@ const EXPECTED: Readonly<Record<string, readonly string[]>> = {
   WechatBridge: [
     'listMethods', 'info', 'call', 'getLlmConfig', 'saveLlmConfig', 'listLlmModels',
     'testLlmConnection', 'getLlmBalance', 'getLlmProfiles', 'activateLlmProfile',
-    'saveLlmProfile', 'deleteLlmProfile', 'backendState', 'onEvent',
+    'saveLlmProfile', 'deleteLlmProfile', 'ocrImage', 'imageAiJson', 'backendState', 'onEvent',
   ],
   RemoteAccessBridge: ['state', 'apply', 'rotate', 'toggle'],
   WebHandoffBridge: ['open', 'restore', 'state'],

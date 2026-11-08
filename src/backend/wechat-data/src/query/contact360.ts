@@ -3,13 +3,17 @@
  * and first/last time, moments count, transfer/red-packet row counts, and
  * shared groups. All reads are defensive against WeChat 4.x schema drift.
  */
-import { createHash } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Contact360Group, Contact360Snapshot } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
 import { withDb } from './db-open.ts'
+import {
+  displayNameForUsername,
+  messageTableName,
+  resolveMessageTable,
+} from './message-identity.ts'
 
 /** Stringify a DB cell. */
 function cellString(v: unknown): string {
@@ -27,7 +31,7 @@ function tableColumns(db: DatabaseSync, table: string): Set<string> {
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  return messageTableName(username)
 }
 
 /** Message count + first/last create_time across all shards for a talker. */
@@ -80,7 +84,7 @@ function momentsCount(decryptedDir: string, username: string): number {
   return 0
 }
 
-/** Transfer/red-packet row counts where the contact is the session. */
+/** Transfer/red-packet row counts that actually involve the contact. */
 function fundsCount(decryptedDir: string, username: string): { transfers: number; redpackets: number } {
   const p = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(p)) return { transfers: 0, redpackets: 0 }
@@ -90,15 +94,25 @@ function fundsCount(decryptedDir: string, username: string): { transfers: number
       let redpackets = 0
       try {
         const cols = tableColumns(db, 'transferTable')
-        if (cols.has('session_name')) {
-          const row = db.prepare('SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?').get(username) as { n: number } | undefined
+        const transferClauses = ['session_name', 'pay_payer', 'pay_receiver']
+          .filter(col => cols.has(col))
+          .map(col => `${col} = ?`)
+        if (transferClauses.length > 0) {
+          const row = db.prepare(
+            'SELECT COUNT(*) AS n FROM transferTable WHERE ' + transferClauses.join(' OR '),
+          ).get(...transferClauses.map(() => username)) as { n: number } | undefined
           transfers = row?.n ?? 0
         }
       } catch { /* transfer table unavailable */ }
       try {
         const cols = tableColumns(db, 'redEnvelopeTable')
-        if (cols.has('session_name')) {
-          const row = db.prepare('SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?').get(username) as { n: number } | undefined
+        const redpacketClauses = ['session_name', 'sender_user_name']
+          .filter(col => cols.has(col))
+          .map(col => `${col} = ?`)
+        if (redpacketClauses.length > 0) {
+          const row = db.prepare(
+            'SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE ' + redpacketClauses.join(' OR '),
+          ).get(...redpacketClauses.map(() => username)) as { n: number } | undefined
           redpackets = row?.n ?? 0
         }
       } catch { /* red envelope table unavailable */ }
@@ -139,7 +153,7 @@ function commonGroups(decryptedDir: string, username: string): Contact360Group[]
               if (!room) continue
               const ru = cellString(room.u)
               if (!ru) continue
-              rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n })
+              rooms.push({ username: ru, name: displayNameForUsername(ru, contactNames), memberCount: r.n })
               if (rooms.length >= 10) break
             }
           }
@@ -159,18 +173,20 @@ function commonGroups(decryptedDir: string, username: string): Contact360Group[]
  * @returns the profile snapshot.
  */
 export function queryContact360(decryptedDir: string, username: string): Contact360Snapshot {
-  const msg = messageStats(decryptedDir, username)
-  const funds = fundsCount(decryptedDir, username)
+  const resolved = resolveMessageTable(decryptedDir, username)
+  const canonical = resolved?.username ?? ''
+  const msg = resolved ? messageStats(decryptedDir, canonical) : { count: 0, firstTime: null, lastTime: null }
+  const funds = canonical ? fundsCount(decryptedDir, canonical) : { transfers: 0, redpackets: 0 }
   const meta = contactMeta(decryptedDir)
-  const enterpriseName = meta.enterpriseNames.get(username)?.trim()
+  const enterpriseName = meta.enterpriseNames.get(canonical)?.trim()
   return {
-    username,
-    displayName: meta.names.get(username) ?? username,
+    username: canonical,
+    displayName: displayNameForUsername(canonical, meta.names),
     ...(enterpriseName ? { enterpriseName } : {}),
     messages: msg,
-    moments: { count: momentsCount(decryptedDir, username) },
+    moments: { count: canonical ? momentsCount(decryptedDir, canonical) : 0 },
     funds,
-    commonGroups: commonGroups(decryptedDir, username),
+    commonGroups: canonical ? commonGroups(decryptedDir, canonical) : [],
     updatedAt: Math.floor(Date.now() / 1000),
   }
 }

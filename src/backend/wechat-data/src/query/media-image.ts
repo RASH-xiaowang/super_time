@@ -9,7 +9,6 @@
 import { createDecipheriv } from 'node:crypto'
 import { DatabaseSync } from './db-open.ts'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { MD5_FIND_RE, isMd5 } from '../md5.ts'
 import { normalizeAesKey } from '../keys/image-key.ts'
@@ -18,6 +17,7 @@ import { isWxgfTranscodeAvailable, transcodeWxgf, type WxgfTranscoder, type Wxgf
 import { cdnHostOf, wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { shardCatalogDirs } from './meta.ts'
 import { emoticonIndexFor, emoticonMissFresh, findEmoticonDats, noteEmoticonMiss } from './emoticon-index.ts'
+import { messageTableName, resolveTalkerUsername } from './message-identity.ts'
 // 这两个是索引层的公开入口，历史调用方（`emoticon-batch.ts` 与两份 spec）都按
 // `media-image.ts` 这个路径 import ⇒ 原样再导出，避免为了搬家去改调用点。
 export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts'
@@ -36,7 +36,7 @@ const IMAGE_MAGIC: Array<[string, number[]]> = [
 
 /** Msg_<md5(username)> table name for a talker. */
 export function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  return messageTableName(username)
 }
 
 /** Convert a comma-separated decimal byte list (st_control BLOB text form) to bytes. */
@@ -116,7 +116,9 @@ export function resolveImageResourceHint(
   username: string,
   localId: number,
 ): ImageResourceHint {
-  const table = msgTableName(username)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return { md5: null, dataIndex: '' }
+  const table = msgTableName(canonical)
   // 分片目录缓存直接定位持有该表的分片，逐图解析不再每次遍历打开所有分片库。
   for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
     const tableMeta = shard.tables.get(table)
@@ -144,7 +146,7 @@ export function resolveImageResourceHint(
   if (existsSync(resDb)) {
     try {
       const db = new DatabaseSync(resDb, { readOnly: true })
-      const chat = db.prepare('SELECT rowid FROM ChatName2Id WHERE user_name = ?').get(username) as { rowid: number } | undefined
+      const chat = db.prepare('SELECT rowid FROM ChatName2Id WHERE user_name = ?').get(canonical) as { rowid: number } | undefined
       if (chat) {
         const info = db.prepare('SELECT message_id, packed_info AS p FROM MessageResourceInfo WHERE chat_id = ? AND message_local_id = ? AND (message_local_type = 3 OR message_local_type % 4294967296 = 3) ORDER BY message_create_time DESC LIMIT 1').get(chat.rowid, localId) as { message_id?: number; p?: unknown } | undefined
         if (info) {
@@ -200,8 +202,10 @@ export function resolveImageResourceHintsBatch(
   // 按会话分组：一张消息表就是一个 username，组内一次 IN 查完
   const idsByUser = new Map<string, Set<number>>()
   for (const it of items) {
-    let ids = idsByUser.get(it.username)
-    if (!ids) { ids = new Set<number>(); idsByUser.set(it.username, ids) }
+    const username = resolveTalkerUsername(decryptedDir, it.username)
+    if (!username) continue
+    let ids = idsByUser.get(username)
+    if (!ids) { ids = new Set<number>(); idsByUser.set(username, ids) }
     ids.add(it.localId)
   }
   const md5ByKey = new Map<string, string>()
@@ -236,11 +240,13 @@ export function resolveImageResourceHintsBatch(
   for (let i = 0; i < items.length; i += 1) {
     const it = items[i]
     if (!it) continue
-    const hit = md5ByKey.get(it.username + '#' + String(it.localId))
+    const canonical = resolveTalkerUsername(decryptedDir, it.username)
+    if (!canonical) continue
+    const hit = md5ByKey.get(canonical + '#' + String(it.localId))
     // 回落走的就是原来那条逐张路径，所以「库里确实没有」与「批量没查到」在这里不区分
     out[i] = hit !== undefined
       ? { md5: hit, dataIndex: '' }
-      : resolveImageResourceHint(decryptedDir, it.username, it.localId)
+      : resolveImageResourceHint(decryptedDir, canonical, it.localId)
   }
   return out
 }
@@ -563,22 +569,24 @@ export function decodeImageDataUrl(
   aesKey?: string | Uint8Array,
   xorKey?: number,
 ): { url?: string; format?: string; thumb?: boolean; error?: string } {
-  const hint = resolveImageResourceHint(decryptedDir, username, localId)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return { error: '无法解析会话身份' }
+  const hint = resolveImageResourceHint(decryptedDir, canonical, localId)
   const md5 = hint.md5
   if (!md5 && !hint.dataIndex) return { error: '无法找到图片 MD5' }
   // 1a/1. 已解码缓存：全局槽（批量解密产物，与用户名无关）优先，再看按用户名的槽。
   //       每个槽里都先要「最好的一份」，再退到 `.t.` 的缩略兜底 —— 见 `cachedImage` 的注释。
   if (md5) {
-    const hit = cachedImage(decodedDir, md5) ?? cachedImage(join(decodedDir, username), md5)
+    const hit = cachedImage(decodedDir, md5) ?? cachedImage(join(decodedDir, canonical), md5)
     if (hit) return hit
     // 上一版把 wxgf 解出的字节写成 `.hevc` 占位；现在有转码能力就该回到 .dat 路径重解一次
     // （否则老缓存会把这张图永久钉在「需系统解码」上）。
-    const hevc = join(decodedDir, username, md5 + '.hevc')
+    const hevc = join(decodedDir, canonical, md5 + '.hevc')
     if (existsSync(hevc) && !isWxgfTranscodeAvailable()) return { error: 'hevc-unsupported' }
   }
   // 2. raw .dat decode (requires the raw WeChat base dir)
   if (wechatBaseDir && md5) {
-    const attach = join(wechatBaseDir, 'msg', 'attach', msgTableName(username).replace(/^Msg_/, ''))
+    const attach = join(wechatBaseDir, 'msg', 'attach', msgTableName(canonical).replace(/^Msg_/, ''))
     const dats = findDatFiles(attach, md5)
     if (dats.length > 0) {
       // The original is often wxgf/HEVC in wechat 4.x; prefer a renderable
@@ -588,7 +596,7 @@ export function decodeImageDataUrl(
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
       const r = decodeDatToResult(ordered, aesBytes, xorKey ?? 0xff, (f, dec) => {
         // 只有 `_t`（与更差的 `_b`）进兜底槽；`_h` 是原图，就该占住「最好的一份」。
-        writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, isThumbTier(f))
+        writeDecodedCache(decodedDir, canonical, md5, dec.format, dec.bytes, isThumbTier(f))
       })
       if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
       return { error: 'hevc-unsupported' }
@@ -599,7 +607,7 @@ export function decodeImageDataUrl(
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? '', hint.dataIndex)
     if (hd) {
       const r = decodeDatToResult([hd], normalizeAesKey(aesKey), xorKey ?? 0xff, (f, dec) => {
-        writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, isThumbTier(f))
+        writeDecodedCache(decodedDir, canonical, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, isThumbTier(f))
       })
       if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
     }

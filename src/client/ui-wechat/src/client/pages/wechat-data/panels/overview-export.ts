@@ -142,6 +142,9 @@ export async function exportElementImage(el: HTMLElement, format: 'png' | 'jpg',
   const fullHeight = Math.max(el.scrollHeight, el.offsetHeight, 1)
   const clone = el.cloneNode(true) as HTMLElement
   inlineComputedStyles(el, clone)
+  // Export-only controls belong to the live panel, not to the saved picture.
+  // Remove them only after style copying, which pairs live/clone children by index.
+  clone.querySelectorAll('[data-export-exclude]').forEach(node => { node.remove() })
   await exportableClone(el, clone)
   clone.style.height = `${fullHeight}px`
   clone.style.overflow = 'visible'

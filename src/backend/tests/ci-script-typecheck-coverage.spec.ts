@@ -34,7 +34,7 @@ function programFiles (tsconfigPath: string): Set<string> {
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   const rootUrl = ROOT.replace(/\\/g, '/') + '/'
   return new Set(out.split(/\r?\n/).map((f) => f.replace(/\\/g, '/'))
-    .filter((f) => f.startsWith(rootUrl) && /\.tsx?$/.test(f))
+    .filter((f) => f.startsWith(rootUrl) && /\.(?:ts|tsx|mts)$/.test(f))
     .map((f) => f.slice(rootUrl.length)))
 }
 
@@ -75,8 +75,8 @@ describe('N32：门禁脚本要在类型检查范围内', () => {
     expect(missing, '这些门禁脚本没被类型检查看过：' + missing.join('、')).toEqual([])
   })
 
-  it('vitest.config.ts 也在同一份 program 里', () => {
-    expect(programFiles(CHECKS_CFG).has('vitest.config.ts'), 'vitest.config.ts 不在类型检查范围内').toBe(true)
+  it('vitest.config.mts 也在同一份 program 里', () => {
+    expect(programFiles(CHECKS_CFG).has('vitest.config.mts'), 'vitest.config.mts 不在类型检查范围内').toBe(true)
   })
 
   it('npm run typecheck 与 CI 都真的会跑这一份', () => {

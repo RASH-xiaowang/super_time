@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
  * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings`，可路由页签共 **41**（其余 23 项 `hidden`，
+ * 侧栏可见 **16** 项 + 底栏独立渲染的 `settings`，可路由页签共 **40**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -16,7 +16,7 @@
  * 真机几何由 `scripts/nav-shell-e2e.mjs` 按「默认展开 → 点一下收起 → 再展开」的顺序验收。
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, runtimeCapabilities, subscribeApiStatus, type ApiStatus } from './api.ts'
+import { apiGetAvatar, apiGetSelfUsername, checkApiHealth, getApiStatus, runtimeCapabilities, subscribeApiStatus, type ApiStatus } from './api.ts'
 import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 
 // 内容面板按页签懒加载；常驻外壳（提醒、引导、全局搜索、余额）保持静态导入。
@@ -26,7 +26,6 @@ import {
   AssetInsightsPanel,
   CallsPanel,
   ChatsPanel,
-  ClawBotPanel,
   ContactsPanel,
   EmoticonsPanel,
   FavoritesPanel,
@@ -74,8 +73,7 @@ import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
 import { BrandTitle } from './panels/brand-title.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
 import { GlobalSearchResults, type GlobalSearchResultsState } from './panels/global-search-results.tsx'
-import { SEARCH_QUERY_EVENT, searchQueryFromEvent } from './panels/search-events.ts'
-import type { UnifiedSearchSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import { useGlobalSearchState } from './use-global-search.ts'
 
 /** 顶部品牌图标：微信风格双气泡。 */
 function IconApp(): React.JSX.Element {
@@ -206,6 +204,7 @@ function renderTab(
   onNavigate: (t: WechatTab) => void,
   onOpenChat: (username: string, localId?: number) => void,
   chatTarget: ChatTarget | null,
+  onChatTargetHandled: (nonce: number) => void,
   onOpenMoments: (username: string) => void,
   momentAuthor: string | null,
   clearMomentAuthor: () => void,
@@ -233,7 +232,7 @@ function renderTab(
         ariaLabel="消息视图"
         initial={tab === 'revoked' ? 'revoked' : tab === 'calls' ? 'calls' : 'chats'}
         sections={[
-          { key: 'chats', label: '消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} /> },
+          { key: 'chats', label: '消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} onInitialTargetHandled={onChatTargetHandled} /> },
           { key: 'calls', label: '通话', render: () => <CallsPanel onOpenChat={onOpenChat} /> },
           { key: 'revoked', label: '撤回', render: () => <RevokedPanel onOpenSettings={onOpenSettings} /> },
         ]}
@@ -333,8 +332,8 @@ function renderTab(
         ariaLabel="资金往来视图"
         initial={tab}
         sections={[
-          { key: 'ledger', label: '汇总', render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
-          { key: 'records', label: '明细', render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
+          { key: 'ledger', label: '汇总', keepAlive: false, render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
+          { key: 'records', label: '明细', keepAlive: false, render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
         ]}
       />
     )
@@ -343,7 +342,6 @@ function renderTab(
     // 待办从聊天文本里提取 TODO，这里的任务是用户显式创建的监听任务（命中关键词 → 记录 → 回调）。
     case 'taskinfo': return <TaskCenterPanel />
     case 'messagelist': return <MessageListPanel />
-    case 'clawbot': return <ClawBotPanel />
     case 'groupinsights':
     case 'monitor': return (
       <MergedSections
@@ -454,6 +452,191 @@ function SidebarFooter({
   )
 }
 
+interface DataPanelSidebarProps {
+  apiStatus: ApiStatus
+  active: WechatTab
+  navOpen: boolean
+  setNavOpen: React.Dispatch<React.SetStateAction<boolean>>
+  navMore: { top: boolean; bottom: boolean }
+  navRef: React.MutableRefObject<HTMLElement | null>
+  updateNavMore: () => void
+  setChatTarget: React.Dispatch<React.SetStateAction<ChatTarget | null>>
+  setMomentAuthor: React.Dispatch<React.SetStateAction<string | null>>
+  setActive: (tab: WechatTab) => void
+  searchQuery: string
+  setSearchQuery: React.Dispatch<React.SetStateAction<string>>
+  searchOpen: boolean
+  setSearchOpen: React.Dispatch<React.SetStateAction<boolean>>
+  searchInputRef: React.MutableRefObject<HTMLInputElement | null>
+  searchLoading: boolean
+  searchResults: GlobalSearchResultsState
+  gsQuery: string
+  openChat: (username: string, localId?: number) => void
+  openMoments: (username: string) => void
+  seedTo: (tab: WechatTab, query: string) => void
+  settingsOpen: boolean
+  openSettings: (section?: string) => void
+}
+
+/** Persistent data-panel sidebar: brand, global search, navigation groups, settings. */
+function DataPanelSidebar({
+  apiStatus,
+  active,
+  navOpen,
+  setNavOpen,
+  navMore,
+  navRef,
+  updateNavMore,
+  setChatTarget,
+  setMomentAuthor,
+  setActive,
+  searchQuery,
+  setSearchQuery,
+  searchOpen,
+  setSearchOpen,
+  searchInputRef,
+  searchLoading,
+  searchResults,
+  gsQuery,
+  openChat,
+  openMoments,
+  seedTo,
+  settingsOpen,
+  openSettings,
+}: DataPanelSidebarProps): React.JSX.Element {
+  return (
+    <aside className={css.sidebar} data-open={navOpen || undefined}>
+      <div className={css.navBrand} title="Super Time">
+        <span className={css.navBrandLogo}>
+          <BrandAvatar online={apiStatus === 'online'} />
+        </span>
+        <span className={css.navBrandText}>
+          <BrandTitle />
+        </span>
+      </div>
+
+      <div className={css.navSearch}>
+        <GlobalSearch
+          value={searchQuery}
+          onChange={setSearchQuery}
+          open={searchOpen}
+          onOpenChange={setSearchOpen}
+          inputRef={searchInputRef}
+        >
+          <GlobalSearchResults
+            query={gsQuery}
+            loading={searchLoading}
+            results={searchResults}
+            onClose={() => { setSearchOpen(false) }}
+            onOpenSession={openChat}
+            onOpenMoments={openMoments}
+            onSeed={seedTo}
+          />
+        </GlobalSearch>
+      </div>
+
+      <button
+        type="button"
+        className={css.navToggle}
+        onClick={() => setNavOpen((value) => !value)}
+        title={navOpen ? '收起导航' : '展开导航'}
+        aria-label={navOpen ? '收起导航' : '展开导航'}
+        aria-expanded={navOpen}
+      >
+        <IconNavToggle open={navOpen} />
+        <span className={css.navLabel}>{navOpen ? '收起导航' : '展开导航'}</span>
+      </button>
+
+      <div
+        className={css.navWrap}
+        data-more-top={navMore.top || undefined}
+        data-more-bottom={navMore.bottom || undefined}
+      >
+        <nav ref={navRef} className={css.nav} onScroll={updateNavMore}>
+          {NAV_GROUPS.map((group) => {
+            const items = group.items.filter((item) => !item.hidden && item.tab !== 'settings')
+            if (items.length === 0) return null
+            return (
+              <div key={group.label} className={css.navGroup}>
+                <div className={css.navGroupLabel}>{group.label}</div>
+                {items.map((item) => (
+                  <button
+                    key={item.tab}
+                    type="button"
+                    className={css.navItem}
+                    data-active={active === item.tab || undefined}
+                    onClick={() => {
+                      setChatTarget(null)
+                      setMomentAuthor(null)
+                      setActive(item.tab)
+                    }}
+                    title={item.label}
+                  >
+                    <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <g dangerouslySetInnerHTML={{ __html: item.icon }} />
+                    </svg>
+                    <span className={css.navLabel}>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          })}
+        </nav>
+        {navMore.top && (
+          <span className={css.navHint} data-dir="up" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 15l-6-6-6 6" /></svg>
+          </span>
+        )}
+        {navMore.bottom && (
+          <span className={css.navHint} data-dir="down" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+          </span>
+        )}
+      </div>
+      <SidebarFooter settingsOpen={settingsOpen} onOpenSettings={openSettings} />
+    </aside>
+  )
+}
+
+interface DataPanelSettingsDialogProps {
+  open: boolean
+  onClose: () => void
+  initialSection: string | undefined
+  onNavigateOut: (tab: string) => void
+  onOpenChat: (username: string, localId?: number) => void
+}
+
+function DataPanelSettingsDialog({
+  open,
+  onClose,
+  initialSection,
+  onNavigateOut,
+  onOpenChat,
+}: DataPanelSettingsDialogProps): React.JSX.Element {
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      className={css.settingsDialog}
+      title={(
+        <span className={css.settingsDialogTitle}>
+          设置
+          <span className={css.settingsDialogDesc}>{runtimeCapabilities().isBrowser && runtimeCapabilities().desktopEquivalent !== true ? '手机这一侧能看的只有数据边界 · 其余各节要在电脑上完成' : '配置向导 · 智能与隐私 · 授权与更新 · 维护与自检 · 高级'}</span>
+        </span>
+      )}
+    >
+      <div className={css.settingsDialogBody}>
+        <SettingsPanelGate
+          inDialog
+          initialSection={initialSection}
+          onNavigateOut={onNavigateOut}
+          onOpenChat={onOpenChat}
+        />
+      </div>
+    </Dialog>
+  )
+}
+
 /**
  * Render the WeChat data panel shell.
  * @returns the data panel element tree.
@@ -474,6 +657,10 @@ export function WechatDataPanel(): React.JSX.Element {
   const apiStatus = useSyncExternalStore(subscribeApiStatus, getApiStatus)
   /** 导航栏展开态：开关按钮切换，**默认展开**（2026-09-30 起；理由见文件头，无持久化）。 */
   const [navOpen, setNavOpen] = useState(true)
+  const {
+    searchQuery, setSearchQuery, searchOpen, setSearchOpen, searchLoading,
+    searchInputRef, searchResults, gsQuery,
+  } = useGlobalSearchState(navOpen, setNavOpen)
   /** 导航轨滚动感知：滚动条已隐藏（scrollbar-width:none），改用「边缘渐隐 + 箭头」
    *  告诉用户上/下方向还有条目。top=true 表示上方有被滚出的内容。 */
   const navRef = useRef<HTMLElement | null>(null)
@@ -490,15 +677,26 @@ export function WechatDataPanel(): React.JSX.Element {
   useEffect(() => {
     const el = navRef.current
     if (!el) return
-    // 用块体：requestAnimationFrame 返回 handle，箭头函数直接返回它就不符合 `(): void`。
-    const raf = (): void => { requestAnimationFrame(updateNavMore) }
-    raf()
+    let frame = 0
+    const scheduleUpdate = (): void => {
+      if (frame !== 0) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        updateNavMore()
+      })
+    }
+    scheduleUpdate()
     const t = setTimeout(updateNavMore, 500) // 字体晚到兜底
-    const ro = new ResizeObserver(raf)
+    const ro = new ResizeObserver(scheduleUpdate)
     ro.observe(el)
-    return () => { clearTimeout(t); ro.disconnect() }
+    return () => {
+      if (frame !== 0) cancelAnimationFrame(frame)
+      clearTimeout(t)
+      ro.disconnect()
+    }
   }, [updateNavMore, navOpen])
   const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null)
+  const chatTargetNonceRef = useRef(0)
   const [momentAuthor, setMomentAuthor] = useState<string | null>(null)
   useReleaseImagesOnTab(active, chatTarget?.username) // W3-10.1：切页签释放看不见的图片槽（语义表见 use-release-images-on-tab.ts）
   /**
@@ -524,24 +722,20 @@ export function WechatDataPanel(): React.JSX.Element {
     if (t in DIALOG_SECTION_OF) { openSettings(DIALOG_SECTION_OF[t]); return }
     setActive(t)
   }, [openSettings, setActive])
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchLoading, setSearchLoading] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement | null>(null)
-  const searchSeqRef = useRef(0)
-  const [searchResults, setSearchResults] = useState<GlobalSearchResultsState>({
-    sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [],
-  })
-
-  /** 当前搜索词（渲染作用域）：命中跳转时要把同一个词带进目标面板。 */
-  const gsQuery = searchQuery.trim()
-
   /** Cross-panel navigation: jump to the chats tab and open/locate a session. */
   const openChat = useCallback((username: string, localId?: number): void => {
-    const target: ChatTarget = { username, nonce: Date.now() }
-    if (localId !== undefined) target.localId = localId
+    const normalized = username.trim()
+    if (!normalized) return
+    const nonce = Math.max(Date.now(), chatTargetNonceRef.current + 1)
+    chatTargetNonceRef.current = nonce
+    const target: ChatTarget = { username: normalized, nonce }
+    if (localId !== undefined && Number.isFinite(localId)) target.localId = localId
     setChatTarget(target)
     setActive('chats')
+  }, [])
+  /** 外部跳转意图已经被消息面板消费，清掉它，避免分段切换重挂时再次打开旧会话。 */
+  const onChatTargetHandled = useCallback((nonce: number): void => {
+    setChatTarget(current => current?.nonce === nonce ? null : current)
   }, [])
 
   /**
@@ -599,89 +793,9 @@ export function WechatDataPanel(): React.JSX.Element {
     void checkApiHealth()
   }, [])
 
-  // Global search (sessions + messages + contacts/moments/favorites/files/records) with a 300ms debounce.
-  useEffect(() => {
-    const q = searchQuery.trim()
-    if (!q) {
-      searchSeqRef.current += 1
-      setSearchResults({ sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [] })
-      setSearchLoading(false)
-      return
-    }
-    setSearchLoading(true)
-    const seq = ++searchSeqRef.current
-    const t = window.setTimeout(() => {
-      void Promise.all([
-        apiGetSessions({ keyword: q, limit: 8 }).catch((): { sessions: never[]; total: number } => ({ sessions: [], total: 0 })),
-        apiSearchUnified({ query: q, limit: 8 }).catch((e): UnifiedSearchSnapshot => ({
-          // 整个请求失败：这同样是「读不到」，不许悄悄画成「没有结果」。
-          query: q, messages: [], contacts: [], moments: [], favorites: [], files: [], records: [],
-          readError: `搜索请求失败（${(e as Error).message}）—— 这不是「没有结果」`,
-        })),
-      ]).then(([sessionRes, un]) => {
-        if (seq !== searchSeqRef.current) return
-        setSearchResults({
-          sessions: sessionRes.sessions,
-          hits: un.messages,
-          contacts: un.contacts,
-          moments: un.moments,
-          favorites: un.favorites,
-          files: un.files,
-          records: un.records,
-          readError: un.readError,
-        })
-        setSearchLoading(false)
-      })
-    }, 300)
-    return () => { window.clearTimeout(t) }
-  }, [searchQuery])
-
-  // Ctrl/Cmd+K 聚焦全局搜索；Esc 关闭结果面板。
-  // 搜索框现在在导航栏里，而收起态（58px 轨）整块是 display: none —— 直接 focus() 会静默失败，
-  // 所以先展开导航，等这一帧渲染出输入框后再聚焦（rAF 比 setTimeout(0) 更贴合绘制时机）。
-  // 原先那套「先展开顶栏折叠条再聚焦」的 inert 绕行方案已随顶栏一起删除。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setNavOpen(true)
-        window.requestAnimationFrame(() => { searchInputRef.current?.focus() })
-        setSearchOpen(true)
-      } else if (e.key === 'Escape') {
-        setSearchOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey) }
-  }, [])
-
-  /**
-   * 词云等分析面板 → 全局搜索（R11）：收到「查这个词」就把三步做齐——
-   * 开导航条（搜索框在里头）、种词、下一帧聚焦。与 Ctrl+K 同一套动作，
-   * 搜什么不在这里管：debounce 搜索 effect 只认 `searchQuery` 的变化，种下去它自己会跑。
-   */
-  useEffect(() => {
-    const onSearchQuery = (e: Event): void => {
-      const q = searchQueryFromEvent(e)
-      if (!q) return
-      setSearchQuery(q)
-      setNavOpen(true)
-      window.requestAnimationFrame(() => { searchInputRef.current?.focus() })
-      setSearchOpen(true)
-    }
-    window.addEventListener(SEARCH_QUERY_EVENT, onSearchQuery)
-    return () => { window.removeEventListener(SEARCH_QUERY_EVENT, onSearchQuery) }
-  }, [])
-
-  // 导航栏收起时搜索框被隐藏（display: none）。此时结果面板若还开着，就会拿一组
-  // 全零的矩形去定位，直接飘到屏幕左上角 —— 收起导航时一并关掉面板。
-  useEffect(() => {
-    if (!navOpen) setSearchOpen(false)
-  }, [navOpen])
-
   const activePanel = useMemo(
-    () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus),
-    [active, navigate, openChat, chatTarget, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus],
+    () => renderTab(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus),
+    [active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus],
   )
   const keepAlivePanel = useKeepAlivePanel(active, activePanel)
 
@@ -707,107 +821,31 @@ export function WechatDataPanel(): React.JSX.Element {
       <SetupGuide open={!settingsOpen} onOpenStep={(k) => { openSettings(k) }} />
       <MobileNavHost active={active} onSelect={(t) => { setChatTarget(null); setMomentAuthor(null); setActive(t) }} onOpenSettings={() => { openSettings() }} />
       <div className={css.body}>
-        <aside className={css.sidebar} data-open={navOpen || undefined}>
-          {/* 品牌：头像 + 产品名（原顶栏左侧）。头像沿用原顶栏的品牌位实现
-              （BrandAvatar 已配置微信账号时显示账号头像，否则显示品牌标记）。 */}
-          <div className={css.navBrand} title="Super Time">
-            <span className={css.navBrandLogo}>
-              <BrandAvatar online={apiStatus === 'online'} />
-            </span>
-            <span className={css.navBrandText}>
-              <BrandTitle />
-            </span>
-          </div>
-
-          {/* 全局搜索（原顶栏中部）：结果面板由 GlobalSearch Portal 到 body */}
-          <div className={css.navSearch}>
-            <GlobalSearch
-              value={searchQuery}
-              onChange={setSearchQuery}
-              open={searchOpen}
-              onOpenChange={setSearchOpen}
-              inputRef={searchInputRef}
-            >
-              <GlobalSearchResults
-                query={gsQuery}
-                loading={searchLoading}
-                results={searchResults}
-                onClose={() => { setSearchOpen(false) }}
-                onOpenSession={openChat}
-                onOpenMoments={openMoments}
-                onSeed={seedTo}
-              />
-            </GlobalSearch>
-          </div>
-
-          {/* 折叠开关：点击切换展开 / 折叠（悬停不再触发，避免误展开） */}
-          <button
-            type="button"
-            className={css.navToggle}
-            onClick={() => setNavOpen(v => !v)}
-            title={navOpen ? '收起导航' : '展开导航'}
-            aria-label={navOpen ? '收起导航' : '展开导航'}
-            aria-expanded={navOpen}
-          >
-            <IconNavToggle open={navOpen} />
-            <span className={css.navLabel}>{navOpen ? '收起导航' : '展开导航'}</span>
-          </button>
-          {/* 定位容器：承载边缘渐隐遮罩与箭头提示（均为 absolute 覆盖层，不占布局） */}
-          <div
-            className={css.navWrap}
-            data-more-top={navMore.top || undefined}
-            data-more-bottom={navMore.bottom || undefined}
-          >
-            <nav ref={navRef} className={css.nav} onScroll={updateNavMore}>
-            {NAV_GROUPS.map(g => {
-              // 分组里的条目全迁进「设置」弹窗后（如「备份与安全」「维护与设置」），
-              // 只剩标题的空组不再渲染 —— 否则侧栏会留一个没有条目的分组名。
-              const items = g.items.filter(it => !it.hidden && it.tab !== 'settings')
-              if (items.length === 0) return null
-              return (
-              <div key={g.label} className={css.navGroup}>
-                <div className={css.navGroupLabel}>{g.label}</div>
-                {items.map(it => (
-                  <button
-                    key={it.tab}
-                    type="button"
-                    className={css.navItem}
-                    data-active={active === it.tab || undefined}
-                    onClick={() => { setChatTarget(null); setMomentAuthor(null); setActive(it.tab) }}
-                    title={it.label}
-                  >
-                    {/* 图标是填充字形（nav-config 的 fragment 自带 fill/stroke 覆盖）。
-                        17px 是对齐微信官方侧栏的光学重量：58px 轨宽下 15px 偏小，
-                        与展开态 12.5px 标签并排时比例失衡。 */}
-                    <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      {/* icons arrive as path fragments; wrap in a <g> */}
-                      <g dangerouslySetInnerHTML={{ __html: it.icon }} />
-                    </svg>
-                    <span className={css.navLabel}>{it.label}</span>
-                  </button>
-                ))}
-              </div>
-              )
-            })}
-            </nav>
-            {navMore.top && (
-              <span className={css.navHint} data-dir="up" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 15l-6-6-6 6" /></svg>
-              </span>
-            )}
-            {navMore.bottom && (
-              <span className={css.navHint} data-dir="down" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-              </span>
-            )}
-          </div>
-          {/* 底部固定区（只剩「设置」）：见 `SidebarFooter`。
-              模型余额 / 数据就绪 / 主题切换 2026-10-17 全部迁到标题栏右上角。 */}
-          <SidebarFooter
-            settingsOpen={settingsOpen}
-            onOpenSettings={openSettings}
-          />
-        </aside>
+        <DataPanelSidebar
+          apiStatus={apiStatus}
+          active={active}
+          navOpen={navOpen}
+          setNavOpen={setNavOpen}
+          navMore={navMore}
+          navRef={navRef}
+          updateNavMore={updateNavMore}
+          setChatTarget={setChatTarget}
+          setMomentAuthor={setMomentAuthor}
+          setActive={setActive}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          searchOpen={searchOpen}
+          setSearchOpen={setSearchOpen}
+          searchInputRef={searchInputRef}
+          searchLoading={searchLoading}
+          searchResults={searchResults}
+          gsQuery={gsQuery}
+          openChat={openChat}
+          openMoments={openMoments}
+          seedTo={seedTo}
+          settingsOpen={settingsOpen}
+          openSettings={openSettings}
+        />
         <main className={css.content}>
           <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>
             {keepAlivePanel}
@@ -817,31 +855,15 @@ export function WechatDataPanel(): React.JSX.Element {
 
       {/* 「设置」弹窗：主内容区保持原页，关闭（× / Esc / 点遮罩）后回到原处。
           面板自身不再画标题栏 —— 标题与关闭按钮由弹窗提供，避免两个标题叠在一起。 */}
-      <Dialog
+      <DataPanelSettingsDialog
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false) }}
-        className={css.settingsDialog}
-        title={(
-          <span className={css.settingsDialogTitle}>
-            设置
-            <span className={css.settingsDialogDesc}>{runtimeCapabilities().isBrowser && runtimeCapabilities().desktopEquivalent !== true ? '手机这一侧能看的只有数据边界 · 其余各节要在电脑上完成' : '配置向导 · 智能与隐私 · 授权与更新 · 维护与自检 · 高级'}</span>
-          </span>
-        )}
-      >
-        <div className={css.settingsDialogBody}>
-          <SettingsPanelGate
-            inDialog
-            initialSection={settingsSection}
-            onNavigateOut={navigateFromDialog}
-            onOpenChat={openChatFromDialog}
-          />
-        </div>
-      </Dialog>
+        initialSection={settingsSection}
+        onNavigateOut={navigateFromDialog}
+        onOpenChat={openChatFromDialog}
+      />
 
     </div>
     </ConfirmProvider>
   )
 }
-
-
-

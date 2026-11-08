@@ -23,6 +23,7 @@ import type {
 import { apiGetAvatarBatched } from '../api.ts'
 import { avatarColors, fmtBytes, fmtSessionTimeSec } from '../utils/format.ts'
 import { cacheBounded } from '../utils/misc.ts'
+import { isLegacyChatId, readableChatName } from '../utils/chat-identity.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import css from './global-search.module.css'
 
@@ -294,7 +295,9 @@ export function GlobalSearchResults({
   onOpenMoments,
   onSeed,
 }: GlobalSearchResultsProps): React.JSX.Element {
-  const total = sum(results.sessions) + sum(results.hits) + sum(results.contacts) + sum(results.moments)
+  const sessions = results.sessions.filter((session) => !isLegacyChatId(session.username))
+  const hits = results.hits.filter((hit) => !isLegacyChatId(hit.username))
+  const total = sum(sessions) + sum(hits) + sum(results.contacts) + sum(results.moments)
     + sum(results.favorites) + sum(results.files) + sum(results.records)
   const empty = !loading && total === 0 && results.readError === undefined
 
@@ -339,14 +342,14 @@ export function GlobalSearchResults({
         </div>
       )}
 
-      {results.sessions.length > 0 && (
-        <ResultGroup label="会话" count={results.sessions.length} icon="message">
-          {results.sessions.map((session) => {
-            const name = session.displayName || session.username
+      {sessions.length > 0 && (
+        <ResultGroup label="会话" count={sessions.length} icon="message">
+          {sessions.map((session) => {
+            const name = readableChatName(session.displayName, session.username)
             const displayName = withEnterprise(name, session.enterpriseName)
             const summary = session.draft !== ''
               ? `草稿：${session.draft}`
-              : (session.summary || session.username)
+              : session.summary
             return (
               <ResultRow
                 key={session.username}
@@ -365,16 +368,21 @@ export function GlobalSearchResults({
         </ResultGroup>
       )}
 
-      {results.hits.length > 0 && (
-        <ResultGroup label="消息" count={results.hits.length} icon="message">
-          {results.hits.map((hit, index) => {
+      {hits.length > 0 && (
+        <ResultGroup label="消息" count={hits.length} icon="message">
+          {hits.map((hit, index) => {
             const group = hit.username.endsWith('@chatroom')
-            const senderName = group ? (hit.sender || hit.name || hit.username) : (hit.name || hit.username)
+            const senderName = group
+              ? readableChatName(hit.sender || hit.name, hit.username)
+              : readableChatName(hit.name, hit.username)
             const senderUsername = group ? hit.sender_username?.trim() : undefined
             const hasSenderAvatar = senderUsername !== undefined && senderUsername !== ''
             const avatarUsername = hasSenderAvatar ? senderUsername : hit.username
             const avatarName = group && hit.sender !== undefined && hit.sender !== '' ? hit.sender : senderName
-            const sessionLabel = withEnterprise(hit.name || hit.username, hit.enterpriseName)
+            const sessionLabel = withEnterprise(
+              readableChatName(hit.name, hit.username),
+              hit.enterpriseName,
+            )
             const displayName = withEnterprise(senderName, group ? hit.senderEnterpriseName : hit.enterpriseName)
             const source = group ? `来源 ${sessionLabel}` : `单聊 · ${sessionLabel}`
             return (

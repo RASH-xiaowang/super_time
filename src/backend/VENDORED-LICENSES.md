@@ -50,3 +50,15 @@ Super Time 中脱离 pnpm workspace 直接运行：
   MIT 许可证全文在同目录 [`LICENSE`](wechat-data/native/img_helper/LICENSE)。
 - ⚠️ 该组件**只在你显式打开**「设置 → 图片解码 → 微信原图自动下载」时才会被加载；
   默认不 `koffi.load()`、不注入。
+
+## 运行时 npm 依赖与字体边界
+
+| 资产 | 版本 | 打包位置 | 许可证 | 处理方式 |
+|---|---|---|---|---|
+| `pdfjs-dist` | 6.3.289 | `node_modules/pdfjs-dist` | Apache-2.0 | 保留入口、worker、`cmaps/` 与 `LICENSE`；知识库只抽 PDF 文本 |
+| `pdfjs-dist/standard_fonts/**` | 6.3.289 | **不随包** | LiberationSans 为 GPLv2 + 字体例外；Foxit 字体为 BSD 式许可 | 显式排除。应用不渲染 PDF 字形，只调用 `getTextContent()`；详见 [`docs/FONT-LICENSING.md`](../../docs/FONT-LICENSING.md) |
+
+UI 不随包分发字体文件：运行时只使用 `system-ui` / `ui-monospace` 等通用字体族，
+由用户操作系统提供实际字形。任何后续新增的随包字体都必须在
+[`scripts/font-assets.json`](../../scripts/font-assets.json) 登记许可证、来源和 SHA-256，
+并通过 `npm run font:check` 与 `npm run font:check:packaged`。

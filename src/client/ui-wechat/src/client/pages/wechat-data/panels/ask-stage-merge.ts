@@ -22,6 +22,7 @@ export interface AskStage {
   label: string
   status: AskStageStatus
   detail?: string
+  round?: number
   phase?: AskToolPhase
   callId?: string
   toolName?: string
@@ -83,6 +84,9 @@ export function normalizeAskStage(value: unknown): AskStage | null {
     label,
     status,
     ...(optionalString(value['detail']) === undefined ? {} : { detail: String(value['detail']) }),
+    ...(nonNegativeNumber(value['round']) === undefined
+      ? {}
+      : { round: nonNegativeNumber(value['round']) }),
     ...(phase === undefined ? {} : { phase }),
     ...(optionalString(value['callId']) === undefined ? {} : { callId: String(value['callId']) }),
     ...(optionalString(value['toolName']) === undefined ? {} : { toolName: String(value['toolName']) }),
@@ -158,6 +162,7 @@ function keepExistingState(previous: AskStage, next: AskStage): AskStage {
       : {}),
     ...mergeAttempt(previous, next),
     ...(elapsedMs === undefined ? {} : { elapsedMs }),
+    ...(previous.round === undefined && next.round !== undefined ? { round: next.round } : {}),
   }
   return previous.status === 'done' ? clearFailureDiagnostics(merged) : merged
 }
@@ -178,6 +183,8 @@ function replaceAttemptState(previous: AskStage, next: AskStage): AskStage {
     label: next.label,
     status: next.status,
     ...(next.detail === undefined ? {} : { detail: next.detail }),
+    ...(next.round === undefined && previous.round !== undefined ? { round: previous.round } : {}),
+    ...(next.round === undefined ? {} : { round: next.round }),
     ...(next.phase === undefined ? {} : { phase: next.phase }),
     ...(next.callId === undefined && previous.callId !== undefined ? { callId: previous.callId } : {}),
     ...(next.callId === undefined ? {} : { callId: next.callId }),

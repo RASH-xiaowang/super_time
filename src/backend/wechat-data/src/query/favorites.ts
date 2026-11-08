@@ -13,6 +13,7 @@ import { fmtDateTimeSec } from '../format.ts'
 import { resolveAvatarsLocal } from './avatar.ts'
 import type { FavItemPart } from '../types.ts'
 import { createEnterpriseDisplayIndex, withFavoritePartEnterprise } from './enterprise-display.ts'
+import { displayNameForUsername } from './message-identity.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -562,7 +563,9 @@ export function queryFavorites(
     const favorites: FavorItem[] = parsedRows.map(({ r, xml, fromUsr, chatName, avatarCandidates }) => {
       const type = Number(r[sel('type', '0')] ?? 0)
       const parsed = parseFavContent(type, xml)
-      const source = chatName ? (names.get(chatName) ?? chatName) : (fromUsr ? (names.get(fromUsr) ?? fromUsr) : '')
+      const source = chatName
+        ? displayNameForUsername(chatName, names)
+        : (fromUsr ? displayNameForUsername(fromUsr, names) : '')
       const sourceEnterpriseName = (
         (chatName ? meta.enterpriseNames.get(chatName) : undefined)
         || (fromUsr ? meta.enterpriseNames.get(fromUsr) : undefined)

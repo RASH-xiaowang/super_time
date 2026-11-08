@@ -44,7 +44,82 @@ export interface PrivacySnapshot {
   top_groups: Array<{ username: string; name: string; enterpriseName?: string; count: number }>
 }
 
-/** Graph snapshot (edges are derived client-side from group_codes). */
+/** Evidence source attached to one observed social-graph edge. */
+export type GraphEdgeEvidenceSource =
+  | 'contact'
+  | 'session'
+  | 'message'
+  | 'chatroom_member'
+  | 'chatroom_snapshot'
+  | 'chatroom_owner'
+  | 'chatroom_inviter'
+  | 'message_reply'
+  | 'message_mention'
+  | 'message_call'
+  | 'sns_like'
+  | 'sns_comment'
+  | 'general_transfer'
+  | 'general_redpacket'
+  | 'general_fmessage'
+
+/**
+ * One piece of local evidence supporting an edge.
+ *
+ * `ref` stays opaque on purpose: it can be a chatroom username, timeline id,
+ * private session username, or another stable local identifier. Callers must
+ * not interpret it as a display string.
+ */
+export interface GraphEdgeEvidence {
+  source: GraphEdgeEvidenceSource
+  ref?: string
+  count?: number
+}
+
+/** Relationship semantics emitted by the backend graph extractor. */
+export type GraphEdgeType =
+  | 'friend'
+  | 'direct_conversation'
+  | 'group_conversation'
+  | 'group_membership'
+  | 'group_owner'
+  | 'group_activity'
+  | 'common_group'
+  | 'common_member'
+  | 'invite'
+  | 'reply'
+  | 'mention_user'
+  | 'call'
+  | 'moment_like'
+  | 'moment_comment'
+  | 'moment_reply'
+  | 'transfer'
+  | 'redpacket'
+  | 'friend_request'
+
+/**
+ * `forward` means the relation reads "source is a member of / acts on target"
+ * according to the edge type. Common-* edges are undirected and their endpoint
+ * order is canonicalized by username for stable deduplication.
+ */
+export type GraphEdgeDirection = 'forward' | 'undirected'
+
+/**
+ * One observed or locally derived relation between two graph nodes.
+ *
+ * `evidence` is the compact string form consumed by the graph UI. The full
+ * machine-readable provenance remains in `evidence_details`.
+ */
+export interface GraphEdge {
+  source: string
+  target: string
+  weight: number
+  type: GraphEdgeType
+  direction: GraphEdgeDirection
+  evidence: string[]
+  evidence_details: GraphEdgeEvidence[]
+}
+
+/** Graph snapshot: identity nodes plus explicit, evidence-backed edges. */
 export interface GraphSnapshot {
   /** Current account username (self node is the literal 'self'). */
   self?: string
@@ -70,6 +145,17 @@ export interface GraphSnapshot {
     msg_count?: number
     group_count?: number
     member_count?: number
+    /**
+     * `known` means the local member snapshot exists (even when it contains
+     * zero members); `unknown` means the room has no member snapshot at all.
+     */
+    membership_status?: 'known' | 'unknown'
+    /** Total members in the local snapshot before the detail payload is capped. */
+    members_total?: number
+    /** Members actually included in `shared_members`. */
+    members_returned?: number
+    /** True when `shared_members` is shorter than the observed membership. */
+    members_truncated?: boolean
     shared_count?: number
     group_codes?: string[]
     avatar_url?: string
@@ -77,7 +163,12 @@ export interface GraphSnapshot {
     remark_group?: string
     shared_members?: Array<{ username: string; name: string; enterpriseName?: string; is_friend: boolean; msg_count: number }>
   }>
-  edges: Array<{ source: string; target: string; weight: number }>
+  edges: GraphEdge[]
+  /**
+   * Machine-readable bounds/truncation report. A missing relation in the graph
+   * can then be distinguished from a deliberately bounded query.
+   */
+  coverage?: GraphCoverage
   summary?: {
     total_contacts?: number
     total_groups?: number
@@ -88,6 +179,52 @@ export interface GraphSnapshot {
     selected_contacts?: number
     selected_groups?: number
     top_relations?: Array<{ username: string; name: string; enterpriseName?: string; msg_count: number }>
+  }
+}
+
+/** Coverage and truncation facts for one graph snapshot. */
+export interface GraphCoverage {
+  /** Explicit evidence edges returned before pair-derived relations fill the rest. */
+  observed_edges?: {
+    cap: number
+    returned: number
+    dropped: number
+    dropped_by_type: Partial<Record<GraphEdgeType, number>>
+  }
+  /** Bounded reply/@ scan. */
+  message_relations?: {
+    scopes: number
+    scanned: number
+    budget: number
+    per_scope_budget: number
+    window_per_scope_cap: number
+    truncated_scopes: number
+    record_budget: number
+    dropped_records: number
+  }
+  /** Fair common-group/common-member pair derivation. */
+  derived_pairs?: {
+    budget: number
+    used: number
+    truncated: boolean
+    common_group: { candidates: number; emitted: number }
+    common_member: { candidates: number; emitted: number }
+  }
+  /** Authoritative references whose stable username had no retained node. */
+  unresolved_actors?: {
+    membership: number
+    owner: number
+    invite: number
+    message_relation: number
+    total: number
+  }
+  /** Edges rejected because one endpoint was not retained in the client view. */
+  client?: {
+    candidate_nodes: number
+    retained_nodes: number
+    dropped_nodes: number
+    dropped_edges: number
+    dropped_edge_endpoints: number
   }
 }
 

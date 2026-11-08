@@ -34,6 +34,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
+import { useKeepAliveActive } from './keep-alive.tsx'
 
 /** 取数状态。`stale === true` 时 UI **必须**标注"这是缓存数据"。 */
 export interface FreshDataState<T> {
@@ -94,6 +95,10 @@ export function useFreshData<T>(
   const alive = useRef(true)
   const dataRef = useRef<T | null>(null)
   dataRef.current = data
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const wasActiveRef = useRef(active)
   const optsRef = useRef(opts)
   optsRef.current = opts
   /**
@@ -151,10 +156,17 @@ export function useFreshData<T>(
     return () => { alive.current = false }
   }, [run])
 
+  // keep-alive 面板重新显示时补一次静默回源；隐藏期间不追 WAL，避免后台白查。
+  useEffect(() => {
+    const resumed = active && !wasActiveRef.current
+    wasActiveRef.current = active
+    if (resumed) void run(true)
+  }, [active, run])
+
   useWechatDataUpdated(() => {
-    if (optsRef.current?.liveRefresh !== true) return
+    if (!activeRef.current || optsRef.current?.liveRefresh !== true) return
     void run(true)
-  })
+  }, 'dsh-wechat-data-updated', 300, { replayOnResume: false })
 
   /**
    * **键变化即清空 `data`**（2026-10-03 补）。

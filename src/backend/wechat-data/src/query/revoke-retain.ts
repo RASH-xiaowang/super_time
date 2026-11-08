@@ -23,7 +23,6 @@
  * @module query/revoke-retain
  */
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import * as zlib from 'node:zlib'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from './db-open.ts'
@@ -34,6 +33,7 @@ import { contactMeta } from './meta.ts'
 import { resolveSelfUsername } from '../config/resolve.ts'
 import { MD5_SEGMENT } from '../md5.ts'
 import type { MessageRich, RevokedItem, RevokedMedia, RevokedMediaKind } from '../types.ts'
+import { displayNameForUsername, messageIdentityIndex } from './message-identity.ts'
 
 /** 归档库路径：数据根下（与 `decoded_images` 同级，不进解密目录以免被同步覆盖）。 */
 export function messageArchivePath (decryptedDir: string): string {
@@ -131,7 +131,7 @@ const REVOKE_TIP = '撤回了一条消息'
 
 /** 一条归档消息。 */
 export interface ArchivedMessage {
-  /** 会话标识：`WechatSession.username` 的等价物（本模块用「文件#表名」表示，见 `talkerOfTable`）。 */
+  /** 会话标识：`WechatSession.username` 的等价物（本模块用「文件#表名」表示）。 */
   talker: string
   rowKey: number
   createTime: number
@@ -166,11 +166,6 @@ function ensureArchive (decryptedDir: string): string {
 /** 把一行的 message_content 安全转成字符串（**先解 zstd/GBK**，否则存进去就是乱码字节）。 */
 function toText (v: unknown): string {
   return decodeBlobText(v)
-}
-
-/** `Msg_<md5>` 表名 → 会话标识（表名后缀就是 md5，保留原样即可，稳定且无需反查联系人）。 */
-function talkerOfTable (table: string): string {
-  return table.startsWith('Msg_') ? table.slice(4) : table
 }
 
 /** 列出某个库里的 `Msg_` 表名。 */
@@ -587,41 +582,28 @@ function typeLabelOf (lt: number | undefined): string {
   }
 }
 
-/** `Msg_<md5>` → 会话 username 的反查缓存（按 contact names 这份 Map 的身份失效）。 */
-const talkerLookupCache = new WeakMap<Map<string, string>, {
-  byMd5: Map<string, string>
-  displayToUser: Map<string, string>
-}>()
-
 /**
- * 从通讯录建两套反查：
- *   · md5(username) → username：归档 talker 只有 `Msg_<md5>`；
- *   · 显示名 → username：仅当显示名**唯一**时成立（同名歧义时宁可不给头像）。
+ * 显示名 → username：仅当显示名**唯一**时成立（同名歧义时宁可不给头像）。
+ * 表 hash → username 由统一身份索引提供，旧群即使已从通讯录消失也能解析。
  * @param names - `contactMeta().names`。
  */
-function talkerLookups (names: Map<string, string>): { byMd5: Map<string, string>; displayToUser: Map<string, string> } {
-  const hit = talkerLookupCache.get(names)
-  if (hit !== undefined) return hit
-  const byMd5 = new Map<string, string>()
+function displayNameLookups (names: Map<string, string>): Map<string, string> {
   const displayToUser = new Map<string, string>()
   const ambiguous = new Set<string>()
   for (const [u, name] of names) {
-    byMd5.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
     const key = name.trim()
     if (key === '') continue
     if (displayToUser.has(key)) ambiguous.add(key)
     else displayToUser.set(key, u)
   }
   for (const key of ambiguous) displayToUser.delete(key)
-  const out = { byMd5, displayToUser }
-  talkerLookupCache.set(names, out)
-  return out
+  return displayToUser
 }
 
 /** 归档 talker（`file#Msg_<md5>`）→ 会话 username。 */
-function sessionUsernameOfTalker (talker: string, byMd5: Map<string, string>): string {
+function sessionUsernameOfTalker (talker: string, hashToUsername: ReadonlyMap<string, string>): string {
   const m = new RegExp('#Msg_(' + MD5_SEGMENT + ')$', 'i').exec(talker)
-  return m?.[1] === undefined ? '' : (byMd5.get(m[1].toLowerCase()) ?? '')
+  return m?.[1] === undefined ? '' : (hashToUsername.get(m[1].toLowerCase()) ?? '')
 }
 
 /** 撤回提示 XML 里的 `<fromusername>`（群消息提示常直接带真实 wxid）。 */
@@ -664,7 +646,8 @@ export function queryRevokedRetained (
     const meta = contactMeta(decryptedDir)
     const names = meta.names
     const enterpriseNames = meta.enterpriseNames
-    const lookups = talkerLookups(names)
+    const displayToUser = displayNameLookups(names)
+    const hashToUsername = messageIdentityIndex(decryptedDir).hashToUsername
     const selfUsername = resolveSelfUsername(decryptedDir)
     const tips = db.prepare(
       `SELECT talker, row_key AS k, create_time AS ct, content FROM archived_msg WHERE local_type = 10000 AND content LIKE ? ORDER BY create_time DESC, row_key DESC`,
@@ -692,21 +675,21 @@ export function queryRevokedRetained (
         server_id?: string
       } | undefined
       const original = prev?.content === undefined ? '' : decodeStored(toText(prev.content))
-      const sessionUsername = sessionUsernameOfTalker(t.talker, lookups.byMd5)
-      const sessionName = sessionUsername === '' ? '' : (names.get(sessionUsername) ?? sessionUsername)
+      const sessionUsername = sessionUsernameOfTalker(t.talker, hashToUsername)
+      const sessionName = sessionUsername === '' ? '' : displayNameForUsername(sessionUsername, names)
       const enterpriseName = sessionUsername === '' ? undefined : enterpriseNames.get(sessionUsername)
       const isGroup = sessionUsername.endsWith('@chatroom') || stripGroupPrefix(tip) !== tip
       // 发送者 username 的优先级：原文群前缀 → 归档 Name2Id → 提示里的 <fromusername>
       // → 撤回提示显示名唯一匹配 → 私聊会话本身 / 自己。
       const rawPrefixUser = original === '' ? '' : senderFromBody(original)
       const tipUser = usernameFromXmlTip(tip)
-      const byName = lookups.displayToUser.get(sender) ?? ''
+      const byName = displayToUser.get(sender) ?? ''
       const senderUsername = rawPrefixUser
         || (prev?.sender_username ?? '')
         || tipUser
         || byName
         || (!isGroup && sender === sessionName ? sessionUsername : '')
-        || (!isGroup && sender === names.get(selfUsername) ? selfUsername : '')
+        || (!isGroup && sender === displayNameForUsername(selfUsername, names) ? selfUsername : '')
       const described = original === '' ? undefined : describeRevokedOriginal(original, prev?.local_type ?? 0, isGroup)
       const content = described?.content ?? '（原文未保留：撤回发生在归档开始之前）'
       const senderEnterpriseName = senderUsername === '' ? undefined : enterpriseNames.get(senderUsername)

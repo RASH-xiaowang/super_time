@@ -9,7 +9,7 @@
  *
  * ## 服务的是哪一份产物
  *
- * `src/client/ui-dist` —— vite 的输出目录（`vite.config.js:24`），也是 Electron 自己
+ * `src/client/ui-dist` —— vite 的输出目录（`vite.config.mjs`），也是 Electron 自己
  * `loadFile` 的同一份（`src/backend/main-window.js:14-18`）。**手机与桌面加载的是同一个
  * 构建产物**，所以不存在「手机版是另一套代码」这种要分别维护的东西。
  *
@@ -51,6 +51,54 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
   '.webmanifest': 'application/manifest+json',
 };
+
+/**
+ * 手机浏览器页面与桌面 meta CSP 保持同一条脚本/资源白名单，只额外加上
+ * HTTP 头才生效的 frame-ancestors（meta 里的 frame-ancestors 会被浏览器忽略）。
+ */
+const REMOTE_ACCESS_CSP = [
+  "default-src 'self'",
+  "img-src 'self' data: blob: file: wechat-media:",
+  "media-src 'self' data: blob: wechat-media:",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
+  "object-src 'none'",
+  "frame-src 'none'",
+  "child-src 'none'",
+  "worker-src 'self' blob:",
+  "form-action 'none'",
+  "base-uri 'self'",
+  "manifest-src 'self'",
+  "connect-src 'self' data: blob: file:",
+  "frame-ancestors 'none'",
+].join('; ');
+
+/** 所有远程访问响应的通用安全头；HTML 另加 CSP。 */
+const SECURITY_HEADERS = Object.freeze({
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+  'X-DNS-Prefetch-Control': 'off',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), payment=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+});
+
+/**
+ * 远程访问静态响应的安全头。页面禁止嵌入、禁止类型嗅探，也不授予任何
+ * 设备/定位权限。CSP 只挂在 HTML 上，避免给 JS/CSS 增加无意义的响应体开销。
+ * @param {string} file - 静态文件绝对路径。
+ * @returns {Record<string, string>} 响应头。
+ */
+function securityHeadersFor(file) {
+  const isHtml = path.extname(file).toLowerCase() === '.html';
+  return {
+    ...SECURITY_HEADERS,
+    ...(isHtml ? { 'Content-Security-Policy': REMOTE_ACCESS_CSP } : {}),
+  };
+}
 
 /**
  * 把一个 URL 路径解析成根目录内的**绝对**文件路径。
@@ -112,15 +160,21 @@ function cacheControlFor(file, urlPath) {
  * @param {object} res - `http.ServerResponse`。
  * @param {string} file - 绝对路径。
  * @param {string} urlPath - URL 路径（决定缓存头）。
+ * @param {boolean} [headOnly] - HEAD 请求只回与 GET 相同的头和长度，不读文件体。
  * @returns 无（异步写；出错时销毁响应）。
  */
-function sendFile(res, file, urlPath) {
+function sendFile(res, file, urlPath, headOnly = false) {
+  const size = fs.statSync(file).size;
   res.writeHead(200, {
     'Content-Type': mimeOf(file),
+    'Content-Length': String(size),
     'Cache-Control': cacheControlFor(file, urlPath),
-    // 手机浏览器（尤其 iOS Safari）会预取与嗅探；我们发的类型是准的，不许它猜。
-    'X-Content-Type-Options': 'nosniff',
+    ...securityHeadersFor(file),
   });
+  if (headOnly) {
+    res.end();
+    return;
+  }
   const stream = fs.createReadStream(file);
   stream.on('error', (err) => {
     // 头已经发出去了，改不了状态码 —— 只能销毁连接，让浏览器当成一次失败的重载。
@@ -130,4 +184,12 @@ function sendFile(res, file, urlPath) {
   stream.pipe(res);
 }
 
-module.exports = { resolveStaticFile, mimeOf, cacheControlFor, sendFile };
+module.exports = {
+  REMOTE_ACCESS_CSP,
+  SECURITY_HEADERS,
+  resolveStaticFile,
+  mimeOf,
+  cacheControlFor,
+  securityHeadersFor,
+  sendFile,
+};

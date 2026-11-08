@@ -23,6 +23,13 @@ export declare function fileImageKeyOf(fileName: string): string;
  */
 export declare function decodedFileRel(decodedDir: string, key: string): string | null;
 /**
+ * Locate only the original-quality cache slot.
+ *
+ * `.t.` entries are deliberately excluded: exporting a thumbnail while calling
+ * it an original is worse than reporting that the original is unavailable.
+ */
+export declare function decodedOriginalFileRel(decodedDir: string, key: string): string | null;
+/**
  * 按解码键定位 `.dat` 候选（已按档位排序）。
  * @param rawBase - 微信账号原始根。
  * @param key - {@link fileImageKeyOf} 的结果。
@@ -77,4 +84,19 @@ export declare function ensureFileImageDecoded(args: {
     aesKey?: string | Uint8Array;
     xorKey?: number;
     thumbFirst?: boolean;
+}): Promise<FileImageHit>;
+/**
+ * Resolve a file-library image from original-quality tiers only.
+ *
+ * A decoded image is accepted only when its plaintext MD5 matches the WeChat
+ * attachment key. That check rejects `.t.` thumbnails even if an older build
+ * accidentally wrote one into the main cache slot.
+ */
+export declare function ensureFileImageOriginalDecoded(args: {
+    decryptedDir: string;
+    decodedDir: string;
+    rawBase: string;
+    key: string;
+    aesKey?: string | Uint8Array;
+    xorKey?: number;
 }): Promise<FileImageHit>;

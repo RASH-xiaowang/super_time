@@ -12,6 +12,7 @@ import {
   isEnterpriseWechatUser,
   loadOpenimWordingNames,
 } from './openim.ts'
+import { readableProfileSignature } from './profile-signature.ts'
 
 /** Strip the WeChat instance suffix (wxid_xxx_f312 -> wxid_xxx). */
 function cleanWxid(username: string): string {
@@ -95,47 +96,6 @@ export function parseChatRoomExtBuffer(raw: Buffer): ChatRoomSnapshotMember[] {
   return out
 }
 
-/** Clean a profile text that may carry a protobuf prefix + JSON (enterprise WeChat). */
-function cleanProfileText(raw: string): string {
-  const start = raw.indexOf('{')
-  if (start >= 0) {
-    const json = raw.slice(start)
-    try {
-      const obj = JSON.parse(json) as Record<string, unknown>
-      {
-        const ci = obj['custom_info']
-        if (Array.isArray(ci) && ci.length > 0) {
-          const parts: string[] = []
-          for (const rawCard of ci) {
-            const card = rawCard as Record<string, unknown>
-            const t = typeof card['title'] === 'string' ? card['title'].trim() : ''
-            if (t && !parts.includes(t)) parts.push(t)
-            const det = card['detail']
-            if (Array.isArray(det)) {
-              for (const rawD of det) {
-                const d = rawD as Record<string, unknown>
-                const desc = typeof d['desc'] === 'string' ? d['desc'].trim() : ''
-                if (!desc || /@im\.wxwork$/i.test(desc)) continue
-                if (!parts.includes(desc)) parts.push(desc)
-              }
-            } else if (typeof det === 'string' && det.trim() && !parts.includes(det.trim())) {
-              parts.push(det.trim())
-            }
-          }
-          return parts.join(' · ').slice(0, 120)
-        }
-        const sig = obj['signature'] ?? obj['desc'] ?? obj['title']
-        if (typeof sig === 'string' && sig.trim()) return sig.trim().slice(0, 120)
-      }
-    } catch {
-      // not JSON: continue to raw cleanup
-    }
-  }
-  return raw.replace(/^[^\u4e00-\u9fa5A-Za-z0-9{]+/, '').trim().slice(0, 120)
-}
-
-
-
 /**
  * Load group info for one chatroom.
  * @param decryptedDir - st_control decrypted data root.
@@ -201,7 +161,7 @@ export function queryGroupInfo(
         if (ebBuf.length > 0) {
           const extra = parseContactExtra(ebBuf)
           if (extra.signature) {
-            const clean = cleanProfileText(extra.signature)
+            const clean = readableProfileSignature(extra.signature)
             if (clean) member.signature = clean
           }
           if (isEnterpriseWechatUser(mUsername)) {

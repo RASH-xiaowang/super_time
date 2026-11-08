@@ -1,43 +1,675 @@
-/* AI 大模型配置表单（原「微信问答 → 模型配置」侧栏的表单样式，
-   已随配置项一起迁到「数据配置」页面）。卡片外壳用 settings.module.css 的 .card。 */
+/* AI 大模型设置：当前连接、配置切换、主编辑器、高级能力各占独立层级。 */
 
+.console {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  container-type: inline-size;
+  font-family: var(--nm-font-sans, system-ui, sans-serif);
+}
+
+.consoleLoading,
+.consoleError {
+  padding: 12px 16px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font-size: 12px;
+}
+
+.consoleError {
+  border-color: color-mix(in srgb, var(--nm-danger) 30%, var(--nm-border));
+  color: var(--nm-danger-text);
+}
+
+.sectionKicker {
+  display: block;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.4;
+}
+
+/* ── 当前连接 ───────────────────────────────────────────── */
+.overviewCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 248px);
+  gap: 16px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.overviewMain {
+  min-width: 0;
+}
+
+.overviewEyebrow {
+  color: var(--nm-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+.overviewTitleRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.overviewTitle {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overviewStatus,
+.draftBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.overviewStatus[data-tone='ok'] {
+  border-color: color-mix(in srgb, var(--nm-brand) 30%, var(--nm-border));
+}
+
+.overviewStatus[data-tone='warn'] {
+  border-color: color-mix(in srgb, var(--nm-amber) 36%, var(--nm-border));
+  color: var(--nm-amber);
+}
+
+.draftBadge {
+  border-color: color-mix(in srgb, var(--nm-amber) 36%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-amber) 9%, transparent);
+  color: var(--nm-amber);
+}
+
+.overviewMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+  line-height: 1.6;
+}
+
+.overviewMeta > span {
+  position: relative;
+}
+
+.overviewMeta > span + span::before {
+  content: '·';
+  position: absolute;
+  left: -8px;
+  color: var(--nm-text-3);
+}
+
+.overviewProfile {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--nm-text-1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overviewFootnote {
+  margin-top: 8px;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.overviewActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.overviewActions .probeRow {
+  display: contents;
+  margin-top: 0;
+}
+
+.overviewActions .modelGhost,
+.overviewActions .modelMsg {
+  width: 100%;
+}
+
+.overviewActions .modelMsg {
+  grid-column: 1 / -1;
+}
+
+/* ── 已保存配置 ─────────────────────────────────────────── */
+.configWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.profileBlock {
+  padding: 12px 16px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.profileHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.profileHeading {
+  min-width: 0;
+}
+
+.profileTitle,
+.editorTitle,
+.advancedTitle {
+  margin: 2px 0 0;
+  color: var(--nm-text-1);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.profileHint,
+.editorDesc,
+.advancedDesc {
+  margin: 4px 0 0;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.profileCount {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.profileList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.profileChip {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.profileChip:hover {
+  border-color: var(--nm-border-hover);
+}
+
+.profileChip[data-active] {
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 7%, var(--nm-bg-card));
+}
+
+.profilePick {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-areas:
+    'dot label'
+    '. model'
+    '. state';
+  column-gap: 6px;
+  row-gap: 3px;
+  align-items: center;
+  width: 100%;
+  min-height: 88px;
+  padding: 12px 28px 12px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-1);
+  text-align: left;
+  cursor: pointer;
+}
+
+.profilePick:focus-visible {
+  outline: 2px solid var(--nm-brand);
+  outline-offset: -2px;
+}
+
+.profilePick:disabled {
+  cursor: default;
+}
+
+.profileDot {
+  grid-area: dot;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+}
+
+.profileChip[data-active] .profileDot {
+  background: var(--nm-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-brand) 12%, transparent);
+}
+
+.profileLabel {
+  grid-area: label;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileModel {
+  grid-area: model;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileState {
+  grid-area: state;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+}
+
+.profileChip[data-active] .profileState {
+  color: var(--nm-text-2);
+}
+
+.profileDel {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.profileDel:hover:enabled {
+  opacity: 1;
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+}
+
+.profileDel:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.profileAddCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 88px;
+  padding: 12px;
+  border: 1px dashed var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  background: transparent;
+  color: var(--nm-text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.profileAddCard:hover:enabled {
+  border-color: var(--nm-brand);
+  background: color-mix(in srgb, var(--nm-brand) 4%, transparent);
+  color: var(--nm-text-1);
+}
+
+.profileAddCard:focus-visible {
+  outline: 2px solid var(--nm-brand);
+  outline-offset: 2px;
+}
+
+.profileAddCard:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.profileDraftCard {
+  border-color: color-mix(in srgb, var(--nm-amber) 42%, var(--nm-border));
+  color: var(--nm-amber);
+}
+
+.profileAddIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.profileAddTitle {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profileAddHint {
+  margin-top: 2px;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+}
+
+.profileEmpty {
+  display: block;
+  margin-top: 8px;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@container (min-width: 768px) {
+  .configWorkspace {
+    grid-template-columns: minmax(200px, 232px) minmax(0, 1fr);
+  }
+
+  .configWorkspace .profileHead {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .configWorkspace .profileList {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .configWorkspace .profileCount {
+    align-self: flex-start;
+  }
+}
+
+/* ── 对话模型编辑区 ─────────────────────────────────────── */
+.editorCard,
+.advancedSection {
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.editorHead,
+.advancedHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editorHeadText {
+  min-width: 0;
+}
+
+.editState {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.editState[data-dirty] {
+  border-color: color-mix(in srgb, var(--nm-amber) 36%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-amber) 8%, transparent);
+  color: var(--nm-amber);
+}
+
+.templateBox {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+}
+
+.templateText {
+  min-width: 0;
+}
+
+.templateTitle {
+  display: block;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.templateHint {
+  display: block;
+  margin-top: 2px;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+}
+
+.templateSelect {
+  flex: 0 0 min(230px, 42%);
+  min-width: 160px;
+}
+
+.formSection {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--nm-border);
+}
+
+.formSectionHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.formStep {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  color: var(--nm-brand);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.formTitle {
+  margin: 0;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.formHint {
+  margin: 2px 0 0;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+}
+
+.formGrid,
 .modelGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  margin-top: 12px;
 }
-/* 窄屏单列：两列在 <720px 下每格过挤，输入框会被压到看不全 */
-@media (max-width: 720px) {
-  .modelGrid { grid-template-columns: 1fr; }
+
+.fieldWide {
+  grid-column: 1 / -1;
 }
+
 .modelField {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
+
+.fieldHint {
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+}
+
 .modelInput {
   width: 100%;
-  padding: 8px 10px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-dense-r);
   background: var(--nm-bg-input);
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-family: inherit;
+  font-size: var(--nm-fs-md);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.modelInput:focus { border-color: var(--nm-brand); }
-/* ── 三块模型面板（2026-09-30 重做）──────────────────────────────────────────
- * 对话 / 嵌入 / 重排序各是一张可折叠卡：标题栏整条是真按钮（键盘可达），
- * 右侧一个状态徽标 + 一个会旋转的折叠箭头。收起时**不渲染**内容（由 TSX 决定，不是 CSS 隐藏）。
- * 间距一律用偶数值（几何规范守卫：奇数间距在文件级棘轮里只许减）。 */
-.panelCard {
+
+.modelInput:focus {
+  border-color: var(--nm-brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-brand) 12%, transparent);
+}
+
+.keyWrap {
+  position: relative;
+  display: flex;
+}
+
+.modelInputKey {
+  padding-right: 36px;
+}
+
+.keyEye {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.keyEye:hover {
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+}
+
+.keyEye[data-on] {
+  color: var(--nm-brand);
+}
+
+.modelPicker {
+  display: flex;
+  align-items: end;
+  gap: 8px;
   margin-top: 12px;
+}
+
+.modelPickerField {
+  flex: 1;
+}
+
+.modelPickerMeta {
+  min-height: 16px;
+  margin-top: 6px;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+}
+
+/* ── 高级能力：继续使用可折叠面板外壳 ───────────────────── */
+.advancedTitle {
+  margin-top: 2px;
+}
+
+.advancedCount {
+  flex: 0 0 auto;
+  max-width: 48%;
+  padding: 3px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+  text-align: right;
+}
+
+.panelCard {
+  margin-top: 10px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
-  background: var(--nm-bg-card);
+  background: var(--nm-bg-input);
   overflow: hidden;
+}
+
+.panelCard:first-of-type {
+  margin-top: 12px;
 }
 
 .panelCard[data-open] {
@@ -55,11 +687,8 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
-  /* 标题栏是整条按钮：被挤压时文字会**逐字换行**成竖排（实测 375px 手机上
-     被压到 80px 宽、309px 高）。标题与副标题各自不换行，由 `.panelHeadText`
-     的 `min-width: 0` + 省略号收尾。 */
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .panelHead:hover {
@@ -73,50 +702,51 @@
 
 .panelHeadText {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
   min-width: 0;
 }
 
 .panelTitle {
+  color: var(--nm-text-1);
   font-size: var(--nm-dense-fs);
   font-weight: 700;
-  color: var(--nm-text-1);
 }
 
 .panelSub {
-  font-size: var(--nm-dense-fs-xs);
-  line-height: 1.5;
+  overflow: hidden;
   color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.5;
+  text-overflow: ellipsis;
 }
 
 .panelStatus {
   flex: 0 0 auto;
   max-width: 40%;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
   padding: 2px 8px;
-  border-radius: var(--nm-r-sm);
   border: 1px solid var(--nm-border);
-  font-size: var(--nm-dense-fs-xs);
+  border-radius: var(--nm-r-sm);
   color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panelStatus[data-tone='idle'] {
-  border-color: var(--nm-border);
   color: var(--nm-text-3);
 }
 
 .panelStatus[data-tone='warn'] {
-  border-color: var(--nm-amber-45, rgba(245, 158, 11, 0.45));
+  border-color: color-mix(in srgb, var(--nm-amber) 38%, var(--nm-border));
   color: var(--nm-amber);
 }
 
 .panelCaret {
-  flex: 0 0 auto;
   display: inline-flex;
+  flex: 0 0 auto;
   color: var(--nm-text-3);
 }
 
@@ -133,231 +763,224 @@
   border-top: 1px solid var(--nm-border);
 }
 
-/* 探针行：一条测试按钮独占一行（结果行贴在它下面，就在那一块的输入框下方）。 */
+.roleTip {
+  margin: 12px 0 0;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.6;
+}
+
+/* ── 探针与通用按钮 ─────────────────────────────────────── */
 .probeRow {
   display: flex;
   gap: 8px;
   margin-top: 12px;
 }
 
-/* 面板里的口径提示（换模型要重建向量 / 精排失败不影响问答）。 */
-.roleTip {
-  margin: 12px 0 0;
-  font-size: var(--nm-dense-fs-xs);
-  line-height: 1.6;
-  color: var(--nm-text-3);
-}
-
-/* 余额行：账户级信息，不属于任何一块模型面板。 */
-.balanceRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 12px;
-}
-/* API Key 输入 + 小眼睛（显示/隐藏明文）。
-   按钮绝对定位在输入框右侧 —— 不占流内空间，切换时输入框宽度不变。 */
-.keyWrap {
-  position: relative;
-  display: flex;
-}
-.modelInputKey { padding-right: 34px; }
-.keyEye {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--nm-r-sm);
-  background: transparent;
-  color: var(--nm-text-3);
-  cursor: pointer;
-  transition: color var(--nm-t-fast), background var(--nm-t-fast);
-}
-.keyEye:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.keyEye[data-on] { color: var(--nm-brand); }
-/* 探针区（2026-09-30）：连接测试 / 余额查询 —— 两个**只读**动作，与「获取 / 保存」分行。
-   混在一行会让人以为它们也会改配置。与 .modelActions 同为等宽两列，上边距一致。 */
-/* 探针行改成 .probeRow（每块面板一条按钮），旧的 .modelProbes 两列网格已不再使用。 */
-/* 操作区：获取（次要）| 保存（主要），等宽两列；消息整行独立 */
-.modelActions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 14px;
-}
-.modelPrimary {
-  padding: 8px 10px;
-  border: 1px solid var(--nm-brand);
+.modelPrimary,
+.modelGhost {
+  min-height: 32px;
+  padding: 6px 12px;
   border-radius: var(--nm-r-md);
-  background: var(--nm-brand);
-  color: var(--nm-on-accent);
-  font-size: 12px;
+  font-size: var(--nm-fs-md);
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
+
+.modelPrimary {
+  border: 1px solid var(--nm-brand);
+  background: var(--nm-brand);
+  color: var(--nm-on-accent);
+}
+
 .modelPrimary:hover:enabled {
   filter: brightness(0.96);
 }
-.modelPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .modelGhost {
-  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: transparent;
+  background: var(--nm-bg-input);
   color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.modelGhost:hover:enabled { border-color: var(--nm-border-hover); color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.modelGhost:disabled { opacity: 0.5; cursor: not-allowed; }
-.modelMsg {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-radius: var(--nm-dense-r);
-  font-size: 12px;
-  line-height: 1.6;
-  word-break: break-word;
-}
-.msgOk {
-  color: var(--nm-success-text);
-  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
-}
-.msgErr {
-  color: var(--nm-danger-text);
-  background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 24%, transparent);
+  font-weight: 500;
 }
 
-/* ── 已配置模型切换条（本轮新增）──────────────────────────────
-   为什么单独成块：这块是「查看 + 切换」，下面的表单是「编辑」，两者语义不同 ——
-   不加视觉分隔时，用户会把芯片当成表单的一部分，然后去等一个「保存」按钮。 */
-.profileBlock {
+.modelGhost:hover:enabled {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.modelPrimary:disabled,
+.modelGhost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modelMsg {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--nm-dense-r);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.msgOk {
+  border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+  color: var(--nm-success-text);
+}
+
+.msgErr {
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 24%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
+  color: var(--nm-danger-text);
+}
+
+/* ── 粘性保存栏 ─────────────────────────────────────────── */
+.saveDock {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
 }
-.profileHead {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.profileTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
-.profileHint { font-size: 12px; color: var(--nm-text-3); }
-.profileSpacer { flex: 1 1 auto; min-width: 0; }
-.profileAdd {
-  padding: 4px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.profileAdd:hover:enabled { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
-.profileAdd:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* 芯片网格：自适应列数，窄屏自然塌成单列（不给固定列数，免得多写一组断点）。 */
-.profileList {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-.profileChip {
-  position: relative;
+.saveFeedback {
   display: flex;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-card);
-  overflow: hidden;
-  transition: border-color 0.15s, background 0.15s;
-}
-.profileChip:hover { border-color: var(--nm-border-hover); }
-/* 使用中的那条：主色边框 + 极浅绿底，一眼认得出此刻在用谁。 */
-.profileChip[data-active] {
-  border-color: var(--nm-brand);
-  background: color-mix(in srgb, var(--nm-brand) 8%, transparent);
-}
-/* 三行栅格：① 圆点 + 名称 ② 模型名 ③ 上次使用。
-   为什么要栅格而不是 column 的 flex：圆点必须是①行里的一个格，否则它会单独占一行
-   （而用绝对定位贴上去的话，长名字会从它上面压过去）。 */
-.profilePick {
-  display: grid;
-  grid-template-columns: 6px minmax(0, 1fr);
-  grid-template-areas:
-    "dot label"
-    ". model"
-    ". state";
-  align-items: center;
-  column-gap: 6px;
-  row-gap: 3px;
-  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
   min-width: 0;
-  padding: 8px 26px 8px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--nm-text-1);
-  text-align: left;
-  cursor: pointer;
-}
-.profilePick:disabled { cursor: default; }
-.profileDot {
-  grid-area: dot;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--nm-text-3);
-}
-.profileChip[data-active] .profileDot { background: var(--nm-brand); }
-.profileLabel { grid-area: label; font-size: 13px; font-weight: 600; }
-.profileModel {
-  grid-area: model;
-  max-width: 100%;
-  font-size: 11px;
-  font-family: var(--nm-font-mono);
   color: var(--nm-text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.55;
 }
-.profileState { grid-area: state; font-size: 11px; color: var(--nm-text-3); }
-.profileChip[data-active] .profileState { color: var(--nm-text-2); }
-/* 删除：常驻但低对比（可见才找得到、才按得到 —— 用 opacity:0 藏起来会让键盘用户摸不到）；
-   hover 才升到危险色。 */
-.profileDel {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--nm-r-sm);
-  background: transparent;
-  color: var(--nm-text-3);
-  font-size: 14px;
+
+.saveFeedback[data-tone='draft'] {
+  color: var(--nm-amber);
+}
+
+.saveFeedback[data-tone='ok'] {
+  color: var(--nm-success-text);
+}
+
+.saveFeedback[data-tone='err'] {
+  color: var(--nm-danger-text);
+}
+
+.saveFeedbackMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: var(--nm-fs-xs);
+  font-weight: 700;
   line-height: 1;
-  opacity: 0.5;
-  cursor: pointer;
-  transition: all 0.15s;
 }
-.profileDel:hover:enabled { opacity: 1; color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 12%, transparent); }
-.profileDel:disabled { cursor: not-allowed; opacity: 0.3; }
-.profileEmpty { font-size: 12px; color: var(--nm-text-3); line-height: 1.6; }
+
+.saveFeedbackText {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.saveActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .overviewCard {
+    grid-template-columns: 1fr;
+  }
+
+  .templateBox {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .templateSelect {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .saveDock {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .saveActions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 560px) {
+  .formGrid,
+  .modelGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldWide {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .overviewCard,
+  .profileBlock,
+  .editorCard,
+  .advancedSection {
+    padding: 12px;
+  }
+
+  .overviewActions {
+    grid-template-columns: 1fr;
+  }
+
+  .editorHead,
+  .advancedHead,
+  .profileHead {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .profileCount,
+  .advancedCount {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .profileList {
+    grid-template-columns: 1fr;
+  }
+
+  .modelPicker {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saveActions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .saveActions .modelPrimary,
+  .saveActions .modelGhost {
+    width: 100%;
+  }
+}

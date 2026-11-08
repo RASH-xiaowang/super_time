@@ -18,6 +18,8 @@
    谁在打包顺序后面谁赢 —— 双类名把特异度抬到 0-2-0，与注入顺序解耦。 */
 .shell.shell {
   overflow: hidden;
+  container-type: inline-size;
+  container-name: kbfiles;
 }
 
 .head {
@@ -25,6 +27,103 @@
   display: flex;
   flex-direction: column;
   gap: var(--nm-dense-g3);
+}
+
+/* 页头「文档工具」菜单：主操作只留「添加文件」，低频/出网动作收在这里。 */
+.toolsMenu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.toolsTrigger {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.toolsTrigger:hover,
+.toolsTrigger[aria-expanded='true'] {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.toolsTrigger:focus-visible {
+  outline: 2px solid var(--nm-brand);
+  outline-offset: 1px;
+}
+
+.toolsPanel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 196px;
+  padding: 4px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-popup);
+}
+
+.toolsItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolsItem:hover:not(:disabled) {
+  background: var(--nm-bg-hover);
+}
+
+.toolsItem:focus-visible {
+  outline: 2px solid var(--nm-brand);
+  outline-offset: -2px;
+}
+
+.toolsItem:disabled {
+  color: var(--nm-text-3);
+  cursor: not-allowed;
+}
+
+.toolsHint {
+  flex: none;
+  font-size: 11px;
+  color: var(--nm-text-3);
+}
+
+.toolsDivider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--nm-border);
+}
+
+@container kbfiles (max-width: 560px) {
+  .toolsPanel {
+    right: auto;
+    left: 0;
+  }
 }
 
 /* 承接容器查询的包裹层：容器查询只能作用于容器的后代，
@@ -100,6 +199,16 @@
 }
 .fillCard [class*='_empty_'] { flex: 1 1 auto; justify-content: center; }
 .listPaneWide [class*='_empty_'] { flex: 1 1 auto; justify-content: center; }
+.loadingPane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--nm-s-2);
+  padding-bottom: var(--nm-empty-pad);
+}
 
 /* 正文展开时列表自己滚。
    ⚠️ 滚动容器必须落在 **.list 自己** 身上，不能给 .listPane：.listPane 用的是 kit 的
@@ -215,6 +324,10 @@
   cursor: help;
 }
 
+.titleName {
+  flex: 0 0 auto;
+}
+
 /* 「已登记 N / M」：比标题小一号，弱化但不至于看不见。 */
 .titleMeta {
   font-size: var(--nm-dense-fs-sm);
@@ -227,11 +340,14 @@
    状态是数据，样式表里不该为它准备并行的三份。 */
 .indexChip {
   margin-left: var(--nm-dense-g3);
+  min-width: 0;
   padding: 1px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   font-size: var(--nm-dense-fs-xs);
   color: var(--nm-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -425,7 +541,7 @@
   color: var(--nm-text-1);
   word-break: break-all;
 }
-.mono { font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: var(--nm-dense-fs-xs); }
+.mono { font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: var(--nm-dense-fs-xs); }
 
 /* 解析结论 / 降级说明。unsupported 与 failed 用**不同颜色**：
    前者是本机还没有解析器（等升级），后者是真的解析出错（要换文件）——
@@ -944,4 +1060,92 @@
 
 .head [class*='_searchBox_'] {
   flex: 0 1 280px;
+}
+
+@container kbfiles (max-width: 560px) {
+  .head {
+    gap: 4px;
+  }
+
+  .head [class*='_panelHeader_'] {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .head [class*='_panelTitleWrap_'] {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .head [class*='_panelActions_'] {
+    width: auto;
+    max-width: 62%;
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    margin-left: auto;
+  }
+
+  /* 标题行在手机上必须真的能收缩：h2 基础规则是 flex: 0 0 auto，配合
+   * titleRow 的 max-content 会把整行撑到 350px 以上，再由祖先 overflow:hidden
+   * 硬裁（390 档实测 scrollWidth-clientWidth≈174px）。这里给 h2 参与收缩的
+   * 权限，低优先级的登记数可以省略，索引状态吃剩余宽度并保留 title 全文。 */
+  .head h2[class*='_panelTitle_'] {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .titleRow {
+    width: 100%;
+    max-width: 100%;
+    gap: var(--nm-dense-g2);
+    overflow: hidden;
+  }
+
+  .titleMeta {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .indexChip {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .head [class*='_toolbar_'] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 8px;
+  }
+
+  .head [class*='_toolbarLeft_'] {
+    display: contents;
+  }
+
+  .head [class*='_searchBox_'] {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    flex: none;
+  }
+
+  .stateBar {
+    grid-column: 1;
+    flex-wrap: nowrap;
+  }
+
+  .head [class*='_toolbarRight_'] {
+    grid-column: 2;
+    min-width: 0;
+    justify-content: flex-end;
+  }
 }

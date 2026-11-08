@@ -22,8 +22,6 @@ const TASK_RECORD = read('task-center-record-modal.tsx')
 const MOMENTS_SCOPE = read('moments-scope.ts')
 const QUOTE_LAYOUT = read('chats-rows.module.css')
 const TASK_LAYOUT = read('task-center.module.css')
-const CLAWBOT_RAIL = read('clawbot-rail.tsx')
-const CLAWBOT_SETTINGS = read('clawbot-settings.tsx')
 
 describe('群名与用户名的头像接线', () => {
   it('群信息里的群主用 owner username，而不是拿展示名猜头像', () => {
@@ -44,8 +42,8 @@ describe('群名与用户名的头像接线', () => {
     expect(GRAPH_MENU_CONTROLLER).toContain("selfUsername={p.selfUsername ?? ''}")
   })
 
-  it('红包状态行与合并转发预览都只在已有真实 username 时带头像', () => {
-    expect(CARDS).toContain('<IdentityName name={senderName || rp.senderName || rp.sender} username={avatarUsername} size={14} />')
+  it('卡片不再渲染内部支付状态，合并转发预览仍只使用真实 username', () => {
+    expect(CARDS).not.toContain('PayStatusLine')
     expect(CARDS).toContain('username={record.sourceUsername ?? \'\'}')
     expect(CARDS).toContain('function ChatlogPreview')
   })
@@ -76,10 +74,4 @@ describe('群名与用户名的头像接线', () => {
     expect(MOMENTS_SCOPE).toContain('moment.username?.trim() ?? \'\'')
   })
 
-  it('Clawbot 实例轨与绑定卡使用真实 wxid / avatar，未知身份才回退首字占位', () => {
-    expect(CLAWBOT_RAIL).toContain('username={it.wxid ?? \'\'}')
-    expect(CLAWBOT_RAIL).toContain('avatarUrl={it.avatar ?? undefined}')
-    expect(CLAWBOT_SETTINGS).toContain('const username = (binding?.wxid ?? inst?.wxid ?? \'\').trim()')
-    expect(CLAWBOT_SETTINGS).toContain('const avatarUrl = (binding?.avatar ?? inst?.avatar ?? \'\').trim() || undefined')
-  })
 })

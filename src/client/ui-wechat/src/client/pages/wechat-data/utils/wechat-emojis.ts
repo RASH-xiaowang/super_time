@@ -856,7 +856,7 @@ export default WechatEmojiTable;
  * ⚠️ 必须是**相对**路径：渲染进程用 `mainWindow.loadFile()` 加载
  * `src/client/ui-dist/index.html`（`file://` 源）。绝对路径 `/wxemoji/…` 在
  * `file://` 下会被解析成盘符根目录 `file:///wxemoji/…`，图片全部 404。
- * `vite.config.js` 的 `base: './'` 与 public 目录（`src/client/ui-app/public`）
+ * `vite.config.mjs` 的 `base: './'` 与 public 目录（`src/client/ui-app/public`）
  * 共同保证构建后 `ui-dist/wxemoji/*.png` 与本文件同级可寻址。
  */
 const EMOJI_BASE = './wxemoji/';

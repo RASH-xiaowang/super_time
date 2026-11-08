@@ -4,11 +4,11 @@
  * 状态、构造与共享辅助在 `gateway-core.ts`；方法面按域分几层壳（`gateway-read.ts` /
  * `gateway-ask-ops.ts` / `gateway-media-ops.ts` / `gateway-export-ops.ts` /
  * `gateway-voice-ops.ts` / `gateway-config-ops.ts` / `gateway-laya-ops.ts` /
- * `gateway-db-health.ts` / `gateway-clawbot.ts`）。装饰器标记落在
+ * `gateway-db-health.ts`）。装饰器标记落在
  * 最派生原型上，所以对外接口与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
 export type { StreamJob } from './gateway-support.ts';
-import { GatewayClawbot } from './gateway-clawbot.ts';
-export declare class WechatDataGateway extends GatewayClawbot {
+import { GatewayDbHealth } from './gateway-db-health.ts';
+export declare class WechatDataGateway extends GatewayDbHealth {
 }
 export default WechatDataGateway;

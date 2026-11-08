@@ -37,7 +37,7 @@ describe('取原图的接线', () => {
   it('成功后让取图 effect 重跑，并把失败原因显示出来', () => {
     expect(/if \(r\.ok\)[\s\S]{0,240}setNonce\(\(n\) => n \+ 1\)/.test(body.replace(/\r/g, '')),
       '取回原图后必须 bump nonce 触发重新取图（否则界面一直停在缩略图）').toBe(true)
-    expect(body.includes('r.error ??'), '取不到时要把后端给的原因显示出来，不能只说失败').toBe(true)
+    expect(body.includes('imageOriginalFailureText(r.error)'), '取不到时要把失败原因收敛成用户能理解的提示').toBe(true)
   })
 
   it('apiGetImageOriginal 不走结果缓存', () => {

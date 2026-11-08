@@ -10,9 +10,9 @@
  * @vitest-environment node
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { STREAM_JOB_CAP, normalizeJobId } from '../src/gateway-support.ts'
+import { STREAM_JOB_CAP, STREAM_JOB_TERMINAL_TTL_MS, normalizeJobId } from '../src/gateway-support.ts'
 import type { StreamJob } from '../src/gateway-support.ts'
-import { finishStreamJobIn, streamControlFor } from '../src/gateway-jobs.ts'
+import { finishStreamJobIn, pruneSettledStreamJobs, streamControlFor } from '../src/gateway-jobs.ts'
 
 let jobs: Map<string, StreamJob>
 let emitted: Array<Record<string, unknown>>
@@ -94,17 +94,33 @@ describe('进度推送', () => {
     expect(() => { ctrl.onProgress?.({ phase: 'zipping', done: 1, total: 2 }) }).not.toThrow()
     expect(slot('job-d')?.progress, '事件失败就把进度也丢掉 ⇒ 任务跑完了进度还停在 null').toEqual({ phase: 'zipping', done: 1, total: 2 })
   })
+
+  it('同一阶段的分页/分条目重计数被钳住，done/total 不倒退', () => {
+    const ctrl = streamControlFor(jobs, emit, 'job-monotonic')
+    ctrl.onProgress?.({ phase: 'sessions', done: 5, total: 20 })
+    ctrl.onProgress?.({ phase: 'sessions', done: 2, total: 20 })
+    expect(slot('job-monotonic')?.progress).toEqual({ phase: 'sessions', done: 5, total: 20 })
+    expect(emitted.at(-1)).toMatchObject({ phase: 'sessions', done: 5, total: 20 })
+  })
 })
 
 describe('槽表的上限', () => {
-  it('到上限时淘汰最早那一个槽（Map 保持插入序）', () => {
+  it('到上限时优先淘汰最早终态槽，不挤掉仍在运行的任务', () => {
     for (let i = 0; i < STREAM_JOB_CAP; i += 1) streamControlFor(jobs, emit, `old-${String(i)}`)
     expect(jobs.size).toBe(STREAM_JOB_CAP)
+    finishStreamJobIn(jobs, 'old-0')
     streamControlFor(jobs, emit, 'brand-new')
     expect(jobs.size, '不淘汰就会无限涨（每个槽都握着一把 AbortController）').toBe(STREAM_JOB_CAP)
     expect(jobs.has('old-0'), '该淘汰最早那个').toBe(false)
     expect(jobs.has(`old-${String(STREAM_JOB_CAP - 1)}`)).toBe(true)
     expect(jobs.has('brand-new')).toBe(true)
+  })
+
+  it('上限内全是运行中任务时明确拒绝新任务，不能拿掉别人的取消令牌', () => {
+    for (let i = 0; i < STREAM_JOB_CAP; i += 1) streamControlFor(jobs, emit, `live-${String(i)}`)
+    expect(() => streamControlFor(jobs, emit, 'overflow')).toThrow(/任务过多/)
+    expect(jobs.size).toBe(STREAM_JOB_CAP)
+    expect(jobs.has('live-0'), '最先启动的那一轮也必须仍可取消').toBe(true)
   })
 
   it('复用**已存在**的 jobId 时一个都不淘汰（否则会把当前这轮的槽自己挤掉）', () => {
@@ -136,5 +152,57 @@ describe('收尾', () => {
     streamControlFor(jobs, emit, 'fail-1')
     finishStreamJobIn(jobs, 'fail-1', 'database is locked')
     expect(slot('fail-1')).toMatchObject({ finished: true, error: 'database is locked' })
+  })
+
+  it('成功终态事件使用累计高水位并明确 finished/status，避免 2000 条突然倒退成 1 条', () => {
+    const ctrl = streamControlFor(jobs, emit, 'terminal-ok')
+    ctrl.onProgress?.({ phase: 'collect', done: 2000, total: 0 })
+    finishStreamJobIn(jobs, 'terminal-ok', undefined, ctrl.jobToken)
+    expect(slot('terminal-ok')).toMatchObject({
+      finished: true,
+      status: 'ok',
+      progress: { phase: 'done', done: 2000, total: 2000 },
+    })
+    expect(emitted.at(-1)).toMatchObject({
+      jobId: 'terminal-ok',
+      phase: 'done',
+      done: 2000,
+      total: 2000,
+      finished: true,
+      status: 'ok',
+    })
+  })
+
+  it('取消终态明确标 canceled；失败终态明确标 error', () => {
+    const canceled = streamControlFor(jobs, emit, 'terminal-cancel')
+    canceled.onProgress?.({ phase: 'copy', done: 4, total: 10 })
+    finishStreamJobIn(jobs, 'terminal-cancel', '操作已取消', canceled.jobToken, true)
+    expect(slot('terminal-cancel')).toMatchObject({ finished: true, status: 'canceled', error: '操作已取消' })
+
+    const failed = streamControlFor(jobs, emit, 'terminal-error')
+    finishStreamJobIn(jobs, 'terminal-error', 'database is locked', failed.jobToken)
+    expect(slot('terminal-error')).toMatchObject({ finished: true, status: 'error', error: 'database is locked' })
+    expect(emitted.at(-1)).toMatchObject({ finished: true, status: 'error', error: 'database is locked' })
+  })
+
+  it('旧代次晚到的 finish 不能把复用同一 jobId 的新任务标成完成', () => {
+    const old = streamControlFor(jobs, emit, 'generation')
+    expect(old.signal?.aborted).toBe(false)
+    const fresh = streamControlFor(jobs, emit, 'generation')
+    expect(old.signal?.aborted, '同 id 再开跑时旧任务必须被主动中止').toBe(true)
+
+    finishStreamJobIn(jobs, 'generation', '旧任务取消', old.jobToken, true)
+    expect(slot('generation')).toMatchObject({ finished: false, status: 'running' })
+    fresh.onProgress?.({ phase: 'prepare', done: 1, total: 2 })
+    expect(slot('generation')?.progress).toEqual({ phase: 'prepare', done: 1, total: 2 })
+  })
+
+  it('终态超过保留期后从槽表清理，后期轮询按未知任务处理', () => {
+    const ctrl = streamControlFor(jobs, emit, 'expire')
+    finishStreamJobIn(jobs, 'expire', undefined, ctrl.jobToken)
+    expect(slot('expire')?.finished).toBe(true)
+    expect(pruneSettledStreamJobs(jobs, Date.now() + STREAM_JOB_TERMINAL_TTL_MS - 1)).toBe(0)
+    expect(pruneSettledStreamJobs(jobs, Date.now() + STREAM_JOB_TERMINAL_TTL_MS + 1)).toBe(1)
+    expect(jobs.has('expire')).toBe(false)
   })
 })

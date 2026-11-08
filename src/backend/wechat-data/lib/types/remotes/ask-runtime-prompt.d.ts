@@ -14,7 +14,6 @@ import type { AnswerRuntimeCitation, AnswerRuntimeResourceCitation } from '../qu
 import type { AnswerStatus, EvidenceBundle } from '../query/answer-runtime/evidence.ts';
 import type { AnswerProfileId } from '../query/tools/profiles.ts';
 import { auditGrounding } from '../query/grounding.ts';
-import type { GroundingReplyMode } from '../query/grounding.ts';
 import type { AskCitation } from '../types.ts';
 import type { RunChatFn } from './ask-run-chat.ts';
 /** 自动回复送模型的一张图（canonical base64）；最多 2 张。 */
@@ -23,30 +22,24 @@ export interface AskImageInput {
     mediaType: string;
     name?: string;
 }
-/** 本轮问答的数据面。 */
-export type AskDataScope = 'wechat' | 'kb-only';
 /** 一次问答的范围。 */
 export interface AskScope {
     username?: string;
+    /** 会话显示名；用于让模型把单聊里的「他/她/对方」对应到当前联系人。 */
+    displayName?: string;
     from?: string;
     to?: string;
 }
-/** 自动回复的聊天兜底提示词。 */
-export declare function buildEmptyChatPrompt(question: string, history?: ReadonlyArray<{
-    role: 'user' | 'assistant';
-    content: string;
-}>, imageNote?: string): string;
 /** 解析本次问答要用的系统提示词。 */
-export declare function resolveSystemPrompt(override: string | undefined, dataScope?: AskDataScope): string;
+export declare function resolveSystemPrompt(override: string | undefined): string;
 /** 构造用户消息里的回答规则。 */
-export declare function buildSynthRules(dataScope: AskDataScope | undefined, timeGuardRule: string): string;
+export declare function buildSynthRules(timeGuardRule: string): string;
 /** 「没检索到原文」时的回答文案。 */
-export declare function emptyAnswerText(dataScope: AskDataScope | undefined, profile?: AnswerProfileId): string;
-/** 自动回复核对失败后的安全文案。 */
-export declare const CHAT_WITHHELD_ANSWER = "\u8FD9\u4E2A\u6570\u5B57\u6211\u8FD9\u8FB9\u6CA1\u6CD5\u786E\u8BA4\uFF0C\u6211\u5148\u6838\u5B9E\u4E00\u4E0B\u518D\u56DE\u4F60\u3002";
+export declare function emptyAnswerText(profile?: AnswerProfileId): string;
 /** 检索范围（只保留非空字段）。 */
 export declare function buildAskScope(options: {
     username?: string;
+    usernameName?: string;
     from?: string;
     to?: string;
 }): AskScope;
@@ -75,7 +68,7 @@ export declare const IMAGE_UNSUPPORTED_NOTE = "\n\n\uFF08\u6CE8\u610F\uFF1A\u5F5
 /** 累加一次模型调用的 usage。 */
 export declare function addTokenUsage(acc: TokenUsage | undefined, next: TokenUsage | undefined): TokenUsage | undefined;
 /** 图片被供应商拒绝时按纯文本重试。 */
-export declare function runChatWithImagesFallback(runChat: RunChatFn, op: (category: 'task', action: string, status: 'fail', target: string, detail: string) => void, system: string, userText: string, maxTokens: number, onDelta?: (text: string) => void, onReasoning?: (text: string) => void, images?: readonly ImageBlock[]): Promise<string>;
+export declare function runChatWithImagesFallback(runChat: RunChatFn, op: (category: 'task', action: string, status: 'fail', target: string, detail: string) => void, system: string, userText: string, maxTokens: number, onDelta?: (text: string) => void, onReasoning?: (text: string) => void, images?: readonly ImageBlock[], signal?: AbortSignal): Promise<string>;
 /**
  * 回答的数据来源说明。
  *
@@ -90,18 +83,16 @@ export declare function askBasisLine(citations: ReadonlyArray<{
         fileName?: string;
     };
     snippet?: string;
-}>, dataScope?: AskDataScope, resourceCount?: number): string;
+}>, resourceCount?: number): string;
 /** 归一知识库 id。 */
 export declare function normalizeKbId(kbId: number | undefined): number | undefined;
 /** 选择入口 profile。 */
 export declare function selectAskProfile(options: {
     source?: string;
-    dataScope?: AskDataScope;
 }): AnswerProfileId;
 /** 工具选择阶段的系统提示：只讲规则与范围，不塞原始证据。 */
 export declare function buildToolSelectionSystem(input: {
     profile: AnswerProfileId;
-    dataScope?: AskDataScope;
     scope: AskScope;
     kbId?: number;
     question: string;
@@ -138,50 +129,53 @@ export declare function buildSynthesisPrompt(input: {
     }>;
     imageHint: string;
     contextBlock: string;
-    dataScope?: AskDataScope;
     timeGuardRule: string;
 }): string;
 /** 运行时的证据正文，按 evidenceId 索引。 */
 export declare function evidenceTexts(evidence: EvidenceBundle): Map<string, string>;
+/**
+ * Final-answer safety net: replace any remaining internal identities with the
+ * citation's real display name (or a neutral human label when it is unknown).
+ */
+export declare function replaceAnswerIdentities(answer: string, citations: readonly AnswerRuntimeCitation[]): string;
 /** 资源正文（参与接地审计，但不计入 [n]）。 */
 export declare function resourceTexts(resources: readonly AnswerRuntimeResourceCitation[]): string[];
 /**
  * 回答是否实际使用了给定证据。
  *
- * 自动回复没有 [n] 角标，仅“存在引用”不能证明模型真的用了材料：模型完全
+ * 资源回答没有 [n] 角标，仅“存在引用”不能证明模型真的用了材料：模型完全
  * 可能返回一段通用话术。这里用确定性的内容重合做保守校验：
  *   · 回答里 ≥4 个连续汉字原样出现在证据中，直接通过；
  *   · 否则比较去噪后的汉字二元组，短回答至少重合 1 个、长回答至少 2 个；
  *   · 英文/型号词至少重合 1 个长度 ≥3 的词。
- * 这不能替代语义审查，但能拦住“有引用、回答却完全无关”的无人值守发送。
+ * 这不能替代语义审查，但能拦住“有引用、回答却完全无关”的结论。
  */
 export declare function hasEvidenceSupport(answer: string, evidenceTexts: readonly string[]): boolean;
-/**
- * 按场景完成接地核对与最多一次回炉。
- *
- * 与旧实现保持同一协议：手动问答要求 [n]；自动回复禁止 [n]，但高风险值仍核对。
- */
+/** 按普通问答或独立资源模式完成接地核对与最多一次回炉。 */
 export declare function resolveGroundedAnswer(input: {
-    /**
-     * `resource` 只用于「文件/收藏/朋友圈等资源」作为唯一证据的回答：
-     * 它和自动回复一样禁止 [n]，但不套用微信闲聊口吻。
-     */
-    mode: GroundingReplyMode | 'resource';
+    /** `resource` 用于「文件/收藏/朋友圈等资源」作为唯一证据的回答。 */
+    mode: 'cited' | 'resource';
     answer: string;
     citationCount: number;
     synthPrompt: string;
     evidenceFor: (cited: number[]) => string[];
     allEvidence: string[];
+    /** 用户问题/范围里已经明确给出的值；复述这些值不算编造。 */
+    trustedValueText?: string;
     systemPrompt: string;
     runChat: RunChatFn;
     images?: readonly ImageBlock[];
+    /** 取消/内部 deadline；修复调用必须沿用，不能让超时请求继续占着供应商连接。 */
+    signal?: AbortSignal;
+    /** 超时降级时关闭第二次模型调用，只对首版回答做确定性核对。 */
+    allowRepair?: boolean;
 }): Promise<{
     answer: string;
     citedIndexes: number[];
     withheld: boolean;
     grounding: ReturnType<typeof auditGrounding>;
     repaired: boolean;
-    /** 回答是否与证据有可验证的内容重合（`chat` / `resource` 模式使用）。 */
+    /** 回答是否与证据有可验证的内容重合（`resource` 模式使用）。 */
     evidenceUsed: boolean;
 }>;
 /** 运行态状态 → 旧结果的 insufficient 口径。 */

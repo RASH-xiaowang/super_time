@@ -12,7 +12,9 @@
  *    写回记录时只落 `external_task_id` 等非敏感结果；
  *  · 失败原因 ≤500 字落 `task_triggers.callback_error`，不含任何凭据。
  */
+import { randomUUID } from 'node:crypto'
 import { withWritableDb } from './db-open.ts'
+import type { DatabaseSync } from './db-open.ts'
 import { findVendor } from './rpa/registry.ts'
 import {
   missingReadyFields,
@@ -47,6 +49,16 @@ import type {
 const CALLBACK_ERROR_MAX = 500
 /** 一批待投递记录的上限（定时器每拍只处理这么多，避免一次拍住事件循环太久）。 */
 const PENDING_DISPATCH_LIMIT = 10
+/**
+ * 单条投递租约。租约由心跳持续续期，因此它只需要覆盖“一次续期失败到下一个 owner
+ * 可接管”的窗口，而不是覆盖整个网络请求。
+ */
+const CALLBACK_LEASE_MS = 120_000
+/** 默认心跳周期；必须显著小于租约，连续一次续期失败就中止在途请求。 */
+const CALLBACK_HEARTBEAT_MS = 20_000
+/** SQLite 是同步 API：撞锁不用 busy_timeout 冻住 worker，而是让出事件循环后重试。 */
+const BUSY_RETRY_ATTEMPTS = 4
+const BUSY_RETRY_BASE_MS = 25
 
 /** 投递依赖：图片解码、隐私闸与 fetch 都由调用方注入（query 层不 import gateway 侧）。 */
 export interface TaskDispatchDeps {
@@ -81,6 +93,44 @@ export interface PendingDispatchResult {
   errors?: string[]
 }
 
+/** 自动批投只接管 pending；人工重投允许 pending（尚未发出）和 failed。 */
+type DispatchClaimMode = 'automatic' | 'manual'
+
+/** 测试可注入时钟/owner/租期；生产调用不传。 */
+export interface TaskDispatchOptions {
+  now?: number
+  leaseMs?: number
+  /** 心跳周期；0 = 关闭（只用于模拟进程已死亡/测试过期接管）。 */
+  heartbeatMs?: number
+  owner?: string
+}
+
+interface InternalDispatchOptions extends TaskDispatchOptions {
+  mode?: DispatchClaimMode
+}
+
+interface DispatchClaim {
+  id: number
+  owner: string
+  until: number
+  fence: number
+  status: TaskTriggerCallbackStatus
+}
+
+type DispatchClaimAttempt =
+  | { ok: true; claim: DispatchClaim }
+  | {
+    ok: false
+    reason: 'missing' | 'busy' | 'not-eligible'
+    status: TaskTriggerCallbackStatus
+  }
+
+interface InternalDispatchResult {
+  /** false = 本次没有可处理的记录（不存在或已被其它 worker 推进到终态）。 */
+  handled: boolean
+  result: TaskCallbackDispatchResult
+}
+
 /** 一次投递要读齐的三样东西：记录 / 所属任务 / 凭据原文。 */
 interface DispatchTarget {
   record?: TaskTriggerRecord
@@ -98,14 +148,14 @@ interface DispatchTarget {
  * @param triggerId - 触发记录 id。
  * @returns 记录 / 所属任务 / 凭据原文；找不到的部分缺省。
  */
-function readDispatchTarget(file: string, triggerId: number): DispatchTarget {
+function readDispatchTarget(file: string, triggerId: number, decryptedDir: string): DispatchTarget {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare('SELECT * FROM task_triggers WHERE id = ?').get(triggerId) as Record<string, unknown> | undefined
     if (triggerRow === undefined) return {}
-    const record = rowToTrigger(triggerRow)
+    const record = rowToTrigger(triggerRow, decryptedDir)
     const taskRow = db.prepare('SELECT * FROM task_info WHERE id = ?').get(record.taskId) as Record<string, unknown> | undefined
     if (taskRow === undefined) return { record }
-    const task = rowToTask(taskRow)
+    const task = rowToTask(taskRow, decryptedDir)
     return { record, task, secrets: secretsOfRow(taskRow, task.triggerMethod) }
   })
 }
@@ -122,36 +172,331 @@ function secretsOfRow(row: Record<string, unknown>, method: string): Record<stri
   return migrateLegacySecrets(method, taskCellStr(row['bazhuayu_api_key']))
 }
 
-/** 把投递结果写回记录（单语句 autocommit；写失败不影响已经发出的请求这一事实）。 */
-function saveDispatchResult(
+function normalizeCallbackStatus(raw: unknown): TaskTriggerCallbackStatus {
+  return raw === 'sent' || raw === 'failed' || raw === 'skipped' || raw === 'sent_unconfirmed'
+    ? raw
+    : 'pending'
+}
+
+function isBusyDatabaseError(error: unknown): boolean {
+  const row = error as { code?: unknown; errcode?: unknown; message?: unknown } | null | undefined
+  const errcode = Number(row?.errcode)
+  if (errcode === 5 || errcode === 6) return true
+  const text = String(row?.code ?? '') + '\n' + String(row?.message ?? error ?? '')
+  return /SQLITE_BUSY|SQLITE_LOCKED|database(?: table)? is locked/i.test(text)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms) })
+}
+
+/** 对短小的同步 SQLite 写入做有界异步重试；等待时让出事件循环，不冻住 worker。 */
+async function withBusyRetry<T>(fn: () => T): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= BUSY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return fn()
+    } catch (e) {
+      lastError = e
+      if (!isBusyDatabaseError(e) || attempt >= BUSY_RETRY_ATTEMPTS) throw e
+      await sleep(BUSY_RETRY_BASE_MS * attempt)
+    }
+  }
+  throw lastError
+}
+
+function resolveLeaseMs(value: unknown): number {
+  return Number.isFinite(value) ? Math.max(1, Math.trunc(value as number)) : CALLBACK_LEASE_MS
+}
+
+function resolveHeartbeatMs(leaseMs: number, value: unknown): number {
+  if (value !== undefined && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value as number))
+  }
+  return Math.min(CALLBACK_HEARTBEAT_MS, Math.max(1, Math.floor(leaseMs / 3)))
+}
+
+function writeTx<T>(db: DatabaseSync, fn: () => T): T {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const value = fn()
+    db.exec('COMMIT')
+    return value
+  } catch (e) {
+    try { db.exec('ROLLBACK') } catch { /* Keep the original database error. */ }
+    throw e
+  }
+}
+
+/**
+ * 原子抢占一条记录的出网权。
+ *
+ * 状态仍保留 pending/failed，新增字段只做内部租约：这样旧 UI/契约无需新增
+ * `dispatching` 状态。`BEGIN IMMEDIATE` 内的读-判-写保证后台批投、人工重投与
+ * 多进程扫描最多只有一个 owner 能进入 HTTP 阶段。
+ */
+function claimTaskTriggerDispatch(
   file: string,
   triggerId: number,
-  status: TaskTriggerCallbackStatus,
-  error: string,
-  externalTaskId: string,
-): void {
-  withWritableDb(file, (db) => {
+  options: InternalDispatchOptions = {},
+): DispatchClaimAttempt {
+  const mode = options.mode ?? 'manual'
+  const now = Number.isFinite(options.now) ? Math.trunc(options.now as number) : Date.now()
+  const leaseMs = resolveLeaseMs(options.leaseMs)
+  const owner = typeof options.owner === 'string' && options.owner.trim() !== ''
+    ? options.owner.trim()
+    : randomUUID()
+  const until = now + leaseMs
+  return withWritableDb(file, (db) => {
     ensureTaskSchema(db)
-    db.prepare(`UPDATE task_triggers SET
-      callback_status = ?, callback_at = ?, callback_error = ?, external_task_id = ?
-      WHERE id = ?`).run(status, Date.now(), error, externalTaskId, triggerId)
+    return writeTx(db, (): DispatchClaimAttempt => {
+      const row = db.prepare(`SELECT callback_status, callback_lease_until, callback_lease_fence
+        FROM task_triggers WHERE id = ? LIMIT 1`).get(triggerId) as Record<string, unknown> | undefined
+      if (row === undefined) {
+        return { ok: false, reason: 'missing', status: 'skipped' }
+      }
+      const status = normalizeCallbackStatus(row['callback_status'])
+      const activeUntil = taskCellNum(row['callback_lease_until'])
+      if (activeUntil > now) {
+        return { ok: false, reason: 'busy', status }
+      }
+      const eligible = mode === 'automatic'
+        ? status === 'pending'
+        : status === 'pending' || status === 'failed' || status === 'sent_unconfirmed'
+      if (!eligible) {
+        return { ok: false, reason: 'not-eligible', status }
+      }
+      const updated = db.prepare(`UPDATE task_triggers SET
+        callback_lease_owner = ?,
+        callback_lease_until = ?,
+        callback_lease_fence = callback_lease_fence + 1
+        WHERE id = ?
+          AND callback_status = ?
+          AND callback_lease_until <= ?`).run(owner, until, triggerId, status, now)
+      if (Number(updated.changes) !== 1) {
+        return { ok: false, reason: 'busy', status }
+      }
+      return {
+        ok: true,
+        claim: {
+          id: triggerId,
+          owner,
+          until,
+          fence: taskCellNum(row['callback_lease_fence']) + 1,
+          status,
+        },
+      }
+    })
+  })
+}
+
+/** 原子续租；owner/fence 任一不匹配都表示本 owner 已失去出网权。 */
+function renewDispatchClaim(file: string, claim: DispatchClaim, leaseMs: number): boolean {
+  const until = Date.now() + leaseMs
+  return withWritableDb(file, (db) => {
+    ensureTaskSchema(db)
+    const updated = db.prepare(`UPDATE task_triggers SET callback_lease_until = ?
+      WHERE id = ?
+        AND callback_lease_owner = ?
+        AND callback_lease_fence = ?`).run(until, claim.id, claim.owner, claim.fence)
+    return Number(updated.changes) === 1
   })
 }
 
 /**
- * 批量投递时把「任务没配好 / 厂商已下线」的 pending 记录落成 `skipped`。
+ * 首次出网前把记录持久化为 `sent_unconfirmed`。
  *
- * 预检 skipped 不出网；但若不落库，同一批 pending 会被每一拍重复捞到（队头阻塞，
- * 后面配置齐全的记录永远排不上）。落库失败只影响下一拍重试，不改变本次返回。
- * @param file - 任务库路径。
- * @param triggerId - 触发记录 id。
- * @param error - 跳过原因（≤500 字）。
+ * 这是崩溃安全的写前标记：进程在请求发出前后崩溃，后台批投都不会再自动认领它；
+ * 用户核对厂商控制台后，仍可走人工重投。
  */
-function persistSkipped(file: string, triggerId: number, error: string): void {
+function markDispatchAttemptStarted(file: string, claim: DispatchClaim): boolean {
+  return withWritableDb(file, (db) => {
+    ensureTaskSchema(db)
+    const updated = db.prepare(`UPDATE task_triggers SET
+      callback_status = 'sent_unconfirmed',
+      callback_at = NULL,
+      callback_error = ''
+      WHERE id = ?
+        AND callback_lease_owner = ?
+        AND callback_lease_fence = ?
+        AND callback_status = ?`).run(claim.id, claim.owner, claim.fence, claim.status)
+    return Number(updated.changes) === 1
+  })
+}
+
+type SaveDispatchOutcome = 'saved' | 'stale'
+
+/** 预检失败没有出网：人工重投只释放租约，不把记录改成 skipped。 */
+function releaseDispatchClaim(file: string, claim: DispatchClaim): SaveDispatchOutcome {
+  return withWritableDb(file, (db) => {
+    ensureTaskSchema(db)
+    const updated = db.prepare(`UPDATE task_triggers SET
+      callback_lease_owner = '',
+      callback_lease_until = 0
+      WHERE id = ?
+        AND callback_lease_owner = ?
+        AND callback_lease_fence = ?`).run(claim.id, claim.owner, claim.fence)
+    return Number(updated.changes) === 1 ? 'saved' : 'stale'
+  })
+}
+
+interface DispatchLeaseGuard {
+  signal: AbortSignal
+  stop: () => void
+  outboundStarted: () => boolean
+  markOutboundStarted: () => Promise<boolean>
+}
+
+/**
+ * 启动租约心跳。心跳不重试：一次续租失败就撤销 AbortController，让在途 fetch
+ * 立即停止。这样“仍然活着但租约已被接管”的旧 worker 不会继续制造远端副作用。
+ */
+function startDispatchLeaseGuard(
+  file: string,
+  claim: DispatchClaim,
+  leaseMs: number,
+  heartbeatMs: number,
+): DispatchLeaseGuard {
+  const controller = new AbortController()
+  let stopped = false
+  let lost = false
+  let outbound = false
+  const loseLease = (): void => {
+    if (stopped || lost) return
+    lost = true
+    controller.abort()
+  }
+  const timer = heartbeatMs > 0
+    ? setInterval(() => {
+      try {
+        if (!renewDispatchClaim(file, claim, leaseMs)) loseLease()
+      } catch {
+        loseLease()
+      }
+    }, heartbeatMs)
+    : null
+  timer?.unref?.()
+
+  return {
+    signal: controller.signal,
+    stop(): void {
+      if (stopped) return
+      stopped = true
+      if (timer !== null) clearInterval(timer)
+    },
+    outboundStarted(): boolean {
+      return outbound
+    },
+    async markOutboundStarted(): Promise<boolean> {
+      if (outbound) return true
+      if (lost) return false
+      try {
+        const marked = await withBusyRetry(() => markDispatchAttemptStarted(file, claim))
+        if (!marked) {
+          loseLease()
+          return false
+        }
+        outbound = true
+        return true
+      } catch {
+        loseLease()
+        return false
+      }
+    },
+  }
+}
+
+/** 只有仍持有同一 owner/fence 的调用才能写终态，旧 owner 的晚到结果会被拒绝。 */
+function saveDispatchResultClaimed(
+  file: string,
+  claim: DispatchClaim,
+  status: TaskTriggerCallbackStatus,
+  error: string,
+  externalTaskId: string,
+): SaveDispatchOutcome {
+  return withWritableDb(file, (db) => {
+    ensureTaskSchema(db)
+    const updated = db.prepare(`UPDATE task_triggers SET
+      callback_status = ?,
+      callback_at = ?,
+      callback_error = ?,
+      external_task_id = ?,
+      callback_lease_owner = '',
+      callback_lease_until = 0
+      WHERE id = ?
+        AND callback_lease_owner = ?
+        AND callback_lease_fence = ?`).run(
+      status,
+      Date.now(),
+      error,
+      externalTaskId,
+      claim.id,
+      claim.owner,
+      claim.fence,
+    )
+    return Number(updated.changes) === 1 ? 'saved' : 'stale'
+  })
+}
+
+function currentCallbackStatus(file: string, triggerId: number): TaskTriggerCallbackStatus {
   try {
-    saveDispatchResult(file, triggerId, 'skipped', error.slice(0, CALLBACK_ERROR_MAX), '')
+    return withWritableDb(file, (db) => {
+      ensureTaskSchema(db)
+      const row = db.prepare('SELECT callback_status FROM task_triggers WHERE id = ? LIMIT 1')
+        .get(triggerId) as Record<string, unknown> | undefined
+      return row === undefined ? 'skipped' : normalizeCallbackStatus(row['callback_status'])
+    })
   } catch {
-    /* 落库失败：下一拍还会再遇到它，不改变本次计数 */
+    return 'pending'
+  }
+}
+
+function unconfirmedResult(
+  result: TaskCallbackDispatchResult,
+  detail: string,
+): TaskCallbackDispatchResult {
+  const out: TaskCallbackDispatchResult = {
+    ok: false,
+    status: 'sent_unconfirmed',
+    error: '远端可能已受理，但本地结果未确认；不会自动重投，请核对后手动处理'
+      + (detail === '' ? '' : '（' + detail + '）'),
+  }
+  if (result.externalTaskId !== undefined && result.externalTaskId !== '') {
+    out.externalTaskId = result.externalTaskId
+  }
+  return out
+}
+
+async function persistClaimedResult(
+  file: string,
+  claim: DispatchClaim,
+  result: TaskCallbackDispatchResult,
+  error: string,
+  outboundStarted: boolean,
+): Promise<TaskCallbackDispatchResult> {
+  let saved: SaveDispatchOutcome
+  try {
+    saved = await withBusyRetry(() => saveDispatchResultClaimed(
+      file,
+      claim,
+      result.status,
+      error.slice(0, CALLBACK_ERROR_MAX),
+      result.externalTaskId ?? '',
+    ))
+  } catch (e) {
+    if (outboundStarted || result.ok) return unconfirmedResult(result, taskErrorText(e))
+    const suffix = '（结果保存失败：' + taskErrorText(e) + '）'
+    return { ...result, error: (result.error ?? error) + suffix }
+  }
+  if (saved === 'saved') return result
+  const current = currentCallbackStatus(file, claim.id)
+  if (outboundStarted && current !== 'sent' && current !== 'failed' && current !== 'skipped') {
+    return unconfirmedResult(result, '投递租约已失效')
+  }
+  return {
+    ok: false,
+    status: current,
+    error: '投递租约已失效，本次结果未覆盖新状态；请刷新后核对',
   }
 }
 
@@ -239,65 +584,174 @@ function outcomeResult(outcome: RpaDispatchOutcome): { result: TaskCallbackDispa
  * @param deps - 解码 / 隐私闸 / fetch 注入。
  * @returns 投递结果（含 skipped 的几种可读原因）。
  */
-export async function dispatchTaskCallback(
+function claimFailureResult(attempt: Extract<DispatchClaimAttempt, { ok: false }>): InternalDispatchResult {
+  if (attempt.reason === 'missing') {
+    return { handled: false, result: skipped('触发记录不存在') }
+  }
+  if (attempt.reason === 'busy') {
+    return {
+      // 批投的 SELECT 与 claim 之间可能有另一 worker 先抢到租约。这里不能当成
+      // “本拍没事发生”静默吞掉，否则扫描日志和失败计数会掩盖真实争用。
+      handled: true,
+      result: {
+        ok: false,
+        status: attempt.status,
+        error: '该记录正在投递中，请稍后刷新后再试',
+      },
+    }
+  }
+  const error = attempt.status === 'sent'
+    ? '记录已投递，不能重复投递'
+    : attempt.status === 'skipped'
+      ? '记录已跳过，不能重复投递'
+      : attempt.status === 'sent_unconfirmed'
+        ? '记录投递结果未确认，请先核对后再人工重投'
+        : '记录当前状态不可投递：' + attempt.status
+  return { handled: false, result: { ok: false, status: attempt.status, error } }
+}
+
+async function dispatchTaskCallbackInternal(
   decryptedDir: string,
   decodedDir: string,
   triggerId: number,
   deps: TaskDispatchDeps,
-): Promise<TaskCallbackDispatchResult> {
+  options: InternalDispatchOptions = {},
+): Promise<InternalDispatchResult> {
   const id = taskCellNum(triggerId)
-  if (id <= 0) return skipped('触发记录不存在')
-  if (!storeExists(decryptedDir)) return skipped('触发记录不存在')
+  if (id <= 0 || !storeExists(decryptedDir)) {
+    return { handled: false, result: skipped('触发记录不存在') }
+  }
   const file = taskDbPath(decryptedDir)
+  const leaseMs = resolveLeaseMs(options.leaseMs)
+  const heartbeatMs = resolveHeartbeatMs(leaseMs, options.heartbeatMs)
+  let claimAttempt: DispatchClaimAttempt
+  try {
+    claimAttempt = await withBusyRetry(() => claimTaskTriggerDispatch(file, id, options))
+  } catch (e) {
+    return {
+      handled: true,
+      result: {
+        ok: false,
+        status: 'pending',
+        error: '读取/认领触发记录失败：' + taskErrorText(e),
+      },
+    }
+  }
+  if (!claimAttempt.ok) return claimFailureResult(claimAttempt)
+  const claim = claimAttempt.claim
+  const guard = startDispatchLeaseGuard(file, claim, leaseMs, heartbeatMs)
+
+  const finishSkipped = async (error: string): Promise<InternalDispatchResult> => {
+    guard.stop()
+    if (options.mode === 'automatic') {
+      return {
+        handled: true,
+        result: await persistClaimedResult(file, claim, skipped(error), error, guard.outboundStarted()),
+      }
+    }
+    try {
+      const released = await withBusyRetry(() => releaseDispatchClaim(file, claim))
+      return {
+        handled: true,
+        result: released === 'saved'
+          ? skipped(error)
+          : skipped(error + '（投递租约已失效）'),
+      }
+    } catch (e) {
+      return {
+        handled: true,
+        result: skipped(error + '（释放投递租约失败：' + taskErrorText(e) + '）'),
+      }
+    }
+  }
+
   let target: DispatchTarget
   try {
-    target = readDispatchTarget(file, id)
+    target = readDispatchTarget(file, id, decryptedDir)
   } catch (e) {
-    return skipped('读取触发记录失败：' + taskErrorText(e))
+    return finishSkipped('读取触发记录失败：' + taskErrorText(e))
   }
   const { record, task } = target
-  if (record === undefined) return skipped('触发记录不存在')
-  if (task === undefined) return skipped('任务不存在或已删除')
-  if (task.status !== 'ready') return skipped('任务未完善')
+  if (record === undefined) return finishSkipped('触发记录不存在')
+  if (task === undefined) return finishSkipped('任务不存在或已删除')
+  if (task.status !== 'ready') return finishSkipped('任务未完善')
   const adapter = findVendor(task.triggerMethod)
-  if (adapter === undefined) return skipped('触发方式不可用：' + task.triggerMethod)
+  if (adapter === undefined) return finishSkipped('触发方式不可用：' + task.triggerMethod)
   const missing = missingReadyFields(adapter.descriptor, task.triggerConfig, task.triggerSecretSet)
-  if (missing.length > 0) return skipped('触发配置不完整：' + missing.join('、'))
+  if (missing.length > 0) return finishSkipped('触发配置不完整：' + missing.join('、'))
 
-  // 所有厂商都发过闸文本；`contentOutbound=false` 的厂商拿空串（当前没有这种厂商）。
-  const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
-  const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
-  const text = adapter.descriptor.governance.contentOutbound ? gatedText : ''
-  const recordContext = buildRecordContext(task, record, text)
-  const imageLinks = usesImageParamSources(adapter.descriptor, task.triggerConfig)
-    ? await buildRpaImageLinks(
-      recordContext,
-      { decodedDir, decodeImage: deps.decodeImage },
-      deps.mediaLinks?.(record.id),
-    )
-    : []
-  const ctx = buildInvocationContext(task, record, target.secrets ?? {}, recordContext, imageLinks)
+  let ctx: RpaInvocationContext
+  try {
+    // 所有厂商都发过闸文本；`contentOutbound=false` 的厂商拿空串（当前没有这种厂商）。
+    const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
+    const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
+    const text = adapter.descriptor.governance.contentOutbound ? gatedText : ''
+    const recordContext = buildRecordContext(task, record, text)
+    const imageLinks = usesImageParamSources(adapter.descriptor, task.triggerConfig)
+      ? await buildRpaImageLinks(
+        recordContext,
+        { decodedDir, decodeImage: deps.decodeImage },
+        deps.mediaLinks?.(record.id),
+      )
+      : []
+    ctx = buildInvocationContext(task, record, target.secrets ?? {}, recordContext, imageLinks)
+  } catch (e) {
+    return finishSkipped('投递准备失败：' + taskErrorText(e))
+  }
+
   let outcome: RpaDispatchOutcome
   try {
     outcome = await dispatchRpaRecord({
       adapter,
       ctx,
-      deps: deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl },
+      deps: {
+        ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+        signal: guard.signal,
+        onOutboundAttempt: async () => {
+          if (!(await guard.markOutboundStarted())) {
+            throw new Error('投递租约已失效，已中止出网')
+          }
+        },
+      },
       buildDeps: { decodedDir, decodeImage: deps.decodeImage },
     })
   } catch (e) {
     outcome = { status: 'failed', error: taskErrorText(e) }
   }
+  const abortedAfterOutbound = guard.signal.aborted && guard.outboundStarted()
+  guard.stop()
   const { result, error } = outcomeResult(outcome)
-  try {
-    saveDispatchResult(file, id, result.status, error, result.externalTaskId ?? '')
-  } catch (e) {
-    // 请求可能已经到达对端；此时如实说"结果没存下来"，而不是回一个会诱发重复投递的失败。
-    return result.ok
-      ? { ok: true, status: 'sent', error: '投递结果保存失败：' + taskErrorText(e) }
-      : { ok: false, status: result.status, error: error + '（结果保存失败：' + taskErrorText(e) + '）' }
+  if (abortedAfterOutbound) {
+    const current = currentCallbackStatus(file, claim.id)
+    if (current === 'sent' || current === 'failed') {
+      return {
+        handled: true,
+        result: {
+          ok: false,
+          status: current,
+          error: '投递租约已失效，本次结果未覆盖新状态；请刷新后核对',
+        },
+      }
+    }
+    return {
+      handled: true,
+      result: unconfirmedResult(result, '租约续期失败，在途请求已中止'),
+    }
   }
-  return result
+  return {
+    handled: true,
+    result: await persistClaimedResult(file, claim, result, error, guard.outboundStarted()),
+  }
+}
+
+export async function dispatchTaskCallback(
+  decryptedDir: string,
+  decodedDir: string,
+  triggerId: number,
+  deps: TaskDispatchDeps,
+  options: TaskDispatchOptions = {},
+): Promise<TaskCallbackDispatchResult> {
+  return (await dispatchTaskCallbackInternal(decryptedDir, decodedDir, triggerId, deps, options)).result
 }
 
 /**
@@ -321,6 +775,7 @@ export async function dispatchPendingTaskCallbacks(
 ): Promise<PendingDispatchResult> {
   if (!storeExists(decryptedDir)) return { dispatched: 0, failed: 0 }
   const cap = clampTaskInt(limit, PENDING_DISPATCH_LIMIT, 1, 100)
+  const now = Date.now()
   let ids: number[] = []
   try {
     ids = withWritableDb(taskDbPath(decryptedDir), (db) => {
@@ -328,8 +783,10 @@ export async function dispatchPendingTaskCallbacks(
       ensureTaskSchema(db)
       const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
         JOIN task_info i ON i.id = t.task_id
-        WHERE t.callback_status = 'pending' AND i.status = 'ready'
-        ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(cap) as Array<{ id?: unknown }>
+        WHERE t.callback_status = 'pending'
+          AND i.status = 'ready'
+          AND t.callback_lease_until <= ?
+        ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(now, cap) as Array<{ id?: unknown }>
       return rows.map((row) => taskCellNum(row.id))
     })
   } catch (e) {
@@ -338,16 +795,17 @@ export async function dispatchPendingTaskCallbacks(
   let dispatched = 0
   let failed = 0
   const errors: string[] = []
-  const file = taskDbPath(decryptedDir)
   for (const id of ids) {
     try {
-      const r = await dispatchTaskCallback(decryptedDir, decodedDir, id, deps)
+      const entry = await dispatchTaskCallbackInternal(decryptedDir, decodedDir, id, deps, {
+        mode: 'automatic',
+      })
+      if (!entry.handled) continue
+      const r = entry.result
       if (r.ok) dispatched += 1
       else {
         failed += 1
         if (errors.length < 10) errors.push('记录 ' + String(id) + '：' + (r.error ?? r.status))
-        // 预检 skipped 不出网但必须落库：否则每拍重复捞到同一批，队头阻塞后面的记录。
-        if (r.status === 'skipped') persistSkipped(file, id, r.error ?? '')
       }
     } catch (e) {
       failed += 1

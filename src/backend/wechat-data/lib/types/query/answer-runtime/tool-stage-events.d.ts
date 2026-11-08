@@ -12,6 +12,7 @@ export interface ToolStageInput {
     key: string;
     label: string;
     status: AnswerRuntimeStage['status'];
+    round?: number;
     callId: string;
     toolName: string;
     argumentsSummary: string;
@@ -28,6 +29,6 @@ export interface ToolStageInput {
 /** 发射阶段事件；监听器抛错时静默忽略。 */
 export declare function safeEmit(emit: AnswerRuntimeEmitStage | undefined, stage: AnswerRuntimeStage): void;
 /** 发射普通流水线阶段。 */
-export declare function emitStage(emit: AnswerRuntimeEmitStage | undefined, key: string, label: string, status: AnswerRuntimeStage['status'], detail?: string): void;
+export declare function emitStage(emit: AnswerRuntimeEmitStage | undefined, key: string, label: string, status: AnswerRuntimeStage['status'], detail?: string, round?: number): void;
 /** 发射工具阶段；只组装结构化白名单字段。 */
 export declare function emitToolStage(emit: AnswerRuntimeEmitStage | undefined, input: ToolStageInput): void;

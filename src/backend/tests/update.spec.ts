@@ -87,6 +87,7 @@ function serviceFor(updater: any, over: Record<string, unknown> = {}) {
     isPackaged: true,
     currentVersion: '1.0.0',
     env: {},
+    stopBackend: () => Promise.resolve(),
     onState: (s: any) => broadcasts.push(s),
     ...over,
   })
@@ -296,8 +297,158 @@ describe('服务行为：安装闸门', () => {
     expect(r.ok).toBe(true)
     // quitAndInstall 排在下一个 tick：先把 IPC 响应发出去，再开始退出
     expect(up.installs).toEqual([])
-    await new Promise((res) => setImmediate(res))
-    expect(up.installs).toEqual([[false, true]])
+    await vi.waitFor(() => {
+      expect(up.installs).toEqual([[false, true]])
+    })
+  })
+
+  it('install 必须先等后端 stop ACK，再调用 quitAndInstall', async () => {
+    const up = fakeUpdater()
+    const order: string[] = []
+    let releaseStop: (() => void) | undefined
+    const { svc } = serviceFor(up, {
+      stopBackend: () => new Promise<void>((resolve) => {
+        order.push('stop-start')
+        releaseStop = () => {
+          order.push('stop-ack')
+          resolve()
+        }
+      }),
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => { expect(order).toEqual(['stop-start']) })
+    expect(up.installs).toEqual([])
+
+    releaseStop?.()
+    await vi.waitFor(() => { expect(up.installs).toEqual([[false, true]]) })
+    expect(order).toEqual(['stop-start', 'stop-ack'])
+  })
+
+  it('连续点击安装只启动一次 stop/quitAndInstall', async () => {
+    const up = fakeUpdater()
+    let stops = 0
+    let releaseStop: (() => void) | undefined
+    const { svc } = serviceFor(up, {
+      stopBackend: () => new Promise<void>((resolve) => {
+        stops += 1
+        releaseStop = resolve
+      }),
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => { expect(stops).toBe(1) })
+    expect(up.installs).toEqual([])
+
+    releaseStop?.()
+    await vi.waitFor(() => { expect(up.installs).toEqual([[false, true]]) })
+    expect(stops).toBe(1)
+  })
+
+  it('stop 成功但 quitAndInstall 抛错 ⇒ 调用 stop 返回的 restart，并可重新安装', async () => {
+    const up = fakeUpdater()
+    const order: string[] = []
+    let installAttempts = 0
+    up.quitAndInstall = () => {
+      installAttempts += 1
+      order.push(`install-${String(installAttempts)}`)
+      if (installAttempts === 1) throw new Error('installer failed')
+      up.installs.push([false, true])
+    }
+    const { svc } = serviceFor(up, {
+      stopBackend: async () => {
+        order.push('stop-ack')
+        return {
+          restart: async () => {
+            order.push('restart')
+          },
+        }
+      },
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => {
+      expect(order).toEqual(['stop-ack', 'install-1', 'restart'])
+    })
+
+    // 失败后安装闸门恢复，后端也已重新拉起；用户再点一次可以继续安装。
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => {
+      expect(up.installs).toEqual([[false, true]])
+    })
+    expect(order).toEqual(['stop-ack', 'install-1', 'restart', 'stop-ack', 'install-2'])
+  })
+
+  it('也支持显式 restartBackend 钩子，优先级高于 stop 返回值', async () => {
+    const up = fakeUpdater()
+    const order: string[] = []
+    up.quitAndInstall = () => {
+      order.push('install')
+      throw new Error('installer failed')
+    }
+    const { svc } = serviceFor(up, {
+      stopBackend: async () => {
+        order.push('stop')
+        return { restart: () => { order.push('stop-result-restart') } }
+      },
+      restartBackend: () => {
+        order.push('explicit-restart')
+      },
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => {
+      expect(order).toEqual(['stop', 'install', 'explicit-restart'])
+    })
+  })
+
+  it('后端 stop 失败时不启动安装器', async () => {
+    const up = fakeUpdater()
+    const errors: unknown[] = []
+    const { svc } = serviceFor(up, {
+      stopBackend: () => Promise.reject(new Error('dispose failed')),
+      log: (level: string, args: unknown[]) => {
+        if (level === 'error') errors.push(args)
+      },
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => { expect(errors).toHaveLength(1) })
+    expect(up.installs).toEqual([])
+  })
+
+  it('无 stop 钩子时拒绝安装', async () => {
+    const up = fakeUpdater()
+    const errors: unknown[] = []
+    const { svc } = serviceFor(up, {
+      stopBackend: undefined,
+      log: (level: string, args: unknown[]) => {
+        if (level === 'error') errors.push(args)
+      },
+    })
+    await svc.check({ manual: true })
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('update-downloaded', { version: '1.2.0' })
+
+    expect(svc.install()).toEqual({ ok: true })
+    await vi.waitFor(() => { expect(errors).toHaveLength(1) })
+    expect(up.installs).toEqual([])
   })
 
   it('dispose 之后事件不再改状态，定时器也不再触发', async () => {
@@ -508,6 +659,8 @@ describe('接线守卫：真实存在、且取值来自该来的地方', () => {
     expect(create.length, 'main.js 里找不到 createUpdateService(...) 的真实调用点').toBeGreaterThan(0)
     // 实参里必须真的把 autoUpdater 传进去（忘了传 = 服务永远报 unavailable）
     expect(create[0]!.args.join(',')).toContain('autoUpdater')
+    // 安装顺序：main 必须把 supervisor.stop 注入更新服务，不能只靠 before-quit 兜底。
+    expect(create[0]!.args.join(',')).toContain('stopBackend: () => backendSupervisor.stop()')
     // 加载必须是 require('electron-updater')，且出现在 try 里（它失败不能拖垮启动）
     expect(mainSrc).toContain("require('electron-updater')")
     const at = mainSrc.indexOf("require('electron-updater')")

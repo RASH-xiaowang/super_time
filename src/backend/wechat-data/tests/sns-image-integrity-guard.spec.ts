@@ -252,9 +252,14 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
     expect(mediaCache).toContain('MEDIA_MAX_BYTES')
     expect(mediaCache).not.toContain('MEDIA_MAX_ENTRIES')
     // 必须盯住**那道提前返回的闸门本身**，不能只盯「出现过这个常量」——
-    // 循环里还有一处 `total <= MEDIA_MAX_BYTES`，只查常量的话把闸门改成 `if (true)`
-    // 照样能过（M406 就是这么漏过去的）。
-    expect(mediaCache).toMatch(/if \(total <= MEDIA_MAX_BYTES \|\| rows\.length === 0\)/)
+    // 删除循环里还有一处 `total <= MEDIA_MAX_BYTES`，只查常量的话把闸门改成
+    // `if (true)` 照样能过（M406 就是这么漏过去的）。实现已改成游标统计，
+    // 这里同时钉住字节预算、游标取证和按字节递减删除，且禁止退回 getAll 物化整库。
+    expect(mediaCache).toMatch(/if \(total <= MEDIA_MAX_BYTES\) return/)
+    expect(mediaCache).toMatch(/index\.openCursor\(\)/)
+    expect(mediaCache).toMatch(/remaining -= entrySize\(cursor\.value as MediaEntry\)/)
+    expect(mediaCache).toMatch(/cursor\.delete\(\)/)
+    expect(mediaCache).not.toMatch(/getAll(?:Keys)?\(\)/)
     // 每条记录必须带 size，否则算不出真实占用（base64 串长度就是它的大小）
     expect(mediaCache).toMatch(/size\?: number/)
   })

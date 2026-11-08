@@ -185,9 +185,19 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     expect(hard.code, '进了名单还只记账 ⇒ ②档永远升级不上去').toBe('ARGS_SCHEMA')
   })
 
-  it('生成表缺口的四个方法由源码覆盖层补齐，且参数形状真的能判错', async () => {
+  it('生成表缺口的源码覆盖层覆盖历史、AI 回复、消息列表与陪伴方法', async () => {
     const schemas = await realSchemas()
-    for (const name of ['getSelfProfile', 'listRpaVendors', 'getFileImageDataUrls', 'revealTaskTriggerSecret']) {
+    for (const name of [
+      'getSelfProfile', 'listRpaVendors', 'getFileImageDataUrls', 'revealTaskTriggerSecret',
+      'getChatAiReplyState', 'getChatAiReplyDefaultWebhook', 'saveChatAiReplyDefaultWebhook',
+      'listEnabledChatAiReplyStates', 'setChatAiReplyEnabled', 'setChatAiReplyPersona',
+      'scanChatAiReplyNow',
+      'listMessageListRecords', 'listMessageListRules', 'saveMessageListRule',
+      'deleteMessageListRule', 'insertMessageListRecord', 'stageMessageListAttachment',
+      'resendMessageListRecord', 'batchResendMessageListRecords',
+      'batchDeleteMessageListRecords', 'ingestMessageListWebhook',
+      'getMessageListWebhookInfo', 'probeMessageListWebhook', 'queryMessageListWebhookJob',
+    ]) {
       expect(schemas.has(name), `${name} 仍不在合并后的 schema 表里`).toBe(true)
     }
 
@@ -197,6 +207,15 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     expect(checkSchema(schemas, 'revealTaskTriggerSecret', [{ id: '1' }], new Set()).verdict).toBe('mismatch')
     expect(checkSchema(schemas, 'getSelfProfile', [], new Set()).verdict).toBe('ok')
     expect(checkSchema(schemas, 'listRpaVendors', [], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'listMessageListRecords', [], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'listMessageListRecords', [{ status: 'pending' }], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'listMessageListRecords', [{ status: 'unknown' }], new Set()).verdict).toBe('mismatch')
+    expect(checkSchema(schemas, 'setChatAiReplyEnabled', [{
+      chatUsername: 'wxid_a', enabled: true, provider: 'custom-webhook',
+    }], new Set()).verdict).toBe('ok')
+    expect(checkSchema(schemas, 'setChatAiReplyEnabled', [{
+      chatUsername: 'wxid_a', enabled: true, provider: 'unknown',
+    }], new Set()).verdict).toBe('mismatch')
   })
 
   it('多余字段不算失败（面板可以先发后端还没认的字段），无 schema 的方法不算覆盖', async () => {
@@ -312,22 +331,6 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
      *     ②档（形状）对它们只是「影子」，进 `ENFORCED_SCHEMA_METHODS` 之前不拒任何调用。
      *   · 取值范围是 62 ≤ 未覆盖 ≤ 62；再涨（>62）说明又有新方法没被记进来，仍然会红。
      *
-     * 2026-10-16 把 62 抬到 **63**（ClawBot 实例别名新增 `@Remote('renameClawbotInstance')`）：
-     *   · 同一条成因（生成器不在本仓），同一条边界：63 ≤ 未覆盖 ≤ 63。
-     *   · 核对方式（可重跑）：`lib/typert.host.js` 里搜不到 `renameClawbotInstance`
-     *     ⇒ 未覆盖 = 196 − 133 = **63**。
-     *   · 它同样**不是新开的口子**：与另外 133 个方法走同一个 `guardCallArgs` 闸门（①档照常拦）。
-     *
-     * 2026-10-17 把 63 抬到 **64**（ClawBot 清除对话历史新增 `@Remote('clearClawbotMessages')`）：
-     *   · 同一条成因，同一条边界：64 ≤ 未覆盖 ≤ 64。
-     *   · 核对方式（可重跑）：`lib/typert.host.js` 里搜不到 `clearClawbotMessages`
-     *     ⇒ 未覆盖 = 197 − 133 = **64**。
-     *
-     * 2026-10-17 把 64 抬到 **65**（ClawBot 默认提示词新增 `@Remote('getClawbotDefaultPrompt')`）：
-     *   · 同一条成因，同一条边界：65 ≤ 未覆盖 ≤ 65。
-     *   · 核对方式（可重跑）：`lib/typert.host.js` 里搜不到 `getClawbotDefaultPrompt`
-     *     ⇒ 未覆盖 = 198 − 133 = **65**。
-     *
      * 2026-10-17 把 65 抬到 **66**（原图自动收割新增 `@Remote('originalHarvest')`）：
      *   · 同一条成因，同一条边界：66 ≤ 未覆盖 ≤ 66。
      *   · 核对方式（可重跑）：`lib/typert.host.js` 里搜不到 `originalHarvest`
@@ -368,6 +371,10 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
      *     `getFileImageDataUrls` / `revealTaskTriggerSecret` 后，覆盖 147 个、未覆盖回 72。
      *   · 这 4 个是真实遗漏，不应把基线抬到 76；覆盖层让它们重新受 ② 档影子校验。
      *   · 剩余 72 个仍是历史生成债务（生成器不在本仓），基线保持不变。
+     *
+     * 2026-10-31：退役功能方法面已删除，`@Remote` 总数与未覆盖数由 `info().argGuard`
+     * 现算；这里保留 72 作为**只降不升**的历史上界。新增方法仍必须补生成表或源码覆盖层，
+     * 不能通过抬高这个上界放行。
      */
     expect(ag!.uncovered, '未覆盖数变大了 ⇒ 新加的 @Remote 方法没有跟着生成 schema（②档对它永久失明）')
       .toBeLessThanOrEqual(72)

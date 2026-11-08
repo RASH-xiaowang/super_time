@@ -180,6 +180,7 @@ describe('M3：单会话导出的进度与取消', () => {
     }
     expect([...senders].sort(), '客户端一个 jobId 接口都没抓到 ⇒ 抓取口径失效').toEqual(
       [
+        'createBackup',
         'createEncryptedBackup',
         'exportAllSessions',
         'exportAnnualReport',

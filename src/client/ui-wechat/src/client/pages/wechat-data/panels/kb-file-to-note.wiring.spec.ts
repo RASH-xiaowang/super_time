@@ -85,6 +85,8 @@ describe('文件 → 笔记：界面入口', () => {
 
   it('MergedSections 的 render 能拿到 go 回调（否则空态跳不了分段）', () => {
     expect(merged, 'render 签名没有 go 参数').toMatch(/render: \(go: \(key: string\) => void\) => ReactNode/)
-    expect(merged, '没有把 go 传给 render').toMatch(/current\.render\(go\)/)
+    // 保活后可能同时挂载多个已访问分段，因此 go 必须传给**每个** section.render，
+    // 而不是只传给 current；否则后台保活面板里的跨分段入口仍会失效。
+    expect(merged, '没有把 go 传给已挂载分段的 render').toMatch(/section\.render\(go\)/)
   })
 })

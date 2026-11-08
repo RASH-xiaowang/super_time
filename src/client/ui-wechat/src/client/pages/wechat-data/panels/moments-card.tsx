@@ -51,12 +51,13 @@ import { clickableKey } from '../ui/kit.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar, MomentsMiniAvatar } from './moments-support.tsx'
-import { RemoteImg, localImageSrc } from './remote-img.tsx'
+import { RemoteImg } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
 import type { MediaKeySpec } from './moments-media.ts'
+import { MomentLiveBadge, momentLivePhoto } from './moments-live.tsx'
+import { MomentsVideoTile } from './moments-video-tile.tsx'
 import css from './moments.module.css'
-import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 import { withEnterprise } from './enterprise-identity.ts'
 
@@ -76,6 +77,7 @@ export interface MomentsCardProps {
   onlyMineComments: boolean
   selfUsername: string | null
   videoSrcs: Record<string, string>
+  videoLoading: Set<string>
   videoMeta: Record<string, { w: number; h: number }>
   setVideoMeta: React.Dispatch<React.SetStateAction<Record<string, { w: number; h: number }>>>
   videoFailed: Set<string>
@@ -91,6 +93,7 @@ export interface MomentsCardProps {
   toggleSocial: (tid: string) => void
   copyText: (text: string) => void
   loadVideo: (vk: string, v: SnsVideoRef) => void
+  reportVideoError: (vk: string, message: string) => void
   saveVideo: (v: SnsVideoRef) => void
   fullscreenVideo: (tile: Element | null) => void
   closeVideo: (vk: string) => void
@@ -177,12 +180,12 @@ export function MomentsCard({
   articleCovers, expandedTextByCard, expandedSocialByCard,
   commentCounts, commentSortByCard, onlyMineComments,
   selfUsername,
-  videoSrcs, videoMeta, setVideoMeta,
+  videoSrcs, videoLoading, videoMeta, setVideoMeta,
   videoFailed, videoErr, mediaKeySpec,
   setViewer, setDetail, setAuthorFilter,
   setOnlyMineComments, setCommentCounts, setCommentSortByCard,
   toggleText, toggleSocial, copyText,
-  loadVideo, saveVideo, fullscreenVideo,
+  loadVideo, reportVideoError, saveVideo, fullscreenVideo,
   closeVideo,
 }: MomentsCardProps): React.JSX.Element {
   const cover = m.images[0]
@@ -217,12 +220,13 @@ export function MomentsCard({
               const key = imgKey(im)
               const dataSrc = key ? snsImgs[key] : undefined
               const fk = m.tid + ':' + String(ii)
+              const live = momentLivePhoto(im)
               if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img', url: im.url, token: im.token, seed: im.key })
               return (
                 <div key={fk}
                   className={css.imgWrap}
                   {...clickableKey(() => { setViewer({ images: m.images, index: ii, author: withEnterprise(m.author || '未知', m.enterpriseName) }) })}
-                  title="点击查看大图"
+                  title={live ? '点击查看大图（实况）' : '点击查看大图'}
                   data-sns-key={key || undefined}
                   data-sns-md5={im.md5 || undefined}
                   data-sns-tid={im.timelineId || undefined}
@@ -247,6 +251,7 @@ export function MomentsCard({
                       </div>
                     )}
                   />
+                  {live && <MomentLiveBadge />}
                 </div>
               )
             })}
@@ -256,60 +261,31 @@ export function MomentsCard({
           <div className={css.videos}>
             {m.videos.map((v, vi) => {
               const vk = videoCoverKey(v)
-  const vCover = vk ? snsImgs[vk] : undefined
+              const vCover = vk ? snsImgs[vk] : undefined
               if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
-              const src = vk ? videoSrcs[vk] : undefined
-              const playing = !!src
-              const meta = vk ? videoMeta[vk] : undefined
               return (
-                <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
-                  data-sns-key={vk || undefined}
-                  data-sns-md5={v.md5 || undefined}
-                  data-sns-tid={v.timelineId || undefined}
-                  data-sns-mid={v.id || undefined}
-                  style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
-                  {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}
-                >
-                  {playing ? (
-                    <>
-                      <video
-                        className={css.videoPlayer}
-                        src={src}
-                        controls
-                        autoPlay
-                        poster={localImageSrc(vCover)}
-                        onLoadedMetadata={(e) => {
-                          const el = e.currentTarget
-                          if (!vk || !el.videoWidth || !el.videoHeight) return
-                          setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
-                        }}
-                      />
-                      <div className={css.videoActions}>
-                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }} {...desktopActionProps()}>⭳</button>
-                        <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
-                        <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
-                      </div>
-                    </>
-                  ) : vCover ? (
-                    <>
-                      {/* 取不到就什么都不画，下面的 ▶ 与时长照常显示（原来靠 onError 隐藏图片，效果一样） */}
-                      <RemoteImg className={css.videoCover} src={vCover} alt="" loading="lazy" decoding="async" />
-                      <span className={css.videoPlayBadge}>▶</span>
-                      {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
-                    </>
-                  ) : (
-                    <>
-                      {videoFailed.has(vk) ? (
-                        <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>
-                          本机未缓存<em>微信里播一次后可看</em>
-                        </span>
-                      ) : (
-                        <span className={css.videoBadge}>▶</span>
-                      )}
-                      {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
-                    </>
-                  )}
-                </div>
+                <MomentsVideoTile
+                  key={vi}
+                  v={v}
+                  vk={vk}
+                  cover={vCover}
+                  src={vk ? videoSrcs[vk] : undefined}
+                  meta={vk ? videoMeta[vk] : undefined}
+                  loading={videoLoading.has(vk)}
+                  failed={videoFailed.has(vk)}
+                  error={videoErr.get(vk)}
+                  dataKey={vk}
+                  dataMd5={v.md5}
+                  dataTid={v.timelineId}
+                  dataMid={v.id}
+                  setVideoMeta={setVideoMeta}
+                  loadVideo={loadVideo}
+                  reportVideoError={reportVideoError}
+                  saveVideo={saveVideo}
+                  fullscreenVideo={fullscreenVideo}
+                  closeVideo={closeVideo}
+                  desktopSave
+                />
               )
             })}
           </div>

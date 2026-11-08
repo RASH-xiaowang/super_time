@@ -12,6 +12,9 @@ import type { LedgerContactRow, LedgerSnapshot, LedgerWarning } from '../types.t
 import { parseMessageContent } from './parse.ts'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
+import { displayNameForUsername } from './message-identity.ts'
+import { centsToYuan, parseCnyAmount } from './payment-money.ts'
+import { readRedpacketEvidence } from './payment-evidence.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -105,36 +108,34 @@ async function resolveMessagesByServerIds(
   return out
 }
 
-/** Extract a numeric amount from a payment card title (￥0.01 / 8.88). */
-function parseAmount(s: unknown): number {
-  const str = typeof s === 'string' || typeof s === 'number' ? String(s) : ''
-  const m = str.match(/[\d.]+/)
-  return m ? Number(m[0]) : 0
-}
-
-/** Parse a payment message content into amount + kind. */
-function paymentFromContent(content: string): { amount: number; kind: 'transfer' | 'redpacket' | null } {
-  if (!content) return { amount: 0, kind: null }
+/** Parse a payment message content into integer cents + kind. */
+function paymentFromContent(content: string): { cents: number | null; kind: 'transfer' | 'redpacket' | null } {
+  if (!content) return { cents: null, kind: null }
   const parsed = parseMessageContent(49, content, false)
   const rich = parsed.rich
-  if (!rich) return { amount: 0, kind: null }
-  if (rich.type === 'transfer') return { amount: parseAmount(rich.title), kind: 'transfer' }
-  if (rich.type === 'redpacket') return { amount: parseAmount(rich.amount), kind: 'redpacket' }
-  return { amount: 0, kind: null }
+  if (!rich) return { cents: null, kind: null }
+  if (rich.type === 'transfer') return { cents: parseCnyAmount(rich.title).cents, kind: 'transfer' }
+  if (rich.type === 'redpacket') return { cents: parseCnyAmount(rich.amount).cents, kind: 'redpacket' }
+  return { cents: null, kind: null }
 }
 
 /** Month start/end epoch seconds for YYYY-MM (local midnight). */
 function monthRange(month: string | null | undefined): { from: number; to: number } {
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) return { from: 0, to: 0 }
-  const parts = month.split('-')
-  const y = Number(parts[0])
-  const m = Number(parts[1])
+  if (month === null || month === undefined || month === '') return { from: 0, to: 0 }
+  if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) {
+    throw new RangeError('月份必须是 YYYY-MM，且月份范围为 01–12')
+  }
+  const [yearText = '', monthText = ''] = month.split('-')
+  const y = Number(yearText)
+  const m = Number(monthText)
+  if (y < 1970 || y > 9999) throw new RangeError('月份年份超出支持范围')
   const from = Math.floor(new Date(y, m - 1, 1).getTime() / 1000)
   const to = Math.floor(new Date(y, m, 1).getTime() / 1000) - 1
   return { from, to }
 }
 
 interface TransferRow {
+  transferId: string
   session: string
   payer: string
   receiver: string
@@ -148,8 +149,139 @@ interface RedpacketRow {
   session: string
   sender: string
   direction: 'in' | 'out' | 'unknown'
-  returned: boolean
+  sendId: string
   serverId: string
+}
+
+interface LedgerRows {
+  transfers: TransferRow[]
+  redpackets: RedpacketRow[]
+  serverIds: Set<string>
+}
+
+function readLedgerRows(
+  decryptedDir: string,
+  from: number,
+  to: number,
+  self: string,
+  readErrors: string[],
+): LedgerRows {
+  const gdb = join(decryptedDir, 'general', 'general.db')
+  const transfers: TransferRow[] = []
+  const redpackets: RedpacketRow[] = []
+  const serverIds = new Set<string>()
+  const seenTransfers = new Set<string>()
+  const addServerId = (id: string): void => {
+    if (id !== '' && id !== '0') serverIds.add(id)
+  }
+
+  if (!existsSync(gdb)) {
+    readErrors.push('还没有资金往来数据（general.db 不存在）')
+    return { transfers, redpackets, serverIds }
+  }
+
+  const db = new DatabaseSync(gdb, { readOnly: true })
+  raiseAnalyticsCache(db)
+  try {
+    let tCols = new Set<string>()
+    try {
+      tCols = new Set((db.prepare('PRAGMA table_info(transferTable)').all() as Array<{ name: string }>).map(r => r.name))
+    } catch (e) {
+      readErrors.push('转账表结构读取失败：' + ((e as Error)?.message ?? String(e)))
+    }
+    if (tCols.size > 0) {
+      if (tCols.has('session_name') && tCols.has('message_server_id')) {
+        const t = tCols.has('begin_transfer_time') ? 'begin_transfer_time' : '0'
+        const inv = tCols.has('invalid_time') ? 'invalid_time' : '0'
+        const transferId = tCols.has('transfer_id') ? 'transfer_id' : "''"
+        const payer = tCols.has('pay_payer') ? 'pay_payer' : "''"
+        const receiver = tCols.has('pay_receiver') ? 'pay_receiver' : "''"
+        const sid2 = tCols.has('second_message_server_id')
+          ? 'CAST(second_message_server_id AS TEXT)'
+          : "''"
+        const where = from > 0 && t !== '0' ? ` WHERE ${t} >= ${from} AND ${t} <= ${to}` : ''
+        try {
+          const sql = `SELECT session_name, CAST(message_server_id AS TEXT) AS message_server_id,
+            ${sid2} AS second_message_server_id, ${transferId} AS transfer_id,
+            ${payer} AS pay_payer, ${receiver} AS pay_receiver,
+            ${t} AS begin_transfer_time, ${inv} AS invalid_time
+            FROM transferTable${where}`
+          const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const sid = decodeCell(r['message_server_id']).trim()
+            const sid2Value = decodeCell(r['second_message_server_id']).trim()
+            const transferIdValue = decodeCell(r['transfer_id']).trim()
+            const dedupeKey = transferIdValue || (sid !== '0' ? sid : sid2Value)
+            if (dedupeKey === '' || seenTransfers.has(dedupeKey)) continue
+            seenTransfers.add(dedupeKey)
+            addServerId(sid)
+            addServerId(sid2Value)
+            const payerValue = decodeCell(r['pay_payer']).trim()
+            const receiverValue = decodeCell(r['pay_receiver']).trim()
+            const session = decodeCell(r['session_name']).trim()
+            const direction: 'in' | 'out' | 'unknown' = self && payerValue === self
+              ? 'out'
+              : self && receiverValue === self
+                ? 'in'
+                : 'unknown'
+            transfers.push({
+              transferId: transferIdValue,
+              session,
+              payer: payerValue,
+              receiver: receiverValue,
+              direction,
+              time: Number(r['begin_transfer_time'] ?? 0),
+              invalidTime: Number(r['invalid_time'] ?? 0),
+              serverIds: [sid, sid2Value].filter(id => id !== '' && id !== '0'),
+            })
+          }
+        } catch (e) {
+          readErrors.push('转账表读取失败：' + ((e as Error)?.message ?? String(e)))
+        }
+      } else {
+        readErrors.push('转账表缺少必要字段，无法核对转账记录')
+      }
+    }
+
+    let rpCols = new Set<string>()
+    try {
+      rpCols = new Set((db.prepare('PRAGMA table_info(redEnvelopeTable)').all() as Array<{ name: string }>).map(r => r.name))
+    } catch (e) {
+      readErrors.push('红包表结构读取失败：' + ((e as Error)?.message ?? String(e)))
+    }
+    if (rpCols.size > 0) {
+      if (rpCols.has('session_name') && rpCols.has('message_server_id')) {
+        const senderCol = rpCols.has('sender_user_name') ? 'sender_user_name' : "''"
+        const sendIdCol = rpCols.has('send_id') ? 'send_id' : "''"
+        try {
+          const sql = `SELECT session_name, CAST(message_server_id AS TEXT) AS message_server_id,
+            ${senderCol} AS sender_user_name, ${sendIdCol} AS send_id
+            FROM redEnvelopeTable`
+          const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const sid = decodeCell(r['message_server_id']).trim()
+            addServerId(sid)
+            const sender = decodeCell(r['sender_user_name']).trim()
+            const sendId = decodeCell(r['send_id']).trim()
+            const session = decodeCell(r['session_name']).trim()
+            const direction: 'in' | 'out' | 'unknown' = self && sender === self
+              ? 'out'
+              : self
+                ? 'in'
+                : 'unknown'
+            redpackets.push({ session, sender, direction, sendId, serverId: sid })
+          }
+        } catch (e) {
+          readErrors.push('红包表读取失败：' + ((e as Error)?.message ?? String(e)))
+        }
+      } else {
+        readErrors.push('红包表缺少必要字段，无法核对红包记录')
+      }
+    }
+  } finally {
+    db.close()
+  }
+  return { transfers, redpackets, serverIds }
 }
 
 /**
@@ -189,166 +321,123 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
   const self = (selfUsername ?? '').trim()
   const { from, to } = monthRange(month)
   const now = Math.floor(Date.now() / 1000)
-  const gdb = join(decryptedDir, 'general', 'general.db')
-  const transfers: TransferRow[] = []
-  const redpackets: RedpacketRow[] = []
-  const serverIds = new Set<string>()
-
-  if (existsSync(gdb)) {
-    const db = new DatabaseSync(gdb, { readOnly: true })
-    raiseAnalyticsCache(db)
-    try {
-      const tCols = new Set((db.prepare('PRAGMA table_info(transferTable)').all() as Array<{ name: string }>).map(r => r.name))
-      if (tCols.has('session_name') && tCols.has('message_server_id')) {
-        const t = tCols.has('begin_transfer_time') ? 'begin_transfer_time' : '0'
-        const inv = tCols.has('invalid_time') ? 'invalid_time' : '0'
-        const where = from > 0 && t !== '0' ? ` WHERE ${t} >= ${from} AND ${t} <= ${to}` : ''
-        try {
-          const sql = `SELECT session_name, CAST(message_server_id AS TEXT) AS message_server_id, CAST(second_message_server_id AS TEXT) AS second_message_server_id, pay_receiver, pay_payer, ${t} AS begin_transfer_time, ${inv} AS invalid_time FROM transferTable${where}`
-          const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
-          for (const r of rows) {
-            const sid = decodeCell(r['message_server_id']).trim()
-            const sid2 = decodeCell(r['second_message_server_id']).trim()
-            if (sid) serverIds.add(sid)
-            if (sid2 && sid2 !== '0') serverIds.add(sid2)
-            const payer = decodeCell(r['pay_payer']).trim()
-            const receiver = decodeCell(r['pay_receiver']).trim()
-            const session = decodeCell(r['session_name']).trim()
-            const direction: 'in' | 'out' | 'unknown' = self && payer === self ? 'out' : self && receiver === self ? 'in' : 'unknown'
-            transfers.push({
-              session,
-              payer,
-              receiver,
-              direction,
-              time: Number(r['begin_transfer_time'] ?? 0),
-              invalidTime: Number(r['invalid_time'] ?? 0),
-              serverIds: [sid, sid2].filter(Boolean),
-            })
-          }
-        } catch { /* transferTable unreadable */ }
-      }
-      const rpCols = new Set((db.prepare('PRAGMA table_info(redEnvelopeTable)').all() as Array<{ name: string }>).map(r => r.name))
-      if (rpCols.has('session_name') && rpCols.has('message_server_id')) {
-        const senderCol = rpCols.has('sender_user_name') ? 'sender_user_name' : "'' AS sender_user_name"
-        const hbStatus = rpCols.has('hb_status') ? 'hb_status' : '0'
-        try {
-          const sql = `SELECT session_name, CAST(message_server_id AS TEXT) AS message_server_id, ${senderCol} AS sender_user_name, ${hbStatus} AS hb_status FROM redEnvelopeTable`
-          const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
-          for (const r of rows) {
-            const sid = decodeCell(r['message_server_id']).trim()
-            if (sid) serverIds.add(sid)
-            const sender = decodeCell(r['sender_user_name']).trim()
-            const session = decodeCell(r['session_name']).trim()
-            const direction: 'in' | 'out' | 'unknown' = self && sender === self ? 'out' : self ? 'in' : 'unknown'
-            redpackets.push({
-              session,
-              sender,
-              direction,
-              returned: Number(r['hb_status'] ?? 0) === 2,
-              serverId: sid,
-            })
-          }
-        } catch { /* redEnvelopeTable unreadable */ }
-      }
-    } finally {
-      db.close()
-    }
-  }
+  const readErrors: string[] = []
+  const { transfers, redpackets, serverIds } = readLedgerRows(
+    decryptedDir,
+    from,
+    to,
+    self,
+    readErrors,
+  )
 
   // Resolve amounts + times for all referenced server ids in one shard pass.
   const resolved = await resolveMessagesByServerIds(decryptedDir, [...serverIds])
-  const byMsg = new Map<string, { amount: number; time: number }>()
+  const byMsg = new Map<string, { cents: number | null; time: number; kind: 'transfer' | 'redpacket' }>()
   for (const [sid, info] of resolved) {
     const pay = paymentFromContent(info.content)
-    if (pay.kind) byMsg.set(sid, { amount: pay.amount, time: info.createTime })
+    if (pay.kind) byMsg.set(sid, { cents: pay.cents, time: info.createTime, kind: pay.kind })
+  }
+  let evidence: Awaited<ReturnType<typeof readRedpacketEvidence>> | null = null
+  if (redpackets.length > 0) {
+    try {
+      evidence = await readRedpacketEvidence(decryptedDir)
+    } catch (e) {
+      readErrors.push('红包领取证据读取失败：' + ((e as Error)?.message ?? String(e)))
+    }
   }
 
-  const contactAgg = new Map<string, { username: string; name: string; count: number; amount: number; direction: 'in' | 'out' | 'unknown' }>()
-  const addContact = (username: string, amount: number, direction: 'in' | 'out' | 'unknown', count = 1): void => {
-    if (!username) return
+  const contactAgg = new Map<string, { username: string; name: string; count: number; amountCents: number; direction: 'in' | 'out' }>()
+  const addContact = (username: string, amountCents: number | null, direction: 'in' | 'out', count = 1): void => {
+    // A contact row with a fabricated zero amount is worse than omitting it.
+    if (username === '' || amountCents === null) return
     const key = username + ':' + direction
     const cur = contactAgg.get(key)
     if (cur) {
       cur.count += count
-      cur.amount += amount
+      cur.amountCents += amountCents
     } else {
-      contactAgg.set(key, { username, name: names.get(username) ?? username, count, amount, direction })
+      contactAgg.set(key, { username, name: displayNameForUsername(username, names), count, amountCents, direction })
     }
   }
 
   const warnings: LedgerWarning[] = []
   let transferIn = 0
   let transferOut = 0
-  let transferInAmount = 0
-  let transferOutAmount = 0
+  let transferInCents = 0n
+  let transferOutCents = 0n
   let transferCount = 0
+  let transferThirdPartyCount = 0
+  let amountUnknownCount = 0
   for (const t of transfers) {
     transferCount += 1
-    const msg = t.serverIds.map(s => byMsg.get(s)).find(Boolean)
-    const amount = msg?.amount ?? 0
+    const msg = t.serverIds.map(s => byMsg.get(s)).find(m => m?.kind === 'transfer')
+    const amountCents = msg?.cents ?? null
     const time = msg?.time ?? t.time
+    if (amountCents === null) amountUnknownCount += 1
     if (t.direction === 'in') {
       transferIn += 1
-      transferInAmount += amount
-      addContact(t.receiver === self ? t.session : t.payer || t.receiver || t.session, amount, 'in')
+      if (amountCents !== null) transferInCents += BigInt(amountCents)
+      addContact(t.payer || t.session, amountCents, 'in')
     } else if (t.direction === 'out') {
       transferOut += 1
-      transferOutAmount += amount
-      addContact(t.payer === self ? (t.receiver || t.session) : t.session, amount, 'out')
+      if (amountCents !== null) transferOutCents += BigInt(amountCents)
+      addContact(t.receiver || t.session, amountCents, 'out')
     } else {
-      addContact(t.session || t.receiver || t.payer, amount, 'unknown')
-    }
-    if (t.invalidTime > 0 && t.invalidTime <= now) {
-      const enterpriseName = enterpriseNames.get(t.session)?.trim()
-      warnings.push({
-        kind: 'transfer-timeout',
-        label: '转账超时/未确认',
-        username: t.session,
-        name: names.get(t.session) ?? t.session,
-        ...(enterpriseName ? { enterpriseName } : {}),
-        time,
-        amount,
-      })
+      transferThirdPartyCount += 1
     }
   }
 
   let rpSent = 0
   let rpReceived = 0
-  let rpSentAmount = 0
-  let rpReceivedAmount = 0
+  let rpSentCents = 0n
+  let rpReceivedCents = 0n
   let rpKnownReceived = 0
+  let rpAmountUnknownCount = 0
+  let rpStatusUnknownCount = 0
   for (const r of redpackets) {
     const msg = byMsg.get(r.serverId)
-    const amount = msg?.amount ?? 0
+    const verifiedMsg = msg?.kind === 'redpacket' ? msg : undefined
+    const amountCents = verifiedMsg?.cents ?? null
     const time = msg?.time ?? 0
     if (from > 0 && (time <= 0 || time < from || time > to)) continue
-    const direction = r.direction
-    if (direction === 'out') {
+    const isReturned = evidence?.returned.has(r.sendId) ?? false
+    const selfClaimed = r.sendId !== '' && (evidence?.selfClaimed.has(r.sendId) ?? false)
+    if (r.direction === 'out') {
       rpSent += 1
-      rpSentAmount += amount
-      addContact(r.session, amount, 'out')
-    } else if (direction === 'in') {
+      if (amountCents === null) {
+        rpAmountUnknownCount += 1
+        amountUnknownCount += 1
+      }
+      else if (!isReturned) {
+        rpSentCents += BigInt(amountCents)
+        addContact(r.session, amountCents, 'out')
+      }
+      if (isReturned) {
+        const username = r.session || r.sender
+        const enterpriseName = enterpriseNames.get(username)?.trim()
+        warnings.push({
+          kind: 'redpacket-returned',
+          label: '红包已退回',
+          username,
+          name: displayNameForUsername(username, names),
+          ...(enterpriseName ? { enterpriseName } : {}),
+          time,
+          ...(amountCents === null ? {} : { amount: centsToYuan(amountCents) }),
+        })
+      }
+    } else if (selfClaimed) {
       rpReceived += 1
-      rpReceivedAmount += amount
-      rpKnownReceived += 1
-      addContact(r.sender || r.session, amount, 'in')
+      if (amountCents === null) {
+        rpAmountUnknownCount += 1
+        amountUnknownCount += 1
+      } else {
+        rpReceivedCents += BigInt(amountCents)
+        rpKnownReceived += 1
+        addContact(r.sender || r.session, amountCents, 'in')
+      }
     } else {
-      rpReceived += 1
-      rpReceivedAmount += amount
-      addContact(r.sender || r.session, amount, 'unknown')
-    }
-    if (r.returned) {
-      const username = r.sender || r.session
-      const enterpriseName = enterpriseNames.get(username)?.trim()
-      warnings.push({
-        kind: 'redpacket-returned',
-        label: '红包已退回',
-        username,
-        name: names.get(username) ?? username,
-        ...(enterpriseName ? { enterpriseName } : {}),
-        time,
-        amount,
-      })
+      // No local claim record exists. Do not turn this into received income.
+      rpStatusUnknownCount += 1
     }
   }
 
@@ -358,18 +447,33 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
   // 所以「记录类长列表虚拟化」这一条在 Ledger 这半边**前提不成立**：
   // 没有无界增长，就没有虚拟化可省。真要放开这里，得先想清楚「联系人排行要多少行」。
   const byContactRows: LedgerContactRow[] = [...contactAgg.values()]
-    .sort((a, b) => b.amount - a.amount || b.count - a.count)
+    .sort((a, b) => b.amountCents - a.amountCents || b.count - a.count)
     .slice(0, 20)
     .map((row) => {
       const enterpriseName = enterpriseNames.get(row.username)?.trim()
-      return { ...row, ...(enterpriseName ? { enterpriseName } : {}) }
+      return {
+        username: row.username,
+        name: row.name,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        count: row.count,
+        amount: centsToYuan(row.amountCents),
+        direction: row.direction,
+      }
     })
 
-  const totalIn = transferInAmount + rpReceivedAmount
-  const totalOut = transferOutAmount + rpSentAmount
-  const receivedAmounts = redpackets.filter(r => r.direction !== 'out' && byMsg.get(r.serverId)?.amount).map(r => byMsg.get(r.serverId)?.amount ?? 0)
-  const redpacketBest = receivedAmounts.length > 0 ? Math.max(...receivedAmounts) : 0
-  const redpacketAvg = rpKnownReceived > 0 ? rpReceivedAmount / rpKnownReceived : 0
+  const totalInCents = transferInCents + rpReceivedCents
+  const totalOutCents = transferOutCents + rpSentCents
+  const receivedAmounts = redpackets
+    .filter(r => r.direction !== 'out' && (evidence?.selfClaimed.has(r.sendId) ?? false))
+    .map(r => byMsg.get(r.serverId))
+    .filter((m): m is { cents: number; time: number; kind: 'transfer' | 'redpacket' } =>
+      m?.kind === 'redpacket' && m.cents !== null,
+    )
+    .map(m => m.cents)
+  const redpacketBestCents = receivedAmounts.length > 0 ? Math.max(...receivedAmounts) : 0
+  const redpacketAvgCents = rpKnownReceived > 0
+    ? Math.round(Number(rpReceivedCents) / rpKnownReceived)
+    : 0
 
   return {
     month: month ?? null,
@@ -377,25 +481,31 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
       transfers: transferCount,
       transferIn,
       transferOut,
-      transferAmountIn: transferInAmount,
-      transferAmountOut: transferOutAmount,
+      transferAmountIn: centsToYuan(Number(transferInCents)),
+      transferAmountOut: centsToYuan(Number(transferOutCents)),
       redpacketsSent: rpSent,
       redpacketsReceived: rpReceived,
-      redpacketAmountSent: rpSentAmount,
-      redpacketAmountReceived: rpReceivedAmount,
-      totalAmountIn: totalIn,
-      totalAmountOut: totalOut,
+      redpacketAmountSent: centsToYuan(Number(rpSentCents)),
+      redpacketAmountReceived: centsToYuan(Number(rpReceivedCents)),
+      totalAmountIn: centsToYuan(Number(totalInCents)),
+      totalAmountOut: centsToYuan(Number(totalOutCents)),
+      amountUnknownCount,
+      redpacketUnconfirmedCount: rpStatusUnknownCount,
+      transferThirdPartyCount,
     },
     byContact: byContactRows,
     redpacket: {
       sentCount: rpSent,
       receivedCount: rpReceived,
-      sentAmount: rpSentAmount,
-      receivedAmount: rpReceivedAmount,
-      bestAmount: redpacketBest,
-      avgAmount: redpacketAvg,
+      sentAmount: centsToYuan(Number(rpSentCents)),
+      receivedAmount: centsToYuan(Number(rpReceivedCents)),
+      bestAmount: centsToYuan(redpacketBestCents),
+      avgAmount: centsToYuan(redpacketAvgCents),
+      amountUnknownCount: rpAmountUnknownCount,
+      statusUnknownCount: rpStatusUnknownCount,
     },
     warnings,
+    ...(readErrors.length === 0 ? {} : { readError: readErrors.join('；') }),
     updatedAt: now,
   }
 }

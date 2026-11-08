@@ -21,18 +21,16 @@ import {
   type AnswerIntentLlmSuggestion,
 } from './intent.ts'
 import {
-  missingDomains,
-  requiredDomainsFor,
-  supplementCandidate,
-  type AnswerDataDomain,
-} from './required-domains.ts'
-import { runToolLoop } from './tool-loop.ts'
+  runToolLoop,
+} from './tool-loop.ts'
+import { emitAnswerStage as emit } from './runtime-events.ts'
+import { supplementMissingDomain } from './runtime-supplement.ts'
 import { withDeadline } from './tool-runtime.ts'
 import { blockedReply, clarificationReply, failedReply, insufficientReply } from './replies.ts'
 import { buildToolHintBlock, profileToolHints } from './tool-guidance.ts'
 import type {
-  AnswerRunTurnFn,
   AnswerRuntimeCitation,
+  AnswerRuntimeEmitStage,
   AnswerRuntimeInput,
   AnswerRuntimeResourceCitation,
   AnswerRuntimeResult,
@@ -47,25 +45,11 @@ import {
   type AnswerProfile,
   type AnswerProfileId,
 } from '../tools/profiles.ts'
-import type { RetrievalTool, ToolContext, ToolName, ToolResult } from '../tools/types.ts'
+import { toToolSchemas, type RetrievalTool, type ToolContext } from '../tools/types.ts'
 
 const MAX_FALLBACK_ITEMS = 8
 const MAX_FALLBACK_SNIPPET = 240
 const DEFAULT_INTENT_CLASSIFIER_DEADLINE_MS = 4_000
-
-function emit(
-  input: AnswerRuntimeInput,
-  key: string,
-  label: string,
-  status: AnswerRuntimeStage['status'],
-  detail?: string,
-): void {
-  try {
-    input.emitStage?.({ key, label, status, ...(detail === undefined ? {} : { detail }) })
-  } catch {
-    // 过程展示是旁路。
-  }
-}
 
 function clip(value: string, max: number): string {
   const chars = Array.from(value)
@@ -83,7 +67,7 @@ export interface ResolvedAnswerContext {
 /**
  * 归一 profile 与工具上下文。
  *
- * session-ask 强制当前会话；clawbot-auto 强制关闭本机微信数据并要求 kbId。
+ * session-ask 强制当前会话；只读知识库的 profile 会关闭本机微信数据。
  * 返回 blocked 而不是抛错，便于调用方把「缺会话 / 缺知识库」如实展示。
  * @param input - 运行时输入。
  * @returns 归一结果。
@@ -117,7 +101,7 @@ export function resolveAnswerContext(input: AnswerRuntimeInput): ResolvedAnswerC
         profile,
         context,
         tools: [],
-        blocked: { status: 'blocked', reason: '未选择知识库，ClawBot 的数据检索已被阻止' },
+        blocked: { status: 'blocked', reason: '未选择知识库，知识库检索已被阻止' },
       }
     }
   }
@@ -278,6 +262,21 @@ function applyExplicitTimeScope(
       ...(range.to ? { to: range.to } : {}),
     },
   }
+}
+
+/**
+ * 时间线问题只取原文，不把全库统计混进工具选择。
+ *
+ * 「最近 X 群聊了什么」不是统计问题；把 aggregate_messages 作为优先工具会让
+ * 模型在拿到会话原文后又做一次全库 COUNT，既拖慢回答，也会把全库数字误当成
+ * 该会话的数字。真正的统计问法仍会被规则判成 aggregate，不受这里影响。
+ */
+function toolsForIntent(
+  intent: AnswerIntentDecision,
+  tools: readonly RetrievalTool[],
+): RetrievalTool[] {
+  if (intent.kind !== 'timeline') return [...tools]
+  return tools.filter(tool => tool.name !== 'aggregate_messages')
 }
 
 function citationOf(
@@ -457,119 +456,6 @@ function scopeBlockedReason(evidence: EvidenceBundle): string {
     : `检索结果越过当前数据边界：${note}`
 }
 
-interface DomainSupplement {
-  loop: ToolLoopResult
-  domain: AnswerDataDomain
-  tool: string
-}
-
-/**
- * 只为缺失的一个专用数据域补查一次。
- *
- * 复用 `runToolLoop` 的单工具兜底路径，因此参数修复、profile 守卫、deadline、
- * 重试与结构化事件都和执行模型调用时一致。非知识库工具会临时摘掉 kbId，
- * 防止 `search_hybrid/search_kb` 在调用上限内抢走专用工具的预算。
- */
-async function runDomainSupplement(input: {
-  runtime: AnswerRuntimeInput
-  profile: AnswerProfile
-  tools: readonly RetrievalTool[]
-  context: ToolContext
-  domain: AnswerDataDomain
-  tool: ToolName
-  offset: number
-}): Promise<DomainSupplement> {
-  const { runtime, profile, tools, context, domain, tool, offset } = input
-  // 只把本次专用工具放进临时 profile：runToolLoop 的 hybrid/kb 优先排序不能
-  // 吃掉这唯一一次补查预算。原始 profile 与上下文边界不变。
-  const supplementProfile: AnswerProfile = { ...profile, allowedTools: [tool] }
-  const emptyTurn: AnswerRunTurnFn = async () => ({
-    blocks: [],
-    finish: { kind: 'stop' },
-    text: '',
-    reasoning: '',
-  })
-  const loop = await runToolLoop({
-    system: runtime.system,
-    messages: runtime.messages,
-    question: runtime.question,
-    profile: supplementProfile,
-    profileTools: tools,
-    toolContext: context,
-    runTurn: emptyTurn,
-    now: runtime.now ?? new Date(),
-    maxRounds: 1,
-    maxCallsPerRound: 1,
-    fallbackTools: [tool],
-    maxFallbackCalls: 1,
-    ...(runtime.fallbackQuery ? { fallbackQuery: runtime.fallbackQuery } : {}),
-    ...(runtime.throwIfCanceled ? { throwIfCanceled: runtime.throwIfCanceled } : {}),
-    ...(runtime.cancelSignal ? { cancelSignal: runtime.cancelSignal } : {}),
-    ...(runtime.sleep ? { sleep: runtime.sleep } : {}),
-    ...(runtime.toolDeadlineMs !== undefined ? { toolDeadlineMs: runtime.toolDeadlineMs } : {}),
-    ...(runtime.op ? { op: runtime.op } : {}),
-    emitStage: (stage) => {
-      // 补查只转发工具阶段，避免重复普通流水线阶段。
-      if (stage.callId === undefined) return
-      runtime.emitStage?.({
-        ...stage,
-        key: `supplement:${String(offset)}:${stage.key}`,
-        callId: `supplement_${String(offset)}_${stage.callId}`,
-      })
-    },
-  })
-  const traces = loop.toolCalls.map((trace, index) => ({
-    ...trace,
-    index: offset + index,
-    callId: `supplement_${String(offset)}_${trace.callId}`,
-  }))
-  return {
-    domain,
-    tool,
-    loop: { ...loop, toolCalls: traces },
-  }
-}
-
-/** 计算缺失域并执行至多一次专用补查；返回 null 表示无需补查。 */
-async function supplementMissingDomain(input: {
-  runtime: AnswerRuntimeInput
-  profile: AnswerProfile
-  tools: readonly RetrievalTool[]
-  context: ToolContext
-  intent: AnswerIntentDecision
-  evidence: EvidenceBundle
-  results: readonly ToolResult[]
-  traceCount: number
-}): Promise<DomainSupplement | null> {
-  const { runtime, profile, tools, context, intent, evidence, results, traceCount } = input
-  const available = new Set(tools.map(tool => String(tool.name)))
-  const attempted = new Set(results.map(result => String(result.tool)))
-  const required = requiredDomainsFor(runtime.question, intent, profile, {
-    hasKb: context.kbId !== undefined && context.kbId > 0,
-    allowedTools: available,
-  })
-  const missing = missingDomains(required, evidence, results)
-  if (missing.length === 0) return null
-  const candidate = supplementCandidate(
-    missing,
-    available,
-    attempted,
-  )
-  if (!candidate) return null
-  emit(runtime, 'answer:supplement', '补充数据域', 'running', candidate.domain)
-  const supplement = await runDomainSupplement({
-    runtime,
-    profile,
-    tools,
-    context,
-    domain: candidate.domain,
-    tool: candidate.tool,
-    offset: traceCount,
-  })
-  emit(runtime, 'answer:supplement', '补充数据域', 'done', candidate.domain)
-  return supplement
-}
-
 function stoppedResult(input: {
   status: AnswerStatus
   answer: string
@@ -579,6 +465,8 @@ function stoppedResult(input: {
   messages: Message[]
   started: number
   reason: string
+  /** 失败前已经展示给 UI 的执行轮次；缺省为 0。 */
+  rounds?: number
 }): AnswerRuntimeResult {
   return {
     status: input.status,
@@ -597,7 +485,7 @@ function stoppedResult(input: {
     toolResults: [],
     citations: [],
     resources: [],
-    rounds: 0,
+    rounds: input.rounds ?? 0,
     exhausted: false,
     fallbackUsed: false,
     synthesized: false,
@@ -642,19 +530,23 @@ export async function runAnswerRuntime(input: AnswerRuntimeInput): Promise<Answe
   // 只在执行守卫里拒绝会让模型先看到 `list_sessions`，白白浪费一轮调用。
   const executionContext = applyExplicitTimeScope(context, intent)
   const scopedTools = filterToolsForScope(profile, tools, executionContext)
+  const focusedTools = toolsForIntent(intent, scopedTools)
+  // 执行层保留 list_sessions，才能把模型残留调用准确归类为
+  // `unsupported_scope`；发给模型的 schema 仍使用 scopedTools。
+  const executionTools = toolsForIntent(intent, filterToolsForProfile(profile, tools))
 
   // 意图建议只作为「优先检查」进入工具选择提示；是否真正执行仍由模型与 schema 决定，
   // 首轮漏调工具时再由确定性兜底按白名单收口。
-  const hintedTools = profileToolHints(profile, intent.toolHints, scopedTools)
+  const hintedTools = profileToolHints(profile, intent.toolHints, focusedTools)
   const fallbackTools = profileToolHints(profile, [
     ...resourceFallbackTools(
       input.question,
-      new Set(scopedTools.map(tool => String(tool.name))),
+      new Set(focusedTools.map(tool => String(tool.name))),
     ),
     ...hintedTools,
-  ], scopedTools)
+  ], focusedTools)
   const system = fallbackTools.length > 0
-    ? input.system + buildToolHintBlock(fallbackTools)
+    ? input.system + buildToolHintBlock(fallbackTools, profile)
     : input.system
 
   const clarifyBeforeSearch = input.clarifyBeforeSearch ?? !profile.kbOnly
@@ -679,7 +571,8 @@ export async function runAnswerRuntime(input: AnswerRuntimeInput): Promise<Answe
     input,
     profile,
     context: executionContext,
-    tools,
+    tools: focusedTools,
+    executionTools,
     intent,
     system,
     fallbackTools,
@@ -692,7 +585,7 @@ export async function runAnswerRuntime(input: AnswerRuntimeInput): Promise<Answe
     input,
     profile,
     context: executionContext,
-    tools,
+    tools: focusedTools,
     intent,
     system,
     loop: toolStage.loop,
@@ -720,7 +613,10 @@ interface ToolStageInput {
   input: AnswerRuntimeInput
   profile: AnswerProfile
   context: ToolContext
+  /** 发给模型的工具 schema 来源。 */
   tools: readonly RetrievalTool[]
+  /** 执行层白名单；包含被范围隐藏、但仍需准确返回错误的工具。 */
+  executionTools: readonly RetrievalTool[]
   intent: AnswerIntentDecision
   system: string
   fallbackTools: readonly string[]
@@ -732,16 +628,34 @@ interface ToolStageInput {
 async function runAnswerTools(
   stage: ToolStageInput,
 ): Promise<{ loop: ToolLoopResult } | { stopped: AnswerRuntimeResult }> {
-  const { input, profile, context, tools, system, fallbackTools, now, started } = stage
+  const {
+    input,
+    profile,
+    context,
+    tools,
+    executionTools,
+    intent,
+    system,
+    fallbackTools,
+    now,
+    started,
+  } = stage
+  let observedRounds = 0
+  const emitStage: AnswerRuntimeEmitStage = event => {
+    if (event.round !== undefined) {
+      observedRounds = Math.max(observedRounds, event.round)
+    }
+    input.emitStage?.(event)
+  }
   emit(input, 'answer:tools', '工具调用', 'running')
   try {
     const loop = await runToolLoop({
       system,
       messages: input.messages,
       question: input.question,
-      ...(input.tools ? { tools: input.tools } : {}),
+      tools: input.tools ?? toToolSchemas(tools),
       profile,
-      profileTools: tools,
+      profileTools: executionTools,
       toolContext: context,
       ...(input.throwIfCanceled ? { throwIfCanceled: input.throwIfCanceled } : {}),
       ...(input.cancelSignal ? { cancelSignal: input.cancelSignal } : {}),
@@ -759,8 +673,10 @@ async function runAnswerTools(
       ...(input.knownSessions ? { knownSessions: input.knownSessions } : {}),
       ...(input.knownSessionCatalog ? { knownSessionCatalog: input.knownSessionCatalog } : {}),
       ...(input.knownContacts ? { knownContacts: input.knownContacts } : {}),
+      ...(intent.recency ? { recency: true } : {}),
+      ...(intent.kind === 'timeline' ? { terminalTools: ['get_session_messages'] } : {}),
       ...(input.assistantSource ? { assistantSource: input.assistantSource } : {}),
-      ...(input.emitStage ? { emitStage: input.emitStage } : {}),
+      emitStage,
       ...(input.op ? { op: input.op } : {}),
       ...(input.onDelta ? { onDelta: input.onDelta } : {}),
       ...(input.onReasoning ? { onReasoning: input.onReasoning } : {}),
@@ -781,6 +697,7 @@ async function runAnswerTools(
         messages: input.messages,
         started,
         reason: `工具循环失败：${message}`,
+        rounds: observedRounds,
       }),
     }
   }
@@ -830,10 +747,13 @@ async function collectAnswerEvidence(stage: {
       evidence,
       results: loop.toolResults,
       traceCount: loop.toolCalls.length,
+      roundBase: loop.rounds,
     })
     if (supplement) {
+      const executedRounds = Math.max(loop.rounds, supplement.loop.rounds)
       loop = {
         ...loop,
+        rounds: executedRounds,
         toolCalls: [...loop.toolCalls, ...supplement.loop.toolCalls],
         toolResults: [...loop.toolResults, ...supplement.loop.toolResults],
         fallbackUsed: loop.fallbackUsed || supplement.loop.fallbackUsed,
@@ -979,6 +899,7 @@ async function finalizeAnswer(stage: {
       ...(answer === '' ? { reason: '综合生成返回空文本，已返回证据兜底' } : {}),
     }
   } catch (error) {
+    if (isCancelError(error) || input.cancelSignal?.aborted === true) throw error
     const message = error instanceof Error ? error.message : String(error)
     const status = evidence.status === 'ok' ? 'degraded' : evidence.status
     emit(input, 'answer:synthesize', '综合生成', 'done', '生成失败，已降级')

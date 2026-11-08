@@ -19,7 +19,7 @@ export interface ArchivedMomentInput {
     ts: number;
     /** 原始 content XML；parser 升级后可重放。 */
     content: string;
-    /** content 的 sha1（省略时由 SQL 不去重，只用于判断「内容变没变」）。 */
+    /** 解析器版本 + content 的 sha1（用于让旧 payload 在解析器升级后重放一次）。 */
     contentHash: string;
     /** `JSON.stringify(MomentEntry)`；包含文本/图片/视频/位置/点赞/评论。 */
     payload: string;

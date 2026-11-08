@@ -8,8 +8,7 @@
  *  · 关着时事件一律不取数；
  *  · 事件后的响应到达时已切到别的会话 ⇒ 旧响应丢弃（A 的统计不许盖到 B 的抽屉里）。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Contact360Snapshot, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'

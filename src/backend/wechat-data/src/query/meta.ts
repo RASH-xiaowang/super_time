@@ -220,6 +220,41 @@ export function isServiceBizType(t: number | undefined): boolean {
 }
 
 /**
+ * Merge one contact-like table (`contact` or `stranger`) into the shared maps.
+ *
+ * `stranger` uses the same schema as `contact` in WeChat 4.x and contains
+ * conversations that were never added as friends. Reading only `contact`
+ * makes those people/groups fall through to a raw wxid or table hash.
+ */
+function addContactIdentityRows(
+  db: DatabaseSync,
+  table: 'contact' | 'stranger',
+  names: Map<string, string>,
+  pinned: Set<string>,
+): void {
+  const cols = tableColumns(db, table)
+  if (cols.size === 0) return
+  const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
+  if (!userCol) return
+  const remarkCol = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : ''
+  const nickCol = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : cols.has('nickName') ? 'nickName' : ''
+  const flagCol = cols.has('flag') ? 'flag' : cols.has('Flag') ? 'Flag' : ''
+  const rows = db.prepare(
+    `SELECT ${userCol} AS u, ${remarkCol || "''"} AS r, ${nickCol || "''"} AS n, ${flagCol || '0'} AS f FROM "${table}"`,
+  ).all() as Array<Record<string, unknown>>
+  for (const row of rows) {
+    const username = decode(row.u).trim()
+    if (!username) continue
+    const display = decode(row.r).trim() || decode(row.n).trim()
+    // Contact rows are merged after stranger rows; a blank contact must not
+    // erase a usable stranger remark/nickname.
+    if (display || !names.has(username)) names.set(username, display || username)
+    const flag = Number(row.f ?? 0)
+    if ((flag & 0x800) !== 0) pinned.add(username)
+  }
+}
+
+/**
  * Read contact.db once and derive all contact metadata.
  * @param decryptedDir - decrypted data root.
  * @returns contact names (remark > nick > username), pinned set, biz types.
@@ -236,27 +271,10 @@ export function contactMeta(decryptedDir: string): ContactMeta {
     try {
       const db = new DatabaseSync(p, { readOnly: true })
       try {
-        const cols = tableColumns(db, 'contact')
-        const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-        const remarkCol = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : ''
-        const nickCol = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'nickName'
-        const flagCol = cols.has('flag') ? 'flag' : cols.has('Flag') ? 'Flag' : ''
-        if (userCol) {
-          const remarkSel = remarkCol || "''"
-          const nickSel = nickCol
-          const rows = db.prepare(
-            `SELECT ${userCol} AS u, ${remarkSel} AS r, ${nickSel} AS n, ${flagCol || '0'} AS f FROM contact`,
-          ).all() as Array<Record<string, unknown>>
-          for (const row of rows) {
-            const u = decode(row.u)
-            if (!u) continue
-            const remark = decode(row.r).trim()
-            const nick = decode(row.n).trim()
-            names.set(u, remark || nick || u)
-            const flag = Number(row.f ?? 0)
-            if ((flag & 0x800) !== 0) pinned.add(u)
-          }
-        }
+        // Stranger first: contact (friend/group) metadata wins for the same id,
+        // while people/groups present only in `stranger` remain visible.
+        addContactIdentityRows(db, 'stranger', names, pinned)
+        addContactIdentityRows(db, 'contact', names, pinned)
         const biCols = tableColumns(db, 'biz_info')
         if (biCols.has('username') && biCols.has('type')) {
           const rows = db.prepare('SELECT username AS u, type AS t FROM biz_info').all() as Array<{ u: unknown; t: unknown }>

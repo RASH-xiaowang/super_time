@@ -115,6 +115,15 @@ describe('群聊信息抽屉的接线', () => {
     expect(thread).toContain('setGroupInfoErr((e as Error).message); setGroupInfo(null)')
   })
 
+  it('打开请求和实时刷新共用同一个版本闸（否则慢的旧打开响应还能覆盖新刷新）', () => {
+    expect(hook, '群信息状态袋没有取得共享闸').toContain('groupInfoRequestGateFor(sessionEpochRef)')
+    expect(hook, '共享闸没有传给实时刷新').toContain('requestGate: groupInfoRequestGate')
+    expect(thread, '打开请求没有取得同一个共享闸').toContain('groupInfoRequestGateFor(sessionEpochRef)')
+    expect(thread, '打开请求没有登记到共享闸').toContain('beginGroupInfoRequest(groupInfoRequestGate)')
+    expect(thread, '打开响应没有校验共享闸').toContain('groupInfoRequestGate.current')
+    expect(thread, '两套序号不能同时存在').not.toContain('groupInfoRequestSeqRef')
+  })
+
   it('反例自证：明知含指纹的合成源码必须被同一个判据抓住', () => {
     const fake = view + '\nconst leak = <span aria-disabled="true">暂不支持邀请</span>\n'
     const bites = VIEW_FINGERPRINTS.filter((fp) => fake.includes(fp))

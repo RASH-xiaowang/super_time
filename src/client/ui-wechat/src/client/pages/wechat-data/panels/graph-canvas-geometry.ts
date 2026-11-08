@@ -65,12 +65,24 @@ export function connectivityBackbone(edges: readonly GEdge[]): Set<number> {
  */
 export function selectEdges(edges: readonly GEdge[], nodes: readonly GNode[]): GEdge[] {
   const backbone = connectivityBackbone(edges)
-  const budget = edgeBudget(nodes.length, edges.length, backbone.size)
+  const authoritative: number[] = []
+  edges.forEach((edge, index) => {
+    if (edge.authoritative === true) authoritative.push(index)
+  })
+  // 后端观测边优先于客户端推导边；只要它们自身不超过绝对上限，就不要再被密度预算裁掉。
+  const budget = edgeBudget(nodes.length, edges.length, Math.max(backbone.size, authoritative.length))
   if (edges.length <= budget) return [...edges]
+  const chosen = new Set<number>(backbone)
+  authoritative
+    .slice()
+    .sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0))
+    .forEach((index) => {
+      if (chosen.size < budget) chosen.add(index)
+    })
   const byKind = new Map<GEdge['kind'], number[]>()
   edges.forEach((e, i) => {
-    // 骨架已占的位不再进桶：否则会被「桶内按权重降序」再挑一次，白占一份份额
-    if (backbone.has(i)) return
+    // 骨架/后端权威边已占的位不再进桶，否则会被「桶内按权重降序」再挑一次，白占份额。
+    if (chosen.has(i)) return
     const arr = byKind.get(e.kind)
     if (arr) arr.push(i)
     else byKind.set(e.kind, [i])
@@ -78,13 +90,13 @@ export function selectEdges(edges: readonly GEdge[], nodes: readonly GNode[]): G
   // 各桶按权重降序：桶内取前 share 条就是该类里最强的那些边
   for (const arr of byKind.values()) arr.sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0))
   const kinds = [...byKind.keys()]
-  const chosen = new Set<number>(backbone)
   if (kinds.length === 0) return edges.filter((_, i) => chosen.has(i))
-  const share = Math.max(1, Math.floor(Math.max(0, budget - chosen.size) / kinds.length))
+  const share = Math.floor(Math.max(0, budget - chosen.size) / kinds.length)
   for (const k of kinds) {
+    if (chosen.size >= budget) break
     const arr = byKind.get(k)
     if (!arr) continue
-    for (let i = 0; i < Math.min(share, arr.length); i++) chosen.add(arr[i] as number)
+    for (let i = 0; i < Math.min(share, arr.length, budget - chosen.size); i++) chosen.add(arr[i] as number)
   }
   // 保底没用完的份额回填：桶大的优先（亲密度边通常最多，它会吃掉剩余预算）
   let left = budget - chosen.size
@@ -410,7 +422,7 @@ export interface Scene {
   reveal?: ReadonlyMap<string, number> | null
 }
 
-export const FONT_STACK = '-apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif'
+export const FONT_STACK = 'system-ui, sans-serif'
 
 /** 标签字体：11px 与改前一致。 */
 export const LABEL_FONT = `500 11px ${FONT_STACK}`

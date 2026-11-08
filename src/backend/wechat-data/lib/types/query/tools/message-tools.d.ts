@@ -7,11 +7,11 @@ interface DisplayIdentity {
     name: string;
     enterpriseName?: string;
 }
-/** 会话显示名与企业名；统一从 contact.db 的缓存元数据读取，兼容旧索引库。 */
+/** 会话显示名与企业名；统一从身份索引 + contact.db 读取，兼容旧索引库。 */
 declare function displayNames(decryptedDir: string): Map<string, DisplayIdentity>;
 /** 关键词检索聊天消息。 */
 export declare const searchMessagesTool: RetrievalTool;
-/** 取某个会话在某时段的消息（按时间升序）。 */
+/** 取某个会话在某时段的消息（默认按时间升序，可显式取最新优先）。 */
 export declare const getSessionMessagesTool: RetrievalTool;
 /** 取某条消息前后的上下文窗口。 */
 export declare const getMessageContextTool: RetrievalTool;

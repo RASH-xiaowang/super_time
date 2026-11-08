@@ -4,10 +4,11 @@
  * 从 `GraphPanel` 抽出：导出只依赖画布命令式句柄与海报选项，属于独立副作用，
  * 与节点菜单、筛选、选中状态无关。
  */
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import type { GraphCanvasHandle } from './GraphCanvas.tsx'
 import type { PosterRatio, PosterStyle } from './GraphExportMenu.tsx'
 import type { RefObject } from 'react'
+import { useExportTask, type ExportTaskState } from './export-task.ts'
 
 export interface UseGraphExportActionsOptions {
   canvasRef: RefObject<GraphCanvasHandle | null>
@@ -16,6 +17,7 @@ export interface UseGraphExportActionsOptions {
 }
 
 export interface GraphExportActions {
+  exportState: ExportTaskState
   exporting: boolean
   exportSvg: () => Promise<void>
   exportPng: () => Promise<void>
@@ -28,12 +30,12 @@ export interface GraphExportActions {
  * @returns 三个动作与海报导出中的状态。
  */
 export function useGraphExportActions(o: UseGraphExportActionsOptions): GraphExportActions {
-  const [exporting, setExporting] = useState(false)
+  const exportTask = useExportTask()
 
   const exportSvg = useCallback(async (): Promise<void> => {
-    try {
+    await exportTask.run(async () => {
       const svg = await o.canvasRef.current?.exportSvg() ?? ''
-      if (!svg) { console.warn('SVG 导出失败:画布未就绪'); return }
+      if (!svg) throw new Error('画布尚未就绪，无法导出 SVG')
       const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -41,39 +43,51 @@ export function useGraphExportActions(o: UseGraphExportActionsOptions): GraphExp
       a.download = '社交关系图谱.svg'
       a.click()
       setTimeout(() => { URL.revokeObjectURL(url) }, 2000)
-    } catch (e) {
-      console.error('SVG 导出失败', e)
-    }
-  }, [o.canvasRef])
+      return a.download
+    }, {
+      idPrefix: 'graph-svg',
+      label: '导出图谱 SVG',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (filename) => `已导出 ${filename}`,
+    })
+  }, [exportTask, o.canvasRef])
 
   const exportPng = useCallback(async (): Promise<void> => {
-    try {
+    await exportTask.run(async () => {
       const url = await o.canvasRef.current?.exportPng(o.posterRatio, o.posterStyle)
-      if (!url) return
+      if (!url) throw new Error('画布尚未就绪，无法导出 PNG')
       const a = document.createElement('a')
       a.href = url
       a.download = `社交图谱-${o.posterStyle}-${o.posterRatio}.png`
       a.click()
-    } catch (e) {
-      console.error('PNG 导出失败', e)
-    }
-  }, [o.canvasRef, o.posterRatio, o.posterStyle])
+      return a.download
+    }, {
+      idPrefix: 'graph-png',
+      label: '导出图谱 PNG',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (filename) => `已导出 ${filename}`,
+    })
+  }, [exportTask, o.canvasRef, o.posterRatio, o.posterStyle])
 
   const exportPoster = useCallback(async (): Promise<void> => {
-    setExporting(true)
-    try {
+    await exportTask.run(async () => {
       const url = await o.canvasRef.current?.renderPoster(o.posterRatio, o.posterStyle)
-      if (!url) return
+      if (!url) throw new Error('海报渲染未返回图片')
       const a = document.createElement('a')
       a.href = url
       a.download = `社交图谱-${o.posterStyle}-${o.posterRatio}.jpg`
       a.click()
-    } catch (e) {
-      console.error('海报导出失败', e)
-    } finally {
-      setExporting(false)
-    }
-  }, [o.canvasRef, o.posterRatio, o.posterStyle])
+      return a.download
+    }, {
+      idPrefix: 'graph-poster',
+      label: '导出图谱海报',
+      progress: { phase: 'local', done: 0, total: 0 },
+      cancelable: false,
+      successMessage: (filename) => `已导出 ${filename}`,
+    })
+  }, [exportTask, o.canvasRef, o.posterRatio, o.posterStyle])
 
-  return { exporting, exportSvg, exportPng, exportPoster }
+  return { exportState: exportTask.state, exporting: exportTask.running, exportSvg, exportPng, exportPoster }
 }

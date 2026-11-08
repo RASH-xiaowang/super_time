@@ -1,4 +1,10 @@
 import type { GraphSnapshot } from '../types.ts';
+/** Reply/@ edges inspect only a bounded newest window per group. */
+export declare const GRAPH_RELATION_MESSAGE_WINDOW_PER_GROUP = 2000;
+/** Shared scan budget keeps relation extraction independent of total history size. */
+export declare const GRAPH_RELATION_MESSAGE_WINDOW_TOTAL = 50000;
+/** Bound aggregation memory even if one @ list contains many usernames. */
+export declare const GRAPH_MESSAGE_RELATION_RECORD_CAP = 50000;
 /**
  * 备注里的「班级/批次」键：**非数字前缀 + 数字编号**（`宜州一中404陈泳达` → `宜州一中404`）。
  *
@@ -16,16 +22,16 @@ import type { GraphSnapshot } from '../types.ts';
  */
 export declare function remarkClassKey(remark: string | undefined | null): string;
 /**
- * Build a graph snapshot: contact/group nodes enriched for both display modes.
+ * Build a graph snapshot: contact/group nodes plus observed relationship edges.
  * @param decryptedDir - decrypted data root.
  * @param selfUsername - logged-in account wxid (excluded from persons).
- * @returns nodes + summary (edges derived client-side from group_codes).
+ * @returns nodes + evidence-backed edges + summary.
  */
 /**
  * 关系图谱快照（节点 + 群/班级元数据）。
  *
- * 后端加签名缓存（P1-3 的第②半）：`cachedBySig` 的键由「会话库 + 通讯录库 + 消息分片目录」
- * 三处签名拼成，**没变就是 0ms**；实时同步写过这些文件后签名自然变化 ⇒ 不需要显式失效，
+ * 后端加签名缓存（P1-3 的第②半）：`cachedBySig` 的键由会话/通讯录/消息分片以及
+ * 朋友圈、资金库签名拼成，**没变就是 0ms**；实时同步写过这些文件后签名自然变化 ⇒ 不需要显式失效，
  * 也不会像「整体清空缓存」那样把没变的条目一起丢掉（M8 那场风暴）。
  * 前端 `apiGetGraph` 那层 30s 的 `cachedGet` 管的是「同一会话里切回来」，
  * 这一层管的是「换了进程 / 超了 30 秒 / 首次打开」—— 那正是原先必须完整等 866ms 的三种情形。

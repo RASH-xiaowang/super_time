@@ -10,8 +10,7 @@
  * 在那里 `preventDefault()` 会被浏览器忽略 ⇒ 缩放到一半，身后的页面还在滚）。
  * @module moments-viewer-spec
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -219,8 +218,10 @@ describe('接线：面板只从这一层拿灯箱状态', () => {
   })
 
   it('保存下来的文件名扩展名只能由那一条纯函数决定', () => {
-    expect(panel).toContain('imageExtOf(src)')
+    const saver = readFileSync(join(HERE, 'moments-original-export.ts'), 'utf8')
+    expect(saver).toContain('imageExtOf(src)')
     expect(panel, '面板里又自己嗅一遍扩展名').not.toContain('data:image')
+    expect(saver, '保存辅助函数里又自己嗅一遍扩展名').not.toContain('data:image')
     expect(readFileSync(join(HERE, 'moments-viewer.ts'), 'utf8')).toContain('data:image')
   })
 })

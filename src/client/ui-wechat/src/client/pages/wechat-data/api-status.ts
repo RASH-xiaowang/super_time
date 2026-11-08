@@ -224,6 +224,9 @@ export interface AnnualMoney {
   topPeerUsername: string
   topPeerEnterpriseName?: string
   byPeer: Array<{ username: string; name: string; enterpriseName?: string; amount: number; count: number }>
+  amountUnknownCount?: number
+  unconfirmedRedpacketCount?: number
+  thirdPartyTransferCount?: number
 }
 
 /** 年度撤回（形状与后端 `AnnualRevoke` 对齐）。 */

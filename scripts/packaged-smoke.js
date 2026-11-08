@@ -14,7 +14,7 @@
  *   ① 后端就绪且 Remote 方法数符合预期（期望值取自**网关继承链全量**的源码计数）；
  *   ② 日志里没有 ENOTDIR / Cannot find module；
  *   ③ 确实产出了渲染截图（说明窗口与前端资源加载正常）；
- *   ④ 安装目录不含、运行后也不会生成 config.json / llm.json / clawbot.db；⑤ 状态落在临时 userData。
+ *   ④ 安装目录不含、运行后也不会生成 config.json / llm.json；⑤ 状态落在临时 userData。
  *
  * 用法：node scripts/packaged-smoke.js      （先跑 npm run dist 或 pack）
  */
@@ -71,13 +71,6 @@ const unpackedWechat = path.join(root, 'dist', 'win-unpacked', 'resources', 'app
  */
 const WECHAT_CONFIG_JSON = 'config.json'
 const WECHAT_LLM_JSON = 'llm.json'
-/**
- * ClawBot 接入数据的库文件名（`<数据根>/clawbot.db`：绑定关系 + 会话正文）。
- * 与上面两个同一条纪律：**本机运行时数据绝不入包、安装目录绝不生成** ——
- * 拆成就近常量还顺带满足 `ci-script-isolation.spec.ts`（不许出现完整路径字面量）。
- */
-const CLAWBOT_DB = 'clawbot.db'
-
 let failed = 0;
 const check = (cond, label, detail = '') => {
   console.log(`  ${cond ? '✅' : '❌'} ${label}${detail ? '  [' + detail + ']' : ''}`);
@@ -95,9 +88,9 @@ function finish(out = '') {
 }
 
 // ── 启动之前（包内容断言）──
-// W2-13.3：常量被改成别的名字，就等于这条断言不再盯着 config.json / llm.json / clawbot.db ——
+// W2-13.3：常量被改成别的名字，就等于这条断言不再盯着 config.json / llm.json ——
 // 不报错的坏法。所以当场确认一次（防空转）。
-check(WECHAT_CONFIG_JSON === 'config.json' && WECHAT_LLM_JSON === 'llm.json' && CLAWBOT_DB === 'clawbot.db',
+check(WECHAT_CONFIG_JSON === 'config.json' && WECHAT_LLM_JSON === 'llm.json',
   '运行时状态文件的文件名常量没被改（改了就换了个断言对象）');
 // 期望方法数扫得动：网关链读不到时会数出 0，拿 0 去比必然红 —— 但红得莫名其妙；
 // 这里先给一条带原因的失败，免得下一次又是「查半天才发现是数错了文件」。
@@ -150,30 +143,27 @@ try {
   const entries = listPackage(asarPath).map((f) => f.replace(/\\/g, '/'));
   check(!entries.includes('/wechat/' + WECHAT_CONFIG_JSON), 'asar 内也不含 wechat/config.json');
   check(!entries.includes('/wechat/' + WECHAT_LLM_JSON), 'asar 内也不含 wechat/llm.json');
-  // ClawBot 的接入数据（clawbot.db = 绑定关系 + 消息正文）与上面两个同一条纪律：
-  // 它是**本机运行时数据根**里的文件，绝不许以任何路径进包。用后缀匹配而不是精确路径：
-  // 它一旦混进来，最可能的位置是 `src/**/*` 通配扫到的某个角落，路径事先猜不准。
-  const clawbotDbEntries = entries.filter((f) => f.endsWith('/' + CLAWBOT_DB));
-  check(clawbotDbEntries.length === 0, 'asar 内不含 clawbot.db（ClawBot 接入数据只在本机数据根）',
-    `${clawbotDbEntries.length} 条目`);
-  // 朋友圈 CDN 解密要用的 WxIsaac64 WASM（3.8MB）。H15 之后它进 asarUnpack：
-  // ① 必须在 app.asar.unpacked 下作为**真实文件**存在（否则解析路径的第 3 个候选永不匹配）；
-  // ② asar 头部必须把它标成 unpacked 且**没有 offset** —— 解包条目在 asar 里仍会被
-  //    `listPackage` 列出来，所以「不在列表里」是错的判据，要看头部标记，
-  //    否则既测不出真正解包、又可能把「解包 + 归档双份 3.8MB」放过去。
+  // 朋友圈 CDN 解密要用的 WxIsaac64 WASM（3.8MB）和胶水 JS 都收在 asar 内。
+  // 它们只读、不需要 spawn，留在 asar 才能受 ASAR integrity 覆盖；解包到磁盘反而
+  // 会绕过完整性校验，成为更容易替换的代码面。
   const wasmRel = 'src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.wasm';
   const jsRel = 'src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.js';
   const unpackedRoot = path.join(resourcesDir, 'app.asar.unpacked');
-  check(fs.existsSync(path.join(unpackedRoot, wasmRel)),
-    'app.asar.unpacked 下有 WxIsaac64 WASM（朋友圈 CDN 解密用）');
-  check(fs.existsSync(path.join(unpackedRoot, jsRel)), 'app.asar.unpacked 下有 WxIsaac64 胶水 JS');
   const rawHeader = getRawHeader(asarPath).header;
   const asarRoot = typeof rawHeader === 'string' ? JSON.parse(rawHeader) : rawHeader;
   const entryOf = (rel) => rel.split('/').reduce((n, seg) => n?.files?.[seg], asarRoot);
+  const isPacked = (rel) => {
+    const entry = entryOf(rel);
+    return Boolean(entry && entry.unpacked !== true && entry.offset !== undefined);
+  };
   const wasmEntry = entryOf(wasmRel);
-  check(Boolean(wasmEntry && wasmEntry.unpacked === true), 'asar 头部把该 WASM 标为 unpacked');
-  check(Boolean(wasmEntry) && wasmEntry.offset === undefined,
-    'asar 归档体里没有重复存一份 WASM（只解包一份）');
+  check(entries.includes('/' + wasmRel) && entries.includes('/' + jsRel),
+    'asar 内含 WxIsaac64 WASM 与胶水 JS');
+  check(isPacked(wasmRel) && isPacked(jsRel),
+    'WxIsaac64 WASM 与胶水 JS 都在归档体内（不是 unpacked）');
+  check(!fs.existsSync(path.join(unpackedRoot, wasmRel))
+    && !fs.existsSync(path.join(unpackedRoot, jsRel)),
+  'WxIsaac64 WASM 与胶水 JS 不再落到 app.asar.unpacked');
 
   // N19：wx_silk.exe 是要被 spawnSync 执行的 —— asar 内的 exe 跑不起来（ENOENT），
   // 所以它必须在 app.asar.unpacked 下是真实文件，且 silkDecoderBin() 会把路径改写到那边
@@ -225,14 +215,11 @@ try {
   ]) {
     check(entries.includes(rel), `asar 仍含运行时必需 ${rel.slice(1)}`);
   }
-  // koffi：它在 deps 树里另有一份拷贝，那个被排除了 —— 必须由 node_modules 那份顶上。
-  // 这里**不能**用「entries 里有没有 /node_modules/koffi/**」来判断：`node_modules/koffi/**`
-  // 与 `@koromix/**` 都在 `asarUnpack` 里 ⇒ 它们全是**解包条目**，而解包条目照样会被
-  // listPackage 列出来 ⇒ 那条断言恒真、什么都没测（第一版就是这么写的，复审把它抓出来了）。
-  // 真正要断言的是**磁盘上存在真实文件**：`await import("koffi")` 的 ESM 入口与原生 .node
-  // 都只能从真实文件加载，asar 内的读补丁对这两者都不生效。
-  check(fs.existsSync(path.join(unpackedRoot, 'node_modules', 'koffi', 'index.js')),
-    'koffi JS 加载器在 app.asar.unpacked（await import("koffi") 的 ESM 入口）');
+  // koffi 的 JS 加载器是纯 JS，收在 asar 内；只有必须由 dlopen 加载的原生 .node 解包。
+  check(isPacked('node_modules/koffi/index.js'),
+    'koffi JS 加载器在 asar 归档体内');
+  check(!fs.existsSync(path.join(unpackedRoot, 'node_modules', 'koffi', 'index.js')),
+    'koffi JS 加载器没有落到 app.asar.unpacked');
   check(fs.existsSync(path.join(unpackedRoot, 'node_modules', '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')),
     'koffi 原生模块在 app.asar.unpacked（排除 deps 树后的回归守卫）');
 
@@ -351,10 +338,6 @@ check(!fs.existsSync(path.join(unpackedWechat, WECHAT_CONFIG_JSON)),
   '启动后安装目录仍未生成 config.json（安装目录保持只读）');
 check(!fs.existsSync(path.join(unpackedWechat, WECHAT_LLM_JSON)),
   '启动后安装目录仍未生成 llm.json');
-// ClawBot 数据根文件同理：安装目录三个可能的位置（根 / resources / asar.unpacked/wechat）都不许出现。
-const clawbotDbInInstall = [path.dirname(exe), resourcesDir, unpackedWechat]
-  .some((d) => fs.existsSync(path.join(d, CLAWBOT_DB)));
-check(!clawbotDbInInstall, '启动后安装目录不含 clawbot.db（ClawBot 接入数据只在本机数据根）');
 check(!fs.existsSync(path.join(userData, 'license-trial.json')),
   '无试用期：不生成 license-trial.json');
 check(out.includes(stateDir), '启动日志里的状态目录指向本次临时 userData');

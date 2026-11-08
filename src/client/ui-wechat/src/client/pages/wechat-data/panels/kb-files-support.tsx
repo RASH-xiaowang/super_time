@@ -96,8 +96,8 @@ export function KbTitleRow({ visible, total, index }: {
       className={css.titleRow}
       title="当前知识库里的本地文件：登记 / 解析状态 / 分块 / 是否参与语义检索 · 存储于 wechat_kb_files.db（kb_files 表）"
     >
-      文件
-      <span className={css.titleMeta}>已登记 {visible} / {total}</span>
+      <span className={css.titleName}>文件</span>
+      <span className={css.titleMeta} title={`已登记 ${visible} / ${total}`}>已登记 {visible} / {total}</span>
       <span className={css.indexChip} data-tone={index.tone} title="本库的向量索引状态；语义检索与问答的向量召回都依赖它">
         {index.text}
       </span>

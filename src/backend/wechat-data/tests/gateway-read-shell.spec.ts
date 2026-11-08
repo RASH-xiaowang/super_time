@@ -484,6 +484,10 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(second.messages.map((m) => m.localId), 'cursor 没被转发的话这一页会重复第一页').toEqual([2, 3])
     const overlap = second.messages.map((m) => m.localId).filter((id) => first.messages.some((m) => m.localId === id))
     expect(overlap, '翻页出现重复消息 ⇒ 游标形同虚设').toEqual([])
+    expect(
+      gw.getMessages({ talker: 'wxid_a', limit: 2, beforeLocalId: 3 }).messages.map((m) => m.localId),
+      'beforeLocalId 没转下去的话，历史引用跳转仍会从最新一页开始翻',
+    ).toEqual([2, 3])
     expect(gw.getMessages({ talker: '不存在的人' })).toMatchObject({ messages: [], total: 0 })
 
     expect(gw.getNewMessages({ talker: 'wxid_a', after: 3 }).messages.map((m) => m.localId)).toEqual([4, 5])
@@ -491,6 +495,35 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(one.messages.length, 'limit 没转下去就会把 4、5 两条都给回来').toBe(1)
     expect([4, 5]).toContain(one.messages[0]?.localId)
     expect(gw.getNewMessages({ talker: 'wxid_a', after: 999 }).messages).toEqual([])
+  })
+
+  it('getNewMessages：afterLocalId 透传，重复 sort_seq 不丢消息且 hasMore 可续拉', () => {
+    const t = fullTree()
+    const db = new DatabaseSync(join(t.decrypted, 'message', 'message_0.db'))
+    try {
+      db.prepare(`UPDATE "${msgTable('wxid_a')}" SET sort_seq = 2 WHERE local_id = 3`).run()
+    } finally {
+      db.close()
+    }
+    const gw = gateway(t)
+    expect(
+      gw.getNewMessages({ talker: 'wxid_a', after: 2 }).messages.map((m) => m.localId),
+      '未传 afterLocalId 时必须保留旧的 sort_seq > after 语义',
+    ).toEqual([4, 5])
+
+    const first = gw.getNewMessages({ talker: 'wxid_a', after: 2, afterLocalId: 1, limit: 2 })
+    expect(first.messages.map((m) => m.localId), 'afterLocalId 没转下去会漏掉同 sort_seq 的 2、3').toEqual([2, 3])
+    expect(first.hasMore).toBe(true)
+    expect([first.cursor, first.cursorLocalId]).toEqual([2, 3])
+
+    const second = gw.getNewMessages({
+      talker: 'wxid_a',
+      after: first.cursor ?? -1,
+      afterLocalId: first.cursorLocalId,
+      limit: 2,
+    })
+    expect(second.messages.map((m) => m.localId)).toEqual([4, 5])
+    expect(second.hasMore).toBe(false)
   })
 
   it('searchMembers：空查询给 like 口径的空快照，limit/roomUsername 转得下去', () => {
@@ -532,7 +565,8 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(feb.month).toBe('2023-02')
     expect(feb.summary.transfers, '转账的 begin_transfer_time 都在 1970 年，2023-02 该一条不剩')
       .toBe(0)
-    expect((await gw.getLedger({ month: '不像月份' })).summary.transfers).toBe(3)
+    await expect(gw.getLedger({ month: '不像月份' })).rejects.toThrow(/YYYY-MM/)
+    await expect(gw.getLedger({ month: '2023-13' })).rejects.toThrow(/YYYY-MM/)
   })
 
   it('cancelSearch：jobId 归一化与在飞槽位对齐（空白/非字符串/超长/未知都返回 ok:false）', () => {
@@ -600,6 +634,10 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect((await gw.resolveChatHistory({ serverId: '2001' })).message?.localId).toBe(1)
     expect(await gw.resolveChatHistory({ serverId: '1003' }), '普通文本消息按 server_id 查不到（口径如此）')
       .toMatchObject({ found: false })
+    expect(
+      (await gw.resolveChatHistory({ serverId: '1003', talker: 'wxid_a' })).message?.localId,
+      '带会话 scope 的引用定位要能解析普通文本/媒体消息',
+    ).toBe(3)
     expect(await gw.resolveChatHistory({ serverId: '-1' })).toMatchObject({ found: false })
     expect(gw.getMomentsAuthors().reduce((a, x) => a + x.count, 0)).toBe(5)
     // 月度分布回的是**快照**（`months` + 可选 `readError`），不是裸数组：
@@ -835,7 +873,7 @@ describe('只读契约', () => {
     expect(recs.items).toEqual([])
     expect(recs.total).toBe(0)
     expect(typeof recs.readError, '缺 general.db 却不出声 ⇒ 面板会显示「暂无记录」').toBe('string')
-    expect(gw.getPaymentStatus({ serverId: '1' })).toEqual({ found: false })
+    expect(await gw.getPaymentStatus({ serverId: '1' })).toEqual({ found: false })
     expect(gw.getVoiceTranscript({ username: 'wxid_a', localId: 1 })).toEqual({ error: '未找到语音消息' })
     expect(gw.getSelfUsername()).toEqual({ username: 'wxid_self' })
     expect(gw.listEditedMessages()).toEqual({ items: [], total: 0 })

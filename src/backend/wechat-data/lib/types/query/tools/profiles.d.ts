@@ -1,7 +1,7 @@
 import { type RetrievalTool, type ToolContext, type ToolName, type ToolResult } from './types.ts';
 import type { HybridSearchMode } from './search-hybrid-tool.ts';
 /** profile 标识（调用方用稳定字符串选择边界）。 */
-export type AnswerProfileId = 'wechat-ask' | 'session-ask' | 'clawbot-auto';
+export type AnswerProfileId = 'wechat-ask' | 'session-ask';
 /** 一个问答入口的工具与数据边界。 */
 export interface AnswerProfile {
     id: AnswerProfileId;
@@ -13,7 +13,7 @@ export interface AnswerProfile {
     allowWechatData: boolean;
     /** 是否允许访问知识库。 */
     allowKnowledgeBase: boolean;
-    /** `true` = 整个入口就是 kb-only（ClawBot）。 */
+    /** `true` = 整个入口只能使用知识库。 */
     kbOnly: boolean;
     /** 是否要求执行上下文里必须有 kbId。 */
     requireKb: boolean;
@@ -23,12 +23,18 @@ export interface AnswerProfile {
     hybridModes?: readonly HybridSearchMode[];
     /** 工具是否只读；未来若加入有副作用工具，重试器据此禁止自动重放。 */
     sideEffectTools?: readonly ToolName[];
+    /** 单次问答的工具循环硬上限；缺省沿用运行时的通用预算。 */
+    maxRounds?: number;
+    /** 每轮最多执行的工具调用数；缺省沿用运行时的通用预算。 */
+    maxCallsPerRound?: number;
+    /** 确定性兜底最多执行几个工具；缺省沿用运行时的通用预算。 */
+    maxFallbackCalls?: number;
 }
-/** 三个入口的边界定义。 */
+/** 各入口的边界定义。 */
 export declare const ANSWER_PROFILES: Readonly<Record<AnswerProfileId, AnswerProfile>>;
 /** 全部 profile（按固定顺序，便于界面与测试）。 */
 export declare const ALL_ANSWER_PROFILES: readonly AnswerProfile[];
-/** 取 profile（不存在时回退到权限最小的 clawbot-auto，而不是全量权限）。 */
+/** 取 profile（不存在时回退到权限最小的现存 profile，而不是全量权限）。 */
 export declare function getAnswerProfile(id: string): AnswerProfile;
 /** 工具是否在该 profile 的白名单内（纯判断，不执行）。 */
 export declare function isToolAllowed(profile: AnswerProfile | AnswerProfileId, name: string): boolean;
@@ -113,7 +119,7 @@ export declare function buildProfileTools(profileRef: AnswerProfile | AnswerProf
  * @returns 结构化结果；越界/未知/异常都不会抛。
  */
 export declare function runProfileTool(profileRef: AnswerProfile | AnswerProfileId, tools: readonly RetrievalTool[], name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
-/** profile 的数据面描述（写进日志/依据行，避免把 kb-only 说成全库）。 */
+/** profile 的数据面描述（写进日志/依据行，避免把仅知识库范围说成全库）。 */
 export declare function profileDataScope(profileRef: AnswerProfile | AnswerProfileId): {
     wechatDataEnabled: boolean;
     kbOnly: boolean;

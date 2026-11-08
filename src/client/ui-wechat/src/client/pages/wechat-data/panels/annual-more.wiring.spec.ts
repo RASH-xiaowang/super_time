@@ -23,6 +23,8 @@ const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(
 
 /** 后端年报主查询（扫描 + 组装）。 */
 const review = strip(read(HERE, '..', '..', '..', '..', '..', '..', '..', '..', 'src', 'backend', 'wechat-data', 'src', 'query', 'annual-review.ts'))
+/** 年报共享类型（2026-10-30 从主查询拆出，守卫必须跟随真实定义位置）。 */
+const reviewTypes = strip(read(HERE, '..', '..', '..', '..', '..', '..', '..', '..', 'src', 'backend', 'wechat-data', 'src', 'query', 'annual-review-types.ts'))
 /** 年度面板（默认 8 卡 + 一段「更多」的编排）。 */
 const panel = read(HERE, 'Annual.tsx')
 /** 「更多」段的实现（2026-09-30 从 `Annual.tsx` 拆出，含分区、词云、卡片与画像）。 */
@@ -33,7 +35,7 @@ const shape = strip(read(HERE, '..', 'api-status.ts'))
 describe('后端：六块新统计都接上了', () => {
   it('AnnualReview 里有 moments / assets / money / revoke / groups 五个字段', () => {
     for (const f of ['moments: AnnualMoments', 'assets: AnnualAssets', 'money: AnnualMoney', 'revoke: AnnualRevoke', 'groups: AnnualGroups']) {
-      expect(review, `AnnualReview 缺字段 ${f}`).toContain(f)
+      expect(reviewTypes, `AnnualReview 缺字段 ${f}`).toContain(f)
     }
   })
 
@@ -45,8 +47,8 @@ describe('后端：六块新统计都接上了', () => {
   })
 
   it('🔴 行累加器收到的是 body0（原始正文），**不是** text（XML 已剥）', () => {
-    expect(review, '传给 extras.onRow 的正文必须是 body0').toMatch(/extras\.onRow\(\s*\{\s*type: lt, ts, text: body0/)
-    expect(review, '不许再把 readableText 的结果喂给累加器').not.toMatch(/extras\.onRow\(\s*\{\s*type: lt, ts, text,/)
+    expect(review, '传给 extras.onRow 的正文必须是 body0').toMatch(/extras\.onRow\(\s*\{\s*type:\s*lt,\s*ts,\s*text:\s*body0/)
+    expect(review, '不许再把 readableText 的结果喂给累加器').not.toMatch(/extras\.onRow\(\s*\{\s*type:\s*lt,\s*ts,\s*text,/)
   })
 
   it('assemble 的返回类型排除那两个跨库字段（它算不出来，就不该假装有）', () => {

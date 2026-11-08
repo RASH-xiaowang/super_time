@@ -156,6 +156,11 @@
 }
 .msgHeaderMoreItem:hover { background: var(--nm-bg-hover); }
 .msgHeaderMoreItem:active { background: var(--nm-bg-active); }
+.msgHeaderMoreItem[data-active='true'] {
+  background: var(--nm-success-15);
+  color: var(--nm-success-text);
+  font-weight: 600;
+}
 .msgHeaderMoreItem:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 浅色主题：微信官方精确值（CSS Modules 内用 :global 命中 theme-light）。 */
 :global(.theme-light) .groupInfo {
@@ -174,6 +179,13 @@
 }
 /* 轮询状态（✓ 时间 · N 条新消息）：排在动作排前，不能吃 margin-left:auto —— 两个 auto 会平分剩余空间把动作排推到标题上（2026-10-16 真机实测）。 */
 .msgHeaderPoll { margin-left: 8px; }
+/* 右键「打开文件」的保存任务：紧贴消息头，切换会话后仍能看到文件名与取消入口。 */
+.msgFileSaveStatus {
+  padding: 6px 14px;
+  min-width: 0;
+  background: var(--wx-chat-bg);
+  border-bottom: 1px solid var(--nm-border);
+}
 /* 类型统计条：从头部移出的独立条；窄列下整条收起（见上方 @container）。 */
 .msgTypeChips {
   display: flex;
@@ -261,6 +273,12 @@
   font-weight: 600;
   color: var(--nm-text-1);
 }
+.msgEmptyText {
+  max-width: 360px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--nm-text-3);
+}
 /* 空态唯一主操作：微信绿实心，无渐变 / 发光 / 彩色描边。 */
 .msgEmptyAction {
   pointer-events: auto;
@@ -342,6 +360,43 @@
   border-color: var(--nm-cyan);
   font-weight: 600;
 }
+.aiFilter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.aiFilter:hover {
+  border-color: color-mix(in srgb, var(--nm-success) 35%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+}
+.aiFilter[data-active='true'] {
+  border-color: color-mix(in srgb, var(--nm-success) 45%, var(--nm-border));
+  background: var(--nm-success-15);
+  color: var(--nm-success-text);
+}
+.aiFilter:disabled { cursor: not-allowed; opacity: 0.5; }
+.aiFilterMark {
+  color: var(--nm-success-text);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.aiFilterCount {
+  min-width: 1.2em;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 /* 会话类型分段（全部 / 公众号 / 服务号 / 客服）：桌面档允许换行，手机档 nowrap 并成一行。 */
 .typeFilter {
   display: flex;
@@ -351,6 +406,7 @@
   /* 上方 12px 是分隔线与分段控件之间可见的那条缝；下方间距由统计行自己的上内边距给。 */
   padding: 12px 12px 0;
 }
+.filterStrip { min-width: 0; }
 .searchIndexHint {
   display: flex;
   flex-direction: column;
@@ -378,83 +434,6 @@
   transition: var(--nm-t-ui);
 }
 .searchHit:hover { background: var(--nm-bg-hover); }
-/* ── 消息日历弹窗 ─────────────────────────────────────────────── */
-.calOverlay {
-  position: fixed; inset: 0; z-index: 1000;
-  display: flex; align-items: center; justify-content: center;
-  /* 覆盖层自己可滚：窗口比弹窗矮时（小屏 / 缩放 / CI）按钮不会被推到视口外；子元素用 margin:auto 居中。 */
-  overflow: auto; overscroll-behavior: contain; padding: 16px;
-  /* 微信化：纯 40% 黑遮罩，无毛玻璃（PLAN §1.3 弹窗口径）。 */
-  background: rgba(0, 0, 0, 0.4);
-}
-.calOverlay > * { margin: auto; }
-.calDialog {
-  width: 420px;
-  max-width: 92vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--nm-r-xl, 12px);
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  overflow: hidden;
-  box-shadow: var(--nm-shadow-popup);
-}
-.calTitle { font-size: 14px; font-weight: 600; color: var(--nm-text-1); }
-.calClose {
-  border: none;
-  background: transparent;
-  color: var(--nm-text-2);
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px;
-  border-radius: var(--nm-r-sm);
-  display: inline-flex;
-  transition: var(--nm-t-ui);
-}
-.calClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.calBody { padding: 14px 16px; flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.calMonthTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--nm-text-1);
-  min-width: 110px;
-  text-align: center;
-  font-family: var(--nm-font-mono, monospace);
-}
-.calStats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-bottom: 12px;
-  font-size: 12px;
-  color: var(--nm-text-2);
-}
-.calDay {
-  aspect-ratio: 1;
-  border: 1px solid transparent;
-  border-radius: var(--nm-r-md);
-  background: transparent;
-  color: var(--nm-text-1);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  position: relative;
-  padding: 0;
-  transition: var(--nm-t-ui);
-}
-.calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
-.calDayCnt {
-  font-size: var(--nm-fs-xs, 11px);
-  color: var(--nm-cyan);
-  font-weight: 700;
-  line-height: 1;
-  margin-top: 1px;
-  font-family: var(--nm-font-mono, monospace);
-}
 /* ── 消息导出弹窗 ─────────────────────────────────────────────── */
 .exportDialog {
   width: 560px;
@@ -598,7 +577,7 @@
 }
 .messageInfoIdentity {
   max-width: 100%;
-  font-family: var(--nm-font, sans-serif);
+  font-family: var(--nm-font-sans);
 }
 .messageInfoRow:last-child .messageInfoLabel,
 .messageInfoRow:last-child .messageInfoValue {
@@ -964,8 +943,35 @@
 @media (max-width: 560px) {
   .sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border: none; border-radius: 0; }
   [data-has-session] .sidebar { display: none; }
+  .filterStrip {
+    display: flex;
+    align-items: center;
+    height: 45px;
+    min-height: 45px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-bottom: 1px solid var(--nm-border);
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .filterStrip::-webkit-scrollbar { width: 0; height: 0; }
+  .filterStrip > .search {
+    flex: 0 0 330px;
+    width: 330px;
+    height: 44px;
+    padding: 0 10px;
+    border-bottom: 0;
+    box-sizing: border-box;
+  }
+  .filterStrip > .typeFilter {
+    flex: 0 0 auto;
+    height: 44px;
+    padding: 0 10px 0 0;
+    box-sizing: border-box;
+  }
   /* 头部让出返回按钮的位置（按钮绝对定位在左上角，样式在 chats-shell）。 */
   .msgHeader { padding: 8px 10px; min-height: 48px; }
+  .msgFileSaveStatus { padding: 6px 10px; }
   /* 长按菜单转底部 sheet：内联 left/top 要用 !important 压掉；贴底 + dvh 上界避免溢出。 */
   .msgCtxMenu {
     left: 8px !important;
@@ -1009,4 +1015,5 @@
   .stats > span:not([class]) { display: none; }
   /* 搜索行动作按钮 36px（全局规则会抬到 44px，min-height 必须一起写）。 */
   .searchActionBtn { height: 36px; min-height: 36px; }
+  .aiFilter { height: 36px; min-height: 36px; }
 }

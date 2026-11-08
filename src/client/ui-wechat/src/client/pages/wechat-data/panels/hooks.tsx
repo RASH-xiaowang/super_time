@@ -1,75 +1,340 @@
 /**
- * 渐进式列表渲染 hook:大数据量列表先渲染前 `step` 项,滚动到底部哨兵
- * 出现时再增量增加,避免一次性渲染上千 DOM 节点导致卡顿。
- * 数据长度变化时自动钳制回合法范围。
+ * 渐进式列表窗口：首屏只挂载一小段，靠近底部时继续追加；超过窗口上限后
+ * 从头部回收 DOM，并用实测高度补位，避免长列表只增不减。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import kitCss from '../ui/kit.module.css'
 import { LoadingState } from '../ui/kit-fields.tsx'
 import { REFRESH_MIN_INTERVAL_MS, computeHasMore, refreshGate, refreshPagesFor } from './paged-list.ts'
 import { collectPageRange } from './load-page-range.ts'
 import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
+import { useKeepAliveActive } from './keep-alive.tsx'
 
+interface ProgressiveWindow {
+  /** 当前窗口第一个条目的原始索引。 */
+  start: number
+  /** 当前窗口结束位置（不含），沿用旧 API 的 `count` 语义。 */
+  end: number
+  /** 已卸载头部条目的实测总高度。 */
+  beforeHeight: number
+  /**
+   * 每次向下回收的头部区间及实测高度。
+   *
+   * 向上滚回时必须按相反顺序恢复这些区间；只存总高度无法知道下一段该恢复多少。
+   */
+  headRuns: ProgressiveHeadRun[]
+}
+
+interface ProgressiveHeadRun {
+  start: number
+  end: number
+  height: number
+}
+
+export interface ProgressiveListOptions {
+  /**
+   * 同时挂载的最大条目数。默认 `step * 3`。
+   *
+   * 这不是「最多加载多少数据」，而是 DOM 窗口上限：滚过上限后从头部回收，
+   * 用等高占位保持滚动位置，后面的数据仍可继续加载。
+   */
+  maxCount?: number
+  /** 筛选、搜索或业务页签变化时重置到第一段（内容变了，旧索引不再有意义）。 */
+  resetKey?: unknown
+  /** 与外部共用滚动容器（例如会话列表还要给键盘导航用）时传入。 */
+  listRef?: RefObject<HTMLElement | null>
+}
+
+function initialProgressiveWindow(len: number, step: number): ProgressiveWindow {
+  return { start: 0, end: Math.min(Math.max(0, len), step), beforeHeight: 0, headRuns: [] }
+}
+
+function normalizeProgressiveWindow(
+  window: ProgressiveWindow,
+  len: number,
+  step: number,
+  maxCount: number,
+): ProgressiveWindow {
+  const total = Math.max(0, len)
+  if (total === 0) return initialProgressiveWindow(0, step)
+  if (window.end <= 0 || window.start >= total) return initialProgressiveWindow(total, step)
+  const end = Math.min(window.end, total)
+  // 数据缩短时只裁尾部。把 start 往回拉会让已回收条目重新出现、却保留不了
+  // 对应的占位高度，滚动位置会突然跳动；只要 start 仍在范围内就原样保留。
+  let start = window.start
+  if (end - start > maxCount) {
+    // 只有窗口上限本身变小时才会走到这里。此时无法反推旧占位对应的高度，
+    // 清空头部状态比保留一份错位的高度更安全。
+    start = Math.max(0, end - maxCount)
+  }
+  return start === window.start && end === window.end
+    ? window
+    : start !== window.start
+      ? { start, end, beforeHeight: 0, headRuns: [] }
+    : { ...window, start, end }
+}
+
+/**
+ * 渐进式列表窗口。
+ *
+ * 旧实现只增不减：`count` 每次靠近底部就加 `step`，用户一路滚下去后前面所有条目
+ * 都留在 DOM 里。现在窗口有硬上限，越过上限时从头部回收；被回收条目的实际高度
+ * 写入顶部占位，使剩余内容在屏幕上的坐标不变。
+ *
+ * 为什么不用固定行高虚拟化：这些列表混有图片、多行正文、展开卡片，行高不固定。
+ * 这里只要求条目根节点带 `data-progressive-item={原始索引}`，回收时用相邻条目的
+ * 实际 `getBoundingClientRect().top` 差测高度，不假设行高。
+ *
+ * @param len - 当前数据总条数。
+ * @param step - 每次追加的条数。
+ * @param options - 窗口上限、重置键、外部列表 ref。
+ * @returns 当前窗口、顶部占位高度、哨兵 ref 与列表 ref。
+ */
 export function useProgressiveList(
   len: number,
   step = 120,
-): { count: number; grow: () => void; reveal: (n: number) => void; sentinelRef: (el: HTMLDivElement | null) => void } {
-  const [count, setCount] = useState(() => Math.min(step, len))
-  const io = useRef<IntersectionObserver | null>(null)
+  options: ProgressiveListOptions = {},
+): {
+  start: number
+  end: number
+  count: number
+  beforeHeight: number
+  grow: () => void
+  reveal: (n: number) => void
+  sentinelRef: (el: HTMLDivElement | null) => void
+  topSentinelRef: (el: HTMLDivElement | null) => void
+  listRef: RefObject<HTMLElement | null>
+} {
+  const safeStep = Math.max(1, Math.floor(step) || 1)
+  const maxCount = Math.max(safeStep, Math.floor(options.maxCount ?? safeStep * 3) || safeStep)
+  const [window, setWindow] = useState<ProgressiveWindow>(() => initialProgressiveWindow(len, safeStep))
+  const windowRef = useRef(window)
+  windowRef.current = window
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const fallbackListRef = useRef<HTMLElement | null>(null)
+  const listRef = options.listRef ?? fallbackListRef
+  const [bottomEl, setBottomEl] = useState<HTMLDivElement | null>(null)
+  const bottomIo = useRef<IntersectionObserver | null>(null)
+  const [topEl, setTopEl] = useState<HTMLDivElement | null>(null)
+  const topIo = useRef<IntersectionObserver | null>(null)
+  const lenRef = useRef(len)
+  lenRef.current = len
+  const resetKeyRef = useRef(options.resetKey)
+  const pendingResetRef = useRef(false)
 
-  const sentinelRef = useCallback((el: HTMLDivElement | null) => {
-    if (io.current) { io.current.disconnect(); io.current = null }
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      // 无 IO 支持时直接全量,保证数据可见
-      setCount(c => (c < len ? Math.max(len, c) : c))
+  const reset = useCallback((): void => {
+    if (!activeRef.current) {
+      pendingResetRef.current = true
       return
+    }
+    pendingResetRef.current = false
+    setWindow(initialProgressiveWindow(lenRef.current, safeStep))
+  }, [safeStep])
+
+  // 数据晚到 / 缩短 / 过滤后，把已有窗口钳回合法范围；不会把正常滚动进度重置。
+  useEffect(() => {
+    // 隐藏分段不写状态；active 重新为 true 时本 effect 会带着最新 len 再跑一次。
+    if (!active) return
+    setWindow(prev => normalizeProgressiveWindow(prev, len, safeStep, maxCount))
+  }, [active, len, safeStep, maxCount])
+
+  // 只在 resetKey 真正变化时重置。隐藏期间发生变化就记一笔，重新显示后再应用。
+  useEffect(() => {
+    if (options.resetKey === resetKeyRef.current) return
+    resetKeyRef.current = options.resetKey
+    if (options.resetKey === undefined) return
+    reset()
+  }, [active, options.resetKey, reset])
+
+  useEffect(() => {
+    if (active && pendingResetRef.current) reset()
+  }, [active, reset])
+
+  const grow = useCallback((): void => {
+    if (!activeRef.current) return
+    const current = windowRef.current
+    const total = Math.max(0, lenRef.current)
+    if (current.end >= total) return
+    const end = Math.min(total, current.end + safeStep)
+    const start = Math.max(0, end - maxCount)
+    let removedHeight = 0
+    if (start > current.start) {
+      const root = listRef.current
+      const first = root?.querySelector<HTMLElement>(`[data-progressive-item="${current.start}"]`)
+      const next = root?.querySelector<HTMLElement>(`[data-progressive-item="${start}"]`)
+      if (first && next) {
+        removedHeight = Math.max(0, next.getBoundingClientRect().top - first.getBoundingClientRect().top)
+      } else {
+        // 测量不到真实高度时宁可不回收：否则占位高度为 0，用户会看到滚动位置跳动。
+        // 所有使用窗口上限的列表都传了 listRef；留这条兜底是为了让误配置表现为
+        // “窗口不再增长”，而不是更难定位的视觉错位。
+        return
+      }
+    }
+    setWindow(prev => {
+      if (prev.start !== current.start || prev.end !== current.end) return prev
+      return {
+        start,
+        end,
+        beforeHeight: Math.round(prev.beforeHeight + removedHeight),
+        headRuns: [
+          ...prev.headRuns,
+          { start: current.start, end: start, height: Math.round(removedHeight) },
+        ],
+      }
+    })
+  }, [listRef, maxCount, safeStep])
+
+  // ref 回调只登记元素；观察器由 effect 重挂。元素本身是依赖，因此搜索/页签条件
+  // 让哨兵在窗口范围不变时重新挂载，也能重新接上。
+  const growRef = useRef(grow)
+  growRef.current = grow
+  const sentinelRef = useCallback((el: HTMLDivElement | null) => { setBottomEl(el) }, [])
+
+  /** 从头部恢复最近一次回收的区间，并裁掉等量尾部条目，保持窗口上界不变。 */
+  const shiftBack = useCallback((): void => {
+    if (!activeRef.current) return
+    const current = windowRef.current
+    const last = current.headRuns.at(-1)
+    if (!last || last.start >= current.start) return
+    const count = current.start - last.start
+    const end = Math.max(last.start, current.end - count)
+    setWindow(prev => {
+      if (prev.start !== current.start || prev.end !== current.end) return prev
+      const tail = prev.headRuns.at(-1)
+      if (!tail || tail.start !== last.start) return prev
+      return {
+        start: last.start,
+        end,
+        beforeHeight: Math.max(0, Math.round(prev.beforeHeight - last.height)),
+        headRuns: prev.headRuns.slice(0, -1),
+      }
+    })
+  }, [])
+
+  const topSentinelRef = useCallback((el: HTMLDivElement | null): void => { setTopEl(el) }, [])
+
+  /*
+   * 顶部哨兵和底部哨兵都随窗口变化重挂观察器。
+   *
+   * IntersectionObserver 只报“相交状态变化”：如果向上恢复一段后哨兵仍留在
+   * rootMargin 内，不重挂就收不到第二次回调，用户会停在半空占位里。窗口变化后
+   * 重挂一次，可在同一帧里继续恢复，直到哨兵离开预加载区或已回到第 0 条。
+   */
+  const shiftBackRef = useRef(shiftBack)
+  shiftBackRef.current = shiftBack
+
+  useEffect(() => {
+    if (bottomIo.current) {
+      bottomIo.current.disconnect()
+      bottomIo.current = null
+    }
+    const el = bottomEl
+    if (!active || !el) return undefined
+    if (typeof IntersectionObserver === 'undefined') {
+      // 无 IO 支持时也保持窗口硬上界。Electron 运行时始终有 IO；这里不能为了
+      // 降级可见性把 1 万条重新塞回 DOM。
+      const total = Math.max(0, lenRef.current)
+      setWindow({ start: 0, end: Math.min(total, maxCount), beforeHeight: 0, headRuns: [] })
+      return undefined
     }
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) setCount(c => Math.min(c + step, len))
+        if (entries[0]?.isIntersecting && activeRef.current) growRef.current()
       },
       { root: null, rootMargin: '600px 0px' },
     )
     obs.observe(el)
-    io.current = obs
-  }, [step, len])
+    bottomIo.current = obs
+    return () => {
+      obs.disconnect()
+      if (bottomIo.current === obs) bottomIo.current = null
+    }
+  }, [active, bottomEl, maxCount, window.end])
 
-  const grow = useCallback((): void => {
-    setCount(c => Math.min(c + step, len))
-  }, [step, len])
-
-  /** 至少渲染到第 n 项（定位跳转等场景需要目标项立刻在 DOM 里）。
-   *  不做上限钳制：调用时闭包里的 len 可能已过期，返回的 count 会按最新
-   *  len 钳制，超出部分自然被忽略。 */
-  const reveal = useCallback((n: number): void => {
-    setCount(c => Math.max(c, n))
-  }, [])
-
-  /*
-   * 数据晚到时的自愈（第 62 轮）。
-   *
-   * `count` 的初值只在**挂载那一刻**算一次：`useState(() => Math.min(step, len))`。
-   * 而这些面板一律是「先渲染骨架、数据后到」——冷启动时后端还在同步，首次请求可能返回空快照，
-   * 于是挂载时 `len = 0` ⇒ `count = 0`；数据到了之后 `count` 还是 0，
-   * 只能靠 sentinel 的 IntersectionObserver 兜回来，而它只在**交叉状态变化**时回调，
-   * 实测会卡住：第 62 轮的 31 页签普查里「文件资产」反复读到 37–50 字符的「只有表头」状态
-   * （把它改成不渲染任何条目能复现同一个特征：正文 43 字符）。
-   *
-   * 这里补一次「len 有值但 count 还是 0」的自愈。它只影响这个坏状态：
-   * 正常路径上 count 挂载时就已经 ≥ min(step, len) > 0。
-   * 同一 hook 被 9 个面板共用（文件/表情包/收藏/会话/账本/媒体/朋友圈/公众号/撤回），
-   * 所以修在这里而不是各个调用点。
-   */
   useEffect(() => {
-    if (count === 0 && len > 0) setCount(Math.min(step, len))
-  }, [count, len, step])
+    if (topIo.current) {
+      topIo.current.disconnect()
+      topIo.current = null
+    }
+    const el = topEl
+    if (!active || !el || typeof IntersectionObserver === 'undefined') return undefined
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && activeRef.current) shiftBackRef.current()
+      },
+      { root: null, rootMargin: '600px 0px' },
+    )
+    obs.observe(el)
+    topIo.current = obs
+    return () => {
+      obs.disconnect()
+      if (topIo.current === obs) topIo.current = null
+    }
+  }, [active, topEl, window.start])
 
-  return { count: Math.min(count, len), grow, reveal, sentinelRef }
+  /** 至少渲染到第 n 项（定位跳转等场景需要目标项立刻在 DOM 里）。 */
+  const reveal = useCallback((n: number): void => {
+    if (!activeRef.current) return
+    setWindow(prev => {
+      const total = Math.max(0, lenRef.current)
+      const end = Math.min(total, Math.max(prev.end, Math.floor(n) || 0))
+      const start = Math.max(0, end - maxCount)
+      return end === prev.end && start === prev.start
+        ? prev
+        : start !== prev.start
+          // 跳转后的头部不再是原来的连续区间；保留旧占位会把同一条目
+          // 既算进 spacer 又挂进 DOM。清空头部状态，至少不发生重复占位。
+          ? { start, end, beforeHeight: 0, headRuns: [] }
+          : { ...prev, end }
+    })
+  }, [maxCount])
+
+  return {
+    start: window.start,
+    end: window.end,
+    count: window.end,
+    beforeHeight: window.beforeHeight,
+    grow,
+    reveal,
+    sentinelRef,
+    topSentinelRef,
+    listRef,
+  }
 }
 
 /** 哨兵容器:占位两个像素,IntersectionObserver 观察它即可触发渐进加载。 */
 export function ListSentinel({ refFn }: { refFn: (el: HTMLDivElement | null) => void }): React.JSX.Element {
   return <div ref={refFn} className={kitCss.sentinel} aria-hidden="true" />
+}
+
+/**
+ * 已回收头部条目的等高占位；高度来自真实 DOM 测量，不参与点击与读屏。
+ *
+ * 顶部哨兵与占位一起渲染：用户向上滚回预加载区时，按记录的回收区间把条目
+ * 放回占位位置，而不是让用户穿过一整段不可见空白。
+ */
+export function ProgressiveListSpacer({ height, topSentinelRef }: {
+  height: number
+  topSentinelRef?: (el: HTMLDivElement | null) => void
+}): React.JSX.Element | null {
+  if (height <= 0) return null
+  return (
+    <>
+      {topSentinelRef && (
+        <div
+          ref={topSentinelRef}
+          className={kitCss.windowTopSentinel}
+          data-progressive-top-sentinel=""
+          aria-hidden="true"
+        />
+      )}
+      <div className={kitCss.windowSpacer} data-progressive-spacer={height} style={{ height }} aria-hidden="true" />
+    </>
+  )
 }
 
 /**
@@ -92,27 +357,49 @@ export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px',
   cbRef.current = onVisible
   const rootRef = useRef(root)
   rootRef.current = root
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const elRef = useRef<HTMLDivElement | null>(null)
   const ioRef = useRef<IntersectionObserver | null>(null)
   /** 哨兵此刻在不在视口里（IO 只在变化时报，所以自己记住最后一次的状态）。 */
   const hitRef = useRef(false)
   /** 第一次跑 `watch` 那个 effect 要跳过（挂载时 IO 已经报过一遍了）。 */
   const firstWatchRef = useRef(true)
+  /** 首次挂载的 ref 回调已经建过观察器；active effect 不能在挂载时再建第二只。 */
+  const firstActiveEffectRef = useRef(true)
   const attach = useCallback((el: HTMLDivElement | null) => {
+    elRef.current = el
     if (ioRef.current) { ioRef.current.disconnect(); ioRef.current = null }
-    if (!el || typeof IntersectionObserver === 'undefined') return
+    // 新观察器要重新等一次相交首报；保留上一轮 true 会让同一次提交里的
+    // watch 补查与 observe 首报各 call 一次。
+    hitRef.current = false
+    if (!activeRef.current || !el || typeof IntersectionObserver === 'undefined') return
     const rootEl = rootRef.current?.() ?? null
     const ob = new IntersectionObserver((entries) => {
       const hit = !!entries[0]?.isIntersecting
       hitRef.current = hit
-      if (hit) cbRef.current()
+      if (hit && activeRef.current) cbRef.current()
     }, { root: rootEl, rootMargin })
     ob.observe(el)
     ioRef.current = ob
   }, [rootMargin])
+  // display:none 期间 IO 可能只报一次 false；恢复显示后主动重挂，
+  // 避免哨兵仍在视口里却收不到第二次相交回调。
+  useEffect(() => {
+    if (firstActiveEffectRef.current) {
+      firstActiveEffectRef.current = false
+      return
+    }
+    const el = elRef.current
+    if (el) attach(el)
+  }, [active, attach])
   useEffect(() => {
     // 挂载那一轮不补查：IO 在 `observe()` 时本来就会报一次初始状态，再 call 一遍就是白敲。
     if (firstWatchRef.current) { firstWatchRef.current = false; return }
-    if (hitRef.current) cbRef.current()
+    // 恢复显示由上面的 active effect 重挂观察器；这里只补「数据追加」这一路，
+    // 否则 active 与 watch 同时变化时 observe 首报和补查会各 call 一次。
+    if (activeRef.current && hitRef.current) cbRef.current()
   }, [watch])
   return attach
 }
@@ -139,24 +426,76 @@ export function ListSkeleton(_props: { rows?: number; grid?: boolean; minCol?: n
  * 始终拿到最新闭包。相比固定轮询，能按需、即时刷新。
  * @param handler - 数据落地后的刷新回调。
  */
-export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wechat-data-updated', debounceMs = 300): void {
+export interface WechatDataUpdatedOptions {
+  /**
+   * 隐藏期间收到的事件是否在重新显示时补跑一次。
+   *
+   * `usePagedList` / `useFreshData` 自己已有恢复钩子；它们传 false，避免恢复时双查。
+   * 其余直接订阅的面板默认 true：隐藏期间不查，但恢复后不能让数据永久停在旧快照。
+   */
+  replayOnResume?: boolean
+}
+
+export function useWechatDataUpdated(
+  handler: () => void,
+  eventName = 'dsh-wechat-data-updated',
+  debounceMs = 300,
+  options: WechatDataUpdatedOptions = {},
+): void {
   const ref = useRef(handler)
   ref.current = handler
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const wasActiveRef = useRef(active)
+  const dirtyRef = useRef(false)
+  const scheduleRef = useRef<(() => void) | null>(null)
+  const replayOnResume = options.replayOnResume !== false
   useEffect(() => {
     let timer: number | undefined
-    const on = (): void => {
-      // 高频同步事件合并为一次刷新，避免连续重载导致界面卡顿。
-      // 合并窗可调（2026-10-13）：后端推送已自带 1.5s 限频，会话列表这类「第一眼就要变」
-      // 的界面用更小的窗换更快的响应。
+    const schedule = (): void => {
       if (timer !== undefined) window.clearTimeout(timer)
-      timer = window.setTimeout(() => { timer = undefined; ref.current() }, debounceMs)
+      timer = window.setTimeout(() => {
+        timer = undefined
+        // 合并窗内面板被隐藏：不后台查询，留到恢复时补跑（或交给面板自己的恢复钩子）。
+        if (!activeRef.current) {
+          dirtyRef.current = true
+          return
+        }
+        ref.current()
+      }, debounceMs)
+    }
+    scheduleRef.current = schedule
+    const on = (): void => {
+      if (!activeRef.current) {
+        dirtyRef.current = true
+        return
+      }
+      // 高频同步事件合并为一次刷新，避免连续重载导致界面卡顿。
+      // 合并窗可调（2026-10-13）：后端推送已自带限频；会话列表这类「第一眼就要变」
+      // 的界面把窗归零，直接刷新。
+      schedule()
     }
     window.addEventListener(eventName, on)
     return () => {
       if (timer !== undefined) window.clearTimeout(timer)
+      if (scheduleRef.current === schedule) scheduleRef.current = null
       window.removeEventListener(eventName, on)
     }
   }, [eventName, debounceMs])
+
+  useEffect(() => {
+    const resumed = active && !wasActiveRef.current
+    wasActiveRef.current = active
+    if (!resumed) return
+    if (!replayOnResume) {
+      dirtyRef.current = false
+      return
+    }
+    if (!dirtyRef.current) return
+    dirtyRef.current = false
+    scheduleRef.current?.()
+  }, [active, replayOnResume])
 }
 
 /**
@@ -317,6 +656,256 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
  * 旧写法是「每约 10 秒、最多 16 个重读请求全部压进后端那一条队列」。
  */
 
+function usePagedListLoader<T>(
+  fetchPage: (offset: number, limit: number) => Promise<{ items: readonly T[]; total: number }>,
+  pageSize: number,
+  maxItems: number,
+  refreshPageLimit = 0,
+  mergeItems?: (current: readonly T[], incoming: readonly T[]) => readonly T[],
+) {
+  const fetchPageRef = useRef(fetchPage)
+  fetchPageRef.current = fetchPage
+  const [items, setItems] = useState<readonly T[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [lastCount, setLastCount] = useState(0)
+  const offsetRef = useRef(0)
+  const seqRef = useRef(0)
+  const busyRef = useRef(false)
+  const active = useKeepAliveActive()
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const lastRefreshAtRef = useRef(0)
+
+  const load = useCallback(async (append: boolean, force = false, keepItems = false): Promise<void> => {
+    if (!activeRef.current) return
+    if (busyRef.current && !force) return
+    busyRef.current = true
+    const seq = ++seqRef.current
+    const offset = append ? offsetRef.current : 0
+    if (append) setLoadingMore(true)
+    else if (keepItems) {
+      // 非破坏性刷新：**不动 items**，列表与滚动位置都保持原样，等新数据到达再替换。
+      setError(null)
+    } else {
+      setItems([])
+      setTotal(0)
+      setLastCount(0)
+      setLoading(true)
+      setError(null)
+    }
+    try {
+      const r = await fetchPageRef.current(offset, pageSize)
+      if (seq !== seqRef.current || !activeRef.current) return
+      const list = r.items
+      setItems(prev => {
+        if (!append) return list
+        const merged = mergeItems ? mergeItems(prev, list) : [...prev, ...list]
+        // 触到上限就**截断尾部**（保留已加载的前 N 条），而不是丢弃头部 ——
+        // 丢头部会让 scrollTop 跳，用户正在看的那一行会跑掉。
+        return maxItems > 0 && merged.length > maxItems ? merged.slice(0, maxItems) : merged
+      })
+      setTotal(r.total)
+      setLastCount(list.length)
+      offsetRef.current = offset + list.length
+    } catch (e) {
+      if (seq === seqRef.current && activeRef.current) setError((e as Error).message)
+    } finally {
+      if (seq === seqRef.current) {
+        busyRef.current = false
+        if (activeRef.current) {
+          setLoading(false)
+          setLoadingMore(false)
+        }
+      }
+    }
+  }, [pageSize, maxItems, mergeItems])
+
+  const loadMore = useCallback((): void => { void load(true) }, [load])
+  const reset = useCallback((): void => {
+    seqRef.current += 1
+    offsetRef.current = 0
+    busyRef.current = false
+    if (!activeRef.current) return
+    void load(false, true)
+  }, [load])
+
+  const refresh = useCallback((): void => {
+    if (!activeRef.current) return
+    const want = offsetRef.current
+    if (want <= 0) {
+      lastRefreshAtRef.current = Date.now()
+      void load(false, true, true)
+      return
+    }
+    // 会话列表这类「已加载 N 页但只需要最新头部」的列表：一轮刷新收成**一个**
+    // `offset=0, limit=want` 请求，避免 600 条时连续打 5 次 getSessions。
+    // 其它分页列表保持原逻辑（逐页取，保证页参数与页面语义一致）。
+    const singleLimit = refreshPageLimit > 0 ? Math.min(want, Math.floor(refreshPageLimit)) : 0
+    if (singleLimit > 0) {
+      const seq = ++seqRef.current
+      busyRef.current = true
+      lastRefreshAtRef.current = Date.now()
+      void (async () => {
+        try {
+          const r = await fetchPageRef.current(0, singleLimit)
+          if (seq !== seqRef.current || !activeRef.current) return
+          setItems((prev) => {
+            const merged = mergeItems ? mergeItems(prev, r.items) : r.items
+            return maxItems > 0 && merged.length > maxItems ? merged.slice(0, maxItems) : merged
+          })
+          setTotal(r.total)
+          setLastCount(r.items.length)
+          // 首页刷新只合并头部，不推进分页 offset：旧页仍在列表里，
+          // 下一次 loadMore 从原 offset 继续，重复项由 mergeItems 去重。
+          setError(null)
+        } catch (e) {
+          if (seq === seqRef.current && activeRef.current) setError((e as Error).message)
+        } finally {
+          if (seq === seqRef.current) {
+            busyRef.current = false
+            if (activeRef.current) {
+              setLoading(false)
+              setLoadingMore(false)
+            }
+          }
+        }
+      })()
+      return
+    }
+    const plan = refreshPagesFor(want, pageSize)
+    if (!plan.feasible) return
+    lastRefreshAtRef.current = Date.now()
+    const seq = ++seqRef.current
+    busyRef.current = true
+    void (async () => {
+      try {
+        const r = await collectPageRange<T>({
+          want,
+          pageSize,
+          maxPages: plan.pages,
+          fetchPage: (offset, limit) => fetchPageRef.current(offset, limit),
+          onPage: (info) => {
+            if (seq !== seqRef.current || !activeRef.current) return false
+            setTotal(info.total)
+            return true
+          },
+        })
+        if (seq !== seqRef.current || !activeRef.current) return
+        setItems(r.items)
+        setLastCount(r.items.length)
+        offsetRef.current = r.items.length
+        setError(null)
+      } catch (e) {
+        if (seq === seqRef.current && activeRef.current) setError((e as Error).message)
+      } finally {
+        if (seq === seqRef.current) {
+          busyRef.current = false
+          if (activeRef.current) {
+            setLoading(false)
+            setLoadingMore(false)
+          }
+        }
+      }
+    })()
+  }, [load, maxItems, mergeItems, pageSize, refreshPageLimit])
+
+  return {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    lastCount,
+    active,
+    activeRef,
+    seqRef,
+    busyRef,
+    lastRefreshAtRef,
+    loadMore,
+    reset,
+    refresh,
+  }
+}
+
+function usePagedListAutoRefresh(args: {
+  active: boolean
+  activeRef: { current: boolean }
+  seqRef: { current: number }
+  busyRef: { current: boolean }
+  lastRefreshAtRef: { current: number }
+  refresh: () => void
+  refreshMinIntervalMs?: number
+  refreshDebounceMs?: number
+}): void {
+  const {
+    active,
+    activeRef,
+    seqRef,
+    busyRef,
+    lastRefreshAtRef,
+    refresh,
+    refreshMinIntervalMs,
+    refreshDebounceMs,
+  } = args
+  const wasActiveRef = useRef(active)
+  const trailingRef = useRef<number | undefined>(undefined)
+
+  const maybeBackgroundRefresh = useCallback((): void => {
+    if (!activeRef.current) return
+    const gate = refreshGate({
+      now: Date.now(),
+      lastStartedAt: lastRefreshAtRef.current,
+      hidden: typeof document !== 'undefined' && document.hidden === true,
+      minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS,
+    })
+    if (gate.go) {
+      refresh()
+      return
+    }
+    if (gate.waitMs <= 0 || trailingRef.current !== undefined) return
+    trailingRef.current = window.setTimeout(() => {
+      trailingRef.current = undefined
+      if (activeRef.current) refresh()
+    }, gate.waitMs)
+  }, [activeRef, lastRefreshAtRef, refresh, refreshMinIntervalMs])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const onVisible = (): void => {
+      if (document.hidden !== true && activeRef.current) refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { document.removeEventListener('visibilitychange', onVisible) }
+  }, [activeRef, refresh])
+
+  useEffect(() => {
+    if (active) return
+    seqRef.current += 1
+    busyRef.current = false
+    if (trailingRef.current !== undefined) {
+      window.clearTimeout(trailingRef.current)
+      trailingRef.current = undefined
+    }
+  }, [active, busyRef, seqRef])
+
+  useEffect(() => {
+    const resumed = active && !wasActiveRef.current
+    wasActiveRef.current = active
+    if (resumed) refresh()
+  }, [active, refresh])
+
+  useEffect(() => () => {
+    if (trailingRef.current !== undefined) window.clearTimeout(trailingRef.current)
+  }, [])
+
+  useWechatDataUpdated(() => {
+    maybeBackgroundRefresh()
+  }, 'dsh-wechat-data-updated', refreshDebounceMs ?? 300, { replayOnResume: false })
+}
+
 export function usePagedList<T>(options: {
   pageSize: number
   fetchPage: (offset: number, limit: number) => Promise<{ items: readonly T[]; total: number }>
@@ -324,6 +913,20 @@ export function usePagedList<T>(options: {
   refreshMinIntervalMs?: number
   /** 推送合并窗（缺省 300ms）。后端推送已自带限频，需要最快响应的小列表传更小值。 */
   refreshDebounceMs?: number
+  /**
+   * 一轮后台刷新是否合并成「一个最多 N 条的首部请求」。
+   *
+   * 仅用于会话列表这类刷新时只关心最新排序头部的列表：600 条时避免按 120 条
+   * 分页连打 5 个请求。缺省 0 = 保持原「按已加载页数逐页重取」语义。
+   */
+  refreshPageLimit?: number
+  /**
+   * 分页与实时头部刷新时的合并函数。
+   *
+   * 传了它就必须按业务键去重并保持期望排序；当前只有会话列表使用。
+   * 不传则保持原有「追加拼接 / 首页替换」语义。
+   */
+  mergeItems?: (current: readonly T[], incoming: readonly T[]) => readonly T[]
   /**
    * 已加载条数的**硬上限**（缺省 0 = 不限制）。
    *
@@ -351,180 +954,41 @@ export function usePagedList<T>(options: {
   reset: () => void
   refresh: () => void
 } {
-  const { pageSize, refreshDebounceMs, refreshMinIntervalMs, maxItems = 0 } = options
-  const fetchPageRef = useRef(options.fetchPage)
-  fetchPageRef.current = options.fetchPage
-  const [items, setItems] = useState<readonly T[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lastCount, setLastCount] = useState(0)
-  const offsetRef = useRef(0)
-  const seqRef = useRef(0)
-  const busyRef = useRef(false)
+  const {
+    pageSize,
+    refreshDebounceMs,
+    refreshMinIntervalMs,
+    maxItems = 0,
+    refreshPageLimit = 0,
+    mergeItems,
+  } = options
+  const {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    lastCount,
+    active,
+    activeRef,
+    seqRef,
+    busyRef,
+    lastRefreshAtRef,
+    loadMore,
+    reset,
+    refresh,
+  } = usePagedListLoader(options.fetchPage, pageSize, maxItems, refreshPageLimit, mergeItems)
 
-  const load = useCallback(async (append: boolean, force = false, keepItems = false): Promise<void> => {
-    if (busyRef.current && !force) return
-    busyRef.current = true
-    const seq = ++seqRef.current
-    const offset = append ? offsetRef.current : 0
-    if (append) setLoadingMore(true)
-    else if (keepItems) {
-      // 非破坏性刷新：**不动 items**，列表与滚动位置都保持原样，等新数据到达再替换。
-      setError(null)
-    } else {
-      setItems([])
-      setTotal(0)
-      setLastCount(0)
-      setLoading(true)
-      setError(null)
-    }
-    try {
-      const r = await fetchPageRef.current(offset, pageSize)
-      if (seq !== seqRef.current) return
-      const list = r.items
-      setItems(prev => {
-        if (!append) return list
-        const merged = [...prev, ...list]
-        // 触到上限就**截断尾部**（保留已加载的前 N 条），而不是丢弃头部 ——
-        // 丢头部会让 scrollTop 跳，用户正在看的那一行会跑掉。
-        return maxItems > 0 && merged.length > maxItems ? merged.slice(0, maxItems) : merged
-      })
-      setTotal(r.total)
-      setLastCount(list.length)
-      offsetRef.current = offset + list.length
-    } catch (e) {
-      if (seq === seqRef.current) setError((e as Error).message)
-    } finally {
-      if (seq === seqRef.current) {
-        setLoading(false)
-        setLoadingMore(false)
-        busyRef.current = false
-      }
-    }
-  }, [pageSize, maxItems])
-
-  const loadMore = useCallback((): void => { void load(true) }, [load])
-  const reset = useCallback((): void => {
-    seqRef.current += 1
-    offsetRef.current = 0
-    busyRef.current = false
-    void load(false, true)
-  }, [load])
-
-  /**
-   * **非破坏性**地重新取数：保留当前已加载的列表（不置空、不显示骨架屏），
-   * 数据到达后再原位替换。
-   *
-   * 为什么必须与 `reset` 分开（本方法存在的唯一理由）：
-   * `reset()` 会**同步** `setItems([])`，列表瞬间被换成骨架屏 —— 内容高度从「已加载
-   * 的 N 条」塌到 12 行时，浏览器会把 `scrollTop` 钳到 0。于是任何走 `reset` 的
-   * 后台刷新都会把用户**弹回列表顶部**。实测触发路径：实时同步每约 10 秒派发一次
-   * `dsh-wechat-data-updated`，本钩子订阅它并 `reset()`，用户往下翻之后会不断被顶回顶部。
-   *
-   * 取数范围要**覆盖已加载条数**：只重取第一页会让列表从 N 条缩回一页，高度骤降
-   * 同样会把滚动位置钳掉。所以按「已加载条数」重取，并保持 `offsetRef` 停在末尾，
-   * 后续 `loadMore()` 接着往下翻。单次请求仍以 `pageSize` 为上限（不放大 IPC 负载），
-   * 因此最多发 `MAX_REFRESH_PAGES` 个请求；超过就退回「重建第一页」，不做无界刷新。
-   *
-   * `refresh()` 只用于「筛选条件没变、只是要拿最新数据」的场景；筛选条件真的变了
-   * 仍用 `reset()` —— 那种情况本来就应该回到顶部。
-   */
-  const refresh = useCallback((): void => {
-    const want = offsetRef.current
-    if (want <= 0) { void load(false, true, true); return }
-    const plan = refreshPagesFor(want, pageSize)
-    if (!plan.feasible) {
-      // 已加载的条数超出一轮的上界：这一轮**不刷**。发前 N 页会把列表缩到 N 页，
-      // 用户看到的不是「数据旧了一点」而是「列表被截断 + 被弹回顶部」。
-      return
-    }
-    lastRefreshAtRef.current = Date.now()
-    const seq = ++seqRef.current
-    busyRef.current = true
-    void (async () => {
-      try {
-        const r = await collectPageRange<T>({
-          want,
-          pageSize,
-          maxPages: plan.pages,
-          fetchPage: (offset, limit) => fetchPageRef.current(offset, limit),
-          // 返回 false = 这一轮已作废（期间发生了切换分类/搜索），丢弃已收集内容。
-          onPage: (info) => {
-            if (seq !== seqRef.current) return false
-            setTotal(info.total)
-            return true
-          },
-        })
-        if (seq !== seqRef.current) return
-        setItems(r.items)
-        setLastCount(r.items.length)
-        offsetRef.current = r.items.length
-        setError(null)
-      } catch (e) {
-        if (seq === seqRef.current) setError((e as Error).message)
-      } finally {
-        if (seq === seqRef.current) {
-          setLoading(false)
-          setLoadingMore(false)
-          busyRef.current = false
-        }
-      }
-    })()
-  }, [load, pageSize])
-
-  // 数据落地后安静刷新，使新数据及时可见。
-  //
-  // 实测（冷启动 + 连续切换页签）：后端启动同步要跑 2–3 分钟，期间请求可能返回
-  // 空快照，面板就停在「共 0 项 / 暂无数据」；约 45–60 秒后才自行恢复 —— 但那份
-  // 恢复是偶然的：用本钩子的面板里只有 Files 订阅了更新事件，其余并没有任何刷新
-  // 通路。这里把它变成确定行为。
-  //
-  // 用 `refresh()`（非破坏性）而不是 `reset()`：同步活跃期该事件约每 10 秒一次，
-  // 而 `reset()` 会**同步清空 items** ⇒ 列表被骨架屏替换 ⇒ 容器高度塌陷 ⇒
-  // 浏览器把 scrollTop 钳到 0 —— 用户往下翻之后会被反复**弹回顶部**。
-  // `refresh()` 保留当前列表并按已加载条数重取，滚动位置不受影响。
-  /** 上一轮真正开始的时刻 / 已排队的尾部刷新。 */
-  const lastRefreshAtRef = useRef(0)
-  const trailingRef = useRef<number | undefined>(undefined)
-
-  /**
-   * 事件驱动的后台刷新：先过节流门，不可见就不发，被合并掉的那一次排成**尾部刷新**。
-   *
-   * 「丢弃」与「合并」的差别是要害：只丢掉事件的话，面板会一直停在旧数据上
-   * （再也没有人触发刷新）—— 那不是省请求，那是把省请求换成了看不见的过期。
-   */
-  const maybeBackgroundRefresh = useCallback((): void => {
-    const gate = refreshGate({
-      now: Date.now(),
-      lastStartedAt: lastRefreshAtRef.current,
-      hidden: typeof document !== 'undefined' && document.hidden === true,
-      minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS,
-    })
-    if (gate.go) { refresh(); return }
-    if (gate.waitMs <= 0 || trailingRef.current !== undefined) return
-    trailingRef.current = window.setTimeout(() => {
-      trailingRef.current = undefined
-      refresh()
-    }, gate.waitMs)
-  }, [refresh, refreshMinIntervalMs])
-
-  // 窗口从后台切回前台时补一次：期间攒下的变更在这里落地（而不是每 10 秒打一轮）。
-  useEffect(() => {
-    if (typeof document === 'undefined') return undefined
-    const onVisible = (): void => { if (document.hidden !== true) refresh() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => { document.removeEventListener('visibilitychange', onVisible) }
-  }, [refresh])
-
-  useEffect(() => () => {
-    if (trailingRef.current !== undefined) window.clearTimeout(trailingRef.current)
-  }, [])
-
-  useWechatDataUpdated(() => {
-    maybeBackgroundRefresh()
-  }, 'dsh-wechat-data-updated', refreshDebounceMs ?? 300)
+  usePagedListAutoRefresh({
+    active,
+    activeRef,
+    seqRef,
+    busyRef,
+    lastRefreshAtRef,
+    refresh,
+    refreshMinIntervalMs,
+    refreshDebounceMs,
+  })
 
   /** 是否已触到 {@link maxItems} 上界（`maxItems` 为 0 时恒 false）。 */
   const capped = maxItems > 0 && items.length >= maxItems

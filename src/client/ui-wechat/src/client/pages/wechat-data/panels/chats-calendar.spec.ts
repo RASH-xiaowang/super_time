@@ -10,8 +10,7 @@
  * 判据分两层：纯函数用表格钉死每种边界；钩子只数 RPC 与看 setter 收到什么
  * （翻月跨年、无会话不发请求、失败要把旧的网格清空）。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatsCalendarState } from './chats-calendar.ts'

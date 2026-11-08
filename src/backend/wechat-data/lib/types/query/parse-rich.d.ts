@@ -170,19 +170,8 @@ export declare function channelsRich(app: string, title: string, des: string, ur
 /**
  * 公众号推送（`<mmreader>`）→ 大图封面 + 次条列表。
  *
- * 实测结构（`biz_message_0.db` 里 gh_ 会话，2026-09）：
- * ```xml
- * <mmreader><category type="20" count="2"><name>公众号名</name>
- *   <topnew><cover>头条封面</cover><width>0</width><height>0</height></topnew>
- *   <item>…头条自身（title/url 与 appmsg 完全重复）…</item>
- *   <item>…次条：title/title_v2/url/cover/summary…</item>
- * </category></mmreader>
- * ```
- * 判据：`items[0]` 与 appmsg 自身的 title/url 相同（实测 #9/#10/#11 三条一致），
- * 所以按「标题或链接与头条相同」跳过它，**次条从第 2 个 item 起**。
- * 界面按官方形态渲染：单篇 = 大图 + 标题在下方；多篇 = 大图（头条）+ 每篇次条一行（标题 + 小方图）。
- *
- * `width`/`height` 实测恒为 0，别拿它算比例；封面统一按 16:9 裁。
+ * `category type=0` 是普通应用通知（例如银行交易提醒），必须保留 `desc` 并按
+ * 普通链接/应用消息渲染；只有 type=20 或至少两篇有效文章才进入多图文卡。
  * @param link - the link descriptor to enrich (mutated in place).
  * @param app - the appmsg XML.
  * @param firstTitle - the appmsg-level title (the top article's).
@@ -190,6 +179,13 @@ export declare function channelsRich(app: string, title: string, des: string, ur
  * @param fallbackCover - `thumburl`, used when `<topnew><cover>` is absent.
  */
 export declare function applyMpNews(link: RichMedia, app: string, firstTitle: string, firstUrl: string, fallbackCover: string): void;
+/**
+ * 解析根节点就是 `<mmreader>` 的公众号/资讯推送（微信 local_type=1）。
+ * 第一篇有效文章作为头条，其余 `<item>/<newitem>` 完整进入 `mpArticles`。
+ * @param xml - root message XML.
+ * @returns rich link descriptor, or null when it is not a real MP push.
+ */
+export declare function parseMpNewsRich(xml: string): RichMedia | null;
 /**
  * Parse the appmsg block (type 49) into its rich subtype.
  *

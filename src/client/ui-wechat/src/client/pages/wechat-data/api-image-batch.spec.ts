@@ -20,6 +20,7 @@ import {
   apiExportAllSessions,
   apiExportSessionMessages,
   apiGetExportProgress,
+  apiGetEmoticonDataUrl,
   apiGetImageDataUrl,
   apiGetImageDataUrlsBatch,
   apiGetSnsVideoCoverDataUrl,
@@ -179,6 +180,36 @@ describe('N16：列表型取图走批量入口（合并窗口在 api 层）', ()
     expect(calls.length).toBe(2)
     expect(calls[1]!.fileOnly).toBe(true)
     expect(single.url).toBe('wechat-media://decoded/wxid_a/x.jpg')
+  })
+})
+
+describe('E1：表情批量请求的稳定去重键', () => {
+  it('同一 tick 的不同表情不会被对象的 String(key) 合并成一个待处理项', async () => {
+    const batches: Array<Array<{ md5: string; emojiUrl?: string }>> = []
+    setWechatRemote({
+      getEmoticonDataUrls: async ({ items }: { items: Array<{ md5: string; emojiUrl?: string }> }) => {
+        batches.push(items)
+        return {
+          ok: true as const,
+          value: {
+            items: items.map(item => ({
+              md5: item.md5,
+              dataUrl: 'data:image/gif;base64,' + item.md5,
+            })),
+          },
+        }
+      },
+    } as unknown as WechatRemote)
+
+    const [first, second] = await Promise.all([
+      apiGetEmoticonDataUrl({ md5: 'queue-key-a', emojiUrl: 'https://cdn.example/a.gif' }),
+      apiGetEmoticonDataUrl({ md5: 'queue-key-b' }),
+    ])
+
+    expect(batches).toHaveLength(1)
+    expect(batches[0]?.map(item => item.md5)).toEqual(['queue-key-a', 'queue-key-b'])
+    expect(first.url).toContain('queue-key-a')
+    expect(second.url).toContain('queue-key-b')
   })
 })
 

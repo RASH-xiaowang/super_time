@@ -21,6 +21,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -28,7 +29,21 @@ import { KNOWN_ROT, LOCAL_ONLY, MEASURED_ON, TIER1, TIER2, TIER3 } from '../../.
 import { MUTATIONS } from '../../../scripts/mutations-registry.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const require = createRequire(import.meta.url)
+const yaml = require('js-yaml') as { load: (source: string) => unknown }
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+
+interface WorkflowStep {
+  name?: string
+  run?: string
+  if?: unknown
+  'continue-on-error'?: unknown
+  'timeout-minutes'?: number
+}
+
+interface WorkflowDocument {
+  jobs?: Record<string, { steps?: WorkflowStep[] }>
+}
 
 /**
  * 读 workflow 并**剥掉 `#` 注释行**。
@@ -48,9 +63,46 @@ const wf = (name: string): string => readFileSync(join(ROOT, '.github', 'workflo
 const ci = wf('ci.yml')
 const nightly = wf('nightly.yml')
 const release = wf('release.yml')
+const ciDoc = yaml.load(ci) as WorkflowDocument
+const nightlyDoc = yaml.load(nightly) as WorkflowDocument
+const releaseDoc = yaml.load(release) as WorkflowDocument
+const releaseSteps = releaseDoc.jobs?.release?.steps ?? []
 
-/** 这个 script 在某个 workflow 里被真的调用了吗（按 `npm run <name>` 找，注释已剥）。 */
-const runsIn = (text: string, script: string): boolean => new RegExp('npm run ' + script.replace(/[:/]/g, '\\$&') + '(?![\\w:-])').test(text)
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const linesOf = (step: WorkflowStep | undefined): string[] => String(step?.run ?? '')
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line !== '' && !line.startsWith('#'))
+const shellLinesOf = (step: WorkflowStep | undefined): string[] => linesOf(step)
+  .filter((line) => !/^(?:echo|write-host|write-output)\b/i.test(line))
+const hasCommand = (step: WorkflowStep | undefined, command: string): boolean => {
+  const pattern = new RegExp(`(?:^|&&|\\|\\||;|=)\\s*${escapeRegExp(command)}(?:\\s|$)`)
+  return shellLinesOf(step).some((line) => pattern.test(line))
+}
+const stepsOf = (doc: WorkflowDocument, job = 'release'): WorkflowStep[] => doc.jobs?.[job]?.steps ?? []
+const commandStepIndex = (doc: WorkflowDocument, command: string, job = 'release'): number =>
+  stepsOf(doc, job).findIndex((step) => hasCommand(step, command))
+const publicPublishStepIndex = (doc: WorkflowDocument): number => stepsOf(doc).findIndex((step) =>
+  linesOf(step).some((line) => /^-Body\s+\(@\{\s*draft\s*=\s*\$false/.test(line)))
+
+function expectBlockingCommand(doc: WorkflowDocument, command: string): number {
+  const index = commandStepIndex(doc, command)
+  expect(index, `${command} 不是可执行步骤，或只出现在注释/输出语句里`).toBeGreaterThan(-1)
+  const step = stepsOf(doc)[index]
+  expect(step?.if, `${command} 带有条件表达式`).toBeUndefined()
+  const continueOnError = step?.['continue-on-error']
+  expect(continueOnError === undefined || continueOnError === false || continueOnError === 'false',
+    `${command} 被 continue-on-error 放行`).toBe(true)
+  expect(
+    linesOf(step).join('\n'),
+    `${command} 所在步骤把失败吞掉了`,
+  ).not.toMatch(/(?:\|\||;)\s*(?:exit\s+0|true)\b/i)
+  return index
+}
+
+/** 这个 script 在某个 workflow 里被真的调用了吗（按 YAML 步骤里的可执行行找）。 */
+const runsIn = (doc: WorkflowDocument, script: string, job = 'release'): boolean =>
+  stepsOf(doc, job).some((step) => hasCommand(step, `npm run ${script}`))
 
 describe('分档表本身', () => {
   it('表里每一条都是 package.json 里真实存在的 script（改名/删除后不许悄悄留在表里）', () => {
@@ -81,11 +133,11 @@ describe('分档表本身', () => {
       expect(all.has(s), s + ' 不在任何一档里 —— 这正是这一轮要修的缺口').toBe(true)
     }
     // 而且必须真的接进 workflow，不只是写进表
-    expect(runsIn(ci, 'lint:db')).toBe(true)
-    expect(runsIn(ci, 'check:deps-provenance')).toBe(true)
-    expect(runsIn(ci, 'measure:quick')).toBe(true)
-    expect(runsIn(nightly, 'check:mutation')).toBe(true)
-    expect(runsIn(nightly, 'measure:slow')).toBe(true)
+    expect(runsIn(ciDoc, 'lint:db', 'verify')).toBe(true)
+    expect(runsIn(ciDoc, 'check:deps-provenance', 'verify')).toBe(true)
+    expect(runsIn(ciDoc, 'measure:quick', 'verify')).toBe(true)
+    expect(runsIn(nightlyDoc, 'check:mutation', 'nightly')).toBe(true)
+    expect(runsIn(nightlyDoc, 'measure:slow', 'nightly')).toBe(true)
   })
 
   it('每条都写了「为什么是这一档」，且实测日期没过期到离谱', () => {
@@ -114,7 +166,7 @@ describe('分档表本身', () => {
 describe('第一档：PR 门禁真的调了表里每一条', () => {
   for (const r of TIER1) {
     it('ci.yml 调了 ' + r.script + '（' + r.cost + '）', () => {
-      expect(runsIn(ci, r.script), r.script + ' 在表里但不在 ci.yml 里').toBe(true)
+      expect(runsIn(ciDoc, r.script, 'verify'), r.script + ' 在表里但不在 ci.yml 的可执行步骤里').toBe(true)
     })
   }
 
@@ -144,7 +196,7 @@ describe('第一档：PR 门禁真的调了表里每一条', () => {
 describe('第二档：夜间工作流跑的是全量，而不是增量', () => {
   for (const r of TIER2) {
     it('nightly.yml 调了 ' + r.script + '（' + r.cost + '）', () => {
-      expect(runsIn(nightly, r.script), r.script + ' 在表里但不在 nightly.yml 里').toBe(true)
+      expect(runsIn(nightlyDoc, r.script, 'nightly'), r.script + ' 在表里但不在 nightly.yml 的可执行步骤里').toBe(true)
     })
   }
 
@@ -153,12 +205,11 @@ describe('第二档：夜间工作流跑的是全量，而不是增量', () => {
     expect(nightly).not.toContain('check:mutation:diff')
   })
 
-  it('tag 发布也要在 publish 之前自己跑全量变异（tag push 不触发 ci.yml，夜间档可能晚于发版）', () => {
-    const iMutation = release.indexOf('npm run check:mutation')
-    const iPublish = release.indexOf('--publish always')
-    expect(iMutation, 'release.yml 没有全量变异自证').toBeGreaterThan(-1)
+  it('tag 发布也要在公开 Release 之前自己跑全量变异（tag push 不触发 ci.yml，夜间档可能晚于发版）', () => {
+    const iMutation = expectBlockingCommand(releaseDoc, 'npm run check:mutation')
+    const iPublish = publicPublishStepIndex(releaseDoc)
     expect(iPublish).toBeGreaterThan(-1)
-    expect(iMutation, '全量变异自证必须排在发布之前').toBeLessThan(iPublish)
+    expect(iMutation, '全量变异自证必须排在公开 Release 之前').toBeLessThan(iPublish)
     expect(release, '发版跑增量自证会漏掉「目标与 spec 都没动」的登记表腐坏').not.toContain('check:mutation:diff')
   })
 
@@ -183,23 +234,31 @@ describe('第二档：夜间工作流跑的是全量，而不是增量', () => {
 describe('第三档：发版前跑，且在发布之前', () => {
   for (const r of TIER3) {
     it('release.yml 调了 ' + r.script, () => {
-      expect(runsIn(release, r.script), r.script + ' 在表里但不在 release.yml 里').toBe(true)
+      expect(runsIn(releaseDoc, r.script), r.script + ' 在表里但不在 release.yml 的可执行步骤里').toBe(true)
     })
   }
 
-  it('⚠️ 打包态检查必须在 `--publish always` **之前**（之后失败时版本已经发出去了）', () => {
-    const iPack = release.indexOf('npm run pack')
-    const iPublish = release.indexOf('--publish always')
-    expect(iPack, 'release.yml 里没有 npm run pack').toBeGreaterThan(-1)
+  it('⚠️ 打包态检查必须在签名构建、发布门禁与公开 Release 之前', () => {
+    const iPack = expectBlockingCommand(releaseDoc, 'npm run pack')
+    const iSignedDist = expectBlockingCommand(releaseDoc, 'npm run dist -- --publish never')
+    const iReleaseGate = expectBlockingCommand(releaseDoc, 'npm run security:release')
+    const iPublish = publicPublishStepIndex(releaseDoc)
     expect(iPublish).toBeGreaterThan(-1)
-    expect(iPack, 'pack 必须排在发布之前').toBeLessThan(iPublish)
+    expect(iPack, 'pack 必须排在签名构建之前').toBeLessThan(iSignedDist)
+    expect(iSignedDist, '签名构建必须排在发布门禁之前').toBeLessThan(iReleaseGate)
+    expect(iReleaseGate, '发布门禁必须排在公开 Release 之前').toBeLessThan(iPublish)
+  })
+
+  it('禁止 electron-builder 直接公开发布；必须先上传草稿并验收', () => {
+    expect(releaseSteps.some((step) => shellLinesOf(step).some((line) => /npm run dist\b.*--publish always/.test(line)))).toBe(false)
+    expect(releaseSteps.some((step) => shellLinesOf(step).some((line) => /npm run dist\b.*--publish never/.test(line)))).toBe(true)
+    expect(releaseSteps.some((step) => linesOf(step).some((line) => /@\{\s*tag_name\s*=\s*\$tag;.*draft\s*=\s*\$true/.test(line)))).toBe(true)
   })
 
   it('打包态冒烟都在 pack 之后（它们要读 dist/win-unpacked）', () => {
-    const iPack = release.indexOf('npm run pack')
+    const iPack = expectBlockingCommand(releaseDoc, 'npm run pack')
     for (const r of TIER3) {
-      const i = release.indexOf('npm run ' + r.script)
-      expect(i, r.script + ' 不在 release.yml 里').toBeGreaterThan(-1)
+      const i = expectBlockingCommand(releaseDoc, 'npm run ' + r.script)
       expect(i, r.script + ' 排在 npm run pack 之前 ⇒ 它读不到打包件').toBeGreaterThan(iPack)
     }
   })
@@ -208,8 +267,8 @@ describe('第三档：发版前跑，且在发布之前', () => {
 describe('KNOWN_ROT：明知坏、不许接进任何一档', () => {
   for (const r of KNOWN_ROT) {
     it(`${r.script} 不在任何 workflow 里`, () => {
-      for (const [name, text] of [['ci.yml', ci], ['nightly.yml', nightly], ['release.yml', release]] as const) {
-        expect(runsIn(text, r.script), `${r.script} 出现在 ${name} 里 —— 它是 KNOWN_ROT，接进去门禁就会常红`).toBe(false)
+      for (const [name, doc, job] of [['ci.yml', ciDoc, 'verify'], ['nightly.yml', nightlyDoc, 'nightly'], ['release.yml', releaseDoc, 'release']] as const) {
+        expect(runsIn(doc, r.script, job), `${r.script} 出现在 ${name} 里 —— 它是 KNOWN_ROT，接进去门禁就会常红`).toBe(false)
       }
     })
   }
@@ -237,8 +296,8 @@ describe('LOCAL_ONLY：只能在本机跑，不许接进 workflow', () => {
 
   for (const r of LOCAL_ONLY) {
     it(`${r.script} 不在任何 workflow 里`, () => {
-      for (const [name, text] of [['ci.yml', ci], ['nightly.yml', nightly], ['release.yml', release]] as const) {
-        expect(runsIn(text, r.script), `${r.script} 出现在 ${name} 里 —— 它引用本机专属资源，接进去必挂`).toBe(false)
+      for (const [name, doc, job] of [['ci.yml', ciDoc, 'verify'], ['nightly.yml', nightlyDoc, 'nightly'], ['release.yml', releaseDoc, 'release']] as const) {
+        expect(runsIn(doc, r.script, job), `${r.script} 出现在 ${name} 里 —— 它引用本机专属资源，接进去必挂`).toBe(false)
       }
     })
 

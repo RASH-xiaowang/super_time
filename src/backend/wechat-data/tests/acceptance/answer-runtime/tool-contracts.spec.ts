@@ -162,30 +162,30 @@ describe('参数构造与修复', () => {
 })
 
 describe('Profile 白名单与范围守卫', () => {
-  it('ClawBot 白名单精确等于 search_kb，且 kb-only/requireKb 固定', () => {
-    const clawbot = getAnswerProfile('clawbot-auto')
-    expect(clawbot.allowedTools).toEqual(['search_kb'])
-    expect(clawbot.kbOnly).toBe(true)
-    expect(clawbot.requireKb).toBe(true)
-    expect(clawbot.allowWechatData).toBe(false)
-    expect(isToolAllowed(clawbot, 'search_kb')).toBe(true)
-    for (const name of ['search_messages', 'search_hybrid', 'aggregate_messages', 'list_sessions']) {
-      expect(isToolAllowed(clawbot, name), `${name} 不应出现在 ClawBot 白名单`).toBe(false)
+  it('会话内问答只允许当前会话相关工具', () => {
+    const session = getAnswerProfile('session-ask')
+    expect(session.forceUsername).toBe(true)
+    expect(session.allowKnowledgeBase).toBe(false)
+    for (const name of ['search_messages', 'search_hybrid', 'aggregate_messages']) {
+      expect(isToolAllowed(session, name), `${name} 应出现在会话内白名单`).toBe(true)
+    }
+    for (const name of ['list_sessions', 'search_files', 'search_kb']) {
+      expect(isToolAllowed(session, name), `${name} 不应出现在会话内白名单`).toBe(false)
     }
   })
 
-  it('ClawBot 调用非白名单工具在执行前被阻断', async () => {
+  it('受限 profile 调用非白名单工具在执行前被阻断', async () => {
     let called = false
-    const spy = makeStubTool('search_messages', (): ToolResult => {
+    const spy = makeStubTool('search_kb', (): ToolResult => {
       called = true
-      return { tool: 'search_messages', ok: true, hits: [] }
+      return { tool: 'search_kb', ok: true, hits: [] }
     })
     const result = await runProfileTool(
-      'clawbot-auto',
+      'session-ask',
       [spy],
-      'search_messages',
-      { keywords: ['合同'] },
-      { decryptedDir: '/nope', kbId: 1 },
+      'search_kb',
+      { query: '合同' },
+      { decryptedDir: '/nope', scope: { username: LISI } },
     )
     expect(result.ok).toBe(false)
     expect(result.errorCode).toBe('tool_not_allowed')

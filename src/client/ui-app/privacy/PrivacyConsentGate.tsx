@@ -38,8 +38,7 @@ import css from './PrivacyConsentGate.module.css'
 /** 网络面的开关性质：决定它拿到哪种标记、以及是否被琥珀色框圈起来。
  *  · `none`   —— 没有开关（琥珀色圈出，全页唯一的警示色）
  *  · `manual` —— 只在你点击时才发生
- *  · `off`    —— **默认关闭、且有真开关**（2026-10-14 随入站监听首次出现；
- *                出网侧自 2026-09-30 起已无此档） */
+ *  · `off`    —— **默认关闭、且有真开关**（入站监听与 v31 起的会话级「AI回复」） */
 type SwitchKind = 'none' | 'manual' | 'off'
 
 interface SurfaceEntry {
@@ -72,8 +71,9 @@ const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
 /**
  * 出网点清单（与 `docs/PRIVACY.md` 第四节 A–G 逐条对应）。
  *
- * 口径提醒（2026-09-30）：应用内的出网开关**已全部移除**，所以这里不再有 `可关闭` 这一档 ——
- * 每条都是「无开关」或「仅在你点击时才发生」。要断网只能靠系统防火墙或断网。
+ * 口径提醒：全局出网开关已于 2026-09-30 移除；这里多数条目是「无开关」或
+ * 「仅在你点击时才发生」。v31 起的「AI回复」是唯一按单聊生效的 `off` 档。
+ * 要彻底断网仍只能靠系统防火墙或断网。
  */
 const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
   {
@@ -99,6 +99,12 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     text: '任务首次触发会先插入一条问候语；任务触发、局域网 Webhook、手动新增或重发产生的消息记录，在匹配「会话名 + 触发对象」规则后，会把 target / message / attachments 等 JSON POST 到你为该规则配置的下游 Webhook。message 先过 task_callback 隐私闸；会话名、触发对象、备注、外链与图片字节不脱敏。没有规则时记录保持待执行、不发请求；失败不自动重试，避免下游重复发微信消息',
     host: '你按规则配置的下游 Webhook 地址（http/https，不内置固定主机）',
     kind: 'none',
+  },
+  {
+    label: 'AI回复',
+    text: '默认关闭，仅单聊。你在聊天「更多」→「AI回复」显式开启后，新消息会读取当前会话最近上下文（最多 60 条 / 6,000 字）；上下文含图片或自定义表情时还会附带最多 3 张、合计不超过 6 MiB 的视觉字节供多模态模型识别，不发送本机路径。经 ai_reply_analyze 隐私闸调用当前对话模型生成一条回复；模型不支持读图时自动降级为纯文本。正文先写入消息列表，再由消息列表规则投递到你配置的 Webhook。不跨会话读取，群聊不提供该开关，失败不自动重试',
+    host: '当前对话模型服务商；你为「会话名 + 触发对象」配置的消息列表 Webhook（如大肥鱼桥接地址）',
+    kind: 'off',
   },
   {
     label: '头像图片',
@@ -132,7 +138,8 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
  * 入站监听面（与 `docs/PRIVACY.md` 第四节 H 对应）。
  *
  * 刻意**与出网点分开列、不并进上面的计数**：方向相反（本机监听、别的设备连进来），
- * 混在一起会让「共 N 个出网点」这句话变成假话。它是本屏唯一带 `off` 标记的一条。
+ * 混在一起会让「共 N 个出网点」这句话变成假话。这里的条目也都是 `off` 档，
+ * 因此计数与顺序断言必须先截出网清单片段。
  */
 const INBOUND: ReadonlyArray<SurfaceEntry> = [
   {
@@ -168,6 +175,10 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   {
     label: '重新审阅本声明',
     text: `数据配置 → 高级设置 → 重新查看启动页，可随时重看并重新同意（当前版本 v${PRIVACY_VERSION}）。`,
+  },
+  {
+    label: '关闭 AI回复',
+    text: '聊天窗口「更多」→「AI回复」可逐会话关闭；关闭后该会话不再自动调用模型，也不会新建自动回复记录。',
   },
   {
     label: '删除全部数据',
@@ -247,11 +258,11 @@ export function PrivacyConsentGate({
           <ul className={css.verdictList}>
             <li>数据不出本机：解析、检索、统计、导出全部在你自己的电脑上完成。</li>
             <li>
-              会把你<b>内容</b>发出去的是 AI 问答与总结、ClawBot、任务触发，以及消息列表回复投递
+              会把你<b>内容</b>发出去的是 AI 问答与总结、任务触发，以及消息列表回复投递
               —— 目的地都是<b>你自己配置</b>的模型或 Webhook / RPA 服务。
             </li>
             <li>
-              其余出网点都不涉及聊天内容，已在下面逐条列明；应用内已<b>没有任何出网开关</b>，
+              其余出网点都不涉及聊天内容，已在下面逐条列明；应用内没有<b>任何全局出网开关</b>，
               要完全断网请配合系统防火墙或断网。
             </li>
           </ul>
@@ -273,7 +284,7 @@ export function PrivacyConsentGate({
 
             <p className={css.caveat}>
               <b>诚实说明</b>：上面 {blocked.length} 条出网点（{blocked.map((e) => e.label).join('、')}）
-              <b>不受任何应用内设置控制</b> —— 应用里已经没有任何出网开关。图片、头像与视频这一类
+              <b>不受任何应用内设置控制</b> —— 应用里没有全局出网开关。图片、头像与视频这一类
               全部由后端代取，界面自己不向任何远程主机要图。要断掉这些请求，只能靠系统防火墙或断网。
             </p>
           </div>

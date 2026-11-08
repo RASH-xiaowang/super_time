@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampZoom,
+  centeredWindow,
   counterText,
   DEFAULT_MAX_ZOOM,
   DEFAULT_MIN_ZOOM,
@@ -15,6 +16,20 @@ import {
   wrapIndex,
   zoomStep,
 } from './viewer-model.ts'
+
+describe('centeredWindow：查看器只保留当前位置附近的有限集合', () => {
+  it('大集合按半径截成固定窗口，并重映射当前索引', () => {
+    expect(centeredWindow(500, 250, 40)).toEqual({ start: 210, end: 291, index: 40 })
+    expect(centeredWindow(500, 2, 40)).toEqual({ start: 0, end: 81, index: 2 })
+    expect(centeredWindow(500, 499, 40)).toEqual({ start: 419, end: 500, index: 80 })
+  })
+
+  it('空集合、非法索引和小于窗口的集合都不会越界', () => {
+    expect(centeredWindow(0, 10, 40)).toEqual({ start: 0, end: 0, index: 0 })
+    expect(centeredWindow(3, -1, 40)).toEqual({ start: 0, end: 3, index: 2 })
+    expect(centeredWindow(3, Number.NaN, 40)).toEqual({ start: 0, end: 3, index: 0 })
+  })
+})
 
 describe('clampZoom / zoomStep：缩放不许越界', () => {
   it('钳在默认区间内，非有限值回 1', () => {

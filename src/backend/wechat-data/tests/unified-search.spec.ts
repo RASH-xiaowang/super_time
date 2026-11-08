@@ -3,6 +3,7 @@
  * favorites, files, and records hit different domains for one query term.
  * @vitest-environment node
  */
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -159,6 +160,53 @@ describe('searchUnified', () => {
     expect(byId.get('transfer-contact')).toMatchObject({ name: '王五', session: 'wxid_contact' })
     expect(byId.get('transfer-session')).toMatchObject({ name: '项目协作群', session: 'wxid_session' })
     expect(byId.get('transfer-missing')).toMatchObject({ name: '未知联系人', session: 'wxid_missing' })
+  })
+
+  it('旧消息表 hash 在收藏、转账记录和会话范围中统一归一为真实群', () => {
+    const root = tempRoot()
+    const room = '25043774179@chatroom'
+    const hash = createHash('md5').update(room, 'utf8').digest('hex')
+    const table = 'Msg_' + hash
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.prepare('INSERT INTO Name2Id VALUES (?)').run(room)
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER)`)
+    })
+    makeDb(join(root, 'session', 'session.db'), (db) => {
+      db.exec('CREATE TABLE SessionNoContactInfoTable (username TEXT, session_title TEXT)')
+      db.prepare('INSERT INTO SessionNoContactInfoTable VALUES (?, ?)').run(hash, '旧群正式名称')
+    })
+    makeDb(join(root, 'favorite', 'favorite.db'), (db) => {
+      db.exec('CREATE TABLE fav_db_item (local_id INTEGER, type INTEGER, update_time INTEGER, server_id INTEGER, source_id INTEGER, fromusr TEXT, realchatname TEXT, content TEXT)')
+      db.prepare('INSERT INTO fav_db_item VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+        51,
+        1,
+        1700000100,
+        1,
+        2,
+        hash,
+        hash,
+        '<favitem><desc><![CDATA[legacy 收藏]]></desc></favitem>',
+      )
+    })
+    makeDb(join(root, 'general', 'general.db'), (db) => {
+      db.exec('CREATE TABLE transferTable (session_name TEXT, begin_transfer_time INTEGER, message_server_id INTEGER, transfer_id TEXT)')
+      db.prepare('INSERT INTO transferTable VALUES (?, ?, ?, ?)').run(
+        hash, 1700000300, 9007199254740995n, 'legacy-transfer',
+      )
+    })
+
+    const snap = searchUnified(root, 'legacy', 12, { username: room })
+    expect(snap.favorites[0]).toMatchObject({
+      id: 51,
+      source: '旧群正式名称',
+    })
+    expect(snap.records[0]).toMatchObject({
+      name: '旧群正式名称',
+      session: room,
+      transferId: 'legacy-transfer',
+    })
+    expect(JSON.stringify(snap)).not.toContain(hash)
   })
 
   it('私聊会话标识无法解析时可安全使用非本人的参与方名称', () => {

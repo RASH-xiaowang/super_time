@@ -68,6 +68,14 @@ export declare function kbDocFromHit(kbId: number, h: KbHit): RetrievedDoc;
 /** 知识库通道的选项：**全都不传 = T3 那条纯关键词老路**（降级说明会如实说「仅关键词」）。 */
 export interface KbChannelOptions {
     /**
+     * 稀疏通道专用查询词。缺省沿用 `query`。
+     *
+     * 推荐回复的场景里，自然语言上下文适合给稠密通道做语义匹配；FTS5 则更适合
+     * 一组去停用词后的内容词。两条通道用不同形态的查询，比强行让一句话同时适配
+     * 「语义理解」和「逐字短语」更可靠。
+     */
+    sparseQuery?: string;
+    /**
      * embedding 函数。缺省 ⇒ 稠密子路径不跑。
      *
      * ⚠ 传进来只代表「**有能力**」，是否**该**跑还要看 `denseEnabled`（见下）。

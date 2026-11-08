@@ -86,6 +86,8 @@ const FAIL_TTL_MS = 5 * 60_000
  * 风险对照：`remote-image.ts` 一直用 16，未见限流；封面单张只抓 2 个请求，16 路仍属温和。
  */
 const COVER_CONCURRENCY = 16
+/** 单次批量封面的硬上限：超出部分不发起网络请求，直接返回可见错误。 */
+export const MAX_ARTICLE_COVERS_PER_CALL = 100
 
 const FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -401,14 +403,18 @@ export async function resolveArticleCoversDataUrls(
   cacheDir?: string,
   localCover?: LocalCoverProbe,
 ): Promise<Array<{ url: string; dataUrl?: string; error?: string }>> {
-  const wanted: string[] = []
+  const requested: string[] = []
   const seen = new Set<string>()
   for (const raw of urls) {
     const key = (raw || '').trim()
     if (key === '' || seen.has(key)) continue
     seen.add(key)
-    wanted.push(key)
+    requested.push(key)
   }
+  // 批量化不能变成「一次请求无限扩张」：入口先截断，超出的链接返回明确错误，
+  // 既不让 worker 被数万条网络任务占住，也不让调用方误以为这些链接已经处理过。
+  const wanted = requested.slice(0, MAX_ARTICLE_COVERS_PER_CALL)
+  const overflow = requested.slice(MAX_ARTICLE_COVERS_PER_CALL)
   const out: Array<{ url: string; dataUrl?: string; error?: string }> = []
   // 诊断（`SUPERTIME_COVER_TRACE=1`）：一次调用**实际带了多少条**、分几波、每波多久。
   // 为什么需要它：真机逐接口时间线只给"3 次调用 / 合计 N ms"，看不出"约束在每趟条数还是网络"。
@@ -462,5 +468,8 @@ export async function resolveArticleCoversDataUrls(
     out.push(...settled)
   }
   if (trace && wanted.length === 0) console.warn('[cover-trace] n=0（这一趟没有待解析的链接）')
+  for (const url of overflow) {
+    out.push({ url, error: `单次最多处理 ${String(MAX_ARTICLE_COVERS_PER_CALL)} 篇文章封面，请分批请求` })
+  }
   return out
 }

@@ -21,6 +21,7 @@ wechat/llm.json
 
 # 构建与调试残留
 .tmp-*
+ci-evidence/
 *.orig
 *.tsbuildinfo
 # Python 字节码：tools/ 下有 13 个变异脚本，跑一次 `python -m py_compile` 或
@@ -34,3 +35,7 @@ __pycache__/
 # 只忽略 `working/shots/` 时，同级的 *.png / *.mjs 仍是未忽略的 `?? working/`，
 # 一次 `git add -A` 就会把明文截图扫进仓库。仓库内无任何代码以此为输入。
 working/
+
+# 根目录临时调查切片与本地验收产物（正式文档放 docs/，历史材料放 docs/archive/）。
+/*.txt
+reports/

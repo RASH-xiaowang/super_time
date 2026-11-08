@@ -719,7 +719,7 @@ export function sceneToSvg(
   parts.push('</g>')
   // 标签：与屏幕绘制挑同一批候选（labelCandidates），并做同样的贪心避重叠 ——
   // 否则导出的 SVG 会比屏幕多出一堆互相压住的字。
-  parts.push(`<g font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="11">`)
+  parts.push('<g font-family="system-ui,sans-serif" font-size="11">')
   const placedLabels: Array<{ x0: number; y0: number; x1: number; y1: number }> = []
   for (const n of labelCandidates(scene.nodes, settings, {
     hoverNodeId: scene.hoverNodeId,

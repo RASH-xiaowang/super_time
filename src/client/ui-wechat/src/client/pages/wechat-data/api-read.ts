@@ -145,6 +145,7 @@ import type {
 } from './types.ts'
 import { KB_LIST_CACHE_KEY, kbCacheKey } from './kb-scope-keys.ts'
 import { KnowledgeSnapshotRead, remote, unwrap } from './api-core.ts'
+import { isLegacyChatId } from './utils/chat-identity.ts'
 
 // ── sessions / contacts / messages (Remote) ──
 /**
@@ -152,8 +153,26 @@ import { KnowledgeSnapshotRead, remote, unwrap } from './api-core.ts'
  * @param options - Query options: keyword fuzzy search, limit max rows.
  * @returns SessionsSnapshot with items + total.
  */
-export async function apiGetSessions(options?: { keyword?: string; limit?: number; offset?: number }): Promise<SessionsSnapshot> {
-  return cachedFetch('sessions:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getSessions(options)), 30_000)
+export async function apiGetSessions(options?: {
+  keyword?: string
+  limit?: number
+  offset?: number
+  jobId?: string
+  /**
+   * 实时事件驱动刷新时直取后端，绕过 30 秒 SWR 持久缓存。
+   *
+   * 普通面板切换仍走缓存；只有「已经知道数据变了」的路径才传 true。
+   * 该字段是客户端包装层参数，不会传给 Remote。
+   */
+  fresh?: boolean
+}): Promise<SessionsSnapshot> {
+  const { fresh: _fresh, ...query } = options ?? {}
+  // 可取消任务的 jobId 是一次性的；缓存它会把已取消的部分结果带给下一轮。
+  // 普通会话列表仍走 30 秒缓存，避免面板切换重复冷算。
+  if (_fresh === true || (query.jobId !== undefined && query.jobId !== '')) {
+    return unwrap(await remote().getSessions(query))
+  }
+  return cachedFetch('sessions:' + JSON.stringify(query), async () => unwrap(await remote().getSessions(query)), 30_000)
 }
 /**
  * Fetch the contact list (optional page size + offset + category filter).
@@ -180,20 +199,36 @@ export async function apiGetContact360(username: string): Promise<Contact360Snap
 /**
  * Fetch messages for a talker.
  * @param options - Query options: talker username, limit, cursor (+ cursorLocalId)
- *   for paging. cursor 与 cursorLocalId 必须成对回传：只传 cursor 会在 sort_seq
- *   重复处丢消息。
+ *   for paging, or beforeLocalId for an exact quote/message jump. cursor 与
+ *   cursorLocalId 必须成对回传：只传 cursor 会在 sort_seq 重复处丢消息。
  * @returns MessagesSnapshot.
  */
-export async function apiGetMessages(options: { talker: string; limit?: number; cursor?: number; cursorLocalId?: number }): Promise<MessagesSnapshot> {
-  if (options.cursor !== undefined) return unwrap(await remote().getMessages(options))
-  return cachedFetch('messages:' + options.talker + ':' + String(options.limit ?? 50), async () => unwrap(await remote().getMessages(options)), 5_000)
+export async function apiGetMessages(options: {
+  talker: string
+  limit?: number
+  cursor?: number
+  cursorLocalId?: number
+  beforeLocalId?: number
+  /** 实时事件驱动刷新时直取后端；普通打开仍允许 5 秒 SWR 缓存。 */
+  fresh?: boolean
+}): Promise<MessagesSnapshot> {
+  const { fresh: _fresh, ...query } = options
+  if (_fresh === true || query.cursor !== undefined || query.beforeLocalId !== undefined || isLegacyChatId(query.talker)) {
+    return unwrap(await remote().getMessages(query))
+  }
+  return cachedFetch('messages:' + query.talker + ':' + String(query.limit ?? 50), async () => unwrap(await remote().getMessages(query)), 5_000)
 }
 /**
- * Fetch messages newer than a sort_seq watermark (real-time polling).
- * @param options - Query options: talker, after watermark, optional limit.
+ * Fetch messages newer than a composite `(sortSeq, localId)` watermark.
+ * @param options - Query options: talker, after watermark (and its localId), optional limit.
  * @returns MessagesSnapshot with the newer messages only.
  */
-export async function apiGetNewMessages(options: { talker: string; after: number; limit?: number }): Promise<MessagesSnapshot> {
+export async function apiGetNewMessages(options: {
+  talker: string
+  after: number
+  afterLocalId?: number
+  limit?: number
+}): Promise<MessagesSnapshot> {
   return unwrap(await remote().getNewMessages(options))
 }
 

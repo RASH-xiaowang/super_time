@@ -34,7 +34,7 @@
    原来 5 张速览卡横排在顶部、下面 5 节一路堆叠：一屏装不下，想改「图片密钥」得先滚下去，
    还容易忘了下面还有几节。改成竖排导航项后，右侧一次只显示当前一节。
 
-   2026-10-16 重设计：左导航 196 → 220px（副标题不再频繁截断），分组**卡片化**
+   2026-10-16 重设计：左导航 196 → 200px（副标题不再频繁截断），分组**卡片化**
    （每组一个圆角容器 + 组名），激活态加**左侧指示条**（与主侧栏 .navItem 同一套语言）。
    微信化（2026-10-19）：去副标题、去分组卡片外壳与渐变，改为「组标题 + 单行条目」。 */
 .layout {
@@ -44,10 +44,10 @@
   gap: 16px;
 }
 
-/* 导航外壳：导航自己滚，底部渐隐只负责提示「后面还有」，不会跟着内容一起滚走。 */
+/* 导航外壳：导航自己滚。`.navFade` 只保留给 820px 断点契约，不再绘制装饰渐隐。 */
 .navPanel {
   position: relative;
-  flex: 0 0 224px;
+  flex: 0 0 200px;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -75,14 +75,7 @@
   outline-offset: -2px;
 }
 .navFade {
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 1px;
-  height: 22px;
-  pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--nm-bg-card));
-  border-radius: 0 0 var(--nm-r-lg) var(--nm-r-lg);
+  display: none;
 }
 
 /* 分组：只留组标题，不再给每组套圆角卡片（微信设置左栏就是一列文字导航）。 */
@@ -165,12 +158,12 @@
 }
 .viewHeader {
   flex: 0 0 auto;
-  min-height: 56px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
 }
@@ -178,12 +171,12 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .viewIcon {
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -195,7 +188,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .viewEyebrow {
   font-size: 10.5px;
@@ -286,7 +279,7 @@
    * 组间（20）明显大于组内（12），「读到哪一组了」一眼能看出来。
    */
   gap: 0;
-  padding: 14px 16px 24px;
+  padding: 12px 16px 16px;
   /*
    * 这里**故意不写** `scroll-behavior: smooth`。
    *
@@ -304,14 +297,7 @@
   outline-offset: -2px;
 }
 .contentFade {
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 1px;
-  height: 20px;
-  pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--nm-bg-1));
-  border-radius: 0 0 var(--nm-r-lg) var(--nm-r-lg);
+  display: none;
 }
 
 /* 右区的直接子项同样禁止压缩：`.mainScroll` 是定高 flex 列，默认 flex-shrink:1 会把
@@ -846,7 +832,7 @@
     overflow-x: auto;
     overflow-y: hidden;
     overscroll-behavior-x: contain;
-    padding: 6px 25px 6px 6px;
+    padding: 6px;
     scrollbar-width: none;
   }
   .navRail::-webkit-scrollbar { width: 0; height: 0; }
@@ -880,14 +866,7 @@
   }
   .navLabel { font-size: 12px; }
   .navFade {
-    left: auto;
-    top: 1px;
-    right: 1px;
-    bottom: 1px;
-    width: 20px;
-    height: auto;
-    background: linear-gradient(to right, transparent, var(--nm-bg-card));
-    border-radius: 0 var(--nm-r-lg) var(--nm-r-lg) 0;
+    display: none;
   }
   .viewValue { max-width: 190px; }
 }
@@ -980,8 +959,8 @@
   /* 内容区拿到整宽 */
   .mainScroll { padding: 12px 12px 20px; }
   .viewHeader {
-    min-height: 50px;
-    padding: var(--nm-s-2, 8px) 10px;
+    min-height: 44px;
+    padding: 6px 10px;
   }
   .viewIcon {
     flex-basis: 28px;

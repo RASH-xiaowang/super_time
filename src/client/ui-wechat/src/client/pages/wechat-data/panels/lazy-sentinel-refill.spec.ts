@@ -10,8 +10,7 @@
  * 实测形状：600 条附件、格子墙视口 625px 高 ⇒ 翻到第 2 页（60 条）就再也不动。
  * 修法是 `watch`（通常传已加载条数）：数据每追加一批就重新问一次"哨兵还在里面吗"。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement, useCallback, useRef, type ReactElement, type ReactNode } from 'react'
+import { act, createElement, useCallback, useRef, type ReactElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useLazySentinel } from './hooks.tsx'

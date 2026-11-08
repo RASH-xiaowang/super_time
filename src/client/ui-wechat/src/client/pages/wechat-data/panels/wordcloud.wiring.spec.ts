@@ -31,6 +31,8 @@ const overview = readdirSync(HERE)
   .map((f) => read(f))
   .join('\n')
 const panel = strip(read('..', 'WechatDataPanel.tsx'))
+/** 搜索事件订阅与 Ctrl+K 共用 `use-global-search` 状态机；守卫直接核订阅实现。 */
+const searchState = strip(read('..', 'use-global-search.ts'))
 
 describe('词云三处落位', () => {
   it('群聊分析页：scope=chat 且绑定当前选中的群（username 随选择器走）', () => {
@@ -59,16 +61,16 @@ describe('词云点击跳全局搜索（R11）', () => {
   })
 
   it('订阅端监听 SEARCH_QUERY_EVENT，且三步做齐（种词 / 开导航条 / rAF 聚焦）', () => {
-    expect(panel).toContain('SEARCH_QUERY_EVENT, searchQueryFromEvent')
+    expect(searchState).toContain('SEARCH_QUERY_EVENT, searchQueryFromEvent')
     // 精确取「回调体」：从 onSearchQuery 声明到 addEventListener 之间。
     // 为什么不用「addEventListener 往前 N 字符」的窗口——变异测试实录：那个窗口把**邻近的
     // Ctrl+K effect** 里的 setNavOpen(true) 也圈进来了，删掉订阅里的那一步断言照样绿（假阳性）。
-    const s = panel.indexOf('const onSearchQuery = (e: Event)')
-    const e = panel.indexOf('window.addEventListener(SEARCH_QUERY_EVENT')
+    const s = searchState.indexOf('const onSearchQuery = (event: Event)')
+    const e = searchState.indexOf('window.addEventListener(SEARCH_QUERY_EVENT')
     expect(s, '找不到订阅回调 —— 改名后请同步本用例').toBeGreaterThan(-1)
     expect(e, '找不到事件监听 —— 改名后请同步本用例').toBeGreaterThan(s)
-    const body = panel.slice(s, e)
-    expect(body.includes('setSearchQuery(q)'), '必须把词种进 searchQuery（debounce 搜索只认它）').toBe(true)
+    const body = searchState.slice(s, e)
+    expect(body.includes('setSearchQuery(query)'), '必须把词种进 searchQuery（debounce 搜索只认它）').toBe(true)
     expect(body.includes('setNavOpen(true)'), '必须开导航条（搜索框在里头，收起时被 display:none）').toBe(true)
     expect(body.includes('requestAnimationFrame'), '聚焦要等这一帧渲染出输入框（与 Ctrl+K 同款）').toBe(true)
     expect(body.includes('setSearchOpen(true)'), '必须打开结果面板（否则词搜了但看不到）').toBe(true)
@@ -76,7 +78,7 @@ describe('词云点击跳全局搜索（R11）', () => {
 
   it('事件名两端同源：都从 search-events.ts 导入，不许各写字符串字面量', () => {
     expect(card).not.toContain("'dsh-wechat-search-query'")
-    expect(panel).not.toContain("'dsh-wechat-search-query'")
+    expect(panel + searchState).not.toContain("'dsh-wechat-search-query'")
     expect(read('search-events.ts')).toContain("export const SEARCH_QUERY_EVENT = 'dsh-wechat-search-query'")
   })
 })

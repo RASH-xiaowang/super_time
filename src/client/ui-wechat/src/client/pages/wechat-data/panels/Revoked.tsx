@@ -4,7 +4,7 @@
  * Top5 统计 + 可展开内容列表 + 隐私横幅。走 Remote（getRevoked）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, ProgressiveListSpacer, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { apiGetRevoked } from '../api.ts'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
@@ -139,7 +139,17 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     setExpanded(next)
   }
 
-  const { count: rvCount, sentinelRef: rvSentinel } = useProgressiveList(filtered.length, 80)
+  const {
+    start: rvStart,
+    count: rvCount,
+    beforeHeight: rvBeforeHeight,
+    sentinelRef: rvSentinel,
+    topSentinelRef: rvTopSentinel,
+  } = useProgressiveList(filtered.length, 80, {
+    maxCount: 240,
+    resetKey: `${search}\u0000${typeFilter ?? ''}`,
+    listRef: revokedScrollRef,
+  })
 
   return (
     <div className={css.panel}>
@@ -212,7 +222,9 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
           </div>
           <div ref={revokedScrollRef} className={`${css.scroll} ${css.rvScroll}`}>
             {filtered.length === 0 && <div className={css.empty}>无匹配记录</div>}
-            {filtered.slice(0, rvCount).map((it, idx) => {
+            <ProgressiveListSpacer height={rvBeforeHeight} topSentinelRef={rvTopSentinel} />
+            {filtered.slice(rvStart, rvCount).map((it, idx) => {
+              const itemIndex = rvStart + idx
               const key = recordKey(it)
               const open = expanded.has(key)
               const senderLabel = withEnterprise(it.sender || '未知', it.senderEnterpriseName)
@@ -222,8 +234,9 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
               const rowLabel = `${senderLabel} · ${it.type_label}，${open ? '收起' : '展开'}详情`
               return (
                 <div
-                  key={`${key}-${idx}`}
+                  key={`${key}-${itemIndex}`}
                   className={`${css.row} ${css.rvRow}`}
+                  data-progressive-item={itemIndex}
                   aria-expanded={open}
                   {...clickableKey(() => { toggle(key) }, { label: rowLabel })}
                 >

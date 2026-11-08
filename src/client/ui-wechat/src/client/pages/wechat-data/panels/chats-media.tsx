@@ -5,20 +5,33 @@
  * 这些原先都是 Chats.tsx 里的顶层函数/组件（不吃面板状态，只吃道具）—— 整段原样搬出，
  * 面板按需 import。依赖由脚本从「这块里真实用到的面板 import」生成。
  */
-import { apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiOpenPath, apiTranscribeVoiceMessage } from '../api.ts'
+import { apiExportChatImage, apiExportChatVideo, apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceTranscript, apiOpenPath, apiSaveFileDialog, apiTranscribeVoiceMessage } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
 import { clickableKey } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { recallImage, rememberImage } from '../image-cache.ts'
 import { CardFoot } from './chats-card-foot.tsx'
-import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
+import { ImageTextActions } from './chats-ocr.tsx'
+import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, imageOriginalFailureText } from './chats-support.tsx'
 import { isEnterpriseWechatUser, withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { IconLinkOutline14, IconPlayOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { withThumbWidth } from '../wechat-media.ts'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
+import type { MediaOriginalExportResult } from '@deepseek-ai/dsh-wechat-data/types'
+
+/**
+ * 聊天气泡的最大显示宽度是 240 CSS px；按 2x DPR 取 480px 的缩略档，
+ * 避免 Chromium 为一张 12MP 原图分配数十 MB 的位图。查看器仍加载原图。
+ */
+export const CHAT_IMAGE_THUMB_WIDTH = 480
+
 /** 微信语音时长（秒）→ 气泡宽度：官方公式 80px + 秒数×4（1s→84px，60s 封顶 320px）。 */
 export function voiceWidth(sec: number): string {
   const clamped = Math.min(60, Math.max(1, sec))
@@ -29,6 +42,48 @@ export interface ViewerImage {
   username: string
   localId: number
 }
+
+/** 从查看器已加载的 data URL / 媒体路径推断保存对话框的默认扩展名。 */
+function chatImageExt(src: string): string {
+  const dataMatch = src.match(/^data:image\/([a-z0-9+.-]+)[;,]/i)
+  if (dataMatch) {
+    const ext = (dataMatch[1] ?? '').toLowerCase()
+    return ext === 'jpeg' ? 'jpg' : ext
+  }
+  const clean = src.split(/[?#]/, 1)[0] ?? ''
+  const ext = clean.split('.').pop()?.toLowerCase() ?? ''
+  return /^[a-z0-9]{2,5}$/.test(ext) ? ext : 'jpg'
+}
+
+/**
+ * 保存聊天原图：路径由保存对话框选择，字节由后端重新解析并校验。
+ * 缩略图不会进入写盘路径，避免把低清预览当成原图交付。
+ */
+async function saveChatOriginal(
+  im: ViewerImage,
+  src: string,
+  jobId: string,
+): Promise<{ path: string } | null> {
+  if (!desktopAction()) {
+    const ext = chatImageExt(src)
+    const picked = await apiSaveFileDialog({
+      defaultName: `聊天图片-${String(im.localId)}.${ext}`,
+      title: '保存聊天原图',
+      filters: [{ name: '图片', extensions: [ext] }],
+    })
+    if (picked.canceled || !picked.path) return null
+    const result = await apiExportChatImage({
+      username: im.username,
+      localId: im.localId,
+      dest: picked.path,
+      jobId,
+    })
+    if (!result.ok) throw new Error(result.error || '聊天原图写入失败')
+    return { path: result.path ?? picked.path }
+  }
+  throw new Error('聊天原图仅支持电脑端保存')
+}
+
 /**
  * 聊天图片查看器（2026-10-21 接入统一 `MediaViewer`）：
  *  - 缩略图先用内存缓存铺底（`recallImage`），原图按需取；
@@ -41,9 +96,10 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
   onClose: () => void
   onIndexChange: (i: number) => void
 }): React.JSX.Element {
+  const imageSave = useMediaSaveTask()
   const sources = useMemo(() => images.map((im) => ({
     key: `${im.username}:${String(im.localId)}`,
-    thumb: recallImage(im.username, im.localId)?.url,
+    thumb: withThumbWidth(recallImage(im.username, im.localId)?.url ?? '', CHAT_IMAGE_THUMB_WIDTH),
     load: async (): Promise<string> => {
       const cached = recallImage(im.username, im.localId)
       if (cached) return cached.url
@@ -52,11 +108,19 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
         rememberImage(im.username, im.localId, { url: r.url, thumb: r.thumb === true })
         return r.url
       }
-      throw new Error(r.error === 'hevc-unsupported'
-        ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）'
-        : (r.error ?? '图片不可用'))
+      throw new Error('图片暂不可用')
     },
-  })), [images])
+    onDownload: async (src: string) => {
+      await imageSave.save<{ path: string }>({
+        idPrefix: 'chat-image',
+        label: '保存聊天原图',
+        successMessage: (r) => `已保存聊天原图 → ${r.path}`,
+        run: (jobId) => saveChatOriginal(im, src, jobId),
+      })
+    },
+    downloadDisabled: desktopAction(),
+    downloadDisabledReason: '聊天原图保存仅支持电脑端',
+  })), [imageSave.save, images])
   return (
     <MediaViewer
       sources={sources}
@@ -65,111 +129,235 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
       onClose={onClose}
       dialogName="chats-viewer"
       showThumbnails={images.length > 1}
+      statusOverlay={(
+        <ExportProgressStatus
+          compact
+          state={imageSave.state}
+          onCancel={() => { void imageSave.cancel() }}
+        />
+      )}
     />
   )
 }
-/** 单张消息图片（可点击进大图）。图片组网格也复用它。 */
-export function MessageThumb({ username, localId, onOpen, alt = '图片' }: {
+type MessageThumbVariant = 'grid' | 'stack' | 'stack-layer' | 'expanded'
+
+const THUMB_CLASS: Record<MessageThumbVariant, string | undefined> = {
+  grid: cssrows.msgImageGridItem,
+  stack: cssrows.msgImageStackItem,
+  'stack-layer': cssrows.msgImageStackLayerItem,
+  expanded: cssrows.msgImageExpandedItem,
+}
+
+/** 单张消息图片（可点击进大图）。图片组折叠栈和展开态也复用它。 */
+export function MessageThumb({
+  username,
+  localId,
+  onOpen,
+  alt = '图片',
+  variant = 'grid',
+  showOcr = true,
+  ocrLayout = 'overlay',
+  isSelf = false,
+  onSource,
+}: {
   username: string
   localId: number
   onOpen?: () => void
   alt?: string
+  variant?: MessageThumbVariant
+  showOcr?: boolean
+  ocrLayout?: 'overlay' | 'side'
+  isSelf?: boolean
+  onSource?: (source: string | null) => void
 }): React.JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
+  // 图片组与单图共用同一份消息图片内存缓存：滚出虚拟窗口再回来不重新读盘/解码。
+  const [src, setSrc] = useState<string | null>(() => recallImage(username, localId)?.url ?? null)
   const [err, setErr] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    setSrc(null)
+    const cached = recallImage(username, localId)
+    setSrc(cached?.url ?? null)
     setErr(null)
+    if (cached) return () => { cancelled = true }
     apiGetImageDataUrl({ username, localId })
-      .then((r) => { if (!cancelled) { if (r.url) setSrc(r.url); else setErr(r.error ?? '图片不可用') } })
-      .catch((e: unknown) => { if (!cancelled) setErr((e as Error).message) })
+      .then((r) => {
+        if (cancelled) return
+        if (r.url) {
+          setSrc(r.url)
+          rememberImage(username, localId, { url: r.url, thumb: r.thumb === true })
+        } else {
+          setErr('图片暂不可用')
+        }
+      })
+      .catch(() => { if (!cancelled) setErr('图片暂不可用') })
     return () => { cancelled = true }
   }, [username, localId])
+  useEffect(() => { onSource?.(src) }, [onSource, src])
   if (err) {
-    return <span className={cssrows.msgImageGridEmpty} title={err}><IconImage /></span>
+    return <span className={cssrows.msgImageGridEmpty} title="图片暂不可用"><IconImage /></span>
   }
   if (!src) return <span className={cssrows.msgImageGridEmpty} data-loading="true" />
-  return (
+  const displaySrc = withThumbWidth(src, CHAT_IMAGE_THUMB_WIDTH)
+  const thumb = (
     <span
-      className={cssrows.msgImageGridItem}
+      className={THUMB_CLASS[variant]}
       {...(onOpen ? clickableKey(onOpen, { label: '查看大图' }) : {})}
     >
-      <img src={src} alt={alt} loading="lazy" decoding="async" />
+      <img src={displaySrc} alt={alt} loading="lazy" decoding="async" />
     </span>
   )
+  const action = showOcr
+    ? <ImageTextActions source={src} username={username} localId={localId} layout={ocrLayout} />
+    : null
+  if (ocrLayout === 'side' && showOcr) {
+    return (
+      <span className={cssrows.msgImageWithOcr} data-self={isSelf ? '1' : undefined}>
+        {thumb}
+        {action}
+      </span>
+    )
+  }
+  return <>{thumb}{action}</>
 }
 /**
  * 图片组（微信「连拍合并」）。
  *
  * 微信把一次连拍的 N 张图拆成 N 条消息，每条都带同一个 `<groupinfo><id>` 与
- * `<count>`。逐条平铺会让一屏只有图片、失去「这是一组」的信息；这里按 id 合成
- * 网格（最多 9 格，多出的用 `+N` 角标），点击任意格进大图。
+ * `<count>`。逐条平铺会让一屏只有图片、失去「这是一组」的信息；折叠态沿用
+ * 微信的卡片栈（第一张完整展示、其余露出一叠边缘），点「展开 N」后在原位
+ * 纵向展开全部图片。
  * @param props.items - the group's messages (in order).
- * @returns the grid element.
+ * @returns the collapsed card stack or its expanded image list.
  */
 export function MessageImageGroup({ items, username, onOpenAt }: {
   items: readonly WechatMessage[]
   username: string
   onOpenAt: (m: WechatMessage) => void
 }): React.JSX.Element {
-  const shown = items.slice(0, 9)
-  const rest = items.length - shown.length
+  const first = items[0]
+  const isSelf = first?.isSender === 1
+  const groupKey = `${username}\u0000${String(first?.localId ?? '')}\u0000${String(first?.rich?.groupId ?? '')}`
+  const firstImageKey = `${username}\u0000${String(first?.localId ?? '')}`
+  const [expanded, setExpanded] = useState(false)
+  const [firstSource, setFirstSource] = useState<{ key: string; source: string | null } | null>(null)
+  const rememberFirstSource = useCallback((source: string | null): void => {
+    setFirstSource({ key: firstImageKey, source })
+  }, [firstImageKey])
+
+  // 虚拟列表会复用组件实例；切到另一组时必须回到折叠态。
+  useEffect(() => {
+    setExpanded(false)
+  }, [groupKey])
+
+  if (!first) return <></>
+  const visibleFirstSource = firstSource?.key === firstImageKey ? firstSource.source : null
+
+  if (expanded) {
+    return (
+      <div className={cssrows.msgImageGroupExpanded} data-self={isSelf ? '1' : undefined}>
+        {items.map((m) => (
+          <span key={m.localId} className={cssrows.msgImageExpandedFrame}>
+            <MessageThumb
+              username={username}
+              localId={m.localId}
+              variant="expanded"
+              ocrLayout="side"
+              isSelf={isSelf}
+              onOpen={() => { onOpenAt(m) }}
+            />
+          </span>
+        ))}
+        <div className={cssrows.msgImageGroupExpandedActions}>
+          <button
+            type="button"
+            className={cssrows.msgImageGroupToggle}
+            aria-expanded="true"
+            title={`收起这组 ${String(items.length)} 张图片`}
+            onClick={(event) => { event.stopPropagation(); setExpanded(false) }}
+          >收起</button>
+        </div>
+      </div>
+    )
+  }
+
+  const backLayers = items.slice(1, 4)
   return (
-    <div className={cssrows.msgImageGrid} data-count={Math.min(shown.length, 9)}>
-      {shown.map((m, i) => (
-        <span key={m.localId} className={cssrows.msgImageGridCell}>
-          <MessageThumb username={username} localId={m.localId} onOpen={() => { onOpenAt(m) }} />
-          {rest > 0 && i === shown.length - 1 && <span className={cssrows.msgImageGridMore}>+{rest}</span>}
+    <div className={cssrows.msgImageGroupPanel} data-self={isSelf ? '1' : undefined}>
+      <div className={cssrows.msgImageStack}>
+        {backLayers.map((m, index) => (
+          <span
+            key={m.localId}
+            className={cssrows.msgImageStackLayer}
+            data-slot={index}
+            aria-hidden="true"
+          >
+            <MessageThumb
+              username={username}
+              localId={m.localId}
+              variant="stack-layer"
+              showOcr={false}
+            />
+          </span>
+        ))}
+        <span className={cssrows.msgImageStackFront}>
+          <MessageThumb
+            username={username}
+            localId={first.localId}
+            variant="stack"
+            showOcr={false}
+            onSource={rememberFirstSource}
+            onOpen={() => { onOpenAt(first) }}
+          />
         </span>
-      ))}
+      </div>
+      <div className={cssrows.msgImageGroupActions}>
+        {visibleFirstSource
+          ? <ImageTextActions source={visibleFirstSource} username={username} localId={first.localId} layout="side" />
+          : <span className={cssrows.msgOcrActionSlot} aria-hidden="true" />}
+        <button
+          type="button"
+          className={cssrows.msgImageGroupToggle}
+          aria-expanded="false"
+          title={`展开这组 ${String(items.length)} 张图片`}
+          onClick={(event) => { event.stopPropagation(); setExpanded(true) }}
+        >展开 {items.length}</button>
+      </div>
     </div>
   )
 }
 /**
  * 系统提示行（type 10000 / 10002）。
  *
- * 撤回单独成类（后端 `renderType === 'revoke'`）：它是**动作**不是通知——
- * 微信也用不同的灰底样式表示。其余系统消息按是否有图标区分：
+ * 撤回与通知统一为微信的居中灰字；不再附加项目自造的图标或底色。
  * @returns the centered system line.
  */
 export function MessageSystem({ m }: { m: WechatMessage }): React.JSX.Element {
-  const text = m.displayText || (m.renderType === 'revoke' ? '撤回了一条消息' : '[系统消息]')
+  const text = m.displayText || (m.renderType === 'revoke' ? '撤回了一条消息' : '')
   const kind = m.renderType === 'revoke' ? 'revoke' : (m.sysKind === 'chatroomtopmsg' || m.sysKind === 'top' ? 'top' : 'notice')
-  const icon = kind === 'revoke' ? '↩' : kind === 'top' ? '📌' : ''
   return (
     <div className={css.msgSystem} data-kind={kind}>
-      {icon && <span className={cssrows.msgSystemIcon} aria-hidden="true">{icon}</span>}
       <span className={cssrows.msgSystemText}>{text}</span>
     </div>
   )
 }
 /**
- * 位置卡片：标题 + 详细地址 + 经纬度（可复制核对）。
+ * 位置卡片：标题 + 详细地址。
  *
  * 后端 `rich.lat/lng` 来自 `<location x y>`（x=纬度、y=经度，微信沿用 mapkit 命名）。
- * 没有可用的离线地图瓦片，所以**不画假地图** —— 只给一个坐标芯片，
- * 让「这条位置到底是哪」可核对，而不是一个只有地名的空卡。
+ * 经纬度仅供数据层使用，不进入消息正文；没有离线地图瓦片时不画假地图。
  * @param props.m - the location message.
  * @returns the location card element.
  */
 export function MessageLocation({ m }: { m: WechatMessage }): React.JSX.Element {
   const rich = m.rich
-  const name = rich?.title || m.displayText || '位置'
+  const name = rich?.title || m.displayText || ''
   const addr = rich?.desc || ''
-  const lat = typeof rich?.lat === 'number' ? rich.lat : null
-  const lng = typeof rich?.lng === 'number' ? rich.lng : null
-  const coord = lat !== null && lng !== null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : ''
+  const visibleName = name.trim() === '位置' ? '' : name
   return (
     <div className={css.msgLocationCard}>
-      <span className={css.msgLocationMap} aria-hidden="true">
-        <span className={cssrows.msgLocationGrid} />
-        <span className={cssrows.msgLocationPin}>📍</span>
-      </span>
       <span className={css.msgLocationBody}>
-        <span className={cssrows.msgLocationTitle} title={name}>{name}</span>
-        {addr && addr !== name && <span className={cssrows.msgLocationDesc} title={addr}>{addr}</span>}
-        {coord && <span className={cssrows.msgLocationCoord} title="纬度, 经度">{coord}</span>}
+        {visibleName && <span className={cssrows.msgLocationTitle} title={visibleName}>{visibleName}</span>}
+        {addr && addr !== visibleName && <span className={cssrows.msgLocationDesc} title={addr}>{addr}</span>}
       </span>
       <CardFoot label="位置" />
     </div>
@@ -182,14 +370,16 @@ export function MessageLocation({ m }: { m: WechatMessage }): React.JSX.Element 
  */
 export function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
   const rich = m.rich
-  const nick = rich?.nickname || rich?.title || m.displayText || '联系人'
   const uname = rich?.username || ''
-  const alias = typeof rich?.alias === 'string' ? rich.alias : ''
+  const rawNick = rich?.nickname || rich?.title || m.displayText || ''
+  const nick = rawNick && rawNick !== uname && !/^wxid_/i.test(rawNick) ? rawNick : '微信用户'
+  const rawAlias = typeof rich?.alias === 'string' ? rich.alias : ''
+  const alias = rawAlias && rawAlias !== uname && !/^wxid_/i.test(rawAlias) ? rawAlias : ''
   const displayIdentity = withEnterprise(nick, rich?.enterpriseName)
   // 名片消息里的头像是消息 XML 带来的**原始地址**：不许由渲染层自己去要（M23），
   // 交给后端代理，取不到就退回首字母（与「本机没有这张头像」同一形状）。
   const avatar = typeof rich?.avatar === 'string' ? rich.avatar : ''
-  const initial = (nick || uname || '?').slice(0, 1).toUpperCase()
+  const initial = nick.slice(0, 1).toUpperCase()
   const isEnterprise = m.type === 66 || isEnterpriseWechatUser(uname)
   return (
     <div className={css.msgContactCard}>
@@ -198,8 +388,7 @@ export function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
       </span>
       <span className={cssrows.msgContactBody}>
         <span className={cssrows.msgContactNick} title={displayIdentity}>{displayIdentity}</span>
-        {alias && <span className={kitCss.textCaption}>别名：{alias}</span>}
-        {uname && <span className={kitCss.textCaptionTrunc} title={uname}>{uname}</span>}
+        {alias && <span className={kitCss.textCaptionTrunc} title={alias}>{alias}</span>}
       </span>
       <CardFoot label={isEnterprise ? '企业微信名片' : '个人名片'} />
     </div>
@@ -239,6 +428,17 @@ export function IconQuoteCard(): React.JSX.Element {
     </svg>
   )
 }
+/** 引用红包时使用的小红封图形，避免退回通用链接图标。 */
+export function IconQuoteRedPacket(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <rect x="2.4" y="1.2" width="9.2" height="11.6" rx="1.7" fill="#D95749" stroke="#E9B85E" strokeWidth="0.7" />
+      <path d="M2.8 3.1c2.8 2 5.6 2 8.4 0v2.2c-2.8 1.7-5.6 1.7-8.4 0V3.1Z" fill="#EE7869" />
+      <circle cx="7" cy="6.8" r="1.8" fill="#F3C962" />
+      <path d="M7 6v1.6M6.2 6.8h1.6" stroke="#B77A23" strokeWidth="0.7" strokeLinecap="round" />
+    </svg>
+  )
+}
 /**
  * 引用行里的类型图标：官方在摘要前放一个类型小图标；没有合适图标时返回 null（只显示名字与摘要）。
  * @param t - 被引用消息的 refermsg `<type>`。
@@ -247,6 +447,7 @@ export function IconQuoteCard(): React.JSX.Element {
  */
 export function quoteKindIcon(t: number | undefined, appType = 0): React.JSX.Element | null {
   if (appType === 2000) return <IconQuoteCard />
+  if (appType === 2001 || appType === 2003) return <IconQuoteRedPacket />
   switch (t) {
     case 3: return <IconImage />
     case 34: return <IconVoiceWaves size={13} />
@@ -261,6 +462,22 @@ export function quoteKindIcon(t: number | undefined, appType = 0): React.JSX.Ele
  * 用模块级而不是 state，是因为「点新的一条要停掉上一条」需要跨组件实例访问。
  */
 export let currentVoiceAudio: HTMLAudioElement | null = null
+
+/** 释放音频解码资源；只 pause 会保留已加载的 data URL 和媒体缓冲。 */
+function releaseVoiceAudio(audio: HTMLAudioElement | null): void {
+  if (!audio) return
+  if (currentVoiceAudio === audio) currentVoiceAudio = null
+  audio.onended = null
+  audio.onerror = null
+  audio.pause()
+  audio.removeAttribute('src')
+  audio.load()
+}
+
+/** 停止并释放全应用当前语音（切页签/关闭会话时调用）。 */
+export function stopCurrentVoice(): void {
+  releaseVoiceAudio(currentVoiceAudio)
+}
 /**
  * 语音消息：时长来自消息 XML（`<voicemsg voicelength>`，毫秒）。
  *
@@ -274,40 +491,52 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
   const [transcript, setTranscript] = useState<string | null>(null)
   const [transcribing, setTranscribing] = useState(false)
   const [tErr, setTErr] = useState<string | null>(null)
-  const [audioOk, setAudioOk] = useState<boolean | null>(null)
   const [playing, setPlaying] = useState(false)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  /** 卸载后禁止任何迟到请求创建/播放音频或写回 React 状态。 */
+  const aliveRef = useRef(true)
+  /** 点击序号：用户连续点按/卸载都会让上一轮异步播放失效。 */
+  const playAttemptRef = useRef(0)
+  const transcribeAttemptRef = useRef(0)
   useEffect(() => {
     let cancelled = false
-    apiGetVoiceInfo({ username: selfName, localId: m.localId })
-      .then((r) => { if (!cancelled) setAudioOk(r.available === true) })
-      .catch(() => { if (!cancelled) setAudioOk(false) })
-    apiGetVoiceTranscript({ username: selfName, localId: m.localId })
+    setTranscript(null)
+    setTErr(null)
+    apiGetVoiceTranscript({ username: selfName, localId: m.localId, svrId: m.serverId })
       .then((r) => { if (!cancelled && r.text) setTranscript(r.text) })
       .catch(() => { /* 尚未转写,跳过 */ })
     return () => { cancelled = true }
-  }, [selfName, m.localId])
+  }, [selfName, m.localId, m.serverId])
   const doTranscribe = async (): Promise<void> => {
+    const attempt = ++transcribeAttemptRef.current
     setTranscribing(true)
     setTErr(null)
     try {
-      const r = await apiTranscribeVoiceMessage({ username: selfName, localId: m.localId })
+      const r = await apiTranscribeVoiceMessage({ username: selfName, localId: m.localId, svrId: m.serverId })
+      if (!aliveRef.current || attempt !== transcribeAttemptRef.current) return
       if (r.ok && r.text) setTranscript(r.text)
-      else setTErr(r.error ?? '转写失败')
-    } catch (e) {
-      setTErr((e as Error).message)
+      else setTErr('转写失败')
+    } catch {
+      if (aliveRef.current && attempt === transcribeAttemptRef.current) setTErr('转写失败')
     } finally {
-      setTranscribing(false)
+      if (aliveRef.current && attempt === transcribeAttemptRef.current) setTranscribing(false)
     }
   }
   const ms = typeof m.rich?.durationMs === 'number' ? m.rich.durationMs : 0
   const sec = ms > 0 ? Math.max(1, Math.round(ms / 1000)) : 0
   const width = sec > 0 ? voiceWidth(sec) : undefined
   const isSelf = m.isSender === 1
-  // 卸载（切会话/滚动出窗口）时停掉本条，避免声音在后台继续放
-  useEffect(() => () => {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
+  // 卸载（切会话/滚动出窗口）时停掉本条，并让尚未返回的取音频请求失效。
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      playAttemptRef.current += 1
+      transcribeAttemptRef.current += 1
+      releaseVoiceAudio(audioRef.current)
+      audioRef.current = null
+    }
   }, [])
   /**
    * 点气泡就地播放/暂停。
@@ -315,27 +544,59 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
    * 不允许 `file:`，所以只能走 data URL；同一条消息流里只允许一条在放（微信行为）。
    */
   const togglePlay = async (): Promise<void> => {
+    const attempt = ++playAttemptRef.current
     setLoadErr(null)
     const cur = audioRef.current
-    if (cur && playing) { cur.pause(); setPlaying(false); return }
+    // Another bubble may have released this element while React still held
+    // `playing=true`. Only the current, live element is genuinely pausable.
+    if (cur && playing && currentVoiceAudio === cur && cur.src) {
+      cur.pause()
+      setPlaying(false)
+      return
+    }
+    if (playing) setPlaying(false)
     try {
       let url = cur ? cur.src : ''
       if (!url) {
-        const r = await apiGetVoiceDataUrl({ username: selfName, localId: m.localId })
-        if (!r.url) { setLoadErr(r.error ?? '语音不可播放'); return }
+        const r = await apiGetVoiceDataUrl({ username: selfName, localId: m.localId, svrId: m.serverId })
+        if (!aliveRef.current || attempt !== playAttemptRef.current) return
+        if (!r.url) { setLoadErr('语音暂不可用'); return }
         url = r.url
       }
-      if (currentVoiceAudio && currentVoiceAudio !== cur) currentVoiceAudio.pause()
-      const a = cur ?? new Audio(url)
+      if (currentVoiceAudio && currentVoiceAudio !== cur) releaseVoiceAudio(currentVoiceAudio)
+      // stopCurrentVoice() clears the element's src. Reusing that dead element
+      // would make every later play() reject even after a fresh URL arrived.
+      const reusable = cur && cur.src ? cur : null
+      if (cur && !reusable) releaseVoiceAudio(cur)
+      const a = reusable ?? new Audio(url)
       audioRef.current = a
       currentVoiceAudio = a
-      a.onended = () => { setPlaying(false) }
+      a.onended = () => {
+        setPlaying(false)
+        // Chromium can leave a finished data-URL media element at duration;
+        // explicitly rewind so the next click starts a new playback.
+        try { a.currentTime = 0 } catch { /* metadata already gone */ }
+      }
+      a.onpause = () => { if (aliveRef.current && audioRef.current === a) setPlaying(false) }
       a.onerror = () => { setPlaying(false); setLoadErr('播放失败') }
+      if (a.ended) a.currentTime = 0
       await a.play()
+      if (!aliveRef.current || attempt !== playAttemptRef.current) {
+        if (audioRef.current === a) {
+          releaseVoiceAudio(a)
+          audioRef.current = null
+        }
+        return
+      }
       setPlaying(true)
-    } catch (e) {
-      setPlaying(false)
-      setLoadErr((e as Error).message)
+    } catch (error) {
+      if (aliveRef.current && attempt === playAttemptRef.current) {
+        setPlaying(false)
+        // 切到另一条语音时，浏览器会用 pause() 打断上一条的 play()，
+        // 这是正常替换而不是“语音暂不可用”。
+        if (error !== null && typeof error === 'object' && 'name' in error && error.name === 'AbortError') return
+        setLoadErr('语音暂不可用')
+      }
     }
   }
   return (
@@ -346,7 +607,12 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
         title={loadErr ?? (playing ? '点击暂停' : '点击播放')}
         data-self={isSelf || undefined}
         data-playing={playing || undefined}
-        {...clickableKey(() => { void togglePlay() }, { role: 'button', label: playing ? '暂停语音' : '播放语音' })}
+        {...clickableKey(() => { void togglePlay() }, {
+          role: 'button',
+          label: playing ? '暂停语音' : '播放语音',
+          // 语音播放是消息行内操作，不能顺带触发整行的“选中即分析”。
+          stopPropagation: true,
+        })}
       >
         {/* 方向：微信只把**我方**图标镜像（参考实现 chat.css `.voice-icon-sent { transform: scaleX(-1) }`），
             对方用基础方向 —— 基础图形是「锥体朝左 + 波纹朝右」，所以对方应是 `◀))) 5″`。
@@ -354,16 +620,22 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
         <span className={css.msgVoiceIcon}><IconVoiceWaves mirror={isSelf} /></span>
         {sec > 0 && <span className={cssrows.msgVoiceDur}>{sec}″</span>}
       </div>
-      {sec === 0 && audioOk === false && <span className={kitCss.textMeta}>语音数据不在本地</span>}
-      {loadErr && <span className={cssrows.msgVoiceErr} title={loadErr}>{loadErr.length > 28 ? loadErr.slice(0, 28) + '…' : loadErr}</span>}
+      {loadErr && <span className={css.msgVoiceErr}>{loadErr}</span>}
       {!transcript && !transcribing && !tErr && (
-        <button type="button" className={cssrows.msgVoiceBtn} onClick={() => { void doTranscribe() }}>语音转文字</button>
+        <button
+          type="button"
+          className={cssrows.msgVoiceBtn}
+          onClick={(event) => {
+            event.stopPropagation()
+            void doTranscribe()
+          }}
+        >语音转文字</button>
       )}
       {transcribing && <span className={kitCss.textMeta}>转写中…</span>}
       {tErr && !transcript && (
-        <span className={cssrows.msgVoiceErr} title={tErr}>{tErr.length > 28 ? tErr.slice(0, 28) + '…' : tErr}</span>
+        <span className={css.msgVoiceErr}>{tErr}</span>
       )}
-      {transcript && <span className={cssrows.msgVoiceText}>【{transcript}】</span>}
+      {transcript && <span className={css.msgVoiceText}>【{transcript}】</span>}
     </div>
   )
 }
@@ -376,7 +648,9 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
 export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: string }): React.JSX.Element {
   const [cover, setCover] = useState<string | null>(null)
   const [vErr, setVErr] = useState<string | null>(null)
+  const [openErr, setOpenErr] = useState<string | null>(null)
   const [videoPath, setVideoPath] = useState<string | null>(null)
+  const videoSave = useMediaSaveTask()
   useEffect(() => {
     let cancelled = false
     apiGetVideoInfo({ username: selfName, localId: m.localId })
@@ -385,59 +659,123 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
         const path = r.videoPath
         if (path) setVideoPath(path)
         if (r.coverUrl) setCover(r.coverUrl)
-        else setVErr(r.error === 'hevc-unsupported' ? 'wxgf/HEVC 封面（需系统解码）' : (r.error ?? '视频不可用'))
+        else setVErr('视频暂不可用')
       })
-      .catch((e: unknown) => { if (!cancelled) setVErr((e as Error).message) })
+      .catch(() => { if (!cancelled) setVErr('视频暂不可用') })
     return () => { cancelled = true }
   }, [selfName, m.localId])
   const durSec = typeof m.rich?.durationSec === 'number' ? m.rich.durationSec : 0
   const durText = durSec > 0 ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}` : ''
   const openVideo = (): void => {
     if (!videoPath) return
+    setOpenErr(null)
     // ⚠️ 必须检查返回值（2026-10-17）：`openPath` 失败时**不抛异常**，返回 `{ ok: false, error }`。
     // 原先只 `.catch()` ⇒ 后端拒绝时静默无反应（用户可用右键菜单里的「显示所在位置」兜底）。
     void apiOpenPath(videoPath).then((r) => {
-      if (!r.ok) setVErr(r.error ?? '无法用系统播放器打开（可用右键菜单「显示所在位置」）')
-    }).catch(() => { /* 打不开就保持原样，用户可用右键菜单里的「显示所在位置」 */ })
+      if (!r.ok) setOpenErr('打开视频失败：' + (r.error || '系统播放器未启动'))
+    }).catch((error: unknown) => {
+      setOpenErr('打开视频失败：' + (error instanceof Error ? error.message : String(error ?? '未知错误')))
+    })
   }
+  const saveVideo = async (): Promise<void> => {
+    if (desktopAction()) {
+      return
+    }
+    await videoSave.save<MediaOriginalExportResult>({
+      idPrefix: 'chat-video',
+      label: '保存聊天原视频',
+      successMessage: (r) => `已保存原视频 → ${r.path ?? ''}`,
+      run: async (jobId) => {
+        const picked = await apiSaveFileDialog({
+          defaultName: `聊天视频-${String(m.localId)}.mp4`,
+          title: '保存聊天原视频',
+          filters: [{ name: '视频', extensions: ['mp4', 'mov', 'm4v'] }],
+        })
+        if (picked.canceled || !picked.path) return null
+        const result = await apiExportChatVideo({
+          username: selfName,
+          localId: m.localId,
+          dest: picked.path,
+          jobId,
+        })
+        if (!result.ok) throw new Error(result.error || '视频原文件写入失败')
+        return { ...result, path: result.path ?? picked.path }
+      },
+    })
+  }
+  const saveAction = (
+    <button
+      type="button"
+      className={cssrows.msgVideoSave}
+      disabled={videoSave.running || desktopAction()}
+      data-saving={videoSave.running || undefined}
+      onClick={(event) => {
+        event.stopPropagation()
+        void saveVideo()
+      }}
+      {...desktopActionProps()}
+    >
+      {videoSave.finishing ? '完成中…' : videoSave.running ? '保存中…' : '保存原视频'}
+    </button>
+  )
+  const saveStatus = (
+    <ExportProgressStatus
+      compact
+      state={videoSave.state}
+      onCancel={() => { void videoSave.cancel() }}
+    />
+  )
   // 没有封面但有实体：给一行可点的入口，而不是报「不在本地」
   if (vErr && videoPath) {
     return (
       <div className={css.msgBubble}>
-        <span className={cssrows.msgVoicelike} title={videoPath} {...clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' })}>
+        <span className={cssrows.msgVoicelike} {...clickableKey(openVideo, {
+          role: 'button',
+          label: '用系统播放器打开视频',
+          stopPropagation: true,
+        })}>
           <IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}
         </span>
-        <span className={kitCss.textMeta}>封面不在本地，点上方用系统播放器打开</span>
+        {openErr && <span className={css.msgVoiceErr}>{openErr}</span>}
+        {saveAction}
+        {saveStatus}
       </div>
     )
   }
-  if (vErr) {
-    return (
-      <div className={css.msgBubble}>
-        <span className={cssrows.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
-        <span className={kitCss.textMeta}>（{vErr}）</span>
-      </div>
-    )
-  }
-  if (!cover) {
-    return (
-      <div className={css.msgBubble}>
-        <span className={cssrows.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
-        <span className={kitCss.textMeta}>加载中…</span>
-      </div>
-    )
-  }
+   if (vErr) {
+     return (
+       <div className={css.msgBubble}>
+         <span className={cssrows.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
+         {saveAction}
+         {saveStatus}
+       </div>
+     )
+   }
+   if (!cover) {
+     return (
+       <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
+         <div className={css.msgImageSkeleton} aria-hidden="true" />
+       </div>
+     )
+   }
   return (
     <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
       <span
         className={cssrows.msgVideoWrap}
-        title={videoPath ? `${videoPath}\n（点击用系统播放器打开）` : '视频封面'}
-        {...(videoPath ? clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' }) : {})}
+        title={videoPath ? '点击用系统播放器打开视频' : '视频封面'}
+        {...(videoPath ? clickableKey(openVideo, {
+          role: 'button',
+          label: '用系统播放器打开视频',
+          stopPropagation: true,
+        }) : {})}
       >
         <img src={cover} alt="视频封面" className={css.msgImage} loading="lazy" />
         <span className={cssrows.msgVideoPlay}><IconPlayOutline16 size={18} /></span>
         {durText && <span className={cssrows.msgVideoDur}>{durText}</span>}
       </span>
+      {openErr && <span className={css.msgVoiceErr}>{openErr}</span>}
+      {saveAction}
+      {saveStatus}
     </div>
   )
 }
@@ -503,15 +841,12 @@ export function MessageCall({ m }: { m: WechatMessage }): React.JSX.Element {
 /**
  * Lazy message image: resolve + decode via Remote, render as data URL.
  *
- * 下方那个「取原图」是 2026-09-20 加的：本机实测 93% 的图片在磁盘上**只有缩略图**
+ * 图片右下角的「取原图」是本机补全能力：本机实测 93% 的图片在磁盘上**只有缩略图**
  * （微信从不主动下载原图），所以「图糊」不是解码失败。能不能自动补回来取决于消息 XML 里
  * 带的是哪种指针 —— 只有免登录预签名直链（`tpurl`/`tphdurl`，实测约 16%）能直接取，
  * 另一类 `cdnbigimgurl` 需要微信登录态，本应用不做。而「这条属于哪一种」只有查过 XML
- * 才知道，所以按钮常在、取不到时把**具体原因**显示出来，而不是一句「失败」。
+ * 才知道。入口只在悬停图片时出现，避免在每条图片消息下常驻项目专属按钮。
  */
-/** 骨架显示多久之后才补一句文字提示（毫秒）。正常网络远够，弱网也不至于一直无声。 */
-const SLOW_MS = 2500
-
 export function MessageImage({ m, selfName, onOpen }: {
   m: WechatMessage
   selfName: string
@@ -527,8 +862,6 @@ export function MessageImage({ m, selfName, onOpen }: {
   const [fetching, setFetching] = useState(false)
   const [origNote, setOrigNote] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
-  /** 慢：只有超过阈值才露面。正常网络下它一直是 false ⇒ 界面上一个字的占位都没有。 */
-  const [slow, setSlow] = useState(false)
   useEffect(() => {
     let cancelled = false
     // 命中内存缓存：一个请求都不发（nonce 变化 = 用户点了「取原图」，那一次必须重取）
@@ -553,18 +886,17 @@ export function MessageImage({ m, selfName, onOpen }: {
           // 写进缓存：**这次之后**再遇到同一条（滚回来、切会话回来）就不用再取一次。
           // 只写成功结果 —— 失败不写，免得「这次没取到」被记成「已知没图」。
           rememberImage(selfName, m.localId, { url: r.url, thumb })
-        } else setImgErr(r.error ?? '图片不可用')
+        } else setImgErr('图片暂不可用')
       })
-      .catch((e: unknown) => { if (!cancelled) setImgErr((e as Error).message) })
+      .catch(() => { if (!cancelled) setImgErr('图片暂不可用') })
     return () => { cancelled = true }
   }, [selfName, m.localId, nonce])
 
-  /** 超过 {@link SLOW_MS} 还没拿到图 → 说一句；拿到或出错就撤掉那句。 */
   useEffect(() => {
-    if (src !== null || imgErr !== null) { setSlow(false); return }
-    const t = window.setTimeout(() => { setSlow(true) }, SLOW_MS)
+    if (origNote === null) return
+    const t = window.setTimeout(() => { setOrigNote(null) }, 2000)
     return () => { window.clearTimeout(t) }
-  }, [src, imgErr, nonce])
+  }, [origNote])
 
   /** 取回的原图会落进后端解码路径优先读的那个缓存槽，所以成功后只需重跑一次取图。 */
   const getOriginal = async (): Promise<void> => {
@@ -576,55 +908,51 @@ export function MessageImage({ m, selfName, onOpen }: {
         setOrigNote(r.note ?? (r.bytes ? `已取回原图（约 ${String(Math.max(1, Math.round(r.bytes / 1024)))} KB），正在重新加载` : '已取到原图，正在重新加载'))
         setNonce((n) => n + 1)
       } else {
-        setOrigNote(r.error ?? '这条消息取不到原图')
+        setOrigNote(imageOriginalFailureText(r.error))
       }
-    } catch (e) {
-      setOrigNote((e as Error).message)
+    } catch {
+      setOrigNote('取原图失败')
     } finally {
       setFetching(false)
     }
   }
 
   if (imgErr) {
-    const isHevc = imgErr === 'hevc-unsupported'
-    const isNoDat = imgErr.startsWith('找不到 .dat')
-    const short = isHevc ? 'wxgf 原图' : isNoDat ? '图片（未解码）' : imgErr
     return (
-      <div className={css.msgBubble} title={imgErr}><span className={kitCss.textMeta}><IconImage /> {short}</span></div>
+      <div className={css.msgBubble}><span className={kitCss.textMeta}><IconImage /> 图片暂不可用</span></div>
     )
   }
   if (!src) {
-    // 骨架（呼吸动画）而不是「图标 + 图片加载中…」：后者在图片密集的会话里整屏都是那句话，
-    // 而且每张图都要闪一次。骨架表达同一件事（还在取），但不占阅读注意力；
-    // 只有真的慢（弱网）才补一句，正常网络下**一个字的文字都没有**。
-    return (
-      <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
-        <div className={css.msgImageSkeleton} aria-hidden="true" />
-        {slow && <span className={kitCss.textMeta}>加载较慢…</span>}
-      </div>
+     // 骨架只表达「尚不可见」，不补项目专属的加载提示。
+     return (
+       <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
+         <div className={css.msgImageSkeleton} aria-hidden="true" />
+       </div>
     )
   }
+  const displaySrc = withThumbWidth(src, CHAT_IMAGE_THUMB_WIDTH)
   return (
-    <>
+    <div className={cssrows.msgImageWithOcr} data-self={m.isSender === 1 ? '1' : undefined}>
       <div className={`${css.msgBubble} ${css.msgBubbleZoom}`} {...clickableKey(() => { if (onOpen) onOpen(m) }, { label: '查看大图' })}>
         <img
-          src={src}
+          src={displaySrc}
           alt="图片"
           className={css.msgImage}
           loading="lazy"
           decoding="async"
+          data-thumb={isThumb ? '1' : undefined}
           data-loaded={loaded ? '1' : undefined}
           onLoad={() => { setLoaded(true) }}
         />
+        <div className={cssrows.msgImageTools}>
+          {fetching
+            ? <span>正在取原图…</span>
+            : <button type="button" className={cssrows.msgImageToolBtn} onClick={(e) => { e.stopPropagation(); void getOriginal() }}>取原图</button>}
+          {origNote !== null && <span>{origNote}</span>}
+        </div>
       </div>
-      <div className={cssrows.msgFileHint}>
-        {isThumb && <span className={kitCss.textMeta}>本机只有缩略图 </span>}
-        {fetching
-          ? <span className={kitCss.textMeta}>正在取原图…</span>
-          : <button type="button" className={cssrows.msgVoiceBtn} onClick={() => { void getOriginal() }}>取原图</button>}
-        {origNote !== null && <span className={kitCss.textMeta}> {origNote}</span>}
-      </div>
-    </>
+      <ImageTextActions source={src} username={selfName} localId={m.localId} layout="side" />
+    </div>
   )
 }
 /**
@@ -635,11 +963,12 @@ export function MessageImage({ m, selfName, onOpen }: {
 export function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?: string; emojiUrl?: string }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const safeLabel = label && !/^[0-9a-f]{32}$/i.test(label) ? label : '表情'
   useEffect(() => {
     let cancelled = false
     if (!md5 || !/^[0-9a-f]{32}$/i.test(md5)) {
       setSrc(null)
-      setErr('缺少表情 MD5')
+      setErr('表情不可用')
       return () => { cancelled = true }
     }
     setSrc(null)
@@ -648,23 +977,23 @@ export function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?:
       .then((r) => {
         if (cancelled) return
         if (r.url) setSrc(r.url)
-        else setErr(r.error ?? '表情不可用')
+        else setErr('表情不可用')
       })
-      .catch((e: unknown) => { if (!cancelled) setErr((e as Error).message) })
+      .catch(() => { if (!cancelled) setErr('表情不可用') })
     return () => { cancelled = true }
-  }, [md5])
+  }, [md5, emojiUrl])
   if (src) {
     return (
-      <div className={cssrows.msgSticker} title={label || '表情'}>
-        <img className={cssrows.msgStickerImg} src={src} alt={label || '表情'} loading="lazy" decoding="async" />
+      <div className={cssrows.msgSticker} title={safeLabel}>
+        <img className={cssrows.msgStickerImg} src={src} alt={safeLabel} loading="lazy" decoding="async" />
       </div>
     )
   }
   return (
     <div className={css.msgBubble}>
-      <span className={cssrows.msgEmojiChip} title={err || (md5 ? `自定义表情 · MD5 ${md5}` : '自定义表情')}>
-        {err ? '😊 [表情]' : '😊 表情加载中…'}
-      </span>
+      {err
+        ? <span className={cssrows.msgEmojiChip} title="表情">表情</span>
+        : <span className={cssrows.msgEmojiChip} data-loading="true" aria-hidden="true" />}
     </div>
   )
 }

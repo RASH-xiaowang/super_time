@@ -47,9 +47,12 @@ export declare abstract class GatewayExportOps extends GatewayMediaOps {
     }): BackupPreviewSnapshot;
     /**
      * Create a local backup snapshot.
+     * @param options - optional jobId for progress and cancellation.
      * @returns BackupMutationResult: ok + backup name, or error.
      */
-    createBackup(): Promise<BackupMutationResult>;
+    createBackup(options?: {
+        jobId?: string;
+    }): Promise<BackupMutationResult>;
     /**
      * Delete one backup by name.
      * @param options - name of the backup to delete.
@@ -106,6 +109,8 @@ export declare abstract class GatewayExportOps extends GatewayMediaOps {
         done: number;
         total: number;
         finished: boolean;
+        status: 'running' | 'ok' | 'error' | 'canceled';
+        cancelRequested: boolean;
         error?: string;
     };
     /**
@@ -123,6 +128,9 @@ export declare abstract class GatewayExportOps extends GatewayMediaOps {
         month?: string;
         mine?: string;
         zip?: boolean;
+        includeImages?: boolean;
+        includeVideos?: boolean;
+        includeLivePhotos?: boolean;
         from?: number;
         to?: number;
         dir?: string;

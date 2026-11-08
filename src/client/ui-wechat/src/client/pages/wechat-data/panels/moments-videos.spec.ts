@@ -8,8 +8,7 @@
  *  · 保存路径必须真由后端写盘（渲染端 `<a download>` 在这个 Electron 里点了没反应，实测）。
  * @module moments-videos-spec
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -23,7 +22,7 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('../api.ts', () => mocks)
 
-const { useMomentsVideos } = await import('./moments-videos.ts')
+const { VIDEO_DIAG_CACHE_MAX, useMomentsVideos } = await import('./moments-videos.ts')
 const HERE = dirname(fileURLToPath(import.meta.url))
 type Videos = ReturnType<typeof useMomentsVideos>
 type Notify = { flash: (v: string, ms?: number) => void; hold: (v: string) => void; clear: () => void }
@@ -39,6 +38,7 @@ function Harness(): React.JSX.Element {
   const v = api
   return createElement('div', {
     'data-srcs': Object.keys(v.videoSrcs).sort().join(','),
+    'data-loading': [...v.videoLoading].sort().join(','),
     'data-failed': [...v.videoFailed].sort().join(','),
     'data-err': [...v.videoErr.entries()].map(([k, m]) => `${k}=${m}`).sort().join(','),
     'data-meta': Object.keys(v.videoMeta).sort().join(','),
@@ -118,6 +118,34 @@ describe('loadVideo：取本体', () => {
     await flush()
     expect(mocks.apiGetSnsVideoDataUrl).toHaveBeenCalledTimes(2)
     expect(attr('data-srcs')).toBe('v:m4')
+    expect(attr('data-failed'), '重试成功后旧失败标记必须清掉').toBe('')
+    expect(attr('data-err'), '重试成功后旧错误原因必须清掉').toBe('')
+  })
+
+  it('媒体元素报错 ⇒ 清掉不可播放 src，进入失败态并保留错误原因', async () => {
+    mocks.apiGetSnsVideoDataUrl.mockResolvedValue({ url: 'blob:broken' })
+    act(() => { api?.loadVideo('v:m6', { md5: 'm6' }) })
+    await flush()
+    expect(attr('data-srcs')).toBe('v:m6')
+
+    act(() => { api?.reportVideoError('v:m6', '视频解码失败') })
+    await flush()
+    expect(attr('data-srcs'), '黑屏时必须卸载坏 src，界面才能显示重试层').toBe('')
+    expect(attr('data-failed')).toBe('v:m6')
+    expect(attr('data-err')).toBe('v:m6=视频解码失败')
+  })
+
+  it('失败集合与失败原因只在诊断窗口内保留，长时间滚动不会无限增长', async () => {
+    mocks.apiGetSnsVideoDataUrl.mockResolvedValue({ url: '', error: '本机没有缓存' })
+    act(() => {
+      for (let i = 0; i < VIDEO_DIAG_CACHE_MAX + 12; i += 1) {
+        api?.loadVideo('v:bounded-' + String(i), { md5: 'bounded-' + String(i) })
+      }
+    })
+    await flush()
+    expect(api?.videoFailed.size).toBe(VIDEO_DIAG_CACHE_MAX)
+    expect(api?.videoErr.size).toBe(VIDEO_DIAG_CACHE_MAX)
+    expect(api?.videoFailed.has('v:bounded-0')).toBe(false)
   })
 })
 
@@ -136,6 +164,15 @@ describe('closeVideo：四份状态一起收干净', () => {
     expect(attr('data-meta')).toBe('')
     expect(attr('data-failed')).toBe('')
     expect(attr('data-err')).toBe('')
+  })
+
+  it('播放器回填的宽高比元数据同样有界', () => {
+    const all = Object.fromEntries(
+      Array.from({ length: VIDEO_DIAG_CACHE_MAX + 10 }, (_, i) => ['v:meta-' + String(i), { w: 16, h: 9 }]),
+    )
+    act(() => { api?.setVideoMeta(all) })
+    expect(Object.keys(api?.videoMeta ?? {}).length).toBe(VIDEO_DIAG_CACHE_MAX)
+    expect(api?.videoMeta['v:meta-0']).toBeUndefined()
   })
 })
 

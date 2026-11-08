@@ -19,8 +19,8 @@ export const MUTATIONS_BATCH3T = [
     id: 'M535-event-map-name-drift',
     why: '映射表里 wechat-data/updated 对应的 DOM 事件名改了一个字母 ⇒ 事件照样转发，但订阅 `dsh-wechat-data-updated` 的面板一个都收不到（WAL 实时刷新静默失效）。判据：wechat-events.spec.ts 的「每条的 DOM 事件名与带不带 detail 都对得上」+「表里每个 DOM 事件名都真的有面板在订阅」。',
     file: 'src/client/ui-app/wechat-events.ts',
-    from: "  { from: 'wechat-data/updated', to: 'dsh-wechat-data-updated' },",
-    to: "  { from: 'wechat-data/updated', to: 'dsh-wechat-updated' },",
+    from: "  { from: 'wechat-data/updated', to: 'dsh-wechat-data-updated', detail: true },",
+    to: "  { from: 'wechat-data/updated', to: 'dsh-wechat-updated', detail: true },",
     spec: 'src/client/ui-app/wechat-events.spec.ts',
   },
   {

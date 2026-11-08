@@ -6,8 +6,8 @@
  * 「数据会不会出去」。这里把文档与源码**双向**绑住：清单里的每一条都要在代码里找得到，
  * 而代码里的每个出网点都要在文档里出现。
  *
- * **2026-09-30**：应用内的出网开关已全部移除，于是这份声明少了一整节「如何关闭出网」的
- * 开关说明，改成如实写明「应用内没有任何出网开关，要断网只能靠系统防火墙 / 断网」。
+ * **2026-09-30**：应用内的全局出网开关已全部移除，于是这份声明少了一整节「如何关闭出网」的
+ * 开关说明，改成如实写明「应用内没有全局出网开关，要断网只能靠系统防火墙 / 断网」。
  * 这条口径本身也被下面的用例钉住（文档里不许再出现被移除开关的名字）。
  *
  * 覆盖的是「有没有写」与「名字对不对」；**不覆盖**「文案描述是否准确」——
@@ -103,7 +103,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(panel, '面板里又出现了已移除的出网开关').not.toContain('blockOutbound')
     expect(panel, '面板里又出现了已移除的出网开关').not.toContain('blockMapTiles')
     expect(doc).toMatch(/敏感字段打码/)
-    expect(doc, '文档要明写「应用内已没有任何出网开关」').toMatch(/没有任何出网开关|已无出网开关|出网开关已(全部)?移除/)
+    expect(doc, '文档要明写「应用内没有任何全局出网开关」').toMatch(/没有任何全局出网开关|已无全局出网开关|全局出网开关已(全部)?移除/)
   })
 
   it('文档列出的每一类出网主机都能在代码里找到', () => {
@@ -120,8 +120,6 @@ describe('H14：隐私声明 ↔ 出网点', () => {
         // 不能为了这条扫描把字面地址抄回桥接层。
         readFileSync(join(ROOT, 'src', 'shared', 'llm-defaults.json'), 'utf8'),
       ],
-      // ClawBot 绑定通道（2026-10-12 接入）：主机在代码里写死，文档必须逐字列出。
-      ilink: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-ilink.ts'), 'utf8'),
     }
     for (const [kind, src] of Object.entries(sources)) {
       const hosts = hostsIn(src)
@@ -168,7 +166,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     }
   })
 
-  it('文档如实写明应用内已没有任何出网开关，并说清"断网才是彻底方案"', () => {
+  it('文档如实写明应用内没有全局出网开关，并说清"断网才是彻底方案"', () => {
     // 2026-09-30：这条从「开关都齐了」反转成「开关全没了」。两个方向都要守 ——
     // 否则文档会往两边骗人：明明没有开关却说有（用户以为关掉就安全），
     // 或者明明删了还留着过期说法（用户去找一个不存在的按钮）。
@@ -331,5 +329,56 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(route).toContain('createMessageWebhookHandler')
     expect(server).toContain('urlPath.startsWith(MESSAGE_WEBHOOK_PATH_PREFIX)')
     expect(server).toContain('handleMessageWebhookPost')
+  })
+
+  it('v31 AI回复：默认关闭、仅单聊、先落消息列表再投递', () => {
+    for (const marker of [
+      'ai_reply_analyze',
+      'AI回复',
+      '仅单聊',
+      '消息列表',
+      '默认关闭',
+      '最多 60 条 / 6,000 字',
+      '固定 system 提示词',
+      '/send/text',
+      '{talker,text}',
+      '{target,message,mention}',
+      '正文与附件必须拆成两条消息记录',
+      'message-list-spool',
+      'resource_ids',
+      'Webhook 入站明确禁止提交 stagedId',
+      '健康检查与任务查询',
+      '失败不自动重试',
+    ]) {
+      expect(doc, `隐私声明没有登记 v31 边界：${marker}`).toContain(marker)
+    }
+
+    const gate = readFileSync(
+      join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
+    expect(gate).toContain("label: 'AI回复'")
+    expect(gate).toContain('仅单聊')
+    expect(gate).toContain('ai_reply_analyze')
+    expect(gate).toContain('默认关闭')
+  })
+
+  it('v32 AI回复：图片/表情字节出网、预算与去视觉降级都已登记', () => {
+    for (const marker of [
+      '最多 3 张、合计不超过 6 MiB',
+      'data URL 多模态内容块',
+      '不发送本机路径',
+      '视觉字节不做文字脱敏',
+      '自动去掉视觉内容',
+      '一次去视觉降级',
+      '自定义表情',
+    ]) {
+      expect(doc, `隐私声明没有登记 v32 图片边界：${marker}`).toContain(marker)
+    }
+
+    const gate = readFileSync(
+      join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
+    expect(gate).toContain('最多 3 张、合计不超过 6 MiB')
+    expect(gate).toContain('自定义表情')
+    expect(gate).toContain('不发送本机路径')
+    expect(gate).toContain('自动降级为纯文本')
   })
 })

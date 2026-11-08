@@ -114,7 +114,12 @@ export function SearchInput({ value, onChange, placeholder = '搜索…', ariaLa
 }): React.JSX.Element {
   return (
     <div className={clsx(css.searchBox, className)}>
-      <span className={css.searchIcon}>🔍</span>
+      <span className={css.searchIcon} aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M16 16l4 4" />
+        </svg>
+      </span>
       <input
         className={css.searchInput}
         type="text"
@@ -142,13 +147,17 @@ export function SearchInput({ value, onChange, placeholder = '搜索…', ariaLa
         }}
       />
       {value !== '' && (
-        <button type="button" className={css.searchClear} aria-label="清除搜索" onClick={() => { onChange('') }}>×</button>
+        <button type="button" className={css.searchClear} aria-label="清除搜索" onClick={() => { onChange('') }}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+            <path d="M7 7l10 10M17 7L7 17" />
+          </svg>
+        </button>
       )}
     </div>
   )
 }
 
-/** 玻璃拟态卡片：可选标题栏/操作区/页脚。 */
+/** 普通内容卡片：可选标题栏/操作区/页脚。 */
 export function Card({ title, extra, footer, children, flush = false, className }: {
   title?: React.ReactNode
   extra?: React.ReactNode

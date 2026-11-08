@@ -5,7 +5,8 @@
  *
  * 桌面快捷方式原来指向主工作区的 `SuperTime.cmd`，它只 `start electron.exe`：
  * 既不构建（`ui-dist`/`lib` 是 gitignore 的构建产物），也不在性能分支的工作树上。
- * 于是「代码已提交、启动的还是旧界面」。
+ * 于是「代码已提交、启动的还是旧界面」。现在 `SuperTime.cmd` 直接执行本脚本；
+ * `Latest.cmd` 仅作为旧快捷方式的兼容包装，二者都进入同一个构建与启动流程。
  *
  * ## 它做的事
  *
@@ -48,7 +49,7 @@ const PRODUCT_FILES = [
   'src/client/ui-dist/index.html',
 ]
 /** 构建配置类文件（改了也要重建）。 */
-const SOURCE_FILES = ['package.json', 'vite.config.ts', 'vite.config.mjs', 'scripts/build-wechat-bundle.js', 'scripts/build-types.js']
+const SOURCE_FILES = ['package.json', 'vite.config.mjs', 'scripts/build-wechat-bundle.js', 'scripts/build-types.js']
 
 /** 递归取目录内最新 mtime（跳过 SKIP_DIRS、测试文件与点文件）。 */
 function newestMtime(dir) {

@@ -204,6 +204,75 @@ describe('状态机与生命周期', () => {
     expect(calls).toContain('init:2222:all')
   })
 
+  it('上次未清理时仍允许手动关闭，保留 marker 并等待微信重启', async () => {
+    const { root, decrypted } = makeRoot()
+    writeFileSync(join(root, 'wechat-image-autodownload.state.json'), JSON.stringify({ pid: 4321, at: 1 }), 'utf8')
+    const calls: string[] = []
+    const config: Record<string, unknown> = { wechat_image_autodownload_enabled: true }
+    __testing.setDeps(fakeDeps({ config, calls, pid: () => 4321 }))
+
+    const status = await wechatImageAutoDownload(decrypted, 'stop')
+    expect(status.enabled).toBe(false)
+    expect(status.cleanupUnconfirmed).toBe(true)
+    expect(status.state).toBe('failed')
+    expect(config['wechat_image_autodownload_enabled']).toBe(false)
+    expect(calls).toContain('save:wechat_image_autodownload_enabled')
+    expect(existsSync(join(root, 'wechat-image-autodownload.state.json'))).toBe(true)
+  })
+
+  it('用户重启微信后，status 轮询自动清除未确认清理警告', async () => {
+    const { root, decrypted } = makeRoot()
+    writeFileSync(join(root, 'wechat-image-autodownload.state.json'), JSON.stringify({ pid: 4321, at: 1 }), 'utf8')
+    const calls: string[] = []
+    let pid = 4321
+    __testing.setDeps(fakeDeps({
+      config: { wechat_image_autodownload_enabled: false },
+      calls,
+      pid: () => pid,
+    }))
+
+    expect(getWechatImageAutoDownloadStatus(decrypted).cleanupUnconfirmed).toBe(true)
+    pid = 2222
+    const recovered = getWechatImageAutoDownloadStatus(decrypted)
+    expect(recovered.cleanupUnconfirmed).toBe(false)
+    expect(recovered.state).toBe('idle')
+    expect(existsSync(join(root, 'wechat-image-autodownload.state.json'))).toBe(false)
+    expect(calls.some((c) => c.startsWith('init:'))).toBe(false)
+  })
+
+  it('还原失败后保留 hooked，第二次 stop 可以重试并完成清理', async () => {
+    const { root, decrypted } = makeRoot()
+    const calls: string[] = []
+    let uninstallAttempts = 0
+    const base = fakeDeps({
+      config: { wechat_image_autodownload_enabled: false },
+      calls,
+    })
+    __testing.setDeps({
+      ...base,
+      loadHelper: async () => ({
+        init: () => true,
+        uninstall: () => {
+          uninstallAttempts += 1
+          calls.push(`uninstall:${String(uninstallAttempts)}`)
+          if (uninstallAttempts === 1) throw new Error('restore failed')
+        },
+        error: () => '',
+      }),
+    })
+
+    await wechatImageAutoDownload(decrypted, 'start')
+    const failed = await stopWechatImageAutoDownload()
+    expect(failed.enabled).toBe(true)
+    expect(failed.hooked).toBe(true)
+    expect(failed.cleanupUnconfirmed).toBe(true)
+
+    const retried = await stopWechatImageAutoDownload()
+    expect(retried.hooked).toBe(false)
+    expect(retried.cleanupUnconfirmed).toBe(false)
+    expect(existsSync(join(root, 'wechat-image-autodownload.state.json'))).toBe(false)
+  })
+
   it('白名单会话数透出到状态（界面显示用）', () => {
     const { decrypted } = makeRoot()
     __testing.setDeps(fakeDeps({

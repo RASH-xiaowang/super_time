@@ -61,10 +61,10 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
     needle: 'disabled={exporting || desktopAction()}',
     why: '进度中继只服务导出任务本身',
   },
-  'clawbot-bind-modal.tsx': {
-    file: 'clawbot-rail.tsx',
-    needle: 'disabled={busy === it.slot} {...desktopActionProps()}',
-    why: '绑定弹窗只从实例轨/集成设置里的绑定按钮打开，两处都已禁用',
+  'export-task.ts': {
+    file: 'chats-head-actions.tsx',
+    needle: 'disabled={exporting || desktopAction()}',
+    why: '共享导出任务只服务已门控的导出入口；本地即时任务不会调用取消 RPC',
   },
   'KbModelDialog.tsx': {
     file: 'KbRail.tsx',
@@ -82,9 +82,14 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
     why: '朋友圈导出整条链路（含重解密）只从面板的「导出」按钮进入',
   },
   'moments-videos.ts': {
-    file: 'moments-card.tsx',
-    needle: 'saveVideo(v) }} {...desktopActionProps()}',
-    why: '视频另存为只从卡片上的 ⭳ 按钮触发，那颗按钮已禁用',
+    file: 'moments-video-tile.tsx',
+    needle: 'onClick={(e) => { e.stopPropagation(); saveVideo(v) }}',
+    why: '视频另存为只从视频卡片上的 ⭳ 按钮触发，那颗按钮已禁用',
+  },
+  'moments-live-download.ts': {
+    file: 'moments-portals.tsx',
+    needle: "if (desktopAction()) throw new Error('实况原视频仅支持电脑端保存')",
+    why: '实况原视频下载只从查看器的下载按钮触发，手机态会明确拒绝而不是偷偷走 <a download>',
   },
   'settings-state.tsx': {
     file: 'Settings.tsx',
@@ -101,6 +106,36 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
     needle: 'void apiOpenPath(videoPath)',
     why: '这条 openPath 是「视频取不到」时的兜底提示路径；手机上看视频走的是白名单里的取数，'
       + '真走到这一支时用户看到的是一句读得出的失败说明',
+  },
+  'use-chat-ai-reply.ts': {
+    file: 'chat-ai-reply-menu.tsx',
+    needle: 'disabled={aiReply === undefined || aiReply.busy || !aiReply.ready}',
+    why: 'AI 回复开关与立即检查都只从会话「更多」菜单触发，这两个菜单项在手机态均被禁用',
+  },
+  'chat-ai-reply-persona-action.ts': {
+    file: 'chat-ai-reply-menu.tsx',
+    needle: 'disabled={aiReply === undefined || aiReply.busy || !aiReply.ready}',
+    why: '人格保存只从已禁用降级的「AI回复设置…」菜单项打开，手机态没有写入口',
+  },
+  'use-message-list-actions.ts': {
+    file: 'MessageListPanel.tsx',
+    needle: 'const canWrite = !desktopAction()',
+    why: '消息记录/规则的所有写入口都挂在 canWrite 下，桌面端判定同时禁用按钮并隐藏 Webhook 写卡片',
+  },
+  'use-message-list-batch-actions.ts': {
+    file: 'message-list-records.tsx',
+    needle: 'onClick={props.onDelete}\n          {...desktopActionProps()}',
+    why: '批量操作入口先由带 desktopActionProps 的「批量处理」按钮开启，工具栏动作本身也再次带同一降级属性',
+  },
+  'use-message-list-data.ts': {
+    file: 'MessageListPanel.tsx',
+    needle: 'const canWrite = !desktopAction()',
+    why: 'Webhook 信息只在 canWrite 为真时读取与展示，手机态不会发起仅桌面的 getMessageListWebhookInfo',
+  },
+  'use-message-list-delivery-actions.ts': {
+    file: 'message-list-records.tsx',
+    needle: 'onClick={() => { props.onResend(record) }}\n                      {...desktopActionProps()}',
+    why: '单条重发、探测与任务查询三个按钮都在记录表操作列，并逐个带桌面端降级属性',
   },
 }
 
@@ -189,7 +224,11 @@ describe('远程动作门控台账（每个仅桌面动作都有人挡着）', (
     // 至少要有 `desktopActionProps()` 的 spread、`desktopOnlyGate('` 的卡、或 `!desktopAction()` 的条件渲染之一。
     const weak = rows.filter((r) => r.gated).filter((r) => {
       const code = stripComments(readFileSync(join(WD, 'panels', r.file), 'utf8'))
-      return !/desktopActionProps\(\)/.test(code) && !/desktopOnlyGate\('/.test(code) && !/!desktopAction\(\)/.test(code) && !/runtimeCapabilities\(\)\.[a-zA-Z]+/.test(code)
+      return !/desktopActionProps\(\)/.test(code)
+        && !/desktopOnlyGate\('/.test(code)
+        && !/!desktopAction\(\)/.test(code)
+        && !/if\s*\(\s*desktopAction\(\)\s*\)/.test(code)
+        && !/runtimeCapabilities\(\)\.[a-zA-Z]+/.test(code)
     }).map((r) => r.file)
     expect(weak).toEqual([])
   })
@@ -202,12 +241,9 @@ describe('远程动作门控台账（每个仅桌面动作都有人挡着）', (
    * 下限取的是**当前实测条数**：加降级随便，减到下限以下就红。
    */
   const MIN_GATE_MARKERS: Readonly<Record<string, number>> = {
-    'clawbot-settings.tsx': 7,
     'Contacts.tsx': 3,
     'kb-files-panel.tsx': 3,
     'Annual.tsx': 2,
-    'clawbot-chat.tsx': 2,
-    'clawbot-rail.tsx': 2,
     'moments-panel.tsx': 2,
     'NoticeBanner.tsx': 2,
     'PrivacyTrust.tsx': 2,
@@ -224,7 +260,7 @@ describe('远程动作门控台账（每个仅桌面动作都有人挡着）', (
     }
     expect(thin).toEqual([])
     // 反例自证：下限不是恒真 —— 少一条就会被点名
-    expect(Object.values(MIN_GATE_MARKERS).reduce((s, v) => s + v, 0)).toBeGreaterThan(20)
+    expect(Object.values(MIN_GATE_MARKERS).reduce((s, v) => s + v, 0)).toBeGreaterThanOrEqual(16)
   })
 
   it('反例自证：把某个真实 api 改判成「仅桌面」，判据立刻把没降级的文件点名', (): void => {

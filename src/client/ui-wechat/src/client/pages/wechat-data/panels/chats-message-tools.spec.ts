@@ -2,8 +2,15 @@
 /** Behaviour guards for the five new right-click actions and poster geometry. */
 import { describe, expect, it } from 'vitest'
 import type { WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import type { MessageRenderItem } from '../utils/message-items.ts'
 import { buildMsgMenu } from './chats-support.tsx'
 import { posterCaptureRect, posterFilename } from './chats-message-tools.tsx'
+import {
+  posterItemLocalId,
+  posterItemsForSelection,
+  posterMessageCount,
+  togglePosterSelection,
+} from './chats-poster.tsx'
 
 const text = {
   localId: 7,
@@ -50,5 +57,37 @@ describe('poster geometry', () => {
     expect(posterCaptureRect([{ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }])).toBeNull()
     const name = posterFilename('客户:A/B?*', 42, Date.UTC(2026, 9, 22, 8, 30, 0))
     expect(name).toBe('聊天海报-客户_A_B__-42-2026-10-22-08-30-00.png')
+  })
+})
+
+describe('multi-message poster selection', () => {
+  const second = { ...text, localId: 9, createTime: 1700000300, displayText: '第二条' } as WechatMessage
+  const third = { ...text, localId: 12, createTime: 1700000600, displayText: '第三条' } as WechatMessage
+  const items: MessageRenderItem[] = [
+    { kind: 'msg', m: text },
+    { kind: 'day', label: '今天', key: 'day-9' },
+    { kind: 'msg', m: second },
+    { kind: 'group', gid: 'g1', items: [third, { ...third, localId: 13 }] },
+  ]
+
+  it('toggles ids immutably and ignores invalid ids', () => {
+    const first = togglePosterSelection(new Set(), 7)
+    expect([...first]).toEqual([7])
+    const twice = togglePosterSelection(first, 7)
+    expect([...twice]).toEqual([])
+    expect([...first]).toEqual([7])
+    expect([...togglePosterSelection(first, -1)]).toEqual([7])
+  })
+
+  it('keeps chronological stream order for non-contiguous selections', () => {
+    const selected = new Set([12, 7, 99])
+    const picked = posterItemsForSelection(items, selected)
+    expect(picked.map(posterItemLocalId)).toEqual([7, 12])
+    expect(picked[1]?.kind).toBe('group')
+  })
+
+  it('counts every underlying message in an image group', () => {
+    const selected = new Set([7, 12])
+    expect(posterMessageCount(posterItemsForSelection(items, selected))).toBe(3)
   })
 })

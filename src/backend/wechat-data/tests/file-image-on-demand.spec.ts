@@ -9,7 +9,7 @@
  *  ④ 缓存命中/参数非法/未配置目录都给可展示结果，不抛。
  * @vitest-environment node
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -27,6 +27,11 @@ const KEYS = {
   h: '0123456789abcdef0123456789abcdef',
   t: 'fedcba9876543210fedcba9876543210',
 }
+const ORIGINAL_JPEG = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]),
+  Buffer.alloc(40, 0x07),
+  Buffer.from([0xff, 0xd9]),
+])
 const scratch: string[] = []
 afterEach(() => {
   resetAttachIndexForTest()
@@ -37,6 +42,10 @@ function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'file-img-ondemand-'))
   scratch.push(dir)
   return dir
+}
+
+function xorEncode(bytes: Buffer, key = 0x5a): Buffer {
+  return Buffer.from(bytes.map((byte) => byte ^ key))
 }
 
 describe('fileImageKeyOf：与客户端 fileKey 同一套剥离规则', () => {
@@ -95,6 +104,42 @@ describe('ensureFileImageDecoded：缓存命中/参数错误都有可展示结�
     })
     expect(hit.file).toBe(KEYS.t + '.t.jpg')
     expect(hit.thumb).toBe(true)
+  })
+
+  it('只有缩略缓存但 thumbFirst=false ⇒ 继续解非缩略 .dat，返回原图', async () => {
+    const decoded = tempDir()
+    const raw = tempDir()
+    const attach = join(raw, 'msg', 'attach', '2026-09', 'abc')
+    mkdirSync(attach, { recursive: true })
+    writeFileSync(join(decoded, KEYS.h + '.t.jpg'), 'cached-thumb')
+    writeFileSync(join(attach, KEYS.h + '_h.dat'), xorEncode(ORIGINAL_JPEG))
+
+    const hit = await ensureFileImageDecoded({
+      decryptedDir: '/dec', decodedDir: decoded, rawBase: raw, key: KEYS.h,
+      thumbFirst: false,
+    })
+    expect(hit).toMatchObject({ file: KEYS.h + '.jpg', format: 'jpg' })
+    expect(hit.thumb).not.toBe(true)
+    expect(readFileSync(join(decoded, KEYS.h + '.jpg')).equals(ORIGINAL_JPEG)).toBe(true)
+  })
+
+  it('只有缩略缓存且找不到原图 .dat ⇒ 回退缩略档供预览', async () => {
+    const decoded = tempDir()
+    const raw = tempDir()
+    mkdirSync(join(raw, 'msg', 'attach'), { recursive: true })
+    writeFileSync(join(decoded, KEYS.t + '.t.jpg'), 'cached-thumb')
+
+    const hit = await ensureFileImageDecoded({
+      decryptedDir: '/dec', decodedDir: decoded, rawBase: raw, key: KEYS.t,
+      thumbFirst: false,
+    })
+    expect(hit).toMatchObject({ file: KEYS.t + '.t.jpg', thumb: true })
+
+    const noBase = await ensureFileImageDecoded({
+      decryptedDir: '/dec', decodedDir: decoded, rawBase: '', key: KEYS.t,
+      thumbFirst: false,
+    })
+    expect(noBase).toMatchObject({ file: KEYS.t + '.t.jpg', thumb: true })
   })
 
   it('非法 key / 未配置目录 ⇒ error（界面保留图标兜底）', async () => {

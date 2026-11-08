@@ -15,6 +15,14 @@ import * as TabsPrimitive from '@radix-ui/react-tabs'
 import * as ToggleGroup from '@radix-ui/react-toggle-group'
 import overlayCss from './kit-overlay.module.css'
 
+function CloseIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  )
+}
+
 /** 胶囊标签页（Radix Tabs 样式化）。 */
 export function Tabs({ tabs, value, onChange, children }: {
   tabs: ReadonlyArray<{ value: string; label: React.ReactNode }>
@@ -47,7 +55,7 @@ export function Segmented({ options, value, onChange, ariaLabel }: {
    * ⚠️ Radix `ToggleGroup` **不接受空字符串作为 item value**（2026-10-17 实测踩到）：
    * `''` 是它内部的「无选中」哨兵 —— 传 `value=''` 时它认为**没有任何项被选中**，
    * 于是「全部」这一项永远不高亮；点它时 Radix 认为「已经是空」，`onValueChange` 不再回调
-   * ⇒ 表现为「**只能点一次**」（ClawBot 收/发筛选的「全部」、操作日志的「全部」等）。
+   * ⇒ 表现为「**只能点一次**」（分段筛选与操作日志里的「全部」等）。
    *
    * 修法：内部把空字符串换成哨兵 `'\u0000empty'`（不可能与真实值撞），对外仍原样传 `''`。
    * 这样 Radix 眼里「全部」是一个**正常的、非空的值**，选中/切换都正常。
@@ -108,7 +116,7 @@ export function Drawer({ open, onClose, title, children, footer, width, modal = 
         >
           <div className={overlayCss.drawerHd}>
             <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>
-            <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
+            <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭"><CloseIcon /></DialogPrimitive.Close>
           </div>
           <div className={overlayCss.drawerBd}>{children}</div>
           {footer && <div className={overlayCss.drawerFt}>{footer}</div>}
@@ -165,7 +173,7 @@ export function Dialog({ open, onClose, title, children, footer, className }: {
           {title && (
             <div className={overlayCss.drawerHd}>
               <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>
-              <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
+              <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭"><CloseIcon /></DialogPrimitive.Close>
             </div>
           )}
           <div className={overlayCss.dialogBd}>{children}</div>

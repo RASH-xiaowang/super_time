@@ -33,6 +33,10 @@ type CiteItem = NonNullable<AskResult['citations']>[number]
 /** 正文片段：普通文本 或 引用角标。 */
 type Piece = { kind: 'text'; text: string } | { kind: 'cite'; n: number }
 
+/** 完成态回答超过这个体量就默认折叠，避免一屏被长篇回答占满。 */
+const COLLAPSE_CHARS = 500
+const COLLAPSE_BLOCKS = 6
+
 /**
  * 把正文切成「文本 / 角标」片段。
  *
@@ -78,7 +82,7 @@ export function AnswerBody({ text, citations, onOpenCite, activeCite, streaming 
   const citationsPending = streaming === true && total === 0
   const blocks = parseAnswerBlocks(text)
   // 流式阶段始终展示最新正文，结束后再按长回答规则折叠。
-  const long = !streaming && (text.length > 1600 || blocks.length > 12)
+  const long = !streaming && (text.length > COLLAPSE_CHARS || blocks.length > COLLAPSE_BLOCKS)
   const shown = long && !expanded ? previewBlocks(blocks) : blocks
 
   const renderCiteGroup = (marks: readonly number[], key: string): React.ReactNode => {
@@ -166,8 +170,8 @@ function blockLength(block: AnswerBlock): number {
   return block.text.length
 }
 
-const PREVIEW_BLOCKS = 6
-const PREVIEW_CHARS = 1100
+const PREVIEW_BLOCKS = 4
+const PREVIEW_CHARS = 380
 
 /** 展开前只放有界预览；被省略的引用不会留在不可见的 Tab 顺序里。 */
 function previewBlocks(blocks: readonly AnswerBlock[]): AnswerBlock[] {
@@ -207,6 +211,26 @@ function previewBlock(block: AnswerBlock, budget: number): AnswerBlock {
 type InlineRenderer = (value: string, key: string) => React.ReactNode[]
 
 type CiteGroupRenderer = (marks: readonly number[], key: string) => React.ReactNode
+
+const LIST_ITEM_DATE_RE = /^(\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2})?)\s*[：:]\s*/
+
+function renderListItemText(
+  value: string,
+  key: string,
+  inline: InlineRenderer,
+): React.ReactNode {
+  const date = LIST_ITEM_DATE_RE.exec(value)
+  if (date === null) return inline(value, key)
+  const label = date[1] ?? ''
+  const [day = '', time = ''] = label.split(/[ T]/)
+  const dateTime = `${day.replaceAll('/', '-')}${time === '' ? '' : `T${time}`}`
+  return [
+    <time key={`${key}:date`} className={runCss.answerListItemDate} dateTime={dateTime}>
+      {label}
+    </time>,
+    ...inline(value.slice(date[0].length), `${key}:body`),
+  ]
+}
 
 function renderInlineTokens(
   tokens: readonly AnswerInlineToken[],
@@ -264,7 +288,9 @@ function renderBlock(
   }
   if (block.type === 'list') {
     const items = block.items.map((item, itemIndex) => (
-      <li key={`${key}:${String(itemIndex)}`}>{inline(item, `${key}:${String(itemIndex)}`)}</li>
+      <li key={`${key}:${String(itemIndex)}`}>
+        {renderListItemText(item, `${key}:${String(itemIndex)}`, inline)}
+      </li>
     ))
     return block.ordered
       ? <ol key={key}>{items}</ol>
@@ -280,5 +306,9 @@ function renderBlock(
       </pre>
     )
   }
-  return <p key={key}>{inline(block.text, key)}</p>
+  return (
+    <p key={key} data-answer-lead={index === 0 ? '' : undefined}>
+      {inline(block.text, key)}
+    </p>
+  )
 }

@@ -186,7 +186,7 @@ function render(methods) {
     }
     const prose = proseLines(m.doc);
     if (prose.length > 0) {
-      out.push(prose.join(' '));
+      out.push(prose.join(' ').trim());
       out.push('');
     }
     const tags = m.doc.filter((l) => l.startsWith('@'));

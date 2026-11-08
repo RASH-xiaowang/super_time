@@ -14,7 +14,15 @@
  * 新增条目必须同时保证 `methods` 里的名字都是网关真实注册的 `@Remote`。
  */
 const HEAVY_CALL_LEDGER = Object.freeze([
-  { why: '导出：大量写盘 + 压缩', methods: Object.freeze(['exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions', 'exportMoments', 'exportSnsVideo']) },
+  {
+    why: '导出：大量写盘、压缩或媒体取回',
+    methods: Object.freeze([
+      'exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions',
+      'exportMoments', 'exportSnsVideo', 'exportSnsImage', 'exportChatImage',
+      'exportChatVideo', 'exportChatFile', 'exportFileImage', 'exportFileVideo', 'exportFileAttachment',
+      'exportFavoriteImage', 'exportFavoriteVideo', 'exportFavoriteFile',
+    ]),
+  },
   { why: '备份与恢复：整库拷贝', methods: Object.freeze(['createBackup', 'createEncryptedBackup', 'restoreBackup', 'previewBackup', 'deleteBackup']) },
   { why: '解密：全量读 + 写', methods: Object.freeze(['decryptAllDatabases', 'decryptAllImages', 'autoGetDbKey', 'autoGetImageKey']) },
   { why: '升级解码缓存：扫 msg/attach（数万文件）+ 逐条重解', methods: Object.freeze(['upgradeDecodedImages']) },
@@ -53,11 +61,7 @@ const HEAVY_CALL_LEDGER = Object.freeze([
   { why: '实体抽取/链接建议：最多 20 个文件串行 LLM / 80 条 embedding', methods: Object.freeze(['extractKbEntities', 'suggestKbLinks']) },
   { why: '年度报告/回顾：跨全年聚合，且可能触发 LLM', methods: Object.freeze(['getAnnual', 'getAnnualReport', 'getAnnualReview', 'generateAnnualNarrative']) },
   { why: '任务同步与抽取', methods: Object.freeze(['syncHandoffTasks', 'extractTasks']) },
-  { why: '大库全文检索：可取消，但扫描窗口可能超过 60 秒', methods: Object.freeze(['searchMessages']) },
-  {
-    why: 'ClawBot 绑定状态中继：单次 = 约 40s 的上游长轮询，默认 60s 窗口余量太薄',
-    methods: Object.freeze(['getClawbotBindState']),
-  },
+  { why: '大库全文/跨域检索：可取消，但扫描窗口可能超过 60 秒', methods: Object.freeze(['searchMessages', 'searchUnified']) },
 ]);
 
 /** `HEAVY_CALL_LEDGER` 的扁平方法集合；运行时超时决策只读这个对象。 */

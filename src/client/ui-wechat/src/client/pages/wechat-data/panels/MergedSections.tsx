@@ -10,11 +10,20 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Segmented } from '../ui/kit.tsx'
+import { KeepAliveActiveProvider, useKeepAliveActive } from './keep-alive.tsx'
 import css from './merged.module.css'
 
 export interface MergedSection {
   key: string
   label: string
+  /**
+   * Whether the section stays mounted after the user switches away.
+   *
+   * Defaults to `true` for the state-preserving behavior used by most merged views.
+   * Heavy tables/virtualizers can opt out so `display:none` does not keep their DOM,
+   * observers and native image resources alive for the rest of the panel's lifetime.
+   */
+  keepAlive?: boolean
   /**
    * 渲染该分段。
    *
@@ -40,29 +49,94 @@ export function MergedSections({ sections, initial, ariaLabel, trailing }: {
   ariaLabel: string
   trailing?: ReactNode
 }): React.JSX.Element | null {
-  const [active, setActive] = useState(initial)
+  const sectionKeys = sections.map(section => section.key)
+  const groupKey = sectionKeys.join('\u0000')
+  const firstKey = sectionKeys.at(0) ?? ''
+  const requested = sectionKeys.includes(initial) ? initial : firstKey
+  const pageActive = useKeepAliveActive()
+  const [view, setView] = useState(() => ({
+    groupKey,
+    active: requested,
+    visited: new Set([requested]),
+  }))
+
+  /*
+   * 同一组合并面板被多个可路由 tab 复用（同一个组件实例）。分组 key 变了要换一套
+   * visited，否则上一组（例如「收藏/表情/统计」）的已访问集合会被误带进下一组。
+   * 首次渲染直接用派生的 view，effect 只负责把这次切换提交到 state。
+   */
+  const effective = view.groupKey === groupKey
+    ? view
+    : { groupKey, active: requested, visited: new Set([requested]) }
+
   // 同一组合并面板被多个 tab 复用（同一个组件实例）：从侧栏/深链切到另一个被合并的
   // tab 时 `initial` 变了，但 useState 只在首次生效 —— 不同步就会出现「点了撤回消息
   // 却还停在会话列表」。这与 ChatsPanel 内部 view 同步的做法一致。
-  useEffect(() => { setActive(initial) }, [initial])
-  const current = sections.find(s => s.key === active) ?? sections.at(0)
+  useEffect(() => {
+    setView(prev => {
+      if (prev.groupKey !== groupKey) {
+        return { groupKey, active: requested, visited: new Set([requested]) }
+      }
+      if (prev.active === requested) return prev
+      const visited = new Set(prev.visited)
+      visited.add(requested)
+      return { ...prev, active: requested, visited }
+    })
+  }, [groupKey, requested])
+
+  const current = sections.find(s => s.key === effective.active) ?? sections[0]
   // 一个分区都没有就没有东西可渲染（调用方恒给至少一个）—— 这里不兜第一个分区，
   // 因为 `current.key` / `current.render()` 拿一个不存在的分区当默认会白屏且无声。
   if (!current) return null
+
+  /** 访问过的分段保持挂载；未访问的分段仍按需懒挂载，避免一次打开全部重面板。 */
+  const select = (key: string): void => {
+    if (!sectionKeys.includes(key)) return
+    setView(prev => {
+      if (prev.groupKey !== groupKey) {
+        return { groupKey, active: key, visited: new Set([key]) }
+      }
+      const visited = new Set(prev.visited)
+      visited.add(key)
+      return { groupKey, active: key, visited }
+    })
+  }
+
   /** 面板主动跳分段：key 不存在时忽略（不报错、不白屏）。 */
-  const go = (key: string): void => { if (sections.some(s => s.key === key)) setActive(key) }
+  const go = select
+  const mounted = sections.filter(section =>
+    section.key === current.key
+    || (section.keepAlive !== false && effective.visited.has(section.key)),
+  )
   return (
     <div className={css.root}>
       <div className={css.bar}>
         <Segmented
           options={sections.map(s => ({ value: s.key, label: s.label }))}
           value={current.key}
-          onChange={setActive}
+          onChange={select}
           ariaLabel={ariaLabel}
         />
         {trailing && <div className={css.trailing}>{trailing}</div>}
       </div>
-      <div className={css.body}>{current.render(go)}</div>
+      <div className={css.body}>
+        {mounted.map((section) => {
+          const sectionActive = section.key === current.key
+          return (
+            <div
+              key={section.key}
+              className={css.sectionPane}
+              data-merged-section={section.key}
+              data-active={sectionActive || undefined}
+              aria-hidden={sectionActive ? undefined : true}
+            >
+              <KeepAliveActiveProvider active={pageActive && sectionActive}>
+                {section.render(go)}
+              </KeepAliveActiveProvider>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

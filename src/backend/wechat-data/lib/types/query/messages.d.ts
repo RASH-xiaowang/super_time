@@ -91,19 +91,22 @@ export { richPlaceholder };
  */
 export declare function msgCreateTimeByServerId(decryptedDir: string, talker: string, serverId: string): number | null;
 /**
- * Incrementally fetch messages newer than a sort_seq watermark (real-time
- * polling). Mirrors st_control's monitor delta: any message whose order key
- * is above the seen high-water mark is returned oldest-first for appending.
+ * Incrementally fetch messages newer than a `(sort_seq, local_id)` watermark
+ * (real-time polling). The composite cursor prevents duplicate `sort_seq`
+ * values from skipping messages; omitting `afterLocalId` keeps the legacy
+ * `sort_seq > after` behavior for old callers.
  * @param decryptedDir - decrypted data root.
  * @param talker - conversation username.
- * @param after - only rows with sort_seq > this watermark are returned.
+ * @param after - only rows at/after this sort_seq watermark are considered.
  * @param limit - max rows to return (default 200).
  * @param selfUsername - logged-in account wxid (see {@link queryMessages}).
- * @returns the newer messages (empty when nothing arrived).
+ * @param afterLocalId - optional second cursor segment; when present, rows are
+ *   fetched with `sort_seq > after OR (sort_seq = after AND local_id > afterLocalId)`.
+ * @returns newer messages plus `hasMore` and the next `(cursor, cursorLocalId)`.
  */
 export declare function queryNewMessages(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
-talker: string, after: number, limit?: number, selfUsername?: string): MessagesSnapshot;
+talker: string, after: number, limit?: number, selfUsername?: string, afterLocalId?: number): MessagesSnapshot;
 /**
  * Read one talker's messages (keyset pagination across all shards).
  * @param decryptedDir - decrypted data root.
@@ -114,11 +117,14 @@ talker: string, after: number, limit?: number, selfUsername?: string): MessagesS
  *   when empty, a private-chat heuristic compares the sender against the talker.
  * @param cursorLocalId - 上一页最后一行的 local_id。与 cursor 组成复合游标，
  *   用于消除 sort_seq 重复导致的分页丢消息；不传则退回只按 sort_seq 分页。
+ * @param beforeLocalId - optional target local id. When present, the page ends at
+ *   this message (inclusive), so jumping to an old quote does not require paging
+ *   through the entire conversation.
  * @returns the messages snapshot.
  */
 export declare function queryMessages(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
-talker: string, limit?: number, cursor?: number, selfUsername?: string, cursorLocalId?: number): MessagesSnapshot;
+talker: string, limit?: number, cursor?: number, selfUsername?: string, cursorLocalId?: number, beforeLocalId?: number): MessagesSnapshot;
 /** 「截至某条消息」的消息窗口；`found=false` 表示目标已不在当前解密快照里。 */
 export interface MessageAtOrBeforeSnapshot {
     messages: WechatMessage[];
@@ -131,17 +137,42 @@ export interface MessageAtOrBeforeSnapshot {
  * 这里按 `local_id` 找到目标的全局排序键，再取 `(sort_seq, local_id) <= 目标`
  * 的最后一页，因此无论目标多旧都只读取当前会话，且不会越过目标看到后续消息。
  * @param decryptedDir - 解密数据根。
- * @param talker - 会话 username（范围边界）。
  * @param localId - 目标消息在当前会话内的 local_id。
  * @param limit - 窗口最多包含多少条消息（含目标）。
  * @param selfUsername - 登录账号 wxid，用于区分「我」和对方/群成员。
+ * @param talker - 会话 `WechatSession.username` 的别名（范围边界）。
  * @returns 按时间正序的消息窗口与目标是否存在。
  */
 export declare function queryMessagesAtOrBefore(decryptedDir: string, talker: string, localId: number, limit?: number, selfUsername?: string): MessageAtOrBeforeSnapshot;
+/** Result of locating one message by its conversation-scoped local id. */
+export interface MessageByLocalIdResult {
+    found: boolean;
+    message?: WechatMessage;
+    error?: string;
+}
 /**
- * Resolve one message by its server_id (merged chat-log nested pointers).
- * Scans every message shard / Msg table; only type-49 appmsg cards are
- * resolved.
+ * Locate one message by `(username, local_id)` without scanning every chat.
+ *
+ * Attachment export must derive the file name, size, MD5 and creation time from
+ * the message itself; taking those values from renderer props would let a stale
+ * or forged card point at another conversation's same-name file. A duplicate
+ * local id across shards is treated as ambiguous and rejected rather than
+ * guessing.
+ * @param decryptedDir - decrypted data root.
+ * @param talker - conversation username or legacy message-table reference.
+ * @param localId - conversation-scoped message id.
+ * @param selfUsername - optional logged-in account for sender normalization.
+ * @returns the canonical parsed message, or an explicit lookup failure.
+ */
+export declare function queryMessageByLocalId(decryptedDir: string, 
+/** 会话微信 ID —— 正名见 `WechatSession.username`。 */
+talker: string, localId: number, selfUsername?: string): MessageByLocalIdResult;
+/**
+ * Resolve one message by its server_id (merged chat-log nested pointers and
+ * quoted-message jumps). With `talker`, the lookup is scoped to that
+ * conversation and resolves every message type. Without it, the historical
+ * behavior is preserved: scan every message table and only resolve type-49
+ * appmsg cards.
  *
  * **带签名缓存**（M11）：本机实测「命中」中位 1.8–3.8ms，而**未命中**要 77–80ms —— 它是两轮
  * 扫描（先按整型走 `server_id` 覆盖索引，再对未命中的整轮 `CAST(server_id AS TEXT)` 全表扫，
@@ -155,9 +186,13 @@ export declare function queryMessagesAtOrBefore(decryptedDir: string, talker: st
  * 可以击穿它（与仓库其它 `cachedBySig` 条目同款限制，非本处新引入）。
  * @param decryptedDir - decrypted data root.
  * @param serverId - server_id as string (may exceed 2^53).
+ * @param talker - optional conversation username for a scoped, all-type lookup.
+ * @param selfUsername - optional logged-in account for sender normalization.
  * @returns found flag plus the parsed message (when found).
  */
-export declare function queryMessageByServerId(decryptedDir: string, serverId: string): Promise<{
+export declare function queryMessageByServerId(decryptedDir: string, serverId: string, 
+/** 会话微信 ID —— 正名见 `WechatSession.username`。 */
+talker?: string, selfUsername?: string): Promise<{
     found: boolean;
     message?: WechatMessage;
 }>;

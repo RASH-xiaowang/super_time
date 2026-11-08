@@ -9,7 +9,7 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, apiOriginalHarvest, apiGetOriginalHarvestStatus, apiGetWxcdnQuota, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, apiOriginalHarvest, apiGetOriginalHarvestStatus, apiGetWxcdnQuota, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
@@ -20,6 +20,7 @@ import { IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14,
 import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus, WxcdnQuota } from '@deepseek-ai/dsh-wechat-data/types'
 import { useOriginalHarvest } from './use-original-harvest.ts'
 import { useThirdPartyOriginal } from './use-third-party-original.ts'
+import { useDiagLogExport } from './use-diag-log-export.ts'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /** SSR 下退化成 useEffect，客户端仍保留首帧落位的 layout 时序。 */
@@ -360,13 +361,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     }
   }, [])
   useEffect(() => { void refreshDiag() }, [refreshDiag])
-  const exportDiagLog = useCallback(async (): Promise<void> => {
-    const r = await apiExportDiagLog()
-    if (r.canceled) return
-    if (!r.ok) { notify('err', '导出诊断日志失败：' + (r.error ?? '未知原因')); return }
-    await refreshDiag()
-    notify('ok', `诊断日志已导出（${Math.max(1, Math.round((r.bytes ?? 0) / 1024))} KB）`)
-  }, [notify, refreshDiag])
+  const { state: diagExportState, exporting: diagExporting, exportLog: exportDiagLog } = useDiagLogExport(refreshDiag)
   const revealDiagLog = useCallback(async (): Promise<void> => {
     const r = await apiRevealDiagLog()
     if (!r.ok) notify('err', '打开日志目录失败：' + (r.error ?? '未知原因'))
@@ -954,7 +949,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo, fetchOriginals,
-    detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
+    detectMsg, detecting, diagExportState, diagExporting, diagInfo, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
     imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     message, nativeTranscribe, navGroups, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,

@@ -150,11 +150,8 @@
   --wx-link-hover: #8fb4f2;
   --wx-time-chip-bg: rgba(0, 0, 0, 0.7);
   --wx-time-chip-text: #ffffff;
-  /* 转账：官方扁平橙色 + 退回态（本项目的 paysubtype 三桶把「无状态」与
-     「已收款」并到了 accepted，故不额外造「已收款」配色，只区分退回）。 */
+  /* 转账：官方扁平橙色。支付状态字段不可靠时不绘制任何推测状态。 */
   --wx-transfer: #f79c46;
-  --wx-transfer-returned: #fde1c3;
-  --wx-transfer-returned-text: #8a6a45;
   /* 红包：官方扁平红橙色 + 底栏文字 */
   --wx-redpacket: #fa9d3b;
   --wx-redpacket-footer: #faecda;
@@ -246,6 +243,14 @@
 /* 只标正在分析的单条消息，不给所有可分析消息加描边。 */
 .msgVRow[data-analysis-target] { border-radius: var(--nm-r-sm); background: color-mix(in srgb, var(--nm-cyan) 5%, transparent); box-shadow: inset 2px 0 var(--nm-cyan); }
 
+/* 海报多选：选中状态跨虚拟滚动保留，但视觉只落在当前挂载的行上。 */
+.msgVRow[data-poster-selectable] { cursor: pointer; }
+.msgVRow[data-poster-selected] {
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--wx-bubble-self) 7%, transparent);
+  box-shadow: inset 3px 0 var(--wx-bubble-self);
+}
+
 /* 系统提示 / 撤回 / 拍一拍：微信官方是**居中小字灰字、无底色无圆角**，
    （与日期分隔同款字色与字号）。 */
 .msgRowSystem { display: flex; justify-content: center; margin: 0; }
@@ -270,6 +275,13 @@
 }
 /* 表情占位（自定义表情的图片本体不在本链路里时）：用正文同字号，避免比周围文字大一圈。 */
 .msgEmojiChip { font-size: 13px; line-height: 1.6; color: inherit; opacity: 0.8; }
+.msgEmojiChip[data-loading='true'] {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--nm-r-sm);
+  background: var(--wx-card-hover);
+}
 .msgVoiceDur {
   font-size: 14px;
   color: inherit;
@@ -290,60 +302,40 @@
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 .msgVoiceBtn:hover { background: var(--wx-card-hover); border-color: var(--wx-card-footer); }
-.msgVoiceErr {
-  font-size: 12px;
-  color: var(--nm-danger);
-  max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.msgAppmsgIcon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wx-card-preview);
 }
-/* 转写结果：微信里是独立的一段引用式灰底。 */
-.msgVoiceText {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--wx-quote-text);
-  background: var(--wx-quote-bg);
-  border-radius: var(--wx-radius);
-  padding: 6px 10px;
-  white-space: normal;
-  word-break: break-word;
-  max-width: 340px;
-}
-.msgSolitaireHd { display: flex; align-items: center; gap: 8px; }
-.msgSolitaireIcon { font-size: 14px; line-height: 1; }
-.msgSolitaireSubject {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--wx-card-title);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.msgSolitaireCount {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
-}
-.msgSolitaireList { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.msgSolitaireItem { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
-.msgSolitaireIdx {
-  flex: 0 0 16px;
-  text-align: right;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-}
-.msgSolitaireText { color: var(--wx-card-title); word-break: break-word; }
-.msgAppmsgIcon { font-size: 16px; line-height: 1.2; }
 .msgAppmsgBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgAppmsgLabel { font-size: 12px; font-weight: 500; color: var(--wx-card-preview); }
-.msgAppmsgTitle { font-size: 13px; line-height: 1.5; color: var(--wx-card-title); word-break: break-word; }
-.msgAppmsgDesc { font-size: 12px; line-height: 1.45; color: var(--wx-card-preview); word-break: break-word; }
-.msgAppmsgSource { font-size: 11px; color: var(--wx-card-footer); }
+.msgAppmsgTitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--wx-card-title);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgAppmsgDesc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--wx-card-preview);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.msgAppmsgSource {
+  font-size: 11px;
+  color: var(--wx-card-footer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .msgCallBody { display: inline-flex; align-items: center; gap: 8px; }
 .msgCallDur {
   font-size: 12px;
@@ -353,6 +345,32 @@
 }
 /* ── 视频封面 + 播放角标（微信：48px 半透明圆、无描边、无模糊） ──── */
 .msgVideoWrap { position: relative; display: inline-block; }
+.msgVideoSave {
+  display: block;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.msgVideoSave:hover:not(:disabled) {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+.msgVideoSave:disabled { cursor: default; opacity: 0.65; }
+.msgVideoSave[data-saving='true'] { cursor: wait; }
+.msgVideoSaved {
+  display: block;
+  margin-top: 4px;
+  max-width: 240px;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
 .msgVideoPlay {
   position: absolute;
   left: 50%;
@@ -451,27 +469,16 @@
   font-variant-numeric: tabular-nums;
   line-height: 1.25;
 }
-.msgTransferStatus { font-size: 12px; opacity: 0.95; }
-.msgRedpacketIcon { font-size: 32px; line-height: 1; flex-shrink: 0; }
+.msgRedpacketIcon {
+  width: 32px;
+  height: 36px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 .msgRedpacketBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .msgRedpacketTitle { font-size: 14px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.msgPayStatus {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-  font-size: 12px;
-  color: inherit;
-  opacity: 0.88;
-  font-variant-numeric: tabular-nums;
-}
-.msgRedpacketAmount {
-  font-size: 14px;
-  font-weight: 500;
-  color: inherit;
-  font-variant-numeric: tabular-nums;
-}
 .msgQuoteWho {
   flex: 0 1 auto;
   min-width: 0;
@@ -495,6 +502,332 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.msgImageTools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 12px);
+  padding: 3px var(--nm-s-2);
+  border-radius: var(--wx-radius);
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.msgBubbleZoom:hover .msgImageTools,
+.msgBubbleZoom:focus-within .msgImageTools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msgImageTools span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msgImageToolBtn {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+/* 单图：气泡与 OCR 入口是兄弟节点；图片本体仍只负责打开大图。 */
+.msgImageWithOcr {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+}
+.msgImageWithOcr[data-self='1'] .msgImageActionStack[data-layout='side'] { order: -1; }
+.msgImageActionStack {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.msgImageActionStack[data-layout='side'] { margin-top: 2px; }
+.msgImageActionStack[data-layout='overlay'] {
+  position: absolute;
+  z-index: 3;
+  top: 5px;
+  right: 5px;
+}
+.msgOcrAction,
+.msgAiAction {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wx-card-footer) 45%, transparent);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  font: 600 13px/20px var(--nm-font-sans, sans-serif);
+  text-align: center;
+  cursor: pointer;
+  corner-shape: round;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.msgOcrAction:hover,
+.msgAiAction:hover {
+  background: rgba(0, 0, 0, 0.74);
+  border-color: var(--wx-card-footer);
+}
+.msgOcrAction:focus-visible,
+.msgAiAction:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.msgAiAction {
+  border-color: color-mix(in srgb, var(--nm-cyan) 62%, transparent);
+  color: color-mix(in srgb, var(--nm-cyan) 80%, #fff);
+  font-size: 9px;
+  letter-spacing: -0.04em;
+}
+.msgOcrAction[data-layout='overlay'],
+.msgAiAction[data-layout='overlay'] {
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.msgAiAction[data-layout='overlay'] { font-size: 8px; }
+.msgImageGrid[data-self='1'] .msgImageActionStack[data-layout='overlay'],
+.msgImageGroupPanel[data-self='1'] .msgImageActionStack[data-layout='overlay'],
+.msgImageGroupExpanded[data-self='1'] .msgImageActionStack[data-layout='overlay'] {
+  left: 5px;
+  right: auto;
+}
+.msgRecognitionDialog {
+  width: min(960px, 94vw);
+  max-height: min(84vh, 760px);
+  container-name: recognition-dialog;
+  container-type: inline-size;
+}
+.msgRecognitionBody {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 14px;
+  min-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.msgRecognitionPreview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 260px;
+  max-height: 58vh;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  cursor: zoom-in;
+  touch-action: none;
+  user-select: none;
+}
+.msgRecognitionPreview:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent);
+  outline-offset: 3px;
+}
+.msgRecognitionPreview[data-zoomed="true"] {
+  cursor: grab;
+}
+.msgRecognitionPreview[data-dragging="true"] {
+  cursor: grabbing;
+}
+.msgRecognitionPreview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 58vh;
+  object-fit: contain;
+  transform-origin: center;
+  transition: transform 100ms ease-out;
+  will-change: transform;
+  pointer-events: none;
+}
+.msgRecognitionPreview[data-dragging="true"] img {
+  transition: none;
+}
+.msgRecognitionZoomHint {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 1;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--nm-r-pill, 999px);
+  color: rgba(248, 249, 252, 0.9);
+  background: rgba(18, 21, 29, 0.68);
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+.msgRecognitionZoomTools {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--nm-r-pill, 999px);
+  background: rgba(18, 21, 29, 0.78);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+.msgRecognitionZoomTools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--nm-r-pill, 999px);
+  color: #f4f6fa;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.msgRecognitionZoomTools button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+.msgRecognitionZoomTools button:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+.msgRecognitionZoomTools .msgRecognitionZoomPercent {
+  min-width: 48px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .msgRecognitionPreview img { transition: none; }
+}
+.msgRecognitionResult {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+.msgRecognitionResult .msgOcrText {
+  flex: 1 1 auto;
+  min-height: 220px;
+  max-height: 58vh;
+}
+@container recognition-dialog (max-width: 760px) {
+  .msgRecognitionBody {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .msgRecognitionPreview {
+    min-height: 180px;
+    max-height: 34vh;
+  }
+  .msgRecognitionPreview img { max-height: 34vh; }
+  .msgRecognitionResult .msgOcrText {
+    min-height: 180px;
+    max-height: 40vh;
+  }
+}
+.msgOcrHeaderActions { display: inline-flex; align-items: center; gap: 8px; }
+.msgOcrCopy,
+.msgOcrRetry {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.msgOcrCopy:hover,
+.msgOcrRetry:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}
+.msgOcrMeta {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.msgOcrText {
+  margin: 0;
+  padding: 12px;
+  max-height: 52vh;
+  overflow: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font: 13px/1.75 var(--nm-font-sans, sans-serif);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  scrollbar-width: thin;
+}
+.msgOcrState {
+  flex: 1;
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+.msgOcrState strong { color: var(--nm-text-1); font-size: 13px; }
+.msgOcrSpinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--nm-cyan) 24%, transparent);
+  border-top-color: var(--nm-cyan);
+  border-radius: 50%;
+  animation: msgOcrSpin 0.8s linear infinite;
+  corner-shape: round;
+}
+@keyframes msgOcrSpin { to { transform: rotate(360deg); } }
+.msgOcrNotice {
+  align-self: flex-end;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+.msgAiElapsed {
+  color: var(--nm-text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .msgOcrSpinner { animation: none; }
 }
 .msgFileTitle {
   font-size: 14px;
@@ -608,17 +941,7 @@
   color: var(--wx-card-preview);
   line-height: 1.4;
   word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgLinkUrl {
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
 }
 .msgLinkOpen {
   position: absolute;
@@ -778,9 +1101,7 @@
    并保留危险语义与微信红的色相。 */
 .viewerBtnClose:hover { background: color-mix(in srgb, var(--nm-danger) 70%, #000) !important; color: #fff !important; }
 /* ── 系统提示行：撤回 / 置顶 / 通知 / 空内容 ───────────────────────
-   微信里这几类都是同一款居中灰字，靠文案区分；本项目保留行首小字形
-   （↩ / 📌）让「动作 vs 通知」仍可快速扫读，其余分色与胶囊底已去掉。 */
-.msgSystemIcon { font-size: 11px; line-height: 1; opacity: 0.85; }
+   微信里这几类都是同一款居中灰字，靠文案区分；不再附加项目自造图标。 */
 .msgSystemText { word-break: break-word; }
 .msgAppmsgThumb {
   width: 42px;
@@ -791,7 +1112,15 @@
   background: var(--wx-card-hover);
   border: none;
 }
-.msgMediaCoverFallback { font-size: 24px; color: var(--wx-card-footer); }
+.msgMediaCoverFallback {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wx-card-footer);
+}
+.msgMediaCoverFallback svg { width: 30px; height: 30px; }
 .msgMediaDot {
   position: absolute;
   right: 8px;
@@ -834,7 +1163,146 @@
   display: block;
   background: var(--wx-card-hover);
 }
-/* ── 图片组网格（连拍合并）：微信用 3 列等宽方格，gap 2px、圆角 4px ── */
+/* ── 图片组合并：折叠为微信式卡片栈，展开后在原位纵向铺开 ───────── */
+.msgImageGroupPanel {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+}
+.msgImageGroupPanel[data-self='1'] { flex-direction: row-reverse; }
+.msgImageGroupActions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+/* 自己发送时动作区在图片左侧，靠右对齐才能让 ? 贴近图片。 */
+.msgImageGroupPanel[data-self='1'] .msgImageGroupActions { align-items: flex-end; }
+.msgOcrActionSlot {
+  display: block;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 48px;
+}
+.msgImageGroupToggle {
+  flex: 0 0 auto;
+  min-width: 48px;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--wx-card-footer) 34%, transparent);
+  border-radius: var(--nm-r-xl);
+  background: color-mix(in srgb, var(--wx-card-bg) 82%, transparent);
+  color: var(--wx-card-title);
+  font: 12px/1 var(--nm-font-sans, sans-serif);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.msgImageGroupToggle:hover {
+  background: var(--wx-card-hover);
+  border-color: color-mix(in srgb, var(--wx-card-footer) 58%, transparent);
+}
+.msgImageGroupToggle:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.msgImageStack {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  min-width: 120px;
+  padding-right: 24px;
+}
+.msgImageStackFront {
+  position: relative;
+  z-index: 4;
+  display: block;
+}
+.msgImageStackItem {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--wx-radius);
+  background: var(--wx-card-hover);
+  cursor: zoom-in;
+}
+.msgImageStackItem img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 180px;
+  max-height: 240px;
+  min-width: 96px;
+  min-height: 96px;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.msgImageStackLayer {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 52px;
+  overflow: hidden;
+  border-radius: var(--nm-r-lg);
+  background: var(--wx-card-hover);
+  box-shadow:
+    0 0 0 2px var(--nm-bg-1, #1b1b1c),
+    0 3px 9px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.msgImageStackLayer[data-slot='0'] { right: 16px; z-index: 3; opacity: 0.9; }
+.msgImageStackLayer[data-slot='1'] { right: 8px; z-index: 2; opacity: 0.72; }
+.msgImageStackLayer[data-slot='2'] { right: 0; z-index: 1; opacity: 0.54; }
+.msgImageStackLayerItem,
+.msgImageStackLayerItem img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.msgImageStackLayer .msgImageGridEmpty { width: 100%; height: 100%; }
+.msgImageGroupExpanded {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+}
+.msgImageGroupExpanded[data-self='1'] { align-items: flex-end; }
+.msgImageGroupExpandedActions {
+  display: flex;
+  align-self: stretch;
+  justify-content: flex-end;
+}
+.msgImageGroupExpanded[data-self='1'] .msgImageGroupExpandedActions {
+  justify-content: flex-start;
+}
+.msgImageExpandedFrame {
+  position: relative;
+  display: block;
+  max-width: 100%;
+}
+.msgImageExpandedItem {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--wx-radius);
+  background: var(--wx-card-hover);
+  cursor: zoom-in;
+}
+.msgImageExpandedItem img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 240px;
+  max-height: 240px;
+  min-width: 96px;
+  min-height: 96px;
+  object-fit: cover;
+  border-radius: inherit;
+}
+/* 旧网格样式仍保留给其他图片组视图复用；新版折叠栈不再依赖固定二维网格。 */
 .msgImageGrid {
   display: grid;
   gap: 2px;
@@ -869,22 +1337,6 @@
   color: #fff;
   background: rgba(0, 0, 0, 0.42);
   pointer-events: none;
-}
-/* 用两道渐变画「路网」示意，代替不可用的离线瓦片；不假装是真实地图。 */
-.msgLocationGrid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px);
-  background-size: 15px 15px;
-  opacity: 0.8;
-}
-.msgLocationPin { position: relative; font-size: 22px; line-height: 1; }
-.msgLocationCoord {
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
 }
 /* ── 名片卡头像填充 ─────────────────────────────────────────────── */
 .msgContactAvatar img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }

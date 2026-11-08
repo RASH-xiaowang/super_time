@@ -84,11 +84,17 @@ export interface RpaHttpRequest {
     /** 二进制请求体（multipart）；存在时优先于 `body`。 */
     bodyBytes?: Uint8Array;
     contentType: string;
+    /** Optional binary response mode used by the Feather resource uploader. */
+    responseType?: 'text' | 'bytes';
+    /** Hard cap when responseType is bytes; prevents an untrusted URL from exhausting memory. */
+    maxResponseBytes?: number;
 }
 /** 一次 HTTP 响应（body 文本，由厂商解析器决定业务成败）。 */
 export interface RpaHttpResponse {
     status: number;
     bodyText: string;
+    /** Present only when the request set `responseType: 'bytes'`. */
+    bodyBytes?: Uint8Array;
 }
 /** 厂商适配器解析后的投递结果。 */
 export interface RpaSendResult {
@@ -116,6 +122,14 @@ export interface RpaVendorAdapter {
 /** 投递依赖（测试注入 fetch；生产省略 = 全局 fetch）。 */
 export interface RpaDispatchDeps {
     fetchImpl?: RetryFetch;
+    /** 调用方的中止信号：租约续期失败时中止在途 fetch。 */
+    signal?: AbortSignal;
+    /**
+     * 首次真正尝试出网前调用；可异步落一条 `sent_unconfirmed` 标记。
+     *
+     * 抛出/拒绝表示标记未能持久化，此时 `sendRequest` 不会调用 fetch。
+     */
+    onOutboundAttempt?: () => void | Promise<void>;
 }
 /** 通用管道对一条记录给出的结果（由 callback 层再包成 TaskCallbackDispatchResult）。 */
 export interface RpaDispatchOutcome {

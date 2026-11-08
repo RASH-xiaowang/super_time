@@ -8,16 +8,21 @@
  */
 import { useState } from 'react'
 import {
+  apiExportFileAttachment,
+  apiExportFavoriteFile,
   apiGetFavoriteMediaDataUrl,
   apiGetFileImageDataUrl,
-  apiGetMessageFile,
   apiGetSnsImageDataUrl,
+  apiSaveFileDialog,
 } from '../api.ts'
 import { preferMediaUrl } from '../wechat-media.ts'
 import { fmtBytes } from '../utils/format.ts'
 import type { AnswerRuntimeResourceCitation, EvidenceLocator } from './use-ask.ts'
 import { openLink } from './chats-support.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './ask-runtime.module.css'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
 
 type ResourceLocator = Extract<EvidenceLocator, { type: 'resource' }>
 
@@ -61,7 +66,8 @@ export function resourceActionKind(resource: AnswerRuntimeResourceCitation): Res
   if (locator.resourceKind === 'favorite') {
     if (locator.mediaKind === 'image' && hasFavoriteMedia(locator)) return 'favorite-image'
     if (locator.mediaKind === 'video' && hasFavoriteMedia(locator)) return 'favorite-video'
-    if (locator.mediaKind === 'file' && (hasFavoriteMedia(locator) || Boolean(locator.fileName))) {
+    if (locator.mediaKind === 'file' && typeof locator.fullMd5 === 'string'
+      && /^[0-9a-f]{32}$/i.test(locator.fullMd5)) {
       return 'favorite-file'
     }
     return url ? 'external-link' : 'none'
@@ -77,15 +83,6 @@ export function resourceActionKind(resource: AnswerRuntimeResourceCitation): Res
 
 function useHttpMedia(): boolean {
   return typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol)
-}
-
-function saveUrl(url: string, name: string): void {
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = name
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
 }
 
 function displayName(resource: AnswerRuntimeResourceCitation): string {
@@ -132,40 +129,30 @@ async function loadVideo(resource: AnswerRuntimeResourceCitation): Promise<strin
   return preferMediaUrl(row, useHttpMedia()).url ?? ''
 }
 
-async function downloadFavorite(resource: AnswerRuntimeResourceCitation): Promise<void> {
+/** Strict original-file save: the backend locates/copies the file and verifies its MD5. */
+async function saveOriginalFile(resource: AnswerRuntimeResourceCitation, jobId: string): Promise<string> {
+  if (desktopAction()) throw new Error('原文件保存仅支持电脑端')
   const locator = locatorOf(resource)
-  if (!locator) return
+  if (!locator) throw new Error('资源缺少本机定位信息')
+  const kind = resourceActionKind(resource)
   const name = displayName(resource)
-  if (locator.md5) {
-    const row = await apiGetFavoriteMediaDataUrl({
-      md5: locator.md5,
-      kind: 'file',
+  const picked = await apiSaveFileDialog({
+    defaultName: name,
+    title: '保存原文件',
+    filters: [{ name: '全部文件', extensions: ['*'] }],
+  })
+  if (picked.canceled || !picked.path) return ''
+  const result = kind === 'favorite-file'
+    ? await apiExportFavoriteFile({ fullMd5: locator.fullMd5 ?? '', kind: 'file', dest: picked.path, jobId })
+    : await apiExportFileAttachment({
       fileName: name,
-      ...(locator.size ? { size: locator.size } : {}),
+      ...(locator.size !== undefined ? { size: locator.size } : {}),
+      ...(locator.md5 ? { md5: locator.md5 } : {}),
+      dest: picked.path,
+      jobId,
     })
-    if (row.url) {
-      saveUrl(row.url, name)
-      return
-    }
-  }
-  const row = await apiGetMessageFile({
-    fileName: name,
-    ...(locator.size ? { size: locator.size } : {}),
-  })
-  if (row.url) saveUrl(row.url, name)
-  else throw new Error(row.error ?? '本地未找到该文件')
-}
-
-async function downloadFile(resource: AnswerRuntimeResourceCitation): Promise<void> {
-  const locator = locatorOf(resource)
-  if (!locator) return
-  const name = displayName(resource)
-  const row = await apiGetMessageFile({
-    fileName: name,
-    ...(locator.size ? { size: locator.size } : {}),
-  })
-  if (row.url) saveUrl(row.url, name)
-  else throw new Error(row.error ?? '本地未找到该文件')
+  if (!result.ok) throw new Error(result.error || '原文件写入失败')
+  return result.path ?? picked.path
 }
 
 /**
@@ -179,9 +166,13 @@ export function ResourceCard({ resource }: { resource: AnswerRuntimeResourceCita
   const [error, setError] = useState('')
   const [image, setImage] = useState('')
   const [video, setVideo] = useState('')
+  const [savedPath, setSavedPath] = useState('')
+  const mediaSave = useMediaSaveTask()
+  const savesFile = action === 'favorite-file' || action === 'file-download'
+  const saveDisabled = savesFile && desktopAction()
 
   const run = async (task: () => Promise<void>): Promise<void> => {
-    if (busy) return
+    if (busy || mediaSave.running) return
     setBusy(true)
     setError('')
     try {
@@ -211,7 +202,7 @@ export function ResourceCard({ resource }: { resource: AnswerRuntimeResourceCita
   const label = action === 'favorite-video'
     ? '播放视频'
     : action === 'favorite-file' || action === 'file-download'
-      ? '下载文件'
+      ? '保存原文件'
       : action === 'external-link'
         ? '打开链接'
         : action === 'none'
@@ -233,12 +224,14 @@ export function ResourceCard({ resource }: { resource: AnswerRuntimeResourceCita
       </div>
       {image && <img className={css.resourceImage} src={image} alt={name} loading="lazy" decoding="async" />}
       {video && <video className={css.resourceVideo} src={video} controls preload="metadata" />}
+      {savedPath && <div className={css.resourceMeta} role="status">已保存原文件 → {savedPath}</div>}
       {label !== '' && (
         <div className={css.resourceActions}>
           <button
             type="button"
             className={css.resourceAction}
-            disabled={busy}
+            disabled={busy || mediaSave.running || saveDisabled}
+            {...(savesFile ? desktopActionProps() : {})}
             onClick={() => {
               if (action === 'external-link') {
                 const url = safeHttpUrl(locator?.url)
@@ -247,14 +240,29 @@ export function ResourceCard({ resource }: { resource: AnswerRuntimeResourceCita
               }
               if (action === 'favorite-video') playVideo()
               else if (action === 'favorite-image' || action === 'file-image' || action === 'moment-image') previewImage()
-              else if (action === 'favorite-file') void run(() => downloadFavorite(resource))
-              else if (action === 'file-download') void run(() => downloadFile(resource))
+              else if (action === 'favorite-file' || action === 'file-download') {
+                void mediaSave.save<string>({
+                  idPrefix: 'resource-file',
+                  label: '保存资源卡原文件',
+                  successMessage: (path) => `已保存原文件 → ${path}`,
+                  run: async (jobId) => {
+                    const path = await saveOriginalFile(resource, jobId)
+                    if (path) setSavedPath(path)
+                    return path || null
+                  },
+                })
+              }
             }}
           >
-            {busy ? '读取中…' : image || video ? '重新加载' : label}
+            {mediaSave.finishing ? '完成中…' : busy || mediaSave.running ? '读取中…' : image || video ? '重新加载' : label}
           </button>
         </div>
       )}
+      <ExportProgressStatus
+        compact
+        state={mediaSave.state}
+        onCancel={() => { void mediaSave.cancel() }}
+      />
       {error && <div className={css.resourceError} role="alert">{error}</div>}
     </li>
   )

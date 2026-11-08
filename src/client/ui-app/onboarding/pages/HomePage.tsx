@@ -22,8 +22,8 @@ import { FIRST_RUN_STEPS, QUESTION_CARDS } from '../onboarding-content.tsx'
  * 三处都按这两个数字现算，改了它会一起红。
  */
 const FACTS = [
-  { k: 'MODULES', v: '17' },
-  { k: 'REMOTE API', v: '227' },
+  { k: 'MODULES', v: '16' },
+  { k: 'REMOTE API', v: '224' },
 ] as const
 
 /** 一次「高频问法」点击：跳去功能引导那一页（把问句对上侧栏分组）。 */
@@ -84,7 +84,7 @@ export function HomePage({ onExplore }: HomePageProps): React.JSX.Element {
             {f.k} <b>{f.v}</b>
           </span>
         ))}
-        {' '}· 39 个可路由页签
+        {' '}· 40 个可路由页签
       </p>
     </div>
   )

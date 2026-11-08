@@ -25,6 +25,8 @@ const entry = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-ap
  */
 const events = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'wechat-events.ts'), 'utf8')
 const chats = readChatsSource()
+const task = readFileSync(join(HERE, 'export-task.ts'), 'utf8')
+const status = readFileSync(join(HERE, 'ExportProgressStatus.tsx'), 'utf8')
 
 describe('M3：导出进度与取消的接线', () => {
   it('渲染层入口把 wechat-export/progress 中继成 DOM 事件', () => {
@@ -36,45 +38,32 @@ describe('M3：导出进度与取消的接线', () => {
       .toContain('onEvent(dispatchWechatEvent)')
   })
 
-  it('导出入口带 jobId（不带的话后端不知道该推给谁）', () => {
+  it('导出入口统一用 export-task 生成并透传 jobId', () => {
     const at = chats.indexOf('const exportSession = useCallback')
     expect(at).toBeGreaterThan(-1)
     const body = chats.slice(at, at + 2600)
-    expect(body).toContain('exportJobRef.current = jobId')
-    expect(body).toMatch(/jobId,\s*\n\s*}/)
+    expect(body).toContain('exportTask.run(async ({ jobId })')
+    expect(body).toMatch(/jobId,/)
   })
 
   it('面板按 jobId 认领进度事件，并清理槽位', () => {
-    expect(chats).toMatch(/addEventListener\('dsh-wechat-export-progress'/)
-    expect(chats).toMatch(/removeEventListener\('dsh-wechat-export-progress'/)
-    expect(chats).toContain('if (!p || p.jobId !== exportJobRef.current) return')
-    // finally 里必须把 jobId 与进度一起清掉：否则下一次导出会认领上一次的残留进度。
-    // 注意要**在 exportSession 体内**找那个 finally —— 联合文本里前面还有别的 try。
-    const fn = chats.slice(chats.indexOf('const exportSession = useCallback'))
-    const fin = fn.slice(fn.indexOf('} finally {'), fn.indexOf('} finally {') + 400)
-    expect(fin).toContain('exportJobRef.current = ')
-    expect(fin).toContain('setExportProgress(null)')
+    expect(task).toMatch(/addEventListener\('dsh-wechat-export-progress'/)
+    expect(task).toMatch(/removeEventListener\('dsh-wechat-export-progress'/)
+    expect(task).toContain('detail.jobId !== backendJobRef.current')
+    // Promise 收尾必须清槽；否则下一次导出会认领上一次的残留进度。
+    expect(task).toContain('jobRef.current = \'\'')
   })
 
   it('取消按钮调 apiCancelExportJob（不是只关对话框）', () => {
-    expect(chats).toMatch(/apiCancelExportJob\(jobId\)/)
-    expect(chats).toMatch(/onClick=\{cancelExport\}/)
+    expect(task).toMatch(/apiCancelExportJob\(jobId\)/)
+    expect(chats).toContain('onCancel={cancelExport}')
   })
 
   it('进度条按 done/total 显示（不是假动画）', () => {
-    const at = chats.indexOf('exportProgress ? (')
-    expect(at, '导出对话框里没有进度条分支').toBeGreaterThan(-1)
-    const blk = chats.slice(at, at + 500)
-    expect(blk).toContain('<ProgressBar value=')
-    expect(blk).toMatch(/exportProgress\.total <= 0/)
-    // 比值算式住在哪一行不重要（#19 第四刀把它收进了 `pctOf`），重要的是它仍是
-    // 「同一个进度的 done / total」并且封顶 100 —— 换成常量或假动画都不会有编译错误。
-    const pctAt = chats.indexOf('function pctOf')
-    expect(pctAt, '进度百分比的算法整个不见了').toBeGreaterThan(-1)
-    const body = chats.slice(pctAt, pctAt + 300)
-    expect(body).toContain('progress.total > 0')
-    expect(body).toContain('progress.done / progress.total')
-    expect(body).toContain('Math.min(100,')
+    expect(chats).toContain('<ExportProgressStatus state={exportState} onCancel={cancelExport} />')
+    expect(status).toContain('<ProgressBar value={percent ?? 0} indeterminate={percent === null} />')
+    expect(status).toContain('progress.done / progress.total')
+    expect(status).toContain('Math.min(100,')
   })
 
   /**
@@ -85,9 +74,9 @@ describe('M3：导出进度与取消的接线', () => {
   it('总量未知时走不定量态，而不是钉在 0%', () => {
     // 读联合而不是 `chats-view.tsx`：这一段 JSX 已被 #19 第四刀搬进 `chats-export-dialog.tsx`，
     // 按文件名死读会让这条守卫静默失去靶子（`chats-source.ts` 的注释记着这个坑）。
-    expect(chats).toContain('indeterminate={exportProgress.total <= 0}')
+    expect(status).toContain('indeterminate={percent === null}')
     const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
-    expect(backup).toContain('indeterminate={encProgress.total <= 0}')
+    expect(backup).toContain('<ExportProgressStatus state={backupTask.state}')
     const fields = readFileSync(join(HERE, '..', 'ui', 'kit-fields.tsx'), 'utf8')
     const at = fields.indexOf('export function ProgressBar')
     const body = fields.slice(at, at + 900)
@@ -103,14 +92,14 @@ describe('M3：导出进度与取消的接线', () => {
   /** 真机验收发现的第二个断链：用户自己按「中止」，界面却报「导出失败」。 */
   it('中止按「已取消」说话，不报成失败', () => {
     const fn = chats.slice(chats.indexOf('const exportSession = useCallback'))
-    const cat = fn.slice(fn.indexOf('} catch (e) {'), fn.indexOf('} catch (e) {') + 400)
-    expect(cat).toMatch(/取消\|cancel\|abort/)
-    expect(cat).toContain('已取消导出')
+    expect(fn).toContain("outcome.canceled ? '已取消导出'")
+    expect(task).toMatch(/取消\|cancel\|abort/)
+    expect(task).toContain("message: canceled ? '任务已停止' : detail")
     const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
     const enc = backup.slice(backup.indexOf('const createEncrypted = async'))
-    const blk = enc.slice(enc.indexOf('if (r.ok)'), enc.indexOf('if (r.ok)') + 500)
-    expect(blk).toMatch(/取消\|cancel\|abort/)
-    expect(blk).toContain('已取消加密备份')
+    expect(enc).toContain('const outcome = await backupTask.run(async ({ jobId })')
+    expect(enc).toContain('if (outcome.ok)')
+    expect(enc).not.toContain('已取消加密备份')
   })
 })
 
@@ -127,21 +116,25 @@ describe('M3：备份面板的失败提示不能被列表刷新顶掉', () => {
   it('失败提示与刷新二选一，统一走 finishWith', () => {
     expect(backup).toContain('const finishWith = async (msg: string | null)')
     expect(backup).toMatch(/if \(msg === null\) \{ await refresh\(\); return \}/)
-    // 三条动作路径都不许再「先 setError 再 refresh」
-    for (const handler of ['const create = async', 'const createEncrypted = async', 'const remove = async']) {
+    // 两条无进度的动作路径都不许再「先 setError 再 refresh」；
+    // 加密备份已改用共享任务卡显示成功/失败/取消，不再走本地 finishWith。
+    for (const handler of ['const create = async', 'const remove = async']) {
       const at = backup.indexOf(handler)
       expect(at, `备份面板里没有 ${handler}`).toBeGreaterThan(-1)
       const body = backup.slice(at, at + 1600)
       expect(body, `${handler} 又回到「报错后刷新」的老写法`).toContain('await finishWith(')
       expect(body).not.toMatch(/if \(!r\.ok\) setError[\s\S]{0,80}await refresh\(\)/)
     }
+    const enc = backup.slice(backup.indexOf('const createEncrypted = async'))
+    expect(enc).toContain('const outcome = await backupTask.run(async ({ jobId })')
+    expect(enc).not.toContain('await finishWith(')
   })
 
   it('失败时留着密码（取消后重试不该重新输入），成功才清空', () => {
     const at = backup.indexOf('const createEncrypted = async')
     const body = backup.slice(at, at + 1600)
-    expect(body).toContain('if (r.ok) setPassword(')
-    expect(body).not.toMatch(/\n\s*setPassword\(''\)/)
+    expect(body).toMatch(/if \(outcome\.ok\) \{[\s\S]{0,80}setPassword\(''\)/)
+    expect(body.match(/setPassword\(''\)/g) ?? [], '密码只应在成功分支清空一次').toHaveLength(1)
   })
 })
 
@@ -155,28 +148,32 @@ describe('M3：加密备份入口接同一条进度', () => {
   it('createEncrypted 生成 jobId 并透传给后端', () => {
     const at = backup.indexOf('const createEncrypted = async')
     expect(at).toBeGreaterThan(-1)
-    const body = backup.slice(at, at + 1400)
-    expect(body).toContain("const jobId = 'backup-enc-'")
-    expect(body).toContain('encJobRef.current = jobId')
+    const body = backup.slice(at, at + 1100)
+    expect(body).toContain("idPrefix: 'backup-enc'")
+    expect(body).toContain('backupTask.run(async ({ jobId })')
     expect(body).toContain('apiCreateEncryptedBackup({ password: password.trim(), jobId })')
   })
 
-  it('按 jobId 认领进度事件，并在 finally 里清槽', () => {
-    expect(backup).toMatch(/addEventListener\('dsh-wechat-export-progress'/)
-    expect(backup).toContain('if (!p || p.jobId !== encJobRef.current) return')
-    const fin = backup.slice(backup.indexOf('const createEncrypted = async'))
-    const blk = fin.slice(fin.indexOf('} finally {'), fin.indexOf('} finally {') + 300)
-    expect(blk).toContain("encJobRef.current = ''")
-    expect(blk).toContain('setEncProgress(null)')
+  it('复用共享 jobId 认领与拉取兜底，不再自己挂第二套监听', () => {
+    expect(backup).toContain('const backupTask = useExportTask()')
+    expect(backup).not.toContain("addEventListener('dsh-wechat-export-progress'")
+    expect(task).toContain('useExportProgressRelay(backendJobRef')
   })
 
   it('进度条与中止都在（不再只有一个 busy 布尔）', () => {
-    const at = backup.indexOf('encProgress ? (')
-    expect(at, '加密备份没有进度分支').toBeGreaterThan(-1)
-    const blk = backup.slice(at, at + 900)
-    expect(blk).toContain('<ProgressBar value=')
-    expect(blk).toContain('encProgress.done / encProgress.total')
-    expect(blk).toContain('onClick={cancelEncrypted}')
-    expect(backup).toMatch(/apiCancelExportJob\(jobId\)/)
+    expect(backup).toContain('<ExportProgressStatus state={backupTask.state} onCancel={')
+    expect(status).toContain("data-export-status")
+    expect(task).toMatch(/apiCancelExportJob\(jobId\)/)
+  })
+
+  it('普通目录备份也生成 jobId、显示共享终态并复用取消', () => {
+    const at = backup.indexOf('const create = async')
+    expect(at).toBeGreaterThan(-1)
+    const body = backup.slice(at, at + 900)
+    expect(body).toContain("idPrefix: 'backup-plain'")
+    expect(body).toContain('backupTask.run(async ({ jobId })')
+    expect(body).toContain('apiCreateBackup({ jobId })')
+    expect(backup).toContain('const busyNow = busy || backupTask.running')
+    expect(backup).toContain('onCancel={() => { void backupTask.cancel() }}')
   })
 })

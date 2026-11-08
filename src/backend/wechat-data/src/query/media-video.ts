@@ -7,20 +7,14 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { extractMd5FromPacked } from './media-image.ts'
+import { cachedBySig, fileSigOf, shardCatalog } from './meta.ts'
+import { messageTableName, resolveTalkerUsername } from './message-identity.ts'
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
-}
-
-/** Message shard DB files under <decrypted>/message. */
-function messageShardFiles(decryptedDir: string): string[] {
-  const dir = join(decryptedDir, 'message')
-  if (!existsSync(dir)) return []
-  return readdirSync(dir).filter(f => f.endsWith('.db') && !f.includes('_shm') && !f.includes('_wal') && !f.includes('monitor_cache')).sort().map(f => join(dir, f))
+  return messageTableName(username)
 }
 
 /**
@@ -56,8 +50,9 @@ export function resolveVideoInfo(
   videoPath?: string
   error?: string
 } {
-  const hasLocator = username.trim() !== '' && Number.isFinite(localId) && localId > 0
-  const locatorMd5 = hasLocator ? normalizeMd5(resolveVideoMd5(decryptedDir, username, localId)) : undefined
+  const canonical = username.trim() !== '' ? resolveTalkerUsername(decryptedDir, username) : ''
+  const hasLocator = canonical !== '' && Number.isFinite(localId) && localId > 0
+  const locatorMd5 = hasLocator ? normalizeMd5(resolveVideoMd5(decryptedDir, canonical, localId)) : undefined
   const md5 = locatorMd5 ?? normalizeMd5(md5Hint)
   if (!md5) {
     return {
@@ -73,7 +68,7 @@ export function resolveVideoInfo(
     try { return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync(p), ext), coverPath: p, ...(found.video ? { videoPath: found.video } : {}) } } catch { /* 继续往下找 */ }
   }
   // 2. 会话内的解码缓存（旧产物路径）
-  const userDir = username.trim() !== '' ? join(decodedDir, username) : ''
+  const userDir = canonical !== '' ? join(decodedDir, canonical) : ''
   if (userDir !== '' && existsSync(userDir)) {
     for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
       const p = join(userDir, md5 + '.' + ext)
@@ -102,45 +97,84 @@ function normalizeMd5(value: string | null | undefined): string | undefined {
   return /^[a-f0-9]{32}$/.test(md5) ? md5 : undefined
 }
 
-/** Message MD5 for one video message, scanned across the message shards. */
+/**
+ * Message MD5 for one video message.
+ *
+ * The shard catalog already records which `Msg_<hash>` tables each database
+ * owns. Use that index instead of opening every shard just to discover that
+ * most of them do not contain the conversation at all.
+ */
 function resolveVideoMd5(decryptedDir: string, username: string, localId: number): string | null {
-  const table = msgTableName(username)
-  for (const shard of messageShardFiles(decryptedDir)) {
-    let db: DatabaseSync | null = null
-    try { db = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
-    try {
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-      if (!has) continue
-      const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
-      const packed = cols.find(c => c.toLowerCase().includes('packed'))
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return null
+  const table = msgTableName(canonical)
+  const candidates = shardCatalog(decryptedDir).filter(shard => shard.tables.has(table))
+  if (candidates.length === 0) return null
+  const sig = candidates.map(shard => shard.file + ':' + fileSigOf(shard.file)).join('|')
+  const key = 'video-md5:' + decryptedDir + ':' + canonical + ':' + String(localId)
+  return cachedBySig(key, sig, () => {
+    for (const shard of candidates) {
+      const cols = shard.tables.get(table)?.cols
+      if (!cols) continue
+      const packed = [...cols].find(c => c.toLowerCase().includes('packed'))
       if (!packed) continue
-      const row = db.prepare('SELECT "' + packed + '" AS p FROM "' + table + '" WHERE local_id = ? AND (local_type = 43 OR local_type % 4294967296 = 43) LIMIT 1').get(localId) as { p?: unknown } | undefined
-      const md5 = row ? extractMd5FromPacked(row.p) : null
-      if (md5) return normalizeMd5(md5) ?? null
-    } catch { /* 换下一个分片 */ } finally { db.close() }
-  }
-  return null
+      let db: DatabaseSync | null = null
+      try {
+        db = new DatabaseSync(shard.file, { readOnly: true })
+        const row = db.prepare('SELECT "' + packed + '" AS p FROM "' + table + '" WHERE local_id = ? AND (local_type = 43 OR local_type % 4294967296 = 43) LIMIT 1').get(localId) as { p?: unknown } | undefined
+        const md5 = row ? extractMd5FromPacked(row.p) : null
+        if (md5) return normalizeMd5(md5) ?? null
+      } catch {
+        // A shard can disappear between catalog construction and the query.
+      } finally {
+        try { db?.close() } catch { /* ignore */ }
+      }
+    }
+    return null
+  })
 }
+
+/** Directory entries keyed by the directory signature, so newly added media is visible. */
+function cachedDirectoryEntries(dir: string): Set<string> {
+  return cachedBySig('directory-index:' + dir, fileSigOf(dir), () => {
+    try {
+      return new Set(readdirSync(dir))
+    } catch {
+      return new Set<string>()
+    }
+  })
+}
+
+const VIDEO_CONTAINER_EXTS = ['mp4', 'mov', 'm4v'] as const
 
 /**
  * Locate the cover thumbnail and the video body under `<base>/msg/video/<YYYY-MM>/`.
- * 月份目录只有 8 个左右，逐个 existsSync 比预建索引更简单，也不会因为新视频而变陈旧。
+ * Directory indexes are cached by each month's mtime+size signature; a new
+ * file invalidates only that month instead of forcing a fresh `existsSync`
+ * probe for every extension/candidate.
  */
 function findVideoArtifacts(baseDir: string | undefined, md5: string): { thumb?: string; video?: string } {
   if (!baseDir) return {}
   const root = join(baseDir, 'msg', 'video')
   if (!existsSync(root)) return {}
+  const months = cachedBySig('video-months:' + root, fileSigOf(root), () => {
+    try {
+      return readdirSync(root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+    } catch {
+      return []
+    }
+  })
   let thumb: string | undefined
   let video: string | undefined
-  for (const month of readdirSync(root)) {
+  for (const month of months) {
     const dir = join(root, month)
-    if (!thumb) {
-      const t = join(dir, md5 + '_thumb.jpg')
-      if (existsSync(t)) thumb = t
-    }
+    const entries = cachedDirectoryEntries(dir)
+    if (!thumb && entries.has(md5 + '_thumb.jpg')) thumb = join(dir, md5 + '_thumb.jpg')
     if (!video) {
-      const v = join(dir, md5 + '.mp4')
-      if (existsSync(v)) video = v
+      const ext = VIDEO_CONTAINER_EXTS.find((candidate) => entries.has(md5 + '.' + candidate))
+      if (ext) video = join(dir, md5 + '.' + ext)
     }
     if (thumb && video) break
   }

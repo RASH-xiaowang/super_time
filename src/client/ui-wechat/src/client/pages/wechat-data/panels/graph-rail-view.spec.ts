@@ -50,4 +50,12 @@ describe('图谱侧栏：参数与节点详情分栏', () => {
     expect(rail).toMatch(/未选中节点/)
     expect(rail).toMatch(/调参请切「图谱参数」/)
   })
+
+  it('六个力度滑杆共享安全范围，并在拖动过程中连续预览', () => {
+    for (const key of ['nodeGap', 'communitySeparation', 'forceCentripetal', 'forceRepulsion', 'forceAttraction', 'forceEdgeLength']) {
+      expect(rail, `力度滑杆 ${key} 没走共享范围`).toContain(`{...GRAPH_FORCE_CONTROLS.${key}}`)
+    }
+    expect(rail).toContain('aria-valuetext={fmt ? fmt(value) : String(value)}')
+    expect(rail).toContain('onInput={(e) => { onChange(Number(e.currentTarget.value)) }}')
+  })
 })

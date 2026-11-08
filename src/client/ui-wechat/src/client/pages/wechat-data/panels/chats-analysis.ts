@@ -25,10 +25,13 @@ interface ChatsAnalysisOptions {
   msgItems: MessageRenderItem[]
   analysisPaneOpen: boolean
   analysisTarget: AnalysisTargetState | null
+  /** 推荐回复占据右栏时，消息区只读；命中后不得切到分析面板。 */
+  suggestionInteractionLocked: boolean
   setAnalysisPaneOpen: React.Dispatch<React.SetStateAction<boolean>>
   setAnalysisTarget: React.Dispatch<React.SetStateAction<AnalysisTargetState | null>>
   setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
   setAiFull: React.Dispatch<React.SetStateAction<boolean>>
+  setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
   setContactInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
   setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
@@ -48,8 +51,9 @@ export interface ChatsAnalysisController {
  */
 export function useChatsAnalysis(options: ChatsAnalysisOptions): ChatsAnalysisController {
   const {
-    curSession, msgItems, analysisPaneOpen, analysisTarget,
-    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setContactInfoOpen, setGroupInfoOpen,
+    curSession, msgItems, analysisPaneOpen, analysisTarget, suggestionInteractionLocked,
+    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setSuggestOpen,
+    setContactInfoOpen, setGroupInfoOpen,
   } = options
   const sessionTalker = curSession?.username ?? ''
   const selectedLocalId = analysisTarget !== null && analysisTarget.talker === sessionTalker
@@ -103,14 +107,26 @@ export function useChatsAnalysis(options: ChatsAnalysisOptions): ChatsAnalysisCo
   }, [analysisPaneOpen, curSession, msgItems, selectedLocalId, sessionTalker, setAnalysisTarget])
 
   const openMessageAnalysis = useCallback((message: WechatMessage): void => {
+    if (suggestionInteractionLocked) return
     if (curSession === null || !isAnalyzableMessage(message)) return
     setAiOpen(false)
     setAiFull(false)
+    setSuggestOpen(false)
     setContactInfoOpen(false)
     setGroupInfoOpen(false)
     setAnalysisPaneOpen(true)
     setAnalysisTarget({ talker: curSession.username, localId: message.localId })
-  }, [curSession, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setContactInfoOpen, setGroupInfoOpen])
+  }, [
+    curSession,
+    suggestionInteractionLocked,
+    setAiFull,
+    setAiOpen,
+    setAnalysisPaneOpen,
+    setAnalysisTarget,
+    setSuggestOpen,
+    setContactInfoOpen,
+    setGroupInfoOpen,
+  ])
 
   return {
     selectedLocalId,

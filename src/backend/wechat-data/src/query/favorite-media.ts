@@ -320,32 +320,46 @@ function acceptsKind(entry: IndexEntry, options: {
   if (options.kind === 'image') return IMAGE_FORMATS.has(format)
   if (options.kind === 'video') return VIDEO_FORMATS.has(format)
   if (options.kind === 'audio') return AUDIO_FORMATS.has(format)
+  // 普通附件的扩展名不能由容器头可靠还原（例如 docx/xlsx 都是 ZIP）。
+  // 文件类型已由 XML 的 datatype 和调用方传入的 kind 固定，不能再拿嗅探
+  // 出来的容器格式去否决一个 MD5 已匹配的原件。
+  if (options.kind === 'file') return true
   const ext = String(options.ext ?? '').trim().toLowerCase()
   return ext === '' || format === ext || format === ''
 }
 
+/** 收藏资源定位参数（与收藏 XML 的字段一一对应）。 */
+export interface FavoriteMediaLookup {
+  md5?: string
+  thumbMd5?: string
+  fullMd5?: string
+  kind?: FavoriteKind
+  ext?: string
+  fileName?: string
+  size?: number
+}
+
+/** 收藏资源原始明文字节与真实格式。 */
+export interface FavoriteMediaBytesResult {
+  bytes?: Buffer
+  format?: string
+  error?: string
+}
+
 /**
- * 按内容 MD5 读取一个收藏资源。
+ * 按内容 MD5 读取一个收藏资源的原始明文字节。
  * @param wechatBaseDir - 微信账号根目录。
  * @param options - XML 里的 md5 / 类型提示。
  * @param aesKey - 当前账号的图片 AES 密钥。
  * @param xorKey - 当前账号的 XOR 字节。
- * @returns data URL 或可读错误；本地收藏缓存没有时返回 error。
+ * @returns 原始字节与格式，或可读错误；本地收藏缓存没有时返回 error。
  */
-export function resolveFavoriteMediaDataUrl(
+export function resolveFavoriteMediaBytes(
   wechatBaseDir: string | undefined,
-  options: {
-    md5?: string
-    thumbMd5?: string
-    fullMd5?: string
-    kind?: FavoriteKind
-    ext?: string
-    fileName?: string
-    size?: number
-  },
+  options: FavoriteMediaLookup,
   aesKey: string | undefined,
   xorKey: number,
-): ImageDataUrlResult {
+): FavoriteMediaBytesResult {
   const roots = favoriteRoots(wechatBaseDir)
   if (roots.length === 0) return { error: '未找到微信收藏缓存目录' }
   // 收藏目录可能暂时只有 data/mid 而无 thumb；不要因为空目录就提前报错。
@@ -369,31 +383,38 @@ export function resolveFavoriteMediaDataUrl(
       sawWrongKind = true
       continue
     }
-    return dataUrlOf(hit.entry.path, dec, options)
+    const format = dec.format || extensionOf(hit.entry.path) || options.ext || ''
+    return {
+      bytes: Buffer.from(dec.bytes),
+      ...(format ? { format } : {}),
+    }
   }
   if (sawWrongKind) return { error: '缓存中的文件类型与收藏资源不一致' }
   return { error: '微信收藏缓存中未找到该资源' }
 }
 
-function dataUrlOf(
-  path: string,
-  dec: { bytes: Uint8Array; format: string },
-  options: {
-    md5?: string
-    thumbMd5?: string
-    fullMd5?: string
-    kind?: FavoriteKind
-    ext?: string
-    fileName?: string
-    size?: number
-  },
+/**
+ * 按内容 MD5 读取一个收藏资源并转成 data URL。
+ * @param wechatBaseDir - 微信账号根目录。
+ * @param options - XML 里的 md5 / 类型提示。
+ * @param aesKey - 当前账号的图片 AES 密钥。
+ * @param xorKey - 当前账号的 XOR 字节。
+ * @returns data URL 或可读错误；本地收藏缓存没有时返回 error。
+ */
+export function resolveFavoriteMediaDataUrl(
+  wechatBaseDir: string | undefined,
+  options: FavoriteMediaLookup,
+  aesKey: string | undefined,
+  xorKey: number,
 ): ImageDataUrlResult {
-  const format = dec.format || extensionOf(path) || options.ext || ''
+  const resolved = resolveFavoriteMediaBytes(wechatBaseDir, options, aesKey, xorKey)
+  if (!resolved.bytes) return { error: resolved.error ?? '微信收藏缓存中未找到该资源' }
+  const format = resolved.format ?? ''
   const kind: FavoriteKind = options.kind
     ?? (IMAGE_FORMATS.has(format) ? 'image' : VIDEO_FORMATS.has(format) ? 'video' : AUDIO_FORMATS.has(format) ? 'audio' : 'unknown')
   const mime = mimeOf(format, kind)
   return {
-    url: 'data:' + mime + ';base64,' + Buffer.from(dec.bytes).toString('base64'),
+    url: 'data:' + mime + ';base64,' + resolved.bytes.toString('base64'),
     format: format || undefined,
   }
 }

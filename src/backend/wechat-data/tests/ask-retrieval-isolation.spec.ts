@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
- * 检索阶段的 kb-only 数据面回归。
+ * 检索阶段的数据面隔离回归。
  *
- * 旧单通道检索是流水线关闭或异常时的回退路径。自动回复使用 `kb-only` 时，
- * 这条回退不得因为配置/异常而重新读取本机微信消息。
+ * 旧单通道检索是流水线关闭或异常时的回退路径。调用方禁用本机微信数据后，
+ * 这条回退不得因为配置或异常而重新读取本机微信消息。
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -83,8 +83,8 @@ function input(overrides: Partial<AskRetrievalInput> = {}): AskRetrievalInput {
   }
 }
 
-describe('runAskRetrieval：kb-only 阻断 legacy 本机检索', () => {
-  it('配置关闭流水线时，kb-only 不回退 retrieveAskCitations', async () => {
+describe('runAskRetrieval：禁用本机微信数据时阻断 legacy 本机检索', () => {
+  it('配置关闭流水线时，不回退 retrieveAskCitations', async () => {
     writeFileSync(retrievalConfigPath(decrypted), JSON.stringify({ enabled: false }), 'utf8')
     const op = vi.fn()
 
@@ -100,11 +100,11 @@ describe('runAskRetrieval：kb-only 阻断 legacy 本机检索', () => {
       'ask_wechat',
       'skip',
       'retrieval_legacy',
-      expect.stringContaining('kb-only'),
+      expect.stringContaining('已禁用本机微信数据'),
     )
   })
 
-  it('流水线异常时，kb-only 仍不进入 legacy 本机检索', async () => {
+  it('流水线异常时，仍不进入 legacy 本机检索', async () => {
     mocks.runRetrievalPipeline.mockRejectedValue(new Error('pipeline failed'))
     const op = vi.fn()
 
@@ -125,11 +125,11 @@ describe('runAskRetrieval：kb-only 阻断 legacy 本机检索', () => {
       'ask_wechat',
       'skip',
       'retrieval_legacy',
-      expect.stringContaining('kb-only'),
+      expect.stringContaining('已禁用本机微信数据'),
     )
   })
 
-  it('对照：手动问答未传 kb-only 时，配置关闭仍按原行为回退', async () => {
+  it('对照：未禁用本机微信数据时，配置关闭仍按原行为回退', async () => {
     writeFileSync(retrievalConfigPath(decrypted), JSON.stringify({ enabled: false }), 'utf8')
 
     const out = await runAskRetrieval(input())

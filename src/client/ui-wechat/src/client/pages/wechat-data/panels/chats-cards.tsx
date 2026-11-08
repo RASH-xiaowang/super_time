@@ -5,7 +5,6 @@
  * 这些原先都是 Chats.tsx 里的顶层函数/组件（不吃面板状态，只吃道具）—— 整段原样搬出，
  * 面板按需 import。依赖由脚本从「这块里真实用到的面板 import」生成。
  */
-import { apiGetPaymentStatus } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
 import { clickableKey } from '../ui/kit.tsx'
 import { fmtBytes } from '../utils/format.ts'
@@ -14,88 +13,76 @@ import { MessageText } from '../utils/message-text.tsx'
 import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg } from './remote-img.tsx'
 import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLocation, MessageSystem, MessageVideo, MessageVoice, quoteKindIcon } from './chats-media.tsx'
-import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, quoteTypeLabel, transferStateKey, transferStatusLabel } from './chats-support.tsx'
+import { AppCardIcon, FileKindIcon, RedPacketGlyph, TransferArrowGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, transferAmountLabel } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { CardFoot } from './chats-card-foot.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 import { IconDataOutline16, IconLinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { ChatlogRecord, MpArticle, MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
-import { useEffect, useState } from 'react'
-/** Authoritative transfer/redpacket status line from general.db. */
-export function PayStatusLine({ serverId, senderName, senderUsername, senderEnterpriseName }: {
-  serverId: string
-  senderName?: string
-  senderUsername?: string
-  senderEnterpriseName?: string
-}): React.JSX.Element | null {
-  const [pay, setPay] = useState<PaymentStatus | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    apiGetPaymentStatus(serverId)
-      .then((r) => { if (!cancelled && r.found) setPay(r) })
-      .catch(() => { /* keep XML-derived status */ })
-    return () => { cancelled = true }
-  }, [serverId])
-  if (!pay || pay.kind === 'transfer' || !pay.redpacket) return null
-  const rp = pay.redpacket
-  const state = rp.hbStatus === 4 || rp.receiveStatus === 4 ? '已退还'
-    : rp.receiveStatus === 3 ? '已被领取'
-      : rp.receiveStatus === 2 ? '已领取'
-        : '待领取'
-  const sender = withEnterprise(
-    senderName || rp.senderName || rp.sender,
-    senderEnterpriseName || rp.senderEnterpriseName,
-  )
-  const avatarUsername = senderUsername?.trim() ?? ''
-  return (
-    <div className={cssrows.msgPayStatus} data-kind={pay.kind}>
-      {sender && (
-        avatarUsername ? (
-          <>
-            <span>来自</span>
-            <IdentityName name={senderName || rp.senderName || rp.sender} username={avatarUsername} size={14} />
-            <span aria-hidden="true">·</span>
-          </>
-        ) : <span>{'来自 ' + sender + ' · '}</span>
-      )}
-      <span>{state}{rp.hbType === 1 ? ' · 群红包' : ''}</span>
-    </div>
-  )
+import { ChatlogRecord, MpArticle, MessageRich, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { useState } from 'react'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useMediaSaveTask } from './media-save-task.ts'
+
+/** Normalize a file extension without treating an extensionless name as one. */
+function fileExtension(title: string, declared?: string): string {
+  const explicit = (declared ?? '').replace(/^\./, '').trim()
+  if (/^[a-z0-9]{1,12}$/i.test(explicit)) return explicit.toUpperCase()
+  const base = title.split(/[\\/]/).pop() ?? title
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0 || dot === base.length - 1) return ''
+  const inferred = base.slice(dot + 1)
+  return /^[a-z0-9]{1,12}$/i.test(inferred) ? inferred.toUpperCase() : ''
 }
+
 /** 点击打开/下载收到的文件（走 msg/file 本地缓存读取）。 */
-export function OpenFileCard({ title, size, createTime }: { title: string; size: string; createTime?: number }): React.JSX.Element {
-  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [message, setMessage] = useState('')
+export function OpenFileCard({ title, size, ext, fileMd5, createTime, sessionUsername, localId }: {
+  title: string
+  size: string
+  ext?: string
+  fileMd5?: string
+  createTime?: number
+  sessionUsername?: string
+  localId?: number
+}): React.JSX.Element {
+  const fileSave = useMediaSaveTask()
   const openFile = async (): Promise<void> => {
-    setStatus('loading')
-    setMessage('')
     const bytes = Number(size)
-    const err = await downloadMessageFile(title, {
-      ...(Number.isFinite(bytes) && bytes > 0 ? { size: bytes } : {}),
-      ...(createTime !== undefined ? { createTime } : {}),
+    await fileSave.save<{ path?: string }>({
+      idPrefix: 'chat-file',
+      label: '保存聊天原文件',
+      successMessage: (r) => `已保存原文件 → ${r.path ?? ''}`,
+      run: async (jobId) => {
+        const result = await downloadMessageFile(title, {
+          ...(sessionUsername ? { username: sessionUsername } : {}),
+          ...(localId !== undefined ? { localId } : {}),
+          ...(Number.isFinite(bytes) && bytes > 0 ? { size: bytes } : {}),
+          ...(createTime !== undefined ? { createTime } : {}),
+          ...(fileMd5 ? { fileMd5 } : {}),
+          jobId,
+        })
+        if (result.error) throw new Error(result.error)
+        return result.path ? result : null
+      },
     })
-    if (err) {
-      setStatus('error')
-      setMessage(err)
-      return
-    }
-    setStatus('idle')
   }
-  const ext = (title.split('.').pop() || '').toLowerCase()
-  const style = fileStyle(title)
-  const sized = size ? fmtBytes(Number(size)) : ''
-  const foot = status === 'loading' ? '打开中…' : status === 'error' ? message : '点击打开 / 下载'
+  const style = fileStyle(title, ext)
+  const bytes = Number(size)
+  const sized = Number.isFinite(bytes) && bytes > 0 ? fmtBytes(bytes) : ''
+  const meta = [fileExtension(title, ext), sized].filter(Boolean).join(' · ')
   return (
-    <div className={css.msgFileCard} {...clickableKey(() => { void openFile() })} title={status === 'error' ? message : '点击打开/下载文件'}>
-      <span className={css.msgFileIcon} data-kind={style.kind}>{style.emoji}</span>
-      <span className={css.msgFileBody}>
+    <div className={css.msgFileCard} {...clickableKey(() => { void openFile() })}>
+      <span className={css.msgFileIcon} data-kind={style.kind}><FileKindIcon kind={style.kind} /></span>
+      <div className={css.msgFileBody}>
         <span className={cssrows.msgFileTitle}>{title}</span>
-        <span className={cssrows.msgFileMeta}>{[ext ? ext.toUpperCase() : '文件', sized].filter(Boolean).join(' · ')}</span>
-        <span className={cssrows.msgFileHint}>{foot}</span>
-      </span>
-      <span className={css.msgFileExt}>{ext ? ext.toUpperCase() : '文件'}</span>
+        {meta && <span className={cssrows.msgFileMeta}>{meta}</span>}
+        <ExportProgressStatus
+          compact
+          state={fileSave.state}
+          onCancel={() => { void fileSave.cancel() }}
+        />
+      </div>
       <CardFoot label="微信电脑版" />
     </div>
   )
@@ -110,7 +97,7 @@ export function OpenFileCard({ title, size, createTime }: { title: string; size:
  * @returns the card element.
  */
 export function LabeledCard({ icon, label, title, desc, source, url, foot, thumb }: {
-  icon: string
+  icon: React.ReactNode
   label: string
   title?: string
   desc?: string
@@ -121,9 +108,16 @@ export function LabeledCard({ icon, label, title, desc, source, url, foot, thumb
 }): React.JSX.Element {
   const link = /^https?:\/\//i.test(url ?? '')
   const safeThumb = proxyableSrc(thumb)
+  const cleanTitle = (title ?? '').trim()
+  const cleanDesc = (desc ?? '').trim()
+  const cleanSource = (source ?? '').trim()
+  const visibleTitle = cleanTitle === label || cleanTitle === foot ? '' : cleanTitle
+  const visibleDesc = cleanDesc === visibleTitle || cleanDesc === label || cleanDesc === foot || cleanDesc === cleanSource ? '' : cleanDesc
+  const visibleSource = cleanSource === visibleTitle || cleanSource === label || cleanSource === foot ? '' : cleanSource
   return (
     <div
       className={link ? `${css.msgAppmsgCard} ${css.msgAppmsgCardOpen}` : css.msgAppmsgCard}
+      aria-label={label}
       title={link ? '点击打开链接' : undefined}
       {...(link ? clickableKey(() => { openLink(url ?? '') }, { role: 'link', label: '打开链接' }) : {})}
     >
@@ -131,10 +125,9 @@ export function LabeledCard({ icon, label, title, desc, source, url, foot, thumb
         ? <RemoteImg className={cssrows.msgAppmsgThumb} src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
         : <span className={cssrows.msgAppmsgIcon} aria-hidden="true">{icon}</span>}
       <span className={cssrows.msgAppmsgBody}>
-        <span className={cssrows.msgAppmsgLabel}>{label}</span>
-        {title && <span className={cssrows.msgAppmsgTitle} title={title}>{title}</span>}
-        {desc && <span className={cssrows.msgAppmsgDesc} title={desc}>{desc}</span>}
-        {source && <span className={cssrows.msgAppmsgSource}>{source}</span>}
+        {visibleTitle && <span className={cssrows.msgAppmsgTitle} title={visibleTitle}>{visibleTitle}</span>}
+        {visibleDesc && <span className={cssrows.msgAppmsgDesc} title={visibleDesc}>{visibleDesc}</span>}
+        {visibleSource && <span className={cssrows.msgAppmsgSource}>{visibleSource}</span>}
       </span>
       {foot && <CardFoot label={foot} />}
     </div>
@@ -161,6 +154,7 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
   const safe = proxyableSrc(cover)
   const [broken, setBroken] = useState(false)
   const open = onOpen
+  const visibleTitle = /^(?:\[(?:视频号|直播)\]|视频号|直播|视频号直播)$/.test(title.trim()) ? '' : title
   return (
     <div
       className={css.msgMediaCard}
@@ -170,14 +164,14 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
       <div className={css.msgMediaCover} data-empty={!safe || broken || undefined}>
         {safe && !broken
           ? <RemoteImg src={safe} alt="" loading="lazy" onError={() => { setBroken(true) }} />
-          : <span className={cssrows.msgMediaCoverFallback} aria-hidden="true">{variant === 'live' ? '📡' : '▶'}</span>}
+          : <span className={cssrows.msgMediaCoverFallback} aria-hidden="true"><AppCardIcon kind={variant === 'live' ? 'live' : 'play'} /></span>}
         {badge && <span className={css.msgMediaBadge}>{badge}</span>}
         {variant === 'live' && <span className={cssrows.msgMediaDot} aria-hidden="true" />}
       </div>
       <div className={cssrows.msgMediaBody}>
-        <div className={cssrows.msgMediaTitle} title={title}>{title}</div>
+        {visibleTitle && <div className={cssrows.msgMediaTitle} title={visibleTitle}>{visibleTitle}</div>}
         {from && <div className={cssrows.msgMediaFrom}>{from}</div>}
-        {desc && desc !== title && <div className={cssrows.msgMediaDesc} title={desc}>{desc}</div>}
+        {desc && desc !== visibleTitle && <div className={cssrows.msgMediaDesc} title={desc}>{desc}</div>}
       </div>
       <CardFoot label={variant === 'live' ? '视频号直播' : '视频号'} />
     </div>
@@ -233,6 +227,8 @@ export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: str
   const cover = proxyableSrc(rich.thumb)
   const [broken, setBroken] = useState(false)
   const secondaries = mpArticlesOf(rich)
+  const desc = decodeEntities(rich.desc || '')
+  const source = decodeEntities(rich.source || '')
   const openUrl = (u: string) => { if (/^https?:\/\//i.test(u)) openLink(u) }
   const mainClickable = /^https?:\/\//i.test(url)
   const showCover = !!cover && !broken
@@ -247,33 +243,36 @@ export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: str
           <RemoteImg className={css.msgMpCoverImg} src={cover} alt="" loading="lazy" onError={() => { setBroken(true) }} />
         </span>
       )}
-      {secondaries.length === 0 ? (
-        <span
-          className={`${css.msgMpTitle} ${mainClickable ? css.msgMpClickable : ''}`}
-          title={mainClickable ? '点击打开文章' : undefined}
-          {...(mainClickable ? clickableKey(() => { openUrl(url) }, { role: 'link', label: '打开文章' }) : {})}
-        >
-          {title}
-        </span>
-      ) : (
-        secondaries.map((a, i) => {
-          const t = a.title || ''
-          const u = a.url || ''
-          const thumb = proxyableSrc(a.cover)
-          const clickable = /^https?:\/\//i.test(u)
-          return (
-            <span
-              key={`${u || t}-${String(i)}`}
-              className={`${css.msgMpRow} ${clickable ? css.msgMpClickable : ''}`}
-              title={clickable ? '点击打开文章' : undefined}
-              {...(clickable ? clickableKey(() => { openUrl(u) }, { role: 'link', label: '打开次条文章' }) : {})}
-            >
-              <span className={css.msgMpRowTitle}>{t || '[无标题]'}</span>
-              {thumb && <RemoteImg className={cssrows.msgMpRowThumb} src={thumb} alt="" loading="lazy" />}
+      <span
+        className={`${css.msgMpHead} ${mainClickable ? css.msgMpClickable : ''}`}
+        title={mainClickable ? '点击打开文章' : undefined}
+        {...(mainClickable ? clickableKey(() => { openUrl(url) }, { role: 'link', label: '打开文章' }) : {})}
+      >
+        {source && <span className={css.msgMpSource}>{source}</span>}
+        {title && <span className={css.msgMpTitle}>{title}</span>}
+        {desc && <span className={css.msgMpDesc} title={desc}>{desc}</span>}
+      </span>
+      {secondaries.map((a, i) => {
+        const t = a.title || ''
+        const u = a.url || ''
+        const summary = a.summary || ''
+        const thumb = proxyableSrc(a.cover)
+        const clickable = /^https?:\/\//i.test(u)
+        return (
+          <span
+            key={`${u || t}-${String(i)}`}
+            className={`${css.msgMpRow} ${clickable ? css.msgMpClickable : ''}`}
+            title={clickable ? '点击打开文章' : undefined}
+            {...(clickable ? clickableKey(() => { openUrl(u) }, { role: 'link', label: '打开次条文章' }) : {})}
+          >
+            <span className={css.msgMpRowBody}>
+              {t && <span className={css.msgMpRowTitle}>{t}</span>}
+              {summary && <span className={css.msgMpRowDesc} title={summary}>{summary}</span>}
             </span>
-          )
-        })
-      )}
+            {thumb && <RemoteImg className={cssrows.msgMpRowThumb} src={thumb} alt="" loading="lazy" />}
+          </span>
+        )
+      })}
     </div>
   )
 }
@@ -297,8 +296,6 @@ export function LinkCard({ rich, title, desc, url }: {
   const clickable = /^https?:\/\//i.test(url)
   const cover = rich.linkStyle === 'cover' && safeThumb && !broken
   const source = rich.source || ''
-  let host = ''
-  try { host = clickable ? new URL(url).hostname : '' } catch { host = '' }
   return (
     <div
       className={[css.msgLinkCard, clickable ? css.msgLinkCardOpen : '', cover ? css.msgLinkCover : ''].filter(Boolean).join(' ')}
@@ -319,7 +316,6 @@ export function LinkCard({ rich, title, desc, url }: {
             {source && <span className={css.msgLinkSource}>{source}</span>}
             <span className={cssrows.msgLinkTitle}>{title}</span>
             {desc && <span className={cssrows.msgLinkDesc} title={desc}>{desc}</span>}
-            {!safeThumb && clickable && <span className={cssrows.msgLinkUrl} title={url}>{host || url}</span>}
           </span>
           {safeThumb && (
             <RemoteImg className={cssrows.msgLinkThumb} src={safeThumb} alt="" loading="lazy" onError={() => { setBroken(true) }} />
@@ -330,6 +326,32 @@ export function LinkCard({ rich, title, desc, url }: {
     </div>
   )
 }
+
+function TransferCard({ rich }: { rich: MessageRich }): React.JSX.Element {
+  const amount = transferAmountLabel(rich.amount || rich.title)
+  return (
+    <div className={css.msgTransferCard}>
+      <span className={css.msgTransferArrow} aria-hidden="true"><TransferArrowGlyph /></span>
+      {amount && <span className={cssrows.msgTransferMain}><span className={cssrows.msgTransferAmount}>{amount}</span></span>}
+      <CardFoot label="微信转账" />
+    </div>
+  )
+}
+
+function RedPacketCard({ rich }: { rich: MessageRich }): React.JSX.Element {
+  const decoded = decodeEntities(rich.desc || '').trim()
+  const greeting = /^\[?微信红包\]?$/.test(decoded) ? '' : decoded
+  return (
+    <div className={css.msgRedpacketCard}>
+      <div className={cssrows.msgRedpacketIcon} aria-hidden="true"><RedPacketGlyph /></div>
+      <div className={cssrows.msgRedpacketBody}>
+        {greeting && <div className={cssrows.msgRedpacketTitle}>{greeting}</div>}
+      </div>
+      <CardFoot label="微信红包" />
+    </div>
+  )
+}
+
 /** 需要走 `RichCard` 的卡片型种类（其余种类有专用渲染器）。 */
 export const CARD_KINDS = new Set<RenderKind>([
   'file', 'link', 'quote', 'miniapp', 'channels', 'live', 'music', 'product',
@@ -340,45 +362,67 @@ export const CARD_KINDS = new Set<RenderKind>([
 interface RichCardProps {
   rich: MessageRich
   fallback: string
-  self?: boolean
   onOpenChatlog?: (rich: MessageRich) => void
-  serverId?: string
+  onOpenQuote?: (rich: MessageRich) => void
   /** 本条消息的接收时间（秒）—— 文件卡按它缩小到月份目录。 */
   createTime?: number
-  senderName?: string
-  senderUsername?: string
-  senderEnterpriseName?: string
+  /** 当前会话 username 与本条消息 localId；文件导出据此从消息库确认归属。 */
+  sessionUsername?: string
+  localId?: number
 }
 
 /** Quote preview under a message bubble; only probe avatars for a real referrer username. */
-function QuoteStrip({ name, username, summary, typeLabel, icon, thumb }: {
+function QuoteStrip({ name, username, summary, icon, thumb, onOpen }: {
   name: string
   username: string
   summary: string
-  typeLabel: string
   icon: React.ReactNode
   thumb: string
+  onOpen?: () => void
 }): React.JSX.Element | null {
-  if (!summary && !name && !typeLabel) return null
+  if (!summary && !name && !thumb) return null
   const thumbOpen = /^https?:\/\//i.test(thumb)
-  return (
-    <div className={css.msgQuoteStrip} title={name ? `${name}：${summary}` : summary}>
+  const fullTitle = name ? `${name}：${summary}` : summary
+  const content = (
+    <>
       {name && (
         username
-          ? <IdentityName className={cssrows.msgQuoteWho} name={name} username={username} size={16} title={username}>{name}:</IdentityName>
+          ? <IdentityName className={cssrows.msgQuoteWho} name={name} username={username} size={16}>{name}:</IdentityName>
           : <span className={cssrows.msgQuoteWho}>{name}:</span>
       )}
       {icon && <span className={cssrows.msgQuoteKind} aria-hidden="true">{icon}</span>}
-      <span className={cssrows.msgQuoteWhat}>{summary || `[${typeLabel}]`}</span>
+      {summary && <span className={cssrows.msgQuoteWhat}>{summary}</span>}
       {thumb && (
         <span
           className={`${cssrows.msgQuoteThumbWrap} ${thumbOpen ? cssrows.msgQuoteThumbOpen : ''}`}
-          {...(thumbOpen ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' }) : {})}
+          {...(thumbOpen ? {
+            onClick: (event: React.MouseEvent) => {
+              event.stopPropagation()
+              openLink(thumb)
+            },
+          } : {})}
         >
           <RemoteImg className={cssrows.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
         </span>
       )}
-    </div>
+    </>
+  )
+  if (!onOpen) {
+    return <div className={css.msgQuoteStrip} title={fullTitle}>{content}</div>
+  }
+  return (
+    <button
+      type="button"
+      className={`${css.msgQuoteStrip} ${css.msgQuoteStripOpen}`}
+      title={`${fullTitle}${fullTitle ? ' · ' : ''}点击定位原消息`}
+      aria-label={`定位引用的原消息${fullTitle ? `：${fullTitle}` : ''}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpen()
+      }}
+    >
+      {content}
+    </button>
   )
 }
 
@@ -390,112 +434,66 @@ function QuoteStrip({ name, username, summary, typeLabel, icon, thumb }: {
  * @param props - the parsed rich descriptor + render context.
  * @returns the card element.
  */
-export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId, createTime, senderName, senderUsername, senderEnterpriseName }: RichCardProps): React.JSX.Element {
+export function RichCard({
+  rich,
+  fallback,
+  onOpenChatlog,
+  onOpenQuote,
+  createTime,
+  sessionUsername,
+  localId,
+}: RichCardProps): React.JSX.Element {
   const title = decodeEntities(rich.title || fallback || '')
   const desc = decodeEntities(rich.desc || '')
   const url = rich.url || ''
   switch (rich.type) {
-    case 'transfer': {
-      const amount = (rich.title || '').replace(/^\s*[Y￥]/, '¥')
-      const state = transferStatusLabel(self, rich.paysubtype)
-      const key = transferStateKey(rich.paysubtype)
+    case 'transfer':
+      return <TransferCard rich={rich} />
+    case 'redpacket':
+      return <RedPacketCard rich={rich} />
+    case 'solitaire':
+      // 微信把接龙作为普通多行文本展示；成员名单只用于数据检索，不进消息气泡。
       return (
-        <div className={css.msgTransferCard} data-state={key}>
-          <span className={css.msgTransferArrow} aria-hidden="true">{key === 'pending' ? <TransferArrowGlyph /> : <TransferCheckGlyph />}</span>
-          <span className={cssrows.msgTransferMain}>
-            <span className={cssrows.msgTransferAmount}>{amount || '¥0.00'}</span>
-            <span className={cssrows.msgTransferStatus}>{state || (key === 'pending' ? (self ? '等待对方领取' : '待收款') : '已收款')}</span>
-          </span>
-          <CardFoot label="微信转账" />
+        <div className={css.msgBubble}>
+          <MessageText text={title || fallback} onOpenLink={openLink} />
         </div>
       )
-    }
-    case 'redpacket': {
-      const amount = typeof rich.amount === 'string' ? rich.amount.replace(/^\s*[Y￥]/, '¥') : ''
-      const greet = rich.desc || '恭喜发财，大吉大利'
-      return (
-        <div className={css.msgRedpacketCard}>
-          <div className={cssrows.msgRedpacketIcon} aria-hidden="true">🧧</div>
-          <div className={cssrows.msgRedpacketBody}>
-            <div className={cssrows.msgRedpacketTitle}>{greet}</div>
-            {amount && <div className={cssrows.msgRedpacketAmount}>{amount}</div>}
-            {serverId && <PayStatusLine serverId={serverId} {...(senderName ? { senderName } : {})} {...(senderUsername ? { senderUsername } : {})} {...(senderEnterpriseName ? { senderEnterpriseName } : {})} />}
-          </div>
-          <CardFoot label="微信红包" />
-        </div>
-      )
-    }
-    case 'solitaire': {
-      // 群接龙：title 只是摘要（`#接龙\n明晚球\n\n1. 云端"），参与者名单在 rich.members。
-      // 本机 316 条接龙里 268 条带名单 —— 旧实现把它们渲染成通用链接卡，名单全看不见。
-      const members = Array.isArray(rich.members) ? rich.members : []
-      const declared = typeof rich.declared === 'number' ? rich.declared : 0
-      const lines = String(rich.title || '').replace(/^#?接龙\s*/, '').split('\n').map(l => l.trim()).filter(Boolean)
-      // 有名单时只留事由（第一行）；没名单时 title 里的 "1. xxx" 就是全部信息，照原样显示
-      const subject = members.length > 0 ? (lines[0] ?? '') : lines.join(' · ')
-      const shown = members.slice(0, 8)
-      return (
-        <div className={css.msgSolitaireCard}>
-          <div className={cssrows.msgSolitaireHd}>
-            <span className={cssrows.msgSolitaireIcon} aria-hidden="true">🧾</span>
-            <span className={cssrows.msgSolitaireSubject} title={subject || '群接龙'}>{subject || '群接龙'}</span>
-            {members.length > 0 && <span className={cssrows.msgSolitaireCount}>{declared > members.length ? `${members.length}/${declared} 人` : `${members.length} 人`}</span>}
-          </div>
-          {shown.length > 0 && (
-            <ol className={cssrows.msgSolitaireList}>
-              {shown.map(m => (
-                <li key={m.idx} className={cssrows.msgSolitaireItem} title={m.username ? `${m.username}` : undefined}>
-                  <span className={cssrows.msgSolitaireIdx}>{m.idx}</span>
-                  <span className={cssrows.msgSolitaireText}>{m.content || '（未填）'}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-          {members.length > shown.length && (
-            <div className={kitCss.textCaption}>还有 {members.length - shown.length} 人…</div>
-          )}
-          {declared > members.length && (
-            <div className={kitCss.textCaption}>名单声明 {declared} 人，当前列出 {members.length} 人（有人退出后未同步）</div>
-          )}
-          <CardFoot label="群接龙" />
-        </div>
-      )
-    }
     case 'announcement':
-      return <LabeledCard icon="📢" label="群公告" title={title || '群公告'} desc={desc} source={rich.source || ''} foot="群公告" />
+      return <LabeledCard icon={<AppCardIcon kind="announcement" />} label="群公告" title={title} desc={desc} source={rich.source || ''} foot="群公告" />
     case 'note':
-      return <LabeledCard icon="📝" label="笔记" title={title || desc} desc={title ? desc : ''} source={rich.source || ''} foot="笔记" />
+      return <LabeledCard icon={<AppCardIcon kind="note" />} label="笔记" title={title || desc} desc={title ? desc : ''} source={rich.source || ''} foot="笔记" />
     case 'card': {
       // 36 类卡片（本机实测是第三方 H5/团购卡）：有 url 就能跳，别画成死卡。
-      return <LabeledCard icon="🏷️" label="卡片" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="卡片" />
+      return <LabeledCard icon={<AppCardIcon kind="card" />} label="卡片" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="卡片" />
     }
     case 'product':
-      return <LabeledCard icon="🛍️" label="商品" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="商品" />
+      return <LabeledCard icon={<AppCardIcon kind="product" />} label="商品" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="商品" />
     case 'sticker': {
       // 自定义表情：按 md5 解码真图；有 CDN thumb 时优先用 thumb（免扫盘）。
-      const md5 = rich.md5 || title || ''
+      const md5 = rich.md5 || (/^[0-9a-f]{32}$/i.test(title) ? title : '')
+      const label = title && !/^[0-9a-f]{32}$/i.test(title) ? title : undefined
       const safeThumb = proxyableSrc(rich.thumb)
       if (safeThumb) {
         return (
-          <div className={cssrows.msgSticker} title={title || '表情'}>
-            <RemoteImg className={cssrows.msgStickerImg} src={safeThumb} alt={title || '表情'} loading="lazy"
+          <div className={cssrows.msgSticker} title={label || '表情'}>
+            <RemoteImg className={cssrows.msgStickerImg} src={safeThumb} alt={label || '表情'} loading="lazy"
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
           </div>
         )
       }
-      if (md5) return <MessageEmoticon md5={md5} label={title || undefined} emojiUrl={typeof rich.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
+      if (md5) return <MessageEmoticon md5={md5} label={label} emojiUrl={typeof rich.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
       return (
         <div className={css.msgBubble}>
-          <span className={cssrows.msgEmojiChip} title="自定义表情">😊 [表情]</span>
+          <span className={cssrows.msgEmojiChip} title="表情">[表情]</span>
         </div>
       )
     }
     case 'pat':
       return <div className={css.msgSystem} data-kind="pat">{title || '[拍一拍]'}</div>
     case 'unsupported':
-      return (
-        <LabeledCard icon="⚠️" label="版本不支持" title={title || '当前微信版本不支持展示该内容，请升级至最新版本。'} foot="暂不支持" />
-      )
+      return <div className={css.msgSystem} data-kind="notice">
+        <span className={cssrows.msgSystemText}>{title && !/^(?:版本不支持|暂不支持)$/.test(title) ? title : '当前微信版本不支持展示该内容，请升级至最新版本。'}</span>
+      </div>
     case 'quote': {
       // 引用：desc = 被引用的原文（媒体/卡片已折成 `[图片]`/`[转账]`），referName = 被引用方昵称。
       //
@@ -509,34 +507,58 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       const quoted = desc || ''
       const refUsername = rich.referUsername?.trim() ?? ''
       const thumb = proxyableSrc(rich.thumb)
-      const qType = quoteTypeLabel(rich.referType)
       const appType = typeof rich.referAppType === 'number' ? rich.referAppType : 0
       const kindIcon = quoteKindIcon(rich.referType, appType)
       // 引用行已经画了类型图标，摘要就不再重复一遍类型词
       // （官方参考图是「⊙微信转账」，不是「⊙ [转账] 微信转账」）。
-      const summary = appType === 2000 ? quoted.replace(/^\[转账\]\s*/, '') : quoted
+      const prefixes: string[] = []
+      if (appType === 2000) prefixes.push('[转账]')
+      if (appType === 2001 || appType === 2003) prefixes.push('[红包]')
+      if (appType === 4 || appType === 5 || appType === 68) prefixes.push('[链接]')
+      if (appType === 36) prefixes.push('[卡片]')
+      if (rich.referType === 3) prefixes.push('[图片]')
+      if (rich.referType === 34) prefixes.push('[语音]')
+      if (rich.referType === 43) prefixes.push('[视频]')
+      if (rich.referType === 42 || rich.referType === 66) prefixes.push('[名片]')
+      if (rich.referType === 49 || rich.referType === 5 || rich.referType === 68) prefixes.push('[链接]')
+      let summary = quoted
+      if (kindIcon) {
+        const prefix = prefixes.find((p) => summary.startsWith(p))
+        if (prefix) summary = summary.slice(prefix.length).trimStart()
+      }
       return (
         <>
-          <div className={css.msgBubble}>{title}</div>
+          {title && <div className={css.msgBubble}>{title}</div>}
           <QuoteStrip
-            name={rich.referName || refUsername}
+            name={rich.referName || ''}
             username={refUsername}
             summary={summary}
-            typeLabel={qType}
             icon={kindIcon}
             thumb={thumb}
+            {...(onOpenQuote ? { onOpen: () => { onOpenQuote(rich) } } : {})}
           />
         </>
       )
     }
     case 'file':
-      return <OpenFileCard title={title} size={rich.fileSize ?? ''} {...(createTime !== undefined ? { createTime } : {})} />
+      return (
+        <OpenFileCard
+          title={title}
+          size={rich.fileSize ?? ''}
+          {...(rich.fileExt ? { ext: rich.fileExt } : {})}
+          {...(rich.fileMd5 ? { fileMd5: rich.fileMd5 } : {})}
+          {...(createTime !== undefined ? { createTime } : {})}
+          {...(sessionUsername ? { sessionUsername } : {})}
+          {...(localId !== undefined ? { localId } : {})}
+        />
+      )
     case 'chatlog': {
       const records = Array.isArray(rich.records) ? rich.records : []
       return (
         <button type="button" className={css.msgChatlogCard}
           onClick={onOpenChatlog ? () => { onOpenChatlog(rich) } : undefined}
-          title={onOpenChatlog ? '点击查看聊天记录' : undefined}>
+          disabled={!onOpenChatlog}
+          title={onOpenChatlog ? '点击查看聊天记录' : '当前消息没有可展开的聊天记录'}>
           <span className={cssrows.msgChatlogMain}>
             <span className={cssrows.msgChatlogIcon}><IconDataOutline16 size={15} /></span>
             <span className={cssrows.msgChatlogBody}>
@@ -544,7 +566,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
               <ChatlogPreview records={records} />
             </span>
           </span>
-          <CardFoot label={records.length > 0 ? `聊天记录 · 共 ${records.length} 条` : '聊天记录'} />
+          <CardFoot label="聊天记录" />
         </button>
       )
     }
@@ -554,39 +576,34 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       const appIcon = proxyableSrc(typeof rich.avatar === 'string' ? rich.avatar : '')
       const appName = rich.source || ''
       const bodyDesc = desc && !/[<>]/.test(desc) && desc !== title ? desc : ''
+      const visibleTitle = /^(?:\[小程序\]|小程序)$/.test(title.trim()) ? '' : title
       return (
-        <div className={css.msgMiniappCard}>
+        <div className={css.msgMiniappCard} data-no-cover={!cover || undefined}>
           {(appName || appIcon) && (
             <div className={css.msgMiniappApp}>
               {appIcon
                 ? <RemoteImg className={cssrows.msgMiniappAppIcon} src={appIcon} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                 : <span className={cssrows.msgMiniappAppDot} aria-hidden="true" />}
-              <span className={cssrows.msgMiniappName}>{appName || '小程序'}</span>
+              {appName && <span className={cssrows.msgMiniappName}>{appName}</span>}
             </div>
           )}
-          <div className={cssrows.msgMiniappTitle}>{title || '[小程序]'}</div>
-          {bodyDesc && <div className={cssrows.msgMiniappDesc}>{bodyDesc}</div>}
-          <div className={cssrows.msgMiniappCover} data-empty={!cover || undefined}>
-            {cover
-              ? (
-                <RemoteImg
-                  className={cssrows.msgMiniappCoverImg}
-                  src={cover}
-                  alt=""
-                  loading="lazy"
-                  onError={(e) => {
-                    const el = e.target as HTMLImageElement
-                    el.style.display = 'none'
-                    el.parentElement?.setAttribute('data-empty', '')
-                  }}
-                />
-              )
-              : (
-                <span className={cssrows.msgMiniappCoverFallback} aria-hidden="true">
-                  <IconDataOutline16 size={22} />
-                </span>
-              )}
-          </div>
+          {visibleTitle && <div className={cssrows.msgMiniappTitle}>{visibleTitle}</div>}
+          {bodyDesc && bodyDesc !== visibleTitle && <div className={cssrows.msgMiniappDesc}>{bodyDesc}</div>}
+          {cover && (
+            <div className={cssrows.msgMiniappCover}>
+              <RemoteImg
+                className={cssrows.msgMiniappCoverImg}
+                src={cover}
+                alt=""
+                loading="lazy"
+                onError={(e) => {
+                  const el = e.target as HTMLImageElement
+                  el.style.display = 'none'
+                  el.parentElement?.setAttribute('data-empty', '')
+                }}
+              />
+            </div>
+          )}
           <CardFoot label="小程序" />
         </div>
       )
@@ -596,7 +613,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
         <MediaCoverCard
           variant="channels"
           cover={rich.thumb}
-          title={title || '[视频号]'}
+          title={title}
           {...(rich.source ? { from: rich.source } : {})}
           {...(desc ? { desc } : {})}
           {...(/^https?:\/\//i.test(url) ? { onOpen: () => { openLink(url) } } : {})}
@@ -608,7 +625,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           variant="live"
           cover={rich.thumb}
           {...(liveStatusText(typeof rich.status === 'string' ? rich.status : '') ? { badge: liveStatusText(typeof rich.status === 'string' ? rich.status : '') } : {})}
-          title={title || '[直播]'}
+          title={title}
           {...(rich.source ? { from: rich.source } : {})}
           {...(desc ? { desc } : {})}
           {...(/^https?:\/\//i.test(url) ? { onOpen: () => { openLink(url) } } : {})}
@@ -624,10 +641,10 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           <span className={cssrows.msgMusicCover} data-empty={!safeThumb || undefined}>
             {safeThumb
               ? <RemoteImg src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-              : <span aria-hidden="true">🎵</span>}
+              : <AppCardIcon kind="music" />}
           </span>
           <span className={cssrows.msgMusicBody}>
-            <span className={cssrows.msgMusicTitle} title={title}>{title || '音乐'}</span>
+            {title && <span className={cssrows.msgMusicTitle} title={title}>{title}</span>}
             {desc && <span className={cssrows.msgMusicArtist} title={desc}>{desc}</span>}
             {rich.source && <span className={cssrows.msgMusicFrom}>{rich.source}</span>}
           </span>
@@ -639,19 +656,19 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       const cardUrl = url || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】…]+$/, '') || ''
       // 公众号推送（后端识别出 `<mmreader>`）走大图卡 + 次条，其余链接仍是紧凑链接卡
       if (rich.mpNews === true) return <MpNewsCard rich={rich} title={title} url={cardUrl} />
-      return <LinkCard rich={rich} title={title || '链接'} desc={desc} url={cardUrl} />
+      return <LinkCard rich={rich} title={title} desc={desc} url={cardUrl} />
     }
     default: {
       // appmsg 兜底：有 url 走链接卡，没 url 就只显示标题文本，绝不画带假链接的卡片。
       const cardUrl = url
         || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】…]+$/, '')
         || ''
-      if (/^https?:\/\//i.test(cardUrl)) return <LinkCard rich={rich} title={title || '链接'} desc={desc} url={cardUrl} />
+      if (/^https?:\/\//i.test(cardUrl)) return <LinkCard rich={rich} title={title} desc={desc} url={cardUrl} />
       return (
         <div className={css.msgAppmsgCard}>
-          <span className={cssrows.msgAppmsgIcon} aria-hidden="true">💬</span>
+          <span className={cssrows.msgAppmsgIcon} aria-hidden="true"><AppCardIcon kind="message" /></span>
           <span className={cssrows.msgAppmsgBody}>
-            <span className={cssrows.msgAppmsgTitle} title={title}>{title || fallback || '[应用消息]'}</span>
+            {title && <span className={cssrows.msgAppmsgTitle} title={title}>{title}</span>}
             {desc && <span className={cssrows.msgAppmsgDesc} title={desc}>{desc}</span>}
           </span>
         </div>
@@ -669,11 +686,13 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
  * @param props - the message + render callbacks.
  * @returns the message body element.
  */
-export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
+export function MessageBody({ m, selfName, sessionUsername, onOpenImage, onOpenChatlog, onOpenQuote }: {
   m: WechatMessage
   selfName: string
+  sessionUsername?: string
   onOpenImage?: (m: WechatMessage) => void
   onOpenChatlog?: (rich: MessageRich) => void
+  onOpenQuote?: (rich: MessageRich) => void
 }): React.JSX.Element {
   const kind = renderKindOf(m)
   const text = m.displayText || ''
@@ -682,10 +701,10 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
   // 系统/撤回：居中系统行（带子类型样式），不是气泡。
   if (kind === 'system' || kind === 'revoke') return <MessageSystem m={m} />
   if (kind === 'pat') return <div className={css.msgSystem} data-kind="pat">{text || '[拍一拍]'}</div>
-  // 11000：内容为空、status=2 的占位行（本机 13 条）。画空气泡或空白都很难看，
-  // 给一行极淡的说明，让「这里有一条记录但没内容」这件事可见。
+  // 11000：内容为空、status=2 的占位行。微信本身没有可读正文，
+  // 这里保留占位但不显示数据库诊断文案。
   if (kind === 'empty') {
-    return <div className={css.msgSystem} data-kind="empty"><span className={cssrows.msgSystemText}>（无内容的消息记录）</span></div>
+    return <div className={css.msgSystem} data-kind="empty" aria-hidden="true" />
   }
 
   if (kind === 'text') {
@@ -712,7 +731,7 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
     if (md5) return <MessageEmoticon md5={md5} label={text || undefined} emojiUrl={typeof rich?.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
     return (
       <div className={css.msgBubble}>
-        <span className={cssrows.msgEmojiChip} title="自定义表情">😊 [表情]</span>
+        <span className={cssrows.msgEmojiChip} title="表情">[表情]</span>
       </div>
     )
   }
@@ -720,22 +739,22 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
   // 卡片型：rich 存在时走 RichCard；rich 缺失（旧缓存 / 极端兜底）时给可读文本。
   if (rich && (CARD_KINDS.has(kind) || rich.type !== undefined)) {
     return (
-      <RichCard rich={rich} fallback={text} self={m.isSender === 1}
+      <RichCard rich={rich} fallback={text}
         createTime={m.createTime}
-        {...(m.senderName ? { senderName: m.senderName } : {})} {...(m.sender ? { senderUsername: m.sender } : {})}
-        {...(m.senderEnterpriseName ? { senderEnterpriseName: m.senderEnterpriseName } : {})}
+        {...(sessionUsername ? { sessionUsername } : {})}
+        localId={m.localId}
         {...(onOpenChatlog ? { onOpenChatlog } : {})}
-        {...(m.serverId ? { serverId: m.serverId } : {})} />
+        {...(onOpenQuote ? { onOpenQuote } : {})} />
     )
   }
   if (kind === 'link') {
     const urlMatch = text.match(/https?:\/\/[^\s<>"']+/)
     const url = urlMatch ? urlMatch[0].replace(/[。，；、！？）)】…]+$/, '') : ''
-    return <LinkCard rich={{ type: 'link', title: text }} title={text || '链接'} desc="" url={url} />
+    return <LinkCard rich={{ type: 'link', title: text }} title={text} desc="" url={url} />
   }
   return (
     <div className={css.msgBubble}>
-      <span className={kitCss.textMeta}>{describeFallbackText(text, m.type)}</span>
+      <span className={kitCss.textMeta}>{describeFallbackText(text)}</span>
     </div>
   )
 }
@@ -750,15 +769,14 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
  * 这两类的 `text` 往往就是**整段 `<msg>…</msg>` XML** ⇒ 原先直接把尖括号渲染出来，
  * 于是同一屏里文本消息好好的、旁边那条卡片消息却是一堆标记。
  *
- * 做法：按 XML 根标签映射成中文标签；认不出退回"类型 N"；非 XML 则清控制字符并限长。
+ * 做法：按 XML 根标签映射成中文标签；认不出只显示通用占位；非 XML 则清控制字符并限长。
  * **只改展示**，不碰解析与数据。
  * @param text - 兜底可用的文本（可能是 XML 片段）。
- * @param type - 消息数值类型（认不出标签时用来提示）。
  * @returns 一行可读文案。
  */
-function describeFallbackText (text: string, type: number): string {
+function describeFallbackText (text: string): string {
   const raw = (text ?? '').trim()
-  if (raw === '') return `[类型 ${String(type)}]`
+  if (raw === '') return '[暂不支持的消息]'
   if (raw.startsWith('<')) {
     const flat = raw.replace(/\s+/g, ' ')
     const byTag: ReadonlyArray<readonly [RegExp, string]> = [
@@ -768,8 +786,8 @@ function describeFallbackText (text: string, type: number): string {
       [/finderusernamecard|<findernamecard/i, '视频号'], [/<card\b|<wcscard/i, '名片'],
       [/<refermsg\b/i, '引用（卡片）'], [/<appmsg\b/i, '链接 / 文件'], [/<sysmsg\b/i, '系统消息'],
     ]
-    for (const [re, label] of byTag) if (re.test(flat)) return `[${label}]（原文为 XML，已折叠）`
-    return `[${type > 0 ? '类型 ' + String(type) : '未知内容'}]（原文为 XML，已折叠）`
+    for (const [re, label] of byTag) if (re.test(flat)) return `[${label}]`
+    return '[暂不支持的消息]'
   }
   const clean = raw.replace(/[\u0000-\u0008\u000b-\u001f]/g, '').replace(/\s+/g, ' ').trim()
   return clean.length > 200 ? clean.slice(0, 200) + '…' : clean

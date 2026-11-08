@@ -1,3 +1,4 @@
+import type { EmbedFn } from '../query/vector-math.ts';
 import { DailySummaryResult, OperationCategory, OperationStatus, PeriodSummaryResult, ReplySuggestResult, SummaryTaskMutationResult, SummaryTaskRunResult } from '../types.ts';
 import type { Context } from '@deepseek-ai/cordis';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
@@ -15,6 +16,10 @@ export interface createSummaryRecordRemotesInputs {
     selfUsername: () => string;
     getSchedBusy: () => boolean;
     setSchedBusy: (v: boolean) => void;
+    makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined;
+    kbModel: (kbId: number, role: 'embed') => {
+        model: string;
+    };
 }
 export declare function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs): {
     generateDailySummary(options: {

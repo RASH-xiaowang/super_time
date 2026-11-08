@@ -141,8 +141,8 @@ export const FEATURE_GROUPS = [
   },
   {
     name: '行动与维护',
-    desc: '待办与任务、操作日志、ClawBot 集群，以及设置弹窗（含隐私体检、备份恢复与数据库健康）。',
-    items: ['ClawBot集群', '待办日程', '任务信息', '操作日志', '设置'],
+    desc: '待办与任务、操作日志，以及设置弹窗（含隐私体检、备份恢复与数据库健康）。',
+    items: ['待办日程', '任务信息', '操作日志', '设置'],
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />

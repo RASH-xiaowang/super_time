@@ -5,14 +5,17 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { apiCapturePanel, apiEditChatMessage, runtimeCapabilities } from '../api.ts'
+import { apiEditChatMessage } from '../api.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { fmtMsgClockSec } from '../utils/format.ts'
 import { Dialog } from '../ui/kit.tsx'
 import { messageSourceText, type MsgMenuItem } from './chats-support.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import { useChatsPoster, type ChatsPosterController } from './chats-poster.tsx'
 import csscards from './chats-cards.module.css'
+
+export { posterCaptureRect, posterFilename } from './chats-poster.tsx'
 
 export type MessageToolMode = 'source' | 'info' | 'editText' | 'editSource'
 
@@ -32,45 +35,6 @@ export interface ChatsMessageToolsController {
   onClose: () => void
   onSave: () => void
   onCopySource: () => void
-}
-
-interface RectLike {
-  left: number
-  top: number
-  right: number
-  bottom: number
-  width: number
-  height: number
-}
-
-/** Union only the avatar + message column, not the full-width virtual row. */
-export function posterCaptureRect(parts: readonly RectLike[], padding = 14): RectLike | null {
-  const valid = parts.filter(r => r.width > 0 && r.height > 0)
-  if (valid.length === 0) return null
-  const left = Math.min(...valid.map(r => r.left)) - padding
-  const top = Math.min(...valid.map(r => r.top)) - padding
-  const right = Math.max(...valid.map(r => r.right)) + padding
-  const bottom = Math.max(...valid.map(r => r.bottom)) + padding
-  return { left, top, right, bottom, width: right - left, height: bottom - top }
-}
-
-/** Stable, filesystem-safe default name for the save dialog. */
-export function posterFilename(sessionName: string, localId: number, now = Date.now()): string {
-  const safe = (sessionName.trim() || '聊天')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-    .slice(0, 48)
-  const stamp = new Date(now).toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  return `聊天海报-${safe}-${localId}-${stamp}.png`
-}
-
-function nextPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame !== 'function') {
-      setTimeout(resolve, 0)
-      return
-    }
-    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve() }) })
-  })
 }
 
 function prettyBytes(value: unknown): string {
@@ -245,6 +209,7 @@ export interface UseChatsMessageToolsInputs {
 /** State + actions behind the five right-click menu entries. */
 export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdits }: UseChatsMessageToolsInputs): {
   controller: ChatsMessageToolsController
+  poster: ChatsPosterController
   openPoster: (m: WechatMessage) => Promise<void>
   openSource: (m: WechatMessage) => void
   openInfo: (m: WechatMessage) => void
@@ -254,6 +219,7 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { controller: poster, begin: beginPoster } = useChatsPoster(curSession, flash)
   const onEdited = useCallback(async (): Promise<void> => {
     await reloadCurrent()
     await loadEdits()
@@ -317,47 +283,8 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
   }, [tool, flash])
 
   const openPoster = useCallback(async (m: WechatMessage): Promise<void> => {
-    if (!curSession) return
-    if (!runtimeCapabilities().capturePanel) {
-      flash('当前环境不支持生成聊天海报，请在桌面端使用')
-      return
-    }
-    await nextPaint()
-    const row = document.getElementById('msg-' + String(m.localId))
-    if (!row) {
-      flash('生成聊天海报失败：消息当前不在可视区域')
-      return
-    }
-    const col = row.querySelector<HTMLElement>('[data-msg-col]')
-    const avatar = row.firstElementChild instanceof HTMLElement ? row.firstElementChild : null
-    const focused = [col?.getBoundingClientRect(), avatar?.getBoundingClientRect()]
-      .filter((r): r is DOMRect => r !== undefined && r.width > 0 && r.height > 0)
-    const parts = focused.length > 0 ? focused : [row.getBoundingClientRect()]
-    const crop = posterCaptureRect(parts)
-    if (!crop) {
-      flash('生成聊天海报失败：无法测量消息区域')
-      return
-    }
-    const x = Math.max(0, crop.left)
-    const y = Math.max(0, crop.top)
-    const right = Math.min(window.innerWidth, crop.right)
-    const bottom = Math.min(window.innerHeight, crop.bottom)
-    if (right <= x || bottom <= y) {
-      flash('生成聊天海报失败：消息已滚出屏幕')
-      return
-    }
-    try {
-      const res = await apiCapturePanel({
-        x, y, width: right - x, height: bottom - y,
-        filename: posterFilename(curSession.displayName || curSession.username, m.localId),
-      })
-      if (!res.ok) flash('生成聊天海报失败：' + (res.message || '未知错误'))
-      else if (res.canceled) flash('已取消生成聊天海报')
-      else flash(`聊天海报已保存：${res.path ?? ''}`)
-    } catch (e) {
-      flash('生成聊天海报失败：' + (e as Error).message)
-    }
-  }, [curSession, flash])
+    beginPoster(m)
+  }, [beginPoster])
 
   return {
     controller: {
@@ -371,6 +298,7 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
       onSave: () => { void save() },
       onCopySource: copySource,
     },
+    poster,
     openPoster,
     openSource,
     openInfo,

@@ -16,6 +16,12 @@ import { searchIndexMessages } from './search-query.ts'
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
 import { contactMeta } from './meta.ts'
+import {
+  displayNameForUsername,
+  messageTableHash,
+  resolveTalkerUsername,
+  messageTableName,
+} from './message-identity.ts'
 
 /**
  * 保证索引**存在且包含最新的消息**（提问路径的唯一入口）。
@@ -264,36 +270,49 @@ export function listMessagesInRange(
   const hi = Math.ceil(Math.max(fromSec, toSec))
   if (!(lo > 0) || !(hi >= lo)) return { hits: [], ready: false }
   const cap = Math.min(Math.max(limit ?? 120, 1), 600)
+  const requestedScope = username?.trim() ?? ''
+  const scopedUsername = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !scopedUsername) return { hits: [], ready: true }
   try {
     const rows = withDb(searchIndexPath(decryptedDir), (db) => {
+      const aliases = scopedUsername
+        ? [...new Set([
+          requestedScope,
+          scopedUsername,
+          messageTableHash(scopedUsername),
+          messageTableName(scopedUsername),
+        ])]
+        : []
       const sql = 'SELECT text, username, create_time, local_id, sender FROM message_meta WHERE create_time BETWEEN ? AND ?'
-        + (username ? ' AND username = ?' : '')
+        + (aliases.length > 0 ? ` AND username IN (${aliases.map(() => '?').join(', ')})` : '')
         + ' ORDER BY create_time DESC LIMIT ?'
-      const args: Array<string | number> = username ? [lo, hi, username, cap] : [lo, hi, cap]
+      const args: Array<string | number> = aliases.length > 0 ? [lo, hi, ...aliases, cap] : [lo, hi, cap]
       return db.prepare(sql).all(...args) as Array<Record<string, unknown>>
     })
     const names = loadDisplayNames(decryptedDir)
     const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
-    const hits = rows.map((r) => {
+    const hits = rows.flatMap((r): SearchHit[] => {
       const text = decodeCell(r['text'])
-      const uname = decodeCell(r['username'])
+      const storedUsername = decodeCell(r['username'])
+      const uname = resolveTalkerUsername(decryptedDir, storedUsername)
+      if (!uname) return []
       const ts = Number(r['create_time'] ?? 0)
       // `sender` 列存原始 wxid（构建时切出）；显示名现查 `names`。
       const sender = decodeCell(r['sender'])
       const enterpriseName = enterpriseNames.get(uname)?.trim()
       const senderEnterpriseName = enterpriseNames.get(sender)?.trim()
-      return {
+      return [{
         text,
         username: uname,
         create_time: ts,
         local_id: Number(r['local_id'] ?? 0),
-        name: names.get(uname) ?? uname,
+        name: displayNameForUsername(uname, names),
         ...(enterpriseName ? { enterpriseName } : {}),
         time: fmtDateTimeSec(ts),
         snippet: text.replace(/\s+/g, ' ').slice(0, 120),
         sender: senderLabel(sender, names),
         ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
-      }
+      }]
     })
     return { hits, ready: true }
   } catch {

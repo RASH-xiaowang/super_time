@@ -17,13 +17,14 @@
  *
  * ② 是这份文件的**全部价值所在**：它把「默认拒绝」从一句口号变成一个会红的判据。
  *
- * ## 例外：「打开网页」桌面交接会话（2026-10-19）
+ * ## 例外：fullAccess 浏览器会话（2026-10-19）
  *
- * 用户在桌面端亲手点「打开网页」时，发出的配对码带 `fullAccess` 标记；它换来的会话
- * **不查这份白名单**，并与桌面端一样走 `/api/native/*` 原生能力代理。原因：浏览器就在
- * 同一台电脑上，是用户把桌面操作面临时交给默认浏览器，权限必须与桌面端一致。
- * 这条例外**只认服务端内存里的会话标记**：普通手机配对码、伪造 URL 的 `mode=desktop`、
- * 旧 Cookie 都拿不到 fullAccess；停服/轮换/点卡片返回都会清空会话表。
+ * 当前有两个入口会签发带 `fullAccess` 标记的配对码：标题栏「打开网页」桌面交接，
+ * 以及设置页「局域网访问（手机）」生成的扫码二维码。fullAccess 会话**不查这份白名单**，
+ * 并与桌面端一样走 `/api/native/*` 原生能力代理；这是已记录的桌面同权设计，不是
+ * “普通手机只能读”。只有长期 `api_token` 登录且未带 fullAccess 的会话受白名单约束。
+ * 该标记只认服务端内存里的会话状态：伪造 URL 的 `mode=desktop`、旧 Cookie 都拿不到
+ * fullAccess；停服/轮换/点卡片返回都会清空会话表。
  *
  * ## 分类口径（判「拒」的四条理由，满足任一条即拒）
  *
@@ -36,9 +37,8 @@
  *      把 `getSessions` 顶到 2202ms）；远程再叠几个 10 分钟档的长调用，桌面界面会被饿死。
  *      **例外**：单条/面板必需的长任务（年度聚合、单图、单条转写、AI 分析）仍可远程调用，
  *      但由 `REMOTE_HEAVY_METHODS` 单独记账，并在共享队列里受重活并发/排队预算约束。
- *   D. **会以用户身份对外产生后果，或销毁问责留痕** —— ClawBot 发消息/改绑定（收到令牌的人
- *      就能给用户的联系人发消息）、清空操作日志与隐私审计（那两份是「谁在什么时候把什么
- *      发出去了」的唯一记录）。
+ *   D. **会以用户身份对外产生后果，或销毁问责留痕** —— 以用户身份发消息、清空操作日志
+ *      与隐私审计（那两份是「谁在什么时候把什么发出去了」的唯一记录）。
  *
  * 拿不准时**一律归入拒绝**：白名单漏一条的后果是「手机上某个按钮报错」，用户看得见、
  * 一句话就能修；黑名单漏一条的后果是静默越权，没人会发现。
@@ -97,6 +97,8 @@ const REMOTE_SAFE_BY_FAMILY = {
     // 消息列表的纯读视图：手机端可以查看记录与规则，但写规则、手动插入、重发和
     // 带令牌的 Webhook 地址读取都在下面的本机写侧 / D 族。
     'listMessageListRecords', 'listMessageListRules',
+    // 会话级 AI 回复的状态是纯读（不含 Webhook/模型凭据）；开关写侧在 D 族。
+    'getChatAiReplyState', 'listEnabledChatAiReplyStates',
   ],
   '知识库': [
     'getKbs', 'getKbFiles', 'getKbFileChunks', 'getNotes', 'saveNote', 'deleteNote',
@@ -121,13 +123,6 @@ const REMOTE_SAFE_BY_FAMILY = {
   '隐私体检（只读）': ['getPrivacyState', 'getPrivacyScan', 'getPrivacyAuditRows'],
   '操作日志（只读）': ['getOperationLog'],
   '本地决策分析': ['analyzeMessages', 'analyzeVisibleMessages', 'cancelLayaAnalysis'],
-  'ClawBot（只读）': [
-    'listClawbotInstances', 'listClawbotMessages', 'getClawbotBinding',
-    'getClawbotBindState', 'checkClawbotEnv', 'getClawbotMedia',
-    // 2026-10-17：内置的拟人化默认提示词是**常量**（不读库、不碰微信数据、无副作用）。
-    // 手机上要能看得到默认值长什么样 —— 否则设置面板的输入框永远是空的。
-    'getClawbotDefaultPrompt',
-  ],
 }
 
 /**
@@ -153,7 +148,10 @@ const LOCAL_ONLY_BY_FAMILY = {
   ],
   'B 导出：在本机磁盘上落文件': [
     'exportCsv', 'exportAllSessions', 'exportSessionMessages', 'exportMoments',
-    'exportSnsVideo', 'exportAnnualReport',
+    'exportSnsVideo', 'exportSnsImage', 'exportChatImage', 'exportChatVideo', 'exportChatFile',
+    'exportFileImage', 'exportFileVideo', 'exportFileAttachment',
+    'exportFavoriteImage', 'exportFavoriteVideo', 'exportFavoriteFile',
+    'exportAnnualReport',
     'getExportHistory', 'getExportProgress', 'cancelExportJob',
     'deleteExportHistory', 'pruneExportHistory',
     // 2026-10-19：新建聊天素材收集任务会在数据根写 texts.json / images/ / task.json ——
@@ -185,27 +183,28 @@ const LOCAL_ONLY_BY_FAMILY = {
     'setTaskInfoStatus', 'scanTaskTriggers',
     // 消息列表写侧：规则与手动插入都落本机库；重发会让内容再次出网。
     'saveMessageListRule', 'deleteMessageListRule', 'insertMessageListRecord',
-    'resendMessageListRecord',
+    'resendMessageListRecord', 'batchResendMessageListRecords', 'batchDeleteMessageListRecords',
+    // 桌面文件选择器返回本机路径；暂存服务只应由桌面端调用。
+    'stageMessageListAttachment',
+    // AI 回复开关会改变无人值守模型调用与出网语义；立即扫描会写任务库并可能出网。
+    'setChatAiReplyEnabled', 'setChatAiReplyPersona', 'scanChatAiReplyNow',
+    'getChatAiReplyDefaultWebhook', 'saveChatAiReplyDefaultWebhook',
     // 该返回值包含可直接调用的入站地址令牌，只允许桌面端本机读取。
     'getMessageListWebhookInfo',
+    // 健康检查会读取已保存的下游地址并发起 GET；输入只能是本机记录/规则 id。
+    // 任务查询同样只允许使用记录里的地址和严格 job id，二者都只给桌面端。
+    'probeMessageListWebhook', 'queryMessageListWebhookJob',
   ],
   'D 任务回调投递：按用户配置的地址把触发内容发到外部平台': [
-    // 与 ClawBot 发消息同属「以用户身份对外产生后果」：一条调用就会把触发文本与图片
+    // 属于「以用户身份对外产生后果」：一条调用就会把触发文本与图片
     // POST 到用户填的回调地址。远程端（手机/普通浏览器会话）不该有能力触发这次出网；
     // 桌面「打开网页」交接会话走 fullAccess，与桌面端同权（见文件头例外）。
     'dispatchTaskCallback',
     // 局域网 Webhook 入站同样会把记录投递到用户配置的下游地址。
     'ingestMessageListWebhook',
   ],
-  'D ClawBot 写侧：能以用户身份发消息、能改绑定与实例配置': [
-    'createClawbotBindQr', 'unbindClawbot', 'createClawbotInstance',
-    'deleteClawbotInstance', 'setClawbotInstanceConfig', 'renameClawbotInstance', 'sendClawbotMessage',
-  ],
   'D 审计留痕的破坏性清理（问责记录不许被远程端抹掉）': [
     'clearOperationLog', 'clearPrivacyAudit',
-    // 2026-10-17：清除对话历史也是**不可恢复的破坏性清理**（删掉接入会话正文），
-    // 与上面两条同族 —— 远程端（手机浏览器）不该能抹掉本机的对话记录。
-    'clearClawbotMessages',
   ],
   'A 跨设备交接：语义未定，先拒（拿不准一律拒）': ['getHandoffReminds', 'syncHandoffTasks'],
 }

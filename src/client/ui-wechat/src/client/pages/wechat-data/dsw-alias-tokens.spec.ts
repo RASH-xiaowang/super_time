@@ -127,7 +127,8 @@ const bareViolations = dswColorLiterals
 const EXPECTED_FORWARD = new Map<string, string>([
   ['--dsw-alias-brand-primary', '--nm-brand'],
   ['--dsw-alias-link', '--nm-sky'],
-  ['--dsw-alias-button-primary-hover', '--nm-green'],
+  ['--dsw-alias-button-primary-fill', '--nm-brand-fill'],
+  ['--dsw-alias-button-primary-hover', '--nm-brand-fill-hover'],
   ['--dsw-alias-border-l1', '--nm-cyan-8'],
   ['--dsw-alias-border-l2', '--nm-cyan-12'],
   ['--dsw-alias-border-l3', '--nm-cyan-25'],

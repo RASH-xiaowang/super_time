@@ -1,21 +1,21 @@
 {
-  "createdAt": "2026-10-22 20:54",
+  "createdAt": "2026-10-28 19:45",
   "metrics": {
-    "remote_methods": 219,
+    "remote_methods": 233,
     "ipc_channels": 46,
-    "host_modules": 42,
-    "host_lines": 10787,
-    "query_files": 158,
-    "query_lines": 46545,
+    "host_modules": 44,
+    "host_lines": 11276,
+    "query_files": 164,
+    "query_lines": 49686,
     "retrieval_files": 15,
-    "remotes_files": 29,
-    "gateway_files": 20,
-    "ui_files": 602,
-    "ui_lines": 122079,
-    "panel_tsx": 171,
-    "nav_tabs": 39,
+    "remotes_files": 31,
+    "gateway_files": 21,
+    "ui_files": 658,
+    "ui_lines": 134787,
+    "panel_tsx": 187,
+    "nav_tabs": 41,
     "nav_hidden": 23,
     "outbound_sites": 20,
-    "bundle_kb": 2374
+    "bundle_kb": 2598
   }
 }

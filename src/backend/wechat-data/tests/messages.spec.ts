@@ -35,7 +35,7 @@ function enterpriseBuffer(wordingId: string): Buffer {
 }
 
 describe('queryMessages / queryNewMessages', () => {
-  it('pages newest-first across shards and increments by watermark', () => {
+  it('pages newest-first across shards and increments by watermark', async () => {
     const root = tempRoot()
     const talker = 'wxid_talker'
     const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
@@ -68,11 +68,60 @@ describe('queryMessages / queryNewMessages', () => {
     expect(second.messages[4]?.localId).toBe(5)
     expect(second.hasMore).toBe(false)
 
+    const anchored = queryMessages(root, talker, 3, undefined, undefined, undefined, 104)
+    expect(anchored.messages.map((m) => m.localId)).toEqual([102, 103, 104])
+    expect(anchored.hasMore).toBe(true)
+    expect(anchored.cursor).toBe(102)
+    expect(anchored.cursorLocalId).toBe(102)
+
+    const scoped = await queryMessageByServerId(root, '1104', talker)
+    expect(scoped.found).toBe(true)
+    expect(scoped.message?.localId).toBe(104)
+    expect(scoped.message?.displayText).toBe('msg 104')
+    expect((await queryMessageByServerId(root, '1104')).found).toBe(false)
+
     const delta = queryNewMessages(root, talker, 2, 10)
     // sort_seq > 2: 3,4,5,101..105 = 8 rows; cap 10 returns all.
     expect(delta.messages.length).toBe(8)
     expect(delta.messages[0]?.localId).toBe(3)
     expect(delta.messages[7]?.localId).toBe(105)
+  })
+
+  it('incremental pages advance through duplicate sort_seq with hasMore and a composite cursor', () => {
+    const root = tempRoot()
+    const talker = 'wxid_talker'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    const mkShard = (path: string, rows: Array<[number, number]>): void => {
+      makeDb(path, (db) => {
+        db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+        db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+        const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+        for (const [localId, sortSeq] of rows) {
+          ins.run(localId, sortSeq, 1, 0, 1700000000 + sortSeq, 1, `msg ${String(localId)}`, String(1000 + localId))
+        }
+        db.prepare('INSERT INTO Name2Id VALUES (?)').run('wxid_sender')
+      })
+    }
+    mkShard(join(root, 'message', 'message_0.db'), [[1, 5], [2, 5], [3, 5]])
+    mkShard(join(root, 'message', 'message_1.db'), [[101, 6], [102, 6]])
+
+    expect(queryNewMessages(root, talker, 5, 10).messages.map((m) => m.localId))
+      .toEqual([101, 102])
+
+    const first = queryNewMessages(root, talker, 4, 2)
+    expect(first.messages.map((m) => m.localId)).toEqual([1, 2])
+    expect(first.hasMore).toBe(true)
+    expect([first.cursor, first.cursorLocalId]).toEqual([5, 2])
+
+    const second = queryNewMessages(root, talker, first.cursor ?? -1, 2, undefined, first.cursorLocalId)
+    expect(second.messages.map((m) => m.localId)).toEqual([3, 101])
+    expect(second.hasMore).toBe(true)
+    expect([second.cursor, second.cursorLocalId]).toEqual([6, 101])
+
+    const third = queryNewMessages(root, talker, second.cursor ?? -1, 2, undefined, second.cursorLocalId)
+    expect(third.messages.map((m) => m.localId)).toEqual([102])
+    expect(third.hasMore).toBe(false)
+    expect([third.cursor, third.cursorLocalId]).toEqual([6, 102])
   })
 
   it('locates a payment message by 64-bit and text server ids', async () => {

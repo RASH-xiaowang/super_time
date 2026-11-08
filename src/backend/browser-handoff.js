@@ -47,7 +47,7 @@ function cardHtml(dark) {
     : 'linear-gradient(135deg, #0d7fa3, #18a7bd)';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;height:100%;overflow:hidden;background:transparent}
-    body{font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;user-select:none}
+    body{font-family:system-ui,sans-serif;user-select:none}
     .card{height:100%;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;
       border-radius:14px;background:${bg};color:${fg};border:1px solid ${border};
       box-shadow:0 12px 34px rgba(0,0,0,0.34)}
@@ -253,9 +253,11 @@ function createBrowserHandoff(deps) {
   deps.ipcMain.handle('browser-handoff:restore', deps.ipcTrust.wrap('browser-handoff:restore', async () => restore()));
   deps.ipcMain.handle('browser-handoff:state', deps.ipcTrust.wrap('browser-handoff:state', () => state()));
   // 卡片是另一个 webContents，入口不是主窗口的 file: URL ⇒ 不能走 ipcTrust；
-  // 只接受“当前卡片自己”的消息，别的窗口发来的一律忽略。
+  // 只接受“当前卡片自己的主 frame”的消息，别的窗口或子 frame 发来的一律忽略。
   deps.ipcMain.on('browser-handoff:restore', (event) => {
-    if (!card || event.sender !== card.webContents) return;
+    if (!card
+      || event.sender !== card.webContents
+      || event.senderFrame !== card.webContents.mainFrame) return;
     void restore();
   });
 

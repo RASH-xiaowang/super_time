@@ -8,9 +8,10 @@
  */
 import { deleteExportHistory, listExportHistory, pruneExportHistory } from '../query/export-history.ts'
 import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessagesStreamed } from '../query/export.ts'
-import { StreamControl } from '../query/zip.ts'
+import { canonicalChatReference, isMessageTableHash } from '../query/message-identity.ts'
 import { ExportHistoryDeleteResult, ExportHistoryPruneOptions, ExportHistoryQuery, ExportHistorySnapshot, ExportResult, ExportStatus, OperationCategory, OperationStatus } from '../types.ts'
 import type { StreamJob } from '../gateway.ts'
+import { isCancelMessage, type ManagedStreamControl } from '../gateway-jobs.ts'
 import type { Context } from '@deepseek-ai/cordis'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
@@ -22,8 +23,8 @@ export interface ExportRemoteCtx {
   ctx: () => Context
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   recordExport: (input: { kind: string; label?: string; format?: string; path: string; rows?: number; status: ExportStatus; error?: string; params?: unknown }) => void
-  streamControl: (jobId?: string) => StreamControl
-  finishStreamJob: (jobId: string, error?: string) => void
+  streamControl: (jobId?: string) => ManagedStreamControl
+  finishStreamJob: (jobId: string, error?: string, token?: symbol, canceled?: boolean) => void
   streamJobs: Map<string, StreamJob>
 }
 
@@ -31,6 +32,7 @@ export interface ExportRemoteCtx {
 const CSV_KIND_LABEL: Record<string, string> = {
   contacts: '通讯录',
   favorites: '收藏',
+  files: '文件',
   records: '记录',
   moments: '朋友圈',
   privacy: '隐私扫描',
@@ -57,11 +59,16 @@ const CSV_KIND_LABEL: Record<string, string> = {
  * @param run - 真正的导出调用，参数是那一份 StreamControl。
  * @returns 导出结果。
  */
-async function withStreamJob<T>(rc: ExportRemoteCtx, jobId: string, run: (ctrl: StreamControl) => Promise<T>): Promise<T> {
+async function withStreamJob<T>(rc: ExportRemoteCtx, jobId: string, run: (ctrl: ManagedStreamControl) => Promise<T>): Promise<T> {
+  const ctrl = rc.streamControl(jobId)
   try {
-    return await run(rc.streamControl(jobId))
-  } finally {
-    rc.finishStreamJob(jobId)
+    const result = await run(ctrl)
+    rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
+    return result
+  } catch (e) {
+    const message = (e as Error).message
+    rc.finishStreamJob(jobId, message, ctrl.jobToken, isCancelMessage(message))
+    throw e
   }
 }
 
@@ -74,7 +81,7 @@ async function withStreamJob<T>(rc: ExportRemoteCtx, jobId: string, run: (ctrl: 
  * @param message - 失败原因。
  */
 function failStreamJob(rc: ExportRemoteCtx, jobId: string, action: string, key: string, message: string): void {
-  rc.finishStreamJob(jobId, message)
+  // 在飞槽已由 withStreamJob/exportSessionMessagesIn 按本轮 token 结算；这里只记账。
   rc.op('export', action, 'fail', key, message)
 }
 
@@ -101,39 +108,55 @@ interface SessionExportOptions {
  */
 async function exportSessionMessagesIn(rc: ExportRemoteCtx, options: SessionExportOptions): Promise<ExportResult> {
   const jobId = rc.normalizeJobId(options?.jobId)
+  let normalizedOptions = options
+  let ctrl: ManagedStreamControl | undefined
   try {
+    ctrl = rc.streamControl(jobId)
     const dirs = rc.dirs()
+    const identity = canonicalChatReference(dirs.decrypted, options?.username ?? '', '导出会话')
+    normalizedOptions = {
+      ...options,
+      username: identity.username,
+      ...(options.sessionName === undefined
+        || options.sessionName.trim() === ''
+        || isMessageTableHash(options.sessionName)
+        ? { sessionName: identity.displayName }
+        : {}),
+    }
+    if (identity.error !== undefined) throw new Error(identity.error)
+    if (identity.username === '') throw new Error('未指定导出会话')
     const rawBase = rc.rawWechatBase(dirs.decrypted)
     const r = await exportSessionMessagesStreamed(dirs.decrypted, {
-      ...options,
+      ...normalizedOptions,
       decodedDir: dirs.decoded,
       ...(rawBase ? { wechatBaseDir: rawBase } : {}),
-      ...rc.streamControl(jobId),
+      ...ctrl,
     })
-    rc.finishStreamJob(jobId)
-    rc.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
+    rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
+    rc.op('export', 'export_session_messages', 'ok', normalizedOptions.username, `共 ${r.count} 条`)
     rc.recordExport({
       kind: 'session',
-      label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-      format: options.zip ? 'zip' : options.format,
+      label: normalizedOptions.sessionName ? `会话 · ${normalizedOptions.sessionName}` : `会话 · ${normalizedOptions.username}`,
+      format: normalizedOptions.zip ? 'zip' : normalizedOptions.format,
       path: r.path,
       rows: r.count,
       status: 'ok',
-      params: options,
+      params: normalizedOptions,
     })
     return r
   } catch (e) {
-    rc.finishStreamJob(jobId, (e as Error).message)
-    rc.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
-    const canceled = /cancel|取消|abort/i.test((e as Error).message)
+    const message = (e as Error).message
+    const canceled = isCancelMessage(message)
+    rc.finishStreamJob(jobId, message, ctrl?.jobToken, canceled)
+    rc.op('export', 'export_session_messages', 'fail', normalizedOptions.username, message)
     rc.recordExport({
       kind: 'session',
-      label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-      format: options.zip ? 'zip' : options.format,
+      label: normalizedOptions.sessionName ? `会话 · ${normalizedOptions.sessionName}` : `会话 · ${normalizedOptions.username}`,
+      format: normalizedOptions.zip ? 'zip' : normalizedOptions.format,
       path: '',
       status: canceled ? 'canceled' : 'fail',
-      error: canceled ? '' : (e as Error).message,
-      params: options,
+      error: canceled ? '' : message,
+      params: normalizedOptions,
     })
     throw e
   }
@@ -161,14 +184,16 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_annual_report', String(options.year), (e as Error).message)
+        const message = (e as Error).message
+        const canceled = isCancelMessage(message)
+        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_annual_report', String(options.year), message)
         rc.recordExport({
           kind: 'annual',
           label: `年度报告 · ${options.year} 年`,
           format: options.format,
           path: '',
-          status: 'fail',
-          error: (e as Error).message,
+          status: canceled ? 'canceled' : 'fail',
+          error: canceled ? '' : message,
           params: options,
         })
         throw e
@@ -177,16 +202,18 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
 
     async exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
       const jobId = normalizeJobId(options?.jobId)
+      let ctrl: ManagedStreamControl | undefined
       try {
+        ctrl = rc.streamControl(jobId)
         // M3：进度/取消三件套（jobId → 本地 onProgress + AbortController）在本层接上，
         // 参数原样透传给 query 层（`& StreamControl`）—— 取消后写盘走 temp+rename，
         // 所以「取消」不会留下半成品文件。
         const r = await exportAllSessions(rc.dirs().decrypted, {
           ...(options?.dir !== undefined ? { dir: options.dir } : {}),
           ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-          ...rc.streamControl(jobId),
+          ...ctrl,
         })
-        rc.finishStreamJob(jobId)
+        rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
         rc.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
         rc.recordExport({
           kind: 'all_sessions',
@@ -199,18 +226,19 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        rc.finishStreamJob(jobId, (e as Error).message)
-        rc.op('export', 'export_all_sessions', 'fail', '', (e as Error).message)
+        const message = (e as Error).message
+        const canceled = isCancelMessage(message)
+        rc.finishStreamJob(jobId, message, ctrl?.jobToken, canceled)
+        rc.op('export', 'export_all_sessions', 'fail', '', message)
         // 取消也是一种正常结局，与「失败」分开记（`path` 为空时并不落库，口径见
         // `exportSessionMessages` 的说明）。
-        const canceled = /cancel|取消|abort/i.test((e as Error).message)
         rc.recordExport({
           kind: 'all_sessions',
           label: '全部会话归档',
           format: 'zip',
           path: '',
           status: canceled ? 'canceled' : 'fail',
-          error: canceled ? '' : (e as Error).message,
+          error: canceled ? '' : message,
           params: options ?? {},
         })
         throw e
@@ -222,6 +250,7 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       const job = id ? rc.streamJobs.get(id) : undefined
       if (!job) return { ok: false, error: '没有该导出任务（jobId 不存在，或进程已重启）' }
       if (job.finished) return { ok: false, error: '该导出任务已结束' }
+      job.cancelRequested = true
       job.ctrl.abort()
       rc.op('export', 'cancel_export_job', 'ok', id)
       return { ok: true }
@@ -233,17 +262,21 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       done: number
       total: number
       finished: boolean
+      status: 'running' | 'ok' | 'error' | 'canceled'
+      cancelRequested: boolean
       error?: string
     } {
       const id = normalizeJobId(options?.jobId)
       const job = id ? rc.streamJobs.get(id) : undefined
-      if (!job) return { found: false, phase: '', done: 0, total: 0, finished: true }
+      if (!job) return { found: false, phase: '', done: 0, total: 0, finished: true, status: 'ok', cancelRequested: false }
       return {
         found: true,
         phase: job.progress?.phase ?? '',
         done: job.progress?.done ?? 0,
         total: job.progress?.total ?? 0,
         finished: job.finished,
+        status: job.status,
+        cancelRequested: job.cancelRequested === true,
         ...(job.error ? { error: job.error } : {}),
       }
     },
@@ -258,6 +291,9 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       month?: string
       mine?: string
       zip?: boolean
+      includeImages?: boolean
+      includeVideos?: boolean
+      includeLivePhotos?: boolean
       from?: number
       to?: number
       dir?: string
@@ -265,7 +301,9 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       jobId?: string
     }): Promise<ExportResult> {
       const jobId = normalizeJobId(options?.jobId)
+      let ctrl: ManagedStreamControl | undefined
       try {
+        ctrl = rc.streamControl(jobId)
         // 与 exportAllSessions 同一套接线：进度事件 + 取消令牌都由 streamControl 提供。
         const r = await exportMoments(rc.dirs().decrypted, {
           ...(options?.format !== undefined ? { format: options.format } : {}),
@@ -277,13 +315,16 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
           ...(options?.month !== undefined ? { month: options.month } : {}),
           ...(options?.mine !== undefined ? { mine: options.mine } : {}),
           ...(options?.zip !== undefined ? { zip: options.zip } : {}),
+          ...(options?.includeImages !== undefined ? { includeImages: options.includeImages } : {}),
+          ...(options?.includeVideos !== undefined ? { includeVideos: options.includeVideos } : {}),
+          ...(options?.includeLivePhotos !== undefined ? { includeLivePhotos: options.includeLivePhotos } : {}),
           ...(options?.from !== undefined ? { from: options.from } : {}),
           ...(options?.to !== undefined ? { to: options.to } : {}),
           ...(options?.dir !== undefined ? { dir: options.dir } : {}),
           ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-          ...rc.streamControl(jobId),
+          ...ctrl,
         })
-        rc.finishStreamJob(jobId)
+        rc.finishStreamJob(jobId, undefined, ctrl.jobToken)
         rc.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
         rc.recordExport({
           kind: 'moments',
@@ -296,16 +337,17 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        rc.finishStreamJob(jobId, (e as Error).message)
-        rc.op('export', 'export_moments', 'fail', options?.username ?? '', (e as Error).message)
-        const canceled = /cancel|取消|abort/i.test((e as Error).message)
+        const message = (e as Error).message
+        const canceled = isCancelMessage(message)
+        rc.finishStreamJob(jobId, message, ctrl?.jobToken, canceled)
+        rc.op('export', 'export_moments', 'fail', options?.username ?? '', message)
         rc.recordExport({
           kind: 'moments',
           label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
           format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
           path: '',
           status: canceled ? 'canceled' : 'fail',
-          error: canceled ? '' : (e as Error).message,
+          error: canceled ? '' : message,
           params: options ?? {},
         })
         throw e
@@ -328,14 +370,16 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_csv', options.kind, (e as Error).message)
+        const message = (e as Error).message
+        const canceled = isCancelMessage(message)
+        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_csv', options.kind, message)
         rc.recordExport({
           kind: options.kind,
           label,
           format: 'csv',
           path: '',
-          status: 'fail',
-          error: (e as Error).message,
+          status: canceled ? 'canceled' : 'fail',
+          error: canceled ? '' : message,
           params: options,
         })
         throw e

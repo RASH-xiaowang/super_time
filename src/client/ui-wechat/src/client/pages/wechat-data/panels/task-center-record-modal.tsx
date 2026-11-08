@@ -215,6 +215,7 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
   /** 当前展示的回调状态：本地重投结果优先（后端快照刷新到位后由容器传新记录覆盖）。 */
   const status: TaskTriggerCallbackStatus = result?.status ?? record?.callbackStatus ?? 'skipped'
   const statusMeta = callbackStatusMeta(status)
+  const unconfirmed = status === 'sent_unconfirmed'
 
   return (
     <div
@@ -317,15 +318,19 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
                   )}
                 </div>
                 {record.callbackError !== undefined && record.callbackError !== '' && (
-                  <div className={css.callbackError}>失败原因：{record.callbackError}</div>
+                  <div className={css.callbackError}>{unconfirmed ? '未确认说明' : '失败原因'}：{record.callbackError}</div>
                 )}
                 {notice !== null && <div className={kitCss.hint} role="status">{notice}</div>}
                 <div className={css.callbackRow}>
                   {/* 重投会把触发内容 POST 到用户配置的外部地址（后端 D 族，仅桌面）：手机端禁用。 */}
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => { void redo() }} {...desktopActionProps()}>
-                    {busy ? '投递中…' : '重新投递'}
+                    {busy ? '投递中…' : unconfirmed ? '核对后重新投递' : '重新投递'}
                   </Button>
-                  <span className={kitCss.textMeta}>只重发这一条记录，不会重新触发任务。</span>
+                  <span className={kitCss.textMeta}>
+                    {unconfirmed
+                      ? '上次结果为“已发送·未确认”。请先在厂商控制台核对，避免重复触发。'
+                      : '只重发这一条记录，不会重新触发任务。'}
+                  </span>
                 </div>
               </div>
             </>

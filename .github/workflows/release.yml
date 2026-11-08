@@ -120,23 +120,26 @@ jobs:
       - name: tag 与 package.json 版本必须一致
         shell: pwsh
         run: |
-          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $ErrorActionPreference = 'Stop'
+          $tag = [string]$env:GITHUB_REF_NAME
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw "GITHUB_REF_NAME 为空，无法校验版本" }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "非法发布 tag：'$tag'。只接受 v<major>.<minor>.<patch> 及可选预发布后缀。"
+          }
+          $ver = $Matches[1]
           $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ($tag -ne $pkg) {
-            Write-Error "tag '${{ github.ref_name }}' 与 package.json 的版本 '$pkg' 不一致 —— 更新将永远不会被触发"
-            exit 1
+          if ($ver -ne $pkg) {
+            throw "tag '$tag' 与 package.json 的版本 '$pkg' 不一致 —— 更新将永远不会被触发"
           }
           Write-Host "版本一致：$tag"
 
       # `npm run dist` = 先 build:all 再 electron-builder --win nsis。
-      # `-- --publish always` 把参数追加到脚本末尾，最终是
-      # `npm run build:all && electron-builder --win nsis --publish always`。
-      # publish 配置里的 releaseType 是 release（不是默认的 draft）：
-      # draft 发布对 electron-updater **不可见**，会让更新静默失效。
+      # 正式构建使用 `--publish never`：先在本地产出并签名，内容/签名/更新摘要门禁
+      # 全部通过后，再由下面的 PowerShell 步骤上传为草稿并在验收后公开。
       # ── 2026-10-09 阶段 2：第三档（打包态）检查，**必须在发布之前** ──────────────
       #
-      # 为什么插在发布前：下一步就是 `--publish always`，一步到位发布。
-      # 打包态检查放它后面 ⇒ 失败时版本**已经发出去了**，只能再发一个补丁号。
+      # 为什么插在正式构建前：打包态检查一旦放到签名构建之后，失败时安装包已经生成；
+      # 如果同时误用自动发布，版本甚至可能已经对外可见。
       # 而打包态恰恰是最容易「源码态绿、打包后坏」的一类（asar、resources 路径
       # 只在打包态才成立，源码态根本走不到那段代码）。
       #
@@ -169,12 +172,37 @@ jobs:
       - name: 前端 shim 与源码一致
         run: npm run check:shim
 
-      - name: 打包并发布到 Releases
-        run: npm run dist -- --publish always
+      - name: 检查发布签名凭据
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          SUPERTIME_WIN_PUBLISHER_NAME: ${{ secrets.WINDOWS_CERT_PUBLISHER_NAME }}
+        run: |
+          $missing = @('CSC_LINK', 'CSC_KEY_PASSWORD', 'SUPERTIME_WIN_PUBLISHER_NAME') |
+            Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing.Count -gt 0) {
+            throw "缺少发布签名 secret：$($missing -join ', ')。未签名包禁止发布。"
+          }
 
-      # ── 发布验收：Release 必须唯一且可见、三个资产必须齐、latest.yml 的版本必须对；缺了就从 dist/ 补传 ──
+      # 正式包必须签名后才允许进入上传步骤；--publish never 保证门禁失败时
+      # Release 上不会先出现一个未验证的安装包。
+      - name: 构建并签名发行包（不发布）
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          SUPERTIME_WIN_PUBLISHER_NAME: ${{ secrets.WINDOWS_CERT_PUBLISHER_NAME }}
+        run: |
+          npm run dist -- --publish never --config.forceCodeSigning=true "--config.win.signtoolOptions.publisherName=$env:SUPERTIME_WIN_PUBLISHER_NAME"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 签名/更新元数据/产物泄露门禁
+        shell: pwsh
+        run: |
+          npm run security:artifacts && npm run security:artifacts:packaged && npm run security:release
+
+      # ── 发布验收：Release 必须唯一且可见、三个资产必须齐、latest.yml 的版本/大小/SHA-512 必须对 ──
       #
       # 为什么必须有这一步（2026-09-21 实测的三种**静默成功 / 假红**）：
       #   ① 资产被截断：v1.0.6 首次由 CI 自动发布时，electron-builder 打印了「uploading …exe」
@@ -184,18 +212,40 @@ jobs:
       #      而 `/releases/latest` 只认**较新**的那个 ⇒ keeper 必须按 created_at 取最新。
       #   ③ 草稿态：删掉再重推 tag 时 GitHub 会把对应 Release 变成 **draft** —— 草稿既不出现在
       #      `/releases/latest`，也会让 `/releases/tags/<tag>` 返回 404（实测踩过，直接把这一步判红）。
-      #      所以这里一律**从发布列表里按 tag_name 找**，找到草稿就发布它，一个都没有就新建。
-      # 然后：缺的资产用**同一次构建**的 dist/ 产物补传，最后回读 latest.yml 校验版本号。
+      #      所以这里一律**从发布列表里按 tag_name 找**，先保持/转为草稿，一个都没有就新建草稿。
+      # 然后：资产用**同一次构建**的 dist/ 产物覆盖上传，回读 latest.yml 校验版本、大小与
+      # SHA-512，全部通过后才把草稿公开。
       # 任一条不满足即失败（宁可红，不要骗过自己的绿）。
-      - name: 验收发布资产（收敛重复 / 发布草稿 / 缺则补传）+ 回读 latest.yml
+      - name: 验收发布资产（收敛重复 / 发布草稿 / 覆盖上传）+ 回读 latest.yml
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = '${{ github.ref_name }}'
-          $ver = $tag.TrimStart('v')
-          $repo = '${{ github.repository }}'
+          $ErrorActionPreference = 'Stop'
+          $tag = [string]$env:GITHUB_REF_NAME
+          $repo = [string]$env:GITHUB_REPOSITORY
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "非法发布 tag：'$tag'。只接受 v<major>.<minor>.<patch> 及可选预发布后缀。"
+          }
+          $ver = $Matches[1]
+          if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw "GITHUB_REPOSITORY 格式异常：'$repo'"
+          }
           $hdr = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+
+          function Get-Sha512Base64File([string]$FilePath) {
+            $stream = [System.IO.File]::OpenRead($FilePath)
+            try {
+              $sha = [System.Security.Cryptography.SHA512]::Create()
+              try {
+                return [Convert]::ToBase64String($sha.ComputeHash($stream))
+              } finally {
+                $sha.Dispose()
+              }
+            } finally {
+              $stream.Dispose()
+            }
+          }
 
           # ① 从发布列表里解析出本 tag 的 Release（不能只用 `/releases/tags/{tag}`：草稿会 404）。
           $all = @(Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases?per_page=100")
@@ -204,9 +254,9 @@ jobs:
           if ($all.Count -eq 1 -and $all[0] -is [array]) { $all = @($all[0]) }
           $dupes = @($all | Where-Object { $_.tag_name -eq $tag })
           if ($dupes.Count -eq 0) {
-            Write-Host "tag $tag 下没有任何 Release —— 新建一个（draft=false）"
+            Write-Host "tag $tag 下没有任何 Release —— 新建一个草稿，上传验收后再公开"
             $rel = Invoke-RestMethod -Method Post -Headers $hdr -ContentType 'application/json' `
-              -Body (@{ tag_name = $tag; name = "Super Time $ver"; draft = $false; prerelease = $false } | ConvertTo-Json) `
+              -Body (@{ tag_name = $tag; name = "Super Time $ver"; draft = $true; prerelease = $false } | ConvertTo-Json) `
               -Uri "https://api.github.com/repos/$repo/releases"
           } else {
             $rel = @($dupes | Sort-Object -Property created_at -Descending)[0]
@@ -219,39 +269,84 @@ jobs:
                 }
               }
             }
-            if ($rel.draft) {
-              Write-Host "该 Release 是草稿（draft 对客户端不可见）—— 发布它 id=$($rel.id)"
+            if (-not $rel.draft) {
+              Write-Host "先将现有 Release 转为草稿，避免删除/重传期间客户端看到不完整资产 id=$($rel.id)"
               $rel = Invoke-RestMethod -Method Patch -Headers $hdr -ContentType 'application/json' `
-                -Body (@{ draft = $false; tag_name = $tag } | ConvertTo-Json) `
+                -Body (@{ draft = $true; tag_name = $tag } | ConvertTo-Json) `
                 -Uri "https://api.github.com/repos/$repo/releases/$($rel.id)"
             }
           }
           # 重新取一次，拿到收敛后的资产清单
           $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/$($rel.id)"
 
-          # ② 缺资产则用同一次构建的 dist/ 产物补传（三份一起，避免 exe 与 blockmap 不同源）
+          # ② 每次都用同一次构建的 dist/ 产物覆盖上传（三份一起，避免 exe 与 blockmap 不同源）。
+          #    旧脚本只在“缺资产”时补传，重跑同一 tag 会把上一轮的完整资产误当成这一轮。
           $want = @('latest.yml', "Super-Time-Setup-$ver.exe", "Super-Time-Setup-$ver.exe.blockmap")
           $have = @($rel.assets | ForEach-Object { $_.name })
-          $missing = @($want | Where-Object { $have -notcontains $_ })
-          if ($missing.Count -gt 0) {
-            Write-Host "缺资产：$($missing -join ', ') —— 补传 dist/ 产物"
-            foreach ($a in $rel.assets) {
-              Invoke-RestMethod -Method Delete -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/assets/$($a.id)" | Out-Null
-            }
-            foreach ($f in Get-ChildItem dist -File | Where-Object { $_.Name -like '*.exe' -or $_.Name -like '*.blockmap' -or $_.Name -eq 'latest.yml' }) {
-              $name = $f.Name -replace ' ', '-'
-              $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$name"
-              Invoke-RestMethod -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'Content-Type' = 'application/octet-stream' } -InFile $f.FullName -Uri $url | Out-Null
-              Write-Host "已补传：$name（$([math]::Round($f.Length / 1MB, 1)) MB）"
-            }
-            $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/$($rel.id)"
-            $have = @($rel.assets | ForEach-Object { $_.name })
+          $files = @(
+            (Join-Path dist "Super Time Setup $ver.exe"),
+            (Join-Path dist "Super Time Setup $ver.exe.blockmap"),
+            (Join-Path dist 'latest.yml')
+          )
+          foreach ($f in $files) {
+            if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { Write-Error "本次构建缺少发布文件：$f"; exit 1 }
           }
+          foreach ($a in $rel.assets) {
+            Invoke-RestMethod -Method Delete -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/assets/$($a.id)" | Out-Null
+          }
+          foreach ($f in $files) {
+            $name = (Split-Path $f -Leaf) -replace ' ', '-'
+            $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$name"
+            Invoke-RestMethod -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'Content-Type' = 'application/octet-stream' } -InFile $f -Uri $url | Out-Null
+            $sizeMb = [math]::Round((Get-Item -LiteralPath $f).Length / 1MB, 1)
+            Write-Host "已上传：$name（$sizeMb MB）"
+          }
+          $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/$($rel.id)"
+          $have = @($rel.assets | ForEach-Object { $_.name })
 
           # ③ 断言 + 回读 latest.yml（客户端判断「有没有新版本」的唯一依据）
           foreach ($w in $want) {
             if ($have -notcontains $w) { Write-Error "发布不完整：Release $tag 上仍缺 $w"; exit 1 }
           }
+          # 资产大小必须与本次 dist/ 完全一致：只核对“名字存在”会放过截断上传。
+          foreach ($f in $files) {
+            $name = (Split-Path $f -Leaf) -replace ' ', '-'
+            $asset = $rel.assets | Where-Object { $_.name -eq $name }
+            $localSize = (Get-Item -LiteralPath $f).Length
+            if ($null -eq $asset -or [long]$asset.size -ne [long]$localSize) {
+              Write-Error "发布资产大小不一致：$name，期望 $localSize，远端 $($asset.size)"
+              exit 1
+            }
+          }
+
+          # 仅比较两份 latest.yml 的 sha512 字段，只能证明元数据被原样回读，不能证明
+          # 远端 exe 的字节正确。必须重新下载 GitHub 上的实际安装包并复算 SHA-512，
+          # 才能发现大小相同但内容被替换/损坏的上传。
+          $installerPath = $files[0]
+          $installerName = (Split-Path $installerPath -Leaf) -replace ' ', '-'
+          $installerAsset = $rel.assets | Where-Object { $_.name -eq $installerName }
+          if ($null -eq $installerAsset) {
+            Write-Error "找不到远端安装包资产：$installerName"
+            exit 1
+          }
+          $localInstallerSha = Get-Sha512Base64File $installerPath
+          $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("supertime-release-" + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+          try {
+            $remoteInstallerPath = Join-Path $tempDir $installerName
+            Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $installerAsset.url -OutFile $remoteInstallerPath
+            $remoteInstallerSha = Get-Sha512Base64File $remoteInstallerPath
+            $remoteInstallerSize = (Get-Item -LiteralPath $remoteInstallerPath).Length
+            if ($remoteInstallerSize -ne (Get-Item -LiteralPath $installerPath).Length) {
+              throw "远端安装包下载后大小不一致：期望 $((Get-Item -LiteralPath $installerPath).Length)，实际 $remoteInstallerSize"
+            }
+            if ($localInstallerSha -eq '' -or $remoteInstallerSha -ne $localInstallerSha) {
+              throw "远端安装包 SHA-512 与本地构建不一致（本地 '$localInstallerSha'，远端 '$remoteInstallerSha'）"
+            }
+          } finally {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
           $asset = $rel.assets | Where-Object { $_.name -eq 'latest.yml' }
           $content = (Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $asset.url).Content
           # PowerShell 7 在 application/octet-stream 下把 Content 给成 byte[]（正则匹配会**总是失败**，
@@ -259,4 +354,14 @@ jobs:
           if ($content -is [byte[]]) { $content = [System.Text.Encoding]::UTF8.GetString($content) }
           $yml = [string]$content
           if ($yml -notmatch "(?m)^version:\s*$ver\s*$") { Write-Error "latest.yml 里的版本不是 $ver（回读内容前 80 字符：$($yml.Substring(0, [Math]::Min(80, $yml.Length)))）"; exit 1 }
-          Write-Host "发布验收通过：$ver（3 个资产齐备、Release 唯一、latest.yml 版本一致）"
+          $localYml = [string](Get-Content (Join-Path dist 'latest.yml') -Raw)
+          $localSha = [regex]::Match($localYml, '(?m)^sha512:\s*([A-Za-z0-9+/=]+)\s*$').Groups[1].Value
+          $remoteSha = [regex]::Match($yml, '(?m)^sha512:\s*([A-Za-z0-9+/=]+)\s*$').Groups[1].Value
+          if ($localSha -eq '' -or $localSha -ne $localInstallerSha -or $remoteSha -ne $localInstallerSha) {
+            throw "latest.yml 的 sha512 与安装包实算值不一致（本地 yml '$localSha'，远端 yml '$remoteSha'，安装包 '$localInstallerSha'）"
+          }
+          # 只有资产、大小、版本、远端安装包实算摘要和更新元数据全部对上，才把草稿公开。
+          $rel = Invoke-RestMethod -Method Patch -Headers $hdr -ContentType 'application/json' `
+            -Body (@{ draft = $false; prerelease = $false; tag_name = $tag } | ConvertTo-Json) `
+            -Uri "https://api.github.com/repos/$repo/releases/$($rel.id)"
+          Write-Host "发布验收通过：$ver（3 个资产齐备、远端安装包 SHA-512 实算一致、Release 已公开）"

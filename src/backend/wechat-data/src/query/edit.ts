@@ -5,9 +5,9 @@
  */
 import * as zlib from 'node:zlib'
 import { existsSync, readdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { withDb, withWritableDb } from './db-open.ts'
+import { messageTableName, resolveTalkerUsername } from './message-identity.ts'
 
 /** Which field the editor is changing. `text` is guarded to plain text rows only. */
 export type MessageEditMode = 'text' | 'source'
@@ -20,7 +20,7 @@ const zstdApi = zlib as unknown as {
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  return messageTableName(username)
 }
 
 /** Message shard DB files under <decrypted>/message. */
@@ -93,18 +93,28 @@ export function listEditedMessages(decryptedDir: string, sessionId?: string): { 
   const p = editDbPath(decryptedDir)
   if (!existsSync(p)) return { items: [], total: 0 }
   try {
-    const rows = withDb(p, (db) => sessionId
-      ? db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC').all(sessionId)
+    const requested = sessionId?.trim() ?? ''
+    const canonical = requested ? resolveTalkerUsername(decryptedDir, requested) : ''
+    const rows = withDb(p, (db) => requested
+      ? (canonical && canonical !== requested
+          ? db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id IN (?, ?) ORDER BY last_edited_at DESC').all(requested, canonical)
+          : db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC').all(canonical || requested))
       : db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits ORDER BY last_edited_at DESC LIMIT 500').all()) as Array<Record<string, unknown>>
-    const items = rows.map(r => ({
-      sessionId: cellStr(r['session_id'] ?? ''),
-      db: cellStr(r['db'] ?? ''),
-      tableName: cellStr(r['table_name'] ?? ''),
-      localId: Number(r['local_id'] ?? 0),
-      lastEditedAt: Number(r['last_edited_at'] ?? 0),
-      editCount: Number(r['edit_count'] ?? 0),
-      originalMsgJson: cellStr(r['original_msg_json'] ?? ''),
-    }))
+    const items = rows.map((r) => {
+      const storedSessionId = cellStr(r['session_id'] ?? '').trim()
+      return {
+        // History rows written before the identity fix may contain the raw
+        // Msg_<md5> suffix. Return the canonical username so "reset" works and
+        // the history dialog never exposes the physical key.
+        sessionId: storedSessionId ? resolveTalkerUsername(decryptedDir, storedSessionId) : '',
+        db: cellStr(r['db'] ?? ''),
+        tableName: cellStr(r['table_name'] ?? ''),
+        localId: Number(r['local_id'] ?? 0),
+        lastEditedAt: Number(r['last_edited_at'] ?? 0),
+        editCount: Number(r['edit_count'] ?? 0),
+        originalMsgJson: cellStr(r['original_msg_json'] ?? ''),
+      }
+    })
     return { items, total: items.length }
   } catch {
     return { items: [], total: 0 }
@@ -177,7 +187,9 @@ export function editChatMessage(
   mode: MessageEditMode = 'text',
 ): { ok: boolean; error?: string; localId?: number } {
   if (mode !== 'text' && mode !== 'source') return { ok: false, error: '不支持的消息修改模式' }
-  const table = msgTableName(username)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return { ok: false, error: '无法解析会话身份' }
+  const table = msgTableName(canonical)
   const shardFile = findShardFile(decryptedDir, table, localId)
   if (!shardFile) return { ok: false, error: '未找到消息分库或目标消息' }
   try {
@@ -213,11 +225,11 @@ export function editChatMessage(
 
       withWritableDb(editDbPath(decryptedDir), (store) => {
         store.exec(EDIT_SCHEMA)
-        const existing = store.prepare('SELECT original_msg_json, edited_cols_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId) as { original_msg_json?: string; edited_cols_json?: string } | undefined
+        const existing = store.prepare('SELECT original_msg_json, edited_cols_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(canonical, localId) as { original_msg_json?: string; edited_cols_json?: string } | undefined
         const ts = Date.now()
         if (!existing) {
           store.prepare('INSERT INTO message_edits(account, session_id, db, table_name, local_id, first_edited_at, last_edited_at, edit_count, original_msg_json, edited_cols_json) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
-            .run(username, username, 'message', table, localId, ts, ts, JSON.stringify(original), JSON.stringify(editedCols))
+            .run(canonical, canonical, 'message', table, localId, ts, ts, JSON.stringify(original), JSON.stringify(editedCols))
           return
         }
 
@@ -235,7 +247,7 @@ export function editChatMessage(
         } catch { /* use current columns */ }
         const mergedCols = [...new Set([...previousCols, ...editedCols])]
         store.prepare('UPDATE message_edits SET last_edited_at = ?, edit_count = edit_count + 1, original_msg_json = ?, edited_cols_json = ? WHERE session_id = ? AND local_id = ?')
-          .run(ts, JSON.stringify(previous), JSON.stringify(mergedCols), username, localId)
+          .run(ts, JSON.stringify(previous), JSON.stringify(mergedCols), canonical, localId)
       })
 
       const assignments = ['"' + contentCol + '" = ?']
@@ -267,12 +279,17 @@ export function editChatMessage(
 export function resetEditedMessage(decryptedDir: string, username: string, localId: number): { ok: boolean; error?: string } {
   const p = editDbPath(decryptedDir)
   if (!existsSync(p)) return { ok: false, error: '编辑记录库不存在' }
+  const requested = username.trim()
+  const canonical = resolveTalkerUsername(decryptedDir, requested)
+  if (!canonical) return { ok: false, error: '无法解析会话身份' }
   try {
-    const rec = withDb(p, (store) => store.prepare('SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId) as { db?: string; table_name?: string; original_msg_json?: string } | undefined)
+    const rec = withDb(p, (store) => store.prepare(
+      'SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id IN (?, ?) AND local_id = ? ORDER BY CASE WHEN session_id = ? THEN 0 ELSE 1 END LIMIT 1',
+    ).get(requested, canonical, localId, canonical) as { db?: string; table_name?: string; original_msg_json?: string } | undefined)
     if (!rec) return { ok: false, error: '无编辑记录' }
     let original: Record<string, unknown> = {}
     try { original = JSON.parse(rec.original_msg_json ?? '{}') as Record<string, unknown> } catch { /* keep empty */ }
-    const table = rec.table_name ?? msgTableName(username)
+    const table = rec.table_name ?? msgTableName(canonical)
     const shardFile = findShardFile(decryptedDir, table, localId)
     if (!shardFile) return { ok: false, error: '未找到消息分库' }
     withWritableDb(shardFile, (db) => {
@@ -283,7 +300,7 @@ export function resetEditedMessage(decryptedDir: string, username: string, local
       }
     })
     withWritableDb(p, (store) => {
-      store.prepare('DELETE FROM message_edits WHERE session_id = ? AND local_id = ?').run(username, localId)
+      store.prepare('DELETE FROM message_edits WHERE session_id IN (?, ?) AND local_id = ?').run(requested, canonical, localId)
     })
     return { ok: true }
   } catch (e) {

@@ -8,7 +8,14 @@
 import { collectDayMessagesAsync, collectPeriodMessages, collectPeriodMessagesAsync } from '../query/daily-summary.ts'
 import { buildSummaryPrompt, type SummaryFormat } from '../query/summary-prompt.ts'
 import { yieldToLoop } from '../query/search-build.ts'
-import { buildReplyPrompt, collectReplyContext, collectReplyKbSnippets, parseReplyCandidates } from '../query/reply-suggest.ts'
+import {
+  buildReplyPrompt,
+  collectReplyContext,
+  parseReplyCandidates,
+  REPLY_SUGGEST_CONTEXT_LIMIT,
+} from '../query/reply-suggest.ts'
+import { collectReplyKbSnippetsHybrid } from '../query/reply-kb.ts'
+import type { EmbedFn } from '../query/vector-math.ts'
 import { deleteSummaryRecord as delRec, saveSummaryRecord as saveRec } from '../query/summary-tasks.ts'
 import { DailySummaryResult, OperationCategory, OperationStatus, PeriodSummaryResult, ReplySuggestResult, SummaryTaskMutationResult, SummaryTaskRunResult } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -92,6 +99,8 @@ export interface createSummaryRecordRemotesInputs {
   selfUsername: () => string
   getSchedBusy: () => boolean
   setSchedBusy: (v: boolean) => void
+  makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined
+  kbModel: (kbId: number, role: 'embed') => { model: string }
 }
 
 export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs) {
@@ -256,26 +265,35 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         return { ok: false, error: '分析对象无效，请重新选择消息' }
       }
       const targetLocalId = rawTarget === undefined ? undefined : Math.trunc(Number(rawTarget))
-      const { lines, latestPeer, count, targetFound } = collectReplyContext(
+      const { lines, latestPeer, count, targetFound, targetLine } = collectReplyContext(
         rc.dirs().decrypted,
         talker,
         rc.selfUsername(),
-        20,
+        REPLY_SUGGEST_CONTEXT_LIMIT,
         targetLocalId,
       )
       if (targetFound === false) return { ok: false, error: '这条消息已不在当前会话中，请重新选择' }
       if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
       const kbId = Math.trunc(Number(options.kbId ?? 0))
-      const snippets = kbId > 0
-        ? collectReplyKbSnippets(rc.dirs().decrypted, kbId, latestPeer || lines[lines.length - 1] || '', 3)
-        : []
+      const kb = kbId > 0
+        ? await collectReplyKbSnippetsHybrid({
+            decryptedDir: rc.dirs().decrypted,
+            kbId,
+            lines,
+            latestPeer,
+            topK: 3,
+            makeEmbedFn: (model, feature) => rc.makeEmbedFn(model, feature),
+            kbModel: (id, role) => rc.kbModel(id, role),
+          })
+        : { snippets: [], note: '' }
+      const snippets = kb.snippets
       const llm = rc.ctx().llm
       const defaultModel = (rc.ctx() as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
       }).agentDefaultModel
       const sel = defaultModel?.currentSelection()
       if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
-      const prompt = buildReplyPrompt(lines, snippets, want)
+      const prompt = buildReplyPrompt(lines, snippets, want, targetLine)
       const [gated] = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
       const userMsg = createUserMessage({
         content: [{ type: 'text', text: gated ?? prompt }],
@@ -306,8 +324,12 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`,
       )
       const base: ReplySuggestResult = { ok: true, replies, messageCount: count, kbSnippetCount: snippets.length }
+      const kbDetail = kb.note !== '' && kb.note !== '知识库没有匹配的内容' ? `（${kb.note}）` : ''
       return snippets.length === 0 && kbId > 0
-        ? { ...base, degraded: '知识库里没有相关内容，这次只用了会话上下文' }
+        ? {
+            ...base,
+            degraded: `知识库里没有相关内容，这次只用了会话上下文${kbDetail}`,
+          }
         : base
     },
 

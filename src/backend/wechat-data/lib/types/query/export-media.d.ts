@@ -4,6 +4,14 @@ import type { ZipFileWriter } from './zip.ts';
 export type ExportMediaKind = 'image' | 'sticker' | 'video' | 'voice' | 'file';
 export type ExportMediaStatus = 'ok' | 'missing' | 'error';
 export type ExportMediaRole = 'content' | 'cover';
+/**
+ * How faithful an archived resource is to the source stored by WeChat.
+ *
+ * `original` means the bytes came from a non-thumbnail source file and were
+ * copied without transcoding. `thumbnail` is deliberately separate: callers
+ * must never present a `.t.` cache entry as an original image.
+ */
+export type ExportMediaQuality = 'original' | 'thumbnail' | 'preview' | 'unknown';
 /** A resource reference used by formatters and the ZIP manifest. */
 export interface ExportMediaEntry {
     id: string;
@@ -21,6 +29,9 @@ export interface ExportMediaEntry {
     sourceName?: string;
     mime?: string;
     size?: number;
+    quality?: ExportMediaQuality;
+    /** The only local candidate was WeChat's thumbnail tier; it was not written. */
+    thumbnailOnly?: boolean;
     error?: string;
     recordIndex?: number;
 }

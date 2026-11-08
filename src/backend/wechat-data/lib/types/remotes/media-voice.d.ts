@@ -16,6 +16,7 @@ export declare function createVoiceVideoRemotes(rc: VoiceVideoRemoteCtx): {
     getVoiceInfo: (options: {
         username: string;
         localId: number;
+        svrId?: string;
     }) => VoiceInfoResult;
     getVoiceDataUrl: (options: {
         username?: string;

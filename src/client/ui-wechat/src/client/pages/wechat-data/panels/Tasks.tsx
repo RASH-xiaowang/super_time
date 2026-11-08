@@ -11,6 +11,8 @@ import { useTransientNotice } from './hooks.tsx'
 import css from './tasks.module.css'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
+import { useConfirm } from '../ui/confirm.tsx'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 function fmtDue(ts?: number): string {
   if (!ts) return ''
@@ -29,7 +31,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
      `shouldCache` 保证**读失败的结果不进缓存**（N1：把"读不到"的空列表写进缓存，
      下次打开会先渲染「暂无待办」，而缓存看不出是读失败还是确实没有）。 */
   const fetchTasks = useCallback(() => apiListTasks(), [])
-  const { data: taskData, reload } = useFreshData<Awaited<ReturnType<typeof apiListTasks>>>('tasks', fetchTasks, { shouldCache: (d) => !d.readError, liveRefresh: true })
+  const { data: taskData, reload, loading: tasksLoading } = useFreshData<Awaited<ReturnType<typeof apiListTasks>>>('tasks', fetchTasks, { shouldCache: (d) => !d.readError, liveRefresh: true })
   const tasks = taskData?.items ?? []
   const readError = taskData?.readError ?? null
   /** 原 `load` 的调用点（新增/提取/同步/删除后重查）全部保留语义：它就是 hook 的 reload。 */
@@ -42,12 +44,17 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
    * 用户会照「暂无待办」去排查，方向全错（那正是 N1 要修的那件事）。
    */
   const [manualTitle, setManualTitle] = useState('')
-  const [loading, setLoading] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [addingManual, setAddingManual] = useState(false)
+  const [busyTaskId, setBusyTaskId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const confirm = useConfirm()
   // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice()
+  const closeMore = useCallback((): void => { setMoreOpen(false) }, [])
+  const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, closeMore)
 
 
 
@@ -85,7 +92,12 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
 
   const addManual = useCallback(async (): Promise<void> => {
     const title = manualTitle.trim()
-    if (!title) return
+    if (!title) {
+      notify('请输入待办内容')
+      return
+    }
+    setAddingManual(true)
+    setError(null)
     try {
       await apiAddTask({ title })
       setManualTitle('')
@@ -93,27 +105,46 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setAddingManual(false)
     }
   }, [manualTitle, load, notify])
 
   const toggle = useCallback(async (t: WechatTask): Promise<void> => {
     const next = t.status === 'open' ? 'done' : 'open'
+    setBusyTaskId(t.id)
+    setError(null)
     try {
       await apiSetTaskStatus({ id: t.id, status: next })
+      notify(next === 'done' ? '已标记完成' : '已重新打开')
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusyTaskId(null)
     }
-  }, [load])
+  }, [load, notify])
 
   const remove = useCallback(async (id: number): Promise<void> => {
+    const ok = await confirm({
+      title: '删除这条待办？',
+      message: '删除后不可恢复；不会删除来源会话里的原始消息。',
+      tone: 'danger',
+      confirmText: '删除',
+    })
+    if (!ok) return
+    setBusyTaskId(id)
+    setError(null)
     try {
       await apiDeleteTask({ id })
+      notify('已删除待办')
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusyTaskId(null)
     }
-  }, [load])
+  }, [confirm, load, notify])
 
   return (
     <div className={kitCss.panelShell}>
@@ -125,20 +156,32 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
             <Button variant="primary" onClick={() => { void extract() }} disabled={extracting}>
               {extracting ? '提取中…' : '提取待办'}
             </Button>
-            <details className={css.more}>
-              <summary className={css.moreSummary}>更多</summary>
-              <div className={css.moreMenu}>
+            <div className={css.more} ref={moreRootRef}>
+              <button
+                ref={moreTriggerRef}
+                type="button"
+                className={css.moreSummary}
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                onClick={() => { setMoreOpen(value => !value) }}
+              >
+                更多
+              </button>
+              {moreOpen && (
+              <div className={css.moreMenu} role="menu" aria-label="待办更多操作">
                 <button
                   type="button"
+                  role="menuitem"
                   className={css.moreItem}
                   disabled={syncing}
-                  onClick={(e) => { (e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open'); void syncHandoff() }}
+                  onClick={() => { closeMore(); void syncHandoff() }}
                   {...desktopActionProps()}
                 >
                   {syncing ? '导入中…' : '导入微信原生提醒'}
                 </button>
               </div>
-            </details>
+              )}
+            </div>
           </>
         )}
       />
@@ -152,10 +195,21 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
               placeholder="手动添加待办（回车确认）"
               value={manualTitle}
               onChange={(e) => { setManualTitle(e.target.value) }}
-              onKeyDown={(e) => { if (e.key === 'Enter') void addManual() }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                if (manualTitle.trim()) void addManual()
+                else notify('请输入待办内容')
+              }}
               aria-label="手动添加待办"
             />
-            <Button variant="pill" onClick={() => { void addManual() }} disabled={!manualTitle.trim()}>添加</Button>
+            <Button
+              variant="pill"
+              onClick={() => { void addManual() }}
+              disabled={!manualTitle.trim() || addingManual}
+              title={!manualTitle.trim() ? '请先输入待办内容' : undefined}
+            >
+              {addingManual ? '添加中…' : '添加'}
+            </Button>
           </>
         )}
       />
@@ -168,16 +222,31 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
           待办库读取失败（不是「暂无待办」）：{readError}
         </div>
       )}
-      {loading && <LoadingState variant="compact" label="加载中…" />}
+      {tasksLoading && <LoadingState variant="compact" label="加载中…" />}
 
       {/* 卡片撑满面板剩余高度（2026-10-18「其他面板的卡片要撑满屏幕」）：
           空态也放进卡里，不再让页面下半截裸空。 */}
       <div className={css.fill}>
         <Card flush>
-          {!loading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" desc="点右上角「提取待办」从最近 7 天聊天里找，或在下面手动添加一条" />}
+          {!tasksLoading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" desc="点右上角「提取待办」从最近 7 天聊天里找，或在上方输入框手动添加一条" />}
           <div className={css.list}>
             {tasks.map(t => (
               <div key={t.id} className={css.taskRow} data-status={t.status}>
+                <button
+                  type="button"
+                  className={css.check}
+                  data-checked={t.status === 'done' ? '1' : undefined}
+                  aria-label={t.status === 'open' ? `完成待办：${t.title}` : `重新打开待办：${t.title}`}
+                  title={t.status === 'open' ? '标记完成' : '重新打开'}
+                  disabled={busyTaskId === t.id}
+                  onClick={() => { void toggle(t) }}
+                >
+                  {busyTaskId === t.id ? <span className={css.checkSpin} /> : (
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                      <path d="M3.5 8.3l2.7 2.7 6.3-6.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </button>
                 <div className={css.taskInfo}>
                   <div className={css.taskTitle}>{t.title}</div>
                   <div className={css.taskMeta}>
@@ -188,8 +257,16 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                   </div>
                 </div>
                 <div className={css.taskActions}>
-                  <Button variant="ghost" onClick={() => { void toggle(t) }}>{t.status === 'open' ? '完成' : '重开'}</Button>
-                  <Button variant="ghost" onClick={() => { void remove(t.id) }}>删除</Button>
+                  <button
+                    type="button"
+                    className={css.deleteBtn}
+                    disabled={busyTaskId === t.id}
+                    onClick={() => { void remove(t.id) }}
+                    aria-label={`删除待办：${t.title}`}
+                    title="删除待办"
+                  >
+                    删除
+                  </button>
                 </div>
               </div>
             ))}

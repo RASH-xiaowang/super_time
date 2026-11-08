@@ -21,6 +21,7 @@ export { readableMessageText, senderLabel, splitGroupPrefix, stripGroupPrefix } 
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
 import { contactMeta } from './meta.ts'
+import { displayNameForUsername, resolveTalkerUsername } from './message-identity.ts'
 
 /** 一条会话窗口内的消息（用于 chunk 级上下文：单条微信消息几乎不构成检索单元）。 */
 export interface WindowMessage {
@@ -56,7 +57,9 @@ export function loadMessageWindow(
   limit = 14,
 ): WindowMessage[] {
   if (!username || !Number.isFinite(centerMs) || centerMs <= 0) return []
-  const table = msgTableName(username)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return []
+  const table = msgTableName(canonical)
   const lo = Math.max(0, Math.floor(centerMs - spanMs))
   const hi = Math.floor(centerMs + spanMs)
   const out: WindowMessage[] = []
@@ -86,7 +89,7 @@ export function loadMessageWindow(
       for (const r of rows) {
         const raw = decodeCell(r['message_content']).trim()
         if (!raw || raw.startsWith('<')) continue
-        const { sender, body } = splitGroupPrefix(raw, username)
+        const { sender, body } = splitGroupPrefix(raw, canonical)
         const text = body.replace(/\s+/g, ' ').trim()
         if (!text) continue
         out.push({
@@ -121,6 +124,9 @@ export function searchWechatFts(
   scopeUsername?: string,
   enterpriseNames: ReadonlyMap<string, string> = new Map(),
 ): { hits: SearchHit[] } {
+  const requestedScope = scopeUsername?.trim() ?? ''
+  const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !canonicalScope) return { hits: [] }
   const p = join(decryptedDir, 'message', 'message_fts.db')
   if (!existsSync(p)) return { hits: [] }
   try {
@@ -144,9 +150,11 @@ export function searchWechatFts(
           const sql = 'SELECT c.c0 AS c, a.message_local_id AS lid, a.sort_seq AS ss, a.session_id AS sid FROM "' + content + '" c LEFT JOIN "' + aux + '" a ON a.rowid = c.id WHERE c.c0 LIKE ? ORDER BY c.id DESC LIMIT ?'
           const rows = db.prepare(sql).all(like, cap) as Array<Record<string, unknown>>
           for (const r of rows) {
-            const username = sessions.get(Number(r['sid'])) ?? ''
+            const storedUsername = sessions.get(Number(r['sid'])) ?? ''
+            const username = storedUsername ? resolveTalkerUsername(decryptedDir, storedUsername) : ''
+            if (!username) continue
             // 会话范围必须真的过滤（此前兜底路径忽略 scope，选了会话仍混入其他会话）
-            if (scopeUsername && username !== scopeUsername) continue
+            if (canonicalScope && username !== canonicalScope) continue
             const text = decodeCell(r['c'])
             const { sender, body: display } = splitGroupPrefix(text, username)
             // sort_seq 是毫秒时间戳：恢复 create_time，时间筛选与显示才可用（此前恒为 0，时间范围会把命中全部滤掉）
@@ -159,7 +167,7 @@ export function searchWechatFts(
               username,
               create_time: createTime,
               local_id: Number(r['lid'] ?? 0),
-              name: names.get(username) ?? username,
+              name: displayNameForUsername(username, names),
               ...(enterpriseName ? { enterpriseName } : {}),
               time: createTime ? fmtDateTimeSec(createTime) : '',
               snippet: display.slice(0, 120),
@@ -211,7 +219,10 @@ function* scanFallbackRows(
 ): Generator<{ talker: string; row: Record<string, unknown> }, void, void> {
   let budget = 800_000
   const shards = messageShardFiles(decryptedDir)
-  const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800)
+  const requestedScope = username?.trim() ?? ''
+  const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !canonicalScope) return
+  const scopeUsernames = canonicalScope ? [canonicalScope] : loadSessionUsernames(decryptedDir).slice(0, 800)
   for (const talker of scopeUsernames) {
     if (budget <= 0) return
     const table = msgTableName(talker)
@@ -274,7 +285,7 @@ export function hitFromRow(
     username: talker,
     create_time: ts,
     local_id: localId,
-    name: names.get(talker) ?? talker,
+    name: displayNameForUsername(talker, names),
     ...(enterpriseName ? { enterpriseName } : {}),
     time: fmtDateTimeSec(ts),
     snippet,
@@ -300,14 +311,17 @@ export function probeIndexedSources(
   names: Map<string, string>,
   username?: string,
 ): { hits: SearchHit[]; total: number; indexed: boolean } | null {
+  const requestedScope = username?.trim() ?? ''
+  const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !canonicalScope) return null
   // ---- 自建 BM25 索引优先（bigram 切分 + 真实 IDF + 相关度排序）----
-  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : undefined)
+  const indexed = searchIndexBatch(decryptedDir, [q], cap, canonicalScope ? { username: canonicalScope } : undefined)
   if (indexed.ranked && indexed.hits.length > 0) {
     return { hits: indexed.hits, total: indexed.hits.length, indexed: true }
   }
   // ---- WeChat built-in content tables (LIKE, tokenizer-independent) ----
   const builtin = searchWechatFts(
-    decryptedDir, q, cap, names, username, contactMeta(decryptedDir).enterpriseNames,
+    decryptedDir, q, cap, names, canonicalScope || undefined, contactMeta(decryptedDir).enterpriseNames,
   )
   if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false }
   return null
@@ -330,13 +344,16 @@ export function searchIndexMessages(
   const q = (query || '').trim()
   if (!q) return { hits: [], total: 0, indexed: false }
   const cap = Math.min(limit ?? 100, 300)
+  const requestedScope = username?.trim() ?? ''
+  const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !canonicalScope) return { hits: [], total: 0, indexed: false }
   const names = loadDisplayNames(decryptedDir)
   const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
-  const early = probeIndexedSources(decryptedDir, q, cap, names, username)
+  const early = probeIndexedSources(decryptedDir, q, cap, names, canonicalScope || undefined)
   if (early) return early
   const hits: SearchHit[] = []
   const qLower = q.toLowerCase()
-  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+  for (const { talker, row } of scanFallbackRows(decryptedDir, canonicalScope || undefined)) {
     const hit = hitFromRow(row, talker, qLower, names, enterpriseNames)
     if (hit) hits.push(hit)
     if (hits.length >= cap) break
@@ -367,13 +384,25 @@ export async function searchIndexMessagesCancellable(
   username?: string,
   ctrl?: SearchControl,
 ): Promise<{ hits: SearchHit[]; total: number; indexed: boolean; cancelled?: boolean }> {
+  // 索引快路径是同步的：一进函数就检查，避免预取消仍加载元数据并返回命中。
+  if (ctrl?.signal?.aborted) {
+    return { hits: [], total: 0, indexed: false, cancelled: true }
+  }
   const q = (query || '').trim()
   if (!q) return { hits: [], total: 0, indexed: false }
   const cap = Math.min(limit ?? 100, 300)
+  const requestedScope = username?.trim() ?? ''
+  const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !canonicalScope) {
+    return { hits: [], total: 0, indexed: false, ...(ctrl?.signal?.aborted ? { cancelled: true } : {}) }
+  }
   const names = loadDisplayNames(decryptedDir)
   const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
-  const early = probeIndexedSources(decryptedDir, q, cap, names, username)
-  if (early) return early
+  const early = probeIndexedSources(decryptedDir, q, cap, names, canonicalScope || undefined)
+  if (early) {
+    // 探针本身无法被同步 AbortSignal 抢占；返回前必须复检，命中绝不能绕过取消标记。
+    return ctrl?.signal?.aborted ? { ...early, cancelled: true } : early
+  }
   // 走到兜底扫描前先看一眼：已经被取消就没必要开库了
   if (ctrl?.signal?.aborted) return { hits: [], total: 0, indexed: false, cancelled: true }
   const hits: SearchHit[] = []
@@ -381,7 +410,7 @@ export async function searchIndexMessagesCancellable(
   let rowsSeen = 0
   let lastYieldAt = Date.now()
   let cancelled = false
-  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+  for (const { talker, row } of scanFallbackRows(decryptedDir, canonicalScope || undefined)) {
     rowsSeen += 1
     if ((rowsSeen & (ABORT_CHECK_EVERY_ROWS - 1)) === 0) {
       if (ctrl?.signal?.aborted) { cancelled = true; break }

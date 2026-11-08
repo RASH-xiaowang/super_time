@@ -90,17 +90,34 @@ describe('坐标落盘：合并到静默期，绝不逐帧写', () => {
 
 describe('布局重排：只随结构与力度参数发生，且合并连续变化', () => {
   it('重排走静默期定时器', () => {
-    expect(code).toContain('const RELAYOUT_SETTLE_MS = 120')
+    expect(code).toContain('const RELAYOUT_SETTLE_MS = 90')
     expect(code).toMatch(/createRestartableTimer\(\{\s*delayMs: RELAYOUT_SETTLE_MS,\s*run: \(\) => \{ void relayoutNow\(false\) \},?\s*\}\)/)
     expect(code).toContain('layoutTimerRef.current.restart()')
+    expect(code).toContain('const previousGraphRef = useRef<BuiltGraph | null>(null)')
   })
 
   it('布局 effect 的依赖只有图与力度指纹 —— 外观参数不该触发整图重排', () => {
     expect(code).toContain('const forceKey = forceKeyOf(settings)')
-    expect(code).toMatch(/\}, \[graph, forceKey, relayoutNow\]\)/)
+    const deps = depsOf('useEffect(() => {\n    const graphChanged = previousGraphRef.current !== graph')
+    expect(deps).toBe('[graph, forceKey, relayoutNow, runForcePreview]')
+    for (const cosmetic of ['nodeScale', 'labelOpacity', 'edgeWidth', 'showArrows', 'showLabels', 'showGrid', 'blurNodes']) {
+      expect(deps).not.toContain(cosmetic)
+    }
     // 外观与状态那条 effect 只重画（scheduleFrame），不得出现 relayoutNow
     const redraw = bodyOf('useEffect(() => { scheduleFrame() }, [settings, graph, dark, selectedId')
     expect(redraw).not.toContain('relayoutNow')
+  })
+
+  it('力度变化先走 rAF 轻量预览，再走静默期完整收敛', () => {
+    const fn = bodyOf('const runForcePreview = useCallback((): void =>')
+    expect(fn).toContain('requestAnimationFrame')
+    expect(fn).toContain('previewLayout({')
+    expect(fn).toContain('blendPositions(positionsRef.current, next, PARAM_PREVIEW_BLEND')
+    expect(fn).toContain('forcePreviewIntervalMs({')
+    expect(fn).toContain('previewLastAtRef.current = startedAt')
+    // 预览路径绝不能跑完整布局；否则每个 input 事件都会阻塞主线程
+    expect(fn).not.toContain('runLayout(')
+    expect(code).toMatch(/if \(forceChanged && !graphChanged && !propsRef\.current\.settings\.lockLayout\) runForcePreview\(\)/)
   })
 
   it('力度指纹只含六个力度参数（混进外观参数 = 拖滑杆就重排）', () => {
@@ -116,23 +133,32 @@ describe('布局重排：只随结构与力度参数发生，且合并连续变�
   it('陈旧的布局结果会被丢弃（连发请求时后到的旧结果不许盖回新形状）', () => {
     const fn = bodyOf('const relayoutNow = useCallback(async (fresh: boolean): Promise<void> =>')
     expect(fn).toContain('const seq = ++layoutSeqRef.current')
-    expect(fn).toMatch(/if \(seq !== layoutSeqRef\.current\) return/)
+    expect(fn).toContain('current.graph !== graphAtStart')
+    expect(fn).toContain('forceKeyOf(current.settings) !== forceAtStart')
   })
 
   it('固定节点在布局后按原位置还原（布局模块没有「固定」这个概念）', () => {
     const fn = bodyOf('const relayoutNow = useCallback(async (fresh: boolean): Promise<void> =>')
     expect(fn).toMatch(/const pinnedSnapshot = new Map<string, Point>\(\)/)
-    expect(fn).toMatch(/for \(const \[id, pos\] of pinnedSnapshot\) positionsRef\.current\.set\(id, pos\)/)
+    expect(fn).toMatch(/for \(const \[id, pos\] of pinnedSnapshot\) target\.set\(id, pos\)/)
   })
 
   it('坐标尺度归一发生在「还原固定节点」之前（否则固定节点会与其余节点失去相对一致性）', () => {
     const fn = bodyOf('const relayoutNow = useCallback(async (fresh: boolean): Promise<void> =>')
     const scaleAt = fn.indexOf('spacingScale(')
-    const restoreAt = fn.indexOf('pinnedSnapshot) positionsRef.current.set')
+    const restoreAt = fn.indexOf('pinnedSnapshot) target.set')
     expect(scaleAt).toBeGreaterThan(-1)
     expect(restoreAt).toBeGreaterThan(-1)
     expect(scaleAt).toBeLessThan(restoreAt)
-    expect(fn).toMatch(/const scale = spacingScale\(p\.graph\.nodes, radiiRef\.current, positionsRef\.current, p\.settings\.nodeGap\)/)
+    expect(fn).toMatch(/const scale = spacingScale\(p\.graph\.nodes, radiiRef\.current, target, p\.settings\.nodeGap\)/)
+  })
+
+  it('自动布局走热启动档位，并在目标副本上完成后平滑过渡', () => {
+    const fn = bodyOf('const relayoutNow = useCallback(async (fresh: boolean): Promise<void> =>')
+    expect(fn).toContain('warmLayoutIterations(p.graph.nodes.length)')
+    expect(fn).toContain('iterations !== undefined ? { iterations }')
+    expect(fn).toContain('const target = new Map<string, Point>()')
+    expect(fn).toContain('createPositionMotion(')
   })
 })
 
@@ -288,12 +314,20 @@ describe('拖拽联动与碰撞：邻居跟着走，且移动/静止都不重叠
 
   it('布局落定后也做碰撞松弛，且在还原固定节点之后（固定节点要当障碍）', () => {
     const fn = bodyOf('const relayoutNow = useCallback(async (fresh: boolean): Promise<void> =>')
-    const restoreAt = fn.indexOf('pinnedSnapshot) positionsRef.current.set')
+    const restoreAt = fn.indexOf('pinnedSnapshot) target.set')
     const relaxAt = fn.indexOf('relaxCollisions(')
     expect(restoreAt).toBeGreaterThan(-1)
     expect(relaxAt).toBeGreaterThan(-1)
     expect(restoreAt).toBeLessThan(relaxAt)
-    expect(fn).toMatch(/relaxCollisions\(p\.graph\.nodes, positionsRef\.current, radiiRef\.current, \{ iterations: \d+, skip: p\.pinnedIds \}\)/)
+    expect(fn).toMatch(/relaxCollisions\(p\.graph\.nodes, target, radiiRef\.current, \{ iterations: \d+, skip: p\.pinnedIds \}\)/)
+  })
+
+  it('参数过渡在 paint 中逐帧推进，并在用户开始拖图时立刻取消', () => {
+    const paint = bodyOf('const paint = useCallback((): void =>')
+    expect(paint).toContain('stepPositionMotion(positionsRef.current, motion, performance.now())')
+    const down = bodyOf('const onPointerDown = (ev: React.PointerEvent<HTMLCanvasElement>): void =>')
+    expect(down).toContain('cancelAnimationFrame(previewFrameRef.current)')
+    expect(down).toContain('motionRef.current = null')
   })
 })
 

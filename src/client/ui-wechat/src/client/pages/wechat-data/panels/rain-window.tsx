@@ -315,7 +315,7 @@ function makeTextMask(w: number, h: number, label: string): HTMLCanvasElement {
     g.fillStyle = '#000'
     g.fillRect(0, 0, c.width, c.height)
     g.fillStyle = '#fff'
-    g.font = '13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif'
+    g.font = '13px system-ui, sans-serif'
     g.textAlign = 'center'
     g.textBaseline = 'middle'
     g.fillText(label, c.width / 2, c.height / 2)

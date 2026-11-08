@@ -1,21 +1,13 @@
 /**
- * 问答与自动回复共用的角色、人称和称呼策略。
+ * 问答入口的角色、人称和称呼策略。
  *
- * 三套入口虽然走同一条运行时，但说话身份不同：
- *   · 微信问答 / 会话内 AI 问答：回答者用「我」，当前提问者用「你」；
- *   · ClawBot 自动回复：回复正文里的「我」必须指当前微信账号本人，「你」指当前聊天联系人。
- *
- * 这些规则不能混成一份。手动问答若套用「主人代理」，模型会把自己当成用户；
- * 自动回复若套用普通问答规则，又会出现「我替你问下账号本人」这种角色错位。
+ * 微信问答与会话内 AI 问答的回答者用「我」，当前提问者用「你」。
  *
  * @module query/answer-runtime/persona
  */
 
 /** 手动问答规则块的幂等标记。 */
 export const MANUAL_QA_PERSONA_MARKER = '【人称与角色规则｜微信问答与 AI 问答】'
-
-/** ClawBot 规则块的幂等标记。 */
-export const CLAWBOT_PERSONA_MARKER = '【人称与角色规则｜ClawBot 自动回复】'
 
 /**
  * 微信问答 / 会话内 AI 问答的固定人称规则。
@@ -34,33 +26,9 @@ export const MANUAL_QA_PERSONA_RULES = [
   '- 面向提问者时直接用「你」，不要称其为「用户」；也不要用「我们」代替 AI 回答者、产品、数据来源或检索过程。',
 ].join('\n')
 
-/**
- * ClawBot 自动回复的固定人称规则。
- *
- * 这不是普通问答角色：模型输出的每句话都会以当前微信账号本人的身份发给聊天联系人。
- */
-export const CLAWBOT_PERSONA_RULES = [
-  '- 角色固定：你正在以当前微信账号本人的身份回复当前聊天联系人。回复正文里的第一人称「我」始终指当前微信账号本人，不得指 AI、ClawBot、模型或第三方；不要用「本人」「账号本人」作为正文自称，直接用「我」。',
-  '- 第二人称统一用「你」指当前聊天联系人，不用「您」；聊天联系人输入的「您」仍按第二人称理解，引用原文时保留原「您」。只有聊天联系人明确代表多人，或群聊语境确实在称呼多人时才用「你们」。',
-  '- 第三人称「他 / 她 / 他们 / 她们」只指前文已经明确的第三方。首次出现先写姓名、昵称或明确身份；有多个候选或身份不明时继续写姓名，不得靠性别代词猜。',
-  '- 「它」只指非人对象，「它们」同样不得指人；同一个人始终沿用同一姓名或昵称，不要在姓名、昵称和代词之间来回切换。',
-  '- 不得用「我们」泛指当前微信账号本人、聊天联系人和第三方。「我们」「咱们」只有在材料明确表明账号本人与聊天联系人共同参与某件事或同属一个群体时才可使用；材料只说聊天联系人与第三人共同的，写「你和某人……」或引用原话，不能把账号本人带进去。',
-  '- 引用历史消息或材料时保留原话人称，并写清「某人说……」；材料里的「我」只在引语内部成立，不能直接当成当前回复里的「我」。',
-  '- 连续多条回复保持同一角色绑定；不要没有说明就从「我」切到「我们」，再切到「他 / 她」。',
-  '- 聊天联系人说的「他 / 她 / 他们 / 她们」或其他指代表达（如「这个 / 那个 / 它」）若在上下文中无法确定是谁或是什么，先用一句自然的话问清（如「你说的是谁呀？」），不要猜。',
-  '- 不得称聊天联系人为「用户」，也不要在回复里暴露 AI、ClawBot、模型或代理身份。',
-].join('\n')
-
 /** 手动问答的用户消息末尾自检，防止长材料把系统规则淹没。 */
 export const MANUAL_QA_OUTPUT_PRONOUN_REMINDER =
   '人称自检：回复里的「我」只指 AI 回答者，不要用身份词自称；「我们」「咱们」不得把 AI 和提问者说成同一方；第二人称统一用「你」指当前提问者；第三方先写姓名或昵称，身份或指代不明先澄清；引用原文保留原人称。'
-
-/** ClawBot 自动回复的用户消息末尾自检。 */
-export const CLAWBOT_OUTPUT_PRONOUN_REMINDER =
-  '人称自检：回复里的「我」只指当前微信账号本人，不写「本人」自称；「你」只指当前聊天联系人；第三方先写姓名或昵称，指代不明先问清；引用材料保留原人称；不要用「我们」「咱们」泛指。'
-
-/** ClawBot 遇到无法核对的关键数值时，以账号本人身份使用的安全回复。 */
-export const CLAWBOT_UNVERIFIED_VALUE_REPLY = '这个数字我这边没法确认，我先核实一下再回你。'
 
 /**
  * 微信问答（页签）与会话内 AI 问答共用的默认系统提示词。
@@ -72,6 +40,9 @@ export const WECHAT_QA_SYSTEM_PROMPT = [
   MANUAL_QA_PERSONA_RULES,
   '',
   '## 回答协议',
+  '- 先给一句直接结论，再列 2-4 条关键事实；只有提问者明确要求完整过程或完整时间线时才展开。',
+  '- 多条事实使用 Markdown 无序列表，每行一条，以「- 」开头；每条只讲一个主题，控制在 1-2 句，日期写在条目前面。',
+  '- 默认不要写大标题、表格或嵌套列表，也不要重复结论或按消息逐条倾倒记录；相近内容合并，只保留能支撑结论的代表性事实。',
   '- 说话自然、口语化，像在微信里向提问者转述聊天内容，不要写成报告。',
   '- 每句事实后面用 [n] 标注真正支持该句的来源。',
   '- 检索结果里没有的信息就直说没找到，绝不推测或编造。',
@@ -96,24 +67,18 @@ export const ASK_OPTIMIZE_SYSTEM_PROMPT = [
   '只输出一行 JSON：{"optimized":"优化后的问题","suggestions":["建议1","建议2"]}',
 ].join('\n')
 
-/** 对话角色在提示词里的显示名。 */
-export type PersonaConversationKind = 'qa' | 'clawbot'
-
 /**
  * 历史消息的角色标签。
  *
- * 只用于模型输入，不面向最终用户；统一成「提问者 / AI 回答者」或
- * 「聊天联系人 / 账号本人」，避免模型把内部角色名误写进回复。
+ * 只用于模型输入，不面向最终用户；统一成「提问者 / AI 回答者」，
+ * 避免模型把内部角色名误写进回复。
  *
  * @param role - 历史消息角色。
- * @param kind - 手动问答或 ClawBot 对话。
  * @returns 明确的中文角色标签。
  */
 export function conversationRoleLabel(
   role: 'user' | 'assistant',
-  kind: PersonaConversationKind,
 ): string {
-  if (kind === 'clawbot') return role === 'user' ? '聊天联系人' : '账号本人'
   return role === 'user' ? '提问者' : 'AI 回答者'
 }
 
@@ -121,15 +86,13 @@ export function conversationRoleLabel(
  * 把多轮历史格式化成带明确角色的文本。
  *
  * @param history - 历史消息。
- * @param kind - 手动问答或 ClawBot 对话。
  * @returns 每行一条的对话记录。
  */
 export function formatConversationHistory(
   history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
-  kind: PersonaConversationKind,
 ): string {
   return history
-    .map(message => `${conversationRoleLabel(message.role, kind)}：${message.content}`)
+    .map(message => `${conversationRoleLabel(message.role)}：${message.content}`)
     .join('\n')
 }
 
@@ -144,20 +107,4 @@ export function withManualQaPersonaRules(prompt: string): string {
   if (trimmed === '') return WECHAT_QA_SYSTEM_PROMPT
   if (trimmed.includes(MANUAL_QA_PERSONA_RULES)) return trimmed
   return `${trimmed}\n\n${MANUAL_QA_PERSONA_MARKER}\n${MANUAL_QA_PERSONA_RULES}`
-}
-
-/**
- * 给自定义 ClawBot 提示词追加固定人称规则（幂等）。
- *
- * 用户仍可自定义人设、语气和领域规则，但不能把「我」改成 AI 自称，也不能
- * 把聊天联系人叫成「用户」。
- *
- * @param prompt - 用户提供的 ClawBot 提示词。
- * @returns 已包含固定角色约束的提示词。
- */
-export function withClawbotPersonaRules(prompt: string): string {
-  const trimmed = prompt.trim()
-  if (trimmed === '') return CLAWBOT_PERSONA_MARKER + '\n' + CLAWBOT_PERSONA_RULES
-  if (trimmed.includes(CLAWBOT_PERSONA_RULES)) return trimmed
-  return `${trimmed}\n\n${CLAWBOT_PERSONA_MARKER}\n${CLAWBOT_PERSONA_RULES}`
 }

@@ -22,6 +22,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 const panel = stripComments(readFileSync(join(HERE, 'Records.tsx'), 'utf8'))
 const mod = readFileSync(join(HERE, 'records-virtual.ts'), 'utf8')
+const recordsCss = readFileSync(join(HERE, 'records.module.css'), 'utf8')
 // 仓库根：panels → wechat-data → pages → client → src → ui-wechat → client → src（8 层）。
 const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..', '..')
 const measure = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'tests', 'longlist-dom-cost.measure.spec.ts'), 'utf8')
@@ -31,8 +32,8 @@ describe('W2-9.3：记录表虚拟化的接线', () => {
     expect(panel, 'Records.tsx 没有接虚拟器').toContain('useRecordRowVirtualizer(')
     expect(panel, '面板没有从零件模块 import').toContain("from './records-virtual.ts'")
     expect(mod, '零件模块里没有 useVirtualizer').toContain('useVirtualizer({')
-    expect(mod, '零件模块里没有 getItemKey').toContain('getItemKey:')
-    expect(mod, '零件模块里没有 measureElement 的挂点说明').toContain('estimateSize')
+    expect(mod, '零件模块里没有 getItemKey').toContain('getItemKey')
+    expect(mod, '零件模块里没有固定行高估算').toContain('estimateSize: estimateRecordRow')
   })
 
   it('overscan 保持小值（调大就等于不虚拟化）', () => {
@@ -52,19 +53,31 @@ describe('W2-9.3：记录表虚拟化的接线', () => {
     expect(padsB, '有表没插尾撑杆 ⇒ 列表滚不到底').toBe(bodies)
   })
 
-  it('每一行都挂了 measureElement（不挂就不会回灌真实行高，撑杆高度全错）', () => {
+  it('每一行使用固定高度，禁止 measureElement 形成撑杆/边框反馈环', () => {
     const mapped = panel.split('visibleRecordRows(rowVirtualizer, items).map(').length - 1
-    const measured = panel.split('ref={rowVirtualizer.measureElement}').length - 1
-    expect(measured, '有分支的行没挂 measureElement').toBeGreaterThanOrEqual(mapped)
+    const fixed = panel.split('style={{ height: RECORD_ROW_PX }}').length - 1
+    expect(fixed, '有分支的行没有固定行高').toBe(mapped)
+    expect(panel, '动态 measureElement 会与首尾撑杆/末行边框形成布局反馈').not.toContain('rowVirtualizer.measureElement')
+    expect(mod, '虚拟器估算必须使用稳定的固定行高函数').toContain('estimateSize: estimateRecordRow')
+    expect(recordsCss, '记录表 td 必须压过全局紧凑表格的 6/10 内边距').toContain('.panel .table tbody tr td')
+    expect(recordsCss, '末行边框随撑杆显隐变化会重新引入 1px 反馈环').not.toContain('tbody tr:last-child')
   })
 
   it('滚动容器接上了 ref（不接的话虚拟器算不出视口，整表会一次性全挂）', () => {
     expect(panel).toMatch(/ref=\{tableScrollRef\}/)
-    expect(mod, '零件模块没把 scrollRef 交给虚拟器').toContain('getScrollElement: () => scrollRef.current')
+    expect(mod, '零件模块没把 scrollRef 交给虚拟器').toContain('getScrollElement')
   })
 
   it('行键带分类前缀（换分类时下标会复用，不带前缀 React 会把旧行实体复用到新表）', () => {
-    expect(/getItemKey:[\s\S]{0,80}keyPrefix/.test(mod), 'getItemKey 没带 keyPrefix ⇒ 切分类时行内容会闪一下才变').toBe(true)
+    expect(/getItemKey\s*=[\s\S]{0,120}keyPrefix/.test(mod), 'getItemKey 没带 keyPrefix ⇒ 切分类时行内容会闪一下才变').toBe(true)
+  })
+
+  it('分类只有一个取数入口，并用请求序号丢弃旧分类的迟到响应', () => {
+    const switchBody = /const switchKind =[\s\S]*?\n  }\n/.exec(panel)?.[0] ?? ''
+    expect(switchBody, 'switchKind 里又直接取数 ⇒ 会先用旧 kind 发一条请求').not.toContain('load(true)')
+    expect(panel, 'queryKey 没包含 kind ⇒ 切分类不会走统一取数入口').toContain("kind + '|'")
+    expect(panel, '没有请求序号 ⇒ 旧响应可覆盖新分类').toContain('requestSeq !== requestSeqRef.current')
+    expect(panel, '加载更多没有同步互斥锁 ⇒ 双击会追加重复页').toContain('loadingMoreRef.current')
   })
 
   it('行为侧的验收在册，且量的是**节点数上界 + 省多少倍**', () => {

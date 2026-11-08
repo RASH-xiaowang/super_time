@@ -19,6 +19,7 @@ import {
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { EmptyState, LoadingState } from './kit-fields.tsx'
 import tableCss from './kit-table.module.css'
+import { COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, COLUMN_RESIZE_STEP, useTableColumnResize } from './table-column-resize.ts'
 
 /** 数据表格列定义（headless：渲染完全由面板提供）。 */
 export interface DataColumn<T> {
@@ -32,7 +33,7 @@ export interface DataColumn<T> {
   className?: string
   /**
    * 列宽（px）。table-layout: fixed 下经 colgroup 兑现；**不传 = 弹性列**，
-   * 与其余未指定列平分剩余宽度（clawbot B1：正文列靠它吃掉全部余量）。
+   * 与其余未指定列平分剩余宽度（适合让正文列吃掉全部余量）。
    */
   width?: number
 }
@@ -48,9 +49,10 @@ export interface DataColumn<T> {
  * @param onRowClick - 行点击回调（有值时整行可点）。
  * @param scroll - 本包装是否自建滚动（默认 true = 既有 62vh 行为；false = 调用方自当滚动容器）。
  * @param minWidth - 表格最小宽度 px（默认 640 = .table 的 CSS 值；0 = 不设下限）。
+ * @param resizable - 是否允许拖拽表头右边缘调整列宽。
  * @returns 表格元素。
  */
-export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, scroll = true, minWidth = 640 }: {
+export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, scroll = true, minWidth = 640, resizable = false }: {
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
   getRowId: (row: T, index: number) => string
@@ -61,19 +63,27 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   /** @deprecated 2026-10-18 起加载态统一为旋转指示，本参数不再生效（仅为兼容旧调用保留）。 */
   skeletonRows?: number  /**
    * 本包装是否自建滚动（默认 true = 既有行为：.tableWrap 带 62vh 上限）。
-   * 传 false = 调用方自己当唯一滚动容器（clawbot B0：面板内只准一个滚动容器，
+   * 传 false = 调用方自己当唯一滚动容器（面板内只保留一个滚动容器，
    * 嵌套滚动会双滚动条 + 滚动手感断裂），包装退成静态。
    */
   scroll?: boolean
   /** 表格最小宽度（px，默认 640 = .table 的 CSS 值；传 0 = 不设下限）。 */
   minWidth?: number
+  /** 是否允许拖拽表头右边缘调整列宽（默认关闭，保持既有表格交互不变）。 */
+  resizable?: boolean
 }): React.JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([])
+  const resize = useTableColumnResize(columns, resizable, minWidth)
   /** scroll=false 时包装不滚；minWidth 与 CSS 默认值不同时才写行内样式（其余面板零影响）。 */
   const wrapClass = scroll ? tableCss.tableWrap : tableCss.tableWrapStatic
-  const tableStyle = minWidth !== 640 ? { minWidth: `${minWidth}px` } : undefined
+  const baseTableStyle = minWidth !== 640 ? { minWidth: `${minWidth}px` } : undefined
+  const tableStyle = resize.tableStyle
+    ? { ...baseTableStyle, ...resize.tableStyle }
+    : baseTableStyle
   /** 有任一列显式宽度时才渲染 colgroup（table-layout: fixed 只认 col/首行，类名不兑现宽度）。 */
-  const hasWidths = columns.some((c) => c.width !== undefined)
+  const hasWidths = resizable || resize.widths !== null || columns.some((c) => c.width !== undefined)
+  const columnWidth = (column: DataColumn<T>): number | undefined =>
+    resize.widths?.[column.id] ?? column.width
   /**
    * 列定义按 id 建索引。
    *
@@ -119,10 +129,13 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   if (loading && rows.length === 0) {
     return (
       <div className={wrapClass}>
-        <table className={tableCss.table} style={tableStyle} aria-busy="true">
+        <table ref={resize.tableRef} className={tableCss.table} style={tableStyle} aria-busy="true">
           {hasWidths && (
             <colgroup>
-              {columns.map((col) => <col key={col.id} style={col.width !== undefined ? { width: `${col.width}px` } : undefined} />)}
+              {columns.map((col) => {
+                const width = columnWidth(col)
+                return <col key={col.id} style={width !== undefined ? { width: `${width}px` } : undefined} />
+              })}
             </colgroup>
           )}
           <thead>
@@ -144,10 +157,13 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   }
   return (
     <div className={wrapClass}>
-      <table className={tableCss.table} style={tableStyle}>
+      <table ref={resize.tableRef} className={tableCss.table} style={tableStyle}>
         {hasWidths && (
           <colgroup>
-            {columns.map((col) => <col key={col.id} style={col.width !== undefined ? { width: `${col.width}px` } : undefined} />)}
+            {columns.map((col) => {
+              const width = columnWidth(col)
+              return <col key={col.id} style={width !== undefined ? { width: `${width}px` } : undefined} />
+            })}
           </colgroup>
         )}
         <thead>
@@ -158,6 +174,9 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
                 const sortable = Boolean(col?.sortValue)
                 const dir = header.column.getIsSorted()
                 const thStyle = col?.align === 'right' ? { textAlign: 'right' as const } : col?.align === 'center' ? { textAlign: 'center' as const } : undefined
+                const columnId = header.column.id
+                const currentWidth = resize.widths?.[columnId] ?? col?.width
+                const headerLabel = typeof col?.header === 'string' ? col.header : columnId
                 const inner = (
                   <span className={tableCss.thInner}>
                     {flexRender(header.column.columnDef.header, header.getContext())}
@@ -184,6 +203,32 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
                         {inner}
                       </button>
                     ) : inner}
+                    {resizable && (
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`调整「${headerLabel}」列宽`}
+                        aria-valuemin={COLUMN_MIN_WIDTH}
+                        aria-valuemax={COLUMN_MAX_WIDTH}
+                        aria-valuenow={currentWidth}
+                        aria-valuetext={currentWidth === undefined ? '自动宽度' : `${currentWidth} 像素`}
+                        className={tableCss.colResizeHandle}
+                        tabIndex={0}
+                        title="拖动调整列宽；双击恢复自动宽度"
+                        onPointerDown={(event) => { resize.startResize(event, columnId) }}
+                        onDoubleClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          resize.resetWidths()
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          resize.adjustWidth(columnId, event.key === 'ArrowLeft' ? -COLUMN_RESIZE_STEP : COLUMN_RESIZE_STEP)
+                        }}
+                      />
+                    )}
                   </th>
                 )
               })}

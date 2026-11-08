@@ -24,6 +24,7 @@ import {
   type DecodeDatPayload,
   type ImageResourceHint,
 } from './media-image.ts'
+import { resolveTalkerUsername } from './message-identity.ts'
 import { transcodeWxgfAsync, type WxgfTranscoderAsync } from './wxam-image.ts'
 
 export type AsyncImageResult = {
@@ -163,7 +164,9 @@ export async function decodeImageDataUrlAsync(
   xorKey?: number,
   options: DecodeImageOptions = {},
 ): Promise<AsyncImageResult> {
-  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, username, localId)
+  const canonical = resolveTalkerUsername(decryptedDir, username)
+  if (!canonical) return { error: '无法解析会话身份' }
+  const hint = options.hint ?? resolveImageResourceHint(decryptedDir, canonical, localId)
   const md5 = hint.md5
   const fileOnly = options.fileOnly === true
   // 桌面临时路径：落盘成功才回填，失败时留给 data URL 兜底（不能把不存在的路径发给渲染层）。
@@ -172,21 +175,21 @@ export async function decodeImageDataUrlAsync(
   if (!md5 && !hint.dataIndex) return { error: '无法找到图片 MD5' }
   if (md5) {
     const hit = await cachedImageAsync(decodedDir, md5, fileOnly)
-      ?? await cachedImageAsync(join(decodedDir, username), md5, fileOnly)
+      ?? await cachedImageAsync(join(decodedDir, canonical), md5, fileOnly)
     if (hit) return hit.file === undefined ? hit : { ...hit, file: relFile(hit.file) }
   }
   // 老缓存里的 `.hevc` 占位只在所有可重解路径都失败后用于给出一致的降级文案；
   // 这里不调同步能力探测（首次探测会加载 DLL，反而先卡住 worker）。
-  const hasHevc = md5 ? await pathExists(join(decodedDir, username, md5 + '.hevc')) : false
+  const hasHevc = md5 ? await pathExists(join(decodedDir, canonical, md5 + '.hevc')) : false
   if (wechatBaseDir && md5) {
-    const attach = join(wechatBaseDir, 'msg', 'attach', msgTableName(username).replace(/^Msg_/, ''))
+    const attach = join(wechatBaseDir, 'msg', 'attach', msgTableName(canonical).replace(/^Msg_/, ''))
     const dats = findDatFiles(attach, md5)
     if (dats.length > 0) {
       const aesBytes = normalizeAesKey(aesKey)
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
       writtenFile = ''
       const r = await decodeDatToResultAsync(ordered, aesBytes, xorKey ?? 0xff, (f, dec) => {
-        const dir = join(decodedDir, username)
+        const dir = join(decodedDir, canonical)
         const out = join(dir, md5 + (isThumbTier(f) ? '.t.' : '.') + dec.format)
         return mkdir(dir, { recursive: true })
           .then(() => writeFile(out, Buffer.from(dec.bytes)))
@@ -213,7 +216,7 @@ export async function decodeImageDataUrlAsync(
       writtenFile = ''
       const r = await decodeDatToResultAsync([hd], normalizeAesKey(aesKey), xorKey ?? 0xff, (f, dec) => {
         const key = md5 || 'data-' + hint.dataIndex
-        const dir = join(decodedDir, username)
+        const dir = join(decodedDir, canonical)
         const out = join(dir, key + (isThumbTier(f) ? '.t.' : '.') + dec.format)
         return mkdir(dir, { recursive: true })
           .then(() => writeFile(out, Buffer.from(dec.bytes)))

@@ -1,7 +1,9 @@
 @echo off
-rem Super Time - always launch the latest build of the perf branch worktree.
-rem ASCII only (cmd codepage); Chinese status lines are printed by the Node launcher.
-rem IMPORTANT: keep this file LF-safe: no parenthesized blocks / labels, only single-line ifs.
+rem Super Time - compatibility wrapper for the former launcher name.
+rem SuperTime.cmd is the canonical entry point; this file keeps existing
+rem shortcuts working and runs the same build-and-launch workflow.
+rem ASCII only (cmd codepage); Chinese status lines are printed by Node.
+rem IMPORTANT: keep this file LF-safe: no parenthesized blocks / labels.
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"

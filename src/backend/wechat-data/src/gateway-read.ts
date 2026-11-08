@@ -7,7 +7,7 @@
 
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { AccountsSnapshot, SelfProfile, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ArticleCoversResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, MomentsMonthlySnapshot, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
-import { querySessions } from './query/sessions.ts'
+import { querySessionsCancellable } from './query/sessions.ts'
 import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
 import { queryContacts } from './query/contacts.ts'
@@ -53,7 +53,7 @@ import { queryMediaAssets } from './query/media-assets.ts'
 import { queryMomentsInsights } from './query/moments-insights.ts'
 import { queryMomentsMonthly } from './query/moments-monthly.ts'
 import { queryOfficialAssets } from './query/official-assets.ts'
-import { searchUnified } from './query/unified-search.ts'
+import { searchUnifiedCancellable } from './query/unified-search.ts'
 import { queryAnnualReport } from './query/annual-report.ts'
 import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
@@ -66,8 +66,24 @@ import { GatewayCore } from './gateway-core.ts'
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export abstract class GatewayRead extends GatewayCore {
   @Remote('getSessions')
-  async getSessions(options?: { keyword?: string; limit?: number; offset?: number }): Promise<SessionsSnapshot> {
-    return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
+  async getSessions(options?: {
+    keyword?: string
+    limit?: number
+    offset?: number
+    jobId?: string
+  }): Promise<SessionsSnapshot> {
+    const job = this.searchSignal(options?.jobId)
+    try {
+      return await querySessionsCancellable(
+        this._dirs.decrypted,
+        options?.keyword,
+        options?.limit,
+        options?.offset,
+        job?.signal,
+      )
+    } finally {
+      job?.done()
+    }
   }
 
   /**
@@ -228,21 +244,44 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns MessagesSnapshot: message items for the talker.
    */
   @Remote('getMessages')
-  getMessages(options: { talker: string; limit?: number; cursor?: number; cursorLocalId?: number }): MessagesSnapshot {
+  getMessages(options: {
+    /** 会话微信 ID —— 正名见 `WechatSession.username`。 */
+    talker: string
+    limit?: number
+    cursor?: number
+    cursorLocalId?: number
+    beforeLocalId?: number
+  }): MessagesSnapshot {
     return queryMessages(
       this._dirs.decrypted, options.talker, options.limit, options.cursor,
-      this.selfUsername(), options.cursorLocalId,
+      this.selfUsername(), options.cursorLocalId, options.beforeLocalId,
     )
   }
 
   /**
-   * Incremental messages newer than a sort_seq watermark (real-time polling).
-   * @param options - talker, after watermark, optional limit.
-   * @returns MessagesSnapshot with only the newer messages.
+   * Incremental messages newer than a `(sort_seq, local_id)` watermark
+   * (real-time polling).
+   * @param options - talker, sort_seq watermark, optional local_id watermark
+   *   and page limit. `afterLocalId` is optional for backward compatibility.
+   * @returns MessagesSnapshot with newer messages, `hasMore`, and the next
+   *   `cursor` / `cursorLocalId` pair.
    */
   @Remote('getNewMessages')
-  getNewMessages(options: { talker: string; after: number; limit?: number }): MessagesSnapshot {
-    return queryNewMessages(this._dirs.decrypted, options.talker, options.after, options.limit, this.selfUsername())
+  getNewMessages(options: {
+    /** 会话微信 ID —— 正名见 `WechatSession.username`。 */
+    talker: string
+    after: number
+    afterLocalId?: number
+    limit?: number
+  }): MessagesSnapshot {
+    return queryNewMessages(
+      this._dirs.decrypted,
+      options.talker,
+      options.after,
+      options.limit,
+      this.selfUsername(),
+      options.afterLocalId,
+    )
   }
 
   /**
@@ -309,15 +348,20 @@ export abstract class GatewayRead extends GatewayCore {
    * Authoritative transfer/redpacket status by message server_id.
    * @param options - the message server_id (string, may exceed 2^53).
    * @returns PaymentStatus: found flag plus authoritative fields.
-   */
+  */
   @Remote('getPaymentStatus')
-  getPaymentStatus(options: { serverId: string }): PaymentStatus {
+  async getPaymentStatus(options: { serverId: string }): Promise<PaymentStatus> {
     return queryPaymentStatus(this._dirs.decrypted, options.serverId)
   }
 
   @Remote('resolveChatHistory')
-  async resolveChatHistory(options: { serverId: string }): Promise<ChatHistoryResolveResult> {
-    return queryMessageByServerId(this._dirs.decrypted, options.serverId)
+  async resolveChatHistory(options: { serverId: string; talker?: string }): Promise<ChatHistoryResolveResult> {
+    return queryMessageByServerId(
+      this._dirs.decrypted,
+      options.serverId,
+      options.talker,
+      this.selfUsername(),
+    )
   }
 
   /**
@@ -501,12 +545,12 @@ export abstract class GatewayRead extends GatewayCore {
 
   /**
    * Cached transcript for one voice message (if already transcribed).
-   * @param options - message username + local_id.
+   * @param options - message username + local_id + the selected server_id.
    * @returns VoiceTranscriptResult: text or an error.
    */
   @Remote('getVoiceTranscript')
-  getVoiceTranscript(options: { username: string; localId: number }): VoiceTranscriptResult {
-    const svrId = svrIdByChatLocal(this._dirs.decrypted, options.username, options.localId)
+  getVoiceTranscript(options: { username: string; localId: number; svrId?: string }): VoiceTranscriptResult {
+    const svrId = svrIdByChatLocal(this._dirs.decrypted, options.username, options.localId, options.svrId ?? '')
     if (!svrId) return { error: '未找到语音消息' }
     const text = cachedTranscript(this._dirs.decoded, svrId)
     return text ? { text } : { error: '尚未转写' }
@@ -514,11 +558,11 @@ export abstract class GatewayRead extends GatewayCore {
 
   /**
    * Transcribe one voice message on demand (chat bubble 语音转文字).
-   * @param options - message username + local_id.
+   * @param options - message username + local_id + the selected server_id.
    * @returns VoiceTranscribeOneResult: ok + text, or an error.
    */
   @Remote('transcribeVoiceMessage')
-  async transcribeVoiceMessage(options: { username: string; localId: number }): Promise<VoiceTranscribeOneResult> {
+  async transcribeVoiceMessage(options: { username: string; localId: number; svrId?: string }): Promise<VoiceTranscribeOneResult> {
     if (this.whisperTranscribing.active) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '已有转写任务进行中'); return { ok: false, error: '已有转写任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
     const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
@@ -526,7 +570,7 @@ export abstract class GatewayRead extends GatewayCore {
     const engine = whisperEnginePath(configBin, modelsDir)
     if (!engine) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '未检测到 whisper.cpp 引擎'); return { ok: false, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」）' } }
     const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
-    const r = await transcribeOneVoiceAsync(this._dirs.decrypted, this._dirs.decoded, modelsDir, modelId, engine, options.username, options.localId)
+    const r = await transcribeOneVoiceAsync(this._dirs.decrypted, this._dirs.decoded, modelsDir, modelId, engine, options.username, options.localId, options.svrId ?? '')
     this.op('task', 'transcribe_voice_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? '转写成功')
     return r
   }
@@ -660,9 +704,28 @@ export abstract class GatewayRead extends GatewayCore {
     return queryOfficialAssets(this._dirs.decrypted)
   }
 
+  /**
+   * 跨消息、联系人、朋友圈等资源域执行全局搜索。
+   *
+   * 传入 `jobId` 后可通过 `cancelSearch` 取消；取消时返回已扫描域的部分结果，
+   * 并以 `cancelled: true` 区分「尚未扫描」和「确实没有命中」。
+   * @param options - 搜索词、单域上限和可选的取消任务标识。
+   * @returns UnifiedSearchSnapshot：各域命中、诊断信息及可选取消标记。
+   */
   @Remote('searchUnified')
-  searchUnified(options: { query: string; limit?: number }): UnifiedSearchSnapshot {
-    return searchUnified(this._dirs.decrypted, options.query, options.limit)
+  async searchUnified(options: { query: string; limit?: number; jobId?: string }): Promise<UnifiedSearchSnapshot> {
+    const job = this.searchSignal(options?.jobId)
+    try {
+      return await searchUnifiedCancellable(
+        this._dirs.decrypted,
+        options.query,
+        options.limit,
+        {},
+        job ? { signal: job.signal } : undefined,
+      )
+    } finally {
+      job?.done()
+    }
   }
 }
 

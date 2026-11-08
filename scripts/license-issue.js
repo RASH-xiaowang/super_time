@@ -22,7 +22,15 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { signPayload } = require('../src/license/crypto')
-const { PRODUCT_ID, KNOWN_FEATURES } = require('../src/license/schema')
+const {
+  PRODUCT_ID,
+  KNOWN_FEATURES,
+  FEATURE_CATALOG,
+  FEATURE_SCHEMA_VERSION,
+  REQUIRED_FEATURES,
+  featureLabel,
+  isKnownFeature,
+} = require('../src/license/schema')
 const { resolvePrivateKeyPath, describeKeyFailure, ENV_KEY } = require('./license-key-path')
 
 function arg(name, def = null) {
@@ -76,7 +84,16 @@ function main() {
   const days = parseInt(arg('days', '365'), 10)
   const seats = parseInt(arg('seats', '1'), 10)
   const featuresArg = arg('features', KNOWN_FEATURES.join(','))
-  const features = featuresArg.split(',').map((s) => s.trim()).filter(Boolean)
+  const picked = [...new Set(featuresArg.split(',').map((s) => s.trim()).filter(Boolean))]
+  const unknown = picked.filter((feature) => !isKnownFeature(feature))
+  if (unknown.length) {
+    console.error(`未知功能项：${unknown.join(', ')}`)
+    process.exit(1)
+  }
+  for (const required of REQUIRED_FEATURES) {
+    if (!picked.includes(required)) picked.push(required)
+  }
+  const features = FEATURE_CATALOG.filter((feature) => picked.includes(feature.id)).map((feature) => feature.id)
   const out = arg('out', path.join(process.cwd(), 'license.json'))
 
   const now = new Date()
@@ -94,6 +111,7 @@ function main() {
     notBefore: now.toISOString(),
     expiresAt,
     features,
+    featureSchemaVersion: FEATURE_SCHEMA_VERSION,
     seats,
     appVersionMin,
     notes: arg('notes', ''),
@@ -111,7 +129,7 @@ function main() {
   console.log('已签发许可证:', out)
   console.log('客户:', name, company ? `(${company})` : '')
   console.log('版本:', edition, '| 席位:', seats)
-  console.log('功能:', features.join(', '))
+  console.log('功能:', features.map(featureLabel).join('、'))
   console.log('到期:', expiresAt ?? '永久')
   console.log('指纹:', fingerprint)
 }

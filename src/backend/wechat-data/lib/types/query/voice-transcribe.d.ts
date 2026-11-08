@@ -52,7 +52,7 @@ export declare function whisperOneAsync(bin: string, modelPath: string, wavPath:
  * 内联分析路径专用（`laya/analysis.ts` 会 `await` 它）：转写期间 worker
  * 不再被独占，消息查询/会话列表照常服务（2026-10-13 用户报「新消息同步慢」的根因修复）。
  */
-export declare function transcribeOneVoiceAsync(decryptedDir: string, decodedDir: string, modelsDir: string, modelId: string, engineBin: string, username: string, localId: number): Promise<{
+export declare function transcribeOneVoiceAsync(decryptedDir: string, decodedDir: string, modelsDir: string, modelId: string, engineBin: string, username: string, localId: number, explicitSvrId?: string): Promise<{
     ok: boolean;
     text?: string;
     error?: string;

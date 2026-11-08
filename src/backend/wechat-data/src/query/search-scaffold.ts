@@ -7,13 +7,21 @@
  * @module search-scaffold
  */
 
-import { createHash } from 'node:crypto'
 import type { DatabaseSync } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
+import {
+  displayNameForUsername,
+  fallbackChatDisplayName,
+  isMessageTableHash,
+  messageIdentityIndex,
+  messageTableHash,
+  messageTableName as sharedMessageTableName,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 import { withDb } from './db-open.ts'
 import { senderLabel } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
@@ -46,8 +54,12 @@ export const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
  * `5`：`message_fts` 改成 FTS5 的**无内容表**（`content=''`）。这是索引的物理布局变了 ——
  * 老索引的内容列还在，新代码不会再往里读，但**留着它也没有任何收益**（重建走 DROP + 建表），
  * 所以升版本让所有存量索引在下次构建时重建成小一半的库（实测同夹具 372MB → 175MB）。
+ *
+ * `6 → 7`：会话身份来源改为「SessionTable + 消息分片身份映射」。老群可能只存在于
+ * Name2Id/ChatName2Id，旧索引既可能完全漏掉它们，也可能把 `Msg_<md5>` 的后缀直接
+ * 当成用户名。水位线已经推进过，无法靠增量补齐这些历史行，因此必须强制重建一次。
  */
-export const INDEX_SCHEMA_VERSION = '6'
+export const INDEX_SCHEMA_VERSION = '7'
 
 /** 索引最近一次构建/同步完成的时刻（毫秒 epoch，来自 Date.now()）。 */
 export const REFRESHED_KEY = 'refreshed_ms'
@@ -204,6 +216,9 @@ export function searchIndexBatch(
   opts?: { username?: string; person?: string },
 ): { hits: SearchHit[]; ranked: boolean } {
   if (!indexReady(decryptedDir)) return { hits: [], ranked: false }
+  const requestedScope = opts?.username?.trim() ?? ''
+  const scopedUsername = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !scopedUsername) return { hits: [], ranked: false }
   const parts = terms.map(ftsPhrase).filter(Boolean)
   if (opts?.person) {
     const who = ftsPhrase(opts.person)
@@ -213,29 +228,45 @@ export function searchIndexBatch(
   const match = parts.join(' OR ')
   try {
     return withDb(searchIndexPath(decryptedDir), (db) => {
+      // Older index generations stored the raw table hash as `username`.
+      // Search both the canonical id and its aliases so a scoped search still
+      // finds rows written by those generations; results are normalized below.
+      const scopeAliases = scopedUsername
+        ? [...new Set([
+          requestedScope,
+          scopedUsername,
+          messageTableHash(scopedUsername),
+          sharedMessageTableName(scopedUsername),
+        ])]
+        : []
       const sql = 'SELECT m.text, m.username, m.create_time, m.local_id, m.sender, bm25(message_fts) AS score'
         + ' FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid'
         + ' WHERE message_fts MATCH ?'
-        + (opts?.username ? ' AND m.username = ?' : '')
+        + (scopeAliases.length > 0 ? ` AND m.username IN (${scopeAliases.map(() => '?').join(', ')})` : '')
         + ' ORDER BY rank LIMIT ?'
-      const args: Array<string | number> = opts?.username ? [match, opts.username, limit] : [match, limit]
+      const args: Array<string | number> = scopeAliases.length > 0 ? [match, ...scopeAliases, limit] : [match, limit]
       const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
       const names = loadDisplayNames(decryptedDir)
       const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
-      const hits = rows.map((r) => {
+      const hits: SearchHit[] = []
+      for (const r of rows) {
         const text = decodeCell(r['text'])
-        const username = decodeCell(r['username'])
+        const storedUsername = decodeCell(r['username'])
+        const username = resolveTalkerUsername(decryptedDir, storedUsername)
+        // A hash-shaped value with no owner is an index artifact, not a
+        // clickable conversation. Hide it rather than reopen an empty chat.
+        if (!username || isMessageTableHash(username)) continue
         const createTime = Number(r['create_time'] ?? 0)
         // `sender` 列存的是**原始 wxid**（构建时从群前缀切出，见 `search-build.ts`）。
         // 旧实现从 `text` 再切一次 —— 而 `text` 在入库时已剥掉前缀，永远切不出东西，
         // 于是群消息的发送者名恒为空（实测：回答里只有群名、没有「谁说的」）。
         const sender = decodeCell(r['sender'])
-        return {
+        hits.push({
           text,
           username,
           create_time: createTime,
           local_id: Number(r['local_id'] ?? 0),
-          name: names.get(username) ?? username,
+          name: displayNameForUsername(username, names),
           ...(enterpriseNames.get(username) ? { enterpriseName: enterpriseNames.get(username) } : {}),
           time: fmtDateTimeSec(createTime),
           snippet: text.slice(0, 120),
@@ -246,8 +277,8 @@ export function searchIndexBatch(
             : {}),
           // bm25() 越小越相关，取负号变成「越大越相关」
           score: -Number(r['score'] ?? 0),
-        }
-      })
+        })
+      }
       return { hits, ranked: true }
     })
   } catch {
@@ -274,7 +305,7 @@ export function searchIndexPath(decryptedDir: string): string {
 
 /** Msg_<md5(username)> table name for a talker. */
 export function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
+  return sharedMessageTableName(username)
 }
 
 /** Decode a BLOB or TEXT cell to UTF-8 text (zstd + GBK aware). */
@@ -301,24 +332,29 @@ export function messageShardFiles(decryptedDir: string): string[] {
 /** Session usernames from session.db (SessionTable or Session). */
 export function loadSessionUsernames(decryptedDir: string): string[] {
   const dbPath = join(decryptedDir, 'session', 'session.db')
-  if (!existsSync(dbPath)) return []
-  const out: string[] = []
-  try {
-    withDb(dbPath, (db) => {
-      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-      if (table) {
-        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const u = decodeCell(r['username']).trim()
-          if (u) out.push(u)
+  const out = new Set<string>()
+  if (existsSync(dbPath)) {
+    try {
+      withDb(dbPath, (db) => {
+        const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+        for (const table of ['SessionTable', 'Session', 'SessionNoContactInfoTable']) {
+          if (!tables.includes(table)) continue
+          const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const u = decodeCell(r['username']).trim()
+            if (u && !isMessageTableHash(u)) out.add(u)
+          }
         }
-      }
-    })
-  } catch {
-    // session.db unavailable
+      })
+    } catch {
+      // session.db unavailable
+    }
   }
-  return out
+  // SessionTable is a cache, not the source of truth. Add only identities that
+  // own an actual Msg_<hash> table; adding every Name2Id member would make the
+  // scanner probe thousands of group members that have no message table.
+  for (const username of messageIdentityIndex(decryptedDir).tableToUsername.values()) out.add(username)
+  return [...out]
 }
 
 /**
@@ -358,9 +394,10 @@ export function loadDisplayNames(decryptedDir: string): Map<string, string> {
         if (has) {
           const rows = db.prepare('SELECT username, session_title FROM SessionNoContactInfoTable').all() as Array<Record<string, unknown>>
           for (const r of rows) {
-            const u = decodeCell(r['username'])
+            const stored = decodeCell(r['username']).trim()
+            const u = stored ? resolveTalkerUsername(decryptedDir, stored) : ''
             const t = decodeCell(r['session_title']).trim()
-            if (u && t && !names.has(u)) names.set(u, t)
+            if (u && t && t !== stored && !isMessageTableHash(t) && !names.has(u)) names.set(u, t)
           }
         }
       })
@@ -370,6 +407,11 @@ export function loadDisplayNames(decryptedDir: string): Map<string, string> {
   }
   // ③ 联系人备注 / 昵称（最强，最后写，覆盖前两层）
   for (const [u, n] of contactMeta(decryptedDir).names) names.set(u, n)
+  // ④ 最后兜底：任何已知会话都不能回退成 32 位表名 hash。
+  for (const u of messageIdentityIndex(decryptedDir).usernames) {
+    const current = names.get(u)?.trim() ?? ''
+    if (!current || current === u) names.set(u, fallbackChatDisplayName(u))
+  }
   return names
 }
 

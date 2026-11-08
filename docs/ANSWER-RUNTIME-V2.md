@@ -1,16 +1,16 @@
-# 问答运行时 V2：三个入口的统一能力边界与验收
+# 问答运行时 V2：两个入口的统一能力边界与验收
 
-本文记录 2026-10-22 对【微信问答】【AI 问答】【ClawBot 集群 AI 自动回复】的统一改造。
-目标不是把三个入口写成同一段提示词，而是让它们共享同一套**可执行**的意图识别、工具循环、
+本文记录 2026-10-22 对【微信问答】【AI 问答】的统一改造。
+目标不是把两个入口写成同一段提示词，而是让它们共享同一套**可执行**的意图识别、工具循环、
 参数修复、证据收敛和引用接地，同时保留各自的数据边界。
 
 配套的机器可读验收契约在
 [`acceptance-matrix.json`](../src/backend/wechat-data/tests/acceptance/answer-runtime/acceptance-matrix.json)，
-三个入口的实现接入点是
+两个入口的实现接入点是
 [`askdeep.ts`](../src/backend/wechat-data/src/remotes/askdeep.ts) 与
 [`ask-runtime.ts`](../src/backend/wechat-data/src/remotes/ask-runtime.ts)。
 
-## 1. 三个模块的能力边界
+## 1. 两个模块的能力边界
 
 边界不是提示词约定，而是在工具 schema、执行器和 profile 守卫三层同时生效。
 
@@ -18,20 +18,14 @@
 |---|---|---|---|---|
 | 微信问答 | `wechat-ask` | 本机微信数据，可选当前知识库 | 消息、语义、混合检索、聚合、会话、上下文、联系人、朋友圈、收藏、文件、账单、知识库等 14 个工具 | 调用方可选会话，不强制锁定 |
 | AI 问答（会话内） | `session-ask` | 仅当前会话的消息数据 | `search_messages`、`search_semantic`、`get_session_messages`、`get_message_context`、`aggregate_messages`、`search_hybrid` | 服务端硬锁定 `username` |
-| ClawBot 集群 AI 自动回复 | `clawbot-auto` | 仅知识库（`kb-only`） | `search_kb` | 不读取任何本机微信数据，必须提供 `kbId` |
 
-`session-ask` 的 `search_hybrid` 只允许 `messages` 模式；`clawbot-auto` 的白名单只有
-`search_kb`，即使模型直接构造工具调用，也会在执行层被拒绝。未知 profile 回退到权限最小的
-`clawbot-auto`，避免配置错误放大数据权限。
+`session-ask` 的 `search_hybrid` 只允许 `messages` 模式；未知 profile 由执行器拒绝，
+避免配置错误放大数据权限。
 
 当前明确不做的能力：
 
 - `session-ask` 不提供跨会话检索、联系人、朋友圈、收藏、文件和账单工具。
-- `clawbot-auto` 不提供本机消息、联系人或其他微信数据工具，也不会因为知识库为空而回退到消息库。
-- ClawBot 自动回复不提供“无知识库纯聊天”模式：`autoReply=true` 必须同时满足
-  `kbEnabled=true` 且 `kbId>0`。设置保存、运行决策与网关发送前校验共用这一条不变量；
-  无库时开关不可开启，已有矛盾配置会在下一次保存时自动收敛为关闭。
-- 三个入口都不自动执行有副作用的工具重试；自动重试只发生在运行时对工具调用的受控循环内。
+- 两个入口都不自动执行有副作用的工具重试；自动重试只发生在运行时对工具调用的受控循环内。
 
 ## 2. 改造前的主要问题
 
@@ -44,7 +38,7 @@
 5. **失败与空结果混淆**：超时、限流、内部异常和真实无命中没有统一分类，用户和审计日志难以区分。
 6. **证据不可溯源**：消息、知识库、聚合事实和资源没有统一稳定键，引用可能指向错误片段或无法回放。
 7. **回答可能脱离证据**：没有统一的引用校验、数值核对和无证据降级，容易生成听起来合理但不可核对的内容。
-8. **三个入口体验不一致**：各自的提示词、检索策略和异常兜底不同，同类问题在不同入口表现不同。
+8. **两个入口体验不一致**：各自的提示词、检索策略和异常兜底不同，同类问题在不同入口表现不同。
 
 ## 3. 统一运行时的具体改动
 
@@ -69,7 +63,7 @@ LLM 返回经 `isValidIntentSuggestion` 形状校验后，统一交给
 `applyAnswerIntentSuggestion` 保守合并：规则高置信时只允许补空字段，低置信/澄清时才允许
 改 `kind`，且不能绕过 profile 白名单与范围守卫。超时、异常、非法返回分别回退规则并记录
 `classifier:llm_timeout` / `classifier:llm_failed` / `classifier:llm_invalid`，
-正常合并记录 `classifier:llm_done`。三个 profile 共用这条链路，ClawBot 仍是 `kb-only`。
+正常合并记录 `classifier:llm_done`。两个 profile 共用这条链路。
 
 工具循环结束、证据包构建完成后，运行时还会按问题语义计算必需数据域
 （`messages/kb/files/favorites/moments/records/contacts`），对仍缺失且本 profile 允许的
@@ -94,11 +88,7 @@ LLM 返回经 `isValidIntentSuggestion` 形状校验后，统一交给
 - 模型未填会话时注入服务端锁定值，不把显示名当作 username；
 - `get_message_context` 的消息 key 必须属于锁定会话；
 - 固定日期范围注入所有声明 `from` / `to` 的工具，冲突或倒序直接拒绝；
-- `search_hybrid` 的 mode 在契约内校验，`session-ask` 自动收敛到 `messages`；
-- `clawbot-auto` 缺少 `kbId` 时在运行时入口直接收敛为 `blocked`；即使绕过入口，
-  执行守卫仍以 `not_configured` 拒绝工具调用。配置层另有对称的硬门禁：
-  `query/clawbot/clawbot-config-invariant.ts` 的 `resolveInstanceConfigForSave` /
-  `hasValidAutoReplyKnowledgeBase`，保证 UI、决策、网关三层不会各自解释“无库”的含义。
+- `search_hybrid` 的 mode 在契约内校验，`session-ask` 自动收敛到 `messages`。
 
 上述拒绝都属于**请求安全阻断**，验收时统一要求 `requestStatus=blocked`、最终
 `answerStatus=blocked`，且不得改写成普通工具失败（`failed`）或空结果
@@ -165,8 +155,6 @@ deadline 触发时 abort 当前尝试，用户取消时同时传播到 `ToolCont
 
 - `session-ask` 只接受属于当前 `username` 的消息证据；跨会话消息、非消息来源和无法
   验证归属的统计事实会被拒绝；
-- `clawbot-auto` 只接受 `source === 'kb'` 且带合法 `kbId/chunkId` 的命中；其他
-  `kbId`、消息、资源与聚合事实会被拒绝；
 - 被拒绝的条数计入 `stats.rejectedCount`，原因去重后写入 `rejectionNotes`；范围错误
   工具计入 `scopeBlockedResults`；
 - 一旦证据包状态为 `blocked`，运行时不会进入综合生成，并清空 `citations/resources`，
@@ -192,53 +180,25 @@ deadline 触发时 abort 当前尝试，用户取消时同时传播到 `ToolCont
 
 ### 3.6 回答接地与展示
 
-最终综合阶段要求普通问答使用 `[n]` 引用证据；ClawBot 和纯资源回答不保留无意义的引用角标。
+最终综合阶段要求普通问答使用 `[n]` 引用证据；纯资源回答不保留无意义的引用角标。
 接地复核会检查回答中的数值和引用是否能在证据包中找到；高风险但无依据的数值会被撤回或
 替换为证据格式化文本。综合生成失败时保留证据和引用，状态降为 `degraded`，而不是返回一段
 看似完整的幻觉回答。
 
-ClawBot 作为无人值守出网通道还有发送前门禁：只有 `ok/degraded`、实际使用知识库材料、
-回答非空且没有 `withheld` 的结果才可发送；每条引用必须属于当前 `kbId`，且必须是规范
-`kb:<kbId>:<chunkId>` 键。综合生成失败、没有引用、引用归属不明或降级结果仍有未核实数值，
-一律不发送并记录可诊断原因。该检查位于网关发送前，不能靠提示词绕过。
-
-前端通过
-[`AskRuntimeMeta.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/AskRuntimeMeta.tsx)
-展示状态、脱敏工具 trace、证据包和独立资源卡；旧后端没有新增字段时整块不渲染，保持兼容。
-资源卡的打开动作见
+前端通过共享
+[`AnswerRunView.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/AnswerRunView.tsx)
+展示状态、执行轨迹、脱敏工具 trace、证据包和独立资源卡；微信问答与会话内 AI 问答只在
+检索范围上不同。`AnswerReasoningSegment` 按 `round` 与 `phase` 归组，思考固定显示在对应
+工具调用下方；旧后端只有单段 `reasoning` 时也走同一顺序，不回到全局思考块旧布局。
+当前线程完成后以及问答历史弹窗均可恢复有界轨迹，旧记录缺字段时整块不渲染。资源卡的打开动作见
 [`resource-card.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/resource-card.tsx)。
-
-### 3.7 ClawBot 运行详情回看
-
-ClawBot 自动回复除了最终消息，还会把每次 run 的可诊断摘要写入
-`clawbot_reply_run.result_json`。老库通过 `ALTER TABLE ADD COLUMN` 补齐这一列，
-读取时若列尚不存在仍按旧列集合工作，不影响升级前的消息列表。
-
-摘要由
-[`clawbot-run-detail.ts`](../src/backend/wechat-data/src/query/clawbot/clawbot-run-detail.ts)
-统一白名单序列化：保留状态、工具调用（含尝试次数/重试/错误类别与参数摘要）、证据、
-引用、资源定位、接地统计和发送门禁；不保存回答正文，定位字段中的 URL/token/seed 不落库。
-单条详情有 64KB 总预算、40 条数组上限和字符串截断，坏 JSON、循环引用或旧行解析失败时
-降级而不抛给消息列表。
-
-消息接口
-[`attachReplyRunDetails`](../src/backend/wechat-data/src/query/clawbot/clawbot-db.ts)
-按入站 `target_message_id` 与出站 `sent_message_id` 分块批量查询，把同一 run 同时附到
-目标入站消息和所有出站分段，避免逐条 N+1。成功、生成失败、配置跳过、空答案、outbox
-保存失败和发送失败都会留下对应 `sendDecision`；`send:false` 仍保留已生成的工具/证据/
-引用摘要，用户能看到“为什么没发”。
-
-前端
-[`clawbot-run-detail.tsx`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/clawbot-run-detail.tsx)
-按 `runId` 去重渲染：同一 run 优先挂在入站目标消息下，只附在出站分段时挂到第一条分段；
-旧消息或非法 `runId` 不伪造详情，无字段时不渲染空壳。
 
 ## 4. 目标效果（非实测结论）
 
 | 维度 | 目标 |
 |---|---|
 | 理解准确 | 明确资源词、时间词和多轮指代进入正确的意图与工具提示，减少泛化检索替代专用查询 |
-| 范围安全 | 会话内问答和 ClawBot 的越权请求在执行前阻断，跨会话泄漏目标为零（待实测） |
+| 范围安全 | 会话内问答的越权请求在执行前阻断，跨会话泄漏目标为零（待实测） |
 | 结果可靠 | 工具失败与真实无命中分离，超时/限流有界重试，内部错误不伪装成空结果 |
 | 可溯源 | 每条消息、知识库和资源证据都有稳定键、定位信息和来源工具 |
 | 抗幻觉 | 引用、数值和状态经过接地复核；无证据时不生成可被误认为事实的结论 |
@@ -275,7 +235,6 @@ ClawBot 自动回复除了最终消息，还会把每次 run 的可诊断摘要�
 | 六类异常覆盖 | 100% | 矩阵元测试 |
 | 工具循环 p95 | ≤ 1,500ms | 不含模型生成时间 |
 | 延迟相对回归 | ≤ 10% | 相对改造前基线 |
-| ClawBot 引用违规 | 0 | 硬性契约 |
 | 证据键稳定性 | 100% | 重复运行一致性 |
 | profile 白名单精确性 | 100% | 代码与矩阵逐项一致 |
 
@@ -299,14 +258,9 @@ ClawBot 自动回复除了最终消息，还会把每次 run 的可诊断摘要�
 3. 所有工具失败都进入 trace，区分空结果、超时、限流、内部错误和参数错误；纯空结果为
    `insufficient`，工具全部失败且无证据为 `failed`。
 4. 每条可引用消息和知识库片段都能通过稳定键回放到原始证据；SessionAsk 的 msg key 必须
-   属于当前 `username`，ClawBot 的引用必须是当前 `kbId` 下的合法知识库键。
-5. 普通问答没有 `[n]` 引用时不得标记为 `ok`；ClawBot 不输出无意义角标。
+   属于当前 `username`。
+5. 普通问答没有 `[n]` 引用时不得标记为 `ok`。
 6. 综合生成异常时保留证据并降级，不丢失已经检索到的可用内容。
-7. ClawBot 发送前必须逐条校验引用属于当前 `kbId` 且为规范知识库键；缺少知识库、
-   综合生成失败、`withheld` 或空答案都不得出网。
-8. ClawBot 的 `autoReply=true` 必须同时满足 `kbEnabled=true` 和 `kbId>0`。设置页在缺少
-   有效知识库时禁用自动回复开关；配置保存拒绝“显式开启但无库”，并在知识库被关闭或清空时
-   自动关闭已有的自动回复，避免留下必然不发送的矛盾状态。
 
 ## 6. 实施与验证记录
 
@@ -322,7 +276,6 @@ ClawBot 自动回复除了最终消息，还会把每次 run 的可诊断摘要�
 - [`ask-tool-profiles.spec.ts`](../src/backend/wechat-data/tests/ask-tool-profiles.spec.ts)
 - [`content-tools-resources.spec.ts`](../src/backend/wechat-data/tests/content-tools-resources.spec.ts)
 - [`acceptance-matrix.spec.ts`](../src/backend/wechat-data/tests/acceptance/answer-runtime/acceptance-matrix.spec.ts)
-- [`clawbot-boundary.spec.ts`](../src/backend/wechat-data/tests/acceptance/answer-runtime/clawbot-boundary.spec.ts)
 - [`scope-evidence.spec.ts`](../src/backend/wechat-data/tests/acceptance/answer-runtime/scope-evidence.spec.ts)
 - [`tool-contracts.spec.ts`](../src/backend/wechat-data/tests/acceptance/answer-runtime/tool-contracts.spec.ts)
 - [`ask-runtime.wiring.spec.ts`](../src/client/ui-wechat/src/client/pages/wechat-data/panels/ask-runtime.wiring.spec.ts)

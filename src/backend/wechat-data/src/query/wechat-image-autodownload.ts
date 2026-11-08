@@ -416,6 +416,37 @@ function ensureRoot(decryptedDir: string): void {
   }
 }
 
+/**
+ * 清理警告只在“marker 记录的微信进程仍然活着”时成立。
+ *
+ * 用户按提示重启微信后，前端仍会每 5s 拉一次 status；如果这里不重新比对 PID，
+ * `cleanupUnconfirmed` 会一直留到后端进程重启，界面看起来像永远关不掉。
+ * 只有拿到 marker 且原 PID 已退出/变化时才自动清除，marker 缺失时宁可保守保留警告。
+ */
+function refreshCleanupState(decryptedDir: string): void {
+  if (!cleanupUnconfirmed) return
+  const marker = readMarker(decryptedDir)
+  if (marker === null || typeof marker.pid !== 'number') return
+  let livePid: number | null
+  try {
+    livePid = deps.findPid()
+  } catch {
+    return
+  }
+  // findPid() 失败也会返回 null；无法区分“微信已退出”和“探测失败”时保守保留警告。
+  if (livePid === null || livePid === marker.pid) return
+  clearMarker(decryptedDir)
+  cleanupUnconfirmed = false
+  hookedPid = null
+  helper = null
+  helperVerified = false
+  state = 'idle'
+  code = ''
+  message = ''
+  lastErrorAt = 0
+  if (readEnabled(decryptedDir)) startWatching()
+}
+
 function readEnabled(decryptedDir: string): boolean {
   try {
     return deps.readConfig(decryptedDir)['wechat_image_autodownload_enabled'] === true
@@ -485,6 +516,7 @@ async function attemptHook(): Promise<void> {
 /** 30s 一次：微信重启后重新接入；组件被卸载/进程消失时更新状态。 */
 async function tick(): Promise<void> {
   if (root === '') return
+  refreshCleanupState(root)
   if (!readEnabled(root)) {
     await stopWechatImageAutoDownload()
     return
@@ -514,6 +546,7 @@ function startWatching(): void {
 /** 计算当前状态快照（纯读，不改状态机）。 */
 export function getWechatImageAutoDownloadStatus(decryptedDir: string): WechatImageAutoDownloadStatus {
   ensureRoot(decryptedDir)
+  refreshCleanupState(decryptedDir)
   const supported = isSupported()
   const enabled = readEnabled(decryptedDir)
   let reported = state
@@ -546,6 +579,7 @@ export function getWechatImageAutoDownloadStatus(decryptedDir: string): WechatIm
  */
 export async function startWechatImageAutoDownload(decryptedDir: string): Promise<WechatImageAutoDownloadStatus> {
   ensureRoot(decryptedDir)
+  refreshCleanupState(decryptedDir)
   if (!isSupported()) {
     fail('IMAGE_AUTODOWNLOAD_UNSUPPORTED', '当前系统不支持原图自动下载（仅 Windows x64，且需组件存在）')
     return getWechatImageAutoDownloadStatus(decryptedDir)
@@ -598,19 +632,31 @@ export async function stopWechatImageAutoDownload(): Promise<WechatImageAutoDown
     state = 'stopping'
     try {
       helper?.uninstall()
-    } catch (e) {
-      cleanupUnconfirmed = true
-      fail('IMAGE_AUTODOWNLOAD_CLEANUP_UNCONFIRMED', e instanceof Error ? e.message : String(e))
-    }
-    hookedPid = null
-    if (!cleanupUnconfirmed) {
+      cleanupUnconfirmed = false
+      hookedPid = null
+      helper = null
+      helperVerified = false
       clearMarker(root)
       state = 'idle'
       code = ''
       message = ''
+      lastErrorAt = 0
+    } catch (e) {
+      cleanupUnconfirmed = true
+      fail(
+        'IMAGE_AUTODOWNLOAD_CLEANUP_UNCONFIRMED',
+        `自动下载已关闭，但还原微信进程失败：${e instanceof Error ? e.message : String(e)}`,
+      )
     }
-  } else {
+  } else if (!cleanupUnconfirmed) {
     state = 'idle'
+    code = ''
+    message = ''
+    lastErrorAt = 0
+  } else {
+    state = 'failed'
+    code = 'IMAGE_AUTODOWNLOAD_CLEANUP_UNCONFIRMED'
+    message = '自动下载已关闭；上次注入尚未确认还原，请重启微信完成清理'
   }
   return getWechatImageAutoDownloadStatus(root)
 }
@@ -626,6 +672,7 @@ export async function wechatImageAutoDownload(
   action: WechatImageAutoDownloadAction,
 ): Promise<WechatImageAutoDownloadStatus> {
   ensureRoot(decryptedDir)
+  refreshCleanupState(decryptedDir)
   if (action === 'status') return getWechatImageAutoDownloadStatus(decryptedDir)
   if (action === 'start') {
     const saved = deps.saveConfig(decryptedDir, {
@@ -639,11 +686,15 @@ export async function wechatImageAutoDownload(
     return await startWechatImageAutoDownload(decryptedDir)
   }
   const saved = deps.saveConfig(decryptedDir, { wechat_image_autodownload_enabled: false })
+  const stopped = await stopWechatImageAutoDownload()
   if (!saved.ok) {
-    fail('IMAGE_AUTODOWNLOAD_SETTINGS_SAVE_FAILED', saved.error ?? '保存设置失败')
+    fail(
+      'IMAGE_AUTODOWNLOAD_SETTINGS_SAVE_FAILED',
+      `已尝试关闭并还原，但关闭状态未能保存：${saved.error ?? '保存设置失败'}`,
+    )
     return getWechatImageAutoDownloadStatus(decryptedDir)
   }
-  return await stopWechatImageAutoDownload()
+  return stopped
 }
 
 /**

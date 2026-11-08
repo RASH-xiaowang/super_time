@@ -4,9 +4,9 @@
   gap: 6px;
   height: 32px;
   padding: 0 8px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: var(--nm-dense-r, 8px);
-  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md, 6px);
+  background: var(--nm-bg-card);
 }
 
 .wrap:focus-within {
@@ -28,8 +28,8 @@
   border: none;
   outline: none;
   background: transparent;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-primary);
 }
 

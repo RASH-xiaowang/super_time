@@ -235,8 +235,9 @@ describe('exportAllSessions 流式产出', () => {
     expect(buf.readUInt32LE(buf.length - 22)).toBe(0x06054b50)
     expect(buf.readUInt16LE(buf.length - 22 + 10)).toBe(2) // 两个条目
     const asText = buf.toString('latin1')
-    expect(asText.includes('wxid_a_')).toBe(true)
-    expect(asText.includes('wxid_b_')).toBe(true)
+    // 显示名可能来自兜底文案；用户名仍是每条归档名中稳定可识别的部分。
+    expect(asText.includes('wxid_a.txt')).toBe(true)
+    expect(asText.includes('wxid_b.txt')).toBe(true)
   })
 
   it('重复导出同一数据集产出相同字节（确定性）', async () => {

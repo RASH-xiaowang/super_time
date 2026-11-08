@@ -240,7 +240,7 @@ export interface PosterInput {
   scale?: number
 }
 
-const FONT = '-apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif'
+const FONT = 'system-ui, sans-serif'
 
 function roundRect(
   ctx: CanvasRenderingContext2D,

@@ -1,4 +1,5 @@
-import type { ImageDataUrlResult } from '../types.ts';
+import { type StreamControl } from '../query/zip.ts';
+import type { ImageDataUrlResult, MediaOriginalExportResult } from '../types.ts';
 /** 收藏入口只需要数据根与原目录解析（与其它 media Remote 一致）。 */
 export interface FavoriteMediaRemoteCtx {
     dirs: () => {
@@ -24,4 +25,16 @@ export interface FavoriteMediaOptions {
  */
 export declare function createFavoriteMediaRemotes(rc: FavoriteMediaRemoteCtx): {
     getFavoriteMediaDataUrl: (options: FavoriteMediaOptions) => ImageDataUrlResult;
+    exportFavoriteImage: (options: FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<MediaOriginalExportResult>;
+    exportFavoriteVideo: (options: FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<MediaOriginalExportResult>;
+    exportFavoriteFile: (options: FavoriteMediaOptions & {
+        dest: string;
+        jobId?: string;
+    }, ctrl?: StreamControl) => Promise<MediaOriginalExportResult>;
 };

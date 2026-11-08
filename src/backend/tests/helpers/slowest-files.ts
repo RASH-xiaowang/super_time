@@ -1,5 +1,5 @@
 /**
- * 「最慢的测试文件榜」与「最慢的用例榜」—— 纯函数部分，被 `vitest.config.ts` 的报告器使用。
+ * 「最慢的测试文件榜」与「最慢的用例榜」—— 纯函数部分，被 `vitest.config.mts` 的报告器使用。
  *
  * 为什么要单独一个文件并且可单测：这两张榜是 N36 的判据面。CI 那条假红的线是
  * vitest 里硬编码的 60 秒（`node_modules/vitest/dist/chunks/index.B521nVV-.js:3` 的
@@ -242,7 +242,7 @@ export function formatFileAccounts(accounts: readonly FileAccount[]): string[] {
 /**
  * `[基线榜]` —— **全部**文件的毫秒数，一行一个，机器读的形状。
  *
- * 只由 `SUPERTIME_BASELINE=1` 触发（见 `vitest.config.ts`）：平时多打 235 行是噪声，
+ * 只由 `SUPERTIME_BASELINE=1` 触发（见 `vitest.config.mts`）：平时多打 235 行是噪声，
  * 采集基线时它才是主角。用制表符而不是中文对齐是因为这一份给脚本解析；
  * 人读的榜另有 `[耗时榜]` —— 两种需求分开，省得两边互相将就。
  * @param files - 全部文件的耗时记录。

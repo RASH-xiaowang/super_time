@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WechatContact } from '@deepseek-ai/dsh-wechat-data/types'
 import { apiGetContacts } from '../api.ts'
 import { EmptyState, ErrorState, LoadingState, PanelHeader, SearchInput } from '../ui/kit.tsx'
-import { LazyMount, ListSentinel, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
+import { LazyMount, ListSentinel, ProgressiveListSpacer, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
 import { CustomerPortraitView } from './CustomerPortraitView.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
@@ -152,8 +152,19 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
       return query === '' || customerSearchText(customer).includes(query)
     })
   }, [customers, filter, search])
-  const { count: visibleCount, sentinelRef } = useProgressiveList(filtered.length, 120)
-  const shownCustomers = filtered.slice(0, visibleCount)
+  const directoryListRef = useRef<HTMLDivElement | null>(null)
+  const {
+    start: visibleStart,
+    count: visibleCount,
+    beforeHeight: visibleBeforeHeight,
+    sentinelRef,
+    topSentinelRef,
+  } = useProgressiveList(filtered.length, 120, {
+    maxCount: 300,
+    resetKey: `${filter}\u0000${search}`,
+    listRef: directoryListRef,
+  })
+  const shownCustomers = filtered.slice(visibleStart, visibleCount)
 
   const selectedIdentity = selected ? customerIdentityOf(selected) : null
 
@@ -199,7 +210,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
             <div key={warning} className={css.notice} role="status">{warning}</div>
           ))}
 
-          <div className={css.directoryList}>
+          <div ref={directoryListRef} className={css.directoryList}>
             {loading && customers.length === 0 && <LoadingState label="正在读取客户…" />}
             {!loading && error && customers.length === 0 && (
               <ErrorState message="客户目录读取失败" detail={error} onRetry={() => { void loadCustomers() }} />
@@ -211,7 +222,8 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
                 desc={search.trim() === '' ? '切换分类或等待本机数据同步完成。' : '试试备注、昵称或微信号的其它片段。'}
               />
             )}
-            {shownCustomers.map((customer) => {
+            <ProgressiveListSpacer height={visibleBeforeHeight} topSentinelRef={topSentinelRef} />
+            {shownCustomers.map((customer, idx) => {
               const name = customer.displayName || customer.remark || customer.nickName || customer.username
               const identity = withEnterprise(name, customer.enterpriseName)
               const groups = customer.groupUsernames?.length ?? 0
@@ -220,6 +232,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
                   key={customer.username}
                   type="button"
                   className={css.customerRow}
+                  data-progressive-item={visibleStart + idx}
                   data-active={selectedUsername === customer.username || undefined}
                   onClick={() => { setSelectedUsername(customer.username) }}
                   aria-pressed={selectedUsername === customer.username}

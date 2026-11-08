@@ -26,7 +26,7 @@
  * @module panels/settings-remote-access
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { encodeQr, qrSvgPath } from './clawbot-qr.ts'
+import { encodeQr, qrSvgPath } from './qr.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import css from './settings-remote-access.module.css'
 import { desktopOnlyGate } from '../ui/desktop-only.tsx'
@@ -68,7 +68,7 @@ function buildQr(address: string, port: number, pairingCode: string): OneTimeQr 
   try {
     return { url, pairingCode, path: qrSvgPath(encodeQr(url)), error: '' }
   } catch (e) {
-    // clawbot-qr 的容量上限是 230 字节（版本 9 / EC-L）；这个 URL 约 60–70 字节，
+    // qr 的容量上限是 230 字节（版本 9 / EC-L）；这个 URL 约 60–70 字节，
     // 正常不会超。真超了说明地址或端口出了怪值，此时仍给出手输链接。
     return { url, pairingCode, path: null, error: e instanceof Error ? e.message : String(e) }
   }

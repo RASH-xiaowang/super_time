@@ -21,6 +21,7 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { contactMeta } from './meta.ts'
+import { normalizeHistoryRuntimeTrace } from './ask-history-trace.ts'
 import { dirname, join } from 'node:path'
 import type {
   AskCitation,
@@ -87,10 +88,28 @@ function openStore(decryptedDir: string): DatabaseSync {
     status TEXT NOT NULL,
     error TEXT,
     retrieval TEXT,
-    elapsed_ms INTEGER
+    elapsed_ms INTEGER,
+    runtime_trace TEXT NOT NULL DEFAULT ''
   )`)
+  // SQLite 没有 ADD COLUMN IF NOT EXISTS；旧库靠 PRAGMA 判列后幂等补列。
+  // 失败不抛出：列表仍可用 SELECT * 读到旧列，写入再退回旧列集合。
+  try {
+    const columns = db.prepare('PRAGMA table_info(ask_history)').all() as Array<{ name?: unknown }>
+    if (!columns.some(column => column.name === 'runtime_trace')) {
+      db.exec("ALTER TABLE ask_history ADD COLUMN runtime_trace TEXT NOT NULL DEFAULT ''")
+    }
+  } catch { /* 补列失败必须降级，不能连带让历史列表打不开 */ }
   db.exec('CREATE INDEX IF NOT EXISTS ask_history_ts ON ask_history(ts)')
   return db
+}
+
+function hasRuntimeTraceColumn(db: DatabaseSync): boolean {
+  try {
+    const columns = db.prepare('PRAGMA table_info(ask_history)').all() as Array<{ name?: unknown }>
+    return columns.some(column => column.name === 'runtime_trace')
+  } catch {
+    return false
+  }
 }
 
 /** 收敛缺失/占位文本（与 export-history 同口径，避免界面上出现字面量 "undefined"）。 */
@@ -168,6 +187,12 @@ export interface RecordAskInput {
   evidence?: unknown
   /** 工具 trace；只落脱敏后的有界字段，不落完整参数。 */
   toolCalls?: unknown
+  /** 旧式单段思考；仅在没有分段思考时作为回退写入轨迹。 */
+  reasoning?: string
+  /** 按工具轮次/综合阶段拆分的可展示思考。 */
+  reasoningSegments?: unknown
+  /** 运行阶段事件；只保留稳定字段，明确丢弃 argumentsSummary。 */
+  stages?: unknown
   /** 资源引用；只落条数与来源工具。 */
   resources?: unknown
   /** 多阶段检索统计（结构化存 JSON）。 */
@@ -263,8 +288,10 @@ function historyToolCallSummary(value: unknown): Record<string, unknown> | undef
     items.push({
       index: finiteNumber(raw['index']),
       round: finiteNumber(raw['round']),
+      callId: clippedText(raw['callId'], 240),
       name: clippedText(raw['name'], 100),
       ok: raw['ok'] === true,
+      deduplicated: raw['deduplicated'] === true,
       attempts: finiteNumber(raw['attempts']),
       retries: finiteNumber(raw['retries']),
       elapsedMs: finiteNumber(raw['elapsedMs']),
@@ -391,46 +418,50 @@ export function recordAsk(decryptedDir: string, input: RecordAskInput): number |
     const evidence = historyEvidenceSummary(input.evidence)
     const toolCalls = historyToolCallSummary(input.toolCalls)
     const resources = historyResourceSummary(input.resources)
+    const runtimeTrace = normalizeHistoryRuntimeTrace(input)
+    const runtimeTraceJson = runtimeTrace === undefined ? '' : safeJson(runtimeTrace)
     const citations = (Array.isArray(input.citations) ? input.citations : []).slice(0, MAX_CITATIONS)
     const terms = (Array.isArray(input.terms) ? input.terms : [])
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
       .slice(0, MAX_TERMS)
     const db = openStore(decryptedDir)
     try {
-      const info = db.prepare(`INSERT INTO ask_history
-        (ts, question, answer, source, username, username_name, from_day, to_day, model,
-         intent, terms, citations, cited_indexes, basis, status, error, retrieval, elapsed_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(
-          input.ts ?? Date.now(),
-          question,
-          answer,
-          cleanText(input.source) || 'ask',
-          cleanText(input.username),
-          cleanText(input.usernameName),
-          cleanText(input.from),
-          cleanText(input.to),
-          cleanText(input.model),
-          cleanText(input.intent),
-          safeJson(terms),
-          safeJson(citations),
-          safeJson((Array.isArray(input.citedIndexes) ? input.citedIndexes : []).filter(n => Number.isFinite(n))),
-          cleanText(input.basis),
-          status.status,
-          status.error,
-          retrieval === undefined
-            ? ''
-            : safeRetrievalJson(
-              retrieval,
-              runtime,
-              reason,
-              clippedText(input.synthesisError, MAX_RUNTIME_TEXT),
-              evidence,
-              toolCalls,
-              resources,
-            ),
-          Number.isFinite(input.elapsedMs) ? Math.round(Number(input.elapsedMs)) : 0,
-        )
+      const values: Array<string | number> = [
+        input.ts ?? Date.now(),
+        question,
+        answer,
+        cleanText(input.source) || 'ask',
+        cleanText(input.username),
+        cleanText(input.usernameName),
+        cleanText(input.from),
+        cleanText(input.to),
+        cleanText(input.model),
+        cleanText(input.intent),
+        safeJson(terms),
+        safeJson(citations),
+        safeJson((Array.isArray(input.citedIndexes) ? input.citedIndexes : []).filter(n => Number.isFinite(n))),
+        cleanText(input.basis),
+        status.status,
+        status.error,
+        retrieval === undefined
+          ? ''
+          : safeRetrievalJson(
+            retrieval,
+            runtime,
+            reason,
+            clippedText(input.synthesisError, MAX_RUNTIME_TEXT),
+            evidence,
+            toolCalls,
+            resources,
+          ),
+        Number.isFinite(input.elapsedMs) ? Math.round(Number(input.elapsedMs)) : 0,
+      ]
+      const hasTraceColumn = hasRuntimeTraceColumn(db)
+      if (hasTraceColumn) values.push(runtimeTraceJson)
+      const columns = `ts, question, answer, source, username, username_name, from_day, to_day, model,
+        intent, terms, citations, cited_indexes, basis, status, error, retrieval, elapsed_ms${hasTraceColumn ? ', runtime_trace' : ''}`
+      const placeholders = values.map(() => '?').join(', ')
+      const info = db.prepare(`INSERT INTO ask_history (${columns}) VALUES (${placeholders})`).run(...values)
       return Number(info.lastInsertRowid ?? 0) || null
     } finally {
       db.close()
@@ -448,6 +479,11 @@ function buildWhere(query: AskHistoryQuery): { sql: string; params: Array<string
   if (sources.length > 0) {
     clauses.push('source IN (' + sources.map(() => '?').join(', ') + ')')
     params.push(...sources)
+  }
+  const username = typeof query.username === 'string' ? query.username.trim() : ''
+  if (username !== '') {
+    clauses.push('username = ?')
+    params.push(username)
   }
   if (query.status && ALLOWED_STATUS.has(query.status)) {
     clauses.push('status = ?')
@@ -485,6 +521,10 @@ function rowToEntry(
   const storedError = cleanText(r['error'])
   const username = cleanText(r['username'])
   const usernameEnterpriseName = username === '' ? '' : (enterpriseNames.get(username)?.trim() ?? '')
+  const parsedRuntimeTrace = parseJson<unknown>(r['runtime_trace'], null)
+  const runtimeTrace = normalizeHistoryRuntimeTrace(
+    isRecordValue(parsedRuntimeTrace) ? parsedRuntimeTrace : null,
+  )
   return {
     id: Number(r['id'] ?? 0),
     ts: Number(r['ts'] ?? 0),
@@ -508,6 +548,7 @@ function rowToEntry(
       ? storedError
       : [storedError, `未知历史状态：${clip(storedStatus, 80) || '（空）'}`].filter(Boolean).join('；'),
     retrieval: parseJson<Record<string, unknown> | null>(r['retrieval'], null),
+    ...(runtimeTrace === undefined ? {} : { runtimeTrace }),
     elapsedMs: Number(r['elapsed_ms'] ?? 0),
   }
 }
@@ -530,10 +571,9 @@ export function listAskHistory(decryptedDir: string, query: AskHistoryQuery = {}
   try {
     const db = openStore(decryptedDir)
     try {
+      // SELECT *：旧库补列失败时仍能读到原有字段，新增列只是可选增强。
       const rows = db.prepare(
-        `SELECT id, ts, question, answer, source, username, username_name, from_day, to_day, model,
-                intent, terms, citations, cited_indexes, basis, status, error, retrieval, elapsed_ms
-         FROM ask_history${where} ORDER BY ${col} ${dir}, id DESC LIMIT ? OFFSET ?`,
+        `SELECT * FROM ask_history${where} ORDER BY ${col} ${dir}, id DESC LIMIT ? OFFSET ?`,
       ).all(...params, limit, offset) as Array<Record<string, unknown>>
       const total = Number((db.prepare(`SELECT COUNT(*) AS c FROM ask_history${where}`).get(...params) as { c?: number } | undefined)?.c ?? 0)
       // 聚合计数按未分页的命中集合算，否则页签数字会随翻页变化。

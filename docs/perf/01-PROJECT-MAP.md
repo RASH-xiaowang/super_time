@@ -6,12 +6,12 @@
 
 1. **三进程、两条通道**：主进程 `main.js`（581 行）负责窗口/IPC/许可证/更新；后端跑在 `utilityProcess` worker（`src/backend/wechat-worker.js`），加载 1.88 MB 的 esbuild 单文件 bundle（`src/backend/wechat-data/lib/index.js`）；渲染进程是 React 18 + Vite 产物（`src/client/ui-dist`，4.42 MB / 248 文件）。渲染层只经 `preload.js` 的 `contextBridge` 说话，主进程↔worker 走 `postMessage`（见 `docs/ARCHITECTURE.md:14-30`、`src/backend/backend-supervisor.js:150-160`）。
 2. **构建链三步串行**：`build:backend`（esbuild → lib/index.js，1884.9 KB）→ `build:types`（tsc → lib/types）→ `build:ui`（vite → ui-dist，60 个 JS chunk）。三者各有一致性门禁（`package.json:12-17`、`docs/ARCHITECTURE.md:184-194`）。
-3. **前端已按面板懒加载**：31 个面板用 `React.lazy` 拆 chunk（`src/client/ui-wechat/src/client/pages/wechat-data/panel-loaders.tsx:12-46`），主包约 354 KB、最大的按需块 `installCanvasRenderer` 441.6 KB；vite 用 550 KB 阈值把"重新长回单体"变成可见回归（`vite.config.js:29-33`）。
-4. **业务面**：侧栏 5 组/14 个可见入口、39 个可路由 tab（14 可见 + 24 隐藏 + settings；`src/client/README.md:33` 仍写 38，clawbot 后未更新，见 §8），后端 214 个 Remote 方法（`docs/API.md`，CI 校验）；后端 query/ 顶层 149 个文件（另有 bot/kb/retrieval/tools 子域）、23 个分域 remotes、19 个 gateway 分片。
+3. **前端已按面板懒加载**：31 个面板用 `React.lazy` 拆 chunk（`src/client/ui-wechat/src/client/pages/wechat-data/panel-loaders.tsx:12-46`），主包约 354 KB、最大的按需块 `installCanvasRenderer` 441.6 KB；vite 用 550 KB 阈值把"重新长回单体"变成可见回归（`vite.config.mjs:29-33`）。
+4. **业务面**：侧栏 5 组/14 个可见入口、可路由 tab 以 `nav-config.ts` 的联合类型与入口列表为准（不要照抄 README 旧数字），后端 Remote 方法数以 `docs/API.md` 为准并由 CI 校验；后端 query/ 顶层 149 个文件（另有 bot/kb/retrieval/tools 子域）、23 个分域 remotes、gateway 分片按源码实测。
 5. **资源大头在安装包而非内存**：win-unpacked 530.9 MB（Electron 234.7 MB + whisper 模型 74.1 MB + app.asar 42.5 MB + onnxruntime 27.4 MB）；仓库内 ui-dist 4.42 MB 中图片占 1.52 MB（wxemoji 921.5 KB + 4 张 onboarding 背景 601.5 KB，后者**全仓无引用**）。
 6. **启动编排已做对**：先建窗（占位首帧）→ 再起后端 init，首帧不等 1.88 MB bundle 解析（`main.js:523-530`）；后端 init 后 `setImmediate` 低优先级预热 shardCatalog/contact_fts（`query/startup-prewarm.ts:1-22`）。
 7. **性能机制已成体系**（优化时先找它们，别重造）：签名缓存 SWR `cachedBySig`/`cachedFetch`、`decoded_images` 磁盘解码缓存 + `wechat-media://` 流式协议（字节不进 IPC）、虚拟列表 + `usePagedList/useLazySentinel`、`yieldToLoop` 让出、HTTP 队列并发 2/排队 32、worker 内存哨兵 1.2 GB 告警线。
-8. **测试口径要小心**：共享简报的 813 = 645 个 `*.spec.ts` + 168 个 vendored zod `*.test.ts`；vitest 实际只收集 624 个 spec（`vitest.config.ts:51-62`）。性能基准 19 个（18 quick + 1 slow 801.5 s）。
+8. **测试口径要小心**：共享简报的 813 = 645 个 `*.spec.ts` + 168 个 vendored zod `*.test.ts`；vitest 实际只收集 624 个 spec（`vitest.config.mts:51-62`）。性能基准 19 个（18 quick + 1 slow 801.5 s）。
 
 ## 1. 进程与入口
 
@@ -31,7 +31,7 @@
 |---|---|---|---|
 | 1 后端 bundle | `node scripts/build-wechat-bundle.js`（`package.json:14`） | `wechat-data/src/index.ts` + `net/fetch-retry.ts` → `lib/index.js`（1884.9 KB）+ `lib/net/fetch-retry.js`（≈3 KB）。esbuild ESM/node22/`packages:external`，TC39 装饰器语义（`build-wechat-bundle.js:71-91`） | `npm run check:backend` 临时目录重建后逐字节比对（`docs/ARCHITECTURE.md:189`） |
 | 2 类型 | `node scripts/build-types.js`（`package.json:15`） | 清空后 `tsc -p tsconfig.types.json` → `lib/types/**`（`build-types.js:35-44`） | `npm run check:types` |
-| 3 前端 | `vite build`（`package.json:13`） | root `src/client/ui-app`，outDir `src/client/ui-dist`，target chrome120（`vite.config.js:16-33`） | `build:ui` + `check:shim`；CSS/交互/主题/响应式另有 8 个 ui 门禁 |
+| 3 前端 | `vite build`（`package.json:13`） | root `src/client/ui-app`，outDir `src/client/ui-dist`，target chrome120（`vite.config.mjs:16-33`） | `build:ui` + `check:shim`；CSS/交互/主题/响应式另有 8 个 ui 门禁 |
 | 打包 | `npm run pack` / `dist` | electron-builder NSIS x64（`package.json:79-80,241-258`）；`files` 白名单（`:177-223`），`asarUnpack` = koffi/onnx/原生/资源/whisper（`:225-233`），fuses 全收紧（`:234-240`） | `nightly.yml` 的 `pack → package:smoke` |
 
 产物实测：`lib/index.js` 1884.9 KB；`ui-dist` 4.42 MB/248 文件（JS 2222.6 KB/60、CSS 673.3 KB/35、webp 601.5 KB/4、png 921.5 KB/148、html 5.6 KB）；`win-unpacked` 530.9 MB/553 文件；安装包 189.42 MB。
@@ -49,14 +49,14 @@ src/shared/llm-defaults.json（唯一共享文件）
 ```
 
 - vendor 依赖 17 个：koffi/@koromix（原生，asarUnpack，`koffi.node` 1018.5 KB）、onnxruntime-node（27.4 MB DLL）、zod（717 文件 4.45 MB，含 168 个 `.test.ts`）、dsh-llm/cordis/typert-protocol 等；`deps/PROVENANCE.json` + `check:deps-provenance` 防静默漂移（`src/backend/README.md:49-60`）。
-- 前端依赖：React 18、Radix、TanStack Table/Virtual、ECharts、graphology-forceatlas2（`package.json:133-162`）；`dedupe:['react','react-dom']` 防双 React 黑屏（`vite.config.js:51-61`）。
+- 前端依赖：React 18、Radix、TanStack Table/Virtual、ECharts、graphology-forceatlas2（`package.json:133-162`）；`dedupe:['react','react-dom']` 防双 React 黑屏（`vite.config.mjs:51-61`）。
 
 ## 4. 业务模块清单
 
 **前端（`src/client/ui-wechat/src` 共 381 ts + 173 tsx + 77 css；数据面板在其 `pages/wechat-data/`）**
 - 侧栏 5 组：概览·问答·总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护；14 个可见入口（数据总览、微信问答、总结、聊天会话、群聊分析、通讯录、朋友圈、知识库、收藏与表情、文件与存储、资金往来、待办日程、操作日志、设置），`WechatTab` 联合类型实测 **39 个**（14 可见 + 24 隐藏 + settings；`nav-config.ts:29-33,59-256`）。
-- 面板分片：`chats-*`、`graph-*`、`world-map-*`、`overview-*`、`settings-*`、`moments-*`、`kb-*`、`clawbot-*` 等（`docs/ARCHITECTURE.md:171-182`）；壳/引导/同意/授权在 `src/client/ui-app/`。
-- 状态/取数：`api-*.ts` 拆 10 个域文件（config/core/read/media/search/kb/export-ops/task-center/clawbot/status）；`cache.ts` 的 `cachedFetch` SWR；`panels/hooks.tsx` 分页/懒加载（`useLazySentinel` 在 `:90`）；消息流/收藏/文件/朋友圈四处虚拟化（`ARCHITECTURE.md:179-182`）。
+- 面板分片：`chats-*`、`graph-*`、`world-map-*`、`overview-*`、`settings-*`、`moments-*`、`kb-*` 等（`docs/ARCHITECTURE.md:171-182`）；壳/引导/同意/授权在 `src/client/ui-app/`。
+- 状态/取数：`api-*.ts` 按配置、读取、媒体、检索、知识库、导出、任务中心等域拆分；`cache.ts` 的 `cachedFetch` SWR；`panels/hooks.tsx` 分页/懒加载（`useLazySentinel` 在 `:90`）；消息流/收藏/文件/朋友圈四处虚拟化（`ARCHITECTURE.md:179-182`）。
 
 **后端查询域（`wechat-data/src/query/` 149 文件 + `remotes/` 23 文件 + `gateway*.ts` 19 文件 / 214 Remote）**
 
@@ -68,7 +68,7 @@ src/shared/llm-defaults.json（唯一共享文件）
 | 分析/报告 | `overview*.ts`、`annual-*.ts`(6)+`annual.ts`、`group-insights.ts`、`wordcloud.ts`、`graph.ts` | 大多数走 `cachedBySigAsync` + 30s~TTL |
 | 知识库/RAG/LLM | `kb-*.ts`(8)、`query/kb/*`、`query/retrieval/*`、`ask.ts`、`ask-history.ts`、`embed-cache.ts` | 向量库 + FTS + LLM 桥（`llm-http.js` 唯一出网传输） |
 | 导出/备份/运维 | `export*.ts`(5)、`backup.ts`、`db-health.ts`、`db-repair.ts`、`operation-log.ts`、`privacy*.ts`(2)、`storage.ts` | 长任务 + 取消 + 审计 |
-| 任务中心/ClawBot | `task-center*.ts`(3)、`wechat-tasks.ts`、`query/clawbot/*`、`remotes/clawbot.ts` | 关键词触发任务、实例管理 |
+| 任务中心 | `task-center*.ts`(3)、`wechat-tasks.ts`、`remotes/task-center.ts` | 关键词触发任务、触发记录与投递 |
 | 语音 | `voice*.ts`、`whisper.ts`、`voice-transcribe.ts` | whisper-cli 异步 spawn（`voice-transcribe.ts:126-134`） |
 
 ## 5. 资源清单（在哪、多大、谁加载）
@@ -89,7 +89,7 @@ src/shared/llm-defaults.json（唯一共享文件）
 
 ## 6. 测试体系
 
-- **单测/契约**：645 个 `*.spec.ts`（wechat-data/tests 255、backend/tests 115、ui-wechat 245、ui-app 9、deps 21），vitest 收集其中 624 个（`vitest.config.ts:51-62`）；`fileParallelism:true`，本机超时 180 s，CI `maxWorkers:1`（`:82-83,109`）；报告器额外打印最慢文件/用例榜（`:17-37`）。
+- **单测/契约**：645 个 `*.spec.ts`（wechat-data/tests 255、backend/tests 115、ui-wechat 245、ui-app 9、deps 21），vitest 收集其中 624 个（`vitest.config.mts:51-62`）；`fileParallelism:true`，本机超时 180 s，CI `maxWorkers:1`（`:82-83,109`）；报告器额外打印最慢文件/用例榜（`:17-37`）。
 - **命名纪律**：`*.wiring.spec.ts` 118 个（"接上了"），`*.guard.spec.ts` 4 个，`*.measure.spec.ts` 19 个（默认 skip，靠门控变量跑）。
 - **性能基准**：`scripts/run-measures.mjs` 19 项 = 18 quick（约 27 s）+ 1 slow（export-memory 801.5 s，脚本头 `:20-32`）；`npm run measure:quick/slow`（`package.json:67-69`）。
 - **e2e/审计脚本**：scripts 顶层 116 文件，75 个 `.mjs`：e2e 12（longlist 虚拟化、loading 恢复、ledger 重载、导出/备份进度等）、audit/acceptance 10、gate/budget/diff 8（interactive-budget、theme-budget、responsive/density gate、css:bundle-diff）、smoke 12、SSR 冒烟 5 个 tsx、其余 CI/一致性/工具。
@@ -110,7 +110,7 @@ src/shared/llm-defaults.json（唯一共享文件）
 1. **`query/cdn-policy.ts` 已不存在**：2026-09-30 出网开关整体移除（`CHANGELOG.md:1077`、`query/gateway-privacy.ts:4-6`），并有反向守卫「该文件必须不存在」（`tests/gateway-privacy-gate.spec.ts:76-79`）。简报 §4 的"唯一口径"已失效；现口径是 `privacyGate` 只做脱敏+审计，出网按 `fetch(` 调用点台账登记（`src/backend/tests/outbound-site-coverage.spec.ts`）。
 2. **后端 bundle 是 1884.9 KB 不是 783 KB**：`main.js:524` 的注释（"import 783KB 的 bundle"）是旧值，冷启动量级应按 ~1.9 MB + typert 197.6 KB 估。
 3. **813 个 spec 的组成**：645 本仓 `.spec.ts` + 168 个 vendored zod `.test.ts`；vitest 实收集 624 个。别把 zod 测试算进本仓测试规模。
-4. **tab 计数口径**：`src/client/README.md:33` 写"可路由页签 38"，`nav-config.ts:29-33` 实测联合类型 39 个（clawbot 后加未更新）；14 个可见侧栏入口不变。写方案时以代码实测为准。
+4. **tab 计数口径**：`src/client/README.md` 的历史计数可能滞后；写方案时以 `nav-config.ts` 的联合类型和可见入口列表为准。
 
 ## 9. 给优化方案的建议（按价值排序）
 

@@ -34,7 +34,13 @@ afterEach(() => {
  * @param opts - `onlyRed`/`noTables` 控制建哪张表。
  * @returns 解密根目录。
  */
-function makeRoot(rows: Array<[number, string, number]> = [], reds: Array<[number, string, string?]> = [], opts: { onlyRed?: boolean; noTables?: boolean } = {}): string {
+type ServerId = number | string | bigint
+
+function makeRoot(
+  rows: Array<[ServerId, string, number, ServerId?]> = [],
+  reds: Array<[ServerId, string, string?]> = [],
+  opts: { onlyRed?: boolean; noTables?: boolean } = {},
+): string {
   const root = mkdtempSync(join(tmpdir(), 'payments-'))
   scratch.push(root)
   mkdirSync(join(root, 'general'), { recursive: true })
@@ -42,10 +48,12 @@ function makeRoot(rows: Array<[number, string, number]> = [], reds: Array<[numbe
   if (!opts.noTables) {
     if (!opts.onlyRed) {
       db.exec(`CREATE TABLE transferTable (
-        message_server_id INTEGER, transfer_id TEXT, pay_sub_type INTEGER, pay_receiver TEXT, pay_payer TEXT,
+        message_server_id INTEGER, second_message_server_id INTEGER, transfer_id TEXT, pay_sub_type INTEGER, pay_receiver TEXT, pay_payer TEXT,
         begin_transfer_time INTEGER, last_modified_time INTEGER, invalid_time INTEGER, delay_confirm_flag INTEGER)`)
-      const ins = db.prepare('INSERT INTO transferTable VALUES (?,?,2,?, ?, 1700000000, 1700000060, 1700000900, ?)')
-      for (const [sid, tid, dcf] of rows) ins.run(sid, tid, 'wxid_payee', 'wxid_payer', dcf)
+      const ins = db.prepare('INSERT INTO transferTable VALUES (?,?,?,2,?, ?, 1700000000, 1700000060, 1700000900, ?)')
+      for (const [sid, tid, dcf, sid2 = 0] of rows) {
+        ins.run(sid, sid2, tid, 'wxid_payee', 'wxid_payer', dcf)
+      }
     }
     db.exec('CREATE TABLE redEnvelopeTable (message_server_id INTEGER, sender_user_name TEXT, hb_status INTEGER, hb_type INTEGER, receive_status INTEGER, send_id TEXT)')
     const insRed = db.prepare('INSERT INTO redEnvelopeTable VALUES (?,?,3,1,2,?)')
@@ -79,14 +87,15 @@ function seedEnterpriseContact(root: string, username: string, name: string, ent
 }
 
 describe('queryPaymentStatus：转账', () => {
-  it('按 message_server_id 命中，字段逐个落位（金额状态是给人看的，取错列就是撒谎）', () => {
+  it('按 message_server_id 命中，字段逐个落位（金额状态是给人看的，取错列就是撒谎）', async () => {
     const root = makeRoot([[7_000_000_000_001, 'TF20231114', 1]])
-    const res = queryPaymentStatus(root, '7000000000001')
+    const res = await queryPaymentStatus(root, '7000000000001')
     expect(res.found).toBe(true)
     expect(res.kind).toBe('transfer')
     expect(res.serverId).toBe('7000000000001')
     expect(res.transfer).toMatchObject({
       transferId: 'TF20231114',
+      matchedServerId: '7000000000001',
       paySubType: 2,
       receiver: 'wxid_payee',
       payer: 'wxid_payer',
@@ -98,7 +107,17 @@ describe('queryPaymentStatus：转账', () => {
     // 转账优先：同一 id 两边都有时，先转账再红包（口径只能有一个）
   })
 
-  it('id 是**超过 2^53 的整数列**也必须命中（少一个 CAST 就查不到，而这不是「没有这笔单」）', () => {
+  it('最终卡只在 second_message_server_id 时也必须命中', async () => {
+    const root = makeRoot([[7001, 'TF-dual', 0, 7002]])
+    const res = await queryPaymentStatus(root, '7002')
+    expect(res).toMatchObject({
+      found: true,
+      kind: 'transfer',
+      transfer: { transferId: 'TF-dual', matchedServerId: '7002' },
+    })
+  })
+
+  it('id 是**超过 2^53 的整数列**也必须命中（少一个 CAST 就查不到，而这不是「没有这笔单」）', async () => {
     const root = mkdtempSync(join(tmpdir(), 'payments-big-'))
     scratch.push(root)
     mkdirSync(join(root, 'general'), { recursive: true })
@@ -107,31 +126,34 @@ describe('queryPaymentStatus：转账', () => {
     // 直接以文本存 id（真实库里两种形态都见过）
     db.prepare('INSERT INTO transferTable VALUES (?, ?, 2, ?, ?, 1700000000, 1700000000, 1700000000, 0)').run('9007199254740993', 'TF_big', 'a', 'b')
     db.close()
-    expect(queryPaymentStatus(root, '9007199254740993').found, '大整数 id 查不到 ⇒ 这张单子永远显示「无状态」').toBe(true)
+    expect(
+      (await queryPaymentStatus(root, '9007199254740993')).found,
+      '大整数 id 查不到 ⇒ 这张单子永远显示「无状态」',
+    ).toBe(true)
   })
 
-  it('查不到 ⇒ found:false 且不带半截对象；空 id 也不炸', () => {
+  it('查不到 ⇒ found:false 且不带半截对象；空 id 也不炸', async () => {
     const root = makeRoot([[1, 'TF1', 0]])
-    expect(queryPaymentStatus(root, '999999')).toEqual({ found: false })
-    expect(queryPaymentStatus(root, '')).toEqual({ found: false })
-    expect(queryPaymentStatus(root, '1').transfer?.delayConfirm, 'flag=0 该读成 false').toBe(false)
+    expect(await queryPaymentStatus(root, '999999')).toEqual({ found: false })
+    expect(await queryPaymentStatus(root, '')).toEqual({ found: false })
+    expect((await queryPaymentStatus(root, '1')).transfer?.delayConfirm, 'flag=0 该读成 false').toBe(false)
   })
 })
 
 describe('queryPaymentStatus：红包与缺表', () => {
-  it('转账表没有、红包表有 ⇒ 走红包分支（两表都在同一个库里，分支顺序不能反）', () => {
+  it('转账表没有、红包表有 ⇒ 走红包分支（两表都在同一个库里，分支顺序不能反）', async () => {
     const root = makeRoot([], [[42, 'SEND42']], { onlyRed: true })
-    const res = queryPaymentStatus(root, '42')
+    const res = await queryPaymentStatus(root, '42')
     expect(res.kind).toBe('redpacket')
     expect(res.redpacket).toMatchObject({ sender: 'wxid_sender', hbStatus: 3, hbType: 1, receiveStatus: 2, sendId: 'SEND42' })
   })
 
-  it('红包发送者是企微联系人时同时带出显示名与企业名', () => {
+  it('红包发送者是企微联系人时同时带出显示名与企业名', async () => {
     const username = 'wxid_redpacket@openim'
     const root = makeRoot([], [[42, 'SEND42', username]], { onlyRed: true })
     seedEnterpriseContact(root, username, '张三', '甲方公司')
 
-    const res = queryPaymentStatus(root, '42')
+    const res = await queryPaymentStatus(root, '42')
     expect(res.redpacket).toMatchObject({
       sender: username,
       senderName: '张三',
@@ -139,38 +161,38 @@ describe('queryPaymentStatus：红包与缺表', () => {
     })
   })
 
-  it('general.db 不存在 ⇒ found:false，不打日志也不抛（这台机器还没解密）', () => {
+  it('general.db 不存在 ⇒ found:false，不打日志也不抛（这台机器还没解密）', async () => {
     const root = mkdtempSync(join(tmpdir(), 'payments-none-'))
     scratch.push(root)
-    expect(queryPaymentStatus(root, '1')).toEqual({ found: false })
+    expect(await queryPaymentStatus(root, '1')).toEqual({ found: false })
   })
 
-  it('库在但两张支付表都没有 ⇒ found:false 并且**留一条 warn**（静默会让「支付状态永远空白」查不出原因）', () => {
+  it('库在但两张支付表都没有 ⇒ found:false 并且**留一条 warn**（静默会让「支付状态永远空白」查不出原因）', async () => {
     const root = makeRoot([], [], { noTables: true })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      expect(queryPaymentStatus(root, '1')).toEqual({ found: false })
+      expect(await queryPaymentStatus(root, '1')).toEqual({ found: false })
       expect(warn.mock.calls.map((c) => String(c[1] ?? '')).join(' '), '支付表缺失被完全咽掉了').toContain('transferTable')
     } finally { warn.mockRestore() }
   })
 
-  it('真的读失败（库里是一张坏表/列缺失）不许被咽成「查无此单」—— P1-1 的契约', () => {
+  it('真的读失败（库里是一张坏表/列缺失）不许被咽成「查无此单」—— P1-1 的契约', async () => {
     const root = mkdtempSync(join(tmpdir(), 'payments-broken-'))
     scratch.push(root)
     mkdirSync(join(root, 'general'), { recursive: true })
     const file = join(root, 'general', 'general.db')
     // 一个存在但打不开成 sqlite 的文件：这不是「没有支付记录」，是读失败
     writeFileSync(file, 'not a database at all', 'utf8')
-    expect(() => queryPaymentStatus(root, '1')).toThrow()
+    await expect(queryPaymentStatus(root, '1')).rejects.toThrow()
   })
 
-  it('同一个数据根的同一张缺表只提醒一次（支付状态是按单查的，不封顶就是刷屏）', () => {
+  it('同一个数据根的同一张缺表只提醒一次（支付状态是按单查的，不封顶就是刷屏）', async () => {
     const root = makeRoot([], [], { noTables: true })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      queryPaymentStatus(root, '1')
-      queryPaymentStatus(root, '2')
-      queryPaymentStatus(root, '3')
+      await queryPaymentStatus(root, '1')
+      await queryPaymentStatus(root, '2')
+      await queryPaymentStatus(root, '3')
       const tables = warn.mock.calls.map((c) => String(c[1] ?? ''))
       expect(tables.filter((t) => t === 'transferTable').length, '每查一单提醒一次 ⇒ 支付面板一开就淹没日志').toBe(1)
     } finally { warn.mockRestore() }

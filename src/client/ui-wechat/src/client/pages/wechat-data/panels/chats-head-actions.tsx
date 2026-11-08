@@ -14,18 +14,24 @@
  * 宽度纪律：动作区是实测瓶颈（P0-2 审计：960px 时连「群信息」都点不到）⇒ 新增按钮一律
  * **纯图标 + title/aria-label**，低频动作（导出 / 已编辑 / 清空草稿）继续收在「更多」里。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { TaskCreateDialog } from './task-create-dialog.tsx'
+import {
+  ChatAiReplyMenu,
+  ChatAiReplySettingsHost,
+  type ChatAiReplyUiState,
+} from './chat-ai-reply-menu.tsx'
 import { IconCalendar } from './chats-support.tsx'
 import {
   IconChevronLeftOutline14, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16,
   IconPlusOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { EditedMessageRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 export interface ChatsHeadActionsProps {
   /** 当前会话（动作按单聊/群聊分叉）。 */
@@ -69,6 +75,8 @@ export interface ChatsHeadActionsProps {
    * 加不了行；这一份不在台账上，所以按钮住这里，桌面端由 CSS 藏掉。
    */
   onBackToList?: () => void
+  /** 会话级自动回复：null = 加载中/不可用；仅单聊显示。 */
+  aiReply?: ChatAiReplyUiState
 }
 
 /**
@@ -81,10 +89,15 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
     curSession, aiEligible, aiOpen, setAiOpen, setAiFull, suggestOpen, setSuggestOpen,
     analysisPaneOpen, setAnalysisPaneOpen, openCalendar, groupInfoOpen, openGroupInfo,
     setGroupInfoOpen, contactInfoOpen, setContactInfoOpen, moreOpen, setMoreOpen, exporting, editing, edits,
-    setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList,
+    setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList, aiReply,
   } = props
   /** 「新建任务」弹窗（触发式任务：关键词 + 对象 + 照片档位）只在点开时渲染，不占头部布局。 */
   const [taskOpen, setTaskOpen] = useState(false)
+  const [aiReplySettingsOpen, setAiReplySettingsOpen] = useState(false)
+  const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, () => { setMoreOpen(false) })
+  useEffect(() => {
+    setAiReplySettingsOpen(false)
+  }, [curSession.username])
   return (
     <>
     <div className={cssshell.msgHeaderActions}>
@@ -134,13 +147,14 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                   <span className={cssshell.calBtnLabel}>AI 问答</span>
                 </button>
               )}
-              <div className={cssshell.msgHeaderMoreWrap} data-st-menu="msg-header-more">
+              <div className={cssshell.msgHeaderMoreWrap} data-st-menu="msg-header-more" ref={moreRootRef}>
                 <button
+                  ref={moreTriggerRef}
                   type="button"
                   className={cssrows.calBtn}
                   title="更多操作"
                   aria-haspopup="menu"
-                  aria-expanded={moreOpen || undefined}
+                  aria-expanded={moreOpen}
                   data-active={moreOpen || undefined}
                   onClick={() => { setMoreOpen(v => !v) }}
                 >
@@ -154,7 +168,7 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                       两块面板改成右侧停靠栏（与消息流并排），入口仍在、头部只剩 2 个动作。
                       推荐回复只对单聊出现（「回一句」在群里不成立）。
                     */}
-                    {curSession.type === 'private' && (
+                    {curSession.type === 'private' && aiReply?.visible === true && (
                       <button
                         type="button"
                         role="menuitem"
@@ -182,6 +196,12 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                         推荐回复
                       </button>
                     )}
+                    <ChatAiReplyMenu
+                      curSession={curSession}
+                      aiReply={aiReply}
+                      onCloseMenu={() => { setMoreOpen(false) }}
+                      onOpenSettings={() => { setAiReplySettingsOpen(true) }}
+                    />
                     <button
                       type="button"
                       role="menuitem"
@@ -192,9 +212,13 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                       aria-label="分析"
                       onClick={() => {
                         setMoreOpen(false)
-                        if (!analysisPaneOpen) setAiOpen(false)
-                        if (!analysisPaneOpen) setAiFull(false)
-                        if (!analysisPaneOpen) { setContactInfoOpen(false); setGroupInfoOpen(false) }
+                        if (!analysisPaneOpen) {
+                          setAiOpen(false)
+                          setAiFull(false)
+                          setSuggestOpen(false)
+                          setContactInfoOpen(false)
+                          setGroupInfoOpen(false)
+                        }
                         setAnalysisPaneOpen(v => !v)
                       }}
                     >
@@ -244,6 +268,12 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
               </div>
     </div>
     {taskOpen && <TaskCreateDialog session={curSession} onClose={() => { setTaskOpen(false) }} />}
+    <ChatAiReplySettingsHost
+      curSession={curSession}
+      aiReply={aiReply}
+      open={aiReplySettingsOpen}
+      onClose={() => { setAiReplySettingsOpen(false) }}
+    />
     </>
   )
 }

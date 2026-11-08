@@ -37,8 +37,10 @@ const path = require('node:path');
  * 依赖，必须随包发布。上界跟着抬，但**不比基线抬得更松** —— 仍留在 1.2× 以内，
  * 这样 N22 那个场景（一个 `ui-dist.bak` 之类的残留，约 +12MB）依旧会顶破上界被抓住。
  * 其中已经扣掉两处纯浪费（实测见 `working/d-asar-probe2.txt`）：
- *   · pdfjs 只留运行期要用的那几块（`legacy/build` + `cmaps` + `standard_fonts` + wasm）：
+ *   · pdfjs 只留运行期要用的那几块（`legacy/build` + `cmaps` + wasm）：
  *     33.17MB → 9.42MB，裁掉的是 `*.map`、非 legacy 的 `build/`、`web/`、`types/`；
+ *     `standard_fonts/` 也整体排除：本应用只抽文本、不渲染 PDF，而其中 LiberationSans
+ *     是 GPLv2 + 字体例外，不能按 `pdfjs-dist` 的 Apache-2.0 一并处理；
  *   · pdfjs 的 optional 依赖 `@napi-rs/canvas` 整棵排除（36.5MB 的 win32 原生 canvas，
  *     本用途只 `getTextContent()`、从不 `render()`，实测移走后 23/23 解析用例仍全绿）。
  */
@@ -56,6 +58,7 @@ const ALLOWED_SRC_DIR_PREFIXES = [
   'src/client/ui-dist/',          // 前端构建产物：渲染进程实际加载的那份
   'src/client/ui-primitives-shim/',
   'src/client/ui-wechat/',
+  'src/client/test-helpers/',     // 只供源码/wiring 测试读取的联合源码助手；TS 后缀会在 asar 层被排除
   'src/license/',
   'src/shared/',                  // 后端 CommonJS 与前端 ESM 共用的纯数据模块
 ];

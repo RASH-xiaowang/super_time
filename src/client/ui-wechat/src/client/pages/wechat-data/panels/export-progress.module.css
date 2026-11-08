@@ -1,0 +1,79 @@
+.box {
+  display: grid;
+  gap: var(--nm-s-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--nm-s-3);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+}
+
+.box[data-export-status='success'] {
+  background: var(--nm-success-15);
+  border-color: var(--nm-success);
+}
+
+.box[data-export-status='error'] {
+  background: var(--nm-danger-15);
+  border-color: var(--nm-danger);
+}
+
+.box[data-export-status='canceled'] {
+  background: var(--nm-warning-15);
+  border-color: var(--nm-warning);
+}
+
+.compact {
+  padding: var(--nm-s-2);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.percent {
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono);
+  font-size: var(--nm-fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cancel {
+  flex: none;
+  padding: 3px 8px;
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-xs, 11px);
+  background: transparent;
+  border: 1px solid var(--nm-danger);
+  border-radius: var(--nm-r-md);
+  cursor: pointer;
+}
+
+.cancel:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.detail {
+  overflow: hidden;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: var(--nm-lh-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

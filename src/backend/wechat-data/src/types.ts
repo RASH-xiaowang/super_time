@@ -23,6 +23,18 @@ export * from './types-retrieval.ts'
 export * from './types-kb-wire.ts'
 export * from './types-taskcenter.ts'
 export * from './types-message-list.ts'
+export type {
+  ChatAiReplyEnabledChat,
+  ChatAiReplyEnabledChatsResult,
+  ChatAiReplyDefaultWebhookMutationResult,
+  ChatAiReplyDefaultWebhookState,
+  ChatAiReplyMutationResult,
+  ChatAiReplyProvider,
+  ChatAiReplyScanResult,
+  ChatAiReplySetting,
+  ChatAiReplyStage,
+  ChatAiReplyState,
+} from './query/ai-reply/types.ts'
 export * from './types-rpa.ts'
 
 /**

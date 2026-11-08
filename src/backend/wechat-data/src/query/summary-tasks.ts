@@ -7,6 +7,11 @@ import { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { SummaryTaskInput } from '../types.ts'
+import {
+  displayNameForUsername,
+  isMessageTableHash,
+  resolveTalkerUsername,
+} from './message-identity.ts'
 
 /** Daily-summary DB path: sibling of the decrypted dir. */
 function dbPath(decryptedDir: string): string {
@@ -80,14 +85,47 @@ function cellStr(v: unknown): string {
   return ''
 }
 
+/**
+ * Keep persisted summary identities canonical and human-readable.
+ *
+ * Older builds could store the message-table hash in both columns. A valid
+ * hash is mapped back to its real group; an unresolvable one is shown as an
+ * unnamed chat instead of being exposed as an internal key.
+ * @param decryptedDir - decrypted data root.
+ * @param storedUsername - raw `group_username` cell.
+ * @param storedName - raw `group_name` cell.
+ * @returns canonical username and safe display name.
+ */
+function canonicalSummaryIdentity(
+  decryptedDir: string,
+  storedUsername: string,
+  storedName: string,
+): { groupUsername: string; groupName: string } {
+  const rawUsername = storedUsername.trim()
+  const rawName = storedName.trim()
+  const groupUsername = rawUsername ? resolveTalkerUsername(decryptedDir, rawUsername) : ''
+  if (!rawUsername) return { groupUsername: '', groupName: rawName && !isMessageTableHash(rawName) ? rawName : '' }
+  if (!groupUsername) return { groupUsername: '', groupName: '未命名会话' }
+  const unsafeName = !rawName || rawName === rawUsername || isMessageTableHash(rawName)
+  return {
+    groupUsername,
+    groupName: unsafeName ? displayNameForUsername(groupUsername) : rawName,
+  }
+}
+
 /** Map a DB row to a task. */
-function rowToTask(r: Record<string, unknown>): SummaryTask {
+function rowToTask(r: Record<string, unknown>, decryptedDir: string): SummaryTask {
   let targetUsers: string[] = []
   try { targetUsers = JSON.parse(cellStr(r['target_users'] ?? '[]')) as string[] } catch { /* keep empty */ }
+  const identity = canonicalSummaryIdentity(
+    decryptedDir,
+    cellStr(r['group_username'] ?? ''),
+    cellStr(r['group_name'] ?? ''),
+  )
   const base: SummaryTask = {
     id: Number(r['id'] ?? 0),
-    groupUsername: cellStr(r['group_username'] ?? ''),
-    groupName: cellStr(r['group_name'] ?? ''),
+    groupUsername: identity.groupUsername,
+    groupName: identity.groupName,
     targetUsers,
     format: cellStr(r['format'] ?? 'brief'),
     customPrompt: cellStr(r['custom_prompt'] ?? ''),
@@ -123,7 +161,7 @@ export function listSummaryTasks(decryptedDir: string): SummaryTaskSnapshotRead 
     const db = openStore(decryptedDir)
     const rows = db.prepare('SELECT * FROM summary_tasks ORDER BY id DESC').all() as Array<Record<string, unknown>>
     db.close()
-    const items = rows.map(rowToTask)
+    const items = rows.map(row => rowToTask(row, decryptedDir))
     return { items, total: items.length }
   } catch (e) {
     const readError = errorText(e)
@@ -146,15 +184,20 @@ export function listSummaryTasks(decryptedDir: string): SummaryTaskSnapshotRead 
  */
 export function saveSummaryTask(decryptedDir: string, task: SummaryTaskInput): { ok: boolean; id?: number; error?: string } {
   try {
+    const hasUsername = task.groupUsername.trim() !== ''
+    const identity = canonicalSummaryIdentity(decryptedDir, task.groupUsername, task.groupName)
+    if (hasUsername && identity.groupUsername === '') {
+      return { ok: false, error: '无法解析群会话身份，请重新选择会话' }
+    }
     const db = openStore(decryptedDir)
     const ts = Date.now()
     const target = JSON.stringify(task.targetUsers)
     if (task.id && task.id > 0) {
-      db.prepare('UPDATE summary_tasks SET group_username = ?, group_name = ?, target_users = ?, format = ?, custom_prompt = ?, schedule_time = ?, enabled = ?, updated_at = ? WHERE id = ?').run(task.groupUsername, task.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, task.id)
+      db.prepare('UPDATE summary_tasks SET group_username = ?, group_name = ?, target_users = ?, format = ?, custom_prompt = ?, schedule_time = ?, enabled = ?, updated_at = ? WHERE id = ?').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, task.id)
       db.close()
       return { ok: true, id: task.id }
     }
-    const r = db.prepare('INSERT INTO summary_tasks(group_username, group_name, target_users, format, custom_prompt, schedule_time, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(task.groupUsername, task.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, ts)
+    const r = db.prepare('INSERT INTO summary_tasks(group_username, group_name, target_users, format, custom_prompt, schedule_time, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, ts)
     const id = Number(r.lastInsertRowid)
     db.close()
     return { ok: true, id }
@@ -269,20 +312,27 @@ export function listSummaryRecords(decryptedDir: string, taskId?: number): { ite
       rows = db.prepare('SELECT * FROM summary_records ORDER BY created_at DESC LIMIT 200').all()
     }
     db.close()
-    const items = rows.map(r => ({
-      id: Number(r['id'] ?? 0),
-      taskId: Number(r['task_id'] ?? 0),
-      groupUsername: cellStr(r['group_username'] ?? ''),
-      // 2026-10-17：`group_name` 之前漏读了 —— 类型里有这个字段，但映射时没取，
-      // 于是「总结阅览」里永远显示 username 而不是群名。
-      groupName: cellStr(r['group_name'] ?? ''),
-      summaryDate: cellStr(r['summary_date'] ?? ''),
-      summary: cellStr(r['summary'] ?? ''),
-      messageCount: Number(r['message_count'] ?? 0),
-      status: cellStr(r['status'] ?? ''),
-      error: cellStr(r['error'] ?? ''),
-      createdAt: Number(r['created_at'] ?? 0),
-    }))
+    const items = rows.map((r) => {
+      const identity = canonicalSummaryIdentity(
+        decryptedDir,
+        cellStr(r['group_username'] ?? ''),
+        cellStr(r['group_name'] ?? ''),
+      )
+      return {
+        id: Number(r['id'] ?? 0),
+        taskId: Number(r['task_id'] ?? 0),
+        groupUsername: identity.groupUsername,
+        // 2026-10-17：`group_name` 之前漏读了 —— 类型里有这个字段，但映射时没取，
+        // 于是「总结阅览」里永远显示 username 而不是群名。
+        groupName: identity.groupName,
+        summaryDate: cellStr(r['summary_date'] ?? ''),
+        summary: cellStr(r['summary'] ?? ''),
+        messageCount: Number(r['message_count'] ?? 0),
+        status: cellStr(r['status'] ?? ''),
+        error: cellStr(r['error'] ?? ''),
+        createdAt: Number(r['created_at'] ?? 0),
+      }
+    })
     return { items, total: items.length }
   } catch (e) {
     const readError = errorText(e)

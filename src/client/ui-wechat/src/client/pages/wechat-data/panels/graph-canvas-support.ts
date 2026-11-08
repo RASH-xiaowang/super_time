@@ -59,8 +59,12 @@ export function forceKeyOf(s: GraphSettings): string {
   return [s.forceCentripetal, s.forceRepulsion, s.forceAttraction, s.forceEdgeLength, s.nodeGap, s.communitySeparation].join('|')
 }
 
-/** 布局重排的静默期：拖力度滑杆会连发几十次 change，合并到最后一次再算。 */
-export const RELAYOUT_SETTLE_MS = 120
+/**
+ * 布局重排的静默期：拖力度滑杆会连发几十次 input，合并到最后一次再算。
+ * 拖动期间由 `runForcePreview` 提供逐帧反馈，因此这里可以更短；90ms 仍足以合并
+ * 60/120Hz 输入，又不会让用户松手后明显等待。
+ */
+export const RELAYOUT_SETTLE_MS = 90
 /** 节点坐标落盘的静默期：拖拽节点时逐帧写 localStorage 会把主线程拖死（改前 L8 的老问题）。 */
 export const PERSIST_SETTLE_MS = 300
 /**

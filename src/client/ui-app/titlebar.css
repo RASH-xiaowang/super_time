@@ -5,6 +5,19 @@ body,
   height: 100%;
 }
 
+/*
+ * 自绘标题栏高度：0 是浏览器态（`ui-entry.tsx` 会摘掉 #titlebar），
+ * 38px 只在本机 Electron 确实挂着标题栏时生效。
+ * Portal 出来的右抽屉也读这个变量，才能从标题栏下方开始。
+ */
+:root {
+  --st-titlebar-h: 0px;
+}
+
+body:has(> #titlebar) {
+  --st-titlebar-h: 38px;
+}
+
 body {
   margin: 0;
   overflow: hidden;
@@ -27,11 +40,19 @@ body {
 }
 
 #titlebar {
-  flex: 0 0 38px;
-  height: 38px;
+  flex: 0 0 var(--st-titlebar-h);
+  height: var(--st-titlebar-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /*
+   * Radix 模态抽屉会给 body 加 pointer-events:none。标题栏是应用外壳，
+   * 抽屉打开时仍要能点余额、主题和窗口控制，所以单独把命中区放回来。
+   * z-index 62 只压过右抽屉（60/61），仍低于居中 Dialog（70/71）。
+   */
+  position: relative;
+  z-index: 62;
+  pointer-events: auto;
   background: var(--nm-bg-1, #f7f7f7);
   border-bottom: 1px solid var(--nm-border, rgba(0, 0, 0, 0.08));
   color: var(--nm-text-1, #0a0a0a);
@@ -41,8 +62,8 @@ body {
 .tb-side {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-left: 14px;
+  gap: 8px;
+  padding-left: 12px;
   min-width: 0;
 }
 

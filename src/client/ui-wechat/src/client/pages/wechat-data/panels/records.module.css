@@ -77,10 +77,19 @@
   font-weight: 600; background: var(--nm-table-header-bg); border-bottom: 1px solid var(--nm-border);
   position: sticky; top: 0; z-index: 2; white-space: nowrap;
 }
-.table td { padding: 6px 10px; border-bottom: 1px solid var(--nm-border); color: var(--nm-text-1); }
+/* 高于 compact-chrome 的 `table[class*='_table_'] tbody tr td`（6/10 内边距），
+   否则固定 36px 行会被全局紧凑规则重新撑高，虚拟器估算与真实高度再次分叉。 */
+.panel .table tbody tr td {
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  vertical-align: middle;
+}
 .table tbody tr { transition: background var(--nm-t-fast); }
 .table tbody tr:hover { background: var(--nm-bg-hover); }
-.table tbody tr:last-child td { border-bottom: none; }
 .mono {
   font-family: var(--nm-font-mono, monospace); font-size: 11px; color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
@@ -88,6 +97,31 @@
 .muted { color: var(--nm-text-2); white-space: nowrap; }
 .ellipsis { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recordIdentityLink { display: inline-flex; min-width: 0; max-width: 100%; padding: 0; text-align: left; }
+
+/* 数据表里的身份链接属于单元格内容，不按主按钮的 44px 触摸高度撑行。
+ * 28px 仍高于 WCAG 2.5.8 的 24px AA 下限，行高回到 32px。 */
+.recordIdentityLink {
+  min-height: 24px;
+  align-items: center;
+}
+
+@media (max-width: 560px) {
+  .kindRow {
+    flex-wrap: nowrap;
+    height: 44px;
+    min-height: 44px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .kindRow::-webkit-scrollbar { width: 0; height: 0; }
+  .kindRow > * { flex: 0 0 auto; }
+  .kindRow .search {
+    flex-basis: 220px;
+    min-width: 180px;
+  }
+}
 
 /* 状态徽章：语义色浅底 + 深字，无发光。 */
 .badge {

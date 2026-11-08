@@ -54,6 +54,10 @@ const MAX_MOMENT_DOM_ROWS = 80
 const fileMd5 = (i) => createHash('md5').update('supertime-file-' + i, 'utf8').digest('hex')
 const USER = 'wxid_n18'
 const SESSION_NAME = 'N18 长列表夹具'
+/** 第二个会话故意复用主夹具最后 100 个 localId，专门验证切换会话时不会串用行高缓存。 */
+const SWITCH_USER = 'wxid_n18_switch'
+const SWITCH_SESSION_NAME = 'N18 会话切换夹具'
+const SWITCH_TOTAL = 100
 
 /**
  * 量一段真实滚动的帧数（W2-3.2）。
@@ -125,8 +129,9 @@ function makeFixture(userData) {
 
   const sdb = new DatabaseSync(join(decrypted, 'session', 'session.db'))
   sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
-  sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, ?, ?, 0, 1, \'\')')
-    .run(USER, SESSION_NAME, 1700000000 + TOTAL, 1700000000 + TOTAL)
+  const insertSession = sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, ?, ?, 0, 1, \'\')')
+  insertSession.run(USER, SESSION_NAME, 1700000000 + TOTAL, 1700000000 + TOTAL)
+  insertSession.run(SWITCH_USER, SWITCH_SESSION_NAME, 1700000000 + TOTAL + 1000, 1700000000 + TOTAL + 1000)
   sdb.close()
 
   const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
@@ -140,6 +145,15 @@ function makeFixture(userData) {
       ? `第 ${i} 条：` + '这是一条很长的消息，用来制造不同的行高。'.repeat(12)
       : (i % 2 === 0 ? `第 ${i} 条：短消息` : `第 ${i} 条：` + '中等长度'.repeat(6))
     ins.run(i, i, 1, i % 2, 1700000000 + i, 1, body, `srv${i}`, '')
+  }
+  mdb.exec('COMMIT')
+
+  const switchTable = 'Msg_' + createHash('md5').update(SWITCH_USER, 'utf8').digest('hex')
+  mdb.exec(`CREATE TABLE "${switchTable}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
+  const switchIns = mdb.prepare(`INSERT INTO "${switchTable}" VALUES (?,?,?,?,?,?,?,?,?)`)
+  mdb.exec('BEGIN')
+  for (let i = TOTAL - SWITCH_TOTAL + 1; i <= TOTAL; i += 1) {
+    switchIns.run(i, i, 1, i % 2, 1700000000 + i, 1, `切换会话第 ${i} 条：短消息`, `switch-srv${i}`, '')
   }
   mdb.exec('COMMIT')
   mdb.close()
@@ -196,6 +210,49 @@ function makeFixture(userData) {
 const results = []
 const check = (ok, label, detail = '') => results.push({ ok: !!ok, label, detail: String(detail) })
 
+/** 切会话后量当前视口：顶部空白、相邻行空隙/重叠和底部空白。 */
+async function auditMessageLayout(win, lastMessageId) {
+  await win.waitForSelector(`#msg-${lastMessageId}`, { timeout: 20000 })
+  await win.waitForTimeout(900)
+  return win.evaluate((lastId) => {
+    const findBox = () => {
+      let el = document.getElementById(`msg-${lastId}`)
+      while (el) {
+        const oy = getComputedStyle(el).overflowY
+        if (oy === 'auto' || oy === 'scroll') return el
+        el = el.parentElement
+      }
+      return null
+    }
+    const box = findBox()
+    if (!box) return null
+    const boxRect = box.getBoundingClientRect()
+    const rows = Array.from(document.querySelectorAll('[id^="msg-"]'))
+      .map((el) => ({ id: el.id, rect: el.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.bottom > boxRect.top - 120 && rect.top < boxRect.bottom + 120)
+      .sort((a, b) => a.rect.top - b.rect.top)
+    let maxGap = 0
+    let maxOverlap = 0
+    for (let i = 1; i < rows.length; i += 1) {
+      const gap = rows[i].rect.top - rows[i - 1].rect.bottom
+      maxGap = Math.max(maxGap, gap)
+      maxOverlap = Math.max(maxOverlap, -gap)
+    }
+    const first = rows[0]?.rect
+    const last = rows.at(-1)?.rect
+    return {
+      rows: rows.length,
+      topGap: first ? Math.max(0, Math.round(first.top - boxRect.top)) : null,
+      bottomGap: last ? Math.max(0, Math.round(boxRect.bottom - last.bottom)) : null,
+      maxGap: Math.round(maxGap),
+      maxOverlap: Math.round(maxOverlap),
+      scrollTop: Math.round(box.scrollTop),
+      scrollHeight: box.scrollHeight,
+      clientHeight: box.clientHeight,
+    }
+  }, lastMessageId)
+}
+
 let app = null
 const userData = mkdtempSync(join(tmpdir(), 'super-time-n18-'))
 try {
@@ -229,8 +286,9 @@ try {
   const chatsBtn = win.getByRole('button', { name: '聊天会话', exact: true })
   await chatsBtn.waitFor({ state: 'visible', timeout: 20000 })
   await chatsBtn.click()
-  // 会话行显示的是 username（显示名要 contact.db；本夹具没造它）
-  const sessionRow = win.getByText(USER, { exact: false }).first()
+  // 会话行显示的是 username（显示名要 contact.db；本夹具没造它）。
+  // 第二会话的用户名以主夹具为前缀，必须按 data 属性精确选中，不能用模糊文本。
+  const sessionRow = win.locator(`[data-session-row="${USER}"]`)
   try {
     await sessionRow.waitFor({ state: 'visible', timeout: 20000 })
   } catch (e) {
@@ -340,6 +398,34 @@ try {
   check(fps.worstMs < 500,
     `单帧没有长停顿（最长 ${Math.round(fps.worstMs)}ms，上界 500ms）`,
     `worst=${Math.round(fps.worstMs)}ms`)
+
+  // 两个会话的最后 100 个 localId 完全相同。切过去再切回来，行高缓存不得串用：
+  // 顶部不能留下整屏空白，相邻消息之间不能出现大洞，也不能互相覆盖。
+  await win.locator(`[data-session-row="${SWITCH_USER}"]`).click()
+  const switchedLayout = await auditMessageLayout(win, TOTAL)
+  check(switchedLayout !== null, '切到复用 localId 的第二个会话后消息区已渲染', '')
+  if (switchedLayout) {
+    check(switchedLayout.topGap !== null && switchedLayout.topGap <= 100,
+      `跨会话切换后顶部无大块空白（${switchedLayout.topGap}px ≤ 100px）`, JSON.stringify(switchedLayout))
+    check(switchedLayout.maxGap <= 100,
+      `跨会话切换后相邻消息无大洞（${switchedLayout.maxGap}px ≤ 100px）`, JSON.stringify(switchedLayout))
+    check(switchedLayout.maxOverlap <= 1,
+      `跨会话切换后消息行不重叠（${switchedLayout.maxOverlap}px ≤ 1px）`, JSON.stringify(switchedLayout))
+  }
+  await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n18-session-switch-b.png') }).catch(() => {})
+
+  await win.locator(`[data-session-row="${USER}"]`).click()
+  const switchedBackLayout = await auditMessageLayout(win, TOTAL)
+  check(switchedBackLayout !== null, '切回原会话后消息区已渲染', '')
+  if (switchedBackLayout) {
+    check(switchedBackLayout.topGap !== null && switchedBackLayout.topGap <= 100,
+      `切回原会话后顶部无大块空白（${switchedBackLayout.topGap}px ≤ 100px）`, JSON.stringify(switchedBackLayout))
+    check(switchedBackLayout.maxGap <= 100,
+      `切回原会话后相邻消息无大洞（${switchedBackLayout.maxGap}px ≤ 100px）`, JSON.stringify(switchedBackLayout))
+    check(switchedBackLayout.maxOverlap <= 1,
+      `切回原会话后消息行不重叠（${switchedBackLayout.maxOverlap}px ≤ 1px）`, JSON.stringify(switchedBackLayout))
+  }
+  await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n18-session-switch-a.png') }).catch(() => {})
 
   /*
    * —— 第二处：收藏面板（#22「推广」那半条）——

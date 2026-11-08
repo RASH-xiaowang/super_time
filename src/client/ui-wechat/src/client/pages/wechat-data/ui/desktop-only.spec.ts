@@ -12,8 +12,7 @@
  *
  * @vitest-environment jsdom
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { setCapabilities } from '../api.ts'

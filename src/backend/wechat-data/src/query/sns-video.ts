@@ -17,8 +17,8 @@
  * ## 索引
  *
  * 与 `sns-image.ts` 同一套路：按月建「内容 md5 → 路径」索引，按 (mtimeMs,size) 签名
- * 增量重建，月份从新到旧、命中即停；整棵树扫完仍未命中则记住这次「确实没有」，
- * 避免每个未缓存的视频都把 200MB 重新哈希一遍。
+ * 增量重建，月份从新到旧、命中即停；整棵树扫完仍未命中则短暂记住「确实没有」，
+ * 避免每个未缓存的视频都把 200MB 重新哈希一遍；miss 到期后允许重新发现新增视频。
  * 视频容器是明文，不需要解密（图片 blob 才需要）。
  */
 import { createHash } from 'node:crypto'
@@ -33,7 +33,7 @@ import { yieldToLoop } from './search-build.ts'
 import { missWithScanNotes, safeReaddir, snsMonthRoots } from './sns-scan.ts'
 import type { ScanNotes } from './sns-scan.ts'
 
-const VIDEO_EXT = ['.mp4', '.mov']
+const VIDEO_EXT = ['.mp4', '.mov', '.m4v']
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png']
 /** 下载中但内容已完整（md5 能对上）的文件也会带 .tmp，同样可用。 */
 const MATCHABLE_EXT = [...VIDEO_EXT, ...IMAGE_EXT, '.tmp']
@@ -45,9 +45,16 @@ interface MonthEntry {
 }
 interface SnsVideoIndex {
   months: Map<string, MonthEntry>
-  /** 已按当前签名扫完全部月份仍未命中的 md5。 */
-  misses: Set<string>
+  /**
+   * 已扫完全部月份仍未命中的 md5 → 首次记录时间。
+   *
+   * 不能永久缓存：微信会在已有月份/桶目录里继续落新视频，父目录签名不一定变化。
+   * 过了短暂的 miss TTL 后必须允许重新扫描，否则新视频要重启进程才看得到。
+   */
+  misses: Map<string, number>
 }
+/** 「本机没有」结论的有效期；到期后强制重扫一次月度索引。 */
+const VIDEO_MISS_TTL_MS = 30_000
 const snsVideoIndex = new Map<string, SnsVideoIndex>()
 /**
  * 同一账号 + 同一月份正在进行的异步索引扫描。
@@ -57,6 +64,33 @@ const snsVideoIndex = new Map<string, SnsVideoIndex>()
 const snsMonthScansInFlight = new Map<string, { promise: Promise<Map<string, string>>; notes: ScanNotes }>()
 /** 异步月度扫描实际开始次数（测试与诊断用：合流后同一月并发请求应只 +1）。 */
 let scanMonthAsyncCalls = 0
+
+/**
+ * 把仍有效的请求分成「TTL 内 miss，直接跳过」和「需要重扫」两组。
+ * @param idx - 当前账号的视频索引。
+ * @param wantMd5s - 本次要查的 md5。
+ * @param now - 当前时间。
+ * @returns 待查集合，以及是否至少有一个旧 miss 已过期。
+ */
+function openVideoLookups(
+  idx: SnsVideoIndex,
+  wantMd5s: readonly string[],
+  now: number,
+): { open: Set<string>; rescanExpiredMisses: boolean } {
+  const open = new Set<string>()
+  let rescanExpiredMisses = false
+  for (const md5 of wantMd5s) {
+    if (md5 === '') continue
+    const missedAt = idx.misses.get(md5)
+    if (missedAt !== undefined) {
+      if (now - missedAt < VIDEO_MISS_TTL_MS) continue
+      idx.misses.delete(md5)
+      rescanExpiredMisses = true
+    }
+    open.add(md5)
+  }
+  return { open, rescanExpiredMisses }
+}
 
 /** 结果缓存：一次解析出的 data URL 不再重算。 */
 const coverCache = new Map<string, string>()
@@ -69,8 +103,15 @@ const COVER_CACHE_MAX_ENTRIES = 300
  */
 const VIDEO_URL_CACHE_MAX_BYTES = 64 * 1024 * 1024
 let videoUrlCacheBytes = 0
-/** 大数据转 base64 时每处理这么多字节让出一次，避免单段 CPU 把 worker 钉住。 */
-const BASE64_CHUNK_BYTES = 1024 * 1024
+/**
+ * 大数据转 base64 时每处理这么多字节让出一次，避免单段 CPU 把 worker 钉住。
+ *
+ * 必须是 3 的倍数：Base64 每 3 字节编成 4 个字符，只有最后一块才允许出现
+ * `=` 填充。此前直接按 1 MiB（1048576，不是 3 的倍数）分块，每块都各自补齐，
+ * 再把带填充的字符串拼起来，浏览器会在第一个 `==` 处停下 —— 几 MB 的视频
+ * 实际只解码出前 1 MiB，`<video>` 因此报 `MEDIA_ELEMENT_ERROR: Format error`。
+ */
+const BASE64_CHUNK_BYTES = Math.floor((1024 * 1024) / 3) * 3
 /** 月度媒体索引扫描时，每处理这么多文件让出一次。 */
 const SCAN_YIELD_EVERY_FILES = 32
 
@@ -246,15 +287,16 @@ function findAllByContentMd5(wechatBaseDir: string, wantMd5s: readonly string[],
   if (wantMd5s.length === 0) return found
   const roots = snsMonthRoots(wechatBaseDir, 'Video', notes)
   let idx = snsVideoIndex.get(wechatBaseDir)
-  if (!idx) { idx = { months: new Map(), misses: new Set() }; snsVideoIndex.set(wechatBaseDir, idx) }
+  if (!idx) { idx = { months: new Map(), misses: new Map() }; snsVideoIndex.set(wechatBaseDir, idx) }
   const live = new Set(roots.map(r => r.month))
   for (const m of [...idx.months.keys()]) if (!live.has(m)) idx.months.delete(m)
-  const open = new Set(wantMd5s.filter((h) => h !== "" && !idx.misses.has(h)))
+  const opened = openVideoLookups(idx, wantMd5s, Date.now())
+  const open = opened.open
 
   for (const { month, root, mtimeMs, size } of roots) {
     if (open.size === 0) break
     const cached = idx.months.get(month)
-    if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+    if (!opened.rescanExpiredMisses && cached && cached.mtimeMs === mtimeMs && cached.size === size) {
       harvest(cached.byMd5, open, found)
       continue
     }
@@ -273,7 +315,10 @@ function findAllByContentMd5(wechatBaseDir: string, wantMd5s: readonly string[],
   }
   // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。
   // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。
-  if (notes.length === 0) for (const h of open) idx.misses.add(h)
+  if (notes.length === 0) {
+    const now = Date.now()
+    for (const h of open) idx.misses.set(h, now)
+  }
   return found
 }
 
@@ -293,15 +338,16 @@ async function findAllByContentMd5Async(
   if (wantMd5s.length === 0) return found
   const roots = snsMonthRoots(wechatBaseDir, 'Video', notes)
   let idx = snsVideoIndex.get(wechatBaseDir)
-  if (!idx) { idx = { months: new Map(), misses: new Set() }; snsVideoIndex.set(wechatBaseDir, idx) }
+  if (!idx) { idx = { months: new Map(), misses: new Map() }; snsVideoIndex.set(wechatBaseDir, idx) }
   const live = new Set(roots.map(r => r.month))
   for (const m of [...idx.months.keys()]) if (!live.has(m)) idx.months.delete(m)
-  const open = new Set(wantMd5s.filter((h) => h !== "" && !idx.misses.has(h)))
+  const opened = openVideoLookups(idx, wantMd5s, Date.now())
+  const open = opened.open
 
   for (const { month, root, mtimeMs, size } of roots) {
     if (open.size === 0) break
     const cached = idx.months.get(month)
-    if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+    if (!opened.rescanExpiredMisses && cached && cached.mtimeMs === mtimeMs && cached.size === size) {
       harvest(cached.byMd5, open, found)
       continue
     }
@@ -318,7 +364,10 @@ async function findAllByContentMd5Async(
     idx.misses.clear()
     harvest(byMd5, open, found)
   }
-  if (notes.length === 0) for (const h of open) idx.misses.add(h)
+  if (notes.length === 0) {
+    const now = Date.now()
+    for (const h of open) idx.misses.set(h, now)
+  }
   return found
 }
 
@@ -422,13 +471,25 @@ export async function loadSnsVideoBytes(args: {
   version?: string
 }): Promise<{ bytes?: Buffer; source?: 'local' | 'remote'; error?: string }> {
   const local = await findLocalVideoPathAsync(args.base, args.md5, args.timelineId, args.mediaId)
+  let localError = local.error
   if (local.path) {
     try {
-      return { bytes: await readFile(local.path), source: 'local' }
-    } catch { /* 读失败则继续走远端 */ }
+      const bytes = await readFile(local.path)
+      const expected = (args.md5 || '').trim().toLowerCase()
+      const actual = createHash('md5').update(bytes).digest('hex')
+      if (!isMp4Container(bytes)) {
+        localError = '本机视频文件不是 MP4/MOV/M4V 容器'
+      } else if (expected && actual !== expected) {
+        localError = `本机视频内容与记录不符（md5 ${actual.slice(0, 8)}… ≠ ${expected.slice(0, 8)}…）`
+      } else {
+        return { bytes, source: 'local' }
+      }
+    } catch {
+      localError = '本机视频文件读取失败'
+    }
   }
   const remote = (args.url || '').trim()
-  if (!/^https?:\/\//i.test(remote)) return { error: local.error ?? '缺少视频地址' }
+  if (!/^https?:\/\//i.test(remote)) return { error: localError ?? '缺少视频地址' }
   // 2026-09-30 补：导出这条路此前**没有**过主机白名单（播放与封面两条在 remotes/media.ts 判），
   // 等于「导出时后端会去取消息里写的任意主机」。判在发请求之前，且**在本机缓存之后** ——
   // 本机已有那份照常导出，不受影响。消息 XML 是可被离线改写的文件，不能让它的地址决定去哪。

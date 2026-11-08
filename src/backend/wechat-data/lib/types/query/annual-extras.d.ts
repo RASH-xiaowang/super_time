@@ -10,6 +10,10 @@ export interface AnnualRowInput {
     sender: string;
     /** 是否我发的。 */
     mine: boolean;
+    /** Message-table sender identity when Name2Id resolves it. */
+    senderUsername?: string;
+    /** 消息 server_id；仅用于没有业务 id 的卡片去重。 */
+    serverId?: string;
 }
 /** 这条消息所属的会话。 */
 export interface AnnualChatInput {
@@ -42,6 +46,12 @@ export interface AnnualMoney {
         amount: number;
         count: number;
     }>;
+    /** Confirmed money events whose amount is absent/foreign/malformed. */
+    amountUnknownCount?: number;
+    /** Incoming red packets with no local system-message claim evidence. */
+    unconfirmedRedpacketCount?: number;
+    /** Transfers where both payer and receiver are other accounts. */
+    thirdPartyTransferCount?: number;
 }
 /** 年度撤回汇总。 */
 export interface AnnualRevoke {
@@ -82,7 +92,11 @@ export interface AnnualGroups {
  * ```
  * @returns `{ onRow, done }` 两个纯函数。
  */
-export declare function createAnnualExtras(): {
+export declare function createAnnualExtras(options?: {
+    selfUsername?: string;
+    names?: ReadonlyMap<string, string>;
+    enterpriseNames?: ReadonlyMap<string, string>;
+}): {
     onRow(row: AnnualRowInput, chat: AnnualChatInput): void;
     done(): {
         money: AnnualMoney;

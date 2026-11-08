@@ -6,42 +6,56 @@
  * formal answer. The trace can default open while there is no answer yet, but
  * it collapses once generation starts so it cannot bury the formal response.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  appendAskStage,
   askToolLabel,
-  askToolStatusLabel,
   formatStageElapsed,
-  toolStages,
   type AskStage,
 } from './ask-stage-merge.ts'
 import {
-  askNodeStatusOf,
-  askRunOutcomeLabel,
   askRunOutcomeTone,
-  askRunPhaseLabel,
   completedAskRunPhase,
   deriveLiveAskPhase,
   formatAskRunDuration,
   formatLiveAskDuration,
-  isAskTimeoutSignal,
   resolveAskRunOutcome,
-  runningAskStage,
-  type AskNodeStatus,
   type AskRunOutcome,
-  type AskRunPhase,
 } from './ask-run-model.ts'
+import {
+  durationBetween,
+  evidenceRowsOf,
+  formatToolResultDetail,
+  iconKindForOutcome,
+  iconKindForPhase,
+  mergeStages,
+  nodeStatusOf,
+  processSummary,
+  stageEventStatus,
+  stageEventStatusLabel,
+  statusTitle,
+  toolStatus,
+  toolStatusLabel,
+  toolViewStats,
+  toolViewsOf,
+  uniqueText,
+  type EvidenceRow,
+  type IconKind,
+  type ToolView,
+} from './answer-run-view-model.ts'
 import { AnswerBody } from './AnswerBody.tsx'
-import { ThinkingSection } from './AnswerRunThinking.tsx'
+import { RunTraceTimeline } from './AnswerRunTrace.tsx'
+import {
+  reasoningSegmentsOf,
+  liveReasoningKeyOf,
+  traceGroupsOf,
+  type AskReasoningSegment,
+} from './answer-run-trace.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 import type {
   AskGrounding,
   AskTurn,
-  EvidenceBundle,
-  EvidenceItem,
-  ToolCallTrace,
 } from './use-ask.ts'
 import css from './answer-run.module.css'
 import processCss from './answer-run-process.module.css'
@@ -55,6 +69,7 @@ export interface AnswerRunViewProps {
   agentLabel?: string
   text?: string
   reasoning?: string
+  reasoningSegments?: AskReasoningSegment[]
   stages?: AskStage[]
   streaming?: boolean
   runStartedAt?: number
@@ -90,107 +105,6 @@ export function useAnswerRunProcessState(): (
       },
     }
   }, [openByRun])
-}
-
-type IconKind =
-  | 'queued'
-  | 'thinking'
-  | 'tool'
-  | 'generating'
-  | 'verifying'
-  | 'success'
-  | 'warning'
-  | 'danger'
-  | 'stopped'
-
-interface ToolView {
-  key: string
-  name: string
-  stage?: AskStage
-  trace?: ToolCallTrace
-  /** 后端阶段快照中的原始事件，用于还原每次尝试而不是只留合并摘要。 */
-  stageEvents: AskStage[]
-}
-
-interface EvidenceRow {
-  key: string
-  source: string
-  name: string
-  username?: string
-  enterpriseName?: string
-  time: string
-  sender?: string
-  senderEnterpriseName?: string
-  snippet: string
-  tools: string[]
-  truncated: boolean
-}
-
-const SOURCE_LABEL: Readonly<Record<string, string>> = {
-  msg: '消息',
-  kb: '知识库',
-  agg: '统计事实',
-  resource: '资源',
-}
-
-function uniqueText(values: readonly (string | undefined)[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const value of values) {
-    const text = (value ?? '').trim()
-    if (text === '' || seen.has(text)) continue
-    seen.add(text)
-    out.push(text)
-  }
-  return out
-}
-
-function formatToolResultDetail(raw: string): string {
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
-}
-
-function PipelineStageDetail({ text }: { text: string }): React.JSX.Element {
-  if (text.length <= 480 && text.split('\n').length <= 8) {
-    return <div className={processCss.toolBody}>{text}</div>
-  }
-  return (
-    <details className={processCss.stageDetails}>
-      <summary>查看完整步骤说明（{String(text.length)} 字）</summary>
-      <div className={processCss.stageDetailText}>{text}</div>
-    </details>
-  )
-}
-
-function mergeStages(stages: readonly AskStage[] | undefined): AskStage[] {
-  return (stages ?? []).reduce<AskStage[]>((out, stage) => appendAskStage(out, stage), [])
-}
-
-function durationBetween(startedAt: number, completedAt: number | undefined): number | undefined {
-  if (startedAt <= 0 || completedAt === undefined || completedAt < startedAt) return undefined
-  return completedAt - startedAt
-}
-
-function iconKindForPhase(phase: AskRunPhase): IconKind {
-  if (phase === 'thinking') return 'thinking'
-  if (phase === 'tool_calling') return 'tool'
-  if (phase === 'generating') return 'generating'
-  if (phase === 'verifying') return 'verifying'
-  if (phase === 'completed') return 'success'
-  if (phase === 'stopped') return 'stopped'
-  if (phase === 'failed') return 'danger'
-  return 'queued'
-}
-
-function iconKindForOutcome(outcome: AskRunOutcome): IconKind {
-  if (outcome === 'ok') return 'success'
-  if (outcome === 'failed' || outcome === 'blocked') return 'danger'
-  if (outcome === 'stopped') return 'stopped'
-  if (outcome === 'unknown') return 'warning'
-  return 'warning'
 }
 
 function StatusIcon({ kind }: { kind: IconKind }): React.JSX.Element {
@@ -230,203 +144,6 @@ function StatusIcon({ kind }: { kind: IconKind }): React.JSX.Element {
     return <svg {...common}><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
   }
   return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-}
-
-function statusTitle(input: {
-  streaming: boolean
-  phase: AskRunPhase
-  outcome: AskRunOutcome
-  stages: readonly AskStage[]
-}): string {
-  if (!input.streaming) return askRunOutcomeLabel(input.outcome)
-  const running = runningAskStage(input.stages)
-  if (input.phase === 'tool_calling' && running !== undefined) {
-    return `${askRunPhaseLabel(input.phase)} · ${askToolLabel(running)}`
-  }
-  return askRunPhaseLabel(input.phase)
-}
-
-function processSummary(input: {
-  tools: readonly ToolView[]
-  thinking: string
-  thinkingDuration?: number
-  evidence: readonly EvidenceRow[]
-  hasPlan: boolean
-  streaming: boolean
-}): string {
-  const failed = input.tools.filter(tool => {
-    const status = toolStatus(tool, !input.streaming)
-    return status === 'error' || status === 'timeout'
-  }).length
-  const thinkingDuration = formatAskRunDuration(input.thinkingDuration)
-  const parts = [
-    input.thinking !== ''
-      ? thinkingDuration !== undefined ? `思考 ${thinkingDuration}` : '思考记录'
-      : '',
-    input.tools.length > 0 ? `${String(input.tools.length)} 个工具` : '',
-  ].filter(Boolean)
-  if (parts.length === 0 && input.evidence.length > 0) {
-    parts.push(`${String(input.evidence.length)} 条证据`)
-  }
-  if (parts.length === 0 && input.hasPlan) parts.push('检索规划')
-  if (failed > 0) parts.push(`${String(failed)} 项异常`)
-  return parts.length > 0 ? parts.join(' · ') : '暂无过程记录'
-}
-
-function toolStatus(tool: ToolView, closed: boolean): AskNodeStatus {
-  const trace = tool.trace
-  if (trace !== undefined) {
-    if (trace.skipped === true) return 'skipped'
-    // 成功 trace 是最终事实。先于 error/deadline 判断，避免旧阶段或兼容字段
-    // 把已经成功的重试重新标成超时/失败。
-    if (trace.ok === true) return 'success'
-    if (isAskTimeoutSignal(trace)) return 'timeout'
-    if (trace.ok === false) return 'error'
-  }
-  if (tool.stage !== undefined) return nodeStatusOf(tool.stage, closed)
-  return trace === undefined ? 'pending' : 'success'
-}
-
-function nodeStatusLabel(status: AskNodeStatus): string {
-  if (status === 'running') return '进行中'
-  if (status === 'success') return '完成'
-  if (status === 'warning') return '需注意'
-  if (status === 'error') return '失败'
-  if (status === 'timeout') return '超时'
-  if (status === 'skipped') return '已跳过'
-  if (status === 'aborted') return '已中止'
-  return '待执行'
-}
-
-function toolStatusLabel(tool: ToolView, closed: boolean): string {
-  const status = toolStatus(tool, closed)
-  if (status === 'running' && tool.stage !== undefined) return askToolStatusLabel(tool.stage)
-  return nodeStatusLabel(status)
-}
-
-function nodeStatusOf(stage: AskStage, closed: boolean): AskNodeStatus {
-  const status = askNodeStatusOf(stage)
-  return closed && status === 'running' ? 'aborted' : status
-}
-
-function toolViewStats(tools: readonly ToolView[], closed: boolean): {
-  total: number
-  failed: number
-  elapsedMs?: number
-} {
-  let elapsedMs = 0
-  let hasElapsed = false
-  let failed = 0
-  for (const tool of tools) {
-    const status = toolStatus(tool, closed)
-    if (status === 'error' || status === 'timeout') failed += 1
-    const elapsed = tool.stage?.elapsedMs ?? tool.trace?.elapsedMs
-    if (elapsed === undefined || !Number.isFinite(elapsed)) continue
-    elapsedMs += Math.max(0, elapsed)
-    hasElapsed = true
-  }
-  return {
-    total: tools.length,
-    failed,
-    ...(hasElapsed ? { elapsedMs } : {}),
-  }
-}
-
-function toolViewsOf(
-  stages: readonly AskStage[],
-  traces: readonly ToolCallTrace[],
-  stageEvents: readonly AskStage[],
-): ToolView[] {
-  const views: ToolView[] = toolStages(stages).map((stage, index) => ({
-    key: stage.callId !== undefined ? `call:${stage.callId}` : `stage:${stage.key}:${String(index)}`,
-    name: askToolLabel(stage),
-    stage,
-    stageEvents: [],
-  }))
-  const findView = (stage: AskStage): ToolView | undefined => {
-    if (stage.callId !== undefined && stage.callId !== '') {
-      return views.find(view => view.stage?.callId === stage.callId)
-    }
-    return views.find(view => view.stage?.key === stage.key)
-  }
-  for (const event of stageEvents) {
-    if (event.toolName === undefined && event.callId === undefined) continue
-    const matched = findView(event)
-    if (matched !== undefined) matched.stageEvents.push(event)
-  }
-  for (const view of views) {
-    if (view.stageEvents.length === 0 && view.stage !== undefined) {
-      view.stageEvents.push(view.stage)
-    }
-  }
-  traces.forEach((trace, index) => {
-    const matched = trace.callId === ''
-      ? undefined
-      : views.find(view => view.stage?.callId === trace.callId)
-    if (matched !== undefined) {
-      matched.trace = trace
-      return
-    }
-    views.push({
-      key: trace.callId !== '' ? `trace:${trace.callId}` : `trace:${String(index)}`,
-      name: askToolLabel({ toolName: trace.name, label: trace.name }),
-      trace,
-      stageEvents: [],
-    })
-  })
-  return views
-}
-
-function evidenceRowsOf(evidence: EvidenceBundle | undefined): EvidenceRow[] {
-  const rows: EvidenceRow[] = []
-  const seenFacts = new Set<string>()
-  const items = Array.isArray(evidence?.items)
-    ? evidence.items.filter((item): item is EvidenceItem => Boolean(item) && typeof item === 'object')
-    : []
-  items.filter(item => item.source !== 'resource').forEach((item, index) => {
-    if (item.kind === 'fact') seenFacts.add(`${item.name}\u0000${item.snippet}`)
-    const username = item.source !== 'kb' && item.locator.type === 'message' ? item.locator.username : ''
-    rows.push({
-      key: item.evidenceId || `evidence:${String(index)}`,
-      source: SOURCE_LABEL[item.source] ?? item.source ?? '证据',
-      name: item.name || '未命名来源',
-      ...(username ? { username } : {}),
-      ...(item.enterpriseName ? { enterpriseName: item.enterpriseName } : {}),
-      time: item.time || '',
-      ...(item.sender ? { sender: item.sender } : {}),
-      ...(item.senderEnterpriseName ? { senderEnterpriseName: item.senderEnterpriseName } : {}),
-      snippet: item.snippet || '',
-      tools: Array.isArray(item.tools) ? item.tools : (item.tool ? [item.tool] : []),
-      truncated: item.truncated === true,
-    })
-  })
-  const facts = Array.isArray(evidence?.facts) ? evidence.facts : []
-  facts.forEach((fact, index) => {
-    const identity = `${fact.title}\u0000${fact.body}`
-    if (seenFacts.has(identity)) return
-    seenFacts.add(identity)
-    rows.push({
-      key: `fact:${String(index)}:${fact.title}`,
-      source: '统计事实',
-      name: fact.title || `事实 ${String(index + 1)}`,
-      time: '',
-      snippet: fact.body || '',
-      tools: [],
-      truncated: false,
-    })
-  })
-  return rows
-}
-
-function stageEventStatus(event: AskStage): AskNodeStatus {
-  const status = askNodeStatusOf(event)
-  if (status !== 'running') return status
-  return event.phase === 'retry' || (event.attempt ?? 0) > 1 ? 'running' : status
-}
-
-function stageEventStatusLabel(event: AskStage): string {
-  const status = stageEventStatus(event)
-  return status === 'running' ? askToolStatusLabel(event) : nodeStatusLabel(status)
 }
 
 function StageAttemptHistory({ tool }: { tool: ToolView }): React.JSX.Element | null {
@@ -526,8 +243,7 @@ function ToolCard({ tool, closed }: { tool: ToolView; closed: boolean }): React.
   const diagnostics = uniqueText([stage?.errorClass, trace?.errorCode, trace?.errorClass]).join(' · ')
   const showError = status === 'error' || status === 'timeout' || errorMessage.length > 0
   const hasIssue = status === 'warning' || status === 'timeout' || status === 'error'
-  const autoOpen = status === 'running'
-    || status === 'warning'
+  const autoOpen = status === 'warning'
     || status === 'timeout'
     || status === 'error'
   useEffect(() => {
@@ -713,6 +429,8 @@ function ProcessInspector(input: {
   stages: readonly AskStage[]
   tools: readonly ToolView[]
   thinking: string
+  reasoning: readonly AskReasoningSegment[]
+  liveReasoningKey?: string
   evidence: readonly EvidenceRow[]
   grounding?: AskGrounding
   outcome: AskRunOutcome
@@ -725,7 +443,12 @@ function ProcessInspector(input: {
   onProcessOpenChange?: (open: boolean) => void
 }): React.JSX.Element | null {
   const [manualOpen, setManualOpen] = useState<boolean | null>(null)
+  const [issueAutoOpen, setIssueAutoOpen] = useState(false)
   const issueSeen = useRef(false)
+  const firstIssueEffect = useRef(true)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const headRef = useRef<HTMLButtonElement | null>(null)
+  const focusWithinRef = useRef(false)
   const bodyId = useId()
   const pipeline = input.stages.filter(stage => stage.toolName === undefined && stage.callId === undefined)
   const toolIssue = input.tools.some(tool => {
@@ -739,19 +462,65 @@ function ProcessInspector(input: {
   const hardFailure = input.outcome === 'failed' || input.outcome === 'blocked'
   const hasIssue = hardFailure || toolIssue || pipelineIssue || input.synthesisError !== undefined
   const hasPlan = input.planNode !== undefined || input.retrievalNode !== undefined
+  const traceGroups = traceGroupsOf({
+    stages: input.stages,
+    tools: input.tools,
+    reasoning: input.reasoning,
+  })
   const exists = input.thinking !== ''
-    || pipeline.length > 0
+    || traceGroups.length > 0
     || input.tools.length > 0
     || input.evidence.length > 0
     || hasPlan
     || input.metrics.length > 0
   useEffect(() => {
-    if (hasIssue && !issueSeen.current) setManualOpen(true)
+    if (hasIssue && !issueSeen.current) {
+      // A completed error can remount this inspector after the user already
+      // chose to keep the trace closed. In that case the parent-supplied fold
+      // state is authoritative; otherwise a newly arriving issue opens once.
+      const savedChoiceOnMount = firstIssueEffect.current && input.processOpen !== undefined
+      if (!savedChoiceOnMount) {
+        setIssueAutoOpen(true)
+        setManualOpen(null)
+      }
+    } else if (!hasIssue) {
+      setIssueAutoOpen(false)
+    }
     issueSeen.current = hasIssue
-  }, [hasIssue])
-  if (!exists) return null
+    firstIssueEffect.current = false
+  }, [hasIssue, input.processOpen])
   const autoOpen = hasIssue || (input.streaming && input.answerText.trim() === '')
-  const open = manualOpen ?? input.processOpen ?? autoOpen
+  const open = manualOpen ?? (issueAutoOpen ? true : input.processOpen ?? autoOpen)
+  useEffect(() => {
+    if (!open) {
+      focusWithinRef.current = false
+      return
+    }
+    const onFocusIn = (event: FocusEvent): void => {
+      focusWithinRef.current = bodyRef.current?.contains(event.target as Node) ?? false
+    }
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!bodyRef.current?.contains(event.target as Node)) focusWithinRef.current = false
+    }
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('pointerdown', onPointerDown, true)
+    }
+  }, [open])
+  useLayoutEffect(() => {
+    if (open) return
+    // Hiding the body while a child still owns focus would drop keyboard users
+    // back to document.body. Browsers may clear focus before this layout effect,
+    // so remember that the body owned focus instead of relying on activeElement.
+    const ownedFocus = focusWithinRef.current
+      || bodyRef.current?.contains(document.activeElement) === true
+    if (!ownedFocus) return
+    focusWithinRef.current = false
+    headRef.current?.focus()
+  }, [open])
+  if (!exists) return null
   const summary = processSummary({
     tools: input.tools,
     thinking: input.thinking,
@@ -767,39 +536,35 @@ function ProcessInspector(input: {
       data-streaming={input.streaming || undefined}
     >
       <button
+        ref={headRef}
         type="button"
         className={css.processHead}
         onClick={() => {
           const next = !open
           setManualOpen(next)
+          setIssueAutoOpen(false)
           input.onProcessOpenChange?.(next)
         }}
-        title={open ? '收起思考与执行过程' : '展开思考与执行过程'}
+        title={open ? '收起执行轨迹' : '展开执行轨迹'}
         aria-expanded={open}
         aria-controls={bodyId}
       >
         <svg className={css.processChevron} viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-        <span className={css.processTitle}>思考与执行过程</span>
+        <span className={css.processTitle}>执行轨迹</span>
         <span className={css.processMeta}>{summary}</span>
       </button>
       <div
+        ref={bodyRef}
         id={bodyId}
         className={css.processBody}
         hidden={!open}
       >
         {input.metrics.length > 0 && (
-          <div className={processCss.metricsRow} aria-label="本轮运行指标">
+          <div className={processCss.metricsRow} role="group" aria-label="本轮运行指标">
             {input.metrics.map(item => (
               <span key={item}>{item}</span>
             ))}
           </div>
-        )}
-        {input.thinking !== '' && (
-          <ThinkingSection
-            text={input.thinking}
-            live={input.streaming && input.answerText.trim() === ''}
-            {...(input.thinkingDuration !== undefined ? { duration: input.thinkingDuration } : {})}
-          />
         )}
         {(input.planNode !== undefined || input.retrievalNode !== undefined) && (
           <section className={processCss.section}>
@@ -812,43 +577,17 @@ function ProcessInspector(input: {
             </div>
           </section>
         )}
-        {pipeline.length > 0 && (
-          <section className={processCss.section}>
-            <div className={processCss.sectionHead}>
-              <span className={processCss.sectionTitle}>执行步骤</span>
-              <span className={processCss.sectionSummary}>{String(pipeline.length)} 个阶段</span>
-            </div>
-            <ol className={processCss.toolList}>
-              {pipeline.map(stage => {
-                const status = nodeStatusOf(stage, !input.streaming)
-                return (
-                  <li key={stage.key} className={processCss.toolItem} data-status={status}>
-                    <div className={processCss.toolHead}>
-                      <span className={processCss.toolName}>{stage.label}</span>
-                      <span className={processCss.toolStatus}>{nodeStatusLabel(status)}</span>
-                    </div>
-                    {stage.detail !== undefined && (
-                      <PipelineStageDetail text={stage.detail} />
-                    )}
-                  </li>
-                )
-              })}
-            </ol>
-          </section>
-        )}
-        {input.tools.length > 0 && (
-          <section className={processCss.section}>
-            <div className={processCss.sectionHead}>
-              <span className={processCss.sectionTitle}>工具调用</span>
-              <span className={processCss.sectionSummary}>{String(input.tools.length)} 个工具</span>
-            </div>
-            <ol className={processCss.toolList}>
-              {input.tools.map(tool => (
-                <ToolCard key={tool.key} tool={tool} closed={!input.streaming} />
-              ))}
-            </ol>
-          </section>
-        )}
+        <RunTraceTimeline
+          groups={traceGroups}
+          streaming={input.streaming}
+          answerText={input.answerText}
+          {...(input.liveReasoningKey !== undefined
+            ? { liveReasoningKey: input.liveReasoningKey }
+            : {})}
+          renderTool={tool => (
+            <ToolCard key={tool.key} tool={tool} closed={!input.streaming} />
+          )}
+        />
         <EvidenceSection rows={input.evidence} {...(input.grounding ? { grounding: input.grounding } : {})} />
       </div>
     </section>
@@ -866,10 +605,22 @@ function RunNotices({ outcome, reason, withheld, synthesisError, grounding, erro
   retryDisabled?: boolean
 }): React.JSX.Element | null {
   const unsupported = Array.isArray(grounding?.unsupported) ? grounding.unsupported : []
+  const normalize = (value: string | undefined): string | undefined => {
+    const text = (value ?? '').trim()
+    if (text === '') return undefined
+    if (/operation was aborted due to timeout|signal timed out|timed out/i.test(text)) {
+      return '模型响应超时：供应商长时间没有返回新内容。请稍后重试，或调高「模型请求超时」。'
+    }
+    return text
+  }
+  const reasonText = normalize(reason)
+  const synthesisText = normalize(synthesisError)
   const notices = uniqueText([
-    outcome !== 'ok' ? reason : undefined,
+    outcome !== 'ok' ? reasonText : undefined,
     withheld ? 'AI 回答未通过原文核对，因此未予采用。' : undefined,
-    synthesisError !== undefined ? `回答生成异常：${synthesisError}` : undefined,
+    synthesisText !== undefined && synthesisText !== reasonText
+      ? `回答生成异常：${synthesisText}`
+      : undefined,
     unsupported.length > 0 ? `${String(unsupported.length)} 个数值未在原文中找到。` : undefined,
   ])
   const danger = outcome === 'failed' || outcome === 'blocked'
@@ -913,7 +664,15 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
   const streaming = props.streaming === true
   const turn = props.turn
   const text = turn?.text ?? props.text ?? ''
-  const thinking = (turn?.reasoning ?? props.reasoning ?? '').trim()
+  const legacyThinking = (turn?.reasoning ?? props.reasoning ?? '').trim()
+  const reasoningSegments = reasoningSegmentsOf(
+    turn?.reasoningSegments ?? props.reasoningSegments,
+    legacyThinking,
+  )
+  const thinking = legacyThinking || reasoningSegments
+    .map(segment => segment.text.trim())
+    .filter(Boolean)
+    .join('\n\n')
   const sourceStages = turn?.stages ?? props.stages ?? []
   const stages = useMemo(
     () => mergeStages(sourceStages),
@@ -978,9 +737,18 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
   const liveThinkingMs = streaming && reasoningStartedAt !== null
     ? Math.max(0, now - reasoningStartedAt)
     : undefined
+  const liveReasoningKey = streaming
+    ? liveReasoningKeyOf(reasoningSegments, stages)
+    : undefined
   const phaseFailure = !streaming && (outcome === 'failed' || outcome === 'blocked')
   const planNode = props.planNode
   const retrievalNode = props.retrievalNode
+  const hasTraceContent = reasoningSegments.length > 0
+    || stages.length > 0
+    || toolViews.length > 0
+    || evidence.length > 0
+    || planNode !== undefined
+    || retrievalNode !== undefined
   const runId = turn?.runId ?? props.runId
   return (
     <div
@@ -1043,6 +811,8 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
           stages={stages}
           tools={toolViews}
           thinking={thinking}
+          reasoning={reasoningSegments}
+          {...(liveReasoningKey !== undefined ? { liveReasoningKey } : {})}
           evidence={evidence}
           {...(turn?.grounding !== undefined ? { grounding: turn.grounding } : {})}
           outcome={outcome}
@@ -1074,8 +844,8 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
             />
           </section>
         )}
-        {streaming && !hasAnswer && (
-          <div className={css.pendingAnswer} role="status" aria-busy="true">
+        {streaming && !hasAnswer && !hasTraceContent && (
+          <div className={css.pendingAnswer} aria-hidden="true">
             <span className={css.pendingBars} aria-hidden="true">
               <span className={css.pendingBar} />
               <span className={css.pendingBar} />

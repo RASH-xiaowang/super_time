@@ -4,7 +4,7 @@
  * 为什么是抽屉而不是主区的一块：定时任务是**配置**（建一次、之后自动跑），
  * 不是日常操作。放在主区会长期占掉一半屏幕，而用户 99% 的时间是在看总结。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   apiDeleteSummaryTask,
   apiGetContacts,
@@ -16,7 +16,7 @@ import {
   writeRenderCache,
 } from '../api.ts'
 import type { SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data/types'
-import { TimeField } from '../ui/kit.tsx'
+import { TimeField, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { fmtLocaleMs } from '../utils/format.ts'
 import { withEnterprise } from './enterprise-identity.ts'
@@ -70,11 +70,8 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
   const [busy, setBusy] = useState<string | null>(null)
 
   // Esc 关闭：表单开着先退表单，否则关抽屉。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { if (form) setForm(null); else onClose() } }
-    window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey) }
-  }, [form, onClose])
+  useEscapeToClose(true, () => { if (form) setForm(null); else onClose() })
+  useDialogFocus(true, '[data-st-dialog="summary-task"]')
 
   const loadGroups = useCallback(async (): Promise<void> => {
     try {
@@ -186,7 +183,7 @@ export function TaskDrawer({ tasks, onClose, onChanged, notify }: {
   }
 
   return (
-    <div className={css.drawer} onClick={onClose} role="dialog" aria-modal="true" aria-label="定时总结任务">
+    <div className={css.drawer} onClick={onClose} role="dialog" aria-modal="true" aria-label="定时总结任务" data-st-dialog="summary-task">
       <div className={css.drawerPanel} onClick={(e) => { e.stopPropagation() }}>
         <div className={css.drawerHead}>
           <span className={css.drawerTitle}>{form ? (form.id ? '编辑任务' : '新建任务') : '定时总结任务'}</span>

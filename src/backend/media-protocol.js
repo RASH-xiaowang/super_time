@@ -138,6 +138,7 @@ function ensureThumb(abs, width) {
   try {
     if (fs.statSync(out).isFile()) return out;
   } catch { /* 还没生成 */ }
+  const tmp = out + '.tmp';
   try {
     const { nativeImage } = require('electron');
     const img = nativeImage.createFromPath(abs);
@@ -146,11 +147,13 @@ function ensureThumb(abs, width) {
     if (!resized || resized.isEmpty()) return null;
     const bytes = resized.toJPEG(80);
     if (!bytes || bytes.length === 0) return null;
-    const tmp = out + '.tmp';
     fs.writeFileSync(tmp, bytes);
     fs.renameSync(tmp, out);
     return out;
   } catch {
+    // nativeImage/写盘/rename 任一步失败都不能留下固定名的半成品，否则下次
+    // 请求仍会命中无效文件，长期还会把 decoded 目录堆满临时文件。
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不遮蔽原始降级 */ }
     return null;
   }
 }
@@ -162,9 +165,10 @@ function ensureThumb(abs, width) {
  * 不带 ⇒ full 档（原图，`no-store`，避免大图长期占磁盘/内存）。
  * @param {string} root - decoded_images 绝对路径。
  * @param {string} rawUrl - request.url。
+ * @param {AbortSignal | undefined} [signal] - 客户端取消信号。
  * @returns {Response} 200 流式图片，或 404 文本。
  */
-function mediaResponse(root, rawUrl) {
+function mediaResponse(root, rawUrl, signal) {
   const rel = parseDecodedUrl(rawUrl);
   const abs = rel === null ? null : resolveDecodedFile(root, rel);
   if (abs === null) return new Response(NOT_FOUND, { status: 404 });
@@ -176,10 +180,23 @@ function mediaResponse(root, rawUrl) {
     'Content-Type': mime,
     'Cache-Control': thumb === null ? 'no-store' : 'public, max-age=604800, immutable',
   };
+  let stream = null;
   try {
-    const stream = fs.createReadStream(serve);
+    stream = fs.createReadStream(serve);
+    const onAbort = () => {
+      if (!stream.destroyed) stream.destroy();
+    };
+    const removeAbortListener = () => {
+      if (typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort);
+    };
+    if (signal && typeof signal.addEventListener === 'function') {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+      stream.once('close', removeAbortListener);
+    }
     return new Response(Readable.toWeb(stream), { headers });
   } catch {
+    try { stream?.destroy(); } catch { /* 读取流可能尚未完全建立 */ }
     return new Response(NOT_FOUND, { status: 404 });
   }
 }
@@ -189,6 +206,7 @@ module.exports = {
   MIME_BY_EXT,
   parseDecodedUrl,
   parseThumbWidth,
+  ensureThumb,
   resolveDecodedFile,
   mediaResponse,
 };

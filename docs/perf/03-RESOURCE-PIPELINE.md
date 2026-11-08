@@ -17,7 +17,7 @@
 
 - **加载路径**：`main.js` 建窗 → `createMainWindow`（`main-window.js:43-109`）用 `win.loadFile(uiEntryHtml())` 从 `file://` 加载 `src/client/ui-dist/index.html`；产物缺失时回退 `src/index.html`（`main-window.js:14-18`）。同目录产物也由 LAN 服务原样提供（`main.js:387-390`、`http-static.js:12-13`），哈希文件名走 `immutable` 一年缓存（`http-static.js:97-103`）——桌面端不经过这层。
 - **首屏字节**：`index.html` 只引 1 个 module script + 1 个 stylesheet（`ui-dist/index.html:19-20`），`file://` 无压缩 ⇒ 首屏原始字节 ≈ **595.9KB**（JS 354.2 + CSS 241.7；CSP 在 `index.html:17`）。
-- **没有 preload/prefetch**：全仓 `grep modulepreload|rel="prefetch"` 为 0；面板 chunk 全部 `React.lazy`（`panel-loaders.tsx:12-46`）+ Suspense（`WechatDataPanel.tsx:906-908`），首次切页签才请求并解析。Vite 配置只有 `chunkSizeWarningLimit: 550`（`vite.config.js:24-33`），无 manualChunks。
+- **没有 preload/prefetch**：全仓 `grep modulepreload|rel="prefetch"` 为 0；面板 chunk 全部 `React.lazy`（`panel-loaders.tsx:12-46`）+ Suspense（`WechatDataPanel.tsx:906-908`），首次切页签才请求并解析。Vite 配置只有 `chunkSizeWarningLimit: 550`（`vite.config.mjs:24-33`），无 manualChunks。
 - **首屏 CSS 构成**（原始体积，压缩/去重后合入 241.7KB）：Bootstrap Grid 50.6KB + Utilities 83.5KB（`ui-entry.tsx:25-26`）、bridge 7.7、主题 49.6+6.1、`wechat-data.module.css` 20.4、`kit.module.css` 37.4、壳层 ~22KB（titlebar/scrollbars/mobile/titlebar-status）；面板 CSS 已按面板拆文件（如 `Chats-*.css` 42.2KB），不在首屏。
 - **字体/图标全量首屏？** 否：无 `@font-face`、无字体文件、无图标字体；导航图标是配置里的 SVG path（`nav-config.ts:59-246`）、标题栏图标内联在 HTML（`index.html:25-66`）。`wxemoji/` 148 个 PNG（921.5KB）按消息文本 `<img>` 按需加载（`utils/wechat-emojis.ts:2-9`、`message-text.tsx:195-197`）。
 - **随包死资源**：`ui-dist/onboarding/*.webp` 4 张 601.6KB 在源码中 **0 引用**（grep `bg-stage`/`webp` 无命中）——只影响安装包/磁盘，不影响运行期加载。

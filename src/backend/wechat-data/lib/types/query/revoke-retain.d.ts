@@ -12,7 +12,7 @@ export declare function messageArchivePath(decryptedDir: string): string;
 export declare const BIN_PREFIX = "\u0001BIN:";
 /** 一条归档消息。 */
 export interface ArchivedMessage {
-    /** 会话标识：`WechatSession.username` 的等价物（本模块用「文件#表名」表示，见 `talkerOfTable`）。 */
+    /** 会话标识：`WechatSession.username` 的等价物（本模块用「文件#表名」表示）。 */
     talker: string;
     rowKey: number;
     createTime: number;

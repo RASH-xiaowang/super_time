@@ -815,6 +815,19 @@
   font-size: 12px;
   font-weight: 600;
 }
+.favOriginalSave {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.favOriginalSave:hover:not(:disabled) { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+.favOriginalSave:disabled { cursor: default; opacity: 0.6; }
 .favFileCard {
   width: 100%;
   display: flex;

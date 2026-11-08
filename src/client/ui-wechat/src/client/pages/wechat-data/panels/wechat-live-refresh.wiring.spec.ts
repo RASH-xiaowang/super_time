@@ -9,7 +9,7 @@
  * 词云 / 地区榜单 / 日历 / 总结任务）。三种被认可的通路形状：
  *   ① `useWechatDataUpdated(...)` 直订（面板内静默重取）；
  *   ② `useFreshData(..., { liveRefresh: true })`（钩子内静默重查）；
- *   ③ `usePagedList`（钩子内已订推送做节流刷新，会话列表额外把节流降到 3s）。
+ *   ③ `usePagedList`（钩子内已订推送做节流刷新，会话列表把节流与合并窗归零）。
  * 每条锚点都是**单行**、在文件里唯一；清单非空 + 每份都真读到东西（哨兵）——
  * 清单被清空或文件读空都会红，不会恒真。
  * @vitest-environment node
@@ -42,12 +42,13 @@ const LIVE_WIRING: ReadonlyArray<readonly [string, string]> = [
   ['Annual.tsx', 'ANNUAL_LIVE_MIN_INTERVAL_MS'],
   ['Annual.tsx', 'useWechatDataUpdated(() => {'],
   ['Health.tsx', 'useWechatDataUpdated(() => { void load() })'],
-  ['Ledger.tsx', 'useWechatDataUpdated(() => { void load(month) })'],
+  ['Ledger.tsx', 'useWechatDataUpdated(() => { if (active) void load(month) })'],
   ['RegionBoard.tsx', 'useWechatDataUpdated(() => { void load() })'],
   ['DailySummary.tsx', 'useDailySummaryTasks(loadTasks)'],
   // ── 面板（既有订阅，防复发）──
-  ['overview-panel.tsx', 'useWechatDataUpdated(() => { void load() })'],
-  ['Contacts.tsx', 'useWechatDataUpdated('],
+  ['overview-panel.tsx', 'useWechatDataUpdated(scheduleAutoRefresh)'],
+  // 通讯录的浏览态/搜索态已统一到一个 pager；实时刷新由 usePagedList 内部订阅。
+  ['Contacts.tsx', 'usePagedList<'],
   ['Files.tsx', 'useWechatDataUpdated('],
   ['Records.tsx', 'useWechatDataUpdated('],
   ['Storage.tsx', 'useWechatDataUpdated('],

@@ -22,6 +22,7 @@ import { normalizeToolArguments, repairToolArguments, type ToolArgumentRepair } 
 import { classifyToolErrorDetailed, type ToolErrorClass } from './errors.ts'
 import { dedupeNames, fallbackArguments } from './fallback-query.ts'
 import {
+  enforceProfileScope,
   filterToolsForScope,
   filterToolsForProfile,
   getAnswerProfile,
@@ -48,45 +49,26 @@ import type {
   ToolLoopResult,
   ToolLoopStopReason,
 } from './types.ts'
+import {
+  nonNegativeInt,
+  positiveInt,
+  rememberResult,
+  safeOp,
+} from './tool-loop-cache.ts'
+import {
+  classifyFailure,
+  failureResult,
+  isSideEffectTool,
+  resultBlockedByScope,
+  resultHasEvidence,
+  retryAfterOption,
+} from './tool-loop-failure.ts'
 
 const DEFAULT_MAX_ROUNDS = 4
 const DEFAULT_MAX_CALLS_PER_ROUND = 6
 const DEFAULT_TOOL_DEADLINE_MS = 20_000
 const DEFAULT_MODEL_DEADLINE_MS = 120_000
 const DEFAULT_MAX_FALLBACK_CALLS = 3
-const MAX_CACHE_ENTRIES = 64
-
-function safeOp(input: ToolLoopInput, status: 'ok' | 'fail' | 'skip', target: string, detail?: string): void {
-  try {
-    input.op?.('task', 'answer_runtime_tool', status, target, detail)
-  } catch {
-    // 日志失败同样不应中断工具循环。
-  }
-}
-
-function rememberResult(
-  cache: Map<string, CachedToolResult>,
-  order: CachedToolResult[],
-  entry: CachedToolResult,
-): void {
-  cache.set(entry.key, entry)
-  order.push(entry)
-  while (order.length > MAX_CACHE_ENTRIES) {
-    const oldest = order.shift()
-    if (oldest) cache.delete(oldest.key)
-  }
-}
-
-function positiveInt(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback
-  return Math.max(1, Math.trunc(value))
-}
-
-/** 允许 0 的整数参数（0 = 关闭对应 deadline）。 */
-function nonNegativeInt(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback
-  return Math.max(0, Math.trunc(value))
-}
 
 /** profile 白名单内的 schema；即使调用方误传全量 schema，也会在这里收口。 */
 export function buildToolLoopSchemas(
@@ -99,7 +81,44 @@ export function buildToolLoopSchemas(
     filterToolsForScope(profile, input.profileTools, input.toolContext).map(t => String(t.name)),
   )
   const schemas = input.tools ?? toToolSchemas(input.profileTools)
-  return schemas.filter(schema => allowed.has(schema.name))
+  const lockedUsername = input.toolContext.scope?.username?.trim() ?? ''
+  return schemas
+    .filter(schema => allowed.has(schema.name))
+    .map(schema => schemaWithLockedUsername(schema, lockedUsername))
+}
+
+/**
+ * 会话已锁定时，模型不需要先查联系人再拿到 username。
+ *
+ * 执行守卫会注入锁定会话，因此把 schema 里的 username 从 required 移除；
+ * 否则模型看到必填项后容易先调用 search_contacts/list_sessions，白白多一轮。
+ */
+function schemaWithLockedUsername(schema: ToolSchema, lockedUsername: string): ToolSchema {
+  if (lockedUsername === '') return schema
+  const properties = isRecord(schema.parameters['properties'])
+    ? schema.parameters['properties']
+    : undefined
+  if (!properties || !Object.prototype.hasOwnProperty.call(properties, 'username')) return schema
+  const required = Array.isArray(schema.parameters['required'])
+    ? schema.parameters['required'].filter(
+      (field): field is string => typeof field === 'string' && field !== 'username',
+    )
+    : []
+  const usernameSchema = isRecord(properties['username']) ? properties['username'] : {}
+  return {
+    ...schema,
+    parameters: {
+      ...schema.parameters,
+      properties: {
+        ...properties,
+        username: {
+          ...usernameSchema,
+          description: '会话标识；当前已锁定会话，可不填，由服务端自动注入',
+        },
+      },
+      required,
+    },
+  }
 }
 
 function replayBlocks(blocks: readonly ContentBlock[]): ContentBlock[] {
@@ -111,68 +130,6 @@ function replayBlocks(blocks: readonly ContentBlock[]): ContentBlock[] {
 
 function toolCallsOf(blocks: readonly ContentBlock[]): ToolCallBlock[] {
   return blocks.filter((block): block is ToolCallBlock => block.type === 'tool-call')
-}
-
-function failureResult(
-  name: string,
-  errorCode: NonNullable<ToolResult['errorCode']>,
-  error: string,
-  details?: Record<string, unknown>,
-): ToolResult {
-  return {
-    tool: name as ToolResult['tool'],
-    ok: false,
-    error,
-    errorCode,
-    ...(details ? { errorDetails: details } : {}),
-    hits: [],
-  }
-}
-
-function classifyFailure(result: ToolResult): { cls: ToolErrorClass; code?: string } {
-  const raw = result.errorCode
-  if (raw === 'invalid_arguments' || raw === 'unknown_tool') return { cls: 'invalid_arguments', ...(raw ? { code: raw } : {}) }
-  if (
-    raw === 'scope_violation'
-    || raw === 'tool_not_allowed'
-    || raw === 'data_scope_blocked'
-    || raw === 'scope_required'
-    || raw === 'unsupported_scope'
-  ) {
-    return { cls: 'scope_blocked', ...(raw ? { code: raw } : {}) }
-  }
-  if (raw === 'not_configured') return { cls: 'not_found', ...(raw ? { code: raw } : {}) }
-  const detailed = classifyToolErrorDetailed(result.error ?? '', {
-    tool: String(result.tool),
-    ...(raw ? { code: raw } : {}),
-    ...retryAfterOption(result),
-  })
-  return { cls: detailed.cls, ...(raw ? { code: raw } : {}) }
-}
-
-/** profile 明确声明有副作用的工具不能自动重放，即使错误看起来是瞬时/限流。 */
-function isSideEffectTool(loop: ToolLoopInput, name: string): boolean {
-  const profile = typeof loop.profile === 'string' ? getAnswerProfile(loop.profile) : loop.profile
-  return (profile.sideEffectTools ?? []).some(tool => String(tool) === name)
-}
-
-/** 工具把服务端等待建议放在 `errorDetails`；分类器需要它才能尊重限流退避。 */
-function retryAfterOption(result: ToolResult): { retryAfterMs?: number } {
-  const details = result.errorDetails
-  if (!details) return {}
-  for (const key of ['retryAfterMs', 'retry_after_ms']) {
-    const value = details[key]
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-      return { retryAfterMs: value }
-    }
-  }
-  for (const key of ['retryAfterSec', 'retry_after_sec']) {
-    const value = details[key]
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-      return { retryAfterMs: value * 1000 }
-    }
-  }
-  return {}
 }
 
 interface ExecuteInput {
@@ -533,7 +490,7 @@ async function executeCall(input: {
     facts: outcome.trace.facts,
     detail: outcome.result.ok
       ? resultFields.resultSummary ?? `${String(outcome.result.hits.length)} 条命中`
-      : traceFailureMessage(outcome.trace),
+      : traceFailureDetail(outcome.trace),
   })
   safeOp(
     loop,
@@ -560,6 +517,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 过程展示与操作日志只使用已脱敏的失败摘要。 */
 function traceFailureMessage(trace: ToolCallTrace): string {
   return trace.errorMessage ?? trace.note ?? '失败'
+}
+
+/** 运行轨迹只保留稳定错误分类，错误正文仍只进入本机操作日志。 */
+function traceFailureDetail(trace: ToolCallTrace): string {
+  if (trace.deadlineExceeded === true) return '工具调用超时'
+  return trace.errorClass === undefined
+    ? '工具调用失败'
+    : `工具调用失败（${trace.errorClass}）`
 }
 
 /** 成功工具的可展示结果快照；沿用回放层的脱敏、条数与长度上限。 */
@@ -594,7 +559,7 @@ function repairArguments(
 ): ToolArgumentRepair {
   const registered = findTool(allTools, name)
   if (registered) {
-    return repairToolArguments(name, raw, {
+    const repaired = repairToolArguments(name, raw, {
       ...(loop.now ? { now: loop.now } : {}),
       ...(loop.knownSessions ? { knownSessions: loop.knownSessions } : {}),
       ...(loop.knownSessionCatalog ? { knownSessionCatalog: loop.knownSessionCatalog } : {}),
@@ -603,6 +568,12 @@ function repairArguments(
         : {}),
       ...forcedScopeForArguments(raw, loop),
     })
+    return repaired.ok
+      ? {
+        ...repaired,
+        args: withRuntimeArgumentDefaults(name, repaired.args, loop),
+      }
+      : repaired
   }
   const tool = findTool(loop.profileTools, name)
   if (!tool) {
@@ -627,7 +598,13 @@ function repairArguments(
     ]),
     ...normalized.fixes.map(fix => fix.message),
   ]
-  if (normalized.ok) return { ok: true, args: normalized.args, repairs }
+  if (normalized.ok) {
+    return {
+      ok: true,
+      args: withRuntimeArgumentDefaults(name, normalized.args, loop),
+      repairs,
+    }
+  }
   const first = normalized.errors[0]
   return {
     ok: false,
@@ -684,35 +661,38 @@ function forcedScopeForArguments(
  * 根本走不到 `enforceProfileScope` 的自动补齐逻辑。
  */
 function forcedScopeOf(loop: ToolLoopInput): { forcedScope?: { username?: string } } {
-  const profile = getAnswerProfile(
-    typeof loop.profile === 'string' ? loop.profile : loop.profile.id,
-  )
-  if (!profile.forceUsername) return {}
   const username = loop.toolContext.scope?.username?.trim()
   return username ? { forcedScope: { username } } : {}
 }
 
 /**
- * 缓存键使用「范围归一后」的参数：会话内问答里「不填 username」与「显式填
- * 当前 username」是同一次调用。跨会话的 username 不会被覆盖，仍会进入执行守卫。
+ * 缓存键使用「范围归一后」的参数。
+ *
+ * 固定会话与固定日期都必须先收敛再算键：模型围绕同一个锁定范围写出不同
+ * 日期参数时，实际执行的是同一次查询，不能因为原始参数不同而重复跑工具。
+ * 真正的越权参数不会被这里静默改写；`enforceProfileScope` 失败时保留原参数，
+ * 继续交给执行守卫返回明确错误。
  */
 function scopeNormalizedArgs(
   name: string,
   args: Record<string, unknown>,
   loop: ToolLoopInput,
 ): Record<string, unknown> {
-  const profile = getAnswerProfile(
-    typeof loop.profile === 'string' ? loop.profile : loop.profile.id,
-  )
-  if (!profile.forceUsername || args['username'] !== undefined) return args
-  const locked = loop.toolContext.scope?.username?.trim()
-  if (!locked) return args
-  const tool = findTool(loop.profileTools, name)
-  const properties = tool && isRecord(tool.parameters['properties'])
-    ? tool.parameters['properties']
-    : undefined
-  if (!properties || !Object.prototype.hasOwnProperty.call(properties, 'username')) return args
-  return { ...args, username: locked }
+  const decision = enforceProfileScope(loop.profile, name, args, loop.toolContext)
+  if (!decision.ok) return args
+  return withRuntimeArgumentDefaults(name, decision.args, loop)
+}
+
+/** 把问题里的确定性排序语义落到工具参数，不依赖模型是否记得传 order。 */
+function withRuntimeArgumentDefaults(
+  name: string,
+  args: Record<string, unknown>,
+  loop: ToolLoopInput,
+): Record<string, unknown> {
+  if (name !== 'get_session_messages' || loop.recency !== true || args['order'] !== undefined) {
+    return args
+  }
+  return { ...args, order: 'desc' }
 }
 
 function assistantMessage(
@@ -812,15 +792,11 @@ function fallbackHasEvidence(outcome: ExecuteOutcome): boolean {
   return resultHasEvidence(outcome.result)
 }
 
-function resultHasEvidence(result: ToolResult): boolean {
-  return result.ok && (result.hits.length > 0 || (result.facts?.length ?? 0) > 0)
-}
-
 /**
  * 兜底循环的停止判据。
  *
  * `search_hybrid` 在 `auto` 模式同时覆盖消息与知识库；但它可能只召回了消息，
- * 此时仍应再跑 `search_kb`。ClawBot 只有 `search_kb`，它自己就是目标域。
+ * 此时仍应再跑 `search_kb`；只开放 `search_kb` 的入口则以它自身为目标域。
  */
 function fallbackCovered(
   name: string,
@@ -874,6 +850,7 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   const maxCalls = positiveInt(input.maxCallsPerRound, DEFAULT_MAX_CALLS_PER_ROUND)
   const deadlineMs = positiveInt(input.toolDeadlineMs, DEFAULT_TOOL_DEADLINE_MS)
   const modelDeadlineMs = nonNegativeInt(input.modelDeadlineMs, DEFAULT_MODEL_DEADLINE_MS)
+  const terminalTools = new Set(input.terminalTools ?? [])
   const source = input.assistantSource ?? { provider: 'answer-runtime', model: 'unknown' }
   const schemas = buildToolLoopSchemas(input)
   const messages = [...input.messages]
@@ -892,10 +869,27 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
 
   for (let round = 1; round <= maxRounds; round += 1) {
     rounds = round
-    emitStage(input.emitStage, `answer:round:${String(round)}`, `工具选择（第 ${String(round)} 轮）`, 'running')
+    const roundInput: ToolLoopInput = input.emitStage === undefined
+      ? input
+      : {
+        ...input,
+        // 工具阶段是流式的；把当前轮次附在旁路事件上，渲染层才能把
+        // 「本轮工具」与「本轮思考」稳定归组，而不依赖到达时间猜测。
+        emitStage: stage => {
+          input.emitStage?.({ ...stage, round: stage.round ?? round })
+        },
+      }
+    emitStage(
+      input.emitStage,
+      `answer:round:${String(round)}`,
+      `工具选择（第 ${String(round)} 轮）`,
+      'running',
+      undefined,
+      round,
+    )
     const turn = await runTurnWithDeadline({
       loop: {
-        ...input,
+        ...roundInput,
         messages,
       },
       deadlineMs: modelDeadlineMs,
@@ -909,7 +903,18 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
           ? { onDelta: gateLateDelta(input.onDelta, signal) }
           : {}),
         ...(input.onReasoning
-          ? { onReasoning: gateLateDelta(input.onReasoning, signal) }
+          ? {
+            onReasoning: gateLateDelta(
+              (text: string) => {
+                input.onReasoning?.(text, {
+                  phase: 'tool_selection',
+                  mode: 'delta',
+                  round,
+                })
+              },
+              signal,
+            ),
+          }
           : {}),
       }),
     })
@@ -923,22 +928,38 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
       `工具选择（第 ${String(round)} 轮）`,
       'done',
       `${String(calls.length)} 个工具调用`,
+      round,
     )
+    if (turn.reasoning !== '' && input.onReasoning) {
+      // 某些 OpenAI 兼容端点只在 block-end 给 reasoning；用最终全文覆盖
+      // 当前轮快照，避免流式端点与整包端点得到两种不同的过程记录。
+      input.onReasoning(turn.reasoning, {
+        phase: 'tool_selection',
+        mode: 'snapshot',
+        round,
+      })
+    }
 
     if (calls.length === 0) {
       if (lastBlocks.length > 0) messages.push(assistantMessage(turn.blocks, source))
       // 首轮模型只说了话、没调工具时也必须检索：否则「看起来像在回答」的空口
-      // 文本会被当成完成，ClawBot 更是会绕过唯一允许的 search_kb。
+      // 文本会被当成完成，只读知识库的入口还会绕过唯一允许的 search_kb。
       // 后续轮次若已有结果全部失败或零命中，再做**一次**有界补查；只要还有
       // 任意可引用命中或事实，就尊重模型停止，不额外扩大检索。
       const needsSupplement = round > 1
         && !supplementUsed
         && results.length > 0
         && results.every(result => !resultHasEvidence(result))
+        /*
+         * 越界调用已经被执行守卫拒绝，不能再让确定性兜底换一个参数继续跑。
+         * 否则模型改写会话被拦下后，系统会自作主张用锁定会话重查，既掩盖了
+         * 越界事实，也破坏了 `scope_violation -> blocked` 的安全契约。
+         */
+        && !results.some(resultBlockedByScope)
       if ((round === 1 || needsSupplement) && !fallbackUsed) {
         if (needsSupplement) supplementUsed = true
         const fallback = await runFallback({
-          loop: input,
+          loop: roundInput,
           traceIndex: traces.length,
           round,
           cache,
@@ -959,6 +980,9 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
     }
 
     messages.push(assistantMessage(turn.blocks, source))
+    let hadExecutableCall = false
+    let hadFreshExecution = false
+    let terminalEvidence = false
     for (const [offset, call] of calls.entries()) {
       const traceIndex = traces.length
       const overLimit = offset >= maxCalls
@@ -966,13 +990,22 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
         call,
         traceIndex,
         round,
-        loop: input,
+        loop: roundInput,
         cache,
         cacheOrder,
         deadlineMs,
         overLimit,
       })
       traces.push(outcome.trace)
+      if (!overLimit) {
+        hadExecutableCall = true
+        if (!outcome.trace.deduplicated) hadFreshExecution = true
+        if (!outcome.trace.deduplicated
+          && terminalTools.has(call.name)
+          && resultHasEvidence(outcome.result)) {
+          terminalEvidence = true
+        }
+      }
       if (!overLimit && !outcome.trace.deduplicated) {
         results.push(outcome.result)
         if (!resultHasEvidence(outcome.result) && outcome.cacheKey !== undefined) {
@@ -984,6 +1017,16 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
         content: [{ type: 'text', text: serializeResult(outcome.result) }],
         isError: !outcome.result.ok,
       }))
+    }
+    // 本轮全部命中缓存意味着模型已经拿到了同一条证据，再问一轮只会增加
+    // 一次完整的思考/网络往返；确定性停止比等模型自己反应过来更快也更稳。
+    if (hadExecutableCall && !hadFreshExecution) {
+      stopReason = 'deduplicated'
+      break
+    }
+    if (terminalEvidence) {
+      stopReason = 'terminal-tool'
+      break
     }
     if (round === maxRounds) {
       stopReason = 'max-rounds'

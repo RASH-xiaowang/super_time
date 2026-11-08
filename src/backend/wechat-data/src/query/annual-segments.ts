@@ -27,12 +27,11 @@
  */
 import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import { throwIfCancelled } from './zip.ts'
+import { messageIdentityIndex } from './message-identity.ts'
 
 /** zstd 魔数（0xFD2FB528，小端）。 */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
@@ -100,30 +99,6 @@ function bodyOnly(content: string): string {
   return stripXml(t.replace(/^[\x00-\x1f\x7f-\x9f]*/, '')).slice(0, 120)
 }
 
-/** `Msg_<md5(username)>`（与会报扫描同一套命名）。 */
-function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
-}
-
-/** 会话名单来自 session.db 的 SessionTable（`loadUsernames` 的口径）。 */
-function loadUsernames(decryptedDir: string): string[] {
-  const p = join(decryptedDir, 'session', 'session.db')
-  if (!existsSync(p)) return []
-  const out: string[] = []
-  try {
-    withDb(p, (db) => {
-      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-      if (!table) return
-      for (const r of db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>) {
-        const u = String(r['username'] ?? '').trim()
-        if (u) out.push(u)
-      }
-    })
-  } catch { /* skip */ }
-  return out
-}
-
 /**
  * 按段取材一年的文本消息。
  *
@@ -148,8 +123,7 @@ export async function collectAnnualSegments(
   const msgDir = join(decryptedDir, 'message')
   if (!existsSync(msgDir)) return { segments: [], truncated: false }
 
-  const tableToUser = new Map<string, string>()
-  for (const u of loadUsernames(decryptedDir)) tableToUser.set(msgTableName(u), u)
+  const tableToUser = messageIdentityIndex(decryptedDir, ['message']).tableToUsername
   const files = readdirSync(msgDir).filter(f => f.endsWith('.db') && !f.includes('-shm') && !f.includes('-wal'))
 
   const segments: AnnualSegment[] = []

@@ -93,10 +93,11 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     //  它仍留在 NAV_GROUPS 里只为提供图标）。
     // 精确钉住而不是写 `>= 15`：README 那个数字就是靠模糊口径长期停在错误值上。
     const inGroups = visible.filter(t => t !== 'settings')
-    // 2026-10-12：ClawBot 集成新增一个可见入口（16 → 17）。
     // 2026-10-17：朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口（17 → 14）。
     // 2026-10-19：新增「任务信息」可见入口（14 → 15）。
-    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(15)
+    // 2026-10-29：新增「群聊分析」「消息列表」两个可见入口（15 → 17）。
+    // 2026-10-31：退役一个可见入口（17 → 16）。
+    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(16)
     expect(visible, '「设置」仍应作为底部入口留在 NAV_GROUPS 里（图标来源）').toContain('settings')
   })
 
@@ -305,14 +306,16 @@ describe('用户可见的计数声明不再静默漂移（这次迁移会改到�
     ).toBe(String(renderedInGroups.length))
   })
 
-  it('历次导航变更的净效果是 14（钉住这个数字，不用范围）', () => {
+  it('历次导航变更的净效果是 16（钉住这个数字，不用范围）', () => {
     // 口径沿革：并入社交图谱前 17（含独立可见的 graph）
     // → 2026-09-17 并入后 16 → 新增「知识库」(kb) 后 17
     // → 2026-09-18 知识图谱并入知识库（knowledge 转 hidden）后 16
-    // → 2026-10-12 新增「ClawBot」后 **17**
-    // → 2026-10-17 朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口后 **14** → 2026-10-19 新增「任务信息」后 **15**。
+    // → 2026-10-17 朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口后 **14**
+    // → 2026-10-19 新增「任务信息」后 **15**
+    // → 2026-10-29 新增「群聊分析」「消息列表」后 **17**。
+    // → 2026-10-31 退役一个可见入口后 **16**。
     // 写成精确值而不是范围 —— 范围断言正是这个数字上次能长期漂着的原因。
-    expect(renderedInGroups.length).toBe(15)
+    expect(renderedInGroups.length).toBe(16)
     for (const t of ['graph', 'knowledge'] as const) {
       expect(renderedInGroups, `${t} 不该再出现在侧栏分组里`).not.toContain(t)
       // 但两者必须仍是**合法 tab** —— 这是深链与段条第二段的前提

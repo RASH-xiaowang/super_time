@@ -6,7 +6,7 @@
  */
 import { useCallback, useRef, useState } from 'react'
 import type { SummaryRecord } from '@deepseek-ai/dsh-wechat-data/types'
-import { DateRangeField } from '../ui/kit.tsx'
+import { DateRangeField, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { fmtLocaleMs } from '../utils/format.ts'
 import type { RangePresetKey } from '../utils/date-range.ts'
 import css from './summary-workbench.module.css'
@@ -222,11 +222,25 @@ export function SummaryToolbar({ from, to, format, loading, hasResult, rangeText
       </label>
       {/* 空态（还没有结果）时，主操作按钮在空态卡里；这里只在已有结果时提供「重新生成」。 */}
       {hasResult && (
-        <button type="button" className={css.primaryBtn} onClick={onGenerate} disabled={loading || !from || !to}>
+        <button
+          type="button"
+          className={css.primaryBtn}
+          onClick={onGenerate}
+          disabled={loading || !from || !to}
+          title={!loading && (!from || !to) ? '请选择完整日期范围' : undefined}
+        >
           {loading ? <><span className={css.spin} />生成中…</> : '重新生成'}
         </button>
       )}
-      <button type="button" className={css.ghostBtn} onClick={onCopy} disabled={!hasResult}>复制</button>
+      <button
+        type="button"
+        className={css.ghostBtn}
+        onClick={onCopy}
+        disabled={!hasResult}
+        title={!hasResult ? '先生成总结后再复制' : undefined}
+      >
+        复制
+      </button>
       <span className={css.toolbarSpacer} />
       <span className={css.cardExtra} title={rangeText}>{rangeText}</span>
     </div>
@@ -362,7 +376,7 @@ export function StatsCard({ stats, label, isSingleDay, nameOf }: {
 /**
  * 历史抽屉外壳（2026-10-19）：把「历史」从固定 320px 侧栏改成盖在面板上的抽屉。
  *
- * 纯展示 + 事件透传；Esc 关闭由调用方处理（与定时任务抽屉同一套交互）。
+ * 纯展示 + 事件透传；无障碍接线与定时任务抽屉同一套。
  * @param props.children - 内部渲染的 `HistoryPanel`。
  * @param props.onClose - 关闭抽屉。
  * @returns 抽屉元素。
@@ -371,8 +385,11 @@ export function SummaryHistoryDrawer({ children, onClose }: {
   children: React.ReactNode
   onClose: () => void
 }): React.JSX.Element {
+  useEscapeToClose(true, onClose)
+  useDialogFocus(true, '[data-st-dialog="summary-history"]')
+
   return (
-    <div className={css.historyDrawer} onClick={onClose} role="dialog" aria-modal="true" aria-label="历史总结">
+    <div className={css.historyDrawer} onClick={onClose} role="dialog" aria-modal="true" aria-label="历史总结" data-st-dialog="summary-history">
       <div className={css.historyPanel} onClick={(e) => { e.stopPropagation() }}>
         {children}
       </div>

@@ -12,6 +12,7 @@ import type {
   EvidenceBundle,
 } from './query/answer-runtime/evidence.ts'
 import type {
+  AnswerReasoningSegment,
   AnswerRuntimeStage,
   AnswerRuntimeResourceCitation,
   ToolCallTrace,
@@ -205,6 +206,8 @@ export interface AskResult {
    * 与实时 `emitStage` 使用同一份事件形状；旧后端可能不返回该字段。
    */
   stages?: AnswerRuntimeStage[]
+  /** 按工具轮次/综合阶段拆分的可展示思考；新后端返回，旧后端缺省。 */
+  reasoningSegments?: AnswerReasoningSegment[]
   /** 本轮问答运行时的端到端耗时（毫秒）；旧后端可能不返回该字段。 */
   durationMs?: number
   /** 收敛、去重、预算截断后的证据包。 */
@@ -260,7 +263,7 @@ export interface AskResult {
    *
    * 一次问答可能调用模型多次（检索规划 / 生成 / 接地回炉），这里是**累加值**；
    * 供应商不返回 usage（或全部没有）时缺省为 undefined —— 不伪造 0。
-   * ClawBot 自动回复用它按实例记账（`clawbot_token_usage`）。
+   * 自动回复按会话记账时使用。
    */
   usage?: TokenUsage
   /** 检索统计（命中候选数 / 保留数 / 范围），用于解释「为什么只有这些来源」。 */
@@ -322,6 +325,43 @@ export interface AskResult {
  */
 export type AskHistoryStatus = 'ok' | 'insufficient' | 'withheld' | 'fail'
 
+/** 历史里保留的工具调用摘要；不保存完整参数与结果正文。 */
+export interface AskHistoryToolCall {
+  index: number
+  round: number
+  callId: string
+  name: string
+  ok: boolean
+  deduplicated: boolean
+  attempts: number
+  retries: number
+  elapsedMs: number
+  errorClass?: string
+  errorCode?: string
+  hits: number
+  facts: number
+  skipped?: boolean
+  deadlineExceeded?: boolean
+}
+
+/**
+ * 一次问答的有界运行轨迹快照。
+ *
+ * 只在本机 `ask_history.runtime_trace` 中保存；不参与导出。思考与阶段均沿用
+ * 写入侧上限，`truncated` 明确告诉界面这是否只是可展示的预算内快照。
+ */
+export interface AskHistoryRuntimeTrace {
+  version: 1
+  /** 按轮次/综合阶段拆分；旧记录没有该数组。 */
+  reasoningSegments: AnswerReasoningSegment[]
+  /** 与实时阶段同形的有界快照；不保存工具完整参数。 */
+  stages: AnswerRuntimeStage[]
+  /** 工具调用摘要；不保存 argumentsSummary/resultDetail/错误正文。 */
+  toolCalls: AskHistoryToolCall[]
+  toolCallTotal: number
+  truncated: boolean
+}
+
 /**
  * 一次问答的完整记录（问题 + 回答 + 引用 + 检索元信息）。
  *
@@ -362,6 +402,8 @@ export interface AskHistoryEntry {
   error: string
   /** 多阶段检索统计（结构化；老记录可能为 null）。 */
   retrieval: Record<string, unknown> | null
+  /** 有界运行轨迹；老记录或损坏数据缺省，不影响其余字段读取。 */
+  runtimeTrace?: AskHistoryRuntimeTrace
   /** 端到端耗时（毫秒）；0 表示未记录。 */
   elapsedMs: number
 }
@@ -372,6 +414,8 @@ export interface AskHistoryQuery {
   q?: string
   /** 只保留这些来源（空/缺省表示全部）。 */
   sources?: string[]
+  /** 只保留该会话范围的记录；会话内问答历史据此隔离。 */
+  username?: string
   status?: AskHistoryStatus
   /** 起始时间（毫秒，含）。 */
   from?: number

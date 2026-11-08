@@ -11,15 +11,17 @@ import { createBackendSupervisor } from '../backend-supervisor.js'
 
 type Boot = { info: { root: string }; methods: string[] }
 type ChannelOptions = { onExit: (code: number) => void; onEvent: (name: string, args: unknown[]) => void }
+type DisposeOutcome = { acknowledged: boolean; reason: 'ack' | 'timeout' | 'worker-exited' | 'error' | 'send-failed' }
 type Handle = {
   init: ReturnType<typeof vi.fn<(arg?: unknown) => Promise<Boot>>>
   call: ReturnType<typeof vi.fn<(method?: unknown, args?: unknown) => Promise<unknown>>>
-  dispose: ReturnType<typeof vi.fn<() => void>>
+  dispose: ReturnType<typeof vi.fn<(done?: (outcome?: DisposeOutcome) => void) => void>>
   stats: ReturnType<typeof vi.fn<() => { pending: number }>>
 }
 
 function makeHarness(options: {
   initResults?: Array<Boot | Error>
+  initFactory?: (index: number) => Promise<Boot>
   settings?: Record<string, unknown>
   secrets?: Record<string, unknown>
   restartBackoffMs?: number[]
@@ -33,6 +35,7 @@ function makeHarness(options: {
   let initIndex = 0
   const handles: Array<{ handle: Handle; channel: ChannelOptions; child: object }> = []
   const events: Array<[string, unknown[]]> = []
+  const stableTimers: Array<() => void> = []
   const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
   const applyConfig = vi.fn()
   const recordResolved = vi.fn()
@@ -41,15 +44,19 @@ function makeHarness(options: {
   const mirroredSecretValues = vi.fn(() => ({ ...secrets }))
   const fork = vi.fn(() => ({ stdout: null, stderr: null }))
   const createWorkerChannel = vi.fn((child: object, channel: ChannelOptions) => {
-    const result = initResults[initIndex]
+    const index = initIndex
+    const result = initResults[index]
     initIndex += 1
     const handle: Handle = {
       init: vi.fn(async () => {
+        if (options.initFactory) return options.initFactory(index)
         if (result instanceof Error) throw result
         return result
       }),
       call: vi.fn(async () => ({ ok: true, value: { ok: true } })),
-      dispose: vi.fn(),
+      dispose: vi.fn((done?: (outcome?: DisposeOutcome) => void) => {
+        done?.({ acknowledged: true, reason: 'ack' })
+      }),
       stats: vi.fn(() => ({ pending: 0 })),
     }
     handles.push({ handle, channel, child })
@@ -81,8 +88,10 @@ function makeHarness(options: {
     recordResolved,
     log,
     restartBackoffMs,
-    setTimeoutFn: (fn: () => void) => {
-      queueMicrotask(fn)
+    setTimeoutFn: (fn: () => void, delay = 0) => {
+      // 测试里的退避立即执行；稳定窗口则显式保留，才能模拟“ready 后立刻崩溃”。
+      if (delay >= 1000) stableTimers.push(fn)
+      else queueMicrotask(fn)
       return { unref: () => {} }
     },
     clearTimeoutFn: vi.fn(),
@@ -102,6 +111,10 @@ function makeHarness(options: {
     mirroredSecretValues,
     fork,
     createWorkerChannel,
+    stableTimers,
+    runStableReset: (): void => {
+      for (const fn of stableTimers.splice(0)) fn()
+    },
   }
 }
 
@@ -149,6 +162,14 @@ describe('backend-supervisor', () => {
     expect(opts.execArgv).toEqual(['--max-old-space-size=192', '--expose-gc'])
   })
 
+  it('开启 relay 日志时使用注入的 logger，不引用未定义变量', async () => {
+    const h = makeHarness({ env: { SUPERTIME_RELAY_LOG: '1' } })
+    await h.supervisor.bootstrap('D:\\userData')
+
+    h.handles[0]!.channel.onEvent('wechat-data/updated', [])
+    expect(h.log.log).toHaveBeenCalledWith('[relay:in]', 'wechat-data/updated')
+  })
+
   it('init 失败会 dispose 当前句柄并进入有界退避；下一次 init 成功后恢复', async () => {
     const h = makeHarness({
       initResults: [
@@ -169,7 +190,152 @@ describe('backend-supervisor', () => {
     expect(h.fork).toHaveBeenCalledTimes(2)
     // 历史语义：首启 init 失败不会回写路径；重启恢复也只回灌设置并收紧 ACL。
     expect(h.recordResolved).toHaveBeenCalledTimes(0)
+    expect(h.supervisor.status.restarts).toBe(1)
+    h.runStableReset()
     expect(h.supervisor.status.restarts).toBe(0)
+  })
+
+  it('init 拒绝时先等 dispose ACK，再安排重启', async () => {
+    let rejectInit: ((error: Error) => void) | undefined
+    const h = makeHarness({
+      initFactory: (index) => {
+        if (index === 0) {
+          return new Promise<Boot>((_resolve, reject) => { rejectInit = reject })
+        }
+        return Promise.resolve({ info: { root: 'D:\\data' }, methods: ['getSessions'] })
+      },
+    })
+    const booting = h.supervisor.bootstrap('D:\\userData')
+    await vi.waitFor(() => {
+      expect(h.handles).toHaveLength(1)
+    })
+    let disposeDone: (() => void) | undefined
+    h.handles[0]!.handle.dispose.mockImplementation((done) => { disposeDone = done })
+    rejectInit?.(new Error('init rejected'))
+
+    await vi.waitFor(() => {
+      expect(h.handles[0]!.handle.dispose).toHaveBeenCalledTimes(1)
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(h.fork).toHaveBeenCalledTimes(1)
+    expect(h.supervisor.status.state).toBe('starting')
+
+    disposeDone?.()
+    expect((await booting).ok).toBe(false)
+    await vi.waitFor(() => {
+      expect(h.supervisor.status.state).toBe('ready')
+    })
+    expect(h.fork).toHaveBeenCalledTimes(2)
+  })
+
+  it('bootstrap 的 init 尚未返回时 stop：捕获 currentHandle，ACK 后退出且不写回 backend', async () => {
+    let resolveInit: ((boot: Boot) => void) | undefined
+    const h = makeHarness({
+      initFactory: () => new Promise<Boot>((resolve) => { resolveInit = resolve }),
+    })
+    const booting = h.supervisor.bootstrap('D:\\userData')
+    await vi.waitFor(() => {
+      expect(h.handles).toHaveLength(1)
+    })
+    let disposeDone: (() => void) | undefined
+    h.handles[0]!.handle.dispose.mockImplementation((done) => { disposeDone = done })
+
+    const stopping = h.supervisor.stop()
+    expect(h.handles[0]!.handle.dispose).toHaveBeenCalledTimes(1)
+    resolveInit?.({ info: { root: 'D:\\late' }, methods: ['getSessions'] })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(h.supervisor.backend).toBeNull()
+    expect(h.supervisor.boot).toBeNull()
+    expect(h.fork).toHaveBeenCalledTimes(1)
+    disposeDone?.()
+    await stopping
+    expect((await booting).ok).toBe(false)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(h.supervisor.backend).toBeNull()
+    expect(h.supervisor.status.state).toBe('down')
+    expect(h.fork, '显式停止后的 init 取消不能被误判为运行故障并自动重启').toHaveBeenCalledTimes(1)
+  })
+
+  it('init 期间重复 stop 复用同一 ACK Promise，只发一次 dispose', async () => {
+    let resolveInit: ((boot: Boot) => void) | undefined
+    const h = makeHarness({
+      initFactory: () => new Promise<Boot>((resolve) => { resolveInit = resolve }),
+    })
+    const booting = h.supervisor.bootstrap('D:\\userData')
+    await vi.waitFor(() => {
+      expect(h.handles).toHaveLength(1)
+    })
+    let disposeDone: ((outcome?: DisposeOutcome) => void) | undefined
+    h.handles[0]!.handle.dispose.mockImplementation((done) => { disposeDone = done })
+
+    const first = h.supervisor.stop()
+    const second = h.supervisor.stop()
+    expect(second).toBe(first)
+    expect(h.handles[0]!.handle.dispose).toHaveBeenCalledTimes(1)
+
+    disposeDone?.({ acknowledged: true, reason: 'ack' })
+    await first
+    expect(h.supervisor.isStopping).toBe(false)
+    // 已完成的 stop 不能永久缓存：否则更新安装失败后再次重启会一直撞到旧终态。
+    const afterDone = h.supervisor.stop()
+    expect(afterDone).not.toBe(first)
+    await afterDone
+    resolveInit?.({ info: { root: 'D:\\late' }, methods: ['getSessions'] })
+    expect((await booting).ok).toBe(false)
+    expect(h.handles[0]!.handle.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('dispose 超时只记录“未确认”，不会误报注入已还原', async () => {
+    const h = makeHarness()
+    await h.supervisor.bootstrap('D:\\userData')
+    h.handles[0]!.handle.dispose.mockImplementation((done) => {
+      done?.({ acknowledged: false, reason: 'timeout' })
+    })
+
+    await h.supervisor.stop()
+    expect(h.log.warn).toHaveBeenCalledWith(
+      '[wechat] dispose 等待 ACK 超时；worker 已被终止，注入还原/收尾无法确认',
+    )
+    expect(h.log.log).not.toHaveBeenCalledWith(
+      '[wechat] 后端已收尾（收到 dispose ACK，注入已还原）',
+    )
+  })
+
+  it('stop 完成后保留可恢复入口：restart 能重新拉起并恢复 ready', async () => {
+    const h = makeHarness({
+      initResults: [
+        { info: { root: 'D:\\first' }, methods: ['getSessions'] },
+        { info: { root: 'D:\\second' }, methods: ['getSessions'] },
+      ],
+    })
+    await h.supervisor.bootstrap('D:\\userData')
+
+    const stopped = await h.supervisor.stop()
+    expect(h.supervisor.isStopping).toBe(false)
+    expect(h.supervisor.backend).toBeNull()
+
+    const restarted = await stopped.restart()
+    expect(restarted.ok).toBe(true)
+    expect(h.fork).toHaveBeenCalledTimes(2)
+    expect(h.supervisor.backend).toBe(h.handles[1]!.handle)
+    expect(h.supervisor.status.state).toBe('ready')
+  })
+
+  it('非 ACK dispose 回执不会误报注入已还原', async () => {
+    const h = makeHarness()
+    await h.supervisor.bootstrap('D:\\userData')
+    h.handles[0]!.handle.dispose.mockImplementation((done) => {
+      done?.({ acknowledged: false, reason: 'error' })
+    })
+
+    await h.supervisor.stop()
+    expect(h.log.warn).toHaveBeenCalledWith(
+      '[wechat] worker 的 dispose 回执失败；注入还原/收尾无法确认',
+    )
+    expect(h.log.log).not.toHaveBeenCalledWith(
+      '[wechat] 后端已收尾（收到 dispose ACK，注入已还原）',
+    )
   })
 
   it('连续 init 失败达到上限后进入 failed，不再无限重启', async () => {
@@ -185,6 +351,32 @@ describe('backend-supervisor', () => {
     // 首启一次 + 三次退避重启；第四次不该再拉起。
     expect(h.fork).toHaveBeenCalledTimes(4)
     expect(h.supervisor.status.lastError).toContain('连续 3 次重启失败')
+  })
+
+  it('ready 后立即退出仍累计重启预算，不会因短暂成功而无限重启', async () => {
+    const h = makeHarness({
+      initResults: Array.from({ length: 5 }, (_, i) => ({
+        info: { root: `D:\\data-${String(i)}` },
+        methods: ['getSessions'],
+      })),
+    })
+    await h.supervisor.bootstrap('D:\\userData')
+    expect(h.supervisor.status.state).toBe('ready')
+
+    for (let i = 0; i < 3; i += 1) {
+      h.handles[i]!.channel.onExit(1)
+      await vi.waitFor(() => {
+        expect(h.supervisor.status.state).toBe('ready')
+        expect(h.supervisor.backend).toBe(h.handles[i + 1]!.handle)
+      })
+    }
+
+    h.handles[3]!.channel.onExit(1)
+    await vi.waitFor(() => {
+      expect(h.supervisor.status.state).toBe('failed')
+    })
+    expect(h.fork).toHaveBeenCalledTimes(4)
+    expect(h.supervisor.status.restarts).toBe(3)
   })
 
   it('陈旧句柄的迟到 exit 不会动健康的新句柄；当前句柄 exit 才安排重启', async () => {
@@ -227,13 +419,21 @@ describe('backend-supervisor', () => {
     })
     const currentExit = h.handles[1]!.channel.onExit
 
-    h.supervisor.stop()
+    let disposeDone: (() => void) | undefined
+    h.handles[1]!.handle.dispose.mockImplementation((done) => { disposeDone = done })
+    const stopping = h.supervisor.stop()
     expect(h.handles[1]!.handle.dispose).toHaveBeenCalledTimes(1)
     // dispose 是握手：必须带回调，等 worker 收尾（还原注入/清 marker）完成才 kill。
     // 「发完就 kill」会让 worker 的 case 'dispose' 与 exit 兜底都来不及跑。
     expect(h.handles[1]!.handle.dispose).toHaveBeenCalledWith(expect.any(Function))
     expect(h.supervisor.backend).toBeNull()
     expect(h.supervisor.isStopping).toBe(true)
+    let resolved = false
+    void stopping.then(() => { resolved = true })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+    disposeDone?.()
+    await stopping
 
     currentExit(1)
     expect(h.supervisor.status.state).toBe('ready')

@@ -81,7 +81,8 @@ describe('文本气泡的可点性约定', () => {
     ])
     const mention = [...host.querySelectorAll('span')].find((s) => s.textContent?.startsWith('@张三'))
     expect(mention?.textContent).toBe('@张三（企业：深度求索）')
-    expect(mention?.getAttribute('title')).toBe('wxid_zhang@openim')
+    expect(mention?.getAttribute('title'), '悬停不能暴露内部 wxid').toBeNull()
+    expect(host.innerHTML).not.toContain('wxid_zhang@openim')
   })
 
   it('只有 http(s) 会被切成链接：伪协议不许生成 <a href>', async () => {

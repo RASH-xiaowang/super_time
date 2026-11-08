@@ -7,9 +7,12 @@
  * @module export-io
  */
 
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled, type StreamControl } from './zip.ts'
 import { getConfig } from './config.ts'
 import { resolveImageKeyPair } from './image-key.ts'
 
@@ -40,6 +43,152 @@ export function writeFileAtomicSync(filePath: string, data: string | Uint8Array)
       rmSync(tmp, { force: true })
     } catch {
       /* 清理失败不掩盖原错误 */
+    }
+    throw e
+  }
+}
+
+/**
+ * Copy a local media file into its destination without transcoding.
+ *
+ * Videos can be hundreds of megabytes, so buffering the whole source before
+ * writing is unnecessary. The temporary-file + rename sequence keeps a failed
+ * copy from leaving a truncated file that looks valid.
+ */
+export function copyFileAtomicSync(sourcePath: string, destinationPath: string): void {
+  const tmp = partialPath(destinationPath)
+  try {
+    copyFileSync(sourcePath, tmp)
+    renameSync(tmp, destinationPath)
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* cleanup failure must not hide the original error */
+    }
+    throw e
+  }
+}
+
+/**
+ * Copy, verify the copied snapshot, then atomically rename it.
+ *
+ * Verifying the source before `copyFileSync` leaves a TOCTOU window while
+ * WeChat may still be writing the source. The verifier runs on the completed
+ * temporary copy instead, so the final destination is exactly the snapshot
+ * whose bytes passed validation. The verifier returns the final destination
+ * so callers can correct an extension from the copied container format.
+ */
+export async function copyFileVerifiedAtomicSync(
+  sourcePath: string,
+  requestedDestination: string,
+  verify: (temporaryPath: string) => Promise<string> | string,
+): Promise<string> {
+  const tmp = partialPath(requestedDestination)
+  try {
+    await copyFile(sourcePath, tmp)
+    const finalDestination = await verify(tmp)
+    renameSync(tmp, finalDestination)
+    return finalDestination
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* cleanup failure must not hide the original error */
+    }
+    throw e
+  }
+}
+
+/**
+ * 异步分块复制并校验。大视频/附件复制期间可以上报字节进度，也能在每个块边界取消。
+ *
+ * 与 `copyFileVerifiedAtomicSync` 的区别只在传输实现：验证仍在临时文件完成后进行，
+ * 因而微信同时写源文件时不会把“读了一部分”的字节当成已经校验过的快照。
+ */
+export async function copyFileVerifiedAtomic(
+  sourcePath: string,
+  requestedDestination: string,
+  verify: (temporaryPath: string) => Promise<string> | string,
+  ctrl?: StreamControl,
+): Promise<string> {
+  const tmp = partialPath(requestedDestination)
+  const total = statSync(sourcePath).size
+  let copied = 0
+  try {
+    reportProgress(ctrl, 'copy', 0, total)
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, callback): void {
+        try {
+          throwIfCancelled(ctrl?.signal)
+          copied += chunk.length
+          reportProgress(ctrl, 'copy', copied, total)
+          callback(null, chunk)
+        } catch (e) {
+          callback(e as Error)
+        }
+      },
+    })
+    await pipeline(createReadStream(sourcePath), meter, createWriteStream(tmp))
+    const finalDestination = await verify(tmp)
+    throwIfCancelled(ctrl?.signal)
+    renameSync(tmp, finalDestination)
+    return finalDestination
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* cleanup failure must not hide the original error */
+    }
+    throw e
+  }
+}
+
+/**
+ * 异步原子写内存中的导出字节，并在分块落盘时上报进度/响应取消。
+ * `Buffer` 本身已在内存里，这里解决的是大视频一次性同步写盘会独占事件循环的问题。
+ */
+export async function writeFileAtomicWithProgress(
+  filePath: string,
+  data: string | Uint8Array,
+  ctrl?: StreamControl,
+): Promise<void> {
+  const tmp = partialPath(filePath)
+  const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
+  let written = 0
+  const writeChunks = async function* (): AsyncGenerator<Buffer> {
+    // `Readable.from([bytes])` feeds the whole file as one chunk, so cancellation
+    // cannot run until the synchronous write has already finished. Slice the
+    // in-memory payload instead; cancellation and progress now happen between
+    // write backpressure boundaries.
+    const chunkSize = 256 * 1024
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      throwIfCancelled(ctrl?.signal)
+      yield bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length))
+    }
+  }
+  try {
+    reportProgress(ctrl, 'write-bytes', 0, bytes.length)
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, callback): void {
+        try {
+          throwIfCancelled(ctrl?.signal)
+          written += chunk.length
+          reportProgress(ctrl, 'write-bytes', written, bytes.length)
+          callback(null, chunk)
+        } catch (e) {
+          callback(e as Error)
+        }
+      },
+    })
+    await pipeline(Readable.from(writeChunks()), meter, createWriteStream(tmp))
+    throwIfCancelled(ctrl?.signal)
+    renameSync(tmp, filePath)
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* cleanup failure must not hide the original error */
     }
     throw e
   }

@@ -31,6 +31,50 @@ export function infoRefreshApplies(open: boolean, fetchedFor: string | null, cur
   return open && fetchedFor !== null && fetchedFor === currentTalker
 }
 
+/**
+ * 判断一次「打开群资料」请求是否仍可提交结果。
+ *
+ * 除了会话归属，还必须比较请求序号：用户可能关闭后马上重开同一个群，
+ * 此时 talker/epoch 都没变，只有新请求序号能让旧响应失效。
+ */
+export function groupInfoRequestApplies(
+  requestSeq: number,
+  currentSeq: number,
+  sessionStillAlive: boolean,
+): boolean {
+  return requestSeq === currentSeq && sessionStillAlive
+}
+
+/**
+ * 群资料所有请求共用的版本闸。
+ *
+ * 打开抽屉与实时刷新分处两个 hook，但必须竞争同一个序号；否则后发的刷新
+ * 无法让更早、更慢的打开响应失效。闸按 `sessionEpochRef` 复用，避免改
+ * `Chats.tsx` 的跨 hook 接线面。
+ */
+export interface GroupInfoRequestGate {
+  current: number
+}
+
+const groupInfoRequestGates = new WeakMap<object, GroupInfoRequestGate>()
+
+export function groupInfoRequestGateFor(owner: object): GroupInfoRequestGate {
+  const existing = groupInfoRequestGates.get(owner)
+  if (existing) return existing
+  const gate = { current: 0 }
+  groupInfoRequestGates.set(owner, gate)
+  return gate
+}
+
+export function beginGroupInfoRequest(gate: GroupInfoRequestGate): number {
+  gate.current += 1
+  return gate.current
+}
+
+export function invalidateGroupInfoRequests(gate: GroupInfoRequestGate): void {
+  gate.current += 1
+}
+
 export interface GroupInfoLiveInputs {
   /** 抽屉是否开着（开着才刷；关着时事件一律不取数）。 */
   open: boolean
@@ -38,6 +82,7 @@ export interface GroupInfoLiveInputs {
   talkerRef: React.MutableRefObject<string | null>
   sessionAlive: (epoch: number, talker: string) => boolean
   sessionEpochRef: React.MutableRefObject<number>
+  requestGate: GroupInfoRequestGate
   setGroupInfo: React.Dispatch<React.SetStateAction<GroupInfo | null>>
   setGroupInfoErr: React.Dispatch<React.SetStateAction<string | null>>
 }
@@ -51,8 +96,15 @@ export interface GroupInfoLiveInputs {
  * 抽屉**关着**时一个请求都不发（重开抽屉会自己重取），开着才发、落地前再过归属闸。
  */
 export function useGroupInfoLive(inputs: GroupInfoLiveInputs): void {
-  const { open, talkerRef, sessionAlive, sessionEpochRef, setGroupInfo, setGroupInfoErr } = inputs
+  const { open, talkerRef, sessionAlive, sessionEpochRef, requestGate, setGroupInfo, setGroupInfoErr } = inputs
   const openRef = useRef(open)
+  const previousOpenRef = useRef(open)
+  // 关闭时立即作废所有在途请求。打开不再自增：打开请求本身会取得更高的新序号，
+  // 若这里也在 false→true 时自增，会把刚发出的打开请求误杀。
+  if (previousOpenRef.current && !open) {
+    invalidateGroupInfoRequests(requestGate)
+  }
+  previousOpenRef.current = open
   openRef.current = open
   // sessionAlive 每次渲染都是新闭包；它只读 ref，存进 ref 让 refresh 的依赖保持为空。
   const aliveRef = useRef(sessionAlive)
@@ -63,15 +115,19 @@ export function useGroupInfoLive(inputs: GroupInfoLiveInputs): void {
     const talker = talkerRef.current
     if (!talker) return
     const epoch = sessionEpochRef.current
+    const requestSeq = beginGroupInfoRequest(requestGate)
     void apiGetGroupInfo(talker)
       .then((r) => {
         // 触发到落地之间：抽屉被关掉 / 会话切走（含 A→B→A 的往返，epoch 会变）都丢弃。
-        if (!infoRefreshApplies(openRef.current, talker, talkerRef.current) || !aliveRef.current(epoch, talker)) return
+        if (
+          !groupInfoRequestApplies(requestSeq, requestGate.current, aliveRef.current(epoch, talker))
+          || !infoRefreshApplies(openRef.current, talker, talkerRef.current)
+        ) return
         setGroupInfo(r.group)
         setGroupInfoErr(null)
       })
       .catch(() => { /* 静默：保留旧快照，下一次事件再试 */ })
-  }, [])
+  }, [requestGate])
   useWechatDataUpdated(refresh)
   useWechatDataUpdated(refresh, `${SNAPSHOT_REFRESHED_EVENT}:group`)
 }

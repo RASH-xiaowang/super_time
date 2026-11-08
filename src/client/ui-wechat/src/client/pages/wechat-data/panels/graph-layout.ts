@@ -15,7 +15,15 @@
  */
 import Graph from 'graphology'
 import forceAtlas2, { type ForceAtlas2Settings } from 'graphology-layout-forceatlas2'
-import { DEFAULT_GRAPH_SETTINGS, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import {
+  DEFAULT_GRAPH_SETTINGS,
+  GRAPH_FORCE_FACTOR_MAX,
+  GRAPH_FORCE_FACTOR_MIN,
+  GRAPH_FORCE_KEYS,
+  type BuiltGraph,
+  type GNode,
+  type GraphSettings,
+} from './graph-model.ts'
 import { nodeRadius } from './graph-canvas.ts'
 // 作用域名（'social' / 'kb:<id>'）与 LRU 上限只有 `../kb-scope-keys.ts` 一处定义，
 // 这里**不手写** 'kb:' 前缀 —— 拼错不会抛错，只会静默用另一个键，也就是静默串库。
@@ -57,10 +65,6 @@ const BASE_SCALING_RATIO = 100
 const BASE_GRAVITY = 1
 const BARNES_HUT_THETA = 0.5
 
-/** 力度倍数的钳制窗口：滑块拉到极限也只到基准的 1/4 ~ 4 倍，避免极端值把布局推成噪点。 */
-const FORCE_FACTOR_MIN = 0.25
-const FORCE_FACTOR_MAX = 4
-
 /**
  * 迭代次数分档（沿用参考实现 llm_wiki graph-view 的档位）。
  * 节点越多单轮越贵，总耗时靠迭代数压住；单调不增，spec 锁的是这条与各档边界。
@@ -73,10 +77,28 @@ export function layoutIterations(nodeCount: number): number {
   return 140
 }
 
+/**
+ * 参数微调与结构变化的“热启动”迭代数。
+ *
+ * 这类布局从当前坐标出发，不需要像首次布局那样跑满收敛轮数；减少到约三分之一后，
+ * 290 节点量级通常能在十几毫秒内算完，滑杆停止时不会先卡一下再瞬移。用户点击
+ * 「重新布局」仍走完整 `layoutIterations`，两套语义互不混淆。
+ * @param nodeCount - 参与力导向的节点数。
+ * @returns 热启动迭代数。
+ */
+export function warmLayoutIterations(nodeCount: number): number {
+  if (nodeCount > 2500) return 12
+  if (nodeCount > 1200) return 16
+  if (nodeCount > 600) return 20
+  if (nodeCount > 250) return 28
+  if (nodeCount > 120) return 36
+  return 48
+}
+
 /** 滑块值 → 相对默认设置的倍数（NaN/缺失按默认处理，免得把 NaN 喂进 FA2 直接抛错）。 */
 function forceFactor(value: number, base: number): number {
   if (!Number.isFinite(value) || !(base > 0)) return 1
-  return Math.min(FORCE_FACTOR_MAX, Math.max(FORCE_FACTOR_MIN, value / base))
+  return Math.min(GRAPH_FORCE_FACTOR_MAX, Math.max(GRAPH_FORCE_FACTOR_MIN, value / base))
 }
 
 /** 节点越多越要铺开（与旧 ECharts 版的 density 同口径：120 节点为 1 倍）。 */
@@ -127,16 +149,6 @@ export function fa2Settings(settings: GraphSettings, nodeCount: number): Fa2Para
   }
 }
 
-/** 参与的力度参数（也是指纹里「参数部分」的白名单）。 */
-const FORCE_KEYS = [
-  'forceCentripetal',
-  'forceRepulsion',
-  'forceAttraction',
-  'forceEdgeLength',
-  'nodeGap',
-  'communitySeparation',
-] as const
-
 /** FNV-1a 32 位哈希：只做摘要，不做安全边界 —— 碰撞的代价是「复用了上一次的坐标」。 */
 function hashParts(parts: readonly string[]): string {
   let hash = 2166136261
@@ -165,7 +177,7 @@ export function graphDataKey(graph: BuiltGraph, settings: GraphSettings): string
   const edges = graph.edges
     .map(e => `${e.source}|${e.target}|${Math.round(e.weight * 1000)}`)
     .sort()
-  const forces = FORCE_KEYS.map(k => Number(settings[k]).toFixed(3)).join('|')
+  const forces = GRAPH_FORCE_KEYS.map(k => Number(settings[k]).toFixed(3)).join('|')
   // 长度同时进指纹：哈希只有 32 位，带上规模才是「几乎不可能撞」的组合
   return `n${nodeIds.length}:${hashParts(nodeIds)}:e${edges.length}:${hashParts(edges)}:f${forces}`
 }
@@ -604,8 +616,43 @@ function toPositions(points: readonly LayoutPoint[]): Map<string, GridPos> {
   return out
 }
 
+/**
+ * 拖动力度滑杆时的一帧轻量预览。
+ *
+ * 它不替换最终布局，也不写缓存；只是在当前坐标上推进少量 FA2 迭代，让用户按住滑杆时
+ * 就能看到图在连续响应。停止拖动后仍由 `runLayout` 做一次完整的热启动收敛。
+ * @param input.graph - 当前图。
+ * @param input.settings - 当前参数。
+ * @param input.positions - 当前屏幕坐标。
+ * @returns 只含参与力导向节点的新坐标；固定节点的位置由调用方保留。
+ */
+export function previewLayout(input: {
+  graph: BuiltGraph
+  settings: GraphSettings
+  positions: ReadonlyMap<string, GridPos>
+}): Map<string, GridPos> {
+  const all = input.graph.nodes
+  if (all.length < 2) return new Map()
+  const deg = degreeOf(input.graph)
+  const linked = all.filter(n => (deg.get(n.id) ?? 0) > 0)
+  if (linked.length < 2) return new Map()
+  const init = initialPositions(linked, new Map(input.positions))
+  const iterations = linked.length > 1200 ? 1 : linked.length > 350 ? 2 : 4
+  const task: LayoutTask = {
+    key: 'preview',
+    nodes: linked.map((n) => {
+      const pos = init.get(n.id)
+      return { id: n.id, x: pos?.x ?? 0, y: pos?.y ?? 0 }
+    }),
+    edges: input.graph.edges.map(e => ({ source: e.source, target: e.target, weight: layoutWeight(e.weight) })),
+    iterations,
+    params: fa2Settings(input.settings, linked.length),
+  }
+  return toPositions(assignLayout(task))
+}
+
 async function computeLayout(
-  input: { graph: BuiltGraph; settings: GraphSettings; saved?: Map<string, GridPos> },
+  input: { graph: BuiltGraph; settings: GraphSettings; saved?: Map<string, GridPos>; iterations?: number },
   key: string,
 ): Promise<LayoutOutcome> {
   const startedAt = nowMs()
@@ -627,7 +674,7 @@ async function computeLayout(
       return { id: n.id, x: pos?.x ?? 0, y: pos?.y ?? 0 }
     }),
     edges: input.graph.edges.map(e => ({ source: e.source, target: e.target, weight: layoutWeight(e.weight) })),
-    iterations: layoutIterations(linked.length),
+    iterations: input.iterations ?? layoutIterations(linked.length),
     params: fa2Settings(input.settings, linked.length),
   }
   const radiusOf = (n: GNode): number => nodeRadius(n, input.settings, all.length)
@@ -682,22 +729,31 @@ export async function runLayout(input: {
   settings: GraphSettings
   saved?: Map<string, GridPos>
   fresh?: boolean
+  /**
+   * 覆盖自动迭代档位。自动参数微调走 `warmLayoutIterations`，手动重排不传（跑满档）。
+   * 迭代数进入缓存键，避免同一张图在两种迭代档位之间错误复用坐标。
+   */
+  iterations?: number
 }): Promise<LayoutResult> {
   const startedAt = nowMs()
-  const key = graphDataKey(input.graph, input.settings)
+  const key = `${graphDataKey(input.graph, input.settings)}:i${String(input.iterations ?? 'auto')}`
   if (!input.fresh && cachedPositions && cachedKey === key) {
     return { positions: copyOf(cachedPositions), engine: 'cache', elapsedMs: nowMs() - startedAt }
   }
-  // fresh 请求不参与「同指纹共享」：它要的正是与缓存/在飞结果不同的那一次计算
-  if (!input.fresh) {
-    const shared = pendingLayouts.get(key)
-    if (shared) {
-      const outcome = await shared
-      return {
-        ...outcome.result,
-        positions: copyOf(outcome.result.positions),
-        elapsedMs: nowMs() - startedAt,
-      }
+  /**
+   * fresh 只绕过**已完成缓存**，不能绕过同指纹的在飞计算。
+   *
+   * Worker 等待表以指纹为键；若两个「重新布局」同时为同一指纹各注册一次，后者会覆盖
+   * 前者的 resolve/reject，前一 Promise 永远不会结束，连带留住调用方组件与整张图。
+   * 共享同一次在飞计算既符合语义（两者要的本来就是同一份新结果），也保证等待表一对一。
+   */
+  const shared = pendingLayouts.get(key)
+  if (shared) {
+    const outcome = await shared
+    return {
+      ...outcome.result,
+      positions: copyOf(outcome.result.positions),
+      elapsedMs: nowMs() - startedAt,
     }
   }
   const pending = computeLayout(input.fresh === true ? { ...input, saved: undefined } : input, key)
@@ -710,7 +766,8 @@ export async function runLayout(input: {
     }
     return { ...outcome.result, positions: copyOf(outcome.result.positions) }
   } finally {
-    pendingLayouts.delete(key)
+    // 只删自己登记的 Promise；即便未来有别的路径替换同键表项，也不能误删新任务。
+    if (pendingLayouts.get(key) === pending) pendingLayouts.delete(key)
   }
 }
 

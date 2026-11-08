@@ -14,12 +14,13 @@ import { CAT_LABEL, fileDisplayName, fileKey, fileSource, fileSourceName, fileSo
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { apiExportCsv, apiGetFiles, apiGetMediaAssets } from '../api.ts'
 import { fetchFileFullUrl, prefetchKeys, thumbWidthFor } from './files-thumbs.ts'
+import { saveFileOriginal } from './files-original-export.ts'
 import { useFileThumbnails } from './use-file-thumbs.ts'
 import { duplicateGroups, namesByMd5 } from './files-dup.ts'
 import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
-import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
+import type { MediaAssetDuplicate, MediaOriginalExportResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { Drawer, EmptyMaybeSyncing, PanelHeader, useDebouncedValue } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './list-panel.module.css'
@@ -27,23 +28,9 @@ import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import { ListFilter, PanelAction } from './asset-ui.tsx'
 import { IdentityName } from './identity.tsx'
-
-/**
- * 文件面板的「导出」动作（W3-11.1）。
- *
- * 抽成模块函数而不是留在组件里：结果经 `useActionNotice` 的一行回调给出（不再是阻塞式
- * `window.alert`），而这 panel 的函数体受 `function-size-ratchet.spec.ts` 的棘轮管着 ——
- * 长一点的组件函数都过不去，动作本身又没有组件状态可依赖，放模块里最合适。
- * @param flash - 回调写入（由 `useActionNotice()` 给出）。
- */
-async function exportFilesCsv(flash: (text: string) => void): Promise<void> {
-  try {
-    const r = await apiExportCsv({ kind: 'files' })
-    flash(`已导出 ${r.count} 个文件 → ${r.path}`)
-  } catch (e) {
-    flash('导出失败: ' + (e as Error).message)
-  }
-}
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
+import { useMediaSaveTask } from './media-save-task.ts'
 
 /** 格位最小宽度，与 `.fileGrid` 的 `minmax(200px, 1fr)` 保持一致（改一处不改另一处就会列数算错）。 */
 const FILE_MIN_COL_PX = 200
@@ -65,6 +52,100 @@ function FileSourceRow({ item }: { item: FileItem }): React.JSX.Element {
           : name}
       </span>
     </div>
+  )
+}
+
+/** Save one detail-drawer item through the original-file RPC, including busy/error state. */
+function FileDetailSaveAction({
+  item,
+  onSaved,
+}: {
+  item: FileItem
+  onSaved: (saved: Awaited<ReturnType<typeof saveFileOriginal>>) => void
+}): React.JSX.Element {
+  const mediaSave = useMediaSaveTask()
+  const save = async (): Promise<void> => {
+    const outcome = await mediaSave.save<MediaOriginalExportResult>({
+      idPrefix: 'files-original',
+      label: '保存文件库原文件',
+      successMessage: (r) => `已保存原文件 → ${r.path ?? ''}`,
+      run: (jobId) => saveFileOriginal(item, { jobId }),
+    })
+    if (outcome.ok) onSaved(outcome.result)
+  }
+  return (
+    <>
+      <PanelAction disabled={mediaSave.running} {...desktopActionProps()} onClick={() => { void save() }}>
+        {mediaSave.finishing ? '完成中…'
+          : mediaSave.running ? '保存中…'
+          : item.category === 'image' ? '保存原图'
+            : item.category === 'video' ? '保存原视频' : '保存原文件'}
+      </PanelAction>
+      <ExportProgressStatus
+        compact
+        state={mediaSave.state}
+        onCancel={() => { void mediaSave.cancel() }}
+      />
+    </>
+  )
+}
+
+/** Lightbox wrapper keeps its media-save lifecycle out of the already-ratcheted FilesPanel body. */
+function FilesLightbox({
+  preview,
+  imageItems,
+  fileImgs,
+  onIndexChange,
+  onClose,
+  onSaved,
+}: {
+  preview: FileItem
+  imageItems: readonly FileItem[]
+  fileImgs: Readonly<Record<string, string>>
+  onIndexChange: (index: number) => void
+  onClose: () => void
+  onSaved: (path: string) => void
+}): React.JSX.Element {
+  const mediaSave = useMediaSaveTask()
+  const sources = useMemo(() => imageItems.map((f) => {
+    const key = fileKey(f)
+    const caption = [CAT_LABEL[f.category] || f.category, fmtBytes(f.fileSize || 0), fmtMonthDaySec(f.modifyTime)]
+    if (fileSource(f)) caption.push(`来源 ${fileSource(f)}`)
+    return {
+      key,
+      thumb: fileImgs[key],
+      title: fileDisplayName(f),
+      subtitle: caption.join(' · '),
+      load: () => fetchFileFullUrl(key),
+      onDownload: async () => {
+        const outcome = await mediaSave.save<MediaOriginalExportResult>({
+          idPrefix: 'files-original',
+          label: '保存文件库原文件',
+          successMessage: (r) => `已保存原文件 → ${r.path ?? ''}`,
+          run: (jobId) => saveFileOriginal(f, { jobId }),
+        })
+        if (outcome.ok) onSaved(outcome.result.path ?? '')
+      },
+      downloadDisabled: desktopAction(),
+      downloadDisabledReason: '原文件保存仅支持电脑端',
+    }
+  }), [fileImgs, imageItems, mediaSave.save, onSaved])
+  const index = imageItems.findIndex((f) => fileKey(f) === fileKey(preview))
+  return (
+    <MediaViewer
+      sources={sources}
+      index={index}
+      onIndexChange={onIndexChange}
+      onClose={onClose}
+      dialogName="files-lightbox"
+      statusOverlay={(
+        <ExportProgressStatus
+          compact
+          state={mediaSave.state}
+          onCancel={() => { void mediaSave.cancel() }}
+        />
+      )}
+    />
   )
 }
 
@@ -136,10 +217,18 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const [dupTotal, setDupTotal] = useState(0)
   const [dupReclaim, setDupReclaim] = useState(0)
   const [dupGroupsServer, setDupGroupsServer] = useState<readonly MediaAssetDuplicate[]>([])
+  const [dupError, setDupError] = useState<string | null>(null)
   const loadDupTotal = useCallback((): void => {
     void apiGetMediaAssets()
-      .then((m) => { setDupTotal(m.duplicateFiles); setDupReclaim(m.reclaimBytes); setDupGroupsServer(m.duplicates) })
-      .catch(() => { /* 统计失败不阻塞列表 */ })
+      .then((m) => {
+        setDupTotal(m.duplicateFiles)
+        setDupReclaim(m.reclaimBytes)
+        setDupGroupsServer(m.duplicates)
+        setDupError(null)
+      })
+      .catch((error: unknown) => {
+        setDupError(error instanceof Error ? error.message : String(error ?? '未知错误'))
+      })
   }, [])
   useEffect(() => { loadDupTotal() }, [loadDupTotal])
   useWechatDataUpdated(loadDupTotal)
@@ -198,33 +287,29 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   }), [visible])
 
   const { notice: exportNotice, flash: flashExport } = useActionNotice()
+  const exportTask = useExportTask()
+  const [refreshPending, setRefreshPending] = useState(false)
 
-  const doExport = (): void => { void exportFilesCsv(flashExport) }
+  useEffect(() => {
+    if (!refreshPending || pager.loading) return
+    setRefreshPending(false)
+    if (pager.error) flashExport('刷新失败：' + pager.error)
+    else flashExport('文件列表已刷新')
+  }, [flashExport, pager.error, pager.loading, refreshPending])
+
+  const doExport = async (): Promise<void> => {
+    if (exportTask.running) return
+    const outcome = await exportTask.run(async ({ jobId }) => apiExportCsv({ kind: 'files', jobId }), {
+      idPrefix: 'files-export',
+      label: '导出文件清单',
+      successMessage: (r) => `已导出 ${r.count} 条文件清单（不含媒体本体）→ ${r.path}`,
+    })
+    if (outcome.ok) flashExport(outcome.message)
+    else if (!outcome.canceled) flashExport('导出失败: ' + outcome.error)
+  }
 
   /** 灯箱的翻页范围：已加载的图片，顺序与网格一致。 */
   const imageItems = useMemo(() => visible.filter((f) => f.category === 'image'), [visible])
-  /** 每张图的元信息 + 按需加载（缩略图先铺底，原图到了查看器内淡入）。 */
-  const viewerSources = useMemo(() => imageItems.map((f) => {
-    const key = fileKey(f)
-    const caption = [CAT_LABEL[f.category] || f.category, fmtBytes(f.fileSize || 0), fmtMonthDaySec(f.modifyTime)]
-    if (fileSource(f)) caption.push(`来源 ${fileSource(f)}`)
-    return {
-      key,
-      thumb: fileImgs[key],
-      title: fileDisplayName(f),
-      subtitle: caption.join(' · '),
-      load: () => fetchFileFullUrl(key),
-      downloadName: `${key}.jpg`,
-      onDownload: (src: string) => {
-        const a = document.createElement('a')
-        a.href = src
-        a.download = `${key}.jpg`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-      },
-    }
-  }), [imageItems, fileImgs])
   const viewerIndex = preview ? imageItems.findIndex((f) => fileKey(f) === fileKey(preview)) : -1
 
   return (
@@ -237,15 +322,33 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         desc={loading && total === 0 ? '正在统计本机文件索引…' : undefined}
         actions={(
           <>
-            <PanelAction onClick={refresh}>刷新</PanelAction>
+            <PanelAction
+              onClick={() => { setRefreshPending(true); refresh() }}
+              disabled={refreshPending || pager.loading}
+            >
+              {refreshPending || pager.loading ? '刷新中…' : '刷新'}
+            </PanelAction>
             <AssetMoreMenu items={[
-              { key: 'export', label: desktopAction() ? '导出（仅电脑）' : '导出', onSelect: () => { void doExport() }, ...desktopActionProps() },
-              { key: 'dup', label: `查找重复 (${dupTotal > 0 ? dupTotal : dupGroups.length})`, onSelect: () => { setDupOpen(v => !v) } },
+              {
+                key: 'export',
+                label: exportTask.finishing ? '完成中…'
+                  : exportTask.running ? '导出中…'
+                    : desktopAction() ? '导出清单 CSV（仅电脑）' : '导出清单 CSV',
+                onSelect: () => { void doExport() },
+                disabled: exportTask.running,
+                ...desktopActionProps(),
+              },
+              {
+                key: 'dup',
+                label: dupError ? '查找重复（统计失败）' : `查找重复 (${dupTotal > 0 ? dupTotal : dupGroups.length})`,
+                onSelect: () => { setDupOpen(v => !v) },
+              },
             ]} />
           </>
         )}
       />
       <ActionNoticeLine notice={exportNotice} />
+      <ExportProgressStatus state={exportTask.state} onCancel={() => { void exportTask.cancel() }} />
       <FilesKpis total={total} counts={counts} loading={loading} />
       <ListFilter
         searchValue={search}
@@ -313,8 +416,10 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         {!loading && !error && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
       <Drawer open={dupOpen} onClose={() => { setDupOpen(false) }} title="重复文件预览">
-        <div className={kitCss.textCaption}>「去重」为只读建议，不在本机删除数据。下列为<strong>全库</strong>按内容（md5）归并的重复组，取前 {dupGroupsServer.length} 组（共 {dupTotal} 个重复文件、可回收约 {fmtBytes(dupReclaim)}）。</div>
-        {dupGroupsServer.length === 0 && <div className={css.empty}>未发现重复文件</div>}
+        {dupError
+          ? <div className={kitCss.error} role="alert">重复文件统计失败：{dupError}</div>
+          : <div className={kitCss.textCaption}>「去重」为只读建议，不在本机删除数据。下列为<strong>全库</strong>按内容（md5）归并的重复组，取前 {dupGroupsServer.length} 组（共 {dupTotal} 个重复文件、可回收约 {fmtBytes(dupReclaim)}）。</div>}
+        {!dupError && dupGroupsServer.length === 0 && <div className={css.empty}>未发现重复文件</div>}
         {dupGroupsServer.map(g => (
           <div key={g.md5} className={css.dupRow}>
             <span className={css.dupName}>{nameByMd5.get(g.md5) ?? `${g.md5.slice(0, 12)}…`}</span>
@@ -334,21 +439,28 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
             <FileSourceRow item={detail} />
             <div className={css.kvRow}><span className={css.kvKey}>来源月份</span><span className={css.kvVal}>{detail.sourceMonth || '(未解析到)'}</span></div>
             <div className={css.kvRow}><span className={css.kvKey}>MD5</span><span className={`${css.kvVal} ${css.kvMono}`}>{detail.md5 || '(空)'}</span></div>
+            <FileDetailSaveAction
+              item={detail}
+              onSaved={(saved) => {
+                if (saved) flashExport(`已保存原文件 → ${saved.path ?? ''}`)
+              }}
+            />
             <div className={kitCss.textCaption}>
               来源会话来自附件目录（`dir1`/`dir2` → `dir2id`，其值是 md5(会话名)），
               与「消息资源」口径互为独立来源；本机数据两口径在图片上 200/200 一致。
-              视频与文件当前不提供在线预览（只读清单）。
+              视频与文件不提供在线预览；可在此保存原文件，CSV 导出仍只含清单。
             </div>
           </div>
         )}
       </Drawer>
       {preview && viewerIndex >= 0 && (
-        <MediaViewer
-          sources={viewerSources}
-          index={viewerIndex}
+        <FilesLightbox
+          preview={preview}
+          imageItems={imageItems}
+          fileImgs={fileImgs}
           onIndexChange={(i) => { const next = imageItems[i]; if (next) setPreview(next) }}
           onClose={() => { setPreview(null) }}
-          dialogName="files-lightbox"
+          onSaved={(path) => { flashExport(`已保存原文件 → ${path}`) }}
         />
       )}
     </div>

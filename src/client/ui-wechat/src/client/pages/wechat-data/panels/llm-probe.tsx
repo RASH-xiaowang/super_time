@@ -6,7 +6,7 @@
  * 点下去看到的结论就贴在那一块的输入框下方 —— 不用回头找"这条消息是哪一类的"。
  *
  * 三条探针的代价不同，写在各自按钮的悬浮提示里：
- *   · chat   = `GET /models`（**不产生费用**）；
+ *   · chat   = 模型列表接口（通常是 `GET /models`，**不产生费用**）；
  *   · embed  = 一条最小请求（固定测试串，约 3 个 token）；
  *   · rerank = 一条最小请求（固定测试串，约 6 个 token）。
  * `余额查询` 不属于"模型端点"，见下面的 {@link LlmBalanceButton}。
@@ -44,7 +44,7 @@ function endpointOf(kind: 'chat' | 'embed' | 'rerank', cfg: WechatLlmConfig): { 
 
 /** 按钮提示里如实写清代价与前置条件。 */
 function hintOf(kind: 'chat' | 'embed' | 'rerank', blocked: boolean): string {
-  if (kind === 'chat') return blocked ? '先填 API 地址' : '向该地址请求 GET /models：通不通、耗时多少、对方是不是 OpenAI 兼容接口。不产生费用'
+  if (kind === 'chat') return blocked ? '先填 API 地址' : '请求该厂商的模型列表接口：通不通、耗时多少、对方是不是 OpenAI 兼容接口。不产生费用'
   if (kind === 'embed') return blocked ? '未填向量模型（或地址）：向量检索会退化为纯本地稀疏通道，没有可测的端点' : '向向量端点发一条最小请求（固定测试串）：能拿到向量维度就算通。约 3 个 token'
   return blocked ? '未填重排序模型：精排整段会跳过（由本地启发式排序），没有可测的端点' : '向重排序端点发一条最小请求（固定测试串）：能拿到相关度就算通。约 6 个 token'
 }

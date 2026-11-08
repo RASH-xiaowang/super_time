@@ -5,11 +5,12 @@
  * 点菜单项必须**先关菜单、再执行动作**。反过来的话，动作里任何一次 `setState`
  * （比如"复制成功"的提示、打开详情抽屉）都会和还挂着的菜单抢位置 ——
  * 用户看到的是菜单盖在新开的界面上，关都关不掉。
- * 「点空白处关掉」在这一格里；Esc 与滚动那两条在 `Chats.tsx` 里（那里已经有统一的关法，
- * 这一份**不再自己加一份** —— 两处各监听一次 Esc 会让共享的弹窗栈多算一层）。
+ * 「点空白处关掉」在这一格里；Esc 走 kit 的覆盖层栈，滚动与窗口尺寸变化仍由
+ * `Chats.tsx` 处理。Esc 只在这一处监听，避免同一次按键把菜单关闭两次。
  */
 import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { useEscapeToClose } from '../ui/kit.tsx'
 import csscards from './chats-cards.module.css'
 
 /** 桌面菜单的估算尺寸（打开前的视口夹取与 CSS 的 min-width 保持同一口径）。 */
@@ -35,6 +36,8 @@ export interface MsgMenuAnchor {
   preventDefault(): void
   clientX: number
   clientY: number
+  /** 触发菜单的消息行；关闭后焦点回到这里。 */
+  currentTarget?: EventTarget | null
 }
 
 export interface ChatsMsgMenuProps {
@@ -42,6 +45,8 @@ export interface ChatsMsgMenuProps {
   items: MsgMenuItem[]
   /** 关掉菜单（不执行任何动作）。 */
   onClose: () => void
+  /** Esc 或点空白处关闭；由面板负责把焦点还给消息行。 */
+  onDismiss: () => void
   /** 执行某一项；调用方负责保证菜单已经先关掉。 */
   onPick: (item: MsgMenuItem, m: WechatMessage) => void
 }
@@ -132,15 +137,17 @@ function MsgMenuGlyph({ action }: { action: MsgMenuItem['action'] }): React.JSX.
  * 渲染消息右键菜单（`msgMenu` 为空时什么都不画）。
  * @returns 菜单元素或 null。
  */
-export function ChatsMsgMenu({ msgMenu, items, onClose, onPick }: ChatsMsgMenuProps): React.JSX.Element | null {
+export function ChatsMsgMenu({ msgMenu, items, onClose, onDismiss, onPick }: ChatsMsgMenuProps): React.JSX.Element | null {
+  useEscapeToClose(msgMenu !== null, onDismiss)
   if (!msgMenu) return null
   const msg = msgMenu.m
   return (
-    <div className={csscards.msgCtxOverlay} onMouseDown={() => { onClose() }}>
+    <div className={csscards.msgCtxOverlay} onMouseDown={(e) => { e.preventDefault(); onDismiss() }}>
       <div
         className={csscards.msgCtxMenu}
         style={{ left: msgMenu.x, top: msgMenu.y }}
         role="menu"
+        aria-label="消息操作"
         data-st-msg-menu={String(msg.localId)}
         onMouseDown={(e) => { e.stopPropagation() }}
       >

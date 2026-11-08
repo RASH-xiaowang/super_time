@@ -19,6 +19,30 @@ function logRetry(what) {
   };
 }
 
+/**
+ * 把厂商返回的 HTTP 错误收敛成可执行的界面文案。
+ *
+ * OpenCode 的隐私限制是工作区级授权，不是请求头或重试能解决的问题。保留原始响应
+ * 便于排障，但把处理动作放在最前面，避免用户只看到一句英文 server_error。
+ * @param {number} status - HTTP 状态码。
+ * @param {string} body - 厂商响应正文（已截断）。
+ * @returns {string} 面向用户的错误文案。
+ */
+function llmHttpError(status, body) {
+  const detail = String(body || '').slice(0, 300);
+  if (
+    status === 400
+    && /trains? on request data/i.test(detail)
+    && /privacy settings/i.test(detail)
+  ) {
+    return 'OpenCode 工作区未允许使用会训练请求数据的付费端点。'
+      + '请在 OpenCode 的 Settings › Privacy 开启 '
+      + '“Allow paid endpoints that train on request data”，或切换到其它模型/厂商。'
+      + `原始响应：${detail}`;
+  }
+  return `LLM HTTP ${status}: ${detail}`;
+}
+
 /** 可注入的 LLM 桥接配置（wechat/llm.json 优先，其次环境变量/覆盖参数）。 */
 function llmConfigFromEnv(overrides = {}) {
   return resolveLlmConfig({
@@ -53,7 +77,7 @@ function resolveEmbedModel(cfg, override = '') {
  * `content` parts 数组：`{ type:'text' }` + `{ type:'image_url', image_url:{ url } }`。
  * 图片有两种来源，本层都认：
  *   · `part.image_url.url` —— 调用方已给出 data URL / 远端 URL；
- *   · `part.data` + `part.mediaType` —— ClawBot 自动回复从本机媒体缓存读出的
+ *   · `part.data` + `part.mediaType` —— 会话 AI 回复从本机媒体缓存读出的
  *     canonical base64（Super Time 的 mini 宿主没有附件服务，只能直接带字节）。
  * 不认识的块一律按旧口径取 `text`（不静默丢内容）。
  * @param {object} message - dsh-llm 形状的消息。
@@ -222,6 +246,8 @@ function buildChatRequest(configOverrides, opts, streamMode, includeUsage = fals
       messages,
       max_tokens: opts.maxTokens ?? 2048,
       stream: streamMode,
+      // 结构化图片识别等低复杂度任务可显式关闭思考；未传时保持厂商默认行为。
+      ...(opts.thinking !== undefined ? { thinking: opts.thinking } : {}),
       // 只有流式请求需要显式要 usage：OpenAI / DeepSeek 在最后一个 SSE 块里回。
       // 不支持的供应商会在下面按 4xx 文案回退一次（不带这个字段重发）。
       ...(streamMode && includeUsage ? { stream_options: { include_usage: true } } : {}),
@@ -232,21 +258,51 @@ function buildChatRequest(configOverrides, opts, streamMode, includeUsage = fals
   };
 }
 
+/**
+ * 判断 4xx 是否只是厂商不认识 `thinking` 参数。
+ *
+ * 不能对所有 400 都无脑重发：图片格式错误、鉴权错误等重试没有收益。
+ * 这里只匹配“字段/参数未知或不支持”以及 thinking 本身的错误文案。
+ */
+function thinkingParameterRejected(status, body) {
+  if (status !== 400 && status !== 422) return false;
+  const text = String(body || '');
+  if (/thinking|reasoning[_ -]?effort|enable_thinking/i.test(text)) return true;
+  return /(?:unknown|unrecognized|unsupported|unexpected|extra|invalid).{0,60}(?:field|parameter|argument)/i.test(text)
+    || /(?:field|parameter|argument).{0,60}(?:unknown|unrecognized|unsupported|unexpected|extra|invalid)/i.test(text);
+}
+
 /** 非流式聊天：有界重试只在出网层进行。 */
 async function fetchChatCompletion(configOverrides, opts) {
-  const req = buildChatRequest(configOverrides, opts, false);
+  let req = buildChatRequest(configOverrides, opts, false);
   // 有界重试：网络抖动 / 429 / 5xx 自动重来，401/400 这类立刻失败。
-  const res = await llmRequest(req.url, {
+  let res = await llmRequest(req.url, {
     method: 'POST',
     headers: req.headers,
     body: req.body,
+    sessionId: opts.sessionId,
     timeoutMs: req.cfg.timeoutMs,
     maxAttempts: 3,
     onRetry: logRetry('chat'),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
+    let text = await res.text().catch(() => '');
+    // 部分 OpenAI 兼容端点不认识 thinking。保留不思考的主路径，失败后只回退一次。
+    if (opts.thinking !== undefined && thinkingParameterRejected(res.status, text)) {
+      req = buildChatRequest(configOverrides, { ...opts, thinking: undefined }, false);
+      res = await llmRequest(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: req.body,
+        sessionId: opts.sessionId,
+        timeoutMs: req.cfg.timeoutMs,
+        maxAttempts: 3,
+        onRetry: logRetry('chat'),
+      });
+      if (!res.ok) text = await res.text().catch(() => '');
+    }
+    if (res.ok) return (await res.json())?.choices?.[0]?.message?.content ?? '';
+    throw new Error(llmHttpError(res.status, text));
   }
   const payload = await res.json();
   return payload?.choices?.[0]?.message?.content ?? '';
@@ -390,21 +446,105 @@ function* emitSsePayload(parsed, emitter) {
   }
 }
 
+/** 把流式正文空闲超时翻译成界面可直接展示的中文错误。 */
+function streamIdleTimeoutError(timeoutMs) {
+  const shown = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+  const error = new Error(
+    `模型流式响应空闲超时（${shown}）：供应商在这段时间内没有返回新内容。`
+      + '请检查网络或供应商状态，或调高「模型请求超时」后重试。',
+  );
+  error.name = 'TimeoutError';
+  error.code = 'LLM_STREAM_IDLE_TIMEOUT';
+  return error;
+}
+
+/**
+ * 给响应正文的每次 read 单独武装空闲计时器。
+ *
+ * 响应头和正文是两种不同等待：模型可以持续吐 token 超过 timeoutMs，但不能在
+ * 已建立连接后 timeoutMs 内一个 chunk 都不给。每收到一个 chunk 都重新计时，
+ * 因此总生成时长不再被握手超时误伤。
+ */
+function idleBodyReader(body, timeoutMs, abortController) {
+  const reader = body.getReader();
+  const timeoutError = streamIdleTimeoutError(timeoutMs);
+  let timedOut = false;
+
+  async function read() {
+    if (!(timeoutMs > 0)) return reader.read();
+    let timer;
+    const idle = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(timeoutError);
+        abortController.abort(timeoutError);
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([reader.read(), idle]);
+    } catch (error) {
+      // 不同运行时会在 abort 时抛 AbortError；统一收敛成可执行的超时文案。
+      if (timedOut) throw timeoutError;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function cancel() {
+    try {
+      await reader.cancel();
+    } catch {
+      // 流已经结束或被上游中止时，cancel 失败不影响原错误。
+    }
+  }
+
+  return { read, cancel };
+}
+
+/** 在空闲预算内读完非流式响应正文（错误响应和忽略 stream:true 的 JSON）。 */
+async function readBodyText(res, abortController, timeoutMs) {
+  if (!res.body) return res.text();
+  const reader = idleBodyReader(res.body, timeoutMs, abortController);
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    await reader.cancel();
+  }
+}
+
 /** 流式聊天：只对握手做重试，一旦开始吐 chunk 就不再重来。 */
 async function* streamChatCompletion(configOverrides, opts) {
   let includeUsage = true;
   let req = buildChatRequest(configOverrides, opts, true, includeUsage);
+  // 该控制器只负责正文阶段：空闲超时或消费者提前退出时中止底层 fetch。
+  const bodyAbort = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, bodyAbort.signal])
+    : bodyAbort.signal;
   // 只对握手做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
   let res = await llmRequest(req.url, {
     method: 'POST',
     headers: req.headers,
     body: req.body,
+    sessionId: opts.sessionId,
+    signal,
     timeoutMs: req.cfg.timeoutMs,
+    // 响应头到达即解除握手计时；正文由 idleBodyReader 按 chunk 逐次计时。
+    timeoutScope: 'headers',
     maxAttempts: 3,
     onRetry: logRetry('chat(stream)'),
   });
   if (!res.ok) {
-    let text = await res.text().catch(() => '');
+    let text = await readBodyText(res, bodyAbort, req.cfg.timeoutMs).catch(() => '');
     // 兼容性回退：部分 OpenAI 兼容端点不认 `stream_options`（400/422）。
     // 只在文案明确指向该字段时才重发，避免把真正的鉴权/参数错误吞成第二次请求。
     const retryable = (res.status === 400 || res.status === 422) && includeUsage
@@ -416,14 +556,17 @@ async function* streamChatCompletion(configOverrides, opts) {
         method: 'POST',
         headers: req.headers,
         body: req.body,
+        sessionId: opts.sessionId,
+        signal,
         timeoutMs: req.cfg.timeoutMs,
+        timeoutScope: 'headers',
         maxAttempts: 3,
         onRetry: logRetry('chat(stream)'),
       });
-      if (!res.ok) text = await res.text().catch(() => '');
+      if (!res.ok) text = await readBodyText(res, bodyAbort, req.cfg.timeoutMs).catch(() => '');
     }
     if (!res.ok) {
-      throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
+      throw new Error(llmHttpError(res.status, text));
     }
   }
 
@@ -431,31 +574,49 @@ async function* streamChatCompletion(configOverrides, opts) {
   const contentType = String(res.headers.get('content-type') || '');
   // 厂商忽略 stream:true 直接返回整段 JSON 时走这里（也覆盖 res.body 为空的情况）
   if (!res.body || !contentType.includes('event-stream')) {
-    yield* emitBufferedCompletion(await res.json(), emitter);
+    const payload = res.body
+      ? JSON.parse(await readBodyText(res, bodyAbort, req.cfg.timeoutMs))
+      : await res.json();
+    yield* emitBufferedCompletion(payload, emitter);
     return;
   }
-  const reader = res.body.getReader();
+  const reader = idleBodyReader(res.body, req.cfg.timeoutMs, bodyAbort);
   const decoder = new TextDecoder();
   let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === '[DONE]') continue;
-      let parsed;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        continue; // 心跳/非 JSON 行忽略
+  let streamDone = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data) continue;
+        if (data === '[DONE]') {
+          streamDone = true;
+          break;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue; // 心跳/非 JSON 行忽略
+        }
+        yield* emitSsePayload(parsed, emitter);
+        // 部分兼容端点不发送 [DONE]，但会在最后一个 delta 上给出 finish_reason。
+        if (parsed?.choices?.[0]?.finish_reason) {
+          streamDone = true;
+          break;
+        }
       }
-      yield* emitSsePayload(parsed, emitter);
+      if (streamDone) break;
     }
+  } finally {
+    await reader.cancel();
   }
   yield* emitter.endText();
   yield* emitter.endReasoning();

@@ -9,6 +9,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RecordItem } from '../types.ts'
 import { contactMeta } from './meta.ts'
+import { displayNameForUsername, resolveTalkerUsername } from './message-identity.ts'
 import { archiveRevokeCache, readArchivedRevoke } from './anti-revoke-archive.ts'
 import { archiveMessages, queryRevokedRetained } from './revoke-retain.ts'
 
@@ -21,18 +22,9 @@ function cellString(v: unknown): string {
   return ''
 }
 
-function countIn(db: DatabaseSync, table: string): number {
-  try { return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n } catch { return 0 }
-}
-
 /** Count rows with an optional WHERE clause. */
 function countWhere(db: DatabaseSync, table: string, whereSql: string): number {
-  try {
-    if (!whereSql) return countIn(db, table)
-    return (db.prepare('SELECT COUNT(*) AS n FROM ' + table + whereSql).get() as { n: number }).n
-  } catch {
-    return 0
-  }
+  return (db.prepare('SELECT COUNT(*) AS n FROM ' + table + whereSql).get() as { n: number }).n
 }
 
 /** Query one records table with limit/offset/keyword/direction, returning rows as objects. */
@@ -45,18 +37,13 @@ function queryTable(
   offset: number,
   whereSql = '',
   direction: 'asc' | 'desc' = 'desc',
+  tieBreak?: string,
 ): RecordItem[] {
-  try {
-    const sel = cols.map(c => c).join(', ')
-    const dir = direction === 'asc' ? 'ASC' : 'DESC'
-    const sql = 'SELECT ' + sel + ' FROM ' + table + whereSql + ' ORDER BY ' + orderCol + ' ' + dir + ' LIMIT ? OFFSET ?'
-    return db.prepare(sql).all(limit, offset) as RecordItem[]
-  } catch (e) {
-    // 绝不能再静默吞掉：之前这里吞掉了 finder_live_id 的越界 int64 异常，
-    // 界面上只表现为「这个页签是空的」，而 total 仍显示 2 —— 两者互相矛盾才暴露出来。
-    console.warn('[records] 读取失败（与「确无记录」不同）：' + table + ': ' + ((e as Error)?.message ?? String(e)))
-    return []
-  }
+  const sel = cols.map(c => c).join(', ')
+  const dir = direction === 'asc' ? 'ASC' : 'DESC'
+  const order = tieBreak === undefined ? orderCol : orderCol + ' ' + dir + ', ' + tieBreak
+  const sql = 'SELECT ' + sel + ' FROM ' + table + whereSql + ' ORDER BY ' + order + ' ' + dir + ' LIMIT ? OFFSET ?'
+  return db.prepare(sql).all(limit, offset) as RecordItem[]
 }
 
 /** Build a numeric time-range WHERE fragment for a time column. */
@@ -94,16 +81,23 @@ function findRevokeTable(decryptedDir: string): { file: string; table: string } 
 function enrichRecords(
   items: RecordItem[],
   kind: string,
+  decryptedDir: string,
   names: Map<string, string>,
   enterpriseNames: ReadonlyMap<string, string>,
 ): void {
+  const canonical = (v: unknown): string => {
+    const raw = cellString(v).trim()
+    return raw ? resolveTalkerUsername(decryptedDir, raw) : ''
+  }
   const dn = (v: unknown): string => {
-    const s = cellString(v)
-    return s ? (names.get(s) ?? '') : ''
+    const username = canonical(v)
+    return username ? displayNameForUsername(username, names) : ''
   }
   const ent = (v: unknown): string => {
-    const s = cellString(v)
-    return s ? (enterpriseNames.get(s)?.trim() ?? '') : ''
+    const raw = cellString(v).trim()
+    if (!raw) return ''
+    const username = resolveTalkerUsername(decryptedDir, raw)
+    return enterpriseNames.get(username || raw)?.trim() ?? ''
   }
   for (const it of items) {
     if (kind === 'revokes') {
@@ -160,6 +154,15 @@ export function queryRecords(
   q?: string,
   opts?: { from?: number; to?: number; direction?: 'asc' | 'desc' },
 ): { items: RecordItem[]; total: number; readError?: string } {
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+    throw new RangeError('limit 必须是非负整数')
+  }
+  if (!Number.isInteger(offset ?? 0) || (offset ?? 0) < 0) {
+    throw new RangeError('offset 必须是非负整数')
+  }
+  if (kind === 'redpackets' && ((opts?.from ?? 0) > 0 || (opts?.to ?? 0) > 0)) {
+    throw new RangeError('红包记录暂不支持按消息时间过滤，请勿静默返回范围外数据')
+  }
   const gdb = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(gdb)) {
     // W3-11.4：general.db 不存在几乎总是「还没解密到这个库」（微信按需下载资源），
@@ -181,11 +184,12 @@ export function queryRecords(
 
     // per-kind column sets mirror general_records/lists.rs; the frontend maps
     // them to per-kind tables (会话/类型/收款方/…)
-    const spec: Record<string, { table: string; cols: string[]; order: string; where?: string; timeCol?: string }> = {
+    const spec: Record<string, { table: string; cols: string[]; order: string; where?: string; timeCol?: string; tieBreak?: string }> = {
       revokes: {
         table: 'revokebatchmessage',
         cols: ['local_id', 'batch_id', 'msg_unique_id', 'session_name', 'msg_local_id', 'msg_create_time'],
         order: 'msg_create_time',
+        tieBreak: 'local_id',
         timeCol: 'msg_create_time',
         where: kw ? ` WHERE session_name LIKE '%${esc(kw)}%' OR msg_unique_id LIKE '%${esc(kw)}%'` : '',
       },
@@ -193,6 +197,7 @@ export function queryRecords(
         table: 'transferTable',
         cols: ['transfer_id', 'transcation_id', 'CAST(message_server_id AS TEXT) AS message_server_id', 'CAST(second_message_server_id AS TEXT) AS second_message_server_id', 'session_name', 'pay_sub_type', 'pay_receiver', 'pay_payer', 'begin_transfer_time', 'last_modified_time', 'invalid_time', 'last_update_time', 'delay_confirm_flag'],
         order: 'begin_transfer_time',
+        tieBreak: 'transfer_id',
         timeCol: 'begin_transfer_time',
         where: kw && !isRecordTypeStopword(kw) ? ` WHERE session_name LIKE '%${esc(kw)}%' OR transfer_id LIKE '%${esc(kw)}%'` : '',
       },
@@ -200,6 +205,7 @@ export function queryRecords(
         table: 'redEnvelopeTable',
         cols: ['CAST(message_server_id AS TEXT) AS message_server_id', 'session_name', 'sender_user_name', 'native_url', 'send_id', 'scene_id', 'hb_status', 'hb_type', 'receive_status'],
         order: 'message_server_id',
+        tieBreak: 'send_id',
         where: kw && !isRecordTypeStopword(kw) ? ` WHERE session_name LIKE '%${esc(kw)}%' OR sender_user_name LIKE '%${esc(kw)}%'` : '',
       },
       finder: {
@@ -209,17 +215,20 @@ export function queryRecords(
         // 被 queryTable 的 catch 吞掉后就表现为「页签有 total 但一行都渲染不出来」。
         cols: ['CAST(finder_live_id AS TEXT) AS finder_live_id', 'finder_username', 'finder_export_id', 'live_status', 'replay_status', 'charge_flag'],
         order: 'finder_live_id',
+        tieBreak: 'finder_username',
       },
       miniprograms: {
         table: 'wacontact',
         cols: ['user_name', 'type', 'brand_icon_url', 'external_info', 'app_id'],
         order: 'user_name',
         timeCol: 'last_update_time',
+        tieBreak: 'app_id',
       },
       friendverifications: {
         table: 'FMessageTable',
         cols: ['user_name_', 'type_', 'timestamp_', 'content_', 'is_sender_', 'scene_', 'remark_'],
         order: 'timestamp_',
+        tieBreak: 'user_name_',
         timeCol: 'timestamp_',
         where: kw ? ` WHERE user_name_ LIKE '%${esc(kw)}%' OR remark_ LIKE '%${esc(kw)}%' OR content_ LIKE '%${esc(kw)}%'` : '',
       },
@@ -263,7 +272,7 @@ export function queryRecords(
         } catch { /* not JSON */ }
         it['nickname'] = nickname
       }
-      enrichRecords(items, kind, names, enterpriseNames)
+      enrichRecords(items, kind, decryptedDir, names, enterpriseNames)
       let total = 0
       try {
         total = (db.prepare('SELECT COUNT(*) AS n FROM wacontact w LEFT JOIN WeAppBizAttrSyncBufferTableV02 a ON a.user_name = w.user_name' + whereSql).get() as { n: number }).n
@@ -271,9 +280,15 @@ export function queryRecords(
       return { items, total }
     }
     const whereSql = combineWhere(s.where ?? '', s.timeCol ? timeSql(s.timeCol) : '')
-    const items = queryTable(db, s.table, s.cols, s.order, cap, off, whereSql, direction)
-    enrichRecords(items, kind, names, enterpriseNames)
+    const items = queryTable(db, s.table, s.cols, s.order, cap, off, whereSql, direction, s.tieBreak)
+    enrichRecords(items, kind, decryptedDir, names, enterpriseNames)
     return { items, total: countWhere(db, s.table, whereSql) }
+  } catch (e) {
+    return {
+      items: [],
+      total: 0,
+      readError: '记录读取失败（与「没有记录」不同）：' + ((e as Error)?.message ?? String(e)),
+    }
   } finally {
     db.close()
   }

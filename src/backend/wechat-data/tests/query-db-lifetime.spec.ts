@@ -47,6 +47,7 @@ import { searchWechatFts } from '../src/query/search-query.ts'
 import { queryRevoked } from '../src/query/records.ts'
 import { queryMomentsInsights } from '../src/query/moments-insights.ts'
 import { queryOverviewInsights } from '../src/query/overview-insights.ts'
+import { queryOverviewExtras } from '../src/query/overview-extras.ts'
 import { listMessagesInRange } from '../src/query/search-build.ts'
 import { msgCreateTimeByServerId } from '../src/query/messages.ts'
 import { vectorDbPath, __internals as embeddingInternals } from '../src/query/retrieval/embedding.ts'
@@ -596,6 +597,25 @@ describe('洞察 / 提醒 / 媒体 / 撤回 / 检索的读路径不留句柄（�
   })
 
   /**
+   * 损坏的文件能成功 open、但第一条 prepare 就抛 `file is not a database`。
+   * 这正是旧写法「close 只在成功路径」看不到的异常分支。
+   */
+  it('总览洞察/趋势：hardlink 与 resource 是坏库时仍关闭连接', async () => {
+    const root = tempRoot('overview-corrupt')
+    const dec = join(root, 'decrypted')
+    mkdirSync(join(dec, 'hardlink'), { recursive: true })
+    mkdirSync(join(dec, 'message'), { recursive: true })
+    writeFileSync(join(dec, 'hardlink', 'hardlink.db'), Buffer.from('not a sqlite database'))
+    writeFileSync(join(dec, 'message', 'message_resource.db'), Buffer.from('not a sqlite database'))
+
+    const insights = await queryOverviewInsights(dec)
+    const extras = queryOverviewExtras(dec)
+    expect(insights.messages.total).toBe(0)
+    expect(extras.trends.messages7).toBe(0)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
    * 这一条要**索引就绪但表结构不对**：`indexReady` 只看 `message_meta` 有没有行 +
    * `meta.schema_version`，所以建一张只有无关列的 `message_meta` 就能让探测通过、
    * 让真正的 `SELECT text, username, ...` 抛错 —— 那正是"开库成功、查询炸掉"的形状。
@@ -754,8 +774,9 @@ describe('query 层的连接纪律（棘轮）', () => {
 
   it('扫描真的看到了足够多的打开点（防空转）', () => {
     expect(files.length).toBeGreaterThan(50)
-    // 下界只用来防「扫描器坏了 ⇒ 集合为空 ⇒ 全部断言恒真」，不代表目标值：改造在推进，这个数只会往下走。
-    expect(opens).toBeGreaterThanOrEqual(60)
+    // 下界只用来防「扫描器坏了 ⇒ 集合为空 ⇒ 全部断言恒真」，不代表目标值：
+    // withDb 化会继续减少裸打开点，因此只要求仍与文件规模同量级。
+    expect(opens).toBeGreaterThanOrEqual(50)
   })
 
   it('待改造站点与清单逐个对齐（只能变小，不能变大）', () => {

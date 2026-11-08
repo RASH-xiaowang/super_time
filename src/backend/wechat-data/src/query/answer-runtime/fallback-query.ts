@@ -99,7 +99,14 @@ export function fallbackArguments(
     return terms.length === 0 ? undefined : withScope({ question: query, keywords: terms })
   }
   if (name === 'get_session_messages') {
-    return username ? { username, ...(from ? { from } : {}), ...(to ? { to } : {}) } : undefined
+    return username
+      ? {
+        username,
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+        ...(loop.recency === true ? { order: 'desc' } : {}),
+      }
+      : undefined
   }
   if (name === 'get_message_context') return undefined
   if (name === 'list_sessions') return {}

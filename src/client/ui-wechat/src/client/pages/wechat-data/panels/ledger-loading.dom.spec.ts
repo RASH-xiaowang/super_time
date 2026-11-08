@@ -52,7 +52,7 @@ describe('资金账本：首次统计的加载态是有结构的，不是一行�
     expect(text, '缺少加载文案').toContain('正在统计资金账本')
     expect(text, '加载文案里没有走秒').toMatch(/已用\s*\d+s/)
     // ② 解释为什么可能偏慢（后端同步、会排在总览统计后面）
-    expect(text, '没有解释耗时原因').toContain('首次统计要解析本机全部消息')
+    expect(text, '没有解释真实读取范围').toContain('首次统计会核对 general.db 资金表及其对应消息卡')
     // ③ 统一的加载态（2026-10-18：不再画骨架条，改为旋转指示 + 加载中…）
     expect(host.querySelector('[data-st-loading]'), '没有统一加载态').toBeTruthy()
     expect(host.querySelector('[class*="spinner"]'), '没有旋转指示').toBeTruthy()
@@ -69,7 +69,7 @@ describe('资金账本：首次统计的加载态是有结构的，不是一行�
 
   it('本页没有缓存、但总览已缓存过账本快照时，直接先渲染出来（不再干等一次全量统计）', async () => {
     // 总览把「全部月份」的账本快照写在这个键下（字段与本页同构）
-    localStorage.setItem('dsh-wechat-overview-ledger-v1', JSON.stringify({
+    localStorage.setItem('dsh-wechat-overview-ledger-v2', JSON.stringify({
       month: null,
       summary: {
         transfers: 13, transferIn: 3, transferOut: 10,
@@ -84,9 +84,9 @@ describe('资金账本：首次统计的加载态是有结构的，不是一行�
     }))
     const host = await renderPanel()
     const text = host.textContent ?? ''
-    cleanups.push(() => { localStorage.removeItem('dsh-wechat-overview-ledger-v1') })
+    cleanups.push(() => { localStorage.removeItem('dsh-wechat-overview-ledger-v2') })
     // 即使 apiGetLedger 永远挂着，也应该立刻看到总览那份数据
-    expect(text, '没有用上总览的缓存').toContain('总收入')
+    expect(text, '没有用上总览的缓存').toContain('已知总收入')
     expect(text).toContain('2,120.00')
     expect(text, '仍在显示加载态').not.toContain('正在统计资金账本')
   })

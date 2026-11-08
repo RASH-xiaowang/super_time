@@ -4,15 +4,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
-import { recordPads, useRecordRowVirtualizer, visibleRecordRows } from './records-virtual.ts'
+import { RECORD_ROW_PX, recordPads, useRecordRowVirtualizer, visibleRecordRows } from './records-virtual.ts'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
 import { Card, DateRangeField, EmptyMaybeSyncing, LinkButton, PanelHeader, SearchInput, Segmented, Select, Toolbar } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
+import { ExportProgressStatus } from './ExportProgressStatus.tsx'
+import { useExportTask } from './export-task.ts'
 import kitCss from '../ui/kit.module.css'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import { useKeepAliveActive } from './keep-alive.tsx'
 
 type Kind = 'revokes' | 'transfers' | 'redpackets' | 'finder' | 'miniprograms' | 'friendverifications'
 
@@ -45,8 +48,9 @@ const KINDS: ReadonlyArray<Kind> = ['revokes', 'transfers', 'redpackets', 'finde
  * W2-9.3 收尾：那 30× 已经拿到了。做法是上面认准的「高度撑杆 tr + 真实 tr」：
  * `<tbody>` 里保留真实 `<tr>`，只在**首尾各插一根空撑杆**（`<tr style={{height}}/>`）——
  * 这样 `<table>` 的列宽计算、`position: sticky` 的表头、以及 `table-layout` 全部不变，
- * 不会出现「绝对定位行与表头列对不齐」那种破相。虚拟器本身是 `useVirtualizer`
- * + `measureElement`（真实行高回灌，与消息流 / 收藏 / 文件 / 朋友圈同一套口径）。
+ * 不会出现「绝对定位行与表头列对不齐」那种破相。记录表使用固定 36px 行高 +
+ * `useVirtualizer`，刻意不做动态测量：末行边框与尾部撑杆的 1px 变化会形成
+ * 原生布局反馈，长时间滚动会持续放大合成与布局开销。
  */
 
 /**
@@ -138,19 +142,21 @@ function dateToTs(v: string, endOfDay: 0 | 1): number {
 }
 
 function transferSubType(v: string | number | boolean | null | undefined): { label: string; tone: 'info' | 'success' | 'muted' } {
-  const map: Record<string, { label: string; tone: 'info' | 'success' | 'muted' }> = {
-    '1': { label: '微信支付', tone: 'info' }, '2': { label: '群收款', tone: 'muted' }, '3': { label: '转账', tone: 'success' },
-    '4': { label: '二维码收款', tone: 'info' }, '5': { label: '收款', tone: 'success' }, '6': { label: 'AA收款', tone: 'muted' },
-    '7': { label: '面对面', tone: 'muted' }, '8': { label: '公众号支付', tone: 'info' },
+  // pay_sub_type's domain is not documented locally. Real data has already
+  // contradicted the old 1–8 scenario map, so show the raw value only.
+  return {
+    label: v === null || v === undefined || v === '' ? '状态值 —' : `状态值 ${String(v)}`,
+    tone: 'muted',
   }
-  return map[String(v)] ?? { label: `类型 ${String(v)}`, tone: 'muted' }
 }
 
-function hbStatus(v: string | number | boolean | null | undefined): { label: string; tone: 'success' | 'warn' | 'danger' | 'muted' } {
-  const map: Record<string, { label: string; tone: 'success' | 'warn' | 'danger' | 'muted' }> = {
-    '0': { label: '未知', tone: 'muted' }, '1': { label: '正常', tone: 'success' }, '2': { label: '已退回', tone: 'danger' }, '3': { label: '已领完', tone: 'warn' },
-  }
-  return map[String(v)] ?? { label: `状态 ${String(v)}`, tone: 'muted' }
+function hbStatus(
+  hb: string | number | boolean | null | undefined,
+  receive: string | number | boolean | null | undefined,
+): { label: string; tone: 'success' | 'warn' | 'danger' | 'muted' } {
+  const hbText = hb === null || hb === undefined || hb === '' ? '—' : String(hb)
+  const receiveText = receive === null || receive === undefined || receive === '' ? '—' : String(receive)
+  return { label: `原始状态 ${hbText}/${receiveText}`, tone: 'muted' }
 }
 
 function liveStatus(v: string | number | boolean | null | undefined): { label: string; tone: 'success' | 'muted' | 'info' } {
@@ -188,13 +194,17 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   const [toDate, setToDate] = useState('')
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc')
   const lastQueryKeyRef = useRef('')
+  const requestSeqRef = useRef(0)
+  const loadingMoreRef = useRef(false)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(0)
-  const [exporting, setExporting] = useState(false)
+  const exportTask = useExportTask()
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice(4000)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const active = useKeepAliveActive()
 
   /** 表格的滚动容器（虚拟器要它算视口；CSS 类是 `.tableScroll`）。 */
   const tableScrollRef = useRef<HTMLDivElement | null>(null)
@@ -218,6 +228,9 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   }, [seedQuery?.nonce])
 
   const load = useCallback(async (reset: boolean): Promise<void> => {
+    if (!reset && (loading || loadingMoreRef.current)) return
+    if (!reset) loadingMoreRef.current = true
+    const requestSeq = ++requestSeqRef.current
     if (reset) setPage(0)
     setError(null)
     const cacheKey = 'records:' + kind + ':' + keyword.trim() + ':' + fromDate + ':' + toDate + ':' + direction
@@ -231,6 +244,8 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       } else {
         setLoading(true)
       }
+    } else {
+      setLoadingMore(true)
     }
     try {
       const nextPage = reset ? 0 : page + 1
@@ -244,6 +259,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         if (toTs > 0) opts.to = toTs
       }
       const env = await apiGetRecords(opts)
+      if (requestSeq !== requestSeqRef.current) return
       const list = (env as RecordsEnvelope).items ?? []
       // W3-11.4：「读不到 general.db」与「确实没有这类记录」分开说。
       setReadError((env as RecordsEnvelope).readError ?? '')
@@ -254,20 +270,33 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       setPage(nextPage)
       if (reset && list.length > 0) writeRenderCache(cacheKey, list)
     } catch (e) {
-      setError((e as Error).message)
+      if (requestSeq === requestSeqRef.current) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false)
+        setLoadingMore(false)
+        loadingMoreRef.current = false
+      }
     }
-  }, [kind, page, keyword, fromDate, toDate, direction])
+  }, [kind, page, keyword, fromDate, toDate, direction, loading, loadingMore])
 
-  const queryKey = keyword.trim() + '|' + fromDate + '|' + toDate + '|' + direction
+  const queryKey = kind + '|' + keyword.trim() + '|' + fromDate + '|' + toDate + '|' + direction
   useEffect(() => {
+    if (!active) return
     if (queryKey === lastQueryKeyRef.current) return
     lastQueryKeyRef.current = queryKey
     if (searchTimer.current) clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => { void load(true) }, 400)
+    requestSeqRef.current += 1
+    loadingMoreRef.current = false
+    setLoadingMore(false)
+    setItems([])
+    setTotal(0)
+    setReadError('')
+    setError(null)
+    const delay = keyword.trim() ? 400 : 0
+    searchTimer.current = setTimeout(() => { void load(true) }, delay)
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current) }
-  }, [queryKey, load])
+  }, [active, queryKey, load])
 
   const switchKind = (k: Kind): void => {
     if (k === kind) return
@@ -276,29 +305,31 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
     writeRenderCache('records:kind', k)
     setKeyword('')
     lastQueryKeyRef.current = ''
-    setItems([])
-    setTotal(0)
-    setPage(0)
-    void load(true)
   }
 
-  useEffect(() => { void load(true) }, [kind])
+  useEffect(() => () => {
+    requestSeqRef.current += 1
+    loadingMoreRef.current = false
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+  }, [])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
-  useWechatDataUpdated(() => { if (items.length === 0) void load(true) })
+  useWechatDataUpdated(() => { if (active && items.length === 0) void load(true) })
 
   const doExport = async (): Promise<void> => {
-    setExporting(true)
-    try {
-      const r = await apiExportCsv({ kind: 'records', recordsKind: kind })
-      notify(`已导出 ${r.count} 条 → ${r.path}`)
-    } catch (e) {
-      notify('导出失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
+    if (exportTask.running) return
+    const outcome = await exportTask.run(
+      async ({ jobId }) => apiExportCsv({ kind: 'records', recordsKind: kind, jobId }),
+      {
+        idPrefix: 'records-export',
+        label: '导出记录 CSV',
+        successMessage: (r) => `已导出 ${r.count} 条 → ${r.path}`,
+      },
+    )
+    if (outcome.ok) notify(outcome.message)
+    else if (!outcome.canceled) notify('导出失败: ' + outcome.error)
   }
 
   const open = (username: string | number | boolean | null | undefined, localId?: string | number | boolean | null): void => {
@@ -318,42 +349,42 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         return (
           <table className={css.table}>
             {head(['会话', '消息 ID', '批次 ID', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, it.msg_local_id, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, it.msg_local_id, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'transfers':
         return (
           <table className={css.table}>
-            {head(['会话', '类型', '收款方', '付款方', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（该 1–8 场景映射未经本机数据验证）`)}{identityTd(it.pay_receiver, it.receiver_display || it.pay_receiver, it.receiver_enterprise, 'r')}{identityTd(it.pay_payer, it.payer_display || it.pay_payer, it.payer_enterprise, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            {head(['会话', '状态值（未释义）', '收款方', '付款方', '时间'])}
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（字段域未验证，不推测状态）`)}{identityTd(it.pay_receiver, it.receiver_display || it.pay_receiver, it.receiver_enterprise, 'r')}{identityTd(it.pay_payer, it.payer_display || it.pay_payer, it.payer_enterprise, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'redpackets':
         return (
           <table className={css.table}>
             {head(['会话', '发送者', '状态', '类型', '消息 ID'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{identityTd(it.sender_user_name, it.sender_display || it.sender_user_name, it.sender_enterprise, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.hb_type) === 0 ? '普通红包' : `类型 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status, it.receive_status); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{identityTd(it.sender_user_name, it.sender_display || it.sender_user_name, it.sender_enterprise, 'n')}{badge(st.label, st.tone, 'b', 'hb_status / receive_status 原始值，未推测领取或退回状态')}{td(<span className={css.muted}>{it.hb_type === null || it.hb_type === undefined ? '类型值 —' : `类型值 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'finder':
         return (
           <table className={css.table}>
             {head(['视频号', '直播状态', '回放', '直播 ID'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = liveStatus(it.live_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.finder_username, it.username_display || it.finder_username, it.username_enterprise, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = liveStatus(it.live_status); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{identityTd(it.finder_username, it.username_display || it.finder_username, it.username_enterprise, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'miniprograms':
         return (
           <table className={css.table}>
             {head(['名称', '用户名', 'AppID', '更新时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.user_name, it.nickname || it.user_name, it.user_enterprise, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{identityTd(it.user_name, it.nickname || it.user_name, it.user_enterprise, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       default:
         return (
           <table className={css.table}>
             {head(['用户', '备注', '验证消息', '类型', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{identityTd(it.user_name_, it.user_display || it.user_name_, it.user_enterprise, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{identityTd(it.user_name_, it.user_display || it.user_name_, it.user_enterprise, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
     }
@@ -400,7 +431,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
               onChange={(v) => { setDirection(v as 'asc' | 'desc') }}
               ariaLabel="排序方向"
             />
-            <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
+            <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exportTask.running} {...desktopActionProps()}>{exportTask.finishing ? '完成中…' : exportTask.running ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
           </>
         )}
       />
@@ -412,6 +443,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       )}
 
       {notice && <div className={css.notice}>{notice}</div>}
+      <ExportProgressStatus state={exportTask.state} onCancel={() => { void exportTask.cancel() }} />
 
       {/* `recordsCard` 只做一件事：`flex-shrink: 0`。面板是滚动 flex 列，
           卡片作为 flex 子项默认会被压缩，再被自己的 `overflow: hidden` 切掉一截表格
@@ -429,8 +461,8 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         )}
         {!loading && !error && items.length > 0 && items.length < total && (
           <div className={css.loadMoreWrap}>
-            <button type="button" className={css.loadMore} onClick={() => { void load(false) }} disabled={loading}>
-              {`加载更多（${items.length}/${total}）`}
+            <button type="button" className={css.loadMore} onClick={() => { void load(false) }} disabled={loading || loadingMore}>
+              {loadingMore ? '加载中…' : `加载更多（${items.length}/${total}）`}
             </button>
           </div>
         )}

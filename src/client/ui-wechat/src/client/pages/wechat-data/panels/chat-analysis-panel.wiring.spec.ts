@@ -1,7 +1,7 @@
 /**
  * 右栏「推荐回复 + 消息分析」的接线守卫。
  *
- * 重设计保留了合并面板与默认关闭，但分析区不再显示六项模型问卷，而是：
+ * 重设计保留了右栏与默认关闭，但推荐回复/分析严格二选一，分析区不再显示六项模型问卷，而是：
  * 分析对象 → 研判结论 → 意图 / 温度 / 建议动作 → 可展开的底层判断。
  */
 import { readFileSync } from 'node:fs'
@@ -21,14 +21,18 @@ const RIGHT = read('ChatRightPanel.tsx')
 const HEAD = read('chats-head-actions.tsx')
 
 describe('消息分析面板', () => {
-  it('① 推荐回复在上、消息分析在下，共用组合层外壳', () => {
+  it('① 推荐回复与消息分析严格二选一，共用组合层外壳', () => {
     const suggestAt = RIGHT.indexOf('<ReplySuggest')
     const analysisAt = RIGHT.indexOf('<ChatAnalysisPanel')
     expect(suggestAt).toBeGreaterThan(-1)
     expect(analysisAt).toBeGreaterThan(suggestAt)
     expect(RIGHT).toContain('className={shell.panel}')
     expect(PANEL, '分析区不该再自带一层面板外壳').not.toContain('shell.panel')
-    expect(RIGHT).toContain('{showSuggest && showAnalysis && <div className={css.divider} />}')
+    expect(RIGHT).toContain("mode: 'suggest' | 'analysis'")
+    expect(RIGHT).toContain("{mode === 'suggest' && (")
+    expect(RIGHT).toContain("{mode === 'analysis' && (")
+    expect(RIGHT, '右栏不能同时渲染推荐回复和分析').not.toContain('推荐回复与消息分析')
+    expect(RIGHT, '单模式下不再需要两块之间的分隔线').not.toContain('css.divider')
   })
 
   it('② 默认关闭、AI 问答打开时顶替，群聊仍可单独分析', () => {
@@ -36,7 +40,7 @@ describe('消息分析面板', () => {
     expect(CHATS).toContain('const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)')
     const mount = sliceBetween(
       VIEW,
-      '{curSession !== null && (suggestVisible || analysisPaneOpen)',
+      '{curSession !== null && chatRightMode !== undefined',
       '<ChatRightPanel',
       '右栏挂载条件',
     )
@@ -46,7 +50,11 @@ describe('消息分析面板', () => {
 
   it('分析入口真的切换开关，并在打开时退出 AI 问答', () => {
     expect(HEAD, '分析按钮没有切换 analysisPaneOpen').toContain('setAnalysisPaneOpen(v => !v)')
-    expect(HEAD, '打开分析时没有让出 AI 问答右栏').toContain('if (!analysisPaneOpen) setAiOpen(false)')
+    const analysisAt = HEAD.indexOf('aria-label="分析"')
+    expect(analysisAt, '找不到分析入口').toBeGreaterThan(-1)
+    const analysisEntry = HEAD.slice(analysisAt, analysisAt + 900)
+    expect(analysisEntry, '打开分析时没有让出 AI 问答右栏').toContain('setAiOpen(false)')
+    expect(analysisEntry, '打开分析时没有关闭推荐回复').toContain('setSuggestOpen(false)')
   })
 
   it('③ 分析区拿到发送者与原文，不把群昵称当 username', () => {

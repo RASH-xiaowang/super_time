@@ -20,6 +20,7 @@ import css from './list-panel.module.css'
 import { CAT_LABEL, fileDisplayName, fileKey, fileTitle } from './files-naming.ts'
 import { fileIcon, fmtBytes, fmtMonthDaySec } from '../utils/format.ts'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 /** KPI 条里的一格：标签在上、数值在下。语义色只用在小面积数值上。 */
 export interface AssetKpiItem {
@@ -64,19 +65,23 @@ export interface AssetMenuItem {
  */
 export function AssetMoreMenu({ items }: { items: ReadonlyArray<AssetMenuItem> }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const close = (): void => { setOpen(false) }
+  const { rootRef, triggerRef } = useMenuDismiss(open, close)
   return (
-    <div className={css.moreMenu}>
+    <div className={css.moreMenu} ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={css.catBtn}
         aria-label="更多操作"
+        aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => { setOpen(v => !v) }}
       >
         更多 ▾
       </button>
       {open && (
-        <div className={css.morePanel} role="menu" aria-label="更多操作" onMouseLeave={() => { setOpen(false) }}>
+        <div className={css.morePanel} role="menu" aria-label="更多操作" onMouseLeave={close}>
           {items.map(it => (
             <button
               key={it.key}

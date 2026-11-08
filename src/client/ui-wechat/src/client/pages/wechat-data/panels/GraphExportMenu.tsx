@@ -9,7 +9,8 @@
  * 在 1230px 宽下换行成两排（页头 51px → 需要 90px）。导出是低频操作，
  * 收进菜单后页头只剩 5 个控件，一行放得下。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+import { useMenuDismiss } from './use-menu-dismiss.ts'
 import css from './graph.module.css'
 
 /** 海报风格。 */
@@ -52,39 +53,26 @@ export function GraphExportMenu({
   onStyle, onRatio, onPoster, onSvg, onPng,
 }: GraphExportMenuProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-
-  // 点外面 / 按 Esc 关闭（菜单是浮层，不关会一直挡着画布）。
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (wrapRef.current !== null && !wrapRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  const { rootRef, triggerRef } = useMenuDismiss(open, () => { setOpen(false) })
 
   /** 执行一个导出动作并收起菜单。 */
   const run = (fn: () => void): void => { setOpen(false); fn() }
 
   return (
-    <div className={css.menuWrap} ref={wrapRef}>
+    <div className={css.menuWrap} ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={css.chip}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => { setOpen(v => !v) }}
+        disabled={exporting}
       >
         {exporting ? '导出中…' : '导出'}
       </button>
       {open && (
-        <div className={css.menu} role="menu">
+        <div className={css.menu} role="menu" aria-label="图谱导出">
           {!isKnowledgeMode && (
             <>
               <div className={css.menuLabel}>海报风格</div>
@@ -120,8 +108,8 @@ export function GraphExportMenu({
               </button>
             </>
           )}
-          <button type="button" className={css.menuItem} role="menuitem" onClick={() => { run(onSvg) }}>SVG 矢量图</button>
-          <button type="button" className={css.menuItem} role="menuitem" onClick={() => { run(onPng) }}>PNG 位图</button>
+          <button type="button" className={css.menuItem} role="menuitem" disabled={exporting} onClick={() => { run(onSvg) }}>SVG 矢量图</button>
+          <button type="button" className={css.menuItem} role="menuitem" disabled={exporting} onClick={() => { run(onPng) }}>PNG 位图</button>
         </div>
       )}
     </div>

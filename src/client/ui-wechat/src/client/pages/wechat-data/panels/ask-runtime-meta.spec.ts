@@ -6,8 +6,7 @@
  * 文件/收藏是不是被伪装成消息引用。旧后端不返回它们时组件必须完全不渲染，
  * 否则会把既有问答界面撑出一块空壳。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AskTurn, EvidenceBundle } from './use-ask.ts'

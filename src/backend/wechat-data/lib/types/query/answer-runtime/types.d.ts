@@ -60,6 +60,8 @@ export interface AnswerRuntimeStage {
     label: string;
     status: 'running' | 'done' | 'failed' | 'skipped';
     detail?: string;
+    /** UI 执行轮次（1 基）；普通流水线阶段可缺省，且不得超过结果 rounds。 */
+    round?: number;
     /** 工具调用的结构化阶段；普通流水线阶段为空。 */
     phase?: AnswerRuntimeToolPhase;
     /** provider 签发的调用 id；工具阶段必有，用于前端合并同一张卡。 */
@@ -83,6 +85,39 @@ export interface AnswerRuntimeStage {
     /** 当前结果的确定性事实数。 */
     facts?: number;
 }
+/** 可展示的模型思考分段；每段独立关联到工具轮次或最终综合阶段。 */
+export interface AnswerReasoningSegment {
+    /** 稳定分段 id；同一次模型调用的后续快照沿用同一 id。 */
+    key: string;
+    /** UI 执行轮次（1 基）；最终综合阶段缺省，并与工具 trace/stage 共用编号空间。 */
+    round?: number;
+    /** 思考发生在工具选择阶段还是最终回答综合阶段。 */
+    phase: 'tool_selection' | 'synthesis';
+    /** 当前分段的完整可展示文本（不是增量）。 */
+    text: string;
+    /** 分段内容版本；同一 key 的迟到旧快照不得覆盖更高版本。 */
+    version?: number;
+    /** 单调递增序号，用于稳定排序和迟到事件去重。 */
+    seq: number;
+}
+/** 思考回调携带的关联信息；底层模型仍只负责吐增量。 */
+export interface AnswerReasoningMeta {
+    phase: AnswerReasoningSegment['phase'];
+    /** `delta` 表示 text 是新增片段；`snapshot` 表示 text 是当前分段全文。 */
+    mode: 'delta' | 'snapshot';
+    /** UI 执行轮次（1 基）；最终综合阶段缺省。 */
+    round?: number;
+    /** 当前分段内容版本；前端据此丢弃迟到或乱序的旧快照。 */
+    version?: number;
+    /** 分段创建顺序；用于跨分段稳定排序。 */
+    seq?: number;
+}
+/** 思考事件发射器；flush 立即补发待发送快照，dispose 后不再接收新事件。 */
+export interface AnswerReasoningEmitter {
+    (text: string, meta?: AnswerReasoningMeta): void;
+    flush(): void;
+    dispose(): void;
+}
 /** 阶段事件发射器；回调异常不会中断工具循环。 */
 export type AnswerRuntimeEmitStage = (stage: AnswerRuntimeStage) => void;
 /** 操作日志（与现有 remotes 的 `op` 形状兼容）。 */
@@ -104,7 +139,7 @@ export type AnswerRuntimeSleep = (ms: number, signal?: AbortSignal) => Promise<v
 export interface ToolCallTrace {
     /** 全局序号（0 基，按发生顺序）。 */
     index: number;
-    /** 第几轮模型调用（1 基）。 */
+    /** UI 执行轮次（1 基）；定向补查使用接在主循环后的 synthetic round。 */
     round: number;
     /** 供应商签发的 call id。 */
     callId: string;
@@ -159,13 +194,22 @@ export interface ToolLoopInput {
     messages: Message[];
     /** 用户问题（用于首轮空输出的混合检索兜底）。 */
     question: string;
+    /** 问题带「最近 / 最新」语义时，会话消息默认按时间倒序取。 */
+    recency?: boolean;
+    /**
+     * 命中并返回证据后即可结束工具循环的终态工具。
+     *
+     * 典型是时间线问答里的 `get_session_messages`：会话与范围已经确定，
+     * 继续让模型决定“还要不要查”只会多一轮思考。
+     */
+    terminalTools?: readonly string[];
     /** 发给模型的工具 schema；缺省时按 profileTools 生成。 */
     tools?: ToolSchema[];
     /** profile 或 id；工具循环会在执行前再次按白名单过滤。 */
     profile: AnswerProfile | AnswerProfileId;
     /** 完整工具集（通常是 buildTools 组装的那份）。 */
     profileTools: readonly RetrievalTool[];
-    /** 工具执行上下文；session/clawbot 的边界由运行时预先归一。 */
+    /** 工具执行上下文；会话边界由运行时预先归一。 */
     toolContext: ToolContext;
     /** 取消检查；工具执行前、退避等待前后调用，取消后不再启动重试。 */
     throwIfCanceled?: () => void;
@@ -212,10 +256,10 @@ export interface ToolLoopInput {
     emitStage?: AnswerRuntimeEmitStage;
     op?: AnswerRuntimeOp;
     onDelta?: (text: string) => void;
-    onReasoning?: (text: string) => void;
+    onReasoning?: (text: string, meta?: AnswerReasoningMeta) => void;
 }
 /** 工具循环停止原因。 */
-export type ToolLoopStopReason = 'stop' | 'max-rounds' | 'no-output' | 'no-tool-call';
+export type ToolLoopStopReason = 'stop' | 'max-rounds' | 'deduplicated' | 'terminal-tool' | 'no-output' | 'no-tool-call';
 /** 工具循环产出。 */
 export interface ToolLoopResult {
     /** 最终对话（含 assistant tool-call 与 tool-result，可直接续跑）。 */
@@ -223,6 +267,7 @@ export interface ToolLoopResult {
     finalText: string;
     /** 已去除 reasoning 的最终 assistant blocks。 */
     finalBlocks: ContentBlock[];
+    /** UI 执行轮次上限；定向补查即使没有 trace 也计入。 */
     rounds: number;
     exhausted: boolean;
     fallbackUsed: boolean;
@@ -340,7 +385,7 @@ export interface AnswerRuntimeInput {
     emitStage?: AnswerRuntimeEmitStage;
     op?: AnswerRuntimeOp;
     onDelta?: (text: string) => void;
-    onReasoning?: (text: string) => void;
+    onReasoning?: (text: string, meta?: AnswerReasoningMeta) => void;
     /** 意图识别选项；now 由运行时统一注入。 */
     intentOptions?: Omit<ClassifyAnswerIntentOptions, 'now'>;
     /** 低置信/需澄清时使用的轻量意图分类器；高置信规则不会调用它。 */
@@ -357,15 +402,13 @@ export interface AnswerRuntimeInput {
      * 证据不足/失败时是否仍调用 synthesize。
      *
      * 缺省 false：直接返回工具循环的可见文本或证据摘要，并保留 insufficient/failed
-     * 状态。ClawBot 的聊天兜底若依赖 synthesize，可显式打开。
+     * 状态。需要综合生成兜底的入口可显式打开。
      */
     synthesizeOnInsufficient?: boolean;
     /**
      * 意图判定为「需要澄清」时是否直接停止检索。
      *
      * 缺省 true（微信问答 / 会话内问答）：指代不明时先问清，避免拿错会话硬答。
-     * kb-only 入口（ClawBot）缺省 false：它没有跨会话风险，仍应尝试知识库后再
-     * 由回复文本追问。
      */
     clarifyBeforeSearch?: boolean;
     synthesize?: AnswerSynthesizeFn;
@@ -377,12 +420,13 @@ export interface AnswerRuntimeResult {
     intent: AnswerIntentDecision;
     evidence: EvidenceBundle;
     profile: AnswerProfileId;
-    /** 归一后的执行上下文（clawbot 会强制 wechatDataEnabled=false）。 */
+    /** 归一后的执行上下文。 */
     context: ToolContext;
     toolCalls: ToolCallTrace[];
     toolResults: ToolResult[];
     citations: AnswerRuntimeCitation[];
     resources: AnswerRuntimeResourceCitation[];
+    /** UI 执行轮次上限；所有 toolCalls/stages 的 round 不得超过它。 */
     rounds: number;
     exhausted: boolean;
     fallbackUsed: boolean;

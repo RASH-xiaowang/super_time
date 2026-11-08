@@ -13,18 +13,19 @@ import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled,
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryContacts } from './contacts.ts'
 import { queryFavorites } from './favorites.ts'
+import { queryFiles } from './files.ts'
 import { queryRecords } from './records.ts'
 import { queryMoments } from './moments.ts'
-import { resolveSnsImageDataUrl } from './sns-image.ts'
-import { resolveSnsVideoDataUrlAsync } from './sns-video.ts'
 import { queryPrivacyScan } from './privacy.ts'
 import { grantRoot, writeDenialReason } from './path-policy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
 import { yieldToLoop } from './search-build.ts'
-import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
+import { exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
 import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatTxtChunksAsync, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
 import { buildSessionMediaManifest, emptySessionMediaArchive, prepareSessionMediaArchive, writeSessionMediaArchive, type ExportMediaLinks, type SessionMediaArchive } from './export-media.ts'
+import { loadSnsImageOriginalBytes, writeMomentsMediaArchive } from './export-sns-media.ts'
+import { canonicalChatReference } from './message-identity.ts'
 
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>> {
@@ -90,6 +91,14 @@ export function sanitizeBasename(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').trim().slice(0, 100)
 }
 
+/** Resolve a legacy message-table hash before any export path, filename, or manifest is written. */
+export function canonicalExportUsername(decryptedDir: string, value: string): string {
+  const chat = canonicalChatReference(decryptedDir, value, '导出会话')
+  if (chat.error !== undefined) throw new Error(chat.error)
+  if (chat.username === '') throw new Error('未指定导出会话')
+  return chat.username
+}
+
 /** 单会话导出的「计划」：收集 + 过滤 + 算出所有输出名（同步/流式两条入口共用）。 */
 export interface SessionExportPlan {
   msgs: WechatMessage[]
@@ -128,6 +137,7 @@ export function planSessionExport(
    */
   preCollected?: WechatMessage[],
 ): SessionExportPlan {
+  username = canonicalExportUsername(decryptedDir, username)
   const all = preCollected ?? collectMessages(decryptedDir, username, count ?? 0, ctrl)
   const msgs = filterMessages(all, types, richTypes).filter((m) => {
     if (from && from > 0 && m.createTime < from) return false
@@ -185,6 +195,7 @@ export function exportSessionMessages(
   zip?: boolean,
   ctrl?: StreamControl,
 ): { path: string; filename: string; count: number } {
+  username = canonicalExportUsername(decryptedDir, username)
   const plan = planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl)
   const { msgs } = plan
   // xlsx 走内存版（本入口必须同步返回）；行数可能很大时用 exportSessionMessagesStreamed，
@@ -201,6 +212,7 @@ export function exportSessionMessages(
   } else {
     writeFileAtomicSync(plan.outPath, content)
   }
+  reportProgress(ctrl, 'done', 1, 1)
   return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length }
 }
 
@@ -237,13 +249,14 @@ export async function exportSessionMessagesStreamed(
     xorKey?: number
   } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number; mediaCount: number; mediaMissingCount: number }> {
+  const username = canonicalExportUsername(decryptedDir, options.username)
   const ctrl: StreamControl = { onProgress: options.onProgress, signal: options.signal }
   // 收集这一段是整条导出里最耗时的同步循环 ⇒ 走**会让出**的版本：不让出时 4 万条会把
   // 后端事件循环独占 2.5 秒，期间别的面板一个查询都进不来（H8 验收项，实测见
   // scripts/export-nonblocking-e2e.mjs）。
-  const collected = await collectMessagesAsync(decryptedDir, options.username, options.count ?? 0, ctrl)
+  const collected = await collectMessagesAsync(decryptedDir, username, options.count ?? 0, ctrl)
   const plan = planSessionExport(
-    decryptedDir, options.username, options.format, options.count, options.dir,
+    decryptedDir, username, options.format, options.count, options.dir,
     options.types, options.richTypes, options.from, options.to, options.filename, options.zip, ctrl, collected,
   )
   const { msgs } = plan
@@ -251,7 +264,7 @@ export async function exportSessionMessagesStreamed(
     ? await prepareSessionMediaArchive({
       decryptedDir,
       decodedDir: options.decodedDir || join(dirname(decryptedDir), 'decoded_images'),
-      username: options.username,
+      username,
       msgs,
       ...(options.wechatBaseDir ? { wechatBaseDir: options.wechatBaseDir } : {}),
       ...(options.aesKey ? { aesKey: options.aesKey } : {}),
@@ -264,32 +277,33 @@ export async function exportSessionMessagesStreamed(
     // 大行数的正路：sheet 逐块产出 → 流式 deflate → temp+rename。
     // 行数此刻已经知道（消息都已收集），把它报给流式层 ⇒ 'format' 阶段才有 done/total，
     // 进度条才真能按百分比填（不传就一路 total=0，界面只能显示「数字在涨」）。
-    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl, msgs.length + 1)
+    await writeXlsxStream(plan.outPath, messageRows(msgs, username), ctrl, msgs.length + 1)
   } else if (plan.isXlsx) {
     // zip 包裹时内层必须是完整的 xlsx 字节：仍走内存版（多一层流式需要再落一次临时文件，
     // 而单会话上限 5 万条、内层 xlsx 本身是压缩数据，收益不抵复杂度）。
     await writeZipAtomic(plan.outPath, async (zip) => {
       await writeSessionMediaArchive(zip, mediaArchive, ctrl)
-      const content = formatXlsx(msgs, options.username, ctrl, mediaLinks)
+      const content = formatXlsx(msgs, username, ctrl, mediaLinks)
       await zip.addFile(plan.innerName, content)
       await zip.addFile('record_media.json', buildSessionMediaManifest(
-        options.username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
+        username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
       ))
     })
   } else {
     if (options.zip) {
       await writeZipAtomic(plan.outPath, async (zip) => {
         await writeSessionMediaArchive(zip, mediaArchive, ctrl)
-        const content = formatTextBody(plan.format, msgs, options.username, plan.now, mediaLinks)
+        const content = formatTextBody(plan.format, msgs, username, plan.now, mediaLinks)
         await zip.addFile(plan.innerName, content)
         await zip.addFile('record_media.json', buildSessionMediaManifest(
-          options.username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
+          username, plan.now, msgs.length, mediaArchive, collectChatlogMedia(msgs),
         ))
       })
     } else {
-      writeFileAtomicSync(plan.outPath, formatTextBody(plan.format, msgs, options.username, plan.now))
+      writeFileAtomicSync(plan.outPath, formatTextBody(plan.format, msgs, username, plan.now))
     }
   }
+  reportProgress(ctrl, 'done', 1, 1)
   return {
     path: plan.outPath,
     filename: plan.filenameOut,
@@ -365,6 +379,28 @@ export async function exportCsv(
       throwIfCancelled(ctrl?.signal)
       rows.push([String(f.localId), String(f.type), String(f.updateTime), f.content, f.fromUsr])
     }
+  } else if (kind === 'files') {
+    // 文件面板的「导出清单」：只写索引元数据，不伪装成媒体文件包。
+    header = ['MD5', '文件名', '类目', '大小', '修改时间', '来源月份', '来源会话', '来源用户名']
+    let offset = 0
+    for (;;) {
+      throwIfCancelled(ctrl?.signal)
+      const env = queryFiles(decryptedDir, 500, offset)
+      for (const f of env.files) {
+        rows.push([
+          f.md5,
+          f.fileName,
+          f.category,
+          String(f.fileSize),
+          String(f.modifyTime),
+          f.sourceMonth ?? '',
+          f.sessionName ?? f.sourceTalker ?? '',
+          f.sessionUsername ?? f.sourceUsername ?? '',
+        ])
+      }
+      offset += env.files.length
+      if (env.files.length === 0 || offset >= env.total) break
+    }
   } else if (kind === 'records') {
     header = ['字段']
     const env = queryRecords(decryptedDir, recordsKind ?? 'revokes', 5000)
@@ -410,6 +446,7 @@ export async function exportCsv(
   writeFileAtomicSync(filepath, buildCsv(header, rows))
   ctrl?.onProgress?.({ phase: 'write', done: 1, total: 1 })
   ctrl?.onProgress?.({ phase: 'collect', done: rows.length, total: rows.length })
+  reportProgress(ctrl, 'done', 1, 1)
   return { path: filepath, filename: basename(filepath), count: rows.length }
 }
 
@@ -546,6 +583,7 @@ export async function exportAnnualReport(
   const path = join(base, safeName)
   writeFileAtomicSync(path, content)
   ctrl?.onProgress?.({ phase: 'write', done: 1, total: 1 })
+  reportProgress(ctrl, 'done', 1, 1)
   return { path, filename: safeName, count: total }
 }
 /**
@@ -567,6 +605,12 @@ export async function exportMoments(
     month?: string
     mine?: string
     zip?: boolean
+    /** ZIP only; defaults to true for backward compatibility. */
+    includeImages?: boolean
+    /** ZIP only; defaults to true for backward compatibility. */
+    includeVideos?: boolean
+    /** ZIP only; defaults to true and writes both the still frame and motion clip. */
+    includeLivePhotos?: boolean
     from?: number
     to?: number
     dir?: string
@@ -644,37 +688,32 @@ export async function exportMoments(
     const zipBase = rawName ? rawName.replace(/\.zip$/i, '') : ''
     const zipName = zipBase ? zipBase + '.zip' : 'wechat_moments_' + String(Date.now()) + '.zip'
     const zipPath = join(base, zipName)
-    // 媒体逐条写入：原先最多把 5000 个图片/视频 buffer 攒在 entries 里再一次性压缩，
-    // 单条视频几十 MB 时峰值很容易上到 GB 级。上限语义（含 moments.json 在内 ≤5000 条）
-    // 保持不变，只是改成边产出边写。
-    let mediaCount = 0
+    // 媒体逐条写入，单条视频不会堆在内存里等全部解析完。解析器只接受原图/原视频；
+    // 缩略档、未解密 CDN 密文与无法按魔数识别的字节都会进入清单而不会写入媒体目录。
     await writeZipAtomic(zipPath, async (zip) => {
       await zip.addFile('moments.json', JSON.stringify(filtered, null, 2))
-      let idx = 0
-      for (const m of filtered) {
-        if (mediaCount >= MAX_MOMENT_MEDIA) break
-        // 媒体解析（解密/读盘）是这里最慢的环节，逐条响应取消并汇报已打包条数。
-        throwIfCancelled(ctrl.signal)
-        for (const im of m.images) {
-          if (mediaCount >= MAX_MOMENT_MEDIA) break
-          const r = im.md5 ? await resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
-          if (r.url) {
-            const buf = dataUrlToBuffer(r.url)
-            if (buf) { await zip.addFile('media/images/img_' + String(idx++) + '.jpg', buf); mediaCount += 1 }
-          }
-        }
-        if (mediaCount >= MAX_MOMENT_MEDIA) break
-        for (const v of m.videos) {
-          if (mediaCount >= MAX_MOMENT_MEDIA) break
-          const r = await resolveSnsVideoDataUrlAsync(mediaCtx.base, v.md5, v.timelineId, v.id)
-          if (r.url) {
-            const buf = dataUrlToBuffer(r.url)
-            if (buf) { await zip.addFile('media/videos/vid_' + String(idx++) + '.mp4', buf); mediaCount += 1 }
-          }
-        }
-        reportProgress(ctrl, 'media', mediaCount, MAX_MOMENT_MEDIA)
-      }
+      const mediaManifest = await writeMomentsMediaArchive({
+        zip,
+        items: filtered,
+        ctx: {
+          ...(mediaCtx.base ? { base: mediaCtx.base } : {}),
+          decodedDir: join(dirname(decryptedDir), 'decoded_images'),
+          ...(mediaCtx.aesKey ? { aesKey: mediaCtx.aesKey } : {}),
+          xorKey: mediaCtx.xorKey,
+        },
+        options: {
+          ...(opts.includeImages !== undefined ? { includeImages: opts.includeImages } : {}),
+          ...(opts.includeVideos !== undefined ? { includeVideos: opts.includeVideos } : {}),
+          ...(opts.includeLivePhotos !== undefined ? { includeLivePhotos: opts.includeLivePhotos } : {}),
+        },
+        ctrl,
+      })
+      await zip.addFile('record_media.json', JSON.stringify({
+        ...mediaManifest,
+        exportedAt: new Date().toISOString(),
+      }, null, 2))
     })
+    reportProgress(ctrl, 'done', 1, 1)
     return { path: zipPath, filename: zipName, count: filtered.length }
   }
   const ext = format
@@ -699,22 +738,45 @@ export async function exportMoments(
       throwIfCancelled(ctrl.signal)
       parts.push('<div class="card"><div class="meta">' + htmlEscape(m.author) + ' · ' + htmlEscape(m.time) + '</div>')
       if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + '</div>')
-      if (m.images.length > 0) {
+      if (m.images.length > 0 && !mediaCtx) {
+        parts.push('<div class="tag">图片×' + String(m.images.length) + '（未内嵌，重新导出时请勾选“HTML 内嵌离线图片”）</div>')
+      } else if (m.images.length > 0) {
         const single = m.images.length === 1 ? ' single' : ''
         const imgs = (await Promise.all(m.images.map(async (im) => {
-          let src = im.url || im.thumb || ''
-          if (mediaCtx && im.md5) {
-            const r = await resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id)
-            if (r.url) src = r.url
+          // 微信 CDN URL 指向加密流且会过期，不能直接交给浏览器当 <img>。
+          // 只嵌入经后端校验过的本地原图；失败时给明确占位，不产生破图图标。
+          let src = ''
+          if (mediaCtx) {
+            const r = await loadSnsImageOriginalBytes(
+              {
+                ...(mediaCtx.base ? { base: mediaCtx.base } : {}),
+                decodedDir: join(dirname(decryptedDir), 'decoded_images'),
+                ...(mediaCtx.aesKey ? { aesKey: mediaCtx.aesKey } : {}),
+                xorKey: mediaCtx.xorKey,
+              },
+              {
+                md5: im.md5,
+                ...(im.timelineId ? { timelineId: im.timelineId } : {}),
+                ...(im.id ? { mediaId: im.id } : {}),
+                ...(im.url ? { url: im.url } : {}),
+                ...(im.token ? { token: im.token } : {}),
+                ...(im.key ? { seed: im.key } : {}),
+              },
+            )
+            if (r.bytes && r.format) {
+              const mime = r.format === 'jpg' ? 'jpeg' : r.format
+              src = `data:image/${mime};base64,${r.bytes.toString('base64')}`
+            }
           }
-          return '<img src="' + htmlEscape(src) + '" loading="lazy" />'
+          return src
+            ? '<img src="' + htmlEscape(src) + '" loading="lazy" />'
+            : '<span class="tag">图片×1（原图未在本地解锁）</span>'
         }))).join('')
         parts.push('<div class="grid' + single + '">' + imgs + '</div>')
       }
       if (m.videos.length > 0) {
-        // 视频本体不内嵌，仅封面（CDN 缩略图）作为占位。
-        const cover = (m.videos[0] && (m.videos[0].thumb || ''))
-        parts.push('<div class="tag">视频×' + String(m.videos.length) + (cover ? ' <img src="' + htmlEscape(cover) + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-left:4px" />' : '') + '</div>')
+        // 视频本体不内嵌；封面同样来自微信 CDN，直接写 <img> 只会得到破图。
+        parts.push('<div class="tag">视频×' + String(m.videos.length) + '（视频文件请用 ZIP 含媒体导出）</div>')
       }
       if (m.location) parts.push('<div class="tag">📍' + htmlEscape(m.location) + '</div>')
       if (m.link_title) {
@@ -760,6 +822,7 @@ export async function exportMoments(
   const path = join(base, name)
   writeFileAtomicSync(path, content)
   reportProgress(ctrl, 'write', 1, 1)
+  reportProgress(ctrl, 'done', 1, 1)
   return { path, filename: name, count: filtered.length }
 }
 /**
@@ -814,5 +877,6 @@ export async function exportAllSessions(
       reportProgress(ctrl, 'sessions', i + 1, sessions.length)
     }
   })
+  reportProgress(ctrl, 'done', 1, 1)
   return { path, filename, count: total }
 }

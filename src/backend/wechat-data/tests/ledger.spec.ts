@@ -34,6 +34,8 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
 // parse.ts 的 parseAppmsgType 只读子元素，属性写法会解析成 0 并落到 default 分支。
 const TRANSFER_XML = '<msg><appmsg><type>2000</type><wcpayinfo><paysubtype>3</paysubtype><feedesc>￥10.00</feedesc></wcpayinfo></appmsg></msg>'
 const REDPACKET_XML = '<msg><appmsg><type>2001</type><wcpayinfo><feedesc>￥8.88</feedesc></wcpayinfo></appmsg></msg>'
+const REDPACKET_SEND_ID = 'send-ledger-1'
+const REDPACKET_CLAIM_XML = `<img src="SystemMessages_HongbaoIcon.png"/> 你领取了张三的<wc_custom_link href="weixin://weixinhongbao/opendetail?sendid=${REDPACKET_SEND_ID}&sign=test">红包</wc_custom_link>`
 
 describe('queryLedger', () => {
   it('aggregates transfer and red-packet amounts with direction and contact names', async () => {
@@ -46,14 +48,15 @@ describe('queryLedger', () => {
     })
     makeDb(join(root, 'general', 'general.db'), (db) => {
       db.exec('CREATE TABLE transferTable (session_name TEXT, message_server_id INTEGER, second_message_server_id INTEGER, pay_receiver TEXT, pay_payer TEXT, begin_transfer_time INTEGER, invalid_time INTEGER)')
-      db.exec('CREATE TABLE redEnvelopeTable (session_name TEXT, message_server_id INTEGER, sender_user_name TEXT, hb_status INTEGER)')
+      db.exec('CREATE TABLE redEnvelopeTable (session_name TEXT, message_server_id INTEGER, sender_user_name TEXT, hb_status INTEGER, send_id TEXT)')
       db.prepare('INSERT INTO transferTable VALUES (?, ?, ?, ?, ?, ?, ?)').run('wxid_a', 1001, 0, 'wxid_a', 'wxid_b', ts, 0)
-      db.prepare('INSERT INTO redEnvelopeTable VALUES (?, ?, ?, ?)').run('wxid_a', 1002, 'wxid_a', 1)
+      db.prepare('INSERT INTO redEnvelopeTable VALUES (?, ?, ?, ?, ?)').run('wxid_a', 1002, 'wxid_a', 1, REDPACKET_SEND_ID)
     })
     makeDb(join(root, 'message', 'message_1.db'), (db) => {
       db.exec(`CREATE TABLE "${msgTable}" (local_id INTEGER, create_time INTEGER, local_type INTEGER, message_content TEXT, server_id INTEGER)`)
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(1, ts, 49, TRANSFER_XML, 1001)
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(2, ts, 49, REDPACKET_XML, 1002)
+      db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(3, ts, 10000, REDPACKET_CLAIM_XML, 0)
     })
 
     const snap = await queryLedger(root, '2026-09', 'wxid_b')
@@ -88,7 +91,7 @@ describe('queryLedger', () => {
       db.exec(`CREATE TABLE "${msgTable}" (local_id INTEGER, create_time INTEGER, local_type INTEGER, message_content TEXT, server_id INTEGER)`)
       // 前导零 id 按 TEXT 存储：SQLite 数值亲和使整型等值(1001)依然命中。
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(1, ts, 49, TRANSFER_XML, '01001')
-      db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(2, ts, 49, REDPACKET_XML, 9007199254740993n)
+      db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(2, ts, 49, TRANSFER_XML, 9007199254740993n)
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(3, ts, 49, TRANSFER_XML, 'ts-1003')
     })
 
@@ -104,6 +107,6 @@ describe('queryLedger', () => {
     expect(snap.summary.transferOut).toBe(2)
     expect(snap.summary.transferIn).toBe(1)
     expect(snap.summary.transferAmountOut).toBe(20)
-    expect(snap.summary.transferAmountIn).toBeCloseTo(8.88)
+    expect(snap.summary.transferAmountIn).toBe(10)
   })
 })

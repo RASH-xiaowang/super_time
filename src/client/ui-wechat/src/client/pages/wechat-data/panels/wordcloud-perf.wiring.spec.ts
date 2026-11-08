@@ -171,6 +171,10 @@ describe('词云卡片本身仍然完整（别为了性能把功能弄丢）', (
     expect(CARD, '舞台高度必须来自布局（`layout.height`），否则坐标与盒子两个高度对不上')
       .toContain('layout.height')
     expect(CARD, '高度必须落到舞台的内联样式上').toMatch(/style=\{laidHeight === null \? undefined : \{ height:/)
+    expect(CARD, '词按钮必须使用布局盒的宽高（全局 44px 触摸下限会撑出舞台）')
+      .toMatch(/width: `\$\{String\(w\.width\)\}px`[\s\S]{0,120}height: `\$\{String\(w\.height\)\}px`/)
+    expect(readStripped(join(HERE, 'wordcloud-card.module.css')), '撒点态词按钮要归零 min-height')
+      .toMatch(/\.cloud\[data-laid\] > button \{[\s\S]{0,300}min-height: 0;/)
   })
 
   it('撒点态：词必须是 data-laid 那层的直接子元素（子选择器不能被中间层挡住）', () => {

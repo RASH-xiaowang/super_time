@@ -3,12 +3,12 @@
  * 内容资产/数据健康五块统计，供总览页展示。
  */
 import { DatabaseSync } from './db-open.ts'
-import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
+import { fallbackChatDisplayName, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
 import {
   insightsShardCachePath,
@@ -366,30 +366,13 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   queryTraceBegin('insights')
   ensureShardCacheHydrated(dec)
   const meta = contactMeta(dec)
-  const names = meta.names
+  const identity = messageIdentityIndex(dec, ['message', 'bizchat'])
+  const names = mergeDisplayNames(dec, identity.usernames)
   const enterpriseNames = meta.enterpriseNames
 
-  // 反向映射 md5(table suffix) -> 联系人。真实账号来自 contactMeta 与
-  // SessionTable（下方合并），不再注入硬编码示例账号。
-  const md5ToUser = new Map<string, string>()
-  for (const u of names.keys()) md5ToUser.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
-  try {
-    const sp = join(dec, 'session', 'session.db')
-    if (existsSync(sp)) {
-      const db = new DatabaseSync(sp, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
-      if (has) {
-        // 会话量级（N8 评估：随会话数增长，不随消息数），保留一次性取回
-        const rows = db.prepare('SELECT username FROM SessionTable').all() as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const u = cellStr(r['username'])
-          if (u) md5ToUser.set(createHash('md5').update(u, 'utf8').digest('hex'), u)
-        }
-      }
-      db.close()
-    }
-  } catch { /* ignore */ }
-  queryTraceMark('insights', 'contacts', md5ToUser.size)
+  // 反向映射必须覆盖消息分片 Name2Id / ChatName2Id，不能只靠会话缓存表。
+  const tableToUser = identity.tableToUsername
+  queryTraceMark('insights', 'contacts', tableToUser.size)
 
   const total = { n: 0, sent: 0 }
   const buckets: Record<string, number> = { text: 0, image: 0, voice: 0, video: 0, rich: 0, system: 0, revoked: 0, other: 0 }
@@ -456,7 +439,10 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
             if (g.m) lastActive = Math.max(lastActive, g.m)
           }
           total.n += tn
-          const talker = md5ToUser.get(table.slice(4)) ?? table.slice(4)
+          // A table without a proven identity must not enter a person ranking:
+          // the 32-char suffix is an md5 lookup key, not a conversation id.
+          const talker = tableToUser.get(table)
+          if (!talker) continue
           talkerCount.set(talker, (talkerCount.get(talker) ?? 0) + tn)
         }
       } finally {
@@ -510,8 +496,8 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
     .map(([u, count]) => {
       let name = names.get(u) ?? ''
       if (!name) {
-        // 联系人或会话中没有该账号的可读名称；避免直接展示 hash/长用户名。
-        name = /^[0-9a-f]{16,}$/i.test(u) ? '未知联系人' : u
+        // 联系人或会话中没有该账号的可读名称；至少给出不泄漏表 hash 的兜底。
+        name = fallbackChatDisplayName(u)
       }
       const enterpriseName = enterpriseNames.get(u)?.trim()
       return { username: u, name, ...(enterpriseName ? { enterpriseName } : {}), count }
@@ -528,26 +514,26 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
     const hp = join(dec, 'hardlink', 'hardlink.db')
     if (!existsSync(hp)) break
     try {
-      const db = new DatabaseSync(hp, { readOnly: true })
-      const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== undefined
-      if (has) {
-        const c = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM ${table}`).get() as { n: number; s: number }
-        assets.files += c.n
-        assets.fileBytes += c.s
-      }
-      db.close()
+      withDb(hp, (db) => {
+        const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== undefined
+        if (has) {
+          const c = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM ${table}`).get() as { n: number; s: number }
+          assets.files += c.n
+          assets.fileBytes += c.s
+        }
+      })
     } catch { /* ignore */ }
   }
   const rp = join(dec, 'message', 'message_resource.db')
   if (existsSync(rp)) {
     try {
-      const db = new DatabaseSync(rp, { readOnly: true })
-      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined) {
-        const c = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS s FROM MessageResourceDetail').get() as { n: number; s: number }
-        assets.mediaItems = c.n
-        assets.mediaBytes = c.s
-      }
-      db.close()
+      withDb(rp, (db) => {
+        if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined) {
+          const c = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS s FROM MessageResourceDetail').get() as { n: number; s: number }
+          assets.mediaItems = c.n
+          assets.mediaBytes = c.s
+        }
+      })
     } catch { /* ignore */ }
   }
 

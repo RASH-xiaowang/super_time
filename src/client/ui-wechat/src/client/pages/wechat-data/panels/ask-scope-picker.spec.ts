@@ -5,8 +5,7 @@
  * 纯逻辑只证明「@ 能触发」，这里补上用户真正会做的动作：
  * 点会话行、切到时间页签、Esc 与点外关闭。
  */
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'

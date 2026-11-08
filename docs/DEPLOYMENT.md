@@ -76,16 +76,22 @@ CI 里已经跑着的两条真机 e2e（都不需要许可证与私钥）：
 `npm run e2e:h14-consent`（隐私同意必须早于授权）、`npm run e2e:export-progress`（导出进度与中止）。
 
 发布链的验收口径**不是**"作业 success"，而是三条可回读的事实：
-`/releases/latest` 指向本 tag、三个资产齐备、`latest.yml` 回读与本地产物逐字节一致。
-`.github/workflows/release.yml` 里的「发布验收」一步就是做这三件事（含同 tag 重复 Release 收敛、
-缺资产补传、草稿态转正式发布）——历史上这里出过两次"灰的绿"，别把它当装饰。
+`/releases/latest` 指向本 tag、三个资产齐备、远端安装包下载后复算 SHA-512 与本地产物一致，
+且 `latest.yml` 回读版本与摘要一致。
+`.github/workflows/release.yml` 里的「发布验收」一步就是做这些检查（含同 tag 重复 Release 收敛、
+用本次构建覆盖上传、远端大小与 SHA-512 复核、草稿验收后公开）——历史上这里出过两次
+"灰的绿"，别把它当装饰。
 
 ## 6. 发版
 
 1. 改版本号（`package.json` + `CHANGELOG.md`，版本策略见 CHANGELOG 开头）；
 2. 提交后打 tag：`git tag v<版本> && git push origin v<版本>`；
-3. `release.yml` 由 tag 触发，`npm run dist -- --publish always` 建 Release 并上传；
-4. 回读第 5 节那三条事实（作业日志里的一步，失败即红）。
+3. 在 GitHub 配置 `WINDOWS_CERT_PFX_BASE64`、`WINDOWS_CERT_PASSWORD`、
+   `WINDOWS_CERT_PUBLISHER_NAME`；`release.yml` 由 tag 触发，强制签名构建后运行
+   `security:artifacts`、`security:artifacts:packaged`、`security:release`；
+4. 全套门禁通过后，工作流才把 `dist/` 的三个资产覆盖上传到草稿 Release；远端大小、
+   `latest.yml` 版本、并重新下载远端安装包实算 SHA-512 全部通过后才公开；
+5. 回读第 5 节那三条事实（作业日志里的一步，失败即红）。
 
 只有 tag 触发才发布：每次 push 都发会让 `latest.yml` 反复被覆盖，客户端可能下到半成品。
 
@@ -101,6 +107,8 @@ CI 里已经跑着的两条真机 e2e（都不需要许可证与私钥）：
 
 ## 8. 还没闭环的部署项（不要当成已完成）
 
-- 代码签名证书与 SmartScreen 信誉：未做（见 `RELEASE-PLAN.md` 的签名条目）；
+- 代码签名证书与 SmartScreen 信誉：发布链路已接入强制 Authenticode 门禁，但必须配置
+  真实证书 secrets 并完成一次签名发版验收；未配置时发布会失败（见
+  [`SECURITY-HARDENING.md`](SECURITY-HARDENING.md) 第 4 节）；
 - 自动更新的服务端策略（灰度、回滚）：只有 `latest.yml` 这一条链路，没有分阶段发布；
 - 公开发布的前置条件与逐条状态：一律以 [`RELEASE-PLAN.md`](RELEASE-PLAN.md) 顶部为准。

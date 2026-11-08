@@ -309,6 +309,8 @@
 .legendDotNote { width: 8px; height: 8px; border-radius: 50%; background: #8b7ff0; }
 .legendLine { width: 18px; height: 2px; background: rgba(120, 128, 140, 0.8); }
 .legendLineBlue { width: 18px; height: 2px; background: var(--nm-blue); }
+/* 绿实线 = 后端观测到的好友/邀请/回复/@提及等直接互动（与 edgeSocial 同义）。 */
+.legendLineGreen { width: 18px; height: 2px; background: var(--nm-green); }
 /* 金虚线 = 同备注编号（与画布的 edgeClass 虚线同义，图例本身也画成虚线） */
 .legendLineGold {
   width: 18px;
@@ -443,6 +445,8 @@
 .detailClose { border: none; background: transparent; color: var(--nm-text-2); cursor: pointer; font-size: var(--nm-fs-lg); line-height: 1; }
 .detailSub { font-size: var(--nm-fs-xs); font-weight: 600; color: var(--nm-text-2); }
 .detailChips { display: flex; flex-wrap: wrap; gap: 4px; }
+.detailConnections { max-height: 320px; overflow-y: auto; padding-right: 2px; align-content: flex-start; }
+.detailEdgeHint { font-size: var(--nm-fs-xs); color: var(--nm-text-2); line-height: 1.5; }
 .detailChip {
   display: inline-flex;
   align-items: center;
@@ -462,6 +466,24 @@
 }
 .detailChipIdentity { min-width: 0; max-width: 100%; }
 .detailChipLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detailEdgeChip {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  max-width: 240px;
+  white-space: normal;
+  text-align: left;
+}
+.detailEdgeChip:disabled { cursor: default; opacity: 0.55; }
+.detailEdgeTop { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.detailEdgeMeta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
 .detailChip:hover { background: var(--nm-bg-active); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 /* 同班级名册里「被挡在图外」的成员：不可点，压暗提示它没参与连边 */
 .detailChip[data-dim] { opacity: 0.45; cursor: default; }

@@ -74,7 +74,7 @@ describe('kit 的 CSS 拆分：选择器的类必须在同一份里定义（否�
 
   it('焦点环那条选择器列表按归属一分为二：声明逐字相同、选择器并集不变', () => {
     // 原始是 4 个选择器一条规则（键盘 Tab 看不到焦点才补的，见 kit.module.css 的原注释）。
-    const decl = '  outline: none;\n  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);'
+    const decl = '  outline: 2px solid var(--nm-border-active);\n  outline-offset: 1px;'
     expect(block(src('kit.module.css'), '.searchClear:focus-visible'), 'kit.module.css 那半的声明块变了').toBe(decl)
     expect(block(src('kit-overlay.module.css'), '.tabTrigger:focus-visible,\n.segItem:focus-visible,\n.drawerClose:focus-visible'),
       'kit-overlay.module.css 那半的声明块变了').toBe(decl)

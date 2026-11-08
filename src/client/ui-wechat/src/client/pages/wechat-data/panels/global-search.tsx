@@ -145,7 +145,11 @@ export function GlobalSearch({ value, onChange, open, onOpenChange, inputRef, ch
             onClick={() => { onChange(''); onOpenChange(false) }}
             aria-label="清空搜索"
             title="清空"
-          >×</button>
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M7 7l10 10M17 7L7 17" />
+            </svg>
+          </button>
         )}
       </div>
 

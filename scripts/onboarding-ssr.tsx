@@ -14,6 +14,7 @@
  * 运行：`node scripts/ui-ask-smoke.js scripts/onboarding-ssr.tsx`
  */
 import { createElement as h } from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
@@ -60,6 +61,11 @@ const NAV_LABELS = new Set(NAV_GROUPS.flatMap((g) => g.items.map((i) => i.label)
 const NAV_HIDDEN = NAV_GROUPS.flatMap((g) => g.items).filter((i) => i.hidden).length
 const NAV_TOTAL = NAV_GROUPS.flatMap((g) => g.items).length
 const NAV_VISIBLE_IN_BODY = NAV_TOTAL - NAV_HIDDEN - 1
+// 本文件会先被打包到仓库根的临时 .mjs 再执行，因此不能用 import.meta.url 推源码目录。
+const API_DOC = readFileSync('docs/API.md', 'utf8')
+const REMOTE_API_TOTAL = Number(
+  /当前共 \*\*(\d+)\*\* 个 Remote 方法/.exec(API_DOC)?.[1] ?? 0,
+)
 
 console.log('启动页 SSR 冒烟')
 
@@ -84,6 +90,11 @@ check('首页 rail 的计数与真源一致（侧栏可见数 / 可路由页签�
   const tabs = /(\d+) 个可路由页签/.exec(home)?.[1]
   ok(tabs === String(NAV_TOTAL),
     `首页写的可路由页签数=${String(tabs)}，nav-config 真源是 ${String(NAV_TOTAL)}`)
+  const remotes = /REMOTE API<\/div><div[^>]*>(\d+)</.exec(home)?.[1]
+    ?? /REMOTE API[\s\S]{0,200}?<b>(\d+)<\/b>/.exec(home)?.[1]
+  ok(REMOTE_API_TOTAL > 100, 'docs/API.md 里找不到 Remote 方法计数')
+  ok(remotes === String(REMOTE_API_TOTAL),
+    `首页 REMOTE API=${String(remotes)}，docs/API.md 真源是 ${String(REMOTE_API_TOTAL)}`)
 })
 
 check('功能引导：分组名与 nav-config 的 NAV_GROUPS 逐组同序', () => {
@@ -113,7 +124,7 @@ check('使用说明：每一步都有「做完应看到」，并且常见问题�
 check('关于：数据位置 / 彻底删除 / 断网使用 / 版本信息都在', () => {
   ok(about.includes('%APPDATA%'), '没写数据位置')
   ok(about.includes('彻底删除'), '没写怎么彻底删')
-  ok(about.includes('没有任何出网开关'), '没写「已无出网开关」这条边界')
+  ok(about.includes('没有全局出网开关'), '没写「没有全局出网开关」这条边界')
   ok(about.includes('30.0.0') && about.includes('124.0.0'), '运行时版本没渲染')
 })
 

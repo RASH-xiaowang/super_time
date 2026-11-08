@@ -112,8 +112,7 @@ const NAMED_OVERLAYS: readonly NamedOverlay[] = [
   { name: 'moments-export', attrIn: 'moments-portals.tsx', focusIn: 'moments-panel.tsx', escIn: 'moments-panel.tsx' },
   { name: 'moments-viewer', attrIn: 'moments-portals.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
   { name: 'moments-detail', attrIn: 'moments-portals.tsx', focusIn: 'moments-panel.tsx', escIn: 'moments-panel.tsx' },
-  // 2026-10-21：ClawBot / 收藏图片也接入共享查看器（属性/焦点/Esc 都在 MediaViewer）。
-  { name: 'clawbot-media', attrIn: 'clawbot-media-viewer.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
+  // 2026-10-21：收藏图片也接入共享查看器（属性/焦点/Esc 都在 MediaViewer）。
   { name: 'favorites-media', attrIn: 'favorites-media.tsx', focusIn: 'MediaViewer.tsx', escIn: 'MediaViewer.tsx', sharedViewer: true },
 ] as const
 

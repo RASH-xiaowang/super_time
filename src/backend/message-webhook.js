@@ -36,6 +36,38 @@ function notFound(res) {
 }
 
 /**
+ * 入站接口只需要让调用方知道落库/投递台账结果，不能回传完整记录。
+ * 记录里的 webhookUrl、replyId 等字段可能包含下游地址或业务标识，必须在此收口。
+ */
+function publicRecordOf(value, record) {
+  const out = { id: record.id };
+  if (typeof record.status === 'string') out.status = record.status;
+  if (typeof record.created === 'boolean') out.created = record.created;
+  else if (typeof value.created === 'boolean') out.created = value.created;
+  if (Number.isSafeInteger(record.attempts) && record.attempts >= 0) out.attempts = record.attempts;
+  return out;
+}
+
+function publicDeliveryError(error) {
+  if (typeof error !== 'string') return error;
+  return error.replace(/\b(https?:\/\/[^\s"'<>]+)/gi, (raw) => {
+    try {
+      const url = new URL(raw);
+      url.username = '';
+      url.password = '';
+      url.search = '';
+      url.hash = '';
+      url.pathname = url.pathname
+        .replace(/(\/webhook\/)[^/]+/i, '$1***')
+        .replace(/(\/api\/message-webhook\/)[^/]+/i, '$1***');
+      return url.toString();
+    } catch {
+      return '[已隐藏地址]';
+    }
+  }).slice(0, 500);
+}
+
+/**
  * @param {object} deps
  * @param {() => string} deps.getApiToken - 每次现取 `secrets.json` 的 api_token。
  * @param {(payload: object) => Promise<unknown>} deps.ingest - 过闸后调用后端。
@@ -125,8 +157,8 @@ function createMessageWebhookHandler(deps, options = {}) {
       ok: true,
       accepted: true,
       delivered: value.ok === true,
-      record,
-      ...(value.ok === true || !value.error ? {} : { deliveryError: value.error }),
+      record: publicRecordOf(value, record),
+      ...(value.ok === true || !value.error ? {} : { deliveryError: publicDeliveryError(value.error) }),
     });
   }
 

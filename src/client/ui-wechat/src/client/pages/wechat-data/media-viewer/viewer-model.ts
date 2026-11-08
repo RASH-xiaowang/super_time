@@ -1,5 +1,5 @@
 /**
- * 资源查看器的纯逻辑（2026-10-21，统一聊天/文件/收藏/ClawBot 的大图预览）。
+ * 资源查看器的纯逻辑（2026-10-21，统一聊天、文件与收藏的大图预览）。
  *
  * 为什么单独成纯函数：这族里最容易写错且**不会报错**的三件事是
  * 「缩放越界变成 0.3 倍」「点最后一张得到 undefined / 跳回第一张」「预取把相邻图全
@@ -10,6 +10,39 @@
 export const DEFAULT_MIN_ZOOM = 0.5
 /** 默认放大上限：再大只会糊。 */
 export const DEFAULT_MAX_ZOOM = 6
+/** 聊天查看器最多持有的图片数：点击位置左右各 40 张。 */
+export const VIEWER_MAX_SOURCES = 81
+/** 底部缩略图条只渲染当前位置左右各 20 张。 */
+export const VIEWER_THUMB_WINDOW_RADIUS = 20
+
+export interface CenteredWindow {
+  /** 窗口在原数组中的起始索引（含）。 */
+  start: number
+  /** 窗口在原数组中的结束索引（不含）。 */
+  end: number
+  /** 原当前索引映射到窗口内的索引。 */
+  index: number
+}
+
+/**
+ * 取当前索引附近、最多 `radius * 2 + 1` 项的连续窗口。
+ *
+ * 图片查看器不能把当前会话所有历史图片都变成 React 源集合；Chromium 的
+ * `loading="lazy"` 只延迟请求，不限制已创建的 `<img>` 和已解码位图。
+ * @param length - 原数组长度。
+ * @param index - 当前索引。
+ * @param radius - 左右各保留多少项。
+ * @returns 窗口边界与映射后的当前索引；空数组返回全 0。
+ */
+export function centeredWindow(length: number, index: number, radius: number): CenteredWindow {
+  const n = Math.max(0, Math.floor(length))
+  if (n === 0) return { start: 0, end: 0, index: 0 }
+  const cur = wrapIndex(n, index, 0)
+  const r = Math.max(0, Math.floor(radius))
+  const size = Math.min(n, r * 2 + 1)
+  const start = Math.min(Math.max(0, cur - r), n - size)
+  return { start, end: start + size, index: cur - start }
+}
 
 /**
  * 把缩放钳进 `[min, max]`。

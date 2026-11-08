@@ -2,15 +2,10 @@
  * Chat calendar: per-day message counts for one month, rewritten from
  * st_control handlers/session/search.rs get_chat_daily_counts.
  */
-import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { withDb } from './db-open.ts'
-
-/** Msg_<md5(username)> table name for a talker. */
-function msgTableName(username: string): string {
-  return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
-}
+import { resolveMessageTable } from './message-identity.ts'
 
 /**
  * Daily message counts for one talker in a month (local time).
@@ -34,11 +29,13 @@ export function getDailyCounts(
   const counts: Record<string, number> = {}
   const msgDir = join(decryptedDir, 'message')
   if (!existsSync(msgDir)) return { counts, year, month }
+  const resolved = resolveMessageTable(decryptedDir, username)
+  if (!resolved) return { counts, year, month }
   const files = readdirSync(msgDir).filter(f =>
     f.endsWith('.db') && f.startsWith('message_')
       && !f.includes('fts') && !f.includes('resource') && !f.includes('media'),
   ).sort()
-  const table = msgTableName(username)
+  const table = resolved.table
   for (const f of files) {
     // 整个「开库 → 存在性检查 → 计数」都必须在 `withDb` 的作用域里：
     // 旧写法把存在性检查写在 try 之外，于是**一个截断/没解密的半写分片**（报

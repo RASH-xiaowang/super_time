@@ -6,8 +6,9 @@
  * 三块统计全是**加法**：错一格不会抛异常，只会让年报上多一个解释不通的数字
  * （「全年转账 47 笔」到底是 45 还是 47，没有任何别的地方能对出来）。所以这里逐条钉住口径：
  *  · 只有 **XML 卡片**才算资金（转账 appmsg 2000 / 红包 2001·2003），纯文本里说「给你转了 50」不算；
- *  · **解析不出就不计入**（`count`/`total` 都不加）—— 但**真的是 0 元**的那笔要计入：
- *    「不知道」与「就是 0」是两件事，混了就等于往合计里塞了一个编出来的数；
+ *  · 转账按 `transferid` 去重；卡面存在但金额读不出时计笔数、标未知，不塞进金额合计；
+ *  · 来账红包只有本机系统消息明确写了「你领取了…」才计收入；我发出的红包只有
+ *    明确的对方领取证据才完成入账，退回不入账；
  *  · 撤回只认 `local_type=10000/10002` 或正文里的 `revokemsg` 标记（复述别人的提示不算）；
  *  · 时段桶用**本地时区**（`new Date(ts*1000).getHours()`，与 `annual-review.ts` 的作息口径同源），
  *    所以夹具用本地分量构造时间戳 —— 断言在任何时区的机器上都一样；
@@ -16,11 +17,10 @@
  *
  * ## 已知缺口（与 `annual-extras.ts` 文件头一一对应，**用下面的用例写成事实，不假装覆盖**）
  *
- *  · 千分位 `￥1,234.56` 只读到 `1`（与 `ledger.ts` 的 `parseAmount` 是同一条正则，逗号截断）；
- *  · 外币（`HK$`/`US$`）只取数字、按人民币元计入（`feedesc` 里没有币种字段）；
- *  · 没有 `<appmsg>` 包裹的裸 `<type>2000</type>` 片段不计入（热路径先挡一道，见 `moneyAmountOf`）；
+ *  · 外币（`HK$`/`US$`）不能被证明为人民币，因此只计事件与未知金额，不进合计；
+ *  · 没有 `<appmsg>` 包裹的裸 `<type>2000</type>` 片段不计入（热路径先挡一道）；
  *  · 聊天记录卡片（`<recorditem>`）里内嵌的转账不计入；
- *  · 群收款 / AA 收款与普通转账同为 appmsg 2000 ⇒ 被**当成转账**计入（`paysubtype` 不参与判据）；
+ *  · 群收款 / AA 收款与普通转账同为 appmsg 2000；字段语义未证实前只当作一次转账卡事件；
  *  · 图片截图里的转账、语音里说的金额、微信支付「收款到账」通知 ⇒ 都不计入。
  * 每一条都有对应用例，且用例注释里写明「这是刻意保留的现状」；要收紧时先改口径再改这里。
  * @vitest-environment node
@@ -59,9 +59,15 @@ function atHour(hour: number, minute = 0): number {
  * @param amount - `feedesc` 的原文（如 `￥1.23`、`100分`；空串表示客户端没下发金额）。
  * @returns 已解码正文。
  */
-function transferXml(amount: string): string {
+function transferXml(
+  amount: string,
+  opts: { transferId?: string; payer?: string; receiver?: string } = {},
+): string {
   return '<msg><appmsg appid="wx123" sdkver="0"><title>微信转账</title><type>2000</type>'
     + '<wcpayinfo><paysubtype>1</paysubtype><feedesc>' + amount + '</feedesc>'
+    + '<transferid>' + (opts.transferId ?? '') + '</transferid>'
+    + '<payer_username>' + (opts.payer ?? '') + '</payer_username>'
+    + '<receiver_username>' + (opts.receiver ?? '') + '</receiver_username>'
     + '<pay_memo>还款</pay_memo></wcpayinfo></appmsg></msg>'
 }
 
@@ -70,9 +76,24 @@ function transferXml(amount: string): string {
  * @param amount - `feedesc` 的原文。
  * @returns 已解码正文。
  */
-function redpacketXml(amount: string): string {
+function redpacketXml(amount: string, sendId = ''): string {
   return '<msg><appmsg><title>恭喜发财</title><type>2001</type>'
-    + '<wcpayinfo><feedesc>' + amount + '</feedesc></wcpayinfo></appmsg></msg>'
+    + '<wcpayinfo><feedesc>' + amount + '</feedesc><paymsgid>' + sendId + '</paymsgid></wcpayinfo></appmsg></msg>'
+}
+
+function redpacketClaimXml(sendId: string): string {
+  return '<img src="SystemMessages_HongbaoIcon.png"/> 你领取了小爱的'
+    + '<wc_custom_link href="weixin://weixinhongbao/opendetail?sendid=' + sendId + '&sign=test">红包</wc_custom_link>'
+}
+
+function redpacketOtherClaimXml(sendId: string): string {
+  return '<img src="SystemMessages_HongbaoIcon.png"/> 老王领取了你的'
+    + '<wc_custom_link href="weixin://weixinhongbao/opendetail?sendid=' + sendId + '">红包</wc_custom_link>'
+}
+
+function redpacketReturnedXml(sendId: string): string {
+  return '<img src="SystemMessages_HongbaoIcon.png"/> 超过24小时未领取，红包已退回'
+    + '<wc_custom_link href="weixin://weixinhongbao/opendetail?sendid=' + sendId + '">查看详情</wc_custom_link>'
 }
 
 /** 撤回提示的 sysmsg 形态（实测第 2 种，`replacemsg` 里带文案）。 */
@@ -88,6 +109,8 @@ interface RowOpts {
   ts?: number
   mine?: boolean
   sender?: string
+  senderUsername?: string
+  serverId?: string
 }
 
 /**
@@ -103,12 +126,17 @@ function rowOf(text: string, opts: RowOpts = {}): AnnualRowInput {
     text,
     sender: opts.sender ?? '对方',
     mine: opts.mine ?? false,
+    ...(opts.senderUsername === undefined ? {} : { senderUsername: opts.senderUsername }),
+    ...(opts.serverId === undefined ? {} : { serverId: opts.serverId }),
   }
 }
 
 /** 一次「喂进去 → 取结果」。 */
-function run(pairs: Array<[AnnualRowInput, AnnualChatInput]>): ReturnType<ReturnType<typeof createAnnualExtras>['done']> {
-  const acc = createAnnualExtras()
+function run(
+  pairs: Array<[AnnualRowInput, AnnualChatInput]>,
+  options: Parameters<typeof createAnnualExtras>[0] = {},
+): ReturnType<ReturnType<typeof createAnnualExtras>['done']> {
+  const acc = createAnnualExtras(options)
   for (const [row, chat] of pairs) acc.onRow(row, chat)
   return acc.done()
 }
@@ -160,8 +188,16 @@ const CASES: Case[] = [
   {
     name: '单聊：我发的转账与对方发的红包都计入（合计 10.11、最大一笔 8.88、TOP1 是小爱）',
     pairs: [
-      [rowOf(transferXml('￥1.23'), { type: 49, ts: atHour(9), mine: true, sender: '我' }), ALICE],
-      [rowOf(redpacketXml('￥8.88'), { type: 49, ts: atHour(10) }), ALICE],
+      [rowOf(
+        transferXml('￥1.23', { transferId: 'tf-single-1', payer: 'wxid_self', receiver: 'wxid_alice' }),
+        { type: 49, ts: atHour(9), mine: true, sender: '我', senderUsername: 'wxid_self' },
+      ), ALICE],
+      [rowOf(redpacketXml('￥8.88', 'rp-single-1'), {
+        type: 49, ts: atHour(10), senderUsername: 'wxid_alice',
+      }), ALICE],
+      [rowOf(redpacketClaimXml('rp-single-1'), {
+        type: 10000, ts: atHour(10) + 5, senderUsername: 'wxid_alice',
+      }), ALICE],
       [rowOf('早', { ts: atHour(11) }), ALICE],
     ],
     money: {
@@ -187,28 +223,29 @@ const CASES: Case[] = [
     revoke: { count: 0 },
   },
   {
-    name: '「真的是 0 元」与「解析不出」是两件事：￥0.00 计 1 笔 0 元，feedesc 空的那笔不计入',
+    name: '「真的是 0 元」与「解析不出」分开：￥0.00 计 1 笔 0 元，空金额计 1 笔未知金额',
     pairs: [
       [rowOf(transferXml('￥0.00'), { type: 49 }), ALICE],
       [rowOf(transferXml(''), { type: 49 }), ALICE],
     ],
     money: {
-      count: 1,
+      count: 2,
       total: 0,
       topAmount: 0,
       topPeerName: '小爱',
       byPeer: [{ username: 'wxid_alice', name: '小爱', amount: 0, count: 1 }],
+      amountUnknownCount: 1,
     },
   },
   {
-    name: '畸形 XML / 非资金卡片都不算钱（链接卡里的 9.9 不是金额）',
+    name: '畸形转账卡只计存在与未知金额，非资金卡片不计数（链接卡里的 9.9 不是金额）',
     pairs: [
       [rowOf('<msg><appmsg><type>2000</type><wcpayinfo><feedesc>￥1.2', { type: 49 }), ALICE],
       [rowOf('<msg><appmsg><type>2000</type></appmsg></msg>', { type: 49 }), ALICE],
       [rowOf('这不是 XML', { type: 1 }), ALICE],
       [rowOf('<msg><appmsg><title>只要 9.9</title><type>5</type><url>https://example.com</url></appmsg></msg>', { type: 49 }), ALICE],
     ],
-    money: { count: 0, total: 0, topAmount: 0, topPeerName: '', byPeer: [] },
+    money: { count: 2, total: 0, topAmount: 0, topPeerName: '', byPeer: [], amountUnknownCount: 2 },
     revoke: { count: 0 },
   },
   {
@@ -223,12 +260,12 @@ const CASES: Case[] = [
     },
   },
   {
-    name: '【已知缺口】千分位 ￥1,234.56 只读到 1（与 ledger 同一条正则，逗号把数字截断了）',
+    name: '千分位 ￥1,234.56 按 1234.56 元解析，不再截断为 1 元',
     pairs: [[rowOf(transferXml('￥1,234.56'), { type: 49 }), ALICE]],
-    money: { count: 1, total: 1, topAmount: 1, topPeerName: '小爱' },
+    money: { count: 1, total: 1234.56, topAmount: 1234.56, topPeerName: '小爱' },
   },
   {
-    name: '【已知缺口】红包没有 feedesc ⇒ 不计入（ledger 会记成 0 元一笔，本模块选择不记）',
+    name: '红包没有金额且没有本机领取证据 ⇒ 不计入金额或领取',
     pairs: [[rowOf(redpacketXml(''), { type: 49 }), ALICE]],
     money: { count: 0, total: 0, topAmount: 0, topPeerName: '', byPeer: [] },
   },
@@ -447,6 +484,83 @@ describe('边界', () => {
   })
 })
 
+describe('真实资金口径：去重、身份与证据', () => {
+  it('同一 transferid 的初始卡与最终卡只计一笔', () => {
+    const xml = transferXml('￥88.00', { transferId: 'tf-dual-1', payer: 'wxid_self', receiver: 'wxid_alice' })
+    const r = run([
+      [rowOf(xml, { type: 49, mine: true, sender: '我', senderUsername: 'wxid_self' }), ALICE],
+      [rowOf(xml, { type: 49, mine: true, sender: '我', senderUsername: 'wxid_self' }), ALICE],
+    ])
+    expect(r.money).toMatchObject({
+      count: 1,
+      total: 88,
+      byPeer: [{ username: 'wxid_alice', name: '小爱', amount: 88, count: 1 }],
+    })
+  })
+
+  it('双方都不是当前账号的第三方转账不计入个人年度资金', () => {
+    const xml = transferXml('￥66.00', {
+      transferId: 'tf-third-party',
+      payer: 'wxid_other_a',
+      receiver: 'wxid_other_b',
+    })
+    const r = run(
+      [[rowOf(xml, { type: 49, senderUsername: 'wxid_other_a' }), ALICE]],
+      { selfUsername: 'wxid_self' },
+    )
+    expect(r.money).toMatchObject({ count: 0, total: 0, thirdPartyTransferCount: 1 })
+  })
+
+  it('群聊红包的往来人取真实发送者，不把群名当成人名', () => {
+    const r = run(
+      [
+        [rowOf(redpacketXml('￥3.00', 'rp-group-1'), {
+          type: 49, senderUsername: 'wxid_member_a',
+        }), ROOM],
+        [rowOf(redpacketClaimXml('rp-group-1'), {
+          type: 10000, senderUsername: 'wxid_member_a',
+        }), ROOM],
+      ],
+      { names: new Map([['wxid_member_a', '成员甲']]) },
+    )
+    expect(r.money.byPeer).toEqual([
+      { username: 'wxid_member_a', name: '成员甲', amount: 3, count: 1 },
+    ])
+  })
+
+  it('无本机领取证据的来账红包只标待核实，不算收入', () => {
+    const r = run([[rowOf(redpacketXml('￥9.99', 'rp-unconfirmed'), { type: 49 }), ALICE]])
+    expect(r.money).toMatchObject({
+      count: 0,
+      total: 0,
+      unconfirmedRedpacketCount: 1,
+    })
+  })
+
+  it('有领取证据但卡面无金额：确认这一笔存在，金额仍为未知', () => {
+    const r = run([
+      [rowOf(redpacketXml('', 'rp-known-claim'), { type: 49 }), ALICE],
+      [rowOf(redpacketClaimXml('rp-known-claim'), { type: 10000 }), ALICE],
+    ])
+    expect(r.money).toMatchObject({ count: 1, total: 0, amountUnknownCount: 1 })
+    expect(r.money.byPeer).toEqual([])
+  })
+
+  it('我发出的红包只有对方领取证据才完成入账；退回则不计支出', () => {
+    const claimed = run([
+      [rowOf(redpacketXml('￥6.00', 'rp-out-claimed'), { type: 49, mine: true, senderUsername: 'wxid_self' }), ALICE],
+      [rowOf(redpacketOtherClaimXml('rp-out-claimed'), { type: 10000 }), ALICE],
+    ])
+    expect(claimed.money).toMatchObject({ count: 1, total: 6 })
+
+    const returned = run([
+      [rowOf(redpacketXml('￥6.00', 'rp-out-returned'), { type: 49, mine: true, senderUsername: 'wxid_self' }), ALICE],
+      [rowOf(redpacketReturnedXml('rp-out-returned'), { type: 10000 }), ALICE],
+    ])
+    expect(returned.money).toMatchObject({ count: 0, total: 0 })
+  })
+})
+
 /* ────────────── 已知缺口：写成事实，不假装覆盖 ────────────── */
 
 describe('已知缺口（当前实现的真实输出，刻意保留）', () => {
@@ -459,10 +573,12 @@ describe('已知缺口（当前实现的真实输出，刻意保留）', () => {
     expect(r.money.total).toBe(0)
   })
 
-  it('外币只取数字、按人民币元计入（feedesc 里没有币种字段）', () => {
+  it('外币不冒充人民币：事件存在，但金额进入未知且不进合计', () => {
     const r = run([[rowOf(transferXml('HK$100'), { type: 49 }), ALICE]])
     expect(r.money.count).toBe(1)
-    expect(r.money.total).toBe(100)
+    expect(r.money.total).toBe(0)
+    expect(r.money.amountUnknownCount).toBe(1)
+    expect(r.money.byPeer).toEqual([])
   })
 
   it('没有 <appmsg> 包裹的裸 <type>2000</type> 片段不计入（热路径先挡一道）', () => {

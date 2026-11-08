@@ -28,11 +28,11 @@
 | 18 | `4318c3e` | chore(perf): 移除误拷贝并被跟踪的 scripts/perf/perf/ 目录 | P（收口清理） | m21 棘轮绿；无代码影响 |
 | 19 | 本轮 | perf(files): 文件面板缩略图批量 RPC（27→2 次，−93%）+ 可视化验证 | Q（文件面板批量） | 8 spec 文件 54 用例绿；typecheck 0；check-generated 一致；真实应用截图：31/31 协议图加载成功、0 破图；decoded +44、缩略图 +22、0 错误 |
 | 20 | 本轮 | refactor(perf): 拆分 remotes/media.ts 与 FilesPanel，修绿两条棘轮并记账 | R（棘轮修复） | 棘轮 9/9 绿；measure:quick 18/21 用例 27.56s |
-| 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实截图 `assets/sidebar-nickname.png` |
+| 21 | 本轮 | feat(ui): 侧栏品牌位显示当前微信昵称（回退 Super Time） | R（用户可见文案） | self-profile 5/5、brand-consistency 6/6；typecheck 0；真实应用验证通过（旧版界面截图已下线） |
 | 22 | 本轮 | perf(files): 缩略图宽度自适应 + 视区外预取（hook 两条 lane、LRU 随列数放大） | S（资源生命周期） | 7 spec 45 用例绿；棘轮绿；measure:quick 18/21 用例 27.37s；真实应用：URL 全为 `?w=240`（原 320）、31 张渲染却新建 51 个缩略图缓存（预取生效）、0 破图 |
 | 23 | 本轮 | chore(launch): 「启动最新版」启动器（按需构建 + 关旧实例 + 启动自检），主区 SuperTime.cmd 转调 | T（启动链路） | 自检 exit 0：产物最新时跳过构建；运行中再启动 → 关闭旧实例 1 个、新主进程 1 个；launch-latest 3 组单测 + 棘轮 16 用例绿；typecheck 0 |
 | 24 | 本轮 | merge: perf/resource-lifecycle-v1 并入主区（WIP 快照 f918145 → merge a8bbb78 → 修复 69be6ee） | U（主区收口） | 26 spec/222 用例绿；measure:quick 21/21 27.4s；typecheck 0；check-generated 一致；真机截图：昵称 + 49 图全载/0 破图、URL `?w=240`；启动器改为主区本地构建 |
-| 25 | 本轮 | feat(ui): 统一资源预览组件 `MediaViewer`（聊天/文件/朋友圈/ClawBot/收藏五处接入） | V（资源预览） | 受影响 7 spec/86 用例绿；measure:quick 21/21 27.5s；棘轮绿；typecheck 0；真机：35 张图、计数器 1/113→2/113 秒开、缩放 125%、Esc 关闭；截图 `assets/viewer-unified.png` |
+| 25 | 本轮 | feat(ui): 统一资源预览组件 `MediaViewer`（聊天/文件/朋友圈等资源视图接入） | V（资源预览） | 受影响 7 spec/86 用例绿；measure:quick 21/21 27.5s；棘轮绿；typecheck 0；真机：35 张图、计数器 1/113→2/113 秒开、缩放 125%、Esc 关闭；截图 `assets/viewer-unified.png` |
 
 ### A · 后端缓存字节预算（详细）
 - 新增 `wechat-data/src/query/cache-budget.ts`：条数 + 总大小 + 单条大小三维上界，LRU 逐出（纯逻辑）。
@@ -161,7 +161,7 @@
   * 灯箱仍走单张原图档（`thumbFirst=false`）。
 - **验证**：
   * IPC 计数（harness `--panels=files`，同一口径）：`getFileImageDataUrl` **27 → 0**、`getFileImageDataUrls` **2**，合计 **2 次（−93%）**；
-  * 真实应用（Playwright 启动 + 截图）：31 张 `wechat-media://decoded/*.t.jpg?w=320` 全部 `naturalWidth>0`、**0 破图**；截图存 `docs/perf/assets/files-panel-thumbnails.png`；
+  * 真实应用（Playwright 启动 + DOM 验证）：31 张 `wechat-media://decoded/*.t.jpg?w=320` 全部 `naturalWidth>0`、**0 破图**；旧版界面截图已下线；
   * 同次运行 decoded_images **+44**、`.w320.jpg` 缩略图 **+22**、样本错误 0；
   * 8 个 spec 54 用例绿；typecheck 0；check-generated 一致。
 
@@ -185,7 +185,7 @@
 - **真实应用验证**（Playwright 启动 + 截图）：
   * 所有协议图片 URL 从 `?w=320` 变为 `?w=240`（当前窗口实测格宽≈205px、DPR=1 ⇒ 240 档）；
   * 可见 `<img>` 仅 **31** 张且 31/31 加载、0 破图，但本次运行新建缩略图缓存 **51** 个 ⇒ 约 20 张是视区外预取（另外滚动过程中加载）；
-  * 截图存 `docs/perf/assets/files-prefetch-adaptive.png`。
+  * 旧版界面截图已下线，实测数字与 DOM 判据保留。
 - **验收**：新增 `files-prefetch.spec.ts`（12 用例）+ 更新 virtual wiring 守卫；相关 7 spec 45 用例绿；两只棘轮绿；typecheck 0；check-generated 一致；measure:quick 27.37s。
 - **回滚**：`git revert` 本提交即可（hook 为新增，`Files.tsx` 回退后仍走原固定 320 逻辑；无后端/接口变更）。
 
@@ -206,20 +206,20 @@
 - **做法（不丢用户 WIP）**：
   1. 先把主区 194 项在途改动（收藏媒体/任务批量/图右键菜单等功能线）做成快照提交 `f918145`；备份分支 `backup/main-release-before-merge`（70c3ca6）；垃圾/重复未跟踪文件（`$null`、`({id`、`420`、旧 `scripts/perf`、`docs/perf` 副本）移到 `D:\super-time-wechat-backup\20261021-172637`；
   2. `git merge perf/resource-lifecycle-v1` → 仅 5 个冲突：`api-core.ts`、`function-size-ratchet.spec.ts` 手工语义合并（两边接口/台账都保留）；3 个生成物（`lib/index.js`、2 个 `.d.ts`）取分支版本后**由源码重建**（`a8bbb78`）；
-  3. 合并后 **M21 单文件 1000 行 / 单函数 250 行**两只棘轮重算：`media.ts` 1005 行 → 拆出 `remotes/media-favorites.ts`、`remotes/media-voice.ts` 后 **967 行**；`createMediaRemotes` 321 → **302 行**；6 个主区在途大文件（ClawBot/askdeep 等）登记白名单并注明为待拆分债务；`computeOverviewInsights` 降到 250 内 ⇒ 移出清单；`FavoritesPanel`（257 行）重新登记（`69be6ee`）；
+  3. 合并后 **M21 单文件 1000 行 / 单函数 250 行**两只棘轮重算：`media.ts` 1005 行 → 拆出 `remotes/media-favorites.ts`、`remotes/media-voice.ts` 后 **967 行**；`createMediaRemotes` 321 → **302 行**；6 个主区在途大文件（`askdeep` 等）登记白名单并注明为待拆分债务；`computeOverviewInsights` 降到 250 内 ⇒ 移出清单；`FavoritesPanel`（257 行）重新登记（`69be6ee`）；
   4. 修掉一条**陈旧接线守卫**：`Files.tsx` 改用 `useFileThumbnails` 后，`file-image-on-demand.spec.ts` 仍断言旧的 `fetchFileThumbUrls` 字样 ⇒ 改为「面板走 hook + hook 里走批量」。
 - **启动器收口**：主区 `SuperTime.cmd` 改为调用**主区本地** `Latest.cmd`（不再依赖 `.worktrees`）；桌面「Super Time」快捷方式目标不变，因此直接生效。
-- **验证**：`typecheck` 0；`check-generated --all` 一致；`measure:quick` 18/21 用例 27.4s；本次合并触及的 26 个 spec / **222 用例全绿**（含收藏/KB/ClawBot 主区新功能与性能分支用例）；真机启动截图：侧栏昵称 `SuperT_王国宁`、文件面板 49 张图全载/0 破图、URL 全为 `?w=240`。
+- **验证**：`typecheck` 0；`check-generated --all` 一致；`measure:quick` 18/21 用例 27.4s；本次合并触及的 26 个 spec / **222 用例全绿**（含收藏、知识库与性能分支用例）；真机启动截图：侧栏昵称 `SuperT_王国宁`、文件面板 49 张图全载/0 破图、URL 全为 `?w=240`。
 - **回滚**：`git reset --hard backup/main-release-before-merge` 可整体回到合并前；单点回滚用 `git revert a8bbb78`（合并）或 `git revert 69be6ee`（棘轮/拆分修复）；备份目录保留原始未跟踪文件。
 
 ### V · 统一资源预览组件：五处收成一个 `MediaViewer`（2026-10-21）
-- **盘点（改造前各写一套）**：聊天图片查看器（`chats-media.tsx` 自绘白底工具条 + 居中「加载中…」）、文件面板灯箱（`Files.tsx` 卡片式 + 底部缩放）、朋友圈灯箱（`moments-portals.tsx` 自带旋转/保存/缩略图）、ClawBot 图片（通用 Dialog 里的裸 `<img>`）、收藏详情图片（只内嵌、不可放大）。
+- **盘点（改造前各写一套）**：聊天图片查看器（`chats-media.tsx` 自绘白底工具条 + 居中「加载中…」）、文件面板灯箱（`Files.tsx` 卡片式 + 底部缩放）、朋友圈灯箱（`moments-portals.tsx` 自带旋转/保存/缩略图）、收藏详情图片（只内嵌、不可放大）。
 - **统一实现**（`pages/wechat-data/media-viewer/`）：
   * `MediaViewer.tsx`：深色玻璃全屏壳；顶部「标题/元信息 + 计数器 + 下载 + 关闭」，底部浮动词条（− 百分比 +、适应窗口、扩展位）；左右切图、缩略图条（可选）、加载骨架/错误重试/淡入；键盘 ← → + − 0 Esc、滚轮、双击、拖拽、双指缩放；
   * **效率**：当前图按需 `load()`，同时预取左右相邻各一张；缓存 hook（`use-viewer-cache.ts`）只留最近 4 张；原图未到时先铺缩略图（blur 占位）→ 到位淡入，文件面板直接用网格 `?w=` 缩略图铺底；
   * `viewer-model.ts`：缩放钳位/步长、循环翻页、相邻预取、计数/百分比文案拆成纯函数并单测；
   * 无障碍：焦点陷阱 + Esc 入栈统一在共享壳内（`dialog-a11y.wiring.spec.ts` 改为「适配器传字面量名字 + 共享壳渲染属性/钩子」的双向判据）。
-- **接入**：聊天（`chats-media.tsx ImageViewer` 变 30 行包装，命中内存缓存直接返回）、文件（`Files.tsx` 灯箱整段替换，`FilesPanel` 336→**282 行**）、朋友圈（保留复制/保存/旋转/缩略图，缩放拖拽交给共享壳，`MomentsPanel` 322→**312 行**）、ClawBot（抽出 `clawbot-media-viewer.tsx`，单函数回到 250 以内）、收藏图片（点开即可全屏）。
+- **接入**：聊天（`chats-media.tsx ImageViewer` 变 30 行包装，命中内存缓存直接返回）、文件（`Files.tsx` 灯箱整段替换，`FilesPanel` 336→**282 行**）、朋友圈（保留复制/保存/旋转/缩略图，缩放拖拽交给共享壳，`MomentsPanel` 322→**312 行**）、收藏图片（点开即可全屏）。
 - **真机验收**（Playwright，文件面板）：35 个图片格 → 打开计数 `1 / 113`、图片已加载、下载/关闭/左右按钮齐；`→` 翻到 `2 / 113` 且**无加载态**（相邻预取生效）；点「+」到 `125%`；`Esc` 后覆盖层消失。截图存 `docs/perf/assets/viewer-unified.png`。
 - **验收门禁**：`npm run test:affected` 7 spec / **86 用例全绿**；`measure:quick` 18/21 用例 27.5s；两只棘轮绿（FilesPanel/MomentsPanel 缩小已记账）；`typecheck` 0；`check-generated --all` 一致。
 - **回滚**：`git revert 本提交`（新组件为新增文件；五处调用点各自可单独回退）。

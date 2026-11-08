@@ -6,6 +6,8 @@ export type * from './types.ts';
 export { WechatDataGateway } from './gateway.ts';
 export { fetchWithRetry } from './net/fetch-retry.ts';
 export { configureSqliteCachePolicy } from './query/db-open.ts';
+/** 打包态冒烟用的确定性密钥流入口；不接收外部路径，资产定位仍由内置逻辑决定。 */
+export { wxIsaac64Keystream } from './query/sns-keystream.ts';
 /**
  * 原图自动下载（实验）的后端启动钩子：宿主在 `createWechatBackend` 建好 gateway 后调用，
  * 上次开关是打开的就在后台恢复注入；宿主 dispose 时调用返回的 `stop()` 还原微信进程。

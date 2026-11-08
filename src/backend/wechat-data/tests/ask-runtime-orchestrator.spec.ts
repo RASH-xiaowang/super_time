@@ -7,11 +7,12 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { AskModelTurn, RunChatFn, RunChatTurnFn } from '../src/remotes/ask-run-chat.ts'
 import type { RetrievalTool, ToolContext, ToolName, ToolResult } from '../src/query/tools/index.ts'
 import type { AnswerRuntimeStage } from '../src/query/answer-runtime/types.ts'
 import { askWithRuntime, type AskRuntimeDeps } from '../src/remotes/ask-runtime.ts'
+import { createAskReasoningCollector } from '../src/remotes/ask-runtime-reasoning.ts'
 
 const NOW = new Date('2026-10-22T10:00:00')
 
@@ -72,7 +73,7 @@ function deps(overrides: Partial<AskRuntimeDeps> = {}): AskRuntimeDeps {
 }
 
 describe('askWithRuntime：profile 与工具边界', () => {
-  it('三个入口选择正确 profile，且只把白名单工具交给模型', async () => {
+  it('两个入口选择正确 profile，且只把白名单工具交给模型', async () => {
     const toolNames: ToolName[] = [
       'search_messages',
       'search_semantic',
@@ -97,13 +98,6 @@ describe('askWithRuntime：profile 与工具边界', () => {
       source: 'session',
       username: 'wxid_locked',
     })
-    await askWithRuntime(deps({ tools, runTurn }), {
-      question: '合同尾款',
-      source: 'auto',
-      dataScope: 'kb-only',
-      kbId: 7,
-    })
-
     expect(schemas[0]).toEqual(expect.arrayContaining(['search_messages', 'search_files', 'search_kb']))
     expect(schemas[1]?.sort()).toEqual([
       'aggregate_messages',
@@ -115,7 +109,54 @@ describe('askWithRuntime：profile 与工具边界', () => {
     ].sort())
     expect(schemas[1]).not.toContain('search_kb')
     expect(schemas[1]).not.toContain('search_files')
-    expect(schemas[2]).toEqual(['search_kb'])
+  })
+
+  it('会话内问答的工具预算由 profile 硬性收紧', async () => {
+    let round = 0
+    let executed = 0
+    const run = vi.fn(() => {
+      executed += 1
+      return {
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: `wxid_locked:${String(executed)}`,
+          name: '当前会话',
+          time: '2026-10-20 10:00',
+          snippet: '合同信息',
+          source: 'msg' as const,
+        }],
+      }
+    })
+    const runTurn = vi.fn(async () => {
+      round += 1
+      return turn({
+        calls: Array.from({ length: 5 }, (_, i) => ({
+          id: `call_budget_${String(round)}_${String(i)}`,
+          name: 'search_messages',
+          args: { keywords: [`合同-${String(round)}-${String(i)}`] },
+        })),
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', run)],
+      runTurn,
+      maxRounds: 99,
+      maxCallsPerRound: 99,
+      synthesize: async () => '合同信息 [1]',
+      intentClassifier: async () => null,
+    }), {
+      question: '当前会话里有哪些合同信息？',
+      source: 'session',
+      username: 'wxid_locked',
+    })
+
+    expect(runTurn).toHaveBeenCalledTimes(2)
+    expect(run).toHaveBeenCalledTimes(6)
+    expect(out.toolCalls?.filter(trace => !trace.skipped)).toHaveLength(6)
+    expect(out.toolCalls?.filter(trace => trace.skipped)).toHaveLength(4)
+    expect(out.toolCalls?.every(trace => trace.round <= 2)).toBe(true)
   })
 
   it('会话内问答缺少 username 时直接 blocked，不调用模型', async () => {
@@ -147,6 +188,70 @@ describe('askWithRuntime：profile 与工具边界', () => {
       errorCode: 'scope_violation',
     })
     expect(out.status).toBe('blocked')
+  })
+
+  it('问题里引号点名已知会话时直接锁定 username，并默认取最新消息', async () => {
+    const run = vi.fn((args: Record<string, unknown>) => {
+      expect(args).toMatchObject({
+        username: '123@chatroom',
+        order: 'desc',
+      })
+      return {
+        tool: 'get_session_messages' as const,
+        ok: true,
+        hits: [{
+          key: '123@chatroom:8',
+          name: '项目群',
+          time: '2026-10-21 18:00',
+          snippet: '最新一条是接口已经恢复。',
+          source: 'msg' as const,
+        }],
+      }
+    })
+    const sessionTool: RetrievalTool = {
+      name: 'get_session_messages',
+      category: 'message',
+      description: 'get_session_messages 测试替身（说明长度足够）',
+      parameters: {
+        type: 'object',
+        properties: {
+          username: { type: 'string' },
+          limit: { type: 'number' },
+          order: { type: 'string', enum: ['asc', 'desc'] },
+        },
+        required: ['username'],
+      },
+      run,
+    }
+    let firstSchema: Record<string, unknown> | undefined
+    let firstToolNames: string[] = []
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (!hasToolResult(input)) {
+        firstToolNames = (input.tools ?? []).map(tool => tool.name)
+        firstSchema = input.tools?.find(tool => tool.name === 'get_session_messages')?.parameters
+        expect(input.system).toContain('会话范围已锁定')
+        return turn({
+          calls: [{ id: 'call_latest', name: 'get_session_messages', args: {} }],
+        })
+      }
+      return turn({ text: '已拿到最新消息。' })
+    }) as unknown as RunChatTurnFn
+
+    const out = await askWithRuntime(deps({
+      tools: [sessionTool, fakeTool('aggregate_messages')],
+      runTurn,
+      knownSessionCatalog: [{ username: '123@chatroom', name: '项目群' }],
+      synthesize: async () => '接口已经恢复 [1]。',
+    }), {
+      question: '最近「项目群」里聊了些什么？',
+      source: 'ask',
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(runTurn).toHaveBeenCalledTimes(1)
+    expect(firstSchema?.['required']).toEqual([])
+    expect(firstToolNames).not.toContain('aggregate_messages')
+    expect(out.status).not.toBe('failed')
   })
 })
 
@@ -228,6 +333,205 @@ describe('askWithRuntime：过程快照与真实耗时', () => {
     expect(out.durationMs).toBeGreaterThanOrEqual(0)
   })
 
+  it('按工具轮次保留思考分段，并给实时事件带上同一轮次', async () => {
+    const emittedReasoning: Array<{ text: string; round?: number; version?: number; seq?: number }> = []
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) {
+        input.onReasoning?.('第二轮：先核对检索结果。')
+        return turn({ text: '尾款下周一付。' })
+      }
+      input.onReasoning?.('第一轮：先确定时间范围。')
+      return turn({
+        calls: [{ id: 'call_reasoning', name: 'search_messages', args: { keywords: ['尾款'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages',
+        ok: true,
+        hits: [{
+          key: 'wxid_a:32',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '尾款下周一付',
+          source: 'msg',
+        }],
+      }))],
+      runTurn,
+      runChat: undefined,
+      synthesize: async () => '尾款下周一付 [1]',
+      emitReasoning: (text, meta) => {
+        emittedReasoning.push({
+          text,
+          ...(meta?.round === undefined ? {} : { round: meta.round }),
+          ...(meta?.version === undefined ? {} : { version: meta.version }),
+          ...(meta?.seq === undefined ? {} : { seq: meta.seq }),
+        })
+      },
+    }), { question: '尾款什么时候付？', source: 'ask' })
+
+    expect(out.reasoningSegments).toEqual([
+      expect.objectContaining({
+        key: 'reasoning:tool:1',
+        round: 1,
+        phase: 'tool_selection',
+        text: '第一轮：先确定时间范围。',
+        version: 1,
+        seq: 1,
+      }),
+      expect.objectContaining({
+        key: 'reasoning:tool:2',
+        round: 2,
+        phase: 'tool_selection',
+        text: '第二轮：先核对检索结果。',
+        version: 1,
+        seq: 2,
+      }),
+    ])
+    expect(emittedReasoning).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        round: 1,
+        text: '第一轮：先确定时间范围。',
+        version: 1,
+        seq: 1,
+      }),
+      expect.objectContaining({
+        round: 2,
+        text: '第二轮：先核对检索结果。',
+        version: 1,
+        seq: 2,
+      }),
+    ]))
+    expect(out.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        callId: 'call_reasoning',
+        round: 1,
+        toolName: 'search_messages',
+      }),
+    ]))
+  })
+
+  it('空白思考只忽略，不创建空分段', () => {
+    const collector = createAskReasoningCollector()
+    collector.onReasoning('   ', {
+      phase: 'tool_selection',
+      mode: 'delta',
+      round: 1,
+    })
+    expect(collector.snapshot()).toEqual([])
+
+    collector.onReasoning('有效思考', {
+      phase: 'tool_selection',
+      mode: 'delta',
+      round: 1,
+    })
+    expect(collector.snapshot()).toEqual([
+      expect.objectContaining({
+        key: 'reasoning:tool:1',
+        round: 1,
+        text: '有效思考',
+        seq: 1,
+      }),
+    ])
+  })
+
+  it('带图综合生成被用户停止时不重试纯文本，并把取消信号传到底层', async () => {
+    const controller = new AbortController()
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{ id: 'call_cancel_image', name: 'search_messages', args: { keywords: ['合同'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+    const runChat = vi.fn(async (
+      _system: string,
+      _text: string,
+      _maxTokens: number,
+      _onDelta?: (text: string) => void,
+      _onReasoning?: (text: string) => void,
+      _images?: readonly unknown[],
+      signal?: AbortSignal,
+    ) => {
+      expect(signal).toBe(controller.signal)
+      throw Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' })
+    }) as unknown as RunChatFn
+    const op = vi.fn()
+
+    await expect(askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:33',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '合同原文已确认。',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      runChat,
+      prepareImages: () => ({
+        blocks: [{
+          type: 'image',
+          data: 'aGVsbG8=',
+          mediaType: 'image/png',
+        } as unknown as ImageBlock],
+        note: '',
+        audit: '',
+      }),
+      cancelSignal: controller.signal,
+      op,
+    }), {
+      question: '合同图片里写了什么？',
+      source: 'ask',
+      images: [{ data: 'aGVsbG8=', mediaType: 'image/png' }],
+    })).rejects.toMatchObject({ code: 'ASK_CANCELED' })
+
+    expect(runChat).toHaveBeenCalledTimes(1)
+    expect(op).not.toHaveBeenCalledWith(
+      'task',
+      'ask_wechat',
+      'fail',
+      'image_send',
+      expect.any(String),
+    )
+  })
+
+  it('失败工具阶段只记录稳定分类，不把脱敏错误正文写进可落库轨迹', async () => {
+    const stages: AnswerRuntimeStage[] = []
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索失败。' })
+      return turn({
+        calls: [{ id: 'call_error_detail', name: 'search_messages', args: { keywords: ['合同'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+    const sensitiveError = '上游返回：token=secret-token，查询正文=合同全文'
+
+    await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: false,
+        error: sensitiveError,
+        errorCode: 'upstream_failure' as const,
+        hits: [],
+      }))],
+      runTurn,
+      runChat: async () => '这次没有查到。',
+      emitStage: stage => { stages.push(stage) },
+      op: () => undefined,
+    }), { question: '合同在哪里？', source: 'ask' })
+
+    const failed = stages.find(stage => stage.callId === 'call_error_detail' && stage.status === 'failed')
+    expect(failed).toMatchObject({
+      errorClass: 'internal',
+      detail: '工具调用失败（internal）',
+    })
+    expect(failed?.detail).not.toContain('secret-token')
+    expect(failed?.detail).not.toContain('合同全文')
+  })
+
   it('真实综合链路把核对结果的 running/done 同时写入快照与外部事件', async () => {
     const emitted: AnswerRuntimeStage[] = []
     const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
@@ -262,6 +566,118 @@ describe('askWithRuntime：过程快照与真实耗时', () => {
     ])
     expect(emitted.filter(stage => stage.key === 'answer:verify')).toEqual(verifyStages)
     expect(out.stages).toEqual(emitted)
+  })
+
+  it('核对修复超时时立即结束，并保留已流出的首版回答', async () => {
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{ id: 'call_verify_timeout', name: 'search_messages', args: { keywords: ['合同'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+    let calls = 0
+    let repairSignal: AbortSignal | undefined
+    const runChat: RunChatFn = async (...args) => {
+      calls += 1
+      if (calls === 1) return '合同金额是 5000.00 元 [1]'
+      repairSignal = args[6]
+      if (repairSignal === undefined) throw new Error('核对调用缺少取消信号')
+      return new Promise<string>((_resolve, reject) => {
+        if (repairSignal?.aborted === true) {
+          reject(repairSignal.reason)
+          return
+        }
+        repairSignal?.addEventListener('abort', () => reject(repairSignal?.reason), { once: true })
+      })
+    }
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:43',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '合同金额是 3000 元',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      runChat,
+      answerVerifyDeadlineMs: 50,
+      intentClassifier: async () => null,
+    }), { question: '合同金额是多少？', source: 'ask' })
+
+    expect(calls).toBe(2)
+    expect(out.answer).toBe('合同金额是 5000.00 元 [1]')
+    expect(out.status).toBe('ok')
+    expect(repairSignal?.aborted).toBe(true)
+    expect(out.stages?.filter(stage => stage.key === 'answer:verify')).toEqual([
+      { key: 'answer:verify', label: '核对结果', status: 'running' },
+      {
+        key: 'answer:verify',
+        label: '核对结果',
+        status: 'done',
+        detail: '核对超时，已保留首版回答',
+      },
+    ])
+  })
+
+  it('核对期间用户主动停止时立即传播取消，而不是等待核对 deadline', async () => {
+    const cancel = new AbortController()
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{ id: 'call_verify_cancel', name: 'search_messages', args: { keywords: ['合同'] } }],
+      })
+    }) as unknown as RunChatTurnFn
+    let calls = 0
+    let repairStarted!: () => void
+    const repairReady = new Promise<void>((resolve) => { repairStarted = resolve })
+    const runChat: RunChatFn = async (...args) => {
+      calls += 1
+      if (calls === 1) return '合同金额是 5000.00 元 [1]'
+      const signal = args[6]
+      repairStarted()
+      return new Promise<string>((_resolve, reject) => {
+        if (signal === undefined) {
+          reject(new Error('核对调用缺少取消信号'))
+          return
+        }
+        signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' }))
+        }, { once: true })
+      })
+    }
+    const asking = askWithRuntime(deps({
+      tools: [fakeTool('search_messages', () => ({
+        tool: 'search_messages' as const,
+        ok: true,
+        hits: [{
+          key: 'wxid_a:44',
+          name: '项目群',
+          time: '2026-10-20 10:00',
+          snippet: '合同金额是 3000 元',
+          source: 'msg' as const,
+        }],
+      }))],
+      runTurn,
+      runChat,
+      answerVerifyDeadlineMs: 5_000,
+      cancelSignal: cancel.signal,
+      throwIfCanceled: () => {
+        if (cancel.signal.aborted) {
+          throw Object.assign(new Error('已停止生成'), { code: 'ASK_CANCELED' })
+        }
+      },
+      intentClassifier: async () => null,
+    }), { question: '合同金额是多少？', source: 'ask' })
+
+    await repairReady
+    cancel.abort()
+    await expect(asking).rejects.toMatchObject({ code: 'ASK_CANCELED' })
+    expect(calls).toBe(2)
   })
 
   it('核对阶段异常时写入 failed，并继续保留在快照与外部事件中', async () => {
@@ -445,6 +861,57 @@ describe('askWithRuntime：多轮线程状态进入检索范围', () => {
 })
 
 describe('askWithRuntime：澄清与失败', () => {
+  it('单聊代词在意图分类器失败时仍解析为当前联系人并继续检索', async () => {
+    const systems: string[] = []
+    const run = vi.fn(() => ({
+      tool: 'search_messages' as const,
+      ok: true,
+      hits: [{
+        key: 'wxid_emin:1',
+        name: 'e敏',
+        time: '2026-10-20 10:00',
+        snippet: '已向 e敏 转账 520.00 元',
+        source: 'msg' as const,
+      }],
+    }))
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      systems.push(input.system)
+      if (hasToolResult(input)) return turn({ text: '检索完成。' })
+      return turn({
+        calls: [{
+          id: 'call_private_pronoun',
+          name: 'search_messages',
+          args: { keywords: ['转账'] },
+        }],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await askWithRuntime(deps({
+      tools: [fakeTool('search_messages', run)],
+      runTurn,
+      runChat: undefined,
+      synthesize: async () => '已向 e敏 转账 520.00 元 [1]',
+      intentClassifier: async () => {
+        throw new Error('LLM 超时')
+      },
+      intentClassifierDeadlineMs: 1,
+    }), {
+      question: '我给她转了多少钱？',
+      source: 'session',
+      username: 'wxid_emin',
+      usernameName: 'e敏',
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(out.status).not.toBe('needs_clarification')
+    expect(out.plan?.person).toBe('e敏')
+    expect(out.appliedThreadState?.contact).toBe('e敏')
+    expect(out.threadState?.activeContact).toBe('e敏')
+    expect(out.toolCalls?.length).toBeGreaterThan(0)
+    expect(out.answer).toContain('520')
+    expect(systems[0]).toContain('e敏')
+  })
+
   it('需要澄清时不执行工具，回答是一句人话追问', async () => {
     const runTurn = vi.fn() as unknown as RunChatTurnFn
     const out = await askWithRuntime(deps({
@@ -683,29 +1150,6 @@ describe('askWithRuntime：引用、兜底与证据保留', () => {
       },
     })
     expect(out.citedIndexes).toEqual([1])
-  })
-
-  it('kb-only 无证据时走聊天兜底，状态仍为 insufficient 且不保留角标', async () => {
-    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
-      if (hasToolResult(input)) return turn({ text: '知识库没有命中。' })
-      return turn({ calls: [{ id: 'call_kb', name: 'search_kb', args: { query: '在吗' } }] })
-    }) as unknown as RunChatTurnFn
-    const out = await askWithRuntime(deps({
-      tools: [fakeTool('search_kb', () => ({ tool: 'search_kb', ok: true, hits: [] }))],
-      runTurn,
-      runChat: async () => '在的 [1]',
-    }), {
-      question: '在吗？',
-      source: 'auto',
-      dataScope: 'kb-only',
-      kbId: 7,
-    })
-
-    expect(out.status).toBe('insufficient')
-    expect(out.insufficient).toBe(true)
-    expect(out.citations).toEqual([])
-    expect(out.answer).toContain('在的')
-    expect(out.answer).not.toContain('[1]')
   })
 
   it('综合生成抛错时降级，但保留引用与证据', async () => {

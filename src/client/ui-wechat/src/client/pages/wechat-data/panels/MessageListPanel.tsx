@@ -15,7 +15,8 @@ import { MessageListWebhookCard } from './message-list-webhook-card.tsx'
 import { RecordFormDialog, RuleFormDialog } from './message-list-dialogs.tsx'
 import { useMessageListActions } from './use-message-list-actions.ts'
 import { useMessageListData } from './use-message-list-data.ts'
-import type { MessageListView } from './message-list-view.ts'
+import { findExactRuleForRecord, type MessageListView } from './message-list-view.ts'
+import type { MessageListRecord } from '@deepseek-ai/dsh-wechat-data/types'
 import css from './message-list.module.css'
 
 export function MessageListPanel(): React.JSX.Element {
@@ -28,7 +29,12 @@ export function MessageListPanel(): React.JSX.Element {
     refreshWebhookInfo: data.refreshWebhookInfo,
   })
 
+  const refreshing = data.loadingRecords || data.loadingRules
   const refresh = (): void => { void data.refreshAll() }
+  const configureRecordRule = (record: MessageListRecord): void => {
+    setView('rules')
+    actions.openRuleFormForRecord(record, findExactRuleForRecord(data.rules, record))
+  }
   const noticeClass = actions.notice === null
     ? ''
     : actions.notice.kind === 'ok'
@@ -44,11 +50,14 @@ export function MessageListPanel(): React.JSX.Element {
         desc="任务首次触发、局域网 Webhook 与手动回复的统一投递台账"
         actions={(
           <div className={css.headActions}>
-            <Button size="sm" variant="outline" onClick={refresh}>刷新</Button>
+            <Button size="sm" variant="outline" onClick={refresh} disabled={refreshing}>
+              {refreshing ? '刷新中…' : '刷新'}
+            </Button>
             <Button
               size="sm"
               variant="primary"
               disabled={!canWrite || view !== 'records'}
+              title={view !== 'records' ? '切回「消息记录」后可手动新增' : undefined}
               onClick={actions.openRecordForm}
               {...desktopActionProps()}
             >
@@ -75,8 +84,10 @@ export function MessageListPanel(): React.JSX.Element {
 
       {actions.notice && (
         <div
-          className={clsx(css.notice, noticeClass)}
+          className={clsx(css.noticeToast, noticeClass)}
           role={actions.notice.kind === 'err' ? 'alert' : 'status'}
+          aria-live={actions.notice.kind === 'err' ? 'assertive' : 'polite'}
+          aria-atomic="true"
         >
           {actions.notice.text}
         </div>
@@ -94,12 +105,28 @@ export function MessageListPanel(): React.JSX.Element {
           source={data.source}
           thumbs={data.thumbs}
           canWrite={canWrite}
+          hasMore={data.hasMore}
+          loadingMore={data.loadingMore}
+          loadMoreError={data.loadMoreError}
+          windowCapped={data.windowCapped}
+          truncated={data.truncated}
           resendingId={actions.resendingId}
+          batchBusy={actions.batchBusy}
+          probeBusyId={actions.probeBusyId}
+          jobBusyId={actions.jobBusyId}
           onSearchChange={data.setSearch}
           onStatusChange={data.setStatus}
           onSourceChange={data.setSource}
           onRefresh={refresh}
+          onLoadMore={data.loadMore}
           onResend={(record) => { void actions.resend(record) }}
+          onBatchResend={actions.batchResend}
+          onBatchProbe={actions.batchProbe}
+          onBatchDelete={actions.batchDelete}
+          onProbe={(record) => { void actions.probeRecord(record) }}
+          onQueryJob={(record) => { void actions.queryJob(record) }}
+          onConfigureRule={() => { setView('rules') }}
+          onConfigureRecordRule={configureRecordRule}
         />
       ) : (
         <MessageListRules
@@ -130,6 +157,8 @@ export function MessageListPanel(): React.JSX.Element {
         form={actions.recordForm}
         saving={actions.saving}
         onChange={actions.setRecordForm}
+        onChooseAttachments={() => { void actions.chooseAttachments() }}
+        onRemoveAttachment={actions.removeStagedAttachment}
         onClose={() => { actions.setRecordForm(null) }}
         onSubmit={() => { void actions.submitRecord() }}
       />

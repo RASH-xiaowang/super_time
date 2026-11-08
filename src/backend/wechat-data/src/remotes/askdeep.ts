@@ -3,7 +3,8 @@
  *
  * 2026-10-22 起，`askWechat` 不再自己维护「LLM 规划器 + 固定检索 + 综合生成」
  * 三段式实现，而是统一交给 `askWithRuntime()`：
- *   · `wechat-ask` / `session-ask` / `clawbot-auto` 共用同一套工具循环；
+ *   · `wechat-ask` / `session-ask`
+ *     共用同一套工具循环；
  *   · 工具选择、参数修复、范围守卫、重试与证据收敛都在运行时内完成；
  *   · 本文件只保留宿主接线：取消、流式事件、图片、索引新鲜度与历史落库。
  *
@@ -36,7 +37,10 @@ import { askWithRuntime } from './ask-runtime.ts'
 import type { AskRuntimeResult } from './ask-runtime.ts'
 import { addTokenUsage, describeAskScope } from './ask-runtime-prompt.ts'
 import type { ThreadState } from '../query/answer-runtime/thread-state.ts'
-import type { AnswerRuntimeStage } from '../query/answer-runtime/types.ts'
+import type {
+  AnswerReasoningEmitter,
+  AnswerRuntimeStage,
+} from '../query/answer-runtime/types.ts'
 import {
   createAskRunChat,
   createAskRunChatTurn,
@@ -66,7 +70,7 @@ export interface createAskDeepRemotesInputs {
   makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined
   makeDeltaEmitter: (streamId?: string) => ((text: string) => void) | undefined
   /** 思考过程发射器：与可见正文分开推，界面单独折叠展示。 */
-  makeReasoningEmitter: (streamId?: string) => ((text: string) => void) | undefined
+  makeReasoningEmitter: (streamId?: string) => AnswerReasoningEmitter | undefined
   /** 阶段事件发射器：把意图 / 工具 / 综合生成的进度推给界面。 */
   makeStageEmitter: (streamId?: string) => ((stage: AnswerRuntimeStage) => void) | undefined
   kbModel: (kbId: number, role: KbModelRole) => ResolvedModel
@@ -228,6 +232,18 @@ function askOpDetail(result: AskRuntimeResult): string {
   ].join(' · ')
 }
 
+async function withReasoningEmitter<T>(
+  emitter: AnswerReasoningEmitter | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run()
+  } finally {
+    try { emitter?.flush() } catch { /* 思考事件尽力而为 */ }
+    try { emitter?.dispose() } catch { /* 思考事件尽力而为 */ }
+  }
+}
+
 export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
   return {
     async askWechat(options: {
@@ -238,26 +254,27 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
       /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
       streamId?: string
-      /** 入口来源：`ask` = 微信问答页签，`session` = 会话内问答，`auto` = ClawBot。 */
+      /** 入口来源：`ask` = 微信问答页签，`session` = 会话内问答。 */
       source?: string
       /** 会话显示名：历史列表直接显示。 */
       usernameName?: string
       /** 当前知识库 id；缺省不检索知识库。 */
       kbId?: number
       jobId?: string
-      /** 数据面：`wechat`（缺省）或 `kb-only`（ClawBot 自动回复）。 */
-      dataScope?: 'wechat' | 'kb-only'
       /** 随问题一起送模型的图片（canonical base64，最多 2 张）。 */
       images?: AskImageInput[]
       /** 系统提示词覆盖；检索材料与「不编造」规则仍由运行时追加。 */
       systemPromptOverride?: string
       /** 上一轮问答返回的结构化线程状态；跨请求继承会话/联系人与时间窗。 */
       threadState?: ThreadState
+      /** 调用方取消时中止底层模型请求。 */
+      signal?: AbortSignal
     }): Promise<AskResult> {
-      const askCtl = beginAskCancel(rc, options.jobId)
+      const askCtl = beginAskCancel(rc, options.jobId, options.signal)
+      const reasoningEmitter = rc.makeReasoningEmitter(options.streamId)
       let usageAcc: TokenUsage | undefined
       let trace: { retrievalId: string; rankedFeatures: Array<{ docKey: string; features: RerankWeights }> } | undefined
-      const result = await askCtl.run(async (): Promise<AskRuntimeResult> => {
+      const result = await withReasoningEmitter(reasoningEmitter, () => askCtl.run(async (): Promise<AskRuntimeResult> => {
         const startedAt = Date.now()
         const ctx = rc.ctx()
         const defaultModel = (ctx as unknown as {
@@ -271,7 +288,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           throw new Error('未配置默认模型（agentDefaultModel），无法调用 AI 问答')
         }
         const modelLabel = `${selected.provider} · ${selected.model}`
-        const indexNote = options.dataScope === 'kb-only' ? '' : await prepareAskIndex(rc)
+        const indexNote = await prepareAskIndex(rc)
         askCtl.throwIfCanceled()
 
         const runtime = await askWithRuntime({
@@ -325,7 +342,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           ...(askCtl.signal ? { cancelSignal: askCtl.signal } : {}),
           modelDeadlineMs: 120_000,
           emitDelta: rc.makeDeltaEmitter(options.streamId),
-          emitReasoning: rc.makeReasoningEmitter(options.streamId),
+          emitReasoning: reasoningEmitter,
           emitStage: rc.makeStageEmitter(options.streamId),
           op: (category, action, status, target, detail) => rc.op(category, action, status, target, detail),
         }, {
@@ -337,7 +354,6 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           ...(options.source !== undefined ? { source: options.source } : {}),
           ...(options.usernameName !== undefined ? { usernameName: options.usernameName } : {}),
           ...(options.kbId !== undefined ? { kbId: options.kbId } : {}),
-          ...(options.dataScope !== undefined ? { dataScope: options.dataScope } : {}),
           ...(options.images ? { images: options.images } : {}),
           ...(options.systemPromptOverride !== undefined
             ? { systemPromptOverride: options.systemPromptOverride }
@@ -371,7 +387,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           intent: (runtime.plan?.intent as IntentKind | undefined) ?? 'open_qa',
         })
         return runtime
-      })
+      }))
       return usageAcc === undefined ? result : { ...result, usage: usageAcc }
     },
 
@@ -460,7 +476,7 @@ async function optimizeAskQuestionIn(
     content: message.content.slice(0, 200),
   }))
   const historyBrief = historyForPrompt.length > 0
-    ? '\n最近对话背景：\n' + formatConversationHistory(historyForPrompt, 'qa')
+    ? '\n最近对话背景：\n' + formatConversationHistory(historyForPrompt)
     : ''
   const prompt = `待优化问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
   const [gated] = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])

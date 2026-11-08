@@ -82,7 +82,7 @@ export interface AnswerTimeRange {
   label: string
 }
 
-/** 历史消息的最小形状（与 Ask / ClawBot 的 history 对齐）。 */
+/** 历史消息的最小形状（与 Ask 的 history 对齐）。 */
 export interface AnswerHistoryMessage {
   role: 'user' | 'assistant'
   content: string
@@ -105,6 +105,10 @@ export interface ClassifyAnswerIntentOptions {
   history?: ReadonlyArray<AnswerHistoryMessage>
   /** 当前会话 username；用于解析「这个群 / 当前会话」。 */
   currentSession?: string
+  /** 当前会话显示名；单聊里用于把「他/她/对方」解析成联系人本人。 */
+  currentSessionName?: string
+  /** 当前会话类型；缺省时按 username 的 `@chatroom` 后缀判断。 */
+  currentSessionKind?: 'private' | 'group'
   /** 已知会话名或 username，用于显式会话点名。 */
   knownSessions?: string[]
   /** 已知联系人名。 */
@@ -165,6 +169,8 @@ export interface AnswerIntentDecision {
   kind: AnswerIntentKind
   /** 可直接传给旧检索流水线的意图。 */
   legacy: IntentKind
+  /** 问题是否带「最近 / 最新 / 这几天」等时间排序语义。 */
+  recency: boolean
   /** 0~1；越高越不应让 LLM 覆盖。 */
   confidence: number
   /** 可解释依据。 */
@@ -292,6 +298,8 @@ const DEICTIC_SESSION_RE = /这个群|这群|本群|该群|当前群|这个群�
 const PERSON_PRONOUN_RE = /(?:^|[^其])他(?!们|人)|她(?!们)|对方|这个人|那个人|这位|那位/
 const GENERIC_REFERENCE_RE =
   /(?:^|[，,。！？?\s])(?:刚才|刚刚|之前|上面|前面|那个|这个|那条|这条|它|那个东西|那件事)/
+const NON_CONTACT_SESSION_RE =
+  /^(?:gh_|weixin$|filehelper$|notifymessage$|fmessage$|newsapp$|medianote$|qqmail$)|@kefu\.openim$/i
 
 const ORDINAL_MESSAGE_RE = /(倒数)?第\s*([0-9一二三四五六七八九十百两]+)\s*条(?:消息|微信|聊天记录|记录|话)?/
 const LATEST_MESSAGE_RE = /最后(?:一)?条(?:消息)?|最新(?:一)?条(?:消息)?|最近(?:一)?条(?:消息)?/
@@ -312,6 +320,29 @@ function unique(values: readonly string[]): string[] {
     out.push(value)
   }
   return out
+}
+
+/**
+ * 当前单聊本身是否足以确定「他/她/对方」是谁。
+ *
+ * 群聊不能把群名当成某位成员；公众号、服务号等也不是第三人称联系人。
+ * 单聊则相反：用户已经选中某个人，问题里的第三人称默认就是这位联系人。
+ * @param input - 当前会话 username、显示名与可选类型。
+ * @returns 可用于代词消解的联系人显示名；非单聊返回 undefined。
+ */
+export function resolvePrivateSessionContact(input: {
+  username?: string
+  displayName?: string
+  kind?: 'private' | 'group'
+}): string | undefined {
+  const username = String(input.username ?? '').trim()
+  if (username === '') return undefined
+  const kind = input.kind ?? (/@chatroom$/i.test(username) ? 'group' : 'private')
+  if (kind !== 'private' || /@chatroom$/i.test(username) || NON_CONTACT_SESSION_RE.test(username)) {
+    return undefined
+  }
+  const displayName = String(input.displayName ?? '').trim()
+  return displayName !== '' ? displayName : username
 }
 
 function uniqueMedia(values: readonly AnswerMediaType[]): AnswerMediaType[] {
@@ -811,6 +842,7 @@ function decideKind(input: {
   hasHistory: boolean
   hasReferenceContext: boolean
   context?: AnswerIntentContext
+  sessionContact?: string
 }): {
   kind: AnswerIntentKind
   confidence: number
@@ -821,7 +853,7 @@ function decideKind(input: {
 } {
   const {
     q, timeRange, mediaTypes, messageRef, entities, knownEntities,
-    hasHistory, hasReferenceContext, context,
+    hasHistory, hasReferenceContext, context, sessionContact,
   } = input
   const signals: string[] = []
   if (timeRange) signals.push(`time:${timeRange.label}`)
@@ -851,7 +883,8 @@ function decideKind(input: {
   const hasGenericRef = GENERIC_REFERENCE_RE.test(q)
   const hasTimelineVerb = TIMELINE_RE.test(q)
   const explicitEntity = entities[0]
-  const inheritedContact = context?.activeContact || context?.lastEntity
+  const contextContact = context?.activeContact || context?.lastEntity
+  const inheritedContact = contextContact || sessionContact
   const entityContext = explicitEntity || inheritedContact
   const residue = q
     .replace(/最近|最新|上次|上一次|之前|刚才|刚刚|那个|这个|这些|那些|一下|帮我|请问|看看|查查|说说|聊聊/g, '')
@@ -859,6 +892,7 @@ function decideKind(input: {
 
   if (hasDeicticSession) signals.push('session:current')
   if (hasPronoun) signals.push('contact:pronoun')
+  if (hasPronoun && sessionContact && !contextContact) signals.push('contact:current-session')
   if (hasAggregateCue) signals.push('aggregate')
   if (hasRelationCue) signals.push('relation')
   if (hasTimelineCue) signals.push('timeline')
@@ -1068,8 +1102,13 @@ export function classifyAnswerIntent(
   const explicitContact = findKnownEntity(q, knownContacts)
   const explicitSession = findKnownEntity(q, knownSessions) ?? extractQuotedSession(q)
   const historyContact = !explicitContact ? extractContactFromHistory(history, knownEntities) : undefined
+  const sessionContact = resolvePrivateSessionContact({
+    ...(opts.currentSession ? { username: opts.currentSession } : {}),
+    ...(opts.currentSessionName ? { displayName: opts.currentSessionName } : {}),
+    ...(opts.currentSessionKind ? { kind: opts.currentSessionKind } : {}),
+  })
   const contextContact = opts.context?.activeContact || opts.context?.lastEntity
-  const inheritedContact = explicitContact || historyContact || contextContact
+  const inheritedContact = explicitContact || historyContact || contextContact || sessionContact
   const entities = unique([explicitEntity, explicitContact, inheritedContact].filter((x): x is string => Boolean(x)))
   const previousRange = asTimeRange(opts.context?.lastTimeRange)
   const timeRange = resolveAnswerTimeRange(q, { now, ...(previousRange ? { previous: previousRange } : {}) })
@@ -1097,6 +1136,7 @@ export function classifyAnswerIntent(
     hasHistory: history.length > 0,
     hasReferenceContext,
     ...(opts.context ? { context: opts.context } : {}),
+    ...(sessionContact ? { sessionContact } : {}),
   })
 
   const legacyDecision = classifyLegacyIntent(q, knownEntities)
@@ -1141,6 +1181,7 @@ export function classifyAnswerIntent(
     legacy: base.kind === 'open_qa' && recency
       ? 'recency_lookup'
       : toLegacyIntent(base.kind, { recency, comparison: COMPARE_RE.test(q) }),
+    recency,
     confidence: clamp(base.confidence),
     reason: base.reason,
     toolHints,

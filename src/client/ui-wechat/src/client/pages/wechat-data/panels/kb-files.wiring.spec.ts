@@ -5,7 +5,7 @@
  * 导航项、分段条、路由分支、IPC 钩子都渲染/执行不起来。而这一屏的退化方式
  * **界面照样能打开**，只是入口、契约或某条分支坏了。按危害从高到低：
  *
- *   ① `kbfiles` 忘了标 `hidden` —— 侧栏会多出一个「文件」入口（入口数 17 → 18），
+ *   ① `kbfiles` 忘了标 `hidden` —— 侧栏会多出一个「文件」入口（入口数 16 → 17），
  *      而段条里也有「文件」，同一个视图有了两条路；
  *   ② `kbfiles` 被从 `WechatTab` 或 `NAV_GROUPS` 里删掉 —— `TAB_LABELS` 是**由后者构建**的，
  *      删了它 `#kbfiles` 就静默落回「数据总览」（`WechatDataPanel` 用
@@ -66,6 +66,8 @@ const panel = [
   'kb-files-support.tsx',
   'kb-files-panel.tsx',
   'kb-files-detail.tsx',
+  'kb-batch-actions.tsx',
+  'use-kb-files-polling.ts',
   'use-kb-files-snapshot.ts',
 ]
   .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
@@ -128,12 +130,17 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
     expect(item('kbfiles')?.hidden, 'kbfiles 必须标 hidden，否则侧栏会多出一个「文件」入口').toBe(true)
     const visible = ALL.filter(it => !it.hidden).map(it => it.tab)
     expect(visible, 'kbfiles 不该出现在侧栏可见项里').not.toContain('kbfiles')
-    // 侧栏入口数仍应是 15（口径 = 未标 hidden 且非 settings；2026-10-12 起含 ClawBot）。
+    // 侧栏入口数仍应是 16（口径 = 未标 hidden 且非 settings）。
     // ⚠️ 2026-10-17：17 → 14（朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口）；
     //    2026-10-19：新增「任务信息」可见入口（14 → 15）。
+    //    2026-10-29：新增「群聊分析」「消息列表」两个可见入口（15 → 17）。
+    //    2026-10-31：退役一个可见入口（17 → 16）。
     // 精确钉住而不是 `<= 18`：范围断言正是这个数字上次能长期漂着的原因。
     const renderedInGroups = NAV_GROUPS.flatMap(g => g.items).filter(it => !it.hidden && it.tab !== 'settings')
-    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(15)
+    const visibleItems = ALL.filter(i => !i.hidden)
+    expect(visibleItems.map(i => i.tab)).toContain('groupinsights')
+    expect(visibleItems.map(i => i.tab)).toContain('messagelist')
+    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(16)
   })
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
@@ -589,10 +596,11 @@ describe('2026-09-19 三栏重排：吸顶骨架与「定位原文件」', () =>
     expect(panelCss).toMatch(/\.bodyWrap\s*\{[^}]*overflow-y:\s*auto/)
   })
 
-  it('主操作是 primary、刷新降为 ghost（与笔记库同一口径）', () => {
+  it('主操作是 primary；刷新与低频动作收进文档工具菜单', () => {
     // ⚠ 属性之间不能用 `[^>]*`：onClick 的箭头函数 `=>` 自带 `>`，会在那里截断。
     expect(panelCode).toMatch(/<Button variant="primary"[\s\S]{0,140}?＋ 添加文件/)
-    expect(panelCode).toMatch(/<Button variant="ghost"[\s\S]{0,80}?disabled=\{loading\}/)
+    expect(panelCode).toMatch(/<KbToolsMenu[\s\S]{0,400}?onRefresh=\{\(\) => \{ void load\(\) \}\}/)
+    expect(panelCode).toMatch(/disabled=\{loading\}[\s\S]{0,80}?onClick=\{\(\) => \{ runAndClose\(onRefresh\) \}\}/)
   })
 
   it('详情里有「在资源管理器中定位」，且复用 preload 已有的那条通道', () => {
@@ -647,13 +655,16 @@ describe('2026-09-19 布局：文件面板两栏铺满滚动区', () => {
   function bodyRules(src: string): string {
     return [...src.matchAll(/\.body\s*\{([^}]*)\}/g)].map(m => stripComments(m[1] ?? '')).join('\n')
   }
-  const base = panelCss.slice(0, panelCss.indexOf('@container kbfiles'))
+  // 页头/工具菜单也有 <=560 的容器查询；两栏断点仍以 720px 的那一段为界，
+  // 不能拿「第一个 @container」当基准，否则会误读成基础规则缺失。
+  const narrowBodyAt = panelCss.indexOf('@container kbfiles (max-width: 720px)')
+  const base = panelCss.slice(0, narrowBodyAt)
 
   it('.body 是 stretch + 至少铺满；窄容器显式退回 start/auto', () => {
     expect(bodyRules(base)).toMatch(/align-items:\s*stretch/)
     expect(bodyRules(base)).toMatch(/min-height:\s*100%/)
     expect(bodyRules(base)).not.toMatch(/align-items:\s*start/)
-    const block = panelCss.slice(panelCss.indexOf('@container kbfiles'))
+    const block = panelCss.slice(narrowBodyAt)
     expect(block).toMatch(/\.body\s*\{[^}]*align-content:\s*start/)
   })
 })
@@ -794,11 +805,12 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
   })
 
   it('按钮写明会出网，且只锁自己（不顺手禁用删除/刷新）', () => {
-    expect(panelCode).toMatch(/title="[^"]*建\/补齐向量索引（会出网）"/)
-    // 手机态这一颗是禁用的（`buildKbVectorIndex` / `cancelKbIndexBuild` 都不在远程白名单里），
-    // 所以降级属性组紧跟在 disabled 之后 —— 顺序有判据兜着（capabilities.wiring ⑥：写反了会被覆盖掉）。
-    expect(panelCode).toMatch(/disabled=\{indexing \|\| batchJobs\.runningId !== null\} \{\.\.\.desktopActionProps\(\)\}\s*\n\s*title=/)
+    expect(panelCode).toMatch(/title=\{[^}]*建\/补齐向量索引（会出网）/s)
+    // 语义索引入口现在在「文档工具」菜单里；手机态由 desktopOnly 禁用，
+    // 菜单的 title 同时说明「会出网」或「仅电脑」，不能只留一个灰按钮。
+    expect(panelCode).toMatch(/disabled=\{busy \|\| desktopOnly\}[\s\S]{0,220}?title=/)
     expect(panelCode).toMatch(/\{indexing \? '建索引中…' : '语义索引'\}/)
+    expect(panelCode, '索引构建不该顺手锁住文件行删除').not.toMatch(/disabled=\{[^}]*indexing[^}]*busyId/)
   })
 
   it('换库 ⇒ 先把状态清成 null 再读（不带着上一个库的行数显示）', () => {

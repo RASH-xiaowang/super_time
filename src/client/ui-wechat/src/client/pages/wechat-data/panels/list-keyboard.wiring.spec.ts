@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const view = readFileSync(join(HERE, 'chats-view.tsx'), 'utf8')
 const chats = readFileSync(join(HERE, 'Chats.tsx'), 'utf8')
+const sessionRow = readFileSync(join(HERE, 'chats-session-row.tsx'), 'utf8')
 
 describe('会话列表键盘导航接线', () => {
   it('ChatsView 的会话列表容器挂了 onKeyDown，并指向 data-session-row', () => {
@@ -23,6 +24,8 @@ describe('会话列表键盘导航接线', () => {
   })
 
   it('会话按钮带 data-session-row（键盘导航的选择器不是空集）', () => {
-    expect(chats).toMatch(/<button\s+key=\{s\.username\}[\s\S]{0,160}data-session-row=\{s\.username\}/)
+    // M21 把会话行拆成 ChatsSessionRow：Chats.tsx 只负责挂行，属性必须落在真正输出 button 的组件上。
+    expect(chats).toContain('<ChatsSessionRow')
+    expect(sessionRow).toMatch(/<button\s+type="button"\s+data-session-row=\{session\.username\}/)
   })
 })

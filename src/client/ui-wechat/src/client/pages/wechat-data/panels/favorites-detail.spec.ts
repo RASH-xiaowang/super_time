@@ -5,8 +5,7 @@
  * 用户反馈「其他收藏类型没有头像」：详情头部必须展示来源头像，并且远程地址只能
  * 交给 `RemoteImg` 走后端代理；取不到时回落到来源首字，而不是留空框。
  */
-import { act } from 'react-dom/test-utils'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -24,6 +23,10 @@ const stubs = vi.hoisted(() => ({
     void options
     return Promise.resolve({})
   }),
+  favoriteExport: vi.fn(),
+  favoriteFileExport: vi.fn(),
+  fileExport: vi.fn(),
+  saveDialog: vi.fn(),
 }))
 
 vi.mock('../api.ts', () => ({
@@ -33,6 +36,12 @@ vi.mock('../api.ts', () => ({
   apiGetSnsVideoDataUrl: stubs.video,
   apiGetMessageFile: stubs.file,
   apiGetFavoriteMediaDataUrl: stubs.favorite,
+  apiExportFavoriteImage: stubs.favoriteExport,
+  apiExportFavoriteVideo: vi.fn(),
+  apiExportFavoriteFile: stubs.favoriteFileExport,
+  apiExportFileAttachment: stubs.fileExport,
+  apiSaveFileDialog: stubs.saveDialog,
+  runtimeCapabilities: () => ({ isBrowser: false, desktopEquivalent: false }),
 }))
 
 vi.mock('./remote-img.tsx', () => ({
@@ -94,6 +103,12 @@ beforeEach(() => {
   stubs.file.mockResolvedValue({})
   stubs.favorite.mockReset()
   stubs.favorite.mockResolvedValue({})
+  stubs.favoriteExport.mockReset()
+  stubs.favoriteFileExport.mockReset()
+  stubs.favoriteFileExport.mockResolvedValue({ ok: true, path: 'D:\\exports\\chosen.pdf' })
+  stubs.fileExport.mockReset()
+  stubs.saveDialog.mockReset()
+  stubs.saveDialog.mockResolvedValue({ canceled: false, path: 'D:\\exports\\chosen.pdf' })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -288,8 +303,7 @@ describe('FavoriteDetail 来源头像', () => {
     expect(q('video')?.getAttribute('src')).toBe('data:video/mp4;base64,local-video')
   })
 
-  it('文件卡点击时按文件名/体积/收藏时间查找并下载', async () => {
-    stubs.file.mockResolvedValue({ url: 'data:application/pdf;base64,file' })
+  it('收藏文件缺少完整 MD5 时禁用保存，绝不用 data URL 冒充原文件', async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const item = fav({
       type: 8,
@@ -302,24 +316,24 @@ describe('FavoriteDetail 来源头像', () => {
       root.render(createElement(FavoriteDetail, { item, thumbs: {} }))
       await Promise.resolve()
     })
-    await act(async () => {
-      q('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(stubs.file).toHaveBeenCalledWith({ fileName: '报价单.pdf', size: 20480, createTime: 1_700_000_000 })
-    expect(click).toHaveBeenCalledTimes(1)
+    const save = q('button[class*="favFileCard"]') as HTMLButtonElement | null
+    expect(save?.disabled).toBe(true)
+    expect(host.textContent).toContain('缺少原文件 MD5')
+    expect(stubs.favoriteFileExport).not.toHaveBeenCalled()
+    expect(stubs.fileExport).not.toHaveBeenCalled()
+    expect(click).not.toHaveBeenCalled()
     click.mockRestore()
   })
 
-  it('文件点击时先下载收藏缓存里的原文件', async () => {
-    stubs.favorite.mockResolvedValue({ url: 'data:application/pdf;base64,local-file' })
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  it('收藏文件按完整 MD5 走后端原文件导出并显示最终 path', async () => {
+    stubs.favoriteFileExport.mockResolvedValue({ ok: true, path: 'D:\\exports\\报价单.pdf' })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const fullMd5 = 'f'.repeat(32)
     const item = fav({
       type: 8,
       typeLabel: '文件',
       avatar: '',
-      content: '<fav><datalist><dataitem datatype="8"><datatitle>报价单.pdf</datatitle><datafmt>pdf</datafmt><fullsize>20480</fullsize><fullmd5>file-md5</fullmd5></dataitem></datalist></fav>',
+      content: `<fav><datalist><dataitem datatype="8"><datatitle>报价单.pdf</datatitle><datafmt>pdf</datafmt><fullsize>20480</fullsize><fullmd5>${fullMd5}</fullmd5></dataitem></datalist></fav>`,
     })
     await act(async () => {
       root.render(createElement(FavoriteDetail, { item, thumbs: {} }))
@@ -330,20 +344,26 @@ describe('FavoriteDetail 来源头像', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(stubs.favorite).toHaveBeenCalledWith({
-      fullMd5: 'file-md5',
+    expect(stubs.saveDialog).toHaveBeenCalledWith(expect.objectContaining({ title: '保存收藏原文件' }))
+    expect(stubs.favoriteFileExport).toHaveBeenCalledWith(expect.objectContaining({
+      fullMd5,
       kind: 'file',
-      ext: 'pdf',
-      fileName: '报价单.pdf',
-      size: 20480,
-    })
-    expect(stubs.file).not.toHaveBeenCalled()
-    expect(click).toHaveBeenCalledTimes(1)
-    click.mockRestore()
+      dest: 'D:\\exports\\chosen.pdf',
+      jobId: expect.stringMatching(/^favorite-file-/),
+    }))
+    expect(stubs.fileExport).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('已保存收藏原文件 → D:\\exports\\报价单.pdf')
+    expect(anchorClick).not.toHaveBeenCalled()
+    expect(stubs.favorite).not.toHaveBeenCalledWith(expect.objectContaining({
+      fullMd5,
+      kind: 'file',
+    }))
+    anchorClick.mockRestore()
   })
 
-  it('文件卡失败时显示后端原因，不把「打开失败」吞掉', async () => {
-    stubs.file.mockResolvedValue({ error: '本地未找到该文件' })
+  it('收藏缓存即使返回 data URL，缺少完整 MD5 时也不触发下载', async () => {
+    stubs.favorite.mockResolvedValue({ url: 'data:application/pdf;base64,preview-only' })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const item = fav({
       type: 8,
       typeLabel: '文件',
@@ -354,12 +374,10 @@ describe('FavoriteDetail 来源头像', () => {
       root.render(createElement(FavoriteDetail, { item, thumbs: {} }))
       await Promise.resolve()
     })
-    await act(async () => {
-      q('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(host.textContent).toContain('本地未找到该文件')
+    expect(host.textContent).toContain('缺少原文件 MD5')
+    expect(anchorClick).not.toHaveBeenCalled()
+    expect(stubs.fileExport).not.toHaveBeenCalled()
+    anchorClick.mockRestore()
   })
 
   it('图片两个 MD5 都失败时显示可读状态', async () => {

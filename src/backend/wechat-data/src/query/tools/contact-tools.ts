@@ -21,6 +21,8 @@ import {
   loadOpenimWordingNames,
 } from '../openim.ts'
 import { searchIndexPath } from '../search-scaffold.ts'
+import { messageTableHash, messageTableName, resolveTalkerUsername } from '../message-identity.ts'
+import { readableProfileSignature } from '../profile-signature.ts'
 import { argInt, argString, type RetrievalTool, type ToolResult } from './types.ts'
 
 /** 联系人检索（复用成员搜索，自动兼容 contact_fts 新旧 schema 与 LIKE 降级）。 */
@@ -86,8 +88,10 @@ export const getContactDetailTool: RetrievalTool = {
   },
   run: (args, ctx): ToolResult => {
     const started = Date.now()
-    const username = argString(args['username']).trim()
-    if (!username) return { tool: 'get_contact_detail', ok: false, error: '缺少 username', hits: [] }
+    const requestedUsername = argString(args['username']).trim()
+    if (!requestedUsername) return { tool: 'get_contact_detail', ok: false, error: '缺少 username', hits: [] }
+    const username = resolveTalkerUsername(ctx.decryptedDir, requestedUsername)
+    if (!username) return { tool: 'get_contact_detail', ok: false, error: '无法解析联系人身份', hits: [] }
     const p = join(ctx.decryptedDir, 'contact', 'contact.db')
     if (!existsSync(p)) return { tool: 'get_contact_detail', ok: false, error: '通讯录库不存在', hits: [] }
     try {
@@ -122,21 +126,28 @@ export const getContactDetailTool: RetrievalTool = {
       let msgCount = 0
       if (existsSync(ip)) {
         try {
+          const aliases = [...new Set([
+            requestedUsername,
+            username,
+            messageTableHash(username),
+            messageTableName(username),
+          ])]
           const r = withDb(ip, (db) => db.prepare(
-            'SELECT COUNT(*) AS c, MAX(create_time) AS mx FROM message_meta WHERE username = ?',
-          ).get(username) as { c?: number; mx?: number } | undefined)
+            `SELECT COUNT(*) AS c, MAX(create_time) AS mx FROM message_meta WHERE username IN (${aliases.map(() => '?').join(', ')})`,
+          ).get(...aliases) as { c?: number; mx?: number } | undefined)
           msgCount = Number(r?.c ?? 0)
           if (r?.mx) recent = new Date(Number(r.mx) * 1000).toISOString().slice(0, 16).replace('T', ' ')
         } catch { /* 索引读不到就不显示 */ }
       }
 
       const name = (row.remark || row.nick || row.username).trim()
+      const signature = readableProfileSignature(row.descr)
       const lines = [
         `显示名：${name}`,
         row.enterpriseName ? `企业名称：${row.enterpriseName}` : '',
         row.remark && row.nick && row.remark !== row.nick ? `昵称：${row.nick}` : '',
         row.alias ? `微信号：${row.alias}` : '',
-        row.descr ? `签名：${row.descr}` : '',
+        signature ? `签名：${signature}` : '',
         `username：${row.username}`,
         msgCount > 0 ? `聊天记录：${msgCount} 条${recent ? `，最近 ${recent}` : ''}` : '聊天记录：无',
       ].filter(Boolean)

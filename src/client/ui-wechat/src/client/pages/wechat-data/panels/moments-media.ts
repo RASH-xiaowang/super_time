@@ -31,7 +31,7 @@
  *
  * @module moments-media
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   apiGetArticleCovers,
@@ -59,8 +59,69 @@ import { ARTICLE_COVER_CACHE_MAX, SNS_IMG_CACHE_MAX, imgKey } from './moments-su
  */
 const MEDIA_RETRY_MAX = 2
 const MEDIA_RETRY_DELAY_MS = 1500
-const mediaRetryCount = new Map<string, number>()
+/**
+ * 媒体键元数据上限。长列表「加载全部」或持续滚动时，卡片会在 render 中登记每个见过的
+ * 媒体键；只靠 data URL 的 200 条 LRU 并不能限制这些只有字符串/对象的键表。
+ */
+export const MOMENTS_MEDIA_KEY_CACHE_MAX = 4000
+/** 待解密队列与媒体键表同界；超出的远端项撤回去重标记，等再次进入视口再排。 */
+export const MOMENTS_MEDIA_QUEUE_MAX = MOMENTS_MEDIA_KEY_CACHE_MAX
+/** 公众号链接只重试 3 次；持久失败链接的尝试表同样必须有界。 */
+export const MOMENTS_COVER_ATTEMPT_MAX = 500
+/** 失败原因记录跟随图片缓存上界，不能比实际可见资源保留更久。 */
+const SNS_ERR_CACHE_MAX = 200
 import type { ViewerState } from './moments-portals.tsx'
+
+/**
+ * FIFO 上界 Set：重复 add 会移到队尾，超限优先淘汰最老的非保护项。
+ * 保护项用于队列中、请求中或等待重试的媒体键，避免 fetched 表先把自己仍在处理的键淘汰。
+ */
+export class BoundedMediaSet<T> extends Set<T> {
+  constructor(
+    private readonly max: number,
+    private readonly protectedValues?: () => ReadonlySet<T> | undefined,
+  ) {
+    super()
+  }
+
+  override add(value: T): this {
+    this.delete(value)
+    super.add(value)
+    while (this.size > this.max) {
+      const protectedSet = this.protectedValues?.()
+      let victim: T | undefined
+      let found = false
+      for (const candidate of this) {
+        if (!protectedSet?.has(candidate)) {
+          victim = candidate
+          found = true
+          break
+        }
+      }
+      if (!found) break
+      this.delete(victim as T)
+    }
+    return this
+  }
+}
+
+/** FIFO 上界 Map；媒体键重复登记时移动到队尾，避免正在渲染的键先被淘汰。 */
+class BoundedMediaMap<K, V> extends Map<K, V> {
+  constructor(private readonly max: number) {
+    super()
+  }
+
+  override set(key: K, value: V): this {
+    this.delete(key)
+    super.set(key, value)
+    while (this.size > this.max) {
+      const oldest = this.keys().next().value
+      if (oldest === undefined) break
+      this.delete(oldest)
+    }
+    return this
+  }
+}
 
 /**
  * 图片/视频的离线解码请求描述。
@@ -158,7 +219,7 @@ export function collectMediaKeys(moments: readonly MomentItem[]): string[] {
  * @param moments - 已加载的动态。
  * @param snsImgs - 已解出的本地媒体。
  * @param articleCovers - 已抓到的封面。
- * @param attempts - 各链接已试次数（会被本函数**就地累加**，与改前的行为一致）。
+ * @param attempts - 各链接已试次数（只读；调用方在实际发送请求时累加）。
  * @returns 本轮要抓的链接列表。
  */
 export function pendingCovers(
@@ -166,6 +227,7 @@ export function pendingCovers(
   snsImgs: Record<string, string>,
   articleCovers: Record<string, string>,
   attempts: Map<string, number>,
+  inflight?: ReadonlySet<string>,
 ): string[] {
   const todo: string[] = []
   for (const m of moments) {
@@ -175,9 +237,9 @@ export function pendingCovers(
     // 本机能解出就别去打网络（隐私闸门关着时这条尤其重要）。
     if (localKey && snsImgs[localKey]) continue
     if (articleCovers[m.link_url]) continue
+    if (inflight?.has(m.link_url)) continue
     const attempt = attempts.get(m.link_url) ?? 0
     if (attempt >= 3) continue
-    attempts.set(m.link_url, attempt + 1)
     todo.push(m.link_url)
   }
   return todo
@@ -240,15 +302,17 @@ function isInViewport(el: HTMLElement, root: HTMLElement | null): boolean {
  * 独立成函数而不是内联在 hook 里：hook 紧贴 `function-size-ratchet` 的 250 行线。
  * @param entries - IO 回调给的相交项。
  * @param specOf - 按 key 查媒体请求描述。
- * @param fetched - 已入过队的键（本函数会就地累加）。
+ * @param active - 已在队列、请求中或等待重试的键（本函数会就地累加）。
+ * @param fetched - 已登记的键（本函数会就地累加）。
  * @param queue - 待办队列（本函数会就地插入）。
  * @param root - 滚动容器。
  * @returns 是否真的入队了（调用方据此决定要不要触发 drain）。
  */
-function enqueueIntersecting(
+export function enqueueIntersecting(
   entries: readonly IntersectionObserverEntry[],
   specOf: Map<string, MediaKeySpec>,
   fetched: Set<string>,
+  active: Set<string>,
   queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
   root: HTMLElement | null,
 ): boolean {
@@ -258,9 +322,10 @@ function enqueueIntersecting(
     if (!e.isIntersecting) continue
     const el = e.target as HTMLElement
     const key = el.dataset.snsKey || ''
-    if (!key || fetched.has(key)) continue
+    if (!key || active.has(key) || fetched.has(key)) continue
     const spec = specOf.get(key)
     if (!spec) continue
+    active.add(key)
     fetched.add(key)
     ;(isInViewport(el, root) ? urgent : lazy).push({ key, ...spec })
   }
@@ -268,6 +333,14 @@ function enqueueIntersecting(
   // `unshift(...urgent)` 保持 urgent 内部顺序（DOM 顺序 = 用户从上往下看的顺序）。
   if (urgent.length > 0) queue.current.unshift(...urgent)
   if (lazy.length > 0) queue.current.push(...lazy)
+  // 队列与 spec 表保持同一上界。被挤掉的是最远的预取项：撤回去重标记，
+  // 下次滚到它时还会重新入队，而不是永久记为「已取过」。
+  if (queue.current.length > MOMENTS_MEDIA_QUEUE_MAX) {
+    for (const dropped of queue.current.splice(MOMENTS_MEDIA_QUEUE_MAX)) {
+      active.delete(dropped.key)
+      fetched.delete(dropped.key)
+    }
+  }
   return true
 }
 
@@ -290,20 +363,37 @@ function enqueueIntersecting(
  *
  * @param it - 失败的那条媒体请求。
  * @param queue - 待办队列（放回它）。
+ * @param active - 正在排队、请求中或等待重试的键。
+ * @param fetched - 已登记的媒体键。
  * @param unmounted - 组件是否已卸载（卸载后早退，避免后台自激）。
+ * @param timers - 延迟 timer 集合。
  * @param drain - 重新触发排空的回调。
  */
-function requeueAfterDelay(
+export function requeueAfterDelay(
   it: { key: string } & MediaKeySpec,
   queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
+  active: Set<string>,
+  fetched: Set<string>,
   unmounted: React.MutableRefObject<boolean>,
+  timers: React.MutableRefObject<Set<number>>,
   drain: () => void,
 ): void {
-  window.setTimeout(() => {
+  const timer = window.setTimeout(() => {
+    timers.current.delete(timer)
     if (unmounted.current) return
-    queue.current.push(it)
+    if (queue.current.length >= MOMENTS_MEDIA_QUEUE_MAX) {
+      // 单次定时器策略：淘汰队尾预取项后立即让重试项入队，不递归续期制造 timer 峰值。
+      const dropped = queue.current.pop()
+      if (dropped && dropped.key !== it.key) {
+        active.delete(dropped.key)
+        fetched.delete(dropped.key)
+      }
+    }
+    // 重试优先于新到的预取项，避免刚回到队列又被尾部截断。
+    queue.current.unshift(it)
     drain()
   }, MEDIA_RETRY_DELAY_MS)
+  timers.current.add(timer)
 }
 
 /** `useMomentsMedia` 的输入。 */
@@ -344,12 +434,19 @@ export interface MomentsMediaInput {
  * 一条链：一次只有 1 个在飞，其余在本地排队，不再把后端队列塞满。
  *
  * 注意：串行的是 RPC，不是渲染 —— 已经命中的 IndexedDB 原图不会进这条链。
- * @returns `run(task)`：把 task 排进串行链，返回它的结果 Promise。
+ * @param cancelled - 执行前读取的取消标记。
+ * @returns 串行执行器。
  */
-function createHeavyRpcLane(): <T>(task: () => Promise<T>) => Promise<T> {
+export function createCancellableHeavyRpcLane(
+  cancelled: () => boolean,
+): <T>(task: () => Promise<T>) => Promise<T> {
   let chain: Promise<void> = Promise.resolve()
   return <T,>(task: () => Promise<T>): Promise<T> => {
-    const run = chain.then(task, task)
+    const invoke = (): Promise<T> => {
+      if (cancelled()) return Promise.reject(new Error('朋友圈媒体请求已取消'))
+      return task()
+    }
+    const run = chain.then(invoke, invoke)
     chain = run.then(() => undefined, () => undefined)
     return run
   }
@@ -371,6 +468,105 @@ function needsHeavyRpcLane(item: MediaKeySpec, offline: boolean): boolean {
     && typeof item.seed === 'string' && item.seed !== '')
 }
 
+function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
+}
+
+function useArticleCoverFallback(
+  moments: readonly MomentItem[],
+  snsImgs: Record<string, string>,
+  unmountedRef: React.MutableRefObject<boolean>,
+): Record<string, string> {
+  const [articleCovers, setArticleCovers] = useState<Record<string, string>>({})
+  const attempts = useRef<Map<string, number>>(new BoundedMediaMap(MOMENTS_COVER_ATTEMPT_MAX))
+  const inflight = useRef<Set<string>>(new BoundedMediaSet(MOMENTS_COVER_ATTEMPT_MAX))
+  const retryTimer = useRef<number | null>(null)
+  const [coverTick, setCoverTick] = useState(0)
+
+  const scheduleRetry = useCallback((): void => {
+    if (unmountedRef.current || retryTimer.current !== null) return
+    retryTimer.current = window.setTimeout(() => {
+      retryTimer.current = null
+      if (!unmountedRef.current) setCoverTick(t => t + 1)
+    }, 2500)
+  }, [unmountedRef])
+
+  useEffect(() => () => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
+  }, [])
+
+  useEffect(() => {
+    const todo = pendingCovers(moments, snsImgs, articleCovers, attempts.current, inflight.current)
+    if (todo.length === 0) return
+    let cancelled = false
+    const run = async (): Promise<void> => {
+      for (let i = 0; i < todo.length; i += COVER_BATCH) {
+        if (cancelled || unmountedRef.current) return
+        const batch = todo.slice(i, i + COVER_BATCH)
+        for (const url of batch) {
+          inflight.current.add(url)
+          attempts.current.set(url, (attempts.current.get(url) ?? 0) + 1)
+        }
+        try {
+          const r = await apiGetArticleCovers({ urls: batch })
+          if (unmountedRef.current) return
+          if (cancelled) {
+            for (const url of batch) inflight.current.delete(url)
+            setCoverTick(t => t + 1)
+            return
+          }
+          const found: Record<string, string> = {}
+          let missed = false
+          for (const it of r.items ?? []) {
+            if (it.dataUrl) found[it.url] = it.dataUrl
+            else missed = true
+          }
+          if (Object.keys(found).length > 0) {
+            setArticleCovers(prev => capRecord({ ...prev, ...found }, ARTICLE_COVER_CACHE_MAX))
+          }
+          if (missed) scheduleRetry()
+        } catch {
+          if (unmountedRef.current) return
+          if (cancelled) {
+            for (const url of batch) inflight.current.delete(url)
+            setCoverTick(t => t + 1)
+          } else {
+            scheduleRetry()
+          }
+        } finally {
+          for (const url of batch) inflight.current.delete(url)
+        }
+      }
+    }
+    void run()
+    return () => { cancelled = true }
+  }, [moments, snsImgs, articleCovers, coverTick, scheduleRetry, unmountedRef])
+
+  return articleCovers
+}
+
+function useRestoreCachedSnsImages(
+  moments: readonly MomentItem[],
+  snsFetched: React.MutableRefObject<Set<string>>,
+  setSnsImgs: React.Dispatch<React.SetStateAction<Record<string, string>>>,
+): void {
+  useEffect(() => {
+    const keys = collectMediaKeys(moments)
+      .filter((k) => !snsFetched.current.has(k))
+      .slice(0, SNS_IMG_RESTORE_MAX)
+    if (keys.length === 0) return
+    let cancelled = false
+    void snsMediaCacheGetMany(keys, true).then((cached) => {
+      if (cancelled) return
+      const found = Object.keys(cached)
+      if (found.length === 0) return
+      for (const k of found) snsFetched.current.add(k)
+      setSnsImgs(prev => capRecord({ ...prev, ...cached }, SNS_IMG_CACHE_MAX))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [moments, snsFetched, setSnsImgs])
+}
+
 /**
  * 朋友圈媒体层钩子：滚动懒解密 + 封面兜底 + IDB 恢复 + 灯箱按需解析。
  * @param input - 见 {@link MomentsMediaInput}。
@@ -385,32 +581,40 @@ export function useMomentsMedia(input: MomentsMediaInput): {
 } {
   const { moments, viewer, scrollRef, groups, renderKey, detailKey } = input
   const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
+  /** 已在队列、请求中或等待重试的键；snsFetched 淘汰时必须跳过这些保护项。 */
+  const mediaActive = useRef<Set<string>>(new Set())
   /** 已经取过（或已经决定不再取）的键 —— 去重靠它，别改成 state（每次 render 都换身份会让效果重跑）。 */
-  const snsFetched = useRef(new Set<string>())
-  const [articleCovers, setArticleCovers] = useState<Record<string, string>>({})
-  const coverAttempts = useRef<Map<string, number>>(new Map())
-  const [coverTick, setCoverTick] = useState(0)
+  const snsFetched = useRef<Set<string>>(
+    new BoundedMediaSet(MOMENTS_MEDIA_KEY_CACHE_MAX, () => mediaActive.current),
+  )
 
-  const mediaKeySpec = useRef(new Map<string, MediaKeySpec>())
+  const mediaKeySpec = useRef<Map<string, MediaKeySpec>>(new BoundedMediaMap(MOMENTS_MEDIA_KEY_CACHE_MAX))
   const mediaQueue = useRef<Array<{ key: string } & MediaKeySpec>>([])
   const mediaFetching = useRef(false)
   const mediaObserved = useRef<IntersectionObserver | null>(null)
-  /** 重活 RPC 串行链（见 createHeavyRpcLane）：一次只发一个，防后端重活队列 REMOTE_BUSY。 */
-  const runHeavyRpc = useRef(createHeavyRpcLane()).current
+  /** 只属于当前挂载实例的重试计数；与媒体键表同界，卸载即释放。 */
+  const mediaRetryCount = useRef<Map<string, number>>(new BoundedMediaMap(MOMENTS_MEDIA_KEY_CACHE_MAX))
+  /** 延迟重试的 timer；卸载时必须主动清掉，回调闭包不能继续持有面板与队列。 */
+  const mediaRetryTimers = useRef<Set<number>>(new Set())
   /** 组件是否已卸载：延迟重试的 `setTimeout` 回调据此早退，避免卸载后自激（见 catch 分支）。 */
   const mediaUnmounted = useRef(false)
-
-  /** 当前是否无网。读法与「为什么不做成 state」见文件头「先网后本」。 */
-  const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false
+  /** 重活 RPC 串行链：一次只发一个，且卸载后跳过尚未开始的排队任务。 */
+  const runHeavyRpc = useRef(createCancellableHeavyRpcLane(() => mediaUnmounted.current)).current
+  /** 灯箱请求的在飞令牌；StrictMode cleanup 只撤销自己这一轮，不吞掉下一轮。 */
+  const viewerInflight = useRef(new Map<string, symbol>())
+  const articleCovers = useArticleCoverFallback(moments, snsImgs, mediaUnmounted)
+  useRestoreCachedSnsImages(moments, snsFetched, setSnsImgs)
 
   const drainMedia = async (): Promise<void> => {
     if (mediaFetching.current) return
     mediaFetching.current = true
     try {
       while (mediaQueue.current.length > 0) {
+        if (mediaUnmounted.current) return
         const batch = mediaQueue.current.splice(0, MEDIA_BATCH)
         const offline = isOffline()
         await Promise.all(batch.map(async (it) => {
+          if (mediaUnmounted.current) return
           const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string; offline?: boolean } = {
     md5: it.md5,
     // 只给图片带 CDN 三件套（视频走另一个 RPC）；有才传 ⇒ 缺省时调用形状逐字不变
@@ -432,12 +636,15 @@ export function useMomentsMedia(input: MomentsMediaInput): {
           opts.offline = offline
           try {
             const cached = await snsMediaCacheGet(it.key, true)
+            if (mediaUnmounted.current) return
             if (cached) {
               // 逐条上屏，不能等 `Promise.all` 全部结束：同一批里只要有一张 RPC 卡住，
               // 其余几张**已经命中的本地原图**也会一起被压住（真机实测：IDB 里明明有
               // 3 张，界面却一直显示「正在取原图」）。
               setSnsImgs(prev => capRecord({ ...prev, [it.key]: cached }, SNS_IMG_CACHE_MAX))
               setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
+              mediaActive.current.delete(it.key)
+              mediaRetryCount.current.delete(it.key)
               return
             }
             // 重活车道判定：视频恒重；图片只有「在线 + CDN 三件套齐」才走普通车道，其余串行。
@@ -446,32 +653,46 @@ export function useMomentsMedia(input: MomentsMediaInput): {
               ? apiGetSnsVideoCoverDataUrl(opts)
               : apiGetSnsImageDataUrl(opts))
             const r = needsHeavyLane ? await runHeavyRpc(rpc) : await rpc()
+            if (mediaUnmounted.current) return
             if (r.url) {
               setSnsImgs(prev => capRecord({ ...prev, [it.key]: r.url as string }, SNS_IMG_CACHE_MAX))
               setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
               // 把「这次是不是缩略图」一起存下去：后端降级给缩略图时标上，
               // 下一轮就能跳过它去换原图（而不是把缩略图当成最终结果永久缓存）。
               void snsMediaCacheSet(it.key, r.url, r.thumb === true)
-              mediaRetryCount.delete(it.key)
+              mediaActive.current.delete(it.key)
+              mediaRetryCount.current.delete(it.key)
             } else {
               // 后端**给了原因**（`{ url?, error? }`），原实现把它丢掉了 ⇒ 这里带上原因再抛
               throw new Error(r.error ?? '后端未返回图片地址')
             }
           } catch (e) {
+            if (mediaUnmounted.current) return
             /**
              * 不再静默：暂时性失败（文件正在写 / 刚建 hardlink / 这一次超时）**放回队列再试**，
              * 最多 `MEDIA_RETRY_MAX` 次；超限才记录**具体原因**。
              * 用户看到的不该是"无解释的空白"。
              */
-            const n = (mediaRetryCount.get(it.key) ?? 0) + 1
-            mediaRetryCount.set(it.key, n)
+            const n = (mediaRetryCount.current.get(it.key) ?? 0) + 1
+            mediaRetryCount.current.set(it.key, n)
             if (n <= MEDIA_RETRY_MAX) {
               // 延迟放回（理由见 `requeueAfterDelay` 的文件头）：立即放回会形成 REMOTE_BUSY 风暴。
-              requeueAfterDelay(it, mediaQueue, mediaUnmounted, () => { void drainMedia() })
+              requeueAfterDelay(
+                it,
+                mediaQueue,
+                mediaActive.current,
+                snsFetched.current,
+                mediaUnmounted,
+                mediaRetryTimers,
+                () => { void drainMedia() },
+              )
             } else {
               const reason = (e as Error).message
+              // 永久失败也不保留计数：这一条不会再自动重试，留着只会随失败媒体数无界增长。
+              mediaActive.current.delete(it.key)
+              mediaRetryCount.current.delete(it.key)
               console.warn('[moments-media] 取图失败（已重试 ' + String(MEDIA_RETRY_MAX) + ' 次，放弃）:', it.key, reason)
-              setSnsErrs(prev => ({ ...prev, [it.key]: reason }))
+              setSnsErrs(prev => capRecord({ ...prev, [it.key]: reason }, SNS_ERR_CACHE_MAX))
             }
           }
         }))
@@ -484,20 +705,37 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   // 懒加载媒体：只有图片/视频封面的占位块接近视口时才解密（IntersectionObserver），
   // 避免一次性解密数百张离线图片造成卡顿；已取到的 data URL 通过 snsImgs 合入。
   useEffect(() => {
+    // StrictMode 会 effect → cleanup → effect；重新 setup 必须恢复可重试状态。
+    mediaUnmounted.current = false
+    const cleanup = (): void => {
+      mediaUnmounted.current = true
+      for (const timer of mediaRetryTimers.current) window.clearTimeout(timer)
+      mediaRetryTimers.current.clear()
+      mediaRetryCount.current.clear()
+    }
     if (typeof IntersectionObserver === 'undefined') {
       // 兜底：不支持 IO 时退回整页解密已挂载的媒体。
       const all = Array.from(mediaKeySpec.current.entries())
       for (const [key, spec] of all) {
-        if (snsFetched.current.has(key)) continue
+        if (mediaQueue.current.length >= MOMENTS_MEDIA_QUEUE_MAX) break
+        if (snsFetched.current.has(key) || mediaActive.current.has(key)) continue
+        mediaActive.current.add(key)
         snsFetched.current.add(key)
         mediaQueue.current.push({ key, ...spec })
       }
       void drainMedia()
-      return
+      return cleanup
     }
     const ob = new IntersectionObserver((entries) => {
       // 视口内的插队到队首、预取区的排到队尾（理由见 `enqueueIntersecting`）。
-      if (enqueueIntersecting(entries, mediaKeySpec.current, snsFetched.current, mediaQueue, scrollRef.current)) {
+      if (enqueueIntersecting(
+        entries,
+        mediaKeySpec.current,
+        snsFetched.current,
+        mediaActive.current,
+        mediaQueue,
+        scrollRef.current,
+      )) {
         void drainMedia()
       }
     }, { root: scrollRef.current, rootMargin: '480px 0px' })
@@ -505,8 +743,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     return () => {
       ob.disconnect()
       mediaObserved.current = null
-      // 卸载后不再让延迟重试的 setTimeout 触发 drain（否则会在后台自激）。
-      mediaUnmounted.current = true
+      cleanup()
     }
   }, [])
 
@@ -516,55 +753,6 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     if (!ob || !scrollRef.current) return
     sweepSnsKeys(ob, snsFetched.current)
   }, [moments, detailKey])
-
-  /**
-   * 公众号文章封面兜底：本地 SNS 缓存没有时，抓取文章页 og:image 转 data URL；
-   * 失败后自动重试（最多 3 次），避免首次加载失败只能靠刷新才能显示。
-   *
-   * ## A1+A2（2026-09-28 性能修复）
-   *
-   * 改前是 `for (const url of todo) { void apiGetArticleCover({ contentUrl: url }) }`
-   * —— **每个链接一个 RPC、且全部立刻发出**。现场日志据此得到「`getArticleCover` 1221 次
-   * （占全部慢调用 73.6%）、均 1920ms」：一屏 30 篇就是 30 个并发 RPC，每个还要 2 次网络往返。
-   *
-   * 现在：① 走批量接口 `apiGetArticleCovers`（一次一屏）；② 分批发出，每批
-   * {@link COVER_BATCH} 条，与前一条的 `drainMedia`/`MEDIA_BATCH` 同一范式 ——
-   * 这样即使一次 refresh 命中很多链接，也不会形成瞬时并发尖峰。
-   */
-  useEffect(() => {
-    const todo = pendingCovers(moments, snsImgs, articleCovers, coverAttempts.current)
-    if (todo.length === 0) return
-    let cancelled = false
-    const retry = (): void => {
-      // 组件已卸载（或 effect 已换轮）就别再排重试，否则会在后台无限自激。
-      if (cancelled) return
-      setTimeout(() => { if (!cancelled) setCoverTick(t => t + 1) }, 2500)
-    }
-    const run = async (): Promise<void> => {
-      for (let i = 0; i < todo.length; i += COVER_BATCH) {
-        if (cancelled) return
-        const batch = todo.slice(i, i + COVER_BATCH)
-        try {
-          const r = await apiGetArticleCovers({ urls: batch })
-          if (cancelled) return
-          const found: Record<string, string> = {}
-          let missed = false
-          for (const it of r.items ?? []) {
-            if (it.dataUrl) found[it.url] = it.dataUrl
-            else missed = true
-          }
-          if (Object.keys(found).length > 0) {
-            setArticleCovers(prev => capRecord({ ...prev, ...found }, ARTICLE_COVER_CACHE_MAX))
-          }
-          if (missed) retry()
-        } catch {
-          retry()
-        }
-      }
-    }
-    void run()
-    return () => { cancelled = true }
-  }, [moments, snsImgs, articleCovers, coverTick])
 
   /**
    * 渲染窗口换了一批元素 ⇒ 重新观察一遍当前 DOM 里的媒体占位块。
@@ -582,41 +770,49 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     for (const el of cells) ob.observe(el)
   }, [groups, renderKey])
 
-  // 进面板时先从 IndexedDB 恢复**已解密原图**（2026-10-19 起不再区分有网/无网）。
-  // 本地有原图就立刻画出来，本地没有的才会在视口内各自去后端要；只恢复开头一段。
-  useEffect(() => {
-    const keys = collectMediaKeys(moments)
-      .filter((k) => !snsFetched.current.has(k))
-      .slice(0, SNS_IMG_RESTORE_MAX)
-    if (keys.length === 0) return
-    void snsMediaCacheGetMany(keys, true).then((cached) => {
-      const found = Object.keys(cached)
-      if (found.length === 0) return
-      for (const k of found) snsFetched.current.add(k)
-      setSnsImgs(prev => capRecord({ ...prev, ...cached }, SNS_IMG_CACHE_MAX))
-    })
-  }, [moments])
+  const viewerImage = viewer ? viewer.images[viewer.index] as ViewerImage | undefined : undefined
+  const viewerRequestKey = viewerImage
+    ? JSON.stringify([imgKey(viewerImage), viewerImage.md5 ?? '', viewerImage.timelineId ?? '', viewerImage.id ?? ''])
+    : ''
+  const viewerKey = viewerImage ? imgKey(viewerImage) : ''
+  const viewerResolved = viewerKey !== '' && Boolean(snsImgs[viewerKey])
 
   // 灯箱当前图：先查本地原图，没有才按需解析（与卡片共用 key）。
+  // 只依赖稳定的请求键和「当前 key 是否已解析」，避免其他图片更新把慢请求误取消后重发。
   useEffect(() => {
-    const im = viewer ? viewer.images[viewer.index] as ViewerImage | undefined : undefined
+    const im = viewerImage
     if (!im) return
     const key = imgKey(im)
-    if (!key || snsImgs[key] || snsFetched.current.has(key)) return
+    if (!key || viewerResolved || snsFetched.current.has(key) || viewerInflight.current.has(key)) return
+    const token = Symbol('viewer-image')
+    viewerInflight.current.set(key, token)
     snsFetched.current.add(key)
+    let cancelled = false
     void snsMediaCacheGet(key, true).then(async (cached) => {
+      if (cancelled) return
       if (cached) {
         setSnsImgs(prev => capRecord({ ...prev, [key]: cached }, SNS_IMG_CACHE_MAX))
         return
       }
       try {
         const r = await apiGetSnsImageDataUrl({ md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id })
-        if (r.url) {
+        if (!cancelled && r.url) {
           setSnsImgs(prev => capRecord({ ...prev, [key]: r.url as string }, SNS_IMG_CACHE_MAX))
         }
       } catch { /* 保留后端兜底 */ }
+    }).catch(() => undefined).finally(() => {
+      if (viewerInflight.current.get(key) === token) viewerInflight.current.delete(key)
     })
-  }, [viewer, snsImgs])
+    return () => {
+      cancelled = true
+      // cleanup 发生在 StrictMode 的“假卸载”时，下一轮必须能重新认领这个键。
+      // 若请求已经成功，token 已摘掉，这里不会误删 fetched。
+      if (viewerInflight.current.get(key) === token) {
+        viewerInflight.current.delete(key)
+        snsFetched.current.delete(key)
+      }
+    }
+  }, [viewerRequestKey, viewerResolved])
 
   /* 取图失败的原因（key → 后端给的原因）。**可加性**输出：调用方暂时可以不理会，
      下一条改动会在占位上把它显示出来（用户："朋友圈图片加载不出来" —— 不该只看到空白）。 */

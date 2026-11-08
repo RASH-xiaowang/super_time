@@ -27,7 +27,7 @@ const css = read('kb-processing.module.css')
 
 describe('页头入口：两个按钮各自接对动作', () => {
   it('批量摘要 / 批量实体都渲染，并分别绑定自己的处理函数', () => {
-    expect(panel).toContain('<KbBatchActionButtons')
+    expect(panel).toContain('<KbToolsMenu')
     expect(buttons).toContain('批量摘要')
     expect(buttons).toContain('批量实体')
     expect(panel).toContain('onSummaries={() => { void batchJobs.batchSummaries() }}')
@@ -87,7 +87,9 @@ describe('实时处理状态面板', () => {
   })
 
   it('批量任务进行中时语义索引也不能再启动', () => {
-    expect(panel).toMatch(/disabled=\{indexing \|\| batchJobs\.runningId !== null\}/)
+    expect(panel).toContain('onIndex={() => { void runIndex(false) }}')
+    expect(buttons).toMatch(/const busy = runningId !== null \|\| indexing/)
+    expect(buttons).toMatch(/disabled=\{busy \|\| desktopOnly\}/)
   })
 
   it('状态用真实终态与计数，不伪造百分比', () => {

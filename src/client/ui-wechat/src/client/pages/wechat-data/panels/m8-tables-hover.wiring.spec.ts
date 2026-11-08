@@ -21,7 +21,8 @@
  *
  * 表格的 640px 最小宽度是第 89 轮定的（窄窗口下每列才都可达），手机上容器只有 349px
  * （实测资金往来 / 操作日志）⇒ 横滚之后不知道这一行是谁的。首列 sticky 的底色必须
- * 不透明（td/th 原本全透明、斑马纹与表头都是半透明叠色），所以判据连底色与叠色层一起钉。
+ * 不透明（td/th 原本全透明、表头是半透明叠色），所以判据连底色与表头叠色层一起钉；
+ * 表体保持无斑马纹，只有可点行在 hover 时高亮。
  *
  * @vitest-environment node
  */
@@ -135,8 +136,16 @@ describe('表格手机档：首列钉住且底色不透明', () => {
     expect(phone, '底色不是卡片令牌 ⇒ 浅色主题会跟着翻车').toContain('var(--nm-bg-card')
     expect(phone, '表头的半透明叠色没叠回来 ⇒ 粘住的列比其余格子暗一档')
       .toContain('linear-gradient(var(--nm-table-header-bg)')
-    expect(phone, '偶数行的斑马纹没叠回来').toContain('linear-gradient(var(--nm-table-row-stripe)')
     expect(phone, '表体首列的 z-index 必须低于表头首列（交叉处会穿帮）').toMatch(/td:first-child \{ z-index: 2; \}/)
+  })
+
+  it('表体不铺斑马纹，只有可点行在 hover 时高亮', () => {
+    expect(kitTable, '不应再按奇偶行铺背景').not
+      .toMatch(/(?:\.table\s+)?tbody\s+tr:nth-child\((?:even|odd)\)[^{}]*\{[^{}]*background/)
+    expect(kitTable, '不应再消费已废弃的斑马纹令牌').not
+      .toMatch(/background(?:-color|-image)?\s*:[^;{}]*var\(--nm-table-row-stripe\)/)
+    expect(kitTable, '可点行的 hover 应使用行高亮令牌')
+      .toContain('.rowClickable:hover { background: var(--nm-table-row-hover) !important; }')
   })
 
   /**

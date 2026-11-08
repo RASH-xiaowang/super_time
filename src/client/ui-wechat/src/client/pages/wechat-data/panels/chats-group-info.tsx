@@ -9,10 +9,10 @@
  */
 
 import type { ChatlogFrame } from './chats-chatlog.ts'
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { filterMembers, memberLimitOf, memberQueryOf, profileAnchor } from './chats-member-view.ts'
-import { useGroupInfoLive } from './chats-info-live.ts'
+import { groupInfoRequestGateFor, useGroupInfoLive } from './chats-info-live.ts'
 
 export interface useChatsGroupInfoInputs {
   /** 当前会话 talker（= 群信息抽屉的取数范围；实时刷新按它判归属）。 */
@@ -23,6 +23,7 @@ export interface useChatsGroupInfoInputs {
 
 export function useChatsGroupInfo(inputs: useChatsGroupInfoInputs) {
   const { talkerRef, sessionAlive, sessionEpochRef } = inputs
+  const groupInfoRequestGate = groupInfoRequestGateFor(sessionEpochRef)
 const [groupInfoOpen, setGroupInfoOpen] = useState(false)
 const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null)
 const [groupInfoLoading, setGroupInfoLoading] = useState(false)
@@ -40,6 +41,13 @@ const [profileMember, setProfileMember] = useState<GroupMember | null>(null)
 const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
 const [chatlogStack, setChatlogStack] = useState<ChatlogFrame[]>([])
 const profileHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+useEffect(() => () => {
+  if (profileHideTimer.current !== null) {
+    clearTimeout(profileHideTimer.current)
+    profileHideTimer.current = null
+  }
+}, [])
 
 const showMemberProfile = (m: GroupMember, el: HTMLElement): void => {
   if (profileHideTimer.current) clearTimeout(profileHideTimer.current)
@@ -62,7 +70,7 @@ const memberLimit = memberLimitOf(memberExpanded)
 const shownMembers = filteredMembers.slice(0, memberLimit)
 
 // 抽屉开着时，宿主数据事件与群信息缓存刷新广播都会静默重取（实时刷新，2026-10-13）。
-useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, setGroupInfo, setGroupInfoErr })
+useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, requestGate: groupInfoRequestGate, setGroupInfo, setGroupInfoErr })
 
   return { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers }
 }

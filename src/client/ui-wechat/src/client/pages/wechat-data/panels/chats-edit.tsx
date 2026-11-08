@@ -14,6 +14,7 @@ import { apiClearAllSessionDrafts, apiClearSessionDraft, apiGetMessages, apiList
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useActionNotice } from './use-action-notice.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
+import { canCacheChatId, canonicalChatId } from '../utils/chat-identity.ts'
 import type { EditedMessageRecord, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsEditInputs {
@@ -69,7 +70,9 @@ const reloadCurrent = useCallback(async (): Promise<void> => {
   try {
     // 键带 v2：早期版本在「切会话」竞态下把上一个会话写进过 v1 缓存（别人的消息留在本会话里），
     // 升版让那些脏数据彻底读不到；读到之后还要再校验一次归属（见 msg-scope.ts）。
-    const raw = readRenderCache<WechatMessage[]>('chat-msgs:v2:' + talker)
+    const raw = canCacheChatId(talker)
+      ? readRenderCache<WechatMessage[]>('chat-msgs:v2:' + talker)
+      : null
     const cached = raw && messagesMatchTalker(raw, talker, selfWxid) ? raw : null
     if (!sessionAlive(epoch, talker)) return
     if (cached && cached.length > 0) {
@@ -78,6 +81,8 @@ const reloadCurrent = useCallback(async (): Promise<void> => {
     }
     const env = await apiGetMessages({ talker, limit: 100 })
     if (!sessionAlive(epoch, talker)) return
+    const canonical = canonicalChatId(talker, env.canonicalUsername)
+    if (canonical !== talker) return
     setMessages(env.messages)
     setWatermarkFrom(env.messages)
     setSelfWxid(env.selfWxid ?? '')
@@ -85,7 +90,7 @@ const reloadCurrent = useCallback(async (): Promise<void> => {
     setCursor(env.cursor ?? 0)
     setCursorLocalId(env.cursorLocalId)
     setTypeStats(env.typeStats ?? [])
-    writeRenderCache('chat-msgs:v2:' + talker, env.messages)
+    if (canCacheChatId(canonical)) writeRenderCache('chat-msgs:v2:' + canonical, env.messages)
   } catch { /* keep current view */ }
 }, [curSession])
 
@@ -120,10 +125,14 @@ const clearAllDrafts = useCallback(async (): Promise<void> => {
   if (!ok) return
   try {
     const r = await apiClearAllSessionDrafts()
-    flashEditNotice(`已清空 ${r.count} 条草稿`)
-    reloadSessionsList()
+    if (r.ok) {
+      flashEditNotice(`已清空 ${r.count} 条草稿`)
+      reloadSessionsList()
+    } else {
+      flashEditNotice('清空草稿失败：' + (r.error ?? '未知错误'))
+    }
   } catch (e) {
-    flashEditNotice('清空失败: ' + (e as Error).message)
+    flashEditNotice('清空草稿失败：' + (e as Error).message)
   }
 }, [flashEditNotice, reloadSessionsList])
 

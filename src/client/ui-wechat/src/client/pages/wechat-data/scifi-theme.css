@@ -1,11 +1,11 @@
 /* ============================================================
- * NEON MATRIX — Super Time 数据面板 科技风主题
+ * WeChat Neutral — Super Time 数据面板主题
  *
- * 深空黑底 + 霓虹青/紫双色系 + 毛玻璃拟态
+ * 微信式中性灰阶 + 单一品牌绿；深浅两套共用同一份组件样式。
  *
  * 本文件只保留两类内容：
  *   1) 设计令牌（:root 变量）—— kit 与所有面板统一经令牌取色；
- *   2) 极少量全局基础样式（重置 / 滚动条 / 选中色 / 一个脉冲动画）。
+ *   2) 极少量全局基础样式（重置 / 滚动条 / 选中色）。
  *
  * 组件级样式一律走 ui/kit.module.css 与各面板的 *.module.css，
  * 不再维护第二套全局组件类（原先的 .nm-btn-* / .nm-card / .nm-modal 等
@@ -93,6 +93,10 @@
   --nm-on-accent: #111111;
   /* 品牌身份色（R1）：与 --nm-cyan 同值起步；语义收窄为「交互态专用」在使用层做 */
   --nm-brand: #07c160;
+  /* 主操作填充：按钮底色专用，与正文/图标用的压暗品牌绿分开 */
+  --nm-brand-fill: #07c160;
+  --nm-brand-fill-hover: #06ad56;
+  --nm-brand-fill-active: #059a4c;
 
   /* 边框 */
   --nm-border: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
@@ -107,8 +111,8 @@
   --nm-shadow-popup: 0 12px 36px rgba(0, 0, 0, 0.55);
 
   /* 排版 */
-  --nm-font-sans: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
-  --nm-font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  --nm-font-sans: system-ui, sans-serif;
+  --nm-font-mono: ui-monospace, monospace;
 
   /* 圆角 */
   --nm-r-xs: 2px;
@@ -196,10 +200,10 @@ body {
 /* ────────────────────────────────────────────
  * 4b. 表单控件字体继承
  *
- * 浏览器 UA 样式表给 button/input/select/textarea 设了 `font: 400 13.3333px Arial`，
+ * 浏览器 UA 样式表给 button/input/select/textarea 设了显式的默认字体，
  * 而 `font-family` 虽然是继承属性，UA 的显式声明会**覆盖继承**。于是面板里
- * div 用 Inter、同一行的 button/input 用 Arial —— 实测确认（会话列表整列、
- * 抽屉的关闭/查看更多按钮、群成员搜索框、头部工具按钮全是 Arial）。
+ * 同一行的 div 与 button/input 可能落到两套字体 —— 实测确认（会话列表整列、
+ * 抽屉的关闭/查看更多按钮、群成员搜索框、头部工具按钮都受影响）。
  *
  * 只补 font-family / font-size，**不用 `font: inherit` 简写**：简写会连
  * line-height / font-weight 一起继承，`.memberMore`（padding 6px 0，无固定高）
@@ -301,15 +305,6 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 :root.theme-light input[type='time']:focus-visible::-webkit-calendar-picker-indicator,
 :root.theme-light input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   opacity: 0.85;
-}
-
-/* ────────────────────────────────────────────
- * 5. 全局动画（唯一被 CSS Module 引用的一个：
- *    wechat-data.module.css 的 .statusDot 使用 nm-pulse-glow）
- * ──────────────────────────────────────────── */
-@keyframes nm-pulse-glow {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50%      { opacity: 0.8; transform: scale(1.05); }
 }
 
 /* ────────────────────────────────────────────
@@ -459,7 +454,7 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 :root {
   color-scheme: dark;
 
-  --dsw-font-family: var(--nm-font-sans, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+  --dsw-font-family: var(--nm-font-sans, system-ui, sans-serif);
   --dsw-font-xs-13: var(--nm-fs-md, 13px);
   --dsw-font-markdown-base: 13px/1.7 var(--nm-font-sans, sans-serif);
   --dsw-font-markdown-base-strong: 13px/1.7 var(--nm-font-sans, sans-serif);
@@ -487,8 +482,8 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --dsw-alias-button-contrast-fill: var(--nm-on-accent, #ffffff);
   --dsw-alias-button-ghost-active-border: var(--nm-cyan-45, rgba(7, 193, 96, 0.45));
   --dsw-alias-button-ghost-active-fill: var(--nm-cyan-12, rgba(7, 193, 96, 0.12));
-  --dsw-alias-button-primary-fill: #07c160;
-  --dsw-alias-button-primary-hover: var(--nm-green, #07c160);
+  --dsw-alias-button-primary-fill: var(--nm-brand-fill, #07c160);
+  --dsw-alias-button-primary-hover: var(--nm-brand-fill-hover, #06ad56);
   --dsw-alias-button-tool-bar-fill: var(--nm-cyan-8, rgba(7, 193, 96, 0.08));
   --dsw-alias-button-tool-bar-hover: var(--nm-cyan-14, rgba(7, 193, 96, 0.14));
   --dsw-alias-interactive-bg-active: var(--nm-cyan-10, rgba(7, 193, 96, 0.10));
@@ -708,6 +703,9 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 @property --nm-cyan-45 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.45); }
 @property --nm-text-4 { syntax: '<color>'; inherits: true; initial-value: #5e5e5e; }
 @property --nm-brand { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-brand-fill { syntax: '<color>'; inherits: true; initial-value: #07c160; }
+@property --nm-brand-fill-hover { syntax: '<color>'; inherits: true; initial-value: #06ad56; }
+@property --nm-brand-fill-active { syntax: '<color>'; inherits: true; initial-value: #059a4c; }
 @property --nm-cyan-20 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.20); }
 @property --nm-cyan-50 { syntax: '<color>'; inherits: true; initial-value: rgba(7, 193, 96, 0.50); }
 @property --nm-cyan-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #07c160 70%, #ededed); }
@@ -817,7 +815,7 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
     --nm-sky,
     --nm-amber-45,
     --nm-text-4,
-    --nm-brand,
+    --nm-brand, --nm-brand-fill, --nm-brand-fill-hover, --nm-brand-fill-active,
     --nm-cyan-text, --nm-danger, --nm-danger-15, --nm-danger-text, --nm-green,
     --nm-green-20, --nm-info, --nm-info-15, --nm-info-text, --nm-map-land,
     --nm-on-accent, --nm-pink, --nm-purple, --nm-purple-20, --nm-purple-text,

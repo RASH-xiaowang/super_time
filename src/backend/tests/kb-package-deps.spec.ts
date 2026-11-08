@@ -125,7 +125,7 @@ describe('B 档三个解析依赖必须在打包白名单里（D6 / R1：漏了�
     expect(worker).toBe(entry.replace(/pdf\.mjs$/, 'pdf.worker.mjs'))
   })
 
-  it('裁剪只裁死重：.map / 非 legacy 的 build / web / types 都被排除，而 cmaps 留着', () => {
+  it('裁剪只裁死重：.map / 非 legacy 的 build / web / types / standard_fonts 都被排除，而 cmaps 留着', () => {
     const ship = (p: string) => `node_modules/pdfjs-dist/${p}`
     // 裁掉的四类：源码映射（只有调试器会取）、另一份用不到的构建、viewer、类型声明。
     for (const dead of [
@@ -141,9 +141,15 @@ describe('B 档三个解析依赖必须在打包白名单里（D6 / R1：漏了�
     // ★ 留下的这一条最要紧：中文 PDF 里字体没有 ToUnicode 时要靠 cmaps 才能把
     // 字节映射成字符。裁掉它 = 中文 PDF 抽出来是乱码（或干脆抽不出），
     // 而那正是本功能的主要使用场景。「省 1.1MB」换这个风险不划算。
-    for (const keep of ['cmaps/Adobe-GB1-UCS2.bcmap', 'standard_fonts/LiberationSans-Regular.ttf']) {
+    for (const keep of ['cmaps/Adobe-GB1-UCS2.bcmap']) {
       expect(excludedBy(files, ship(keep)), `${keep} 被裁掉了 —— 中文 PDF 会抽不出字`).toBe(false)
       expect(coveredBy(files, ship(keep)), `${keep} 没被覆盖`).toBe(true)
+    }
+    // PDF.js 的 standard_fonts 只用于渲染缺字形的 PDF；本应用只 getTextContent()。
+    // 其中 LiberationSans 是 GPLv2 + 字体例外，不属于 pdfjs-dist 的 Apache-2.0，
+    // 因此整个目录不得进入闭源商业发布包。
+    for (const drop of ['standard_fonts/LiberationSans-Regular.ttf', 'standard_fonts/LICENSE_LIBERATION', 'standard_fonts/FoxitFixed.pfb']) {
+      expect(excludedBy(files, ship(drop)), `${drop} 必须被排除`).toBe(true)
     }
   })
 
@@ -196,6 +202,8 @@ describe('B 档三个解析依赖必须在打包白名单里（D6 / R1：漏了�
     // xlsx 的裁剪在产物层再确证一次：白名单只是意图，产物才是事实。
     expect(entries.some((p) => p === '/node_modules/xlsx/dist/cpexcel.js'),
       'cpexcel.js 不在包内 —— 老式 .xls 的代码页解码会在用户机器上炸').toBe(true)
+    expect(entries.some((p) => p.startsWith('/node_modules/pdfjs-dist/standard_fonts/')),
+      'pdfjs 标准字体进了包：LiberationSans 是 GPLv2 + 字体例外，闭源分发风险高').toBe(false)
     expect(entries.some((p) => p.startsWith('/node_modules/xlsx/dist/xlsx.full.min')),
       'xlsx.full.min.js 进了包（900KB 死重）').toBe(false)
     // 传递依赖：它们**没有**列进 files，靠 electron-builder 自动带。产物层是唯一能验的地方。
