@@ -238,12 +238,11 @@ describe('AI 自动回复 · 同一轮只回最新问题', () => {
 
     expect(generate).not.toHaveBeenCalled()
     expect(dispatchReply).not.toHaveBeenCalled()
-    expect(getMessageListRecord(decrypted, reserved.id ?? 0)).toMatchObject({
-      status: 'failed',
-      error: expect.stringContaining('过期'),
-    })
+    // 从未生成过正文的预约被更新消息取代时直接删除：后台没有可补发的 pending，
+    // 任务信息里也不会多出一条「会话已有更新的消息」失败记录。
+    expect(getMessageListRecord(decrypted, reserved.id ?? 0)).toBeUndefined()
     expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
-      stage: 'failed',
+      stage: 'success',
       cursor: 'v2:200:2',
     })
     expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').pendingSourceRef)

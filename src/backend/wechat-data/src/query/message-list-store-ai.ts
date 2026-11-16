@@ -589,6 +589,77 @@ export function failAiReplyMessageListRecord(
   }
 }
 
+/**
+ * 删除一组**从未发送**的 AI 回复预约。
+ *
+ * 被同一轮更新消息取代的预约没有任何发送价值；把它标成失败只会在「任务信息」
+ * 里堆出一条条无意义的失败记录（真机实测：4 分钟 40+ 条「会话已有更新的消息」）。
+ * 只有整组都还是 pending（没有任何分段进过 dispatching/queued/running/success）
+ * 才允许删除；一旦有分段进过投递，事实必须保留给人工核对。
+ *
+ * 幂等：记录已经不存在时返回 ok=true、removed=0。
+ */
+export function dropAiReplyMessageListRecord(
+  decryptedDir: string,
+  id: number,
+  sourceRef?: string,
+): { ok: boolean; removed: number; error?: string } {
+  const recordId = positiveId(id)
+  if (recordId <= 0) return { ok: false, removed: 0, error: 'AI 回复记录 id 无效' }
+  if (!storeExists(decryptedDir)) return { ok: false, removed: 0, error: 'AI 回复预约记录不存在' }
+  try {
+    return withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureMessageListSchema(db)
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const targetRow = db.prepare('SELECT * FROM message_list_records WHERE id = ?')
+          .get(recordId) as Record<string, unknown> | undefined
+        if (targetRow === undefined) {
+          db.exec('COMMIT')
+          return { ok: true, removed: 0 }
+        }
+        const target = rowToMessageListRecord(targetRow)
+        if (target.source !== 'ai_reply') throw new Error('目标记录不是 AI 回复来源')
+        const parsed = parseChatAiReplySourceRef(target.sourceRef)
+        if (parsed === null) throw new Error('AI 回复预约的 sourceRef 无效')
+        const base = parsed.baseSourceRef
+        // 调用方传了 sourceRef 就必须与记录一致，避免幂等键漂移后误删别的分组。
+        const expected = textOf(sourceRef ?? '', SOURCE_REF_MAX)
+        if (expected !== ''
+          && parseChatAiReplySourceRef(expected)?.baseSourceRef !== base) {
+          throw new Error('AI 回复预约的 sourceRef 与记录不一致，拒绝删除')
+        }
+        const groupRows = db.prepare(`SELECT status, text FROM message_list_records
+          WHERE source = 'ai_reply'
+            AND (source_ref = ? OR segment_group_ref = ? OR instr(source_ref, ?) = 1)`)
+          .all(base, base, base + ':segment:') as Array<{ status?: unknown; text?: unknown }>
+        if (groupRows.some((row) => textOf(row.status, 32) !== 'pending')) {
+          throw new Error('AI 回复分组已有投递事实，不能删除')
+        }
+        // 已经生成过正文的预约只在等配置/等投递，删掉等于丢模型结果。
+        if (groupRows.some((row) => textOf(row.text, TEXT_MAX) !== '')) {
+          throw new Error('AI 回复分组已有生成正文，不能删除')
+        }
+        const info = db.prepare(`DELETE FROM message_list_records
+          WHERE source = 'ai_reply'
+            AND (source_ref = ? OR segment_group_ref = ? OR instr(source_ref, ?) = 1)`)
+          .run(base, base, base + ':segment:')
+        db.exec('COMMIT')
+        return { ok: true, removed: Number(info.changes) }
+      } catch (e) {
+        try {
+          db.exec('ROLLBACK')
+        } catch {
+          // 原始错误更有用。
+        }
+        throw e
+      }
+    })
+  } catch (e) {
+    return { ok: false, removed: 0, error: 'AI 回复预约删除失败：' + errorText(e) }
+  }
+}
+
 /** AI 回复恢复器的只读孤儿预约快照；不暴露完整消息正文给扫描器。 */
 export interface PendingAiReplyMessageListRecord {
   id: number

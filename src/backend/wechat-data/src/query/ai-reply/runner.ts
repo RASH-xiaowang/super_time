@@ -49,6 +49,11 @@ import {
   notifyChatAiReplyRecordUpdated,
 } from './runner-state.ts'
 import {
+  CHAT_AI_REPLY_COALESCE_QUIET_MS,
+  cancelSupersededBeforeReservation,
+  coalesceChatAiReplyRun,
+} from './runner-coalesce.ts'
+import {
   beginChatAiReplyRun,
   cancelStaleChatAiReplyRun,
   cancelSupersededChatAiReplyRun,
@@ -69,6 +74,11 @@ export interface ChatAiReplyRunnerOptions {
   leaseMs?: number
   /** 0 表示禁用心跳，仅用于确定性的租约接管测试。 */
   heartbeatMs?: number
+  /**
+   * 同一轮连发的合并静默期（毫秒）；0 关闭合并。
+   * 生产默认 900ms：对方连发时等这一轮说完再生成，一条消息一次模型调用。
+   */
+  coalesceMs?: number
   /** 测试可固定 owner；生产每个 runner 实例自动生成唯一值。 */
   owner?: string
 }
@@ -85,6 +95,7 @@ async function runOne(
     now: () => number
     leaseMs: number
     heartbeatMs: number
+    coalesceMs: number
     stale: boolean
     canUseLease: () => boolean
   },
@@ -172,6 +183,19 @@ async function runOne(
       if (options.stale) {
         return await cancelStaleChatAiReplyRun(deps, state, started)
       }
+      // 同一轮连发先合并：等对方说完了再生成，一条消息一次模型调用。
+      if (await coalesceChatAiReplyRun(
+        deps,
+        state,
+        started,
+        isCancelled,
+        options.coalesceMs,
+      ) === 'handled') {
+        return false
+      }
+      if (isCancelled()) return false
+      // 预约之前复核：已经被更新消息越过时，不建预约、不留失败记录。
+      if (await cancelSupersededBeforeReservation(deps, state, started)) return false
       const reserved = await reserveChatAiReplyRun(deps, state, started)
       if (reserved === 'done') return false
       if (isCancelled()) return false
@@ -348,6 +372,9 @@ export function createChatAiReplyRunner(
   const heartbeatMs = runnerOptions.heartbeatMs === undefined
     ? Math.max(1, Math.floor(leaseMs / 3))
     : Math.max(0, Math.trunc(runnerOptions.heartbeatMs))
+  const coalesceMs = runnerOptions.coalesceMs === undefined
+    ? CHAT_AI_REPLY_COALESCE_QUIET_MS
+    : Math.max(0, Math.trunc(runnerOptions.coalesceMs))
   const owner = runnerOptions.owner?.trim()
     || 'chat-ai-reply:' + String(process.pid) + ':' + randomUUID()
 
@@ -415,6 +442,7 @@ export function createChatAiReplyRunner(
             now,
             leaseMs,
             heartbeatMs,
+            coalesceMs,
             stale: work.stale,
             canUseLease: () => !disposed,
           },

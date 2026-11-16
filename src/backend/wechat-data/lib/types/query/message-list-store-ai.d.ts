@@ -43,6 +43,21 @@ export declare function failAiReplyMessageListSegmentsAfter(decryptedDir: string
  * 已完成或已进入投递态的记录不会被失败回写覆盖。
  */
 export declare function failAiReplyMessageListRecord(decryptedDir: string, id: number, error: string): MessageListRecordResult;
+/**
+ * 删除一组**从未发送**的 AI 回复预约。
+ *
+ * 被同一轮更新消息取代的预约没有任何发送价值；把它标成失败只会在「任务信息」
+ * 里堆出一条条无意义的失败记录（真机实测：4 分钟 40+ 条「会话已有更新的消息」）。
+ * 只有整组都还是 pending（没有任何分段进过 dispatching/queued/running/success）
+ * 才允许删除；一旦有分段进过投递，事实必须保留给人工核对。
+ *
+ * 幂等：记录已经不存在时返回 ok=true、removed=0。
+ */
+export declare function dropAiReplyMessageListRecord(decryptedDir: string, id: number, sourceRef?: string): {
+    ok: boolean;
+    removed: number;
+    error?: string;
+};
 /** AI 回复恢复器的只读孤儿预约快照；不暴露完整消息正文给扫描器。 */
 export interface PendingAiReplyMessageListRecord {
     id: number;

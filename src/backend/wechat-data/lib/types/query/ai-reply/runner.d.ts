@@ -9,6 +9,11 @@ export interface ChatAiReplyRunnerOptions {
     leaseMs?: number;
     /** 0 表示禁用心跳，仅用于确定性的租约接管测试。 */
     heartbeatMs?: number;
+    /**
+     * 同一轮连发的合并静默期（毫秒）；0 关闭合并。
+     * 生产默认 900ms：对方连发时等这一轮说完再生成，一条消息一次模型调用。
+     */
+    coalesceMs?: number;
     /** 测试可固定 owner；生产每个 runner 实例自动生成唯一值。 */
     owner?: string;
 }

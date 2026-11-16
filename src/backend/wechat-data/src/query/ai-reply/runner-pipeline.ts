@@ -33,6 +33,7 @@ import {
   inspectReply,
   sourceRefOf,
 } from './runner-recovery.ts'
+import { STALE_REPLY_REASON, dropOrFailStaleReservation } from './runner-coalesce.ts'
 import {
   type ChatAiReplyRunRef,
   deferChatAiReplyRun,
@@ -50,9 +51,6 @@ import {
 type SegmentReadResult =
   | { ok: true; segments: ChatAiReplySegmentSnapshot[]; grouped: boolean }
   | { ok: false; error: string }
-
-const STALE_REPLY_REASON =
-  '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题'
 
 async function readSegmentsForRun(
   deps: ChatAiReplyScanDeps,
@@ -164,8 +162,9 @@ function isAcceptedStatus(status: ChatAiReplyMessageStatus): boolean {
 /**
  * 收口已被会话新消息越过的旧任务。
  *
- * 这里绝不生成或投递：先尽量把仍为 pending 的旧预约（含分段）标记失败，
- * 防止别的投递入口把旧问题再次发出去；已成功/已受理的段保留事实并直接收口。
+ * 这里绝不生成或投递：从未生成过正文的预约直接删除（这不是失败，不留失败记录），
+ * 其余仍为 pending 的旧预约（含分段）标记失败，防止别的投递入口把旧问题再次发出去；
+ * 已成功/已受理的段保留事实并直接收口。
  */
 export async function cancelStaleChatAiReplyRun(
   deps: ChatAiReplyScanDeps,
@@ -220,10 +219,9 @@ export async function cancelStaleChatAiReplyRun(
 
   const pendingSegments = segments?.filter((segment) => segment.status === 'pending') ?? []
   if (record.status === 'pending' || segments === undefined || pendingSegments.length > 0) {
-    record = await failChatAiReplyReservation(deps, state, run, STALE_REPLY_REASON)
-    for (const segment of pendingSegments) {
-      notifyChatAiReplyRecordUpdated(deps, state, segment.id)
-    }
+    // 从未生成过正文的预约直接删除（这不是失败）；删不了才退回标失败。
+    if (await dropOrFailStaleReservation(deps, state, run, pendingSegments)) return true
+    record = await inspectReply(deps, run.recordId)
   }
 
   if (record.found && record.status === 'pending') {

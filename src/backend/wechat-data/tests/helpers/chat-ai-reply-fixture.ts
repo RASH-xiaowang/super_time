@@ -11,6 +11,7 @@ import type { ChatAiReplyScanDeps } from '../../src/query/ai-reply/types.ts'
 import {
   completeAiReplyMessageListRecord,
   completeAiReplyMessageListRecordSegments,
+  dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
   getMessageListRecord,
@@ -30,6 +31,7 @@ export interface ChatAiReplyTestHarness {
   listReplySegments: NonNullable<ChatAiReplyScanDeps['listReplySegments']>
   failReplySegmentsAfter: NonNullable<ChatAiReplyScanDeps['failReplySegmentsAfter']>
   failReply: ChatAiReplyScanDeps['failReply']
+  dropReply: NonNullable<ChatAiReplyScanDeps['dropReply']>
   getReply: ChatAiReplyScanDeps['getReply']
   deps: (overrides?: Partial<ChatAiReplyScanDeps>) => ChatAiReplyScanDeps
 }
@@ -107,6 +109,13 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
     }
   }
 
+  const dropReply: NonNullable<ChatAiReplyScanDeps['dropReply']> = async (input) => {
+    const dropped = dropAiReplyMessageListRecord(decrypted, input.id, input.sourceRef)
+    return dropped.ok
+      ? { ok: true }
+      : { ok: false, ...(dropped.error === undefined ? {} : { error: dropped.error }) }
+  }
+
   const getReply: ChatAiReplyScanDeps['getReply'] = async (id) => {
     const record = getMessageListRecord(decrypted, id)
     return record === undefined
@@ -140,6 +149,7 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
     listReplySegments,
     failReplySegmentsAfter,
     failReply,
+    dropReply,
     getReply,
     dispatchReply: async () => ({ ok: true }),
     op: () => {},
@@ -172,6 +182,7 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
     listReplySegments,
     failReplySegmentsAfter,
     failReply,
+    dropReply,
     getReply,
     deps,
   }

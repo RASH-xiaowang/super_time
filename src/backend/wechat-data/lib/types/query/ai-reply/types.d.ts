@@ -311,6 +311,19 @@ export interface ChatAiReplyScanDeps {
         id: number;
         error: string;
     }) => Promise<ChatAiReplyRecordResult>;
+    /**
+     * 删除一组**从未发送**的 AI 预约（整组必须都还是 pending）。
+     *
+     * 被同一轮更新消息取代的预约直接删除，不再标失败 —— 否则「任务信息」会被
+     * 「会话已有更新的消息」这一类记录刷屏。缺省时退回 `failReply`。
+     */
+    dropReply?: (input: {
+        id: number;
+        sourceRef: string;
+    }) => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
     /** 只读回查记录，用于崩溃后判断该从生成、补投还是人工终态继续。 */
     getReply: (id: number) => Promise<ChatAiReplyRecordSnapshot>;
     /** 只允许投递已经由 completeReply 写入消息列表的记录。 */

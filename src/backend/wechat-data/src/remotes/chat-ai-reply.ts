@@ -37,6 +37,7 @@ import type {
 import {
   completeAiReplyMessageListRecord,
   completeAiReplyMessageListRecordSegments,
+  dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
   getMessageListRecord,
@@ -186,6 +187,12 @@ function createChatAiReplyScanDeps(
               : { status: failed.record.status, text: failed.record.text }),
           }
         : { ok: false, ...(failed.error === undefined ? {} : { error: failed.error }) }
+    },
+    dropReply: async (input) => {
+      const dropped = dropAiReplyMessageListRecord(dir(), input.id, input.sourceRef)
+      return dropped.ok
+        ? { ok: true }
+        : { ok: false, ...(dropped.error === undefined ? {} : { error: dropped.error }) }
     },
     getReply: async (id) => {
       const record = getMessageListRecord(dir(), id)

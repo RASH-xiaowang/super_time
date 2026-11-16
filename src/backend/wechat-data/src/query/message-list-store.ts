@@ -44,6 +44,7 @@ export {
   type PendingAiReplyMessageListRecord,
   completeAiReplyMessageListRecord,
   completeAiReplyMessageListRecordSegments,
+  dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
   insertAiReplyMessageListRecord,
