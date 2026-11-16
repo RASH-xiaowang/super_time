@@ -28,6 +28,12 @@ export async function saveMomentImageOriginal(
     ...(image.token ? { token: image.token } : {}),
     ...((image.seed ?? image.key) ? { seed: image.seed ?? image.key } : {}),
     ...(image.key ? { key: image.key } : {}),
+    ...(image.originalWidth !== undefined ? { originalWidth: image.originalWidth } : {}),
+    ...(image.originalHeight !== undefined ? { originalHeight: image.originalHeight } : {}),
+    ...(image.originalBytes !== undefined ? { originalBytes: image.originalBytes } : {}),
+    ...(image.uhdUrl ? { uhdUrl: image.uhdUrl } : {}),
+    ...(image.uhdToken ? { uhdToken: image.uhdToken } : {}),
+    ...(image.uhdSeed ? { uhdSeed: image.uhdSeed } : {}),
     dest: picked.path,
     jobId,
   })

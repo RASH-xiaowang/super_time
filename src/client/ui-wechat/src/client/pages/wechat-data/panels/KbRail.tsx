@@ -349,7 +349,13 @@ export function KbRail(): React.JSX.Element {
           placeholder="库名（同一个库内笔记标题唯一，库名本身也需唯一）"
           aria-label="知识库名称"
           onChange={(e) => { if (form) setForm({ ...form, name: e.target.value }) }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) { e.preventDefault(); void submitForm() } }}
+          // `isComposing` 必须挡：中文输入法里按 Enter 是「上屏候选词」，不挡就会把
+          // 打到一半的库名直接提交（`e.key` 在组词期间同样是 'Enter'）。
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || busy || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            void submitForm()
+          }}
         />
         {err && <div className={css.errBox} role="alert">⚠️ {err}</div>}
       </Dialog>

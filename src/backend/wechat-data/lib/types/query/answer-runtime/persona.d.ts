@@ -7,6 +7,20 @@
  */
 /** 手动问答规则块的幂等标记。 */
 export declare const MANUAL_QA_PERSONA_MARKER = "\u3010\u4EBA\u79F0\u4E0E\u89D2\u8272\u89C4\u5219\uFF5C\u5FAE\u4FE1\u95EE\u7B54\u4E0E AI \u95EE\u7B54\u3011";
+/** 不可信材料安全边界块的幂等标记。 */
+export declare const UNTRUSTED_MATERIAL_MARKER = "\u3010\u4E0D\u53EF\u4FE1\u6750\u6599\u5B89\u5168\u8FB9\u754C\u3011";
+/** 材料正文的开始分隔符（系统提示与 synth 规则都按它描述材料位置）。 */
+export declare const MATERIAL_BEGIN_MARKER = "\u3010\u68C0\u7D22\u6750\u6599\u5F00\u59CB\u3011";
+/** 材料正文的结束分隔符。 */
+export declare const MATERIAL_END_MARKER = "\u3010\u68C0\u7D22\u6750\u6599\u7ED3\u675F\u3011";
+/**
+ * 检索材料的硬安全规则。
+ *
+ * 聊天记录、群公告、知识库文档、朋友圈等内容都可能被外部人员写入，必须按
+ * **数据**而不是**指令**对待。规则同时说明材料在提示词里的包裹方式，便于模型
+ * 区分「系统规则 / 提问者问题」与「材料正文」。
+ */
+export declare const UNTRUSTED_MATERIAL_RULE: string;
 /**
  * 微信问答 / 会话内 AI 问答的固定人称规则。
  *
@@ -48,9 +62,9 @@ export declare function formatConversationHistory(history: ReadonlyArray<{
     content: string;
 }>): string;
 /**
- * 给自定义问答提示词追加固定人称规则（幂等）。
+ * 给自定义问答提示词追加固定人称规则与不可信材料边界（幂等）。
  *
  * @param prompt - 用户或调用方提供的提示词。
- * @returns 已包含固定规则的提示词。
+ * @returns 已包含固定规则与安全边界的提示词。
  */
 export declare function withManualQaPersonaRules(prompt: string): string;

@@ -8,11 +8,13 @@
  *
  * 组件本身不发请求。`useInlineAnalysis` 负责「选中即分析」、排队、缓存与重试，
  * 这里只消费状态，保证展示层可以独立测试。
+ *
+ * 边界：本面板**只做研判**（意图、温度、建议动作），不生成可直接发送的候选回复。
+ * 候选回复属于独立的「推荐回复」板块，由 `ChatRightPanel` 按模式二选一渲染。
  */
 import type { LayaAnswer, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { Avatar } from './chats-support.tsx'
 import { AnswerBlock } from './AnalysisBlocks.tsx'
-import { AnalysisReplySuggest } from './AnalysisReplySuggest.tsx'
 import { buildAnalysisBrief } from './analysis-brief.ts'
 import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
 import { fmtDateTimeSec } from '../utils/format.ts'
@@ -39,8 +41,6 @@ export interface ChatAnalysisPanelProps {
   isGroup?: boolean
   /** 当前是否正在跳缓存重算。 */
   refreshing?: boolean
-  /** 当前会话 username；用于生成针对分析目标的推荐回复。 */
-  replyUsername?: string
   /** 失败后重试。 */
   onRetry?: (localId: number) => void
   /** 忽略缓存后重新分析。 */
@@ -117,7 +117,7 @@ function ProbabilityBar({ value, tone }: { value: number; tone?: 'brand' | 'warn
  * @param props - 选中消息、分析状态与重试/重算回调。
  */
 export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Element {
-  const { targetId, entry, message, speaker, isGroup, refreshing, replyUsername, onRetry, onRefresh } = props
+  const { targetId, entry, message, speaker, isGroup, refreshing, onRetry, onRefresh } = props
   const done = entry?.state === 'done' ? entry : undefined
   const brief = done === undefined ? undefined : buildAnalysisBrief(done)
   const ordered: LayaAnswer[] = done === undefined
@@ -227,10 +227,6 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
                   <p>{brief.action.guidance}</p>
                   <div className={css.avoid}><b>避免</b>{brief.action.avoid}</div>
                 </section>
-
-                {replyUsername !== undefined && replyUsername !== '' && (
-                  <AnalysisReplySuggest username={replyUsername} targetLocalId={targetId} />
-                )}
 
                 {brief.signals.length > 0 && (
                   <div className={css.signalGrid} aria-label="关键信号">

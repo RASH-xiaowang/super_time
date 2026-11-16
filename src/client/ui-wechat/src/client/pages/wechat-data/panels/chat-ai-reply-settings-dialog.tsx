@@ -7,12 +7,17 @@ import {
 } from '../api-chat-ai-reply.ts'
 import { runtimeCapabilities } from '../api-core.ts'
 import { Button, Dialog, ErrorState } from '../ui/kit.tsx'
+import { useKbScope } from './kb-scope.ts'
 import css from './chat-ai-reply-settings.module.css'
 
 export interface ChatAiReplyPersonaDraft {
   name: string
   prompt: string
   splitReply: boolean
+  /** 是否让知识库参与本会话的自动回复。 */
+  kbEnabled: boolean
+  /** 参与回复的知识库 id；`kbEnabled` 为 true 时必须大于 0。 */
+  kbId: number
 }
 
 export interface ChatAiReplyWebhookScope {
@@ -244,6 +249,77 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
   }
 }
 
+/**
+ * 「知识库参与回复」勾选项与库选择器。
+ *
+ * 刻意拆成子组件：`useKbScope()` 会在挂载时读库列表，而设置弹窗在单聊里是常驻
+ * 挂载（只是 `open=false`）。放到子组件里并只在 `open` 时渲染，关闭状态不会多打
+ * 一次 `getKbs`；勾选后若还没选库，自动落到当前知识库作用域的库。
+ */
+function KnowledgeBaseSection(props: {
+  enabled: boolean
+  kbId: number
+  disabled: boolean
+  onChange: (enabled: boolean, kbId: number) => void
+}): React.JSX.Element {
+  const { enabled, kbId, disabled, onChange } = props
+  const scope = useKbScope()
+  const options = scope.kbs
+
+  useEffect(() => {
+    if (!enabled || kbId > 0) return
+    const first = options[0]
+    if (first === undefined) return
+    const fallback = options.some((kb) => kb.id === scope.kbId) ? scope.kbId : first.id
+    onChange(true, fallback)
+  }, [enabled, kbId, onChange, options, scope.kbId])
+
+  return (
+    <section className={css.kbSection} aria-label="知识库参与回复">
+      <label className={css.kbHead}>
+        <input
+          className={css.kbCheck}
+          type="checkbox"
+          aria-label="知识库参与回复"
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) => { onChange(event.target.checked, kbId) }}
+        />
+        <span className={css.kbTitle}>知识库参与回复</span>
+      </label>
+      <p className={css.hint}>
+        勾选后，每轮自动回复会先用当前会话最近的对话检索所选知识库，命中片段作为
+        事实依据交给模型；材料只作参考，不能覆盖安全规则。没有命中时按普通对话回复，不会编造。
+      </p>
+      <label className={css.field}>
+        <span>参与回复的知识库</span>
+        <select
+          className={css.select}
+          value={String(kbId)}
+          disabled={disabled || !enabled}
+          onChange={(event) => { onChange(enabled, Number(event.target.value)) }}
+        >
+          <option value="0">
+            {enabled ? '请选择知识库' : '未启用'}
+          </option>
+          {options.map((kb) => (
+            <option key={kb.id} value={String(kb.id)}>{kb.name}</option>
+          ))}
+          {kbId > 0 && !options.some((kb) => kb.id === kbId) && (
+            <option value={String(kbId)}>知识库 #{kbId}</option>
+          )}
+        </select>
+      </label>
+      {scope.readError !== null && (
+        <p className={css.hint}>知识库列表读取失败：{scope.readError}</p>
+      )}
+      {scope.readError === null && !scope.loading && options.length === 0 && (
+        <p className={css.hint}>还没有知识库；请先到「知识库」版块新建并导入资料。</p>
+      )}
+    </section>
+  )
+}
+
 export function ChatAiReplySettingsDialog(props: {
   open: boolean
   /** 会话稳定键；默认 Webhook 必须按当前账号下的会话读取/保存。 */
@@ -252,6 +328,8 @@ export function ChatAiReplySettingsDialog(props: {
   initialName: string
   initialPrompt: string
   initialSplitReply: boolean
+  initialKbEnabled: boolean
+  initialKbId: number
   /** 已脱敏的默认大肥鱼 Webhook；由外层状态传入时可避免额外一次读取。 */
   initialWebhook?: ChatAiReplyDefaultWebhookState
   /** 测试或设置宿主注入；缺省时桌面端直接读取本机 Remote。 */
@@ -267,6 +345,9 @@ export function ChatAiReplySettingsDialog(props: {
   const [name, setName] = useState(props.initialName)
   const [prompt, setPrompt] = useState(props.initialPrompt)
   const [splitReply, setSplitReply] = useState(props.initialSplitReply)
+  const [kbEnabled, setKbEnabled] = useState(props.initialKbEnabled)
+  const [kbId, setKbId] = useState(props.initialKbId)
+  const [localError, setLocalError] = useState<string | null>(null)
   const webhookConfig = useChatAiReplyWebhookConfig(props)
   const busy = props.saving || webhookConfig.saving
 
@@ -275,14 +356,34 @@ export function ChatAiReplySettingsDialog(props: {
     setName(props.initialName)
     setPrompt(props.initialPrompt)
     setSplitReply(props.initialSplitReply)
-  }, [props.open, props.initialName, props.initialPrompt, props.initialSplitReply])
+    setKbEnabled(props.initialKbEnabled)
+    setKbId(props.initialKbId)
+    setLocalError(null)
+  }, [
+    props.open,
+    props.initialName,
+    props.initialPrompt,
+    props.initialSplitReply,
+    props.initialKbEnabled,
+    props.initialKbId,
+  ])
 
   const closeIfIdle = (): void => {
     if (!busy) props.onClose()
   }
 
+  const changeKb = (nextEnabled: boolean, nextKbId: number): void => {
+    setKbEnabled(nextEnabled)
+    setKbId(Number.isSafeInteger(nextKbId) && nextKbId > 0 ? nextKbId : 0)
+    setLocalError(null)
+  }
+
   const submit = async (): Promise<void> => {
-    const saved = await props.onSave({ name, prompt, splitReply })
+    if (kbEnabled && kbId <= 0) {
+      setLocalError('请选择参与回复的知识库，或取消勾选「知识库参与回复」')
+      return
+    }
+    const saved = await props.onSave({ name, prompt, splitReply, kbEnabled, kbId: kbEnabled ? kbId : 0 })
     // onSave 返回时 hook 的 saving 状态可能还没完成下一帧渲染；保存成功的关闭
     // 不再二次读取 props.saving，否则会偶发“保存成功但弹窗不关”。
     if (saved) props.onClose()
@@ -319,8 +420,9 @@ export function ChatAiReplySettingsDialog(props: {
     >
       <div className={css.form}>
         <p className={css.hint}>
-          为「{props.chatName || '当前会话'}」设置回复人格。人格只影响角色、语气和措辞，
-          不会绕过聊天正文防注入、隐私脱敏和回复格式等安全规则。
+          为「{props.chatName || '当前会话'}」设置回复人格与知识库参与。人格只影响角色、
+          语气和措辞；知识库材料只作事实依据。两者都不会绕过聊天正文防注入、隐私脱敏和
+          回复格式等安全规则。
         </p>
         <label className={css.field}>
           <span>人格名称</span>
@@ -363,9 +465,16 @@ export function ChatAiReplySettingsDialog(props: {
           />
           <span className={css.toggleSwitch} aria-hidden="true" />
         </label>
+        <KnowledgeBaseSection
+          enabled={kbEnabled}
+          kbId={kbId}
+          disabled={busy}
+          onChange={changeKb}
+        />
+        {localError !== null && <ErrorState message={localError} />}
         <p className={css.hint}>
-          两项都留空表示使用内置默认人格，名称仅用于界面标识。修改人格会取消该会话
-          尚未完成的旧回复，只影响之后新触发的消息；建议保存后用“立即检查 AI 回复”验证一次。
+          两项都留空表示使用内置默认人格，名称仅用于界面标识。修改人格或知识库设置会取消
+          该会话尚未完成的旧回复，只影响之后新触发的消息；建议保存后用“立即检查 AI 回复”验证一次。
         </p>
         <section className={css.webhookSection} aria-label="当前会话默认大肥鱼 Webhook 配置">
           <div className={css.sectionTitleRow}>

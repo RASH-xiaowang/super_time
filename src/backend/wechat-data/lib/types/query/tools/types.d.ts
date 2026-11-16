@@ -31,7 +31,7 @@
  * @module query/tools/types
  */
 /** 工具名（稳定标识，模型按它调用；改动等于破坏兼容）。 */
-export type ToolName = 'search_messages' | 'search_semantic' | 'search_hybrid' | 'aggregate_messages' | 'list_sessions' | 'get_session_messages' | 'get_message_context' | 'search_contacts' | 'get_contact_detail' | 'search_moments' | 'search_favorites' | 'search_files' | 'search_records' | 'search_kb';
+export type ToolName = 'search_messages' | 'search_semantic' | 'search_hybrid' | 'aggregate_messages' | 'list_sessions' | 'get_session_messages' | 'get_message_context' | 'search_contacts' | 'get_contact_detail' | 'search_moments' | 'search_favorites' | 'search_files' | 'search_records' | 'search_kb' | 'get_funds_summary' | 'get_call_history' | 'get_group_detail' | 'search_revoked' | 'aggregate_media' | 'get_moments_stats';
 /** 工具的分类（用于界面分组与「这次用了哪类工具」的展示）。 */
 export type ToolCategory = 'message' | 'aggregate' | 'contact' | 'content' | 'kb';
 /** 独立资源种类（文件/收藏/朋友圈/转账红包）。 */

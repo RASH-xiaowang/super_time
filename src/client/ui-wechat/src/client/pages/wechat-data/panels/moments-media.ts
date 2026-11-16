@@ -31,7 +31,7 @@
  *
  * @module moments-media
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   apiGetArticleCovers,
@@ -127,21 +127,200 @@ class BoundedMediaMap<K, V> extends Map<K, V> {
  * 图片/视频的离线解码请求描述。
  * 定义在这里（而不是卡片里）：面板的钩子与卡片的 props 共用同一个形状，只有一份出处。
  */
-export interface MediaKeySpec {
+export interface SnsImageSource {
   /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路（见后端 `sns-cdn-image.ts`）。 */
   url?: string
   /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
   token?: string
-  md5: string
+  md5?: string
   timelineId?: string
+  id?: string
   mediaId?: string
-  kind: 'img' | 'video' | 'comment'
   seed?: string
+  /** 卡片 XML 的 `<enc key>`；即主图 `seed` 的别名。 */
+  key?: string
   thumb?: string
+  /** 原图预期尺寸/字节数（后端按这些字段选择真实的 `/0` 原图）。 */
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  /** XML `<uhd>` 的独立 CDN 三件套；它和主图 `url/token/seed` 不是同一份。 */
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
+  uhdMd5?: string
+}
+
+export interface MediaKeySpec extends SnsImageSource {
+  md5: string
+  kind: 'img' | 'video' | 'comment'
 }
 
 /** 灯箱按需解析时用的最小图结构（与 `MomentsImageViewer` 传进来的形状兼容）。 */
-type ViewerImage = { thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }
+type ViewerImage = SnsImageSource
+
+export interface SnsImageRequestOptions {
+  md5: string
+  timelineId?: string
+  mediaId?: string
+  url?: string
+  token?: string
+  seed?: string
+  thumb?: string
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
+  offline?: boolean
+}
+
+export interface SnsImageEntry {
+  url: string
+  original: boolean
+}
+
+export type SnsImageEntries = Record<string, SnsImageEntry>
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function positiveCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined
+}
+
+/**
+ * 把图片记录里的原图元数据收成请求字段。
+ *
+ * 网格与灯箱都必须走这里：UHD 的 md5/token/seed 与普通图不同，尤其 `uhdSeed`
+ * 必须来自 `<uhd key>`；漏一个字段后端就只能退到低清图。
+ */
+export function snsImageMetadata(source: SnsImageSource): Pick<
+  MediaKeySpec,
+  'originalWidth' | 'originalHeight' | 'originalBytes' | 'uhdUrl' | 'uhdToken' | 'uhdSeed'
+> {
+  const originalWidth = positiveCount(source.originalWidth)
+  const originalHeight = positiveCount(source.originalHeight)
+  const originalBytes = positiveCount(source.originalBytes)
+  const uhdUrl = nonEmpty(source.uhdUrl)
+  const uhdToken = nonEmpty(source.uhdToken)
+  const uhdSeed = nonEmpty(source.uhdSeed)
+  return {
+    ...(originalWidth !== undefined ? { originalWidth } : {}),
+    ...(originalHeight !== undefined ? { originalHeight } : {}),
+    ...(originalBytes !== undefined ? { originalBytes } : {}),
+    ...(uhdUrl !== undefined ? { uhdUrl } : {}),
+    ...(uhdToken !== undefined ? { uhdToken } : {}),
+    ...(uhdSeed !== undefined ? { uhdSeed } : {}),
+  }
+}
+
+/**
+ * 把一条朋友圈图片记录登记成取图描述。
+ *
+ * 文章链接卡会隐藏九宫格，但 `images[0]` 仍是公众号封面的 SNS 副本；它同样需要
+ * `timelineId + id + url + token + seed` 才能被后端定位。卡片与详情共用这一份，
+ * 避免某一处漏字段后静默退化成空白封面。
+ * @param im - 朋友圈图片记录。
+ * @returns 有可用媒体键时返回取图描述，否则 null。
+ */
+export function momentImageSpec(im: MomentItem['images'][number]): MediaKeySpec | null {
+  if (imgKey(im) === '') return null
+  return {
+    md5: im.md5 || '',
+    kind: 'img',
+    ...(im.timelineId ? { timelineId: im.timelineId } : {}),
+    ...(im.id ? { mediaId: im.id } : {}),
+    ...(im.url ? { url: im.url } : {}),
+    ...(im.token ? { token: im.token } : {}),
+    ...(im.key ? { seed: im.key } : {}),
+    ...(im.uhdMd5 ? { uhdMd5: im.uhdMd5 } : {}),
+    ...snsImageMetadata(im),
+  }
+}
+
+/**
+ * 只保留能定位的九宫格图片。
+ *
+ * 视频号分享的 `<finderFeed><media>` 没有 md5/id，旧解析器会把它塞进 `images`，
+ * 界面于是显示「这条媒体没有 md5/id，无法定位」的假图片格。这里按 `imgKey`
+ * 过滤，既挡住新数据，也让尚未重放归档的旧数据不再出现伪图片。
+ * @param m - 至少带 `images` 的动态。
+ * @returns 有可用媒体键的图片列表。
+ */
+export function momentGridImages(m: Pick<MomentItem, 'images'>): MomentItem['images'] {
+  return m.images.filter((im) => imgKey(im) !== '')
+}
+
+/**
+ * 朋友圈链接卡片的展示规则。
+ *
+ * 视频号分享（`contentType === 28`）的 `<finderFeed>` 里也有 `<media>`，但那是视频
+ * 播放源/封面，不是九宫格图片；旧解析器会把它误挂到 `images`，于是界面出现
+ * 「这条媒体没有 md5/id」的假图片格。这里把视频号从图片网格中排除，并优先使用
+ * `<finderFeed>` 的封面地址；普通动态仍保持九宫格。
+ */
+export function momentLinkCardView(
+  m: Pick<MomentItem, 'images' | 'link_url' | 'sourceNickName'>
+    & Partial<Pick<MomentItem, 'contentType' | 'link_thumb' | 'link_title'>>,
+  snsImgs: Readonly<Record<string, string>>,
+  articleCovers: Readonly<Record<string, string>> = {},
+): { showImages: boolean; coverSrc: string; label: string; title: string } {
+  // `sourceNickName === '视频号'` 是对旧归档的兜底：更早的 payload 可能没有 contentType。
+  const videoChannel = m.contentType === 28 || (m.sourceNickName ?? '').trim() === '视频号'
+  const images = momentGridImages(m)
+  const cover = images[0]
+  const coverKey = cover ? imgKey(cover) : ''
+  const localCover = coverKey !== '' ? (snsImgs[coverKey] ?? '') : ''
+  const articleCover = m.link_url ? (articleCovers[m.link_url] ?? '') : ''
+  const rawTitle = m.link_title ?? ''
+  // 微信旧客户端会把视频号标题写成兼容性占位；归档还没重放时也不要把它当正文标题。
+  const title = videoChannel && (rawTitle === '' || /当前微信版本不支持展示该内容|请升级至最新版本/.test(rawTitle))
+    ? '视频号内容'
+    : rawTitle
+  // 文章页封面是公众号的正式封面；已经拿到时优先它，未拿到时仍可用本机 SNS 副本先顶上。
+  const coverSrc = m.contentType === 3 && articleCover !== ''
+    ? articleCover
+    : (localCover || articleCover || m.link_thumb || '')
+  return {
+    showImages: images.length > 0 && m.contentType !== 3 && !videoChannel,
+    coverSrc,
+    label: videoChannel ? '视频号' : (m.sourceNickName ? '公众号 · ' + m.sourceNickName : '链接'),
+    title,
+  }
+}
+
+/**
+ * 构造朋友圈单图请求。主图三件套与 `<uhd>` 三件套分别透传，绝不互相顶替。
+ * @param source - 卡片/灯箱里的图片记录。
+ * @param offline - 取图时的网络状态。
+ */
+export function buildSnsImageRequestOptions(
+  source: SnsImageSource,
+  offline = isOffline(),
+): SnsImageRequestOptions {
+  const timelineId = nonEmpty(source.timelineId)
+  const mediaId = nonEmpty(source.id) ?? nonEmpty(source.mediaId)
+  const url = nonEmpty(source.url)
+  const token = nonEmpty(source.token)
+  const seed = nonEmpty(source.seed) ?? nonEmpty(source.key)
+  const thumb = nonEmpty(source.thumb)
+  return {
+    md5: nonEmpty(source.md5) ?? '',
+    ...(timelineId !== undefined ? { timelineId } : {}),
+    ...(mediaId !== undefined ? { mediaId } : {}),
+    ...(url !== undefined ? { url } : {}),
+    ...(token !== undefined ? { token } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+    ...(thumb !== undefined ? { thumb } : {}),
+    ...snsImageMetadata(source),
+    offline,
+  }
+}
 
 /**
  * 一批出队解码的条数。
@@ -472,12 +651,143 @@ function isOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
+function mergeSnsImageEntries(current: SnsImageEntries, incoming: SnsImageEntries): SnsImageEntries {
+  let next = current
+  let changed = false
+  for (const [key, entry] of Object.entries(incoming)) {
+    const previous = next[key]
+    // 原图不能被迟到的缩略图降级；这是网格与灯箱并发回包时最容易出现的覆盖。
+    if (previous?.original === true && !entry.original) continue
+    if (previous?.url === entry.url && previous.original === entry.original) continue
+    if (!changed) {
+      next = { ...current }
+      changed = true
+    }
+    next[key] = entry
+  }
+  return changed ? capRecord(next, SNS_IMG_CACHE_MAX) : current
+}
+
+function imageUrlsOf(entries: SnsImageEntries): Record<string, string> {
+  return Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, entry.url]))
+}
+
+function originalKeysOf(entries: SnsImageEntries): ReadonlySet<string> {
+  return new Set(Object.entries(entries)
+    .filter(([, entry]) => entry.original)
+    .map(([key]) => key))
+}
+
+interface SnsOriginalResolverDeps {
+  current: (key: string) => SnsImageEntry | undefined
+  commit: (key: string, url: string, original: boolean) => void
+  alive: () => boolean
+  runHeavy: <T>(task: () => Promise<T>) => Promise<T>
+}
+
+/**
+ * 原图请求的身份。不能只用 md5：同一张图第一次可能只有普通三件套，随后
+ * 归档 payload 才补上 `<uhd>`/`<size>`。这些字段一变就应允许重新回源，
+ * 否则早先一次缩略图结果会把补齐后的高清元数据永久挡住。
+ */
+function snsOriginalAttemptKey(image: ViewerImage): string {
+  return JSON.stringify([
+    imgKey(image),
+    image.md5 ?? '',
+    image.timelineId ?? '',
+    image.id ?? image.mediaId ?? '',
+    image.url ?? '',
+    image.token ?? '',
+    image.seed ?? image.key ?? '',
+    image.originalWidth ?? 0,
+    image.originalHeight ?? 0,
+    image.originalBytes ?? 0,
+    image.uhdUrl ?? '',
+    image.uhdToken ?? '',
+    image.uhdSeed ?? '',
+  ])
+}
+
+/**
+ * 为灯箱创建一次性的原图解析器。
+ *
+ * 与网格的 `snsFetched` 完全分开：网格写过缩略图只代表「有图可显示」，不阻塞这里回源。
+ * `attempted` 是失败闸门——原图请求失败后只回退当前缩略图，自动渲染或重试都不会无限打后端。
+ */
+export function createSnsOriginalResolver(
+  deps: SnsOriginalResolverDeps,
+): (image: ViewerImage) => Promise<string> {
+  // 用户可能看很多张；失败闸门跟媒体键表同界，避免长时间浏览后无界增长。
+  const attempted = new BoundedMediaSet<string>(MOMENTS_MEDIA_KEY_CACHE_MAX)
+  const inflight = new Map<string, Promise<string>>()
+  // 只回退已经解出来的本地图；`image.thumb` 是 CDN 密文地址，不能交给灯箱渲染。
+  const fallbackOf = (key: string): string => deps.current(key)?.url ?? ''
+
+  return async (image: ViewerImage): Promise<string> => {
+    const key = imgKey(image)
+    if (key === '') throw new Error('缺少朋友圈图片标识，无法取原图')
+    const known = deps.current(key)
+    if (known?.original === true) return known.url
+    const attemptKey = snsOriginalAttemptKey(image)
+    const pending = inflight.get(attemptKey)
+    if (pending !== undefined) return pending
+    const fallback = fallbackOf(key)
+    if (attempted.has(attemptKey)) {
+      if (fallback !== '') return fallback
+      throw new Error('朋友圈原图已尝试获取，本次不再自动重试')
+    }
+    attempted.add(attemptKey)
+
+    const task = (async (): Promise<string> => {
+      const cached = await snsMediaCacheGet(key, true)
+      if (cached !== null) {
+        if (!deps.alive()) throw new Error('朋友圈媒体请求已取消')
+        deps.commit(key, cached, true)
+        return cached
+      }
+      const offline = isOffline()
+      const options = buildSnsImageRequestOptions(image, offline)
+      const request = (): ReturnType<typeof apiGetSnsImageDataUrl> => apiGetSnsImageDataUrl(options)
+      const spec: MediaKeySpec = {
+        md5: options.md5,
+        kind: 'img',
+        ...(options.url !== undefined ? { url: options.url } : {}),
+        ...(options.token !== undefined ? { token: options.token } : {}),
+        ...(options.seed !== undefined ? { seed: options.seed } : {}),
+      }
+      const result = needsHeavyRpcLane(spec, offline)
+        ? await deps.runHeavy(request)
+        : await request()
+      if (!deps.alive()) throw new Error('朋友圈媒体请求已取消')
+      if (!result.url) throw new Error(result.error ?? '后端未返回原图')
+      const original = result.thumb !== true
+      deps.commit(key, result.url, original)
+      void snsMediaCacheSet(key, result.url, !original)
+      if (original) return result.url
+      const best = deps.current(key)
+      return best?.original === true ? best.url : result.url
+    })().catch((error: unknown): string => {
+      const fallback = fallbackOf(key)
+      if (fallback !== '') return fallback
+      throw error
+    }).finally(() => {
+      inflight.delete(attemptKey)
+    })
+    inflight.set(attemptKey, task)
+    return task
+  }
+}
+
 function useArticleCoverFallback(
   moments: readonly MomentItem[],
   snsImgs: Record<string, string>,
   unmountedRef: React.MutableRefObject<boolean>,
 ): Record<string, string> {
   const [articleCovers, setArticleCovers] = useState<Record<string, string>>({})
+  // `snsImgs` 每次有新图上屏都会换对象；它只用于判断本机是否已有封面，
+  // 不能进 effect 依赖，否则一屏图片陆续完成时会把正在进行的封面请求反复取消。
+  const snsImgsRef = useRef(snsImgs)
+  snsImgsRef.current = snsImgs
   const attempts = useRef<Map<string, number>>(new BoundedMediaMap(MOMENTS_COVER_ATTEMPT_MAX))
   const inflight = useRef<Set<string>>(new BoundedMediaSet(MOMENTS_COVER_ATTEMPT_MAX))
   const retryTimer = useRef<number | null>(null)
@@ -496,7 +806,7 @@ function useArticleCoverFallback(
   }, [])
 
   useEffect(() => {
-    const todo = pendingCovers(moments, snsImgs, articleCovers, attempts.current, inflight.current)
+    const todo = pendingCovers(moments, snsImgsRef.current, articleCovers, attempts.current, inflight.current)
     if (todo.length === 0) return
     let cancelled = false
     const run = async (): Promise<void> => {
@@ -540,7 +850,7 @@ function useArticleCoverFallback(
     }
     void run()
     return () => { cancelled = true }
-  }, [moments, snsImgs, articleCovers, coverTick, scheduleRetry, unmountedRef])
+  }, [moments, articleCovers, coverTick, scheduleRetry, unmountedRef])
 
   return articleCovers
 }
@@ -548,7 +858,7 @@ function useArticleCoverFallback(
 function useRestoreCachedSnsImages(
   moments: readonly MomentItem[],
   snsFetched: React.MutableRefObject<Set<string>>,
-  setSnsImgs: React.Dispatch<React.SetStateAction<Record<string, string>>>,
+  commit: (entries: SnsImageEntries) => void,
 ): void {
   useEffect(() => {
     const keys = collectMediaKeys(moments)
@@ -561,10 +871,10 @@ function useRestoreCachedSnsImages(
       const found = Object.keys(cached)
       if (found.length === 0) return
       for (const k of found) snsFetched.current.add(k)
-      setSnsImgs(prev => capRecord({ ...prev, ...cached }, SNS_IMG_CACHE_MAX))
+      commit(Object.fromEntries(found.map((key) => [key, { url: cached[key] as string, original: true }])))
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [moments, snsFetched, setSnsImgs])
+  }, [moments, snsFetched, commit])
 }
 
 /**
@@ -574,13 +884,21 @@ function useRestoreCachedSnsImages(
  */
 export function useMomentsMedia(input: MomentsMediaInput): {
   snsImgs: Record<string, string>
+  /** 已确认是原图的键；`snsImgs` 里其余值可能只是缩略图。 */
+  snsOriginals: ReadonlySet<string>
   articleCovers: Record<string, string>
   mediaKeySpec: React.MutableRefObject<Map<string, MediaKeySpec>>
   /** 取图**失败**的原因（key → 后端给的原因）。空对象 = 没有失败。 */
   snsErrs: Record<string, string>
+  /** 灯箱专用：按原图语义取图；失败时返回当前缩略图。 */
+  resolveSnsOriginal: (image: ViewerImage) => Promise<string>
 } {
   const { moments, viewer, scrollRef, groups, renderKey, detailKey } = input
-  const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
+  const [snsImageEntries, setSnsImageEntries] = useState<SnsImageEntries>({})
+  const snsImageEntriesRef = useRef(snsImageEntries)
+  snsImageEntriesRef.current = snsImageEntries
+  const snsImgs = useMemo(() => imageUrlsOf(snsImageEntries), [snsImageEntries])
+  const snsOriginals = useMemo(() => originalKeysOf(snsImageEntries), [snsImageEntries])
   /** 已在队列、请求中或等待重试的键；snsFetched 淘汰时必须跳过这些保护项。 */
   const mediaActive = useRef<Set<string>>(new Set())
   /** 已经取过（或已经决定不再取）的键 —— 去重靠它，别改成 state（每次 render 都换身份会让效果重跑）。 */
@@ -600,10 +918,20 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const mediaUnmounted = useRef(false)
   /** 重活 RPC 串行链：一次只发一个，且卸载后跳过尚未开始的排队任务。 */
   const runHeavyRpc = useRef(createCancellableHeavyRpcLane(() => mediaUnmounted.current)).current
-  /** 灯箱请求的在飞令牌；StrictMode cleanup 只撤销自己这一轮，不吞掉下一轮。 */
-  const viewerInflight = useRef(new Map<string, symbol>())
+  const commitSnsImages = useCallback((incoming: SnsImageEntries): void => {
+    const next = mergeSnsImageEntries(snsImageEntriesRef.current, incoming)
+    if (next === snsImageEntriesRef.current) return
+    snsImageEntriesRef.current = next
+    setSnsImageEntries(next)
+  }, [])
+  const resolveSnsOriginal = useRef(createSnsOriginalResolver({
+    current: (key) => snsImageEntriesRef.current[key],
+    commit: (key, url, original) => { commitSnsImages({ [key]: { url, original } }) },
+    alive: () => !mediaUnmounted.current,
+    runHeavy: runHeavyRpc,
+  })).current
   const articleCovers = useArticleCoverFallback(moments, snsImgs, mediaUnmounted)
-  useRestoreCachedSnsImages(moments, snsFetched, setSnsImgs)
+  useRestoreCachedSnsImages(moments, snsFetched, commitSnsImages)
 
   const drainMedia = async (): Promise<void> => {
     if (mediaFetching.current) return
@@ -615,25 +943,18 @@ export function useMomentsMedia(input: MomentsMediaInput): {
         const offline = isOffline()
         await Promise.all(batch.map(async (it) => {
           if (mediaUnmounted.current) return
-          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string; offline?: boolean } = {
-    md5: it.md5,
-    // 只给图片带 CDN 三件套（视频走另一个 RPC）；有才传 ⇒ 缺省时调用形状逐字不变
-    // ⚠️ 下面三行原来都写的是 `kind === 'img'`，把评论图（`kind === 'comment'`）关在门外：
-// 就算卡片把 url/token/seed 填齐了也传不到后端，评论图于是永远取不到（实测裸地址
-// 5/5 返 HTTP 400，而评论图本机没有对应文件 ⇒ 只能显示 [图]）。
-// 判据因此改成「**不是视频**」而不是「是 img」：以后再加图片种类不会被静默漏掉。
-...(it.kind !== 'video' && it.url ? { url: it.url } : {}),
-    ...(it.kind !== 'video' && it.token ? { token: it.token } : {}),
-    ...(it.kind !== 'video' && it.seed ? { seed: it.seed } : {}),
-  }
-          if (it.timelineId) opts.timelineId = it.timelineId
-          if (it.mediaId) opts.mediaId = it.mediaId
-          if (it.seed) opts.key = it.seed
-          if (it.thumb) opts.thumb = it.thumb
+          const imageOpts = buildSnsImageRequestOptions(it, offline)
+          const videoOpts = {
+            md5: it.md5,
+            ...(it.timelineId ? { timelineId: it.timelineId } : {}),
+            ...(it.mediaId ? { mediaId: it.mediaId } : {}),
+            ...(it.seed ? { key: it.seed } : {}),
+            ...(it.thumb ? { thumb: it.thumb } : {}),
+            offline,
+          }
           // 本地优先（2026-10-19 用户口径）：先查 IndexedDB 里的**原图**（`wantOriginal`
           // 会把缩略图当未命中）。命中就直接显示、不再出网；只有本地确实没有原图才走
           // 后端（后端同样先查长期归档/本机，最后才 CDN）。
-          opts.offline = offline
           try {
             const cached = await snsMediaCacheGet(it.key, true)
             if (mediaUnmounted.current) return
@@ -641,7 +962,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
               // 逐条上屏，不能等 `Promise.all` 全部结束：同一批里只要有一张 RPC 卡住，
               // 其余几张**已经命中的本地原图**也会一起被压住（真机实测：IDB 里明明有
               // 3 张，界面却一直显示「正在取原图」）。
-              setSnsImgs(prev => capRecord({ ...prev, [it.key]: cached }, SNS_IMG_CACHE_MAX))
+              commitSnsImages({ [it.key]: { url: cached, original: true } })
               setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
               mediaActive.current.delete(it.key)
               mediaRetryCount.current.delete(it.key)
@@ -650,16 +971,17 @@ export function useMomentsMedia(input: MomentsMediaInput): {
             // 重活车道判定：视频恒重；图片只有「在线 + CDN 三件套齐」才走普通车道，其余串行。
             const needsHeavyLane = needsHeavyRpcLane(it, offline)
             const rpc = () => (it.kind === 'video'
-              ? apiGetSnsVideoCoverDataUrl(opts)
-              : apiGetSnsImageDataUrl(opts))
+              ? apiGetSnsVideoCoverDataUrl(videoOpts)
+              : apiGetSnsImageDataUrl(imageOpts))
             const r = needsHeavyLane ? await runHeavyRpc(rpc) : await rpc()
             if (mediaUnmounted.current) return
             if (r.url) {
-              setSnsImgs(prev => capRecord({ ...prev, [it.key]: r.url as string }, SNS_IMG_CACHE_MAX))
+              const original = r.thumb !== true
+              commitSnsImages({ [it.key]: { url: r.url, original } })
               setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
               // 把「这次是不是缩略图」一起存下去：后端降级给缩略图时标上，
               // 下一轮就能跳过它去换原图（而不是把缩略图当成最终结果永久缓存）。
-              void snsMediaCacheSet(it.key, r.url, r.thumb === true)
+              void snsMediaCacheSet(it.key, r.url, !original)
               mediaActive.current.delete(it.key)
               mediaRetryCount.current.delete(it.key)
             } else {
@@ -772,51 +1094,38 @@ export function useMomentsMedia(input: MomentsMediaInput): {
 
   const viewerImage = viewer ? viewer.images[viewer.index] as ViewerImage | undefined : undefined
   const viewerRequestKey = viewerImage
-    ? JSON.stringify([imgKey(viewerImage), viewerImage.md5 ?? '', viewerImage.timelineId ?? '', viewerImage.id ?? ''])
+    ? JSON.stringify([
+        imgKey(viewerImage),
+        viewerImage.md5 ?? '',
+        viewerImage.timelineId ?? '',
+        viewerImage.id ?? '',
+        viewerImage.url ?? '',
+        viewerImage.token ?? '',
+        viewerImage.seed ?? viewerImage.key ?? '',
+        viewerImage.thumb ?? '',
+        viewerImage.originalWidth ?? 0,
+        viewerImage.originalHeight ?? 0,
+        viewerImage.originalBytes ?? 0,
+        viewerImage.uhdUrl ?? '',
+        viewerImage.uhdToken ?? '',
+        viewerImage.uhdSeed ?? '',
+      ])
     : ''
   const viewerKey = viewerImage ? imgKey(viewerImage) : ''
-  const viewerResolved = viewerKey !== '' && Boolean(snsImgs[viewerKey])
+  // 「有图」不等于「原图」：网格可能只写进了 thumb。只有原图确认表能阻止灯箱回源。
+  const viewerResolved = viewerKey !== '' && snsOriginals.has(viewerKey)
 
-  // 灯箱当前图：先查本地原图，没有才按需解析（与卡片共用 key）。
-  // 只依赖稳定的请求键和「当前 key 是否已解析」，避免其他图片更新把慢请求误取消后重发。
+  // 灯箱当前图独立回源；网格的 snsFetched 只负责网格去重，不能挡住这里。
   useEffect(() => {
     const im = viewerImage
     if (!im) return
-    const key = imgKey(im)
-    if (!key || viewerResolved || snsFetched.current.has(key) || viewerInflight.current.has(key)) return
-    const token = Symbol('viewer-image')
-    viewerInflight.current.set(key, token)
-    snsFetched.current.add(key)
-    let cancelled = false
-    void snsMediaCacheGet(key, true).then(async (cached) => {
-      if (cancelled) return
-      if (cached) {
-        setSnsImgs(prev => capRecord({ ...prev, [key]: cached }, SNS_IMG_CACHE_MAX))
-        return
-      }
-      try {
-        const r = await apiGetSnsImageDataUrl({ md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id })
-        if (!cancelled && r.url) {
-          setSnsImgs(prev => capRecord({ ...prev, [key]: r.url as string }, SNS_IMG_CACHE_MAX))
-        }
-      } catch { /* 保留后端兜底 */ }
-    }).catch(() => undefined).finally(() => {
-      if (viewerInflight.current.get(key) === token) viewerInflight.current.delete(key)
-    })
-    return () => {
-      cancelled = true
-      // cleanup 发生在 StrictMode 的“假卸载”时，下一轮必须能重新认领这个键。
-      // 若请求已经成功，token 已摘掉，这里不会误删 fetched。
-      if (viewerInflight.current.get(key) === token) {
-        viewerInflight.current.delete(key)
-        snsFetched.current.delete(key)
-      }
-    }
+    if (viewerResolved) return
+    void resolveSnsOriginal(im).catch(() => undefined)
   }, [viewerRequestKey, viewerResolved])
 
   /* 取图失败的原因（key → 后端给的原因）。**可加性**输出：调用方暂时可以不理会，
      下一条改动会在占位上把它显示出来（用户："朋友圈图片加载不出来" —— 不该只看到空白）。 */
   const [snsErrs, setSnsErrs] = useState<Record<string, string>>({})
 
-  return { snsImgs, articleCovers, mediaKeySpec, snsErrs }
+  return { snsImgs, snsOriginals, articleCovers, mediaKeySpec, snsErrs, resolveSnsOriginal }
 }

@@ -36,9 +36,11 @@ export declare const INTERRUPTED_STATES: readonly ["parsing", "chunking", "embed
  *   · `chunks` 必须早于 `fts` —— FTS 行的 rowid 就是 chunk 的 id，先把 chunk 行删了
  *     就再也问不出该删哪些 rowid（所以这一步会**先取出 id 列表**再删表）；
  *   · `blob` 必须早于 `file` —— 判断「还有没有别的行引用这个 sha256」要趁登记行还在，
- *     删完再问永远是 0，于是**共享的副本会被误删**（另一个库的文件从此读不出内容）。
+ *     删完再问永远是 0，于是**共享的副本会被误删**（另一个库的文件从此读不出内容）；
+ *   · `entities` 在 `file` 之前 —— 实体表在同一个文件库里，按 `file_id` 删；
+ *     放在最后会留下「文件没了、实体还在」的孤儿，图谱弹层计数虚高。
  */
-export declare const KB_FILE_DELETE_ORDER: readonly ["chunks", "fts", "vectors", "blob", "file"];
+export declare const KB_FILE_DELETE_ORDER: readonly ["chunks", "fts", "vectors", "entities", "blob", "file"];
 export type KbFileDeleteStep = (typeof KB_FILE_DELETE_ORDER)[number];
 /**
  * 建表 / 建索引 / 加列，全部幂等。

@@ -85,7 +85,11 @@ describe('导出记录：旧的设置侧接线已清干净', () => {
     expect(dialog).toContain('const exportTask = useExportTask()')
     expect(dialog).toContain('exportTask.run(async ({ jobId })')
     expect(dialog).toContain('<ExportProgressStatus state={exportTask.state}')
-    for (const marker of ['dest: savePath,\n          jobId,', 'filename: savePath,\n          jobId,', 'apiExportAllSessions({ filename: savePath, jobId })']) {
+    // 2026-11-13：年报 / 会话 / 全部会话的落盘参数改成 `splitReplayPath(savePath)`
+    // （后端现在拒绝把完整路径当 filename 传，见 export-flows 的 resolveExportTarget），
+    // 这里断言的重心不变：每个入口都必须复用同一个 jobId。
+    expect(dialog, '重放路径没有拆成 dir + filename').toContain('...splitReplayPath(savePath),')
+    for (const marker of ['dest: savePath,\n          jobId,', '...splitReplayPath(savePath),\n          jobId,', 'apiExportAllSessions({ ...splitReplayPath(savePath), jobId })']) {
       expect(dialog, `重放入口漏了 ${marker}`).toContain(marker)
     }
   })

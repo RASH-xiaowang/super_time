@@ -120,7 +120,9 @@ try {
     if (nonTimeout.length > 0) { settled = nonTimeout[0].slice(0, 120); break }
     await win.waitForTimeout(300)
   }
-  const timeoutAlerts = await win.locator('[role="alert"]', { hasText: '调用超时' }).count()
+  // 只数**可见**的 alert：上一个面板被 keep-alive 保留成 `display:none` 的隐藏 DOM，
+  // 它的错误提示既看不到、也不在无障碍树里，不构成「污染新面板」。
+  const timeoutAlerts = await win.locator('[role="alert"]:visible', { hasText: '调用超时' }).count()
   check(settled !== '', '超时之后的下一条调用照常收尾（空态或数据源错误，都不是超时）', settled)
   // 顺带钉住文案：空数据源时面板必须说人话（中文 + 去哪配置），不能把 SQLite 英文原文甩给用户
   check(!/unable to open database file/i.test(settled) || settled.includes('数据配置'),

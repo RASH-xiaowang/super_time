@@ -82,10 +82,17 @@ export function useChatsAiReplyControls({
         personaName: chatAiReply.state?.personaName ?? '',
         personaPrompt: chatAiReply.state?.personaPrompt ?? '',
         splitReply: chatAiReply.state?.splitReply !== false,
+        kbEnabled: chatAiReply.state?.kbEnabled === true,
+        kbId: chatAiReply.state?.kbId ?? 0,
         onToggle: () => { void chatAiReply.toggle() },
         onScanNow: () => { void chatAiReply.scanNow() },
-        onSavePersona: (persona: { name: string; prompt: string; splitReply: boolean }) =>
-          chatAiReply.savePersona(persona),
+        onSavePersona: (persona: {
+          name: string
+          prompt: string
+          splitReply: boolean
+          kbEnabled: boolean
+          kbId: number
+        }) => chatAiReply.savePersona(persona),
       }
     : undefined
 

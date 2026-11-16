@@ -56,7 +56,10 @@ const HEAVY_CALL_LEDGER = Object.freeze([
   { why: '索引与离线评估', methods: Object.freeze(['buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval']) },
   {
     why: 'LLM 长任务：仓库自身 LLM 超时 120s，RPC 窗口必须明显宽于它',
-    methods: Object.freeze(['askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary', 'summarizeKbFile']),
+    // 2026-11-13：补进 `suggestReplies` —— 现场日志 69 次 / 均值 8.2s / p99 89s
+    // （`remotes/summaryrec.ts` 的注释里有原始口径）。它走的是同一套 LLM 生成，
+    // 落在普通 60s 窗口里时，慢 provider 下前台会先报超时、而后端其实还在生成。
+    methods: Object.freeze(['askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary', 'summarizeKbFile', 'suggestReplies']),
   },
   { why: '实体抽取/链接建议：最多 20 个文件串行 LLM / 80 条 embedding', methods: Object.freeze(['extractKbEntities', 'suggestKbLinks']) },
   { why: '年度报告/回顾：跨全年聚合，且可能触发 LLM', methods: Object.freeze(['getAnnual', 'getAnnualReport', 'getAnnualReview', 'generateAnnualNarrative']) },

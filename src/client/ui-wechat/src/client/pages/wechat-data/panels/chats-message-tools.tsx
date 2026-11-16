@@ -33,6 +33,11 @@ export interface ChatsMessageToolsController {
   error: string | null
   onChange: (value: string) => void
   onClose: () => void
+  /**
+   * 换会话时强制收起（`onClose` 在保存中会被拦下，对话框会带着上一会话的消息
+   * 盖在新会话的聊天窗口上）。进行中的保存有自己的归属令牌，落地时不会写错会话。
+   */
+  closeNow: () => void
   onSave: () => void
   onCopySource: () => void
 }
@@ -202,7 +207,7 @@ export function ChatsMessageTools({ tool, session, draft, busy, error, onChange,
 export interface UseChatsMessageToolsInputs {
   curSession: WechatSession | null
   flash: (message: string) => void
-  reloadCurrent: () => Promise<void>
+  reloadCurrent: (targetLocalId?: number) => Promise<void>
   loadEdits: () => Promise<void>
 }
 
@@ -220,8 +225,8 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { controller: poster, begin: beginPoster } = useChatsPoster(curSession, flash)
-  const onEdited = useCallback(async (): Promise<void> => {
-    await reloadCurrent()
+  const onEdited = useCallback(async (localId?: number): Promise<void> => {
+    await reloadCurrent(localId)
     await loadEdits()
   }, [reloadCurrent, loadEdits])
 
@@ -230,6 +235,11 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
     setTool(null)
     setError(null)
   }, [busy])
+
+  const closeNow = useCallback((): void => {
+    setTool(null)
+    setError(null)
+  }, [])
 
   const openSource = useCallback((m: WechatMessage): void => {
     setTool({ mode: 'source', m, session: curSession })
@@ -267,7 +277,7 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
       }
       setTool(null)
       flash(mode === 'text' ? '消息已修改' : '源码已保存')
-      try { await onEdited() } catch { /* the write already succeeded; refresh is best-effort */ }
+      try { await onEdited(tool.m.localId) } catch { /* the write already succeeded; refresh is best-effort */ }
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -295,6 +305,7 @@ export function useChatsMessageTools({ curSession, flash, reloadCurrent, loadEdi
       error,
       onChange: setDraft,
       onClose: close,
+      closeNow,
       onSave: () => { void save() },
       onCopySource: copySource,
     },

@@ -16,15 +16,17 @@
 
 | 入口 | profile | 数据范围 | 工具白名单 | 会话范围 |
 |---|---|---|---|---|
-| 微信问答 | `wechat-ask` | 本机微信数据，可选当前知识库 | 消息、语义、混合检索、聚合、会话、上下文、联系人、朋友圈、收藏、文件、账单、知识库等 14 个工具 | 调用方可选会话，不强制锁定 |
-| AI 问答（会话内） | `session-ask` | 仅当前会话的消息数据 | `search_messages`、`search_semantic`、`get_session_messages`、`get_message_context`、`aggregate_messages`、`search_hybrid` | 服务端硬锁定 `username` |
+| 微信问答 | `wechat-ask` | 本机微信数据，可选当前知识库 | 消息、语义、混合检索、聚合、会话、上下文、联系人、群资料、朋友圈、收藏、文件、资金账本、通话、撤回、媒体、知识库等 20 个工具 | 调用方可选会话，不强制锁定 |
+| AI 问答（会话内） | `session-ask` | 仅当前会话的消息，以及可归属该会话的转账/红包、通话、群资料、媒体、撤回记录 | `search_messages`、`search_semantic`、`get_session_messages`、`get_message_context`、`aggregate_messages`、`search_hybrid`、`get_funds_summary`、`get_call_history`、`get_group_detail`、`aggregate_media`、`search_revoked` | 服务端硬锁定 `username`；专用工具自动注入/校验 `username`、`peer`、`group` |
 
 `session-ask` 的 `search_hybrid` 只允许 `messages` 模式；未知 profile 由执行器拒绝，
 避免配置错误放大数据权限。
 
 当前明确不做的能力：
 
-- `session-ask` 不提供跨会话检索、联系人、朋友圈、收藏、文件和账单工具。
+- `session-ask` 不提供跨会话检索、联系人、朋友圈、收藏、文件、知识库和会话列表。
+- 资金、通话、群资料、媒体与撤回工具在会话内由 profile 守卫强制锁定当前会话：账本/媒体自动注入 `username`，通话自动注入 `peer`，群资料只允许当前 `@chatroom`，撤回记录只保留 `session_username` 与锁定会话一致的行；无法归属的行按 fail-closed 排除。
+- 输出侧证据包继续复核归属：会话内只接受当前 `username` 的消息定位；账本资源必须带同一 `session`；专用工具事实只允许来自上述已锁定范围的工具。
 - 两个入口都不自动执行有副作用的工具重试；自动重试只发生在运行时对工具调用的受控循环内。
 
 ## 2. 改造前的主要问题

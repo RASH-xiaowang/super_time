@@ -26,6 +26,14 @@ export interface KbSearchOptions {
     onlyRag?: boolean;
 }
 /**
+ * 收敛 topK：非有限值 / <=0 一律回落到默认；超过上限则夹住。
+ *
+ * 导出给融合层（`remotes/kb.ts`）用：稀疏与稠密必须**同一个**条数口径，
+ * 否则融合后的列表会比调用方要的多（旧实现按稀疏命中数给稠密定 topK，
+ * 逐字搜不到时只取 1 条，命中很多时又能返回 2×topK）。
+ */
+export declare function normalizeKbTopK(value: unknown): number;
+/**
  * 在某个知识库里做关键词检索。
  *
  * 排序交给 FTS5 的 `bm25`（`ORDER BY rank`），不自己算相似度 ——

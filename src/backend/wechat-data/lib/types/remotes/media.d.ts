@@ -278,22 +278,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         fileName: string;
         size?: number;
         createTime?: number;
-        md5
-        /**
-         * 批量取表情时的**出网并发上限**（E1，2026-09-28）。
-         *
-         * 为什么是 8：与封面的 `COVER_CONCURRENCY`（`article-cover.ts`）取同一个数 ——
-         * 两条链的出网特性一样（都是向 CDN 取一张小图、失败可忽略），同一个数便于统一调参。
-         * 表情图比封面小得多，理论上可以更高，但**不为了跑分调高**：并发上去了对端更容易限流，
-         * 而这条链失败一次的代价是用户看到占位芯片。
-         */
-        /**
-         * 远程图片代理一次最多收多少个地址。
-         *
-         * 真正的取回上限（40 张）在 `query/remote-image.ts` 里；这一道只是**RPC 载荷护栏** ——
-         * 传进来一万个地址时，宁可在这里截断，也不要把几 MB 的字符串数组搬过进程边界。
-         */
-        ?: string;
+        md5?: string;
         dest: string;
         jobId?: string;
     }, ctrl?: StreamControl) => Promise<import("../types-moments.ts").MediaOriginalExportResult>;
@@ -346,6 +331,21 @@ interface SnsImageOptions {
     token?: string;
     /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
     seed?: string;
+    /** XML 外层 `<size width>`：原图期望宽度。 */
+    originalWidth?: number;
+    /** XML 外层 `<size height>`：原图期望高度。 */
+    originalHeight?: number;
+    /** XML 外层 `<size totalSize>`：原图期望字节数（可缺省）。 */
+    originalBytes?: number;
+    /**
+     * 真实 `<uhd>` 地址与独立三件套。
+     *
+     * ⚠️ UHD 的 `token`/`key`/`md5` 与普通 `<url>` **不是同一份**；真实样本中
+     * `/2000` 保留尺寸段才返回 200，改成 `/0` 反而 400。
+     */
+    uhdUrl?: string;
+    uhdToken?: string;
+    uhdSeed?: string;
     /**
      * 界面侧判定「当前无网」（`navigator.onLine === false`）。缺省按**有网**处理。
      *

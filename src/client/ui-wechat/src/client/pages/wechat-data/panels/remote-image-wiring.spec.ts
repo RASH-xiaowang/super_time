@@ -58,12 +58,16 @@ function jsxNames(file: string): { tags: string[]; imported: string[]; elements:
 }
 
 describe('M23：卡片缩略图走后端代理', () => {
-  it('chats-cards.tsx 里已经没有直连的 <img>，11 处都是 RemoteImg', () => {
+  it('chats-cards.tsx 里已经没有直连的 <img>：10 处 RemoteImg + 表情的 StickerImage', () => {
     const { tags, imported } = jsxNames(CARDS)
     expect(tags.filter((t) => t === 'img'), '又有 <img> 直接吃消息里的地址了').toEqual([])
     expect(imported, 'RemoteImg 没有被 import（写了标签名也不算接上）').toContain('RemoteImg')
     const used = tags.filter((t) => t === 'RemoteImg').length
-    expect(used, `RemoteImg 只用了几处：${String(used)}`).toBeGreaterThanOrEqual(11)
+    expect(used, `RemoteImg 只用了几处：${String(used)}`).toBeGreaterThanOrEqual(10)
+    // 表情那一处改由 StickerImage 画（它要先占住行高再加载；内部同样走 useRemoteImage
+    // 代理，见 chats-sticker.tsx）。这里必须两支都认，否则「组件化」会被误判成「接线回退」。
+    expect(imported, 'StickerImage 没有被 import').toContain('StickerImage')
+    expect(tags.filter((t) => t === 'StickerImage').length, 'chats-cards 里没有用 StickerImage 画表情').toBeGreaterThanOrEqual(1)
   })
 
   /**
@@ -73,8 +77,13 @@ describe('M23：卡片缩略图走后端代理', () => {
    * `img-src` 管，不归 `media-src`。视频本体是后端给的 data URL（`media-src` 里有 `data:`），
    * 但 poster 若继续吃 CDN 地址，收紧 `img-src` 之后就会变成「视频能放、封面不出」。
    */
-  // 详情灯箱迁到共享 MediaViewer 后，portals 仍保留正文图、视频封面、评论图 3 个远程面位。
-  for (const [file, minUses] of [['moments-card.tsx', 4], ['moments-portals.tsx', 3]] as const) {
+  // 视频封面已拆到 moments-video-tile.tsx：RemoteImg / poster / data-sns-key 必须一起检查，
+  // 否则测试会把「组件拆分」误判成「接线回退」。
+  for (const [file, minUses] of [
+    ['moments-card.tsx', 2],
+    ['moments-portals.tsx', 3],
+    ['moments-video-tile.tsx', 1],
+  ] as const) {
     it(`${file}：没有直连 <img>，poster 只接受本机地址`, () => {
       const { tags, imported } = jsxNames(join(HERE, file))
       expect(tags.filter((t) => t === 'img'), `${file} 里又有直连 <img> 了`).toEqual([])
@@ -82,7 +91,6 @@ describe('M23：卡片缩略图走后端代理', () => {
       expect(tags.filter((t) => t === 'RemoteImg').length, `${file} 用了几个 RemoteImg`).toBeGreaterThanOrEqual(minUses)
       const text = readFileSync(join(HERE, file), 'utf8')
       const posters = [...text.matchAll(/poster=\{([^}]*)\}/g)].map((m) => m[1]?.trim() ?? '')
-      expect(posters.length, `${file} 里没有 poster 属性？前提不成立`).toBeGreaterThan(0)
       for (const p of posters) {
         expect(p, `${file} 的 poster 又不是只给本机地址：poster={${p}}`).toMatch(/^localImageSrc\(/)
       }
@@ -156,14 +164,21 @@ describe('M23：卡片缩略图走后端代理', () => {
    * `data-sns-key` 挂在任何组件上都算合法（实测 `tsc` 0 错误）。
    */
   it('本机解码的观察钥匙不挂在会消失的节点上', () => {
-    for (const f of [CARDS, join(HERE, 'moments-card.tsx'), join(HERE, 'moments-portals.tsx')]) {
+    for (const f of [
+      CARDS,
+      join(HERE, 'moments-card.tsx'),
+      join(HERE, 'moments-portals.tsx'),
+      join(HERE, 'moments-video-tile.tsx'),
+    ]) {
       const hung = jsxNames(f).elements
         .filter((e) => e.tag === 'RemoteImg' && e.attrs.some((a) => a.startsWith('data-')))
         .map((e) => e.attrs.filter((a) => a.startsWith('data-')))
       expect(hung, `${f.split(/[\\/]/).pop()}：观察钥匙挂在了 RemoteImg 上，代理回话之前那一格不在 DOM 里`).toEqual([])
     }
     // 反向前提：这架观察机器还在，而且钥匙挂在永远在 DOM 的容器上（网格 / 视频块 / 评论行）
-    const keys = jsxNames(join(HERE, 'moments-card.tsx')).elements.filter((e) => e.attrs.includes('data-sns-key'))
+    const keys = [join(HERE, 'moments-card.tsx'), join(HERE, 'moments-video-tile.tsx')].flatMap((f) =>
+      jsxNames(f).elements.filter((e) => e.attrs.includes('data-sns-key')),
+    )
     expect(keys.length, '一处 data-sns-key 都没有：本机解码的观察机制被拆了').toBeGreaterThanOrEqual(3)
     expect(keys.every((e) => e.tag === 'div'), '观察钥匙又挂回画图节点上了：' + keys.map((e) => e.tag).join(',')).toBe(true)
   })

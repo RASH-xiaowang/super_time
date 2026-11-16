@@ -18,22 +18,25 @@ describe('微信缓存 schema 迁移', () => {
     localStorage.setItem('wxdata-render-cache:chats', '{"old":true}')
     localStorage.setItem('dsh-wechat-overview-base-v1', '{"old":true}')
     localStorage.setItem('chat-msgs:v1:0369f1affa3bb162c3bf31266d2ba0e6', '[]')
+    // v2 的裸列表没有归属信息可核对（单聊行此前不带 sender），必须随代际一起清掉。
+    localStorage.setItem('wxdata-render-cache:acct-1a2b3c4d:chat-msgs:v2:wxid_x', '{"at":1,"v":[]}')
     localStorage.setItem('super-time-wechat-theme', 'dark')
     localStorage.setItem('graph-positions:main', '{"a":{"x":1,"y":2}}')
 
     await import('./cache.ts')
 
-    expect(localStorage.getItem(SCHEMA_KEY)).toBe('message-identity-v3')
+    expect(localStorage.getItem(SCHEMA_KEY)).toBe('message-identity-v4')
     expect(localStorage.getItem('dsh-wechat-cache-v1:sessions:list')).toBeNull()
     expect(localStorage.getItem('wxdata-render-cache:chats')).toBeNull()
     expect(localStorage.getItem('dsh-wechat-overview-base-v1')).toBeNull()
     expect(localStorage.getItem('chat-msgs:v1:0369f1affa3bb162c3bf31266d2ba0e6')).toBeNull()
+    expect(localStorage.getItem('wxdata-render-cache:acct-1a2b3c4d:chat-msgs:v2:wxid_x')).toBeNull()
     expect(localStorage.getItem('super-time-wechat-theme')).toBe('dark')
     expect(localStorage.getItem('graph-positions:main')).toBe('{"a":{"x":1,"y":2}}')
   })
 
   it('同代缓存不重复清理，二次启动保留可再生的快照', async () => {
-    localStorage.setItem(SCHEMA_KEY, 'message-identity-v3')
+    localStorage.setItem(SCHEMA_KEY, 'message-identity-v4')
     localStorage.setItem('dsh-wechat-cache-v1:sessions:list', '{"fresh":true}')
     localStorage.setItem('wxdata-render-cache:chats', '{"fresh":true}')
 

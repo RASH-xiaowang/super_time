@@ -12,33 +12,21 @@
  * 而本钩子在 `useChatsThread` 里正坐在原来那五个钩子的位置上（会话切换复位那个 effect 之前）。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { SNAPSHOT_REFRESHED_EVENT, apiGetDataRevision, apiGetMessages, apiGetNewMessages, writeRenderCache } from '../api.ts'
+import { SNAPSHOT_REFRESHED_EVENT, apiGetDataRevision, apiGetMessages, apiGetNewMessages } from '../api.ts'
 import { POLL_HIDDEN_MS, POLL_VISIBLE_MS } from './chats-support.tsx'
 import { useKeepAliveActive } from './keep-alive.tsx'
 import type { DataRevision, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { canCacheChatId, canonicalChatId } from '../utils/chat-identity.ts'
+import { CHAT_RENDER_CACHE_MAX_MESSAGES, writeChatRenderCache } from './chat-render-cache.ts'
+import { mergeLatestWindow } from './message-identity.ts'
 
-/** 渲染缓存与后端快照共用的键前缀（拆开前后是同一个字符串，改这里要一起改缓存版本）。 */
-const RENDER_CACHE_PREFIX = 'chat-msgs:v2:'
-/**
- * 渲染缓存只保留最新窗口。首次打开会话无论如何都会权威拉取最近 100 条，
- * 历史消息由“加载更多”分页取；把用户本次加载的几千条全量写 localStorage
- * 只会在每次新消息时同步 JSON 序列化数 MB，且最终还会撞上 1.5MB 上限被丢弃。
- */
-export const CHAT_RENDER_CACHE_MAX_MESSAGES = 300
+export { CHAT_RENDER_CACHE_MAX_MESSAGES }
 
 /** 对账限频：`getMessages(50)` 冷跑要扫统计（实测百毫秒级），新消息显示不靠它。 */
 const RECONCILE_MIN_GAP_MS = 2_000
 
 /** 距底多少像素以内算「正在看最新消息」；超过就只出提示、不抢滚动。 */
 export const NEAR_BOTTOM_PX = 80
-
-function persistChatRenderCache(talker: string, messages: readonly WechatMessage[]): void {
-  const tail = messages.length > CHAT_RENDER_CACHE_MAX_MESSAGES
-    ? messages.slice(-CHAT_RENDER_CACHE_MAX_MESSAGES)
-    : messages
-  writeRenderCache(RENDER_CACHE_PREFIX + talker, tail)
-}
 
 /**
  * 滚动容器是否已接近底部 —— 决定新消息到达时「跟随滚到底」还是「只提示」。
@@ -119,39 +107,6 @@ function revisionDetailOf(event: Event): DataRevision | null {
     shards,
     messageChanged: record['messageChanged'] === true,
   }
-}
-
-/**
- * 对账时判断同一条消息是否需要换行。
- *
- * 不能让「对象引用不同」直接算变化：后端每拍都会重建消息对象，那样每次推送都会
- * 替换整个可见窗口并重写渲染缓存。也不能只看 `type`/`sortSeq`：编辑消息、撤回文案
- * 和部分就地修改不会推进 `sort_seq`，但正文/系统子类型已经变了。
- */
-function sameJson(left: unknown, right: unknown): boolean {
-  return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
-}
-
-function sameMessageRow(a: WechatMessage, b: WechatMessage): boolean {
-  return a.localId === b.localId
-    && a.type === b.type
-    && a.subType === b.subType
-    && a.sortSeq === b.sortSeq
-    && a.isSender === b.isSender
-    && a.createTime === b.createTime
-    && a.serverId === b.serverId
-    && a.msgContent === b.msgContent
-    && a.strContent === b.strContent
-    && a.typeLabel === b.typeLabel
-    && a.displayText === b.displayText
-    && a.renderType === b.renderType
-    && a.renderLabel === b.renderLabel
-    && a.sysKind === b.sysKind
-    && a.sender === b.sender
-    && a.senderName === b.senderName
-    && a.senderEnterpriseName === b.senderEnterpriseName
-    && sameJson(a.rich, b.rich)
-    && sameJson(a.atUsers, b.atUsers)
 }
 
 /**
@@ -288,7 +243,7 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
         // Keep the render cache current so a session reopen paints the same
         // newest messages before the authoritative fetch returns.
         const merged = [...prev, ...add]
-        if (canCacheChatId(cacheTalker)) persistChatRenderCache(cacheTalker, merged)
+        if (canCacheChatId(cacheTalker)) writeChatRenderCache(cacheTalker, merged)
         return merged
       })
       // 用户就在底部附近 ⇒ 跟随到最新消息；正在翻历史 ⇒ 只在窗口里提示，不抢滚动。
@@ -309,7 +264,7 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
 
   /** 与快照最近窗口对账：撤回(10002)/删除等就地修改保留原 sort_seq，
    *  增量轮询按 sort_seq 水位看不到它们；宿主推送后拉一次最近 50 条，
-   *  按 localId 用新行替换发生变化的行，界面与库保持一致（有界查询）。 */
+   *  按复合身份（sort_seq + local_id）用新行替换发生变化的行，界面与库保持一致（有界查询）。 */
   const reconcileRef = useRef(false)
   const reconcileRecent = useCallback(async (): Promise<void> => {
     if (!curSession || reconcileRef.current) return
@@ -320,24 +275,21 @@ export function useChatsPolling(inputs: ChatsPollingInputs): { pollNew: () => Pr
       // 事件驱动对账必须绕过 5s SWR：撤回/编辑不会推进 sort_seq，
       // 命中旧缓存会让界面继续挂着上一版内容。
       const env = await apiGetMessages({ talker, limit: 50, fresh: true })
-      // 对账按 localId 匹配，而 local_id 只在会话内唯一 —— 切走后拿另一个会话的
-      // 行去替换当前会话的行，等于按编号把别人的消息安到这个会话上，必须丢弃。
+      // 归属令牌：切走后到达的窗口整条丢掉 —— 拿另一个会话的行去替换当前会话的行，
+      // 等于按编号把别人的消息安到这个会话上。
       if (!sessionAlive(epoch, talker)) return
-      const byId = new Map<number, WechatMessage>()
-      for (const m of env.messages) byId.set(m.localId, m)
-      if (byId.size === 0) return
+      if (env.messages.length === 0) return
       setMessages((prev) => {
         if (!sessionAlive(epoch, talker)) return prev
-        const next = prev.map((m) => {
-          const cur = byId.get(m.localId)
-          if (cur && !sameMessageRow(m, cur)) return cur
-          return m
-        })
-        const changed = next.some((m, i) => m !== prev[i])
-        if (!changed) return prev
+        const merge = mergeLatestWindow(prev, env.messages)
+        // 最新窗口里出现 prev 没有的行 ⇒ 追加。
+        // 空会话（水位 0）永远进不了 pollNew 的增量分支；只替换不追加的话，
+        // 对方发来的第一条消息只能靠切走再点回来才看得见。
+        if (merge.added.length === 0 && !merge.changed) return prev
+        if (merge.added.length > 0) setWatermarkFrom(merge.added)
         const cacheTalker = canonicalChatId(talker, env.canonicalUsername)
-        if (canCacheChatId(cacheTalker)) persistChatRenderCache(cacheTalker, next)
-        return next
+        if (canCacheChatId(cacheTalker)) writeChatRenderCache(cacheTalker, merge.next)
+        return merge.next
       })
     } catch { /* 保持当前视图，等待下一次推送对账 */ } finally {
       reconcileRef.current = false

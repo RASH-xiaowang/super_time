@@ -4,7 +4,7 @@
  */
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 const ROOT = join(__dirname, '..', '..', '..')
 const require = createRequire(import.meta.url)
@@ -96,5 +96,60 @@ describe('交接会话原生能力代理', () => {
   it('未知动作明确报错（不静默成功）', async () => {
     const h = harness()
     await expect(h.call('not-a-real-action')).rejects.toThrow(/未知的原生动作/)
+  })
+
+  it('交接态禁止生成/查看访问凭据：rotate 明确拒绝，且不会调用控制面', async () => {
+    const rotate = vi.fn(async () => ({ ok: true, token: 'SECRET', pairingCode: 'PAIR' }))
+    const h = harness({ control: { rotate, setEnabled: async () => ({ ok: true }) } })
+    await expect(h.call('remote-access-rotate'))
+      .rejects.toThrow(/桌面端/)
+    expect(rotate, '浏览器请求仍然触发了凭据生成').not.toHaveBeenCalled()
+  })
+
+  it('原生响应递归脱敏：即使某个处理器误带凭据，也不会从 /api/native/* 回到浏览器', async () => {
+    const h = harness({
+      remoteAccess: {
+        getState: () => ({
+          running: true,
+          port: 5032,
+          token: 'SECRET-TOKEN',
+          pairingCode: 'SECRET-PAIR',
+          nested: { token: 'SECRET-NESTED', list: [{ pairingCode: 'SECRET-LIST', port: 1 }] },
+        }),
+        syncWithConfig: async () => ({ running: true }),
+      },
+    })
+    const out = await h.call('remote-access-state') as Record<string, unknown>
+    const text = JSON.stringify(out)
+    expect(text, '原生响应里出现了明文凭据').not.toContain('SECRET')
+    expect(out.token).toBeUndefined()
+    expect(out.pairingCode).toBeUndefined()
+    expect((out.nested as Record<string, unknown>).token).toBeUndefined()
+    expect((out.nested as { list: Array<Record<string, unknown>> }).list[0]!.pairingCode).toBeUndefined()
+    expect(out.port).toBe(5032)
+  })
+
+  it('模型列表复用桌面的 llmModelListUrl（OpenCode 的列表路径不是 ${base}/models）', async () => {
+    const calls: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: unknown) => {
+      calls.push(String(input))
+      return new Response(JSON.stringify({ data: [{ id: 'opencode-go' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+    try {
+      const h = harness()
+      const out = await h.call('llm-models', {
+        opts: { baseUrl: 'https://opencode.ai/inference/go/openai/v1', apiKey: 'k' },
+      }) as { models: string[], source: string }
+      expect(out.models).toEqual(['opencode-go'])
+      expect(out.source).toBe('live')
+      expect(calls).toHaveLength(1)
+      expect(calls[0], '模型列表没有复用桌面端的 URL 推导').toBe('https://opencode.ai/inference/go/v1/models')
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 })

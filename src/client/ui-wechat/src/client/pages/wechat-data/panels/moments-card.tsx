@@ -48,12 +48,13 @@
  */
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
+import { SafeExternalLink } from './chats-support.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar, MomentsMiniAvatar } from './moments-support.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
-import { videoCoverKey } from './moments-media.ts'
+import { momentGridImages, momentImageSpec, momentLinkCardView, videoCoverKey } from './moments-media.ts'
 import type { MediaKeySpec } from './moments-media.ts'
 import { MomentLiveBadge, momentLivePhoto } from './moments-live.tsx'
 import { MomentsVideoTile } from './moments-video-tile.tsx'
@@ -188,9 +189,14 @@ export function MomentsCard({
   loadVideo, reportVideoError, saveVideo, fullscreenVideo,
   closeVideo,
 }: MomentsCardProps): React.JSX.Element {
-  const cover = m.images[0]
-  const isArticle = m.contentType === 3
-  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || ''
+  const gridImages = momentGridImages(m)
+  const cover = gridImages[0]
+  const coverKey = cover ? imgKey(cover) : ''
+  const coverSpec = cover ? momentImageSpec(cover) : null
+  const linkView = momentLinkCardView(m, snsImgs, articleCovers)
+  // 公众号文章会隐藏九宫格，但首图仍是链接卡的 SNS 封面副本；即使不渲染图片格，
+  // 也要把它登记进取图表，链接卡上的 data-sns-key 才能触发解码。
+  if (coverKey && coverSpec) mediaKeySpec.current.set(coverKey, coverSpec)
   const textExpanded = expandedTextByCard.has(m.tid)
   const socialExpanded = expandedSocialByCard.has(m.tid)
   const commentShown = commentCounts[m.tid] ?? 5
@@ -214,18 +220,19 @@ export function MomentsCard({
             {m.text.length > 200 && (<button type="button" className={css.textToggle} onClick={() => { toggleText(m.tid) }}>{textExpanded ? '收起' : '展开'}</button>)}
           </div>
         )}
-        {m.images.length > 0 && !isArticle && (
-          <div className={[css.images, m.images.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
-            {m.images.map((im, ii) => {
+        {gridImages.length > 0 && linkView.showImages && (
+          <div className={[css.images, gridImages.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
+            {gridImages.map((im, ii) => {
               const key = imgKey(im)
               const dataSrc = key ? snsImgs[key] : undefined
               const fk = m.tid + ':' + String(ii)
               const live = momentLivePhoto(im)
-              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img', url: im.url, token: im.token, seed: im.key })
+              const spec = momentImageSpec(im)
+              if (key && spec) mediaKeySpec.current.set(key, spec)
               return (
                 <div key={fk}
                   className={css.imgWrap}
-                  {...clickableKey(() => { setViewer({ images: m.images, index: ii, author: withEnterprise(m.author || '未知', m.enterpriseName) }) })}
+                  {...clickableKey(() => { setViewer({ images: gridImages, index: ii, author: withEnterprise(m.author || '未知', m.enterpriseName) }) })}
                   title={live ? '点击查看大图（实况）' : '点击查看大图'}
                   data-sns-key={key || undefined}
                   data-sns-md5={im.md5 || undefined}
@@ -292,14 +299,16 @@ export function MomentsCard({
         )}
         {m.link_title && (
           <div className={css.linkCard}>
-            {cover ? (
-              <div className={css.linkCover}>
+            {(cover || m.link_thumb || m.contentType === 3) ? (
+              <div className={css.linkCover} data-sns-key={coverKey || undefined}>
                 {/* .linkCover 是固定 60×60 的框：隐藏图片只会留下一个**没有意义的空格子**
                     （实测共享文章封面里有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块），
                     所以取不到时画 🔗 占位。与评论图/朋友圈图的失败口径一致。 */}
                 <RemoteImg
-                  src={coverSrc}
+                  src={linkView.coverSrc}
                   alt=""
+                  empty={<span className={css.linkCoverFallback} title="正在读取公众号封面">🔗</span>}
+                  pending={<span className={css.linkCoverFallback}>…</span>}
                   failed={<span className={css.linkCoverFallback} title="封面来自公众号 CDN，原链接已失效">🔗</span>}
                 />
               </div>
@@ -309,9 +318,9 @@ export function MomentsCard({
                   第 60 轮把「纵向截断但无 title」并入截断巡检后，这里立刻被抓出来
                   （视频号长标题可见 45px、实际 67px，用户无法拿到全文）。 */}
               {m.link_url
-                ? <a className={css.linkTitle} href={m.link_url} target="_blank" rel="noopener noreferrer" title={m.link_title}>{m.link_title}</a>
-                : <span className={css.linkTitle} title={m.link_title}>{m.link_title}</span>}
-              <div className={kitCss.textMeta}>{m.sourceNickName ? '公众号 · ' + m.sourceNickName : (m.contentType === 28 ? '视频号' : '链接')}</div>
+                ? <SafeExternalLink className={css.linkTitle} href={m.link_url} title={linkView.title}>{linkView.title}</SafeExternalLink>
+                : <span className={css.linkTitle} title={linkView.title}>{linkView.title}</span>}
+              <div className={kitCss.textMeta}>{linkView.label}</div>
             </div>
           </div>
         )}

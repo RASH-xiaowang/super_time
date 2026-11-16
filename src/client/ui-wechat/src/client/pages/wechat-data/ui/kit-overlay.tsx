@@ -211,6 +211,9 @@ export function useEscapeToClose(open: boolean, onClose: () => void): void {
     escStack.push(entry)
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // 更高层的 Radix 弹窗（alertdialog 确认框）在 document 捕获阶段已经处理并
+      // preventDefault；它也按 Esc 时不能再顺手关掉下面这层手写浮层。
+      if (e.defaultPrevented) return
       if (escStack[escStack.length - 1] !== entry) return   // 只让最上层响应
       e.stopPropagation()
       ref.current()
@@ -257,6 +260,10 @@ export function useDialogFocus(open: boolean, selector: string): void {
       if (e.key !== 'Tab') return
       const el = document.querySelector<HTMLElement>(selector)
       if (!el) return
+      // keep-alive 把整个面板 `display:none` 之后，浮层容器仍在 DOM 里但不可见。
+      // 此时可聚焦元素列表为空，若继续 preventDefault，会让**全应用**的 Tab 失效
+      // （用户切到别的页签后按 Tab 完全没反应）。
+      if (el.getClientRects().length === 0) return
       const list = focusables()
       if (list.length === 0) { e.preventDefault(); return }
       const first = list[0]

@@ -16,7 +16,9 @@ import type { KbFileChunk, KbFileMeta, KbFileParseState, KbFileRegisterResult, K
 import { KB_ACCEPTED_EXTS } from '../types.ts'
 import { Badge, Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
+import { formatRelative } from './kb-model.ts'
 import css from './kbfiles.module.css'
+import kitCss from '../ui/kit.module.css'
 import { fmtBytes } from '../utils/format.ts'
 
 /** 首帧渲染缓存：上次成功读到的那份文件列表（冷启动先出内容，再由请求结果校正）。 */
@@ -62,6 +64,8 @@ export function indexLabel(view: KbVectorIndexView | null): { text: string; tone
   if (s.staleReason === 'model-mismatch') {
     return { text: `索引由 ${s.models[0] || '未知模型'} 生成、本库现在用 ${view.model} · 需重建`, tone: 'warn' }
   }
+  // 只缺新增内容的向量：不用整库重建，点一次「语义索引」就是增量补齐。
+  if (s.staleReason === 'incomplete') return { text: '有新增内容未建索引 · 点「语义索引」补齐', tone: 'warn' }
   return { text: '语义索引不可用 · 需重建', tone: 'warn' }
 }
 
@@ -296,4 +300,113 @@ export interface AddReport {
   added: number
   failed: number
   failures: ReadonlyArray<{ name: string; reason: string }>
+}
+
+/**
+ * 面板顶部的三条告警（索引构建失败 / 索引状态读失败 / 列表读失败）。
+ *
+ * 三条分开说、不合并成一句「读取失败」，因为出路不同：
+ *   · 建索引失败 ⇒ 去「数据配置 → AI 大模型」或等网络；
+ *   · 索引状态读失败 ⇒ 索引本身可能好好的，只是这次没读到；
+ *   · 列表读失败 ⇒ 文件库打不开，**不是**「还没有文件」（N1）。
+ * 从 `KbFilesPanel` 搬出：那个函数受单函数行数棘轮管着（只许变小）。
+ * @param props.indexBuildError - 本面板发起的那次构建的失败原因。
+ * @param props.indexError - `getKbVectorIndex` 的失败原因。
+ * @param props.readError - 文件列表的失败原因。
+ * @param props.kbLabel - 库名（带引号；未知时为空串）。
+ * @returns 三条告警（都不成立时是空片段）。
+ */
+export function KbPanelAlerts({ indexBuildError, indexError, readError, kbLabel }: {
+  indexBuildError: string | null
+  indexError: string | null
+  readError: string | null
+  kbLabel: string
+}): React.JSX.Element {
+  return (
+    <>
+      {indexBuildError !== null && (
+        <div className={kitCss.error} role="alert">语义索引没有建成：{indexBuildError}</div>
+      )}
+      {indexError !== null && (
+        <div className={kitCss.error} role="alert">索引状态读取失败：{indexError}</div>
+      )}
+      {readError !== null && (
+        <div className={kitCss.error} role="alert">
+          {kbLabel || '这个库'}的文件列表读取失败（不是「还没有文件」）：{readError}
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * 左侧文件列表（解析状态行 + 「加载更多」）。
+ *
+ * 从 `KbFilesPanel` 搬出：那个函数受单函数行数棘轮管着（只许变小），
+ * 而这一段是自洽的 —— 进的是可见列表与两个回调，不碰面板的其它 state。
+ *
+ * 「加载更多」不是可选的收尾：后端列表默认只回 200 条（单库上限 5,000），
+ * 没有它，第 201 条之后的文件在界面上根本不存在（正文检索能命中，却点不开）。
+ * @param props.items - 当前筛选下可见的行。
+ * @param props.selectedId - 当前选中行（null = 未选）。
+ * @param props.now - 相对时间的基准（随列表加载更新，避免逐帧重算抖动）。
+ * @param props.hasMore - 还有未加载的页。
+ * @param props.loadingMore - 下一页在途。
+ * @param props.shownCount - 已加载条数（页脚「已显示 N / M」的 N）。
+ * @param props.total - 本库总数。
+ * @param props.onSelect - 选中一行。
+ * @param props.onLoadMore - 追加下一页。
+ * @returns 列表元素。
+ */
+export function KbFileList({ items, selectedId, now, hasMore, loadingMore, shownCount, total, onSelect, onLoadMore }: {
+  items: readonly KbFileMeta[]
+  selectedId: number | null
+  now: number
+  hasMore: boolean
+  loadingMore: boolean
+  shownCount: number
+  total: number
+  onSelect: (id: number) => void
+  onLoadMore: () => void
+}): React.JSX.Element {
+  return (
+    <div className={css.list}>
+      {items.map((f) => {
+        const look = PARSE_LOOK[f.parseState]
+        return (
+          <button
+            key={f.id}
+            type="button"
+            className={css.row}
+            data-on={f.id === selectedId ? '1' : undefined}
+            aria-current={f.id === selectedId ? 'true' : undefined}
+            onClick={() => { onSelect(f.id) }}
+          >
+            <span className={css.rowMain}>
+              <span className={css.rowTitle}>
+                <span className={css.rowName} title={f.name}>{f.name}</span>
+                <Badge tone={look.tone}>{look.label}</Badge>
+              </span>
+              <span className={css.rowSub}>
+                <span>{f.ext ? f.ext.toUpperCase() : '无扩展名'}</span>
+                <span>{formatBytes(f.sizeBytes)}</span>
+                <span>{f.chunkCount} 块</span>
+                <span>{formatRelative(f.createdAt, now)}</span>
+              </span>
+            </span>
+            <span className={css.rowSide}>
+              {f.includeInRag ? null : <span className={css.offlineMark}>不出网</span>}
+            </span>
+          </button>
+        )
+      })}
+      {hasMore && (
+        <div className={css.listMore}>
+          <Button size="sm" variant="outline" disabled={loadingMore} onClick={onLoadMore}>
+            {loadingMore ? '加载中…' : `加载更多（已显示 ${String(shownCount)} / ${String(total)}）`}
+          </Button>
+        </div>
+      )}
+    </div>
+  )
 }

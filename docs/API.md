@@ -230,7 +230,7 @@
 | 212 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
 | 213 | `searchUnified` | 跨消息、联系人、朋友圈等资源域执行全局搜索。 |
 | 214 | `setChatAiReplyEnabled` | 开启或关闭某个单聊的 AI 回复。 |
-| 215 | `setChatAiReplyPersona` | 保存某个单聊的 AI 回复人格。 |
+| 215 | `setChatAiReplyPersona` | 保存某个单聊的 AI 回复人格与知识库参与设置。 |
 | 216 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
 | 217 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
 | 218 | `setPrivacyState` | — |
@@ -937,7 +937,7 @@ Export a conversation messages to txt/csv/excel/html.  M3：本入口改为 `asy
 ### `exportSnsImage`
 
 ```ts
-async exportSnsImage(options: { md5: string timelineId?: string mediaId?: string url?: string token?: string seed?: string key?: string dest: string jobId?: string }): Promise<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>
+async exportSnsImage(options: { md5: string timelineId?: string mediaId?: string url?: string token?: string seed?: string key?: string originalWidth?: number originalHeight?: number originalBytes?: number uhdUrl?: string uhdToken?: string uhdSeed?: string dest: string jobId?: string }): Promise<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>
 ```
 
 把一条朋友圈图片按**原图**写到用户选定路径。  顺序为长期归档 → 解码原图缓存 → 本机非缩略图 → CDN `/0` 原图；CDN 解密后再次校验图片魔数。缩略图和未解密密文一律不落盘。
@@ -1761,7 +1761,7 @@ _（源码中未附说明 —— 请直接阅读 `src/backend/wechat-data/src/ga
 ### `getSnsImageDataUrl`
 
 ```ts
-async getSnsImageDataUrl(options: { md5: string timelineId?: string mediaId?: string url?: string token?: string seed?: string offline?: boolean }): Promise<ImageDataUrlResult>
+async getSnsImageDataUrl(options: { md5: string timelineId?: string mediaId?: string url?: string token?: string seed?: string originalWidth?: number originalHeight?: number originalBytes?: number uhdUrl?: string uhdToken?: string uhdSeed?: string offline?: boolean }): Promise<ImageDataUrlResult>
 ```
 
 Resolve one SNS (朋友圈) media to a base64 data URL —— **本地优先、CDN 兜底**。  顺序：`<数据根>/moments-media` 长期归档 → `decoded_images/sns-media` → 微信原始目录原图 → 仅在线且都没有时向 CDN 要 `/0` → 最后才是缩略图。 长期归档跨重启/换密钥保留；本地命中时不再出网（用户 2026-10-19 口径）。  顺序与理由见 `remotes/media.ts` 的 `snsImageWithCdnFirst`。  `offline` 由界面按 `navigator.onLine` 判定，缺省按有网处理（仅影响「本地都没有时能否出网」）。
@@ -2397,10 +2397,10 @@ setChatAiReplyEnabled(options: { chatUsername: string chatName?: string enabled:
 ### `setChatAiReplyPersona`
 
 ```ts
-setChatAiReplyPersona(options: { chatUsername: string chatName?: string personaName: string personaPrompt: string splitReply?: boolean expectedRevision?: number }): ChatAiReplyMutationResult
+setChatAiReplyPersona(options: { chatUsername: string chatName?: string personaName: string personaPrompt: string splitReply?: boolean kbEnabled?: boolean kbId?: number expectedRevision?: number }): ChatAiReplyMutationResult
 ```
 
-保存某个单聊的 AI 回复人格。 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；写入会推进 revision，并取消该会话尚未完成的旧回复任务。
+保存某个单聊的 AI 回复人格与知识库参与设置。 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；勾选知识库后， 每轮生成会先按最近上下文检索该库并把命中的片段作为**不可信材料**交给模型。 写入会推进 revision，并取消该会话尚未完成的旧回复任务。
 
 ### `setKbFileRag`
 

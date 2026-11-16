@@ -11,7 +11,7 @@
  * @module query/answer-runtime/runtime
  */
 import type { Message, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { buildEvidenceBundle, type AnswerStatus, type EvidenceBundle } from './evidence.ts'
+import { buildEvidenceBundle, type AnswerStatus, type EvidenceBundle, type EvidenceLocator } from './evidence.ts'
 import { resourceFallbackTools } from './fallbacks.ts'
 import {
   applyAnswerIntentSuggestion,
@@ -305,6 +305,7 @@ function citationOf(
         ? { sender: item.sender ?? stringValue(embedded?.['sender']) }
         : {}),
       ...(senderEnterpriseName === '' ? {} : { senderEnterpriseName }),
+      ...(item.tools.includes('search_revoked') ? { revoked: true } : {}),
       locator: item.locator,
     }
   }
@@ -769,6 +770,60 @@ async function collectAnswerEvidence(stage: {
   }
 }
 
+/** 证据定位的稳定键；用于校验综合阶段返回的引用确实来自本轮证据。 */
+function citationLocatorKey(locator: EvidenceLocator): string {
+  switch (locator.type) {
+    case 'message':
+      return `message:${locator.username}:${String(locator.localId)}`
+    case 'kb':
+      return `kb:${String(locator.kbId)}:${String(locator.fileId)}:${String(locator.chunkId)}`
+    case 'fact':
+      return `fact:${locator.tool}:${locator.key ?? locator.title ?? locator.bodyDigest ?? String(locator.index ?? '')}`
+    case 'resource':
+      return `resource:${locator.tool}:${locator.stableKey ?? locator.key}`
+  }
+}
+
+/**
+ * 只保留能对应到本轮证据的引用。
+ *
+ * 综合生成可以返回引用列表覆盖证据层映射；如果不校验，模型（或被注入的
+ * 材料）可以凭空给出一个 `username/local_id` 形成悬空引用。这里按
+ * evidenceId 与 locator 双键校验：任一命中即视为已知引用。全部未知时回退到
+ * 证据层引用，至少不会把可核对来源一起丢掉。
+ */
+function filterSynthesisCitations(
+  requested: readonly AnswerRuntimeCitation[] | undefined,
+  evidence: EvidenceBundle,
+  known: readonly AnswerRuntimeCitation[],
+): { citations: AnswerRuntimeCitation[]; dropped: number } | undefined {
+  if (requested === undefined) return undefined
+  const evidenceIds = new Set<string>()
+  const locators = new Set<string>()
+  for (const item of evidence.items) {
+    evidenceIds.add(item.evidenceId)
+    locators.add(citationLocatorKey(item.locator))
+  }
+  for (const citation of known) locators.add(citationLocatorKey(citation.locator))
+  const kept: AnswerRuntimeCitation[] = []
+  let dropped = 0
+  for (const citation of requested) {
+    const evidenceId = typeof citation.evidenceId === 'string' ? citation.evidenceId.trim() : ''
+    const locator = citation.locator
+    const isKnown = (evidenceId !== '' && evidenceIds.has(evidenceId))
+      || (locator !== undefined && locators.has(citationLocatorKey(locator)))
+    if (!isKnown) {
+      dropped += 1
+      continue
+    }
+    kept.push(citation)
+  }
+  return {
+    citations: kept.length > 0 || dropped === 0 ? kept : [...known],
+    dropped,
+  }
+}
+
 /** 所有出口都经过这里：阻断、澄清、失败与空证据都必须产生非空回答。 */
 async function finalizeAnswer(stage: {
   input: AnswerRuntimeInput
@@ -834,9 +889,17 @@ async function finalizeAnswer(stage: {
     }
   }
 
+  /*
+   * 「证据不足」不等于「没有内容」：只有统计事实、或片段略短时，模型仍然可以
+   * 据此写出有依据的回答。旧逻辑只要 status=insufficient 就跳过综合，最终只能
+   * 回退成固定话术，表现为「明明有数据却说没检索到」（2026-11-13 审计）。
+   * 只有当证据包完全为空时才跳过；真有内容就让综合阶段处理，状态仍如实保留。
+   */
+  const hasEvidenceContent = evidence.items.length > 0 || evidence.facts.length > 0
   const skipSynthesis = evidence.status === 'failed'
     || (
       evidence.status === 'insufficient'
+      && !hasEvidenceContent
       && (input.synthesize === undefined || input.synthesizeOnInsufficient !== true)
     )
   if (skipSynthesis) {
@@ -885,18 +948,34 @@ async function finalizeAnswer(stage: {
     if (synthesized.usage) usages.push(synthesized.usage)
     const answer = synthesized.answer.trim()
     const requestedStatus = statusAfterSynthesis(evidence, synthesized.status)
+    const filteredCitations = filterSynthesisCitations(
+      synthesized.citations,
+      evidence,
+      stage.citations,
+    )
+    const droppedCitations = (filteredCitations?.dropped ?? 0) > 0
+    const emptyAnswer = answer === ''
+    const status: AnswerStatus = emptyAnswer && requestedStatus === 'ok'
+      ? 'degraded'
+      : droppedCitations && requestedStatus === 'ok'
+        ? 'degraded'
+        : requestedStatus
     emit(input, 'answer:synthesize', '综合生成', 'done')
     return {
       ...base,
       usages,
-      status: answer === '' && requestedStatus === 'ok' ? 'degraded' : requestedStatus,
-      answer: answer === ''
+      status,
+      answer: emptyAnswer
         ? fallbackAnswer(evidence) || replyForStatus(requestedStatus, profile.id, evidence.assessment.reason)
         : synthesized.answer,
-      ...(synthesized.citations ? { citations: [...synthesized.citations] } : {}),
-      synthesized: answer !== '',
+      ...(filteredCitations === undefined ? {} : { citations: filteredCitations.citations }),
+      synthesized: !emptyAnswer,
       durationMs: Date.now() - started,
-      ...(answer === '' ? { reason: '综合生成返回空文本，已返回证据兜底' } : {}),
+      ...(emptyAnswer
+        ? { reason: '综合生成返回空文本，已返回证据兜底' }
+        : droppedCitations
+          ? { reason: `综合生成返回了 ${String(filteredCitations?.dropped ?? 0)} 条无法对应到本轮证据的引用，已丢弃` }
+          : {}),
     }
   } catch (error) {
     if (isCancelError(error) || input.cancelSignal?.aborted === true) throw error

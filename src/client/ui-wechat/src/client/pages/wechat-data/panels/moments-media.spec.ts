@@ -40,9 +40,14 @@ const {
   BoundedMediaSet,
   MOMENTS_MEDIA_KEY_CACHE_MAX,
   MOMENTS_MEDIA_QUEUE_MAX,
+  buildSnsImageRequestOptions,
   collectMediaKeys,
   createCancellableHeavyRpcLane,
+  createSnsOriginalResolver,
   enqueueIntersecting,
+  momentGridImages,
+  momentImageSpec,
+  momentLinkCardView,
   pendingCovers,
   requeueAfterDelay,
   useMomentsMedia,
@@ -126,6 +131,92 @@ describe('键规则：DOM 契约只能有一份实现', () => {
     // imgKey() 的口径是 md5 优先，所以同一张图在两条动态里只算一个键
     expect(keys.filter((k) => k === 'same')).toHaveLength(1)
     expect(keys).toEqual(expect.arrayContaining(['same', 'other', 'v:vm', 'cm']))
+  })
+
+  it('公众号首图没有 md5 时仍按 timelineId+id 登记完整 CDN 元数据', () => {
+    const spec = momentImageSpec({
+      md5: '',
+      timelineId: '15049300464112701979',
+      id: '15049300464754102797',
+      url: 'http://szmmsns.qpic.cn/cover/0',
+      thumb: 'http://szmmsns.qpic.cn/cover/150',
+      token: 'token',
+      key: 'seed',
+      originalWidth: 150,
+      originalHeight: 150,
+      originalBytes: 1741,
+    })
+
+    expect(spec).toEqual({
+      md5: '',
+      kind: 'img',
+      timelineId: '15049300464112701979',
+      mediaId: '15049300464754102797',
+      url: 'http://szmmsns.qpic.cn/cover/0',
+      token: 'token',
+      seed: 'seed',
+      originalWidth: 150,
+      originalHeight: 150,
+      originalBytes: 1741,
+    })
+    expect(momentImageSpec({
+      md5: '',
+      timelineId: 'only-tid',
+      thumb: '',
+      url: '',
+      key: '',
+    })).toBeNull()
+  })
+})
+
+describe('原图请求：主图与 UHD 元数据各走各的', () => {
+  it('完整透传主图三件套、UHD 三件套、尺寸与字节', () => {
+    const opts = buildSnsImageRequestOptions({
+      md5: 'main-md5',
+      timelineId: 'timeline-1',
+      id: 'media-1',
+      url: 'main-url',
+      token: 'main-token',
+      key: 'main-seed',
+      thumb: 'thumb-url',
+      originalWidth: 4032,
+      originalHeight: 3024,
+      originalBytes: 1_234_567,
+      uhdUrl: 'uhd-url',
+      uhdToken: 'uhd-token',
+      uhdSeed: 'uhd-seed',
+      uhdMd5: 'uhd-md5',
+    }, true)
+
+    expect(opts).toEqual({
+      md5: 'main-md5',
+      timelineId: 'timeline-1',
+      mediaId: 'media-1',
+      url: 'main-url',
+      token: 'main-token',
+      seed: 'main-seed',
+      thumb: 'thumb-url',
+      originalWidth: 4032,
+      originalHeight: 3024,
+      originalBytes: 1_234_567,
+      uhdUrl: 'uhd-url',
+      uhdToken: 'uhd-token',
+      uhdSeed: 'uhd-seed',
+      offline: true,
+    })
+    // UHD 的 token/seed 只能作为独立字段，不能顶替主图那份。
+    expect(opts.token).not.toBe(opts.uhdToken)
+    expect(opts.seed).not.toBe(opts.uhdSeed)
+    // `uhdMd5` 只用于媒体键登记，不是 getSnsImageDataUrl 的入参。
+    expect(opts).not.toHaveProperty('uhdMd5')
+  })
+
+  it('空值不伪造字段，`key` 仍可作为主图 seed 的别名', () => {
+    expect(buildSnsImageRequestOptions({ md5: 'only-md5', key: 'from-key' }, false)).toEqual({
+      md5: 'only-md5',
+      seed: 'from-key',
+      offline: false,
+    })
   })
 })
 
@@ -324,7 +415,8 @@ function Harness(props: {
 }): React.JSX.Element {
   media = useMomentsMedia({ moments: props.moments, viewer: props.viewer, scrollRef: { current: null }, groups: [1], renderKey: '0-0', detailKey: '' })
   return createElement('div', null, createElement(Register, { specs: props.specs }),
-    createElement('span', { 'data-imgs': Object.keys(media.snsImgs).sort().join(',') }))
+    createElement('span', { 'data-imgs': Object.keys(media.snsImgs).sort().join(',') }),
+    createElement('span', { 'data-originals': Array.from(media.snsOriginals).sort().join(',') }))
 }
 
 const img = (md5: string): [string, { md5: string; kind: 'img' }] => [md5, { md5, kind: 'img' }]
@@ -347,7 +439,10 @@ const flush = async (): Promise<void> => {
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
 }
 
-const imgs = (): string[] => (host.firstElementChild?.lastElementChild?.getAttribute('data-imgs') ?? '').split(',').filter(Boolean)
+const attrList = (name: string): string[] =>
+  (host.querySelector(`[${name}]`)?.getAttribute(name) ?? '').split(',').filter(Boolean)
+const imgs = (): string[] => attrList('data-imgs')
+const originals = (): string[] => attrList('data-originals')
 
 beforeEach(() => {
   media = null
@@ -556,10 +651,106 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     render({ viewer })
     await flush()
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
-    expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledWith({ md5: 'lightbox-md5', timelineId: undefined, mediaId: undefined })
+    expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledWith({
+      md5: 'lightbox-md5',
+      url: 'u',
+      thumb: 't',
+      offline: false,
+    })
     render({ viewer })
     await flush()
     expect(mocks.apiGetSnsImageDataUrl, '同一张灯箱图被解了两次').toHaveBeenCalledTimes(1)
+  })
+
+  it('网格先写缩略图也不会挡住灯箱回源，原图成功后会覆盖它', async () => {
+    mocks.apiGetSnsImageDataUrl
+      .mockResolvedValueOnce({ url: 'data:thumb', thumb: true })
+      .mockResolvedValueOnce({ url: 'data:original' })
+    const viewer = { images: [{ md5: 'thumb-key', url: 'u', thumb: 't' }], index: 0, author: '张三' }
+
+    render({ specs: [img('thumb-key')] })
+    await flush()
+    expect(media?.snsImgs['thumb-key']).toBe('data:thumb')
+    expect(originals(), '缩略图不该被登记成原图').toEqual([])
+
+    render({ specs: [img('thumb-key')], viewer })
+    await flush()
+    await flush()
+
+    expect(mocks.apiGetSnsImageDataUrl, '网格的 fetched 挡住了灯箱回源').toHaveBeenCalledTimes(2)
+    expect(media?.snsImgs['thumb-key']).toBe('data:original')
+    expect(originals()).toContain('thumb-key')
+    expect(mocks.snsMediaCacheSet).toHaveBeenLastCalledWith('thumb-key', 'data:original', false)
+  })
+
+  it('灯箱原图请求失败后回退当前缩略图，第二次不再打后端', async () => {
+    mocks.apiGetSnsImageDataUrl.mockRejectedValue(new Error('后端暂时失败'))
+    const commit = vi.fn()
+    const resolve = createSnsOriginalResolver({
+      current: () => ({ url: 'data:current-thumb', original: false }),
+      commit,
+      alive: () => true,
+      runHeavy: <T,>(task: () => Promise<T>): Promise<T> => task(),
+    })
+    const image = { md5: 'resolver-fail', url: 'u', thumb: 't' }
+
+    await expect(resolve(image)).resolves.toBe('data:current-thumb')
+    await expect(resolve(image), '失败后第二次没有回退到当前缩略图').resolves.toBe('data:current-thumb')
+    expect(mocks.apiGetSnsImageDataUrl, '失败后仍在反复打后端').toHaveBeenCalledTimes(1)
+    expect(commit).not.toHaveBeenCalled()
+  })
+
+  it('没有本地缩略图时失败就报错，不把 CDN 密文地址当兜底', async () => {
+    mocks.apiGetSnsImageDataUrl.mockRejectedValue(new Error('原图暂时取不到'))
+    const resolve = createSnsOriginalResolver({
+      current: () => undefined,
+      commit: vi.fn(),
+      alive: () => true,
+      runHeavy: <T,>(task: () => Promise<T>): Promise<T> => task(),
+    })
+
+    await expect(resolve({
+      md5: 'no-local-fallback',
+      url: 'https://cdn.example/encrypted',
+      thumb: 'https://cdn.example/encrypted-thumb',
+    })).rejects.toThrow('原图暂时取不到')
+  })
+
+  it('同一张图补齐 UHD 元数据后允许再回源，不被上一次缩略图结果挡住', async () => {
+    mocks.apiGetSnsImageDataUrl
+      .mockResolvedValueOnce({ url: 'data:thumb', thumb: true })
+      .mockResolvedValueOnce({ url: 'data:uhd-original' })
+    let current: { url: string; original: boolean } | undefined
+    const resolve = createSnsOriginalResolver({
+      current: () => current,
+      commit: (_key, url, original) => { current = { url, original } },
+      alive: () => true,
+      runHeavy: <T,>(task: () => Promise<T>): Promise<T> => task(),
+    })
+
+    await expect(resolve({ md5: 'late-uhd', url: 'main-url', token: 'main-token', key: 'main-seed' }))
+      .resolves.toBe('data:thumb')
+    expect(current, '缩略图不能登记成原图').toEqual({ url: 'data:thumb', original: false })
+
+    await expect(resolve({
+      md5: 'late-uhd',
+      url: 'main-url',
+      token: 'main-token',
+      key: 'main-seed',
+      originalWidth: 1440,
+      originalHeight: 1920,
+      originalBytes: 212083,
+      uhdUrl: 'uhd-url/2000',
+      uhdToken: 'uhd-token',
+      uhdSeed: 'uhd-seed',
+    })).resolves.toBe('data:uhd-original')
+    expect(mocks.apiGetSnsImageDataUrl, 'UHD 元数据补齐后仍被旧失败闸门挡住').toHaveBeenCalledTimes(2)
+    expect(mocks.apiGetSnsImageDataUrl).toHaveBeenLastCalledWith(expect.objectContaining({
+      uhdUrl: 'uhd-url/2000',
+      uhdToken: 'uhd-token',
+      uhdSeed: 'uhd-seed',
+    }))
+    expect(current).toEqual({ url: 'data:uhd-original', original: true })
   })
 
   it('其他图片上屏不会取消并重启正在进行的灯箱请求', async () => {
@@ -593,6 +784,26 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
 })
 
 describe('useMomentsMedia：失败重试状态的生命周期', () => {
+  it('其他图片上屏不会取消正在进行的文章封面请求', async () => {
+    let releaseCover!: (value: { items: Array<{ url: string; dataUrl?: string; error?: string }> }) => void
+    mocks.apiGetArticleCovers.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseCover = resolve
+    }))
+    const article = mk({ tid: 'cover-while-images', contentType: 3, link_url: 'https://x/article' })
+    const moments = [article]
+
+    render({ moments, specs: [img('other-fast')] })
+    await flush()
+    expect(mocks.apiGetArticleCovers).toHaveBeenCalledTimes(1)
+    expect(imgs()).toContain('other-fast')
+
+    releaseCover({ items: [{ url: 'https://x/article', dataUrl: 'data:article-cover' }] })
+    await flush()
+    await flush()
+
+    expect(media?.articleCovers['https://x/article']).toBe('data:article-cover')
+  })
+
   it('卸载时取消尚未触发的重试 timer，回调不再持有面板或继续请求', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
@@ -737,16 +948,103 @@ describe('useMomentsMedia：失败重试状态的生命周期', () => {
   })
 })
 
+describe('视频号链接卡：不再把 finderFeed 当九宫格图片', () => {
+  it('contentType=28 隐藏伪图片格，封面走 link_thumb，标签固定为视频号', () => {
+    const view = momentLinkCardView({
+      contentType: 28,
+      images: [{
+        thumb: 'https://wxapp.tc.qq.com/thumb',
+        url: 'https://wxapp.tc.qq.com/video',
+        key: '',
+        md5: '',
+        timelineId: 'tl-video',
+      }],
+      link_url: 'https://support.weixin.qq.com/update/',
+      link_thumb: 'https://wxapp.tc.qq.com/cover',
+      sourceNickName: '视频号',
+    }, {}, {})
+
+    expect(view.showImages).toBe(false)
+    expect(view.coverSrc).toBe('https://wxapp.tc.qq.com/cover')
+    expect(view.label).toBe('视频号')
+    expect(view.title).toBe('视频号内容')
+  })
+
+  it('旧归档缺 contentType 时按 sourceNickName 兜底，并过滤无媒体键的伪图片', () => {
+    const fake = {
+      thumb: 'https://wxapp.tc.qq.com/thumb',
+      url: 'https://wxapp.tc.qq.com/video',
+      key: '',
+      md5: '',
+      timelineId: 'tl-video',
+    }
+    const real = {
+      thumb: 'thumb', url: 'url', key: 'seed', md5: 'b'.repeat(32), timelineId: 'tl', id: 'mid',
+    }
+    const view = momentLinkCardView({
+      images: [fake, real],
+      link_url: 'https://support.weixin.qq.com/update/',
+      sourceNickName: '视频号',
+    }, {}, {})
+
+    expect(view.showImages).toBe(false)
+    expect(view.label).toBe('视频号')
+    expect(view.title).toBe('视频号内容')
+    expect(momentGridImages({ images: [fake, real] })).toEqual([real])
+  })
+
+  it('已经解析出的真实视频号标题不被前端兜底覆盖', () => {
+    const view = momentLinkCardView({
+      contentType: 28,
+      images: [],
+      link_url: 'https://support.weixin.qq.com/update/',
+      link_title: '真实视频号标题',
+      sourceNickName: '视频号',
+    }, {}, {})
+    expect(view.title).toBe('真实视频号标题')
+  })
+
+  it('普通动态仍显示图片，公众号文章仍隐藏正文图片', () => {
+    const image = {
+      thumb: 'thumb', url: 'url', key: 'seed', md5: 'a'.repeat(32), timelineId: 'tl',
+    }
+    expect(momentLinkCardView({ contentType: 1, images: [image] }, {}, {}).showImages).toBe(true)
+    expect(momentLinkCardView({ contentType: 3, images: [image], link_url: 'https://mp.weixin.qq.com/s/x' }, {}, {}).showImages).toBe(false)
+  })
+
+  it('公众号文章拿到文章页封面后优先显示它，等待期间可用本机 SNS 封面兜底', () => {
+    const image = {
+      thumb: 'thumb', url: 'url', key: 'seed', md5: '', timelineId: 'tl', id: 'mid',
+    }
+    const key = 'tl:mid'
+    const article = {
+      contentType: 3,
+      images: [image],
+      link_url: 'https://mp.weixin.qq.com/s/x',
+      sourceNickName: '人民日报',
+    }
+
+    expect(momentLinkCardView(article, { [key]: 'data:local-cover' }, {}).coverSrc).toBe('data:local-cover')
+    expect(momentLinkCardView(article, { [key]: 'data:local-cover' }, {
+      'https://mp.weixin.qq.com/s/x': 'data:article-cover',
+    }).coverSrc).toBe('data:article-cover')
+  })
+})
+
 describe('接线：面板只从这一层拿媒体状态', () => {
   const panel = readFileSync(join(HERE, 'moments-panel.tsx'), 'utf8')
+  const mediaLayer = readFileSync(join(HERE, 'moments-media.ts'), 'utf8')
 
-  it('面板走 useMomentsMedia，且不再自己持有那三份状态', () => {
+  it('面板走 useMomentsMedia，且不再自己持有媒体状态', () => {
     expect(panel).toContain('useMomentsMedia')
     for (const gone of ['setSnsImgs', 'setArticleCovers', 'coverTick', 'mediaQueue', 'drainMedia', 'snsFetched']) {
       expect(panel, `「${gone}」又回到面板里了 ⇒ 媒体层被绕过`).not.toContain(gone)
-      expect(readFileSync(join(HERE, 'moments-media.ts'), 'utf8'), `本层里也没有「${gone}」，上面那条判据的对象是编的`)
-        .toContain(gone)
     }
+    // 媒体层现在用带 original 标记的条目状态；「有图」与「原图」不再共用一份字符串表。
+    expect(mediaLayer).toContain('const [snsImageEntries, setSnsImageEntries]')
+    expect(mediaLayer).toContain('const commitSnsImages = useCallback')
+    expect(mediaLayer).toContain('const snsOriginals = useMemo')
+    expect(mediaLayer).toContain('function mergeSnsImageEntries')
   })
 
   it('卡片仍在 render 期间登记 spec（挪进 useEffect 就错过挂载时的兜底）', () => {
@@ -766,5 +1064,12 @@ describe('接线：面板只从这一层拿媒体状态', () => {
     walk(sf, false)
     expect(total, '卡片不再往那张表里登记 ⇒ 观察器永远查不到 spec，图片停在缩略图').toBeGreaterThanOrEqual(3)
     expect(inEffect, '登记被挪进了 useEffect ⇒ 挂载时那次兜底拿到的是空表').toBe(0)
+  })
+
+  it('图片 spec 带着尺寸/UHD 元数据，UHD 的 md5 也不丢', () => {
+    const card = readFileSync(join(HERE, 'moments-card.tsx'), 'utf8')
+    expect(card).toContain('momentImageSpec(im)')
+    expect(mediaLayer).toContain('...snsImageMetadata(im)')
+    expect(mediaLayer).toContain('im.uhdMd5')
   })
 })

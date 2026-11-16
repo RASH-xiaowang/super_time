@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { registerKbFile } from '../src/query/kb-files.ts'
+import { deleteKbFile, kbFilesOnKbDelete, registerKbFile, setKbFileRagFlag } from '../src/query/kb-files.ts'
 import { kbFilesDbPath } from '../src/query/kb-paths.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 import {
@@ -27,6 +27,7 @@ import {
   extractFileEntities,
   mergeDocEntities,
   parseEntityLines,
+  kbEntitySummary,
   readDocEntities,
   saveDocEntities,
   type DocEntity,
@@ -207,6 +208,53 @@ describe('③ 抽取入口：作用域与出网意愿', () => {
     expect(items.every(i => i.model === 'deepseek/deepseek-chat')).toBe(true)
     expect(items.every(i => i.at > 0)).toBe(true)
     expect(items.every(i => i.fileName === '项目计划.md')).toBe(true)
+  })
+})
+
+/* ── ③b 实体行的生命周期：删除 / 换库 / 关闭出网 ───────────────────────
+ * 实体表是**派生数据**，但同样带 kb_id 与 file_id。漏掉级联不会报错，
+ * 只会让图谱计数虚高、换库后目标库看不到、或者关掉 RAG 后标签仍随链接建议出网。
+ */
+describe('③b 实体行跟随文件：删除级联、换库迁移、RAG 关闭后不可见', () => {
+  it('删除文件 ⇒ 它的实体一并删除（同库、同一事务）', () => {
+    const f = addFile(1, 'a.md', '项目背景与交付节奏说明。'.repeat(12))
+    saveDocEntities(decrypted, 1, f, [{ label: '待删主题', kind: 'topic', weight: 60 }], 'm1')
+    expect(readDocEntities(decrypted, 1).items).toHaveLength(1)
+    const r = deleteKbFile(decrypted, 1, f)
+    expect(r.ok).toBe(true)
+    expect(readDocEntities(decrypted, 1).items).toEqual([])
+    const db = new DatabaseSync(kbFilesDbPath(decrypted), { readOnly: true })
+    try {
+      expect((db.prepare('SELECT COUNT(*) AS c FROM kb_doc_entities').get() as { c: number }).c).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('删库并换库 ⇒ 实体行的 kb_id 跟着文件迁移，目标库读得到', () => {
+    const f = addFile(1, 'a.md', '项目背景与交付节奏说明。'.repeat(12))
+    saveDocEntities(decrypted, 1, f, [{ label: '迁移主题', kind: 'topic', weight: 60 }], 'm1')
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    expect(rep.movedFiles).toBe(1)
+    expect(readDocEntities(decrypted, 1).items).toEqual([])
+    expect(readDocEntities(decrypted, 2).items.map(i => i.label)).toEqual(['迁移主题'])
+  })
+
+  it('关闭「参与语义检索」⇒ 实体标签不再读出（数据保留，重开恢复）', () => {
+    const f = addFile(1, 'a.md', '项目背景与交付节奏说明。'.repeat(12))
+    saveDocEntities(decrypted, 1, f, [{ label: '私有主题', kind: 'topic', weight: 60 }], 'm1')
+    expect(readDocEntities(decrypted, 1).items).toHaveLength(1)
+    expect(kbEntitySummary(decrypted, 1).entities).toBe(1)
+
+    const off = setKbFileRagFlag(decrypted, 1, f, false)
+    expect(off.ok).toBe(true)
+    expect(readDocEntities(decrypted, 1).items, '关掉出网开关后实体标签仍在图谱/链接建议里').toEqual([])
+    expect(kbEntitySummary(decrypted, 1).entities, '进度还报着不该再出现的实体').toBe(0)
+
+    const on = setKbFileRagFlag(decrypted, 1, f, true)
+    expect(on.ok).toBe(true)
+    expect(readDocEntities(decrypted, 1).items.map(i => i.label)).toEqual(['私有主题'])
   })
 })
 

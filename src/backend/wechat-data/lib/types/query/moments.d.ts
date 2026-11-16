@@ -15,6 +15,20 @@ export interface MomentMedia {
     id?: string;
     /** Timeline <id> (SnsDataItem/TimelineObject id). */
     timelineId?: string;
+    /** XML 外层 `<size width>`：原图期望宽度。 */
+    originalWidth?: number;
+    /** XML 外层 `<size height>`：原图期望高度。 */
+    originalHeight?: number;
+    /** XML 外层 `<size totalSize>`：原图期望字节数（可缺省）。 */
+    originalBytes?: number;
+    /** XML `<uhd>` 地址；真实样本保留 `/2000` 才 200，改成 `/0` 会 400。 */
+    uhdUrl?: string;
+    /** `<uhd token>`；与普通 `<url token>` 是两套值。 */
+    uhdToken?: string;
+    /** `<uhd key>`；与普通 `<url key>` 是两套值。 */
+    uhdSeed?: string;
+    /** `<uhd md5>`；仅用于诊断。 */
+    uhdMd5?: string;
     /** 这张静态图附带的实况视频；普通图片没有该字段。 */
     livePhoto?: MomentLivePhoto;
 }
@@ -97,6 +111,8 @@ export interface MomentEntry {
     location: string;
     link_title: string;
     link_url: string;
+    /** 视频号卡片的封面地址；普通图片/文章没有该字段。 */
+    link_thumb?: string;
     /** ContentObject <type>: 3=公众号文章链接, 28=视频号, 1=普通动态. */
     contentType?: number;
     /** 公众号/来源显示名 (<sourceNickName>). */
@@ -138,6 +154,8 @@ export declare function parseSnsXml(xml: string): {
     lng: number;
     linkTitle: string;
     linkUrl: string;
+    /** 视频号卡片的封面地址（`<finderFeed><mediaList><media><coverUrl>`）。 */
+    linkThumb: string;
     contentType: number;
     sourceNickName: string;
     publicUserName: string;

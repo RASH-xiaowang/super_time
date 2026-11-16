@@ -4,6 +4,19 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatAiReplySettingsDialog } from './chat-ai-reply-settings-dialog.tsx'
 
+const kbScope = vi.hoisted(() => ({
+  state: {
+    kbId: 1,
+    kbs: [{ id: 1, name: '客服知识库' }, { id: 2, name: '产品库' }],
+    readError: null as string | null,
+    loading: false,
+  },
+}))
+
+vi.mock('./kb-scope.ts', () => ({
+  useKbScope: () => kbScope.state,
+}))
+
 let host: HTMLDivElement
 let root: Root
 
@@ -15,11 +28,19 @@ function button(text: string): HTMLButtonElement {
 }
 
 async function render(input: {
-  onSave: (draft: { name: string; prompt: string; splitReply: boolean }) => Promise<boolean>
+  onSave: (draft: {
+    name: string
+    prompt: string
+    splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
+  }) => Promise<boolean>
   onClose?: () => void
   saving?: boolean
   chatUsername?: string
   initialSplitReply?: boolean
+  initialKbEnabled?: boolean
+  initialKbId?: number
   initialWebhook?: { configured: boolean; endpoint: string }
   onLoadWebhook?: (options: { chatUsername: string; chatName?: string }) => Promise<{
     configured: boolean
@@ -42,6 +63,8 @@ async function render(input: {
       initialName: '温柔客服',
       initialPrompt: '先回应情绪，再给下一步。',
       initialSplitReply: input.initialSplitReply ?? true,
+      initialKbEnabled: input.initialKbEnabled ?? false,
+      initialKbId: input.initialKbId ?? 0,
       ...(input.initialWebhook === undefined ? {} : { initialWebhook: input.initialWebhook }),
       ...(input.onLoadWebhook === undefined ? {} : { onLoadWebhook: input.onLoadWebhook }),
       ...(input.onSaveWebhook === undefined ? {} : { onSaveWebhook: input.onSaveWebhook }),
@@ -86,6 +109,8 @@ describe('AI 回复人格设置弹窗', () => {
       name: '温柔客服',
       prompt: '先回应情绪，再给下一步。',
       splitReply: true,
+      kbEnabled: false,
+      kbId: 0,
     })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -101,7 +126,13 @@ describe('AI 回复人格设置弹窗', () => {
       button('保存设置').click()
       await Promise.resolve()
     })
-    expect(onSave).toHaveBeenCalledWith({ name: '', prompt: '', splitReply: true })
+    expect(onSave).toHaveBeenCalledWith({
+      name: '',
+      prompt: '',
+      splitReply: true,
+      kbEnabled: false,
+      kbId: 0,
+    })
   })
 
   it('长回复分段开关随草稿保存', async () => {
@@ -118,7 +149,56 @@ describe('AI 回复人格设置弹窗', () => {
       name: '温柔客服',
       prompt: '先回应情绪，再给下一步。',
       splitReply: false,
+      kbEnabled: false,
+      kbId: 0,
     })
+  })
+
+  it('勾选知识库后自动落到当前作用域的库，并随草稿保存', async () => {
+    const onSave = vi.fn(async () => true)
+    await render({ onSave })
+    const check = document.querySelector('input[aria-label="知识库参与回复"]') as HTMLInputElement
+    expect(check.checked).toBe(false)
+    await act(async () => {
+      check.click()
+      await Promise.resolve()
+    })
+    const select = document.querySelector('select') as HTMLSelectElement
+    expect(select.value).toBe('1')
+    expect(select.disabled).toBe(false)
+    await act(async () => {
+      button('保存设置').click()
+      await Promise.resolve()
+    })
+    expect(onSave).toHaveBeenCalledWith({
+      name: '温柔客服',
+      prompt: '先回应情绪，再给下一步。',
+      splitReply: true,
+      kbEnabled: true,
+      kbId: 1,
+    })
+  })
+
+  it('勾选知识库但没有可选库时阻止保存并提示', async () => {
+    const onSave = vi.fn(async () => true)
+    const original = kbScope.state
+    kbScope.state = { kbId: 1, kbs: [], readError: null, loading: false }
+    try {
+      await render({ onSave })
+      const check = document.querySelector('input[aria-label="知识库参与回复"]') as HTMLInputElement
+      await act(async () => {
+        check.click()
+        await Promise.resolve()
+      })
+      await act(async () => {
+        button('保存设置').click()
+        await Promise.resolve()
+      })
+      expect(onSave).not.toHaveBeenCalled()
+      expect(document.body.textContent).toContain('请选择参与回复的知识库')
+    } finally {
+      kbScope.state = original
+    }
   })
 
   it('保存中禁用关闭与重复提交', async () => {

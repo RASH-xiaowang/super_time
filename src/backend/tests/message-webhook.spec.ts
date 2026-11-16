@@ -292,4 +292,32 @@ describe('消息列表局域网 Webhook 路由', () => {
     expect(result.body).toContain('BODY_TOO_LARGE')
     expect(f.calls).toEqual([])
   })
+
+  it('令牌错误时**先于 body 读取**返回 404：声明 30MB 也不会被读进内存', async () => {
+    const f = await fixture(async () => ({ ok: false }))
+    const result = await rawBodylessPost(f.url, MESSAGE_WEBHOOK_PATH_PREFIX + 'not-a-valid-token', {
+      'content-type': 'application/json',
+      // 如果实现先读 body，这个 Content-Length 会立刻变成 413；先验令牌就该是 404。
+      'content-length': String(MESSAGE_WEBHOOK_BODY_BYTES * 10),
+    })
+    expect(result.status, '未认证请求体在验签之前被处理了').toBe(404)
+    expect(result.body).toContain('WEBHOOK_NOT_FOUND')
+    expect(f.calls).toEqual([])
+  })
+
+  it('错误令牌连续试错触发限速：超过窗口上限后返回 429，正确令牌也先被挡住', async () => {
+    const f = await fixture(async () => ({ ok: false }))
+    const wrong = f.url + MESSAGE_WEBHOOK_PATH_PREFIX + 'not-a-valid-token'
+    for (let i = 0; i < 30; i += 1) {
+      const r = await fetch(wrong)
+      expect(r.status).toBe(404)
+    }
+    const limited = await fetch(wrong)
+    expect(limited.status).toBe(429)
+    expect((await limited.json() as { error?: { code?: string } }).error?.code).toBe('TOO_MANY_ATTEMPTS')
+    // 限速检查在验签之前：正确令牌在窗口内也要等，避免用正确令牌探测限速状态。
+    const alsoLimited = await fetch(f.url + f.path)
+    expect(alsoLimited.status).toBe(429)
+    expect(f.calls).toEqual([])
+  })
 })

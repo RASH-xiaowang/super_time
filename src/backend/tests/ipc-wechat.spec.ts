@@ -245,11 +245,11 @@ describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西
       () => ({ packaged: false, skipGates: false })
     let ocrCalls = 0
     let imageCalls = 0
-    ;(ctx as { wechatOcr: { recognize: () => Promise<unknown> } }).wechatOcr = {
-      recognize: async () => { ocrCalls += 1; return { text: '不该被调用' } },
+    ;(ctx as { wechatOcr: { recognize: (source: unknown) => Promise<unknown> } }).wechatOcr = {
+      recognize: async (_source: unknown) => { ocrCalls += 1; return { text: '不该被调用' } },
     }
-    ;(ctx as { wechatImageAi: { recognize: () => Promise<unknown> } }).wechatImageAi = {
-      recognize: async () => { imageCalls += 1; return { json: {} } },
+    ;(ctx as { wechatImageAi: { recognize: (source: unknown) => Promise<unknown> } }).wechatImageAi = {
+      recognize: async (_source: unknown) => { imageCalls += 1; return { json: {} } },
     }
     ;(ctx as {
       licenseService: { authorizeFeature: (status: unknown, feature: string) => unknown }

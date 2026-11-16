@@ -213,7 +213,9 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
   it('四个文件域调用全部把 kbId 作为第一个位置参数', () => {
     // 漏传就会「切了库但文件列表没变」；删除 / 开关更严重 —— 文件 id 是**全局自增**的，
     // kbId 在写操作上是守卫，拿甲库的 id 调乙库会物理删掉甲库那一条。
-    expect(panelCode).toMatch(/apiGetKbFiles\(kbId\)/)
+    // 2026-11-13：首屏改为按「用户已翻到的条数」取一页（`{ limit }`）以支持加载更多；
+    // 第一个位置参数仍必须是 kbId —— 这条判据守的就是它。
+    expect(panelCode).toMatch(/apiGetKbFiles\(kbId[,)]/)
     expect(panelCode).toMatch(/apiAddKbFiles\(kbId, paths\)/)
     expect(panelCode).toMatch(/apiDeleteKbFile\(kbId, f\.id\)/)
     expect(panelCode).toMatch(/apiSetKbFileRag\(kbId, f\.id, next\)/)
@@ -273,9 +275,18 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
     //   笔记一条没写的库，唯一出口只剩「一并删除」。
     const from = apiSrc.indexOf('function invalidateKbFileCaches')
     expect(from, 'api.ts 里找不到 invalidateKbFileCaches').toBeGreaterThan(0)
-    const fn = apiSrc.slice(from, from + 320)
+    // 边界按「下一个顶格 `}`」切，不按固定偏移：body 里每加一行注释就会把断言切到隔壁。
+    const end = apiSrc.indexOf('\n}\n', from)
+    const fn = end > from ? apiSrc.slice(from, end) : apiSrc.slice(from)
     expect(fn, '文件变更后没让库列表失效 —— 删库弹层的 fileCount 会一直是旧值')
       .toContain('invalidateKbCaches()')
+    // 2026-11-13：文件/实体变了，图谱与「本库模型」弹层都会变（节点里的文件与实体来自
+    // kb_files / kb_doc_entities；弹层那行「还剩几个文件没抽」也是它的聚合）。
+    // 它们挂在另外三处缓存上，漏清就是「加完文件，图谱还是一分钟前的样子」。
+    expect(fn, '文件变更后没清图谱快照缓存').toContain("snapshotDelete(kbCacheKey('kb:graph', kbId))")
+    expect(fn, '文件变更后没清图谱渲染缓存').toContain("invalidateWechatCache(kbCacheKey('kb-graph', kbId))")
+    expect(fn, '文件变更后没清模型弹层缓存').toContain("invalidateWechatCache(kbCacheKey('kb-model', kbId))")
+    expect(fn, '文件变更后没叫醒已挂载的图谱/笔记面板').toContain('notifyNotesUpdated()')
     // 必须是**同一个入口**（一次做全三件事：清快照 + 清渲染缓存 + 广播），而不是只清一层：
     // 只清缓存不广播，已经挂载的切换器手里还是上一次的数组，弹层照样说错话。
     expect(apiSrc).toMatch(/function invalidateKbCaches[\s\S]{0,400}?snapshotDelete\(KB_LIST_CACHE_KEY\)/)
@@ -288,7 +299,9 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
     // 若那个 id 恰好也存在，详情区显示的就是别的库的文件。
     const snapshotModule = readFileSync(join(HERE, 'use-kb-files-snapshot.ts'), 'utf8')
     expect(snapshotModule).toMatch(
-      /setSnapshot\(cachedFiles\(kbId\) \?\? \{ items: \[\], total: 0 \}\)/
+      // 2026-11-13：切库 effect 先把 `cachedFiles(kbId)` 存进 `cached`（后面还要用它
+      // 同步 loadedRef / hasMore），落快照用的仍是同一份缓存。
+      /setSnapshot\((?:cachedFiles\(kbId\)|cached) \?\? \{ items: \[\], total: 0 \}\)/
     )
     expect(panelCode).toMatch(/setSelectedId\(null\)\s*\n\s*setQuery\(''\)/)
     expect(panelCode).toMatch(/setQuery\(''\)\s*\n\s*setFilter\('all'\)/)
@@ -599,7 +612,8 @@ describe('2026-09-19 三栏重排：吸顶骨架与「定位原文件」', () =>
   it('主操作是 primary；刷新与低频动作收进文档工具菜单', () => {
     // ⚠ 属性之间不能用 `[^>]*`：onClick 的箭头函数 `=>` 自带 `>`，会在那里截断。
     expect(panelCode).toMatch(/<Button variant="primary"[\s\S]{0,140}?＋ 添加文件/)
-    expect(panelCode).toMatch(/<KbToolsMenu[\s\S]{0,400}?onRefresh=\{\(\) => \{ void load\(\) \}\}/)
+    // 距离放宽到 700：菜单多了 `onCancelIndex`（停止建索引）一个 prop，位置不再紧挨着。
+    expect(panelCode).toMatch(/<KbToolsMenu[\s\S]{0,700}?onRefresh=\{\(\) => \{ void load\(\) \}\}/)
     expect(panelCode).toMatch(/disabled=\{loading\}[\s\S]{0,80}?onClick=\{\(\) => \{ runAndClose\(onRefresh\) \}\}/)
   })
 
@@ -831,7 +845,9 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
     expect(end).toBeGreaterThan(0)
     const body = rest.slice(0, end)
     expect(body, '读失败被当成「确实没有索引」显示（N1 复发）').not.toContain('setIndexView(null)')
-    expect(body).toMatch(/catch \{/)
+    // 2026-11-13：catch 现在**要绑定错误**（把原因写进 indexError 横幅），
+    // 所以允许 `catch (e)`；不绑定的空 catch 仍算合规的静默降级。
+    expect(body).toMatch(/catch(?: \(e\))? \{/)
   })
 
   it('轮询判据是后端的 job，不是本地的 indexing 布尔', () => {
@@ -867,5 +883,49 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
     // ③ 清列表那一层必须**只在写成功之后**：失败时后端一行没改，
     //    白广播一次会把「保存失败」这件事混进一次看起来正常的刷新里。
     expect(write).toMatch(/if \(result\.ok\) invalidateKbCaches\(\)/)
+  })
+})
+
+/**
+ * 2026-11-13（知识库修复轮）的四个「界面静默」缺陷：
+ *   ① 超过 200 条时后续文件**永远看不到**（页头写着 total，却只取第一页）；
+ *   ② 建索引没有停止入口，进行中也读不到 done/total；
+ *   ③ 建索引失败 / 索引状态读失败曾是**静默**的（按钮转完就复原，一句话都没有）；
+ *   ④ 模型弹层的「重建」不带 jobId ⇒ 既不可取消，也看不到批次进度。
+ */
+describe('2026-11-13：分页、停止、进度与失败可见', () => {
+  it('文件列表支持「加载更多」（后端默认只回 200 条，单库上限 5,000）', () => {
+    const snapshot = readFileSync(join(HERE, 'use-kb-files-snapshot.ts'), 'utf8')
+    expect(snapshot).toContain('offset')
+    expect(snapshot).toMatch(/loadMore/)
+    expect(snapshot).toContain('KB_FILES_MAX')
+    expect(snapshot, '刷新时至少取回「用户已翻到的条数」，否则静默刷新会把列表缩回第一页')
+      .toMatch(/Math\.max\(KB_FILES_PAGE, loadedRef\.current\)/)
+    expect(panelCode, '页脚没有「加载更多」入口').toContain('加载更多')
+  })
+
+  it('建索引有停止入口，且 jobId 与构建配对', () => {
+    const idx = readFileSync(join(HERE, 'kb-index-build.ts'), 'utf8')
+    expect(idx).toContain('apiCancelKbIndexBuild')
+    expect(idx, 'jobId 必须进 ref（局部变量每次渲染都从 0 重来）').toMatch(/jobRef\.current = jobId/)
+    expect(idx, '从面板发起的构建必须把 jobId 交给后端，否则「停止」没有对象').toMatch(/apiBuildKbVectorIndex\(kbId, force, jobId\)/)
+    expect(panelCode).toContain('onCancelIndex')
+    expect(panelCode).toContain('停止建索引')
+  })
+
+  it('失败与进度必须被说出来，不许静默', () => {
+    expect(panelCode).toContain('语义索引没有建成')
+    expect(panelCode).toContain('索引状态读取失败')
+    expect(panelCode).toMatch(/indexBuildError/)
+  })
+
+  it('模型弹层的「重建」也带 jobId，并可停止', () => {
+    const hook = readFileSync(join(HERE, 'kb-index-build.ts'), 'utf8')
+    expect(hook).toMatch(/function useKbModelRebuild/)
+    expect(hook).toMatch(/apiBuildKbVectorIndex\(kbId, true, jobId\)/)
+    expect(hook).toContain('apiCancelKbIndexBuild')
+    const dialog = readFileSync(join(HERE, 'KbModelDialog.tsx'), 'utf8')
+    expect(dialog).toContain('useKbModelRebuild')
+    expect(dialog, '停止按钮没接上').toContain('停止重建')
   })
 })

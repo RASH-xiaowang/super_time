@@ -64,6 +64,11 @@ const MESSAGE_TOOLS = new Set([
   'search_hybrid',
   'get_session_messages',
   'get_message_context',
+  // 新增的消息型工具：通话、媒体、撤回都返回真实消息定位，
+  // 必须走同一套 username/localId 校验，防止伪造消息证据。
+  'get_call_history',
+  'aggregate_media',
+  'search_revoked',
 ])
 
 function normalizeFactSlug(value: string): string {

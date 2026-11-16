@@ -308,12 +308,26 @@ describe('B 验收四项', () => {
     expect(r.note).toContain('32')
     expect(r.note).toContain('8')
 
-    // (b) meta 里的 dim 被抹掉（手改/半个事务）⇒ 未就绪，而不是「按 0 维硬算」
+    // (b) meta 里的 dim 被抹掉（手改/半个事务）不再影响判定：维度按**本库行**取。
+    // 全局 meta.dim 是「最近一次构建」的单值，两个库用不同维度模型时会互相判「维度不符」；
+    // 行级维度才是这个库真正能算余弦的依据。
     const db = new DatabaseSync(kbVectorsDbPath(decrypted))
     try {
       db.prepare("DELETE FROM meta WHERE key = 'dim'").run()
     } finally {
       db.close()
+    }
+    __internals.statusCache.clear()
+    const st = kbVectorIndexStatus(decrypted, 1, MODEL)
+    expect(st.dim, '维度应从本库向量行读出来').toBe(32)
+    expect(st.ready).toBe(true)
+
+    // 行级维度也丢了（值为 0）⇒ 未就绪，而不是「按 0 维硬算」
+    const broken = new DatabaseSync(kbVectorsDbPath(decrypted))
+    try {
+      broken.prepare('UPDATE ' + KB_VECTORS_TABLE + ' SET dim = 0 WHERE kb_id = 1').run()
+    } finally {
+      broken.close()
     }
     __internals.statusCache.clear()
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).ready).toBe(false)
@@ -400,6 +414,13 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
     //  按库绑定之后那个前提没了 ——  C5。）
     expect(vectorRows(2)).toEqual(kb2Before)
     expect(kbVectorIndexStatus(decrypted, 2, MODEL).ready).toBe(true)
+    // 维度也是**按库**的：甲库 16 维不该把乙库的 32 维判成「维度不符」。
+    // 旧实现读全局 `meta.dim`，最后一次构建写谁，另一个库就坏谁，来回重建永远好不了。
+    expect(kbVectorIndexStatus(decrypted, 2, MODEL).dim).toBe(32)
+    const probe = makeEmbed(32)
+    const r2 = await searchKbDense(decrypted, 2, '玄武纪要', probe.fn, { topK: 5, minSimilarity: -1, candidatePool: 50, model: MODEL })
+    expect(r2.note ?? '', '拿乙库 32 维模型检索却被甲库的 16 维记录挡住').not.toContain('维度不符')
+    expect(r2.hits.length).toBeGreaterThan(0)
     // 拿旧模型名去问甲库 ⇒ 判的是「模型不符」，而不是「就绪」（F1 的复发判据）
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).staleReason).toBe('model-mismatch')
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).ready).toBe(false)
@@ -590,11 +611,15 @@ describe('W2-7.2：换库搬迁按「块 + 模型」搬，不连带整库重建'
     expect(rows.length, '外来行没被删 ⇒ 乙库会判 model-mismatch 直到整库重建').toBe(1)
     expect(rows[0]?.kb_id, '乙库自己的行被误伤').toBe(2)
     expect(rows[0]?.model).toBe('m2')
-    // 关键后果：乙库**不会**因此变成不可用（否则又要整库重建）
-    expect(kbVectorIndexStatus(decrypted, 2, 'm2').ready, '跨模型搬迁把乙库拖成 model-mismatch').toBe(true)
+    // 关键后果：乙库**不会**变成 model-mismatch（不用整库重算），但它现在**不完整** ——
+    // 搬过来的文件还没有向量。状态如实报 incomplete，下一次提问/建索引只补缺口。
+    const moved = kbVectorIndexStatus(decrypted, 2, 'm2')
+    expect(moved.ready, '搬迁后把缺向量说成就绪 ⇒ 稠密通道静默漏内容').toBe(false)
+    expect(moved.staleReason).toBe('incomplete')
     // 而且下一次 build 只为搬过来的那个文件补 embedding，不重算乙库原有内容
     const built = await buildBumped(decrypted, 2, m2.fn, { ...BUILD, model: 'm2' })
     expect(built.embedded, '重建范围应当是「搬过来的那个文件」，不是整个乙库').toBe(1)
+    expect(kbVectorIndexStatus(decrypted, 2, 'm2').ready, '补完缺口应恢复就绪').toBe(true)
     expect(callsTotal(m2) - before, '多算了一遍乙库原有内容').toBe(1)
   })
 

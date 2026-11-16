@@ -16,13 +16,15 @@ import { describe, expect, it } from 'vitest'
 
 const read = (p: string): string => readFileSync(p, 'utf8')
 const HEALTH = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Health.tsx'
+/** 2026-11-16：重建/重试的动作与文案抽到了 `health-actions.ts`（HealthPanel 只渲染）。 */
+const HEALTH_ACTIONS = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/health-actions.ts'
 const VIEW = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx'
 const CFG = 'src/backend/wechat-data/src/remotes/config.ts'
 const KEYSDEC = 'src/backend/wechat-data/src/remotes/keysdec.ts'
 
 describe('W3-3.3：索引重建期间要说清「读到的还是旧索引」', () => {
   it('Health 的重建按钮按下时给出这句话', () => {
-    const h = read(HEALTH)
+    const h = read(HEALTH) + read(HEALTH_ACTIONS)
     expect(h, '重建时没有告知「走的是旧索引」').toContain('旧索引')
     expect(h, '重建提示没说「可能变慢」').toContain('可能变慢')
   })
@@ -55,10 +57,10 @@ describe('W3-2.5：解密失败必须给出明细与下一步', () => {
   })
 
   it('前端：重试的四个分支都出声（成功 / 部分失败 / 抛错 / 收尾）', () => {
-    const h = read(HEALTH)
-    expect(h).toContain('解密完成：成功 ${r.okCount}/${r.total}')
-    expect(h).toContain('仍有 ${r.failed.length} 个失败')
-    expect(h).toMatch(/catch \(e\) \{[\s\S]{0,120}setError\(\(e as Error\)\.message\)/)
-    expect(h).toMatch(/finally \{[\s\S]{0,120}setRetrying\(false\)/)
+    const a = read(HEALTH_ACTIONS)
+    expect(a).toContain('解密完成：成功 ${String(r.okCount)}/${String(r.total)}')
+    expect(a).toContain('仍有 ${String(r.failed.length)} 个失败')
+    expect(a).toMatch(/catch \(e\) \{[\s\S]{0,120}setError\(/)
+    expect(a).toMatch(/finally \{[\s\S]{0,120}setRetrying\(false\)/)
   })
 })

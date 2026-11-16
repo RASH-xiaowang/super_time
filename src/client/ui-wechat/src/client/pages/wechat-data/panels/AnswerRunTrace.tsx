@@ -81,6 +81,8 @@ export function RunTraceTimeline(input: {
   groups: readonly AskTraceGroup[]
   streaming: boolean
   answerText: string
+  /** 当前正在进行的工具轮次；用于在没有 reasoning 增量时给出可见步骤。 */
+  activeRound?: number
   liveReasoningKey?: string
   renderTool: (tool: ToolView) => ReactNode
 }): React.JSX.Element | null {
@@ -95,6 +97,16 @@ export function RunTraceTimeline(input: {
           && input.answerText.trim() === ''
           && groupIsLive(group)
           && group.reasoningKeys.includes(input.liveReasoningKey ?? '')
+        /*
+         * 模型思考时只发 reasoning 增量；在第一个增量到达前，这一轮在轨迹里
+         * 完全没有可见节点，用户会以为步骤丢了。给当前轮补一个占位步骤，
+         * 增量到达后由真正的思考区接管。
+         */
+        const thinkingPending = input.streaming
+          && input.answerText.trim() === ''
+          && reasoning === undefined
+          && input.activeRound !== undefined
+          && group.round === input.activeRound
         return (
           <section
             key={group.key}
@@ -143,6 +155,12 @@ export function RunTraceTimeline(input: {
                 variant="trace"
                 label={reasoning.phase === 'synthesis' ? '回答整理思考' : '本轮思考 · 调用前'}
               />
+            )}
+            {thinkingPending && (
+              <div className={processCss.traceThinkingPending} data-live="" role="status">
+                <span className={processCss.tracePipelineDot} aria-hidden="true" />
+                <span>本轮思考中…</span>
+              </div>
             )}
           </section>
         )

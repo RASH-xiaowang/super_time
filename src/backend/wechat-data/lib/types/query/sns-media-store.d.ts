@@ -1,3 +1,4 @@
+import { type SnsOriginalExpectation } from './image-dimensions.ts';
 /** 落盘子目录名（在 `decoded_images` 之下，与 `article-covers` 同级）。 */
 export declare const SNS_MEDIA_STORE_SUBDIR = "sns-media";
 /**
@@ -19,6 +20,18 @@ export declare const SNS_MEDIA_STORE_BUDGET_BYTES: number;
  * 环境变量 `SUPERTIME_SNS_MEDIA_STORE_FILES` 可覆盖（与字节那个同构）。
  */
 export declare const SNS_MEDIA_STORE_BUDGET_FILES: number;
+/** 读取原图缓存时的可选质量校验。 */
+export interface OriginalLookupOptions {
+    /** XML `<size>` 给出的原图预期；给了就按它判定。 */
+    expectation?: SnsOriginalExpectation;
+    /** true = 必须通过 {@link evaluateSnsOriginal}；视频封面等小图调用方不要开。 */
+    requireQuality?: boolean;
+}
+/** 写入原图缓存时的替换策略。 */
+export interface OriginalSaveOptions extends OriginalLookupOptions {
+    /** true = 新图尺寸/字节更优时替换同 md5 的旧档（用于修复历史 200x300 错档）。 */
+    replaceIfLarger?: boolean;
+}
 /** 从字节头判格式；认不出返回 `null`（**不猜** —— 猜错会把坏字节当原图永久缓存）。 */
 export declare function sniffOriginalExt(b: Uint8Array): string | null;
 /** 该扩展名对应的 mime（供调用方直接拼 data URL，省得再判一次）。 */
@@ -28,9 +41,10 @@ export declare function mimeOfExt(ext: string): string;
  *
  * @param decodedDir - `decoded_images` 目录（`rc.dirs().decoded`）。
  * @param md5 - 32 位媒体 md5。
+ * @param options - 可选原图尺寸/质量校验；默认只为兼容旧调用方做格式嗅探。
  * @returns 命中的字节与格式；没有则 `null`。
  */
-export declare function lookupOriginal(decodedDir: string, md5: string): {
+export declare function lookupOriginal(decodedDir: string, md5: string, options?: OriginalLookupOptions): {
     bytes: Buffer;
     ext: string;
 } | null;
@@ -49,10 +63,12 @@ export declare function sweepOriginalStore(decodedDir: string, budgetBytes?: num
  * @param decodedDir - `decoded_images` 目录。
  * @param md5 - 32 位媒体 md5（缓存键，内容寻址 ⇒ 同名必同内容，重复写无害）。
  * @param bytes - 原图字节。
+ * @param options - 可选质量校验与替换策略。`replaceIfLarger` 用于修复旧的
+ *   200x300 错档：只有新图尺寸/字节明显更优时才覆盖，避免每轮重复写盘。
  * @returns 落盘的扩展名；**不是图片 / 参数不合法 / 写失败**一律返回 `null`。
  *          返回 `null` 只表示「这次没存上」，调用方照常返回本次结果，不得因此报错。
  */
-export declare function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null;
+export declare function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array, options?: OriginalSaveOptions): string | null;
 /** 把落盘原图变成 data URL（省得调用方再拼一次 mime）。 */
 export declare function originalAsDataUrl(hit: {
     bytes: Buffer;
@@ -79,9 +95,10 @@ export declare function momentsMediaArchiveRoot(decodedDir: string): string;
  * 查**长期归档**里的原图（进入朋友圈的第一判断）。
  * @param decodedDir - `decoded_images` 目录（用它定位数据根）。
  * @param md5 - 32 位媒体 md5。
+ * @param options - 可选原图尺寸/质量校验；默认只为兼容旧调用方做格式嗅探。
  * @returns 命中的字节与格式；没有则 `null`。
  */
-export declare function lookupArchivedOriginal(decodedDir: string, md5: string): {
+export declare function lookupArchivedOriginal(decodedDir: string, md5: string, options?: OriginalLookupOptions): {
     bytes: Buffer;
     ext: string;
 } | null;
@@ -94,9 +111,11 @@ export declare function lookupArchivedOriginal(decodedDir: string, md5: string):
  * @param decodedDir - `decoded_images` 目录。
  * @param md5 - 32 位媒体 md5。
  * @param bytes - 原图字节。
+ * @param options - 可选质量校验与替换策略。旧归档里的 200x300 预览图会在
+ *   `replaceIfLarger: true` 时被更大的原图替换。
  * @returns 落盘扩展名；不是图片/写失败为 `null`。
  */
-export declare function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null;
+export declare function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uint8Array, options?: OriginalSaveOptions): string | null;
 /**
  * 按容量回收长期归档（按 mtime 从旧到新删，直到低于预算）。
  * @param decodedDir - `decoded_images` 目录。

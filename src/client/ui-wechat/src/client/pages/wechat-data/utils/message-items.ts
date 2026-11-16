@@ -24,6 +24,26 @@ export type MessageRenderItem =
 /** 相邻消息间隔超过这个秒数就在中间插日期分隔 —— 微信口径（5 分钟）。 */
 export const DIVIDER_GAP_SEC = 300
 
+/**
+ * 日期分隔项的稳定 key。
+ *
+ * **不能只用 `local_id`**：`local_id` 只在单个消息分片内唯一，群里同一会话的
+ * `message_0..N` 各自从 1 起编号。真机数据里同一会话会同时出现「`local_id=1`
+ * 的第一条」和「`local_id=1` 的最新一条」——两处分隔器拿到同一个 key 后，
+ * React 会按重复 key 复用/遗留 DOM 节点，表现是「上一个会话的日期分隔（3月15日 20:05）
+ * 卡在下一个窗口里」，虚拟列表的测高缓存也会串用。复合身份与
+ * `panels/message-identity.ts#messageIdentity` 同口径：`sort_seq + local_id`，
+ * 缺失时退回 `create_time + local_id`。
+ * @param m - 紧跟在该分隔项后的消息。
+ * @returns 会话内唯一的 key。
+ */
+function dayItemKey(m: WechatMessage): string {
+  const seq = Number(m.sortSeq ?? 0)
+  const at = String(Number(m.createTime ?? 0))
+  if (Number.isFinite(seq) && seq > 0) return `day-s${String(seq)}:${String(m.localId)}:${at}`
+  return `day-l${String(m.localId)}:${at}`
+}
+
 /** 一天的自然日 key（`YYYY-M-D`），只用于判断「跨天」。 */
 function dayKey(ts: number): string {
   if (!ts) return ''
@@ -123,7 +143,7 @@ export function buildMessageItems(messages: readonly WechatMessage[], start = 0)
     if (!m) continue
     const divider = dividerLabelBefore(i > 0 ? messages[i - 1] : undefined, m)
     // 向上加载历史后下标会整体后移；日期分隔 key 必须跟着真实消息，不能跟 index。
-    if (divider) items.push({ kind: 'day', label: divider, key: `day-${String(m.localId)}` })
+    if (divider) items.push({ kind: 'day', label: divider, key: dayItemKey(m) })
     if (renderKindOf(m) === 'image') {
       const gid = m.rich?.groupId ?? ''
       if (gid && groupCountOf(m) > 0) {

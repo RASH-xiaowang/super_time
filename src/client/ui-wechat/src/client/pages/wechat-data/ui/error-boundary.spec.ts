@@ -71,6 +71,29 @@ describe('ErrorBoundary', (): void => {
     expect(host.querySelector('[role="alert"]'), '重试后兜底卡还在').toBeNull()
   })
 
+  it('resetKey 变化时清掉错误态，但没变时不打扰（切页签恢复 / 其余时刻保持错误卡）', (): void => {
+    const { Comp, setOk } = makeFlaky()
+    const renderWith = (resetKey: string): void => {
+      act(() => {
+        root?.render(createElement(ErrorBoundary, { label: '聊天会话', resetKey, children: createElement(Comp) }))
+      })
+    }
+    root = createRoot(host)
+    renderWith('chats')
+    expect(host.querySelector('[role="alert"]'), '第一次应当出错').not.toBeNull()
+
+    // 子组件已恢复正常，但 resetKey 没变：错误卡必须留着（否则每帧都在偷偷重试）。
+    setOk(true)
+    renderWith('chats')
+    expect(host.querySelector('[role="alert"]'), 'resetKey 未变化却清掉了错误态').not.toBeNull()
+    expect(host.querySelector('[data-ok="yes"]')).toBeNull()
+
+    // 切到另一个页签（resetKey 变化）⇒ 清错误态并重新渲染子树。
+    renderWith('taskinfo')
+    expect(host.querySelector('[role="alert"]'), 'resetKey 变化后错误卡还在').toBeNull()
+    expect(host.querySelector('[data-ok="yes"]'), 'resetKey 变化后没有重新渲染子树').not.toBeNull()
+  })
+
   it('子组件正常时不渲染任何兜底 UI（不能凭空多一块）', (): void => {
     root = createRoot(host)
     act(() => { root?.render(createElement(ErrorBoundary, null, createElement('div', { 'data-ok': 'yes' }, '正常'))) })

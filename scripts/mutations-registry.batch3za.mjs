@@ -35,8 +35,10 @@ export const MUTATIONS_BATCH3ZA = [
     id: 'M573-kb-add-files-button-ungated',
     why: '知识库「添加文件」按钮去掉降级属性组 ⇒ 手机上出现一个只能吃到「不开放远程访问」的按钮（入参是本机文件路径，远程端根本给不出）。判据：remote-action-gating.wiring.spec.ts 的 ②。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx',
-    from: 'onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}',
-    to: 'onClick={() => { void addFiles() }} disabled={adding}',
+    // 2026-11-13：顶栏按钮也补上了降级属性组，与空态那颗按钮同形 ⇒ 锚点必须带上
+    // `variant="primary"` 才唯一（判据文件里「恰好命中一次」不许放宽）。
+    from: 'variant="primary" onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}',
+    to: 'variant="primary" onClick={() => { void addFiles() }} disabled={adding}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/remote-action-gating.wiring.spec.ts',
   },
   {

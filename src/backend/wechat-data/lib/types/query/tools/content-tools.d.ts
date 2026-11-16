@@ -1,4 +1,4 @@
-import { type RetrievalTool } from './types.ts';
+import type { RetrievalTool } from './types.ts';
 /** 朋友圈检索。 */
 export declare const searchMomentsTool: RetrievalTool;
 /** 收藏检索。 */

@@ -17,6 +17,26 @@ const {
 
 const PRODUCT_ID = 'super-time-wechat'
 
+/**
+ * 时钟回拨容差：系统时间比「上次看到的时间」倒退了超过这个量才算异常。
+ *
+ * 为什么需要：许可证过期判定只看 `now > expiresAt`，把系统时钟调到到期日之前，
+ * 过期证就能一直用。last-seen 基线是低成本的缓解（不是防篡改：有管理员权限的人
+ * 仍可改文件）。容差取 1 小时，覆盖 NTP 校时/时区误设这类正常抖动，又足以发现
+ * 「把日期调回几个月前」这种典型做法。
+ */
+const CLOCK_ROLLBACK_TOLERANCE_MS = 60 * 60 * 1000
+
+/** last-seen 可能是毫秒数或 ISO 字符串；其它形状一律当作没有基线。 */
+function normalizeLastSeen(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 function isIsoDate(v) {
   return typeof v === 'string' && !Number.isNaN(Date.parse(v))
 }
@@ -81,13 +101,19 @@ function validatePayload(payload) {
 /**
  * 语义有效性（签名之外）：时间窗 + 设备绑定 + 版本下限。
  * @param {Record<string, any>} payload
- * @param {{ fingerprint: string, appVersion: string, now?: Date }} ctx
+ * @param {{ fingerprint: string, appVersion: string, now?: Date, lastSeenAt?: number|string|null }} ctx
  */
 function evaluatePayload(payload, ctx) {
   const now = ctx.now ?? new Date()
   const notBefore = payload.notBefore ? new Date(payload.notBefore) : null
   const expiresAt = payload.expiresAt ? new Date(payload.expiresAt) : null
 
+  // 回拨检测必须排在有效期之前：时钟被调回去时 `now > expiresAt` 恰好不成立，
+  // 过期证会看起来有效。没有 last-seen 基线时跳过（首次导入/旧数据）。
+  const lastSeen = normalizeLastSeen(ctx.lastSeenAt)
+  if (lastSeen !== null && now.getTime() + CLOCK_ROLLBACK_TOLERANCE_MS < lastSeen) {
+    return { valid: false, reason: 'clock_rollback', code: 'CLOCK_ROLLBACK' }
+  }
   if (notBefore && now < notBefore) {
     return { valid: false, reason: 'not_yet_active', code: 'NOT_BEFORE' }
   }
@@ -118,6 +144,7 @@ function compareSemver(a, b) {
 
 module.exports = {
   PRODUCT_ID,
+  CLOCK_ROLLBACK_TOLERANCE_MS,
   FEATURE_SCHEMA_VERSION,
   KNOWN_FEATURES,
   REQUIRED_FEATURES,

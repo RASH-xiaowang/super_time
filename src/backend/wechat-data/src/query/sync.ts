@@ -25,7 +25,10 @@ import { decryptWalPatch, walFramesPatchable, WAL_FRAME_HEADER_SZ, WAL_HEADER_SZ
 export { decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts'
 import { decryptTailAppend, schemaIntact, tailAppendPlan, tailQuickCheckOk } from './sync-tail-patch.ts'
 import { DIFF_MAX_CHANGED_RATIO, diffPageIndexes, pageHashesOf, pageHashesRange, patchChangedPages } from './sync-page-diff.ts'
-import { cleanStaleSnapshotLeftovers, discardSupersededWal, stageCopyRetry, stageOpenRetry } from './snapshot-sidecars.ts'
+import { cleanStaleSnapshotLeftovers, clearSupersededWal, discardSupersededWal, restoreSupersededWal, stageCopyRetry, stageOpenRetry } from './snapshot-sidecars.ts'
+import { reconcileSnapshotWal } from './snapshot-reconcile.ts'
+import { withPublishLock } from './snapshot-publish-lock.ts'
+import { assertPublishable } from './snapshot-verify.ts'
 import {
   SYNC_FALLBACK_FAST_MS,
   SYNC_INTERVAL_MS,
@@ -36,6 +39,7 @@ import {
   takeSyncSuccesses,
 } from './sync-pacing.ts'
 import { flushSyncSourceState, loadSyncSourceState, noteSyncSourceState } from './sync-state.ts'
+import { contactSig, plainDbSig, sessionSig, shardSig, sigKeyOf, type ShardSig } from './sync-signatures.ts'
 import { startSyncWatch } from './sync-watch.ts'
 import { createSyncTrigger } from './sync-trigger.ts'
 import { DIFF_RETRY_AFTER_MS, notePageDiffRejected, notePageDiffSuccess, pageDiffSuppressed } from './sync-diff-adaptive.ts'
@@ -71,15 +75,6 @@ function cachedDirEntries(dir: string): DirListing {
 
 
 
-/** Per-shard state: raw mtimes of the main db and its wal. */
-/**
- * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
- * 缓存侧早已是 `mtimeNs + size`（`meta.ts` 的 `fileSig`，同口径），
- * 而这里一直只比 `mtimeMs` —— 同毫秒内的写入它**看不见**，`mode` 会误判成 `wal`，
- * 于是那个分片的改动要等下一次变得更多才会被同步到。
- * 现在改成纳秒 + 大小（NTFS 100ns 精度，实测 `statSync(...,{bigint:true})` 与普通 stat 开销无差别）。
- */
-interface ShardSig { main: string; wal: string }
 
 /**
  * 「这页解对了没有」的判据 —— 只看 SQLite 页 1 头部里**不能被合成**的字段。
@@ -145,6 +140,13 @@ export function looksDecrypted(dbPath: string): boolean {
  * @param target - 目标快照文件。
  */
 export async function atomicReplace(temp: string, target: string): Promise<void> {
+  // 2026-11-16：发布按目标串行（同步 tick 与修复 RPC 同进程并发写同一快照时，
+  // 旧一代不许压在新一代之上）。只锁「发布」这一段，不锁解密，也不锁微信源库。
+  await withPublishLock(target, () => replaceUnderLock(temp, target))
+}
+
+/** 真正的发布动作；只由 {@link atomicReplace} 在发布锁内调用。 */
+async function replaceUnderLock(temp: string, target: string): Promise<void> {
   await mkdir(dirname(target), { recursive: true })
   let lastErr: unknown = null
   for (let i = 0; i < 8; i += 1) {
@@ -153,6 +155,9 @@ export async function atomicReplace(temp: string, target: string): Promise<void>
     } else {
       try {
         await rename(temp, target)
+        // 换代成功：隔离出来的上一代 WAL 已经没有任何用途，清掉（失败的 unlink 不致命，
+        // 启动对账会把残留当作 quarantine 处理）。
+        await clearSupersededWal(target)
         return
       } catch (e) {
         lastErr = e
@@ -162,6 +167,9 @@ export async function atomicReplace(temp: string, target: string): Promise<void>
     // asynchronous pause lets the reader close before retrying.
     await new Promise<void>((resolve) => { setTimeout(resolve, 120) })
   }
+  // 2026-11-16：换代最终失败时把旧 WAL 放回去。旧实现先 `unlink` 再 rename，rename 失败
+  // ⇒ 旧主文件失去它的 WAL（已提交的页只剩 WAL 里那一份）⇒ 下一次读出 malformed。
+  await restoreSupersededWal(target)
   throw lastErr instanceof Error ? lastErr : new Error('atomicReplace failed')
 }
 
@@ -180,14 +188,10 @@ function fullDecryptDue(key: string): boolean {
 }
 
 /**
- * **失败退避 + 日志节流**见 `./sync-pacing.ts`（2026-09-29 从本文件外提：本文件已贴着
- * 单文件 1000 行的硬上限，而那套状态与注释有 100 多行）。这里只留两件事：
- *   ① `sigKeyOf`：把签名压成一行字符串喂给日志（便于对照"是不是同一份数据"）；
- *   ② `forgetFullDecryptCooldown`：测试要能把"退避"与"6 秒 full-decrypt 冷却"分开证伪。
+ * 失败退避 + 日志节流见 `./sync-pacing.ts`，源库签名见 `./sync-signatures.ts`
+ * （两者都因本文件贴着单文件 1000 行硬上限而外提）。这里只留
+ * `forgetFullDecryptCooldown`：测试要能把「退避」与「6 秒 full-decrypt 冷却」分开证伪。
  */
-function sigKeyOf(sig: ShardSig): string {
-  return `${String(sig.main)}:${String(sig.wal)}`
-}
 
 /**
  * 只清空 full-decrypt 冷却（测试用）。
@@ -273,28 +277,6 @@ function shardEncKey(
 ): Buffer {
   const keyHex = resolveShardKey(decryptedDir, relKey, rawKeyHex)
   return deriveEncKeyCached(decryptedDir, relKey, rawDbFile, keyHex, keyFormat)
-}
-
-/** Per-shard mtime signature (main db + its wal). */
-/** 源库签名片段：纳秒 + 大小（与缓存层 meta.ts 的 fileSig 同口径）。 */
-function statSigStr (path: string): string {
-  try {
-    const st = statSync(path, { bigint: true })
-    return String(st.mtimeNs) + ':' + String(st.size)
-  } catch {
-    return ''
-  }
-}
-function shardSig(msgDir: string, file: string): ShardSig {
-  const sig: ShardSig = { main: '', wal: '' }
-  for (const f of [file, file + '-wal']) {
-    try {
-      const ms = statSigStr(join(msgDir, f))
-      if (f === file) sig.main = ms
-      else sig.wal = ms
-    } catch { /* skip */ }
-  }
-  return sig
 }
 
 /** Copy a raw WAL into staging when it has frames; otherwise drop stale staging. */
@@ -460,7 +442,9 @@ export async function syncChangedShards(
     const diffSuppressed = pageDiffSuppressed(target)
     if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) continue
     if (syncFailureBackoffActive(f)) continue
-    lastState.set(f, sig)
+    // 2026-11-16：签名只在**发布成功之后**记账。旧写法在动手前就 `set`，失败那条路又
+    // 保留签名 ⇒ 退避结束后命中上面的「签名没变 + 目标存在」提前 return，一次失败的
+    // 整库重解可能永远不再重试；更糟的是下一轮 WAL 补丁会打在**没换代成功**的旧主库上。
     // 2026-10-18：目标快照 schema 坏了（历史版本把 dsh_sort 索引写进快照、又被补丁覆盖）⇒
     // 直接整库重解自愈；否则 WAL 补丁会在坏快照上继续写，界面一直读不到新消息。
     const targetUsable = prev !== undefined && existsSync(target) && schemaIntact(target)
@@ -492,6 +476,7 @@ export async function syncChangedShards(
       if (diff.length === 0) {
         // 只有 mtime 变了、页一个没动：签名记账即可，不需要任何解密。
         pageHashCache.set(f, { sig: sig.main, hashes: curHashes })
+        lastState.set(f, sig)
         continue
       }
       if (diff.length / Math.max(1, curHashes.length) <= DIFF_MAX_CHANGED_RATIO) {
@@ -514,6 +499,7 @@ export async function syncChangedShards(
         }
       } else if (r.via === 'diff') { notePageDiffSuccess(target) }
       noteSyncSuccess(f)
+      lastState.set(f, sig)
       // 指纹簿记账：tail 补尾部新页、diff 直接复用本轮扫描、full 重扫一遍。
       // 抑制期（或本轮刚触发抑制）不重扫：page-diff 已经确定走不通，扫了也是白扫。
       const skipHashBookkeeping = diffSuppressed || pageDiffSuppressed(target)
@@ -543,18 +529,6 @@ export async function syncChangedShards(
   return { synced, errors }
 }
 
-/** Session-db signature (main + wal). */
-function sessionSig(sessionDir: string): ShardSig {
-  const sig: ShardSig = { main: '', wal: '' }
-  for (const f of ['session.db', 'session.db-wal']) {
-    try {
-      const ms = statSigStr(join(sessionDir, f))
-      if (f === 'session.db') sig.main = ms
-      else sig.wal = ms
-    } catch { /* skip */ }
-  }
-  return sig
-}
 
 /**
  * Sync session.db (the conversation list state) from the raw tree into the
@@ -581,7 +555,6 @@ export async function syncSessionDb(
   const target = join(decSess, 'session.db')
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
   if (syncFailureBackoffActive('session.db')) return []
-  lastState.set('session.db', sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue('session.db')) {
     lastState.delete('session.db')
@@ -605,6 +578,7 @@ export async function syncSessionDb(
         if (!looksDecrypted(stagingDb)) throw new Error('session wal patch invalid')
         await atomicReplace(stagingDb, target)
         noteSyncSuccess('session.db')
+        lastState.set('session.db', sig)
         if (walPages > 0) return [`session.db:wal(w${walPages})`]
         return []
       } finally {
@@ -617,8 +591,13 @@ export async function syncSessionDb(
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error('session decrypt invalid')
+      // 发布前页结构自检：头部合法但页结构坏的产物不许发出去（消息分片早已有同类闸门）。
+      // 只加在**整库发布**上；WAL 增量补丁路径刻意不跑 quick_check —— 那会变成每拍
+      // 每库一次整库扫描，直接拖慢消息推送（帧语义与发布一致性另按提交帧处理）。
+      assertPublishable(temp)
       await atomicReplace(temp, target)
       noteSyncSuccess('session.db')
+      lastState.set('session.db', sig)
       return [`session.db:full(${fullPages}p/w${walPages})`]
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
@@ -627,19 +606,6 @@ export async function syncSessionDb(
     noteSyncFailure('session.db', sigKeyOf(sig), (e as Error).message)
     return []
   }
-}
-
-/** Contact-db signature (main + wal). */
-function contactSig(contactDir: string): ShardSig {
-  const sig: ShardSig = { main: '', wal: '' }
-  for (const f of ['contact.db', 'contact.db-wal']) {
-    try {
-      const ms = statSigStr(join(contactDir, f))
-      if (f === 'contact.db') sig.main = ms
-      else sig.wal = ms
-    } catch { /* skip */ }
-  }
-  return sig
 }
 
 /**
@@ -667,7 +633,6 @@ export async function syncContactDb(
   const target = join(decContact, 'contact.db')
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
   if (syncFailureBackoffActive('contact.db')) return []
-  lastState.set('contact.db', sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue('contact.db')) {
     lastState.delete('contact.db')
@@ -691,6 +656,7 @@ export async function syncContactDb(
         if (!looksDecrypted(stagingDb)) throw new Error('contact wal patch invalid')
         await atomicReplace(stagingDb, target)
         noteSyncSuccess('contact.db')
+        lastState.set('contact.db', sig)
         if (walPages > 0) return [`contact.db:wal(w${walPages})`]
         return []
       } finally {
@@ -705,8 +671,10 @@ export async function syncContactDb(
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error('contact decrypt invalid')
+      assertPublishable(temp)
       await atomicReplace(temp, target)
       noteSyncSuccess('contact.db')
+      lastState.set('contact.db', sig)
       return [`contact.db:full(${fullPages}p/w${walPages})`]
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
@@ -717,19 +685,6 @@ export async function syncContactDb(
   }
 }
 
-
-/** Signature of a plain db dir (main + wal by dbName). */
-function plainDbSig(dir: string, dbName: string): ShardSig {
-  const sig: ShardSig = { main: '', wal: '' }
-  for (const f of [dbName, dbName + '-wal']) {
-    try {
-      const ms = statSigStr(join(dir, f))
-      if (f === dbName) sig.main = ms
-      else sig.wal = ms
-    } catch { /* skip */ }
-  }
-  return sig
-}
 
 /**
  * Sync any plain "dbName" under rawRoot/<sub> -> decryptedDir/<sub> with the
@@ -756,7 +711,6 @@ export async function syncPlainDatabase(
   const target = join(decDir, dbName)
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
   if (syncFailureBackoffActive(label)) return []
-  lastState.set(label, sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue(label)) {
     lastState.delete(label)
@@ -780,6 +734,7 @@ export async function syncPlainDatabase(
         if (!looksDecrypted(stagingDb)) throw new Error(label + ' wal patch invalid')
         await atomicReplace(stagingDb, target)
         noteSyncSuccess(label)
+        lastState.set(label, sig)
         if (walPages > 0) return [label + ':wal(w' + String(walPages) + ')']
         return []
       } finally {
@@ -792,8 +747,10 @@ export async function syncPlainDatabase(
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error(label + ' decrypt invalid')
+      assertPublishable(temp)
       await atomicReplace(temp, target)
       noteSyncSuccess(label)
+      lastState.set(label, sig)
       return [label + ':full(' + String(fullPages) + 'p/w' + String(walPages) + ')']
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
@@ -837,6 +794,10 @@ export function startRealtimeSync(
       if (!cleaned) {
         cleaned = true
         await cleanStaleSnapshotLeftovers(decryptedDir())
+        // 2026-11-16：启动不再盲删非空 `-wal`（那会把「主文件撕裂 + WAL 里是补救页」
+        // 的自愈状态变成永久 malformed）。改成在**我们自己的快照目录**里对账：
+        // 能读就 checkpoint 进主库再删；读不了就隔离，绝不先删。
+        await reconcileSnapshotWal(decryptedDir())
       }
       const raw = rawDbDir()
       const dec = decryptedDir()

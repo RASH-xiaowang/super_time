@@ -30,7 +30,12 @@ export function fmtFull(ts: number): string {
  * @param target - 要收集到的条数上限（`collectMessages` 已把 `count=0` 折成 5 万）。
  * @param ctrl - 取消令牌（每页检查一次）。
  */
-function* messagePages(decryptedDir: string, username: string, target: number, ctrl?: StreamControl): Generator<WechatMessage[]> {
+function* messagePages(
+  decryptedDir: string,
+  username: string,
+  target: number,
+  ctrl?: StreamControl,
+): Generator<{ rows: WechatMessage[]; newPage: boolean }> {
   /**
    * 每页条数。**从 100 提到 1000**（2026-09-29 第 78 轮，实测）。
    *
@@ -67,15 +72,22 @@ function* messagePages(decryptedDir: string, username: string, target: number, c
   while (collected < target && pages < maxPages) {
     // 分页收集是最长的同步循环之一，取消要在这里能生效。
     throwIfCancelled(ctrl?.signal)
+    // 最后一页只取**还差多少条**：`count` 小于一页时若仍按 1000 条取最新页，
+    // 循环会在页中间停下，留下的是最新页里最旧的那一段 —— 用户要的却是最新 N 条。
+    const pageSize = Math.min(PAGE_SIZE, target - collected)
     // 传复合游标，避免 sort_seq 重复处分页丢消息（导出必须一条不漏）。
-    const env = queryMessages(decryptedDir, username, PAGE_SIZE, cursor, undefined, cursorLocalId)
+    const env = queryMessages(decryptedDir, username, pageSize, cursor, undefined, cursorLocalId)
     if (env.messages.length === 0) break
     pages += 1
     // 页内分块上报：既保持"总调用次数少"，又不让进度/取消的粒度变粗。
+    // 每页第一块标记 `newPage`：`queryMessages` 已把单页排成 oldest→newest，
+    // 但页与页之间是「越翻越旧」，调用方必须知道边界才能还原全局时间正序。
+    let firstChunk = true
     for (let off = 0; off < env.messages.length; off += PROGRESS_CHUNK) {
       const chunk = env.messages.slice(off, off + PROGRESS_CHUNK)
       collected += chunk.length
-      yield chunk
+      yield { rows: chunk, newPage: firstChunk }
+      firstChunk = false
       // ⚠️ 必须在这里再看一次取消：一页有 1000 条、要分 10 块 yield，**每块都会触发一次
       // `reportProgress`**。而取消是在"页边界"检查的 ⇒ 用户在这 10 块之间按取消时，
       // 后面几块会继续 yield、继续报进度（那几块反正会被丢掉，纯属白干）。
@@ -116,14 +128,33 @@ const COLLECT_YIELD_EVERY_PAGES = 8
  */
 export function collectMessages(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): WechatMessage[] {
   const target = count === 0 ? 50000 : Math.max(1, Math.min(count, 50000))
-  const pages: WechatMessage[] = []
+  const pages: WechatMessage[][] = []
+  let page: WechatMessage[] = []
+  let collected = 0
   for (const part of messagePages(decryptedDir, username, target, ctrl)) {
-    pages.push(...part)
+    if (part.newPage && page.length > 0) { pages.push(page); page = [] }
+    page.push(...part.rows)
+    collected += part.rows.length
     // count=0（导全部）时总量未知，报 0 让调用方显示不定量进度，而不是永远停在 0%（目标上限是 5 万）。
-    reportProgress(ctrl, 'collect', pages.length, count === 0 ? 0 : target)
+    reportProgress(ctrl, 'collect', collected, count === 0 ? 0 : target)
   }
-  // newest-first pages -> chronological (oldest first)
-  return pages.slice(0, target).reverse()
+  if (page.length > 0) pages.push(page)
+  return chronologicalTail(pages, target)
+}
+
+/**
+ * 把「新→旧排列的页、页内正序」还原成全局正序，并只保留**最新**的 `target` 条。
+ *
+ * 原先直接 `flat().slice(0, target).reverse()` 有两处错：
+ *  ① 页序本身是新→旧，整体 reverse 只能把页内顺序翻反，跨页仍是倒的；
+ *  ② 截断取的是 flat 数组的**开头**（最新页里最旧的一段），`count` 小于一页时会导出错误的一半。
+ * @param pages - 按「最新页 → 更旧页」排列，每页内部 oldest→newest。
+ * @param target - 要保留的最新条数上限。
+ * @returns 全局 oldest→newest 的消息数组。
+ */
+function chronologicalTail(pages: WechatMessage[][], target: number): WechatMessage[] {
+  const ordered = pages.reverse().flat()
+  return ordered.length > target ? ordered.slice(ordered.length - target) : ordered
 }
 
 /**
@@ -138,11 +169,15 @@ export function collectMessages(decryptedDir: string, username: string, count: n
  */
 export async function collectMessagesAsync(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): Promise<WechatMessage[]> {
   const target = count === 0 ? 50000 : Math.max(1, Math.min(count, 50000))
-  const pages: WechatMessage[] = []
+  const pages: WechatMessage[][] = []
+  let page: WechatMessage[] = []
+  let collected = 0
   let sinceYield = 0
   for (const part of messagePages(decryptedDir, username, target, ctrl)) {
-    pages.push(...part)
-    reportProgress(ctrl, 'collect', pages.length, count === 0 ? 0 : target)
+    if (part.newPage && page.length > 0) { pages.push(page); page = [] }
+    page.push(...part.rows)
+    collected += part.rows.length
+    reportProgress(ctrl, 'collect', collected, count === 0 ? 0 : target)
     sinceYield += 1
     if (sinceYield >= COLLECT_YIELD_EVERY_PAGES) {
       sinceYield = 0
@@ -150,7 +185,8 @@ export async function collectMessagesAsync(decryptedDir: string, username: strin
       await yieldToEventLoop()
     }
   }
-  return pages.slice(0, target).reverse()
+  if (page.length > 0) pages.push(page)
+  return chronologicalTail(pages, target)
 }
 
 /** Escape a CSV cell (wrap in quotes, double inner quotes). */

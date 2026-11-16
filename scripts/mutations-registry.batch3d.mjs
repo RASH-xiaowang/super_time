@@ -41,12 +41,13 @@ export const MUTATIONS_BATCH3D = [
   },
 
   // ── 评论图：批处理放行 CDN 三件套（最容易回归的一处）────────────────────────────
+ // 2026-11-13：锚点跟随 批处理改成按 kind 选 RPC（评论图走图片分支） 更新。
   {
     id: "M420-comment-cdn-triple-gated-to-img",
     why: "把判据从「不是视频」写回「是 img」⇒ 评论图（kind='comment'）又被关在门外。这正是修复前的原样，且**不会**让任何单测变红：所有断言都不走真实批处理。",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts",
-    from: "...(it.kind !== 'video' && it.token ? { token: it.token } : {}),",
-    to: "...(it.kind === 'img' && it.token ? { token: it.token } : {}),",
+    from: "            const rpc = () => (it.kind === 'video'\n              ? apiGetSnsVideoCoverDataUrl(videoOpts)\n              : apiGetSnsImageDataUrl(imageOpts))",
+    to: "            const rpc = () => (it.kind === 'video'\n              ? apiGetSnsVideoCoverDataUrl(videoOpts)\n              : it.kind === 'img'\n                ? apiGetSnsImageDataUrl(imageOpts)\n                : Promise.resolve({ url: '' }))",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
   {

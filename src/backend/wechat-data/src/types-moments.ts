@@ -61,6 +61,20 @@ export interface MomentItem {
     token?: string
     id?: string
     timelineId?: string
+    /** XML 外层 `<size>`：原图期望宽度（像素）。 */
+    originalWidth?: number
+    /** XML 外层 `<size>`：原图期望高度（像素）。 */
+    originalHeight?: number
+    /** XML 外层 `<size totalSize>`：原图期望字节数（可缺省）。 */
+    originalBytes?: number
+    /** XML `<uhd>` 的地址；真实样本是 `/2000`，不能归一成 `/0`。 */
+    uhdUrl?: string
+    /** `<uhd token>`；与普通 `<url token>` 不是同一份。 */
+    uhdToken?: string
+    /** `<uhd key>`；与普通 `<url key>` 不是同一份。 */
+    uhdSeed?: string
+    /** `<uhd md5>`；仅用于诊断/区分，不是缓存主键。 */
+    uhdMd5?: string
     /** 实况照片的动态部分；普通图片没有该字段。 */
     livePhoto?: MomentLivePhotoItem
   }>
@@ -76,6 +90,8 @@ export interface MomentItem {
   lng?: number
   link_title: string
   link_url?: string
+  /** 视频号卡片的封面地址（`<finderFeed>` 内的 `coverUrl`/`thumbUrl`）。 */
+  link_thumb?: string
   contentType?: number
   sourceNickName?: string
   publicUserName?: string

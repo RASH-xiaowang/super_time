@@ -44,18 +44,43 @@ export declare function stageCopyRetry(src: string, dst: string, deps?: StageCop
  */
 export declare function strayWalBlocks(target: string): boolean;
 /**
- * 丢掉**上一代**的 `-wal`（顺手清 `-shm`）。
+ * 把**上一代**的 `-wal` 挪到隔离位（`<target>.superseded-wal`），而不是直接删除。
+ *
+ * 为什么改成 rename：主文件可能在上一次进程写入/checkpoint 中途被杀而撕裂，`-wal` 里
+ * 正是尚未落进主文件的页 —— 先删 WAL 会把「还能自愈」变成永久
+ * `database disk image is malformed`。隔离后主文件仍是旧代；读者占用时 rename 同样会失败，
+ * 所以保留原有判据：挡着就返回 true、由调用方重试。彻底放弃换代时，调用方可用
+ * {@link restoreSupersededWal} 把它放回去。
  * @param target - 快照主文件路径。
- * @returns 是否仍有非空 `-wal` 挡着换代（true = 还没清掉）。
+ * @returns 是否仍有非空 `-wal` 挡着换代（true = 还没挪走）。
  */
 export declare function discardSupersededWal(target: string): Promise<boolean>;
 /**
- * 扫掉上一次中断留下的旁文件/半成品：`.stage_src`/`.stage_wal`/`.decrypt_tmp`
- * 与**非空 `-wal`**（顺手清 `-shm`）。真正的解密产物一个都不匹配。
+ * 把隔离的上一代 WAL 放回原位（换代彻底失败时的回滚口）。
  *
- * 为什么启动时顺手清 WAL：它的成因是一次没干净收尾的会话（见模块头），而启动这一刻本进程
- * 还没读过任何快照 ⇒ 白捡一次自愈。不清的话，那个库要等到它**下一次换代**才恢复
- * —— 常年不改的分片就一直读不了。
+ * 只在目标位置没有**非空** `-wal` 时动手：新 WAL 一旦有帧就代表新一代已经开始写，
+ * 覆盖回去只会制造第二个「配错主文件」的现场。空壳 `-wal`（≤32B、无帧）先删掉再 rename
+ * （Windows 的 rename 不允许覆盖已存在的文件）。整体 best-effort，不抛错 ——
+ * 回滚失败不该掩盖调用方的原始错误。
+ * @param target - 快照主文件路径。
+ */
+export declare function restoreSupersededWal(target: string): Promise<void>;
+/**
+ * 删除隔离位（`<target>.superseded-wal` / `<target>.superseded-shm`），best-effort。
+ *
+ * 用在确认新快照已稳定、上一代不再需要回滚之后；当前由对账/维护路径按需调用。
+ * @param target - 快照主文件路径。
+ */
+export declare function clearSupersededWal(target: string): Promise<void>;
+/**
+ * 扫掉上一次中断留下的旁文件/半成品：`.stage_src`/`.stage_wal`/`.decrypt_tmp`/
+ * `.decrypt_src`/`.decrypt_wal`、**≤32B 的空 `-wal`** 与所有 `-shm`。
+ * 真正的解密产物一个都不匹配。
+ *
+ * **非空 `-wal` 一律保留**：它可能是主文件撕裂时唯一能自愈的页来源（见模块头），
+ * 交给 `snapshot-reconcile.ts` 做 quick_check + checkpoint / 隔离。
+ * `.superseded-wal` 同样不在这里删 —— 它是换代时的回滚位，由对账路径负责隔离或
+ * `clearSupersededWal` 在确认稳定后清理。
  * @param root - 解密快照根目录。
  */
 export declare function cleanStaleSnapshotLeftovers(root: string): Promise<void>;

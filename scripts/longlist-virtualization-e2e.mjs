@@ -8,10 +8,10 @@
  *
  * 做法：合成一份 1 万条消息的解密数据根（直接写进临时 userData 的 `wechat-data/decrypted`，
  * 应用默认就会读它），用 Playwright 驱动真实 Electron：
- *   ① 点「加载更多」把 1 万条全部拉进内存（后端分页，按钮驱动）；
+ *   ① 反复滚到顶部自动续页，把 1 万条全部拉进内存（后端分页，滚动触发）；
  *   ② 反复滚到顶，直到滚不动为止 —— 这一步会把「渐进窗口」的累积效果逼出来；
  *   ③ 断言：`[id^="msg-"]` 节点数 ≤ {@link MAX_DOM_NODES}、最早那条 `#msg-1` 可达、
- *      滚到底能到 `#msg-<total>`、以及「加载更多」不跳位（视图里那条消息的 rect.top 不位移）。
+ *      滚到底能到 `#msg-<total>`、以及滚到顶部自动加载更多不跳位（视图里那条消息的 rect.top 不位移）。
  *
  * 运行：node scripts/longlist-virtualization-e2e.mjs
  * 退出码：0 = 全部成立；1 = 有断言不成立；2 = 前置缺失。
@@ -309,54 +309,63 @@ try {
     while (p && p.scrollHeight <= p.clientHeight + 4) p = p.parentElement
     return p
   })
-  // 载入更多：按钮驱动（hasMore 为假时按钮消失）
-  const loadMoreBtn = win.getByRole('button', { name: '加载更多', exact: true })
-  // 「加载更多不跳位」：先拉几页，滚到中间，记下**当前视口里最上面那条**的位置，
-  // 再点一次「加载更多」——那条消息必须还在原位（±40px），否则用户会觉得列表被拽走了。
-  let clicks = 0
-  for (; clicks < 6; clicks += 1) {
-    if (await loadMoreBtn.count() === 0) break
-    await loadMoreBtn.click({ timeout: 3000 }).catch(() => {})
-    await win.waitForTimeout(150)
-  }
-  const boxEarly = await win.locator('[id^="msg-"]').first().evaluateHandle((el) => {
-    let p = el.parentElement
-    while (p && p.scrollHeight <= p.clientHeight + 4) p = p.parentElement
-    return p
-  })
-  // 「加载更多」不跳位：按钮就在滚动区**顶部**，所以先把视口滚到顶，取「按钮下方第一条可见消息」
-  // 作为锚点，再点一次「加载更多」——那条消息必须还在视口里的同一位置（±40px）。
-  // （注意：不能先滚到中间再点 —— Playwright 会把屏幕外的按钮滚进视野，测的就不是「不跳位」了。）
-  await boxEarly.evaluate((el) => { el.scrollTop = 0 })
-  await win.waitForTimeout(400)
-  const anchorBefore = await win.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll('[id^="msg-"]'))
-    const vis = rows.find((r) => r.getBoundingClientRect().top >= 0)
-    return vis ? { id: vis.id, top: Math.round(vis.getBoundingClientRect().top) } : null
-  })
-  if (anchorBefore && await loadMoreBtn.count() > 0) {
-    await loadMoreBtn.click()
-    await win.waitForTimeout(900)
-    const anchorAfter = await win.evaluate((id) => {
-      const el = document.getElementById(id)
-      return el ? Math.round(el.getBoundingClientRect().top) : null
-    }, anchorBefore.id)
-    const drift = anchorAfter === null ? null : Math.abs(anchorAfter - anchorBefore.top)
-    check(anchorAfter !== null && drift !== null && drift <= 40,
-      `加载更多不跳位（锚点 ${anchorBefore.id} 位移 ${drift === null ? '丢失' : drift + 'px'}）`, `before=${anchorBefore.top} after=${anchorAfter}`)
-  } else {
-    check(false, '加载更多不跳位（用例前提不成立：没找到锚点或按钮已消失）', '')
+  check(await win.getByRole('button', { name: '加载更多', exact: true }).count() === 0,
+    '手动「加载更多」按钮已移除', '')
+
+  // 先自动续几页，给「加载更多不跳位」留出可滚动的中间位置。
+  for (let i = 0; i < 4; i += 1) {
+    await box.evaluate((el) => { el.scrollTop = 0 })
+    await win.waitForTimeout(400)
   }
 
-  for (; clicks < 400; clicks += 1) {
-    if (await loadMoreBtn.count() === 0) break
-    try { await loadMoreBtn.click({ timeout: 3000 }) } catch { break }
-    await win.waitForTimeout(120)
+  // 「加载更多不跳位」：先滚到中间，再滚进顶部触发区，并在**自动续页开始前**记下
+  // 当前视口里最上面那条消息的相对位置；续页完成后它必须还在原位（±40px）。
+  await box.evaluate((el) => { el.scrollTop = 300 })
+  await win.waitForTimeout(350)
+  const anchorBefore = await box.evaluate((el) => {
+    el.scrollTop = 60
+    const boxRect = el.getBoundingClientRect()
+    const rows = Array.from(el.querySelectorAll('[id^="msg-"]'))
+      .map((row) => ({ id: row.id, rect: row.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.bottom > boxRect.top && rect.top < boxRect.bottom)
+      .sort((a, b) => a.rect.top - b.rect.top)
+    const vis = rows.find(({ rect }) => rect.top >= boxRect.top - 1) ?? rows[0]
+    return vis
+      ? { id: vis.id, top: Math.round(vis.rect.top - boxRect.top), scrollHeight: el.scrollHeight }
+      : null
+  })
+  if (anchorBefore) {
+    await win.waitForTimeout(1200)
+    const anchorAfter = await box.evaluate((el, id) => {
+      const target = el.querySelector(`#${id}`)
+      return target
+        ? { top: Math.round(target.getBoundingClientRect().top - el.getBoundingClientRect().top), scrollHeight: el.scrollHeight }
+        : null
+    }, anchorBefore.id)
+    const drift = anchorAfter === null ? null : Math.abs(anchorAfter.top - anchorBefore.top)
+    check(anchorAfter !== null && drift !== null && drift <= 40,
+      `加载更多不跳位（锚点 ${anchorBefore.id} 位移 ${drift === null ? '丢失' : drift + 'px'}）`,
+      `before=${anchorBefore.top} after=${anchorAfter?.top ?? 'null'}`)
+    check(anchorAfter !== null && anchorAfter.scrollHeight > anchorBefore.scrollHeight,
+      '滚到顶部后确实自动加载了更早一页', `height ${anchorBefore.scrollHeight} → ${anchorAfter?.scrollHeight ?? 'null'}`)
+  } else {
+    check(false, '加载更多不跳位（用例前提不成立：没找到锚点）', '')
+    check(false, '滚到顶部后确实自动加载了更早一页（用例前提不成立：没找到锚点）', '')
+  }
+
+  // 反复滚到顶，直到最老一条已加载并挂到窗口里；每次自动续 100 条。
+  let autoLoadRounds = 0
+  for (; autoLoadRounds < 400; autoLoadRounds += 1) {
+    if (await win.locator('#msg-1').count() > 0) break
+    await box.evaluate((el) => { el.scrollTop = 0 })
+    await win.waitForTimeout(250)
   }
   await win.waitForTimeout(800)
+  await box.evaluate((el) => { el.scrollTop = 0 })
+  await win.waitForTimeout(500)
   const nodeCountAfterLoad = await win.locator('[id^="msg-"]').count()
-  check(true, `已点「加载更多」${clicks} 次，当前 DOM 节点 ${nodeCountAfterLoad}`, '')
-  check(clicks < 400, '后端分页能拉到最老一条（按钮消失）', `clicks=${clicks}`)
+  check(true, `滚到顶部自动续页 ${autoLoadRounds} 轮，当前 DOM 节点 ${nodeCountAfterLoad}`, '')
+  check(autoLoadRounds < 400, '后端分页能自动拉到最老一条', `rounds=${autoLoadRounds}`)
 
   // 滚到顶：反复滚，直到滚不动（渐进窗口会在这期间不断累积）
   let topReached = false

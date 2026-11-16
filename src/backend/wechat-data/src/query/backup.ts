@@ -5,7 +5,7 @@
  * header, per-file IVs) that restoreBackup decrypts back to a directory.
  */
 import { closeSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from 'node:crypto'
 import { StreamWriter, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
 import type { StreamControl } from './zip.ts'
@@ -15,6 +15,14 @@ import { yieldToLoop } from './search-build.ts'
 const MAGIC = Buffer.from('DSHWCB1\n', 'utf8')
 const SALT_LEN = 16
 const VERSION = 1
+
+/** `.wcb` 头长度上限（P1-08）：真实头只有几百字节，8MB 足够容纳任意大账号的文件清单。 */
+const MAX_HEADER_BYTES = 8 * 1024 * 1024
+/**
+ * 单个分片明文上限（P1-08）：任何真实微信库分片都远小于 2GB。
+ * 与「必须放得进备份文件剩余字节」一起校验，恶意头无法在认证后要求分配任意大 Buffer。
+ */
+const MAX_ENTRY_BYTES = 2 * 1024 * 1024 * 1024
 
 /** Backup root dir: sibling of the decrypted dir. */
 function backupDir(decryptedDir: string): string {
@@ -66,8 +74,18 @@ function ensureRestoreSpace(dir: string, plainBytes: number): { ok: boolean; err
   }
 }
 
+/**
+ * SQLite 运行时 sidecar（P2-03）：`-wal` / `-shm` / `-journal` 记录的是**某一时刻**的页状态，
+ * 单独复制到别处后可能被回放，轻则带回陈旧数据，重则把恢复出来的库改坏。
+ *
+ * 取舍：这里选择**排除**而不是恢复前 checkpoint —— 备份对象是解密流程发布的快照，
+ * 备份代码不该为了复制再打开/写源库（那会改动用户数据，也绕开解密层的原子发布约定）。
+ * 代价是源库若真有未 checkpoint 的已提交事务不会进备份；对「已发布的解密快照」这个
+ * 前提来说它们本来就该已经落在 `.db` 主体里。
+ */
 function skipName(name: string): boolean {
-  return name.endsWith('-wal') || name.endsWith('-shm')
+  const lower = name.toLowerCase()
+  return lower.endsWith('-wal') || lower.endsWith('-shm') || lower.endsWith('-journal')
 }
 
 function collectFiles(root: string): Array<{ abs: string; rel: string; size: number }> {
@@ -203,6 +221,9 @@ export function listBackups(decryptedDir: string): { items: BackupEntry[]; total
   if (!existsSync(dir)) return { items: [], total: 0 }
   const items: BackupEntry[] = []
   for (const name of readdirSync(dir).sort().reverse()) {
+    // 恢复临时目录（`.restored` / `.partial-*`）不是备份：列出来会让用户以为多了一份
+    // 可用快照，也会把「恢复失败后清理」变成看起来成功的假象（P3-03）。
+    if (name.endsWith('.restored') || name.includes('.partial-')) continue
     const p = join(dir, name)
     try {
       const st = statSync(p)
@@ -250,7 +271,11 @@ export async function createBackup(decryptedDir: string, ctrl?: StreamControl): 
         await yieldToLoop()
         throwIfCancelled(ctrl?.signal)
         try {
-          cpSync(join(decryptedDir, sub.name), join(tmp, sub.name), { recursive: true })
+          // P2-03：整树复制时排除 WAL/SHM/journal sidecar（见 skipName 的取舍说明）。
+          cpSync(join(decryptedDir, sub.name), join(tmp, sub.name), {
+            recursive: true,
+            filter: (src) => !skipName(basename(src)),
+          })
         } catch (e) {
           throwIfCancelled(ctrl?.signal)
           failed.push(sub.name + '（' + (e as Error).message + '）')
@@ -361,6 +386,81 @@ export async function createEncryptedBackup(decryptedDir: string, password: stri
 }
 
 /**
+ * 备份名必须是 `backups/` 下的单层名字（P1-09）：拒绝路径分隔符、盘符与 `.`/`..`。
+ * @param name - 调用方给的备份名。
+ * @returns 是否是安全的单层名字。
+ */
+function isPlainBackupName(name: unknown): name is string {
+  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') return false
+  if (/[\\/]/.test(name) || /^[A-Za-z]:/.test(name)) return false
+  return true
+}
+
+/**
+ * 把 `.wcb` 头里的分片相对路径落到 `targetRoot` 内（P1-08）。
+ *
+ * 拒绝：空名、NUL、绝对路径（POSIX/UNC）、盘符、空段、`.` / `..` 段、Windows 非法字符
+ * （`:` 还可指向备用数据流）、结尾是空格或点的段。最后用 `resolve` + `relative`
+ * 再确认一次结果没有越出 `targetRoot`（按路径段，不比字符串前缀）。
+ * @param targetRoot - 本次恢复的临时目录。
+ * @param raw - 头里的 `name` 字段（不可信）。
+ * @returns 绝对路径；名字不合法时返回 null。
+ */
+function resolveRestoreTarget(targetRoot: string, raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '' || raw.includes('\u0000')) return null
+  const normalized = raw.replace(/\\/g, '/')
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) return null
+  const parts = normalized.split('/')
+  if (parts.some(p => p === '' || p === '.' || p === '..')) return null
+  // 控制字符任何平台都不该出现在文件名里。
+  if (parts.some(p => /[\u0000-\u001f]/.test(p))) return null
+  // Windows 专属限制：非法字符（`:` 还可指向备用数据流）与结尾空格/点。
+  // 只在该平台启用，避免把 POSIX 上合法备份里的文件名误判成攻击。
+  if (process.platform === 'win32' && parts.some(p => /[<>:"|?*]/.test(p) || /[. ]$/.test(p))) return null
+  const abs = resolve(targetRoot, normalized)
+  const rel = relative(targetRoot, abs)
+  if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || isAbsolute(rel)) return null
+  return abs
+}
+
+/** 头里的单文件大小：非负、安全整数，且不超过 {@link MAX_ENTRY_BYTES}（P1-08）。 */
+function isValidEntrySize(size: unknown): size is number {
+  return typeof size === 'number' && Number.isSafeInteger(size) && size >= 0 && size <= MAX_ENTRY_BYTES
+}
+
+/** `.wcb` 头里一个分片的声明。 */
+interface WcbHeaderFile {
+  name: string
+  size: number
+  iv: string
+}
+
+/**
+ * 解析并校验 `.wcb` 头（P1-08）。调用方必须在 HMAC 校验**之后**调用。
+ * @param buf - 头 JSON 字节。
+ * @returns 分片清单；形状/大小/IV 不合法时返回 null（对外统一报「备份头异常」）。
+ */
+function parseWcbHeader(buf: Buffer): WcbHeaderFile[] | null {
+  let value: unknown
+  try { value = JSON.parse(buf.toString('utf8')) } catch { return null }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const files = (value as { files?: unknown }).files
+  if (!Array.isArray(files)) return null
+  const out: WcbHeaderFile[] = []
+  for (const item of files) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return null
+    const f = item as Record<string, unknown>
+    if (typeof f['name'] !== 'string') return null
+    if (!isValidEntrySize(f['size'])) return null
+    if (typeof f['iv'] !== 'string') return null
+    // AES-GCM nonce 必须是 12 字节；长度不对时 createDecipheriv 必然抛错，提前按头异常处理。
+    if (Buffer.from(f['iv'], 'base64').length !== 12) return null
+    out.push({ name: f['name'], size: f['size'], iv: f['iv'] })
+  }
+  return out
+}
+
+/**
  * Restore an encrypted `.wcb` backup into `<backups>/<name>.restored`.
  * @param decryptedDir - decrypted data root.
  * @param name - backup file name (must end .wcb).
@@ -369,10 +469,14 @@ export async function createEncryptedBackup(decryptedDir: string, password: stri
  */
 export function restoreEncryptedBackup(decryptedDir: string, name: string, password: string): BackupRestoreResult {
   const dir = backupDir(decryptedDir)
+  if (!isPlainBackupName(name) || !name.endsWith('.wcb')) return { ok: false, error: '加密备份不存在' }
   const src = join(dir, name)
-  if (!name.endsWith('.wcb') || !existsSync(src)) return { ok: false, error: '加密备份不存在' }
-  const target = join(dir, name.replace(/\.wcb$/, '') + '.restored')
-  if (existsSync(target)) rmSync(target, { recursive: true, force: true })
+  if (!existsSync(src)) return { ok: false, error: '加密备份不存在' }
+  const target = join(dir, name.slice(0, -'.wcb'.length) + '.restored')
+  // 先解到同目录的临时目录，成功后才换名：失败时不会在 `.restored` 留下半截明文，
+  // 也不会提前删掉上一次成功恢复出来的目录（P3-03）。
+  const tmp = partialPath(target)
+  let tmpCreated = false
   let fd: number | null = null
   try {
     fd = openSync(src, 'r')
@@ -381,41 +485,84 @@ export function restoreEncryptedBackup(decryptedDir: string, name: string, passw
     const salt = readExactFd(fd, SALT_LEN)
     const lenBuf = readExactFd(fd, 4)
     const headerLen = lenBuf.readUInt32BE(0)
+    // P1-08：头长度必须在**分配之前**设上限。否则一个 4 字节的恶意长度就能在 MAC
+    // 校验之前要求分配/读取任意大的 Buffer。
+    if (headerLen === 0 || headerLen > MAX_HEADER_BYTES) return { ok: false, error: '备份头异常：头长度不合法' }
     const headerBuf = readExactFd(fd, headerLen)
     const mac = readExactFd(fd, 32)
     const key = scryptSync(password, salt, 32)
     const expect = createHmac('sha256', key).update(headerBuf).digest()
     if (!mac.equals(expect)) return { ok: false, error: '密码错误或文件被篡改' }
-    const header = JSON.parse(headerBuf.toString('utf8')) as { files: Array<{ name: string; size: number; iv: string }> }
+    // P1-08：头形状、单文件大小与路径都在**认证之后、写盘之前**统一校验。
+    const files = parseWcbHeader(headerBuf)
+    if (files === null) return { ok: false, error: '备份头异常：文件清单不合法' }
+    const plans: Array<{ f: WcbHeaderFile; outPath: string }> = []
+    for (const f of files) {
+      const outPath = resolveRestoreTarget(tmp, f.name)
+      if (outPath === null) return { ok: false, error: '备份头异常：文件路径不合法' }
+      plans.push({ f, outPath })
+    }
     // W2-8.4：预检放在这里，两个位置都不能挪 ——
     //   ① 必须在**密码校验之后**：否则用户密码打错了却看到「磁盘空间不足」，
     //      会被引到完全错误的方向上去查；
     //   ② 必须在**解密写盘之前**：.wcb 头里已经记着每个分片的明文字节数，
     //      所以不必解密也知道要落多少盘；等解到一半才发现 ENOSPC，
     //      用户白等一场，磁盘上还留着一个半截目录。
-    const plainBytes = header.files.reduce((n, f) => n + (Number(f.size) || 0), 0)
+    const plainBytes = files.reduce((n, f) => n + f.size, 0)
+    if (!Number.isSafeInteger(plainBytes)) return { ok: false, error: '备份头异常：文件总大小不合法' }
     const space = ensureRestoreSpace(dir, plainBytes)
     if (!space.ok) return { ok: false, error: space.error }
-    for (const f of header.files) {
+    // P1-08：声明的大小还必须真的放得进备份文件的剩余字节 —— 一个只有几百字节的
+    // 恶意备份不能靠 `size: 2GB` 让 readExactFd 在认证后立刻申请 2GB。
+    const bodyStart = MAGIC.length + SALT_LEN + 4 + headerLen + 32
+    const bodyBytes = files.reduce((n, f) => n + f.size + 16, 0)
+    if (bodyStart + bodyBytes > statSync(src).size) return { ok: false, error: '备份头异常：文件长度超出备份大小' }
+    mkdirSync(tmp, { recursive: true })
+    tmpCreated = true
+    for (const { f, outPath } of plans) {
       const iv = Buffer.from(f.iv, 'base64')
       const cipherText = readExactFd(fd, f.size)
       const tag = readExactFd(fd, 16)
       const decipher = createDecipheriv('aes-256-gcm', key, iv)
       decipher.setAuthTag(tag)
-      const outPath = join(target, f.name.split('/').join(process.platform === 'win32' ? '\\' : '/'))
-      mkdirSync(dirname(outPath), { recursive: true })
+      let plain: Buffer
       try {
-        const plain = Buffer.concat([decipher.update(cipherText), decipher.final()])
-        writeFileSync(outPath, plain)
+        plain = Buffer.concat([decipher.update(cipherText), decipher.final()])
       } catch {
         return { ok: false, error: '解密校验失败（数据损坏或密码错误）' }
       }
+      mkdirSync(dirname(outPath), { recursive: true })
+      writeFileSync(outPath, plain)
+    }
+    // 成功后才替换旧目录；恢复目录是整份新写的，旧的 WAL/SHM 不会残留。
+    // 先把旧目录挪成 `.partial-` 再换名：换名若失败还能把它挪回来，
+    // 不会出现「旧的已被删、新的没换上」这种用户数据丢失。
+    let previous: string | null = null
+    if (existsSync(target)) {
+      previous = partialPath(target + '.old')
+      renameSync(target, previous)
+    }
+    try {
+      renameSync(tmp, target)
+    } catch (e) {
+      if (previous !== null) {
+        try { renameSync(previous, target) } catch { /* 回滚失败时旧目录仍在 .partial- 下，不掩盖原错误 */ }
+      }
+      throw e
+    }
+    tmpCreated = false
+    if (previous !== null) {
+      try { rmSync(previous, { recursive: true, force: true }) } catch { /* 残留的 .partial- 不会被 listBackups 列出 */ }
     }
     return { ok: true, path: target }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   } finally {
     if (fd !== null) closeSync(fd)
+    // 只清理**本次**创建的临时目录；用户已有的 target 不动（成功路径已换名，走到这里时 tmpCreated=false）。
+    if (tmpCreated) {
+      try { rmSync(tmp, { recursive: true, force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+    }
   }
 }
 
@@ -437,9 +584,17 @@ function readExactFd(fd: number, size: number): Buffer {
  * @returns ok, or an error description when the backup cannot be removed.
  */
 export function deleteBackup(decryptedDir: string, name: string): { ok: boolean; error?: string } {
-  const dir = backupDir(decryptedDir)
-  const target = join(dir, name)
-  if (!target.startsWith(dir) || !existsSync(target)) return { ok: false, error: '备份不存在' }
+  // P1-09：旧实现用 `target.startsWith(dir)`，`../backups-old` 也满足前缀
+  // （字符串前缀，且没带分隔符语义）⇒ 能删到 backups 目录外。现在只接受单层名字，
+  // resolve 之后再按路径段确认一次。
+  if (!isPlainBackupName(name)) return { ok: false, error: '备份不存在' }
+  const dir = resolve(backupDir(decryptedDir))
+  const target = resolve(dir, name)
+  const rel = relative(dir, target)
+  if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || isAbsolute(rel)) {
+    return { ok: false, error: '备份不存在' }
+  }
+  if (!existsSync(target)) return { ok: false, error: '备份不存在' }
   try {
     rmSync(target, { recursive: true, force: true })
     return { ok: true }

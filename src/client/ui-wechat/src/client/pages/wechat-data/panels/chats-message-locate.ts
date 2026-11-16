@@ -38,7 +38,13 @@ export function useChatsMessageLocate({
   useEffect(() => {
     if (!pending) return
     if (pending.scopeKey && pending.scopeKey !== scopeKey) return
-    const index = items.findIndex((item) => itemLocalId(item) === pending.localId)
+    // 图片组的非首条消息不在 `itemLocalId` 上（那只是组内第一条），
+    // 但整组共享一个滚动项 —— 找到组也要滚到它。
+    const index = items.findIndex((item) => (
+      item.kind === 'group'
+        ? item.items.some((m) => m.localId === pending.localId)
+        : itemLocalId(item) === pending.localId
+    ))
     if (index < 0) return
     setPending(null)
     virtualizer.scrollToIndex(index, { align: 'center' })

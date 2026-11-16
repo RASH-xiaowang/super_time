@@ -22,7 +22,33 @@ const MESSAGE_TOOLS = new Set([
   'search_hybrid',
   'get_session_messages',
   'get_message_context',
+  'get_call_history',
+  'aggregate_media',
+  'search_revoked',
 ])
+
+/**
+ * 会话内问答允许携带统计事实的专用工具。
+ *
+ * 这些工具在 `enforceProfileScope` 里被强制注入当前会话（账本/媒体/撤回）或
+ * 校验锁定群（群资料），因此它们产出的事实可以归属到当前会话；其余全局资源
+ * 工具（联系人、文件、收藏、朋友圈）仍不得把事实混进会话证据包。
+ */
+const SESSION_SCOPED_FACT_TOOLS = new Set([
+  'get_funds_summary',
+  'get_call_history',
+  'get_group_detail',
+  'aggregate_media',
+  'search_revoked',
+])
+
+/**
+ * 会话内问答允许携带资源命中的专用工具。
+ *
+ * 账本命中是「转账/红包资源」，定位里带 `session`，可与锁定会话逐条核对；
+ * 文件/收藏/朋友圈等资源没有会话归属，继续拒绝。
+ */
+const SESSION_SCOPED_RESOURCE_TOOLS = new Set(['get_funds_summary'])
 
 export function safeString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -176,6 +202,14 @@ export function boundaryViolation(
 ): string | undefined {
   const allowedUsername = options.allowedUsername?.trim() ?? ''
   if (allowedUsername !== '') {
+    if (source === 'resource') {
+      const owner = locator.type === 'resource' ? locator.username?.trim() ?? '' : ''
+      const session = locator.type === 'resource' ? locator.session?.trim() ?? '' : ''
+      if (SESSION_SCOPED_RESOURCE_TOOLS.has(tool) && (owner === allowedUsername || session === allowedUsername)) {
+        return undefined
+      }
+      return `${tool} 返回了无法归属当前会话的资源（${source}），已拒绝进入当前会话证据包`
+    }
     if (source !== 'msg') {
       return `${tool} 返回了非消息来源（${source}），当前会话问答只接受消息证据`
     }
@@ -231,7 +265,11 @@ export function allowsFact(
     return `${tool} 返回了统计事实，当前知识库会话只接受知识库证据`
   }
   const allowedUsername = options.allowedUsername?.trim() ?? ''
-  if (allowedUsername !== '' && (tool !== 'aggregate_messages' || locator.type !== 'fact')) {
+  if (
+    allowedUsername !== ''
+    && !SESSION_SCOPED_FACT_TOOLS.has(tool)
+    && (tool !== 'aggregate_messages' || locator.type !== 'fact')
+  ) {
     return `${tool} 返回了无法验证会话归属的统计事实，已拒绝`
   }
   return undefined

@@ -103,6 +103,48 @@ function renderBody(
 }
 
 /**
+ * 详情元信息里的一行「来源」。
+ *
+ * 三种来源里只有两种有去处：问答沉淀能跳回来源会话，文件沉淀能跳回源文件
+ * （`sourceFileId` 由 `saveNote` 的 `sourceKind: 'file'` 分支写入）。
+ * 之前文件沉淀的那条笔记只显示了正文与标签，用户看得出「这话是从某个文件抄来的」，
+ * 却没有任何入口回到那个文件 —— 沉淀链路在界面上断在最后一格。
+ * @param props.note - 当前选中的笔记。
+ * @param props.onOpenChat - 跳来源会话（无此能力时为 `undefined`）。
+ * @param props.onGoFiles - 跳「文件」分段并可带一个文件 id。
+ * @returns 一行来源文案；手写笔记返回 `null`。
+ */
+function NoteSource({ note, onOpenChat, onGoFiles }: {
+  note: KnowledgeNote
+  onOpenChat: ((username: string, localId?: number) => void) | undefined
+  onGoFiles: ((fileId?: number) => void) | undefined
+}): React.JSX.Element | null {
+  if (note.sourceKind === 'ask') {
+    const username = note.sourceUsername ?? ''
+    return (
+      <span>
+        来自问答沉淀
+        {username !== '' && onOpenChat
+          ? <LinkButton onClick={() => { onOpenChat(username) }}>· 查看来源会话</LinkButton>
+          : null}
+      </span>
+    )
+  }
+  if (note.sourceKind === 'file') {
+    const fileId = note.sourceFileId
+    return (
+      <span>
+        来自文件沉淀
+        {fileId !== undefined && fileId > 0 && onGoFiles
+          ? <LinkButton onClick={() => { onGoFiles(fileId) }}>· 回到源文件</LinkButton>
+          : null}
+      </span>
+    )
+  }
+  return null
+}
+
+/**
  * 笔记库空态 —— 从 `KnowledgeBasePanel` 拆出（单函数行数棘轮）。
  *
  * 2026-10-17：空态必须给出「从文件沉淀」这条路。改前只说「新建第一条」，
@@ -146,10 +188,10 @@ function KbEmptyState({ filtering, filterDesc, kbLabel, onClearFilter, onCreate,
 /**
  * Knowledge base panel.
  * @param props.onOpenChat - 打开来源会话（问答沉淀的笔记才有来源）。
- * @param props.onGoFiles - 跳到「文件」分段（空态里「从文件沉淀」的出口）。
+ * @param props.onGoFiles - 跳到「文件」分段（空态里的出口）；带 `fileId` 时还要就地选中那个文件。
  * @returns the knowledge-base element tree.
  */
-export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (username: string, localId?: number) => void; onGoFiles?: () => void } = {}): React.JSX.Element {
+export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (username: string, localId?: number) => void; onGoFiles?: (fileId?: number) => void } = {}): React.JSX.Element {
   // 「当前是哪个库」由分段条右侧的切换器决定，而切换器在合并外壳里 —— 不是本组件的父级，
   // 所以走订阅（`useKbScope`）而不是 props。
   const { kbId, kbs } = useKbScope()
@@ -238,9 +280,14 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
 
   // 详情默认落在第一条：主从视图里右侧空着，用户得自己猜「要点一下左边」。
   // 只依赖两个原子值而不是 `visible` 数组，数组每次渲染都是新引用，会让 effect 空转。
+  //
+  // 第二半是「选中的那条已经不存在」：在知识图谱分段里删掉它、或别的窗口删了它之后，
+  // 本段的 `selectedId` 还停在旧 id 上 —— 于是详情区永远显示空态，而左边明明有条目。
+  // 判据用未筛选的 `notes`（搜索/标签只是暂时把它藏起来，不该顺手清掉选中）。
   useEffect(() => {
-    if (selectedId === null && firstVisibleId !== null) setSelectedId(firstVisibleId)
-  }, [selectedId, firstVisibleId])
+    if (selectedId !== null && notes.some(n => n.id === selectedId)) return
+    if (firstVisibleId !== null) setSelectedId(firstVisibleId)
+  }, [selectedId, firstVisibleId, notes])
 
   // 当前标签在新结果里没了（改过标签、或搜索把它排除了）就退回「全部」，
   // 否则会停在一个筛不出任何东西、且筛选条上已经看不到选中态的标签上。
@@ -259,13 +306,17 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
   const onSaved = useCallback((id?: number): void => {
     const created = editor.id === undefined
     setEditor({ open: false })
+    // 新建的条目在「关键词 / 标签筛选」下很可能一条都不匹配 —— 不清筛选，用户看到的就是
+    // 「提示已新建、列表里却没有」，会以为没保存成功。清掉筛选（而不是只提示）保证它可见。
+    const wasFiltering = debounced !== '' || tag !== null
+    if (created && wasFiltering) { setQuery(''); setTag(null) }
     // 新建后选中这条（列表按更新时间倒序，它就是第一条）；不这么做会停在上一篇笔记上，
     // 用户刚从编辑器里出来却看不到自己刚写的东西。详情区的空态有 `!loading` 那道闸，
     // 所以这里出现的短暂「未选中」不会闪出一句「选一条看正文」。
     if (typeof id === 'number') setSelectedId(id)
-    flash(created ? '已新建条目' : '已保存修改')
+    flash(created ? (wasFiltering ? '已新建条目 · 已清除筛选以显示它' : '已新建条目') : '已保存修改')
     void load()
-  }, [editor.id, flash, load])
+  }, [debounced, editor.id, flash, load, tag])
 
   const remove = useCallback(async (n: KnowledgeNote): Promise<void> => {
     const ok = await confirm({
@@ -424,20 +475,7 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
                   <span>创建于 {fmtDateMs(selected.createdAt)}</span>
                   <span>{selected.body.length} 字</span>
                   {links.length > 0 ? <span>{links.length} 条链接</span> : null}
-                  {selected.sourceKind === 'ask' ? (
-                    <span>
-                      来自问答沉淀
-                      {selected.sourceUsername && onOpenChat
-                        ? (
-                          <LinkButton
-                            onClick={() => { onOpenChat(selected.sourceUsername ?? '') }}
-                          >
-                            · 查看来源会话
-                          </LinkButton>
-                        )
-                        : null}
-                    </span>
-                  ) : null}
+                  <NoteSource note={selected} onOpenChat={onOpenChat} onGoFiles={onGoFiles} />
                 </div>
 
                 {selected.sourceQuestion ? (

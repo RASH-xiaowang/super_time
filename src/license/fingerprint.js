@@ -48,10 +48,25 @@ function cpuSignature() {
 }
 
 /**
+ * 进程内缓存。
+ *
+ * 指纹采集在 Windows 上要起 `reg` 与 `cmd /c vol` 两个子进程（各 4s 超时），而
+ * `getLicenseStatus()` 会在**每一次**过闸调用里走到这里（HTTP 远程访问与桌面 IPC
+ * 共用同一道闸）。不缓存的话，每次聊天列表刷新都要再起一次子进程 —— 这是纯粹的
+ * 固定开销，而且采集结果在进程生命周期内不会变。
+ *
+ * 失效点：许可证导入/删除（`service.js`）与显式刷新（`refreshDeviceFingerprint()`）。
+ * 用对象引用缓存，测试可以据此断言「第二次没有重新采集」。
+ * @type {{ fingerprint: string, parts: Record<string, string> } | null}
+ */
+let cached = null
+
+/**
  * 计算当前设备指纹（hex sha256）。
  * @returns {{ fingerprint: string, parts: Record<string, string> }}
  */
 function getDeviceFingerprint() {
+  if (cached !== null) return cached
   const parts = {
     platform: process.platform,
     arch: process.arch,
@@ -71,7 +86,19 @@ function getDeviceFingerprint() {
     parts.volume,
   ].join('||')
   const fingerprint = crypto.createHash('sha256').update(material, 'utf8').digest('hex')
-  return { fingerprint, parts }
+  cached = { fingerprint, parts }
+  return cached
 }
 
-module.exports = { getDeviceFingerprint }
+/** 丢弃进程内缓存（许可证导入/删除、或调用方显式要求重新采集时用）。 */
+function clearFingerprintCache() {
+  cached = null
+}
+
+/** 显式刷新：清缓存并立刻重新采集一次。 */
+function refreshDeviceFingerprint() {
+  clearFingerprintCache()
+  return getDeviceFingerprint()
+}
+
+module.exports = { getDeviceFingerprint, clearFingerprintCache, refreshDeviceFingerprint }

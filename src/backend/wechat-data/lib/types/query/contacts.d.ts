@@ -1,5 +1,18 @@
 import type { WechatContact } from '../types.ts';
 /**
+ * 联系人类别判定（对外只读口径）。
+ *
+ * 为什么要把私有函数暴露出来：问答的 `search_contacts` 支持 `kind`
+ * （all/person/group/enterprise）过滤，如果它自己再写一份判据，
+ * 同一个账号在「找人」与「通讯录」里就可能落到不同类目 ——
+ * 用户按「人」筛却看不到通讯录里明明标为「联系人」的账号。
+ * @param localType - contact.local_type。
+ * @param username - 联系人/群 username。
+ * @param deleteFlag - contact.delete_flag。
+ * @returns 分类键（friend/enterprise/group/official/service/member/system/deleted）。
+ */
+export declare function contactCategoryOf(localType: number, username: string, deleteFlag?: number): string;
+/**
  * Read the contact book.
  * @param decryptedDir - decrypted data root.
  * @returns the contacts snapshot (contacts + per-category stats).
@@ -18,6 +31,13 @@ export interface ContactsPageOptions {
      * 未传（或传 `all`）时行为与之前完全一致。
      */
     category?: string;
+    /**
+     * 可选的搜索词：大小写不敏感地匹配 username / 备注 / 昵称 / 别名 / 全拼列。
+     *
+     * 与 `category` 一起在 **SQL 里**过滤，再分页 —— 否则「搜索 + 翻页」只能搜到当前
+     * 已加载的那一页。`stats` 仍是全量口径（页签计数不随搜索变化）。
+     */
+    search?: string;
 }
 export declare function queryContacts(decryptedDir: string, options?: ContactsPageOptions): {
     contacts: WechatContact[];

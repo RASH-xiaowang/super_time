@@ -25,6 +25,12 @@ import css from './error-boundary.module.css'
 interface Props {
   /** 出错时显示在哪一节（用于文案，如「设置」）。 */
   label?: string
+  /**
+   * 重置信号：变化时清掉错误态（不重挂子树）。
+   *
+   * 页签切换用它把「上一次打开这一页时的错误卡」收掉；数据身份变化则直接改 key 重挂。
+   */
+  resetKey?: unknown
   children: React.ReactNode
 }
 
@@ -47,6 +53,14 @@ export class ErrorBoundary extends React.Component<Props, State> {
     // 留一条带组件栈的日志：控制台里那条 React 自己的报错不含组件栈，
     // 排查时最缺的就是「是哪一节炸的」。
     console.error('[error-boundary] 渲染失败:', error, info.componentStack)
+  }
+
+  override componentDidUpdate(prevProps: Props): void {
+    // 只清错误态、不重挂 children：切回某个页签时给它一次重新渲染的机会，
+    // 同时保持 keep-alive 里已挂载子树的 state（scroll / 搜索词）不变。
+    if (this.state.error !== null && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null })
+    }
   }
 
   private readonly retry = (): void => {

@@ -29,7 +29,7 @@ export function buildToolHintBlock(
   profile?: AnswerProfile,
 ): string {
   const guidance = profile?.id === 'session-ask'
-    ? '本入口只查当前会话的聊天消息；没有证据就如实说明，不要改查联系人、文件、收藏、朋友圈、账单或其他全局资源。'
+    ? '本入口只查当前会话内的消息、转账/红包、通话、群资料、媒体与撤回记录；这些工具会强制锁定当前会话。没有证据就如实说明，不要改查联系人、文件、收藏、朋友圈、知识库或其他会话。'
     : '若问题明确是文件/收藏/朋友圈/联系人/统计，不要用泛化检索替代对应工具。'
   return `\n\n本轮建议优先检查的工具（只是排序建议，仍按问题选择）：${tools.join('、')}。`
     + guidance

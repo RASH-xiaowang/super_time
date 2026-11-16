@@ -1,8 +1,9 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import { apiGetMessages, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiGetMessages } from '../api.ts'
 import type { MessagesSnapshot, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { messagesMatchTalker } from './msg-scope.ts'
+import { readChatRenderCache, writeChatRenderCache } from './chat-render-cache.ts'
 import { pinScrollToBottom } from './chats-polling.ts'
+import { messageIdentity, messageIdentitySet, prependOlderWindow } from './message-identity.ts'
 import { directChatEnterpriseName } from './enterprise-identity.ts'
 import {
   canCacheChatId,
@@ -28,6 +29,8 @@ export interface SessionRuntime {
   setHasMore: Dispatch<SetStateAction<boolean>>
   setSelfWxid: Dispatch<SetStateAction<string>>
   setWatermarkFrom: (list: readonly WechatMessage[]) => void
+  /** 当前窗口的快照（可选）：续页整页都已存在时不必立滚动锚点。 */
+  messages?: readonly WechatMessage[]
 }
 
 export interface OpenSessionRuntime extends SessionRuntime {
@@ -122,13 +125,19 @@ export async function openChatSession(runtime: OpenSessionRuntime, session: Wech
   resetSessionState(runtime, [])
 
   try {
-    const raw = canCacheChatId(requestedUsername)
-      ? readRenderCache<WechatMessage[]>('chat-msgs:v2:' + requestedUsername)
+    const cached = canCacheChatId(requestedUsername)
+      ? readChatRenderCache(requestedUsername, runtime.selfWxid)
       : null
-    const cached = raw && messagesMatchTalker(raw, requestedUsername, runtime.selfWxid) ? raw : null
     if (!runtime.sessionAlive(epoch, activeUsername)) return
     runtime.setMessages(cached ?? [])
     if (cached && cached.length > 0) {
+      // 缓存窗口的起点就是「更早消息」的合法复合游标：缓存首屏先把它交出去，
+      // 权威首屏返回前向上滚才不会拿 cursor=0 发一次空页（那会把 hasMore 关死）。
+      const oldest = cached[0]
+      if (oldest) {
+        runtime.setCursor(oldest.sortSeq ?? 0)
+        runtime.setCursorLocalId(oldest.localId)
+      }
       runtime.setHasMore(true)
       runtime.setMsgLoading(false)
     }
@@ -150,7 +159,7 @@ export async function openChatSession(runtime: OpenSessionRuntime, session: Wech
     runtime.setCursorLocalId(env.cursorLocalId)
     runtime.setTypeStats(env.typeStats ?? [])
     if (canCacheChatId(activeUsername)) {
-      writeRenderCache('chat-msgs:v2:' + activeUsername, env.messages)
+      writeChatRenderCache(activeUsername, env.messages)
     }
     setTimeout(() => {
       if (runtime.sessionAlive(epoch, activeUsername)) pinScrollToBottom(runtime.msgScrollRef.current, 8)
@@ -176,23 +185,34 @@ export async function loadOlderChatMessages(
     runtime.setMsgLoading(false)
     return
   }
+  // cursor=0 且没有第二段游标 = 首屏还没给出「更早」的边界。此时发请求只会拿到
+  // 一个空页并把 hasMore 写成 false，把本会话的分页永久关掉（缓存快速路径踩过）。
+  if (cursor <= 0 && cursorLocalId === undefined) return
   const epoch = runtime.sessionEpochRef.current
   runtime.setMsgLoading(true)
+  runtime.setMsgError(null)
   try {
     const env = await apiGetMessages({ talker, limit: 100, cursor, cursorLocalId })
     if (!runtime.sessionAlive(epoch, talker)) return
     if (canonicalChatId(talker, env.canonicalUsername) !== talker) {
       throw new Error('会话身份发生变化，已停止合并历史消息')
     }
+    // 空页不插入任何行：先调 onBeforePrepend 会留下一个永远不消费的滚动锚点，
+    // 下一次消息数变化时它会按旧高度把视口往下拽。整页都已在窗口里（重复页）同理。
     const box = runtime.msgScrollRef.current
-    if (box) onBeforePrepend(box)
+    const known = runtime.messages ? messageIdentitySet(runtime.messages) : null
+    const addsRows = env.messages.length > 0
+      && (known === null || env.messages.some((m) => !known.has(messageIdentity(m))))
+    if (box && addsRows) onBeforePrepend(box)
+    // 按复合身份去重后拼到窗口前面：重复页退化成空操作，不会整段重复。
     runtime.setMessages((previous) => (
-      runtime.sessionAlive(epoch, talker) ? [...env.messages, ...previous] : previous
+      runtime.sessionAlive(epoch, talker) ? prependOlderWindow(previous, env.messages).next : previous
     ))
     runtime.setWatermarkFrom(env.messages)
-    runtime.setHasMore(env.hasMore ?? false)
+    // 旧后端可能不返回 hasMore：保留当前值，别用 false 把分页关死。
+    runtime.setHasMore((previous) => env.hasMore ?? previous)
     runtime.setCursor(env.cursor ?? cursor)
-    runtime.setCursorLocalId(env.cursorLocalId)
+    runtime.setCursorLocalId(env.cursorLocalId ?? cursorLocalId)
   } catch (error) {
     if (runtime.sessionAlive(epoch, talker)) runtime.setMsgError((error as Error).message)
   } finally {
@@ -246,7 +266,7 @@ export async function openChatSessionAndLocate(
       runtime.setCurSession(sessionFromSnapshot(activeUsername, runtime.sessions, snapshot))
     }
     adoptSnapshot(env)
-    let list = env.messages
+    let list: readonly WechatMessage[] = env.messages
     const findHit = (): number => {
       if (localId !== undefined) return list.findIndex((message) => message.localId === localId)
       if (dayStart !== undefined) return list.findIndex((message) => message.createTime >= dayStart)
@@ -273,7 +293,8 @@ export async function openChatSessionAndLocate(
       env = await apiGetMessages(options)
       if (!runtime.sessionAlive(epoch, activeUsername)) return
       adoptSnapshot(env)
-      list = [...env.messages, ...list]
+      // 同样按复合身份去重：后端在游标边界给出重叠页时，整段历史会重复一遍。
+      list = prependOlderWindow(list, env.messages).next
       pages += 1
       hit = findHit()
     }

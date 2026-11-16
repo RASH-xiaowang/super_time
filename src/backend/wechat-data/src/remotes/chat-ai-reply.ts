@@ -22,6 +22,7 @@ import {
   saveChatAiReplyDefaultWebhook,
 } from '../query/ai-reply/default-webhook-store.ts'
 import { createChatAiReplyRunner } from '../query/ai-reply/runner.ts'
+import { errorText, latestMessageCursor } from '../query/ai-reply/runner-recovery.ts'
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts'
 import type {
   ChatAiReplyDefaultWebhookMutationResult,
@@ -33,7 +34,6 @@ import type {
   ChatAiReplyScanDeps,
   ChatAiReplyState,
 } from '../query/ai-reply/types.ts'
-import { contextualMessageText } from '../query/ai-reply/inbound-trigger.ts'
 import {
   completeAiReplyMessageListRecord,
   completeAiReplyMessageListRecordSegments,
@@ -43,6 +43,7 @@ import {
   listAiReplyMessageListSegments,
   recoverInterruptedMessageListDispatches,
   reserveAiReplyMessageListRecord,
+  saveMessageListDispatchResult,
 } from '../query/message-list-store.ts'
 import type { OperationCategory, OperationStatus } from '../types.ts'
 
@@ -53,6 +54,8 @@ export interface CreateChatAiReplyRemotesInputs {
   gate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => string[]
   generate: ChatAiReplyGenerateFn
   decodeImages?: NonNullable<ChatAiReplyScanDeps['decodeImages']>
+  /** 知识库片段检索；由网关接到与问答相同的混合检索通道。 */
+  collectKbSnippets?: NonNullable<ChatAiReplyScanDeps['collectKbSnippets']>
   dispatch: (recordId: number) => Promise<ChatAiReplyDispatchResult>
   onRecordSaved?: ChatAiReplyScanDeps['onRecordSaved']
   onRecordUpdated?: ChatAiReplyScanDeps['onRecordUpdated']
@@ -71,6 +74,17 @@ function createChatAiReplyScanDeps(
   rc: CreateChatAiReplyRemotesInputs,
   dir: () => string,
 ): ChatAiReplyScanDeps {
+  const markDispatchUnconfirmed = (recordId: number, error: string): void => {
+    const marked = saveMessageListDispatchResult(dir(), recordId, {
+      status: 'sent_unconfirmed',
+      error,
+      responseSummary: '',
+      countAttempt: false,
+    })
+    if (marked?.status !== 'sent_unconfirmed') {
+      failAiReplyMessageListRecord(dir(), recordId, error)
+    }
+  }
   return {
     decryptedDir: dir,
     selfUsername: () => rc.selfUsername(),
@@ -116,6 +130,7 @@ function createChatAiReplyScanDeps(
     },
     generate: rc.generate,
     ...(rc.decodeImages === undefined ? {} : { decodeImages: rc.decodeImages }),
+    ...(rc.collectKbSnippets === undefined ? {} : { collectKbSnippets: rc.collectKbSnippets }),
     gate: rc.gate,
     reserveReply: async (input) => {
       const reserved = reserveAiReplyMessageListRecord(dir(), input)
@@ -184,7 +199,28 @@ function createChatAiReplyScanDeps(
             ...(record.error === '' ? {} : { error: record.error }),
           }
     },
-    dispatchReply: (recordId) => rc.dispatch(recordId),
+    dispatchReply: async (recordId) => {
+      const result = await rc.dispatch(recordId)
+      if (!result.ok) return result
+      // 正常 dispatcher 在出网前已原子认领为 dispatching，成功后还会写
+      // success/queued。若仍读到 pending，说明返回成功与台账终态之间有缺口；
+      // 此时绝不能按成功推进，否则后台批次会把同一条记录再次领走。
+      let current: ReturnType<typeof getMessageListRecord>
+      try {
+        current = getMessageListRecord(dir(), recordId)
+      } catch (e) {
+        const error = '投递已返回成功，但无法确认消息台账终态；已停止自动重发：' + errorText(e)
+        markDispatchUnconfirmed(recordId, error)
+        return { ok: false, error }
+      }
+      if (current?.status === 'pending') {
+        const error = '投递已返回成功，但消息台账仍为 pending；'
+          + '为避免后台再次发送，已标记为待核对'
+        markDispatchUnconfirmed(recordId, error)
+        return { ok: false, error }
+      }
+      return result
+    },
     ...(rc.onRecordSaved === undefined ? {} : { onRecordSaved: rc.onRecordSaved }),
     ...(rc.onRecordUpdated === undefined ? {} : { onRecordUpdated: rc.onRecordUpdated }),
     ...(rc.onDispatchFinished === undefined ? {} : { onDispatchFinished: rc.onDispatchFinished }),
@@ -271,18 +307,9 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       '上次进程中断，AI 回复记录已转 sent_unconfirmed，等待人工核对',
     )
   }
-  const latestIncomingCursor = (chatUsername: string): string => {
+  const latestCursor = (chatUsername: string): string => {
     const snapshot = queryMessages(dir(), chatUsername, 80, undefined, rc.selfUsername())
-    let cursor = ''
-    for (const message of snapshot.messages) {
-      if (message.isSender === 1) continue
-      const text = contextualMessageText(message)
-      if (message.localId <= 0 || text === '') continue
-      const sortSeq = Number(message.sortSeq ?? message.localId)
-      if (!Number.isSafeInteger(sortSeq) || sortSeq < 0) continue
-      cursor = 'v2:' + String(sortSeq) + ':' + String(message.localId)
-    }
-    return cursor
+    return latestMessageCursor(snapshot.messages) ?? ''
   }
   const scanDeps = createChatAiReplyScanDeps(rc, dir)
   const runner = createChatAiReplyRunner(scanDeps)
@@ -392,7 +419,7 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
         try {
           // Even an empty history gets an explicit watermark. If the query
           // itself fails, leave it empty so the runner retries a first scan.
-          cursor = latestIncomingCursor(options.chatUsername) || '0:0'
+          cursor = latestCursor(options.chatUsername) || '0:0'
         } catch {
           // 水位是优化，不是开关的前置条件：读不到时由首拍补建。
         }
@@ -452,6 +479,8 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       personaName: string
       personaPrompt: string
       splitReply?: boolean
+      kbEnabled?: boolean
+      kbId?: number
       expectedRevision?: number
     }): ChatAiReplyMutationResult {
       const state = saveChatAiReplyPersona(dir(), {
@@ -461,6 +490,8 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
         personaName: options.personaName,
         personaPrompt: options.personaPrompt,
         ...(options.splitReply === undefined ? {} : { splitReply: options.splitReply }),
+        ...(options.kbEnabled === undefined ? {} : { kbEnabled: options.kbEnabled }),
+        ...(options.kbId === undefined ? {} : { kbId: options.kbId }),
         ...(options.expectedRevision === undefined ? {} : { expectedRevision: options.expectedRevision }),
       })
       if (state.ok) rc.changed()

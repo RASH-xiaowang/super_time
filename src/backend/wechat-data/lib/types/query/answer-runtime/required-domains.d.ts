@@ -12,7 +12,7 @@ import type { EvidenceBundle } from './evidence.ts';
 import { type AnswerProfile, type AnswerProfileId } from '../tools/profiles.ts';
 import type { ToolName, ToolResult } from '../tools/types.ts';
 /** 可被问题独立要求的检索数据域。 */
-export type AnswerDataDomain = 'messages' | 'kb' | 'files' | 'favorites' | 'moments' | 'records' | 'contacts';
+export type AnswerDataDomain = 'messages' | 'kb' | 'files' | 'favorites' | 'moments' | 'records' | 'contacts' | 'funds' | 'calls' | 'groups' | 'media' | 'revoked';
 /** 数据域 → 专用工具。messages/kb 的兜底优先级最低。 */
 export declare const DOMAIN_TOOL: Readonly<Record<AnswerDataDomain, ToolName>>;
 /**

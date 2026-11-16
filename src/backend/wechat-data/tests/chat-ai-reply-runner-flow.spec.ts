@@ -178,7 +178,7 @@ describe('AI 回复运行器 · 流程与游标', () => {
     runner.dispose()
   })
 
-  it('cursor 后存在积压时从最早未处理消息继续，不只看最新一页', async () => {
+  it('cursor 后存在积压时合并到最新消息，不逐条补答旧消息', async () => {
     const saved = saveChatAiReplySetting(decrypted, {
       accountKey: 'wxid_self',
       chatUsername: 'wxid_peer',
@@ -196,7 +196,7 @@ describe('AI 回复运行器 · 流程与游标', () => {
       { localId: 2, sortSeq: 101, createTime: 2000, isSender: 0, renderType: 'text', displayText: '积压最早一条' },
       { localId: 3, sortSeq: 102, createTime: 3000, isSender: 0, renderType: 'text', displayText: '积压第二条' },
     ])
-    const generate = vi.fn(async () => ({ ok: true, text: '回复最早一条' }))
+    const generate = vi.fn(async () => ({ ok: true, text: '回复最新一条' }))
     const runner = createChatAiReplyRunner(deps({
       // 最新窗口故意完全看不到积压消息。
       listMessages: async () => [
@@ -212,10 +212,53 @@ describe('AI 回复运行器 · 流程与游标', () => {
     await vi.waitFor(() => expect(runner.pending()).toBe(0))
     expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
       stage: 'success',
-      cursor: 'v2:101:2',
+      cursor: 'v2:999:900',
     })
     expect(listMessageListRecords(decrypted).items[0]?.sourceRef)
-      .toBe('ai-reply:wxid_self:wxid_peer:2000:2')
+      .toBe('ai-reply:wxid_self:wxid_peer:999000:900')
+    expect(generate).toHaveBeenCalledTimes(1)
+    runner.dispose()
+  })
+
+  it('最新可视消息是自己时不自动回复，等对方再次发言才处理', async () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+      cursor: 'v2:100:1',
+    }).ok).toBe(true)
+    let messages = [
+      { localId: 2, sortSeq: 200, createTime: 2000, isSender: 0, renderType: 'text', displayText: '已经问过' },
+      { localId: 3, sortSeq: 300, createTime: 3000, isSender: 1, renderType: 'text', displayText: '已经回复' },
+    ]
+    const generate = vi.fn(async () => ({ ok: true, text: '新回复' }))
+    const reserveReplySpy = vi.fn(reserveReply)
+    const runner = createChatAiReplyRunner(deps({
+      listMessages: async () => messages,
+      generate,
+      reserveReply: reserveReplySpy,
+    }))
+
+    await runner.scan()
+    await vi.waitFor(() => expect(runner.pending()).toBe(0))
+    expect(generate).not.toHaveBeenCalled()
+    expect(reserveReplySpy).not.toHaveBeenCalled()
+
+    messages = [
+      ...messages,
+      { localId: 4, sortSeq: 400, createTime: 4000, isSender: 0, renderType: 'text', displayText: '新问题' },
+    ]
+    await runner.scan()
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(runner.pending()).toBe(0))
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      stage: 'success',
+      cursor: 'v2:400:4',
+    })
+    expect(reserveReplySpy.mock.calls[0]?.[0].sourceRef)
+      .toBe('ai-reply:wxid_self:wxid_peer:4000:4')
     runner.dispose()
   })
 

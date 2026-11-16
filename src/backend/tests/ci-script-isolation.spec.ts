@@ -164,6 +164,19 @@ const SPLIT_TAIL_LIBS: Record<string, string[]> = {
   'scripts/packaged-smoke.js': ['WECHAT_CONFIG_JSON', 'WECHAT_LLM_JSON'],
 }
 
+/**
+ * 单测里的显式豁免：只允许「不读取资产、只断言发布规则会拦截它」的合成反例。
+ *
+ * `release-hardening.spec.ts` 的私钥路径已改为运行时拼接（`['vendor-keys', 'license-private.pem'].join('/')`），
+ * 但拆出的段名 `vendor-keys` 仍会被 AST 当作字符串字面量抽出；该用例只把这个路径交给
+ * `entryViolations` 做判定，从不 `readFileSync`，因此干净检出/CI 上可以正常跑。
+ * 理由为空或已无命中的豁免由下面的用例当场判红。
+ */
+const SPEC_LITERAL_EXEMPTIONS: Record<string, string> = {
+  'src/backend/tests/release-hardening.spec.ts':
+    '合成反例：只断言发布规则会拦截该路径，不读取资产；路径已运行时拼接，拆出的段名仍会被 AST 抽到',
+}
+
 describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
   it('解析有效：扫到了 workflow、CI 步骤与脚本文件，且包含那条曾坏掉的步骤（防空转）', () => {
     expect(workflowFiles.length).toBeGreaterThan(0)
@@ -239,11 +252,23 @@ describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
   it('单测文件里也没有本机专有资产的字符串字面量（npm test 同样是 CI 步骤）', () => {
     expect(specFiles.length, '没扫到任何 spec 文件，扫描逻辑可能失效').toBeGreaterThan(5)
     for (const rel of specFiles) {
+      if (rel in SPEC_LITERAL_EXEMPTIONS) continue
       const literals = stringLiterals(readFileSync(join(ROOT, rel), 'utf8'), rel)
       for (const pattern of FORBIDDEN_PATH_PATTERNS) {
         const hits = literals.filter((l) => pattern.test(l))
         expect(hits, `${rel} 引用了${pattern.name}（${hits.join(', ')}）—— CI 上会失败`).toEqual([])
       }
+    }
+  })
+
+  it('单测豁免必须带理由，且确实仍有命中（否则应删除过期豁免）', () => {
+    for (const [rel, reason] of Object.entries(SPEC_LITERAL_EXEMPTIONS)) {
+      expect(reason.trim().length, `${rel} 的豁免缺少理由`).toBeGreaterThan(10)
+      expect(specFiles, `${rel} 不在扫描集合里，豁免已失效`).toContain(rel)
+      // 反面确认：豁免不是空转的 —— 该文件当前仍会被判据命中。
+      const literals = stringLiterals(readFileSync(join(ROOT, rel), 'utf8'), rel)
+      const hits = literals.filter((l) => FORBIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(l)))
+      expect(hits.length, `${rel} 已无命中，应删除过期豁免`).toBeGreaterThan(0)
     }
   })
 

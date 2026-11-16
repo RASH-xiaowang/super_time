@@ -187,6 +187,24 @@ describe('轮询的两道闸门', () => {
     expect(mocks.apiGetNewMessages, '没有水位也去问了后端').not.toHaveBeenCalled()
   })
 
+  it('水位为 0 的空会话：对账把最新窗口里没有的行追加进来（否则第一条消息永远不出现）', async () => {
+    seenWatermark = 0
+    msgs = []
+    mocks.apiGetMessages.mockResolvedValue({ messages: [msg(1), msg(2)], selfWxid: 'wxid_self' })
+    await reconcile()
+    expect(msgs.map((m) => m.localId), '空会话没有自举路径').toEqual([1, 2])
+    expect(watermarkFromCalls.flat().map((m) => m.localId), '追加后水位没有推进').toEqual([1, 2])
+    expect(seenWatermark).toBe(2)
+  })
+
+  it('对账不重复追加 prev 已有的行（没有变化时保持数组身份）', async () => {
+    msgs = [msg(1), msg(2)]
+    mocks.apiGetMessages.mockResolvedValue({ messages: [msg(1), msg(2)] })
+    await reconcile()
+    expect(msgs.map((m) => m.localId)).toEqual([1, 2])
+    expect(identityKept, '没变化却重写了消息数组').toBe(1)
+  })
+
   it('闸门开着（上一次轮询还在飞）⇒ 不发第二次', async () => {
     seenWatermark = 10
     inFlight = true
@@ -271,10 +289,14 @@ describe('合并、去重与写回缓存', () => {
     expect(watermarkFromCalls).toHaveLength(1)
     expect(watermarkFromCalls[0]?.map((m) => m.localId), '水位推进用的是整批 fresh：重复项会把水位算回去').toEqual([3, 4])
     expect(mocks.writeRenderCache).toHaveBeenCalledWith(
-      'chat-msgs:v2:' + CUR.username,
-      expect.arrayContaining([expect.objectContaining({ localId: 1 }), expect.objectContaining({ localId: 4 })]),
+      'chat-msgs:v3:' + CUR.username,
+      {
+        talker: CUR.username,
+        messages: expect.arrayContaining([expect.objectContaining({ localId: 1 }), expect.objectContaining({ localId: 4 })]),
+      },
     )
-    expect((mocks.writeRenderCache.mock.calls[0]?.[1] as readonly WechatMessage[]).length, '只写增量 ⇒ 下次打开旧消息全丢').toBe(4)
+    const cached = mocks.writeRenderCache.mock.calls[0]?.[1] as { messages: readonly WechatMessage[] }
+    expect(cached.messages.length, '只写增量 ⇒ 下次打开旧消息全丢').toBe(4)
   })
 
   it('localId + sortSeq 都见过的行不重复追加（保持原身份）', async () => {
@@ -303,10 +325,11 @@ describe('合并、去重与写回缓存', () => {
 
     await poll()
 
-    const cached = mocks.writeRenderCache.mock.calls[0]?.[1] as readonly WechatMessage[]
-    expect(cached).toHaveLength(CHAT_RENDER_CACHE_MAX_MESSAGES)
-    expect(cached.at(-1)?.localId).toBe(baseLength + 1)
-    expect(cached[0]?.localId).toBe(baseLength - CHAT_RENDER_CACHE_MAX_MESSAGES + 2)
+    const payload = mocks.writeRenderCache.mock.calls[0]?.[1] as { talker: string; messages: readonly WechatMessage[] }
+    expect(payload.talker, '缓存值必须自带归属').toBe(CUR.username)
+    expect(payload.messages).toHaveLength(CHAT_RENDER_CACHE_MAX_MESSAGES)
+    expect(payload.messages.at(-1)?.localId).toBe(baseLength + 1)
+    expect(payload.messages[0]?.localId).toBe(baseLength - CHAT_RENDER_CACHE_MAX_MESSAGES + 2)
   })
 })
 
@@ -569,22 +592,32 @@ describe('宿主推送与 SWR 广播：两个事件都要同时触发增量与�
 })
 
 describe('就地改对账：只替换真变了的行', () => {
-  it('type 变了 ⇒ 换成新行；什么都没变 ⇒ 保持原身份且不写缓存', async () => {
+  it('撤回(10002) ⇒ 同身份换成新行；什么都没变 ⇒ 保持原身份且不写缓存', async () => {
     const a = msg(1, { sortSeq: 10 })
     const b = msg(2, { sortSeq: 11 })
     msgs = [a, b]
-    mocks.apiGetMessages.mockResolvedValue({ messages: [msg(1, { sortSeq: 11 }), b] })
+    const recalled = { ...a, type: 10002 } as WechatMessage
+    mocks.apiGetMessages.mockResolvedValue({ messages: [recalled, b] })
     await reconcile()
-    expect(msgs[0]?.sortSeq, 'sortSeq 变了没替换').toBe(11)
+    expect(msgs[0]?.type, '撤回(10002)没换行').toBe(10002)
     expect(msgs[1]).toBe(b)
     expect(mocks.writeRenderCache).toHaveBeenCalledTimes(1)
 
     mocks.writeRenderCache.mockClear()
     committed = 0
-    mocks.apiGetMessages.mockResolvedValue({ messages: [msg(1, { sortSeq: 11 }), b] })
+    mocks.apiGetMessages.mockResolvedValue({ messages: [{ ...recalled }, b] })
     await reconcile()
     expect(committed, '什么都没变还提交新数组').toBe(0)
     expect(mocks.writeRenderCache, '无变化也写缓存（每次推送都把整列表序列化一遍）').not.toHaveBeenCalled()
+  })
+
+  it('跨分片同号行（同一 localId、不同 sortSeq）不是同一行：老行保留，新行追加', async () => {
+    const older = msg(1, { sortSeq: 500, displayText: '二〇二三年的老消息' })
+    msgs = [older]
+    mocks.apiGetMessages.mockResolvedValue({ messages: [msg(1, { sortSeq: 9000, displayText: '二〇二五年的新消息' })] })
+    await reconcile()
+    expect(msgs[0], '老分片的同号行被最新页的行顶掉了 —— 同一段内容会因此同屏出现两次').toBe(older)
+    expect(msgs.map((m) => m.displayText)).toEqual(['二〇二三年的老消息', '二〇二五年的新消息'])
   })
 
   it('只有非展示字段变了 ⇒ 保持原对象身份', async () => {

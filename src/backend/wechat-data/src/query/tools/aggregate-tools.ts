@@ -20,7 +20,7 @@
  *
  * @module query/tools/aggregate-tools
  */
-import { runAggregate, pickDimension, resolveWindow } from '../retrieval/aggregate.ts'
+import { runAggregate, pickDimension, resolveWindow, ymdLocal } from '../retrieval/aggregate.ts'
 import { argInt, argString, type RetrievalTool, type ToolResult } from './types.ts'
 
 /** 聚合统计消息（计数 / 排名 / 去重）。 */
@@ -40,8 +40,12 @@ export const aggregateMessagesTool: RetrievalTool = {
         description:
           '统计维度：keyword = 按关键词数消息条数（「一共多少笔转账」）；'
           + 'session = 按会话分组排名（「哪个群最多」）；'
-          + 'day = 按天分组排名（「哪天最多」）；'
-          + 'distinct = 去重计数（「跟多少人聊过」）。不填则按问题自动判断。',
+          + 'day = 按时间分组排名（「哪天最多」，粒度由 granularity 控制）；'
+          + 'distinct = 去重计数（默认数会话；distinctField=sender 时数发送者）。不填则按问题自动判断。',
+      },
+      question: {
+        type: 'string',
+        description: '用户原问题（用于识别方向词「收到/付出」与自动选择维度；运行时自动注入，模型可不填）',
       },
       keywords: {
         type: 'array', items: { type: 'string' },
@@ -50,25 +54,53 @@ export const aggregateMessagesTool: RetrievalTool = {
       from: { type: 'string', description: '起始日期 YYYY-MM-DD（不填 = 不限）' },
       to: { type: 'string', description: '截止日期 YYYY-MM-DD（不填 = 不限）' },
       username: { type: 'string', description: '限定某个会话（不填 = 全库）' },
+      sender: { type: 'string', description: '限定发送者：群内成员显示名或 username（不填 = 不限）' },
+      kind: {
+        type: 'string',
+        enum: ['all', 'group', 'single'],
+        description: '会话类型：all = 全部（默认）；group = 只看群聊；single = 只看单聊',
+      },
+      granularity: {
+        type: 'string',
+        enum: ['day', 'month', 'hour', 'weekday'],
+        description: 'dimension=day 时的分组粒度：day = 按天（默认）；month = 按月；hour = 按小时；weekday = 按星期',
+      },
+      distinctField: {
+        type: 'string',
+        enum: ['session', 'sender'],
+        description: 'dimension=distinct 时的去重对象：session = 会话数（默认）；sender = 发送者人数（仅统计群消息前缀里的发送者）',
+      },
+      top: { type: 'number', description: '分组排名最多返回几项（默认 15，上限 50）' },
     },
   },
   run: (args, ctx): ToolResult => {
     const started = Date.now()
-    const question = argString(args['question'])
-    const dimArg = argString(args['dimension'])
     const keywords = Array.isArray(args['keywords'])
       ? (args['keywords'] as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, 6)
       : []
+    // 原问题优先；模型漏填时用关键词组合兜底 —— 否则自动维度与方向词（收到/付出）全部失效。
+    const question = argString(args['question']).trim() || keywords.join(' ')
+    const dimArg = argString(args['dimension'])
     // 执行上下文里的范围是服务端锁定值，不能被模型参数覆盖。
     const from = ctx.scope?.from || argString(args['from'])
     const to = ctx.scope?.to || argString(args['to'])
     const username = ctx.scope?.username || argString(args['username'])
+    const sender = argString(args['sender']).trim()
+    // 枚举值非法时回退默认值，不报错（模型偶尔写大写或别的词）。
+    const kindRaw = argString(args['kind']).trim().toLowerCase()
+    const kind: 'all' | 'group' | 'single' = kindRaw === 'group' || kindRaw === 'single' ? kindRaw : 'all'
+    const granRaw = argString(args['granularity']).trim().toLowerCase()
+    const granularity: 'day' | 'month' | 'hour' | 'weekday' =
+      granRaw === 'month' || granRaw === 'hour' || granRaw === 'weekday' ? granRaw : 'day'
+    const distinctRaw = argString(args['distinctField']).trim().toLowerCase()
+    const distinctField: 'session' | 'sender' = distinctRaw === 'sender' ? 'sender' : 'session'
+    const top = argInt(args['top'], 15, 1, 50)
 
     // 维度：模型给了就用它，没给就按问题自动判断（`pickDimension` 是确定性规则）。
     // 为什么允许模型覆盖：它能看到完整对话上下文，而 `pickDimension` 只看这一句问题。
     const dim = dimArg === 'keyword' || dimArg === 'session' || dimArg === 'day' || dimArg === 'distinct'
       ? dimArg
-      : pickDimension(question || keywords.join(' '))
+      : pickDimension(question)
 
     // `runAggregate` 的维度判定走问题文本，这里把模型给的维度**编码进问题**，
     // 避免为了传一个枚举去改它的签名（它还要被流水线直接调用）。
@@ -85,6 +117,11 @@ export const aggregateMessagesTool: RetrievalTool = {
       ...(username ? { scope: { username } } : {}),
       ...(from ? { from } : {}),
       ...(to ? { to } : {}),
+      ...(sender ? { sender } : {}),
+      kind,
+      granularity,
+      distinctField,
+      top,
       ...(ctx.now ? { now: ctx.now } : {}),
     })
     if (facts.length === 0) {
@@ -100,12 +137,16 @@ export const aggregateMessagesTool: RetrievalTool = {
       ...(ctx.now ? { now: ctx.now } : {}),
     })
     const range = win.lo === 0 && win.hi === 0 ? '全部时间'
-      : `${new Date(win.lo * 1000).toISOString().slice(0, 10)} ~ ${new Date(win.hi * 1000).toISOString().slice(0, 10)}`
+      : `${ymdLocal(win.lo)} ~ ${ymdLocal(win.hi)}`
     const scopeLabel = username ? `会话 ${username}` : '全库'
+    const filterLabel = [
+      sender ? `发送者 ${sender}` : '',
+      kind === 'group' ? '仅群聊' : kind === 'single' ? '仅单聊' : '',
+    ].filter(Boolean).join(' · ')
     return {
       tool: 'aggregate_messages', ok: true, hits: [],
       facts: facts.map(f => ({ title: f.title, body: f.body })),
-      note: `统计维度 ${dim} · ${range} · ${scopeLabel} ${facts[0]?.total ?? 0} 条消息`,
+      note: `统计维度 ${dim} · ${range} · ${scopeLabel}${filterLabel ? ` · ${filterLabel}` : ''} ${facts[0]?.total ?? 0} 条消息`,
       elapsedMs: Date.now() - started,
     }
   },

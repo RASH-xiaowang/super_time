@@ -41,7 +41,7 @@ const LIVE_WIRING: ReadonlyArray<readonly [string, string]> = [
   // ── 面板（直订族，本轮新接）──
   ['Annual.tsx', 'ANNUAL_LIVE_MIN_INTERVAL_MS'],
   ['Annual.tsx', 'useWechatDataUpdated(() => {'],
-  ['Health.tsx', 'useWechatDataUpdated(() => { void load() })'],
+  ['Health.tsx', 'useWechatDataUpdated(() => { void loadStats() })'],
   ['Ledger.tsx', 'useWechatDataUpdated(() => { if (active) void load(month) })'],
   ['RegionBoard.tsx', 'useWechatDataUpdated(() => { void load() })'],
   ['DailySummary.tsx', 'useDailySummaryTasks(loadTasks)'],

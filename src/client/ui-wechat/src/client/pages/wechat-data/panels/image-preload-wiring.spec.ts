@@ -99,9 +99,10 @@ describe('W2-4.5 接线：六条不许退化的纪律', () => {
 
   it('③ 滚动中不打出去：停 {@link PREFETCH_DEBOUNCE_MS} 之后才发', () => {
     expect(src).toContain('PREFETCH_DEBOUNCE_MS')
-    // 回调体跨了很多行，单行正则 `setTimeout(...PREFETCH_DEBOUNCE_MS)` 匹配不到；
-    // 判据改成「常量确实在 setTimeout 的收尾参数位上」。
-    expect(src).toContain('}, PREFETCH_DEBOUNCE_MS)')
+    // 防抖回调已抽成 `run`（滚动停止后要复用同一段），判据改成「常量确实在
+    // setTimeout 的延时位上」，且**初始预取与滚动重排**都走它。
+    expect(src.match(/window\.setTimeout\(run, PREFETCH_DEBOUNCE_MS\)/g)?.length ?? 0)
+      .toBeGreaterThanOrEqual(2)
     expect(/PREFETCH_DEBOUNCE_MS = (\d+)/.exec(src)?.[1], 'debounce 不得为 0（那等于滚动中就打）').toBeTruthy()
     expect(Number(/PREFETCH_DEBOUNCE_MS = (\d+)/.exec(src)?.[1] ?? 0)).toBeGreaterThan(0)
   })

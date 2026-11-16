@@ -14,10 +14,9 @@ import { useKbFileDetailActions, useLoadAllChunks } from './kb-save-note.ts'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import type { KbFileMeta, KbSearchResult, KbVectorIndexView } from '../types.ts'
 import { KB_ACCEPTED_EXTS } from '../types.ts'
-import { Badge, Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { ListSkeleton, useTransientNotice } from './hooks.tsx'
-import { formatRelative } from './kb-model.ts'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
 import { useKbIndexBuild } from './kb-index-build.ts'
 import { KbFileDetailPane, type KbFileReaderState } from './kb-files-detail.tsx'
@@ -29,7 +28,7 @@ import { useKbFilesSnapshot } from './use-kb-files-snapshot.ts'
 import { useKeepAliveActive } from './keep-alive.tsx'
 import css from './kbfiles.module.css'
 import kitCss from '../ui/kit.module.css'
-import { AddReport, FILTERS, KbTitleRow, PARSE_LOOK, SnippetText, StateFilter, baseName, cachedFiles, formatBytes, indexLabel, reasonText } from './kb-files-support.tsx'
+import { AddReport, FILTERS, KbFileList, KbPanelAlerts, KbTitleRow, PARSE_LOOK, SnippetText, StateFilter, baseName, cachedFiles, indexLabel, reasonText } from './kb-files-support.tsx'
 
 /**
  * 知识库文件面板。
@@ -95,7 +94,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
 
   /** 文件列表快照（N1：读失败必须与「确实没有文件」分开）。 */
   const {
-    snapshot, setSnapshot, readError, loading, error, setError, now, load,
+    snapshot, setSnapshot, readError, loading, loadingMore, hasMore, loadMore, error, setError, now, load,
   } = useKbFilesSnapshot(kbId)
   const [query, setQuery] = useState('')
   const debounced = useDebouncedValue(query, 300)
@@ -256,7 +255,14 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    * 这条与 N1（读失败 vs 确无数据）同一个口径 —— 派生状态最容易在这里说谎。
    */
   const loadIndex = useCallback(async (): Promise<void> => {
-    try { setIndexView(await apiGetKbVectorIndex(kbId)) } catch { /* 保留上一次的值，不把它清成「无」 */ }
+    try {
+      setIndexView(await apiGetKbVectorIndex(kbId))
+      setIndexError(null)
+    } catch (e) {
+      // 保留上一次的值（不把读失败显示成「没有索引」），但**必须说出来**：
+      // 旧实现 catch 为空，首次读取失败时芯片会永远停在「读取中…」。
+      setIndexError((e as Error).message || '读取失败')
+    }
   }, [kbId])
 
   // 换库 ⇒ 先清掉上一个库的状态再读。不清的话会短暂显示「甲库已建 1,240 块」，
@@ -270,7 +276,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   /**
    * W3-11.5：建索引与停止（整块搬去 kb-index-build.ts：面板主体已超函数体棘轮）。
    */
-  const { indexing, jobId: indexJobId, run: runIndex, cancel: cancelIndex } =
+  const { indexing, jobId: indexJobId, error: indexBuildError, run: runIndex, cancel: cancelIndex } =
     useKbIndexBuild(kbId, flash, () => { void loadIndex() })
 
   /**
@@ -281,6 +287,20 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    */
   const indexJobKey = indexView?.job ? `${indexView.kbId}:${indexView.job.done}` : ''
   useKbIndexPolling(active, indexJobKey, loadIndex)
+  /**
+   * 本面板发起的构建：**在跑的时候也要轮询**。
+   *
+   * 上面那条轮询以「后端的 job」为判据，而 indexView 只在构建结束的 `onDone` 里刷新 ——
+   * 于是自己发起的那一次全程看不到 `done/total`，芯片只有一句静止的「建索引中…」。
+   * 这里在本地 `indexing` 为真时先立刻读一次、再按 1.2s 轮询；job 一出现，
+   * 上面那条会按 done 变化继续接棒。
+   */
+  useEffect(() => {
+    if (!indexing) return
+    void loadIndex()
+    const timer = setInterval(() => { void loadIndex() }, 1200)
+    return () => { clearInterval(timer) }
+  }, [indexing, loadIndex])
 
   /**
    * 关键词**同时**过滤文件名与正文（设计稿 §8.4：用户不选模式，系统决定）。
@@ -331,9 +351,12 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
 
   // 详情默认落在第一条：主从视图里右侧空着，用户得自己猜「要点一下左边」。
   // 只依赖两个原子值而不是 `visible` 数组，数组每次渲染都是新引用，会让 effect 空转。
+  // 判「选中项是否还在当前文件集里」而不是只看 null：删除当前文件、或搜索/筛选把它
+  // 挡住之后，右栏会停在空态且没有行高亮，用户还得自己再点一次。
   useEffect(() => {
-    if (selectedId === null && firstVisibleId !== null) setSelectedId(firstVisibleId)
-  }, [selectedId, firstVisibleId])
+    const stillListed = selectedId !== null && files.some(f => f.id === selectedId)
+    if (!stillListed && firstVisibleId !== null) setSelectedId(firstVisibleId)
+  }, [selectedId, firstVisibleId, files])
 
   // 从问答引用跳进来时**直接选中那个文件**：落到一个几百条的列表里让用户自己找，
   // 等于没跳 —— 而且用户并不知道要找的是哪一条。
@@ -551,8 +574,8 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           title={<KbTitleRow visible={visible.length} total={total} index={idx} />}
           actions={(
             <>
-              <Button variant="primary" onClick={() => { void addFiles() }} disabled={adding}>
-                {adding ? '添加中…' : '＋ 添加文件'}
+              <Button variant="primary" onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}>
+                {adding ? '添加中…' : desktopAction() ? '＋ 添加文件（仅电脑）' : '＋ 添加文件'}
               </Button>
               {/* 低频文档动作收进菜单：页头只保留「添加文件」这一个主操作。
                   语义索引会把本库 `include_in_rag=1` 文件的正文发给向量模型，菜单项标注「会出网」。 */}
@@ -562,6 +585,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
                 indexing={indexing}
                 loading={loading}
                 onIndex={() => { void runIndex(false) }}
+                onCancelIndex={() => { void cancelIndex() }}
                 onSummaries={() => { void batchJobs.batchSummaries() }}
                 onEntities={() => { void batchJobs.batchEntities() }}
                 onRefresh={() => { void load() }}
@@ -603,15 +627,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {indexError && (
-        <div className={kitCss.error} role="alert">语义索引没有建成：{indexError}</div>
-      )}
-      {/* 读失败与空库必须分开说（N1） */}
-      {readError && (
-        <div className={kitCss.error} role="alert">
-          {kbLabel || '这个库'}的文件列表读取失败（不是「还没有文件」）：{readError}
-        </div>
-      )}
+      <KbPanelAlerts indexBuildError={indexBuildError} indexError={indexError} readError={readError} kbLabel={kbLabel} />
 
       {/* 滚动区：回执、检索结果与主从两栏一起滚（与改前「整块面板滚」的行为一致），
           被吸住的只有上面的页头与工具栏。 */}
@@ -685,37 +701,17 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
             {loading && files.length === 0 ? (
               <KbFilesLoadingPane />
             ) : visible.length === 0 ? emptyNode : (
-              <div className={css.list}>
-                {visible.map((f) => {
-                  const look = PARSE_LOOK[f.parseState]
-                  return (
-                    <button
-                      key={f.id}
-                      type="button"
-                      className={css.row}
-                      data-on={f.id === selectedId ? '1' : undefined}
-                      aria-current={f.id === selectedId ? 'true' : undefined}
-                      onClick={() => { setSelectedId(f.id) }}
-                    >
-                      <span className={css.rowMain}>
-                        <span className={css.rowTitle}>
-                          <span className={css.rowName} title={f.name}>{f.name}</span>
-                          <Badge tone={look.tone}>{look.label}</Badge>
-                        </span>
-                        <span className={css.rowSub}>
-                          <span>{f.ext ? f.ext.toUpperCase() : '无扩展名'}</span>
-                          <span>{formatBytes(f.sizeBytes)}</span>
-                          <span>{f.chunkCount} 块</span>
-                          <span>{formatRelative(f.createdAt, now)}</span>
-                        </span>
-                      </span>
-                      <span className={css.rowSide}>
-                        {f.includeInRag ? null : <span className={css.offlineMark}>不出网</span>}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
+              <KbFileList
+                items={visible}
+                selectedId={selectedId}
+                now={now}
+                hasMore={hasMore}
+                loadingMore={loadingMore}
+                shownCount={files.length}
+                total={total}
+                onSelect={setSelectedId}
+                onLoadMore={() => { void loadMore() }}
+              />
             )}
           </Card>
 

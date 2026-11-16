@@ -24,7 +24,7 @@
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { createServer as createNodeServer } from 'node:http'
+import { createServer as createNodeServer, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,7 +87,15 @@ const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostA
   isHostAllowed: (authority: string | undefined, expectedAddress: string, expectedPort: number) => boolean
   lanAddresses: () => Array<{ address: string, family: string, iface: string }>
 }
+const DEFERRED_MUTATION = require(join(ROOT, 'src', 'backend', 'mutation-gate.js')) as {
+  bumpMutationEpoch: (reason: string) => number
+  mutationGateStats: () => { lastBumpReason: string }
+  resetMutationGate: () => void
+  setMutationGateMode: (mode: 'shadow' | 'enforce') => void
+}
 afterEach(async () => {
+  DEFERRED_MUTATION.setMutationGateMode('shadow')
+  DEFERRED_MUTATION.resetMutationGate()
   await cleanupFixtures()
 })
 
@@ -108,6 +116,15 @@ async function login(base: string, token: string = TOKEN): Promise<string> {
   expect(r.status, '令牌正确时应当换取到会话').toBe(200)
   const setCookie = r.headers.get('set-cookie') ?? ''
   return setCookie.split(';')[0] ?? ''
+}
+
+/** 轮询等待一个同步条件（连接关闭、队列出队等都不是同一 tick 内完成的）。 */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const startedAt = Date.now()
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error('等待条件超时')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }
 
 /** 发送 JSON 请求；浏览器桥与生产客户端都使用同一媒体类型。 */
@@ -918,6 +935,143 @@ describe('SSE 事件流：形状必须与 IPC 的 wechat:event 一致', () => {
     const base2 = `http://127.0.0.1:${String(st2.port)}`
     const r = await fetch(`${base2}/api/status`, { headers: { cookie } })
     expect(r.status, '重启后旧会话仍然有效 —— 会话表不该跨重启存活').toBe(401)
+  })
+
+  it('stop() 幂等：交接收尾重复调用不抛错，之后仍可重新启动', async () => {
+    const f = fixture()
+    await up(f)
+    await f.srv.stop()
+    await expect(f.srv.stop()).resolves.toBeTruthy()
+    expect(f.srv.getState().running).toBe(false)
+    const st = await f.srv.start()
+    expect(st.running, '重复 stop 之后服务起不来了').toBe(true)
+  })
+})
+
+describe('资源上限与宿主兜底：连接数、慢客户端、未捕获异常、写代际', () => {
+  const EVENT_PATH = '/api/wechat/events'
+
+  it('SSE 全局连接数有上限：超出返回 503 SSE_LIMIT，断开后名额释放', async () => {
+    const f = fixture({ maxSseClients: 1 })
+    const base = await up(f)
+    const cookie = await login(base)
+    const ac1 = new AbortController()
+    const first = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie }, signal: ac1.signal })
+    expect(first.status).toBe(200)
+    await waitUntil(() => (f.srv.getState().sseClients ?? 0) === 1)
+
+    const cookieB = await login(base)
+    const blocked = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie: cookieB } })
+    expect(blocked.status, '连接数已满却仍接受新的 SSE').toBe(503)
+    expect((await blocked.json()).error.code).toBe('SSE_LIMIT')
+
+    ac1.abort()
+    await waitUntil(() => (f.srv.getState().sseClients ?? 0) === 0)
+    const ac2 = new AbortController()
+    const again = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie: cookieB }, signal: ac2.signal })
+    expect(again.status, '旧连接断开后名额没有释放').toBe(200)
+    ac2.abort()
+  })
+
+  it('SSE 单会话连接数有上限：同一 Cookie 开第二个被拒，另一个会话不受影响', async () => {
+    const f = fixture({ maxSsePerSession: 1, maxSseClients: 8 })
+    const base = await up(f)
+    const cookieA = await login(base)
+    const acA = new AbortController()
+    const first = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie: cookieA }, signal: acA.signal })
+    expect(first.status).toBe(200)
+    await waitUntil(() => (f.srv.getState().sseClients ?? 0) === 1)
+
+    const blocked = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie: cookieA } })
+    expect(blocked.status).toBe(503)
+    expect((await blocked.json()).error.code).toBe('SSE_LIMIT')
+
+    const cookieB = await login(base)
+    const acB = new AbortController()
+    const other = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie: cookieB }, signal: acB.signal })
+    expect(other.status, '单会话上限误伤了别的会话').toBe(200)
+    acA.abort()
+    acB.abort()
+  })
+
+  it('慢客户端：res.write 返回 false 时立刻摘除连接，不把主进程内存顶上去', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const cookie = await login(base)
+    const ac = new AbortController()
+    const res = await fetch(`${base}${EVENT_PATH}`, { headers: { cookie }, signal: ac.signal })
+    expect(res.status).toBe(200)
+    await waitUntil(() => (f.srv.getState().sseClients ?? 0) === 1)
+
+    const originalWrite = ServerResponse.prototype.write
+    ServerResponse.prototype.write = (() => false) as unknown as typeof ServerResponse.prototype.write
+    try {
+      f.srv.pushEvent('slow/client', [])
+    } finally {
+      ServerResponse.prototype.write = originalWrite
+    }
+    await waitUntil(() => (f.srv.getState().sseClients ?? 0) === 0)
+    ac.abort()
+  })
+
+  it('路由处理器抛异常：返回 500 INTERNAL_ERROR，而不是让请求悬挂到超时', async () => {
+    const f = fixture({ getUiDistDir: () => { throw new Error('spec: static root unavailable') } })
+    const base = await up(f)
+    const r = await fetch(`${base}/`)
+    expect(r.status).toBe(500)
+    expect((await r.json()).error.code).toBe('INTERNAL_ERROR')
+  })
+
+  it('排队期间配置换代：旧写请求在出队时被撤销（enforce），不会落到后端', async () => {
+    let release!: () => void
+    let entered = false
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const f = fixture({
+      callQueue: {
+        run: async (task) => {
+          entered = true
+          await gate
+          return task()
+        },
+      },
+    })
+    DEFERRED_MUTATION.setMutationGateMode('enforce')
+    const base = await up(f)
+    const cookie = await login(base)
+    const pending = postJson(`${base}/api/wechat/call`, {
+      method: 'saveSummaryTask',
+      args: [{ title: 'spec' }],
+    }, { cookie })
+    await waitUntil(() => entered)
+    // 模拟「排队期间配置被保存」：与 ipc-wechat 的 saveWechatConfig 成功后 bump 同一口径。
+    DEFERRED_MUTATION.bumpMutationEpoch('spec-config-saved')
+    release()
+    const r = await pending
+    const j = await r.json() as { ok?: boolean, error?: { code?: string } }
+    expect(j.ok).toBe(false)
+    expect(j.error?.code).toBe('MUTATION_DISPATCH_REVOKED')
+    expect(f.calls, '被撤销的写仍然到了后端').toEqual([])
+  })
+
+  it('saveWechatConfig 成功后开新代际（HTTP 与桌面 IPC 同一口径）', async () => {
+    const f = fixture()
+    const base = await up(f)
+    // saveWechatConfig 是桌面同权方法：普通手机白名单拒绝它，交接会话（fullAccess）才放行。
+    const code = f.srv.issuePairingCode({ fullAccess: true })
+    const auth = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: code }),
+    })
+    expect(auth.status).toBe(200)
+    const cookie = (auth.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+    const r = await postJson(`${base}/api/wechat/call`, {
+      method: 'saveWechatConfig',
+      args: [{ patch: { api_enabled: true } }],
+    }, { cookie })
+    expect(r.status).toBe(200)
+    expect((await r.json() as { ok?: boolean }).ok).toBe(true)
+    expect(DEFERRED_MUTATION.mutationGateStats().lastBumpReason).toBe('wechat-config-saved')
   })
 })
 

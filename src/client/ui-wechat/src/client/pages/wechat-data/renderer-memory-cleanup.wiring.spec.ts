@@ -60,7 +60,8 @@ describe('renderer 资源清理接线', () => {
     expect(hook).toContain('queue.current.splice(MOMENTS_MEDIA_QUEUE_MAX)')
     expect(hook).toContain('queue.current.unshift(it)')
     expect(hook).toContain('if (cancelled) {')
-    expect(hook).toContain('coverAttempts.current.set(url, (coverAttempts.current.get(url) ?? 0) + 1)')
+    // 2026-11-13：封面尝试表改名为 `attempts`（仍有上界，见上面那条 BoundedMediaMap 断言）。
+    expect(hook).toContain('attempts.current.set(url, (attempts.current.get(url) ?? 0) + 1)')
     expect(hook).toContain('}, [viewerRequestKey, viewerResolved])')
     expect(hook).toContain('for (const timer of mediaRetryTimers.current) window.clearTimeout(timer)')
   })

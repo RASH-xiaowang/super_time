@@ -45,7 +45,9 @@ describe('引用行显示', () => {
   })
 
   it('② 摘要两行截断（-webkit-line-clamp: 2），且不能退回单行 nowrap', () => {
-    const what = classBlock(ROWS, 'msgQuoteWhat')
+    // 2026-11-13：`.msgQuoteWhat` 与 `.msgQuoteStripOpen` 同份（chats.module.css）——
+    // 跨份引用在 CSS Modules 下是 undefined，hover 下划线根本不会生效。
+    const what = classBlock(MSG, 'msgQuoteWhat')
     expect(what, '要按参考图做两行截断').toContain('-webkit-line-clamp: 2')
     expect(what, 'line-clamp 需要 -webkit-box 才生效').toContain('display: -webkit-box')
     expect(what, 'nowrap 会把行撑爆（用户截图就是这么来的）').not.toContain('nowrap')

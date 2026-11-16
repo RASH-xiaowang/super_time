@@ -31,7 +31,7 @@ import { join } from 'node:path'
 import type { DbIntegrityResult, DbRepairResult } from '../types.ts'
 import { checkDecryptedIntegrity } from './db-health.ts'
 import { decryptAllDbs } from './decrypt-all.ts'
-import { discardSupersededWal, strayWalBlocks } from './snapshot-sidecars.ts'
+import { clearSupersededWal, discardSupersededWal, strayWalBlocks } from './snapshot-sidecars.ts'
 
 /**
  * 修复解密快照里损坏的库：本地清残留 → 仍坏的从本机原始 `db_storage` 重新解密**且仅这几个**。
@@ -67,6 +67,9 @@ export async function repairCorruptDbs(
     if (strayWalBlocks(abs)) {
       touched = true
       await discardSupersededWal(abs)
+      // 2026-11-16：discard 现在是「隔离」而不是「删除」（失败换代要能放回去）。
+      // 本地修复已经决定以主库为当前代际、随后会复检，隔离出来的旧 WAL 不再需要。
+      await clearSupersededWal(abs)
     }
   }
   const local: DbIntegrityResult = touched ? await checkDecryptedIntegrity(decryptedDir) : before

@@ -283,6 +283,44 @@ describe('evidence：KB citation 八字段', () => {
     expect(nonKb.status).toBe('failed')
     expect(nonKb.stats.malformedHits).toBe(1)
   })
+
+  it('会话内允许带 session 归属的账本资源与专用事实，拒绝无法归属的资源', () => {
+    const fundsResult = (session: string): ToolResult => ({
+      tool: 'get_funds_summary',
+      ok: true,
+      hits: [{
+        key: 'record:transfers:t1',
+        name: '李四',
+        time: '2026-10-20 10:00',
+        snippet: '转账 · 收入 13.00 元 · 已收款',
+        source: 'resource',
+        trace: {
+          kind: 'resource',
+          resource: {
+            resourceKind: 'record',
+            stableKey: 'record:transfers:t1',
+            session,
+          },
+        },
+      }],
+      facts: [{ title: '资金总览', body: '转账 1 笔，收入 13.00 元' }],
+    })
+
+    const allowed = buildEvidenceBundle(
+      [fundsResult('wxid_locked')],
+      { allowedUsername: 'wxid_locked' },
+    )
+    expect(allowed.status).not.toBe('blocked')
+    expect(allowed.facts).toHaveLength(1)
+    expect(allowed.items.some(item => item.locator.type === 'resource')).toBe(true)
+
+    const foreign = buildEvidenceBundle(
+      [fundsResult('wxid_other')],
+      { allowedUsername: 'wxid_locked' },
+    )
+    expect(foreign.status).toBe('blocked')
+    expect(foreign.stats.rejectedCount).toBe(1)
+  })
 })
 
 describe('evidence：消息与资源边界', () => {

@@ -80,6 +80,8 @@ function render(
       setViewerIndex,
       curImg: viewer.images[0],
       snsImgs: {},
+      snsOriginals: new Set<string>(),
+      resolveSnsOriginal: async () => 'data:live',
       copyCurrentLink: vi.fn(),
       viewRotate: 0,
       setViewRotate: vi.fn(),

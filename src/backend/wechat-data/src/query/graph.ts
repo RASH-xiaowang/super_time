@@ -154,7 +154,7 @@ interface MessageStats {
   relationRecordsDropped: number
 }
 
-/** Mirror the message reader's bounded group-sender fallback. */
+/** Mirror the message reader's bounded group-sender fallback（前缀必须锚在开头）. */
 function senderFromContent(content: string, talker: string): string {
   if (!content) return ''
   let printable = 0
@@ -163,7 +163,7 @@ function senderFromContent(content: string, talker: string): string {
     if ((code >= 0x20 && code <= 0x7e) || code >= 0x80) printable += 1
   }
   if (content.length > 0 && printable / Math.min(content.length, 512) < 0.6) return ''
-  const match = content.match(/([A-Za-z0-9_@.\-]{3,64}):\n/)
+  const match = /^([A-Za-z0-9_@.\-]{3,64}):\r?\n/.exec(content)
   const sender = match?.[1] ?? ''
   if (!sender || sender.includes('<') || sender === talker) return ''
   return sender

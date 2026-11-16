@@ -23,6 +23,12 @@ describe('snsCdnUrl：朋友圈 CDN 请求构造', () => {
     expect(snsCdnUrl(URL0.replace('/0', '/480'), TOK)).toContain('/0?token=')
   })
 
+  it('UHD 的 /2000 必须原样保留（真实样本改成 /0 会 400）', () => {
+    const uhd = URL0.replace('/0', '/2000')
+    expect(snsCdnUrl(uhd, TOK)).toContain('/2000?token=')
+    expect(snsCdnUrl(uhd, TOK)).not.toContain('/0?token=')
+  })
+
   it('清掉库里可能已有的 token/idx，不叠加（否则参数重复会 400）', () => {
     const withOld = URL0 + '?token=OLD&idx=9&foo=1'
     const out = snsCdnUrl(withOld, TOK)

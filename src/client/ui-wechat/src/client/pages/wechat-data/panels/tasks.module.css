@@ -135,7 +135,7 @@
 }
 .check[data-checked]:hover { background: var(--nm-brand-fill-hover); border-color: var(--nm-brand-fill-hover); }
 .check:focus-visible { outline: 2px solid var(--nm-brand); outline-offset: 2px; }
-.check:disabled { cursor: wait; opacity: 0.7; }
+.check:disabled { cursor: wait; opacity: 0.5; }
 .checkSpin {
   width: 12px;
   height: 12px;
@@ -162,7 +162,7 @@
 .taskRow:focus-within .deleteBtn { opacity: 1; }
 .deleteBtn:hover:not(:disabled) { background: color-mix(in srgb, var(--nm-danger) 9%, transparent); }
 .deleteBtn:focus-visible { outline: 2px solid var(--nm-danger); outline-offset: 1px; opacity: 1; }
-.deleteBtn:disabled { cursor: wait; opacity: 0.45; }
+.deleteBtn:disabled { cursor: wait; opacity: 0.5; }
 
 @keyframes taskSpin { to { transform: rotate(360deg); } }
 

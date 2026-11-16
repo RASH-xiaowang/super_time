@@ -87,6 +87,126 @@ describe('queryMessages / queryNewMessages', () => {
     expect(delta.messages[7]?.localId).toBe(105)
   })
 
+  it('单聊接收方向的消息带上 sender（缓存归属可校验），自己发的消息不被标成对方', () => {
+    const root = tempRoot()
+    const talker = 'wxid_peer'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.exec("INSERT INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_me'), (2, '')")
+      const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+      ins.run(1, 1, 1, 0, 1700000001, 0, '对方发来的', '1001')
+      ins.run(2, 2, 1, 0, 1700000002, 1, '我自己发的', '1002')
+    })
+
+    const snap = queryMessages(root, talker, 10, undefined, 'wxid_me')
+    const [incoming, mine] = snap.messages
+    expect(incoming?.isSender).toBe(0)
+    // 前端读渲染缓存时靠这一行判定「这份列表是不是这个会话的」（msg-scope.ts）。
+    expect(incoming?.sender, '单聊接收方向不带 sender ⇒ 前端缓存归属校验形同虚设').toBe(talker)
+    // 联系人表里查不到这个人：显示名退回「对方」，不能把 wxid 或「未知联系人」写进去。
+    expect(incoming?.senderName).toBe('对方')
+    expect(mine?.isSender).toBe(1)
+    expect(mine?.sender, '自己发的行不该被安上对端身份').toBeUndefined()
+  })
+
+  /**
+   * 归属判据（2026-11 报障）：真机上分片 Name2Id 里登录账号**有独立命名行**，
+   * 空 user_name 行是**另一个群成员** —— 那些行的撤回通知写着别人的名字。
+   * 把空名行认成「我」，这个成员的消息会整批画到右侧。
+   */
+  it('分片有显式账号行时，空名 Name2Id 行的消息不算「我发的」', () => {
+    const root = tempRoot()
+    const talker = '123@chatroom'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.exec("INSERT INTO Name2Id (rowid, user_name) VALUES (2, 'wxid_me'), (19, '')")
+      const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+      ins.run(1, 1, 1, 0, 1700000001, 2, '我发的', '1001')
+      ins.run(2, 2, 1, 0, 1700000002, 19, '别人发的', '1002')
+      ins.run(3, 3, 10000, 0, 1700000003, 19, '"旭动" 撤回了一条消息', '1003')
+    })
+
+    const [mine, other, notice] = queryMessages(root, talker, 10, undefined, 'wxid_me').messages
+    expect(mine?.isSender).toBe(1)
+    expect(other?.isSender, '空名行是另一个成员，却被画成了「我发的」').toBe(0)
+    expect(other?.sender, '那个成员没有可解析的 wxid，不能编一个').toBeUndefined()
+    expect(notice?.isSender, '别人的撤回通知同样不能算我发的').toBe(0)
+  })
+
+  it('分片没有显式账号行时，沿旧约定把空名行当作「我」（老分片兼容）', () => {
+    const root = tempRoot()
+    const talker = '456@chatroom'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.exec("INSERT INTO Name2Id (rowid, user_name) VALUES (8, ''), (9, 'wxid_member')")
+      const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+      ins.run(1, 1, 1, 0, 1700000001, 8, '老分片里我发的', '1001')
+      ins.run(2, 2, 1, 0, 1700000002, 9, '成员发的', '1002')
+    })
+
+    const [mine, member] = queryMessages(root, talker, 10, undefined, 'wxid_me').messages
+    expect(mine?.isSender, '没有显式账号行时，空名行是唯一的「我」的线索').toBe(1)
+    expect(member?.isSender).toBe(0)
+  })
+
+  it('「和自己对话」的会话（talker 就是登录账号）里，消息仍然算我发的', () => {
+    const root = tempRoot()
+    const self = 'wxid_me'
+    const table = 'Msg_' + createHash('md5').update(self, 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.exec("INSERT INTO Name2Id (rowid, user_name) VALUES (2, 'wxid_me')")
+      db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+        .run(1, 1, 1, 0, 1700000001, 2, '发给自己的一条', '1001')
+    })
+
+    const [only] = queryMessages(root, self, 10, undefined, self).messages
+    expect(only?.isSender, '自聊会话里我发的消息被当成了对方（画到左边）').toBe(1)
+  })
+
+  /**
+   * 正文前缀的判据（2026-11 实测）：
+   *  · 私聊没有发送者前缀 —— 以 `try:\n` 开头的代码会被旧的「全串搜索 `xxx:\n`」
+   *    误认成发送者，于是自己发的消息被画到左边；
+   *  · 群聊的前缀必须锚定开头，且 token 必须是本分片 Name2Id 里存在的账号
+   *    （真机抽样 96,863/96,863 命中；非锚定命中的唯一一条是正文里的 `android:`）。
+   */
+  it('正文里的 `xxx:\\n` 不能被当成发送者前缀（私聊/群聊同一判据）', () => {
+    const root = tempRoot()
+    const peer = 'wxid_peer'
+    const peerTable = 'Msg_' + createHash('md5').update(peer, 'utf8').digest('hex')
+    const room = '789@chatroom'
+    const roomTable = 'Msg_' + createHash('md5').update(room, 'utf8').digest('hex')
+    makeDb(join(root, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${peerTable}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec(`CREATE TABLE "${roomTable}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+      db.exec("INSERT INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_me'), (2, 'wxid_peer'), (5, 'wxid_other')")
+      db.prepare(`INSERT INTO "${peerTable}" VALUES (?,?,?,?,?,?,?,?)`)
+        .run(1, 1, 1, 0, 1700000001, 1, 'try:\n   x = 1', '1001')
+      const ins = db.prepare(`INSERT INTO "${roomTable}" VALUES (?,?,?,?,?,?,?,?)`)
+      ins.run(1, 2, 1, 0, 1700000002, 1, 'try:\n   x = 1', '1002')
+      ins.run(2, 3, 1, 0, 1700000003, 5, 'iOS&android:\n下载链接', '1003')
+      ins.run(3, 4, 1, 0, 1700000004, 5, 'wxid_other:\n真实前缀', '1004')
+    })
+
+    const [mine] = queryMessages(root, peer, 10, undefined, 'wxid_me').messages
+    expect(mine?.isSender, '私聊正文里的 `try:` 不是发送者：自己的消息必须还在右边').toBe(1)
+
+    const [roomMine, noise, prefixed] = queryMessages(root, room, 10, undefined, 'wxid_me').messages
+    expect(roomMine?.isSender, '群里自己发的代码片段不能被前缀规则翻成对方').toBe(1)
+    expect(noise?.isSender).toBe(0)
+    expect(noise?.sender, '正文里的 `android:` 不是账号，必须回退到 Name2Id 的发送者').toBe('wxid_other')
+    expect(prefixed?.sender, '真实前缀（Name2Id 里存在）仍然优先').toBe('wxid_other')
+  })
+
   it('incremental pages advance through duplicate sort_seq with hasMore and a composite cursor', () => {
     const root = tempRoot()
     const talker = 'wxid_talker'

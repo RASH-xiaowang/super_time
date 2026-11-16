@@ -63,7 +63,19 @@ export interface AnswerProfile {
   maxFallbackCalls?: number
 }
 
-/** 会话内问答可用的工具：只覆盖「消息检索 + 上下文 + 聚合 + 混合兜底」。 */
+/**
+ * 会话内问答可用的工具：消息检索 + 上下文 + 聚合 + 混合兜底，以及
+ * 2026-11-13 起可在会话边界内收敛的确定性数据域工具。
+ *
+ * 后五个工具都**不是直接放开全局能力**，而是进入白名单后仍由
+ * {@link enforceProfileScope} 强制注入/校验范围：
+ *   · get_funds_summary / aggregate_media：走 `username` 参数注入；
+ *   · get_call_history：走 `peer` 参数注入与冲突拒绝；
+ *   · get_group_detail：仅群聊会话可用，`group` 必须是当前群；
+ *   · search_revoked：工具内部按 `session_username` 过滤，无法归属的行丢弃。
+ *
+ * 朋友圈统计（get_moments_stats）天然跨会话，仍然**不允许**出现在会话内问答。
+ */
 const SESSION_TOOLS: readonly ToolName[] = [
   'search_messages',
   'search_semantic',
@@ -71,9 +83,14 @@ const SESSION_TOOLS: readonly ToolName[] = [
   'get_message_context',
   'aggregate_messages',
   'search_hybrid',
+  'get_funds_summary',
+  'get_call_history',
+  'get_group_detail',
+  'aggregate_media',
+  'search_revoked',
 ]
 
-/** 微信问答的完整工具集：现有 13 个工具 + search_hybrid。 */
+/** 微信问答的完整工具集：20 个工具（含 search_hybrid）。 */
 const WECHAT_TOOLS: readonly ToolName[] = [
   'search_messages',
   'search_semantic',
@@ -89,6 +106,15 @@ const WECHAT_TOOLS: readonly ToolName[] = [
   'search_files',
   'search_records',
   'search_kb',
+  // 2026-11-13 补齐的确定性数据域工具。get_moments_stats 只进微信问答
+  // （朋友圈统计天然跨会话）；其余五个也允许会话内问答，但必须由
+  // enforceProfileScope 注入/校验 username、peer 或 group 后才会执行。
+  'get_funds_summary',
+  'get_call_history',
+  'get_group_detail',
+  'search_revoked',
+  'aggregate_media',
+  'get_moments_stats',
 ]
 
 /** 各入口的边界定义。 */
@@ -219,9 +245,18 @@ const USERNAME_ARG_TOOLS = new Set<ToolName>([
   'search_hybrid',
   'search_moments',
   'search_favorites',
-  'search_files',
+  // search_files 的文件索引没有会话归属：注入 username 只会让工具返回
+  // unsupported_scope（审计 2026-11-13）。等文件索引补上来源会话再放开。
   'search_records',
+  'get_funds_summary',
+  'aggregate_media',
 ])
+
+/**
+ * 文件索引（hardlink.db）没有会话列：锁定会话时无论模型是否自带 username，
+ * 都必须明确拒绝，否则不带 username 的调用会静默查全库（审计 2026-11-13）。
+ */
+const LOCKED_SCOPE_UNSUPPORTED_TOOLS = new Set<ToolName>(['search_files'])
 
 /**
  * 哪些工具声明了 `from` / `to` 参数。
@@ -239,6 +274,11 @@ const DATE_ARG_TOOLS = new Set<ToolName>([
   'search_favorites',
   'search_files',
   'search_records',
+  'get_funds_summary',
+  'get_call_history',
+  'aggregate_media',
+  'search_revoked',
+  'get_moments_stats',
 ])
 
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -345,6 +385,14 @@ export function enforceProfileScope(
   }
 
   if (lockedUsername !== '') {
+    if (LOCKED_SCOPE_UNSUPPORTED_TOOLS.has(toolName as ToolName)) {
+      return {
+        ok: false,
+        error: fail(toolName, 'unsupported_scope', '文件检索不支持按会话过滤，锁定会话时不可用', {
+          username: lockedUsername,
+        }),
+      }
+    }
     const requested = argString(nextArgs['username']).trim()
     if (requested !== '' && requested !== lockedUsername) {
       return {
@@ -372,6 +420,58 @@ export function enforceProfileScope(
           }),
         }
       }
+    }
+
+    if (toolName === 'get_call_history') {
+      // 群聊没有一对一通话记录；直接说清「不支持」，不能返回一个看似
+      // 「这个群没打过电话」的 0 结果。
+      if (/@chatroom$/i.test(lockedUsername)) {
+        return {
+          ok: false,
+          error: fail(toolName, 'unsupported_scope', '群聊会话没有通话记录', {
+            username: lockedUsername,
+          }),
+        }
+      }
+      // 通话记录用 `peer` 而不是 `username`：同样不能由模型换成别的会话，
+      // 但错误参数名必须如实写 `peer`，否则模型会去改一个不存在的 username。
+      const requestedPeer = argString(nextArgs['peer']).trim()
+      if (requestedPeer !== '' && requestedPeer !== lockedUsername) {
+        return {
+          ok: false,
+          error: fail(toolName, 'scope_violation', '请求的通话对方与当前会话不一致', {
+            argument: 'peer',
+            locked: lockedUsername,
+            requested: requestedPeer,
+          }),
+        }
+      }
+      if (requestedPeer === '') nextArgs['peer'] = lockedUsername
+    }
+
+    if (toolName === 'get_group_detail') {
+      // 私聊没有群档案：锁定会话不是群时直接明确拒绝，避免模型把
+      // 「查不到群」误当成「这个群不存在」。判据与 group-tools 保持一致（忽略大小写）。
+      if (!/@chatroom$/i.test(lockedUsername)) {
+        return {
+          ok: false,
+          error: fail(toolName, 'unsupported_scope', '当前会话不是群聊，无法查询群资料', {
+            username: lockedUsername,
+          }),
+        }
+      }
+      const requestedGroup = argString(nextArgs['group']).trim()
+      if (requestedGroup !== '' && requestedGroup !== lockedUsername) {
+        return {
+          ok: false,
+          error: fail(toolName, 'scope_violation', '请求的群与当前会话不一致', {
+            argument: 'group',
+            locked: lockedUsername,
+            requested: requestedGroup,
+          }),
+        }
+      }
+      if (requestedGroup === '') nextArgs['group'] = lockedUsername
     }
   }
 
@@ -481,6 +581,15 @@ export function enforceProfileScope(
         ...(effectiveTo !== '' ? { to: effectiveTo } : {}),
       }
     }
+  }
+
+  if (toolName === 'get_moments_stats' && profile.id !== 'session-ask' && nextCtx.scope !== undefined) {
+    /*
+     * 微信问答的 `scope.username` 是「会话过滤」，不是朋友圈作者。朋友圈统计
+     * 天然跨会话；把它当作者会把群/联系人答成「该作者 0 条」（2026-11-13 审计）。
+     * 只有会话内问答（或模型显式传 author）才允许把锁定会话当作者。
+     */
+    nextCtx.scope = { ...nextCtx.scope, username: undefined }
   }
 
   return { ok: true, args: nextArgs, ctx: nextCtx, adjustments }

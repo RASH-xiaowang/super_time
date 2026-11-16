@@ -11,20 +11,22 @@
  *      记成失败。`sync.ts#atomicReplace` 早就修过这件事并写了同名注释 —— **同一个属性必须有
  *      同一个主人**，所以这里钉的是「decrypt-all 走的是那份实现」，而「替换期间目标始终存在」
  *      由 `sync-wal.spec.ts`「快照替换期间目标必须始终存在」那一组守（见下面那条接线判据）。
- *   ② 单个库解密失败**不许**中断整棵树（用户要的是「其余照常」），也不许留下半截 `.decrypt_tmp`；
+ *   ② 单个库解密失败**不许**中断整棵树（用户要的是「其余照常」），也不许留下半截临时文件；
  *   ③ 每库独立密钥（`all_keys.json`）优先于配置里的兜底密钥 —— 多账号机器上读错就是全库乱码。
  *
- * 夹具是**合成的 SQLCipher4 页**（加密侧与本仓 `sync-wal.spec.ts` 同一套写法），不碰真实微信文件。
+ * 夹具是**真 SQLite 库 + 合成 SQLCipher4 页**（加密侧与本仓 `sync-wal.spec.ts` 同一套写法），
+ * 不碰真实微信文件。发布前现在要跑 `PRAGMA quick_check`，所以夹具必须是 SQLite 自己认的库；
+ * 合成「页 1 头 + 垃圾页」会被正确地判成损坏（那正是发布闸门该做的事）。
  * @vitest-environment node
  */
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { decryptAllDbs } from '../src/query/decrypt-all.ts'
 import { looksDecrypted, plausibleSqliteHeader } from '../src/query/sync.ts'
-import { writeSqlitePage1Header } from '../../tests/helpers/sqlite-page1.ts'
 
 const PAGE_SZ = 4096
 const RESERVE_SZ = 80
@@ -43,6 +45,33 @@ function derive(rawKeyHex: string, salt: Buffer): Buffer {
   return pbkdf2Sync(Buffer.from(rawKeyHex, 'hex'), salt, 256_000, 32, 'sha512')
 }
 
+/** 把一页明文改成 SQLCipher 的 reserved=80 布局（内容区整体左移 80B）。 */
+function toReservedPage(page: Buffer, pgno: number): Buffer {
+  const buf = Buffer.from(page)
+  if (pgno === 1) buf[20] = RESERVE_SZ
+  const hdr = pgno === 1 ? 100 : 0
+  const nCells = buf.readUInt16BE(hdr + 3)
+  const cs = buf.readUInt16BE(hdr + 5)
+  if (cs === 0) return buf
+  const ptr = hdr + 8
+  for (let i = 0; i < nCells; i += 1) {
+    buf.writeUInt16BE(buf.readUInt16BE(ptr + i * 2) - RESERVE_SZ, ptr + i * 2)
+  }
+  buf.writeUInt16BE(cs - RESERVE_SZ, hdr + 5)
+  buf.copy(buf, cs - RESERVE_SZ, cs, PAGE_SZ)
+  buf.fill(0, PAGE_SZ - RESERVE_SZ, PAGE_SZ)
+  return buf
+}
+
+/** 整库改成 reserved=80：第 1 页的页头在偏移 100，其余页在偏移 0。 */
+function toReservedLayout(plain: Buffer): Buffer {
+  const buf = Buffer.from(plain)
+  for (let base = 0; base + PAGE_SZ <= buf.length; base += PAGE_SZ) {
+    toReservedPage(buf.subarray(base, base + PAGE_SZ), base === 0 ? 1 : 2).copy(buf, base)
+  }
+  return buf
+}
+
 /** 把一页明文封成 SQLCipher4 的磁盘形态（HMAC 尾巴填零：解密侧不校验它）。 */
 function encryptPage(plain: Buffer, pgno: number, encKey: Buffer, salt: Buffer): Buffer {
   const iv = randomBytes(16)
@@ -57,29 +86,47 @@ function encryptPage(plain: Buffer, pgno: number, encKey: Buffer, salt: Buffer):
   return page
 }
 
+/** 按 SQLCipher-4 布局加密整库（页数不变，产物与明文等长）。 */
+function encryptPlainDb(plain: Buffer, rawKeyHex: string): Buffer {
+  const salt = randomBytes(16)
+  const encKey = derive(rawKeyHex, salt)
+  const pages = Math.ceil(plain.length / PAGE_SZ)
+  const out = Buffer.alloc(pages * PAGE_SZ)
+  for (let pgno = 1; pgno <= pages; pgno += 1) {
+    const base = (pgno - 1) * PAGE_SZ
+    const page = Buffer.alloc(PAGE_SZ)
+    plain.copy(page, 0, base, Math.min(base + PAGE_SZ, plain.length))
+    encryptPage(page, pgno, encKey, salt).copy(out, base)
+  }
+  return out
+}
+
 /**
  * 造一个「raw db_storage 里有一个加密库」的场景。
+ *
+ * 夹具必须是**真 SQLite 库**：发布前现在要跑 `PRAGMA quick_check`，合成页（页 1 头 + 垃圾页）
+ * 会被正确地判成损坏 —— 那正是发布闸门该做的事。表里写入 100 行（固定 2 页），
+ * 解密后按 `marker` 列断言内容真的解出来了，而不是密文原样透传或全零。
  * @param rawDir - raw db_storage 目录本身（不是数据根）。
  * @param rel - 相对 rawDbDir 的路径（如 `message/msg_0.db`）。
  * @param rawKeyHex - 用来派生该库密钥的原始 key。
- * @param marker - 明文页里填的字节，用来验证内容真的解出来了。
+ * @param marker - 明文表里每一行填的标记整数。
  * @returns 写出的相对路径（原样返回，方便断言）。
  */
 function makeEncryptedDb(rawDir: string, rel: string, rawKeyHex = RAW_KEY, marker = 0x5a): string {
   const file = join(rawDir, rel)
   mkdirSync(dirname(file), { recursive: true })
-  const salt = Buffer.from('a'.repeat(16) + rel.length.toString(16).padStart(2, '0')).subarray(0, 16)
-  const encKey = derive(rawKeyHex, salt)
-  const plain1 = Buffer.alloc(PAGE_SZ, marker)
-  // 页 1 头部要写得**像一个真库**：偏移 16-17 的页大小、18/19 的读写格式、
-  // 21/22/23 的三个 payload fraction（SQLite 规范写死 64/32/32）。`plausibleSqliteHeader`
-  // 现在这几维都看，夹具只填页大小的话，解出来的东西会被自己的判据拒掉。
-  writeSqlitePage1Header(plain1, PAGE_SZ)
-  const plain2 = Buffer.alloc(PAGE_SZ, marker + 1)
-  writeFileSync(file, Buffer.concat([
-    encryptPage(plain1, 1, encKey, salt),
-    encryptPage(plain2, 2, encKey, randomBytes(16)),
-  ]))
+  const plainPath = file + '.plain'
+  rmSync(plainPath, { force: true })
+  const db = new DatabaseSync(plainPath)
+  db.exec('CREATE TABLE Row (id INTEGER PRIMARY KEY, marker INTEGER)')
+  const ins = db.prepare('INSERT INTO Row VALUES (?, ?)')
+  for (let i = 0; i < 100; i += 1) ins.run(i, marker)
+  db.close()
+  const plain = toReservedLayout(readFileSync(plainPath))
+  rmSync(plainPath, { force: true })
+  if (plain.length !== PAGE_SZ * 2) throw new Error(`夹具应为 2 页，实际 ${String(plain.length / PAGE_SZ)} 页`)
+  writeFileSync(file, encryptPlainDb(plain, rawKeyHex))
   return rel
 }
 
@@ -98,7 +145,7 @@ function makeRoots(cfg: Record<string, unknown>): { root: string; raw: string; d
 const listFiles = (dir: string): string[] => readdirSync(dir, { recursive: true, encoding: 'utf8' }) as string[]
 
 describe('decryptAllDbs：成功路径', () => {
-  it('合成库整树解密：目录结构镜像、内容真是解出来的、没有 .decrypt_tmp 残留', async () => {
+  it('真库整树解密：目录结构镜像、内容真是解出来的、没有临时文件残留', async () => {
     const { raw, decrypted } = makeRoots({ db_enc_key: RAW_KEY, key_format: 'wx_key_v4.1' })
     makeEncryptedDb(raw, 'message/msg_0.db')
     makeEncryptedDb(raw, 'contact/contact.db', RAW_KEY, 0x21)
@@ -109,13 +156,23 @@ describe('decryptAllDbs：成功路径', () => {
     const out = join(decrypted, 'message', 'msg_0.db')
     const bytes = readFileSync(out)
     expect(bytes.subarray(0, 16).toString('utf8'), '解密产物必须能被 sqlite 打开（页 1 头部）').toBe(SQLITE_HDR)
-    // 内容判据：页 2 的明文是我们的 marker+1，不是零、也不是原样透传的密文
-    expect(bytes.subarray(PAGE_SZ, PAGE_SZ + 8).every((b) => b === 0x5b), '页内容没被真正解出来').toBe(true)
-    const contact = readFileSync(join(decrypted, 'contact', 'contact.db'))
-    expect(contact.subarray(PAGE_SZ, PAGE_SZ + 4).every((b) => b === 0x22)).toBe(true)
+    expect(bytes.length, '真库夹具是 2 页，解密产物也应是 2 页').toBe(PAGE_SZ * 2)
+    // 内容判据：SQLite 自己能读出 marker 行 —— 证明页内容是真解出来的，不是零、也不是密文透传。
+    const mdb = new DatabaseSync(out, { readOnly: true })
+    try {
+      const rows = mdb.prepare('SELECT marker FROM Row WHERE id = 0').all() as Array<{ marker: number }>
+      expect(rows.map((r) => r.marker), '页内容没被真正解出来（读不到 marker 行）').toEqual([0x5a])
+    } finally { mdb.close() }
+    const contactBytes = readFileSync(join(decrypted, 'contact', 'contact.db'))
+    const cdb = new DatabaseSync(join(decrypted, 'contact', 'contact.db'), { readOnly: true })
+    try {
+      const rows = cdb.prepare('SELECT marker FROM Row WHERE id = 0').all() as Array<{ marker: number }>
+      expect(rows.map((r) => r.marker)).toEqual([0x21])
+    } finally { cdb.close() }
+    expect(contactBytes.subarray(PAGE_SZ, PAGE_SZ * 2).some((b) => b !== 0), '页 2 被解成了全零').toBe(true)
 
     // 临时文件不许留下（下一次「立即解密」不该读到上一次的半截）
-    expect(listFiles(decrypted).filter((f) => f.includes('.decrypt_tmp')), '留下了半截临时文件').toEqual([])
+    expect(listFiles(decrypted).filter((f) => /\.decrypt_(tmp|src|wal)$/.test(f)), '留下了半截临时文件').toEqual([])
   })
 
   it('进度回调每个库恰好一次、计数单调，并且**库与库之间让出过事件循环**（否则轮询进度的 RPC 会被饿死）', async () => {
@@ -185,7 +242,7 @@ describe('decryptAllDbs：失败必须局部化', () => {
     expect(res.ok).toBe(false)
     expect(existsSync(target), '失败的一轮把可用快照删掉了 —— 这正是 unlink-再-rename 的窗口').toBe(true)
     expect(readFileSync(target).equals(before), '旧快照被动过').toBe(true)
-    expect(listFiles(decrypted).filter((f) => f.includes('.decrypt_tmp')), '失败后残留临时文件').toEqual([])
+    expect(listFiles(decrypted).filter((f) => /\.decrypt_(tmp|src|wal)$/.test(f)), '失败后残留临时文件').toEqual([])
   })
 
   it('文件小于一个页 ⇒ 报「文件过小」，不产生目标文件', async () => {

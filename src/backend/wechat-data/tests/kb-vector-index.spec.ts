@@ -242,6 +242,38 @@ describe('searchKb：降级说明要说本次真话（V3）', () => {
     expect(at(r.hits, 0, 'hits').fileName).toBe('b.md')
   })
 
+  it('关键词 0 命中时，稠密按请求的 topK 取候选，融合结果也不超量', async () => {
+    // 三份文件都与查询“同字不同序”：稀疏按整句短语匹配 ⇒ 0 命中；
+    // 字符直方图桩会给出相近向量 ⇒ 稠密能召回三条。旧实现用 `Math.max(稀疏命中,1)`
+    // 给稠密定 topK，这里只会返回 1 条（恰好是稠密最该发挥作用的场景）。
+    addFile('c1.md', '预算与采购的比价结论，供应商甲。')
+    addFile('c2.md', '采购预算调整，供应商乙。')
+    addFile('c3.md', '预算采购比价，供应商丙。')
+    await gw.buildKbVectorIndex({ kbId })
+    const q = '预算采购比价供应商'
+    const sparseOnly = await gw.searchKb({ kbId, query: q, topK: 2 })
+    const r = await gw.searchKb({ kbId, query: q, topK: 2 })
+    expect(sparseOnly.stats.channels.find(c => c.channel === 'sparse')?.count, '前提：稀疏这一路确实 0 命中').toBe(0)
+    expect(r.hits, '稠密被稀疏命中数绑架，请求 2 条却只回 1 条').toHaveLength(2)
+    expect(r.stats.kept).toBe(2)
+    expect(r.stats.recalled, '召回统计仍只算稀疏一侧的旧值').toBeGreaterThanOrEqual(2)
+  })
+
+  it('建完索引后新增文件 ⇒ 状态报 incomplete；再建只补新增内容并恢复就绪', async () => {
+    addFile('old.md', '微信转账限额说明：单笔最高二十万元。')
+    await gw.buildKbVectorIndex({ kbId })
+    expect(gw.getKbVectorIndex({ kbId }).status.ready).toBe(true)
+
+    addFile('new.md', '玄武纪要：本季度采购计划与预算调整。')
+    const dirty = gw.getKbVectorIndex({ kbId }).status
+    expect(dirty.ready, '新增文件没有向量却仍报就绪 ⇒ 稠密通道静默漏内容').toBe(false)
+    expect(dirty.staleReason).toBe('incomplete')
+
+    const built = await gw.buildKbVectorIndex({ kbId })
+    expect(built.embedded, '应只补新增文件，而不是重算整库').toBe(1)
+    expect(gw.getKbVectorIndex({ kbId }).status.ready).toBe(true)
+  })
+
   it('embedding 抛错时关键词一路照常可用，且说明如实（H7）', async () => {
     addFile('a.md', '微信转账限额说明：单笔最高二十万元。')
     await gw.buildKbVectorIndex({ kbId })

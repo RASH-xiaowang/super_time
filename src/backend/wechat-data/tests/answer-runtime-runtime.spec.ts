@@ -18,6 +18,8 @@ import {
   resourcesFromEvidence,
   runAnswerRuntime,
 } from '../src/query/answer-runtime/runtime.ts'
+import type { AnswerSynthesisInput } from '../src/query/answer-runtime/types.ts'
+import { citationToAskCitation } from '../src/remotes/ask-runtime-prompt.ts'
 
 const NOW = new Date('2026-10-22T10:00:00')
 
@@ -234,6 +236,168 @@ describe('runAnswerRuntime', () => {
       local_id: 11,
       sender: '李四',
     })
+  })
+
+  it('综合阶段返回的未知引用被丢弃并降级，只保留本轮证据内的引用', async () => {
+    const run = vi.fn(() => ({
+      tool: 'search_messages' as const,
+      ok: true,
+      hits: [{
+        key: 'wxid_a:17',
+        name: '项目群',
+        time: '2026-10-20 10:00',
+        snippet: '合同原文已确认。',
+        source: 'msg' as const,
+        trace: { kind: 'msg' as const, username: 'wxid_a', localId: 17 },
+      }],
+    }))
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '工具完成。' })
+      }
+      return turn({ call: { id: 'call_cite', name: 'search_messages', args: { keywords: ['合同'] } } })
+    }) as unknown as RunChatTurnFn
+    let evidenceId = ''
+    const synthesize = vi.fn((synthesis: AnswerSynthesisInput) => {
+      const item = synthesis.evidence.items[0]
+      evidenceId = item?.evidenceId ?? ''
+      return {
+        answer: '合同已确认。 [1][2][3]',
+        citations: [
+          {
+            index: 1,
+            evidenceId,
+            source: 'msg' as const,
+            name: '项目群',
+            time: '2026-10-20 10:00',
+            snippet: '合同原文已确认。',
+            username: 'wxid_a',
+            local_id: 17,
+            locator: { type: 'message' as const, username: 'wxid_a', localId: 17, key: 'wxid_a:17' },
+          },
+          {
+            // evidenceId 是旧的，但 locator 仍能对应到本轮证据。
+            index: 2,
+            evidenceId: 'stale:evidence',
+            source: 'msg' as const,
+            name: '项目群',
+            time: '2026-10-20 10:00',
+            snippet: '合同原文已确认。',
+            username: 'wxid_a',
+            local_id: 17,
+            locator: { type: 'message' as const, username: 'wxid_a', localId: 17, key: 'wxid_a:17' },
+          },
+          {
+            // evidenceId 与 locator 都不在本轮证据里：必须丢弃。
+            index: 3,
+            evidenceId: 'bogus:evidence',
+            source: 'msg' as const,
+            name: '别的会话',
+            time: '',
+            snippet: '悬空引用',
+            username: 'wxid_other',
+            local_id: 99,
+            locator: { type: 'message' as const, username: 'wxid_other', localId: 99, key: 'wxid_other:99' },
+          },
+        ],
+      }
+    })
+
+    const out = await runAnswerRuntime(baseInput({
+      profileTools: [fakeTool('search_messages', run)],
+      runTurn,
+      synthesize,
+    }))
+
+    expect(evidenceId).not.toBe('')
+    expect(out.citations).toHaveLength(2)
+    expect(out.citations.map(citation => citation.evidenceId)).toContain(evidenceId)
+    expect(out.citations.every(citation => citation.username === 'wxid_a')).toBe(true)
+    expect(out.status).toBe('degraded')
+    expect(out.reason).toContain('无法对应到本轮证据')
+  })
+
+  it('综合阶段引用全部未知时回退到证据层引用，并标记降级', async () => {
+    const run = vi.fn(() => ({
+      tool: 'search_messages' as const,
+      ok: true,
+      hits: [{
+        key: 'wxid_a:18',
+        name: '项目群',
+        time: '2026-10-20 10:00',
+        snippet: '合同原文已确认。',
+        source: 'msg' as const,
+        trace: { kind: 'msg' as const, username: 'wxid_a', localId: 18 },
+      }],
+    }))
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '工具完成。' })
+      }
+      return turn({ call: { id: 'call_cite_bad', name: 'search_messages', args: { keywords: ['合同'] } } })
+    }) as unknown as RunChatTurnFn
+    let evidenceId = ''
+    const synthesize = vi.fn((synthesis: AnswerSynthesisInput) => {
+      evidenceId = synthesis.evidence.items[0]?.evidenceId ?? ''
+      return {
+        answer: '合同已确认。 [1]',
+        citations: [{
+          index: 1,
+          evidenceId: 'bogus:evidence',
+          source: 'msg' as const,
+          name: '别的会话',
+          time: '',
+          snippet: '悬空引用',
+          username: 'wxid_other',
+          local_id: 99,
+          locator: { type: 'message' as const, username: 'wxid_other', localId: 99, key: 'wxid_other:99' },
+        }],
+      }
+    })
+
+    const out = await runAnswerRuntime(baseInput({
+      profileTools: [fakeTool('search_messages', run)],
+      runTurn,
+      synthesize,
+    }))
+
+    expect(evidenceId).not.toBe('')
+    // 未知引用全部丢弃后回退到证据层引用，不产生悬空引用，也不丢可核对来源。
+    expect(out.citations).toHaveLength(1)
+    expect(out.citations[0]?.evidenceId).toBe(evidenceId)
+    expect(out.status).toBe('degraded')
+  })
+
+  it('撤回消息引用带 revoked 标记，并保留到 AskCitation', async () => {
+    const run = vi.fn(() => ({
+      tool: 'search_revoked' as const,
+      ok: true,
+      hits: [{
+        key: 'wxid_a:21',
+        name: '项目群',
+        time: '2026-10-20 10:00',
+        snippet: '撤回：合同作废',
+        source: 'msg' as const,
+        trace: { kind: 'msg' as const, username: 'wxid_a', localId: 21 },
+      }],
+    }))
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '工具完成。' })
+      }
+      return turn({ call: { id: 'call_revoked', name: 'search_revoked', args: { query: '合同' } } })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runAnswerRuntime(baseInput({
+      profileTools: [fakeTool('search_revoked', run)],
+      runTurn,
+      synthesize: () => '合同已撤回。 [1]',
+    }))
+
+    expect(out.citations).toHaveLength(1)
+    expect(out.citations[0]?.revoked).toBe(true)
+    const askCitation = citationToAskCitation(out.citations[0]!)
+    expect(askCitation.revoked).toBe(true)
   })
 
   it('固定范围下 list_sessions 不暴露，残留调用只降级且保留目标会话 8 条消息', async () => {

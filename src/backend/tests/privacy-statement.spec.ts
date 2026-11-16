@@ -82,6 +82,33 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     }
   })
 
+  /**
+   * 口径盲区补扫（2026-11-13）：上面的联合只收「类文件 + `gateway-*` + `remotes/**`」，
+   * 而 `query/**` 里同样可能有出站调用（推荐回复的 KB 检索就在 `query/reply-kb.ts`）。
+   * 实现从网关继续下沉时，上一条用例会**静默通过** —— 新功能的 `privacyGate(...)` 或
+   * `makeEmbedFn(..., '新功能名')` 落在 `query/` 下就没人检查文档写没写。这里把整棵树
+   * 扫一遍，口径与上一条相同。
+   */
+  it('query/** 里的出站调用也必须出现在文档里', () => {
+    const base = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query')
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) return walk(p)
+      return e.isFile() && e.name.endsWith('.ts') && !e.name.includes('.spec.') ? [p] : []
+    })
+    const code = stripComments(walk(base).map((p) => readFileSync(p, 'utf8')).join('\n'))
+    const features = [...new Set([
+      ...[...code.matchAll(/privacyGate\(\s*'([^']+)'/g)].map((m) => m[1]),
+      ...[...code.matchAll(/makeEmbedFn\([^)]*?'([^']+)'/g)].map((m) => m[1]),
+      ...[...code.matchAll(/makeChatAsker\([^)]*?'([^']+)'/g)].map((m) => m[1]),
+    ])].filter((f): f is string => Boolean(f))
+    // 防空转：`query/reply-kb.ts` 的 kb_embed 调用必须在扫描结果里，否则说明 walk 坏了
+    expect(features).toContain('kb_embed')
+    for (const f of features) {
+      expect(doc, `query/** 里的出站功能 ${f} 没写进隐私声明`).toContain(f)
+    }
+  })
+
   it('知识库建索引必须走**独立**的审计功能名 kb_embed（否则审计里分不开哪类数据出网）', () => {
     const code = stripComments(gateway)
     // 只多一个字符串常量是不够的：必须看到 makeEmbedFn(..., 'kb_embed') 这个**真实调用点**

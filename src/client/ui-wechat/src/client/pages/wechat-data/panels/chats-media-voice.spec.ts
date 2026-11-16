@@ -135,7 +135,10 @@ describe('媒体加载态不显示项目专属文案', () => {
     await flush()
 
     expect(host.textContent).not.toContain('加载中')
-    expect(host.querySelector('[data-loading="true"]')).not.toBeNull()
+    // 取图期间画的是定尺寸骨架（2026-11-15：芯片只有几十像素，图到了再涨 100px 会把
+    // 下一行压住；表情行必须先占住 130px）。判据仍是「只有空白占位、没有项目文案」。
+    expect(host.querySelector('[class*="msgImageSkeleton"]'), '取图期间应当只留空白占位').not.toBeNull()
+    expect(host.querySelector('[data-loading="true"]')).toBeNull()
     expect(host.innerHTML).not.toContain('0123456789abcdef0123456789abcdef')
   })
 })

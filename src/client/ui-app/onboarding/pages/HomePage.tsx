@@ -23,7 +23,7 @@ import { FIRST_RUN_STEPS, QUESTION_CARDS } from '../onboarding-content.tsx'
  */
 const FACTS = [
   { k: 'MODULES', v: '16' },
-  { k: 'REMOTE API', v: '224' },
+  { k: 'REMOTE API', v: '234' },
 ] as const
 
 /** 一次「高频问法」点击：跳去功能引导那一页（把问句对上侧栏分组）。 */

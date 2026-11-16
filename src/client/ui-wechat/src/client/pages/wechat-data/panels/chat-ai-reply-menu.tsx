@@ -15,9 +15,17 @@ export interface ChatAiReplyUiState {
   personaName: string
   personaPrompt: string
   splitReply: boolean
+  kbEnabled: boolean
+  kbId: number
   onToggle: () => void
   onScanNow: () => void
-  onSavePersona: (input: { name: string; prompt: string; splitReply: boolean }) => Promise<boolean>
+  onSavePersona: (input: {
+    name: string
+    prompt: string
+    splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
+  }) => Promise<boolean>
 }
 
 /**
@@ -77,9 +85,10 @@ export function ChatAiReplyMenu(props: {
           className={csscards.msgHeaderMoreItem}
           disabled={aiReply === undefined || aiReply.busy || !aiReply.ready}
           {...desktopActionProps()}
-          title={aiReply?.error ?? (aiReply?.personaName
-            ? '当前人格：' + aiReply.personaName
-            : '配置本会话的 AI 回复人格与语气')}
+          title={aiReply?.error ?? [
+            aiReply?.personaName ? '当前人格：' + aiReply.personaName : '配置本会话的 AI 回复人格与语气',
+            aiReply?.kbEnabled === true ? '知识库：参与回复' : '',
+          ].filter(Boolean).join('\n')}
           onClick={() => {
             onCloseMenu()
             onOpenSettings()
@@ -133,6 +142,8 @@ export function ChatAiReplySettingsHost(props: {
       initialName={aiReply.personaName}
       initialPrompt={aiReply.personaPrompt}
       initialSplitReply={aiReply.splitReply}
+      initialKbEnabled={aiReply.kbEnabled}
+      initialKbId={aiReply.kbId}
       saving={aiReply.busy}
       {...(aiReply.error === undefined ? {} : { error: aiReply.error })}
       onClose={onClose}

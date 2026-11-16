@@ -127,6 +127,20 @@ function createBrowserHandoff(deps) {
     };
   }
 
+  /**
+   * 回滚本次交接启动的服务。
+   *
+   * 顺序是刻意的：**先停服**（纯内存/本地操作，不依赖后端就绪与许可证），
+   * 再 best-effort 把配置改回 false。反过来写的话，后端不可用 / 未授权时
+   * `savePatch` 会失败并提前 return，端口就留在那里继续接受连接。
+   * @param {boolean} startedHere - 服务是否由这次交接启动。
+   */
+  async function rollbackStartedService(startedHere) {
+    if (startedHere !== true) return;
+    try { await deps.remoteAccess.stop(); } catch { /* stop 幂等，失败也继续关配置 */ }
+    try { await control.setEnabled(false); } catch { /* 配置回写尽力而为 */ }
+  }
+
   /** 在右下角显示卡片（已存在则只保证可见）。 */
   function showCard() {
     if (card && !card.isDestroyed()) { card.showInactive(); return; }
@@ -136,7 +150,7 @@ function createBrowserHandoff(deps) {
     card = new deps.BrowserWindow({
       x, y, width: CARD_WIDTH, height: CARD_HEIGHT,
       frame: false, transparent: true, resizable: false, movable: true,
-      minimizable: false, maximizable: false, fullscreenable: false,
+      minimizable: false, maximizable: false, fullscreenable: false, closable: false,
       alwaysOnTop: true, skipTaskbar: true, hasShadow: true,
       show: false,
       webPreferences: {
@@ -146,7 +160,14 @@ function createBrowserHandoff(deps) {
     });
     card.setAlwaysOnTop(true, 'screen-saver');
     card.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
-    card.on('closed', () => { card = null; });
+    // 有些平台/窗口管理器不认 closable 选项，快捷键仍可能把卡片关掉。
+    // 因此「卡片被关」本身也必须等于「返回桌面」——否则主窗口还藏着，用户无路可回。
+    try { card.setClosable?.(false); } catch { /* 平台不支持就算了 */ }
+    card.on('closed', () => {
+      card = null;
+      // restore() 会先把 active 置 false 再销毁卡片，所以这里不会递归。
+      if (active) void restore();
+    });
     card.once('ready-to-show', () => {
       if (card && !card.isDestroyed()) card.showInactive();
     });
@@ -183,14 +204,14 @@ function createBrowserHandoff(deps) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     if (!session.ok) {
-      if (session.startedHere) { try { await control.setEnabled(false); } catch { /* 回滚尽力而为 */ } }
+      await rollbackStartedService(session.startedHere);
       return { ok: false, error: session.error };
     }
     try {
       await deps.openExternal(session.url);
     } catch (e) {
       // 系统没有默认浏览器 / 打开被拒绝：不要让桌面端“消失”在一个打不开的网页后面。
-      if (session.startedHere) { try { await control.setEnabled(false); } catch { /* 回滚尽力而为 */ } }
+      await rollbackStartedService(session.startedHere);
       return { ok: false, error: `打开默认浏览器失败：${e instanceof Error ? e.message : String(e)}` };
     }
     active = true;
@@ -202,6 +223,9 @@ function createBrowserHandoff(deps) {
       active = false;
       startedService = false;
       closeCard();
+      // 卡片建不出来也要把本次交接启动的服务收掉：窗口已经 show 回来，
+      // 但浏览器可能已经被打开（openExternal 先成功了），不能留下一个无人管理的入口。
+      await rollbackStartedService(session.startedHere);
       showDesktop();
       return { ok: false, error: `创建悬浮卡片失败：${e instanceof Error ? e.message : String(e)}` };
     }
@@ -210,6 +234,9 @@ function createBrowserHandoff(deps) {
 
   /**
    * 收回到桌面：停服务（会话全部作废）→ 关卡片 → 显示主窗口。
+   *
+   * 停服务必须**无条件先做**：它是纯本地操作，不依赖后端就绪、也不依赖许可证；
+   * 先写配置的话，后端不可用/未授权会让流程提前失败，浏览器那边的会话继续有效。
    * @returns `{ ok: boolean }`。
    */
   async function restore() {
@@ -220,14 +247,16 @@ function createBrowserHandoff(deps) {
     }
     active = false;
     closeCard();
+    // ① 先停服：stop() 内部会 revokeAll()，浏览器手里的 Cookie 立刻失效。
+    try { await deps.remoteAccess.stop(); } catch { /* 没在跑/已停过：幂等失败不挡收尾 */ }
     try {
       if (startedService) {
-        // 这次交接自己开的服务：连配置一起关掉，别让端口留到下次启动。
+        // 这次交接自己开的服务：再 best-effort 把配置关掉，别让端口留到下次启动。
+        // 即使这里失败（后端不可用），上面的 stop() 也已经让浏览器断开了。
         await control.setEnabled(false);
       } else {
-        // 用户原本就开着远程访问（手机）：保留配置，但 stop() 会作废**全部**会话，
-        // 重启后浏览器手里的 Cookie 已经无效 —— 这就是「浏览器自动断开」。
-        await deps.remoteAccess.stop();
+        // 用户原本就开着远程访问（手机）：保留配置，重新对齐让手机继续可用。
+        // 此时浏览器会话已经在 stop() 里作废 —— 这就是「浏览器自动断开」。
         await deps.remoteAccess.syncWithConfig();
       }
     } catch { /* 停服失败也必须把桌面还回去 */ }

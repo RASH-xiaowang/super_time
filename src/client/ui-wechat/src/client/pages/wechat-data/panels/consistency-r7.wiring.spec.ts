@@ -47,6 +47,15 @@ function jsxElementEnd(src: string, start: number): number {
   return -1
 }
 
+/**
+ * 明确豁免 `desc` 的面板：用户对个别面板另有「页头压到两行」的要求，
+ * 描述被收进标题的 `title`（悬停即见）。每条都要写出覆盖它的那份守卫。
+ */
+const DESC_EXEMPT: Readonly<Record<string, string>> = {
+  'kb-files-panel.tsx': '2026-10-17 用户要求页头只占两行：描述收进 KbTitleRow 的 title，'
+    + '由 kb-reader.wiring.spec.ts「描述收进 title，不再占独立一行」钉住',
+}
+
 describe('U12 · 页头口径：有 PanelHeader 就要有 desc', () => {
   it('每个用 PanelHeader 的面板都传了 desc（或显式展开 header 属性）', () => {
     const files = readdirSync(HERE).filter((f) => f.endsWith('.tsx'))
@@ -60,7 +69,7 @@ describe('U12 · 页头口径：有 PanelHeader 就要有 desc', () => {
         const slash = jsxElementEnd(src, i)
         expect(slash, `${f}: 找不到 PanelHeader 元素的结尾 —— 写法变了，本用例的扫描规则要跟着改`).toBeGreaterThan(i)
         const seg = src.slice(i, slash)
-        if (!/\bdesc=/.test(seg) && !seg.includes('{...')) missing.push(f)
+        if (!/\bdesc=/.test(seg) && !seg.includes('{...') && DESC_EXEMPT[f] === undefined) missing.push(f)
         heads++
         i = src.indexOf('<PanelHeader', slash)
       }

@@ -7,7 +7,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
-import { messagesMatchTalker } from './msg-scope.ts'
 import { SessionAsk } from './SessionAsk.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
@@ -24,6 +23,7 @@ import { ChatsView } from './chats-view.tsx'
 import { MSG_MENU_ITEM_HEIGHT, MSG_MENU_WIDTH, type MsgMenuAnchor } from './chats-msg-menu.tsx'
 import { useChatsMenuAction, useChatsMessageTools } from './chats-message-tools.tsx'
 import { useChatsThread } from './chats-thread.tsx'
+import { resetSessionOverlays } from './chats-session-scope.ts'
 import type { ChatNavigationTarget } from './chats-target.ts'
 import { useChatsMsgSearch } from './chats-msg-search.tsx'
 import { useChatsGroupInfo } from './chats-group-info.tsx'
@@ -184,8 +184,29 @@ function useChatsPanelState(initialView: ChatView) {
     sessionEpochRef.current === epoch && messagesTalkerRef.current === talker
   )
 
+  /**
+   * 会话归属令牌的「渲染期镜像」。
+   *
+   * `sessionEpoch` 是状态，`sessionEpochRef` 是同步令牌：`beginSession` 先推进 ref、
+   * 再通过 `onSessionBegin` 推状态。两者之间如果发生一次渲染，`curSession` 已经是
+   * 新会话、`messages` 还是上一个会话的那一份 —— 消息流会以「新会话的标题 + 旧会话的
+   * 消息」画出一帧，正是用户看到的「原界面的消息被带到了第二个界面」。
+   * 用 ref 记下当前 epoch，让 `messagesMatchSession` 在状态追上之前一律判为不匹配。
+   */
+  const messagesEpochRef = useRef(0)
+  const onSessionBegin = useCallback((epoch: number): void => {
+    messagesEpochRef.current = epoch
+    setSessionEpoch(epoch)
+  }, [])
+
+  /** 当前消息列表是否属于正在显示的会话（身份 + 纪元；定义理由见 `messagesEpochRef`）。 */
+  const messagesMatchSession = curSession !== null
+    && messagesTalkerRef.current === curSession.username
+    && messagesEpochRef.current === sessionEpoch
+
   const closeCurrentSession = useCallback((): void => {
     sessionEpochRef.current += 1
+    messagesEpochRef.current = sessionEpochRef.current
     setSessionEpoch(sessionEpochRef.current)
     messagesTalkerRef.current = null
     inFlightRef.current = false
@@ -228,7 +249,8 @@ function useChatsPanelState(initialView: ChatView) {
     curSession, setCurSession, contactInfoOpen, setContactInfoOpen, messages, setMessages,
     msgLoading, setMsgLoading, msgError, setMsgError, hasMore, setHasMore, cursor, setCursor,
     cursorLocalId, setCursorLocalId, moreOpen, setMoreOpen, watermarkRef, watermarkLocalIdRef, inFlightRef,
-    sessionEpochRef, sessionEpoch, setSessionEpoch, messagesTalkerRef, suggestOpen, setSuggestOpen,
+    messagesMatchSession,
+    sessionEpochRef, sessionEpoch, setSessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin, suggestOpen, setSuggestOpen,
     analysisPaneOpen, setAnalysisPaneOpen, analysisTarget, setAnalysisTarget, aiOpen, setAiOpen,
     aiFull, setAiFull, pollStatus, setPollStatus, selfWxid, setSelfWxid, typeStats, setTypeStats,
     msgEndRef, viewer, setViewer, pinnedCollapsed, setPinnedCollapsed, setWatermarkFrom,
@@ -273,14 +295,18 @@ function useChatsSessionEffects({
     setError(null)
     if (sessionSearching) {
       let cancelled = false
-      setLoading(true)
-      void apiGetSessions({ keyword: sessionSearch.trim(), limit: 500 })
-        .then((env) => {
-          if (!cancelled) setSessions(env.sessions)
-        })
-        .catch((error: unknown) => { if (!cancelled) setError((error as Error).message) })
-        .finally(() => { if (!cancelled) setLoading(false) })
-      return () => { cancelled = true }
+      // 列表本身已按关键词本地过滤，服务端检索只用于补全「已加载 500 条之外」的结果。
+      // 每个按键都发一次 = 输入 “abc” 白跑 3 次 500 条查询；250ms 合并成一次。
+      const timer = setTimeout(() => {
+        setLoading(true)
+        void apiGetSessions({ keyword: sessionSearch.trim(), limit: 500 })
+          .then((env) => {
+            if (!cancelled) setSessions(env.sessions)
+          })
+          .catch((error: unknown) => { if (!cancelled) setError((error as Error).message) })
+          .finally(() => { if (!cancelled) setLoading(false) })
+      }, 250)
+      return () => { cancelled = true; clearTimeout(timer) }
     }
     sessionsPager.reset()
     return undefined
@@ -338,9 +364,12 @@ function useChatsAvatarPrefetch(
   setAvatarVersion: React.Dispatch<React.SetStateAction<number>>,
 ): void {
   useEffect(() => {
+    // 只扫最近一小段消息：更早消息的发送者在它们首次出现的那些拍里已经预取过，
+    // 每拍都把整段已加载历史（可能几千条）平铺一遍纯属重复劳动。
+    const recent = messages.length > 200 ? messages.slice(-200) : messages
     const keys = [
       ...sessions.map((session) => session.username),
-      ...messages.map((message) => message.sender ?? ''),
+      ...recent.map((message) => message.sender ?? ''),
       ...(curSession ? [curSession.username] : []),
     ]
     const unique = [...new Set(keys.filter(Boolean))].filter((username) => avatarCache.get(username) === undefined)
@@ -444,7 +473,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTarg
     curSession, setCurSession, contactInfoOpen, setContactInfoOpen, messages, setMessages,
     msgLoading, setMsgLoading, msgError, setMsgError, hasMore, setHasMore, cursor, setCursor,
     cursorLocalId, setCursorLocalId, moreOpen, setMoreOpen, watermarkRef, watermarkLocalIdRef, inFlightRef,
-    sessionEpochRef, sessionEpoch, setSessionEpoch, messagesTalkerRef, suggestOpen, setSuggestOpen,
+    messagesMatchSession,
+    sessionEpochRef, sessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin, suggestOpen, setSuggestOpen,
     analysisPaneOpen, setAnalysisPaneOpen, analysisTarget, setAnalysisTarget, aiOpen, setAiOpen,
     aiFull, setAiFull, pollStatus, setPollStatus, selfWxid, setSelfWxid, typeStats, setTypeStats,
     msgEndRef, viewer, setViewer, pinnedCollapsed, setPinnedCollapsed, setWatermarkFrom,
@@ -545,7 +575,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTarg
   const msgVirtualListRef = useRef<HTMLDivElement | null>(null)
   /** 虚拟列表前面还有“加载更多”等正常流内容；TanStack 需要这段偏移量。 */
   const msgVirtualScope = (curSession?.username ?? '') + '\u0000' + String(sessionEpoch)
-  const messagesMatchSession = curSession !== null && messagesTalkerRef.current === curSession.username
   const { msgItems, msgScrollMargin, msgVirtualizer } = useChatsMessageVirtualizer({
     messages,
     scopeKey: msgVirtualScope,
@@ -598,7 +627,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTarg
   }, [setMsgMenu])
 
   /** 菜单项分发：把「声明式条目」落到具体的面板动作上。 */
-  const { changeView, jumpToLatest, loadMore, newMsgCount, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgListRef: msgVirtualListRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef, watermarkLocalIdRef, onInitialTargetHandled, onSessionBegin: setSessionEpoch })
+  const { changeView, jumpToLatest, loadMore, newMsgCount, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgListRef: msgVirtualListRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef, watermarkLocalIdRef, onInitialTargetHandled, onSessionBegin })
 const {
     calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calTop, calTotal, calYear,
     jumpToDay, openCalendar, refreshCurrentMonth, switchCalMonth,
@@ -635,19 +664,19 @@ const {
 
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
-  // 换会话时只清「分析」的选中（localId 只在会话内唯一，留着会把上个会话的分析显示过来）。
-  // 两块右栏的开/关**不**再随换会话重置（2026-10-13 反转）：默认关、头部按钮是唯一入口，
-  // 用户的选择应当跟着人走，而不是每换一个会话就被强行打开一次。
+  // 换会话收起所有「装着上一个会话内容」的浮层（清单与理由见 chats-session-scope.ts）。
+  // 两块右栏的开/关**不**在此列：默认关、头部按钮是唯一入口，选择跟着人走（2026-10-13 反转）。
+  const closeMessageTool = messageTools.closeNow
   useEffect(() => {
-    setAnalysisTarget(null)
-  }, [curSession?.username])
+    resetSessionOverlays({ setAnalysisTarget, setViewer, setChatlogStack, setMsgMenu, closeMessageTool, setEditedOpen, stopVoice: stopCurrentVoice })
+  }, [curSession?.username, closeMessageTool])
 
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
     calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, refreshCurrentMonth, setCalOpen, switchCalMonth },
     edited: { doReset, editedOpen, editing, edits, setEditedOpen },
     exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportState, exportSession, finishing, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
     groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, onExport: () => setExportOpen(true), setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
-    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession, dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession, dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
   }
 
   // 编辑/草稿与复制/打开文件共用一条回执（同一时刻不会同时做两件事；都有值时编辑优先）。

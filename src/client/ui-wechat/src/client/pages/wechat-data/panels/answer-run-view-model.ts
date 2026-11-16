@@ -9,7 +9,6 @@ import {
   askNodeStatusOf,
   askRunOutcomeLabel,
   askRunPhaseLabel,
-  formatAskRunDuration,
   isAskTimeoutSignal,
   runningAskStage,
   type AskNodeStatus,
@@ -119,16 +118,29 @@ export function statusTitle(input: {
 }): string {
   if (!input.streaming) return askRunOutcomeLabel(input.outcome)
   const running = runningAskStage(input.stages)
+  const round = running?.round
   if (input.phase === 'tool_calling' && running !== undefined) {
-    return `${askRunPhaseLabel(input.phase)} · ${askToolLabel(running)}`
+    return round !== undefined
+      ? `${askRunPhaseLabel(input.phase)} · ${askToolLabel(running)} · 第 ${String(round)} 轮`
+      : `${askRunPhaseLabel(input.phase)} · ${askToolLabel(running)}`
+  }
+  if (input.phase === 'thinking' && round !== undefined) {
+    return `${askRunPhaseLabel(input.phase)} · 第 ${String(round)} 轮`
   }
   return askRunPhaseLabel(input.phase)
 }
 
+/**
+ * 执行轨迹折叠条摘要。
+ *
+ * 刻意不用「思考 53s」这类墙钟跨度：一轮问答会跨多次模型调用，跨度包含工具
+ * 执行与轮间等待，用户会误以为模型空想了 53 秒。这里只陈述可核对的计数；
+ * 真实思考时长放在运行指标里（按区间累计，见 `buildAskRunMetrics`）。
+ */
 export function processSummary(input: {
   tools: readonly ToolView[]
-  thinking: string
-  thinkingDuration?: number
+  rounds: number
+  thinkingSegments: number
   evidence: readonly EvidenceRow[]
   hasPlan: boolean
   streaming: boolean
@@ -137,12 +149,10 @@ export function processSummary(input: {
     const status = toolStatus(tool, !input.streaming)
     return status === 'error' || status === 'timeout'
   }).length
-  const thinkingDuration = formatAskRunDuration(input.thinkingDuration)
   const parts = [
+    input.rounds > 1 ? `${String(input.rounds)} 轮` : '',
     input.tools.length > 0 ? `${String(input.tools.length)} 个工具` : '',
-    input.thinking !== ''
-      ? thinkingDuration !== undefined ? `思考 ${thinkingDuration}` : '思考记录'
-      : '',
+    input.thinkingSegments > 0 ? `思考 ${String(input.thinkingSegments)} 段` : '',
   ].filter(Boolean)
   if (parts.length === 0 && input.evidence.length > 0) {
     parts.push(`${String(input.evidence.length)} 条证据`)

@@ -311,7 +311,9 @@ export function readDocEntities(decryptedDir: string, kbId: number): { items: Do
         'SELECT e.file_id AS file_id, f.name AS file_name, e.label AS label, e.kind AS kind, '
         + 'e.weight AS weight, e.model AS model, e.created_at AS created_at '
         + 'FROM ' + KB_ENTITIES_TABLE + ' e JOIN kb_files f ON f.id = e.file_id '
-        + 'WHERE e.kb_id = ? ORDER BY e.weight DESC, e.label ASC',
+        // 与抽取入口同一条隐私边界：关掉「参与语义检索」的文件，
+        // 它的实体标签也不能再随图谱/链接建议出网。数据保留，重新打开即恢复。
+        + 'WHERE e.kb_id = ? AND f.include_in_rag = 1 ORDER BY e.weight DESC, e.label ASC',
       ).all(kbId) as Array<Record<string, unknown>>
     } catch {
       // 表还不存在（这个库从没抽过实体）⇒ 空，不是错误
@@ -378,14 +380,18 @@ export function kbEntitySummary(decryptedDir: string, kbId: number): KbEntitySum
         ensureEntitiesTableReadOnly(db)
         // LEFT JOIN 数「一个实体都没有的文件」：按钮要告诉用户还有几个没抽，
         // 而不是只报「已抽 N 条」—— 后者在「抽了 3 个文件各 20 条」时看起来像快做完了。
-        const agg = db.prepare('SELECT COUNT(*) AS c FROM '
-          + KB_ENTITIES_TABLE + ' WHERE kb_id = ?').get(kb) as { c?: number }
+        // 只数仍参与语义检索的文件：实体标签属于文件派生内容，
+        // 文件关掉出网开关后它不该继续出现在“已抽 N 条”的进度里。
+        const agg = db.prepare('SELECT COUNT(*) AS c FROM ' + KB_ENTITIES_TABLE + ' e '
+          + 'JOIN kb_files f ON f.id = e.file_id WHERE e.kb_id = ? AND f.include_in_rag = 1').get(kb) as { c?: number }
         entities = Number(agg?.c ?? 0)
         if (entities > 0) {
           // 「最近一次用的模型」按时间取，不能按 model 字符串取最大 —— 字母序会把
           // 「上个月换回去的旧模型」报成当前这批里最新的那个。
-          const last = db.prepare('SELECT model FROM ' + KB_ENTITIES_TABLE
-            + ' WHERE kb_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(kb) as { model?: string }
+          const last = db.prepare('SELECT e.model AS model FROM ' + KB_ENTITIES_TABLE + ' e '
+            + 'JOIN kb_files f ON f.id = e.file_id '
+            + 'WHERE e.kb_id = ? AND f.include_in_rag = 1 '
+            + 'ORDER BY e.created_at DESC, e.id DESC LIMIT 1').get(kb) as { model?: string }
           model = String(last?.model ?? '')
         }
         pending = (db.prepare('SELECT COUNT(*) AS c FROM kb_files f '

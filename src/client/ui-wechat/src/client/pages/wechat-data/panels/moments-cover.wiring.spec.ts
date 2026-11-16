@@ -97,6 +97,10 @@ describe('朋友圈：图片失败要有占位，不能留空格子', () => {
     // 链接封面的 🔗 占位（本轮最初修的就是它）与它的样式都还在
     expect(sites.some((s) => s.text.includes('css.linkCoverFallback')), '链接封面没有 🔗 占位').toBe(true)
     expect(momentsCss, '缺少占位样式').toMatch(/\.linkCoverFallback\s*\{/)
+    // 文章隐藏九宫格后，链接封面仍要靠外层固定尺寸节点的 data-sns-key 触发解码；
+    // RemoteImg 在拿到 data URL 前不渲染 <img>，钥匙挂在它身上会永久消失。
+    expect(moments, '链接封面没有登记 SNS 观察键').toContain('data-sns-key={coverKey || undefined}')
+    expect(moments, '链接封面空地址时又退回空框').toContain('empty={<span className={css.linkCoverFallback}')
     // 反例：`display = 'none'` 正是留空格子的写法；failedImgs 那台状态机已被代理的确定信号取代
     expect(moments, '仍有把 img 藏掉的旧写法').not.toMatch(/style\.display = 'none'/)
     expect(moments, 'failedImgs 已被 RemoteImg 的 pending/failed 取代').not.toMatch(/failedImgs/)

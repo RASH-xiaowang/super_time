@@ -326,10 +326,17 @@ function commitReady(
   const db: DatabaseSync = openStore(decryptedDir)
   try {
     inTransaction(db, () => {
-      insertChunks(db, job.id, job.kbId, chunked.chunks)
-      db.prepare(
+      /**
+       * **先 UPDATE，再判 changes**：解析是异步的（B 档要几秒），这期间用户完全可能
+       * 把这个文件删掉（或连库一起删）。旧顺序先插块、后更新行，文件行没了照样插，
+       * 于是 `kb_chunks` / FTS 里留下永远不可见的孤儿（搜索要 JOIN `kb_files`）。
+       * 行不在了就不写块；同事务里 UPDATE 失败会连同插入一起回滚。
+       */
+      const updated = db.prepare(
         'UPDATE kb_files SET parse_state = ?, parser = ?, parse_error = ?, chunk_count = ?, char_count = ?, updated_at = ? WHERE id = ?',
       ).run('ready', parser, composeParseNote(note, truncated), chunked.chunkCount, chunked.charCount, Date.now(), job.id)
+      if (Number(updated.changes ?? 0) === 0) return
+      insertChunks(db, job.id, job.kbId, chunked.chunks)
     })
   } finally {
     try {

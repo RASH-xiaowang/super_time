@@ -18,7 +18,21 @@
  */
 import { searchKb } from '../kb-search.ts'
 import { searchDense, vectorIndexStatus, type EmbedFn } from '../retrieval/embedding.ts'
+import { fmtDateTimeSec } from '../../format.ts'
 import { argInt, argString, type RetrievalTool, type ToolResult } from './types.ts'
+
+/** `YYYY-MM-DD` → 当天 00:00（本地时区）的 epoch 秒。 */
+function dayStartSec(day: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  if (!m) return 0
+  return Math.floor(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0).getTime() / 1000)
+}
+
+/** `YYYY-MM-DD` → 当天 23:59:59（本地时区）的 epoch 秒。 */
+function dayEndSec(day: string): number {
+  const start = dayStartSec(day)
+  return start === 0 ? 0 : start + 86_399
+}
 
 /** 知识库文件检索。 */
 export const searchKbTool: RetrievalTool = {
@@ -115,36 +129,36 @@ export function makeSearchSemanticTool(embedFn?: EmbedFn, embedModel = ''): Retr
       const username = ctx.scope?.username?.trim() || argString(args['username']).trim()
       const from = ctx.scope?.from?.trim() || argString(args['from']).trim()
       const to = ctx.scope?.to?.trim() || argString(args['to']).trim()
-      if (from !== '' || to !== '') {
-        return {
-          tool: 'search_semantic',
-          ok: false,
-          error: '当前向量检索接口不支持按日期范围过滤（超出可执行的数据范围）',
-          errorCode: 'unsupported_scope',
-          errorDetails: {
-            argument: from !== '' ? 'from' : 'to',
-            ...(from !== '' ? { from } : {}),
-            ...(to !== '' ? { to } : {}),
-          },
-          hits: [],
-        }
-      }
+      // 向量检索本身不带时间条件，但结果里每条都有 create_time。既然 schema
+      // 声明了 from/to，就必须兑现：先多取候选，再按本地日期过滤。旧实现直接
+      // 报 unsupported_scope，而 profile 锁定时又会自动注入日期，导致「只要
+      // 问题带时间范围，语义检索就必然失败」（审计 2026-11-13）。
+      const lo = dayStartSec(from)
+      const hi = dayEndSec(to)
+      const inRange = (sec: number): boolean =>
+        (lo === 0 || sec >= lo) && (hi === 0 || sec <= hi)
+      const candidate = lo > 0 || hi > 0 ? Math.min(limit * 10, 120) : limit
       try {
         const res = await searchDense(ctx.decryptedDir, q, embedFn, {
-          topK: limit,
+          topK: candidate,
           minSimilarity: 0.2,
           candidatePool: 2000,
           ...(username ? { username } : {}),
         })
-        const hits = res.docs.filter(d => !username || d.username === username).map((d, i) => ({
-          key: d.docKey,
-          name: d.name,
-          time: d.create_time ? new Date(d.create_time * 1000).toISOString().slice(0, 16).replace('T', ' ') : '',
-          snippet: d.snippet || d.text.slice(0, 200),
-          ...(d.sender ? { sender: d.sender } : {}),
-          source: 'msg' as const,
-          score: res.scores[i] ?? 0,
-        }))
+        // 先保留原始下标再过滤：直接 filter 后拿 `res.scores[i]` 会张冠李戴。
+        const hits = res.docs
+          .map((doc, index) => ({ doc, score: res.scores[index] ?? 0 }))
+          .filter(({ doc }) => (!username || doc.username === username) && inRange(doc.create_time))
+          .slice(0, limit)
+          .map(({ doc: d, score }) => ({
+            key: d.docKey,
+            name: d.name,
+            time: d.create_time ? fmtDateTimeSec(d.create_time) : '',
+            snippet: d.snippet || d.text.slice(0, 200),
+            ...(d.sender ? { sender: d.sender } : {}),
+            source: 'msg' as const,
+            score,
+          }))
         return {
           tool: 'search_semantic', ok: true, hits,
           note: `语义检索「${q}」→ ${hits.length} 条${embedModel ? `（${embedModel}）` : ''}`,

@@ -111,25 +111,31 @@ function citationsFixture(): HybridSearchExecution {
 }
 
 describe('AnswerProfile：白名单与边界', () => {
-  it('wechat-ask 覆盖完整工具集（现有 13 个 + search_hybrid）', () => {
+  it('wechat-ask 覆盖完整工具集（20 个工具，含 search_hybrid）', () => {
     const profile = ANSWER_PROFILES['wechat-ask']
     expect(profile.allowedTools.length).toBe(TOOL_NAMES.length)
     for (const name of TOOL_NAMES) expect(isToolAllowed(profile, name), `缺少 ${name}`).toBe(true)
     expect(profile.allowedTools).toContain('search_hybrid')
   })
 
-  it('session-ask 只保留消息检索/上下文/聚合/混合兜底', () => {
+  it('session-ask 只保留消息检索/上下文/聚合/混合兜底与会话可收敛的专用工具', () => {
     const profile = ANSWER_PROFILES['session-ask']
     expect([...profile.allowedTools].sort()).toEqual([
+      'aggregate_media',
       'aggregate_messages',
+      'get_call_history',
+      'get_funds_summary',
+      'get_group_detail',
       'get_message_context',
       'get_session_messages',
       'search_hybrid',
       'search_messages',
+      'search_revoked',
       'search_semantic',
     ].sort())
-    // 联系人/朋友圈/收藏/文件/知识库/会话列表都不该出现在会话内问答里
-    for (const name of ['search_kb', 'list_sessions', 'search_contacts', 'search_moments', 'search_favorites', 'search_files', 'search_records']) {
+    // 联系人/朋友圈/收藏/文件/知识库/会话列表都不该出现在会话内问答里；
+    // get_moments_stats 是朋友圈统计（天然跨会话），同样不允许。
+    for (const name of ['search_kb', 'list_sessions', 'search_contacts', 'search_moments', 'get_moments_stats', 'search_favorites', 'search_files', 'search_records']) {
       expect(isToolAllowed(profile, name), `${name} 不该被允许`).toBe(false)
     }
   })
@@ -157,14 +163,19 @@ describe('AnswerProfile：白名单与边界', () => {
       imageNote: '',
       now: new Date('2026-10-22T10:00:00'),
     })
-    expect(system).toContain('只在当前会话内收集聊天消息证据')
+    expect(system).toContain('只在当前会话内收集证据')
     expect(system).toContain('通常控制在 1-2 次工具调用')
-    expect(system).not.toContain('明确问文件用 search_files')
+    // 会话内提示词应把模型引向会话可收敛的专用工具，而不是全局资源。
+    for (const name of ['get_funds_summary', 'get_call_history', 'get_group_detail', 'aggregate_media', 'search_revoked']) {
+      expect(system, `提示词应提到 ${name}`).toContain(name)
+    }
     expect(system).not.toContain('search_contacts')
     expect(system).not.toContain('list_sessions')
+    expect(system).not.toContain('get_moments_stats')
 
     const sessionHint = buildToolHintBlock(['search_messages'], ANSWER_PROFILES['session-ask'])
-    expect(sessionHint).toContain('只查当前会话的聊天消息')
+    expect(sessionHint).toContain('本入口只查当前会话内的消息、转账/红包、通话、群资料、媒体与撤回记录')
+    expect(sessionHint).toContain('强制锁定当前会话')
     expect(sessionHint).not.toContain('文件/收藏/朋友圈/联系人/统计')
 
     const globalHint = buildToolHintBlock(['search_files'], ANSWER_PROFILES['wechat-ask'])
@@ -285,6 +296,12 @@ describe('AnswerProfile：执行期范围强制', () => {
       'search_favorites',
       'search_files',
       'search_records',
+      // 2026-11-13 新增的确定性工具同样声明 from/to，必须一起受范围锁约束。
+      'get_funds_summary',
+      'get_call_history',
+      'aggregate_media',
+      'search_revoked',
+      'get_moments_stats',
     ] as const
     // 防止实现里的 DATE_ARG_TOOLS 与真实 schema 漂移：新增带日期参数的工具时
     // 这条断言会先失败，而不是让新工具静默绕过范围锁。
@@ -307,7 +324,14 @@ describe('AnswerProfile：执行期范围强制', () => {
     })
 
     for (const name of tools) {
-      const injected = enforceProfileScope('wechat-ask', name, argsFor(name), locked)
+      // 群聊没有通话记录：通话工具用私聊锁定验证日期范围，其余工具用群聊锁定。
+      // search_files 锁定会话时整体不可用（文件索引没有会话归属），只验证日期锁。
+      const scopeFor = name === 'get_call_history'
+        ? { ...locked, scope: { ...locked.scope, username: 'wxid_a' } }
+        : name === 'search_files'
+          ? { decryptedDir: locked.decryptedDir, scope: { from: '2026-10-01', to: '2026-10-07' } }
+          : locked
+      const injected = enforceProfileScope('wechat-ask', name, argsFor(name), scopeFor)
       expect(injected.ok, name).toBe(true)
       if (injected.ok) {
         expect(injected.args['from'], name).toBe('2026-10-01')
@@ -315,7 +339,7 @@ describe('AnswerProfile：执行期范围强制', () => {
         expect(injected.ctx.scope, name).toMatchObject({ from: '2026-10-01', to: '2026-10-07' })
       }
 
-      const conflict = enforceProfileScope('wechat-ask', name, argsFor(name, { from: '2026-09-01' }), locked)
+      const conflict = enforceProfileScope('wechat-ask', name, argsFor(name, { from: '2026-09-01' }), scopeFor)
       expect(conflict.ok, name).toBe(true)
       if (conflict.ok) {
         expect(conflict.args['from'], name).toBe('2026-10-01')
@@ -334,6 +358,50 @@ describe('AnswerProfile：执行期范围强制', () => {
       expect(reversed.ok, name).toBe(false)
       if (!reversed.ok) expect(reversed.error.errorCode, name).toBe('invalid_arguments')
     }
+  })
+
+  it('锁定会话时 search_files 明确不可用（文件索引没有会话归属）', () => {
+    // 不带 username 也必须拒绝：否则会静默查全库。
+    for (const args of [{ query: '合同' }, { query: '合同', username: 'wxid_a' }]) {
+      const locked = enforceProfileScope('wechat-ask', 'search_files', args, ctx('wxid_a'))
+      expect(locked.ok, JSON.stringify(args)).toBe(false)
+      if (!locked.ok) {
+        expect(locked.error.errorCode).toBe('unsupported_scope')
+        expect(locked.error.errorDetails).toMatchObject({ username: 'wxid_a' })
+      }
+    }
+
+    // 没有会话锁定时仍可正常执行（日期锁不受影响）。
+    const unlocked = enforceProfileScope('wechat-ask', 'search_files', { query: '合同' }, ctx())
+    expect(unlocked.ok).toBe(true)
+
+    const dateOnly = enforceProfileScope('wechat-ask', 'search_files', { query: '合同' }, {
+      decryptedDir: '/tmp/test-profile',
+      scope: { from: '2026-10-01', to: '2026-10-07' },
+    })
+    expect(dateOnly.ok).toBe(true)
+    if (dateOnly.ok) {
+      expect(dateOnly.args).toMatchObject({ from: '2026-10-01', to: '2026-10-07' })
+    }
+  })
+
+  it('微信问答的会话 scope 不会被 get_moments_stats 当成作者', () => {
+    const decision = enforceProfileScope(
+      'wechat-ask',
+      'get_moments_stats',
+      {},
+      {
+        decryptedDir: '/tmp/test-profile',
+        scope: { username: '123@chatroom', from: '2026-10-01', to: '2026-10-07' },
+      },
+    )
+    expect(decision.ok).toBe(true)
+    if (!decision.ok) return
+    // 日期范围仍锁定，但 username（会话）不能作为朋友圈作者下传。
+    expect(decision.ctx.scope?.username).toBeUndefined()
+    expect(decision.ctx.scope).toMatchObject({ from: '2026-10-01', to: '2026-10-07' })
+    expect(decision.args['from']).toBe('2026-10-01')
+    expect(decision.args['to']).toBe('2026-10-07')
   })
 
   it('get_message_context 的 key 必须属于当前会话', () => {
@@ -362,6 +430,96 @@ describe('AnswerProfile：执行期范围强制', () => {
     })
     expect(byDate.ok).toBe(false)
     if (!byDate.ok) expect(byDate.error.errorCode).toBe('unsupported_scope')
+  })
+
+  it('会话内问答给 get_call_history 注入 peer，冲突时按 peer 拒绝', () => {
+    const injected = enforceProfileScope('session-ask', 'get_call_history', {}, ctx('wxid_a'))
+    expect(injected.ok).toBe(true)
+    if (injected.ok) {
+      expect(injected.args['peer']).toBe('wxid_a')
+      expect(injected.ctx.scope?.username).toBe('wxid_a')
+    }
+
+    // 模型填的就是当前会话：保留原参数，不产生冲突。
+    const same = enforceProfileScope('session-ask', 'get_call_history', { peer: 'wxid_a' }, ctx('wxid_a'))
+    expect(same.ok).toBe(true)
+
+    const conflict = enforceProfileScope('session-ask', 'get_call_history', { peer: 'wxid_b' }, ctx('wxid_a'))
+    expect(conflict.ok).toBe(false)
+    if (!conflict.ok) {
+      expect(conflict.error.errorCode).toBe('scope_violation')
+      expect(conflict.error.errorDetails).toMatchObject({
+        argument: 'peer',
+        locked: 'wxid_a',
+        requested: 'wxid_b',
+      })
+    }
+
+    // 群聊没有 1:1 通话：明确报不支持，不能伪装成「没查到通话」。
+    const group = enforceProfileScope('session-ask', 'get_call_history', {}, ctx('123@chatroom'))
+    expect(group.ok).toBe(false)
+    if (!group.ok) {
+      expect(group.error.errorCode).toBe('unsupported_scope')
+      expect(group.error.errorDetails).toMatchObject({ username: '123@chatroom' })
+    }
+  })
+
+  it('会话内问答的 get_group_detail 私聊拒绝、群聊注入当前群、跨群拒绝', () => {
+    // 私聊没有群档案：明确报 unsupported_scope，而不是返回「群不存在」。
+    const direct = enforceProfileScope(
+      'session-ask',
+      'get_group_detail',
+      { group: 'wxid_a' },
+      ctx('wxid_a'),
+    )
+    expect(direct.ok).toBe(false)
+    if (!direct.ok) {
+      expect(direct.error.errorCode).toBe('unsupported_scope')
+      expect(direct.error.errorDetails).toMatchObject({ username: 'wxid_a' })
+    }
+
+    const injected = enforceProfileScope('session-ask', 'get_group_detail', {}, ctx('123@chatroom'))
+    expect(injected.ok).toBe(true)
+    if (injected.ok) {
+      expect(injected.args['group']).toBe('123@chatroom')
+      expect(injected.ctx.scope?.username).toBe('123@chatroom')
+    }
+
+    // 模型填的就是当前群：允许通过。
+    const same = enforceProfileScope(
+      'session-ask',
+      'get_group_detail',
+      { group: '123@chatroom' },
+      ctx('123@chatroom'),
+    )
+    expect(same.ok).toBe(true)
+
+    const conflict = enforceProfileScope(
+      'session-ask',
+      'get_group_detail',
+      { group: '456@chatroom' },
+      ctx('123@chatroom'),
+    )
+    expect(conflict.ok).toBe(false)
+    if (!conflict.ok) {
+      expect(conflict.error.errorCode).toBe('scope_violation')
+      expect(conflict.error.errorDetails).toMatchObject({
+        argument: 'group',
+        locked: '123@chatroom',
+        requested: '456@chatroom',
+      })
+    }
+  })
+
+  it('会话内问答锁定 search_revoked 的上下文范围（工具内部按 session_username 过滤）', () => {
+    const d = enforceProfileScope('session-ask', 'search_revoked', { query: '合同' }, ctx('wxid_a'))
+    expect(d.ok).toBe(true)
+    if (!d.ok) return
+    expect(d.ctx.scope?.username).toBe('wxid_a')
+    // search_revoked 没有 username 参数：不要注入一个 schema 不存在的参数，
+    // 会话过滤由工具读取 ctx.scope 完成。
+    expect(d.args['username']).toBeUndefined()
+    expect(d.args['query']).toBe('合同')
   })
 
   it('search_hybrid 在会话内问答自动收敛为 messages 模式', () => {

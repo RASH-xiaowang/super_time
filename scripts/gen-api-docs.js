@@ -224,7 +224,7 @@ function main() {
       process.exit(1);
     }
     if (current.replace(/\r\n/g, '\n') !== content) {
-      console.error('❌ docs/API.md 与 gateway*.ts 的 @Remote 集合不一致：请运行 npm run docs:api 后提交');
+      console.error('❌ docs/API.md 与 gateway*.ts 的 @Remote 内容/签名不一致：请运行 npm run docs:api 后提交');
       process.exit(1);
     }
     console.log(`ok: docs/API.md 与源码一致（${methods.length} 个方法）`);

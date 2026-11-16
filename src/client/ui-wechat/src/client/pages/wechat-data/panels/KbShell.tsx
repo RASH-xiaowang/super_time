@@ -14,6 +14,7 @@
  * 退化规则写在 `kb-rail.module.css` 里（`.rail` 的定义处），因为 CSS Module 的类名按文件哈希，
  * 跨文件选不中。
  */
+import { useState } from 'react'
 import { GraphPanel } from './Graph.tsx'
 import { KbFilesPanel } from './KbFiles.tsx'
 import { KbRail } from './KbRail.tsx'
@@ -41,6 +42,18 @@ export function KbShell({ initial, onOpenChat, focusFileId, focusNonce }: {
    * `#kbfiles` / `#knowledge` 两个深链仍各自直达自己的分段。
    */
   const landing = initial === 'kb' ? 'kbfiles' : initial
+  /**
+   * 分段内部的「跳到一个文件」（当前唯一来源：笔记详情的「回到源文件」）。
+   *
+   * 为什么状态在这层：文件面板与笔记库是两个分段，焦点要跨 `MergedSections` 传 ——
+   * 分段切换由它管，`go` 回调不给带参数，所以由外壳记下 id，再用与深链同一组 props
+   * （`focusFileId` / `focusNonce`）喂给文件面板：两条入口共用同一段聚焦逻辑，不复制。
+   * nonce 取 `Date.now()`：同一个源文件第二次点进来时值会变，聚焦 effect 才会重跑。
+   */
+  const [jump, setJump] = useState<{ id: number; nonce: number } | null>(null)
+  // 外部深链（聊天里的文件卡片）优先于内部分段的跳转。
+  const focusId = focusFileId ?? jump?.id ?? null
+  const focusTick = focusFileId != null ? (focusNonce ?? 0) : (jump?.nonce ?? 0)
   return (
     <div className={css.wrap}>
       <div className={css.shell}>
@@ -60,10 +73,19 @@ export function KbShell({ initial, onOpenChat, focusFileId, focusNonce }: {
               //
               // 侧栏「知识库」经 `landing` 落在**第一段**（文件）上：默认面与左起第一段
               // 从此是同一个，不再需要「惯例 vs 最常用」那套取舍。
-              { key: 'kbfiles', label: '文件', render: () => <KbFilesPanel focusFileId={focusFileId ?? null} focusNonce={focusNonce ?? 0} /> },
+              { key: 'kbfiles', label: '文件', render: () => <KbFilesPanel focusFileId={focusId} focusNonce={focusTick} /> },
               // 2026-10-17：笔记库空态里的「从文件沉淀 →」要能跳到「文件」分段 ——
               // 分段状态在 `MergedSections` 里，所以用它的 `go` 回调。
-              { key: 'kb', label: '笔记库', render: (go) => <KnowledgeBasePanel onOpenChat={onOpenChat} onGoFiles={() => { go('kbfiles') }} /> },
+              // 带 fileId 时同时聚焦那个文件（笔记详情的「回到源文件」）。
+              // 「回到源文件」：`onGoFiles(fileId)` 记下要聚焦的文件再切段。
+              { key: 'kb', label: '笔记库',
+                render: (go) => (
+                  <KnowledgeBasePanel onOpenChat={onOpenChat} onGoFiles={(fileId) => {
+                    if (fileId !== undefined) setJump({ id: fileId, nonce: Date.now() })
+                    go('kbfiles')
+                  }} />
+                ),
+              },
               { key: 'knowledge', label: '知识图谱', render: () => <GraphPanel variant="knowledge" onOpenChat={onOpenChat} /> },
             ]}
           />

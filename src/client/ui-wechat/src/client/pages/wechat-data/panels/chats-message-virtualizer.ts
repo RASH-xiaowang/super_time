@@ -17,6 +17,17 @@ interface ChatsMessageVirtualizerOptions {
   }
 }
 
+/**
+ * 滚动停下后补量已挂载行的等待时间。
+ *
+ * 为什么需要这一拍：TanStack 在滚动期间会**跳过**一部分测量（`isScrolling` 闸）把
+ * 预算让给滚动本身，媒体行（表情/图片）又是在解码完成后才长高。快速上滚时新挂载的
+ * 行可能在下一次重绘前就停在旧高度上 —— 相邻行重叠，画面看起来「消息分布不对」。
+ * 滚动停稳后对所有 `[data-index]` 行做一次同步测量，保证最终几何一定收敛；
+ * 尺寸没变时 `measureElement` 是空操作（delta=0），不会带来额外布局抖动。
+ */
+const SETTLE_MEASURE_MS = 180
+
 /** Own the message virtualizer, dynamic row measuring, and scroll-margin synchronization. */
 export function useChatsMessageVirtualizer({
   messages,
@@ -98,6 +109,28 @@ export function useChatsMessageVirtualizer({
     layoutVersion.msgError,
     layoutVersion.msgLoading,
   ])
+
+  useEffect(() => {
+    const box = scrollRef.current
+    if (!box) return
+    let timer: number | undefined
+    const onScroll = (): void => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = undefined
+        const list = listRef.current
+        if (!list) return
+        for (const el of list.querySelectorAll<HTMLElement>('[data-index]')) {
+          msgVirtualizer.measureElement(el)
+        }
+      }, SETTLE_MEASURE_MS)
+    }
+    box.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      box.removeEventListener('scroll', onScroll)
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [listRef, msgVirtualizer, scopeKey, scrollRef])
 
   return { msgItems, msgScrollMargin, msgVirtualizer }
 }

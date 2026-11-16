@@ -63,6 +63,13 @@ describe('N18：消息流虚拟化的接线', () => {
     expect(chatsSrc, '滚动容器没有 ref（虚拟化拿不到滚动元素）').toMatch(/ref=\{msgScrollRef\}|scrollRef=\{msgScrollRef\}/)
   })
 
+  it('滚到消息流顶部自动续页，不再要求手动点「加载更多」', () => {
+    expect(chatsSrc, '滚动容器没有接自动续页').toContain('onScroll={onMessageScroll}')
+    expect(chatsSrc, '自动续页没有判断向上滚动，首屏滚到底会误触发').toContain('nextScrollTop < previousScrollTop - 1')
+    expect(chatsSrc, '自动续页没有顶部阈值').toContain('AUTO_LOAD_OLDER_PX')
+    expect(chatsSrc, '手动「加载更多」按钮还在').not.toContain('onClick={() => { void loadMore() }}')
+  })
+
   it('行为侧的验收台在册，且量的是「硬上界」', () => {
     expect(existsSync(harnessPath), '找不到 scripts/longlist-virtualization-e2e.mjs').toBe(true)
     const src = readFileSync(harnessPath, 'utf8')

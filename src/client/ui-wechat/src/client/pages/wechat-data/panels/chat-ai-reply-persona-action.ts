@@ -31,7 +31,7 @@ export interface ChatAiReplyPersonaSaveContext {
  */
 export async function saveChatAiReplyPersona(
   context: ChatAiReplyPersonaSaveContext,
-  draft: { name: string; prompt: string; splitReply: boolean },
+  draft: { name: string; prompt: string; splitReply: boolean; kbEnabled: boolean; kbId: number },
 ): Promise<boolean> {
   const latest = context.latestRef.current
   const stateIdentity = context.stateIdentityRef.current
@@ -58,6 +58,8 @@ export async function saveChatAiReplyPersona(
       personaName: draft.name,
       personaPrompt: draft.prompt,
       splitReply: draft.splitReply,
+      kbEnabled: draft.kbEnabled,
+      kbId: draft.kbId,
       expectedRevision: context.state.revision,
     })
     if (context.requestIdRef.current !== requestId) return false

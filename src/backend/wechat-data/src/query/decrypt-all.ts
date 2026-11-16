@@ -1,17 +1,23 @@
 /**
  * Full SQLCipher decyption of the WeChat raw db_storage tree into the
- * decrypted snapshot (one-call "立即解密"). Per database: page-1 salt →
+ * decrypted snapshot (one-call "立即解密"). Per database: stage-copy the raw
+ * main DB + WAL (the source may be written concurrently) → page-1 salt →
  * PBKDF2-HMAC-SHA512(256000) derive (wx_key_v4.1) → AES-256-CBC page stream
- * decrypt → atomic publish at `<decrypted>/<rel>` with a SQLite-header check.
- * Reuses the same layout as sync.ts so the realtime watchers keep working.
+ * decrypt → merge patchable WAL frames → SQLite-header check + full
+ * `PRAGMA quick_check` (corrupt results are never published) → atomic publish
+ * at `<decrypted>/<rel>`. Reuses the same layout as sync.ts so the realtime
+ * watchers keep working.
  */
 import { pbkdf2Sync } from 'node:crypto'
 import {
-  closeSync, existsSync, mkdirSync, openSync, readSync, unlinkSync,
+  closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { atomicReplace, fullDecryptFile, looksDecrypted } from './sync.ts'
 import { getConfig, scanDbFiles } from './config.ts'
+import { stageCopyRetry } from './snapshot-sidecars.ts'
+import { WAL_HEADER_SZ, decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts'
+import { assertPublishable } from './snapshot-verify.ts'
 
 const PBKDF2_ITERS = 256000
 const SQLITE_HDR = Buffer.from('SQLite format 3\x00')
@@ -109,17 +115,42 @@ export async function decryptAllDbs(
     const rel = relative(rawDbDir, db).replace(/\\/g, '/')
     const target = join(decryptedDir, rel)
     const staged = target + '.decrypt_tmp'
+    // 源侧 staging：微信可能正写着原始主库/WAL，边读边解会读出撕裂页。先整文件复制
+    // 一份（带 EBUSY 有界重试，与实时同步共用 `snapshot-sidecars.ts#stageCopyRetry`），
+    // 后续解密只碰副本。三个后缀都放在目标旁边，失败/成功都由 finally 清掉。
+    const stagedSrc = target + '.decrypt_src'
+    const stagedWal = target + '.decrypt_wal'
     try {
       mkdirSync(dirname(target), { recursive: true })
-      const salt = readPrefix(db, 16)
+      await stageCopyRetry(db, stagedSrc)
+      const salt = readPrefix(stagedSrc, 16)
       if (salt.length < 16) throw new Error('文件过小')
       const keyHex = rawKeyHexFor(decryptedDir, rel, rawKeyHex)
       if (keyHex.length !== 64) throw new Error('db_enc_key 缺失')
       const encKey = deriveEncKey(Buffer.from(keyHex, 'hex'), salt, keyFormat)
-      await fullDecryptFile(db, staged, encKey)
+      // 原始主库只含**已 checkpoint** 的页；微信最新写入可能还躺在旁边的 `-wal` 里。
+      // 不合并它，修复会静默丢掉最新消息；而源主库签名没变，实时同步之后也不会再补。
+      // 口径与 sync.ts 的整库路径一致：主库副本 + WAL 副本 + 帧补丁（salt 换代则跳过）。
+      const rawWal = db + '-wal'
+      let walPatchable = false
+      if (existsSync(rawWal) && statSync(rawWal).size > WAL_HEADER_SZ) {
+        await stageCopyRetry(rawWal, stagedWal)
+        // 复制后先判「这批帧还属于当前 salt 世代吗」：不可补说明是陈旧 WAL，
+        // 对应的页早已 checkpoint 进主库（详见 sqlcipher-wal.ts#walFramesPatchable）。
+        walPatchable = await walFramesPatchable(stagedWal)
+        if (!walPatchable) {
+          console.warn('[wechat-decrypt]', rel,
+            '源 -wal 的帧与 WAL 头 salt 世代不一致（陈旧 WAL），主库已含对应页，跳过帧补丁')
+        }
+      }
+      await fullDecryptFile(stagedSrc, staged, encKey)
+      if (walPatchable) await decryptWalPatch(stagedWal, staged, encKey)
       // 判据与实时同步共用同一个主人 `sync.ts#looksDecrypted`：`decryptPage` 给页 1 无条件
       // 贴上魔数，所以「比对魔数」等于没比，必须看头部里不能被合成的字段（页大小）。
       if (!looksDecrypted(staged)) throw new Error('解密结果校验失败（密钥不匹配？）')
+      // 头部只覆盖页 1；页 2 起的损坏（撕裂读、补丁打错页）必须让 SQLite 自己扫一遍。
+      // corrupt ⇒ 抛错，atomicReplace 不会执行，旧目标原样保留；uncheckable ⇒ 告警放行。
+      assertPublishable(staged)
       // 发布走 `sync.ts` 的 `atomicReplace`，**不要**改回「先 unlink 再 rename」：
       // 那会在「删掉」与「改名」之间留出一个「目标不存在」的窗口，并发只读查询正好落在
       // 里面就是 ENOENT；而 Windows 上目标被 SQLite 打开时 unlink 直接 EBUSY，整库解密被记成失败。
@@ -127,8 +158,13 @@ export async function decryptAllDbs(
       await atomicReplace(staged, target)
       okCount += 1
     } catch (e) {
-      try { unlinkSync(staged) } catch { /* best effort cleanup */ }
       failed.push({ db: rel, error: (e as Error).message })
+    } finally {
+      // 成功失败都清：半截 `.decrypt_tmp` 与源侧 `.decrypt_src/.decrypt_wal` 都不该
+      // 留给下一次运行或面板；失败时旧目标仍由 catch 语义保留（这里只动临时文件）。
+      for (const f of [staged, stagedSrc, stagedWal]) {
+        try { unlinkSync(f) } catch { /* best effort cleanup */ }
+      }
     }
     done += 1
     onProgress?.(done, scope.length, failed.length, rel)

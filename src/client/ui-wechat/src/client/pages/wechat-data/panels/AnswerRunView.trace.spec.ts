@@ -76,6 +76,36 @@ afterEach(() => {
 })
 
 describe('AnswerRunView 执行轨迹', () => {
+  it('当前轮还没有思考增量时显示“本轮思考中”占位，步骤不中断', () => {
+    render({
+      streaming: true,
+      text: '',
+      stages: [{
+        key: 'answer:round:2',
+        label: '工具选择（第 2 轮）',
+        status: 'running',
+        round: 2,
+      }],
+    })
+    expect(host.textContent).toContain('第 2 轮')
+    expect(host.textContent).toContain('本轮思考中…')
+  })
+
+  it('已有本轮思考后不再显示占位', () => {
+    render({
+      streaming: true,
+      text: '',
+      stages: [{
+        key: 'answer:round:1',
+        label: '工具选择（第 1 轮）',
+        status: 'running',
+        round: 1,
+      }],
+      reasoningSegments: [{ key: 'reasoning:tool:1', text: '先确认范围。', round: 1, phase: 'tool_selection' }],
+    })
+    expect(host.textContent).not.toContain('本轮思考中…')
+  })
+
   it('正文到达自动收起轨迹时，把焦点交还执行轨迹按钮', () => {
     const stages = runningStages('call-focus')
     render({ streaming: true, reasoning: '先确认上下文。', stages })

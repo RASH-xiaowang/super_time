@@ -23,6 +23,7 @@ import type {
   KbFilesDeleteReport,
 } from '../types.ts'
 import { MAX_CHUNKS_PER_FILE, chunkBlocks } from './kb/chunk.ts'
+import { KB_ENTITIES_TABLE } from './kb/extract.ts'
 import type { ChunkResult } from './kb/types.ts'
 import { isAsyncParsableExt } from './kb/parse-async.ts'
 import { parseFileByExt } from './kb/parse-plain.ts'
@@ -176,7 +177,23 @@ export function registerKbFile(decryptedDir: string, input: KbFileRegisterInput)
     const row = db.prepare('SELECT * FROM kb_files WHERE id = ?').get(fileId) as Record<string, unknown> | undefined
     return { ok: true, file: rowToFileMeta(row ?? {}) }
   } catch (e) {
-    return { ok: false, code: 'store-failed', error: isBusyError(e) ? BUSY_TEXT : errorText(e) }
+    const msg = errorText(e)
+    /**
+     * 查重 SELECT 与 INSERT 之间没有锁（两个进程同时登记同一内容时），
+     * 唯一索引会在这里兜底。把裸 SQLite 文案翻译回「重复」：用户能做的动作
+     * 是「去列表里找这份文件」，而不是拿着 `UNIQUE constraint failed` 去查库。
+     */
+    if (/UNIQUE constraint failed:\s*kb_files\.kb_id,\s*kb_files\.sha256/i.test(msg)) {
+      const dup = db.prepare('SELECT id, name FROM kb_files WHERE kb_id = ? AND sha256 = ?').get(kbId, sha256) as Record<string, unknown> | undefined
+      const existing = { id: Number(dup?.['id'] ?? 0), name: cellStr(dup?.['name']) }
+      return {
+        ok: false,
+        code: 'duplicate',
+        duplicateOf: existing,
+        error: '该文件已在当前库中（按内容判定）：' + (existing.name || '未命名'),
+      }
+    }
+    return { ok: false, code: 'store-failed', error: isBusyError(e) ? BUSY_TEXT : msg }
   } finally {
     try {
       db.close()
@@ -407,6 +424,20 @@ export const CASCADE_STEPS: Record<KbFileDeleteStep, (c: CascadeContext) => void
     if (c.chunkIds.length === 0) return
     const del = c.db.prepare('DELETE FROM kb_chunks_fts WHERE rowid = ?')
     for (const id of c.chunkIds) del.run(id)
+  },
+  entities: (c) => {
+    /**
+     * 实体抽取结果与文件同库，按 `file_id` 直接删。
+     *
+     * 表是**按需建**的：从没抽过实体的库没有这张表，DELETE 会抛
+     * `no such table` —— 那不是错误，正是“没有东西可删”。吞掉它，
+     * 别让删文件因为一张没建过的派生表而失败。
+     */
+    try {
+      c.db.prepare('DELETE FROM ' + KB_ENTITIES_TABLE + ' WHERE file_id = ?').run(c.fileId)
+    } catch {
+      /* 表尚未创建：没有实体可删 */
+    }
   },
   vectors: (c) => {
     /**

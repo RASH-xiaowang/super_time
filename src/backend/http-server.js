@@ -60,6 +60,7 @@ const { MESSAGE_WEBHOOK_PATH_PREFIX, createMessageWebhookHandler } = require('./
 const { resolveStaticFile, sendFile } = require('./http-static.js');
 const { allowBrowserRequest } = require('./http-request-guard.js');
 const { writeFileAtomic } = require('./atomic-json.js');
+const { beginMutation, checkMutation, bumpMutationEpoch } = require('./mutation-gate.js');
 
 const {
   DEFAULT_PORT,
@@ -84,6 +85,84 @@ const REMOTE_ACCESS_RUNTIME_FILE = 'http-runtime.json';
 /** SSE 心跳间隔：比常见代理/移动网络的空闲断开阈值短，让连接不被中间设备掐掉。 */
 const SSE_HEARTBEAT_MS = 25_000;
 /**
+ * SSE 连接上限。
+ *
+ * 浏览器每个标签页、每个面板都可能开一条 EventSource；手机端被恶意脚本/失控页面
+ * 刷连接时，主进程会为每条连接保留一个响应句柄与心跳写循环。全局上限挡住总量，
+ * 单会话上限挡住「一个 Cookie 刷爆」。超限直接 503，不排队。
+ */
+const MAX_SSE_CLIENTS = 32;
+const MAX_SSE_PER_SESSION = 4;
+
+/**
+ * 入站 Webhook 的鉴权失败限速：令牌在 URL 里，先验签再读 body。
+ * 30 次/分钟足以覆盖外部系统重试，又能挡住拿错误令牌刷 30MB body 的脚本。
+ */
+const WEBHOOK_AUTH_WINDOW_MS = 60_000;
+const WEBHOOK_AUTH_MAX_FAILURES = 30;
+
+/**
+ * 入站 Webhook 的鉴权顺序是「先验 URL 令牌、再读 body」：令牌无效时**一个字节**
+ * 的请求体都不读（等价于预认证上限 0，比 1MB 更严）。只有验签通过后才按
+ * `MESSAGE_WEBHOOK_BODY_BYTES`（30MB，覆盖附件 base64 膨胀）读取。
+ */
+
+/** 入站 Webhook 令牌模块（构建产物，ESM dynamic import；与 message-webhook.js 同源）。 */
+let webhookTokenModulePromise = null;
+function loadWebhookTokenModule() {
+  if (webhookTokenModulePromise === null) {
+    webhookTokenModulePromise = import('./wechat-data/lib/net/message-webhook.js').catch((e) => {
+      webhookTokenModulePromise = null;
+      throw e;
+    });
+  }
+  return webhookTokenModulePromise;
+}
+
+/**
+ * 先验 URL 令牌（不读 body）。
+ * @returns {Promise<boolean>} 令牌有效时为 true。
+ */
+async function verifyMessageWebhookToken(deps, ctx, token) {
+  const cfg = readRemoteAccessConfig(deps.getDataRoot());
+  if (cfg.token === '' || typeof token !== 'string' || token === '') return false;
+  try {
+    const mod = await loadWebhookTokenModule();
+    return mod.verifyMessageWebhookToken(cfg.token, token) === true;
+  } catch (e) {
+    ctx.warn('[remote-access] Webhook 令牌校验模块不可用：%s', e?.message ?? e);
+    return false;
+  }
+}
+
+/** 入站 Webhook 的失败窗口限速（与登录限速分开，互不影响）。 */
+function createWebhookAuthLimiter() {
+  /** @type {Map<string, number[]>} ip → 失败时刻 */
+  const hits = new Map();
+  return {
+    ok(ip) {
+      const list = hits.get(ip);
+      if (!list) return true;
+      const cutoff = Date.now() - WEBHOOK_AUTH_WINDOW_MS;
+      const recent = list.filter((t) => t > cutoff);
+      if (recent.length === 0) hits.delete(ip);
+      else hits.set(ip, recent);
+      return recent.length < WEBHOOK_AUTH_MAX_FAILURES;
+    },
+    fail(ip) {
+      const list = hits.get(ip) || [];
+      list.push(Date.now());
+      hits.set(ip, list);
+    },
+    succeed(ip) {
+      hits.delete(ip);
+    },
+    reset() {
+      hits.clear();
+    },
+  };
+}
+/**
  * 运行期共享状态：路由、生命周期与组合根之间只经这一个对象通信，
  * 不再把几十个闭包变量全部塞进 `createRemoteAccessServer`。
  */
@@ -97,6 +176,7 @@ function createServerContext(deps) {
     pairings: deps.pairings || createPairingStore(),
     queue: deps.callQueue || createCallQueue(),
     limiter: deps.authLimiter || createAuthLimiter(),
+    webhookLimiter: createWebhookAuthLimiter(),
     /**
      * RPA 图片签名直链（路由 + Host 例外名单）。放这儿而不是 `createRemoteAccessServer`：
      * 路由的 Host 校验与 `/api/` 分支都要用它，走同一个对象才不会两处各建一份。
@@ -115,6 +195,14 @@ function createServerContext(deps) {
     }),
     /** @type {Set<http.ServerResponse>} SSE 客户端 */
     sseClients: new Set(),
+    /** @type {Map<string, Set<http.ServerResponse>>} 会话 Cookie（或来源 IP）→ 该会话的 SSE 客户端 */
+    sseBySession: new Map(),
+    maxSseClients: Number.isSafeInteger(deps.maxSseClients) && deps.maxSseClients > 0
+      ? deps.maxSseClients
+      : MAX_SSE_CLIENTS,
+    maxSsePerSession: Number.isSafeInteger(deps.maxSsePerSession) && deps.maxSsePerSession > 0
+      ? deps.maxSsePerSession
+      : MAX_SSE_PER_SESSION,
     state: {
       running: false,
       port: 0,
@@ -131,12 +219,48 @@ function createServerContext(deps) {
   };
 }
 
-/** 写一条 SSE 事件；客户端已经断开时把它从集合里移除。 */
-function writeSse(sseClients, res, payload) {
+/**
+ * 把一个 SSE 客户端从全局表与会话表里同时摘掉（不销毁连接）。
+ * @param {object} ctx - 服务上下文。
+ * @param {http.ServerResponse} res - SSE 响应。
+ */
+function removeSseClient(ctx, res) {
+  ctx.sseClients.delete(res);
+  for (const [key, set] of ctx.sseBySession) {
+    set.delete(res);
+    if (set.size === 0) ctx.sseBySession.delete(key);
+  }
+}
+
+/**
+ * 摘掉客户端并销毁连接（慢客户端/写失败）。
+ * @param {object} ctx - 服务上下文。
+ * @param {http.ServerResponse} res - SSE 响应。
+ */
+function dropSseClient(ctx, res) {
+  removeSseClient(ctx, res);
+  try { res.destroy(); } catch { /* 已经断了 */ }
+}
+
+/**
+ * 写一条 SSE 事件。
+ *
+ * `res.write()` 返回 false 表示内核缓冲区已满（慢客户端 / 页面卡死）。继续往里写
+ * 只会把主进程内存顶上去，还会拖慢心跳；这里直接丢弃该客户端，浏览器端
+ * `EventSource` 会按 `retry` 自动重连一个干净的新连接。
+ * @returns {boolean} 客户端是否仍然保留。
+ */
+function writeSse(ctx, res, payload) {
   try {
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (res.write(`data: ${JSON.stringify(payload)}\n\n`) === false) {
+      ctx.warn('[remote-access] SSE 客户端写入阻塞，已丢弃（慢客户端）');
+      dropSseClient(ctx, res);
+      return false;
+    }
+    return true;
   } catch {
-    sseClients.delete(res);
+    dropSseClient(ctx, res);
+    return false;
   }
 }
 
@@ -408,6 +532,10 @@ function createCallHandler(deps, ctx) {
       });
       return;
     }
+    // HTTP 侧同样记代际令牌：手机排队期间后端重启/配置被改写时，旧写不该落地。
+    // 观察（observeBackendStatus）在共享的 `gatedWechatCall` 派发时进行；这里只负责
+    // 入队前取令牌、出队后比对，避免监听器把「重启前的写」投到新 worker 上。
+    const mutationToken = beginMutation(method);
     // HTTP 客户端断开只代表「没人再等这个响应」，worker 里的搜索不会因此自动停。
     // 首次取消可能早于后端 job 注册，因此由 cancelGuard 在原调用仍存活时重放。
     const cancelPlan = connectionCancelPlanFor(method, args);
@@ -450,12 +578,19 @@ function createCallHandler(deps, ctx) {
           throw error;
         }
         cancelGuard.beforeBackendCall();
+        const revoked = checkMutation(mutationToken);
+        if (revoked) throw revoked;
         return deps.gatedCall(method, args);
       };
       const viaQueue = () => ctx.queue.run(runBackend, meta);
       const result = shouldBypassCallQueue(method)
         ? await runBackend()
         : await viaQueue();
+      // 配置保存改变后续读写的语义（数据根/引擎/转写路径）：成功后开新代际，
+      // 与桌面 IPC 完全一致；排队中的旧写会在出队时被 checkMutation 拦下。
+      if (method === 'saveWechatConfig' && result && typeof result === 'object' && result.ok === true) {
+        bumpMutationEpoch('wechat-config-saved');
+      }
       detachDisconnect();
       if (!cancelGuard.isDisconnected() && !res.destroyed && !res.writableEnded) sendJson(res, 200, result);
     } catch (e) {
@@ -474,6 +609,18 @@ function createCallHandler(deps, ctx) {
 /** SSE 事件流处理器。 */
 function createEventsHandler(ctx) {
   function handleEvents(req, res) {
+    const sessionKey = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+      || req.socket.remoteAddress
+      || 'unknown';
+    const perSession = ctx.sseBySession.get(sessionKey);
+    if (ctx.sseClients.size >= ctx.maxSseClients
+      || (perSession ? perSession.size : 0) >= ctx.maxSsePerSession) {
+      sendJson(res, 503, {
+        ok: false,
+        error: { message: '事件连接数已达上限，请关闭多余的页面后重试', code: 'SSE_LIMIT' },
+      });
+      return;
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -484,9 +631,12 @@ function createEventsHandler(ctx) {
     });
     res.write('retry: 3000\n\n');
     ctx.sseClients.add(res);
-    writeSse(ctx.sseClients, res, { name: 'remote-access/ready', args: [{ port: ctx.state.port }] });
-    req.on('close', () => ctx.sseClients.delete(res));
-    req.on('error', () => ctx.sseClients.delete(res));
+    if (!ctx.sseBySession.has(sessionKey)) ctx.sseBySession.set(sessionKey, new Set());
+    ctx.sseBySession.get(sessionKey).add(res);
+    const detach = () => removeSseClient(ctx, res);
+    req.on('close', detach);
+    req.on('error', detach);
+    writeSse(ctx, res, { name: 'remote-access/ready', args: [{ port: ctx.state.port }] });
   }
   return { handleEvents };
 }
@@ -545,25 +695,53 @@ function createRequestRouter(deps, ctx, handlers) {
         return;
       }
       // 消息列表入站 Webhook：凭据同样在 URL 里，因此排在会话校验之前。
+      // **先验 URL 令牌，再读 body**：验签不需要请求体，令牌无效时一个字节都不读
+      // （否则未认证方可以拿 30MB body 把主进程内存/带宽打满）。
       if (urlPath.startsWith(MESSAGE_WEBHOOK_PATH_PREFIX)) {
         const token = urlPath.slice(MESSAGE_WEBHOOK_PATH_PREFIX.length);
+        const ip = req.socket.remoteAddress || '';
+        if (!ctx.webhookLimiter.ok(ip)) {
+          sendJson(res, 429, {
+            ok: false,
+            error: { message: 'Webhook 鉴权失败次数过多，请一分钟后再试', code: 'TOO_MANY_ATTEMPTS' },
+          });
+          return;
+        }
+        // 验签期间暂停请求体：避免在动态加载令牌模块的窗口里把 body 读进内存。
+        if (req.method === 'POST') req.pause();
+        const tokenOk = await verifyMessageWebhookToken(deps, ctx, token);
+        if (!tokenOk) {
+          ctx.webhookLimiter.fail(ip);
+          sendJson(res, 404, { ok: false, error: { message: 'Webhook 不存在或令牌已失效', code: 'WEBHOOK_NOT_FOUND' } });
+          // 响应发完后切断连接：不消费攻击者继续灌进来的请求体。
+          res.once('finish', () => { try { req.destroy(); } catch { /* 已断开 */ } });
+          return;
+        }
+        ctx.webhookLimiter.succeed(ip);
         if (req.method === 'GET' || req.method === 'HEAD') {
           await handlers.handleMessageWebhookGet(res, token);
           return;
         }
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: { message: 'Webhook 只接受 GET / POST', code: 'METHOD_NOT_ALLOWED' } });
+          res.once('finish', () => { try { req.destroy(); } catch { /* 已断开 */ } });
           return;
         }
         let body;
         try {
-          body = await readBody(req, {
+          // 先挂上监听器再 resume，避免暂停期间的数据在两者之间丢失。
+          const bodyPromise = readBody(req, {
             maxBytes: MESSAGE_WEBHOOK_BODY_BYTES,
             requireJson: true,
             requireObject: true,
           });
+          req.resume();
+          body = await bodyPromise;
         } catch (e) {
           sendJson(res, e.status || 400, { ok: false, error: { message: e.message, code: e.code || 'BAD_REQUEST' } });
+          // 415/413 等入口错误：请求体还停在暂停态，响应发完后直接断开，
+          // 不让一个被拒的连接继续占着 socket。
+          res.once('finish', () => { try { req.destroy(); } catch { /* 已断开 */ } });
           return;
         }
         await handlers.handleMessageWebhookPost(res, token, body);
@@ -602,7 +780,8 @@ function createRequestRouter(deps, ctx, handlers) {
   /** 把一个后端事件推给所有 SSE 客户端。 */
   function pushEvent(name, args) {
     if (ctx.sseClients.size === 0) return;
-    for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { name, args });
+    // 快照遍历：writeSse 可能把慢客户端从集合里删掉。
+    for (const res of [...ctx.sseClients]) writeSse(ctx, res, { name, args });
   }
 
   return { onRequest, pushEvent };
@@ -663,6 +842,28 @@ function createHttpLifecycle(deps, ctx, onRequest) {
     return snapshotRemoteState(deps, ctx);
   }
 
+  /**
+   * 兜底：路由处理器漏掉的 rejection / 同步异常。
+   *
+   * 不接这一层的话，`onRequest` 返回的 rejected promise 在 Node 默认策略下会变成
+   * unhandledRejection，请求既没有响应也没有断开（浏览器挂到超时），而且这个
+   * 未处理拒绝可能触发主进程的全局处理策略。头已发出（SSE/流式）时只能销毁连接。
+   * @param {object} ctx - 服务上下文。
+   * @param {http.ServerResponse} res - 响应。
+   * @param {unknown} e - 异常。
+   */
+  function failUnhandledRequest(ctx, res, e) {
+    ctx.warn('[remote-access] 未捕获的请求异常：%s', e?.stack ?? e?.message ?? e);
+    if (res.headersSent || res.writableEnded) {
+      try { res.destroy(); } catch { /* 已经断了 */ }
+      return;
+    }
+    sendJson(res, 500, {
+      ok: false,
+      error: { message: '远程访问请求处理失败', code: 'INTERNAL_ERROR' },
+    });
+  }
+
   /** 监听一个端口；被占用就往后试。@returns 实际端口，全试完返回 0。 */
   function listenOn(host, preferredPort) {
     return new Promise((resolve) => {
@@ -671,7 +872,13 @@ function createHttpLifecycle(deps, ctx, onRequest) {
         if (attempt >= PORT_ATTEMPTS) { resolve(0); return; }
         const port = preferredPort + attempt;
         attempt += 1;
-        const srv = http.createServer((req, res) => { void onRequest(req, res); });
+        const srv = http.createServer((req, res) => {
+          try {
+            onRequest(req, res).catch((e) => failUnhandledRequest(ctx, res, e));
+          } catch (e) {
+            failUnhandledRequest(ctx, res, e);
+          }
+        });
         srv.once('error', (err) => {
           if (err && err.code === 'EADDRINUSE') { tryNext(); return; }
           ctx.warn('[remote-access] 监听失败 %s:%d —— %s', host, port, err?.message ?? err);
@@ -712,7 +919,9 @@ function createHttpLifecycle(deps, ctx, onRequest) {
     };
     persistRuntimeState();
     ctx.heartbeat = setInterval(() => {
-      for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { name: 'remote-access/heartbeat', args: [] });
+      for (const res of [...ctx.sseClients]) {
+        writeSse(ctx, res, { name: 'remote-access/heartbeat', args: [] });
+      }
     }, SSE_HEARTBEAT_MS);
     ctx.heartbeat.unref?.();
     ctx.reconcileTimer = setInterval(() => { void syncWithConfig(); }, ADDRESS_WATCH_MS);
@@ -778,9 +987,11 @@ function createHttpLifecycle(deps, ctx, onRequest) {
       try { res.end(); } catch { /* 已经断了 */ }
     }
     ctx.sseClients.clear();
+    ctx.sseBySession.clear();
     ctx.sessions.revokeAll();
     ctx.pairings.revokeAll();
     ctx.limiter.reset();
+    ctx.webhookLimiter.reset();
     const srv = ctx.server;
     ctx.server = null;
     ctx.state = { ...ctx.state, running: false, port: 0, address: '', startedAt: 0 };

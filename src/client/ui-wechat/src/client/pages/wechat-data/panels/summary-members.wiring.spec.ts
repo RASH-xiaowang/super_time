@@ -67,14 +67,16 @@ describe('定时任务：关注成员必须能读到', () => {
 
   it('后端 memberRooms 必须是「一对多」（一个人可以在多个群）', () => {
     // 反例：`Map<number, number>` 会让后写入的群覆盖前面的
+    // 2026-11-13：contacts.ts 重构后存的是群 username（`string[]`）而不是 rowid，
+    // 判据不变 —— 值必须是数组，且同一成员的第二、第三个群要 push 进去。
     expect(contacts, 'memberRooms 又退回一对一了 ⇒ 多群成员会被覆盖')
-      .toMatch(/const memberRooms = new Map<number, number\[\]>\(\)/)
-    expect(contacts, 'memberRooms 没有 push 多个群').toMatch(/list\.push\(rid\)/)
+      .toMatch(/const memberRooms = new Map<number, string\[\]>\(\)/)
+    expect(contacts, 'memberRooms 没有 push 多个群').toMatch(/list\.push\(roomName\)/)
   })
 
   it('groupUsername 与 groupUsernames 都要填（前者兼容旧字段，后者是完整列表）', () => {
-    expect(contacts).toMatch(/contact\.groupUsername = names\[0\]/)
-    expect(contacts).toMatch(/contact\.groupUsernames = names/)
+    expect(contacts).toMatch(/contact\.groupUsername = rooms\[0\]/)
+    expect(contacts).toMatch(/contact\.groupUsernames = rooms/)
   })
 
   it('groupUsername 不再限定 category === member（好友/企业微信成员也要有归属）', () => {

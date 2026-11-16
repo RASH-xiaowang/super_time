@@ -51,7 +51,9 @@ describe('N1：待办面板区分「读取失败」与「确无数据」', () =>
     expect(code).toMatch(/\{readError && \(/)
     expect(code).toContain('待办库读取失败')
     // 防空转：空状态必须带 !readError 这道闸（否则失败时仍显示「暂无待办」）
-    expect(code).toMatch(/!loading && tasks\.length === 0 && !error && !readError && <EmptyState/)
+    // 2026-11-13：`useFreshData` 的加载态改名 `tasksLoading`；空态仍必须在「不加载、无错、
+    // 无读取失败」三条件同时成立时才出现。
+    expect(code).toMatch(/!tasksLoading && tasks\.length === 0 && !error && !readError && <EmptyState/)
   })
 })
 

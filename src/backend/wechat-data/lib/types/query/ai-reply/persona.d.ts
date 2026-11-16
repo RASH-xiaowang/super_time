@@ -6,6 +6,8 @@
  */
 export declare const CHAT_AI_REPLY_PERSONA_NAME_MAX = 80;
 export declare const CHAT_AI_REPLY_PERSONA_PROMPT_MAX = 4000;
+/** 知识库材料进入 system 提示词的字符预算；超出时按检索顺序截断。 */
+export declare const CHAT_AI_REPLY_KB_PROMPT_MAX = 3000;
 export interface ChatAiReplyPersona {
     name: string;
     prompt: string;
@@ -23,4 +25,8 @@ export declare function normalizeChatAiReplyPersona(input: {
  */
 export declare function buildChatAiReplySystemPrompt(persona?: Partial<ChatAiReplyPersona>, options?: {
     splitReply?: boolean;
+    /** 已检索到的知识库片段；与 `kbRequested` 同时出现才表示知识库参与本轮回复。 */
+    kbSnippets?: readonly string[];
+    /** 用户是否勾选了知识库参与回复（空命中时也要如实告诉模型）。 */
+    kbRequested?: boolean;
 }): string;

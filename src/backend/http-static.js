@@ -164,7 +164,32 @@ function cacheControlFor(file, urlPath) {
  * @returns 无（异步写；出错时销毁响应）。
  */
 function sendFile(res, file, urlPath, headOnly = false) {
-  const size = fs.statSync(file).size;
+  let size;
+  try {
+    // resolveStaticFile 只做了路径归一化；文件仍可能在「解析完」到「stat」之间被
+    // 升级/清理删掉（或权限被改）。statSync 抛出时若不在这里接住，会变成
+    // onRequest 的 rejection —— 客户端拿不到状态码，只能挂到超时。
+    size = fs.statSync(file).size;
+  } catch (e) {
+    const missing = e?.code === 'ENOENT' || e?.code === 'ENOTDIR';
+    console.warn('[remote-access] 静态文件 stat 失败 %s: %s', file, e?.message ?? e);
+    if (!res.headersSent && !res.writableEnded) {
+      res.writeHead(missing ? 404 : 500, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        ok: false,
+        error: {
+          message: missing ? '没有这个资源' : '静态资源读取失败',
+          code: missing ? 'NOT_FOUND' : 'STATIC_READ_FAILED',
+        },
+      }));
+    } else {
+      res.destroy();
+    }
+    return;
+  }
   res.writeHead(200, {
     'Content-Type': mimeOf(file),
     'Content-Length': String(size),

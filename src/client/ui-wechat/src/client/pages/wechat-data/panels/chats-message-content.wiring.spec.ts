@@ -66,7 +66,8 @@ describe('聊天内容完整性', () => {
 
     const emojiStart = MEDIA.indexOf('export function MessageEmoticon')
     const emoji = MEDIA.slice(emojiStart)
-    expect(emoji).toContain('}, [md5, emojiUrl])')
+    // keep-alive 隐藏时释放 data URL：依赖里必须带 keepAliveActive 才能触发释放分支。
+    expect(emoji).toContain('}, [md5, emojiUrl, keepAliveActive])')
   })
 
   it('聊天气泡使用 480px 缩略档，查看器加载原图', () => {

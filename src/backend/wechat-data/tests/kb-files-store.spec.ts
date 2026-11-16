@@ -415,11 +415,12 @@ describe('列表 · 作用域与分页', () => {
 })
 
 describe('删除 · 级联顺序与来源保护', () => {
-  it('级联顺序是唯一真源，且含五个步骤', () => {
-    expect(KB_FILE_DELETE_ORDER).toEqual(['chunks', 'fts', 'vectors', 'blob', 'file'])
+  it('级联顺序是唯一真源，且含六个步骤', () => {
+    expect(KB_FILE_DELETE_ORDER).toEqual(['chunks', 'fts', 'vectors', 'entities', 'blob', 'file'])
     // chunks 必须早于 fts（FTS 的 rowid = chunk id，先删 chunk 就问不出来了）；
     // blob 必须早于 file（判断「还有没有别人引用」要趁登记行还在）。
     expect(KB_FILE_DELETE_ORDER.indexOf('chunks')).toBeLessThan(KB_FILE_DELETE_ORDER.indexOf('fts'))
+    expect(KB_FILE_DELETE_ORDER.indexOf('entities')).toBeLessThan(KB_FILE_DELETE_ORDER.indexOf('file'))
     expect(KB_FILE_DELETE_ORDER.indexOf('blob')).toBeLessThan(KB_FILE_DELETE_ORDER.indexOf('file'))
   })
 

@@ -16,6 +16,7 @@ import {
   listMessageListRecords,
   listMessageListRules,
   reserveAiReplyMessageListRecord,
+  saveMessageListDispatchResult,
 } from '../src/query/message-list-store.ts'
 import { withWritableDb } from '../src/query/db-open.ts'
 import { taskDbPath } from '../src/query/task-db.ts'
@@ -62,12 +63,12 @@ function seedMessages(
   mkdirSync(join(decrypted, 'message'), { recursive: true })
   const db = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
   try {
-    db.exec('CREATE TABLE Name2Id (user_name TEXT)')
-    const names = db.prepare('INSERT INTO Name2Id (rowid, user_name) VALUES (?, ?)')
+    db.exec('CREATE TABLE IF NOT EXISTS Name2Id (user_name TEXT)')
+    const names = db.prepare('INSERT OR REPLACE INTO Name2Id (rowid, user_name) VALUES (?, ?)')
     names.run(1, '')
     names.run(2, 'wxid_peer')
     const table = 'Msg_' + createHash('md5').update('wxid_peer', 'utf8').digest('hex')
-    db.exec(`CREATE TABLE "${table}" (
+    db.exec(`CREATE TABLE IF NOT EXISTS "${table}" (
       local_id INTEGER PRIMARY KEY,
       sort_seq INTEGER,
       local_type INTEGER,
@@ -75,7 +76,7 @@ function seedMessages(
       real_sender_id INTEGER,
       message_content TEXT
     )`)
-    const insert = db.prepare(`INSERT INTO "${table}" (
+    const insert = db.prepare(`INSERT OR REPLACE INTO "${table}" (
       local_id, sort_seq, local_type, create_time, real_sender_id, message_content
     ) VALUES (?, ?, ?, ?, ?, ?)`)
     for (const row of rows) {
@@ -91,6 +92,15 @@ function seedMessages(
   } finally {
     db.close()
   }
+}
+
+async function dispatchSuccess(recordId: number): Promise<{ ok: true }> {
+  saveMessageListDispatchResult(decrypted, recordId, {
+    status: 'success',
+    error: '',
+    responseSummary: 'test success',
+  })
+  return { ok: true }
 }
 
 describe('AI 回复默认 Webhook 编排', () => {
@@ -266,7 +276,7 @@ describe('AI 回复默认 Webhook 编排', () => {
       op: () => {},
       gate: (_feature, _stats, texts) => texts,
       generate,
-      dispatch: async () => ({ ok: true }),
+      dispatch: dispatchSuccess,
       changed: () => {},
     })
 
@@ -303,7 +313,7 @@ describe('AI 回复默认 Webhook 编排', () => {
       op: () => {},
       gate: (_feature, _stats, texts) => texts,
       generate,
-      dispatch: async () => ({ ok: true }),
+      dispatch: dispatchSuccess,
       changed: () => {},
     })
 
@@ -321,6 +331,125 @@ describe('AI 回复默认 Webhook 编排', () => {
     await runtime.scanOnce()
     expect(generate).not.toHaveBeenCalled()
     expect(listMessageListRecords(decrypted).items).toEqual([])
+    runtime.dispose()
+  })
+
+  it('最近 80 条没有入站消息时仍以最新合法消息建立水位，第一条新消息不被漏掉', async () => {
+    const rows: Parameters<typeof seedMessages>[0] = [{
+      localId: 1,
+      sortSeq: 100,
+      type: 1,
+      createTime: 1_000,
+      senderRowId: 2,
+      content: '开启前已经回答过的旧问题',
+    }]
+    for (let localId = 2; localId <= 82; localId += 1) {
+      rows.push({
+        localId,
+        sortSeq: localId * 100,
+        type: 1,
+        createTime: localId * 1_000,
+        senderRowId: 1,
+        content: '我自己的历史消息 ' + String(localId),
+      })
+    }
+    seedMessages(rows)
+    const generate = vi.fn(async () => ({ ok: true, text: '新问题回复' }))
+    const runtime = createChatAiReplyRemotes({
+      dirs: () => ({ decrypted, decoded: join(root, 'data', 'decoded') }),
+      selfUsername: () => 'wxid_self',
+      op: () => {},
+      gate: (_feature, _stats, texts) => texts,
+      generate,
+      dispatch: dispatchSuccess,
+      changed: () => {},
+    })
+
+    expect(runtime.setEnabled({
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+    })).toMatchObject({ ok: true })
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      enabled: true,
+      cursor: 'v2:8200:82',
+    })
+
+    await runtime.scanOnce()
+    expect(generate).not.toHaveBeenCalled()
+
+    seedMessages([{
+      localId: 83,
+      sortSeq: 8_300,
+      type: 1,
+      createTime: 83_000,
+      senderRowId: 2,
+      content: '开启后的第一条新问题',
+    }])
+    await runtime.scanOnce()
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => {
+      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+        stage: 'success',
+        cursor: 'v2:8300:83',
+      })
+    })
+    expect(listMessageListRecords(decrypted).items[0]?.sourceRef)
+      .toBe('ai-reply:wxid_self:wxid_peer:83000:83')
+    runtime.dispose()
+  })
+
+  it('下游返回成功但台账仍 pending 时转为待核对，禁止自动重发', async () => {
+    seedMessages([{
+      localId: 1,
+      sortSeq: 100,
+      type: 1,
+      createTime: 1_000,
+      senderRowId: 2,
+      content: '开启前的消息',
+    }])
+    const dispatch = vi.fn(async () => ({ ok: true }))
+    const runtime = createChatAiReplyRemotes({
+      dirs: () => ({ decrypted, decoded: join(root, 'data', 'decoded') }),
+      selfUsername: () => 'wxid_self',
+      op: () => {},
+      gate: (_feature, _stats, texts) => texts,
+      generate: async () => ({ ok: true, text: '一条新回复' }),
+      dispatch,
+      changed: () => {},
+    })
+
+    expect(runtime.setEnabled({
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+    })).toMatchObject({ ok: true })
+    seedMessages([{
+      localId: 2,
+      sortSeq: 200,
+      type: 1,
+      createTime: 2_000,
+      senderRowId: 2,
+      content: '新的问题',
+    }])
+
+    await runtime.scanOnce()
+    await vi.waitFor(() => {
+      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+        stage: 'failed',
+      })
+    })
+    const record = listMessageListRecords(decrypted).items[0]
+    expect(record).toMatchObject({
+      status: 'sent_unconfirmed',
+      text: '一条新回复',
+    })
+    expect(record?.error).toContain('待核对')
+
+    await runtime.scanOnce()
+    expect(dispatch).toHaveBeenCalledTimes(1)
     runtime.dispose()
   })
 })

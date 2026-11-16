@@ -167,8 +167,9 @@ async function scanFiles(decryptedDir: string, selfUsername: string): Promise<Fi
         let sid: number | undefined
         if (selfUsername && meta.cols.has('real_sender_id')) {
           for (const [id, name] of meta.name2id) if (name === selfUsername) { sid = id; break }
-          // Name2Id 里**空 user_name 那行就是登录账号自己**（见 `meta.ts#loadShardMeta`）；
-          // 分片里查不到显式 wxid 时按这条约定兜底，否则真机上「我发出的」会全塌成收到。
+          // 老分片把登录账号记成**空 user_name 行**（见 `meta.ts#loadShardMeta`）；
+          // **只在分片里查不到显式 wxid 时**才按这条约定兜底 —— 真机上显式行通常
+          // 存在，此时空名行是另一位群成员，认成「我」会把别人的文件算成我发出的。
           if (sid === undefined) for (const [id, name] of meta.name2id) if (name === '') { sid = id; break }
         }
         // 别名与前缀不同名（`sid` 这个名字已被上面的「我的 rowid」占用），避免读错变量。

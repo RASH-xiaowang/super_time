@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
  * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **16** 项 + 底栏独立渲染的 `settings`，可路由页签共 **40**（其余 23 项 `hidden`，
+ * 侧栏可见 **16** 项 + 底栏独立渲染的 `settings` 与「Bug 反馈」入口，可路由页签共 **40**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -16,7 +16,7 @@
  * 真机几何由 `scripts/nav-shell-e2e.mjs` 按「默认展开 → 点一下收起 → 再展开」的顺序验收。
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { apiGetAvatar, apiGetSelfUsername, checkApiHealth, getApiStatus, runtimeCapabilities, subscribeApiStatus, type ApiStatus } from './api.ts'
+import { apiGetAvatar, apiGetSelfUsername, apiGetWechatConfig, checkApiHealth, getApiStatus, runtimeCapabilities, subscribeApiStatus, type ApiStatus } from './api.ts'
 import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 
 // 内容面板按页签懒加载；常驻外壳（提醒、引导、全局搜索、余额）保持静态导入。
@@ -52,6 +52,7 @@ import {
   TasksPanel,
 } from './panel-loaders.tsx'
 import { NoticeBanner } from './panels/NoticeBanner.tsx'
+import { BugReportDialog } from './panels/BugReportDialog.tsx'
 import { SetupGuide } from './panels/SetupGuide.tsx'
 import { MergedSections } from './panels/MergedSections.tsx'
 import { setActiveKb } from './panels/kb-scope.ts'
@@ -65,11 +66,13 @@ import css from './wechat-data.module.css'
 import compactCss from './ui/compact-chrome.module.css'
 import './scifi-theme.css'
 import './light-theme.css'
-import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
+import { NAV_GROUPS, hashKey, isWechatTab, ownValue, tabFromHash, tabLabelOf, type WechatTab } from './nav-config.ts'
 import { Dialog } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
+import { ErrorBoundary } from './ui/error-boundary.tsx'
 import { MobileNavHost } from './ui/mobile-nav.tsx'
 import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
+import { DATA_IDENTITY_CHANGED_EVENT, setDataDirIdentity } from './cache.ts'
 import { BrandTitle } from './panels/brand-title.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
 import { GlobalSearchResults, type GlobalSearchResultsState } from './panels/global-search-results.tsx'
@@ -107,6 +110,15 @@ let selfAvatarCache: { username: string; src: string | null } | null = null
  */
 function BrandAvatar({ online }: { online: boolean }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
+  /** 数据目录/密钥保存后递增：强制重取头像，避免顶栏继续显示上一个账号。 */
+  const [identityNonce, setIdentityNonce] = useState(0)
+
+  // 保存新账号/目录后，模块级缓存属于旧身份，必须丢掉并重取。
+  useEffect(() => {
+    const resetAvatar = (): void => { selfAvatarCache = null; setSrc(null); setIdentityNonce(n => n + 1) }
+    window.addEventListener(DATA_IDENTITY_CHANGED_EVENT, resetAvatar)
+    return () => { window.removeEventListener(DATA_IDENTITY_CHANGED_EVENT, resetAvatar) }
+  }, [])
 
   useEffect(() => {
     if (!online) {
@@ -135,7 +147,7 @@ function BrandAvatar({ online }: { online: boolean }): React.JSX.Element {
       }
     })()
     return () => { cancelled = true }
-  }, [online])
+  }, [online, identityNonce])
 
   if (!src) return <IconApp />
   return (
@@ -379,7 +391,7 @@ function renderTab(
     default:
       return (
         <div className={css.placeholder}>
-          <p>🚧 「{TAB_LABELS[tab]}」面板正在重构中</p>
+          <p>🚧 「{tabLabelOf(tab)}」面板正在重构中</p>
           <p>该页签的 React 版本将在后续迭代中接入。</p>
         </div>
       )
@@ -410,6 +422,16 @@ const DIALOG_SECTION_OF: Readonly<Record<string, string>> = {
 }
 
 /**
+ * 深链 hash → 设置弹窗的落节。**只认自有属性**：`#toString` / `#__proto__` 不能再
+ * 命中 `Object.prototype` 把函数当成节名传给设置面板。
+ * @param hash - 带不带前导 `#` 都可以。
+ * @returns 节名；不是设置类深链时 undefined。
+ */
+function dialogSectionOf(hash: string): string | undefined {
+  return ownValue<string>(DIALOG_SECTION_OF, hashKey(hash))
+}
+
+/**
  * 侧栏底部固定区：**设置**按钮。
  *
  * 为什么拆成独立组件（2026-09-30）：本文件的主组件有行数棘轮（只能变小），
@@ -431,9 +453,36 @@ function SidebarFooter({
   settingsOpen: boolean
   onOpenSettings: () => void
 }): React.JSX.Element {
+  // Bug 反馈是纯全局动作：状态只属于底部固定区，不上升到主面板（避免主组件多一个无关 state）。
+  const [bugReportOpen, setBugReportOpen] = useState(false)
   return (
     <div className={css.sidebarFooter}>
-      {/* 底部固定区域：设置始终可见（点击弹出弹窗，不切换主内容区） */}
+      {/* 底部固定区域：「Bug 反馈」+「设置」始终可见（均为弹窗，不切换主内容区） */}
+      <button
+        type="button"
+        className={css.navItem}
+        data-active={bugReportOpen || undefined}
+        onClick={() => { setBugReportOpen(true) }}
+        title="Bug 反馈"
+        aria-haspopup="dialog"
+        aria-expanded={bugReportOpen}
+      >
+        {/* 24×24 线稿 bug：与设置齿轮区分开，避免两个入口同图 */}
+        <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m8 2 1.88 1.88" />
+          <path d="M14.12 3.88 16 2" />
+          <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
+          <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" />
+          <path d="M12 20v-9" />
+          <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
+          <path d="M6 13H2" />
+          <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
+          <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
+          <path d="M22 13h-4" />
+          <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+        </svg>
+        <span className={css.navLabel}>Bug 反馈</span>
+      </button>
       <button
         type="button"
         className={css.navItem}
@@ -448,6 +497,7 @@ function SidebarFooter({
         </svg>
         <span className={css.navLabel}>设置</span>
       </button>
+      <BugReportDialog open={bugReportOpen} onClose={() => { setBugReportOpen(false) }} />
     </div>
   )
 }
@@ -638,22 +688,58 @@ function DataPanelSettingsDialog({
 }
 
 /**
+ * 深链 hash 的浏览器侧同步（hashchange / 前进后退）。
+ *
+ * 抽成模块级 hook 是为了让主组件贴着函数体棘轮：这里只做事件订阅，
+ * 切换口径仍与 `setActive` / `dialogSectionOf` 共用一套判断。
+ * @param setActive - 页签 setter（已含原型键白名单）。
+ * @param setSection - 设置弹窗落节 setter。
+ * @param setSettingsOpen - 设置弹窗开关 setter。
+ */
+function useHashNavigation(
+  setActive: React.Dispatch<React.SetStateAction<WechatTab>>,
+  setSection: React.Dispatch<React.SetStateAction<string | undefined>>,
+  setSettingsOpen: React.Dispatch<React.SetStateAction<boolean>>,
+): void {
+  useEffect(() => {
+    const syncFromHash = (): void => {
+      const raw = typeof location === 'undefined' ? '' : location.hash.replace('#', '')
+      const section = dialogSectionOf(raw)
+      if (section !== undefined) { setSection(section); setSettingsOpen(true); return }
+      const tab = tabFromHash(raw)
+      if (tab === null) return
+      setSettingsOpen(false)
+      setActive(tab)
+    }
+    window.addEventListener('hashchange', syncFromHash)
+    window.addEventListener('popstate', syncFromHash)
+    return () => { window.removeEventListener('hashchange', syncFromHash); window.removeEventListener('popstate', syncFromHash) }
+  }, [setActive, setSection, setSettingsOpen])
+}
+
+/**
  * Render the WeChat data panel shell.
  * @returns the data panel element tree.
  */
 export function WechatDataPanel(): React.JSX.Element {
   /** #settings / #privacytrust / #health 深链直接开弹窗落节；#privacy / #oplog 反过来留主内容区（只读视图）不开弹窗。 */
   const initialHash = typeof location !== 'undefined' ? location.hash.replace('#', '') : ''
-  const [active, setActiveState] = useState<WechatTab>(() => {
-    return (initialHash in TAB_LABELS && !(initialHash in DIALOG_SECTION_OF) ? initialHash : 'overview') as WechatTab
-  })
+  const initialSection = dialogSectionOf(initialHash)
+  const [active, setActiveState] = useState<WechatTab>(() => (initialSection === undefined ? tabFromHash(initialHash) : null) ?? 'overview')
   /** 「数据配置」以弹窗呈现（详见 renderTab 上方的说明），settingsSection 决定它开在哪一节。 */
-  const [settingsOpen, setSettingsOpen] = useState(() => initialHash in DIALOG_SECTION_OF)
-  const [settingsSection, setSettingsSection] = useState<string | undefined>(() => DIALOG_SECTION_OF[initialHash])
+  const [settingsOpen, setSettingsOpen] = useState(() => initialSection !== undefined)
+  const [settingsSection, setSettingsSection] = useState<string | undefined>(() => initialSection)
   const setActive = useCallback((t: WechatTab): void => {
+    // 原型键（#toString / #__proto__）在运行时可能是字符串，绝不能进入 state / 写入 hash。
+    if (!isWechatTab(t)) return
     setActiveState(t)
-    try { if (typeof location !== 'undefined') location.hash = t } catch { /* hash 写入失败可忽略 */ }
+    try {
+      // replaceState 不触发 hashchange（避免和下面的事件监听互相拉扯），也不会为切页签堆历史。
+      if (typeof location !== 'undefined' && location.hash.slice(1) !== t) history.replaceState(null, '', '#' + t)
+    } catch { /* hash 写入失败可忽略 */ }
   }, [])
+  /** 浏览器前进/后退或手动改 hash：与 `setActive` 统一的页签/弹窗切换入口。 */
+  useHashNavigation(setActiveState, setSettingsSection, setSettingsOpen)
   const apiStatus = useSyncExternalStore(subscribeApiStatus, getApiStatus)
   /** 导航栏展开态：开关按钮切换，**默认展开**（2026-09-30 起；理由见文件头，无持久化）。 */
   const [navOpen, setNavOpen] = useState(true)
@@ -719,7 +805,8 @@ export function WechatDataPanel(): React.JSX.Element {
    * 并指定节；其余照旧切换主内容区页签。
    */
   const navigate = useCallback((t: WechatTab): void => {
-    if (t in DIALOG_SECTION_OF) { openSettings(DIALOG_SECTION_OF[t]); return }
+    const section = dialogSectionOf(t)
+    if (section !== undefined) { openSettings(section); return }
     setActive(t)
   }, [openSettings, setActive])
   /** Cross-panel navigation: jump to the chats tab and open/locate a session. */
@@ -791,6 +878,8 @@ export function WechatDataPanel(): React.JSX.Element {
 
   useEffect(() => {
     void checkApiHealth()
+    // 轻量配置只取 db_dir：目录指纹用于渲染缓存命名与保活重置，不在这里读密钥。
+    void apiGetWechatConfig().then((c) => { setDataDirIdentity(c.db_dir) }).catch(() => { /* 读不到就保持空指纹 */ })
   }, [])
 
   const activePanel = useMemo(
@@ -800,8 +889,11 @@ export function WechatDataPanel(): React.JSX.Element {
   const keepAlivePanel = useKeepAlivePanel(active, activePanel)
 
   return (
-    /* ConfirmProvider 包在最外层：全应用共用一个应用内确认框实例。
-       不用原生 window.confirm（系统白框、不跟主题、阻塞渲染进程）。 */
+    /* 根级边界：侧栏 / 顶栏 / 弹窗任何一处渲染期抛错都不许把整棵根树卸成白屏。
+       主内容区还有自己的边界（见下），这里是最后一道。 */
+    <ErrorBoundary label="微信数据">
+    {/* ConfirmProvider 包在次外层：全应用共用一个应用内确认框实例。
+        不用原生 window.confirm（系统白框、不跟主题、阻塞渲染进程）。 */}
     <ConfirmProvider>
     <div className={`${css.panel} ${compactCss.compactChrome}`}>
       {/* 顶栏已整体迁入左侧导航栏（2026-09）：品牌 / 全局搜索 / 主题 / 数据状态
@@ -847,9 +939,14 @@ export function WechatDataPanel(): React.JSX.Element {
           openSettings={openSettings}
         />
         <main className={css.content}>
-          <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>
-            {keepAlivePanel}
-          </Suspense>
+          {/* 主内容区边界：按 active tab 重置错误态；keep-alive 的外层 key 只跟数据身份走，
+              所以切页签不会重挂已缓存面板（否则滚动位置/搜索词会丢）。每个 pane 内部还有
+              一层按 tab 的边界，见 keep-alive.tsx。 */}
+          <ErrorBoundary label={tabLabelOf(active)} resetKey={active}>
+            <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>
+              {keepAlivePanel}
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 
@@ -865,5 +962,6 @@ export function WechatDataPanel(): React.JSX.Element {
 
     </div>
     </ConfirmProvider>
+    </ErrorBoundary>
   )
 }

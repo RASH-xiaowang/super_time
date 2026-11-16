@@ -11,8 +11,9 @@
  *   · **finally 清槽位**：不清的话下一次「停止」会打到上一批那个已经结束的 jobId 上，
  *     后端会说「这次构建已经结束了」—— 而这一批其实正跑着。
  */
-import { useCallback, useRef, useState } from 'react'
-import { apiBuildKbVectorIndex, apiCancelKbIndexBuild } from '../api.ts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiBuildKbVectorIndex, apiCancelKbIndexBuild, apiGetKbVectorIndex } from '../api.ts'
+import type { KbVectorIndexView } from '../types.ts'
 
 export interface KbIndexBuildApi {
   /** 本面板发起的那次构建是否在跑（按钮禁用态）。 */
@@ -76,4 +77,90 @@ export function useKbIndexBuild(
   }, [])
 
   return { indexing, jobId: jobRef.current, error, run, cancel }
+}
+
+/** `useKbModelRebuild` 的返回值。 */
+export interface KbModelRebuildApi {
+  /** 本库索引状态（`null` = 还没读到）。 */
+  idx: KbVectorIndexView | null
+  /** 外部读取（弹层首屏的 `getKbModelConfig` 同批读一次）写入这里。 */
+  setIdx: (view: KbVectorIndexView | null) => void
+  /** 本弹层发起的那次重建是否在跑。 */
+  indexing: boolean
+  /** 清空本库向量并按当前模型重算。 */
+  rebuild: () => Promise<void>
+  /** 停止本轮重建（没有在跑的批次时是空操作）。 */
+  cancel: () => Promise<void>
+}
+
+/**
+ * 「本库模型」弹层里的**重建 + 进度 + 停止**（从 `KbModelDialog` 搪出：那个函数受
+ * 单函数行数棘轮管着，只许变小）。
+ *
+ * 与 `useKbIndexBuild` 的区别：那边服务于「文件」面板（增量 / 强制两种，错误自持）；
+ * 这边服务于模型弹层（总是强制重建、错误交给弹层的 `err` 横幅、且要边跑边读进度）。
+ * 两处共用同一组后端契约（`buildKbVectorIndex` / `cancelKbIndexBuild` / jobId 配对）。
+ * @param kbId - 目标库。
+ * @param onFlash - 成功/正常收尾的回执。
+ * @param onError - 写失败原因（传 `null` 清空）。
+ */
+export function useKbModelRebuild(
+  kbId: number,
+  onFlash: (text: string) => void,
+  onError: (msg: string | null) => void,
+): KbModelRebuildApi {
+  const [idx, setIdx] = useState<KbVectorIndexView | null>(null)
+  const [indexing, setIndexing] = useState(false)
+  /** 本弹层发起的那次重建的 jobId（停止按钮只停自己发起的这一轮）。 */
+  const jobRef = useRef('')
+  const seqRef = useRef(0)
+
+  // 建索引在飞时跟着轮询进度；停下的判据是**后端的 job 消失**，不是本地按钮态。
+  const jobOn = idx?.job ? `${idx.kbId}:${idx.job.done}` : ''
+  useEffect(() => {
+    if (jobOn === '') return
+    const t = setInterval(() => { void apiGetKbVectorIndex(kbId).then(setIdx).catch(() => { /* 下一轮再试 */ }) }, 1500)
+    return () => { clearInterval(t) }
+  }, [jobOn, kbId])
+
+  // 本弹层自己发起的那一轮：`indexing` 为真时也轮询。上面的 job 轮询要等 idx 里出现
+  // job，而 idx 只在 rebuild 完成后才重读 —— 于是按钮转圈的整段时间里看不到 done/total。
+  useEffect(() => {
+    if (!indexing) return
+    void apiGetKbVectorIndex(kbId).then(setIdx).catch(() => { /* 下一轮再试 */ })
+    const t = setInterval(() => { void apiGetKbVectorIndex(kbId).then(setIdx).catch(() => { /* 下一轮再试 */ }) }, 1200)
+    return () => { clearInterval(t) }
+  }, [indexing, kbId])
+
+  const rebuild = useCallback(async (): Promise<void> => {
+    const jobId = `kb-index-${String(kbId)}-rebuild-${String(++seqRef.current)}`
+    jobRef.current = jobId
+    setIndexing(true)
+    onError(null)
+    try {
+      const r = await apiBuildKbVectorIndex(kbId, true, jobId)
+      // 取消不是失败：阶段二没开，旧索引一行未动。
+      if (r.status === 'cancelled') onFlash('已停止重建，旧索引保持原样')
+      else if (!r.ok) onError(r.error ?? '重建失败')
+      else onFlash(`本库索引已重建：${r.embedded} 块 · ${r.elapsed_ms}ms`)
+      setIdx(await apiGetKbVectorIndex(kbId))
+    } catch (e) {
+      onError((e as Error).message)
+    } finally {
+      if (jobRef.current === jobId) jobRef.current = ''
+      setIndexing(false)
+    }
+  }, [kbId, onError, onFlash])
+
+  const cancel = useCallback((): Promise<void> => {
+    const jobId = jobRef.current
+    if (jobId === '') return Promise.resolve()
+    return apiCancelKbIndexBuild({ jobId })
+      .then((r: { ok: boolean; message?: string }) => {
+        if (r.ok !== true && r.message !== undefined) onError(r.message)
+      })
+      .catch((e: unknown) => { onError('没能停止：' + (e as Error).message) })
+  }, [onError])
+
+  return { idx, setIdx, indexing, rebuild, cancel }
 }

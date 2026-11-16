@@ -76,14 +76,46 @@ export { richPlaceholder };
  * 现在解析不到就留空：由内容前缀兜底，或由界面显示为未知发送者。
  */
 /**
+ * 一条待解析的「未读起点」：会话 + `unread_first_msg_srv_id` 的字符串形式。
+ */
+export interface MsgServerIdLookup {
+    /** 会话 username（`WechatSession.username` 的别名；决定 Msg_ 表名与所在分片）。 */
+    talker: string;
+    /** server_id 的**字符串**形式（SQL 侧 CAST 成 TEXT 比对，见下）。 */
+    serverId: string;
+}
+/**
+ * 批量解析「未读从什么时候开始」（第 67 轮，P2：会话未读 N+1）。
+ *
+ * 旧实现让 `querySessions` 对最多 80 个未读会话逐个调用
+ * {@link msgCreateTimeByServerId}，每次都要把**全部**消息分片打开一遍
+ * （`withShards` 按表过滤后仍要 open/close 每个含该表的分片）。会话一多，
+ * 分片打开次数 = 未读会话数 × 分片数，而且每次查询都只能按
+ * `CAST(server_id AS TEXT) = ?` 扫单表、用不上索引（int64 的 server_id 无法直接绑定）。
+ *
+ * 这里改成：
+ *   ① 分片目录只遍历一次，**每个分片只 open 一次**；
+ *   ② 同一分片内按表分组，用 `IN (?, ?, …)` 一次取回多行；
+ *   ③ 同一张表出现在多个分片时按 catalog 顺序依次尝试，保留旧语义
+ *      （第一个 `create_time > 0` 的命中生效）；某分片读失败也只跳过该分片。
+ *
+ * ⚠️ `server_id` 是 int64：SQL 侧必须 `CAST(server_id AS TEXT)` 比对，否则读出来就
+ * `ERR_OUT_OF_RANGE`；同时这也兼容老库里 `server_id` 存成 TEXT 的分片。
+ *
+ * @param decryptedDir - decrypted root.
+ * @param lookups - 按调用方顺序给出的待解析项。
+ * @returns 与 `lookups` 等长的数组；解析不到（或无效项）为 `null`。
+ */
+export declare function msgCreateTimesByServerIds(decryptedDir: string, lookups: ReadonlyArray<MsgServerIdLookup>): Array<number | null>;
+/**
  * 用 server_id 反查一条消息的 create_time（第 67 轮）。
  *
  * 用途：`SessionTable.unread_first_msg_srv_id` 指向该会话**最早的一条未读**，
  * 把它换成时间就能显示「未读 48 条 · 最早 2 小时前」，比光一个数字更能判断该先看哪个。
- * 实测本机 41 个未读会话里 39 个能解析（另 2 个 srv_id=0，是合成会话），
- * 全部解析耗时 ~7ms（复用 catalog 的分片索引），所以可以放在 getSessions 里同步做。
+ * 实测本机 41 个未读会话里 39 个能解析（另 2 个 srv_id=0，是合成会话）。
  *
- * ⚠️ `server_id` 是 int64：SQL 侧必须 `CAST(server_id AS TEXT)` 比对，否则读出来就 `ERR_OUT_OF_RANGE`。
+ * 单条查询保留为批量的薄包装：`querySessions` 已改走
+ * {@link msgCreateTimesByServerIds}，这里的实现与批量路径共享「分片只开一次」的语义。
  * @param decryptedDir - decrypted root.
  * @param talker - 会话 username（决定 Msg_ 表名与所在分片）。
  * @param serverId - server_id 的**字符串**形式。

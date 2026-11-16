@@ -143,7 +143,7 @@ const BUILTIN_FTS_TOKENIZERS = new Set(['unicode61', 'ascii', 'porter', 'trigram
 const TOKENIZE_RE = /tokenize\s*=\s*["']?([A-Za-z_][A-Za-z0-9_]*)/i
 
 /** 「本机没有这个模块/分词器」的原话 —— 万一 DDL 里没写出来，还能按这句把类判对。 */
-const MISSING_MODULE_RE = /no such (module|tokenizer|function)|not authorized/i
+export const MISSING_MODULE_RE = /no such (module|tokenizer|function)|not authorized/i
 
 /**
  * 这个库**本机体检不了**的原因（`null` = 能体检）。
@@ -154,7 +154,7 @@ const MISSING_MODULE_RE = /no such (module|tokenizer|function)|not authorized/i
  * @param abs - 库的绝对路径。
  * @returns 说清原因的一句话，或 null。
  */
-function uncheckableReason(abs: string): string | null {
+export function uncheckableReason(abs: string): string | null {
   try {
     return withDb(abs, (db) => {
       const rows = db.prepare(

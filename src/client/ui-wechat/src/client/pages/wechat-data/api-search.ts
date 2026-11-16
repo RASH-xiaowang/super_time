@@ -189,7 +189,8 @@ export async function apiSearchUnified(options: { query: string; limit?: number;
  */
 /**
  * 「推荐回复」：按当前会话的上下文（可带当前选中的知识库）生成候选回复。
- * @param options - 会话 username；kbId/count 可缺省；targetLocalId 用于对准分析中的历史消息。
+ * @param options - 会话 username；kbId/count 可缺省；targetLocalId 可把上下文截止到某条历史消息
+ *   （缺省时按会话最新上下文）。
  * @returns ReplySuggestResult；ok=false 时读 error（被隐私闸门拦下与模型不可用是两句不同的话）。
  */
 export async function apiSuggestReplies(options: {

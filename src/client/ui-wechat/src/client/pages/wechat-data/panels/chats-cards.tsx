@@ -12,6 +12,7 @@ import { renderKindOf } from '../utils/message-items.ts'
 import { MessageText } from '../utils/message-text.tsx'
 import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg } from './remote-img.tsx'
+import { StickerImage } from './chats-sticker.tsx'
 import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLocation, MessageSystem, MessageVideo, MessageVoice, quoteKindIcon } from './chats-media.tsx'
 import { AppCardIcon, FileKindIcon, RedPacketGlyph, TransferArrowGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, transferAmountLabel } from './chats-support.tsx'
 import css from './chats.module.css'
@@ -391,7 +392,7 @@ function QuoteStrip({ name, username, summary, icon, thumb, onOpen }: {
           : <span className={cssrows.msgQuoteWho}>{name}:</span>
       )}
       {icon && <span className={cssrows.msgQuoteKind} aria-hidden="true">{icon}</span>}
-      {summary && <span className={cssrows.msgQuoteWhat}>{summary}</span>}
+      {summary && <span className={css.msgQuoteWhat}>{summary}</span>}
       {thumb && (
         <span
           className={`${cssrows.msgQuoteThumbWrap} ${thumbOpen ? cssrows.msgQuoteThumbOpen : ''}`}
@@ -473,14 +474,8 @@ export function RichCard({
       const md5 = rich.md5 || (/^[0-9a-f]{32}$/i.test(title) ? title : '')
       const label = title && !/^[0-9a-f]{32}$/i.test(title) ? title : undefined
       const safeThumb = proxyableSrc(rich.thumb)
-      if (safeThumb) {
-        return (
-          <div className={cssrows.msgSticker} title={label || '表情'}>
-            <RemoteImg className={cssrows.msgStickerImg} src={safeThumb} alt={label || '表情'} loading="lazy"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-          </div>
-        )
-      }
+      if (safeThumb) return <StickerImage src={safeThumb} label={label} />
+
       if (md5) return <MessageEmoticon md5={md5} label={label} emojiUrl={typeof rich.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
       return (
         <div className={css.msgBubble}>

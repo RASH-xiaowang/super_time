@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ZipFileWriter, zipFiles } from '../src/query/zip.ts'
-import { exportAllSessions } from '../src/query/export.ts'
+import { collectMessages, exportAllSessions } from '../src/query/export.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -267,5 +267,47 @@ describe('exportAllSessions 流式产出', () => {
     }
     walk(outDir)
     expect(leftovers).toEqual([])
+  })
+})
+
+describe('collectMessages 的时间顺序', () => {
+  /** 单个会话、按 local_id/sort_seq 递增的合成消息表（跨越 1000 条的页边界）。 */
+  function makeOrderedRoot(count: number): string {
+    const root = tempDir('export-order-')
+    const decrypted = join(root, 'decrypted')
+    mkdirSync(join(decrypted, 'session'), { recursive: true })
+    mkdirSync(join(decrypted, 'message'), { recursive: true })
+    const sdb = new DatabaseSync(join(decrypted, 'session', 'session.db'))
+    sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
+    sdb.prepare('INSERT INTO SessionTable VALUES (?, ?, ?, ?, 0, 1, \'\')').run('wxid_order', '顺序夹具', 1, 1)
+    sdb.close()
+    const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+    const t = 'Msg_' + createHash('md5').update('wxid_order', 'utf8').digest('hex')
+    mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER)`)
+    const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?)`)
+    for (let i = 1; i <= count; i += 1) {
+      ins.run(i, i, 1, 0, 1700000000 + i, 1, '第 ' + String(i) + ' 条', 'srv' + String(i))
+    }
+    mdb.close()
+    return decrypted
+  }
+
+  it('跨页仍是全局 oldest→newest（页本身是新→旧排列，不能整体 reverse）', () => {
+    const decrypted = makeOrderedRoot(1205)
+    const msgs = collectMessages(decrypted, 'wxid_order', 0)
+    expect(msgs).toHaveLength(1205)
+    for (let i = 1; i < msgs.length; i += 1) {
+      expect(msgs[i]!.sortSeq!, `第 ${String(i)} 条时间倒退了`).toBeGreaterThan(msgs[i - 1]!.sortSeq!)
+    }
+    expect(msgs[0]?.localId).toBe(1)
+    expect(msgs[msgs.length - 1]?.localId).toBe(1205)
+  })
+
+  it('count 小于一页时保留的是最新 N 条（不是最新页里最旧的那一段）', () => {
+    const decrypted = makeOrderedRoot(1205)
+    const msgs = collectMessages(decrypted, 'wxid_order', 500)
+    expect(msgs).toHaveLength(500)
+    expect(msgs[0]?.localId).toBe(706)
+    expect(msgs[msgs.length - 1]?.localId).toBe(1205)
   })
 })

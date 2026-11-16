@@ -21,6 +21,7 @@ class FakeWindow {
   destroyed = false
   alwaysOnTop: { value: boolean, level?: string } | null = null
   visibleAllWorkspaces = false
+  closable: boolean | null = null
   handlers: Record<string, (...args: any[]) => void> = {}
   ready: (() => void) | null = null
   url = ''
@@ -34,6 +35,7 @@ class FakeWindow {
 
   setAlwaysOnTop(value: boolean, level?: string): void { this.alwaysOnTop = { value, level }; }
   setVisibleOnAllWorkspaces(value: boolean): void { this.visibleAllWorkspaces = value; }
+  setClosable(value: boolean): void { this.closable = value; }
   on(event: string, cb: (...args: any[]) => void): void { this.handlers[event] = cb; }
   once(_event: string, cb: () => void): void { this.ready = cb; }
   loadURL(url: string): Promise<void> {
@@ -97,14 +99,26 @@ function fakeRemote(initial: Partial<RemoteState> = {}) {
 }
 
 /** 组装一份控制面。 */
-function harness(options: { remote?: ReturnType<typeof fakeRemote>, openThrows?: boolean } = {}) {
+function harness(options: {
+  remote?: ReturnType<typeof fakeRemote>
+  openThrows?: boolean
+  backendCall?: (method: string, args: any[]) => Promise<unknown>
+  BrowserWindow?: new (opts: Record<string, any>) => FakeWindow
+} = {}) {
   FakeWindow.all = []
   const ipcHandlers = new Map<string, (...args: any[]) => any>()
   const ipcListeners = new Map<string, (...args: any[]) => void>()
   const backendCalls: Array<{ method: string, args: any[] }> = []
+  /** 收尾顺序：用于钉住「先停服、再写配置」。 */
+  const order: string[] = []
   const opened: string[] = []
   const main = fakeMainWindow()
   const remote = options.remote || fakeRemote()
+  const realStop = remote.stop
+  remote.stop = async (): Promise<RemoteState> => {
+    order.push('stop')
+    return realStop()
+  }
   const api = {
     open: null as BrowserHandoff | null,
     openExternal: async (url: string): Promise<void> => {
@@ -112,7 +126,14 @@ function harness(options: { remote?: ReturnType<typeof fakeRemote>, openThrows?:
       if (options.openThrows === true) throw new Error('no default browser')
     },
     backendCall: async (method: string, args: any[]): Promise<unknown> => {
+      order.push(`backend:${method}`)
       backendCalls.push({ method, args })
+      if (options.backendCall) return options.backendCall(method, args)
+      // 与真实后端一致：api_enabled 落库后，下一次 syncWithConfig 才知道该不该监听。
+      const patch = args?.[0]?.patch
+      if (method === 'saveWechatConfig' && typeof patch?.api_enabled === 'boolean') {
+        remote.state.enabled = patch.api_enabled
+      }
       return { ok: true, value: { ok: true } }
     },
   }
@@ -122,7 +143,7 @@ function harness(options: { remote?: ReturnType<typeof fakeRemote>, openThrows?:
       on: (channel: string, handler: (...args: any[]) => void) => { ipcListeners.set(channel, handler); },
     },
     ipcTrust: { wrap: (_channel: string, handler: (...args: any[]) => any) => handler },
-    BrowserWindow: FakeWindow,
+    BrowserWindow: options.BrowserWindow ?? FakeWindow,
     screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1040 } }) },
     nativeTheme: { shouldUseDarkColors: true },
     rootDir: 'D:/app',
@@ -131,7 +152,7 @@ function harness(options: { remote?: ReturnType<typeof fakeRemote>, openThrows?:
     openExternal: api.openExternal,
     getMainWindow: () => main.win,
   })
-  return { handoff: api.open, main, remote, backendCalls, opened, ipcHandlers, ipcListeners, FakeWindow }
+  return { handoff: api.open, main, remote, backendCalls, opened, ipcHandlers, ipcListeners, FakeWindow, order }
 }
 
 describe('浏览器交接：打开默认浏览器', () => {
@@ -149,6 +170,9 @@ describe('浏览器交接：打开默认浏览器', () => {
     expect(card.opts.frame).toBe(false)
     expect(card.opts.alwaysOnTop).toBe(true)
     expect(card.opts.skipTaskbar).toBe(true)
+    // 卡片是隐藏桌面后唯一能回去的入口：不允许被关掉（平台不认选项时还有 closed 兜底）。
+    expect(card.opts.closable).toBe(false)
+    expect(card.closable).toBe(false)
     expect(card.opts.x).toBe(1920 - CARD_WIDTH - CARD_MARGIN)
     expect(card.opts.y).toBe(1040 - CARD_HEIGHT - CARD_MARGIN)
     expect(card.alwaysOnTop).toEqual({ value: true, level: 'screen-saver' })
@@ -184,6 +208,21 @@ describe('浏览器交接：打开默认浏览器', () => {
     const saved = h.backendCalls.filter((c) => c.method === 'saveWechatConfig')
     expect(saved.some((c) => c.args?.[0]?.patch?.api_enabled === false)).toBe(true)
     expect(h.remote.calls.stopped).toBeGreaterThanOrEqual(1)
+  })
+
+  it('卡片创建失败：桌面已经藏起来了，也必须停服并把窗口还回来', async () => {
+    class BrokenWindow {
+      constructor() { throw new Error('cannot create window') }
+    }
+    const h = harness({ BrowserWindow: BrokenWindow as unknown as new (opts: Record<string, any>) => FakeWindow })
+    const r = await h.handoff.open()
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('创建悬浮卡片失败')
+    expect(h.main.state.hidden).toBe(1)
+    expect(h.main.state.shown, '卡片失败后桌面没有恢复 —— 用户无路可回').toBe(1)
+    expect(h.remote.state.running, '卡片失败后本次启动的服务还开着').toBe(false)
+    const saved = h.backendCalls.filter((c) => c.method === 'saveWechatConfig')
+    expect(saved.some((c) => c.args?.[0]?.patch?.api_enabled === false)).toBe(true)
   })
 })
 
@@ -238,6 +277,68 @@ describe('浏览器交接：点卡片返回桌面', () => {
     const r = await h.handoff.restore()
     expect(r.ok).toBe(true)
     expect(h.main.state.shown).toBe(1)
+  })
+
+  it('收尾时后端保存失败（未授权/后端未就绪）：仍然先停服并把桌面还回来', async () => {
+    let failPatch = false
+    const h = harness({
+      backendCall: async (method) => {
+        if (failPatch && method === 'saveWechatConfig') {
+          return { ok: false, error: { message: '需要有效许可证才能使用' } }
+        }
+        return { ok: true, value: { ok: true } }
+      },
+    })
+    await h.handoff.open()
+    failPatch = true
+    const r = await h.handoff.restore()
+    expect(r.ok).toBe(true)
+    expect(h.main.state.shown, '写配置失败后没有把桌面还给用户').toBe(1)
+    expect(h.handoff.state()).toEqual({ active: false })
+    // 关键顺序：stop 必须在 savePatch 之前 —— 反过来会因为后端失败提前 return，端口继续开着。
+    const stopAt = h.order.indexOf('stop')
+    const patchAt = h.order.lastIndexOf('backend:saveWechatConfig')
+    expect(stopAt).toBeGreaterThanOrEqual(0)
+    expect(patchAt).toBeGreaterThanOrEqual(0)
+    expect(stopAt, `收尾顺序反了：${h.order.join(' → ')}`).toBeLessThan(patchAt)
+  })
+
+  it('打开浏览器失败后的回滚同样先停服：配置回写失败也不能留下监听端口', async () => {
+    const remote = fakeRemote()
+    const h = harness({
+      remote,
+      openThrows: true,
+      backendCall: async (method, args) => {
+        const patch = args?.[0]?.patch ?? {}
+        if (method === 'saveWechatConfig' && patch.api_enabled === false) {
+          return { ok: false, error: { message: '后端不可用' } }
+        }
+        return { ok: true, value: { ok: true } }
+      },
+    })
+    const r = await h.handoff.open()
+    expect(r.ok).toBe(false)
+    expect(remote.state.running, '回滚没有真正停服').toBe(false)
+    const rollbackPatches = h.backendCalls.filter((c) => c.method === 'saveWechatConfig'
+      && c.args?.[0]?.patch?.api_enabled === false)
+    expect(rollbackPatches, '没有尝试把 api_enabled 改回 false').toHaveLength(1)
+    const stopAt = h.order.indexOf('stop')
+    const patchAt = h.order.lastIndexOf('backend:saveWechatConfig')
+    expect(stopAt).toBeGreaterThanOrEqual(0)
+    expect(stopAt, `停服必须先于写配置：${h.order.join(' → ')}`).toBeLessThan(patchAt)
+    expect(h.main.state.hidden).toBe(0)
+  })
+
+  it('卡片被系统关掉（closable 不被平台支持）也等于返回桌面，用户不会被困住', async () => {
+    const h = harness()
+    await h.handoff.open()
+    const card = h.FakeWindow.all[0]!
+    expect(typeof card.handlers.closed).toBe('function')
+    card.handlers.closed?.()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(h.main.state.shown, '卡片关了但桌面还藏着 —— 用户无路可回').toBe(1)
+    expect(h.handoff.state()).toEqual({ active: false })
+    expect(h.remote.calls.stopped).toBeGreaterThanOrEqual(2) // open 轮换 1 次 + 收尾 1 次
   })
 })
 

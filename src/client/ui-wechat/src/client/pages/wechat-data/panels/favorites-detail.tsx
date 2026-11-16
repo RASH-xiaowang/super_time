@@ -7,6 +7,7 @@
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
 import kitCss from '../ui/kit.module.css'
 import { FavoriteAvatar } from './favorites-avatar.tsx'
+import { SafeExternalLink } from './chats-support.tsx'
 import { FavoritePart } from './favorites-media.tsx'
 import { parseFavItem } from './favorites-parse.ts'
 import { withEnterprise } from './enterprise-identity.ts'
@@ -59,7 +60,9 @@ export function FavoriteDetail({ item, thumbs }: FavoriteDetailProps): React.JSX
           </div>
         )) : <div className={css.favPartText}>{d.desc || ''}</div>}
       </div>
-      {d.url && <a href={d.url} target="_blank" rel="noopener noreferrer" className={css.rowName}>打开链接</a>}
+      {d.url && (
+        <SafeExternalLink href={d.url} className={css.rowName} fallback={null}>打开链接</SafeExternalLink>
+      )}
     </div>
   )
 }

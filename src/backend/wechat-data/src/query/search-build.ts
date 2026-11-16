@@ -60,11 +60,15 @@ export async function ensureSearchIndex(
   const st = getSearchIndexStatus(decryptedDir)
   if (!st.ready) {
     if (opts.background === true) {
-      // 不 await：`buildSearchIndex` 自带按索引路径键控的单飞闸与结果缓存，
-      // 所以连着问十次也只会构建一次，而每一次都能拿到同一个 promise。
-      // catch 吃掉异常：失败会由索引自身体现出来（下次仍是 `ready=false` 并重来），
-      // 而这一问已经用旧索引答完了，没有任何地方会把这个异常抛回给谁。
-      void buildSearchIndex(decryptedDir, false).catch(() => { /* 下一轮提问会看到它仍未就绪 */ })
+      // 自动构建只在**空闲**时触发：已有构建在飞就不再挂一个订阅者 —— 它跑完同样会让
+      // 索引就绪，重复加入只会让引用计数虚高。状态可通过 `getSearchIndexBuildStatus()` 读。
+      if (!getSearchIndexBuildStatus(decryptedDir).building) {
+        // 不 await：`buildSearchIndex` 自带按索引路径键控的单飞闸与结果缓存，
+        // 所以连着问十次也只会构建一次。
+        // catch 吃掉异常：失败会由索引自身体现出来（下次仍是 `ready=false` 并重来），
+        // 而这一问已经用旧索引答完了，没有任何地方会把这个异常抛回给谁。
+        void buildSearchIndex(decryptedDir, false).catch(() => { /* 下一轮提问会看到它仍未就绪 */ })
+      }
       return {
         action: 'deferred',
         elapsed_ms: 0,
@@ -362,8 +366,27 @@ export const FLUSH_EVERY_CHARS = 1 << 16
  *
  * force 语义：非 force 调用可以加入任何在飞构建；force 调用若撞上在飞的非 force 构建，
  * 不能把对方的「索引已存在」当答复，而要排队在其之后再真正重建一次。
+ *
+ * 取消语义（P2）：每次构建持有**自己的** AbortController，并维护订阅者引用计数。
+ * 某个调用方 abort 只解除自己的订阅；只有**最后一个**订阅者离开时才 abort 底层构建。
+ * 因此「界面点停止」不会把另一个调用方（例如问答路径）正在等待的构建一起停掉。
  */
-export const inflightIndexBuilds = new Map<string, { promise: Promise<BuildResult>; force: boolean }>()
+export interface InflightIndexBuild {
+  /** 底层构建（一次 force/非 force 构建只跑一份，所有订阅者共享）。 */
+  promise: Promise<BuildResult>
+  /** 本次构建是否为 force（force 调用不会被非 force 调用「顶掉」）。 */
+  force: boolean
+  /** 构建自身的取消令牌：所有订阅者都取消时才 abort。 */
+  controller: AbortController
+  /** 仍在等待的调用方数量（引用计数）。 */
+  subscribers: number
+  /** 构建（排队中的也算）创建时间，用于取消结果里的 elapsed_ms。 */
+  startedAt: number
+  /** 订阅者的进度回调；底层的进度广播给所有仍订阅的调用方。 */
+  progress: Set<(done: number, total: number, rows: number) => void>
+}
+
+export const inflightIndexBuilds = new Map<string, InflightIndexBuild>()
 
 /** 构建结果。 */
 export interface BuildResult {
@@ -395,8 +418,104 @@ export interface SearchIndexBuildHooks {
 /** 被取消时从构建里抛出的哨兵（不是错误：调用方要把它显示成「已停止」）。 */
 const INDEX_BUILD_CANCELED = 'SEARCH_INDEX_BUILD_CANCELED'
 
+/** 取消结果（与 `runBuildSearchIndex` 内部的取消分支保持同一文案）。 */
+function cancelledBuildResult(startedAt: number): BuildResult {
+  return {
+    status: 'cancelled',
+    rows: 0,
+    elapsed_ms: Math.max(0, Date.now() - startedAt),
+    message: '已停止构建，旧索引保持原样',
+  }
+}
+
+/**
+ * 建一次底层构建，并把它的进度/取消通道与所有订阅者隔离开。
+ *
+ * `base` 是排队用的：force 撞上非 force 构建时要等前一个结束再真正重建。
+ * @param decryptedDir - 已解密数据根。
+ * @param force - 是否强制重建。
+ * @param base - 前一个构建（排队时）或已 resolve 的 promise。
+ * @returns 可被订阅的 in-flight 条目。
+ */
+function createIndexBuildEntry(decryptedDir: string, force: boolean, base: Promise<unknown>): InflightIndexBuild {
+  const entry: InflightIndexBuild = {
+    // 占位：真正的 promise 在下面赋值，任何调用方拿到 entry 之前已完成赋值。
+    promise: Promise.resolve({ status: 'queued' }),
+    force,
+    controller: new AbortController(),
+    subscribers: 0,
+    startedAt: Date.now(),
+    progress: new Set(),
+  }
+  entry.promise = base.then(() => runBuildSearchIndex(decryptedDir, force, {
+    signal: entry.controller.signal,
+    onProgress: (done, total, rows) => {
+      // 单个订阅者的回调异常不能打断构建，也不能影响其他订阅者。
+      for (const fn of [...entry.progress]) {
+        try { fn(done, total, rows) } catch { /* 订阅者自己的问题 */ }
+      }
+    },
+  }))
+  return entry
+}
+
+/**
+ * 加入一次在飞构建。
+ *
+ * 返回的 promise 是**每个调用方独立**的：
+ *   · 调用方 abort 且还有其他订阅者 → 立即以 `cancelled` 收尾，底层构建继续；
+ *   · 调用方 abort 且自己是最后一个 → abort 底层构建，并等它回滚完再返回
+ *     （这样「旧索引保持原样」在 promise 落定时已经是事实）；
+ *   · 未 abort → 与底层构建同结果。
+ * @param entry - 在飞构建。
+ * @param hooks - 调用方的进度/取消钩子。
+ * @returns 本次调用方视角的构建结果。
+ */
+function joinIndexBuild(entry: InflightIndexBuild, hooks?: SearchIndexBuildHooks): Promise<BuildResult> {
+  const signal = hooks?.signal
+  if (signal?.aborted === true) return Promise.resolve(cancelledBuildResult(entry.startedAt))
+  entry.subscribers += 1
+  const listener = hooks?.onProgress
+  if (listener) entry.progress.add(listener)
+
+  return new Promise<BuildResult>((resolve, reject) => {
+    let settled = false
+    const cleanup = (): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      if (listener) entry.progress.delete(listener)
+      entry.subscribers -= 1
+    }
+    const finish = (result: BuildResult): void => {
+      cleanup()
+      resolve(result)
+    }
+    const fail = (error: unknown): void => {
+      cleanup()
+      reject(error)
+    }
+    const onAbort = (): void => {
+      if (settled) return
+      cleanup()
+      if (entry.subscribers > 0) {
+        // 还有别人在等：只让本调用方提前收尾，底层构建继续跑。
+        resolve(cancelledBuildResult(entry.startedAt))
+        return
+      }
+      // 最后一个订阅者：取消的是这次构建本身；等它回滚完再由 finish/fail 落定。
+      entry.controller.abort()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    entry.promise.then(finish, fail)
+  })
+}
+
 /**
  * 构建全文检索索引（FTS5）。
+ *
+ * 并发语义见 {@link inflightIndexBuilds}：同一索引文件的并发布建共享一份底层构建；
+ * force 请求遇到在飞的非 force 构建时会排队重建；取消按调用方引用计数隔离。
  *
  * @param decryptedDir - 已解密数据根。
  * @param force - 为 true 时即使已有同版本索引也重建。
@@ -405,19 +524,49 @@ const INDEX_BUILD_CANCELED = 'SEARCH_INDEX_BUILD_CANCELED'
  */
 export function buildSearchIndex(decryptedDir: string, force?: boolean, hooks?: SearchIndexBuildHooks): Promise<BuildResult> {
   const key = searchIndexPath(decryptedDir)
+  // 预取消：不创建、不排队、也不订阅任何人的构建 —— abort 只代表「这个调用方不要了」，
+  // 不该因此启动一次没人等待的构建。
+  if (hooks?.signal?.aborted === true) return Promise.resolve(cancelledBuildResult(Date.now()))
   const slot = inflightIndexBuilds.get(key)
-  if (slot && (slot.force || !force)) return slot.promise
-  // 走到这里：没有在飞构建，或本次要求 force 而在飞的是非 force 构建（后者要排队重建）。
+  // 已经被最后一个订阅者取消的条目不再可加入：它的 controller 已 abort，加入只会
+  // 立刻拿到 cancelled。新调用方应当排队到它之后再起一次真正构建。
+  if (slot && !slot.controller.signal.aborted && (slot.force || !force)) {
+    return joinIndexBuild(slot, hooks)
+  }
+  // 走到这里：没有可加入的在飞构建，或本次要求 force 而在飞的是非 force 构建（后者要排队重建）。
   const base: Promise<unknown> = slot ? slot.promise.catch(() => undefined) : Promise.resolve()
-  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force, hooks))
-  const entry = { promise, force: Boolean(force) }
+  const entry = createIndexBuildEntry(decryptedDir, Boolean(force), base)
   inflightIndexBuilds.set(key, entry)
   // 用双参 then 而非 finally：派生的 promise 恒为 fulfilled，不会产生未处理的拒绝。
   const release = (): void => {
     if (inflightIndexBuilds.get(key) === entry) inflightIndexBuilds.delete(key)
   }
-  promise.then(release, release)
-  return promise
+  entry.promise.then(release, release)
+  return joinIndexBuild(entry, hooks)
+}
+
+/**
+ * 当前索引构建状态（只读，不触发构建）。
+ *
+ * 供「自动构建只在空闲触发」的调用方判断是否已有构建在飞；也便于诊断面板展示
+ * 「构建中 / 排队中 / 几个调用方在等」。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 是否在飞、是否 force、订阅者数量与已运行时间；空闲时全部为零/undefined。
+ */
+export function getSearchIndexBuildStatus(decryptedDir: string): {
+  building: boolean
+  force: boolean
+  subscribers: number
+  elapsed_ms: number
+} {
+  const entry = inflightIndexBuilds.get(searchIndexPath(decryptedDir))
+  if (entry === undefined) return { building: false, force: false, subscribers: 0, elapsed_ms: 0 }
+  return {
+    building: true,
+    force: entry.force,
+    subscribers: entry.subscribers,
+    elapsed_ms: Math.max(0, Date.now() - entry.startedAt),
+  }
 }
 
 /**

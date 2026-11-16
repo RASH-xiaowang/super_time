@@ -29,8 +29,11 @@ export interface ImagePreloadOption {
   talker: string
   /** 虚拟行（与列表渲染用的是同一份）。 */
   items: readonly MessageRenderItem[]
-  /** 虚拟化器：只用它判断当前可见区间。 */
-  virtualizer: { getVirtualItems(): ReadonlyArray<{ index: number }> }
+  /** 虚拟化器：判断当前可见区间，并监听它的滚动容器以在滚动停止后重新预取。 */
+  virtualizer: {
+    getVirtualItems(): ReadonlyArray<{ index: number }>
+    scrollElement?: Element | null
+  }
   /** 可见窗口上下各多看几行。默认 {@link LOOKAHEAD}。 */
   lookahead?: number
 }
@@ -92,7 +95,7 @@ export function useImagePreload(option: ImagePreloadOption): void {
       }
     }
 
-    const timer = window.setTimeout(() => {
+    const run = (): void => {
       // 1) 收集：可见窗口 ± lookahead 内的图片消息，且还没进缓存、也不在飞
       const virtual = virtualizer.getVirtualItems()
       if (virtual.length === 0) return
@@ -120,6 +123,8 @@ export function useImagePreload(option: ImagePreloadOption): void {
         inflight.current.set(key, myToken)
         claimed.push(key)
       }
+      // 上一轮的空闲调度还没跑就作废：否则滚动连发几次会在空闲时同时拉起几批。
+      disposeIdle?.()
       disposeIdle = onIdle(() => {
         if (cancelled || myEpoch !== epoch.current) {
           releaseClaims()
@@ -146,11 +151,22 @@ export function useImagePreload(option: ImagePreloadOption): void {
           }
         })()
       })
-    }, PREFETCH_DEBOUNCE_MS)
+    }
+    let timer = window.setTimeout(run, PREFETCH_DEBOUNCE_MS)
+    // 滚动停止后再按新的可见区间重跑。原先只靠 effect 重跑，但依赖里只有
+    // `items` / 虚拟化器身份 —— 滚动不会重建它们，预取实际只在消息变化时发生
+    // （与注释里「滚动会不停重跑本 effect」相反）。
+    const scrollEl = virtualizer.scrollElement ?? null
+    const onScroll = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(run, PREFETCH_DEBOUNCE_MS)
+    }
+    scrollEl?.addEventListener('scroll', onScroll, { passive: true })
 
     return () => {
       cancelled = true
       window.clearTimeout(timer)
+      scrollEl?.removeEventListener('scroll', onScroll)
       disposeIdle?.()
       releaseClaims()
     }

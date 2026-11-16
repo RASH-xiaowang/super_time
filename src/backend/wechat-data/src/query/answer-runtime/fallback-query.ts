@@ -68,6 +68,24 @@ export function fallbackTerms(query: string): string[] {
 }
 
 /**
+ * 从问题里识别要盘点的媒体种类。
+ *
+ * 只收窄到明确的种类词；识别不出时返回 undefined，让兜底跳过该工具，
+ * 而不是猜一个种类去扫全库（猜错会给出「没有图片」这类错误结论）。
+ * @param query - 原始问题。
+ * @returns `aggregate_media.kind` 或 undefined。
+ */
+function fallbackMediaKind(query: string): string | undefined {
+  if (/视频/.test(query)) return 'video'
+  if (/语音|音频/.test(query)) return 'voice'
+  if (/表情/.test(query)) return 'emoji'
+  if (/位置|定位/.test(query)) return 'location'
+  if (/文件|文档|附件/.test(query)) return 'file'
+  if (/图片|照片|图像|截图/.test(query)) return 'image'
+  return undefined
+}
+
+/**
  * 为确定性兜底构造最小合法参数。
  *
  * 只填工具必填项与服务端锁定范围。缺必填项的工具直接跳过，交给证据层
@@ -110,13 +128,67 @@ export function fallbackArguments(
   }
   if (name === 'get_message_context') return undefined
   if (name === 'list_sessions') return {}
+  /*
+   * 专用数据域工具：只填问题里能确定的部分（锁定范围、内容词、媒体种类）。
+   * 模型首轮没调工具时，这些工具往往是唯一能看到对应数据的入口
+   * （通话 / 账单 / 朋友圈不在聊天检索索引里），没有兜底参数等于放弃兜底。
+   */
+  if (name === 'get_funds_summary') {
+    return withScope({})
+  }
+  if (name === 'get_call_history') {
+    return {
+      ...(username ? { peer: username } : {}),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+      order: 'recent',
+    }
+  }
+  if (name === 'aggregate_media') {
+    const kind = fallbackMediaKind(query)
+    if (kind === undefined) return undefined
+    return withScope({ kind })
+  }
+  if (name === 'get_moments_stats') {
+    return {
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    }
+  }
+  if (name === 'search_revoked') {
+    return {
+      ...(termQuery === '' ? {} : { query: termQuery }),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    }
+  }
+  if (name === 'get_group_detail') {
+    // 只有锁定范围本身就是群时才敢直接查；部分群名匹配交给模型。
+    return username !== undefined && username.endsWith('@chatroom')
+      ? { group: username }
+      : undefined
+  }
+  if (name === 'search_files') {
+    /*
+     * 文件索引没有会话归属：锁定会话时兜底注入 username 只会稳定得到
+     * `unsupported_scope`，白占一次调用预算（2026-11-13 审计）。锁定会话
+     * 直接不发起这次注定失败的调用；只有日期锁定时仍按关键词兜底。
+     */
+    if (username !== undefined) return undefined
+    return termQuery === ''
+      ? undefined
+      : {
+        query: termQuery,
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+      }
+  }
   if (
     name === 'search_hybrid'
     || name === 'search_semantic'
     || name === 'search_contacts'
     || name === 'search_moments'
     || name === 'search_favorites'
-    || name === 'search_files'
     || name === 'search_records'
   ) {
     return termQuery === '' ? undefined : withScope({ query: termQuery })

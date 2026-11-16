@@ -270,6 +270,8 @@ export function traceGroupsOf(input: {
   stages: readonly AskStage[]
   tools: readonly ToolView[]
   reasoning: readonly AskReasoningSegment[]
+  /** 页面已经单独渲染了检索规划时，意图阶段不再重复成「运行步骤」。 */
+  hasPlan?: boolean
 }): AskTraceGroup[] {
   const groups = new Map<string, AskTraceGroup>()
   const hasStructuredTools = input.tools.length > 0 || input.stages.some(stage =>
@@ -290,6 +292,8 @@ export function traceGroupsOf(input: {
       if (round !== undefined) getGroup(groups, groupMapKey(round, undefined), round, undefined)
       return
     }
+    // 意图已经由页面顶部的「检索规划」展示；再列成「运行步骤」是重复信息。
+    if (input.hasPlan === true && stage.key === 'answer:intent') return
     // The generic wrapper is redundant when this run already has per-round tools.
     if (stage.key === 'answer:tools' && hasStructuredTools) return
     // The round header already communicates this boundary; repeating it as a

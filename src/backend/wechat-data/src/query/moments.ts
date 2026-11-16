@@ -53,6 +53,20 @@ export interface MomentMedia {
   id?: string
   /** Timeline <id> (SnsDataItem/TimelineObject id). */
   timelineId?: string
+  /** XML 外层 `<size width>`：原图期望宽度。 */
+  originalWidth?: number
+  /** XML 外层 `<size height>`：原图期望高度。 */
+  originalHeight?: number
+  /** XML 外层 `<size totalSize>`：原图期望字节数（可缺省）。 */
+  originalBytes?: number
+  /** XML `<uhd>` 地址；真实样本保留 `/2000` 才 200，改成 `/0` 会 400。 */
+  uhdUrl?: string
+  /** `<uhd token>`；与普通 `<url token>` 是两套值。 */
+  uhdToken?: string
+  /** `<uhd key>`；与普通 `<url key>` 是两套值。 */
+  uhdSeed?: string
+  /** `<uhd md5>`；仅用于诊断。 */
+  uhdMd5?: string
   /** 这张静态图附带的实况视频；普通图片没有该字段。 */
   livePhoto?: MomentLivePhoto
 }
@@ -140,6 +154,8 @@ export interface MomentEntry {
   location: string
   link_title: string
   link_url: string
+  /** 视频号卡片的封面地址；普通图片/文章没有该字段。 */
+  link_thumb?: string
   /** ContentObject <type>: 3=公众号文章链接, 28=视频号, 1=普通动态. */
   contentType?: number
   /** 公众号/来源显示名 (<sourceNickName>). */
@@ -206,6 +222,14 @@ function xmlTagAttr(xml: string, tag: string, attr: string): string | null {
   return tagStr.slice(v, e)
 }
 
+/** 读标签属性里的正整数；缺失/非法/0 一律返回 `undefined`。 */
+function xmlTagAttrPositiveInt(xml: string, tag: string, attr: string): number | undefined {
+  const raw = xmlTagAttr(xml, tag, attr)
+  if (raw === null) return undefined
+  const parsed = Number.parseInt(unescapeXml(raw).trim(), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 /**
  * 取一个元素的**原始内部 XML**（不剥 CDATA、不做实体反转义）。
  *
@@ -226,6 +250,21 @@ function xmlElementInner(xml: string, tag: string): string | null {
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
   return xml.slice(contentStart, close)
+}
+
+/** 从外层 `<media>` 里去掉嵌套元素（实况视频的 `<LivePhoto>`），避免误取内层尺寸/URL。 */
+function xmlWithoutElement(xml: string, tag: string): string {
+  const openExact = '<' + tag + '>'
+  const openAttr = '<' + tag + ' '
+  const exactAt = xml.indexOf(openExact)
+  const attrAt = xml.indexOf(openAttr)
+  const start = exactAt >= 0 ? exactAt : attrAt
+  if (start < 0) return xml
+  const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
+  if (contentStart <= start) return xml
+  const close = xml.indexOf('</' + tag + '>', contentStart)
+  if (close < 0) return xml
+  return xml.slice(0, start) + xml.slice(close + tag.length + 3)
 }
 
 /** Extract text of the first nested tag inside a parent tag. */
@@ -393,6 +432,8 @@ export function parseSnsXml(xml: string): {
   lng: number
   linkTitle: string
   linkUrl: string
+  /** 视频号卡片的封面地址（`<finderFeed><mediaList><media><coverUrl>`）。 */
+  linkThumb: string
   contentType: number
   sourceNickName: string
   publicUserName: string
@@ -400,7 +441,12 @@ export function parseSnsXml(xml: string): {
 } {
   const text = tagTextFirst(xml, ['contentDesc', 'ContentDesc'])
   const createTime = Number.parseInt(tagTextFirst(xml, ['createTime', 'CreateTime']), 10) || 0
-  const blocks = mediaBlocks(xml)
+  const contentType = Number.parseInt(tagTextFirst(xml, ['type', 'Type']), 10) || 0
+  // 视频号分享的 `<finderFeed>` 里也有 `<mediaList><media>`，但它是视频封面/播放源，
+  // 不是朋友圈九宫格图片。先取出 finderFeed 再扫描外层媒体，避免把无 md5/id 的视频
+  // 媒体误渲染成普通图片格。
+  const finderFeed = xmlElementInner(xml, 'finderFeed') ?? ''
+  const blocks = mediaBlocks(finderFeed === '' ? xml : xmlWithoutElement(xml, 'finderFeed'))
   const mediaCount = blocks.length
 
   const images: MomentMedia[] = []
@@ -408,17 +454,20 @@ export function parseSnsXml(xml: string): {
   let hasVideo = false
   const timelineId = tagTextFirst(xml, ['id', 'Id']) || undefined
   for (const inner of blocks) {
-    const url = tagTextFirst(inner, ['url', 'Url', 'cdnUrl', 'cdnurl'])
-    const thumb = tagTextFirst(inner, ['thumb', 'Thumb', 'cdnThumbUrl', 'cdnthumburl', 'thumbUrl', 'thumburl', 'coverUrl', 'coverurl'])
-    const key = xmlTagAttr(inner, 'enc', 'key') ?? xmlTagAttr(inner, 'thumb', 'key') ?? xmlTagAttr(inner, 'url', 'key') ?? ''
-    const md5 = xmlTagAttr(inner, 'url', 'md5') ?? ''
+    // 实况照片的外层 `<media>` 里嵌着 `<LivePhoto><liveMedia>`，后者也有
+    // `<url>/<size>`；先剥掉它，保证图片字段永远是外层那一份。
+    const outer = xmlWithoutElement(xmlWithoutElement(inner, 'LivePhoto'), 'livePhoto')
+    const url = tagTextFirst(outer, ['url', 'Url', 'cdnUrl', 'cdnurl'])
+    const thumb = tagTextFirst(outer, ['thumb', 'Thumb', 'cdnThumbUrl', 'cdnthumburl', 'thumbUrl', 'thumburl', 'coverUrl', 'coverurl'])
+    const key = xmlTagAttr(outer, 'enc', 'key') ?? xmlTagAttr(outer, 'thumb', 'key') ?? xmlTagAttr(outer, 'url', 'key') ?? ''
+    const md5 = xmlTagAttr(outer, 'url', 'md5') ?? ''
     // CDN 取图要带：`<url token>` / `<thumb token>`（实测 `token+idx=1` 才 200）
-    const token = xmlTagAttr(inner, 'url', 'token') ?? xmlTagAttr(inner, 'thumb', 'token') ?? ''
-    const mediaId = tagTextFirst(inner, ['id', 'Id']) || undefined
-    const duration = Number.parseFloat(tagTextFirst(inner, ['videoDuration'])) || 0
+    const token = xmlTagAttr(outer, 'url', 'token') ?? xmlTagAttr(outer, 'thumb', 'token') ?? ''
+    const mediaId = tagTextFirst(outer, ['id', 'Id']) || undefined
+    const duration = Number.parseFloat(tagTextFirst(outer, ['videoDuration'])) || 0
     // The first <type> belongs to the outer media block; the nested <liveMedia><type>6</type>
     // must not turn a live photo into a standalone video tile.
-    const mediaType = Number.parseInt(tagTextFirst(inner, ['type', 'Type']), 10) || 0
+    const mediaType = Number.parseInt(tagTextFirst(outer, ['type', 'Type']), 10) || 0
     if (url && (mediaType === 4 || mediaType === 6 || mediaType === 15 || isVideoUrl(url))) {
       const videoEntry: MomentVideo = { url, thumb, key, md5, duration }
       if (mediaId) videoEntry.id = mediaId
@@ -429,12 +478,26 @@ export function parseSnsXml(xml: string): {
       const mediaEntry: MomentMedia = { thumb, url, key, md5, token }
       if (mediaId) mediaEntry.id = mediaId
       if (timelineId) mediaEntry.timelineId = timelineId
+      const originalWidth = xmlTagAttrPositiveInt(outer, 'size', 'width')
+      const originalHeight = xmlTagAttrPositiveInt(outer, 'size', 'height')
+      const originalBytes = xmlTagAttrPositiveInt(outer, 'size', 'totalSize')
+      if (originalWidth !== undefined) mediaEntry.originalWidth = originalWidth
+      if (originalHeight !== undefined) mediaEntry.originalHeight = originalHeight
+      if (originalBytes !== undefined) mediaEntry.originalBytes = originalBytes
+      const uhdUrl = tagTextFirst(outer, ['uhd', 'Uhd', 'UHD'])
+      const uhdMd5 = xmlTagAttr(outer, 'uhd', 'md5') ?? ''
+      const uhdToken = xmlTagAttr(outer, 'uhd', 'token') ?? ''
+      const uhdSeed = xmlTagAttr(outer, 'uhd', 'key') ?? ''
+      if (uhdUrl !== '') mediaEntry.uhdUrl = uhdUrl
+      if (uhdMd5 !== '') mediaEntry.uhdMd5 = uhdMd5
+      if (uhdToken !== '') mediaEntry.uhdToken = uhdToken
+      if (uhdSeed !== '') mediaEntry.uhdSeed = uhdSeed
       const livePhoto = parseMomentLivePhoto(inner, timelineId)
       if (livePhoto !== undefined) mediaEntry.livePhoto = livePhoto
       images.push(mediaEntry)
     }
   }
-  const mediaDesc = mediaCount === 0 ? '' : hasVideo ? '视频' : `图片×${mediaCount}`
+  const mediaDesc = contentType === 28 ? '视频号' : mediaCount === 0 ? '' : hasVideo ? '视频' : `图片×${mediaCount}`
   const location = xmlTagAttr(xml, 'location', 'poiName') ?? xmlTagAttr(xml, 'location', 'poiname') ?? ''
   const city = xmlTagAttr(xml, 'location', 'city') ?? ''
   const country = xmlTagAttr(xml, 'location', 'country') ?? ''
@@ -443,9 +506,22 @@ export function parseSnsXml(xml: string): {
   const rawLng = Number(xmlTagAttr(xml, 'location', 'longitude') ?? '') || 0
   const lat = rawLng
   const lng = rawLat
-  const linkTitle = unescapeXml(xmlNestedText(xml, 'ContentObject', 'title') ?? '') || unescapeXml(xmlNestedText(xml, 'contentObject', 'title') ?? '') || ''
+  let linkTitle = unescapeXml(xmlNestedText(xml, 'ContentObject', 'title') ?? '') || unescapeXml(xmlNestedText(xml, 'contentObject', 'title') ?? '') || ''
   const linkUrl = unescapeXml(xmlTagText(xml, 'contentUrl') ?? '') || unescapeXml(xmlTagText(xml, 'ContentUrl') ?? '') || ''
-  const contentType = Number.parseInt(tagTextFirst(xml, ['type', 'Type']), 10) || 0
+  const linkThumb = contentType === 28
+    ? tagTextFirst(finderFeed, ['coverUrl', 'coverurl', 'thumbUrl', 'thumburl'])
+    : ''
+  if (contentType === 28) {
+    // 微信旧客户端会把视频号标题写成「当前微信版本不支持展示该内容…」；
+    // 真正的标题在 `<finderFeed><desc>`，不要把这个错误占位当成正文标题。
+    const titleWithoutPrefix = linkTitle.replace(/^\[视频号\]\s*/, '')
+    const unsupported = /当前微信版本不支持展示该内容|请升级至最新版本/.test(titleWithoutPrefix)
+    if (titleWithoutPrefix === '' || unsupported) {
+      linkTitle = tagTextFirst(finderFeed, ['desc']) || '视频号内容'
+    } else {
+      linkTitle = titleWithoutPrefix
+    }
+  }
   const sourceNickName = tagTextFirst(xml, ['sourceNickName', 'SourceNickName']) || ''
   const publicUserName = tagTextFirst(xml, ['publicUserName', 'PublicUserName']) || ''
   const nickname = tagTextFirst(xml, ['nickname', 'NickName', 'nickName']) || ''
@@ -463,6 +539,7 @@ export function parseSnsXml(xml: string): {
     lng,
     linkTitle,
     linkUrl,
+    linkThumb,
     contentType,
     sourceNickName,
     publicUserName,
@@ -583,7 +660,7 @@ const LAST_ARCHIVE_SYNC = new Map<string, number>()
  * 重算，新字段（本次的 `livePhoto`）在已有安装上永远不可见。把版本写进 hash，
  * 升级后每条线上动态只重放一次，之后恢复按内容去重。
  */
-const ARCHIVE_PARSE_VERSION = 'moments-parser-2026-11-02-live-photo-v1'
+const ARCHIVE_PARSE_VERSION = 'moments-parser-2026-11-08-video-channel-v1'
 
 /** 归档去重 hash：解析器版本 + 原始 XML。 */
 function momentContentHash(xml: string): string {
@@ -670,6 +747,13 @@ function mergeMomentMedia(oldImage: MomentMedia, nextImage: MomentMedia): Moment
   if (nextImage.token !== undefined && nextImage.token !== '') merged.token = nextImage.token
   if (nextImage.id !== undefined && nextImage.id !== '') merged.id = nextImage.id
   if (nextImage.timelineId !== undefined && nextImage.timelineId !== '') merged.timelineId = nextImage.timelineId
+  if (nextImage.originalWidth !== undefined && nextImage.originalWidth > 0) merged.originalWidth = nextImage.originalWidth
+  if (nextImage.originalHeight !== undefined && nextImage.originalHeight > 0) merged.originalHeight = nextImage.originalHeight
+  if (nextImage.originalBytes !== undefined && nextImage.originalBytes > 0) merged.originalBytes = nextImage.originalBytes
+  if (nextImage.uhdUrl !== undefined && nextImage.uhdUrl !== '') merged.uhdUrl = nextImage.uhdUrl
+  if (nextImage.uhdToken !== undefined && nextImage.uhdToken !== '') merged.uhdToken = nextImage.uhdToken
+  if (nextImage.uhdSeed !== undefined && nextImage.uhdSeed !== '') merged.uhdSeed = nextImage.uhdSeed
+  if (nextImage.uhdMd5 !== undefined && nextImage.uhdMd5 !== '') merged.uhdMd5 = nextImage.uhdMd5
   if (nextImage.livePhoto !== undefined) merged.livePhoto = nextImage.livePhoto
   return merged
 }
@@ -692,18 +776,25 @@ function mergeArchivedEntry(oldPayload: string, next: MomentEntry): MomentEntry 
     text: next.text === '' ? old.text : next.text,
     likes: unionBy(old.likes ?? [], next.likes, (l) => l.username + '|' + l.nickname),
     comments: unionBy(old.comments ?? [], next.comments, (c) => JSON.stringify(c)),
-    images: unionBy(
-      old.images ?? [],
-      next.images,
-      (m) => (m.md5 || '') + '|' + (m.timelineId ?? '') + '|' + (m.id ?? ''),
-      mergeMomentMedia,
-    ),
+    // 视频号分享的旧归档里可能混入 finderFeed 的视频媒体（无 md5/id），
+    // 它不是可展示的图片；升级解析器后必须以线上解析结果为准，不能再并集保留。
+    images: next.contentType === 28
+      ? next.images
+      : unionBy(
+          old.images ?? [],
+          next.images,
+          (m) => (m.md5 || '') + '|' + (m.timelineId ?? '') + '|' + (m.id ?? ''),
+          mergeMomentMedia,
+        ),
     videos: unionBy(old.videos ?? [], next.videos, (v) => (v.md5 || '') + '|' + (v.timelineId ?? '') + '|' + (v.id ?? '')),
   }
   if (merged.location === '' && old.location !== '') merged.location = old.location
   if (merged.link_title === '' && old.link_title !== '') {
     merged.link_title = old.link_title
     merged.link_url = old.link_url
+  }
+  if (merged.link_thumb === undefined && old.link_thumb !== undefined && old.link_thumb !== '') {
+    merged.link_thumb = old.link_thumb
   }
   return merged
 }
@@ -738,6 +829,7 @@ function buildMomentEntry(
     likes: social.likes,
     comments: social.comments,
   }
+  if (parsed.linkThumb !== '') entry.link_thumb = parsed.linkThumb
   if (parsed.contentType) entry.contentType = parsed.contentType
   if (parsed.sourceNickName) entry.sourceNickName = parsed.sourceNickName
   if (parsed.publicUserName) entry.publicUserName = parsed.publicUserName

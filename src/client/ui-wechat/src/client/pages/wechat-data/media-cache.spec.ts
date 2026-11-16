@@ -1,11 +1,95 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it, vi } from 'vitest'
 import { trimMediaCache } from './media-cache.ts'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const SOURCE = readFileSync(join(HERE, 'media-cache.ts'), 'utf8')
 
 interface FakeEntry {
   key: string
   at: number
   size: number
+}
+
+/**
+ * 只实现缓存写回/读取要用的 IndexedDB 面。
+ *
+ * 重点是可观察：`open` 的版本号、`clear` 是否发生、缩略图写入前后的记录值。
+ */
+function fakeIndexedDb(): {
+  factory: IDBFactory
+  data: Map<string, unknown>
+  versions: number[]
+  cleared: () => boolean
+} {
+  const data = new Map<string, unknown>()
+  const versions: number[] = []
+  let clearCount = 0
+
+  const makeTx = (): Record<string, any> => {
+    const tx: Record<string, any> = {}
+    const finish = (): void => { queueMicrotask(() => tx.oncomplete?.()) }
+    const store: Record<string, any> = {
+      get(key: string) {
+        const req: Record<string, any> = { result: undefined }
+        queueMicrotask(() => {
+          req.result = data.get(key)
+          req.onsuccess?.()
+          finish()
+        })
+        return req
+      },
+      put(value: unknown, key: string) {
+        data.set(key, value)
+        finish()
+      },
+      clear() {
+        clearCount += 1
+        data.clear()
+        finish()
+      },
+      index() {
+        return {
+          openCursor() {
+            const req: Record<string, any> = { result: null }
+            queueMicrotask(() => {
+              req.onsuccess?.()
+              finish()
+            })
+            return req
+          },
+        }
+      },
+    }
+    tx.objectStore = () => store
+    return tx
+  }
+
+  const db = {
+    objectStoreNames: { contains: () => false },
+    createObjectStore: () => ({ createIndex: () => ({}) }),
+    transaction: () => makeTx(),
+  }
+  const factory = {
+    open(_name: string, version: number) {
+      versions.push(version)
+      const req: Record<string, any> = { result: db }
+      queueMicrotask(() => {
+        req.onupgradeneeded?.({ oldVersion: 0 })
+        req.onsuccess?.()
+      })
+      return req
+    },
+  }
+  return {
+    factory: factory as unknown as IDBFactory,
+    data,
+    versions,
+    cleared: () => clearCount > 0,
+  }
 }
 
 /**
@@ -94,5 +178,31 @@ describe('IndexedDB 媒体缓存裁剪', () => {
     expect(fixture.calls).not.toContain('getAll')
     expect(fixture.calls).not.toContain('getAllKeys')
     expect(fixture.entries.map((entry) => entry.key)).toEqual(['middle', 'newest'])
+  })
+})
+
+describe('IndexedDB 媒体缓存版本与缩略图写回', () => {
+  it('库版本与条目语义版本都升到 3，跨版本升级清库', () => {
+    expect(SOURCE).toMatch(/const MEDIA_DB_VERSION = 3/)
+    expect(SOURCE).toMatch(/const MEDIA_ENTRY_V = 3/)
+    expect(SOURCE).toMatch(/ev\.oldVersion > 0 && ev\.oldVersion < MEDIA_DB_VERSION/)
+    expect(SOURCE).toMatch(/store\.clear\(\)/)
+  })
+
+  it('迟到的缩略图不会覆盖已落盘的 v3 原图', async () => {
+    vi.resetModules()
+    const fake = fakeIndexedDb()
+    vi.stubGlobal('indexedDB', fake.factory)
+    try {
+      const mod = await import('./media-cache.ts')
+      await mod.snsMediaCacheSet('same-key', 'data:original', false)
+      await mod.snsMediaCacheSet('same-key', 'data:thumb', true)
+
+      expect(fake.versions).toEqual([3])
+      expect(fake.cleared(), '首次建库不该清空').toBe(false)
+      await expect(mod.snsMediaCacheGet('same-key', true)).resolves.toBe('data:original')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

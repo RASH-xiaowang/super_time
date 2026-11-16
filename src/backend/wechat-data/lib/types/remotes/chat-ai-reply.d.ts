@@ -14,6 +14,8 @@ export interface CreateChatAiReplyRemotesInputs {
     }, texts: string[]) => string[];
     generate: ChatAiReplyGenerateFn;
     decodeImages?: NonNullable<ChatAiReplyScanDeps['decodeImages']>;
+    /** 知识库片段检索；由网关接到与问答相同的混合检索通道。 */
+    collectKbSnippets?: NonNullable<ChatAiReplyScanDeps['collectKbSnippets']>;
     dispatch: (recordId: number) => Promise<ChatAiReplyDispatchResult>;
     onRecordSaved?: ChatAiReplyScanDeps['onRecordSaved'];
     onRecordUpdated?: ChatAiReplyScanDeps['onRecordUpdated'];
@@ -54,6 +56,8 @@ export declare function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInp
         personaName: string;
         personaPrompt: string;
         splitReply?: boolean;
+        kbEnabled?: boolean;
+        kbId?: number;
         expectedRevision?: number;
     }): ChatAiReplyMutationResult;
     scanOnce(): Promise<ChatAiReplyScanResult>;

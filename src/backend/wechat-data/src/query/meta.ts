@@ -310,9 +310,11 @@ function loadShardMeta(dbFile: string): ShardMeta {
         try {
           const rows = db.prepare('SELECT rowid AS id, user_name AS u FROM ' + t).all() as Array<{ id: number; u: unknown }>
           for (const row of rows) {
-            // 空 user_name 必须写入：WeChat 4.x 用 Name2Id 空行代表「登录账号自己」
-            // （实测每个分片恰好 1 行，被约 6% 的消息引用）。跳过空行会让这些消息
-            // 解析不到 sender，isSelf 全部塌成 false —— 自己发的话全跑到对方气泡侧。
+            // 空 user_name 必须写入（每个分片恰好 1 行，被约 6% 的消息引用）：
+            // 老分片用它代表「登录账号自己」。但**不能无条件**这样认 —— 真机上
+            // 登录账号往往另有显式 wxid 行，空行反而是另一位群成员；调用方
+            // （`messages.ts#shardMarksSelfWithEmptyRow`、`calls.ts#findSelfRowId`）
+            // 负责先找显式行、找不到才退回空行。这里跳掉空行则两者都无从判断。
             const u = decode(row.u).trim()
             name2id.set(row.id, u)
           }

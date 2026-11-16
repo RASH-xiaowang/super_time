@@ -18,7 +18,7 @@ import kitCss from '../ui/kit.module.css'
 import { clickableKey } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { fmtBytes } from '../utils/format.ts'
-import { openLink } from './chats-support.tsx'
+import { SafeExternalLink } from './chats-support.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import css from './list-panel.module.css'
@@ -403,7 +403,7 @@ function FavoriteFile({ part }: { part: FavItemPart }): React.JSX.Element {
   )
 }
 
-/** 链接统一经 `openLink`，只放行 http(s)。 */
+/** 链接统一经 `SafeExternalLink`，只放行 http(s)。 */
 function FavoriteLink({ part }: { part: FavItemPart }): React.JSX.Element {
   const title = part.text || part.title || part.url || '链接'
   const url = part.url ?? ''
@@ -417,9 +417,7 @@ function FavoriteLink({ part }: { part: FavItemPart }): React.JSX.Element {
         </div>
       </div>
       {url !== '' && (
-        <a className={css.favMediaLink} href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => { e.preventDefault(); openLink(url) }}>
-          {url}
-        </a>
+        <SafeExternalLink className={css.favMediaLink} href={url}>{url}</SafeExternalLink>
       )}
     </div>
   )
@@ -476,7 +474,7 @@ export function FavoritePart({ part, thumbs }: FavoritePartProps): React.JSX.Ele
           </div>
         </div>
         {meta.length > 0 && <div className={css.favMediaMeta}>{meta.join(' · ')}</div>}
-        {part.url && <a className={css.favMediaLink} href={part.url} target="_blank" rel="noopener noreferrer">在高德地图中查看</a>}
+        {part.url && <SafeExternalLink className={css.favMediaLink} href={part.url}>在高德地图中查看</SafeExternalLink>}
       </div>
     )
   }
@@ -520,13 +518,7 @@ export function FavoritePart({ part, thumbs }: FavoritePartProps): React.JSX.Ele
       {details.map((line, i) => <div key={i} className={css.favMediaDesc}>{line}</div>)}
       {part.meta?.map((row, i) => <div key={`meta-${String(i)}`} className={css.favMediaMeta}>{row.label}：{row.value}</div>)}
       {part.url && (
-        <a
-          className={css.favMediaLink}
-          href={part.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => { e.preventDefault(); openLink(part.url ?? '') }}
-        >{part.url}</a>
+        <SafeExternalLink className={css.favMediaLink} href={part.url}>{part.url}</SafeExternalLink>
       )}
     </div>
   )

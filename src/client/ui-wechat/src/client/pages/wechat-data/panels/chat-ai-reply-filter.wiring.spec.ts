@@ -23,8 +23,11 @@ describe('AI 回复会话标志与筛选', () => {
     const controls = read('use-chats-ai-reply-controls.ts')
     expect(controls).toContain('onEnabledChanged: enabledIndex.markEnabled')
     expect(controls).toMatch(/session\.type === 'private'\s+&& enabledIndex\.enabledUsernames\.has\(session\.username\)/)
+    // 2026-11-13：会话行渲染抽成 makeChatsSessionRowRenderer 后，索引经参数传入；
+    // 判据不变 —— 行内徽标必须按当前会话的 username 查同一份 enabledUsernames。
     const panel = read('Chats.tsx')
-    expect(panel).toContain('aiReplyEnabled={aiReplyControls.enabledUsernames.has(session.username)}')
+    expect(panel).toContain('aiReplyEnabledUsernames: aiReplyControls.enabledUsernames')
+    expect(panel).toContain('aiReplyEnabled={aiReplyEnabledUsernames.has(session.username)}')
   })
 
   it('会话行徽标、筛选状态和专用空态都存在', () => {

@@ -131,6 +131,8 @@ function defaultSetting(): ChatAiReplySetting {
     splitReply: true,
     personaName: '',
     personaPrompt: '',
+    kbEnabled: false,
+    kbId: 0,
     revision: 0,
     updatedAt: 0,
     cursor: '',
@@ -175,6 +177,8 @@ interface SettingRow {
   split_reply?: unknown
   persona_name?: unknown
   persona_prompt?: unknown
+  kb_enabled?: unknown
+  kb_id?: unknown
   revision?: unknown
   updated_at?: unknown
   cursor?: unknown
@@ -209,6 +213,8 @@ function stateOf(
         splitReply: row.split_reply === undefined || numOf(row.split_reply) !== 0,
         personaName: textOf(row.persona_name, CHAT_AI_REPLY_PERSONA_NAME_MAX),
         personaPrompt: textOf(row.persona_prompt, CHAT_AI_REPLY_PERSONA_PROMPT_MAX),
+        kbEnabled: numOf(row.kb_enabled) === 1,
+        kbId: Math.max(0, numOf(row.kb_id)),
         revision: Math.max(0, numOf(row.revision)),
         updatedAt: Math.max(0, numOf(row.updated_at)),
         cursor: textOf(row.cursor, CURSOR_MAX),
@@ -290,6 +296,8 @@ export function ensureChatAiReplySchema(db: DatabaseSync): void {
     split_reply INTEGER NOT NULL DEFAULT 1,
     persona_name TEXT NOT NULL DEFAULT '',
     persona_prompt TEXT NOT NULL DEFAULT '',
+    kb_enabled INTEGER NOT NULL DEFAULT 0,
+    kb_id INTEGER NOT NULL DEFAULT 0,
     revision INTEGER NOT NULL DEFAULT 0,
     cursor TEXT NOT NULL DEFAULT '',
     pending_cursor TEXT NOT NULL DEFAULT '',
@@ -326,6 +334,16 @@ export function ensureChatAiReplySchema(db: DatabaseSync): void {
     db,
     'persona_prompt',
     "ALTER TABLE chat_ai_reply_settings ADD COLUMN persona_prompt TEXT NOT NULL DEFAULT ''",
+  )
+  addColumnIfMissing(
+    db,
+    'kb_enabled',
+    'ALTER TABLE chat_ai_reply_settings ADD COLUMN kb_enabled INTEGER NOT NULL DEFAULT 0',
+  )
+  addColumnIfMissing(
+    db,
+    'kb_id',
+    'ALTER TABLE chat_ai_reply_settings ADD COLUMN kb_id INTEGER NOT NULL DEFAULT 0',
   )
   addColumnIfMissing(
     db,
@@ -519,6 +537,10 @@ export function saveChatAiReplySetting(
     personaName?: string
     /** 省略时保留当前人格，避免旧调用方切换开关时清空配置。 */
     personaPrompt?: string
+    /** 省略时保留当前知识库设置，避免旧调用方切换开关时改回默认。 */
+    kbEnabled?: boolean
+    /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
+    kbId?: number
     expectedRevision?: number
     cursor?: string
   },
@@ -554,6 +576,15 @@ export function saveChatAiReplySetting(
         const splitReply = input.splitReply === undefined
           ? (current === undefined ? true : numOf(current.split_reply) !== 0)
           : input.splitReply
+        const kbEnabled = input.kbEnabled === undefined
+          ? (current === undefined ? false : numOf(current.kb_enabled) === 1)
+          : input.kbEnabled
+        const kbId = input.kbId === undefined
+          ? (current === undefined ? 0 : Math.max(0, numOf(current.kb_id)))
+          : Math.max(0, numOf(input.kbId))
+        if (kbEnabled && kbId <= 0) {
+          return { ok: false, error: '请选择参与回复的知识库' }
+        }
         const now = Date.now()
         failSupersededReservation(
           db,
@@ -567,10 +598,11 @@ export function saveChatAiReplySetting(
         const stage = input.enabled ? 'idle' : 'disabled'
         const saved = db.prepare(`INSERT INTO chat_ai_reply_settings
           (account_key, chat_username, chat_name, enabled, provider,
-           split_reply, persona_name, persona_prompt, revision, cursor,
+           split_reply, persona_name, persona_prompt, kb_enabled, kb_id,
+           revision, cursor,
            pending_cursor, pending_source_ref, pending_revision, stage,
            last_run_at, record_id, error, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
           ON CONFLICT(account_key, chat_username) DO UPDATE SET
             chat_name = excluded.chat_name,
             enabled = excluded.enabled,
@@ -578,6 +610,8 @@ export function saveChatAiReplySetting(
             split_reply = excluded.split_reply,
             persona_name = excluded.persona_name,
             persona_prompt = excluded.persona_prompt,
+            kb_enabled = excluded.kb_enabled,
+            kb_id = excluded.kb_id,
             revision = excluded.revision,
             cursor = excluded.cursor,
             pending_cursor = '',
@@ -603,6 +637,8 @@ export function saveChatAiReplySetting(
           splitReply ? 1 : 0,
           personaName,
           personaPrompt,
+          kbEnabled ? 1 : 0,
+          kbId,
           nextRevision,
           cursor,
           stage,
@@ -637,6 +673,10 @@ export function saveChatAiReplyPersona(
     personaPrompt: string
     /** 省略时保留当前设置。 */
     splitReply?: boolean
+    /** 省略时保留当前知识库设置。 */
+    kbEnabled?: boolean
+    /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
+    kbId?: number
     expectedRevision?: number
   },
 ): ChatAiReplyMutationResult {
@@ -657,10 +697,19 @@ export function saveChatAiReplyPersona(
     prompt: input.personaPrompt,
   })
   const splitReply = input.splitReply ?? current.splitReply
+  const kbEnabled = input.kbEnabled ?? current.kbEnabled
+  const kbId = input.kbId === undefined
+    ? current.kbId
+    : Math.max(0, numOf(input.kbId))
+  if (kbEnabled && kbId <= 0) {
+    return { ok: false, error: '请选择参与回复的知识库' }
+  }
   if (
     persona.name === current.personaName
     && persona.prompt === current.personaPrompt
     && splitReply === current.splitReply
+    && kbEnabled === current.kbEnabled
+    && kbId === current.kbId
   ) {
     return { ok: true, state: current }
   }
@@ -673,6 +722,8 @@ export function saveChatAiReplyPersona(
     splitReply,
     personaName: persona.name,
     personaPrompt: persona.prompt,
+    kbEnabled,
+    kbId,
     expectedRevision,
     cursor: current.cursor,
   })

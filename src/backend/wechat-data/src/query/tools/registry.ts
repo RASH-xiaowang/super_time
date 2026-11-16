@@ -24,6 +24,12 @@ import { MESSAGE_TOOLS } from './message-tools.ts'
 import { AGGREGATE_TOOLS } from './aggregate-tools.ts'
 import { CONTACT_TOOLS } from './contact-tools.ts'
 import { CONTENT_TOOLS } from './content-tools.ts'
+import { FUNDS_TOOLS } from './funds-tools.ts'
+import { CALLS_TOOLS } from './calls-tools.ts'
+import { GROUP_TOOLS } from './group-tools.ts'
+import { REVOKE_TOOLS } from './revoke-tools.ts'
+import { MEDIA_TOOLS } from './media-tools.ts'
+import { MOMENTS_TOOLS } from './moments-tools.ts'
 import { KB_TOOLS, makeSearchSemanticTool } from './kb-tools.ts'
 import { makeSearchHybridTool, type HybridSearchExecutor } from './search-hybrid-tool.ts'
 import { findTool, toToolSchemas, type RetrievalTool, type ToolContext, type ToolName, type ToolResult } from './types.ts'
@@ -45,7 +51,17 @@ export function buildTools(opts: {
   embedModel?: string
   hybridExecutor?: HybridSearchExecutor
 } = {}): RetrievalTool[] {
+  /*
+   * 顺序即模型看到的 schema 顺序：先确定性事实工具，再原文检索，最后
+   * 知识库/语义/混合兜底。顺序只影响偏置，真正的边界仍由 profile 与提示词决定。
+   */
   return [
+    ...FUNDS_TOOLS,
+    ...CALLS_TOOLS,
+    ...GROUP_TOOLS,
+    ...MOMENTS_TOOLS,
+    ...REVOKE_TOOLS,
+    ...MEDIA_TOOLS,
     ...MESSAGE_TOOLS,
     ...AGGREGATE_TOOLS,
     ...CONTACT_TOOLS,

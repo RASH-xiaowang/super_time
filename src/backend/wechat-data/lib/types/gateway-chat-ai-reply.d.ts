@@ -41,9 +41,10 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
         expectedRevision?: number;
     }): ChatAiReplyMutationResult;
     /**
-     * 保存某个单聊的 AI 回复人格。
-     * 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；写入会推进
-     * revision，并取消该会话尚未完成的旧回复任务。
+     * 保存某个单聊的 AI 回复人格与知识库参与设置。
+     * 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；勾选知识库后，
+     * 每轮生成会先按最近上下文检索该库并把命中的片段作为**不可信材料**交给模型。
+     * 写入会推进 revision，并取消该会话尚未完成的旧回复任务。
      */
     setChatAiReplyPersona(options: {
         chatUsername: string;
@@ -51,6 +52,8 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
         personaName: string;
         personaPrompt: string;
         splitReply?: boolean;
+        kbEnabled?: boolean;
+        kbId?: number;
         expectedRevision?: number;
     }): ChatAiReplyMutationResult;
     /**

@@ -291,6 +291,12 @@ export async function apiGetSnsImageDataUrl(options: {
   url?: string
   token?: string
   seed?: string
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
   key?: string
   thumb?: string
   offline?: boolean

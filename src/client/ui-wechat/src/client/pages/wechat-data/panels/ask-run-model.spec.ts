@@ -157,4 +157,10 @@ describe('ask-run-model', () => {
       stages: [tool({ status: 'done', phase: 'completed', hits: 1 })],
     })).toBe('thinking')
   })
+
+  it('综合生成阶段显示“准备回答”，不误报思考中', () => {
+    expect(deriveLiveAskPhase({
+      stages: [{ key: 'answer:synthesize', label: '综合生成', status: 'running' }],
+    })).toBe('preparing')
+  })
 })

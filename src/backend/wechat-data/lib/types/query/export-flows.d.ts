@@ -31,6 +31,28 @@ export declare function filterMessages(msgs: WechatMessage[], types?: number[], 
  */
 /** Sanitize a user-supplied file basename (no separators / invalid chars). */
 export declare function sanitizeBasename(name: string): string;
+/**
+ * 把一个「用户文件名」解析成导出目录内**唯一且越不出去**的落点（P1-07）。
+ *
+ * 调用方给的 `filename` 语义是文件名，不是路径 —— 这里先拒绝路径分隔符、盘符与
+ * `..`，再用 {@link sanitizeBasename} 校验非法字符（它若改动了名字就说明输入不该被
+ * 接受；静默换成别的文件名会让用户以为导出到了他填的位置）。随后 `resolve` 到目录
+ * 内、用 {@link isInsideRoot} 做路径段级前缀校验，最后套用
+ * {@link writeDenialReason} 的写政策。默认名与重名也在这里统一处理：
+ * 已有同名文件时依次尝试 `_2`、`_3`…，不静默覆盖上一份导出。
+ *
+ * 所有「目录 + filename」型导出入口（年度报告 / 朋友圈 / 全量会话）都必须只经这里
+ * 落盘；单会话导出与 CSV 已有各自的校验，行为保持不变。
+ * @param base - 导出目录。
+ * @param filename - 调用方给的文件名（可带目标扩展名）；空/未给时用 `fallbackName`。
+ * @param ext - 目标扩展名（不带点；最终落地为小写）。
+ * @param fallbackName - 未给文件名时的默认主干名（不含扩展名）。
+ * @returns 绝对路径与最终文件名（仅 basename）。
+ */
+export declare function resolveExportTarget(base: string, filename: string | undefined, ext: string, fallbackName: string): {
+    path: string;
+    filename: string;
+};
 /** Resolve a legacy message-table hash before any export path, filename, or manifest is written. */
 export declare function canonicalExportUsername(decryptedDir: string, value: string): string;
 /** 单会话导出的「计划」：收集 + 过滤 + 算出所有输出名（同步/流式两条入口共用）。 */

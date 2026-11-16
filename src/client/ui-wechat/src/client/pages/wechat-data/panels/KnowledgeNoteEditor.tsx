@@ -44,14 +44,25 @@ function extractTargets(body: string): string[] {
  * @returns 一行「保存到 [库选择器]」。
  */
 function KbTargetPicker({ value, onChange }: { value: number; onChange: (id: number) => void }): React.JSX.Element {
-  const { kbs } = useKbScope()
+  const { kbs, readError, loading, reloadKbs } = useKbScope()
   if (kbs.length === 0) {
     // 列表还没到（或读失败）：**不留一个空选择器** —— 空下拉会被读成「没有别的库」，
     // 而这时用户其实只是还不知道有哪些库。
+    // 读失败与「还在读」必须分开：「读取中…」停在读失败上是一句永远不兑现的承诺，
+    // 用户既不知道出了事，也没有任何重试入口（只能关掉弹层再开一次）。
+    if (readError !== null) {
+      return (
+        <div className={css.kbRow}>
+          <span className={css.kbLabel}>保存到</span>
+          <span className={css.kbHint}>读取知识库列表失败：{readError}</span>
+          <Button variant="ghost" onClick={reloadKbs}>重试</Button>
+        </div>
+      )
+    }
     return (
       <div className={css.kbRow}>
         <span className={css.kbLabel}>保存到</span>
-        <span className={css.kbHint}>读取知识库列表…</span>
+        <span className={css.kbHint}>{loading ? '读取知识库列表…' : '还没有可选的库'}</span>
       </div>
     )
   }

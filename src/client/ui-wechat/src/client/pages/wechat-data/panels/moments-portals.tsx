@@ -11,20 +11,18 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
+import { SafeExternalLink } from './chats-support.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
-import { videoCoverKey, type MediaKeySpec } from './moments-media.ts'
+import { momentGridImages, momentImageSpec, momentLinkCardView, videoCoverKey, type MediaKeySpec } from './moments-media.ts'
 import { RemoteImg } from './remote-img.tsx'
 import { MediaViewer, type ViewerSource } from '../media-viewer/MediaViewer.tsx'
-import { apiGetSnsImageDataUrl } from '../api.ts'
 import { MomentLiveAction, MomentLiveBadge, momentLiveKey, momentLivePhoto, type MomentLiveMedia } from './moments-live.tsx'
 import { saveMomentsLiveVideo } from './moments-live-download.ts'
 import { saveMomentImageOriginal } from './moments-original-export.ts'
 import { ExportProgressStatus } from './ExportProgressStatus.tsx'
 import { useMediaSaveTask } from './media-save-task.ts'
-import { pickImageSrc } from './moments-actions.ts'
-import { proxyableSrc } from '../utils/url.ts'
 import { MomentsVideoTile } from './moments-video-tile.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -42,6 +40,13 @@ export interface ViewerImage {
   token?: string
   seed?: string
   key?: string
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
+  uhdMd5?: string
   livePhoto?: MomentLiveMedia
   live?: MomentLiveMedia
 }
@@ -215,6 +220,8 @@ export interface MomentsImageViewerProps {
   setViewerIndex: (index: number) => void
   curImg: ViewerImage | undefined
   snsImgs: Record<string, string>
+  snsOriginals: ReadonlySet<string>
+  resolveSnsOriginal: (im: ViewerImage) => Promise<string>
   copyCurrentLink: () => void
   viewRotate: number
   setViewRotate: React.Dispatch<React.SetStateAction<number>>
@@ -228,7 +235,7 @@ export interface MomentsImageViewerProps {
 }
 
 export function MomentsImageViewer({
-  viewer, setViewer, setViewerIndex, curImg, snsImgs, copyCurrentLink,
+  viewer, setViewer, setViewerIndex, curImg, snsImgs, snsOriginals, resolveSnsOriginal, copyCurrentLink,
   viewRotate, setViewRotate, videoSrcs, videoFailed, videoErr, loadVideo, closeVideo,
   onLiveVideoSaved, onImageSaved,
 }: MomentsImageViewerProps): React.JSX.Element | null {
@@ -236,6 +243,8 @@ export function MomentsImageViewer({
   const activeLiveKeyRef = useRef('')
   const snsImgsRef = useRef(snsImgs)
   snsImgsRef.current = snsImgs
+  const snsOriginalsRef = useRef(snsOriginals)
+  snsOriginalsRef.current = snsOriginals
   const imageSave = useMediaSaveTask()
   const liveSave = useMediaSaveTask()
 
@@ -268,7 +277,8 @@ export function MomentsImageViewer({
   const sources: ViewerSource[] = useMemo(() => viewerImages.map((im, i) => {
     const imageKey = imgKey(im)
     const imageLive = momentLivePhoto(im)
-    const thumb = snsImgsRef.current[imageKey] ?? im.thumb ?? undefined
+    // 只喂后端解出的 data URL；`im.thumb` 是 CDN 密文地址，画不出来也不能当占位。
+    const thumb = snsImgsRef.current[imageKey]
     if (i === viewer?.index && liveActive && liveSrc !== '') {
       const onDownload = imageLive === null ? undefined : async (): Promise<void> => {
         if (desktopAction()) throw new Error('实况原视频仅支持电脑端保存')
@@ -303,6 +313,9 @@ export function MomentsImageViewer({
       title: viewer?.author ?? '',
       subtitle: imageLive === null ? undefined : '实况照片',
       onDownload: async (src: string): Promise<void> => {
+        if (!snsOriginalsRef.current.has(imageKey)) {
+          throw new Error('原图尚未就绪，请稍后重试')
+        }
         const outcome = await imageSave.save<{ path?: string; bytes?: number }>({
           idPrefix: 'moment-image',
           label: '保存朋友圈原图',
@@ -313,22 +326,10 @@ export function MomentsImageViewer({
       },
       downloadDisabled: desktopAction(),
       downloadDisabledReason: '朋友圈原图保存仅支持电脑端',
-      load: async (): Promise<string> => {
-        const local = snsImgsRef.current[imageKey]
-        if (local) return local
-        const r = await apiGetSnsImageDataUrl({
-          md5: im.md5 ?? '',
-          ...(im.timelineId ? { timelineId: im.timelineId } : {}),
-          ...(im.id || im.mediaId ? { mediaId: im.id ?? im.mediaId } : {}),
-          ...(im.url ? { url: im.url } : {}),
-          ...(im.token ? { token: im.token } : {}),
-          ...(im.seed || im.key ? { seed: im.seed ?? im.key } : {}),
-        })
-        if (r.url) return r.url
-        throw new Error(r.error ?? '图片暂不可用')
-      },
+      // 本地有缩略图也继续回源；是否已确认原图由媒体层判断。
+      load: async (): Promise<string> => resolveSnsOriginal(im),
     }
-  }), [viewerImages, viewer?.index, viewer?.author, liveActive, liveSrc, activeLiveKey, liveSave.save, imageSave.save, onLiveVideoSaved, onImageSaved])
+  }), [viewerImages, viewer?.index, viewer?.author, liveActive, liveSrc, activeLiveKey, liveSave.save, imageSave.save, onLiveVideoSaved, onImageSaved, resolveSnsOriginal])
 
   if (!viewer) return null
 
@@ -357,10 +358,11 @@ export function MomentsImageViewer({
   }
 
   const canCopy = Boolean(curImg?.url || (curImg ? snsImgs[imgKey(curImg)] : '') || curImg?.thumb)
-  const canSave = canCopy
+  const canSave = Boolean(curImg && snsOriginals.has(imgKey(curImg)) && snsImgs[imgKey(curImg)])
   const saveCurrentImage = async (): Promise<void> => {
     if (!curImg || !canSave) return
-    const src = pickImageSrc(snsImgsRef.current[imgKey(curImg)] ?? '', proxyableSrc(curImg.url, curImg.thumb) ?? '', 'local')
+    const src = snsImgsRef.current[imgKey(curImg)] ?? ''
+    if (!src) return
     const outcome = await imageSave.save<{ path?: string; bytes?: number }>({
       idPrefix: 'moment-image',
       label: '保存朋友圈原图',
@@ -430,6 +432,7 @@ export interface MomentsDetailProps {
   setViewer: (v: ViewerState | null) => void
   setAuthorFilter: React.Dispatch<React.SetStateAction<string | null>>
   snsImgs: Record<string, string>
+  articleCovers: Record<string, string>
   videoSrcs: Record<string, string>
   videoLoading: Set<string>
   videoMeta: Record<string, { w: number; h: number }>
@@ -452,11 +455,17 @@ export interface MomentsDetailProps {
 }
 
 export function MomentsDetail({
-  detail, setDetail, setViewer, setAuthorFilter, snsImgs, mediaKeySpec,
+  detail, setDetail, setViewer, setAuthorFilter, snsImgs, articleCovers, mediaKeySpec,
   videoSrcs, videoLoading, videoMeta, setVideoMeta, videoFailed, videoErr,
   loadVideo, reportVideoError, saveVideo, fullscreenVideo, closeVideo,
 }: MomentsDetailProps): React.JSX.Element | null {
   if (!detail) return null
+  const gridImages = momentGridImages(detail.m)
+  const cover = gridImages[0]
+  const coverKey = cover ? imgKey(cover) : ''
+  const coverSpec = cover ? momentImageSpec(cover) : null
+  const linkView = momentLinkCardView(detail.m, snsImgs, articleCovers)
+  if (coverKey && coverSpec) mediaKeySpec.current.set(coverKey, coverSpec)
   return createPortal(
       <div className={css.overlay} data-st-dialog="moments-detail" onClick={() => { setDetail(null) }} role="dialog" aria-modal="true">
         <div className={css.detailCard} onClick={(e) => { e.stopPropagation() }}>
@@ -469,25 +478,28 @@ export function MomentsDetail({
           </div>
           <div className={css.detailBody}>
             {detail.m.text && <div className={css.content}>{detail.m.text}</div>}
-            {detail.m.images.length > 0 && (
-              <div className={[css.images, detail.m.images.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
-                {detail.m.images.map((im, ii) => {
+            {gridImages.length > 0 && linkView.showImages && (
+              <div className={[css.images, gridImages.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
+                {gridImages.map((im, ii) => {
                   const key = imgKey(im)
                   const dataSrc = key ? snsImgs[key] : undefined
                   const live = momentLivePhoto(im)
+                  const spec = momentImageSpec(im)
+                  if (key && spec) mediaKeySpec.current.set(key, spec)
                   // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
                   // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：给占位，不留空。
                   return (
-                    <div key={ii} className={css.imgWrap} title={live ? '点击查看大图（实况）' : '点击查看大图'} {...clickableKey(() => {
+                    <div key={ii} className={css.imgWrap} data-sns-key={key || undefined} title={live ? '点击查看大图（实况）' : '点击查看大图'} {...clickableKey(() => {
                       // 详情浮层与查看器都是 body portal；先收起层级更高的详情，查看器才能可见、可操作。
                       setDetail(null)
-                      setViewer({ images: detail.m.images, index: ii, author: withEnterprise(detail.m.author || '未知', detail.m.enterpriseName) })
+                      setViewer({ images: gridImages, index: ii, author: withEnterprise(detail.m.author || '未知', detail.m.enterpriseName) })
                     })}>
                       <RemoteImg
                         src={dataSrc || ''}
                         alt=""
                         loading="lazy"
                         className={css.img}
+                        empty={<div className={css.imgFallback}>正在取原图…</div>}
                         pending={<div className={css.imgFallback}>加载中</div>}
                         failed={<div className={css.imgFallback}>图片加载失败</div>}
                       />
@@ -527,11 +539,22 @@ export function MomentsDetail({
             )}
             {detail.m.link_title && (
               <div className={css.linkCard}>
+                {(cover || detail.m.link_thumb || detail.m.contentType === 3) && (
+                  <div className={css.linkCover} data-sns-key={coverKey || undefined}>
+                    <RemoteImg
+                      src={linkView.coverSrc}
+                      alt=""
+                      empty={<span className={css.linkCoverFallback} title="正在读取公众号封面">🔗</span>}
+                      pending={<span className={css.linkCoverFallback}>…</span>}
+                      failed={<span className={css.linkCoverFallback} title="封面来自微信 CDN，原链接已失效">🔗</span>}
+                    />
+                  </div>
+                )}
                 <div className={css.linkBody}>
                   {detail.m.link_url
-                    ? <a className={css.linkTitle} href={detail.m.link_url} target="_blank" rel="noopener noreferrer" title={detail.m.link_title}>{detail.m.link_title}</a>
-                    : <span className={css.linkTitle} title={detail.m.link_title}>{detail.m.link_title}</span>}
-                  <div className={kitCss.textMeta}>{detail.m.sourceNickName ? '公众号 · ' + detail.m.sourceNickName : (detail.m.contentType === 28 ? '视频号' : '链接')}</div>
+                    ? <SafeExternalLink className={css.linkTitle} href={detail.m.link_url} title={linkView.title}>{linkView.title}</SafeExternalLink>
+                    : <span className={css.linkTitle} title={linkView.title}>{linkView.title}</span>}
+                  <div className={kitCss.textMeta}>{linkView.label}</div>
                 </div>
               </div>
             )}

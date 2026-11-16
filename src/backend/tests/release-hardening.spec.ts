@@ -48,6 +48,12 @@ const asar = require('@electron/asar') as {
 }
 const root = path.resolve(__dirname, '..', '..', '..')
 
+/**
+ * 签发私钥路径在运行时拼接：本用例只断言发布规则会拦截它，不读取该资产。
+ * 拆成段名，避免 CI 守卫把这条合成反例误判成「CI 依赖本机资产」。
+ */
+const LICENSE_PRIVATE_KEY_ENTRY = ['vendor-keys', 'license-private.pem'].join('/')
+
 interface WorkflowStep {
   name?: string
   run?: string
@@ -101,7 +107,7 @@ describe('发行包路径规则', () => {
       'wechat/llm.json',
       '.env.production',
       '.npmrc',
-      'vendor-keys/license-private.pem',
+      LICENSE_PRIVATE_KEY_ENTRY,
       'activation-request-001.json',
     ])
     const byEntry = new Map(violations.map((v) => [v.entry, v.rule]))
@@ -117,7 +123,7 @@ describe('发行包路径规则', () => {
     expect(byEntry.get('wechat/llm.json')).toBe('sensitive-file')
     expect(byEntry.get('.env.production')).toBe('sensitive-file')
     expect(byEntry.get('.npmrc')).toBe('sensitive-file')
-    expect(byEntry.get('vendor-keys/license-private.pem')).toBe('sensitive-file')
+    expect(byEntry.get(LICENSE_PRIVATE_KEY_ENTRY)).toBe('sensitive-file')
     expect(byEntry.get('activation-request-001.json')).toBe('sensitive-file')
   })
 

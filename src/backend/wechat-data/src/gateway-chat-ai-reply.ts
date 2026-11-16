@@ -21,6 +21,7 @@ import {
 import { createDefaultChatAiReplyGenerator } from './query/ai-reply/generator.ts'
 import { decodeChatAiReplyImages } from './query/ai-reply/context.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
+import { collectReplyKbSnippetsHybrid } from './query/reply-kb.ts'
 import { rawWechatBase } from './gateway-support.ts'
 import { GatewayMessageList } from './gateway-message-list.ts'
 
@@ -103,9 +104,10 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
   }
 
   /**
-   * 保存某个单聊的 AI 回复人格。
-   * 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；写入会推进
-   * revision，并取消该会话尚未完成的旧回复任务。
+   * 保存某个单聊的 AI 回复人格与知识库参与设置。
+   * 人格只影响模型语气与措辞，不能覆盖后端固定的防注入和安全规则；勾选知识库后，
+   * 每轮生成会先按最近上下文检索该库并把命中的片段作为**不可信材料**交给模型。
+   * 写入会推进 revision，并取消该会话尚未完成的旧回复任务。
    */
   @Remote('setChatAiReplyPersona')
   setChatAiReplyPersona(options: {
@@ -114,6 +116,8 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     personaName: string
     personaPrompt: string
     splitReply?: boolean
+    kbEnabled?: boolean
+    kbId?: number
     expectedRevision?: number
   }): ChatAiReplyMutationResult {
     return this.chatAiReplyRemotes().setPersona(options)
@@ -155,6 +159,15 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
           },
         )
       },
+      collectKbSnippets: ({ kbId, lines, latestPeer }) => collectReplyKbSnippetsHybrid({
+        decryptedDir: this._dirs.decrypted,
+        kbId,
+        lines,
+        ...(latestPeer === undefined ? {} : { latestPeer }),
+        topK: 3,
+        makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
+        kbModel: (id, role) => this.kbModel(id, role),
+      }),
       dispatch: async (recordId) => {
         const result = await this.messageListRemotes().dispatchRecord(recordId)
         return {

@@ -133,11 +133,26 @@ export declare const FLUSH_EVERY_CHARS: number;
  *
  * force 语义：非 force 调用可以加入任何在飞构建；force 调用若撞上在飞的非 force 构建，
  * 不能把对方的「索引已存在」当答复，而要排队在其之后再真正重建一次。
+ *
+ * 取消语义（P2）：每次构建持有**自己的** AbortController，并维护订阅者引用计数。
+ * 某个调用方 abort 只解除自己的订阅；只有**最后一个**订阅者离开时才 abort 底层构建。
+ * 因此「界面点停止」不会把另一个调用方（例如问答路径）正在等待的构建一起停掉。
  */
-export declare const inflightIndexBuilds: Map<string, {
+export interface InflightIndexBuild {
+    /** 底层构建（一次 force/非 force 构建只跑一份，所有订阅者共享）。 */
     promise: Promise<BuildResult>;
+    /** 本次构建是否为 force（force 调用不会被非 force 调用「顶掉」）。 */
     force: boolean;
-}>;
+    /** 构建自身的取消令牌：所有订阅者都取消时才 abort。 */
+    controller: AbortController;
+    /** 仍在等待的调用方数量（引用计数）。 */
+    subscribers: number;
+    /** 构建（排队中的也算）创建时间，用于取消结果里的 elapsed_ms。 */
+    startedAt: number;
+    /** 订阅者的进度回调；底层的进度广播给所有仍订阅的调用方。 */
+    progress: Set<(done: number, total: number, rows: number) => void>;
+}
+export declare const inflightIndexBuilds: Map<string, InflightIndexBuild>;
 /** 构建结果。 */
 export interface BuildResult {
     status: string;
@@ -166,12 +181,29 @@ export interface SearchIndexBuildHooks {
 /**
  * 构建全文检索索引（FTS5）。
  *
+ * 并发语义见 {@link inflightIndexBuilds}：同一索引文件的并发布建共享一份底层构建；
+ * force 请求遇到在飞的非 force 构建时会排队重建；取消按调用方引用计数隔离。
+ *
  * @param decryptedDir - 已解密数据根。
  * @param force - 为 true 时即使已有同版本索引也重建。
  * @param hooks - 进度回调与取消信号（见 {@link SearchIndexBuildHooks}）。
  * @returns 构建结果（status/rows/built_at/elapsed_ms 或 message）。
  */
 export declare function buildSearchIndex(decryptedDir: string, force?: boolean, hooks?: SearchIndexBuildHooks): Promise<BuildResult>;
+/**
+ * 当前索引构建状态（只读，不触发构建）。
+ *
+ * 供「自动构建只在空闲触发」的调用方判断是否已有构建在飞；也便于诊断面板展示
+ * 「构建中 / 排队中 / 几个调用方在等」。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 是否在飞、是否 force、订阅者数量与已运行时间；空闲时全部为零/undefined。
+ */
+export declare function getSearchIndexBuildStatus(decryptedDir: string): {
+    building: boolean;
+    force: boolean;
+    subscribers: number;
+    elapsed_ms: number;
+};
 /**
  * 索引库写闸（同步、不排队）。
  *

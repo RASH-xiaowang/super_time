@@ -10,10 +10,12 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readRenderCache, writeRenderCache } from './cache.ts'
+import { readRenderCache, scopedRenderCacheKey, writeRenderCache } from './cache.ts'
 
 const PREFIX = 'wxdata-render-cache:'
 const DAY_MS = 24 * 60 * 60_000
+/** 实际落盘的键带目录指纹；这里用生产 helper 计算，避免测试另写一份口径。 */
+const stored = (key: string): string => PREFIX + scopedRenderCacheKey(key)
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -30,7 +32,7 @@ describe('保质期与格式', () => {
   it('写进去读得回来，且存的是带时间的信封（没有时间的条目无法判旧不旧）', () => {
     writeRenderCache('chats', { items: [1, 2] })
     expect(readRenderCache('chats')).toEqual({ items: [1, 2] })
-    const env = JSON.parse(String(localStorage.getItem(PREFIX + 'chats'))) as { at: number; v: unknown }
+    const env = JSON.parse(String(localStorage.getItem(stored('chats')))) as { at: number; v: unknown }
     expect(typeof env.at).toBe('number')
     expect(env.v).toEqual({ items: [1, 2] })
   })
@@ -39,7 +41,7 @@ describe('保质期与格式', () => {
     writeRenderCache('moments', { items: ['昨天'] })
     vi.advanceTimersByTime(DAY_MS + 1)
     expect(readRenderCache('moments')).toBeNull()
-    expect(localStorage.getItem(PREFIX + 'moments'), '过期条目留在 localStorage 里 = 白占配额').toBeNull()
+    expect(localStorage.getItem(stored('moments')), '过期条目留在 localStorage 里 = 白占配额').toBeNull()
   })
 
   it('旧版裸值（没有时间戳）当过期丢掉，不猜它的年龄', () => {
@@ -49,7 +51,7 @@ describe('保质期与格式', () => {
   })
 
   it('损坏的 JSON 与「没有这一条」同样是未命中（不许抛出去）', () => {
-    localStorage.setItem(PREFIX + 'broken', '{not json')
+    localStorage.setItem(stored('broken'), '{not json')
     expect(readRenderCache('broken')).toBeNull()
   })
 })
@@ -59,7 +61,7 @@ describe('上限与写失败可见', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
     const big = { text: 'x'.repeat(2_000_000) }
     writeRenderCache('overview', big)
-    expect(localStorage.getItem(PREFIX + 'overview')).toBeNull()
+    expect(localStorage.getItem(stored('overview'))).toBeNull()
     expect(info.mock.calls.map(c => String(c[0])).join('\n')).toContain('单条过大')
     writeRenderCache('overview2', big)
     writeRenderCache('overview3', big)
@@ -76,8 +78,8 @@ describe('上限与写失败可见', () => {
     boom.mockRestore()
     expect(info.mock.calls.map(c => String(c[0])).join('\n')).toContain('配额')
     // 丢掉之后读不到，但键也真的不在了（下一次写能成功）
-    expect(localStorage.getItem(PREFIX + 'a')).toBeNull()
-    expect(localStorage.getItem(PREFIX + 'b')).toBeNull()
+    expect(localStorage.getItem(stored('a'))).toBeNull()
+    expect(localStorage.getItem(stored('b'))).toBeNull()
     writeRenderCache('d', { ok: 4 })
     expect(readRenderCache('d')).toEqual({ ok: 4 })
     expect(info.mock.calls.filter(c => String(c[0]).includes('配额')).length).toBe(1)

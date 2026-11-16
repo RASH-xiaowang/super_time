@@ -52,6 +52,15 @@ export interface AggregateFact {
   total: number
 }
 
+/** `day` 维度的分组粒度。 */
+export type AggregateGranularity = 'day' | 'month' | 'hour' | 'weekday'
+
+/** 会话类型过滤。 */
+export type AggregateKind = 'all' | 'group' | 'single'
+
+/** `distinct` 维度的去重对象。 */
+export type AggregateDistinctField = 'session' | 'sender'
+
 /** 聚合查询的输入。 */
 export interface AggregateInput {
   decryptedDir: string
@@ -64,6 +73,16 @@ export interface AggregateInput {
   /** 规划器给出的日期（软偏好，作为默认时间窗）。 */
   from?: string
   to?: string
+  /** 只看某个发送者（显示名或 username；sender 列存原始 wxid，查询前会反查）。 */
+  sender?: string
+  /** 会话类型过滤（群体/单聊）。 */
+  kind?: AggregateKind
+  /** `day` 维度的分组粒度（默认 day）。 */
+  granularity?: AggregateGranularity
+  /** 分组排名返回前几项（默认 15，上限 50）。 */
+  top?: number
+  /** `distinct` 去重对象：session=会话数（默认）；sender=发送者人数。 */
+  distinctField?: AggregateDistinctField
   /** 现在时刻（可注入，便于测试）。 */
   now?: Date
 }
@@ -136,6 +155,21 @@ export function directionTerms(question: string): string[] {
   return out
 }
 
+/**
+ * epoch 秒 → 本地时区 `YYYY-MM-DD`。
+ *
+ * 统计事实是直接给模型抄进回答的，必须和用户所在时区一致；用
+ * `toISOString()` 会在 UTC+8 把本地 00:00 写成前一天，导致「最近 7 天」被
+ * 说成 11-06 ~ 11-13，与规划器的 11-07 ~ 11-13 自相矛盾。
+ * @param sec - epoch 秒。
+ * @returns 本地日期；非法输入返回空串。
+ */
+export function ymdLocal(sec: number): string {
+  const date = new Date(sec * 1000)
+  if (!Number.isFinite(date.getTime())) return ''
+  return `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 /** 把 `YYYY-MM-DD` 转成当天 00:00 的 epoch 秒（本地时区）。 */
 function dayStartSec(d: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d)
@@ -192,8 +226,39 @@ function indexDbPath(decryptedDir: string): string {
   return searchIndexPath(decryptedDir)
 }
 
+/**
+ * 把发送者参数解析成 `message_meta.sender` 可比较的别名。
+ *
+ * `sender` 列存原始 wxid（构建时从群前缀切出），而模型/用户通常给显示名。
+ * 显示名反查必须做：否则「只看张三」会统计出 0 条，且不会报错。
+ * @param decryptedDir - 解密数据根。
+ * @param sender - 模型给的发送者（显示名 / username / 企业名）。
+ * @param names - username → 显示名。
+ * @returns 去重后的候选原始 wxid 列表。
+ */
+function senderAliases(
+  decryptedDir: string,
+  sender: string,
+  names: ReadonlyMap<string, string>,
+): string[] {
+  const raw = sender.trim()
+  if (raw === '') return []
+  const out = new Set<string>([raw])
+  const resolved = resolveTalkerUsername(decryptedDir, raw)
+  if (resolved) out.add(resolved)
+  const target = raw.toLowerCase()
+  for (const [username, name] of names) {
+    if (String(name ?? '').trim().toLowerCase() === target) out.add(username)
+  }
+  return [...out]
+}
+
 /** 拼 WHERE 子句与参数。 */
-function whereOf(win: Window, scopeAliases?: readonly string[]): { sql: string; params: Array<string | number> } {
+function whereOf(
+  win: Window,
+  scopeAliases?: readonly string[],
+  extra?: { senderAliases?: readonly string[]; kind?: AggregateKind },
+): { sql: string; params: Array<string | number> } {
   const parts: string[] = []
   const params: Array<string | number> = []
   if (win.lo > 0) { parts.push('create_time >= ?'); params.push(win.lo) }
@@ -202,15 +267,50 @@ function whereOf(win: Window, scopeAliases?: readonly string[]): { sql: string; 
     parts.push(`username IN (${scopeAliases.map(() => '?').join(', ')})`)
     params.push(...scopeAliases)
   }
+  if (extra?.senderAliases && extra.senderAliases.length > 0) {
+    parts.push(`sender IN (${extra.senderAliases.map(() => '?').join(', ')})`)
+    params.push(...extra.senderAliases)
+  }
+  // 群聊 username 以 `@chatroom` 结尾（与 list_sessions/聚合其余路径同一判据）。
+  // 索引 v7 起 username 已规范化为真实 username，因此可以直接在 SQL 层过滤。
+  if (extra?.kind === 'group') parts.push("username LIKE '%@chatroom'")
+  if (extra?.kind === 'single') parts.push("username NOT LIKE '%@chatroom'")
   return { sql: parts.length > 0 ? ' WHERE ' + parts.join(' AND ') : '', params }
+}
+
+/** 规范化分组粒度（非法值回退 day）。 */
+function normalizeGranularity(g: AggregateGranularity | undefined): AggregateGranularity {
+  return g === 'month' || g === 'hour' || g === 'weekday' ? g : 'day'
+}
+
+/** `day` 维度在 SQL 里的分组表达式（本地时区，和 `ymdLocal` 同口径）。 */
+function granularitySql(g: AggregateGranularity): string {
+  if (g === 'month') return "strftime('%Y-%m', create_time, 'unixepoch', 'localtime')"
+  if (g === 'hour') return "strftime('%H', create_time, 'unixepoch', 'localtime')"
+  if (g === 'weekday') return "strftime('%w', create_time, 'unixepoch', 'localtime')"
+  return "date(create_time, 'unixepoch', 'localtime')"
+}
+
+/** 粒度分组值 → 人话标签（星期的数字必须在这里换，SQL 只给 0-6）。 */
+function granularityLabel(g: AggregateGranularity, value: string): string {
+  if (g === 'weekday') {
+    const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+    return names[Number(value)] ?? value
+  }
+  if (g === 'hour') return `${String(value).padStart(2, '0')} 点`
+  return value
+}
+
+/** 粒度在标题里的单位（「按天 / 按月 / 按小时 / 按星期」）。 */
+function granularityUnit(g: AggregateGranularity): string {
+  return g === 'month' ? '月' : g === 'hour' ? '小时' : g === 'weekday' ? '星期' : '天'
 }
 
 /** 时间窗的人话描述（写进事实标题，让模型知道统计范围）。 */
 function windowLabel(win: Window): string {
   if (win.lo === 0 && win.hi === 0) return '全部时间'
-  const f = (s: number): string => new Date(s * 1000).toISOString().slice(0, 10)
-  if (win.lo > 0 && win.hi > 0) return `${f(win.lo)} ~ ${f(win.hi)}`
-  return win.lo > 0 ? `${f(win.lo)} 起` : `截至 ${f(win.hi)}`
+  if (win.lo > 0 && win.hi > 0) return `${ymdLocal(win.lo)} ~ ${ymdLocal(win.hi)}`
+  return win.lo > 0 ? `${ymdLocal(win.lo)} 起` : `截至 ${ymdLocal(win.hi)}`
 }
 
 /**
@@ -237,11 +337,18 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
       messageTableName(scopedUsername),
     ])]
     : []
-  const { sql: where, params } = whereOf(win, scopeAliases)
+  const names = mergeDisplayNames(input.decryptedDir)
+  const senderWanted = input.sender?.trim() ?? ''
+  const kind = input.kind === 'group' || input.kind === 'single' ? input.kind : 'all'
+  const gran = normalizeGranularity(input.granularity)
+  const top = Math.min(Math.max(Math.trunc(input.top ?? 15), 1), 50)
+  const { sql: where, params } = whereOf(win, scopeAliases, {
+    senderAliases: senderWanted ? senderAliases(input.decryptedDir, senderWanted, names) : [],
+    kind,
+  })
   const label = windowLabel(win)
   const totalScopeLabel = scopedUsername ? '当前范围' : '全库'
   const facts: AggregateFact[] = []
-  const names = mergeDisplayNames(input.decryptedDir)
 
   try {
     return withDb(p, (db) => {
@@ -266,28 +373,52 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
       }
 
       if (dim === 'distinct') {
-        // 去重计数：「我总共跟多少人聊过天」的**唯一诚实答案来源**。
-        // 分两类报：群聊（`@chatroom`）与单聊 —— 用户问「多少人」时通常想知道的是人，
-        // 而群聊不是「人」。两类都给，让模型按问题措辞选用。
-        const all = sessions.size
-        const groups = [...sessions.keys()].filter(username => username.endsWith('@chatroom')).length
-        const singles = all - groups
-        facts.push({
-          title: `去重会话数（${label}，${totalScopeLabel}共 ${total} 条消息）`,
-          body: [
-            `  · 有聊天记录的会话总数（去重）：${all} 个`,
-            `  · 其中群聊：${groups} 个`,
-            `  · 其中单聊（含公众号/服务号等非群会话）：${singles} 个`,
-          ].join('\n'),
-          total,
-        })
+        if (input.distinctField === 'sender') {
+          // 「跟多少人聊过」有两种口径：会话数（默认，含群聊）与**发送者人数**。
+          // 后者只能从群消息前缀里的 sender 去重得到 —— 单聊消息没有发送者前缀，
+          // 所以必须在正文里如实写出口径，否则模型会把 0 人当成「没聊过」。
+          const senderWhere = where === '' ? " WHERE sender <> ''" : `${where} AND sender <> ''`
+          const countRow = db.prepare(
+            `SELECT COUNT(DISTINCT sender) AS c FROM message_meta${senderWhere}`,
+          ).get(...params) as { c?: number } | undefined
+          const senders = Number(countRow?.c ?? 0)
+          const topSenders = db.prepare(
+            `SELECT sender, COUNT(*) AS c FROM message_meta${senderWhere} GROUP BY sender ORDER BY c DESC LIMIT ?`,
+          ).all(...params, Math.min(top, 10)) as Array<{ sender: string; c: number }>
+          facts.push({
+            title: `去重发送者数（${label}，${totalScopeLabel}共 ${total} 条消息）`,
+            body: [
+              `  · 不同发送者（去重）：${senders} 人`,
+              `  · 口径：按群消息前缀里的发送者统计；单聊消息没有发送者前缀，不计入`,
+              ...topSenders.map((r, i) =>
+                `  ${i + 1}. ${displayNameForUsername(r.sender, names)}：${Number(r.c ?? 0)} 条`),
+            ].join('\n'),
+            total,
+          })
+        } else {
+          // 去重会话数：「我总共跟多少人聊过天」的**唯一诚实答案来源**。
+          // 分两类报：群聊（`@chatroom`）与单聊 —— 用户问「多少人」时通常想知道的是人，
+          // 而群聊不是「人」。两类都给，让模型按问题措辞选用。
+          const all = sessions.size
+          const groups = [...sessions.keys()].filter(username => username.endsWith('@chatroom')).length
+          const singles = all - groups
+          facts.push({
+            title: `去重会话数（${label}，${totalScopeLabel}共 ${total} 条消息）`,
+            body: [
+              `  · 有聊天记录的会话总数（去重）：${all} 个`,
+              `  · 其中群聊：${groups} 个`,
+              `  · 其中单聊（含公众号/服务号等非群会话）：${singles} 个`,
+            ].join('\n'),
+            total,
+          })
+        }
       } else if (dim === 'session') {
         const rows = [...sessions.entries()]
           .sort((a, b) => b[1].c - a[1].c)
-          .slice(0, 15)
+          .slice(0, top)
         const lines = rows.map(([username, r], i) => {
-          const d1 = new Date(r.mn * 1000).toISOString().slice(0, 10)
-          const d2 = new Date(r.mx * 1000).toISOString().slice(0, 10)
+          const d1 = ymdLocal(r.mn)
+          const d2 = ymdLocal(r.mx)
           return `  ${i + 1}. ${displayNameForUsername(username, names)}：${r.c} 条（${d1} ~ ${d2}）`
         })
         facts.push({
@@ -296,13 +427,16 @@ export function runAggregate(input: AggregateInput): AggregateFact[] {
           total,
         })
       } else if (dim === 'day') {
+        // 粒度只影响分组表达式与标签：day/month/hour/weekday 都是「按时间聚合」，
+        // 走同一套 WHERE（日期范围、会话、发送者、kind 全部生效）。
         const rows = db.prepare(
-          `SELECT date(create_time, 'unixepoch', 'localtime') AS d, COUNT(*) AS c
-           FROM message_meta${where} GROUP BY d ORDER BY c DESC LIMIT 15`,
-        ).all(...params) as Array<{ d: string; c: number }>
-        const lines = rows.map((r, i) => `  ${i + 1}. ${r.d}：${r.c} 条`)
+          `SELECT ${granularitySql(gran)} AS d, COUNT(*) AS c
+           FROM message_meta${where} GROUP BY d ORDER BY c DESC LIMIT ?`,
+        ).all(...params, top) as Array<{ d: string; c: number }>
+        const unit = granularityUnit(gran)
+        const lines = rows.map((r, i) => `  ${i + 1}. ${granularityLabel(gran, String(r.d))}：${r.c} 条`)
         facts.push({
-          title: `按天统计消息数（${label}，${totalScopeLabel}共 ${total} 条消息 / ${rows.length} 天上榜）`,
+          title: `按${unit}统计消息数（${label}，${totalScopeLabel}共 ${total} 条消息 / ${rows.length} ${unit}上榜）`,
           body: lines.join('\n'),
           total,
         })

@@ -49,7 +49,7 @@ import { queryMomentsInsights } from '../src/query/moments-insights.ts'
 import { queryOverviewInsights } from '../src/query/overview-insights.ts'
 import { queryOverviewExtras } from '../src/query/overview-extras.ts'
 import { listMessagesInRange } from '../src/query/search-build.ts'
-import { msgCreateTimeByServerId } from '../src/query/messages.ts'
+import { msgCreateTimeByServerId, msgCreateTimesByServerIds, queryMessages } from '../src/query/messages.ts'
 import { vectorDbPath, __internals as embeddingInternals } from '../src/query/retrieval/embedding.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -580,6 +580,51 @@ describe('洞察 / 提醒 / 媒体 / 撤回 / 检索的读路径不留句柄（�
       })
     }
     expect(msgCreateTimeByServerId(dec, 'wxid_a', '12345')).toBe(1700000001)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * 批量入口**每个分片只开一次**（第 67 轮把「未读会话逐个解析」收成一次批量）。
+   * 两条查询分别命中第一、第二个分片 ⇒ 两次 open 都在 `finally` 里关掉，整棵树才可删。
+   */
+  it('msgCreateTimesByServerIds：两条查询落在不同分片时，两次 open 都关了', () => {
+    const root = tempRoot('msg-shards-multi')
+    const dec = join(root, 'decrypted')
+    const tableOf = (talker: string): string => 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    for (const [n, talker] of [[1, 'wxid_a'], [2, 'wxid_b']] as const) {
+      makeDb(join(dec, 'message', `message_${n}.db`), (db) => {
+        const table = tableOf(talker)
+        db.exec(`CREATE TABLE "${table}" (server_id INTEGER, create_time INTEGER)`)
+        db.prepare(`INSERT INTO "${table}" VALUES (?, ?)`).run(12345, 1700000000 + n)
+      })
+    }
+    expect(msgCreateTimesByServerIds(dec, [
+      { talker: 'wxid_a', serverId: '12345' },
+      { talker: 'wxid_b', serverId: '12345' },
+    ])).toEqual([1700000001, 1700000002])
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * `withShards` 是 `queryMessages` / `queryNewMessages` 等共用的开库助手：它一次把所有含该表
+   * 的分片都打开，回调结束后**统一**关。上面那条 `msgCreateTimeByServerId` 在改成批量薄包装后
+   * 已经不走这里了，所以另起一条钉住这个助手 —— 否则「轮到哪条关哪条 / 命中就 return」那种
+   * 旧形状（M273 变异体）可以静默回潮。
+   */
+  it('queryMessages：跨两个分片取一页后，两条连接都已关（withShards 的收尾）', () => {
+    const root = tempRoot('msg-with-shards')
+    const dec = join(root, 'decrypted')
+    const table = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
+    for (const n of [1, 2]) {
+      makeDb(join(dec, 'message', `message_${n}.db`), (db) => {
+        db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+        db.exec('CREATE TABLE Name2Id (user_name TEXT)')
+        db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`)
+          .run(n, n, 1, 0, 1700000000 + n, 1, `msg ${n}`, String(1000 + n))
+      })
+    }
+    const snap = queryMessages(dec, 'wxid_a', 10)
+    expect(snap.messages.map((m) => m.localId).sort((a, b) => a - b)).toEqual([1, 2])
     expect(leakedFiles(root)).toEqual([])
   })
 

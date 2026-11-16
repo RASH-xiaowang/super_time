@@ -14,7 +14,8 @@
 }
 
 .input,
-.textarea {
+.textarea,
+.select {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--nm-border);
@@ -27,7 +28,8 @@
   transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
 }
 
-.input {
+.input,
+.select {
   height: 32px;
   padding: 0 10px;
 }
@@ -45,9 +47,15 @@
 }
 
 .input:focus,
-.textarea:focus {
+.textarea:focus,
+.select:focus {
   border-color: var(--nm-border-active);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+
+.select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .hint,
@@ -142,6 +150,36 @@
 .toggleRow:has(.toggleInput:disabled) {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.kbSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+}
+
+.kbHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.kbCheck {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--nm-cyan);
+}
+
+.kbTitle {
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  font-weight: 650;
 }
 
 .webhookSection {

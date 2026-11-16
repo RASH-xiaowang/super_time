@@ -7,7 +7,7 @@
  */
 import { apiExportChatFile, apiExportFileAttachment, apiGetAvatar, apiGetAvatarBatched, apiSaveFileDialog } from '../api.ts'
 import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
-import { MessageRenderItem } from '../utils/message-items.ts'
+import { MessageRenderItem, renderKindOf } from '../utils/message-items.ts'
 import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
@@ -100,9 +100,55 @@ export function IconCallMissedOutline(): React.JSX.Element {
 }
 /** Open an external http(s) URL in a new tab (protocol-checked). */
 export function openLink(url: string): void {
-  if (/^https?:\/\//i.test(url)) {
-    window.open(url, '_blank', 'noopener,noreferrer')
+  const safe = safeExternalHref(url)
+  if (safe !== null) {
+    window.open(safe, '_blank', 'noopener,noreferrer')
   }
+}
+/**
+ * 外部链接白名单：只放行 http/https。
+ *
+ * 微信数据里的链接来自消息/收藏/朋友圈 XML，属于**不可信内容**；`javascript:`、`file:`、
+ * `data:` 之类一旦直接进 `href`，点击就是一次任意脚本/本地文件访问。返回 null 表示
+ * 不该作为链接渲染（调用方退化成纯文本，而不是留一个可点的死链）。
+ * @param url - 原始地址（可能带空白）。
+ * @returns 可安全交给 `href` 的地址，或 null。
+ */
+export function safeExternalHref(url: string): string | null {
+  const value = String(url ?? '').trim()
+  return /^https?:\/\//i.test(value) ? value : null
+}
+
+/**
+ * 安全外部链接：正常 http/https 保持原生 `<a target="_blank">` 行为；
+ * 非 http(s) 地址退化为同样式的纯文本（也可用 `fallback` 完全隐藏）。
+ *
+ * 为什么不统一走 `onClick + openLink`：那会改掉中键/右键「在新标签打开」等原生行为。
+ * 这里只做“地址不可信就不生成 href”，正常链接的交互与原来完全一致。
+ */
+export function SafeExternalLink({
+  href,
+  className,
+  title,
+  children,
+  fallback,
+}: {
+  href: string
+  className?: string
+  title?: string
+  children: React.ReactNode
+  fallback?: React.ReactNode
+}): React.JSX.Element {
+  const safe = safeExternalHref(href)
+  if (safe === null) {
+    // 显式传 null 表示「不可信时整段不显示」；不传才退回 children（保留可见文案）。
+    return <span className={className} title={title}>{fallback === undefined ? children : fallback}</span>
+  }
+  return (
+    <a className={className} href={safe} target="_blank" rel="noopener noreferrer" title={title}>
+      {children}
+    </a>
+  )
 }
 /** Convert a transfer-card amount to a display string without inventing `¥0.00`. */
 export function transferAmountLabel(raw: string | undefined): string {
@@ -608,15 +654,24 @@ export function itemLocalId(item: MessageRenderItem | undefined): number {
   return head?.localId ?? -1
 }
 /**
- * 取渲染项的稳定 key（day 自带 key；消息按 localId，图片组按 gid+首条 localId）。
+ * 取渲染项的稳定 key（day 自带 key；消息按复合身份，图片组按 gid+首条复合身份）。
+ *
+ * **消息也不能只按 `local_id` 建 key**：`local_id` 只在单个分片内唯一，同一会话的
+ * `message_0..N` 各自从 1 起编号。复合身份取 `sort_seq + local_id`，再把
+ * `server_id / create_time` 带上兜底（`sort_seq` 在少数表里也有重复值）。
+ * key 重复的后果不是报错，而是 React 按重复 key 复用节点、虚拟列表把一行的
+ * 测量高度套到另一行上 —— 表现是「上一个窗口的日期分隔留在新窗口里、行与行叠住」。
  * @param item - `buildMessageItems` 的产物。
  * @returns 虚拟化与 React 共用的 key。
  */
 export function msgItemKey(item: MessageRenderItem | undefined): string {
   if (!item) return 'nil'
   if (item.kind === 'day') return item.key
-  const stableId = (m: WechatMessage | undefined): string =>
-    String(m?.localId ?? '') + '-' + String(m?.serverId ?? m?.createTime ?? '')
+  const stableId = (m: WechatMessage | undefined): string => {
+    const seq = Number(m?.sortSeq ?? 0)
+    const seqPart = Number.isFinite(seq) && seq > 0 ? 's' + String(seq) : ''
+    return String(m?.localId ?? '') + '-' + seqPart + '-' + String(m?.serverId ?? m?.createTime ?? '')
+  }
   if (item.kind === 'group') return 'grp-' + item.gid + '-' + stableId(item.items[0])
   return 'msg-' + stableId(item.m)
 }
@@ -635,17 +690,58 @@ export function scopedMsgItemKey(scope: string, item: MessageRenderItem | undefi
 /**
  * 虚拟化的初始高度估算（真实高度由 `measureElement` 量完回填）。
  *
- * 估得准不准只影响首帧的滚动条长度，不影响正确性；但**偏差太大**会让「回到底部」
- * 之类的定位多跳几次，所以这里按文本长度粗分三档（长文本在气泡里会换行）。
+ * 估得准不准不只是滚动条长度的问题：虚拟行是**绝对定位**的，估算**比真实值矮**
+ * 的那一行在挂载首帧会高出自己分到的槽位，直接压到下一行上（真机现象就是
+ * 「消息叠在一起、日期分隔和消息重影」），要等 `measureElement` 回填才归位。
+ * 图片/表情/视频这类媒体行最严重 —— 表情 `<img>` 在解码前高度为 0、之后最多 130px。
+ * 所以这里按**渲染种类**给上界（媒体行宁可估高：多出的空白下一帧就会被量回来，
+ * 和图片骨架多于真实图的处理一致），只有普通文本才按长度分档。
  * @param item - `buildMessageItems` 的产物。
- * @returns 预估像素高度。
+ * @returns 预估像素高度（含 `.msgVRow` 的行间距）。
  */
 export function estimateMsgItemHeight(item: MessageRenderItem | undefined): number {
-  if (!item) return 72
-  if (item.kind === 'day') return 30
+  if (!item) return 78
+  if (item.kind === 'day') return 34
   const head = item.kind === 'group' ? item.items[0] : item.m
-  const len = (head?.strContent ?? head?.displayText ?? head?.msgContent ?? '').length
-  if (len > 400) return 160
-  if (len > 120) return 104
-  return 72
+  if (!head) return 78
+  /* 渲染缓存里的旧消息没有 `renderType`（`renderKindOf` 的兜底会把自定义表情归到
+     `emoji`），按 rich 类型再认一次，别把 130px 的贴图估成一行字。 */
+  if (head.rich?.type === 'sticker') return 176
+  switch (renderKindOf(head)) {
+    case 'system':
+    case 'revoke':
+    case 'pat':
+    case 'empty':
+      return 34
+    /* 自定义表情图最大 130px + 群聊昵称行（17px）+ 行间距（16px）。真图由
+       StickerImage 先按 120×120 占位，就绪后交还固有尺寸，误差只剩个位数。
+       内置 emoji（`emoji`）是 26px 字号的一行文本，不能按贴图算。 */
+    case 'sticker':
+      return 176
+    case 'emoji':
+      return 76
+    // 图片骨架 120 + 昵称 17 + 间距 16；大图（最高 240）测量后回填。
+    case 'image':
+    case 'video':
+      return 196
+    case 'voice':
+      return 76
+    // 卡片类内容（一条标题 + 摘要 + 页脚）高度稳定，按一行半估。
+    case 'chatlog':
+    case 'transfer':
+    case 'redpacket':
+    case 'link':
+    case 'file':
+    case 'miniapp':
+    case 'location':
+    case 'contactCard':
+    case 'quote':
+      return 128
+    default:
+      break
+  }
+  const len = (head.strContent ?? head.displayText ?? head.msgContent ?? '').length
+  if (len > 400) return 176
+  if (len > 120) return 116
+  return 78
 }

@@ -6,7 +6,7 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { messagesMatchTalker } from './msg-scope.ts'
+import { cachedMessagesMatchTalker, messagesMatchTalker } from './msg-scope.ts'
 
 const TALKER = 'wxid_peer'
 const SELF = 'wxid_me'
@@ -37,5 +37,30 @@ describe('messagesMatchTalker', () => {
 
   it('空列表算「没缓存」而不是「归属成立」——两者在调用方都是重新取数', () => {
     expect(messagesMatchTalker([], TALKER, SELF)).toBe(true)
+  })
+})
+
+describe('cachedMessagesMatchTalker（读渲染缓存时的更严判据）', () => {
+  it('单聊缓存必须拿得出发送者证据：接收方向的行缺 sender ⇒ 不画（旧缓存/旧后端）', () => {
+    // 2026-09 的脏缓存就是这种形态：整份列表没有 sender，宽松判据全放行。
+    expect(cachedMessagesMatchTalker([{ isSender: 0 }, { isSender: 0 }], TALKER, SELF)).toBe(false)
+    expect(cachedMessagesMatchTalker([msg(0), msg(0, TALKER)], TALKER, SELF), '掺了一行无证据的接收消息也不能冒险').toBe(false)
+  })
+
+  it('单聊：接收方向的行都带 sender 且只指向对端/自己 ⇒ 可用', () => {
+    expect(cachedMessagesMatchTalker([msg(1), msg(0, TALKER), msg(0, SELF)], TALKER, SELF)).toBe(true)
+  })
+
+  it('单聊：出现第三方发送者 ⇒ 不可用（这就是串会话的缓存）', () => {
+    expect(cachedMessagesMatchTalker([msg(0, TALKER), msg(0, 'wxid_other')], TALKER, SELF)).toBe(false)
+  })
+
+  it('只有自己发的行 ⇒ 无法证明归属，宁可不画（多取一次权威数据）', () => {
+    expect(cachedMessagesMatchTalker([msg(1), msg(1)], TALKER, SELF)).toBe(false)
+  })
+
+  it('空列表仍算「没缓存」；群聊不适用发送者判据', () => {
+    expect(cachedMessagesMatchTalker([], TALKER, SELF)).toBe(true)
+    expect(cachedMessagesMatchTalker([msg(0, 'a'), msg(0, 'b')], '1@chatroom', SELF)).toBe(true)
   })
 })

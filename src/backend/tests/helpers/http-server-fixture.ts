@@ -20,6 +20,8 @@ const { createRemoteAccessServer } = require(join(ROOT, 'src', 'backend', 'http-
     gatedCall: (method: string, args: unknown[]) => Promise<unknown>
     nativeCall?: (action: string, payload: Record<string, unknown>) => Promise<unknown>
     getDecodedRoot?: () => string
+    maxSseClients?: number
+    maxSsePerSession?: number
     appVersion: string
     bindHost?: string
     callQueue?: {
@@ -55,6 +57,7 @@ export interface State {
   hasToken: boolean
   tokenMasked: string
   pairingCodes?: number
+  sseClients?: number
 }
 
 export const TOKEN = 'spec-token-0123456789abcdef'
@@ -89,6 +92,9 @@ export function fixture(opts: {
   enabled?: boolean
   token?: string
   port?: number
+  maxSseClients?: number
+  maxSsePerSession?: number
+  getUiDistDir?: () => string
   callQueue?: {
     run: (task: () => Promise<unknown>, meta?: Record<string, unknown>) => Promise<unknown>
   }
@@ -123,8 +129,10 @@ export function fixture(opts: {
   const calls: string[] = []
   const srv = createRemoteAccessServer({
     getDataRoot: () => dataRoot,
-    getUiDistDir: () => uiDist,
+    getUiDistDir: opts.getUiDistDir ?? (() => uiDist),
     getDecodedRoot: () => decodedDir,
+    ...(opts.maxSseClients === undefined ? {} : { maxSseClients: opts.maxSseClients }),
+    ...(opts.maxSsePerSession === undefined ? {} : { maxSsePerSession: opts.maxSsePerSession }),
     ...(opts.callQueue
       ? {
           callQueue: {

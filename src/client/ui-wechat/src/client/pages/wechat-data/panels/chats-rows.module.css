@@ -361,7 +361,7 @@
   background: var(--nm-bg-hover);
   color: var(--nm-text-1);
 }
-.msgVideoSave:disabled { cursor: default; opacity: 0.65; }
+.msgVideoSave:disabled { cursor: default; opacity: 0.5; }
 .msgVideoSave[data-saving='true'] { cursor: wait; }
 .msgVideoSaved {
   display: block;
@@ -486,51 +486,12 @@
   margin-inline-end: 4px;
 }
 .msgQuoteKind { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
-/* 被引用摘要：参考图实测是**两行截断**，不是早先注释里写的「单行省略」——
-   图里那条引用行高 58px（2 × 19.2 行高 + 内边距），第二行末尾带省略号。
-   反过来，单行 + nowrap 会在宽窗口下把行撑到 1694px（用户截图）。 */
-.msgQuoteWhat {
-  min-width: 0;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
 .msgFileHint {
   font-size: 11px;
   color: var(--wx-card-footer);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.msgImageTools {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 12px);
-  padding: 3px var(--nm-s-2);
-  border-radius: var(--wx-radius);
-  background: rgba(0, 0, 0, 0.58);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-}
-.msgBubbleZoom:hover .msgImageTools,
-.msgBubbleZoom:focus-within .msgImageTools {
-  opacity: 1;
-  pointer-events: auto;
-}
-.msgImageTools span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .msgImageToolBtn {
   flex: 0 0 auto;

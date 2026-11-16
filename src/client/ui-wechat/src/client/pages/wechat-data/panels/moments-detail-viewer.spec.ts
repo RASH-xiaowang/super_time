@@ -44,6 +44,7 @@ describe('朋友圈详情浮层', () => {
         setViewer,
         setAuthorFilter: vi.fn(),
         snsImgs: {},
+        articleCovers: {},
         mediaKeySpec: { current: new Map() },
         videoSrcs: {},
         videoLoading: new Set<string>(),

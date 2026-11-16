@@ -7,8 +7,8 @@
  * @module export-flows
  */
 
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled, type StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryContacts } from './contacts.ts'
@@ -17,7 +17,7 @@ import { queryFiles } from './files.ts'
 import { queryRecords } from './records.ts'
 import { queryMoments } from './moments.ts'
 import { queryPrivacyScan } from './privacy.ts'
-import { grantRoot, writeDenialReason } from './path-policy.ts'
+import { grantRoot, isInsideRoot, writeDenialReason } from './path-policy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
 import { yieldToLoop } from './search-build.ts'
@@ -89,6 +89,66 @@ export function filterMessages(msgs: WechatMessage[], types?: number[], richType
 /** Sanitize a user-supplied file basename (no separators / invalid chars). */
 export function sanitizeBasename(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').trim().slice(0, 100)
+}
+
+/**
+ * 把一个「用户文件名」解析成导出目录内**唯一且越不出去**的落点（P1-07）。
+ *
+ * 调用方给的 `filename` 语义是文件名，不是路径 —— 这里先拒绝路径分隔符、盘符与
+ * `..`，再用 {@link sanitizeBasename} 校验非法字符（它若改动了名字就说明输入不该被
+ * 接受；静默换成别的文件名会让用户以为导出到了他填的位置）。随后 `resolve` 到目录
+ * 内、用 {@link isInsideRoot} 做路径段级前缀校验，最后套用
+ * {@link writeDenialReason} 的写政策。默认名与重名也在这里统一处理：
+ * 已有同名文件时依次尝试 `_2`、`_3`…，不静默覆盖上一份导出。
+ *
+ * 所有「目录 + filename」型导出入口（年度报告 / 朋友圈 / 全量会话）都必须只经这里
+ * 落盘；单会话导出与 CSV 已有各自的校验，行为保持不变。
+ * @param base - 导出目录。
+ * @param filename - 调用方给的文件名（可带目标扩展名）；空/未给时用 `fallbackName`。
+ * @param ext - 目标扩展名（不带点；最终落地为小写）。
+ * @param fallbackName - 未给文件名时的默认主干名（不含扩展名）。
+ * @returns 绝对路径与最终文件名（仅 basename）。
+ */
+export function resolveExportTarget(
+  base: string,
+  filename: string | undefined,
+  ext: string,
+  fallbackName: string,
+): { path: string; filename: string } {
+  const dir = resolve(base)
+  const raw = typeof filename === 'string' ? filename.trim() : ''
+  let stem: string
+  if (raw === '') {
+    stem = fallbackName
+  } else {
+    // 这些形状说明调用方把「路径」塞进了 filename：明确拒绝，绝不 join 后再赌它没越界。
+    if (/[\\/]/.test(raw)) throw new Error('导出文件名不能包含路径分隔符')
+    if (/^[A-Za-z]:/.test(raw)) throw new Error('导出文件名不能是盘符路径')
+    if (raw === '.' || raw === '..') throw new Error('导出文件名不能是相对目录')
+    // 复用既有清洗器做**校验**：它改动了名字 ⇒ 含非法字符/结尾是空格或点 ⇒ 拒绝。
+    // 长度超过 100 时允许按既有口径截断（与 sanitizeBasename 一致），不算非法。
+    const cleaned = sanitizeBasename(raw)
+    if (cleaned !== raw.slice(0, 100)) throw new Error('导出文件名包含非法字符')
+    stem = cleaned
+  }
+  const suffix = '.' + ext
+  const name = stem.toLowerCase().endsWith(suffix.toLowerCase())
+    ? stem.slice(0, stem.length - suffix.length) + suffix
+    : stem + suffix
+  // 重名：保留用户这次的导出，也不覆盖上一份（确定性后缀，避免时间戳漂移）。
+  const stemOfName = name.slice(0, name.length - suffix.length)
+  let finalName = name
+  let seq = 2
+  while (existsSync(join(dir, finalName))) {
+    finalName = stemOfName + '_' + String(seq) + suffix
+    seq += 1
+  }
+  const abs = resolve(dir, finalName)
+  // resolve 之后再按路径段比一次：即使上面的字符校验将来被放松，这里也拦得住穿越。
+  if (abs === dir || !isInsideRoot(abs, dir)) throw new Error('导出路径越界')
+  const denial = writeDenialReason(abs, dir)
+  if (denial !== null) throw new Error(denial)
+  return { path: abs, filename: finalName }
 }
 
 /** Resolve a legacy message-table hash before any export path, filename, or manifest is written. */
@@ -509,8 +569,9 @@ export async function exportAnnualReport(
   throwIfCancelled(ctrl?.signal)
   const ext = format === 'html' ? 'html' : format === 'json' ? 'json' : 'md'
   const base = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
-  const safeName = (filename && filename.trim()) ? filename.trim().replace(/\.(md|html|json)$/i, '') + '.' + ext : 'wechat_annual_' + String(year) + '.' + ext
   mkdirSync(base, { recursive: true })
+  // P1-07：文件名清洗、穿越拒绝、写政策与重名统一交给 resolveExportTarget。
+  const target = resolveExportTarget(base, filename, ext, 'wechat_annual_' + String(year))
   let content = ''
   const total = Number(report['total'] ?? 0)
   const activeDays = Number(report['active_days'] ?? 0)
@@ -580,11 +641,11 @@ export async function exportAnnualReport(
   }
   throwIfCancelled(ctrl?.signal)
   ctrl?.onProgress?.({ phase: 'write', done: 0, total: 1 })
-  const path = join(base, safeName)
+  const path = target.path
   writeFileAtomicSync(path, content)
   ctrl?.onProgress?.({ phase: 'write', done: 1, total: 1 })
   reportProgress(ctrl, 'done', 1, 1)
-  return { path, filename: safeName, count: total }
+  return { path, filename: target.filename, count: total }
 }
 /**
  * Export moments (朋友圈) as txt / html / json / csv with optional
@@ -684,10 +745,10 @@ export async function exportMoments(
   // ZIP：JSON 数据 + 离线媒体（图片/视频），做成可归档的媒体包。
   if (opts?.zip) {
     const mediaCtx = exportMediaCtx(decryptedDir)
-    const rawName = (opts.filename ?? '').trim()
-    const zipBase = rawName ? rawName.replace(/\.zip$/i, '') : ''
-    const zipName = zipBase ? zipBase + '.zip' : 'wechat_moments_' + String(Date.now()) + '.zip'
-    const zipPath = join(base, zipName)
+    // P1-07：ZIP 与非 ZIP 共用同一个目标解析（拒绝穿越 + 政策 + 默认名 + 重名）。
+    const target = resolveExportTarget(base, opts.filename, 'zip', 'wechat_moments_' + String(Date.now()))
+    const zipPath = target.path
+    const zipName = target.filename
     // 媒体逐条写入，单条视频不会堆在内存里等全部解析完。解析器只接受原图/原视频；
     // 缩略档、未解密 CDN 密文与无法按魔数识别的字节都会进入清单而不会写入媒体目录。
     await writeZipAtomic(zipPath, async (zip) => {
@@ -717,9 +778,8 @@ export async function exportMoments(
     return { path: zipPath, filename: zipName, count: filtered.length }
   }
   const ext = format
-  const name = (opts?.filename && opts.filename.trim())
-    ? opts.filename.trim().replace(/\.(txt|html|json|csv)$/i, '') + '.' + ext
-    : 'wechat_moments_' + String(Date.now()) + '.' + ext
+  const target = resolveExportTarget(base, opts?.filename, ext, 'wechat_moments_' + String(Date.now()))
+  const name = target.filename
   let content = ''
   if (ext === 'json') {
     content = JSON.stringify(filtered, null, 2)
@@ -761,6 +821,12 @@ export async function exportMoments(
                 ...(im.url ? { url: im.url } : {}),
                 ...(im.token ? { token: im.token } : {}),
                 ...(im.key ? { seed: im.key } : {}),
+                ...(im.originalWidth !== undefined ? { originalWidth: im.originalWidth } : {}),
+                ...(im.originalHeight !== undefined ? { originalHeight: im.originalHeight } : {}),
+                ...(im.originalBytes !== undefined ? { originalBytes: im.originalBytes } : {}),
+                ...(im.uhdUrl ? { uhdUrl: im.uhdUrl } : {}),
+                ...(im.uhdToken ? { uhdToken: im.uhdToken } : {}),
+                ...(im.uhdSeed ? { uhdSeed: im.uhdSeed } : {}),
               },
             )
             if (r.bytes && r.format) {
@@ -819,7 +885,7 @@ export async function exportMoments(
   // 所以发完必须**再查一次** —— 只在发之前查的话，按钮永远慢半拍，
   // 「停止」看起来像没反应。
   throwIfCancelled(ctrl.signal)
-  const path = join(base, name)
+  const path = target.path
   writeFileAtomicSync(path, content)
   reportProgress(ctrl, 'write', 1, 1)
   reportProgress(ctrl, 'done', 1, 1)
@@ -841,8 +907,10 @@ export async function exportAllSessions(
   const sessions = env.sessions.slice(0, 1000)
   const base = (opts?.dir && opts.dir.trim()) ? opts.dir.trim() : join(dirname(decryptedDir), 'exports')
   mkdirSync(base, { recursive: true })
-  const filename = (opts?.filename && opts.filename.trim()) ? (opts.filename.trim().endsWith('.zip') ? opts.filename.trim() : opts.filename.trim() + '.zip') : 'wechat_all_sessions_' + String(Date.now()) + '.zip'
-  const path = join(base, filename)
+  // P1-07：全量会话同样只认文件名，穿越/盘符/非法字符在这里被拒绝。
+  const target = resolveExportTarget(base, opts?.filename, 'zip', 'wechat_all_sessions_' + String(Date.now()))
+  const path = target.path
+  const filename = target.filename
   const seen = new Set<string>()
   let total = 0
   // 逐会话产出并写盘：峰值内存与「单个会话」相关，而不是 1000 个会话之和。

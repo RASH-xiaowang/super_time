@@ -101,6 +101,21 @@ const EXEMPT: Array<{ file: string; call: string; why: string }> = [
     why: '模块级助手 writeSecretMigrationAck 里的确认位写入，失败经 report 回调落到 setSaveMsg 提示条',
   },
   {
+    // 模型弹层的重建（2026-11-13）：hook 故意不自持消息位 —— `KbModelDialog` 已经有
+    // `flash` 回执与 `err` 横幅两处渲染点，hook 再存一份只会出现「弹层说失败、hook 说
+    // 成功」的双源。反馈经 `onFlash` / `onError` 两个参数回传，名字不含反馈词，
+    // 所以令牌看不见它；豁免是如实记账，不是「没做反馈」。
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-index-build.ts',
+    call: 'apiBuildKbVectorIndex(',
+    why: '反馈经 onFlash/onError 参数回传，由 KbModelDialog 的 flash 回执与 err 横幅渲染',
+  },
+  {
+    // 同一次重建的「停止」：成败同样走 `onError`（弹层 err 横幅），理由同上。
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-index-build.ts',
+    call: 'apiCancelKbIndexBuild(',
+    why: '停不下来的原因经 onError 回传到 KbModelDialog 的 err 横幅，hook 不复述',
+  },
+  {
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export.tsx',
     call: 'apiExportSessionMessages',
     why: '批量循环把逐会话失败聚合成 errors 并返回；exportBatch 的 successMessage 报成功/失败数，宿主 chats-view.tsx 用 ExportProgressStatus 渲染 batchExportState',

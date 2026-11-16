@@ -28,13 +28,15 @@ import type {
   ChatAiReplyState,
 } from './types.ts'
 import {
-  afterCursor,
   anchorOf,
   anchorOfRecord,
-  cursorOf,
+  conversationProgressedAfter,
   errorText,
   inspectReply,
   isUnfinishedStage,
+  latestInboundAfterCursor,
+  latestMessageCursor,
+  latestVisibleMessage,
   loadMessagesForState,
   parseSourceRef,
   pendingAnchorOf,
@@ -48,6 +50,7 @@ import {
 } from './runner-state.ts'
 import {
   beginChatAiReplyRun,
+  cancelStaleChatAiReplyRun,
   cancelSupersededChatAiReplyRun,
   dispatchChatAiReply,
   failChatAiReplyRun,
@@ -82,6 +85,7 @@ async function runOne(
     now: () => number
     leaseMs: number
     heartbeatMs: number
+    stale: boolean
     canUseLease: () => boolean
   },
 ): Promise<boolean> {
@@ -127,7 +131,11 @@ async function runOne(
         resumed,
         claimed,
         state.revision,
-        { leaseMs: options.leaseMs, now: options.now },
+        {
+          leaseMs: options.leaseMs,
+          now: options.now,
+          stale: options.stale,
+        },
       )
       if (started === null) return false
       activeRun = started
@@ -161,6 +169,9 @@ async function runOne(
         return await cancelSupersededChatAiReplyRun(deps, state, started)
       }
       if (isCancelled()) return false
+      if (options.stale) {
+        return await cancelStaleChatAiReplyRun(deps, state, started)
+      }
       const reserved = await reserveChatAiReplyRun(deps, state, started)
       if (reserved === 'done') return false
       if (isCancelled()) return false
@@ -212,6 +223,8 @@ async function runOne(
 interface SessionWork {
   anchor: ChatAiReplyAnchor
   resumed: boolean
+  /** 恢复对象已被更新的会话消息越过，只收口旧任务，不再生成或投递。 */
+  stale: boolean
 }
 
 async function workForSession(
@@ -228,7 +241,11 @@ async function workForSession(
       || state.pendingRevision <= 0) {
       throw new Error('AI 回复 pendingRevision 缺失、为 0 或非法；已停止本会话自动扫描')
     }
-    return { anchor: pending, resumed: true }
+    return {
+      anchor: pending,
+      resumed: true,
+      stale: await conversationProgressedAfter(deps, state, pending, messages),
+    }
   }
   if (hasPendingIntent && state.recordId === undefined) {
     throw new Error('AI 回复恢复锚点损坏；为避免越过未完成消息，已停止本会话自动扫描')
@@ -243,33 +260,41 @@ async function workForSession(
     if (anchor === null) {
       throw new Error('AI 回复记录缺少可恢复的 sourceRef；已停止本会话自动扫描')
     }
-    return { anchor, resumed: true }
+    return {
+      anchor,
+      resumed: true,
+      stale: await conversationProgressedAfter(deps, state, anchor, messages),
+    }
   }
   if (recoverOnly) return null
 
-  const incoming = messages
-    .filter((message) => message.isSender !== 1)
-    .map(anchorOf)
-    .filter((value): value is ChatAiReplyAnchor => value !== null)
-    .sort((a, b) => a.sortSeq - b.sortSeq || a.localId - b.localId)
-  const latest = incoming.at(-1)
-  if (latest === undefined) return null
-
   // 首次开启只建立水位；否则会把历史消息整体回一遍。
   if (state.cursor === '') {
+    const cursor = latestMessageCursor(messages)
+    if (cursor === undefined) return null
     initializeChatAiReplyCursor(
       deps.decryptedDir(),
       state.accountKey,
       state.chatUsername,
-      cursorOf(latest),
+      cursor,
       state.revision,
     )
     return null
   }
 
-  // 必须从最早未处理消息开始；选最新会把前面未完成的任务永久越过。
-  const anchor = incoming.find((candidate) => afterCursor(candidate, state.cursor))
-  return anchor === undefined ? null : { anchor, resumed: false }
+  const latestVisible = latestVisibleMessage(messages)
+  if (latestVisible === undefined) return null
+
+  // 只有对方最后发言才需要自动回复。若最新可视消息是自己（人工或上一条 AI
+  // 回复），说明上一轮已经有人回答，绝不能再拿更早的问题补答一次。
+  if (latestVisible.isSender === 1) return null
+
+  // 对方连续发送多条时，只回复最新一条；上下文会自然包含前面的同一轮消息。
+  // 逐条补答旧消息正是“每次都回复上次问题”的根因。
+  const anchor = latestInboundAfterCursor(messages, state.cursor)
+  return anchor === undefined
+    ? null
+    : { anchor, resumed: false, stale: false }
 }
 
 async function closeOrphanAiReplyPending(
@@ -390,6 +415,7 @@ export function createChatAiReplyRunner(
             now,
             leaseMs,
             heartbeatMs,
+            stale: work.stale,
             canUseLease: () => !disposed,
           },
         )

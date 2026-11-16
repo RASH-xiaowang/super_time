@@ -37,12 +37,13 @@ export const MUTATIONS_BATCH3S = [
     to: '  if (false) return false;',
     spec: 'src/backend/tests/http-auth.spec.ts',
   },
+ // 2026-11-13：锚点跟随 授权 catch 增加「拒绝」注释后收窄到许可分支 更新。
   {
     id: 'M529-remote-license-exception-allows',
     why: '许可校验自身抛异常时改成**放行**（许可 JSON 损坏 / 读盘失败 / 指纹采集异常都会走到那个 catch）—— 这正是 2026-09 修掉的洞：闸门一旦出异常就完全失效。抽出共用实现后，HTTP 那条路少抄这个分支洞就回来了。判据：call-gates.spec.ts 的「校验自身抛异常 → 拒绝，不是放行」。',
     file: 'src/backend/call-gates.js',
-    from: '  } catch (e) {',
-    to: '  } catch (e) { if (true) return getWechatBackend().call(method, args);',
+    from: '  } catch (e) {\n    // 授权检查**自身**失败时必须拒绝，而不是放行。',
+    to: '  } catch (e) {\n    if (true) return getWechatBackend().call(method, args);\n    // 授权检查**自身**失败时必须拒绝，而不是放行。',
     spec: 'src/backend/tests/call-gates.spec.ts',
   },
   {
@@ -77,12 +78,13 @@ export const MUTATIONS_BATCH3S = [
     to: '  void 0;',
     spec: 'src/backend/tests/http-server.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 pushEvent 改为快照遍历 ctx.sseClients 更新。
   {
     id: 'M534-remote-sse-payload-shape-changed',
     why: 'SSE 的 payload 从 `{ name, args }` 改成别的形状 ⇒ 与 IPC 的 `wechat:event` 不再同形，渲染层那套「事件名 → DOM CustomEvent」的分发全部失配（7 个事件一个都收不到），而这正是「手机与桌面共用同一份渲染层」的前提。判据：http-server.spec.ts 的「SSE 事件流：形状必须与 IPC 的 wechat:event 一致」。',
     file: 'src/backend/http-server.js',
-    from: '    for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { name, args });',
-    to: '    for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { event: name, payload: args });',
+    from: '    for (const res of [...ctx.sseClients]) writeSse(ctx, res, { name, args });',
+    to: '    for (const res of [...ctx.sseClients]) writeSse(ctx, res, { event: name, payload: args });',
     spec: 'src/backend/tests/http-server.spec.ts',
   },
   {

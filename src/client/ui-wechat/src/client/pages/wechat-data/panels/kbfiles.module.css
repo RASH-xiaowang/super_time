@@ -432,6 +432,15 @@
 /* ── 左：文件列表 ─────────────────────────────────────────── */
 .list { display: flex; flex-direction: column; }
 
+/* 「加载更多」：列表默认只取一页（200 条），更多内容由用户显式翻页。
+   不虚拟化是因为这一页本来就有上限，翻到底也不会把 DOM 撑到失控。 */
+.listMore {
+  display: flex;
+  justify-content: center;
+  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x);
+  border-top: 1px solid var(--nm-border);
+}
+
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

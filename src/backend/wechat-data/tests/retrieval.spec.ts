@@ -24,7 +24,7 @@ import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig, loadRetrieva
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
-import { pickDimension, resolveWindow, factsToDocs, runAggregate, directionTerms } from '../src/query/retrieval/aggregate.ts'
+import { pickDimension, resolveWindow, factsToDocs, runAggregate, directionTerms, ymdLocal } from '../src/query/retrieval/aggregate.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -682,6 +682,12 @@ describe('聚合通道：维度判定与时间窗', () => {
     expect(w.hi - w.lo).toBe(7 * 86400)
     // 不限
     expect(resolveWindow({ decryptedDir: '', question: '哪个群最多', now })).toEqual({ lo: 0, hi: 0 })
+  })
+
+  it('统计范围标签按本地时区渲染，不会把本地 00:00 写成前一天', () => {
+    // UTC+8 下旧实现用 toISOString() 会把 11-07 00:30 的服务器时间写成 11-06。
+    const localMorning = new Date(2026, 10, 7, 0, 30, 0)
+    expect(ymdLocal(Math.floor(localMorning.getTime() / 1000))).toBe('2026-11-07')
   })
 
   it('聚合事实转成文档时带 source=agg（压缩阶段靠它跳过窗口展开）', () => {

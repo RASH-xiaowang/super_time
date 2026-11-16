@@ -107,13 +107,15 @@ export async function apiSetChatAiReplyEnabled(options: {
   return result
 }
 
-/** 保存当前单聊的 AI 回复人格；只允许桌面端写入。 */
+/** 保存当前单聊的 AI 回复人格与知识库设置；只允许桌面端写入。 */
 export async function apiSetChatAiReplyPersona(options: {
   chatUsername: string
   chatName?: string
   personaName: string
   personaPrompt: string
   splitReply?: boolean
+  kbEnabled?: boolean
+  kbId?: number
   expectedRevision?: number
 }): Promise<ChatAiReplyMutationResult> {
   const result = unwrap(await remote().setChatAiReplyPersona(options))

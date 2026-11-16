@@ -62,8 +62,13 @@ const DDL = [
  * 1 → 2：新增 `local_id` / `server_id`（媒体实体定位键）。旧归档的行已经存在，
  * 只靠 `INSERT OR IGNORE` 永远不会补这两列；而源库签名可能早就不变了，
  * 所以必须把版本也写进 `archived_source`，让旧记录强制重扫一次。
+ *
+ * 2 → 3：修正 `sender_username` 的归属。v2 无条件把 Name2Id 的空名行当成登录账号，
+ * 真机上那个空名行其实是**另一位群成员** —— 他/她发的消息被记成了「我发的」。
+ * 判据改成「先找显式账号行，找不到才退回空行」（与 `messages.ts` 同一口径）；
+ * 已写错的旧行需要重扫才会被纠正，因此同样要 bump 版本。
  */
-const ARCHIVE_VERSION = 2
+const ARCHIVE_VERSION = 3
 
 /** 单条内容上限：超过则只留前 1MB（极端的二进制/压缩块不该把归档库撑爆）。 */
 const MAX_CONTENT_CHARS = 1_048_576
@@ -221,8 +226,14 @@ export function archiveMessages (decryptedDir: string): { added: number; tables:
     ensureSourceSchema(adb)
     const selfUsername = resolveSelfUsername(decryptedDir)
     const ins = adb.prepare('INSERT OR IGNORE INTO archived_msg (talker, row_key, create_time, local_type, sender_id, sender_username, local_id, server_id, content, archived_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
-    // 旧行只补定位键，**绝不更新 content**：归档的保留语义是「首次入库的原文永久不变」。
-    const updMeta = adb.prepare('UPDATE archived_msg SET create_time = ?, local_type = ?, sender_id = ?, sender_username = ?, local_id = ?, server_id = ? WHERE talker = ? AND row_key = ? AND (sender_username = \'\' OR local_id = 0 OR server_id = \'\')')
+    // 旧行只补定位键与发送者，**绝不更新 content**：归档的保留语义是「首次入库的原文永久不变」。
+    // 谓词里的 `sender_username = ?self` 只为修正 v2 的误归属（空名行被当成登录账号）；
+    // 它由 `name2IdOk` 兜底 —— Name2Id 读失败时宁可不动，也不能把整片发送者清空。
+    const updMeta = adb.prepare(
+      'UPDATE archived_msg SET create_time = ?, local_type = ?, sender_id = ?, sender_username = ?, '
+      + 'local_id = ?, server_id = ? WHERE talker = ? AND row_key = ? '
+      + 'AND (sender_username = \'\' OR local_id = 0 OR server_id = \'\' OR (? = 1 AND sender_username = ?))',
+    )
     const getSrc = adb.prepare('SELECT sig, ver FROM archived_source WHERE file = ?')
     const setSrc = adb.prepare('INSERT INTO archived_source (file, sig, rows, at, ver) VALUES (?,?,?,?,?) ON CONFLICT(file) DO UPDATE SET sig=excluded.sig, rows=excluded.rows, at=excluded.at, ver=excluded.ver')
     const now = Math.floor(Date.now() / 1000)
@@ -238,12 +249,20 @@ export function archiveMessages (decryptedDir: string): { added: number; tables:
       // 版本不同则**不能跳**：v1 归档缺 local_id/server_id，必须借这次重扫补齐。
       if (sig !== '' && known?.sig === sig && Number(known.ver ?? 1) >= ARCHIVE_VERSION) { skipped += 1; continue }
       let rows: Array<{ tk: string; k: number; ct: number; lt: number; sid: number; su: string; lid: number; srid: string; mc: unknown }> = []
+      let name2IdOk = false
       try {
         rows = withDb(srcFile, (db) => {
           const out: Array<{ tk: string; k: number; ct: number; lt: number; sid: number; su: string; lid: number; srid: string; mc: unknown }> = []
-          // Name2Id：real_sender_id → wxid。空 user_name 是微信 4.x 对「登录账号自己」的标记。
+          // Name2Id：real_sender_id → wxid。
+          // ⚠️ 空 user_name **不是**无条件代表登录账号：真机的同一分片里登录账号有
+          // 显式 wxid 行（`message_5.db` rowid 2），空名行是**另一位群成员** ——
+          // 它的行里全是「"郭亮" 撤回了一条消息」这类别人的撤回提示。把空名行当
+          // 自己，会把这个人所有消息的发送者写成「我」（与 `messages.ts#isSelf`
+          // 同一类误归属）。判据与 `messages.ts#shardMarksSelfWithEmptyRow`、
+          // `calls.ts#findSelfRowId` 一致：先找显式账号行，找不到才沿旧约定退回空行。
           const name2Id = new Map<number, string>()
-          let selfRowId: number | undefined
+          let emptyRowId: number | undefined
+          let explicitSelfId: number | undefined
           for (const t of ['Name2Id', 'name2id']) {
             try {
               const got = db.prepare(`SELECT rowid AS id, user_name AS u FROM ${t}`).all() as Array<{ id: number; u: unknown }>
@@ -251,12 +270,19 @@ export function archiveMessages (decryptedDir: string): { added: number; tables:
                 const id = Number(ng.id)
                 const u = toText(ng.u).trim()
                 name2Id.set(id, u)
-                // 空 user_name 是登录账号自己的占位行；记下它，归档时写成真实 self wxid。
-                if (u === '' && selfRowId === undefined) selfRowId = id
+                if (u === '') {
+                  if (emptyRowId === undefined) emptyRowId = id
+                } else if (selfUsername !== '' && u === selfUsername && explicitSelfId === undefined) {
+                  explicitSelfId = id
+                }
               }
               if (name2Id.size > 0) break
             } catch { /* 换另一个大小写 */ }
           }
+          const selfRowId = explicitSelfId ?? emptyRowId
+          // Name2Id 一个都没读出来（库损坏/权限）时，`su` 会整片是空串；这种情况下
+          // 绝不能用它去覆盖归档里已有的发送者（见 updMeta 的谓词）。
+          name2IdOk = name2Id.size > 0
           for (const table of msgTables(db)) {
             const cols = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((r) => r.name))
             if (!cols.has('message_content')) continue
@@ -296,8 +322,9 @@ export function archiveMessages (decryptedDir: string): { added: number; tables:
           if (looksBinary(content)) content = BIN_PREFIX + String(r.lt) + ':' + String(content.length)
           const res = ins.run(r.tk, r.k, r.ct, r.lt, r.sid, r.su, r.lid, r.srid, compressForStore(content), now)
           added += Number((res as { changes?: number }).changes ?? 0)
-          // 已有行：只补/修正定位元数据。`content` 不在 SET 里是硬约束。
-          updMeta.run(r.ct, r.lt, r.sid, r.su, r.lid, r.srid, r.tk, r.k)
+          // 已有行：只补/修正定位与发送者元数据。`content` 不在 SET 里是硬约束。
+          // 最后的两个参数用于纠正 v2 误归属（见 updMeta 注释）。
+          updMeta.run(r.ct, r.lt, r.sid, r.su, r.lid, r.srid, r.tk, r.k, name2IdOk ? 1 : 0, selfUsername)
         }
         adb.exec('COMMIT')
       } catch (e) {

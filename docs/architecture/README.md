@@ -71,7 +71,7 @@ build-pipeline.svg        看「改了代码怎么变成产物」   → 交付�
 | **入口层** | 三类调用来源：桌面窗口 / 手机浏览器 / RPA·Webhook | 3 个入口 | `main-window.js`、`http-server.js`、`query/rpa/**` |
 | **渲染进程** | React 18 面板、启动三站、前端缓存与图表 | 702 个 ts/tsx，约 13.1 万行 | `ui-app/ui-entry.tsx`、`WechatDataPanel.tsx`、`api-core.ts` |
 | **主进程（宿主层）** | 窗口与安全、IPC、三道闸、RPC、并发、配置、LLM 传输、更新、许可 | 45 个模块 / 11,305 行 | `main.js`(581)、`call-gates.js`、`backend-rpc.js`、`backend-supervisor.js` |
-| **后端 worker** | 224 个 `@Remote` 方法、业务查询、密钥、检索、本地模型 | 174 个 query 模块 / 50,959 行 | `wechat-worker.js`、`wechat-host.js`、`gateway*.ts` |
+| **后端 worker** | 234 个 `@Remote` 方法、业务查询、密钥、检索、本地模型 | query 模块按目录统计，数量随代码演进 | `wechat-worker.js`、`wechat-host.js`、`gateway*.ts` |
 | **数据层** | 解密快照、派生索引、媒体缓存、配置与密钥 | 22 个解密库 + 14 个派生库 | `query/decrypt-all.ts`、`query/sync.ts`、`query/db-open.ts` |
 | **外部接口** | LLM、微信 CDN、地图、模型下载、更新、RPA | 16 个出网点 | `llm-http.js`、`query/cdn-hosts.ts`、`query/map-geo.ts` |
 
@@ -228,17 +228,17 @@ WAL 变更 → sync-watch → sync-trigger 合并器 → 页级补丁/尾部追�
 
 | 事实 | 值 | 出处 / 核对方式 |
 |---|---|---|
-| Remote 方法数 | **224** | `npm run audit:remote-types`（服务端与前端契约一致） |
+| Remote 方法数 | **234** | `npm run audit:remote-types`（服务端与前端契约一致） |
 | Gateway 继承层级 | **12 层基类 + 1 叶子** | `grep -n "class Gateway" src/backend/wechat-data/src/gateway*.ts` |
 | `remotes/**` 域处理器 | 31 文件 | `ls src/backend/wechat-data/src/remotes/*.ts \| wc -l` |
-| query 层 | 174 文件 / 50,959 行 | `ls src/.../query/*.ts \| wc -l`；`cat ... \| wc -l` |
+| query 层 | 按目录统计，数量随代码演进 | `ls src/.../query/*.ts` |
 | retrieval 层 | 15 文件 / 4,591 行 | `ls src/.../query/retrieval/` |
 | 宿主层直属模块 | 45 文件 / 11,305 行 | `ls src/backend/*.js \| wc -l` |
 | `main.js` | 581 行（体积棘轮 1000 行上限） | `wc -l main.js` |
 | `preload.js` | 179 行 | `wc -l preload.js` |
 | IPC 唯一通道 | **46**（47 个调用点，`browser-handoff:restore` 同时有 handle 与 on） | `grep -oE "handleIpc\('([^']+)'" ...` 去重 |
 | 前端 ts/tsx | 702 文件 / 约 13.1 万行 | `find src/client/ui-wechat/src -name "*.ts*" \| wc -l` |
-| panels 视图分片 | **182** 个 .tsx | `ls .../panels/*.tsx \| wc -l` |
+| panels 视图分片 | **191** 个 .tsx | `ls .../panels/*.tsx \| wc -l` |
 | 导航 | 40 可路由 tab / 5 组 / 16 正文入口 + 设置 / 23 hidden | `nav-config.ts` 的 `WechatTab` 联合类型 |
 | 前端 chunk | 37 个 `React.lazy` → 62 个 js chunk | `panel-loaders.tsx`；`ui-dist/assets` |
 | 设计令牌 | 140 个 `--nm-*`；圆角 6 档 / 间距 7 档 | `scifi-theme.css` |
@@ -258,7 +258,7 @@ WAL 变更 → sync-watch → sync-trigger 合并器 → 页级补丁/尾部追�
 |---|---|---|
 | 设计令牌 | 「7 档圆角 / 17 档间距」 | 圆角 **6 档**、间距 **7 档**（140 个 `--nm-*`） |
 | IPC 通道 | 「39」 | **46** 个唯一通道 |
-| 面板分族 | 「chats 63 · graph 33 · kb 28」 | 那是 `panels/` 下**所有文件类型**的计数；只看 `.tsx` 是 182 个，分族为 chats 22 · kb 7 · moments 7 |
+| 面板分族 | 「chats 63 · graph 33 · kb 28」 | 那是 `panels/` 下**所有文件类型**的计数；只看 `.tsx` 是 192 个，按文件名粗分为 chats 30 · kb 11 · moments 10（会随重构漂移，以 `ls` 实测为准） |
 | 出网点 | 「19 个」 | 台账 20 条，其中 4 条是同源相对路径 → 实际 **16** 个 |
 
 ---

@@ -21,9 +21,19 @@ export type AnswerDataDomain =
   | 'moments'
   | 'records'
   | 'contacts'
+  | 'funds'
+  | 'calls'
+  | 'groups'
+  | 'media'
+  | 'revoked'
 
 /** 数据域 → 专用工具。messages/kb 的兜底优先级最低。 */
 export const DOMAIN_TOOL: Readonly<Record<AnswerDataDomain, ToolName>> = {
+  funds: 'get_funds_summary',
+  calls: 'get_call_history',
+  groups: 'get_group_detail',
+  media: 'aggregate_media',
+  revoked: 'search_revoked',
   files: 'search_files',
   favorites: 'search_favorites',
   moments: 'search_moments',
@@ -33,8 +43,13 @@ export const DOMAIN_TOOL: Readonly<Record<AnswerDataDomain, ToolName>> = {
   messages: 'search_messages',
 }
 
-/** 补查优先级：先专用资源域，再知识库，最后泛化消息。 */
+/** 补查优先级：先确定性事实域，再资源域，最后知识库与泛化消息。 */
 const DOMAIN_PRIORITY: readonly AnswerDataDomain[] = [
+  'funds',
+  'calls',
+  'groups',
+  'revoked',
+  'media',
   'files',
   'favorites',
   'moments',
@@ -45,6 +60,11 @@ const DOMAIN_PRIORITY: readonly AnswerDataDomain[] = [
 ]
 
 const QUESTION_DOMAIN_RULES: ReadonlyArray<readonly [AnswerDataDomain, RegExp]> = [
+  ['funds', /(收到|转出|支出|收入|一共|总共|多少).*(转账|红包|钱)|转账.*(多少|金额)|红包.*(多少|金额)|账单|收支|最近一次转账/i],
+  ['calls', /通话|电话|未接|拨打|接听/i],
+  ['groups', /群公告|群主|群成员|群资料|这个群有多少人|群里有多少人|群里谁/i],
+  ['revoked', /撤回/i],
+  ['media', /(多少|几张|几条|哪些|最近).*(图片|照片|视频|语音|表情|位置)/i],
   ['files', /文件|文档|附件|表格|pdf|excel|word|ppt|压缩包|安装包|合同(?:书|文件)|资料/i],
   ['favorites', /收藏|书签/i],
   ['moments', /朋友圈|动态|说说|sns/i],
@@ -67,6 +87,12 @@ const TOOL_DOMAIN: Readonly<Record<string, AnswerDataDomain>> = {
   search_records: 'records',
   search_contacts: 'contacts',
   get_contact_detail: 'contacts',
+  get_funds_summary: 'funds',
+  get_call_history: 'calls',
+  get_group_detail: 'groups',
+  aggregate_media: 'media',
+  search_revoked: 'revoked',
+  get_moments_stats: 'moments',
 }
 
 const RESOURCE_DOMAIN: Readonly<Record<string, AnswerDataDomain>> = {

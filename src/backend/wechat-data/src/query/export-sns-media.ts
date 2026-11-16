@@ -20,6 +20,7 @@ import {
   saveArchivedOriginal,
   saveOriginal,
 } from './sns-media-store.ts'
+import { evaluateSnsOriginal, type SnsOriginalExpectation } from './image-dimensions.ts'
 import { loadSnsVideoBytes } from './sns-video.ts'
 
 export type ExportMediaSource = 'local' | 'cdn'
@@ -41,6 +42,14 @@ export interface SnsMediaInput {
   seed?: string
   /** Public RPC alias used by the Moments UI; same value as `seed`. */
   key?: string
+  /** XML `<size>`：原图期望尺寸/字节数。 */
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  /** XML `<uhd>` 的独立 CDN 三件套；`/2000` 必须保留。 */
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
 }
 
 export interface SnsMediaContext {
@@ -193,20 +202,39 @@ function normalizedSource(value: string | undefined): ExportMediaSource | undefi
   return undefined
 }
 
+function snsOriginalExpectationOf(input: SnsMediaInput): SnsOriginalExpectation {
+  const positive = (value: number | undefined): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined
+  const width = positive(input.originalWidth)
+  const height = positive(input.originalHeight)
+  const bytes = positive(input.originalBytes)
+  return {
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+    ...(bytes !== undefined ? { bytes } : {}),
+  }
+}
+
 function originalFromDataUrl(
   decodedDir: string,
   md5: string | undefined,
   dataUrl: string,
   source: ExportMediaSource,
+  expectation: SnsOriginalExpectation,
 ): OriginalMediaBytes {
   const bytes = dataUrlToBuffer(dataUrl)
   if (!bytes) return { error: '原图返回的不是 base64 data URL' }
   const media = sniffExportMediaBytes(bytes, 'image')
   if (!media) return { error: '拒绝写入：字节不是可识别的图片（可能是缩略图密文或损坏文件）' }
+  const evaluation = evaluateSnsOriginal(bytes, expectation)
+  if (!evaluation.accepted) {
+    return { error: '拒绝写入：' + String(evaluation.reason ?? '不是原图尺寸') }
+  }
   const key = String(md5 ?? '').trim().toLowerCase()
   if (key) {
-    saveOriginal(decodedDir, key, bytes)
-    saveArchivedOriginal(decodedDir, key, bytes)
+    const saveOptions = { expectation, requireQuality: true, replaceIfLarger: true }
+    saveOriginal(decodedDir, key, bytes, saveOptions)
+    saveArchivedOriginal(decodedDir, key, bytes, saveOptions)
   }
   return { bytes, source, format: media.format }
 }
@@ -220,6 +248,7 @@ export async function loadSnsImageOriginalBytes(
   input: SnsMediaInput,
 ): Promise<OriginalMediaBytes> {
   const md5 = String(input.md5 ?? '').trim().toLowerCase()
+  const expectation = snsOriginalExpectationOf(input)
   const errors: string[] = []
   if (/^[a-f0-9]{32}$/.test(md5)) {
     // 朋友圈 XML 的 md5 是媒体身份/缓存键，不等于解密并裁掉 CDN 尾块后文件的
@@ -228,17 +257,25 @@ export async function loadSnsImageOriginalBytes(
     const archived = lookupArchivedOriginal(ctx.decodedDir, md5)
     if (archived) {
       const media = sniffExportMediaBytes(archived.bytes, 'image')
-      if (media) return { bytes: archived.bytes, source: 'local', format: media.format }
-      errors.push('长期归档里的文件不是有效图片')
+      const evaluation = evaluateSnsOriginal(archived.bytes, expectation)
+      if (media && evaluation.accepted) {
+        return { bytes: archived.bytes, source: 'local', format: media.format }
+      }
+      errors.push('长期归档不是原图：' + String(evaluation.reason ?? '不是有效图片'))
     }
     const stored = lookupOriginal(ctx.decodedDir, md5)
     if (stored) {
       const media = sniffExportMediaBytes(stored.bytes, 'image')
-      if (media) {
-        saveArchivedOriginal(ctx.decodedDir, md5, stored.bytes)
+      const evaluation = evaluateSnsOriginal(stored.bytes, expectation)
+      if (media && evaluation.accepted) {
+        saveArchivedOriginal(ctx.decodedDir, md5, stored.bytes, {
+          expectation,
+          requireQuality: true,
+          replaceIfLarger: true,
+        })
         return { bytes: stored.bytes, source: 'local', format: media.format }
       }
-      errors.push('本地原图缓存里的文件不是有效图片')
+      errors.push('本地原图缓存不是原图：' + String(evaluation.reason ?? '不是有效图片'))
     }
   }
 
@@ -252,11 +289,25 @@ export async function loadSnsImageOriginalBytes(
     false,
   )
   if (local.url) {
-    const resolved = originalFromDataUrl(ctx.decodedDir, md5, local.url, 'local')
+    const resolved = originalFromDataUrl(ctx.decodedDir, md5, local.url, 'local', expectation)
     if (resolved.bytes) return resolved
     errors.push(resolved.error ?? '本地解码结果不是原图')
   } else if (local.error) {
     errors.push(local.error)
+  }
+
+  const uhdUrl = String(input.uhdUrl ?? '').trim()
+  const uhdToken = String(input.uhdToken ?? '').trim()
+  const uhdSeed = String(input.uhdSeed ?? '').trim()
+  if (uhdUrl && uhdToken && uhdSeed) {
+    const uhd = await fetchSnsCdnImage(uhdUrl, uhdToken, uhdSeed)
+    if (uhd.dataUrl) {
+      const resolved = originalFromDataUrl(ctx.decodedDir, md5, uhd.dataUrl, 'cdn', expectation)
+      if (resolved.bytes) return resolved
+      errors.push('UHD：' + String(resolved.error ?? '返回的图片不是原图'))
+    } else if (uhd.error) {
+      errors.push('UHD：' + uhd.error)
+    }
   }
 
   const url = String(input.url ?? '').trim()
@@ -265,13 +316,13 @@ export async function loadSnsImageOriginalBytes(
   if (url && seed) {
     const cdn = await fetchSnsCdnImage(url, token, seed)
     if (cdn.dataUrl) {
-      const resolved = originalFromDataUrl(ctx.decodedDir, md5, cdn.dataUrl, 'cdn')
+      const resolved = originalFromDataUrl(ctx.decodedDir, md5, cdn.dataUrl, 'cdn', expectation)
       if (resolved.bytes) return resolved
       errors.push(resolved.error ?? 'CDN 返回的图片不是原图')
     } else if (cdn.error) {
       errors.push('CDN：' + cdn.error)
     }
-  } else {
+  } else if (!uhdUrl && !uhdSeed) {
     errors.push('缺少 CDN 原图地址或解密种子，未尝试在线取回')
   }
 
@@ -342,6 +393,12 @@ function* momentMediaTasks(
             url: image.url,
             token: image.token,
             seed: image.key,
+            ...(image.originalWidth !== undefined ? { originalWidth: image.originalWidth } : {}),
+            ...(image.originalHeight !== undefined ? { originalHeight: image.originalHeight } : {}),
+            ...(image.originalBytes !== undefined ? { originalBytes: image.originalBytes } : {}),
+            ...(image.uhdUrl !== undefined ? { uhdUrl: image.uhdUrl } : {}),
+            ...(image.uhdToken !== undefined ? { uhdToken: image.uhdToken } : {}),
+            ...(image.uhdSeed !== undefined ? { uhdSeed: image.uhdSeed } : {}),
           },
         }
         yield {
@@ -367,6 +424,12 @@ function* momentMediaTasks(
             url: image.url,
             token: image.token,
             seed: image.key,
+            ...(image.originalWidth !== undefined ? { originalWidth: image.originalWidth } : {}),
+            ...(image.originalHeight !== undefined ? { originalHeight: image.originalHeight } : {}),
+            ...(image.originalBytes !== undefined ? { originalBytes: image.originalBytes } : {}),
+            ...(image.uhdUrl !== undefined ? { uhdUrl: image.uhdUrl } : {}),
+            ...(image.uhdToken !== undefined ? { uhdToken: image.uhdToken } : {}),
+            ...(image.uhdSeed !== undefined ? { uhdSeed: image.uhdSeed } : {}),
           },
         }
       }

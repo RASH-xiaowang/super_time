@@ -51,9 +51,14 @@ function stripXml(x: string): string {
   return x.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-/** Extract group sender from content prefix (wxid:\n). */
+/**
+ * Extract group sender from content prefix (wxid:\n).
+ *
+ * 必须锚定在开头：正文里的 `iOS&android:\n` 这类内容也会命中全串搜索，
+ * 把普通文字误记成一位「发送者」（与 `messages.ts#senderFromContent` 同一判据）。
+ */
 function senderFromContent(content: string): string | null {
-  const m = content.match(/([A-Za-z0-9_@.\-]{3,64}):\n/)
+  const m = /^([A-Za-z0-9_@.\-]{3,64}):\r?\n/.exec(content)
   return m ? (m[1] ?? null) : null
 }
 

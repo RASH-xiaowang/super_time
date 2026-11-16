@@ -65,6 +65,16 @@ export interface AskRunTiming {
   firstTokenAt?: number
   firstReasoningAt?: number
   reasoningEndedAt?: number
+  /**
+   * 已结算的思考时长累计（毫秒）。
+   *
+   * 一次问答会跨多轮模型调用：每轮先思考、再调工具。只记「首次思考 → 最后
+   * 一次思考」的墙钟跨度会把工具执行和等待时间也算成思考（实测 72s 的一轮被
+   * 写成「思考 53s」）。这里按区间累计：工具开始或正文到达即结算一段。
+   */
+  reasoningMs?: number
+  /** 当前尚未结算的思考区间起点；undefined = 不在思考中。 */
+  reasoningOpenAt?: number
 }
 
 const PHASE_LABEL: Readonly<Record<AskRunPhase, string>> = {
@@ -157,6 +167,13 @@ function isVerificationStage(stage: AskStage): boolean {
   return /核对|校验|接地|verify|ground/.test(text)
 }
 
+/** 综合生成阶段：模型正在把工具结果写成正文，不能继续显示「思考中」。 */
+function isSynthesisStage(stage: AskStage): boolean {
+  return stage.key === 'answer:synthesize'
+    || stage.key === 'answer:synthesis'
+    || stage.label === '综合生成'
+}
+
 /** 找出正在运行的阶段；工具卡优先于普通流水线。 */
 export function runningAskStage(stages: readonly AskStage[] | undefined): AskStage | undefined {
   const list = stages ?? []
@@ -178,6 +195,7 @@ export function deriveLiveAskPhase(input: {
   const running = runningAskStage(stages)
   if (running !== undefined && isVerificationStage(running)) return 'verifying'
   if ((input.text ?? '').trim() !== '') return 'generating'
+  if (running !== undefined && isSynthesisStage(running)) return 'preparing'
   if (running !== undefined && (running.toolName !== undefined || running.callId !== undefined)) {
     return 'tool_calling'
   }
@@ -265,10 +283,15 @@ export function buildAskRunMetrics(
   const firstTokenMs = timing.firstTokenAt === undefined
     ? undefined
     : Math.max(0, timing.firstTokenAt - startedAt)
+  // 优先用按区间累计的思考时长：它排除了工具执行与轮间等待。
+  // 未结算的区间（运行中/刚好完成）按 completedAt 收口；旧数据没有累计值
+  // 时才退回「首次思考 → 结束」的跨度，保持向后兼容。
   const reasoningEndedAt = timing.reasoningEndedAt ?? completedAt
   const reasoningMs = timing.firstReasoningAt === undefined
     ? undefined
-    : Math.max(0, reasoningEndedAt - timing.firstReasoningAt)
+    : timing.reasoningMs !== undefined
+      ? Math.max(0, timing.reasoningMs + (timing.reasoningOpenAt === undefined ? 0 : completedAt - timing.reasoningOpenAt))
+      : Math.max(0, reasoningEndedAt - timing.firstReasoningAt)
   const tool = askToolStats(stages)
   return {
     startedAt,

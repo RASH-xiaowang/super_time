@@ -1,5 +1,9 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+const { writeFileAtomic } = require('./atomic-json.js');
+
 /**
  * 应用自动更新（electron-updater + GitHub Releases）。
  *
@@ -82,6 +86,126 @@ const PROGRESS_STEP_PERCENT = 1;
  * 拉一次 latest.yml，CI 就多了一个会因网络抖动的失败点。这类脚本显式设 `=1`。
  */
 const DISABLE_UPDATE_CHECK_ENV = 'SUPERTIME_DISABLE_UPDATE_CHECK';
+
+/** 「跳过此版本」的持久化文件名（落在 userData 下，与其它宿主状态同目录）。 */
+const UPDATE_STATE_FILE_NAME = 'update-state.json';
+
+/**
+ * 解析跳过状态的持久化路径。
+ *
+ * `stateFile: null` 显式关闭（单测/脚本）；给了字符串就用它；都没给才懒加载
+ * Electron 的 `app` 取 userData。懒加载必须包在 try 里：本模块也会在纯 Node
+ * 单测里被 require，那时 `require('electron')` 拿到的是可执行文件路径字符串。
+ * @param {{ stateFile?: string | null }} options
+ * @returns {string|null} 文件路径；无法持久化时为 null。
+ */
+function resolveUpdateStateFile(options) {
+  if (options.stateFile === null) return null;
+  if (typeof options.stateFile === 'string' && options.stateFile.trim()) return options.stateFile;
+  try {
+    const { app } = require('electron');
+    if (app && typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), UPDATE_STATE_FILE_NAME);
+    }
+  } catch { /* 非 Electron 环境：本次运行不持久化 */ }
+  return null;
+}
+
+/** 读持久化的跳过版本；文件缺失/损坏一律当作「没跳过」（不能让坏文件挡住更新）。 */
+function readPersistedSkip(file) {
+  if (!file) return null;
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const v = typeof doc?.skippedVersion === 'string' ? doc.skippedVersion.trim() : '';
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 原子写跳过版本（临时文件 + rename）；失败只记日志，不改变内存里的跳过状态。 */
+function persistSkippedVersion(file, version, log) {
+  if (!file) return false;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeFileAtomic(file, JSON.stringify({
+      version: 1,
+      skippedVersion: version || null,
+      updatedAt: new Date().toISOString(),
+    }) + '\n');
+    return true;
+  } catch (err) {
+    log('warn', ['跳过版本状态持久化失败（本次运行仍然生效）', err]);
+    return false;
+  }
+}
+
+/**
+ * 尽力取消在途下载。electron-updater 当前公开 API 没有取消方法，这里只调用
+ * 未来版本或替代实现可能提供的接口；没有就退回「autoDownload=false + 忽略进度」。
+ */
+function bestEffortCancelDownload(autoUpdater, log) {
+  if (!autoUpdater) return false;
+  for (const name of ['cancelDownload', 'cancel', 'abortDownload']) {
+    if (typeof autoUpdater[name] !== 'function') continue;
+    try {
+      autoUpdater[name]();
+      log('info', ['已请求取消正在进行的更新下载']);
+      return true;
+    } catch (err) {
+      log('warn', ['取消更新下载失败，改为忽略后续进度', err]);
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * 跳过策略落到 updater 上。
+ *
+ * 跳过时：不再自动下载，退出应用也不再自动安装；有取消接口就停掉在途下载。
+ * 取消跳过（空版本）或出现**另一个**新版本时：恢复自动下载/自动安装。
+ * @param {any} autoUpdater
+ * @param {string|null} skippedVersion
+ * @param {(level: string, args: unknown[]) => void} log
+ */
+function applySkipUpdaterPolicy(autoUpdater, skippedVersion, log) {
+  if (!autoUpdater) return;
+  if (skippedVersion) {
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+    bestEffortCancelDownload(autoUpdater, log);
+    return;
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+}
+
+/**
+ * 按当前状态安排（或取消）一次自动重试。
+ *
+ * 抽到模块级是为了让 `createUpdateService` 稳定在 function-size 棘轮的 250 行以内；
+ * 「什么情况下会重试」仍然只有一份口径：状态说会重试才排，状态说不会就清。
+ * @param {object} opts
+ * @returns {NodeJS.Timeout|null} 新计时器（调用方保存）。
+ */
+function scheduleRetryTimer(opts) {
+  const { next, isDisposed, autoUpdater, isSupported, log, retry, onFire } = opts;
+  if (isDisposed() || !next || next.willRetry !== true || !next.nextRetryAt) return null;
+  // 到点不自动重试的情况：没得可试的（不支持 / autoUpdater 缺失）。
+  if (!autoUpdater || !isSupported()) return null;
+  const delay = Math.max(0, Date.parse(next.nextRetryAt) - Date.now());
+  const timer = setTimeout(() => {
+    onFire();
+    if (isDisposed()) return;
+    log('warn', ['下载更新失败，自动重试（第 ' + String(next.attempt) + ' 次后）']);
+    Promise.resolve(retry()).catch((err) => {
+      log('warn', ['自动重试下载失败', err]);
+    });
+  }, delay);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
 
 /**
  * 安装器会替换仍被 worker 持有的文件，必须先等 stop() 的 dispose ACK/超时。
@@ -261,13 +385,32 @@ function applyUpdateEvent(state, event) {
       };
 
     case 'progress':
+      // 已跳过的版本即使还在后台下载，也不许把界面拉回「正在下载」——
+      // 否则用户刚点完「跳过」，卡片又活了。
+      if (state.skippedVersion && state.version === state.skippedVersion) {
+        return { ...state, phase: 'skipped', progress: null };
+      }
       return { ...state, phase: 'downloading', progress: normalizeProgress(e.progress), error: null };
 
-    case 'downloaded':
+    case 'downloaded': {
+      // 双重保险：下载完成事件可能晚于 skip 到达。同名版本一律不进入可安装态。
+      const downloadedVersion = version || state.version;
+      if (downloadedVersion && state.skippedVersion === downloadedVersion) {
+        return {
+          ...state,
+          phase: 'skipped',
+          version: downloadedVersion,
+          progress: null,
+          error: null,
+          willRetry: false,
+          nextRetryAt: null,
+          checkedAt: at,
+        };
+      }
       return {
         ...state,
         phase: 'downloaded',
-        version: version || state.version,
+        version: downloadedVersion,
         releaseName: typeof info.releaseName === 'string' && info.releaseName ? info.releaseName : state.releaseName,
         releaseNotes: normalizeReleaseNotes(info.releaseNotes) || state.releaseNotes,
         progress: { percent: 100, transferred: null, total: null, bytesPerSecond: null },
@@ -277,6 +420,7 @@ function applyUpdateEvent(state, event) {
         nextRetryAt: null,
         checkedAt: at,
       };
+    }
 
     /**
      * W2-12.2：**下载中**失败才自动重试。
@@ -322,6 +466,9 @@ function applyUpdateEvent(state, event) {
       if (!v) {
         return {
           ...state,
+          // 取消跳过必须真的「反悔」：界面不能还停在 skipped，否则用户点回来
+          // 仍然看到「已跳过」，而下载/安装按钮也不会出现。
+          phase: state.phase === 'skipped' ? (state.version ? 'available' : 'idle') : state.phase,
           skippedVersion: null,
           error: null,
           reason: null,
@@ -408,12 +555,65 @@ function wireUpdaterEvents(autoUpdater, wired, callbacks) {
   });
   wire('update-available', (info) => {
     callbacks.resetProgress();
+    // 出现的是另一个（未跳过的）版本 ⇒ 恢复自动下载/退出安装。
+    if (typeof callbacks.onAvailable === 'function') callbacks.onAvailable(info);
     callbacks.commit({ type: 'available', info });
   });
   wire('update-not-available', (info) => callbacks.commit({ type: 'not-available', info }));
   wire('download-progress', (progress) => callbacks.commitProgress(progress));
-  wire('update-downloaded', (info) => callbacks.commit({ type: 'downloaded', info }));
+  wire('update-downloaded', (info) => {
+    // 跳过发生在下载途中时，事件可能晚到；这里先拦一次，再交给纯函数双保险。
+    if (typeof callbacks.blockDownloaded === 'function' && callbacks.blockDownloaded(info)) {
+      callbacks.resetProgress();
+      return;
+    }
+    callbacks.commit({ type: 'downloaded', info });
+  });
   wire('error', (err) => callbacks.commit({ type: 'error', error: err }));
+}
+
+/**
+ * 状态提交器：把「事件 → 状态 → 重试安排 → 通知界面」收敛到一处。
+ *
+ * 抽到模块级是为了让 `createUpdateService` 保持在 function-size 棘轮的 250 行以内；
+ * 进度节流与阶段切换必推的规则（PROGRESS_STEP_PERCENT）跟在这里，服务工厂只负责接线。
+ * @param {object} opts
+ * @returns {{ commit: Function, commitProgress: Function, resetProgress: Function }}
+ */
+function createStateCommitter(opts) {
+  const { getState, setState, onState, log, scheduleRetry, clearRetry } = opts;
+  /** 上一次推给界面的整数百分比；-1 表示「本轮的阶梯还没开始」。 */
+  let lastEmittedPercent = -1;
+  const notify = () => {
+    try {
+      onState(getState());
+    } catch (err) {
+      log('warn', ['状态回调抛错', err]);
+    }
+  };
+  const commit = (event) => {
+    setState(applyUpdateEvent(getState(), event));
+    scheduleRetry(getState());
+    notify();
+    return getState();
+  };
+  const commitProgress = (progress) => {
+    const prevPhase = getState().phase;
+    setState(applyUpdateEvent(getState(), { type: 'progress', progress }));
+    // 又开始动起来：上一轮失败排下的重试就作废了（不然会多重启一次下载）。
+    if (prevPhase === 'retrying' || prevPhase === 'error') clearRetry();
+    const current = getState().progress;
+    const pct = Math.floor((current && current.percent) || 0);
+    if (prevPhase !== getState().phase || pct !== lastEmittedPercent) {
+      lastEmittedPercent = pct;
+      notify();
+    }
+  };
+  return {
+    commit,
+    commitProgress,
+    resetProgress: () => { lastEmittedPercent = -1; },
+  };
 }
 
 /**
@@ -450,12 +650,16 @@ function createUpdateService(opts = {}) {
   const delayMs = Number.isFinite(opts.autoCheckDelayMs) && opts.autoCheckDelayMs >= 0
     ? opts.autoCheckDelayMs
     : DEFAULT_AUTO_CHECK_DELAY_MS;
+  // 跳过状态要跨重启保留：否则用户每开一次应用就被同一个版本再问一次。
+  const stateFile = resolveUpdateStateFile(opts);
 
   let state = blankUpdateState(opts.currentVersion);
+  const persistedSkip = readPersistedSkip(stateFile);
+  if (persistedSkip) {
+    state = { ...state, phase: 'skipped', version: persistedSkip, skippedVersion: persistedSkip };
+  }
   let timer = null;
   let disposed = false;
-  /** 上一次推给界面的整数百分比；-1 表示「本轮的阶梯还没开始」。 */
-  let lastEmittedPercent = -1;
   /** 已注册的监听器，dispose 时逐个摘掉（测试里会反复建服务）。 */
   const wired = [];
   /** W2-12.2：下载失败后的自动重试计时器。 */
@@ -474,58 +678,33 @@ function createUpdateService(opts = {}) {
   /**
    * 按当前状态安排（或取消）一次自动重试。
    *
-   * 放在 `commit` 之后的唯一调用点上，所以「什么情况下会重试」只有一份口径：
-   * 状态说会重试才排，状态说不会就清。用 `nextRetryAt` 而不是直接读退避表算时间 ——
-   * 那样「何时重试」就有两个真相（表在 applyUpdateEvent 里、相减在服务里）。
+   * 放在 `commit` 之后：状态说会重试才排，状态说不会就清。用 `nextRetryAt` 而不是
+   * 直接读退避表算时间 —— 那样「何时重试」就有两个真相。
    * @param {ReturnType<typeof blankUpdateState>} next 刚落定的状态。
    */
   const scheduleRetryIfNeeded = (next) => {
     clearRetryTimer();
-    if (disposed) return;
-    if (!next || next.willRetry !== true || !next.nextRetryAt) return;
-    const delay = Math.max(0, Date.parse(next.nextRetryAt) - Date.now());
-    // 到点不自动重试的情况：没得可试的（不支持 / autoUpdater 缺失）。
-    if (!autoUpdater || !isSupported()) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      if (disposed) return;
-      log('warn', ['下载更新失败，自动重试（第 ' + String(next.attempt) + ' 次后）']);
-      Promise.resolve(service.retryDownload()).catch((err) => {
-        log('warn', ['自动重试下载失败', err]);
-      });
-    }, delay);
-    if (typeof retryTimer.unref === 'function') retryTimer.unref();
+    retryTimer = scheduleRetryTimer({
+      next,
+      isDisposed: () => disposed,
+      autoUpdater,
+      isSupported,
+      log,
+      retry: () => service.retryDownload(),
+      onFire: () => { retryTimer = null; },
+    });
   };
 
-  const commit = (event) => {
-    state = applyUpdateEvent(state, event);
-    scheduleRetryIfNeeded(state);
-    try {
-      onState(state);
-    } catch (err) {
-      log('warn', ['状态回调抛错', err]);
-    }
-    return state;
-  };
-
-  /**
-   * 进度专用提交：按 1% 阶梯节流（阶段切换必推，见 PROGRESS_STEP_PERCENT 的说明）。
-   */
-  const commitProgress = (progress) => {
-    const prevPhase = state.phase;
-    state = applyUpdateEvent(state, { type: 'progress', progress });
-    // 又开始动起来：上一轮失败排下的重试就作废了（不然会多重启一次下载）。
-    if (prevPhase === 'retrying' || prevPhase === 'error') clearRetryTimer();
-    const pct = Math.floor((state.progress && state.progress.percent) || 0);
-    if (prevPhase !== state.phase || pct !== lastEmittedPercent) {
-      lastEmittedPercent = pct;
-      try {
-        onState(state);
-      } catch (err) {
-        log('warn', ['状态回调抛错', err]);
-      }
-    }
-  };
+  const committer = createStateCommitter({
+    getState: () => state,
+    setState: (next) => { state = next; },
+    onState,
+    log,
+    scheduleRetry: (next) => scheduleRetryIfNeeded(next),
+    clearRetry: clearRetryTimer,
+  });
+  const commit = committer.commit;
+  const commitProgress = committer.commitProgress;
 
   const disabledByEnv = () => String(env[DISABLE_UPDATE_CHECK_ENV] ?? '') === '1';
   // autoUpdater 缺失 = main.js 那边 require('electron-updater') 失败了（打包产物缺依赖等）。
@@ -543,16 +722,30 @@ function createUpdateService(opts = {}) {
   if (autoUpdater) {
     // autoDownload：发现新版本就后台拉，不等用户点（本轮选定的行为）。
     // autoInstallOnAppQuit：拉完不打断用户，退出时自动装 —— 装完下次启动就是新版。
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // 但持久化里已有「跳过」时，开机就要按跳过策略关掉自动下载与自动安装：
+    // 否则每次启动都会把用户明确跳过的那个版本重新下一遍。出现**另一个**版本时，
+    // `onAvailable` 会在 update-available 的同步回调里恢复这两个开关 ——
+    // electron-updater 是在 emit 之后才读 `autoDownload` 决定要不要下载的。
+    autoUpdater.autoDownload = !persistedSkip;
+    autoUpdater.autoInstallOnAppQuit = !persistedSkip;
     autoUpdater.logger = toUpdaterLogger(log);
     wireUpdaterEvents(autoUpdater, wired, {
       commit,
       commitProgress,
-      resetProgress: () => { lastEmittedPercent = -1; },
+      resetProgress: committer.resetProgress,
       // `manual` 由调用 check() 的那一方决定；electron-updater 开始拉取时自己也会发
       // 一次这个事件，这里只做幂等重申，不能把用户手动触发的标记冲掉。
       manual: () => state.manual === true,
+      onAvailable: (info) => {
+        const v = typeof info?.version === 'string' ? info.version : '';
+        if (!v || state.skippedVersion !== v) applySkipUpdaterPolicy(autoUpdater, null, log);
+      },
+      blockDownloaded: (info) => {
+        const v = typeof info?.version === 'string' && info.version ? info.version : state.version;
+        if (!v || state.skippedVersion !== v) return false;
+        autoUpdater.autoInstallOnAppQuit = false;
+        return true;
+      },
     });
   }
 
@@ -623,6 +816,10 @@ function createUpdateService(opts = {}) {
     skipVersion(version) {
       const v = typeof version === 'string' && version.trim() ? version.trim() : '';
       clearRetryTimer();
+      // 跳过不只是改状态：必须让 updater 停止自动下载/退出安装（若支持则取消在途下载），
+      // 取消跳过（空串）时再恢复；两边都持久化，重启后仍然算数。
+      applySkipUpdaterPolicy(autoUpdater, v, log);
+      persistSkippedVersion(stateFile, v, log);
       return commit({ type: 'skip', version: v || null, at: new Date().toISOString() });
     },
 

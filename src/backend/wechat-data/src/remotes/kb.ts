@@ -2,13 +2,13 @@
 /**
  * 知识库域的 @Remote 处理器（M21 第 38 刀自 `gateway.ts` 搬出）。
  *
- * 为什么这么切：`gateway.ts` 是 224 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
+ * 为什么这么切：`gateway.ts` 是 234 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
  * （建库 / 文件 / 检索 / 向量索引 / 模型配置）。类里保留 Remote 装饰器与签名 —— 协议层要按名字
  * 枚举 —— 方法体改成一行转发；真正的逻辑搬到这里，依赖由 `ctx` 显式给出（原来靠 `this` 拿）。
  */
 import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, registerKbFile, setKbFileRagFlag, setKbFileSummary } from '../query/kb-files.ts'
 import { drainKbQueue } from '../query/kb-queue.ts'
-import { searchKb as searchKbRows } from '../query/kb-search.ts'
+import { normalizeKbTopK, searchKb as searchKbRows } from '../query/kb-search.ts'
 import { kbBuildIndexIn } from './kb.kbindex.ts'
 import { buildKbVectorIndex, kbVectorIndexStatus, searchKbDense } from '../query/kb-vectors.ts'
 import { extractFileEntities, kbEntitySummary, readDocEntities } from '../query/kb/extract.ts'
@@ -92,15 +92,16 @@ async function kbExtractOne(
   id: number,
   sink: {
     onSaved: (n: number) => void
-    onFailed: (error: string) => void
+    /** **必须带上文件 id**：并发下不能靠外层可变变量反查是谁失败了。 */
+    onFailed: (fileId: number, error: string) => void
   },
 ): Promise<void> {
   try {
     const r = await extractFileEntities(o.dir, o.kbId, id, o.ask, o.model)
     if (r.ok) sink.onSaved(r.saved ?? 0)
-    else sink.onFailed(r.error ?? '未知原囩')
+    else sink.onFailed(id, r.error ?? '未知原因')
   } catch (e) {
-    sink.onFailed((e as Error).message ?? '抽取失败')
+    sink.onFailed(id, (e as Error).message ?? '抽取失败')
   }
 }
 
@@ -141,17 +142,93 @@ const SUMMARY_INPUT_CHARS = 8000
  * @param res - 稀疏那一路的结果（字段是它的基底）。
  * @param denseCount - 稠密那一路的命中条数。
  * @param fused - RRF 融合后的有序命中。
+ * @param topK - 调用方请求的条数（融合后再截断一次：两路各取 topK，
+ *   合并天然可能到 2×topK，不截断就等于偷偷放大返回量）。
  * @returns 交回界面的结果（不带任何降级说明）。
  */
-function fusedKbResult(res: KbSearchResult, denseCount: number, fused: readonly FusedKbHit[]): KbSearchResult {
+function fusedKbResult(res: KbSearchResult, denseCount: number, fused: readonly FusedKbHit[], topK: number): KbSearchResult {
+  const hits = fused.slice(0, topK).map(f => f.hit)
   return {
     ...res,
-    hits: fused.map(f => f.hit),
+    hits,
     stats: {
       ...res.stats,
       channels: [...res.stats.channels, { channel: 'dense', count: denseCount, active: true }],
+      // 两路都跑成：召回是两路之和，保留量是真正交回界面的条数。
+      recalled: res.stats.recalled + denseCount,
+      kept: hits.length,
     },
     degraded: undefined,
+  }
+}
+
+/**
+ * 「关键词 + 语义」两路检索（从 `createKbRemotes` 里搪出：工厂受函数体行数棘轮管着）。
+ *
+ * 名字以 `In` 结尾不是装饰：`license-outbound-coverage.spec.ts` 靠这个后缀跟到
+ * 被委托的实现，才认得出 `searchKb` 用了 embedding 工厂（= 出网，必须登记功能位）。
+ *
+ * 稀疏一路先跑；它能跑成、且确实有查询词时才叠加稠密，最后 RRF 融合。
+ * 每一道降级都**原样把原因说给界面**（措辞取自后端，界面不复述）。
+ * @param rc - 宿主能力（目录、模型、embedding 工厂）。
+ * @param options - 库 id / 查询词 / 请求条数。
+ * @returns 检索结果（可能带 `degraded`）。
+ */
+async function kbSearchWithDenseIn(rc: KbRemoteCtx, options: { kbId: number; query?: string; topK?: number }): Promise<KbSearchResult> {
+  const dir = rc.dirs().decrypted
+  const res = searchKbRows(dir, options?.kbId, { query: options?.query, topK: options?.topK })
+  const q = (options?.query ?? '').trim()
+  // 稀疏这一路自己就没跑成（无效请求 / 库打不开）或压根没查询词 ⇒ 不叠加稠密，原样返回。
+  // ⚠ **不能**因为「稀疏 0 命中」就提前返回：那正是稠密唯一有价值的场景
+  //（逐字搜不到、换个说法能搜到），提前返回等于把这条通道的意义删掉。
+  if (res.error !== undefined || res.readError !== undefined || q === '') {
+    return res
+  }
+  const cfg = loadRetrievalConfig(dir)
+  const embedModel = rc.kbModel(Number(options?.kbId), 'embed').model
+  // 总开关或稠密通道被关掉时不该偷偷出网算 query 向量：与问答管线
+  //（`query/retrieval/pipeline.ts`）、推荐回复（`reply-kb.ts`）同一口径。
+  if (!cfg.enabled || !cfg.channels.dense.enabled) {
+    return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（语义检索已在检索设置中关闭）' } }
+  }
+  if (!cfg.embedding.enabled || embedModel === '') {
+    return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
+  }
+  const kbId = Number(options?.kbId)
+  const topK = normalizeKbTopK(options?.topK)
+  const st = kbVectorIndexStatus(dir, kbId, embedModel)
+  if (!st.ready) {
+    // 未就绪的原因分开说：`no-index` 是「还没建」，`model-mismatch` 是「建过但换了模型」，
+    // `incomplete` 是「建过、但之后新增/恢复的内容还没补进来」—— 前两者点一下按钮就能建，
+    // 后者只补缺口；`model-mismatch` 必须先让用户知道要重算一遍（会再次出网）。
+    const label = st.staleReason === 'no-index'
+      ? '仅关键词（本库还没有向量索引）'
+      : st.staleReason === 'model-mismatch'
+        ? '仅关键词（本库索引由别的模型生成，需重建才能语义检索）'
+        : st.staleReason === 'incomplete'
+          ? '仅关键词（本库有新增内容尚未建立向量索引，补充索引后可用）'
+          : '仅关键词（向量索引不可用）'
+    return { ...res, degraded: { reason: st.staleReason === 'model-mismatch' ? 'index-stale' : 'no-vector-index', label } }
+  }
+  const embed = rc.makeEmbedFn(embedModel, 'kb_embed')
+  if (!embed) return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
+  try {
+    const dense = await searchKbDense(dir, kbId, q, embed, {
+      // 与稀疏同一口径。旧实现用 `Math.max(res.hits.length, 1)`：
+      // 稀疏 0 命中时稠密只取 1 条（恰恰是稠密最有价值的场景），命中多时又会超量。
+      topK,
+      minSimilarity: cfg.channels.dense.minSimilarity,
+      candidatePool: cfg.channels.dense.candidatePool,
+      model: embedModel,
+    })
+    if (dense.note !== undefined) {
+      return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索这次没跑成：' + dense.note + '）' } }
+    }
+    const fused = fuseKbHits(res.hits, dense.hits, { k: cfg.fusion.k })
+    // 两路都跑成 ⇒ 交回融合后的列表 + 两路各自的命中数（W2-7.4）。
+    return fusedKbResult(res, dense.hits.length, fused, topK)
+  } catch (e) {
+    return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索失败：' + (e as Error).message + '）' } }
   }
 }
 
@@ -345,10 +422,23 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const raw = Array.isArray(options?.paths) ? options.paths : []
       const paths = raw.filter((p) => typeof p === 'string' && p.trim() !== '')
       if (paths.length === 0) return { ok: false, added: 0, failed: 0, results: [], error: '没有选择文件' }
+      const kbId = Number(options?.kbId)
+      /**
+       * 先确认库还在：`kb_files` 故意没有跨库外键，不查这一下，
+       * 界面拿着已删除库的旧 id 仍会把文件与 blob 写进一个**任何列表都查不到**的库。
+       * 校验放在 Remote 层（能看见 notes 的 `kbs` 表），存储层仍然只管自己的文件库。
+       */
+      const kbs = listKbs(rc.dirs().decrypted)
+      if (kbs.readError !== undefined) {
+        return { ok: false, added: 0, failed: paths.length, results: [], error: '知识库列表读取失败，暂时无法添加文件：' + kbs.readError }
+      }
+      if (!kbs.items.some((k) => k.id === kbId)) {
+        return { ok: false, added: 0, failed: paths.length, results: [], error: '知识库不存在（可能已被删除），请刷新知识库列表后重试' }
+      }
       const results: KbFileRegisterResult[] = []
       for (const srcPath of paths) {
         results.push(registerKbFile(rc.dirs().decrypted, {
-          kbId: Number(options?.kbId),
+          kbId,
           srcPath,
           includeInRag: options?.includeInRag,
         }))
@@ -387,50 +477,7 @@ export function createKbRemotes(rc: KbRemoteCtx) {
     },
 
     async searchKb(options: { kbId: number; query?: string; topK?: number }): Promise<KbSearchResult> {
-      const dir = rc.dirs().decrypted
-      const res = searchKbRows(dir, options?.kbId, { query: options?.query, topK: options?.topK })
-      const q = (options?.query ?? '').trim()
-      // 稀疏这一路自己就没跑成（无效请求 / 库打不开）或压根没查询词 ⇒ 不叠加稠密，原样返回。
-      // ⚠ **不能**因为「稀疏 0 命中」就提前返回：那正是稠密唯一有价值的场景
-      //（逐字搜不到、换个说法能搜到），提前返回等于把这条通道的意义删掉。
-      if (res.error !== undefined || res.readError !== undefined || q === '') {
-        return res
-      }
-      const cfg = loadRetrievalConfig(dir)
-      const embedModel = rc.kbModel(Number(options?.kbId), 'embed').model
-      if (!cfg.embedding.enabled || embedModel === '') {
-        return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
-      }
-      const kbId = Number(options?.kbId)
-      const st = kbVectorIndexStatus(dir, kbId, embedModel)
-      if (!st.ready) {
-        // 未就绪的四种原因分开说：`no-index` 是「还没建」，`model-mismatch` 是「建过但换了模型」，
-        // 前者点一下按钮就能建，后者必须先让用户知道要重算一遍（会再次出网）。
-        const label = st.staleReason === 'no-index'
-          ? '仅关键词（本库还没有向量索引）'
-          : st.staleReason === 'model-mismatch'
-            ? '仅关键词（本库索引由别的模型生成，需重建才能语义检索）'
-            : '仅关键词（向量索引不可用）'
-        return { ...res, degraded: { reason: st.staleReason === 'model-mismatch' ? 'index-stale' : 'no-vector-index', label } }
-      }
-      const embed = rc.makeEmbedFn(embedModel, 'kb_embed')
-      if (!embed) return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
-      try {
-        const dense = await searchKbDense(dir, kbId, q, embed, {
-          topK: Math.max(res.hits.length, 1),
-          minSimilarity: cfg.channels.dense.minSimilarity,
-          candidatePool: cfg.channels.dense.candidatePool,
-          model: embedModel,
-        })
-        if (dense.note !== undefined) {
-          return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索这次没跑成：' + dense.note + '）' } }
-        }
-        const fused = fuseKbHits(res.hits, dense.hits, { k: cfg.fusion.k })
-        // 两路都跑成 ⇒ 交回融合后的列表 + 两路各自的命中数（W2-7.4）。
-        return fusedKbResult(res, dense.hits.length, fused)
-      } catch (e) {
-        return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索失败：' + (e as Error).message + '）' } }
-      }
+      return kbSearchWithDenseIn(rc, options)
     },
 
     getKbModelConfig(options: { kbId: number }): KbModelConfigView {
@@ -520,9 +567,10 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const failed: Array<{ id: number; error: string }> = []
       let saved = 0
       // W3-6.6：有界并发 + 逐文件不连块（动作全在模块级，工厂受椚轮管）。
-      const sink = { onSaved: (n: number) => { saved += n }, onFailed: (error: string) => { failed.push({ id: sinkId, error }) } }
-      let sinkId = 0
-      await runKbExtractBatch({ batch, concurrency: KB_EXTRACT_CONCURRENCY, extract: (id) => { sinkId = id; return kbExtractOne({ dir, kbId, ask, model }, id, sink) } })
+      // 失败回报带 id：旧实现用外层 `sinkId` 反查，并发 3 个文件时
+      // B 会覆盖 A 的 id，A 失败却被记到 B 头上。
+      const sink = { onSaved: (n: number) => { saved += n }, onFailed: (id: number, error: string) => { failed.push({ id, error }) } }
+      await runKbExtractBatch({ batch, concurrency: KB_EXTRACT_CONCURRENCY, extract: (id) => kbExtractOne({ dir, kbId, ask, model }, id, sink) })
       touchKbEntitiesAt(dir, kbId, Date.now())
       rc.op('task', 'kb_extract', failed.length === batch.length && batch.length > 0 ? 'fail' : 'ok',
         `kb=${kbId}`, `${batch.length} 个文件 · 写入 ${saved} 条实体 · ${model}`)

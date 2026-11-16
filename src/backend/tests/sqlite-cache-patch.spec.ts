@@ -65,7 +65,9 @@ describe('SQLite 页缓存策略', () => {
       return hits.map((hit) => `${file}:${hit.index ?? -1}`)
     }).filter((hit) => !hit.startsWith(join(sourceRoot, 'sqlite-connection.ts')))
     expect(bypasses.join('\n'), '新增绕过 sqlite-connection 的原生 DatabaseSync 导入').toBe('')
-    const nativeImports = bundleSrc.match(/from\s+["']node:sqlite["']/g) ?? []
+    // 2026-11-13：产物改成 minify 后 `from` 与引号之间没有空格（`from"node:sqlite"`），
+    // 原判据的 `from\s+` 会量到 0 条；允许零个空白即可，判据语义不变。
+    const nativeImports = bundleSrc.match(/from\s*["']node:sqlite["']/g) ?? []
     expect(nativeImports.length, 'bundle 应只在 sqlite-connection 内部保留一条 node:sqlite 导入').toBe(1)
     expect(bundleSrc).toContain('configureSqliteCachePolicy')
   })

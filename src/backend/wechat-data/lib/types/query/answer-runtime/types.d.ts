@@ -298,6 +298,8 @@ export interface AnswerRuntimeCitation {
     local_id: number;
     sender?: string;
     senderEnterpriseName?: string;
+    /** 该引用来自撤回消息归档（原文已从当前消息库删除）。 */
+    revoked?: boolean;
     kb?: {
         kbId: number;
         chunkId: number;

@@ -429,6 +429,9 @@ function ProcessInspector(input: {
   stages: readonly AskStage[]
   tools: readonly ToolView[]
   thinking: string
+  thinkingSegments: number
+  rounds: number
+  activeRound?: number
   reasoning: readonly AskReasoningSegment[]
   liveReasoningKey?: string
   evidence: readonly EvidenceRow[]
@@ -436,7 +439,6 @@ function ProcessInspector(input: {
   outcome: AskRunOutcome
   synthesisError?: string
   metrics: readonly string[]
-  thinkingDuration?: number
   planNode?: ReactNode
   retrievalNode?: ReactNode
   processOpen?: boolean
@@ -466,6 +468,7 @@ function ProcessInspector(input: {
     stages: input.stages,
     tools: input.tools,
     reasoning: input.reasoning,
+    hasPlan,
   })
   const exists = input.thinking !== ''
     || traceGroups.length > 0
@@ -523,8 +526,8 @@ function ProcessInspector(input: {
   if (!exists) return null
   const summary = processSummary({
     tools: input.tools,
-    thinking: input.thinking,
-    ...(input.thinkingDuration !== undefined ? { thinkingDuration: input.thinkingDuration } : {}),
+    rounds: input.rounds,
+    thinkingSegments: input.thinkingSegments,
     evidence: input.evidence,
     hasPlan,
     streaming: input.streaming,
@@ -581,6 +584,7 @@ function ProcessInspector(input: {
           groups={traceGroups}
           streaming={input.streaming}
           answerText={input.answerText}
+          {...(input.activeRound !== undefined ? { activeRound: input.activeRound } : {})}
           {...(input.liveReasoningKey !== undefined
             ? { liveReasoningKey: input.liveReasoningKey }
             : {})}
@@ -657,6 +661,21 @@ function RunNotices({ outcome, reason, withheld, synthesisError, grounding, erro
   )
 }
 
+/** 本轮已经走到第几轮工具循环；没有轮次元数据时返回 0。 */
+function maxRoundOf(
+  stages: readonly AskStage[],
+  toolCalls?: readonly { round?: number }[],
+): number {
+  let max = 0
+  for (const stage of stages) {
+    if (typeof stage.round === 'number' && stage.round > max) max = stage.round
+  }
+  for (const call of toolCalls ?? []) {
+    if (typeof call.round === 'number' && call.round > max) max = call.round
+  }
+  return max
+}
+
 /**
  * Render a live or completed answer run with a consistent status/process/answer order.
  */
@@ -694,7 +713,6 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
   const toolStats = toolViewStats(toolViews, !streaming)
   const [mountedAt] = useState(() => Date.now())
   const [now, setNow] = useState(() => Date.now())
-  const [reasoningStartedAt, setReasoningStartedAt] = useState<number | null>(null)
   const startedAt = props.runStartedAt !== undefined && props.runStartedAt > 0
     ? props.runStartedAt
     : mountedAt
@@ -704,29 +722,24 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
     const timer = window.setInterval(() => { setNow(Date.now()) }, 1000)
     return () => { window.clearInterval(timer) }
   }, [streaming])
-  useEffect(() => {
-    if (!streaming) {
-      setReasoningStartedAt(null)
-      return
-    }
-    if (thinking !== '' && reasoningStartedAt === null) {
-      const started = Date.now()
-      setReasoningStartedAt(started)
-      setNow(started)
-    }
-  }, [reasoningStartedAt, streaming, thinking])
   const totalMs = turn?.metrics?.totalMs
     ?? (turn?.metrics !== undefined
       ? durationBetween(turn.metrics.startedAt, turn.metrics.completedAt)
       : undefined)
   const liveElapsed = streaming ? Math.max(0, now - startedAt) : undefined
+  const roundCount = maxRoundOf(stages, turn?.toolCalls)
+  const activeRound = streaming && roundCount > 0 ? roundCount : undefined
   const statusMeta = [
     streaming
       ? `已用 ${formatLiveAskDuration(liveElapsed) ?? '—'}`
       : totalMs !== undefined ? `总耗时 ${formatAskRunDuration(totalMs) ?? '—'}` : '',
+    streaming && activeRound !== undefined ? `第 ${String(activeRound)} 轮` : '',
     toolStats.failed > 0 ? `${String(toolStats.failed)} 个异常` : '',
   ].filter(Boolean)
   const processMetrics = [
+    turn?.metrics?.reasoningMs !== undefined
+      ? `思考 ${formatAskRunDuration(turn.metrics.reasoningMs) ?? '—'}`
+      : '',
     turn?.metrics?.firstTokenMs !== undefined
       ? `首字 ${formatAskRunDuration(turn.metrics.firstTokenMs) ?? '—'}`
       : '',
@@ -734,9 +747,6 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
       ? `工具耗时 ${formatAskRunDuration(turn?.metrics?.toolMs ?? toolStats.elapsedMs) ?? '—'}`
       : '',
   ].filter(Boolean)
-  const liveThinkingMs = streaming && reasoningStartedAt !== null
-    ? Math.max(0, now - reasoningStartedAt)
-    : undefined
   const liveReasoningKey = streaming
     ? liveReasoningKeyOf(reasoningSegments, stages)
     : undefined
@@ -811,15 +821,15 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
           stages={stages}
           tools={toolViews}
           thinking={thinking}
+          thinkingSegments={reasoningSegments.length}
+          rounds={roundCount}
+          {...(activeRound !== undefined ? { activeRound } : {})}
           reasoning={reasoningSegments}
           {...(liveReasoningKey !== undefined ? { liveReasoningKey } : {})}
           evidence={evidence}
           {...(turn?.grounding !== undefined ? { grounding: turn.grounding } : {})}
           outcome={outcome}
           metrics={processMetrics}
-          {...(turn?.metrics?.reasoningMs !== undefined
-            ? { thinkingDuration: turn.metrics.reasoningMs }
-            : liveThinkingMs !== undefined ? { thinkingDuration: liveThinkingMs } : {})}
           {...(turn?.synthesisError !== undefined ? { synthesisError: turn.synthesisError } : {})}
           {...(planNode !== undefined ? { planNode } : {})}
           {...(retrievalNode !== undefined ? { retrievalNode } : {})}

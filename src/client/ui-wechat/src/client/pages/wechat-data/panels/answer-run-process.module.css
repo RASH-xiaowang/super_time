@@ -256,6 +256,23 @@ button.sectionHead:hover {
   background: var(--nm-border-hover);
 }
 
+/* 当前轮思考占位：与流水线步骤同一缩进，增量到达后由思考区替换。 */
+.traceThinkingPending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0 2px 1px;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.traceThinkingPending .tracePipelineDot {
+  background: var(--nm-cyan);
+  box-shadow: 0 0 0 3px var(--nm-cyan-10);
+}
+
 .tracePipelineItem[data-status='running'] .tracePipelineDot {
   background: var(--nm-cyan);
   box-shadow: 0 0 0 3px var(--nm-cyan-10);

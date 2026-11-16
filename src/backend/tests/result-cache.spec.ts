@@ -131,6 +131,13 @@ describe('结果缓存的定向失效（M8）', () => {
     expect(h.read(k)).toBe(null)
   })
 
+  it('降级缩略图不入正缓存，后续同参请求仍能重新回源高清', () => {
+    const h = freshCache()
+    const k = h.key('getSnsImageDataUrl', [{ md5: 'thumbable' }])
+    h.write(k, { ok: true, value: { url: 'data:image/jpeg;base64,THUMB', thumb: true } })
+    expect(h.read(k)).toBe(null)
+  })
+
   it('总字符预算 64MB：超量后逐出最早键，clearAll 后计数归零', () => {
     const h = freshCache()
     const payload = 'x'.repeat(512 * 1024)

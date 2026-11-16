@@ -116,8 +116,14 @@ function buildSnippet(text: string, terms: readonly string[], radius = KB_SNIPPE
   return { snippet: prefix + body + suffix, marks }
 }
 
-/** 收敛 topK：非有限值 / <=0 一律回落到默认；超过上限则夹住。 */
-function normalizeTopK(value: unknown): number {
+/**
+ * 收敛 topK：非有限值 / <=0 一律回落到默认；超过上限则夹住。
+ *
+ * 导出给融合层（`remotes/kb.ts`）用：稀疏与稠密必须**同一个**条数口径，
+ * 否则融合后的列表会比调用方要的多（旧实现按稀疏命中数给稠密定 topK，
+ * 逐字搜不到时只取 1 条，命中很多时又能返回 2×topK）。
+ */
+export function normalizeKbTopK(value: unknown): number {
   const n = Math.trunc(Number(value))
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_KB_TOP_K
   return Math.min(n, MAX_KB_TOP_K)
@@ -154,7 +160,7 @@ export function searchKb(decryptedDir: string, kbId: number, opts: KbSearchOptio
   const started = Date.now()
   const kb = Math.trunc(Number(kbId))
   const query = typeof opts.query === 'string' ? opts.query.trim() : ''
-  const topK = normalizeTopK(opts.topK)
+  const topK = normalizeKbTopK(opts.topK)
   const onlyRag = opts.onlyRag === true
 
   const empty = (extra: Partial<KbSearchResult>): KbSearchResult => ({

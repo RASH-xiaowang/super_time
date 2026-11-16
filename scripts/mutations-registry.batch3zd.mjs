@@ -40,12 +40,13 @@ export const MUTATIONS_BATCH3ZD = [
     to: '      <div id="tb-status-removed"></div>',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/nav-migration.spec.ts',
   },
+ // 2026-11-13：锚点跟随 侧栏底部新增 Bug 反馈按钮、设置块位移 更新。
   {
     id: 'M625-balance-back-to-sidebar',
     why: '把余额条退回侧栏底部固定区 ⇒ 两处分叉（标题栏那份还在，侧栏又多一份）。判据：llm-probe-sidebar.wiring.spec.ts 的「余额条不在侧栏」断言。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: '        <span className={css.navLabel}>设置</span>\n      </button>\n    </div>\n  )\n}',
-    to: '        <span className={css.navLabel}>设置</span>\n      </button>\n      <SidebarBalance collapsed={false} />\n    </div>\n  )\n}',
+    from: '        <span className={css.navLabel}>设置</span>\n      </button>\n      <BugReportDialog open={bugReportOpen} onClose={() => { setBugReportOpen(false) }} />',
+    to: '        <span className={css.navLabel}>设置</span>\n      </button>\n      <SidebarBalance collapsed={false} />\n      <BugReportDialog open={bugReportOpen} onClose={() => { setBugReportOpen(false) }} />',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/llm-probe-sidebar.wiring.spec.ts',
   },
   {
@@ -88,12 +89,13 @@ export const MUTATIONS_BATCH3ZD = [
     to: '',
     spec: 'src/client/ui-wechat/src/client/capabilities.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 .mainScroll 的 padding 改为 12px 更新。
   {
     id: 'M631-settings-gap-back-to-12',
     why: '把 `.mainScroll` 的 `gap: 0` 改回 `gap: 12px` ⇒ 与子项 margin 叠加，间距又变成 10/12/17/18 四种（用户报的「间隙不一致」原样复现）。判据：settings-spacing.wiring.spec.ts 的「不再用 gap」。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings.module.css',
-    from: '  gap: 0;\n  padding: 14px 16px 24px;',
-    to: '  gap: 12px;\n  padding: 14px 16px 24px;',
+    from: '  gap: 0;\n  padding: 12px 16px 16px;',
+    to: '  gap: 12px;\n  padding: 12px 16px 16px;',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-spacing.wiring.spec.ts',
   },
   {
@@ -561,5 +563,37 @@ export const MUTATIONS_BATCH3ZD = [
     from: '    win.setBounds(display.workArea);',
     to: '    win.setFullScreen(true);',
     spec: 'src/backend/tests/ipc-misc.spec.ts',
+  },
+  {
+    id: 'M691-private-sender-ownership-gone',
+    why: '单聊接收方向不再补 `sender`（回到 2026-09 的形状）⇒ 前端渲染缓存的归属校验没有可核对的不变量，缓存被写成别人的会话也照样画出来。判据：messages.spec.ts 的「单聊接收方向的消息带上 sender」。',
+    file: 'src/backend/wechat-data/src/query/message-sender.ts',
+    from: '  msg.sender = talker',
+    to: '  void talker',
+    spec: 'src/backend/wechat-data/tests/messages.spec.ts',
+  },
+  {
+    id: 'M692-cache-ownership-evidence-ignored',
+    why: '读缓存时放过「接收方向但没有 sender」的行 ⇒ 旧格式/旧后端的裸列表全部通过校验，2026-09 那种脏缓存重新可见。判据：msg-scope.spec.ts 的「接收方向的行缺 sender」。',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/msg-scope.ts',
+    from: "    if ((m.sender ?? '').trim() === '') return false",
+    to: "    if ((m.sender ?? '').trim() === '') continue",
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/msg-scope.spec.ts',
+  },
+  {
+    id: 'M693-render-cache-envelope-talker-ignored',
+    why: '读取渲染缓存时不核对信封里的 talker ⇒ 键是当前会话、值却是另一个会话的窗口时直接画出来。判据：chat-render-cache.spec.ts 的「信封写着别的会话」。',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-render-cache.ts',
+    from: '  if (payload.talker !== talker) return null',
+    to: '  if (false) return null',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-render-cache.spec.ts',
+  },
+  {
+    id: 'M694-session-switch-keeps-viewer',
+    why: '切会话时不收起全屏图片查看器 ⇒ 上一会话的图片盖在新会话的聊天窗口上（用户报的「窗口里有别的会话内容」）。判据：chats-session-scope.spec.ts。',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-session-scope.ts',
+    from: '  sink.setViewer(null)',
+    to: '  // sink.setViewer(null)',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-session-scope.spec.ts',
   },
 ]

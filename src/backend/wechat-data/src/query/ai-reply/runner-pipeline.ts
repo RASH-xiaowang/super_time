@@ -27,6 +27,7 @@ import type {
 } from './types.ts'
 import { FEATHER_MESSAGE_MAX_UTF16 } from '../message-list-store-shared.ts'
 import {
+  conversationProgressedAfter,
   cursorOf,
   errorText,
   inspectReply,
@@ -49,6 +50,9 @@ import {
 type SegmentReadResult =
   | { ok: true; segments: ChatAiReplySegmentSnapshot[]; grouped: boolean }
   | { ok: false; error: string }
+
+const STALE_REPLY_REASON =
+  '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题'
 
 async function readSegmentsForRun(
   deps: ChatAiReplyScanDeps,
@@ -157,6 +161,113 @@ function isAcceptedStatus(status: ChatAiReplyMessageStatus): boolean {
   return status === 'success' || status === 'queued' || status === 'running'
 }
 
+/**
+ * 收口已被会话新消息越过的旧任务。
+ *
+ * 这里绝不生成或投递：先尽量把仍为 pending 的旧预约（含分段）标记失败，
+ * 防止别的投递入口把旧问题再次发出去；已成功/已受理的段保留事实并直接收口。
+ */
+export async function cancelStaleChatAiReplyRun(
+  deps: ChatAiReplyScanDeps,
+  state: ChatAiReplyState,
+  run: ChatAiReplyRunRef,
+): Promise<boolean> {
+  if (run.recordId === undefined) {
+    // 旧状态可能只剩 pending 锚点而丢了 recordId。先按同一 sourceRef 做一次
+    // 幂等查询/预约，确保旧台账也被收口；否则后台批次仍可能捡到它。
+    await requireLiveLease(deps, state, run)
+    const reserved = await deps.reserveReply(reservationInputForRun(state, run))
+    if (!reserved.ok || reserved.id === undefined) {
+      run.recordOpen = false
+      return settleChatAiReplyRun(
+        deps,
+        state,
+        run,
+        'failed',
+        STALE_REPLY_REASON + '；旧回复台账查询失败，请人工核对',
+        'stale reply without reservation',
+      )
+    }
+    run.recordId = reserved.id
+    run.reservationMade = true
+  }
+  let record = await inspectReply(deps, run.recordId)
+  if (!record.found) {
+    run.recordOpen = false
+    return settleChatAiReplyRun(
+      deps,
+      state,
+      run,
+      'failed',
+      STALE_REPLY_REASON + '；原消息列表记录暂不可读',
+      'record=' + String(run.recordId) + ' stale; record unreadable',
+    )
+  }
+
+  const loaded = await readSegmentsForRun(deps, run, record)
+  const segments = loaded.ok ? loaded.segments : undefined
+  if (segments !== undefined && segments.every((segment) => isAcceptedStatus(segment.status))) {
+    run.recordOpen = false
+    return settleChatAiReplyRun(
+      deps,
+      state,
+      run,
+      'success',
+      '',
+      'record=' + String(run.recordId) + ' stale but already accepted',
+    )
+  }
+
+  const pendingSegments = segments?.filter((segment) => segment.status === 'pending') ?? []
+  if (record.status === 'pending' || segments === undefined || pendingSegments.length > 0) {
+    record = await failChatAiReplyReservation(deps, state, run, STALE_REPLY_REASON)
+    for (const segment of pendingSegments) {
+      notifyChatAiReplyRecordUpdated(deps, state, segment.id)
+    }
+  }
+
+  if (record.found && record.status === 'pending') {
+    run.recordOpen = false
+    return await deferChatAiReplyRun(
+      deps,
+      state,
+      run,
+      STALE_REPLY_REASON + '；旧预约尚未收口，等待下一次重试',
+      'record=' + String(run.recordId) + ' stale cancellation retained',
+    )
+  }
+  if (record.found && pendingSegments.length === 0 && isAcceptedStatus(record.status as ChatAiReplyMessageStatus)) {
+    run.recordOpen = false
+    return settleChatAiReplyRun(
+      deps,
+      state,
+      run,
+      'success',
+      '',
+      'record=' + String(run.recordId) + ' stale; accepted record retained',
+    )
+  }
+
+  run.recordOpen = false
+  const uncertain = record.found
+    && (record.status === 'dispatching' || record.status === 'sent_unconfirmed')
+  const previousError = record.found
+    && record.status === 'failed'
+    && record.error !== undefined
+    && record.error !== ''
+    ? '；原记录错误：' + record.error
+    : ''
+  return settleChatAiReplyRun(
+    deps,
+    state,
+    run,
+    'failed',
+    STALE_REPLY_REASON + previousError
+      + (uncertain ? '；原记录可能已发出，请人工核对' : ''),
+    'record=' + String(run.recordId) + ' stale cancelled',
+  )
+}
+
 async function settleSegmentFailure(
   deps: ChatAiReplyScanDeps,
   state: ChatAiReplyState,
@@ -178,7 +289,7 @@ export async function beginChatAiReplyRun(
   resumed: boolean,
   lease: ChatAiReplyLease,
   expectedRevision: number,
-  options: { leaseMs: number; now: () => number },
+  options: { leaseMs: number; now: () => number; stale?: boolean },
 ): Promise<ChatAiReplyRunRef | null> {
   const initialResult = readCurrentChatAiReplyState(deps, state)
   if (!initialResult.ok) throw new Error(initialResult.error)
@@ -197,6 +308,7 @@ export async function beginChatAiReplyRun(
   }
   const pendingRevision = samePending ? initial.pendingRevision : initial.revision
   const revisionChanged = samePending && pendingRevision !== initial.revision
+  const stale = options.stale === true
   const patch: Parameters<typeof updateChatAiReplyRunStateResult>[3] = {
     stage: 'generating',
     pendingCursor: cursorOf(anchor),
@@ -221,12 +333,15 @@ export async function beginChatAiReplyRun(
     now: options.now,
     leaseLost: false,
     reservationMade: false,
-    ...(samePending && initial.recordId !== undefined ? { recordId: initial.recordId } : {}),
+    ...((samePending || stale) && initial.recordId !== undefined
+      ? { recordId: initial.recordId }
+      : {}),
     recordOpen: false,
     resumed,
     revisionChanged,
   }
   if (!revisionChanged
+    && !stale
     && (await guardedUpdate(deps, state, run, patch)) !== 'updated') return null
   return run
 }
@@ -491,6 +606,42 @@ export async function reserveChatAiReplyRun(
   throw new Error('消息列表返回了无法识别的 AI 回复状态')
 }
 
+/**
+ * 按会话设置检索知识库片段。
+ *
+ * 知识库是**增强**不是前置条件：未勾选、未选库或检索失败都返回 `undefined`，
+ * 让回复退回普通对话，而不是让一次知识库故障卡住无人值守的自动回复。
+ * @returns 检索成功时的片段（可能为空数组）；未启用或失败时 undefined。
+ */
+async function collectKbSnippetsForState(
+  deps: ChatAiReplyScanDeps,
+  state: ChatAiReplyState,
+  context: { lines: string[]; latestPeer: string },
+): Promise<string[] | undefined> {
+  if (!state.kbEnabled || state.kbId <= 0) return undefined
+  if (deps.collectKbSnippets === undefined) {
+    deps.op('chat_ai_reply', false, 'kb retrieval unavailable; reply without knowledge base')
+    return undefined
+  }
+  try {
+    const result = await deps.collectKbSnippets({
+      kbId: state.kbId,
+      lines: context.lines,
+      ...(context.latestPeer === '' ? {} : { latestPeer: context.latestPeer }),
+    })
+    deps.op(
+      'chat_ai_reply',
+      true,
+      'kb snippets=' + String(result.snippets.length)
+        + (result.note === '' ? '' : '; ' + result.note),
+    )
+    return result.snippets
+  } catch (e) {
+    deps.op('chat_ai_reply', false, 'kb retrieval failed: ' + errorText(e))
+    return undefined
+  }
+}
+
 async function generateChatAiReply(
   deps: ChatAiReplyScanDeps,
   state: ChatAiReplyState,
@@ -517,13 +668,17 @@ async function generateChatAiReply(
       deps.op('chat_ai_reply', false, 'decode media failed: ' + errorText(e))
     }
   }
+  const kb = await collectKbSnippetsForState(deps, state, context)
   const prompt = images.length > 0
     ? buildChatAiReplyPrompt(context.lines, images.length)
     : context.prompt
   const systemPrompt = buildChatAiReplySystemPrompt({
     name: state.personaName,
     prompt: state.personaPrompt,
-  }, { splitReply: state.splitReply })
+  }, {
+    splitReply: state.splitReply,
+    ...(kb === undefined ? {} : { kbRequested: true, kbSnippets: kb }),
+  })
   const [gatedSystem, gatedPrompt] = deps.gate(
     'ai_reply_analyze',
     { sessions: 1, messages: context.count },
@@ -572,6 +727,23 @@ export async function dispatchChatAiReply(
     )
   }
   let segments = loaded.segments
+
+  if (segments.every((segment) => segment.status === 'pending')) {
+    try {
+      if (await conversationProgressedAfter(deps, state, run.anchor)) {
+        return await cancelStaleChatAiReplyRun(deps, state, run)
+      }
+    } catch (e) {
+      return await deferChatAiReplyRun(
+        deps,
+        state,
+        run,
+        '无法确认会话是否已有新消息，投递已暂缓：' + errorText(e),
+        'record=' + String(baseRecordId) + ' conversation check failed before dispatch',
+        { stage: 'dispatching' },
+      )
+    }
+  }
 
   const fail = async (problem: SegmentProblem): Promise<boolean> => {
     const prefix = problem.uncertain ? '投递结果无法确认：' : '分段发送失败：'
@@ -788,6 +960,19 @@ export async function saveAndDispatchChatAiReply(
   isCancelled: () => boolean,
 ): Promise<boolean> {
   if (run.recordId === undefined) throw new Error('AI 回复预约记录不存在')
+  try {
+    if (await conversationProgressedAfter(deps, state, run.anchor)) {
+      return await cancelStaleChatAiReplyRun(deps, state, run)
+    }
+  } catch (e) {
+    return await deferChatAiReplyRun(
+      deps,
+      state,
+      run,
+      '无法确认会话是否已有新消息，本轮生成已暂缓：' + errorText(e),
+      'record=' + String(run.recordId) + ' conversation check failed before generation',
+    )
+  }
   const text = run.generatedText ?? await generateChatAiReply(deps, state, run.anchor)
   if (isCancelled()) {
     const persisted = await guardedUpdate(

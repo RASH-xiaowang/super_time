@@ -198,6 +198,8 @@ describe('useMomentsViewer 的效果', () => {
 
 describe('接线：面板只从这一层拿灯箱状态', () => {
   const panel = readFileSync(join(HERE, 'moments-panel.tsx'), 'utf8')
+  const portals = readFileSync(join(HERE, 'moments-portals.tsx'), 'utf8')
+  const mediaLayer = readFileSync(join(HERE, 'moments-media.ts'), 'utf8')
 
   it('面板走钩子，且不再自己持有那四个变换量', () => {
     expect(panel).toContain('useMomentsViewer')
@@ -223,5 +225,33 @@ describe('接线：面板只从这一层拿灯箱状态', () => {
     expect(panel, '面板里又自己嗅一遍扩展名').not.toContain('data:image')
     expect(saver, '保存辅助函数里又自己嗅一遍扩展名').not.toContain('data:image')
     expect(readFileSync(join(HERE, 'moments-viewer.ts'), 'utf8')).toContain('data:image')
+  })
+
+  it('灯箱取图只走原图解析器，不再直接打图片 RPC', () => {
+    expect(portals).toContain('load: async (): Promise<string> => resolveSnsOriginal(im)')
+    expect(portals).not.toContain('apiGetSnsImageDataUrl')
+    expect(portals).not.toContain("from '../api.ts'")
+    expect(portals).not.toContain('proxyableSrc')
+    expect(portals).not.toContain("from '../utils/url.ts'")
+  })
+
+  it('缩略图只从本地状态读，已知密文地址不许再当兜底', () => {
+    expect(portals).toContain('const thumb = snsImgsRef.current[imageKey]')
+    expect(portals).not.toContain('snsImgsRef.current[imageKey] ?? im.thumb')
+  })
+
+  it('保存按钮只对已确认原图启用，执行时再检查一次', () => {
+    expect(portals).toMatch(/const canSave = Boolean\(curImg && snsOriginals\.has\(imgKey\(curImg\)\)/)
+    expect(portals).toContain('if (!snsOriginalsRef.current.has(imageKey))')
+    expect(portals).toContain('const src = snsImgsRef.current[imgKey(curImg)] ?? \'\'')
+  })
+
+  it('媒体层把「可显示」与「已确认原图」分开，灯箱不复用网格的 fetched', () => {
+    expect(mediaLayer).toContain('snsOriginals: ReadonlySet<string>')
+    expect(mediaLayer).toContain("const viewerResolved = viewerKey !== '' && snsOriginals.has(viewerKey)")
+    expect(mediaLayer).toContain('if (viewerResolved) return')
+    expect(mediaLayer).toContain('void resolveSnsOriginal(im)')
+    expect(mediaLayer).toContain('export function createSnsOriginalResolver')
+    expect(mediaLayer).not.toContain('?? nonEmpty(image.thumb)')
   })
 })

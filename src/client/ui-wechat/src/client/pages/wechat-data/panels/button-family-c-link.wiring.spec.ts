@@ -124,7 +124,9 @@ const RETIRED = [
 const CALL_SITES = [
   { file: 'chats-export-dialog.tsx', times: 2 },
   { file: 'Contacts.tsx', times: 1 },
-  { file: 'KnowledgeBase.tsx', times: 1 },
+  // 2026-11-13：详情元信息里新增「来自文件沉淀 · 回到源文件」，与「查看来源会话」各一处
+  // （两处都收在 `NoteSource` 里，仍是 LinkButton，没有退回手写 <button>）。
+  { file: 'KnowledgeBase.tsx', times: 2 },
   { file: 'Ledger.tsx', times: 1 },
   { file: 'Records.tsx', times: 1 },
   { file: 'Storage.tsx', times: 1 },

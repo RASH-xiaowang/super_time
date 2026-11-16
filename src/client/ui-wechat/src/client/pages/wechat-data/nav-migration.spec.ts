@@ -100,15 +100,22 @@ describe('顶栏已取消：四件事全部迁入导航栏', () => {
    * ⚠️ 2026-10-17：**三块全部迁到标题栏右上角**（窗口控制按钮前）——
    * 主题切换（与最小化/全屏/关闭同属「全局动作」）、模型余额 + 数据就绪
    * （描述的是整个应用的状态，不是当前页签的内容）。
-   * 所以侧栏底部固定区**只剩「设置」**，这里改为断言「三块都不在侧栏」
-   * （防止有人又加回来变成两处）。
+   * 所以侧栏底部固定区只剩全局动作入口：**「Bug 反馈」+「设置」**；这里同时断言
+   * 三块（主题/余额/状态）**都不在侧栏**（防止有人又加回来变成两处）。
    */
-  it('侧栏底部固定区只剩「设置」；余额/状态/主题**都不在**侧栏（已迁到标题栏）', () => {
+  it('侧栏底部固定区同时有「Bug 反馈」与「设置」；余额/状态/主题**都不在**侧栏（已迁到标题栏）', () => {
     expect(aside, 'aside 里没渲染底部固定区组件').toContain('<SidebarFooter')
     const footerFn = panel.slice(panel.indexOf('function SidebarFooter('), panel.indexOf('export function WechatDataPanel'))
     expect(footerFn.length, '切不出 SidebarFooter 的函数体 ⇒ 下面的断言会空转').toBeGreaterThan(200)
     expect(footerFn).toContain('css.sidebarFooter')
-    expect(footerFn).toContain('设置')
+    expect(panel, '主面板没导入 Bug 反馈弹窗').toContain("from './panels/BugReportDialog.tsx'")
+    expect(footerFn, '底部固定区没有 Bug 反馈入口').toContain('Bug 反馈')
+    expect(footerFn, '底部固定区没渲染 Bug 弹窗').toContain('<BugReportDialog')
+    expect(footerFn, '底部固定区没有设置入口').toContain('设置')
+    expect(
+      footerFn.indexOf('Bug 反馈') < footerFn.indexOf('设置'),
+      '「Bug 反馈」应排在「设置」之前（用户要求的入口顺序）',
+    ).toBe(true)
     // 三块都已迁走：侧栏里**不许**再有它们（两处会分叉）。
     expect(footerFn, '主题按钮又回到侧栏了（已迁到标题栏右上角）').not.toContain('css.themeToggle')
     expect(footerFn, '主题按钮又回到侧栏了（已迁到标题栏右上角）').not.toContain('data-theme-toggle')

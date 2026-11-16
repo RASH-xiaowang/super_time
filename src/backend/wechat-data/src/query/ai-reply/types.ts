@@ -40,6 +40,10 @@ export interface ChatAiReplySetting {
   personaName: string
   /** 会话级人格/回复风格要求；空串表示使用内置默认人格。 */
   personaPrompt: string
+  /** 是否让知识库参与本会话的自动回复；默认关闭。 */
+  kbEnabled: boolean
+  /** 参与回复的知识库 id；0 表示尚未选择（此时 `kbEnabled` 必须为 false）。 */
+  kbId: number
   /** 防两条旧请求互相覆盖。 */
   revision: number
   updatedAt: number
@@ -57,7 +61,10 @@ export interface ChatAiReplyState extends ChatAiReplySetting {
   defaultWebhookConfigured?: boolean
   /** 默认 Webhook 的脱敏展示值，不包含路径 token 或查询凭据。 */
   defaultWebhookEndpoint?: string
-  /** 已预约但尚未完成的锚点；进程重启后据此恢复，不越过它处理更晚消息。 */
+  /**
+   * 已预约但尚未完成的锚点；进程重启后据此恢复。
+   * 若会话已出现更晚的可视消息，旧任务会收口，不再补发。
+   */
   pendingCursor?: string
   /** 与 pendingCursor 对应的消息列表 sourceRef。 */
   pendingSourceRef?: string
@@ -252,7 +259,8 @@ export interface ChatAiReplyScanDeps {
     limit: number,
   ) => Promise<ChatAiReplyScanMessage[]>
   /**
-   * 读取 cursor 之后最早的一批消息，避免积压超过最新窗口时被永久越过。
+   * 读取 cursor 之后最早的一批消息；正常扫描会与最新一页合并，
+   * 恢复/投递前也用它判断会话是否已经推进。
    * `talker` 是 `WechatSession.username` 的别名。
    */
   listMessagesAfter?: (
@@ -280,6 +288,15 @@ export interface ChatAiReplyScanDeps {
     talker: string
     candidates: NonNullable<ChatAiReplyContext['imageCandidates']>
   }) => Promise<ChatAiReplyContextImage[]>
+  /**
+   * 按当前会话最近上下文检索知识库片段；生产网关注入真实混合检索，测试可省略。
+   * 只返回带文件名的纯文本片段；检索失败应抛错，由运行器记录并降级为无知识库回复。
+   */
+  collectKbSnippets?: (input: {
+    kbId: number
+    lines: readonly string[]
+    latestPeer?: string
+  }) => Promise<{ snippets: string[]; note: string }>
   generate: (input: {
     system: string
     prompt: string

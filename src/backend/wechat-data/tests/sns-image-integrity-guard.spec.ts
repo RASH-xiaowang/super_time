@@ -71,8 +71,8 @@ describe('朋友圈图片：种子不许跨层抓', () => {
     // 正则写法（`/<enc\b[^>]*key=/`）天生跨层；生产用的是 `xmlTagAttr` 的 indexOf 口径，
     // 顶层 `<enc>0</enc>` 先精确匹配 `<enc>` 从而返回 null，才正确回落到 <thumb key>。
     expect(code(moments)).not.toMatch(/<enc\\b/)
-    expect(code(moments)).toMatch(/xmlTagAttr\(inner, 'thumb', 'key'\)/)
-    expect(code(moments)).toMatch(/xmlTagAttr\(inner, 'url', 'key'\)/)
+    expect(code(moments)).toMatch(/xmlTagAttr\(outer, 'thumb', 'key'\)/)
+    expect(code(moments)).toMatch(/xmlTagAttr\(outer, 'url', 'key'\)/)
   })
 })
 
@@ -142,7 +142,8 @@ describe('本地优先：长期归档 → 解码缓存 → 本机原图 → CDN�
   }
   const iArchived = findInImg('lookupArchivedOriginal(decoded, options.md5)')
   const iStore = findInImg('lookupOriginal(decoded, options.md5)')
-  const iCdn = findInImg('fetchSnsCdnImage(')
+  // 现在有 UHD 与普通 CDN 两个 fetch；这条讲的是普通 CDN 那一路的写穿。
+  const iCdn = findInImg('fetchSnsCdnImage(url, token, seed)')
   const iLocalOriginal = findInImg('local(false)')
   const iLocalThumb = findInImg('local(true)')
 
@@ -183,9 +184,9 @@ describe('本地优先：长期归档 → 解码缓存 → 本机原图 → CDN�
   })
 
   it('CDN 取回的原图要写穿两处缓存（解码缓存 + 长期归档）', () => {
-    // CDN 调用之后紧跟 CDN 分支的落盘；此时 iLocalOriginal 已经在前，不能再拿它当右边界。
-    const after = mediaRemotes.slice(iCdn, iCdn + 700)
-    expect(after).toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, cdn\.dataUrl\)/)
+    // UHD 与普通 CDN 是两条独立分支，各自命中后都必须落盘；只盯普通 CDN 会漏掉 UHD。
+    expect(mediaRemotes).toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, uhd\.dataUrl, \{/)
+    expect(mediaRemotes).toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, cdn\.dataUrl, \{/)
   })
 
   it('本机原图拿到也写穿；缩略图刻意不写穿（否则缩略图会变成永久的「高清」）', () => {
@@ -208,8 +209,9 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
 
   it('后端：原图两路 + 视频封面写穿落盘；缩略图不写', () => {
     const writes = [...mediaRemotes.matchAll(/saveOriginalFromDataUrl\(/g)].length
-    // 定义一处 + 本机原图 + CDN + 视频封面（rememberCover）。缩略图那一路刻意不在里面。
-    expect(writes).toBe(4)
+    // 定义一处 + 本机原图 + UHD CDN + 普通 CDN + 视频封面（rememberCover）。
+    // 缩略图那一路刻意不在里面。
+    expect(writes).toBe(5)
   })
 
   it('前端：进面板恢复与单张查询都遵守「本地优先」', () => {
@@ -221,12 +223,16 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
     // 网络状态由界面读同一个信号（navigator.onLine），不在后端另造一套探网
     expect(momentsMedia).toMatch(/navigator\.onLine === false/)
     // 并且把它传给后端：后端仍要靠它决定「本地都没有时能不能出网」
-    expect(momentsMedia).toMatch(/opts\.offline = offline/)
+    expect(momentsMedia).toMatch(/const options = buildSnsImageRequestOptions\(image, offline\)/)
+    expect(momentsMedia).toMatch(/const imageOpts = buildSnsImageRequestOptions\(it, offline\)/)
+    expect(momentsMedia).toMatch(/\.\.\.snsImageMetadata\(source\),\s*offline,/)
     expect(mediaRemotes).toMatch(/offline\?: boolean/)
   })
 
   it('前端：写回时把 thumb 标记一起存下去', () => {
-    expect(momentsMedia).toMatch(/snsMediaCacheSet\(it\.key, r\.url, r\.thumb === true\)/)
+    expect(momentsMedia).toMatch(/const original = (?:r|result)\.thumb !== true/)
+    expect(momentsMedia).toMatch(/snsMediaCacheSet\(it\.key, r\.url, !original\)/)
+    expect(momentsMedia).toMatch(/snsMediaCacheSet\(key, result\.url, !original\)/)
     expect(mediaCache).toMatch(/thumb\?: boolean/)
     // wantOriginal 为真时，缩略图**与 v1 旧条目**都必须当未命中。
     // 只判 thumb 不够：v1 条目根本没有这个字段（真机清点 1186 条里 1093 条是那种）。
@@ -314,9 +320,12 @@ describe('评论图：token/key 从解析到批处理，四处缺一不可', () 
   it('④ 批处理放行 CDN 三件套的判据是「不是视频」，不是「是 img」', () => {
     // 这条是本 PR 里最容易回归的一处：把 `!== 'video'` 写回 `=== 'img'`，
     // 评论图就静默退回 [图]，而所有单测仍然全绿（因为它们都不走真实批处理）。
-    expect(mediaHook).toMatch(/it\.kind !== 'video' && it\.url/)
-    expect(mediaHook).toMatch(/it\.kind !== 'video' && it\.token/)
-    expect(mediaHook).toMatch(/it\.kind !== 'video' && it\.seed/)
+    // 现在三件套由共享构造器统一透传；批处理只按「视频 / 非视频」分流。
+    expect(mediaHook).toMatch(/const imageOpts = buildSnsImageRequestOptions\(it, offline\)/)
+    expect(mediaHook).toMatch(/it\.kind === 'video'\s*\?\s*apiGetSnsVideoCoverDataUrl\(videoOpts\)\s*:\s*apiGetSnsImageDataUrl\(imageOpts\)/)
+    expect(mediaHook).toMatch(/\.\.\.\(url !== undefined \? \{ url \} : \{\}\)/)
+    expect(mediaHook).toMatch(/\.\.\.\(token !== undefined \? \{ token \} : \{\}\)/)
+    expect(mediaHook).toMatch(/\.\.\.\(seed !== undefined \? \{ seed \} : \{\}\)/)
     expect(code(mediaHook)).not.toMatch(/it\.kind === 'img' && it\.(?:url|token|seed)/)
   })
 

@@ -8,6 +8,7 @@
  * 因此 40 多个面板的 import 路径都不用动。拆分是否等值由
  * `api-module-split.spec.ts` 的搬移一致性断言守住。
  */
+import { forgetAllImages } from './image-cache.ts'
 /**
  * In-memory snapshot cache with a short TTL. The WeChat panels unmount when
  * the user switches tabs; a shared cache makes returning to a tab show the
@@ -154,6 +155,161 @@ export function snapshotDelete(key: string): void {
   for (const fn of _snapshotListeners.get(key) ?? []) { try { fn() } catch { /* ignore */ } }
 }
 
+/**
+ * 硬清空全部快照（换账号 / 换数据目录专用）。
+ *
+ * `invalidateSnapshotCache()` 的口径是「标记陈旧，旧值仍可先画一帧再后台复验」——
+ * 这对实时同步是对的，对换数据源不对：旧值属于上一个账号，先画就是串号。
+ * 这里直接丢掉并通知订阅者回源，不走陈旧可读。
+ */
+export function clearSnapshotCache(): void {
+  _snapshotCache.clear()
+  snapshotGeneration += 1
+  for (const set of _snapshotListeners.values()) for (const fn of set) { try { fn() } catch { /* ignore */ } }
+}
+
+// ── 数据目录身份：换账号 / 换数据目录时隔离并失效缓存 ─────────────────────────
+//
+// 为什么需要：扫描型面板的首屏会同步读渲染缓存，而缓存键只带 talker / 查询参数，
+// 换账号后同一个键仍然命中 → 用户会先看到**上一个账号**的会话/消息一帧，再被真实数据覆盖。
+// 这里把「当前数据目录」变成一个可订阅的身份：渲染缓存键带上目录指纹，保活面板按身份
+// 重新挂载；保存配置时若目录或密钥变了，统一作废快照与两层持久缓存。
+//
+// 指纹只用于缓存命名（FNV-1a 32 位），不是安全哈希，也不会把目录明文写进 localStorage 键。
+
+/** 参与数据身份判定的字段（密钥只参与「变没变」的比较，不落进缓存键）。 */
+export interface DataIdentityFields {
+  db_dir?: string
+  db_enc_key?: string
+  image_aes_key?: string
+  image_xor_key?: string | number
+}
+
+/** 归一化目录：统一分隔符、去掉尾部斜杠、大小写不敏感（Windows 路径）。 */
+export function normalizeDataDir(dbDir: string | undefined): string {
+  return String(dbDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/** 目录指纹（FNV-1a 32 位，8 位十六进制）；空目录也有稳定值。 */
+export function dataDirFingerprint(dbDir: string | undefined): string {
+  const value = normalizeDataDir(dbDir)
+  let hash = 0x811c9dc5
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+let currentDataDir = ''
+let lastKnownDataIdentity: DataIdentityFields | null = null
+let dataIdentityRevision = 0
+let dataIdentitySnapshot = `${dataDirFingerprint('')}:0`
+const _dataIdentityListeners = new Set<() => void>()
+
+function publishDataIdentity(): void {
+  dataIdentitySnapshot = `${dataDirFingerprint(currentDataDir)}:${String(dataIdentityRevision)}`
+  for (const fn of [..._dataIdentityListeners]) { try { fn() } catch { /* ignore */ } }
+}
+
+/** 供 `useSyncExternalStore`：快照在身份变化时才变（目录指纹 + 失效代数）。 */
+export function getDataIdentitySnapshot(): string {
+  return dataIdentitySnapshot
+}
+
+/** 订阅数据身份变化（keep-alive 用它决定何时丢弃旧面板）。 */
+export function subscribeDataIdentity(fn: () => void): () => void {
+  _dataIdentityListeners.add(fn)
+  return () => { _dataIdentityListeners.delete(fn) }
+}
+
+/** 只更新目录指纹（启动时从轻量配置读取，密钥未知不影响缓存命名）。 */
+export function setDataDirIdentity(dbDir: string | undefined): void {
+  const next = normalizeDataDir(dbDir)
+  if (next === currentDataDir) return
+  currentDataDir = next
+  publishDataIdentity()
+}
+
+/** 记住一份完整配置的目录与密钥，作为下一次保存时的比较基线。 */
+export function rememberDataIdentity(config: DataIdentityFields): void {
+  setDataDirIdentity(config.db_dir)
+  lastKnownDataIdentity = {
+    db_dir: config.db_dir,
+    db_enc_key: config.db_enc_key ?? '',
+    image_aes_key: config.image_aes_key ?? '',
+    image_xor_key: config.image_xor_key ?? '',
+  }
+}
+
+function sameDataIdentity(a: DataIdentityFields, b: DataIdentityFields): boolean {
+  return normalizeDataDir(a.db_dir) === normalizeDataDir(b.db_dir)
+    && (a.db_enc_key ?? '') === (b.db_enc_key ?? '')
+    && (a.image_aes_key ?? '') === (b.image_aes_key ?? '')
+    && String(a.image_xor_key ?? '') === String(b.image_xor_key ?? '')
+}
+
+/** 这次保存是否真的动了数据来源（目录或密钥）。纯函数，便于单测。 */
+export function dataIdentityChanged(after: DataIdentityFields, before: DataIdentityFields | null): boolean {
+  if (before === null) {
+    return normalizeDataDir(after.db_dir) !== ''
+      || (after.db_enc_key ?? '') !== ''
+      || (after.image_aes_key ?? '') !== ''
+  }
+  return !sameDataIdentity(before, after)
+}
+
+/** 身份变化时要做的三件事（注入是为了单测能断言「保存后确实调了失效」）。 */
+export interface DataIdentityCacheOps {
+  invalidateAll: () => void
+  forgetImages: () => void
+  notifyAvatar: () => void
+}
+
+/** 头像缓存重置信号：WechatDataPanel 的 BrandAvatar 监听后丢弃模块级缓存。 */
+export const DATA_IDENTITY_CHANGED_EVENT = 'dsh-wechat-data-identity-changed'
+
+const DEFAULT_DATA_IDENTITY_OPS: DataIdentityCacheOps = {
+  // 换账号不能走「陈旧可读」：旧快照属于上一个账号，先画一帧就是串号。
+  invalidateAll: () => { invalidateWechatCache(''); clearSnapshotCache() },
+  forgetImages: () => { forgetAllImages() },
+  notifyAvatar: () => {
+    if (typeof window === 'undefined') return
+    try { window.dispatchEvent(new CustomEvent(DATA_IDENTITY_CHANGED_EVENT)) } catch { /* 没有 CustomEvent 时只是少一次头像刷新 */ }
+  },
+}
+
+/**
+ * 保存成功后调用：目录 / 密钥真的变了才失效缓存并推进身份代数。
+ *
+ * 「统一失效」是**硬清**：两层 localStorage（消息 / 会话 / 知识库 / 总览 / 渲染缓存）
+ * 按命名空间清掉，内存快照直接丢弃并通知订阅者回源（不做陈旧可读，避免先画旧账号）；
+ * 图片内存 LRU 一并清空，头像缓存通过事件通知顶栏丢弃。返回是否发生了失效。
+ * @param after - 刚保存的配置字段。
+ * @param ops - 可注入的副作用（生产用默认实现）。
+ * @returns 是否发生了身份变化。
+ */
+export function applyDataIdentityAfterSave(
+  after: DataIdentityFields,
+  ops: DataIdentityCacheOps = DEFAULT_DATA_IDENTITY_OPS,
+): boolean {
+  if (!dataIdentityChanged(after, lastKnownDataIdentity)) return false
+  ops.invalidateAll()
+  ops.forgetImages()
+  ops.notifyAvatar()
+  currentDataDir = normalizeDataDir(after.db_dir)
+  dataIdentityRevision += 1
+  lastKnownDataIdentity = {
+    db_dir: after.db_dir,
+    db_enc_key: after.db_enc_key ?? '',
+    image_aes_key: after.image_aes_key ?? '',
+    image_xor_key: after.image_xor_key ?? '',
+  }
+  publishDataIdentity()
+  return true
+}
+
+
 if (typeof window !== 'undefined') {
   // The ui-wechat plugin relays the host realtime sync signal as this DOM event;
   // new decrypted data means every in-memory snapshot is stale. The persistent
@@ -174,6 +330,33 @@ if (typeof window !== 'undefined') {
 }
 
 const RENDER_CACHE_PREFIX = 'wxdata-render-cache:'
+/**
+ * 渲染缓存键的「账号/数据目录」命名空间。
+ *
+ * **所有**渲染缓存都按当前目录指纹命名，而不只是聊天消息：会话列表、群洞察、
+ * 监控、朋友圈、知识库等键要么含 username，要么含库 id，换账号后完全可能同名。
+ * 旧实现只给 `chat-msgs:` 加前缀，其余仍会在第一次读到新后端数据前闪一帧旧账号内容。
+ *
+ * 键形如 `acct-1a2b3c4d:chat-msgs:v3:wxid_x`。指纹只用于命名，不写目录明文。
+ * 升级前写入的无前缀键无法判断属于哪个账号，`readRenderCache` 会顺手删掉它们。
+ */
+const DATA_SCOPE_KEY_PREFIX = 'acct-'
+/**
+ * 给渲染缓存键加目录命名空间。
+ * @param key - 逻辑键（调用方原本使用的键）。
+ * @returns 实际落盘的键（不含 `wxdata-render-cache:` 前缀）。
+ */
+export function scopedRenderCacheKey(key: string): string {
+  return DATA_SCOPE_KEY_PREFIX + dataDirFingerprint(currentDataDir) + ':' + key
+}
+
+/** 把磁盘上的（可能带目录命名空间的）键还原成逻辑键，供前缀失效使用。 */
+function logicalRenderCacheKey(stored: string): string {
+  if (!stored.startsWith(DATA_SCOPE_KEY_PREFIX)) return stored
+  const colon = stored.indexOf(':')
+  return colon < 0 ? stored : stored.slice(colon + 1)
+}
+
 /**
  * 渲染缓存的保质期（P2-5）。这一层是给「二次打开秒出图」用的，
  * 不是给「离线可用」用的 —— 超过一天就宁可重新取一次，也不画昨天的会话列表。
@@ -199,18 +382,25 @@ interface RenderEnvelope { at: number; v: unknown }
  */
 export function readRenderCache<T>(key: string, ..._rest: T[]): T | null {
   if (typeof localStorage === 'undefined') return null
+  const storedKey = RENDER_CACHE_PREFIX + scopedRenderCacheKey(key)
+  const legacyKey = RENDER_CACHE_PREFIX + key
   try {
-    const raw = localStorage.getItem(RENDER_CACHE_PREFIX + key)
+    // 升级前的无前缀条目：不知道属于哪个账号，不能猜 —— 顺手删掉并当未命中。
+    if (storedKey !== legacyKey && localStorage.getItem(storedKey) === null) {
+      localStorage.removeItem(legacyKey)
+      return null
+    }
+    const raw = localStorage.getItem(storedKey)
     if (!raw) return null
     const parsed = JSON.parse(raw) as unknown
     const env = parsed as RenderEnvelope
     if (env === null || typeof env !== 'object' || typeof env.at !== 'number' || !('v' in env)) {
       // 旧格式（裸值）：没有写时间，无法判旧不旧 ⇒ 当过期丢掉，下一次写就是新格式
-      localStorage.removeItem(RENDER_CACHE_PREFIX + key)
+      localStorage.removeItem(storedKey)
       return null
     }
     if (Date.now() - env.at > RENDER_CACHE_TTL_MS) {
-      localStorage.removeItem(RENDER_CACHE_PREFIX + key)
+      localStorage.removeItem(storedKey)
       return null
     }
     return env.v as T
@@ -221,6 +411,12 @@ export function readRenderCache<T>(key: string, ..._rest: T[]): T | null {
 /** Save a snapshot after a successful render (quota-safe, with the failure made visible). */
 export function writeRenderCache(key: string, data: unknown): void {
   if (typeof localStorage === 'undefined') return
+  const storedKey = RENDER_CACHE_PREFIX + scopedRenderCacheKey(key)
+  const legacyKey = RENDER_CACHE_PREFIX + key
+  try {
+    // 旧版无前缀键读不到（readRenderCache 会忽略），但没必要继续占配额。
+    if (storedKey !== legacyKey) localStorage.removeItem(legacyKey)
+  } catch { /* best-effort */ }
   let payload = ''
   try {
     payload = JSON.stringify({ at: Date.now(), v: data } satisfies RenderEnvelope)
@@ -235,7 +431,7 @@ export function writeRenderCache(key: string, data: unknown): void {
     return
   }
   try {
-    localStorage.setItem(RENDER_CACHE_PREFIX + key, payload)
+    localStorage.setItem(storedKey, payload)
   } catch {
     // 配额满：把这一层整个丢干净（它随时可丢），并说一次为什么首屏变慢了。
     try {
@@ -263,9 +459,14 @@ const CACHE_TTL_DEFAULT = 60_000
  * 后端修复后，如果升级后的首帧仍先读旧 localStorage，用户会短暂看到哈希标题，
  * 甚至继续用哈希打开一个空会话。这个标记做一次性、命名空间内的清理：
  * 只丢弃可再生的微信数据缓存，不动主题、布局等用户偏好。
+ *
+ * v4（2026-11）：聊天消息渲染缓存改成自描述信封（`chat-msgs:v3:`），旧格式
+ * （`chat-msgs:v2:` 的裸列表）没有可核对的归属证据 —— 单聊行此前根本不带
+ * `sender`，历史上被写进别人的会话也无从识别。升代把旧条目一次性清掉，
+ * 避免它们被当成「没有缓存」以外的形态继续存在。
  */
 const WECHAT_CACHE_SCHEMA_KEY = 'dsh-wechat-cache-schema'
-const WECHAT_CACHE_SCHEMA = 'message-identity-v3'
+const WECHAT_CACHE_SCHEMA = 'message-identity-v4'
 const WECHAT_CACHE_NAMESPACES = [
   'dsh-wechat-cache:',
   CACHE_PREFIX,
@@ -333,8 +534,13 @@ export function invalidateWechatCache(prefix: string): void {
       const k = localStorage.key(i)
       if (!k) continue
       if (k.startsWith(CACHE_PREFIX + prefix)) localStorage.removeItem(k)
-      if (k.startsWith(RENDER_CACHE_PREFIX + prefix)) localStorage.removeItem(k)
       if (k.startsWith(OVERVIEW_CACHE_PREFIX + prefix)) localStorage.removeItem(k)
+      if (k.startsWith(RENDER_CACHE_PREFIX)) {
+        // 渲染缓存可能带 `acct-<目录指纹>:` 命名空间：按逻辑键判断前缀，
+        // 否则 `invalidateAndNotify('chat-msgs:')` 清不到换账号后的条目。
+        const logical = logicalRenderCacheKey(k.slice(RENDER_CACHE_PREFIX.length))
+        if (logical.startsWith(prefix)) localStorage.removeItem(k)
+      }
     }
   } catch { /* quota/security errors are best-effort */ }
 }

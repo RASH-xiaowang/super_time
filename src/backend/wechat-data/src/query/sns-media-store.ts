@@ -40,6 +40,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, basename, join } from 'node:path'
 import { MD5_RE } from '../md5.ts'
+import {
+  compareSnsOriginalQuality,
+  evaluateSnsOriginal,
+  readImageDimensions,
+  type SnsOriginalExpectation,
+  type SnsOriginalQuality,
+} from './image-dimensions.ts'
 
 /** 落盘子目录名（在 `decoded_images` 之下，与 `article-covers` 同级）。 */
 export const SNS_MEDIA_STORE_SUBDIR = 'sns-media'
@@ -80,6 +87,30 @@ const EXTS: ReadonlyArray<{ ext: string; mime: string }> = [
   { ext: 'gif', mime: 'image/gif' },
   { ext: 'bmp', mime: 'image/bmp' },
 ]
+
+/** 读取原图缓存时的可选质量校验。 */
+export interface OriginalLookupOptions {
+  /** XML `<size>` 给出的原图预期；给了就按它判定。 */
+  expectation?: SnsOriginalExpectation
+  /** true = 必须通过 {@link evaluateSnsOriginal}；视频封面等小图调用方不要开。 */
+  requireQuality?: boolean
+}
+
+/** 写入原图缓存时的替换策略。 */
+export interface OriginalSaveOptions extends OriginalLookupOptions {
+  /** true = 新图尺寸/字节更优时替换同 md5 的旧档（用于修复历史 200x300 错档）。 */
+  replaceIfLarger?: boolean
+}
+
+interface OriginalHit {
+  bytes: Buffer
+  ext: string
+}
+
+interface OriginalSaveResult {
+  ext: string
+  wrote: boolean
+}
 
 /**
  * md5 字面量的唯一出处是 `md5.ts`（`md5-image-key.spec.ts` 对「md5 正则只许住在那里」零容忍）——
@@ -133,30 +164,71 @@ function shardOf(decodedDir: string, md5: string): string {
   return join(decodedDir, SNS_MEDIA_STORE_SUBDIR, md5.slice(0, 2))
 }
 
+function qualityOf(bytes: Uint8Array): SnsOriginalQuality {
+  const dims = readImageDimensions(bytes)
+  return {
+    bytes: bytes.length,
+    ...(dims !== null ? { width: dims.width, height: dims.height } : {}),
+  }
+}
+
+function readShardOriginals(shard: string, key: string): OriginalHit[] {
+  const hits: OriginalHit[] = []
+  for (const entry of EXTS) {
+    const path = join(shard, key + '.' + entry.ext)
+    try {
+      if (!existsSync(path)) continue
+      const bytes = readFileSync(path)
+      if (bytes.length < MIN_ORIGINAL_BYTES) continue
+      if (sniffOriginalExt(bytes) !== entry.ext) continue
+      hits.push({ bytes, ext: entry.ext })
+    } catch {
+      // 读不动（权限/被占用）⇒ 继续试下一个扩展名
+    }
+  }
+  return hits
+}
+
+function bestOriginalHit(hits: readonly OriginalHit[]): OriginalHit | null {
+  let best: OriginalHit | null = null
+  for (const hit of hits) {
+    if (best === null) {
+      best = hit
+      continue
+    }
+    if (compareSnsOriginalQuality(qualityOf(hit.bytes), qualityOf(best.bytes)) > 0) best = hit
+  }
+  return best
+}
+
+function lookupInShard(
+  shard: string,
+  key: string,
+  options: OriginalLookupOptions = {},
+): OriginalHit | null {
+  const candidates = readShardOriginals(shard, key)
+  const allowed = options.requireQuality === true
+    ? candidates.filter((hit) => evaluateSnsOriginal(hit.bytes, options.expectation).accepted)
+    : candidates
+  return bestOriginalHit(allowed)
+}
+
 /**
  * 查这张图的落盘原图。
  *
  * @param decodedDir - `decoded_images` 目录（`rc.dirs().decoded`）。
  * @param md5 - 32 位媒体 md5。
+ * @param options - 可选原图尺寸/质量校验；默认只为兼容旧调用方做格式嗅探。
  * @returns 命中的字节与格式；没有则 `null`。
  */
-export function lookupOriginal(decodedDir: string, md5: string): { bytes: Buffer; ext: string } | null {
+export function lookupOriginal(
+  decodedDir: string,
+  md5: string,
+  options: OriginalLookupOptions = {},
+): { bytes: Buffer; ext: string } | null {
   const key = (md5 || '').trim().toLowerCase()
   if (!decodedDir || !MD5_RE.test(key)) return null
-  const shard = shardOf(decodedDir, key)
-  for (const e of EXTS) {
-    const p = join(shard, key + '.' + e.ext)
-    try {
-      if (!existsSync(p)) continue
-      const bytes = readFileSync(p)
-      // 落盘的可能被外部工具截断过 ⇒ 读回来再认一次头，认不出就当没有（宁可重抓）
-      if (bytes.length === 0 || sniffOriginalExt(bytes) !== e.ext) continue
-      return { bytes, ext: e.ext }
-    } catch {
-      // 读不动（权限/被占用）⇒ 继续试下一个扩展名
-    }
-  }
-  return null
+  return lookupInShard(shardOf(decodedDir, key), key, options)
 }
 
 /** 最近一次淘汰发生在什么时候（毫秒时间戳）；用于节流。 */
@@ -215,33 +287,85 @@ export function sweepOriginalStore(
   return dropped
 }
 
+function writeOriginalToShard(
+  shard: string,
+  key: string,
+  bytes: Uint8Array,
+  ext: string,
+  options: OriginalSaveOptions,
+): OriginalSaveResult | null {
+  if (!existsSync(shard)) mkdirSync(shard, { recursive: true })
+  const existing = bestOriginalHit(readShardOriginals(shard, key))
+  if (existing !== null) {
+    if (options.replaceIfLarger !== true) return { ext: existing.ext, wrote: false }
+    const comparison = compareSnsOriginalQuality(qualityOf(bytes), qualityOf(existing.bytes))
+    if (comparison <= 0) return { ext: existing.ext, wrote: false }
+  }
+
+  const target = join(shard, key + '.' + ext)
+  // 先写临时文件再改名：半个文件会被当原图缓存下来，此后每次都返回坏图且永不重抓
+  const part = target + '.part'
+  try {
+    writeFileSync(part, bytes)
+    try {
+      renameSync(part, target)
+    } catch {
+      // Windows 上目标已存在时 rename 可能拒绝覆盖；先移除旧档再改名。
+      try {
+        if (existsSync(target)) unlinkSync(target)
+        renameSync(part, target)
+      } catch {
+        try { unlinkSync(part) } catch { /* best-effort */ }
+        return null
+      }
+    }
+  } catch {
+    try { unlinkSync(part) } catch { /* best-effort */ }
+    return null
+  }
+
+  for (const entry of EXTS) {
+    if (entry.ext === ext) continue
+    try {
+      const stale = join(shard, key + '.' + entry.ext)
+      if (existsSync(stale)) unlinkSync(stale)
+    } catch {
+      // 旧扩展名删不掉不影响本次结果；下次 lookup 会按尺寸挑更优的那份。
+    }
+  }
+  return { ext, wrote: true }
+}
+
 /**
  * 把一份**确认是原图**的字节存下来。
  *
  * @param decodedDir - `decoded_images` 目录。
  * @param md5 - 32 位媒体 md5（缓存键，内容寻址 ⇒ 同名必同内容，重复写无害）。
  * @param bytes - 原图字节。
+ * @param options - 可选质量校验与替换策略。`replaceIfLarger` 用于修复旧的
+ *   200x300 错档：只有新图尺寸/字节明显更优时才覆盖，避免每轮重复写盘。
  * @returns 落盘的扩展名；**不是图片 / 参数不合法 / 写失败**一律返回 `null`。
  *          返回 `null` 只表示「这次没存上」，调用方照常返回本次结果，不得因此报错。
  */
-export function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null {
+export function saveOriginal(
+  decodedDir: string,
+  md5: string,
+  bytes: Uint8Array,
+  options: OriginalSaveOptions = {},
+): string | null {
   const key = (md5 || '').trim().toLowerCase()
   if (!decodedDir || !MD5_RE.test(key)) return null
   const ext = sniffOriginalExt(bytes)
   if (ext === null) return null
+  if (options.requireQuality === true
+    && !evaluateSnsOriginal(bytes, options.expectation).accepted) {
+    return null
+  }
   try {
     const shard = shardOf(decodedDir, key)
-    if (!existsSync(shard)) mkdirSync(shard, { recursive: true })
-    const target = join(shard, key + '.' + ext)
-    if (existsSync(target)) return ext
-    // 先写临时文件再改名：半个文件会被当原图缓存下来，此后每次都返回坏图且永不重抓
-    const part = target + '.part'
-    writeFileSync(part, bytes)
-    try { renameSync(part, target) } catch {
-      // 极端情况下 rename 失败 ⇒ 清掉临时文件，别留垃圾
-      try { unlinkSync(part) } catch { /* best-effort */ }
-      return null
-    }
+    const saved = writeOriginalToShard(shard, key, bytes, ext, options)
+    if (saved === null) return null
+    if (!saved.wrote) return saved.ext
     writesSinceSweep += 1
     const now = Date.now()
     if (writesSinceSweep >= SWEEP_EVERY_N_WRITES && now - lastSweepAt >= SWEEP_MIN_INTERVAL_MS) {
@@ -249,7 +373,7 @@ export function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array)
       writesSinceSweep = 0
       sweepOriginalStore(decodedDir)
     }
-    return ext
+    return saved.ext
   } catch {
     // 磁盘满 / 只读 / 权限不足：只是这次没存上
     return null
@@ -301,22 +425,17 @@ function archiveShardOf(decodedDir: string, md5: string): string {
  * 查**长期归档**里的原图（进入朋友圈的第一判断）。
  * @param decodedDir - `decoded_images` 目录（用它定位数据根）。
  * @param md5 - 32 位媒体 md5。
+ * @param options - 可选原图尺寸/质量校验；默认只为兼容旧调用方做格式嗅探。
  * @returns 命中的字节与格式；没有则 `null`。
  */
-export function lookupArchivedOriginal(decodedDir: string, md5: string): { bytes: Buffer; ext: string } | null {
+export function lookupArchivedOriginal(
+  decodedDir: string,
+  md5: string,
+  options: OriginalLookupOptions = {},
+): { bytes: Buffer; ext: string } | null {
   const key = (md5 || '').trim().toLowerCase()
   if (!decodedDir || !MD5_RE.test(key)) return null
-  const shard = archiveShardOf(decodedDir, key)
-  for (const e of EXTS) {
-    const p = join(shard, key + '.' + e.ext)
-    try {
-      if (!existsSync(p)) continue
-      const bytes = readFileSync(p)
-      if (bytes.length < MIN_ORIGINAL_BYTES) continue
-      return { bytes, ext: e.ext }
-    } catch { /* 读不到就试下一个扩展名 */ }
-  }
-  return null
+  return lookupInShard(archiveShardOf(decodedDir, key), key, options)
 }
 
 /** 归档淘汰节流：每 100 次写或 5 分钟检查一次，避免每次保存都全扫。 */
@@ -334,24 +453,29 @@ const ARCHIVE_SWEEP_MIN_INTERVAL_MS = 5 * 60_000
  * @param decodedDir - `decoded_images` 目录。
  * @param md5 - 32 位媒体 md5。
  * @param bytes - 原图字节。
+ * @param options - 可选质量校验与替换策略。旧归档里的 200x300 预览图会在
+ *   `replaceIfLarger: true` 时被更大的原图替换。
  * @returns 落盘扩展名；不是图片/写失败为 `null`。
  */
-export function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null {
+export function saveArchivedOriginal(
+  decodedDir: string,
+  md5: string,
+  bytes: Uint8Array,
+  options: OriginalSaveOptions = {},
+): string | null {
   const key = (md5 || '').trim().toLowerCase()
   if (!decodedDir || !MD5_RE.test(key)) return null
   const ext = sniffOriginalExt(bytes)
   if (ext === null) return null
+  if (options.requireQuality === true
+    && !evaluateSnsOriginal(bytes, options.expectation).accepted) {
+    return null
+  }
   try {
     const shard = archiveShardOf(decodedDir, key)
-    if (!existsSync(shard)) mkdirSync(shard, { recursive: true })
-    const target = join(shard, key + '.' + ext)
-    if (existsSync(target)) return ext
-    const part = target + '.part'
-    writeFileSync(part, bytes)
-    try { renameSync(part, target) } catch {
-      try { unlinkSync(part) } catch { /* best-effort */ }
-      return null
-    }
+    const saved = writeOriginalToShard(shard, key, bytes, ext, options)
+    if (saved === null) return null
+    if (!saved.wrote) return saved.ext
     archiveWritesSinceSweep += 1
     const now = Date.now()
     if (archiveWritesSinceSweep >= ARCHIVE_SWEEP_EVERY_N_WRITES && now - lastArchiveSweepAt >= ARCHIVE_SWEEP_MIN_INTERVAL_MS) {
@@ -359,7 +483,7 @@ export function saveArchivedOriginal(decodedDir: string, md5: string, bytes: Uin
       archiveWritesSinceSweep = 0
       sweepMomentsMediaArchive(decodedDir)
     }
-    return ext
+    return saved.ext
   } catch {
     return null
   }

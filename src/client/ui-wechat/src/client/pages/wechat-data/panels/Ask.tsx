@@ -579,13 +579,13 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
         onClearTime={() => { setFrom(''); setTo('') }}
       />
 
-      {/* ④ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动）。
-          「所选模型」要说清是哪一支：用户判断"这句话会不会发出去、发给谁"就靠这一行。 */}
+      {/* ④ 隐私说明：输入框下方次级小字（常驻底部）；「所选模型」要说清是哪一支。 */}
       <div className={css.privacyNote}>
         检索在本机完成；AI 生成会把检索到的片段（聊天记录与知识库文件）发送到
         {model ? <>「<b>{model.provider} · {model.model}</b>」</> : '当前配置的模型'}
         {model && model.model.trim() === '' ? '（尚未配置，需先在「设置 → AI 大模型」里填写）' : ''}
-        （可在「设置 → 数据边界与出网」中关闭出网）
+        {/* 不能写「可在设置里关闭出网」：应用内已无出网开关（2026-09-30 移除）。 */}
+        （应用内没有出网开关；关掉某文件的「参与语义检索」后，它的正文不再发给模型）
       </div>
       </div>
 
@@ -776,7 +776,7 @@ function AskThread({ turns, asking, live, onRetry, onOpenCite, activeCite, patch
             <div key={i} className={css.chatAi}>
               <AnswerRunView
                 turn={t}
-                agentLabel="AI 问答"
+                agentLabel="微信问答"
                 {...processPropsFor(t.runId)}
                 {...(t.status === 'failed' && i === turns.length - 1 && !asking
                   ? { onRetry: () => { onRetry(i) } }
@@ -821,7 +821,7 @@ function AskThread({ turns, asking, live, onRetry, onOpenCite, activeCite, patch
         {asking && (
           <div className={css.chatAi}>
             <AnswerRunView
-              agentLabel="AI 问答"
+              agentLabel="微信问答"
               text={live.streamText}
               reasoning={live.streamReasoning}
               reasoningSegments={live.streamReasoningSegments}

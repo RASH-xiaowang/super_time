@@ -13,10 +13,18 @@
 
 /** 资源词 → 更合适的专用工具（按问题中出现的顺序稳定去重）。 */
 const RESOURCE_RULES: ReadonlyArray<{ re: RegExp; tool: string }> = [
+  // 金额/笔数/收支优先走账本；只有问「某一笔」或单号时才轮到 records。
+  // 两条规则都会命中「转账」类问题，兜底上限 3 个，顺序决定优先级。
+  { re: /(收到|转出|支出|收入|一共|多少|总额).*(转账|红包|钱)|转账.*(多少|金额)|红包.*(多少|金额)|账单|收支/, tool: 'get_funds_summary' },
+  { re: /转账|红包|收款|付款|账单|交易记录/, tool: 'search_records' },
+  { re: /通话|电话|未接|拨打|接听/, tool: 'get_call_history' },
+  { re: /群公告|群主|群成员|群资料|这个群有多少人|群里有多少人/, tool: 'get_group_detail' },
+  { re: /撤回/, tool: 'search_revoked' },
+  { re: /(多少|几张|几条|哪些|最近).*(图片|照片|视频|语音|表情|位置)/, tool: 'aggregate_media' },
+  { re: /(多少|几条|点赞|评论|获赞).*朋友圈|朋友圈.*(多少|几条|点赞|评论|获赞)/, tool: 'get_moments_stats' },
   { re: /朋友圈|动态|说说/, tool: 'search_moments' },
   { re: /收藏|书签/, tool: 'search_favorites' },
   { re: /文件|文档|附件|表格|pdf|excel|word|ppt|压缩包|安装包/i, tool: 'search_files' },
-  { re: /转账|红包|收款|付款|账单|交易记录/, tool: 'search_records' },
   { re: /联系人|好友|微信号|电话号码|手机号|是谁/, tool: 'search_contacts' },
 ]
 

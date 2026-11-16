@@ -692,7 +692,8 @@ describe('触发图片：按 photoLimit 取最近 N 张并按时间正序', () =
     expect(record?.images.map((image) => image.localId)).toEqual([1, 2])
     expect(record?.images.map((image) => image.createTime)).toEqual([100_000, 200_000])
     expect(record?.images[1]?.md5).toBe('md5_second')
-    // 单聊消息不写 `sender`（那是群聊成员字段），显示名退回「对方」。
+    // 单聊接收方向的 `sender` 现在等于对端 talker（前端渲染缓存据此校验归属）；
+    // 联系人表里没有这个人时，显示名仍退回「对方」，不把 wxid 露给用户。
     expect(record?.images[1]?.sender).toBe('对方')
   })
 
@@ -714,7 +715,7 @@ describe('触发图片：按 photoLimit 取最近 N 张并按时间正序', () =
     const image = listTaskTriggers(decrypted).items[0]?.images[0]
     expect(image).toMatchObject({
       localId: 1,
-      sender: '对方',
+      sender: '小企',
       senderUsername: ENTERPRISE_TALKER,
       senderEnterpriseName: '示例企业',
       md5: 'md5_ent',

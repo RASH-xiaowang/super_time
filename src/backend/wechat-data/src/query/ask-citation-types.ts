@@ -32,6 +32,8 @@ export interface AskCitation {
   sender?: string
   /** 企业微信发送者所属企业（群聊按发送者、单聊按会话）。 */
   senderEnterpriseName?: string
+  /** 该引用来自撤回消息归档（原文已从当前消息库删除）。 */
+  revoked?: boolean
   /** 来源域：消息（缺省）、知识库、聚合事实或资源。 */
   source?: 'msg' | 'kb' | 'agg' | 'resource'
   /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */

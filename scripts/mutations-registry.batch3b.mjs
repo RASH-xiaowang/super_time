@@ -271,12 +271,13 @@ export const MUTATIONS_BATCH3B = [
     to: "knowledge?.summary.noteCount ?? graph.nodes.filter(n => n.kind === 'note').length",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model-kind-counts.spec.ts",
   },
+ // 2026-11-13：锚点跟随 图构造返回值新增 coverage 更新。
   {
     id: "M255-built-graph-missing-counts",
     why: "图构造处忘了数、直接给空对象 ⇒ 统计条那一档永远是 0（模型与组件两边都不报错，看着就是「这个人没有消息」）",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts",
-    from: "edges: [...observed, ...inferred], communityCount, kindCounts: countByKind(nodes) }",
-    to: "edges: [...observed, ...inferred], communityCount, kindCounts: {} }",
+    from: "  return { nodes, edges, communityCount, kindCounts: countByKind(nodes), coverage: { ...graphCoverage, ...(normalizedEnv.coverage ? { server: normalizedEnv.coverage } : {}) } }",
+    to: "  return { nodes, edges, communityCount, kindCounts: {}, coverage: { ...graphCoverage, ...(normalizedEnv.coverage ? { server: normalizedEnv.coverage } : {}) } }",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model-kind-counts.spec.ts",
   },
   {

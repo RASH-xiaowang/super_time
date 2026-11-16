@@ -13,10 +13,11 @@
  *      否则就会造出「A 家地址 + B 家模型」这种 401 陷阱的新变体。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { apiBuildKbVectorIndex, apiExtractKbEntities, apiGetKbModelConfig, apiGetKbVectorIndex, apiSetKbModelConfig } from '../api.ts'
-import type { KbModelConfigView, KbVectorIndexView } from '../types.ts'
+import { apiExtractKbEntities, apiGetKbModelConfig, apiGetKbVectorIndex, apiSetKbModelConfig } from '../api.ts'
+import type { KbModelConfigView } from '../types.ts'
 import { Button, Dialog } from '../ui/kit.tsx'
 import { useTransientNotice } from './hooks.tsx'
+import { useKbModelRebuild } from './kb-index-build.ts'
 import { formatRelative } from './kb-model.ts'
 import css from './kb-model-dialog.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -46,15 +47,16 @@ export function KbModelDialog({ kbId, kbName, onClose }: {
   onClose: () => void
 }): React.JSX.Element {
   const [cfg, setCfg] = useState<KbModelConfigView | null>(null)
-  const [idx, setIdx] = useState<KbVectorIndexView | null>(null)
   const [draft, setDraft] = useState<Draft>({ chat: '', embed: '', rerank: '' })
   const [busy, setBusy] = useState(false)
-  const [indexing, setIndexing] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   // 成功回执走公共 hook（自己写 setTimeout 清位的做法已被门禁挡下：
   // 卸载后仍会触发一次 setState，且各面板的停留时长会漂）。
   const { notice, flash } = useTransientNotice()
+  // 重建 / 进度 / 停止收在 `kb-index-build.ts`：本弹层受单函数行数棘轮管着（只许变小），
+  // 而这一块是自洽的（只碰索引状态与两个按钮）。
+  const { idx, setIdx, indexing, rebuild, cancel: cancelRebuild } = useKbModelRebuild(kbId, flash, setErr)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -65,17 +67,9 @@ export function KbModelDialog({ kbId, kbName, onClose }: {
     } catch (e) {
       setErr((e as Error).message)
     }
-  }, [kbId])
+  }, [kbId, setIdx])
 
   useEffect(() => { void load() }, [load])
-
-  // 建索引在飞时跟着轮询进度；停下的判据是**后端的 job 消失**，不是本地按钮态。
-  const jobOn = idx?.job ? `${idx.kbId}:${idx.job.done}` : ''
-  useEffect(() => {
-    if (jobOn === '') return
-    const t = setInterval(() => { void apiGetKbVectorIndex(kbId).then(setIdx).catch(() => { /* 下一轮再试 */ }) }, 1500)
-    return () => { clearInterval(t) }
-  }, [jobOn, kbId])
 
   const save = useCallback(async (): Promise<void> => {
     setBusy(true)
@@ -95,21 +89,6 @@ export function KbModelDialog({ kbId, kbName, onClose }: {
       setBusy(false)
     }
   }, [draft, kbId, load])
-
-  const rebuild = useCallback(async (): Promise<void> => {
-    setIndexing(true)
-    setErr(null)
-    try {
-      const r = await apiBuildKbVectorIndex(kbId, true)
-      if (!r.ok) setErr(r.error ?? '重建失败')
-      else flash(`本库索引已重建：${r.embedded} 块 · ${r.elapsed_ms}ms`)
-      setIdx(await apiGetKbVectorIndex(kbId))
-    } catch (e) {
-      setErr((e as Error).message)
-    } finally {
-      setIndexing(false)
-    }
-  }, [kbId])
 
   /**
    * 抽一轮实体（一轮最多 20 个文件，见后端 `extractKbEntities` 的 `limit`）。
@@ -210,8 +189,18 @@ export function KbModelDialog({ kbId, kbName, onClose }: {
             disabled={indexing || idx?.configured === false}
             title={idx?.configured === false ? '未配置向量模型：先在「数据配置 → AI 大模型」填写' : '清空本库向量并按当前模型重算（会出网）'}
           >
-            {indexing ? '重建中…' : '重建本库索引'}
+            {indexing ? `重建中…${idx?.job ? ` ${String(idx.job.done)}/${String(idx.job.total)}` : ''}` : '重建本库索引'}
           </Button>
+          {/* 只在本地发起的那一轮显示：后端 job 也可能是「文件」面板发起的，这里没有它的 jobId。 */}
+          {indexing && (
+            <Button
+              variant="pill"
+              onClick={() => { void cancelRebuild() }}
+              title="停止本轮重建；阶段二（写库）尚未开始，旧索引保持原样"
+            >
+              停止重建
+            </Button>
+          )}
           {idx !== null && !idx.configured && (
             <span className={css.muted}>未配置向量模型，本库只有关键词检索可用。</span>
           )}

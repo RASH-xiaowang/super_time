@@ -91,6 +91,7 @@ import { MUTATIONS_BATCH3ZA } from './mutations-registry.batch3za.mjs'
 import { MUTATIONS_BATCH3ZB } from './mutations-registry.batch3zb.mjs'
 import { MUTATIONS_BATCH3ZC } from './mutations-registry.batch3zc.mjs'
 import { MUTATIONS_BATCH3ZD } from './mutations-registry.batch3zd.mjs'
+import { MUTATIONS_BATCH3ZE } from './mutations-registry.batch3ze.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -233,6 +234,7 @@ const MUTATIONS_BATCH12 = [
     to: '  setInterval(() => { setElapsed(0) }, 1000)\n  const elapsed = 0',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/u2-slow-query.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 docs/API.md 的 234 个 Remote 更新。
   {
     id: 'M18-readme-remote-count-drift',
     why: '把前端 README 的 Remote 计数改回旧的 158 —— docs-consistency 必须发现它和 docs/API.md 不一致',
@@ -251,7 +253,7 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-20（任务配置 / 触发记录批量删除 +2 → 214）：第十九次跟。
     // 2026-10-22（统一问答运行时新增 Remote 方法 → 219）：第二十次跟。
     // 2026-10-30（AI 回复 / 消息列表投递方法面 → 224）：第二十一次跟。
-    from: '224 个 Remote 方法）',
+    from: '234 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -297,28 +299,31 @@ const MUTATIONS_BATCH12 = [
     to: '暂无数据',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/consistency-r7.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 「更多」菜单里的分析按钮分支化（setMoreOpen + 四个面板互斥） 更新。
   {
     id: 'M27-analysis-toggle-not-wired',
     why: '「分析」按钮的 onClick 变成空操作（不再 toggle `analysisPaneOpen`）—— 按钮在、点了没反应，必须发现（2026-10-19 微信化后这个按钮同时负责收起「更多」菜单，锚点跟着带上 `setMoreOpen(false)`）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-head-actions.tsx',
-    from: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) setAiOpen(false)\n                        if (!analysisPaneOpen) setAiFull(false)\n                        if (!analysisPaneOpen) { setContactInfoOpen(false); setGroupInfoOpen(false) }\n                        setAnalysisPaneOpen(v => !v)\n                      }}',
-    to: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) setAiOpen(false)\n                        if (!analysisPaneOpen) setAiFull(false)\n                        if (!analysisPaneOpen) { setContactInfoOpen(false); setGroupInfoOpen(false) }\n                        setAnalysisPaneOpen(false)\n                      }}',
+    from: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setSuggestOpen(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(v => !v)\n                      }}',
+    to: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setSuggestOpen(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(false)\n                      }}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 分析块拆进 ChatRightPanel（mode === 'analysis' 条件渲染） 更新。
   {
     id: 'M28-analysis-block-always-rendered',
     why: '组合层去掉分析块的条件渲染 —— 折叠按钮点了分析区还在，等于按钮是摆设',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/ChatRightPanel.tsx',
-    from: '      {showAnalysis && (\n        <ChatAnalysisPanel',
+    from: '      {mode === \'analysis\' && (\n        <ChatAnalysisPanel',
     to: '      {(true) && (\n        <ChatAnalysisPanel',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
+ // 2026-11-13：锚点跟随 右栏挂载条件改按 chatRightMode 判定 更新。
   {
     id: 'M29-right-panel-private-only',
     why: '右栏挂载条件退回「只有单聊才挂」—— 群聊将无法单独打开分析（2026-09-26 刚修掉的那个副作用）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx',
-    from: '{curSession !== null && (suggestVisible || analysisPaneOpen) && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (',
-    to: "{suggestOpen && curSession !== null && curSession.type === 'private' && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (",
+    from: '{curSession !== null && chatRightMode !== undefined && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (',
+    to: "{curSession !== null && curSession.type === 'private' && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
   {
@@ -526,12 +531,13 @@ const MUTATIONS_BATCH12 = [
     to: "  void sig\n  return computeGraph(decryptedDir, selfUsername)",
     spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
   },
+ // 2026-11-13：锚点跟随 loadMessageCounts 改为按 shard 取 wanted（entries/meta） 更新。
   {
     id: "M64-graph-open-per-table",
     why: "把「每个分片只开一次库」改回「每张表把所在分片再开一遍」（P1-3 的第①半）—— 开合数重新随会话数增长",
     file: "src/backend/wechat-data/src/query/graph.ts",
-    from: "  for (const sh of shardCatalog(decryptedDir)) {\n    // 先把这个分片里要的表挑出来，然后**一个分片只开一次库**。\n    // 原先是「每张表开合一次」：本机 290 会话 / 304 张 Msg_* 表 ⇒ 对同一批文件开合数百次，\n    // 而 Windows 的 SQLite 打开是带文件锁的进程级操作 —— 这就是 queryGraph 冷跑 866ms 的大头。\n    const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ''))\n    if (wanted.length === 0) continue\n    // P1-2：真正要开库的分片之间各让一次（放在 wanted 判空之后，\n    // 这样「让出次数 == 实际开库次数」，判据的下界才算得出来）。\n    await yieldToLoop()\n    try {\n      withDb(sh.file, (db) => {\n        for (const t of wanted) {\n          const u = tableToUser.get(t)\n          if (!u || counts.has(u)) continue\n          try {\n            counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)\n          } catch { /* 这张表读不到就算 0，下一张 */ }\n        }\n      })\n    } catch { /* 整个分片开不了：跳过 */ }\n  }\n",
-    to: "  for (const sh of shardCatalog(decryptedDir)) {\n    for (const t of sh.tables.keys()) {\n      const u = tableToUser.get(t)\n      if (!u || counts.has(u)) continue\n      let db: DatabaseSync | null = null\n      try { db = new DatabaseSync(sh.file, { readOnly: true }) } catch { continue }\n      try {\n        counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)\n      } catch { /* next table */ } finally {\n        db.close()\n      }\n    }\n  }\n",
+    from: "  for (const sh of shards) {\n    const wanted = [...sh.tables.entries()]\n      .filter(([table]) => tableToUser.has(table))\n      .map(([table, meta]) => ({ table, meta }))\n    if (wanted.length === 0) continue\n    // Keep one open/close per shard even though this now processes both the\n    // count identity set and the bounded relation rows.\n    await yieldToLoop()\n    try {\n      await withDbAsync(sh.file, async (db) => {\n        for (const { table, meta } of wanted) {\n",
+    to: "  for (const sh of shards) {\n    const wanted = [...sh.tables.entries()]\n      .filter(([table]) => tableToUser.has(table))\n      .map(([table, meta]) => ({ table, meta }))\n    if (wanted.length === 0) continue\n    // Keep one open/close per shard even though this now processes both the\n    // count identity set and the bounded relation rows.\n    await yieldToLoop()\n    try {\n      await withDbAsync(sh.file, async (db) => {\n        for (const { table, meta } of wanted) {\n          await withDbAsync(sh.file, async () => { /* 每张表把所在分片再开一遍 */ })\n",
     spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
   },
   {
@@ -646,12 +652,13 @@ const MUTATIONS_BATCH12 = [
     to: "              role=\"button\"",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/utils/message-text-clickable.spec.ts",
   },
+ // 2026-11-13：锚点跟随 @提及去掉 title（隐私）后的 span 更新。
   {
     id: "M79-mention-gets-dead-focus",
     why: "给展示性的 @提及加上 tabIndex（可点性约定的另一面）—— 每条群消息都往 Tab 序列里塞一个按了没反应的死焦点",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/utils/message-text.tsx",
-    from: "            <span key={idx} className={cssshell.msgMention} title={seg.user?.username}>",
-    to: "            <span key={idx} role=\"button\" tabIndex={0} className={cssshell.msgMention} title={seg.user?.username}>",
+    from: "            <span key={idx} className={cssshell.msgMention}>",
+    to: "            <span key={idx} role=\"button\" tabIndex={0} className={cssshell.msgMention}>",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/utils/message-text-clickable.spec.ts",
   },
   {
@@ -750,12 +757,13 @@ const MUTATIONS_BATCH12 = [
     to: "  if (hit !== undefined) {",
     spec: "src/backend/wechat-data/tests/media-file-resolve.spec.ts",
   },
+ // 2026-11-13：锚点跟随 缓存键追加 requireUnique 维度 更新。
   {
     id: "M92-media-cache-key-loses-root",
     why: "缓存键退回不含 wechatBaseDir —— 换账号/换目录后同名同体积的文件会读到上一个目录的字节",
     file: "src/backend/wechat-data/src/query/media-file.ts",
-    from: "  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`",
-    to: "  const cacheKey = `${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}`",
+    from: "  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}|${requireUnique ? 'unique' : 'latest'}`",
+    to: "  const cacheKey = `${name.toLowerCase()}|${String(size)}|${month}|${fileMd5 ?? ''}|${requireUnique ? 'unique' : 'latest'}`",
     spec: "src/backend/wechat-data/tests/media-file-resolve.spec.ts",
   },
   {
@@ -838,12 +846,13 @@ const MUTATIONS_BATCH12 = [
     to: "    return empty",
     spec: "src/backend/wechat-data/tests/read-failure-contract.spec.ts",
   },
+ // 2026-11-13：锚点跟随 misses 改成 Map.set 并加花括号 更新。
   {
     id: "M103-sns-video-caches-miss-on-unreadable-dir",
     why: "把「扫不全也记 miss」放回去：一次临时的目录读不动被永久记成「本机没有这条视频」，重启才恢复",
     file: "src/backend/wechat-data/src/query/sns-video.ts",
-    from: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (notes.length === 0) for (const h of open) idx.misses.add(h)",
-    to: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (true) for (const h of open) idx.misses.add(h)",
+    from: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (notes.length === 0) {",
+    to: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (true) {",
     spec: "src/backend/wechat-data/tests/read-failure-contract.spec.ts",
   },
   {
@@ -961,7 +970,7 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC, ...MUTATIONS_BATCH3ZD]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC, ...MUTATIONS_BATCH3ZD, ...MUTATIONS_BATCH3ZE]
 
 /** 全量条数唯一来源：门禁文案与预算不要再各自抄一个会腐坏的数字。 */
 export const MUTATION_COUNT = MUTATIONS.length

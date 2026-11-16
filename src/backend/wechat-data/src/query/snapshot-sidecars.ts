@@ -21,27 +21,32 @@
  * 「整文件 rename」（`sync.ts#atomicReplace`）：新一代主文件是**完整**的一代
  * （原始库 + 原始 WAL 帧都已合进去），上一代的 `-wal` 对它就是**另一个库的页**。
  *
- * ## 为什么可以放心丢
+ * ## 为什么改成「隔离」而不是「删除」
  *
- * 快照里的写者只有两处（懒补排序索引 `message-sort-index.ts`、编辑消息 `edit.ts`），
- * 两者都是**全同步**函数：从拿连接到 `close()` 之间没有任何 await，因此不可能横跨发布路径的
- * await 还活着 —— 发布/启动清理这一刻旁文件里的帧**一定**来自一次没干净收尾的会话
- * （进程被杀、或关连接失败）。干净收尾时 SQLite 会 checkpoint 进主文件并删掉 `-wal`，
- * 所以丢掉它的损失上限是「一次没来得及 checkpoint 的提交」；不丢，赔上的是整个库读不了。
- * （前提是同一个人数据根只有一个后端进程 —— Electron 单实例锁 + 开发版/安装版各自
- * userData 已保证这一点。）
+ * 曾经的口径是「启动/换代时无条件删掉非空 `-wal`」，理由是快照里的写者只有两处
+ * （懒补排序索引 `message-sort-index.ts`、编辑消息 `edit.ts`），两者都是**全同步**函数，
+ * 不可能横跨发布路径的 await 还活着 —— 旁文件里的帧一定来自一次没干净收尾的会话。
  *
- * ## 丢不掉怎么办
+ * 真机教训推翻了这个「放心丢」：进程若在**写入/checkpoint 中途**被杀，主文件本身可能
+ * 已经撕裂，而 `-wal` 里正是尚未落进主文件的页。先删 WAL 就等于把「还能自愈」的状态
+ * 变成永久的 `database disk image is malformed`。所以现在：
+ *   · 换代时把旧 `-wal` **rename** 到 `<target>.superseded-wal`（可回滚、可隔离），
+ *     不再先删（见 {@link discardSupersededWal} / {@link restoreSupersededWal}）；
+ *   · 启动清理只删空 WAL（≤32B，无帧）、`-shm` 与真正的一次性 staging 文件，
+ *     非空 `-wal` 留给 `snapshot-reconcile.ts` 在快照目录内做 quick_check + checkpoint。
  *
- * Windows 上读者正持有 `-wal` 时 unlink 直接 EBUSY（实测），所以发布路径**宁可不发布**
+ * ## 挡着换代怎么办
+ *
+ * Windows 上读者正持有 `-wal` 时 unlink/rename 都会失败（实测），所以发布路径**宁可不发布**
  * （见 `sync.ts#atomicReplace`）：被挡住的代价是这一轮快照没更新（下一轮重试），
- * 而不是把一份读不了的快照发出去。`-shm` 只是 wal-index 缓存，留着不会让那些帧生效
- * （WAL 的盐一变，SQLite 自己会重建它），所以它清不掉不拦发布。
+ * 而不是把一份读不了的快照发出去；调用方彻底放弃这一轮时可用
+ * {@link restoreSupersededWal} 把隔离的 WAL 放回原位。`-shm` 只是 wal-index 缓存，
+ * 留着不会让那些帧生效（WAL 的盐一变，SQLite 自己会重建它），所以清不掉不拦发布。
  *
  * @module query/snapshot-sidecars
  */
 import { statSync } from 'node:fs'
-import { copyFile, open, readdir, stat, unlink, type FileHandle } from 'node:fs/promises'
+import { copyFile, open, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** staging 拷贝/打开的重试次数与间隔（真机 EBUSY 实测，见 stageCopyRetry 头注）。 */
@@ -127,13 +132,23 @@ export function strayWalBlocks(target: string): boolean {
 }
 
 /**
- * 丢掉**上一代**的 `-wal`（顺手清 `-shm`）。
+ * 把**上一代**的 `-wal` 挪到隔离位（`<target>.superseded-wal`），而不是直接删除。
+ *
+ * 为什么改成 rename：主文件可能在上一次进程写入/checkpoint 中途被杀而撕裂，`-wal` 里
+ * 正是尚未落进主文件的页 —— 先删 WAL 会把「还能自愈」变成永久
+ * `database disk image is malformed`。隔离后主文件仍是旧代；读者占用时 rename 同样会失败，
+ * 所以保留原有判据：挡着就返回 true、由调用方重试。彻底放弃换代时，调用方可用
+ * {@link restoreSupersededWal} 把它放回去。
  * @param target - 快照主文件路径。
- * @returns 是否仍有非空 `-wal` 挡着换代（true = 还没清掉）。
+ * @returns 是否仍有非空 `-wal` 挡着换代（true = 还没挪走）。
  */
 export async function discardSupersededWal(target: string): Promise<boolean> {
   if (strayWalBlocks(target)) {
-    try { await unlink(target + '-wal') } catch { /* 读者占用：交给调用方的重试 */ }
+    // 同名隔离位可能是更早一轮留下的：先尽力清掉，给这次 rename 让位。
+    try { await unlink(target + '.superseded-wal') } catch { /* 不存在或被占用：下面 rename 会给出结论 */ }
+    try {
+      await rename(target + '-wal', target + '.superseded-wal')
+    } catch { /* 读者占用等：由下面的判据决定是否让调用方重试 */ }
   }
   if (strayWalBlocks(target)) return true
   try { await unlink(target + '-shm') } catch { /* 占用或本来就没有：无害 */ }
@@ -141,16 +156,47 @@ export async function discardSupersededWal(target: string): Promise<boolean> {
 }
 
 /**
- * 扫掉上一次中断留下的旁文件/半成品：`.stage_src`/`.stage_wal`/`.decrypt_tmp`
- * 与**非空 `-wal`**（顺手清 `-shm`）。真正的解密产物一个都不匹配。
+ * 把隔离的上一代 WAL 放回原位（换代彻底失败时的回滚口）。
  *
- * 为什么启动时顺手清 WAL：它的成因是一次没干净收尾的会话（见模块头），而启动这一刻本进程
- * 还没读过任何快照 ⇒ 白捡一次自愈。不清的话，那个库要等到它**下一次换代**才恢复
- * —— 常年不改的分片就一直读不了。
+ * 只在目标位置没有**非空** `-wal` 时动手：新 WAL 一旦有帧就代表新一代已经开始写，
+ * 覆盖回去只会制造第二个「配错主文件」的现场。空壳 `-wal`（≤32B、无帧）先删掉再 rename
+ * （Windows 的 rename 不允许覆盖已存在的文件）。整体 best-effort，不抛错 ——
+ * 回滚失败不该掩盖调用方的原始错误。
+ * @param target - 快照主文件路径。
+ */
+export async function restoreSupersededWal(target: string): Promise<void> {
+  const stash = target + '.superseded-wal'
+  try {
+    if (strayWalBlocks(target)) return
+    try { await unlink(target + '-wal') } catch { /* 空壳或不存在 */ }
+    await rename(stash, target + '-wal')
+  } catch { /* 隔离位不存在 / 被占用：回滚是尽力而为 */ }
+}
+
+/**
+ * 删除隔离位（`<target>.superseded-wal` / `<target>.superseded-shm`），best-effort。
+ *
+ * 用在确认新快照已稳定、上一代不再需要回滚之后；当前由对账/维护路径按需调用。
+ * @param target - 快照主文件路径。
+ */
+export async function clearSupersededWal(target: string): Promise<void> {
+  try { await unlink(target + '.superseded-wal') } catch { /* 不存在或被占用 */ }
+  try { await unlink(target + '.superseded-shm') } catch { /* 不存在或被占用 */ }
+}
+
+/**
+ * 扫掉上一次中断留下的旁文件/半成品：`.stage_src`/`.stage_wal`/`.decrypt_tmp`/
+ * `.decrypt_src`/`.decrypt_wal`、**≤32B 的空 `-wal`** 与所有 `-shm`。
+ * 真正的解密产物一个都不匹配。
+ *
+ * **非空 `-wal` 一律保留**：它可能是主文件撕裂时唯一能自愈的页来源（见模块头），
+ * 交给 `snapshot-reconcile.ts` 做 quick_check + checkpoint / 隔离。
+ * `.superseded-wal` 同样不在这里删 —— 它是换代时的回滚位，由对账路径负责隔离或
+ * `clearSupersededWal` 在确认稳定后清理。
  * @param root - 解密快照根目录。
  */
 export async function cleanStaleSnapshotLeftovers(root: string): Promise<void> {
-  const suffixes = ['.stage_src', '.stage_wal', '.decrypt_tmp']
+  const suffixes = ['.stage_src', '.stage_wal', '.decrypt_tmp', '.decrypt_src', '.decrypt_wal']
   async function walk(dir: string): Promise<void> {
     try {
       const entries = await readdir(dir, { withFileTypes: true })
@@ -161,12 +207,14 @@ export async function cleanStaleSnapshotLeftovers(root: string): Promise<void> {
           continue
         }
         const isWal = entry.name.endsWith('.db-wal')
-        if (!suffixes.some(s => entry.name.endsWith(s)) && !isWal && !entry.name.endsWith('.db-shm')) continue
+        const isShm = entry.name.endsWith('.db-shm')
+        if (!suffixes.some(s => entry.name.endsWith(s)) && !isWal && !isShm) continue
         if (isWal) {
           // ≤32B 的空 WAL 只是个头（SQLite 本来就不认它有帧，读路径自己也会建出来）。
+          // 非空 WAL 里可能有主文件缺失的页 —— 这里绝不删，留给 reconcile。
           let size = 0
           try { size = (await stat(p)).size } catch { /* 刚被别处删掉 */ }
-          if (size <= WAL_HEADER_SZ) continue
+          if (size > WAL_HEADER_SZ) continue
         }
         try {
           await unlink(p)

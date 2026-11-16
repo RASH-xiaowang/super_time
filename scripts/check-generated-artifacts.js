@@ -28,7 +28,7 @@ const PKG_ROOT = path.join(ROOT, 'src', 'backend', 'wechat-data');
 const LIB_ROOT = path.join(PKG_ROOT, 'lib');
 const TYPES_ROOT = path.join(LIB_ROOT, 'types');
 const TYPES_CONFIG = path.join(PKG_ROOT, 'tsconfig.types.json');
-const BACKEND_PATHS = ['index.js', 'net/fetch-retry.js', 'net/rpa-media.js'];
+const BACKEND_PATHS = ['index.js', 'net/fetch-retry.js', 'net/rpa-media.js', 'net/message-webhook.js'];
 const MAX_REPORTED_DIFFS = 60;
 
 function parseMode(argv) {

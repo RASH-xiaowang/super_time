@@ -35,7 +35,11 @@ const features = requireCjs(join(ROOT, 'src', 'license', 'features.js')) as Feat
 const service = requireCjs(join(ROOT, 'src', 'license', 'service.js')) as Service
 
 function remoteMethods(): string[] {
-  return [...new Set([...gatewaySource().matchAll(/@Remote\('([A-Za-z0-9_]+)'\)/g)].map((match) => match[1]))]
+  return [...new Set(
+    [...gatewaySource().matchAll(/@Remote\('([A-Za-z0-9_]+)'\)/g)]
+      .map((match) => match[1])
+      .filter((name): name is string => Boolean(name)),
+  )]
 }
 
 describe('License 功能授权目录', () => {

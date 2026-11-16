@@ -11,9 +11,11 @@ import { clickableKey } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { MediaViewer } from '../media-viewer/MediaViewer.tsx'
 import { recallImage, rememberImage } from '../image-cache.ts'
+import { useKeepAliveActive } from './keep-alive.tsx'
 import { CardFoot } from './chats-card-foot.tsx'
 import { ImageTextActions } from './chats-ocr.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, imageOriginalFailureText } from './chats-support.tsx'
+import { StickerImage, StickerPlaceholder } from './chats-sticker.tsx'
 import { isEnterpriseWechatUser, withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
@@ -173,8 +175,14 @@ export function MessageThumb({
   // 图片组与单图共用同一份消息图片内存缓存：滚出虚拟窗口再回来不重新读盘/解码。
   const [src, setSrc] = useState<string | null>(() => recallImage(username, localId)?.url ?? null)
   const [err, setErr] = useState<string | null>(null)
+  // 保活面板切走后仍在 DOM 里：释放组件手里的 data URL，只留缓存 key（见下方 effect）。
+  const keepAliveActive = useKeepAliveActive()
   useEffect(() => {
     let cancelled = false
+    if (!keepAliveActive) {
+      setSrc(null)
+      return () => { cancelled = true }
+    }
     const cached = recallImage(username, localId)
     setSrc(cached?.url ?? null)
     setErr(null)
@@ -191,7 +199,7 @@ export function MessageThumb({
       })
       .catch(() => { if (!cancelled) setErr('图片暂不可用') })
     return () => { cancelled = true }
-  }, [username, localId])
+  }, [username, localId, keepAliveActive])
   useEffect(() => { onSource?.(src) }, [onSource, src])
   if (err) {
     return <span className={cssrows.msgImageGridEmpty} title="图片暂不可用"><IconImage /></span>
@@ -651,8 +659,14 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   const [openErr, setOpenErr] = useState<string | null>(null)
   const [videoPath, setVideoPath] = useState<string | null>(null)
   const videoSave = useMediaSaveTask()
+  const keepAliveActive = useKeepAliveActive()
   useEffect(() => {
     let cancelled = false
+    if (!keepAliveActive) {
+      // 封面是 data URL：隐藏面板不保留，切回来按需重取。
+      setCover(null)
+      return () => { cancelled = true }
+    }
     apiGetVideoInfo({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
@@ -663,7 +677,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
       })
       .catch(() => { if (!cancelled) setVErr('视频暂不可用') })
     return () => { cancelled = true }
-  }, [selfName, m.localId])
+  }, [selfName, m.localId, keepAliveActive])
   const durSec = typeof m.rich?.durationSec === 'number' ? m.rich.durationSec : 0
   const durText = durSec > 0 ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}` : ''
   const openVideo = (): void => {
@@ -862,8 +876,16 @@ export function MessageImage({ m, selfName, onOpen }: {
   const [fetching, setFetching] = useState(false)
   const [origNote, setOrigNote] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // 保活面板隐藏时释放 data URL（缓存 key 还在，切回来重新取/命中缓存）。
+  const keepAliveActive = useKeepAliveActive()
   useEffect(() => {
     let cancelled = false
+    if (!keepAliveActive) {
+      setSrc(null)
+      setImgErr(null)
+      setLoaded(false)
+      return () => { cancelled = true }
+    }
     // 命中内存缓存：一个请求都不发（nonce 变化 = 用户点了「取原图」，那一次必须重取）
     const hit = recallImage(selfName, m.localId)
     if (hit !== undefined && nonce === 0) {
@@ -890,7 +912,7 @@ export function MessageImage({ m, selfName, onOpen }: {
       })
       .catch(() => { if (!cancelled) setImgErr('图片暂不可用') })
     return () => { cancelled = true }
-  }, [selfName, m.localId, nonce])
+  }, [selfName, m.localId, nonce, keepAliveActive])
 
   useEffect(() => {
     if (origNote === null) return
@@ -944,7 +966,7 @@ export function MessageImage({ m, selfName, onOpen }: {
           data-loaded={loaded ? '1' : undefined}
           onLoad={() => { setLoaded(true) }}
         />
-        <div className={cssrows.msgImageTools}>
+        <div className={css.msgImageTools}>
           {fetching
             ? <span>正在取原图…</span>
             : <button type="button" className={cssrows.msgImageToolBtn} onClick={(e) => { e.stopPropagation(); void getOriginal() }}>取原图</button>}
@@ -963,9 +985,14 @@ export function MessageImage({ m, selfName, onOpen }: {
 export function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?: string; emojiUrl?: string }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const keepAliveActive = useKeepAliveActive()
   const safeLabel = label && !/^[0-9a-f]{32}$/i.test(label) ? label : '表情'
   useEffect(() => {
     let cancelled = false
+    if (!keepAliveActive) {
+      setSrc(null)
+      return () => { cancelled = true }
+    }
     if (!md5 || !/^[0-9a-f]{32}$/i.test(md5)) {
       setSrc(null)
       setErr('表情不可用')
@@ -981,19 +1008,13 @@ export function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?:
       })
       .catch(() => { if (!cancelled) setErr('表情不可用') })
     return () => { cancelled = true }
-  }, [md5, emojiUrl])
-  if (src) {
-    return (
-      <div className={cssrows.msgSticker} title={safeLabel}>
-        <img className={cssrows.msgStickerImg} src={src} alt={safeLabel} loading="lazy" decoding="async" />
-      </div>
-    )
-  }
+  }, [md5, emojiUrl, keepAliveActive])
+  if (src) return <StickerImage src={src} label={safeLabel} />
+  // 取图期间就占住表情的行高：芯片只有几十像素，等图到了再涨 100px 会把下一行压住。
+  if (!err) return <StickerPlaceholder />
   return (
     <div className={css.msgBubble}>
-      {err
-        ? <span className={cssrows.msgEmojiChip} title="表情">表情</span>
-        : <span className={cssrows.msgEmojiChip} data-loading="true" aria-hidden="true" />}
+      <span className={cssrows.msgEmojiChip} title="表情">表情</span>
     </div>
   )
 }

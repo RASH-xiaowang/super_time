@@ -22,10 +22,14 @@ const MEDIA_STORE = 'sns-images'
  * 于是 `wantOriginal` 拦不住它们：一格一旦从 v1 缓存里恢复出这样一张图，
  * `<img>` 解不开 ⇒ 永远显示「图片加载失败」，而错误文案还会指向「本地缓存没找到」。
  * 这类条目没法靠字段补救，只能整体作废让后端重取。
+ *
+ * 2026-11-08 从 2 升到 3：v2 时期前端把「snsImgs 有值」误当成「原图已解析」，
+ * 网格写回的预览图可能未带 `thumb` 或被旧逻辑当成原图命中；这些条目会遮住灯箱回源，
+ * 无法可靠区分。按条目语义变更规则整体失效，避免用户继续看到低清预览。
  */
-const MEDIA_DB_VERSION = 2
+const MEDIA_DB_VERSION = 3
 /** 条目自身的语义版本：读的时候要求 `v >= MEDIA_DB_VERSION`，否则当没有。 */
-const MEDIA_ENTRY_V = 2
+const MEDIA_ENTRY_V = 3
 /**
  * 容量上限（字节），默认 512 MB。
  *
@@ -203,7 +207,19 @@ export async function snsMediaCacheSet(key: string, url: string, thumb = false):
     const db = await openMediaDb()
     await new Promise<void>((resolve) => {
       const tx = db.transaction(MEDIA_STORE, 'readwrite')
-      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now(), v: MEDIA_ENTRY_V, thumb, size: url.length } satisfies MediaEntry, key)
+      const store = tx.objectStore(MEDIA_STORE)
+      const entry = { url, at: Date.now(), v: MEDIA_ENTRY_V, thumb, size: url.length } satisfies MediaEntry
+      if (!thumb) {
+        store.put(entry, key)
+      } else {
+        // 缩略图只能补空位，不能把已经落盘的 v3 原图降级。网格与灯箱可能并发回包，
+        // 没有这道闸时较慢的缩略图会把刚写好的原图覆盖掉，下一次灯箱又只剩预览图。
+        const existing = store.get(key)
+        existing.onsuccess = () => {
+          const old = existing.result as MediaEntry | undefined
+          if (!isCurrent(old) || old?.thumb === true) store.put(entry, key)
+        }
+      }
       tx.oncomplete = () => { resolve() }
       tx.onerror = () => { resolve() }
     })

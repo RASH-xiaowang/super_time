@@ -47,8 +47,16 @@ describe('W2-10.2 组件走攒批', () => {
     expect(avatar, '撤回面板没有把展示名作为 name').toContain('name={it.sender')
   })
 
-  it('签名与语义不变（调用方一行都不用改），所以那处 import 只多不少', () => {
-    expect(support).toContain("import { apiGetAvatar, apiGetMessageFile, apiGetAvatarBatched } from '../api.ts'")
+  it('签名与语义不变（调用方一行都不用改），所以 Avatar 相关导入只多不少', () => {
+    const match = /import\s*\{([^}]+)\}\s*from\s*'\.\.\/api\.ts'/.exec(support)
+    expect(match, '找不到从 ../api.ts 的具名导入').not.toBeNull()
+    const imported = new Set(
+      (match?.[1] ?? '').split(',').map((symbol) => symbol.trim()).filter((symbol) => symbol !== ''),
+    )
+    // 只比较导入符号集合，不比整行文本；允许后续按需增加其它 api 符号。
+    expect([...imported], 'Avatar 的批量与单张入口都必须保留').toEqual(
+      expect.arrayContaining(['apiGetAvatar', 'apiGetAvatarBatched']),
+    )
   })
 
   it('仍然是「只写成功结果，失败写 null」—— 攒批不改变缓存纪律', () => {

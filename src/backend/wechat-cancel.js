@@ -100,6 +100,9 @@ const NON_CANCELLABLE_LONG_CALLS = Object.freeze(new Set([
   'previewBackup',
   'restoreBackup',
   'runSummaryTask',
+  // 2026-11-13：推荐回复走同一条 LLM 长任务窗口（现场 p99 89s），但没有取消槽位 ——
+  // 超时只能记幽灵调用，不能伪装成取消成功。
+  'suggestReplies',
   'suggestKbLinks',
   'summarizeKbFile',
   'syncHandoffTasks',

@@ -183,6 +183,167 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
     runner.dispose()
   })
 
+  it('恢复时发现会话已推进：旧 pending 不生成不投递，下一拍处理最新消息', async () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+      cursor: 'v2:100:1',
+    }).ok).toBe(true)
+    const oldSourceRef = 'ai-reply:wxid_self:wxid_peer:1000:1'
+    const reserved = await reserveReply({
+      targetName: '小王',
+      targetUsername: 'wxid_peer',
+      chatName: '小王',
+      chatUsername: 'wxid_peer',
+      triggeredAt: 1_000_000,
+      sourceRef: oldSourceRef,
+    })
+    await completeReply({ id: reserved.id ?? 0, text: '旧问题回复' })
+    expect(updateChatAiReplyRunState(decrypted, 'wxid_self', 'wxid_peer', {
+      stage: 'saving',
+      recordId: reserved.id,
+      pendingCursor: 'v2:100:1',
+      pendingSourceRef: oldSourceRef,
+      pendingRevision: 1,
+    })).toBe(true)
+
+    const oldMessage = {
+      localId: 1,
+      sortSeq: 100,
+      createTime: 1000,
+      isSender: 0,
+      renderType: 'text',
+      displayText: '旧问题',
+    }
+    const newerMessage = {
+      localId: 2,
+      sortSeq: 200,
+      createTime: 2000,
+      isSender: 0,
+      renderType: 'text',
+      displayText: '新问题',
+    }
+    const listMessagesAtOrBefore = vi.fn(async () => [oldMessage])
+    const listMessagesAfter = vi.fn(async (_talker: string, cursor: string) => (
+      cursor === 'v2:100:1' ? [newerMessage] : []
+    ))
+    const listMessages = vi.fn(async () => [oldMessage, newerMessage])
+    const generate = vi.fn(async () => ({ ok: true, text: '新问题回复' }))
+    const dispatchReply = vi.fn(async () => ({ ok: true }))
+    const runner = createChatAiReplyRunner(deps({
+      listMessages,
+      listMessagesAtOrBefore,
+      listMessagesAfter,
+      generate,
+      dispatchReply,
+    }))
+
+    const recovered = await runner.recover()
+    expect(recovered.recovered).toBe(1)
+    await vi.waitFor(() => expect(runner.pending()).toBe(0))
+    expect(generate).not.toHaveBeenCalled()
+    expect(dispatchReply).not.toHaveBeenCalled()
+    expect(getMessageListRecord(decrypted, reserved.id ?? 0)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('过期'),
+    })
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      stage: 'failed',
+      cursor: 'v2:100:1',
+    })
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').pendingSourceRef)
+      .toBeUndefined()
+
+    await runner.scan()
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(runner.pending()).toBe(0))
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      stage: 'success',
+      cursor: 'v2:200:2',
+    })
+    expect(listMessageListRecords(decrypted).items.some((record) =>
+      record.sourceRef === 'ai-reply:wxid_self:wxid_peer:2000:2')).toBe(true)
+    runner.dispose()
+  })
+
+  it('恢复补投前发现新消息时停止旧回复，不调用下游', async () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+      cursor: 'v2:100:1',
+    }).ok).toBe(true)
+    const sourceRef = 'ai-reply:wxid_self:wxid_peer:1000:1'
+    const reserved = await reserveReply({
+      targetName: '小王',
+      targetUsername: 'wxid_peer',
+      chatName: '小王',
+      chatUsername: 'wxid_peer',
+      triggeredAt: 1_000_000,
+      sourceRef,
+    })
+    await completeReply({ id: reserved.id ?? 0, text: '旧问题回复' })
+    expect(updateChatAiReplyRunState(decrypted, 'wxid_self', 'wxid_peer', {
+      stage: 'saving',
+      recordId: reserved.id,
+      pendingCursor: 'v2:100:1',
+      pendingSourceRef: sourceRef,
+      pendingRevision: 1,
+    })).toBe(true)
+
+    const oldMessage = {
+      localId: 1,
+      sortSeq: 100,
+      createTime: 1000,
+      isSender: 0,
+      renderType: 'text',
+      displayText: '旧问题',
+    }
+    const newerMessage = {
+      localId: 2,
+      sortSeq: 200,
+      createTime: 2000,
+      isSender: 0,
+      renderType: 'text',
+      displayText: '新问题',
+    }
+    let afterCalls = 0
+    const listMessagesAfter = vi.fn(async () => {
+      afterCalls += 1
+      return afterCalls === 1 ? [] : [newerMessage]
+    })
+    const listMessagesAtOrBefore = vi.fn(async () => [oldMessage])
+    const generate = vi.fn(async () => ({ ok: true, text: '不应生成' }))
+    const dispatchReply = vi.fn(async () => ({ ok: true }))
+    const runner = createChatAiReplyRunner(deps({
+      listMessagesAtOrBefore,
+      listMessagesAfter,
+      generate,
+      dispatchReply,
+    }))
+
+    const recovered = await runner.recover()
+    expect(recovered.recovered).toBe(1)
+    await vi.waitFor(() => expect(runner.pending()).toBe(0))
+    expect(afterCalls).toBe(2)
+    expect(generate).not.toHaveBeenCalled()
+    expect(dispatchReply).not.toHaveBeenCalled()
+    expect(getMessageListRecord(decrypted, reserved.id ?? 0)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('过期'),
+    })
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      stage: 'failed',
+      cursor: 'v2:100:1',
+    })
+    runner.dispose()
+  })
+
   it('故障注入：认领后崩溃的 dispatching 只收口，不自动重发', async () => {
     expect(saveChatAiReplySetting(decrypted, {
       accountKey: 'wxid_self',
@@ -461,7 +622,7 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
     { stage: 'saving' as const, text: '已生成但未投递', generateCalls: 0, dispatchCalls: 1, httpCalls: 1, final: 'success' },
     { stage: 'dispatching' as const, text: '已认领但未确认', generateCalls: 0, dispatchCalls: 0, httpCalls: 0, final: 'failed' },
   ])(
-    '重建 runner 的崩溃矩阵：$stage 不越过 pending 锚点，且二次恢复不重复生成/出网',
+    '重建 runner 的崩溃矩阵：$stage 同一 pending 二次恢复不重复生成/出网',
     async ({ stage, text, generateCalls, dispatchCalls, httpCalls, final }) => {
       expect(saveChatAiReplySetting(decrypted, {
         accountKey: 'wxid_self',
@@ -521,7 +682,6 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
       const crashDeps = deps({
         listMessages: async () => [
           { localId: 1, sortSeq: 100, createTime: 1000, isSender: 0, renderType: 'text', displayText: '崩溃前消息' },
-          { localId: 2, sortSeq: 200, createTime: 2000, isSender: 0, renderType: 'text', displayText: '不得越过' },
         ],
         generate: async () => {
           generated += 1
@@ -555,7 +715,7 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
     },
   )
 
-  it('同一会话存在多条新消息时先处理最早一条，不越过未完成记录', async () => {
+  it('同一会话存在多条新消息时只合并回复最新一条，不逐条补答旧问题', async () => {
     expect(saveChatAiReplySetting(decrypted, {
       accountKey: 'wxid_self',
       chatUsername: 'wxid_peer',
@@ -569,19 +729,12 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
       { localId: 2, sortSeq: 200, createTime: 2000, isSender: 0, renderType: 'text', displayText: '第二条' },
     ]
     const reserveReplySpy = vi.fn(reserveReply)
+    const generate = vi.fn(async () => ({ ok: true, text: '合并回复' }))
     const runner = createChatAiReplyRunner(deps({
       listMessages: async () => messages,
       reserveReply: reserveReplySpy,
+      generate,
     }))
-    await runner.scan()
-    await vi.waitFor(() => {
-      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
-        stage: 'success',
-        cursor: 'v2:100:1',
-      })
-    })
-    expect(reserveReplySpy.mock.calls[0]?.[0].sourceRef)
-      .toBe('ai-reply:wxid_self:wxid_peer:1000:1')
     await runner.scan()
     await vi.waitFor(() => {
       expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
@@ -589,7 +742,12 @@ describe('AI 回复运行器 · 故障恢复与水位', () => {
         cursor: 'v2:200:2',
       })
     })
-    expect(reserveReplySpy).toHaveBeenCalledTimes(2)
+    expect(reserveReplySpy.mock.calls[0]?.[0].sourceRef)
+      .toBe('ai-reply:wxid_self:wxid_peer:2000:2')
+    expect(generate).toHaveBeenCalledTimes(1)
+    await runner.scan()
+    expect(reserveReplySpy).toHaveBeenCalledTimes(1)
+    expect(generate).toHaveBeenCalledTimes(1)
     runner.dispose()
   })
 

@@ -108,6 +108,11 @@ export function createAskRunChat(deps: {
     if (finish.kind === 'aborted') {
       throw new Error(`模型调用已中止：${finish.failure.message}`)
     }
+    // 输出被上限截断时正文会戛然而止；至少要在诊断日志里留下证据，
+    // 否则只能靠用户肉眼发现「回答写到一半」。
+    if (finish.kind === 'max-tokens') {
+      console.warn(`[ask] 模型输出达到 max_tokens=${String(maxTokens)} 被截断（${String(acc.length)} 字符）`)
+    }
     // 厂商不支持 SSE 时 stream() 只 yield 一次完整 text-delta，上面已覆盖；
     // 若一个 delta 都没拿到（极端情况），最后补发一次完整文本，保证界面不会空着。
     if (onDelta && !emitted) {

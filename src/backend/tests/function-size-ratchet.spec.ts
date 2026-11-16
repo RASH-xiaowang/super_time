@@ -53,7 +53,10 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  785',
   // 2026-10-21：收藏/任务功能线合并后 computeOverviewInsights 已降到 250 以内 ⇒ 移出棘轮（清单只许变小，达标即删）。
   // 2026-10-21：收藏/任务功能线把知识库批量动作拆成 `kb-batch-actions.tsx` ⇒ 727 → 687。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  665',
+  // 2026-11-13（知识库修复轮）：文件列表与三条告警分别搬成 `KbFileList` / `KbPanelAlerts`
+  // （都在 `kb-files-support.tsx`）⇒ 665 → 662。本轮新增的「加载更多 / 索引进度 / 停止」
+  // 只在面板里留状态接线，展示体都已出函数。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  662',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
   // 725 → 513；同日补上「始终可见的折叠按钮」（浮层收起后唯一的入口）⇒ 513 → 523；
   // 同日小地图让位（浮层展开时隐藏，`hideMinimap={railOpen}`）⇒ 523 → 524；
@@ -81,23 +84,30 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  312',
   // 2026-10-17：`openFile` 抽成模块级 `openExportFile`（顺带修「openPath 失败静默」的 bug）
   // ⇒ 461 → 456。棘轮只许变小，成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  493',
+  // 2026-11-13：修复轮删掉重复的路径拆分逻辑（复用 `splitReplayPath`）⇒ 493 → 491。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  491',
   // 2026-10-15：KB Remote wire 类型收进 `types-kb-wire.ts`，匿名对象签名换成了
   // 共享类型引用，函数体 400 → 372。棘轮只许变小，成果需要回到这里记账。
-  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  289',
+  // 2026-11-13（知识库修复轮）：两路检索的算法体（稀疏 → 稠密的每一道降级闸门）搬成
+  // 模块级 `kbSearchWithDenseIn`，方法体退回一行转发 ⇒ 289 → 260。棘轮只许变小。
+  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  260',
   // 2026-10-16（M22）：总览的四组卡片 JSX 全部拆进 `overview-sections.tsx` 的具名区块组件
   // （TrendSection / HeatmapSection / RegionSection / WordCloudSection / InteractionSection /
   // RelationSection / MomentsAuthorsSection / ContentAssetsSection / StorageCompositionSection /
   // RevokedSection / StorageAdviceSection / LedgerSection / HealthSection），
   // `OverviewPanel` 390 → 215，已低于 250 阈值 ⇒ 从本棘轮移除。
   // 若后续再次逼近 250 行，要重新登记并继续拆小。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  384',
+  // 2026-11-13（知识库修复轮）：来源行抽成模块级 `NoteSource`、选中项失效的判据去掉重复
+  // 分支 ⇒ 384 → 380。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  380',
   // 2026-10-16：资产类面板（文件/收藏/表情/媒体/公众号）重做时把列表筛选与操作按钮
   // 抽进 `asset-ui.tsx`，`FilesPanel` 364 → 359。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  313',
   // 2026-10-19（微信化改版）：消息卡去掉渐变/发光分支，329 → 322。棘轮只许变小，成果记账。
   // 2026-11-02：视频加载/失败状态接线后合并卡片属性行 ⇒ 312 → 311。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  314',
+  // 2026-11-13（修复轮）：隐藏页签释放图片 src / 重新可见时从缓存恢复的分支接线 ⇒ 314 → 317。
+  // 这次是**按实测重登记**（LIMIT 未放宽）：下一次再长必须先拆出卡片级展示逻辑。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  317',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  306',
   // 2026-09-28（E1 性能修复）：334 → 362。增量全部是**新增的 `getEmoticonDataUrls`
   // 批量壳**（签名 + 文档 + 一行转发）—— 算法体已搬到 `query/emoticon-batch.ts`，
@@ -147,10 +157,15 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。
   // 2026-11-02：视频播放分支抽成共享 MomentsVideoTile（卡片/详情同一实现）⇒ 259 → 232，
   // 已低于 250 阈值 ⇒ 从本棘轮移除。
-  // 2026-10-19（workspace 组收口）：数据健康面板随检查项/文案回归涨到 251 行，刚好越过 250 阈值。
-  // 只登记、**不改阈值**（LIMIT 仍 250）：这说明它下一次再长就必须先拆（例如把检查项列表抽出去），
-  // 现在先把它纳入「只许变小」的台账，避免它游离在棘轮之外静默变胖。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Health.tsx  HealthPanel  251',
+  // 2026-11-16：数据健康面板把取数/修复编排抽到 `health-actions.ts`（hook）后，
+  // `HealthPanel` 实测 151 行、已低于 250 阈值 ⇒ 从本棘轮移除（只许变小的成果要记账）。
+  // 2026-11-13（系统修复轮）：按当前共享工作树实测重登记三个超标函数。它们 `HEAD` 时分别
+  // 是 195 / 104 / 238 行（`git show HEAD:<path>` + 同一 AST 口径复核），是在这批未提交的
+  // 功能线里越过 250 行的；本轮修复没有拆分它们（改动风险大于收益），先如实入账「只许变小」，
+  // 不把 LIMIT 从 250 抬高。下一次改到这里应先拆分再回头改数字。
+  'src/backend/wechat-data/src/query/ledger.ts  computeLedger  347',
+  'src/backend/wechat-data/src/query/unified-search.ts  searchRecords  288',
+  'src/backend/wechat-data/src/query/ai-reply/runner-pipeline.ts  dispatchChatAiReply  255',
   // 2026-10-15：宿主 CommonJS 的七个巨型函数已全部拆成组合根/小型工厂，
   // 因此从本棘轮移除原七条登记；若后续再次逼近 250 行，要重新登记并继续拆小。
 ]

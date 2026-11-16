@@ -37,6 +37,7 @@ import type { KbHit } from '../types.ts'
 // 这样 `kb-files.ts → kb-vectors.ts`（删除级联）与 `kb-vectors.ts → kb-files.ts`（读语料）
 // 之间**不会形成环** —— 依赖单向：两边都只指向 kb-paths。
 import { kbFilesDbPath, kbVectorsDbPath } from './kb-paths.ts'
+import { liveChunkAlive, pruneDeadChunkGroups } from './kb/live-chunks.ts'
 export { KB_VECTORS_DB, kbVectorsDbPath } from './kb-paths.ts'
 import { yieldToLoop } from './search.ts'
 import {
@@ -72,9 +73,14 @@ export const KB_VECTOR_SCHEMA_VERSION = '1'
  *   · `schema-mismatch` 表结构升过版 ⇒ 全表都要重建（不只是本库）；
  *   · `no-model` 调用方没给出「当前用哪个模型」⇒ **无法背书溯源**，按不可用处理。
  *     这条存在的原因：以前记账名是写死的 `'default'`，等于没有溯源，
- *     于是「换模型」这件事在库里根本不留痕迹。
+ *     于是「换模型」这件事在库里根本不留痕迹；
+ *   · `incomplete` 索引建过、但本库当前可索引的块比已入库的向量多
+ *     ⇒ 新增/恢复/重新打开 RAG 的内容还没补索引。**只补缺口**，不必重算全部。
+ *
+ * `rows > 应有块数` 不算未就绪：删除文件/关掉 RAG 后残留的向量既进不了检索结果
+ *（读路径会 JOIN 回 `kb_chunks`/`kb_files` 再验一次），也不值得为了清它们强制重建。
  */
-export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model'
+export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model' | 'incomplete'
 
 /** 向量库状态（**按库**：`rows` 是「这个库里有多少块已入库」）。 */
 export interface KbVectorIndexStatus {
@@ -195,8 +201,17 @@ function invalidateKbStatusCache(decryptedDir: string, kbId: number): void {
   STATUS_CACHE.delete(kbVectorsDbPath(decryptedDir) + '#' + kbId)
 }
 
-/** 就绪判定的六个条件（顺序即优先级：先说结构、再说有没有、最后说模型对不对）。 */
-function staleReasonOf(rows: number, dim: number, ver: string, models: string[], current: string): KbVectorStaleReason {
+/**
+ * 就绪判定的六个条件（顺序即优先级：先说结构、再说有没有、最后说模型与覆盖）。
+ * @param rows - 本库已入库的向量行数。
+ * @param expected - 本库当前**应有**的块数（`include_in_rag = 1` 的分块）。
+ * @param dim - 本库行级维度（不读全局 meta，见 `readKbVectorStatus`）。
+ * @param ver - meta 里的 schema 版本。
+ * @param models - 本库行级出现过的模型名。
+ * @param current - 当前解析出的嵌入模型名。
+ * @returns 未就绪原因；空串 = 就绪。
+ */
+function staleReasonOf(rows: number, expected: number, dim: number, ver: string, models: string[], current: string): KbVectorStaleReason {
   if (ver !== KB_VECTOR_SCHEMA_VERSION) return 'schema-mismatch'
   if (rows === 0) return 'no-index'
   if (dim <= 0) return 'no-dim'
@@ -204,7 +219,36 @@ function staleReasonOf(rows: number, dim: number, ver: string, models: string[],
   // 必须**恰好一个**模型且等于当前：两个说明库里混过批次（半重建），
   // 不等于当前说明换过模型 —— 两者都不能拿去算余弦。
   if (models.length !== 1 || models[0] !== current) return 'model-mismatch'
+  // 覆盖率放在模型之后：换模型要整体重算，比「补几块」更紧急，文案也不该被后者盖住。
+  if (rows < expected) return 'incomplete'
   return ''
+}
+
+/**
+ * 本库当前**应该**有多少块参与向量检索。
+ *
+ * 与建库语料 SQL 完全同源（`kb_chunks ⋈ kb_files WHERE include_in_rag=1`）：
+ * 只数会被送进 embedding 的块，才算「应然」。读不到文件库时返回 0（不阻断状态读取，
+ * 此时 rows>0 仍按已建处理；真正的读失败由文件面板自己的 readError 报）。
+ * @param decryptedDir - 解密数据根。
+ * @param kbId - 目标库。
+ * @returns 应有块数。
+ */
+function countIndexableChunks(decryptedDir: string, kbId: number): number {
+  try {
+    const db = new DatabaseSync(kbFilesDbPath(decryptedDir), { readOnly: true })
+    try {
+      const row = db.prepare(
+        'SELECT COUNT(*) AS c FROM kb_chunks c JOIN kb_files f ON f.id = c.file_id '
+        + 'WHERE c.kb_id = ? AND f.include_in_rag = 1',
+      ).get(kbId) as { c?: number } | undefined
+      return Number(row?.c ?? 0) || 0
+    } finally {
+      db.close()
+    }
+  } catch {
+    return 0
+  }
 }
 
 /**
@@ -230,8 +274,6 @@ function readKbVectorStatus(decryptedDir: string, kbId: number, current: string)
           meta.set(String(r.key), String(r.value ?? ''))
         }
       } catch { /* meta 表缺失/损坏：按「什么都没写过」处理 ⇒ 版本不符 ⇒ 未就绪 */ }
-      const dim = Number(meta.get('dim') || 0)
-      const model = meta.get('model') ?? ''
       const built = meta.get('built_at') || null
       const ver = meta.get('schema_version') ?? ''
       // 按库 COUNT（走 idx_kb_vectors_kb）。**不用** meta 里的全局 rows：
@@ -246,7 +288,21 @@ function readKbVectorStatus(decryptedDir: string, kbId: number, current: string)
         models = (db.prepare('SELECT DISTINCT model FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ?').all(kbId) as Array<{ model: unknown }>)
           .map(r => String(r.model ?? '')).sort()
       } catch { models = [] }
-      const reason = staleReasonOf(rows, dim, ver, models, current)
+      /**
+       * 维度也按库取，**不读全局 `meta.dim`**：那个键是「最近一次构建」写的单值，
+       * 甲库 1024 维、乙库 512 维时，后建的会把先建的判成「维度不符」，
+       * 两边来回重建永远好不了。行级维度恰好一个且为正才算数；混维度按 0 处理 ⇒ 逼重建。
+       */
+      let dims: number[] = []
+      try {
+        dims = (db.prepare('SELECT DISTINCT dim FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ?').all(kbId) as Array<{ dim: unknown }>)
+          .map(r => Number(r.dim ?? 0)).filter(n => Number.isFinite(n) && n > 0)
+      } catch { dims = [] }
+      const dim = dims.length === 1 && dims[0] !== undefined ? dims[0] : 0
+      // 展示用的模型名同样按库取；没有行级溯源（老库）才退回 meta 的最近一次构建值。
+      const model = models.length === 1 && models[0] !== undefined ? models[0] : (meta.get('model') ?? '')
+      const expected = countIndexableChunks(decryptedDir, kbId)
+      const reason = staleReasonOf(rows, expected, dim, ver, models, current)
       return {
         exists: true, rows, dim, model, models, current, staleReason: reason, built_at: built, ready: reason === '',
       }
@@ -273,7 +329,12 @@ export function kbVectorIndexStatus(decryptedDir: string, kbId: number, current 
   const kb = Number.isFinite(kbId) && kbId > 0 ? Math.trunc(kbId) : 0
   const p = kbVectorsDbPath(decryptedDir)
   const cur = String(current ?? '')
-  const sig = statSig(p)
+  /**
+   * 指纹必须**同时**覆盖向量库与文件库：就绪判定现在还要数「应有块数」，
+   * 新增/删除文件、解析完成都会改文件库而不改向量库。只拿向量库做指纹时，
+   * 缓存会把「新增了文件」的旧状态一直当成就绪。
+   */
+  const sig = String(statSig(p)) + '|' + String(statSig(kbFilesDbPath(decryptedDir)))
   const key = p + '#' + kb + '#' + cur
   const hit = STATUS_CACHE.get(key)
   if (hit && hit.sig === sig) return { ...hit.status, models: [...hit.status.models] }
@@ -451,6 +512,22 @@ async function runBuildKbVectorIndex(
     const wipeKbAll = !wipeTable && opts.force === true
     const wipeKbForeign = !wipeTable && opts.force !== true
       && kbRows > 0 && (kbModels.size !== 1 || !kbModels.has(opts.model))
+    /**
+     * 三种作废的公共执行体。
+     *
+     * **up-to-date 早退分支也要走它**：旧实现 pendingCount===0 时只写 meta 就返回，
+     * 于是「force 重建 / 换模型后重算 / 结构升级」在“当前模型的块都已入库”时
+     * 永远清不掉外来行与孤儿行，状态卡在 model-mismatch，构建却一直报 up-to-date。
+     */
+    const wipeStaleRows = (): void => {
+      if (wipeTable) {
+        db.exec('DELETE FROM ' + KB_VECTORS_TABLE)
+      } else if (wipeKbAll) {
+        db.prepare('DELETE FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ?').run(kbId)
+      } else if (wipeKbForeign) {
+        db.prepare('DELETE FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ? AND model <> ?').run(kbId, opts.model)
+      }
+    }
     const done = new Set<number>()
     if (!wipeTable && !wipeKbAll) {
       /**
@@ -498,6 +575,8 @@ async function runBuildKbVectorIndex(
       // 一行 meta 也进事务：省得「版本写了、时间没写」各占一半（派生数据也值得原子落地）
       db.exec('BEGIN')
       try {
+        // 先作废再记账：force / 换模型 / 结构升级即使没有待算的块，也要把旧行清掉。
+        wipeStaleRows()
         writeMeta(db, 'schema_version', KB_VECTOR_SCHEMA_VERSION)
         writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
         writeMeta(db, 'rows', String((db.prepare('SELECT COUNT(*) AS c FROM ' + KB_VECTORS_TABLE).get() as { c: number }).c))
@@ -520,6 +599,10 @@ async function runBuildKbVectorIndex(
     const texts = [...groups.keys()]
     const batchSize = clampInt(opts.batchSize, 1, 1, 256)
     const concurrency = clampInt(opts.concurrency, 1, 1, 16)
+    // 构建期间的**实时**语料复核（判据见 `kb/live-chunks.ts`）。
+    // 连接开在这里、关在下面的 finally：`query-db-lifetime` 棘轮要求 open/close 同函数配对。
+    const liveDb = new DatabaseSync(src, { readOnly: true })
+    const live = liveChunkAlive(liveDb, kbId)
     let next = 0
     let failure: unknown = null
     /** W3-11.5：被取消（用户点了「停止」）。此时一行都没写。 */
@@ -538,7 +621,24 @@ async function runBuildKbVectorIndex(
         const start = next
         next += batchSize
         if (start >= texts.length) return
-        const batch = texts.slice(start, start + batchSize)
+        const claimed = texts.slice(start, start + batchSize)
+        // 复核：只把「此刻仍然存在且仍参与 RAG」的块留在批次里。
+        const batch: string[] = []
+        for (const key of claimed) {
+          const groupRows = groups.get(key)
+          if (groupRows === undefined) continue
+          const kept = groupRows.filter((c) => live(c.chunkId))
+          if (kept.length === 0) {
+            groups.delete(key)
+            continue
+          }
+          groups.set(key, kept)
+          batch.push(key)
+        }
+        if (batch.length === 0) {
+          await yieldToLoop()
+          continue
+        }
         let vecs: number[][]
         // 计数在**发起之前**：`embed_calls` 的语义是「发出了多少次请求」，放在 await 之后
         // 会让失败那次漏报（错误路径的口径就错了）。
@@ -570,7 +670,17 @@ async function runBuildKbVectorIndex(
       }
     }
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()))
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()))
+      /**
+       * 收尾再复核一次：最后一批 embed 的 await 期间仍可能删文件。
+       * 这一步只改 `groups`（阶段二的写入来源），不发请求 —— 保证写进向量库的
+       * 每一行在**提交这一刻**仍属于一个存在且参与 RAG 的块。
+       */
+      if (!canceled && failure === null) pruneDeadChunkGroups(groups, live)
+    } finally {
+      liveDb.close()
+    }
     // W3-11.5：取消不是失败 —— 阶段二没开，旧索引一行未动。
     if (canceled) {
       return { status: 'cancelled', rows: kbRows, embedded: 0, embed_calls: embedCalls, elapsed_ms: Date.now() - started, message: '已停止构建，旧索引保持原样' }
@@ -588,13 +698,7 @@ async function runBuildKbVectorIndex(
     let embedded = 0
     db.exec('BEGIN')
     try {
-      if (wipeTable) {
-        db.exec('DELETE FROM ' + KB_VECTORS_TABLE)
-      } else if (wipeKbAll) {
-        db.prepare('DELETE FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ?').run(kbId)
-      } else if (wipeKbForeign) {
-        db.prepare('DELETE FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ? AND model <> ?').run(kbId, opts.model)
-      }
+      wipeStaleRows()
       for (const [text, v] of vectors) {
         for (const c of groups.get(text) ?? []) {
           ins.run(c.chunkId, kbId, c.fileId, dim, v.blob, v.lo, v.hi, opts.model)
@@ -666,6 +770,7 @@ export async function searchKbDense(
       'no-model': '调用方未提供当前向量模型名，无法判定索引是否可用',
       'model-mismatch': '本库索引由 ' + (status.models.join('/') || '未知') + ' 生成、本次用的是 '
         + (opts.model || '（未指定）') + '，两者不可比，请重建',
+      'incomplete': '本库有新增内容尚未建立向量索引，请补充索引',
     }
     return { hits: [], note: '向量索引不可用：' + why[status.staleReason] }
   }

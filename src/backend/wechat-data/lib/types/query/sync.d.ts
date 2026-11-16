@@ -1,4 +1,5 @@
 export { decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts';
+import { type ShardSig } from './sync-signatures.ts';
 import { fullDecryptFile } from './sync-decrypt.ts';
 export { fullDecryptFile };
 /** Cached raw-dir entries; refreshed when the directory signature changes.
@@ -11,18 +12,6 @@ export { fullDecryptFile };
 export interface DirListing {
     files: string[];
     error?: string;
-}
-/** Per-shard state: raw mtimes of the main db and its wal. */
-/**
- * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
- * 缓存侧早已是 `mtimeNs + size`（`meta.ts` 的 `fileSig`，同口径），
- * 而这里一直只比 `mtimeMs` —— 同毫秒内的写入它**看不见**，`mode` 会误判成 `wal`，
- * 于是那个分片的改动要等下一次变得更多才会被同步到。
- * 现在改成纳秒 + 大小（NTFS 100ns 精度，实测 `statSync(...,{bigint:true})` 与普通 stat 开销无差别）。
- */
-interface ShardSig {
-    main: string;
-    wal: string;
 }
 /**
  * 「这页解对了没有」的判据 —— 只看 SQLite 页 1 头部里**不能被合成**的字段。
@@ -71,6 +60,11 @@ export declare function looksDecrypted(dbPath: string): boolean;
  * @param target - 目标快照文件。
  */
 export declare function atomicReplace(temp: string, target: string): Promise<void>;
+/**
+ * 失败退避 + 日志节流见 `./sync-pacing.ts`，源库签名见 `./sync-signatures.ts`
+ * （两者都因本文件贴着单文件 1000 行硬上限而外提）。这里只留
+ * `forgetFullDecryptCooldown`：测试要能把「退避」与「6 秒 full-decrypt 冷却」分开证伪。
+ */
 /**
  * 只清空 full-decrypt 冷却（测试用）。
  *

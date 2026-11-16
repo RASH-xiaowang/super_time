@@ -12,6 +12,7 @@
  * 原先这些名字在「袋的类型 / 调用点 / 面板的字面量」里各抄一遍，加一件道具要记着改三处，
  * 漏一处不会报错，只会让那一屏少读一个值。现在只有 props 那一份是出处。
  */
+import { useCallback, useEffect, useRef } from 'react'
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
 import { EmptyMaybeSyncing, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
@@ -65,6 +66,9 @@ import { shouldShowEnterpriseBadge } from './session-list.ts'
 import { IdentityName } from './identity.tsx'
 import type { MessageFileSaveTask } from './message-file-save.ts'
 
+/** 消息流距顶部多少像素时自动加载更早消息。 */
+const AUTO_LOAD_OLDER_PX = 120
+
 export interface ChatsViewProps {
   /** Right-click tools (source/info/editors) live outside the state bag. */
   messageTools: ChatsMessageToolsController
@@ -107,9 +111,17 @@ export interface ChatsViewProps {
     personaName: string
     personaPrompt: string
     splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
     onToggle: () => void
     onScanNow: () => void
-    onSavePersona: (input: { name: string; prompt: string; splitReply: boolean }) => Promise<boolean>
+    onSavePersona: (input: {
+      name: string
+      prompt: string
+      splitReply: boolean
+      kbEnabled: boolean
+      kbId: number
+    }) => Promise<boolean>
   }
   /** 会话列表的 AI 回复徽标与筛选；与当前会话的 aiReply 开关分开。 */
   aiReplyFilter: {
@@ -200,6 +212,8 @@ export interface ChatsViewProps {
       openNestedChatlog: (rec: ChatlogRecord) => Promise<void>
       openSession: (s: WechatSession) => Promise<void>
       openSessionAndLocate: (username: string, localId?: number, dayStart?: number) => Promise<void>
+      /** 重新拉取当前会话最新一页：消息流错误条的重试入口。 */
+      reloadCurrent: () => Promise<void>
       pinnedCollapsed: boolean
       pinnedList: readonly WechatSession[]
       pollStatus: string
@@ -251,12 +265,13 @@ function CapNote({ loaded, total }: { loaded: number; total: number }): React.JS
  * 消息区外壳：滚动容器 + 「N 条新消息」浮标（2026-10-18）。
  * 浮标只在用户翻历史且轮询追加了新消息时出现；点击跳回最新，不抢正常阅读的滚动。
  */
-function MsgScrollArea({ scrollRef, newMsgCount, onJump, children, interactionLocked = false }: {
+function MsgScrollArea({ scrollRef, newMsgCount, onJump, children, interactionLocked = false, onScroll }: {
   scrollRef: React.MutableRefObject<HTMLDivElement | null>
   newMsgCount: number
   onJump: () => void
   children: React.ReactNode
   interactionLocked?: boolean
+  onScroll?: React.UIEventHandler<HTMLDivElement>
 }): React.JSX.Element {
   // 捕获阶段只拦点击，不用 pointer-events:none：滚轮和触摸滚动必须保持可用。
   return (
@@ -264,6 +279,7 @@ function MsgScrollArea({ scrollRef, newMsgCount, onJump, children, interactionLo
       <div
         className={cssrows.msgBody}
         ref={scrollRef}
+        onScroll={onScroll}
         data-message-interaction-locked={interactionLocked || undefined}
         onClickCapture={interactionLocked
           ? (event) => {
@@ -544,6 +560,7 @@ interface ChatsMessageStreamProps {
   newMsgCount: number
   jumpToLatest: () => void
   loadMore: () => Promise<void>
+  reloadCurrent: () => Promise<void>
   selectedLocalId: number | null
   suggestionInteractionLocked: boolean
   messagePoster: ChatsPosterController
@@ -556,24 +573,48 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
   const {
     messages, messagesMatchSession, hasMore, msgLoading, msgError, msgItems,
     msgVirtualizer, messageVirtualization, msgScrollRef, msgEndRef, newMsgCount,
-    jumpToLatest, loadMore, selectedLocalId, suggestionInteractionLocked,
+    jumpToLatest, loadMore, reloadCurrent, selectedLocalId, suggestionInteractionLocked,
     messagePoster, renderMsgItem, openMessageAnalysis,
   } = props
+  const previousScrollTopRef = useRef(0)
+  const autoLoadArmedRef = useRef(false)
+  const autoLoadInFlightRef = useRef(false)
+
+  // 切会话时重新布防：首屏是程序化滚到底，不能被当成用户向上翻历史。
+  useEffect(() => {
+    autoLoadArmedRef.current = false
+    previousScrollTopRef.current = msgScrollRef.current?.scrollTop ?? 0
+  }, [messagesMatchSession, msgScrollRef])
+
+  const triggerLoadOlder = useCallback((): void => {
+    if (!hasMore || msgLoading || autoLoadInFlightRef.current) return
+    autoLoadInFlightRef.current = true
+    void loadMore().finally(() => { autoLoadInFlightRef.current = false })
+  }, [hasMore, loadMore, msgLoading])
+
+  const onMessageScroll = useCallback((event: React.UIEvent<HTMLDivElement>): void => {
+    const nextScrollTop = event.currentTarget.scrollTop
+    const previousScrollTop = previousScrollTopRef.current
+    previousScrollTopRef.current = nextScrollTop
+    // 只有用户主动向上滚动过才布防；首屏 pin 到底和加载后的锚定都会向下移动。
+    if (nextScrollTop < previousScrollTop - 1) autoLoadArmedRef.current = true
+    if (!autoLoadArmedRef.current || nextScrollTop > AUTO_LOAD_OLDER_PX) return
+    triggerLoadOlder()
+  }, [triggerLoadOlder])
+
   return (
     <MsgScrollArea
       scrollRef={msgScrollRef}
       newMsgCount={newMsgCount}
       onJump={jumpToLatest}
       interactionLocked={suggestionInteractionLocked}
+      onScroll={onMessageScroll}
     >
       {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
       {!messagesMatchSession && <ListSkeleton rows={8} />}
-      {messagesMatchSession && hasMore && (
-        <button type="button" className={csscards.loadMore} onClick={() => { void loadMore() }}>
-          {msgLoading ? '加载中…' : '加载更多'}
-        </button>
+      {messagesMatchSession && msgError && (
+        <ErrorState message={msgError} onRetry={() => { void reloadCurrent() }} />
       )}
-      {messagesMatchSession && msgError && <ErrorState message={msgError} />}
       {messagesMatchSession && !msgLoading && !msgError && messages.length === 0 && (
         <div className={csscards.msgEmptyState} role="status">
           <div className={csscards.msgEmptyTitle}>暂无可显示的消息</div>
@@ -636,7 +677,7 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
 
 export function ChatsView({ state, batchExport, messageTools, messagePoster, notice, indexProgress, onCancelIndexBuild, onCancelMsgSearch, onBackToList, aiReply, aiReplyFilter, messageFileSave, messageVirtualization }: ChatsViewProps): React.JSX.Element {
   const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
-  dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
+  dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
   // 推荐回复只对单聊成立（群聊“回一句”无意义）；分析读写当前会话，群聊也适用。
   const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
   // 右栏一次只渲染一个内容域。分析优先，避免历史状态残留时两块同时出现。
@@ -755,6 +796,7 @@ export function ChatsView({ state, batchExport, messageTools, messagePoster, not
               newMsgCount={newMsgCount}
               jumpToLatest={jumpToLatest}
               loadMore={loadMore}
+              reloadCurrent={reloadCurrent}
               selectedLocalId={selectedLocalId}
               suggestionInteractionLocked={suggestionInteractionLocked}
               messagePoster={messagePoster}

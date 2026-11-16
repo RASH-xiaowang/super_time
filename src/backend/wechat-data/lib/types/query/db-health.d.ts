@@ -6,6 +6,18 @@ import type { DbHealthSnapshot, DbIntegrityResult } from '../types.ts';
  * @returns the health snapshot.
  */
 export declare function queryDbHealth(decryptedDir: string): DbHealthSnapshot;
+/** 「本机没有这个模块/分词器」的原话 —— 万一 DDL 里没写出来，还能按这句把类判对。 */
+export declare const MISSING_MODULE_RE: RegExp;
+/**
+ * 这个库**本机体检不了**的原因（`null` = 能体检）。
+ *
+ * 判据只看 `sqlite_master` 里的虚拟表 DDL，**不看错误文案**：错误文案是
+ * `SQL logic error` 这种通用句，拿它当判据等于没判。看得到分词器名字，才说得清
+ * 「为什么检不了、为什么退出微信也没用」。
+ * @param abs - 库的绝对路径。
+ * @returns 说清原因的一句话，或 null。
+ */
+export declare function uncheckableReason(abs: string): string | null;
 /**
  * 逐库跑 `PRAGMA integrity_check`（**按需显式动作**，不在健康快照里）。
  *

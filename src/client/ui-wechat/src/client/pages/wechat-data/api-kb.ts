@@ -403,9 +403,20 @@ export async function apiOpenFileDialog(opts?: {
  *
  * 为什么光清缓存还不够、还要广播：清缓存只保证「下一次取数拿到新值」，不会叫醒
  * **已经挂载**的切换器（它手里是上一次的数组）。所以走 `invalidateKbCaches()` 这一个
- * 入口 —— 它一次做全三件事（清快照 + 清渲染缓存 + 广播）。
- * 广播的是 `KBS_UPDATED_EVENT`（库列表），**不是** `NOTES_UPDATED_EVENT`：笔记库 /
- * 知识图谱 / 问答并不读 `kb_files`，叫醒它们只会白重取一次。
+ * 入口 —— 它一次做全三件事（清快照 + 清渲染缓存 + 广播库列表）。
+ *
+ * ## 为什么还要清图谱与模型弹层（2026-11-13 修正）
+ *
+ * 旧注释说「笔记库 / 知识图谱 / 问答并不读 `kb_files`」，**那是错的**：
+ *   · 知识图谱的节点里就有文件与实体（`kb_doc_entities` 按 `kb_files` 关联），
+ *     挂在快照层 `kb:graph:<id>`（30s TTL）与渲染层 `kb-graph:<id>` 两处；
+ *   · 「本库模型」弹层那行「还有几个文件没抽实体」是 `kb_files` 的聚合，
+ *     挂在 `kb-model:<id>`（60s TTL）。
+ * 只清文件列表的后果：加完文件、删完文件、或关掉某个文件的「参与检索」之后，
+ * 图谱最长一分钟还是旧节点，用户会以为操作没生效（删掉的文件还在图上）。
+ *
+ * 广播因此**同时**发两个：`KBS_UPDATED_EVENT`（切换器里的 fileCount）与
+ * `NOTES_UPDATED_EVENT`（已挂载的图谱/笔记面板重取——清缓存不会叫醒它们）。
  *
  * 键名由 `kbCacheKey` 拼，别处不许手写 `kb-files:` + id：带库 id 的键字面量散开
  * 就会出现「模型里有、图上看不到」那类只在切库后才现形的偏差。
@@ -415,8 +426,14 @@ export async function apiOpenFileDialog(opts?: {
  */
 export function invalidateKbFileCaches(kbId: number): void {
   invalidateWechatCache(kbCacheKey('kb-files', kbId))
+  // 图谱：快照层（cachedGet）与渲染层（useFreshData 的首帧）是两套，各清一次。
+  snapshotDelete(kbCacheKey('kb:graph', kbId))
+  invalidateWechatCache(kbCacheKey('kb-graph', kbId))
+  // 模型弹层的「实体抽取」摘要来自 kb_files 聚合（cachedFetch 走渲染层）。
+  invalidateWechatCache(kbCacheKey('kb-model', kbId))
   // 同上：`KbMeta.fileCount` 是 getKbs 合流的派生值，与文件列表分属两套缓存。
   invalidateKbCaches()
+  notifyNotesUpdated()
 }
 
 /**

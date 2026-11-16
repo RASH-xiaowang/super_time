@@ -91,6 +91,12 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     token: z.string().optional(),
     seed: z.string().optional(),
     key: z.string().optional(),
+    originalWidth: z.number().optional(),
+    originalHeight: z.number().optional(),
+    originalBytes: z.number().optional(),
+    uhdUrl: z.string().optional(),
+    uhdToken: z.string().optional(),
+    uhdSeed: z.string().optional(),
     dest: z.string(),
   })),
   remote('exportChatImage', z.object({

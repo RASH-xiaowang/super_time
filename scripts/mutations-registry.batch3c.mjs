@@ -273,12 +273,14 @@ export const MUTATIONS_BATCH3C = [
     to: "    return this.slot('media', () => createKbRemotes({",
     spec: "src/backend/tests/gateway-collaborators.spec.ts",
   },
+ // 2026-11-13：锚点跟随 panels/ 下 .tsx 实测数 191 更新（分析面板移除内嵌推荐组件）；
+ // 2026-11-15：表情占位组件 `chats-sticker.tsx` 让实测数变成 192，锚点跟随。
   {
     id: "M343-readme-panel-count-rotted",
-    why: "（2026-10-13 聊天信息 D0 新增 `chats-info-rows.tsx`；随后健康完整性、远程访问、资产面板、图谱参数、问答过程、任务信息和知识库视图持续拆件，锚点跟随。2026-10-25 分析面板新增 `AnalysisReplySuggest.tsx`；2026-10-26 问答运行视图新增 `AnswerRunView.tsx`、正文块解析新增 `answer-blocks.ts` 及样式文件，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
+    why: "（2026-10-13 聊天信息 D0 新增 `chats-info-rows.tsx`；随后健康完整性、远程访问、资产面板、图谱参数、问答过程、任务信息和知识库视图持续拆件，锚点跟随。2026-10-25 分析面板新增 `AnalysisReplySuggest.tsx`；2026-11-13 该组件随「分析与推荐回复分家」删除，锚点跟随；2026-10-26 问答运行视图新增 `AnswerRunView.tsx`、正文块解析新增 `answer-blocks.ts` 及样式文件，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 182 个 .tsx 视图）",
-    to: "src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 192 个 .tsx 视图）",
+    to: "src/client/ui-wechat/    数据面板（panels/ 下 182 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },
   {
@@ -761,12 +763,13 @@ MUTATIONS_BATCH3C.push(
     to: "  // 门槛被拆掉",
     spec: "src/backend/wechat-data/tests/sns-media-store.spec.ts",
   },
+ // 2026-11-13：锚点跟随 saveOriginal 签名改多行并新增 options 更新。
   {
     id: "M404-sns-original-store-md5-gate-removed",
     why: "去掉 saveOriginal 的 md5 合法性校验 ⇒ 脏字符串（`../../etc/passwd` 之类）会被拼进落盘路径。缓存键是内容寻址的，进来一个不是 md5 的键就等于开了一条任意路径写",
     file: "src/backend/wechat-data/src/query/sns-media-store.ts",
-    from: "export function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null {\n  const key = (md5 || '').trim().toLowerCase()\n  if (!decodedDir || !MD5_RE.test(key)) return null",
-    to: "export function saveOriginal(decodedDir: string, md5: string, bytes: Uint8Array): string | null {\n  const key = (md5 || '').trim().toLowerCase()",
+    from: "export function saveOriginal(\n  decodedDir: string,\n  md5: string,\n  bytes: Uint8Array,\n  options: OriginalSaveOptions = {},\n): string | null {\n  const key = (md5 || '').trim().toLowerCase()\n  if (!decodedDir || !MD5_RE.test(key)) return null",
+    to: "export function saveOriginal(\n  decodedDir: string,\n  md5: string,\n  bytes: Uint8Array,\n  options: OriginalSaveOptions = {},\n): string | null {\n  const key = (md5 || '').trim().toLowerCase()",
     spec: "src/backend/wechat-data/tests/sns-media-store.spec.ts",
   },
   {
@@ -819,12 +822,13 @@ MUTATIONS_BATCH3C.push(
     to: "  const archived = null",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
+ // 2026-11-13：锚点跟随 buildSnsImageRequestOptions 改为返回对象里的 offline 字段 更新。
   {
     id: "M411-sns-frontend-ignores-offline-signal",
     why: "界面不再把网络状态告诉后端（恒传 offline=false）⇒ **断网时也会去出网**，于是每一次取图都要等一个注定失败的请求 + 超时；而 CDN 一失败又回落本地，于是用户感到的是「图片出不来而且很慢」。真实病因（断网）被完全掩盖",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts",
-    from: "          opts.offline = offline",
-    to: "          opts.offline = false",
+    from: "    ...snsImageMetadata(source),\n    offline,\n  }\n}",
+    to: "    ...snsImageMetadata(source),\n    offline: false,\n  }\n}",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
   {

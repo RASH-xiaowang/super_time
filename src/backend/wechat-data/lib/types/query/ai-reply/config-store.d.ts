@@ -42,6 +42,10 @@ export declare function saveChatAiReplySetting(decryptedDir: string, input: {
     personaName?: string;
     /** 省略时保留当前人格，避免旧调用方切换开关时清空配置。 */
     personaPrompt?: string;
+    /** 省略时保留当前知识库设置，避免旧调用方切换开关时改回默认。 */
+    kbEnabled?: boolean;
+    /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
+    kbId?: number;
     expectedRevision?: number;
     cursor?: string;
 }): ChatAiReplyMutationResult;
@@ -59,6 +63,10 @@ export declare function saveChatAiReplyPersona(decryptedDir: string, input: {
     personaPrompt: string;
     /** 省略时保留当前设置。 */
     splitReply?: boolean;
+    /** 省略时保留当前知识库设置。 */
+    kbEnabled?: boolean;
+    /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
+    kbId?: number;
     expectedRevision?: number;
 }): ChatAiReplyMutationResult;
 export type ChatAiReplyRunStateUpdateResult = 'updated' | 'guard-mismatch' | 'transient';

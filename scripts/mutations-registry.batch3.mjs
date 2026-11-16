@@ -174,12 +174,13 @@ export const MUTATIONS_BATCH3 = [
     to: "  if (scope.authorName) opts.username = scope.authorName",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-export.spec.ts",
   },
+ // 2026-11-13：锚点跟随 取视频去重条件加入 videoFailed 判定 更新。
   {
     id: "M138-video-drops-inflight-dedupe",
     why: "去掉「正在取」那张集合的判重 ⇒ 连点两下按钮发两次 RPC，第二次回来还会覆盖第一次（几十 MB 的取回走两遍）",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-videos.ts",
-    from: "    if (!vk || videoSrcs[vk] || videoFetching.current.has(vk)) return",
-    to: "    if (!vk || videoSrcs[vk]) return",
+    from: "    if (!vk || (videoSrcs[vk] && !videoFailed.has(vk)) || videoFetching.current.has(vk)) return",
+    to: "    if (!vk || (videoSrcs[vk] && !videoFailed.has(vk))) return",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-videos.spec.ts",
   },
   {
@@ -190,12 +191,13 @@ export const MUTATIONS_BATCH3 = [
     to: "          if (false) recordErr(vk, r.error as string)",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-videos.spec.ts",
   },
+ // 2026-11-13：锚点跟随 保存结果改走 outcome.result.path 更新。
   {
     id: "M140-video-save-forgets-to-record-path",
     why: "保存成功却不把落盘路径记回面板 ⇒ 面板那一行「打开这个文件」指向空，用户存到了却不知道存哪儿了",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-videos.ts",
-    from: "        onSavedPath?.(pickedPath)",
-    to: "        // 不记路径",
+    from: "          onSavedPath?.(outcome.result.path ?? pickedPath)",
+    to: "          // 不记路径",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-videos.spec.ts",
   },
   {
@@ -410,15 +412,16 @@ export const MUTATIONS_BATCH3 = [
     id: "M167-poll-cache-writes-delta-only",
     why: "渲染缓存改写增量那一批 ⇒ 下次打开这个会话时秒开出来的只有新消息，旧消息要等后端整趟回来才补上",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-polling.ts",
-    from: "  writeRenderCache(RENDER_CACHE_PREFIX + talker, tail)",
-    to: "  writeRenderCache(RENDER_CACHE_PREFIX + talker, [])",
+    from: "        const merged = [...prev, ...add]\n        if (canCacheChatId(cacheTalker)) writeChatRenderCache(cacheTalker, merged)",
+    to: "        const merged = [...prev, ...add]\n        if (canCacheChatId(cacheTalker)) writeChatRenderCache(cacheTalker, add)",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-polling.spec.ts",
   },
+ // 2026-11-13：锚点跟随 useChatsPolling 入参新增 msgListRef/watermarkLocalIdRef 更新。
   {
     id: "M168-poll-hook-never-mounted",
     why: "把 `useChatsPolling(...)` 从 `useChatsThread` 里摘掉（模块还在、行为用例还全绿）⇒ 接线守卫必须红：搬完没人挂，等于把「新消息自动出现」这个功能删了",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-thread.tsx",
-    from: "useChatsPolling({ curSession, inFlightRef, messagesLen: messages.length, msgScrollRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef })",
+    from: "const polling = useChatsPolling({ curSession, inFlightRef, messagesLen: messages.length, msgListRef, msgScrollRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef, watermarkLocalIdRef })",
     to: "// 忘了挂轮询",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-polling.wiring.spec.ts",
   },
@@ -462,11 +465,12 @@ export const MUTATIONS_BATCH3 = [
     to: "              <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-msg-row.spec.ts",
   },
+ // 2026-11-13：锚点跟随 makeMsgRow 入参新增 openQuote 更新。
   {
     id: "M174-row-factory-never-called",
     why: "把 `makeMsgRow(...)` 从 `useChatsThread` 里摘掉（模块还在、16 条行为用例还全绿）⇒ 接线守卫必须红，这一族搬完之后没人挂就等于会话里再也不画消息",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-thread.tsx",
-    from: "const renderMsgItem = makeMsgRow({ curSession, editedIds, openChatlog, openMsgMenu, openViewer, selfWxid })",
+    from: "const renderMsgItem = makeMsgRow({ curSession, editedIds, openChatlog, openQuote, openMsgMenu, openViewer, selfWxid })",
     to: "const renderMsgItem = (): React.JSX.Element | null => null",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-msg-row.wiring.spec.ts",
   },
@@ -670,27 +674,30 @@ export const MUTATIONS_BATCH3 = [
     to: "    return undefined",
     spec: "src/backend/tests/gateway-collaborators.spec.ts",
   },
+ // 2026-11-13：锚点跟随 槽位改成每次新建 job 对象（不再原地复用） 更新。
   {
     id: "M204-jobs-reuses-aborted-token",
     why: '复用槽位时不再换新的 AbortController ⇒ 用户取消一轮之后再点一次，新一轮手里那把令牌已经是"已取消"，导出刚起步就失败（注释里明写的原事故）',
     file: "src/backend/wechat-data/src/gateway-jobs.ts",
-    from: "  job.ctrl = new AbortController()",
-    to: "  // 沿用上一轮的令牌",
+    from: "    ctrl: new AbortController(),",
+    to: "    ctrl: existing?.ctrl ?? new AbortController(),",
     spec: "src/backend/wechat-data/tests/gateway-jobs.spec.ts",
   },
+ // 2026-11-13：锚点跟随 槽位改成每次新建 job 对象（不再原地复用） 更新。
   {
     id: "M205-jobs-keeps-terminal-state",
     why: "新一轮开始时不清上一轮的 finished/error ⇒ 任务还没跑，进度查询就答复「已完成 / 用户取消」",
     file: "src/backend/wechat-data/src/gateway-jobs.ts",
-    from: "  job.finished = false\n  delete job.error",
-    to: "  // 终态留着",
+    from: "    finished: false,",
+    to: "    finished: existing?.finished ?? false,",
     spec: "src/backend/wechat-data/tests/gateway-jobs.spec.ts",
   },
+ // 2026-11-13：锚点跟随 onProgress 改写为高水位合并后 更新。
   {
     id: "M206-jobs-drops-progress-when-emit-fails",
     why: "进度只发事件、不写槽位 ⇒ 渲染进程断了（IPC 抛错）的时候，任务明明在跑而 getExportProgress 永远回 null",
     file: "src/backend/wechat-data/src/gateway-jobs.ts",
-    from: "      job.progress = { phase: p.phase, done: p.done, total: p.total }",
+    from: "      job.progress = { phase: p.phase, done, total }",
     to: "      // 只发事件",
     spec: "src/backend/wechat-data/tests/gateway-jobs.spec.ts",
   },
@@ -774,20 +781,22 @@ export const MUTATIONS_BATCH3 = [
     to: "setExpTypes(prev => [...prev, c.key])",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.spec.ts",
   },
+ // 2026-11-13：锚点跟随 进度卡抽成 ExportProgressStatus、比例计算移出弹窗 更新。
   {
     id: "M217-export-dialog-progress-ratio-inverted",
     why: "比值写成 total/done ⇒ 3/12 报成 100%（`ProgressBar` 内部自己封顶，所以「不封顶」那条变异是等价变异、测不出来；真正会被看见的是算反）。done 为 0 时还会直接 NaN",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.tsx",
-    from: "Math.min(100, (progress.done / progress.total) * 100)",
-    to: "Math.min(100, (progress.total / progress.done) * 100)",
+    from: "          <ExportProgressStatus state={exportState} onCancel={cancelExport} />",
+    to: "          <ExportProgressStatus state={exportState.progress ? { ...exportState, progress: { ...exportState.progress, done: exportState.progress.total, total: exportState.progress.done } } : exportState} onCancel={cancelExport} />",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.spec.ts",
   },
+ // 2026-11-13：锚点跟随 进度卡抽成 ExportProgressStatus、不定量判定移出弹窗 更新。
   {
     id: "M218-export-dialog-total-zero-not-indeterminate",
     why: "`total<=0` 不再走不定量态 ⇒ 「导全部」时画一根钉在 0% 的空条（真机验收发现的断链，M3 那一刀修的就是它）",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.tsx",
-    from: "indeterminate={exportProgress.total <= 0}",
-    to: "indeterminate={false}",
+    from: "          <ExportProgressStatus state={exportState} onCancel={cancelExport} />",
+    to: "          <ExportProgressStatus state={exportState.progress && exportState.progress.total <= 0 ? { ...exportState, progress: { ...exportState.progress, total: 1 } } : exportState} onCancel={cancelExport} />",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.spec.ts",
   },
   {

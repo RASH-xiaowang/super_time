@@ -61,6 +61,8 @@ export interface KbToolsMenuProps extends KbBatchActionButtonsProps {
   loading: boolean
   /** 建/补齐语义索引。 */
   onIndex: () => void
+  /** 停止本面板正在跑的语义索引构建。 */
+  onCancelIndex: () => void
   /** 重新读取文件列表与索引状态。 */
   onRefresh: () => void
 }
@@ -75,7 +77,7 @@ export interface KbToolsMenuProps extends KbBatchActionButtonsProps {
  * @returns 页头「文档工具」菜单。
  */
 export function KbToolsMenu({
-  run, runningId, indexing, loading, onSummaries, onEntities, onIndex, onRefresh,
+  run, runningId, indexing, loading, onSummaries, onEntities, onIndex, onCancelIndex, onRefresh,
 }: KbToolsMenuProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const { rootRef, triggerRef } = useMenuDismiss(open, () => { setOpen(false) })
@@ -117,6 +119,20 @@ export function KbToolsMenu({
             <span>{indexing ? '建索引中…' : '语义索引'}</span>
             <span className={css.toolsHint}>{desktopOnly ? '仅电脑' : '会出网'}</span>
           </button>
+          {/* 只有本面板发起的构建才能取消（jobId 在 handle 里），所以按 indexing 显示，
+              而不是按后端的 job —— 别的入口发起的构建这里没有可取消的标识。 */}
+          {indexing && (
+            <button
+              type="button"
+              role="menuitem"
+              className={css.toolsItem}
+              title="停止本轮构建；阶段二尚未开始，旧索引保持原样"
+              onClick={() => { runAndClose(onCancelIndex) }}
+            >
+              <span>停止建索引</span>
+              <span className={css.toolsHint}>旧索引不变</span>
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"

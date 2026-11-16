@@ -30,6 +30,13 @@ export interface ViewerImageLike {
   seed?: string
   key?: string
   token?: string
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
+  uhdMd5?: string
   livePhoto?: MomentLiveMedia
   live?: MomentLiveMedia
 }

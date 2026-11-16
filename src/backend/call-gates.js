@@ -24,6 +24,8 @@
  * @module backend/call-gates
  */
 
+const { observeBackendStatus } = require('./mutation-gate.js');
+
 /**
  * @typedef {object} CallGateCtx
  * @property {(timeoutMs: number) => Promise<boolean>} awaitBackendReady - 等后端就绪。
@@ -53,6 +55,10 @@ async function gatedWechatCall(ctx, method, args) {
     awaitBackendReady, BACKEND_CALL_READY_WAIT_MS, getWechatBackend, getBackendStatus,
     debugGates, licenseService, app, APP_VERSION,
   } = ctx;
+
+  // 代际观察放在共享入口：IPC 与 HTTP 两条路都会在后端重启后看到新 restarts。
+  // （HTTP 路径没有独立的状态注入；这次观察至少保证**下一次**调用会 bump。）
+  if (typeof getBackendStatus === 'function') observeBackendStatus(getBackendStatus());
 
   // ① 后端还在启动/重启时**等待**，而不是立刻回一句假错误。
   const ready = await awaitBackendReady(BACKEND_CALL_READY_WAIT_MS);
@@ -113,4 +119,46 @@ async function gatedWechatCall(ctx, method, args) {
   return getWechatBackend().call(method, args);
 }
 
-module.exports = { gatedWechatCall };
+/**
+ * 直连 IPC（不走 `wechat:call` 的功能）使用**同一份**许可证判定。
+ *
+ * 这些通道（OCR / 图片识别等）没有 `@Remote` 方法名，无法交给 `gatedWechatCall`；
+ * 但授权逻辑不能再抄一份 —— 那正是本文件开头说的「两边各自漂」。
+ * 失败方向同样必须是「拒绝」：许可证模块缺失、读盘/验签抛错都回可展示的拒绝信封。
+ *
+ * @param {CallGateCtx} ctx - 与 `gatedWechatCall` 同源。
+ * @param {string} feature - `FEATURE_CATALOG` 里的功能位。
+ * @returns {null | { ok: false, error: { message: string, code?: string, details?: object } }}
+ */
+function directFeatureGate(ctx, feature) {
+  try {
+    if (ctx.debugGates?.().skipGates) return null;
+    const service = ctx.licenseService;
+    if (!service || typeof service.getLicenseStatus !== 'function' || typeof service.authorizeFeature !== 'function') {
+      throw new Error('许可证服务不可用');
+    }
+    const status = service.getLicenseStatus(ctx.app.getPath('userData'), ctx.APP_VERSION);
+    const gate = service.authorizeFeature(status, feature);
+    if (gate.ok) return null;
+    return {
+      ok: false,
+      error: {
+        message: gate.message,
+        code: gate.code,
+        details: { feature, licenseState: status?.state },
+      },
+    };
+  } catch (e) {
+    console.error('[license] 功能位授权校验异常，已拒绝本次调用:', e?.message ?? e);
+    return {
+      ok: false,
+      error: {
+        message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
+        code: 'LICENSE_CHECK_FAILED',
+        details: { feature },
+      },
+    };
+  }
+}
+
+module.exports = { gatedWechatCall, directFeatureGate };

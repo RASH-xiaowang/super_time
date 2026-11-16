@@ -5,9 +5,10 @@
  * counts, member's owning group, and category stats.
  */
 import { DatabaseSync } from './db-open.ts'
-import { cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
+import { cachedBySig, fileSigOf } from './meta.ts'
 import { join } from 'node:path'
 import type { WechatContact } from '../types.ts'
+import { normalizeOffset, normalizePageLimit } from './limits.ts'
 import {
   enterpriseNameFromExtra,
   isEnterpriseWechatUser,
@@ -79,6 +80,22 @@ function categoryOf(localType: number, username: string, deleteFlag: number): st
   if (isEnterpriseWechatUser(username)) return 'enterprise'
   if (localType === 1) return 'friend'
   return 'member'
+}
+
+/**
+ * 联系人类别判定（对外只读口径）。
+ *
+ * 为什么要把私有函数暴露出来：问答的 `search_contacts` 支持 `kind`
+ * （all/person/group/enterprise）过滤，如果它自己再写一份判据，
+ * 同一个账号在「找人」与「通讯录」里就可能落到不同类目 ——
+ * 用户按「人」筛却看不到通讯录里明明标为「联系人」的账号。
+ * @param localType - contact.local_type。
+ * @param username - 联系人/群 username。
+ * @param deleteFlag - contact.delete_flag。
+ * @returns 分类键（friend/enterprise/group/official/service/member/system/deleted）。
+ */
+export function contactCategoryOf(localType: number, username: string, deleteFlag = 0): string {
+  return categoryOf(localType, username, deleteFlag)
 }
 
 /** Source category_label. */
@@ -158,6 +175,13 @@ export interface ContactsPageOptions {
    * 未传（或传 `all`）时行为与之前完全一致。
    */
   category?: string
+  /**
+   * 可选的搜索词：大小写不敏感地匹配 username / 备注 / 昵称 / 别名 / 全拼列。
+   *
+   * 与 `category` 一起在 **SQL 里**过滤，再分页 —— 否则「搜索 + 翻页」只能搜到当前
+   * 已加载的那一页。`stats` 仍是全量口径（页签计数不随搜索变化）。
+   */
+  search?: string
 }
 
 export function queryContacts(
@@ -167,13 +191,14 @@ export function queryContacts(
   // Cache keyed on the contact snapshot's signature. The realtime sync rewrites
   // contact.db under an atomic rename, so the signature changes and this
   // recomputes immediately instead of re-scanning on every panel refresh.
-  const limit = options?.limit
-  const offset = options?.offset ?? 0
+  const limit = normalizePageLimit(options?.limit)
+  const offset = normalizeOffset(options?.offset)
   const category = normalizeCategory(options?.category)
+  const search = (options?.search ?? '').trim()
   return cachedBySig(
-    'contacts:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + category,
+    'contacts:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + category + ':' + search,
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
-    () => computeContacts(decryptedDir, limit, offset, category),
+    () => computeContacts(decryptedDir, limit, offset, category, search),
   )
 }
 
@@ -189,193 +214,425 @@ function normalizeCategory(category?: string): string {
   return c
 }
 
+/** contact.db 的列名集合。 */
+type ContactColumns = Set<string>
+
+/** 列名只来自代码常量（PRAGMA 结果），存在则加引号；缺列时退回字面量默认值。 */
+function colOf(cols: ContactColumns, name: string, fallback: string): string {
+  return cols.has(name) ? `"${name}"` : fallback
+}
+
+function castText(expr: string): string {
+  return `CAST(${expr} AS TEXT)`
+}
+
+/** 一次构造联系人页查询所需的全部 SQL 片段。 */
+interface ContactSqlParts {
+  /** 分类表达式（含 biz_info 服务号改判）。 */
+  categoryExpr: string
+  selectCols: string
+  orderSql: string
+  whereSql: string
+  filterArgs: string[]
+  baseWhere: string
+}
+
+/**
+ * P2：把「分类 / 首字母 / 搜索 / 排序」全部翻译成 SQL。
+ *
+ * 旧实现把 contact（以及 chat_room / chatroom_member / biz_info）整表 `.all()`
+ * 进 JS，再在内存里分类、过滤、排序、切片 —— 每次翻页都重新物化全部行、解析全部
+ * extra_buffer。现在 `WHERE + ORDER BY + LIMIT/OFFSET` 在 SQLite 内完成，只把当前页
+ * 的行解码成 JS 对象；`stats` 另走 GROUP BY，保持全量口径。
+ *
+ * 排序差异说明：`localeCompare` 使用 ICU collation，SQLite 只有 BINARY；对拼音列
+ * （ASCII）两者一致，只有在「首字母 + 全拼都相同」时才会用显示名比较 —— 中文显示名
+ * 在 ICU（按拼音）与码点之间可能有细微顺序差异。分页键本身是确定的，不会漏行/重行。
+ * @param db - contact.db 连接。
+ * @param cols - contact 表的列集合。
+ * @param category - 已归一化的分类过滤（空串表示不过滤）。
+ * @param search - 已 trim 的搜索词（空串表示不过滤）。
+ * @returns SQL 片段与过滤参数。
+ */
+function buildContactSqlParts(
+  db: DatabaseSync,
+  cols: ContactColumns,
+  category: string,
+  search: string,
+): ContactSqlParts {
+  const usernameCol = colOf(cols, 'username', "''")
+  const localTypeCol = colOf(cols, 'local_type', '0')
+  const deleteFlagCol = colOf(cols, 'delete_flag', '0')
+  const quanPinCol = colOf(cols, 'quan_pin', "''")
+  const textOf = (c: string): string => `COALESCE(${castText(colOf(cols, c, "''"))}, '')`
+
+  let bizTypeExpr = 'NULL'
+  try {
+    const biCols = tableColumns(db, 'biz_info')
+    if (biCols.has('username') && biCols.has('type')) {
+      // 相关子查询而不是 JOIN：biz_info 即使有重复 username 也不会把 contact 行放大。
+      // ⚠️ 外层 username 必须用表名限定，否则子查询里的 `username` 会解析到 biz_info 自己。
+      const outerUsername = cols.has('username') ? 'contact."username"' : "''"
+      bizTypeExpr = `(SELECT "type" FROM biz_info WHERE ${castText('"username"')} = ${castText(outerUsername)} LIMIT 1)`
+    }
+  } catch { /* no biz_info */ }
+
+  const rawCategoryExpr = [
+    'CASE',
+    `WHEN COALESCE(${deleteFlagCol}, 0) <> 0 OR COALESCE(${localTypeCol}, 0) = 4 THEN 'deleted'`,
+    `WHEN substr(${castText(usernameCol)}, -9) = '@chatroom' THEN 'group'`,
+    `WHEN instr(${castText(usernameCol)}, 'gh_') > 0 THEN 'official'`,
+    `WHEN lower(${castText(usernameCol)}) IN ('weixin','notifymessage','cmdamount','floatbottle','fmessage','medianote','qmessage') OR substr(lower(${castText(usernameCol)}), 1, 7) = 'weixin_' THEN 'system'`,
+    `WHEN substr(${castText(usernameCol)}, -12) = '@kefu.openim' THEN 'service'`,
+    `WHEN substr(${castText(usernameCol)}, -7) = '@openim' AND substr(${castText(usernameCol)}, -12) <> '@kefu.openim' THEN 'enterprise'`,
+    `WHEN COALESCE(${localTypeCol}, 0) = 1 THEN 'friend'`,
+    `ELSE 'member'`,
+    'END',
+  ].join(' ')
+  // 与 sessions.ts 共用同一判据：biz_info.type 为 1/3/5 的 gh_ 账号归「服务号」。
+  const categoryExpr = `CASE WHEN (${rawCategoryExpr}) = 'official' AND COALESCE(${bizTypeExpr}, 0) IN (1, 3, 5)`
+    + ` THEN 'service' ELSE (${rawCategoryExpr}) END`
+
+  const remarkInitial = textOf('remark_pin_yin_initial')
+  const nickInitial = textOf('pin_yin_initial')
+  const pinExpr = `trim(COALESCE(NULLIF(${castText(colOf(cols, 'remark_quan_pin', "''"))}, ''), NULLIF(${castText(quanPinCol)}, '')))`
+  const displayExpr = `COALESCE(NULLIF(${castText(colOf(cols, 'remark', "''"))}, ''), NULLIF(${castText(colOf(cols, 'nick_name', "''"))}, ''), ${castText(usernameCol)})`
+  const letterOf = (src: string): string => {
+    const ch = `upper(substr(${src}, 1, 1))`
+    return `CASE WHEN ${ch} BETWEEN 'A' AND 'Z' THEN ${ch} ELSE '' END`
+  }
+  // `initialOf` 的口径：remarkInitial || nickInitial（空串才回退），再备注全拼 || 昵称全拼，
+  // 再显示名；都没有可识别字母时归 '#'。
+  const initialExpr = `COALESCE(`
+    + ` NULLIF(CASE WHEN ${remarkInitial} <> '' THEN ${letterOf(remarkInitial)} ELSE ${letterOf(nickInitial)} END, ''),`
+    + ` NULLIF(${letterOf(pinExpr)}, ''),`
+    + ` NULLIF(${letterOf(displayExpr)}, ''),`
+    + ` '#')`
+
+  const baseWhere = `COALESCE(${castText(usernameCol)}, '') <> ''`
+  const where: string[] = [baseWhere]
+  const filterArgs: string[] = []
+  if (category !== '') {
+    where.push(`(${categoryExpr}) = ?`)
+    filterArgs.push(category)
+  }
+  if (search !== '') {
+    const searchTerm = search.toLowerCase()
+    const searchable = ['username', 'remark', 'nick_name', 'alias', 'quan_pin', 'remark_quan_pin']
+      .filter((c) => cols.has(c))
+    if (searchable.length === 0) {
+      where.push('0')
+    } else {
+      where.push('(' + searchable
+        .map((c) => `instr(lower(${castText(`"${c}"`)}), ?) > 0`)
+        .join(' OR ') + ')')
+      for (let i = 0; i < searchable.length; i += 1) filterArgs.push(searchTerm)
+    }
+  }
+
+  const selectCols = [
+    `${colOf(cols, 'id', '0')} AS id`,
+    `${usernameCol} AS username`,
+    `${localTypeCol} AS local_type`,
+    `${colOf(cols, 'alias', "''")} AS alias`,
+    `${deleteFlagCol} AS delete_flag`,
+    `${colOf(cols, 'remark', "''")} AS remark`,
+    `${colOf(cols, 'remark_pin_yin_initial', "''")} AS remark_initial`,
+    `${colOf(cols, 'nick_name', "''")} AS nick_name`,
+    `${colOf(cols, 'pin_yin_initial', "''")} AS nick_initial`,
+    `${quanPinCol} AS quan_pin`,
+    `${colOf(cols, 'remark_quan_pin', "''")} AS remark_quan_pin`,
+    `${colOf(cols, 'big_head_url', "''")} AS big_head_url`,
+    `${colOf(cols, 'small_head_url', "''")} AS small_head_url`,
+    `${colOf(cols, 'description', "''")} AS description`,
+    `${colOf(cols, 'is_in_chat_room', '0')} AS is_in_chat_room`,
+    `${colOf(cols, 'extra_buffer', 'NULL')} AS extra_buffer`,
+    `(${categoryExpr}) AS category_key`,
+  ].join(', ')
+  const orderSql = [
+    // '#'（无拼音可依的兜底桶）必须排最后：先按 rank，再按首字母。
+    `((${initialExpr}) = '#') ASC`,
+    `(${initialExpr}) ASC`,
+    `COALESCE(${castText(quanPinCol)}, '') ASC`,
+    `(${displayExpr}) ASC`,
+    // 稳定分页：旧实现的 sort 是稳定排序，完全相同的键按表扫描顺序；SQL 侧显式补
+    // username 作为最后一级，避免同键行在翻页时漂移。
+    `COALESCE(${castText(usernameCol)}, '') ASC`,
+  ].join(', ')
+
+  return {
+    categoryExpr,
+    selectCols,
+    orderSql,
+    whereSql: where.join(' AND '),
+    filterArgs,
+    baseWhere,
+  }
+}
+
+/** stats 永远按全量算：分类页签上的数字不能随当前类目/搜索词变化。 */
+function contactStats(db: DatabaseSync, categoryExpr: string, baseWhere: string): Record<string, number> {
+  const stats: Record<string, number> = { friend: 0, enterprise: 0, group: 0, official: 0, service: 0, member: 0, system: 0, deleted: 0 }
+  const rows = db.prepare(
+    `SELECT (${categoryExpr}) AS category_key, COUNT(*) AS n FROM contact WHERE ${baseWhere} GROUP BY category_key`,
+  ).all() as Array<Record<string, unknown>>
+  let all = 0
+  for (const row of rows) {
+    const key = String(row['category_key'] ?? '')
+    const n = Number(row['n'] ?? 0)
+    if (!(key in stats)) continue
+    stats[key] = (stats[key] ?? 0) + n
+    all += n
+  }
+  // 给界面一个稳定的「全部」总数：即使当前按类目过滤，页签上的「全部(N)」也应显示全量。
+  stats.all = all
+  return stats
+}
+
+/** 页内一行 contact 的解码结果（群信息在第二遍补齐）。 */
+interface ContactDraft {
+  id: number
+  username: string
+  nickName: string
+  remark: string
+  localType: number
+  deleteFlag: number
+  category: string
+  displayName: string
+  alias: string
+  quanPin: string
+  remarkQuanPin: string
+  initial: string
+  extraRaw: unknown
+  avatarBig: string
+  avatarSmall: string
+  description: string
+  inChatRoom: boolean
+}
+
+/** 把 SQL 页行解码成 JS 草稿，并收集群 / 成员 id（只针对当前页）。 */
+function decodeContactRows(rows: ReadonlyArray<Record<string, unknown>>): {
+  drafts: ContactDraft[]
+  groupIds: number[]
+  memberIds: number[]
+} {
+  const drafts: ContactDraft[] = []
+  const groupIds: number[] = []
+  const memberIds: number[] = []
+  for (const r of rows) {
+    const username = cellString(r['username'])
+    if (!username) continue
+    const id = Number(r['id'] ?? 0)
+    const nickName = cellString(r['nick_name'])
+    const remark = cellString(r['remark'])
+    const localType = Number(r['local_type'] ?? 0)
+    const deleteFlag = Number(r['delete_flag'] ?? 0)
+    const categoryKey = String(r['category_key'] ?? '')
+    const resolvedCategory = categoryKey || categoryOf(localType, username, deleteFlag)
+    const displayName = remark || nickName || username
+    const quanPin = cellString(r['quan_pin'])
+    const remarkQuanPin = cellString(r['remark_quan_pin'])
+    drafts.push({
+      id,
+      username,
+      nickName,
+      remark,
+      localType,
+      deleteFlag,
+      category: resolvedCategory,
+      displayName,
+      alias: cellString(r['alias']),
+      quanPin,
+      remarkQuanPin,
+      initial: initialOf(
+        cellString(r['remark_initial']),
+        cellString(r['nick_initial']),
+        remarkQuanPin,
+        quanPin,
+        displayName,
+      ),
+      extraRaw: r['extra_buffer'],
+      avatarBig: cellString(r['big_head_url']),
+      avatarSmall: cellString(r['small_head_url']),
+      description: readableProfileSignature(cellString(r['description'])),
+      inChatRoom: Number(r['is_in_chat_room'] ?? 0) === 1,
+    })
+    if (resolvedCategory === 'group') groupIds.push(id)
+    else memberIds.push(id)
+  }
+  return { drafts, groupIds, memberIds }
+}
+
+/** 当前页用到的群信息（owner / 成员数 / 成员所属群）。 */
+interface ContactGroupInfo {
+  roomOwners: Map<number, string>
+  memberCounts: Map<number, number>
+  memberRooms: Map<number, string[]>
+}
+
+/**
+ * 多表合并只针对**当前页**：
+ *   · chat_room/chatroom_member —— 群的 owner、成员数、以及非群联系人所属的群；
+ *   · biz_info —— 已在分类表达式里用相关子查询处理；
+ *   · openim_wording —— 企业名称（只对页内企业微信联系人解码 extra_buffer）。
+ * 这样群成员表再大也不会被整表读进 JS；同一个人重复出现在同一群时用 GROUP BY 去重。
+ * @param db - contact.db 连接。
+ * @param groupIds - 页内群联系人的 contact.id。
+ * @param memberIds - 页内非群联系人的 contact.id。
+ * @returns 页内群信息映射。
+ */
+function loadContactGroupInfo(
+  db: DatabaseSync,
+  groupIds: ReadonlyArray<number>,
+  memberIds: ReadonlyArray<number>,
+): ContactGroupInfo {
+  const roomOwners = new Map<number, string>()
+  const roomUsernames = new Map<number, string>()
+  const memberCounts = new Map<number, number>()
+  /** member_id → 它所在的全部群的 username 列表（旧字段 `groupUsername` 只取第一个）。 */
+  const memberRooms = new Map<number, string[]>()
+  const uniqueIds = (ids: ReadonlyArray<number>): number[] => [...new Set(ids)]
+  const placeholders = (ids: ReadonlyArray<number>): string => ids.map(() => '?').join(', ')
+  let roomCols: Set<string> | null = null
+  try { roomCols = tableColumns(db, 'chat_room') } catch { roomCols = null }
+  let memberCols: Set<string> | null = null
+  try { memberCols = tableColumns(db, 'chatroom_member') } catch { memberCols = null }
+  const roomIdCol = roomCols?.has('id') ? '"id"' : ''
+  const roomUserCol = roomCols?.has('username') ? '"username"' : ''
+  const roomOwnerCol = roomCols?.has('owner') ? '"owner"' : ''
+
+  const pageGroupIds = uniqueIds(groupIds)
+  if (roomCols !== null && roomIdCol !== '' && pageGroupIds.length > 0) {
+    const rows = db.prepare(
+      `SELECT ${roomIdCol} AS rid, ${roomUserCol || "''"} AS u, ${roomOwnerCol || "''"} AS o`
+      + ` FROM chat_room WHERE ${roomIdCol} IN (${placeholders(pageGroupIds)})`,
+    ).all(...pageGroupIds) as Array<Record<string, unknown>>
+    for (const r of rows) {
+      const rid = Number(r['rid'] ?? 0)
+      roomUsernames.set(rid, cellString(r['u']))
+      const owner = cellString(r['o'])
+      if (owner) roomOwners.set(rid, owner)
+    }
+  }
+  if (memberCols?.has('room_id') && memberCols.has('member_id') && pageGroupIds.length > 0) {
+    const rows = db.prepare(
+      'SELECT room_id AS rid, COUNT(DISTINCT member_id) AS c FROM chatroom_member'
+      + ` WHERE room_id IN (${placeholders(pageGroupIds)}) GROUP BY room_id`,
+    ).all(...pageGroupIds) as Array<Record<string, unknown>>
+    for (const r of rows) memberCounts.set(Number(r['rid'] ?? 0), Number(r['c'] ?? 0))
+  }
+  const pageMemberIds = uniqueIds(memberIds)
+  if (memberCols?.has('room_id') && memberCols.has('member_id') && pageMemberIds.length > 0) {
+    // GROUP BY (member, room) 去重：同一个人在同一群里出现多行时不能把群名重复塞进
+    // `groupUsernames`（旧实现会重复，前端按群筛成员时会重复计数）。
+    const rows = db.prepare(
+      'SELECT room_id AS rid, member_id AS mid FROM chatroom_member'
+      + ` WHERE member_id IN (${placeholders(pageMemberIds)}) GROUP BY mid, rid`,
+    ).all(...pageMemberIds) as Array<Record<string, unknown>>
+    const missingRoomIds = uniqueIds(rows.map((r) => Number(r['rid'] ?? 0)))
+      .filter((rid) => rid !== 0 && !roomUsernames.has(rid))
+    if (roomCols !== null && roomIdCol !== '' && roomUserCol !== '' && missingRoomIds.length > 0) {
+      const roomRows = db.prepare(
+        `SELECT ${roomIdCol} AS rid, ${roomUserCol} AS u FROM chat_room`
+        + ` WHERE ${roomIdCol} IN (${placeholders(missingRoomIds)})`,
+      ).all(...missingRoomIds) as Array<Record<string, unknown>>
+      for (const r of roomRows) roomUsernames.set(Number(r['rid'] ?? 0), cellString(r['u']))
+    }
+    for (const r of rows) {
+      const rid = Number(r['rid'] ?? 0)
+      const mid = Number(r['mid'] ?? 0)
+      const roomName = roomUsernames.get(rid) ?? ''
+      if (!roomName) continue
+      const list = memberRooms.get(mid)
+      if (list) list.push(roomName)
+      else memberRooms.set(mid, [roomName])
+    }
+  }
+  return { roomOwners, memberCounts, memberRooms }
+}
+
+/** 把页内草稿 + 群信息组装成对外 `WechatContact`（结构与旧实现逐字段一致）。 */
+function assembleContacts(
+  drafts: ReadonlyArray<ContactDraft>,
+  groupInfo: ContactGroupInfo,
+  enterpriseWordingNames: ReadonlyMap<string, string>,
+): WechatContact[] {
+  const contacts: WechatContact[] = []
+  for (const d of drafts) {
+    const extra = parseContactExtra(cellBuffer(d.extraRaw))
+    const region = buildRegion(extra.country ?? '', extra.province ?? '', extra.city ?? '').trim()
+    const gender = extra.gender === 1 || extra.gender === 2 ? extra.gender : undefined
+    const contact: WechatContact = {
+      username: d.username,
+      nickName: d.nickName,
+      remark: d.remark,
+      displayName: d.displayName,
+      alias: d.alias,
+      category: d.category,
+      localTypeLabel: categoryLabel(d.category),
+      initial: d.initial,
+      quanPin: d.quanPin,
+      remarkQuanPin: d.remarkQuanPin,
+      description: d.description || readableProfileSignature(extra.signature),
+      ...(region === '' ? {} : { region }),
+      ...(gender === undefined ? {} : { gender }),
+      inChatRoom: d.inChatRoom,
+      localType: d.localType,
+    }
+    if (isEnterpriseWechatUser(d.username)) {
+      const enterpriseName = enterpriseNameFromExtra(d.extraRaw, enterpriseWordingNames)
+      if (enterpriseName !== undefined) contact.enterpriseName = enterpriseName
+    }
+    const avatar = d.avatarBig || d.avatarSmall
+    if (avatar) contact.avatarUrl = avatar
+    if (d.category === 'group') {
+      const mc = groupInfo.memberCounts.get(d.id)
+      if (mc !== undefined) contact.memberCount = mc
+      const owner = groupInfo.roomOwners.get(d.id)
+      if (owner) contact.owner = owner
+    } else {
+      // 2026-10-17 修：归属只由 chatroom_member 决定，与 category 正交；
+      // 一个人可以在多个群，`groupUsername` 只留第一个（兼容旧字段），完整列表放
+      // `groupUsernames`（前端筛群成员必须用后者）。
+      const rooms = groupInfo.memberRooms.get(d.id)
+      if (rooms && rooms.length > 0) {
+        contact.groupUsername = rooms[0]
+        contact.groupName = rooms[0]
+        contact.groupUsernames = rooms
+      }
+    }
+    contacts.push(contact)
+  }
+  return contacts
+}
+
 function computeContacts(
   decryptedDir: string,
   limit?: number,
   offset: number = 0,
   category: string = '',
+  search: string = '',
 ): { contacts: WechatContact[]; total: number; stats: Record<string, number> } {
   const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
   try {
     const cols = tableColumns(db, 'contact')
-    const sel = (c: string, dft: string): string => (cols.has(c) ? c : dft)
-    const sql = [
-      'SELECT',
-      [sel('id', '0'), sel('username', "''"), sel('local_type', '0'), sel('alias', "''"),
-        sel('delete_flag', '0'), sel('remark', "''"), sel('remark_pin_yin_initial', "''"),
-        sel('nick_name', "''"), sel('pin_yin_initial', "''"), sel('quan_pin', "''"),
-        // 第 85 轮：`remark_quan_pin` 是**备注**（也就是界面上显示的那个名字）的拼音，
-        // `quan_pin` 是昵称的拼音。此前只读后者 —— 于是「桂西北_教练黄剑腾」这类
-        // 备注名搜 `guixibeijiaolianhuangjianteng` 一条也搜不到（实测可新解锁 270 人）。
-        sel('remark_quan_pin', "''"),
-        sel('big_head_url', "''"), sel('small_head_url', "''"), sel('description', "''"), sel('is_in_chat_room', '0'),
-        sel('extra_buffer', 'NULL')].join(', '),
-      'FROM contact',
-    ].join(' ')
-    const rows = db.prepare(sql).all() as Array<Record<string, unknown>>
-    const enterpriseWordingNames = loadOpenimWordingNames(db)
+    const parts = buildContactSqlParts(db, cols, category, search)
+    const stats = contactStats(db, parts.categoryExpr, parts.baseWhere)
+    // `total` 是当前视图（类目 + 搜索）的条数；无过滤时直接复用 stats 的全量计数。
+    const total = category === '' && search === ''
+      ? (stats.all ?? 0)
+      : Number((db.prepare(`SELECT COUNT(*) AS c FROM contact WHERE ${parts.whereSql}`).get(...parts.filterArgs) as { c?: unknown } | undefined)?.c ?? 0)
 
-    // group info: chat_room owner + member counts (chatroom_member.room_id -> id)
-    const roomOwners = new Map<number, string>()
-    const roomUsernames = new Map<number, string>()
-    const memberCounts = new Map<number, number>()
-    /**
-     * member_id → **它所在的全部群**（room_id 列表）。
-     *
-     * ⚠️ 2026-10-17 修：原先是 `Map<member_id, room_id>`（一对一），
-     * 但**一个人可以在多个群里** —— 后写入的会覆盖前面的，于是
-     * `groupUsername` 只保留"最后一个群"，其余群查成员时一个都拿不到。
-     * 实测本机：`wxid_umyqa86if3lm22` 在 426 群，但 `memberRooms.get(99)` 返回 3061
-     * （它在 3061 群也出现过）—— 用户选 426 群时「关注成员」永远是空的。
-     */
-    const memberRooms = new Map<number, number[]>()
-    try {
-      const crCols = tableColumns(db, 'chat_room')
-      const crSel = (c: string, dft: string): string => (crCols.has(c) ? c : dft)
-      const rooms = db.prepare(`SELECT ${crSel('id', '0')} AS id, ${crSel('username', "''")} AS u, ${crSel('owner', "''")} AS o FROM chat_room`).all() as Array<{ id: number; u: string; o: string }>
-      for (const r of rooms) {
-        roomUsernames.set(r.id, r.u)
-        if (r.o) roomOwners.set(r.id, r.o)
-      }
-      const cmCols = tableColumns(db, 'chatroom_member')
-      if (cmCols.has('room_id') && cmCols.has('member_id')) {
-        const members = db.prepare('SELECT room_id, member_id FROM chatroom_member').all() as Array<{ room_id: number; member_id: number }>
-        for (const m of members) {
-          const rid = m.room_id
-          memberCounts.set(rid, (memberCounts.get(rid) ?? 0) + 1)
-          const list = memberRooms.get(m.member_id)
-          if (list) list.push(rid)
-          else memberRooms.set(m.member_id, [rid])
-        }
-      }
-    } catch { /* no group tables */ }
+    const sql = `SELECT ${parts.selectCols} FROM contact WHERE ${parts.whereSql} ORDER BY ${parts.orderSql}`
+      + (limit === undefined ? '' : ' LIMIT ? OFFSET ?')
+    const pageArgs: Array<string | number> = [...parts.filterArgs]
+    if (limit !== undefined) pageArgs.push(limit, offset)
+    const rows = db.prepare(sql).all(...pageArgs) as Array<Record<string, unknown>>
 
-    // official/service split by biz_info.type
-    const bizTypes = new Map<string, number>()
-    try {
-      const biCols = tableColumns(db, 'biz_info')
-      if (biCols.has('username') && biCols.has('type')) {
-        const biz = db.prepare('SELECT username, type FROM biz_info').all() as Array<{ username: string; type: number }>
-        for (const b of biz) bizTypes.set(b.username, b.type)
-      }
-    } catch { /* no biz_info */ }
-
-    const contacts: WechatContact[] = []
-    const stats: Record<string, number> = { friend: 0, enterprise: 0, group: 0, official: 0, service: 0, member: 0, system: 0, deleted: 0 }
-    for (const r of rows) {
-      const id = Number(r[sel('id', '0')] ?? 0)
-      const username = cellString(r[sel('username', '')])
-      if (!username) continue
-      const nickName = cellString(r[sel('nick_name', '')])
-      const remark = cellString(r[sel('remark', '')])
-      const localType = Number(r[sel('local_type', '0')] ?? 0)
-      const deleteFlag = Number(r[sel('delete_flag', '0')] ?? 0)
-      let category = categoryOf(localType, username, deleteFlag)
-      // 与聊天列表（sessions.ts）共用同一判据，避免同一账号在两个面板落到不同类目。
-      if (category === 'official' && isServiceBizType(bizTypes.get(username))) category = 'service'
-      const displayName = remark || nickName || username
-      // 全拼列在下面构造 contact 时还要用，这里先解一次复用（cellString 会做 UTF-8 解码，
-      // 重复调用等于对同一格解码两次）。
-      const quanPin = cellString(r[sel('quan_pin', '')])
-      const remarkQuanPin = cellString(r[sel('remark_quan_pin', '')])
-      const initial = initialOf(
-        cellString(r[sel('remark_pin_yin_initial', '')]),
-        cellString(r[sel('pin_yin_initial', '')]),
-        remarkQuanPin,
-        quanPin,
-        displayName,
-      )
-      const extraRaw = r[sel('extra_buffer', 'NULL')]
-      const extra = parseContactExtra(cellBuffer(extraRaw))
-      const region = buildRegion(extra.country ?? '', extra.province ?? '', extra.city ?? '').trim()
-      const gender = extra.gender === 1 || extra.gender === 2 ? extra.gender : undefined
-      stats[category] = (stats[category] ?? 0) + 1
-      const isGroup = category === 'group'
-      const contact: WechatContact = {
-        username,
-        nickName,
-        remark,
-        displayName,
-        alias: cellString(r[sel('alias', '')]),
-        category,
-        localTypeLabel: categoryLabel(category),
-        initial,
-        quanPin,
-        remarkQuanPin,
-        description: readableProfileSignature(cellString(r[sel('description', '')]))
-          || readableProfileSignature(extra.signature),
-        ...(region === '' ? {} : { region }),
-        ...(gender === undefined ? {} : { gender }),
-        inChatRoom: Number(r[sel('is_in_chat_room', '0')] ?? 0) === 1,
-        localType,
-      }
-      if (isEnterpriseWechatUser(username)) {
-        const enterpriseName = enterpriseNameFromExtra(extraRaw, enterpriseWordingNames)
-        if (enterpriseName !== undefined) contact.enterpriseName = enterpriseName
-      }
-      const avatar = cellString(r[sel('big_head_url', '')]) || cellString(r[sel('small_head_url', '')])
-      if (avatar) contact.avatarUrl = avatar
-      if (isGroup) {
-        const mc = memberCounts.get(id)
-        if (mc !== undefined) contact.memberCount = mc
-        const owner = roomOwners.get(id)
-        if (owner) contact.owner = owner
-      } else {
-        // 2026-10-17 修：**不再限定 `category === 'member'`**。
-        //
-        // 原写法只在 `member` 类别里填 `groupUsername`，于是：
-        //   · 加过好友的群成员（`localType === 1` → `friend`）拿不到归属；
-        //   · 企业微信成员（`@openim` → `enterprise`）也拿不到。
-        // 后果：定时任务的「关注成员」按 `groupUsername` 筛时，这些群一个成员都选不到
-        // （用户报障：选「智能回复机器人·ai-3群」显示「未读取到群成员」，
-        //  实测该群 3 个成员全是 friend / enterprise）。
-        //
-        // `groupUsername` 与 `category` 是**正交**的两件事：一个人可以既是好友、
-        // 又是某个群的成员。归属只由 `chatroom_member` 表决定，与联系人类型无关。
-        //
-        // ⚠️ 一个人可以在**多个群**里：`groupUsername` 只留第一个（兼容旧字段），
-        // 完整列表放 `groupUsernames` —— 前端筛群成员必须用后者，否则多群成员
-        // 只在其中一个群可见。
-        const rids = memberRooms.get(id)
-        if (rids && rids.length > 0) {
-          const names = rids.map((rid) => roomUsernames.get(rid) ?? '').filter((n) => n !== '')
-          if (names.length > 0) {
-            contact.groupUsername = names[0]
-            contact.groupName = names[0]
-            contact.groupUsernames = names
-          }
-        }
-      }
-      contacts.push(contact)
-    }
-    // source order: initial + quan_pin + display name
-    // '#'（无拼音可依的兜底桶）必须排**最后**。原实现写成
-    // `a[0] === '#' ? 1 : b[0] === '#' ? -1 : localeCompare(...)`，但这个三元是空转的：
-    // `'#'.localeCompare('A') === -1`（locale 排序把标点排在字母之前），
-    // 于是 '#' 组实际排在最前 —— 一进「全部」先看到的是一屏没有字母分类的人。
-    //
-    // 这里改用显式分级：字母组 rank 0、'#' 组 rank 1，rank 大的排后面。
-    // （注意方向：`return ra - rb` —— 给 '#' 更大的 rank 才会把它推到最后。）
-    const initialRank = (s: string): number => (s === '#' ? 1 : 0)
-    const byInitial = (a: string, b: string): number => {
-      const ra = initialRank(a)
-      const rb = initialRank(b)
-      if (ra !== rb) return ra - rb
-      if (ra === 1) return 0 // 两个都是 '#'：无需再比首字母
-      return a < b ? -1 : a > b ? 1 : 0
-    }
-    contacts.sort((a, b) => byInitial(a.initial ?? '#', b.initial ?? '#') || (a.quanPin ?? '').localeCompare(b.quanPin ?? '') || a.displayName.localeCompare(b.displayName))
-    // 分类过滤必须在 `total` 与切片**之前**（口径一致：total 就是当前视图的总条数）。
-    // `stats` 始终是全量口径 —— 页签上的数字不该随当前选中的类目变化。
-    const visible = category ? contacts.filter(c => c.category === category) : contacts
-    const total = visible.length
-    // 给界面一个稳定的「全部」总数：即使当前按类目过滤，页签上的「全部(N)」也应显示全量。
-    // （此前界面拿 total 当「全部」的计数，过滤下沉后 total 变成当前类目数，会把
-    //  「全部(2150)」显示成「全部(282)」——所以这里显式补一个 all。）
-    stats.all = contacts.length
-    // Bound the page payload: the UI lazy-loads pages instead of one full list.
-    const page = limit !== undefined ? visible.slice(offset, offset + limit) : visible
-    return { contacts: page, total, stats }
+    const { drafts, groupIds, memberIds } = decodeContactRows(rows)
+    const groupInfo = loadContactGroupInfo(db, groupIds, memberIds)
+    const contacts = assembleContacts(drafts, groupInfo, loadOpenimWordingNames(db))
+    return { contacts, total, stats }
   } finally {
     db.close()
   }

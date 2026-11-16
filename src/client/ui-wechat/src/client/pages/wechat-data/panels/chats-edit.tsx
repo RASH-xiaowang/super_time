@@ -7,11 +7,12 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import type { useConfirm } from '../ui/confirm.tsx'
-import { apiClearAllSessionDrafts, apiClearSessionDraft, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
-import { messagesMatchTalker } from './msg-scope.ts'
+import { apiClearAllSessionDrafts, apiClearSessionDraft, apiGetMessages, apiListEditedMessages, apiResetEditedMessage } from '../api.ts'
+import { readChatRenderCache, writeChatRenderCache } from './chat-render-cache.ts'
+import { mergeRowsInPlace } from './message-identity.ts'
 import { useActionNotice } from './use-action-notice.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { canCacheChatId, canonicalChatId } from '../utils/chat-identity.ts'
@@ -50,49 +51,77 @@ const [editing, setEditing] = useState(false)
 const { notice: editNotice, flash: flashEditNotice } = useActionNotice()
 
 const loadEdits = useCallback(async (): Promise<void> => {
+  const epoch = sessionEpochRef.current
   try {
     const r = await apiListEditedMessages(curSession ? { sessionId: curSession.username } : undefined)
+    // 响应回来时可能已经切了会话：按 localId 建的徽标集合会串到新会话上。
+    if (sessionEpochRef.current !== epoch) return
     setEdits(r.items)
     setEditedIds(new Set(r.items.map(it => it.localId)))
-  } catch { setEdits([]); setEditedIds(new Set()) }
-}, [curSession])
+  } catch {
+    if (sessionEpochRef.current !== epoch) return
+    setEdits([]); setEditedIds(new Set())
+  }
+}, [curSession, sessionEpochRef])
+
+// 切会话立即清掉上一会话的编辑记录 —— 「已编辑」徽标按 localId 匹配，跨会话会张冠李戴。
+useEffect(() => {
+  setEdits([])
+  setEditedIds(new Set())
+}, [curSession?.username])
 
 const openEdits = useCallback(async (): Promise<void> => {
   setEditedOpen(v => !v)
   if (!editedOpen) await loadEdits()
 }, [editedOpen, loadEdits])
 
-const reloadCurrent = useCallback(async (): Promise<void> => {
+const reloadCurrent = useCallback(async (targetLocalId?: number): Promise<void> => {
   if (!curSession) return
   // 记下发起时的归属：编辑后刷新期间用户可能已经切走，回来必须校验。
   const talker = curSession.username
   const epoch = sessionEpochRef.current
   try {
-    // 键带 v2：早期版本在「切会话」竞态下把上一个会话写进过 v1 缓存（别人的消息留在本会话里），
-    // 升版让那些脏数据彻底读不到；读到之后还要再校验一次归属（见 msg-scope.ts）。
-    const raw = canCacheChatId(talker)
-      ? readRenderCache<WechatMessage[]>('chat-msgs:v2:' + talker)
-      : null
-    const cached = raw && messagesMatchTalker(raw, talker, selfWxid) ? raw : null
+    // 缓存入口只有一个（chat-render-cache.ts）：键和值都带会话身份，单聊再做内容级
+    // 归属校验。早期版本在「切会话」竞态下把上一个会话写进过缓存（别人的消息留在
+    // 本会话里），升版让那些脏数据彻底读不到。
+    const cached = canCacheChatId(talker) ? readChatRenderCache(talker, selfWxid) : null
     if (!sessionAlive(epoch, talker)) return
-    if (cached && cached.length > 0) {
-      setMessages(cached)
-      setHasMore(true)
-    }
+    // 只在当前列表为空（首屏失败/重试）时用缓存兜底：编辑刷新已有内容，
+    // 直接盖缓存会把用户已经翻出来的历史整段换掉。
+    if (cached && cached.length > 0) setMessages((prev) => (prev.length === 0 ? cached : prev))
     const env = await apiGetMessages({ talker, limit: 100 })
     if (!sessionAlive(epoch, talker)) return
     const canonical = canonicalChatId(talker, env.canonicalUsername)
     if (canonical !== talker) return
-    setMessages(env.messages)
-    setWatermarkFrom(env.messages)
+    // 编辑/恢复的那条通常不在最新 100 条里：定向取回包含它的窗口，只换那一行。
+    let target: WechatMessage | undefined
+    if (targetLocalId !== undefined && !env.messages.some((m) => m.localId === targetLocalId)) {
+      const win = await apiGetMessages({ talker, limit: 100, beforeLocalId: targetLocalId })
+      if (!sessionAlive(epoch, talker)) return
+      target = win.messages.find((m) => m.localId === targetLocalId)
+    }
+    const targetRow = target ? [target] : []
+    setMessages((prev) => {
+      if (!sessionAlive(epoch, talker)) return prev
+      // 按复合身份（sort_seq + local_id）替换：只按 localId 匹配会把另一个消息分片里
+      // 同号的行换成这一条，同屏出现两份一样的内容。
+      const base = prev.length === 0 ? env.messages : prev
+      const next = mergeRowsInPlace(base, env.messages, targetRow)
+      // 还没翻过历史：以最新页的游标/水位为准；翻过就保留更早的边界与已推进的水位，
+      // 否则下一次「加载更多」会把已经加载过的历史再取一遍。
+      if (prev.length <= env.messages.length) {
+        setWatermarkFrom(env.messages)
+        setHasMore(env.hasMore ?? false)
+        setCursor(env.cursor ?? 0)
+        setCursorLocalId(env.cursorLocalId)
+      }
+      return next
+    })
     setSelfWxid(env.selfWxid ?? '')
-    setHasMore(env.hasMore ?? false)
-    setCursor(env.cursor ?? 0)
-    setCursorLocalId(env.cursorLocalId)
     setTypeStats(env.typeStats ?? [])
-    if (canCacheChatId(canonical)) writeRenderCache('chat-msgs:v2:' + canonical, env.messages)
+    if (canCacheChatId(canonical)) writeChatRenderCache(canonical, env.messages)
   } catch { /* keep current view */ }
-}, [curSession])
+}, [curSession, selfWxid])
 
 const sessionListRef = useRef<HTMLDivElement | null>(null)
 const clearDraft = useCallback(async (): Promise<void> => {
@@ -165,7 +194,7 @@ const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
   try {
     const r = await apiResetEditedMessage({ username: rec.sessionId, localId: rec.localId })
     if (!r.ok) flashEditNotice('恢复失败: ' + (r.error ?? ''))
-    else { flashEditNotice('已恢复为原始内容'); await reloadCurrent(); await loadEdits() }
+    else { flashEditNotice('已恢复为原始内容'); await reloadCurrent(rec.localId); await loadEdits() }
   } catch (e) {
     flashEditNotice('恢复失败: ' + (e as Error).message)
   } finally {

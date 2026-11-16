@@ -26,6 +26,6 @@ SOFTWARE.
 
 - 内联依赖（17 个，全部 MIT）：`src/backend/VENDORED-LICENSES.md`
 - 微信客户端资产（表情原图、朋友圈视频解密 WASM）：`src/backend/wechat-data/native/weflow-isaac64/PROVENANCE.md`
-  —— **其再分发许可尚未明确**，公开发布前需法务确认（见 `docs/RELEASE-PLAN.md` 的 H13）。
+  —— 2026-09-21 法务结论：**允许随包分发**（见该 PROVENANCE.md 与 `docs/RELEASE-PLAN.md` 的 H13）。
 
 本软件读取用户**本机**微信数据，与腾讯公司无任何关联，未获其授权或背书。

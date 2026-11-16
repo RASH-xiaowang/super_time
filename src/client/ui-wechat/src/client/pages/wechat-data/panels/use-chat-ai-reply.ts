@@ -29,7 +29,13 @@ export interface ChatAiReplyController {
   toggle: () => Promise<void>
   refresh: () => Promise<void>
   scanNow: () => Promise<void>
-  savePersona: (input: { name: string; prompt: string; splitReply: boolean }) => Promise<boolean>
+  savePersona: (input: {
+    name: string
+    prompt: string
+    splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
+  }) => Promise<boolean>
 }
 
 function currentChatAiReplyState(
@@ -196,6 +202,8 @@ export function useChatAiReply(input: {
     name: string
     prompt: string
     splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
   }): Promise<boolean> => saveChatAiReplyPersona({
     state,
     latestRef,

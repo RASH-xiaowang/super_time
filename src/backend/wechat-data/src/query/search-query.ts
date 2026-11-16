@@ -12,7 +12,10 @@ import { withDb } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
-import { decodeCell, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, searchIndexBatch } from './search-scaffold.ts'
+import {
+  decodeCell, ftsPhrase, indexReady, loadDisplayNames, loadSessionUsernames,
+  messageShardFiles, msgTableName, searchIndexBatch, searchIndexPath,
+} from './search-scaffold.ts'
 
 // 这五个「展示形状」的纯函数搬到了 `search-display.ts`（为了断掉 scaffold ↔ query 的环，
 // 理由写在那份文件的头里）。这里继续 re-export：`search.ts` 是 `export *` 转发，
@@ -21,7 +24,10 @@ export { readableMessageText, senderLabel, splitGroupPrefix, stripGroupPrefix } 
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
 import { contactMeta } from './meta.ts'
-import { displayNameForUsername, resolveTalkerUsername } from './message-identity.ts'
+import { clampLimit } from './limits.ts'
+import {
+  displayNameForUsername, isMessageTableHash, messageTableHash, resolveTalkerUsername,
+} from './message-identity.ts'
 
 /** 一条会话窗口内的消息（用于 chunk 级上下文：单条微信消息几乎不构成检索单元）。 */
 export interface WindowMessage {
@@ -211,13 +217,22 @@ export const YIELD_EVERY_MS = 25
  *
  * @param decryptedDir - decrypted data root.
  * @param username - 可选：只扫一个 talker（群聊内搜索）。
+ * @param range - 可选时间范围（epoch 秒）。**下推到分片 SQL**：日期过滤若只在取回后做，
+ *   大表会把扫描预算耗在范围外的行上，甚至一个范围内的结果都扫不到。
  * @returns `{ talker, row }`。
  */
 function* scanFallbackRows(
   decryptedDir: string,
   username?: string,
+  range?: { lo?: number; hi?: number },
 ): Generator<{ talker: string; row: Record<string, unknown> }, void, void> {
   let budget = 800_000
+  const lo = range?.lo ?? 0
+  const hi = range?.hi ?? 0
+  const timeConds: string[] = []
+  const timeArgs: number[] = []
+  if (lo > 0) { timeConds.push('create_time >= ?'); timeArgs.push(lo) }
+  if (hi > 0) { timeConds.push('create_time <= ?'); timeArgs.push(hi) }
   const shards = messageShardFiles(decryptedDir)
   const requestedScope = username?.trim() ?? ''
   const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
@@ -234,9 +249,10 @@ function* scanFallbackRows(
       if (!has) { sdb.close(); continue }
       try {
         const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1'
+          + (timeConds.length > 0 ? ' AND ' + timeConds.join(' AND ') : '')
         // 用 iterate() 而不是 all()：all() 会把整张 Msg_ 表先物化成一个数组，
         // 单会话几十万条时峰值直接与消息数同阶；而下面本来就是逐条判断后即丢。
-        for (const row of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
+        for (const row of sdb.prepare(sql).iterate(...timeArgs) as Iterable<Record<string, unknown>>) {
           budget -= 1
           if (budget <= 0) return
           yield { talker, row }
@@ -302,6 +318,7 @@ export function hitFromRow(
  * @param cap - 命中上限。
  * @param names - username → 显示名。
  * @param username - 可选：只搜一个 talker。
+ * @param person - 可选：发送者线索（转发给索引的 `who:` 召回分支；严格过滤在工具边界做）。
  * @returns 命中结果，或 null（两条快路径都没命中）。
  */
 export function probeIndexedSources(
@@ -310,12 +327,19 @@ export function probeIndexedSources(
   cap: number,
   names: Map<string, string>,
   username?: string,
+  person?: string,
 ): { hits: SearchHit[]; total: number; indexed: boolean } | null {
   const requestedScope = username?.trim() ?? ''
   const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
   if (requestedScope && !canonicalScope) return null
   // ---- 自建 BM25 索引优先（bigram 切分 + 真实 IDF + 相关度排序）----
-  const indexed = searchIndexBatch(decryptedDir, [q], cap, canonicalScope ? { username: canonicalScope } : undefined)
+  const batchOpts = canonicalScope || person
+    ? {
+      ...(canonicalScope ? { username: canonicalScope } : {}),
+      ...(person ? { person } : {}),
+    }
+    : undefined
+  const indexed = searchIndexBatch(decryptedDir, [q], cap, batchOpts)
   if (indexed.ranked && indexed.hits.length > 0) {
     return { hits: indexed.hits, total: indexed.hits.length, indexed: true }
   }
@@ -328,11 +352,105 @@ export function probeIndexedSources(
 }
 
 /**
+ * 带时间范围的索引检索（把日期条件下推到 FTS JOIN 的 SQL 里）。
+ *
+ * 为什么不复用 `searchIndexBatch`：它的签名被流水线共用，本轮对 scaffold 的改动
+ * 只允许「person 透传」这一处。而日期过滤若仍走「先取 top-N 再在内存里筛」，
+ * 命中词高频时（例如「转账」全库上万条）top-N 可能全部落在范围外 ——
+ * 范围内的真实结果会被误判成 0。这里把 `create_time` 直接放进 WHERE，
+ * 由 SQLite 先约束行集再取 limit。
+ *
+ * 投影逻辑必须与 `searchIndexBatch` 保持一致（sender 原始 wxid → 显示名等），
+ * 否则同一句查询在「带日期/不带日期」两条路径下会返回不同的形状。
+ */
+function searchIndexInRange(
+  decryptedDir: string,
+  terms: string[],
+  limit: number,
+  opts: { username?: string; person?: string; lo?: number; hi?: number },
+): { hits: SearchHit[]; ranked: boolean } {
+  if (!indexReady(decryptedDir)) return { hits: [], ranked: false }
+  const requestedScope = opts.username?.trim() ?? ''
+  const scopedUsername = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
+  if (requestedScope && !scopedUsername) return { hits: [], ranked: false }
+  const parts = terms.map(ftsPhrase).filter(Boolean)
+  // `person` 与 `searchIndexBatch` 同一口径：追加 `who:` 召回分支（OR），
+  // 严格发送者过滤由工具层按 message_meta.sender 再做一次。
+  if (opts.person) {
+    const who = ftsPhrase(opts.person)
+    if (who) parts.push('who:' + who)
+  }
+  if (parts.length === 0) return { hits: [], ranked: false }
+  const match = parts.join(' OR ')
+  try {
+    return withDb(searchIndexPath(decryptedDir), (db) => {
+      const scopeAliases = scopedUsername
+        ? [...new Set([
+          requestedScope,
+          scopedUsername,
+          messageTableHash(scopedUsername),
+          msgTableName(scopedUsername),
+        ])]
+        : []
+      const where: string[] = ['message_fts MATCH ?']
+      const args: Array<string | number> = [match]
+      if (scopeAliases.length > 0) {
+        where.push(`m.username IN (${scopeAliases.map(() => '?').join(', ')})`)
+        args.push(...scopeAliases)
+      }
+      if ((opts.lo ?? 0) > 0) { where.push('m.create_time >= ?'); args.push(opts.lo as number) }
+      if ((opts.hi ?? 0) > 0) { where.push('m.create_time <= ?'); args.push(opts.hi as number) }
+      args.push(limit)
+      const rows = db.prepare(
+        'SELECT m.text, m.username, m.create_time, m.local_id, m.sender, bm25(message_fts) AS score'
+        + ' FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid'
+        + ' WHERE ' + where.join(' AND ')
+        + ' ORDER BY rank LIMIT ?',
+      ).all(...args) as Array<Record<string, unknown>>
+      const names = loadDisplayNames(decryptedDir)
+      const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
+      const hits: SearchHit[] = []
+      for (const r of rows) {
+        const text = decodeCell(r['text'])
+        const storedUsername = decodeCell(r['username'])
+        const username = resolveTalkerUsername(decryptedDir, storedUsername)
+        // 与 `searchIndexBatch` 一致：无主的 hash 是索引残留，不是可点开的会话。
+        if (!username || isMessageTableHash(username)) continue
+        const createTime = Number(r['create_time'] ?? 0)
+        const sender = decodeCell(r['sender'])
+        hits.push({
+          text,
+          username,
+          create_time: createTime,
+          local_id: Number(r['local_id'] ?? 0),
+          name: displayNameForUsername(username, names),
+          ...(enterpriseNames.get(username) ? { enterpriseName: enterpriseNames.get(username) } : {}),
+          time: fmtDateTimeSec(createTime),
+          snippet: text.slice(0, 120),
+          sender: senderLabel(sender, names),
+          ...(sender !== '' ? { sender_username: sender } : {}),
+          ...(sender !== '' && enterpriseNames.get(sender)
+            ? { senderEnterpriseName: enterpriseNames.get(sender) }
+            : {}),
+          score: -Number(r['score'] ?? 0),
+        })
+      }
+      return { hits, ranked: true }
+    })
+  } catch {
+    return { hits: [], ranked: false }
+  }
+}
+
+/**
  * Search text messages: FTS5 index first, bounded full-table scan fallback.
  * @param decryptedDir - decrypted data root.
  * @param query - search term.
  * @param limit - max hits.
  * @param username - optional scope: only search one talker (chatroom).
+ * @param person - optional sender hint: forwarded to the index `who:` branch.
+ * @param range - optional epoch-second window; pushed into SQL so a high-frequency
+ *   term cannot crowd out the in-range rows before filtering.
  * @returns hits plus whether the index was used.
  */
 export function searchIndexMessages(
@@ -340,16 +458,59 @@ export function searchIndexMessages(
   query: string,
   limit?: number,
   username?: string,
+  person?: string,
+  range?: { lo?: number; hi?: number },
 ): { hits: SearchHit[]; total: number; indexed: boolean } {
   const q = (query || '').trim()
   if (!q) return { hits: [], total: 0, indexed: false }
-  const cap = Math.min(limit ?? 100, 300)
+  // 上限从 300 放宽到 1000：工具侧 limit 最大 100，而日期/交集/时间倒序需要
+  // 约 10 倍候选池；仍保留硬上限避免调用方传入巨大值把整库物化。
+  // 负值在 SQLite 里等价于「不限制」，NaN/小数会抛错 —— 统一走 clampLimit。
+  const cap = clampLimit(limit, 100, 1000)
   const requestedScope = username?.trim() ?? ''
   const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
   if (requestedScope && !canonicalScope) return { hits: [], total: 0, indexed: false }
   const names = loadDisplayNames(decryptedDir)
   const enterpriseNames = contactMeta(decryptedDir).enterpriseNames
-  const early = probeIndexedSources(decryptedDir, q, cap, names, canonicalScope || undefined)
+  const lo = range?.lo ?? 0
+  const hi = range?.hi ?? 0
+
+  // ---- 带日期：索引 SQL 先下推时间条件 ----
+  if (lo > 0 || hi > 0) {
+    const ranged = searchIndexInRange(decryptedDir, [q], cap, {
+      ...(canonicalScope ? { username: canonicalScope } : {}),
+      ...(person ? { person } : {}),
+      ...(lo > 0 ? { lo } : {}),
+      ...(hi > 0 ? { hi } : {}),
+    })
+    if (ranged.ranked && ranged.hits.length > 0) {
+      return { hits: ranged.hits, total: ranged.hits.length, indexed: true }
+    }
+    // 索引在范围内 0 条或未就绪：仍给内置 FTS / 兜底扫描一次机会
+    // （索引可能落后于消息分片，不能因为索引没建完就断定「没有结果」）。
+    const inRange = (h: SearchHit): boolean =>
+      h.create_time > 0 && (lo === 0 || h.create_time >= lo) && (hi === 0 || h.create_time <= hi)
+    // 内置 FTS 的 LIKE 结果先按更大的池取回再筛，同样避免范围外命中挤掉范围内命中。
+    const builtin = searchWechatFts(
+      decryptedDir, q, Math.min(cap * 10, 2000), names,
+      canonicalScope || undefined, enterpriseNames,
+    )
+    const builtinHits = builtin.hits.filter(inRange)
+    if (builtinHits.length > 0) {
+      const hits = builtinHits.slice(0, cap)
+      return { hits, total: hits.length, indexed: false }
+    }
+    const hits: SearchHit[] = []
+    const qLower = q.toLowerCase()
+    for (const { talker, row } of scanFallbackRows(decryptedDir, canonicalScope || undefined, { lo, hi })) {
+      const hit = hitFromRow(row, talker, qLower, names, enterpriseNames)
+      if (hit) hits.push(hit)
+      if (hits.length >= cap) break
+    }
+    return { hits, total: hits.length, indexed: false }
+  }
+
+  const early = probeIndexedSources(decryptedDir, q, cap, names, canonicalScope || undefined, person)
   if (early) return early
   const hits: SearchHit[] = []
   const qLower = q.toLowerCase()
@@ -390,7 +551,8 @@ export async function searchIndexMessagesCancellable(
   }
   const q = (query || '').trim()
   if (!q) return { hits: [], total: 0, indexed: false }
-  const cap = Math.min(limit ?? 100, 300)
+  // 可取消入口是界面交互路径，候选池上限更小（300）；同样必须先夹紧再使用。
+  const cap = clampLimit(limit, 100, 300)
   const requestedScope = username?.trim() ?? ''
   const canonicalScope = requestedScope ? resolveTalkerUsername(decryptedDir, requestedScope) : ''
   if (requestedScope && !canonicalScope) {

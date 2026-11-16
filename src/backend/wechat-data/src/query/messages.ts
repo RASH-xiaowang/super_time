@@ -8,8 +8,9 @@
  * resolved through each shard's Name2Id table (rowid -> wxid); when that is
  * empty the content `wxid_xxx:\n` prefix is used. `is_self` is computed
  * (the raw `is_sender` column does not exist in wechat 4.x) by comparing the
- * sender with the logged-in account wxid; Name2Id rows whose user_name is
- * empty are WeChat's own marker for the logged-in account.
+ * sender with the logged-in account wxid. An empty Name2Id row only means the
+ * logged-in account when the shard has no explicit row for it — see
+ * `message-attribution.ts#shardMarksSelfWithEmptyRow`.
  *
  * Pagination is keyset-based on `sort_seq` (the millisecond-level stable
  * order key), matching st_control: newer messages have a larger sort_seq, and
@@ -20,11 +21,10 @@
  * are decoded here so text/rich parsing sees the real content.
  */
 import { DatabaseSync } from './db-open.ts'
-import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
 import type { MessageAtUser, MessageRich, MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
-import { boundedSet, cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
+import { boundedSet, cachedBySigAsync, contactMeta, fileSigOf, shardCatalog, shardCatalogSig } from './meta.ts'
 import {
   displayNameForUsername,
   messageTableName,
@@ -32,7 +32,10 @@ import {
   type ChatIdentity,
 } from './message-identity.ts'
 import { yieldToLoop } from './search-build.ts'
+import { clampLimit } from './limits.ts'
 import { createEnterpriseDisplayIndex, enterpriseNameFor, withChatlogEnterprise, type EnterpriseDisplayIndex } from './enterprise-display.ts'
+import { fillDirectChatSender } from './message-sender.ts'
+import { knownSendersOf, senderFromContent, shardMarksSelfWithEmptyRow } from './message-attribution.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -139,31 +142,6 @@ function cellBytes(v: unknown): Buffer {
   return Buffer.alloc(0)
 }
 
-/**
- * Extract the group sender username from decoded message content.
- * The content is often a binary header + 'wxid_xxx:\n' + body; scan for a
- * username-like token followed by ':\n' anywhere, and skip binary blobs.
- * @param content - decoded message content.
- * @param talker - conversation username, used to reject the group-id prefix.
- */
-function senderFromContent(content: string, talker: string): string | null {
-  if (!content) return null
-  let printable = 0
-  for (let i = 0; i < content.length && i < 512; i += 1) {
-    const c = content.charCodeAt(i)
-    if ((c >= 0x20 && c <= 0x7e) || c >= 0x80) printable += 1
-  }
-  if (content.length > 0 && printable / Math.min(content.length, 512) < 0.6) return null
-  const m = content.match(/([A-Za-z0-9_@.\-]{3,64}):\n/)
-  if (!m) return null
-  const head = m[1] ?? ''
-  if (head.includes('<')) return null
-  // 系统消息（sysmsg）的内容前缀是【会话本身】，例如
-  // "50345516636@chatroom: <sysmsg ...>"。那不是发送者，
-  // 若不排除会把系统消息记成"群自己发的"。
-  if (talker && head === talker) return null
-  return head
-}
 /**
  * Resolve wechat system-message placeholders: `$wxid_xxx$` to the contact’s
  * display name. System messages (type 10000) reference a sender by id and
@@ -284,8 +262,13 @@ interface RawMsgRow {
   isSender: number
   createTime: number
   senderUsername: string
-  /** Name2Id 存在该 rowid 且 user_name 为空 —— WeChat 4.x 的「登录账号」标记。 */
+  /**
+   * Name2Id 存在该 rowid、user_name 为空，**且本分片没有显式的「我」行** ——
+   * 只有这种组合才是 WeChat 4.x 的「登录账号」标记（判据见 `shardMarksSelfWithEmptyRow`）。
+   */
   name2IdEmptySelf?: boolean
+  /** 本分片 Name2Id 的全部账号（用于校验正文里的发送者前缀，见 `senderFromContent`）。 */
+  knownSenders?: ReadonlySet<string>
   content: Buffer
   realSenderId?: number
   serverId?: string
@@ -317,39 +300,124 @@ interface MsgShard {
  */
 
 /**
+ * 一条待解析的「未读起点」：会话 + `unread_first_msg_srv_id` 的字符串形式。
+ */
+export interface MsgServerIdLookup {
+  /** 会话 username（`WechatSession.username` 的别名；决定 Msg_ 表名与所在分片）。 */
+  talker: string
+  /** server_id 的**字符串**形式（SQL 侧 CAST 成 TEXT 比对，见下）。 */
+  serverId: string
+}
+
+/**
+ * 批量解析「未读从什么时候开始」（第 67 轮，P2：会话未读 N+1）。
+ *
+ * 旧实现让 `querySessions` 对最多 80 个未读会话逐个调用
+ * {@link msgCreateTimeByServerId}，每次都要把**全部**消息分片打开一遍
+ * （`withShards` 按表过滤后仍要 open/close 每个含该表的分片）。会话一多，
+ * 分片打开次数 = 未读会话数 × 分片数，而且每次查询都只能按
+ * `CAST(server_id AS TEXT) = ?` 扫单表、用不上索引（int64 的 server_id 无法直接绑定）。
+ *
+ * 这里改成：
+ *   ① 分片目录只遍历一次，**每个分片只 open 一次**；
+ *   ② 同一分片内按表分组，用 `IN (?, ?, …)` 一次取回多行；
+ *   ③ 同一张表出现在多个分片时按 catalog 顺序依次尝试，保留旧语义
+ *      （第一个 `create_time > 0` 的命中生效）；某分片读失败也只跳过该分片。
+ *
+ * ⚠️ `server_id` 是 int64：SQL 侧必须 `CAST(server_id AS TEXT)` 比对，否则读出来就
+ * `ERR_OUT_OF_RANGE`；同时这也兼容老库里 `server_id` 存成 TEXT 的分片。
+ *
+ * @param decryptedDir - decrypted root.
+ * @param lookups - 按调用方顺序给出的待解析项。
+ * @returns 与 `lookups` 等长的数组；解析不到（或无效项）为 `null`。
+ */
+export function msgCreateTimesByServerIds(
+  decryptedDir: string,
+  lookups: ReadonlyArray<MsgServerIdLookup>,
+): Array<number | null> {
+  const out: Array<number | null> = lookups.map(() => null)
+  if (lookups.length === 0) return out
+  type Pending = { index: number; table: string; serverId: string }
+  const pending: Pending[] = []
+  for (let i = 0; i < lookups.length; i += 1) {
+    const entry = lookups[i]
+    if (entry === undefined) continue
+    const { talker, serverId } = entry
+    if (!talker || !serverId || serverId === '0') continue
+    const identity = resolveChatIdentity(decryptedDir, talker)
+    if (!identity.username) continue
+    pending.push({ index: i, table: msgTableName(identity.username), serverId })
+  }
+  if (pending.length === 0) return out
+
+  // 按 catalog 顺序访问分片：这与旧实现「逐个 withShards、命中即 return」的优先级一致。
+  let remaining = pending
+  for (const shard of shardCatalog(decryptedDir)) {
+    if (remaining.length === 0) break
+    const onShard = remaining.filter((item) => shard.tables.has(item.table))
+    if (onShard.length === 0) continue
+    let db: DatabaseSync | null = null
+    try {
+      db = new DatabaseSync(shard.file, { readOnly: true })
+      // 同一分片里按表分组，每张表一条 IN 查询，拼成一条 UNION ALL（分片内只查一次）。
+      const byTable = new Map<string, Pending[]>()
+      for (const item of onShard) {
+        const list = byTable.get(item.table)
+        if (list) list.push(item)
+        else byTable.set(item.table, [item])
+      }
+      const arms: string[] = []
+      const args: string[] = []
+      for (const [table, items] of byTable) {
+        arms.push(
+          `SELECT '${table}' AS tbl, CAST(server_id AS TEXT) AS sid, CAST(create_time AS TEXT) AS ct`
+          + ` FROM "${table}" WHERE CAST(server_id AS TEXT) IN (${items.map(() => '?').join(', ')})`,
+        )
+        for (const item of items) args.push(item.serverId)
+      }
+      const rows = db.prepare(arms.join(' UNION ALL ')).all(...args) as Array<Record<string, unknown>>
+      const byKey = new Map<string, Pending[]>()
+      for (const item of onShard) {
+        const key = item.table + '\u0000' + item.serverId
+        const list = byKey.get(key)
+        if (list) list.push(item)
+        else byKey.set(key, [item])
+      }
+      for (const row of rows) {
+        const ct = Number(row['ct'] ?? 0)
+        if (!(ct > 0)) continue
+        const matches = byKey.get(String(row['tbl'] ?? '') + '\u0000' + String(row['sid'] ?? ''))
+        if (matches === undefined) continue
+        for (const item of matches) {
+          if (out[item.index] === null) out[item.index] = ct
+        }
+      }
+    } catch {
+      // 该分片读失败：跳过它，未命中的条目继续在后面的分片里找（与 withShards 一致）。
+    } finally {
+      try { db?.close() } catch { /* already closed */ }
+    }
+    remaining = remaining.filter((item) => out[item.index] === null)
+  }
+  return out
+}
+
+/**
  * 用 server_id 反查一条消息的 create_time（第 67 轮）。
  *
  * 用途：`SessionTable.unread_first_msg_srv_id` 指向该会话**最早的一条未读**，
  * 把它换成时间就能显示「未读 48 条 · 最早 2 小时前」，比光一个数字更能判断该先看哪个。
- * 实测本机 41 个未读会话里 39 个能解析（另 2 个 srv_id=0，是合成会话），
- * 全部解析耗时 ~7ms（复用 catalog 的分片索引），所以可以放在 getSessions 里同步做。
+ * 实测本机 41 个未读会话里 39 个能解析（另 2 个 srv_id=0，是合成会话）。
  *
- * ⚠️ `server_id` 是 int64：SQL 侧必须 `CAST(server_id AS TEXT)` 比对，否则读出来就 `ERR_OUT_OF_RANGE`。
+ * 单条查询保留为批量的薄包装：`querySessions` 已改走
+ * {@link msgCreateTimesByServerIds}，这里的实现与批量路径共享「分片只开一次」的语义。
  * @param decryptedDir - decrypted root.
  * @param talker - 会话 username（决定 Msg_ 表名与所在分片）。
  * @param serverId - server_id 的**字符串**形式。
  * @returns create_time（epoch 秒），解析不到返回 null。
  */
 export function msgCreateTimeByServerId(decryptedDir: string, talker: string, serverId: string): number | null {
-  if (!talker || !serverId || serverId === '0') return null
-  const identity = resolveChatIdentity(decryptedDir, talker)
-  if (!identity.username) return null
-  const table = msgTableName(identity.username)
-  // `withShards` 一次把**所有**含该表的分片都打开。原先的写法是「轮到哪条关哪条，命中就 return」
-  // ⇒ 后面那些还没轮到的连接留在进程里（Windows 上从此删不掉解密目录），
-  // 而多分片的会话恰恰是消息最多的那些。改成"先取全部、finally 里全关"。
-  return withShards(decryptedDir, table, (shards) => {
-    for (const shard of shards) {
-      try {
-        const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
-        const n = Number(row?.ct ?? 0)
-        if (n > 0) return n
-      } catch {
-        // 该分片读失败就试下一个
-      }
-    }
-    return null
-  })
+  return msgCreateTimesByServerIds(decryptedDir, [{ talker, serverId }])[0] ?? null
 }
 
 /**
@@ -395,8 +463,11 @@ function withShards<T>(decryptedDir: string, table: string, fn: (shards: MsgShar
  * @param limit - max rows from this shard.
  * @returns raw rows in descending order.
  */
-function queryShardRows(shard: MsgShard, table: string, cursor: number | undefined, limit: number, cursorLocalId?: number): RawMsgRow[] {
-  return queryShardRowsWith(shard, table, cursor, undefined, limit, false, cursorLocalId)
+function queryShardRows(
+  shard: MsgShard, table: string, cursor: number | undefined, limit: number,
+  cursorLocalId?: number, self?: string,
+): RawMsgRow[] {
+  return queryShardRowsWith(shard, table, cursor, undefined, limit, false, cursorLocalId, undefined, undefined, self)
 }
 
 /**
@@ -414,7 +485,7 @@ function queryShardRows(shard: MsgShard, table: string, cursor: number | undefin
 function queryShardRowsWith(
   shard: MsgShard, table: string, cursor: number | undefined, after: number | undefined,
   limit: number, ascending: boolean, cursorLocalId?: number,
-  upTo?: { order: number; localId: number }, afterLocalId?: number,
+  upTo?: { order: number; localId: number }, afterLocalId?: number, self?: string,
 ): RawMsgRow[] {
   const { db, cols } = shard
   const has = (c: string): boolean => cols.has(c)
@@ -461,7 +532,7 @@ function queryShardRowsWith(
   ].filter(Boolean).join(' ')
   params.push(limit)
   const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>
-  return rows.map((r) => rawMsgRow(shard, r, sel))
+  return rows.map((r) => rawMsgRow(shard, r, sel, self))
 }
 
 /** Shared SELECT list for message rows; older shards get safe fallbacks. */
@@ -482,13 +553,16 @@ function rawMsgRow(
   shard: MsgShard,
   row: Record<string, unknown>,
   sel: (column: string, fallback: string) => string,
+  self?: string,
 ): RawMsgRow {
   const realSenderId = Number(row[sel('real_sender_id', '0')] ?? 0)
   const rawSource = row[sel('source', 'NULL')]
   // has + get：区分「Name2Id 没有该 rowid」与「有该 rowid 但 user_name 为空」。
-  // 空 user_name 是 WeChat 4.x 对登录账号自己的标记，不能和 miss 混为一谈。
+  // 空 user_name 只有在**本分片没有显式「我」行**时才代表登录账号（见上一条注释）。
   const hasName = shard.name2id.has(realSenderId)
   const nameVal = hasName ? (shard.name2id.get(realSenderId) ?? '') : undefined
+  const emptyNameIsSelf = hasName && nameVal === '' && realSenderId > 0
+    && shardMarksSelfWithEmptyRow(shard.name2id, self ?? '')
   return {
     localId: Number(row[sel('local_id', '0')] ?? 0),
     sortSeq: Number(row[sel('sort_seq', 'local_id')] ?? 0),
@@ -496,7 +570,8 @@ function rawMsgRow(
     isSender: Number(row[sel('is_sender', '0')] ?? 0),
     createTime: Number(row[sel('create_time', '0')] ?? 0),
     senderUsername: nameVal ?? '',
-    ...(nameVal === '' && hasName && realSenderId > 0 ? { name2IdEmptySelf: true } : {}),
+    ...(emptyNameIsSelf ? { name2IdEmptySelf: true } : {}),
+    knownSenders: knownSendersOf(shard.name2id),
     content: cellBytes(row[sel('message_content', 'NULL')]),
     realSenderId,
     ...(rawSource !== null && rawSource !== undefined ? { source: cellBytes(rawSource) } : {}),
@@ -528,24 +603,27 @@ function toWechatMessages(
     // "wxid_xxx:\n" 前缀（群消息）兜底。注意【不能】拿 real_sender_id 去查
     // message_resource.db 的 SenderName2Id —— 那是另一套 id 空间（实测同 id
     // 100% 指向不同的人），会给出错误的人名。
-    const prefixSender = senderFromContent(content, talker)
+    const prefixSender = senderFromContent(content, talker, r.knownSenders)
     const name2IdSender = r.senderUsername || ''
-    // 内容前缀（真实 wxid）优先于 Name2Id；Name2Id 空行是「自己」的占位。
+    // 内容前缀（真实 wxid）优先于 Name2Id；只有本分片没有显式「我」行时，
+    // Name2Id 空行才是「自己」的占位（判据见 `shardMarksSelfWithEmptyRow`）。
     const sender = prefixSender || name2IdSender
     const self = selfUsername && selfUsername.length > 0 ? selfUsername.trim() : ''
     // isSelf 判定（WeChat 4.x Msg_ 表没有 is_sender 列，只能推导）：
     // 1. 已解析 sender 且已知 self → 精确比对；
     // 2. 内容前缀未给出 sender，且 Name2Id 为空行 → 登录账号自己
-    //    （实测约 6% 消息走这条路径；原先漏判会把「我发的」全画到对方侧）；
-    // 3. 私聊且 sender === talker → 对方；
+    //    （仅当本分片找不到显式「我」行 —— 否则那个空名行是别的群成员，
+    //    认成「我」会把他/她整个人的消息画到右侧）；
+    // 3. 私聊且 sender === talker → 对方（与自己对话的会话除外，那里所有消息都是自己的）；
     // 4. 私聊且 self 未知、sender 是别的 wxid → 按启发式视为自己；
     // 5. 其余（群聊未知 sender 等）→ 对方/未知，避免把别人的气泡画成自己。
     let isSelf = false
     if (sender.length > 0 && self.length > 0) {
       isSelf = sender === self
       // 私聊对端 talker 不可能是「自己」：selfUsername 被错配成对方 wxid 时
-      // 若不拦，对方的消息会画到右侧（串成「我发的」）。
-      if (!isGroup && sender === talker) isSelf = false
+      // 若不拦，对方的消息会画到右侧（串成「我发的」）。例外是「和自己对话」
+      // （talker 就是登录账号）：拦下来会把自己的消息全部画到左边。
+      if (!isGroup && sender === talker && talker !== self) isSelf = false
     } else if (!prefixSender && r.name2IdEmptySelf === true) {
       isSelf = true
     } else if (!isGroup && sender.length > 0 && sender === talker) {
@@ -603,8 +681,7 @@ function toWechatMessages(
         if (enterpriseName) msg.senderEnterpriseName = enterpriseName
       }
     } else if (!isSelf) {
-      const enterpriseName = enterpriseNames.get(talker)?.trim()
-      if (enterpriseName) msg.senderEnterpriseName = enterpriseName
+      fillDirectChatSender(msg, talker, contactNames, enterpriseNames)
     }
     return msg
   })
@@ -639,14 +716,16 @@ export function queryNewMessages(
   const table = msgTableName(canonicalTalker)
   return withShards(decryptedDir, table, (shards) => {
     if (shards.length === 0) return { messages: [], total: 0, hasMore: false, ...chatIdentityFields(identity) }
-    const cap = Math.min(limit ?? 200, 1000)
+    // 负值在 SQLite 的 `LIMIT -1` 里等于「整表物化」，NaN/小数则直接抛错；
+    // 统一夹到 [1, 1000]。正常分页语义（默认 200）不变。
+    const cap = clampLimit(limit, 200, 1000)
     const localAfter = afterLocalId !== undefined && Number.isSafeInteger(afterLocalId) && afterLocalId >= 0
       ? afterLocalId
       : undefined
     const merged: RawMsgRow[] = []
     for (const shard of shards) {
       merged.push(...queryShardRowsWith(
-        shard, table, undefined, after, cap + 1, true, undefined, undefined, localAfter,
+        shard, table, undefined, after, cap + 1, true, undefined, undefined, localAfter, selfUsername,
       ))
     }
     merged.sort((a, b) => a.sortSeq - b.sortSeq || a.localId - b.localId)
@@ -676,16 +755,15 @@ interface MessageStats {
 
 const statsCache = new Map<string, { sig: string; stats: MessageStats }>()
 
-/** Fingerprint the shard files backing one talker's table (mtime+size). */
+/**
+ * Fingerprint the shard files backing one talker's table.
+ *
+ * 用 `fileSigOf`（纳秒 mtime + size + change counter + **WAL 尾巴**）而不是裸
+ * `mtimeMs:size`：WAL 模式下新消息先落 `-wal`，主库可能长时间不变 —— 旧口径
+ * 会把「刚收到一条」的统计缓存判成没变。
+ */
 function shardStatsFingerprint(shards: MsgShard[]): string {
-  return shards.map((s) => {
-    try {
-      const st = statSync(s.file)
-      return `${s.file}:${st.mtimeMs}:${st.size}`
-    } catch {
-      return s.file + ':?'
-    }
-  }).join('|')
+  return shards.map((s) => `${s.file}:${fileSigOf(s.file)}`).join('|')
 }
 
 /** Cached per-talker typeStats + total; invalidated by shard file signatures. */
@@ -695,12 +773,19 @@ function messageStats(decryptedDir: string, table: string, shards: MsgShard[]): 
   const hit = statsCache.get(key)
   if (hit && hit.sig === sig) return hit.stats
   const statsMap = new Map<number, number>()
+  // 总数从 GROUP BY 的结果里累加：旧实现为拿 total 再对每张分片跑一次
+  // `COUNT(*)`，等于每拍把同一批行扫两遍（导出/轮询都会走到这里）。
+  let total = 0
   for (const shard of shards) {
     const { db, cols } = shard
-    if (!cols.has('local_type')) continue
+    if (!cols.has('local_type')) {
+      try { total += Number(db.prepare('SELECT COUNT(*) AS c FROM ' + table).get()?.c ?? 0) } catch { /* skip */ }
+      continue
+    }
     try {
       const rows = db.prepare('SELECT local_type AS t, COUNT(*) AS c FROM ' + table + ' GROUP BY local_type').all() as Array<{ t: number; c: number }>
       for (const r of rows) {
+        total += r.c
         const key2 = normalizeMsgType(r.t)
         statsMap.set(key2, (statsMap.get(key2) ?? 0) + r.c)
       }
@@ -710,11 +795,6 @@ function messageStats(decryptedDir: string, table: string, shards: MsgShard[]): 
     .map(([type, count]) => ({ type, label: msgTypeLabel(type), count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10)
-  const total = shards.reduce((a, s) => {
-    try {
-      return a + Number(s.db.prepare('SELECT COUNT(*) AS c FROM ' + table).get()?.c ?? 0)
-    } catch { return a }
-  }, 0)
   const stats: MessageStats = { total, typeStats }
   boundedSet(statsCache, key, { sig, stats }, 512)
   return stats
@@ -778,7 +858,8 @@ export function queryMessages(
   const table = msgTableName(canonicalTalker)
   return withShards(decryptedDir, table, (shards) => {
     if (shards.length === 0) return { messages: [], total: 0, ...chatIdentityFields(identity) }
-    const pageSize = Math.min(limit ?? 100, 1000)
+    // 见 `clampLimit`：负值会让 SQLite 返回全表，NaN/小数会抛错。
+    const pageSize = clampLimit(limit, 100, 1000)
     const requestedBound = beforeLocalId !== undefined && Number.isSafeInteger(beforeLocalId) && beforeLocalId > 0
       ? beforeLocalId
       : undefined
@@ -796,8 +877,8 @@ export function queryMessages(
     const merged: RawMsgRow[] = []
     for (const shard of shards) {
       merged.push(...(bound
-        ? queryShardRowsWith(shard, table, undefined, undefined, limitPerShard, false, undefined, bound)
-        : queryShardRows(shard, table, cursor, limitPerShard, cursorLocalId)))
+        ? queryShardRowsWith(shard, table, undefined, undefined, limitPerShard, false, undefined, bound, undefined, selfUsername)
+        : queryShardRows(shard, table, cursor, limitPerShard, cursorLocalId, selfUsername)))
     }
     // Global sort: sort_seq DESC, local_id DESC (stable across shards).
     merged.sort((a, b) => b.sortSeq - a.sortSeq || b.localId - a.localId)
@@ -868,11 +949,12 @@ export function queryMessagesAtOrBefore(
     const bound = messageOrderBound(shards, table, localId)
     if (bound === undefined) return { messages: [], found: false }
 
-    const pageSize = Math.max(1, Math.min(Math.trunc(limit), 60))
+    // `Math.trunc(NaN)` 仍是 NaN，旧的 Math.max/min 组合会把 NaN 漏进 SQL。
+    const pageSize = clampLimit(limit, 20, 60)
     const merged: RawMsgRow[] = []
     for (const shard of shards) {
       merged.push(...queryShardRowsWith(
-        shard, table, undefined, undefined, pageSize, false, undefined, bound,
+        shard, table, undefined, undefined, pageSize, false, undefined, bound, undefined, selfUsername,
       ))
     }
     merged.sort((a, b) => b.sortSeq - a.sortSeq || b.localId - a.localId)
@@ -940,7 +1022,7 @@ export function queryMessageByLocalId(
             sel('source', 'NULL')].join(', '),
           'FROM "' + table + '" WHERE local_id = ? LIMIT 2',
         ].join(' ')).all(localId) as Array<Record<string, unknown>>
-        for (const row of rows) matches.push(rawMsgRow(shard, row, sel))
+        for (const row of rows) matches.push(rawMsgRow(shard, row, sel, selfUsername))
       } catch {
         // A damaged/older shard is skipped; the result still says whether a
         // unique canonical row was found in any readable shard.
@@ -1055,7 +1137,7 @@ function queryMessageByServerIdInTalker(
       if (!row) continue
       const meta = contactMeta(decryptedDir)
       const message = toWechatMessages(
-        [rawMsgRow(shard, row, sel)],
+        [rawMsgRow(shard, row, sel, selfUsername)],
         identity.username,
         identity.username.endsWith('@chatroom'),
         meta.names,

@@ -35,6 +35,12 @@ const POLICY = resolve(HERE, '../../../../../../../backend/http-remote-policy.js
 
 /** 台账：文件 → 覆盖它的那一句（在 `file` 里必须能原样搜到）。 */
 const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, why: string }>> = {
+  'health-actions.ts': {
+    file: 'Health.tsx',
+    needle: "desktopOnlyGate('health')",
+    why: '健康中心的取数/体检/修复/重解密动作只由 HealthPanel 调用，而该面板在所有 hooks 之后'
+      + ' 先过 desktopOnlyGate（浏览器态整节换成降级卡，手机态没有这些入口）',
+  },
   'use-original-harvest.ts': {
     file: 'settings-steps.tsx',
     needle: 'onClick={() => { void originalHarvest(',
@@ -72,9 +78,11 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
     why: '本库模型弹层只从 KbRail 的模型芯片打开，那颗芯片在手机态禁用',
   },
   'kb-index-build.ts': {
-    file: 'kb-files-panel.tsx',
-    needle: 'disabled={indexing || batchJobs.runningId !== null} {...desktopActionProps()}',
-    why: '建索引 hook 只被「语义索引」那颗按钮驱动，按钮已禁用',
+    // 2026-11-13：页头低频动作收进「文档工具」菜单后，那颗「语义索引」按钮移到
+    // `KbToolsMenu`；降级标记也随之落到菜单项上（`desktopOnly` 来自 desktopAction()）。
+    file: 'kb-batch-actions.tsx',
+    needle: 'disabled={busy || desktopOnly}',
+    why: '建索引 hook 只被「文档工具 → 语义索引」菜单项驱动，该项在手机态禁用',
   },
   'moments-export.ts': {
     file: 'moments-panel.tsx',
@@ -242,7 +250,9 @@ describe('远程动作门控台账（每个仅桌面动作都有人挡着）', (
    */
   const MIN_GATE_MARKERS: Readonly<Record<string, number>> = {
     'Contacts.tsx': 3,
-    'kb-files-panel.tsx': 3,
+    // 2026-11-13：3 → 2 —— 页头两个低频动作收进 KbToolsMenu（降级落在 kb-batch-actions.tsx，
+    // 由台账 ② 那条 needle 钉住），本文件只剩「添加文件」与详情区两处。
+    'kb-files-panel.tsx': 2,
     'Annual.tsx': 2,
     'moments-panel.tsx': 2,
     'NoticeBanner.tsx': 2,
@@ -259,8 +269,8 @@ describe('远程动作门控台账（每个仅桌面动作都有人挡着）', (
       if (n < floor) thin.push(`${file}：登记下限 ${String(floor)}，实测 ${String(n)}`)
     }
     expect(thin).toEqual([])
-    // 反例自证：下限不是恒真 —— 少一条就会被点名
-    expect(Object.values(MIN_GATE_MARKERS).reduce((s, v) => s + v, 0)).toBeGreaterThanOrEqual(16)
+    // 反例自证：下限不是恒真 —— 少一条就会被点名（2026-11-13：kb-files-panel 3 → 2 后总和 15）
+    expect(Object.values(MIN_GATE_MARKERS).reduce((s, v) => s + v, 0)).toBeGreaterThanOrEqual(15)
   })
 
   it('反例自证：把某个真实 api 改判成「仅桌面」，判据立刻把没降级的文件点名', (): void => {

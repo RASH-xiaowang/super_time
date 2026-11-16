@@ -47,6 +47,12 @@ export type ToolName =
   | 'search_files'
   | 'search_records'
   | 'search_kb'
+  | 'get_funds_summary'
+  | 'get_call_history'
+  | 'get_group_detail'
+  | 'search_revoked'
+  | 'aggregate_media'
+  | 'get_moments_stats'
 
 /** 工具的分类（用于界面分组与「这次用了哪类工具」的展示）。 */
 export type ToolCategory = 'message' | 'aggregate' | 'contact' | 'content' | 'kb'

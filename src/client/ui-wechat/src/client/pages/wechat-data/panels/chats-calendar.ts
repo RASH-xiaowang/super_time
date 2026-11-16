@@ -10,7 +10,7 @@
  * 后者只需要数 RPC。名字刻意不叫 `fmt*` / `format*` —— 那个前缀 + 单位换算会被
  * `format-single-source` 判成第二份时间格式化实现（本仓真有过一次）。
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { apiGetDailyCounts } from '../api.ts'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
@@ -122,6 +122,13 @@ export function useChatsCalendar(inputs: ChatsCalendarInputs): ChatsCalendarStat
   const [calCounts, setCalCounts] = useState<DailyCounts>({})
   const [calLoading, setCalLoading] = useState(false)
   const derived = useMemo(() => deriveCalendar(calCounts, calYear, calMonth), [calCounts, calYear, calMonth])
+  /**
+   * 请求序号 + 目标年月：快速翻月时多个 `apiGetDailyCounts` 可能乱序落地，
+   * 只有「最后一次发起的请求」才允许提交（否则会把 3 月的计数画进 4 月的网格）。
+   */
+  const countRequestRef = useRef(0)
+  const calYmRef = useRef({ year: calYear, month: calMonth })
+  calYmRef.current = { year: calYear, month: calMonth }
 
   /**
    * 取某年某月的日计数。
@@ -131,15 +138,18 @@ export function useChatsCalendar(inputs: ChatsCalendarInputs): ChatsCalendarStat
    * 失败写进消息流那一侧的错误位（改前就是这样，这里保持原样）。
    */
   const fetchCounts = useCallback(async (username: string, year: number, month: number): Promise<void> => {
+    const seq = countRequestRef.current + 1
+    countRequestRef.current = seq
     setCalLoading(true)
     setCalCounts({})
     try {
       const r = await apiGetDailyCounts({ username, year, month })
+      if (seq !== countRequestRef.current) return
       setCalCounts(r.counts)
     } catch (e) {
-      setMsgError((e as Error).message)
+      if (seq === countRequestRef.current) setMsgError((e as Error).message)
     } finally {
-      setCalLoading(false)
+      if (seq === countRequestRef.current) setCalLoading(false)
     }
   }, [setMsgError])
 
@@ -162,8 +172,13 @@ export function useChatsCalendar(inputs: ChatsCalendarInputs): ChatsCalendarStat
 
   const refreshCurrentMonth = useCallback(async (): Promise<void> => {
     if (!curSession) return
+    const year = calYear
+    const month = calMonth
     try {
-      const r = await apiGetDailyCounts({ username: curSession.username, year: calYear, month: calMonth })
+      const r = await apiGetDailyCounts({ username: curSession.username, year, month })
+      // 静默刷新期间用户可能已经翻月：迟到的响应不能覆盖当前网格。
+      const current = calYmRef.current
+      if (current.year !== year || current.month !== month) return
       setCalCounts(r.counts)
     } catch { /* 静默：保留旧值，下一次事件再试 */ }
   }, [curSession, calYear, calMonth])

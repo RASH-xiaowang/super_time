@@ -22,8 +22,9 @@
  *
  * @module ui/mobile-nav
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { NAV_GROUPS, type NavItem, type WechatTab } from '../nav-config.ts'
+import { BugReportDialog } from '../panels/BugReportDialog.tsx'
 import { PHONE_QUERY, useMediaQuery } from './use-media-query.ts'
 import css from './mobile-nav.module.css'
 
@@ -126,6 +127,31 @@ function MoreIcon(): React.JSX.Element {
 }
 
 /**
+ * 「Bug 反馈」的图标：24×24 线稿 bug。
+ *
+ * 不复用 nav-config 里的 settings 图标 —— 它是个齿轮，两个入口并排却同图，
+ * 用户分不清哪个是配置、哪个是报障。
+ */
+function BugIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m8 2 1.88 1.88" />
+      <path d="M14.12 3.88 16 2" />
+      <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
+      <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" />
+      <path d="M12 20v-9" />
+      <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
+      <path d="M6 13H2" />
+      <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
+      <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
+      <path d="M22 13h-4" />
+      <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+    </svg>
+  )
+}
+
+/**
  * 底部标签栏。
  *
  * @param props.active - 当前 tab（高亮用）。
@@ -142,6 +168,15 @@ export function MobileNav({
   onOpenSettings?: () => void
 }): React.JSX.Element {
   const [moreOpen, setMoreOpen] = useState(false)
+  // Bug 反馈弹窗的状态不能挂在 `MobileNavHost` 的对外 props 上：宿主（WechatDataPanel）
+  // 只关心导航选中与设置入口，报障入口完全属于手机端自己的「更多」sheet。
+  const [bugOpen, setBugOpen] = useState(false)
+  // 打开 Bug 弹窗前会先卸载 sheet（触发按钮随之消失），关闭后焦点必须手动还给「更多」。
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null)
+  /** sheet 根节点：初始焦点、Tab 焦点陷阱、body 滚动锁都以它为界。 */
+  const sheetRef = useRef<HTMLDivElement | null>(null)
+  /** 记录 sheet 是否真的打开过，避免首次挂载时把页面焦点抢到「更多」。 */
+  const wasMoreOpenRef = useRef(false)
   const groups = sheetGroups()
   const settingsItem = ITEM_BY_TAB.get('settings')
 
@@ -153,10 +188,42 @@ export function MobileNav({
 
   useEffect(() => {
     if (!moreOpen) return undefined
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMoreOpen(false) }
+    const panel = sheetRef.current
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    wasMoreOpenRef.current = true
+    // 打开即把焦点送进 sheet（第一个可聚焦元素是右上角关闭按钮）。
+    panel?.querySelector<HTMLElement>('button')?.focus()
+    const focusables = (): HTMLElement[] => panel === null
+      ? []
+      : [...panel.querySelectorAll<HTMLElement>('button:not([disabled]),[href],input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])')]
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') { e.preventDefault(); setMoreOpen(false); return }
+      if (e.key !== 'Tab') return
+      const items = focusables()
+      if (items.length === 0) { e.preventDefault(); return }
+      const first = items[0] as HTMLElement
+      const last = items[items.length - 1] as HTMLElement
+      const current = document.activeElement
+      const inside = current !== null && panel?.contains(current) === true
+      if (e.shiftKey) {
+        if (!inside || current === first) { e.preventDefault(); last.focus() }
+      } else if (!inside || current === last) { e.preventDefault(); first.focus() }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKey)
+    }
   }, [moreOpen])
+
+  // 关闭后焦点还给「更多」；但转去 Bug 弹窗时交给它的 onClose 处理（它自己会还）。
+  useEffect(() => {
+    if (moreOpen) { wasMoreOpenRef.current = true; return }
+    if (!wasMoreOpenRef.current) return
+    wasMoreOpenRef.current = false
+    if (!bugOpen) moreButtonRef.current?.focus()
+  }, [moreOpen, bugOpen])
 
   // 当前 tab 不在 4 个高频位里时，「更多」那一格高亮 —— 否则用户看不出自己在哪。
   const inPrimary = PRIMARY.includes(active)
@@ -164,7 +231,7 @@ export function MobileNav({
   return (
     <>
       {moreOpen && (
-        <div className={css.sheet} role="dialog" aria-modal="true" aria-label="全部功能">
+        <div ref={sheetRef} className={css.sheet} role="dialog" aria-modal="true" aria-label="全部功能">
           <div className={css.sheetScrim} onClick={() => setMoreOpen(false)} aria-hidden="true" />
           <div className={css.sheetPanel}>
             <span className={css.sheetGrip} aria-hidden="true" />
@@ -196,17 +263,29 @@ export function MobileNav({
                   </div>
                 </section>
               ))}
-              {onOpenSettings && settingsItem && (
-                <section className={css.sheetGroup}>
-                  <h3 className={css.sheetGroupLabel}>配置</h3>
-                  <div className={css.sheetGrid}>
+              {/* 配置组无条件渲染：Bug 反馈不依赖设置入口，不能因 settings 缺失整组消失。 */}
+              <section className={css.sheetGroup}>
+                <h3 className={css.sheetGroupLabel}>配置</h3>
+                <div className={css.sheetGrid}>
+                  {/* 设置入口保持原行为：宿主没接 onOpenSettings（也没有图标数据）时整格不渲染。 */}
+                  {onOpenSettings && settingsItem && (
                     <button type="button" className={css.sheetItem} onClick={() => { setMoreOpen(false); onOpenSettings() }}>
                       <NavIcon fragment={settingsItem.icon} size={22} />
                       <span className={css.sheetItemLabel}>设置</span>
                     </button>
-                  </div>
-                </section>
-              )}
+                  )}
+                  <button
+                    type="button"
+                    className={css.sheetItem}
+                    onClick={() => { setMoreOpen(false); setBugOpen(true) }}
+                    aria-label="Bug 反馈：提交问题或功能建议"
+                    title="提交 Bug 或功能建议"
+                  >
+                    <BugIcon />
+                    <span className={css.sheetItemLabel}>Bug 反馈</span>
+                  </button>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -231,6 +310,7 @@ export function MobileNav({
           )
         })}
         <button
+          ref={moreButtonRef}
           type="button"
           className={css.barItem}
           data-active={(!inPrimary || moreOpen) || undefined}
@@ -242,6 +322,21 @@ export function MobileNav({
           <span className={css.barLabel}>更多</span>
         </button>
       </nav>
+
+      {/*
+        Bug 弹窗挂在 Fragment 根上，而不是 sheet 里：点「Bug 反馈」会先关 sheet，
+        弹窗若跟着 sheet 卸载，用户看到的是「点了没反应」。Radix portal 到 body，
+        位置与底部栏无关。
+      */}
+      <BugReportDialog
+        open={bugOpen}
+        onClose={() => {
+          setBugOpen(false)
+          // Radix 关闭时会把焦点还给「打开时的 activeElement」，而那个元素（sheet 里的
+          // Bug 按钮）已经随 sheet 卸载了。等它自己的焦点恢复跑完，再把焦点交还「更多」。
+          window.setTimeout(() => { moreButtonRef.current?.focus() }, 0)
+        }}
+      />
     </>
   )
 }

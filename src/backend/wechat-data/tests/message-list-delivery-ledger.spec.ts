@@ -307,6 +307,8 @@ describe('下游投递：台账、批量与删除', () => {
     )
 
     expect(result.ok).toBe(true)
+    // 夹具覆盖了「chatName 被归一化为占位名」的路径：投递目标仍须回落到触发对象。
+    expect(getMessageListRecord(decrypted, inserted.id ?? 0)?.chatName).toBe('未命名会话')
     expect(body.target).toBe('文件传输助手')
     expect(body.mention).toBeUndefined()
   })

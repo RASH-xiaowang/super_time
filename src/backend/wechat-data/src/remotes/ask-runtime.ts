@@ -770,10 +770,15 @@ function createSynthesizer(input: SynthesizerInput): AnswerSynthesizeFn {
         signal ?? deps.cancelSignal,
       )
     }
+    /*
+     * 推理模型的 reasoning 与正文共享同一个输出上限：1200 在实测里会被
+     * 上千 token 的「回答整理思考」吃掉，正文写到一半就断（2026-11-13 真机
+     * 复现：回答停在「…问题沟通群」）。给到 4096，保证思考 + 3 段正文都有余量。
+     */
     const answer = await gatedChat(
       system,
       prompt,
-      1200,
+      4096,
       deps.emitDelta,
       text => onReasoning(text, { phase: 'synthesis', mode: 'snapshot' }),
       prepared.blocks,

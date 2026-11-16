@@ -356,10 +356,30 @@ export function buildAskTools(input: AskRetrievalInput): RetrievalTool[] {
   const retrConfig = loadRetrievalConfig(input.decryptedDir)
   const embedModel = input.embedModelName(retrConfig.embedding.model)
   const embedFn = retrConfig.embedding.enabled ? input.makeEmbedFn(embedModel) : undefined
-  return buildTools({
+  const tools = buildTools({
     ...(embedFn ? { embedFn } : {}),
     embedModel,
     hybridExecutor: makeAskHybridExecutor(input),
+  })
+  /*
+   * 能力裁剪：工具「存在但必然失败」比「不存在」更糟 —— 模型会先调它、拿到
+   * not_configured/unsupported_scope，再被判降级，既浪费轮次也污染证据状态。
+   * 这里按本次装配的真实能力过滤 schema 与兜底清单（同一份数组会被循环使用）。
+   *   · 没有选中知识库 → 不提供 search_kb；
+   *   · 未启用向量模型 → 不提供 search_semantic；
+   *   · 明确禁用本机微信数据（无人值守自动回复）→ 只保留知识库与混合检索
+   *     （后者内部还会再校验 wechatDataEnabled）。
+   */
+  const hasKb = input.kbId !== undefined && input.kbId > 0
+  return tools.filter(tool => {
+    if (tool.name === 'search_kb') return hasKb
+    if (tool.name === 'search_semantic') return embedFn !== undefined
+    if (input.wechatDataEnabled === false) {
+      // search_kb 已在上面的分支按 kbId 处理；这里只保留混合检索，
+      // 它自身会再次校验 wechatDataEnabled，mode=kb 时才允许出网。
+      return tool.name === 'search_hybrid'
+    }
+    return true
   })
 }
 

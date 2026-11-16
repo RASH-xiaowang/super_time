@@ -403,13 +403,15 @@ export interface WechatRemote {
     provider?: 'dsh-wechat-bridge' | 'custom-webhook'
     expectedRevision?: number
   }): Promise<RemoteResult<ChatAiReplyMutationResult>>
-  /** 保存当前会话的人格与回复风格；写入会推进 revision 并取消旧任务。 */
+  /** 保存当前会话的人格、回复风格与知识库参与设置；写入会推进 revision 并取消旧任务。 */
   setChatAiReplyPersona(options: {
     chatUsername: string
     chatName?: string
     personaName: string
     personaPrompt: string
     splitReply?: boolean
+    kbEnabled?: boolean
+    kbId?: number
     expectedRevision?: number
   }): Promise<RemoteResult<ChatAiReplyMutationResult>>
   /** 立即扫描一次（桌面端诊断用）。 */
@@ -633,6 +635,12 @@ export interface WechatRemote {
     url?: string
     token?: string
     seed?: string
+    originalWidth?: number
+    originalHeight?: number
+    originalBytes?: number
+    uhdUrl?: string
+    uhdToken?: string
+    uhdSeed?: string
     offline?: boolean
   }): Promise<RemoteResult<ImageDataUrlResult>>
   /**
@@ -740,7 +748,21 @@ export interface WechatRemote {
   }): Promise<RemoteResult<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>>
   /** 导出朋友圈单张原图到指定路径（缩略图和密文不会被写盘）。 */
   exportSnsImage(options: {
-    md5: string; timelineId?: string; mediaId?: string; url?: string; token?: string; seed?: string; key?: string; dest: string; jobId?: string
+    md5: string
+    timelineId?: string
+    mediaId?: string
+    url?: string
+    token?: string
+    seed?: string
+    key?: string
+    originalWidth?: number
+    originalHeight?: number
+    originalBytes?: number
+    uhdUrl?: string
+    uhdToken?: string
+    uhdSeed?: string
+    dest: string
+    jobId?: string
   }): Promise<RemoteResult<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }>>
   /** 导出单张聊天原图到指定路径（只有缩略图时拒绝写盘）。 */
   exportChatImage(options: {

@@ -11,6 +11,7 @@
 */
 import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, apiOriginalHarvest, apiGetOriginalHarvestStatus, apiGetWxcdnQuota, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
+import { applyDataIdentityAfterSave, rememberDataIdentity } from '../cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
 import { PollRegistry, createPollRegistry } from './poll-registry.ts'
@@ -225,10 +226,9 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
    */
   const [imgDetailTitle, setImgDetailTitle] = useState('图片解密详情')
   /**
-   * 「联网补齐原图」的四个状态。
-   *
-   * `origPlan` 是**先扫描再取回**的那份盘点：用户问得出「为什么这张没有原图」，而答案分三类
-   * （本机已有 / 可联网取 / 只有微信登录态才拿得到）。不给这个数，界面上只能给一句「取不到」。
+   * 「联网补齐原图」的四个状态。`origPlan` 是**先扫描再取回**的盘点：
+   * 用户问得出「为什么这张没有原图」，而答案分三类（本机已有 / 可联网取 / 只有登录态才拿得到）。
+   * 不给这个数，界面上只能给一句「取不到」。
    */
   const [origPlan, setOrigPlan] = useState<OriginalFetchPlan | null>(null)
   const [origBusy, setOrigBusy] = useState<'scan' | 'fetch' | null>(null)
@@ -341,11 +341,9 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     return () => { window.clearTimeout(t1); window.clearTimeout(t2) }
   }, [])
   /**
-   * 富提示写入（本面板唯一的 notify 入口）。
-   *
-   * 时长按改前原样保留两档：带 details（失败明细清单）12s、其余 5s。
-   * 为什么用 `flash(value, ms)` 而不是给 hook 加一个新形态：控制器已经有「写入 + 各自计时 +
-   * 重启用新时长」的语义，富提示只是 value 变成了对象（`useTransientNotice<T>` 本来就是泛型）。
+   * 富提示写入（本面板唯一的 notify 入口）。时长按改前原样保留两档：带 details 12s、其余 5s。
+   * 为什么用 `flash(value, ms)`：控制器已有「写入 + 各自计时 + 重启用新时长」的语义，
+   * 富提示只是 value 变成了对象（`useTransientNotice<T>` 本来就是泛型）。
    */
   const notify = (kind: 'ok' | 'err', text: string, details?: readonly string[]): void => {
     const rich = Boolean(details && details.length > 0)
@@ -371,6 +369,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     setCfgLoading(true)
     try {
       const c = await apiGetWechatConfigFull()
+      rememberDataIdentity(c)
       setCfg(c)
       writeRenderCache(SETTINGS_CONFIG_CACHE_KEY, cacheableConfig(c))
       setDbDir(c.db_dir)
@@ -610,6 +609,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       })
       if (r.ok) {
         setSaveMsg({ kind: 'ok', text: '✓ 配置已保存' })
+        applyDataIdentityAfterSave({ db_dir: dbDir, db_enc_key: dbKey, image_aes_key: imgAes, image_xor_key: Number(imgXor) || 136 })
         await load()
         await refreshWhisper(true)
       }
@@ -632,11 +632,11 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       if (r.ok && r.key) {
         setDbKey(r.key)
         // 拿到就立刻落盘。这一步的产物**就是密钥本身**，再要求用户点一次「保存配置」没有意义 ——
-        // 忘了点就会以为配好了、其实没存。只写这一个字段（不是整张表单），
-        // 免得把用户还没打算提交的其他改动一起写进去。
+        // 忘了点就会以为配好了、其实没存。只写这一个字段，免得把用户还没提交的改动一起写进去。
         const saved = await apiSaveWechatConfig({ patch: { db_enc_key: r.key } })
           .then((x) => x.ok)
           .catch(() => false)
+        if (saved) applyDataIdentityAfterSave({ db_dir: dbDir, db_enc_key: r.key, image_aes_key: imgAes, image_xor_key: Number(imgXor) || 136 })
         const saveTag = saved ? '已自动保存' : '自动保存失败，请点「保存配置」'
         const keysFile = (cfg?.resolved?.keys_file) ?? ''
         if (keysFile && dbDir) {
@@ -675,6 +675,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
         const saved = await apiSaveWechatConfig({ patch: { image_aes_key: r.aesKey, image_xor_key: r.xorKey } })
           .then((x) => x.ok)
           .catch(() => false)
+        if (saved) applyDataIdentityAfterSave({ db_dir: dbDir, db_enc_key: dbKey, image_aes_key: r.aesKey, image_xor_key: r.xorKey })
         setImgOpMsg(saved
           ? { kind: 'ok', text: '✓ 已自动获取图片密钥（V2 验证） · 已自动保存' }
           : { kind: 'err', text: '✓ 已获取图片密钥，但自动保存失败，请点「保存配置」' })

@@ -1,0 +1,142 @@
+/* 「提交 Bug 与建议」引导弹窗。
+   视觉全部走 --nm-* 令牌；弹窗外壳（宽度 / 遮罩 / 页脚布局）由 kit 的 Dialog 提供，
+   这里只负责正文排版与页脚内的状态提示。 */
+
+.intro {
+  margin: 0;
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nm-s-3);
+}
+
+/* 编号徽标：用弱强调色底，避免三条步骤抢过隐私提醒的视觉重量。 */
+.stepNo {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  color: var(--nm-cyan);
+  font-size: var(--nm-fs-xs, 11px);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stepTitle {
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-md);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.stepDetail {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+}
+
+/* 隐私提醒：唯一使用危险色的区块，确保在长文案里第一眼能看到。 */
+.privacy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 35%, transparent);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-danger-15);
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+}
+
+.privacyTitle {
+  color: var(--nm-danger-text);
+  font-weight: 700;
+}
+
+.hint {
+  margin: 0;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: var(--nm-lh-body);
+}
+
+/* 收集表地址：允许用户手动选中复制，防止系统浏览器没弹出时无路可走。 */
+.url {
+  display: block;
+  margin-top: 2px;
+  color: var(--nm-text-2);
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* 复制失败时的诊断信息预览：可手动选中，不让用户去猜版本号。 */
+.manual {
+  margin: 0;
+  max-height: 132px;
+  overflow: auto;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+  color: var(--nm-text-2);
+  font-family: ui-monospace, monospace;
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* 页脚：复制按钮 + 复制结果留在左侧，取消 / 提交靠右。
+   手机窄屏允许换行，避免主按钮被状态文案挤出弹窗。 */
+.actions {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.copyState {
+  font-size: var(--nm-fs-xs, 11px);
+  line-height: var(--nm-lh-body);
+}
+
+.copyOk {
+  color: var(--nm-green);
+}
+
+.copyFail {
+  color: var(--nm-danger-text);
+}

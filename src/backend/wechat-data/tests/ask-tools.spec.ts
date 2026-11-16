@@ -349,12 +349,23 @@ describe('工具集接线（问答装配层）', () => {
     }
   }
 
-  it('buildAskTools 返回完整工具集（含需要注入的 search_semantic）', () => {
+  it('buildAskTools 按本次能力裁剪：没配向量/知识库时不暴露必然失败的工具', () => {
     const tools = buildAskTools(makeInput())
-    expect(tools.map(t => t.name).sort()).toEqual([...TOOL_NAMES].sort())
-    // 未配向量模型时它**仍然在清单里** —— 消失会让模型以为「没有这个能力」，
-    // 而实际是「这次没配」。
+    // 2026-11-13 审计：工具「存在但必然失败」会让模型先调它、拿到
+    // not_configured，再被判降级，白白浪费轮次。能力缺失就不进清单；
+    // 原始注册表（buildTools）仍保留它们，供面板与诊断使用。
+    expect(tools.some(t => t.name === 'search_semantic')).toBe(false)
+    expect(tools.some(t => t.name === 'search_kb')).toBe(false)
+    expect(tools.map(t => t.name).sort()).toEqual(
+      TOOL_NAMES.filter(n => n !== 'search_semantic' && n !== 'search_kb').sort(),
+    )
+  })
+
+  it('配好知识库与向量模型后，两个按需工具才出现', () => {
+    const embedFn = async (texts: string[]): Promise<number[][]> => texts.map(() => [1, 0, 0])
+    const tools = buildAskTools(makeInput({ kbId: 7, makeEmbedFn: () => embedFn }))
     expect(tools.some(t => t.name === 'search_semantic')).toBe(true)
+    expect(tools.some(t => t.name === 'search_kb')).toBe(true)
   })
 
   it('embedFn 注入后 search_semantic 能真的跑（不是只挂个名字）', async () => {

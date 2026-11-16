@@ -144,6 +144,14 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         token?: string;
         /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
         seed?: string;
+        /** XML 外层 `<size>`：原图期望尺寸/字节数。 */
+        originalWidth?: number;
+        originalHeight?: number;
+        originalBytes?: number;
+        /** XML `<uhd>` 的独立 CDN 三件套；`/2000` 不能归一成 `/0`。 */
+        uhdUrl?: string;
+        uhdToken?: string;
+        uhdSeed?: string;
         /**
          * 界面侧判定「当前无网」（`navigator.onLine === false`）。
          *
@@ -429,6 +437,12 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
         token?: string;
         seed?: string;
         key?: string;
+        originalWidth?: number;
+        originalHeight?: number;
+        originalBytes?: number;
+        uhdUrl?: string;
+        uhdToken?: string;
+        uhdSeed?: string;
         dest: string;
         jobId?: string;
     }): Promise<{

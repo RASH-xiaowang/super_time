@@ -17,6 +17,7 @@
  */
 import type { DbIntegrityResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Card } from '../ui/kit.tsx'
+import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 
 /** 一条结论（库 + 原因）的渲染，三类共用。 */
@@ -34,22 +35,59 @@ function IssueLines({ items }: { items: ReadonlyArray<{ file: string; error: str
 }
 
 /**
- * 渲染「损坏的库 / 没能体检的库 / 本机体检不了的库」三组卡片；一组都没有时返回 null。
+ * 渲染完整性体检的结论区：体检失败 / 尚未体检 / 未发现损坏 / 三类问题明细。
+ *
+ * 「体检没跑成」「还没体检」「没有损坏」必须各占一张卡 —— 前两种一旦落进
+ * 「数组都是空」的分支，就会被界面说成「未发现损坏」，把失败伪装成全绿。
  * @param props.integrity - 最近一次逐库体检结论（null = 还没体检过）。
  * @param props.repairing - 修复进行中（按钮禁用态）。
  * @param props.onRepair - 点「修复」：清本地残留 + 只重解密仍坏的那几个（后端 `repairCorruptDbs`）。
- * @returns 卡片组元素，或 null。
+ * @param props.error - 体检请求本身失败的原因；非空时优先成卡，且绝不显示全绿。
+ * @param props.checked - 调用方是否确认体检真的跑过（`integrity` 非 null 时应传 true）。
+ * @returns 卡片组元素。
  */
-export function HealthIntegrityCards({ integrity, repairing, onRepair }: {
+export function HealthIntegrityCards({ integrity, repairing, onRepair, error = null, checked = false }: {
   integrity: DbIntegrityResult | null
   repairing: boolean
   onRepair: () => void
-}): React.JSX.Element | null {
-  const corrupted = integrity?.corrupted ?? []
-  const unreadable = integrity?.unreadable ?? []
-  const uncheckable = integrity?.uncheckable ?? []
-  if (corrupted.length === 0 && unreadable.length === 0 && uncheckable.length === 0) return null
+  error?: string | null
+  checked?: boolean
+}): React.JSX.Element {
+  // ① RPC 失败：此时 integrity 被置 null，但绝不能渲染成「没有损坏」。
+  if (error !== null && error !== '') {
+    return (
+      <Card title="体检没跑成">
+        <div className={kitCss.error} role="alert">{error}</div>
+        <div className={css.failHint}>这不代表库是好的，只代表这次体检没有结论。排除占用/权限问题后再点「重新检查」。</div>
+      </Card>
+    )
+  }
 
+  // ② 从未体检（体检是显式动作，打开面板不会自动跑）。
+  if (integrity === null) {
+    return (
+      <Card title="完整性体检">
+        <div className={kitCss.emptyInline}>尚未体检：点上方「重新检查」逐库运行 <code>PRAGMA integrity_check</code>（全量扫描需要几秒）。</div>
+      </Card>
+    )
+  }
+
+  const corrupted = integrity.corrupted
+  const unreadable = integrity.unreadable
+  const uncheckable = integrity.uncheckable
+
+  // ③ 三类都空：只有调用方确认体检跑过，才允许说「未发现损坏」。
+  if (corrupted.length === 0 && unreadable.length === 0 && uncheckable.length === 0) {
+    return (
+      <Card title="完整性体检">
+        <div className={kitCss.emptyInline}>
+          {checked ? `未发现损坏（检查 ${String(integrity.checked)} 个库）` : '尚未体检'}
+        </div>
+      </Card>
+    )
+  }
+
+  // ④ 以下三组卡片与文案保持原样：损坏 / 没能体检 / 本机体检不了。
   return (
     <>
       {corrupted.length > 0 && (

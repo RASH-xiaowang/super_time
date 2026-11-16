@@ -43,6 +43,8 @@ let host: HTMLElement
 beforeEach(() => {
   host = document.createElement('div')
   document.body.appendChild(host)
+  // 焦点 / 滚动锁用例会改 body 行内样式；每个用例从干净状态开始。
+  document.body.style.overflow = ''
 })
 
 afterEach(() => {
@@ -58,6 +60,14 @@ afterEach(() => {
 function mount(node: Parameters<typeof createElement>[1] extends never ? never : React.ReactNode): void {
   root = createRoot(host)
   act(() => { root?.render(node as React.ReactElement) })
+}
+
+/**
+ * Radix 弹窗的挂载/卸载跨多个微任务与 portal 提交：jsdom 下单轮 act 不够，
+ * 多轮 `setTimeout(0)` 才等到 DOM 稳定（与 `confirm.a11y.spec.ts` 同一个套路）。
+ */
+async function flush(n = 8): Promise<void> {
+  for (let i = 0; i < n; i++) await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
 }
 
 const barButtons = (): string[] =>
@@ -109,11 +119,13 @@ describe('「更多」sheet 覆盖手机端保留的全部条目', () => {
       return item && !labels.includes(item.label)
     })
     expect(missing, `这些保留 tab 在手机上到不了：${missing.join(', ')}`).toEqual([])
-    // 反向：sheet 里不许出现白名单之外的条目（多出来的入口点了会去到不该在手机上出现的页）
+    // 反向：sheet 里不许出现白名单之外的条目（多出来的入口点了会去到不该在手机上出现的页）。
+    // 「Bug 反馈」显式放行：它是**全局动作**（和「设置」并列的配置组入口），不是导航 tab，
+    // 不参与手机导航可达性白名单 —— 它由 MobileNav 自己维护，不来自 NAV_GROUPS。
     const keepLabels = new Set(
       NAV_GROUPS.flatMap((g) => [...g.items]).filter((i) => MOBILE_KEEP_TABS.includes(i.tab)).map((i) => i.label),
     )
-    const extra = labels.filter((l) => !keepLabels.has(l) && l !== '设置')
+    const extra = labels.filter((l) => !keepLabels.has(l) && l !== '设置' && l !== 'Bug 反馈')
     expect(extra, `sheet 里出现了白名单之外的条目：${extra.join(', ')}`).toEqual([])
     // hidden 条目不该出现在 sheet 里（桌面侧栏也不渲染它们）
     for (const it of NAV_GROUPS.flatMap((g) => [...g.items]).filter((i) => i.hidden)) {
@@ -146,6 +158,44 @@ describe('「更多」sheet 覆盖手机端保留的全部条目', () => {
     expect(host.querySelector('[role="dialog"]'), '点完设置 sheet 没关').toBeNull()
   })
 
+  it('「更多」→ Bug 反馈：先关 sheet 再开弹窗，关闭后弹窗消失且焦点回到「更多」', async () => {
+    stubMatchMedia(true)
+    // 这个用例刻意不传 onOpenSettings：Bug 入口不能依赖宿主是否接了设置回调。
+    mount(createElement(MobileNav, { active: 'overview', onSelect: () => undefined }))
+
+    const more = [...host.querySelectorAll('nav[aria-label="主导航"] > button')].at(-1) as HTMLElement
+    act(() => { more.click() })
+
+    // 注意只在 sheet 自己的 dialog 里找；Bug 弹窗是另一个 Radix dialog，不能污染 sheet 列表。
+    const bug = [...host.querySelectorAll('[role="dialog"][aria-label="全部功能"] button')]
+      .find((b) => (b.textContent ?? '').trim() === 'Bug 反馈') as HTMLElement | undefined
+    expect(bug, '「更多」的配置分组里没有 Bug 反馈入口').toBeTruthy()
+    act(() => { bug!.click() })
+    await flush()
+
+    // sheet 必须先关：否则弹窗叠在「全部功能」上，Esc 和焦点陷阱会互相抢。
+    expect(host.querySelector('[role="dialog"][aria-label="全部功能"]'), '点 Bug 反馈后 sheet 没关').toBeNull()
+
+    // Bug 弹窗走 Radix portal 到 document.body，不在 host 子树里。
+    const bugDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+      .find((d) => (d.textContent ?? '').includes('提交 Bug 与建议'))
+    expect(bugDialog, 'sheet 关闭后没有出现「提交 Bug 与建议」弹窗').toBeTruthy()
+
+    // Radix 的关闭按钮是 X（aria-label="关闭"）；若实现改用「取消」按钮也应能关。
+    const close = [...(bugDialog as HTMLElement).querySelectorAll<HTMLElement>('button')]
+      .find((b) => (b.getAttribute('aria-label') ?? '').includes('关闭') || (b.textContent ?? '').includes('取消'))
+    expect(close, 'Bug 弹窗里找不到关闭/取消按钮').toBeTruthy()
+    act(() => { close!.click() })
+    await flush()
+
+    const stillOpen = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+      .some((d) => (d.textContent ?? '').includes('提交 Bug 与建议'))
+    expect(stillOpen, '点关闭后 Bug 弹窗还在').toBe(false)
+
+    // 打开弹窗前 sheet 已卸载，Radix 恢复不到原按钮；关闭后必须把焦点还给「更多」。
+    expect(document.activeElement, '关闭 Bug 弹窗后焦点掉到了 body').toBe(more)
+  })
+
   it('当前 tab 不在高频位时，「更多」那一格高亮（否则用户看不出自己在哪）', () => {
     stubMatchMedia(true)
     mount(createElement(MobileNav, { active: 'ledger', onSelect: () => undefined }))
@@ -161,6 +211,77 @@ describe('「更多」sheet 覆盖手机端保留的全部条目', () => {
     expect(more2.hasAttribute('data-active'), 'chats 是高频位，「更多」却高亮了').toBe(false)
     act(() => { r2.unmount(); root2.unmount() })
     h2.remove()
+  })
+})
+
+const sheetEl = (): HTMLElement | null => host.querySelector<HTMLElement>('[role="dialog"][aria-label="全部功能"]')
+
+const moreButton = (): HTMLElement =>
+  [...host.querySelectorAll('nav[aria-label="主导航"] > button')].at(-1) as HTMLElement
+
+/** 与 mobile-nav 里的焦点陷阱用同一组选择器。 */
+const sheetFocusables = (): HTMLElement[] => {
+  const panel = sheetEl()
+  return panel === null
+    ? []
+    : [...panel.querySelectorAll<HTMLElement>('button:not([disabled]),[href],input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])')]
+}
+
+describe('「更多」sheet 的焦点管理与滚动锁', () => {
+  it('打开后焦点进入 sheet、body 滚动锁定；关闭后焦点回到「更多」且滚动恢复', () => {
+    stubMatchMedia(true)
+    mount(createElement(MobileNav, { active: 'overview', onSelect: () => undefined }))
+    const more = moreButton()
+    const before = document.body.style.overflow
+
+    act(() => { more.click() })
+    const focusables = sheetFocusables()
+    expect(focusables.length, 'sheet 里没有可聚焦元素').toBeGreaterThan(1)
+    expect(document.activeElement, '打开 sheet 后焦点没有进入面板').toBe(focusables[0])
+    expect(document.body.style.overflow, 'sheet 打开时页面仍可滚动').toBe('hidden')
+
+    const close = sheetEl()?.querySelector<HTMLElement>('button[aria-label="关闭"]')
+    expect(close, 'sheet 里没有关闭按钮').toBeTruthy()
+    act(() => { close!.click() })
+    expect(sheetEl(), '点关闭后 sheet 还在').toBeNull()
+    expect(document.activeElement, '关闭后焦点没有还给「更多」').toBe(more)
+    expect(document.body.style.overflow, '关闭后 body 滚动没有恢复').toBe(before)
+  })
+
+  it('Tab 在首尾之间循环，焦点不会逃到页面其它元素', () => {
+    stubMatchMedia(true)
+    mount(createElement(MobileNav, { active: 'overview', onSelect: () => undefined }))
+    act(() => { moreButton().click() })
+
+    const items = sheetFocusables()
+    const first = items[0] as HTMLElement
+    const last = items[items.length - 1] as HTMLElement
+
+    last.focus()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })) })
+    expect(document.activeElement, '在最后一个元素按 Tab 没有回到第一个').toBe(first)
+
+    first.focus()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true })) })
+    expect(document.activeElement, '在第一个元素按 Shift+Tab 没有跳到最后一个').toBe(last)
+
+    // 焦点意外落到面板外（例如脚本/辅助技术移走）时，Tab 也要拉回面板内。
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })) })
+    expect(document.activeElement, '焦点落回 body 后 Tab 没有回到面板').toBe(first)
+  })
+
+  it('Esc 关闭 sheet，并同样把焦点还给「更多」', () => {
+    stubMatchMedia(true)
+    mount(createElement(MobileNav, { active: 'overview', onSelect: () => undefined }))
+    const more = moreButton()
+    act(() => { more.click() })
+    expect(sheetEl()).not.toBeNull()
+
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(sheetEl(), '按 Esc 没有关闭 sheet').toBeNull()
+    expect(document.activeElement, 'Esc 关闭后焦点没有还给「更多」').toBe(more)
+    expect(document.body.style.overflow).toBe('')
   })
 })
 

@@ -17,9 +17,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createTempWorkspace, type TempWorkspace } from '../../tests/helpers/temp-db.ts'
 import {
   forgetSweepStateForTest,
+  lookupArchivedOriginal,
   lookupOriginal,
   mimeOfExt,
+  momentsMediaArchiveRoot,
   originalAsDataUrl,
+  saveArchivedOriginal,
   saveOriginal,
   sniffOriginalExt,
   sweepOriginalStore,
@@ -52,6 +55,23 @@ function pngBytes(body = 64): Buffer {
 }
 function avifBytes(body = 64): Buffer {
   return Buffer.concat([Buffer.alloc(4, 0), Buffer.from('ftypavif'), Buffer.alloc(body, 7)])
+}
+/** 带真实 SOF 尺寸的 JPEG（`jpegBytes` 只有头，尺寸读不出来）。 */
+function jpegWithSize(width: number, height: number, body = 64): Buffer {
+  const sof = Buffer.alloc(19)
+  sof[0] = 0xff
+  sof[1] = 0xc0
+  sof.writeUInt16BE(17, 2)
+  sof[4] = 8
+  sof.writeUInt16BE(height, 5)
+  sof.writeUInt16BE(width, 7)
+  sof[9] = 3
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    sof,
+    Buffer.alloc(body, 7),
+    Buffer.from([0xff, 0xd9]),
+  ])
 }
 /** 第 i 个夹具的 md5（32 位小写十六进制）。 */
 const md5Of = (i: number): string => i.toString(16).padStart(32, '0')
@@ -203,5 +223,48 @@ describe('sweepOriginalStore：按字节删最旧的', () => {
 
   it('目录不存在时返回 0（不抛）', () => {
     expect(sweepOriginalStore(decodedDir(), 1)).toBe(0)
+  })
+})
+
+describe('原图质量闸门与历史预览档替换', () => {
+  const expected = { width: 1440, height: 1920, bytes: 212_083 }
+
+  it('quality-gated lookup 拒绝已有 200x300 缓存（不再无条件短路）', () => {
+    const dir = decodedDir()
+    const preview = jpegWithSize(200, 300)
+    expect(saveOriginal(dir, MD5_A, preview)).toBe('jpg')
+    expect(lookupOriginal(dir, MD5_A, { requireQuality: true, expectation: expected })).toBeNull()
+    expect(lookupOriginal(dir, MD5_A)?.bytes.equals(preview)).toBe(true)
+  })
+
+  it('replaceIfLarger 用 1440x1920 覆盖 200x300，并清掉旧扩展名', () => {
+    const dir = decodedDir()
+    const preview = jpegWithSize(200, 300)
+    const original = jpegWithSize(1440, 1920, 256)
+    expect(saveArchivedOriginal(dir, MD5_A, preview)).toBe('jpg')
+    // 再放一份 png 旧档，验证升级后旧扩展名不会留下两份互相竞争的档。
+    const archiveShard = join(momentsMediaArchiveRoot(dir), MD5_A.slice(0, 2))
+    mkdirSync(archiveShard, { recursive: true })
+    writeFileSync(join(archiveShard, MD5_A + '.png'), Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from([0x00, 0x00, 0x00, 0x0d]),
+      Buffer.from('IHDR', 'latin1'),
+      Buffer.from([0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x01, 0x2c]),
+      Buffer.alloc(17, 0),
+    ]))
+    expect(lookupArchivedOriginal(dir, MD5_A, {
+      requireQuality: true,
+      expectation: expected,
+    }), '质量闸门没有拒绝历史预览档').toBeNull()
+
+    expect(saveArchivedOriginal(dir, MD5_A, original, {
+      expectation: expected,
+      requireQuality: true,
+      replaceIfLarger: true,
+    })).toBe('jpg')
+
+    const hit = lookupArchivedOriginal(dir, MD5_A, { requireQuality: true, expectation: expected })
+    expect(hit?.bytes.equals(original), '高分辨率归档没有被优先读回').toBe(true)
+    expect(existsSync(join(archiveShard, MD5_A + '.png')), '旧扩展名没有被清掉').toBe(false)
   })
 })

@@ -8,6 +8,12 @@ export interface AggregateFact {
     /** 参与统计的总行数（让模型知道这是全量还是抽样）。 */
     total: number;
 }
+/** `day` 维度的分组粒度。 */
+export type AggregateGranularity = 'day' | 'month' | 'hour' | 'weekday';
+/** 会话类型过滤。 */
+export type AggregateKind = 'all' | 'group' | 'single';
+/** `distinct` 维度的去重对象。 */
+export type AggregateDistinctField = 'session' | 'sender';
 /** 聚合查询的输入。 */
 export interface AggregateInput {
     decryptedDir: string;
@@ -24,6 +30,16 @@ export interface AggregateInput {
     /** 规划器给出的日期（软偏好，作为默认时间窗）。 */
     from?: string;
     to?: string;
+    /** 只看某个发送者（显示名或 username；sender 列存原始 wxid，查询前会反查）。 */
+    sender?: string;
+    /** 会话类型过滤（群体/单聊）。 */
+    kind?: AggregateKind;
+    /** `day` 维度的分组粒度（默认 day）。 */
+    granularity?: AggregateGranularity;
+    /** 分组排名返回前几项（默认 15，上限 50）。 */
+    top?: number;
+    /** `distinct` 去重对象：session=会话数（默认）；sender=发送者人数。 */
+    distinctField?: AggregateDistinctField;
     /** 现在时刻（可注入，便于测试）。 */
     now?: Date;
 }
@@ -70,6 +86,16 @@ export declare function pickDimension(question: string): Dimension;
  * @returns 组合词列表（可能为空）。
  */
 export declare function directionTerms(question: string): string[];
+/**
+ * epoch 秒 → 本地时区 `YYYY-MM-DD`。
+ *
+ * 统计事实是直接给模型抄进回答的，必须和用户所在时区一致；用
+ * `toISOString()` 会在 UTC+8 把本地 00:00 写成前一天，导致「最近 7 天」被
+ * 说成 11-06 ~ 11-13，与规划器的 11-07 ~ 11-13 自相矛盾。
+ * @param sec - epoch 秒。
+ * @returns 本地日期；非法输入返回空串。
+ */
+export declare function ymdLocal(sec: number): string;
 /** 时间窗（epoch 秒）；两端为 0 表示不限。 */
 interface Window {
     lo: number;

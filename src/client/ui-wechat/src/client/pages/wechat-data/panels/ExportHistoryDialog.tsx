@@ -24,7 +24,7 @@ import type { DataColumn } from '../ui/kit.tsx'
 import css from './export-history.module.css'
 import kitCss from '../ui/kit.module.css'
 import { fmtBytes, fmtLocaleMs } from '../utils/format.ts'
-import { buildMomentsReplayOptions } from './export-history-replay.ts'
+import { buildMomentsReplayOptions, splitReplayPath } from './export-history-replay.ts'
 import { ExportProgressStatus } from './ExportProgressStatus.tsx'
 import { useExportTask } from './export-task.ts'
 
@@ -280,8 +280,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       if (r.kind === 'annual') {
         const res = await apiExportAnnualReport({
           ...(params as { year: number; format: string }),
-          dir: undefined,
-          filename: savePath,
+          ...splitReplayPath(savePath),
           jobId,
         })
         return { count: res.count, unit: '条' }
@@ -289,13 +288,12 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       if (r.kind === 'session') {
         const res = await apiExportSessionMessages({
           ...(params as { username: string; format: string }),
-          dir: undefined,
-          filename: savePath,
+          ...splitReplayPath(savePath),
           jobId,
         })
         return { count: res.count, unit: '条' }
       }
-      const res = await apiExportAllSessions({ filename: savePath, jobId })
+      const res = await apiExportAllSessions({ ...splitReplayPath(savePath), jobId })
       return { count: res.count, unit: '条' }
     }, {
       idPrefix: 'export-history-replay',

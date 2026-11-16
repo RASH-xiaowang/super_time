@@ -21,7 +21,7 @@ const { humanizeNetworkError, testLlmEndpoint, queryLlmBalance } = require('./ll
 const { parseLlmBaseUrl, llmModelListUrl, llmRequest } = require('./llm-http.js');
 // 「一次后端调用要过哪几道闸」的唯一出处：HTTP 那条路（局域网远程访问）也调它，
 // 两边不许各写一份 —— 最可能的漂法是少抄那个 catch，于是许可校验一抛异常就变成放行。
-const { gatedWechatCall } = require('./call-gates.js');
+const { gatedWechatCall, directFeatureGate } = require('./call-gates.js');
 // 少数「静态本地读」走免排队通道（仍过同一道许可/就绪闸）：世界地图底图在应用启动
 // 瞬间会和首屏请求一起撞上队列上限，排队拒绝会让界面误报「底图不可用」。
 // 清单与判据见 call-priority.js 的 QUEUE_BYPASS_METHODS。
@@ -41,45 +41,6 @@ async function imageAiJsonResponse(wechatImageAi, opts = {}) {
       error: {
         message: e?.message || '大模型图片识别失败',
         ...(code === undefined ? {} : { code }),
-      },
-    };
-  }
-}
-
-/**
- * 直连 IPC（不走 wechat:call 的功能）使用同一份许可证目录做校验。
- *
- * 失败必须关死：许可证模块缺失、读盘/验签抛错都返回可展示的拒绝信封，
- * 不能因为「这里不是 Remote 方法」就绕过授权。
- * @param {object} ctx - 注册上下文。
- * @param {string} feature - FEATURE_CATALOG 里的功能位。
- * @returns {null | { ok: false, error: { message: string, code?: string, details?: object } }}
- */
-function directFeatureGate(ctx, feature) {
-  try {
-    if (ctx.debugGates?.().skipGates) return null;
-    const service = ctx.licenseService;
-    if (!service || typeof service.getLicenseStatus !== 'function' || typeof service.authorizeFeature !== 'function') {
-      throw new Error('许可证服务不可用');
-    }
-    const status = service.getLicenseStatus(ctx.app.getPath('userData'), ctx.APP_VERSION);
-    const gate = service.authorizeFeature(status, feature);
-    if (gate.ok) return null;
-    return {
-      ok: false,
-      error: {
-        message: gate.message,
-        code: gate.code,
-        details: { feature, licenseState: status?.state },
-      },
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      error: {
-        message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
-        code: 'LICENSE_CHECK_FAILED',
-        details: { feature },
       },
     };
   }

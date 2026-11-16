@@ -70,9 +70,10 @@ talker: string, qLower: string, names: Map<string, string>, enterpriseNames?: Re
  * @param cap - 命中上限。
  * @param names - username → 显示名。
  * @param username - 可选：只搜一个 talker。
+ * @param person - 可选：发送者线索（转发给索引的 `who:` 召回分支；严格过滤在工具边界做）。
  * @returns 命中结果，或 null（两条快路径都没命中）。
  */
-export declare function probeIndexedSources(decryptedDir: string, q: string, cap: number, names: Map<string, string>, username?: string): {
+export declare function probeIndexedSources(decryptedDir: string, q: string, cap: number, names: Map<string, string>, username?: string, person?: string): {
     hits: SearchHit[];
     total: number;
     indexed: boolean;
@@ -83,9 +84,15 @@ export declare function probeIndexedSources(decryptedDir: string, q: string, cap
  * @param query - search term.
  * @param limit - max hits.
  * @param username - optional scope: only search one talker (chatroom).
+ * @param person - optional sender hint: forwarded to the index `who:` branch.
+ * @param range - optional epoch-second window; pushed into SQL so a high-frequency
+ *   term cannot crowd out the in-range rows before filtering.
  * @returns hits plus whether the index was used.
  */
-export declare function searchIndexMessages(decryptedDir: string, query: string, limit?: number, username?: string): {
+export declare function searchIndexMessages(decryptedDir: string, query: string, limit?: number, username?: string, person?: string, range?: {
+    lo?: number;
+    hi?: number;
+}): {
     hits: SearchHit[];
     total: number;
     indexed: boolean;

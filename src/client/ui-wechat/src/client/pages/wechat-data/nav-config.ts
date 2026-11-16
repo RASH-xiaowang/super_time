@@ -261,3 +261,53 @@ export const TAB_LABELS: Record<WechatTab, string> = (() => {
   for (const g of NAV_GROUPS) for (const it of g.items) map[it.tab] = it.label
   return map
 })()
+
+/**
+ * 是否是真实页签（**只认自有属性**）。
+ *
+ * 不能用 `key in TAB_LABELS`：`#toString` / `#__proto__` / `#constructor` 会命中
+ * `Object.prototype`，于是深链会把函数当成页签 —— 最终在占位页里把
+ * `TAB_LABELS.toString`（一个函数）当 React child 渲染而炸掉整棵树。
+ * @param value - 深链或调用方传来的字符串。
+ * @returns true 表示可安全当作 {@link WechatTab} 使用。
+ */
+export function isWechatTab(value: string): value is WechatTab {
+  return Object.hasOwn(TAB_LABELS, value)
+}
+
+/** 深链 hash → 键（去掉一个前导 `#`，其余原样）。 */
+export function hashKey(hash: string): string {
+  return hash.startsWith('#') ? hash.slice(1) : hash
+}
+
+/**
+ * 只在**自有属性**里查表：`toString` / `__proto__` / `constructor` 等原型键返回 undefined。
+ *
+ * 深链解析（页签与设置落节）共用同一条口径，避免一处用 `in`、一处用 `Object.hasOwn`
+ * 导致原型键从另一条路径溜进来。
+ * @param table - 任意查找表（键来自源码常量）。
+ * @param key - 已去掉前导 `#` 的键。
+ * @returns 命中值；非自有属性返回 undefined。
+ */
+export function ownValue<T>(table: object, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? (table as Record<string, T>)[key] : undefined
+}
+
+/**
+ * 深链 hash → 页签；不是真实页签（含原型键）时返回 null。
+ * @param hash - 带不带前导 `#` 都可以。
+ * @returns 合法页签或 null。
+ */
+export function tabFromHash(hash: string): WechatTab | null {
+  const key = hashKey(hash)
+  return isWechatTab(key) ? key : null
+}
+
+/**
+ * 页签标题的安全读取：非法值返回空串，绝不把原型上的函数漏给 JSX。
+ * @param tab - 任意字符串（可能来自深链）。
+ * @returns 展示用标题。
+ */
+export function tabLabelOf(tab: string): string {
+  return ownValue<string>(TAB_LABELS, tab) ?? ''
+}

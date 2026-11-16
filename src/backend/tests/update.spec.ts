@@ -27,7 +27,8 @@
  * @vitest-environment node
  */
 import { EventEmitter } from 'node:events'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -618,6 +619,92 @@ describe('W2-12.2：跳过版本', () => {
     const s = svc.skipVersion('1.2.0')
     expect(s.phase).toBe('skipped')
     expect(s.skippedVersion).toBe('1.2.0')
+  })
+
+  it('服务层：跳过必须停掉自动下载/退出安装，并尽力取消在途下载', () => {
+    const up = fakeUpdater()
+    const cancel = vi.fn()
+    ;(up as any).cancelDownload = cancel
+    const { svc } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    expect(up.autoDownload).toBe(true)
+    svc.skipVersion('1.2.0')
+    expect(up.autoDownload, '跳过之后还在后台下载被跳过的版本').toBe(false)
+    expect(up.autoInstallOnAppQuit, '跳过之后退出应用仍会自动安装被跳过的版本').toBe(false)
+    expect(cancel, 'updater 提供取消接口时应当真的取消').toHaveBeenCalledTimes(1)
+  })
+
+  it('服务层：跳过之后迟到的 progress / downloaded 都不许把界面拉回可安装态', () => {
+    const up = fakeUpdater()
+    const { svc } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    svc.skipVersion('1.2.0')
+    up.emit('download-progress', { percent: 55 })
+    expect(svc.getState().phase).toBe('skipped')
+    expect(svc.getState().progress).toBeNull()
+    // 下载完成事件晚于 skip 到达：不能进入 downloaded，否则「重启并安装」会装回被跳过的版本。
+    up.emit('update-downloaded', { version: '1.2.0' })
+    expect(svc.getState().phase, '下载完成事件绕过了跳过').toBe('skipped')
+    expect(svc.install().ok).toBe(false)
+    expect(up.autoInstallOnAppQuit).toBe(false)
+  })
+
+  it('服务层：出现另一个新版本时恢复自动下载与退出安装', () => {
+    const up = fakeUpdater()
+    const { svc } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    svc.skipVersion('1.2.0')
+    expect(up.autoDownload).toBe(false)
+    up.emit('update-available', { version: '1.3.0' })
+    expect(svc.getState().phase).toBe('available')
+    expect(svc.getState().version).toBe('1.3.0')
+    expect(up.autoDownload, '新版本出现后仍不自动下载 ⇒ 用户永远收不到更新').toBe(true)
+    expect(up.autoInstallOnAppQuit).toBe(true)
+  })
+
+  it('服务层：取消跳过会恢复开关并把状态从 skipped 放出来', () => {
+    const up = fakeUpdater()
+    const { svc } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    svc.skipVersion('1.2.0')
+    const s = svc.skipVersion('')
+    expect(s.skippedVersion).toBeNull()
+    expect(s.phase, '取消跳过后仍停在 skipped，用户没有补救入口').toBe('available')
+    expect(up.autoDownload).toBe(true)
+    expect(up.autoInstallOnAppQuit).toBe(true)
+  })
+
+  it('服务层：跳过状态跨重启保留（持久化到显式 stateFile）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'update-state-'))
+    const stateFile = join(dir, 'update-state.json')
+    try {
+      const up1 = fakeUpdater()
+      const { svc: first } = serviceFor(up1, { stateFile })
+      up1.emit('update-available', { version: '1.2.0' })
+      first.skipVersion('1.2.0')
+      first.dispose()
+
+      const up2 = fakeUpdater()
+      const { svc: second } = serviceFor(up2, { stateFile })
+      const restored = second.getState()
+      expect(restored.phase, '重启后又被同一个版本问一次 ⇒ 跳过没有持久化').toBe('skipped')
+      expect(restored.skippedVersion).toBe('1.2.0')
+      expect(up2.autoInstallOnAppQuit, '重启后退出应用仍会自动安装被跳过的版本').toBe(false)
+      expect(up2.autoDownload, '重启后又去下载用户明确跳过的版本').toBe(false)
+      second.dispose()
+
+      const up3 = fakeUpdater()
+      const { svc: third } = serviceFor(up3, { stateFile })
+      third.skipVersion('')
+      third.dispose()
+      const up4 = fakeUpdater()
+      const { svc: fourth } = serviceFor(up4, { stateFile })
+      expect(fourth.getState().skippedVersion, '取消跳过没有持久化').toBeNull()
+      expect(fourth.getState().phase).toBe('idle')
+      fourth.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

@@ -479,8 +479,9 @@ describe('AnswerRunView 已完成轮次', () => {
     expect(host.textContent).toContain('首字 1.1s')
     expect(host.textContent).toContain('思考 800ms')
     expect(host.textContent).toContain('工具耗时 2.0s')
+    // 折叠条只陈述可核对计数；真实思考时长在运行指标里（按区间累计，不含工具耗时）。
     expect(host.querySelector('[class*="processMeta"]')?.textContent?.trim())
-      .toBe('1 个工具 · 思考 800ms')
+      .toBe('1 个工具 · 思考 1 段')
     const answerAt = host.textContent?.indexOf('结论在正文里') ?? -1
     const processAt = host.textContent?.indexOf('执行轨迹') ?? -1
     expect(processAt).toBeGreaterThan(-1)

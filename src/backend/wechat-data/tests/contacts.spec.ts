@@ -372,3 +372,177 @@ describe('queryContacts profile fields', () => {
     })
   })
 })
+
+/**
+ * P2\uff1acontact / chat_room / chatroom_member / biz_info \u5168\u91cf\u7269\u5316\u7684\u56de\u5f52\u5939\u5177\u3002
+ *
+ * \u8986\u76d6\u300c\u5206\u7c7b + \u641c\u7d22 + \u5206\u9875\u5728 SQL \u5185\u5b8c\u6210\u300d\u4e4b\u540e\u5fc5\u987b\u4fdd\u6301\u7684\u5916\u89c2\uff1a
+ *   \u00b7 total / stats \u53e3\u5f84\uff08stats \u59cb\u7ec8\u5168\u91cf\uff09\uff1b
+ *   \u00b7 \u9996\u5b57\u6bcd\u6392\u5e8f\uff08'#' \u6700\u540e\uff09\uff1b
+ *   \u00b7 \u7fa4\u6210\u5458\u6570 / \u7fa4\u4e3b / \u6210\u5458\u6240\u5c5e\u7fa4\uff08\u542b\u91cd\u590d\u6210\u5458\u884c\u53bb\u91cd\uff09\uff1b
+ *   \u00b7 biz_info \u628a gh_ \u670d\u52a1\u53f7\u4ece official \u6539\u5224 service\u3002
+ */
+function makePagedContactDb(): string {
+  const root = mkdtempSync(join(tmpdir(), 'wx-contacts-paged-'))
+  scratch.push(root)
+  const dir = join(root, 'contact')
+  mkdirSync(dir, { recursive: true })
+  const db = new DatabaseSync(join(dir, 'contact.db'))
+  db.exec(`CREATE TABLE contact (
+    id INTEGER PRIMARY KEY, username TEXT, local_type INTEGER, alias TEXT, delete_flag INTEGER,
+    remark TEXT, remark_pin_yin_initial TEXT, nick_name TEXT, pin_yin_initial TEXT, quan_pin TEXT,
+    remark_quan_pin TEXT, big_head_url TEXT, small_head_url TEXT, description TEXT, is_in_chat_room INTEGER
+  )`)
+  db.exec('CREATE TABLE chat_room (id INTEGER PRIMARY KEY, username TEXT, owner TEXT)')
+  db.exec('CREATE TABLE chatroom_member (room_id INTEGER, member_id INTEGER)')
+  db.exec('CREATE TABLE biz_info (username TEXT, type INTEGER)')
+  const ins = db.prepare(`INSERT INTO contact
+    (id, username, local_type, alias, delete_flag, remark, remark_pin_yin_initial, nick_name,
+     pin_yin_initial, quan_pin, remark_quan_pin)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run(1, 'wxid_alice', 1, '', 0, 'Alice', 'A', 'Alice', '', 'alice', 'alice')
+  ins.run(2, 'wxid_bob', 1, '', 0, 'Bob', 'B', 'Bob', '', 'bob', 'bob')
+  ins.run(3, 'wxid_carol', 3, '', 0, '', '', 'Carol', 'C', 'carol', '')
+  ins.run(4, 'g1@chatroom', 0, '', 0, 'Alpha \u7fa4', '', '', '', 'alphaqun', '')
+  ins.run(5, 'g2@chatroom', 0, '', 0, 'Zulu \u7fa4', '', '', '', 'zuluqun', '')
+  ins.run(6, 'gh_news', 0, '', 0, '', '', 'News', '', '', '')
+  ins.run(7, 'gh_service', 0, '', 0, '', '', 'Service', '', '', '')
+  ins.run(8, 'wxid_dave', 1, '', 0, 'Dave \u5ba2\u670d', 'D', 'Dave', '', 'dave', 'dave')
+  ins.run(9, 'wxid_eve', 1, 'eve_alias', 0, '', '', 'Eve', 'E', 'eve', '')
+  db.prepare('INSERT INTO chat_room VALUES (?, ?, ?)').run(4, 'g1@chatroom', 'wxid_owner')
+  db.prepare('INSERT INTO chat_room VALUES (?, ?, ?)').run(5, 'g2@chatroom', '')
+  // \u540c\u4e00\u4e2a\u4eba\u5728\u540c\u4e00\u7fa4\u91cc\u51fa\u73b0\u4e24\u884c\uff1agroupUsernames \u4e0d\u5e94\u91cd\u590d\u3002
+  const cm = db.prepare('INSERT INTO chatroom_member VALUES (?, ?)')
+  cm.run(4, 8)
+  cm.run(4, 8)
+  cm.run(5, 8)
+  db.prepare('INSERT INTO biz_info VALUES (?, ?)').run('gh_service', 1)
+  db.prepare('INSERT INTO biz_info VALUES (?, ?)').run('gh_news', 0)
+  db.close()
+  return root
+}
+
+describe('queryContacts \u8fc7\u6ee4/\u5206\u9875\u4e0b\u63a8 SQL\uff08P2\uff09', () => {
+  it('\u5206\u9875\u8fb9\u754c\uff1alimit/offset \u5728 SQL \u5185\u5207\u7247\uff0ctotal \u59cb\u7ec8\u662f\u5f53\u524d\u89c6\u56fe\u6761\u6570', () => {
+    const root = makePagedContactDb()
+    const all = queryContacts(root)
+    expect(all.total).toBe(9)
+    expect(all.contacts.length).toBe(9)
+
+    const first = queryContacts(root, { limit: 2, offset: 0 })
+    expect(first.total).toBe(9)
+    expect(first.contacts.length).toBe(2)
+    const second = queryContacts(root, { limit: 2, offset: 2 })
+    expect(second.contacts.length).toBe(2)
+    // \u7ffb\u9875\u4e0d\u91cd\u590d\u3001\u4e0d\u4e22\u884c\u3002
+    expect(first.contacts.map(c => c.username)).not.toEqual(second.contacts.map(c => c.username))
+
+    const last = queryContacts(root, { limit: 2, offset: 8 })
+    expect(last.total).toBe(9)
+    expect(last.contacts.length).toBe(1)
+    const beyond = queryContacts(root, { limit: 2, offset: 9 })
+    expect(beyond.total).toBe(9)
+    expect(beyond.contacts).toEqual([])
+  })
+
+  it('\u5206\u7c7b\u8fc7\u6ee4\u5728\u5206\u9875\u4e4b\u524d\uff0c\u4e14 stats \u4fdd\u6301\u5168\u91cf\u53e3\u5f84', () => {
+    const root = makePagedContactDb()
+    const friends = queryContacts(root, { category: 'friend', limit: 2, offset: 0 })
+    expect(friends.total).toBe(4)
+    expect(friends.contacts.length).toBe(2)
+    expect(friends.contacts.every(c => c.category === 'friend')).toBe(true)
+    expect(friends.stats).toMatchObject({ friend: 4, group: 2, official: 1, service: 1, member: 1, all: 9 })
+
+    const secondPage = queryContacts(root, { category: 'friend', limit: 2, offset: 2 })
+    expect(secondPage.total).toBe(4)
+    expect(secondPage.contacts.length).toBe(2)
+    const usernames = [...friends.contacts, ...secondPage.contacts].map(c => c.username)
+    expect(new Set(usernames).size).toBe(4)
+  })
+
+  it('\u641c\u7d22\u4e0b\u63a8\u5230 SQL\uff1a\u5907\u6ce8 / \u6635\u79f0 / \u522b\u540d / \u62fc\u97f3 / username \u90fd\u80fd\u547d\u4e2d\uff0c\u4e14\u5927\u5c0f\u5199\u4e0d\u654f\u611f', () => {
+    const root = makePagedContactDb()
+    const expectOne = (search: string, username: string): void => {
+      const env = queryContacts(root, { search })
+      expect(env.total, `\u641c\u7d22\u300c${search}\u300d\u7684\u603b\u6570`).toBe(1)
+      expect(env.contacts.map(c => c.username)).toEqual([username])
+    }
+    expectOne('Alice', 'wxid_alice')       // \u5907\u6ce8
+    expectOne('DAVE', 'wxid_dave')         // \u5907\u6ce8\uff08\u5927\u5c0f\u5199\uff09
+    expectOne('eve_alias', 'wxid_eve')     // \u522b\u540d
+    expectOne('carol', 'wxid_carol')       // username / \u6635\u79f0\u5168\u62fc
+    expectOne('alphaqun', 'g1@chatroom')   // \u7fa4\u5907\u6ce8\u5168\u62fc
+    expectOne('News', 'gh_news')           // \u6635\u79f0
+  })
+
+  it('\u641c\u7d22 + \u5206\u9875\uff1a\u5728\u5b8c\u6574\u7ed3\u679c\u96c6\u4e0a\u7ffb\u9875\uff0c\u4e0d\u4f1a\u53ea\u641c\u5f53\u524d\u9875', () => {
+    const root = makePagedContactDb()
+    const first = queryContacts(root, { search: 'wxid_', limit: 2, offset: 0 })
+    const second = queryContacts(root, { search: 'wxid_', limit: 2, offset: 2 })
+    const third = queryContacts(root, { search: 'wxid_', limit: 2, offset: 4 })
+    expect(first.total).toBe(5)
+    expect(first.contacts.length).toBe(2)
+    expect(second.contacts.length).toBe(2)
+    expect(third.contacts.length).toBe(1)
+    const usernames = [...first.contacts, ...second.contacts, ...third.contacts].map(c => c.username)
+    expect(new Set(usernames).size).toBe(5)
+  })
+
+  it('\u7a7a\u7ed3\u679c\uff1asearch / category \u4e0d\u547d\u4e2d\u65f6\u8fd4\u56de\u7a7a\u4e14 total=0\uff0cstats \u4e0d\u53d7\u5f71\u54cd', () => {
+    const root = makePagedContactDb()
+    const noMatch = queryContacts(root, { search: '\u4e0d\u5b58\u5728\u7684\u4eba' })
+    expect(noMatch.contacts).toEqual([])
+    expect(noMatch.total).toBe(0)
+    expect(noMatch.stats.all).toBe(9)
+
+    const badCategory = queryContacts(root, { category: 'friendd' })
+    expect(badCategory.contacts).toEqual([])
+    expect(badCategory.total).toBe(0)
+    expect(badCategory.stats.friend).toBe(4)
+  })
+
+  it('biz_info \u670d\u52a1\u53f7\u4ecd\u5f52 service\uff0c\u666e\u901a gh_ \u5f52 official\uff08\u4e0e sessions.ts \u540c\u4e00\u5224\u636e\uff09', () => {
+    const root = makePagedContactDb()
+    const env = queryContacts(root)
+    const byName = new Map(env.contacts.map(c => [c.username, c]))
+    expect(byName.get('gh_service')?.category).toBe('service')
+    expect(byName.get('gh_news')?.category).toBe('official')
+    expect(env.stats.service).toBe(1)
+    expect(env.stats.official).toBe(1)
+  })
+
+  it('\u7fa4\u4fe1\u606f\u53ea\u67e5\u5f53\u524d\u9875\uff1a\u6210\u5458\u6570\u53bb\u91cd\u3001\u7fa4\u4e3b\u3001\u6210\u5458\u6240\u5c5e\u591a\u7fa4\u90fd\u4fdd\u6301', () => {
+    const root = makePagedContactDb()
+    const all = queryContacts(root)
+    const byName = new Map(all.contacts.map(c => [c.username, c]))
+    expect(byName.get('g1@chatroom')?.memberCount, '\u540c\u4e00\u6210\u5458\u91cd\u590d\u884c\u4e0d\u5e94\u91cd\u590d\u8ba1\u6570').toBe(1)
+    expect(byName.get('g1@chatroom')?.owner).toBe('wxid_owner')
+    expect(byName.get('g2@chatroom')?.owner).toBeUndefined()
+
+    const dave = byName.get('wxid_dave')
+    expect(dave?.groupUsernames?.length, '\u540c\u4e00\u7fa4\u91cd\u590d\u6210\u5458\u884c\u4e0d\u5e94\u91cd\u590d\u7fa4\u540d').toBe(2)
+    expect(new Set(dave?.groupUsernames ?? [])).toEqual(new Set(['g1@chatroom', 'g2@chatroom']))
+    expect(dave?.groupUsername).toBe(dave?.groupUsernames?.[0])
+
+    // \u53ea\u53d6\u597d\u53cb\u9875\uff08\u4e0d\u5305\u542b\u7fa4\u884c\uff09\u65f6\uff0c\u7fa4\u4fe1\u606f\u4ecd\u6309\u9875\u5185 id \u6b63\u786e\u5173\u8054\u3002
+    const friends = queryContacts(root, { category: 'friend' })
+    expect(friends.contacts.find(c => c.username === 'wxid_dave')?.groupUsernames?.length).toBe(2)
+  })
+
+  it('\u9996\u5b57\u6bcd\u6392\u5e8f\u4ecd\u628a # \u653e\u5728\u6700\u540e\uff0c\u4e14\u5b57\u6bcd\u7ec4\u6709\u5e8f', () => {
+    const root = makePagedContactDb()
+    const env = queryContacts(root)
+    const initials = env.contacts.map(c => c.initial)
+    expect(initials[initials.length - 1]).not.toBe('#')
+    const letters = initials.filter((i): i is string => i !== undefined && i !== '#')
+    expect(letters).toEqual([...letters].sort())
+  })
+
+  it('\u975e\u6cd5 limit/offset \u4e0d\u4f1a\u9000\u5316\u6210\u5168\u8868\u6216\u629b\u9519', () => {
+    const root = makePagedContactDb()
+    expect(queryContacts(root, { limit: -1 }).contacts).toEqual([])
+    expect(queryContacts(root, { limit: Number.NaN }).contacts).toEqual([])
+    expect(queryContacts(root, { limit: 1.5 }).contacts.length).toBe(1)
+    expect(queryContacts(root, { limit: 2, offset: -3 }).contacts.length).toBe(2)
+  })
+})

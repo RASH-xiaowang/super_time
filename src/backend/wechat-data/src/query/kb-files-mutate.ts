@@ -22,6 +22,7 @@ import type {
 import { deleteKbVectorsForFile, reassignKbVectors } from './kb-vectors.ts'
 import { KB_FILE_DELETE_ORDER, cellStr, errorText, inTransaction, normalizePositive, openStore, rowToFileMeta, warn } from './kb-files-store.ts'
 import { CASCADE_STEPS, CascadeContext, listKbFiles } from './kb-files-register.ts'
+import { KB_ENTITIES_TABLE } from './kb/extract.ts'
 
 /** 按 `KB_FILE_DELETE_ORDER` 逐条执行级联。 */
 export function cascadeDeleteFile(ctx: CascadeContext): void {
@@ -259,6 +260,16 @@ export function kbFilesOnKbDelete(decryptedDir: string, kbId: number, targetKbId
           // 分块也要跟着换归属，否则新库检索不到它、旧库又能搜到（隔离被破坏）。
           // FTS 表里没有 kb_id（作用域一律走 JOIN），所以不需要同步。
           db.prepare('UPDATE kb_chunks SET kb_id = ? WHERE file_id = ?').run(target, id)
+          /**
+           * 实体行同样带 `kb_id`，漏迁的后果与向量行一样是静默的：
+           * 源库删掉后这些实体既不在目标图谱里，也永远不会被清理。
+           * 表是按需建的，没有就跳过。
+           */
+          try {
+            db.prepare('UPDATE ' + KB_ENTITIES_TABLE + ' SET kb_id = ? WHERE file_id = ?').run(target, id)
+          } catch {
+            /* 表尚未创建：没有实体可迁 */
+          }
           /**
            * 向量行的归属**也要跟着换**（跨库，所以进不了这个事务）。
            * 漏了它的后果是静默的：向量行还在，但 `kb_id` 指向那个即将消失的库 ⇒ 目标库的

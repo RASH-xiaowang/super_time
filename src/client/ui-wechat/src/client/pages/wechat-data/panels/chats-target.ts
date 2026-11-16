@@ -5,7 +5,7 @@
  * 同一个 target 会在数据落地后被反复打开，每次又把消息清空并重新请求，
  * 界面便一直停在骨架屏。
  */
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 export interface ChatNavigationTarget {
   username: string
@@ -25,6 +25,12 @@ interface ChatTargetNavigationInputs {
  * 每个非空 target 只消费一次。
  *
  * 回调用 ref 保存最新值：effect 只认 target 本身，不因会话/消息变化而重跑。
+ *
+ * 为什么是 `useLayoutEffect` 而不是 `useEffect`：宿主把聊天视图切到前台与下发 target
+ * 是同一拍发生的。`useEffect` 在**绘制之后**才跑 —— 中间那一帧里面板已经可见，显示
+ * 的却还是上一个会话的消息（用户报障的「原界面的消息被带到第二个界面」）。
+ * `open` 的同步前缀（切会话 + 作废旧令牌 + 清空消息）放进 layout effect，正好发生在
+ * 绘制之前，旧消息一帧都不会被画出来。
  */
 export function useChatTargetNavigation({ target, open, onHandled }: ChatTargetNavigationInputs): void {
   const openRef = useRef(open)
@@ -33,7 +39,7 @@ export function useChatTargetNavigation({ target, open, onHandled }: ChatTargetN
   openRef.current = open
   onHandledRef.current = onHandled
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!target) return
     const handled = handledRef.current
     if (

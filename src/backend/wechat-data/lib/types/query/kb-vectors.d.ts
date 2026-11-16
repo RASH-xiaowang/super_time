@@ -52,9 +52,14 @@ export declare const KB_VECTOR_SCHEMA_VERSION = "1";
  *   · `schema-mismatch` 表结构升过版 ⇒ 全表都要重建（不只是本库）；
  *   · `no-model` 调用方没给出「当前用哪个模型」⇒ **无法背书溯源**，按不可用处理。
  *     这条存在的原因：以前记账名是写死的 `'default'`，等于没有溯源，
- *     于是「换模型」这件事在库里根本不留痕迹。
+ *     于是「换模型」这件事在库里根本不留痕迹；
+ *   · `incomplete` 索引建过、但本库当前可索引的块比已入库的向量多
+ *     ⇒ 新增/恢复/重新打开 RAG 的内容还没补索引。**只补缺口**，不必重算全部。
+ *
+ * `rows > 应有块数` 不算未就绪：删除文件/关掉 RAG 后残留的向量既进不了检索结果
+ *（读路径会 JOIN 回 `kb_chunks`/`kb_files` 再验一次），也不值得为了清它们强制重建。
  */
-export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model';
+export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model' | 'incomplete';
 /** 向量库状态（**按库**：`rows` 是「这个库里有多少块已入库」）。 */
 export interface KbVectorIndexStatus {
     exists: boolean;

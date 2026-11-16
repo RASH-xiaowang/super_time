@@ -235,6 +235,27 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     expect(checkSchema(schemas, zeroParam as string, [], new Set([zeroParam as string])).verdict).toBe('ok')
   })
 
+  it('getSnsImageDataUrl 的 UHD/原图尺寸字段在影子 schema 下仍判 ok（运行期不会剥参）', async () => {
+    const schemas = await realSchemas()
+    const result = checkSchema(schemas, 'getSnsImageDataUrl', [{
+      md5: 'a'.repeat(32),
+      timelineId: 'tl',
+      mediaId: 'm',
+      url: 'http://shmmsns.qpic.cn/mmsns/test/0',
+      token: 'normal-token',
+      seed: 'normal-seed',
+      originalWidth: 1440,
+      originalHeight: 1920,
+      originalBytes: 212083,
+      uhdUrl: 'http://shmmsns.qpic.cn/mmsns/test/2000',
+      uhdToken: 'uhd-token',
+      uhdSeed: 'uhd-seed',
+      offline: false,
+    }], new Set())
+    expect(result.verdict).toBe('ok')
+    expect(result.code).toBeUndefined()
+  })
+
   it('宿主层真的把两档都接上了（source 级接线判据）', async () => {
     const { readFileSync } = await import('node:fs')
     const { dirname, join: j } = await import('node:path')

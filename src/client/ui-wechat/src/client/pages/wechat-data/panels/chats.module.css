@@ -214,6 +214,36 @@
 .msgRowSelf .msgBubbleZoom::after { content: none; }
 /* 可点放大的媒体热区 */
 .msgBubbleZoom { cursor: zoom-in; }
+/* 图片工具条：与 `.msgBubbleZoom` 同份（CSS Modules 按文件打 hash，跨份引用会拿到 undefined）。 */
+.msgImageTools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 12px);
+  padding: 3px var(--nm-s-2);
+  border-radius: var(--wx-radius);
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.msgBubbleZoom:hover .msgImageTools,
+.msgBubbleZoom:focus-within .msgImageTools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msgImageTools span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .avatarStub { width: var(--wx-avatar); height: var(--wx-avatar); display: inline-block; }
 .msgSystem {
   display: inline-flex;
@@ -516,6 +546,17 @@
   color: var(--wx-quote-text);
 }
 .msgQuoteStripOpen { cursor: pointer; border-radius: var(--nm-r-xs); }
+/* 被引用摘要：参考图实测是**两行截断**，不是早先注释里写的「单行省略」——
+   图里那条引用行高 58px（2 × 19.2 行高 + 内边距），第二行末尾带省略号。
+   反过来，单行 + nowrap 会在宽窗口下把行撑到 1694px（用户截图）。
+   与 `.msgQuoteStripOpen` 同份：跨份引用会拿到 undefined（CSS Modules 按文件打 hash）。 */
+.msgQuoteWhat {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 .msgQuoteStripOpen:hover .msgQuoteWhat {
   text-decoration: underline;
   text-decoration-thickness: 1px;

@@ -15,6 +15,26 @@ import {
 } from './answer-run-trace.ts'
 import type { AskRunTiming } from './ask-run-model.ts'
 
+/** 进入一段思考：首次思考时间与当前区间起点只在第一次设置。 */
+function openReasoning(timing: AskRunTiming, now: number): void {
+  if (timing.startedAt <= 0) return
+  if (timing.firstReasoningAt === undefined) timing.firstReasoningAt = now
+  if (timing.reasoningOpenAt === undefined) timing.reasoningOpenAt = now
+}
+
+/**
+ * 结算当前思考区间。
+ *
+ * 工具开始、正文到达、本轮结束都意味着模型已经交出了这一轮判断；
+ * 之后再来的 reasoning 属于下一轮，必须重新开区间，不能把工具耗时算进思考。
+ */
+function closeReasoning(timing: AskRunTiming, now: number): void {
+  if (timing.reasoningOpenAt === undefined) return
+  timing.reasoningMs = (timing.reasoningMs ?? 0) + Math.max(0, now - timing.reasoningOpenAt)
+  timing.reasoningOpenAt = undefined
+  timing.reasoningEndedAt = now
+}
+
 export function useAskStreamFeed(
   streamIdRef: MutableRefObject<string>,
   setStreamText: Dispatch<SetStateAction<string>>,
@@ -43,9 +63,7 @@ export function useAskStreamFeed(
       const now = Date.now()
       const timing = timingRef.current
       if (timing.startedAt > 0 && timing.firstTokenAt === undefined) timing.firstTokenAt = now
-      if (timing.firstReasoningAt !== undefined && timing.reasoningEndedAt === undefined) {
-        timing.reasoningEndedAt = now
-      }
+      closeReasoning(timing, now)
       setStreamText(d.text)
     }
     window.addEventListener('dsh-wechat-ask-delta', onDelta)
@@ -65,10 +83,7 @@ export function useAskStreamFeed(
       if (typeof d.text !== 'string') return
       const now = Date.now()
       const timing = timingRef.current
-      if (timing.startedAt > 0 && timing.firstReasoningAt === undefined) {
-        timing.firstReasoningAt = now
-      }
-      if (timing.firstReasoningAt !== undefined) timing.reasoningEndedAt = now
+      openReasoning(timing, now)
       const next = mergeReasoningSegment(streamReasoningSegmentsRef.current, segment)
       streamReasoningSegmentsRef.current = next
       setStreamReasoningSegments(next)
@@ -83,12 +98,8 @@ export function useAskStreamFeed(
       const d = (e as CustomEvent).detail as ({ id?: string } & Record<string, unknown>) | null
       if (!d || !d.id || d.id !== streamIdRef.current) return
       const timing = timingRef.current
-      if (
-        timing.firstReasoningAt !== undefined
-        && timing.reasoningEndedAt === undefined
-        && (typeof d['toolName'] === 'string' || typeof d['callId'] === 'string')
-      ) {
-        timing.reasoningEndedAt = Date.now()
+      if (typeof d['toolName'] === 'string' || typeof d['callId'] === 'string') {
+        closeReasoning(timing, Date.now())
       }
       setStreamStages(prev => appendAskStage(prev, d))
       const normalized = normalizeAskStage(d)

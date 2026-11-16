@@ -4,6 +4,8 @@
  * 两块内容读取的都是当前会话，但语义不同：推荐回复面向会话最新上下文，分析面向
  * 用户点选的一条消息。此前允许同时打开，结果两套内容、两个滚动区互相挤压，且用户
  * 很难判断当前操作的是哪一块。现在由入口保证互斥，组件也只在单一模式下渲染。
+ * 两块内容也互不掺杂：分析面板只做研判，不再内嵌候选回复；候选回复只在
+ * 「推荐回复」模式出现（2026-11-13）。
  *
  * 组件分工：
  *   · 本文件 —— **唯一**的面板外壳（`.panel` / `.head` / 关闭）与模式分派；
@@ -87,7 +89,6 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
           speaker={analysisSpeaker}
           isGroup={analysisIsGroup}
           refreshing={analysisRefreshing}
-          replyUsername={target.username}
           onRetry={onRetryAnalysis}
           onRefresh={onRefreshAnalysis}
         />

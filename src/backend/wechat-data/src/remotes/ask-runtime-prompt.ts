@@ -18,6 +18,9 @@ import type {
 import type { AnswerStatus, EvidenceBundle } from '../query/answer-runtime/evidence.ts'
 import {
   MANUAL_QA_OUTPUT_PRONOUN_REMINDER,
+  MATERIAL_BEGIN_MARKER,
+  MATERIAL_END_MARKER,
+  UNTRUSTED_MATERIAL_RULE,
   WECHAT_QA_SYSTEM_PROMPT,
   formatConversationHistory,
   withManualQaPersonaRules,
@@ -60,12 +63,13 @@ export function resolveSystemPrompt(override: string | undefined): string {
 export function buildSynthRules(timeGuardRule: string): string {
   return `
   请按以下要求回答：
+  ${UNTRUSTED_MATERIAL_RULE}
   1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。金额、日期、电话/卡号这类值**只能原样照抄**材料里的写法 —— 要说合计就写明由哪几条相加（如「3500+3500=7000」），不要自行换算单位或推算日期。
   2. **先结论后要点**：第一段先用一句话直接回答问题；随后用 \`- \` 列 2-4 条关键事实。除非提问者明确要求完整过程，否则不要按消息逐条倾倒记录。
   3. **排版简单**：每条只讲一个主题，控制在 1-2 句；相近消息合并，只保留代表性事实。不要使用大标题、表格、嵌套列表或连续加粗。
   4. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
   5. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述；日期放在条目开头。
-  6. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
+  6. **找不到就直说，但有事实就先回答**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。注意：材料里出现「统计事实」时，它就是可以据以回答的确定性结论 —— 必须先按事实回答，禁止说「没有聊天记录」「无法判断」；只有统计事实也没有覆盖问题时才说明缺口。不要用推测填空。
   7. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。
   8. **联系人只用网名或备注**：提到聊天对象或群成员时，必须使用材料里的备注、群昵称或会话显示名。严禁输出 \`wxid_*\`、\`*@chatroom\`、\`gh_*\` 或其他 username、消息 key 等技术标识；显示名缺失时写「某位成员」或「该群聊」，不得把内部标识当成人名。${timeGuardRule}
   **效率要求**：材料可能很多，先筛出与问题直接相关的少量证据，不要逐条分析或枚举全部记录；除非提问者明确要求完整清单，否则只保留 2-4 个主题。
@@ -346,20 +350,35 @@ export function buildToolSelectionSystem(input: {
     : ''
   const taskRules = input.profile === 'session-ask'
     ? `你的任务：
-1. 只在当前会话内收集聊天消息证据；会话身份已经确定，不要再确认或切换会话；
+1. 只在当前会话内收集证据；会话身份已经确定，不要再确认或切换会话；
 2. 明确关键词优先 search_messages；“最近聊了什么”优先 get_session_messages；关键词检索不足时，再用一次 search_hybrid（mode=messages）或 search_semantic 补充语义召回；
 3. 只有明确的数量、排名或日期统计才用 aggregate_messages；只有需要某条消息前后上下文时才用 get_message_context；
-4. 不要改查联系人、会话列表、文件、收藏、朋友圈、转账账单、知识库或其他全局资源。问题提到这些词时，只把它们当作当前会话中的消息内容来检索；找不到就如实说明；
-5. 同一工具同一参数不要重复调用。通常控制在 1-2 次工具调用，拿到足够证据后立即停止，不要为了“再确认”反复检索；
-6. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
+4. 当前会话内的确定性数据域也要用专用工具，它们已由系统强制限制在当前会话：
+   · 转账/红包的金额、收支、最近一笔 → get_funds_summary
+   · 通话次数/时长/未接 → get_call_history
+   · 当前群聊的群主/群公告/群成员/群活跃 → get_group_detail（仅群聊）
+   · 图片/语音/视频/文件/位置等媒体消息 → aggregate_media
+   · 撤回原文 → search_revoked
+   调用时不要填其他会话的 username/peer/group；系统会自动注入当前会话，填了别的值会被拒绝；
+5. 不要改查联系人、会话列表、文件、收藏、朋友圈、知识库或其他会话。问题提到这些词时，只把它们当作当前会话中的内容来检索；找不到就如实说明；
+6. 同一工具同一参数不要重复调用。通常控制在 1-2 次工具调用，拿到足够证据后立即停止，不要为了“再确认”反复检索；
+7. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
     : `你的任务：
 1. 只选择并调用必要的检索工具，收集能回答问题的原文或确定性统计；
 2. 不要臆造工具结果，不要把常识当成本机记录；
-3. 如果问题适合综合检索，优先用 search_hybrid；明确统计用 aggregate_messages；明确会话内上下文用 get_session_messages 或 get_message_context；
-4. 同一工具同一参数不要重复调用；参数必须符合 schema；
-5. 明确问文件用 search_files、收藏用 search_favorites、朋友圈用 search_moments、转账红包用 search_records、联系人用 search_contacts；
-6. 不要用一个泛化检索工具替代这些明确的数据域；对应工具没有命中时再考虑 search_hybrid；
-7. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
+3. 先判断问题要的是「原文」还是「事实」：原文用 search_messages / get_session_messages / get_message_context；数量、金额、排名、时长用确定性工具，不要从片段里自己数；
+4. 专用数据域必须用专用工具：
+   · 转账/红包的金额、收支、最近一笔、异常 → get_funds_summary（条目明细才用 search_records）
+   · 通话次数/时长/未接 → get_call_history
+   · 群主/群公告/群成员/群活跃 → get_group_detail
+   · 朋友圈发布数/点赞/评论排行 → get_moments_stats（按内容找单条才用 search_moments）
+   · 撤回原文 → search_revoked
+   · 图片/语音/视频/文件/位置等媒体消息 → aggregate_media
+   · 文件 → search_files；收藏 → search_favorites；联系人档案 → search_contacts / get_contact_detail；知识库 → search_kb；
+5. 同一工具同一参数不要重复调用；参数必须符合 schema；日期一律写 YYYY-MM-DD；
+6. 用户给的是显示名或群名时可直接填 username/group/sessionName，系统会解析；返回歧义候选时选一个或向用户澄清，不要反复猜；
+7. 专用工具没有命中时再考虑 search_hybrid 或 search_messages，不要一开始就用泛化检索替代专用数据域；
+8. 工具阶段不要写最终回答。完成检索后停止调用工具，由后续综合阶段生成答案。`
   return `今天是 ${today}。你是一个检索工具选择器，不是最终回答器。
 待处理问题：${input.question}
 执行边界：${scope}${lockedHint}${history}${image}
@@ -396,7 +415,16 @@ export function buildTimeGuardRule(intent: AnswerIntentDecision, evidence: Evide
   if (hits > 0) {
     return `\n9. **时间范围**：材料里有 ${String(hits)} 条落在 ${label} 内，可以按该范围陈述。`
   }
-  return `\n9. **时间范围（重要）**：检索在 ${label} 内**一条都没找到**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${label} 这段时间没有找到相关记录」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`
+  /*
+   * 统计事实（aggregate_messages 的确定性结论）天然带自己的统计区间。
+   * 只按「消息原文命中数」判断，会把「这个范围没有可引用的原文」误写成
+   * 「这个范围没有聊天记录」，并让模型在紧跟其后的事实列表面前自相矛盾。
+   */
+  const factCount = Array.isArray(evidence.facts) ? evidence.facts.length : 0
+  if (factCount > 0) {
+    return `\n9. **时间范围（重要）**：${label} 内没有检索到可直接引用的**消息原文**，但材料里有 ${String(factCount)} 条**统计事实**（每条形如「统计区间为 X ~ Y」）。必须先用统计事实直接回答，不得说「这段时间没有聊天记录」「无法判断」「查不到」；引用其他日期的原文时，逐条写出真实日期，不要把其他日期的事说成发生在该范围内。`
+  }
+  return `\n9. **时间范围（重要）**：检索在 ${label} 内没有找到**消息原文**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${label} 这段时间没有检索到相关原文」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`
 }
 
 /** 资源证据不伪装成消息引用，而是作为独立材料块给模型。 */
@@ -445,6 +473,7 @@ export function citationToAskCitation(citation: AnswerRuntimeCitation): AskCitat
     ...(citation.senderEnterpriseName
       ? { senderEnterpriseName: citation.senderEnterpriseName }
       : {}),
+    ...(citation.revoked ? { revoked: true } : {}),
     ...(citation.source ? { source: citation.source } : {}),
     ...(citation.kb ? { kb: citation.kb } : {}),
   }
@@ -463,9 +492,18 @@ export function buildSynthesisPrompt(input: {
       + formatConversationHistory(input.history) + '\n\n'
     : ''
   const imageHint = input.imageHint !== '' ? '\n关于图片：' + input.imageHint : ''
+  /*
+   * 材料正文里若原样出现分隔符，就等于给了材料一个「提前结束包裹」的机会。
+   * 先替换成普通文本，保证唯一的结束分隔符只能由运行时写入。
+   */
+  const material = input.contextBlock
+    .replaceAll(MATERIAL_BEGIN_MARKER, '[检索材料开始]')
+    .replaceAll(MATERIAL_END_MARKER, '[检索材料结束]')
   return `${historyBlock}提问者本次问题：${input.question}${imageHint}
 
-${input.contextBlock}
+${MATERIAL_BEGIN_MARKER}
+${material}
+${MATERIAL_END_MARKER}
 ${buildSynthRules(input.timeGuardRule)}`
 }
 

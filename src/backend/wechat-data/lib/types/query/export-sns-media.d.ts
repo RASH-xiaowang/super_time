@@ -17,6 +17,14 @@ export interface SnsMediaInput {
     seed?: string;
     /** Public RPC alias used by the Moments UI; same value as `seed`. */
     key?: string;
+    /** XML `<size>`：原图期望尺寸/字节数。 */
+    originalWidth?: number;
+    originalHeight?: number;
+    originalBytes?: number;
+    /** XML `<uhd>` 的独立 CDN 三件套；`/2000` 必须保留。 */
+    uhdUrl?: string;
+    uhdToken?: string;
+    uhdSeed?: string;
 }
 export interface SnsMediaContext {
     /** Raw WeChat account root (the parent of `msg/`). */

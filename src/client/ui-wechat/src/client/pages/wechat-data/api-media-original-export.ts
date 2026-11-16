@@ -32,6 +32,12 @@ export async function apiExportSnsImage(options: {
   token?: string
   seed?: string
   key?: string
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
   dest: string
   jobId?: string
 }): Promise<{ ok: boolean; path?: string; bytes?: number; format?: string; source?: 'local' | 'cdn'; error?: string }> {

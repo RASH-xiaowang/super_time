@@ -20,6 +20,7 @@ import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImages
 import { getOriginalHarvestStatus, harvestHdDats, setHarvestProgress, startOriginalHarvester, stopOriginalHarvester, type HarvestResult, type HarvestStatus } from '../query/original-harvester.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
 import { lookupOriginal, lookupArchivedOriginal, originalAsDataUrl, saveArchivedOriginal, saveOriginal } from '../query/sns-media-store.ts'
+import { evaluateSnsOriginal, type SnsOriginalExpectation } from '../query/image-dimensions.ts'
 import { readArchivedAvatar, readArchivedAvatars, saveArchivedAvatar, saveArchivedAvatars } from '../query/moments-archive.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
@@ -863,17 +864,36 @@ async function wxcdnQuotaWithOp(rc: MediaRemoteCtx): Promise<{ quota?: WxcdnQuot
  * @param decodedDir - `decoded_images` 目录。
  * @param md5 - 32 位媒体 md5。
  * @param dataUrl - `data:image/...;base64,...`；形态不对就静默跳过。
+ * @param options - 原图预期与质量闸门。朋友圈原图必须走 `requireQuality`，
+ *   视频封面等小图保持旧行为。
+ * @returns 至少写进一处缓存时为 true。
  */
-function saveOriginalFromDataUrl(decodedDir: string, md5: string, dataUrl: string | undefined): void {
-  if (!dataUrl || !dataUrl.startsWith('data:image/')) return
+function saveOriginalFromDataUrl(
+  decodedDir: string,
+  md5: string,
+  dataUrl: string | undefined,
+  options: { expectation?: SnsOriginalExpectation; requireQuality?: boolean } = {},
+): boolean {
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return false
   const comma = dataUrl.indexOf(',')
-  if (comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) return
+  if (comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) return false
   try {
     const bytes = Buffer.from(dataUrl.slice(comma + 1), 'base64')
-    saveOriginal(decodedDir, md5, bytes)
-    saveArchivedOriginal(decodedDir, md5, bytes)
+    if (options.requireQuality === true
+      && !evaluateSnsOriginal(bytes, options.expectation).accepted) {
+      return false
+    }
+    const saveOptions = {
+      ...(options.expectation !== undefined ? { expectation: options.expectation } : {}),
+      ...(options.requireQuality === true ? { requireQuality: true } : {}),
+      ...(options.requireQuality === true ? { replaceIfLarger: true } : {}),
+    }
+    const stored = saveOriginal(decodedDir, md5, bytes, saveOptions)
+    const archived = saveArchivedOriginal(decodedDir, md5, bytes, saveOptions)
+    return stored !== null || archived !== null
   } catch {
     // 落盘失败不影响本次展示（磁盘满 / 只读目录 / 权限不足）
+    return false
   }
 }
 
@@ -888,6 +908,21 @@ interface SnsImageOptions {
   token?: string
   /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
   seed?: string
+  /** XML 外层 `<size width>`：原图期望宽度。 */
+  originalWidth?: number
+  /** XML 外层 `<size height>`：原图期望高度。 */
+  originalHeight?: number
+  /** XML 外层 `<size totalSize>`：原图期望字节数（可缺省）。 */
+  originalBytes?: number
+  /**
+   * 真实 `<uhd>` 地址与独立三件套。
+   *
+   * ⚠️ UHD 的 `token`/`key`/`md5` 与普通 `<url>` **不是同一份**；真实样本中
+   * `/2000` 保留尺寸段才返回 200，改成 `/0` 反而 400。
+   */
+  uhdUrl?: string
+  uhdToken?: string
+  uhdSeed?: string
   /**
    * 界面侧判定「当前无网」（`navigator.onLine === false`）。缺省按**有网**处理。
    *
@@ -895,6 +930,23 @@ interface SnsImageOptions {
    * 误判成无网会让用户永远看不到刚上传的新图，而且**没有任何报错**。
    */
   offline?: boolean
+}
+
+function snsOriginalExpectation(options: {
+  originalWidth?: number
+  originalHeight?: number
+  originalBytes?: number
+}): SnsOriginalExpectation {
+  const positive = (value: number | undefined): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined
+  const width = positive(options.originalWidth)
+  const height = positive(options.originalHeight)
+  const bytes = positive(options.originalBytes)
+  return {
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+    ...(bytes !== undefined ? { bytes } : {}),
+  }
 }
 
 /**
@@ -933,40 +985,87 @@ async function snsImageWithCdnFirst(
   const url = String(options.url ?? '')
   const token = String(options.token ?? '')
   const seed = String(options.seed ?? '')
+  const uhdUrl = String(options.uhdUrl ?? '')
+  const uhdToken = String(options.uhdToken ?? '')
+  const uhdSeed = String(options.uhdSeed ?? '')
   const decoded = dirs.decoded
   const offline = options.offline === true
+  const expectation = snsOriginalExpectation(options)
   // 追踪：卡片只显示默认文案时，唯一能取证的地方就是这里（应用日志 app.log）
   const tag = '[sns-image] md5=' + options.md5.slice(0, 8) + (offline ? ' [无网]' : '')
   const hasCdn = url !== '' && token !== '' && seed !== ''
+  const hasUhd = uhdUrl !== '' && uhdToken !== '' && uhdSeed !== ''
 
   /** 本机那条：`allowThumb=false` 只要原图，`true` 连缩略图一起收。 */
   const local = async (allowThumb: boolean) =>
     resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, allowThumb)
 
-  // ⓪ 长期归档：跨密钥/重启保留的那份。命中即最终结果（同一 md5 = 同一张原图）。
+  // ⓪ 长期归档：跨密钥/重启保留的那份。历史归档里可能混进 200x300 预览图，
+  // 所以命中后仍要过尺寸校验；不合格就继续往下找，绝不再无条件短路。
   const archived = lookupArchivedOriginal(decoded, options.md5)
   if (archived !== null) {
-    console.error(tag + ' 长期归档原图（长度 ' + String(archived.bytes.length) + '）')
-    return { url: originalAsDataUrl(archived) }
+    const evaluation = evaluateSnsOriginal(archived.bytes, expectation)
+    if (evaluation.accepted) {
+      console.error(tag + ' 长期归档原图（长度 ' + String(archived.bytes.length) + '）')
+      return { url: originalAsDataUrl(archived) }
+    }
+    console.error(tag + ' 长期归档被拒绝：' + String(evaluation.reason))
   }
 
   // ① 解码缓存里的原图（同一台机器的快路径），顺手补写长期归档。
   const stored = lookupOriginal(decoded, options.md5)
   if (stored !== null) {
-    saveArchivedOriginal(decoded, options.md5, stored.bytes)
-    console.error(tag + ' 已下载的原图（长度 ' + String(stored.bytes.length) + '，已补写长期归档）')
-    return { url: originalAsDataUrl(stored) }
+    const evaluation = evaluateSnsOriginal(stored.bytes, expectation)
+    if (evaluation.accepted) {
+      saveArchivedOriginal(decoded, options.md5, stored.bytes, {
+        expectation,
+        requireQuality: true,
+        replaceIfLarger: true,
+      })
+      console.error(tag + ' 已下载的原图（长度 ' + String(stored.bytes.length) + '，已补写长期归档）')
+      return { url: originalAsDataUrl(stored) }
+    }
+    console.error(tag + ' 解码缓存被拒绝：' + String(evaluation.reason))
   }
 
   // ② 微信原始目录里的原图：落地即写穿两处缓存。
   const localOriginal = await local(false)
   if (localOriginal.url) {
-    console.error(tag + ' 本机原图（长度 ' + String(localOriginal.url.length) + '）')
-    saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url)
-    return localOriginal
+    const bytes = dataUrlToBuffer(localOriginal.url)
+    const evaluation = bytes === null ? null : evaluateSnsOriginal(bytes, expectation)
+    if (evaluation?.accepted === true) {
+      console.error(tag + ' 本机原图（长度 ' + String(localOriginal.url.length) + '）')
+      saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url, {
+        expectation,
+        requireQuality: true,
+      })
+      return localOriginal
+    }
+    console.error(tag + ' 本机原图被拒绝：' + String(evaluation?.reason ?? '返回的不是 base64 图片'))
   }
 
-  // ③ 本地确实没有原图，才出网。离线时跳过（避免白等一个超时窗口）。
+  // ③ 本地确实没有可用的高清原图，才出网。UHD 优先；离线时两档都跳过。
+  if (!offline && hasUhd) {
+    const uhd = await fetchSnsCdnImage(uhdUrl, uhdToken, uhdSeed)
+    if (uhd.dataUrl) {
+      const bytes = dataUrlToBuffer(uhd.dataUrl)
+      const evaluation = bytes === null ? null : evaluateSnsOriginal(bytes, expectation)
+      if (evaluation?.accepted === true) {
+        saveOriginalFromDataUrl(decoded, options.md5, uhd.dataUrl, {
+          expectation,
+          requireQuality: true,
+        })
+        console.error(tag + ' UHD CDN 原图（长度 ' + String(uhd.dataUrl.length) + '，已落盘）')
+        return { url: uhd.dataUrl }
+      }
+      console.error(tag + ' UHD CDN 结果被拒绝：' + String(evaluation?.reason ?? '返回的不是 base64 图片'))
+    } else {
+      console.error(tag + ' UHD CDN 失败：' + String(uhd.error))
+    }
+  } else if (!offline && (uhdUrl !== '' || uhdToken !== '' || uhdSeed !== '')) {
+    console.error(tag + ' UHD 三件套不完整（url/token/seed），跳过 UHD')
+  }
+
   if (!offline && hasCdn) {
     // ⚠️ 这里原先跟着一句「整份 XOR 用我们这份 WxIsaac64 构建做不到」的断言，那是错的：
     // 2026-10-08 真库/真网/真 WASM 测过两份 WASM 同一份、分块与一次性生成逐字节相同、
@@ -974,11 +1073,20 @@ async function snsImageWithCdnFirst(
     // EOI 后挂 24 字节签名块），已修。别再照那句旧断言去换二进制。
     const cdn = await fetchSnsCdnImage(url, token, seed)
     if (cdn.dataUrl) {
-      saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl)
-      console.error(tag + ' CDN 原图（长度 ' + String(cdn.dataUrl.length) + '，已落盘）')
-      return { url: cdn.dataUrl }
+      const bytes = dataUrlToBuffer(cdn.dataUrl)
+      const evaluation = bytes === null ? null : evaluateSnsOriginal(bytes, expectation)
+      if (evaluation?.accepted === true) {
+        saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl, {
+          expectation,
+          requireQuality: true,
+        })
+        console.error(tag + ' CDN 原图（长度 ' + String(cdn.dataUrl.length) + '，已落盘）')
+        return { url: cdn.dataUrl }
+      }
+      console.error(tag + ' CDN 结果被拒绝：' + String(evaluation?.reason ?? '返回的不是 base64 图片'))
+    } else {
+      console.error(tag + ' CDN 失败：' + String(cdn.error))
     }
-    console.error(tag + ' CDN 失败：' + String(cdn.error))
   } else if (!offline) {
     console.error(tag + ' 缺 CDN 三件套（url/token/seed），只能走本机')
   }

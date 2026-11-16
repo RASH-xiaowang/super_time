@@ -181,7 +181,12 @@ describe('返回按钮：只在手机档出现，且接的是 closeCurrentSessio
     expect(closer, 'closeCurrentSession 没有同步响应式令牌 ⇒ 会话级 AI 回复状态可能沿用旧会话')
       .toContain('setSessionEpoch(sessionEpochRef.current)')
     expect(panel, '会话开始没有发布新令牌 ⇒ 重开同一单聊不会刷新 AI 回复状态')
-      .toContain('onSessionBegin: setSessionEpoch')
+      .toContain('onSessionBegin })')
+    const begin = sliceBetween(panel, 'const onSessionBegin', '}, [])', 'onSessionBegin')
+    expect(begin, '会话开始没推进响应式令牌 ⇒ UI 侧拿不到新会话纪元')
+      .toContain('setSessionEpoch(epoch)')
+    expect(begin, '会话纪元的渲染期镜像没更新 ⇒ 换会话的第一帧会画出上一份消息')
+      .toContain('messagesEpochRef.current = epoch')
   })
 })
 

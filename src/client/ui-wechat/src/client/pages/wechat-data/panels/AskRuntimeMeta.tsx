@@ -28,6 +28,7 @@ import type {
 import { ResourceCard } from './resource-card.tsx'
 import { identityLabel, withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import { askToolNameLabel } from './ask-tool-labels.ts'
 import css from './ask-runtime.module.css'
 
 const STATUS_LABEL: Readonly<Record<string, string>> = {
@@ -65,24 +66,6 @@ export function intentLabel(intent?: string): string {
   return INTENT_LABEL[intent] ?? intent
 }
 
-/** 工具名 → 中文动作；未知工具原样显示，避免把新工具藏起来。 */
-const TOOL_LABEL: Record<string, string> = {
-  search_messages: '消息检索',
-  search_semantic: '语义检索',
-  search_hybrid: '混合检索',
-  aggregate_messages: '统计消息',
-  list_sessions: '会话列表',
-  get_session_messages: '读取会话消息',
-  get_message_context: '展开消息上下文',
-  search_contacts: '联系人检索',
-  get_contact_detail: '联系人详情',
-  search_moments: '朋友圈检索',
-  search_favorites: '收藏检索',
-  search_files: '文件检索',
-  search_records: '转账/红包检索',
-  search_kb: '知识库检索',
-}
-
 const SOURCE_LABEL: Record<string, string> = {
   msg: '消息',
   kb: '知识库',
@@ -90,9 +73,9 @@ const SOURCE_LABEL: Record<string, string> = {
   resource: '资源',
 }
 
+/** 工具名 → 中文动作；未知工具原样显示，避免把新工具藏起来。 */
 function toolLabel(name: string | undefined): string {
-  if (!name) return '未知工具'
-  return TOOL_LABEL[name] ?? name
+  return askToolNameLabel(name) ?? '未知工具'
 }
 
 function safeNumber(value: unknown): number {

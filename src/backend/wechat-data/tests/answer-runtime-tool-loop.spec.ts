@@ -170,6 +170,87 @@ describe('runToolLoop：工具调用与结果回放', () => {
   })
 })
 
+describe('runToolLoop：会话锁定的必填参数注入', () => {
+  const sessionLoop = (overrides: Partial<Parameters<typeof runToolLoop>[0]>) => loopInput({
+    profile: ANSWER_PROFILES['session-ask'],
+    toolContext: { decryptedDir: '/fake', scope: { username: '123@chatroom' } },
+    ...overrides,
+  })
+
+  it('模型漏填 group 时在 schema 必填校验前注入当前群', async () => {
+    const group = vi.fn((_args: Record<string, unknown>) => hitResult('get_group_detail', []))
+    let first = true
+    const runTurn = vi.fn(async () => {
+      if (first) {
+        first = false
+        return turn({ calls: [{ id: 'call_group', name: 'get_group_detail', args: {} }] })
+      }
+      return turn({ text: '完成了。' })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(sessionLoop({
+      profileTools: [fakeTool('get_group_detail', group)],
+      runTurn,
+    }))
+
+    expect(group).toHaveBeenCalledTimes(1)
+    expect(group.mock.calls[0]?.[0]).toMatchObject({ group: '123@chatroom' })
+    expect(out.toolCalls[0]?.ok).toBe(true)
+  })
+
+  it('模型显式填了别的群时不被静默改写，交给范围守卫拒绝', async () => {
+    const group = vi.fn((_args: Record<string, unknown>) => hitResult('get_group_detail', []))
+    let first = true
+    const runTurn = vi.fn(async () => {
+      if (first) {
+        first = false
+        return turn({
+          calls: [{ id: 'call_group', name: 'get_group_detail', args: { group: 'other@chatroom' } }],
+        })
+      }
+      return turn({ text: '完成了。' })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(sessionLoop({
+      profileTools: [fakeTool('get_group_detail', group)],
+      runTurn,
+    }))
+
+    expect(group).not.toHaveBeenCalled()
+    expect(out.toolCalls[0]?.ok).toBe(false)
+    // 可能是范围守卫的 scope_violation，也可能是参数归一化先判定群标识不可用；
+    // 两种都必须「不执行」，不能被静默改写成当前群。
+    expect(out.toolCalls[0]?.errorClass).not.toBeUndefined()
+  })
+
+  it('通话工具的 peer 与群资料一样在必填校验前注入当前会话', async () => {
+    const calls = vi.fn((_args: Record<string, unknown>) => ({
+      tool: 'get_call_history' as const,
+      ok: true,
+      hits: [],
+      facts: [],
+    }))
+    let first = true
+    const runTurn = vi.fn(async () => {
+      if (first) {
+        first = false
+        return turn({ calls: [{ id: 'call_calls', name: 'get_call_history', args: {} }] })
+      }
+      return turn({ text: '完成了。' })
+    }) as unknown as RunChatTurnFn
+
+    await runToolLoop(sessionLoop({
+      // 通话只存在于一对一会话；群聊锁定会明确报 unsupported_scope。
+      toolContext: { decryptedDir: '/fake', scope: { username: 'wxid_a' } },
+      profileTools: [fakeTool('get_call_history', calls)],
+      runTurn,
+    }))
+
+    expect(calls).toHaveBeenCalledTimes(1)
+    expect(calls.mock.calls[0]?.[0]).toMatchObject({ peer: 'wxid_a' })
+  })
+})
+
 describe('runToolLoop：模型轮次截止与错误回放', () => {
   it('模型轮次超过 deadline 会 abort 请求并抛出稳定 model_timeout', async () => {
     let aborted = false
@@ -281,26 +362,17 @@ describe('runToolLoop：模型轮次截止与错误回放', () => {
 })
 
 describe('runToolLoop：失败、重试与边界', () => {
-  it('失败结果不进入缓存，后续同参调用会重新执行', async () => {
-    let calls = 0
-    const run = vi.fn(() => {
-      calls += 1
-      if (calls === 1) {
-        return {
-          tool: 'search_messages',
-          ok: false,
-          error: '权限不足',
-          errorCode: 'upstream_failure',
-          hits: [],
-        } as ToolResult
-      }
-      return hitResult('search_messages', [
-        { key: 'wxid_a:fail-cache', name: '项目群', time: '', snippet: '第二次执行成功', source: 'msg' },
-      ])
-    })
+  it('失败结果按 name+args 缓存，后续同参调用不再重试', async () => {
+    const run = vi.fn(() => ({
+      tool: 'search_messages',
+      ok: false,
+      error: '权限不足',
+      errorCode: 'upstream_failure',
+      hits: [],
+    }) as ToolResult)
     const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
       if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
-        return turn({ text: '重查成功。' })
+        return turn({ text: '本轮先不再重查。' })
       }
       const args = { keywords: ['合同'] }
       return turn({
@@ -316,7 +388,7 @@ describe('runToolLoop：失败、重试与边界', () => {
       runTurn,
     }))
 
-    expect(run).toHaveBeenCalledTimes(2)
+    expect(run).toHaveBeenCalledTimes(1)
     expect(out.toolCalls).toHaveLength(2)
     expect(out.toolCalls[0]).toMatchObject({
       ok: false,
@@ -324,11 +396,54 @@ describe('runToolLoop：失败、重试与边界', () => {
       deduplicated: false,
     })
     expect(out.toolCalls[1]).toMatchObject({
-      ok: true,
+      ok: false,
+      errorCode: 'upstream_failure',
+      deduplicated: true,
+    })
+    // 失败结果也进入本轮缓存，供后续轮次继续复用。
+    expect(out.cachedResults).toHaveLength(1)
+    expect(out.cachedResults[0]?.result.ok).toBe(false)
+  })
+
+  it('超时失败同样缓存：同一轮不会因模型重放而再跑一次大扫描', async () => {
+    const run = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 30))
+      return hitResult('search_messages', [])
+    })
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '超时后停止。' })
+      }
+      const args = { keywords: ['合同'] }
+      return turn({
+        calls: [
+          { id: 'call_timeout', name: 'search_messages', args },
+          { id: 'call_timeout_replay', name: 'search_messages', args },
+        ],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(loopInput({
+      profileTools: [fakeTool('search_messages', run)],
+      runTurn,
+      toolDeadlineMs: 10,
+    }))
+
+    // 第一次调用的内部重试（2 次尝试）后结果被缓存；第二次同参调用直接复用，
+    // 不再发起第三次/第四次执行。
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(out.toolCalls[0]).toMatchObject({
+      ok: false,
+      errorClass: 'timeout',
+      attempts: 2,
       deduplicated: false,
     })
+    expect(out.toolCalls[1]).toMatchObject({
+      ok: false,
+      errorClass: 'timeout',
+      deduplicated: true,
+    })
     expect(out.cachedResults).toHaveLength(1)
-    expect(out.cachedResults[0]?.result.ok).toBe(true)
   })
 
   it('timeout 有界重试一次（总尝试 2 次）', async () => {
@@ -603,6 +718,59 @@ describe('runToolLoop：失败、重试与边界', () => {
     expect(out.toolCalls.map(trace => trace.name)).toEqual(['search_hybrid', 'aggregate_messages'])
   })
 
+  it('兜底跳过缺必填参数的工具，且不占用调用预算', async () => {
+    const group = vi.fn(() => hitResult('get_group_detail', []))
+    const message = vi.fn(() => hitResult('search_messages', [
+      { key: 'wxid_a:skip-budget', name: '项目群', time: '', snippet: '合同已确认', source: 'msg' },
+    ]))
+    const runTurn = vi.fn(async () => turn({ text: '我看看。' })) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(loopInput({
+      question: '合同',
+      profileTools: [
+        fakeTool('get_group_detail', group),
+        fakeTool('search_messages', message),
+      ],
+      // get_group_detail 没有 group 参数时不能猜；它不该吃掉后面 search_messages 的名额。
+      fallbackTools: ['get_group_detail', 'search_messages'],
+      runTurn,
+    }))
+
+    expect(group).not.toHaveBeenCalled()
+    expect(message).toHaveBeenCalledTimes(1)
+    expect(out.toolCalls.map(trace => trace.name)).toEqual(['search_messages'])
+  })
+
+  it('专用工具占满预算时仍给泛化检索留一个位置', async () => {
+    const funds = vi.fn((): ToolResult => ({
+      tool: 'get_funds_summary',
+      ok: false,
+      errorCode: 'not_configured',
+      hits: [],
+    }))
+    const records = vi.fn(() => hitResult('search_records', []))
+    const hybrid = vi.fn(() => hitResult('search_hybrid', [
+      { key: 'wxid_a:reserve-hybrid', name: '项目群', time: '', snippet: '收到转账 13.00 元', source: 'msg' },
+    ]))
+    const runTurn = vi.fn(async () => turn({ text: '我看看。' })) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(loopInput({
+      question: '最近一次转账是多少',
+      profileTools: [
+        fakeTool('get_funds_summary', funds),
+        fakeTool('search_records', records),
+        fakeTool('search_hybrid', hybrid),
+      ],
+      fallbackTools: ['get_funds_summary', 'search_records', 'search_hybrid'],
+      maxFallbackCalls: 2,
+      runTurn,
+    }))
+
+    // 专用工具失败后必须轮到 hybrid，而不是把两个名额都花在专用工具上。
+    expect(out.toolCalls.map(trace => trace.name)).toEqual(['get_funds_summary', 'search_hybrid'])
+    expect(hybrid).toHaveBeenCalledTimes(1)
+  })
+
   it('fallback 使用 extractAskTerms 提词，不把整句问题当查询词', async () => {
     const question = '蓝鲸合同验收款文件 帮我看下'
     const message = vi.fn((args: Record<string, unknown>) => {
@@ -659,6 +827,33 @@ describe('runToolLoop：失败、重试与边界', () => {
 
     expect(message).toHaveBeenCalledTimes(1)
     expect(out.toolResults[0]?.hits).toHaveLength(1)
+  })
+
+  it('锁定会话时兜底不发起 search_files；只有日期锁定时仍可兜底', async () => {
+    const files = vi.fn((_args: Record<string, unknown>) => hitResult('search_files', []))
+    const textTurn = vi.fn(async () => turn({ text: '没有可用的文件检索。' })) as unknown as RunChatTurnFn
+
+    const locked = await runToolLoop(loopInput({
+      question: '合同文件里写了什么',
+      profileTools: [fakeTool('search_files', files)],
+      fallbackTools: ['search_files'],
+      toolContext: { decryptedDir: '/fake', scope: { username: 'wxid_locked' } },
+      runTurn: textTurn,
+    }))
+    expect(files).not.toHaveBeenCalled()
+    expect(locked.fallbackUsed).toBe(false)
+    expect(locked.toolCalls).toEqual([])
+
+    const dateOnly = await runToolLoop(loopInput({
+      question: '合同文件里写了什么',
+      profileTools: [fakeTool('search_files', files)],
+      fallbackTools: ['search_files'],
+      toolContext: { decryptedDir: '/fake', scope: { from: '2026-10-01', to: '2026-10-07' } },
+      runTurn: textTurn,
+    }))
+    expect(files).toHaveBeenCalledTimes(1)
+    expect(files.mock.calls[0]?.[0]).toMatchObject({ from: '2026-10-01', to: '2026-10-07' })
+    expect(dateOnly.fallbackUsed).toBe(true)
   })
 
   it('首轮失败后模型停止时只补查一次，跳过同一失败调用', async () => {

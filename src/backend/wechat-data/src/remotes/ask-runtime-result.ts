@@ -117,6 +117,23 @@ function buildPlan(
   }
 }
 
+/**
+ * 证据被判「不足」时仍然值得保留的模型回答。
+ *
+ * 证据不足有三种成因：完全没有证据、只有统计事实、原文片段太短。后两种其实
+ * 已经有可核对的内容，模型也据此写完了回答；如果这时一律换成固定的
+ * 「本机记录里没有检索到……」，用户会看到「有数据却说没有」——2026-11-13 实测
+ * 的错答就是这么来的。这里只保留「确实有证据（items 或 facts）」的非空回答；
+ * 完全无证据时仍然使用固定话术，避免把模型凭空写的结论当成记录。
+ */
+function preservedInsufficientAnswer(runtime: AnswerRuntimeResult): string {
+  const answer = runtime.answer.trim()
+  if (answer === '') return ''
+  const hasEvidence = runtime.evidence.items.length > 0
+    || runtime.evidence.facts.length > 0
+  return hasEvidence ? answer : ''
+}
+
 function answerForStatus(
   runtime: AnswerRuntimeResult,
   profile: AnswerProfileId,
@@ -127,7 +144,9 @@ function answerForStatus(
   }
   if (runtime.status === 'blocked') return blockedReply(runtime.reason, profile)
   if (runtime.status === 'failed') return failedReply(profile)
-  if (runtime.status === 'insufficient') return insufficientReply(profile)
+  if (runtime.status === 'insufficient') {
+    return preservedInsufficientAnswer(runtime) || insufficientReply(profile)
+  }
   if (answer !== '') return answer
   if (runtime.status === 'degraded') {
     return runtime.citations.length > 0 || runtime.resources.length > 0
@@ -194,9 +213,15 @@ export function askResultFromRuntime(input: {
     && runtime.synthesisError === undefined
     && hasCitations
     && citedIndexes.length === 0
-  const finalStatus: AnswerStatus = (status === 'ok' && (withheld || uncited))
+  // 保留了「证据不足」时的模型回答，就不能再对用户显示「证据不足/未找到」；
+  // 降级为 degraded 更准确：回答可用，但缺少可引用原文。
+  const baseStatus: AnswerStatus = status === 'insufficient'
+    && preservedInsufficientAnswer(runtime) !== ''
     ? 'degraded'
     : status
+  const finalStatus: AnswerStatus = (baseStatus === 'ok' && (withheld || uncited))
+    ? 'degraded'
+    : baseStatus
   // 综合阶段自身降级比“没有角标”更能解释用户看到的兜底文本。
   const synthesisReason = runtime.synthesisError
     ?? (runtime.reason?.includes('综合生成') ? runtime.reason : undefined)

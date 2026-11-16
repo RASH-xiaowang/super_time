@@ -198,6 +198,9 @@ function readResultCache(key) {
 
 function writeResultCache(key, result) {
   const value = result && result.value;
+  // 缩略图是「暂时降级」，不是该 md5 的最终答案：若让它进正缓存，之后即使
+  // UHD/原图已可取回，同参会一直命中这张低清图。失败结果仍按原策略短缓存。
+  if (value && typeof value === 'object' && value.thumb === true) return;
   const payload = value && typeof value === 'object' ? (value.url ?? value.data ?? null) : null;
   if (typeof payload === 'string' && payload.length > RESULT_CACHE_MAX_CHARS) return;
   if (resultCache.has(key)) deleteResultCacheEntry(key);

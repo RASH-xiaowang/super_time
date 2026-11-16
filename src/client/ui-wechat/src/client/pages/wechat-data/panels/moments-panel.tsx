@@ -210,7 +210,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     : 'none'
 
   // 离线媒体层（滚动懒解密 / 封面兜底 / IDB 恢复 / 灯箱按需解析）整个交给 moments-media.ts。
-  const { snsImgs, snsErrs, articleCovers, mediaKeySpec } = useMomentsMedia({
+  const { snsImgs, snsOriginals, snsErrs, articleCovers, mediaKeySpec, resolveSnsOriginal } = useMomentsMedia({
     moments,
     viewer,
     scrollRef,
@@ -402,6 +402,8 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         setViewerIndex={setViewerIndex}
         curImg={curImg}
         snsImgs={snsImgs}
+        snsOriginals={snsOriginals}
+        resolveSnsOriginal={resolveSnsOriginal}
         copyCurrentLink={copyCurrentLink}
         viewRotate={viewRotate}
         setViewRotate={setViewRotate}
@@ -427,6 +429,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         setViewer={setViewer}
         setAuthorFilter={setAuthorFilter}
         snsImgs={snsImgs}
+        articleCovers={articleCovers}
         mediaKeySpec={mediaKeySpec}
         videoSrcs={videoSrcs}
         videoLoading={videoLoading}

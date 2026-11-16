@@ -41,6 +41,15 @@ function write(rel: string, content = 'x') {
 }
 
 describe('check-generated-artifacts', () => {
+  it('后端 bundle 比对清单覆盖四个手工分包入口', () => {
+    expect(script.BACKEND_PATHS).toEqual([
+      'index.js',
+      'net/fetch-retry.js',
+      'net/rpa-media.js',
+      'net/message-webhook.js',
+    ])
+  })
+
   it('模式参数只认三个合法值，缺省为 all', () => {
     expect(script.parseMode(['node', 'script.js'])).toBe('all')
     expect(script.parseMode(['node', 'script.js', '--backend'])).toBe('backend')

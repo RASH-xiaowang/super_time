@@ -201,8 +201,13 @@ describe('收尾', () => {
     const ctrl = streamControlFor(jobs, emit, 'expire')
     finishStreamJobIn(jobs, 'expire', undefined, ctrl.jobToken)
     expect(slot('expire')?.finished).toBe(true)
-    expect(pruneSettledStreamJobs(jobs, Date.now() + STREAM_JOB_TERMINAL_TTL_MS - 1)).toBe(0)
-    expect(pruneSettledStreamJobs(jobs, Date.now() + STREAM_JOB_TERMINAL_TTL_MS + 1)).toBe(1)
+    // 锚在**真实的 settledAt** 上，而不是断言时另取一次 `Date.now()`：两者之间只要过去
+    // 1ms，`Date.now() + TTL - 1` 就已经越过了该任务的过期线，清理条数从 0 变 1 ——
+    // 满载并行时这是必然发生的假红（实测全量跑里偶发一次）。
+    const settledAt = slot('expire')?.settledAt ?? Number.NaN
+    expect(Number.isFinite(settledAt), '终态必须记下 settledAt，否则过期清理本身无从谈起').toBe(true)
+    expect(pruneSettledStreamJobs(jobs, settledAt + STREAM_JOB_TERMINAL_TTL_MS - 1)).toBe(0)
+    expect(pruneSettledStreamJobs(jobs, settledAt + STREAM_JOB_TERMINAL_TTL_MS)).toBe(1)
     expect(jobs.has('expire')).toBe(false)
   })
 })

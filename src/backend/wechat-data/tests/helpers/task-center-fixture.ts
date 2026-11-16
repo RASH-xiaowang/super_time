@@ -9,13 +9,20 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-/** 发送者 → 分片 Name2Id 的 rowid（rowid 1 是空串 = 微信对「登录账号自己」的标记）。 */
+/**
+ * 发送者 → 分片 Name2Id 的 rowid。
+ *
+ * 真机上登录账号有**显式 wxid 行**（rowid 5 = `wxid_self`），空名行（rowid 1）
+ * 是**另一位群成员** —— 归属判据见 `messages.ts#shardMarksSelfWithEmptyRow`。
+ * 夹具必须照这个形状造：把 `self` 指向空名行会让「自己发的」被当成对方，
+ * 任务中心的「单聊只触发对方消息」用例就失去意义。
+ */
 const SENDER_ROWID: Record<string, number> = {
-  self: 1,
+  unknown: 1,
   wxid_lisi: 2,
   wxid_target: 3,
   wxid_other: 4,
-  wxid_self: 5,
+  self: 5,
   'wxid_ent@openim': 6,
 }
 

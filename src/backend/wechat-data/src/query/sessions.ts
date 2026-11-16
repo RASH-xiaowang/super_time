@@ -6,7 +6,7 @@ import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
 import type { SessionsSnapshot, WechatSession } from '../types.ts'
 import { contactMeta, cachedBySigAsync, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'
-import { msgCreateTimeByServerId } from './messages.ts'
+import { msgCreateTimesByServerIds } from './messages.ts'
 import { yieldToLoop } from './search-build.ts'
 import {
   fallbackChatDisplayName,
@@ -15,12 +15,12 @@ import {
 } from './message-identity.ts'
 
 /**
- * 每解析这么多条「未读最早时间」就让出一次。
+ * 解析「未读从什么时候开始」的会话预算。
  *
- * 取 8：单次解析实测约 1.4ms（真实数据 `working/diag-sessions.ts`），8 次≈11ms
- * —— 与其它模块的片段量级对齐（词云 13ms、通话 22ms、资产 39ms）。
+ * 批量解析后单次开销与分片数同阶，不再与未读会话数相乘；80 仍保留为
+ * 「一页最多解析多少条」的上界，避免 limit=500 时把整页都拖进这条旁路。
  */
-const YIELD_EVERY_UNREAD_LOOKUPS = 8
+const UNREAD_LOOKUP_BUDGET = 80
 
 /** Read SessionTable column names (wechat 4.x may add/remove columns). */
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
@@ -143,7 +143,7 @@ export async function querySessions(
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
-    // 会话行的「最近活跃 / 未读」要回查消息分片（msgCreateTimeByServerId），所以分片变了
+    // 会话行的「最近活跃 / 未读」要回查消息分片（msgCreateTimesByServerIds），所以分片变了
     // 这份快照也可能变。原先只签 session/contact，靠「事件后整表清空」兜住 —— M8 去掉那层
     // 兜底后必须补上真正读了的东西（shardCatalogSig 内部走按文件粒度的缓存，代价很小）。
     shardCatalogSig(decryptedDir, ['message']),
@@ -293,34 +293,37 @@ async function computeSessions(
     const page = limit === undefined ? sessions : sessions.slice(offset, offset + limit)
     if (signal?.aborted) return { sessions: page, total, cancelled: true }
     /*
-     * 「未读从什么时候开始」（第 67 轮）。
+     * 「未读从什么时候开始」（第 67 轮，P2 批量版）。
      *
      * `SessionTable.unread_first_msg_srv_id` 指向该会话最早的一条未读消息；把它换成 create_time，
      * 界面就能写「未读 48 条 · 最早 2 小时前」——判断先看哪个会话，比光一个数字有用得多。
-     * 只对**返回的那一页**里 unread>0 的会话解析（实测 41 个未读会话全部解析约 7ms，
-     * 走的是 messages.ts 里 catalog 化的分片索引），并设一个上限，避免 limit=500 时做 500 次查找。
-     * 解析不到就留空（2 个 srv_id=0 的合成会话必然为空），界面不显示这一行即可。
+     *
+     * 旧实现对每个未读会话各调一次 `msgCreateTimeByServerId`，每次都要遍历并打开全部分片
+     * （实测 41 个未读会话 59ms，且是**不间断同步执行**）。现在先收集本页的
+     * `(talker, serverId)`，一次批量交给 `msgCreateTimesByServerIds`：分片只 open 一次、
+     * 表内用 `IN (...)` 取行，未读会话数与分片打开次数不再相乘。
+     * 只对**返回的那一页**里 unread>0 的会话解析，并保留 80 条预算；解析不到就留空
+     * （2 个 srv_id=0 的合成会话必然为空），界面不显示这一行即可。
      */
-    let budget = 80
-    let sinceYield = 0
+    const targets: WechatSession[] = []
+    const lookups: Array<{ talker: string; serverId: string }> = []
     for (const s of page) {
-      if (budget <= 0) break
+      if (targets.length >= UNREAD_LOOKUP_BUDGET) break
       if ((s.unreadCount ?? 0) <= 0 || isSyntheticSessionHolder(s.username)) continue
       const sid = srvIds.get(s.username)
       if (!sid || sid === '0') continue
-      budget -= 1
-      const since = msgCreateTimeByServerId(decryptedDir, s.username, sid)
-      if (since !== null) s.unreadSince = since
-      // 2026-09-28：让出点。实测口径（`working/diag-sessions.ts`，真实数据）：
-      // `SessionTable` 全表读取只要 **1ms**（290 行），而这一圈 **41 次**查找要 **59ms**
-      // —— `querySessions(200)` 的 78ms 几乎全在这里。每次查找都要按 catalog 打开分片，
-      // 41 次连做就是几十毫秒的**不间断同步执行**（`working/probe-stall.txt` 里它是
-      // 仅剩两个"让出 0"的接口之一）。原文注释只量了"约 7ms"，那是单次热缓存的数。
-      sinceYield += 1
-      if (sinceYield >= YIELD_EVERY_UNREAD_LOOKUPS) {
-        sinceYield = 0
-        await yieldToLoop()
-        if (signal?.aborted) return { sessions: page, total, cancelled: true }
+      targets.push(s)
+      lookups.push({ talker: s.username, serverId: sid })
+    }
+    if (lookups.length > 0) {
+      if (signal?.aborted) return { sessions: page, total, cancelled: true }
+      // 批量解析仍然是同步 SQL（node:sqlite）：先让出一拍，别把整页未读解析
+      // 和前面的会话扫描拼成一段不间断的同步执行。
+      await yieldToLoop()
+      const since = msgCreateTimesByServerIds(decryptedDir, lookups)
+      for (let i = 0; i < targets.length; i += 1) {
+        const ts = since[i]
+        if (ts !== undefined && ts !== null) targets[i]!.unreadSince = ts
       }
     }
     return { sessions: page, total }

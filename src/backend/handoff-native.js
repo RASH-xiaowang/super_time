@@ -16,7 +16,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { humanizeNetworkError, testLlmEndpoint, queryLlmBalance } = require('./llm-balance.js');
-const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js');
+const { parseLlmBaseUrl, llmModelListUrl, llmRequest } = require('./llm-http.js');
 
 /** 对话框父窗口：只认**可见**的主窗口。主窗口隐藏（交接态）时用无父窗口的
  * 系统对话框 —— 给隐藏窗口挂一个模态子窗，在 Windows 上可能连对话框都看不见。 */
@@ -132,7 +132,9 @@ function llmHandlers(deps) {
       const apiKey = String(opts.apiKey || '');
       const parsed = parseLlmBaseUrl(baseUrl);
       const host = parsed.host;
-      const url = parsed.base + '/models';
+      // 与桌面 IPC（ipc-wechat.js 的 wechat:llm-models）复用同一个 URL 推导：
+      // OpenCode 的模型列表路径与 chat 路径并不同前缀，自己拼 `${base}/models` 会 404。
+      const url = llmModelListUrl(parsed.base);
       const catalogFallback = (note) => {
         if (apiKey) return null;
         const hit = findModelCatalog(parsed.base);
@@ -267,9 +269,36 @@ function updateHandlers(deps) {
     'update-retry': () => updateService.retryDownload(),
     'remote-access-state': () => remoteAccess.getState(),
     'remote-access-apply': () => remoteAccess.syncWithConfig(),
-    'remote-access-rotate': () => control.rotate({ fullAccess: true }),
+    /**
+     * 浏览器交接态**不允许**生成/查看访问凭据（P1）。
+     *
+     * 交接页的设置面板会调到这个动作（`handoff-boot.ts` 的 `remoteAccess.rotate`），
+     * 但 rotate 的返回值含明文 `token` 与 `pairingCode`：一旦从 `/api/native/*`
+     * 回给浏览器，持有该 fullAccess 会话的任何页面脚本都能读到长期凭据。
+     * 凭据只能在桌面端窗口里生成与显示，这里明确拒绝并给出替代入口。
+     */
+    'remote-access-rotate': () => {
+      throw new Error('为安全起见，网页交接态不能生成或显示访问凭据；请回到桌面端「设置 → 维护与自检 → 局域网访问（手机）」操作');
+    },
     'remote-access-toggle': (payload) => control.setEnabled(payload.enabled === true),
   };
+}
+
+/**
+ * 原生代理响应的兜底脱敏：即使未来某个处理器误把凭据塞进返回值，也不许经
+ * `/api/native/*` 回到浏览器。只递归处理普通对象/数组，其它类型原样返回。
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function withoutNativeSecrets(value) {
+  if (Array.isArray(value)) return value.map(withoutNativeSecrets);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'token' || key === 'pairingCode') continue;
+    out[key] = withoutNativeSecrets(item);
+  }
+  return out;
 }
 
 /**
@@ -295,7 +324,7 @@ function createHandoffNative(deps) {
   return async function nativeCall(action, payload = {}) {
     const handler = handlers[action];
     if (typeof handler !== 'function') throw new Error(`未知的原生动作：${action}`);
-    return handler(payload);
+    return withoutNativeSecrets(await handler(payload));
   };
 }
 

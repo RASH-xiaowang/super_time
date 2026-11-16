@@ -10,6 +10,8 @@
  * @module panels/ask-stage-merge
  */
 
+import { askToolNameLabel } from './ask-tool-labels.ts'
+
 /** 工具阶段的前端稳定状态。 */
 export type AskStageStatus = 'running' | 'done' | 'failed' | 'skipped'
 
@@ -285,27 +287,10 @@ export function isAskStageDetail(value: unknown): boolean {
   return isRecord(value) && typeof value['key'] === 'string' && typeof value['label'] === 'string'
 }
 
-const TOOL_LABELS: Readonly<Record<string, string>> = {
-  search_messages: '消息检索',
-  search_semantic: '语义检索',
-  search_hybrid: '混合检索',
-  aggregate_messages: '统计消息',
-  list_sessions: '会话列表',
-  get_session_messages: '读取会话消息',
-  get_message_context: '展开消息上下文',
-  search_contacts: '联系人检索',
-  get_contact_detail: '联系人详情',
-  search_moments: '朋友圈检索',
-  search_favorites: '收藏检索',
-  search_files: '文件检索',
-  search_records: '转账/红包检索',
-  search_kb: '知识库检索',
-}
-
 /** 工具名 → 中文动作；未知工具原样显示。 */
 export function askToolLabel(stage: Pick<AskStage, 'toolName' | 'label'>): string {
   const name = stage.toolName ?? stage.label
-  return TOOL_LABELS[name] ?? name
+  return askToolNameLabel(name) ?? name
 }
 
 /** 工具卡右侧的状态文案。 */

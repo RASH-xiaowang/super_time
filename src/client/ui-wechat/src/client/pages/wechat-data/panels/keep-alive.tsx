@@ -13,7 +13,10 @@
  * 为什么抽成模块而不是塞进 WechatDataPanel：面板函数已贴着长函数棘轮（473 行），
  * 且 keep-alive 的缓存语义可以脱离 React 用纯函数测。
  */
-import React, { createContext, useContext, useRef } from 'react'
+import React, { createContext, useContext, useRef, useSyncExternalStore } from 'react'
+import { getDataIdentitySnapshot, subscribeDataIdentity } from '../cache.ts'
+import { tabLabelOf } from '../nav-config.ts'
+import { ErrorBoundary } from '../ui/error-boundary.tsx'
 
 /** 试点面板；刻意只放两个，验证收益后再扩。 */
 const KEEP_ALIVE_TABS = new Set(['chats', 'taskinfo'])
@@ -71,12 +74,27 @@ export function keepAliveView(
 
 /** React 侧的缓存钩子；每个 WechatDataPanel 实例一份。 */
 export function useKeepAlivePanel(active: string, activePanel: React.ReactNode): React.ReactNode {
-  const cache = useRef<Map<string, React.ReactNode>>(new Map())
-  const view = keepAliveView(cache.current, active, activePanel)
+  /**
+   * 数据目录身份（账号 / db_dir / 密钥）变化 ⇒ 旧的 hidden 面板属于上一个数据源，
+   * 必须丢缓存并按新身份重挂。身份稳定时 key 不变，keep-alive 语义原样保留。
+   */
+  const identity = useSyncExternalStore(subscribeDataIdentity, getDataIdentitySnapshot, getDataIdentitySnapshot)
+  const cacheRef = useRef<{ identity: string; cache: Map<string, React.ReactNode> }>({
+    identity,
+    cache: new Map(),
+  })
+  if (cacheRef.current.identity !== identity) {
+    cacheRef.current = { identity, cache: new Map() }
+  }
+  const view = keepAliveView(cacheRef.current.cache, active, activePanel)
   return (
     <>
-      <KeepAlivePanes panes={view.panes} active={active} />
-      {view.standalone}
+      <KeepAlivePanes panes={view.panes} active={active} identity={identity} />
+      {view.standalone === null ? null : (
+        <ErrorBoundary key={`standalone:${active}:${identity}`} label={tabLabelOf(active)} resetKey={active}>
+          {view.standalone}
+        </ErrorBoundary>
+      )}
     </>
   )
 }
@@ -85,11 +103,16 @@ export function useKeepAlivePanel(active: string, activePanel: React.ReactNode):
  * 渲染缓存面板：active 用 `display: contents` 让出布局，其余用 `display: none` 挂起。
  * 不用 `hidden` 属性 + inline display 的组合：inline style 的优先级会压过 UA 的
  * `[hidden] { display:none }`，反而让 hidden 失效。
+ *
+ * 每个 pane 自带 ErrorBoundary：某个面板渲染期抛错只毁它自己，切到别的页签不会黑屏。
+ * 边界 key 带数据身份（换账号时重挂 + 清错误态），`resetKey` 是「本 pane 是否正显示」，
+ * 从隐藏切回来时自动清掉上一次的错误卡；wrapper 的 `key={tab}` 保持稳定，保活不受影响。
  * @param props.panes - 已缓存面板。
  * @param props.active - 当前 tab。
+ * @param props.identity - 数据目录身份（变化时重挂子树）。
  * @returns 面板节点。
  */
-export function KeepAlivePanes({ panes, active }: { panes: KeepAliveView['panes'], active: string }): React.JSX.Element {
+export function KeepAlivePanes({ panes, active, identity }: { panes: KeepAliveView['panes'], active: string, identity: string }): React.JSX.Element {
   return (
     <>
       {panes.map(([tab, node]) => (
@@ -100,7 +123,9 @@ export function KeepAlivePanes({ panes, active }: { panes: KeepAliveView['panes'
           style={{ display: tab === active ? 'contents' : 'none' }}
         >
           <KeepAliveActiveProvider active={tab === active}>
-            {node}
+            <ErrorBoundary key={`${tab}:${identity}`} label={tabLabelOf(tab)} resetKey={tab === active}>
+              {node}
+            </ErrorBoundary>
           </KeepAliveActiveProvider>
         </div>
       ))}

@@ -21,12 +21,14 @@ import type { ContentBlock, Message, ToolCallBlock, ToolSchema } from '@deepseek
 import { normalizeToolArguments, repairToolArguments, type ToolArgumentRepair } from './arguments.ts'
 import { classifyToolErrorDetailed, type ToolErrorClass } from './errors.ts'
 import { dedupeNames, fallbackArguments } from './fallback-query.ts'
+import { withForcedScope } from './forced-scope.ts'
 import {
   enforceProfileScope,
   filterToolsForScope,
   filterToolsForProfile,
   getAnswerProfile,
   runProfileTool,
+  type AnswerProfile,
 } from '../tools/profiles.ts'
 import { allTools } from '../tools/registry.ts'
 import { findTool } from '../tools/types.ts'
@@ -84,7 +86,43 @@ export function buildToolLoopSchemas(
   const lockedUsername = input.toolContext.scope?.username?.trim() ?? ''
   return schemas
     .filter(schema => allowed.has(schema.name))
-    .map(schema => schemaWithLockedUsername(schema, lockedUsername))
+    .map(schema => schemaForProfile(
+      schemaWithLockedUsername(schema, lockedUsername),
+      profile,
+    ))
+}
+
+/**
+ * 按 profile 的允许模式收窄 schema。
+ *
+ * 会话内问答只允许 `mode=messages`，但 schema 仍暴露 auto/kb：模型一旦显式
+ * 选 kb，就会在执行守卫被判 scope_violation，整轮证据被 blocked。让模型根本
+ * 看不到越界选项，比事后报错更可靠。
+ */
+function schemaForProfile(schema: ToolSchema, profile: AnswerProfile): ToolSchema {
+  if (schema.name !== 'search_hybrid' || profile.hybridModes === undefined
+    || profile.hybridModes.length === 0) {
+    return schema
+  }
+  const properties = isRecord(schema.parameters['properties'])
+    ? schema.parameters['properties']
+    : undefined
+  const mode = properties && isRecord(properties['mode']) ? properties['mode'] : undefined
+  if (!properties || !mode) return schema
+  return {
+    ...schema,
+    parameters: {
+      ...schema.parameters,
+      properties: {
+        ...properties,
+        mode: {
+          ...mode,
+          enum: [...profile.hybridModes],
+          ...(profile.hybridModes.length === 1 ? { default: profile.hybridModes[0] } : {}),
+        },
+      },
+    },
+  }
 }
 
 /**
@@ -498,15 +536,18 @@ async function executeCall(input: {
     call.name,
     outcome.result.ok ? `${String(outcome.result.hits.length)} 条命中` : traceFailureMessage(outcome.trace),
   )
-  if (outcome.result.ok) {
-    const cachedEntry: CachedToolResult = {
-      key,
-      name: call.name,
-      args: cacheArgs,
-      result: outcome.result,
-    }
-    rememberResult(input.cache, input.cacheOrder, cachedEntry)
+  /*
+   * 失败结果同样按「工具名 + 规范化参数」缓存到本轮结束：超时/大扫描失败
+   * 若被模型原样重放，会让一次有界等待翻倍。取消由循环出口处理，缓存本身
+   * 不改变取消语义；per-call deadline 的失败结果复用后也不会再发起请求。
+   */
+  const cachedEntry: CachedToolResult = {
+    key,
+    name: call.name,
+    args: cacheArgs,
+    result: outcome.result,
   }
+  rememberResult(input.cache, input.cacheOrder, cachedEntry)
   return { ...outcome, cacheKey: key }
 }
 
@@ -559,14 +600,20 @@ function repairArguments(
 ): ToolArgumentRepair {
   const registered = findTool(allTools, name)
   if (registered) {
-    const repaired = repairToolArguments(name, raw, {
+    const seeded = withForcedScope(
+      name,
+      registered.parameters,
+      raw,
+      forcedScopeOf(loop).forcedScope?.username,
+    )
+    const repaired = repairToolArguments(name, seeded, {
       ...(loop.now ? { now: loop.now } : {}),
       ...(loop.knownSessions ? { knownSessions: loop.knownSessions } : {}),
       ...(loop.knownSessionCatalog ? { knownSessionCatalog: loop.knownSessionCatalog } : {}),
       ...(loop.knownContacts ?? loop.toolContext.knownEntities
         ? { knownContacts: loop.knownContacts ?? loop.toolContext.knownEntities }
         : {}),
-      ...forcedScopeForArguments(raw, loop),
+      ...forcedScopeForArguments(seeded, loop),
     })
     return repaired.ok
       ? {
@@ -581,7 +628,7 @@ function repairArguments(
   }
   const normalized = normalizeToolArguments(
     { name: tool.name, parameters: tool.parameters },
-    withForcedScope(tool.parameters, raw, loop),
+    withForcedScope(name, tool.parameters, raw, forcedScopeOf(loop).forcedScope?.username),
     {
       decryptedDir: loop.toolContext.decryptedDir,
       ...(loop.now ? { now: loop.now } : {}),
@@ -612,27 +659,6 @@ function repairArguments(
     repairs,
     ...(first ? { error: first.message, field: first.field } : { error: '参数校验失败' }),
   }
-}
-
-/**
- * 自定义工具不在注册表时，也必须先注入强制会话。
- *
- * `normalizeToolArguments` 的必填校验发生在 `enforceProfileScope` 之前；如果等到
- * 执行守卫再补 `username`，模型漏填时已经被判成 `missing_required`，永远走不到
- * 会话锁定逻辑。
- */
-function withForcedScope(
-  parameters: Record<string, unknown>,
-  raw: unknown,
-  loop: ToolLoopInput,
-): unknown {
-  const username = forcedScopeForArguments(raw, loop).forcedScope?.username
-  if (username === undefined) return raw
-  const properties = isRecord(parameters['properties']) ? parameters['properties'] : {}
-  if (!Object.prototype.hasOwnProperty.call(properties, 'username')) return raw
-  if (raw === null || raw === undefined) return { username }
-  // 走到这里说明模型没填 username 或已与锁定会话一致；两者都用锁定值收口。
-  return isRecord(raw) ? { ...raw, username } : raw
 }
 
 /**
@@ -689,10 +715,20 @@ function withRuntimeArgumentDefaults(
   args: Record<string, unknown>,
   loop: ToolLoopInput,
 ): Record<string, unknown> {
-  if (name !== 'get_session_messages' || loop.recency !== true || args['order'] !== undefined) {
-    return args
+  const next = { ...args }
+  /*
+   * 统计工具需要原问题才能识别方向词（收到/付出）与「哪个群最多」这类自动维度。
+   * schema 里虽然声明了 `question`，但模型经常不填；运行时在这里统一注入，
+   * 保证「收到多少笔转账」不会退化成「包含转账的全部条数」。
+   */
+  if (name === 'aggregate_messages') {
+    const supplied = typeof next['question'] === 'string' ? next['question'].trim() : ''
+    if (supplied === '' && loop.question.trim() !== '') next['question'] = loop.question.trim()
   }
-  return { ...args, order: 'desc' }
+  if (name === 'get_session_messages' && loop.recency === true && next['order'] === undefined) {
+    next['order'] = 'desc'
+  }
+  return next
 }
 
 function assistantMessage(
@@ -727,14 +763,6 @@ async function runFallback(input: {
   const kb = hasKb && allowed.has('search_kb') ? ['search_kb'] : []
   const focused = requested.filter(name => name !== 'aggregate_messages')
   const aggregate = requested.filter(name => name === 'aggregate_messages')
-  // 选了知识库时先保证两个数据域都被检索：hybrid 覆盖消息 + 知识库，
-  // search_kb 再补上 hybrid 可能漏掉的文件域。资源专用工具放到其后，
-  // 避免它们先命中消息就把知识库覆盖挤到调用上限之外。
-  // `aggregate_messages` 永远排在最后：它能对「0 条命中」也给出一条统计事实，
-  // 若排在 hybrid 前面会提前满足停止条件，导致真正可引用的原文一次都没查。
-  const names = dedupeNames(hasKb
-    ? [...hybrid, ...kb, ...focused, ...aggregate]
-    : [...focused, ...hybrid, ...kb, ...aggregate])
   const limit = Math.max(
     1,
     Math.min(
@@ -742,9 +770,33 @@ async function runFallback(input: {
       positiveInt(input.loop.maxFallbackCalls, DEFAULT_MAX_FALLBACK_CALLS),
     ),
   )
+  // 选了知识库时先保证两个数据域都被检索：hybrid 覆盖消息 + 知识库，
+  // search_kb 再补上 hybrid 可能漏掉的文件域。资源专用工具放到其后，
+  // 避免它们先命中消息就把知识库覆盖挤到调用上限之外。
+  // `aggregate_messages` 永远排在最后：它能对「0 条命中」也给出一条统计事实，
+  // 若排在 hybrid 前面会提前满足停止条件，导致真正可引用的原文一次都没查。
+  //
+  // 没有知识库时给泛化检索留一个位置：专用工具（账本/通话/朋友圈……）可能
+  // 因为数据源缺失或口径不匹配而拿不到证据，若它们把预算全部吃掉，
+  // `search_hybrid` 就永远轮不到，最终表现为「明明聊天里有原文却答没有」。
+  // 因此前 `limit - 1` 个专用工具之后立刻接 hybrid，剩余专用工具排在它后面。
+  const specializedSlots = Math.max(1, limit - 1)
+  const names = dedupeNames(hasKb
+    ? [...hybrid, ...kb, ...focused, ...aggregate]
+    : [
+      ...focused.slice(0, specializedSlots),
+      ...hybrid,
+      ...focused.slice(specializedSlots),
+      ...kb,
+      ...aggregate,
+    ])
   const outcomes: ExecuteOutcome[] = []
-  for (const name of names.slice(0, limit)) {
+  let executed = 0
+  for (const name of names) {
+    if (executed >= limit) break
     const args = fallbackArguments(name, input.loop)
+    // 没有确定性参数的工具不执行，也**不占用**兜底预算：否则一个「需要
+    // 群名/媒体种类」的工具会把后面的泛化检索名额白白占掉（2026-11-13）。
     if (args === undefined) continue
     const plannedKey = plannedFallbackKey(name, args, input.loop)
     if (plannedKey !== undefined && input.skipKeys?.has(plannedKey)) {
@@ -762,6 +814,7 @@ async function runFallback(input: {
       })
       continue
     }
+    executed += 1
     const outcome = await executeCall({
       call: {
         type: 'tool-call',
@@ -896,7 +949,12 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
       buildTurnInput: signal => ({
         system: input.system,
         messages,
-        maxTokens: input.maxTokens ?? 2000,
+        /*
+         * 工具轮与综合阶段共用同一类推理模型：reasoning 与 tool-call 共享输出
+         * 上限，2000 常被上千 token 的思考吃掉，表现为「只思考、不调用工具」
+         * （2026-11-13 审计）。抬到 4096，与综合阶段保持一致。
+         */
+        maxTokens: input.maxTokens ?? 4096,
         ...(signal !== undefined ? { signal } : {}),
         ...(schemas.length > 0 ? { tools: schemas } : {}),
         ...(input.onDelta
@@ -946,8 +1004,16 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
       // 文本会被当成完成，只读知识库的入口还会绕过唯一允许的 search_kb。
       // 后续轮次若已有结果全部失败或零命中，再做**一次**有界补查；只要还有
       // 任意可引用命中或事实，就尊重模型停止，不额外扩大检索。
+      /*
+       * 全部失败都是超时时不再补查：超时是执行预算问题，换一组参数重跑同一
+       * 数据源（或泛化检索）大概率同样超时，只会把一次有界等待翻倍。
+       * 零命中与普通失败仍可换词/换工具补一次。
+       */
+      const timedOutOnly = traces.length > 0
+        && traces.every(trace => !trace.ok && trace.errorClass === 'timeout')
       const needsSupplement = round > 1
         && !supplementUsed
+        && !timedOutOnly
         && results.length > 0
         && results.every(result => !resultHasEvidence(result))
         /*

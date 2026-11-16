@@ -31,11 +31,12 @@ export function toolHintsFor(kind: AnswerIntentKind, ctx: ToolHintContext): stri
       return unique(out)
     }
     case 'aggregate':
-      return ['aggregate_messages', 'search_messages']
+      return ['aggregate_messages', 'get_funds_summary', 'get_call_history', 'search_messages']
     case 'relation':
       return unique([
         'search_contacts',
         'aggregate_messages',
+        'get_group_detail',
         'search_messages',
         ...(ctx.hasSession ? ['get_session_messages'] : []),
       ])
@@ -46,13 +47,17 @@ export function toolHintsFor(kind: AnswerIntentKind, ctx: ToolHintContext): stri
       ])
     case 'content_media':
       return unique([
+        'aggregate_media',
         'get_message_context',
         'search_messages',
         ...(/文件|文档|附件/.test(ctx.q) ? ['search_files'] : []),
         ...(/收藏/.test(ctx.q) ? ['search_favorites'] : []),
+        ...(/撤回/.test(ctx.q) ? ['search_revoked'] : []),
       ])
     case 'open_qa':
-      return ['search_kb', 'search_semantic']
+      // 开放问题先用泛化原文检索；知识库/语义是按需补充，不能排在首位
+      // （未配置时它们必然失败，会把首轮预算耗光）。
+      return ['search_messages', 'search_hybrid', 'search_semantic', 'search_kb']
     case 'clarify':
       return []
   }

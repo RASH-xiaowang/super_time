@@ -46,7 +46,10 @@ describe('本地分析：选中即分析', () => {
     expect(view).toContain('setAiOpen(false)')
     expect(view).toContain('setAnalysisPaneOpen(true)')
     expect(view).toContain('openMessageAnalysis(item.m)')
-    expect(head, '从头部打开分析时也要让出右栏，否则 AI 问答仍会占位').toContain('if (!analysisPaneOpen) setAiOpen(false)')
+    // 2026-11-13：同一分支里还要收起 suggest / 群信息 / 聊天信息，hence 花括号写法；
+    // 判据不变 —— 打开分析时必须让出右栏。
+    expect(head, '从头部打开分析时也要让出右栏，否则 AI 问答仍会占位')
+      .toMatch(/if \(!analysisPaneOpen\) \{\s*setAiOpen\(false\)/)
     expect(view).toContain('localId: message.localId')
     expect(view, '选中消息在消息流里要可见').toContain('data-analysis-target=')
   })

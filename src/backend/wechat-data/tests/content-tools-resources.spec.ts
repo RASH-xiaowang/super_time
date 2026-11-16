@@ -90,7 +90,8 @@ describe('内容类工具：资源命中使用稳定键与结构化 trace', () =
     const result = await run(makeResourceDir(), 'search_moments')
     expect(result.hits[0]).toMatchObject({
       key: 'moment:wxid_m:123',
-      name: '朋友圈',
+      // 夹具没有 contact.db：作者名只能是安全兜底，不能把 wxid 直接当展示名。
+      name: '未知联系人',
       source: 'resource',
       trace: {
         kind: 'resource',

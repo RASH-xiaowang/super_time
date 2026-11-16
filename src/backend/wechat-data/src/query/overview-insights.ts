@@ -415,6 +415,13 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
             for (const [id, name] of first.name2id) {
               if (name === self) { selfRowId = id; break }
             }
+            // 老分片可能把登录账号记成空 user_name 行；**只有**本分片找不到显式
+            // 账号行时才沿用这条旧约定（与 `messages.ts#shardMarksSelfWithEmptyRow`
+            // 同一口径）。反过来无条件认空行，真机上会把另一位群成员的发送量
+            // 记成「我发出的」。
+            if (selfRowId === undefined) {
+              for (const [id, name] of first.name2id) if (name === '') { selfRowId = id; break }
+            }
           }
         }
         for (const [table, meta] of sh.tables) {

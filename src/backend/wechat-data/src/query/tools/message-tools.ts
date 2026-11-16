@@ -14,7 +14,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { searchIndexMessages } from '../search.ts'
+import { loadDisplayNames, searchIndexMessages } from '../search.ts'
 import { loadMessageWindow } from '../search-query.ts'
 import { withDb } from '../db-open.ts'
 import { contactMeta } from '../meta.ts'
@@ -34,6 +34,7 @@ import {
   argInt, argString, argStringArray,
   type RetrievalTool, type ToolContext, type ToolHit, type ToolResult,
 } from './types.ts'
+import type { SearchHit } from '../../types.ts'
 
 /** 把 `YYYY-MM-DD` 转成当天 00:00 的 epoch 秒（本地时区）。 */
 function dayStartSec(d: string): number {
@@ -117,6 +118,90 @@ function readableMessageText(
   )
 }
 
+/**
+ * 正文是否真的包含关键词。
+ *
+ * 为什么 `sender` 场景需要它：索引的 `person` 是 `who:` 召回分支（OR 进 MATCH），
+ * 只按「这个人的会话/名字」命中的消息可能正文里根本没有关键词。用户同时给了
+ * keyword 与 sender 时，语义是「这个人说的、包含这个词的消息」= AND，
+ * 所以这里强制正文包含关键词；未给 sender 时保持旧的 who 召回行为不变。
+ */
+function textContainsKeyword(text: string, keyword: string): boolean {
+  const t = String(text ?? '').toLowerCase()
+  const k = keyword.trim().toLowerCase()
+  if (k === '') return true
+  if (t.includes(k)) return true
+  // FTS 会丢弃空白/标点：多段关键词逐段都出现，等价于 bigram 短语命中。
+  const parts = k.split(/\s+/).filter(Boolean)
+  return parts.length > 1 && parts.every(p => t.includes(p))
+}
+
+/**
+ * 命中是否来自指定发送者。
+ *
+ * 为什么还要在工具层再筛一次：索引里的 `person` 是 `who:` 召回分支（与会话名/发送者名
+ * 的 BM25 匹配，OR 进查询），它**提高**相关命中的排名，但不是严格过滤。模型参数
+ * `sender` 是显式意图，必须真的只返回这个人的消息 —— 否则「张三说过什么」会混入
+ * 别人提到张三的消息。
+ */
+function senderMatches(
+  hit: SearchHit,
+  want: string,
+  names: Map<string, DisplayIdentity>,
+): boolean {
+  const target = want.trim().toLowerCase()
+  if (target === '') return true
+  const raw = (hit.sender_username ?? '').trim()
+  const mapped = raw ? (names.get(raw) ?? names.get(raw.toLowerCase())) : undefined
+  const candidates = [
+    raw,
+    hit.sender ?? '',
+    mapped?.name ?? '',
+    mapped?.enterpriseName ?? '',
+  ]
+  // 单聊没有群前缀（message_meta.sender 为空）；会话对方就是消息的发送者，
+  // 因此允许用对方的会话 username / 显示名作为 sender。
+  if (!hit.username.endsWith('@chatroom')) {
+    candidates.push(hit.username, hit.name, names.get(hit.username)?.name ?? '')
+  }
+  return candidates.some(v => v.trim() !== '' && v.trim().toLowerCase() === target)
+}
+
+/** 日期范围硬过滤（epoch 秒；0 = 不限）。 */
+function inTimeRange(sec: number, lo: number, hi: number): boolean {
+  if (lo > 0 && sec < lo) return false
+  if (hi > 0 && sec > hi) return false
+  return true
+}
+
+/**
+ * 把发送者参数（显示名 / username / 企业名）解析成 SQL `IN` 可用的原始 wxid 别名。
+ *
+ * `message_meta.sender` 存的是原始 wxid（见 search-build.ts），而模型通常给显示名；
+ * 不反查就会「按显示名筛出 0 条」—— 这种失败不报错，最难发现。
+ */
+function resolveSenderAliases(
+  decryptedDir: string,
+  sender: string,
+  // 同时接受 `DisplayIdentity`（含企业名）与纯显示名映射：群内备注只在
+  // `loadDisplayNames` 里有，而企业名只在 `displayNames` 里有，调用方按需选。
+  names: ReadonlyMap<string, string | DisplayIdentity>,
+): string[] {
+  const raw = sender.trim()
+  if (raw === '') return []
+  const out = new Set<string>([raw])
+  const resolved = resolveTalkerUsername(decryptedDir, raw)
+  if (resolved) out.add(resolved)
+  const target = raw.toLowerCase()
+  for (const [username, entry] of names) {
+    const display = typeof entry === 'string' ? entry : entry.name
+    const enterprise = typeof entry === 'string' ? '' : entry.enterpriseName ?? ''
+    if (display.trim().toLowerCase() === target) out.add(username)
+    if (enterprise.trim().toLowerCase() === target) out.add(username)
+  }
+  return [...out]
+}
+
 /** 关键词检索聊天消息。 */
 export const searchMessagesTool: RetrievalTool = {
   name: 'search_messages',
@@ -124,7 +209,8 @@ export const searchMessagesTool: RetrievalTool = {
   description:
     '按关键词检索本机微信聊天记录，返回命中的消息片段。'
     + '适用于「谁说过 X」「关于 X 的聊天」「X 是什么时候说的」这类**找具体内容**的问题。'
-    + '多个关键词用空格分隔（会分别检索后合并）。'
+    + '多个关键词用空格分隔：match=any（默认）分别检索后合并；match=all 取交集（多条件同时满足）。'
+    + '可用 sender 限定群内某个人，order=recent 按时间倒序。'
     + '注意：它返回的是**片段**，不是统计结果 —— 问「一共多少条」请用 aggregate_messages。',
   parameters: {
     type: 'object',
@@ -134,9 +220,20 @@ export const searchMessagesTool: RetrievalTool = {
         description: '检索关键词（1-6 个，每个 2-12 字，用有区分度的实词，不要用「什么/怎么/我的」这类疑问词）',
       },
       username: { type: 'string', description: '限定某个会话（不填 = 全库）' },
+      sender: { type: 'string', description: '限定发送者：群内成员的显示名或 username；单聊可填对方（不填 = 不限发送者）' },
+      match: {
+        type: 'string',
+        enum: ['all', 'any'],
+        description: '多关键词匹配方式：any = 任一命中（默认，覆盖面广）；all = 全部命中（交集，多条件精确定位）',
+      },
+      order: {
+        type: 'string',
+        enum: ['relevance', 'recent'],
+        description: '结果顺序：relevance = 相关度（默认）；recent = 按消息时间倒序，问「最近/最新」时使用',
+      },
       from: { type: 'string', description: '起始日期 YYYY-MM-DD（不填 = 不限）' },
       to: { type: 'string', description: '截止日期 YYYY-MM-DD（不填 = 不限）' },
-      limit: { type: 'number', description: '最多返回几条（默认 24，上限 60）' },
+      limit: { type: 'number', description: '最多返回几条（默认 24，上限 100）' },
     },
     required: ['keywords'],
   },
@@ -144,7 +241,12 @@ export const searchMessagesTool: RetrievalTool = {
     const started = Date.now()
     const keywords = argStringArray(args['keywords'], 6)
     if (keywords.length === 0) return { tool: 'search_messages', ok: false, error: '缺少 keywords', hits: [] }
-    const limit = argInt(args['limit'], 24, 1, 60)
+    const limit = argInt(args['limit'], 24, 1, 100)
+    // 枚举值非法时回退默认值（不报错）：模型偶尔会写 `"ALL"`、`"time"` 这类词，
+    // 报错会让它整次调用失败，而回退到兼容行为仍能给出有用结果。
+    const match = argString(args['match']).trim().toLowerCase() === 'all' ? 'all' : 'any'
+    const order = argString(args['order']).trim().toLowerCase() === 'recent' ? 'recent' : 'relevance'
+    const sender = argString(args['sender']).trim()
     // `ctx.scope` 是服务端锁定的硬范围，优先级高于模型参数。
     const requestedUsername = ctx.scope?.username || argString(args['username'])
     const username = requestedUsername
@@ -157,53 +259,88 @@ export const searchMessagesTool: RetrievalTool = {
     const to = ctx.scope?.to || argString(args['to'])
     const lo = dayStartSec(from)
     const hi = dayEndSec(to)
-    // 日期过滤发生在检索之后：先扩大候选，避免前 limit 条都在范围外时
-    // 把范围内真正存在的结果误判成 0 命中。
-    const candidateLimit = lo > 0 || hi > 0
-      ? Math.min(Math.max(limit * 10, limit), 300)
-      : limit
+    // 有发送者/日期/交集/时间排序时要更大的候选池：
+    //   · 日期已经下推到索引 SQL（见 searchIndexMessages），不会因 top-N 截断误判为 0；
+    //   · `sender` 的 person 分支是 OR 召回，严格过滤后可能只剩一部分，需要更深的池；
+    //   · `match=all` 的交集与 `order=recent` 的排序仍在内存里做，需要约 10 倍池。
+    const needsPool = sender !== '' || match === 'all' || order === 'recent' || lo > 0 || hi > 0
+    const candidateLimit = needsPool ? Math.min(Math.max(limit * 10, 100), 1000) : limit
+    const range = lo > 0 || hi > 0
+      ? { ...(lo > 0 ? { lo } : {}), ...(hi > 0 ? { hi } : {}) }
+      : undefined
     const names = displayNames(ctx.decryptedDir)
+    const keyOf = (h: SearchHit): string => h.username + ':' + h.local_id
 
-    const seen = new Set<string>()
-    const hits: ToolHit[] = []
+    // 逐词检索（person 作为索引召回线索一起下发）。
+    const perTerm: SearchHit[][] = []
     for (const kw of keywords) {
-      const r = searchIndexMessages(ctx.decryptedDir, kw, candidateLimit, username || undefined)
-      for (const h of r.hits) {
-        const key = h.username + ':' + h.local_id
-        if (seen.has(key)) continue
-        // 时间范围是**硬过滤**（用户/模型明确给了日期）—— 与流水线的软偏好不同：
-        // 工具的参数是显式意图，填了就该生效。
-        if (lo > 0 && h.create_time < lo) continue
-        if (hi > 0 && h.create_time > hi) continue
-        seen.add(key)
-        const identity = names.get(h.username)
-        const enterpriseName = h.enterpriseName
-          || identity?.enterpriseName
-        const senderEnterpriseName = h.senderEnterpriseName
-          || (h.sender ? names.get(h.sender)?.enterpriseName : undefined)
-        const name = identity?.name ?? h.name ?? fallbackChatDisplayName(h.username)
-        const sender = readableSender(
-          h.sender ?? '',
-          names,
-          h.username.endsWith('@chatroom') ? '' : name,
-        )
-        hits.push({
-          key,
-          name,
-          ...(enterpriseName ? { enterpriseName } : {}),
-          time: fmtDateTimeSec(h.create_time),
-          snippet: readableMessageText(h.snippet, names, h.username, name),
-          ...(sender ? { sender } : {}),
-          ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
-          source: 'msg',
-        })
-        if (hits.length >= limit) break
-      }
-      if (hits.length >= limit) break
+      const r = searchIndexMessages(
+        ctx.decryptedDir, kw, candidateLimit,
+        username || undefined, sender || undefined, range,
+      )
+      perTerm.push(r.hits.filter(h =>
+        inTimeRange(h.create_time, lo, hi)
+        && senderMatches(h, sender, names)
+        && (sender === '' || textContainsKeyword(h.text, kw))))
     }
+
+    let merged: SearchHit[]
+    if (match === 'all') {
+      // 交集：以第一个词的命中为骨架，要求同一个 key 也出现在其余每个词的结果里。
+      // 任一关键词 0 命中 ⇒ 交集必然为空（直接短路，省掉后续集合运算）。
+      const first = perTerm[0] ?? []
+      const otherKeys = perTerm.slice(1).map(list => new Set(list.map(keyOf)))
+      merged = perTerm.some(list => list.length === 0)
+        ? []
+        : first.filter(h => otherKeys.every(set => set.has(keyOf(h))))
+    } else {
+      const seen = new Set<string>()
+      merged = []
+      for (const list of perTerm) {
+        for (const h of list) {
+          const key = keyOf(h)
+          if (seen.has(key)) continue
+          seen.add(key)
+          merged.push(h)
+        }
+      }
+    }
+
+    // recent 按真实消息时间倒序（相关度顺序回答不了「最近一次」；同秒用 local_id 兜底稳定）。
+    if (order === 'recent') {
+      merged.sort((a, b) => b.create_time - a.create_time || b.local_id - a.local_id)
+    }
+
+    const hits: ToolHit[] = merged.slice(0, limit).map((h) => {
+      const key = keyOf(h)
+      const identity = names.get(h.username)
+      const enterpriseName = h.enterpriseName
+        || identity?.enterpriseName
+      const senderEnterpriseName = h.senderEnterpriseName
+        || (h.sender_username ? names.get(h.sender_username)?.enterpriseName : undefined)
+      const name = identity?.name ?? h.name ?? fallbackChatDisplayName(h.username)
+      const senderLabelText = readableSender(
+        h.sender ?? '',
+        names,
+        h.username.endsWith('@chatroom') ? '' : name,
+      )
+      return {
+        key,
+        name,
+        ...(enterpriseName ? { enterpriseName } : {}),
+        time: fmtDateTimeSec(h.create_time),
+        snippet: readableMessageText(h.snippet, names, h.username, name),
+        ...(senderLabelText ? { sender: senderLabelText } : {}),
+        ...(senderEnterpriseName ? { senderEnterpriseName } : {}),
+        source: 'msg',
+      }
+    })
     return {
       tool: 'search_messages', ok: true, hits,
-      note: `关键词 ${keywords.join(' / ')} → 命中 ${hits.length} 条`,
+      note: `关键词 ${keywords.join(' / ')} → 命中 ${hits.length} 条`
+        + (match === 'all' ? '（交集）' : '')
+        + (order === 'recent' ? ' · 最新优先' : '')
+        + (sender ? ` · 发送者 ${sender}` : ''),
       elapsedMs: Date.now() - started,
     }
   },
@@ -223,7 +360,9 @@ export const getSessionMessagesTool: RetrievalTool = {
       username: { type: 'string', description: '会话标识（群是 xxx@chatroom，单聊是 wxid_xxx；会话已锁定时可省略）' },
       from: { type: 'string', description: '起始日期 YYYY-MM-DD' },
       to: { type: 'string', description: '截止日期 YYYY-MM-DD' },
+      sender: { type: 'string', description: '只看某个发送者（群内成员显示名或 username；不填 = 全部）' },
       limit: { type: 'number', description: '最多返回几条（默认 40，上限 200）' },
+      offset: { type: 'number', description: '跳过前几条（默认 0，上限 1000；用于翻页）' },
       order: {
         type: 'string',
         enum: ['asc', 'desc'],
@@ -239,7 +378,9 @@ export const getSessionMessagesTool: RetrievalTool = {
     const username = resolveTalkerUsername(ctx.decryptedDir, requestedUsername)
     if (!username) return { tool: 'get_session_messages', ok: false, error: '无法解析会话身份', hits: [] }
     const limit = argInt(args['limit'], 40, 1, 200)
+    const offset = argInt(args['offset'], 0, 0, 1000)
     const order = argString(args['order']).trim().toLowerCase() === 'desc' ? 'desc' : 'asc'
+    const senderArg = argString(args['sender']).trim()
     // 服务端固定范围必须兜底：漏填 `from/to` 时不能退化成「查全历史」。
     const from = ctx.scope?.from || argString(args['from'])
     const to = ctx.scope?.to || argString(args['to'])
@@ -263,9 +404,19 @@ export const getSessionMessagesTool: RetrievalTool = {
         const params: Array<string | number> = [...aliases]
         if (lo > 0) { parts.push('create_time >= ?'); params.push(lo) }
         if (hi > 0) { parts.push('create_time <= ?'); params.push(hi) }
+        // sender 在 SQL 里过滤（`message_meta.sender` 存的是原始 wxid）。
+        // 模型/用户给的是显示名时，先把显示名反查成 username 再放进 IN —— 否则
+        // 「只看张三」会静默返回 0 条（查不到还不报错是最难查的一类失败）。
+        const senderAliases = senderArg
+          ? resolveSenderAliases(ctx.decryptedDir, senderArg, loadDisplayNames(ctx.decryptedDir))
+          : []
+        if (senderAliases.length > 0) {
+          parts.push(`sender IN (${senderAliases.map(() => '?').join(', ')})`)
+          params.push(...senderAliases)
+        }
         return db.prepare(
-          `SELECT local_id, create_time, text, sender FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ${order === 'desc' ? 'DESC' : 'ASC'}, local_id ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ?`,
-        ).all(...params, limit) as Array<{ local_id: number; create_time: number; text: string; sender?: string }>
+          `SELECT local_id, create_time, text, sender FROM message_meta WHERE ${parts.join(' AND ')} ORDER BY create_time ${order === 'desc' ? 'DESC' : 'ASC'}, local_id ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`,
+        ).all(...params, limit, offset) as Array<{ local_id: number; create_time: number; text: string; sender?: string }>
       })
       const hits: ToolHit[] = rows.map((r) => {
         const sender = readableSender(
@@ -288,7 +439,7 @@ export const getSessionMessagesTool: RetrievalTool = {
       })
       return {
         tool: 'get_session_messages', ok: true, hits,
-        note: `${name} · ${hits.length} 条${order === 'desc' ? ' · 最新优先' : ''}${lo > 0 || hi > 0 ? `（${from || '不限'} ~ ${to || '不限'}）` : ''}`,
+        note: `${name} · ${hits.length} 条${order === 'desc' ? ' · 最新优先' : ''}${offset > 0 ? ` · 跳过 ${offset} 条` : ''}${senderArg ? ` · 发送者 ${senderArg}` : ''}${lo > 0 || hi > 0 ? `（${from || '不限'} ~ ${to || '不限'}）` : ''}`,
         elapsedMs: Date.now() - started,
       }
     } catch (e) {

@@ -200,12 +200,16 @@ async function attachmentsOf(
 const dispatchLocks = new Set<string>()
 
 function messageListRequestBody(record: MessageListRecord, text: string, attachments: string[]): string {
-  const groupMention = isGroupMessageListRecord(record)
-      ? record.targetName
-      : ''
+  const group = isGroupMessageListRecord(record)
+  // 私聊的 chatName 可能只是未解析会话的展示占位名（如「未命名会话」）；
+  // 发送目标必须回落到触发对象，与 featherRecordCapacityError 的取法保持一致。
+  const target = group
+    ? (record.chatName || record.targetName)
+    : (record.targetName || record.chatName)
+  const groupMention = group ? record.targetName : ''
   return JSON.stringify({
     // 轻羽等发送端把 target 当作消息目的地，群成员只能放进 mention。
-    target: record.chatName || record.targetName,
+    target,
     message: text,
     attachments,
     ...(groupMention === '' ? {} : { mention: groupMention }),
