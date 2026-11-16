@@ -170,7 +170,7 @@ function messagePosition(
   return { sortSeq, localId }
 }
 
-function messageAfterAnchor(
+export function messageAfterAnchor(
   message: ChatAiReplyScanMessage,
   anchor: ChatAiReplyAnchor,
 ): boolean {
@@ -181,7 +181,7 @@ function messageAfterAnchor(
 }
 
 /** 自己发出的可读消息表示这一轮已经有人回答，系统事件不算。 */
-function isVisibleConversationMessage(message: ChatAiReplyScanMessage): boolean {
+export function isVisibleConversationMessage(message: ChatAiReplyScanMessage): boolean {
   return message.isSender === 1
     ? contextualMessageText(message) !== ''
     : isInboundReplyTrigger(message)

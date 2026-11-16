@@ -317,19 +317,144 @@ export const STATUS_LABEL: Record<MessageListStatus, string> = {
   sent_unconfirmed: '已发送·未确认',
 }
 
+/** 空白 AI 预约超过这个时长没有正文，就按「生成停滞」展示。 */
+export const AI_REPLY_STALLED_MS = 10 * 60_000
+
+export type AiReplyPhase =
+  | 'generating'
+  | 'stalled'
+  | 'waiting_config'
+  | 'failed_generation'
+  | 'failed_send'
+  | 'other'
+
+type MessageListAiStatusInput = Pick<
+  MessageListRecord,
+  'source' | 'status' | 'text' | 'webhookUrl' | 'createdAt' | 'error'
+>
+
+/**
+ * 按记录里已有事实判定 AI 回复阶段。
+ *
+ * 空正文 pending 的时长一律从 `createdAt` 起算：`updatedAt` 会被无关的状态回写
+ * 刷新，用它计时会让停滞的预约永远显示「生成中」。
+ */
+export function aiReplyPhase(
+  record: MessageListAiStatusInput,
+  now = Date.now(),
+): AiReplyPhase {
+  if (record.source !== 'ai_reply') return 'other'
+  if (record.status === 'pending') {
+    if (record.text.trim() === '') {
+      const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : 0
+      return now - createdAt < AI_REPLY_STALLED_MS ? 'generating' : 'stalled'
+    }
+    return record.webhookUrl.trim() === '' ? 'waiting_config' : 'other'
+  }
+  if (record.status === 'failed') {
+    return record.text.trim() === '' ? 'failed_generation' : 'failed_send'
+  }
+  return 'other'
+}
+
 /** AI 回复正文已落库，但还没有匹配到 Webhook 时的专用状态文案。 */
 export function isAiReplyWaitingForWebhook(
-  record: Pick<MessageListRecord, 'source' | 'status' | 'webhookUrl'>,
+  record: Pick<MessageListRecord, 'source' | 'status' | 'text' | 'webhookUrl'>,
 ): boolean {
   return record.source === 'ai_reply'
     && record.status === 'pending'
+    && record.text.trim() !== ''
     && record.webhookUrl.trim() === ''
 }
 
 export function messageListRecordStatusLabel(
-  record: Pick<MessageListRecord, 'source' | 'status' | 'webhookUrl'>,
+  record: MessageListAiStatusInput,
+  now = Date.now(),
 ): string {
-  return isAiReplyWaitingForWebhook(record) ? '待配置' : STATUS_LABEL[record.status]
+  switch (aiReplyPhase(record, now)) {
+    case 'generating': return '生成中'
+    case 'stalled': return '生成停滞'
+    case 'waiting_config': return '待配置'
+    case 'failed_generation': return '生成失败'
+    case 'failed_send': return '发送失败'
+    default: return STATUS_LABEL[record.status]
+  }
+}
+
+/** 状态徽标的悬停说明；失败阶段直接给出记录里保存的失败原文摘要。 */
+export function messageListRecordStatusHint(
+  record: MessageListAiStatusInput,
+  now = Date.now(),
+): string {
+  const error = record.error.trim()
+  switch (aiReplyPhase(record, now)) {
+    case 'generating': return '模型正在生成，尚无正文'
+    case 'stalled': return '超过 10 分钟没有进展，可能已中断'
+    case 'waiting_config': return '正文已生成并保存；配置发送地址后自动投递'
+    case 'failed_generation':
+    case 'failed_send': return error !== '' ? error : '未提供失败原因'
+    default: return error
+  }
+}
+
+export interface MessageListFailureCopy {
+  title: string
+  detail: string
+  hint: string
+}
+
+const EXPIRED_REPLY_ERROR = /会话已有更新的消息|过期取消/
+const NO_SENDING_ADDRESS_ERROR =
+  /未匹配到\s*Webhook|未配置(?:默认)?\s*Webhook|没有(?:已保存的)?(?:投递|发送)地址/i
+const UNCONFIRMED_SEND_ERROR = /未确认|无法确认|可能已发出|可能已受理/
+
+/**
+ * 失败记录的分层文案。
+ *
+ * 备注列只展示 `title`，完整文本放悬停属性/详情抽屉；四种场景的判断顺序
+ * 从最具体到最宽泛，避免把「过期」「没地址」误报成泛化的操作失败。
+ */
+export function messageListFailureCopy(
+  record: Pick<MessageListRecord, 'status' | 'text' | 'error' | 'webhookUrl'>,
+): MessageListFailureCopy {
+  const error = record.error.trim()
+  const missingAddress = NO_SENDING_ADDRESS_ERROR.test(error)
+    || (record.status === 'pending'
+      && record.text.trim() !== ''
+      && record.webhookUrl.trim() === '')
+  if (EXPIRED_REPLY_ERROR.test(error)) {
+    return {
+      title: '这条回复已过期',
+      detail: '对方传来更新的消息，系统只回复最新一条；旧问题不会补发',
+      hint: '如需回复，请等待新消息',
+    }
+  }
+  if (missingAddress) {
+    return {
+      title: '还没有发送地址',
+      detail: error !== '' ? error : '记录没有保存可用的发送地址',
+      hint: '去配置规则',
+    }
+  }
+  if (record.status === 'failed' && record.text.trim() === '') {
+    return {
+      title: '没有生成正文',
+      detail: '模型没有返回内容',
+      hint: '重试只能重新发送已有正文',
+    }
+  }
+  if (record.status === 'sent_unconfirmed' || UNCONFIRMED_SEND_ERROR.test(error)) {
+    return {
+      title: '发送结果未确认',
+      detail: '请求可能已发出，请先在微信核对，避免重复发送',
+      hint: '核对后可单条重发',
+    }
+  }
+  return {
+    title: '操作失败',
+    detail: error !== '' ? error : '未提供失败原因',
+    hint: '',
+  }
 }
 
 export const STATUS_FILTERS: ReadonlyArray<{ value: '' | MessageListStatus; label: string }> = [
@@ -418,8 +543,14 @@ export function batchProbeEligibility(record: MessageListRecord): BatchActionEli
     : { eligible: true, reason: '' }
 }
 
-/** 投递中或下游异步任务执行中的记录不能删除；否则会丢失任务追踪。 */
+/**
+ * 批量删除护栏：投递中或下游异步任务执行中的记录不能删除；AI 回复有专用
+ * 删除/清理入口，一律不进入通用批量删除，避免误伤生成链路。
+ */
 export function batchDeleteEligibility(record: MessageListRecord): BatchActionEligibility {
+  if (record.source === 'ai_reply') {
+    return { eligible: false, reason: 'AI 回复请用专用删除/清理' }
+  }
   return record.status === 'dispatching' || record.status === 'queued' || record.status === 'running'
     ? { eligible: false, reason: '投递或下游任务执行中，不能删除' }
     : { eligible: true, reason: '' }

@@ -17,6 +17,12 @@ import {
   sameChatAiReplyIdentity,
   type ChatAiReplyIdentity,
 } from './chat-ai-reply-identity.ts'
+import { useChatAiReplyRefresh } from './use-chat-ai-reply-refresh.ts'
+
+export {
+  CHAT_AI_REPLY_POLL_MS,
+  CHAT_AI_REPLY_REFRESH_DEBOUNCE_MS,
+} from './use-chat-ai-reply-refresh.ts'
 
 export interface ChatAiReplyController {
   state: ChatAiReplyState | null
@@ -27,7 +33,7 @@ export interface ChatAiReplyController {
   /** 菜单是否应出现（单聊即可；正在等待账号 wxid 时为可显示但禁用）。 */
   available: boolean
   toggle: () => Promise<void>
-  refresh: () => Promise<void>
+  refresh: (options?: { silent?: boolean }) => Promise<void>
   scanNow: () => Promise<void>
   savePersona: (input: {
     name: string
@@ -76,6 +82,7 @@ export function useChatAiReply(input: {
   latestRef.current = input
   /** The exact account/session snapshot that produced current `state`. */
   const stateIdentityRef = useRef<ChatAiReplyIdentity | null>(null)
+  const current = currentChatAiReplyState(state, stateIdentityRef.current, input)
 
   const valid = (epoch: number, talker: string, account: string): boolean => (
     latestRef.current.alive(epoch, talker)
@@ -118,35 +125,19 @@ export function useChatAiReply(input: {
       })
   }, [chatUsername, chatName, isGroup, selfWxid, sessionEpoch])
 
-  const refresh = useCallback(async (): Promise<void> => {
-    const latest = latestRef.current
-    if (latest.chatUsername === '' || latest.isGroup || latest.selfWxid === '') return
-    const requestId = requestIdRef.current + 1
-    requestIdRef.current = requestId
-    setLoading(true)
-    try {
-      const next = await apiGetChatAiReplyState({
-        chatUsername: latest.chatUsername,
-        chatName: latest.chatName,
-      })
-      if (requestIdRef.current !== requestId) return
-      if (!valid(latest.sessionEpoch, latest.chatUsername, next.accountKey)) return
-      stateIdentityRef.current = {
-        selfWxid: latest.selfWxid,
-        chatUsername: latest.chatUsername,
-        chatName: latest.chatName,
-        sessionEpoch: latest.sessionEpoch,
-      }
-      setError(null)
-      setState({ ...next, chatName: latest.chatName })
-    } catch (e) {
-      if (requestIdRef.current === requestId) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      if (requestIdRef.current === requestId) setLoading(false)
-    }
-  }, [])
+  const { refresh } = useChatAiReplyRefresh({
+    chatUsername,
+    isGroup,
+    selfWxid,
+    sessionEpoch,
+    latestRef,
+    stateIdentityRef,
+    requestIdRef,
+    hasState: current !== null,
+    setState,
+    setLoading,
+    setError,
+  })
 
   const scanNow = useCallback(async (): Promise<void> => {
     const latest = latestRef.current
@@ -284,7 +275,6 @@ export function useChatAiReply(input: {
     }
   }, [state])
 
-  const current = currentChatAiReplyState(state, stateIdentityRef.current, input)
   const errorText = selfWxid === ''
     ? '正在读取当前账号，请稍候'
     : (error ?? current?.error ?? null)

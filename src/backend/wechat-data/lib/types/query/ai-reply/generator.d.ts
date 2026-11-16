@@ -8,6 +8,8 @@ export type ChatAiReplyGenerateFn = (input: {
     images?: ChatAiReplyContextImage[];
     accountKey: string;
     chatUsername: string;
+    /** 生成期取消信号；沿用 DSH 的 GenerateOptions.signal。 */
+    signal?: AbortSignal;
 }) => Promise<ChatAiReplyGenerationResult>;
 export interface ChatAiReplyGeneratorDeps {
     ctx: () => Context;

@@ -9,10 +9,8 @@ import {
   updateChatAiReplyRunStateResult,
 } from './config-store.ts'
 import type { ChatAiReplyLease } from './lease-store.ts'
-import { buildChatAiReplyPrompt, collectChatAiReplyContext } from './context.ts'
 import { normalizeChatAiReplyText } from './context.ts'
-import type { ChatAiReplyContextImage } from './context.ts'
-import { buildChatAiReplySystemPrompt } from './persona.ts'
+import { generateChatAiReply } from './runner-generate.ts'
 import {
   CHAT_AI_REPLY_MAX_SEGMENTS,
   splitChatAiReplyText,
@@ -31,6 +29,8 @@ import {
   cursorOf,
   errorText,
   inspectReply,
+  isVisibleConversationMessage,
+  messageAfterAnchor,
   sourceRefOf,
 } from './runner-recovery.ts'
 import { STALE_REPLY_REASON, dropOrFailStaleReservation } from './runner-coalesce.ts'
@@ -605,94 +605,65 @@ export async function reserveChatAiReplyRun(
 }
 
 /**
- * 按会话设置检索知识库片段。
+ * 生成被取消后的收口。
  *
- * 知识库是**增强**不是前置条件：未勾选、未选库或检索失败都返回 `undefined`，
- * 让回复退回普通对话，而不是让一次知识库故障卡住无人值守的自动回复。
- * @returns 检索成功时的片段（可能为空数组）；未启用或失败时 undefined。
+ * 取消不是失败：模型已经流出的部分正文先写进 generation 快照（绝不补全消息
+ * 列表、绝不投递），再按原因收口——会话已被新消息越过走 stale，设置 revision
+ * 变了走 superseded；租约丢失时没有写入资格，直接结束本次执行。
  */
-async function collectKbSnippetsForState(
+async function cancelAbortedChatAiReplyGeneration(
   deps: ChatAiReplyScanDeps,
   state: ChatAiReplyState,
-  context: { lines: string[]; latestPeer: string },
-): Promise<string[] | undefined> {
-  if (!state.kbEnabled || state.kbId <= 0) return undefined
-  if (deps.collectKbSnippets === undefined) {
-    deps.op('chat_ai_reply', false, 'kb retrieval unavailable; reply without knowledge base')
-    return undefined
+  run: ChatAiReplyRunRef,
+  text: string,
+): Promise<boolean> {
+  if (run.leaseLost || run.lease === undefined) return false
+  const partial = text.trim()
+  if (partial !== '') {
+    const persisted = await guardedUpdate(deps, state, run, {
+      stage: 'saving',
+      generationState: 'result',
+      generationSourceRef: run.sourceRef,
+      generationText: partial,
+      generationRevision: run.revision,
+      // 部分正文只作本次执行内的诊断快照；收口时按既有语义清空，绝不补全或投递。
+      error: 'AI 回复生成已取消；本次结果不会发送',
+    })
+    if (persisted === 'guard-mismatch') {
+      run.leaseLost = true
+      return false
+    }
+    if (persisted !== 'updated') return false
+    run.generatedText = partial
+  }
+  const currentResult = readCurrentChatAiReplyState(deps, state)
+  if (!currentResult.ok) return false
+  const current = currentResult.state
+  if (!current.enabled || current.revision !== run.revision) {
+    return await cancelSupersededChatAiReplyRun(deps, state, run)
   }
   try {
-    const result = await deps.collectKbSnippets({
-      kbId: state.kbId,
-      lines: context.lines,
-      ...(context.latestPeer === '' ? {} : { latestPeer: context.latestPeer }),
-    })
-    deps.op(
-      'chat_ai_reply',
-      true,
-      'kb snippets=' + String(result.snippets.length)
-        + (result.note === '' ? '' : '; ' + result.note),
-    )
-    return result.snippets
-  } catch (e) {
-    deps.op('chat_ai_reply', false, 'kb retrieval failed: ' + errorText(e))
-    return undefined
-  }
-}
-
-async function generateChatAiReply(
-  deps: ChatAiReplyScanDeps,
-  state: ChatAiReplyState,
-  anchor: ChatAiReplyAnchor,
-): Promise<string> {
-  const collectContext = deps.collectContext ?? collectChatAiReplyContext
-  const context = collectContext(
-    deps.decryptedDir(),
-    state.chatUsername,
-    deps.selfUsername(),
-    anchor.localId,
-  )
-  if (context.count === 0) throw new Error('当前会话没有可用文本')
-  let images: ChatAiReplyContextImage[] = []
-  if (context.imageCandidates !== undefined && context.imageCandidates.length > 0 && deps.decodeImages !== undefined) {
-    try {
-      images = await deps.decodeImages({
-        decryptedDir: deps.decryptedDir(),
-        talker: state.chatUsername,
-        candidates: context.imageCandidates,
-      })
-    } catch (e) {
-      // 图片/表情是增强信息，解码失败不能阻断纯文本回复。
-      deps.op('chat_ai_reply', false, 'decode media failed: ' + errorText(e))
+    if (await conversationProgressedAfter(deps, state, run.anchor)) {
+      return await cancelStaleChatAiReplyRun(deps, state, run)
     }
+  } catch {
+    // 读不到新消息时保留生成快照与 pending 锚点，下一拍再收口；本拍不投递。
+    return false
   }
-  const kb = await collectKbSnippetsForState(deps, state, context)
-  const prompt = images.length > 0
-    ? buildChatAiReplyPrompt(context.lines, images.length)
-    : context.prompt
-  const systemPrompt = buildChatAiReplySystemPrompt({
-    name: state.personaName,
-    prompt: state.personaPrompt,
-  }, {
-    splitReply: state.splitReply,
-    ...(kb === undefined ? {} : { kbRequested: true, kbSnippets: kb }),
-  })
-  const [gatedSystem, gatedPrompt] = deps.gate(
-    'ai_reply_analyze',
-    { sessions: 1, messages: context.count },
-    [systemPrompt, prompt],
-  )
-  const generated = await deps.generate({
-    system: gatedSystem ?? systemPrompt,
-    prompt: gatedPrompt ?? prompt,
-    ...(images.length > 0 ? { images } : {}),
-    accountKey: state.accountKey,
-    chatUsername: state.chatUsername,
-  })
-  if (!generated.ok || generated.text.trim() === '') {
-    throw new Error(generated.error ?? '模型没有返回可用回复')
+  // 轻量/测试适配器可能没注入 listMessagesAfter；最新一页同样能证明会话推进。
+  try {
+    const latest = await deps.listMessages(state.chatUsername, 80)
+    if (latest.some((message) =>
+      message.isSender !== 1
+      && isVisibleConversationMessage(message)
+      && messageAfterAnchor(message, run.anchor))) {
+      return await cancelStaleChatAiReplyRun(deps, state, run)
+    }
+  } catch {
+    return false
   }
-  return generated.text.trim()
+  // dispose 导致的取消没有会话推进可收口：保留快照等重启恢复，本拍不投递。
+  return false
 }
 
 export async function dispatchChatAiReply(
@@ -971,7 +942,14 @@ export async function saveAndDispatchChatAiReply(
       'record=' + String(run.recordId) + ' conversation check failed before generation',
     )
   }
-  const text = run.generatedText ?? await generateChatAiReply(deps, state, run.anchor)
+  const generated = run.generatedText !== undefined
+    ? { text: run.generatedText, canceled: false }
+    : await generateChatAiReply(deps, state, run)
+  const text = generated.text
+  // 取消绝不进入补全/投递：已流出的部分正文只进生成快照，然后按原因收口。
+  if (generated.canceled) {
+    return await cancelAbortedChatAiReplyGeneration(deps, state, run, text)
+  }
   if (isCancelled()) {
     const persisted = await guardedUpdate(
       deps,

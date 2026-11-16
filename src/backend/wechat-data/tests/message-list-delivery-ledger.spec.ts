@@ -623,6 +623,26 @@ describe('下游投递：台账、批量与删除', () => {
     ])
   })
 
+  it('通用批量删除跳过 AI 回复记录，避免删掉生成中的预约或已付费正文', () => {
+    const aiRecord = insertMessageListRecord(decrypted, {
+      targetName: 'AI 对象',
+      text: 'AI 生成的正文',
+    })
+    withWritableDb(taskDbPath(decrypted), (db) => {
+      db.prepare("UPDATE message_list_records SET source = 'ai_reply' WHERE id = ?")
+        .run(aiRecord.id ?? 0)
+    })
+
+    const result = deleteMessageListRecords(decrypted, [aiRecord.id ?? 0])
+    expect(result).toMatchObject({ ok: true, requested: 1, removed: 0, skipped: 1 })
+    expect(result.items[0]).toMatchObject({
+      id: aiRecord.id,
+      status: 'skipped',
+      error: 'AI 回复记录请使用 AI 专用删除/清理',
+    })
+    expect(getMessageListRecord(decrypted, aiRecord.id ?? 0)).toBeDefined()
+  })
+
   it('批量删除拒绝空批次和非法 id', () => {
     expect(deleteMessageListRecords(decrypted, [])).toMatchObject({
       ok: false,

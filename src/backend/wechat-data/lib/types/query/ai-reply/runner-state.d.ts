@@ -28,6 +28,11 @@ export interface ChatAiReplyRunRef {
     resumed: boolean;
     /** pending 创建后设置 revision 已被推进；只收口旧预约，不再生成/投递。 */
     revisionChanged: boolean;
+    /**
+     * 运行期取消信号；只读传递，不落库。
+     * 生成器在流式调用期间收到 abort 后应尽快停止并交回部分结果。
+     */
+    signal?: AbortSignal;
 }
 export declare function readCurrentChatAiReplyState(deps: ChatAiReplyScanDeps, state: ChatAiReplyState): import("./config-store.ts").ChatAiReplyStateReadResult;
 export declare function notifyChatAiReplyRecordUpdated(deps: ChatAiReplyScanDeps, state: Pick<ChatAiReplyState, 'accountKey' | 'chatUsername'>, recordId: number | undefined): void;

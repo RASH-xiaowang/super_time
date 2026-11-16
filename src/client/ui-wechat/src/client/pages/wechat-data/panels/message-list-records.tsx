@@ -6,7 +6,6 @@ import type {
   MessageListStatus,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
-  Badge,
   Button,
   EmptyState,
   ErrorState,
@@ -17,19 +16,11 @@ import {
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import {
   SOURCE_FILTERS,
-  SOURCE_LABEL,
   STATUS_FILTERS,
-  batchDeleteEligibility,
-  isAiReplyWaitingForWebhook,
-  localImageKey,
-  messageListRecordStatusLabel,
-  sourceTone,
-  statusTone,
-  timeText,
+  aiReplyPhase,
 } from './message-list-view.ts'
 import { useMessageListBatch } from './use-message-list-batch.ts'
-import { withEnterprise } from './enterprise-identity.ts'
-import { IdentityName } from './identity.tsx'
+import { MessageListRow } from './message-list-row.tsx'
 import {
   messageListRowsForRender,
   useMessageListRowVirtualizer,
@@ -75,19 +66,17 @@ interface MessageListRecordsProps {
   onConfigureRecordRule: (record: MessageListRecord) => void
 }
 
-function recordIdentity(name: string, enterpriseName?: string): string {
-  return name ? withEnterprise(name, enterpriseName) : '—'
-}
-
 type MessageListBatchState = ReturnType<typeof useMessageListBatch>
 
 function MessageListRecordsHeader(
   props: MessageListRecordsProps & { batch: MessageListBatchState },
 ): React.JSX.Element {
-  const unrouted = props.records.filter((record) => (
-    record.status === 'pending' && record.webhookUrl === ''
+  const now = Date.now()
+  const phases = props.records.map((record) => aiReplyPhase(record, now))
+  const aiWaitingConfig = phases.filter((phase) => phase === 'waiting_config').length
+  const aiGenerating = phases.filter((phase) => (
+    phase === 'generating' || phase === 'stalled'
   )).length
-  const aiWaitingConfig = props.records.filter(isAiReplyWaitingForWebhook).length
   return (
     <>
       <div className={css.statStrip}>
@@ -96,6 +85,11 @@ function MessageListRecordsHeader(
           <b>{props.stats.pending}</b> 待执行
           {aiWaitingConfig > 0 ? ` / ${String(aiWaitingConfig)} 待配置` : ''} · 当前窗口
         </span>
+        {aiGenerating > 0 && (
+          <span className={css.statPending}>
+            <b>{aiGenerating}</b> 生成中 · 当前窗口
+          </span>
+        )}
         <span className={css.statPending}>
           <b>{props.stats.queued + props.stats.running}</b> 下游处理中 · 当前窗口
         </span>
@@ -150,10 +144,10 @@ function MessageListRecordsHeader(
           onDelete={() => { void props.batch.runDelete() }}
         />
       )}
-      {unrouted > 0 && (
+      {aiWaitingConfig > 0 && (
         <div className={`${css.inlineNotice} ${css.noticeWarn}`} role="status">
           <span>
-            当前已加载记录中有 {String(unrouted)} 条待执行记录还没有投递地址。
+            当前已加载记录中有 {String(aiWaitingConfig)} 条 AI 回复还没有投递地址。
             正文已保存在消息列表，但需要先配置 Webhook 规则才能发送。
           </span>
           <Button
@@ -261,6 +255,7 @@ function MessageListTable(
   }
 
   const hasFilter = props.search.trim() !== '' || props.status !== '' || props.source !== ''
+  const now = Date.now()
   return (
     props.loading && props.records.length === 0 ? (
       <LoadingState label="加载消息记录…" />
@@ -307,139 +302,28 @@ function MessageListTable(
                 />
               </tr>
             )}
-            {renderedRows.rows.map(({ record, index }) => {
-              const deleteEligibility = batchDeleteEligibility(record)
-              const selectable = deleteEligibility.eligible
-              const missingWebhook = record.webhookUrl === ''
-              const waitingConfig = isAiReplyWaitingForWebhook(record)
-              const downstreamActive = record.status === 'queued' || record.status === 'running'
-              return (
-              <tr
+            {renderedRows.rows.map(({ record, index }) => (
+              <MessageListRow
                 key={record.id}
-                className={css.recordRow}
-                data-index={index}
-                data-record-id={record.id}
-                ref={rowVirtualizer.measureElement}
-              >
-                <td className={css.numCell}>
-                  <div className={css.numCellInner}>
-                    {props.batch.active && (
-                      <input
-                        type="checkbox"
-                        className={css.rowCheckbox}
-                        checked={props.batch.selectedIds.has(record.id)}
-                        disabled={props.batchBusy || !selectable}
-                        title={selectable ? '选择这条记录' : deleteEligibility.reason}
-                        aria-label={'选择记录 #' + String(record.id)}
-                        onChange={() => { props.batch.toggle(record.id) }}
-                      />
-                    )}
-                    <span title="按当前列表连续编号，删除后自动重算">{String(index + 1)}</span>
-                  </div>
-                </td>
-                <td className={css.nameCell} title={recordIdentity(record.chatName, record.chatEnterpriseName)}>
-                  <IdentityName name={record.chatName || '未知会话'} username={record.chatUsername} size={20}>
-                    {recordIdentity(record.chatName, record.chatEnterpriseName)}
-                  </IdentityName>
-                </td>
-                <td className={css.statusCell}>
-                  <Badge
-                    tone={statusTone(record.status)}
-                    title={record.error || (waitingConfig
-                      ? 'AI 回复正文已保存到消息列表，配置 Webhook 规则后即可投递'
-                      : undefined)}
-                  >
-                    {messageListRecordStatusLabel(record)}
-                  </Badge>
-                  {record.attempts > 0 && <span className={css.attempts}>第 {record.attempts} 次</span>}
-                </td>
-                <td className={css.noteCell}>
-                  <span
-                    className={css.noteLine}
-                    data-error={record.error ? 'true' : undefined}
-                    title={record.error || record.note}
-                  >
-                    <span className={css.noteText}>
-                      {record.error || record.note || '—'}
-                    </span>
-                  </span>
-                </td>
-                <td>
-                  <div className={css.rowActions}>
-                    {missingWebhook && (
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={!props.canWrite || props.batchBusy}
-                        data-configure-rule={record.id}
-                        aria-label={'为记录 #' + String(record.id) + ' 配置 Webhook 规则'}
-                        title={'带入「' + (record.chatName || '任意会话') + ' × '
-                          + (record.targetName || '任意对象') + '」配置规则'}
-                        onClick={() => { props.onConfigureRecordRule(record) }}
-                        {...desktopActionProps()}
-                      >
-                        配置规则
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!props.canWrite
-                        || props.batchBusy
-                        || props.resendingId === record.id
-                        || downstreamActive
-                        || record.status === 'pending' && missingWebhook}
-                      onClick={() => { props.onResend(record) }}
-                      {...desktopActionProps()}
-                      title={record.status === 'pending' && missingWebhook
-                        ? '请先在规则配置中设置会话或全局 Webhook'
-                        : downstreamActive
-                          ? '下游异步任务尚未结束，禁止重复发送'
-                        : record.status === 'sent_unconfirmed'
-                          ? '远端可能已发送；请先核对，再在弹出的确认框中确认重发'
-                          : '重新投递这条记录'}
-                    >
-                      {props.resendingId === record.id
-                        ? '重发中…'
-                        : record.status === 'sent_unconfirmed' ? '核对后重发' : '重发'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={!props.canWrite || props.batchBusy || props.probeBusyId === record.id || record.webhookUrl === ''}
-                      title="对记录保存的下游地址发 GET 健康检查"
-                      onClick={() => { props.onProbe(record) }}
-                      {...desktopActionProps()}
-                    >
-                      {props.probeBusyId === record.id ? '探测中…' : '探测'}
-                    </Button>
-                    {record.jobId !== undefined && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={!props.canWrite || props.batchBusy || props.jobBusyId === record.id}
-                        title={'查询下游任务 ' + record.jobId}
-                        onClick={() => { props.onQueryJob(record) }}
-                        {...desktopActionProps()}
-                      >
-                        {props.jobBusyId === record.id ? '查询中…' : '查任务'}
-                      </Button>
-                    )}
-                  </div>
-                </td>
-                <td className={css.nameCell} title={recordIdentity(record.targetName, record.targetEnterpriseName)}>
-                  <IdentityName name={record.targetName || '未知对象'} username={record.targetUsername} size={20}>
-                    {recordIdentity(record.targetName, record.targetEnterpriseName)}
-                  </IdentityName>
-                </td>
-                <td className={css.textCell}><span title={record.text}>{record.text || '—'}</span></td>
-                <td><Badge tone={sourceTone(record.source)}>{SOURCE_LABEL[record.source]}</Badge></td>
-                <td className={css.timeCell}>{timeText(record.triggeredAt)}</td>
-                <td><RecordImages record={record} thumbs={props.thumbs} /></td>
-                <td><code className={css.replyId} title={record.replyId}>{record.replyId}</code></td>
-              </tr>
-              )
-            })}
+                record={record}
+                index={index}
+                now={now}
+                rowRef={rowVirtualizer.measureElement}
+                batchActive={props.batch.active}
+                batchBusy={props.batchBusy}
+                selected={props.batch.selectedIds.has(record.id)}
+                canWrite={props.canWrite}
+                resendingId={props.resendingId}
+                probeBusyId={props.probeBusyId}
+                jobBusyId={props.jobBusyId}
+                thumbs={props.thumbs}
+                onToggle={props.batch.toggle}
+                onResend={props.onResend}
+                onProbe={props.onProbe}
+                onQueryJob={props.onQueryJob}
+                onConfigureRecordRule={props.onConfigureRecordRule}
+              />
+            ))}
             {renderedRows.pads.bottom > 0 && (
               <tr aria-hidden="true">
                 <td
@@ -589,34 +473,6 @@ function BatchToolbar(props: {
           {props.busy ? '处理中…' : '批量删除 · ' + String(props.deletableCount)}
         </Button>
       </div>
-    </div>
-  )
-}
-
-function RecordImages(props: {
-  record: MessageListRecord
-  thumbs: Record<string, string>
-}): React.JSX.Element {
-  if (props.record.images.length === 0) return <span className={css.muted}>—</span>
-  const shown = props.record.images.slice(0, 3)
-  return (
-    <div className={css.imageStack} title={String(props.record.images.length) + ' 个附件'}>
-      {shown.map((image, index) => {
-        if (image.stagedId !== undefined) {
-          return <span key={index} className={css.imageChip} title={image.name}>{image.name ?? '附件'}</span>
-        }
-        const src = image.dataUrl
-          ?? (image.localId === undefined
-            ? undefined
-            : props.thumbs[localImageKey(props.record.chatUsername, image.localId)])
-        if (src) {
-          return <img key={index} className={css.thumb} src={src} alt={'触发图片 ' + String(index + 1)} />
-        }
-        return <span key={index} className={css.imageChip}>{image.url ? '外链' : '待解码'}</span>
-      })}
-      {props.record.images.length > shown.length && (
-        <span className={css.imageMore}>+{props.record.images.length - shown.length}</span>
-      )}
     </div>
   )
 }

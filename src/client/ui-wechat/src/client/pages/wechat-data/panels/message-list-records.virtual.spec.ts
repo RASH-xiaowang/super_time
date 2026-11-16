@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const records = readFileSync(join(HERE, 'message-list-records.tsx'), 'utf8')
+const row = readFileSync(join(HERE, 'message-list-row.tsx'), 'utf8')
 const virtual = readFileSync(join(HERE, 'message-list-virtual.ts'), 'utf8')
 const css = readFileSync(join(HERE, 'message-list.module.css'), 'utf8')
 
@@ -15,10 +16,13 @@ describe('消息列表虚拟化接线', () => {
     expect(records).toContain('messageListRowsForRender(rowVirtualizer, props.records)')
     expect(records).toContain('renderedRows.rows.map')
     expect(records).toContain('ref={tableScrollRef}')
-    expect(records).toContain('ref={rowVirtualizer.measureElement}')
+    expect(records).toContain('rowRef={rowVirtualizer.measureElement}')
+    expect(row).toContain('ref={props.rowRef}')
     expect(records).toContain('renderedRows.pads.top')
     expect(records).toContain('renderedRows.pads.bottom')
-    expect(records).not.toContain('props.records.map((record')
+    // 只约束表体：表头统计对当前窗口做一次 phase 映射不算“整表 map”。
+    const table = records.slice(records.indexOf('function MessageListTable('))
+    expect(table).not.toContain('props.records.map((record')
   })
 
   it('数据窗口和 DOM 都有显式硬上界', () => {
@@ -38,8 +42,8 @@ describe('消息列表虚拟化接线', () => {
   })
 
   it('记录行保持单行紧凑，不让备注和操作按钮撑高', () => {
-    expect(records).toContain('className={css.recordRow}')
-    expect(records).toContain('className={css.noteLine}')
+    expect(row).toContain('className={css.recordRow}')
+    expect(row).toContain('className={css.noteLine}')
     expect(css).toMatch(/\.recordRow,\s*\.recordRow > td\s*\{\s*height: 32px;/)
     expect(css).toMatch(/\.rowActions\s*\{[\s\S]*?flex-wrap: nowrap;/)
     expect(css).toMatch(/\.textCell span\s*\{[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/)

@@ -4,13 +4,17 @@ import {
   EMPTY_MESSAGE_LIST_WINDOW,
   MESSAGE_LIST_PAGE_SIZE,
   MESSAGE_LIST_WINDOW_MAX,
+  aiReplyPhase,
   appendMessageListWindow,
   batchDeleteEligibility,
   batchResendEligibility,
   findExactRuleForRecord,
   isAiReplyWaitingForWebhook,
+  isBatchSelectable,
   mergeMessageListRecordUpdates,
   mergeMessageListRefresh,
+  messageListFailureCopy,
+  messageListRecordStatusHint,
   messageListRecordStatusLabel,
   nextMessageListPageSize,
   replaceMessageListWindow,
@@ -284,7 +288,7 @@ describe('记录到规则表单的参数带入', () => {
 })
 
 describe('AI 回复待配置状态', () => {
-  it('只有缺少 Webhook 的 AI pending 记录显示待配置', () => {
+  it('只有缺少 Webhook 且已有正文的 AI pending 记录显示待配置', () => {
     const waiting = record(21, 1)
     waiting.source = 'ai_reply'
     waiting.status = 'pending'
@@ -296,8 +300,137 @@ describe('AI 回复待配置状态', () => {
     expect(isAiReplyWaitingForWebhook(waiting)).toBe(false)
     expect(messageListRecordStatusLabel(waiting)).toBe('待执行')
 
+    const blank = record(23, 3)
+    blank.source = 'ai_reply'
+    blank.status = 'pending'
+    blank.text = ''
+    blank.webhookUrl = ''
+    expect(isAiReplyWaitingForWebhook(blank), '空白预约不是“待配置”').toBe(false)
+
     const manual = record(22, 2)
     expect(messageListRecordStatusLabel(manual)).toBe('待执行')
+  })
+})
+
+describe('AI 回复阶段判定', () => {
+  const BASE = 1_700_000_000_000
+
+  function aiRecord(patch: Partial<MessageListRecord> = {}): MessageListRecord {
+    const item = record(41, BASE)
+    item.source = 'ai_reply'
+    item.status = 'pending'
+    item.text = ''
+    item.webhookUrl = ''
+    item.createdAt = BASE
+    item.updatedAt = BASE
+    return { ...item, ...patch }
+  }
+
+  it('空白预约 10 分钟内为生成中，超时按 createdAt 判为生成停滞', () => {
+    const generating = aiRecord()
+    expect(aiReplyPhase(generating, BASE + 60_000)).toBe('generating')
+    expect(messageListRecordStatusLabel(generating, BASE + 60_000)).toBe('生成中')
+    expect(messageListRecordStatusHint(generating, BASE + 60_000)).toBe('模型正在生成，尚无正文')
+
+    // updatedAt 被无关回写刷新过，也不能把已停滞的预约继续显示成生成中。
+    const stalled = aiRecord({ updatedAt: BASE + 9 * 60_000 })
+    expect(aiReplyPhase(stalled, BASE + 10 * 60_000)).toBe('stalled')
+    expect(messageListRecordStatusLabel(stalled, BASE + 10 * 60_000)).toBe('生成停滞')
+    expect(messageListRecordStatusHint(stalled, BASE + 10 * 60_000))
+      .toBe('超过 10 分钟没有进展，可能已中断')
+  })
+
+  it('已有正文但没有发送地址是待配置，而不是生成中', () => {
+    const waiting = aiRecord({ text: '在的，怎么了？' })
+    expect(aiReplyPhase(waiting, BASE + 60_000)).toBe('waiting_config')
+    expect(messageListRecordStatusLabel(waiting, BASE + 60_000)).toBe('待配置')
+    expect(messageListRecordStatusHint(waiting, BASE + 60_000))
+      .toBe('正文已生成并保存；配置发送地址后自动投递')
+  })
+
+  it('失败记录按是否已有正文区分生成失败与发送失败', () => {
+    const noText = aiRecord({ status: 'failed', error: '模型调用超时' })
+    expect(aiReplyPhase(noText, BASE + 60_000)).toBe('failed_generation')
+    expect(messageListRecordStatusLabel(noText, BASE + 60_000)).toBe('生成失败')
+    expect(messageListRecordStatusHint(noText, BASE + 60_000)).toBe('模型调用超时')
+
+    const withText = aiRecord({ status: 'failed', text: '已生成但没发出去', error: '连接被拒绝' })
+    expect(aiReplyPhase(withText, BASE + 60_000)).toBe('failed_send')
+    expect(messageListRecordStatusLabel(withText, BASE + 60_000)).toBe('发送失败')
+    expect(messageListRecordStatusHint(withText, BASE + 60_000)).toBe('连接被拒绝')
+
+    const manualFailed = record(42, BASE, 'failed')
+    manualFailed.text = ''
+    expect(aiReplyPhase(manualFailed, BASE + 60_000)).toBe('other')
+    expect(messageListRecordStatusLabel(manualFailed, BASE + 60_000)).toBe('失败')
+  })
+
+  it('AI 回复记录一律不可批量勾选删除', () => {
+    for (const status of ['pending', 'failed', 'success'] as const) {
+      const aiRow = aiRecord({ status, text: '正文' })
+      expect(batchDeleteEligibility(aiRow)).toMatchObject({
+        eligible: false,
+        reason: expect.stringContaining('AI 回复请用专用删除/清理'),
+      })
+      expect(isBatchSelectable(aiRow)).toBe(false)
+    }
+    expect(batchDeleteEligibility(record(43, BASE)).eligible).toBe(true)
+  })
+})
+
+describe('失败文案分层', () => {
+  const BASE = 1_700_000_000_000
+
+  function failedRecord(patch: Partial<MessageListRecord>): MessageListRecord {
+    return { ...record(51, BASE, 'failed'), source: 'ai_reply', ...patch }
+  }
+
+  it('已过期回复给出不补发说明', () => {
+    const expired = failedRecord({
+      text: '旧问题的回答',
+      error: '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题',
+    })
+    expect(messageListFailureCopy(expired)).toMatchObject({
+      title: '这条回复已过期',
+      detail: '对方传来更新的消息，系统只回复最新一条；旧问题不会补发',
+      hint: '如需回复，请等待新消息',
+    })
+  })
+
+  it('无发送地址、未生成正文、未确认与兜底各自分层', () => {
+    const noAddress = failedRecord({
+      text: '正文',
+      error: '未匹配到 Webhook：请先在规则配置中为会话名和触发对象设置地址',
+    })
+    expect(messageListFailureCopy(noAddress)).toMatchObject({
+      title: '还没有发送地址',
+      detail: '未匹配到 Webhook：请先在规则配置中为会话名和触发对象设置地址',
+      hint: '去配置规则',
+    })
+
+    const noText = failedRecord({ text: '', error: '模型调用失败' })
+    expect(messageListFailureCopy(noText)).toMatchObject({
+      title: '没有生成正文',
+      detail: '模型没有返回内容',
+      hint: '重试只能重新发送已有正文',
+    })
+
+    const unconfirmed = failedRecord({
+      status: 'sent_unconfirmed',
+      text: '正文',
+      error: '请求可能已发出，但未收到完整响应',
+    })
+    expect(messageListFailureCopy(unconfirmed)).toMatchObject({
+      title: '发送结果未确认',
+      detail: '请求可能已发出，请先在微信核对，避免重复发送',
+      hint: '核对后可单条重发',
+    })
+
+    const other = failedRecord({ text: '正文', error: '下游返回 500' })
+    expect(messageListFailureCopy(other)).toMatchObject({
+      title: '操作失败',
+      detail: '下游返回 500',
+    })
   })
 })
 

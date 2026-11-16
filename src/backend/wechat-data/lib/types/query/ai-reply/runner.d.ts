@@ -16,6 +16,10 @@ export interface ChatAiReplyRunnerOptions {
     coalesceMs?: number;
     /** 测试可固定 owner；生产每个 runner 实例自动生成唯一值。 */
     owner?: string;
+    /** 跨会话同时执行的会话数上限；默认 2，避免一轮扫描同时开太多付费调用。 */
+    maxConcurrentSessions?: number;
+    /** 超出并发上限后的排队上限；默认 8，0 表示本拍直接跳过。 */
+    maxQueue?: number;
 }
 export declare function createChatAiReplyRunner(deps: ChatAiReplyScanDeps, runnerOptions?: ChatAiReplyRunnerOptions): {
     scan: () => Promise<ChatAiReplyScanResult>;

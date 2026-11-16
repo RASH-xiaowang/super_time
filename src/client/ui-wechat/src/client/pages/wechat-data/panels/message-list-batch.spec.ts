@@ -47,14 +47,15 @@ describe('消息列表批量处理', () => {
     expect(batchResendEligibility(record({ status: 'sent_unconfirmed' })).eligible).toBe(false)
   })
 
-  it('删除仅拦截投递中的记录；探测仍要求已保存地址', () => {
-    const noSnapshot = record({ webhookUrl: '' })
+  it('删除拦截 AI 回复与投递中的记录；探测仍要求已保存地址', () => {
+    const noSnapshot = record({ source: 'manual', webhookUrl: '' })
     expect(batchResendEligibility(noSnapshot).eligible).toBe(true)
     expect(batchProbeEligibility(noSnapshot).eligible).toBe(false)
     expect(batchDeleteEligibility(noSnapshot).eligible).toBe(true)
     expect(isBatchSelectable(noSnapshot)).toBe(true)
 
     const unconfirmedWithSnapshot = record({
+      source: 'manual',
       status: 'sent_unconfirmed',
       webhookUrl: 'https://downstream.example/webhook/***',
     })
@@ -63,7 +64,18 @@ describe('消息列表批量处理', () => {
     expect(batchDeleteEligibility(unconfirmedWithSnapshot).eligible).toBe(true)
     expect(isBatchSelectable(unconfirmedWithSnapshot)).toBe(true)
 
-    expect(batchDeleteEligibility(record({ status: 'dispatching' })).eligible).toBe(false)
-    expect(isBatchSelectable(record({ status: 'dispatching' }))).toBe(false)
+    expect(batchDeleteEligibility(record({ source: 'manual', status: 'dispatching' })).eligible).toBe(false)
+    expect(isBatchSelectable(record({ source: 'manual', status: 'dispatching' }))).toBe(false)
+  })
+
+  it('AI 回复一律不可批量勾选删除，改用专用删除/清理', () => {
+    for (const status of ['pending', 'failed', 'success', 'sent_unconfirmed'] as const) {
+      const aiRow = record({ source: 'ai_reply', status })
+      expect(batchDeleteEligibility(aiRow)).toEqual({
+        eligible: false,
+        reason: 'AI 回复请用专用删除/清理',
+      })
+      expect(isBatchSelectable(aiRow)).toBe(false)
+    }
   })
 })

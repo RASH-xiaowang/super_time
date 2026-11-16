@@ -34,14 +34,24 @@ import {
   errorText,
   inspectReply,
   isUnfinishedStage,
+  isVisibleConversationMessage,
   latestInboundAfterCursor,
   latestMessageCursor,
   latestVisibleMessage,
   loadMessagesForState,
+  messageAfterAnchor,
   parseSourceRef,
   pendingAnchorOf,
   sourceRefOf,
 } from './runner-recovery.ts'
+import {
+  createChatAiReplyCancellation,
+} from './runner-cancel.ts'
+import type { ChatAiReplyCancellation } from './runner-cancel.ts'
+import {
+  createAdmissionLimiter,
+} from './runner-admission.ts'
+import type { ChatAiReplyAdmissionLimiter } from './runner-admission.ts'
 import {
   type ChatAiReplyRunRef,
   ChatAiReplyLeaseLostError,
@@ -81,6 +91,10 @@ export interface ChatAiReplyRunnerOptions {
   coalesceMs?: number
   /** 测试可固定 owner；生产每个 runner 实例自动生成唯一值。 */
   owner?: string
+  /** 跨会话同时执行的会话数上限；默认 2，避免一轮扫描同时开太多付费调用。 */
+  maxConcurrentSessions?: number
+  /** 超出并发上限后的排队上限；默认 8，0 表示本拍直接跳过。 */
+  maxQueue?: number
 }
 
 async function runOne(
@@ -98,6 +112,7 @@ async function runOne(
     coalesceMs: number
     stale: boolean
     canUseLease: () => boolean
+    admission: ChatAiReplyAdmissionLimiter
   },
 ): Promise<boolean> {
   const key = state.accountKey + '\u0000' + state.chatUsername
@@ -118,10 +133,15 @@ async function runOne(
   let activeRun = initialRun
   let claimedLease: ChatAiReplyLease | undefined
   let heartbeat: ReturnType<typeof setInterval> | undefined
+  let cancellation: ChatAiReplyCancellation | undefined
+  let admitted = false
 
   // 先登记再启动，避免两个并发 scan 都通过上面的检查。
   const task = Promise.resolve().then(async (): Promise<boolean> => {
     try {
+      // 跨会话并发上限先于租约：拿不到槽位时本拍完全不碰数据库。
+      admitted = await options.admission.acquire(isCancelled)
+      if (!admitted || isCancelled()) return false
       const claimed = claimChatAiReplyRun(
         deps.decryptedDir(),
         state.accountKey,
@@ -150,6 +170,25 @@ async function runOne(
       )
       if (started === null) return false
       activeRun = started
+      // 生成期取消：只把判据汇成信号，不在这里写状态或投递。
+      cancellation = createChatAiReplyCancellation({
+        isCancelled,
+        isLeaseLost: () => activeRun.leaseLost,
+        hasNewerMessage: async () => {
+          let messages: Awaited<ReturnType<ChatAiReplyScanDeps['listMessages']>>
+          try {
+            messages = await deps.listMessages(state.chatUsername, 80)
+          } catch {
+            // 读失败按“没有新消息”处理，避免数据库抖动误杀付费调用。
+            return false
+          }
+          return messages.some((message) =>
+            message.isSender !== 1
+            && isVisibleConversationMessage(message)
+            && messageAfterAnchor(message, activeRun.anchor))
+        },
+      })
+      started.signal = cancellation.signal
       if (options.heartbeatMs > 0) {
         heartbeat = setInterval(() => {
           const lease = activeRun.lease
@@ -223,6 +262,7 @@ async function runOne(
       }
       return await failChatAiReplyRun(deps, state, activeRun, errorText(e))
     } finally {
+      cancellation?.stop()
       if (heartbeat !== undefined) clearInterval(heartbeat)
       const lease = activeRun.lease ?? claimedLease
       if (lease !== undefined) {
@@ -234,6 +274,8 @@ async function runOne(
           lease,
         )
       }
+      // 槽位最后释放：租约已归还，下一会话可以从干净的租约开始。
+      if (admitted) options.admission.release()
     }
   })
   inFlight.set(key, task)
@@ -377,6 +419,12 @@ export function createChatAiReplyRunner(
     : Math.max(0, Math.trunc(runnerOptions.coalesceMs))
   const owner = runnerOptions.owner?.trim()
     || 'chat-ai-reply:' + String(process.pid) + ':' + randomUUID()
+  const admission = createAdmissionLimiter({
+    ...(runnerOptions.maxConcurrentSessions === undefined
+      ? {}
+      : { maxConcurrent: runnerOptions.maxConcurrentSessions }),
+    ...(runnerOptions.maxQueue === undefined ? {} : { maxQueue: runnerOptions.maxQueue }),
+  })
 
   const performScan = async (recoverOnly: boolean): Promise<ChatAiReplyScanResult> => {
     const empty = (): ChatAiReplyScanResult => ({
@@ -445,6 +493,7 @@ export function createChatAiReplyRunner(
             coalesceMs,
             stale: work.stale,
             canUseLease: () => !disposed,
+            admission,
           },
         )
         void running.catch(() => {
@@ -483,6 +532,7 @@ export function createChatAiReplyRunner(
     },
     dispose(): void {
       disposed = true
+      admission.wakeAll(false)
       inFlight.clear()
     },
     pending(): number {

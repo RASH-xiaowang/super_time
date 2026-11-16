@@ -19,6 +19,8 @@ export type ChatAiReplyGenerateFn = (input: {
   images?: ChatAiReplyContextImage[]
   accountKey: string
   chatUsername: string
+  /** 生成期取消信号；沿用 DSH 的 GenerateOptions.signal。 */
+  signal?: AbortSignal
 }) => Promise<ChatAiReplyGenerationResult>
 
 export interface ChatAiReplyGeneratorDeps {
@@ -68,11 +70,20 @@ export function createDefaultChatAiReplyGenerator(
       const options: GenerateOptions = {
         ...optionsBase,
         messages: [user],
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       }
       const assembler = new BlockAssembler()
       try {
         for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
       } catch (e) {
+        if (input.signal?.aborted === true) {
+          // 取消不是失败：把已经流出的部分正文交回运行器写进生成快照，
+          // 绝不走图片降级再付一次费。
+          const partial = normalizeChatAiReplyText(
+            assembler.blocks().map((block) => block.type === 'text' ? block.text : '').join(''),
+          )
+          return { ok: false, text: partial, canceled: true, error: '已取消' }
+        }
         return { ok: false, text: '', error: e instanceof Error ? e.message : String(e) }
       }
       const text = normalizeChatAiReplyText(
@@ -85,6 +96,8 @@ export function createDefaultChatAiReplyGenerator(
 
     const images = input.images ?? []
     const first = await run(input.prompt, images)
+    // 取消优先于图片降级：第二次调用只会继续烧 token。
+    if (first.canceled === true) return first
     if (first.ok || images.length === 0 || !isImageRequestFailure(first.error)) return first
 
     // 纯文本模型/不兼容端点不应让整次回复失败：去掉图片块后按原上下文降级一次。

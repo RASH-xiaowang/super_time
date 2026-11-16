@@ -141,9 +141,9 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
     why: 'Webhook 信息只在 canWrite 为真时读取与展示，手机态不会发起仅桌面的 getMessageListWebhookInfo',
   },
   'use-message-list-delivery-actions.ts': {
-    file: 'message-list-records.tsx',
-    needle: 'onClick={() => { props.onResend(record) }}\n                      {...desktopActionProps()}',
-    why: '单条重发、探测与任务查询三个按钮都在记录表操作列，并逐个带桌面端降级属性',
+    file: 'message-list-row.tsx',
+    needle: 'onClick={() => { props.onResend(record) }}\n            {...desktopActionProps()}',
+    why: '单条重发、探测与任务查询三个按钮都在记录表的行组件操作列，并逐个带桌面端降级属性',
   },
 }
 

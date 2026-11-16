@@ -136,6 +136,8 @@ export interface ChatAiReplyGenerationResult {
     ok: boolean;
     text: string;
     error?: string;
+    /** 生成期被主动取消；`text` 可能只含已流出的部分正文。 */
+    canceled?: boolean;
 }
 /** 本层只关心这些稳定状态，不反向依赖消息列表的顶层展示类型。 */
 export type ChatAiReplyMessageStatus = 'success' | 'failed' | 'pending' | 'dispatching' | 'queued' | 'running' | 'sent_unconfirmed';
@@ -262,6 +264,8 @@ export interface ChatAiReplyScanDeps {
         images?: ChatAiReplyContextImage[];
         accountKey: string;
         chatUsername: string;
+        /** 生成期取消信号；生成器应把它透传给模型传输层。 */
+        signal?: AbortSignal;
     }) => Promise<ChatAiReplyGenerationResult>;
     gate: (feature: string, stats: {
         sessions: number;

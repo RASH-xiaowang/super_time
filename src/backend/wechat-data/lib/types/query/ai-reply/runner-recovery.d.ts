@@ -22,6 +22,9 @@ export declare function parseSourceRef(value: string | undefined): ChatAiReplySo
 export declare function pendingAnchorOf(state: ChatAiReplyState, messages: ChatAiReplyScanMessage[]): ChatAiReplyAnchor | null;
 export declare function anchorOfRecord(state: ChatAiReplyState, record: ChatAiReplyRecordSnapshot, messages: ChatAiReplyScanMessage[]): ChatAiReplyAnchor | null;
 export declare function afterCursor(anchor: ChatAiReplyAnchor, cursor: string): boolean;
+export declare function messageAfterAnchor(message: ChatAiReplyScanMessage, anchor: ChatAiReplyAnchor): boolean;
+/** 自己发出的可读消息表示这一轮已经有人回答，系统事件不算。 */
+export declare function isVisibleConversationMessage(message: ChatAiReplyScanMessage): boolean;
 /** 会话中最后一条可视消息；用于判断当前是否轮到对方、需要自动回复。 */
 export declare function latestVisibleMessage(messages: readonly ChatAiReplyScanMessage[]): ChatAiReplyScanMessage | undefined;
 /** 只选择游标之后最新的一条对方消息，把同一轮连续消息合并成一次回复。 */

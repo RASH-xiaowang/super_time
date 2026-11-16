@@ -44,6 +44,11 @@ export interface ChatAiReplyRunRef {
   resumed: boolean
   /** pending 创建后设置 revision 已被推进；只收口旧预约，不再生成/投递。 */
   revisionChanged: boolean
+  /**
+   * 运行期取消信号；只读传递，不落库。
+   * 生成器在流式调用期间收到 abort 后应尽快停止并交回部分结果。
+   */
+  signal?: AbortSignal
 }
 
 export function readCurrentChatAiReplyState(
@@ -224,13 +229,19 @@ export async function deferChatAiReplyRun(
   return updated === 'updated'
 }
 
-export function waitForChatAiReplyConfig(
+export async function waitForChatAiReplyConfig(
   deps: ChatAiReplyScanDeps,
   state: ChatAiReplyState,
   run: ChatAiReplyRunRef,
   error: string,
   opDetail: string,
 ): Promise<boolean> {
+  // 防御：没有正文的预约不能进入「待配置」——那会被界面说成“正文已保存”，
+  // 恢复路径也会误以为只差一个地址。空白预约按失败收口，交给下一拍重新判断。
+  const record = run.recordId === undefined ? undefined : await inspectReply(deps, run.recordId)
+  if (record?.found === true && (record.text ?? '').trim() === '') {
+    return deferChatAiReplyRun(deps, state, run, error, opDetail)
+  }
   return deferChatAiReplyRun(deps, state, run, error, opDetail, {
     stage: 'waiting_config',
   })

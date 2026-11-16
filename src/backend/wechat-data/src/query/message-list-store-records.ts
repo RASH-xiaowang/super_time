@@ -581,9 +581,12 @@ export function deleteMessageListRecords(
       ensureMessageListSchema(db)
       db.exec('BEGIN IMMEDIATE')
       try {
+        // AI 回复记录不走通用批删：空白预约可能正在生成，有正文的记录是已付费
+        // 模型产出。它们只能通过 AI 专用删除/清理入口处理，避免误删已付费结果。
         const remove = db.prepare(`DELETE FROM message_list_records
-          WHERE id = ? AND status NOT IN ('dispatching', 'queued', 'running')`)
-        const status = db.prepare('SELECT status FROM message_list_records WHERE id = ?')
+          WHERE id = ? AND source <> 'ai_reply'
+            AND status NOT IN ('dispatching', 'queued', 'running')`)
+        const status = db.prepare('SELECT status, source FROM message_list_records WHERE id = ?')
         for (const id of ids) {
           const info = remove.run(id)
           if (Number(info.changes) > 0) {
@@ -591,18 +594,20 @@ export function deleteMessageListRecords(
             result.items.push({ id, status: 'removed' })
             continue
           }
-          const row = status.get(id) as { status?: unknown } | undefined
+          const row = status.get(id) as { status?: unknown; source?: unknown } | undefined
           result.skipped += 1
           result.items.push({
             id,
             status: 'skipped',
             error: row === undefined
               ? '消息记录不存在'
-              : row.status === 'dispatching'
-                ? '记录正在投递，不能删除'
-                : row.status === 'queued' || row.status === 'running'
-                  ? '下游异步任务尚未结束，不能删除'
-                  : '记录状态不允许删除',
+              : row.source === 'ai_reply'
+                ? 'AI 回复记录请使用 AI 专用删除/清理'
+                : row.status === 'dispatching'
+                  ? '记录正在投递，不能删除'
+                  : row.status === 'queued' || row.status === 'running'
+                    ? '下游异步任务尚未结束，不能删除'
+                    : '记录状态不允许删除',
           })
         }
         db.exec('COMMIT')
