@@ -26,6 +26,7 @@ import {
   conversationProgressedAfter,
   cursorOf,
   delay,
+  errorText,
   inspectReply,
   latestInboundAfterCursor,
   latestVisibleMessage,
@@ -33,6 +34,7 @@ import {
 } from './runner-recovery.ts'
 import {
   type ChatAiReplyRunRef,
+  deferChatAiReplyRun,
   failChatAiReplyReservation,
   guardedUpdate,
   notifyChatAiReplyRecordUpdated,
@@ -48,6 +50,13 @@ export const STALE_REPLY_REASON =
   '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题'
 /** 合并等待上限：对方持续刷屏时也不能一直占着会话租约。 */
 const CHAT_AI_REPLY_COALESCE_MAX_MS = 3_500
+/**
+ * 到达总等待上限时，若刚刚（≤ 600ms）还有新消息把锚点往后挪，说明这一轮
+ * 连发仍未结束；允许再延长一次 1500ms，避免在刷屏中途抢先回复旧消息。
+ * 只延长一次，所以持续刷屏的最长等待是 3.5s + 1.5s = 5.0s。
+ */
+export const COALESCE_BURST_WINDOW_MS = 600
+export const COALESCE_GRACE_MS = 1_500
 /** 合并期间的轮询间隔：只读最新一页，代价是几次 SQL。 */
 const CHAT_AI_REPLY_COALESCE_POLL_MS = 200
 /** 允许的时钟偏差：消息时间比本地时间晚超过这个值就不参与合并计时。 */
@@ -132,21 +141,53 @@ export async function coalesceChatAiReplyRun(
   }
   if (!isFresh(run.anchor)) return 'generate'
   // 等待时长按真实时钟计：注入时钟可能被测试冻结，拿它算超时会死循环。
-  const deadline = Date.now() + Math.max(quietMs, CHAT_AI_REPLY_COALESCE_MAX_MS)
+  let deadline = Date.now() + Math.max(quietMs, CHAT_AI_REPLY_COALESCE_MAX_MS)
   let quietUntil = Date.now() + quietMs
-  while (Date.now() < quietUntil && Date.now() < deadline) {
+  let lastReanchorAt = 0
+  let extended = false
+  while (true) {
+    const now = Date.now()
+    if (now >= deadline) {
+      // 连发仍在继续（最近一次重锚不超过 600ms）时只延长一次静默预算。
+      if (!extended && lastReanchorAt > 0 && now - lastReanchorAt <= COALESCE_BURST_WINDOW_MS) {
+        extended = true
+        deadline += COALESCE_GRACE_MS
+        quietUntil = Math.min(now + quietMs, deadline)
+        continue
+      }
+      break
+    }
+    if (now >= quietUntil) break
     if (isCancelled()) return 'handled'
     await delay(Math.max(1, Math.min(
       CHAT_AI_REPLY_COALESCE_POLL_MS,
       Math.min(quietUntil, deadline) - Date.now() + 1,
     )))
     if (isCancelled()) return 'handled'
-    let messages: Awaited<ReturnType<ChatAiReplyScanDeps['listMessages']>>
-    try {
-      messages = await deps.listMessages(state.chatUsername, CHAT_AI_REPLY_COALESCE_WINDOW)
-    } catch {
-      // 读不到新消息时不能假定「没有更新」；发送前的会话推进复核仍会兜底。
-      return 'generate'
+    let messages: Awaited<ReturnType<ChatAiReplyScanDeps['listMessages']>> | undefined
+    let readError: unknown
+    // 原地重试一次：一次数据库抖动不应把整轮合并变成直接生成。
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        messages = await deps.listMessages(state.chatUsername, CHAT_AI_REPLY_COALESCE_WINDOW)
+        readError = undefined
+        break
+      } catch (e) {
+        readError = e
+      }
+    }
+    if (messages === undefined) {
+      // 读不到新消息时不能假定「没有更新」，更不能直接调模型；有租约就暂缓本轮，
+      // 下一拍仍从同一锚点恢复。无租约的调用方保留原降级行为。
+      if (run.lease === undefined || run.revision <= 0) return 'generate'
+      await deferChatAiReplyRun(
+        deps,
+        state,
+        run,
+        '无法确认连发是否结束，本次 AI 回复已暂缓：' + errorText(readError),
+        'coalesce: listMessages failed; retained for retry',
+      )
+      return 'handled'
     }
     const latest = latestVisibleMessage(messages)
     if (latest !== undefined
@@ -162,6 +203,7 @@ export async function coalesceChatAiReplyRun(
     const newestAnchor = newest ?? null
     if (newestAnchor !== null && anchorAfter(run.anchor, newestAnchor)) {
       if (!(await reanchorChatAiReplyRun(deps, state, run, newestAnchor))) return 'handled'
+      lastReanchorAt = Date.now()
       // 又来了新消息：静默期从头计，但总等待时间仍受 deadline 限制。
       quietUntil = Math.min(Date.now() + quietMs, deadline)
       if (!isFresh(run.anchor)) break
@@ -280,7 +322,7 @@ export async function dropOrFailStaleReservation(
     )
     return true
   }
-  await failChatAiReplyReservation(deps, state, run, reason)
+  await failChatAiReplyReservation(deps, state, run, reason, 'superseded')
   for (const segment of pendingSegments) {
     notifyChatAiReplyRecordUpdated(deps, state, segment.id)
   }

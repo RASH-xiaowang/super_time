@@ -133,6 +133,7 @@ async function failSegmentsAfter(
   segments: ChatAiReplySegmentSnapshot[],
   failedIndex: number,
   error: string,
+  failureKind?: string,
 ): Promise<void> {
   const laterPending = segments.filter((segment) =>
     segment.segmentIndex > failedIndex && segment.status === 'pending')
@@ -143,6 +144,7 @@ async function failSegmentsAfter(
       sourceRef: run.sourceRef,
       segmentIndex: failedIndex,
       error: detail,
+      ...(failureKind === undefined ? {} : { failureKind }),
     })
     if (result !== undefined && !result.ok) {
       deps.op('chat_ai_reply', false, result.error ?? '后续分段失败收口未完成')
@@ -274,8 +276,9 @@ async function settleSegmentFailure(
   failedIndex: number,
   error: string,
   opDetail: string,
+  failureKind?: string,
 ): Promise<boolean> {
-  await failSegmentsAfter(deps, state, run, segments, failedIndex, error)
+  await failSegmentsAfter(deps, state, run, segments, failedIndex, error, failureKind)
   run.recordOpen = false
   return settleChatAiReplyRun(deps, state, run, 'failed', error, opDetail)
 }
@@ -382,7 +385,7 @@ export async function cancelSupersededChatAiReplyRun(
   }
   let record = await inspectReply(deps, run.recordId)
   if (record.found && record.status === 'pending') {
-    record = await failChatAiReplyReservation(deps, state, run, reason)
+    record = await failChatAiReplyReservation(deps, state, run, reason, 'config_changed')
   }
   run.recordOpen = false
   if (record.found) {
@@ -443,7 +446,8 @@ export async function reserveChatAiReplyRun(
   if (base === undefined) throw new Error('AI 回复预约记录不存在')
   const problem = segmentProblemOf(segments)
   if (problem !== null) {
-    await failSegmentsAfter(deps, state, run, segments, problem.index, problem.error)
+    const kind = problem.uncertain ? 'unconfirmed' : 'send_failed'
+    await failSegmentsAfter(deps, state, run, segments, problem.index, problem.error, kind)
     run.recordOpen = false
     await settleChatAiReplyRun(
       deps,
@@ -485,7 +489,7 @@ export async function reserveChatAiReplyRun(
     && segment.segmentIndex > 1
     && segment.text.trim() === '')) {
     const reason = 'AI 回复分段正文补全不完整；为避免乱序发送，已停止本组投递'
-    await failSegmentsAfter(deps, state, run, segments, 1, reason)
+    await failSegmentsAfter(deps, state, run, segments, 1, reason, 'generation_failed')
     run.recordOpen = false
     await settleChatAiReplyRun(
       deps,
@@ -510,7 +514,7 @@ export async function reserveChatAiReplyRun(
   if (base.status === 'pending') {
     if (segments.length > 1 && base.text.trim() === '') {
       const reason = 'AI 回复首段正文为空但分组已存在；为避免乱序发送，已停止本组投递'
-      await failSegmentsAfter(deps, state, run, segments, 1, reason)
+      await failSegmentsAfter(deps, state, run, segments, 1, reason, 'generation_failed')
       run.recordOpen = false
       await settleChatAiReplyRun(
         deps,
@@ -551,13 +555,13 @@ export async function reserveChatAiReplyRun(
       }
       if (generation.state === 'intent') {
         const reason = 'AI 回复模型生成已开始但没有可恢复结果；为避免重复生成，已 fail-closed，等待人工重新触发'
-        const failed = await failChatAiReplyReservation(deps, state, run, reason)
+        const failed = await failChatAiReplyReservation(deps, state, run, reason, 'generation_failed')
         deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' interrupted generation; failed closed')
         await settleFromRecord(deps, state, run, failed, reason)
         return 'done'
       }
       const reason = 'AI 回复生成快照不完整；为避免重复生成，已 fail-closed'
-      const failed = await failChatAiReplyReservation(deps, state, run, reason)
+      const failed = await failChatAiReplyReservation(deps, state, run, reason, 'generation_failed')
       deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' invalid generation snapshot; failed closed')
       await settleFromRecord(deps, state, run, failed, reason)
       return 'done'
@@ -567,7 +571,7 @@ export async function reserveChatAiReplyRun(
     // the model was called, fail closed instead of paying for a second call.
     if (reserved.created === false) {
       const reason = 'AI 回复预约缺少生成意图；无法证明模型是否已执行，已 fail-closed'
-      const failed = await failChatAiReplyReservation(deps, state, run, reason)
+      const failed = await failChatAiReplyReservation(deps, state, run, reason, 'generation_failed')
       deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' legacy blank pending; failed closed')
       await settleFromRecord(deps, state, run, failed, reason)
       return 'done'
@@ -725,9 +729,9 @@ export async function dispatchChatAiReply(
       prefix + problem.error,
       'record=' + String(baseRecordId) + ' segment '
         + String(problem.index) + (problem.uncertain ? ' uncertain' : ' failed'),
+      problem.uncertain ? 'unconfirmed' : 'send_failed',
     )
   }
-
   while (true) {
     if (isCancelled()) return false
     const problem = segmentProblemOf(segments)
@@ -783,7 +787,7 @@ export async function dispatchChatAiReply(
     const current = currentResult.state
     if (!current.enabled || current.revision !== run.revision) {
       const reason = 'AI 回复已关闭或设置已变更，本次投递已取消'
-      await failChatAiReplyReservation(deps, state, run, reason)
+      await failChatAiReplyReservation(deps, state, run, reason, 'config_changed')
       return await settleChatAiReplyRun(
         deps,
         state,
@@ -998,6 +1002,7 @@ export async function saveAndDispatchChatAiReply(
       state,
       run,
       'AI 回复已关闭或设置已变更，本次生成已取消',
+      'config_changed',
     )
     run.recordOpen = false
     deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' switch changed; generation cancelled')
@@ -1101,7 +1106,7 @@ export async function saveAndDispatchChatAiReply(
   }
   const beforeDispatch = beforeDispatchResult.state
   if (!beforeDispatch.enabled || beforeDispatch.revision !== run.revision) {
-    await failChatAiReplyReservation(deps, state, run, 'AI 回复设置已变更，已取消投递')
+    await failChatAiReplyReservation(deps, state, run, 'AI 回复设置已变更，已取消投递', 'config_changed')
     deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' switch changed; dispatch skipped')
     return false
   }
@@ -1113,6 +1118,7 @@ export async function failChatAiReplyRun(
   state: ChatAiReplyState,
   run: ChatAiReplyRunRef,
   error: string,
+  failureKind?: string,
 ): Promise<boolean> {
   if (!run.reservationMade || run.recordId === undefined) {
     // 预约本身失败：没有消息列表记录，不能推进水位；保留 pending 锚点供下一拍重试。
@@ -1132,6 +1138,7 @@ export async function failChatAiReplyRun(
         problem.index,
         problem.error,
         'record=' + String(run.recordId) + ' segment recovered failed',
+        problem.uncertain ? 'unconfirmed' : 'send_failed',
       )
     }
     if (loaded.segments.every((segment) => isAcceptedStatus(segment.status))) {
@@ -1157,6 +1164,7 @@ export async function failChatAiReplyRun(
         1,
         reason,
         'record=' + String(run.recordId) + ' incomplete segments; failed closed',
+        'generation_failed',
       )
     }
     if (hasLaterPending
@@ -1212,7 +1220,7 @@ export async function failChatAiReplyRun(
     }
   }
   if (record.found && record.status === 'pending' && run.recordOpen) {
-    record = await failChatAiReplyReservation(deps, state, run, error)
+    record = await failChatAiReplyReservation(deps, state, run, error, failureKind)
   }
   return settleFromRecord(deps, state, run, record, error)
 }

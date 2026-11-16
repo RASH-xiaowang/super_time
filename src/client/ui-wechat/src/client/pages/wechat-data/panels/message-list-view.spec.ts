@@ -365,6 +365,28 @@ describe('AI 回复阶段判定', () => {
     expect(messageListRecordStatusLabel(manualFailed, BASE + 60_000)).toBe('失败')
   })
 
+  it('superseded 阶段优先于生成/发送失败，旧错误前缀仍按已过期兜底', () => {
+    const superseded = aiRecord({
+      status: 'failed',
+      text: '旧问题的回答',
+      error: '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题',
+      failureKind: 'superseded',
+    })
+    expect(aiReplyPhase(superseded, BASE + 60_000)).toBe('superseded')
+    expect(messageListRecordStatusLabel(superseded, BASE + 60_000)).toBe('已过期')
+    expect(messageListRecordStatusHint(superseded, BASE + 60_000))
+      .toBe('会话已有更新消息，这条按设计不发送')
+
+    // 旧行没有 failureKind 时，错误前缀决定它同样是「已过期」而不是发送失败。
+    const legacy = aiRecord({
+      status: 'failed',
+      text: '旧问题的回答',
+      error: '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题',
+    })
+    expect(aiReplyPhase(legacy, BASE + 60_000)).toBe('superseded')
+    expect(messageListRecordStatusLabel(legacy, BASE + 60_000)).toBe('已过期')
+  })
+
   it('AI 回复记录一律不可批量勾选删除', () => {
     for (const status of ['pending', 'failed', 'success'] as const) {
       const aiRow = aiRecord({ status, text: '正文' })
@@ -431,6 +453,40 @@ describe('失败文案分层', () => {
       title: '操作失败',
       detail: '下游返回 500',
     })
+  })
+
+  it('failureKind 优先映射稳定分类，六种原因各有独立文案', () => {
+    const cases: Array<[string, string]> = [
+      ['superseded', '这条回复已过期'],
+      ['no_webhook', '还没有发送地址'],
+      ['generation_failed', '没有生成正文'],
+      ['send_failed', '发送失败'],
+      ['unconfirmed', '发送结果未确认'],
+      ['config_changed', '设置已变更'],
+    ]
+    for (const [failureKind, title] of cases) {
+      const item = failedRecord({
+        status: 'failed',
+        text: '正文',
+        error: '原始错误：' + failureKind,
+        failureKind,
+      })
+      expect(messageListFailureCopy(item).title).toBe(title)
+    }
+    // kind 优先于错误字符串：即便文本像「未匹配到 Webhook」，仍按 send_failed。
+    const preferred = failedRecord({
+      status: 'failed',
+      text: '正文',
+      error: '未匹配到 Webhook',
+      failureKind: 'send_failed',
+    })
+    expect(messageListFailureCopy(preferred)).toMatchObject({
+      title: '发送失败',
+      detail: '未匹配到 Webhook',
+    })
+    // 无 kind 的旧行继续保留字符串兜底。
+    const legacy = failedRecord({ text: '', error: '模型调用失败' })
+    expect(messageListFailureCopy(legacy).title).toBe('没有生成正文')
   })
 })
 

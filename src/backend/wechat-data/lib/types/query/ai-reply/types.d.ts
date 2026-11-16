@@ -250,6 +250,11 @@ export interface ChatAiReplyScanDeps {
      * 按当前会话最近上下文检索知识库片段；生产网关注入真实混合检索，测试可省略。
      * 只返回带文件名的纯文本片段；检索失败应抛错，由运行器记录并降级为无知识库回复。
      */
+    /**
+     * 顺带收口上一进程遗留的 dispatching 记录（返回本次收口条数）。
+     * 生产网关注入；测试可省略。扫描器会做 30 秒节流，避免每拍都写库。
+     */
+    closeInterruptedDispatches?: () => number;
     collectKbSnippets?: (input: {
         kbId: number;
         lines: readonly string[];
@@ -306,6 +311,8 @@ export interface ChatAiReplyScanDeps {
         sourceRef: string;
         segmentIndex: number;
         error: string;
+        /** 稳定失败分类：send_failed / unconfirmed / generation_failed 等。 */
+        failureKind?: string;
     }) => Promise<{
         ok: boolean;
         error?: string;
@@ -314,6 +321,8 @@ export interface ChatAiReplyScanDeps {
     failReply: (input: {
         id: number;
         error: string;
+        /** 稳定失败分类；缺省表示未分类（旧调用方）。 */
+        failureKind?: string;
     }) => Promise<ChatAiReplyRecordResult>;
     /**
      * 删除一组**从未发送**的 AI 预约（整组必须都还是 pending）。

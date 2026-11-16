@@ -68,6 +68,11 @@ jobs:
       - name: 接口参考与源码一致
         run: npm run docs:api:check
 
+      # ── Feather 文档事实一致性：§5 的常量与「sourceRef → 预约 → 模型生成 →
+      #    分段 → 认领/投递」顺序由源码推导，文档漂移或顺序写反时直接失败。
+      - name: Feather 文档事实一致
+        run: npm run docs:feather:check
+
       # 前端 WechatRemote 镜像与后端 @Remote 参数/返回类型逐方法比对（不只比方法名）。
       # tools/audit-remote-types.mjs 动态扫 gateway*.ts，不存在空转窗口。
       - name: Remote 类型镜像比对

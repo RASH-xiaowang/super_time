@@ -29,6 +29,7 @@ import {
   USERNAME_MAX,
   ensureParentDir,
   errorText,
+  failureKindOf,
   generateReplyId,
   numOf,
   positiveId,
@@ -508,17 +509,20 @@ export function failAiReplyMessageListSegmentsAfter(
   sourceRef: string,
   afterSegmentIndex: number,
   error: string,
+  failureKind?: string,
 ): { ok: boolean; error?: string } {
   const parsed = parseChatAiReplySourceRef(sourceRef)
   const index = Math.max(1, numOf(afterSegmentIndex))
   if (parsed === null) return { ok: false, error: 'AI 回复 sourceRef 无效' }
   if (!storeExists(decryptedDir)) return { ok: false, error: 'AI 回复分段记录不存在' }
   const detail = textOf(error, ERROR_MAX) || '前序分段投递失败，本段未发送'
+  const kind = failureKindOf(failureKind)
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       ensureMessageListSchema(db)
       const info = db.prepare(`UPDATE message_list_records SET
-        status = 'failed', error = ?, note = 'AI 回复 · 分段未发送', updated_at = ?
+        status = 'failed', error = ?, note = 'AI 回复 · 分段未发送',
+        failure_kind = ?, updated_at = ?
         WHERE source = 'ai_reply' AND status = 'pending'
           AND (segment_group_ref = ? OR source_ref LIKE ?)
           AND (
@@ -526,6 +530,7 @@ export function failAiReplyMessageListSegmentsAfter(
             OR (segment_index = 0 AND source_ref LIKE ?)
           )`).run(
         detail,
+        kind,
         Date.now(),
         parsed.baseSourceRef,
         parsed.baseSourceRef + ':segment:%',
@@ -547,9 +552,11 @@ export function failAiReplyMessageListRecord(
   decryptedDir: string,
   id: number,
   error: string,
+  failureKind?: string,
 ): MessageListRecordResult {
   const recordId = positiveId(id)
   const detail = textOf(error, ERROR_MAX) || 'AI 回复生成失败'
+  const kind = failureKindOf(failureKind)
   if (recordId <= 0) return { ok: false, error: 'AI 回复记录 id 无效' }
   if (!storeExists(decryptedDir)) return { ok: false, error: 'AI 回复预约记录不存在' }
   try {
@@ -562,14 +569,17 @@ export function failAiReplyMessageListRecord(
       const target = rowToMessageListRecord(targetRow)
       const parsed = parseChatAiReplySourceRef(target.sourceRef)
       const baseSourceRef = parsed?.baseSourceRef ?? ''
+      // 同一分组里所有仍为 pending 的段按调用方给的分类一起收口。
       const info = db.prepare(`UPDATE message_list_records SET
-        status = 'failed', error = ?, note = 'AI 回复 · 生成失败', updated_at = ?
+        status = 'failed', error = ?, note = 'AI 回复 · 生成失败',
+        failure_kind = ?, updated_at = ?
         WHERE source = 'ai_reply' AND status = 'pending'
           AND (
             id = ?
             OR (? <> '' AND (source_ref = ? OR source_ref LIKE ?))
           )`).run(
         detail,
+        kind,
         now,
         recordId,
         baseSourceRef,

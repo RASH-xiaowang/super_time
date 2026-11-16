@@ -34,7 +34,7 @@ export declare function listAiReplyMessageListSegments(decryptedDir: string, sou
  * 某段投递失败后，把后续尚未发送的 pending 段标成失败。
  * 已成功/已受理的段保持不变，后续不会因为前序失败而乱序补发。
  */
-export declare function failAiReplyMessageListSegmentsAfter(decryptedDir: string, sourceRef: string, afterSegmentIndex: number, error: string): {
+export declare function failAiReplyMessageListSegmentsAfter(decryptedDir: string, sourceRef: string, afterSegmentIndex: number, error: string, failureKind?: string): {
     ok: boolean;
     error?: string;
 };
@@ -42,7 +42,7 @@ export declare function failAiReplyMessageListSegmentsAfter(decryptedDir: string
  * 将尚未完成的 AI 预约标记为失败，保留在消息列表里供用户排查。
  * 已完成或已进入投递态的记录不会被失败回写覆盖。
  */
-export declare function failAiReplyMessageListRecord(decryptedDir: string, id: number, error: string): MessageListRecordResult;
+export declare function failAiReplyMessageListRecord(decryptedDir: string, id: number, error: string, failureKind?: string): MessageListRecordResult;
 /**
  * 删除一组**从未发送**的 AI 回复预约。
  *

@@ -121,6 +121,22 @@ export function statusOf(value: unknown): MessageListStatus {
     : 'pending'
 }
 
+/** 失败原因分类的稳定枚举；空串表示未分类（旧行）。 */
+const MESSAGE_LIST_FAILURE_KINDS: ReadonlySet<string> = new Set([
+  'superseded',
+  'no_webhook',
+  'generation_failed',
+  'send_failed',
+  'unconfirmed',
+  'config_changed',
+])
+
+/** 只接受稳定枚举里的失败分类，拒绝调用方写入自由文本。 */
+export function failureKindOf(value: unknown): string {
+  const kind = textOf(value, 40)
+  return MESSAGE_LIST_FAILURE_KINDS.has(kind) ? kind : ''
+}
+
 /** 下游任务状态是外部协议值，只在明确可证明时映射到本地投递状态。 */
 export type MessageListJobPhase = 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown'
 

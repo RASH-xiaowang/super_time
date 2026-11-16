@@ -237,9 +237,17 @@ export async function waitForChatAiReplyConfig(
   opDetail: string,
 ): Promise<boolean> {
   // 防御：没有正文的预约不能进入「待配置」——那会被界面说成“正文已保存”，
-  // 恢复路径也会误以为只差一个地址。空白预约按失败收口，交给下一拍重新判断。
+  // 恢复路径也会误以为只差一个地址。空白预约按 no_webhook 收口后仍保留
+  // pending 锚点，交给下一拍重新判断。
   const record = run.recordId === undefined ? undefined : await inspectReply(deps, run.recordId)
   if (record?.found === true && (record.text ?? '').trim() === '') {
+    await failChatAiReplyReservation(
+      deps,
+      state,
+      run,
+      '未匹配到 Webhook，且预约正文为空；已停止本轮等待配置',
+      'no_webhook',
+    )
     return deferChatAiReplyRun(deps, state, run, error, opDetail)
   }
   return deferChatAiReplyRun(deps, state, run, error, opDetail, {
@@ -252,12 +260,13 @@ export async function failChatAiReplyReservation(
   state: ChatAiReplyState,
   run: ChatAiReplyRunRef,
   error: string,
+  failureKind?: string,
 ): Promise<ChatAiReplyRecordSnapshot> {
   await requireLiveLease(deps, state, run)
   if (run.recordId === undefined) throw new Error('AI 回复预约记录不存在')
   const recordId = run.recordId
   try {
-    await deps.failReply({ id: recordId, error })
+    await deps.failReply({ id: recordId, error, ...(failureKind === undefined ? {} : { failureKind }) })
   } catch {
     // The runner still reports the original failure in state and operation logs.
   }

@@ -314,6 +314,7 @@ function saveDispatchResponse(
         jobId,
         jobState: 'submitted',
         webhookUrl,
+        failureKind: 'send_failed',
         countAttempt: true,
       })
       return { ok: false, error, record: latest ?? record }
@@ -334,6 +335,8 @@ function saveDispatchResponse(
         jobId,
         jobState: jobState || 'queued',
         webhookUrl,
+        // 异步任务明确失败按发送失败归类；已受理/成功则清掉旧分类。
+        failureKind: asyncStatus === 'failed' ? 'send_failed' : '',
         countAttempt: true,
       })
       if (latest === undefined) {
@@ -345,6 +348,7 @@ function saveDispatchResponse(
           jobId,
           jobState: jobState || 'queued',
           webhookUrl,
+          failureKind: 'unconfirmed',
           countAttempt: true,
         })
         return {
@@ -365,6 +369,7 @@ function saveDispatchResponse(
       jobId,
       jobState: 'submitted',
       webhookUrl,
+      failureKind: '',
       countAttempt: true,
     })
     if (latest === undefined) {
@@ -377,6 +382,7 @@ function saveDispatchResponse(
         jobId,
         jobState: 'submitted',
         webhookUrl,
+        failureKind: 'unconfirmed',
         countAttempt: true,
       })
       return {
@@ -398,6 +404,7 @@ function saveDispatchResponse(
     replyId,
     jobId,
     webhookUrl,
+    failureKind: 'send_failed',
     countAttempt: true,
   })
   return { ok: false, error, record: latest ?? record }
@@ -506,6 +513,7 @@ async function dispatchMessageListRecordUnlocked(
       error,
       responseSummary: '',
       webhookUrl,
+      failureKind: 'send_failed',
       countAttempt: false,
     })
     return { ok: false, error, record: latest ?? existing }
@@ -601,6 +609,7 @@ async function dispatchMessageListRecordUnlocked(
       error: persistedError,
       responseSummary: '',
       webhookUrl,
+      failureKind: uncertain ? 'unconfirmed' : 'send_failed',
       countAttempt: requestStarted,
     })
     return { ok: false, error: persistedError, record: latest ?? record }

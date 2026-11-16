@@ -2,6 +2,7 @@
  * 消息投递结果回写、原子认领、崩溃恢复与下游任务状态。
  */
 import { withWritableDb } from './db-open.ts'
+import { processIsAlive as isProcessAlive } from './process-liveness.ts'
 import { storeExists, taskDbPath } from './task-db.ts'
 import type { MessageListRecord, MessageListStatus } from '../types.ts'
 import {
@@ -11,6 +12,7 @@ import {
   JOB_STATE_MAX,
   RESPONSE_MAX,
   httpUrl,
+  failureKindOf,
   messageListJobPhase,
   messageListStatusForJobPhase,
   numOf,
@@ -37,6 +39,8 @@ export function saveMessageListDispatchResult(
     jobId?: string
     jobState?: string
     webhookUrl?: string
+    /** 失败原因分类；成功/待执行回写传空串以清掉旧分类。 */
+    failureKind?: string
     /** 只有真正发出 HTTP 请求时才累加尝试次数。 */
     countAttempt?: boolean
   },
@@ -44,6 +48,7 @@ export function saveMessageListDispatchResult(
   const recordId = positiveId(id)
   if (recordId <= 0 || !storeExists(decryptedDir)) return undefined
   const now = Date.now()
+  const failureKind = failureKindOf(outcome.failureKind)
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       ensureMessageListSchema(db)
@@ -68,7 +73,7 @@ export function saveMessageListDispatchResult(
       }
       db.prepare(`UPDATE message_list_records SET
         status = ?, error = ?, attempts = ?, last_attempt_at = ?,
-        response_summary = ?, updated_at = ? WHERE id = ?`).run(
+        response_summary = ?, failure_kind = ?, updated_at = ? WHERE id = ?`).run(
         statusOf(outcome.status),
         textOf(outcome.error, ERROR_MAX),
         Math.max(0, numOf(current.attempts)) + (outcome.countAttempt === false ? 0 : 1),
@@ -78,6 +83,7 @@ export function saveMessageListDispatchResult(
               : numOf(current.last_attempt_at))
           : now,
         textOf(outcome.responseSummary, RESPONSE_MAX),
+        failureKind,
         now,
         recordId,
       )
@@ -149,10 +155,11 @@ export function claimMessageListRecordForDispatch(
       const now = Date.now()
       const info = db.prepare(`UPDATE message_list_records SET
         status = 'dispatching',
+        dispatch_owner = ?,
         webhook_url = CASE WHEN ? = '' THEN webhook_url ELSE ? END,
         updated_at = ?
         WHERE id = ? AND status IN (${statusPlaceholders})`)
-        .run(claimedWebhook, claimedWebhook, now, recordId, ...claimableStatuses)
+        .run(String(process.pid), claimedWebhook, claimedWebhook, now, recordId, ...claimableStatuses)
       if (Number(info.changes) <= 0) return undefined
       const row = db.prepare('SELECT * FROM message_list_records WHERE id = ?')
         .get(recordId) as Record<string, unknown> | undefined
@@ -171,8 +178,8 @@ export function claimMessageListRecordForDispatch(
  *
  * 认领发生在 HTTP 请求之前，因此无法从库中判断请求是否真正发出。依据“宁可不自动
  * 重发，也不重复发微信”的边界，这里只允许人工核对后单条重发或删除，绝不放回 pending。
- * 新进程启动不代表旧进程已经死亡：只回收超过投递超时窗口的认领，避免把其他进程
- * 正在进行的 HTTP 请求误判为崩溃。
+ * 收口条件有两条：认领进程已经不存在，或认领已超过投递超时窗口。存活进程在窗口内
+ * 继续等待（大附件上传可能接近 5 分钟），超窗仍按中断收口，避免永久卡住。
  */
 export function recoverInterruptedMessageListDispatches(
   decryptedDir: string,
@@ -187,14 +194,30 @@ export function recoverInterruptedMessageListDispatches(
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       ensureMessageListSchema(db)
+      // 两条收口依据：超过投递超时窗口，或认领进程已经不存在（不可能还在发
+      // 请求）。后者让快速重启后的记录不必在「投递中」白等 5 分钟；进程仍
+      // 存活时即使超过窗口也继续等待，避免误伤正在上传附件的老进程。
+      const rows = db.prepare(`SELECT id, dispatch_owner, updated_at
+        FROM message_list_records WHERE status = 'dispatching'`).all() as Array<Record<string, unknown>>
+      const targets: number[] = []
+      for (const row of rows) {
+        const id = numOf(row['id'])
+        if (id <= 0) continue
+        const ownerPid = Number(textOf(row['dispatch_owner'], 40))
+        const ownerDead = Number.isSafeInteger(ownerPid) && ownerPid > 0 && !isProcessAlive(ownerPid)
+        if (ownerDead || numOf(row['updated_at']) <= cutoff) targets.push(id)
+      }
+      if (targets.length === 0) return 0
+      const placeholders = targets.map(() => '?').join(', ')
       const info = db.prepare(`UPDATE message_list_records SET
         status = 'sent_unconfirmed',
+        failure_kind = 'unconfirmed',
         error = CASE
           WHEN error = '' THEN '进程在投递期间中断，无法确认是否已发出；请核对后单条重发或删除'
           ELSE error || '；进程在投递期间中断，请核对后再处理'
         END,
         updated_at = ?
-        WHERE status = 'dispatching' AND updated_at <= ?`).run(now, cutoff)
+        WHERE status = 'dispatching' AND id IN (${placeholders})`).run(now, ...targets)
       return Math.max(0, Number(info.changes))
     })
   } catch {
@@ -247,7 +270,8 @@ export function saveMessageListJobResult(
       const info = db.prepare(`UPDATE message_list_records SET
         job_id = ?, job_state = ?, job_checked_at = ?, updated_at = ?,
         status = COALESCE(?, status),
-        error = CASE WHEN ? = 'failed' THEN ? ELSE error END
+        error = CASE WHEN ? = 'failed' THEN ? ELSE error END,
+        failure_kind = CASE WHEN ? = 'failed' THEN 'send_failed' ELSE failure_kind END
         WHERE id = ?`).run(
         jobId,
         textOf(input.jobState, JOB_STATE_MAX),
@@ -256,6 +280,7 @@ export function saveMessageListJobResult(
         nextStatus ?? null,
         nextStatus ?? '',
         jobError,
+        nextStatus ?? '',
         recordId,
       )
       if (Number(info.changes) <= 0) return undefined

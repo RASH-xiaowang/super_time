@@ -195,12 +195,17 @@ describe('AI 回复待配置状态', () => {
   it('连续扫描同一待配置原因不重复记录失败日志', async () => {
     const op = vi.fn<ChatAiReplyScanDeps['op']>()
     const runner = await enterWaitingConfig(op)
-    const afterFirst = op.mock.calls.length
+    // 扫描摘要走独立的 chat_ai_reply_scan 分类；这里只盯运行器自己的
+    // chat_ai_reply 日志，避免把每拍都有的摘要误判成重复失败。
+    const runnerOps = (): typeof op.mock.calls => op.mock.calls.filter(
+      (call) => call[0] === 'chat_ai_reply',
+    )
+    const afterFirst = runnerOps().length
 
     expect(op.mock.calls.some((call) => call[1] === false)).toBe(false)
     await runner.scan()
     await vi.waitFor(() => expect(runner.pending()).toBe(0))
-    expect(op).toHaveBeenCalledTimes(afterFirst)
+    expect(runnerOps()).toHaveLength(afterFirst)
     expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').stage)
       .toBe('waiting_config')
     runner.dispose()

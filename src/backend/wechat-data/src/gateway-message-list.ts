@@ -31,6 +31,7 @@ import { rawWechatBase } from './gateway-support.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
 import { getConfig } from './config/wechat-config.ts'
 import { pickLanIPv4 } from './net/lan-ipv4.ts'
+import { processIsAlive as isProcessAlive } from './query/process-liveness.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
@@ -51,12 +52,7 @@ interface HttpRuntimeSnapshot {
 }
 
 function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
-  }
+  return isProcessAlive(pid)
 }
 
 /** 只接受当前宿主写入、仍存活且适合局域网访问的实际监听地址。 */

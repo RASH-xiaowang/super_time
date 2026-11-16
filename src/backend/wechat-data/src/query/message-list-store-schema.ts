@@ -59,6 +59,8 @@ export function ensureMessageListSchema(db: DatabaseSync): void {
     segment_group_ref TEXT NOT NULL DEFAULT '',
     segment_index INTEGER NOT NULL DEFAULT 0,
     segment_count INTEGER NOT NULL DEFAULT 0,
+    failure_kind TEXT NOT NULL DEFAULT '',
+    dispatch_owner TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`)
@@ -107,9 +109,24 @@ export function ensureMessageListSchema(db: DatabaseSync): void {
   if (!columns.has('segment_count')) {
     db.exec('ALTER TABLE message_list_records ADD COLUMN segment_count INTEGER NOT NULL DEFAULT 0')
   }
+  // 失败原因分类：让界面能区分「按设计过期」「没生成正文」「发送失败」，
+  // 而不是把所有失败都压成一条机器长句；空串表示未分类（旧行）。
+  if (!columns.has('failure_kind')) {
+    db.exec("ALTER TABLE message_list_records ADD COLUMN failure_kind TEXT NOT NULL DEFAULT ''")
+  }
+  // 投递认领进程：进程已死的 dispatching 可立即收口为「已发送·未确认」，
+  // 不必等满 5 分钟；空串表示旧行，仍走原超时路径。
+  if (!columns.has('dispatch_owner')) {
+    db.exec("ALTER TABLE message_list_records ADD COLUMN dispatch_owner TEXT NOT NULL DEFAULT ''")
+  }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_message_list_segment_group
     ON message_list_records(segment_group_ref, segment_index)
     WHERE segment_group_ref <> ''`)
+  // 旧版把「会话已有更新的消息」写成普通 failed 行；一次性归入按设计过期，
+  // 避免界面把它计入真正的发送/生成失败。条件只命中未分类行，可重复执行。
+  db.exec(`UPDATE message_list_records SET failure_kind = 'superseded'
+    WHERE failure_kind = '' AND source = 'ai_reply' AND status = 'failed'
+      AND error LIKE '%会话已有更新的消息%'`)
   // 旧版 AI 预约沿用了原消息时间，可能在按触发时间倒序的首屏 200 条之外。
   // 只迁移仍为空正文的 pending 预约，避免污染已完成记录或重复改变展示顺序。
   db.exec(`UPDATE message_list_records
@@ -225,6 +242,8 @@ export function rowToMessageListRecord(row: Record<string, unknown>): MessageLis
   if (segmentIndex > 0) record.segmentIndex = segmentIndex
   const segmentCount = positiveId(row['segment_count'])
   if (segmentCount > 0) record.segmentCount = segmentCount
+  const failureKind = textOf(row['failure_kind'], 40)
+  if (failureKind !== '') record.failureKind = failureKind
   if (images.error !== undefined) imageParseErrors.set(record, images.error)
   return record
 }

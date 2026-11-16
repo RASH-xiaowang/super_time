@@ -18,6 +18,7 @@ import {
   SOURCE_FILTERS,
   STATUS_FILTERS,
   aiReplyPhase,
+  isSupersededAiReply,
 } from './message-list-view.ts'
 import { useMessageListBatch } from './use-message-list-batch.ts'
 import { MessageListRow } from './message-list-row.tsx'
@@ -77,6 +78,9 @@ function MessageListRecordsHeader(
   const aiGenerating = phases.filter((phase) => (
     phase === 'generating' || phase === 'stalled'
   )).length
+  // 已过期是「按设计不发送」，不能混进真正的失败数；只调整当前窗口口径。
+  const supersededInWindow = props.records.filter(isSupersededAiReply).length
+  const failedInWindow = Math.max(0, props.stats.failed - supersededInWindow)
   return (
     <>
       <div className={css.statStrip}>
@@ -94,7 +98,12 @@ function MessageListRecordsHeader(
           <b>{props.stats.queued + props.stats.running}</b> 下游处理中 · 当前窗口
         </span>
         <span className={css.statSuccess}><b>{props.stats.success}</b> 成功 · 当前窗口</span>
-        <span className={css.statFailed}><b>{props.stats.failed}</b> 失败 · 当前窗口</span>
+        <span className={css.statFailed}>
+          <b>{failedInWindow}</b> 失败 · 当前窗口
+          {supersededInWindow > 0
+            ? `（已排除 ${String(supersededInWindow)} 条已过期）`
+            : ''}
+        </span>
       </div>
       <div className={css.filters}>
         <SearchInput

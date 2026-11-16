@@ -119,10 +119,25 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
       webhookUrl: 'http://192.0.2.10:17890/webhook/***',
     })], { failed: 1 })
 
-    expect(html).toContain('发送失败')
+    expect(html).toContain('已过期')
     expect(html).toContain('>这条回复已过期</span>')
     expect(html).toContain('对方传来更新的消息')
     expect(html).not.toContain('>' + error + '<')
+  })
+
+  it('已过期行不再计入失败数，并标注窗口内排除的条数', () => {
+    const html = renderRecords([aiRecord({
+      status: 'failed',
+      text: '旧问题的回答',
+      error: '会话已有更新的消息，本次 AI 回复已过期取消；不会自动补发旧问题',
+      failureKind: 'superseded',
+      webhookUrl: 'http://192.0.2.10:17890/webhook/***',
+    })], { failed: 1, pending: 0 })
+
+    expect(html).toContain('<b>0</b> 失败 · 当前窗口')
+    expect(html).toContain('已排除 1 条已过期')
+    expect(html).toContain('已过期')
+    expect(html).toContain('>这条回复已过期</span>')
   })
 
   it('待配置计数只统计已有正文的记录，空白预约单独计入生成中', () => {

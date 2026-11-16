@@ -44,5 +44,5 @@ export declare function deferChatAiReplyRun(deps: ChatAiReplyScanDeps, state: Ch
     stage?: Extract<ChatAiReplyStage, 'failed' | 'waiting_config' | 'dispatching'>;
 }): Promise<boolean>;
 export declare function waitForChatAiReplyConfig(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, error: string, opDetail: string): Promise<boolean>;
-export declare function failChatAiReplyReservation(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, error: string): Promise<ChatAiReplyRecordSnapshot>;
+export declare function failChatAiReplyReservation(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, error: string, failureKind?: string): Promise<ChatAiReplyRecordSnapshot>;
 export declare function settleFromRecord(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, record: ChatAiReplyRecordSnapshot, fallbackError: string): Promise<boolean>;

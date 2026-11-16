@@ -51,6 +51,10 @@ import type { ChatAiReplyCancellation } from './runner-cancel.ts'
 import {
   createAdmissionLimiter,
 } from './runner-admission.ts'
+import {
+  formatChatAiReplyScanDetail,
+  shouldWriteChatAiReplyScanReport,
+} from './scan-report.ts'
 import type { ChatAiReplyAdmissionLimiter } from './runner-admission.ts'
 import {
   type ChatAiReplyRunRef,
@@ -113,6 +117,8 @@ async function runOne(
     stale: boolean
     canUseLease: () => boolean
     admission: ChatAiReplyAdmissionLimiter
+    /** 只上报原因码（计数用），不携带任何聊天内容。 */
+    onEvent?: (event: string) => void
   },
 ): Promise<boolean> {
   const key = state.accountKey + '\u0000' + state.chatUsername
@@ -153,7 +159,10 @@ async function runOne(
           leaseMs: options.leaseMs,
         },
       )
-      if (claimed === null) return false
+      if (claimed === null) {
+        options.onEvent?.('lease_miss')
+        return false
+      }
       claimedLease = claimed
       const started = await beginChatAiReplyRun(
         deps,
@@ -168,7 +177,10 @@ async function runOne(
           stale: options.stale,
         },
       )
-      if (started === null) return false
+      if (started === null) {
+        options.onEvent?.('control_changed')
+        return false
+      }
       activeRun = started
       // 生成期取消：只把判据汇成信号，不在这里写状态或投递。
       cancellation = createChatAiReplyCancellation({
@@ -216,10 +228,12 @@ async function runOne(
         heartbeat.unref?.()
       }
       if (started.revisionChanged) {
+        options.onEvent?.('skipped')
         return await cancelSupersededChatAiReplyRun(deps, state, started)
       }
       if (isCancelled()) return false
       if (options.stale) {
+        options.onEvent?.('stale_closed')
         return await cancelStaleChatAiReplyRun(deps, state, started)
       }
       // 同一轮连发先合并：等对方说完了再生成，一条消息一次模型调用。
@@ -230,17 +244,23 @@ async function runOne(
         isCancelled,
         options.coalesceMs,
       ) === 'handled') {
+        options.onEvent?.('coalesced')
         return false
       }
       if (isCancelled()) return false
       // 预约之前复核：已经被更新消息越过时，不建预约、不留失败记录。
       if (await cancelSupersededBeforeReservation(deps, state, started)) return false
       const reserved = await reserveChatAiReplyRun(deps, state, started)
-      if (reserved === 'done') return false
+      if (reserved === 'done') {
+        options.onEvent?.('skipped')
+        return false
+      }
       if (isCancelled()) return false
       if (reserved === 'dispatch') {
+        options.onEvent?.('replied')
         return await dispatchChatAiReply(deps, state, started, isCancelled)
       }
+      options.onEvent?.('replied')
       return await saveAndDispatchChatAiReply(deps, state, started, isCancelled)
     } catch (e) {
       if (isCancelled()) return false
@@ -260,7 +280,7 @@ async function runOne(
         }
         return false
       }
-      return await failChatAiReplyRun(deps, state, activeRun, errorText(e))
+      return await failChatAiReplyRun(deps, state, activeRun, errorText(e), 'generation_failed')
     } finally {
       cancellation?.stop()
       if (heartbeat !== undefined) clearInterval(heartbeat)
@@ -426,6 +446,7 @@ export function createChatAiReplyRunner(
     ...(runnerOptions.maxQueue === undefined ? {} : { maxQueue: runnerOptions.maxQueue }),
   })
 
+  let lastDispatchClosureAt = 0
   const performScan = async (recoverOnly: boolean): Promise<ChatAiReplyScanResult> => {
     const empty = (): ChatAiReplyScanResult => ({
       scanned: 0,
@@ -435,6 +456,20 @@ export function createChatAiReplyRunner(
       recovered: 0,
     })
     if (disposed) return empty()
+    // 顺带收口上一进程遗留的 dispatching：30 秒节流，避免每拍都写库；
+    // 认领进程已死的记录可立即转「已发送·未确认」，不必空等 5 分钟。
+    const closureAt = Date.now()
+    if (deps.closeInterruptedDispatches !== undefined && closureAt - lastDispatchClosureAt >= 30_000) {
+      lastDispatchClosureAt = closureAt
+      try {
+        const closed = deps.closeInterruptedDispatches()
+        if (closed > 0) {
+          deps.op('chat_ai_reply_scan', true, 'recovered_dispatches=' + String(closed))
+        }
+      } catch {
+        // 收口失败不能阻断本轮扫描；下一拍再试。
+      }
+    }
     const dir = deps.decryptedDir()
     const self = deps.selfUsername()
     if (self === '') {
@@ -451,6 +486,8 @@ export function createChatAiReplyRunner(
     let queued = 0
     let recovered = 0
     let settingsReadFailed = false
+    // 只统计原因码，扫描结束后最多写一条操作日志（有事实才写、10 分钟去重）。
+    const events: Record<string, number> = {}
     for (const listed of listedResult.states) {
       if (listed.accountKey !== self || listed.chatUsername.endsWith('@chatroom')) continue
       try {
@@ -494,6 +531,9 @@ export function createChatAiReplyRunner(
             stale: work.stale,
             canUseLease: () => !disposed,
             admission,
+            onEvent: (event) => {
+              events[event] = (events[event] ?? 0) + 1
+            },
           },
         )
         void running.catch(() => {
@@ -505,6 +545,10 @@ export function createChatAiReplyRunner(
     }
     if (!disposed && !settingsReadFailed) {
       await closeOrphanAiReplyPending(deps, dir, states, errors)
+    }
+    const detail = formatChatAiReplyScanDetail({ ...events, queued, resumed: recovered })
+    if (detail !== '' && shouldWriteChatAiReplyScanReport(detail)) {
+      deps.op('chat_ai_reply_scan', true, detail)
     }
     return {
       scanned,

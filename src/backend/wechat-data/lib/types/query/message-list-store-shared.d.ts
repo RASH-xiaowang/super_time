@@ -39,6 +39,8 @@ export declare function ensureParentDir(decryptedDir: string): void;
 export declare function httpUrl(value: unknown, max?: number): string;
 export declare function sourceOf(value: unknown): MessageListSource;
 export declare function statusOf(value: unknown): MessageListStatus;
+/** 只接受稳定枚举里的失败分类，拒绝调用方写入自由文本。 */
+export declare function failureKindOf(value: unknown): string;
 /** 下游任务状态是外部协议值，只在明确可证明时映射到本地投递状态。 */
 export type MessageListJobPhase = 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown';
 export declare function messageListJobPhase(value: unknown): MessageListJobPhase;

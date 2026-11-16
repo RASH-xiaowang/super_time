@@ -80,10 +80,11 @@ function createChatAiReplyScanDeps(
       status: 'sent_unconfirmed',
       error,
       responseSummary: '',
+      failureKind: 'unconfirmed',
       countAttempt: false,
     })
     if (marked?.status !== 'sent_unconfirmed') {
-      failAiReplyMessageListRecord(dir(), recordId, error)
+      failAiReplyMessageListRecord(dir(), recordId, error, 'unconfirmed')
     }
   }
   return {
@@ -174,10 +175,16 @@ function createChatAiReplyScanDeps(
         input.sourceRef,
         input.segmentIndex,
         input.error,
+        input.failureKind,
       )
     },
     failReply: async (input) => {
-      const failed = failAiReplyMessageListRecord(dir(), input.id, input.error)
+      const failed = failAiReplyMessageListRecord(
+        dir(),
+        input.id,
+        input.error,
+        input.failureKind,
+      )
       return failed.ok
         ? {
             ok: true,
@@ -231,6 +238,7 @@ function createChatAiReplyScanDeps(
     ...(rc.onRecordSaved === undefined ? {} : { onRecordSaved: rc.onRecordSaved }),
     ...(rc.onRecordUpdated === undefined ? {} : { onRecordUpdated: rc.onRecordUpdated }),
     ...(rc.onDispatchFinished === undefined ? {} : { onDispatchFinished: rc.onDispatchFinished }),
+    closeInterruptedDispatches: () => recoverInterruptedMessageListDispatches(dir()),
     op: (action, ok, detail) => {
       rc.op('task', action, ok ? 'ok' : 'fail', '', detail)
     },

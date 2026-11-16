@@ -324,6 +324,7 @@ export type AiReplyPhase =
   | 'generating'
   | 'stalled'
   | 'waiting_config'
+  | 'superseded'
   | 'failed_generation'
   | 'failed_send'
   | 'other'
@@ -331,7 +332,24 @@ export type AiReplyPhase =
 type MessageListAiStatusInput = Pick<
   MessageListRecord,
   'source' | 'status' | 'text' | 'webhookUrl' | 'createdAt' | 'error'
->
+> & { failureKind?: string }
+
+/** 旧版把「已过期」写成普通失败文本；新行优先用 failureKind。 */
+const LEGACY_EXPIRED_REPLY_ERROR = /会话已有更新的消息|过期取消/
+
+/**
+ * 是否按设计过期（会话已有更新消息，旧问题不补发）。
+ *
+ * 新后端写 `failureKind='superseded'`；旧行没有分类时用错误前缀兜底，
+ * 避免升级后仍把这类记录当成真正的发送/生成失败。
+ */
+export function isSupersededAiReply(
+  record: Pick<MessageListRecord, 'source' | 'status' | 'error'> & { failureKind?: string },
+): boolean {
+  if (record.source !== 'ai_reply') return false
+  if (record.failureKind === 'superseded') return true
+  return record.status === 'failed' && LEGACY_EXPIRED_REPLY_ERROR.test(record.error)
+}
 
 /**
  * 按记录里已有事实判定 AI 回复阶段。
@@ -344,6 +362,7 @@ export function aiReplyPhase(
   now = Date.now(),
 ): AiReplyPhase {
   if (record.source !== 'ai_reply') return 'other'
+  if (isSupersededAiReply(record)) return 'superseded'
   if (record.status === 'pending') {
     if (record.text.trim() === '') {
       const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : 0
@@ -375,6 +394,7 @@ export function messageListRecordStatusLabel(
     case 'generating': return '生成中'
     case 'stalled': return '生成停滞'
     case 'waiting_config': return '待配置'
+    case 'superseded': return '已过期'
     case 'failed_generation': return '生成失败'
     case 'failed_send': return '发送失败'
     default: return STATUS_LABEL[record.status]
@@ -391,6 +411,7 @@ export function messageListRecordStatusHint(
     case 'generating': return '模型正在生成，尚无正文'
     case 'stalled': return '超过 10 分钟没有进展，可能已中断'
     case 'waiting_config': return '正文已生成并保存；配置发送地址后自动投递'
+    case 'superseded': return '会话已有更新消息，这条按设计不发送'
     case 'failed_generation':
     case 'failed_send': return error !== '' ? error : '未提供失败原因'
     default: return error
@@ -403,7 +424,6 @@ export interface MessageListFailureCopy {
   hint: string
 }
 
-const EXPIRED_REPLY_ERROR = /会话已有更新的消息|过期取消/
 const NO_SENDING_ADDRESS_ERROR =
   /未匹配到\s*Webhook|未配置(?:默认)?\s*Webhook|没有(?:已保存的)?(?:投递|发送)地址/i
 const UNCONFIRMED_SEND_ERROR = /未确认|无法确认|可能已发出|可能已受理/
@@ -411,18 +431,62 @@ const UNCONFIRMED_SEND_ERROR = /未确认|无法确认|可能已发出|可能已
 /**
  * 失败记录的分层文案。
  *
- * 备注列只展示 `title`，完整文本放悬停属性/详情抽屉；四种场景的判断顺序
- * 从最具体到最宽泛，避免把「过期」「没地址」误报成泛化的操作失败。
+ * 备注列只展示 `title`，完整文本放悬停属性/详情抽屉；有 `failureKind` 时先按
+ * 稳定分类映射，旧行没有分类才退回错误字符串判断。判断顺序从最具体到最宽泛，
+ * 避免把「过期」「没地址」误报成泛化的操作失败。
  */
 export function messageListFailureCopy(
-  record: Pick<MessageListRecord, 'status' | 'text' | 'error' | 'webhookUrl'>,
+  record: Pick<
+    MessageListRecord,
+    'source' | 'status' | 'text' | 'error' | 'webhookUrl'
+  > & { failureKind?: string },
 ): MessageListFailureCopy {
   const error = record.error.trim()
   const missingAddress = NO_SENDING_ADDRESS_ERROR.test(error)
     || (record.status === 'pending'
       && record.text.trim() !== ''
       && record.webhookUrl.trim() === '')
-  if (EXPIRED_REPLY_ERROR.test(error)) {
+  switch (record.failureKind) {
+    case 'superseded':
+      return {
+        title: '这条回复已过期',
+        detail: '对方传来更新的消息，系统只回复最新一条；旧问题不会补发',
+        hint: '如需回复，请等待新消息',
+      }
+    case 'no_webhook':
+      return {
+        title: '还没有发送地址',
+        detail: error !== '' ? error : '记录没有保存可用的发送地址',
+        hint: '去配置规则',
+      }
+    case 'generation_failed':
+      return {
+        title: '没有生成正文',
+        detail: '模型没有返回内容',
+        hint: '重试只能重新发送已有正文',
+      }
+    case 'send_failed':
+      return {
+        title: '发送失败',
+        detail: error !== '' ? error : '下游没有接受本次发送',
+        hint: '',
+      }
+    case 'unconfirmed':
+      return {
+        title: '发送结果未确认',
+        detail: '请求可能已发出，请先在微信核对，避免重复发送',
+        hint: '核对后可单条重发',
+      }
+    case 'config_changed':
+      return {
+        title: '设置已变更',
+        detail: error !== '' ? error : 'AI 回复设置已变更，本次回复已取消',
+        hint: '如需回复，请重新触发',
+      }
+    default:
+      break
+  }
+  if (isSupersededAiReply(record)) {
     return {
       title: '这条回复已过期',
       detail: '对方传来更新的消息，系统只回复最新一条；旧问题不会补发',

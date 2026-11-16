@@ -93,6 +93,13 @@ export interface MessageListRecord {
     webhookUrl: string;
     /** 最近一次失败原因。 */
     error: string;
+    /**
+     * 失败原因分类（稳定枚举，仅作展示与清理依据）：
+     * `superseded` 按设计过期、`no_webhook` 缺发送地址、`generation_failed`
+     * 未生成正文、`send_failed` 投递失败、`unconfirmed` 结果未确认、
+     * `config_changed` 设置变更。空串/缺省表示未分类（旧行）。
+     */
+    failureKind?: string;
     /** 本机尝试次数。 */
     attempts: number;
     /** 最近一次尝试时间（毫秒）。 */

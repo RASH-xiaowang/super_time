@@ -9,6 +9,8 @@ export declare function saveMessageListDispatchResult(decryptedDir: string, id: 
     jobId?: string;
     jobState?: string;
     webhookUrl?: string;
+    /** 失败原因分类；成功/待执行回写传空串以清掉旧分类。 */
+    failureKind?: string;
     /** 只有真正发出 HTTP 请求时才累加尝试次数。 */
     countAttempt?: boolean;
 }): MessageListRecord | undefined;
@@ -37,8 +39,8 @@ export declare function claimMessageListRecordForDispatch(decryptedDir: string, 
  *
  * 认领发生在 HTTP 请求之前，因此无法从库中判断请求是否真正发出。依据“宁可不自动
  * 重发，也不重复发微信”的边界，这里只允许人工核对后单条重发或删除，绝不放回 pending。
- * 新进程启动不代表旧进程已经死亡：只回收超过投递超时窗口的认领，避免把其他进程
- * 正在进行的 HTTP 请求误判为崩溃。
+ * 收口条件有两条：认领进程已经不存在，或认领已超过投递超时窗口。存活进程在窗口内
+ * 继续等待（大附件上传可能接近 5 分钟），超窗仍按中断收口，避免永久卡住。
  */
 export declare function recoverInterruptedMessageListDispatches(decryptedDir: string, staleAfterMs?: number, now?: number): number;
 /**

@@ -156,8 +156,9 @@ GET /webhook/<token>/jobs/<job-id>
   不会串用 Webhook；
 - 已有规则若可用，会用它回填当前账号、当前会话中尚未写入地址的 AI `pending`
   记录；生成中的空正文预约不会被回填，也不会进入自动投递批次；
-- 没有 Webhook 时不会反复记录失败，消息列表显示「待配置」，AI 状态进入
-  `waiting_config`；规则补齐后沿用原记录继续投递，不重新调用模型。
+- 已有正文但没有可用的 Webhook 时不会反复记录失败，消息列表显示「待配置」，AI 状态
+  进入 `waiting_config`；空正文预约不会进入这个状态，而按恢复逻辑继续生成或失败收口。
+  规则补齐后沿用原记录继续投递，不重新调用模型。
 
 同一菜单中的「AI回复设置…」用于配置当前单聊的人格名称、回复风格和长回复分段。
 人格只追加角色、称呼、语气和措辞偏好，固定防注入规则与输出格式始终优先。默认开启
@@ -168,27 +169,38 @@ GET /webhook/<token>/jobs/<job-id>
 
 ## 5. AI 回复主流程
 
-后台扫描由微信实时同步事件与 10 秒兜底触发，不要求聊天页一直打开：
+<!-- feather-facts:begin -->
+<!-- 由 `node scripts/check-feather-facts.js` 生成；请勿手改，运行该脚本可重新生成。 -->
+| 常量 | 源码值 | 含义 | 来源 |
+|---|---|---|---|
+| `CHAT_AI_REPLY_COALESCE_QUIET_MS` | `900`（900 ms） | 连续消息合并的静默窗口 | `src/backend/wechat-data/src/query/ai-reply/runner-coalesce.ts` |
+| `CHAT_AI_REPLY_LEASE_MS` | `60_000`（60,000 ms / 1 分钟） | 会话执行租约 | `src/backend/wechat-data/src/query/ai-reply/lease-store.ts` |
+| `INTERRUPTED_DISPATCH_STALE_MS` | `5 * 60_000`（300,000 ms / 5 分钟） | `dispatching` 崩溃恢复阈值 | `src/backend/wechat-data/src/query/message-list-store-shared.ts` |
+<!-- feather-facts:end -->
+
+后台扫描由微信实时同步事件与 10 秒兜底触发，不要求聊天页一直打开。主流程的顺序是
+**先生成 sourceRef、再落空正文预约、再调用模型、再补全正文、最后才逐段认领投递**：
 
 ```text
 新入站对话消息（文字 / 引用 / 图片 / 表情 / 语音 / 视频 / 文件 / 链接 / 卡片等）
   → 检查当前账号 + 当前单聊的 AI 回复开关
   → 同一轮只选最新一条对方消息作为锚点（连续消息合并为一次回复）
+  → 生成 sourceRef：ai-reply:<账号>:<会话>:<createTime>:<localId>（此时还没有正文）
+  → 先落一条空正文 pending 预约：source=ai_reply、note=AI 回复 · 生成中、不保存 Webhook 地址
   → 读取该单聊最近上下文（最多 60 条 / 6,000 字；图片与自定义表情按需解码）
   → ai_reply_analyze 隐私闸
   → 当前 DSH 对话模型只生成一次完整正文
-  → 生成 sourceRef：ai-reply:<账号>:<会话>:<createTime>:<localId>
   → 按语义规划分段；后续段 sourceRef 追加 :segment:<N>
-  → 在同一事务写入整组消息列表记录（source=ai_reply）
-  → 仅 created=true 时原子认领 pending 记录
-  → 从首段开始逐段匹配规则并投递 Feather
+  → 在同一事务补全整组正文（首段预约 + 后续分段，source=ai_reply）
+  → 逐段原子认领 pending → dispatching，并从首段开始匹配规则、投递 Feather
+       ├─ 只有已有正文的记录才能被认领；空正文预约永远不进入投递
        ├─ 前段 queued/running → 等待终态，绝不越过发送后段
        ├─ 前段 succeeded → 才进入下一段
        ├─ 任一段失败/不确定 → 停止并收口后续 pending 段
        ├─ 有可用地址 → POST 202 → queued（或 running）
        ├─ 查任务 succeeded → success；failed/cancelled/expired → failed
        ├─ 网络结果不确定 → sent_unconfirmed
-       └─ 无可用地址 → 保持 pending + waiting_config，等待配置
+       └─ 已有正文但无可用地址 → 保持 pending + waiting_config，等待配置
   → 全程保存 job id / job state / 最近查询时间
 ```
 
@@ -204,12 +216,20 @@ GET /webhook/<token>/jobs/<job-id>
 
 关键不变量：
 
-- **先落库、后出网**：模型结果必须先写入消息列表，投递器只读取消息记录。
+- **预约先行、先落库后出网**：生成 `sourceRef` 后、调用模型前，先落一条空正文
+  `pending` 预约（`source=ai_reply`，备注「AI 回复 · 生成中」，不保存 Webhook 地址）；
+  模型结果必须在同一事务补全整组正文后才允许投递。投递器只读取已有正文的消息记录，
+  空正文预约永远不会出网。
 - **待配置不是失败**：没有 Webhook 时保留原 pending 记录和 pendingCursor，只把会话
-  状态标记为 `waiting_config`；同一原因重复扫描静默，配置完成后从原记录继续投递。
+  状态标记为 `waiting_config`；这个状态只在记录**已有正文、仅缺发送地址**时出现，
+  空正文预约不能被描述成「待配置」。同一原因重复扫描静默，配置完成后从原记录继续
+  投递，不重新调用模型。
 - **默认规则只补缺**：自动绑定只创建缺失的精确规则，不回写或覆盖已有手工规则。
 - **同消息幂等**：基础 `sourceRef` 唯一约束防止同一入站消息重复生成；分段使用
-  `:segment:<N>` 派生唯一键，重启后从首个未完成段继续，不重发已成功段。
+  `:segment:<N>` 派生唯一键，重启后从首个未完成段继续，不重发已成功段。重复触发命中
+  同一 `sourceRef` 时返回 `created=false`：已有正文的 pending 可继续补投；空白预约若
+  没有对应的生成快照，无法证明模型是否已执行，必须 fail-closed（不重新生成、不投递），
+  交由人工重新触发。
 - **一次生成、多段落库**：长回复只调用一次模型；整组分段要么在同一事务完整写入，
   要么全部回滚，不会留下无法判定顺序的半成品。关闭分段时仍只写一条并安全截断到 511。
 - **跨进程单跑**：`chat_ai_reply_settings` 以 owner + lease + fence 原子认领会话执行权；
@@ -225,13 +245,17 @@ GET /webhook/<token>/jobs/<job-id>
   但台账仍是 `pending`，转为 `sent_unconfirmed` 等待人工核对，禁止自动批次重发。
 - **锁冲突不是租约丢失**：带 owner + fence 的状态写入遇到 `SQLITE_BUSY` / `SQLITE_LOCKED`
   会短暂退避重试；只有实际 owner / fence / revision 不匹配才判定旧 runner 失效。
-- **只发新记录**：已存在 `sourceRef` 时 `created=false`，绝不再次投递。
+- **有正文才投递**：投递条件不是 `created=true`，而是记录已有正文且仍是可认领的
+  `pending`。`created=false` 的空白预约没有生成快照时 fail-closed；已有正文的 pending
+  （包括进程在预约和投递之间退出后的恢复）可以继续补投，不会重新调用模型。
 - **分段严格串行**：AI 分组按 `segment_index` 顺序逐段认领；前段未到终态时不发送后段，
   任一段失败后只收口后续 pending 段，已成功段保持成功。
 - **原子认领**：`pending → dispatching` 使用条件更新，后台批次、AI 即时投递与人工重发
   不能同时发送同一条记录。
-- **崩溃恢复有超时窗**：启动或周期批次只把超过 5 分钟仍未完成的 `dispatching` 收口为
-  `sent_unconfirmed`，不会因为第二个进程启动就误伤另一个进程正在进行的 HTTP 投递。
+- **崩溃恢复有超时窗**：启动或周期批次默认只把超过 5 分钟仍未完成的 `dispatching`
+  收口为 `sent_unconfirmed`；记录同时保存投递认领进程（owner），owner 进程已退出时
+  可立即判定为中断并收口，不必等满窗口，同时不会误伤另一个仍存活进程正在进行的
+  HTTP 投递。
 - **不自动重试 POST**：下游会真实操作微信，HTTP 失败交由消息列表显式重发；避免自动重试
   造成重复消息。
 - **202 不等于成功**：`queued/running` 只能说明下游已受理/执行中；消息列表不会把它们
@@ -343,15 +367,16 @@ npm run docs:api:check
 | 202 但微信无消息 | 只是入队/执行中，并非已发送 | 看消息列表是否 `queued/running`；查 job 的 `state` 与 `error`，终态会回写台账 |
 | 附件任务 404 | 资源已过期或不属于该令牌 | 重新暂存并上传，不要复用旧 resource_id |
 | 正文与附件一起失败 | Feather 单任务不支持混发 | 拆成两条消息列表记录 |
-| AI 回复记录显示「待配置」 | 当前会话没有默认 Webhook，且没有可用规则 | 在该会话「AI回复设置…」保存默认 Webhook；系统会回填原 pending 记录并自动继续 |
+| AI 回复记录显示「待配置」 | 记录已有正文，但当前会话没有默认 Webhook，且没有可用规则 | 在该会话「AI回复设置…」保存默认 Webhook；系统会回填原 pending 记录并自动继续（空正文预约不会显示为待配置） |
 | 记录停在 `sent_unconfirmed` | 下游已接受但本地回写失败 | 先查 job 与微信，禁止盲目重发 |
 
 ## 10. 当前边界
 
 Feather 发送链路保持“AI 生成 → 消息列表 → dispatch → Feather”。发送事实以
 `message_list_records` 台账为准；网络结果未知或本地回写失败时收口为
-`sent_unconfirmed`，人工核对后才能显式重发。启动恢复只处理超过五分钟仍未完成的
-`dispatching`，避免误伤另一个进程正在进行的 HTTP 投递。
+`sent_unconfirmed`，人工核对后才能显式重发。启动恢复默认只处理超过五分钟仍未完成的
+`dispatching`；记录带 owner 进程信息，owner 已退出时可立即收口，仍存活的另一进程
+正在进行的 HTTP 投递不会被误伤。
 
 任务中心的 RPA/Webhook 触发记录仍由 `task_triggers` 驱动，并不等同于消息列表记录；
 这条链路仍按自身协议单独核算。

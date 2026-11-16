@@ -19,9 +19,12 @@ import {
   updateChatAiReplyRunState,
 } from '../src/query/ai-reply/config-store.ts'
 import { createChatAiReplyRunner } from '../src/query/ai-reply/runner.ts'
+import { coalesceChatAiReplyRun } from '../src/query/ai-reply/runner-coalesce.ts'
+import type { ChatAiReplyRunRef } from '../src/query/ai-reply/runner-state.ts'
 import type {
   ChatAiReplyScanDeps,
   ChatAiReplyScanMessage,
+  ChatAiReplyState,
 } from '../src/query/ai-reply/types.ts'
 import {
   completeAiReplyMessageListRecord,
@@ -305,5 +308,146 @@ describe('AI 回复 · 连发合并与被取代预约', () => {
       status: 'failed',
     })
     runner.dispose()
+  })
+
+  it('持续刷屏只延长一次：到达 3.5s 上限后最多等到 5.0s', async () => {
+    enable('v2:100:1')
+    const anchorMs = Math.floor(Date.now() / 1000) * 1000
+    const nowSec = Math.floor(anchorMs / 1000)
+    const startedAt = Date.now()
+    let count = 0
+    const listMessages = vi.fn(async () => {
+      // 首拍与合并期每次轮询都来一条新消息，模拟持续刷屏；4.9s 后停下，
+      // 保证合并结束后锚点不会再被越过（避免走进 superseded 分支）。
+      if (Date.now() - startedAt < 4_900) count += 1
+      return Array.from({ length: count }, (_value, index) =>
+        message(index + 2, (index + 2) * 100, nowSec, '第' + String(index + 1) + '句'))
+    })
+    const generate = vi.fn(async () => ({ ok: true, text: '合并后的回复' }))
+    const reserveReply = vi.fn(harness.reserveReply)
+    const runner = createChatAiReplyRunner(harness.deps({
+      listMessages,
+      listMessagesAfter: async () => [],
+      reserveReply,
+      generate,
+    }), { now: () => anchorMs + 10, coalesceMs: 150 })
+
+    await runner.scan()
+    await vi.waitFor(() => {
+      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').stage).toBe('success')
+    }, { timeout: 15_000 })
+    const elapsedMs = Date.now() - startedAt
+
+    expect(generate).toHaveBeenCalledTimes(1)
+    // 一次延长 = 3.5s + 1.5s；若重复延长会拖到 6.5s 以上。
+    expect(elapsedMs).toBeGreaterThanOrEqual(4_800)
+    expect(elapsedMs).toBeLessThan(6_500)
+    // 回复的是停下前最后一条消息，而不是 3.5s 那一刻的旧消息。
+    expect(reserveReply.mock.calls[0]?.[0].sourceRef)
+      .toBe('ai-reply:wxid_self:wxid_peer:' + String(nowSec) + ':' + String(count + 1))
+    runner.dispose()
+  })
+
+  it('刷屏在 3.0s 停止时按静默期生成，不再等满延长上限', async () => {
+    enable('v2:100:1')
+    const anchorMs = Math.floor(Date.now() / 1000) * 1000
+    const nowSec = Math.floor(anchorMs / 1000)
+    const startedAt = Date.now()
+    let count = 0
+    let lastMessageAt = startedAt
+    const listMessages = vi.fn(async () => {
+      if (Date.now() - startedAt < 3_000) {
+        count += 1
+        lastMessageAt = Date.now()
+      }
+      return Array.from({ length: count }, (_value, index) =>
+        message(index + 2, (index + 2) * 100, nowSec, '第' + String(index + 1) + '句'))
+    })
+    const generate = vi.fn(async () => ({ ok: true, text: '合并后的回复' }))
+    const runner = createChatAiReplyRunner(harness.deps({
+      listMessages,
+      listMessagesAfter: async () => [],
+      generate,
+    }), { now: () => anchorMs + 10, coalesceMs: 400 })
+
+    await runner.scan()
+    await vi.waitFor(() => {
+      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').stage).toBe('success')
+    }, { timeout: 10_000 })
+    const elapsedMs = Date.now() - startedAt
+
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(elapsedMs).toBeGreaterThanOrEqual(3_000)
+    // 最后一条消息之后再等一个静默期（400ms）就生成，远早于 5.0s 的延长上限。
+    expect(Date.now() - lastMessageAt).toBeGreaterThanOrEqual(350)
+    expect(elapsedMs).toBeLessThan(4_000)
+    runner.dispose()
+  })
+
+  it('合并期读消息失败：原地重试一次后暂缓本轮，不直接调模型', async () => {
+    enable('v2:100:1')
+    const anchorMs = Math.floor(Date.now() / 1000) * 1000
+    const nowSec = Math.floor(anchorMs / 1000)
+    const first = message(2, 200, nowSec, '第一句')
+    let calls = 0
+    const listMessages = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) return [first]
+      throw new Error('database is locked')
+    })
+    const reserveReply = vi.fn(harness.reserveReply)
+    const generate = vi.fn(async () => ({ ok: true, text: '不应生成' }))
+    const runner = createChatAiReplyRunner(harness.deps({
+      listMessages,
+      listMessagesAfter: async () => [],
+      reserveReply,
+      generate,
+    }), { now: () => anchorMs + 10, coalesceMs: 900 })
+
+    await runner.scan()
+    await vi.waitFor(() => expect(runner.pending()).toBe(0), { timeout: 8_000 })
+
+    // 首拍一次 + 合并轮询失败一次 + 原地重试一次。
+    expect(listMessages).toHaveBeenCalledTimes(3)
+    expect(reserveReply).not.toHaveBeenCalled()
+    expect(generate).not.toHaveBeenCalled()
+    expect(listMessageListRecords(decrypted).total).toBe(0)
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer')).toMatchObject({
+      stage: 'failed',
+      pendingCursor: 'v2:200:2',
+      pendingSourceRef: 'ai-reply:wxid_self:wxid_peer:' + String(nowSec) + ':2',
+    })
+    expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').error)
+      .toContain('已暂缓')
+    runner.dispose()
+  })
+
+  it('合并期读失败但运行没有租约时，保留原样返回 generate', async () => {
+    const anchorMs = Math.floor(Date.now() / 1000) * 1000
+    const nowSec = Math.floor(anchorMs / 1000)
+    const state = {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      cursor: 'v2:100:1',
+    } as unknown as ChatAiReplyState
+    const run: ChatAiReplyRunRef = {
+      revision: 1,
+      anchor: { localId: 2, sortSeq: 200, createTime: nowSec, content: '第一句' },
+      sourceRef: 'ai-reply:wxid_self:wxid_peer:' + String(nowSec) + ':2',
+      leaseMs: 60_000,
+      now: () => anchorMs + 10,
+      leaseLost: false,
+      reservationMade: false,
+      recordOpen: false,
+      resumed: false,
+      revisionChanged: false,
+    }
+    const deps = harness.deps({
+      listMessages: async () => { throw new Error('database is locked') },
+    })
+
+    await expect(coalesceChatAiReplyRun(deps, state, run, () => false, 50))
+      .resolves.toBe('generate')
   })
 })

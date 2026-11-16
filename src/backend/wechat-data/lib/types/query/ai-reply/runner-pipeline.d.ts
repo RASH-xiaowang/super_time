@@ -22,4 +22,4 @@ export declare function cancelSupersededChatAiReplyRun(deps: ChatAiReplyScanDeps
 export declare function reserveChatAiReplyRun(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef): Promise<'generate' | 'dispatch' | 'done'>;
 export declare function dispatchChatAiReply(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, isCancelled: () => boolean): Promise<boolean>;
 export declare function saveAndDispatchChatAiReply(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, isCancelled: () => boolean): Promise<boolean>;
-export declare function failChatAiReplyRun(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, error: string): Promise<boolean>;
+export declare function failChatAiReplyRun(deps: ChatAiReplyScanDeps, state: ChatAiReplyState, run: ChatAiReplyRunRef, error: string, failureKind?: string): Promise<boolean>;

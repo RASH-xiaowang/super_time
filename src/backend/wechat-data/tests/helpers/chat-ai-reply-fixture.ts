@@ -93,11 +93,17 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
       input.sourceRef,
       input.segmentIndex,
       input.error,
+      input.failureKind,
     )
   }
 
   const failReply: ChatAiReplyScanDeps['failReply'] = async (input) => {
-    const result = failAiReplyMessageListRecord(decrypted, input.id, input.error)
+    const result = failAiReplyMessageListRecord(
+      decrypted,
+      input.id,
+      input.error,
+      input.failureKind,
+    )
     return {
       ok: result.ok,
       ...(result.id === undefined ? {} : { id: result.id }),

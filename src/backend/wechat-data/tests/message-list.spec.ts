@@ -798,6 +798,46 @@ describe('大肥鱼健康检查、任务查询与旧库兼容', () => {
     expect(getMessageListRecord(decrypted, id)?.status).toBe('dispatching')
   })
 
+  it('认领进程已退出的 dispatching 立即收口，存活进程在窗口内继续等待', () => {
+    const dead = insertMessageListRecord(decrypted, {
+      targetName: '死进程对象',
+      text: '崩溃在投递中',
+    })
+    const alive = insertMessageListRecord(decrypted, {
+      targetName: '活进程对象',
+      text: '正在上传大附件',
+    })
+    const deadId = dead.id ?? 0
+    const aliveId = alive.id ?? 0
+    withWritableDb(taskDbPath(decrypted), (db) => {
+      // 刚中断（远小于 5 分钟），但认领进程已经不存在。
+      db.prepare("UPDATE message_list_records SET status = 'dispatching', dispatch_owner = ?, updated_at = ? WHERE id = ?")
+        .run('2147483646', Date.now(), deadId)
+      // 存活进程仍在投递窗口内：大附件上传可能接近超时，不能误杀。
+      db.prepare("UPDATE message_list_records SET status = 'dispatching', dispatch_owner = ?, updated_at = ? WHERE id = ?")
+        .run(String(process.pid), Date.now(), aliveId)
+    })
+
+    expect(recoverInterruptedMessageListDispatches(decrypted)).toBe(1)
+    expect(getMessageListRecord(decrypted, deadId)?.status).toBe('sent_unconfirmed')
+    expect(getMessageListRecord(decrypted, deadId)?.failureKind).toBe('unconfirmed')
+    expect(getMessageListRecord(decrypted, aliveId)?.status).toBe('dispatching')
+  })
+
+  it('认领时把当前进程写进 dispatch_owner', () => {
+    const inserted = insertMessageListRecord(decrypted, {
+      targetName: '认领归属',
+      text: '记录认领者',
+    })
+    const id = inserted.id ?? 0
+    expect(claimMessageListRecordForDispatch(decrypted, id)?.status).toBe('dispatching')
+    withWritableDb(taskDbPath(decrypted), (db) => {
+      const row = db.prepare('SELECT dispatch_owner FROM message_list_records WHERE id = ?')
+        .get(id) as { dispatch_owner?: unknown } | undefined
+      expect(String(row?.dispatch_owner ?? '')).toBe(String(process.pid))
+    })
+  })
+
   it('人工单条成功后，自动投递不能再次认领或出网', async () => {
     expect(saveMessageListRule(decrypted, {
       targetName: '成功防重对象',
