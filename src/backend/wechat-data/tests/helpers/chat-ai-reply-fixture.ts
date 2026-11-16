@@ -16,6 +16,7 @@ import {
   failAiReplyMessageListRecord,
   getMessageListRecord,
   listAiReplyMessageListSegments,
+  reopenAiReplyMessageListRecord,
   reserveAiReplyMessageListRecord,
 } from '../../src/query/message-list-store.ts'
 
@@ -32,6 +33,7 @@ export interface ChatAiReplyTestHarness {
   failReplySegmentsAfter: NonNullable<ChatAiReplyScanDeps['failReplySegmentsAfter']>
   failReply: ChatAiReplyScanDeps['failReply']
   dropReply: NonNullable<ChatAiReplyScanDeps['dropReply']>
+  reopenReply: NonNullable<ChatAiReplyScanDeps['reopenReply']>
   getReply: ChatAiReplyScanDeps['getReply']
   deps: (overrides?: Partial<ChatAiReplyScanDeps>) => ChatAiReplyScanDeps
 }
@@ -122,6 +124,13 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
       : { ok: false, ...(dropped.error === undefined ? {} : { error: dropped.error }) }
   }
 
+  const reopenReply: NonNullable<ChatAiReplyScanDeps['reopenReply']> = async (input) => {
+    const reopened = reopenAiReplyMessageListRecord(decrypted, input.id, input.sourceRef)
+    return reopened.ok
+      ? { ok: true }
+      : { ok: false, ...(reopened.error === undefined ? {} : { error: reopened.error }) }
+  }
+
   const getReply: ChatAiReplyScanDeps['getReply'] = async (id) => {
     const record = getMessageListRecord(decrypted, id)
     return record === undefined
@@ -132,6 +141,12 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
           text: record.text,
           ...(record.sourceRef === undefined ? {} : { sourceRef: record.sourceRef }),
           ...(record.error === '' ? {} : { error: record.error }),
+          source: record.source,
+          imageCount: record.images.length,
+          ...(record.jobId === undefined ? {} : { jobId: record.jobId }),
+          attempts: record.attempts,
+          ...(record.failureKind === undefined ? {} : { failureKind: record.failureKind }),
+          createdAt: record.createdAt,
         }
   }
 
@@ -156,6 +171,7 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
     failReplySegmentsAfter,
     failReply,
     dropReply,
+    reopenReply,
     getReply,
     dispatchReply: async () => ({ ok: true }),
     op: () => {},
@@ -189,6 +205,7 @@ export function createChatAiReplyTestHarness(): ChatAiReplyTestHarness {
     failReplySegmentsAfter,
     failReply,
     dropReply,
+    reopenReply,
     getReply,
     deps,
   }

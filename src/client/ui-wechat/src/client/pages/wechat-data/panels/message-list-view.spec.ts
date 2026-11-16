@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { MessageListRecord, MessageListSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import {
+  AI_REPLY_REGENERATE_WINDOW_MS,
+  AI_REPLY_STALLED_MS,
   EMPTY_MESSAGE_LIST_WINDOW,
   MESSAGE_LIST_PAGE_SIZE,
   MESSAGE_LIST_WINDOW_MAX,
+  aiReplyDeleteEligibility,
   aiReplyPhase,
+  aiReplyRegenerateEligibility,
   appendMessageListWindow,
   batchDeleteEligibility,
   batchResendEligibility,
@@ -506,5 +510,122 @@ describe('下游异步任务状态', () => {
         reason: expect.stringContaining('下游任务'),
       })
     }
+  })
+})
+
+describe('AI 回复的重新生成与专用清理资格', () => {
+  const NOW = 1_800_000_000_000
+
+  function aiRecord(
+    now: number,
+    patch: Partial<MessageListRecord> = {},
+  ): MessageListRecord {
+    return {
+      ...record(51, now, 'failed'),
+      source: 'ai_reply',
+      text: '',
+      images: [],
+      webhookUrl: '',
+      error: '模型没有返回内容',
+      failureKind: 'generation_failed',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+      ...patch,
+    }
+  }
+
+  it('空白失败、未投递且 24h 内的 AI 回复可以重新生成', () => {
+    expect(aiReplyRegenerateEligibility(aiRecord(NOW), NOW)).toEqual({
+      eligible: true,
+      reason: '',
+    })
+    for (const failureKind of ['superseded', 'generation_failed', 'config_changed']) {
+      expect(aiReplyRegenerateEligibility(
+        aiRecord(NOW, { failureKind }),
+        NOW,
+      ).eligible).toBe(true)
+    }
+    // 窗口边界：差 1ms 仍可，正好 24h 不可。
+    expect(aiReplyRegenerateEligibility(
+      aiRecord(NOW, { createdAt: NOW - AI_REPLY_REGENERATE_WINDOW_MS + 1 }),
+      NOW,
+    ).eligible).toBe(true)
+  })
+
+  it('正文、图片、任务、超过 24h 或不支持的分类都会拒绝重新生成并给出原因', () => {
+    const cases: Array<[Partial<MessageListRecord>, string]> = [
+      [{ text: '已有正文' }, '已有正文'],
+      [{ images: [{ url: 'https://example.com/a.png' }] }, '已有正文'],
+      [{ jobId: 'jobs/abc' }, '已投递'],
+      [{ attempts: 1 }, '尝试'],
+      [{ lastAttemptAt: NOW - 1 }, '尝试'],
+      [{ webhookUrl: 'http://192.0.2.10:17890/webhook/***' }, '发送地址'],
+      [{ createdAt: NOW - AI_REPLY_REGENERATE_WINDOW_MS }, '24 小时'],
+      [{ failureKind: 'send_failed' }, '失败类型'],
+    ]
+    for (const [patch, reason] of cases) {
+      const result = aiReplyRegenerateEligibility(aiRecord(NOW, patch), NOW)
+      expect(result.eligible, JSON.stringify(patch)).toBe(false)
+      expect(result.reason).toContain(reason)
+    }
+    // 非 AI 来源、非失败状态同样不属于可重新生成类型。
+    expect(aiReplyRegenerateEligibility(record(52, NOW, 'failed'), NOW).reason)
+      .toContain('AI 回复')
+    expect(aiReplyRegenerateEligibility(aiRecord(NOW, { status: 'success' }), NOW).reason)
+      .toContain('只有失败')
+  })
+
+  it('已投递/未确认的记录不能重新生成，即使正文为空', () => {
+    const delivered = aiRecord(NOW, { status: 'running', jobId: 'jobs/abc' })
+    expect(aiReplyRegenerateEligibility(delivered, NOW).reason).toContain('已投递')
+
+    const unconfirmed = aiRecord(NOW, {
+      status: 'sent_unconfirmed',
+      failureKind: 'unconfirmed',
+    })
+    expect(aiReplyRegenerateEligibility(unconfirmed, NOW).reason).toContain('未确认')
+  })
+
+  it('生成中的空白预约不能清理；停滞或失败后才可清理', () => {
+    const pending = aiRecord(NOW, {
+      status: 'pending',
+      error: '',
+      failureKind: undefined,
+    })
+    // 删除行不等于取消在途模型调用：10 分钟内一律拒绝并说明原因。
+    expect(aiReplyDeleteEligibility(pending, NOW)).toEqual({
+      eligible: false,
+      reason: '生成进行中，完成或停滞后再清理',
+      generating: true,
+    })
+    expect(aiReplyDeleteEligibility(pending, NOW + AI_REPLY_STALLED_MS - 1).eligible)
+      .toBe(false)
+    // 超过停滞窗口：不再有 runner 会在本次进程里续上，允许清理。
+    expect(aiReplyDeleteEligibility(pending, NOW + AI_REPLY_STALLED_MS)).toMatchObject({
+      eligible: true,
+      generating: false,
+    })
+    expect(aiReplyDeleteEligibility(aiRecord(NOW), NOW)).toMatchObject({
+      eligible: true,
+      generating: false,
+    })
+  })
+
+  it('正文、图片、任务、尝试过投递或状态不符的记录不能清理', () => {
+    const cases: Array<[Partial<MessageListRecord>, string]> = [
+      [{ text: '已有正文' }, '已有正文'],
+      [{ images: [{ url: 'https://example.com/a.png' }] }, '已有正文'],
+      [{ jobId: 'jobs/abc' }, '已投递'],
+      [{ attempts: 1 }, '尝试'],
+      [{ status: 'success' }, '待执行或失败'],
+    ]
+    for (const [patch, reason] of cases) {
+      const result = aiReplyDeleteEligibility(aiRecord(NOW, patch), NOW)
+      expect(result.eligible, JSON.stringify(patch)).toBe(false)
+      expect(result.generating).toBe(false)
+      expect(result.reason).toContain(reason)
+    }
+    expect(aiReplyDeleteEligibility(record(53, NOW), NOW).reason).toContain('AI 回复')
   })
 })

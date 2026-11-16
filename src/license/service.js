@@ -330,7 +330,8 @@ const FEATURE_METHODS = {
     'saveSummaryTask', 'suggestKbLinks', 'summarizeKbFile', 'toggleSummaryTask',
   ],
   'ai-reply': [
-    'getChatAiReplyDefaultWebhook', 'getChatAiReplyState', 'listEnabledChatAiReplyStates',
+    'deleteAiReplyReservations', 'getChatAiReplyDefaultWebhook', 'getChatAiReplyState',
+    'listEnabledChatAiReplyStates', 'regenerateChatAiReplyRecord',
     'saveChatAiReplyDefaultWebhook', 'scanChatAiReplyNow', 'setChatAiReplyEnabled',
     'setChatAiReplyPersona',
   ],

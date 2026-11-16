@@ -1,6 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatAiReplyDefaultWebhookMutationResult, ChatAiReplyDefaultWebhookState, ChatAiReplyEnabledChatsResult, ChatAiReplyMutationResult, ChatAiReplyScanResult, ChatAiReplyState } from './query/ai-reply/types.ts';
 import { createChatAiReplyRemotes, type CreateChatAiReplyRemotesInputs } from './remotes/chat-ai-reply.ts';
+import type { ChatAiReplyRegenerateResult } from './query/ai-reply/runner-regenerate.ts';
+import type { AiReplyReservationCleanupResult } from './query/message-list-store.ts';
 import { GatewayMessageList } from './gateway-message-list.ts';
 export declare abstract class GatewayChatAiReply extends GatewayMessageList {
     constructor(ctx: Context);
@@ -61,6 +63,27 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
      * 正常由实时同步事件和 10 秒兜底触发；此方法主要供桌面端诊断使用。
      */
     scanChatAiReplyNow(): Promise<ChatAiReplyScanResult>;
+    /**
+     * 桌面端专用：重新生成一条空白失败的 AI 回复记录。
+     *
+     * 只允许 24 小时内、整组无正文/图片/投递事实，且失败分类为 superseded、
+     * generation_failed 或 config_changed 的记录。**会再调用一次付费模型并可能出网，
+     * 成功后不可撤销**；expectedSourceRef 用于防止点击后目标记录被替换。
+     */
+    regenerateChatAiReplyRecord(options: {
+        recordId: number;
+        expectedSourceRef: string;
+    }): Promise<ChatAiReplyRegenerateResult>;
+    /**
+     * 桌面端专用：清理空白且从未发送的 AI 回复预约/失败记录。
+     *
+     * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**；有正文、图片、异步任务、
+     * 发送尝试或任何投递事实的记录会逐条跳过；运行窗口仍在生成/投递的记录也会被
+     * 拒绝（删除行不等于取消在途模型调用）。记录不存在算 skipped，重复调用幂等。
+     */
+    deleteAiReplyReservations(options: {
+        ids: number[];
+    }): AiReplyReservationCleanupResult;
     protected _chatAiReplyRemotes?: ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyRemotes(): ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyDeps(): CreateChatAiReplyRemotesInputs;

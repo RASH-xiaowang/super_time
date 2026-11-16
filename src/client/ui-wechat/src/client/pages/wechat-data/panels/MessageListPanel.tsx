@@ -127,6 +127,11 @@ export function MessageListPanel(): React.JSX.Element {
           onQueryJob={(record) => { void actions.queryJob(record) }}
           onConfigureRule={() => { setView('rules') }}
           onConfigureRecordRule={configureRecordRule}
+          regeneratingId={actions.regeneratingId}
+          deletingAiReplyId={actions.deletingAiReplyId}
+          onRegenerateAiReply={(record) => { void actions.regenerateAiReply(record) }}
+          onDeleteAiReplyRecord={(record) => { void actions.deleteAiReplyRecord(record) }}
+          onCleanupAiReplyRecords={actions.cleanupAiReplyRecords}
         />
       ) : (
         <MessageListRules

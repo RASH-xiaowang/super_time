@@ -1,4 +1,5 @@
 import type { ChatAiReplyScanDeps, ChatAiReplyScanResult } from './types.ts';
+import type { ChatAiReplyRegenerateResult } from './runner-regenerate.ts';
 /** Runtime snapshot for diagnostics/tests; cursor intentionally excluded from display. */
 export interface ChatAiReplyRunnerSnapshot {
     executing: number;
@@ -24,6 +25,8 @@ export interface ChatAiReplyRunnerOptions {
 export declare function createChatAiReplyRunner(deps: ChatAiReplyScanDeps, runnerOptions?: ChatAiReplyRunnerOptions): {
     scan: () => Promise<ChatAiReplyScanResult>;
     recover: () => Promise<ChatAiReplyScanResult>;
+    /** 桌面端显式重跑一条空白失败的记录；会再调用一次模型。 */
+    regenerate: (recordId: number, expectedSourceRef: string) => Promise<ChatAiReplyRegenerateResult>;
     dispose: () => void;
     pending: () => number;
     snapshot: () => ChatAiReplyRunnerSnapshot;

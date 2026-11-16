@@ -32,6 +32,7 @@ import {
 import { useTransientNotice } from './hooks.tsx'
 import { useMessageListBatchActions } from './use-message-list-batch-actions.ts'
 import { useMessageListDeliveryActions } from './use-message-list-delivery-actions.ts'
+import { useMessageListAiReplyActions } from './use-message-list-ai-reply-actions.ts'
 import { useMessageListWebhookActions } from './use-message-list-webhook-actions.ts'
 
 export function useMessageListActions(input: {
@@ -50,6 +51,10 @@ export function useMessageListActions(input: {
     setNotice,
   })
   const deliveryActions = useMessageListDeliveryActions({
+    refreshRecords: input.refreshRecords,
+    setNotice,
+  })
+  const aiReplyActions = useMessageListAiReplyActions({
     refreshRecords: input.refreshRecords,
     setNotice,
   })
@@ -253,6 +258,11 @@ export function useMessageListActions(input: {
     batchDelete: batchActions.batchDelete,
     probeRecord: deliveryActions.probeRecord,
     queryJob: deliveryActions.queryJob,
+    regeneratingId: aiReplyActions.regeneratingId,
+    deletingAiReplyId: aiReplyActions.deletingAiReplyId,
+    regenerateAiReply: aiReplyActions.regenerate,
+    deleteAiReplyRecord: aiReplyActions.remove,
+    cleanupAiReplyRecords: aiReplyActions.cleanup,
     toggleRule,
     removeRule,
   }

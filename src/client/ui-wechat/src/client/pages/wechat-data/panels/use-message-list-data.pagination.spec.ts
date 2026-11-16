@@ -865,6 +865,11 @@ describe('消息列表滚动锚定', () => {
       onQueryJob: () => {},
       onConfigureRule: () => {},
       onConfigureRecordRule: () => {},
+      regeneratingId: null,
+      deletingAiReplyId: null,
+      onRegenerateAiReply: () => {},
+      onDeleteAiReplyRecord: () => {},
+      onCleanupAiReplyRecords: async () => true,
     })
 
     act(() => {

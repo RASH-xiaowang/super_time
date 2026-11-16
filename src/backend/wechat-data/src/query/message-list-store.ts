@@ -53,6 +53,12 @@ export {
   reserveAiReplyMessageListRecord,
 } from './message-list-store-ai.ts'
 export {
+  type AiReplyReservationCleanupResult,
+  AI_REPLY_REOPEN_NOTE,
+  deleteAiReplyMessageListRecordsForCleanup,
+  reopenAiReplyMessageListRecord,
+} from './message-list-store-ai-maintenance.ts'
+export {
   type MessageListDispatchIntent,
   claimMessageListRecordForDispatch,
   messageListRecordCanBeClaimed,

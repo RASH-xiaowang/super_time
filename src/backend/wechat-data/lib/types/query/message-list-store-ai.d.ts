@@ -58,6 +58,7 @@ export declare function dropAiReplyMessageListRecord(decryptedDir: string, id: n
     removed: number;
     error?: string;
 };
+/** 桌面端「重新生成」写入的备注：与自动生成的备注区分，便于用户识别这次是手动重跑。 */
 /** AI 回复恢复器的只读孤儿预约快照；不暴露完整消息正文给扫描器。 */
 export interface PendingAiReplyMessageListRecord {
     id: number;

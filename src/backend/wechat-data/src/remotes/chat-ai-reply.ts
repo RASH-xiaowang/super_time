@@ -22,6 +22,7 @@ import {
   saveChatAiReplyDefaultWebhook,
 } from '../query/ai-reply/default-webhook-store.ts'
 import { createChatAiReplyRunner } from '../query/ai-reply/runner.ts'
+import type { ChatAiReplyRegenerateResult } from '../query/ai-reply/runner-regenerate.ts'
 import { errorText, latestMessageCursor } from '../query/ai-reply/runner-recovery.ts'
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts'
 import type {
@@ -37,14 +38,19 @@ import type {
 import {
   completeAiReplyMessageListRecord,
   completeAiReplyMessageListRecordSegments,
+  deleteAiReplyMessageListRecordsForCleanup,
   dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
   getMessageListRecord,
   listAiReplyMessageListSegments,
   recoverInterruptedMessageListDispatches,
+  reopenAiReplyMessageListRecord,
   reserveAiReplyMessageListRecord,
   saveMessageListDispatchResult,
+} from '../query/message-list-store.ts'
+import type {
+  AiReplyReservationCleanupResult,
 } from '../query/message-list-store.ts'
 import type { OperationCategory, OperationStatus } from '../types.ts'
 
@@ -201,6 +207,12 @@ function createChatAiReplyScanDeps(
         ? { ok: true }
         : { ok: false, ...(dropped.error === undefined ? {} : { error: dropped.error }) }
     },
+    reopenReply: async (input) => {
+      const reopened = reopenAiReplyMessageListRecord(dir(), input.id, input.sourceRef)
+      return reopened.ok
+        ? { ok: true }
+        : { ok: false, ...(reopened.error === undefined ? {} : { error: reopened.error }) }
+    },
     getReply: async (id) => {
       const record = getMessageListRecord(dir(), id)
       return record === undefined
@@ -211,6 +223,12 @@ function createChatAiReplyScanDeps(
             text: record.text,
             ...(record.sourceRef === undefined ? {} : { sourceRef: record.sourceRef }),
             ...(record.error === '' ? {} : { error: record.error }),
+            source: record.source,
+            imageCount: record.images.length,
+            ...(record.jobId === undefined ? {} : { jobId: record.jobId }),
+            attempts: record.attempts,
+            ...(record.failureKind === undefined ? {} : { failureKind: record.failureKind }),
+            createdAt: record.createdAt,
           }
     },
     dispatchReply: async (recordId) => {
@@ -526,6 +544,26 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
 
     recordResult(id: number): { found: boolean; status?: string; error?: string } {
       return recordResultOf(dir(), id)
+    },
+
+    /**
+     * 桌面端专用：重新生成一条空白失败的 AI 回复。
+     * 会再调用一次模型，记录会被原地复用（sourceRef 不变），不新建消息列表行。
+     */
+    regenerateRecord(options: {
+      recordId: number
+      expectedSourceRef: string
+    }): Promise<ChatAiReplyRegenerateResult> {
+      return runner.regenerate(options.recordId, options.expectedSourceRef)
+    },
+
+    /**
+     * 桌面端专用：按 id 整组清理从未生成正文、从未投递的 AI 预约/失败记录。
+     * 记录不存在算 skipped，重复调用幂等；逐条原因放在 items 里。
+     * 运行窗口仍在生成/投递的记录会被拒绝（删除行不等于取消在途模型调用）。
+     */
+    deleteReservations(ids: readonly number[]): AiReplyReservationCleanupResult {
+      return deleteAiReplyMessageListRecordsForCleanup(dir(), ids)
     },
 
     dispose(): void {

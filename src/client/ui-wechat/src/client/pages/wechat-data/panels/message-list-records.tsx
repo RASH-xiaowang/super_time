@@ -1,5 +1,5 @@
 /** 消息记录：筛选、统计与完整台账表格。 */
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
   MessageListRecord,
   MessageListSource,
@@ -22,6 +22,8 @@ import {
 } from './message-list-view.ts'
 import { useMessageListBatch } from './use-message-list-batch.ts'
 import { MessageListRow } from './message-list-row.tsx'
+import { MessageListDetailDrawer } from './message-list-detail-drawer.tsx'
+import { MessageListAiReplyCleanup } from './message-list-ai-reply-cleanup.tsx'
 import {
   messageListRowsForRender,
   useMessageListRowVirtualizer,
@@ -65,6 +67,12 @@ interface MessageListRecordsProps {
   onConfigureRule: () => void
   /** 为单条未配置记录打开规则表单，并带入会话名与触发对象。 */
   onConfigureRecordRule: (record: MessageListRecord) => void
+  regeneratingId: number | null
+  deletingAiReplyId: number | null
+  onRegenerateAiReply: (record: MessageListRecord) => void
+  onDeleteAiReplyRecord: (record: MessageListRecord) => void
+  /** 清理当前窗口内可删除的 AI 回复；返回 true 表示至少一批被接受。 */
+  onCleanupAiReplyRecords: (records: MessageListRecord[]) => Promise<boolean>
 }
 
 type MessageListBatchState = ReturnType<typeof useMessageListBatch>
@@ -125,6 +133,13 @@ function MessageListRecordsHeader(
           onChange={(value) => { props.onSourceChange(value as '' | MessageListSource) }}
           ariaLabel="来源筛选"
         />
+        {props.source === 'ai_reply' && (
+          <MessageListAiReplyCleanup
+            records={props.records}
+            canWrite={props.canWrite}
+            onCleanup={props.onCleanupAiReplyRecords}
+          />
+        )}
         {props.canWrite && (
           <Button
             size="sm"
@@ -217,6 +232,16 @@ function MessageListTable(
   const tableScrollRef = useRef<HTMLDivElement | null>(null)
   const rowVirtualizer = useMessageListRowVirtualizer(props.records, tableScrollRef)
   const renderedRows = messageListRowsForRender(rowVirtualizer, props.records)
+  // 详情抽屉只存 id，展示时始终从最新的 props.records 取记录：
+  // 事件刷新替换了同 id 的新对象后，抽屉内容不会停在旧快照上。
+  const [detailRecordId, setDetailRecordId] = useState<number | null>(null)
+  const detailRecord = detailRecordId === null
+    ? null
+    : props.records.find((record) => record.id === detailRecordId) ?? null
+  useEffect(() => {
+    // 记录被删除或不再满足当前筛选后，关闭抽屉并清掉 id，避免同 id 复现时自动重开。
+    if (detailRecordId !== null && detailRecord === null) setDetailRecordId(null)
+  }, [detailRecordId, detailRecord])
   const filterKey = props.search + '\u0000' + props.status + '\u0000' + props.source
   const scrollAnchorRef = useRef<{
     filterKey: string
@@ -266,9 +291,10 @@ function MessageListTable(
   const hasFilter = props.search.trim() !== '' || props.status !== '' || props.source !== ''
   const now = Date.now()
   return (
-    props.loading && props.records.length === 0 ? (
-      <LoadingState label="加载消息记录…" />
-    ) : props.records.length === 0 ? (
+    <>
+      {props.loading && props.records.length === 0 ? (
+        <LoadingState label="加载消息记录…" />
+      ) : props.records.length === 0 ? (
       <EmptyState
         icon="✉"
         title={hasFilter ? '没有匹配的记录' : '还没有消息记录'}
@@ -331,6 +357,11 @@ function MessageListTable(
                 onProbe={props.onProbe}
                 onQueryJob={props.onQueryJob}
                 onConfigureRecordRule={props.onConfigureRecordRule}
+                onOpenDetail={(id) => { setDetailRecordId(id) }}
+                regeneratingId={props.regeneratingId}
+                deletingAiReplyId={props.deletingAiReplyId}
+                onRegenerateAiReply={props.onRegenerateAiReply}
+                onDeleteAiReplyRecord={props.onDeleteAiReplyRecord}
               />
             ))}
             {renderedRows.pads.bottom > 0 && (
@@ -345,7 +376,15 @@ function MessageListTable(
           </tbody>
         </table>
       </div>
-    )
+      )}
+      {detailRecord !== null && (
+        <MessageListDetailDrawer
+          record={detailRecord}
+          thumbs={props.thumbs}
+          onClose={() => { setDetailRecordId(null) }}
+        />
+      )}
+    </>
   )
 }
 

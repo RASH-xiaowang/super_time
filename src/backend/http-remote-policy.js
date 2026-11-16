@@ -189,6 +189,10 @@ const LOCAL_ONLY_BY_FAMILY = {
     // AI 回复开关会改变无人值守模型调用与出网语义；立即扫描会写任务库并可能出网。
     'setChatAiReplyEnabled', 'setChatAiReplyPersona', 'scanChatAiReplyNow',
     'getChatAiReplyDefaultWebhook', 'saveChatAiReplyDefaultWebhook',
+    // 2026-11-16：桌面端专用的两个 AI 回复清理入口。重新生成会再花一次模型钱并
+    // 可能出网，成功后不可撤销；专用删除会整组销毁消息列表台账。二者都只允许
+    // 桌面本机通道，手机/普通浏览器会话拒绝。
+    'regenerateChatAiReplyRecord', 'deleteAiReplyReservations',
     // 该返回值包含可直接调用的入站地址令牌，只允许桌面端本机读取。
     'getMessageListWebhookInfo',
     // 健康检查会读取已保存的下游地址并发起 GET；输入只能是本机记录/规则 id。

@@ -76,6 +76,10 @@ import {
   reserveChatAiReplyRun,
   saveAndDispatchChatAiReply,
 } from './runner-pipeline.ts'
+import {
+  regenerateChatAiReplyRecord,
+} from './runner-regenerate.ts'
+import type { ChatAiReplyRegenerateResult } from './runner-regenerate.ts'
 
 /** Runtime snapshot for diagnostics/tests; cursor intentionally excluded from display. */
 export interface ChatAiReplyRunnerSnapshot {
@@ -420,6 +424,8 @@ export function createChatAiReplyRunner(
 ): {
   scan: () => Promise<ChatAiReplyScanResult>
   recover: () => Promise<ChatAiReplyScanResult>
+  /** 桌面端显式重跑一条空白失败的记录；会再调用一次模型。 */
+  regenerate: (recordId: number, expectedSourceRef: string) => Promise<ChatAiReplyRegenerateResult>
   dispose: () => void
   pending: () => number
   snapshot: () => ChatAiReplyRunnerSnapshot
@@ -573,6 +579,26 @@ export function createChatAiReplyRunner(
     },
     recover(): Promise<ChatAiReplyScanResult> {
       return enqueueScan(true)
+    },
+    regenerate(
+      recordId: number,
+      expectedSourceRef: string,
+    ): Promise<ChatAiReplyRegenerateResult> {
+      // 与扫描共用同一套 deps/租约；dispose 后不再开始新的付费调用。
+      return regenerateChatAiReplyRecord(
+        deps,
+        {
+          owner,
+          now,
+          leaseMs,
+          // 手动重生成是用户明确的一次性动作，不占自动扫描的并发槽位：
+          // 否则面板请求会排在后台批扫后面等待；但仍然共用租约、心跳与取消。
+          heartbeatMs,
+          isCancelled: () => disposed,
+        },
+        recordId,
+        expectedSourceRef,
+      )
     },
     dispose(): void {
       disposed = true

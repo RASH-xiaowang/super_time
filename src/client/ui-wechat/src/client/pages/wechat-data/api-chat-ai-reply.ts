@@ -128,6 +128,59 @@ export async function apiScanChatAiReplyNow(): Promise<ChatAiReplyScanResult> {
   return unwrap(await remote().scanChatAiReplyNow())
 }
 
+/** 重新生成的返回：`ok=false` 时用户应看到具体拒绝/失败原因。 */
+export interface ChatAiReplyRegenerateResult {
+  ok: boolean
+  error?: string
+}
+
+/** 专用清理的逐条结果；未删除的条目必须带原因，界面据此提示用户。 */
+export interface AiReplyReservationDeleteItem {
+  id: number
+  status: 'removed' | 'skipped'
+  error?: string
+}
+
+export interface AiReplyReservationDeleteResult {
+  ok: boolean
+  removed: number
+  skipped: number
+  items?: AiReplyReservationDeleteItem[]
+  error?: string
+}
+
+/**
+ * 桌面端专用：重新生成一条空白失败的 AI 回复记录。
+ *
+ * 会再调用一次模型并可能出网，成功后不可撤销；`sourceRef` 是记录的幂等键，
+ * 由列表记录原样带入，用于防止点击后目标被其它记录替换。
+ */
+export async function apiRegenerateChatAiReplyRecord(
+  recordId: number,
+  sourceRef: string,
+): Promise<ChatAiReplyRegenerateResult> {
+  const result = unwrap(await remote().regenerateChatAiReplyRecord({
+    recordId,
+    expectedSourceRef: sourceRef,
+  }))
+  if (result.ok) notifyMessageListUpdated()
+  return result
+}
+
+/**
+ * 桌面端专用：整组清理空白且从未发送的 AI 回复预约/失败记录。
+ *
+ * 不可撤销；后端只放宽 failed 状态，正文、图片、job、发送尝试与投递事实都会
+ * 让整组跳过。记录不存在算 skipped，因此重复调用是幂等的。
+ */
+export async function apiDeleteAiReplyReservations(
+  ids: number[],
+): Promise<AiReplyReservationDeleteResult> {
+  const result = unwrap(await remote().deleteAiReplyReservations({ ids }))
+  if (result.ok) notifyMessageListUpdated()
+  return result
+}
+
 /**
  * 读取 AI 回复默认大肥鱼 Webhook。
  *

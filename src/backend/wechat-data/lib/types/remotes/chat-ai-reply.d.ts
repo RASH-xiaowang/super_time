@@ -1,5 +1,7 @@
+import type { ChatAiReplyRegenerateResult } from '../query/ai-reply/runner-regenerate.ts';
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts';
 import type { ChatAiReplyDefaultWebhookMutationResult, ChatAiReplyDefaultWebhookState, ChatAiReplyDispatchResult, ChatAiReplyEnabledChatsResult, ChatAiReplyMutationResult, ChatAiReplyScanResult, ChatAiReplyScanDeps, ChatAiReplyState } from '../query/ai-reply/types.ts';
+import type { AiReplyReservationCleanupResult } from '../query/message-list-store.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
 export interface CreateChatAiReplyRemotesInputs {
     dirs: () => {
@@ -68,5 +70,19 @@ export declare function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInp
         status?: string;
         error?: string;
     };
+    /**
+     * 桌面端专用：重新生成一条空白失败的 AI 回复。
+     * 会再调用一次模型，记录会被原地复用（sourceRef 不变），不新建消息列表行。
+     */
+    regenerateRecord(options: {
+        recordId: number;
+        expectedSourceRef: string;
+    }): Promise<ChatAiReplyRegenerateResult>;
+    /**
+     * 桌面端专用：按 id 整组清理从未生成正文、从未投递的 AI 预约/失败记录。
+     * 记录不存在算 skipped，重复调用幂等；逐条原因放在 items 里。
+     * 运行窗口仍在生成/投递的记录会被拒绝（删除行不等于取消在途模型调用）。
+     */
+    deleteReservations(ids: readonly number[]): AiReplyReservationCleanupResult;
     dispose(): void;
 };

@@ -69,6 +69,10 @@ async function readSegmentsForRun(
         text: fallback.text ?? '',
         sourceRef: fallback.sourceRef ?? run.sourceRef,
         ...(fallback.error === undefined ? {} : { error: fallback.error }),
+        ...(fallback.imageCount === undefined ? {} : { imageCount: fallback.imageCount }),
+        ...(fallback.jobId === undefined ? {} : { jobId: fallback.jobId }),
+        ...(fallback.attempts === undefined ? {} : { attempts: fallback.attempts }),
+        ...(fallback.failureKind === undefined ? {} : { failureKind: fallback.failureKind }),
       }],
     }
   }

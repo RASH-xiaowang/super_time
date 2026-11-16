@@ -158,6 +158,16 @@ export interface ChatAiReplyRecordSnapshot {
     text?: string;
     sourceRef?: string;
     error?: string;
+    /**
+     * 桌面端「重新生成」守卫所需的只读事实。
+     * 只带定位与安全判据，不把 Webhook 地址等凭据带进运行器。
+     */
+    source?: string;
+    imageCount?: number;
+    jobId?: string;
+    attempts?: number;
+    failureKind?: string;
+    createdAt?: number;
 }
 /** 一次 AI 回复分组中的单段台账快照。 */
 export interface ChatAiReplySegmentSnapshot {
@@ -168,6 +178,11 @@ export interface ChatAiReplySegmentSnapshot {
     text: string;
     sourceRef: string;
     error?: string;
+    /** 重新生成/清理守卫所需：分段是否带附件、投递任务与发送尝试。 */
+    imageCount?: number;
+    jobId?: string;
+    attempts?: number;
+    failureKind?: string;
 }
 /** 原子补全一个 AI 回复分组的返回值。 */
 export interface ChatAiReplySegmentsResult {
@@ -331,6 +346,19 @@ export interface ChatAiReplyScanDeps {
      * 「会话已有更新的消息」这一类记录刷屏。缺省时退回 `failReply`。
      */
     dropReply?: (input: {
+        id: number;
+        sourceRef: string;
+    }) => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
+    /**
+     * 桌面端「重新生成」专用：把一条空白失败的 AI 回复记录 CAS 重置为 pending。
+     *
+     * 只有 id/sourceRef/状态/正文/投递任务都与调用方看到的一致时才允许；
+     * 返回失败时记录保持原状，绝不把已生成或已投递的事实改回 pending。
+     */
+    reopenReply?: (input: {
         id: number;
         sourceRef: string;
     }) => Promise<{

@@ -182,6 +182,16 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     expectedRevision: z.number().optional(),
   })),
   remote('scanChatAiReplyNow'),
+  // 桌面端专用的重新生成 / 清理：参数形状必须与网关签名逐字段一致。
+  // recordId 是正整数；sourceRef 非空，用于防止点击后目标记录被替换。
+  remote('regenerateChatAiReplyRecord', z.object({
+    recordId: z.number().int().positive(),
+    expectedSourceRef: z.string().min(1),
+  })),
+  // 单次最多 100 条，与 store 的清理上限一致；ids 不允许空数组。
+  remote('deleteAiReplyReservations', z.object({
+    ids: z.array(z.number().int().positive()).min(1).max(100),
+  })),
 
   // 消息列表：查询、规则、手动写入、附件暂存与投递诊断。
   remote('listMessageListRecords', z.union([

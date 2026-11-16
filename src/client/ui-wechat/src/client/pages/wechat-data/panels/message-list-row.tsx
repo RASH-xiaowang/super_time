@@ -4,7 +4,9 @@ import { Badge, Button } from '../ui/kit.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import {
   SOURCE_LABEL,
+  aiReplyDeleteEligibility,
   aiReplyPhase,
+  aiReplyRegenerateEligibility,
   batchDeleteEligibility,
   localImageKey,
   messageListFailureCopy,
@@ -16,6 +18,7 @@ import {
 } from './message-list-view.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import detailCss from './message-list-detail.module.css'
 import css from './message-list.module.css'
 
 export interface MessageListRowProps {
@@ -37,6 +40,29 @@ export interface MessageListRowProps {
   onProbe: (record: MessageListRecord) => void
   onQueryJob: (record: MessageListRecord) => void
   onConfigureRecordRule: (record: MessageListRecord) => void
+  /** 打开只读详情；入口是状态徽标与回复 ID，整行不可点。 */
+  onOpenDetail: (id: number) => void
+  regeneratingId: number | null
+  deletingAiReplyId: number | null
+  onRegenerateAiReply: (record: MessageListRecord) => void
+  onDeleteAiReplyRecord: (record: MessageListRecord) => void
+}
+
+function RegenerateIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0-2.34 5.66" />
+      <path d="M20 4v7h-7" />
+    </svg>
+  )
+}
+
+function TrashIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+    </svg>
+  )
 }
 
 function recordIdentity(name: string, enterpriseName?: string): string {
@@ -55,6 +81,8 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
   const showFailure = record.status === 'failed'
     || record.status === 'sent_unconfirmed'
     || record.error.trim() !== ''
+  const regenerateEligibility = aiReplyRegenerateEligibility(record, props.now)
+  const aiReplyDelete = aiReplyDeleteEligibility(record, props.now)
   // 备注列只显示分层标题；完整原文/建议放悬停属性，留给后续详情抽屉。
   const noteTitle = showFailure
     ? [failure.title, failure.detail, failure.hint]
@@ -90,12 +118,19 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
         </IdentityName>
       </td>
       <td className={css.statusCell}>
-        <Badge
-          tone={statusTone(record.status)}
-          title={messageListRecordStatusHint(record, props.now) || undefined}
+        <button
+          type="button"
+          className={detailCss.detailTrigger}
+          aria-label={'查看记录 #' + String(record.id) + ' 详情'}
+          onClick={() => { props.onOpenDetail(record.id) }}
         >
-          {messageListRecordStatusLabel(record, props.now)}
-        </Badge>
+          <Badge
+            tone={statusTone(record.status)}
+            title={messageListRecordStatusHint(record, props.now) || undefined}
+          >
+            {messageListRecordStatusLabel(record, props.now)}
+          </Badge>
+        </button>
         {record.attempts > 0 && <span className={css.attempts}>第 {record.attempts} 次</span>}
       </td>
       <td className={css.noteCell}>
@@ -173,6 +208,36 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
               {props.jobBusyId === record.id ? '查询中…' : '查任务'}
             </Button>
           )}
+          {regenerateEligibility.eligible && (
+            <Button
+              size="sm"
+              variant="ghost"
+              iconOnly
+              icon={<RegenerateIcon />}
+              disabled={!props.canWrite || props.batchBusy || props.regeneratingId === record.id}
+              aria-label={'重新生成记录 #' + String(record.id) + ' 的 AI 回复'}
+              title={props.regeneratingId === record.id
+                ? '重新生成中…'
+                : '重新生成（会再调用一次已配置的 AI 模型）'}
+              data-regenerate-ai-reply={record.id}
+              onClick={() => { props.onRegenerateAiReply(record) }}
+              {...desktopActionProps()}
+            />
+          )}
+          {aiReplyDelete.eligible && (
+            <Button
+              size="sm"
+              variant="ghost"
+              iconOnly
+              icon={<TrashIcon />}
+              disabled={!props.canWrite || props.batchBusy || props.deletingAiReplyId === record.id}
+              aria-label={'删除 AI 回复记录 #' + String(record.id)}
+              title="删除空白预约/失败记录（生成中的记录会被拒绝）"
+              data-delete-ai-reply={record.id}
+              onClick={() => { props.onDeleteAiReplyRecord(record) }}
+              {...desktopActionProps()}
+            />
+          )}
         </div>
       </td>
       <td className={css.nameCell} title={recordIdentity(record.targetName, record.targetEnterpriseName)}>
@@ -184,7 +249,16 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
       <td><Badge tone={sourceTone(record.source)}>{SOURCE_LABEL[record.source]}</Badge></td>
       <td className={css.timeCell}>{timeText(record.triggeredAt)}</td>
       <td><RecordImages record={record} thumbs={props.thumbs} /></td>
-      <td><code className={css.replyId} title={record.replyId}>{record.replyId}</code></td>
+      <td>
+        <button
+          type="button"
+          className={detailCss.replyIdButton}
+          aria-label={'查看记录 #' + String(record.id) + ' 详情'}
+          onClick={() => { props.onOpenDetail(record.id) }}
+        >
+          <code className={css.replyId} title={record.replyId}>{record.replyId}</code>
+        </button>
+      </td>
     </tr>
   )
 }

@@ -1,0 +1,62 @@
+/*
+ * 消息列表表头「清理无正文失败记录」入口与预览弹窗。
+ *
+ * 清单限高滚动，行内用可换行 flex；窄视口不会把弹窗撑出横向滚动。
+ */
+.lead {
+  margin: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  margin: 10px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.id {
+  flex: none;
+  color: var(--nm-cyan-text);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+}
+
+.time {
+  flex: none;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.title {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.more {
+  padding: 4px 8px;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}

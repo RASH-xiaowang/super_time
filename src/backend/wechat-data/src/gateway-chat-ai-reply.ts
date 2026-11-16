@@ -18,6 +18,8 @@ import {
   createChatAiReplyRemotes,
   type CreateChatAiReplyRemotesInputs,
 } from './remotes/chat-ai-reply.ts'
+import type { ChatAiReplyRegenerateResult } from './query/ai-reply/runner-regenerate.ts'
+import type { AiReplyReservationCleanupResult } from './query/message-list-store.ts'
 import { createDefaultChatAiReplyGenerator } from './query/ai-reply/generator.ts'
 import { decodeChatAiReplyImages } from './query/ai-reply/context.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
@@ -130,6 +132,40 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
   @Remote('scanChatAiReplyNow')
   scanChatAiReplyNow(): Promise<ChatAiReplyScanResult> {
     return this.chatAiReplyRemotes().scanOnce()
+  }
+
+  /**
+   * 桌面端专用：重新生成一条空白失败的 AI 回复记录。
+   *
+   * 只允许 24 小时内、整组无正文/图片/投递事实，且失败分类为 superseded、
+   * generation_failed 或 config_changed 的记录。**会再调用一次付费模型并可能出网，
+   * 成功后不可撤销**；expectedSourceRef 用于防止点击后目标记录被替换。
+   */
+  @Remote('regenerateChatAiReplyRecord')
+  regenerateChatAiReplyRecord(options: {
+    recordId: number
+    expectedSourceRef: string
+  }): Promise<ChatAiReplyRegenerateResult> {
+    // schema 覆盖层只是影子账；这里对绕过界面的调用仍给出稳定错误。
+    if (options === null || typeof options !== 'object') {
+      return Promise.resolve({ ok: false, error: '重新生成参数无效' })
+    }
+    return this.chatAiReplyRemotes().regenerateRecord(options)
+  }
+
+  /**
+   * 桌面端专用：清理空白且从未发送的 AI 回复预约/失败记录。
+   *
+   * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**；有正文、图片、异步任务、
+   * 发送尝试或任何投递事实的记录会逐条跳过；运行窗口仍在生成/投递的记录也会被
+   * 拒绝（删除行不等于取消在途模型调用）。记录不存在算 skipped，重复调用幂等。
+   */
+  @Remote('deleteAiReplyReservations')
+  deleteAiReplyReservations(options: { ids: number[] }): AiReplyReservationCleanupResult {
+    if (options === null || typeof options !== 'object' || !Array.isArray(options.ids)) {
+      return { ok: false, removed: 0, skipped: 0, items: [], error: 'ids 必须是数组' }
+    }
+    return this.chatAiReplyRemotes().deleteReservations(options.ids)
   }
 
   protected _chatAiReplyRemotes?: ReturnType<typeof createChatAiReplyRemotes>

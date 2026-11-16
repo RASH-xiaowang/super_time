@@ -1,0 +1,281 @@
+/*
+ * 消息记录详情抽屉。
+ *
+ * 只读视图：状态、正文、失败分层、关键时间、标识、附件与下游任务。
+ * 正文单独限高滚动，长文不把抽屉撑高；所有可换行文本都允许 anywhere，
+ * 窄视口下不会产生横向溢出。
+ */
+.body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.subtitle {
+  min-width: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hint {
+  margin: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+/* 正文是详情抽屉最长的内容：独立限高滚动，长文不会把整个抽屉撑高。 */
+.textBox {
+  min-width: 0;
+  min-height: 56px;
+  max-height: 42vh;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.textBox[data-empty='true'] {
+  color: var(--nm-text-2);
+}
+
+.failure {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, var(--nm-border));
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-danger) 7%, var(--nm-bg-card));
+}
+
+.failureTitle {
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-sm);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.failureDetail,
+.failureHint {
+  margin: 4px 0 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.failureDetail {
+  color: var(--nm-text-1);
+}
+
+.failureHint {
+  color: var(--nm-text-2);
+}
+
+.times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.timeRow {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.itemLabel {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.itemValue {
+  margin: 0;
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.timeValue {
+  font-variant-numeric: tabular-nums;
+}
+
+.ids {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.idRow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.idValue {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-cyan-text);
+  overflow-wrap: anywhere;
+}
+
+.attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.attachmentThumb {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  object-fit: cover;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  flex: none;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.attachmentName {
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  margin: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-sm);
+}
+
+/*
+ * 行内入口：状态 Badge 与回复 ID 各包一层真正的 button。
+ * 外观必须完全继承单元格，不加 padding/边框；表格在手机档有
+ * `.table .recordRow button { min-height: 28px }`，这里保持相同的紧凑高度。
+ */
+.detailTrigger {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.replyIdButton {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.detailTrigger:focus-visible,
+.replyIdButton:focus-visible {
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 2px;
+}
+
+@media (max-width: 560px) {
+  .times {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .idRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .idRow .itemLabel {
+    margin-top: 4px;
+  }
+}

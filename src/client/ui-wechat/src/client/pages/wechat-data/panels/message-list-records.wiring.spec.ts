@@ -8,8 +8,9 @@
  */
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { MessageListRecord } from '@deepseek-ai/dsh-wechat-data/types'
+import { setCapabilities } from '../api.ts'
 import { MessageListRecords } from './message-list-records.tsx'
 
 type Stats = {
@@ -46,6 +47,7 @@ function aiRecord(patch: Partial<MessageListRecord> = {}): MessageListRecord {
 function renderRecords(
   records: MessageListRecord[],
   stats: Partial<Stats> = {},
+  overrides: Partial<Parameters<typeof MessageListRecords>[0]> = {},
 ): string {
   return renderToStaticMarkup(createElement(MessageListRecords, {
     records,
@@ -74,8 +76,47 @@ function renderRecords(
     onQueryJob: () => {},
     onConfigureRule: () => {},
     onConfigureRecordRule: () => {},
+    regeneratingId: null,
+    deletingAiReplyId: null,
+    onRegenerateAiReply: () => {},
+    onDeleteAiReplyRecord: () => {},
+    onCleanupAiReplyRecords: async () => true,
+    ...overrides,
   }))
 }
+
+/** 空白失败/预约记录：重新生成与专用删除的共同候选形态。 */
+function blankAiRecord(patch: Partial<MessageListRecord> = {}): MessageListRecord {
+  const now = Date.now()
+  return aiRecord({
+    id: 21,
+    replyId: 'ml-21',
+    text: '',
+    note: '',
+    status: 'failed',
+    error: '模型没有返回内容',
+    failureKind: 'generation_failed',
+    webhookUrl: '',
+    createdAt: now,
+    updatedAt: now,
+    ...patch,
+  })
+}
+
+afterEach(() => {
+  // 本仓测试默认按浏览器能力表求值；上一条用例若切到桌面态，这里恢复默认。
+  setCapabilities({
+    isDesktop: false,
+    isBrowser: true,
+    desktopEquivalent: false,
+    dirPicker: false,
+    capturePanel: false,
+    shellOpen: false,
+    license: false,
+    diag: false,
+    update: false,
+  })
+})
 
 describe('消息列表：未配置投递地址的 AI 回复', () => {
   it('明确显示正文已保存并给出去配置规则的入口', () => {
@@ -159,5 +200,92 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
     expect(html).toContain('<b>1</b> 生成中')
     expect((html.match(/data-configure-rule=/g) ?? [])).toHaveLength(1)
     expect(html).toContain('1 条 AI 回复还没有投递地址')
+  })
+
+  it('空白失败的 AI 回复行提供「重新生成」与「删除」入口', () => {
+    const html = renderRecords([blankAiRecord()], { failed: 1 })
+
+    expect(html).toContain('data-regenerate-ai-reply="21"')
+    expect(html).toContain('data-delete-ai-reply="21"')
+    expect(html).toContain('aria-label="重新生成记录 #21 的 AI 回复"')
+    expect(html).toContain('aria-label="删除 AI 回复记录 #21"')
+
+    // 桌面态才看得到真实动作提示；浏览器态由 desktopActionProps 改成统一降级文案。
+    setCapabilities({
+      isDesktop: true,
+      isBrowser: false,
+      desktopEquivalent: false,
+      dirPicker: true,
+      capturePanel: true,
+      shellOpen: true,
+      license: true,
+      diag: true,
+      update: true,
+    })
+    const desktopHtml = renderRecords([blankAiRecord()], { failed: 1 })
+    expect(desktopHtml).toContain('重新生成（会再调用一次已配置的 AI 模型）')
+    expect(desktopHtml).toContain('删除空白预约/失败记录')
+  })
+
+  it('已有正文的失败 AI 回复不提供「重新生成」或「删除」', () => {
+    const html = renderRecords([aiRecord({
+      id: 22,
+      replyId: 'ml-22',
+      status: 'failed',
+      failureKind: 'send_failed',
+      text: '已经生成的正文',
+    })], { failed: 1 })
+
+    expect(html).not.toContain('data-regenerate-ai-reply')
+    expect(html).not.toContain('data-delete-ai-reply')
+    expect(html).not.toContain('重新生成记录 #22')
+  })
+
+  it('清理入口只在 AI 来源筛选且当前窗口有候选时出现', () => {
+    const blank = aiRecord({
+      id: 31,
+      replyId: 'ml-31',
+      text: '',
+      note: '',
+      status: 'pending',
+      error: '',
+    })
+
+    const aiFiltered = renderRecords([blank], { pending: 1 })
+    expect(aiFiltered).toContain('清理无正文失败记录 · 1（当前窗口）')
+    expect(aiFiltered).toContain('data-cleanup-ai-reply="1"')
+
+    const allSources = renderRecords([blank], { pending: 1 }, { source: '' })
+    expect(allSources).not.toContain('data-cleanup-ai-reply')
+    expect(allSources).not.toContain('清理无正文失败记录')
+
+    // 非空正文记录即使来源筛选是 AI 也不是清理候选。
+    const withText = renderRecords([aiRecord()], { pending: 1 })
+    expect(withText).not.toContain('data-cleanup-ai-reply')
+  })
+
+  it('浏览器态下重新生成、删除与清理入口都禁用', () => {
+    setCapabilities({
+      isDesktop: false,
+      isBrowser: true,
+      desktopEquivalent: false,
+      dirPicker: false,
+      capturePanel: false,
+      shellOpen: false,
+      license: false,
+      diag: false,
+      update: false,
+    })
+    const html = renderRecords([blankAiRecord({ id: 41, replyId: 'ml-41' })], { failed: 1 })
+
+    const regenerate = /<button[^>]*data-regenerate-ai-reply="41"[^>]*>/.exec(html)?.[0] ?? ''
+    const remove = /<button[^>]*data-delete-ai-reply="41"[^>]*>/.exec(html)?.[0] ?? ''
+    const cleanup = /<button[^>]*data-cleanup-ai-reply="1"[^>]*>/.exec(html)?.[0] ?? ''
+    expect(regenerate, '缺少重新生成入口').not.toBe('')
+    expect(remove, '缺少删除入口').not.toBe('')
+    expect(cleanup, '缺少清理入口').not.toBe('')
+    expect(regenerate).toContain('disabled=""')
+    expect(remove).toContain('disabled=""')
+    expect(cleanup).toContain('disabled=""')
   })
 })

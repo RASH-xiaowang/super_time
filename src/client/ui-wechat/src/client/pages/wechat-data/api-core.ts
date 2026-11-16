@@ -416,6 +416,28 @@ export interface WechatRemote {
   }): Promise<RemoteResult<ChatAiReplyMutationResult>>
   /** 立即扫描一次（桌面端诊断用）。 */
   scanChatAiReplyNow(): Promise<RemoteResult<ChatAiReplyScanResult>>
+  /** 重新生成一条空白失败的 AI 回复记录；会再调用模型，仅桌面端可用。 */
+  regenerateChatAiReplyRecord(options: {
+    recordId: number
+    expectedSourceRef: string
+  }): Promise<RemoteResult<{
+    ok: boolean
+    error?: string
+  }>>
+  /** 整组清理空白且从未发送的 AI 回复预约；仅桌面端可用，不可撤销。 */
+  deleteAiReplyReservations(options: {
+    ids: number[]
+  }): Promise<RemoteResult<{
+    ok: boolean
+    removed: number
+    skipped: number
+    items?: Array<{
+      id: number
+      status: 'removed' | 'skipped'
+      error?: string
+    }>
+    error?: string
+  }>>
   /** 局域网 Webhook 地址与示例（含令牌，仅桌面端可调用）。 */
   getMessageListWebhookInfo(): Promise<RemoteResult<MessageListWebhookInfo>>
   getMoments(options?: { offset?: number; limit?: number; author?: string }): Promise<RemoteResult<MomentsSnapshot>>

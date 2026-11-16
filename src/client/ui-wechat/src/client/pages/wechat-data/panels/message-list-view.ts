@@ -623,3 +623,114 @@ export function batchDeleteEligibility(record: MessageListRecord): BatchActionEl
 export function isBatchSelectable(record: MessageListRecord): boolean {
   return batchDeleteEligibility(record).eligible
 }
+
+/** 重新生成窗口：后端只接受创建 24 小时内的空白失败 AI 回复。 */
+export const AI_REPLY_REGENERATE_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 可以重新生成的失败分类：过期、模型没产出正文、设置变更。
+ *
+ * 发送失败/未确认不在其中——前者可能已经产生了外部副作用，后者无法确认，
+ * 两者重新生成都可能造成重复调用或重复消息。
+ */
+const AI_REPLY_REGENERATE_FAILURE_KINDS: ReadonlySet<string> = new Set([
+  'superseded',
+  'generation_failed',
+  'config_changed',
+])
+
+/**
+ * 重新生成一条空白失败 AI 回复的资格。
+ *
+ * 条件：来源 AI、失败且没有正文/图片、没有下游任务、失败分类属于
+ * 过期/生成失败/设置变更、创建时间在 24 小时内。任何一条不满足都给出
+ * 用户能读懂的原因，按钮据此隐藏而不是点击后才报错。
+ * @param record - 消息记录。
+ * @param now - 当前时间；测试可固定。
+ * @returns 是否可重新生成及不可用原因。
+ */
+export function aiReplyRegenerateEligibility(
+  record: MessageListRecord,
+  now = Date.now(),
+): BatchActionEligibility {
+  if (record.source !== 'ai_reply') {
+    return { eligible: false, reason: '只有 AI 回复记录可以重新生成' }
+  }
+  if (record.status === 'sent_unconfirmed' || record.failureKind === 'unconfirmed') {
+    return { eligible: false, reason: '发送结果未确认，不能重新生成' }
+  }
+  if (record.text.trim() !== '' || record.images.length > 0) {
+    return { eligible: false, reason: '已有正文或附件，不能重新生成' }
+  }
+  if ((record.jobId ?? '').trim() !== '' || (record.jobState ?? '').trim() !== '') {
+    return { eligible: false, reason: '已投递到下游或存在任务，不能重新生成' }
+  }
+  if (record.attempts > 0 || record.lastAttemptAt !== undefined) {
+    return { eligible: false, reason: '已经尝试过投递，不能重新生成' }
+  }
+  if (record.webhookUrl.trim() !== '') {
+    return { eligible: false, reason: '已绑定发送地址，不能重新生成' }
+  }
+  if (record.status !== 'failed') {
+    return { eligible: false, reason: '只有失败的 AI 回复可以重新生成' }
+  }
+  if (!AI_REPLY_REGENERATE_FAILURE_KINDS.has(record.failureKind ?? '')) {
+    return { eligible: false, reason: '这条失败类型不支持重新生成' }
+  }
+  if (!Number.isFinite(record.createdAt)
+    || now - record.createdAt >= AI_REPLY_REGENERATE_WINDOW_MS) {
+    return { eligible: false, reason: '超过 24 小时，无法重新生成' }
+  }
+  return { eligible: true, reason: '' }
+}
+
+export interface AiReplyDeleteEligibility extends BatchActionEligibility {
+  /** 删除会放弃 10 分钟内仍在进行的生成；确认框必须给出警告。 */
+  generating: boolean
+}
+
+/**
+ * 专用清理（整组删除）一条 AI 回复预约/失败记录的资格。
+ *
+ * 只处理「空白、无附件、无下游任务、从未尝试投递」的 pending/failed。
+ * 10 分钟内的空白 pending 视为**仍在生成**，一律不允许删除：删除行并不等于
+ * 取消在途模型调用，runner 仍会拿到结果并按同一 sourceRef 恢复/投递。等这一轮
+ * 收口（失败）或超过停滞窗口后再清理。
+ * @param record - 消息记录。
+ * @param now - 当前时间；测试可固定。
+ * @returns 是否可清理、原因及是否仍在生成。
+ */
+export function aiReplyDeleteEligibility(
+  record: MessageListRecord,
+  now = Date.now(),
+): AiReplyDeleteEligibility {
+  const no = (reason: string): AiReplyDeleteEligibility => ({
+    eligible: false,
+    reason,
+    generating: false,
+  })
+  if (record.source !== 'ai_reply') return no('只有 AI 回复记录可以清理')
+  if (record.status !== 'pending' && record.status !== 'failed') {
+    return no('只有待执行或失败的 AI 回复可以清理')
+  }
+  if (record.text.trim() !== '' || record.images.length > 0) {
+    return no('已有正文或附件，不能清理')
+  }
+  if ((record.jobId ?? '').trim() !== '' || (record.jobState ?? '').trim() !== '') {
+    return no('已投递到下游或存在任务，不能清理')
+  }
+  if (record.attempts > 0 || record.lastAttemptAt !== undefined) {
+    return no('已经尝试过投递，不能清理')
+  }
+  if (record.webhookUrl.trim() !== '') {
+    return no('已绑定发送地址，不能清理')
+  }
+  if (record.status === 'pending' && aiReplyPhase(record, now) === 'generating') {
+    return {
+      eligible: false,
+      reason: '生成进行中，完成或停滞后再清理',
+      generating: true,
+    }
+  }
+  return { eligible: true, reason: '', generating: false }
+}

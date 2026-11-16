@@ -275,12 +275,13 @@ export const MUTATIONS_BATCH3C = [
   },
  // 2026-11-13：锚点跟随 panels/ 下 .tsx 实测数 191 更新（分析面板移除内嵌推荐组件）；
  // 2026-11-15：表情占位组件 `chats-sticker.tsx` 让实测数变成 192，锚点跟随。
+ // 2026-11-16：消息记录详情抽屉 `message-list-detail-drawer.tsx` 让实测数变成 194；随后 AI 回复清理入口 `message-list-ai-reply-cleanup.tsx` 让实测数变成 195，锚点跟随。
   {
     id: "M343-readme-panel-count-rotted",
     why: "（2026-10-13 聊天信息 D0 新增 `chats-info-rows.tsx`；随后健康完整性、远程访问、资产面板、图谱参数、问答过程、任务信息和知识库视图持续拆件，锚点跟随。2026-10-25 分析面板新增 `AnalysisReplySuggest.tsx`；2026-11-13 该组件随「分析与推荐回复分家」删除，锚点跟随；2026-10-26 问答运行视图新增 `AnswerRunView.tsx`、正文块解析新增 `answer-blocks.ts` 及样式文件，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 193 个 .tsx 视图）",
-    to: "src/client/ui-wechat/    数据面板（panels/ 下 183 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 195 个 .tsx 视图）",
+    to: "src/client/ui-wechat/    数据面板（panels/ 下 185 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },
   {
