@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { createDefaultChatAiReplyGenerator } from '../src/query/ai-reply/generator.ts'
+import { buildChatAiReplyPrompt } from '../src/query/ai-reply/context.ts'
 
 describe('AI 回复生成器的 OpenCode 会话标识', () => {
   it('同一账号与联系人会得到可复用的稳定种子', async () => {
@@ -75,7 +76,9 @@ describe('AI 回复生成器的 OpenCode 会话标识', () => {
 
     const result = await generate({
       system: 'system',
-      prompt: '上下文\n\n本次随请求附带 1 张最近的图片，请结合图片内容理解上下文。\n\n请回复',
+      // 用生产提示词原文，确保降级时真的替换掉「图片或表情」附注；
+      // 手写旧文案会掩盖正则与实际提示词不一致的问题。
+      prompt: buildChatAiReplyPrompt(['对方：[图片]'], 1),
       images: [{
         localId: 1,
         dataUrl: 'data:image/png;base64,aGVsbG8=',
@@ -96,8 +99,9 @@ describe('AI 回复生成器的 OpenCode 会话标识', () => {
       mediaType: 'image/png',
     })
     expect(seen[1]?.messages[0]?.content.some((block) => block.type === 'image')).toBe(false)
-    expect(String((seen[1]?.messages[0]?.content[0] as { text?: string } | undefined)?.text))
-      .toContain('当前模型未能读取所附图片')
+    const retryText = String((seen[1]?.messages[0]?.content[0] as { text?: string } | undefined)?.text)
+    expect(retryText).toContain('当前模型未能读取所附图片')
+    expect(retryText).not.toContain('本次随请求附带')
   })
 
   it('模型完整正文按 UTF-16 安全截断到 4000，不会拆坏 emoji', async () => {

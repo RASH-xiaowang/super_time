@@ -53,6 +53,31 @@ export interface ReplyImageCandidate {
   emojiUrl?: string
 }
 
+/** 一条进入模型上下文的聊天消息；正文已压平空白但**未截断**。 */
+export interface ReplyContextEntry {
+  localId: number
+  /** 消息时间（秒）；未知为 0。 */
+  createTime: number
+  isSender: boolean
+  /** 单聊为「我 / 对方」；群聊为成员显示名。 */
+  speaker: string
+  /** 已压平空白的完整展示文本（媒体消息为 [图片]/[表情] 等占位）。 */
+  text: string
+  /** 仅视觉消息出现：会话内定位键。 */
+  image?: ReplyImageCandidate
+}
+
+/** `collectReplyContextEntries` 的结果：结构化条目 + 与 `collectReplyContext` 同源的汇总字段。 */
+export interface ReplyContextEntries {
+  entries: ReplyContextEntry[]
+  imageCandidates?: ReplyImageCandidate[]
+  latestPeer: string
+  count: number
+  targetFound?: boolean
+  targetSpeaker?: string
+  targetLine: string
+}
+
 /**
  * 取当前会话最近的对话上下文。
  * @param decryptedDir - 解密数据根。
@@ -70,6 +95,42 @@ export function collectReplyContext(
   limit = REPLY_SUGGEST_CONTEXT_LIMIT,
   targetLocalId?: number,
 ): ReplyContext {
+  // 取数、过滤与发言者标注都收在共享实现里；它内部仍只按 talker 走
+  // queryMessages(talker, …) / queryMessagesAtOrBefore，跨会话隔离的边界不变。
+  const context = collectReplyContextEntries(decryptedDir, talker, selfUsername, limit, targetLocalId)
+  return {
+    // 每条文本只保留头部 300 字（`messageText` 的既有口径）；entries 里的正文保持完整。
+    lines: context.entries.map((entry) => `${entry.speaker}：${truncateLine(entry.text)}`),
+    ...(context.imageCandidates === undefined ? {} : { imageCandidates: context.imageCandidates }),
+    latestPeer: context.latestPeer,
+    count: context.entries.length,
+    targetLine: context.targetLine,
+    ...(context.targetFound === undefined ? {} : { targetFound: context.targetFound }),
+    ...(context.targetSpeaker === undefined ? {} : { targetSpeaker: context.targetSpeaker }),
+  }
+}
+
+/**
+ * 取当前会话最近的对话上下文（**结构化条目**版）。
+ *
+ * 与 `collectReplyContext` 共用同一份取数/过滤/发言者标注/图片候选规则；区别只在
+ * 每条消息保留**未截断**的正文与身份字段，供上下文预算引擎自行取舍。
+ * 汇总字段（`latestPeer` / `targetLine`）沿用推荐回复的既有 300 字口径。
+ * @param decryptedDir - 解密数据根。
+ * @param talker - 会话 username（**范围就是它**，绝不跨会话取）。
+ * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
+ * @param limit - 取最近多少条（默认 60）。
+ * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
+ * @returns 结构化条目；该会话没有可用文本时 `count` 为 0。
+ */
+export function collectReplyContextEntries(
+  decryptedDir: string,
+  // talker 是 `WechatSession.username` 的别名。
+  talker: string,
+  selfUsername?: string,
+  limit = REPLY_SUGGEST_CONTEXT_LIMIT,
+  targetLocalId?: number,
+): ReplyContextEntries {
   const cap = Math.max(1, Math.min(limit, 60))
   const targetId = Number.isFinite(targetLocalId) && Number(targetLocalId) > 0
     ? Math.trunc(Number(targetLocalId))
@@ -80,11 +141,13 @@ export function collectReplyContext(
     ? queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
     : queryMessagesAtOrBefore(decryptedDir, talker, targetId, cap, selfUsername)
   if (targetId !== undefined && 'found' in snapshot && !snapshot.found) {
-    return { lines: [], latestPeer: '', count: 0, targetFound: false, targetLine: '' }
+    return { entries: [], latestPeer: '', count: 0, targetFound: false, targetLine: '' }
   }
-  const lines: string[] = []
+  const entries: ReplyContextEntry[] = []
   const imageCandidates: ReplyImageCandidate[] = []
-  const seenVisual = new Set<number>()
+  // localId -> 候选，用于同一视觉消息重复出现时仍让 entry 拿到定位键；
+  // imageCandidates 本身保持「时间正序、按 localId 去重」的既有规则。
+  const visualByLocalId = new Map<number, ReplyImageCandidate>()
   let latestPeer = ''
   let latestLine = ''
   let targetSpeaker: string | undefined
@@ -92,21 +155,27 @@ export function collectReplyContext(
   const isGroup = talker.endsWith('@chatroom')
   for (const m of snapshot.messages) {
     // 所有对话类型都进入上下文；媒体/卡片缺少展示字段时由同一条规则合成占位。
-    const text = messageText({ ...m, displayText: contextualMessageText(m) })
+    // 这里刻意用完整正文：截断只发生在 `collectReplyContext` 映射行时。
+    const text = flattenMessageText({ ...m, displayText: contextualMessageText(m) })
     if (text === '') continue
     const visualKind = visualKindOf(m)
-    if (visualKind !== null && m.localId > 0 && !seenVisual.has(m.localId)) {
-      seenVisual.add(m.localId)
-      imageCandidates.push({
-        localId: m.localId,
-        ...(visualKind === 'sticker'
-          ? {
-              kind: 'sticker' as const,
-              ...(m.rich?.md5 ? { md5: m.rich.md5 } : {}),
-              ...(m.rich?.emojiUrl ? { emojiUrl: m.rich.emojiUrl } : {}),
-            }
-          : {}),
-      })
+    let image: ReplyImageCandidate | undefined
+    if (visualKind !== null && m.localId > 0) {
+      image = visualByLocalId.get(m.localId)
+      if (image === undefined) {
+        image = {
+          localId: m.localId,
+          ...(visualKind === 'sticker'
+            ? {
+                kind: 'sticker' as const,
+                ...(m.rich?.md5 ? { md5: m.rich.md5 } : {}),
+                ...(m.rich?.emojiUrl ? { emojiUrl: m.rich.emojiUrl } : {}),
+              }
+            : {}),
+        }
+        visualByLocalId.set(m.localId, image)
+        imageCandidates.push(image)
+      }
     }
     const self = m.isSender === 1
     // 群聊必须保留发言者身份，否则模型会把不同成员揉成同一个「对方」。
@@ -119,24 +188,32 @@ export function collectReplyContext(
       : isGroup
         ? (senderName || m.sender || '群成员')
         : '对方'
-    const line = `${speaker}：${text}`
-    lines.push(line)
-    latestLine = line
+    entries.push({
+      localId: m.localId,
+      createTime: Number.isFinite(m.createTime) ? m.createTime : 0,
+      isSender: self,
+      speaker,
+      text,
+      ...(image === undefined ? {} : { image }),
+    })
+    // 汇总字段沿用推荐回复的既有口径：单条只保留头部 300 字。
+    const lineText = truncateLine(text)
+    latestLine = `${speaker}：${lineText}`
     if (m.localId === targetId) {
-      targetText = text
+      targetText = lineText
       targetSpeaker = speaker
     }
-    if (!self) latestPeer = text
+    if (!self) latestPeer = lineText
   }
   if (targetText !== '') latestPeer = targetText
   const targetLine = targetText !== '' && targetSpeaker !== undefined
     ? `${targetSpeaker}：${targetText}`
     : latestLine
   return {
-    lines,
+    entries,
     ...(imageCandidates.length === 0 ? {} : { imageCandidates }),
     latestPeer,
-    count: lines.length,
+    count: entries.length,
     targetLine,
     ...(targetId === undefined ? {} : { targetFound: true }),
     ...(targetSpeaker === undefined ? {} : { targetSpeaker }),
@@ -195,12 +272,21 @@ export function buildReplyPrompt(
   return parts.join('\n')
 }
 
-/** 一条消息用于拼提示词的文本：优先展示文本，其次落回原始字段；过长截断。 */
-export function messageText(m: { displayText?: string; strContent?: string; msgContent?: string }): string {
+/** 把展示文本压平空白但**不截断**；空串表示该消息不该进上下文。 */
+function flattenMessageText(m: { displayText?: string; strContent?: string; msgContent?: string }): string {
   const raw = String(m.displayText ?? m.strContent ?? m.msgContent ?? '').trim()
   if (raw === '') return ''
-  const flat = raw.replace(/\s+/g, ' ')
+  return raw.replace(/\s+/g, ' ')
+}
+
+/** 单条文本只保留头部 `MAX_LINE_CHARS` 字符（推荐回复的既有口径）。 */
+function truncateLine(flat: string): string {
   return flat.length > MAX_LINE_CHARS ? flat.slice(0, MAX_LINE_CHARS) + '…' : flat
+}
+
+/** 一条消息用于拼提示词的文本：优先展示文本，其次落回原始字段；过长截断。 */
+export function messageText(m: { displayText?: string; strContent?: string; msgContent?: string }): string {
+  return truncateLine(flattenMessageText(m))
 }
 
 /**

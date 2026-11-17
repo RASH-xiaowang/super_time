@@ -34,7 +34,7 @@ export interface ChatAiReplyGeneration {
 async function collectKbSnippetsForState(
   deps: ChatAiReplyScanDeps,
   state: ChatAiReplyState,
-  context: { lines: string[]; latestPeer: string },
+  context: { lines: string[]; dialogueLines?: string[]; latestPeer: string },
 ): Promise<string[] | undefined> {
   if (!state.kbEnabled || state.kbId <= 0) return undefined
   if (deps.collectKbSnippets === undefined) {
@@ -44,7 +44,8 @@ async function collectKbSnippetsForState(
   try {
     const result = await deps.collectKbSnippets({
       kbId: state.kbId,
-      lines: context.lines,
+      // 检索只看正文：时间标记与「更早的对话已省略」会把查询词切碎。
+      lines: context.dialogueLines ?? context.lines,
       ...(context.latestPeer === '' ? {} : { latestPeer: context.latestPeer }),
     })
     deps.op(
@@ -86,6 +87,18 @@ export async function generateChatAiReply(
       // 图片/表情是增强信息，解码失败不能阻断纯文本回复。
       deps.op('chat_ai_reply', false, 'decode media failed: ' + errorText(e))
     }
+  }
+  // 只记录统计，不记录聊天正文：排查「为什么模型没看到某条消息」时，
+  // 这条日志足以区分预算裁剪、图片预留与单条截断。
+  const stats = context.stats
+  if (stats !== undefined) {
+    deps.op('chat_ai_reply', true,
+      'context included=' + String(stats.included) + '/' + String(stats.collected)
+        + ' tokens~' + String(stats.estimatedTokens) + '/' + String(stats.tokenBudget)
+        // decoded/reserved：解码失败时两者不同，避免把预留 token 误读成正文预算。
+        + ' images=' + String(images.length) + '/' + String(stats.imageCount)
+        + (stats.truncated ? ' dropped=' + String(stats.dropped) : '')
+        + (stats.shortened > 0 ? ' shortened=' + String(stats.shortened) : ''))
   }
   const kb = await collectKbSnippetsForState(deps, state, context)
   const prompt = images.length > 0

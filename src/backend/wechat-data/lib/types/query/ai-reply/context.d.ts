@@ -1,17 +1,22 @@
+import type { ChatAiReplyContextStats } from './context-budget.ts';
 import type { ReplyImageCandidate } from '../reply-suggest.ts';
+export { AI_REPLY_INPUT_TOKEN_BUDGET } from './context-budget.ts';
 export declare const AI_REPLY_CONTEXT_LIMIT = 60;
-export declare const AI_REPLY_PROMPT_BUDGET = 6000;
 /** 单次回复最多附带几张视觉内容：控制在常见视觉模型的请求上限内。 */
 export declare const AI_REPLY_IMAGE_LIMIT = 3;
 /** 图片/表情解码后的总字节预算；超出时从最旧的视觉内容开始舍弃。 */
 export declare const AI_REPLY_IMAGE_TOTAL_BYTES: number;
 export interface ChatAiReplyContext {
     lines: string[];
-    /** 当前窗口内按时间正序的图片/表情消息；字节由生成前按需解码。 */
+    /** 只含正文行，不含时间标记/省略行；知识库检索用它，避免日期污染查询。 */
+    dialogueLines?: string[];
+    /** 只包含预算窗口内的图片/表情消息；窗口外的图片不会被解码或发送。 */
     imageCandidates?: ReplyImageCandidate[];
     latestPeer: string;
     count: number;
     prompt: string;
+    /** 本次上下文装配的统计；测试注入的上下文可省略。 */
+    stats?: ChatAiReplyContextStats;
 }
 /** 已解码、可直接放进多模态请求的一张图片。 */
 export interface ChatAiReplyContextImage {

@@ -113,8 +113,9 @@ function isImageRequestFailure(error: string | undefined): boolean {
 }
 
 function stripImageNotice(prompt: string): string {
+  // 兼容「图片」与「图片或表情」两种文案；只替换整行附注，不碰对话正文。
   return prompt.replace(
-    /\n\n本次随请求附带 \d+ 张最近的图片，请结合图片内容理解上下文。\n/,
+    /\n\n本次随请求附带 \d+ 张[^\n]*\n/,
     '\n\n（当前模型未能读取所附图片，本次只按文字上下文回复。）\n',
   )
 }

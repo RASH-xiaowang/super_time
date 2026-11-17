@@ -30,6 +30,29 @@ export interface ReplyImageCandidate {
     md5?: string;
     emojiUrl?: string;
 }
+/** 一条进入模型上下文的聊天消息；正文已压平空白但**未截断**。 */
+export interface ReplyContextEntry {
+    localId: number;
+    /** 消息时间（秒）；未知为 0。 */
+    createTime: number;
+    isSender: boolean;
+    /** 单聊为「我 / 对方」；群聊为成员显示名。 */
+    speaker: string;
+    /** 已压平空白的完整展示文本（媒体消息为 [图片]/[表情] 等占位）。 */
+    text: string;
+    /** 仅视觉消息出现：会话内定位键。 */
+    image?: ReplyImageCandidate;
+}
+/** `collectReplyContextEntries` 的结果：结构化条目 + 与 `collectReplyContext` 同源的汇总字段。 */
+export interface ReplyContextEntries {
+    entries: ReplyContextEntry[];
+    imageCandidates?: ReplyImageCandidate[];
+    latestPeer: string;
+    count: number;
+    targetFound?: boolean;
+    targetSpeaker?: string;
+    targetLine: string;
+}
 /**
  * 取当前会话最近的对话上下文。
  * @param decryptedDir - 解密数据根。
@@ -42,6 +65,20 @@ export interface ReplyImageCandidate {
 export declare function collectReplyContext(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
 talker: string, selfUsername?: string, limit?: number, targetLocalId?: number): ReplyContext;
+/**
+ * 取当前会话最近的对话上下文（**结构化条目**版）。
+ *
+ * 与 `collectReplyContext` 共用同一份取数/过滤/发言者标注/图片候选规则；区别只在
+ * 每条消息保留**未截断**的正文与身份字段，供上下文预算引擎自行取舍。
+ * 汇总字段（`latestPeer` / `targetLine`）沿用推荐回复的既有 300 字口径。
+ * @param decryptedDir - 解密数据根。
+ * @param talker - 会话 username（**范围就是它**，绝不跨会话取）。
+ * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
+ * @param limit - 取最近多少条（默认 60）。
+ * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
+ * @returns 结构化条目；该会话没有可用文本时 `count` 为 0。
+ */
+export declare function collectReplyContextEntries(decryptedDir: string, talker: string, selfUsername?: string, limit?: number, targetLocalId?: number): ReplyContextEntries;
 /**
  * 拼「推荐回复」的提示词。
  *

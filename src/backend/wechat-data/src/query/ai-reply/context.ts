@@ -4,7 +4,7 @@
  * 读取范围永远只有当前 talker；账号身份由调用方传入。正文一律按「不可信文本」
  * 处理：单条截断、总预算限制、系统/撤回/空消息剔除。这里不联网、不写库。
  */
-import { collectReplyContext } from '../reply-suggest.ts'
+import { collectReplyContextEntries } from '../reply-suggest.ts'
 import {
   decodeEmoticonDataUrlAsync,
   decodeImageDataUrlAsync,
@@ -14,10 +14,15 @@ import {
   truncateUtf16,
 } from '../message-list-store-shared.ts'
 import { CHAT_AI_REPLY_TEXT_MAX } from './segments.ts'
+import {
+  assembleChatAiReplyContext,
+} from './context-budget.ts'
+import type { ChatAiReplyContextStats } from './context-budget.ts'
 import type { ReplyImageCandidate } from '../reply-suggest.ts'
 
+export { AI_REPLY_INPUT_TOKEN_BUDGET } from './context-budget.ts'
+
 export const AI_REPLY_CONTEXT_LIMIT = 60
-export const AI_REPLY_PROMPT_BUDGET = 6000
 /** 单次回复最多附带几张视觉内容：控制在常见视觉模型的请求上限内。 */
 export const AI_REPLY_IMAGE_LIMIT = 3
 /** 图片/表情解码后的总字节预算；超出时从最旧的视觉内容开始舍弃。 */
@@ -25,11 +30,15 @@ export const AI_REPLY_IMAGE_TOTAL_BYTES = 6 * 1024 * 1024
 
 export interface ChatAiReplyContext {
   lines: string[]
-  /** 当前窗口内按时间正序的图片/表情消息；字节由生成前按需解码。 */
+  /** 只含正文行，不含时间标记/省略行；知识库检索用它，避免日期污染查询。 */
+  dialogueLines?: string[]
+  /** 只包含预算窗口内的图片/表情消息；窗口外的图片不会被解码或发送。 */
   imageCandidates?: ReplyImageCandidate[]
   latestPeer: string
   count: number
   prompt: string
+  /** 本次上下文装配的统计；测试注入的上下文可省略。 */
+  stats?: ChatAiReplyContextStats
 }
 
 /** 已解码、可直接放进多模态请求的一张图片。 */
@@ -61,29 +70,34 @@ export function collectChatAiReplyContext(
   selfUsername: string,
   anchorLocalId?: number,
 ): ChatAiReplyContext {
-  const context = collectReplyContext(
+  const context = collectReplyContextEntries(
     decryptedDir,
     talker,
     selfUsername,
     AI_REPLY_CONTEXT_LIMIT,
     anchorLocalId,
   )
-  const lines: string[] = []
-  let used = 0
-  for (let i = context.lines.length - 1; i >= 0; i -= 1) {
-    const line = context.lines[i]
-    if (line === undefined) continue
-    const next = used + line.length + 1
-    if (next > AI_REPLY_PROMPT_BUDGET) break
-    lines.unshift(line)
-    used = next
-  }
+  // 两步装配：先按「不带图片」探出正文窗口，只保留窗口内的视觉候选；
+  // 否则被预算裁掉的历史图片仍会解码出网，而 prompt 里没有任何 [图片] 占位。
+  // 第二步按实际候选数预留 token；窗口若因此进一步缩小，再做一次过滤。
+  const probe = assembleChatAiReplyContext(context.entries, { imageCount: 0 })
+  const probeIds = new Set(probe.includedLocalIds)
+  const visible = (context.imageCandidates ?? [])
+    .filter((candidate) => probeIds.has(candidate.localId))
+    .slice(-AI_REPLY_IMAGE_LIMIT)
+  const assembled = assembleChatAiReplyContext(context.entries, {
+    imageCount: visible.length,
+  })
+  const finalIds = new Set(assembled.includedLocalIds)
+  const imageCandidates = visible.filter((candidate) => finalIds.has(candidate.localId))
   return {
-    lines,
-    ...(context.imageCandidates === undefined ? {} : { imageCandidates: context.imageCandidates }),
+    lines: assembled.lines,
+    dialogueLines: assembled.dialogueLines,
+    ...(imageCandidates.length === 0 ? {} : { imageCandidates }),
     latestPeer: context.latestPeer,
-    count: lines.length,
-    prompt: buildChatAiReplyPrompt(lines),
+    count: assembled.stats.included,
+    prompt: buildChatAiReplyPrompt(assembled.lines),
+    stats: assembled.stats,
   }
 }
 
@@ -188,13 +202,13 @@ function dataUrlBytes(value: string): number {
 /** 生成完整回复的提示词；注入内容只作为资料，不赋任何工具能力。 */
 export function buildChatAiReplyPrompt(lines: readonly string[], imageCount = 0): string {
   return [
-    '以下是当前微信单聊最近的对话（时间正序，标注了发言者）：',
+    '以下是当前微信单聊最近的对话（时间正序，标注了发言者；[年-月-日 时:分] 标记其后的消息发生时间；“更早的对话已省略”表示历史被裁剪）：',
     ...lines,
     ...(imageCount > 0
       ? ['', `本次随请求附带 ${String(imageCount)} 张最近的图片或表情（按对话中出现时间从早到晚排列），请结合视觉内容理解上下文。`]
       : []),
     '',
-    '请只针对最后一条对方消息，替“我”写完整回复。',
+    '请只针对最后一条对方消息，替“我”写完整回复；时间标记只用于判断时效和语气，不要回复或模仿时间标记。',
     '要求：只输出回复正文，不要解释、不要引号、不要复述提示词；口吻自然、简洁；',
     '内容确实较多时按语义使用空行分段，每段都像一条可以单独发送的微信消息；',
     '不得声称执行了你看不到的操作，不确定的信息要直接询问。',
