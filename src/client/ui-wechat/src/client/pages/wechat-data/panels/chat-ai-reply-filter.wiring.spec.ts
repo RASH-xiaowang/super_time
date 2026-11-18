@@ -19,15 +19,31 @@ describe('AI 回复会话标志与筛选', () => {
     expect(hook).toContain('markEnabled')
   })
 
-  it('开关成功后即时更新索引，列表只筛单聊', () => {
+  it('计数、筛选、行内徽标共用同一个判据（单聊与群聊都算）', () => {
     const controls = read('use-chats-ai-reply-controls.ts')
     expect(controls).toContain('onEnabledChanged: enabledIndex.markEnabled')
-    expect(controls).toMatch(/session\.type === 'private'\s+&& enabledIndex\.enabledUsernames\.has\(session\.username\)/)
-    // 2026-11-13：会话行渲染抽成 makeChatsSessionRowRenderer 后，索引经参数传入；
-    // 判据不变 —— 行内徽标必须按当前会话的 username 查同一份 enabledUsernames。
+    // 2026-11-18：群聊也能开启 AI 回复。三处判据曾各写一遍，计数处漏了群聊，
+    // 导致「开了 2 个却显示 1 个」；现在共用 `sessionHasAiReply`。
+    expect(controls).toContain('sessions.filter((session) => sessionHasAiReply(session, enabledIndex.enabledUsernames))')
+
     const panel = read('Chats.tsx')
+    // 筛选
+    expect(panel).toContain('base.filter((session) => sessionHasAiReply(session, aiReplyEnabledUsernames))')
+    // 行内徽标
+    expect(panel).toContain('aiReplyEnabled={sessionHasAiReply(session, aiReplyEnabledUsernames)}')
+    // 2026-11-13：会话行渲染抽成 makeChatsSessionRowRenderer 后，索引经参数传入。
     expect(panel).toContain('aiReplyEnabledUsernames: aiReplyControls.enabledUsernames')
-    expect(panel).toContain('aiReplyEnabled={aiReplyEnabledUsernames.has(session.username)}')
+
+    // 判据本身：两种 type 都算可对话，且必须查已开启集合。
+    const enabledFile = read('use-chat-ai-reply-enabled.ts')
+    expect(enabledFile).toContain('export function sessionIsConversational')
+    expect(enabledFile).toContain('export function sessionHasAiReply')
+    expect(enabledFile).toMatch(
+      /function sessionHasAiReply[\s\S]{0,200}sessionIsConversational\(session\)[\s\S]{0,120}enabledUsernames\.has\(session\.username\)/,
+    )
+    // AI 问答与 AI 回复的入口可见性也用同一判据，别再各写一遍。
+    expect(controls).toContain('sessionIsConversational(curSession)')
+    expect(panel).toContain('sessionIsConversational(curSession)')
   })
 
   it('会话行徽标、筛选状态和专用空态都存在', () => {

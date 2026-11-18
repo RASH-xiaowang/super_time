@@ -31,6 +31,14 @@ export interface ChatAiReplySetting {
     kbEnabled: boolean;
     /** 参与回复的知识库 id；0 表示尚未选择（此时 `kbEnabled` 必须为 false）。 */
     kbId: number;
+    /**
+     * 上下文时间窗（小时）：只把最近这个时间范围内的消息当作上下文。
+     *
+     * `0` = 不限（沿用「最近 60 条」）。设了窗口后，窗口之外的消息**不进提示词**，
+     * 模型也就不会把几天前的旧事项当成还没做完的待办反复追问。
+     * 上限 720 小时（30 天），超出按上限夹紧。
+     */
+    contextWindowHours: number;
     /** 防两条旧请求互相覆盖。 */
     revision: number;
     updatedAt: number;
@@ -138,6 +146,11 @@ export interface ChatAiReplyGenerationResult {
     error?: string;
     /** 生成期被主动取消；`text` 可能只含已流出的部分正文。 */
     canceled?: boolean;
+    /**
+     * 实际使用的模型（`provider/model`）。只用于本机留痕与详情展示，
+     * 不会出现在投递请求体里；缺省表示注入的生成器没有报告。
+     */
+    model?: string;
 }
 /** 本层只关心这些稳定状态，不反向依赖消息列表的顶层展示类型。 */
 export type ChatAiReplyMessageStatus = 'success' | 'failed' | 'pending' | 'dispatching' | 'queued' | 'running' | 'sent_unconfirmed';
@@ -204,6 +217,15 @@ export interface ChatAiReplyAnchor {
     sortSeq: number;
     createTime: number;
     content: string;
+    /**
+     * 触发者（群里 @我 的那个人）的 wxid 与展示名。
+     *
+     * 群聊回复必须 @ 提问者，投递时把它作为 `mention` 放在消息列表记录的
+     * `targetName`/`targetUsername` 上。单聊留空（私聊没有「@某人」的语义）。
+     * 只从原始消息现算，不落库：恢复时按 sourceRef 找到同一条消息再取一次。
+     */
+    mentionUsername?: string;
+    mentionName?: string;
 }
 /** AI 扫描只需的稳定消息字段；`talker` 是 `WechatSession.username` 的别名。 */
 export interface ChatAiReplyScanMessage {
@@ -226,6 +248,15 @@ export interface ChatAiReplyScanMessage {
         md5?: string;
         emojiUrl?: string;
     };
+    /**
+     * 群聊专用：这条消息是否 @ 了登录账号。由读取边界注入（见 `listMessages`），
+     * 单聊不带此字段。扫描用它把「群里闲聊」与「点名叫我」区分开。
+     */
+    mentionSelf?: boolean;
+    /** 发送者 wxid（群聊才有；回复时要 @ 的就是他）。 */
+    sender?: string;
+    /** 发送者展示名（群昵称 → 备注 → wxid）。 */
+    senderName?: string;
 }
 /** 后台扫描依赖（队列、生成、落库投递均由网关注入）。 */
 export interface ChatAiReplyScanDeps {
@@ -250,7 +281,19 @@ export interface ChatAiReplyScanDeps {
      * 测试可注入合成上下文；生产默认读取当前会话的消息库。
      * `talker` 是 `WechatSession.username` 的别名。
      */
-    collectContext?: (decryptedDir: string, talker: string, selfUsername: string, anchorLocalId?: number) => ChatAiReplyContext;
+    collectContext?: (decryptedDir: string, talker: string, selfUsername: string, anchorLocalId?: number, voiceTexts?: ReadonlyMap<number, string>, 
+    /** 上下文时间窗起点（秒）；0/缺省表示不限。 */
+    sinceCreateTime?: number) => ChatAiReplyContext;
+    /**
+     * 把窗口内的语音转成文本（localId → 文本）。生产网关接本地 whisper；
+     * 未选择模型/引擎时返回空 Map，回复按 `[语音]` 占位继续，不阻断生成。
+     */
+    transcribeVoices?: (input: {
+        decryptedDir: string;
+        /** `talker` 是 `WechatSession.username` 的别名。 */
+        talker: string;
+        localIds: readonly number[];
+    }) => Promise<ReadonlyMap<number, string>>;
     /**
      * 按会话内 localId 解码图片；生产网关注入真实媒体解码器，测试可省略。
      * 解码器必须自行处理坏图/超预算图片，返回空数组也应被视为正常降级。
@@ -387,5 +430,71 @@ export interface ChatAiReplyScanDeps {
         recordId: number;
         ok: boolean;
     }) => void;
+    /**
+     * 过程留痕：把本轮上下文、提示词、模型输出与阶段耗时写到本机
+     * `chat_ai_reply_traces`，供消息列表详情查看。
+     *
+     * 留痕是**诊断增强**：实现必须吞掉自身异常（写不进也不能影响回复），
+     * 测试可省略。
+     */
+    writeTrace?: (patch: ChatAiReplyTracePatch) => void;
     op: (action: string, ok: boolean, detail: string) => void;
+}
+/** 一次自动回复的阶段名（详情抽屉按顺序展示）。 */
+export type ChatAiReplyTraceStageName = 'reserved' | 'context' | 'generated' | 'generate_failed' | 'saved' | 'success' | 'failed';
+/** 阶段留痕：发生时间与一句话说明（说明里只放数字/原因码，不放聊天正文）。 */
+export interface ChatAiReplyTraceStage {
+    name: ChatAiReplyTraceStageName;
+    at: number;
+    detail?: string;
+}
+/**
+ * 写入留痕的增量补丁：只有显式给出的字段会被覆盖。
+ *
+ * 运行器在预约、装配上下文、生成、落库、投递各阶段分别写一次，
+ * 所以任何阶段崩溃都能在详情里看到「走到哪里」。
+ */
+export interface ChatAiReplyTracePatch {
+    /** 消息列表记录 id；<=0 时整条补丁被忽略。 */
+    recordId: number;
+    sourceRef?: string;
+    accountKey?: string;
+    chatUsername?: string;
+    model?: string;
+    startedAt?: number;
+    finishedAt?: number;
+    /** 本轮送进模型的上下文（逐行，已带时间与发言人）。 */
+    context?: string;
+    /** 命中的知识库片段。 */
+    kb?: string;
+    systemPrompt?: string;
+    userPrompt?: string;
+    imageCount?: number;
+    voiceCount?: number;
+    output?: string;
+    error?: string;
+    /** 隐私闸改写了提示词（脱敏）时为 true。 */
+    redacted?: boolean;
+    stage?: ChatAiReplyTraceStage;
+}
+/** 读取一条记录的过程留痕（详情抽屉用）。 */
+export interface ChatAiReplyTrace {
+    recordId: number;
+    sourceRef: string;
+    accountKey: string;
+    chatUsername: string;
+    model: string;
+    startedAt: number;
+    finishedAt: number;
+    context: string;
+    kb: string;
+    systemPrompt: string;
+    userPrompt: string;
+    imageCount: number;
+    voiceCount: number;
+    output: string;
+    error: string;
+    redacted: boolean;
+    stages: ChatAiReplyTraceStage[];
+    updatedAt: number;
 }

@@ -627,6 +627,8 @@ export abstract class GatewayAskOps extends GatewayRead {
     kbId?: number
     count?: number
     targetLocalId?: number
+    /** 跳过缓存重新生成（界面的「换一批」用它）。 */
+    force?: boolean
   }): Promise<ReplySuggestResult> {
     return this.summaryRecordRemotes().suggestReplies(options)
   }

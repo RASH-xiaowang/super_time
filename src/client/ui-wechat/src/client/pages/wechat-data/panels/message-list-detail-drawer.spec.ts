@@ -179,6 +179,43 @@ describe('消息记录详情抽屉', () => {
     expect(text).not.toContain('删除')
   })
 
+  it('群聊首条显示 @提问者', async () => {
+    await render([baseRecord({
+      id: 21,
+      chatName: '测试群',
+      chatUsername: 'room@chatroom',
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      segmentIndex: 1,
+      segmentCount: 3,
+    })])
+    await click(openTrigger(21))
+    expect(dialog()?.textContent ?? '').toContain('@张三')
+  })
+
+  it('同一批次第 2 段不再点名，并说明原因', async () => {
+    await render([baseRecord({
+      id: 22,
+      chatName: '测试群',
+      chatUsername: 'room@chatroom',
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      segmentIndex: 2,
+      segmentCount: 3,
+    })])
+    await click(openTrigger(22))
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain('不 @')
+    expect(text).toContain('同一批次的后续消息，只由首条点名提问者')
+    expect(text).not.toContain('@张三')
+  })
+
+  it('私聊不显示「提及」行（没有 @ 语义）', async () => {
+    await render([baseRecord({ chatUsername: 'wxid_peer', targetName: '小王' })])
+    await click(openTrigger())
+    expect(dialog()?.textContent ?? '').not.toContain('提及')
+  })
+
   it('事件刷新后抽屉内容跟随同 id 的新记录，不停在旧快照', async () => {
     await render([baseRecord({
       status: 'pending',

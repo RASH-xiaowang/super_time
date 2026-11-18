@@ -205,6 +205,8 @@ describe('AI 回复 · 生成期取消', () => {
       text: '部分',
       canceled: true,
       error: '已取消',
+      // 留痕要标明实际用的模型；这是本机诊断字段，不进入投递请求体。
+      model: 'opencode/vision-model',
     })
     expect(seen).toHaveLength(1)
     expect(seen[0]?.signal).toBe(controller.signal)

@@ -512,3 +512,19 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* 「判断依据」摘录列表：引用的原话逐条列出，不做成引号堆叠。 */
+.evidenceList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0 0 0 16px;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+.evidenceList li {
+  overflow-wrap: anywhere;
+}

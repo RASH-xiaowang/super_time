@@ -1,13 +1,18 @@
 /**
  * Voice-model catalog UI.
  *
- * The old panel hid six real model files behind one native dropdown. This
- * component exposes every downloadable artifact as a card so selection,
- * installation state, progress and cancellation are all visible at once.
+ * The old panel hid the model files behind one native dropdown. This component
+ * exposes every downloadable artifact as a card so selection, installation
+ * state, progress and cancellation are all visible at once.
+ *
+ * 卡片里列的是**产品清单**（`query/whisper.ts` 的 `WHISPER_MODELS`），不是官方仓库的
+ * 全量文件：`tiny` / `base` / `medium` 因中文准确率不足已下线，
+ * 但仍保留文件映射供老配置解析（见 `WHISPER_LEGACY_MODEL_FILES`）。
  */
 import type { WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCheckOutline16, IconDownloadOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clsx } from 'clsx'
+import { recommendedWhisperModel } from './settings-common.tsx'
 import { modelCss } from './settings-css.ts'
 
 type WhisperModel = WhisperStatus['models'][number]
@@ -19,35 +24,30 @@ interface ModelPresentation {
 }
 
 const MODEL_COPY: Record<string, ModelPresentation> = {
-  tiny: {
-    summary: '极速预览',
-    detail: '资源占用最低，适合快速确认语音内容。',
-    speed: '最快',
-  },
-  base: {
-    summary: '轻量日常',
-    detail: '适合清晰录音和较短语音，低配机器更从容。',
-    speed: '很快',
-  },
   small: {
-    summary: '均衡首选',
-    detail: '准确率与速度平衡，适合大多数中文对话。',
+    summary: '低配可用',
+    detail: '中文可用、CPU 压力小；复杂环境或口音较重时准确率会下降。',
     speed: '较快',
   },
-  medium: {
-    summary: '高精度',
-    detail: '复杂环境更稳，但 CPU 转写耗时明显增加。',
+  'turbo-q5': {
+    summary: '高精度 · 体积小',
+    detail: '量化后的 Large v3 Turbo：准确率接近 large-v3，体积只有它的 1/5，CPU 上也快。',
+    speed: '快',
+  },
+  turbo: {
+    summary: '高精度 · 原版',
+    detail: 'Large v3 的加速原版（fp16），显存/内存充裕时保真度最高。',
+    speed: '快',
+  },
+  'large-v3-q5': {
+    summary: '最高精度 · 量化',
+    detail: '量化后的 Large v3：中文准确率最高一档，体积只有原版的 1/3。',
     speed: '中等',
   },
   'large-v3': {
-    summary: '最高精度',
-    detail: '适合离线精转，需要更多内存和磁盘空间。',
+    summary: '最高精度 · 原版',
+    detail: '中文准确率最高（fp16 原版），需要更多内存与磁盘，CPU 转写较慢。',
     speed: '较慢',
-  },
-  turbo: {
-    summary: '大模型加速',
-    detail: 'Large v3 的加速版本，适合 NVIDIA GPU。',
-    speed: '快',
   },
 }
 
@@ -61,12 +61,16 @@ export interface WhisperModelLibraryProps {
   selected: string
 }
 
-/** Six-card model picker with an explicit download path per artifact. */
+/** Model-card picker with an explicit download path per artifact. */
 export function WhisperModelLibrary({
   device, download, downloading, models, onCancel, onSelect, selected,
 }: WhisperModelLibraryProps): React.JSX.Element {
   const installed = models.filter(model => model.installed).length
-  const recommended = device === 'gpu' ? 'turbo' : 'small'
+  /**
+   * 「推荐」徽标指向哪一个（口径见 `recommendedWhisperModel`）：
+   * CPU 上是 turbo-q5（准确率接近 large-v3、体积 547 MB），GPU 上是 large-v3 原版。
+   */
+  const recommended = recommendedWhisperModel(device)
 
   return (
     <div className={modelCss.voiceLibrary}>

@@ -230,4 +230,20 @@ describe('collectReplyContextEntries', () => {
     expect(ctx.entries[0]?.speaker).toBe('群成员')
     expect(ctx.entries[0]?.isSender).toBe(false)
   })
+
+  it('上下文时间窗：窗口外的消息整条排除，窗口内照常保留', () => {
+    // 夹具的 create_time = 1700000000 + localId ⇒ 起点 1700000050 只放过 localId ≥ 100。
+    const dir = makeFixture([
+      { talker: PEER, localId: 1, text: '几天前的旧话题', fromSelf: false },
+      { talker: PEER, localId: 100, text: '刚刚的提问', fromSelf: false },
+      { talker: PEER, localId: 101, text: '补充一句', fromSelf: true },
+    ])
+    const windowed = collectReplyContextEntries(dir, PEER, SELF, 60, undefined, 1700000050)
+    expect(windowed.entries.map((entry) => entry.localId)).toEqual([100, 101])
+    expect(windowed.count).toBe(2)
+
+    // 起点为 0（未设置时间窗）时保持原行为，不做任何过滤。
+    const unlimited = collectReplyContextEntries(dir, PEER, SELF, 60, undefined, 0)
+    expect(unlimited.entries.map((entry) => entry.localId)).toEqual([1, 100, 101])
+  })
 })

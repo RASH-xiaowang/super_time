@@ -331,13 +331,13 @@ const FEATURE_METHODS = {
   ],
   'ai-reply': [
     'deleteAiReplyReservations', 'getChatAiReplyDefaultWebhook', 'getChatAiReplyState',
+    'getChatAiReplyTrace',
     'listEnabledChatAiReplyStates', 'regenerateChatAiReplyRecord',
     'saveChatAiReplyDefaultWebhook', 'scanChatAiReplyNow', 'setChatAiReplyEnabled',
     'setChatAiReplyPersona',
   ],
-  'local-analysis': [
-    'adoptLayaModel', 'analyzeMessages', 'analyzeVisibleMessages', 'cancelLayaAnalysis',
-    'cancelLayaDownload', 'downloadLayaModel', 'getLayaStatus', 'unloadLaya',
+  'message-analysis': [
+    'analyzeMessage',
   ],
   'voice-transcribe': [
     'cancelWhisperDownload', 'downloadWhisperModel', 'getVoiceTranscript',

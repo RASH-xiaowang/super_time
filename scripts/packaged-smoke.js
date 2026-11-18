@@ -223,41 +223,15 @@ try {
   check(fs.existsSync(path.join(unpackedRoot, 'node_modules', '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')),
     'koffi 原生模块在 app.asar.unpacked（排除 deps 树后的回归守卫）');
 
-  // ── laya 的本地推理运行时与分词器（2026-09-28 补）──────────────────────────────
-  // 为什么必须补：这两样是在「语音/向量」之后才进 `files` 的，而本脚本当时对它**一条断言都没有**
-  // ⇒「装进包里没有、能不能从 app.asar.unpacked 真加载」从来没被验过。
-  // 它们同属 koffi 那一类：原生模块只能从**真实文件**加载（asar 内的读补丁对 .node/.dll 不生效）。
-  const ortBin = path.join(unpackedRoot, 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6', 'win32', 'x64');
-  check(fs.existsSync(path.join(ortBin, 'onnxruntime.dll')),
-    'onnxruntime.dll 在 app.asar.unpacked（laya 推理的原生库；asar 内加载不了）');
-  check(fs.existsSync(path.join(ortBin, 'onnxruntime_binding.node')),
-    'onnxruntime_binding.node 在 app.asar.unpacked（同上）');
-  // 平台裁剪：只要 win32/x64。多带一个平台就是几十 MB 白给。
-  for (const dead of ['darwin', 'linux', 'win32/arm64']) {
-    const prefix = `/node_modules/onnxruntime-node/bin/napi-v6/${dead}/`;
-    const hit = entries.filter((f) => f.startsWith(prefix));
-    check(hit.length === 0, `asar 不含 onnxruntime 的 ${dead} 构建`, `${hit.length} 条目`);
-  }
-  // GPU 用的三个 DLL 不参与本用途（CPU 推理），排除后不该以任何形态回到包里。
-  for (const dll of ['DirectML.dll', 'dxcompiler.dll', 'dxil.dll']) {
-    const inEntries = entries.some((f) => f.endsWith(`/onnxruntime-node/bin/napi-v6/win32/x64/${dll}`));
-    const onDisk = fs.existsSync(path.join(ortBin, dll));
-    check(!inEntries && !onDisk, `onnxruntime 的 ${dll} 已排除（CPU 推理用不到）`,
-      `asar=${inEntries} unpacked=${onDisk}`);
-  }
-  // 分词器与它的兄弟包：都必须在 asar 里（纯 JS，不需要解包）。
-  for (const rel of [
-    '/node_modules/@huggingface/tokenizers/package.json',
-    '/node_modules/@huggingface/tokenizers/dist/tokenizers.cjs',
-    '/node_modules/onnxruntime-common/package.json',   // onnxruntime-node 的两个 dist 都无保护 require 它
-  ]) {
-    check(entries.includes(rel), `asar 含 ${rel.slice(1)}`);
-  }
-  // 反向：被换掉的那套（连同它 135 MB + 18.5 MB 的传递依赖）不许再回到包里。
+  // ── 2026-11-18：本地 ONNX 决策模型已移除（消息分析改走对话模型）──
+  // 原来这里断言 onnxruntime 的 dll/binding 在 unpacked、以及裁剪掉非 win32-x64 平台与
+  // 三个 GPU DLL。这套运行时已不在依赖里，正向断言随之删除；**反向断言仍保留**：
+  // onnxruntime 与分词器不许再以任何形态回到包里（回归守卫）。
   for (const gone of ['/node_modules/@huggingface/transformers/', '/node_modules/onnxruntime-web/',
-    '/node_modules/sharp/', '/node_modules/@img/']) {
+    '/node_modules/onnxruntime-node/', '/node_modules/onnxruntime-common/',
+    '/node_modules/@huggingface/tokenizers/', '/node_modules/sharp/', '/node_modules/@img/']) {
     const hit = entries.filter((f) => f.startsWith(gone));
-    check(hit.length === 0, `asar 不含 ${gone.slice(1)}（换掉 transformers 后应彻底消失）`, `${hit.length} 条目`);
+    check(hit.length === 0, `asar 不含 ${gone.slice(1)}（本地 ONNX 模型移除后应彻底消失）`, `${hit.length} 条目`);
   }
 
   // ── N22（打包之后那一半）：体积上界 + `src/**` 白名单 ──

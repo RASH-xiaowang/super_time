@@ -44,5 +44,7 @@ export declare function createSummaryRecordRemotes(rc: createSummaryRecordRemote
         count?: number;
         /** 分析面板当前选中的消息；缺省时仍按会话最新上下文推荐。 */
         targetLocalId?: number;
+        /** 跳过缓存重新生成（界面的「换一批」用它）。 */
+        force?: boolean;
     }): Promise<ReplySuggestResult>;
 };

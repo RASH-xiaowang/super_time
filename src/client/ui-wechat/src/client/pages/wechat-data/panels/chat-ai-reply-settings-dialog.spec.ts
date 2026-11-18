@@ -34,6 +34,7 @@ async function render(input: {
     splitReply: boolean
     kbEnabled: boolean
     kbId: number
+    contextWindowHours: number
   }) => Promise<boolean>
   onClose?: () => void
   saving?: boolean
@@ -41,6 +42,7 @@ async function render(input: {
   initialSplitReply?: boolean
   initialKbEnabled?: boolean
   initialKbId?: number
+  initialContextWindowHours?: number
   initialWebhook?: { configured: boolean; endpoint: string }
   onLoadWebhook?: (options: { chatUsername: string; chatName?: string }) => Promise<{
     configured: boolean
@@ -65,6 +67,7 @@ async function render(input: {
       initialSplitReply: input.initialSplitReply ?? true,
       initialKbEnabled: input.initialKbEnabled ?? false,
       initialKbId: input.initialKbId ?? 0,
+      initialContextWindowHours: input.initialContextWindowHours ?? 0,
       ...(input.initialWebhook === undefined ? {} : { initialWebhook: input.initialWebhook }),
       ...(input.onLoadWebhook === undefined ? {} : { onLoadWebhook: input.onLoadWebhook }),
       ...(input.onSaveWebhook === undefined ? {} : { onSaveWebhook: input.onSaveWebhook }),
@@ -111,6 +114,7 @@ describe('AI 回复人格设置弹窗', () => {
       splitReply: true,
       kbEnabled: false,
       kbId: 0,
+      contextWindowHours: 0,
     })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -132,6 +136,7 @@ describe('AI 回复人格设置弹窗', () => {
       splitReply: true,
       kbEnabled: false,
       kbId: 0,
+      contextWindowHours: 0,
     })
   })
 
@@ -151,6 +156,7 @@ describe('AI 回复人格设置弹窗', () => {
       splitReply: false,
       kbEnabled: false,
       kbId: 0,
+      contextWindowHours: 0,
     })
   })
 
@@ -163,7 +169,9 @@ describe('AI 回复人格设置弹窗', () => {
       check.click()
       await Promise.resolve()
     })
-    const select = document.querySelector('select') as HTMLSelectElement
+    // 弹窗里现在有两个下拉（上下文时间窗 / 知识库），必须按 aria-label 取，
+    // 否则会读到时间窗那个而误判。
+    const select = document.querySelector('select[aria-label="选择知识库"]') as HTMLSelectElement
     expect(select.value).toBe('1')
     expect(select.disabled).toBe(false)
     await act(async () => {
@@ -176,6 +184,7 @@ describe('AI 回复人格设置弹窗', () => {
       splitReply: true,
       kbEnabled: true,
       kbId: 1,
+      contextWindowHours: 0,
     })
   })
 
@@ -347,5 +356,84 @@ describe('AI 回复人格设置弹窗', () => {
       })
       await Promise.resolve()
     })
+  })
+})
+
+describe('预设人格', () => {
+  function preset(id: string): HTMLButtonElement {
+    const el = document.querySelector('[data-preset="' + id + '"]')
+    if (!(el instanceof HTMLButtonElement)) throw new Error('找不到预设：' + id)
+    return el
+  }
+
+  function inputByPlaceholder(placeholder: string): HTMLInputElement | HTMLTextAreaElement {
+    const el = document.querySelector('[placeholder^="' + placeholder + '"]')
+    if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) {
+      throw new Error('找不到输入框：' + placeholder)
+    }
+    return el
+  }
+
+  const nameInput = (): HTMLInputElement => {
+    const el = document.querySelector('input[maxlength="80"]')
+    if (!(el instanceof HTMLInputElement)) throw new Error('找不到人格名称输入框')
+    return el
+  }
+
+  const promptArea = (): HTMLTextAreaElement => {
+    const el = document.querySelector('textarea[maxlength="4000"]')
+    if (!(el instanceof HTMLTextAreaElement)) throw new Error('找不到人格风格输入框')
+    return el
+  }
+
+  it('列出多套预设，点一下同时填入名称与回复风格', async () => {
+    await render({ onSave: vi.fn(async () => true) })
+    const chips = [...document.querySelectorAll('[data-preset]')]
+    expect(chips.length).toBeGreaterThanOrEqual(4)
+
+    await act(async () => {
+      preset('warm-service').click()
+      await Promise.resolve()
+    })
+    expect(nameInput().value).toBe('温柔客服')
+    expect(promptArea().value).toContain('先回应对方的情绪或处境')
+    // 点完即高亮该预设，便于确认当前用的是哪一套。
+    expect(preset('warm-service').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('修改任一字段后不再高亮（避免误以为还是原预设）', async () => {
+    await render({ onSave: vi.fn(async () => true) })
+    await act(async () => {
+      preset('pro-consultant').click()
+      await Promise.resolve()
+    })
+    expect(preset('pro-consultant').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => {
+      setInputValue(nameInput(), '我自己的名字')
+      await Promise.resolve()
+    })
+    expect(preset('pro-consultant').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('保存时提交的是预设填充后的内容', async () => {
+    const onSave = vi.fn(async () => true)
+    await render({ onSave })
+    await act(async () => {
+      preset('efficient-assistant').click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      button('保存设置').click()
+      await Promise.resolve()
+    })
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: '高效助理',
+      prompt: expect.stringContaining('只给关键信息'),
+    }))
+  })
+
+  it('保存中禁用预设，避免写到一半被改写', async () => {
+    await render({ onSave: vi.fn(async () => true), saving: true })
+    expect(preset('warm-service').disabled).toBe(true)
   })
 })

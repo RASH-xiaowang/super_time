@@ -26,12 +26,19 @@ export const CHAT_AI_REPLY_POLL_MS = 15_000
 
 export interface ChatAiReplyRefreshInput {
   chatUsername: string
-  isGroup: boolean
   selfWxid: string
   sessionEpoch: number
   latestRef: MutableRefObject<ChatAiReplyPersonaLatest>
   stateIdentityRef: MutableRefObject<ChatAiReplyIdentity | null>
   requestIdRef: MutableRefObject<number>
+  /**
+   * 写操作（开关 / 人格）的在飞锁。
+   *
+   * 为什么回源要看它：写入期间若并发一次静默回源，它会推进 `requestIdRef` —— 写请求
+   * 拿到结果时序号已过期，于是结果被丢弃、`saving` 收不回来。实测症状是「开关关掉之后
+   * 按钮永久变灰、再点没反应」。写期间直接让回源让路，写完由事件触发下一轮。
+   */
+  savingLockRef: MutableRefObject<symbol | null>
   hasState: boolean
   setState: Dispatch<SetStateAction<ChatAiReplyState | null>>
   setLoading: Dispatch<SetStateAction<boolean>>
@@ -45,12 +52,12 @@ export interface ChatAiReplyRefreshController {
 export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiReplyRefreshController {
   const {
     chatUsername,
-    isGroup,
     selfWxid,
     sessionEpoch,
     latestRef,
     stateIdentityRef,
     requestIdRef,
+    savingLockRef,
     hasState,
     setState,
     setLoading,
@@ -61,7 +68,7 @@ export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiRep
   // 旧会话的静默请求即使还在飞，也不能被新会话的事件刷新复用。
   useEffect(() => {
     refreshInFlightRef.current = null
-  }, [chatUsername, isGroup, selfWxid, sessionEpoch])
+  }, [chatUsername, selfWxid, sessionEpoch])
 
   const refresh = useCallback((options?: { silent?: boolean }): Promise<void> => {
     const silent = options?.silent === true
@@ -70,9 +77,11 @@ export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiRep
       return refreshInFlightRef.current
     }
     const latest = latestRef.current
-    if (latest.chatUsername === '' || latest.isGroup || latest.selfWxid === '') {
+    if (latest.chatUsername === '' || latest.selfWxid === '') {
       return Promise.resolve()
     }
+    // 写操作在飞时回源让路：它会推进 requestId，让写结果被判成过期（见接口注释）。
+    if (savingLockRef.current !== null) return Promise.resolve()
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     if (!silent) setLoading(true)
@@ -112,11 +121,11 @@ export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiRep
       if (refreshInFlightRef.current === promise) refreshInFlightRef.current = null
     })
     return promise
-  }, [latestRef, requestIdRef, setError, setLoading, setState, stateIdentityRef])
+  }, [latestRef, requestIdRef, savingLockRef, setError, setLoading, setState, stateIdentityRef])
 
   // 消息列表事件先做 2s 尾随去抖：一次投递往往连续回写多条记录，没必要逐条回源。
   useEffect(() => {
-    if (chatUsername === '' || isGroup || selfWxid === '') return undefined
+    if (chatUsername === '' || selfWxid === '') return undefined
     const hidden = (): boolean => typeof document !== 'undefined' && document.hidden === true
     let timer: ReturnType<typeof setTimeout> | null = null
     const onUpdated = (): void => {
@@ -133,11 +142,11 @@ export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiRep
       window.removeEventListener(MESSAGE_LIST_UPDATED_EVENT, onUpdated)
       if (timer !== null) clearTimeout(timer)
     }
-  }, [chatUsername, isGroup, refresh, selfWxid])
+  }, [chatUsername, refresh, selfWxid])
 
   // 页面可见且已有状态时做 15s 轻量兜底；切到后台停表，回来先补一次。
   useEffect(() => {
-    if (!hasState || chatUsername === '' || isGroup || selfWxid === '') return undefined
+    if (!hasState || chatUsername === '' || selfWxid === '') return undefined
     const hidden = (): boolean => typeof document !== 'undefined' && document.hidden === true
     let timer: ReturnType<typeof setInterval> | null = null
     const stop = (): void => {
@@ -168,7 +177,7 @@ export function useChatAiReplyRefresh(input: ChatAiReplyRefreshInput): ChatAiRep
       }
       stop()
     }
-  }, [chatUsername, hasState, isGroup, refresh, selfWxid])
+  }, [chatUsername, hasState, refresh, selfWxid])
 
   return { refresh }
 }

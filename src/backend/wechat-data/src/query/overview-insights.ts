@@ -6,7 +6,7 @@ import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogDirs, shardCatalogSig } from './meta.ts'
-import { withDb, withDbAsync } from './db-open.ts'
+import { withDb } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
 import { fallbackChatDisplayName, mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
 import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
@@ -18,13 +18,36 @@ import {
 } from './insights-shard-store.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryOverviewExtras } from './overview-extras.ts'
+import { addTalkerDay, freezeTalkerDays, mergePackedTalkerDays, type TalkerDayCounts } from './overview-activity.ts'
+import { scanMomentsShared } from './overview-moments-scan.ts'
 
 /**
  * 朋友圈整表扫每多少行让出一次。
  * 导出是给守卫用例**按这个数造数据**用的 —— 判据不该依赖墙上时钟（CI 机器比本机慢 20 倍，
  * 任何「跑够 25ms」的断言在那边都会假红）。
  */
-export const SNS_YIELD_EVERY_ROWS = 2000
+export { SNS_YIELD_EVERY_ROWS } from './overview-moments-scan.ts'
+
+const HARDLINK_TABLES = ['image_hardlink_info_v4', 'file_hardlink_info_v4', 'video_hardlink_info_v4'] as const
+
+/** 三张 hardlink 表只开一次库。计数字段与原先逐表 `withDb` 相同。 */
+function sumHardlinkAssets(dec: string): { files: number; fileBytes: number } {
+  const hp = join(dec, 'hardlink', 'hardlink.db')
+  const out = { files: 0, fileBytes: 0 }
+  if (!existsSync(hp)) return out
+  try {
+    withDb(hp, (db) => {
+      for (const table of HARDLINK_TABLES) {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+        if (!has) continue
+        const c = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM ${table}`).get() as { n: number; s: number }
+        out.files += c.n
+        out.fileBytes += c.s
+      }
+    })
+  } catch { /* ignore */ }
+  return out
+}
 
 export interface OverviewInsights {
   messages: {
@@ -68,28 +91,6 @@ function cellStr(v: unknown): string {
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
   if (v instanceof Uint8Array) return new TextDecoder('utf-8', { fatal: false }).decode(v)
   return ''
-}
-
-/**
- * 子串出现次数（**不分配数组**）。
- *
- * 为什么不用 `str.split(x).length - 1`：朋友圈那条解析是每行要数 2–3 个标记的热路径，
- * `split` 会为每个标记物化一个临时数组（几千行 × 每条 XML 数 KB）。改成 indexOf 循环
- * 只省分配、不省扫描：实测 insights 冷跑该段仍在 44–47ms（字符串扫描为主），
- * 整体 370→362ms 属小幅；这里保留是为了减少 GC 抖动，不单独宣称延迟收益。
- * @param hay - 被搜索的字符串。
- * @param needle - 非空子串。
- * @returns 非重叠出现次数。
- */
-function countSubstr(hay: string, needle: string): number {
-  if (needle === '') return 0
-  let count = 0
-  let idx = hay.indexOf(needle)
-  while (idx !== -1) {
-    count += 1
-    idx = hay.indexOf(needle, idx + needle.length)
-  }
-  return count
 }
 
 /** 枚举 decrypted 目录下所有 *.db（不含 -wal/-shm）。 */
@@ -149,6 +150,8 @@ interface InsightsShardAgg {
   hourDist: number[]
   dayCounts: Array<[number, number]>
   talker: Array<[string, number]>
+  /** 会话 × 日序号 × 条数。趋势窗口用它加总，不再二次打开分片。 */
+  talkerDays: Array<[string, Array<[number, number]>]>
   minDay: number
   maxDay: number
   lastActive: number
@@ -249,20 +252,21 @@ function snapshotTotals (t: InsightsTotals, b: InsightsBounds): { snap: Insights
 }
 
 /** 把分片的部分聚合逐字段加回总量（**不碰数据库** ⇒ 连接纪律棘轮看不见它）。 */
-function mergeInsightsShard (t: InsightsTotals, agg: InsightsShardAgg): void {
+function mergeInsightsShard (t: InsightsTotals, agg: InsightsShardAgg, talkerDays: TalkerDayCounts): void {
   t.total.n += agg.n
   t.total.sent += agg.sent
   for (const [k, v] of Object.entries(agg.buckets)) t.buckets[k] = (t.buckets[k] ?? 0) + v
   for (let i = 0; i < 24; i++) t.hourDist[i] = (t.hourDist[i] ?? 0) + (agg.hourDist[i] ?? 0)
   for (const [d, n] of agg.dayCounts) t.dayCounts.set(d, (t.dayCounts.get(d) ?? 0) + n)
   for (const [k, n] of agg.talker) t.talkerCount.set(k, (t.talkerCount.get(k) ?? 0) + n)
+  mergePackedTalkerDays(talkerDays, agg.talkerDays)
 }
 
 /** 缓存命中就合并并返回新极值；未命中返回 `null`。**命中路径连数据库都不打开**（省时的来源）。 */
-function applyCachedShard (key: string, sig: string, t: InsightsTotals, b: InsightsBounds): InsightsBounds | null {
+function applyCachedShard (key: string, sig: string, t: InsightsTotals, b: InsightsBounds, talkerDays: TalkerDayCounts): InsightsBounds | null {
   const hit = insightsShardCache.get(key)
   if (!hit || hit.sig !== sig) return null
-  mergeInsightsShard(t, hit.agg)
+  mergeInsightsShard(t, hit.agg, talkerDays)
   return {
     minDay: hit.agg.minDay >= 0 && (b.minDay < 0 || hit.agg.minDay < b.minDay) ? hit.agg.minDay : b.minDay,
     maxDay: hit.agg.maxDay >= 0 && hit.agg.maxDay > b.maxDay ? hit.agg.maxDay : b.maxDay,
@@ -277,6 +281,7 @@ function recordShard (
   t: InsightsTotals,
   b: InsightsBounds,
   before: { snap: InsightsTotals; bounds: InsightsBounds },
+  talkerDays: TalkerDayCounts,
 ): void {
   const agg: InsightsShardAgg = {
     n: t.total.n - before.snap.total.n,
@@ -285,6 +290,7 @@ function recordShard (
     hourDist: t.hourDist.map((v, i) => (v ?? 0) - (before.snap.hourDist[i] ?? 0)),
     dayCounts: diffMapNums(before.snap.dayCounts, t.dayCounts),
     talker: diffMapNums(before.snap.talkerCount, t.talkerCount),
+    talkerDays: freezeTalkerDays(talkerDays),
     minDay: b.minDay >= 0 && b.minDay !== before.bounds.minDay ? b.minDay : -1,
     maxDay: b.maxDay > before.bounds.maxDay ? b.maxDay : -1,
     lastActive: b.lastActive > before.bounds.lastActive ? b.lastActive : 0,
@@ -324,41 +330,51 @@ function diffMapNums<K> (before: Map<K, number>, after: Map<K, number>): Array<[
  * @returns 朋友圈计数（读不到时全 0，不影响其它统计）。
  */
 async function scanMomentsStats(dec: string): Promise<{ total: number; images: number; videos: number; likes: number; comments: number }> {
-  // 朋友圈
-  const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
-  const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
-  if (existsSync(sp2)) {
-    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
-    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
-    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
-    try {
-      await withDbAsync(sp2, async (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-        if (!has) return
-        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
-        let scanned = 0
-        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
-          const xml = cellStr(r.c)
-          moments.total += 1
-          moments.images += countSubstr(xml, '<media>') + countSubstr(xml, '<media ')
-          if (xml.includes('<type>6</type>') || xml.includes('<type>4</type>') || xml.includes('<type>15</type>')) moments.videos += 1
-          const le = xml.indexOf('<LocalExtraInfo>')
-          if (le >= 0) {
-            const block = xml.slice(le, xml.indexOf('</LocalExtraInfo>', le) || xml.length)
-            const parts = countSubstr(block, '<user_comment>')
-            const likes = countSubstr(block, '<type>1</type>')
-            moments.likes += likes
-            moments.comments += Math.max(0, parts - likes)
-          }
-          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
-          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
-          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
-        }
-        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
-      })
-    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
+  try {
+    return (await scanMomentsShared(dec)).stats
+  } catch {
+    return { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
   }
-  return moments
+}
+
+interface GroupedMessageRow { t: number; h: number; d: number; n: number; s: number; m: number | null }
+
+/** 把一张表的 GROUP BY 行加进洞察总量，并记下会话的按日条数。 */
+function absorbGrouped(
+  grouped: GroupedMessageRow[],
+  /** 会话 `WechatSession.username`；没有可信归属的表传 undefined。 */
+  talker: string | undefined,
+  totals: InsightsTotals,
+  bounds: InsightsBounds,
+  talkerDays: TalkerDayCounts,
+): InsightsBounds {
+  let minDay = bounds.minDay
+  let maxDay = bounds.maxDay
+  let lastActive = bounds.lastActive
+  let tn = 0
+  for (const g of grouped) {
+    const bucket = typeBucket(g.t)
+    totals.buckets[bucket] = (totals.buckets[bucket] ?? 0) + g.n
+    totals.total.sent += g.s
+    tn += g.n
+    const hour = ((g.h % 24) + 24) % 24
+    totals.hourDist[hour] = (totals.hourDist[hour] ?? 0) + g.n
+    totals.dayCounts.set(g.d, (totals.dayCounts.get(g.d) ?? 0) + g.n)
+    if (talker) addTalkerDay(talkerDays, talker, g.d, g.n)
+    if (minDay < 0 || g.d < minDay) minDay = g.d
+    if (g.d > maxDay) maxDay = g.d
+    if (g.m) lastActive = Math.max(lastActive, g.m)
+  }
+  totals.total.n += tn
+  if (talker) totals.talkerCount.set(talker, (totals.talkerCount.get(talker) ?? 0) + tn)
+  return { minDay, maxDay, lastActive }
+}
+
+/** 没有 local_type 的表不进类型画像，但趋势仍要按日计数（与旧 extras 的列要求一致）。 */
+function collectDayGroups(db: DatabaseSync, table: string, talker: string | undefined, talkerDays: TalkerDayCounts): void {
+  if (!talker) return
+  const rows = db.prepare('SELECT create_time / 86400 AS d, COUNT(*) AS n FROM ' + table + ' GROUP BY d').all() as Array<{ d: number; n: number }>
+  for (const row of rows) addTalkerDay(talkerDays, talker, row.d, row.n)
 }
 
 async function computeOverviewInsights(decryptedDir: string, self = ''): Promise<OverviewInsights> {
@@ -385,6 +401,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
 
   // 累计量容器：与循环**共享同一批对象**（引用共享 ⇒ 循环体一个字都不用改）
   const t: InsightsTotals = { total, buckets, hourDist, dayCounts, talkerCount }
+  const talkerDays: TalkerDayCounts = new Map()
   for (const sh of shardCatalogDirs(dec, ['message', 'bizchat'])) {
     // P1-2：每个分片要对它的全部 Msg_ 表各跑一次 GROUP BY 扫描（实测机器上 239 张表）。
     // 分片之间让出一次，排在这个查询后面的请求才有插进来的机会 ——
@@ -393,7 +410,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
     await yieldToLoop()
     const shardKey = shardCacheKey(sh.file, self, dec)
     const shardSig = fileSigOf(sh.file)
-    const hitBounds = applyCachedShard(shardKey, shardSig, t, { minDay, maxDay, lastActive })
+    const hitBounds = applyCachedShard(shardKey, shardSig, t, { minDay, maxDay, lastActive }, talkerDays)
     if (hitBounds) {
       minDay = hitBounds.minDay
       maxDay = hitBounds.maxDay
@@ -401,6 +418,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
       continue
     }
     const before = snapshotTotals(t, { minDay, maxDay, lastActive })
+    const shardDays: TalkerDayCounts = new Map()
     try {
       const db = new DatabaseSync(sh.file, { readOnly: true })
       try {
@@ -425,39 +443,30 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
           }
         }
         for (const [table, meta] of sh.tables) {
-          if (!meta.cols.has('create_time') || !meta.cols.has('local_type')) continue
+          if (!meta.cols.has('create_time')) continue
+          const talker = tableToUser.get(table)
+          if (!meta.cols.has('local_type')) {
+            collectDayGroups(db, table, talker, shardDays)
+            continue
+          }
           const sentExpr = meta.cols.has('real_sender_id') && selfRowId !== undefined
             ? 'SUM(CASE WHEN real_sender_id = ' + selfRowId + ' THEN 1 ELSE 0 END)'
             : '0'
           const grouped = db.prepare(
             'SELECT (local_type & 4294967295) AS t, (create_time / 3600) % 24 AS h, create_time / 86400 AS d, COUNT(*) AS n, ' + sentExpr + ' AS s, MAX(create_time) AS m FROM ' + table + ' GROUP BY t, h, d',
-          ).all() as Array<{ t: number; h: number; d: number; n: number; s: number; m: number | null }>
-          let tn = 0
-          for (const g of grouped) {
-            const b = typeBucket(g.t)
-            buckets[b] = (buckets[b] ?? 0) + g.n
-            total.sent += g.s
-            tn += g.n
-            hourDist[((g.h % 24) + 24) % 24] = (hourDist[((g.h % 24) + 24) % 24] ?? 0) + g.n
-            const d = g.d
-            dayCounts.set(d, (dayCounts.get(d) ?? 0) + g.n)
-            if (minDay < 0 || d < minDay) minDay = d
-            if (d > maxDay) maxDay = d
-            if (g.m) lastActive = Math.max(lastActive, g.m)
-          }
-          total.n += tn
-          // A table without a proven identity must not enter a person ranking:
-          // the 32-char suffix is an md5 lookup key, not a conversation id.
-          const talker = tableToUser.get(table)
-          if (!talker) continue
-          talkerCount.set(talker, (talkerCount.get(talker) ?? 0) + tn)
+          ).all() as unknown as GroupedMessageRow[]
+          const next = absorbGrouped(grouped, talker, t, { minDay, maxDay, lastActive }, shardDays)
+          minDay = next.minDay
+          maxDay = next.maxDay
+          lastActive = next.lastActive
         }
+        mergePackedTalkerDays(talkerDays, freezeTalkerDays(shardDays))
       } finally {
         db.close()
       }
     } catch { /* skip shard */ }
     // 把本分片增量入缓存（极值只在"这次真的推动了它"时记入，见 recordShard）
-    recordShard(shardKey, shardSig, t, { minDay, maxDay, lastActive }, before)
+    recordShard(shardKey, shardSig, t, { minDay, maxDay, lastActive }, before, shardDays)
   }
 
   // 循环后的纯计算抽成模块级助手（单函数行数棘轮：这段搬走让本函数净变短）
@@ -517,20 +526,9 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   const assets = { favorites: 0, emoticons: 0, files: 0, fileBytes: 0, mediaItems: 0, mediaBytes: 0 }
   assets.favorites = countRows(join(dec, 'favorite', 'favorite.db'), 'fav_db_item')
   assets.emoticons = countRows(join(dec, 'emoticon', 'emoticon.db'), 'kNonStoreEmoticonTable')
-  for (const table of ['image_hardlink_info_v4', 'file_hardlink_info_v4', 'video_hardlink_info_v4']) {
-    const hp = join(dec, 'hardlink', 'hardlink.db')
-    if (!existsSync(hp)) break
-    try {
-      withDb(hp, (db) => {
-        const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== undefined
-        if (has) {
-          const c = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM ${table}`).get() as { n: number; s: number }
-          assets.files += c.n
-          assets.fileBytes += c.s
-        }
-      })
-    } catch { /* ignore */ }
-  }
+  const hardlink = sumHardlinkAssets(dec)
+  assets.files += hardlink.files
+  assets.fileBytes += hardlink.fileBytes
   const rp = join(dec, 'message', 'message_resource.db')
   if (existsSync(rp)) {
     try {
@@ -584,7 +582,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
     moments,
     assets,
     health: { dbFiles: dbs.length, dbBytes, ok: total.n > 0 || contactRows.length > 0 },
-    extras: queryOverviewExtras(decryptedDir),
+    extras: queryOverviewExtras(decryptedDir, talkerDays),
   }
 }
 

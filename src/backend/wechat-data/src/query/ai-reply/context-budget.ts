@@ -18,12 +18,20 @@ export const AI_REPLY_MIN_PEER_ENTRIES = 4
 export const AI_REPLY_MIN_SELF_ENTRIES = 2
 /** 单条正文进提示词前的默认最大字符数（按 code point 计）。 */
 export const AI_REPLY_MAX_LINE_CHARS = 600
-/** 相邻消息间隔达到这个秒数时补一条时间标记。 */
-export const AI_REPLY_MARKER_GAP_SECONDS = 30 * 60
 /** 一张图片/表情在上下文预算里的保守 token 估算。 */
 export const AI_REPLY_IMAGE_TOKEN_ESTIMATE = 800
 /** 为满足最低条数时，正文最多允许超出预算的倍数。 */
 export const AI_REPLY_BUDGET_HARD_OVERRUN = 1.35
+/**
+ * 时间断层阈值：相邻两条消息间隔超过它，就认为上一段对话已经结束。
+ *
+ * 上下文最多跨 60 条、可能横跨好几天。模型看到几天前「我」交代过的事，
+ * 会把它当成**还没做完的待办**，于是替「我」重新追问一遍 —— 表现就是
+ * 「同一个问题被反复回复」。标出断层后，断层之前的内容只作背景。
+ */
+export const CHAT_AI_REPLY_TIME_GAP_SECONDS = 3 * 60 * 60
+/** 断层标记行：只出现在 `lines` 里，不进 `dialogueLines`（不参与检索）。 */
+export const CHAT_AI_REPLY_GAP_MARKER = '（以上是更早的对话，与本条没有直接关系）'
 
 /** 单条消息在提示词里的粗略 token 成本：前缀 + 正文 + 行开销。 */
 const AI_REPLY_LINE_OVERHEAD_TOKENS = 4
@@ -35,7 +43,6 @@ export interface ChatAiReplyContextBudgetOptions {
   minPeer?: number
   minSelf?: number
   maxLineChars?: number
-  gapSeconds?: number
   imageCount?: number
   imageTokenEstimate?: number
   hardOverrun?: number
@@ -80,6 +87,8 @@ export interface ChatAiReplyAssembledContext {
 interface PreparedChatAiReplyEntry {
   localId: number
   createTime: number
+  /** 已格式化的 `[年-月-日 时:分]`；没有有效时间戳时为空串。 */
+  timeLabel: string
   isSender: boolean
   speaker: string
   text: string
@@ -162,7 +171,6 @@ export function assembleChatAiReplyContext(
   const minPeer = nonNegativeIntegerOption(options.minPeer, AI_REPLY_MIN_PEER_ENTRIES)
   const minSelf = nonNegativeIntegerOption(options.minSelf, AI_REPLY_MIN_SELF_ENTRIES)
   const maxLineChars = positiveIntegerOption(options.maxLineChars, AI_REPLY_MAX_LINE_CHARS)
-  const gapSeconds = nonNegativeNumberOption(options.gapSeconds, AI_REPLY_MARKER_GAP_SECONDS)
   const imageCount = nonNegativeIntegerOption(options.imageCount, 0)
   const imageTokenEstimate = nonNegativeIntegerOption(
     options.imageTokenEstimate,
@@ -178,15 +186,19 @@ export function assembleChatAiReplyContext(
     const createTime = Number.isFinite(Number(entry.createTime))
       ? Number(entry.createTime)
       : 0
+    // 每条消息都带自己的时间：模型判断「多久之前」不依赖相邻间隔，裁剪后也不会丢时间。
+    const timeLabel = createTime > 0 ? `[${fmtDateTimeSec(createTime)}]` : ''
     return {
       localId: Number.isFinite(Number(entry.localId)) ? Number(entry.localId) : 0,
       createTime,
+      timeLabel,
       isSender: entry.isSender === true,
       speaker,
       text: shortened.text,
       shortened: shortened.shortened,
       cost: estimateChatAiReplyTokens(`${speaker}：`) +
         estimateChatAiReplyTokens(shortened.text) +
+        (timeLabel === '' ? 0 : estimateChatAiReplyTokens(timeLabel) + 1) +
         AI_REPLY_LINE_OVERHEAD_TOKENS,
     }
   })
@@ -261,22 +273,20 @@ export function assembleChatAiReplyContext(
   if (start > 0) lines.push('（更早的对话已省略）')
 
   let shortened = 0
-  // 只记录最近一条**有效**时间：中间夹着 createTime=0 的占位消息时，
-  // 后一条仍应拿到自己的时间标记，而不是静默丢掉。
+  /** 上一条纳入窗口的消息时间，用于插「时间断层」标记。 */
   let previousTime = 0
   for (let i = start; i < total; i += 1) {
     const item = prepared[i]
     if (item === undefined) continue
-    if (item.createTime > 0) {
-      const needsMarker = previousTime === 0 ||
-        localDayKey(item.createTime) !== localDayKey(previousTime) ||
-        item.createTime - previousTime >= gapSeconds
-      // 复用后端唯一的本地时间格式化，避免再写第二份月份/补零口径。
-      if (needsMarker) lines.push(`[${fmtDateTimeSec(item.createTime)}]`)
-      previousTime = item.createTime
+    // 断层只影响提示词行，不进 dialogueLines：检索仍然拿到连续对话正文。
+    if (previousTime > 0 && item.createTime > 0
+      && item.createTime - previousTime > CHAT_AI_REPLY_TIME_GAP_SECONDS) {
+      lines.push(CHAT_AI_REPLY_GAP_MARKER)
     }
+    if (item.createTime > 0) previousTime = item.createTime
     const dialogue = `${item.speaker}：${item.text}`
-    lines.push(dialogue)
+    // 有时间的消息把时间内联在行首：每条都带，裁剪后也不会丢。
+    lines.push(item.timeLabel === '' ? dialogue : `${item.timeLabel} ${dialogue}`)
     dialogueLines.push(dialogue)
     if (item.localId > 0) includedLocalIds.push(item.localId)
     if (item.shortened) shortened += 1
@@ -302,12 +312,6 @@ export function assembleChatAiReplyContext(
       imageCount,
     },
   }
-}
-
-/** 本地时区里两个时间戳是否属于同一自然日。 */
-function localDayKey(seconds: number): number {
-  const date = new Date(seconds * 1000)
-  return date.getFullYear() * 10_000 + (date.getMonth() + 1) * 100 + date.getDate()
 }
 
 /** NaN/负数回退默认值的非负整数参数。 */

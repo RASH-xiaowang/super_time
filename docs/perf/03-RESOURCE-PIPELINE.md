@@ -74,7 +74,7 @@
 | 聊天会话 | sessions 1 + messages 1 + 头像批量 1 + 图片批量（可见窗口）+ idle 预取 | `api-read.ts:155,188`、`api-config.ts:233-236`、`api-media.ts:741-763` | snapshot 30s；消息缓存 5s；keep-alive 试点 |
 | 通讯录 | contacts 1 + 类目计数 1 + 头像预热 1 批（≤300） | `Contacts.tsx:326,341,365` | snapshot 30s；avatarCache 300 |
 | 朋友圈 | 4（moments 500 + monthly + self + authors）+ 媒体逐条 | `moments-data.ts:89,97,114,119` | 列表用 render cache 仅失败兜底（`:101-107`）；图片 IDB 512MB |
-| 文件与存储 | files 页 30 1 + 全量重复统计 1 + 每可见缩略图 1（约 15-30） | `Files.tsx:99,132,173-190` | 列表无 snapshot 复用；缩略图 60 条 |
+| 文件与存储 | files 页 30 1（重复统计 0；打开「查找重复」才 +1）+ 每可见缩略图 1（约 15-30） | `Files.tsx:99,132,173-190` | 列表无 snapshot 复用；缩略图 60 条 |
 | 收藏与表情 | favorites 1 + 每个 part 1-2 + 表情批量（200/次） | `Favorites.tsx:89-125`、`favorites-media.tsx:88-104`、`api-media.ts:227-274` | 表情 snapshot；收藏无渲染缓存 |
 | 年度报告 | annual 1 + years 1 + review 1 + avatars 批量 1 | `Annual.tsx:626,636,647,681` | 各接口 snapshot 30s |
 | 社交图谱 | graph 1 + knowledgeGraph 1 + avatars 批量 1 | `Graph.tsx:104,108,307` | snapshot 30s；头像预算 ≤320 |

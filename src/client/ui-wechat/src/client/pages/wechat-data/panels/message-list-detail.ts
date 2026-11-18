@@ -31,6 +31,20 @@ export interface MessageListDetailJob {
 }
 
 /**
+ * 这条记录投递时会不会 @ 人、@ 谁。
+ *
+ * 权威规则在后端 `query/ai-reply/queue-plan.ts`（私聊不 @；群聊只有批次首条
+ * @ 提问者）。前端这里只做**展示推导**，字段口径与后端一致；私聊不显示该行
+ * （没有 @ 语义，显示「不 @」只会增加噪音）。
+ */
+export interface MessageListDetailMention {
+  /** `@张三` 或 `不 @`。 */
+  text: string
+  /** 一句原因；空串表示无需解释（正常点名）。 */
+  hint: string
+}
+
+/**
  * 分段信息：当前段号 / 组内总段数 / 本段正文字符数。
  *
  * 记录契约里只有 `segmentIndex` 与 `segmentCount`，没有整组字数；`total` 因此
@@ -58,6 +72,7 @@ export interface MessageListDetailModel {
   sourceRef: string
   job?: MessageListDetailJob
   segments?: MessageListDetailSegments
+  mention?: MessageListDetailMention
 }
 
 function positiveInt(value: number | undefined): number | undefined {
@@ -66,6 +81,26 @@ function positiveInt(value: number | undefined): number | undefined {
 
 function textOrDash(value: string): string {
   return value.trim() === '' ? '—' : value
+}
+
+/**
+ * 推导这条记录投递时会不会 @ 人。
+ *
+ * 只对群聊给结果：私聊没有 @ 语义，返回 undefined 让界面整行不显示。
+ * @param record - 消息记录。
+ * @returns `@成员` / `不 @` + 原因；私聊为 undefined。
+ */
+function mentionOfDetail(record: MessageListRecord): MessageListDetailMention | undefined {
+  if (!record.chatUsername.trim().endsWith('@chatroom')) return undefined
+  const target = record.targetName.trim()
+  if (target === '' || target === record.chatName.trim()) {
+    return { text: '不 @', hint: '未解析到提问者，按普通群消息发送' }
+  }
+  const index = Number(record.segmentIndex ?? 0)
+  if (Number.isSafeInteger(index) && index > 1) {
+    return { text: '不 @', hint: '同一批次的后续消息，只由首条点名提问者' }
+  }
+  return { text: '@' + target, hint: '' }
 }
 
 /**
@@ -91,6 +126,7 @@ export function messageListDetailModel(
       count: Math.max(segmentCount ?? 1, segmentIndex ?? 1),
       total: record.text.length,
     }
+  const mention = mentionOfDetail(record)
   return {
     title: '记录 #' + String(record.id),
     sourceLabel: SOURCE_LABEL[record.source],
@@ -120,5 +156,6 @@ export function messageListDetailModel(
       ? {}
       : { job: { id: textOrDash(jobId), state: textOrDash(jobState) } }),
     ...(segments === undefined ? {} : { segments }),
+    ...(mention === undefined ? {} : { mention }),
   }
 }

@@ -8,6 +8,7 @@ import {
 import { runtimeCapabilities } from '../api-core.ts'
 import { Button, Dialog, ErrorState } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
+import { PersonaPresetPicker } from './chat-ai-reply-persona-presets.tsx'
 import css from './chat-ai-reply-settings.module.css'
 
 export interface ChatAiReplyPersonaDraft {
@@ -18,7 +19,26 @@ export interface ChatAiReplyPersonaDraft {
   kbEnabled: boolean
   /** 参与回复的知识库 id；`kbEnabled` 为 true 时必须大于 0。 */
   kbId: number
+  /** 上下文时间窗（小时）；0 = 不限。 */
+  contextWindowHours: number
 }
+
+/**
+ * 上下文时间窗的可选项：小时数 → 界面文案。
+ *
+ * 刻意给固定的几档而不是自由输入：这个值影响模型看到多少历史，
+ * 手填「37 小时」既难解释也没有实际收益。
+ */
+export const CONTEXT_WINDOW_OPTIONS: ReadonlyArray<{ hours: number; label: string }> = [
+  { hours: 0, label: '不限（最近 60 条）' },
+  { hours: 1, label: '最近 1 小时' },
+  { hours: 3, label: '最近 3 小时' },
+  { hours: 6, label: '最近 6 小时' },
+  { hours: 12, label: '最近 12 小时' },
+  { hours: 24, label: '最近 1 天' },
+  { hours: 72, label: '最近 3 天' },
+  { hours: 168, label: '最近 7 天' },
+]
 
 export interface ChatAiReplyWebhookScope {
   chatUsername: string
@@ -252,7 +272,7 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
 /**
  * 「知识库参与回复」勾选项与库选择器。
  *
- * 刻意拆成子组件：`useKbScope()` 会在挂载时读库列表，而设置弹窗在单聊里是常驻
+ * 刻意拆成子组件：`useKbScope()` 会在挂载时读库列表，而设置弹窗在会话里是常驻
  * 挂载（只是 `open=false`）。放到子组件里并只在 `open` 时渲染，关闭状态不会多打
  * 一次 `getKbs`；勾选后若还没选库，自动落到当前知识库作用域的库。
  */
@@ -295,6 +315,7 @@ function KnowledgeBaseSection(props: {
         <span>参与回复的知识库</span>
         <select
           className={css.select}
+          aria-label="选择知识库"
           value={String(kbId)}
           disabled={disabled || !enabled}
           onChange={(event) => { onChange(enabled, Number(event.target.value)) }}
@@ -330,6 +351,8 @@ export function ChatAiReplySettingsDialog(props: {
   initialSplitReply: boolean
   initialKbEnabled: boolean
   initialKbId: number
+  /** 上下文时间窗（小时）；0 = 不限。 */
+  initialContextWindowHours: number
   /** 已脱敏的默认大肥鱼 Webhook；由外层状态传入时可避免额外一次读取。 */
   initialWebhook?: ChatAiReplyDefaultWebhookState
   /** 测试或设置宿主注入；缺省时桌面端直接读取本机 Remote。 */
@@ -347,6 +370,7 @@ export function ChatAiReplySettingsDialog(props: {
   const [splitReply, setSplitReply] = useState(props.initialSplitReply)
   const [kbEnabled, setKbEnabled] = useState(props.initialKbEnabled)
   const [kbId, setKbId] = useState(props.initialKbId)
+  const [contextWindowHours, setContextWindowHours] = useState(props.initialContextWindowHours)
   const [localError, setLocalError] = useState<string | null>(null)
   const webhookConfig = useChatAiReplyWebhookConfig(props)
   const busy = props.saving || webhookConfig.saving
@@ -358,6 +382,7 @@ export function ChatAiReplySettingsDialog(props: {
     setSplitReply(props.initialSplitReply)
     setKbEnabled(props.initialKbEnabled)
     setKbId(props.initialKbId)
+    setContextWindowHours(props.initialContextWindowHours)
     setLocalError(null)
   }, [
     props.open,
@@ -366,6 +391,7 @@ export function ChatAiReplySettingsDialog(props: {
     props.initialSplitReply,
     props.initialKbEnabled,
     props.initialKbId,
+    props.initialContextWindowHours,
   ])
 
   const closeIfIdle = (): void => {
@@ -383,7 +409,14 @@ export function ChatAiReplySettingsDialog(props: {
       setLocalError('请选择参与回复的知识库，或取消勾选「知识库参与回复」')
       return
     }
-    const saved = await props.onSave({ name, prompt, splitReply, kbEnabled, kbId: kbEnabled ? kbId : 0 })
+    const saved = await props.onSave({
+      name,
+      prompt,
+      splitReply,
+      kbEnabled,
+      kbId: kbEnabled ? kbId : 0,
+      contextWindowHours,
+    })
     // onSave 返回时 hook 的 saving 状态可能还没完成下一帧渲染；保存成功的关闭
     // 不再二次读取 props.saving，否则会偶发“保存成功但弹窗不关”。
     if (saved) props.onClose()
@@ -424,6 +457,15 @@ export function ChatAiReplySettingsDialog(props: {
           语气和措辞；知识库材料只作事实依据。两者都不会绕过聊天正文防注入、隐私脱敏和
           回复格式等安全规则。
         </p>
+        <PersonaPresetPicker
+          disabled={busy}
+          draft={{ name, prompt }}
+          onPick={(preset) => {
+            setName(preset.name)
+            setPrompt(preset.prompt)
+            setLocalError(null)
+          }}
+        />
         <label className={css.field}>
           <span>人格名称</span>
           <input
@@ -452,7 +494,9 @@ export function ChatAiReplySettingsDialog(props: {
           <span className={css.toggleCopy}>
             <span className={css.toggleLabel}>长回复自动分段</span>
             <span className={css.toggleHint}>
-              模型只调用一次；生成后按空行和句意拆成每段 25 个字以内，段尾只保留问号或感叹号，再通过消息列表按顺序发送。
+              模型只调用一次；生成后按空行和句意拆成每段
+              {props.chatUsername.endsWith('@chatroom') ? '25' : '80'} 个字以内，
+              段尾只保留问号或感叹号，再通过消息列表按顺序发送。
             </span>
           </span>
           <input
@@ -465,6 +509,28 @@ export function ChatAiReplySettingsDialog(props: {
           />
           <span className={css.toggleSwitch} aria-hidden="true" />
         </label>
+        <label className={css.field}>
+          <span>上下文时间窗</span>
+          <select
+            className={css.select}
+            aria-label="上下文时间窗"
+            value={String(contextWindowHours)}
+            disabled={busy}
+            onChange={(event) => {
+              setContextWindowHours(Number(event.target.value))
+              setLocalError(null)
+            }}
+          >
+            {CONTEXT_WINDOW_OPTIONS.map((option) => (
+              <option key={option.hours} value={String(option.hours)}>{option.label}</option>
+            ))}
+          </select>
+          <span className={css.hint}>
+            只把这段时间内的消息当作上下文。窗口外（例如几天前交代过、但一直没下文的事）
+            不会进提示词，模型也就不会把它当成待办反复追问。
+            「不限」仍受最多 60 条与 6,000 token 预算约束。
+          </span>
+        </label>
         <KnowledgeBaseSection
           enabled={kbEnabled}
           kbId={kbId}
@@ -476,59 +542,76 @@ export function ChatAiReplySettingsDialog(props: {
           两项都留空表示使用内置默认人格，名称仅用于界面标识。修改人格或知识库设置会取消
           该会话尚未完成的旧回复，只影响之后新触发的消息；建议保存后用“立即检查 AI 回复”验证一次。
         </p>
-        <section className={css.webhookSection} aria-label="当前会话默认大肥鱼 Webhook 配置">
-          <div className={css.sectionTitleRow}>
-            <span className={css.sectionTitle}>当前会话默认大肥鱼 Webhook</span>
-            <span
-              className={css.webhookStatus}
-              data-configured={webhookConfig.webhook.configured ? 'true' : undefined}
-              title={webhookConfig.webhook.updatedAt === undefined
-                ? undefined
-                : '最近更新：' + new Date(webhookConfig.webhook.updatedAt).toLocaleString('zh-CN', { hour12: false })}
-            >
-              {webhookConfig.loading
-                ? '读取中…'
-                : webhookConfig.webhook.configured
-                  ? '已配置'
-                  : '待配置'}
-            </span>
-          </div>
-          <p className={css.hint}>
-            为当前会话保存独立地址。开启 AI 回复后，回复正文会先写入消息列表；
-            没有会话级规则时使用这个默认地址投递。
-            已保存的 token 只显示脱敏值，输入新地址即可替换；留空或保留脱敏值不会覆盖原 token。
-          </p>
-          <div className={css.webhookRow}>
-            <input
-              className={css.input}
-              value={webhookConfig.text}
-              disabled={!webhookConfig.canConfigure || webhookConfig.loading || webhookConfig.saving || props.saving}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              placeholder="http://192.168.1.4:17890/webhook/<token>"
-              onChange={(event) => { webhookConfig.changeText(event.target.value) }}
-              onFocus={(event) => { webhookConfig.focusText(event.currentTarget.value) }}
-              onBlur={webhookConfig.blurText}
-              aria-label="默认大肥鱼 Webhook 地址"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!webhookConfig.canConfigure || webhookConfig.loading || webhookConfig.saving || props.saving}
-              onClick={() => { void webhookConfig.save() }}
-            >
-              {webhookConfig.saving ? '保存中…' : '保存 Webhook'}
-            </Button>
-          </div>
-          {!webhookConfig.canConfigure && (
-            <p className={css.hint}>默认 Webhook 只允许在电脑端配置。</p>
-          )}
-          {webhookConfig.error !== null && <ErrorState message={webhookConfig.error} />}
-        </section>
+        <WebhookSettingsSection config={webhookConfig} saving={props.saving} />
         {props.error && <ErrorState message={props.error} />}
       </div>
     </Dialog>
+  )
+}
+
+/**
+ * 「当前会话默认大肥鱼 Webhook」区块。
+ *
+ * 从设置弹窗本体拆出（单函数行数闸门）：它只是一段表单渲染 + 一处脱敏提示，
+ * 状态全在 `useChatAiReplyWebhookConfig` 里，拆出来不改变任何行为。
+ */
+function WebhookSettingsSection(props: {
+  config: ReturnType<typeof useChatAiReplyWebhookConfig>
+  saving: boolean
+}): React.JSX.Element {
+  const { config, saving } = props
+  const busy = config.loading || config.saving || saving
+  return (
+    <section className={css.webhookSection} aria-label="当前会话默认大肥鱼 Webhook 配置">
+      <div className={css.sectionTitleRow}>
+        <span className={css.sectionTitle}>当前会话默认大肥鱼 Webhook</span>
+        <span
+          className={css.webhookStatus}
+          data-configured={config.webhook.configured ? 'true' : undefined}
+          title={config.webhook.updatedAt === undefined
+            ? undefined
+            : '最近更新：' + new Date(config.webhook.updatedAt).toLocaleString('zh-CN', { hour12: false })}
+        >
+          {config.loading
+            ? '读取中…'
+            : config.webhook.configured
+              ? '已配置'
+              : '待配置'}
+        </span>
+      </div>
+      <p className={css.hint}>
+        为当前会话保存独立地址。开启 AI 回复后，回复正文会先写入消息列表；
+        没有会话级规则时使用这个默认地址投递。
+        已保存的 token 只显示脱敏值，输入新地址即可替换；留空或保留脱敏值不会覆盖原 token。
+      </p>
+      <div className={css.webhookRow}>
+        <input
+          className={css.input}
+          value={config.text}
+          disabled={!config.canConfigure || busy}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          placeholder="http://192.168.1.4:17890/webhook/<token>"
+          onChange={(event) => { config.changeText(event.target.value) }}
+          onFocus={(event) => { config.focusText(event.currentTarget.value) }}
+          onBlur={config.blurText}
+          aria-label="默认大肥鱼 Webhook 地址"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!config.canConfigure || busy}
+          onClick={() => { void config.save() }}
+        >
+          {config.saving ? '保存中…' : '保存 Webhook'}
+        </Button>
+      </div>
+      {!config.canConfigure && (
+        <p className={css.hint}>默认 Webhook 只允许在电脑端配置。</p>
+      )}
+      {config.error !== null && <ErrorState message={config.error} />}
+    </section>
   )
 }
 

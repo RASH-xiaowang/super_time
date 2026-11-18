@@ -174,7 +174,15 @@ export interface DecryptStatus {
 }
 /** One Whisper model catalog entry (installed flag from the models dir). */
 export interface WhisperModelInfo {
-    id: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3' | 'turbo';
+    /**
+     * 模型 id。
+     *
+     * `turbo-q5` / `large-v3-q5` 是量化版（q5_0）：精度与 fp16 原版几乎一致，
+     * 体积压到 1/3，CPU 上明显更快。
+     * `tiny` / `base` / `medium` 已从产品清单下线（中文准确率不足或被更优模型全面压制），
+     * 但仍保留在联合类型里 —— 老配置里可能存着它们，读取时必须能解析而不是报错。
+     */
+    id: 'small' | 'turbo-q5' | 'turbo' | 'large-v3-q5' | 'large-v3' | 'tiny' | 'base' | 'medium';
     name: string;
     sizeLabel: string;
     /** Exact official ggml file downloaded into the models directory. */

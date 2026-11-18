@@ -1,8 +1,47 @@
 import type { WhisperModelInfo } from '../types.ts';
-/** Whisper model catalog (id/name/size labels). */
+/**
+ * Whisper 模型清单（**产品真正提供的那些**）。
+ *
+ * 选型依据是「中文语音转写的准确率 × 本机可行性」，而不是把官方仓库的文件全列一遍：
+ *
+ * | id | 体积 | 定位 |
+ * |---|---|---|
+ * | `small` | 466 MB | 低配合格线：CPU 压力小，中文可用 |
+ * | `turbo-q5` | 547 MB | **默认推荐**：量化 turbo，接近 large-v3 的准确率、体积只有 1/5 |
+ * | `turbo` | 1.6 GB | fp16 原版 turbo（GPU / 大内存，追求最高保真） |
+ * | `large-v3-q5` | 1.0 GB | 最高准确率（量化版，比 medium 更小也更准） |
+ * | `large-v3` | 3.1 GB | 最高准确率（fp16 原版） |
+ *
+ * 已下线（见 {@link WHISPER_LEGACY_MODEL_FILES}）：`tiny` / `base` 中文准确率不足
+ * （实测同一条语音出现「受权/微星/据任」这类同音错字）；`medium` 被 `large-v3-q5`
+ * 全面压制 —— 体积更大（1.5 GB vs 1.0 GB）而准确率更低。
+ */
 export declare const WHISPER_MODELS: ReadonlyArray<Pick<WhisperModelInfo, 'id' | 'name' | 'sizeLabel'>>;
+/**
+ * 已从产品清单下线、但**仍要能解析**的模型 → 官方 ggml 文件。
+ *
+ * 为什么保留而不是直接删掉文件名映射：老配置里可能写死着 `whisper_model: 'medium'`，
+ * 用户磁盘上也确实还有 `ggml-medium.bin`。删掉映射会让这些用户的转写突然变成
+ * 「未知模型」而停摆 —— 下线的意思是**不再推荐、不再出现在界面上**，
+ * 不是让已经在用的人一夜之间失效。
+ */
+export declare const WHISPER_LEGACY_MODEL_FILES: ReadonlyArray<[string, string]>;
+/**
+ * 下线模型 → 建议替换成的模型 id（设置页据此提示并预选）。
+ *
+ * 映射依据：`tiny`/`base` 只求「能出字」，给最小的合格模型 `small`；
+ * `medium` 精度档次与 `large-v3-q5` 相同但更大更慢，所以指向量化版 large-v3。
+ */
+export declare const WHISPER_MODEL_REPLACEMENTS: Readonly<Record<string, string>>;
 /** ggml model file per model id (whisper.cpp official release artifacts). */
 export declare const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]>;
+/**
+ * 未显式配置模型时的默认值。
+ *
+ * 用 `turbo-q5`（量化 turbo）而不是原来的 `medium`：同样面向「够准 + 本机跑得动」，
+ * 但它体积只有 medium 的 1/3（547 MB vs 1.5 GB）、准确率更高。
+ */
+export declare const WHISPER_DEFAULT_MODEL = "turbo-q5";
 /**
  * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
  *

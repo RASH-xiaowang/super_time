@@ -60,39 +60,32 @@ function scopeNameOf(s: WechatSession): string {
 }
 
 /**
- * 面板头（标题 + 历史记录 / 新 AI 问答 / 全屏 / 关闭）。
+ * 面板头（标题 + 历史记录 / 新 AI 问答 / 展开全宽 / 关闭）。
  *
  * 抽出来的理由与 `SessionThread` / `SessionIntro` 相同：`SessionAsk` 受函数体棘轮
  * 管着（250 行上限）。四个按钮的 SVG 就占 20 行，而它们与面板状态无关。
  *
- * @param props.full - 是否全屏（决定全屏按钮的图标与提示）。
- * @param props.onToggleFull - 切换全屏。
+ * 2026-11-18 布局改版：**范围**从头部挪到下面一行（与「推荐回复」的「依据」行同一形态），
+ * 头部只留标题与四个图标按钮，窄侧栏（320px）里也不会把标题挤掉。
+ *
+ * @param props.full - 是否已展开为全宽（决定全宽按钮的图标与提示）。
+ * @param props.onToggleFull - 在「侧栏 / 全宽」之间切换。
  * @param props.onClose - 关闭面板。
  * @param props.onHistory - 打开历史记录弹窗。
  * @param props.onNewChat - 开始新的 AI 问答（清空本会话的问答记录）。
- * @param props.scopeName - 当前会话显示名（只读检索范围）。
- * @param props.scopeUsername - 当前会话 username（用于悬停提示）。
  * @returns 头部元素。
  */
-function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat, scopeName, scopeUsername }: {
+function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat }: {
   full: boolean
   onToggleFull: () => void
   onClose: () => void
   onHistory: () => void
   onNewChat: () => void
-  scopeName: string
-  scopeUsername: string
 }): React.JSX.Element {
   return (
     <div className={css.head}>
       <div className={css.headIdentity}>
         <span className={css.title}>AI 问答</span>
-        <span className={css.scopeChip} title={`读取范围：${scopeUsername}`}>
-          <span className={css.scopePrefix}>范围</span>
-          <IdentityName className={css.scopeName} name={scopeName} username={scopeUsername} size={18}>
-            {scopeName}
-          </IdentityName>
-        </span>
       </div>
       <div className={css.headActions}>
         {/* 「历史记录」：与「微信问答」同一件弹窗（内容由后端在每次回答产出时自动累积）。 */}
@@ -108,7 +101,7 @@ function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat, scopeN
             <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
           </svg>
         </button>
-        <button type="button" className={css.iconBtn} title={full ? '退出全屏' : '全屏'} aria-label={full ? '退出全屏' : '全屏'} onClick={onToggleFull}>
+        <button type="button" className={css.iconBtn} title={full ? '收起到右侧栏' : '展开为全宽（收起聊天记录与会话列表）'} aria-label={full ? '收起到右侧栏' : '展开为全宽'} onClick={onToggleFull}>
           {full ? (
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M9 3H5a2 2 0 0 0-2 2v4" /><path d="M15 21h4a2 2 0 0 0 2-2v-4" />
@@ -127,6 +120,31 @@ function SessionHead({ full, onToggleFull, onClose, onHistory, onNewChat, scopeN
           </svg>
         </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * 范围行：左标签 + 会话身份 + 右侧提示。
+ *
+ * 2026-11-18 布局改版时从面板头挪出来的一行，形态对齐「推荐回复」的「依据」行。
+ * 抽成组件而不是留在 `SessionAsk` 里：那个函数只有 250 行预算，一行注释都算钱。
+ * @param props.name - 当前会话显示名。
+ * @param props.username - 当前会话 username（悬停提示与身份色块）。
+ * @returns 范围行元素。
+ */
+function SessionScopeRow({ name, username }: {
+  name: string
+  username: string
+}): React.JSX.Element {
+  return (
+    <div className={css.scopeRow}>
+      <span className={css.scopeLabel}>范围</span>
+      <IdentityName className={css.scopeName} name={name} username={username} size={18}
+        title={`读取范围：${username}`}>
+        {name}
+      </IdentityName>
+      <span className={css.scopeHint}>仅本会话</span>
     </div>
   )
 }
@@ -371,8 +389,6 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         full={full}
         onToggleFull={onToggleFull}
         onClose={onClose}
-        scopeName={targetName}
-        scopeUsername={target.username}
         onHistory={() => { setHistoryOpen(true) }}
         onNewChat={() => {
           resetThread()
@@ -382,6 +398,11 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
           setQuestion('')
         }}
       />
+
+      {/* 范围行：与「推荐回复」的「依据」行同一形态（左标签 + 身份 + 右侧提示）。
+          2026-11-18 从头部挪到这里 —— 侧栏只有 320px，头部再放一枚范围芯片
+          会把标题和四个动作按钮挤在一起。 */}
+      <SessionScopeRow name={targetName} username={target.username} />
 
       <div className={css.body} ref={bodyRef}>
         {turns.length === 0 && !asking ? (
@@ -447,35 +468,27 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         </div>
       )}
 
+      {/* 输入区：与「微信问答」主面板同一套结构 —— 输入框与发送键**同一行**、
+          底部对齐，次要动作（优化提问）与提示在下一行。此前发送键被排到输入框下方
+          的独立一行、右侧留一大片空白，侧栏里看起来像没收尾。 */}
       <div className={css.composer}>
-        <textarea
-          ref={taRef}
-          className={css.input}
-          value={question}
-          onChange={(e) => { setQuestion(e.target.value) }}
-          onKeyDown={(e) => {
-            // Enter 发送、Shift+Enter 换行；输入法组字期间不拦截。
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          placeholder="继续追问这段聊天…"
-          rows={1}
-          aria-label="继续追问这段聊天"
-        />
-        <div className={css.composerFoot}>
-          {/* 优化提问：与「微信问答」同一条后端 Remote（范围同样限定到当前会话）。 */}
-          <button
-            type="button"
-            className={css.optBtn}
-            onClick={() => { void optimizeQuestion() }}
-            disabled={optLoading || !question.trim() || asking}
-            title="让 AI 改写问题、给出改进建议（结果内联展示，可一键采用）"
-          >
-            {optLoading ? '优化中…' : '优化提问'}
-          </button>
-          <span className={css.footSpacer} />
+        <div className={css.inputRow}>
+          <textarea
+            ref={taRef}
+            className={css.input}
+            value={question}
+            onChange={(e) => { setQuestion(e.target.value) }}
+            onKeyDown={(e) => {
+              // Enter 发送、Shift+Enter 换行；输入法组字期间不拦截。
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+            placeholder="继续追问这段聊天…"
+            rows={1}
+            aria-label="继续追问这段聊天"
+          />
           {asking ? (
             <button type="button" className={css.stopSend} onClick={cancel}
               aria-label="停止生成" title="停止本轮回答的生成（已生成的部分会保留）">
@@ -488,8 +501,22 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
             </button>
           )}
         </div>
+        <div className={css.composerFoot}>
+          {/* 优化提问：与「微信问答」同一条后端 Remote（范围同样限定到当前会话）。 */}
+          <button
+            type="button"
+            className={css.optBtn}
+            onClick={() => { void optimizeQuestion() }}
+            disabled={optLoading || !question.trim() || asking}
+            title="让 AI 改写问题、给出改进建议（结果内联展示，可一键采用）"
+          >
+            {optLoading ? '优化中…' : '优化提问'}
+          </button>
+          {/* 出处说明原先是输入区下方独立一行；侧栏里每省一行都是可见高度，
+              收进这一行右端，容器再窄时自动隐藏（见 CSS 的容器查询）。 */}
+          <span className={css.footHint}>回答附原文出处</span>
+        </div>
       </div>
-      <div className={css.note}>回答附原文出处，点击可核对</div>
 
       {/* 「沉淀为笔记」编辑器：与「微信问答」同一件。`sourceKind='ask'` +
           当前会话范围，构成知识图谱连到人的那条边。 */}

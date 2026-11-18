@@ -9,7 +9,7 @@ import {
   updateChatAiReplyRunState,
 } from '../src/query/ai-reply/config-store.ts'
 import { createChatAiReplyRunner } from '../src/query/ai-reply/runner.ts'
-import type { ChatAiReplyScanDeps } from '../src/query/ai-reply/types.ts'
+import type { ChatAiReplyScanDeps, ChatAiReplyScanMessage } from '../src/query/ai-reply/types.ts'
 import { createChatAiReplyRemotes } from '../src/remotes/chat-ai-reply.ts'
 import { withWritableDb } from '../src/query/db-open.ts'
 import { taskDbPath } from '../src/query/task-db.ts'
@@ -751,4 +751,107 @@ describe('AI 回复运行器 · 流程与游标', () => {
     runner.dispose()
   })
 
+})
+
+describe('群聊 AI 回复：只回 @我 的消息，并 @ 提问者', () => {
+  it('群里闲聊不触发；点名 @我 之后按提问者预约台账（群名仍是发送目的地）', async () => {
+    const room = 'room@chatroom'
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: room,
+      chatName: '测试群',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+    }).ok).toBe(true)
+
+    let messages: ChatAiReplyScanMessage[] = [
+      { localId: 1, sortSeq: 100, createTime: 1000, isSender: 0, renderType: 'text', displayText: '历史', mentionSelf: false },
+    ]
+    const generate = vi.fn(async () => ({ ok: true, text: '群里回复' }))
+    const collectContext = vi.fn(() => ({
+      lines: ['对方：@我 看一下报价'],
+      latestPeer: '@我 看一下报价',
+      count: 1,
+      prompt: '以下是当前微信群聊最近的对话：',
+    }))
+    const runner = createChatAiReplyRunner(deps({
+      listMessages: async () => messages,
+      generate,
+      collectContext,
+    }))
+
+    // 首次扫描只建立水位。
+    expect((await runner.scan()).queued).toBe(0)
+
+    // 群里有人闲聊（没有 @我）⇒ 不触发。
+    messages = [...messages, {
+      localId: 2, sortSeq: 200, createTime: 2000, isSender: 0,
+      renderType: 'text', displayText: '我下周也去', mentionSelf: false,
+    }]
+    expect((await runner.scan()).queued).toBe(0)
+    expect(generate).not.toHaveBeenCalled()
+
+    // 点名 @我 ⇒ 触发一次。带上发送者：群聊回复必须 @ 他。
+    messages = [...messages, {
+      localId: 3, sortSeq: 300, createTime: 3000, isSender: 0,
+      sender: 'wxid_asker', senderName: '张三',
+      renderType: 'text', displayText: '@我 看一下报价', mentionSelf: true,
+    }]
+    expect((await runner.scan()).queued).toBe(1)
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1))
+
+    const record = listMessageListRecords(decrypted).items[0]
+    expect(record).toMatchObject({
+      source: 'ai_reply',
+      chatUsername: room,
+      chatName: '测试群',
+      // 投递端把群聊记录的 targetName 当作 mention：必须是提问者。
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      text: '群里回复',
+    })
+    expect(record?.sourceRef).toBe('ai-reply:wxid_self:' + room + ':3000:3')
+    runner.dispose()
+  })
+})
+
+describe('AI 回复过程留痕', () => {
+  it('生成成功后留痕包含本轮上下文、提示词与模型输出', async () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+      cursor: 'v2:100:1',
+    }).ok).toBe(true)
+    const patches: Array<Record<string, unknown>> = []
+    const runner = createChatAiReplyRunner(deps({
+      listMessages: async () => [
+        { localId: 1, sortSeq: 100, createTime: 1000, isSender: 0, renderType: 'text', displayText: '历史' },
+        { localId: 2, sortSeq: 200, createTime: 2000, isSender: 0, renderType: 'text', displayText: '在吗' },
+      ],
+      collectContext: () => ({
+        lines: ['[2026-11-18 14:00] 对方：在吗'],
+        latestPeer: '在吗',
+        count: 1,
+        prompt: '以下是当前微信单聊最近的对话：\n[2026-11-18 14:00] 对方：在吗',
+      }),
+      generate: async () => ({ ok: true, text: '在的', model: 'opencode/kimi' }),
+      writeTrace: (patch) => { patches.push(patch as unknown as Record<string, unknown>) },
+    }))
+    expect((await runner.scan()).queued).toBe(1)
+    await vi.waitFor(() => expect(patches.some((patch) => patch['stage'] !== undefined)).toBe(true))
+    runner.dispose()
+
+    const stages = patches
+      .map((patch) => (patch['stage'] as { name?: string } | undefined)?.name)
+      .filter((name): name is string => name !== undefined)
+    expect(stages).toContain('context')
+    expect(stages).toContain('generated')
+    const context = patches.find((patch) => patch['context'] !== undefined)
+    expect(String(context?.['context'])).toContain('在吗')
+    const output = patches.find((patch) => patch['output'] === '在的')
+    expect(output?.['model']).toBe('opencode/kimi')
+  })
 })

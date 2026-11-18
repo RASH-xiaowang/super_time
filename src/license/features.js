@@ -158,10 +158,10 @@ const FEATURE_CATALOG = [
     description: '自动回复配置、扫描、消息回调与投递。',
   },
   {
-    id: 'local-analysis',
-    label: '本机智能分析',
+    id: 'message-analysis',
+    label: '消息分析',
     group: 'ai',
-    description: '本地模型分析，聊天内容不会离开本机。',
+    description: '分析单条消息的意图、氛围与应对方式；群聊额外判断是否针对你、该不该接话。',
   },
   {
     id: 'voice-transcribe',

@@ -4,7 +4,7 @@ import { Badge, Button } from '../ui/kit.tsx'
 import { desktopActionProps } from '../ui/desktop-only.tsx'
 import {
   SOURCE_LABEL,
-  aiReplyDeleteEligibility,
+  aiReplyAnyDeleteEligibility,
   aiReplyPhase,
   aiReplyRegenerateEligibility,
   batchDeleteEligibility,
@@ -82,7 +82,7 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
     || record.status === 'sent_unconfirmed'
     || record.error.trim() !== ''
   const regenerateEligibility = aiReplyRegenerateEligibility(record, props.now)
-  const aiReplyDelete = aiReplyDeleteEligibility(record, props.now)
+  const aiReplyDelete = aiReplyAnyDeleteEligibility(record, props.now)
   // 备注列只显示分层标题；完整原文/建议放悬停属性，留给后续详情抽屉。
   const noteTitle = showFailure
     ? [failure.title, failure.detail, failure.hint]
@@ -232,7 +232,7 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
               icon={<TrashIcon />}
               disabled={!props.canWrite || props.batchBusy || props.deletingAiReplyId === record.id}
               aria-label={'删除 AI 回复记录 #' + String(record.id)}
-              title="删除空白预约/失败记录（生成中的记录会被拒绝）"
+              title="删除这条 AI 回复记录（只清本机台账，不会撤回已发出的消息；生成中或投递中的会被拒绝）"
               data-delete-ai-reply={record.id}
               onClick={() => { props.onDeleteAiReplyRecord(record) }}
               {...desktopActionProps()}

@@ -224,10 +224,10 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
     })
     const desktopHtml = renderRecords([blankAiRecord()], { failed: 1 })
     expect(desktopHtml).toContain('重新生成（会再调用一次已配置的 AI 模型）')
-    expect(desktopHtml).toContain('删除空白预约/失败记录')
+    expect(desktopHtml).toContain('不会撤回已发出的消息')
   })
 
-  it('已有正文的失败 AI 回复不提供「重新生成」或「删除」', () => {
+  it('已有正文的失败 AI 回复不提供「重新生成」，但仍可删除（只清台账、不撤回消息）', () => {
     const html = renderRecords([aiRecord({
       id: 22,
       replyId: 'ml-22',
@@ -236,12 +236,14 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
       text: '已经生成的正文',
     })], { failed: 1 })
 
+    // 重新生成会再花一次模型钱，所以有正文时一律不提供。
     expect(html).not.toContain('data-regenerate-ai-reply')
-    expect(html).not.toContain('data-delete-ai-reply')
     expect(html).not.toContain('重新生成记录 #22')
+    // 删除只清本机台账、不会撤回已发出的消息 ⇒ 终态记录必须给出口。
+    expect(html).toContain('data-delete-ai-reply="22"')
   })
 
-  it('清理入口只在 AI 来源筛选且当前窗口有候选时出现', () => {
+  it('清理入口覆盖空白预约与已收口的终态记录，只有 AI 来源筛选下出现', () => {
     const blank = aiRecord({
       id: 31,
       replyId: 'ml-31',
@@ -252,16 +254,22 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
     })
 
     const aiFiltered = renderRecords([blank], { pending: 1 })
-    expect(aiFiltered).toContain('清理无正文失败记录 · 1（当前窗口）')
+    expect(aiFiltered).toContain('删除 AI 回复记录 · 1（当前窗口）')
     expect(aiFiltered).toContain('data-cleanup-ai-reply="1"')
 
     const allSources = renderRecords([blank], { pending: 1 }, { source: '' })
     expect(allSources).not.toContain('data-cleanup-ai-reply')
-    expect(allSources).not.toContain('清理无正文失败记录')
+    expect(allSources).not.toContain('删除 AI 回复记录 · ')
 
-    // 非空正文记录即使来源筛选是 AI 也不是清理候选。
-    const withText = renderRecords([aiRecord()], { pending: 1 })
-    expect(withText).not.toContain('data-cleanup-ai-reply')
+    // 已发出、已有正文的终态记录同样进入候选（用户要能把台账清干净）。
+    const delivered = renderRecords([aiRecord({
+      id: 32,
+      replyId: 'ml-32',
+      status: 'success',
+      text: '已经发出的回复',
+    })], { success: 1 })
+    expect(delivered).toContain('data-cleanup-ai-reply="1"')
+    expect(delivered).toContain('data-delete-ai-reply="32"')
   })
 
   it('浏览器态下重新生成、删除与清理入口都禁用', () => {

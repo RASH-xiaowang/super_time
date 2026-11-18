@@ -179,6 +179,9 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     personaName: z.string(),
     personaPrompt: z.string(),
     splitReply: z.boolean().optional(),
+    // 上下文时间窗：0 = 不限；上限 720 小时（30 天）。这里只校验范围，
+    // 存储层仍会再夹紧一次，避免绕过 Remote 的调用方写出越界值。
+    contextWindowHours: z.number().int().min(0).max(720).optional(),
     expectedRevision: z.number().optional(),
   })),
   remote('scanChatAiReplyNow'),
@@ -189,8 +192,14 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     expectedSourceRef: z.string().min(1),
   })),
   // 单次最多 100 条，与 store 的清理上限一致；ids 不允许空数组。
+  // includeTerminal 放开「已收口的终态记录」，默认只删空白预约。
   remote('deleteAiReplyReservations', z.object({
     ids: z.array(z.number().int().positive()).min(1).max(100),
+    includeTerminal: z.boolean().optional(),
+  })),
+  // 过程留痕是只读诊断：recordId 必须是正整数，不接受批量或空对象。
+  remote('getChatAiReplyTrace', z.object({
+    recordId: z.number().int().positive(),
   })),
 
   // 消息列表：查询、规则、手动写入、附件暂存与投递诊断。

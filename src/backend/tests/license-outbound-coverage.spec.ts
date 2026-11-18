@@ -48,7 +48,6 @@ const NON_AI_OUTBOUND: Record<string, string> = {
   getRemoteImages: '远程图片代理（M23）：按地址从微信 CDN 白名单主机取图并落盘，不发内容给模型',
   downloadWhisperModel: '从 HuggingFace / hf-mirror 下载语音识别模型**文件**，只在你点击下载时发生，不发内容给模型',
   installWhisperEngine: '从 GitHub releases 下载 whisper.cpp 引擎**压缩包**，只在你点击下载时发生，不发内容给模型',
-  downloadLayaModel: '从 HuggingFace 下载本地决策分析模型**文件**（约 1.26 GB），只在你点击下载时发生，不发内容给模型；分析本身跑在本机 onnxruntime 上',
 }
 
 const PRIVACY_SEAMS = new Set(['privacyGate'])

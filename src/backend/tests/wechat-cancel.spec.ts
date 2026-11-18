@@ -104,8 +104,6 @@ describe('wechat-cancel：超时调用的取消计划', () => {
       'cancelExportJob',
       'cancelSearch',
       'cancelAsk',
-      'cancelLayaAnalysis',
-      'cancelLayaDownload',
       'cancelSearchIndexBuild',
       'cancelKbIndexBuild',
       'cancelWhisperDownload',

@@ -41,10 +41,15 @@ function entry(over: Partial<ReplyContextEntry>): ReplyContextEntry {
   }
 }
 
-function respond(entries: ReplyContextEntry[], imageCandidates?: Array<{ localId: number }>): void {
+function respond(
+  entries: ReplyContextEntry[],
+  imageCandidates?: Array<{ localId: number }>,
+  voiceCandidates?: number[],
+): void {
   collectEntries.mockReturnValue({
     entries,
     ...(imageCandidates === undefined ? {} : { imageCandidates }),
+    ...(voiceCandidates === undefined ? {} : { voiceCandidates }),
     latestPeer: entries[entries.length - 1]?.text ?? '',
     count: entries.length,
     targetLine: entries.length === 0
@@ -58,7 +63,7 @@ beforeEach(() => {
 })
 
 describe('AI 回复上下文装配', () => {
-  it('跨时段对话带时间标记，统计与实际纳入条数一致', () => {
+  it('每条对话都带自己的时间，统计与实际纳入条数一致', () => {
     respond([
       entry({ localId: 1, createTime: at(9, 0), text: '早上好' }),
       entry({ localId: 2, createTime: at(9, 1), isSender: true, speaker: '我', text: '早呀' }),
@@ -73,10 +78,14 @@ describe('AI 回复上下文装配', () => {
       'wxid_self',
       AI_REPLY_CONTEXT_LIMIT,
       3,
+      // 没设时间窗时起点为 0（不做时间过滤）。
+      0,
     )
-    expect(context.lines.some((line) => line.startsWith('[2026-11-17 09:00]'))).toBe(true)
-    expect(context.lines.some((line) => line.startsWith('[2026-11-17 10:30]'))).toBe(true)
-    expect(context.lines).toContain('对方：报价多少')
+    expect(context.lines).toEqual([
+      '[2026-11-17 09:00] 对方：早上好',
+      '[2026-11-17 09:01] 我：早呀',
+      '[2026-11-17 10:30] 对方：报价多少',
+    ])
     expect(context.count).toBe(3)
     expect(context.stats).toMatchObject({
       collected: 3,
@@ -154,10 +163,56 @@ describe('AI 回复上下文装配', () => {
     expect(context.prompt).toContain('第 60 条：')
   })
 
-  it('提示词说明时间标记的语义，图片附注与实际文案一致', () => {
+  it('提示词说明时间的语义，图片附注与实际文案一致', () => {
     const prompt = buildChatAiReplyPrompt(['[2026-11-17 09:00]', '对方：在吗'], 2)
 
-    expect(prompt).toContain('不要回复或模仿时间标记')
+    expect(prompt).toContain('行首的时间只用于判断时效和语气')
     expect(prompt).toContain('本次随请求附带 2 张最近的图片或表情')
+  })
+
+  it('语音：没转写时交回 localId，转写后正文替换成「[语音]文本」', () => {
+    respond([
+      entry({ localId: 1, createTime: at(9, 0), text: '[语音]', voice: true }),
+      entry({ localId: 2, createTime: at(9, 1), isSender: true, speaker: '我', text: '好' }),
+      entry({ localId: 3, createTime: at(9, 2), text: '[语音]', voice: true }),
+    ], undefined, [1, 3])
+
+    const plain = collectChatAiReplyContext('decrypted', 'wxid_peer', 'wxid_self')
+    expect(plain.voiceCandidates).toEqual([1, 3])
+    expect(plain.lines).toContain('[2026-11-17 09:00] 对方：[语音]')
+
+    const transcribed = collectChatAiReplyContext(
+      'decrypted',
+      'wxid_peer',
+      'wxid_self',
+      undefined,
+      new Map([[1, '我到了'], [3, '马上下来']]),
+    )
+    expect(transcribed.lines).toEqual([
+      '[2026-11-17 09:00] 对方：[语音]我到了',
+      '[2026-11-17 09:01] 我：好',
+      '[2026-11-17 09:02] 对方：[语音]马上下来',
+    ])
+    // 已转写的不再要求上层重复转写。
+    expect(transcribed.voiceCandidates).toBeUndefined()
+  })
+
+  it('语音转写只交回最终窗口里的条数，窗口外不为转写付费', () => {
+    respond(
+      Array.from({ length: 60 }, (_, index) => entry({
+        localId: index + 1,
+        createTime: at(9, 0) + index,
+        text: '[语音]' + '很长的正文。'.repeat(40),
+        voice: true,
+      })),
+      undefined,
+      Array.from({ length: 60 }, (_, index) => index + 1),
+    )
+
+    const context = collectChatAiReplyContext('decrypted', 'wxid_peer', 'wxid_self')
+    expect(context.stats?.truncated).toBe(true)
+    expect(context.voiceCandidates?.length).toBeLessThanOrEqual(5)
+    // 一定是最新的那几条（升序、落到最终窗口里的尾部）。
+    expect(context.voiceCandidates?.at(-1)).toBe(60)
   })
 })

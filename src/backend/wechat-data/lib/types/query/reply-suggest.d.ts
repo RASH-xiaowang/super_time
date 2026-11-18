@@ -42,11 +42,15 @@ export interface ReplyContextEntry {
     text: string;
     /** 仅视觉消息出现：会话内定位键。 */
     image?: ReplyImageCandidate;
+    /** 语音消息：正文只是 `[语音]` 占位，需上层转写后再替换。 */
+    voice?: true;
 }
 /** `collectReplyContextEntries` 的结果：结构化条目 + 与 `collectReplyContext` 同源的汇总字段。 */
 export interface ReplyContextEntries {
     entries: ReplyContextEntry[];
     imageCandidates?: ReplyImageCandidate[];
+    /** 落到上下文里的语音消息 localId（时间正序）；上层按需转写成文本。 */
+    voiceCandidates?: number[];
     latestPeer: string;
     count: number;
     targetFound?: boolean;
@@ -76,9 +80,12 @@ talker: string, selfUsername?: string, limit?: number, targetLocalId?: number): 
  * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
  * @param limit - 取最近多少条（默认 60）。
  * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
+ * @param sinceCreateTime - 只保留这个时间点（秒）之后的消息；0/缺省表示不限。
+ *   「上下文时间窗」用它实现：窗口之外的消息不进提示词，模型也就不会把几天前的
+ *   旧事项当成待办反复追问。
  * @returns 结构化条目；该会话没有可用文本时 `count` 为 0。
  */
-export declare function collectReplyContextEntries(decryptedDir: string, talker: string, selfUsername?: string, limit?: number, targetLocalId?: number): ReplyContextEntries;
+export declare function collectReplyContextEntries(decryptedDir: string, talker: string, selfUsername?: string, limit?: number, targetLocalId?: number, sinceCreateTime?: number): ReplyContextEntries;
 /**
  * 拼「推荐回复」的提示词。
  *

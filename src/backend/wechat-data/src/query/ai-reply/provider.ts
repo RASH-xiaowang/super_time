@@ -18,6 +18,7 @@ import {
   FEATHER_TARGET_MAX_UTF16,
   jsonUtf8Bytes,
 } from '../message-list-store-shared.ts'
+import { isGroupMessageListRecord, mentionOfRecord } from './queue-plan.ts'
 
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -102,7 +103,8 @@ export function featherRecordCapacityError(
     ? (textOf(record.chatName) || textOf(record.targetName))
     : (textOf(record.targetName) || textOf(record.chatName))
   const message = textOf(record.text)
-  const mention = group ? textOf(record.targetName) : ''
+  // 提及与投递共用同一条策略：私聊永不发，群聊只在批次首条发。
+  const mention = mentionOfRecord(record)
   return featherRequestCapacityError({
     target,
     ...(message === '' ? {} : { message }),
@@ -113,20 +115,10 @@ export function featherRecordCapacityError(
 /**
  * 判断一条消息列表记录是否代表群聊。
  *
- * 稳定依据是 `chatUsername=...@chatroom`。外部入站协议用
- * `target=群名 + mention=成员` 时没有 username，只能在该 source 下按
- * 「会话名与触发对象不同」兜底。Feather 的发送目标名来自消息列表，不能把
- * 手工私聊的备注差异猜成群聊；因此没有 `@chatroom` 时只允许显式入站记录按
- * 历史协议兜底。
+ * 实现已移到 `queue-plan.ts`：入队与投递必须用同一个判据，否则
+ * 「写入时按群聊记提问者、投递时按私聊当目的地」这类错位会静默发生。
  */
-export function isGroupMessageListRecord(record: FeatherRecordShape): boolean {
-  if (record.chatUsername.endsWith('@chatroom')) return true
-  return record.chatUsername === ''
-    && record.source === 'webhook'
-    && record.chatName !== ''
-    && record.targetName !== ''
-    && record.chatName !== record.targetName
-}
+export { isGroupMessageListRecord } from './queue-plan.ts'
 
 /**
  * 将消息列表记录转成桥接发送请求。该函数不直接出网，便于单测检查
@@ -143,7 +135,12 @@ export function dshBridgeRequestOf(record: MessageListRecord): {
   if (record.images.length > 0) {
     return { ok: false, error: '/send/text 不支持附件，禁止静默丢件' }
   }
-  const talker = textOf(record.targetUsername)
+  // 群聊记录的 `targetUsername` 是**提问者**（用于 @ 他），消息目的地仍是群。
+  // 这个桥接协议只有 `{talker,text}`、没有 mention 字段，所以群聊只能发到群、
+  // 无法真正 @ 人；要 @ 请用 Feather 的 `/webhook/<token>`（它有 mention）。
+  const talker = isGroupMessageListRecord(record)
+    ? textOf(record.chatUsername)
+    : textOf(record.targetUsername)
   if (talker === '') return { ok: false, error: '消息列表记录缺少发送目标 wxid' }
   if (textOf(record.text) === '') return { ok: false, error: '消息列表记录正文为空' }
   return { ok: true, request: { talker, text: record.text } }
@@ -177,7 +174,7 @@ export function featherRequestOf(
     ? (textOf(record.chatName) || textOf(record.targetName))
     : (textOf(record.targetName) || textOf(record.chatName))
   const message = textOf(gatedText)
-  const mention = group ? textOf(record.targetName) : ''
+  const mention = mentionOfRecord(record)
   if (target === '') return { ok: false, error: '消息列表记录缺少发送目标名称' }
   const hasAttachments = (attachments?.length ?? 0) > 0 || (resourceIds?.length ?? 0) > 0
   if (message === '' && !hasAttachments) {

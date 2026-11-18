@@ -108,7 +108,7 @@ const LEDGER: LedgerEntry[] = [
   {
     site: 'src/backend/wechat-data/src/query/whisper.ts#streamUrlToFile',
     control: '无应用内闸门（只有你点击「下载模型」/「下载本地决策模型」才会发生）', anchor: 'NONE', marker: '',
-    why: 'whisper 模型（HF / hf-mirror）与 laya 模型（约 1.26 GB）共用这条流式下载原语。',
+    why: 'whisper 模型（HF / hf-mirror）走这条流式下载原语（本地 ONNX 决策模型已于 2026-11-18 移除）。',
   },
   {
     site: 'src/backend/llm-http.js#llmRequest',

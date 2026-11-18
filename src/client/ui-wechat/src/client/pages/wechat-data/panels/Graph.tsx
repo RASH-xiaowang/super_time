@@ -174,7 +174,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   /** 知识图谱快照（笔记 / stub / wiki 边）。与社交图谱分开加载：它是叠加维度，
    *  取不到时社交侧必须照常可用，所以单独 try/catch、不共用 error 状态。 */
   const fetchKnowledge = useCallback(() => apiGetKnowledgeGraph(kbId), [kbId])
-  const { data: knowledge, reload: reloadKnowledge } = useFreshData<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId), fetchKnowledge)
+  const { data: knowledge, reload: reloadKnowledge } = useFreshData<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId), fetchKnowledge, { enabled: variant === 'knowledge' })
   /** 笔记编辑器：open + 待编辑内容（id 为空表示新建）。 */
   const [noteEditor, setNoteEditor] = useState<{ open: boolean; id?: number; title?: string; body?: string }>({ open: false })
   const [settings, setSettings] = useState<GraphSettings>(() => ({
@@ -274,8 +274,8 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
 
   /** 知识图谱单独加载：失败只静默保持旧值（或空），不把社交图谱面板带进错误态。
    *  `kbId` 是依赖：换库就是换图，必须重取；缓存键也带库 id，两者一起才不串库。 */
-  /** 既有调用点原样可用（换库时 hook 的 key 变化会自动重取）。 */
-  const loadKnowledge = reloadKnowledge
+  /** 社交段不拉知识图；切库仍只重取知识侧。 */
+  const loadKnowledge = useCallback((): Promise<void> => variant === 'knowledge' ? reloadKnowledge() : Promise.resolve(), [variant, reloadKnowledge])
 
   // 两个加载器分成两个 effect：`load`（通讯录图谱）与库无关，并在一起的话每次切库
   // 都会白拉一次社交图谱（那是几百毫秒级的大快照）。
@@ -300,7 +300,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
   useWechatDataUpdated(() => {
     if (!data) void load()
-    if (!knowledge) void loadKnowledge()
+    if (variant === 'knowledge' && !knowledge) void loadKnowledge()
   })
 
   const isKnowledgeMode = variant === 'knowledge'

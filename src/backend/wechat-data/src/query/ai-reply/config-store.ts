@@ -25,14 +25,20 @@ import {
   normalizeChatAiReplyPersona,
 } from './persona.ts'
 import { canonicalChatReference, isMessageTableHash } from '../message-identity.ts'
+import {
+  ensureChatAiReplySchema,
+  PENDING_REVISION_LEGACY,
+  PENDING_REVISION_VALID,
+} from './config-schema.ts'
+
+// 建表与补列已拆到 `config-schema.ts`；这里重新导出，保持既有 import 路径不变。
+export { ensureChatAiReplySchema } from './config-schema.ts'
 
 const NAME_MAX = 200
 const USERNAME_MAX = 255
 const ERROR_MAX = 500
 const CURSOR_MAX = 200
 const GENERATION_TEXT_MAX = 4000
-const PENDING_REVISION_VALID = 'valid'
-const PENDING_REVISION_LEGACY = 'legacy'
 
 function textOf(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : ''
@@ -54,15 +60,13 @@ function errorText(e: unknown): string {
   return typeof message === 'string' && message !== '' ? message : String(e)
 }
 
-function singleChatIdentity(
+/** 会话身份（单聊/群聊都支持；群聊的触发条件在扫描边界按 @我 判定）。 */
+function chatReplyIdentity(
   decryptedDir: string,
   value: string,
 ): { username: string; displayName: string; error?: string } {
   const chat = canonicalChatReference(decryptedDir, value, 'AI 回复会话')
   if (chat.error !== undefined) return { username: '', displayName: chat.displayName, error: chat.error }
-  if (chat.username !== '' && chat.type === 'group') {
-    return { username: '', displayName: chat.displayName, error: 'AI 回复当前仅支持单聊' }
-  }
   return { username: chat.username, displayName: chat.displayName }
 }
 
@@ -72,32 +76,6 @@ function isBusyError(e: unknown): boolean {
   const message = typeof record?.message === 'string' ? record.message : String(e)
   return /SQLITE_(?:BUSY|LOCKED)/i.test(code)
     || /database (?:table )?is locked|database is busy/i.test(message)
-}
-
-function isDuplicateColumnError(e: unknown): boolean {
-  return /duplicate column name/i.test(errorText(e))
-}
-
-function tableHasColumn(db: DatabaseSync, table: string, column: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>
-  return rows.some((row) => textOf(row.name, 80) === column)
-}
-
-/**
- * 老库并发启动时，两个连接可能都先看到缺列；后到的 ALTER 会报 duplicate column。
- * 这里把“列已经存在”当作迁移成功，避免一次正常竞态阻断后台 runner。
- */
-function addColumnIfMissing(db: DatabaseSync, column: string, ddl: string): boolean {
-  if (tableHasColumn(db, 'chat_ai_reply_settings', column)) return false
-  try {
-    db.exec(ddl)
-    return true
-  } catch (e) {
-    if (isDuplicateColumnError(e) && tableHasColumn(db, 'chat_ai_reply_settings', column)) {
-      return false
-    }
-    throw e
-  }
 }
 
 function writeTx<T>(db: DatabaseSync, fn: () => T): T {
@@ -114,6 +92,19 @@ function writeTx<T>(db: DatabaseSync, fn: () => T): T {
 
 function providerOf(value: unknown): ChatAiReplyProvider {
   return value === 'custom-webhook' ? 'custom-webhook' : 'dsh-wechat-bridge'
+}
+
+/** 上下文时间窗上限：30 天。设更长没有意义（上下文本来只取最近 60 条）。 */
+export const CHAT_AI_REPLY_CONTEXT_WINDOW_MAX_HOURS = 720
+
+/**
+ * 归一化上下文时间窗。
+ * @param value - 任意输入（数据库列或调用方参数）。
+ * @returns 0（不限）或 1..720 的整数小时。
+ */
+export function normalizeContextWindowHours(value: unknown): number {
+  const hours = Math.max(0, Math.floor(numOf(value)))
+  return Math.min(hours, CHAT_AI_REPLY_CONTEXT_WINDOW_MAX_HOURS)
 }
 
 function stageOf(value: unknown): ChatAiReplyStage {
@@ -133,6 +124,7 @@ function defaultSetting(): ChatAiReplySetting {
     personaPrompt: '',
     kbEnabled: false,
     kbId: 0,
+    contextWindowHours: 0,
     revision: 0,
     updatedAt: 0,
     cursor: '',
@@ -179,6 +171,7 @@ interface SettingRow {
   persona_prompt?: unknown
   kb_enabled?: unknown
   kb_id?: unknown
+  context_window_hours?: unknown
   revision?: unknown
   updated_at?: unknown
   cursor?: unknown
@@ -215,6 +208,7 @@ function stateOf(
         personaPrompt: textOf(row.persona_prompt, CHAT_AI_REPLY_PERSONA_PROMPT_MAX),
         kbEnabled: numOf(row.kb_enabled) === 1,
         kbId: Math.max(0, numOf(row.kb_id)),
+        contextWindowHours: normalizeContextWindowHours(row.context_window_hours),
         revision: Math.max(0, numOf(row.revision)),
         updatedAt: Math.max(0, numOf(row.updated_at)),
         cursor: textOf(row.cursor, CURSOR_MAX),
@@ -285,129 +279,6 @@ function failSupersededReservation(
   )
 }
 
-/** 建表；与消息列表同库，可重复调用。 */
-export function ensureChatAiReplySchema(db: DatabaseSync): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS chat_ai_reply_settings (
-    account_key TEXT NOT NULL,
-    chat_username TEXT NOT NULL,
-    chat_name TEXT NOT NULL DEFAULT '',
-    enabled INTEGER NOT NULL DEFAULT 0,
-    provider TEXT NOT NULL DEFAULT 'dsh-wechat-bridge',
-    split_reply INTEGER NOT NULL DEFAULT 1,
-    persona_name TEXT NOT NULL DEFAULT '',
-    persona_prompt TEXT NOT NULL DEFAULT '',
-    kb_enabled INTEGER NOT NULL DEFAULT 0,
-    kb_id INTEGER NOT NULL DEFAULT 0,
-    revision INTEGER NOT NULL DEFAULT 0,
-    cursor TEXT NOT NULL DEFAULT '',
-    pending_cursor TEXT NOT NULL DEFAULT '',
-    pending_source_ref TEXT NOT NULL DEFAULT '',
-    pending_revision INTEGER NOT NULL DEFAULT 0,
-    pending_revision_marker TEXT NOT NULL DEFAULT '',
-    generation_state TEXT NOT NULL DEFAULT '',
-    generation_source_ref TEXT NOT NULL DEFAULT '',
-    generation_text TEXT NOT NULL DEFAULT '',
-    generation_revision INTEGER NOT NULL DEFAULT 0,
-    lease_owner TEXT,
-    lease_until INTEGER NOT NULL DEFAULT 0,
-    lease_fence INTEGER NOT NULL DEFAULT 0,
-    stage TEXT NOT NULL DEFAULT 'idle',
-    last_run_at INTEGER,
-    record_id INTEGER,
-    error TEXT NOT NULL DEFAULT '',
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (account_key, chat_username)
-  )`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_ai_reply_enabled
-    ON chat_ai_reply_settings(enabled, updated_at DESC)`)
-  addColumnIfMissing(
-    db,
-    'split_reply',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN split_reply INTEGER NOT NULL DEFAULT 1',
-  )
-  addColumnIfMissing(
-    db,
-    'persona_name',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN persona_name TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'persona_prompt',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN persona_prompt TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'kb_enabled',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN kb_enabled INTEGER NOT NULL DEFAULT 0',
-  )
-  addColumnIfMissing(
-    db,
-    'kb_id',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN kb_id INTEGER NOT NULL DEFAULT 0',
-  )
-  addColumnIfMissing(
-    db,
-    'pending_cursor',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN pending_cursor TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'pending_source_ref',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN pending_source_ref TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'pending_revision',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN pending_revision INTEGER NOT NULL DEFAULT 0',
-  )
-  if (addColumnIfMissing(
-    db,
-    'pending_revision_marker',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN pending_revision_marker TEXT NOT NULL DEFAULT ''",
-  )) {
-    // Existing pending rows predate the marker. They are deliberately marked
-    // as legacy rather than backfilled from the current revision.
-    db.exec(`UPDATE chat_ai_reply_settings SET pending_revision_marker = '${PENDING_REVISION_LEGACY}'
-      WHERE pending_cursor <> '' OR pending_source_ref <> ''
-        OR record_id IS NOT NULL
-        OR stage IN ('generating', 'saving', 'dispatching')`)
-  }
-  addColumnIfMissing(
-    db,
-    'generation_state',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN generation_state TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'generation_source_ref',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN generation_source_ref TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'generation_text',
-    "ALTER TABLE chat_ai_reply_settings ADD COLUMN generation_text TEXT NOT NULL DEFAULT ''",
-  )
-  addColumnIfMissing(
-    db,
-    'generation_revision',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN generation_revision INTEGER NOT NULL DEFAULT 0',
-  )
-  addColumnIfMissing(
-    db,
-    'lease_owner',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN lease_owner TEXT',
-  )
-  addColumnIfMissing(
-    db,
-    'lease_until',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN lease_until INTEGER NOT NULL DEFAULT 0',
-  )
-  addColumnIfMissing(
-    db,
-    'lease_fence',
-    'ALTER TABLE chat_ai_reply_settings ADD COLUMN lease_fence INTEGER NOT NULL DEFAULT 0',
-  )
-}
 
 /** 读取单个会话设置；库不存在/读失败时返回 disabled，不让面板崩掉。 */
 export function readChatAiReplyState(
@@ -423,7 +294,7 @@ export function readChatAiReplyState(
     chatName,
   )
   if (result.ok) return result.state
-  const fallback = singleChatIdentity(decryptedDir, chatUsername)
+  const fallback = chatReplyIdentity(decryptedDir, chatUsername)
   return stateOf(
     textOf(accountKey, USERNAME_MAX),
     fallback.username,
@@ -450,7 +321,7 @@ export function readChatAiReplyStateStrict(
 ): ChatAiReplyStateReadResult {
   const account = textOf(accountKey, USERNAME_MAX)
   const rawUsername = textOf(chatUsername, USERNAME_MAX)
-  const canonical = singleChatIdentity(decryptedDir, rawUsername)
+  const canonical = chatReplyIdentity(decryptedDir, rawUsername)
   if (canonical.error !== undefined) return { ok: false, error: canonical.error }
   const username = canonical.username
   if (account === '' || username === '') {
@@ -494,7 +365,7 @@ export function readEnabledChatAiReplyStates(
         WHERE enabled = 1 ORDER BY updated_at DESC`).all() as SettingRow[]
       const out = new Map<string, ChatAiReplyState>()
       for (const row of rows) {
-        const chat = singleChatIdentity(
+        const chat = chatReplyIdentity(
           decryptedDir,
           textOf(row.chat_username, USERNAME_MAX),
         )
@@ -541,12 +412,14 @@ export function saveChatAiReplySetting(
     kbEnabled?: boolean
     /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
     kbId?: number
+    /** 上下文时间窗（小时）；省略时保留当前值，0/非法值表示不限。 */
+    contextWindowHours?: number
     expectedRevision?: number
     cursor?: string
   },
 ): ChatAiReplyMutationResult {
   const account = textOf(input.accountKey, USERNAME_MAX)
-  const canonical = singleChatIdentity(decryptedDir, input.chatUsername)
+  const canonical = chatReplyIdentity(decryptedDir, input.chatUsername)
   if (canonical.error !== undefined) return { ok: false, error: canonical.error }
   const username = canonical.username
   if (account === '' || username === '') return { ok: false, error: '缺少当前账号或会话' }
@@ -585,6 +458,9 @@ export function saveChatAiReplySetting(
         if (kbEnabled && kbId <= 0) {
           return { ok: false, error: '请选择参与回复的知识库' }
         }
+        const contextWindowHours = input.contextWindowHours === undefined
+          ? (current === undefined ? 0 : normalizeContextWindowHours(current.context_window_hours))
+          : normalizeContextWindowHours(input.contextWindowHours)
         const now = Date.now()
         failSupersededReservation(
           db,
@@ -599,10 +475,11 @@ export function saveChatAiReplySetting(
         const saved = db.prepare(`INSERT INTO chat_ai_reply_settings
           (account_key, chat_username, chat_name, enabled, provider,
            split_reply, persona_name, persona_prompt, kb_enabled, kb_id,
+           context_window_hours,
            revision, cursor,
            pending_cursor, pending_source_ref, pending_revision, stage,
            last_run_at, record_id, error, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
           ON CONFLICT(account_key, chat_username) DO UPDATE SET
             chat_name = excluded.chat_name,
             enabled = excluded.enabled,
@@ -612,6 +489,7 @@ export function saveChatAiReplySetting(
             persona_prompt = excluded.persona_prompt,
             kb_enabled = excluded.kb_enabled,
             kb_id = excluded.kb_id,
+            context_window_hours = excluded.context_window_hours,
             revision = excluded.revision,
             cursor = excluded.cursor,
             pending_cursor = '',
@@ -639,6 +517,7 @@ export function saveChatAiReplySetting(
           personaPrompt,
           kbEnabled ? 1 : 0,
           kbId,
+          contextWindowHours,
           nextRevision,
           cursor,
           stage,
@@ -677,6 +556,8 @@ export function saveChatAiReplyPersona(
     kbEnabled?: boolean
     /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
     kbId?: number
+    /** 上下文时间窗（小时）；省略时保留当前值，0 表示不限。 */
+    contextWindowHours?: number
     expectedRevision?: number
   },
 ): ChatAiReplyMutationResult {
@@ -704,12 +585,16 @@ export function saveChatAiReplyPersona(
   if (kbEnabled && kbId <= 0) {
     return { ok: false, error: '请选择参与回复的知识库' }
   }
+  const contextWindowHours = input.contextWindowHours === undefined
+    ? current.contextWindowHours
+    : normalizeContextWindowHours(input.contextWindowHours)
   if (
     persona.name === current.personaName
     && persona.prompt === current.personaPrompt
     && splitReply === current.splitReply
     && kbEnabled === current.kbEnabled
     && kbId === current.kbId
+    && contextWindowHours === current.contextWindowHours
   ) {
     return { ok: true, state: current }
   }
@@ -724,6 +609,7 @@ export function saveChatAiReplyPersona(
     personaPrompt: persona.prompt,
     kbEnabled,
     kbId,
+    contextWindowHours,
     expectedRevision,
     cursor: current.cursor,
   })

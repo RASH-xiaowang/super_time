@@ -6,7 +6,6 @@
  * 按需读取，目录本身由好友、企业微信、群成员三个分类一次合并，避免 N+1 请求。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { WechatContact } from '@deepseek-ai/dsh-wechat-data/types'
 import { apiGetContacts } from '../api.ts'
 import { EmptyState, ErrorState, LoadingState, PanelHeader, SearchInput } from '../ui/kit.tsx'
 import { LazyMount, ListSentinel, ProgressiveListSpacer, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
@@ -98,30 +97,17 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
     const sequence = ++loadSequence.current
     if (!silent) setLoading(true)
     setError(null)
-    const results = await Promise.allSettled(
-      CUSTOMER_CATEGORY_KEYS.map((category) => apiGetContacts({ category })),
-    )
-    // 实时刷新与首次加载可能并发；旧响应晚到时不能让目录倒退。
-    if (sequence !== loadSequence.current) return
-    const batches: WechatContact[][] = []
-    const failed: string[] = []
-    results.forEach((result, index) => {
-      const category = CUSTOMER_CATEGORY_KEYS[index] ?? 'friend'
-      if (result.status === 'fulfilled') batches.push(result.value.contacts)
-      else failed.push(CATEGORY_LABELS[category])
-    })
-
-    const merged = mergeCustomerCandidates(batches)
-    if (batches.length > 0) {
-      setCustomers(merged)
-      setWarnings(failed.length > 0 ? [`以下分类暂时未读到：${failed.join('、')}。当前目录可能不完整。`] : [])
-      setError(null)
-    } else {
-      const reason = results
-        .map((result) => result.status === 'rejected' ? (result.reason as Error).message : '')
-        .find((message) => message !== '') ?? '未知错误'
+    try {
+      // 三类一次查出。worker 单线程，原先三次 getContacts 只是排队扫三遍。
+      const env = await apiGetContacts({ categories: [...CUSTOMER_CATEGORY_KEYS] })
+      if (sequence !== loadSequence.current) return
+      setCustomers(mergeCustomerCandidates([env.contacts]))
       setWarnings([])
-      setError(reason)
+      setError(null)
+    } catch (e) {
+      if (sequence !== loadSequence.current) return
+      setWarnings([])
+      setError((e as Error).message)
     }
     setLoading(false)
   }, [])

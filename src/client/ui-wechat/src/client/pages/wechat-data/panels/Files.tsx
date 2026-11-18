@@ -230,8 +230,8 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         setDupError(error instanceof Error ? error.message : String(error ?? '未知错误'))
       })
   }, [])
-  useEffect(() => { loadDupTotal() }, [loadDupTotal])
-  useWechatDataUpdated(loadDupTotal)
+  useEffect(() => { if (dupOpen) loadDupTotal() }, [dupOpen, loadDupTotal])
+  useWechatDataUpdated(() => { if (dupOpen) loadDupTotal() })
 
   useWechatDataUpdated(() => { pager.reset() })
 
@@ -340,7 +340,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
               },
               {
                 key: 'dup',
-                label: dupError ? '查找重复（统计失败）' : `查找重复 (${dupTotal > 0 ? dupTotal : dupGroups.length})`,
+                label: dupError ? '查找重复（统计失败）' : dupOpen || dupTotal > 0 ? `查找重复 (${dupTotal})` : '查找重复',
                 onSelect: () => { setDupOpen(v => !v) },
               },
             ]} />

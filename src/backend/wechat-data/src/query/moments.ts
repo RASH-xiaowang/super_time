@@ -888,6 +888,31 @@ export function ensureMomentsArchiveFresh(decryptedDir: string, force = false): 
   return changed.length
 }
 
+function hydrateArchivedMoments(
+  rows: ArchivedMomentRow[],
+  names: Map<string, string>,
+  enterpriseNames: Map<string, string>,
+  self: string,
+): MomentEntry[] {
+  const moments: MomentEntry[] = []
+  for (const row of rows) {
+    try {
+      const entry = JSON.parse(row.payload) as MomentEntry
+      entry.tid = row.tid
+      entry.username = row.username
+      entry.author = displayNameForUsername(row.username, names, row.author || entry.author)
+      applyEnterpriseNames(entry, enterpriseNames)
+      entry.is_self = row.username === self
+      // 相对时间必须按「现在」重算：归档里存的是归档时刻的「3 天前」，一个月后就不对了。
+      entry.time = fmtRelativeDaySec(row.ts)
+      moments.push(entry)
+    } catch (e) {
+      console.warn('[moments-archive] 跳过坏 payload tid=' + row.tid + '：' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+  return moments
+}
+
 /**
  * 读一页朋友圈（归档优先；归档不可用时回退线上表）。
  * @param decryptedDir - decrypted data root.
@@ -907,39 +932,23 @@ export function queryMoments(
   const cap = Math.min(limit ?? 50, 500)
   const off = offset ?? 0
   const self = selfUsername ?? ''
-  const liveRows = readLiveMomentRows(decryptedDir) ?? []
   try {
     ensureMomentsArchiveFresh(decryptedDir)
   } catch (e) {
     console.warn('[moments-archive] 同步失败：' + (e instanceof Error ? e.message : String(e)))
   }
   const meta = contactMeta(decryptedDir)
-  const names = meta.names
   const archived = readArchivedMoments(decryptedDir, { offset: off, limit: cap, ...(authorUsername !== undefined ? { authorUsername } : {}) })
-  // 归档写失败时（库只读/磁盘满）不能拿空列表糊弄：回退到线上表。
-  if (archived !== null && (archived.total > 0 || liveRows.length === 0)) {
-    const moments: MomentEntry[] = []
-    for (const row of archived.rows) {
-      try {
-        const entry = JSON.parse(row.payload) as MomentEntry
-        entry.tid = row.tid
-        entry.username = row.username
-        entry.author = displayNameForUsername(row.username, names, row.author || entry.author)
-        applyEnterpriseNames(entry, meta.enterpriseNames)
-        entry.is_self = row.username === self
-        // 相对时间必须按「现在」重算：归档里存的是归档时刻的「3 天前」，一个月后就不对了。
-        entry.time = fmtRelativeDaySec(row.ts)
-        moments.push(entry)
-      } catch (e) {
-        console.warn('[moments-archive] 跳过坏 payload tid=' + row.tid + '：' + (e instanceof Error ? e.message : String(e)))
-      }
-    }
-    return { moments, total: archived.total }
+  // 归档里已经有帖时不再读整张 SnsTimeLine。空归档才回退线上表（写失败不能拿空列表糊弄）。
+  if (archived !== null && archived.total > 0) {
+    return { moments: hydrateArchivedMoments(archived.rows, meta.names, meta.enterpriseNames, self), total: archived.total }
   }
+  const liveRows = readLiveMomentRows(decryptedDir) ?? []
+  if (archived !== null && liveRows.length === 0) return { moments: [], total: 0 }
   // 归档库不存在/不可用 ⇒ 保留原来的线上分页路径，功能不因归档故障而消失。
   const filtered = authorUsername === undefined ? liveRows : liveRows.filter((r) => r.username === authorUsername)
   const page = filtered.slice(off, off + cap)
-  const moments = page.map((row) => buildMomentEntry(row.tid, row.username, row.content, names, meta.enterpriseNames, self))
+  const moments = page.map((row) => buildMomentEntry(row.tid, row.username, row.content, meta.names, meta.enterpriseNames, self))
   return { moments, total: filtered.length }
 }
 

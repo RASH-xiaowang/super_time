@@ -7,6 +7,7 @@ import {
   useChatAiReply,
   type ChatAiReplyController,
 } from './use-chat-ai-reply.ts'
+import { MESSAGE_LIST_UPDATED_EVENT } from '../message-list-events.ts'
 
 const mocks = vi.hoisted(() => ({
   apiGetChatAiReplyState: vi.fn(),
@@ -50,6 +51,7 @@ function stateFor(chatUsername: string): ChatAiReplyState {
     personaPrompt: '',
     kbEnabled: false,
     kbId: 0,
+    contextWindowHours: 0,
     revision: 1,
     updatedAt: 1,
     cursor: '',
@@ -77,6 +79,9 @@ function Probe({ chatUsername, sessionEpoch }: {
   })
   return createElement('div', {
     'data-scanning': String(latest.scanning),
+    'data-saving': String(latest.saving),
+    'data-enabled': String(latest.state?.enabled === true),
+    'data-revision': String(latest.state?.revision ?? 0),
     'data-error': latest.error ?? '',
   })
 }
@@ -167,5 +172,61 @@ describe('AI 回复立即扫描的会话隔离', () => {
     expect(notices).toHaveLength(noticesBefore)
     expect(notices.join('\n')).not.toContain('old scan failed')
     expect(host.firstElementChild?.getAttribute('data-error')).toBe('')
+  })
+})
+
+describe('AI 回复开关：关掉之后必须还能再开', () => {
+  it('写入期间的静默回源不会让 saving 永久为真（否则按钮永久变灰）', async () => {
+    const offWrite = deferred<{ ok: true; state: ChatAiReplyState }>()
+    const onWrite = deferred<{ ok: true; state: ChatAiReplyState }>()
+    mocks.apiSetChatAiReplyEnabled
+      .mockImplementationOnce(() => offWrite.promise)
+      .mockImplementationOnce(() => onWrite.promise)
+
+    renderProbe('wxid_a', 1)
+    await flush()
+    expect(host.firstElementChild?.getAttribute('data-enabled')).toBe('true')
+    const readsAfterLoad = mocks.apiGetChatAiReplyState.mock.calls.length
+
+    // ① 关闭：写入在飞
+    act(() => { void latest?.toggle() })
+    await flush()
+    expect(host.firstElementChild?.getAttribute('data-saving')).toBe('true')
+
+    // 写入期间来一次消息列表事件 —— 实测就是这次回源把 requestId 推走，
+    // 让写结果被判成过期，`saving` 于是再也收不回来。
+    vi.useFakeTimers()
+    act(() => { window.dispatchEvent(new Event(MESSAGE_LIST_UPDATED_EVENT)) })
+    await act(async () => { vi.advanceTimersByTime(2500) })
+    vi.useRealTimers()
+    await flush()
+
+    expect(
+      mocks.apiGetChatAiReplyState.mock.calls.length,
+      '写期间的回源没有让路',
+    ).toBe(readsAfterLoad)
+
+    await act(async () => {
+      offWrite.resolve({ ok: true, state: { ...stateFor('wxid_a'), enabled: false, revision: 2 } })
+    })
+    await flush()
+    expect(host.firstElementChild?.getAttribute('data-saving'), 'saving 没有收回').toBe('false')
+    expect(host.firstElementChild?.getAttribute('data-enabled')).toBe('false')
+
+    // ② 再开启：按钮必须仍可点，且带上一轮的新 revision。
+    act(() => { void latest?.toggle() })
+    await flush()
+    expect(mocks.apiSetChatAiReplyEnabled, '第二次开启没有发出请求').toHaveBeenCalledTimes(2)
+    expect(mocks.apiSetChatAiReplyEnabled.mock.calls[1]?.[0]).toMatchObject({
+      enabled: true,
+      expectedRevision: 2,
+    })
+
+    await act(async () => {
+      onWrite.resolve({ ok: true, state: { ...stateFor('wxid_a'), enabled: true, revision: 3 } })
+    })
+    await flush()
+    expect(host.firstElementChild?.getAttribute('data-enabled')).toBe('true')
+    expect(host.firstElementChild?.getAttribute('data-saving')).toBe('false')
   })
 })

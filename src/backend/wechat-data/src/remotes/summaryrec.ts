@@ -18,10 +18,16 @@ import { collectReplyKbSnippetsHybrid } from '../query/reply-kb.ts'
 import type { EmbedFn } from '../query/vector-math.ts'
 import { deleteSummaryRecord as delRec, saveSummaryRecord as saveRec } from '../query/summary-tasks.ts'
 import { DailySummaryResult, OperationCategory, OperationStatus, PeriodSummaryResult, ReplySuggestResult, SummaryTaskMutationResult, SummaryTaskRunResult } from '../types.ts'
+import type { ReplyTrace } from '../types-analysis.ts'
+import {
+  readReplySuggestCache,
+  replySuggestCacheKey,
+  writeReplySuggestCache,
+} from '../query/reply-suggest-cache.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 
 /**
  * 首 token 超时（D1，2026-09-28 性能修复）。
@@ -32,6 +38,39 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
  * 正常 provider 的排队+首 token（远小于总生成耗时），又能在真卡住时快速失败。
  */
 const FIRST_TOKEN_TIMEOUT_MS = 15_000
+
+/** 推荐回复的输出上限（3 条候选约 150 token，320 留了两倍余量）。 */
+const REPLY_SUGGEST_MAX_TOKENS = 320
+
+/**
+ * 知识库检索的超时上限。
+ *
+ * 稠密通道要先调一次向量模型，大库的索引扫描也不是常数时间；这两件事都可能
+ * 比模型生成更慢。超过就把片段当作空、按纯对话推荐继续 —— 用户要的是候选，
+ * 不是「等一个可能失败的知识库」。
+ */
+const KB_RETRIEVE_TIMEOUT_MS = 4_000
+
+/**
+ * 给 promise 套一个超时；超时后返回兜底值而不是抛错。
+ * @param task - 待等待的 promise。
+ * @param ms - 超时毫秒数。
+ * @param fallback - 超时时采用的结果。
+ * @returns 任务结果，或超时兜底值。
+ */
+async function withTimeout<T>(task: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => { resolve(fallback) }, ms)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 /**
  * 给异步迭代器套一个「首块到期」看门狗（D1）。
@@ -101,6 +140,182 @@ export interface createSummaryRecordRemotesInputs {
   setSchedBusy: (v: boolean) => void
   makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined
   kbModel: (kbId: number, role: 'embed') => { model: string }
+}
+
+/**
+ * 「推荐回复」的实现体。
+ *
+ * 从 remotes 工厂里抽出来（单函数行数闸门）：它要取上下文、检索知识库、调模型、
+ * 解析候选，还要组装过程留痕 —— 留在工厂里会把那个函数顶过 250 行。
+ * @param rc - 网关注入的依赖。
+ * @param options - 会话、知识库、候选条数与可选的分析目标消息。
+ * @returns 候选回复 + 本次调用的过程留痕。
+ */
+async function suggestRepliesOf(
+  rc: createSummaryRecordRemotesInputs,
+  options: {
+    username?: string
+    kbId?: number
+    count?: number
+    /** 分析面板当前选中的消息；缺省时仍按会话最新上下文推荐。 */
+    targetLocalId?: number
+    /** 忽略缓存、重新生成（界面的「换一批」用它）。 */
+    force?: boolean
+  },
+): Promise<ReplySuggestResult> {
+  /** `talker` 是 `WechatSession.username` 的别名。 */
+  const talker = String(options.username ?? '').trim()
+  if (talker === '') return { ok: false, error: '缺少会话' }
+  const want = Math.max(1, Math.min(Math.trunc(options.count ?? 3), 5))
+  const rawTarget = options.targetLocalId
+  if (rawTarget !== undefined && (!Number.isFinite(Number(rawTarget)) || Number(rawTarget) <= 0)) {
+    return { ok: false, error: '分析对象无效，请重新选择消息' }
+  }
+  const targetLocalId = rawTarget === undefined ? undefined : Math.trunc(Number(rawTarget))
+  const { lines, latestPeer, count, targetFound, targetLine } = collectReplyContext(
+    rc.dirs().decrypted,
+    talker,
+    rc.selfUsername(),
+    REPLY_SUGGEST_CONTEXT_LIMIT,
+    targetLocalId,
+  )
+  if (targetFound === false) return { ok: false, error: '这条消息已不在当前会话中，请重新选择' }
+  if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
+  const kbId = Math.trunc(Number(options.kbId ?? 0))
+  /**
+   * 命中缓存就直接返回。
+   *
+   * 键里带着上下文指纹 —— 会话里出现了新消息时指纹会变、缓存自然失效；
+   * 没变化的会话（关掉面板再打开、切走再切回）则秒开，不再等一次模型。
+   * `force` 来自界面的「换一批」，明确要求换结果时跳过缓存。
+   */
+  const llm = rc.ctx().llm
+  const defaultModel = (rc.ctx() as unknown as {
+    agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
+  }).agentDefaultModel
+  const sel = defaultModel?.currentSelection()
+  if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
+  const modelLabel = sel.provider + '/' + sel.model
+  const cacheKey = replySuggestCacheKey({
+    talker,
+    targetLocalId,
+    kbId,
+    model: modelLabel,
+    want,
+    lines,
+  })
+  if (options.force !== true) {
+    const cached = readReplySuggestCache(rc.dirs().decrypted, cacheKey)
+    if (cached !== undefined) {
+      rc.op('task', 'suggest_replies', 'ok', talker, `命中缓存 · ${cached.replies.length} 条`)
+      return {
+        ok: true,
+        replies: cached.replies,
+        messageCount: count,
+        kbSnippetCount: 0,
+        cached: true,
+        ...(cached.trace === undefined ? {} : { trace: cached.trace }),
+      }
+    }
+  }
+  /**
+   * 知识库检索**必须有上限**。
+   *
+   * 它是整条链路里唯一可能卡住的地方：库很大时检索要扫索引，稠密通道还要先调一次
+   * 向量模型（一次额外网络往返）。此前这里是裸 `await` —— 检索慢就等于候选慢，
+   * 而且模型还没开始调。超时后按「没有片段」降级继续：推荐回复本身就是可降级功能，
+   * 让它因为知识库而整个失败（或等到十几秒）是最差的选择。
+   */
+  const kb = kbId > 0
+    ? await withTimeout(
+        collectReplyKbSnippetsHybrid({
+          decryptedDir: rc.dirs().decrypted,
+          kbId,
+          lines,
+          latestPeer,
+          topK: 3,
+          makeEmbedFn: (model, feature) => rc.makeEmbedFn(model, feature),
+          kbModel: (id, role) => rc.kbModel(id, role),
+        }),
+        KB_RETRIEVE_TIMEOUT_MS,
+        { snippets: [], note: '知识库检索超时，这次只用了会话上下文' },
+      )
+    : { snippets: [], note: '' }
+  const snippets = kb.snippets
+  const prompt = buildReplyPrompt(lines, snippets, want, targetLine)
+  const [gated] = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
+  const sentPrompt = gated ?? prompt
+  const systemPrompt = '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。'
+  const userMsg = createUserMessage({
+    content: [{ type: 'text', text: sentPrompt }],
+    source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+  })
+  const assembler = new BlockAssembler()
+  const opts: GenerateOptions = {
+    provider: sel.provider, model: sel.model, messages: [userMsg],
+    system: systemPrompt,
+    /**
+     * 输出上限：3 条候选、每条 30 字上下，约 150 token。
+     *
+     * 此前**没有设上限** —— 模型会一直写到它自己认为够了为止，而推荐回复的
+     * 输出体量本该是最小的一类（AI 回复 600 / 分析 1200 都设了，唯独这里漏了）。
+     * 上限 320 给了两倍余量，同时把「模型开始啰嗦」这条尾部延迟掐掉。
+     */
+    maxTokens: REPLY_SUGGEST_MAX_TOKENS,
+  }
+  const startedAt = Date.now()
+  try {
+    for await (const chunk of streamWithDeadline<StreamChunk>(
+      llm.stream(opts),
+      FIRST_TOKEN_TIMEOUT_MS,
+    )) assembler.push(chunk)
+  } catch (e) {
+    rc.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
+    return { ok: false, error: (e as Error).message }
+  }
+  const elapsedMs = Date.now() - startedAt
+  const raw = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+  const replies = parseReplyCandidates(raw, want)
+  // 留痕在**解析之后**组装：即使候选为空，详情里也要能看到模型的原始输出，
+  // 否则「模型没给出可用的候选」这句话无法自证。
+  const trace: ReplyTrace = {
+    systemPrompt,
+    userPrompt: sentPrompt,
+    contextLines: lines,
+    kbSnippets: snippets,
+    rawOutput: raw,
+    model: sel.provider + '/' + sel.model,
+    elapsedMs,
+    redacted: sentPrompt !== prompt,
+  }
+  if (replies.length === 0) {
+    rc.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
+    return { ok: false, error: '模型没给出可用的候选回复', trace }
+  }
+  rc.op(
+    'task',
+    'suggest_replies',
+    'ok',
+    targetLocalId === undefined ? talker : `${talker}#${String(targetLocalId)}`,
+    `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`,
+  )
+      const base: ReplySuggestResult = {
+        ok: true,
+        replies,
+        messageCount: count,
+        kbSnippetCount: snippets.length,
+        trace,
+        cached: false,
+      }
+      // 写缓存放在返回路径上：命中它的是「同一段没变化的对话」。
+      writeReplySuggestCache(rc.dirs().decrypted, cacheKey, { replies, trace })
+  const kbDetail = kb.note !== '' && kb.note !== '知识库没有匹配的内容' ? `（${kb.note}）` : ''
+  return snippets.length === 0 && kbId > 0
+    ? {
+        ...base,
+        degraded: `知识库里没有相关内容，这次只用了会话上下文${kbDetail}`,
+      }
+    : base
 }
 
 export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs) {
@@ -256,81 +471,10 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       count?: number
       /** 分析面板当前选中的消息；缺省时仍按会话最新上下文推荐。 */
       targetLocalId?: number
+      /** 跳过缓存重新生成（界面的「换一批」用它）。 */
+      force?: boolean
     }): Promise<ReplySuggestResult> {
-      const talker = String(options.username ?? '').trim()
-      if (talker === '') return { ok: false, error: '缺少会话' }
-      const want = Math.max(1, Math.min(Math.trunc(options.count ?? 3), 5))
-      const rawTarget = options.targetLocalId
-      if (rawTarget !== undefined && (!Number.isFinite(Number(rawTarget)) || Number(rawTarget) <= 0)) {
-        return { ok: false, error: '分析对象无效，请重新选择消息' }
-      }
-      const targetLocalId = rawTarget === undefined ? undefined : Math.trunc(Number(rawTarget))
-      const { lines, latestPeer, count, targetFound, targetLine } = collectReplyContext(
-        rc.dirs().decrypted,
-        talker,
-        rc.selfUsername(),
-        REPLY_SUGGEST_CONTEXT_LIMIT,
-        targetLocalId,
-      )
-      if (targetFound === false) return { ok: false, error: '这条消息已不在当前会话中，请重新选择' }
-      if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
-      const kbId = Math.trunc(Number(options.kbId ?? 0))
-      const kb = kbId > 0
-        ? await collectReplyKbSnippetsHybrid({
-            decryptedDir: rc.dirs().decrypted,
-            kbId,
-            lines,
-            latestPeer,
-            topK: 3,
-            makeEmbedFn: (model, feature) => rc.makeEmbedFn(model, feature),
-            kbModel: (id, role) => rc.kbModel(id, role),
-          })
-        : { snippets: [], note: '' }
-      const snippets = kb.snippets
-      const llm = rc.ctx().llm
-      const defaultModel = (rc.ctx() as unknown as {
-        agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
-      }).agentDefaultModel
-      const sel = defaultModel?.currentSelection()
-      if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
-      const prompt = buildReplyPrompt(lines, snippets, want, targetLine)
-      const [gated] = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
-      const userMsg = createUserMessage({
-        content: [{ type: 'text', text: gated ?? prompt }],
-        source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-      })
-      const assembler = new BlockAssembler()
-      const opts: GenerateOptions = {
-        provider: sel.provider, model: sel.model, messages: [userMsg],
-        system: '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。',
-      }
-      try {
-        for await (const chunk of streamWithDeadline(llm.stream(opts), FIRST_TOKEN_TIMEOUT_MS)) assembler.push(chunk)
-      } catch (e) {
-        rc.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
-        return { ok: false, error: (e as Error).message }
-      }
-      const raw = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-      const replies = parseReplyCandidates(raw, want)
-      if (replies.length === 0) {
-        rc.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
-        return { ok: false, error: '模型没给出可用的候选回复' }
-      }
-      rc.op(
-        'task',
-        'suggest_replies',
-        'ok',
-        targetLocalId === undefined ? talker : `${talker}#${String(targetLocalId)}`,
-        `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`,
-      )
-      const base: ReplySuggestResult = { ok: true, replies, messageCount: count, kbSnippetCount: snippets.length }
-      const kbDetail = kb.note !== '' && kb.note !== '知识库没有匹配的内容' ? `（${kb.note}）` : ''
-      return snippets.length === 0 && kbId > 0
-        ? {
-            ...base,
-            degraded: `知识库里没有相关内容，这次只用了会话上下文${kbDetail}`,
-          }
-        : base
+    return suggestRepliesOf(rc, options)
     },
 
   }

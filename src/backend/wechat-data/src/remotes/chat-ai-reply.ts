@@ -22,6 +22,8 @@ import {
   saveChatAiReplyDefaultWebhook,
 } from '../query/ai-reply/default-webhook-store.ts'
 import { createChatAiReplyRunner } from '../query/ai-reply/runner.ts'
+import { readChatAiReplyTrace, writeChatAiReplyTrace } from '../query/ai-reply/trace-store.ts'
+import type { ChatAiReplyTraceReadResult } from '../query/ai-reply/trace-store.ts'
 import type { ChatAiReplyRegenerateResult } from '../query/ai-reply/runner-regenerate.ts'
 import { errorText, latestMessageCursor } from '../query/ai-reply/runner-recovery.ts'
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts'
@@ -53,6 +55,38 @@ import type {
   AiReplyReservationCleanupResult,
 } from '../query/message-list-store.ts'
 import type { OperationCategory, OperationStatus } from '../types.ts'
+import type { MessageListRecordResult } from '../types.ts'
+
+type ReserveReplyInput = Parameters<ChatAiReplyScanDeps['reserveReply']>[0]
+
+/**
+ * 预约成功后的留痕（模块级，避免把大工厂函数撑过单函数行数阈值）。
+ * 只给新建记录写：恢复时重复预约不追加重复阶段。
+ */
+function traceReserved(
+  dir: string,
+  reserved: MessageListRecordResult,
+  input: ReserveReplyInput,
+  selfUsername: string,
+): void {
+  if (!reserved.ok || reserved.created === false || reserved.id === undefined) return
+  writeChatAiReplyTrace(dir, {
+    recordId: reserved.id,
+    sourceRef: input.sourceRef,
+    accountKey: selfUsername,
+    ...(input.chatUsername === undefined ? {} : { chatUsername: input.chatUsername }),
+    stage: { name: 'reserved', at: Date.now(), detail: 'target=' + input.targetName },
+  })
+}
+
+/** 正文写入消息列表后的留痕：详情里据此区分「已生成」与「已落库」。 */
+function traceSaved(dir: string, recordId: number, output: string, segments: number): void {
+  writeChatAiReplyTrace(dir, {
+    recordId,
+    output,
+    stage: { name: 'saved', at: Date.now(), detail: 'segments=' + String(segments) },
+  })
+}
 
 export interface CreateChatAiReplyRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
@@ -61,6 +95,8 @@ export interface CreateChatAiReplyRemotesInputs {
   gate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => string[]
   generate: ChatAiReplyGenerateFn
   decodeImages?: NonNullable<ChatAiReplyScanDeps['decodeImages']>
+  /** 语音转写；由网关接到本地 whisper（设置里选的模型）。 */
+  transcribeVoices?: NonNullable<ChatAiReplyScanDeps['transcribeVoices']>
   /** 知识库片段检索；由网关接到与问答相同的混合检索通道。 */
   collectKbSnippets?: NonNullable<ChatAiReplyScanDeps['collectKbSnippets']>
   dispatch: (recordId: number) => Promise<ChatAiReplyDispatchResult>
@@ -93,12 +129,33 @@ function createChatAiReplyScanDeps(
       failAiReplyMessageListRecord(dir(), recordId, error, 'unconfirmed')
     }
   }
+  /**
+   * 群聊消息补一列 `mentionSelf`：扫描据此只把「点名 @我」的消息当作锚点。
+   *
+   * 为什么在**读取边界**算：登录账号只有这里知道；放进纯函数会让它多一个参数、
+   * 并且每一处调用都要记得传。单聊消息原样返回（不带该字段 ⇒ 不施加限制）。
+   * @param talker - 会话 `WechatSession.username` 的别名。
+   * @param messages - 该会话读到的消息。
+   * @returns 带上 `mentionSelf` 的消息（群聊）或原数组（单聊）。
+   */
+  const withMentionFlags = <T extends { atUsers?: ReadonlyArray<{ username: string }> }>(
+    talker: string,
+    messages: T[],
+  ): T[] => {
+    if (!talker.endsWith('@chatroom')) return messages
+    const self = rc.selfUsername()
+    return messages.map((message) => ({
+      ...message,
+      // 只认结构化的 atuserlist；`notify@all`（@所有人）不算单独 @我。
+      mentionSelf: self !== '' && (message.atUsers ?? []).some((user) => user.username === self),
+    }))
+  }
   return {
     decryptedDir: dir,
     selfUsername: () => rc.selfUsername(),
     listMessages: async (talker, limit) => {
       const snapshot = queryMessages(dir(), talker, limit, undefined, rc.selfUsername())
-      return snapshot.messages
+      return withMentionFlags(talker, snapshot.messages)
     },
     listMessagesAtOrBefore: async (talker, localId, limit) => {
       const snapshot = queryMessagesAtOrBefore(
@@ -108,19 +165,22 @@ function createChatAiReplyScanDeps(
         limit,
         rc.selfUsername(),
       )
-      return snapshot.messages
+      return withMentionFlags(talker, snapshot.messages)
     },
     listMessagesAfter: async (talker, cursor, limit) => {
       const match = /^v2:(\d+):(\d+)$/.exec(cursor)
       if (match === null) {
         const snapshot = queryMessages(dir(), talker, limit, undefined, rc.selfUsername())
-        return snapshot.messages
+        return withMentionFlags(talker, snapshot.messages)
       }
       const sortSeq = Number(match[1])
       const localId = Number(match[2])
       if (!Number.isSafeInteger(sortSeq) || sortSeq < 0
         || !Number.isSafeInteger(localId) || localId <= 0) {
-        return queryMessages(dir(), talker, limit, undefined, rc.selfUsername()).messages
+        return withMentionFlags(
+          talker,
+          queryMessages(dir(), talker, limit, undefined, rc.selfUsername()).messages,
+        )
       }
       const afterSortSeq = sortSeq > 0 ? sortSeq - 1 : 0
       const snapshot = queryNewMessages(
@@ -130,18 +190,20 @@ function createChatAiReplyScanDeps(
         Math.min(1000, Math.max(1, limit + 1)),
         rc.selfUsername(),
       )
-      return snapshot.messages.filter((message) => {
+      return withMentionFlags(talker, snapshot.messages.filter((message) => {
         const nextSortSeq = Number(message.sortSeq ?? message.localId)
         return nextSortSeq > sortSeq
           || (nextSortSeq === sortSeq && message.localId > localId)
-      }).slice(0, limit)
+      }).slice(0, limit))
     },
     generate: rc.generate,
     ...(rc.decodeImages === undefined ? {} : { decodeImages: rc.decodeImages }),
+    ...(rc.transcribeVoices === undefined ? {} : { transcribeVoices: rc.transcribeVoices }),
     ...(rc.collectKbSnippets === undefined ? {} : { collectKbSnippets: rc.collectKbSnippets }),
     gate: rc.gate,
     reserveReply: async (input) => {
       const reserved = reserveAiReplyMessageListRecord(dir(), input)
+      traceReserved(dir(), reserved, input, rc.selfUsername())
       return reserved.ok
         ? {
             ok: true,
@@ -158,6 +220,7 @@ function createChatAiReplyScanDeps(
         text: input.text,
         ...(input.note === undefined ? {} : { note: input.note }),
       })
+      if (completed.ok) traceSaved(dir(), input.id, input.text, 1)
       return completed.ok
         ? {
             ok: true,
@@ -169,10 +232,12 @@ function createChatAiReplyScanDeps(
         : { ok: false, ...(completed.error === undefined ? {} : { error: completed.error }) }
     },
     completeReplySegments: async (input) => {
-      return completeAiReplyMessageListRecordSegments(dir(), input.id, {
+      const completed = await completeAiReplyMessageListRecordSegments(dir(), input.id, {
         segments: input.segments,
         ...(input.note === undefined ? {} : { note: input.note }),
       })
+      if (completed.ok) traceSaved(dir(), input.id, input.segments.join('\n\n'), input.segments.length)
+      return completed
     },
     listReplySegments: async (sourceRef) => listAiReplyMessageListSegments(dir(), sourceRef),
     failReplySegmentsAfter: async (input) => {
@@ -257,6 +322,8 @@ function createChatAiReplyScanDeps(
     ...(rc.onRecordUpdated === undefined ? {} : { onRecordUpdated: rc.onRecordUpdated }),
     ...(rc.onDispatchFinished === undefined ? {} : { onDispatchFinished: rc.onDispatchFinished }),
     closeInterruptedDispatches: () => recoverInterruptedMessageListDispatches(dir()),
+    // 过程留痕：上下文/提示词/输出/阶段耗时写进独立表，供消息列表详情查看。
+    writeTrace: (patch) => writeChatAiReplyTrace(dir(), patch),
     op: (action, ok, detail) => {
       rc.op('task', action, ok ? 'ok' : 'fail', '', detail)
     },
@@ -304,10 +371,10 @@ function listEnabledChats(
   return {
     ok: true,
     chats: result.states
+      // 2026-11-18 起群聊也能开启，徽标/筛选同样需要它。
       .filter((state) => state.enabled
         && state.accountKey === accountKey
-        && state.chatUsername !== ''
-        && !state.chatUsername.endsWith('@chatroom'))
+        && state.chatUsername !== '')
       .map((state) => ({
         chatUsername: state.chatUsername,
         chatName: state.chatName,
@@ -324,6 +391,75 @@ function recordResultOf(
   return record === undefined
     ? { found: false }
     : { found: true, status: record.status, ...(record.error === '' ? {} : { error: record.error }) }
+}
+
+/** 保存默认 Webhook 并立即绑定缺失的精确规则（从大工厂里拆出，控制单函数行数）。 */
+function saveDefaultWebhookWithRule(
+  rc: CreateChatAiReplyRemotesInputs,
+  dir: string,
+  options: { chatUsername: string; chatName?: string; webhookUrl: string },
+): ChatAiReplyDefaultWebhookMutationResult {
+  const saved = saveChatAiReplyDefaultWebhook(dir, {
+    accountKey: rc.selfUsername(),
+    chatUsername: options.chatUsername,
+    ...(options.chatName === undefined ? {} : { chatName: options.chatName }),
+    webhookUrl: options.webhookUrl,
+  })
+  if (!saved.ok) {
+    return {
+      ok: false,
+      configured: false,
+      endpoint: '',
+      updatedAt: 0,
+      error: saved.error,
+    }
+  }
+  const applied = applyChatAiReplyDefaultWebhook(dir, {
+    accountKey: rc.selfUsername(),
+    chatUsername: options.chatUsername,
+    ...(options.chatName === undefined ? {} : { chatName: options.chatName }),
+  })
+  if (!applied.ok && applied.reason !== 'missing_webhook') {
+    rc.op(
+      'task',
+      'chat_ai_reply_default_webhook_bind',
+      'fail',
+      options.chatName ?? options.chatUsername,
+      applied.error,
+    )
+    return {
+      ok: false,
+      configured: saved.webhook.configured,
+      endpoint: saved.webhook.endpoint,
+      updatedAt: saved.webhook.updatedAt,
+      error: '默认 Webhook 已保存，但规则绑定失败：' + applied.error,
+    }
+  }
+  rc.op(
+    'task',
+    'chat_ai_reply_default_webhook_bind',
+    'ok',
+    options.chatName ?? options.chatUsername,
+    applied.ok
+      ? 'rule=' + String(applied.ruleId)
+        + '; created=' + String(applied.ruleCreated)
+        + '; backfilled=' + String(applied.backfilled)
+      : applied.error,
+  )
+  rc.changed()
+  return {
+    ok: true,
+    configured: saved.webhook.configured,
+    endpoint: saved.webhook.endpoint,
+    updatedAt: saved.webhook.updatedAt,
+    ...(applied.ok
+      ? {
+          ruleId: applied.ruleId,
+          ruleCreated: applied.ruleCreated,
+          backfilled: applied.backfilled,
+        }
+      : {}),
+  }
 }
 
 export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
@@ -367,71 +503,11 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       chatName?: string
       webhookUrl: string
     }): ChatAiReplyDefaultWebhookMutationResult {
-      const saved = saveChatAiReplyDefaultWebhook(dir(), {
-        accountKey: rc.selfUsername(),
-        chatUsername: options.chatUsername,
-        ...(options.chatName === undefined ? {} : { chatName: options.chatName }),
-        webhookUrl: options.webhookUrl,
-      })
-      if (!saved.ok) {
-        return {
-          ok: false,
-          configured: false,
-          endpoint: '',
-          updatedAt: 0,
-          error: saved.error,
-        }
-      }
-      const applied = applyChatAiReplyDefaultWebhook(dir(), {
-        accountKey: rc.selfUsername(),
-        chatUsername: options.chatUsername,
-        ...(options.chatName === undefined ? {} : { chatName: options.chatName }),
-      })
-      if (!applied.ok && applied.reason !== 'missing_webhook') {
-        rc.op(
-          'task',
-          'chat_ai_reply_default_webhook_bind',
-          'fail',
-          options.chatName ?? options.chatUsername,
-          applied.error,
-        )
-        return {
-          ok: false,
-          configured: saved.webhook.configured,
-          endpoint: saved.webhook.endpoint,
-          updatedAt: saved.webhook.updatedAt,
-          error: '默认 Webhook 已保存，但规则绑定失败：' + applied.error,
-        }
-      }
-      rc.op(
-        'task',
-        'chat_ai_reply_default_webhook_bind',
-        'ok',
-        options.chatName ?? options.chatUsername,
-        applied.ok
-          ? 'rule=' + String(applied.ruleId)
-            + '; created=' + String(applied.ruleCreated)
-            + '; backfilled=' + String(applied.backfilled)
-          : applied.error,
-      )
-      rc.changed()
-      return {
-        ok: true,
-        configured: saved.webhook.configured,
-        endpoint: saved.webhook.endpoint,
-        updatedAt: saved.webhook.updatedAt,
-        ...(applied.ok
-          ? {
-              ruleId: applied.ruleId,
-              ruleCreated: applied.ruleCreated,
-              backfilled: applied.backfilled,
-            }
-          : {}),
-      }
+      return saveDefaultWebhookWithRule(rc, dir(), options)
     },
 
     /**
-     * 读取当前账号已开启 AI 回复的单聊摘要。
+     * 读取当前账号已开启 AI 回复的会话摘要（单聊与群聊）。
      *
      * 任务库可能同时保存多个微信账号，因此必须在服务端按当前 selfWxid 过滤；
      * 读取失败原样返回，不能把未知状态当成“没有开启”。
@@ -514,6 +590,7 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       splitReply?: boolean
       kbEnabled?: boolean
       kbId?: number
+      contextWindowHours?: number
       expectedRevision?: number
     }): ChatAiReplyMutationResult {
       const state = saveChatAiReplyPersona(dir(), {
@@ -525,6 +602,9 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
         ...(options.splitReply === undefined ? {} : { splitReply: options.splitReply }),
         ...(options.kbEnabled === undefined ? {} : { kbEnabled: options.kbEnabled }),
         ...(options.kbId === undefined ? {} : { kbId: options.kbId }),
+        ...(options.contextWindowHours === undefined
+          ? {}
+          : { contextWindowHours: options.contextWindowHours }),
         ...(options.expectedRevision === undefined ? {} : { expectedRevision: options.expectedRevision }),
       })
       if (state.ok) rc.changed()
@@ -558,12 +638,24 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
     },
 
     /**
-     * 桌面端专用：按 id 整组清理从未生成正文、从未投递的 AI 预约/失败记录。
-     * 记录不存在算 skipped，重复调用幂等；逐条原因放在 items 里。
-     * 运行窗口仍在生成/投递的记录会被拒绝（删除行不等于取消在途模型调用）。
+     * 桌面端专用：按 id 整组删除 AI 回复记录。
+     * 默认只删空白且从未投递的预约/失败记录；`includeTerminal` 放开已收口的终态
+     * 记录（成功 / 已发出未确认 / 失败），在途状态仍拒绝。记录不存在算 skipped，
+     * 重复调用幂等；逐条原因放在 items 里。
      */
-    deleteReservations(ids: readonly number[]): AiReplyReservationCleanupResult {
-      return deleteAiReplyMessageListRecordsForCleanup(dir(), ids)
+    deleteReservations(
+      ids: readonly number[],
+      includeTerminal = false,
+    ): AiReplyReservationCleanupResult {
+      return deleteAiReplyMessageListRecordsForCleanup(dir(), ids, { includeTerminal })
+    },
+
+    /**
+     * 读取一条 AI 回复记录的过程留痕（上下文 / 知识库 / 提示词 / 输出 / 阶段耗时）。
+     * 只读本机自建表，不含 Webhook 或模型凭据；旧记录没有留痕时返回 `ok:false`。
+     */
+    getTrace(recordId: number): ChatAiReplyTraceReadResult {
+      return readChatAiReplyTrace(dir(), recordId)
     },
 
     dispose(): void {

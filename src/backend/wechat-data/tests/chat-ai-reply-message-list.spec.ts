@@ -15,6 +15,7 @@ import { withWritableDb } from '../src/query/db-open.ts'
 import { taskDbPath } from '../src/query/task-db.ts'
 import {
   completeAiReplyMessageListRecord,
+  completeAiReplyMessageListRecordSegments,
   failAiReplyMessageListRecord,
   getMessageListRecord,
   insertAiReplyMessageListRecord,
@@ -164,5 +165,93 @@ describe('消息列表 AI 来源与幂等', () => {
     await dispatchMessageListRecord(decrypted, first.id ?? 0, deps)
     expect(calls).toBe(1)
     expect(listMessageListRecords(decrypted).items[0]?.status).toBe('success')
+  })
+})
+
+describe('群聊 AI 回复投递：@ 提问者', () => {
+  it('群名作 target，提问者作 mention；规则按会话名仍然命中', async () => {
+    // 群聊记录的 targetName 是提问者（用于 @ 人），chatName 才是群名（发送目的地）。
+    const bodies: string[] = []
+    const dispatchDeps = {
+      decodeImage: async () => ({}),
+      gate: (_feature: string, _stats: { sessions: number; messages: number }, texts: string[]) => texts,
+      fetchImpl: async (_url: string, init?: { body?: unknown }) => {
+        bodies.push(String(init?.body ?? ''))
+        return new Response('{"ok":true}', { status: 200 })
+      },
+    }
+    // 默认 Webhook 自动绑定的规则是「会话名 + 会话名」，记录里没有地址快照。
+    expect(saveMessageListRule(decrypted, {
+      chatName: '测试群',
+      targetName: '测试群',
+      webhookUrl: 'https://downstream.example/ai',
+    }).ok).toBe(true)
+    const reserved = reserveAiReplyMessageListRecord(decrypted, {
+      chatName: '测试群',
+      chatUsername: 'room@chatroom',
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      sourceRef: 'ai-reply:wxid_self:room@chatroom:3000:3:pending',
+    })
+    expect(reserved.ok, reserved.ok ? '' : reserved.error).toBe(true)
+    completeAiReplyMessageListRecord(decrypted, reserved.id ?? 0, { text: '报价 100' })
+
+    const result = await dispatchMessageListRecord(decrypted, reserved.id ?? 0, dispatchDeps)
+    expect(result.ok, result.ok ? '' : result.error).toBe(true)
+    expect(JSON.parse(bodies[0] ?? '{}')).toMatchObject({
+      target: '测试群',
+      message: '报价 100',
+      mention: '张三',
+    })
+    expect(listMessageListRecords(decrypted).items[0]).toMatchObject({
+      status: 'success',
+      webhookUrl: 'https://downstream.example/ai',
+    })
+  })
+
+  it('同一批次被拆成 3 段：只有首条 @ 提问者，后续段落是普通群消息', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const dispatchDeps = {
+      decodeImage: async () => ({}),
+      gate: (_feature: string, _stats: { sessions: number; messages: number }, texts: string[]) => texts,
+      fetchImpl: async (_url: string, init?: { body?: unknown }) => {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+        return new Response('{"ok":true}', { status: 200 })
+      },
+    }
+    expect(saveMessageListRule(decrypted, {
+      chatName: '测试群',
+      targetName: '测试群',
+      webhookUrl: 'https://downstream.example/ai',
+    }).ok).toBe(true)
+    const reserved = reserveAiReplyMessageListRecord(decrypted, {
+      chatName: '测试群',
+      chatUsername: 'room@chatroom',
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      sourceRef: 'ai-reply:wxid_self:room@chatroom:4000:4',
+    })
+    expect(reserved.ok, reserved.ok ? '' : reserved.error).toBe(true)
+    const completed = completeAiReplyMessageListRecordSegments(decrypted, reserved.id ?? 0, {
+      segments: ['报价 100', '含运费 8 元', '今天下单明天到'],
+    })
+    expect(completed.ok, completed.ok ? '' : completed.error).toBe(true)
+    const segments = completed.segments ?? []
+    expect(segments.map((segment) => segment.segmentIndex)).toEqual([1, 2, 3])
+
+    // 逐条按顺序投递，模拟 runner 的串行补发。
+    for (const segment of segments) {
+      const result = await dispatchMessageListRecord(decrypted, segment.id, dispatchDeps)
+      expect(result.ok, result.ok ? '' : result.error).toBe(true)
+    }
+
+    expect(bodies).toHaveLength(3)
+    // 首条点名提问者。
+    expect(bodies[0]).toMatchObject({ target: '测试群', message: '报价 100', mention: '张三' })
+    // 后续段落在群里接着发，不再重复 @ 同一个人。
+    expect(bodies[1]).toMatchObject({ target: '测试群', message: '含运费 8 元' })
+    expect(bodies[2]).toMatchObject({ target: '测试群', message: '今天下单明天到' })
+    expect(bodies[1]?.['mention']).toBeUndefined()
+    expect(bodies[2]?.['mention']).toBeUndefined()
   })
 })

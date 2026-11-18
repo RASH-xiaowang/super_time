@@ -7,6 +7,8 @@ import {
   MESSAGE_LIST_PAGE_SIZE,
   MESSAGE_LIST_WINDOW_MAX,
   aiReplyDeleteEligibility,
+  aiReplyAnyDeleteEligibility,
+  aiReplyTerminalDeleteEligibility,
   aiReplyPhase,
   aiReplyRegenerateEligibility,
   appendMessageListWindow,
@@ -627,5 +629,57 @@ describe('AI 回复的重新生成与专用清理资格', () => {
       expect(result.reason).toContain(reason)
     }
     expect(aiReplyDeleteEligibility(record(53, NOW), NOW).reason).toContain('AI 回复')
+  })
+
+  it('终态删除：已成功 / 已发出未确认 / 有正文的失败都能删，在途状态仍然拒绝', () => {
+    // 三条终态记录（用户在消息列表里最常见的样子：已经发出去、或已经失败收口）。
+    expect(aiReplyTerminalDeleteEligibility(aiRecord(NOW, {
+      status: 'success',
+      text: '已发出的回复',
+    }))).toMatchObject({ eligible: true })
+    expect(aiReplyTerminalDeleteEligibility(aiRecord(NOW, {
+      status: 'sent_unconfirmed',
+      text: '可能已发出',
+      failureKind: 'unconfirmed',
+    }))).toMatchObject({ eligible: true })
+    expect(aiReplyTerminalDeleteEligibility(aiRecord(NOW, {
+      status: 'failed',
+      text: '生成过正文但发送失败',
+      failureKind: 'send_failed',
+    }))).toMatchObject({ eligible: true })
+
+    // 在途状态一律拒绝：删行不等于停掉在途动作。
+    for (const status of ['pending', 'dispatching', 'queued', 'running'] as const) {
+      const result = aiReplyTerminalDeleteEligibility(aiRecord(NOW, { status, text: '正文' }))
+      expect(result.eligible, status).toBe(false)
+      expect(result.reason).toContain('不能删除')
+    }
+
+    // 下游任务还没结束的终态记录也不能删。
+    const active = aiReplyTerminalDeleteEligibility(aiRecord(NOW, {
+      status: 'success',
+      text: '已受理',
+      jobId: 'job-1',
+      jobState: 'running',
+    }))
+    expect(active.eligible).toBe(false)
+    expect(active.reason).toContain('下游异步任务尚未结束')
+
+    // 非 AI 记录不归这个口径管。
+    expect(aiReplyTerminalDeleteEligibility(record(54, NOW, 'success')).reason)
+      .toContain('AI 回复')
+  })
+
+  it('合并口径：空白预约与终态记录都能删，生成中的两条口径都拒绝', () => {
+    const blank = aiRecord(NOW, { status: 'failed', text: '', failureKind: 'generation_failed' })
+    expect(aiReplyAnyDeleteEligibility(blank, NOW)).toMatchObject({ eligible: true })
+
+    const delivered = aiRecord(NOW, { status: 'success', text: '已发出' })
+    expect(aiReplyAnyDeleteEligibility(delivered, NOW)).toMatchObject({ eligible: true })
+
+    // 空白 pending 在 10 分钟内是「生成中」：预约口径拒绝，终态口径也不收。
+    const generating = aiRecord(NOW, { status: 'pending', text: '', failureKind: undefined })
+    expect(aiReplyAnyDeleteEligibility(generating, NOW)).toMatchObject({ eligible: false })
+    expect(aiReplyAnyDeleteEligibility(generating, NOW).reason).toContain('生成进行中')
   })
 })

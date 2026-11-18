@@ -48,6 +48,8 @@ export function createDefaultChatAiReplyGenerator(
       // x-opencode-session，避免把账号或联系人原值直接发给厂商。
       sessionId: `supertime:ai-reply:${input.accountKey}:${input.chatUsername}` as GenerateOptions['sessionId'],
     }
+    // 只用于本机留痕与详情展示；不进入投递请求体，也不含凭据。
+    const modelLabel = selection.provider + '/' + selection.model
 
     const run = async (
       prompt: string,
@@ -82,16 +84,16 @@ export function createDefaultChatAiReplyGenerator(
           const partial = normalizeChatAiReplyText(
             assembler.blocks().map((block) => block.type === 'text' ? block.text : '').join(''),
           )
-          return { ok: false, text: partial, canceled: true, error: '已取消' }
+          return { ok: false, text: partial, canceled: true, error: '已取消', model: modelLabel }
         }
-        return { ok: false, text: '', error: e instanceof Error ? e.message : String(e) }
+        return { ok: false, text: '', error: e instanceof Error ? e.message : String(e), model: modelLabel }
       }
       const text = normalizeChatAiReplyText(
         assembler.blocks().map((block) => block.type === 'text' ? block.text : '').join(''),
       )
       return text === ''
-        ? { ok: false, text: '', error: '模型没有返回可用文本' }
-        : { ok: true, text }
+        ? { ok: false, text: '', error: '模型没有返回可用文本', model: modelLabel }
+        : { ok: true, text, model: modelLabel }
     }
 
     const images = input.images ?? []

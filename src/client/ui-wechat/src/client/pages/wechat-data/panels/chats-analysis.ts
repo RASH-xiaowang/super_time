@@ -25,13 +25,10 @@ interface ChatsAnalysisOptions {
   msgItems: MessageRenderItem[]
   analysisPaneOpen: boolean
   analysisTarget: AnalysisTargetState | null
-  /** 推荐回复占据右栏时，消息区只读；命中后不得切到分析面板。 */
-  suggestionInteractionLocked: boolean
   setAnalysisPaneOpen: React.Dispatch<React.SetStateAction<boolean>>
   setAnalysisTarget: React.Dispatch<React.SetStateAction<AnalysisTargetState | null>>
   setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
   setAiFull: React.Dispatch<React.SetStateAction<boolean>>
-  setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
   setContactInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
   setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
@@ -51,12 +48,21 @@ export interface ChatsAnalysisController {
  */
 export function useChatsAnalysis(options: ChatsAnalysisOptions): ChatsAnalysisController {
   const {
-    curSession, msgItems, analysisPaneOpen, analysisTarget, suggestionInteractionLocked,
-    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setSuggestOpen,
+    curSession, msgItems, analysisPaneOpen, analysisTarget,
+    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull,
     setContactInfoOpen, setGroupInfoOpen,
   } = options
   const sessionTalker = curSession?.username ?? ''
-  const selectedLocalId = analysisTarget !== null && analysisTarget.talker === sessionTalker
+  /**
+   * 当前被分析的那条消息。
+   *
+   * **面板收起时视为没有选中**：否则关掉右栏之后那一行仍带着高亮（`data-analysis-target`），
+   * 右侧却什么都没有，看起来像「点了没反应」。收起有多个入口（点击消息、✕、切到 AI 问答 /
+   * 群聊信息 / 聊天信息），逐个去清目标容易漏，所以在这里按面板开关统一收敛。
+   */
+  const selectedLocalId = analysisPaneOpen
+    && analysisTarget !== null
+    && analysisTarget.talker === sessionTalker
     ? analysisTarget.localId
     : null
   const targetMessage = useMemo(
@@ -107,23 +113,32 @@ export function useChatsAnalysis(options: ChatsAnalysisOptions): ChatsAnalysisCo
   }, [analysisPaneOpen, curSession, msgItems, selectedLocalId, sessionTalker, setAnalysisTarget])
 
   const openMessageAnalysis = useCallback((message: WechatMessage): void => {
-    if (suggestionInteractionLocked) return
     if (curSession === null || !isAnalyzableMessage(message)) return
+    /*
+     * 再次点击「已选中且正在展示」的那条：收起面板（与头部「回复助手」按钮同一套开关语义）。
+     *
+     * 消息行本身就是这条分析的入口，再点一次自然应当是「关掉」，而不是让面板一直占着右栏。
+     * 只收起、不清空目标：下次再点同一条会立刻用缓存结果展开（不必重算）。
+     * 目标与高亮的失联由 `selectedLocalId` 在面板收起时统一置空来兜住。
+     */
+    if (analysisPaneOpen && selectedLocalId === message.localId) {
+      setAnalysisPaneOpen(false)
+      return
+    }
     setAiOpen(false)
     setAiFull(false)
-    setSuggestOpen(false)
     setContactInfoOpen(false)
     setGroupInfoOpen(false)
     setAnalysisPaneOpen(true)
     setAnalysisTarget({ talker: curSession.username, localId: message.localId })
   }, [
+    analysisPaneOpen,
     curSession,
-    suggestionInteractionLocked,
+    selectedLocalId,
     setAiFull,
     setAiOpen,
     setAnalysisPaneOpen,
     setAnalysisTarget,
-    setSuggestOpen,
     setContactInfoOpen,
     setGroupInfoOpen,
   ])

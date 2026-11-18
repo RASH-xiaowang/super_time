@@ -19,9 +19,14 @@ import {
   type CreateChatAiReplyRemotesInputs,
 } from './remotes/chat-ai-reply.ts'
 import type { ChatAiReplyRegenerateResult } from './query/ai-reply/runner-regenerate.ts'
+import type { ChatAiReplyTraceReadResult } from './query/ai-reply/trace-store.ts'
 import type { AiReplyReservationCleanupResult } from './query/message-list-store.ts'
 import { createDefaultChatAiReplyGenerator } from './query/ai-reply/generator.ts'
-import { decodeChatAiReplyImages } from './query/ai-reply/context.ts'
+import { AI_REPLY_VOICE_BUDGET_MS, decodeChatAiReplyImages } from './query/ai-reply/context.ts'
+import { cachedTranscript, TRANSCRIBE_CONCURRENCY, transcribeOneVoiceAsync } from './query/voice-transcribe.ts'
+import { svrIdByChatLocal } from './query/voice.ts'
+import { getConfig } from './query/config.ts'
+import { WHISPER_DEFAULT_MODEL, resolveWhisperModelsDir, whisperEnginePath } from './query/whisper.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
 import { collectReplyKbSnippetsHybrid } from './query/reply-kb.ts'
 import { rawWechatBase } from './gateway-support.ts'
@@ -90,8 +95,9 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
   }
 
   /**
-   * 开启或关闭某个单聊的 AI 回复。
-   * 仅桌面端可写；群聊、缺少账号或旧 revision 写入都会被拒绝。开启时尽量预置当前水位，
+   * 开启或关闭某个会话的 AI 回复。
+   * 仅桌面端可写；单聊与群聊都支持（群聊只有 @我 的消息会触发），缺少账号或
+   * 旧 revision 写入会被拒绝。开启时尽量预置当前水位，
    * 避免回放历史消息；关闭后不再生成或投递该会话的新回复。
    */
   @Remote('setChatAiReplyEnabled')
@@ -120,6 +126,8 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     splitReply?: boolean
     kbEnabled?: boolean
     kbId?: number
+    /** 上下文时间窗（小时）；0 = 不限。上限 720（30 天），超出按上限夹紧。 */
+    contextWindowHours?: number
     expectedRevision?: number
   }): ChatAiReplyMutationResult {
     return this.chatAiReplyRemotes().setPersona(options)
@@ -154,18 +162,40 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
   }
 
   /**
-   * 桌面端专用：清理空白且从未发送的 AI 回复预约/失败记录。
+   * 桌面端专用：删除 AI 回复记录。
    *
-   * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**；有正文、图片、异步任务、
-   * 发送尝试或任何投递事实的记录会逐条跳过；运行窗口仍在生成/投递的记录也会被
-   * 拒绝（删除行不等于取消在途模型调用）。记录不存在算 skipped，重复调用幂等。
+   * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**。默认只删空白且从未投递的
+   * 预约/失败记录；传 `includeTerminal: true` 时允许删除已收口的记录（成功 / 已发出
+   * 未确认 / 失败），用于清理台账里已经结束的行。在途状态（生成中 / 投递中 / 下游
+   * 排队或执行）一律拒绝 —— 删除行不等于取消在途模型调用或投递。记录不存在算
+   * skipped，重复调用幂等。
    */
   @Remote('deleteAiReplyReservations')
-  deleteAiReplyReservations(options: { ids: number[] }): AiReplyReservationCleanupResult {
+  deleteAiReplyReservations(options: {
+    ids: number[]
+    /** 是否允许删除已收口的终态记录（默认 false，只删空白预约）。 */
+    includeTerminal?: boolean
+  }): AiReplyReservationCleanupResult {
     if (options === null || typeof options !== 'object' || !Array.isArray(options.ids)) {
       return { ok: false, removed: 0, skipped: 0, items: [], error: 'ids 必须是数组' }
     }
-    return this.chatAiReplyRemotes().deleteReservations(options.ids)
+    return this.chatAiReplyRemotes().deleteReservations(options.ids, options.includeTerminal === true)
+  }
+
+  /**
+   * 读取一条 AI 回复记录的过程留痕（只读）。
+   *
+   * 返回本轮实际送进模型的上下文、知识库命中、system/user 提示词、模型输出与
+   * 各阶段时间戳，供消息列表详情「回复过程」展示。只有本机自建表，不含 Webhook
+   * 地址或模型凭据；旧记录没有留痕时 `ok:false`，界面据此显示「无留痕」。
+   */
+  @Remote('getChatAiReplyTrace')
+  getChatAiReplyTrace(options: { recordId: number }): ChatAiReplyTraceReadResult {
+    const recordId = Number(options?.recordId)
+    if (!Number.isSafeInteger(recordId) || recordId <= 0) {
+      return { ok: false, error: '记录 id 无效' }
+    }
+    return this.chatAiReplyRemotes().getTrace(recordId)
   }
 
   protected _chatAiReplyRemotes?: ReturnType<typeof createChatAiReplyRemotes>
@@ -194,6 +224,55 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
             xorKey: image.xorKey,
           },
         )
+      },
+      // 语音先转文字：模型拿到的是「对方说了什么」，而不是一个 [语音] 占位。
+      // 引擎/模型没装好时返回空 Map（调用方保留占位），绝不阻断整次回复。
+      //
+      // 延迟：large-v3 在本机实测每条 26–31 秒，但转写结果按 svr_id 缓存在
+      // `<decoded>/voices/<svr_id>.txt`，同一条语音只有第一次要等。这里按
+      // TRANSCRIBE_CONCURRENCY 并发，把首次命中几条语音的等待压到一半左右。
+      transcribeVoices: async ({ decryptedDir, talker, localIds }) => {
+        const out = new Map<number, string>()
+        const cfg = getConfig(this._dirs.decrypted)
+        const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
+        const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
+        const engine = whisperEnginePath(configBin, modelsDir)
+        if (engine === null) {
+          this.op('task', 'chat_ai_reply', 'fail', talker, '未检测到 whisper.cpp 引擎，语音按占位进入上下文')
+          return out
+        }
+        const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : WHISPER_DEFAULT_MODEL
+        // 最新优先：回复针对的是最后一条，先转它；预算耗尽就留占位。
+        const queue = [...localIds].reverse()
+        const deadline = Date.now() + AI_REPLY_VOICE_BUDGET_MS
+        const worker = async (): Promise<void> => {
+          for (;;) {
+            if (Date.now() >= deadline) return
+            const localId = queue.shift()
+            if (localId === undefined) return
+            // 已转写过的直接读缓存，不重复起 whisper 子进程。
+            const svrId = svrIdByChatLocal(decryptedDir, talker, localId, '')
+            if (svrId !== '') {
+              const cached = cachedTranscript(this._dirs.decoded, svrId)
+              if (cached !== '') {
+                out.set(localId, cached)
+                continue
+              }
+            }
+            const r = await transcribeOneVoiceAsync(
+              decryptedDir, this._dirs.decoded, modelsDir, modelId, engine, talker, localId, '',
+            )
+            if (r.ok && (r.text ?? '') !== '') out.set(localId, r.text ?? '')
+          }
+        }
+        const lanes = Math.min(TRANSCRIBE_CONCURRENCY, Math.max(1, queue.length))
+        await Promise.all(Array.from({ length: lanes }, () => worker()))
+        if (out.size < localIds.length) {
+          this.op('task', 'chat_ai_reply', 'ok', talker,
+            '语音转写 ' + String(out.size) + '/' + String(localIds.length)
+              + '（超出 ' + String(Math.round(AI_REPLY_VOICE_BUDGET_MS / 1000)) + ' 秒预算的留占位，下次命中缓存）')
+        }
+        return out
       },
       collectKbSnippets: ({ kbId, lines, latestPeer }) => collectReplyKbSnippetsHybrid({
         decryptedDir: this._dirs.decrypted,

@@ -61,10 +61,10 @@ export const MUTATIONS_BATCH3H = [
   },
   {
     id: 'M491-chats-right-pane-default-open-again',
-    why: '（2026-10-13 用户要求「进入聊天框后推荐回复面板和分析面板默认不显示」）推荐回复初值改回 true ⇒ 进会话右栏又默认摊开，消息列被挤。判据：chat-analysis-panel.wiring.spec.ts 的 ②。',
+    why: '（2026-10-13 用户要求「进入聊天框后推荐回复面板和分析面板默认不显示」；2026-11-18 合并成一个「回复助手」面板后判据落到这唯一的开关）初值改回 true ⇒ 进会话右栏又默认摊开，消息列被挤。判据：chat-analysis-panel.wiring.spec.ts 的 ④。',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx',
-    from: 'const [suggestOpen, setSuggestOpen] = useState(false)',
-    to: 'const [suggestOpen, setSuggestOpen] = useState(true)',
+    from: 'const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)',
+    to: 'const [analysisPaneOpen, setAnalysisPaneOpen] = useState(true)',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
 ]

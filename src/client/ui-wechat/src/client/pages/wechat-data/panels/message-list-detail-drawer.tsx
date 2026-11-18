@@ -13,6 +13,7 @@ import {
   messageListDetailModel,
   type MessageListDetailModel,
 } from './message-list-detail.ts'
+import { MessageListTraceSection } from './message-list-detail-trace.tsx'
 import css from './message-list-detail.module.css'
 
 export interface MessageListDetailDrawerProps {
@@ -129,6 +130,9 @@ function DetailBody(props: {
         </section>
       )}
 
+      {record.source === 'ai_reply' && <MessageListTraceSection recordId={record.id} />}
+      {record.source === 'ai_reply' && <MessageListTraceSection recordId={record.id} />}
+
       <section className={css.section} aria-label="关键时间">
         <h3 className={css.sectionTitle}>关键时间</h3>
         <dl className={css.times}>
@@ -156,6 +160,17 @@ function DetailBody(props: {
               <dd className={`${css.itemValue} ${css.idValue}`}>
                 第 {String(model.segments.index)}/{String(model.segments.count)} 段
                 {' · 本段 '}{String(model.segments.total)} 字
+              </dd>
+            </div>
+          )}
+          {model.mention !== undefined && (
+            <div className={css.idRow}>
+              <dt className={css.itemLabel}>提及</dt>
+              <dd className={`${css.itemValue} ${css.idValue}`}>
+                {model.mention.text}
+                {model.mention.hint !== '' && (
+                  <span className={css.mentionHint}>{' · '}{model.mention.hint}</span>
+                )}
               </dd>
             </div>
           )}

@@ -27,9 +27,9 @@ import {
 import {
   dshBridgeRequestOf,
   featherRequestOf,
-  isGroupMessageListRecord,
   isFeatherResourceEndpoint,
 } from './ai-reply/provider.ts'
+import { isGroupMessageListRecord, mentionOfRecord } from './ai-reply/queue-plan.ts'
 import { MESSAGE_LIST_ATTACHMENT_TOTAL_MAX_BYTES, decodeMessageListImageDataUrl } from './message-list-attachments.ts'
 import {
   FEATHER_REQUEST_MAX_BYTES,
@@ -206,13 +206,16 @@ function messageListRequestBody(record: MessageListRecord, text: string, attachm
   const target = group
     ? (record.chatName || record.targetName)
     : (record.targetName || record.chatName)
-  const groupMention = group ? record.targetName : ''
+  // 群聊的 @ 策略：只有批次首条点名提问者，后续段落不再重复 @。
+  const groupMention = mentionOfRecord(record)
   return JSON.stringify({
     // 轻羽等发送端把 target 当作消息目的地，群成员只能放进 mention。
     target,
     message: text,
     attachments,
-    ...(groupMention === '' ? {} : { mention: groupMention }),
+    // mention 与 target 相同时等于「@ 整个群」，没有意义（群聊没解析到提问者
+    // 时 targetName 会回落成群名），这里如实不发 mention。
+    ...(groupMention === '' || groupMention === target ? {} : { mention: groupMention }),
     recordId: record.id,
     replyId: record.replyId,
     chatName: record.chatName,
@@ -483,13 +486,20 @@ async function dispatchMessageListRecordUnlocked(
   }
   let webhookUrl = existing.webhookUrl
   if (webhookUrl === '') {
-    const rule = matchMessageListRule(
-      decryptedDir,
-      existing.chatName,
-      existing.targetName,
-      aiReplyRuleScope(decryptedDir, existing),
-    )
-    webhookUrl = rule?.webhookUrl ?? ''
+    const scope = aiReplyRuleScope(decryptedDir, existing)
+    // 群聊的 `targetName` 是「提问者」（投递时作为 mention @ 他），而规则里的
+    // 触发对象通常写的是会话名。先按提问者精确匹配人工成员规则，再退回按
+    // 会话名匹配群规则，否则群聊 AI 回复永远匹配不到默认 Webhook。
+    const targets = isGroupMessageListRecord(existing) && existing.targetName !== existing.chatName
+      ? [existing.targetName, existing.chatName]
+      : [existing.targetName]
+    for (const target of targets) {
+      if (target === '') continue
+      const rule = matchMessageListRule(decryptedDir, existing.chatName, target, scope)
+      if (rule === undefined) continue
+      webhookUrl = rule.webhookUrl
+      break
+    }
   }
   if (webhookUrl === '') {
     const latest = saveMessageListDispatchResult(decryptedDir, existing.id, {

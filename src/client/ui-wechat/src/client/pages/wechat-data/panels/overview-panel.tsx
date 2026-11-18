@@ -59,6 +59,23 @@ import { useMenuDismiss } from './use-menu-dismiss.ts'
 
 /** 总览的统计查询单次约 1–2 秒；WAL 高频推送只做合并限频，避免每几秒重复全量重算。 */
 export const OVERVIEW_AUTO_REFRESH_MIN_MS = 30_000
+/** 核心总览上屏后，再把资金/存储让给 worker，避免紧接着堵住切页。 */
+export const OVERVIEW_EXTRAS_DELAY_MS = 400
+
+async function fetchOverviewExtras(
+  alive: () => boolean,
+  apply: (lg: LedgerSnapshot, st: StorageSnapshot) => void,
+  fail: (message: string) => void,
+): Promise<void> {
+  try {
+    const [lg, st] = await Promise.all([apiGetLedger(), apiGetStorageStats()])
+    if (!alive()) return
+    apply(lg, st)
+  } catch (e) {
+    if (!alive()) return
+    fail(e instanceof Error ? e.message : String(e))
+  }
+}
 
 async function archiveAllSessions(
   task: Pick<ExportTask, 'running' | 'run'>,
@@ -149,6 +166,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const [moreOpen, setMoreOpen] = useState(false)
   const closeMore = useCallback((): void => { setMoreOpen(false) }, [])
   const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, closeMore)
+  const aliveRef = useRef(true)
+  const extrasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const extrasResolveRef = useRef<(() => void) | null>(null)
 
   const load = async (): Promise<void> => {
     const hadData = data !== null
@@ -179,21 +199,26 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       setLoading(false)
       setRefreshing(false)
     }
-    // 资金/存储等较重扩展数据在后台慢慢更新并持久化，不阻塞核心刷新。
-    try {
-      const [lg, st] = await Promise.all([
-        apiGetLedger(),
-        apiGetStorageStats(),
-      ])
+    // 资金/存储排在核心总览之后，并让出一拍：worker 单线程，紧接着打这两路会堵住切页。
+    await new Promise<void>((resolve) => {
+      extrasResolveRef.current = resolve
+      if (extrasTimerRef.current !== null) clearTimeout(extrasTimerRef.current)
+      extrasTimerRef.current = setTimeout(() => {
+        extrasTimerRef.current = null
+        extrasResolveRef.current = null
+        resolve()
+      }, OVERVIEW_EXTRAS_DELAY_MS)
+    })
+    if (!aliveRef.current) return
+    await fetchOverviewExtras(() => aliveRef.current, (lg, st) => {
       setLedger(lg)
       setStor(st)
       if (lg.readError) hold('资金台账读取不完整：' + lg.readError)
       else writeCache(CACHE_LEDGER, lg)
       writeCache(CACHE_STOR, st)
-    } catch (e) {
-      // 保留已有缓存，但资金读取失败不能伪装成“没有资金记录”。
-      hold('资金台账或存储统计失败，当前显示缓存数据：' + (e as Error).message)
-    }
+    }, (message) => {
+      hold('资金台账或存储统计失败，当前显示缓存数据：' + message)
+    })
   }
 
   const loadRef = useRef(load)
@@ -228,10 +253,15 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   }
 
   useEffect(() => {
+    aliveRef.current = true
     lastAutoRefreshAtRef.current = Date.now()
     void runLoad()
     return () => {
+      aliveRef.current = false
       if (autoRefreshTimerRef.current !== null) clearTimeout(autoRefreshTimerRef.current)
+      if (extrasTimerRef.current !== null) clearTimeout(extrasTimerRef.current)
+      extrasResolveRef.current?.()
+      extrasResolveRef.current = null
     }
   }, [])
   useWechatDataUpdated(scheduleAutoRefresh)

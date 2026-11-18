@@ -295,9 +295,14 @@ function productionDepClosure(rootDir, rootPkg) {
  * 而不是悄悄把断言删掉。
  */
 const FORBIDDEN_IN_DEPS = [
-  { name: 'onnxruntime-web', why: 'wasm/js 构建形态，Node 侧用不上（node 构建只 require onnxruntime-node）——实测 135 MB' },
-  { name: 'sharp', why: '图片处理，本用途只用分词器用不到它 ——连带 @img/sharp-win32-x64 的 libvips-42.dll 18.6 MB' },
+  { name: 'onnxruntime-web', why: 'wasm/js 构建形态，Node 侧用不上 ——实测 135 MB' },
+  { name: 'sharp', why: '图片处理，本用途用不到它 ——连带 @img/sharp-win32-x64 的 libvips-42.dll 18.6 MB' },
   { name: '@img/sharp-win32-x64', why: 'sharp 的原生 libvips（18.6 MB）' },
+  // 2026-11-18：本地 ONNX 决策模型已移除（消息分析改走对话模型），下面两个包
+  // 不再允许出现在生产依赖闭包里 —— 它们只为那个模型存在。
+  { name: 'onnxruntime-node', why: '只服务已移除的本地决策模型；消息分析现在走对话模型' },
+  { name: 'onnxruntime-common', why: 'onnxruntime-node 的兄弟包，随它一起移除' },
+  { name: '@huggingface/tokenizers', why: '只服务已移除的本地决策模型的分词器' },
 ];
 
 /**
@@ -305,9 +310,6 @@ const FORBIDDEN_IN_DEPS = [
  * 与 packaged-smoke 的「必需物仍在」是同一思路，但这条**不需要先打包**。
  */
 const REQUIRED_IN_DEPS = [
-  { name: 'onnxruntime-node', why: 'laya 本地推理的 ONNX 运行时' },
-  { name: 'onnxruntime-common', why: 'onnxruntime-node 的兄弟包：dist/index.js 与 dist/binding.js 都无保护 require 它' },
-  { name: '@huggingface/tokenizers', why: 'laya 的分词器（纯 JS、零依赖）' },
   { name: 'koffi', why: '读写目标进程内存（读取微信数据库密钥）' },
   { name: 'mammoth', why: 'Word（.docx）解析器 —— 知识库导入用' },
   { name: 'pdfjs-dist', why: 'PDF 解析器 —— 知识库导入用' },

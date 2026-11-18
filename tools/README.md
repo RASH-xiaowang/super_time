@@ -16,7 +16,7 @@
 | 目录 | 内容 | 说明 |
 |---|---|---|
 | `daily-push/` | 按需生成真实 Electron 面板截图与产品海报 | 成品不再入库；截图写入被忽略的临时目录，不得提交含真实用户数据的截图 |
-| `laya/` | 本地决策模型的 ONNX 导出、fixture 生成、推理与分词基准、打包态校验 | `export-onnx.py`、`dump-fixtures.py`、`bench-*.mjs`、`verify-packaged-onnx.mjs` |
+| `laya/` | 已移除：本地 ONNX 决策模型（2026-11-18 改为对话模型分析，见 `src/backend/wechat-data/src/query/analysis/`） | — |
 | `license-studio/` | 本机许可证签发 Electron GUI | 按中文业务模块勾选 27 项开放功能；由 `npm run license-studio` 启动；私钥不得进入仓库 |
 | `visual-audit/` | 真实 Electron + CDP 的面板视觉采集脚本 | 需要真实数据与 Playwright；用法见 `tools/visual-audit/README.md` |
 

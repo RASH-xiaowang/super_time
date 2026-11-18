@@ -83,8 +83,11 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  * `types-rpa.ts` 与 `types.ts` 同性质：多 RPA 厂商触发的**纯类型契约**（描述符/目录/配置），
  * 不 import 任何运行时模块，query 层的 task-center / query/rpa 只拿类型。放行它不会把运行时
  * 依赖方向带偏，也不会形成 keys ↔ query 的双向环。
+ *
+ * `types-analysis.ts` 同理：消息分析（`query/analysis/**`）的进出参类型，纯类型、不含运行时，
+ * 由 query 层与 remotes 共用。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'types-analysis.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {

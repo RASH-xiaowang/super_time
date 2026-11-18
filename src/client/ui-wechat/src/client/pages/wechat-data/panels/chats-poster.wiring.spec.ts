@@ -16,9 +16,9 @@ describe('multi-message poster wiring', () => {
     const view = read('chats-view.tsx')
     expect(view).toContain('onClickCapture={messagePoster.active && posterId > 0')
     expect(view).toContain('messagePoster.toggle(posterId)')
-    expect(view).toContain(
-      'onClick={!suggestionInteractionLocked && !messagePoster.active && item.kind === \'msg\'',
-    )
+    // 2026-11-18：推荐回复不再锁消息区（合并后点消息就是换分析对象），
+    // 因此这里只剩批量海报模式自己的那道门。
+    expect(view).toContain("onClick={!messagePoster.active && item.kind === 'msg'")
   })
 
   it('selection toolbar and scaled preview are both mounted', () => {

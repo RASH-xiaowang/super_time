@@ -8,7 +8,7 @@
     "gateway-export-ops.ts",
     "gateway-voice-ops.ts",
     "gateway-config-ops.ts",
-    "gateway-laya-ops.ts",
+    "gateway-analysis-ops.ts",
     "gateway-message-list.ts",
     "gateway-chat-ai-reply.ts",
     "gateway-taskcenter.ts",

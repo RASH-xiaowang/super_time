@@ -37,7 +37,7 @@ import { resolveImageKeyPair } from './query/image-key.ts'
 import { createHash } from 'node:crypto'
 import { queryOverviewInsights } from './query/overview-insights.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
-import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
+import { WHISPER_DEFAULT_MODEL, WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
 import { cachedTranscript, transcribeOneVoiceAsync, transcribeVoiceBatch } from './query/voice-transcribe.ts'
 import { svrIdByChatLocal } from './query/voice.ts'
 import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from './query/ask-history.ts'
@@ -55,7 +55,8 @@ import { queryMomentsMonthly } from './query/moments-monthly.ts'
 import { queryOfficialAssets } from './query/official-assets.ts'
 import { searchUnifiedCancellable } from './query/unified-search.ts'
 import { queryAnnualReport } from './query/annual-report.ts'
-import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
+import type { AnnualReview } from './query/annual-review.ts'
+import { queryAnnualReview } from './query/annual-review-cache.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
@@ -95,7 +96,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns ContactsSnapshot: contacts list (items + total) + per-category stats.
    */
   @Remote('getContacts')
-  getContacts(options?: { limit?: number; offset?: number; category?: string }): ContactsSnapshot {
+  getContacts(options?: { limit?: number; offset?: number; category?: string; categories?: string[] }): ContactsSnapshot {
     return queryContacts(this._dirs.decrypted, options)
   }
 
@@ -569,7 +570,7 @@ export abstract class GatewayRead extends GatewayCore {
     const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
     const engine = whisperEnginePath(configBin, modelsDir)
     if (!engine) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '未检测到 whisper.cpp 引擎'); return { ok: false, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」）' } }
-    const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
+    const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : WHISPER_DEFAULT_MODEL
     const r = await transcribeOneVoiceAsync(this._dirs.decrypted, this._dirs.decoded, modelsDir, modelId, engine, options.username, options.localId, options.svrId ?? '')
     this.op('task', 'transcribe_voice_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? '转写成功')
     return r

@@ -106,7 +106,8 @@ describe('AI 回复 · 专用清理：允许的空白预约', () => {
 
     const result = cleanup([base])
 
-    expect(result).toMatchObject({ ok: true, removed: 1, skipped: 0 })
+    // removed 按**行**计：基础记录 + 分段都被删掉，界面上的条数才能对上。
+    expect(result).toMatchObject({ ok: true, removed: 2, skipped: 0 })
     expect(listMessageListRecords(decrypted).total).toBe(0)
     expect(getMessageListRecord(decrypted, base)).toBeUndefined()
     expect(getMessageListRecord(decrypted, segment)).toBeUndefined()
@@ -122,15 +123,16 @@ describe('AI 回复 · 专用清理：允许的空白预约', () => {
     expect(again.items[0]?.error).toContain('不存在')
   })
 
-  it('同一分组重复传入只删除一次，其余按已处理跳过', () => {
+  it('同一分组重复传入只删除一次，两条 id 都如实记为已删除', () => {
     const base = reserve(SOURCE_REF)
     const segment = reserve(SOURCE_REF + ':segment:2')
     const result = cleanup([base, segment])
 
-    expect(result).toMatchObject({ ok: true, removed: 1, skipped: 1 })
+    // 两条 id 指向同一分组，实际删掉两行；不能把分段报成「跳过」。
+    expect(result).toMatchObject({ ok: true, removed: 2, skipped: 0 })
     expect(result.items[0]).toMatchObject({ id: base, status: 'removed' })
-    expect(result.items[1]).toMatchObject({ id: segment, status: 'skipped' })
-    expect(result.items[1]?.error).toContain('同一分组')
+    expect(result.items[1]).toMatchObject({ id: segment, status: 'removed' })
+    expect(listMessageListRecords(decrypted).total).toBe(0)
   })
 })
 
@@ -292,5 +294,100 @@ describe('AI 回复 · 专用清理：守卫与逐条原因', () => {
     expect(cleanup([0])).toMatchObject({ ok: false })
     expect(cleanup([-1])).toMatchObject({ ok: false })
     expect(cleanup([1.5])).toMatchObject({ ok: false })
+  })
+})
+
+describe('AI 回复 · 终态删除（includeTerminal）', () => {
+  function cleanupTerminal(ids: number[]) {
+    return deleteAiReplyMessageListRecordsForCleanup(decrypted, ids, { includeTerminal: true })
+  }
+
+  it('已成功、已发出未确认、有正文的失败记录都可以按终态删除', () => {
+    const okId = reserve('ai-reply:wxid_self:wxid_peer:1000:11')
+    expect(completeAiReplyMessageListRecord(decrypted, okId, { text: '已发出的回复' }).ok).toBe(true)
+    setRaw(okId, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'success')
+
+    const failedWithText = seedFailedWithText('ai-reply:wxid_self:wxid_peer:1000:12')
+
+    const unconfirmed = reserve('ai-reply:wxid_self:wxid_peer:1000:13')
+    expect(completeAiReplyMessageListRecord(decrypted, unconfirmed, { text: '可能已发出' }).ok).toBe(true)
+    setRaw(unconfirmed, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'sent_unconfirmed')
+
+    const result = cleanupTerminal([okId, failedWithText, unconfirmed])
+
+    expect(result).toMatchObject({ ok: true, removed: 3, skipped: 0 })
+    expect(getMessageListRecord(decrypted, okId)).toBeUndefined()
+    expect(getMessageListRecord(decrypted, failedWithText)).toBeUndefined()
+    expect(getMessageListRecord(decrypted, unconfirmed)).toBeUndefined()
+    expect(listMessageListRecords(decrypted).total).toBe(0)
+  })
+
+  it('默认口径不变：不传 includeTerminal 时，有正文的记录仍然跳过', () => {
+    const kept = seedFailedWithText()
+    const result = cleanup([kept])
+
+    expect(result).toMatchObject({ ok: true, removed: 0, skipped: 1 })
+    expect(result.items[0]?.error).toContain('已有正文')
+    expect(getMessageListRecord(decrypted, kept)).toBeDefined()
+  })
+
+  it('在途状态仍然拒绝：pending / dispatching / queued / running', () => {
+    const pending = reserve('ai-reply:wxid_self:wxid_peer:1000:21')
+    const dispatching = reserve('ai-reply:wxid_self:wxid_peer:1000:22')
+    setRaw(dispatching, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'dispatching')
+    const queued = reserve('ai-reply:wxid_self:wxid_peer:1000:23')
+    setRaw(queued, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'queued')
+    const running = reserve('ai-reply:wxid_self:wxid_peer:1000:24')
+    setRaw(running, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'running')
+
+    const result = cleanupTerminal([pending, dispatching, queued, running])
+
+    expect(result).toMatchObject({ ok: true, removed: 0, skipped: 4 })
+    for (const id of [pending, dispatching, queued, running]) {
+      expect(getMessageListRecord(decrypted, id), '#' + String(id) + ' 不该被删').toBeDefined()
+    }
+    expect(result.items[0]?.error).toContain('仍在生成或投递中')
+    expect(result.items[1]?.error).toContain('仍在生成或投递中')
+  })
+
+  it('终态记录的下游任务仍在排队/执行时也拒绝', () => {
+    const id = reserve('ai-reply:wxid_self:wxid_peer:1000:31')
+    expect(completeAiReplyMessageListRecord(decrypted, id, { text: '已受理' }).ok).toBe(true)
+    withWritableDb(taskDbPath(decrypted), (db) => {
+      ensureMessageListSchema(db)
+      db.prepare("UPDATE message_list_records SET status = 'success', job_id = 'job-1', job_state = 'running' WHERE id = ?").run(id)
+    })
+
+    const result = cleanupTerminal([id])
+
+    expect(result).toMatchObject({ ok: true, removed: 0, skipped: 1 })
+    expect(result.items[0]?.error).toContain('下游异步任务尚未结束')
+    expect(getMessageListRecord(decrypted, id)).toBeDefined()
+  })
+
+  it('会话仍挂着该分组的待恢复锚点时，终态删除同样拒绝', () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'wxid_peer',
+      chatName: '小王',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+    }).ok).toBe(true)
+    const id = reserve('ai-reply:wxid_self:wxid_peer:1000:41')
+    expect(completeAiReplyMessageListRecord(decrypted, id, { text: '待恢复' }).ok).toBe(true)
+    setRaw(id, 'UPDATE message_list_records SET status = ? WHERE id = ?', 'success')
+    withWritableDb(taskDbPath(decrypted), (db) => {
+      ensureChatAiReplySchema(db)
+      db.prepare(`UPDATE chat_ai_reply_settings
+        SET stage = 'failed', pending_source_ref = ?
+        WHERE account_key = 'wxid_self' AND chat_username = 'wxid_peer'`)
+        .run('ai-reply:wxid_self:wxid_peer:1000:41')
+    })
+
+    const result = cleanupTerminal([id])
+
+    expect(result).toMatchObject({ ok: true, removed: 0, skipped: 1 })
+    expect(result.items[0]?.error).toContain('待恢复')
+    expect(getMessageListRecord(decrypted, id)).toBeDefined()
   })
 })

@@ -90,6 +90,6 @@ describe('overview-extras 接线守卫', () => {
   it('compute 里真的按签名读缓存并落盘（否则磁盘缓存永远不会生效）', () => {
     expect(SRC, '缺 loadSigCached ⇒ 重启后永远重算').toContain('loadSigCached<OverviewExtras>')
     expect(SRC, '缺 saveSigCached ⇒ 算完从不落盘').toContain('saveSigCached(extrasCachePath(dec), sig, result)')
-    expect(SRC, 'compute 必须拿到 sig 才能校验').toContain('computeOverviewExtras(dec, sig)')
+    expect(SRC, 'compute 必须拿到 sig 才能校验').toContain('computeOverviewExtras(dec, sig, talkerDays)')
   })
 })

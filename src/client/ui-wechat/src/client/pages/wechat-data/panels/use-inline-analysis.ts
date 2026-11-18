@@ -1,45 +1,88 @@
 /**
- * 单条消息的本地决策分析。
+ * 单条消息分析的状态机（「选中即分析」）。
  *
- * ## 为什么改成「选中即分析」
+ * ## 为什么只分析选中的一条
  *
- * 旧实现会随着消息流滚动，自动分析可见窗口里的对方消息。这个设计有两个用户可见的问题：
- *   · 点开分析面板时，用户真正想看的那条可能还没轮到，界面只能显示「还没轮到这条」；
- *   · 滚动会顺带触发多条推理，而用户根本没有打开分析区。
+ * 旧实现随消息流滚动自动分析可见窗口里的所有对方消息。两个用户可见的问题：
+ *   · 点开面板时想看的可能还没轮到，界面只能显示「还没轮到这条」；
+ *   · 滚动会顺带触发多次推理，而用户根本没打开分析区。
+ * 现在只分析**当前选中的一条**：点消息或打开面板后立即取结果，滚动不再触发。
  *
- * 现在只分析**当前选中的一条**：点消息或打开面板后立即取结果，滚动不再触发推理。
- * 同一会话里已经看过的结果仍留在内存；磁盘缓存继续由后端按消息与模型指纹命中。
+ * ## 为什么保留全局单飞与间隔
  *
- * ## 为什么保留全局单飞
+ * 每次分析都是一次真实的大模型调用（花钱、占请求配额）。用户快速切换多条消息时，
+ * 只在上一次结束后启动下一次，并保持一个最小间隔 —— 这是纯函数口径，
+ * 便于测试，也避免连点造成一串并发请求。
  *
- * laya 的 ONNX forward 是同步 CPU 段，单次约 0.5–9 秒。即使用户快速切换多条消息，
- * 也只在上一单结束后启动下一单，避免两个长任务同时占住 worker。排队由
- * {@link deferInlineAnalysis} 的纯函数口径控制，便于测试。
+ * @module panels/use-inline-analysis
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiAnalyzeVisibleMessages } from '../api.ts'
-import type { LayaAnswer } from '@deepseek-ai/dsh-wechat-data/types'
+import { apiAnalyzeMessage } from '../api.ts'
+import type { MessageAnalysisResult } from '@deepseek-ai/dsh-wechat-data/types'
 
 /** 一条消息的分析状态。 */
 export type InlineAnalysisEntry =
   | { state: 'pending' }
   | { state: 'error'; error: string }
-  | {
-    state: 'done'
-    answers: LayaAnswer[]
-    /** 被分析的文本（语音则是转写文本）。 */
-    sourceText: string
-    fromVoice: boolean
-    inferenceMs: number
-    cached: boolean
-    /** 源文本太短：判断主要来自上下文，界面据此提示「信息有限」。 */
-    lowConfidence?: boolean
-  }
+  | { state: 'done'; result: MessageAnalysisResult }
 
 /** 当前要分析的消息。 */
 export interface InlineAnalysisTarget {
   localId: number
   sortSeq: number
+}
+
+/** 两次调用之间的最小间隔（毫秒）。 */
+export const ANALYSIS_GAP_MS = 120
+/** 单会话内存缓存的条数上限；超出按最久未用淘汰。 */
+export const ANALYSIS_CACHE_LIMIT = 160
+
+let analyzeInFlight = false
+let lastAnalyzeDoneAt = 0
+
+/**
+ * 判断这次请求是否应该让路（纯函数，供测试直接钉住）。
+ * @param now - 当前时刻（毫秒）。
+ * @param inFlight - 是否有请求在跑。
+ * @returns true 表示应先排队等待。
+ */
+export function deferInlineAnalysis(now: number, inFlight: boolean): boolean {
+  if (inFlight) return true
+  return now - lastAnalyzeDoneAt < ANALYSIS_GAP_MS
+}
+
+/** 测试用：重置模块级单飞与节流状态。 */
+export function __resetInlineAnalysisGateForTest(): void {
+  analyzeInFlight = false
+  lastAnalyzeDoneAt = 0
+}
+
+/**
+ * 写入一条分析结果并维持容量上限（纯函数，便于单测）。
+ *
+ * `Map` 的插入顺序就是 LRU 顺序：先删再插，保证「再次查看同一条」也会被移到最新端；
+ * 超出上限时从最早插入的一端淘汰。
+ * @param prev - 现有表。
+ * @param localId - 消息 localId。
+ * @param entry - 新状态。
+ * @param limit - 容量上限。
+ * @returns 新的表（不修改入参）。
+ */
+export function rememberInlineAnalysis(
+  prev: ReadonlyMap<number, InlineAnalysisEntry>,
+  localId: number,
+  entry: InlineAnalysisEntry,
+  limit = ANALYSIS_CACHE_LIMIT,
+): Map<number, InlineAnalysisEntry> {
+  const next = new Map(prev)
+  next.delete(localId)
+  next.set(localId, entry)
+  while (next.size > Math.max(1, limit)) {
+    const oldest = next.keys().next()
+    if (oldest.done === true) break
+    next.delete(oldest.value)
+  }
+  return next
 }
 
 export interface InlineAnalysisOption {
@@ -60,200 +103,116 @@ export interface InlineAnalysisApi {
   refresh: (localId: number) => void
 }
 
-/** 两个分析任务之间至少留出的让路时间。单条推理已经会占满一次 ONNX forward。 */
-export const ANALYSIS_GAP_MS = 120
-
-/**
- * 单会话最多保留多少条分析结果。
- *
- * 分析结果里带原文与多条答案；长会话里逐条点开时，没有上界会让 state 一直涨到退出面板。
- * 保留最近一段足够来回对照，超出后从最早写入的那条开始淘汰。
- */
-export const INLINE_ANALYSIS_CACHE_LIMIT = 160
-
-/** 全应用同时只允许一个本地分析在飞。 */
-let analyzeInFlight = false
-/** 上一单结束时刻；0 表示还没跑过。 */
-let lastAnalyzeDoneAt = 0
-
-/**
- * 这一单现在该不该推迟、要推多久。
- * @param now - 当前时刻（ms）。
- * @param inFlight - 是否已有任务在跑。
- * @param lastDoneAt - 上一单结束时刻；0 表示尚未跑过。
- * @param gapMs - 两单之间的最小间隔。
- */
-export function deferInlineAnalysis(
-  now: number,
-  inFlight: boolean,
-  lastDoneAt: number,
-  gapMs: number = ANALYSIS_GAP_MS,
-): { defer: boolean; waitMs: number } {
-  if (inFlight) return { defer: true, waitMs: gapMs }
-  const since = now - lastDoneAt
-  if (lastDoneAt > 0 && since < gapMs) return { defer: true, waitMs: gapMs - since }
-  return { defer: false, waitMs: 0 }
-}
-
-function errorEntry(error: unknown): InlineAnalysisEntry {
-  return { state: 'error', error: error instanceof Error ? error.message : String(error) }
+interface RunOptions {
+  talker: string
+  target: InlineAnalysisTarget
+  force: boolean
 }
 
 /**
- * 写入一条分析结果并把缓存限制在上界内。
- * @param previous - 当前结果表。
- * @param localId - 消息在会话内的局部 id。
- * @param entry - 新状态；已有同 id 时移到最近使用位置。
- * @param limit - 最多保留条数。
- * @returns 新的有界结果表。
- */
-export function rememberInlineAnalysis(
-  previous: ReadonlyMap<number, InlineAnalysisEntry>,
-  localId: number,
-  entry: InlineAnalysisEntry,
-  limit = INLINE_ANALYSIS_CACHE_LIMIT,
-): Map<number, InlineAnalysisEntry> {
-  const next = new Map(previous)
-  next.delete(localId)
-  next.set(localId, entry)
-  const max = Math.max(1, Math.trunc(limit))
-  while (next.size > max) {
-    const oldest = next.keys().next().value
-    if (oldest === undefined) break
-    next.delete(oldest)
-  }
-  return next
-}
-
-/**
- * 分析当前选中消息。
- * @param option - 会话与目标消息；目标为 null 时不发起请求。
+ * 管理单条消息分析。
+ * @param option - 会话与当前目标。
+ * @returns 读取、重试与重算入口。
  */
 export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisApi {
-  const [map, setMap] = useState<Map<number, InlineAnalysisEntry>>(() => new Map())
-  const [gateTick, setGateTick] = useState(0)
-  const epoch = useRef(0)
-  const inflight = useRef<Set<number>>(new Set())
-  /** 用户明确要求跳过缓存的目标；成功后才移除。 */
-  const forced = useRef<Set<number>>(new Set())
-  const alive = useRef(false)
+  const { talker, target } = option
+  const [entries, setEntries] = useState<Map<number, InlineAnalysisEntry>>(() => new Map())
+  const [refreshing, setRefreshing] = useState(false)
+  const talkerRef = useRef(talker)
+  /** 已被用户显式强制重算过的 localId：失败后不再自动重试，避免成环。 */
+  const forcedRef = useRef<Set<number>>(new Set())
+  const aliveRef = useRef(true)
 
   useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-      // 卸载也算一代结束：在飞请求迟到时既不能再写 state，也不能再推进排队闸门。
-      epoch.current += 1
-      inflight.current.clear()
-      forced.current.clear()
-    }
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
   }, [])
 
+  // 换会话：整张表作废（localId 只在会话内唯一）。
   useEffect(() => {
-    epoch.current += 1
-    inflight.current.clear()
-    forced.current.clear()
-    setMap(new Map())
-  }, [option.talker])
+    if (talkerRef.current === talker) return
+    talkerRef.current = talker
+    forcedRef.current = new Set()
+    setEntries(new Map())
+    setRefreshing(false)
+  }, [talker])
 
-  const target = option.target
-  const targetId = target?.localId ?? null
-  const targetSeq = target?.sortSeq ?? 0
+  const remember = useCallback((localId: number, entry: InlineAnalysisEntry): void => {
+    setEntries((prev) => rememberInlineAnalysis(prev, localId, entry))
+  }, [])
 
-  useEffect(() => {
-    if (option.talker === '' || targetId === null || targetSeq <= 0) return
-
-    const current = map.get(targetId)
-    const mustRefresh = forced.current.has(targetId)
-    if (current?.state === 'pending' && inflight.current.has(targetId)) return
-    if (current?.state === 'done' && !mustRefresh) return
-    if (current?.state === 'error' && !mustRefresh) return
-
-    let timer = 0
-    const fire = (): void => {
-      const gate = deferInlineAnalysis(Date.now(), analyzeInFlight, lastAnalyzeDoneAt)
-      if (gate.defer) {
-        timer = window.setTimeout(fire, gate.waitMs)
-        return
-      }
-
-      const myEpoch = epoch.current
-      const force = forced.current.has(targetId)
-      inflight.current.add(targetId)
-      analyzeInFlight = true
-      setMap((previous) => {
-        return rememberInlineAnalysis(previous, targetId, { state: 'pending' })
-      })
-
-      void apiAnalyzeVisibleMessages({
-        talker: option.talker,
-        targets: [{ localId: targetId, sortSeq: targetSeq }],
+  const run = useCallback(async (input: RunOptions): Promise<void> => {
+    const { talker: runTalker, target: runTarget, force } = input
+    if (runTarget.sortSeq <= 0) return
+    // 已经在跑或刚跑完就等下一拍：每次调用都是真实计费的模型请求。
+    while (deferInlineAnalysis(Date.now(), analyzeInFlight)) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, ANALYSIS_GAP_MS / 2) })
+      if (!aliveRef.current) return
+    }
+    if (talkerRef.current !== runTalker) return
+    analyzeInFlight = true
+    if (force) setRefreshing(true)
+    remember(runTarget.localId, { state: 'pending' })
+    try {
+      const result = await apiAnalyzeMessage({
+        talker: runTalker,
+        localId: runTarget.localId,
+        sortSeq: runTarget.sortSeq,
         ...(force ? { force: true } : {}),
       })
-        .then((result) => {
-          if (!alive.current || myEpoch !== epoch.current) return
-          const item = result.items.find((candidate) => candidate.localId === targetId)
-          setMap((previous) => {
-            if (result.ok && item?.ok === true && item.answers.length > 0) {
-              return rememberInlineAnalysis(previous, targetId, {
-                state: 'done',
-                answers: item.answers,
-                sourceText: item.sourceText,
-                fromVoice: item.fromVoice,
-                inferenceMs: item.inferenceMs,
-                cached: item.cached,
-                lowConfidence: item.lowConfidence === true,
-              })
-            }
-            return rememberInlineAnalysis(previous, targetId, {
-              state: 'error',
-              error: item?.error ?? result.error ?? '本地分析没有返回结果',
-            })
-          })
+      if (!aliveRef.current || talkerRef.current !== runTalker) return
+      if (!result.ok || result.analysis === undefined) {
+        remember(runTarget.localId, {
+          state: 'error',
+          error: result.error ?? '分析失败，请重试',
         })
-        .catch((error: unknown) => {
-          if (!alive.current || myEpoch !== epoch.current) return
-          setMap((previous) => {
-            return rememberInlineAnalysis(previous, targetId, errorEntry(error))
-          })
-        })
-        .finally(() => {
-          analyzeInFlight = false
-          lastAnalyzeDoneAt = Date.now()
-          inflight.current.delete(targetId)
-          // 强制标记只属于这一次请求。失败后也必须消费掉，否则 map 变成 error 会再次
-          // 满足 mustRefresh，形成「失败 → 自动重试 → 再失败」的无限循环。
-          forced.current.delete(targetId)
-          // 目标可能已经切换；推进一次重渲染，让排队中的那一条接着发。
-          if (alive.current && myEpoch === epoch.current) setGateTick((value) => value + 1)
-        })
+        return
+      }
+      remember(runTarget.localId, { state: 'done', result })
+    } catch (e) {
+      if (!aliveRef.current || talkerRef.current !== runTalker) return
+      if (force) forcedRef.current.delete(runTarget.localId)
+      remember(runTarget.localId, {
+        state: 'error',
+        error: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      analyzeInFlight = false
+      lastAnalyzeDoneAt = Date.now()
+      if (aliveRef.current) setRefreshing(false)
     }
+  }, [remember])
 
-    fire()
-    return () => { window.clearTimeout(timer) }
-  }, [gateTick, map, option.talker, targetId, targetSeq])
+  // 目标变化即分析；已有结果（同会话）不重复请求。
+  useEffect(() => {
+    if (target === null) return
+    const existing = entries.get(target.localId)
+    if (existing !== undefined) {
+      // 失败过的目标不自动重试：用户已经看到错误，重试是显式动作。
+      if (existing.state === 'error' && !forcedRef.current.has(target.localId)) return
+      if (existing.state === 'done') return
+      if (existing.state === 'pending') return
+    }
+    forcedRef.current.delete(target.localId)
+    void run({ talker, target, force: false })
+  }, [entries, run, talker, target])
 
-  const get = useCallback((localId: number): InlineAnalysisEntry | undefined => map.get(localId), [map])
   const retry = useCallback((localId: number): void => {
-    forced.current.add(localId)
-    setMap((previous) => {
-      const next = new Map(previous)
-      next.delete(localId)
-      return next
-    })
-  }, [])
-  const refresh = useCallback((localId: number): void => {
-    forced.current.add(localId)
-    setMap((previous) => {
-      const next = new Map(previous)
-      next.delete(localId)
-      return next
-    })
-  }, [])
+    if (target === null || target.localId !== localId) return
+    forcedRef.current.add(localId)
+    void run({ talker: talkerRef.current, target, force: false })
+  }, [run, target])
 
-  const refreshing = targetId !== null
-    && forced.current.has(targetId)
-    && map.get(targetId)?.state !== 'done'
+  const refresh = useCallback((localId: number): void => {
+    if (target === null || target.localId !== localId) return
+    forcedRef.current.add(localId)
+    void run({ talker: talkerRef.current, target, force: true })
+  }, [run, target])
+
+  const get = useCallback(
+    (localId: number): InlineAnalysisEntry | undefined => entries.get(localId),
+    [entries],
+  )
 
   return { get, refreshing, retry, refresh }
 }

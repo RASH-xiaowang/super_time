@@ -6,7 +6,7 @@ import {
   updateChatAiReplyRunState,
 } from '../src/query/ai-reply/config-store.ts'
 import { createChatAiReplyRunner } from '../src/query/ai-reply/runner.ts'
-import { splitChatAiReplyText } from '../src/query/ai-reply/segments.ts'
+import { segmentLimitForChat, splitChatAiReplyText } from '../src/query/ai-reply/segments.ts'
 import {
   getMessageListRecord,
   listAiReplyMessageListSegments,
@@ -96,7 +96,7 @@ describe('AI 回复长文本分段调度', () => {
 
   it('只调用一次模型，按分段顺序串行投递并逐段写入消息列表', async () => {
     enableReply()
-    const expected = splitChatAiReplyText(LONG_REPLY)
+    const expected = splitChatAiReplyText(LONG_REPLY, segmentLimitForChat('wxid_peer'))
     expect(expected.length).toBeGreaterThan(1)
     const generate = vi.fn(async () => ({ ok: true, text: LONG_REPLY }))
     const completeReply = vi.fn(harness.completeReply)
@@ -144,7 +144,7 @@ describe('AI 回复长文本分段调度', () => {
 
   it('第二段失败后停止发送，保留首段成功并把后续 pending 明确收口为 failed', async () => {
     enableReply()
-    const expected = splitChatAiReplyText(LONG_REPLY)
+    const expected = splitChatAiReplyText(LONG_REPLY, segmentLimitForChat('wxid_peer'))
     expect(expected.length).toBeGreaterThan(2)
     const failAfter = vi.fn(harness.failReplySegmentsAfter)
     const dispatchOrder: number[] = []
@@ -205,7 +205,7 @@ describe('AI 回复长文本分段调度', () => {
       note: 'AI 回复 · 生成中',
     })
     const baseRecordId = reserved.id ?? 0
-    const segments = splitChatAiReplyText(LONG_REPLY)
+    const segments = splitChatAiReplyText(LONG_REPLY, segmentLimitForChat('wxid_peer'))
     expect(segments.length).toBeGreaterThan(2)
     const materialized = await harness.completeReplySegments({
       id: baseRecordId,
@@ -260,6 +260,94 @@ describe('AI 回复长文本分段调度', () => {
       decrypted,
       'ai-reply:wxid_self:wxid_peer:2000:2',
     ).every((segment) => segment.status === 'success')).toBe(true)
+    runner.dispose()
+  })
+})
+
+describe('分段回复的「自己的消息」不算会话推进', () => {
+  /**
+   * 复现现场：第 1 段已投递成功，群里出现我们自己的那条消息（发送端还在前面
+   * 拼了 @提及）。下一拍扫描必须继续发第 2..N 段，而不是整组判过期。
+   */
+  it('恢复扫描看到本批次已发的分段时继续发剩余段，不整组判过期', async () => {
+    enableReply()
+    const expected = splitChatAiReplyText(LONG_REPLY, segmentLimitForChat('wxid_peer'))
+    expect(expected.length).toBeGreaterThan(1)
+    const firstSegment = expected[0] ?? ''
+    // 本机身份、正文包含我们发出去的那一段（前面还带着发送端拼的 @提及）。
+    const ownSentMessage = {
+      localId: 3,
+      sortSeq: 300,
+      createTime: 3_000,
+      isSender: 1,
+      renderType: 'text',
+      displayText: '@小王 ' + firstSegment,
+    }
+    // 第一拍：消息窗口里还没有自己的消息，正常分段并投递。
+    let messages: Array<typeof ownSentMessage | {
+      localId: number
+      sortSeq: number
+      createTime: number
+      isSender: number
+      renderType: string
+      displayText: string
+    }> = incomingMessages()
+    let failFirstDispatch = false
+    const dispatchOrder: number[] = []
+    const dispatchReply = vi.fn(async (id: number) => {
+      dispatchOrder.push(id)
+      if (failFirstDispatch) {
+        // 模拟「第 1 段发出去了，但 runner 还没来得及继续」——保留后续 pending。
+        failFirstDispatch = false
+        return { ok: false, error: '暂缓' }
+      }
+      saveMessageListDispatchResult(decrypted, id, {
+        status: 'success',
+        error: '',
+        responseSummary: 'accepted',
+        webhookUrl: 'https://example.test/ai',
+      })
+      return { ok: true }
+    })
+    const runner = createChatAiReplyRunner(harness.deps({
+      listMessages: async () => messages,
+      generate: async () => ({ ok: true, text: LONG_REPLY }),
+      dispatchReply,
+    }))
+
+    await runner.scan()
+    await vi.waitFor(() => {
+      expect(dispatchOrder.length).toBeGreaterThan(0)
+    })
+    // 第 1 段已成功；把状态强行退回「还没投递完」，再让窗口里出现自己的消息。
+    const records = [...listMessageListRecords(decrypted).items]
+      .sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0))
+    const second = records[1]
+    expect(second, '分段没有落库').toBeDefined()
+    saveMessageListDispatchResult(decrypted, second?.id ?? 0, {
+      status: 'pending',
+      error: 'AI 回复投递已暂缓',
+      responseSummary: '',
+      webhookUrl: '',
+      countAttempt: false,
+    })
+    updateChatAiReplyRunState(decrypted, 'wxid_self', 'wxid_peer', {
+      stage: 'dispatching',
+      recordId: records[0]?.id,
+    })
+    messages = [...incomingMessages(), ownSentMessage]
+
+    await runner.scan()
+    await vi.waitFor(() => {
+      expect(readChatAiReplyState(decrypted, 'wxid_self', 'wxid_peer').stage).toBe('success')
+    })
+    const finalRecords = [...listMessageListRecords(decrypted).items]
+      .sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0))
+    expect(finalRecords.map((record) => record.status)).toEqual(
+      expected.map(() => 'success'),
+    )
+    // 没有任何一段被判成「会话已推进」。
+    expect(finalRecords.some((record) => record.failureKind === 'superseded')).toBe(false)
     runner.dispose()
   })
 })

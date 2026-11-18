@@ -38,7 +38,11 @@ export interface ContactsPageOptions {
      * 已加载的那一页。`stats` 仍是全量口径（页签计数不随搜索变化）。
      */
     search?: string;
+    /** 多分类一次查出（客户画像）。与单个 `category` 二选一，此项优先。 */
+    categories?: readonly string[];
 }
+/** 总览只要分类计数。不走 `queryContacts`：那条不传 limit 时会把整张通讯录解码并拼群。 */
+export declare function queryContactStats(decryptedDir: string): Record<string, number>;
 export declare function queryContacts(decryptedDir: string, options?: ContactsPageOptions): {
     contacts: WechatContact[];
     total: number;

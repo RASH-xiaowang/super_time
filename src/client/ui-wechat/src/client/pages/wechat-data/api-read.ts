@@ -106,10 +106,7 @@ import type {
   WechatConfigPatch,
   WhisperDownloadResult,
   WhisperStatus,
-  LayaAnalysisView,
-  LayaDownloadOutcome,
-  LayaStatus,
-  LayaVisibleAnalysisResult,
+  MessageAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
@@ -185,7 +182,7 @@ export async function apiGetSessions(options?: {
  * @param options - Query options: limit page size, offset page start, category filter.
  * @returns ContactsSnapshot.
  */
-export async function apiGetContacts(options?: { limit?: number; offset?: number; category?: string }): Promise<ContactsSnapshot> {
+export async function apiGetContacts(options?: { limit?: number; offset?: number; category?: string; categories?: readonly string[] }): Promise<ContactsSnapshot> {
   return cachedGet('contacts:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getContacts(options)))
 }
 /**
@@ -292,88 +289,25 @@ export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'm
 }
 
 /**
- * Analyze one conversation with the local decision model (laya · onnxruntime).
+ * 分析一条消息（单聊与群聊用两套问题域）。
  *
- * Runs entirely on this machine: no network call, no LLM, not routed through the
- * outbound privacy gate. A missing model is a normal outcome, not an exception —
- * inspect `ok` / `error` / `note`.
- * @param options - 会话 username 与可选上下文条数（默认 20，上限 60）。
- * @returns 逐命题的判断（概率分布 / 分值）。
- */
-export async function apiAnalyzeMessages(options: { talker: string; contextLimit?: number }): Promise<LayaAnalysisView> {
-  return unwrap(await remote().analyzeMessages(options))
-}
-
-/**
- * Per-message local analysis for the **visible window** of a conversation.
+ * 单聊回答「他想要什么、情绪如何、我该怎么回」；群聊回答「这条消息是否针对我、
+ * 他在群里做什么动作、我该不该接话、公开回还是私聊」。
  *
- * Each message is analyzed against the conversation up to that point (both sides are in the
- * context). Voice messages are transcribed first — transcript cache is shared with the voice
- * panel, so an already-transcribed clip costs nothing. Results are cached on disk, so scrolling
- * back over the same messages is instant.
- * @param options - talker + targets (localId + sortSeq), up to a dozen per call.
- * @returns Per-message answers; failures are per item, not for the whole batch.
+ * 走 `analyze_message` 隐私闸后调用设置里的当前对话模型，输出严格 JSON；
+ * 结果在后端按（会话、消息、模型+提示词版本）缓存，重复查看同一条是即时的。
+ * @param options - 会话 username、消息定位键（localId/sortSeq）与是否强制重算。
+ * @returns 结构化分析；`ok:false` 时 `error` 可直接展示。
  */
-export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string; force?: boolean }): Promise<LayaVisibleAnalysisResult> {
-  return unwrap(await remote().analyzeVisibleMessages(options))
+export async function apiAnalyzeMessage(options: {
+  talker: string
+  localId: number
+  sortSeq?: number
+  force?: boolean
+}): Promise<MessageAnalysisResult> {
+  return unwrap(await remote().analyzeMessage(options))
 }
 
-/**
- * Stop a batch of per-message local analysis that is still running (W3-11.5).
- *
- * Cancelling only takes effect **between** items (one ONNX forward cannot be interrupted),
- * so worst case is one item's inference latency; whatever already finished is kept on disk,
- * so a stop never throws away paid-for work.
- * @param options - jobId, the same identifier that batch was started with.
- * @returns ok, plus why it did not stop anything (batch already finished / unknown id).
- */
-export async function apiCancelLayaAnalysis(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
-  return unwrap(await remote().cancelLayaAnalysis(options))
-}
-
-/**
- * Local decision model status: required files, size, source dir, download progress
- * and runtime state (loaded / last inference ms / last error).
- * @returns LayaStatus.
- */
-export async function apiGetLayaStatus(): Promise<LayaStatus> {
-  return unwrap(await remote().getLayaStatus())
-}
-
-/**
- * Download the decision model assets (~1.26 GB) into the data dir.
- * @param options - 可选的 jobId（W2-11.5：有它才能取消）。
- * @returns LayaDownloadOutcome；被取消时 `canceled: true`。
- */
-export async function apiDownloadLayaModel(options?: { jobId?: string }): Promise<LayaDownloadOutcome> {
-  return unwrap(await remote().downloadLayaModel(options))
-}
-
-/**
- * 取消正在进行的 laya 模型下载（W2-11.5）。
- * @param options - 与 `apiDownloadLayaModel` 同一个 jobId。
- * @returns ok，或没有该任务时的说明。
- */
-export async function apiCancelLayaDownload(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
-  return unwrap(await remote().cancelLayaDownload(options))
-}
-
-/**
- * Adopt an already-downloaded model directory (move into the data dir).
- * @param options - sourceDir.
- * @returns LayaStatus.
- */
-export async function apiAdoptLayaModel(options: { sourceDir: string }): Promise<LayaStatus> {
-  return unwrap(await remote().adoptLayaModel(options))
-}
-
-/**
- * Unload the model and release its resident memory.
- * @returns { ok }.
- */
-export async function apiUnloadLaya(): Promise<{ ok: boolean }> {
-  return unwrap(await remote().unloadLaya())
-}
 /**
  * Fetch the favorites list.
  * @param options - Query options: limit.

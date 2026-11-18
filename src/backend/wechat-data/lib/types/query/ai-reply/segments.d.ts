@@ -1,6 +1,19 @@
 export declare const CHAT_AI_REPLY_SEGMENT_MAX_UTF16 = 25;
+/**
+ * 单聊的分段上限。
+ *
+ * 群聊里短句更像自然的接话，单聊里把一句 200 字的回复切成 7 条会被读成
+ * 「同一个问题回了好几次」。单聊用更长的段，通常 2–3 条就发完。
+ */
+export declare const CHAT_AI_REPLY_PRIVATE_SEGMENT_MAX_UTF16 = 80;
 export declare const CHAT_AI_REPLY_TEXT_MAX = 4000;
 export declare const CHAT_AI_REPLY_MAX_SEGMENTS = 50;
+/**
+ * 按会话类型选分段上限。
+ * @param chatUsername - 会话 `WechatSession.username`。
+ * @returns 群聊用短段上限，单聊用长段上限。
+ */
+export declare function segmentLimitForChat(chatUsername: string): number;
 export interface ChatAiReplySourceRefParts {
     accountKey: string;
     chatUsername: string;

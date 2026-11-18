@@ -1,8 +1,14 @@
-import type { DatabaseSync } from '../db-open.ts';
 import type { ChatAiReplyEnabledStatesReadResult, ChatAiReplyMutationResult, ChatAiReplyProvider, ChatAiReplyStage, ChatAiReplyState } from './types.ts';
 import type { ChatAiReplyLease } from './lease-store.ts';
-/** 建表；与消息列表同库，可重复调用。 */
-export declare function ensureChatAiReplySchema(db: DatabaseSync): void;
+export { ensureChatAiReplySchema } from './config-schema.ts';
+/** 上下文时间窗上限：30 天。设更长没有意义（上下文本来只取最近 60 条）。 */
+export declare const CHAT_AI_REPLY_CONTEXT_WINDOW_MAX_HOURS = 720;
+/**
+ * 归一化上下文时间窗。
+ * @param value - 任意输入（数据库列或调用方参数）。
+ * @returns 0（不限）或 1..720 的整数小时。
+ */
+export declare function normalizeContextWindowHours(value: unknown): number;
 /** 读取单个会话设置；库不存在/读失败时返回 disabled，不让面板崩掉。 */
 export declare function readChatAiReplyState(decryptedDir: string, accountKey: string, chatUsername: string, chatName?: string): ChatAiReplyState;
 export type ChatAiReplyStateReadResult = {
@@ -46,6 +52,8 @@ export declare function saveChatAiReplySetting(decryptedDir: string, input: {
     kbEnabled?: boolean;
     /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
     kbId?: number;
+    /** 上下文时间窗（小时）；省略时保留当前值，0/非法值表示不限。 */
+    contextWindowHours?: number;
     expectedRevision?: number;
     cursor?: string;
 }): ChatAiReplyMutationResult;
@@ -67,6 +75,8 @@ export declare function saveChatAiReplyPersona(decryptedDir: string, input: {
     kbEnabled?: boolean;
     /** 省略时保留当前知识库选择；`kbEnabled` 为 true 时必须大于 0。 */
     kbId?: number;
+    /** 上下文时间窗（小时）；省略时保留当前值，0 表示不限。 */
+    contextWindowHours?: number;
     expectedRevision?: number;
 }): ChatAiReplyMutationResult;
 export type ChatAiReplyRunStateUpdateResult = 'updated' | 'guard-mismatch' | 'transient';

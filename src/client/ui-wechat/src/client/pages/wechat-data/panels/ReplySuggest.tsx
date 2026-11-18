@@ -13,6 +13,7 @@
  * 的句子」。本应用只读、没有发送微信消息的代码路径，所以唯一的动作是**复制**。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReplyTrace } from '@deepseek-ai/dsh-wechat-data/types'
 import { apiSuggestReplies } from '../api.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { ErrorState, Select } from '../ui/kit.tsx'
@@ -32,6 +33,20 @@ export interface ReplyTarget {
 export interface ReplySuggestProps {
   /** 目标会话（读取范围就是它）。 */
   target: ReplyTarget
+  /**
+   * 每次取完候选后上报过程留痕（供右栏「详情」视图展示）。
+   *
+   * 为什么由这里上报而不是让组合层再取一次：留痕只在**这次调用**里存在，
+   * 再取一次就是又花一次模型钱。`undefined` 表示这次没有可用留痕（例如请求失败）。
+   */
+  onTrace?: (trace: ReplyTrace | undefined) => void
+  /**
+   * 当前分析对象（消息 `localId`）。
+   *
+   * 传了就按「这条消息及其之前」截上下文：输入更小（模型更快）、提示词更准
+   * （不必让模型自己猜「最后一条」是哪条）。不传仍按会话最新一页推荐。
+   */
+  targetLocalId?: number | null
 }
 
 /**
@@ -41,6 +56,7 @@ export interface ReplySuggestProps {
  */
 export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   const { target } = props
+  const targetLocalId = props.targetLocalId ?? undefined
   const { kbId: scopeKbId, kbs, readError: kbListError, loading: kbListLoading } = useKbScope()
   /**
    * 知识库选择：默认**跟随应用当前选中的库**，用户在本面板里改过之后就以本地选择为准。
@@ -88,16 +104,39 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   /** 请求世代：切会话/换库/「换一批」都会作废在途请求（过期响应不许写进当前面板）。 */
   const seqRef = useRef(0)
 
-  /** 取一批候选。切会话/换库后也会重取（依赖里都带上了）。 */
-  const load = useCallback((): void => {
+  /**
+   * 回调存进 ref 而不是放进 `load` 的依赖。
+   *
+   * 组合层传下来的 `onTrace` 通常是内联箭头函数，每次渲染都是新引用；
+   * 把它放进 deps 会让「取一批」在每次父组件重渲染时重新触发 —— 每次都是
+   * 一次真实计费的模型调用。用 ref 保存最新值即可，取数时机只由会话与库决定。
+   */
+  const onTraceRef = useRef(props.onTrace)
+  onTraceRef.current = props.onTrace
+
+  /**
+   * 取一批候选。
+   *
+   * `force` 来自「换一批」：跳过后端缓存、明确要新结果。其余场景（挂载、
+   * 切会话、换库、切换分析对象）都允许命中缓存 —— 键里带着上下文指纹，
+   * 对话没变化时秒开且不再花模型钱。
+   */
+  const load = useCallback((force = false): void => {
     const seq = ++seqRef.current
     setLoading(true)
     setError(null)
     setCopied(null)
     setCopyFailed(false)
-    void apiSuggestReplies({ username: target.username, kbId })
+    void apiSuggestReplies({
+      username: target.username,
+      kbId,
+      ...(targetLocalId === undefined ? {} : { targetLocalId }),
+      ...(force ? { force: true } : {}),
+    })
       .then((r) => {
         if (seq !== seqRef.current) return
+        // 留痕随每次结果上报：详情视图要能解释「这批候选怎么来的」。
+        onTraceRef.current?.(r.trace)
         if (!r.ok) {
           setReplies([])
           setBasis(null)
@@ -113,10 +152,9 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
       })
       .catch((e: unknown) => { if (seq === seqRef.current) setError((e as Error).message) })
       .finally(() => { if (seq === seqRef.current) setLoading(false) })
-  }, [target.username, kbId])
+  }, [target.username, kbId, targetLocalId])
 
   useEffect(() => { load() }, [load])
-
   /**
    * 复制某条候选 —— 等真实结果再改口径。
    *
@@ -126,8 +164,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
    * 共享助手 `copyTextToClipboard` 已经把两条路径（异步 API 与 `execCommand` 兜底）的
    * 失败都收敛成 `false`，所以这里只需要按布尔值说真话。
    */
-  const copy = (text: string, index: number): void => {
-    const seq = seqRef.current
+  const copy = (text: string, index: number): void => {    const seq = seqRef.current
     setCopyFailed(false)
     void copyTextToClipboard(text).then((ok) => {
       // 期间换过会话或库：这一批候选已经不是当前这批，别把标记打到新的行上
@@ -155,7 +192,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
         {/* 「换一批」放在这一行尾部：它是内容级动作（重取候选），而头部已归组合层
             `ChatRightPanel`（那里只留面板级的「关闭」），两类动作不该混在一处。 */}
         <button type="button" className={css.iconBtn} title="换一批" aria-label="换一批"
-          disabled={loading} onClick={() => { load() }}>
+          disabled={loading} onClick={() => { load(true) }}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 4v5h-5" />
           </svg>

@@ -59,14 +59,15 @@ describe('会话级 AI 回复配置', () => {
     expect(readChatAiReplyState(decrypted, 'wxid_other', 'wxid_peer').enabled).toBe(false)
   })
 
-  it('群聊与缺失身份 fail-closed', () => {
+  it('群聊可开启；缺失账号仍 fail-closed', () => {
+    // 2026-11-18 起群聊也能开启（只有 @我 的消息会触发，判定在扫描边界完成）。
     expect(saveChatAiReplySetting(decrypted, {
       accountKey: 'wxid_self',
       chatUsername: 'room@chatroom',
       chatName: '群',
       enabled: true,
       provider: 'dsh-wechat-bridge',
-    })).toMatchObject({ ok: false })
+    })).toMatchObject({ ok: true })
     expect(saveChatAiReplySetting(decrypted, {
       accountKey: '',
       chatUsername: 'wxid_peer',
@@ -90,7 +91,7 @@ describe('会话级 AI 回复已开启列表', () => {
     })
   }
 
-  it('只返回当前账号已开启的单聊摘要', () => {
+  it('只返回当前账号已开启的会话摘要', () => {
     expect(saveChatAiReplySetting(decrypted, {
       accountKey: 'wxid_self',
       chatUsername: 'wxid_peer',
@@ -120,6 +121,22 @@ describe('会话级 AI 回复已开启列表', () => {
         chatUsername: 'wxid_peer',
         chatName: '小王',
       }],
+    })
+    remotes.dispose()
+  })
+
+  it('已开启的群聊也出现在摘要里（会话徽标与筛选要用）', () => {
+    expect(saveChatAiReplySetting(decrypted, {
+      accountKey: 'wxid_self',
+      chatUsername: 'room@chatroom',
+      chatName: '测试群',
+      enabled: true,
+      provider: 'dsh-wechat-bridge',
+    }).ok).toBe(true)
+    const remotes = remotesFor()
+    expect(remotes.listEnabled()).toMatchObject({
+      ok: true,
+      chats: [{ chatUsername: 'room@chatroom', chatName: '测试群' }],
     })
     remotes.dispose()
   })

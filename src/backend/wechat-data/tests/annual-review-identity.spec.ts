@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { invalidateWechatMeta } from '../src/query/meta.ts'
-import { queryAnnualReview } from '../src/query/annual-review.ts'
+import { queryAnnualReview } from '../src/query/annual-review-cache.ts'
 
 const scratch: string[] = []
 

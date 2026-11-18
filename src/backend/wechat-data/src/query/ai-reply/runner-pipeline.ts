@@ -13,6 +13,7 @@ import { normalizeChatAiReplyText } from './context.ts'
 import { generateChatAiReply } from './runner-generate.ts'
 import {
   CHAT_AI_REPLY_MAX_SEGMENTS,
+  segmentLimitForChat,
   splitChatAiReplyText,
 } from './segments.ts'
 import type {
@@ -34,6 +35,7 @@ import {
   sourceRefOf,
 } from './runner-recovery.ts'
 import { STALE_REPLY_REASON, dropOrFailStaleReservation } from './runner-coalesce.ts'
+import { queueEntryOf } from './queue-plan.ts'
 import {
   type ChatAiReplyRunRef,
   deferChatAiReplyRun,
@@ -355,11 +357,21 @@ function reservationInputForRun(
   state: ChatAiReplyState,
   run: ChatAiReplyRunRef,
 ): Parameters<ChatAiReplyScanDeps['reserveReply']>[0] {
-  return {
-    chatName: state.chatName || state.chatUsername,
+  // 入队规则收在 `queue-plan.ts`：私聊 target=对方（永不发 mention），
+  // 群聊 target=提问者（只有批次首条 @ 他）。runner 这里只传原始身份。
+  const entry = queueEntryOf({
     chatUsername: state.chatUsername,
-    targetName: state.chatName || state.chatUsername,
-    targetUsername: state.chatUsername,
+    chatName: state.chatName,
+    ...(run.anchor.mentionName === undefined ? {} : { mentionName: run.anchor.mentionName }),
+    ...(run.anchor.mentionUsername === undefined
+      ? {}
+      : { mentionUsername: run.anchor.mentionUsername }),
+  })
+  return {
+    chatName: entry.chatName,
+    chatUsername: entry.chatUsername,
+    targetName: entry.targetName,
+    targetUsername: entry.targetUsername,
     // 台账按触发时间倒序展示。若沿用历史消息时间，开启 AI 回复后的
     // pending 记录会被首屏 200 条遮住；原始消息时间仍由 sourceRef 保留。
     triggeredAt: run.now(),
@@ -1027,7 +1039,7 @@ export async function saveAndDispatchChatAiReply(
   run.generatedText = text
   await requireLiveLease(deps, state, run)
   const planned = current.splitReply
-    ? splitChatAiReplyText(text)
+    ? splitChatAiReplyText(text, segmentLimitForChat(state.chatUsername))
     : [normalizeChatAiReplyText(text, FEATHER_MESSAGE_MAX_UTF16)]
   const plannedSegments = planned.filter((segment) => segment.trim() !== '')
   if (plannedSegments.length === 0) throw new Error('模型没有返回可用回复')

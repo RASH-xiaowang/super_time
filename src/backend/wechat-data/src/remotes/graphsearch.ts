@@ -21,7 +21,7 @@ export interface createGraphSearchRemotesInputs {
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   searchJobs: Map<string, AbortController>
   searchSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
-  /** W3-11.5：进度事件的出口（与 laya 分析同一套路）。 */
+  /** W3-11.5：进度事件的出口（与问答同一套路）。 */
   ctx: () => { emit: (name: string, ...args: unknown[]) => void }
   /**
    * W3-11.5：索引构建的取消槽。

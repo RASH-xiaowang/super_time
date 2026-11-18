@@ -48,9 +48,8 @@ describe('callPriorityFor', () => {
     expect(callPriorityFor('askWechat')).toBe(HEAVY_PRIORITY)
   })
 
-  it('语音播放优先于内联分析，但保留长 RPC 超时窗口', () => {
+  it('语音播放是交互档，但保留长 RPC 超时窗口', () => {
     expect(callPriorityFor('getVoiceDataUrl')).toBe(INTERACTIVE_PRIORITY)
-    expect(callPriorityFor('analyzeVisibleMessages')).toBe(HEAVY_PRIORITY)
     expect(LONG_CALL_METHODS.has('getVoiceDataUrl')).toBe(true)
   })
 

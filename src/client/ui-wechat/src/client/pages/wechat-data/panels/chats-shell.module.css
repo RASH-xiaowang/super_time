@@ -371,25 +371,17 @@
   .msgHeaderActions { flex: 1 1 100%; justify-content: flex-start; }
 }
 
-/* AI 问答是独立阅读面，不和消息流做左右对半。
-   默认接管消息流、保留会话列表便于切换；全屏态再收起会话列表。
-   推荐回复 / 消息分析等其他右栏仍沿用下面的停靠规则。 */
-[data-side-panel='ai'][data-has-session] [data-chat-messages],
+/* AI 问答默认与「推荐回复」同宽停靠在消息流右侧（2026-11-18 用户要求）：
+   打开时聊天记录照常可见，不再接管整条消息流。
+   只有点头部「展开为全宽」后（`data-ai-full`）才由它独占会话区 —— 消息流与会话列表
+   同时让位，面板吃满剩余宽度。 */
+[data-ai-full] [data-chat-messages],
 [data-ai-full] [data-chat-sidebar] { display: none; }
-[data-side-panel='ai'][data-has-session] [data-side-panel-view] {
+[data-ai-full] [data-side-panel-view] {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
   max-width: none;
-}
-/* AI 问答视图里，会话列表仍可滚动换会话，但不显示滚动条。 */
-[data-side-panel='ai'] [data-chat-sidebar],
-[data-side-panel='ai'] [data-chat-sidebar] * { scrollbar-width: none; }
-[data-side-panel='ai'] [data-chat-sidebar]::-webkit-scrollbar,
-[data-side-panel='ai'] [data-chat-sidebar] *::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
 }
 
 /* 右侧功能栏在中小窗口改为“单栏接管”：列表和消息流都让位，

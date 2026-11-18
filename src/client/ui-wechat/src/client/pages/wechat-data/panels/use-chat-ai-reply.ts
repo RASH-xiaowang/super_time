@@ -30,7 +30,7 @@ export interface ChatAiReplyController {
   saving: boolean
   scanning: boolean
   error: string | null
-  /** 菜单是否应出现（单聊即可；正在等待账号 wxid 时为可显示但禁用）。 */
+  /** 菜单是否应出现（单聊与群聊即可；正在等待账号 wxid 时为可显示但禁用）。 */
   available: boolean
   toggle: () => Promise<void>
   refresh: (options?: { silent?: boolean }) => Promise<void>
@@ -41,6 +41,7 @@ export interface ChatAiReplyController {
     splitReply: boolean
     kbEnabled: boolean
     kbId: number
+    contextWindowHours: number
   }) => Promise<boolean>
 }
 
@@ -69,7 +70,7 @@ export function useChatAiReply(input: {
   /** 列表索引的乐观同步；权威状态仍由 message-list 事件回源。 */
   onEnabledChanged?: (chatUsername: string, enabled: boolean) => void
 }): ChatAiReplyController {
-  const { chatUsername, chatName, isGroup, selfWxid, sessionEpoch } = input
+  const { chatUsername, chatName, selfWxid, sessionEpoch } = input
   const [state, setState] = useState<ChatAiReplyState | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -103,7 +104,8 @@ export function useChatAiReply(input: {
     savingLockRef.current = null
     scanningLockRef.current = null
     stateIdentityRef.current = null
-    if (chatUsername === '' || isGroup) return
+    // 2026-11-18 起群聊也支持：只按「有没有会话」判断，不再按 isGroup 提前返回。
+    if (chatUsername === '') return
     if (selfWxid === '') return
     setLoading(true)
     void apiGetChatAiReplyState({ chatUsername, chatName })
@@ -123,16 +125,16 @@ export function useChatAiReply(input: {
       .finally(() => {
         if (requestIdRef.current === requestId) setLoading(false)
       })
-  }, [chatUsername, chatName, isGroup, selfWxid, sessionEpoch])
+  }, [chatUsername, chatName, selfWxid, sessionEpoch])
 
   const { refresh } = useChatAiReplyRefresh({
     chatUsername,
-    isGroup,
     selfWxid,
     sessionEpoch,
     latestRef,
     stateIdentityRef,
     requestIdRef,
+    savingLockRef,
     hasState: current !== null,
     setState,
     setLoading,
@@ -141,7 +143,7 @@ export function useChatAiReply(input: {
 
   const scanNow = useCallback(async (): Promise<void> => {
     const latest = latestRef.current
-    if (latest.chatUsername === '' || latest.isGroup || latest.selfWxid === '') return
+    if (latest.chatUsername === '' || latest.selfWxid === '') return
     if (latestRef.current.alive(latest.sessionEpoch, latest.chatUsername) === false) return
     if (scanningLockRef.current !== null) return
     const lock = Symbol('chat-ai-reply-scan')
@@ -195,6 +197,7 @@ export function useChatAiReply(input: {
     splitReply: boolean
     kbEnabled: boolean
     kbId: number
+    contextWindowHours: number
   }): Promise<boolean> => saveChatAiReplyPersona({
     state,
     latestRef,
@@ -215,7 +218,6 @@ export function useChatAiReply(input: {
       || stateIdentity === null
       || savingLockRef.current !== null
       || scanningLockRef.current !== null
-      || latest.isGroup
       || latest.selfWxid === ''
       || !sameChatAiReplyIdentity(stateIdentity, {
         selfWxid: latest.selfWxid,
@@ -270,7 +272,9 @@ export function useChatAiReply(input: {
     } finally {
       if (savingLockRef.current === lock) {
         savingLockRef.current = null
-        if (requestIdRef.current === requestId) setSaving(false)
+        // 不要用 requestId 兜这个收尾：一旦被并发回源推进，`saving` 就永远收不回来，
+        // 按钮永久变灰（实测「关掉后再也打不开」的根因）。锁仍属于本次写入时直接收尾。
+        setSaving(false)
       }
     }
   }, [state])
@@ -284,7 +288,7 @@ export function useChatAiReply(input: {
     saving,
     scanning,
     error: errorText,
-    available: chatUsername !== '' && !isGroup,
+    available: chatUsername !== '',
     toggle,
     refresh,
     scanNow,

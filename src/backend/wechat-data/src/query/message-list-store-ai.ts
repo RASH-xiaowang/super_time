@@ -47,6 +47,7 @@ import {
   featherRecordCapacityError,
   featherTextCapacityError,
 } from './ai-reply/provider.ts'
+import { pruneOrphanChatAiReplyTraces } from './ai-reply/trace-store.ts'
 import { canonicalChatReference } from './message-identity.ts'
 
 function aiReplyRuleScope(decryptedDir: string, sourceRef: string | undefined): {
@@ -658,6 +659,8 @@ export function dropAiReplyMessageListRecord(
           WHERE source = 'ai_reply'
             AND (source_ref = ? OR segment_group_ref = ? OR instr(source_ref, ?) = 1)`)
           .run(base, base, base + ':segment:')
+        // 记录整组删掉后留痕也要走：不能把聊天上下文留在任务库里。
+        pruneOrphanChatAiReplyTraces(db)
         db.exec('COMMIT')
         return { ok: true, removed: Number(info.changes) }
       } catch (e) {

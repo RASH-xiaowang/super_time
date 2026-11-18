@@ -31,6 +31,7 @@ import { useChatsEdit } from './chats-edit.tsx'
 import { useChatsCalendar } from './chats-calendar.ts'
 import { useChatsExport } from './chats-export.tsx'
 import { useChatsAiReplyControls } from './use-chats-ai-reply-controls.ts'
+import { sessionHasAiReply, sessionIsConversational } from './use-chat-ai-reply-enabled.ts'
 // 类型与值要分开转发：`ChatView`/`ViewerImage` 是 type，Rollup 找不到运行期导出会直接构建失败
 export type { ChatView } from './chats-support.tsx'
 export { isEnterpriseChat } from './chats-support.tsx'
@@ -149,7 +150,13 @@ function useChatsPanelState(initialView: ChatView) {
   const sessionEpochRef = useRef(0)
   const [sessionEpoch, setSessionEpoch] = useState(0)
   const messagesTalkerRef = useRef<string | null>(null)
-  const [suggestOpen, setSuggestOpen] = useState(false)
+  /**
+   * 右栏「回复助手」是否打开。
+   *
+   * 2026-11-18 起右栏只有**一个**面板：里面同时有「这条消息怎么理解」（分析）与
+   * 「可以这样回」（候选回复）。此前是两个布尔开关（推荐 / 分析）互相排斥，
+   * 用户要来回开菜单才知道另一块在哪，窄屏下还互相挤压。
+   */
   const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)
   const [analysisTarget, setAnalysisTarget] = useState<AnalysisTargetState | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
@@ -250,7 +257,7 @@ function useChatsPanelState(initialView: ChatView) {
     msgLoading, setMsgLoading, msgError, setMsgError, hasMore, setHasMore, cursor, setCursor,
     cursorLocalId, setCursorLocalId, moreOpen, setMoreOpen, watermarkRef, watermarkLocalIdRef, inFlightRef,
     messagesMatchSession,
-    sessionEpochRef, sessionEpoch, setSessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin, suggestOpen, setSuggestOpen,
+    sessionEpochRef, sessionEpoch, setSessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin,
     analysisPaneOpen, setAnalysisPaneOpen, analysisTarget, setAnalysisTarget, aiOpen, setAiOpen,
     aiFull, setAiFull, pollStatus, setPollStatus, selfWxid, setSelfWxid, typeStats, setTypeStats,
     msgEndRef, viewer, setViewer, pinnedCollapsed, setPinnedCollapsed, setWatermarkFrom,
@@ -331,7 +338,9 @@ function useChatsSessionDerived(
   const filtered = useMemo(() => {
     const base = view === 'chats' ? sessions : sessions.filter((session) => sessionInView(session, view))
     const scoped = aiOnly
-      ? base.filter((session) => session.type === 'private' && aiReplyEnabledUsernames.has(session.username))
+      // 与 chip 计数、行内徽标共用同一个判据（`sessionHasAiReply`），
+      // 避免「筛选结果比显示的数字多」这类不一致。
+      ? base.filter((session) => sessionHasAiReply(session, aiReplyEnabledUsernames))
       : base
     const query = search.trim().toLowerCase()
     if (!query) return scoped
@@ -441,7 +450,7 @@ function makeChatsSessionRowRenderer(deps: ChatsSessionRowRendererDeps): (sessio
       batchMode={batchMode}
       selected={selected.has(session.username)}
       selfWxid={selfWxid}
-      aiReplyEnabled={aiReplyEnabledUsernames.has(session.username)}
+      aiReplyEnabled={sessionHasAiReply(session, aiReplyEnabledUsernames)}
       onOpen={(next) => { void openSession(next) }}
       onToggle={toggleSelect}
     />
@@ -474,7 +483,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTarg
     msgLoading, setMsgLoading, msgError, setMsgError, hasMore, setHasMore, cursor, setCursor,
     cursorLocalId, setCursorLocalId, moreOpen, setMoreOpen, watermarkRef, watermarkLocalIdRef, inFlightRef,
     messagesMatchSession,
-    sessionEpochRef, sessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin, suggestOpen, setSuggestOpen,
+    sessionEpochRef, sessionEpoch, messagesTalkerRef, messagesEpochRef, onSessionBegin,
     analysisPaneOpen, setAnalysisPaneOpen, analysisTarget, setAnalysisTarget, aiOpen, setAiOpen,
     aiFull, setAiFull, pollStatus, setPollStatus, selfWxid, setSelfWxid, typeStats, setTypeStats,
     msgEndRef, viewer, setViewer, pinnedCollapsed, setPinnedCollapsed, setWatermarkFrom,
@@ -541,7 +550,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTarg
    * AI 入口的可见性：单聊与群聊才有「这段聊天」的语义；
    * 公众号/服务号/客服是单向广播，问答没有意义，不给入口。
    */
-  const aiEligible = curSession !== null && (curSession.type === 'private' || curSession.type === 'group')
+  const aiEligible = curSession !== null && sessionIsConversational(curSession)
 
   /**
    * AI 面板的读取范围：**就是当前打开的会话**。
@@ -676,7 +685,7 @@ const {
     edited: { doReset, editedOpen, editing, edits, setEditedOpen },
     exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportState, exportSession, finishing, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
     groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, onExport: () => setExportOpen(true), setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
-    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession, dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession, dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setViewer, stats, togglePinned, typeStats, view, viewer,
   }
 
   // 编辑/草稿与复制/打开文件共用一条回执（同一时刻不会同时做两件事；都有值时编辑优先）。

@@ -9,7 +9,7 @@ import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import type { ChatView } from './chats-support.tsx'
 import type { ChatsViewProps } from './chats-view.tsx'
 import { useChatAiReply } from './use-chat-ai-reply.ts'
-import { useChatAiReplyEnabledIndex } from './use-chat-ai-reply-enabled.ts'
+import { sessionHasAiReply, sessionIsConversational, useChatAiReplyEnabledIndex } from './use-chat-ai-reply-enabled.ts'
 
 interface ChatsAiReplyControlsInput {
   view: ChatView
@@ -45,15 +45,16 @@ export function useChatsAiReplyControls({
     if (view !== 'chats') setAiOnly(false)
   }, [view])
 
+  // 计数与筛选、行内徽标共用 `sessionHasAiReply`：三处各写一遍判据，
+  // 曾导致「群聊开了 AI 回复却不算进 chip 计数」（显示 1，实际 2）。
   const matchCount = useMemo(
     () => view === 'chats'
-      ? sessions.filter((session) => session.type === 'private'
-        && enabledIndex.enabledUsernames.has(session.username)).length
+      ? sessions.filter((session) => sessionHasAiReply(session, enabledIndex.enabledUsernames)).length
       : 0,
     [enabledIndex.enabledUsernames, sessions, view],
   )
 
-  /** 会话级 AI 回复：只在单聊可用，切换会话立即作废旧请求。 */
+  /** 会话级 AI 回复：单聊与群聊都可用（群聊只回 @我 的消息），切换会话立即作废旧请求。 */
   const chatAiReply = useChatAiReply({
     chatUsername: curSession?.username ?? '',
     chatName: curSession?.displayName ?? '',
@@ -65,9 +66,13 @@ export function useChatsAiReplyControls({
     onEnabledChanged: enabledIndex.markEnabled,
   })
 
-  const aiReply = curSession?.type === 'private'
+  // 2026-11-18 起群聊也能开启（此前只有单聊）：群聊的触发条件收在后端
+  // （只有 @我 的消息才成为锚点）。公众号/文件传输等其它会话类型仍不显示。
+  const aiReply = curSession !== null
+    && sessionIsConversational(curSession)
+    && chatAiReply.available
     ? {
-        visible: chatAiReply.available,
+        visible: true,
         enabled: chatAiReply.state?.enabled === true,
         stage: chatAiReply.state?.stage ?? 'idle',
         busy: chatAiReply.available && (chatAiReply.loading || chatAiReply.saving || chatAiReply.scanning),
@@ -84,6 +89,7 @@ export function useChatsAiReplyControls({
         splitReply: chatAiReply.state?.splitReply !== false,
         kbEnabled: chatAiReply.state?.kbEnabled === true,
         kbId: chatAiReply.state?.kbId ?? 0,
+        contextWindowHours: chatAiReply.state?.contextWindowHours ?? 0,
         onToggle: () => { void chatAiReply.toggle() },
         onScanNow: () => { void chatAiReply.scanNow() },
         onSavePersona: (persona: {
@@ -92,6 +98,7 @@ export function useChatsAiReplyControls({
           splitReply: boolean
           kbEnabled: boolean
           kbId: number
+          contextWindowHours: number
         }) => chatAiReply.savePersona(persona),
       }
     : undefined

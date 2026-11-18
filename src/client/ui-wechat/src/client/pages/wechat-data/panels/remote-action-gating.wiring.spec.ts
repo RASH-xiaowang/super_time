@@ -117,13 +117,14 @@ const COVERED_BY_OWNER: Readonly<Record<string, { file: string, needle: string, 
   },
   'use-chat-ai-reply.ts': {
     file: 'chat-ai-reply-menu.tsx',
-    needle: 'disabled={aiReply === undefined || aiReply.busy || !aiReply.ready}',
-    why: 'AI 回复开关与立即检查都只从会话「更多」菜单触发，这两个菜单项在手机态均被禁用',
+    needle: 'const disabled = aiReply.busy || !aiReply.ready',
+    why: 'AI 回复开关与设置 2026-11-18 搬到会话头部（纯图标按钮），「立即检查」留在「更多」；'
+      + '两者共用同一个禁用判据，并各自带 desktopActionProps() 的桌面端降级',
   },
   'chat-ai-reply-persona-action.ts': {
     file: 'chat-ai-reply-menu.tsx',
-    needle: 'disabled={aiReply === undefined || aiReply.busy || !aiReply.ready}',
-    why: '人格保存只从已禁用降级的「AI回复设置…」菜单项打开，手机态没有写入口',
+    needle: 'const disabled = aiReply.busy || !aiReply.ready',
+    why: '人格保存只从头部已禁用降级的「AI回复设置」按钮打开，手机态没有写入口',
   },
   'use-message-list-actions.ts': {
     file: 'MessageListPanel.tsx',

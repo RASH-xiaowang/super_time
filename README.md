@@ -29,7 +29,7 @@
 | npm | 随 Node | 安装依赖用 |
 | 网络 | 安装依赖时需要访问 npm registry 与 `cdn.sheetjs.com`（`xlsx` 的 tarball） | 运行期的出网点（LLM、语音模型下载、更新检查、媒体取图等）逐条见 [`docs/PRIVACY.md`](docs/PRIVACY.md) |
 | 微信 | PC 微信（`Weixin.exe` / `WeChat.exe`）已在本机登录 | 数据源；解析密钥需要它**正在运行** |
-| 语音转写 | 仓库与安装包已带 whisper 引擎与 `ggml-tiny.bin` | 其它模型可在应用内下载（会出网） |
+| 语音转写 | 仓库与安装包已带 whisper 引擎与 `ggml-tiny.bin`（仅供开箱自检） | 中文转写建议在设置里下载 `Turbo (量化)`（547 MB，默认推荐）；其它模型同样可在应用内下载（会出网） |
 
 ## 快速开始
 
@@ -161,23 +161,23 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     src/remotes/         各域的 @Remote 处理器体（按域拆分）
     src/keys/            微信解密密钥获取（含 win32 进程内存扫描）
     src/config/          config.json / secrets.json（配置与密钥的真源）
-    src/laya/            本地决策模型（onnxruntime-node + JS 分词）
+    src/query/analysis/  消息分析（上下文 + 提示词 + JSON 校验；单聊/群聊两套问题域）
     lib/                 后端 bundle（`npm run build:backend` 产物；运行时只加载 lib/index.js）
     native/              朋友圈视频解密 WASM（随包分发，许可见 PROVENANCE.md）
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 195 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 197 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
 wechat/                  随包只读资产：语音引擎与预置模型（`wechat/whisper/`）、配置模板（`*.example.json`）
 build/                   应用图标（`icon.ico` 供安装包使用）
 vendor-keys/             许可证**公钥**（私钥不在仓库里；本目录已 gitignore）
-tools/                   Remote 审计、Laya 模型工具、许可签发 GUI、视觉审计（见 tools/README.md）
+tools/                   Remote 审计、许可签发 GUI、视觉审计（见 tools/README.md）
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本、CI 分档表（ci-tiers.mjs）、变异登记表
 website/                 官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
-docs/                    十五份当前有效的文档 + 归档目录（见下方索引）
+docs/                    十八份当前有效的文档 + 归档目录（见下方索引）
 .github/workflows/       CI（ci.yml）、夜间（nightly.yml）、发版（release.yml）、官网（pages.yml）
 ```
 

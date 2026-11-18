@@ -40,6 +40,7 @@ import {
   latestVisibleMessage,
   loadMessagesForState,
   messageAfterAnchor,
+  ownSentSegmentsOf,
   parseSourceRef,
   pendingAnchorOf,
   sourceRefOf,
@@ -331,10 +332,13 @@ async function workForSession(
       || state.pendingRevision <= 0) {
       throw new Error('AI 回复 pendingRevision 缺失、为 0 或非法；已停止本会话自动扫描')
     }
+    // 同上：恢复 pending 时也要排除「本批次已发出的分段」，否则分段落库后
+    // 第 1 段一发出，下一拍就会把整个 pending 判成过期。
+    const own = await ownSentSegmentsOf(deps, state.pendingSourceRef)
     return {
       anchor: pending,
       resumed: true,
-      stale: await conversationProgressedAfter(deps, state, pending, messages),
+      stale: await conversationProgressedAfter(deps, state, pending, messages, own),
     }
   }
   if (hasPendingIntent && state.recordId === undefined) {
@@ -350,10 +354,13 @@ async function workForSession(
     if (anchor === null) {
       throw new Error('AI 回复记录缺少可恢复的 sourceRef；已停止本会话自动扫描')
     }
+    // 本批次已经发出去的分段会以本机身份回到会话里；它们不是「会话推进」，
+    // 必须排除，否则多段回复只发第 1 段就被判过期。
+    const own = await ownSentSegmentsOf(deps, record.sourceRef ?? state.pendingSourceRef)
     return {
       anchor,
       resumed: true,
-      stale: await conversationProgressedAfter(deps, state, anchor, messages),
+      stale: await conversationProgressedAfter(deps, state, anchor, messages, own),
     }
   }
   if (recoverOnly) return null
@@ -495,7 +502,9 @@ export function createChatAiReplyRunner(
     // 只统计原因码，扫描结束后最多写一条操作日志（有事实才写、10 分钟去重）。
     const events: Record<string, number> = {}
     for (const listed of listedResult.states) {
-      if (listed.accountKey !== self || listed.chatUsername.endsWith('@chatroom')) continue
+      // 群聊与单聊都参与扫描；群聊的触发条件由消息级 `mentionSelf` 把关
+      // （只有 @我 的消息才会成为锚点），这里不再按 @chatroom 跳过。
+      if (listed.accountKey !== self) continue
       try {
         // 先重新取设置，再按当前 cursor/pending 选择窗口；否则延迟 scan
         // 可能用旧 cursor 截最新一页，把窗口外的积压消息永久越过。

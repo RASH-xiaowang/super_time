@@ -1,7 +1,7 @@
 /**
  * WechatDataGateway 方法面 · **数据库健康**（完整性体检 + 损坏修复）的转发（W3-11.7）。
  *
- * 为什么单独成环：数据/运维方法面已经按域切成 media / export / voice / config / laya
+ * 为什么单独成环：数据/运维方法面已经按域切成 media / export / voice / config / analysis
  * 多层壳，往其中一层加方法的代价不是这一处好看，是下一次任何改动都要先和结构边界
  * 打交道。而「体检 + 修复」本来就是自成一家的一族：两条方法、一个
  * 协作者槽（{@link GatewayDbHealth}）、消费方只有「数据健康中心」一个面板。

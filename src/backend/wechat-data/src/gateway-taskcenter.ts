@@ -2,8 +2,8 @@
  * WechatDataGateway 方法面 · **任务信息 / 任务触发记录 / 触发投递**（2026-10-19）。
  *
  * 单独成环的理由与 db-health 同款：这一族方法（任务配置 + 触发记录 + 投递）
- * 不属于现有的 read / ask / media / export / voice / config / laya / db-health 任何一层，
- * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayLayaOps` 与 `GatewayDbHealth` 之间，
+ * 不属于现有的 read / ask / media / export / voice / config / analysis / db-health 任何一层，
+ * 硬塞进去只会让下一刀再拆一次。本文件插在 `GatewayAnalysisOps` 与 `GatewayDbHealth` 之间，
  * 对外方法面逐名增加 11 个（`gateway-remote-surface.spec.ts` / 契约用例守；2026-10-21
  * 多 RPA 厂商接入新增 `listRpaVendors`，同日新增 `revealTaskTriggerSecret`）。
  *

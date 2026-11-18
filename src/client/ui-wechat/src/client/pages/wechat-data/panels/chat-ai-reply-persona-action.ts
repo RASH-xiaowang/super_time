@@ -31,7 +31,14 @@ export interface ChatAiReplyPersonaSaveContext {
  */
 export async function saveChatAiReplyPersona(
   context: ChatAiReplyPersonaSaveContext,
-  draft: { name: string; prompt: string; splitReply: boolean; kbEnabled: boolean; kbId: number },
+  draft: {
+    name: string
+    prompt: string
+    splitReply: boolean
+    kbEnabled: boolean
+    kbId: number
+    contextWindowHours: number
+  },
 ): Promise<boolean> {
   const latest = context.latestRef.current
   const stateIdentity = context.stateIdentityRef.current
@@ -40,7 +47,6 @@ export async function saveChatAiReplyPersona(
     || stateIdentity === null
     || context.savingLockRef.current !== null
     || context.scanningLockRef.current !== null
-    || latest.isGroup
     || latest.selfWxid === ''
     || !sameChatAiReplyIdentity(stateIdentity, latest)
   ) return false
@@ -60,6 +66,7 @@ export async function saveChatAiReplyPersona(
       splitReply: draft.splitReply,
       kbEnabled: draft.kbEnabled,
       kbId: draft.kbId,
+      contextWindowHours: draft.contextWindowHours,
       expectedRevision: context.state.revision,
     })
     if (context.requestIdRef.current !== requestId) return false
@@ -93,7 +100,9 @@ export async function saveChatAiReplyPersona(
   } finally {
     if (context.savingLockRef.current === lock) {
       context.savingLockRef.current = null
-      if (context.requestIdRef.current === requestId) context.setSaving(false)
+      // 同 `toggle`：收尾只看锁归属，不看 requestId —— 否则并发回源会让 `saving`
+      // 永久为真，设置弹窗的保存按钮从此一直是「保存中」。
+      context.setSaving(false)
     }
   }
 }

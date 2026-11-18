@@ -19,6 +19,7 @@ import type {
 } from './query/answer-runtime/types.ts'
 import type { ThreadState } from './query/answer-runtime/thread-state.ts'
 import type { AskCitation } from './query/ask-citation-types.ts'
+import type { ReplyTrace } from './types-analysis.ts'
 
 export type { ThreadState } from './query/answer-runtime/thread-state.ts'
 export type { AskCitation } from './query/ask-citation-types.ts'
@@ -182,6 +183,13 @@ export interface ReplySuggestResult {
   kbSnippetCount?: number
   /** 降级说明：选了库但没命中时如实说明「这次只用了会话上下文」。 */
   degraded?: string
+  /** 本次是否命中缓存（命中时没有新的模型调用，也没有新的留痕）。 */
+  cached?: boolean
+  /**
+   * 本次调用的过程留痕：实际发出的提示词、上下文、知识库命中与模型原始输出。
+   * 详情视图用它解释「这些候选是怎么想出来的」。
+   */
+  trace?: ReplyTrace
 }
 
 export interface AskResult {

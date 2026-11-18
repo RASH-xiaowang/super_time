@@ -18,6 +18,7 @@ import { Button, IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOu
 import { clsx } from 'clsx'
 import { ImageAutoDownloadCard } from './image-autodownload-card.tsx'
 import { WhisperModelLibrary } from './whisper-model-library.tsx'
+import { useRetiredWhisperModel } from './use-retired-whisper-model.ts'
 
 /** 检测账号 卡片（面板里的第 1 节）。 */
 export interface SettingsDetectSectionProps {
@@ -498,6 +499,8 @@ export function SettingsVoiceSection({
   whisperModel, whisperModelsDir, whisperStatus,
   whisperStatusLoading, whisperThreads, whisperTranscribing,
 }: SettingsVoiceSectionProps): React.JSX.Element {
+  // 老配置里已下线的识别模型（tiny/base/medium）→ 预选推荐模型并写明原因。
+  useRetiredWhisperModel({ whisperDevice, whisperModel, whisperStatus, setWhisperDirMsg, setWhisperModel })
   const models = whisperStatus?.models ?? WHISPER_MODEL_FALLBACK
   const currentModel = models.find(model => model.id === whisperModel)
   const installedModels = models.filter(model => model.installed).length

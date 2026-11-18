@@ -88,8 +88,8 @@ const EXEMPT: Array<{ file: string; call: string; why: string }> = [
     // 「本地分析中… / 分析失败：<原因> / 结果 + 缓存与耗时」。所以它不是没有反馈，
     // 是反馈不住在 setter 名字里 —— 这条豁免把那个事实记在这里，免得下一个人误判。
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/use-inline-analysis.ts',
-    call: 'apiAnalyzeVisibleMessages',
-    why: '反馈经 setMap 写入逐消息状态槽，由 ChatAnalysisPanel 渲染 pending/error/done 三态',
+    call: 'apiAnalyzeMessage(',
+    why: '反馈经 rememberInlineAnalysis 写入逐消息状态槽（pending/error/done），由 ChatAnalysisPanel 渲染三态',
   },
   {
     // 「知道了」（M1 密钥搬家提示，W2-12.3）：反馈经 `report(...)` 回传，

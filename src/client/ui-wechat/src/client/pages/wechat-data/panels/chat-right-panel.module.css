@@ -1,16 +1,61 @@
-/* 右栏单模式布局（推荐回复 / 分析二选一）。
+/* 右栏「回复助手」：一个面板，纵向两段（这条消息怎么理解 / 可以这样回）。
  *
- * 面板外壳本身（边框 / 圆角 / 底色 / 头部 / 滚动区）复用 `session-ask.module.css`
- * —— 与「AI 问答」同一处视觉语言；本文件只负责让当前激活的推荐回复填满内容区。
- * 分析组件自己已经是 `flex: 1 1 auto`，不需要额外的高度约束。
+ * 面板外壳本身（边框 / 圆角 / 底色 / 头部）复用 `session-ask.module.css`
+ * —— 与「AI 问答」同一处视觉语言；本文件只负责滚动区与段标题。
  *
  * 几何一律走令牌（UI-GEOMETRY-SPEC：新 CSS 文件零容忍）。 */
 
-/* 推荐回复：独占右栏内容区，超出时由内部 `.body` 自己滚动。 */
-.top {
+/*
+ * 唯一的滚动区。
+ *
+ * 刻意用 `display: block`：两段内部的组件各自写着 `flex: 1 1 auto; overflow-y: auto`，
+ * 在块级父容器里它们只按内容高度展开，不会多出一个滚动条 —— 否则 400px 宽的右栏里
+ * 会出现「三块都能滚」的鼠标滚轮陷阱。
+ */
+.scroll {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* 段：上段研判、下段候选。分隔线只画在两段之间（第二段自己带上边框）。 */
+.section {
+  display: block;
+  min-width: 0;
+}
+
+.section + .section {
+  border-top: 0.5px solid var(--nm-border);
+}
+
+/* 段标题：低调一行，说明「这一段是什么」。 */
+.sectionHead {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 16px 0;
+}
+
+.sectionTitle {
+  flex: 0 0 auto;
+  color: var(--nm-text-2);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.sectionHint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
 }

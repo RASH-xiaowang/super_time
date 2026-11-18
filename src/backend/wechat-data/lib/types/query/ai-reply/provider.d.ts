@@ -36,13 +36,10 @@ export declare function featherRecordCapacityError(record: FeatherRecordShape, w
 /**
  * 判断一条消息列表记录是否代表群聊。
  *
- * 稳定依据是 `chatUsername=...@chatroom`。外部入站协议用
- * `target=群名 + mention=成员` 时没有 username，只能在该 source 下按
- * 「会话名与触发对象不同」兜底。Feather 的发送目标名来自消息列表，不能把
- * 手工私聊的备注差异猜成群聊；因此没有 `@chatroom` 时只允许显式入站记录按
- * 历史协议兜底。
+ * 实现已移到 `queue-plan.ts`：入队与投递必须用同一个判据，否则
+ * 「写入时按群聊记提问者、投递时按私聊当目的地」这类错位会静默发生。
  */
-export declare function isGroupMessageListRecord(record: FeatherRecordShape): boolean;
+export { isGroupMessageListRecord } from './queue-plan.ts';
 /**
  * 将消息列表记录转成桥接发送请求。该函数不直接出网，便于单测检查
  * “只有消息列表记录能成为发送正文”的约束。
@@ -73,4 +70,3 @@ export declare function featherRequestOf(record: MessageListRecord, gatedText?: 
         type?: 'attachments';
     };
 };
-export {};

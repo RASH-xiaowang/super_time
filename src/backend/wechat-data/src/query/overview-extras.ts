@@ -7,10 +7,11 @@ import { DatabaseSync, withDb } from './db-open.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig, dataGenerationSig } from './meta.ts'
-import { mergeDisplayNames, messageIdentityIndex } from './message-identity.ts'
+import { messageIdentityIndex } from './message-identity.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
 import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
+import { rollupTalkerDays, type TalkerDayCounts } from './overview-activity.ts'
 
 /**
  * 「签名 + 结果」磁盘缓存的位置：`<数据根>/cache/overview-extras.v1.json`。
@@ -41,7 +42,7 @@ function walkDb(dir: string, depth: number, out: { files: number; bytes: number;
   }
 }
 
-export function queryOverviewExtras(decryptedDir: string): OverviewExtras {
+export function queryOverviewExtras(decryptedDir: string, talkerDays?: TalkerDayCounts): OverviewExtras {
   const dec = decryptedDir
   const sig = [
     shardCatalogSig(dec, ['message', 'bizchat']),
@@ -52,10 +53,10 @@ export function queryOverviewExtras(decryptedDir: string): OverviewExtras {
     fileSigOf(join(dec, 'session', 'session.db')),
     dataGenerationSig(),
   ].join('|')
-  return cachedBySig('overview-extras:' + dec, sig, () => computeOverviewExtras(dec, sig), 30_000)
+  return cachedBySig('overview-extras:' + dec, sig, () => computeOverviewExtras(dec, sig, talkerDays), 30_000)
 }
 
-function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
+function computeOverviewExtras(dec: string, sig: string, talkerDays?: TalkerDayCounts): OverviewExtras {
   queryTraceBegin('extras')
   // 跨启动复用：签名一致就直接返回上次算好的结果（跳过下面全部扫描）。
   const diskHit = loadSigCached<OverviewExtras>(extrasCachePath(dec), sig)
@@ -70,19 +71,31 @@ function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
   const day14 = now - 14 * 86400
   const day90 = now - 90 * 86400
 
-  const identity = messageIdentityIndex(dec, ['message', 'bizchat'])
-  const names = mergeDisplayNames(dec, identity.usernames)
-  const tableToUser = identity.tableToUsername
-  queryTraceMark('extras', 'contacts', tableToUser.size)
-
-  const dayCounts = new Map<string, number>()
+  let dayCounts = new Map<string, number>()
   let m7 = 0; let m30 = 0; let m60 = 0; let prev7 = 0; let prev30 = 0
-  const contactActive7 = new Set<string>()
-  const contactActive30 = new Set<string>()
-  const groupActive7 = new Set<string>()
-  const groupActive30 = new Set<string>()
+  let contactActive7 = new Set<string>()
+  let contactActive30 = new Set<string>()
+  let groupActive7 = new Set<string>()
+  let groupActive30 = new Set<string>()
   let lastSync = 0
 
+  if (talkerDays) {
+    const rolled = rollupTalkerDays(talkerDays, now)
+    dayCounts = rolled.dayCounts
+    m7 = rolled.m7
+    m30 = rolled.m30
+    m60 = rolled.m60
+    prev7 = rolled.prev7
+    prev30 = rolled.prev30
+    contactActive7 = rolled.contactActive7
+    contactActive30 = rolled.contactActive30
+    groupActive7 = rolled.groupActive7
+    groupActive30 = rolled.groupActive30
+    lastSync = rolled.lastSync
+  } else {
+  const identity = messageIdentityIndex(dec, ['message', 'bizchat'])
+  const tableToUser = identity.tableToUsername
+  queryTraceMark('extras', 'contacts', tableToUser.size)
   for (const sh of shardCatalogDirs(dec, ['message', 'bizchat'])) {
     try {
       const db = new DatabaseSync(sh.file, { readOnly: true })
@@ -114,6 +127,7 @@ function computeOverviewExtras(dec: string, sig: string): OverviewExtras {
         db.close()
       }
     } catch { /* skip shard */ }
+  }
   }
   queryTraceMark('extras', 'shards')
 

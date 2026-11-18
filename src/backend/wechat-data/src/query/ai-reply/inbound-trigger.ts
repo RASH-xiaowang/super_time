@@ -20,6 +20,20 @@ export interface InboundMessageRich {
   desc?: string
   md5?: string
   emojiUrl?: string
+  /** 转账金额（`￥100.00`）或红包金额（已去掉货币符号）。 */
+  amount?: string
+  /** 视频 / 通话时长（秒）。 */
+  durationSec?: number
+  /** 语音时长（毫秒）。 */
+  durationMs?: number
+  /** 通话结局原文，例如「已拒绝」「通话时长 00:21」。 */
+  status?: string
+  /** 通话类型：语音 / 视频。 */
+  voipType?: string
+  /** 引用消息的原发言人显示名。 */
+  referName?: string
+  /** 通话是否接通（其它设备接听也算接通）。 */
+  connected?: boolean
 }
 
 export interface InboundMessageLike {
@@ -29,6 +43,14 @@ export interface InboundMessageLike {
   strContent?: string
   msgContent?: string
   isSender?: number
+  /**
+   * **群聊专用**：这条消息是否 @ 了登录账号。
+   *
+   * 由消息读取边界（`remotes/chat-ai-reply.ts`）按 `source` 列的解构化
+   * `atuserlist` 计算后注入，不在这里猜正文里的 `@昵称`（昵称可改、重名、
+   * 正文普通 @ 都会误判）。单聊消息不带这个字段 ⇒ 不施加任何限制。
+   */
+  mentionSelf?: boolean
   rich?: InboundMessageRich
 }
 
@@ -106,12 +128,92 @@ export function contextualMessageText(message: InboundMessageLike): string {
   if (NON_REPLY_RENDER_TYPES.has(key)) return ''
   const kind = renderKindOf(message)
   if (kind !== undefined && NON_REPLY_RENDER_TYPES.has(kind)) return ''
-  return messageDisplayText(message)
+  const base = messageDisplayText(message)
+  return kind === undefined ? base : enrichForContext(kind, message.rich, base)
 }
 
-/** 对方发来的、可自动回复的消息。自己的消息永远不作为触发锚点。 */
+/** 时长展示：60 秒以上折成分秒，未知返回空串。 */
+function durationText(rich: InboundMessageRich | undefined): string {
+  const raw = Number(rich?.durationSec ?? 0)
+  const sec = Number.isFinite(raw) && raw > 0
+    ? raw
+    : Number(rich?.durationMs ?? 0) > 0 ? Number(rich?.durationMs) / 1000 : 0
+  if (!Number.isFinite(sec) || sec <= 0) return ''
+  const total = Math.max(1, Math.round(sec))
+  return total >= 60 ? `${String(Math.floor(total / 60))}分${String(total % 60)}秒` : `${String(total)}秒`
+}
+
+/**
+ * 给「只有占位符」的消息补上模型真正需要的细节。
+ *
+ * 微信的卡片类消息在库里只存 XML，`displayText` 往往是裸的 `[转账]`、`[引用]`，
+ * 模型看不出转了多少钱、引用了谁说的什么。这里只**增强进上下文的文本**，
+ * 界面上的气泡文案（`displayText`）保持原样 —— 那是渲染层与导出共用的口径。
+ */
+function enrichForContext(
+  kind: RenderKind,
+  rich: InboundMessageRich | undefined,
+  base: string,
+): string {
+  const desc = String(rich?.desc ?? '').trim()
+  switch (kind) {
+    case 'transfer': {
+      // 转账：金额在 title（`￥100.00`），备注在 desc。
+      const amount = String(rich?.title ?? '').trim()
+      if (amount === '' && desc === '') return base
+      return `[转账${amount === '' ? '' : ' ' + amount}]${desc === '' ? '' : ' ' + desc}`
+    }
+    case 'redpacket': {
+      // 红包：金额在 amount（已去货币符号），祝福语在 desc。
+      const amount = String(rich?.amount ?? '').trim()
+      const head = amount === '' ? '[红包]' : `[红包 ${amount}]`
+      return desc === '' ? head : `${head} ${desc}`
+    }
+    case 'quote': {
+      // 引用：title 是「我」的回复，desc 是被引用的那句；缺了后半截模型会答非所问。
+      const reply = String(rich?.title ?? '').trim()
+      if (desc === '') return base
+      const who = String(rich?.referName ?? '').trim()
+      const quoted = who === '' ? desc : `${who}：${desc}`
+      return reply === '' ? `[引用 ${quoted}]` : `[引用 ${quoted}] ${reply}`
+    }
+    case 'video': {
+      const dur = durationText(rich)
+      return dur === '' ? base : `[视频 ${dur}]`
+    }
+    case 'voip': {
+      const status = String(rich?.status ?? '').trim()
+      const voipType = String(rich?.voipType ?? '').trim()
+      if (status === '' && voipType === '') return base
+      const label = voipType === 'video' ? '视频通话' : voipType === 'voice' ? '语音通话' : '通话'
+      return status === '' ? `[${label}]` : `[${label}] ${status}`
+    }
+    case 'location': {
+      const name = String(rich?.title ?? '').trim()
+      const head = name === '' ? '[位置]' : `[位置] ${name}`
+      return desc === '' || name.includes(desc) ? head : `${head}（${desc}）`
+    }
+    case 'voice': {
+      const dur = durationText(rich)
+      return dur === '' ? base : `[语音 ${dur}]`
+    }
+    default:
+      return base
+  }
+}
+
+/**
+ * 对方发来的、可自动回复的消息。
+ *
+ * 自己的消息永远不是锚点。群聊额外要求 **@我**：`mentionSelf` 由读取边界注入，
+ * 未注入（单聊）时不做限制 —— 这样纯函数不需要知道登录账号是谁。
+ * @param message - 待判定的消息。
+ * @returns 是否可作为自动回复的锚点。
+ */
 export function isInboundReplyTrigger(message: InboundMessageLike): boolean {
-  return message.isSender !== 1 && contextualMessageText(message) !== ''
+  if (message.isSender === 1) return false
+  if (contextualMessageText(message) === '') return false
+  return message.mentionSelf !== false
 }
 
 /** 图片与自定义表情都会作为视觉内容进入模型。 */
@@ -122,4 +224,13 @@ export function visualKindOf(message: InboundMessageLike): 'image' | 'sticker' |
     return 'sticker'
   }
   return null
+}
+
+/**
+ * 是否语音消息。语音要先用本地 whisper 转成文字再进上下文，
+ * 否则模型只看到 `[语音]` 这个占位符，等于少了一整条对话。
+ */
+export function isVoiceMessage(message: InboundMessageLike): boolean {
+  if (renderKindOf(message) === 'voice') return true
+  return message.type === 34
 }

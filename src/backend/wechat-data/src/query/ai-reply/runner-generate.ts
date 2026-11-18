@@ -14,11 +14,37 @@ import { buildChatAiReplySystemPrompt } from './persona.ts'
 import { errorText } from './runner-recovery.ts'
 import type { ChatAiReplyRunRef } from './runner-state.ts'
 import type {
+  ChatAiReplyGenerationResult,
   ChatAiReplyScanDeps,
   ChatAiReplyState,
 } from './types.ts'
 
-/** 一次生成的结果；`canceled` 时 `text` 只含已经流出的部分正文。 */
+/** 会话类型决定提示词措辞（群聊要说清「只有 @ 我 的消息才会触发」）。 */
+function scopeOfChat(talker: string): 'private' | 'group' {
+  return talker.endsWith('@chatroom') ? 'group' : 'private'
+}
+
+/**
+ * 把「上下文时间窗（小时）」换算成消息时间起点。
+ *
+ * 基准是**触发消息的时间**而不是当前时间：消息可能延迟处理（App 刚启动、积压补发），
+ * 用「现在」当基准会把本该回答的那一轮对话直接裁掉，模型甚至拿不到提问。
+ * @param anchorCreateTime - 触发消息的 createTime（秒）。
+ * @param contextWindowHours - 会话设置：0 表示不限。
+ * @returns 起点秒数；0 表示不做时间过滤。
+ */
+export function contextWindowStart(
+  anchorCreateTime: number,
+  contextWindowHours: number | undefined,
+): number {
+  const hours = Number(contextWindowHours)
+  if (!Number.isFinite(hours) || hours <= 0) return 0
+  const anchor = Number(anchorCreateTime)
+  if (!Number.isFinite(anchor) || anchor <= 0) return 0
+  return Math.max(0, Math.trunc(anchor - hours * 3600))
+}
+
+/** 一次性生成的结果；`canceled` 时 `text` 只含已经流出的部分正文。 */
 export interface ChatAiReplyGeneration {
   text: string
   canceled: boolean
@@ -68,26 +94,64 @@ export async function generateChatAiReply(
 ): Promise<ChatAiReplyGeneration> {
   const anchor = run.anchor
   const collectContext = deps.collectContext ?? collectChatAiReplyContext
-  const context = collectContext(
+  // 会话级「上下文时间窗」：只保留窗口内的消息。起点以**触发消息时间**为准，
+  // 而不是「现在」—— 积压补发时按现在算会把本该回答的那轮对话整个裁掉。
+  const sinceCreateTime = contextWindowStart(anchor.createTime, state.contextWindowHours)
+  let context = collectContext(
     deps.decryptedDir(),
     state.chatUsername,
     deps.selfUsername(),
     anchor.localId,
+    undefined,
+    sinceCreateTime,
   )
-  if (context.count === 0) throw new Error('当前会话没有可用文本')
-  let images: ChatAiReplyContextImage[] = []
-  if (context.imageCandidates !== undefined && context.imageCandidates.length > 0 && deps.decodeImages !== undefined) {
+  // 图片解码与语音转写互不依赖：并行跑，别让「等 whisper」把解码也一起拖住。
+  const imageCandidates = context.imageCandidates
+  const imageTask = (async (): Promise<ChatAiReplyContextImage[]> => {
+    if (imageCandidates === undefined || imageCandidates.length === 0 || deps.decodeImages === undefined) return []
     try {
-      images = await deps.decodeImages({
+      return await deps.decodeImages({
         decryptedDir: deps.decryptedDir(),
         talker: state.chatUsername,
-        candidates: context.imageCandidates,
+        candidates: imageCandidates,
       })
     } catch (e) {
       // 图片/表情是增强信息，解码失败不能阻断纯文本回复。
       deps.op('chat_ai_reply', false, 'decode media failed: ' + errorText(e))
+      return []
+    }
+  })()
+  // 语音先转文字再进上下文：否则模型只看到 `[语音]`，等于少了一整条对话。
+  let voiceTranscribed = 0
+  if (context.voiceCandidates !== undefined && context.voiceCandidates.length > 0
+    && deps.transcribeVoices !== undefined) {
+    const pendingCount = context.voiceCandidates.length
+    try {
+      const voiceTexts = await deps.transcribeVoices({
+        decryptedDir: deps.decryptedDir(),
+        talker: state.chatUsername,
+        localIds: context.voiceCandidates,
+      })
+      voiceTranscribed = voiceTexts.size
+      if (voiceTexts.size > 0) {
+        context = collectContext(
+          deps.decryptedDir(),
+          state.chatUsername,
+          deps.selfUsername(),
+          anchor.localId,
+          voiceTexts,
+          sinceCreateTime,
+        )
+      }
+      deps.op('chat_ai_reply', true,
+        'voice transcribed=' + String(voiceTexts.size) + '/' + String(pendingCount))
+    } catch (e) {
+      // 转写是增强：失败就保留 `[语音]` 占位，不能阻断整次回复。
+      deps.op('chat_ai_reply', false, 'transcribe voice failed: ' + errorText(e))
     }
   }
+  const images = await imageTask
+  if (context.count === 0) throw new Error('当前会话没有可用文本')
   // 只记录统计，不记录聊天正文：排查「为什么模型没看到某条消息」时，
   // 这条日志足以区分预算裁剪、图片预留与单条截断。
   const stats = context.stats
@@ -102,7 +166,7 @@ export async function generateChatAiReply(
   }
   const kb = await collectKbSnippetsForState(deps, state, context)
   const prompt = images.length > 0
-    ? buildChatAiReplyPrompt(context.lines, images.length)
+    ? buildChatAiReplyPrompt(context.lines, images.length, scopeOfChat(state.chatUsername))
     : context.prompt
   const systemPrompt = buildChatAiReplySystemPrompt({
     name: state.personaName,
@@ -116,19 +180,90 @@ export async function generateChatAiReply(
     { sessions: 1, messages: context.count },
     [systemPrompt, prompt],
   )
-  const generated = await deps.generate({
-    system: gatedSystem ?? systemPrompt,
-    prompt: gatedPrompt ?? prompt,
-    ...(images.length > 0 ? { images } : {}),
+  const sentSystem = gatedSystem ?? systemPrompt
+  const sentPrompt = gatedPrompt ?? prompt
+  // 留痕记「实际发出去的那一版」：隐私闸若改写过提示词，详情里看到的必须与模型收到的一致。
+  deps.writeTrace?.({
+    recordId: run.recordId ?? 0,
+    sourceRef: run.sourceRef,
     accountKey: state.accountKey,
     chatUsername: state.chatUsername,
-    ...(run.signal === undefined ? {} : { signal: run.signal }),
+    context: context.lines.join('\n'),
+    ...(kb === undefined || kb.length === 0 ? {} : { kb: kb.join('\n\n') }),
+    systemPrompt: sentSystem,
+    userPrompt: sentPrompt,
+    imageCount: images.length,
+    voiceCount: voiceTranscribed,
+    redacted: sentSystem !== systemPrompt || sentPrompt !== prompt,
+    stage: {
+      name: 'context',
+      at: Date.now(),
+      detail: 'messages=' + String(context.count)
+        + ' images=' + String(images.length)
+        + (kb === undefined ? '' : ' kb=' + String(kb.length))
+        + (sinceCreateTime > 0
+          ? ' window=' + String(state.contextWindowHours) + 'h'
+          : ''),
+    },
   })
+  const generateAt = Date.now()
+  let generated: ChatAiReplyGenerationResult
+  try {
+    generated = await deps.generate({
+      system: sentSystem,
+      prompt: sentPrompt,
+      ...(images.length > 0 ? { images } : {}),
+      accountKey: state.accountKey,
+      chatUsername: state.chatUsername,
+      ...(run.signal === undefined ? {} : { signal: run.signal }),
+    })
+  } catch (e) {
+    const error = errorText(e)
+    deps.writeTrace?.({
+      recordId: run.recordId ?? 0,
+      error,
+      finishedAt: Date.now(),
+      stage: { name: 'generate_failed', at: Date.now(), detail: 'elapsed=' + String(Date.now() - generateAt) + 'ms' },
+    })
+    throw e
+  }
   if (generated.canceled === true) {
-    return { text: generated.text.trim(), canceled: true }
+    const partial = generated.text.trim()
+    deps.writeTrace?.({
+      recordId: run.recordId ?? 0,
+      ...(generated.model === undefined ? {} : { model: generated.model }),
+      output: partial,
+      finishedAt: Date.now(),
+      stage: { name: 'generate_failed', at: Date.now(), detail: 'canceled' },
+    })
+    return { text: partial, canceled: true }
   }
   if (!generated.ok || generated.text.trim() === '') {
-    throw new Error(generated.error ?? '模型没有返回可用回复')
+    const error = generated.error ?? '模型没有返回可用回复'
+    deps.writeTrace?.({
+      recordId: run.recordId ?? 0,
+      ...(generated.model === undefined ? {} : { model: generated.model }),
+      error,
+      output: generated.text,
+      finishedAt: Date.now(),
+      stage: {
+        name: 'generate_failed',
+        at: Date.now(),
+        detail: 'elapsed=' + String(Date.now() - generateAt) + 'ms',
+      },
+    })
+    throw new Error(error)
   }
-  return { text: generated.text.trim(), canceled: false }
+  const text = generated.text.trim()
+  deps.writeTrace?.({
+    recordId: run.recordId ?? 0,
+    ...(generated.model === undefined ? {} : { model: generated.model }),
+    output: text,
+    stage: {
+      name: 'generated',
+      at: Date.now(),
+      detail: 'chars=' + String(text.length) + ' elapsed=' + String(Date.now() - generateAt) + 'ms',
+    },
+  })
+  return { text, canceled: false }
 }

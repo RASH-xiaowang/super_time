@@ -9,12 +9,20 @@ export declare const AI_REPLY_MIN_PEER_ENTRIES = 4;
 export declare const AI_REPLY_MIN_SELF_ENTRIES = 2;
 /** 单条正文进提示词前的默认最大字符数（按 code point 计）。 */
 export declare const AI_REPLY_MAX_LINE_CHARS = 600;
-/** 相邻消息间隔达到这个秒数时补一条时间标记。 */
-export declare const AI_REPLY_MARKER_GAP_SECONDS: number;
 /** 一张图片/表情在上下文预算里的保守 token 估算。 */
 export declare const AI_REPLY_IMAGE_TOKEN_ESTIMATE = 800;
 /** 为满足最低条数时，正文最多允许超出预算的倍数。 */
 export declare const AI_REPLY_BUDGET_HARD_OVERRUN = 1.35;
+/**
+ * 时间断层阈值：相邻两条消息间隔超过它，就认为上一段对话已经结束。
+ *
+ * 上下文最多跨 60 条、可能横跨好几天。模型看到几天前「我」交代过的事，
+ * 会把它当成**还没做完的待办**，于是替「我」重新追问一遍 —— 表现就是
+ * 「同一个问题被反复回复」。标出断层后，断层之前的内容只作背景。
+ */
+export declare const CHAT_AI_REPLY_TIME_GAP_SECONDS: number;
+/** 断层标记行：只出现在 `lines` 里，不进 `dialogueLines`（不参与检索）。 */
+export declare const CHAT_AI_REPLY_GAP_MARKER = "\uFF08\u4EE5\u4E0A\u662F\u66F4\u65E9\u7684\u5BF9\u8BDD\uFF0C\u4E0E\u672C\u6761\u6CA1\u6709\u76F4\u63A5\u5173\u7CFB\uFF09";
 /** 调用方可以按模型/场景覆盖的预算参数。 */
 export interface ChatAiReplyContextBudgetOptions {
     tokenBudget?: number;
@@ -22,7 +30,6 @@ export interface ChatAiReplyContextBudgetOptions {
     minPeer?: number;
     minSelf?: number;
     maxLineChars?: number;
-    gapSeconds?: number;
     imageCount?: number;
     imageTokenEstimate?: number;
     hardOverrun?: number;

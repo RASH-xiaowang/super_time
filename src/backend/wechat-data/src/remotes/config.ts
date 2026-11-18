@@ -10,7 +10,7 @@ import { generateKeysFile, getConfig, getKeysInfo, saveConfig, secretMigrationPe
 import { checkDecryptedIntegrity, queryDbHealth } from '../query/db-health.ts'
 import { queryWechatConfig } from '../query/settings.ts'
 import { getDbStatus } from '../query/status.ts'
-import { migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
+import { WHISPER_DEFAULT_MODEL, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
 import { AutoDbKeyResult, ConfigSnapshot, DbHealthSnapshot, DbIntegrityResult, DbStatusSnapshot, DecryptStatus, GenerateKeysResult, KeysInfoResult, OperationCategory, OperationStatus, SimpleResult, WechatConfigFull, WechatConfigPatch } from '../types.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
 import { openDenialReason } from '../query/path-policy.ts'
@@ -53,7 +53,7 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         api_port: Number(cfg['api_port'] ?? 5032),
         api_token: cellStr(cfg['api_token'] ?? ''),
         whisper_device: cfg['whisper_device'] === 'gpu' ? 'gpu' : 'cpu',
-        whisper_model: cellStr(cfg['whisper_model'] ?? 'medium'),
+        whisper_model: cellStr(cfg['whisper_model'] ?? WHISPER_DEFAULT_MODEL),
         whisper_threads: Number(cfg['whisper_threads'] ?? 0),
         whisper_models_dir: cellStr(cfg['whisper_models_dir'] ?? ''),
         whisper_bin: cellStr(cfg['whisper_bin'] ?? ''),

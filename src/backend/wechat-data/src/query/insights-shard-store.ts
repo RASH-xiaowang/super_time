@@ -32,14 +32,15 @@ export interface InsightsShardCacheEntry<T> {
  *
  * v2：会话键从「消息表物理哈希」迁移为真实微信 username。旧 v1 聚合里可能
  * 仍把 `md5(username)` 当联系人键，仅改读取逻辑无法洗掉这些存量值，必须换文件。
+ * v3：每条分片聚合带上按会话、按日的条数，供总览趋势直接加总，不再第二次打开分片。
  */
-const CACHE_VERSION = 2
+const CACHE_VERSION = 3
 const CACHE_FILE = 'insights-shards.v' + CACHE_VERSION + '.json'
 /** 单个缓存文件的大小上限：超过视为异常文件，不读（防止坏数据把启动拖住）。 */
 const MAX_BYTES = 16 * 1024 * 1024
 
 /**
- * 分片聚合磁盘缓存的位置：`<数据根>/cache/insights-shards.v2.json`
+ * 分片聚合磁盘缓存的位置：`<数据根>/cache/insights-shards.v3.json`
  * （`dec` 是 `<数据根>/decrypted`）。
  * @param dec - 已解密数据根。
  * @returns 缓存文件绝对路径。

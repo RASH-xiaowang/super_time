@@ -113,6 +113,8 @@ export interface ChatsViewProps {
     splitReply: boolean
     kbEnabled: boolean
     kbId: number
+    /** 上下文时间窗（小时）；0 = 不限。 */
+    contextWindowHours: number
     onToggle: () => void
     onScanNow: () => void
     onSavePersona: (input: {
@@ -121,6 +123,7 @@ export interface ChatsViewProps {
       splitReply: boolean
       kbEnabled: boolean
       kbId: number
+      contextWindowHours: number
     }) => Promise<boolean>
   }
   /** 会话列表的 AI 回复徽标与筛选；与当前会话的 aiReply 开关分开。 */
@@ -245,10 +248,8 @@ export interface ChatsViewProps {
       setSearch: React.Dispatch<React.SetStateAction<string>>
       setSearchMode: React.Dispatch<React.SetStateAction<'session' | 'message'>>
       setSelected: React.Dispatch<React.SetStateAction<Set<string>>>
-      setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
       setViewer: React.Dispatch<React.SetStateAction<{ images: ViewerImage[]; index: number } | null>>
       stats: { friends: number; groups: number; unread: number }
-      suggestOpen: boolean
       togglePinned: () => void
       typeStats: readonly { type: number; label: string; count: number }[]
       view: ChatView
@@ -562,7 +563,6 @@ interface ChatsMessageStreamProps {
   loadMore: () => Promise<void>
   reloadCurrent: () => Promise<void>
   selectedLocalId: number | null
-  suggestionInteractionLocked: boolean
   messagePoster: ChatsPosterController
   renderMsgItem: MsgRowRenderer
   openMessageAnalysis: (message: WechatMessage) => void
@@ -573,7 +573,7 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
   const {
     messages, messagesMatchSession, hasMore, msgLoading, msgError, msgItems,
     msgVirtualizer, messageVirtualization, msgScrollRef, msgEndRef, newMsgCount,
-    jumpToLatest, loadMore, reloadCurrent, selectedLocalId, suggestionInteractionLocked,
+    jumpToLatest, loadMore, reloadCurrent, selectedLocalId,
     messagePoster, renderMsgItem, openMessageAnalysis,
   } = props
   const previousScrollTopRef = useRef(0)
@@ -607,7 +607,7 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
       scrollRef={msgScrollRef}
       newMsgCount={newMsgCount}
       onJump={jumpToLatest}
-      interactionLocked={suggestionInteractionLocked}
+
       onScroll={onMessageScroll}
     >
       {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
@@ -641,8 +641,8 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
                 data-index={vi.index}
                 ref={msgVirtualizer.measureElement}
                 className={cssrows.msgVRow}
-                data-analysis-target={!suggestionInteractionLocked && item.kind === 'msg' && selectedLocalId === item.m.localId || undefined}
-                data-message-interaction-locked={suggestionInteractionLocked || undefined}
+                data-analysis-target={item.kind === 'msg' && selectedLocalId === item.m.localId || undefined}
+
                 data-poster-selectable={messagePoster.active && posterId > 0 || undefined}
                 data-poster-selected={messagePoster.active && posterSelected || undefined}
                 data-poster-self={messagePoster.active && posterHead?.isSender === 1 || undefined}
@@ -653,7 +653,7 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
                       messagePoster.toggle(posterId)
                     }
                   : undefined}
-                onClick={!suggestionInteractionLocked && !messagePoster.active && item.kind === 'msg' && isAnalyzableMessage(item.m)
+                onClick={!messagePoster.active && item.kind === 'msg' && isAnalyzableMessage(item.m)
                   ? () => { openMessageAnalysis(item.m) }
                   : undefined}
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start - messageVirtualization.scrollMargin}px)` }}
@@ -677,22 +677,21 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
 
 export function ChatsView({ state, batchExport, messageTools, messagePoster, notice, indexProgress, onCancelIndexBuild, onCancelMsgSearch, onBackToList, aiReply, aiReplyFilter, messageFileSave, messageVirtualization }: ChatsViewProps): React.JSX.Element {
   const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
-  dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
-  // 推荐回复只对单聊成立（群聊“回一句”无意义）；分析读写当前会话，群聊也适用。
-  const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
-  // 右栏一次只渲染一个内容域。分析优先，避免历史状态残留时两块同时出现。
-  const chatRightMode = analysisPaneOpen ? 'analysis' as const : suggestVisible ? 'suggest' as const : undefined
-  // 只有推荐回复真的占据右栏时才锁消息点击；AI 问答/资料抽屉临时占位时不能误锁。
+  dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setViewer, stats, togglePinned, typeStats, view, viewer } = state
+  // 右栏只有一块面板（「回复助手」）：打开即同时包含分析（这条消息怎么理解）与
+  // 推荐回复（可以这样回）。群聊没有「回一句」的语义，面板里只渲染分析那一段。
+  const chatRightMode = analysisPaneOpen ? 'assistant' as const : undefined
+  // AI 问答/资料抽屉临时占位时右栏被顶替，但**不再锁**消息点击 ——
+  // 合并后点消息就是切换分析对象，锁住反而让用户以为界面卡了。
   const chatRightPanelSuppressed = (aiOpen && aiEligible && aiTarget !== null) || groupInfoOpen || contactInfoOpen
-  const suggestionInteractionLocked = chatRightMode === 'suggest' && !chatRightPanelSuppressed && !messagePoster.active
   const posterSelectedItems = messagePoster.active
     ? posterItemsForSelection(msgItems, messagePoster.selectedIds)
     : []
   const posterSelectedCount = posterMessageCount(posterSelectedItems)
   const sidePanel = aiOpen && aiEligible && aiTarget ? 'ai' : groupInfoOpen ? 'group' : contactInfoOpen ? 'contact' : chatRightMode !== undefined ? 'chat' : undefined
   const { selectedLocalId, targetMessage, speaker, inlineAnalysis, openMessageAnalysis } = useChatsAnalysis({
-    curSession, msgItems, analysisPaneOpen, analysisTarget, suggestionInteractionLocked,
-    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull, setSuggestOpen,
+    curSession, msgItems, analysisPaneOpen, analysisTarget,
+    setAnalysisPaneOpen, setAnalysisTarget, setAiOpen, setAiFull,
     setContactInfoOpen, setGroupInfoOpen: groupInfo.setGroupInfoOpen,
   })
   // 图片预取：可见窗口上下若干行的图片提前低优先批量取回并写内存缓存，滚动时首帧命中、不闪占位。
@@ -728,8 +727,6 @@ export function ChatsView({ state, batchExport, messageTools, messagePoster, not
                 aiEligible={aiEligible}
                 aiOpen={aiOpen}
                 setAiOpen={setAiOpen} setAiFull={setAiFull}
-                suggestOpen={suggestOpen}
-                setSuggestOpen={setSuggestOpen}
                 analysisPaneOpen={analysisPaneOpen}
                 setAnalysisPaneOpen={setAnalysisPaneOpen}
                 openCalendar={openCalendar}
@@ -798,7 +795,7 @@ export function ChatsView({ state, batchExport, messageTools, messagePoster, not
               loadMore={loadMore}
               reloadCurrent={reloadCurrent}
               selectedLocalId={selectedLocalId}
-              suggestionInteractionLocked={suggestionInteractionLocked}
+
               messagePoster={messagePoster}
               renderMsgItem={renderMsgItem}
               openMessageAnalysis={openMessageAnalysis}
@@ -850,15 +847,16 @@ export function ChatsView({ state, batchExport, messageTools, messagePoster, not
       {/* 已编辑消息浮层：JSX 在 chats-edited-dialog.tsx（遮罩那一判在那里） */}
       <ChatsEditedDialog {...edited} />
 
-      {/* 右栏 = 推荐回复 / 消息分析二选一：
-          · 分析只跑当前点选的一条，结果来自本地模型；
-          · 群聊没有推荐回复，但仍可单独打开消息分析；
-          · AI 问答打开时顶替整个右栏，点击消息会先关闭 AI 问答再切回分析。 */}
+      {/* 右栏 = 一个面板「回复助手」，里面**同时**有两段内容：
+          · 上段「这条消息怎么理解」= 当前选中消息的研判（点消息即切换对象）；
+          · 下段「可以这样回」= 候选回复（只有单聊有，群聊「回一句」不成立）；
+          · 两段共用一个滚动区，不再各自开窗；
+          · AI 问答打开时顶替整个右栏。 */}
       {curSession !== null && chatRightMode !== undefined && !(aiOpen && aiEligible && aiTarget) && !groupInfoOpen && !contactInfoOpen && (
         <ChatRightPanel
           target={curSession}
-          onClose={() => { setSuggestOpen(false); setAnalysisPaneOpen(false) }}
-          mode={chatRightMode}
+          onClose={() => { setAnalysisPaneOpen(false) }}
+          allowSuggest={curSession.type === 'private'}
           analysisTargetId={selectedLocalId}
           analysisEntry={selectedLocalId === null ? undefined : inlineAnalysis.get(selectedLocalId)}
           analysisMessage={targetMessage}

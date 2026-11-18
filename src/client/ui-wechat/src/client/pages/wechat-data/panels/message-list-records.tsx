@@ -89,6 +89,8 @@ function MessageListRecordsHeader(
   // 已过期是「按设计不发送」，不能混进真正的失败数；只调整当前窗口口径。
   const supersededInWindow = props.records.filter(isSupersededAiReply).length
   const failedInWindow = Math.max(0, props.stats.failed - supersededInWindow)
+  /** AI 回复记录不走通用批删；批量模式里要给用户指出真正的删除入口。 */
+  const aiReplyInWindow = props.records.filter((record) => record.source === 'ai_reply').length
   return (
     <>
       <div className={css.statStrip}>
@@ -167,6 +169,14 @@ function MessageListRecordsHeader(
           onProbe={() => { void props.batch.runProbe() }}
           onDelete={() => { void props.batch.runDelete() }}
         />
+      )}
+      {props.batch.active && aiReplyInWindow > 0 && (
+        <div className={`${css.inlineNotice} ${css.noticeWarn}`} role="status">
+          <span>
+            当前窗口有 {String(aiReplyInWindow)} 条 AI 回复记录不进入批量删除（避免误删已付费的
+            模型产出或正在投递的预约）。请用行内的删除按钮，或表头「删除 AI 回复记录」按窗口清理。
+          </span>
+        </div>
       )}
       {aiWaitingConfig > 0 && (
         <div className={`${css.inlineNotice} ${css.noticeWarn}`} role="status">

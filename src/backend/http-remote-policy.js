@@ -98,7 +98,8 @@ const REMOTE_SAFE_BY_FAMILY = {
     // 带令牌的 Webhook 地址读取都在下面的本机写侧 / D 族。
     'listMessageListRecords', 'listMessageListRules',
     // 会话级 AI 回复的状态是纯读（不含 Webhook/模型凭据）；开关写侧在 D 族。
-    'getChatAiReplyState', 'listEnabledChatAiReplyStates',
+    // getChatAiReplyTrace 也只读本机自建留痕表（不含 Webhook 地址或模型凭据）。
+    'getChatAiReplyState', 'listEnabledChatAiReplyStates', 'getChatAiReplyTrace',
   ],
   '知识库': [
     'getKbs', 'getKbFiles', 'getKbFileChunks', 'getNotes', 'saveNote', 'deleteNote',
@@ -122,7 +123,7 @@ const REMOTE_SAFE_BY_FAMILY = {
   '健康与状态（只读）': ['getDbHealth', 'getDbStatus', 'getDecryptStatus', 'getDataRevision'],
   '隐私体检（只读）': ['getPrivacyState', 'getPrivacyScan', 'getPrivacyAuditRows'],
   '操作日志（只读）': ['getOperationLog'],
-  '本地决策分析': ['analyzeMessages', 'analyzeVisibleMessages', 'cancelLayaAnalysis'],
+  '消息分析（只读）': ['analyzeMessage'],
 }
 
 /**
@@ -165,7 +166,6 @@ const LOCAL_ONLY_BY_FAMILY = {
   'B 知识库加文件：入参是本机文件路径，远程端给不出': ['addKbFiles'],
   'C 引擎与模型下载 / 安装（长任务 + 落盘）': [
     'installWhisperEngine', 'downloadWhisperModel', 'cancelWhisperDownload', 'getWhisperStatus',
-    'adoptLayaModel', 'downloadLayaModel', 'cancelLayaDownload', 'unloadLaya', 'getLayaStatus',
   ],
   'C 重活：整库解密 / 修复 / 索引重建 / 批量取图 / 批量转写': [
     'decryptAllDatabases', 'decryptAllImages', 'upgradeDecodedImages', 'repairCorruptDbs',

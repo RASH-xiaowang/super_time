@@ -159,14 +159,6 @@ function keyOf(
   if (chat.error !== undefined) {
     return { account: textOf(accountKey, ACCOUNT_MAX), username: '', displayName: chat.displayName, error: chat.error }
   }
-  if (chat.username !== '' && chat.type === 'group') {
-    return {
-      account: textOf(accountKey, ACCOUNT_MAX),
-      username: '',
-      displayName: chat.displayName,
-      error: 'AI 回复当前仅支持单聊',
-    }
-  }
   return {
     account: textOf(accountKey, ACCOUNT_MAX),
     username: chat.username,

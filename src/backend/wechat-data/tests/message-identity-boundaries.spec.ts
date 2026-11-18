@@ -167,23 +167,25 @@ describe('legacy hash mutation boundaries', () => {
     expect(webhook.ok, webhook.ok ? '' : webhook.error).toBe(true)
     expect(readChatAiReplyDefaultWebhook(root, 'wxid_self', personHash).configured).toBe(true)
 
-    const rejectedGroup = saveChatAiReplySetting(root, {
+    const acceptedGroup = saveChatAiReplySetting(root, {
       accountKey: 'wxid_self',
       chatUsername: roomHash,
       chatName: '',
       enabled: true,
       provider: 'dsh-wechat-bridge',
     })
-    expect(rejectedGroup.ok).toBe(false)
-    expect(rejectedGroup.error).toContain('仅支持单聊')
+    // 2026-11-18 起群聊也能开启（只有 @我 的消息会触发）。
+    expect(acceptedGroup.ok, acceptedGroup.ok ? '' : acceptedGroup.error).toBe(true)
 
     const db = new DatabaseSync(taskDbPath(root), { readOnly: true })
     try {
       const taskRow = db.prepare('SELECT chat_username FROM task_info').get() as { chat_username?: string }
-      const aiRow = db.prepare('SELECT chat_username FROM chat_ai_reply_settings').get() as { chat_username?: string }
+      // AI 设置现在有单聊与群聊两行（2026-11-18 起群聊也支持），按集合比对而不是只取第一行。
+      const aiRows = (db.prepare('SELECT chat_username FROM chat_ai_reply_settings').all() as Array<{ chat_username?: string }>)
+        .map((row) => row.chat_username).sort()
       const hookRow = db.prepare('SELECT chat_username FROM chat_ai_reply_defaults').get() as { chat_username?: string }
       expect(taskRow.chat_username).toBe(room)
-      expect(aiRow.chat_username).toBe(person)
+      expect(aiRows).toEqual([person, room].sort())
       expect(hookRow.chat_username).toBe(person)
     } finally {
       db.close()

@@ -7,7 +7,7 @@
  */
 import { getConfig, saveConfig } from '../query/config.ts'
 import { transcribeVoiceBatch } from '../query/voice-transcribe.ts'
-import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from '../query/whisper.ts'
+import { WHISPER_DEFAULT_MODEL, WHISPER_DOWNLOAD_FILES, installWhisperEngine, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from '../query/whisper.ts'
 import { OperationCategory, OperationStatus, VoiceTranscribeResult, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -33,7 +33,7 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
       const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
       const engine = whisperEnginePath(configBin, modelsDir)
       if (!engine) { rc.op('task', 'transcribe_voice_batch', 'fail', '', '未检测到 whisper.cpp 引擎'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」，或设 DSH_WECHAT_WHISPER_BIN）' } }
-      const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
+      const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : WHISPER_DEFAULT_MODEL
       const limit = Math.max(1, Math.min(Math.floor(options?.limit ?? 50), 200))
       const tr: WhisperTranscribing = { active: true, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
       rc.setWhisperTranscribing(tr)

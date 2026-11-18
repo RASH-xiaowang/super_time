@@ -6,8 +6,8 @@ import { DatabaseSync } from './db-open.ts'
 import { raiseAnalyticsCache } from '../sqlite-connection.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
-import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { yieldToLoop } from './search-build.ts'
 import { queryTraceBegin, queryTraceMark } from './query-trace.ts'
 import { loadSigCached, saveSigCached } from './sig-disk-cache.ts'
 
@@ -21,9 +21,9 @@ function overviewCachePath(dec: string): string {
   return join(dirname(dec), 'cache', 'overview.v1.json')
 }
 import { classifyPacked } from './resource-classify.ts'
-import { withDb, withDbAsync } from './db-open.ts'
-import { queryContacts } from './contacts.ts'
-import { displayNameForUsername } from './message-identity.ts'
+import { withDb } from './db-open.ts'
+import { queryContactStats } from './contacts.ts'
+import { momentAuthorsFromScan, scanMomentsShared } from './overview-moments-scan.ts'
 
 interface StorageCategory { label: string; count: number; size: number }
 interface MomentsAuthorStat { username: string; name: string; enterpriseName?: string; posts: number }
@@ -57,20 +57,6 @@ function countRows(path: string, table: string, where = ''): number {
   }
 }
 
-/** Stringify a DB cell. */
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  if (v instanceof Uint8Array) return new TextDecoder('utf-8', { fatal: false }).decode(v)
-  return ''
-}
-
-/** 朋友圈 XML 里的第一个 <nickname> 显示名。 */
-function xmlNickname(xml: string): string {
-  const m = xml.match(/<nickname>([^<]*)<\/nickname>/)
-  return m ? (m[1] ?? '').replace(/&amp;/g, '&') : ''
-}
 /**
  * Count revoked-message cache rows across every message shard. The cache
  * table (`_weflow_anti_revoke_deleted_cache`) lives in whichever shard holds
@@ -132,7 +118,7 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
     queryTraceMark('overview', 'disk-hit')
     return diskHit
   }
-  const cstats = queryContacts(dec).stats
+  const cstats = queryContactStats(dec)
   queryTraceMark('overview', 'contacts')
   const sessions = countRows(join(dec, 'session', 'session.db'), 'SessionTable')
   const groups = cstats.group ?? 0
@@ -178,57 +164,11 @@ async function computeOverview(dec: string, sig: string): Promise<OverviewResult
   }
   queryTraceMark('overview', 'resource', total_count)
 
-  // moments authors (Top 20)
-  const moments_authors: MomentsAuthorStat[] = []
-  const snsPath = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
-  if (existsSync(snsPath)) {
-    try {
-      // `withDbAsync`（不是 `withDb`）：下面游标要 `await yieldToLoop()`，而同步版的
-      // `finally` 会在第一次让出时就把连接关掉（见 `db-open.ts:70-83`）。
-      await withDbAsync(snsPath, async (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-        if (!has) return
-        const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
-        const uname = cols.has('user_name') ? 'user_name' : 'userName'
-        const cname = cols.has('content') ? 'content' : 'Content'
-        const meta = contactMeta(dec)
-        const names = meta.names
-        const enterpriseNames = meta.enterpriseNames
-        const authorMap = new Map<string, { name: string; enterpriseName?: string; posts: number }>()
-        // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，`.all()` 会把整表先物化成数组，
-        // 而这里只是逐条累加一个 Map —— 读完即释放。
-        const sql = `SELECT ${uname} AS u, ${cname} AS c FROM SnsTimeLine`
-        let sinceYield = 0
-        for (const r of db.prepare(sql).iterate() as Iterable<{ u: string; c?: unknown }>) {
-          const u = cellStr(r.u)
-          if (!u) continue
-          const cur = authorMap.get(u)
-          if (cur) cur.posts += 1
-          else {
-            const enterpriseName = enterpriseNames.get(u)?.trim()
-            authorMap.set(u, {
-              name: displayNameForUsername(u, names, xmlNickname(cellStr(r.c))),
-              ...(enterpriseName ? { enterpriseName } : {}),
-              posts: 1,
-            })
-          }
-          // 2026-09-28：行级让出（同 `wordcloud.ts` 的双阈值口径）。
-          sinceYield += 1
-          if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
-        }
-        const sorted = Array.from(authorMap.entries())
-          .map(([username, v]) => ({
-            username,
-            name: v.name,
-            ...(v.enterpriseName ? { enterpriseName: v.enterpriseName } : {}),
-            posts: v.posts,
-          }))
-          .sort((a, b) => b.posts - a.posts)
-          .slice(0, 20)
-        for (const a of sorted) moments_authors.push(a)
-      })
-    } catch { /* no sns */ }
-  }
+  // moments authors (Top 20)。整表扫描与洞察共用同一份签名缓存。
+  let moments_authors: MomentsAuthorStat[] = []
+  try {
+    moments_authors = await scanMomentsShared(dec).then((scan) => momentAuthorsFromScan(scan, dec))
+  } catch { /* no sns */ }
   queryTraceMark('overview', 'sns', moments_authors.length)
 
   const result: OverviewResult = {

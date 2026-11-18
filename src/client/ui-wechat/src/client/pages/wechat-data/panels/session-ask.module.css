@@ -1,6 +1,6 @@
 /* 「AI 问答」会话级面板，同时是推荐/分析共用右栏的外壳。
-   AI 问答打开时接管消息流，形成单栏阅读面，不再和聊天记录左右对半；
-   会话列表默认保留，全屏态（data-full）再收起列表。
+   2026-11-18 起与「推荐回复」同宽同位置停靠在消息流右侧（聊天记录始终可见），
+   只有头部的「展开为全宽」把面板撑成独占阅读面（`.panel[data-full]`）。
    推荐/分析仍按 320–420px 右栏使用同一外壳。 */
 
 .panel {
@@ -45,30 +45,11 @@
   min-width: 0;
 }
 .title { flex: 0 0 auto; font-size: 13px; font-weight: 650; color: var(--nm-text-1); line-height: 1.4; }
-.scopeChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: min(42vw, 320px);
-  padding-left: 8px;
-  border-left: 1px solid var(--nm-border);
-  color: var(--nm-text-3);
-  line-height: 1.4;
-}
-.scopePrefix {
+/* 范围提示（与「推荐回复」的「依据 · N 条对话」同一位置语言）：靠右、低调。 */
+.scopeHint {
   flex: 0 0 auto;
   color: var(--nm-text-3);
   font-size: 10.5px;
-}
-.scopeChip .scopeName {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--nm-text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .scopeRow {
@@ -213,19 +194,37 @@
   flex-shrink: 0;
   width: min(calc(100% - 32px), 720px);
   margin-inline: auto;
-  padding: var(--nm-s-1) var(--nm-s-2) var(--nm-s-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--nm-s-2) var(--nm-s-2) var(--nm-s-1);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-xl);
   background: color-mix(in srgb, var(--nm-bg-card) 92%, var(--nm-text-1) 3%);
   box-shadow: 0 1px 2px color-mix(in srgb, #000 5%, transparent);
   transition: background 0.2s ease, border-color 0.2s ease;
 }
+/* 输入框与发送键**同一行**、底部对齐（与「微信问答」主面板同构）：
+   发送键贴在输入框右下角，而不是掉到下一行的右侧。 */
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
 .composer:focus-within {
   border-color: color-mix(in srgb, var(--nm-cyan) 32%, var(--nm-border));
   background: var(--nm-bg-card);
 }
+/* 输入框：透明无边框（容器本身就是那个面），随行数自动增高（JS 控高）。
+   `flex: 1 1 auto; min-width: 0` 必须显式写 —— 否则 textarea 用固有宽度（约 20 列），
+   发送键会贴在它右边而不是整行右端。 */
 .input {
-  display: block; width: 100%; padding: var(--nm-s-2) 10px 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  display: block;
+  padding: var(--nm-s-2) var(--nm-s-1) var(--nm-s-1);
   font: inherit; font-size: 12.5px; line-height: 1.55;
   color: var(--nm-text-1); background: transparent;
   border: none; outline: none; resize: none;
@@ -246,8 +245,21 @@ textarea.input:focus-visible { outline: none; }
   min-height: 22px;
   padding: 0;
 }
-.footHint { font-size: 10px; color: var(--nm-text-3); }
-.footSpacer { flex: 1 1 auto; }
+/* 出处说明：这一行右端的低调提示（原先占输入区下方整整一行）。
+   容器窄到 400px 以下时隐藏 —— 那一档连「优化提问」都快放不下，
+   而这句说明只是补充，不是操作。 */
+.footHint {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--nm-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 400px) {
+  .footHint { display: none; }
+}
 .send {
   flex-shrink: 0;
   display: grid; place-items: center;
@@ -309,16 +321,6 @@ textarea.input:focus-visible { outline: none; }
   animation: sa-spin 0.7s linear infinite;
 }
 @keyframes sa-spin { to { transform: rotate(360deg); } }
-
-/* ── 底部说明 ── */
-.note {
-  flex-shrink: 0;
-  width: min(calc(100% - 32px), 720px);
-  margin-inline: auto;
-  padding: 4px 12px 6px;
-  text-align: center;
-  font-size: 10px; color: var(--nm-text-3);
-}
 
 /* ── 回答脚注行：依据 + 反馈 + 沉淀合成一行（与「微信问答」同一布局）──
    旧实现只有一行依据；补上反馈与沉淀后仍压成一行（依据占满剩余、按钮靠右），

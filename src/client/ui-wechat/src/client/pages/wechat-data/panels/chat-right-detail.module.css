@@ -1,0 +1,192 @@
+/* 右栏「回复助手」的详情视图：过程留痕。
+ *
+ * 只做排版，不发请求。320–420px 宽的栏里要装下上下文、提示词与模型原始输出，
+ * 所以大段文本一律可折叠 + 限高滚动（32vh），并把提示词与原始输出用等宽字体
+ * 展示 —— 时间前缀与「发言人：」只有等宽才对得齐。
+ *
+ * 几何一律走令牌（UI-GEOMETRY-SPEC：新 CSS 文件零容忍）。 */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  padding: 12px 16px 16px;
+  min-width: 0;
+}
+
+/* 返回行：左「← 返回」，右一句「只展示过程」。 */
+.introRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.backBtn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.backBtn:hover {
+  border-color: var(--nm-border-active);
+  background: var(--nm-bg-hover);
+}
+
+.introHint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+/* 两段（分析 / 推荐回复）：用一条上边框分开，段内不再套卡片边框。 */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  min-width: 0;
+  padding-top: var(--nm-s-3);
+  border-top: 0.5px solid var(--nm-border);
+}
+
+.section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.sectionTitle {
+  color: var(--nm-text-2);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.sectionHint {
+  min-width: 0;
+  color: var(--nm-text-3);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+/* 被分析的那条原文：左侧竖线 + 次要色，与正文区分开。 */
+.quote {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--nm-border);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+}
+
+.metaRow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.metaRow dt {
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+}
+
+.metaRow dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* 可折叠文本块。 */
+.block {
+  min-width: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.blockHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.blockHead::-webkit-details-marker {
+  display: none;
+}
+
+.blockMeta {
+  flex: none;
+  color: var(--nm-text-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.pre {
+  margin: 0;
+  max-height: 32vh;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.pre[data-empty='true'] {
+  color: var(--nm-text-3);
+}
+
+.muted {
+  margin: 0;
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}

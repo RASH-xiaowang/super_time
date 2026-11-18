@@ -77,7 +77,7 @@ describe('insights-shard-store', () => {
     const path = insightsShardCachePath(join(dir, 'decrypted'))
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify({
-      version: 2,
+      version: 3,
       entries: [{ key: 'ok', sig: 's', agg: { n: 1 } }, { key: 'no-sig', agg: {} }, { sig: 'no-key', agg: {} }, null],
     }), 'utf8')
     const loaded = loadInsightsShardCache(path)
@@ -89,7 +89,7 @@ describe('insights-shard-store', () => {
     const path = insightsShardCachePath(join(dir, 'decrypted'))
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify({
-      version: 1,
+      version: 2,
       entries: [{ key: 'old', sig: 's', agg: { n: 1 } }],
     }), 'utf8')
     expect(loadInsightsShardCache(path).size).toBe(0)
@@ -100,7 +100,7 @@ describe('insights-shard-store', () => {
     const blocker = join(dir, 'blocker')
     writeFileSync(blocker, 'x', 'utf8')
     // 让父目录是一个文件 ⇒ mkdirSync 失败
-    const path = join(blocker, 'cache', 'insights-shards.v2.json')
+    const path = join(blocker, 'cache', 'insights-shards.v3.json')
     expect(() => saveInsightsShardCache(path, [])).not.toThrow()
     expect(saveInsightsShardCache(path, [])).toBe(false)
   })

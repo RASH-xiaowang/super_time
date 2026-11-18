@@ -402,10 +402,10 @@ export const MUTATIONS_BATCH3B = [
   },
   {
     id: "M270-overview-insights-helper-forgots-close",
-    why: "overview-insights 的 withDb 换成不关连接的本地实现 ⇒ countRows 的「表不在就返回 0」那条早退漏句柄，总览面板逐库数行数时成片泄漏。锚点带着 withDbAsync 一起换（这一份文件两个助手都用），所以 to 里把它原样留着",
+    why: "overview-insights 的 withDb 换成不关连接的本地实现 ⇒ countRows 的「表不在就返回 0」那条早退漏句柄，总览面板逐库数行数时成片泄漏。该文件现在只 import withDb（朋友圈扫描搬到 overview-moments-scan.ts 后不再需要 withDbAsync）",
     file: "src/backend/wechat-data/src/query/overview-insights.ts",
-    from: "import { withDb, withDbAsync } from './db-open.ts'",
-    to: "import { withDbAsync } from './db-open.ts'; const withDb = <T,>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file, { readOnly: true }); return fn(db) }",
+    from: "import { withDb } from './db-open.ts'",
+    to: "const withDb = <T,>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file, { readOnly: true }); return fn(db) }",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
   {

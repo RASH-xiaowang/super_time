@@ -30,20 +30,16 @@ const data = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'qu
 const remotes = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'remotes', 'summaryrec.ts'), 'utf8')
 
 describe('推荐回复的接线', () => {
-  it('入口是「右栏常驻面板」而不是「头部按钮」（2026-09-25 改），且仍只对单聊出现', () => {
-    // 为什么改：推荐回复从「点头部按钮切出来的第三栏」改成了**右栏的默认内容**
-    // （产品要求「左分析、右推荐回复」两个面板并排），按钮随之移除 ——
-    // 否则同一功能会有两个入口（一个按钮 + 一个已经常驻的面板）。
-    // 守卫的语义没变：**只对单聊出现**（群聊里「回一句」不成立）+ **必须有一个入口**。
+  it('入口是右栏「回复助手」（一个面板），候选段仍然只对单聊出现', () => {
+    // 2026-11-18：分析与推荐回复合并成一个面板，入口也合成一条「回复助手」——
+    // 因此不再有独立的「推荐回复」菜单项，候选段由组合层的 `allowSuggest` 控制。
     expect(chats.includes('推荐回复：按这段对话'), '头部按钮已随需求移除，不该再加回来').toBe(false)
-    // 推荐回复与「分析」共用组合层，但组合层一次只显示一个内容域。
     const at = chats.indexOf('<ChatRightPanel')
     expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
-    const around = chats.slice(Math.max(0, at - 420), at)
-    // 右栏先由 `suggestVisible` 判定单聊可见性，再收敛为唯一的 `chatRightMode`。
-    // 这样即使历史状态里两个开关同时为真，挂载条件也只会渲染一个内容域。
-    expect(around.includes('chatRightMode'), '右栏挂载必须由互斥模式参与决定').toBe(true)
-    expect(chats.includes("const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'"),
+    const around = chats.slice(Math.max(0, at - 420), at + 400)
+    expect(around.includes('chatRightMode'), '右栏挂载必须由打开状态参与决定').toBe(true)
+    // 群聊里「替你回一句」没有对象：候选段必须能被整段关掉。
+    expect(around.includes("allowSuggest={curSession.type === 'private'}"),
       '推荐回复仍只对单聊出现（「回一句」在群里不成立）').toBe(true)
   })
 
@@ -53,10 +49,9 @@ describe('推荐回复的接线', () => {
     // 条件在标签**之前**（JSX 的 `{cond && (<Comp .../>)}`），所以两边都要看。
     const around = chats.slice(Math.max(0, at - 300), at + 400)
     expect(around.includes('target={curSession}'), '面板必须拿到当前会话（否则读取范围会退化成「没有范围」）').toBe(true)
-    // 「只对单聊」不再写在挂载条件里（群聊要能单独看分析）⇒ 改钉组合层的渲染条件。
-    expect(around.includes('mode={chatRightMode}'), '右栏模式必须由当前内容决定').toBe(true)
-    expect(chats.includes("analysisPaneOpen ? 'analysis' as const : suggestVisible ? 'suggest' as const : undefined"),
-      '两块同时有状态时也必须只选一个内容域').toBe(true)
+    // 合并后只有一个开关：打开即渲染这一个面板（内部两段同时在场）。
+    expect(chats.includes("const chatRightMode = analysisPaneOpen ? 'assistant' as const : undefined"),
+      '右栏只有「打开 / 收起」两态，不该再有互斥的两个内容域').toBe(true)
   })
 
   it('数据层按 talker 取上下文（跨会话隔离靠它）', () => {
@@ -83,20 +78,18 @@ describe('推荐回复的接线', () => {
     expect(data).toContain('const targetLine = targetText !== \'\' && targetSpeaker !== undefined')
   })
 
-  it('推荐回复打开时锁住消息区点击，不能切到分析面板', () => {
+  it('点消息即切换分析对象，不再因为「推荐回复开着」而锁住消息区', () => {
+    // 2026-11-18：两块合并进同一个面板后，上面的研判就是**针对选中那条消息**的，
+    // 锁住点击等于让用户没法换对象。锁已移除（只保留批量海报模式自己的保护）。
+    expect(chats).not.toContain('suggestionInteractionLocked')
     expect(chats).toContain(
-      "const suggestionInteractionLocked = chatRightMode === 'suggest' && !chatRightPanelSuppressed && !messagePoster.active",
-    )
-    expect(chats).toContain('interactionLocked={suggestionInteractionLocked}')
-    expect(chats).toContain('data-message-interaction-locked={interactionLocked || undefined}')
-    expect(chats).toContain('event.preventDefault()')
-    expect(chats).toContain('event.stopPropagation()')
-    expect(chats).toContain(
-      "onClick={!suggestionInteractionLocked && !messagePoster.active && item.kind === 'msg'",
+      "onClick={!messagePoster.active && item.kind === 'msg'",
     )
     const analysis = readFileSync(join(HERE, 'chats-analysis.ts'), 'utf8')
-    expect(analysis).toContain('if (suggestionInteractionLocked) return')
-    expect(analysis).toContain('suggestionInteractionLocked,')
+    expect(analysis).not.toContain('suggestionInteractionLocked')
+    // 点消息仍然要能打开面板并定位到该条。
+    expect(analysis).toContain('setAnalysisPaneOpen(true)')
+    expect(analysis).toContain('setAnalysisTarget({ talker: curSession.username, localId: message.localId })')
   })
 
   it('面板里有知识库下拉：默认跟随全局、可改、且有「不用知识库」', () => {

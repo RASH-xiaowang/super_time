@@ -198,6 +198,8 @@ export async function apiSuggestReplies(options: {
   kbId?: number
   count?: number
   targetLocalId?: number
+  /** 跳过缓存重新生成（「换一批」用它）。 */
+  force?: boolean
 }): Promise<ReplySuggestResult> {
   return unwrap(await remote().suggestReplies(options))
 }

@@ -2,7 +2,7 @@
  * WechatDataGateway 方法面 · 消息列表 / 回复投递规则。
  *
  * 纯读方法可远程访问；规则写入、手动插入、重发与带令牌的 Webhook 信息只允许桌面端。
- * 该层位于 `GatewayLayaOps` 与 `GatewayTaskCenter` 之间，任务触发扫描通过
+ * 该层位于 `GatewayAnalysisOps` 与 `GatewayTaskCenter` 之间，任务触发扫描通过
  * {@link GatewayMessageList.scheduleMessageListDispatch} 把新问候推向已配置的下游。
  */
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
@@ -25,7 +25,7 @@ import type {
   MessageListWebhookProbe,
 } from './types.ts'
 import { stageMessageListAttachment } from './query/message-list-attachments.ts'
-import { GatewayLayaOps } from './gateway-laya-ops.ts'
+import { GatewayAnalysisOps } from './gateway-analysis-ops.ts'
 import { createMessageListRemotes } from './remotes/message-list.ts'
 import { rawWechatBase } from './gateway-support.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
@@ -105,7 +105,7 @@ function normalizeBaseUrl(raw: unknown): string {
   }
 }
 
-export abstract class GatewayMessageList extends GatewayLayaOps {
+export abstract class GatewayMessageList extends GatewayAnalysisOps {
   @Remote('listMessageListRecords')
   listMessageListRecords(options?: MessageListQuery): MessageListSnapshot {
     return this.messageListRemotes().listMessageListRecords(options)

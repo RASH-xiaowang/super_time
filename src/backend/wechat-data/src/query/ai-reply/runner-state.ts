@@ -186,7 +186,16 @@ export async function settleChatAiReplyRun(
     true,
   )
   if (updated === 'guard-mismatch') run.leaseLost = true
-  if (updated === 'updated') deps.op('chat_ai_reply', stage === 'success', opDetail)
+  if (updated === 'updated') {
+    deps.op('chat_ai_reply', stage === 'success', opDetail)
+    // 终态留痕：完成时间与最终原因，详情里可直接看出「成/败在哪一步」。
+    deps.writeTrace?.({
+      recordId: run.recordId ?? 0,
+      finishedAt: Date.now(),
+      ...(stage === 'failed' ? { error } : {}),
+      stage: { name: stage, at: Date.now(), detail: opDetail },
+    })
+  }
   return updated === 'updated'
 }
 

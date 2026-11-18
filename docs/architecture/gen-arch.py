@@ -297,7 +297,7 @@ def fig_architecture():
         ("wechat-host.js  适配层",
          ["737 行 · 方法名枚举 · 参数守卫两档", "结果缓存 300 条 / 64MB（含负缓存）", "cancelPlan 映射 jobId · 慢调用落审计"]),
         ("Gateway 继承链（12 层）",
-         ["Core→Read→AskOps→MediaOps→ExportOps→VoiceOps", "→ConfigOps→LayaOps→MessageList→ChatAiReply", "→TaskCenter→DbHealth · 方法面唯一出处"]),
+         ["Core→Read→AskOps→MediaOps→ExportOps→VoiceOps", "→ConfigOps→AnalysisOps→MessageList→ChatAiReply", "→TaskCenter→DbHealth · 方法面唯一出处"]),
         (f"remotes/**  {FACTS['remotes_files']} 个域处理器",
          ["ask · kb · media · export · backup · summary", "task-center · graphsearch · voicellm", "annual-narr · wordcloud …"]),
     ])
@@ -316,8 +316,8 @@ def fig_architecture():
          ["sync-watch（WAL 监听）→ sync-trigger 合并器", "sync-page-diff 页级补丁 · sync-tail-patch 尾部追加", "SYNC_INTERVAL_MS / 兜底快速轮询"]),
         ("连接生命周期",
          ["withDb（只读）/ withWritableDb / withDbAsync", "sqlite-connection.ts 唯一构造器", "句柄必须关净：整棵树可删才判通过"]),
-        ("laya/**  本地决策模型",
-         ["onnxruntime-node + JS 分词（无网络）", "逐条消息分析与批量分析", "模型 1.26GB，可下载 / 采纳"]),
+        ("query/analysis/**  消息分析",
+         ["一次带隐私闸的对话模型调用 · 严格 JSON", "单聊：意图 / 情绪 / 怎么回", "群聊：是否在找你 · 要不要接 · 公开或私聊"]),
         ("原生桥接",
          ["koffi（win32 进程内存读写）· wx_silk.exe", "whisper 引擎 + ggml 模型 · VoipEngine.dll", "img_helper.dll（实验：原图自动下载）"]),
     ])
@@ -790,7 +790,7 @@ flowchart TB
     K5["keys/** 11 文件"]
     K6["retrieval/** + kb/**"]
     K7["answer-runtime/** + tools/**"]
-    K8["laya/** 本地模型"]
+    K8["query/analysis/** 消息分析"]
   end
 
   subgraph DATA["数据与持久化"]

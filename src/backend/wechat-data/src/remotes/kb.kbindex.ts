@@ -39,7 +39,7 @@ export async function kbBuildIndexIn(
   // 取消槽由 gateway 持有（与消息域的构建各占一格，互相不会打断）。
   const ctl = rc.kbIndexSignal(options?.jobId)
   // kb.ts 的 ctx 是**完整** Cordis Context（这里还用它做别的事），所以不能像
-  // laya/graphsearch 那样把字段收窄成 `{ emit }`；这里就地收窄这一次调用。
+  // graphsearch 那样把字段收窄成 `{ emit }`；这里就地收窄这一次调用。
   const emit = rc.ctx.emit as (name: string, ...args: unknown[]) => void
   let lastAt = 0
   const onProgress = (done: number, total: number): void => {

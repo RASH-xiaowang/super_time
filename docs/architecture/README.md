@@ -103,7 +103,7 @@ TypertRemoteService
                   └─ GatewayExportOps 导出/备份
                       └─ GatewayVoiceOps 语音
                           └─ GatewayConfigOps 配置/任务
-                              └─ GatewayLayaOps 本地模型
+                              └─ GatewayAnalysisOps 消息分析
                                   └─ GatewayMessageList 消息列表
                                       └─ GatewayChatAiReply 会话 AI 回复
                                           └─ GatewayTaskCenter 任务中心

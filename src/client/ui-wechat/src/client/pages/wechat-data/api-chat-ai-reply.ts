@@ -107,7 +107,7 @@ export async function apiSetChatAiReplyEnabled(options: {
   return result
 }
 
-/** 保存当前单聊的 AI 回复人格与知识库设置；只允许桌面端写入。 */
+/** 保存当前会话的 AI 回复人格、知识库与上下文时间窗设置；只允许桌面端写入。 */
 export async function apiSetChatAiReplyPersona(options: {
   chatUsername: string
   chatName?: string
@@ -116,6 +116,8 @@ export async function apiSetChatAiReplyPersona(options: {
   splitReply?: boolean
   kbEnabled?: boolean
   kbId?: number
+  /** 上下文时间窗（小时）；0 = 不限，上限 720。 */
+  contextWindowHours?: number
   expectedRevision?: number
 }): Promise<ChatAiReplyMutationResult> {
   const result = unwrap(await remote().setChatAiReplyPersona(options))
@@ -168,15 +170,20 @@ export async function apiRegenerateChatAiReplyRecord(
 }
 
 /**
- * 桌面端专用：整组清理空白且从未发送的 AI 回复预约/失败记录。
+ * 桌面端专用：整组删除 AI 回复记录。
  *
- * 不可撤销；后端只放宽 failed 状态，正文、图片、job、发送尝试与投递事实都会
- * 让整组跳过。记录不存在算 skipped，因此重复调用是幂等的。
+ * 默认只删空白且从未发送的预约/失败记录。传 `includeTerminal` 时放开已收口的终态
+ * 记录（成功 / 已发出未确认 / 失败）；在途状态（生成中 / 投递中 / 下游任务未结束）
+ * 后端一律跳过。不可撤销；记录不存在算 skipped，因此重复调用是幂等的。
  */
 export async function apiDeleteAiReplyReservations(
   ids: number[],
+  options: { includeTerminal?: boolean } = {},
 ): Promise<AiReplyReservationDeleteResult> {
-  const result = unwrap(await remote().deleteAiReplyReservations({ ids }))
+  const result = unwrap(await remote().deleteAiReplyReservations({
+    ids,
+    ...(options.includeTerminal === true ? { includeTerminal: true } : {}),
+  }))
   if (result.ok) notifyMessageListUpdated()
   return result
 }
@@ -240,4 +247,51 @@ export async function apiSaveChatAiReplyDefaultWebhook(options: {
     ...(typeof value.ruleCreated === 'boolean' ? { ruleCreated: value.ruleCreated } : {}),
     ...(typeof value.backfilled === 'number' ? { backfilled: value.backfilled } : {}),
   }
+}
+
+/** 过程留痕的展示形状（与后端契约一致，只读）。 */
+export interface ChatAiReplyTraceView {
+  recordId: number
+  sourceRef: string
+  accountKey: string
+  chatUsername: string
+  model: string
+  startedAt: number
+  finishedAt: number
+  context: string
+  kb: string
+  systemPrompt: string
+  userPrompt: string
+  imageCount: number
+  voiceCount: number
+  output: string
+  error: string
+  redacted: boolean
+  stages: Array<{ name: string; at: number; detail?: string }>
+  updatedAt: number
+}
+
+export type ChatAiReplyTraceRead =
+  | { ok: true; trace: ChatAiReplyTraceView }
+  | { ok: false; error: string }
+
+/**
+ * 读取一条 AI 回复记录的过程留痕。
+ *
+ * 旧记录可能没有留痕（功能上线前产生的），这时返回 `ok:false` 而不是抛错，
+ * 详情抽屉据此显示「这条记录没有留痕」。
+ */
+export async function apiGetChatAiReplyTrace(recordId: number): Promise<ChatAiReplyTraceRead> {
+  const result = await remote().getChatAiReplyTrace({ recordId })
+  if (result.ok !== true || result.value === undefined) {
+    return {
+      ok: false,
+      error: result.error?.message ?? result.error?.code ?? '过程留痕读取失败',
+    }
+  }
+  const value = result.value
+  if (value.ok !== true || value.trace === undefined) {
+    return { ok: false, error: typeof value.error === 'string' ? value.error : '这条记录没有过程留痕' }
+  }
+  return { ok: true, trace: value.trace }
 }

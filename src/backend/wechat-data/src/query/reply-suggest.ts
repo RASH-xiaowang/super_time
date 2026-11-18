@@ -12,6 +12,7 @@
 import { queryMessages, queryMessagesAtOrBefore } from './messages.ts'
 import {
   contextualMessageText,
+  isVoiceMessage,
   visualKindOf,
 } from './ai-reply/inbound-trigger.ts'
 
@@ -65,12 +66,16 @@ export interface ReplyContextEntry {
   text: string
   /** 仅视觉消息出现：会话内定位键。 */
   image?: ReplyImageCandidate
+  /** 语音消息：正文只是 `[语音]` 占位，需上层转写后再替换。 */
+  voice?: true
 }
 
 /** `collectReplyContextEntries` 的结果：结构化条目 + 与 `collectReplyContext` 同源的汇总字段。 */
 export interface ReplyContextEntries {
   entries: ReplyContextEntry[]
   imageCandidates?: ReplyImageCandidate[]
+  /** 落到上下文里的语音消息 localId（时间正序）；上层按需转写成文本。 */
+  voiceCandidates?: number[]
   latestPeer: string
   count: number
   targetFound?: boolean
@@ -121,6 +126,9 @@ export function collectReplyContext(
  * @param selfUsername - 登录账号 wxid（用于标注「我」，未知时传空）。
  * @param limit - 取最近多少条（默认 60）。
  * @param targetLocalId - 只分析/回复截至这条消息的上下文；缺省时仍取会话最新一页。
+ * @param sinceCreateTime - 只保留这个时间点（秒）之后的消息；0/缺省表示不限。
+ *   「上下文时间窗」用它实现：窗口之外的消息不进提示词，模型也就不会把几天前的
+ *   旧事项当成待办反复追问。
  * @returns 结构化条目；该会话没有可用文本时 `count` 为 0。
  */
 export function collectReplyContextEntries(
@@ -130,8 +138,12 @@ export function collectReplyContextEntries(
   selfUsername?: string,
   limit = REPLY_SUGGEST_CONTEXT_LIMIT,
   targetLocalId?: number,
+  sinceCreateTime?: number,
 ): ReplyContextEntries {
   const cap = Math.max(1, Math.min(limit, 60))
+  const since = Number.isFinite(sinceCreateTime) && Number(sinceCreateTime) > 0
+    ? Math.trunc(Number(sinceCreateTime))
+    : 0
   const targetId = Number.isFinite(targetLocalId) && Number(targetLocalId) > 0
     ? Math.trunc(Number(targetLocalId))
     : undefined
@@ -145,6 +157,9 @@ export function collectReplyContextEntries(
   }
   const entries: ReplyContextEntry[] = []
   const imageCandidates: ReplyImageCandidate[] = []
+  /** 语音 localId（时间正序、去重）：上层用它决定要转写哪几条。 */
+  const voiceCandidates: number[] = []
+  const seenVoice = new Set<number>()
   // localId -> 候选，用于同一视觉消息重复出现时仍让 entry 拿到定位键；
   // imageCandidates 本身保持「时间正序、按 localId 去重」的既有规则。
   const visualByLocalId = new Map<number, ReplyImageCandidate>()
@@ -154,10 +169,18 @@ export function collectReplyContextEntries(
   let targetText = ''
   const isGroup = talker.endsWith('@chatroom')
   for (const m of snapshot.messages) {
+    // 时间窗：窗口之外的消息整条跳过（正文、图片、语音一起排除），
+    // 否则模型仍会看到几天前的旧事项。
+    if (since > 0 && Number(m.createTime) > 0 && Number(m.createTime) < since) continue
     // 所有对话类型都进入上下文；媒体/卡片缺少展示字段时由同一条规则合成占位。
     // 这里刻意用完整正文：截断只发生在 `collectReplyContext` 映射行时。
     const text = flattenMessageText({ ...m, displayText: contextualMessageText(m) })
     if (text === '') continue
+    const voice = isVoiceMessage(m)
+    if (voice && m.localId > 0 && !seenVoice.has(m.localId)) {
+      seenVoice.add(m.localId)
+      voiceCandidates.push(m.localId)
+    }
     const visualKind = visualKindOf(m)
     let image: ReplyImageCandidate | undefined
     if (visualKind !== null && m.localId > 0) {
@@ -195,6 +218,7 @@ export function collectReplyContextEntries(
       speaker,
       text,
       ...(image === undefined ? {} : { image }),
+      ...(voice ? { voice: true as const } : {}),
     })
     // 汇总字段沿用推荐回复的既有口径：单条只保留头部 300 字。
     const lineText = truncateLine(text)
@@ -212,6 +236,7 @@ export function collectReplyContextEntries(
   return {
     entries,
     ...(imageCandidates.length === 0 ? {} : { imageCandidates }),
+    ...(voiceCandidates.length === 0 ? {} : { voiceCandidates }),
     latestPeer,
     count: entries.length,
     targetLine,

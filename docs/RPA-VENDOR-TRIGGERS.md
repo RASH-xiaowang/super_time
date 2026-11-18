@@ -31,7 +31,7 @@
 | 厂商适配器 | `src/backend/wechat-data/src/query/rpa/vendors/` | `webhook` `bazhuayu` `bazhuayu-mcp` `yingdao` `uipath` `aliyun-rpa` `laiye` `shizai`，每家一个文件 |
 | Remote | `src/backend/wechat-data/src/gateway-taskcenter.ts` | 新增 `listRpaVendors` / `revealTaskTriggerSecret`（`@Remote` 方法数 217 → **219**） |
 
-> 隐私与文档口径：`PRIVACY_VERSION` **29**、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
+> 隐私与文档口径：`PRIVACY_VERSION` 以 `src/client/ui-app/privacy/consent.ts` 为准（当前 v36）、[`PRIVACY.md`](PRIVACY.md) 第四节 G3、
 > [`TASK-CENTER.md`](TASK-CENTER.md) §3.5/§6；出网台账登记 `query/rpa/dispatch.ts#sendRequest`。
 > 设计文档以下内容保留为**调研与设计依据**（不随实现状态更新而删除）。
 

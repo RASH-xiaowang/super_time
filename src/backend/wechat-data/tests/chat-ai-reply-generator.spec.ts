@@ -89,7 +89,7 @@ describe('AI 回复生成器的 OpenCode 会话标识', () => {
       chatUsername: 'wxid_peer',
     })
 
-    expect(result).toEqual({ ok: true, text: '收到' })
+    expect(result).toEqual({ ok: true, text: '收到', model: 'opencode/vision-model' })
     expect(seen).toHaveLength(2)
     const firstContent = seen[0]?.messages[0]?.content as unknown as Array<Record<string, unknown>>
     expect(firstContent[0]).toMatchObject({ type: 'text' })

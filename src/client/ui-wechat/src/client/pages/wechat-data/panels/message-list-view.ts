@@ -734,3 +734,58 @@ export function aiReplyDeleteEligibility(
   }
   return { eligible: true, reason: '', generating: false }
 }
+
+/** 下游任务是否仍在排队/执行（与后端 `ACTIVE_JOB_STATES` 同口径）。 */
+function jobStillActive(jobState: string | undefined): boolean {
+  const state = String(jobState ?? '').toLowerCase().replace(/[\s-]+/g, '_')
+  return state === 'queued' || state === 'pending' || state === 'accepted' || state === 'submitted'
+    || state === 'running' || state === 'processing' || state === 'in_progress' || state === 'executing'
+}
+
+/**
+ * 终态 AI 回复记录的删除资格。
+ *
+ * 与 {@link aiReplyDeleteEligibility} 的分工：那条只覆盖「空白、从未投递」的预约，
+ * 用于清理生成失败的半成品；这条覆盖**已经收口**的记录 —— 成功、已发出未确认、
+ * 已失败。它们的正文是已经付费的模型产出或已经发出的消息，删除只是清台账，
+ * **不会撤回任何已发出的消息**，所以确认框必须写明这一点。
+ *
+ * 仍然拒绝的情形（删行不等于停掉在途动作）：
+ *   · `pending`：可能正在生成，下一拍 runner 会按同一 sourceRef 恢复并投递；
+ *   · `dispatching` / `queued` / `running`：投递或下游任务还没结束；
+ *   · `jobState` 仍是排队/执行态：下游异步任务未收口。
+ * @param record - 消息记录。
+ * @returns 是否可删除及原因。
+ */
+export function aiReplyTerminalDeleteEligibility(
+  record: MessageListRecord,
+): AiReplyDeleteEligibility {
+  const no = (reason: string): AiReplyDeleteEligibility => ({
+    eligible: false,
+    reason,
+    generating: false,
+  })
+  if (record.source !== 'ai_reply') return no('只有 AI 回复记录可以删除')
+  if (record.status !== 'success' && record.status !== 'failed' && record.status !== 'sent_unconfirmed') {
+    return no(
+      record.status === 'pending'
+        ? '生成中或待恢复的记录不能删除，等这一轮收口后再试'
+        : '记录仍在投递或下游执行中，不能删除',
+    )
+  }
+  if (jobStillActive(record.jobState)) return no('下游异步任务尚未结束，不能删除')
+  return { eligible: true, reason: '', generating: false }
+}
+
+/** 任一删除口径可用即可删；表头清理与行内删除共用这一条判据。 */
+export function aiReplyAnyDeleteEligibility(
+  record: MessageListRecord,
+  now = Date.now(),
+): AiReplyDeleteEligibility {
+  const reservation = aiReplyDeleteEligibility(record, now)
+  if (reservation.eligible) return reservation
+  const terminal = aiReplyTerminalDeleteEligibility(record)
+  if (terminal.eligible) return terminal
+  // 两条都拒绝时优先给更具体的「生成中」说明：它是用户最需要知道的那条。
+  return reservation.generating ? reservation : terminal
+}

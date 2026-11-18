@@ -26,10 +26,11 @@ function makeEntry(overrides: Partial<ReplyContextEntry> = {}): ReplyContextEntr
   }
 }
 
-/** 去掉时间标记与省略行，只留正文行。 */
+/** 去掉行首时间前缀与省略行，只留正文行。 */
 function bodyLines(lines: readonly string[]): string[] {
-  return lines.filter((line) =>
-    line !== OMITTED_LINE && !/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]$/.test(line))
+  return lines
+    .filter((line) => line !== OMITTED_LINE)
+    .map((line) => line.replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] /, ''))
 }
 
 /** 字符串里是否存在落单的 UTF-16 代理项（被劈开的 emoji 会命中）。 */
@@ -203,17 +204,18 @@ describe('AI 回复上下文预算装配', () => {
       minRecent: 1,
       minPeer: 0,
       minSelf: 0,
-      hardOverrun: 5,
+      // 每条都带时间前缀后，单行成本约 20 token；硬上限要够捞回这条「我」。
+      hardOverrun: 10,
     })
 
     expect(result.stats.selfIncluded).toBe(1)
     expect(result.stats.included).toBe(entries.length)
-    expect(result.lines).toContain('我：更早的我')
+    expect(result.lines).toContain('[2026-11-17 09:30] 我：更早的我')
   })
 })
 
 describe('AI 回复上下文时间标记', () => {
-  it('跨天或间隔达到 30 分钟时加标记，同一时段不重复加', () => {
+  it('每条消息都带自己的时间，不依赖相邻间隔', () => {
     const start = new Date(2026, 10, 17, 23, 40).getTime() / 1000
     const entries = [
       makeEntry({ createTime: start, text: '晚上好' }),
@@ -229,18 +231,18 @@ describe('AI 回复上下文时间标记', () => {
       minSelf: 0,
     })
 
-    expect(result.lines[0]).toBe('[2026-11-17 23:40]')
-    expect(result.lines.filter((line) =>
-      /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]$/.test(line))).toEqual([
-      '[2026-11-17 23:40]',
-      '[2026-11-18 00:00]',
-      '[2026-11-18 00:40]',
+    expect(result.lines).toEqual([
+      '[2026-11-17 23:40] 对方：晚上好',
+      '[2026-11-17 23:50] 对方：在吗',
+      '[2026-11-18 00:00] 对方：跨天了',
+      '[2026-11-18 00:10] 对方：十分钟后',
+      '[2026-11-18 00:40] 对方：半小时后',
     ])
     expect(bodyLines(result.lines)).toHaveLength(entries.length)
     expect(result.stats.included).toBe(entries.length)
   })
 
-  it('没有有效时间戳时不加时间标记', () => {
+  it('没有有效时间戳时不加时间前缀', () => {
     const result = assembleChatAiReplyContext([
       makeEntry({ createTime: 0, text: '无时间' }),
     ], {
@@ -251,7 +253,7 @@ describe('AI 回复上下文时间标记', () => {
     expect(result.lines).toEqual(['对方：无时间'])
   })
 
-  it('中间夹着缺失时间戳时，后一条有效时间仍会补标记', () => {
+  it('中间夹着缺失时间戳时，其余每条仍各自带时间', () => {
     const result = assembleChatAiReplyContext([
       makeEntry({ createTime: 0, text: '占位消息' }),
       makeEntry({ createTime: BASE_TIME, text: '有时间' }),
@@ -262,8 +264,7 @@ describe('AI 回复上下文时间标记', () => {
 
     expect(result.lines).toEqual([
       '对方：占位消息',
-      '[2026-11-17 09:30]',
-      '对方：有时间',
+      '[2026-11-17 09:30] 对方：有时间',
     ])
   })
 })

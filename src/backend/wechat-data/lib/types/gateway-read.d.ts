@@ -8,7 +8,7 @@ import type { AccountsSnapshot, SelfProfile, AnnualReport, AnnualSnapshot, AskHi
 import type { ChatCollectTaskResult, ChatCollectTaskSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
-import { type AnnualReview } from './query/annual-review.ts';
+import type { AnnualReview } from './query/annual-review.ts';
 import { GatewayCore } from './gateway-core.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export declare abstract class GatewayRead extends GatewayCore {
@@ -30,6 +30,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         limit?: number;
         offset?: number;
         category?: string;
+        categories?: string[];
     }): ContactsSnapshot;
     /**
      * One-screen data overview.

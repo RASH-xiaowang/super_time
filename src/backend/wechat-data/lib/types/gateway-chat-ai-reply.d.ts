@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ChatAiReplyDefaultWebhookMutationResult, ChatAiReplyDefaultWebhookState, ChatAiReplyEnabledChatsResult, ChatAiReplyMutationResult, ChatAiReplyScanResult, ChatAiReplyState } from './query/ai-reply/types.ts';
 import { createChatAiReplyRemotes, type CreateChatAiReplyRemotesInputs } from './remotes/chat-ai-reply.ts';
 import type { ChatAiReplyRegenerateResult } from './query/ai-reply/runner-regenerate.ts';
+import type { ChatAiReplyTraceReadResult } from './query/ai-reply/trace-store.ts';
 import type { AiReplyReservationCleanupResult } from './query/message-list-store.ts';
 import { GatewayMessageList } from './gateway-message-list.ts';
 export declare abstract class GatewayChatAiReply extends GatewayMessageList {
@@ -31,8 +32,9 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
      */
     listEnabledChatAiReplyStates(): ChatAiReplyEnabledChatsResult;
     /**
-     * 开启或关闭某个单聊的 AI 回复。
-     * 仅桌面端可写；群聊、缺少账号或旧 revision 写入都会被拒绝。开启时尽量预置当前水位，
+     * 开启或关闭某个会话的 AI 回复。
+     * 仅桌面端可写；单聊与群聊都支持（群聊只有 @我 的消息会触发），缺少账号或
+     * 旧 revision 写入会被拒绝。开启时尽量预置当前水位，
      * 避免回放历史消息；关闭后不再生成或投递该会话的新回复。
      */
     setChatAiReplyEnabled(options: {
@@ -56,6 +58,8 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
         splitReply?: boolean;
         kbEnabled?: boolean;
         kbId?: number;
+        /** 上下文时间窗（小时）；0 = 不限。上限 720（30 天），超出按上限夹紧。 */
+        contextWindowHours?: number;
         expectedRevision?: number;
     }): ChatAiReplyMutationResult;
     /**
@@ -75,15 +79,29 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
         expectedSourceRef: string;
     }): Promise<ChatAiReplyRegenerateResult>;
     /**
-     * 桌面端专用：清理空白且从未发送的 AI 回复预约/失败记录。
+     * 桌面端专用：删除 AI 回复记录。
      *
-     * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**；有正文、图片、异步任务、
-     * 发送尝试或任何投递事实的记录会逐条跳过；运行窗口仍在生成/投递的记录也会被
-     * 拒绝（删除行不等于取消在途模型调用）。记录不存在算 skipped，重复调用幂等。
+     * 按 sourceRef/segment_group_ref 整组删除，**不可撤销**。默认只删空白且从未投递的
+     * 预约/失败记录；传 `includeTerminal: true` 时允许删除已收口的记录（成功 / 已发出
+     * 未确认 / 失败），用于清理台账里已经结束的行。在途状态（生成中 / 投递中 / 下游
+     * 排队或执行）一律拒绝 —— 删除行不等于取消在途模型调用或投递。记录不存在算
+     * skipped，重复调用幂等。
      */
     deleteAiReplyReservations(options: {
         ids: number[];
+        /** 是否允许删除已收口的终态记录（默认 false，只删空白预约）。 */
+        includeTerminal?: boolean;
     }): AiReplyReservationCleanupResult;
+    /**
+     * 读取一条 AI 回复记录的过程留痕（只读）。
+     *
+     * 返回本轮实际送进模型的上下文、知识库命中、system/user 提示词、模型输出与
+     * 各阶段时间戳，供消息列表详情「回复过程」展示。只有本机自建表，不含 Webhook
+     * 地址或模型凭据；旧记录没有留痕时 `ok:false`，界面据此显示「无留痕」。
+     */
+    getChatAiReplyTrace(options: {
+        recordId: number;
+    }): ChatAiReplyTraceReadResult;
     protected _chatAiReplyRemotes?: ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyRemotes(): ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyDeps(): CreateChatAiReplyRemotesInputs;

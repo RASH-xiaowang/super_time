@@ -182,6 +182,20 @@ export interface ContactsPageOptions {
    * 已加载的那一页。`stats` 仍是全量口径（页签计数不随搜索变化）。
    */
   search?: string
+  /** 多分类一次查出（客户画像）。与单个 `category` 二选一，此项优先。 */
+  categories?: readonly string[]
+}
+
+/** 总览只要分类计数。不走 `queryContacts`：那条不传 limit 时会把整张通讯录解码并拼群。 */
+export function queryContactStats(decryptedDir: string): Record<string, number> {
+  const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
+  try {
+    const cols = tableColumns(db, 'contact')
+    const parts = buildContactSqlParts(db, cols, '', '')
+    return contactStats(db, parts.categoryExpr, parts.baseWhere)
+  } finally {
+    db.close()
+  }
 }
 
 export function queryContacts(
@@ -193,7 +207,8 @@ export function queryContacts(
   // recomputes immediately instead of re-scanning on every panel refresh.
   const limit = normalizePageLimit(options?.limit)
   const offset = normalizeOffset(options?.offset)
-  const category = normalizeCategory(options?.category)
+  const categoryList = (options?.categories ?? []).map((item) => item.trim()).filter((item) => item !== '' && item !== 'all')
+  const category = categoryList.length > 0 ? categoryList.join(',') : normalizeCategory(options?.category)
   const search = (options?.search ?? '').trim()
   return cachedBySig(
     'contacts:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + category + ':' + search,
@@ -313,8 +328,9 @@ function buildContactSqlParts(
   const where: string[] = [baseWhere]
   const filterArgs: string[] = []
   if (category !== '') {
-    where.push(`(${categoryExpr}) = ?`)
-    filterArgs.push(category)
+    const keys = category.split(',').filter((key) => key !== '')
+    where.push(`(${categoryExpr}) IN (${keys.map(() => '?').join(', ')})`)
+    filterArgs.push(...keys)
   }
   if (search !== '') {
     const searchTerm = search.toLowerCase()

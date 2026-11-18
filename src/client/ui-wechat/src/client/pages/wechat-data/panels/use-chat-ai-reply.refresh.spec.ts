@@ -42,6 +42,7 @@ function stateFor(chatUsername: string): ChatAiReplyState {
     personaPrompt: '',
     kbEnabled: false,
     kbId: 0,
+    contextWindowHours: 0,
     revision: 1,
     updatedAt: 1,
     cursor: '',

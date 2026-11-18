@@ -12,7 +12,7 @@ export interface createGraphSearchRemotesInputs {
         signal: AbortSignal;
         done: () => void;
     } | undefined;
-    /** W3-11.5：进度事件的出口（与 laya 分析同一套路）。 */
+    /** W3-11.5：进度事件的出口（与问答同一套路）。 */
     ctx: () => {
         emit: (name: string, ...args: unknown[]) => void;
     };

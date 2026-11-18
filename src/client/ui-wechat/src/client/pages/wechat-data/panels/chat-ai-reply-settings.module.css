@@ -266,3 +266,93 @@
     flex-direction: column;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 预设人格
+ *
+ * 一组「一键填充」的卡片：名称在上、一句话说明在下。用按钮而不是下拉，
+ * 是因为说明文字是选择依据，藏在下拉里看不见。
+ * ------------------------------------------------------------------ */
+.presetSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.presetHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.presetTitle {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.presetHint {
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+}
+
+.presetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.presetChip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.presetChip:hover:not(:disabled) {
+  border-color: var(--nm-border-active);
+  background: var(--nm-bg-hover);
+}
+
+.presetChip:focus-visible {
+  outline: 2px solid var(--nm-border-active);
+  outline-offset: 2px;
+}
+
+.presetChip:disabled {
+  cursor: not-allowed;
+  /* R6：按钮禁用态统一 .5（与全仓其它按钮一致）。 */
+  opacity: 0.5;
+}
+
+.presetChip[data-active='true'] {
+  border-color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, var(--nm-bg-card));
+}
+
+.presetName {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.presetSummary {
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

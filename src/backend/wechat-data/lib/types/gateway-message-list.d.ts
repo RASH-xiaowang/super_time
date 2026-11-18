@@ -1,7 +1,7 @@
 import type { MessageListAttachmentStageInput, MessageListAttachmentStageResult, MessageListBatchDeleteResult, MessageListBatchResendResult, MessageListDispatchBatchResult, MessageListMutationResult, MessageListQuery, MessageListRecordInput, MessageListRecordResult, MessageListRuleInput, MessageListRuleSnapshot, MessageListSnapshot, MessageListWebhookInfo, MessageListWebhookJob, MessageListWebhookPayload, MessageListWebhookProbe } from './types.ts';
-import { GatewayLayaOps } from './gateway-laya-ops.ts';
+import { GatewayAnalysisOps } from './gateway-analysis-ops.ts';
 import { createMessageListRemotes } from './remotes/message-list.ts';
-export declare abstract class GatewayMessageList extends GatewayLayaOps {
+export declare abstract class GatewayMessageList extends GatewayAnalysisOps {
     listMessageListRecords(options?: MessageListQuery): MessageListSnapshot;
     listMessageListRules(): MessageListRuleSnapshot;
     /**

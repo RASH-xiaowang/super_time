@@ -36,11 +36,17 @@ describe('推荐回复与分析的功能板块分界', () => {
     expect(existsSync(join(HERE, 'AnalysisReplySuggest.tsx'))).toBe(false)
   })
 
-  it('推荐回复仍由组合层在 suggest 模式单独渲染', () => {
-    expect(RIGHT).toContain("mode === 'suggest'")
-    expect(RIGHT).toContain('<ReplySuggest target={target} />')
-    expect(RIGHT).toContain("mode === 'analysis'")
+  it('组合层把两段放进同一个面板，且各段仍是独立组件', () => {
+    // 2026-11-18：合并的是**壳**，不是内容 —— 分析段仍用 `ChatAnalysisPanel`，
+    // 候选段仍用 `ReplySuggest`；两块不互相 import，也不共享状态。
+    expect(RIGHT).toContain('onTrace={setReplyTrace}')
     expect(RIGHT).toContain('<ChatAnalysisPanel')
+    expect(RIGHT).toContain('aria-label="这条消息怎么理解"')
+    expect(RIGHT).toContain('aria-label="可以这样回"')
+    // 群聊没有「回一句」的对象 ⇒ 候选段必须能被整体关掉。
+    expect(RIGHT).toContain('{allowSuggest && (')
+    // 分析对象也传下去了：下段推荐的是回「上段研判的那条」。
+    expect(RIGHT).toContain('targetLocalId={analysisTargetId}')
   })
 
   it('分析面板样式不残留推荐区块类名，但保留重新分析按钮', () => {

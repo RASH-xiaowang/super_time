@@ -58,9 +58,6 @@ export function readChatAiReplyRunWindowOnDb(
     // 身份解析会读其它库；放在 try 内，单条坏记录只跳过本条，不中止整批。
     const chat = canonicalChatReference(decryptedDir, chatUsername, 'AI 回复会话')
     if (chat.error !== undefined) return { ok: false, error: chat.error }
-    if (chat.username !== '' && chat.type === 'group') {
-      return { ok: false, error: 'AI 回复当前仅支持单聊' }
-    }
     const row = db.prepare(`SELECT stage, pending_source_ref, record_id
       FROM chat_ai_reply_settings WHERE account_key = ? AND chat_username = ?`)
       .get(account, chat.username) as {

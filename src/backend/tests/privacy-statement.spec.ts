@@ -64,6 +64,9 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     const code = stripComments(gateway)
     const features = [...new Set([
       ...[...code.matchAll(/privacyGate\(\s*'([^']+)'/g)].map((m) => m[1]),
+      // 注入式闸门（`deps.gate('…')`）：消息分析等实现住在 `query/**`，网关只负责注入。
+      // 少这一条，那些功能的出网点就永远不会被文档守卫看见。
+      ...[...code.matchAll(/\bgate\(\s*'([^']+)'/g)].map((m) => m[1]),
       // embedding 的功能名是**参数**（消息侧 `ask_embed` / 知识库侧 `kb_embed`），
       // 不以字面量形式出现在 `privacyGate(` 后面，所以要从 `makeEmbedFn` 的调用点取。
       ...[...code.matchAll(/makeEmbedFn\([^)]*?'([^']+)'/g)].map((m) => m[1]),
@@ -99,11 +102,15 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     const code = stripComments(walk(base).map((p) => readFileSync(p, 'utf8')).join('\n'))
     const features = [...new Set([
       ...[...code.matchAll(/privacyGate\(\s*'([^']+)'/g)].map((m) => m[1]),
+      // 与上一条同样的补扫：`query/**` 里经注入闸门的功能（`deps.gate('…')`）。
+      ...[...code.matchAll(/\bgate\(\s*'([^']+)'/g)].map((m) => m[1]),
       ...[...code.matchAll(/makeEmbedFn\([^)]*?'([^']+)'/g)].map((m) => m[1]),
       ...[...code.matchAll(/makeChatAsker\([^)]*?'([^']+)'/g)].map((m) => m[1]),
     ])].filter((f): f is string => Boolean(f))
     // 防空转：`query/reply-kb.ts` 的 kb_embed 调用必须在扫描结果里，否则说明 walk 坏了
     expect(features).toContain('kb_embed')
+    // 消息分析也走注入闸门，必须被这条补扫抓到（否则新增出网点会静默通过）。
+    expect(features).toContain('analyze_message')
     for (const f of features) {
       expect(doc, `query/** 里的出站功能 ${f} 没写进隐私声明`).toContain(f)
     }
@@ -358,11 +365,11 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(server).toContain('handleMessageWebhookPost')
   })
 
-  it('v31 AI回复：默认关闭、仅单聊、先落消息列表再投递', () => {
+  it('v31 AI回复：默认关闭、单聊与群聊、先落消息列表再投递', () => {
     for (const marker of [
       'ai_reply_analyze',
       'AI回复',
-      '仅单聊',
+      '群聊只回复 @我 的消息',
       '消息列表',
       '默认关闭',
       '最多 60 条 / 6,000 字',
@@ -383,7 +390,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     const gate = readFileSync(
       join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
     expect(gate).toContain("label: 'AI回复'")
-    expect(gate).toContain('仅单聊')
+    expect(gate).toContain('群聊只回复 @我 的消息')
     expect(gate).toContain('ai_reply_analyze')
     expect(gate).toContain('默认关闭')
   })

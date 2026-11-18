@@ -109,6 +109,7 @@ src/client/**                      前端（ESM + React）
 | `<userData>/wechat-data/decrypted/` | 解密后的 SQLite 分库 | `src/query/decrypt-all.ts` |
 | `.../decoded_images/` | 图片解码缓存（全局槽 + 按用户名槽、缩略带 `.t.`） | `src/query/media-image.ts` |
 | `.../sync-state.json` | 同步签名账：哪个目标的**源**签名已成功解密 | `src/query/sync-state.ts` |
+| `.../cache/` | 「签名 + 结果」**磁盘**缓存：总览（`overview.v1.json`）、趋势（`overview-extras.v1.json`）、洞察分片聚合（`insights-shards.v3.json`）、文件名清单（`file-names.v1.json`）；数据一变签名即失效 | `src/query/sig-disk-cache.ts`、`src/query/insights-shard-store.ts` |
 | `.../wechat_search.db`、`wechat_rag_vectors.db` | 派生索引（可随时从 `contact.db` / 消息重算） | `src/query/search-*.ts`、`retrieval/**` |
 
 宿主配置写入分两层：路径/微信设置镜像由 `wechat-paths.js` 负责，LLM 当前配置与

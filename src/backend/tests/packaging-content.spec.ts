@@ -243,12 +243,12 @@ describe('生产依赖闭包（审计 §P2-6 ⑰ 的 TODO ②：不需要先打�
     expect(v.find((x) => x.name === 'onnxruntime-web')?.rule).toBe('dep-forbidden')
   })
 
-  it('反例自证②：必需包（onnxruntime-common）缺了必须报 dep-required', () => {
+  it('反例自证②：必需包（koffi）缺了必须报 dep-required', () => {
     const { names } = rules.productionDepClosure(repoRoot, rootPkg)
     const bad = new Set(names)
-    bad.delete('onnxruntime-common')
+    bad.delete('koffi')
     const v = rules.depClosureViolations(bad)
-    expect(v.map((x) => x.name)).toContain('onnxruntime-common')
+    expect(v.map((x) => x.name)).toContain('koffi')
     expect(v.some((x) => x.rule === 'dep-required')).toBe(true)
   })
 
@@ -268,7 +268,11 @@ describe('生产依赖闭包（审计 §P2-6 ⑰ 的 TODO ②：不需要先打�
 
   it('禁用/必需两张名单都不是空的，且每条都写明了理由（否则就是无声的名单）', () => {
     expect(rules.FORBIDDEN_IN_DEPS.length).toBeGreaterThanOrEqual(3)
-    expect(rules.REQUIRED_IN_DEPS.length).toBeGreaterThanOrEqual(8)
+    // 2026-11-18：本地 ONNX 决策模型移除后，`onnxruntime-node/-common` 与
+    // `@huggingface/tokenizers` 三条从「必需」移到「禁用」，必需清单剩 5 条
+    // （koffi / mammoth / pdfjs-dist / unzipper / xlsx）。下限随之从 8 降到 4：
+    // 它守的是「名单不许被清空成恒真」，不是「必须一直有 8 条」。
+    expect(rules.REQUIRED_IN_DEPS.length).toBeGreaterThanOrEqual(4)
     for (const e of [...rules.FORBIDDEN_IN_DEPS, ...rules.REQUIRED_IN_DEPS]) {
       expect(e.why.length, `${e.name} 的理由太短（形同没写）`).toBeGreaterThanOrEqual(5)
     }

@@ -71,6 +71,11 @@ export interface FreshDataOpts<T> {
   shouldCache?: (data: T) => boolean
   /** 订阅 WAL 增量推送做静默重查（2026-10-13，见模块头）。 */
   liveRefresh?: boolean
+  /**
+   * 为 false 时不自动取数。社交图谱与知识图谱共用一个面板，社交段不该打知识图。
+   * 缺省为取。经渲染期读取的布尔值进 effect 依赖，内联对象本身不会引发重查。
+   */
+  enabled?: boolean
 }
 
 /**
@@ -109,52 +114,69 @@ export function useFreshData<T>(
    * （它拿到的是同一资源的一份真实快照），但**不更新组件状态**。
    */
   const requestSeqRef = useRef(0)
+  /** 同一轮非静默取数只打一次后端。图谱的 effect 会紧接着再 reload，合并掉这下重复。 */
+  const inflightRef = useRef<Promise<void> | null>(null)
+  const enabled = opts?.enabled !== false
 
-  /**
-   * @param silent - WAL 推送触发的静默重查：已有数据时不翻 loading、失败保留旧值不报错。
-   */
   /**
    * @param silent - WAL 推送触发的静默重查：已有数据时不翻 loading、失败保留旧值不报错。
    * @param keepContent - 内容仍显示在屏上时只更新 `refreshing`，绝不翻 `loading`。
    */
   const run = useCallback(async (silent = false, keepContent = false): Promise<void> => {
+    if (!silent && !keepContent && inflightRef.current) return inflightRef.current
     const requestSeq = requestSeqRef.current + 1
     requestSeqRef.current = requestSeq
-    if (!silent && !keepContent) {
-      setLoading(true)
-      setError(null)
-    }
-    try {
-      const fresh = await fetcher()
-      if (!alive.current || requestSeq !== requestSeqRef.current) return
-      setData(fresh)
-      setStale(false)
-      // ② 成功写回（除非调用方声明"这次结果不该缓存"）
-      const o = optsRef.current
-      if (o?.shouldCache === undefined || o.shouldCache(fresh)) writeRenderCache(key, fresh)
-    } catch (e) {
-      if (!alive.current || requestSeq !== requestSeqRef.current) return
-      if ((silent || keepContent) && dataRef.current !== null) return
-      const msg = (e as Error).message
-      const cached = readRenderCache<T>(key)
-      if (cached !== null) {
-        // ③ 失败回退：数据照给，但**必须**让调用方知道这不是最新的
-        setData(cached)
-        setStale(true)
-        setError('查询失败，以下为本地缓存（可能不是最新）：' + msg)
-      } else {
-        setError(msg)
+    const task = (async (): Promise<void> => {
+      if (!silent && !keepContent) {
+        setLoading(true)
+        setError(null)
       }
+      try {
+        const fresh = await fetcher()
+        if (!alive.current || requestSeq !== requestSeqRef.current) return
+        setData(fresh)
+        setStale(false)
+        // ② 成功写回（除非调用方声明"这次结果不该缓存"）
+        const o = optsRef.current
+        if (o?.shouldCache === undefined || o.shouldCache(fresh)) writeRenderCache(key, fresh)
+      } catch (e) {
+        if (!alive.current || requestSeq !== requestSeqRef.current) return
+        if ((silent || keepContent) && dataRef.current !== null) return
+        const msg = (e as Error).message
+        const cached = readRenderCache<T>(key)
+        if (cached !== null) {
+          // ③ 失败回退：数据照给，但**必须**让调用方知道这不是最新的
+          setData(cached)
+          setStale(true)
+          setError('查询失败，以下为本地缓存（可能不是最新）：' + msg)
+        } else {
+          setError(msg)
+        }
+      } finally {
+        if (alive.current && !silent && !keepContent && requestSeq === requestSeqRef.current) setLoading(false)
+      }
+    })()
+    if (!silent && !keepContent) inflightRef.current = task
+    try {
+      await task
     } finally {
-      if (alive.current && !silent && !keepContent && requestSeq === requestSeqRef.current) setLoading(false)
+      if (inflightRef.current === task) inflightRef.current = null
     }
   }, [key, fetcher])
 
   useEffect(() => {
     alive.current = true
+    const stop = (): void => {
+      alive.current = false
+      inflightRef.current = null
+    }
+    if (!enabled) {
+      setLoading(false)
+      return stop
+    }
     void run()
-    return () => { alive.current = false }
-  }, [run])
+    return stop
+  }, [run, enabled])
 
   // keep-alive 面板重新显示时补一次静默回源；隐藏期间不追 WAL，避免后台白查。
   useEffect(() => {

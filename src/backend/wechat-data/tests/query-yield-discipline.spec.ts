@@ -459,9 +459,10 @@ const P1_2_MODULES = [
   'storage.ts',
   'ledger.ts',
   'graph.ts',
-  // 2026-09-28 性能修复（PERF-AUDIT-172）：日志里三个最慢的非本地取数模块。
-  // 路径不同（`laya/` 与 `query/`），下面按模块名在**两个目录**里找。
-  'analysis.ts',
+  // 2026-09-28 性能修复（PERF-AUDIT-172）：日志里最慢的非本地取数模块。
+  // 2026-11-18：本地 ONNX 分析（`laya/analysis.ts`）已随模型一并移除，
+  // 它那条「逐条推理之间必须让出」的条目不再适用；`query/analysis/analyze.ts`
+  // 是异步 LLM 调用，本就不占事件循环。
   'remote-image.ts',
   'article-cover.ts',
   // 2026-09-28（本轮补）：`wordcloud.ts` 是上一轮**漏登记**的一个 —— 它的遮罩换成
@@ -556,7 +557,6 @@ describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
     // 2026-09-29 做"账本 vs 清单"对账时发现并补上 `remotes/`。
     const srcDirs = [
       join(import.meta.dirname, '..', 'src', 'query'),
-      join(import.meta.dirname, '..', 'src', 'laya'),
       join(import.meta.dirname, '..', 'src', 'remotes'),
     ]
     expect(P1_2_MODULES.length, '清单被清空 ⇒ 这条判据就是空转').toBeGreaterThanOrEqual(5)
@@ -575,7 +575,6 @@ describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
     const CALL = /(?:^|[^A-Za-z0-9_$.])yieldToLoop\s*\(/
     const roots = join(import.meta.dirname, '..', 'src')
     const targets = [
-      join(roots, 'laya', 'analysis.ts'),
       join(roots, 'query', 'remote-image.ts'),
       join(roots, 'query', 'article-cover.ts'),
     ]

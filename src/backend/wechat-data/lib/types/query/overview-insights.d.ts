@@ -4,7 +4,7 @@ import type { OverviewExtras } from '../types.ts';
  * 导出是给守卫用例**按这个数造数据**用的 —— 判据不该依赖墙上时钟（CI 机器比本机慢 20 倍，
  * 任何「跑够 25ms」的断言在那边都会假红）。
  */
-export declare const SNS_YIELD_EVERY_ROWS = 2000;
+export { SNS_YIELD_EVERY_ROWS } from './overview-moments-scan.ts';
 export interface OverviewInsights {
     messages: {
         total: number;

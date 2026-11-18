@@ -1,21 +1,23 @@
 /**
- * 右栏消息分析：把单条消息的本地模型读数排成一份可行动简报。
+ * 右栏消息分析面板。
  *
- * 页面分三层，而不是把六道模型命题平铺出来：
- *   1. 分析对象：发送者、时间、原文 / 语音转写；
- *   2. 结论：一句谨慎的判断 + 意图、温度、建议动作；
- *   3. 依据：三项关键信号和可展开的完整模型读数。
+ * ## 单聊与群聊是两套问题，不是同一张卡换个标题
  *
- * 组件本身不发请求。`useInlineAnalysis` 负责「选中即分析」、排队、缓存与重试，
- * 这里只消费状态，保证展示层可以独立测试。
+ *  · **单聊**：他这段话想要什么、情绪如何、我该怎么回；
+ *  · **群聊**：这条消息是否在找我、他在群里做的是什么动作、我该不该接话、
+ *    公开回还是私聊。
  *
- * 边界：本面板**只做研判**（意图、温度、建议动作），不生成可直接发送的候选回复。
- * 候选回复属于独立的「推荐回复」板块，由 `ChatRightPanel` 按模式二选一渲染。
+ * 旧实现把「对方意图 / 对话温度 / 建议动作」硬套到群聊，于是「@我 报价多少」
+ * 会被判成「想确认你的态度」。这里按 `scope` 分两套排版。
+ *
+ * 组件本身不发请求：`useInlineAnalysis` 负责选中即分析、排队与缓存，
+ * 这里只消费状态，保证展示层可独立测试。
+ *
+ * 边界：只做研判，不生成可直接发送的候选回复 —— 那是「推荐回复」板块的职责，
+ * 两块由 `ChatRightPanel` 按模式二选一渲染。
  */
-import type { LayaAnswer, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import type { MessageAnalysis, MessageAnalysisResult, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { Avatar } from './chats-support.tsx'
-import { AnswerBlock } from './AnalysisBlocks.tsx'
-import { buildAnalysisBrief } from './analysis-brief.ts'
 import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import { withEnterprise } from './enterprise-identity.ts'
@@ -31,7 +33,7 @@ export interface AnalysisSpeaker {
 export interface ChatAnalysisPanelProps {
   /** 选中消息的 localId；`null` = 尚未选择。 */
   targetId: number | null
-  /** 选中消息的本地分析状态。 */
+  /** 选中消息的分析状态。 */
   entry: InlineAnalysisEntry | undefined
   /** 当前目标消息；用于在分析完成前就展示发送者与原文。 */
   message?: WechatMessage
@@ -45,6 +47,12 @@ export interface ChatAnalysisPanelProps {
   onRetry?: (localId: number) => void
   /** 忽略缓存后重新分析。 */
   onRefresh?: (localId: number) => void
+}
+
+const CONFIDENCE_LABEL: Record<MessageAnalysis['confidence'], string> = {
+  high: '把握较大',
+  medium: '倾向明显',
+  low: '信息有限',
 }
 
 function previewOf(message: WechatMessage | undefined, sourceText: string): string {
@@ -65,7 +73,7 @@ function MessageSubject(props: {
   isGroup?: boolean
 }): React.JSX.Element {
   const { targetId, message, entry, speaker, isGroup } = props
-  const done = entry?.state === 'done' ? entry : undefined
+  const done = entry?.state === 'done' ? entry.result : undefined
   const text = previewOf(message, done?.sourceText ?? '')
   const fromVoice = done?.fromVoice === true || message?.renderType === 'voice'
 
@@ -97,18 +105,144 @@ function LoadingState({ refreshing }: { refreshing?: boolean }): React.JSX.Eleme
       <span className={shell.spinner} aria-hidden="true" />
       <div>
         <strong>{refreshing === true ? '正在重新分析' : '正在分析这条消息'}</strong>
-        <span>读取当前会话的前文并运行本地模型，通常需要几秒。</span>
+        <span>读取当前会话的前文并调用对话模型，通常需要一到几秒。</span>
       </div>
     </div>
   )
 }
 
-function ProbabilityBar({ value, tone }: { value: number; tone?: 'brand' | 'warn' }): React.JSX.Element {
-  const width = Math.max(2, Math.min(100, value * 100))
+/** 一张「标签 + 一句话」的发现卡：两套版式共用。 */
+function FindingCard(props: {
+  label: string
+  value: string
+  detail?: string
+  tone?: 'brand' | 'warn'
+}): React.JSX.Element {
   return (
-    <span className={css.bar} data-tone={tone}>
-      <span style={{ width: `${String(width)}%` }} />
-    </span>
+    <section className={css.findingCard}>
+      <div className={css.cardLabel}>{props.label}</div>
+      <strong className={css.cardValue} data-tone={props.tone}>{props.value}</strong>
+      {props.detail !== undefined && props.detail !== '' && (
+        <p className={css.altLine}>{props.detail}</p>
+      )}
+    </section>
+  )
+}
+
+/** 建议动作卡：单聊说「怎么回」，群聊还要说「要不要接、在哪接」。 */
+function ActionCard(props: {
+  analysis: MessageAnalysis
+  isGroup: boolean
+}): React.JSX.Element {
+  const { analysis, isGroup } = props
+  const { action } = analysis
+  const channelText = action.channel === 'public'
+    ? '建议在群里回'
+    : action.channel === 'private'
+      ? '建议私聊'
+      : '群里回或私聊都行'
+  return (
+    <section className={css.actionCard}>
+      <div className={css.actionTop}>
+        <div>
+          <div className={css.cardLabel}>{isGroup ? '要不要接话' : '建议动作'}</div>
+          <strong>{action.shouldReply ? action.title : '这条可以不用回'}</strong>
+        </div>
+        {isGroup && action.shouldReply && <span>{channelText}</span>}
+      </div>
+      <p>{action.guidance}</p>
+      {action.avoid !== '' && <div className={css.avoid}><b>避免</b>{action.avoid}</div>}
+    </section>
+  )
+}
+
+function AnalysisBody(props: {
+  targetId: number
+  analysis: MessageAnalysis
+  done: MessageAnalysisResult
+  onRefresh?: (localId: number) => void
+}): React.JSX.Element {
+  const { targetId, analysis, done, onRefresh } = props
+  const isGroup = analysis.scope === 'group'
+  return (
+    <>
+      <section className={css.hero}>
+        <div className={css.heroTop}>
+          <span className={css.eyebrow}>{isGroup ? '群聊研判' : '研判结论'}</span>
+          <span className={css.confidence} data-tone={analysis.confidence}>
+            {CONFIDENCE_LABEL[analysis.confidence]}
+          </span>
+        </div>
+        <p className={css.headline}>{analysis.headline}</p>
+        {done.lowConfidence === true && (
+          <p className={css.caution}>消息本身很短，判断主要来自前文，仅供参考。</p>
+        )}
+      </section>
+
+      {isGroup && analysis.addressed !== undefined && (
+        <section className={css.actionCard} data-tone={analysis.addressed.targeted ? 'brand' : undefined}>
+          <div className={css.actionTop}>
+            <div>
+              <div className={css.cardLabel}>是否在找你</div>
+              <strong>{analysis.addressed.targeted ? '在找你' : '不像是针对你'}</strong>
+            </div>
+          </div>
+          <p>{analysis.addressed.reason}</p>
+        </section>
+      )}
+
+      <div className={css.findingGrid}>
+        <FindingCard
+          label={isGroup ? '发言性质' : '对方意图'}
+          value={analysis.intent.label}
+          detail={analysis.intent.detail}
+        />
+        <FindingCard
+          label={isGroup ? '群里氛围' : '情绪状态'}
+          value={analysis.mood.label}
+          detail={analysis.mood.detail}
+          tone={analysis.mood.label === '紧张' || analysis.mood.label === '不悦' ? 'warn' : 'brand'}
+        />
+      </div>
+
+      <ActionCard analysis={analysis} isGroup={isGroup} />
+
+      {analysis.signals.length > 0 && (
+        <div className={css.signalGrid} aria-label="关键信号">
+          {analysis.signals.map((signal, index) => (
+            <span key={String(index)} className={css.signal}>{signal}</span>
+          ))}
+        </div>
+      )}
+
+      {analysis.evidence.length > 0 && (
+        <details className={css.details}>
+          <summary>判断依据 · 引用了 {String(analysis.evidence.length)} 处原话</summary>
+          <ul className={css.evidenceList}>
+            {analysis.evidence.map((line, index) => (
+              <li key={String(index)}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <div className={css.resultMeta}>
+        <span>
+          {done.model === '' ? '对话模型' : done.model}
+          {done.fromVoice ? ' · 语音转写' : ''}
+          {done.cached ? ' · 命中缓存' : ' · ' + String(done.elapsedMs) + 'ms'}
+        </span>
+        {onRefresh !== undefined && (
+          <button type="button" className={css.textBtn} onClick={() => { onRefresh(targetId) }}>
+            重新分析
+          </button>
+        )}
+      </div>
+
+      <p className={css.disclaimer}>
+        分析结果由当前对话模型生成，只依据本会话的上下文，不代表事实；判断把握不足时以你的判断为准。
+      </p>
+    </>
   )
 }
 
@@ -118,14 +252,8 @@ function ProbabilityBar({ value, tone }: { value: number; tone?: 'brand' | 'warn
  */
 export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Element {
   const { targetId, entry, message, speaker, isGroup, refreshing, onRetry, onRefresh } = props
-  const done = entry?.state === 'done' ? entry : undefined
-  const brief = done === undefined ? undefined : buildAnalysisBrief(done)
-  const ordered: LayaAnswer[] = done === undefined
-    ? []
-    : [...done.answers.filter((answer) => answer.kind !== 'choice'), ...done.answers.filter((answer) => answer.kind === 'choice')]
-  const tensionPercent = brief === undefined || brief.mood.tensionScale <= 0
-    ? 0
-    : brief.mood.tension / brief.mood.tensionScale
+  const done = entry?.state === 'done' ? entry.result : undefined
+  const analysis = done?.analysis
 
   return (
     <div className={css.sec} aria-label="消息分析">
@@ -143,7 +271,7 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
               打开分析后会自动选择最近一条对方文本或语音；也可以直接点击聊天里的消息切换。
             </div>
             <div className={css.scopeChips}>
-              <span>文字</span><span>语音转写</span><span>全程本地</span>
+              <span>文字</span><span>语音转写</span><span>单聊·群聊</span>
             </div>
           </div>
         )}
@@ -174,96 +302,13 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
               </div>
             )}
 
-            {done !== undefined && brief !== undefined && (
-              <>
-                <section className={css.hero}>
-                  <div className={css.heroTop}>
-                    <span className={css.eyebrow}>研判结论</span>
-                    <span className={css.confidence} data-tone={brief.confidenceTone}>
-                      {brief.confidenceLabel}
-                    </span>
-                  </div>
-                  <p className={css.headline}>{brief.headline}</p>
-                  {done.lowConfidence === true && (
-                    <p className={css.caution}>信息不足，仅供参考：这条消息本身很短，判断主要来自前文。</p>
-                  )}
-                </section>
-
-                <div className={css.findingGrid}>
-                  <section className={css.findingCard}>
-                    <div className={css.cardLabel}>对方意图</div>
-                    <strong className={css.cardValue}>{brief.intent.primary.label}</strong>
-                    <div className={css.probabilityLine}>
-                      <ProbabilityBar value={brief.intent.primary.probability} />
-                      <span>{Math.round(brief.intent.primary.probability * 100)}%</span>
-                    </div>
-                    {brief.intent.alternative !== undefined && (
-                      <p className={css.altLine}>
-                        也可能是「{brief.intent.alternative.label}」
-                        {' '}{Math.round(brief.intent.alternative.probability * 100)}%
-                      </p>
-                    )}
-                  </section>
-
-                  <section className={css.findingCard}>
-                    <div className={css.cardLabel}>对话温度</div>
-                    <div className={css.temperatureValue}>
-                      <strong>{brief.mood.label}</strong>
-                      <span>{brief.mood.tension.toFixed(1)} / {brief.mood.tensionScale}</span>
-                    </div>
-                    <ProbabilityBar value={tensionPercent} tone={brief.mood.tension >= 6 ? 'warn' : 'brand'} />
-                    <p className={css.altLine}>{brief.mood.detail}</p>
-                  </section>
-                </div>
-
-                <section className={css.actionCard}>
-                  <div className={css.actionTop}>
-                    <div>
-                      <div className={css.cardLabel}>建议动作</div>
-                      <strong>{brief.action.title}</strong>
-                    </div>
-                    <span>{Math.round(brief.action.probability * 100)}% 倾向</span>
-                  </div>
-                  <p>{brief.action.guidance}</p>
-                  <div className={css.avoid}><b>避免</b>{brief.action.avoid}</div>
-                </section>
-
-                {brief.signals.length > 0 && (
-                  <div className={css.signalGrid} aria-label="关键信号">
-                    {brief.signals.map((signal) => (
-                      <span key={signal.qid} className={css.signal} title={signal.detail}>
-                        <span>{signal.label}</span>
-                        <b>{Math.round(signal.probability * 100)}%</b>
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className={css.resultMeta}>
-                  <span>
-                    本地分析
-                    {done.fromVoice ? ' · 语音转写' : ''}
-                    {done.cached ? ' · 命中缓存' : ` · ${String(done.inferenceMs)}ms`}
-                  </span>
-                  {onRefresh !== undefined && (
-                    <button type="button" className={css.textBtn} onClick={() => { onRefresh(targetId) }}>
-                      重新分析
-                    </button>
-                  )}
-                </div>
-
-                <details className={css.details}>
-                  <summary>查看底层判断 · {String(done.answers.length)} 项</summary>
-                  <p className={css.detailsHint}>下面是模型原始概率，不是额外结论。</p>
-                  <div className={css.blocks}>
-                    {ordered.map((answer) => <AnswerBlock key={answer.qid} a={answer} />)}
-                  </div>
-                </details>
-
-                <p className={css.disclaimer}>
-                  结果基于本地聊天上下文，未上传到网络。概率表示模型的判断倾向，不代表事实。
-                </p>
-              </>
+            {done !== undefined && analysis !== undefined && (
+              <AnalysisBody
+                targetId={targetId}
+                analysis={analysis}
+                done={done}
+                {...(onRefresh === undefined ? {} : { onRefresh })}
+              />
             )}
           </>
         )}

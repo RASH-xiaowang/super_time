@@ -46,14 +46,7 @@ const HEAVY_CALL_LEDGER = Object.freeze([
     methods: Object.freeze(['transcribeVoiceBatch', 'transcribeVoiceMessage', 'downloadWhisperModel', 'installWhisperEngine']),
   },
   {
-    why: 'laya 本地决策推理：实测单次 54,103ms / 峰值 110s',
-    methods: Object.freeze(['analyzeMessages', 'analyzeVisibleMessages']),
-  },
-  {
-    why: 'laya 模型分发：1.26 GB 流式下载 / 1.23 GB 跨盘接管',
-    methods: Object.freeze(['downloadLayaModel', 'adoptLayaModel']),
-  },
-  { why: '索引与离线评估', methods: Object.freeze(['buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval']) },
+    why: '索引与离线评估', methods: Object.freeze(['buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval']) },
   {
     why: 'LLM 长任务：仓库自身 LLM 超时 120s，RPC 窗口必须明显宽于它',
     // 2026-11-13：补进 `suggestReplies` —— 现场日志 69 次 / 均值 8.2s / p99 89s

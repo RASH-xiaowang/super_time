@@ -106,4 +106,22 @@ describe('统一问答运行信息接线', () => {
     expect(read('SessionAsk.tsx'), '会话 AI 面板必须带统一右栏标记').toContain('data-side-panel-view=""')
   })
 
+  it('输入区与「微信问答」同构：发送键在输入框同一行右下角，出处说明收进底部行', () => {
+    const tsx = read('SessionAsk.tsx')
+    const styles = read('session-ask.module.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    const inputRow = /\.inputRow\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
+    const input = /\.input\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
+
+    // 结构：textarea 与发送/停止键包在同一个 `.inputRow` 里（此前发送键掉到下一行）。
+    expect(tsx, '输入框与发送键没有包进同一行容器').toMatch(/className=\{css\.inputRow\}[\s\S]{0,900}?className=\{css\.(send|stopSend)\}/)
+    expect(inputRow, '输入行必须底部对齐').toContain('align-items: flex-end')
+    expect(input, '输入框必须按 flex 占满剩余宽度').toMatch(/flex:\s*1 1 auto/)
+    expect(input, '输入框必须允许收窄，否则发送键会被顶出容器').toContain('min-width: 0')
+
+    // 出处说明不再单独占一行（`.note` 已删），收进 `.composerFoot` 右端。
+    expect(styles, '还留着独立的 .note 行规则').not.toContain('.note {')
+    expect(tsx, '出处说明没有收进底部行').toMatch(/css\.composerFoot[\s\S]{0,700}?css\.footHint/)
+    expect(styles, '出处说明缺少窄栏隐藏规则').toContain('@container (max-width: 400px)')
+  })
+
 })

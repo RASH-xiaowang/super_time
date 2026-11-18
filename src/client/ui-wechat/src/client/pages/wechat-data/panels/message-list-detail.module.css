@@ -279,3 +279,128 @@
     margin-top: 4px;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 回复过程（本机留痕）
+ *
+ * 上下文与提示词可能很长：每个块单独限高滚动，折叠时不占高度，
+ * 保证抽屉里「状态 / 正文 / 失败信息」仍先被看到。
+ * ------------------------------------------------------------------ */
+.trace {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.traceMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.traceStages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.traceStage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+.traceStageTime {
+  flex: none;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.traceStageName {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.traceStageDetail {
+  min-width: 0;
+  color: var(--nm-text-2);
+  overflow-wrap: anywhere;
+}
+
+.traceError {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, var(--nm-border));
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-danger) 7%, var(--nm-bg-card));
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  overflow-wrap: anywhere;
+}
+
+.traceBlock {
+  min-width: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.traceSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.traceSummary::-webkit-details-marker {
+  display: none;
+}
+
+.traceCount {
+  flex: none;
+  color: var(--nm-text-2);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 留痕正文用等宽字体：时间前缀与「发言人：」对齐后才能一眼扫出轮次。 */
+.tracePre {
+  margin: 0;
+  max-height: 32vh;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.tracePre[data-empty='true'] {
+  color: var(--nm-text-2);
+}
+/* 「提及」行里的原因说明：比取值更弱一级，不抢视线。 */
+.mentionHint {
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-sans);
+}

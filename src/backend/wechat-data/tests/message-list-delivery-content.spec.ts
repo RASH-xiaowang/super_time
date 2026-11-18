@@ -68,6 +68,35 @@ describe('下游投递：请求体与附件', () => {
     expect(body).toEqual({ talker: 'wxid_wang', text: '在的，你说' })
   })
 
+  it('/send/text 的群聊记录发到群，不会误发成私聊给提问者', async () => {
+    expect(saveMessageListRule(decrypted, {
+      chatName: '测试群',
+      targetName: '测试群',
+      webhookUrl: 'http://192.0.2.10:17890/send/text',
+    }).ok).toBe(true)
+    const inserted = insertAiReplyMessageListRecord(decrypted, {
+      chatName: '测试群',
+      chatUsername: 'room@chatroom',
+      // 群聊记录的 targetName/targetUsername 是提问者（用于 @ 人）。
+      targetName: '张三',
+      targetUsername: 'wxid_asker',
+      text: '报价 100',
+      sourceRef: 'ai-reply:wxid_self:room@chatroom:3000:3',
+    })
+    let body: Record<string, unknown> = {}
+    const result = await dispatchMessageListRecord(
+      decrypted,
+      inserted.id ?? 0,
+      dispatchDeps(async (_url, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response('{"ok":true}', { status: 200 })
+      }),
+    )
+    expect(result.ok, result.ok ? '' : result.error).toBe(true)
+    // 这条桥接协议没有 mention 字段，但目的地必须是群，不是提问者的私聊。
+    expect(body).toEqual({ talker: 'room@chatroom', text: '报价 100' })
+  })
+
   it('/send/text 遇到有附件的记录时在出网前显式失败', async () => {
     expect(saveMessageListRule(decrypted, {
       targetName: '小王',

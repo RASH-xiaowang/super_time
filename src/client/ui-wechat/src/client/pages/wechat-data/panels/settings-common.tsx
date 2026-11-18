@@ -17,13 +17,25 @@ import { css, acctCss } from './settings-css.ts'
 
 /** 模型目录探测器尚未就绪时的本地目录兜底(安装状态以 getWhisperStatus 为准)。 */
 export const WHISPER_MODEL_FALLBACK: ReadonlyArray<WhisperModelInfo> = [
-  { id: 'tiny', name: 'Tiny', sizeLabel: '约 75 MB · 最快', file: 'ggml-tiny.bin', installed: false },
-  { id: 'base', name: 'Base', sizeLabel: '约 145 MB · 很快', file: 'ggml-base.bin', installed: false },
   { id: 'small', name: 'Small', sizeLabel: '约 466 MB · 较快', file: 'ggml-small.bin', installed: false },
-  { id: 'medium', name: 'Medium', sizeLabel: '约 1.5 GB · 中等', file: 'ggml-medium.bin', installed: false },
-  { id: 'large-v3', name: 'Large v3', sizeLabel: '约 3.1 GB · 较慢', file: 'ggml-large-v3.bin', installed: false },
+  { id: 'turbo-q5', name: 'Turbo (量化)', sizeLabel: '约 547 MB · 快', file: 'ggml-large-v3-turbo-q5_0.bin', installed: false },
   { id: 'turbo', name: 'Turbo', sizeLabel: '约 1.6 GB · 快', file: 'ggml-large-v3-turbo.bin', installed: false },
+  { id: 'large-v3-q5', name: 'Large v3 (量化)', sizeLabel: '约 1.0 GB · 高精度', file: 'ggml-large-v3-q5_0.bin', installed: false },
+  { id: 'large-v3', name: 'Large v3', sizeLabel: '约 3.1 GB · 最高精度', file: 'ggml-large-v3.bin', installed: false },
 ]
+
+/**
+ * 当前推荐的识别模型 id。
+ *
+ * 只有这一处口径：模型卡片上的「推荐」徽标、以及设置页把下线模型迁过去的预选值，
+ * 都读这个函数。分成两份会漂 —— 徽标指的是 A、迁移却把用户推到 B。
+ *
+ * · CPU：`turbo-q5`（量化 turbo，547 MB，准确率接近 large-v3，本机跑得动）
+ * · GPU：`large-v3`（fp16 原版，显存够时保真度最高）
+ */
+export function recommendedWhisperModel(device: 'cpu' | 'gpu'): string {
+  return device === 'gpu' ? 'large-v3' : 'turbo-q5'
+}
 
 /** Module-level avatar cache (wxid -> data/remote URL, null when none). */
 const accountAvatarCache = new Map<string, string | null>()

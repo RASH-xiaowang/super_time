@@ -81,6 +81,7 @@ import type {
   MessagesSnapshot,
   MomentsInsightsSnapshot,
   MomentsMonthlyRow, MomentsMonthlySnapshot,
+  MessageAnalysisResult,
   MomentsSnapshot,
   OfficialAssetsSnapshot,
   OverviewInsights,
@@ -126,10 +127,6 @@ import type {
   WechatImageAutoDownloadStatus,
   WhisperDownloadResult,
   WhisperStatus,
-  LayaAnalysisView,
-  LayaDownloadOutcome,
-  LayaStatus,
-  LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 
 // 任务信息 / 触发记录（2026-10-19）：类型单一真源在后端 `types-taskcenter.ts`，
@@ -303,7 +300,7 @@ export interface WechatRemote {
     offset?: number
     jobId?: string
   }): Promise<RemoteResult<SessionsSnapshot>>
-  getContacts(options?: { limit?: number; offset?: number; category?: string }): Promise<RemoteResult<ContactsSnapshot>>
+  getContacts(options?: { limit?: number; offset?: number; category?: string; categories?: readonly string[] }): Promise<RemoteResult<ContactsSnapshot>>
   getContact360(options: { username: string }): Promise<RemoteResult<Contact360Snapshot>>
   getMessages(options: {
     talker: string
@@ -393,7 +390,7 @@ export interface WechatRemote {
     chatName?: string
     webhookUrl: string
   }): Promise<RemoteResult<ChatAiReplyDefaultWebhookMutationResult>>
-  /** 当前账号已开启 AI 回复的单聊摘要（用于会话列表徽标与筛选）。 */
+  /** 当前账号已开启 AI 回复的会话摘要（单聊与群聊，用于会话列表徽标与筛选）。 */
   listEnabledChatAiReplyStates(): Promise<RemoteResult<ChatAiReplyEnabledChatsResult>>
   /** 开启/关闭会话级 AI 回复；revision 用于防旧请求覆盖新值。 */
   setChatAiReplyEnabled(options: {
@@ -412,6 +409,8 @@ export interface WechatRemote {
     splitReply?: boolean
     kbEnabled?: boolean
     kbId?: number
+    /** 上下文时间窗（小时）；0 = 不限，上限 720。 */
+    contextWindowHours?: number
     expectedRevision?: number
   }): Promise<RemoteResult<ChatAiReplyMutationResult>>
   /** 立即扫描一次（桌面端诊断用）。 */
@@ -424,9 +423,10 @@ export interface WechatRemote {
     ok: boolean
     error?: string
   }>>
-  /** 整组清理空白且从未发送的 AI 回复预约；仅桌面端可用，不可撤销。 */
+  /** 整组删除 AI 回复记录；仅桌面端可用，不可撤销。`includeTerminal` 放开已收口的终态记录。 */
   deleteAiReplyReservations(options: {
     ids: number[]
+    includeTerminal?: boolean
   }): Promise<RemoteResult<{
     ok: boolean
     removed: number
@@ -436,6 +436,36 @@ export interface WechatRemote {
       status: 'removed' | 'skipped'
       error?: string
     }>
+    error?: string
+  }>>
+  /**
+   * 读取一条 AI 回复记录的过程留痕（上下文 / 知识库 / 提示词 / 输出 / 阶段耗时）。
+   * 只读本机自建表；没有留痕的旧记录返回 `ok:false`。
+   */
+  getChatAiReplyTrace(options: {
+    recordId: number
+  }): Promise<RemoteResult<{
+    ok: boolean
+    trace?: {
+      recordId: number
+      sourceRef: string
+      accountKey: string
+      chatUsername: string
+      model: string
+      startedAt: number
+      finishedAt: number
+      context: string
+      kb: string
+      systemPrompt: string
+      userPrompt: string
+      imageCount: number
+      voiceCount: number
+      output: string
+      error: string
+      redacted: boolean
+      stages: Array<{ name: string; at: number; detail?: string }>
+      updatedAt: number
+    }
     error?: string
   }>>
   /** 局域网 Webhook 地址与示例（含令牌，仅桌面端可调用）。 */
@@ -451,13 +481,8 @@ export interface WechatRemote {
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlySnapshot>>
   getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number; canceled?: boolean }>>
-  analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<RemoteResult<LayaAnalysisView>>
-  analyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string; force?: boolean }): Promise<RemoteResult<LayaVisibleAnalysisResult>>
-  getLayaStatus(): Promise<RemoteResult<LayaStatus>>
-  downloadLayaModel(options?: { jobId?: string }): Promise<RemoteResult<LayaDownloadOutcome>>
-  cancelLayaDownload(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
-  adoptLayaModel(options: { sourceDir: string }): Promise<RemoteResult<LayaStatus>>
-  unloadLaya(): Promise<RemoteResult<{ ok: boolean }>>
+  /** 分析一条消息（单聊与群聊两套问题域）；ok:false 时 error 可直接展示。 */
+  analyzeMessage(options: { talker: string; localId: number; sortSeq?: number; force?: boolean }): Promise<RemoteResult<MessageAnalysisResult>>
   getFavorites(options?: { limit?: number; offset?: number; q?: string }): Promise<RemoteResult<FavoritesSnapshot>>
   getAssetInsights(): Promise<RemoteResult<AssetInsightsSnapshot>>
   getOfficialAssets(): Promise<RemoteResult<OfficialAssetsSnapshot>>
@@ -535,6 +560,8 @@ export interface WechatRemote {
     kbId?: number
     count?: number
     targetLocalId?: number
+    /** 跳过缓存重新生成（「换一批」用它）。 */
+    force?: boolean
   }): Promise<RemoteResult<ReplySuggestResult>>
   askWechat(options: {
     question: string
@@ -565,14 +592,11 @@ export interface WechatRemote {
     /** 上一轮返回的结构化线程状态；用于跨请求继承会话、联系人与时间窗。 */
     threadState?: ThreadState
   }): Promise<RemoteResult<AskResult>>
-  /** 取消一轮正在生成的问答（W3-6.1）。找不到在跑的那一轮时 ok=false + message。 */
-  cancelAsk(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
   /**
-   * 停止一批正在跑的逐条本地分析（W3-11.5）。
-   * @param options - jobId = `analyzeVisibleMessages` 那批的同一标识。
-   * @returns ok + 停不上的原因（该批已算完 / 标识不认识）。
+   * 停止一轮正在跑的问答（W3-6.1）：`jobId` 与 `askWechat` 传入的同一个。
+   * @returns ok，或找不到那一轮时的说明。
    */
-  cancelLayaAnalysis(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
+  cancelAsk(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; message?: string }>>
   /**
    * 停止一次正在跑的搜索索引构建（W3-11.5）。
    *

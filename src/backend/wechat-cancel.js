@@ -37,8 +37,6 @@ const CALL_CANCEL_METHODS = Object.freeze({
   searchMessages: 'cancelSearch',
   searchUnified: 'cancelSearch',
   askWechat: 'cancelAsk',
-  analyzeVisibleMessages: 'cancelLayaAnalysis',
-  downloadLayaModel: 'cancelLayaDownload',
   buildSearchIndex: 'cancelSearchIndexBuild',
   buildKbVectorIndex: 'cancelKbIndexBuild',
   downloadWhisperModel: 'cancelWhisperDownload',

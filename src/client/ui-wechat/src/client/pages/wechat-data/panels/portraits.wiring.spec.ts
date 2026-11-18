@@ -42,10 +42,9 @@ describe('客户画像与标签：导航与主页面', () => {
     expect(keep).toContain("'portraits'")
   })
 
-  it('目录并行读取三个真实分类并合并，360 只对当前选中客户按需加载', () => {
-    expect(PAGE).toContain('Promise.allSettled(')
-    expect(PAGE).toContain('CUSTOMER_CATEGORY_KEYS.map((category) => apiGetContacts({ category }))')
-    expect(PAGE).toContain('mergeCustomerCandidates(batches)')
+  it('目录一次读取三个真实分类并合并，360 只对当前选中客户按需加载', () => {
+    expect(PAGE).toContain('apiGetContacts({ categories: [...CUSTOMER_CATEGORY_KEYS] })')
+    expect(PAGE).toContain('mergeCustomerCandidates([env.contacts])')
     expect(PAGE).toContain('useCustomer360(selected?.username ?? null)')
     expect(PAGE, '目录不能逐行请求 getContact360').not.toContain('filtered.map((customer) => apiGetContact360')
   })

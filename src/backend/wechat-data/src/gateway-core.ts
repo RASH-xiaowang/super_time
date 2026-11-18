@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 236 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 230 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -144,8 +144,6 @@ export abstract class GatewayCore extends TypertRemoteService {
    * （就是那轮的 streamId），取消走独立的 `cancelAsk` Remote。
    */
   protected readonly _askJobs = new Map<string, AbortController>()
-  /** W3-11.5：逐条分析的取消槽（与问答分开放，原因见 `layaSignal` 的注释）。 */
-  protected readonly _layaJobs = new Map<string, AbortController>()
   /** W3-11.5：搜索索引构建的取消槽（与搜索分开放，原因见 `searchIndexSignal` 的注释）。 */
   protected readonly _searchIndexJobs = new Map<string, AbortController>()
   /** W3-5.5：下载的取消槽（与其余几种各占一格）。 */
@@ -775,28 +773,7 @@ export abstract class GatewayCore extends TypertRemoteService {
   }
 
   /**
-   * 取一批逐条分析的取消信号（W3-11.5）。语义与 {@link searchSignal} / {@link askSignal} 一致：
-   * 槽位只认「自己这一枚控制器」，先取消再重跑的令牌不会互相删。
-   *
-   * 为什么单独一格而不复用 `_askJobs`：分析批与问答轮次会同时在跑，共用一个 Map 的话
-   * 两个毫不相干的 jobId 会互相顶掉对方的令牌，取消会打到错误的批次上。
-   * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
-   */
-  protected layaSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
-    return jobSignalFor(this._layaJobs, jobId)
-  }
-
-  /**
-   * 取消一批逐条分析。返回是否真的找到了在跑的那一批 —— 找不到（已算完 / jobId 不认识）
-   * 时给调用方一个可读的 false，而不是静默成功。
-   * @param jobId - 要取消的批次标识。
-   */
-  protected cancelLayaJob(jobId?: string): boolean {
-    return cancelJobIn(this._layaJobs, jobId)
-  }
-
-  /**
-   * 取一次搜索索引构建的取消信号（W3-11.5）。语义与前两个 `xxxSignal` 一致。
+   * 取一次搜索索引构建的取消信号（W3-11.5）。语义与 {@link askSignal} 一致。
    *
    * 为什么单独一格：搜索与构建会同时在跑（搜索兜底扫描期间用户就能点「构建索引」），
    * 共用 `_searchJobs` 的话「停止构建」会打到在跑的搜索上、把搜索打断。

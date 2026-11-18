@@ -1,2 +1,3 @@
 import type { OverviewExtras } from '../types.ts';
-export declare function queryOverviewExtras(decryptedDir: string): OverviewExtras;
+import { type TalkerDayCounts } from './overview-activity.ts';
+export declare function queryOverviewExtras(decryptedDir: string, talkerDays?: TalkerDayCounts): OverviewExtras;

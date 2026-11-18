@@ -13,11 +13,25 @@ import {
 
 const done = (sourceText: string): InlineAnalysisEntry => ({
   state: 'done',
-  answers: [],
-  sourceText,
-  fromVoice: false,
-  inferenceMs: 1,
-  cached: false,
+  result: {
+    ok: true,
+    model: 'opencode/kimi',
+    sourceText,
+    fromVoice: false,
+    cached: false,
+    elapsedMs: 1,
+    lowConfidence: false,
+    analysis: {
+      scope: 'private',
+      headline: sourceText,
+      confidence: 'medium',
+      intent: { label: '想确认', detail: '' },
+      mood: { label: '平稳', detail: '' },
+      action: { shouldReply: true, channel: 'private', title: '直接回答', guidance: '', avoid: '' },
+      signals: [],
+      evidence: [],
+    },
+  },
 })
 
 describe('rememberInlineAnalysis', () => {
@@ -44,7 +58,7 @@ describe('rememberInlineAnalysis', () => {
     expect(entries.size).toBe(3)
     expect(entries.has(2), '刷新第一条后，第二条才应该成为最旧条目').toBe(false)
     const first = entries.get(1)
-    expect(first?.state === 'done' ? first.sourceText : '').toBe('新')
+    expect(first?.state === 'done' ? first.result.sourceText : '').toBe('新')
     expect([...entries.keys()]).toEqual([3, 1, 4])
   })
 })

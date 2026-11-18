@@ -254,7 +254,9 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-22（统一问答运行时新增 Remote 方法 → 219）：第二十次跟。
     // 2026-10-30（AI 回复 / 消息列表投递方法面 → 224）：第二十一次跟。
     // 2026-11-16（AI 回复记录重新生成 / 专用清理 +2 → 236）：第二十二次跟。
-    from: '236 个 Remote 方法）',
+    // 2026-11-18（AI 回复过程留痕 `getChatAiReplyTrace` → 237）：第二十三次跟。
+    // 2026-11-18（移除本地 ONNX 决策模型、改为 LLM 消息分析：8 → 1 → 230）：第二十四次跟。
+    from: '230 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -300,22 +302,22 @@ const MUTATIONS_BATCH12 = [
     to: '暂无数据',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/consistency-r7.wiring.spec.ts',
   },
- // 2026-11-13：锚点跟随 「更多」菜单里的分析按钮分支化（setMoreOpen + 四个面板互斥） 更新。
+ // 2026-11-18：锚点跟随「分析与推荐回复合并成一个面板、入口合成一条『回复助手』」更新。
   {
     id: 'M27-analysis-toggle-not-wired',
-    why: '「分析」按钮的 onClick 变成空操作（不再 toggle `analysisPaneOpen`）—— 按钮在、点了没反应，必须发现（2026-10-19 微信化后这个按钮同时负责收起「更多」菜单，锚点跟着带上 `setMoreOpen(false)`）',
+    why: '「回复助手」入口的 onClick 变成空操作（不再 toggle `analysisPaneOpen`）—— 按钮在、点了没反应，必须发现',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-head-actions.tsx',
-    from: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setSuggestOpen(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(v => !v)\n                      }}',
-    to: 'onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setSuggestOpen(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(false)\n                      }}',
+    from: "onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(v => !v)\n                      }}",
+    to: "onClick={() => {\n                        setMoreOpen(false)\n                        if (!analysisPaneOpen) {\n                          setAiOpen(false)\n                          setAiFull(false)\n                          setContactInfoOpen(false)\n                          setGroupInfoOpen(false)\n                        }\n                        setAnalysisPaneOpen(false)\n                      }}",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
- // 2026-11-13：锚点跟随 分析块拆进 ChatRightPanel（mode === 'analysis' 条件渲染） 更新。
+ // 2026-11-18：锚点跟随 合并后的「回复助手」结构（研判段无条件渲染、候选段按 allowSuggest）更新。
   {
     id: 'M28-analysis-block-always-rendered',
-    why: '组合层去掉分析块的条件渲染 —— 折叠按钮点了分析区还在，等于按钮是摆设',
+    why: '组合层去掉候选段的条件渲染 —— 群聊里也会冒出「可以这样回」，而群里没有可以「替我说一句」的对象',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/ChatRightPanel.tsx',
-    from: '      {mode === \'analysis\' && (\n        <ChatAnalysisPanel',
-    to: '      {(true) && (\n        <ChatAnalysisPanel',
+    from: '        {allowSuggest && (\n          <section className={css.section} aria-label="可以这样回">',
+    to: '        {(true) && (\n          <section className={css.section} aria-label="可以这样回">',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
   },
  // 2026-11-13：锚点跟随 右栏挂载条件改按 chatRightMode 判定 更新。
@@ -390,10 +392,10 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M37-suggest-not-private-only',
-    why: '推荐回复的可见性去掉单聊限定 —— 群聊里会冒出「回一句」，语义不成立',
+    why: '推荐回复的可见性去掉单聊限定 —— 群聊里会冒出「回一句」，语义不成立（2026-11-18 合并成一个面板后，判据落到 `allowSuggest`）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx',
-    from: "const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'",
-    to: 'const suggestVisible = suggestOpen && curSession !== null',
+    from: "allowSuggest={curSession.type === 'private'}",
+    to: 'allowSuggest={true}',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/reply-suggest.wiring.spec.ts',
   },
   {
@@ -890,10 +892,10 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: "M108-overview-insights-stops-yielding-per-row",
-    why: "只在分片边界让出、整表扫一口气跑完：大账号的朋友圈（几万条）仍然把循环钉死",
-    file: "src/backend/wechat-data/src/query/overview-insights.ts",
-    from: "          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()",
-    to: "          if (false) await yieldToLoop()",
+    why: "只在分片边界让出、整表扫一口气跑完：大账号的朋友圈（几万条）仍然把循环钉死。锚点跟着朋友圈整表扫描一起搬到 overview-moments-scan.ts（总览与洞察共用那一份扫描）",
+    file: "src/backend/wechat-data/src/query/overview-moments-scan.ts",
+    from: "      if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()",
+    to: "      if (false) await yieldToLoop()",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
   {

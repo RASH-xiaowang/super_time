@@ -46,7 +46,7 @@ describe('Whisper 下载 jobId 接线', () => {
     expect(install).toMatch(/finally \{[\s\S]{0,120}whisperJobId\.current = ''/)
   })
 
-  it('语音设置使用六卡模型库，并完整接上选择、下载和停止回调', () => {
+  it('语音设置使用模型卡片库，并完整接上选择、下载和停止回调', () => {
     expect(steps).toContain('<WhisperModelLibrary')
     expect(steps, '原生下拉不应再出现在语音设置里').not.toMatch(/<Select\b/)
     expect(steps).toContain('setWhisperModel(model.id)')
