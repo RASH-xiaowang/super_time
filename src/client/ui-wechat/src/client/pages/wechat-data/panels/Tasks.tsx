@@ -13,6 +13,7 @@ import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 import { useConfirm } from '../ui/confirm.tsx'
 import { useMenuDismiss } from './use-menu-dismiss.ts'
+import { HandoffRemindList } from './tasks-handoff.tsx'
 
 function fmtDue(ts?: number): string {
   if (!ts) return ''
@@ -55,8 +56,6 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   const { notice, flash } = useTransientNotice()
   const closeMore = useCallback((): void => { setMoreOpen(false) }, [])
   const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, closeMore)
-
-
 
   const notify = (text: string): void => {
     flash(text)
@@ -226,6 +225,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
 
       {/* 卡片撑满面板剩余高度（2026-10-18「其他面板的卡片要撑满屏幕」）：
           空态也放进卡里，不再让页面下半截裸空。 */}
+      <HandoffRemindList />
       <div className={css.fill}>
         <Card flush>
           {!tasksLoading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" desc="点右上角「提取待办」从最近 7 天聊天里找，或在上方输入框手动添加一条" />}

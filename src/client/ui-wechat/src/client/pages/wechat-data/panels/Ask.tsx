@@ -330,7 +330,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
 } = {}): React.JSX.Element {
   // 当前知识库：沉淀为笔记时默认存到这里，编辑器里可以就地改 ——
   // 「沉淀完才发现该归到另一个库」是这个入口最常见的补正，所以这里必须能改。
-  const { kbId } = useKbScope()
+  const { kbId, kbs: kbList } = useKbScope()
   const [sessions, setSessions] = useState<readonly WechatSession[]>([])
   /**
    * 当前模型（provider · model）：底部隐私说明要写清"片段会发给谁"。
@@ -581,7 +581,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
 
       {/* ④ 隐私说明：输入框下方次级小字（常驻底部）；「所选模型」要说清是哪一支。 */}
       <div className={css.privacyNote}>
-        检索在本机完成；AI 生成会把检索到的片段（聊天记录与知识库文件）发送到
+        检索在本机完成{kbList.find(k => k.id === kbId)?.name ? <>，知识库用「<b>{kbList.find(k => k.id === kbId)?.name}</b>」</> : ''}；AI 生成会把检索到的片段（聊天记录与知识库文件）发送到
         {model ? <>「<b>{model.provider} · {model.model}</b>」</> : '当前配置的模型'}
         {model && model.model.trim() === '' ? '（尚未配置，需先在「设置 → AI 大模型」里填写）' : ''}
         {/* 不能写「可在设置里关闭出网」：应用内已无出网开关（2026-09-30 移除）。 */}

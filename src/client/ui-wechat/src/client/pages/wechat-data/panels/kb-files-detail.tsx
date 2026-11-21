@@ -276,17 +276,22 @@ export function KbFileDetailPane({
                 <dd className={css.kvVal}>
                   {selected.chunkCount} 块{selected.charCount > 0 ? ` · ${selected.charCount.toLocaleString('zh-CN')} 字` : ''}
                 </dd>
-                <dt className={css.kvKey}>解析器</dt>
-                <dd className={css.kvVal}>{selected.parser || '（尚未使用）'}</dd>
-                <dt className={css.kvKey}>内容指纹</dt>
-                <dd className={clsx(css.kvVal, css.mono)} title={selected.sha256}>{selected.sha256 || '（空）'}</dd>
-                <dt className={css.kvKey}>原始路径</dt>
-                {/* 只登记、从不变动：这句话要跟路径放在一起，看路径的人才会放心。 */}
-                <dd className={clsx(css.kvVal, css.mono)} title={selected.srcPath}>
-                  {selected.srcPath || '（空）'}
-                  <div className={css.hintNote}>仅登记，不会被修改或删除。</div>
-                </dd>
               </dl>
+              <details className={css.detailFoot}>
+                <summary className={css.sectionLabel}>技术详情（排障用）</summary>
+                <dl className={css.kv}>
+                  <dt className={css.kvKey}>解析器</dt>
+                  <dd className={css.kvVal}>{selected.parser || '（尚未使用）'}</dd>
+                  <dt className={css.kvKey}>内容指纹</dt>
+                  <dd className={clsx(css.kvVal, css.mono)} title={selected.sha256}>{selected.sha256 || '（空）'}</dd>
+                  <dt className={css.kvKey}>原始路径</dt>
+                  {/* 只登记、从不变动：这句话要跟路径放在一起，看路径的人才会放心。 */}
+                  <dd className={clsx(css.kvVal, css.mono)} title={selected.srcPath}>
+                    {selected.srcPath || '（空）'}
+                    <div className={css.hintNote}>仅登记，不会被修改或删除。</div>
+                  </dd>
+                </dl>
+              </details>
             </div>
           )}
         </div>

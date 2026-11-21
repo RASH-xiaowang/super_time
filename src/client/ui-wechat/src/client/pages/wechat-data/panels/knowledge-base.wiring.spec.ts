@@ -170,7 +170,7 @@ describe('路由：kb 与 knowledge 同走一个合并外壳，且没有并进�
     expect(branch).toContain('initial={tab}')
     // 三段齐全，且 key 必须等于 tab id（深链才对得上）
     expect(shellSrc).toContain('ariaLabel="知识库视图"')
-    expect(shellSrc).toContain("{ key: 'kb', label: '笔记库'")
+    expect(shellSrc).toContain("{ key: 'kb', label: '笔记'")
     expect(shellSrc).toContain("{ key: 'knowledge', label: '知识图谱'")
     expect(shellSrc).toMatch(/\{ key: '(kb|knowledge|kbfiles)', label: '[^']+'/g)
     expect(shellSrc).toContain('<KnowledgeBasePanel')
@@ -662,10 +662,12 @@ describe('2026-09-19 三栏重排：吸顶骨架、按钮层级与库 rail', () 
     expect(panelCode.match(/＋ 新建条目/g)?.length, '「＋ 新建条目」的按钮数变了').toBe(1)
   })
 
-  it('命名收口：面板标题叫「笔记库」，「知识库」这个名字留给侧栏与 rail', () => {
-    // 改前是侧栏「知识库」→ 分段「笔记库」→ 面板标题「知识库」，同一个词指两层东西。
-    expect(panelCode).toMatch(/<PanelHeader\s+title="笔记库"/)
-    expect(code(shellSrc)).toContain("{ key: 'kb', label: '笔记库'")
+  it('命名收口：分段与面板标题叫「笔记」，「知识库」只留给侧栏与 rail', () => {
+    // 2026-11-19 再收一层：曾用「笔记库」，但侧栏入口本身就叫「知识库」，
+    // 「笔记"库"」会让用户以为这是另一个库。现在 侧栏=知识库 / 分段=笔记 / 标题=笔记，
+    // 三个词各自只指一层，不再有"库里有库"的歧义。
+    expect(panelCode).toMatch(/<PanelHeader\s+title="笔记"/)
+    expect(code(shellSrc)).toContain("{ key: 'kb', label: '笔记'")
     expect(code(railSrc)).toMatch(/railHd[\s\S]{0,120}知识库/)
   })
 

@@ -632,19 +632,18 @@ export function createCancellableHeavyRpcLane(
 }
 
 /**
- * 这条媒体 RPC 会不会进后端重活车道（决定是否要串行）。
+ * 这条媒体 RPC 会不会进后端**重活**车道（决定是否要串行）。
  *
- * 判据与 `call-priority.js` 的 `downgradeHeavyByArgs` 对齐：视频封面恒重；图片只有
- * 「在线 + CDN 三件套齐」才会被降到普通车道，其余都按重活处理。
- * @param item - 媒体请求。
+ * 判据必须与后端一致（2026-11-19 修）：`call-priority.js#downgradeHeavyByArgs` 只按
+ * **网络状态**分档（在线 ⇒ NORMAL 车道并发 2 / 队列 32，无网 ⇒ HEAVY 只有 1 个运行位），
+ * 不看 CDN 三件套。旧判据在「在线但缺 url/token/seed」时也串行，比后端严格一档，
+ * 一屏 30 张图被拉成 30 × 1.2s。现在只按无网串行；前端一批最多 4 个，不会 `REMOTE_BUSY`。
+ * @param _item - 媒体请求（保留入参：后端若改成按类型分档，这里要跟着分）。
  * @param offline - 当前是否无网。
  * @returns true = 需要走串行车道。
  */
-function needsHeavyRpcLane(item: MediaKeySpec, offline: boolean): boolean {
-  if (item.kind === 'video' || offline) return true
-  return !(typeof item.url === 'string' && item.url !== ''
-    && typeof item.token === 'string' && item.token !== ''
-    && typeof item.seed === 'string' && item.seed !== '')
+export function needsHeavyRpcLane(_item: MediaKeySpec, offline: boolean): boolean {
+  return offline
 }
 
 function isOffline(): boolean {

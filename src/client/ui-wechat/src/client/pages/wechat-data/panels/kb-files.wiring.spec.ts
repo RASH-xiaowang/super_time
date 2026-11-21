@@ -177,8 +177,10 @@ describe('路由：kbfiles 与 kb / knowledge 同走一个知识库外壳', () =
     )
     expect(branch).toContain('<KbShell')
     expect(branch).toContain('initial={tab}')
-    // 三段齐全，且 key 必须等于 tab id（外壳靠 `initial={tab}` 找分段）
-    expect(kbShellSrc).toContain("{ key: 'kb', label: '笔记库'")
+    // 三段齐全，且 key 必须等于 tab id（外壳靠 `initial={tab}` 找分段）。
+    // 2026-11-19：label 从「笔记库」改成「笔记」—— 侧栏入口已叫「知识库」，
+    // 分段再叫「笔记库」会让用户以为这是两个不同的库。
+    expect(kbShellSrc).toContain("{ key: 'kb', label: '笔记'")
     expect(kbShellSrc).toContain("{ key: 'knowledge', label: '知识图谱'")
     expect(kbShellSrc).toContain("{ key: 'kbfiles', label: '文件'")
     expect(kbShellSrc).toContain('<KbFilesPanel')
@@ -808,6 +810,10 @@ describe('模型摘要：界面必须说清这段摘要覆盖了什么', () => {
  *   ② 状态读取失败被显示成「还没有语义索引」—— 正是本面板反复踩过的 N1（读失败 ≠ 确无数据）；
  *   ③ 轮询判据用本地的 `indexing` 而不是后端的 job —— 别的入口触发的构建在本界面不动；
  *   ④ 四种「只有关键词」被并成一句 —— 用户分不清该去配模型、还是点一下建索引、还是要重建。
+ *
+ * 2026-11-20：语义索引改为**导入后自动建立**（`remotes/kb-auto-index.ts`）。
+ * 因此 ② 与 ④ 里的人话不再指导用户"点一下建索引"，而是说明"会自动进行" ——
+ * 手动按钮保留，仅作为自动失败时的兜底。
  */
 describe('语义索引：入口、状态与四种「只有关键词」', () => {
   it('接的是 getKbVectorIndex / buildKbVectorIndex 两个 Remote', () => {
@@ -863,7 +869,9 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
     expect(from).toBeGreaterThan(0)
     const fn = panelCode.slice(from, from + 1200)
     expect(fn).toContain('未配置向量模型')
-    expect(fn).toContain('还没有语义索引')
+    // 2026-11-20：语义索引改为**导入后自动建立**，所以文案不再指导用户去点按钮，
+    // 而是说明"会自动进行"（手动入口仍保留，作为自动失败时的兜底）。
+    expect(fn).toContain('自动建立')
     expect(fn).toContain('需重建')
     // 未就绪 ≠ 空：`null`（还没读到）必须有自己的说法，否则读失败会显示成「还没有」
     expect(fn).toMatch(/view === null[\s\S]{0,80}读取中/)

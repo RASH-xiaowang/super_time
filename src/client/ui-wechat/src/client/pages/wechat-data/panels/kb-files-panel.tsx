@@ -553,7 +553,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
       : (
         <EmptyState
           title="还没有登记文件"
-          desc="点右上角「添加文件」，把你电脑上的 txt / md / csv / json / html 等文件加进来。文件只被「读取」，不会被修改或删除；解析用的是库内的副本，所以原文件之后改名、移动都不影响。"
+          desc="① 点「添加文件」加入电脑上的 txt / md / csv / json / html 等资料；② 等右上角状态变成「已就绪」；③ 到「微信问答」提问——回答会标注来自哪份文件，并可点回原文。文件只被读取，不会被修改或删除。"
           action={<Button variant="pill" onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}>{desktopAction() ? '添加文件（仅电脑）' : '添加文件'}</Button>}
         />
       )

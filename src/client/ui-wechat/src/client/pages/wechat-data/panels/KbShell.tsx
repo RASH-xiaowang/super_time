@@ -78,7 +78,7 @@ export function KbShell({ initial, onOpenChat, focusFileId, focusNonce }: {
               // 分段状态在 `MergedSections` 里，所以用它的 `go` 回调。
               // 带 fileId 时同时聚焦那个文件（笔记详情的「回到源文件」）。
               // 「回到源文件」：`onGoFiles(fileId)` 记下要聚焦的文件再切段。
-              { key: 'kb', label: '笔记库',
+              { key: 'kb', label: '笔记',
                 render: (go) => (
                   <KnowledgeBasePanel onOpenChat={onOpenChat} onGoFiles={(fileId) => {
                     if (fileId !== undefined) setJump({ id: fileId, nonce: Date.now() })

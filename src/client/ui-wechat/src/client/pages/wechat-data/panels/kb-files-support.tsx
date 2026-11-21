@@ -60,12 +60,18 @@ export function indexLabel(view: KbVectorIndexView | null): { text: string; tone
   if (!view.configured) return { text: '未配置向量模型 · 只有关键词检索', tone: 'muted' }
   const s = view.status
   if (s.ready) return { text: `语义索引 ${s.rows.toLocaleString('zh-CN')} 块 · ${s.model}`, tone: 'ok' }
-  if (s.staleReason === 'no-index') return { text: '还没有语义索引', tone: 'warn' }
+  if (s.staleReason === 'no-index') return { text: '语义索引将自动建立（导入后自动进行）', tone: 'warn' }
   if (s.staleReason === 'model-mismatch') {
     return { text: `索引由 ${s.models[0] || '未知模型'} 生成、本库现在用 ${view.model} · 需重建`, tone: 'warn' }
   }
-  // 只缺新增内容的向量：不用整库重建，点一次「语义索引」就是增量补齐。
-  if (s.staleReason === 'incomplete') return { text: '有新增内容未建索引 · 点「语义索引」补齐', tone: 'warn' }
+  // 只缺新增内容的向量：不用整库重建，导入时已自动安排增量补齐。
+  if (s.staleReason === 'incomplete') return { text: '有新增内容待补齐（已自动安排）', tone: 'warn' }
+  /*
+   * 索引由旧的分块截断策略生成（2026-11-20）：那些向量只嵌了每块的前 200 字，
+   * 而实际块中位数 489 字 —— 约六成正文对语义检索不可见。必须整份重算。
+   * 文案要说清"会发生什么"，而不是甩一个 `truncation-changed` 让用户猜。
+   */
+  if (s.staleReason === 'truncation-changed') return { text: '索引需按完整正文重建（已自动安排）', tone: 'warn' }
   return { text: '语义索引不可用 · 需重建', tone: 'warn' }
 }
 

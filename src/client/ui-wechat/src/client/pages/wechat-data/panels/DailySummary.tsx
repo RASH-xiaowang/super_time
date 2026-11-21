@@ -32,7 +32,7 @@ import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 
 const FORMATS: ReadonlyArray<{ key: string; label: string; desc: string }> = [
-  { key: 'brief', label: '简洁总结', desc: '3–5 句话概括当天聊天的重点内容' },
+  { key: 'brief', label: '简洁总结', desc: '一段话概括重点，篇幅随素材量' },
   { key: 'detailed', label: '详细总结', desc: '按主题分点，包含关键事件、话题与结论' },
   { key: 'bullets', label: '要点列表', desc: '用要点列表提炼当天核心信息' },
   { key: 'story', label: '叙事总结', desc: '以第三人称叙述当天交流的来龙去脉' },

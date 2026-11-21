@@ -159,14 +159,18 @@ export function DegradedNotice({ text, onOpenSettings }: {
  * 输出格式 —— 与后端 `summary-prompt.ts` 的 `FORMAT_SPEC` 一一对应。
  *
  * 为什么要让用户选：改前只有一种「简洁要点」，模型有时写 3 行、有时写 800 字，
- * 用户不知道会得到什么。现在每种格式都有**明确字数区间**（见后端），
- * 选「详细」就是 400–700 字，选「要点」就是 6–10 条。
+ * 用户不知道会得到什么。现在每种格式的**结构**是明确的（分点/成段/小标题/时间顺序）。
+ *
+ * ⚠️ `hint` 里**不要写字数区间**（2026-11-19 修）：此前这里是 `150–250 字`、
+ * `400–700 字`…，与后端提示词里同一组数字重复维护。后端已经改成「篇幅按素材量决定」，
+ * 这里却没跟着改 —— 界面上仍然标着区间，用户自然以为还在限字数（实测就是这么被问的）。
+ * 现在 hint 只描述**形状**，不承诺长度。
  */
 export const FORMATS: ReadonlyArray<{ key: string; label: string; hint: string }> = [
-  { key: 'brief', label: '简洁', hint: '150–250 字' },
-  { key: 'detailed', label: '详细', hint: '400–700 字' },
-  { key: 'bullets', label: '要点', hint: '6–10 条' },
-  { key: 'story', label: '叙事', hint: '300–500 字' },
+  { key: 'brief', label: '简洁', hint: '一段话 · 只说主线' },
+  { key: 'detailed', label: '详细', hint: '按主题分节' },
+  { key: 'bullets', label: '要点', hint: '逐条列出' },
+  { key: 'story', label: '叙事', hint: '按时间顺序' },
 ]
 
 /**

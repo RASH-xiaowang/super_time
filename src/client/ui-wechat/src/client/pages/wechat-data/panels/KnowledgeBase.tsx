@@ -349,7 +349,7 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
           滚两屏之后「新建」「搜索」「标签」就都不在屏幕上，而右侧详情还长得滚不完。 */}
       <div className={css.head}>
         <PanelHeader
-          title="笔记库"
+          title="笔记"
           desc="本地笔记：新建 / 编辑 / 标签 / 关键词搜索"
           actions={(
             <>

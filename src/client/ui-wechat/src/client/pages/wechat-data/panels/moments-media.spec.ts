@@ -12,9 +12,7 @@
  * 所以这里的判据都是「数 RPC 次数 / 数谁被调用」，而不是读源码：
  *  · 兜底路径（没有 IntersectionObserver 时）必须把登记过的键**逐个**解一遍，且**不重复**；
  *  · 先问 IndexedDB 原图，命中就不许再调解密 RPC（否则进面板就打爆后端）；
- *  · 一批 8 个之外剩下的也必须排空（`while` 而不是只 splice 一次）；
- *  · 封面兜底最多试 3 次（否则一个永久失败的链接会一直打网络）；
- *  · 灯箱那张缺图的按需解析只发生一次。
+ *  · 一批 8 个之外剩下的也必须排空（`while` 而不是只 splice 一次）；封面最多试 3 次。
  * @module moments-media-spec
  */
 import { StrictMode, act, createElement } from 'react'
@@ -48,6 +46,7 @@ const {
   momentGridImages,
   momentImageSpec,
   momentLinkCardView,
+  needsHeavyRpcLane,
   pendingCovers,
   requeueAfterDelay,
   useMomentsMedia,
@@ -529,17 +528,18 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     await flush()
   })
 
-  it('缺 CDN 三件套的图片 RPC 串行：同一时刻只发一个，避免后端重活队列 REMOTE_BUSY', async () => {
-    let releaseFirst: (() => void) | null = null
-    mocks.apiGetSnsImageDataUrl.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseFirst = () => { resolve({ url: 'data:k1' }) }
-    }))
+  it('串行判据与后端一致：在线并发，仅无网串行', async () => {
+    // 后端 `downgradeHeavyByArgs` 只按网络状态分档（在线 ⇒ NORMAL 车道并发 2）。旧实现在
+    // 「缺 CDN 三件套」时也串行，比后端严格一档 —— 一屏 30 张图被拉成 30 × 1.2s。
+    const spec = { md5: 'x', kind: 'img' as const }
+    const vid = { md5: 'x', kind: 'video' as const, url: '', token: '', seed: '' }
+    expect([needsHeavyRpcLane(spec, false), needsHeavyRpcLane(vid, false), needsHeavyRpcLane(spec, true)])
+      .toEqual([false, false, true])
+    // 接线：在线时一批里的 3 张同时发出去（不是一个个等）。
+    setOnline(true)
+    mocks.snsMediaCacheGet.mockResolvedValue(null)
+    mocks.apiGetSnsImageDataUrl.mockImplementation(() => new Promise<void>(() => { /* 永不返回，只看发了几次 */ }))
     render({ specs: [img('k1'), img('k2'), img('k3')] })
-    await flush()
-    expect(mocks.apiGetSnsImageDataUrl.mock.calls.length, '第一张还没回话就发了第二个重活 RPC').toBe(1)
-    releaseFirst!()
-    await flush()
-    await flush()
     await flush()
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.length).toBe(3)
   })
