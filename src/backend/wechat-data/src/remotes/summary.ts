@@ -6,7 +6,10 @@
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
 import { collectDayMessages } from '../query/daily-summary.ts'
+import { buildSummaryPrompt, type SummaryFormat } from '../query/summary-prompt.ts'
 import { deleteSummaryTask as delTask, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from '../query/summary-tasks.ts'
+import { pushSummaryToWebhook } from '../query/summary-webhook.ts'
+import { redactWebhookEndpoint } from '../net/webhook-endpoint.ts'
 import { OperationCategory, OperationStatus, SummaryRecord, SummaryTask, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
@@ -22,7 +25,20 @@ export interface createSummaryRemotesInputs {
 export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
   return {
     listSummaryTasks(): SummaryTaskSnapshot {
-      return listTasks(rc.dirs().decrypted)
+      const snapshot = listTasks(rc.dirs().decrypted)
+      /**
+       * 地址里的 token 就是凭据：完整值只留在本机库里，**跨 Remote 边界一律脱敏**。
+       * 与 AI 回复默认 Webhook 同一口径（`default-webhook-store.ts` 的 `viewOf`）。
+       * 保存时把 `***` 原样传回来会被 `normalizeSummaryWebhookUrl` 判成 `keep`，
+       * 所以「看到脱敏地址 → 直接保存」不会覆盖真实 token。
+       */
+      return {
+        ...snapshot,
+        items: snapshot.items.map(task => ({
+          ...task,
+          webhookUrl: redactWebhookEndpoint(task.webhookUrl),
+        })),
+      }
     },
 
     saveSummaryTask(options: { task: SummaryTaskInput }): SummaryTaskMutationResult {
@@ -65,21 +81,31 @@ export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
         status = 'error'
         errMsg = 'LLM/模型不可用'
       } else {
-        // build the prompt from the task's format (mirror daily_summary.rs summary_formats)
-        const targets = task.targetUsers.length > 0 ? task.targetUsers.join('、') : '全部成员'
-        const formats: Record<string, string> = {
-          brief: '请用简洁的中文概括当天聊天记录的重点，3-5 句话以内，不要分点。',
-          detailed: '请对当天聊天记录做详细总结：按主题分点（Markdown 列表），包含关键事件、讨论的话题、达成的共识与结论；只依据记录内容，不编造。',
-          bullets: '请用 Markdown 无序列表提炼当天聊天记录的核心要点，每条一句话，控制在 10 条以内。',
-          story: '请以第三人称、叙事的方式回顾当天聊天记录：谁和谁聊了什么、发生了什么、有什么进展或插曲，读起来像一篇日记。',
-          custom: (task.customPrompt || '').replace(/\{date\}/g, date).replace(/\{group\}/g, task.groupName || task.groupUsername).replace(/\{targets\}/g, targets),
-        }
-        const fmtPrompt = formats[task.format || 'brief'] || formats['brief'] || ''
-        const prompt = '群聊【' + task.groupName + '】(' + task.groupUsername + ') ' + date + ' 的聊天记录如下：\n\n' + lines.join('\n') + '\n\n' + fmtPrompt
+        /**
+         * prompt 走**共用构造器**（`summary-prompt.ts`），不再自己写一份格式表。
+         *
+         * 这里原本有一份独立 map，`brief` 写着「3-5 句话以内」、`bullets` 写着
+         * 「控制在 10 条以内」—— 于是改共用的那份时定时任务不跟着变，两处口径漂了。
+         * 现在只有一个来源；`scope` 传群名，`targets` 传关注成员（给 {group} / {targets} 用）。
+         */
+        const prompt = buildSummaryPrompt({
+          from: date,
+          to: date,
+          lines,
+          stats: { total: count, sessions: 1, messages: lines.length },
+          format: (task.format || 'brief') as SummaryFormat,
+          customPrompt: task.customPrompt || '',
+          scope: task.groupName || task.groupUsername,
+          targets: task.targetUsers.length > 0 ? task.targetUsers.join('、') : '',
+        })
         const [gated] = rc.privacyGate('summary_task', { sessions: 1, messages: count }, [prompt])
         const userMsg = createUserMessage({ content: [{ type: 'text', text: gated ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
         const assembler = new BlockAssembler()
-        const opts: GenerateOptions = { provider: sel.provider, model: sel.model, messages: [userMsg], system: '你是微信每日总结助手，按要求的格式输出总结。', maxTokens: 1024 }
+        /**
+         * 刻意**不传 `maxTokens`**：过去这里是 `maxTokens: 1024`，一段长群聊的总结会被
+         * 硬生生截在半句话上。篇幅交给 prompt 里「按素材量决定」那条 + 模型自身的输出上限。
+         */
+        const opts: GenerateOptions = { provider: sel.provider, model: sel.model, messages: [userMsg], system: '你是微信每日总结助手，按要求的格式输出总结。' }
         try {
           for await (const chunk of llm.stream(opts)) assembler.push(chunk)
           summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
@@ -100,11 +126,39 @@ export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
         createdAt: Date.now(),
       }
       saveRec(rc.dirs().decrypted, rec)
-      // update task last run state
-      updateSummaryTaskRunState(rc.dirs().decrypted, task.id, Date.now(), status, errMsg)
       const done = status === 'done'
-      rc.op('task', 'run_summary_task', done ? 'ok' : 'fail', task.groupUsername, errMsg || `共 ${count} 条消息`)
-      return done ? { ok: true, summary, messageCount: count } : { ok: false, error: errMsg || '生成失败' }
+
+      /**
+       * 推送（2026-11-18）：只把**生成成功且有内容**的总结发出去。
+       *
+       * 失败不改 `status` —— 总结确实生成了、也落库了，把它标成 error 会让用户以为
+       * 白跑一轮（下一轮还要重新花 token）。推送原因单独带回，界面显示
+       * 「已生成，但推送失败：…」，并把它写进 `last_error` 让任务列表能看见。
+       */
+      let webhookResult: SummaryTaskRunResult['webhook']
+      let lastError = errMsg
+      if (done && summary !== '' && task.webhookUrl.trim() !== '') {
+        const pushed = await pushSummaryToWebhook({
+          webhookUrl: task.webhookUrl,
+          target: task.webhookTarget.trim() || task.groupName || task.groupUsername,
+          message: summary,
+        })
+        webhookResult = {
+          ok: pushed.ok,
+          endpoint: pushed.endpoint,
+          ...(pushed.status === undefined ? {} : { status: pushed.status }),
+          ...(pushed.error === undefined ? {} : { error: pushed.error }),
+        }
+        if (!pushed.ok) lastError = '推送失败：' + (pushed.error ?? '未知原因')
+        rc.op('task', 'push_summary_webhook', pushed.ok ? 'ok' : 'fail', pushed.endpoint, pushed.error ?? `id=${String(task.id)}`)
+      }
+
+      // update task last run state
+      updateSummaryTaskRunState(rc.dirs().decrypted, task.id, Date.now(), status, lastError)
+      rc.op('task', 'run_summary_task', done ? 'ok' : 'fail', task.groupUsername, lastError || `共 ${count} 条消息`)
+      const result: SummaryTaskRunResult = done ? { ok: true, summary, messageCount: count } : { ok: false, error: errMsg || '生成失败' }
+      if (webhookResult !== undefined) result.webhook = webhookResult
+      return result
     },
 
   }

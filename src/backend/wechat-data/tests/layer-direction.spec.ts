@@ -86,8 +86,13 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  *
  * `types-analysis.ts` 同理：消息分析（`query/analysis/**`）的进出参类型，纯类型、不含运行时，
  * 由 query 层与 remotes 共用。
+ *
+ * `net/webhook-endpoint.ts` 也是叶子模块：只依赖全局 `URL`，放的是「这个地址算不算合法的
+ * Feather `/webhook/<token>` 端点」与「日志里怎么把 token 抹掉」这两件事。三处调用方
+ * （消息列表投递、消息列表健康探测、定时总结推送）必须是**同一把尺子** —— 各写一份就会出现
+ * 「这里能存、那里拒绝」或者「某条路径把 token 原样写进日志」。放行它不会把上层依赖带进 query。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'types-analysis.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'types-analysis.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts', 'net/webhook-endpoint.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {

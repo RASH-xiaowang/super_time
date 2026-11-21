@@ -35,6 +35,8 @@ export declare function buildSummaryPrompt(opts: {
     };
     format?: SummaryFormat;
     customPrompt?: string;
+    scope?: string;
+    targets?: string;
 }): string;
 /**
  * 素材为空时的固定回复（不调模型，省一次请求）。

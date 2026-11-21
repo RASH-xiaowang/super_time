@@ -53,23 +53,27 @@ export function buildSummaryPrompt(opts: {
   stats: { total: number; sessions: number; messages: number }
   format?: SummaryFormat
   customPrompt?: string
+  scope?: string
+  targets?: string
 }): string {
   const single = opts.from === opts.to
   const span = single ? opts.from : `${opts.from} 至 ${opts.to}`
   const fmt = opts.format ?? 'brief'
+  const scope = (opts.scope ?? '').trim()
+  const targets = (opts.targets ?? '').trim()
 
   // 自定义模板：用户自己写，只做占位符替换（不叠加我们的结构要求 —— 那会覆盖用户的意图）。
   if (fmt === 'custom' && opts.customPrompt && opts.customPrompt.trim()) {
     const filled = opts.customPrompt
       .replace(/\{date\}/g, span)
-      .replace(/\{group\}/g, '全部会话')
-      .replace(/\{targets\}/g, '全部成员')
+      .replace(/\{group\}/g, scope === '' ? '全部会话' : scope)
+      .replace(/\{targets\}/g, targets === '' ? '全部成员' : targets)
     return filled + '\n\n以下是聊天素材：\n\n' + opts.lines.join('\n')
   }
 
   const spec = FORMAT_SPEC[fmt === 'custom' ? 'brief' : fmt]
   const head = [
-    `请总结 ${span} 的微信聊天记录。`,
+    `请总结 ${scope === '' ? '' : scope + ' '}${span} 的微信聊天记录。`,
     '',
     `素材规模：${String(opts.stats.total)} 条消息 / ${String(opts.stats.sessions)} 个会话 / ${String(opts.stats.messages)} 行文本。`,
     '',

@@ -9,6 +9,15 @@ export interface SummaryTask {
     customPrompt: string;
     scheduleTime: string;
     enabled: boolean;
+    /**
+     * Feather 的发送端点 `/webhook/<token>`；空串 = 不推送（2026-11-18 新增）。
+     *
+     * 地址里带着 token（就是凭据），所以**只在本机任务库里存**，
+     * 界面上回显时走 `redactWebhookEndpoint` 的脱敏形式。
+     */
+    webhookUrl: string;
+    /** 推送对象（微信会话名，例如「文件传输助手」）；空串时由调用方退回群名。 */
+    webhookTarget: string;
     lastRunAt?: number;
     lastStatus: string;
     lastError: string;

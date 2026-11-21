@@ -99,7 +99,7 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('手机/浏览器不可调用'), '没有说清手机 / 浏览器不可调用凭据回读')
 })
 
-check('出网点开关口径与文档一致（7 条无开关 + 1 条仅点击时下载 + 1 条默认关闭可关）', () => {
+check('出网点开关口径与文档一致（9 条无开关 + 1 条仅点击时下载 + 1 条默认关闭可关）', () => {
   // 2026-09-30：全局出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
   // 其余出网点没有全局开关；2026-10-30（v32）新增的「AI回复」是出网侧的 off 档
   // （默认关闭、按单聊开启）。要断网仍只能靠系统防火墙或断网。
@@ -117,13 +117,13 @@ check('出网点开关口径与文档一致（7 条无开关 + 1 条仅点击时
     .map((c) => c.slice(0, c.indexOf('"')))
     .filter((k) => k === 'none' || k === 'manual' || k === 'off')
   const ORDER = [
-    'AI 问答与总结', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）',
-    '消息列表回复投递', 'AI回复', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
+    'AI 问答与总结', '消息分析', 'AI embedding', '任务触发（Webhook / 多家 RPA 厂商）',
+    '消息列表回复投递', '定时总结 Webhook 推送', 'AI回复', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载',
   ]
   /** 唯一一条「仅点击时下载」的出网点；其余出网点都应当是「无开关」。 */
   const MANUAL = '语音模型下载'
   /** 默认关闭、按单聊开启的出网点。 */
-  const OFF = 'AI回复'
+  const OFF = ['AI回复']
   const at = ORDER.map((l) => outboundHtml.indexOf(`>${l}<`))
   ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => (at[i] ?? -1) < 0).join('、')}`)
   // 取不到前一项就当 NaN：任何与 NaN 的比较都是 false ⇒ 宁可判错位，不许悄悄放过
@@ -131,17 +131,23 @@ check('出网点开关口径与文档一致（7 条无开关 + 1 条仅点击时
   ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
   const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
   ok(kindOf[MANUAL] === 'manual', `${MANUAL}应标为「仅点击时下载」，实际 ${kindOf[MANUAL]}`)
-  ok(kindOf[OFF] === 'off', `${OFF}应标为「默认关闭 · 可关」，实际 ${kindOf[OFF]}`)
-  for (const l of ORDER.filter((l) => l !== MANUAL && l !== OFF)) {
+  for (const label of OFF) ok(kindOf[label] === 'off', `${label}应标为「默认关闭 · 可关」，实际 ${kindOf[label]}`)
+  for (const l of ORDER.filter((l) => l !== MANUAL && !OFF.includes(l))) {
     ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
   }
-  ok(kinds.filter((k) => k === 'none').length === ORDER.length - 2, `无开关的应当且仅当 ${ORDER.length - 2} 条（${MANUAL}、${OFF}除外）`)
+  ok(kinds.filter((k) => k === 'none').length === ORDER.length - 1 - OFF.length, `无开关的应当且仅当 ${ORDER.length - 1 - OFF.length} 条（${MANUAL}、${OFF}除外）`)
   ok(kinds.filter((k) => k === 'manual').length === 1, '「仅点击时下载」的应当且仅当 1 条')
-  ok(kinds.filter((k) => k === 'off').length === 1, '「默认关闭 · 可关」的出网点应当且仅当 1 条')
+  ok(kinds.filter((k) => k === 'off').length === OFF.length, '「默认关闭 · 可关」的出网点应当且仅当 1 条')
   // 标记文字与 data-switch 同源，这里再按渲染结果数一遍（防「值对但标签写错」）。
-  ok((outboundHtml.match(/>无开关</g) ?? []).length === ORDER.length - 2, `渲染出的「无开关」标记不是 ${ORDER.length - 2} 个`)
+  ok((outboundHtml.match(/>无开关</g) ?? []).length === ORDER.length - 1 - OFF.length, `渲染出的「无开关」标记不是 ${ORDER.length - 1 - OFF.length} 个`)
   ok((outboundHtml.match(/>仅点击时下载</g) ?? []).length === 1, '渲染出的「仅点击时下载」标记不是 1 个')
-  ok((outboundHtml.match(/>默认关闭 · 可关</g) ?? []).length === 1, '渲染出的「默认关闭 · 可关」出网标记不是 1 个')
+  ok((outboundHtml.match(/>默认关闭 · 可关</g) ?? []).length === OFF.length, '渲染出的「默认关闭 · 可关」出网标记不是 1 个')
+})
+
+check('新增材料与投递动作在同意屏真实渲染', () => {
+  for (const text of ['消息分析', 'analyze_message', '定时总结 Webhook 推送', '立即运行', '/webhook/***']) {
+    ok(outboundHtml.includes(text), '同意屏漏项：' + text)
+  }
 })
 
 check('重点被单独框出：一句话结论 + 那句「没有全局出网开关」+ 完全离线的诚实说明', () => {

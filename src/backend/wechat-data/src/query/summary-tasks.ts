@@ -7,6 +7,7 @@ import { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { SummaryTaskInput } from '../types.ts'
+import { SUMMARY_WEBHOOK_TARGET_MAX, normalizeSummaryWebhookUrl } from './summary-webhook.ts'
 import {
   displayNameForUsername,
   isMessageTableHash,
@@ -43,7 +44,33 @@ function openStore(decryptedDir: string): DatabaseSync {
   const db = new DatabaseSync(file)
   db.exec("CREATE TABLE IF NOT EXISTS summary_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', custom_prompt TEXT NOT NULL DEFAULT '', schedule_time TEXT NOT NULL DEFAULT '08:00', enabled INTEGER NOT NULL DEFAULT 1, last_run_at INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
   db.exec("CREATE TABLE IF NOT EXISTS summary_records (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', summary_date TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', summary TEXT NOT NULL DEFAULT '', char_count INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'done', error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)")
+  ensureWebhookColumns(db)
   return db
+}
+
+/**
+ * 老库补列：`webhook_url` / `webhook_target`（2026-11-18 新增）。
+ *
+ * 为什么必须补而不是只改建表语句：`CREATE TABLE IF NOT EXISTS` 对**已存在**的表什么都不做，
+ * 而线上早就有一堆建好的 `daily_summary.db`。不补列的话，升级后第一次 `SELECT *`
+ * 会因为 `rowToTask` 读不到列而拿到 undefined（看起来像「配置丢了」），
+ * 写入则会直接报 `table summary_tasks has no column named webhook_url`。
+ *
+ * 判据用 `PRAGMA table_info` 而不是「try ALTER / catch」：后者会把真正的写失败
+ * 也一起吞掉。默认值空串 = 不推送，老任务行为完全不变。
+ * @param db - 已打开的任务库。
+ */
+function ensureWebhookColumns(db: DatabaseSync): void {
+  const present = new Set(
+    (db.prepare('PRAGMA table_info(summary_tasks)').all() as Array<Record<string, unknown>>)
+      .map(row => cellStr(row['name']).toLowerCase()),
+  )
+  if (!present.has('webhook_url')) {
+    db.exec("ALTER TABLE summary_tasks ADD COLUMN webhook_url TEXT NOT NULL DEFAULT ''")
+  }
+  if (!present.has('webhook_target')) {
+    db.exec("ALTER TABLE summary_tasks ADD COLUMN webhook_target TEXT NOT NULL DEFAULT ''")
+  }
 }
 
 /** One summary task. */
@@ -56,6 +83,15 @@ export interface SummaryTask {
   customPrompt: string
   scheduleTime: string
   enabled: boolean
+  /**
+   * Feather 的发送端点 `/webhook/<token>`；空串 = 不推送（2026-11-18 新增）。
+   *
+   * 地址里带着 token（就是凭据），所以**只在本机任务库里存**，
+   * 界面上回显时走 `redactWebhookEndpoint` 的脱敏形式。
+   */
+  webhookUrl: string
+  /** 推送对象（微信会话名，例如「文件传输助手」）；空串时由调用方退回群名。 */
+  webhookTarget: string
   lastRunAt?: number
   lastStatus: string
   lastError: string
@@ -131,6 +167,8 @@ function rowToTask(r: Record<string, unknown>, decryptedDir: string): SummaryTas
     customPrompt: cellStr(r['custom_prompt'] ?? ''),
     scheduleTime: cellStr(r['schedule_time'] ?? '08:00'),
     enabled: Number(r['enabled'] ?? 1) !== 0,
+    webhookUrl: cellStr(r['webhook_url'] ?? ''),
+    webhookTarget: cellStr(r['webhook_target'] ?? ''),
     lastStatus: cellStr(r['last_status'] ?? ''),
     lastError: cellStr(r['last_error'] ?? ''),
     createdAt: Number(r['created_at'] ?? 0),
@@ -192,12 +230,32 @@ export function saveSummaryTask(decryptedDir: string, task: SummaryTaskInput): {
     const db = openStore(decryptedDir)
     const ts = Date.now()
     const target = JSON.stringify(task.targetUsers)
+    /**
+     * 推送地址在**写入前**规范化：非法地址不该等到「到点推送失败」才被发现。
+     *
+     * 三态落到 SQL 的方式见 `SummaryWebhookUrlCheck.kind`：`keep` / `undefined` → NULL
+     * （由 `COALESCE(?, 列)` 保留原值），`clear` → 空串，`set` → 规范化后的地址。
+     */
+    const rawWebhookUrl = typeof task.webhookUrl === 'string' ? task.webhookUrl : undefined
+    const webhook = rawWebhookUrl === undefined ? null : normalizeSummaryWebhookUrl(rawWebhookUrl)
+    if (webhook !== null && !webhook.ok) {
+      db.close()
+      return { ok: false, error: webhook.error ?? '推送地址无效' }
+    }
+    const webhookUrlCell = webhook === null || webhook.kind === 'keep'
+      ? null
+      : (webhook.kind === 'set' ? webhook.url : '')
+    const webhookTargetCell = typeof task.webhookTarget === 'string'
+      ? task.webhookTarget.trim().slice(0, SUMMARY_WEBHOOK_TARGET_MAX)
+      : null
     if (task.id && task.id > 0) {
-      db.prepare('UPDATE summary_tasks SET group_username = ?, group_name = ?, target_users = ?, format = ?, custom_prompt = ?, schedule_time = ?, enabled = ?, updated_at = ? WHERE id = ?').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, task.id)
+      // COALESCE(?, 列) —— 参数为 NULL 时保留原值。别改成「先读再写」：
+      // 那会多一次查询，而且读到与写入之间还有被并发改写的窗口。
+      db.prepare('UPDATE summary_tasks SET group_username = ?, group_name = ?, target_users = ?, format = ?, custom_prompt = ?, schedule_time = ?, enabled = ?, webhook_url = COALESCE(?, webhook_url), webhook_target = COALESCE(?, webhook_target), updated_at = ? WHERE id = ?').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, webhookUrlCell, webhookTargetCell, ts, task.id)
       db.close()
       return { ok: true, id: task.id }
     }
-    const r = db.prepare('INSERT INTO summary_tasks(group_username, group_name, target_users, format, custom_prompt, schedule_time, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, ts, ts)
+    const r = db.prepare('INSERT INTO summary_tasks(group_username, group_name, target_users, format, custom_prompt, schedule_time, enabled, webhook_url, webhook_target, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(identity.groupUsername, identity.groupName, target, task.format, task.customPrompt, task.scheduleTime, task.enabled ? 1 : 0, webhookUrlCell ?? '', webhookTargetCell ?? '', ts, ts)
     const id = Number(r.lastInsertRowid)
     db.close()
     return { ok: true, id }

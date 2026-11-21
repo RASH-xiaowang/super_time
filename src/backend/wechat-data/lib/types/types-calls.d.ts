@@ -118,6 +118,15 @@ export interface SummaryTask {
     customPrompt: string;
     scheduleTime: string;
     enabled: boolean;
+    /**
+     * 推送地址（Feather `/webhook/<token>`）；空串 = 不推送。
+     *
+     * 地址里的 token 就是凭据，所以列表返回时由界面层用
+     * `redactWebhookEndpoint` 脱敏展示，**不要**直接渲染原值。
+     */
+    webhookUrl: string;
+    /** 推送对象（微信会话名）；空串 = 用群名。 */
+    webhookTarget: string;
     lastRunAt?: number;
     lastStatus: string;
     lastError: string;
@@ -134,8 +143,21 @@ export interface SummaryTask {
  * `lastStatus: ''`、`lastError: ''`，读起来像「保存会清掉上次运行状态」。今天它不成立，
  * 而一旦有人「补全」那条 INSERT，界面上编辑一次任务就会抹掉它的运行记录。所以从类型上就不可传。
  */
-export type SummaryTaskInput = Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt' | 'lastRunAt' | 'lastStatus' | 'lastError'> & {
+export type SummaryTaskInput = Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt' | 'lastRunAt' | 'lastStatus' | 'lastError' | 'webhookUrl' | 'webhookTarget'> & {
     id?: number;
+    /**
+     * 推送地址。**可选**，且 `undefined` 与 `''` 语义不同：
+     *   · `undefined` = 「这次保存不谈推送」→ UPDATE 时该列保持原值；
+     *   · `''` = 明确关掉推送 → 该列写空串。
+     *
+     * 为什么必须区分：本项目有两个任务表单（`SummaryTaskDrawer` 是当前入口，
+     * `DailySummary.tsx` 是旧的内联表单且没有推送 UI）。若把 `''` 当成「未提供」，
+     * 从旧表单编辑一次任务就会把用户配好的推送地址悄悄清空 —— 那种「保存后推送没了」
+     * 极难归因。用 COALESCE 落成 SQL，判据只有一处。
+     */
+    webhookUrl?: string;
+    /** 推送对象；`undefined` 同 `webhookUrl`（保持原值）。 */
+    webhookTarget?: string;
 };
 /** Task list snapshot. */
 export interface SummaryTaskSnapshot {
@@ -172,6 +194,21 @@ export interface SummaryTaskRunResult {
     summary?: string;
     messageCount?: number;
     error?: string;
+    /**
+     * 推送结果（2026-11-18）。
+     *
+     * 与 `ok` **刻意分开**：`ok` 说的是「总结有没有生成」，这里说的是「生成的内容有没有
+     * 送到微信」。两者可以一个成一个败，界面因此能说出「已生成，但推送失败：<原因>」
+     * 而不是笼统的「运行失败」—— 后者会让人以为总结白跑了。
+     * 任务没配推送地址时不带这个字段。
+     */
+    webhook?: {
+        ok: boolean;
+        /** 脱敏后的地址（`/webhook/***`）。 */
+        endpoint: string;
+        status?: number;
+        error?: string;
+    };
 }
 /** Avatar resolution result. */
 export interface AvatarResult {

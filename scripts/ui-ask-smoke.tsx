@@ -23,6 +23,7 @@ import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data
 import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
 import { SetupGuideCard } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SetupGuide.tsx'
 import { DailySummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx'
+import { TaskForm } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SummaryTaskDrawer.tsx'
 import { PeriodSummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/PeriodSummary.tsx'
 import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx'
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
@@ -425,6 +426,64 @@ check('每日总结：面板壳 + 页签 + 空态落地卡都能渲染', () => {
   for (const t of ['总结任务栏', '总结阅览', '手动生成']) ok(html.includes(t), `缺少页签：${t}`)
   ok(html.includes('三步拿到第一份总结'), '缺少空态落地卡')
 })
+check('定时任务表单：Webhook 推送开关可勾选，勾上后出现输入框', () => {
+  // 2026-11-18 新增：定时总结可以推送。这里渲染的是**真实**的 TaskForm。
+  // 回归：第一版把 `checked` 绑在「地址是否非空」上，勾选时写回空串 → 永远勾不上、
+  // 输入框永远不出现（用户报障）。所以这里断言的是「勾上（webhookOn=true）就该能填」。
+  const base = {
+    id: undefined,
+    groupUsername: 'g@chatroom',
+    groupName: '某个群',
+    targetAll: true,
+    targetUsers: [],
+    format: 'brief',
+    customPrompt: '',
+    scheduleTime: '08:00',
+    enabled: true,
+    webhookTarget: '',
+  }
+  const common = {
+    setForm: () => {},
+    groups: [{ username: 'g@chatroom', name: '某个群' }],
+    members: [],
+    busy: null,
+    onSave: () => {},
+    onCancel: () => {},
+    onGroupChange: () => {},
+  }
+
+  // 只针对**推送那个勾选框**判选中态：面板里还有「全部成员」「已启用」两个 checkbox，
+  // 用 `checked` 裸词或「任一 checkbox 被选中」都会被它们污染成假阳性（第一版就踩了）。
+  // 所以给推送框加了 `aria-label`，按它精确定位。
+  const webhookBox = (html: string): string =>
+    (html.match(/<input[^>]*aria-label="启用 Webhook 推送"[^>]*>/) ?? [''])[0] ?? ''
+
+  const off = renderToStaticMarkup(h(TaskForm, { ...common, form: { ...base, webhookOn: false, webhookUrl: '' } }))
+  ok(off.includes('Webhook 推送'), '缺少「Webhook 推送」开关')
+  ok(webhookBox(off) !== '', '找不到推送勾选框（aria-label="启用 Webhook 推送"）')
+  ok(!webhookBox(off).includes('checked'), '没勾选时勾选框不该是选中态')
+  ok(!off.includes('aria-label="Webhook 推送地址"'), '没勾选时不该渲染地址输入框')
+  ok(!off.includes('aria-label="Webhook 推送对象"'), '没勾选时不该渲染推送对象输入框')
+
+  // 关键一帧：**勾上但还没填地址** —— 勾选框必须是选中态，输入框必须出现，
+  // 否则用户先看到「点了没反应」，再发现「根本没法填」。
+  const on = renderToStaticMarkup(h(TaskForm, { ...common, form: { ...base, webhookOn: true, webhookUrl: '' } }))
+  ok(webhookBox(on).includes('checked'), '勾选后勾选框必须是选中态（回归：曾绑在「地址非空」上导致勾不住）')
+  ok(on.includes('aria-label="Webhook 推送地址"'), '勾选后必须出现地址输入框（即使还没填）')
+  ok(on.includes('aria-label="Webhook 推送对象"'), '勾选后必须出现推送对象输入框')
+  ok(on.includes('http://192.168.1.2:55725/webhook/'), '缺少地址填写示例')
+  ok(on.includes('/webhook/&lt;token&gt;') || on.includes('/webhook/<token>'), '缺少 /webhook/<token> 形态提示')
+  ok(on.includes('/webhook/***'), '缺少「保存后只回显脱敏地址」的说明')
+
+  // 已配置的任务：回显的是后端脱敏地址，不能出现真实 token。
+  const filled = renderToStaticMarkup(h(TaskForm, {
+    ...common,
+    form: { ...base, webhookOn: true, webhookUrl: 'http://192.168.1.2:55725/webhook/***', webhookTarget: '文件传输助手' },
+  }))
+  ok(filled.includes('value="http://192.168.1.2:55725/webhook/***"'), '脱敏地址应回显在输入框里')
+  ok(!filled.includes('fb90139b3e708090469256fd2f8d9c4f'), '界面里不该出现真实 token')
+})
+
 check('周期总结：表单与落地卡都能渲染', () => {
   const html = renderToStaticMarkup(h(PeriodSummaryPanel, {}))
   ok(html.includes('周期总结'), '缺少面板标题')

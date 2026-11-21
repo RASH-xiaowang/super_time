@@ -72,7 +72,7 @@ const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
  * 出网点清单（与 `docs/PRIVACY.md` 第四节 A–G 逐条对应）。
  *
  * 口径提醒：全局出网开关已于 2026-09-30 移除；这里多数条目是「无开关」或
- * 「仅在你点击时才发生」。v31 起的「AI回复」是唯一按单聊生效的 `off` 档。
+ * 「仅在你点击时才发生」。「AI回复」受会话级开启状态约束，标为 `off` 档。
  * 要彻底断网仍只能靠系统防火墙或断网。
  */
 const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
@@ -80,6 +80,12 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     label: 'AI 问答与总结',
     text: '把检索到的聊天片段发给你自己配置的模型接口；勾选知识库时，命中的知识库文件片段也会一并发出（「抽取实体」按文件发正文摘要串，默认 20 个/轮、上限 50 个）。「测试连接 / 测试向量 / 测试精排」只发一条固定测试串，「余额查询」（左下角每 5 分钟一次）只带 Key —— 都不发你的内容',
     host: '默认 api.openai.com（以你配置的 apiUrl 为准）',
+    kind: 'none',
+  },
+  {
+    label: '消息分析',
+    text: '点击「更多 → 分析」时，把该消息及之前最多 20 条上下文经 analyze_message 发给当前对话模型；语音先在本机转写。命中本机分析缓存时不重复调用；只做研判，不发送微信消息',
+    host: '你配置的当前对话模型接口',
     kind: 'none',
   },
   {
@@ -99,6 +105,13 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     text: '任务首次触发会先插入一条问候语；任务触发、局域网 Webhook、手动新增或重发产生的消息记录，在匹配「会话名 + 触发对象」规则后，会把 target / message / attachments 等 JSON POST 到你为该规则配置的下游 Webhook。message 先过 task_callback 隐私闸；会话名、触发对象、备注、外链与图片字节不脱敏。没有规则时记录保持待执行、不发请求；失败不自动重试，避免下游重复发微信消息',
     host: '你按规则配置的下游 Webhook 地址（http/https，不内置固定主机）',
     kind: 'none',
+  },
+  {
+    label: '定时总结 Webhook 推送',
+    text: '任务保存了推送地址后，由已启用任务到点或你点击「立即运行」，且总结生成成功时，把 target（填写的推送对象；留空时使用任务群名或群标识）和 message（该轮总结正文）POST 到 /webhook/<token>。不额外附带聊天原文、联系人名单、图片或本机路径；总结本身仍可能包含源消息中的个人信息。完整地址只存本机，界面回显 /webhook/***；推送失败不撤销已生成的总结',
+    host: '该任务保存的 http/https Webhook 地址（由你配置）',
+    kind: 'none',
+    note: '没有全局出网开关；清空该任务推送地址或停用任务可停止后续自动推送。',
   },
   {
     label: 'AI回复',

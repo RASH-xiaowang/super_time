@@ -161,7 +161,14 @@ function stubLlm(opts: { latencyMs?: number } = {}): LlmStub {
     const msgs = (o as { messages?: Array<{ content?: Array<{ text?: string }> }> }).messages ?? []
     return msgs[0]?.content?.[0]?.text ?? ''
   }
-  const groupOf = (p: string): string => /\((wxid_[^)]+)\)/.exec(p)?.[1] ?? '未知群'
+  /**
+   * 从 prompt 里取出「这次总结的是哪个群」。
+   *
+   * 2026-11-18 起定时任务走共用的 `buildSummaryPrompt`，prompt 头部是
+   * `请总结 <群名> <日期> 的微信聊天记录。` —— 不再带 `(wxid_xxx)`（那个 id 对模型
+   * 毫无意义，只是噪声）。判据跟着改成取群名，仍然能证明「三个群没有串数据」。
+   */
+  const groupOf = (p: string): string => /请总结 (\S+) \d{4}-\d{2}-\d{2} 的微信聊天记录/.exec(p)?.[1] ?? '未知群'
   return {
     calls,
     maxInFlight: () => peak,
@@ -242,7 +249,7 @@ describe('N15：同一分钟到期的摘要任务并发执行', () => {
       const rec = recs.find((r) => r.groupUsername === g.username)
       expect(rec, `没有 ${g.username} 的记录 —— 并发把这批数据串了`).toBeTruthy()
       // 摘要由桩 LLM 依据**它收到的 prompt** 生成：串数据会立刻体现为「摘要属于别的群」
-      expect(rec?.summary).toBe('小结:' + g.username)
+      expect(rec?.summary).toBe('小结:' + g.name)
       expect(rec?.status).toBe('done')
       // 条数 = 该群昨天的消息数 + 1 行「【username】」标题（collectRange 的口径）
       expect(rec?.messageCount).toBe(g.texts.length + 1)
@@ -259,8 +266,9 @@ describe('N15：同一分钟到期的摘要任务并发执行', () => {
     expect(llm.calls.length).toBe(3)
     // 每次请求的 prompt 只含自己那群的消息：串群会在这里露出来
     for (const g of GROUPS) {
-      const own = llm.calls.filter((p) => p.includes('(' + g.username + ')'))
-      expect(own.length, `${g.username} 的 prompt 不是恰好一次`).toBe(1)
+      // 判据用群名（2026-11-18 起 prompt 不再带 wxid，见 groupOf 注释）
+      const own = llm.calls.filter((p) => p.includes('请总结 ' + g.name + ' '))
+      expect(own.length, `${g.name} 的 prompt 不是恰好一次`).toBe(1)
     }
   })
 
@@ -363,7 +371,7 @@ describe('N15：到期判定', () => {
     await runDueNow(gw)
 
     expect(llm.calls.length, '只有「到期且一分钟内没跑过」的那一个该跑').toBe(1)
-    expect(llm.calls[0]).toContain('(wxid_g1)')
+    expect(llm.calls[0]).toContain('请总结 一群 ')  // prompt 头部带的是群名（见 groupOf 的注释）
     expect(listSummaryRecords(decrypted).items.length).toBe(1)
   })
 })
