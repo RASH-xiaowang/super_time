@@ -468,6 +468,21 @@ export interface ChatAiReplyScanDeps {  decryptedDir: () => string
    */
   writeTrace?: (patch: ChatAiReplyTracePatch) => void
   op: (action: string, ok: boolean, detail: string) => void
+  /**
+   * 发送前闸门。缺省时保持原行为：生成后直接投递。
+   * `preflight` 返回 `defer` 时本轮不调用模型；`postflight` 返回 `hold` 时正文留草稿。
+   */
+  assessOutbound?: (input: {
+    accountKey: string
+    chatUsername: string
+    group: boolean
+    kbEnabled: boolean
+    phase: 'preflight' | 'postflight'
+  }) => { action: 'proceed' | 'defer' | 'send' | 'hold'; reason: string }
+  /** 把已生成、尚未投递的记录收成草稿。只有 `assessOutbound` 决定 hold 时调用。 */
+  holdReply?: (input: { id: number; reason: string }) => Promise<{ ok: boolean; error?: string }>
+  /** 投递成功后记一笔额度，供冷却和每小时上限使用。 */
+  noteReplySent?: (input: { accountKey: string; chatUsername: string }) => void
 }
 
 /** 一次自动回复的阶段名（详情抽屉按顺序展示）。 */

@@ -605,6 +605,93 @@ export function failAiReplyMessageListRecord(
 }
 
 /**
+ * 把尚未投递的 AI 回复收成草稿。
+ *
+ * 状态写成 failed + `held_draft`，自动投递不再领取；正文保留，用户在消息列表单条重发即视为确认。
+ * 已经是草稿的记录再次调用仍然成功，避免恢复扫描把它当成投递失败。
+ */
+export function holdAiReplyMessageListDraft(
+  decryptedDir: string,
+  id: number,
+  reason: string,
+): MessageListRecordResult {
+  const recordId = positiveId(id)
+  const detail = textOf(reason, ERROR_MAX) || '已保存为草稿，尚未发送'
+  if (recordId <= 0) return { ok: false, error: 'AI 回复记录 id 无效' }
+  if (!storeExists(decryptedDir)) return { ok: false, error: 'AI 回复预约记录不存在' }
+  try {
+    return enrichMessageListResult(decryptedDir, withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureMessageListSchema(db)
+      const now = Date.now()
+      const targetRow = db.prepare('SELECT * FROM message_list_records WHERE id = ?')
+        .get(recordId) as Record<string, unknown> | undefined
+      if (targetRow === undefined) return { ok: false, error: 'AI 回复预约记录不存在' }
+      const target = rowToMessageListRecord(targetRow)
+      if (target.failureKind === 'held_draft' && target.status === 'failed') {
+        return { ok: true, id: recordId, record: target, created: false }
+      }
+      const parsed = parseChatAiReplySourceRef(target.sourceRef)
+      const baseSourceRef = parsed?.baseSourceRef ?? ''
+      const info = db.prepare(`UPDATE message_list_records SET
+        status = 'failed', error = ?, note = 'AI 回复 · 草稿待确认',
+        failure_kind = 'held_draft', updated_at = ?
+        WHERE source = 'ai_reply' AND status = 'pending'
+          AND (
+            id = ?
+            OR (? <> '' AND (source_ref = ? OR source_ref LIKE ?))
+          )`).run(
+        detail,
+        now,
+        recordId,
+        baseSourceRef,
+        baseSourceRef,
+        baseSourceRef === '' ? '' : baseSourceRef + ':segment:%',
+      )
+      const row = db.prepare('SELECT * FROM message_list_records WHERE id = ?')
+        .get(recordId) as Record<string, unknown> | undefined
+      if (row === undefined) return { ok: false, error: 'AI 回复预约记录不存在' }
+      const record = rowToMessageListRecord(row)
+      return Number(info.changes) > 0
+        ? { ok: true, id: recordId, record, created: false }
+        : { ok: false, id: recordId, record, error: 'AI 回复记录状态已变化，不能改成草稿' }
+    }))
+  } catch (e) {
+    return { ok: false, id: recordId, error: 'AI 回复草稿写入失败：' + errorText(e) }
+  }
+}
+
+export interface HeldAiReplyDraft {
+  id: number
+  chatName: string
+  targetName: string
+  text: string
+  error: string
+}
+
+/** 还没经 Webhook 发出的 AI 回复草稿。 */
+export function listHeldAiReplyDrafts(decryptedDir: string): HeldAiReplyDraft[] {
+  if (!storeExists(decryptedDir)) return []
+  try {
+    return withWritableDb(taskDbPath(decryptedDir), (db) => {
+      ensureMessageListSchema(db)
+      const rows = db.prepare(`SELECT id, chat_name, target_name, text, error
+        FROM message_list_records
+        WHERE source = 'ai_reply' AND status = 'failed' AND failure_kind = 'held_draft'
+        ORDER BY id DESC LIMIT 30`).all() as Array<Record<string, unknown>>
+      return rows.map((row) => ({
+        id: positiveId(row.id),
+        chatName: textOf(row.chat_name, 200),
+        targetName: textOf(row.target_name, 200),
+        text: textOf(row.text, 500),
+        error: textOf(row.error, 300),
+      })).filter((row) => row.id > 0)
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
  * 删除一组**从未发送**的 AI 回复预约。
  *
  * 被同一轮更新消息取代的预约没有任何发送价值；把它标成失败只会在「任务信息」

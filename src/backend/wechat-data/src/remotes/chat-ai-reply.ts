@@ -26,6 +26,8 @@ import { readChatAiReplyTrace, writeChatAiReplyTrace } from '../query/ai-reply/t
 import type { ChatAiReplyTraceReadResult } from '../query/ai-reply/trace-store.ts'
 import type { ChatAiReplyRegenerateResult } from '../query/ai-reply/runner-regenerate.ts'
 import { errorText, latestMessageCursor } from '../query/ai-reply/runner-recovery.ts'
+import { assessReplyOutbound, rememberReplySent } from '../query/agent/reply-gate.ts'
+import { runAgentTick } from '../query/agent/store.ts'
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts'
 import type {
   ChatAiReplyDefaultWebhookMutationResult,
@@ -44,6 +46,7 @@ import {
   dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
+  holdAiReplyMessageListDraft,
   getMessageListRecord,
   listAiReplyMessageListSegments,
   recoverInterruptedMessageListDispatches,
@@ -201,6 +204,16 @@ function createChatAiReplyScanDeps(
     ...(rc.transcribeVoices === undefined ? {} : { transcribeVoices: rc.transcribeVoices }),
     ...(rc.collectKbSnippets === undefined ? {} : { collectKbSnippets: rc.collectKbSnippets }),
     gate: rc.gate,
+    assessOutbound: (input) => assessReplyOutbound(dir(), input),
+    holdReply: async (input) => {
+      const held = holdAiReplyMessageListDraft(dir(), input.id, input.reason)
+      return held.ok
+        ? { ok: true }
+        : { ok: false, ...(held.error === undefined ? {} : { error: held.error }) }
+    },
+    noteReplySent: (input) => {
+      rememberReplySent(dir(), input.accountKey, input.chatUsername)
+    },
     reserveReply: async (input) => {
       const reserved = reserveAiReplyMessageListRecord(dir(), input)
       traceReserved(dir(), reserved, input, rc.selfUsername())
@@ -614,6 +627,11 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
     },
 
     scanOnce(): Promise<ChatAiReplyScanResult> {
+      try {
+        runAgentTick(dir(), rc.selfUsername())
+      } catch (e) {
+        rc.op('task', 'agent_tick', 'fail', '', errorText(e))
+      }
       return runner.scan()
     },
 

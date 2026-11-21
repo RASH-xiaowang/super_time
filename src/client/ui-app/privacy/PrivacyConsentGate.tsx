@@ -72,7 +72,7 @@ const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
  * 出网点清单（与 `docs/PRIVACY.md` 第四节 A–G 逐条对应）。
  *
  * 口径提醒：全局出网开关已于 2026-09-30 移除；这里多数条目是「无开关」或
- * 「仅在你点击时才发生」。「AI回复」受会话级开启状态约束，标为 `off` 档。
+ * 「仅在你点击时才发生」。「AI回复」及其队友记忆受会话级开启状态约束，标为 `off` 档。
  * 要彻底断网仍只能靠系统防火墙或断网。
  */
 const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
@@ -112,6 +112,12 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
     host: '该任务保存的 http/https Webhook 地址（由你配置）',
     kind: 'none',
     note: '没有全局出网开关；清空该任务推送地址或停用任务可停止后续自动推送。',
+  },
+  {
+    label: 'AI 队友记忆与提案',
+    text: '已开启的 AI回复会把该账号的用户级记忆与当前会话匹配的记忆作为不可信背景，经 ai_reply_analyze 随提示词发给当前模型（记忆正文预算 900 字）。删除记忆后，后续构建的提示词不再携带它，已发出的内容不能撤回。群聊启用知识库时生成正文留作草稿，不自动投递；「只标记采纳」仅记状态，「Webhook 发送」才将提案正文经消息列表规则投递到填写的目标，待确认草稿也须显式发送。AI 队友接口仅桌面 IPC 可用，HTTP 含 fullAccess 交接会话均不可调用',
+    host: '当前对话模型；你配置的消息列表下游 Webhook',
+    kind: 'off',
   },
   {
     label: 'AI回复',

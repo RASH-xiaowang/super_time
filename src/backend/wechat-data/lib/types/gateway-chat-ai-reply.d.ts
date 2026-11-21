@@ -4,6 +4,7 @@ import { createChatAiReplyRemotes, type CreateChatAiReplyRemotesInputs } from '.
 import type { ChatAiReplyRegenerateResult } from './query/ai-reply/runner-regenerate.ts';
 import type { ChatAiReplyTraceReadResult } from './query/ai-reply/trace-store.ts';
 import type { AiReplyReservationCleanupResult } from './query/message-list-store.ts';
+import type { MemoryFact } from './query/agent/decision.ts';
 import { GatewayMessageList } from './gateway-message-list.ts';
 export declare abstract class GatewayChatAiReply extends GatewayMessageList {
     constructor(ctx: Context);
@@ -105,6 +106,72 @@ export declare abstract class GatewayChatAiReply extends GatewayMessageList {
     protected _chatAiReplyRemotes?: ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyRemotes(): ReturnType<typeof createChatAiReplyRemotes>;
     protected chatAiReplyDeps(): CreateChatAiReplyRemotesInputs;
+    /** AI 队友总览：控制、记忆、提案和审计都在本机，不把主动提案送进微信。 */
+    getAgentDesk(): {
+        drafts: import("./query/message-list-store-ai.ts").HeldAiReplyDraft[];
+        control: import("./query/agent/store.ts").AgentControl;
+        memories: import("./query/agent/store.ts").AgentMemory[];
+        proposals: import("./query/agent/store.ts").AgentProposal[];
+        promises: import("./query/agent/store.ts").AgentPromise[];
+        audit: import("./query/agent/store.ts").AgentAuditEntry[];
+        reconcile: {
+            expected: number;
+            executed: number;
+            skipped: number;
+            delta: number;
+        };
+        channels: Readonly<Record<"feather-webhook" | "feather-text" | "generic", import("./query/agent/decision.ts").ChannelCapability>>;
+    };
+    saveAgentControl(options: {
+        killed?: boolean;
+        shadow?: boolean;
+        quietStart?: string;
+        quietEnd?: string;
+        cooldownMs?: number;
+        hourCap?: number;
+        dayCap?: number;
+        proactiveHourCap?: number;
+        handoff?: boolean;
+    }): import("./query/agent/store.ts").AgentControl;
+    writeAgentMemory(options: {
+        scope: MemoryFact['scope'];
+        scopeKey: string;
+        kind: MemoryFact['kind'];
+        text: string;
+    }): {
+        ok: boolean;
+        op: string;
+        error?: string;
+    };
+    deleteAgentMemory(options: {
+        id: number;
+    }): {
+        ok: boolean;
+    };
+    addAgentPromise(options: {
+        text: string;
+        dueAt: number;
+    }): {
+        ok: boolean;
+    };
+    setAgentProposalStatus(options: {
+        id: number;
+        status: 'accepted' | 'dismissed';
+    }): {
+        ok: boolean;
+    };
+    /** 把已确认的草稿按原 Webhook 地址重发。自动投递不会走这条。 */
+    sendAgentDraft(options: {
+        id: number;
+    }): Promise<import("./types-message-list.ts").MessageListRecordResult>;
+    /**
+     * 把一条提案正文按图中的 Webhook 发出。
+     * target 就是请求体里的 target，例如「文件传输助手」；要先有匹配的消息列表规则。
+     */
+    sendAgentProposal(options: {
+        id: number;
+        target: string;
+    }): Promise<import("./types-message-list.ts").MessageListRecordResult>;
     /** 后台扫描：由同步事件与 10s 兜底调用；失败不影响微信同步主流程。 */
     protected scanChatAiRepliesBackground(): void;
     protected _chatAiReplyScan: Promise<ChatAiReplyScanResult> | null;

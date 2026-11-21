@@ -8,11 +8,17 @@
  */
 import { getMessageListRecord, getMessageListRule, saveMessageListJobResult } from './message-list-store.ts'
 import { sendRequest } from './rpa/dispatch.ts'
+import {
+  WEBHOOK_TEXT_MAX,
+  isTokenizedWebhookEndpoint,
+  redactWebhookEndpoint,
+  redactWebhookSecrets,
+  trimText,
+} from '../net/webhook-endpoint.ts'
 import type { RetryFetch } from '../net/fetch-retry.ts'
 import type { MessageListWebhookJob, MessageListWebhookProbe } from '../types.ts'
 
-const RESPONSE_MAX = 500
-const URL_TOKEN_RE = /\b(https?:\/\/[^\s"'<>]+)/gi
+const RESPONSE_MAX = WEBHOOK_TEXT_MAX
 
 export interface MessageListWebhookDeps {
   fetchImpl?: RetryFetch
@@ -23,71 +29,12 @@ export function errorText(e: unknown): string {
   return typeof msg === 'string' && msg !== '' ? msg : String(e)
 }
 
-export function trimText(value: unknown, max: number): string {
-  const text = typeof value === 'string' ? value.trim() : ''
-  return text.length > max ? text.slice(0, max) : text
-}
-
-/**
- * Downstream errors can echo the full Webhook URL. Keep only the origin and a
- * redacted path skeleton before persisting or returning the text.
- */
-function redactUrls(text: string): string {
-  return text.replace(URL_TOKEN_RE, (raw) => {
-    try {
-      const url = new URL(raw)
-      if (url.username !== '' || url.password !== '') {
-        url.username = ''
-        url.password = ''
-      }
-      url.pathname = url.pathname
-        .replace(/(\/webhook\/)[^/]+/i, '$1***')
-        .replace(/(\/api\/message-webhook\/)[^/]+/i, '$1***')
-      url.search = ''
-      return url.toString()
-    } catch {
-      return '[已隐藏地址]'
-    }
-  })
-}
-
-export function redactWebhookSecrets(text: string, webhookUrl: string): string {
-  let out = redactUrls(text)
-  try {
-    const url = new URL(webhookUrl)
-    const pathSegments = url.pathname.split('/').filter(Boolean)
-    const pathToken = pathSegments.at(-1) ?? ''
-    const tokenizedPath = /\/webhook\/[^/]+/i.test(url.pathname)
-      || /\/api\/message-webhook\/[^/]+/i.test(url.pathname)
-    const queryValues = [...url.searchParams.values()]
-    for (const secret of [tokenizedPath ? pathToken : '', ...queryValues]) {
-      if (secret.length >= 4) out = out.split(secret).join('***')
-    }
-  } catch {
-    // webhookUrl already passed http(s) validation; failure here only skips extra masking.
-  }
-  return trimText(out, RESPONSE_MAX)
-}
+// 脱敏与端点判定统一收在 `net/webhook-endpoint.ts`（定时总结推送共用同一把尺子）。
+// 这里 re-export 是为了保住 `message-list-dispatch.ts` 既有的对外面。
+export { redactWebhookEndpoint, redactWebhookSecrets, trimText }
 
 export function safeErrorText(value: string, webhookUrl: string): string {
   return redactWebhookSecrets(value, webhookUrl)
-}
-
-/** Return only the origin, path skeleton, and a masked token. */
-export function redactWebhookEndpoint(webhookUrl: string): string {
-  try {
-    const url = new URL(webhookUrl)
-    url.username = ''
-    url.password = ''
-    url.search = ''
-    url.hash = ''
-    url.pathname = url.pathname
-      .replace(/(\/webhook\/)[^/]+/i, '$1***')
-      .replace(/(\/api\/message-webhook\/)[^/]+/i, '$1***')
-    return url.toString().replace(/\/$/, '')
-  } catch {
-    return ''
-  }
 }
 
 /** Remote job ids must remain conservative ASCII identifiers. */
@@ -289,13 +236,5 @@ export async function queryMessageListWebhookJob(
       endpoint,
       error: safeErrorText(errorText(e), record.webhookUrl),
     }
-  }
-}
-
-function isTokenizedWebhookEndpoint(url: string): boolean {
-  try {
-    return /^\/webhook\/[^/]+\/?$/i.test(new URL(url).pathname)
-  } catch {
-    return /\/webhook\/[^/]+\/?$/i.test(url)
   }
 }

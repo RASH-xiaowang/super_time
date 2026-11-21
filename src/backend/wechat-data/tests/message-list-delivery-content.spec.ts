@@ -227,6 +227,7 @@ describe('下游投递：请求体与附件', () => {
       target: '智能回复机器人·ai-1群',
       message: '憨憨，上班',
       mention: 'Y.M',
+      mention_separator: 'newline',
     })
     expect(result.record?.jobId).toBe('job-group-1')
   })

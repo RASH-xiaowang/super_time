@@ -279,4 +279,36 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     recordId: z.number(),
     jobId: z.string().optional(),
   })),
+  remote('getAgentDesk'),
+  remote('saveAgentControl', z.object({
+    killed: z.boolean().optional(),
+    shadow: z.boolean().optional(),
+    quietStart: z.string().optional(),
+    quietEnd: z.string().optional(),
+    cooldownMs: z.number().int().min(0).max(86_400_000).optional(),
+    hourCap: z.number().int().min(0).max(10_000).optional(),
+    dayCap: z.number().int().min(0).max(100_000).optional(),
+    proactiveHourCap: z.number().int().min(0).max(100).optional(),
+    handoff: z.boolean().optional(),
+  })),
+  remote('writeAgentMemory', z.object({
+    scope: z.enum(['user', 'conversation']),
+    scopeKey: z.string().min(1),
+    kind: z.enum(['semantic', 'episode', 'profile', 'relation', 'promise']),
+    text: z.string().min(1).max(500),
+  })),
+  remote('deleteAgentMemory', z.object({ id: z.number().int().positive() })),
+  remote('addAgentPromise', z.object({
+    text: z.string().min(1).max(300),
+    dueAt: z.number().int().positive(),
+  })),
+  remote('setAgentProposalStatus', z.object({
+    id: z.number().int().positive(),
+    status: z.enum(['accepted', 'dismissed']),
+  })),
+  remote('sendAgentDraft', z.object({ id: z.number().int().positive() })),
+  remote('sendAgentProposal', z.object({
+    id: z.number().int().positive(),
+    target: z.string().min(1).max(200),
+  })),
 ]

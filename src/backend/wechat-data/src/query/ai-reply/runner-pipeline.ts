@@ -36,6 +36,7 @@ import {
 } from './runner-recovery.ts'
 import { STALE_REPLY_REASON, dropOrFailStaleReservation } from './runner-coalesce.ts'
 import { queueEntryOf } from './queue-plan.ts'
+import { deliverChatAiReply } from './runner-policy.ts'
 import {
   type ChatAiReplyRunRef,
   deferChatAiReplyRun,
@@ -1126,7 +1127,7 @@ export async function saveAndDispatchChatAiReply(
     deps.op('chat_ai_reply', false, 'record=' + String(run.recordId) + ' switch changed; dispatch skipped')
     return false
   }
-  return dispatchChatAiReply(deps, state, run, isCancelled)
+  return deliverChatAiReply(deps, state, run, isCancelled, dispatchChatAiReply)
 }
 
 export async function failChatAiReplyRun(

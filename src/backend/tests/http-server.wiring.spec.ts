@@ -233,7 +233,7 @@ describe('闸门只有一份实现：IPC 与 HTTP 共用 call-gates', () => {
     const sf = parse(SERVER)
     const body = bodyOf(sf, 'handleCall')
     expect(body, '找不到 handleCall 的实现').not.toBe('')
-    const policyAt = body.indexOf('isRemoteSafe(method)')
+    const policyAt = body.indexOf('isHttpCallAllowed(method, fullAccess)')
     // handleCall 里还有断连取消的 gatedCall；这里必须精确匹配业务调用本身，
     // 否则取消 RPC 会被误当成“调用后端”的位置。
     const callAt = body.indexOf('deps.gatedCall(method, args)')

@@ -3,7 +3,9 @@
  *
  * 当前支持两种已确认的发送协议：
  *  · `/send/text`：`{talker,text}`；
- *  · `/webhook/<token>`：`{target,message,mention?,attachments?}`。
+ *  · `/webhook/<token>`：`{target,message}`、附件 `{target,attachments}`、
+ *    群成员 `{target,message,mention,mention_separator:"newline"}`。
+ *    任务结果用 `GET /webhook/<token>/jobs/{id}`。
  *
  * 两者都只在消息列表记录落库后由 dispatch 调用。未知路径继续走通用消息列表
  * JSON，不猜测字段或鉴权语义。
@@ -65,6 +67,7 @@ export declare function featherRequestOf(record: MessageListRecord, gatedText?: 
         target: string;
         message?: string;
         mention?: string;
+        mention_separator?: 'newline';
         attachments?: string;
         resource_ids?: string[];
         type?: 'attachments';

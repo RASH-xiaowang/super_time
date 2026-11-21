@@ -15,6 +15,7 @@ import {
   matchMessageListRule,
   pendingMessageListRecordIds,
   recoverInterruptedMessageListDispatches,
+  holdAiReplyMessageListDraft,
   saveMessageListDispatchResult,
 } from './message-list-store.ts'
 import type { MessageListDispatchIntent, MessageListRuleScope } from './message-list-store.ts'
@@ -30,6 +31,8 @@ import {
   isFeatherResourceEndpoint,
 } from './ai-reply/provider.ts'
 import { isGroupMessageListRecord, mentionOfRecord } from './ai-reply/queue-plan.ts'
+import { automaticReplyBlock } from './agent/reply-gate.ts'
+import { degradeToText } from './agent/decision.ts'
 import { MESSAGE_LIST_ATTACHMENT_TOTAL_MAX_BYTES, decodeMessageListImageDataUrl } from './message-list-attachments.ts'
 import {
   FEATHER_REQUEST_MAX_BYTES,
@@ -271,7 +274,7 @@ function requestBody(
     if (resourceIds.length > 0 && text !== '') {
       throw new Error('大肥鱼一次任务只能发送正文或附件；请拆成两条消息记录后分别重发')
     }
-    const webhook = featherRequestOf(record, text, undefined, resourceIds)
+    const webhook = featherRequestOf(record, degradeToText(text), undefined, resourceIds)
     if (webhook.ok && webhook.request !== undefined) return JSON.stringify(webhook.request)
     throw new Error(webhook.error ?? '无法组装大肥鱼请求体')
   }
@@ -466,6 +469,16 @@ async function dispatchMessageListRecordUnlocked(
       countAttempt: false,
     })
     return { ok: false, error: attachmentError, record: latest ?? existing }
+  }
+  if (intent === 'automatic' && existing.source === 'ai_reply') {
+    const block = automaticReplyBlock(decryptedDir, existing.sourceRef, existing.chatUsername)
+    if (block?.action === 'hold') {
+      const held = holdAiReplyMessageListDraft(decryptedDir, existing.id, block.reason)
+      return { ok: false, error: block.reason, record: held.record ?? existing }
+    }
+    if (block?.action === 'defer') {
+      return { ok: false, error: block.reason, record: existing }
+    }
   }
   if (existing.text.trim() === '' && existing.images.length === 0) {
     return {

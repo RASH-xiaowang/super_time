@@ -133,6 +133,10 @@ const REMOTE_SAFE_BY_FAMILY = {
  * 完整性由 spec 校验。列在这里的意义是：① 让「为什么这个方法手机上不能用」
  * 有一个写在代码里的答案；② 新增方法时强迫作者做一次显式选择。
  */
+// These eight methods require desktop IPC even for a fullAccess handoff session.
+const AGENT_DESKTOP_ONLY_METHODS = new Set(['getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory',
+  'addAgentPromise', 'setAgentProposalStatus', 'sendAgentDraft', 'sendAgentProposal']);
+
 const LOCAL_ONLY_BY_FAMILY = {
   'A 凭据 / 密钥 / 配置（含模型 API Key 与本机账号探测）': [
     'getWechatConfig', 'getWechatConfigFull', 'saveWechatConfig', 'openConfig',
@@ -193,6 +197,8 @@ const LOCAL_ONLY_BY_FAMILY = {
     // 可能出网，成功后不可撤销；专用删除会整组销毁消息列表台账。二者都只允许
     // 桌面本机通道，手机/普通浏览器会话拒绝。
     'regenerateChatAiReplyRecord', 'deleteAiReplyReservations',
+    // AI 队友：记忆、提案和紧急停止都含个人内容，主动提案不允许远程触发。
+    ...AGENT_DESKTOP_ONLY_METHODS,
     // 该返回值包含可直接调用的入站地址令牌，只允许桌面端本机读取。
     'getMessageListWebhookInfo',
     // 健康检查会读取已保存的下游地址并发起 GET；输入只能是本机记录/规则 id。
@@ -295,7 +301,14 @@ const NATIVE_CAPABILITIES = Object.freeze({
   update: false,
 })
 
+/** fullAccess does not grant the desktop-only Agent capability. */
+function isHttpCallAllowed(method, fullAccess) {
+  return !AGENT_DESKTOP_ONLY_METHODS.has(method) && (fullAccess === true || isRemoteSafe(method))
+}
+
 module.exports = {
+  AGENT_DESKTOP_ONLY_METHODS,
+  isHttpCallAllowed,
   REMOTE_SAFE_BY_FAMILY,
   LOCAL_ONLY_BY_FAMILY,
   REMOTE_SAFE_METHODS,

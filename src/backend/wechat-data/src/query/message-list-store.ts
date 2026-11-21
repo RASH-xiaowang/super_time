@@ -47,6 +47,8 @@ export {
   dropAiReplyMessageListRecord,
   failAiReplyMessageListSegmentsAfter,
   failAiReplyMessageListRecord,
+  holdAiReplyMessageListDraft,
+  listHeldAiReplyDrafts,
   insertAiReplyMessageListRecord,
   listAiReplyMessageListSegments,
   listPendingAiReplyMessageListRecords,

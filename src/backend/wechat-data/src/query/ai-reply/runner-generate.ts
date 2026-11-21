@@ -11,6 +11,7 @@ import {
 } from './context.ts'
 import type { ChatAiReplyContextImage } from './context.ts'
 import { buildChatAiReplySystemPrompt } from './persona.ts'
+import { memoryPromptBlock } from '../agent/store.ts'
 import { errorText } from './runner-recovery.ts'
 import type { ChatAiReplyRunRef } from './runner-state.ts'
 import type {
@@ -168,13 +169,17 @@ export async function generateChatAiReply(
   const prompt = images.length > 0
     ? buildChatAiReplyPrompt(context.lines, images.length, scopeOfChat(state.chatUsername))
     : context.prompt
-  const systemPrompt = buildChatAiReplySystemPrompt({
-    name: state.personaName,
-    prompt: state.personaPrompt,
-  }, {
-    splitReply: state.splitReply,
-    ...(kb === undefined ? {} : { kbRequested: true, kbSnippets: kb }),
-  })
+  const memory = memoryPromptBlock(deps.decryptedDir(), state.accountKey, state.chatUsername)
+  const systemPrompt = [
+    buildChatAiReplySystemPrompt({
+      name: state.personaName,
+      prompt: state.personaPrompt,
+    }, {
+      splitReply: state.splitReply,
+      ...(kb === undefined ? {} : { kbRequested: true, kbSnippets: kb }),
+    }),
+    memory,
+  ].filter((part) => part.trim() !== '').join('\n\n')
   const [gatedSystem, gatedPrompt] = deps.gate(
     'ai_reply_analyze',
     { sessions: 1, messages: context.count },

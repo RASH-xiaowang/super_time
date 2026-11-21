@@ -30,7 +30,7 @@ export type WechatTab =
   | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'kb' | 'monitor' | 'contacts' | 'portraits' | 'moments'
   | 'favorites' | 'emoticons' | 'files' | 'records' | 'ledger' | 'storage' | 'bizchats'
   | 'servicechats' | 'kefu' | 'annual' | 'period' | 'dailysummary' | 'hook' | 'privacy'
-  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'messagelist' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles'
+  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'agentdesk' | 'messagelist' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles'
 
 export interface NavItem {
   tab: WechatTab
@@ -219,6 +219,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
       // 图标：三行清单（触发条件）+ 右侧闪电（触发语义）。清单条与闪电之间留出空隙，
       // 17px 下不会糊成一团；闪电坐标落在 15.5~20.9，不与清单条（x ≤ 12.8）相交。
       { tab: 'taskinfo', label: '任务信息', icon: filled('<path d="M3.4 6.2h9.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 11.4h7.2a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 16.6h8.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2z"/><path d="M18.9 3.2l-3.4 6.1h2.4l-1.3 5.3 3.6-6.3h-2.4z"/>') },
+      { tab: 'agentdesk', label: 'AI 队友', icon: filled('<path d="M12 3.2l1.5 4.4 4.5.5-3.4 3 1.1 4.4L12 13.2 8.3 15.5l1.1-4.4-3.4-3 4.5-.5z"/>') },
       // 消息列表：三条已发送消息 + 右侧状态勾。它记录「回复发没发出去」，
       // 与任务信息（配置监听规则）和聊天会话（阅读原始消息）都不是同一件事。
       { tab: 'messagelist', label: '消息列表', icon: filled('<path d="M5.2 3.2h13.6A2.2 2.2 0 0 1 21 5.4v13.2a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.6V5.4a2.2 2.2 0 0 1 2.2-2.2zM6.6 7.2h7.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 11.2h5.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 15.2h4.2a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM17.1 13.1l1.3 1.3 2.4-2.7 1.4 1.2-3.9 4.3-2.6-2.7z"/>') },

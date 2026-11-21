@@ -129,6 +129,7 @@ const MESSAGE_LIST_FAILURE_KINDS: ReadonlySet<string> = new Set([
   'send_failed',
   'unconfirmed',
   'config_changed',
+  'held_draft',
 ])
 
 /** 只接受稳定枚举里的失败分类，拒绝调用方写入自由文本。 */

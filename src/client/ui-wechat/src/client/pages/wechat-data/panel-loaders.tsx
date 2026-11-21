@@ -25,6 +25,7 @@ export const LedgerPanel = lazy(() => import('./panels/Ledger.tsx').then(({ Ledg
 export const TasksPanel = lazy(() => import('./panels/Tasks.tsx').then(({ TasksPanel }) => ({ default: TasksPanel })))
 // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录的双栏面板。
 export const TaskCenterPanel = lazy(() => import('./panels/TaskCenter.tsx').then(({ TaskCenterPanel }) => ({ default: TaskCenterPanel })))
+export const AgentDeskPanel = lazy(() => import('./panels/AgentDesk.tsx').then(({ AgentDeskPanel }) => ({ default: AgentDeskPanel })))
 // 消息列表（2026-10-27）：任务首次触发 / 局域网 Webhook / 手动回复的统一投递台账。
 export const MessageListPanel = lazy(() => import('./panels/MessageListPanel.tsx').then(({ MessageListPanel }) => ({ default: MessageListPanel })))
 export const GroupInsightsPanel = lazy(() => import('./panels/GroupInsights.tsx').then(({ GroupInsightsPanel }) => ({ default: GroupInsightsPanel })))

@@ -44,6 +44,22 @@ export declare function failAiReplyMessageListSegmentsAfter(decryptedDir: string
  */
 export declare function failAiReplyMessageListRecord(decryptedDir: string, id: number, error: string, failureKind?: string): MessageListRecordResult;
 /**
+ * 把尚未投递的 AI 回复收成草稿。
+ *
+ * 状态写成 failed + `held_draft`，自动投递不再领取；正文保留，用户在消息列表单条重发即视为确认。
+ * 已经是草稿的记录再次调用仍然成功，避免恢复扫描把它当成投递失败。
+ */
+export declare function holdAiReplyMessageListDraft(decryptedDir: string, id: number, reason: string): MessageListRecordResult;
+export interface HeldAiReplyDraft {
+    id: number;
+    chatName: string;
+    targetName: string;
+    text: string;
+    error: string;
+}
+/** 还没经 Webhook 发出的 AI 回复草稿。 */
+export declare function listHeldAiReplyDrafts(decryptedDir: string): HeldAiReplyDraft[];
+/**
  * 删除一组**从未发送**的 AI 回复预约。
  *
  * 被同一轮更新消息取代的预约没有任何发送价值；把它标成失败只会在「任务信息」

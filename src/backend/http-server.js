@@ -9,7 +9,7 @@
  * （后端就绪等待 → 调试豁免 → 许可证授权），再进同一个单线程 worker。
  *
  * 所以手机上能看到什么，由**令牌**（是不是主人给的）与**会话权限标记**决定：
- * 非 fullAccess 会话走 `http-remote-policy.js` 的方法白名单；fullAccess 会话与桌面同权。
+ * 非 fullAccess 会话走方法白名单；fullAccess 延续桌面权限，但八个 Agent 方法仅允许桌面 IPC。
  *
  * 当前标题栏「打开网页」交接码与设置页局域网扫码都会签发 `fullAccess` 会话
  * （全部方法 + `/api/native/*`）；长期 `api_token` 登录得到的会话按白名单收口。
@@ -52,7 +52,7 @@ const {
 } = require('./http-auth.js');
 const { createCallQueue, HEAVY_PRIORITY } = require('./http-queue.js');
 const { downgradeHeavyByArgs, shouldBypassCallQueue } = require('./call-priority.js');
-const { NATIVE_CAPABILITIES, REMOTE_DENIED_CODE, isRemoteHeavy, isRemoteSafe } = require('./http-remote-policy.js');
+const { NATIVE_CAPABILITIES, REMOTE_DENIED_CODE, isRemoteHeavy, isHttpCallAllowed } = require('./http-remote-policy.js');
 const { connectionCancelPlanFor } = require('./wechat-cancel.js');
 const { MIME_BY_EXT, ensureThumb, parseThumbWidth, resolveDecodedFile } = require('./media-protocol.js');
 const { RPA_MEDIA_PATH_PREFIX, createRpaMediaHandler } = require('./rpa-media.js');
@@ -516,12 +516,12 @@ function createCallHandler(deps, ctx) {
     }
     const method = typeof body.method === 'string' ? body.method : '';
     const args = Array.isArray(body.args) ? body.args : [];
-    // 「打开网页」交接会话与桌面端同权限：允许全部 Remote 方法（不再过手机白名单）。
+    // fullAccess 交接仍受 Agent 的桌面专属限制；其余 Remote 保持既有交接权限。
     // 普通手机会话仍走白名单 —— 这条分支只看服务端内存里的会话标记，浏览器伪造 URL 无效。
     const sessionCookie = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     const fullAccess = ctx.sessions.isFull(sessionCookie);
     // 白名单在过闸之前：不在名单里的方法连许可证校验都不该走到。
-    if (!fullAccess && !isRemoteSafe(method)) {
+    if (!isHttpCallAllowed(method, fullAccess)) {
       sendJson(res, 200, {
         ok: false,
         error: {

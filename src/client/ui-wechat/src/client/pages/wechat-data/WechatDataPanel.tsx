@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
  * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **16** 项 + 底栏独立渲染的 `settings` 与「Bug 反馈」入口，可路由页签共 **40**（其余 23 项 `hidden`，
+ * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings` 与「Bug 反馈」入口，可路由页签共 **41**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -48,6 +48,7 @@ import {
   SettingsPanelGate,
   StoragePanel,
   SummaryWorkbench,
+  AgentDeskPanel,
   TaskCenterPanel,
   TasksPanel,
 } from './panel-loaders.tsx'
@@ -353,6 +354,7 @@ function renderTab(
     // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录（双栏）。与「待办日程」是两件事：
     // 待办从聊天文本里提取 TODO，这里的任务是用户显式创建的监听任务（命中关键词 → 记录 → 回调）。
     case 'taskinfo': return <TaskCenterPanel />
+    case 'agentdesk': return <AgentDeskPanel />
     case 'messagelist': return <MessageListPanel />
     case 'groupinsights':
     case 'monitor': return (

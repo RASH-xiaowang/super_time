@@ -30,6 +30,7 @@ const AI_FEATURES: ReadonlyArray<{ name: string; desc: string }> = [
   { name: '群总结任务', desc: '按任务收集指定群消息调用模型；保存推送地址的已启用任务还会将总结正文和 target 发往 Webhook（不额外附带原始消息）' },
   { name: '消息分析', desc: 'analyze_message：点击分析时发送该消息及之前最多 20 条上下文；语音先在本机转写' },
   { name: '推荐回复 / AI回复', desc: '所选模型接收当前会话上下文及按配置启用的知识库片段、图片等；AI回复默认关闭，生成正文先落消息列表再按规则投递' },
+  { name: 'AI 队友记忆与提案', desc: '开启 AI回复后，用户级与当前会话记忆作为不可信背景经 ai_reply_analyze 进入模型提示词；只标记采纳不发送，Webhook 发送才投递提案正文；群聊知识库回复保留为待确认草稿' },
   { name: '知识库模型处理', desc: '文件摘要、实体抽取、向量索引与链接建议会按各自功能发送文件正文、摘要或查询文本' },
   { name: 'AI 年度叙述', desc: '按月整理的聊天材料送至所选模型生成年度叙述' },
 ]
@@ -46,7 +47,7 @@ const FEATURE_LABELS: Readonly<Record<string, string>> = {
   period_summary: '周期总结',
   summary_task: '群总结任务',
   analyze_message: '消息分析',
-  ai_reply_analyze: 'AI回复',
+  ai_reply_analyze: 'AI回复（含队友记忆）',
   task_callback: '消息列表回复投递',
   suggest_reply: '推荐回复',
   annual_narrative: 'AI 年度叙述',
@@ -145,7 +146,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
           导出进度与页头留在画布外 —— 它们是面板级动作，不该参与摆放。 */}
       <CardCanvas year={0} scope="privacy-trust">
         <CanvasCard id="trust-boundary" title="数据边界">
-        <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用不同 AI 功能时，聊天上下文、知识库材料或图片可能按对应功能说明发送到所选模型；可在模型设置中更换服务商，不代表阻止出网。</p>
+        <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用不同 AI 功能时，聊天上下文、知识库材料、图片或队友记忆可能按对应功能说明发送到所选模型；可在模型设置中更换服务商，不代表阻止出网。</p>
         <p className={css.lead}>{AVATAR_NOTE}</p>
       </CanvasCard>
 

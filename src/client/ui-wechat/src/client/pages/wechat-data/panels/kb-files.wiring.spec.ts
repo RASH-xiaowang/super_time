@@ -140,7 +140,8 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
     const visibleItems = ALL.filter(i => !i.hidden)
     expect(visibleItems.map(i => i.tab)).toContain('groupinsights')
     expect(visibleItems.map(i => i.tab)).toContain('messagelist')
-    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(16)
+    // v41 adds exactly one desktop Agent entry; kbfiles itself remains hidden.
+    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(17)
   })
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
