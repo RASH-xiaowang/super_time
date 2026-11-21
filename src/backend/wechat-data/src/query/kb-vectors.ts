@@ -37,6 +37,8 @@ import type { KbHit } from '../types.ts'
 // 这样 `kb-files.ts → kb-vectors.ts`（删除级联）与 `kb-vectors.ts → kb-files.ts`（读语料）
 // 之间**不会形成环** —— 依赖单向：两边都只指向 kb-paths。
 import { kbFilesDbPath, kbVectorsDbPath } from './kb-paths.ts'
+import { CHUNK_MAX_CHARS } from './kb/chunk.ts'
+import { truncateForEmbedding } from './embed-text.ts'
 import { liveChunkAlive, pruneDeadChunkGroups } from './kb/live-chunks.ts'
 export { KB_VECTORS_DB, kbVectorsDbPath } from './kb-paths.ts'
 import { yieldToLoop } from './search.ts'
@@ -57,12 +59,16 @@ import {
 export const KB_VECTORS_TABLE = 'kb_vectors'
 
 /**
- * 向量库 schema 版本；**结构或哈希算法变化时自动重建**。
+ * 向量库 schema 版本与「不能用」的原因都定义在 `kb-vectors-status.ts`（就绪判定的归属地）。
+ * 依赖方向因此是单向的：`kb-vectors` → `kb-vectors-status`。
  *
- * 与消息域各自一个版本号：两边的表结构本来就不同，共用一个号只会让
- * 「消息域升版本导致知识库白重建」这种无意义的重活发生。
+ * 注意 `export { X } from ...` **只重新导出**、不把名字带进本模块作用域，
+ * 所以下面还要显式 import 一份供本文件使用（与前端 `types.ts` 同一套写法）。
  */
-export const KB_VECTOR_SCHEMA_VERSION = '1'
+import { countIndexableChunks, kbEmbedChars, KB_VECTOR_SCHEMA_VERSION, staleReasonOf } from './kb-vectors-status.ts'
+import type { KbVectorStaleReason } from './kb-vectors-status.ts'
+export { KB_VECTOR_SCHEMA_VERSION, kbEmbedChars } from './kb-vectors-status.ts'
+export type { KbVectorStaleReason } from './kb-vectors-status.ts'
 
 /**
  * 「这个库的向量为什么不能用」—— 界面与降级说明要说的是这一句，而不是笼统的「未就绪」。
@@ -80,7 +86,6 @@ export const KB_VECTOR_SCHEMA_VERSION = '1'
  * `rows > 应有块数` 不算未就绪：删除文件/关掉 RAG 后残留的向量既进不了检索结果
  *（读路径会 JOIN 回 `kb_chunks`/`kb_files` 再验一次），也不值得为了清它们强制重建。
  */
-export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model' | 'incomplete'
 
 /** 向量库状态（**按库**：`rows` 是「这个库里有多少块已入库」）。 */
 export interface KbVectorIndexStatus {
@@ -201,55 +206,6 @@ function invalidateKbStatusCache(decryptedDir: string, kbId: number): void {
   STATUS_CACHE.delete(kbVectorsDbPath(decryptedDir) + '#' + kbId)
 }
 
-/**
- * 就绪判定的六个条件（顺序即优先级：先说结构、再说有没有、最后说模型与覆盖）。
- * @param rows - 本库已入库的向量行数。
- * @param expected - 本库当前**应有**的块数（`include_in_rag = 1` 的分块）。
- * @param dim - 本库行级维度（不读全局 meta，见 `readKbVectorStatus`）。
- * @param ver - meta 里的 schema 版本。
- * @param models - 本库行级出现过的模型名。
- * @param current - 当前解析出的嵌入模型名。
- * @returns 未就绪原因；空串 = 就绪。
- */
-function staleReasonOf(rows: number, expected: number, dim: number, ver: string, models: string[], current: string): KbVectorStaleReason {
-  if (ver !== KB_VECTOR_SCHEMA_VERSION) return 'schema-mismatch'
-  if (rows === 0) return 'no-index'
-  if (dim <= 0) return 'no-dim'
-  if (current === '') return 'no-model'
-  // 必须**恰好一个**模型且等于当前：两个说明库里混过批次（半重建），
-  // 不等于当前说明换过模型 —— 两者都不能拿去算余弦。
-  if (models.length !== 1 || models[0] !== current) return 'model-mismatch'
-  // 覆盖率放在模型之后：换模型要整体重算，比「补几块」更紧急，文案也不该被后者盖住。
-  if (rows < expected) return 'incomplete'
-  return ''
-}
-
-/**
- * 本库当前**应该**有多少块参与向量检索。
- *
- * 与建库语料 SQL 完全同源（`kb_chunks ⋈ kb_files WHERE include_in_rag=1`）：
- * 只数会被送进 embedding 的块，才算「应然」。读不到文件库时返回 0（不阻断状态读取，
- * 此时 rows>0 仍按已建处理；真正的读失败由文件面板自己的 readError 报）。
- * @param decryptedDir - 解密数据根。
- * @param kbId - 目标库。
- * @returns 应有块数。
- */
-function countIndexableChunks(decryptedDir: string, kbId: number): number {
-  try {
-    const db = new DatabaseSync(kbFilesDbPath(decryptedDir), { readOnly: true })
-    try {
-      const row = db.prepare(
-        'SELECT COUNT(*) AS c FROM kb_chunks c JOIN kb_files f ON f.id = c.file_id '
-        + 'WHERE c.kb_id = ? AND f.include_in_rag = 1',
-      ).get(kbId) as { c?: number } | undefined
-      return Number(row?.c ?? 0) || 0
-    } finally {
-      db.close()
-    }
-  } catch {
-    return 0
-  }
-}
 
 /**
  * 读一次向量库状态（冷路径：一次连接 + 一次 meta 读 + 一次按库 COUNT + 一次按库 DISTINCT model）。
@@ -302,7 +258,11 @@ function readKbVectorStatus(decryptedDir: string, kbId: number, current: string)
       // 展示用的模型名同样按库取；没有行级溯源（老库）才退回 meta 的最近一次构建值。
       const model = models.length === 1 && models[0] !== undefined ? models[0] : (meta.get('model') ?? '')
       const expected = countIndexableChunks(decryptedDir, kbId)
-      const reason = staleReasonOf(rows, expected, dim, ver, models, current)
+      const reason = staleReasonOf({
+        rows, expected, dim, ver, models, current,
+        storedChars: meta.get('max_chars') ?? '',
+        curChars: kbEmbedChars(),
+      })
       return {
         exists: true, rows, dim, model, models, current, staleReason: reason, built_at: built, ready: reason === '',
       }
@@ -487,6 +447,11 @@ async function runBuildKbVectorIndex(
   const db = openVectorsDb(decryptedDir, false)
   try {
     const prevVer = readMeta(db, 'schema_version')
+    // 上次构建用的每块字符上限（空串 = 老库没记过，即按旧策略建的）。
+    const prevMaxChars = readMeta(db, 'max_chars')
+    const maxChars = kbEmbedChars()
+    // 截断策略变了 ⇒ 本库已算过的块全部无效（向量只覆盖了旧上限内的文字）；老库同样作废。
+    const truncationChanged = prevVer !== '' && prevMaxChars !== String(maxChars)
     /**
      * 本库行级出现过的模型名（判定「换没换模型」用的是**行**，不是 meta 里那个全局值 ——
      * 后者在按库绑定之后只是「最近一次构建」的诊断信息，见 §7 F1）。
@@ -500,24 +465,18 @@ async function runBuildKbVectorIndex(
         kbRows += Number(r.c ?? 0)
       }
     } catch { /* 老库还没有 model 列：按「无溯源」处理 ⇒ 本库全部行都算外来行，重建时一并清掉 */ }
-    // 三种作废范围，从小到大。**都不再是「整张表」**（除结构升版）：
-    //   · schema-mismatch ⇒ 整张表。每一行都不再符合新的列/哈希口径，与谁算的无关。
-    //   · force           ⇒ 本库全部行。用户点名「重建」，不该给他留一半旧的。
-    //   · 换模型          ⇒ 只删本库里**不是当前模型**的行。同模型的行仍然有效，
-    //                        删了就等于把一批本不必发的 embedding 请求再发一遍（白花 token、
-    //                        白花一次出网）。
-    // 旧实现清的是整张表，那时的前提是「全库共用一个模型」—— 一个模型变了就是全都变了。
-    // 按库绑定之后这个前提没了：甲库换模型不该让乙库白重建一次。
+    // 三种作废范围（从小到大，都不再是整张表，除结构升版）：
+    //   · schema-mismatch ⇒ 整张表（每行都不符合新口径）；· force ⇒ 本库全部行；
+    //   · 换模型 ⇒ 只删本库里不是当前模型的行（同模型的行仍有效，删了等于白花一次出网）。
+    // 按库绑定之后「全库共用一个模型」的前提没了：甲库换模型不该让乙库白重建。
     const wipeTable = prevVer !== '' && prevVer !== KB_VECTOR_SCHEMA_VERSION
-    const wipeKbAll = !wipeTable && opts.force === true
-    const wipeKbForeign = !wipeTable && opts.force !== true
+    // 截断策略变了也要整体重算本库（同模型的行不能跳过，见 `truncationChanged`）。
+    const wipeKbAll = !wipeTable && (opts.force === true || truncationChanged)
+    const wipeKbForeign = !wipeTable && opts.force !== true && !truncationChanged
       && kbRows > 0 && (kbModels.size !== 1 || !kbModels.has(opts.model))
     /**
-     * 三种作废的公共执行体。
-     *
-     * **up-to-date 早退分支也要走它**：旧实现 pendingCount===0 时只写 meta 就返回，
-     * 于是「force 重建 / 换模型后重算 / 结构升级」在“当前模型的块都已入库”时
-     * 永远清不掉外来行与孤儿行，状态卡在 model-mismatch，构建却一直报 up-to-date。
+     * 三种作废的公共执行体。**up-to-date 早退分支也要走它** —— 否则「force / 换模型 / 升版」
+     * 在"当前模型的块都已入库"时永远清不掉外来行，状态卡住而构建一直报 up-to-date。
      */
     const wipeStaleRows = (): void => {
       if (wipeTable) {
@@ -530,12 +489,8 @@ async function runBuildKbVectorIndex(
     }
     const done = new Set<number>()
     if (!wipeTable && !wipeKbAll) {
-      /**
-       * 增量游标：这个库里**已经由当前模型算过**的块。
-       * 必须带 `model = ?`：不带的话，旧模型的那些行会被当成「已完成」跳过，
-       * 于是库里永远混着两个模型的向量、而状态永远判它「模型不符」——白建。
-       * 用 iterate 而不是 `.all()`（元数据可能几万行）。
-       */
+      // 增量游标：本库里**已由当前模型算过**的块。必须带 `model = ?` —— 否则旧模型的行
+      // 会被当成「已完成」跳过，库里永远混着两个模型。用 iterate（元数据可能几万行）。
       for (const row of db.prepare('SELECT chunk_id FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ? AND model = ?')
         .iterate(kbId, opts.model) as Iterable<{ chunk_id: number }>) {
         done.add(Number(row.chunk_id))
@@ -560,7 +515,9 @@ async function runBuildKbVectorIndex(
         if (pendingCount >= cap) break
         const chunkId = Number(r['chunk_id'] ?? 0)
         if (chunkId <= 0 || done.has(chunkId)) continue
-        const text = String(r['text'] ?? '').slice(0, opts.maxCharsPerDoc)
+        // 不按 maxCharsPerDoc 截断：KB 分块本身已限 500 字，再截到 200 会让每块后 60% 对语义检索不可见。
+        // 同消息域：截断不能切断 emoji 的代理对（否则 embedding 端点 400，整个构建失败）。
+        const text = truncateForEmbedding(String(r['text'] ?? ''), maxChars)
         const tuple: PendingChunk = { chunkId, fileId: Number(r['file_id'] ?? 0) }
         const g = groups.get(text)
         if (g) g.push(tuple)
@@ -579,6 +536,7 @@ async function runBuildKbVectorIndex(
         wipeStaleRows()
         writeMeta(db, 'schema_version', KB_VECTOR_SCHEMA_VERSION)
         writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
+        writeMeta(db, 'max_chars', String(maxChars))
         writeMeta(db, 'rows', String((db.prepare('SELECT COUNT(*) AS c FROM ' + KB_VECTORS_TABLE).get() as { c: number }).c))
         db.exec('COMMIT')
       } catch (e) {
@@ -712,6 +670,8 @@ async function runBuildKbVectorIndex(
       writeMeta(db, 'model', opts.model)
       if (dim > 0) writeMeta(db, 'dim', String(dim))
       writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
+      // 记下本批向量用的截断策略：读状态时与当前策略比对，不等就整份重算。
+      writeMeta(db, 'max_chars', String(maxChars))
       db.exec('COMMIT')
       return { status: 'ok', rows: total, embedded, embed_calls: embedCalls, elapsed_ms: Date.now() - started }
     } catch (e) {
@@ -771,6 +731,7 @@ export async function searchKbDense(
       'model-mismatch': '本库索引由 ' + (status.models.join('/') || '未知') + ' 生成、本次用的是 '
         + (opts.model || '（未指定）') + '，两者不可比，请重建',
       'incomplete': '本库有新增内容尚未建立向量索引，请补充索引',
+      'truncation-changed': '本库索引由旧的分块截断策略生成（每块只嵌入了前部分文字），需要重建才能覆盖完整正文',
     }
     return { hits: [], note: '向量索引不可用：' + why[status.staleReason] }
   }

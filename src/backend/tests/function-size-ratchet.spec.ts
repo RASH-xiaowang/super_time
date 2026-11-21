@@ -90,7 +90,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 共享类型引用，函数体 400 → 372。棘轮只许变小，成果需要回到这里记账。
   // 2026-11-13（知识库修复轮）：两路检索的算法体（稀疏 → 稠密的每一道降级闸门）搬成
   // 模块级 `kbSearchWithDenseIn`，方法体退回一行转发 ⇒ 289 → 260。棘轮只许变小。
-  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  260',
+  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  257',
   // 2026-10-16（M22）：总览的四组卡片 JSX 全部拆进 `overview-sections.tsx` 的具名区块组件
   // （TrendSection / HeatmapSection / RegionSection / WordCloudSection / InteractionSection /
   // RelationSection / MomentsAuthorsSection / ContentAssetsSection / StorageCompositionSection /

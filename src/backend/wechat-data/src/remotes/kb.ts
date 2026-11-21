@@ -7,7 +7,7 @@
  * 枚举 —— 方法体改成一行转发；真正的逻辑搬到这里，依赖由 `ctx` 显式给出（原来靠 `this` 拿）。
  */
 import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, registerKbFile, setKbFileRagFlag, setKbFileSummary } from '../query/kb-files.ts'
-import { drainKbQueue } from '../query/kb-queue.ts'
+import { afterKbFilesAdded } from './kb-auto-index.ts'
 import { normalizeKbTopK, searchKb as searchKbRows } from '../query/kb-search.ts'
 import { kbBuildIndexIn } from './kb.kbindex.ts'
 import { buildKbVectorIndex, kbVectorIndexStatus, searchKbDense } from '../query/kb-vectors.ts'
@@ -454,11 +454,8 @@ export function createKbRemotes(rc: KbRemoteCtx) {
        * `void` 不等待：回执要立刻给出去（H4）。判据是「结果里真的出现了 `queued` 行」
        * 而不是「added > 0」—— 纯文本上传不该白开一次库去发现队列是空的。
        */
-      if (results.some((x) => x.ok && x.file?.parseState === 'queued')) {
-        void drainKbQueue(rc.dirs().decrypted).catch((e: unknown) => {
-          console.warn('[kb-queue] 解析队列启动异常：' + (e instanceof Error ? e.message : String(e)))
-        })
-      }
+      // 导入完成后自动建语义索引（时序编排在 kb-auto-index.ts；没配向量模型时静默跳过）。
+      afterKbFilesAdded(rc, kbId, results.some((x) => x.ok && x.file?.parseState === 'queued'))
       return { ok: added > 0, added, failed: results.length - added, results }
     },
 

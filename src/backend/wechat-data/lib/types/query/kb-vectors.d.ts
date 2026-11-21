@@ -36,13 +36,9 @@ export { KB_VECTORS_DB, kbVectorsDbPath } from './kb-paths.ts';
 import { type EmbedFn, type HashRow } from './vector-math.ts';
 /** 向量表名（C4 的删除级联与守卫用例都要按名字断言，所以导出而不是散落字面量）。 */
 export declare const KB_VECTORS_TABLE = "kb_vectors";
-/**
- * 向量库 schema 版本；**结构或哈希算法变化时自动重建**。
- *
- * 与消息域各自一个版本号：两边的表结构本来就不同，共用一个号只会让
- * 「消息域升版本导致知识库白重建」这种无意义的重活发生。
- */
-export declare const KB_VECTOR_SCHEMA_VERSION = "1";
+import type { KbVectorStaleReason } from './kb-vectors-status.ts';
+export { KB_VECTOR_SCHEMA_VERSION, kbEmbedChars } from './kb-vectors-status.ts';
+export type { KbVectorStaleReason } from './kb-vectors-status.ts';
 /**
  * 「这个库的向量为什么不能用」—— 界面与降级说明要说的是这一句，而不是笼统的「未就绪」。
  *
@@ -59,7 +55,6 @@ export declare const KB_VECTOR_SCHEMA_VERSION = "1";
  * `rows > 应有块数` 不算未就绪：删除文件/关掉 RAG 后残留的向量既进不了检索结果
  *（读路径会 JOIN 回 `kb_chunks`/`kb_files` 再验一次），也不值得为了清它们强制重建。
  */
-export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model' | 'incomplete';
 /** 向量库状态（**按库**：`rows` 是「这个库里有多少块已入库」）。 */
 export interface KbVectorIndexStatus {
     exists: boolean;

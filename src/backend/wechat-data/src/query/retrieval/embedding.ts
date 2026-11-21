@@ -25,6 +25,8 @@ import { join } from 'node:path'
 import type { RetrievedDoc } from './types.ts'
 import { retrievalRoot } from './config.ts'
 import { searchIndexPath, yieldToLoop } from '../search.ts'
+import { readIndexEpoch } from '../search-scaffold.ts'
+import { truncateForEmbedding } from '../embed-text.ts'
 // 共用向量数学（与知识库向量库 `query/kb-vectors.ts` 同一份实现，见 `query/vector-math.ts`）：
 // 粗筛/哈希/归一化必须逐位一致，所以只留一处实现。`EmbedFn` 也从这里转出，
 // 保持 `gateway.ts` / `pipeline.ts` 既有的 `from './retrieval/embedding.ts'` 导入点不变。
@@ -134,6 +136,7 @@ function invalidateVectorStatusCache(p: string): void {
  * 冷路径 = 1 次连接 + 1 次 meta 查询（+ 仅老库才有的一次 COUNT），
  * 热路径（缓存命中）= 0 次连接、0 条 SQL。
  * @param p - 向量库文件路径。
+ * @param decryptedDir - 解密数据根（用于比对索引代次）。
  * @returns 状态快照。
  */
 function readVectorIndexStatus(p: string): VectorIndexStatus {
@@ -158,7 +161,36 @@ function readVectorIndexStatus(p: string): VectorIndexStatus {
       const rows = Number.isFinite(rowsMeta) && hasVectorsTable(db)
         ? rowsMeta
         : (db.prepare('SELECT COUNT(*) AS c FROM vectors').get() as { c: number }).c
-      return { exists: true, rows, dim, model, built_at: built, ready: rows > 0 && dim > 0 && ver === VECTOR_SCHEMA_VERSION }
+      /*
+       * 「没有模型溯源」的索引不算就绪（2026-11-20）。
+       *
+       * 真机发现：这份索引的 `meta.model` 是 `'default'`、`meta.dim` 是 **64**，
+       * 建于 2026-09-15 —— 与当前 4096 维的嵌入模型完全不是一回事。
+       * 而旧判据只看 `rows > 0 && dim > 0 && schema 版本对`，于是它**报了整整两个月的就绪**。
+       *
+       * 危害不是"少召回"而是"错召回"：`dotProduct` 按 `min(len)` 截断，
+       * 4096 维查询只会与这 64 维向量的前 64 个分量做点积 —— 分数看似正常、语义是随机的。
+       *
+       * `'default'` 是本项目历史上「记账名没跟发送名对齐」时写死的占位值（§7 F1），
+       * 空串同理：两者都等于"不知道这份向量是谁算的"，只能按不可用处理并触发重建。
+       */
+      const traceable = model !== '' && model !== 'default'
+      /*
+       * 「只建了一部分」也不算就绪（2026-11-20）。
+       *
+       * 构建受 `maxDocsPerBuild` 截断（默认 40000），而旧判据只看 `rows > 0` ——
+       * 于是 27 万条语料里建了 4 万条就报就绪，剩下 23 万条**永远不会再补**，
+       * 且界面上一切正常。真机实测到过：只建 2 万条就 `ready=true`。
+       *
+       * `expected` 由构建时写入（全库 `message_meta` 行数）。老库没有这个键 ⇒ 按 0 处理，
+       * 退回原判据（不能因为新增判据让存量库全部失效）。
+       */
+      const expected = Number(meta.get('expected') ?? 0)
+      const covered = !Number.isFinite(expected) || expected <= 0 || rows >= expected
+      return {
+        exists: true, rows, dim, model, built_at: built,
+        ready: rows > 0 && dim > 0 && ver === VECTOR_SCHEMA_VERSION && traceable && covered,
+      }
     } finally {
       db.close()
     }
@@ -196,7 +228,11 @@ function hasVectorsTable(db: DatabaseSync): boolean {
  */
 export function vectorIndexStatus(decryptedDir: string): VectorIndexStatus {
   const p = vectorDbPath(decryptedDir)
-  const sig = statSig(p)
+  /*
+   * 缓存指纹必须同时覆盖**两个**库：只盯向量库时，搜索索引重建（代次变化）
+   * 之后这里会继续返回旧的 `ready:true`，错配就绕过了检测。
+   */
+  const sig = statSig(p) + '|' + statSig(searchIndexPath(decryptedDir))
   const hit = STATUS_CACHE.get(p)
   if (hit && hit.sig === sig) return { ...hit.status }
   const status = readVectorIndexStatus(p)
@@ -311,13 +347,18 @@ async function runBuildVectorIndex(
   try {
     const prevModel = readMeta(db, 'model')
     const prevVer = readMeta(db, 'schema_version')
+    const prevEpoch = readMeta(db, 'src_epoch')
+    const curEpoch = readIndexEpoch(decryptedDir)
     /**
-     * 是否整体重建：换模型（旧向量维度/语义都不兼容）或 schema 版本不符。
+     * 是否整体重建：换模型（旧向量维度/语义都不兼容）、schema 版本不符，
+     * 或**稀疏索引已重建**（`message_meta.rowid` 重排 ⇒ 旧向量错位，必须整份重算）。
      *
-     * 这里只**决定**、不执行 `DELETE` —— 删除要进事务（阶段二），否则中途失败会把已有索引
-     * 留成空表（H9 第三轮在搜索路径上修过同一个问题，这里是同族）。
+     * 最后一条是 2026-11-19 补的兜底：主路径是 `buildSearchIndex` 提交后直接
+     * `resetMessageVectorIndex()` 把向量表删掉；但那次操作可能因并发占用失败，
+     * 所以构建时再比一次代次 —— 这里本来就已经打开搜索库读语料，**不新增连接**。
      */
-    const reset = Boolean(opts.force || (prevVer && prevVer !== VECTOR_SCHEMA_VERSION) || (prevModel && prevModel !== opts.model))
+    const epochMismatch = prevEpoch !== '' && curEpoch !== '' && prevEpoch !== curEpoch
+    const reset = Boolean(opts.force || epochMismatch || (prevVer && prevVer !== VECTOR_SCHEMA_VERSION) || (prevModel && prevModel !== opts.model))
     const done = new Set<number>()
     // reset 时不能把旧行当成「已有向量」：它们马上要被删掉，全库都要重算。
     if (!reset) {
@@ -330,39 +371,40 @@ async function runBuildVectorIndex(
     }
 
     /**
-     * 待入库的行：**游标边读边判**（N8），并只保留轻量元组。
+     * 待入库的行：**游标边读边判**（N8），只保留轻量元组。
      *
-     * 改前是 `SELECT … FROM message_meta ORDER BY rowid` 之后 `.all()` —— 整张表先物化成一个
-     * 数组（实测 20 万行 / 单条 478 字符：**1876ms、RSS 峰值 +271.7MB**），而下面立刻
-     * `filter(done).slice(0, maxDocsPerBuild)` 只留前几万条，物化全表纯属浪费。
-     * 现在读到够数就 `break`，内存与 `maxDocsPerBuild` 同阶。
-     *
-     * 顺带不再让每行都持有自己的 `text` 字符串（478 字符 × 4 万行 ≈ 数十 MB）：
-     * 文本只作为 `groups` 的**键**存在一份，行上只留
-     * `(rid, username, localId, createTime)` 四个标量。
+     * 改前 `.all()` 会把整张表物化成数组（实测 20 万行：1876ms、RSS +271.7MB），
+     * 而下面立刻只用前 `maxDocsPerBuild` 条。现在读到够数就 `break`。
+     * 文本只作为 `groups` 的**键**存在一份，行上只留四个标量。
      */
     type PendingRow = { rid: number; username: string; localId: number; createTime: number }
     const groups = new Map<string, PendingRow[]>()
     /**
-     * 单次构建的行数上限。
-     *
-     * 配置可手改且不做数值校验，所以这里显式归一：非有限数/≤0 一律按 0 处理（= 不构建，
-     * 与改前 `slice(0, 0)` 的结果一致）。注意改前对**负数**会走 `slice(0, -n)` 的
-     * 「去掉末尾 n 条」语义（笔误产物），这里按 0 收口 —— 有意分叉，与 M9 对 `pool` 的处理同例。
+     * 单次构建的行数上限。配置可手改且不做校验，显式归一：非有限数/≤0 一律按 0
+     * （= 不构建）。改前对**负数**会走 `slice(0, -n)` 的「去掉末尾 n 条」语义（笔误产物），
+     * 这里按 0 收口 —— 有意分叉，与 M9 对 `pool` 的处理同例。
      */
     const cap = Number.isFinite(opts.maxDocsPerBuild) && opts.maxDocsPerBuild > 0
       ? Math.floor(opts.maxDocsPerBuild)
       : 0
     let pendingCount = 0
+    /** 全库可索引文档总数（写进 meta 的 `expected`，供「覆盖不全」判定）。 */
+    let corpusTotal = 0
     const sdb = new DatabaseSync(src, { readOnly: true })
     try {
+      // 先数全量：构建受 `maxDocsPerBuild` 截断，只有知道应有总数才能发现「只建了一半」。
+      try {
+        corpusTotal = Number((sdb.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c?: number } | undefined)?.c ?? 0)
+      } catch { corpusTotal = 0 }
       const sql = 'SELECT m.rowid AS rid, m.text AS text, m.username AS username, m.local_id AS local_id, m.create_time AS create_time '
         + 'FROM message_meta m ORDER BY m.rowid'
       for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
         if (pendingCount >= cap) break
         const rid = Number(r['rid'] ?? 0)
         if (done.has(rid)) continue
-        const text = String(r['text'] ?? '').slice(0, opts.maxCharsPerDoc)
+        // 截断必须走 `truncateForEmbedding`：直接 slice 会切断 emoji 的代理对，
+        // 产出非法 UTF-16 ⇒ embedding 端点回 400「参数无效」⇒ 整个构建失败（真机实测 25 行）。
+        const text = truncateForEmbedding(String(r['text'] ?? ''), opts.maxCharsPerDoc)
         const tuple: PendingRow = {
           rid,
           username: String(r['username'] ?? ''),
@@ -389,6 +431,10 @@ async function runBuildVectorIndex(
         writeMeta(db, 'rows', String(known))
         writeMeta(db, 'schema_version', VECTOR_SCHEMA_VERSION)
         writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
+        // 记下全库应有条数：`rows < expected` ⇒ 只建了一部分（被 `maxDocsPerBuild` 截断）。
+        if (corpusTotal > 0) writeMeta(db, 'expected', String(corpusTotal))
+        // 代次与状态同事务：否则「向量已换、代次还是旧的」会让下一次读又判一次错配。
+        if (curEpoch !== '') writeMeta(db, 'src_epoch', curEpoch)
         db.exec('COMMIT')
       } catch (e) {
         try { db.exec('ROLLBACK') } catch { /* no tx */ }
@@ -515,8 +561,12 @@ async function runBuildVectorIndex(
       writeMeta(db, 'rows', String(total))
       writeMeta(db, 'schema_version', VECTOR_SCHEMA_VERSION)
       writeMeta(db, 'model', opts.model)
+      // 应有总数：`rows < expected` ⇒ 本次被 `maxDocsPerBuild` 截断，状态不能报就绪。
+      if (corpusTotal > 0) writeMeta(db, 'expected', String(corpusTotal))
       if (dim > 0) writeMeta(db, 'dim', String(dim))
       writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
+      // 记下这批向量对应的稀疏索代次：稀疏索引一旦重建（rowid 重排），读侧据此判定错配。
+      if (curEpoch !== '') writeMeta(db, 'src_epoch', curEpoch)
       db.exec('COMMIT')
       return { status: 'ok', rows: total, embedded, embed_calls: embedCalls, elapsed_ms: Date.now() - started }
     } catch (e) {
