@@ -1,0 +1,142 @@
+/**
+ * 年度报告「自由画布」的样式（2026-11-19 从 annual.module.css 抽出）。
+ *
+ * 抽出的直接原因是 M21 文件行数棘轮：annual.module.css 涨到 1012 行、越过 1000 上限。
+ * 但这两块本来就该分开 —— 画布是**布局容器**（绝对定位 + 拖拽），
+ * 而 annual.module.css 里其余是**卡片内容**的排布。混在一个文件里，
+ * 改卡片内容时容易误碰画布规则（反过来也一样）。
+ *
+ * 卡片组件同时引用两份：`css`（内容类）与 `canvasCss`（画布类）。
+ */
+.canvasWrap { display: flex; flex-direction: column; gap: var(--nm-dense-g3); min-width: 0; }
+.canvasBar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--nm-dense-g4);
+  min-height: 24px;
+}
+.canvasHint { font-size: 11px; color: var(--nm-text-3); }
+.canvasReset {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-0);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  cursor: pointer;
+}
+.canvasReset:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
+
+/* 画布本体：高度由内容撑开（inline style 给确切高度），卡片全部绝对定位。 */
+.canvas { position: relative; width: 100%; min-width: 0; }
+/* 拖动期间整块画布禁选文字，否则指针划过会选中一堆正文。 */
+.canvas[data-dragging] { user-select: none; }
+
+.canvasCard {
+  position: absolute;
+  /* 高度**不设** —— 由内容决定，容器量回来参与排版。 */
+  display: flex; flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  /*
+   * 位置**不做过渡**（2026-11-19）。
+   *
+   * 原来这里是 `transition: left 120ms ease, top 120ms ease`。问题在于重排是
+   * **整块画布一起动**：一张卡变高后下面的卡集体下移，这 120ms 里它们会从邻居身上
+   * 穿过去 —— 视觉上就是「卡片相互遮挡」。而画布的不变式是"永不遮挡"，
+   * 一个会让它瞬时失效的动画不该存在。
+   *
+   * 拖动本身不受影响：拖动走的是 `transform`，本来就是即时跟手的。
+   */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  isolation: isolate;
+}
+/* 拖动中的那张：位置由 transform 驱动（即时跟手），并浮到最上层。
+   没有任何位置过渡，所以它"飘"在邻卡上方是拖拽预览，不是版面遮挡。 */
+.canvasCard[data-dragging] { transform-origin: top left; }
+.canvasCard::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: var(--nm-r-lg) var(--nm-r-lg) 0 0;
+  background: var(--tone-line, transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.canvasCard > * { position: relative; z-index: 1; }
+.canvasCard[data-tone] { --tone-line: var(--nm-border-hover); }
+.canvasCard[data-tone='green'] { --tone-line: var(--nm-cyan); }
+
+/* 卡头：右侧留出拖拽手柄的位置（见下面 `.canvasHandle` 的绝对定位）。
+   `padding-right` 必须够 18px 手柄 + 一点空隙，否则长标题会跑到手柄底下。
+   `flex-wrap: wrap` 保留 —— 标题与角标各自折行是对的，只是手柄不再参与这个流。 */
+.canvasHead {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap;
+  flex: 0 0 auto; min-width: 0;
+  padding-right: 24px;
+}
+/* 卡片标题：允许折行（等宽瀑布流下卡只有约 300px，「收藏与文件 · 总量盘点」原先被省略号吃掉）。 */
+.canvasTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); letter-spacing: 0.01em; overflow-wrap: anywhere; }
+.canvasRight { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.canvasExtra { font-size: 12px; color: var(--nm-text-3); text-align: right; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* 拖拽手柄：**永远在卡片右上角**（2026-11-19 用户要求）。
+   关键在 `position: absolute` —— 它不在 `canvasHead` 的 flex 流里，所以
+   「标题很长」「右上角还有分区药丸 + 操作按钮 + 折叠按钮」都不会把它挤到第二行或左下角。
+   之前它放在 `.canvasRight` 里，而那条规则带 `flex-wrap: wrap`，
+   于是内容一多手柄就换行，用户看到的是"拖拽按钮跑到卡片中间偏下"。
+
+   另外两条不变量：
+   · **始终可见**（不靠 :hover）—— 触摸屏没有 hover，悬停显形的控件在平板上点不到，
+     仓库有专门守卫抓这类（`m8-tables-hover.wiring.spec.ts`）；
+   · 用颜色区分静止/悬停，而不是透明度。
+   位置：卡片 `padding: 20px`，让手柄视觉上与标题行居中对齐。 */
+.canvasCard > .canvasHandle {
+  position: absolute;
+  top: 17px;
+  right: 16px;
+  z-index: 3;
+}
+.canvasHandle {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: var(--nm-r-sm);
+  color: var(--nm-text-3);
+  opacity: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.canvasCard:hover .canvasHandle { color: var(--nm-text-2); background: var(--nm-bg-hover); }
+.canvasCard[data-dragging] .canvasHandle { cursor: grabbing; color: var(--nm-text-1); }
+
+/* 内容填充层：把多余高度摊到内容块之间，卡片永远顶满、不出现半截空白。 */
+.canvasBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+/* 窄屏：画布退化成普通竖向堆叠（绝对定位在窄屏只会互相压住）。 */
+@media (max-width: 760px) {
+  .canvas { height: auto !important; }
+  .canvasCard { position: static; width: auto !important; transition: none; }
+}
+
+/* 骨架屏复用画布卡，但占位卡不该出现拖拽手柄。 */
+.skelHost { display: block; min-width: 0; }
+.skelHost .canvasHandle { display: none; }
+/* 占位块：宽度随卡片走，高度由 inline style 给（骨架里是固定 px）。 */
+.skelBlock {
+  display: block;
+  min-height: 0;
+  width: 100%;
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-3) 12%, transparent);
+}

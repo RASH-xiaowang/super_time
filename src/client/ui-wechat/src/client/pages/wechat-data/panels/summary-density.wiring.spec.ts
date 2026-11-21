@@ -104,9 +104,16 @@ describe('年度报告：键值格一行、小卡两行', () => {
     expect(annual).toMatch(/\.heroCell \{[^}]*justify-content: space-between/)
   })
 
-  it('「还有这些人」的小卡由三行压成两行（标签+姓名同行，数值独占一行）', () => {
-    expect(annual).toMatch(/\.moreInfo \{ display: grid;/)
-    expect(annual).toMatch(/\.moreVal \{ grid-column: 1 \/ -1; \}/)
+  it('「还有这些人」的小卡纵向排（标签 / 姓名 / 数值各一行，都能折行）', () => {
+    /**
+     * 2026-11-19 反转：从「标签+姓名同行 + 数值独占一行」的 2 列网格改成**纯纵向**。
+     * 等宽瀑布流下每格约 140px，2 列里标签（「最常联系」4 字）就吃掉一半宽度，
+     * 姓名只剩 60px、必然截断。纵向排之后每行都有整格宽度可用。
+     */
+    expect(annual, '.moreInfo 应改成纵向 flex').toMatch(/\.moreInfo \{ display: flex; flex-direction: column;/)
+    expect(annual, '.moreInfo 又回到 2 列网格了').not.toMatch(/\.moreInfo \{ display: grid;/)
+    // 姓名允许折两行（而不是 nowrap 截断）。
+    expect(annual).toMatch(/\.moreCell \.name \{[\s\S]{0,220}-webkit-line-clamp: 2/)
   })
 
   it('海报的 fr 行高与退化规则没被改动（一屏装下 + 装不下时退回瀑布流）', () => {

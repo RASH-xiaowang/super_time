@@ -149,26 +149,11 @@
   color: var(--nm-text-3);
   vertical-align: -3px;
 }
-/* 折叠按钮：文字按钮（灰），展开态才用主色 —— 与全站 kit 一致 */
-.ovCollapse {
-  min-height: 24px;
-  height: 24px;
-  box-sizing: border-box;
-  padding: 2px 8px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: var(--nm-bg-card);
-  color: var(--nm-text-3);
-  font: inherit;
-  font-size: 11px;
-  line-height: 16px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.ovCollapse:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
-.ovCollapse[aria-expanded='true'] { color: var(--nm-text-2); }
+/* 折叠按钮（`.ovCollapse`）已于 2026-11-19 随折叠功能一并删除：
+   用户要求「数据总览界面所有的折叠展开按钮」不要再出现。
+   卡头右上角现在只有调用点自己的 `action`（如「详情 →」）。 */
 
-/* 卡片体：统一竖向排布；hidden 必须压回 display:none（行为判据见 spec） */
+/* 卡片体：统一竖向排布 */
 .ovSectionBd {
   display: flex;
   flex-direction: column;
@@ -183,26 +168,9 @@
 .ovSectionBd svg,
 .ovSectionBd video { max-width: 100%; }
 
-/* 「更多分析」折叠条 */
-.moreAnalysis { display: flex; flex-direction: column; gap: 8px; }
-.moreToggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 12px;
-  border: 1px dashed var(--nm-border-hover);
-  border-radius: var(--nm-r-md);
-  background: transparent;
-  color: var(--nm-text-2);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.moreToggle:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
-.moreChevron { color: var(--nm-text-3); font-size: 11px; }
+/* 「更多分析」折叠条（.moreAnalysis / .moreToggle / .moreChevron）已于 2026-11-19 删除：
+   那个折叠区被取消，17 项分析改为直接进画布。留着样式只会让"折叠还在"这件事
+   在 CSS 层面看起来成立。 */
 
 /* ── 通用指标格 ──────────────────────────────────────────── */
 .metricGrid {
@@ -293,6 +261,13 @@
   max-height: none;
 }
 .worldMapBox > * { height: 100%; }
+/* 独立的地图卡（2026-11-19 从「关系与地区」拆出，占两列）。
+   高度按「约两张普通卡」给：普通卡内容高度约 200-300px，这里 320-520px。
+   必须显式给高度 —— 拆出来之后父容器不再是关系卡的 flex 列，
+   .worldMapFlex 的 height: auto 会让地图塌成 min-height(220px)。 */
+.worldMapSolo { height: clamp(320px, 32vw, 520px); min-width: 0; }
+.worldMapSolo .worldMapFlex { height: 100%; min-height: 0; max-height: none; }
+
 .worldMapBox [class*='wrap'],
 .worldMapBox [class*='stage'],
 .worldMapBox [class*='mapFrame'],

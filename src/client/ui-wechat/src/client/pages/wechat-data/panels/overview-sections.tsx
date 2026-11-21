@@ -83,7 +83,7 @@ export function KpiSection({ data, ins, onGo }: {
 /** 近 7/30 天趋势：消息、活跃好友/群、新增媒体。 */
 export function TrendSection({ extras }: { extras: NonNullable<OverviewInsights['extras']> }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-4" icon="trend" title="近 30 天趋势">
+    <OvSection canvasId="ov-trend" zone="近期" icon="trend" title="近 30 天趋势">
       <div className={css.trendGrid}>
         <div className={css.trendCell}><span className={css.metricValue}>{extras.trends.messages7.toLocaleString()}</span><span className={kitCss.textCaption}>近 7 天消息</span><span className={deltaArrow(extras.trends.messages7Delta).cls}>{deltaArrow(extras.trends.messages7Delta).text}</span></div>
         <div className={css.trendCell}><span className={css.metricValue}>{extras.trends.messages30.toLocaleString()}</span><span className={kitCss.textCaption}>近 30 天消息</span><span className={deltaArrow(extras.trends.messages30Delta).cls}>{deltaArrow(extras.trends.messages30Delta).text}</span></div>
@@ -98,7 +98,7 @@ export function TrendSection({ extras }: { extras: NonNullable<OverviewInsights[
 /** 消息热度 · 近 90 天（日历热力，按需加载）。 */
 export function HeatmapSection({ heatmap }: { heatmap: Array<{ d: string; count: number }> }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-8" icon="heat" title="消息热度 · 近 90 天">
+    <OvSection canvasId="ov-heat" zone="近期" icon="heat" title="消息热度 · 近 90 天">
       <div className={css.ovHeatBody}><CalendarHeatmapGate data={heatmap} /></div>
     </OvSection>
   )
@@ -107,8 +107,12 @@ export function HeatmapSection({ heatmap }: { heatmap: Array<{ d: string; count:
 /**
  * 世界地图（进入可视区后加载）。
  *
- * 2026-10-19：不再单独占一张卡 —— 并入「关系与地区」卡，作为好友分布的可视化；
- * 地图盒仍保留 `.worldMapBox` 的高度链与懒加载占位。
+ * 2026-11-19 用户要求：**拆成独立卡片**，并且比其它卡大两倍。
+ * 此前它并进「关系与地区」卡里当可视化，一列宽时地图框被压成一条窄横条
+ * （实测约 220px 高、里面只有一句"滚轮缩放"），等于看不见。
+ *
+ * 现在它是独立卡、`cols={2}`（跨两列 ⇒ 宽度是普通卡的两倍）。
+ * `WorldMapBody` 保留原样只作内容体，卡片外壳由 {@link WorldMapSection} 给。
  */
 export function WorldMapBody(): React.JSX.Element {
   return (
@@ -123,22 +127,63 @@ export function WorldMapBody(): React.JSX.Element {
   )
 }
 
-/** 关系浓度 + 好友地区（世界地图）+ 对话 Top。 */
-export function RelationSection({ ins, onOpenChat, className }: {
-  ins: OverviewInsights
-  onOpenChat: (username: string) => void
-  className?: string
-}): React.JSX.Element {
+/**
+ * 世界地图卡片（独立、跨两列、高度约两张普通卡）。
+ * @returns 与其它卡同一套外壳，但宽高都翻倍。
+ */
+export function WorldMapSection(): React.JSX.Element {
   return (
-    <OvSection className={className} icon="relation" title="关系与地区">
+    <OvSection canvasId="ov-worldmap" zone="人与关系" icon="world" title="好友世界地图" cols={2}>
+      {/* 独立成卡后父容器不再是"关系卡"的 flex 列 —— 地图盒需要明确高度，
+          否则 `.worldMapFlex` 的 `height:auto` 会把它塌成 min-height(220px)。 */}
+      <div className={css.worldMapSolo}>
+        <WorldMapBody />
+      </div>
+    </OvSection>
+  )
+}
+
+/** 关系浓度 + 对话 Top（世界地图已拆成独立卡）。 */
+/**
+ * 关系规模（**只讲「我认识多少人」**）。
+ *
+ * 2026-11-19 拆分：原名「关系与地区」，装了三件不同的事 ——
+ * 关系规模、好友世界地图、对话 Top 8。地图先拆出去（`WorldMapSection`），
+ * 这里再把「对话 Top 8」拆成独立的 {@link TopChatsSection}。
+ * 现在本卡只回答一个问题：**我有多少联系人、其中多少是活的**。
+ * 名字也跟着改准 —— 地图与地区榜都搬走了，再叫「关系与地区」是假的。
+ */
+export function RelationSection({ ins }: { ins: OverviewInsights }): React.JSX.Element {
+  return (
+    <OvSection canvasId="ov-relation" zone="人与关系" icon="relation" title="关系规模">
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.total}</span><span className={kitCss.textCaption}>好友总数</span></div>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.active}</span><span className={kitCss.textCaption}>有消息往来</span></div>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.silent}</span><span className={kitCss.textCaption}>沉默好友(无消息)</span></div>
         <div className={css.metric}><span className={css.metricValue}>{ins.relations.groupsWithMsg}</span><span className={kitCss.textCaption}>有消息的群</span></div>
       </div>
-      <WorldMapBody />
-      {ins.relations.top.length > 0 && (
+    </OvSection>
+  )
+}
+
+/**
+ * 对话 Top 8（**只讲「我跟谁聊得最多」**）。
+ *
+ * 从「关系与地区」拆出来：它是**排行**，与上面那组"规模统计"是两件事
+ * （一个回答"认识多少"，一个回答"跟谁最密"）。混在一张卡里时，
+ * 8 行排行把卡撑得很长，而 4 个指标只占顶部一小块。
+ * @param props.onOpenChat - 点击某一行跳转到该会话。
+ */
+export function TopChatsSection({ ins, onOpenChat }: {
+  ins: OverviewInsights
+  onOpenChat: (username: string) => void
+}): React.JSX.Element {
+  const max = Math.max(1, ...ins.relations.top.map(x => x.count))
+  return (
+    <OvSection canvasId="ov-top-chats" zone="人与关系" icon="chat" title="对话 Top 8">
+      {ins.relations.top.length === 0 ? (
+        <div className={kitCss.emptyInline}>还没有可排行的会话</div>
+      ) : (
         <div className={css.topList}>
           {ins.relations.top.slice(0, 8).map((t, i) => (
             <button key={t.username} type="button" className={css.topRow} onClick={() => { onOpenChat(t.username) }} title={`与「${withEnterprise(t.name, t.enterpriseName)}」的对话`}>
@@ -153,7 +198,7 @@ export function RelationSection({ ins, onOpenChat, className }: {
               >
                 {withEnterprise(t.name, t.enterpriseName)}
               </IdentityName>
-              <div className={css.topTrack}><div className={css.topFill} style={{ width: `${(t.count / Math.max(1, ...ins.relations.top.map(x => x.count))) * 100}%` }} /></div>
+              <div className={css.topTrack}><div className={css.topFill} style={{ width: `${(t.count / max) * 100}%` }} /></div>
               <span className={css.topCount}>{t.count} 条</span>
             </button>
           ))}
@@ -163,16 +208,20 @@ export function RelationSection({ ins, onOpenChat, className }: {
   )
 }
 
-/** 内容构成（收发/类型）与内容资产。 */
-export function ContentAssetsSection({ ins, official, className }: {
-  ins: OverviewInsights
-  official: number
-  className?: string
-}): React.JSX.Element {
+/**
+ * 消息构成（**只讲「消息本身怎么构成」**：收发比 + 类型分布）。
+ *
+ * 2026-11-19 拆分：原名「内容构成与资产」，装了两件互不相干的事 ——
+ * 消息的构成（收发 / 图片 / 语音 / 文件…），以及**内容资产盘点**
+ * （朋友圈、公众号、收藏、表情）。前者是"聊天里都是什么"，后者是"我攒了什么"，
+ * 混在一起时用户看下半截会忘了上半截在说什么。资产已拆成 {@link AssetsOverviewSection}。
+ */
+export function ContentSection({ ins }: { ins: OverviewInsights }): React.JSX.Element {
   const total = Math.max(1, ins.messages.total)
   const sentPct = Math.min(100, Math.max(0, Math.round((ins.messages.sent / total) * 100)))
+  const bucketMax = Math.max(1, ...MSG_BUCKETS.map(b => ins.messages[b.key] ?? 0))
   return (
-    <OvSection className={className} icon="content" title="内容构成与资产">
+    <OvSection canvasId="ov-content" zone="内容与存储" icon="content" title="消息构成">
       <div className={css.mixLine}>
         <span>消息 <b>{ins.messages.total.toLocaleString()}</b> 条</span>
         <span>发出 <b>{ins.messages.sent.toLocaleString()}</b></span>
@@ -185,10 +234,26 @@ export function ContentAssetsSection({ ins, official, className }: {
       <div className={css.catList}>
         {MSG_BUCKETS.map((x) => {
           const n = ins.messages[x.key]
-          const max = Math.max(1, ...MSG_BUCKETS.map(b => ins.messages[b.key] ?? 0))
-          return <div key={x.label} className={css.cat}><div className={css.catRow}><span className={css.catLabel}>{x.label}</span><span className={css.catMeta}>{n.toLocaleString()} 条</span></div><div className={css.bar}><div className={css.barFill} style={{ width: `${(n / max) * 100}%` }} /></div></div>
+          return <div key={x.label} className={css.cat}><div className={css.catRow}><span className={css.catLabel}>{x.label}</span><span className={css.catMeta}>{n.toLocaleString()} 条</span></div><div className={css.bar}><div className={css.barFill} style={{ width: `${(n / bucketMax) * 100}%` }} /></div></div>
         })}
       </div>
+    </OvSection>
+  )
+}
+
+/**
+ * 内容资产盘点（**只讲「我攒了什么」**：朋友圈 / 公众号 / 收藏 / 表情）。
+ *
+ * 从「内容构成与资产」拆出。这四项的共同点是**它们不是聊天消息**，
+ * 而是这个账号里的长期沉淀（跨年累积），与"这一年发了多少条消息"完全不同层次。
+ * @param props.official - 公众号/服务号会话数。
+ */
+export function AssetsOverviewSection({ ins, official }: {
+  ins: OverviewInsights
+  official: number
+}): React.JSX.Element {
+  return (
+    <OvSection canvasId="ov-assets" zone="内容与存储" icon="asset" title="内容资产">
       <div className={css.assetGrid}>
         <div className={css.assetItem}>
           <span className={css.assetLabel}>朋友圈</span>
@@ -224,7 +289,7 @@ export function StorageCompositionSection({ categories, stor, largeFileCount, on
   className?: string
 }): React.JSX.Element {
   return (
-    <OvSection className={className} icon="storage" title={`存储构成 Top ${categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('storage') }}>详情 →</button>}>
+    <OvSection canvasId="ov-storage" zone="内容与存储" icon="storage" title={`存储构成 Top ${categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('storage') }}>详情 →</button>}>
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{fmtBytes(stor?.total_size ?? 0)}</span><span className={kitCss.textCaption}>媒体占用</span></div>
         <div className={css.metric}><span className={css.metricValue}>{(stor?.total_count ?? 0).toLocaleString()}</span><span className={kitCss.textCaption}>媒体项</span></div>
@@ -252,7 +317,7 @@ export function LedgerSection({ ledger, onGo, className }: {
 }): React.JSX.Element {
   const ls = ledger?.summary
   return (
-    <OvSection className={className} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('ledger') }}>详情 →</button>}>
+    <OvSection canvasId="ov-ledger" zone="内容与存储" icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { onGo('ledger') }}>详情 →</button>}>
       {ledger?.readError && (
         <div className={kitCss.error} role="alert">
           资金台账读取不完整：{ledger.readError}
@@ -277,34 +342,10 @@ export function LedgerSection({ ledger, onGo, className }: {
   )
 }
 
-/**
- * 「更多分析」：默认折叠的次级分析区。
- *
- * 微信化的信息层级：默认一屏只留 6 张核心卡；这些指标仍然保留（功能不减），
- * 但不再与核心卡抢视线。展开后按 Bootstrap 栅格两列/整行排布。
- */
-export function MoreAnalysis({ count, children }: { count: number; children: React.ReactNode }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className={css.moreAnalysis}>
-      <button
-        type="button"
-        className={css.moreToggle}
-        aria-expanded={open}
-        onClick={() => { setOpen((v) => !v) }}
-      >
-        <span>更多分析（{count} 项）</span>
-        <span className={css.moreChevron}>{open ? '收起 —' : '展开 +'}</span>
-      </button>
-      {open && <div className="row g-2">{children}</div>}
-    </div>
-  )
-}
-
 /** 全局热词。 */
 export function WordCloudSection(): React.JSX.Element {
   return (
-    <OvSection className="col-12" icon="content" title="全局热词">
+    <OvSection canvasId="ov-wordcloud" zone="更多分析" icon="content" title="全局热词">
       <WordCloudCard scope="global" limit={60} />
     </OvSection>
   )
@@ -313,7 +354,7 @@ export function WordCloudSection(): React.JSX.Element {
 /** 交互画像 · 基于消息时间与类型。 */
 export function InteractionSection({ ins }: { ins: OverviewInsights }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-6" icon="insight" title="交互画像 · 基于消息时间与类型">
+    <OvSection canvasId="ov-interaction" zone="更多分析" icon="insight" title="交互画像 · 基于消息时间与类型">
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{ins.messages.total.toLocaleString()}</span><span className={kitCss.textCaption}>消息总数</span></div>
         <div className={css.metric}><span className={css.metricValue}>{ins.time.activeDays}</span><span className={kitCss.textCaption}>活跃天数</span></div>
@@ -335,7 +376,7 @@ export function InteractionSection({ ins }: { ins: OverviewInsights }): React.JS
 /** 朋友圈活跃 Top 10。 */
 export function MomentsAuthorsSection({ authors, onOpenMoments, onGo }: { authors: OverviewMomentsAuthor[]; onOpenMoments: (username: string) => void; onGo: (tab: string) => void }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-6" icon="moments" title="朋友圈活跃 Top 10" action={<button type="button" className={css.panelGo} onClick={() => { onGo('moments') }}>详情 →</button>}>
+    <OvSection canvasId="ov-moments" zone="更多分析" icon="moments" title="朋友圈活跃 Top 10" action={<button type="button" className={css.panelGo} onClick={() => { onGo('moments') }}>详情 →</button>}>
       {authors.length === 0 ? <div className={kitCss.emptyInline}>暂无朋友圈活跃作者</div> : (
         <div className={css.authors}>
           {authors.slice(0, 10).map((a, i) => (
@@ -355,7 +396,7 @@ export function MomentsAuthorsSection({ authors, onOpenMoments, onGo }: { author
 /** 撤回消息痕迹 · 风险提示。 */
 export function RevokedSection({ revoked, warnCount, onGo }: { revoked: number; warnCount: number; onGo: (tab: string) => void }): React.JSX.Element {
   return (
-    <OvSection className="col-12 col-xl-6" icon="revoke" title="撤回消息痕迹 · 风险提示" action={<button type="button" className={css.panelGo} onClick={() => { onGo('revoked') }}>详情 →</button>}>
+    <OvSection canvasId="ov-revoked" zone="更多分析" icon="revoke" title="撤回消息痕迹 · 风险提示" action={<button type="button" className={css.panelGo} onClick={() => { onGo('revoked') }}>详情 →</button>}>
       <div className={css.metricGrid}>
         <div className={css.metric}><span className={css.metricValue}>{revoked.toLocaleString()}</span><span className={kitCss.textCaption}>撤回消息（可回溯）</span></div>
         <div className={css.metric}><span className={css.metricValue}>{warnCount}</span><span className={kitCss.textCaption}>转账/红包异常</span></div>
@@ -368,7 +409,7 @@ export function RevokedSection({ revoked, warnCount, onGo }: { revoked: number; 
 /** 数据健康。 */
 export function HealthSection({ ins, extras }: { ins: OverviewInsights; extras: OverviewInsights['extras'] }): React.JSX.Element {
   return (
-    <OvSection className="col-12" icon="health" title="数据健康">
+    <OvSection canvasId="ov-health" zone="更多分析" icon="health" title="数据健康">
       <div className={css.healthGrid}>
         <div className={css.healthItem}><span className={css.healthValue}>{ins.health.dbFiles}</span><span className={kitCss.textCaption}>数据库文件</span></div>
         <div className={css.healthItem}><span className={css.healthValue}>{fmtBytes(ins.health.dbBytes)}</span><span className={kitCss.textCaption}>解密数据体积</span></div>

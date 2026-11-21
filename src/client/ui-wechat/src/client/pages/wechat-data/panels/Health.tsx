@@ -13,10 +13,12 @@
  * 取数与动作已抽到 `health-actions.ts`：本组件只负责渲染，且 WAL 推送只刷统计，
  * 不会顺带触发全库体检。
  */
-import { Button, Card, LoadingState, PanelHeader, StatCard, StatGrid, Toolbar } from '../ui/kit.tsx'
+import { Button, LoadingState, PanelHeader, StatCard, StatGrid, Toolbar } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 import { HealthIntegrityCards } from './health-integrity.tsx'
+import { CardCanvas } from './card-canvas.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { useHealthPanelActions } from './health-actions.ts'
@@ -115,8 +117,13 @@ export function HealthPanel({ embedded = false }: {
               （侧栏已有「文件与存储」「数据边界与出网」），其中「前往系统设置」更是
               在设置弹窗里点它回到设置 —— 用户要求精简时就该先删这种。 */}
 
-          <div className={kitCss.cardGrid}>
-            <Card title="插件存储文件">
+          {/* 卡片区改用**等宽瀑布流画布**（2026-11-19，与「年度报告」「数据总览」同一套）。
+              这里最能体现画布的价值：「损坏的库」卡可能装三组列表 + 三段说明、高过千像素，
+              而旁边的「DB 状态摘要」可能只有两行 —— 旧的两列网格会把它们拉成等高，
+              矮卡下方留一大片空白。画布让每张卡各自按内容取高、按最短列落位。
+              KPI 那条 `StatGrid` 留在画布外：它是「一眼看的六个数字」，横条形态更合适。 */}
+          <CardCanvas year={0} scope="health">
+            <CanvasCard id="health-stores" title="插件存储文件">
               {snap.stores.length === 0 ? (
                 <div className={kitCss.emptyInline}>暂无插件存储文件</div>
               ) : (
@@ -129,7 +136,7 @@ export function HealthPanel({ embedded = false }: {
                   ))}
                 </div>
               )}
-            </Card>
+            </CanvasCard>
 
             {/* W3-11.7：体检结论区（拆到 health-integrity.tsx：HealthPanel
                 因此回到函数尺寸棘轮以内，而这一族卡片只依赖体检结论与修复动作）。
@@ -149,7 +156,7 @@ export function HealthPanel({ embedded = false }: {
                 「哪几个、因为什么、现在能不能修」—— 否则用户在健康中心
                 看到一個數字，什么也做不了。 */}
             {(decrypt?.failures.length ?? 0) > 0 && (
-              <Card title={`解密失败明细（${String(decrypt?.failures.length ?? 0)}）`}>
+              <CanvasCard id="health-failures" title={`解密失败明细（${String(decrypt?.failures.length ?? 0)}）`}>
                 <div className={css.lines}>
                   {decrypt?.failures.map((x) => (
                     <div key={x.db} className={css.line}>
@@ -160,10 +167,10 @@ export function HealthPanel({ embedded = false }: {
                 </div>
                 {/* 直接给出下一步：失败最常见的原因是库还被微信占着。 */}
                 <div className={css.failHint}>最常见的原因是这些库正被微信客户端占用：退出微信后点上面的「重试解密」。</div>
-              </Card>
+              </CanvasCard>
             )}
 
-            <Card title="DB 状态摘要">
+            <CanvasCard id="health-status" title="DB 状态摘要">
               {(status?.lines ?? []).length === 0 ? (
                 <div className={kitCss.emptyInline}>暂无状态行</div>
               ) : (
@@ -171,8 +178,8 @@ export function HealthPanel({ embedded = false }: {
                   {status?.lines.map(line => <div key={line} className={css.line}>{line}</div>)}
                 </div>
               )}
-            </Card>
-          </div>
+            </CanvasCard>
+          </CardCanvas>
         </>
       )}
     </div>

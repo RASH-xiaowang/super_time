@@ -393,6 +393,20 @@
 .panelShell > :is(.card, .cardGrid, .statGrid, .panelHeader) { flex-shrink: 0; }
 
 /*
+ * 画布容器（`card-canvas.module.css` 的 `.canvasWrap`）也要免于 flex 收缩。
+ *
+ * 原因：画布的高度是**算出来的绝对值**（`height` 内联在 `.canvas` 上，等于所有卡的
+ * 排版高度）。而 flex 子项默认 `flex-shrink: 1` —— 在定高的 `.panelShell` 里，
+ * 一旦内容超出，浏览器会先把画布压扁再去滚动，卡片的 `top` 就与容器高度对不上，
+ * 出现「卡被裁掉下半截」。
+ *
+ * 类名跨模块拿不到，所以用属性片段选择器（与本文件下方 `[class*='_cardBd']`
+ * 同一套写法）。2026-11-19 数据健康/收藏统计/数据边界三页改用画布时加入。
+ */
+.panelShell > [class*='canvasWrap'],
+.panelEmbed > [class*='canvasWrap'] { flex-shrink: 0; }
+
+/*
  * 面板的「嵌入形态」：作为「设置」弹窗里的一节渲染时替换 .panelShell。
  * 差别只有两点 —— 不自建 height:100%（那是整页用的，塞进弹窗右区会变成定高内滚动），
  * 不自建内边距（弹窗右区已经给了）。滚动统一交给右区。

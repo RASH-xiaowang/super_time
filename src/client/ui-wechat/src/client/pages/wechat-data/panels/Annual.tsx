@@ -5,15 +5,37 @@
  *   · 人物类指标（发出/排行/搭子/口头禅/回复速度/谁先开口）只算**我发出的**；
  *   · 规模类指标（日历热力/最疯的一天/作息切片）算**全部消息**。
  * 两类口径在看板上分别标注，避免「日均 28 条却有一天 2,218 条」这种无法解释的数字。
+ *
+ * ## 一屏 8 张卡的排布（2026-11-19 按叙事重排）
+ *
+ * 改前是 27 张卡片墙；2026-10-19 收敛到 8 张，2026-11-19 再按「读起来顺」重排成四段：
+ *
+ *   段1 这一年       HeroCard(6)      RhythmCard(6)        我的产出与作息
+ *   段2 你和他们     RankingCard(6)   GroupsCard(6)        先跟谁聊、群里怎么样
+ *   段3 生活的痕迹   MoneyCard(6)     MomentsCard(3)   MediaCallCard(3)
+ *   段4 值得记住     ExtremesCard(12) 年度之最（横贯，小砖块平铺）
+ *   页脚            footer(12)
+ *
+ * **为什么内容最多的资金卡给 6 列**：它要放「总额 + 未计入 + 最大一笔 + 往来 TOP5」，
+ * 4 列时每行折成两段、卡片被撑到约 300px，同排的矮卡下方就空出一大片。给 6 列后
+ * 名字与金额同行、卡片变矮，三张卡的高度接近（2026-11-19 用户反馈「空白太多」）。
+ * 整页严格整除 12（合计 60 列 = 5 行）。
+ *
+ * **段与段之间不加横贯标题**：那会破坏 12 列网格的整除关系，也把一屏切成碎片。
+ * 分区改由每张卡右上角的小药丸承担（`Card` 的 `zone`）。
+ *
+ * ⚠️ 改顺序或 span 时必须同步 `annual-skeleton.tsx` 的 CELLS 与
+ * `annual-more.wiring.spec.ts` —— 两处都会逐行求和。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import type { AnnualReviewShape } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { AnnualSkeleton } from './annual-skeleton.tsx'
-import { annualReviewCacheKey, normalizeReview, type NormalizedReview } from './annual-normalize.ts'
-import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
-import { MasonryGrid } from './annual-masonry.tsx'
+import { CardCanvasSkeleton } from './annual-skeleton.tsx'
+import { annualReviewCacheKey, defaultAnnualYear, normalizeAnnualYears, normalizeReview, type NormalizedReview } from './annual-normalize.ts'
+import { AVATAR_SIZE, Avatar, adaptiveTiers, dur, fmt, lv } from './annual-common.tsx'
+import { CardCanvas } from './card-canvas.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { IdentityName } from './identity.tsx'
 import { ExportProgressStatus } from './ExportProgressStatus.tsx'
@@ -31,25 +53,6 @@ import { withEnterprise } from './enterprise-identity.ts'
 
 /** 周一为首的行标签。 */
 const DOW = ['一', '二', '三', '四', '五', '六', '日']
-/** 数字 → 热力等级（0 不显示底色）。 */
-function lv(n: number, t: [number, number, number, number]): string {
-  if (n <= 0) return ''
-  if (n <= t[0]) return '1'
-  if (n <= t[1]) return '2'
-  if (n <= t[2]) return '3'
-  return '4'
-}
-/**
- * 按当年峰值自适应分档。
- * 固定阈值不行：总量 20 万条/年时，每一格都远超任何合理常数，热力图会变成一整块同色
- * （实测：日历 376 格里 300+ 是同一档），完全看不出疏密。改为按峰值取比例分档，
- * 不同体量的用户都能看到梯度。
- */
-function adaptiveTiers(max: number): [number, number, number, number] {
-  const m = Math.max(1, max)
-  return [Math.max(1, Math.round(m * 0.1)), Math.round(m * 0.3), Math.round(m * 0.55), Math.round(m * 0.8)]
-}
-
 
 /**
  * 卡片的**语义色调**（2026-10-17 新增）。
@@ -91,27 +94,40 @@ export type CardTone = 'cyan' | 'purple' | 'pink' | 'green' | 'amber' | 'blue' |
  *   3. 固定行高 + 跨 2 行 → 滚动条没了，但 2 行卡下方留白 200px；
  *   4. **现在**：高度随内容 + `dense` 补空 —— 参考图的做法，最简单也最好看。
  *
+ * ## `zone`：分区标签（2026-11-19 加）
+ *
+ * 8 张核心卡按**叙事**排成四段（这一年 / 你和他们 / 生活的痕迹 / 值得记住）。
+ * 段与段之间不加横贯标题 —— 那会破坏 12 列网格的整除关系（`annual-more.wiring.spec.ts`
+ * 逐行求和），也会把一屏切成四块碎片。改成每张卡右上角一枚小药丸，扫视时自然聚成组。
+ *
  * @param span 12 列网格里的占列数（退化布局下忽略）。
  */
-function Card({ title, extra, span = 3, tone = 'cyan', wide = false, children }: {
-  title: string; extra?: React.ReactNode; span?: number; tone?: CardTone
-  /** 宽内容卡（8 列）：窄档下也独占一行，保证总 span 数整除列数。 */
-  wide?: boolean
+/**
+ * 卡片外壳。
+ *
+ * `canvasId` **必填**（2026-11-19）。此前它是可选的 —— 没传就退回 12 列网格卡，
+ * 而网格卡在**绝对定位的画布**里会留在文档流里撑满整行、压住别的卡。
+ * 那次事故的现场就是 `YearPortrait` 没走外壳、`OvSection` 忘了传 id。
+ * 可选参数等于把这个坑留给下一个人，所以改成必填：忘传 = 编译错误。
+ *
+ * @param canvasId 画布里的稳定 id（位置按它存取，改名等于换了一张卡）。
+ */
+function Card({
+  canvasId, title, extra, zone, tone = 'cyan', children,
+}: {
+  /** 画布里的稳定 id（**必填**，见上面的说明）。 */
+  canvasId: string
+  title: React.ReactNode
+  extra?: React.ReactNode
+  /** 分区标签（这一年 / 你和他们 / 生活的痕迹 / 值得记住）。 */
+  zone?: string
+  tone?: CardTone
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <section
-      className={css.card}
-      data-tone={tone}
-      data-span-wide={wide ? '' : undefined}
-      style={{ gridColumn: `span ${span}` }}
-    >
-      <div className={css.cardHead}>
-        <span className={css.cardTitle}>{title}</span>
-        {extra !== undefined && <span className={css.cardExtra}>{extra}</span>}
-      </div>
-      <div className={css.cardBody}>{children}</div>
-    </section>
+    <CanvasCard id={canvasId} title={title} zone={zone} extra={extra} tone={tone}>
+      {children}
+    </CanvasCard>
   )
 }
 
@@ -121,7 +137,7 @@ function HeroCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   // 用户得自己换算成比例才知道算不算勤快。
   const activeRate = Math.round((r.activeDaysMine / 365) * 100)
   return (
-    <Card title="全年发出" span={6} tone="cyan" extra={`发给 ${fmt(r.sentTo)} 个会话`}>
+    <Card canvasId="hero" title="全年发出" tone="cyan" zone="这一年" extra={`发给 ${fmt(r.sentTo)} 个会话`}>
       <div className={css.heroNum}>{fmt(r.sent)}<small>条</small></div>
       <div className={css.heroSub}>平均每天 {r.sentDailyAvg} 条 · 一年就这样过去了。</div>
       {/* 活跃率条：把「活跃 237 天」变成一眼能读的比例。
@@ -177,8 +193,9 @@ function CalendarCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
 
   return (
     <Card
-      span={6}
+      canvasId="more-calendar"
       tone="cyan"
+      zone="这一年"
       title={`${r.year} 年的 ${r.calendar.length} 天`}
       extra={`全年活跃 ${r.activeDaysAll} 天 · 最高一天 ${fmt(r.maxDayAll)} 条`}
     >
@@ -221,7 +238,7 @@ function BuddyCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
   if (!b) return null
   const total = Math.max(1, b.mine + b.theirs)
   return (
-    <Card title="年度搭子" tone="pink" extra="今年话最多的一对">
+    <Card canvasId="more-buddy" title="年度搭子" tone="pink" extra="今年话最多的一对">
       <div className={css.row}>
         <Avatar username={b.username} name={b.name} size={AVATAR_SIZE} src={av.get(b.username) ?? undefined} />
         <div className={css.rowMain}>
@@ -258,7 +275,7 @@ function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, stri
   const hot = r.hottestMonth
   return (
     <Card
-      span={6}
+      canvasId="more-monthly-star"
       tone="pink"
       title="十二个月的主演"
       extra={r.starName ? (
@@ -314,7 +331,7 @@ function NightCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
   const n = r.night
   const total = Math.max(1, n.mine + n.theirs)
   return (
-    <Card title="深夜" span={3} tone="purple" extra={`陪你完成 ${(n.share * 100).toFixed(1)}% 的深夜`}>
+    <Card canvasId="more-night" title="深夜" tone="purple" extra={`陪你完成 ${(n.share * 100).toFixed(1)}% 的深夜`}>
       <div className={css.nightTop}>
         <Avatar username={n.topUsername} name={n.topName} size={AVATAR_SIZE} />
         <div className={css.rowMain}>
@@ -348,7 +365,7 @@ function RhythmCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const tiers = useMemo(() => adaptiveTiers(heat.reduce((m, x) => Math.max(m, x), 0)), [heat])
   return (
     <Card
-      span={6}
+      canvasId="rhythm"
       tone="purple"
       title="作息切片"
       extra={`一周 168 格 · 共 ${fmt(r.rhythm.heat.reduce((a, n) => a + n, 0))} 条`}
@@ -389,11 +406,24 @@ function RhythmCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   )
 }
 
-/** ⑧ 你说的话。 */
+/**
+ * ⑧ 你说的话（**只讲「文字量」这一件事**）。
+ *
+ * ## 2026-11-19 去重
+ *
+ * 这里原来有 6 个格子：敲字、语音发出、语音收到、通话、接通/未接、视频/语音。
+ * 后 5 个与「媒体与通话」卡（`MediaCallCard`）**逐字重复** —— 同一份数据在两处画两遍，
+ * 用户读到第二条时只会想"我刚不是看过吗"。
+ *
+ * 现在按**语义**分工：
+ *   · 本卡 = 我打了多少字（主值 + 收发对比 + 敲字次数）；
+ *   · `MediaCallCard` = 媒体与通话（图片视频 / 语音 / 通话 / 接通率 / 表情）。
+ * 一张卡只回答一个问题，这也是「能拆就拆」的前提 —— 拆之前先别把两件事塞在一起。
+ */
 function WordsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const w = r.words
   return (
-    <Card title="你说的话" span={3} tone="blue" extra={`收到 ${fmt(w.receivedChars)} 字`}>
+    <Card canvasId="more-words" title="你说的话" tone="blue" extra={`收到 ${fmt(w.receivedChars)} 字`}>
       <div className={css.bigDay}>
         <span className={css.bigDayNum}>{fmt(w.mineChars)}</span>
         <span className={css.bigDayUnit}>字</span>
@@ -407,17 +437,17 @@ function WordsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
         <span>你发 {fmt(w.mineChars)} 字</span>
         <span>收到 {fmt(w.receivedChars)} 字</span>
       </div>
-      {/* 2026-10-17：从「副标题 + 8 格」精简成「6 格」——
-          原先「平均每条」「语音占比」两个格子是**现算的派生值**（不是后端字段），
-          「最长一条语音」副标题与「语音发出」格子重复，多出来的 3 行把卡片
-          撑出滚动条（溢出 239px，全页最严重）。 */}
       <div className={css.heroGrid} style={{ marginTop: 4 }}>
-        <div className={css.heroCell}><span className={css.heroCellK}>敲字</span><span className={css.heroCellV}>{fmt(w.keystrokes)} 次</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>语音发出</span><span className={css.heroCellV}>{w.voiceSentCount} 条 · {dur(w.voiceSentSec)}</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>语音收到</span><span className={css.heroCellV}>{w.voiceRecvCount} 条 · {dur(w.voiceRecvSec)}</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>通话</span><span className={css.heroCellV}>{dur(w.callSec)} · {w.callCount} 通</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>接通 / 未接</span><span className={css.heroCellV}>{w.callConnected} · {w.callMissed}</span></div>
-        <div className={css.heroCell}><span className={css.heroCellK}>视频 / 语音</span><span className={css.heroCellV}>{w.videoSent} / {w.voiceMsgSent}</span></div>
+        <div className={css.heroCell}>
+          <span className={css.heroCellK}>敲字</span>
+          <span className={css.heroCellV}>{fmt(w.keystrokes)} 次</span>
+        </div>
+        {w.longestVoiceSec > 0 && (
+          <div className={css.heroCell}>
+            <span className={css.heroCellK}>最长一条语音</span>
+            <span className={css.heroCellV}>{dur(w.longestVoiceSec)}</span>
+          </div>
+        )}
       </div>
     </Card>
   )
@@ -432,7 +462,7 @@ function CatchphraseCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const rest = c.top.slice(1, 6)
   const maxCount = Math.max(1, ...rest.map(p => p.count))
   return (
-    <Card title="年度口头禅" span={3} tone="pink" extra={`${fmt(c.shortTotal)} 句短表达 · ${fmt(c.catchTotal)} 句成了口头禅`}>
+    <Card canvasId="more-catchphrase" title="年度口头禅" tone="pink" extra={`${fmt(c.shortTotal)} 句短表达 · ${fmt(c.catchTotal)} 句成了口头禅`}>
       {c.phrase
         ? <div className={css.phraseHero}>“{c.phrase}”<span className={css.sub} style={{ marginLeft: 8 }}>说了 {c.count} 次</span></div>
         : <div className={css.sub}>还没有足够短的重复表达</div>}
@@ -458,7 +488,7 @@ function ReplyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   // 中位数 vs 九成：两个数差多少倍，直接决定"你是秒回还是看心情"。
   const spread = p.medianSec > 0 ? p.p90Sec / p.medianSec : 0
   return (
-    <Card title="回复速度" span={4} tone="purple" extra="按「对方说 → 我回」的间隔统计">
+    <Card canvasId="more-reply" title="回复速度" tone="purple" extra="按「对方说 → 我回」的间隔统计">
       <div className={css.bigDay}>
         <span className={css.bigDayNum}>{dur(p.medianSec)}</span>
         <span className={css.bigDayUnit}>一半的消息，你在这个时间内回了</span>
@@ -525,7 +555,7 @@ function OpenerCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const o = r.opener
   const total = Math.max(1, o.mine + o.theirs)
   return (
-    <Card title="谁先开口" span={4} tone="pink" extra={`全年 ${fmt(o.mine + o.theirs)} 次对话`}>
+    <Card canvasId="more-opener" title="谁先开口" tone="pink" extra={`全年 ${fmt(o.mine + o.theirs)} 次对话`}>
       <div className={css.bigDay}>
         <span className={css.bigDayNum}>{(o.share * 100).toFixed(1)}%</span>
         <span className={css.bigDayUnit}>的对话由你先开口</span>
@@ -586,7 +616,7 @@ function OpenerCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
 /** ⑫ 年度聊天排行。 */
 function RankingCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element {
   return (
-    <Card title="年度聊天排行" span={3} tone="pink" extra="你发 | TA 发">
+    <Card canvasId="ranking" title="年度聊天排行" tone="pink" zone="你和他们" extra="你发 | TA 发">
       {r.ranking.length === 0 && <div className={css.sub}>暂无单聊记录</div>}
       {/* 一屏只放前 5：卡片行高固定，10 行会撑破并被裁掉 */}
       {r.ranking.slice(0, 5).map((row, i) => (
@@ -606,7 +636,7 @@ function EmojiCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const e = r.emoji
   const topMax = Math.max(1, ...e.top.map(x => x.count))
   return (
-    <Card title="表情宇宙" span={4} tone="amber" extra={e.threw > 0 ? `出没 ${e.days} 天` : ''}>
+    <Card canvasId="more-emoji" title="表情宇宙" tone="amber" extra={e.threw > 0 ? `出没 ${e.days} 天` : ''}>
       {/* 2026-10-17：原先 4 行 kv + 一排表情（109px / 230px，填充率 45%）。
           改成 2×2 小格 + 表情榜（带占比条），信息密度上来、空白也填掉了。 */}
       <div className={css.heroGrid}>
@@ -634,7 +664,7 @@ function EmojiCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
 function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element | null {
   if (r.highlights.length === 0) return null
   return (
-    <Card title="还有这些人" span={12} tone="pink" wide>
+    <Card canvasId="more-highlights" title="还有这些人" tone="pink">
       {/* 横向小卡（头像 + 说明列）：**放不下就换行**。
           原先这里复用 `.moreRow`（"标签 ←→ 数值"的不换行容器），而芯片类名
           （moreCell / moreInfo / moreLabel / moreVal）在当前样式里是缺失的 ⇒
@@ -681,6 +711,48 @@ function avatarUsernamesForReview(data: NormalizedReview): string[] {
   ].filter(Boolean))].slice(0, 60)
 }
 
+/**
+ * 「更多年度数据」的 17 项（2026-11-19 抽出成组件，压 `AnnualPanel` 的行数）。
+ *
+ * **不再是一个独立画布**：它只返回一串卡片，由 `AnnualPanel` 放进**同一个** `CardCanvas`。
+ * 改前它是 `<details>` 里第二个画布 —— 页面上出现两块分开的瀑布流，中间还夹着一条
+ * 折叠标题，读起来像两篇文章（用户 2026-11-19：「不要分为两个分割的画布板块」）。
+ *
+ * 合并之后整页是**一条连续的瀑布流**：8 张核心卡在前、17 项明细在后，
+ * 顺序即阅读顺序，拖拽也在同一块画布里进行（位置共用一个作用域）。
+ *
+ * @param props.data - 年报数据。
+ * @param props.av - 头像表。
+ * @returns 这 17 张卡的片段（由外层画布接管排版）。
+ */
+function MoreCards({ data, av }: { data: NormalizedReview; av: Map<string, string | null> }): React.JSX.Element {
+  return (
+    <>
+      <CalendarCard r={data} />
+      <MonthlyTrendCard r={data} />
+      <MonthlyStarCard r={data} av={av} />
+      <BuddyCard r={data} av={av} />
+      <NightCard r={data} av={av} />
+      <YearPortrait r={data} />
+      <WordsCard r={data} />
+      <CatchphraseCard r={data} />
+      <ReplyCard r={data} />
+      <OpenerCard r={data} />
+      <EmojiCard r={data} />
+      <CatchphraseTopCard r={data} />
+      <RevokeCard r={data} />
+      <AssetsCard r={data} />
+      <HighlightsCard r={data} av={av} />
+      <CanvasCard id="more-wordcloud-global" title={`${String(data.year)} 年度热词`}>
+        <WordCloudCard scope="global" year={data.year} title="" limit={56} height={120} />
+      </CanvasCard>
+      <CanvasCard id="more-wordcloud-moments" title={`${String(data.year)} 朋友圈热词`}>
+        <WordCloudCard scope="moments" year={data.year} title="" limit={56} height={120} />
+      </CanvasCard>
+    </>
+  )
+}
+
 export function AnnualPanel(): React.JSX.Element {
   const [years, setYears] = useState<readonly number[]>([])
   const [year, setYear] = useState<number | null>(null)
@@ -695,17 +767,23 @@ export function AnnualPanel(): React.JSX.Element {
   const loadSeqRef = useRef(0)
   /**
    * 2026-09-30 删掉了「一屏海报」那套自适应：`bodyRef` + `compact` 状态 + 被切检测 +
-   * 那套被切标记属性 全没了。理由是用户要求「将下段卡片全部迁移到上段卡片中」——
-   * 整页现在**只有一张密排网格**（`MasonryGrid`），卡片按内容取高、随页面滚动，
-   * 自然不存在"装不下被切"的问题，那套兜底逻辑失去前提（留着就是死代码）。
+   * 那套被切标记属性 全没了。
+   *
+   * 2026-11-19 起首屏 8 张卡改用**自由画布**（`CardCanvas`）：宽度按内容分档、
+   * 高度随内容、可拖动摆放。折叠区仍是一张 12 列密排网格（`css.board`，默认收起）。
    */
 
   const loadYears = useCallback(async (): Promise<void> => {
     try {
       const env = await apiGetAnnual()
-      const ys = env.years.filter(n => Number.isFinite(n) && n > 2000)
+      /**
+       * 年份归一化成降序（最新在前），默认打开**最新**的一年。
+       * 原先是 `ys.at(-1)` —— 后端返回降序，`at(-1)` 每次选中最旧的 2020 年。
+       * 排序与取值收在 `annual-normalize.ts` 的纯函数里，有行为级测试钉着。
+       */
+      const ys = normalizeAnnualYears(env.years)
       setYears(ys)
-      setYear(prev => prev ?? ys.at(-1) ?? new Date().getFullYear())
+      setYear(prev => prev ?? defaultAnnualYear(ys))
     } catch (e) {
       setError((e as Error).message)
       setYear(prev => prev ?? new Date().getFullYear())
@@ -857,7 +935,7 @@ export function AnnualPanel(): React.JSX.Element {
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {/* 加载骨架屏：与真实卡片**同构**（同一个 12 列网格 + 同样的 span/rows 分布），
             加载完成时只有内容替换、没有布局跳变。见 `annual-skeleton.tsx` 的说明。 */}
-        {!data && loading && <AnnualSkeleton />}
+        {!data && loading && <CardCanvasSkeleton year={year ?? 0} />}
         {!data && !loading && !error && (
           <div className={css.empty}>
             <EmptyState
@@ -869,58 +947,28 @@ export function AnnualPanel(): React.JSX.Element {
         )}
         {data && (
           <>
-          {/* **默认 8 张核心卡**（2026-10-19 微信化）。
-              改前是 27 张卡片墙 + 7 种语义色调 —— 用户打开年度报告先看到一堵彩色墙，
-              真正的结论（这一年发了多少、作息、最常聊的人、钱）反而被淹没。
-              现在一屏只留 8 张：年度概览 / 作息 / 关系 / 群 / 媒体 / 资金 / 朋友圈 / 极值，
-              其余 17 项全部收进下方「更多年度数据」折叠区（功能不减）。
-
-              **顺序按「每行整除 12」排**（12 列基准）：
-                行1  6+6      = 12   年度概览（全年发出） / 作息切片
-                行2  6+6      = 12   群聊年度 / 年度之最
-                行3  3+3+3+3  = 12   年度聊天排行 / 年度资金 / 朋友圈年度 / 媒体与通话
-                行4  12       = 12   页脚
-              ⚠️ 改顺序或 span 时**必须重算每行** —— `annual-more.wiring.spec.ts` 会逐行求和。 */}
-          <MasonryGrid>
+          {/* **整页只有一块画布**（2026-11-19）。改前是「首屏画布 + 折叠区画布」两块，
+              中间夹一条折叠标题 —— 读起来像两篇文章，而用户要的是一条连续的年度回顾。
+              现在 8 张核心卡在前、17 项明细在后，**同一条瀑布流**、同一套拖拽。
+              顺序即「先放谁」，也是拖动前的阅读顺序。
+              ⚠️ 卡片的 `canvasId` 是位置存储的键，**改名等于换了一张卡**（用户摆好的位置会丢）。 */}
+          <CardCanvas year={data.year}>
             <HeroCard r={data} />
             <RhythmCard r={data} />
-            <GroupsCard r={data} av={av} />
-            <ExtremesCard r={data} />
             <RankingCard r={data} av={av} />
+            <GroupsCard r={data} av={av} />
             <MoneyCard r={data} />
             <MomentsCard r={data} />
             <MediaCallCard r={data} />
-            <div className={css.footer}>
-              <span>第一条 · {data.firstAt || '—'}</span>
-              <span className={css.footerMid}>好好再说。没有哪种聊法是错的。</span>
-              <span>最后一条 · {data.lastAt || '—'}</span>
-            </div>
-          </MasonryGrid>
-
-          {/* 「更多年度数据」：其余 17 项（月度趋势/日历热力/画像/搭子/口头禅/回复速度/词云…）。
-              原生 `<details>` —— 键盘可聚焦、可展开，默认收起。 */}
-          <details className={css.moreSection}>
-            <summary className={css.moreSummary}>更多年度数据（17 项）</summary>
-            <div className={`${css.board} ${css.boardMore}`}>
-              <CalendarCard r={data} />
-              <MonthlyTrendCard r={data} />
-              <MonthlyStarCard r={data} av={av} />
-              <BuddyCard r={data} av={av} />
-              <NightCard r={data} av={av} />
-              <YearPortrait r={data} />
-              <WordsCard r={data} />
-              <CatchphraseCard r={data} />
-              <ReplyCard r={data} />
-              <OpenerCard r={data} />
-              <EmojiCard r={data} />
-              <CatchphraseTopCard r={data} />
-              <RevokeCard r={data} />
-              <AssetsCard r={data} />
-              <HighlightsCard r={data} av={av} />
-              <div className={css.span6}><WordCloudCard scope="global" year={data.year} title={`${String(data.year)} 年度热词`} limit={56} height={120} /></div>
-              <div className={css.span6}><WordCloudCard scope="moments" year={data.year} title={`${String(data.year)} 朋友圈热词`} limit={56} height={120} /></div>
-            </div>
-          </details>
+            <ExtremesCard r={data} />
+            <MoreCards data={data} av={av} />
+          </CardCanvas>
+          {/* 页脚不在画布里：它是一整行文字，没有摆放的意义，放在整条瀑布流的收尾处。 */}
+          <div className={css.footer}>
+            <span>第一条 · {data.firstAt || '—'}</span>
+            <span className={css.footerMid}>好好再说。没有哪种聊法是错的。</span>
+            <span>最后一条 · {data.lastAt || '—'}</span>
+          </div>
           </>
         )}
       </div>

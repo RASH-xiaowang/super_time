@@ -543,11 +543,11 @@ export const MUTATIONS_BATCH3C = [
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-hero-hook.wiring.spec.ts",
   },
   {
-    id: "M377-section-collapse-not-honoured",
-    why: "把折叠状态的接收端掐掉（`hidden={collapsed}` → `hidden={false}`）⇒ 按钮还照点、`aria-expanded` 还照翻、localStorage 还照记，**只有内容不折**：DOM 上一切都对，用户看到的却什么都没发生。行为判据（真渲染 + 点一下）量的就是这一下（2026-10-18 Wave D3 把卡片换成 kit Card，接收端变成 `.ovSectionBd`，锚点跟随）",
+    id: "M377-overview-section-collapse-removed",
+    why: "把折叠功能加回来（给 `OvSection` 恢复 `hidden={collapsed}` + 折叠按钮）⇒ 用户明确要求「数据总览界面所有的折叠展开按钮」不要出现（2026-11-19）。这条原本守的是「折叠状态接收端被掐掉」，功能移除后改为守**反向**：折叠必须彻底不在（按钮、状态、localStorage 键、CSS 类）。判据：overview-section-collapse.spec.ts 的「折叠功能已彻底移除」。",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-parts.tsx",
-    from: "<div className={css.ovSectionBd} hidden={collapsed}>{children}</div>",
-    to: "<div className={css.ovSectionBd} hidden={false}>{children}</div>",
+    from: "      <div className={css.ovSectionBd}>{children}</div>\n    </CanvasCard>",
+    to: "      <div className={css.ovSectionBd} hidden={false}>{children}</div>\n    </CanvasCard>",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-section-collapse.spec.ts",
   },
   {

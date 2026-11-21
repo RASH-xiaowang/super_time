@@ -39,21 +39,24 @@ import { ExportProgressStatus } from './ExportProgressStatus.tsx'
 import { useExportTask, type ExportTask } from './export-task.ts'
 import { useOverviewReportExport, type OverviewReportExport } from './use-overview-report-export.ts'
 import { RegionBoard } from './RegionBoard.tsx'
+import { CardCanvas } from './card-canvas.tsx'
 import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
 import {
-  ContentAssetsSection,
+  AssetsOverviewSection,
+  ContentSection,
   HealthSection,
   HeatmapSection,
   InteractionSection,
   LedgerSection,
   MomentsAuthorsSection,
-  MoreAnalysis,
   RelationSection,
+  TopChatsSection,
   RevokedSection,
   StorageCompositionSection,
   KpiSection,
   TrendSection,
   WordCloudSection,
+  WorldMapSection,
 } from './overview-sections.tsx'
 import { useMenuDismiss } from './use-menu-dismiss.ts'
 
@@ -353,33 +356,33 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
         {!debugSkeleton && data !== null && (
           <>
+            {/* KPI 是「一眼看的四个数」，不参与拖拽排版；它本来就是横条形态。 */}
             <KpiSection data={data} ins={ins} onGo={go} />
 
-            {/* 卡片区：Bootstrap 栅格。默认 6 张核心卡（趋势/热度/关系/内容/存储/资金），
-                其余分析收进「更多分析」折叠区 —— 首屏不再是一堵卡片墙。 */}
+            {/* 卡片区：**等宽瀑布流画布**（2026-11-19，与「年度报告」同一套）。
+                改前是 Bootstrap 栅格 `row g-2` + `col-12 col-xl-*`：每行必须等高、
+                列宽只能是 1/12 的整数倍，窄列里的指标格被挤成一团。
+                现在所有卡同宽、按最短列落位、可拖动摆放，位置按作用域记住。
+                `MoreAnalysis` 不再折叠 —— 展开后同样进画布（一整条瀑布流，
+                不再出现"折叠区是另一个版面"的割裂）。 */}
             <div className={css.cardStack}>
-              <div className="row g-2">
+              <CardCanvas year={0} scope="overview">
                 {extras && <TrendSection extras={extras} />}
                 {extras && extras.heatmap.length > 0 && <HeatmapSection heatmap={extras.heatmap} />}
-              </div>
-
-              <div className="row g-2">
-                {ins && <RelationSection className={`col-12 col-xl-6 ${css.overviewRelationColumn}`} ins={ins} onOpenChat={openChat} />}
-                <div className={`col-12 col-xl-6 ${css.overviewRightStack}`}>
-                  {ins && <ContentAssetsSection className={css.overviewStackCard} ins={ins} official={data.official} />}
-                  <StorageCompositionSection className={css.overviewStackCard} categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
-                  <LedgerSection className={css.overviewStackCard} ledger={ledger} onGo={go} />
-                </div>
-              </div>
-
-              <MoreAnalysis count={6}>
+                {ins && <RelationSection ins={ins} />}
+                <WorldMapSection />
+                {ins && <TopChatsSection ins={ins} onOpenChat={openChat} />}
+                {ins && <ContentSection ins={ins} />}
+                {ins && <AssetsOverviewSection ins={ins} official={data.official} />}
+                <StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
+                <LedgerSection ledger={ledger} onGo={go} />
                 {ins && <InteractionSection ins={ins} />}
                 <MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />
                 <WordCloudSection />
                 <RegionBoard />
                 <RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />
                 {ins && <HealthSection ins={ins} extras={extras} />}
-              </MoreAnalysis>
+              </CardCanvas>
             </div>
           </>
         )}

@@ -53,45 +53,13 @@
 .refreshBtn:disabled { opacity: 0.5; cursor: default; }
 .refreshBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
-/* ── 2 列栅格 ─────────────────────────────────────────────────── */
-.grid2 {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
-  gap: 8px;
-  align-items: stretch;
-}
-
-.fillCard {
-  min-height: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.fillCard > [class*='_cardBd'] {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.fillCard > [class*='_cardBd'] > .list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.fillCard > [class*='_cardBd'] > .empty {
-  flex: 1 1 auto;
-  justify-content: center;
-}
-
-@media (max-width: 900px) {
-  .grid2 { grid-template-columns: minmax(0, 1fr); }
-}
+/* ── 画布取代了 2 列栅格（2026-11-19）─────────────────────────────
+   这里原有 `.grid2`（2 列 + `grid-auto-rows: minmax(0,1fr)` 拉伸）与 `.fillCard`
+   （把卡身撑满、列表在卡内 `overflow-y: auto`）。改用等宽瀑布流画布后：
+     · 卡片高度由内容决定 ⇒ `1fr` 拉伸与 `height: 100%` 失去意义；
+     · 列表不再需要在卡内滚动（卡有多高就多高）。
+   两套类已无引用，删除。若将来某个面板还要"撑满剩余高度"，请用它的
+   局部样式，不要把这里的死规则复活。 */
 
 /* ── 列表 ─────────────────────────────────────────────────────── */
 .list {

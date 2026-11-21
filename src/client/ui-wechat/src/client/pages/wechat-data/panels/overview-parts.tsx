@@ -21,6 +21,7 @@ import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from
 import { Card, LoadingState } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
+import { CanvasCard } from './card-canvas-card.tsx'
 import { CalendarHeatmapPanel } from './overview-export.ts'
 
 /** 给总览里的日历热力一个独立 Suspense，主面板不必为懒加载多包一层 JSX。 */
@@ -50,14 +51,6 @@ export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): Rea
 }
 
 export { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
-/** 折起来的卡片标题（设计稿每张卡右上角那个「折叠」）。 */
-export const OV_COLLAPSED_KEY = 'dsh-wechat-ov-collapsed-v1'
-
-/** 已折叠的卡片标题集合。读不出来就当全展开 —— 宁可多显示，也不要因为一条坏记录把内容藏起来。 */
-export function readCollapsed(): Set<string> {
-  const raw = readCache(OV_COLLAPSED_KEY)
-  return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
-}
 
 export function readCache(key: string): unknown {
   try {
@@ -235,51 +228,51 @@ export function OvIcon({ name }: { name: string }): React.JSX.Element {
   }
 }
 
-/** 新总览统一卡片：图标 + 标题 + 操作 + 内容（基于 kit `Card`，与其他页签同一套卡片外观）。 */
-export function OvSection({ icon, title, action, children, className }: {
+/**
+ * 新总览统一卡片：图标 + 标题 + 操作 + 内容。
+ *
+ * ## 只支持画布模式（2026-11-19）
+ *
+ * `canvasId` 是**必填**的。这不是冗余参数，而是把「卡片必须参与画布布局」这件事
+ * 交给类型检查 —— 忘了传就是编译错误，不会有卡片留在文档流里压住别人。
+ *
+ * 之前留着"可选 + 退回栅格"的双模式，代价是**每次新增卡片都可能忘传**：
+ * 2026-11-19 就因为朋友圈活跃 / 撤回痕迹 / 数据健康 / 地区榜单漏传，
+ * 用户看到的是「卡片相互遮挡」。可选参数等于把这个坑留给下一个人。
+ *
+ * @param props.canvasId - 画布里的稳定 id（位置按它存取，改名等于换了一张卡）。
+ */
+export function OvSection({ icon, title, action, children, canvasId, zone, cols }: {
   icon: string
   title: React.ReactNode
   action?: React.ReactNode
   children: React.ReactNode
-  /** 版式类名（Bootstrap `col-*`）—— 由调用点决定这张卡在栅格行里的位置 */
-  className?: string
+  /** 画布里的稳定 id（**必填**，见上面的说明）。 */
+  canvasId: string
+  /** 分区标签（近期 / 人与关系 / 内容与存储 / 更多分析）。 */
+  zone?: string
+  /** 跨几列（默认 1）。世界地图这种横长内容占 2 列。 */
+  cols?: number
 }): React.JSX.Element {
-  // 「折叠」按**标题**记进 localStorage：同一张卡在刷新/切页签之后仍是用户放下的样子。
-  // 记标题而不是下标 —— 下标会随卡片增删整体漂移，把"折起来的资产"读到"数据健康"上。
-  const key = String(title)
-  const [collapsed, setCollapsed] = useState<boolean>(() => readCollapsed().has(key))
-  const toggle = (): void => {
-    setCollapsed((prev) => {
-      const next = !prev
-      const set = readCollapsed()
-      if (next) set.add(key)
-      else set.delete(key)
-      writeCache(OV_COLLAPSED_KEY, [...set])
-      return next
-    })
-  }
+  /**
+   * 折叠功能已于 2026-11-19 按用户要求**移除**（「当前不需要这个功能了」）。
+   *
+   * 移除的是整套东西，不只是按钮：`useState(collapsed)`、按标题存 localStorage 的
+   * 读写、`hidden={collapsed}` 的接收端、`.ovCollapse` 样式、以及 `localStorage` 里的
+   * 旧键。只删按钮会留下"点了没反应的代码"和永远展开的 `hidden={false}`，
+   * 那比留着一个能用的按钮更难查。
+   *
+   * 卡头右上角现在只剩调用点自己的 `action`（如「详情 →」）。
+   */
   return (
-    <div className={[css.ovCol, className].filter(Boolean).join(' ')}>
-      <Card
-        className={css.ovSectionCard}
-        title={<><span className={css.ovIcon}><OvIcon name={icon} /></span>{title}</>}
-        extra={(
-          <>
-            {action}
-            <button
-              type="button"
-              className={css.ovCollapse}
-              aria-expanded={!collapsed}
-              onClick={toggle}
-              title={collapsed ? `展开「${key}」` : `折叠「${key}」`}
-            >
-              {collapsed ? '展开 +' : '折叠 —'}
-            </button>
-          </>
-        )}
-      >
-        <div className={css.ovSectionBd} hidden={collapsed}>{children}</div>
-      </Card>
-    </div>
+    <CanvasCard
+      id={canvasId}
+      {...(cols === undefined ? {} : { cols })}
+      title={<><span className={css.ovIcon}><OvIcon name={icon} /></span>{title}</>}
+      {...(zone === undefined ? {} : { zone })}
+      {...(action === undefined ? {} : { extra: action })}
+    >
+      <div className={css.ovSectionBd}>{children}</div>
+    </CanvasCard>
   )
 }

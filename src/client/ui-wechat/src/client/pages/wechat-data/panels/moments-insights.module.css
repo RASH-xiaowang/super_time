@@ -4,11 +4,13 @@
  * 颜色只用 --nm-* 令牌（灰阶层级 + 绿主色 + 语义琥珀/红），本文件不写裸 hex。
  */
 
-/* ── 密度令牌 ─────────────────────────────────────────────────── */
+/* ── 密度令牌 ───────────────────────────────────────────────────
+ * 2026-11-19 修：这个类原本从未被应用（面板根用的是 `kitCss.panelShell`），
+ * 于是 `min-height: var(--mi-row)` 里的变量是 undefined ⇒ 整条声明在计算值阶段
+ * 失效、退化成 `auto`，行高密度一直是丢失状态。现在根元素同时挂这个类。
+ * 这里**只放自定义属性**，不写任何布局规则，避免和 panelShell 抢。 */
 .panel {
-  --mi-pad: 10px 12px;
   --mi-row: 22px;
-  --mi-gap: 8px;
 }
 
 /* ── 内联 KPI 条（40–46px，不再堆 3 张大统计卡）────────────────────── */
@@ -67,80 +69,25 @@
 .refreshBtn:disabled { opacity: 0.5; cursor: default; }
 .refreshBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
 
-/* ── 两行栅格：互动 Top + 热词 / 月度分布 + 足迹 ────────────────────
- * 行高固定（300 / 340）：词云与月度热力格是「铺满卡片」的图形，必须有确定高度；
- * 卡身统一 flex 撑满，卡片高度由行高决定。 */
-.gridTop {
-  flex: 1 1 0;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  grid-auto-rows: minmax(0, 1fr);
-  gap: var(--mi-gap);
-  align-items: stretch;
-}
+/* ── 两行栅格已删除（2026-11-19 改用等宽瀑布流画布）─────────────────
+ * 原有 `.gridTop`（1.1fr / 0.9fr）与 `.gridBottom`（1:1）都是
+ * `flex: 1 1 0` + `grid-auto-rows: minmax(0, 1fr)`：行高由**剩余空间**决定，
+ * 于是卡片被拉成等高 —— 「互动 Top」只有 10 行却占满一行高度、热词卡下方一片空白
+ * （用户截图指的就是这个）。
+ *
+ * 改用 `CardCanvas` 后卡片高度由内容决定，这里不再需要任何栅格：
+ *   · 卡片间距由画布的 `CANVAS_GAP` 给；
+ *   · 卡宽由画布按列宽分配（每张卡默认一列）。
+ * 下面只保留**卡内**的自适应规则。
+ */
 
-.gridBottom {
-  flex: 1 1 0;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
-  gap: var(--mi-gap);
-  align-items: stretch;
-}
+/* ── 「互动 Top」的两列布局已删除（2026-11-19 二次调整）─────────────
+ * 用户要求把「点赞最多」「评论最多」拆成两张独立卡，于是 `.topCols` / `.topCol`
+ * 不再有任何用处 —— 两个榜各占一张卡，卡内只有一列。同期 `.subTitle`
+ * （卡内小标题）也一起删除：拆卡之后板块名由卡片标题承担，再画一条分隔线是重复。
+ */
 
-.gridTop > * {
-  height: auto;
-  min-height: 0;
-}
-
-.gridBottom > * {
-  height: auto;
-  min-height: 0;
-}
-
-.gridTop > * > [class*='cardBd'],
-.gridBottom > * > [class*='cardBd'] {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-@media (max-width: 900px) {
-  .gridTop,
-  .gridBottom {
-    flex: 0 0 auto;
-    grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: auto;
-  }
-  .gridTop > * { height: 300px; }
-  .gridBottom > * { height: 360px; }
-}
-
-/* ── 互动 Top：同卡两列 ────────────────────────────────────────── */
-.topCols {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--nm-s-4);
-}
-
-@media (max-width: 720px) {
-  .topCols { grid-template-columns: minmax(0, 1fr); }
-}
-
-.topCol { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-
-.subTitle {
-  font-size: var(--nm-fs-xs);
-  font-weight: 600;
-  color: var(--nm-text-2);
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--nm-border);
-}
-
-/* ── 列表（双榜 / 地点共用）───────────────────────────────────── */
+/* ── 列表（点赞榜 / 评论榜 / 地点榜共用）────────────────────────── */
 .list {
   display: flex;
   flex-direction: column;
@@ -226,15 +173,16 @@
 
 /* ── 月度发布热力图（按年分组）──────────────────────────────────
  * 一年一行：`年份 | 12 个格子 | 总数`，格子用**颜色深浅**编码发布量。
- * 5 档色阶：0 = 空月（描边框），1~4 = 由浅到深的主色。 */
+ * 5 档色阶：0 = 空月（描边框），1~4 = 由浅到深的主色。
+ *
+ * 2026-11-19：去掉 `flex: 1 1 0` + `overflow-y: auto`。
+ * 那两条是「卡高由栅格定死、多出来的年份在卡内滚」时代的写法；
+ * 画布下卡片高度**等于**内容高度，再内滚就成了「卡里再套一根滚动条」，
+ * 年份还要滚才看得全 —— 直接把所有年份摊开。 */
 .heat {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  flex: 1 1 0;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
 }
 
 .heatRow {
@@ -327,20 +275,14 @@
   padding: 0 4px;
 }
 
-/* ── 足迹：地图 + 打卡最多的地方 ───────────────────────────────── */
-.footWrap {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: var(--nm-s-4);
-  align-items: start;
-}
-
+/* ── 足迹 ───────────────────────────────────────────────────────
+ * 2026-11-19：地图与打卡榜**拆成两张卡**（用户要求）。
+ *   · `.footWrap`（地图 + 榜单的横排/纵排容器）与 `.footSide`（榜单栏）随之删除 ——
+ *     拆卡后没有"容器"，两张卡各由 `CardCanvas` 摆放。
+ *   · `.footMap` 保留：它只是 `min-width: 0`，防止 ECharts 画布把卡片撑出列宽。
+ * 地图本身是固定 220px 高的 ECharts canvas（见下方 `.footprintMapBox`），
+ * 宽度吃满卡宽即可。 */
 .footMap { min-width: 0; }
-.footSide { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-
-@media (max-width: 900px) {
-  .footWrap { grid-template-columns: minmax(0, 1fr); }
-}
 
 /* 通用行内空态 / 「暂无数据」。 */
 .empty {
@@ -353,7 +295,11 @@
   line-height: 1.6;
 }
 
-/* ── 足迹地图画布（ECharts canvas 必须有确定高度）────────────────── */
+/* ── 足迹地图画布（ECharts canvas 必须有确定高度）──────────────────
+ * 220px 只是**缺省值**（组件不传 `height` 时用它）。朋友圈洞察那张卡传 420：
+ * ECharts 用 `layoutSize: '100%'`，地图尺寸按容器**短边**算 —— 容器宽 600、高 220 时
+ * 地图只有 220 大小、两侧空一大片（用户 2026-11-19 反馈「地图看不了全身」）。
+ * 抬高到 420 后短边落在高度上，地图才铺得开。 */
 .footprintWrap { display: flex; flex-direction: column; padding: 8px 12px 10px; gap: 6px; }
 .footprintBar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .footprintMapBox {
@@ -363,6 +309,8 @@
   overflow: hidden;
 }
 
+/* 窄屏降高度的规则只在**调用方没指定高度**时生效：指定过的走内联 style，
+ * 优先级高于这里的媒体查询，所以不会把小屏压回 200。 */
 @media (max-width: 900px) {
   .footprintMapBox {
     height: 200px;

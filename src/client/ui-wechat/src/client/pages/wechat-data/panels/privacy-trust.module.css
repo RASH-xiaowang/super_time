@@ -9,6 +9,9 @@
   min-height: 0;
 }
 
+/* 画布容器高度是算出来的绝对值，不能被 flex 收缩压扁（2026-11-19 改用画布时加入）。 */
+.embedded > [class*='canvasWrap'] { flex-shrink: 0; }
+
 .chipGrid { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
 .localChip {
   border: 1px solid color-mix(in srgb, var(--nm-success) 25%, transparent);

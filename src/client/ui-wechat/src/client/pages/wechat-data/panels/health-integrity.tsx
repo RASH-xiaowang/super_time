@@ -16,7 +16,8 @@
  *     用户照做一次、两次、三次，永远是同一句 `SQL logic error`。
  */
 import type { DbIntegrityResult } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card } from '../ui/kit.tsx'
+import { Button } from '../ui/kit.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 
@@ -56,19 +57,19 @@ export function HealthIntegrityCards({ integrity, repairing, onRepair, error = n
   // ① RPC 失败：此时 integrity 被置 null，但绝不能渲染成「没有损坏」。
   if (error !== null && error !== '') {
     return (
-      <Card title="体检没跑成">
+      <CanvasCard id="health-integrity-error" title="体检没跑成">
         <div className={kitCss.error} role="alert">{error}</div>
         <div className={css.failHint}>这不代表库是好的，只代表这次体检没有结论。排除占用/权限问题后再点「重新检查」。</div>
-      </Card>
+      </CanvasCard>
     )
   }
 
   // ② 从未体检（体检是显式动作，打开面板不会自动跑）。
   if (integrity === null) {
     return (
-      <Card title="完整性体检">
+      <CanvasCard id="health-integrity-pending" title="完整性体检">
         <div className={kitCss.emptyInline}>尚未体检：点上方「重新检查」逐库运行 <code>PRAGMA integrity_check</code>（全量扫描需要几秒）。</div>
-      </Card>
+      </CanvasCard>
     )
   }
 
@@ -79,11 +80,11 @@ export function HealthIntegrityCards({ integrity, repairing, onRepair, error = n
   // ③ 三类都空：只有调用方确认体检跑过，才允许说「未发现损坏」。
   if (corrupted.length === 0 && unreadable.length === 0 && uncheckable.length === 0) {
     return (
-      <Card title="完整性体检">
+      <CanvasCard id="health-integrity-ok" title="完整性体检">
         <div className={kitCss.emptyInline}>
           {checked ? `未发现损坏（检查 ${String(integrity.checked)} 个库）` : '尚未体检'}
         </div>
-      </Card>
+      </CanvasCard>
     )
   }
 
@@ -91,7 +92,7 @@ export function HealthIntegrityCards({ integrity, repairing, onRepair, error = n
   return (
     <>
       {corrupted.length > 0 && (
-        <Card title={`损坏的库（${String(corrupted.length)}）`}>
+        <CanvasCard id="health-corrupted" title={`损坏的库（${String(corrupted.length)}）`}>
           <IssueLines items={corrupted} />
           {/* 「坏了几个」只是个计数，这里要回答「点了之后会发生什么」——
               修复分两步：先清本地残留旁文件（不读原始库），仍坏的才从原始 db_storage 重解密。 */}
@@ -111,21 +112,21 @@ export function HealthIntegrityCards({ integrity, repairing, onRepair, error = n
           <div className={css.storeRow}>
             <Button variant="outline" size="sm" onClick={onRepair} disabled={repairing}>{repairing ? '修复中…' : '修复损坏的库'}</Button>
           </div>
-        </Card>
+        </CanvasCard>
       )}
 
       {/* 一个没坏：后两类各自成卡 —— 沉默会被读成「全绿」，而它们各自的动作完全不同。 */}
       {corrupted.length === 0 && unreadable.length > 0 && (
-        <Card title={`没能体检的库（${String(unreadable.length)}）`}>
+        <CanvasCard id="health-unreadable" title={`没能体检的库（${String(unreadable.length)}）`}>
           <IssueLines items={unreadable} />
           <div className={css.failHint}>这些库没能完成完整性体检（上表是原因）—— 与损坏无关，最常见是正被微信客户端独占。退出微信后点「重新检查」。</div>
-        </Card>
+        </CanvasCard>
       )}
       {corrupted.length === 0 && uncheckable.length > 0 && (
-        <Card title={`本机体检不了的库（${String(uncheckable.length)}）`}>
+        <CanvasCard id="health-uncheckable" title={`本机体检不了的库（${String(uncheckable.length)}）`}>
           <IssueLines items={uncheckable} />
           <div className={css.failHint}>这些库含虚拟表、用的是微信自带的 FTS 分词器，本机 SQLite 装不上它，<code>PRAGMA integrity_check</code> 必然报错。与损坏无关，退出微信也没用；这些库的表读得出来，不用管。</div>
-        </Card>
+        </CanvasCard>
       )}
     </>
   )

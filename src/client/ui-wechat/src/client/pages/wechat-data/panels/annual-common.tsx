@@ -26,7 +26,7 @@ export const fmt = (n: number): string => (Number.isFinite(n) ? n.toLocaleString
  * 年报里原先有 18 / 24 / 26 / 30 / 32 / 34 六种尺寸 —— 同一屏里大小不一，看着像没对齐。
  * 现在只此一处定义，所有 `<Avatar>` 都引用它；要调就调这一个数。
  */
-export const AVATAR_SIZE = 26
+export const AVATAR_SIZE = 30
 /** 秒 → 可读时长。 */
 export function dur(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '—'
@@ -34,4 +34,36 @@ export function dur(sec: number): string {
   if (sec < 3600) return `${Math.round(sec / 60)}分钟`
   if (sec < 86400) return `${(sec / 3600).toFixed(1)}小时`
   return `${Math.round(sec / 86400)}天`
+}
+
+/**
+ * 数字 → 热力等级（0 不显示底色）。
+ *
+ * 日历热力图与作息切片共用。2026-11-19 从 `Annual.tsx` 搬到公共小件：
+ * 两张卡分别在两个文件里（日历在 `annual-more-cards.tsx`、作息在 `Annual.tsx`），
+ * 放在任何一边都会让另一边反向依赖。
+ * @param n - 该格的条数。
+ * @param t - 四档阈值（由 {@link adaptiveTiers} 按当年峰值算）。
+ * @returns `'1' | '2' | '3' | '4'` 或空串（0 条不上色）。
+ */
+export function lv(n: number, t: [number, number, number, number]): string {
+  if (n <= 0) return ''
+  if (n <= t[0]) return '1'
+  if (n <= t[1]) return '2'
+  if (n <= t[2]) return '3'
+  return '4'
+}
+
+/**
+ * 按当年峰值自适应分档。
+ *
+ * 固定阈值不行：总量 20 万条/年时，每一格都远超任何合理常数，热力图会变成一整块同色
+ * （实测：日历 376 格里 300+ 是同一档），完全看不出疏密。改为按峰值取比例分档，
+ * 不同体量的用户都能看到梯度。
+ * @param max - 当年单日（或单时段）最高条数。
+ * @returns 四档阈值。
+ */
+export function adaptiveTiers(max: number): [number, number, number, number] {
+  const m = Math.max(1, max)
+  return [Math.max(1, Math.round(m * 0.1)), Math.round(m * 0.3), Math.round(m * 0.55), Math.round(m * 0.8)]
 }

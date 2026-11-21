@@ -14,6 +14,7 @@ import { AVATAR_SIZE, dur, fmt } from './annual-common.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 import css from './annual.module.css'
+import { CanvasCard } from './card-canvas-card.tsx'
 
 /**
  * 第二段（「更多」长页）用的小卡片外壳。
@@ -27,30 +28,29 @@ import css from './annual.module.css'
  *
  * 2026-10-17 第四次改：**高度随内容**（与海报卡同口径），不再有 `rows` 参数。
  */
-export function MoreCard({ title, extra, zone, span = 4, tone = 'cyan', children }: {
-  title: string
-  /** 分区标签（社交互动 / 作息与习惯 / 财务与资产）—— 分区不再用横贯标题，改挂在卡上。 */
+/**
+ * 卡片外壳。
+ *
+ * `canvasId` **必填**（2026-11-19）：没传就退回网格卡，而网格卡在绝对定位的画布里
+ * 会留在文档流、撑满整行、压住别的卡（用户报过两次「卡片相互遮挡」）。
+ * 改成必填之后，忘传就是编译错误，不再是运行时才发现的版面事故。
+ * @param props.canvasId - 画布里的稳定 id（位置按它存取）。
+ */
+export function MoreCard({ canvasId, title, extra, zone, tone = 'cyan', children }: {
+  /** 画布里的稳定 id（**必填**，见上面的说明）。 */
+  canvasId: string
+  title: React.ReactNode
+  /** 分区标签（社交互动 / 作息与习惯 / 财务与资产 / 更多分析）。 */
   zone?: string
-  /** 跨列数（12 列基准）。默认 4 = 1/3 行；宽内容给 6，小卡给 3 —— 这些卡已在 `AnnualPanel` 里与海报卡交错混排，跨度要让整段**整除 12**。 */
-  span?: number
   /** 语义色调（与海报卡同一套）。 */
   tone?: CardTone
   extra?: string
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div
-      className={css.moreCard}
-      data-tone={tone}
-      style={{ gridColumn: `span ${String(span)}` }}
-    >
-      <div className={css.moreCardHead}>
-        <span className={css.moreCardTitle}>{title}</span>
-        {zone ? <span className={css.zoneTag}>{zone}</span> : null}
-        {extra ? <span className={css.moreCardExtra}>{extra}</span> : null}
-      </div>
+    <CanvasCard id={canvasId} title={title} zone={zone} extra={extra} tone={tone}>
       {children}
-    </div>
+    </CanvasCard>
   )
 }
 
@@ -65,7 +65,7 @@ export function MoneyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const unknown = m.amountUnknownCount ?? 0
   const knownAmount = m.count > 0 && unknown === m.count
   return (
-    <MoreCard span={3} tone="green" zone="财务与资产" title="年度资金" extra={m.count > 0 ? `${String(m.count)} 笔` : undefined}>
+    <MoreCard canvasId="money" tone="green" zone="生活的痕迹" title="年度资金" extra={m.count > 0 ? `${String(m.count)} 笔` : undefined}>
       {m.count === 0 ? (
         <div className={css.moreEmpty}>这一年聊天里没有可识别的转账 / 红包</div>
       ) : (
@@ -103,14 +103,14 @@ export function MoneyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
             </div>
             {m.byPeer.slice(0, 5).map((p) => (
               <div key={p.username} className={css.moreRow}>
-                <IdentityName className={css.moreRowName} name={p.name || p.username} username={p.username} size={18}>
+                <IdentityName className={css.moreRowName} name={p.name || p.username} username={p.username} size={AVATAR_SIZE}>
                   {withEnterprise(p.name || p.username, p.enterpriseName)}
                 </IdentityName>
                 <span>¥{p.amount.toFixed(2)} · {String(p.count)} 笔</span>
               </div>
             ))}
           </div>
-          <div className={css.moreSub}>口径：只统计聊天里的转账与红包，**不含理财、零钱通、提现与银行卡流水**；金额读不出来的那笔不计入，也不会当成 0 元。</div>
+          <div className={css.moreSub}>口径：只统计聊天里的转账与红包，<b>不含理财、零钱通、提现与银行卡流水</b>；金额读不出来的那笔不计入，也不会当成 0 元。</div>
         </>
       )}
     </MoreCard>
@@ -126,7 +126,7 @@ export function RevokeCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const v = r.revoke
   const peak = v.byHour.reduce((best, n, h) => (n > v.byHour[best]! ? h : best), 0)
   return (
-    <MoreCard span={4} tone="red" zone="作息与习惯" title="撤回与删除" extra={v.count > 0 ? `${String(v.count)} 条` : undefined}>
+    <MoreCard canvasId="more-revoke" tone="red" zone="作息与习惯" title="撤回与删除" extra={v.count > 0 ? `${String(v.count)} 条` : undefined}>
       {v.count === 0 ? (
         <div className={css.moreEmpty}>这一年没有识别到撤回</div>
       ) : (
@@ -159,7 +159,7 @@ export function RevokeCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
 export function GroupsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element {
   const g = r.groups
   return (
-    <MoreCard span={6} tone="pink" zone="社交互动" title="群聊年度" extra={g.messages > 0 ? `占全年 ${(g.share * 100).toFixed(1)}%` : undefined}>
+    <MoreCard canvasId="groups" tone="pink" zone="你和他们" title="群聊年度" extra={g.messages > 0 ? `占全年 ${(g.share * 100).toFixed(1)}%` : undefined}>
       {g.top.length === 0 ? (
         <div className={css.moreEmpty}>这一年没有群聊消息</div>
       ) : (
@@ -168,7 +168,7 @@ export function GroupsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, st
             <span>群消息总量</span>
             <span className={css.moreNum}>{String(g.messages)}</span>
           </div>
-          <div className={css.moreSub}>口径：**群里所有人**发出的消息都算（不只你发的）；「你发出」的占比见下方榜单。</div>
+          <div className={css.moreSub}>口径：<b>群里所有人</b>发出的消息都算（不只你发的）。</div>
           <div className={css.moreList}>
             {g.top.slice(0, 5).map((c) => (
               <div key={c.username} className={css.moreRow}>
@@ -211,14 +211,22 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
   if (r.catchphrase.phrase) bits.push(`口头禅是「${r.catchphrase.phrase}」，说了 ${fmt(r.catchphrase.count)} 次`)
   if (r.buddy) bits.push(`今年最常聊的是 ${withEnterprise(r.buddy.name, r.buddy.enterpriseName)}`)
 
-  // 右侧关键指标：把画像里提到的数字**单独列出来**，让 6 列宽的卡片右侧不再空着
-  // （2026-10-17：原先只有一段文字，右侧 60% 面积全空）。
+  /**
+   * 右侧关键指标 —— **只列画像文字里真正提到的数字**。
+   *
+   * 2026-11-19 去重：原先 6 格里有 4 格（全年发出 / 日均 / 活跃天数 / 最长连续）
+   * 与「全年发出」卡（`HeroCard`）**一模一样** —— 同一组数字在两处画两遍。
+   * 画像的定位是"一句话看懂这一年"，指标格是这句话的注脚，所以只留文字里说到的
+   * （深夜占比、转账合计、口头禅、最常聊），其余交给各自的专卡。
+   */
   const stats: Array<{ k: string; v: React.ReactNode; title: string }> = [
-    { k: '全年发出', v: `${fmt(r.sent)} 条`, title: `${fmt(r.sent)} 条` },
-    { k: '日均', v: `${String(r.sentDailyAvg)} 条`, title: `${String(r.sentDailyAvg)} 条` },
-    { k: '活跃天数', v: `${String(r.activeDaysMine)} 天`, title: `${String(r.activeDaysMine)} 天` },
-    { k: '最长连续', v: `${String(r.longestStreak)} 天`, title: `${String(r.longestStreak)} 天` },
     { k: '深夜占比', v: `${(r.rhythm.nightShare * 100).toFixed(1)}%`, title: `${(r.rhythm.nightShare * 100).toFixed(1)}%` },
+    ...(r.money.total > 0
+      ? [{ k: '转账合计', v: `¥${r.money.total.toFixed(0)}`, title: `¥${r.money.total.toFixed(2)}` }]
+      : []),
+    ...(r.catchphrase.phrase
+      ? [{ k: '口头禅', v: `「${r.catchphrase.phrase}」`, title: `说了 ${fmt(r.catchphrase.count)} 次` }]
+      : []),
     {
       k: '最常聊',
       v: r.buddy
@@ -233,11 +241,13 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
   ]
 
   return (
-    <div className={`${css.moreCard} ${css.portrait}`} data-tone="cyan" data-annual-portrait="">
-      <div className={css.moreCardHead}>
-        <span className={css.moreCardTitle}>{String(r.year)} 年度画像</span>
-        <span className={css.moreCardExtra}>按本机数据推导 · 不含推测</span>
-      </div>
+    <MoreCard
+      canvasId="more-portrait"
+      tone="cyan"
+      zone="你和他们"
+      title={`${String(r.year)} 年度画像`}
+      extra="按本机数据推导 · 不含推测"
+    >
       {bits.length === 0 ? (
         <div className={css.moreEmpty}>这一年数据太少，还画不出画像</div>
       ) : (
@@ -253,7 +263,7 @@ export function YearPortrait({ r }: { r: NormalizedReview }): React.JSX.Element 
           </div>
         </div>
       )}
-    </div>
+    </MoreCard>
   )
 }
 
@@ -279,7 +289,7 @@ export function MonthlyTrendCard({ r }: { r: NormalizedReview }): React.JSX.Elem
   const active = months.map((n, i) => ({ n, i })).filter((m) => m.n > 0)
   const coldest = active.length > 0 ? active.reduce((best, m) => (m.n < best.n ? m : best)).i : 0
   return (
-    <MoreCard span={6} tone="purple" zone="作息与习惯" title="月度趋势" extra={total > 0 ? `全年 ${fmt(total)} 条` : undefined}>
+    <MoreCard canvasId="more-monthly-trend" tone="purple" zone="作息与习惯" title="月度趋势" extra={total > 0 ? `全年 ${fmt(total)} 条` : undefined}>
       {total === 0 ? (
         <div className={css.moreEmpty}>这一年还没有可统计的消息</div>
       ) : (
@@ -314,70 +324,90 @@ export function MonthlyTrendCard({ r }: { r: NormalizedReview }): React.JSX.Elem
  *
  * 这些数在后端都已经算好（`busiest` / `longestStreak` / `words` / `reply` / `rhythm`），
  * 只是原先藏在各自卡片的小字里 —— 汇总一处能一眼看完，不用来回找。
+ *
+ * ## 2026-11-19 重排：长条列表 → 网格小砖块
+ *
+ * 原先 9 项排成「左标签 ←→ 右值」的单列长条：一堵 11px 的窄字墙，右侧值常常折行
+ * （`2020-12-24 → 2020-12-31` 被截成两段，读起来像断句）。现在：
+ *   · 每项是**一块小砖**：标签在上（11px 弱色）、值在下（15px 主色）；
+ *   · `auto-fit` 网格按卡片实宽自适应列数（横贯时一行 5–6 块，半宽时 2–3 块）；
+ *   · 主值/次要值用 `<small>` 分色，`919 条` 不会和日期打平。
+ *
+ * 顺带修掉一个真实缺陷：CSS 里一直有 `.extremesGrid`（双列 + 容器查询退回单列），
+ * 但这张卡用的是 `.moreList` —— 双列规则从来没有生效过，成了死代码。现在两边都换成
+ * `.tileGrid`，并删掉那两条没人用的 `.extremesGrid` 规则。
  */
 export function ExtremesCard({ r }: { r: NormalizedReview }): React.JSX.Element {
-  const items: Array<{ k: string; v: React.ReactNode }> = []
-  if (r.busiest) items.push({ k: '消息最多的一天', v: `${r.busiest.date} · ${fmt(r.busiest.n)} 条` })
-  if (r.longestStreak > 0) items.push({ k: '最长连续聊天', v: `${String(r.longestStreak)} 天` })
-  if (r.longestSpanFrom && r.longestSpanTo) items.push({ k: '最长的一段', v: `${r.longestSpanFrom} → ${r.longestSpanTo}` })
+  /** `main` 是主值，`sub` 是次要说明（弱化显示）。 */
+  const items: Array<{ k: string; main: React.ReactNode; sub?: React.ReactNode }> = []
+  if (r.busiest) {
+    items.push({ k: '消息最多的一天', main: r.busiest.date, sub: `${fmt(r.busiest.n)} 条` })
+  }
+  if (r.longestStreak > 0) items.push({ k: '最长连续聊天', main: `${String(r.longestStreak)} 天` })
+  if (r.longestSpanFrom && r.longestSpanTo) {
+    items.push({ k: '最长的一段', main: `${r.longestSpanFrom.slice(5)} → ${r.longestSpanTo.slice(5)}` })
+  }
   if (r.words.longestVoiceSec > 0) {
     items.push({
       k: '最长的一条语音',
-      v: (
-        <span className={css.moreRowValue}>
-          {dur(r.words.longestVoiceSec)}
-          {r.words.longestVoiceFrom ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <IdentityName
-                name={r.words.longestVoiceFrom}
-                username={r.words.longestVoiceUsername}
-                size={16}
-              >
-                {withEnterprise(r.words.longestVoiceFrom, r.words.longestVoiceEnterpriseName)}
-              </IdentityName>
-            </>
-          ) : null}
-        </span>
-      ),
+      main: dur(r.words.longestVoiceSec),
+      ...(r.words.longestVoiceFrom
+        ? {
+          sub: (
+            <IdentityName
+              name={r.words.longestVoiceFrom}
+              username={r.words.longestVoiceUsername}
+              size={16}
+            >
+              {withEnterprise(r.words.longestVoiceFrom, r.words.longestVoiceEnterpriseName)}
+            </IdentityName>
+          ),
+        }
+        : {}),
     })
   }
   if (r.reply.fastestName) {
     items.push({
       k: '回得最快',
-      v: (
-        <span className={css.moreRowValue}>
-          <IdentityName name={r.reply.fastestName} username={r.reply.fastestUsername} size={16}>
-            {withEnterprise(r.reply.fastestName, r.reply.fastestEnterpriseName)}
-          </IdentityName>
-          <span>· {dur(r.reply.fastestSec)}</span>
-        </span>
+      main: dur(r.reply.fastestSec),
+      sub: (
+        <IdentityName name={r.reply.fastestName} username={r.reply.fastestUsername} size={16}>
+          {withEnterprise(r.reply.fastestName, r.reply.fastestEnterpriseName)}
+        </IdentityName>
       ),
     })
   }
   if (r.reply.slowestName) {
     items.push({
       k: '让 TA 等最久',
-      v: (
-        <span className={css.moreRowValue}>
-          <IdentityName name={r.reply.slowestName} username={r.reply.slowestUsername} size={16}>
-            {withEnterprise(r.reply.slowestName, r.reply.slowestEnterpriseName)}
-          </IdentityName>
-          <span>· {dur(r.reply.slowestSec)}</span>
-        </span>
+      main: dur(r.reply.slowestSec),
+      sub: (
+        <IdentityName name={r.reply.slowestName} username={r.reply.slowestUsername} size={16}>
+          {withEnterprise(r.reply.slowestName, r.reply.slowestEnterpriseName)}
+        </IdentityName>
       ),
     })
   }
-  items.push({ k: '最安静的时段', v: `${String(r.rhythm.quietestHour)}:00 · ${fmt(r.rhythm.quietestCount)} 条` })
-  items.push({ k: '深夜占比', v: `${(r.rhythm.nightShare * 100).toFixed(1)}%` })
-  if (r.lastText) items.push({ k: '最后一句', v: `${r.lastAt} · ${r.lastText}` })
+  items.push({ k: '最安静的时段', main: `${String(r.rhythm.quietestHour)}:00`, sub: `${fmt(r.rhythm.quietestCount)} 条` })
+  items.push({ k: '深夜占比', main: `${(r.rhythm.nightShare * 100).toFixed(1)}%` })
+  if (r.lastText) items.push({ k: '最后一句', main: r.lastText, sub: r.lastAt })
   return (
-    <MoreCard span={6} tone="amber" zone="作息与习惯" title="年度之最">
-      <div className={css.moreList}>
+    <MoreCard canvasId="extremes" tone="amber" zone="值得记住" title="年度之最">
+      <div className={css.tileGrid}>
         {items.map((it) => (
-          <div key={it.k} className={css.moreRow}>
-            <span>{it.k}</span>
-            <span>{it.v}</span>
+          <div key={it.k} className={css.tile}>
+            <span className={css.tileK}>{it.k}</span>
+            {/* 值可能很长（「最后一句」是一整条消息），交给 CSS 限行 + 省略号，
+                完整内容放 title 里悬停可看 —— 不让一条长文本把卡片撑成一堵墙。 */}
+            <span
+              className={css.tileV}
+              {...(typeof it.main === 'string'
+                ? { title: typeof it.sub === 'string' ? `${it.main} ${it.sub}` : it.main }
+                : {})}
+            >
+              {it.main}
+              {it.sub !== undefined && <small>{it.sub}</small>}
+            </span>
           </div>
         ))}
       </div>
@@ -386,17 +416,25 @@ export function ExtremesCard({ r }: { r: NormalizedReview }): React.JSX.Element 
 }
 
 /** 媒体与通话：把海报里挤在「你说的话」小字里的语音/通话/图片拆出来单独看。 */
+/**
+ * 媒体与通话（**只讲「音视频与通话」**）。
+ *
+ * 2026-11-19 去重：末行「表情」与「表情宇宙」卡（`EmojiCard`）重复，已移除；
+ * 「你说的话」卡里的语音/通话格子也交给本卡，分工变成
+ *   · 你说的话 = 文字量（字数 / 敲字 / 最长语音）
+ *   · 媒体与通话 = 音视频与通话（本卡）
+ *   · 表情宇宙 = 表情（`EmojiCard`）
+ */
 export function MediaCallCard({ r }: { r: NormalizedReview }): React.JSX.Element {
   const w = r.words
   return (
-    <MoreCard span={3} tone="blue" zone="社交互动" title="媒体与通话" extra={r.mediaSent > 0 ? `发出 ${fmt(r.mediaSent)} 条图片/视频` : undefined}>
+    <MoreCard canvasId="media" tone="blue" zone="生活的痕迹" title="媒体与通话" extra={r.mediaSent > 0 ? `发出 ${fmt(r.mediaSent)} 条图片/视频` : undefined}>
       <div className={css.moreList}>
         <div className={css.moreRow}><span>图片 / 视频</span><span>{fmt(r.mediaSent)} 条（视频 {fmt(w.videoSent)}）</span></div>
         <div className={css.moreRow}><span>语音</span><span>发出 {fmt(w.voiceSentCount)} 条 · {dur(w.voiceSentSec)}</span></div>
         <div className={css.moreRow}><span>收到语音</span><span>{fmt(w.voiceRecvCount)} 条 · {dur(w.voiceRecvSec)}</span></div>
         <div className={css.moreRow}><span>通话</span><span>{fmt(w.callCount)} 通 · {dur(w.callSec)}</span></div>
         <div className={css.moreRow}><span>接通 / 未接</span><span>{fmt(w.callConnected)} / {fmt(w.callMissed)}</span></div>
-        <div className={css.moreRow}><span>表情</span><span>甩出 {fmt(r.emoji.threw)} · 攒下 {fmt(r.emoji.kept)} 种</span></div>
       </div>
     </MoreCard>
   )
@@ -406,7 +444,7 @@ export function MediaCallCard({ r }: { r: NormalizedReview }): React.JSX.Element
 export function CatchphraseTopCard({ r }: { r: NormalizedReview }): React.JSX.Element {
   const top = r.catchphrase.top.slice(0, 10)
   return (
-    <MoreCard span={4} tone="pink" zone="社交互动" title="口头禅 TOP10" extra={r.catchphrase.catchTotal > 0 ? `${fmt(r.catchphrase.catchTotal)} 句成了口头禅` : undefined}>
+    <MoreCard canvasId="more-catchphrase-top" tone="pink" zone="社交互动" title="口头禅 TOP10" extra={r.catchphrase.catchTotal > 0 ? `${fmt(r.catchphrase.catchTotal)} 句成了口头禅` : undefined}>
       {top.length === 0 ? (
         <div className={css.moreEmpty}>这一年还没有 2–8 字的整句口头禅</div>
       ) : (
@@ -417,7 +455,7 @@ export function CatchphraseTopCard({ r }: { r: NormalizedReview }): React.JSX.El
               <span>{fmt(p.count)} 次</span>
             </div>
           ))}
-          <div className={css.moreSub}>统计口径：我发出的、2–8 字的**整句**（{fmt(r.catchphrase.shortTotal)} 句短表达里挑出来的）。</div>
+          <div className={css.moreSub}>统计口径：我发出的、2–8 字的<b>整句</b>（{fmt(r.catchphrase.shortTotal)} 句短表达里挑出来的）。</div>
         </div>
       )}
     </MoreCard>
@@ -433,7 +471,7 @@ export function CatchphraseTopCard({ r }: { r: NormalizedReview }): React.JSX.El
 export function MomentsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const m = r.moments
   return (
-    <MoreCard span={3} tone="pink" zone="社交互动" title="朋友圈年度" extra={m.available ? `${String(m.count)} 条` : undefined}>
+    <MoreCard canvasId="moments" tone="pink" zone="生活的痕迹" title="朋友圈年度" extra={m.available ? `${String(m.count)} 条` : undefined}>
       {!m.available ? (
         <div className={css.moreEmpty}>未读取到朋友圈数据（本机没有 sns.db 或尚未解密）</div>
       ) : m.count === 0 ? (
@@ -480,7 +518,7 @@ export function MomentsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element 
 export function AssetsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   const a = r.assets
   return (
-    <MoreCard span={4} tone="green" zone="财务与资产" title="收藏与文件 · 总量盘点" extra={a.available ? undefined : '未读取到'}>
+    <MoreCard canvasId="more-assets" tone="green" zone="财务与资产" title="收藏与文件 · 总量盘点" extra={a.available ? undefined : '未读取到'}>
       {!a.available ? (
         <div className={css.moreEmpty}>未读取到收藏/文件数据（本机没有对应的库）</div>
       ) : (
@@ -497,7 +535,7 @@ export function AssetsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
             <span>其中我发出</span>
             <span>{String(a.sentFiles)} 条</span>
           </div>
-          <div className={css.moreSub}>收藏与文件没有可靠的按年时间列，所以这里给的是**至今总量**盘点，不随年份变化。</div>
+          <div className={css.moreSub}>收藏与文件没有可靠的按年时间列，所以这里给的是<b>至今总量</b>盘点，不随年份变化。</div>
         </div>
       )}
     </MoreCard>

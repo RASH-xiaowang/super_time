@@ -99,75 +99,78 @@ describe('总览 KPI 条：4 项 kit StatCard + Bootstrap 栅格', () => {
   })
 })
 
-describe('总览卡片区：默认 6 张核心卡 + 「更多分析」折叠区', () => {
-  it('默认只渲染 6 张核心卡（趋势/热度/关系/内容/存储/资金）', () => {
+describe('总览卡片区：一块等宽瀑布流画布（2026-11-19 改）', () => {
+  it('核心卡都在画布里，且都带 canvasId', () => {
     for (const comp of [
       '<TrendSection extras={extras} />',
       '<HeatmapSection heatmap={extras.heatmap} />',
-      '<RelationSection className={`col-12 col-xl-6 ${css.overviewRelationColumn}`} ins={ins} onOpenChat={openChat} />',
-      '<ContentAssetsSection className={css.overviewStackCard} ins={ins} official={data.official} />',
-      '<StorageCompositionSection className={css.overviewStackCard} categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />',
-      '<LedgerSection className={css.overviewStackCard} ledger={ledger} onGo={go} />',
+      '<RelationSection ins={ins} />',
+      '<TopChatsSection ins={ins} onOpenChat={openChat} />',
+      '<ContentSection ins={ins} />',
+      '<AssetsOverviewSection ins={ins} official={data.official} />',
+      '<StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />',
+      '<LedgerSection ledger={ledger} onGo={go} />',
     ]) {
       expect(panelCode, `核心卡少了 ${comp}`).toContain(comp)
     }
-    // 核心区只有 2 个栅格行（趋势+热力 / 关系+右侧三卡纵列）；KPI 行在 KpiSection 里
-    expect(count(panelCode, 'className="row g-2"'), '核心卡栅格行数不对').toBe(2)
+    // 卡片区是一块 CardCanvas（与「年度报告」同一套），不是 Bootstrap 栅格行。
+    expect(panelCode, '卡片区没走画布').toContain('<CardCanvas')
+    expect(panelCode, '卡片区还在用 Bootstrap 栅格行').not.toMatch(/<div className="row g-2">/)
   })
 
-  it('内容构成与资产 / 存储构成 / 资金快照在同一右列按序纵排', () => {
-    expect(panelCode, '右侧三卡没有共用的纵排容器').toContain('className={`col-12 col-xl-6 ${css.overviewRightStack}`}')
-    const contentAt = panelCode.indexOf('<ContentAssetsSection')
-    const storageAt = panelCode.indexOf('<StorageCompositionSection')
-    const ledgerAt = panelCode.indexOf('<LedgerSection')
-    expect(contentAt, '右列缺内容构成与资产').toBeGreaterThan(-1)
-    expect(storageAt, '存储构成不在内容构成与资产之后').toBeGreaterThan(contentAt)
-    expect(ledgerAt, '资金快照不在存储构成之后').toBeGreaterThan(storageAt)
-    // 关系卡与右列同处一个 Bootstrap row，row 默认拉伸使二者底部对齐。
-    expect(panelCode).toMatch(/<RelationSection className=\{`col-12 col-xl-6 \$\{css\.overviewRelationColumn\}`\}[\s\S]*?overviewRightStack/)
-    expect(css).toMatch(/\.overviewRightStack\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s)
-    expect(css).toContain('gap: 0.5rem')
-    expect(css).toMatch(/\.overviewStackCard\s*\{[^}]*width:\s*100%/s)
-    // compact-chrome 的图表卡高度上限特异性更高，关系卡必须在桌面端显式解除整卡/卡身上限。
-    expect(css).toMatch(/@media\s*\(min-width:\s*901px\)[\s\S]*?\.overviewRelationColumn > \.ovSectionCard[\s\S]*?max-height:\s*none\s*!important/)
-    expect(css).toMatch(/\.overviewRelationColumn > \.ovSectionCard > \[class\*='_cardBd_'\][\s\S]*?max-height:\s*none\s*!important/)
+  it('每张 OvSection 都带 canvasId（没传就退回栅格模式 ⇒ 会被压住）', () => {
+    const ids = ['ov-trend', 'ov-heat', 'ov-relation', 'ov-top-chats', 'ov-content', 'ov-assets',
+      'ov-storage', 'ov-ledger', 'ov-interaction', 'ov-wordcloud', 'ov-worldmap']
+    for (const id of ids) {
+      expect(sectionsCode, `缺少 canvasId="${id}"`).toContain(`canvasId="${id}"`)
+    }
+    // `OvSection` 必须渲染共享的 CanvasCard（否则没有 data-canvas-id）。
+    // 2026-11-19：`canvasId` 已改成**必填**，所以这里断言的是"必填"而不是"可选"。
+    const partsCode = readFileSync(join(HERE, 'overview-parts.tsx'), 'utf8')
+    expect(partsCode, 'OvSection 没接画布外壳').toContain('<CanvasCard')
+    expect(partsCode, 'OvSection 的 canvasId 必须是必填（可选参数会让人忘传）')
+      .toMatch(/canvasId: string/)
+    expect(partsCode, 'OvSection 的 canvasId 又变成可选了').not.toMatch(/canvasId\?: string/)
+    // 双模式（退回栅格）已删除 —— 它正是"忘了传就遮挡"的入口。
+    expect(partsCode, 'OvSection 又留了栅格兜底分支').not.toContain('css.ovCol, className')
   })
 
-  it('其余分析收进 MoreAnalysis 折叠区（不再铺成 14 张卡片墙）', () => {
-    expect(panelCode, '缺少「更多分析」折叠区').toContain('<MoreAnalysis count={6}>')
+  it('其余分析不再折叠，同样进画布（一整条瀑布流）', () => {
     for (const comp of [
       '<InteractionSection ins={ins} />',
       '<MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />',
       '<WordCloudSection />',
-      '<RegionBoard />',
       '<RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />',
       '<HealthSection ins={ins} extras={extras} />',
     ]) {
-      expect(panelCode, `「更多分析」里少了 ${comp}`).toContain(comp)
+      expect(panelCode, `画布里少了 ${comp}`).toContain(comp)
     }
-    // 交互画像与朋友圈活跃都是半宽卡：必须相邻，才能在 xl 档并排且不留下半行空白。
+    // 顺序即阅读顺序：交互画像 → 朋友圈活跃 → 热词。
     const interactionAt = panelCode.indexOf('<InteractionSection')
     const momentsAt = panelCode.indexOf('<MomentsAuthorsSection')
     const wordCloudAt = panelCode.indexOf('<WordCloudSection')
-    expect(interactionAt, '「更多分析」缺交互画像').toBeGreaterThan(-1)
+    expect(interactionAt, '画布里缺交互画像').toBeGreaterThan(-1)
     expect(momentsAt, '朋友圈活跃不在交互画像之后').toBeGreaterThan(interactionAt)
-    expect(wordCloudAt, '整宽的全局热词应排在两张半宽卡之后').toBeGreaterThan(momentsAt)
-    // 折叠语义：默认收起（无 open 初值），按钮 aria-expanded 跟随状态
-    expect(sectionsCode).toContain('useState(false)')
-    expect(sectionsCode).toContain('aria-expanded={open}')
+    expect(wordCloudAt, '全局热词应排在两张卡之后').toBeGreaterThan(momentsAt)
   })
 
-  it('行的列宽分工：KPI 4 列 + 趋势 4/8 + 关系与右侧三卡列 6/6', () => {
-    for (const cls of ['className="col-6 col-sm-3"', 'className="col-12 col-xl-4"', 'className="col-12 col-xl-8"', 'className="col-12 col-xl-6"']) {
-      expect(tsx, `缺少列类 ${cls}`).toContain(cls)
-    }
-    // 右侧三卡是同一列里的普通卡片，不应再各自硬编码 6 栅格。
-    expect(coreCode, '右侧纵排卡片仍在各自占 Bootstrap 半行').not.toContain('className="col-12 col-xl-6"')
-    // 趋势 4 / 热度 8 同处一行
-    expect(coreCode).toContain('className="col-12 col-xl-4"')
-    expect(coreCode).toContain('className="col-12 col-xl-8"')
-    // 折叠区里的词云是整行
-    expect(moreCode).toContain('className="col-12" icon="content" title="全局热词"')
+  it('拆分后的顺序：关系规模 → 世界地图 → 对话 Top → 消息构成 → 内容资产 → 存储 → 资金', () => {
+    const order = [
+      '<RelationSection', '<WorldMapSection', '<TopChatsSection',
+      '<ContentSection', '<AssetsOverviewSection',
+      '<StorageCompositionSection', '<LedgerSection',
+    ]
+    const at = order.map(s => panelCode.indexOf(s))
+    expect(at.every(n => n > -1), '有卡片没找到').toBe(true)
+    expect(at, '拆分后的阅读顺序变了').toEqual([...at].sort((a, b) => a - b))
+  })
+
+  it('KPI 保留横条形态（4 个数字一眼看），不进画布', () => {
+    // KPI 是「一眼看的四个数」，横条比瀑布流里的一张卡更合适。
+    expect(tsx, 'KPI 仍是 4 列 StatCard').toContain('className="col-6 col-sm-3"')
+    // 卡片区不该再有 Bootstrap 列类（都走画布了）。
+    expect(coreCode, '核心区还在用 Bootstrap 列宽').not.toContain('className="col-12 col-xl-4"')
+    expect(coreCode, '核心区还在用 Bootstrap 列宽').not.toContain('className="col-12 col-xl-8"')
   })
 
   it('手机档不再用 order-* 重排（DOM 顺序即阅读顺序）', () => {
@@ -177,49 +180,57 @@ describe('总览卡片区：默认 6 张核心卡 + 「更多分析」折叠区'
     expect(tsx, '还在用 PHONE_QUERY 重排？').not.toContain('PHONE_QUERY')
   })
 
-  it('好友地区：世界地图并入「关系与地区」卡；省份/城市榜在更多分析里', () => {
-    // 地图与关系指标同卡：关系卡里出现 WorldMapBody，且地图盒仍是 .worldMapBox 高度链
+  it('世界地图是**独立卡**、跨两列；省份/城市榜在画布里', () => {
+    /**
+     * 2026-11-19 用户要求：地图从「关系与地区」拆出来独立成卡，且比其它卡大两倍。
+     * 此前它塞在一列宽的卡里，实测只剩约 220px 高的空框，等于看不见。
+     */
     const rel = sectionsCode.slice(sectionsCode.indexOf('export function RelationSection'), sectionsCode.indexOf('export function ContentAssetsSection'))
-    expect(rel, '关系卡里没有世界地图').toContain('<WorldMapBody />')
-    expect(rel).toContain('Math.max(1, ...ins.relations.top.map(x => x.count))')
+    expect(rel, '关系卡里不该再有地图了').not.toContain('<WorldMapBody />')
+    expect(sectionsCode, '缺少独立的地图卡').toContain('export function WorldMapSection')
+    expect(sectionsCode, '地图卡没有自己的 canvasId').toContain('canvasId="ov-worldmap"')
+    expect(sectionsCode, '地图卡必须跨两列（否则又变成一条窄框）').toMatch(/canvasId="ov-worldmap"[\s\S]{0,80}cols=\{2\}/)
+    expect(panelCode, '面板里没挂地图卡').toContain('<WorldMapSection />')
+
+    // 地图盒与懒加载占位仍在。
     expect(sectionsCode).toContain('function WorldMapBody')
     expect(sectionsCode, '地图盒丢了').toContain('css.worldMapBox')
     expect(sectionsCode, '地图懒加载占位丢了').toContain('地图进入可视区后加载')
     expect(css).toContain('.worldMapBox')
     const worldMapFlex = /\.worldMapFlex\s*\{[^}]*\}/s.exec(css)?.[0]
     expect(worldMapFlex, '地图自适应规则丢了').toBeTruthy()
-    expect(worldMapFlex, '地图仍有桌面高度上限，无法填满右列对应的卡片高度').toContain('max-height: none')
-    // 省份/城市榜仍由 RegionBoard 提供（数据源不新增），只是挪进折叠区
+    expect(worldMapFlex, '地图仍有桌面高度上限').toContain('max-height: none')
+    // 独立成卡后必须有明确高度，否则 `height:auto` 会塌成 min-height(220px)。
+    expect(css, '缺 `.worldMapSolo` 高度').toMatch(/\.worldMapSolo\s*\{[^}]*height:\s*clamp\(/)
+    expect(sectionsCode, '地图卡没套 `.worldMapSolo`').toContain('css.worldMapSolo')
+
+    // 省份/城市榜仍由 RegionBoard 提供（数据源不新增），现在也在画布里。
     expect(board).toContain('apiGetRegionMap')
-    expect(board).toContain('<RankCard title="省份 Top 10">')
-    expect(board).toContain('<RankCard title="城市 Top 12">')
+    expect(board).toContain('<RankCard slot="prov" title="省份 Top 10">')
+    expect(board).toContain('<RankCard slot="city" title="城市 Top 12">')
     expect(board, '省份榜/城市榜还在用旧 regionSpan').not.toContain('regionSpan')
   })
 })
 
-describe('卡片外观统一：OvSection 基于 kit Card', () => {
-  it('OvSection 用 kit Card（title=图标+标题，extra=折叠按钮），不再自造 section/header', () => {
-    expect(tsx, 'OvSection 没用 kit Card').toContain('<Card')
+describe('卡片外观统一：OvSection 基于共享 CanvasCard', () => {
+  it('OvSection 用 CanvasCard（title=图标+标题，extra=调用点动作），不再自造 section/header', () => {
+    expect(tsx, 'OvSection 没接画布外壳').toContain('<CanvasCard')
     expect(tsx, 'OvSection 还在自己写 section').not.toContain('css.ovCard')
-    expect(tsx, '折叠按钮缺 aria-expanded').toContain('aria-expanded={!collapsed}')
-    expect(tsx, '折叠体缺 hidden 属性').toContain('hidden={collapsed}')
+    /**
+     * 2026-11-19：折叠功能按用户要求移除，所以这里**不再**断言 `aria-expanded` /
+     * `hidden={collapsed}`。反向守卫在 `overview-section-collapse.spec.ts`：
+     * 折叠必须彻底不在（按钮、状态、localStorage 键、CSS 都算）。
+     */
     expect(tsx, '折叠位置类 ovSectionBd 丢了').toContain('css.ovSectionBd')
-    expect(css, 'hidden 的 display:none 兜底规则丢了').toMatch(/\.ovSectionBd\[hidden\]\s*\{\s*display:\s*none\s*;?\s*\}/)
-    // 卡片头压到 36px（与全站「卡头 36」一致）
-    expect(css, '卡片头没有压到 36px').toMatch(/\.ovSectionCard > \[class\*='_cardHd_'\]\s*\{[^}]*min-height:\s*36px/s)
   })
 
-  it('卡片间距：栅格列与卡片本体分离，横纵间距都由 Bootstrap g-2 提供', () => {
-    expect(tsx, 'OvSection 没把栅格列包在卡片外层').toMatch(/<div className=\{\[css\.ovCol, className\]/)
-    expect(tsx, '卡片根又挂回了 col-*').toMatch(/<Card\s+className=\{css\.ovSectionCard\}/)
-    expect(css, '缺少 .ovCol 承载 gutter').toMatch(/\.ovCol\s*\{[^}]*display:\s*flex/s)
-    expect(css, '缺少 .ovSectionCard 铺满列内容盒').toMatch(/\.ovSectionCard\s*\{[^}]*width:\s*100%/s)
-  })
-
-  it('折叠语义：按标题存 localStorage，坏记录当全展开', () => {
-    expect(tsx).toContain("OV_COLLAPSED_KEY = 'dsh-wechat-ov-collapsed-v1'")
-    expect(tsx).toContain('readCollapsed().has(key)')
-    expect(tsx).toContain('Array.isArray(raw) ? raw.filter')
+  it('卡片间距：走画布（不再有 Bootstrap 栅格列壳）', () => {
+    // 2026-11-19：`OvSection` 只画布模式，栅格列壳（`div.[css.ovCol, className]`）已删除。
+    // 间距由画布的 `gap` 统一给（`card-canvas.module.css`），卡与卡之间不再有 g-2 包裹层。
+    expect(tsx, 'OvSection 又留了栅格列壳').not.toMatch(/<div className=\{\[css\.ovCol, className\]/)
+    expect(tsx, 'OvSection 应直接渲染 CanvasCard').toMatch(/<CanvasCard\s+id=\{canvasId\}/)
+    const canvasCssFile = readFileSync(join(HERE, 'card-canvas.module.css'), 'utf8')
+    expect(canvasCssFile, '画布缺少列与行间距').toMatch(/\.canvasCard \{[\s\S]{0,400}position: absolute/)
   })
 
   it('旧的霓虹卡片类已彻底删除（避免「JSX 用了 / 样式没有」互查失败）', () => {

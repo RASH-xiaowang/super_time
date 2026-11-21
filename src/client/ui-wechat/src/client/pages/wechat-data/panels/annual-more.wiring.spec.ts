@@ -117,44 +117,117 @@ function expectRowsFill12 (cells: Array<{ name: string; span: number }>, label: 
 }
 
 describe('界面：默认 8 张核心卡 + 「更多年度数据」折叠', () => {
-  const mainGrid = /<MasonryGrid>([\s\S]*?)<\/MasonryGrid>/.exec(panel)?.[1] ?? ''
-  const moreGrid = /<div className=\{`\$\{css\.board\} \$\{css\.boardMore\}`\}>([\s\S]*?)<\/div>\s*<\/details>/.exec(panel)?.[1] ?? ''
-  const mainCells = gridCells(mainGrid)
-  const moreCells = gridCells(moreGrid)
+  /**
+   * 首屏区块：2026-11-19 起是 `<CardCanvas>`（自由画布），不再是 `<MasonryGrid>`。
+   * 页面上有两个画布（首屏 + 折叠区），首屏那个**不带** `scope="more"`，用它区分。
+   */
+  const mainGrid = /<CardCanvas(?![^>]*scope="more")[^>]*>([\s\S]*?)<\/CardCanvas>/.exec(panel)?.[1] ?? ''
+  /** 折叠区画布：按 `scope="more"` 精确定位。 */
+  const moreGrid = /<CardCanvas[^>]*scope="more"[^>]*>([\s\S]*?)<\/CardCanvas>/.exec(panel)?.[1] ?? ''
 
-  it('默认可见：**8 张卡 + 页脚**，合计 48 列 = 12×4，每行正好 12', () => {
-    expect(mainGrid, 'Annual.tsx 里应有 <MasonryGrid> 块').not.toBe('')
-    expect(mainCells.map(c => c.name).filter(n => n !== 'footer'), '默认可见卡片数不对').toHaveLength(8)
-    expect(mainCells.map(c => c.name), '8 张核心卡的组件/顺序').toEqual([
-      'HeroCard', 'RhythmCard', 'GroupsCard', 'ExtremesCard', 'RankingCard', 'MoneyCard', 'MomentsCard', 'MediaCallCard', 'footer',
+  it('默认可见：**8 张核心卡放在自由画布**（2026-11-19 起不再用 12 列网格）', () => {
+    // 首屏从 `<MasonryGrid>` 换成 `<CardCanvas>`：宽度按内容分档、高度随内容、可拖动。
+    expect(panel, '首屏应改用 CardCanvas').toContain('<CardCanvas')
+    expect(panel, '首屏不该再包在 MasonryGrid 里').not.toMatch(/<MasonryGrid>\s*<HeroCard/)
+    // 8 张卡的**顺序**仍然要钉住 —— 它决定初始排布（也是拖动前的阅读顺序）。
+    const order = [...mainGrid.matchAll(/<(\w+Card)\s/g)].map((m) => m[1])
+    expect(order, '8 张核心卡的组件/顺序').toEqual([
+      'HeroCard', 'RhythmCard', 'RankingCard', 'GroupsCard',
+      'MoneyCard', 'MomentsCard', 'MediaCallCard', 'ExtremesCard',
     ])
-    const sum = mainCells.reduce((a, b) => a + b.span, 0)
-    expect(sum, '默认网格总列数必须是 12 的整数倍').toBe(48)
-    expectRowsFill12(mainCells, '默认 8 卡')
+    // 每张卡都必须带 canvasId（位置存储的键）。
+    // ⚠️ 5 张卡（groups/money/moments/media/extremes）定义在 annual-more-cards.tsx 里，
+    // 所以两处源码都要查。
+    for (const id of ['hero', 'rhythm', 'ranking', 'groups', 'money', 'moments', 'media', 'extremes']) {
+      expect(panel + more, `缺少 canvasId="${id}"`).toContain(`canvasId="${id}"`)
+    }
+    // 等宽瀑布流：卡片不再声明宽度档（宽度由容器统一给）。
+    expect(panel + more, '还在传 width 档 ⇒ 不是等宽瀑布流').not.toMatch(/canvasId="[\w-]+"\s+width="/)
+    expect(mainGrid, '页脚已移出画布（它是一整行文字，没有摆放的意义）').not.toContain('css.footer')
   })
 
-  it('「更多年度数据」是原生 details：17 项，合计 84 列 = 12×7，每行正好 12', () => {
-    expect(panel, '缺少「更多年度数据」折叠区').toContain('<details className={css.moreSection}>')
-    expect(panel, '缺少折叠标题').toContain('更多年度数据（17 项）')
-    expect(panel, '缺少更多网格').toContain('css.boardMore')
-    expect(moreCells.map(c => c.name).filter(n => n !== 'footer'), '折叠区项数不对').toHaveLength(17)
-    expect(moreCells.map(c => c.name), '折叠区的卡片顺序').toEqual([
-      'CalendarCard', 'MonthlyTrendCard', 'MonthlyStarCard', 'BuddyCard', 'NightCard', 'YearPortrait',
-      'WordsCard', 'CatchphraseCard', 'ReplyCard', 'OpenerCard', 'EmojiCard',
-      'CatchphraseTopCard', 'RevokeCard', 'AssetsCard', 'HighlightsCard', 'WordCloud', 'WordCloud',
-    ])
-    const sum = moreCells.reduce((a, b) => a + b.span, 0)
-    expect(sum, '折叠网格总列数必须是 12 的整数倍').toBe(84)
-    expectRowsFill12(moreCells, '更多 17 项')
+  it('整页只有**一块**画布：25 张卡都在同一条瀑布流里', () => {
+    // 2026-11-19 用户要求「不要分为两个分割的画布板块，都在一个画布上显示」。
+    // 改前是「首屏画布 + 折叠区画布」两块，中间夹一条折叠标题 —— 读起来像两篇文章。
+    const canvases = [...panel.matchAll(/<CardCanvas[\s\S]*?<\/CardCanvas>/g)]
+    expect(canvases.length, '页面上出现了多块画布').toBe(1)
+    expect(panel, '折叠区（details）已取消').not.toContain('<details className={css.moreSection}>')
+    expect(panel, '不该再有第二块画布的作用域').not.toContain('scope="more"')
+    // 17 项仍在同一个画布里（顺序也要一致）。
+    expect(canvases[0]?.[0], '17 项没进主画布').toContain('<MoreCards data={data} av={av} />')
+    expect(panel, '17 项应抽成 MoreCards 组件').toContain('function MoreCards(')
+    // 两个词云各是一个画布格子（不再用 `.span6` 的网格 div）。
+    expect(panel, '年度热词没进画布').toContain('id="more-wordcloud-global"')
+    expect(panel, '朋友圈热词没进画布').toContain('id="more-wordcloud-moments"')
+    expect(panel, '还有 `.span6` 网格 div 残留').not.toContain('css.span6')
+  })
+
+  it('任何卡片组件都不许绕开外壳自己写卡片类（2026-11-19 遮挡事故）', () => {
+    /**
+     * 事故现场：`YearPortrait` 原先自己写
+     * `<div className={`${css.moreCard} ${css.portrait}`}>`，绕过了 `MoreCard` 外壳 ——
+     * 于是它**没有 `data-canvas-id`**，不参与画布布局、留在文档流里撑满整行，
+     * 把绝对定位的其它卡片全压住了（用户：「年度画像将后面的内容卡片挡住了」）。
+     *
+     * 判据：`css.card` / `css.moreCard` 只允许出现在两个外壳的 JSX 里
+     * （`Annual.tsx` 的 `Card`、`annual-more-cards.tsx` 的 `MoreCard`），
+     * 其它卡片组件一律通过外壳渲染。这样"忘了走外壳"就红在源码上，而不是等用户看见遮挡。
+     */
+    const bypass = (src: string): string[] => {
+      const out: string[] = []
+      // 逐个函数体检查：`export function XxxCard(...)` 到下一个函数/文件尾。
+      const fnRe = /(?:export )?function (\w+)\([\s\S]*?(?=\n(?:export )?function |\n\/\*\*|$)/g
+      for (const m of src.matchAll(fnRe)) {
+        const name = m[1] ?? ''
+        const body = m[0]
+        if (name === 'Card' || name === 'MoreCard') continue
+        if (/className=\{[^}]*css\.(?:card|moreCard)\b/.test(body)) out.push(name)
+      }
+      return out
+    }
+    const offenders = [...bypass(panel), ...bypass(more)]
+    expect(offenders, `这些卡片绕过了外壳（不会有 data-canvas-id ⇒ 会遮挡别人）：${offenders.join('、')}`)
+      .toEqual([])
+  })
+
+  it('画像卡走外壳、且带 canvasId（本次遮挡的直接修复）', () => {
+    const portrait = /export function YearPortrait[\s\S]*?\n\}/.exec(more)?.[0] ?? ''
+    expect(portrait, '找不到 YearPortrait').not.toBe('')
+    expect(portrait, '画像卡没走 MoreCard 外壳').toContain('<MoreCard')
+    expect(portrait, '画像卡缺少 canvasId').toContain('canvasId="more-portrait"')
+    expect(portrait, '画像卡还在自己写卡片类').not.toMatch(/css\.moreCard/)
+  })
+
+  it('每个 Card / MoreCard 调用都传了 canvasId（没传就退回网格模式 ⇒ 又会遮挡）', () => {
+    /**
+     * 只"走外壳"还不够：`Card` / `MoreCard` 在**没传 canvasId 时退回网格模式**
+     * （渲染 `css.card` / `css.moreCard` 的普通 div）。在画布里那仍是一个文档流元素，
+     * 会撑满整行、被绝对定位的卡片压住 —— 和 `YearPortrait` 那次是同一个病。
+     *
+     * 所以逐个调用检查：开标签里必须有 `canvasId=`。
+     */
+    const missing: string[] = []
+    for (const [file, src] of [['Annual.tsx', panel], ['annual-more-cards.tsx', more]] as const) {
+      // 标签名后必须是空白、`/` 或 `>` —— 否则 `<MoreCards>` 会被当成 `<MoreCard>` 误报。
+      for (const m of src.matchAll(/<(Card|MoreCard)(?=[\s/>])([\s\S]*?)\/?>/g)) {
+        const attrs = m[2] ?? ''
+        // 外壳自身的定义处（`function Card({ canvasId, ...`）不会被这个正则命中，
+        // 但 `MoreCard` 内部那次 `<CanvasCard` 也不会 —— 这里只匹配 Card / MoreCard 标签。
+        if (!attrs.includes('canvasId=')) {
+          const title = /title="([^"]*)"/.exec(attrs)?.[1] ?? /title=\{[^}]*\}/.exec(attrs)?.[0] ?? '(无标题)'
+          missing.push(`${file}: ${m[1]} ${title}`)
+        }
+      }
+    }
+    expect(missing, `这些卡片没传 canvasId，会退回网格模式并被别的卡压住：\n  ${missing.join('\n  ')}`)
+      .toEqual([])
   })
 
   it('默认不再渲染旧的一屏 27 卡（卡片墙已收敛）', () => {
-    expect(mainGrid, '默认网格里还塞着旧卡片').not.toContain('<CalendarCard')
-    expect(mainGrid, '默认网格里还塞着旧卡片').not.toContain('<YearPortrait')
-    expect(mainGrid, '默认网格里还塞着旧卡片').not.toContain('<BuddyCard')
+    // 首屏 8 张卡里不该混进明细卡（它们由 `MoreCards` 排在后面）。
+    expect(panel, '17 项应抽成 MoreCards 组件').toContain('<MoreCards data={data} av={av} />')
     // 旧注释里的「26 张卡」网格已不存在
     expect(panel, '旧的 moreItems 块必须已消失').not.toContain('moreItems(data, av)')
-    expect(panel, '还留着 MoreSection 段容器').not.toContain('MoreSection')
   })
 
   it('「更多」卡都还在（功能不减，只是折叠）：资金/撤回/群聊/朋友圈/收藏/词云', () => {
@@ -168,14 +241,39 @@ describe('界面：默认 8 张核心卡 + 「更多年度数据」折叠', () =
     }
   })
 
-  it('「还有这些人」的小卡放不下要换行（.hlRow 三列网格）', () => {
+  it('「还有这些人」的小卡按容器宽度自动换列（不再写死三列）', () => {
     expect(panel, '容器没换成可换行的 .hlRow').toContain('css.hlRow')
     expect(styleCode, '.hlRow 必须是网格').toMatch(/\.hlRow \{[^}]*display: grid/)
-    expect(styleCode, '.hlRow 必须是三列').toMatch(/\.hlRow \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/)
+    /**
+     * 2026-11-19：从固定 3 列改成 **auto-fit**。
+     * 3 列的前提是"卡片 6 列宽≈750px"，等宽瀑布流下只有约 300px ⇒ 每格 90px，
+     * 名字被截成「a憨 2958...」。auto-fit 让列数随宽度变，这就是"自动换行"。
+     */
+    expect(styleCode, '.hlRow 必须 auto-fit').toMatch(/\.hlRow \{[^}]*repeat\(auto-fit, minmax\(/)
+    expect(styleCode, '.hlRow 又写死 3 列了').not.toMatch(/\.hlRow \{[^}]*repeat\(3, minmax/)
     for (const cls of ['\\.moreCell \\{', '\\.moreInfo \\{', '\\.moreLabel \\{', '\\.moreVal \\{']) {
       expect(styleCode, `缺样式：${cls}`).toMatch(new RegExp(cls))
     }
-    expect(styleCode).toMatch(/\.moreCell \.name \{[^}]*text-overflow: ellipsis/)
+    // 2026-11-19：芯片里的名字允许折两行（原先 nowrap + ellipsis，窄格子里必然截断）。
+    expect(styleCode, '.moreCell .name 必须允许折行').toMatch(/\.moreCell \.name \{[^}]*-webkit-line-clamp: 2/)
+    expect(styleCode, '.moreCell .name 又回到 nowrap 了').not.toMatch(/\.moreCell \.name \{[^}]*white-space: nowrap/)
+  })
+
+  it('同一套内容类不许被重复定义（重复定义会让换行改进静默失效）', () => {
+    /**
+     * 事故现场（2026-11-19）：`.moreCell` / `.moreInfo` / `.moreLabel` / `.moreVal` /
+     * `.moreCell .name` 在 CSS 里被定义了**两遍** —— 前一组允许换行、后一组是旧版的
+     * `white-space: nowrap`。后定义的覆盖前者，于是"允许换行"从来没生效过，
+     * 且没有任何测试能发现（两处都"存在"，只是后者赢了）。
+     *
+     * 判据：这几个内容类在剥注释后的样式表里只允许出现一次。
+     */
+    for (const cls of ['.moreCell', '.moreInfo', '.moreLabel', '.moreVal', '.moreCell .name']) {
+      const re = new RegExp(`(^|\\n)${cls.replace('.', '\\.')}\\s*\\{`, 'g')
+      const hits = [...styleCode.matchAll(re)]
+      expect(hits.length, `${cls} 被定义了 ${String(hits.length)} 次 ⇒ 后者会覆盖前者，改前一处等于白改`)
+        .toBe(1)
+    }
   })
 
   it('两块词云给了**高度上限**（自适应公式有 200px 下限，靠做窄压不下去）', () => {
@@ -187,16 +285,39 @@ describe('界面：默认 8 张核心卡 + 「更多年度数据」折叠', () =
     expect(card, '传进来的 height 没被用上').toMatch(/const stageHeight = fill && stageH > 0 \? stageH : \(height \?\? cloudStageHeight\(stageW\)\)/)
   })
 
-  it('整页顺序：默认网格在前，「更多年度数据」在其后', () => {
-    const at = (s: string): number => panel.indexOf(s)
-    const order = ['<MasonryGrid>', '<HeroCard r={data} />', '<div className={css.footer}>', '</MasonryGrid>', '<details className={css.moreSection}>']
+  it('整页顺序：一块画布（首屏 8 卡 + 17 项明细）在前，页脚收尾', () => {
+    const bodyStart = panel.indexOf('export function AnnualPanel')
+    expect(bodyStart, '找不到 AnnualPanel').toBeGreaterThan(0)
+    const body = panel.slice(bodyStart)
+    const at = (s: string): number => body.indexOf(s)
+    // 页脚不在画布里（一整行文字，没有摆放的意义），排在整条瀑布流之后收尾。
+    const order = ['<CardCanvas', '<HeroCard r={data} />', '<MoreCards data={data} av={av} />', '</CardCanvas>', '<div className={css.footer}>']
     const idx = order.map(at)
     expect(idx.every((n) => n > 0), '有环节没找到').toBe(true)
-    expect(idx, '分区/卡片顺序变了').toEqual([...idx].sort((a, b) => a - b))
+    expect(idx, '画布 / 8 卡 / 17 项 / 页脚的顺序变了').toEqual([...idx].sort((a, b) => a - b))
     // 分区标签仍在（挂在卡上）
     for (const z of ['zone="社交互动"', 'zone="作息与习惯"', 'zone="财务与资产"']) {
       expect(more, `缺分区标签 ${z}`).toContain(z)
     }
+  })
+
+  it('默认年份走纯函数，不再依赖数组顺序（2026-11-19 修复）', () => {
+    /**
+     * 事故：`setYear(prev => prev ?? ys.at(-1) ?? …)` —— 后端返回降序，
+     * `at(-1)` 每次选中**最旧**的一年（用户打开看到 2020，而最新的是 2026）。
+     *
+     * 这条守**接线**：面板必须调 `defaultAnnualYear` / `normalizeAnnualYears`，
+     * 不许再就地写"取某个位置"的表达式。选值正确性由
+     * `annual-default-year.spec.ts` 用降序/升序/乱序三种输入覆盖。
+     *
+     * ⚠️ 断言前必须先剥注释：本文件的说明里**引用**了旧写法，裸词匹配会被自己骗到
+     * （仓库里这类"被注释骗红"已发生多次，见 `outbound-site-coverage.spec.ts` 的 `codeOf`）。
+     */
+    const code = panel.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    expect(code, '默认年份应走 defaultAnnualYear').toContain('defaultAnnualYear(')
+    expect(code, '年份列表应走 normalizeAnnualYears').toContain('normalizeAnnualYears(')
+    expect(code, '不许再用 at(-1) 取年份').not.toMatch(/at\(-1\)/)
+    expect(code, '不许再用 ys[ys.length - 1]').not.toMatch(/ys\[ys\.length\s*-\s*1\]/)
   })
 
   it('读不到数据时说「未读取到」，不许把 0 当真实值', () => {
@@ -235,15 +356,24 @@ describe('低分辨率适配：内容不许溢出容器', () => {
     expect(styleCode, '又出现了等宽多列').not.toMatch(/column-width:\s/)
   })
 
-  it('卡片与行允许长串换行 / 省略（用户名、群名、连排表情都没有空格可断）', () => {
+  it('卡片与行允许长串换行（用户名、群名、连排表情都没有空格可断）', () => {
     expect(styleText).toMatch(/\.moreCard \{[\s\S]{0,900}overflow-wrap: anywhere/)
     expect(styleText).toMatch(/\.moreCard \{[\s\S]{0,300}min-width: 0/)
-    expect(styleText).toMatch(/\.moreRow > span:first-child \{[^}]*text-overflow: ellipsis/)
-    expect(styleText).toMatch(/\.moreRow > span:last-child \{[^}]*overflow-wrap: anywhere/)
+    /**
+     * 2026-11-19：两侧都改成**允许折行**（`overflow-wrap: anywhere`）。
+     * 原先标签侧是 `nowrap + ellipsis` —— 等宽瀑布流下卡只有约 300px，
+     * 「金额读不出来的那笔不计入合计」被截成「金额读不出...」。
+     * 用户要求「不行就自动换行」，所以这里守的是"两侧都能断行、不许再 nowrap"。
+     */
+    expect(styleText).toMatch(/\.moreRow > span \{[^}]*overflow-wrap: anywhere/)
+    expect(styleText, '`.moreRow` 的标签侧又回到 nowrap 了').not.toMatch(/\.moreRow > span:first-child \{[^}]*white-space: nowrap/)
     const moreRowRules = [...styleCode.matchAll(/\.moreRow\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '')
     expect(moreRowRules.length, '`.moreRow` 的基础样式丢了').toBeGreaterThan(0)
     for (const rule of moreRowRules) {
       expect(rule, '身份行不能被 overflow:hidden 裁掉上下边缘').not.toContain('overflow: hidden')
+      // 纵向排（≤380px 容器查询）本来就不需要 wrap；横向排的必须允许 wrap。
+      if (rule.includes('flex-direction: column')) continue
+      expect(rule, '`.moreRow` 必须 flex-wrap: wrap（否则值不肯折行）').toContain('flex-wrap: wrap')
     }
   })
 
@@ -263,11 +393,42 @@ describe('低分辨率适配：内容不许溢出容器', () => {
 })
 
 describe('间隙与卡内留白：走全站刻度，板块之间要接上', () => {
-  it('间距走 `--nm-dense-g*` 刻度，不再是裸 px 各说各话', () => {
-    expect(styleCode).toMatch(/\.moreList \{[^}]*gap: var\(--nm-dense-g1\)/)
-    expect(styleCode).toMatch(/\.moreCard \{[\s\S]{0,260}padding: 10px 12px/)
-    expect(styleCode, '网格间距：与海报卡同刻度').toMatch(/\.board \{[^}]*gap: var\(--nm-dense-g4\)/)
+  /**
+   * 2026-11-19 舒适化重做后，这里的判据从「写死的旧数值」改成**跨段一致性**。
+   *
+   * 原来它钉的是 `.board gap: var(--nm-dense-g4)`、`.moreCard padding: 10px 12px`、
+   * `.heroNum 28px` 这些具体值 —— 但舒适化本来就要改这些值，钉死只会让每次调间距
+   * 都得改测试数字（那测试就退化成"抄一遍 CSS"）。
+   *
+   * 这条规则**真正要守的**是：上下两段（海报卡 / 更多卡）用同一套刻度，
+   * 不许一段 8px 一段 16px 各说各话。所以改成：
+   *   · 间距必须由刻度令牌推导（`var(--nm-dense-g*)` 或 `calc(...g4 * N)`）；
+   *   · 两段的 padding / 标题色 / 附注字号 / 主数字 必须**逐字相同**。
+   */
+  it('间距由刻度令牌推导，不是裸 px', () => {
+    expect(styleCode, '网格间距要由刻度推导').toMatch(/\.board \{[^}]*gap: (?:calc\()?var\(--nm-dense-g/)
+    expect(styleCode, 'moreList 间距要由刻度推导').toMatch(/\.moreList \{[^}]*gap: var\(--nm-dense-g/)
     expect(styleCode, 'moreCard 又加回竖向 margin 了').not.toMatch(/\.moreCard \{[^}]*margin: 0 0/)
+  })
+
+  it('上下两段是**同一套设计语言**：内边距/标题/附注/主数字逐字对齐', () => {
+    /** 取一条规则里某个声明的值（声明顺序无关）。 */
+    const declOf = (selector: string, prop: string): string | null => {
+      const block = new RegExp(`\\${selector} \\{([^}]*)\\}`.replace('\\' + selector, selector)).exec(styleCode)
+      if (!block?.[1]) return null
+      const m = new RegExp(`${prop}:\\s*([^;]+);`).exec(block[1])
+      return m?.[1]?.trim() ?? null
+    }
+    // 海报卡与更多卡内边距必须相同（骨架卡也照抄）—— 不一致会在加载完成时"长高几像素"。
+    expect(declOf('.card', 'padding'), '海报卡缺 padding').not.toBeNull()
+    expect(declOf('.moreCard', 'padding'), '两段内边距不一致').toBe(declOf('.card', 'padding'))
+    expect(declOf('.skelCard', 'padding'), '骨架与真实卡片内边距不一致').toBe(declOf('.card', 'padding'))
+    // 标题色 / 附注字号：两段同值（层级怎么定都行，但不能一段一个样）。
+    expect(declOf('.moreCardTitle', 'color')).toBe(declOf('.cardTitle', 'color'))
+    expect(declOf('.moreCardExtra', 'font-size')).toBe(declOf('.cardExtra', 'font-size'))
+    // 分区标签必须是中性小字（任何彩色都属于另一套视觉语言）
+    expect(styleCode).toMatch(/\.zoneTag \{[^}]*color: var\(--nm-text-3\)/)
+    expect(styleCode).not.toMatch(/\.zoneTag \{[^}]*var\(--nm-cyan\)/)
   })
 
   it('宽度自适应：窄面板退列（12 → 8 → 6 → 1），跨度等比例减半', () => {
@@ -283,18 +444,6 @@ describe('间隙与卡内留白：走全站刻度，板块之间要接上', () =
     expect(js).not.toContain('getBoundingClientRect')
   })
 
-  it('上下两段是**同一套设计语言**：间隙、卡片标题、数字逐字对齐', () => {
-    expect(styleCode, '间距只由 .board 的 gap 给').toMatch(/\.board \{[^}]*gap: var\(--nm-dense-g4\)/)
-    expect(styleCode).toMatch(/\.moreCardTitle \{[^}]*color: var\(--nm-text-2\)/)
-    expect(styleCode).toMatch(/\.moreCardExtra \{[^}]*font-size: var\(--nm-dense-fs-sm\)[^}]*color: var\(--nm-text-3\)/)
-    expect(styleCode).toMatch(/\.moreNum \{[^}]*font-size: 24px/)
-    expect(styleCode).toMatch(/\.cardTitle \{[^}]*color: var\(--nm-text-2\)/)
-    expect(styleCode).toMatch(/\.heroNum \{[^}]*font-size: 28px/)
-    // 分区标签必须是中性小字（任何彩色都属于另一套视觉语言）
-    expect(styleCode).toMatch(/\.zoneTag \{[^}]*color: var\(--nm-text-3\)/)
-    expect(styleCode).not.toMatch(/\.zoneTag \{[^}]*var\(--nm-cyan\)/)
-  })
-
   it('横向行统一换行：标签←→数值 式的行在窄卡里都要能换行', () => {
     const rule = [...styleCode.matchAll(/@container \(max-width: 620px\) \{[\s\S]*?\}/g)].map((m) => m[0]).join(String())
     expect(rule, '缺少 620px 的换行规则').toBeTruthy()
@@ -302,7 +451,16 @@ describe('间隙与卡内留白：走全站刻度，板块之间要接上', () =
       expect(rule, `${cls} 没有加进换行规则`).toContain(cls)
     }
     expect(styleCode, '换行后数值要改成左对齐').toContain('text-align: left')
-    expect(styleCode, '.hlRow 必须是三列网格').toMatch(/\.hlRow \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/)
+    /**
+     * 2026-11-19 反转：`.hlRow` 从**固定 3 列**改成 **auto-fit**。
+     *
+     * 3 列的前提是"卡片占 6 列≈750px"，而等宽瀑布流下整张卡只有约 300px ⇒
+     * 每格约 90px，名字被截成「a憨 2958...」。auto-fit 让列数随宽度自己变
+     * （这是用户说的「不行就自动换行」）。这里守的就是"不许再写死列数"。
+     */
+    expect(styleCode, '.hlRow 必须用 auto-fit（写死列数会在窄卡里挤爆）')
+      .toMatch(/\.hlRow \{[^}]*grid-template-columns: repeat\(auto-fit, minmax\(/)
+    expect(styleCode, '.hlRow 又写死列数了').not.toMatch(/\.hlRow \{[^}]*repeat\(3, minmax/)
   })
 
   it('卡片内部适配：按**卡片宽度**（容器查询）而不是窗口宽度退形态', () => {

@@ -152,15 +152,29 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
   })
 })
 
-describe('年度报告 · 整页一张网格（2026-09-30 用户要求把下段卡片并进上段）', () => {
-  it('海报的 12 列固定网格与"被切检测"都已移除（整页只有一张密排网格）', () => {
+describe('年度报告 · 版面容器（2026-09-30 合并下段；2026-11-19 换成自由画布）', () => {
+  it('海报的 12 列固定网格与"被切检测"都已移除', () => {
     expect(annualTsx, '旧的 12 列海报网格又回来了').not.toContain('css.wrap')
     expect(annualTsx, '被切检测（compact）又回来了').not.toContain('data-compact')
-    expect(annualTsx, '没有用密排网格').toContain('<MasonryGrid>')
   })
 
-  it('样式层面确认密排网格在位（`.wrap` / 被切标记的旧规则留着不删：删它们的风险更大）', () => {
-    expect(annualCss, '看板网格的样式必须在').toContain('.board {')
+  /**
+   * 2026-11-19 用户要求「改为画布形式、不限制网格、卡片随内容自适应、支持拖拽」。
+   * 首屏因此从 `<MasonryGrid>` 换成 `<CardCanvas>` —— 这条判据跟着换对象，
+   * 守的东西没变：**整页必须有且只有一个主版面容器**（不许一半画布一半网格）。
+   */
+  it('首屏用自由画布，而不是密排网格', () => {
+    expect(annualTsx, '首屏没有用画布').toContain('<CardCanvas')
+    expect(annualTsx, '首屏不该再包在 MasonryGrid 里').not.toMatch(/<MasonryGrid>\s*<HeroCard/)
+  })
+
+  it('样式层面确认画布与折叠区网格都在位', () => {
+    // 2026-11-19：画布类迁到 `card-canvas.module.css`（M21 行数棘轮），两处都要查。
+    const canvasCss = read('card-canvas.module.css')
+    expect(canvasCss, '画布容器样式必须在').toContain('.canvas {')
+    expect(canvasCss, '卡片定位样式必须在').toContain('.canvasCard {')
+    // 折叠区仍是 12 列网格（默认收起，不改）。
+    expect(annualCss, '折叠区的看板网格样式必须在').toContain('.board {')
     expect(annualCss, '滚动容器必须常开').toMatch(/\.scrollBody \{[^}]*overflow-y: auto/)
   })
 })

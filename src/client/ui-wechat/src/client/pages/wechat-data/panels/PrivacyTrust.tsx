@@ -6,7 +6,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiClearPrivacyAudit, apiGetPrivacyAuditRows, apiGetPrivacyState, apiSetPrivacyState, readRenderCache } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { PrivacyAuditRow, PrivacySnapshot, PrivacyStateSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, ErrorState, LoadingState, PanelHeader } from '../ui/kit.tsx'
+import { Button, ErrorState, LoadingState, PanelHeader } from '../ui/kit.tsx'
+import { CardCanvas } from './card-canvas.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './privacy-trust.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
@@ -133,14 +135,18 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   return (
     <div className={embedded ? css.embedded : kitCss.panelShell}>
       <PanelHeader title="数据边界与出网" desc="数据边界 · AI 出网说明 · 敏感信息扫描结果" />
-      <ExportProgressStatus state={exportTask.state} />
 
-      <Card title="数据边界">
+      {/* 卡片区改用**等宽瀑布流画布**（2026-11-19，与「年度报告」「数据总览」同一套）。
+          这几张卡的高度差异很大：「数据边界」是三段长文、「隐私体检」常常只有一行摘要，
+          旧的两列栅格会把它们拉成等高，矮卡下方留白。
+          导出进度与页头留在画布外 —— 它们是面板级动作，不该参与摆放。 */}
+      <CardCanvas year={0} scope="privacy-trust">
+        <CanvasCard id="trust-boundary" title="数据边界">
         <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用 AI 功能时，只有检索到的聊天片段会发送到所选 LLM 模型，可在模型设置中更换或调整。</p>
         <p className={css.lead}>{AVATAR_NOTE}</p>
-      </Card>
+      </CanvasCard>
 
-      <Card title="防护设置">
+      <CanvasCard id="trust-guard" title="防护设置">
         {state ? (
           <div className={css.toggles}>
             <button type="button" className={css.toggle} data-active={state.redactSensitive} onClick={() => { void toggle('redactSensitive', !state.redactSensitive) }} {...desktopActionProps()}>
@@ -150,16 +156,15 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
         ) : (
           <LoadingState variant="compact" label="设置加载中…" />
         )}
-      </Card>
+      </CanvasCard>
 
-      <div className={kitCss.cardGrid}>
-        <Card title="纯本地功能">
+      <CanvasCard id="trust-local" title="纯本地功能">
           <div className={css.chipGrid}>
             {LOCAL_FEATURES.map(f => <span key={f} className={css.localChip}>🔒 {f}</span>)}
           </div>
-        </Card>
+        </CanvasCard>
 
-        <Card title="AI 功能（出网）">
+        <CanvasCard id="trust-ai" title="AI 功能（出网）">
           <div className={css.aiList}>
             {AI_FEATURES.map(f => (
               <div key={f.name} className={css.aiRow}>
@@ -168,10 +173,9 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
               </div>
             ))}
           </div>
-        </Card>
-      </div>
+        </CanvasCard>
 
-      <Card title="AI 出站审计" extra={<span className={kitCss.textCaption}>每次放行的功能、次数与字符数</span>}>
+      <CanvasCard id="trust-audit" title="AI 出站审计" extra={<span className={kitCss.textCaption}>每次放行的功能、次数与字符数</span>}>
         {!state ? (
           <LoadingState variant="compact" label="设置加载中…" />
         ) : (
@@ -195,12 +199,12 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
           <Button variant="pill" onClick={exportAudit} disabled={rows.length === 0 || exportTask.running}>{exportTask.running ? '导出中…' : '导出审计 CSV'}</Button>
           <Button variant="pill" onClick={() => { void clearAudit() }} disabled={state?.audit.total === 0} {...desktopActionProps()}>清空审计</Button>
         </div>
-      </Card>
+      </CanvasCard>
 
       {/* 2026-09-30 精简：这一块原来把「隐私体检」的**完整结果**（分类明细 + 高风险联系人芯片）
           又抄了一遍，而侧栏「隐私体检」页本来就展示同一份数据。现在只留一行摘要，
           详情回那一页看 —— 这正是「内容重复」在这次精简里被砍掉的第一处。 */}
-      <Card title="隐私体检（敏感信息扫描）">
+      <CanvasCard id="trust-scan" title="隐私体检（敏感信息扫描）">
         {loading && !scan && <LoadingState variant="compact" label="扫描结果加载中…" />}
         {!loading && !scan && !error && <div className={kitCss.emptyInline}>尚无扫描结果 —— 侧栏「隐私体检」页点一次扫描即可</div>}
         {error && <ErrorState message={error} />}
@@ -211,7 +215,10 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
             <span className={kitCss.textCaption}>分类明细与高风险联系人见侧栏「隐私体检」</span>
           </div>
         )}
-      </Card>
+      </CanvasCard>
+      </CardCanvas>
+
+      <ExportProgressStatus state={exportTask.state} />
 
       <p className={css.footnote}>说明：敏感字段打码与 AI 调用审计均为本机即时生效；本地模型优先切换为后续项。应用内已没有任何出网开关（2026-09-30 起全部移除）。审计记录的是**被放行去出站**的调用次数与字符数（含随后因密钥/网络被模型方拒绝的）。</p>
     </div>

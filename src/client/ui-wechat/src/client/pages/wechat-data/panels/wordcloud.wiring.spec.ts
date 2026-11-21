@@ -38,18 +38,27 @@ describe('词云三处落位', () => {
   it('群聊分析页：scope=chat 且绑定当前选中的群（username 随选择器走）', () => {
     expect(groupInsights).toContain('<WordCloudCard scope="chat" username={data.username} fill />')
   })
-  it('朋友圈洞察页：scope=moments', () => {
-    // 2026-10-17：词云与「月度发布分布」并排（`grid2`），用 `fill` 而不是固定 `height`
-    // —— 固定 220px 时月度分布 479px，词云下方空出 177px（真机 1230×713 实测）。
-    // `fill` 让舞台高度跟着卡片走，卡片高度由 `grid2` 的固定 300px 决定。
-    expect(momentsInsights).toContain('<WordCloudCard scope="moments" fill />')
+  it('朋友圈洞察页：scope=moments，且卡片在画布里（2026-11-19 起不再用两行栅格）', () => {
+    // 2026-10-17 曾用 `fill`：当时卡片高度由 `gridTop/gridBottom` 的固定行高决定，
+    // `fill` 让舞台高度跟着卡片走。
+    // 2026-11-19 改用等宽瀑布流画布后，卡片高度**反过来**由内容决定 ——
+    // `fill` 是「量卡片根高度」反推舞台高度，而画布卡的高度又是量 `offsetHeight`
+    // 得来的，两者互为因果（循环依赖）。所以画布场景必须用显式 `height`。
+    const at = momentsInsights.indexOf('<WordCloudCard scope="moments"')
+    expect(at, '找不到朋友圈词云').toBeGreaterThan(-1)
+    const tag = momentsInsights.slice(at, momentsInsights.indexOf('/>', at))
+    expect(tag).toContain('canvasId="moments-words"')
+    expect(tag).toContain('height={320}')
+    expect(tag, '画布场景不能用 fill（与卡片高度循环依赖）').not.toContain('fill')
   })
-  it('数据总览：scope=global，且卡片是 Bootstrap 全宽行（col-12 独占一行）', () => {
+  it('数据总览：scope=global，且卡片在画布里（2026-11-19 起不再用 Bootstrap 栅格）', () => {
     expect(overview).toContain('<WordCloudCard scope="global"')
-    // Wave D3：总览改用 Bootstrap 栅格，词云卡是整行（col-12），不再用自造 span12
+    // 总览卡片区改成等宽瀑布流画布后，词云和其他卡一样由画布排版（等宽、可拖动），
+    // 不再需要 `col-12`。守的是它**带 canvasId**，即真的进了画布。
     const at = overview.indexOf('<WordCloudCard scope="global"')
-    const before = overview.slice(Math.max(0, at - 160), at)
-    expect(before.includes('className="col-12"'), '词云卡必须是 Bootstrap col-12（整行独占）').toBe(true)
+    const before = overview.slice(Math.max(0, at - 200), at)
+    expect(before.includes('canvasId="ov-wordcloud"'), '词云卡必须带 canvasId（真的进画布）').toBe(true)
+    expect(before.includes('className="col-12"'), '词云卡还在用 Bootstrap 栅格').toBe(false)
   })
 })
 

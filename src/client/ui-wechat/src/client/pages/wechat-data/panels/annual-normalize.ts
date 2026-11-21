@@ -42,6 +42,50 @@ export function annualReviewCacheKey(year: number): string {
   return `annual-review:v4:${String(year)}`
 }
 
+/**
+ * 从可选年份里选出**默认打开**的那一年：最新（最大）的一年。
+ *
+ * ## 为什么单独抽出来（2026-11-19 修 bug 时抽的）
+ *
+ * 原来这段逻辑写在 `loadYears` 里，是 `ys.at(-1)` —— 取数组**最后一项**。
+ * 而后端返回的是**降序**（`annual.ts` 里 `sort((a, b) => b - a)`），
+ * 于是 `at(-1)` 每次选中**最旧**的一年：用户打开年度报告看到的是 2020 年，
+ * 而下拉里最新的是 2026 年（截图确认）。
+ *
+ * 两个教训：
+ *   ① **不要依赖后端数组的顺序** —— 顺序不是契约，改了不会有人通知；
+ *   ② 这种"只错一次选择"的缺陷，看代码很容易觉得对（`at(-1)` 读起来像"最后一个"），
+ *      所以抽成纯函数、用行为级测试钉住（含降序/升序/乱序三种输入）。
+ *
+ * @param years - 可选年份（任意顺序，可含非整数）。
+ * @returns 最大年份；没有可用年份时返回当前年。
+ */
+export function defaultAnnualYear(years: readonly number[]): number {
+  let best: number | null = null
+  for (const y of years) {
+    if (!Number.isFinite(y)) continue
+    if (best === null || y > best) best = y
+  }
+  return best ?? new Date().getFullYear()
+}
+
+/**
+ * 把后端给的年份列表归一化成**降序**（最新在前）。
+ *
+ * 下拉框的顺序也走这里 —— 这样"第一个选项 = 默认年份"成立，
+ * 用户点开就能看到最新一年在最上面。
+ * @param years - 任意顺序的年份（含脏数据）。
+ * @returns 去重后的降序数组。
+ */
+export function normalizeAnnualYears(years: readonly number[]): number[] {
+  const seen = new Set<number>()
+  for (const y of years) {
+    // 2000 之前基本是脏数据（微信本身还没发布），与面板原有过滤口径一致。
+    if (Number.isFinite(y) && y > 2000) seen.add(y)
+  }
+  return [...seen].sort((a, b) => b - a)
+}
+
 /** 五个新字段的空形状（`available:false` 表示"这个库没读到"，不是"是 0"）。 */
 function emptyExtras(): Pick<AnnualReviewShape, 'moments' | 'assets' | 'money' | 'revoke' | 'groups'> {
   return {

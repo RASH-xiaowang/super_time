@@ -85,17 +85,23 @@ describe('layout-tokens 的派生函数', () => {
   })
 })
 
-describe('总览不再自造 12 栅格（Wave D3 起交给 Bootstrap）', () => {
+describe('总览不再自造 12 栅格（Wave D3 起交给 Bootstrap；2026-11-19 起交给画布）', () => {
   it('overview.module.css 不得再出现 .ovGrid / .ovSpanN 规则', () => {
-    expect(OVERVIEW_CSS, '旧的自造 12 栅格又回来了？总览现在用 Bootstrap row/col').not.toMatch(/\.ovGrid\b/)
-    expect(OVERVIEW_CSS, '旧的自造跨列又回来了？总览现在用 Bootstrap row/col').not.toMatch(/\.ovSpan\d*\b/)
+    expect(OVERVIEW_CSS, '旧的自造 12 栅格又回来了？总览现在用画布').not.toMatch(/\.ovGrid\b/)
+    expect(OVERVIEW_CSS, '旧的自造跨列又回来了？总览现在用画布').not.toMatch(/\.ovSpan\d*\b/)
   })
 
-  it('布局由 Bootstrap 类名承担：TSX 里必须有 row g-2 / col-*', () => {
+  it('KPI 仍走 Bootstrap 四列档，卡片区交给画布', () => {
     const tsx = readText(join(HERE, 'overview-panel.tsx')) + readText(join(HERE, 'overview-sections.tsx'))
-    expect(tsx).toContain('row g-2')
-    // 2026-10-19 微信化：KPI 8→4 后改为 4 列档（手机 2 列 / ≥sm 4 列），不再用 sm-4 的 3 列档
+    expect(tsx, 'KPI 行不见了').toContain('row g-2')
+    // 2026-10-19 微信化：KPI 8→4 后改为 4 列档（手机 2 列 / ≥sm 4 列），不再用 sm-4 的 3 列档。
     expect(tsx).toMatch(/className="col-6 col-sm-3"/)
-    expect(tsx).toMatch(/className="col-12 col-xl-\d+"/)
+    /**
+     * 2026-11-19：卡片区从 Bootstrap 栅格改成**等宽瀑布流画布**，
+     * 所以 `col-12 col-xl-*` 不再存在 —— 那正是这次要去掉的东西（每行等高 + 窄列挤爆）。
+     * 守的是：卡片区真的在画布里，而不是又悄悄退回栅格。
+     */
+    expect(tsx, '卡片区没走画布').toContain('<CardCanvas')
+    expect(tsx, '卡片区还在用 Bootstrap 列宽').not.toMatch(/className="col-12 col-xl-\d+"/)
   })
 })

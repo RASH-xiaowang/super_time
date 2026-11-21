@@ -86,9 +86,31 @@ function RankList({ hint, rows, max }: {
   )
 }
 
-function RankCard({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
-  return <OvSection className="col-12" icon="world" title={title}>{children}</OvSection>
+/**
+ * 榜单小卡。
+ *
+ * `slot` 而不是 `canvasId`：这张卡在**四个分支**里各出现两次（加载中 / 失败 / 无数据 /
+ * 有数据），逐个手写 id 既啰嗦又容易漏（漏一个就退回栅格模式 ⇒ 压住别人）。
+ * 让 id 由 slot 推导，调用点只需要说清"这是省份榜还是城市榜"。
+ * @param props.slot - 榜单种类（决定画布 id：`ov-region-prov` / `ov-region-city`）。
+ */
+function RankCard({ slot, title, children }: {
+  slot: 'prov' | 'city'
+  title: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <OvSection canvasId={`ov-region-${slot}`} zone="更多分析" icon="world" title={title}>
+      {children}
+    </OvSection>
+  )
 }
+
+/** 两张榜单的固定槽位（标题也放这里，四个分支共用）。 */
+const SKELETON_SLOTS = [
+  { slot: 'prov', title: '省份 Top 10' },
+  { slot: 'city', title: '城市 Top 12' },
+] as const
 
 /**
  * 好友地区榜单（省份 + 城市）。
@@ -116,16 +138,16 @@ export function RegionBoard(): React.JSX.Element {
   if (failed) {
     return (
       <>
-        <RankCard title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
-        <RankCard title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
+        <RankCard slot="prov" title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
+        <RankCard slot="city" title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
       </>
     )
   }
   if (!snap) {
     return (
       <>
-        {(['省份 Top 10', '城市 Top 12'] as const).map(title => (
-          <RankCard key={title} title={title}>
+        {SKELETON_SLOTS.map(({ slot, title }) => (
+          <RankCard key={slot} slot={slot} title={title}>
             <div className={regionCss.regionRank}>
               <div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div>
             </div>
@@ -139,8 +161,8 @@ export function RegionBoard(): React.JSX.Element {
   if (!country) {
     return (
       <>
-        <RankCard title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
-        <RankCard title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
+        <RankCard slot="prov" title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
+        <RankCard slot="city" title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
       </>
     )
   }
@@ -150,10 +172,10 @@ export function RegionBoard(): React.JSX.Element {
 
   return (
     <>
-      <RankCard title="省份 Top 10">
+      <RankCard slot="prov" title="省份 Top 10">
         <RankList hint={`${country.name} ${country.count} 位 · 占 ${pct}%`} rows={prov.rows} max={prov.max} />
       </RankCard>
-      <RankCard title="城市 Top 12">
+      <RankCard slot="city" title="城市 Top 12">
         <RankList hint={`共 ${city.rows.length >= 12 ? '12+' : city.rows.length} 个城市有好友`} rows={city.rows} max={city.max} />
       </RankCard>
     </>

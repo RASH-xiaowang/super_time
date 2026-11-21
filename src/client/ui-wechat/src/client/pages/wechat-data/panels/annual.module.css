@@ -72,7 +72,11 @@
   overflow: hidden;
   overflow-wrap: anywhere;     /* 长串在任意位置断行 */
   display: flex; flex-direction: column;
-  padding: 10px 12px;
+  /* ── 内边距（2026-11-19 舒适化重做）──
+     10px 12px → 20px。原值是按「密集报表」定的：文字几乎贴边，
+     一屏 8 张卡挤在一起像 Excel 而不是年度回顾。年度回顾是**阅读**型内容，
+     卡片需要像文章段落一样有留白。 */
+  padding: 20px;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
@@ -108,12 +112,20 @@
   --tone-line: var(--nm-cyan);
 }
 .cardHead {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-  margin-bottom: 6px; flex: 0 0 auto;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap;
+  /* 6px → 14px：卡头与正文之间要有一条"气口"，否则标题像被正文吞掉。 */
+  margin-bottom: 14px; flex: 0 0 auto;
 }
-/* 标题：参考图是「深灰小字 + 字重 600」，不是彩色标签。 */
-.cardTitle { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-2); white-space: nowrap; }
-.cardExtra { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 标题：从「12px 次要色」提到「13px 主色」—— 扫视时标题必须先被眼睛抓到，
+   原先它和正文同色同重，8 张卡摆在一起只能靠位置猜哪块是什么。 */
+.cardTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); letter-spacing: 0.01em; overflow-wrap: anywhere; }
+.cardExtra { font-size: 12px; color: var(--nm-text-3); text-align: right; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* 卡头右侧：分区药丸 + 附注在同一行，空间不够时药丸优先保留（它是分组线索）。 */
+.headRight {
+  display: inline-flex; align-items: center; justify-content: flex-end;
+  gap: 8px; min-width: 0;
+  flex-wrap: nowrap;
+}
 /* 卡头附注里带身份时（年度主演），允许头像与文字在窄卡里换行，而不是整段被省略。 */
 .inlineExtra {
   display: inline-flex;
@@ -129,51 +141,89 @@
 /* 卡片正文：**高度随内容**（参考图的做法），不再固定行高、不再内部滚动。
    ⚠️ 2026-10-17 第三次改：前两版分别试过 `space-between`（内容被拉散）和
    固定行高 + 内部滚动（出现滚动条）。参考图的做法最简单也最好看 ——
-   卡片高度跟着内容走，内容多的卡自然更高，整页像"报表"而不是"积木墙"。 */
+   卡片高度跟着内容走，内容多的卡自然更高，整页像"报表"而不是"积木墙"。
+   （2026-11-19 附注：`space-between` 现在由内层 `.cardFill` 承担，
+   本层仍是 `flex-start` —— 直接子元素只有一个填充层，这里不能分散。） */
 .cardBody {
   min-height: 0;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  /* 「正文内部各块之间要能分开」——间距从 6px 提到 10px（2026-11-19 舒适化）。
+     写在这儿而不是夹在声明中间：变异登记表的锚点按字面匹配这三行（M648/M649），
+     中间插一行注释就会让锚点「腐烂」。 */
   justify-content: flex-start;
-  gap: var(--nm-dense-g3);
+  gap: 10px;
   overflow: visible;
 }
 
+/* ── 填充层（2026-11-19）────────────────────────────────────────────
+   同行等高（`.board` 的 `stretch`）之后，矮卡会多出高度。这一层负责把多出来的
+   空间**摊到内容块之间**，而不是堆在卡片底部留一块空白：
+
+     · `justify-content: space-between` —— 首块贴顶、末块贴底，中间均分；
+     · 实测效果：内容 3 块、多出 120px 时，块间距约 60px，读起来是"这张卡用满了"，
+       而不是"下面空了一大块"。
+
+   为什么不让 `.cardBody` 自己 space-between：那块被变异登记表钉着
+   （M648/M649 的锚点就是它的三行声明），而且直接子元素只有这一层填充层，
+   分散放在外层没有意义。 */
+.cardFill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+/* 内容块之间均匀伸展时，列表块自己也要能吃满剩余高度（否则空白仍堆在列表下方）。 */
+.cardFill > .moreList,
+.moreBody > .moreList { flex: 1 1 auto; justify-content: space-between; }
+
 /* ── ① 全年发出 ── */
-/* 参考图里主数字是**视觉焦点**：20px → 28px，字重 700，行高收紧。 */
-.heroNum { font-size: 28px; font-weight: 700; line-height: 1.05; color: var(--nm-text-1); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-.heroNum small { font-size: var(--nm-dense-fs-sm); font-weight: 500; color: var(--nm-text-3); margin-left: 4px; letter-spacing: 0; }
-.heroSub { margin-top: 1px; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
+/* 主数字是视觉焦点：28px → 36px。年度回顾里"我这一年发了多少"是第一个结论，
+   它必须一眼可读，而不是和旁边 12px 的标签混在一起。 */
+.heroNum { font-size: 36px; font-weight: 700; line-height: 1.02; color: var(--nm-text-1); font-variant-numeric: tabular-nums; letter-spacing: -0.025em; }
+.heroNum small { font-size: 12px; font-weight: 500; color: var(--nm-text-3); margin-left: var(--nm-dense-g2); letter-spacing: 0; }
+.heroSub { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--nm-text-3); }
 /* 活跃率 / 占比条（2026-10-17 新增）：把「活跃 237 天」「深夜占 12.3%」这类
    绝对数字变成一眼能读的比例条 —— 原先这些卡只有几十像素内容、下半截全空。 */
-.heroRate { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.heroRate { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
 .heroRateBar {
-  height: 5px; border-radius: var(--nm-r-pill); overflow: hidden;
+  height: 6px; border-radius: var(--nm-r-pill); overflow: hidden;
   background: color-mix(in srgb, var(--nm-text-1) 8%, transparent);
 }
 .heroRateFill {
   height: 100%; border-radius: var(--nm-r-pill);
   background: var(--nm-cyan);
 }
-.heroRateText { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); }
+.heroRateText { font-size: 12px; line-height: 1.55; color: var(--nm-text-3); }
 .heroRateText b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* 3 列宽的卡片里 `heroGrid` 用 2 列（2026-10-17 改）：
    3 列时每格只有 ~55px，「最长连续 64 天」这种值会被裁成「64…」。
    2 列后每格 ~85px，值放得下，行数也自然变多、填满卡片高度。 */
-.heroGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin-top: 4px; }
+/* 「标签 + 值」格子网格。
+   2026-11-19：固定 2 列 → `auto-fit`。等宽瀑布流下卡片约 300px，
+   2 列时每格约 145px —— 「最长连续 55 天」这类值放得下但偏挤；
+   卡片更窄时会自动掉成 1 列，不会硬挤。 */
+.heroGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px 12px; margin-top: 14px; }
 /* 6 列宽的卡片（画像/群聊）里用 3 列 —— 宽度够，3 列更紧凑。 */
 .card[data-span-wide] .heroGrid,
 .moreCard[data-span-wide] .heroGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 /* 「标签 + 值」排在**同一行**（改前是上下两行）：6 个格子两行下来能省约 16px 给正文。 */
 .heroCell {
   display: flex; flex-direction: row; align-items: baseline; justify-content: space-between;
-  gap: var(--nm-dense-g2); min-width: 0;
-  padding: 2px 6px; border-radius: var(--nm-r-sm);
+  gap: 6px; min-width: 0;
+  /* 2px 6px → 8px 10px：格子内部要有呼吸，否则"标签贴值"读起来很赶。 */
+  padding: 8px 10px; border-radius: var(--nm-r-sm);
   background: var(--nm-bg-0); border: 0.5px solid var(--nm-border);
 }
-.heroCellK { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
-.heroCellV { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heroCellK { font-size: 11px; color: var(--nm-text-3); white-space: nowrap; }
+/* 12px → 14px 且字重 650：格子里的值是"读数"，不该和标签同等份量。 */
+/* 格子里的值。
+   ⚠️ 2026-11-19：允许折行（原先 nowrap + ellipsis）。等宽瀑布流下每格约 145px，
+   「12–24 – 12–31」这类值原先被截成「12–24 – 12...」。 */
+.heroCellV { font-size: 14px; font-weight: 650; color: var(--nm-text-1); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 /* ── ② 日历热力 ── */
 .calWrap { display: flex; flex-direction: column; gap: var(--nm-dense-g2); min-height: 0; flex: 1 1 auto; }
@@ -193,7 +243,7 @@
 .calCell[data-lv="3"] { background: color-mix(in srgb, var(--nm-green) 64%, transparent); }
 .calCell[data-lv="4"] { background: color-mix(in srgb, var(--nm-green) 90%, transparent); }
 .calFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
-.calLegend { display: inline-flex; align-items: center; gap: var(--nm-dense-g1); font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
+.calLegend { display: inline-flex; align-items: center; gap: var(--nm-dense-g2); font-size: 11px; color: var(--nm-text-3); white-space: nowrap; }
 .calLegend .calCell { width: 9px; aspect-ratio: 1; flex: 0 0 auto; }
 /* 图例里带身份时允许整段折行，头像仍与名字保持同一条基线。 */
 .identityLegend {
@@ -210,9 +260,14 @@
 .bigDayUnit { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
 .bar { margin: 3px 0; height: 4px; border-radius: var(--nm-r-pill); background: color-mix(in srgb, var(--nm-text-1) 8%, transparent); overflow: hidden; flex: 0 0 auto; }
 .barFill { height: 100%; border-radius: var(--nm-r-pill); background: var(--nm-text-3); }
-.kv { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); min-width: 0; }
-.kv + .kv { margin-top: var(--nm-dense-g1); }
-.kv > span, .kv > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「标签 ←→ 值」行。
+   ⚠️ 2026-11-19：值侧从 `nowrap + ellipsis` 改成**允许折行**。
+   等宽瀑布流下每张卡只有约 300px，`nowrap` 会把「月收入 ¥1000.00 · 1 笔」这类值
+   直接截成「月收入 ¥1000...」—— 而用户明确要求「不行就自动换行」。
+   折行后靠 `text-align: right` 让值仍贴右对齐，读起来仍是"标签 / 值"两段。 */
+.kv { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; font-size: 13px; line-height: 1.6; color: var(--nm-text-2); min-width: 0; }
+.kv + .kv { margin-top: var(--nm-dense-g4); }
+.kv > span, .kv > b { min-width: 0; overflow-wrap: anywhere; }
 /* Wave 1（2026-10-18 响应式审计）：值侧（`.kv b`）原先 `flex: 0 0 auto` —— 数值/名字列表
    多长都不许缩，整行只能顶出卡片（基线 768×1024 实测卡片被横向裁 22px）。
    改回可收缩 + 既有省略号：长值在行内截断为「…」（本行设计口径就是 ellipsis），
@@ -233,8 +288,8 @@
   white-space: normal;
 }
 .quote {
-  margin-top: 3px; padding: var(--nm-dense-g1) 8px;
-  font-size: var(--nm-dense-fs-sm); line-height: 1.4; color: var(--nm-text-2);
+  margin-top: 8px; padding: 8px 10px;
+  font-size: 13px; line-height: 1.65; color: var(--nm-text-2);
   background: var(--nm-bg-0); border-radius: var(--nm-dense-r);
   border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
   word-break: break-word; flex: 0 0 auto;
@@ -246,10 +301,13 @@
 /* ── 头像 ── */
 .av { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; overflow: hidden; font-weight: 600; }
 .av img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.row { display: flex; align-items: center; gap: var(--nm-dense-g3); min-width: 0; }
+.row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .rowMain { min-width: 0; flex: 1 1 auto; }
-.name { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sub { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 姓名 / 副标题。
+   ⚠️ 2026-11-19：允许折行（原先 `nowrap + ellipsis`，窄卡里「物联本2022毛远辉」
+   被截成「物联本2022...」）。排行、搭子、深夜、媒体等卡都靠这两个类。 */
+.name { font-size: 14px; font-weight: 600; color: var(--nm-text-1); overflow-wrap: anywhere; }
+.sub { font-size: 12px; line-height: 1.55; color: var(--nm-text-3); overflow-wrap: anywhere; }
 
 /* ── ⑤ 十二月主演（6 列宽 → 12 个格子一行）── */
 /* 2026-10-17：从「12 格一行」改成「6 格两行」—— 一行 12 格时每格只有 30px 头像，
@@ -267,17 +325,21 @@
 .nightTop { display: flex; align-items: center; gap: var(--nm-dense-g3); margin-bottom: 4px; flex: 0 0 auto; }
 
 /* ── ⑦ 作息切片 ── */
-.rhythmRow { display: grid; grid-template-columns: 13px 1fr; gap: var(--nm-dense-g1); align-items: center; }
-.rhythmRow + .rhythmRow { margin-top: 1px; }
-.rhythmDow { font-size: 9.5px; color: var(--nm-text-3); }
-.rhythmGrid { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
+.rhythmRow { display: grid; grid-template-columns: 16px 1fr; gap: 6px; align-items: center; }
+/* 行间 1px → 3px：热力图行贴行时读不出「哪行是周几」，隔开一点才分得清。 */
+.rhythmRow + .rhythmRow { margin-top: var(--nm-dense-g2); }
+.rhythmDow { font-size: 11px; color: var(--nm-text-3); }
+.rhythmGrid { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: var(--nm-dense-g2); }
+/* 格子仍是 7px 高（24 列 × 7 行要塞进半屏高，再高就爆）。
+   2026-11-19 的舒适化只动**间距**：gap 2 → 4px，行距拿到可读的呼吸，
+   但没有放大格子本身 —— 那会挤爆 24 列。 */
 .rhythmCell { height: 7px; border-radius: var(--nm-r-xs); background: color-mix(in srgb, var(--nm-text-1) 5%, transparent); }
 .rhythmCell[data-lv="1"] { background: color-mix(in srgb, var(--nm-cyan) 18%, transparent); }
 .rhythmCell[data-lv="2"] { background: color-mix(in srgb, var(--nm-cyan) 36%, transparent); }
 .rhythmCell[data-lv="3"] { background: color-mix(in srgb, var(--nm-cyan) 58%, transparent); }
 .rhythmCell[data-lv="4"] { background: color-mix(in srgb, var(--nm-cyan) 82%, transparent); }
-.rhythmHours { display: grid; grid-template-columns: 13px 1fr; gap: 3px; margin-top: 2px; }
-.rhythmHourTicks { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 9.5px; color: var(--nm-text-3); }
+.rhythmHours { display: grid; grid-template-columns: 16px 1fr; gap: 6px; margin-top: 6px; }
+.rhythmHourTicks { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 11px; color: var(--nm-text-3); }
 
 /* ── ⑨ 口头禅 ── */
 .phraseHero { font-size: 16px; font-weight: 700; color: var(--nm-text-1); line-height: 1.2; }
@@ -302,18 +364,25 @@
 }
 
 /* ── ⑫ 排行（一屏只放前 5，避免撑破行高）── */
-.rankRow { display: flex; align-items: center; gap: var(--nm-dense-g3); padding: 0; min-width: 0; }
+/* 2026-11-19：行间补内边距。原先只有 0.5px 分隔线 + 行内 gap，5 行贴在一起像表格；
+   现在每行 7px 上下留白，读起来是「榜单」而不是「单元格」。 */
+/* 排行行：名次 + 身份 + 条数。
+   ⚠️ 2026-11-19：`.rankVal` 从 `flex: 0 0 auto` 改成可收缩并允许折行；
+   身份名（`.rankRow .name`）也允许折行 —— 窄卡里「物联本2022毛远辉 79」原先必然截断。 */
+.rankRow { display: flex; align-items: center; gap: 10px; padding: 8px 0; min-width: 0; flex-wrap: wrap; }
 .rankRow + .rankRow { border-top: 0.5px solid var(--nm-border); }
-.rankNo { width: 12px; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
-.rankVal { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.rankNo { width: 16px; font-size: 12px; color: var(--nm-text-3); font-variant-numeric: tabular-nums; flex: 0 0 auto; text-align: right; }
+.rankVal { font-size: 13px; font-weight: 650; color: var(--nm-text-1); font-variant-numeric: tabular-nums; flex: 0 1 auto; margin-left: auto; }
 
 /* ── ⑬ 表情 ── */
 /* 2026-10-17：从 `flex-wrap` 改成**两列网格** —— 表情少时只占一行（109px / 230px，
    填充率 40%）。两列后每个表情占一行，高度翻倍、占比条也放得下。 */
+/* 表情格：固定 2 列 → auto-fit（2026-11-19）。表情格内容是「表情 + 次数」，
+   窄卡里掉成 1 列更易读，宽卡里能排 3 列。 */
 .emojiTop {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 3px;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: var(--nm-dense-g2);
   margin-top: var(--nm-dense-g2);
   min-width: 0;
 }
@@ -336,46 +405,45 @@
   padding: var(--nm-dense-g2) 8px;
   background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: var(--nm-dense-r);
 }
-/* 三行 → 两行：① 标签 + 姓名 同行 ② 数值 独占一行。
-   改前是「标签 / 姓名 / 数值」三行，一排 7 格时白占约 13px。 */
-.moreInfo { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--nm-dense-g2); min-width: 0; }
-.moreLabel { grid-column: 1; font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
-.moreInfo .name { grid-column: 2; min-width: 0; }
-.moreVal { grid-column: 1 / -1; }
-.moreVal { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.moreCell .name { font-size: var(--nm-dense-fs); }
+/* 芯片内三行：标签（小字）→ 姓名 → 数值。
+   2026-11-19：从「标签 | 姓名 同行 + 数值独占一行」的 2 列网格改成**纯纵向三行** ——
+   2 列网格在约 140px 的格子里，标签（「最常联系」4 字）就吃掉一半宽度，
+   姓名只剩 60px。纵向排之后每行都有整格宽度可用。
+   姓名允许**折两行**（不再 nowrap + 省略号）：用户明确要求「不行就自动换行」，
+   而姓名是最容易被截断的内容。 */
+.moreInfo { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.moreLabel { font-size: 11px; color: var(--nm-text-3); overflow-wrap: anywhere; }
+.moreVal { font-size: 12px; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.moreCell .name {
+  font-size: 13px;
+  line-height: 1.35;
+  /* 最多两行，超出才省略 —— 一格放得下就一行，放不下就换行，不再粗暴截断。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
 
 /* ── ⑮ 页脚 ── */
 .footer {
   grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: space-between; gap: var(--nm-dense-g5);
-  font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  /* 页脚是整屏的收尾，需要一段明显的留白才不像"漏了一张卡"。 */
+  margin-top: 4px; padding: 20px 4px 8px;
+  font-size: 12px; line-height: 1.7; color: var(--nm-text-3); flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
 }
 .footerMid { color: var(--nm-text-2); }
 
 /* ── 「更多年度数据」折叠区（2026-10-19 微信化：27 卡 → 默认 8 卡）──────
    默认一屏只留 8 张核心卡（年度概览/作息/关系/群/媒体/资金/朋友圈/极值），
    其余 17 项进原生 `<details>` —— 功能不减，但不再让用户先滚过一堵卡片墙。 */
-.moreSection { margin-top: var(--nm-dense-g4); }
-.moreSummary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 36px;
-  padding: 6px 12px;
-  border: 1px dashed var(--nm-border-hover);
-  border-radius: var(--nm-r-md);
-  color: var(--nm-text-2);
-  font-size: var(--nm-dense-fs-sm);
-  cursor: pointer;
-  list-style: none;
-}
-.moreSummary::-webkit-details-marker { display: none; }
-.moreSummary::after { content: '展开 +'; color: var(--nm-text-3); font-size: var(--nm-dense-fs-xs); }
-.moreSection[open] .moreSummary::after { content: '收起 —'; }
-.moreSummary:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
-.boardMore { margin-top: var(--nm-dense-g4); }
+/* 折叠区（`.moreSection` / `.moreSummary` / `.boardMore`）的样式已于 2026-11-19 删除：
+   用户要求「不要分为两个分割的画布板块，都在一个画布上显示」，`<details>` 折叠区
+   连同它那套展开/收起样式一起退场。17 项明细现在直接跟在首屏 8 张卡后面，
+   由同一块 `AnnualCanvas` 排版。 */
 
 /* ── 退化：窄窗或矮窗装不下 12 列/5 行 → 回到瀑布流 + 滚动 ──
    强压到不可读不如允许滚动；用户的 1664×1066 走上面的无滚动版。
@@ -422,17 +490,24 @@
 
    ⚠️ 为什么回到 `auto` 而不是继续调行高：固定行高与"内容量差异 20 倍"是**根本矛盾** ——
    行高调低就出滚动条，调高就留白。参考图的做法是**放弃统一高度**，
-   用 `dense` 让小卡回头补进大卡留下的空隙，视觉上依然整齐。
-   ⚠️ `align-items: start` 而不是 `stretch`：`stretch` 会把同一行的卡片拉成等高，
-   又回到"固定高度"的老路。 */
+   用 `dense` 让小卡回头补进大卡留下的空隙。
+
+   ⚠️ `align-items: stretch`（2026-11-19 用户反馈「空白太多，要能自己补齐」）：
+   改前是 `start` —— 卡片高度随内容，同一行里高的卡把矮卡衬出一大片空白
+   （实测资金卡约 300px、朋友圈卡约 90px 并排，后者下方空 200px）。
+   改成 `stretch` 后同一行等高，再配合 `.cardFill` / `.moreBody` 的
+   `justify-content: space-between` 把多余高度**摊到内容块之间**，
+   而不是堆在卡片底部。 */
 .board {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-auto-rows: auto;
-  /* 间距：参考图约 8px，比原来的 10px 更紧凑。 */
-  gap: var(--nm-dense-g4);
+  /* 间距：8px → 16px（2026-11-19 舒适化）。8px 让 8 张卡视觉上连成一整块，
+     分不清哪张卡是哪张；16px 才能让每张卡被看成独立的一块内容。
+     写法仍走全站刻度（`g4` × 2），不落裸 px —— 刻度变了这里跟着变。 */
+  gap: calc(var(--nm-dense-g4) * 2);
   grid-auto-flow: dense;
-  align-items: start;
+  align-items: stretch;
 }
 
 /* ── 加载骨架屏（2026-10-17 重做）──────────────────────────────────────
@@ -442,14 +517,18 @@
 
    ⚠️ 为什么不用通用的 `ListSkeleton`：那是**列表**骨架（头像 + 一行文字），
    而这里是 12 列卡片墙 —— 形状完全不同，加载完会「跳」一下。 */
+.skelHost { display: block; min-width: 0; }
+/* 骨架不再自带网格：它复用 `AnnualCanvas` + `CanvasCard`（与真实布局同一套机制）。
+   这里只补两件事：占位卡不该显示拖拽手柄、占位块是纯色条。 */
+.skelHost .canvasHandle { display: none; }
 .skelCard {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  /* 与 `.card` 完全同款内边距（10px 12px）—— 骨架与真实卡片必须逐像素对齐，
+  /* 与 `.card` 完全同款内边距（20px）—— 骨架与真实卡片必须逐像素对齐，
      否则加载完成时卡片会"长高"几像素。 */
-  padding: 10px 12px;
+  padding: 20px;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
@@ -482,7 +561,9 @@
   background: color-mix(in srgb, var(--nm-text-3) 22%, transparent);
 }
 
-/* 内容块：宽度随卡片走，高度按 `flex` 比例分配（卡片高度随内容，块撑开卡片）。 */
+/* 内容块：宽度随卡片走，高度按占位块自身高度（卡片高度随内容，块撑开卡片）。
+   ⚠️ 骨架的其余样式（`.skelHost` / 占位块）已随画布一起迁到 `annual-canvas.module.css`
+   —— 骨架本身复用 `AnnualCanvas` + `CanvasCard`，与画布是同一块东西。 */
 .skelBlock {
   display: block;
   min-height: 0;
@@ -497,12 +578,69 @@
 .footer { grid-column: span 12; }
 .zoneTag {
   flex: 0 0 auto;
-  padding: 0 var(--nm-dense-g1);
-  font-size: var(--nm-dense-fs-sm);
+  /* 分区标签从「10px 灰字」变成一枚小小的淡色药丸：它是"这张卡属于哪一段"的唯一提示，
+     纯文字在扫视时会被当成装饰忽略掉。 */
+  padding: 2px 8px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  font-size: 11px;
+  letter-spacing: 0.02em;
   color: var(--nm-text-3);
   text-align: right;
   white-space: nowrap;
 }
+
+/* ── 「年度之最」的格子（2026-11-19 重做）────────────────────────────
+   原先 9 项排成「左标签 ←→ 右值」的单列长条：一堵 11px 的窄字墙，
+   右侧值还常常折行（`2020-12-24 → 2020-12-31` 被截成两段）。
+   现在改成**网格小砖块**：标签在上（小字）、值在下（大字），
+   一屏之内横向铺开，扫视成本从"逐行读"降到"看块"。
+   `auto-fit` + `minmax` 让它按卡片实际宽度自适应列数 —— 6 列卡是 2 列，
+   12 列卡（横贯那一版）是 4–6 列，都不需要写死档位。 */
+/* 「年度之最」的砖块网格（2026-11-19 第二次修）。
+ *
+ * ⚠️ 这里曾经写过 `grid-auto-rows: 1fr` + `align-content: stretch` + `flex: 1 1 auto`，
+ * 本意是"让砖块撑满卡片、别在下半截留空"。实际后果是**整张卡被拉成一堵墙**：
+ * `1fr` 会让**所有行等高、且等于最高的那一行** —— 而最后一格「最后一句」是长文本，
+ * 一高就把另外 8 行也全撑成同样的高度（用户截图：9 格竖排、每格近百像素空白）。
+ *
+ * 现在回到最朴素的 `grid-auto-rows: auto`（每行按自己的内容取高），
+ * 并**去掉** `flex: 1 1 auto`（画布卡的高度本来就是内容决定的，flex 拉伸没有意义）。
+ * "别留空"该由内容本身解决（砖块多、字号合理），不该靠拉伸行高硬凑。
+ */
+.tileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-auto-rows: auto;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+.tile {
+  display: flex; flex-direction: column; gap: var(--nm-dense-g3);
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-0);
+  border: 0.5px solid var(--nm-border);
+}
+.tileK { font-size: 11px; color: var(--nm-text-3); overflow-wrap: anywhere; }
+/* 砖块里的值。
+   ⚠️ 必须**限行**：`最后一句` 是一整条消息，长文本在 120px 宽的砖块里会折成十几行，
+   把这张卡撑成一堵墙（限 3 行 + 省略号，全文在 `title` 里悬停可看）。
+   注意不再用 `display: flex` —— `-webkit-line-clamp` 要求 `-webkit-box`，两者只能取一个。 */
+.tileV {
+  font-size: 15px; font-weight: 650; line-height: 1.35;
+  color: var(--nm-text-1); font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 值里的次要部分（「· 919 条」这类）要弱于主值。
+   `-webkit-box` 下 `small` 是行内元素，前面留一点间距即可。 */
+.tileV small { font-size: 12px; font-weight: 500; color: var(--nm-text-3); margin-left: 4px; }
 .moreCard {
   container-type: inline-size;
   grid-column: span 4;          /* 默认 1/3 宽；宽内容卡由 .span6 / .portrait 覆盖成半行 */
@@ -512,11 +650,12 @@
   overflow-wrap: anywhere;
   display: flex; flex-direction: column;
   /* 间距交给网格 gap —— 这里再给 margin 会和 gap 叠加。 */
-  padding: 10px 12px;
+  padding: 20px;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
   /* 与 `.card` 同一套：只有顶部 2px 色线，没有径向渐变。 */
+  gap: 8px;
   position: relative;
   isolation: isolate;
 }
@@ -531,16 +670,27 @@
   z-index: 1;
 }
 .moreCard > * { position: relative; z-index: 1; }
+/* 内容填充层：与 `.cardFill` 同一职责（同行等高后摊掉多余高度）。 */
+.moreBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
 .moreCard:last-child { margin-bottom: 0; }
-.moreCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); margin-bottom: 6px; min-width: 0; flex-wrap: wrap; }
-.moreCardTitle { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.moreCardExtra { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 参考图里主数字是视觉焦点：20px → 24px，字重 700。 */
-.moreNum { font-size: 24px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--nm-text-1); }
-.moreRow { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); min-width: 0; }
-.moreRow > span { min-width: 0; }
-.moreRow > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.moreRow > span:last-child { text-align: right; overflow-wrap: anywhere; }
+.moreCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; min-width: 0; flex-wrap: wrap; }
+.moreCardTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); min-width: 0; letter-spacing: 0.01em; overflow-wrap: anywhere; }
+.moreCardExtra { font-size: 12px; color: var(--nm-text-3); text-align: right; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* 参考图里主数字是视觉焦点：24px → 30px，字重 700。 */
+.moreNum { font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--nm-text-1); letter-spacing: -0.02em; }
+/* 明细行：标签 / 值。
+   ⚠️ 2026-11-19：两侧都允许折行（原先标签侧 `nowrap + ellipsis`，窄卡里
+   「金额读不出来的那笔不计入合计」被截成「金额读不出...」）。 */
+.moreRow { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; font-size: 13px; line-height: 1.6; color: var(--nm-text-2); min-width: 0; }
+.moreRow > span { min-width: 0; overflow-wrap: anywhere; }
+.moreRow > span:last-child { text-align: right; }
 .moreRowValue {
   display: inline-flex;
   align-items: center;
@@ -550,42 +700,41 @@
   min-width: 0;
   max-width: 100%;
 }
-.moreRowName { display: inline-flex; align-items: center; gap: var(--nm-dense-g2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.moreList { display: flex; flex-direction: column; gap: var(--nm-dense-g1); margin-top: var(--nm-dense-g2); min-width: 0; }
-/* 「年度之最」的 9 项：两列并排（单列会撑破 6 列卡的高度，最后两项被裁）。
-   窄卡下由容器查询退回单列（见文件末尾 @container 520px）。 */
-.extremesGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: var(--nm-dense-g4);
-  row-gap: var(--nm-dense-g1);
-}
-/* 两列里每项仍是「标签 ←→ 值」一行；值太长时省略而不是把列顶宽。 */
-.extremesGrid .moreRow > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.moreSub { margin-top: var(--nm-dense-g2); font-size: var(--nm-dense-fs-xs); line-height: 1.5; color: var(--nm-text-2); overflow-wrap: anywhere; }
-.moreEmpty { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); overflow-wrap: anywhere; }
+.moreRowName { display: inline-flex; align-items: center; gap: var(--nm-dense-g2); min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; }
+.moreList { display: flex; flex-direction: column; gap: var(--nm-dense-g4); margin-top: var(--nm-dense-g3); min-width: 0; }
+.moreSub { margin-top: 8px; font-size: 12px; line-height: 1.7; color: var(--nm-text-3); overflow-wrap: anywhere; }
+/* 口径说明里的强调：正文本身是弱色，强调项要提亮一档才有效果。 */
+.moreSub b { color: var(--nm-text-2); font-weight: 600; }
+.moreEmpty { font-size: 13px; line-height: 1.6; color: var(--nm-text-2); overflow-wrap: anywhere; }
 .moreBars { display: flex; align-items: flex-end; gap: var(--nm-dense-g2); height: 64px; margin-top: var(--nm-dense-g2); min-width: 0; }
 .moreBarCol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: var(--nm-dense-g2); height: 100%; justify-content: flex-end; }
 .moreBarFill { width: 100%; min-height: 2px; border-radius: var(--nm-dense-r) var(--nm-dense-r) 0 0; background: color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
 .moreBarFill[data-peak] { background: var(--nm-cyan); }
 .moreBarLabel { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); white-space: nowrap; }
-.portrait { grid-column: span 6; border-color: var(--nm-border); }
+/* 画像卡（2026-11-19 改为走画布）。
+   原先它自己写 `className={css.moreCard}` 绕过外壳 —— 没有 `data-canvas-id`，
+   于是**不参与画布布局**、留在文档流里撑满整行，把绝对定位的其它卡压住
+   （用户：「年度画像将后面的内容卡片挡住了」）。现在走 `MoreCard`。
+   `.portrait` 类保留给容器查询/兼容，但不再靠它定宽。 */
+.portrait { border-color: var(--nm-border); }
 .portraitText { margin: 0; font-size: var(--nm-dense-fs); line-height: 1.7; color: var(--nm-text-1); }
-/* 画像卡：左侧文字 + 右侧指标网格（2026-10-17 新增）。
-   原先只有一段文字，6 列宽的卡片右侧 60% 面积全空。
-   比例 1.15 : 1 会让文字被挤成 3 行（实测「口头禅是「好的」，说了 84 次」被截断），
-   改成 1.4 : 1 —— 文字有足够宽度，指标格仍放得下 2 列。 */
+/* 画像卡：文字 + 指标网格。
+   ⚠️ 2026-11-19：改成等宽瀑布流后每张卡只有约 300px 宽，原来的 1.4fr : 1fr
+   两列会把文字挤成 5–6 行、指标格只剩 90px。改为**单列上下排**（文字在上、指标在下），
+   与窄卡一致（原先只有 ≤520px 的容器查询才退单列，现在所有卡都是这个宽度）。 */
 .portraitBody {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--nm-dense-g4);
   align-items: start;
   min-height: 0;
 }
+/* 画像指标格：同样改成 auto-fit（2026-11-19）。
+   固定 2 列时每格约 130px，「口头禅是「好的」」这类值会被截断；auto-fit 让窄卡自动掉成 1 列。 */
 .portraitStats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 3px;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: var(--nm-dense-g2);
   min-width: 0;
 }
 .portraitStat {
@@ -595,11 +744,11 @@
   border: 0.5px solid var(--nm-border);
   border-radius: var(--nm-r-sm);
 }
-.portraitStatK { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
+.portraitStatK { font-size: 11px; color: var(--nm-text-3); overflow-wrap: anywhere; }
 .portraitStatV {
-  font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1);
+  font-size: 13px; font-weight: 600; color: var(--nm-text-1);
   font-variant-numeric: tabular-nums;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 /* 窄卡里退回单列（文字在上、指标在下）。 */
 @container (max-width: 520px) {
@@ -611,7 +760,7 @@
 .ratioLegend { display: flex; justify-content: space-between; gap: var(--nm-dense-g3); margin-top: var(--nm-dense-g1); font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); }
 .rhythmRow[data-weekend] { background: var(--nm-bg-hover); border-radius: var(--nm-r-xs, 4px); }
 .rhythmRow[data-weekend] .rhythmDow { color: var(--nm-text-1); font-weight: 700; }
-.rhythmConclusion { margin-top: var(--nm-dense-g2); font-size: var(--nm-dense-fs-sm); line-height: 1.5; color: var(--nm-text-2); }
+.rhythmConclusion { margin-top: 10px; font-size: 13px; line-height: 1.7; color: var(--nm-text-2); }
 .rhythmConclusion b { color: var(--nm-text-1); font-weight: 700; }
 
 /* ── 宽度自适应（2026-10-17 重做：4 档）────────────────────────────────────
@@ -702,8 +851,6 @@
      高度塌成一条线。改成固定 4px 高，保住"能看出疏密"这个唯一用途。 */
   .calCell { aspect-ratio: auto; height: 4px; }
   .calLegend .calCell { height: 9px; }
-  /* 「年度之最」两列在窄卡里每列只剩 ~90px，标签+值挤成一团 ⇒ 退回单列。 */
-  .extremesGrid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @container (max-width: 380px) {
@@ -737,14 +884,18 @@
 /* ── 「还有这些人」的一排小卡（头像 + 说明列）──────────────────────────────
    2026-09-30 补：这几个类原先**在样式里缺失**（容器又复用了不换行的 `.moreRow`），
    窄卡下 7 张芯片挤在一起互相压住。这里补齐并让它**放不下就换行**。 */
+/* 「还有这些人」的芯片网格（2026-11-19 第三次改）。
+ *
+ * 演进：`flex-wrap`（芯片互相压住）→ **固定 3 列**（每格约 250px，名字放得下）→
+ * **auto-fit**（2026-11-19）。3 列那版的前提是"卡片占 6 列≈750px"，而等宽瀑布流下
+ * 整张卡只有约 300px ⇒ 每格约 90px，名字被截成「a憨 2958...」「黑龙... 6067...」。
+ *
+ * 现在用 `auto-fit` + `minmax`：容器变窄就自动掉成 2 列 / 1 列，永远不会硬挤。
+ * 这就是用户说的「是在不行就自动换行」—— 让**列数随宽度自己变**，而不是固定列数硬塞。 */
 .hlRow {
   display: grid;
-  /* 2026-10-17：从 `flex-wrap` 改成**三列网格** —— 7 张芯片挤在一行只占 57px，
-     卡片 230px 高、下方 170px 全空（填充率 24%）。
-     两列时每格只有 ~180px，名字折行导致 4 行变 6 行、溢出 78px；
-     三列每格 ~250px，名字放得下，7 张排成 3 行刚好填满。 */
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--nm-dense-g2);
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: var(--nm-dense-g3);
   min-width: 0;
 }
 /* 汇总行：把 7 个"之最"压成一句人话，同时填满卡片下半截。 */
@@ -756,22 +907,12 @@
 }
 .hlSummary b { color: var(--nm-text-1); font-weight: 600; }
 .hlSummarySub { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); }
-.moreCell {
-  display: flex;
-  align-items: center;
-  gap: var(--nm-dense-g2);
-  min-width: 0;
-  max-width: 100%;
-  padding: 2px var(--nm-dense-g2);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  background: var(--nm-bg-0);
-}
-.moreInfo { display: flex; flex-direction: column; gap: 0; min-width: 0; }
-.moreLabel { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); white-space: nowrap; }
-.moreVal { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1); white-space: nowrap; }
-/* 芯片里的名字：长了就省略号，不许把芯片顶宽 */
-.moreCell .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ⚠️ 2026-11-19：这里原本又定义了一遍 `.moreCell` / `.moreInfo` / `.moreLabel` /
+   `.moreVal` / `.moreCell .name`（旧版，用 `white-space: nowrap` 强制单行）。
+   它与上面那组**重复定义**，后定义的覆盖前者 —— 于是"允许换行"的改进从来没生效过，
+   等宽瀑布流下每格只有约 140px，名字全被截成「a憨 2958...」。
+   已删除这一份，样式统一以上面那组为准。 */
 
 
 /* ── 窄卡统一换行（2026-09-30 用户："其他卡片中的内容也是一样，该换行换行"）──────────

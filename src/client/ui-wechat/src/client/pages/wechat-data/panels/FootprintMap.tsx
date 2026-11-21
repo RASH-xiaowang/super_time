@@ -237,9 +237,22 @@ export function buildFootprintTree(points: readonly MomentsGeoPoint[]): RegionNo
  * 渲染朋友圈足迹地图（中国分省热力）。
  * @param props.points - 已修正的 (lat, lng) 点；空数组时由调用方给空态，这里返回 null。
  * @param props.cities - 去重城市数，用于摘要文案。
+ * @param props.height - 地图画布高度（px），缺省用样式表的 220。
  * @returns 地图元素；无中国点时 null。
  */
-export function FootprintMap({ points, cities }: { points: readonly MomentsGeoPoint[]; cities: number }): React.JSX.Element | null {
+export function FootprintMap({ points, cities, height }: {
+  points: readonly MomentsGeoPoint[]
+  cities: number
+  /**
+   * 地图画布高度（px）。缺省沿用样式表里的 220。
+   *
+   * ⚠️ 这个值直接决定地图**看起来多大**，不只是"容器有多高"：
+   * `GeoEchartsMap` 给的是 `layoutSize: '100%'`，ECharts 按容器**短边**算地图尺寸。
+   * 所以容器 600×220 时地图只有 220 大小，两侧留大片空白 —— 宽度给再多都不会放大。
+   * 朋友圈洞察的画布卡是两列宽（约 600px），传 420 才让短边落在高度上、地图铺开。
+   */
+  height?: number
+}): React.JSX.Element | null {
   const tree = useMemo(() => buildFootprintTree(points), [points])
   if (points.length === 0) return null
 
@@ -252,7 +265,10 @@ export function FootprintMap({ points, cities }: { points: readonly MomentsGeoPo
         <span className={kitCss.textCaption}>{summary}</span>
         <span className={kitCss.textCaption}>滚轮缩放 · 拖拽平移 · 悬停看城市</span>
       </div>
-      <div className={css.footprintMapBox}>
+      <div
+        className={css.footprintMapBox}
+        style={height === undefined ? undefined : { height: `${String(height)}px`, minHeight: `${String(height)}px` }}
+      >
         <ChinaMap
           node={tree}
           /* 足迹地图只做展示：点省份不下钻（没有更细的底图），

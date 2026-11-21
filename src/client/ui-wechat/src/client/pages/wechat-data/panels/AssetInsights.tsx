@@ -12,7 +12,9 @@ import { useCallback } from 'react'
 import { apiGetAssetInsights } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
 import type { AssetInsightsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, LoadingState } from '../ui/kit.tsx'
+import { LoadingState } from '../ui/kit.tsx'
+import { CardCanvas } from './card-canvas.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './asset-insights.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
@@ -81,11 +83,15 @@ export function AssetInsightsPanel(): React.JSX.Element {
             <button type="button" className={css.refreshBtn} onClick={() => { void reload() }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
           </div>
 
-          {/* 只保留 2 张图（收藏类型 / 收藏年份），与收藏页的条目列表不重复。 */}
-          <div className={css.grid2}>
-            <Card
+          {/* 两张分布卡改用**等宽瀑布流画布**（2026-11-19，与「年度报告」同一套）。
+              旧写法是 `grid2` + 两卡 `fill` 满面板高：卡身靠 `flex: 1 1 0` 撑开、
+              列表在卡内滚动。画布下每张卡按内容取高，条目多少不再影响卡片高度，
+              也不会出现"两行数据却占满整屏"的拉伸。
+              KPI 条留在画布外 —— 它是横条，不参与摆放。 */}
+          <CardCanvas year={0} scope="asset-insights">
+            <CanvasCard
+              id="asset-types"
               title="收藏类型分布"
-              className={css.fillCard}
               extra={<span className={kitCss.textCaption}>{`${String(data.favorites.byType.length)} 类`}</span>}
             >
               {data.favorites.byType.length === 0 ? (
@@ -97,11 +103,11 @@ export function AssetInsightsPanel(): React.JSX.Element {
                   ))}
                 </div>
               )}
-            </Card>
+            </CanvasCard>
 
-            <Card
+            <CanvasCard
+              id="asset-years"
               title="收藏年份分布"
-              className={css.fillCard}
               extra={<span className={kitCss.textCaption}>{`${String(data.favorites.byYear.length)} 年`}</span>}
             >
               {data.favorites.byYear.length === 0 ? (
@@ -113,8 +119,8 @@ export function AssetInsightsPanel(): React.JSX.Element {
                   ))}
                 </div>
               )}
-            </Card>
-          </div>
+            </CanvasCard>
+          </CardCanvas>
         </>
       )}
     </div>

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiGetWordCloud, readRenderCache, writeRenderCache } from '../api.ts'
 import { openGlobalSearch } from './search-events.ts'
 import { Card, LoadingState } from '../ui/kit.tsx'
+import { CanvasCard } from './card-canvas-card.tsx'
 import { useWechatDataUpdated } from './hooks.tsx'
 import kitCss from '../ui/kit.module.css'
 import {
@@ -51,8 +52,27 @@ export interface WordCloudCardProps {
    * `flex: 1 1 auto` 拉到 592px ⇒ 舞台下方空出 170px（用户截图「下面没有内容」）。
    * 打开这个开关后，舞台高度改由**实测的卡片剩余高度**决定，撒点也按那个高度重算 ——
    * 词会铺满整张卡，而不是挤在顶上一条。
+   *
+   * ⚠️ **不能与 `canvasId` 同时用**：`fill` 靠「量卡片根高度」反推舞台高度，
+   * 而画布卡的高度又是 `CardCanvas` 量卡片 `offsetHeight` 得来的 —— 舞台决定卡高、
+   * 卡高又决定舞台高，循环依赖。画布场景一律改用显式 `height`。
    */
   fill?: boolean
+  /**
+   * 在「等宽瀑布流画布」里渲染时传这张卡的 id（2026-11-19）。
+   *
+   * 传了就换用 `CanvasCard` 外壳 —— 因为画布只认 `data-canvas-id` 的直接子元素，
+   * 叶子里再套一层普通 `Card` 会退回文档流、被绝对定位的邻卡压住。
+   * 此时**必须**同时给 `height`（见上面 `fill` 的说明）。
+   */
+  canvasId?: string
+  /**
+   * 画布卡的跨列数（只在给了 `canvasId` 时生效，默认 1）。
+   *
+   * 词云是唯一"越宽越好读"的图形：同样 120 个词，两列宽时字号能大一档、
+   * 排布也更接近圆形而不是一根竖条。窄屏下画布会自动收敛到容器列数，不会溢出。
+   */
+  canvasCols?: number
 }
 
 /**
@@ -60,7 +80,7 @@ export interface WordCloudCardProps {
  * @param props - 作用域与可选上限。
  * @returns 词云卡片元素。
  */
-export function WordCloudCard({ scope, username, year, title, limit, height, fill = false }: WordCloudCardProps): React.JSX.Element {
+export function WordCloudCard({ scope, username, year, title, limit, height, fill = false, canvasId, canvasCols }: WordCloudCardProps): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [stageW, setStageW] = useState(0)
   /** `fill` 模式下量到的舞台可用高度（0 = 还没量到，退回 `cloudStageHeight`）。 */
@@ -215,12 +235,12 @@ export function WordCloudCard({ scope, username, year, title, limit, height, fil
   const showEmpty = !loading && error === null && words.length === 0
   const heading = title ?? (scope === 'chat' ? '群聊热词' : scope === 'moments' ? '朋友圈热词' : '全部热词')
 
-  return (
-    <Card
-      title={heading}
-      extra={snap.scanned > 0 ? `${snap.scanned.toLocaleString('en-US')} 条正文` : undefined}
-      className={fill ? css.fillCard : undefined}
-    >
+  const extra = snap.scanned > 0 ? `${snap.scanned.toLocaleString('en-US')} 条正文` : undefined
+  /**
+   * 舞台。两种外壳（普通 `Card` / 画布 `CanvasCard`）共用同一份内容，
+   * 免得同一段 JSX 写两遍、日后改一处漏一处。
+   */
+  const stage = (
       <div
         ref={stageRef}
         className={css.cloud}
@@ -268,6 +288,19 @@ export function WordCloudCard({ scope, username, year, title, limit, height, fil
         </>
         )}
       </div>
-    </Card>
   )
+
+  // 画布里必须用 `CanvasCard` 外壳：画布只认 `data-canvas-id` 的直接子元素，
+  // 套一层普通 `Card` 会退回文档流、被绝对定位的邻卡压住。
+  if (canvasId !== undefined) {
+    return (
+      <CanvasCard
+        id={canvasId}
+        cols={canvasCols ?? 1}
+        title={heading}
+        extra={extra}
+      >{stage}</CanvasCard>
+    )
+  }
+  return <Card title={heading} extra={extra} className={fill ? css.fillCard : undefined}>{stage}</Card>
 }
