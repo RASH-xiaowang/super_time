@@ -385,10 +385,20 @@ export async function apiGetCalls(options?: { topPeers?: number; recentLimit?: n
 }
 /**
  * Fetch revoked messages.
- * @param options - Query options: limit.
+ *
+ * `fresh: true` 会先丢掉这条快照缓存再回源。撤回面板需要它：
+ * `cachedGet` 的口径是「先画旧值、后台复验」，而复验完成只会通知
+ * `subscribeSnapshot` 的订阅者 —— 分页列表没订阅，于是新撤回要等**下一次**数据事件
+ * 才会出现在界面上（实测延迟 10–40s，用户以为没实时生效）。
+ * @param options - Query options: limit/offset/q，以及 `fresh`（不发给后端）。
  * @returns RevokedSnapshot.
  */
-export async function apiGetRevoked(options?: { limit?: number; offset?: number; q?: string }): Promise<RevokedSnapshot> { return cachedGet('revoked:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getRevoked(options))) }
+export async function apiGetRevoked(options?: { limit?: number; offset?: number; q?: string; fresh?: boolean }): Promise<RevokedSnapshot> {
+  const query = { limit: options?.limit, offset: options?.offset, q: options?.q }
+  const key = 'revoked:' + JSON.stringify(query)
+  if (options?.fresh === true) snapshotDelete(key)
+  return cachedGet(key, async () => unwrap(await remote().getRevoked(query)))
+}
 /**
  * Fetch the emoticons list.
  * @param options - Query options: limit/offset.

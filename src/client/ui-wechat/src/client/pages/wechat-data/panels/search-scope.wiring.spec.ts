@@ -32,11 +32,11 @@ describe('搜索框：关键词交给服务端（不再「拉一批再本地过�
   /** 撤回面板特殊：它保留了一个 500 条分支，但只服务于「类型筛选」。 */
   it('Revoked.tsx：搜索走服务端分页，500 条只留给类型筛选', () => {
     const src = panel('Revoked.tsx')
-    // ① 分页请求带上关键词
-    expect(src).toMatch(/apiGetRevoked\(\{ limit, offset, \.\.\.kwOpt \}\)/)
+    // ① 分页请求带上关键词（首页额外带 `fresh` 绕过快照缓存，关键词照旧下推）
+    expect(src).toMatch(/apiGetRevoked\(\{ limit, offset, \.\.\.kwOpt/)
     // ② 「拉 500 条」只出现在 typeFilter 分支里（类型后端没有参数，只能本端筛；
     //    类型是有限枚举，不是自由文本，所以这个上限不会像关键字那样静默漏结果）
-    expect(src).toMatch(/if \(typeFilter\) \{[\s\S]*?apiGetRevoked\(\{ limit: 500, \.\.\.kwOpt \}\)/)
+    expect(src).toMatch(/if \(typeFilter\) \{[\s\S]*?apiGetRevoked\(\{ limit: 500, \.\.\.kwOpt/)
     // ③ 搜索不再触发「一次性拉 500 条」（旧的 `searching || typeFilter` 必须消失）
     expect(src).not.toMatch(/searching \|\| typeFilter/)
     // ④ 本地关键字过滤必须消失

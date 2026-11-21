@@ -17,6 +17,35 @@ import { RevokedContent } from './revoked-content.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 
 /**
+ * 空态：说清「为空」的三种可能，而不是只说"没有"。
+ *
+ * 抽成组件只为让 `RevokedPanel` 留在函数尺寸棘轮（250 行）以内。
+ * 最关键的是第二条 —— 微信撤回是**就地改写**，刚发出就撤回的消息可能在归档前已被抹掉。
+ */
+function RevokedLanding({ loading, onRefresh, onOpenSettings }: {
+  loading: boolean
+  onRefresh: () => void
+  onOpenSettings?: (section?: string) => void
+}): React.JSX.Element {
+  return (
+    <div className={css.rvLand}>
+      <div className={css.rvLandTitle}>暂无撤回消息记录</div>
+      <div className={css.rvLandDesc}>本页读的是本地归档：同步时先存一份原文，微信把消息改写成提示时原文仍在。为空通常是三种情况之一：</div>
+      <ul className={css.rvLandList}>
+        <li><b>本机确实没人撤回过</b> —— 那就没什么可看的</li>
+        <li><b>归档没赶上</b> —— 刚发出就撤回的消息，可能在归档前已被改写成提示</li>
+        <li><b>解密库还没同步</b> —— 去「设置 → 数据配置」重新解密后再回来刷新</li>
+      </ul>
+      <div className={css.rvLandActions}>
+        <button type="button" className={css.catBtn} data-active="true" onClick={onRefresh} disabled={loading}>刷新重读</button>
+        <button type="button" className={css.catBtn} onClick={() => { onOpenSettings?.('detect') }}>去数据配置</button>
+      </div>
+      <div className={kitCss.textMeta}>有数据时这里会按发送者/类型/时间列出每条撤回记录，可展开看原文，并给出「撤回最多」排行。</div>
+    </div>
+  )
+}
+
+/**
  * Render the revoked-messages panel.
  * @returns the revoked element tree.
  */
@@ -38,8 +67,19 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
 
   const pager = usePagedList<RevokedItem>({
     pageSize: 100,
+    /*
+     * 撤回要"刚发生就能看见"：默认 30s 的刷新节流太长，而每次查询本身很便宜
+     * （归档按分片签名跳过、提示行按目录签名缓存，真机一次十来毫秒）。
+     * 5s 足够让新撤回在两次同步节拍内出现，又不会把 SQLite 拖满。
+     */
+    refreshMinIntervalMs: 5_000,
     fetchPage: async (offset, limit) => {
-      const env = await apiGetRevoked({ limit, offset, ...kwOpt })
+      /*
+       * 第一页走 `fresh`：绕过「先画旧值、后台复验」的快照缓存。
+       * 那条路径的复验结果只通知 `subscribeSnapshot` 的订阅者，分页列表不订阅，
+       * 于是新撤回要等下一次数据事件才上屏（实测 10–40s）。翻页仍用缓存。
+       */
+      const env = await apiGetRevoked({ limit, offset, ...kwOpt, ...(offset === 0 ? { fresh: true } : {}) })
       // W3-11.4：「归档库还没建」与「没有撤回消息」分开说。
       setReadError(env.readError ?? '')
       return { items: env.items, total: env.total }
@@ -51,11 +91,12 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
       let cancelled = false
       setLoading(true)
       setError(null)
-      void apiGetRevoked({ limit: 500, ...kwOpt })
+      void apiGetRevoked({ limit: 500, ...kwOpt, fresh: true })
         .then((env) => {
           if (cancelled) return
           setItems(env.items)
           setTotal(env.total)
+          setReadError(env.readError ?? '')
         })
         .catch((e: unknown) => { if (!cancelled) setError((e as Error).message) })
         .finally(() => { if (!cancelled) setLoading(false) })
@@ -77,8 +118,8 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     setError(null)
     if (typeFilter) {
       setLoading(true)
-      void apiGetRevoked({ limit: 500, ...kwOpt })
-        .then((env) => { setItems(env.items); setTotal(env.total) })
+      void apiGetRevoked({ limit: 500, ...kwOpt, fresh: true })
+        .then((env) => { setItems(env.items); setTotal(env.total); setReadError(env.readError ?? '') })
         .catch((e: unknown) => { setError((e as Error).message) })
         .finally(() => { setLoading(false) })
     } else {
@@ -155,7 +196,7 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     <div className={css.panel}>
       <PanelHeader
         title="撤回"
-        desc="本机删除缓存 · 只读"
+        desc="本地归档 · 只读"
         actions={(
           <button type="button" className={css.catBtn} onClick={refresh} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
         )}
@@ -166,23 +207,11 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
       {readError && <div className={kitCss.error} role="alert">{readError}</div>}
       {!error && !readError && loading && items.length === 0 && <ListSkeleton rows={8} />}
       {!error && !readError && !loading && items.length === 0 && (
-        <div className={css.rvLand}>
-          <div className={css.rvLandTitle}>暂无撤回消息记录</div>
-          <div className={css.rvLandDesc}>
-            微信 4.x 起客户端才会在本机保留「删除缓存」，本页只读取这份缓存。
-            为空通常是三种情况之一：
-          </div>
-          <ul className={css.rvLandList}>
-            <li><b>本机确实没人撤回过</b> —— 那就没什么可看的</li>
-            <li><b>微信客户端没保留缓存</b> —— 4.x 之前的版本不写这份数据</li>
-            <li><b>解密库还没同步到最新</b> —— 去「设置 → 数据配置」重新解密后再回来刷新</li>
-          </ul>
-          <div className={css.rvLandActions}>
-            <button type="button" className={css.catBtn} data-active="true" onClick={refresh} disabled={loading}>刷新重读</button>
-            <button type="button" className={css.catBtn} onClick={() => { onOpenSettings?.('detect') }}>去数据配置</button>
-          </div>
-          <div className={kitCss.textMeta}>有数据时这里会按发送者/类型/时间列出每条撤回记录，可展开看原文，并给出「撤回最多」排行。</div>
-        </div>
+        <RevokedLanding
+          loading={loading}
+          onRefresh={refresh}
+          {...(onOpenSettings === undefined ? {} : { onOpenSettings })}
+        />
       )}
       {!error && items.length > 0 && (
         <>
