@@ -666,9 +666,36 @@ async function embedTexts(configOverrides, texts, opts = {}) {
   }
   const payload = await res.json();
   const data = Array.isArray(payload?.data) ? payload.data : [];
-  // 按 index 排序保证与输入顺序一致（部分厂商不保证返回顺序）。
-  const sorted = data.slice().sort((a, b) => Number(a?.index ?? 0) - Number(b?.index ?? 0));
-  return sorted.map((d) => (Array.isArray(d?.embedding) ? d.embedding : []));
+  /**
+   * 把返回的 `data[]` 映射回**输入顺序**。
+   *
+   * ## 为什么不能直接按 `index` 排序（2026-11-20 真机实测）
+   *
+   * 硅基流动（`Qwen/Qwen3-VL-Embedding-8B`）在一次 16 条的批量请求里返回的 `index` 是
+   * **循环编号**：`[0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7]`。照着排序（哪怕稳定排序）会把
+   * 第二组的 0 挪到第一组的 7 前面 —— **返回顺序被彻底打乱，向量与文本错配**。
+   * 这个错误完全静默：维度对、条数对、库也建成了，只有检索质量莫名下降。
+   *
+   * 所以只在「index 恰好是 0..n-1 的一个排列」时才按它排序（那才是厂商真的乱序返回）；
+   * 否则相信**返回顺序**（OpenAI 兼容端点的惯例就是按输入顺序）。
+   */
+  const indices = data.map((d) => Number(d?.index));
+  const isPermutation = data.length === list.length
+    && indices.every((v, i) => Number.isInteger(v) && v >= 0 && v < list.length)
+    && new Set(indices).size === list.length;
+  const ordered = isPermutation
+    ? data.slice().sort((a, b) => Number(a?.index ?? 0) - Number(b?.index ?? 0))
+    : data;
+  /**
+   * 条数不足必须**抛错**而不是静默少给：调用方（建索引）会按 `undefined` 跳过该条，
+   * 于是库里永远缺这几块向量、而状态仍报「就绪」—— 又是一次静默降级。
+   */
+  if (ordered.length !== list.length) {
+    throw new Error(
+      `embedding 返回条数与输入不一致（输入 ${String(list.length)}、返回 ${String(ordered.length)}）`,
+    );
+  }
+  return ordered.map((d) => (Array.isArray(d?.embedding) ? d.embedding : []));
 }
 
 /** 精排：返回按输入下标索引的分数数组，缺项按 0 分而不是抛错。 */
