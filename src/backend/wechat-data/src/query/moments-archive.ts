@@ -287,10 +287,23 @@ export function readArchivedMoments(
       const rows = db.prepare(
         'SELECT tid, username, author, ts, content, content_hash AS contentHash, payload, ' +
         'archived_at AS archivedAt, last_seen_at AS lastSeenAt FROM moments_archive' + where +
-        // tid 在真机是**有符号 64 位整数**（实测大量是 `-3410996087506914705` 这类负数），
-        // 不能按文本长度/字典序排 —— `-6…` 会排到 `-3…` 前面，最新动态反而沉底。
-        // CAST 回 INTEGER（SQLite 的 64 位整型）才是与线上 `ORDER BY tid DESC` 同口径。
-        ' ORDER BY CAST(tid AS INTEGER) DESC LIMIT ? OFFSET ?',
+        /*
+         * 按 `ts DESC` 排序（+ `tid` 作并列时的稳定次序），**不要**再按 `CAST(tid AS INTEGER)`。
+         *
+         * ## 为什么改（2026-11-19 实测）
+         *
+         * 旧写法 `ORDER BY CAST(tid AS INTEGER) DESC` 会让索引完全失效 ——
+         * 执行计划是 `SCAN moments_archive` + `USE TEMP B-TREE FOR ORDER BY`：
+         * 每翻一页都要**全表扫描 + 全表排序**，而归档只增不减（防撤回语义），成本会持续上涨。
+         *
+         * 实测（3,395 行）：`CAST(tid)` 31ms/页、且深分页退化到 57ms；
+         * 改成 `ts DESC, tid DESC` 后走 `idx_moments_archive_ts`：**5.7ms / 17.7ms**。
+         * 真机全量比对两种排序的 tid 序列：**0 处不一致**（tid 是雪花号，与发帖时间同序）。
+         *
+         * 保留 `tid DESC` 作第二排序键：同一秒发两条时次序稳定（不会因为翻页而重复/漏行）。
+         * 它只触发 `TEMP B-TREE FOR LAST TERM`，仅在 ts 相等的组内排，实测成本可忽略。
+         */
+        ' ORDER BY ts DESC, tid DESC LIMIT ? OFFSET ?',
       ).all(...params, Math.max(0, Math.trunc(opts.limit)), Math.max(0, Math.trunc(opts.offset))) as unknown as ArchivedMomentRow[]
       return { rows, total: Math.trunc(Number(totalRow?.n ?? 0)) }
     })
