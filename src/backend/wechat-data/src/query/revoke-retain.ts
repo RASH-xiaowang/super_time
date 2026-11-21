@@ -32,6 +32,7 @@ import { classifyRender, parseMessageContent, RENDER_LABEL, richPlaceholder, typ
 import { contactMeta } from './meta.ts'
 import { resolveSelfUsername } from '../config/resolve.ts'
 import { MD5_SEGMENT } from '../md5.ts'
+import { probeRowStates, scanSourceTips, stateKey } from './revoke-source-probe.ts'
 import type { MessageRich, RevokedItem, RevokedMedia, RevokedMediaKind } from '../types.ts'
 import { displayNameForUsername, messageIdentityIndex } from './message-identity.ts'
 
@@ -158,6 +159,18 @@ function ensureArchive (decryptedDir: string): string {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   withWritableDb(p, (db) => {
     db.exec(DDL)
+    /*
+     * 撤回列表要按 `local_type = 10000` 筛系统消息（52 万行里约 8 千行），
+     * 没有索引时每次打开面板都要全表扫一遍（真机实测 ~400ms）。
+     * 这条索引与内容无关、只加速筛选，`CREATE INDEX IF NOT EXISTS` 幂等。
+     *
+     * ⚠️ 必须 best-effort：在 364MB 表上建索引会短暂持有写锁，
+     * 若此刻另一个连接正在读归档（打开撤回面板），这里会 `database is locked`。
+     * 建索引失败不影响归档本身 —— 索引只是优化，下次启动会再试。
+     */
+    try {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_archived_msg_lt ON archived_msg(local_type)')
+    } catch { /* 建不了就算了，查询仍可用（只是慢） */ }
     // 旧归档库是 version 1（没有这两列）。`ALTER TABLE ADD COLUMN` 幂等性靠列探测，
     // 不用 try/catch 猜错误码（不同 SQLite 版本的报错文案不一致）。
     const cols = new Set((db.prepare('PRAGMA table_info(archived_msg)').all() as Array<{ name: string }>).map((r) => r.name))
@@ -384,7 +397,49 @@ function quotedName (s: string): string {
   const m = /[“"']([^”"'\n]{1,40})[”"'][^”"'\n]{0,24}?撤回了一条消息/.exec(s)
   const name = m?.[1]?.trim() ?? ''
   // 纯数字/版本号这类明显不是名字，直接放弃（宁可显示"（未知）"也不显示 "1.0"）
-  return /^[0-9.]+$/.test(name) ? '' : name
+  if (/^[0-9.]+$/.test(name)) return ''
+  /*
+   * **绝不能取 XML 属性值**（2026-11-19 真机回归）：
+   * 微信 4.x 的提示是 `<sysmsg type="revokemsg"><revokemsg><content>你撤回了一条消息</content>…`，
+   * `type="revokemsg"` 与 `撤回了一条消息` 之间只隔了 24 个字符以内 —— 上面那条正则
+   * 就把发送者取成了 **`revokemsg`**（真机列表里第一行的显示值）。
+   * 属性值一定带 `=`/`<`/`>` 的邻居，或本身是标签名，一律排除。
+   */
+  if (/[=<>]/.test(name) || /^(revokemsg|sysmsg|xml|version)$/i.test(name)) return ''
+  return name
+}
+
+/**
+ * 撤回提示里的**正文**（`<revokemsg><content>…</content>`）。
+ *
+ * 4.x 的提示不带 `<replacemsg>`，只有这个 `<content>`；发送者名就藏在里面
+ * （`"梦" 撤回了一条消息` / `你撤回了一条消息`）。
+ * @param tip - 已解码的提示内容。
+ * @returns `<content>` 的文本；没有该标签时返回空串。
+ */
+function tipContentOf (tip: string): string {
+  const m = /<content>\s*(?:<!\[CDATA\[)?([\s\S]{0,200}?)(?:\]\]>)?\s*<\/content>/i.exec(tip)
+  return m?.[1]?.replace(/<!\[CDATA\[|\]\]>/g, '').trim() ?? ''
+}
+
+/**
+ * 从提示里取发送者（三层兜底，顺序有讲究）。
+ *
+ * 1. `<content>` 里的正文（4.x 主流形态，最可靠）；
+ * 2. 纯文本 `"某某" 撤回了一条消息`；
+ * 3. XML 的 `<replacemsg>` / `<fromusername>`；最后才是任意位置的引号名。
+ *
+ * 「你/我 撤回了一条消息」= 自己撤回的，返回本人的显示名 —— 旧实现会把它当成"（未知）"，
+ * 用户就不知道这条是自己撤的。
+ * @param tip - 已解码的提示内容（可能带群前缀）。
+ * @param selfName - 本人的显示名（取不到时用「我」）。
+ * @returns 发送者显示名。
+ */
+function senderFromTipAny (tip: string, selfName: string): string {
+  const stripped = stripGroupPrefix(tip).trim()
+  const inner = tipContentOf(stripped) || tipContentOf(tip) || stripped
+  if (/^(你|我)\s*撤回了一条消息/.test(inner)) return selfName !== '' ? selfName : '我'
+  return senderFromTip(inner) || senderFromXmlTip(inner) || quotedName(stripped) || '（未知）'
 }
 
 /** 群聊消息前缀 `wxid_xxx: 正文` —— 展示时剥掉（对用户是噪声）。 */
@@ -639,11 +694,39 @@ function usernameFromXmlTip (tip: string): string {
   return from?.[1]?.trim() ?? ''
 }
 
+/** 列表项的一条「候选」：只记「哪里有撤回 + 时间」，内容与配对结果留到构造当前页时解析。 */
+interface RevokeCandidate {
+  /** 会话标识，等价于 `WechatSession.username`（形如 `message_0.db#Msg_<md5>`）。 */
+  talker: string
+  rowKey: number
+  /** 提示正文（已解码）。只有源库侧候选在这里就有值，归档侧留到按页解析。 */
+  tip: string
+  createTime: number
+  /** 来自「源库已改写成提示、归档仍是原文」这条路（真正防撤回成功的那些）。 */
+  fromSource: boolean
+}
+
 /**
- * 产出「撤回消息」列表：**识别提示 + 配对原文**，全部来自我们自己的归档库。
+ * 产出「撤回消息」列表：**识别提示 + 配对原文**，数据来自我们自己的归档库，
+ * 并用**源库当前状态**校验配对是否成立（2026-11-19 重做）。
  *
- * 配对判据：同一 `talker` 下、`row_key` 小于提示行的**最靠后那条**（同会话里紧挨在提示之前）。
- * 配不到就如实标注"原文未保留（撤回发生在归档开始之前）"——不编造。
+ * ## 为什么必须校验（真机实测的根因）
+ *
+ * 微信撤回是**就地改写**那一行：原文不再以任何形式留在库里。所以只有「在改写前存下过」
+ * 才能拿到原文。旧实现不管有没有存下，一律把「提示前一条」当作原文并标成"原文已保留" ——
+ * 真机 4,554 条提示里只有 208 条确实存到了原文，其余 4,346 条显示的都是**上一条不相干的消息**，
+ * 用户因此"看不到撤回的内容是啥"（内容根本不是被撤回的那条）。
+ *
+ * 现在按源库状态分三类：
+ *   · 源库该行已删除 / 已变成提示 ⇒ 归档里那份就是原文（**确认**）；
+ *   · 源库该行还是原样 ⇒ 它不是撤回原文，标为"原文未保留"（**不再冒充**）；
+ *   · 源库读不到 ⇒ 沿用旧配对，但标为「推定」，让用户自己判断。
+ *
+ * ## 另一类原文（旧实现完全漏掉）
+ *
+ * 「归档留着原文、源库已被改写成提示」的行——它们**不在**归档的提示行集合里
+ * （归档那行的内容还是原文），所以旧实现永远看不到它们。现在以**源库的提示行**为锚点
+ * 反查归档，把这类真正防撤回成功的记录也列出来。
  *
  * @param decryptedDir - 解密数据根。
  * @param limit - 上限（调用方已裁剪）。
@@ -661,6 +744,27 @@ export function queryRevokedRetained (
   // W3-11.4：归档库不存在 ≠ 没有撤回消息。归档由同步 tick 自动补，
   // 所以这里给出 readError（界面据此说「还没归档」，而不是「你没有撤回消息」）。
   if (!existsSync(p)) return { items: [], total: 0, readError: '撤回消息归档库还没建立（后台同步会自动补上）；若长时间为空，请检查「数据配置」是否完成解密' }
+  /*
+   * 打开/读取失败要与「没有撤回」分开报：上次异常退出会在库旁留未 checkpoint 的 `-wal`，
+   * 只读打开需要写 wal 索引 ⇒ 抛 `attempt to write a readonly database`。
+   * 旧代码让它冒泡、被上层 catch 吞成空列表，面板显示「暂无撤回消息」，用户以为防撤回失效。
+   */
+  try {
+    return readArchive(p, decryptedDir, limit, offset, q)
+  } catch (e) {
+    return {
+      items: [],
+      total: 0,
+      readError: '读取撤回归档失败（与「没有撤回消息」不同）：' + ((e as Error)?.message ?? String(e))
+        + '。常见原因是上次异常退出留下了未合并的 -wal；重启应用后再试即可。',
+    }
+  }
+}
+
+/** 真正读归档库（拆出来只为让上面那层能统一兜错）。 */
+function readArchive (
+  p: string, decryptedDir: string, limit: number, offset: number, q?: string,
+): { items: RetainedRevokeItem[]; total: number; readError?: string } {
   return withDb(p, (db) => {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='archived_msg'").get()
     if (has === undefined) return { items: [], total: 0, readError: '归档库缺少 archived_msg 表（可能解密不完整）：重新解密该库后即可' }
@@ -671,74 +775,184 @@ export function queryRevokedRetained (
       : "'' AS sender_username, 0 AS local_id, '' AS server_id"
     const kw = (q ?? '').trim().toLowerCase()
     const meta = contactMeta(decryptedDir)
-    const names = meta.names
-    const enterpriseNames = meta.enterpriseNames
+    const { names, enterpriseNames } = meta
     const displayToUser = displayNameLookups(names)
     const hashToUsername = messageIdentityIndex(decryptedDir).hashToUsername
     const selfUsername = resolveSelfUsername(decryptedDir)
-    const tips = db.prepare(
-      `SELECT talker, row_key AS k, create_time AS ct, content FROM archived_msg WHERE local_type = 10000 AND content LIKE ? ORDER BY create_time DESC, row_key DESC`,
-    ).all('%' + REVOKE_TIP + '%') as Array<{ talker: string; k: number; ct: number; content: string }>
-    /**
-     * 配对：同一会话里、rowid 紧挨在提示之前的**非系统**消息（`local_type <> 10000`）。
-     * 为什么排除系统消息：提示前一条本身也可能是"撤回了一条消息""拍了拍"等系统行，
-     * 直接取会配错原文（自测发现）。
+    const selfName = selfUsername === '' ? '' : displayNameForUsername(selfUsername, names)
+
+    /*
+     * 提示行**只取元数据**：content 留到构造当前页时再读。
+     *
+     * 真机实测：4,186 条提示逐条读 content + 逐条查"前一条" + 逐条查归档同一行，
+     * 合计 ~270ms，而分页每次刷新都要重算一遍。只取 talker/row_key/create_time
+     * 时这条查询 15ms —— 剩下的全是可以用「只对当前页做」来省掉的。
      */
+    const archiveTips = db.prepare(
+      `SELECT talker, row_key AS k, create_time AS ct FROM archived_msg WHERE local_type = 10000 AND content LIKE ?`,
+    ).all('%' + REVOKE_TIP + '%') as Array<{ talker: string; k: number; ct: number }>
+    const archiveTipKeys = new Set(archiveTips.map(t => stateKey(t.talker, Number(t.k))))
+    /* 配对：同一会话里紧挨在提示之前的**非系统**消息（提示前一条也可能是系统行）。 */
     const prevStmt = db.prepare(
-      `SELECT row_key AS rk, local_type, sender_id, content, ${metaSel} FROM archived_msg WHERE talker = ? AND row_key < ? AND local_type <> 10000 ORDER BY row_key DESC LIMIT 1`,
+      `SELECT row_key AS rk, local_type, content, ${metaSel} FROM archived_msg WHERE talker = ? AND row_key < ? AND local_type <> 10000 ORDER BY row_key DESC LIMIT 1`,
     )
+    /* ① 源库这一行现在是撤回提示、而归档里**没有**这条提示 ⇒ 归档那份是改写前的原文。 */
+    const archivedAt = db.prepare(
+      `SELECT local_type, content, ${metaSel} FROM archived_msg WHERE talker = ? AND row_key = ?`,
+    )
+    const sourceTips = scanSourceTips(decryptedDir)
+    const candidates: RevokeCandidate[] = []
+    for (const [talker, tipMap] of sourceTips) {
+      for (const [k, info] of tipMap) {
+        // 归档也是提示 ⇒ 归档晚于撤回，交给 ② 如实说明（否则同一条会被记两次）。
+        if (archiveTipKeys.has(stateKey(talker, k))) continue
+        candidates.push({ talker, rowKey: k, tip: info.text, createTime: info.ct, fromSource: true })
+      }
+    }
+    /** ② 归档里的提示行。 */
+    for (const t of archiveTips) {
+      candidates.push({ talker: t.talker, rowKey: Number(t.k), tip: '', createTime: Number(t.ct), fromSource: false })
+    }
+
+    /*
+     * 排序：**一律按时间倒序（最新在最前）**。
+     *
+     * ⚠️ 2026-11-19 修：一度改成「源库确认有原文的排最前面」，结果是新发生的撤回
+     * （还没配上原文）被压到 200 多条旧记录之后 —— 用户打开面板找刚撤回的那条，
+     * 翻遍首屏也看不到，体感就是"防撤回没实时生效"。撤回面板的第一语义是**时间线**，
+     * 不是"原文大全"；有原文的那些由 `status_label` 标明，扫一眼就能分辨。
+     */
+    candidates.sort((a, b) => b.createTime - a.createTime)
+    /**
+     * 没有关键词时只构造**当前页**；带关键词时必须全量匹配（用户主动搜索，慢一点可接受）。
+     */
+    const pageOnly = kw === ''
+    const toBuild = pageOnly ? candidates.slice(offset, offset + limit) : candidates
+
+    /*
+     * 只对**这一页**查「提示前一条」与「源库是否仍原样」。
+     * 4 千多条逐条查曾占 200ms 以上，而结果只影响当前页的措辞。
+     */
+    type Row = { local_type?: number; rk?: number; content?: unknown; sender_username?: string; local_id?: number; server_id?: string }
+    const prevOf = new Map<string, Row | undefined>()
+    const verifyWanted = new Map<string, Set<number>>()
+    for (const c of toBuild) {
+      if (c.fromSource) continue
+      const prev = prevStmt.get(c.talker, c.rowKey) as Row | undefined
+      prevOf.set(stateKey(c.talker, c.rowKey), prev)
+      if (prev?.rk === undefined) continue
+      const set = verifyWanted.get(c.talker) ?? new Set<number>()
+      set.add(Number(prev.rk))
+      verifyWanted.set(c.talker, set)
+    }
+    const pageStates = probeRowStates(decryptedDir, verifyWanted)
+
     const items: RetainedRevokeItem[] = []
-    for (const t of tips) {
-      const tip = decodeStored(toText(t.content))
-      const tipClean = stripGroupPrefix(tip).trim()
-      const sender = senderFromTip(tipClean) || senderFromXmlTip(tipClean) || quotedName(tip) || '（未知）'
-      const prev = prevStmt.get(t.talker, Number(t.k)) as {
-        local_type?: number
-        sender_id?: number
-        rk?: number
-        content?: string
-        sender_username?: string
-        local_id?: number
-        server_id?: string
-      } | undefined
-      const original = prev?.content === undefined ? '' : decodeStored(toText(prev.content))
-      const sessionUsername = sessionUsernameOfTalker(t.talker, hashToUsername)
+    for (const c of toBuild) {
+      const key = stateKey(c.talker, c.rowKey)
+      const row = archivedAt.get(c.talker, c.rowKey) as Row | undefined
+      let tip = c.tip
+      let origin: { raw: string; localType: number; senderUsername: string; localId: number; serverId: string; rowKey: number } | undefined
+      let confirmed = false
+      if (c.fromSource) {
+        /* ① 归档这一行留着原文（源库已把它改写成提示）。 */
+        const raw = row === undefined ? '' : decodeStored(toText(row.content))
+        if (Number(row?.local_type ?? 0) !== 10000 && raw !== '' && !raw.includes(REVOKE_TIP)) {
+          confirmed = true
+          origin = {
+            raw,
+            localType: Number(row?.local_type ?? 0),
+            senderUsername: String(row?.sender_username ?? ''),
+            localId: Number(row?.local_id ?? 0),
+            serverId: String(row?.server_id ?? ''),
+            rowKey: c.rowKey,
+          }
+        }
+      } else {
+        /* ② 归档里的提示：正文来自同一行，再由源库状态决定「前一条」算不算原文。 */
+        tip = row === undefined ? '' : decodeStored(toText(row.content))
+        const prev = prevOf.get(key)
+        const raw = prev?.content === undefined ? '' : decodeStored(toText(prev.content))
+        if (prev?.rk !== undefined && raw !== '') {
+          const st = pageStates.get(stateKey(c.talker, Number(prev.rk))) ?? 'unknown'
+          /*
+           * · 已删除 ⇒ 确认（就是被撤掉的那行）；
+           * · 已变成提示 ⇒ **这里不认**：原文由 ① 产出，再认一次会同一条记两次；
+           * · 仍原样 ⇒ 它不是原文，宁可不显示也不冒充；
+           * · 读不到 ⇒ 保留内容但标"推定"。
+           */
+          if (st === 'deleted') {
+            confirmed = true
+            origin = {
+              raw,
+              localType: Number(prev.local_type ?? 0),
+              senderUsername: String(prev.sender_username ?? ''),
+              localId: Number(prev.local_id ?? 0),
+              serverId: String(prev.server_id ?? ''),
+              rowKey: Number(prev.rk),
+            }
+          } else if (st === 'unknown') {
+            origin = {
+              raw,
+              localType: Number(prev.local_type ?? 0),
+              senderUsername: String(prev.sender_username ?? ''),
+              localId: Number(prev.local_id ?? 0),
+              serverId: String(prev.server_id ?? ''),
+              rowKey: Number(prev.rk),
+            }
+          }
+        }
+      }
+      const sessionUsername = sessionUsernameOfTalker(c.talker, hashToUsername)
       const sessionName = sessionUsername === '' ? '' : displayNameForUsername(sessionUsername, names)
       const enterpriseName = sessionUsername === '' ? undefined : enterpriseNames.get(sessionUsername)
       const isGroup = sessionUsername.endsWith('@chatroom') || stripGroupPrefix(tip) !== tip
-      // 发送者 username 的优先级：原文群前缀 → 归档 Name2Id → 提示里的 <fromusername>
-      // → 撤回提示显示名唯一匹配 → 私聊会话本身 / 自己。
-      const rawPrefixUser = original === '' ? '' : senderFromBody(original)
+      const tipClean = stripGroupPrefix(tip).trim()
+      const sender = senderFromTipAny(tipClean, selfName)
+      const rawPrefixUser = origin === undefined ? '' : senderFromBody(origin.raw)
       const tipUser = usernameFromXmlTip(tip)
       const byName = displayToUser.get(sender) ?? ''
       const senderUsername = rawPrefixUser
-        || (prev?.sender_username ?? '')
+        || (origin?.senderUsername ?? '')
         || tipUser
         || byName
         || (!isGroup && sender === sessionName ? sessionUsername : '')
-        || (!isGroup && sender === displayNameForUsername(selfUsername, names) ? selfUsername : '')
-      const described = original === '' ? undefined : describeRevokedOriginal(original, prev?.local_type ?? 0, isGroup)
-      const content = described?.content ?? '（原文未保留：撤回发生在归档开始之前）'
+        || (!isGroup && sender === selfName && selfName !== '' ? selfUsername : '')
+      const described = origin === undefined ? undefined : describeRevokedOriginal(origin.raw, origin.localType, isGroup)
+      /*
+       * 三种措辞必须能一眼分开，否则用户又会以为"防撤回没用"：
+       *   · 确认 ⇒ 直接给原文；
+       *   · 推定 ⇒ 给候选内容但**明说是推定**；
+       *   · 无原文 ⇒ 说清原因（微信就地改写，我们没赶上）。
+       */
+      const content = described === undefined
+        ? '（原文未保留：微信撤回时会**就地把这条消息改写成提示**，我们没能在改写之前把原文存下来）'
+        : confirmed
+          ? described.content
+          : `（以下是给「提示」配对到的前一条消息，**可能不是**被撤回的那条）\n${described.content}`
+      const statusLabel = described === undefined
+        ? '原文未保留'
+        : confirmed ? described.statusLabel : '原文未确认（推定）'
       const senderEnterpriseName = senderUsername === '' ? undefined : enterpriseNames.get(senderUsername)
       const item: RetainedRevokeItem = {
         sender,
         type_label: described?.typeLabel ?? '原文缺失',
         content,
-        create_time: Number(t.ct),
+        create_time: c.createTime,
         ...(senderUsername !== '' ? { sender_username: senderUsername } : {}),
         ...(sessionUsername !== '' ? { session_username: sessionUsername } : {}),
         ...(sessionName !== '' ? { session_name: sessionName } : {}),
         ...(enterpriseName !== undefined && enterpriseName.trim() !== '' ? { enterpriseName } : {}),
         ...(senderEnterpriseName !== undefined && senderEnterpriseName.trim() !== '' ? { senderEnterpriseName } : {}),
         session_is_group: isGroup,
-        ...(prev === undefined ? {} : {
+        ...(origin === undefined ? {} : {
           // v1 归档没有 local_id：真机上 local_id === rowid，回退 row_key。
-          local_id: Number(prev.local_id ?? 0) > 0 ? Number(prev.local_id) : Number(prev.rk ?? 0),
-          server_id: String(prev.server_id ?? ''),
-          raw_local_type: Number(prev.local_type ?? 0),
+          local_id: origin.localId > 0 ? origin.localId : origin.rowKey,
+          server_id: origin.serverId,
+          raw_local_type: origin.localType,
         }),
         retained: described !== undefined,
-        status_label: described?.statusLabel ?? '原文未保留',
+        status_label: statusLabel,
         ...(described?.media ? { media: described.media } : {}),
       }
       const searchable = [
@@ -751,6 +965,7 @@ export function queryRevokedRetained (
       if (kw !== '' && !searchable.includes(kw)) continue
       items.push(item)
     }
+    if (pageOnly) return { items, total: candidates.length }
     return { items: items.slice(offset, offset + limit), total: items.length }
   })
 }

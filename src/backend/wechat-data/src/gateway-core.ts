@@ -251,8 +251,27 @@ export abstract class GatewayCore extends TypertRemoteService {
       // 必须在 emit 之前发布：事件到达前端时，前端马上读修订就能读到同一拍。
       publishDataRevision(synced)
       const revision = readDataRevision()
+      /**
+       * 撤回原文归档（2026-09-29，用户选 C：全量归档）——**必须跑在 `emit` 之前**。
+       *
+       * ## 为什么挪到前面（2026-11-19 修）
+       *
+       * 原来的顺序是 `emit` → 归档。后果：面板被事件唤醒、立刻拉撤回列表时，
+       * 归档**还没写**，于是拉到的永远是**上一次**的状态 —— 用户看到「刚撤回的那条不在」，
+       * 以为防撤回没实时生效。真机复现：撤回后 3s 归档已入库，但面板要等下一拍才显示。
+       *
+       * ## 为什么不违背「不许挡在通知前面」这条纪律
+       *
+       * 那条纪律针对的是**首次全量归档**（19 万行 ≈2.4s）。现在归档库已建立、
+       * 按源库签名整库跳过：稳态实测 **1–2ms**，不影响聊天窗口的可见延迟。
+       * 真有大量新消息时（整库重解密后的首拍）会慢一些，但那时前端本来也要等解密完成。
+       * 失败只记日志，绝不阻断同步主流程。
+       */
+      if (synced.length > 0) {
+        try { archiveMessages(decrypted) } catch (e) { console.warn('[revoke-archive] 归档失败:', (e as Error).message) }
+      }
       // 事件先发（2026-10-18）：聊天窗口/会话列表的可见延迟只取决于这一行；
-      // 归档、SNS 预热、密钥解析都排在它后面，不许挡在通知前面。
+      // SNS 预热、密钥解析都排在它后面，不许挡在通知前面。
       try { ctx.emit('wechat-data/updated', revision) } catch { /* event best-effort */ }
       /**
        * 任务触发扫描（2026-10-19 提速）：新分片到达即刻扫，不再等 30s 定时器。
@@ -270,16 +289,9 @@ export abstract class GatewayCore extends TypertRemoteService {
         }, 0)
       }
       /**
-       * 撤回原文归档（2026-09-29，用户选 C：全量归档）——**挂在同步 tick 上，而不是读路径**。
-       *
-       * 为什么：`queryRevoked` 里那份"先归档再出列表"在首次会扫全部历史（19 万行 ≈2.4s），
-       * 压在"打开面板"上太慢。归档本身按**源库签名**整库跳过，空闲时只有几次 stat，
-       * 所以放在这里最合适；且**只在本 tick 真有分片变化时**才做，避免拖慢别的查询。
-       * 失败只记日志，绝不影响同步主流程。
+       * 撤回原文归档已在上面的 `emit` **之前**执行（见那段注释：面板要比归档晚看到，
+       * 否则刚撤回那条永远慢一拍）。这里不再重复调用。
        */
-      if (synced.length > 0) {
-        try { archiveMessages(decrypted) } catch (e) { console.warn('[revoke-archive] 归档失败:', (e as Error).message) }
-      }
       /**
        * **预热解码缓存**（2026-09-29「有的图片加载不出来」的治本一步）。
        *

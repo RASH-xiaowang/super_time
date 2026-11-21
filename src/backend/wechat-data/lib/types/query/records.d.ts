@@ -39,4 +39,5 @@ q?: string): {
         create_time: number;
     }>;
     total: number;
+    readError?: string;
 };

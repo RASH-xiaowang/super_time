@@ -359,7 +359,7 @@ export function queryRevoked(
   offset: number = 0,
   /** 关键词：匹配撤回内容 / 发送者 id。放在服务端，避免只搜到已加载那一页。 */
   q?: string,
-): { items: Array<{ sender: string; type_label: string; content: string; create_time: number }>; total: number } {
+): { items: Array<{ sender: string; type_label: string; content: string; create_time: number }>; total: number; readError?: string } {
   const cap = Math.min(limit ?? 200, 500)
   /**
    * ① **先归档、再从我们自己的库出列表**（2026-09-29 用户选 C：全量归档）。
@@ -373,6 +373,12 @@ export function queryRevoked(
     archiveMessages(decryptedDir)
     const retained = queryRevokedRetained(decryptedDir, cap, offset, q)
     if (retained.items.length > 0) return { items: retained.items, total: retained.total }
+    /*
+     * 空列表**且**带 readError ⇒ 这是「归档库读不到」，不是「没人撤回过」。
+     * 必须把 readError 透出去：否则面板会显示「暂无撤回消息记录」，
+     * 用户以为防撤回没生效，而真实原因（残留 WAL / 库损坏）被彻底藏起来。
+     */
+    if (retained.readError !== undefined) return { items: [], total: 0, readError: retained.readError }
   } catch { /* 归档/识别失败 → 退回下面的第三方插件路径，绝不让列表整体挂掉 */ }
   const loc = findRevokeTable(decryptedDir)
   /** 把插件缓存里的记录**幂等归档**到我们自己的库：原文只增不改，插件清缓存也不丢（见该模块注释）。 */
