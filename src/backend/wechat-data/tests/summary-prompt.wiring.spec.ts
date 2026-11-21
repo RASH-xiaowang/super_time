@@ -1,15 +1,23 @@
 /**
- * 总结 prompt 的篇幅与内容质量守卫。
+ * 总结 prompt 的内容质量守卫。
  *
  * ## 背景（2026-10-17）
  *
  * 改前两处各写一句 `'请总结 X 的微信聊天内容，输出简洁的中文要点：'`，问题有三：
- *   ① **没有篇幅约束** —— 模型有时写 3 行、有时写 800 字，用户不知道会得到什么；
- *   ② **没有结构要求** —— 输出是一坨散文，扫不出重点；
- *   ③ **没有防编造约束** —— 素材稀疏时模型会"合理推测"，而这是个人聊天记录。
- *
+ *   ① **没有结构要求** —— 输出是一坨散文，扫不出重点；
+ *   ② **没有防编造约束** —— 素材稀疏时模型会"合理推测"，而这是个人聊天记录。
  * 同时素材本身也有问题：`wxid_xxx:` 前缀原样喂给模型、机器人/广告挤掉真实对话。
- * 这里把「prompt 有篇幅约束」与「素材已清洗」两件事都钉住。
+ * 这里把「结构/诚实性」与「素材已清洗」两件事钉住。
+ *
+ * ## 篇幅：2026-11-18 起**不再限字数**
+ *
+ * 10-17 那一版给每种格式钉了硬区间（`150–250 字` / `400–700 字` / `6–10 条`）并要求
+ * `maxTokens >= 2048`。实测代价更大：素材多时被硬砍掉结论、素材少时被下界逼着凑字数
+ * （与「不编造」直接打架）。用户要求「不要限制总结的字数」，于是：
+ *   · prompt 里不出现字数区间，改成「按素材量决定」；
+ *   · 每日/周期保留既有 2048 token 预算；桥接层省略参数仍默认 2048；
+ *   · Webhook 推送不再截断正文。
+ * 下面分别钉住提示词、既有输出预算与推送行为 —— 它们最容易在某次「顺手加个上限」时被加回来。
  * @vitest-environment node
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -29,24 +37,43 @@ function findRoot(start: string): string {
 }
 const ROOT = findRoot(HERE)
 const BACKEND = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
-const prompt = readFileSync(join(BACKEND, 'query', 'summary-prompt.ts'), 'utf8')
-const collect = readFileSync(join(BACKEND, 'query', 'daily-summary.ts'), 'utf8')
-const remotes = readFileSync(join(BACKEND, 'remotes', 'summaryrec.ts'), 'utf8')
 
-describe('总结 prompt：篇幅与结构必须明确', () => {
-  it('四种格式各有**明确字数区间**（不是"简洁"这种模糊词）', () => {
-    // 每种格式都要有「数字–数字 字」或「数字–数字 条」的区间
-    const ranges = [...prompt.matchAll(/range: '(\d+)[–-](\d+) (字|条)/g)]
-    expect(ranges.length, '四种格式的字数区间没写全').toBe(4)
-    for (const m of ranges) {
-      const lo = Number(m[1])
-      const hi = Number(m[2])
-      const unit = m[3]
-      expect(hi, `区间 ${m[1]}–${m[2]} 上下界反了`).toBeGreaterThan(lo)
-      // 「字」的下界要够大（少于 100 字等于没约束）；「条」的下界至少 4 条
-      if (unit === '字') expect(lo, `区间 ${m[1]}–${m[2]} 字下界太小`).toBeGreaterThanOrEqual(100)
-      else expect(lo, `区间 ${m[1]}–${m[2]} 条下界太小`).toBeGreaterThanOrEqual(4)
+/**
+ * 去注释后再断言。
+ *
+ * 必要而非洁癖：这几个文件的**头注释里专门记着旧写法**（「此前是 `150–250 字`」、
+ * 「过去这里是 `maxTokens: 1024`」），裸词断言会把它们当成违规命中 —— 本文件第一版
+ * 就被自己的注释骗红过一次。仓库里 `outbound-site-coverage.spec.ts` 的 `codeOf()` 同理。
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
+const prompt = stripComments(readFileSync(join(BACKEND, 'query', 'summary-prompt.ts'), 'utf8'))
+const collect = readFileSync(join(BACKEND, 'query', 'daily-summary.ts'), 'utf8')
+const remotes = stripComments(readFileSync(join(BACKEND, 'remotes', 'summaryrec.ts'), 'utf8'))
+const taskRemotes = stripComments(readFileSync(join(BACKEND, 'remotes', 'summary.ts'), 'utf8'))
+const webhook = stripComments(readFileSync(join(BACKEND, 'query', 'summary-webhook.ts'), 'utf8'))
+
+describe('总结 prompt：篇幅不限，但结构与诚实性必须明确', () => {
+  it('四种格式都不写字数区间（篇幅交给素材量决定）', () => {
+    const ranges = [...prompt.matchAll(/range:\s*'[^']*'/g)]
+    expect(ranges, '还在写死字数区间').toHaveLength(0)
+    // 防空转：区间形状（数字–数字 字/条）在 prompt 文件里也不该出现。
+    expect(prompt, 'prompt 里还有「N–M 字」这类硬上限').not.toMatch(/\d+\s*[–-]\s*\d+\s*(字|条)/)
+  })
+
+  it('篇幅的判据是「按素材量决定」，并且明确禁止凑长度与漏信息', () => {
+    expect(prompt, '缺少「按素材量决定篇幅」').toContain('按素材量决定')
+    expect(prompt, '没禁止为凑长度重复/铺垫').toContain('不要为了凑长度')
+    expect(prompt, '没禁止漏掉重要信息').toContain('漏掉重要信息')
+  })
+
+  it('structure 仍然逐格式给全（去掉的只是字数，不是结构）', () => {
+    for (const fmt of ['brief', 'detailed', 'bullets', 'story']) {
+      expect(prompt, `缺少 ${fmt} 的 shape`).toContain(`${fmt}: {`)
     }
+    expect((prompt.match(/shape: '/g) ?? []).length, '四种格式的结构要求没写全').toBe(4)
   })
 
   it('prompt 里必须写清「只写素材里有的，不推测不编造」', () => {
@@ -58,25 +85,34 @@ describe('总结 prompt：篇幅与结构必须明确', () => {
     expect(prompt, '缺少"素材不足就直说"的出口').toContain('没有值得总结的对话')
   })
 
-  it('prompt 里要带上素材规模（让模型知道该写多长）', () => {
+  it('prompt 里要带上素材规模（模型据此判断该写多长）', () => {
     expect(prompt).toContain('素材规模')
     expect(prompt).toMatch(/stats\.total/)
     expect(prompt).toMatch(/stats\.sessions/)
   })
 
-  it('两条生成链路都走同一个 prompt 构造器（不许各写一句）', () => {
-    const calls = [...remotes.matchAll(/buildSummaryPrompt\(/g)]
-    expect(calls.length, '每日与周期应各调一次 buildSummaryPrompt').toBeGreaterThanOrEqual(2)
+  it('三条生成链路都走同一个 prompt 构造器（不许各写一句）', () => {
+    // 每日 + 周期
+    expect([...remotes.matchAll(/buildSummaryPrompt\(/g)].length, '每日与周期应各调一次 buildSummaryPrompt')
+      .toBeGreaterThanOrEqual(2)
+    // 定时任务：2026-11-18 起也走同一条（此前自带一份含「3-5 句话以内」的格式表）
+    expect(taskRemotes, '定时任务没走共用构造器').toContain('buildSummaryPrompt({')
+    expect(taskRemotes, '定时任务还留着手写的格式表').not.toMatch(/3-5 句话以内/)
     // 反例：不许再出现手写的「请总结 … 输出简洁的中文要点」
     expect(remotes, '还有手写的旧 prompt').not.toMatch(/'请总结 ' \+/)
   })
 
-  it('maxTokens 要够写「详细」格式（400–700 字 ≈ 1000+ tokens）', () => {
-    const tokens = [...remotes.matchAll(/maxTokens: (\d+)/g)].map((m) => Number(m[1]))
-    expect(tokens.length).toBeGreaterThanOrEqual(2)
-    for (const t of tokens) {
-      expect(t, `maxTokens=${String(t)} 太小，写不下 700 字`).toBeGreaterThanOrEqual(2048)
-    }
+  it('每日/周期预算保持既有 2048；省略参数不代表无限输出', () => {
+    const caps = [...remotes.matchAll(/maxTokens:\s*(\d+)/g)].map(m => Number(m[1]))
+    expect(caps.filter(n => n === 2048)).toHaveLength(2)
+    const bridge = readFileSync(join(ROOT, 'src', 'backend', 'llm-bridge.js'), 'utf8')
+    expect(bridge).toContain('max_tokens: opts.maxTokens ?? 2048')
+  })
+
+  it('Webhook 推送不截断正文（长总结照原样发）', () => {
+    expect(webhook, '推送还在截断正文').not.toMatch(/SUMMARY_WEBHOOK_MESSAGE_MAX/)
+    expect(webhook, '推送还在 slice 正文').not.toMatch(/message\.slice\(/)
+    expect(webhook, '结果里还留着 truncated 字段').not.toContain('truncated')
   })
 })
 

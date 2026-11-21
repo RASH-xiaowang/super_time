@@ -57,4 +57,17 @@ describe('定时任务的 prompt 作用域', () => {
     expect(prompt).toContain('全部会话 的 全部成员')
   })
 
+  it('篇幅要求是「按素材量决定」，且不出现任何字数区间', () => {
+    for (const format of ['brief', 'detailed', 'bullets', 'story'] as const) {
+      const prompt = buildSummaryPrompt({
+        from: '2026-11-17',
+        to: '2026-11-17',
+        lines,
+        stats: { total: 2, sessions: 1, messages: 2 },
+        format,
+      })
+      expect(prompt, format).toContain('按素材量决定')
+      expect(prompt, `${format} 里还有字数区间`).not.toMatch(/\d+\s*[–-]\s*\d+\s*(字|条)/)
+    }
+  })
 })
