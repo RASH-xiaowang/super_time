@@ -531,6 +531,50 @@ export function knownSessionCatalog(
   return out
 }
 
+/**
+ * 「索引代次」的 meta 键（2026-11-19）。
+ *
+ * 全量重建会 `DROP TABLE message_meta` 再重建，rowid 从 1 重新分配 —— 同一个 rowid
+ * 指向的是**完全不同的消息**。而消息域向量表以 `fts_rowid` 为键（`vectors.fts_rowid`），
+ * 于是重建之后旧向量与新索引**错位**：`searchDense` 用旧向量去 `JOIN message_meta`，
+ * 会静默返回"分数正常但内容不是它"的消息。这比"搜不到"更糟 —— 用户无法自证。
+ *
+ * 这个键在每次全量重建时写入一个**必然变化**的值，向量侧把它记进 `src_epoch`；
+ * 读路径一比就知道该不该信这份向量。老索引没有这个键（返回空串），此时按"无法判定"
+ * 处理 —— 与改前行为一致，不会因为新增这一项而让存量用户突然全部失效。
+ */
+export const INDEX_EPOCH_KEY = 'index_epoch'
+
+/**
+ * 生成新一代次。用「毫秒时间 + 行数 + 随机段」而不是单纯 `Date.now()`：
+ * 同一秒内两次重建（测试里很常见）也必须得到不同值，否则错配检测形同虚设。
+ * @param rows - 本次重建后的行数（只为让人读日志时能对上）。
+ * @returns 新代次字符串。
+ */
+export function nextIndexEpoch(rows: number): string {
+  return String(Date.now()) + '-' + String(rows) + '-' + Math.random().toString(36).slice(2, 8)
+}
+
+/**
+ * 读当前索引代次。
+ *
+ * 只读一次 `meta`（1 行），用于与向量库里的 `src_epoch` 比较。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 代次；索引不存在或老索引没有该键时返回空串。
+ */
+export function readIndexEpoch(decryptedDir: string): string {
+  const p = searchIndexPath(decryptedDir)
+  if (!existsSync(p)) return ''
+  try {
+    return withDb(p, (db) => {
+      const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(INDEX_EPOCH_KEY) as { value?: string } | undefined
+      return String(row?.value ?? '')
+    })
+  } catch {
+    return ''
+  }
+}
+
 export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; rows: number; built_at: string | null; ready: boolean } {
   const p = searchIndexPath(decryptedDir)
   if (!existsSync(p)) return { exists: false, rows: 0, built_at: null, ready: false }

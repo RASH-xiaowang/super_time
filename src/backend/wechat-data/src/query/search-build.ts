@@ -11,7 +11,8 @@ import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
-import { EnsureIndexResult, INDEX_SCHEMA_VERSION, REFRESHED_KEY, SHARD_WM_PREFIX, bigramTokens, decodeCell, ensureMetaIndexes, getSearchIndexFreshness, getSearchIndexStatus, indexReady, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, readWatermarks, searchIndexBatch, searchIndexPath } from './search-scaffold.ts'
+import { EnsureIndexResult, INDEX_EPOCH_KEY, INDEX_SCHEMA_VERSION, REFRESHED_KEY, SHARD_WM_PREFIX, bigramTokens, decodeCell, ensureMetaIndexes, getSearchIndexFreshness, getSearchIndexStatus, indexReady, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, nextIndexEpoch, readWatermarks, searchIndexBatch, searchIndexPath } from './search-scaffold.ts'
+import { resetMessageVectorIndex } from './retrieval/vector-reset.ts'
 import { searchIndexMessages } from './search-query.ts'
 import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
 import { fmtDateTimeSec } from '../format.ts'
@@ -812,6 +813,8 @@ export async function runBuildSearchIndex(
     const builtAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt)
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION)
+    // 索引代次：与索引本体同一次提交写入（重建会重排 rowid，向量侧靠它发现错位）。
+    db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(INDEX_EPOCH_KEY, nextIndexEpoch(total))
     // 水位线与 refreshed_ms 和索引本体同一次提交：否则「新索引 + 旧水位线」的中间态
     // 会让下一次增量把整个分片重读一遍（重复入索引）。
     const insKv = db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)')
@@ -822,6 +825,8 @@ export async function runBuildSearchIndex(
     // 尽快自包含 —— 否则「只拷 wechat_search.db、不拷 -wal」的拷贝路径会静默拿到上一代索引
     // （dirs.ts 的 bootstrap 正是拷主库、跳过 -wal/-shm）。
     try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } catch { /* 有并发读者时 checkpoint 失败，忽略 */ }
+    // 作废消息域向量：重建重排了 rowid 而向量表以 fts_rowid 为键，不作废会"旧向量配新正文"（静默答错）。
+    try { if (!resetMessageVectorIndex(decryptedDir)) console.warn('[search-index] 向量索引作废失败：下次构建向量时按代次重算') } catch (e) { console.warn('[search-index] 向量作废异常：' + (e instanceof Error ? e.message : String(e))) }
     const result: BuildResult = { status: 'ok', rows: total, built_at: builtAt, elapsed_ms: Date.now() - started }
     if (skippedCount > 0) result.message = `已跳过 ${skippedCount} 个不可读分片：${skipped.join('; ')}`
     return result
