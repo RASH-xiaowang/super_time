@@ -29,7 +29,7 @@ const FONT_MANIFEST = join(ROOT, 'scripts', 'font-assets.json')
 const SOURCE_ONLY = process.argv.includes('--source-only')
 const PACKAGED_ONLY = process.argv.includes('--packaged')
 
-const SOURCE_ROOTS = ['src', 'website', 'tools', 'wechat', 'assets', 'docs/architecture']
+const SOURCE_ROOTS = ['src', 'apps/website', 'tools', 'apps/license-studio', 'wechat', 'assets', 'docs/architecture']
 const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.css', '.html', '.htm', '.svg', '.py', '.json'])
 const FONT_EXT = new Set(['.ttf', '.ttc', '.otf', '.otc', '.woff', '.woff2', '.eot', '.fon', '.pfb', '.pfa'])
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.tmp-e2e', 'working', 'ui-dist.bak'])

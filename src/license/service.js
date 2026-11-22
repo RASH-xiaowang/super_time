@@ -310,6 +310,8 @@ const FEATURE_METHODS = {
     'setTaskInfoStatus',
   ],
   'message-list': [
+    // Explicit sends reuse the existing insert/resend feature, not a new license bit.
+    'sendAgentDraft', 'sendAgentProposal',
     'batchDeleteMessageListRecords', 'batchResendMessageListRecords',
     'deleteMessageListRule', 'getMessageListWebhookInfo', 'ingestMessageListWebhook',
     'insertMessageListRecord', 'listMessageListRecords', 'listMessageListRules',
@@ -330,6 +332,9 @@ const FEATURE_METHODS = {
     'saveSummaryTask', 'suggestKbLinks', 'summarizeKbFile', 'toggleSummaryTask',
   ],
   'ai-reply': [
+    // Teammate controls and memory belong to the existing AI reply capability.
+    'getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory',
+    'addAgentPromise', 'setAgentProposalStatus',
     'deleteAiReplyReservations', 'getChatAiReplyDefaultWebhook', 'getChatAiReplyState',
     'getChatAiReplyTrace',
     'listEnabledChatAiReplyStates', 'regenerateChatAiReplyRecord',

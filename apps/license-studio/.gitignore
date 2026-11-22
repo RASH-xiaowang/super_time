@@ -1,0 +1,13 @@
+# Build outputs and local test artifacts
+/build/
+/out/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+*.log
+*.user
+.vs/

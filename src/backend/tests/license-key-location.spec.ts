@@ -104,7 +104,7 @@ describe('签发私钥的位置（P3-10）', () => {
     const consumers = [
       'scripts/license-issue.js',
       'scripts/license-keygen.js',
-      'tools/license-studio/main.js',
+      'apps/license-studio/engine.js',
     ]
     expect(consumers.length, '消费者清单是空的 ⇒ 这条恒真').toBe(3)
     for (const f of consumers) {

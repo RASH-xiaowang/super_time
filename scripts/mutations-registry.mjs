@@ -256,7 +256,7 @@ const MUTATIONS_BATCH12 = [
     // 2026-11-16（AI 回复记录重新生成 / 专用清理 +2 → 236）：第二十二次跟。
     // 2026-11-18（AI 回复过程留痕 `getChatAiReplyTrace` → 237）：第二十三次跟。
     // 2026-11-18（移除本地 ONNX 决策模型、改为 LLM 消息分析：8 → 1 → 230）：第二十四次跟。
-    from: '230 个 Remote 方法）',
+    from: '238 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -266,7 +266,7 @@ const MUTATIONS_BATCH12 = [
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
     // 2026-10-19（任务信息页签 +1 → 39）、2026-10-30（新增页签 → 41）；
     // 退役一个可见入口后（→ 40）：锚点跟着真源走。
-    from: '可路由页签共 **40**（其余 23 项',
+    from: '可路由页签共 **41**（其余 23 项',
     to: '可路由页签共 **32**（其余 23 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },

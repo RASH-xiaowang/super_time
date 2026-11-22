@@ -106,3 +106,25 @@ describe('License 功能授权目录', () => {
     expect(service.authorizeCall(legacy, 'createBackup').ok, '旧证的基础位越权开放了备份功能').toBe(false)
   })
 })
+
+
+describe('Agent methods reuse existing feature boundaries', () => {
+  const controls = ['getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory', 'addAgentPromise', 'setAgentProposalStatus']
+  const sends = ['sendAgentDraft', 'sendAgentProposal']
+  function status(feature: string) {
+    return { state: 'licensed', payload: { features: ['wechat-data', feature], featureSchemaVersion: features.FEATURE_SCHEMA_VERSION } }
+  }
+  it('maps control and memory to AI reply, explicit send to message-list; never base access', () => {
+    for (const method of controls) {
+      expect(service.METHOD_FEATURE[method]).toBe('ai-reply')
+      expect(service.authorizeCall(status('ai-reply'), method).ok).toBe(true)
+      expect(service.authorizeCall(status('message-list'), method).ok).toBe(false)
+    }
+    for (const method of sends) {
+      expect(service.METHOD_FEATURE[method]).toBe('message-list')
+      expect(service.authorizeCall(status('message-list'), method).ok).toBe(true)
+      expect(service.authorizeCall(status('ai-reply'), method).ok).toBe(false)
+    }
+    for (const method of [...controls, ...sends]) expect(service.authorizeCall(status('chats'), method).ok).toBe(false)
+  })
+})

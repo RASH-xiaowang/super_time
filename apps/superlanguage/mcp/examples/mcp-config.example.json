@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "supertime": {
+      "command": "python",
+      "args": [
+        "C:\\path\\to\\repo\\mcp\\supertime_mcp.py"
+      ],
+      "env": {
+        "SUPERTIME_CONFIG_DIR": "C:\\path\\to\\repo\\build",
+        "SUPERTIME_API_TIMEOUT_SECONDS": "15",
+        "SUPERTIME_MCP_LOG": "WARNING"
+      }
+    }
+  }
+}

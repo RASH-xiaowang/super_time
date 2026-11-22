@@ -9,7 +9,7 @@
 |---|---|---|
 | `audit-remote-types.mjs` | 双向校验后端 `@Remote` 方法与前端 `WechatRemote` 镜像的类型、参数与返回值 | `npm run audit:remote-types`（CI） |
 | `remote-files.json` | 由 `scripts/sync-remote-files.mjs` 自动推导的网关类与前端接口文件清单 | `npm run sync:remote-files` |
-| `LicenseStudio.cmd` | Windows 下启动许可签发 GUI 的快捷入口 | 双击或命令行运行 |
+| `LicenseStudio.cmd` | Windows 下启动 Win32 许可签发台的快捷入口 | 双击或命令行运行 |
 
 ## 子目录
 
@@ -17,12 +17,11 @@
 |---|---|---|
 | `daily-push/` | 按需生成真实 Electron 面板截图与产品海报 | 成品不再入库；截图写入被忽略的临时目录，不得提交含真实用户数据的截图 |
 | `laya/` | 已移除：本地 ONNX 决策模型（2026-11-18 改为对话模型分析，见 `src/backend/wechat-data/src/query/analysis/`） | — |
-| `license-studio/` | 本机许可证签发 Electron GUI | 按中文业务模块勾选 27 项开放功能；由 `npm run license-studio` 启动；私钥不得进入仓库 |
 | `visual-audit/` | 真实 Electron + CDP 的面板视觉采集脚本 | 需要真实数据与 Playwright；用法见 `tools/visual-audit/README.md` |
 
 ## 授权签发台
 
-启动方式：`npm run license-studio`，或双击 `tools/LicenseStudio.cmd`。
+签发台是 Win32 原生应用，源码位于 `apps/license-studio/`（界面为原生窗口；签名与载荷仍复用仓库根的 `src/license` 与 `scripts/license-key-path`，由 `engine.js` 调用）。首次使用或源码变更后先运行 `apps\license-studio\build.bat`。启动方式：`npm run license-studio`，或双击 `tools/LicenseStudio.cmd`。
 
 - 功能目录由 `src/license/features.js` 统一维护，签发台、设置页和后台拦截共用，避免界面与校验逻辑各维护一份。
 - 开放功能按「基础 / 数据浏览 / 智能能力 / 交付与维护」分组，界面只显示中文名称和说明；英文功能 ID 仅写入许可证，供程序兼容使用。

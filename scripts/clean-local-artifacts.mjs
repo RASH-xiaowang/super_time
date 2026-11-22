@@ -12,7 +12,7 @@ const GENERATED_PATHS = [
   'ci-evidence',
   'docs/architecture/__pycache__',
   'src/backend/wechat-data/lib/tsconfig.tsbuildinfo',
-  'website/tests/smoke.log',
+  'apps/website/tests/smoke.log',
 ]
 
 // These names were accidentally produced by shell redirection / arithmetic snippets.

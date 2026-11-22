@@ -70,6 +70,7 @@ const PHONE_KEEP: readonly WechatTab[] = [
  * 而理由本身是给下一个人看的 —— 没有理由的移除看起来就像漏了。
  */
 const PHONE_HIDDEN: Readonly<Record<string, string>> = Object.freeze({
+  agentdesk: 'AI 队友的 8 个 Remote 仅允许桌面 IPC，普通及 fullAccess HTTP 均拒绝；手机不提供该入口',
   oplog: '审计长表：手机上横向溢出 104 处（640px 表格塞进 556px 视口），且翻查审计本就是坐在电脑前做的事',
   // 2026-10-19：任务信息的价值在「配置 + 触发回调」，而写侧（建/改/删/扫描/回调投递）
   // 与旧「聊天素材收集任务」同为仅桌面端方法（见 `backend/http-remote-policy.js` 的 B/D 族）。

@@ -1,0 +1,68 @@
+# Runtime data and local backups
+queue.db*
+api-token.txt*
+api-port.txt*
+api-enabled.txt*
+api-listen.txt*
+send-timeout.txt*
+shortcut-tip.txt*
+api-*.txt.bak*
+api-*.txt.old*
+api-*.txt.orig*
+api-*.txt.rej*
+api-*.txt.save*
+api-*.txt.tmp*
+api-*.txt~
+resource-spool/
+instance.lock
+*.log
+*.log.1
+*.dmp
+
+# Local automation and probe output
+run-send.txt
+run-send.png
+run-search.txt
+run-search.png
+log-region*.png
+/tools/**/*.png
+/tools/**/*.jpg
+/tools/**/*.jpeg
+/tools/**/*.bmp
+/tools/**/*.webp
+
+# Generated builds and test output
+/build/
+/out/
+/artifacts/
+/tests/.tmp/
+__pycache__/
+*.py[cod]
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+Feather.exe
+SuperLanguage.exe
+
+# Release artifacts and external binary archive
+/dist/
+/_archive/
+
+# Secrets and signing material
+*.pfx
+*.p12
+*.pem
+*.key
+.env
+.env.*
+
+# Editor and OS metadata
+.vs/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini

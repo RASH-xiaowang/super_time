@@ -1,20 +1,13 @@
 @echo off
 setlocal
-set "ELECTRON_RUN_AS_NODE="
-set "TOOLS_DIR=%~dp0"
-set "ROOT=%TOOLS_DIR%.."
+set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
-set "ELECTRON=%ROOT%\node_modules\electron\dist\electron.exe"
-set "APP_DIR=%TOOLS_DIR%license-studio"
-if not exist "%ELECTRON%" (
-  echo [ERROR] Electron not found: %ELECTRON%
+set "EXE=%ROOT%\apps\license-studio\build\LicenseStudio.exe"
+if not exist "%EXE%" (
+  echo [ERROR] 未找到 Win32 签发台: %EXE%
+  echo 请先运行: %ROOT%\apps\license-studio\build.bat
   pause
   exit /b 1
 )
-if not exist "%APP_DIR%\main.js" (
-  echo [ERROR] App not found: %APP_DIR%\main.js
-  pause
-  exit /b 1
-)
-start "License Studio" "%ELECTRON%" "%APP_DIR%"
+start "License Studio" "%EXE%"
 endlocal

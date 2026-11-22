@@ -87,7 +87,7 @@
     "epipe:smoke": "node scripts/epipe-smoke.js",
     "pack": "npm run build:all && electron-builder --dir --config electron-builder.test.config.js",
     "dist": "npm run build:all && electron-builder --win nsis",
-    "license-studio": "electron tools/license-studio",
+    "license-studio": "node apps/license-studio/launch.js",
     "license-keygen": "node scripts/license-keygen.js",
     "license-issue": "node scripts/license-issue.js",
     "license-smoke": "node scripts/license-smoke.js",

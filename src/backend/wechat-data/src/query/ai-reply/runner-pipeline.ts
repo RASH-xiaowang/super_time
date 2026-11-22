@@ -114,14 +114,12 @@ interface SegmentProblem {
 function segmentProblemOf(
   segments: ChatAiReplySegmentSnapshot[],
 ): SegmentProblem | null {
-  for (const segment of segments) {
-    if (segment.status === 'dispatching' || segment.status === 'sent_unconfirmed') {
-      return {
-        index: segment.segmentIndex,
-        uncertain: true,
-        error: segment.error ?? '消息已进入投递但结果无法确认，请人工核对后处理',
-      }
-    }
+  // Uncertain delivery takes precedence over ordinary failures; preserve the first segment.
+  const uncertain = segments.find(segment => segment.status === 'dispatching' || segment.status === 'sent_unconfirmed')
+  if (uncertain !== undefined) return {
+    index: uncertain.segmentIndex,
+    uncertain: true,
+    error: uncertain.error ?? '消息已进入投递但结果无法确认，请人工核对后处理',
   }
   const failed = segments.find((segment) => segment.status === 'failed')
   return failed === undefined

@@ -365,8 +365,8 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         provider: useProvider,
         model: useModel,
         messages: [userMsg],
+        // 不传 maxTokens：篇幅由 prompt 里「按素材量决定」那条控制，不在这里硬截。
         system: '你是微信聊天总结助手。严格按用户给出的篇幅与结构要求输出中文总结，只依据素材内容，不推测不编造。',
-        maxTokens: 2048,
       }
       let summary = ''
       try {
@@ -442,7 +442,7 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       const [gated] = rc.privacyGate('period_summary', { sessions, messages: count }, [prompt])
       const userMsg = createUserMessage({ content: [{ type: 'text', text: gated ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
       const assembler = new BlockAssembler()
-      const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信聊天总结助手。严格按用户给出的篇幅与结构要求输出中文总结，只依据素材内容，不推测不编造。', maxTokens: 2048 }
+      const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信聊天总结助手。严格按用户给出的篇幅与结构要求输出中文总结，只依据素材内容，不推测不编造。' }
       let summary = ''
       try { for await (const chunk of llm.stream(opts)) assembler.push(chunk); summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim() } catch (e) { summary = 'LLM 调用失败: ' + (e as Error).message }
       const finalSummary = summary || (lines.length > 0 ? '模型未返回内容。\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '') : '（该周期没有可用的文本消息）')

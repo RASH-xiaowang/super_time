@@ -1,15 +1,15 @@
 name: Pages
 
-# 把 website/ 发布成 GitHub Pages，作为安装包的下载落地页。
+# 把 apps/website/ 发布成 GitHub Pages，作为安装包的下载落地页。
 #
-# 只监听 website/ 的改动：这个工作流与代码无关，改后端代码时不该重跑一遍部署。
+# 只监听 apps/website/ 的改动：这个工作流与代码无关，改后端代码时不该重跑一遍部署。
 # 注意：`paths` 过滤一旦写错（比如漏了 workflow 自己）就会出现「改了工作流但不生效」
 # 的死角，所以这里把工作流文件本身也列进去。
 on:
   push:
     branches: [main]
     paths:
-      - 'website/**'
+      - 'apps/website/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -56,9 +56,9 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # 上传的是 website/ 的**内容**（index.html 落在站点根），不是 website 这一层目录。
+      # 上传的是 apps/website/ 的**内容**（index.html 落在站点根），不是 apps/website 这一层目录。
       #
-      # ⚠️ 不能直接 `path: website`：那会把 `website/tests/`（`smoke.js` 冒烟脚本，
+      # ⚠️ 不能直接 `path: apps/website`：那会把 `apps/website/tests/`（`smoke.js` 冒烟脚本，
       # 内含本机绝对路径 `D:/super-time-wechat/...`）一并发布到公网站点，
       # 于是 `https://<user>.github.io/<repo>/tests/smoke.js` 可被任何人下载。
       # 这里先把要发布的文件挑进一个干净目录，再上传它 —— 站点根仍是 index.html。
@@ -67,7 +67,7 @@ jobs:
         run: |
           mkdir -p _site
           # 只发布站点真正需要的静态资源；tests/ 是开发期冒烟脚本，不属于站点。
-          rsync -a --exclude 'tests/' website/ _site/
+          rsync -a --exclude 'tests/' apps/website/ _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:

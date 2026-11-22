@@ -15,9 +15,9 @@
  * `maxTokens >= 2048`。实测代价更大：素材多时被硬砍掉结论、素材少时被下界逼着凑字数
  * （与「不编造」直接打架）。用户要求「不要限制总结的字数」，于是：
  *   · prompt 里不出现字数区间，改成「按素材量决定」；
- *   · 每日/周期保留既有 2048 token 预算；桥接层省略参数仍默认 2048；
+ *   · 三处生成调用都不传 `maxTokens`；
  *   · Webhook 推送不再截断正文。
- * 下面分别钉住提示词、既有输出预算与推送行为 —— 它们最容易在某次「顺手加个上限」时被加回来。
+ * 下面把这三条钉住 —— 它们最容易在某次「顺手加个上限」时被加回来。
  * @vitest-environment node
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -102,11 +102,13 @@ describe('总结 prompt：篇幅不限，但结构与诚实性必须明确', () 
     expect(remotes, '还有手写的旧 prompt').not.toMatch(/'请总结 ' \+/)
   })
 
-  it('每日/周期预算保持既有 2048；省略参数不代表无限输出', () => {
-    const caps = [...remotes.matchAll(/maxTokens:\s*(\d+)/g)].map(m => Number(m[1]))
-    expect(caps.filter(n => n === 2048)).toHaveLength(2)
-    const bridge = readFileSync(join(ROOT, 'src', 'backend', 'llm-bridge.js'), 'utf8')
-    expect(bridge).toContain('max_tokens: opts.maxTokens ?? 2048')
+  it('三处生成调用都不传 maxTokens（不再硬截输出）', () => {
+    for (const [name, src] of [['summaryrec', remotes], ['summary', taskRemotes]] as const) {
+      const caps = [...src.matchAll(/maxTokens:\s*(\d+)/g)].map((m) => Number(m[1]))
+      // 推荐回复有自己独立的预算（与总结无关），只拦总结调用上的。
+      const summaryCaps = caps.filter((n) => n === 1024 || n === 2048)
+      expect(summaryCaps, `${name} 里还有总结用的 maxTokens 硬上限`).toHaveLength(0)
+    }
   })
 
   it('Webhook 推送不截断正文（长总结照原样发）', () => {

@@ -4,15 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Super Time · 本机微信数据工作台</title>
-<meta name="description" content="Super Time 是面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：提供会话与媒体回看、混合检索、带引用问答、知识库、微信原生 OCR、洞察和消息触发自动化。AI 与外部投递均为可选配置。">
+<meta name="description" content="Super Time 是面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：会话与媒体回看、检索与分析、带引用问答、知识库、微信原生 OCR、洞察和消息触发。公开可下载版本为 1.2.1；本机产品版本 1.4.1 尚未作为 GitHub Release 发布。AI 与外部投递均为可选配置。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Super Time">
 <meta property="og:title" content="Super Time · 本机微信数据工作台">
-<meta property="og:description" content="面向 Windows 10/11 x64 的微信 4.x 本机数据工作台：会话检索、带引用问答、知识库、原生 OCR、洞察与消息触发自动化。">
+<meta property="og:description" content="面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台。公开可下载版本 1.2.1；产品版本 1.4.1 尚未公开发布。">
 <meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#04050a">
 <!-- Remote API 方法数以 docs/API.md 为准。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23070a13'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%2322d3ee' stroke-width='4'/%3E%3Cpath d='M32 18v15l9 6' fill='none' stroke='%23a78bfa' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<script>
+/* 仅在可运动画时先隐藏 .rv，避免无 JS / 减弱动画用户看到空白首页 */
+(function(){
+  try{
+    if (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.documentElement.classList.add("js-animating");
+    }
+  }catch (e) {}
+})();
+</script>
 <style>
 /* ==========================================================================
    Super Time · 官网
@@ -144,9 +154,10 @@ h1,h2,h3,h4,h5,p,li{overflow-wrap:break-word}
 }
 .ico svg{width:22px;height:22px;stroke:#a9e9ff;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 
-/* ---------- 滚动揭示 ---------- */
-.rv{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0ms)}
-.rv.in{opacity:1;transform:none}
+/* ---------- 滚动揭示：默认可见，仅 js-animating 时先隐藏 ---------- */
+.rv{opacity:1;transform:none}
+.js-animating .rv{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0ms)}
+.js-animating .rv.in{opacity:1;transform:none}
 
 /* ---------- 导航 ---------- */
 .nav{
@@ -791,6 +802,89 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   html{scroll-behavior:auto;scroll-padding-top:84px}
   .rv{opacity:1;transform:none}
 }
+
+/* ==========================================================================
+   界面更新：下载区层次、双版本说明、响应式与可读性
+   ========================================================================== */
+.hero-kicker{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.hero-kicker .chip{letter-spacing:.04em}
+.chip-muted{color:var(--txt-3);border-style:dashed}
+.chip .ver-em{color:#c9f6ff;font-weight:650;letter-spacing:.02em}
+
+/* 英雄区略收紧，避免大屏只剩光效 */
+.hero{padding:clamp(96px,10vw,136px) 0 clamp(48px,6vw,80px)}
+.hero h1{max-width:16ch}
+.hero .lead{max-width:38em}
+
+.band{position:relative;z-index:2}
+
+/* 指标带改为定性事实，避免过时数字 */
+.stats{align-items:stretch}
+.stat b{font-variant-numeric:normal}
+
+/* 下载 / 版本卡 */
+.release-band{padding:36px 0 8px}
+.release-card{
+  display:block;
+  padding:0;
+  overflow:hidden;
+}
+.release-card::after{right:-6%;top:-70%;width:520px;height:520px}
+.release-shell{position:relative;z-index:1;display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:0;align-items:stretch}
+.release-versions{display:flex;flex-direction:column;justify-content:center;gap:20px;padding:26px 24px;background:linear-gradient(180deg,rgba(34,211,238,.08),rgba(139,92,246,.07));border-right:1px solid var(--line)}
+.ver-block{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.ver-label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-3);font-weight:650}
+/* 覆盖旧的小号徽章尺寸，但保留公开版渐变胶囊；产品版用虚线胶囊以示未发布 */
+.release-versions .release-ver{
+  font-size:13px;padding:6px 12px;letter-spacing:.06em;font-weight:700;
+}
+.product-ver{
+  display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;
+  border:1px dashed rgba(167,139,250,.5);background:transparent;
+  color:#ddd6fe;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.06em;
+}
+.ver-block time,.ver-note{font-size:12.5px;color:var(--txt-3);line-height:1.5;max-width:18em}
+.release-copy{padding:26px 28px 24px}
+.release-copy h2{margin:0 0 10px;font-size:clamp(20px,2.4vw,28px);line-height:1.25;font-weight:720;letter-spacing:-.02em}
+.release-copy > p{margin:0;color:var(--txt-2);font-size:14.8px;max-width:58em}
+.release-copy > p b{color:var(--txt);font-weight:650}
+.release-asset{margin:18px 0 0;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:rgba(7,10,19,.55)}
+.asset-name{font-family:var(--mono);font-size:13.5px;color:#d7f7ff;word-break:break-all}
+.asset-meta{margin-top:4px;font-size:12.5px;color:var(--txt-3)}
+.asset-sha{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-start}
+.sha-label{flex:0 0 auto;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-3);padding-top:2px}
+.asset-sha code{font-family:var(--mono);font-size:12px;line-height:1.55;color:#c9f6ff;overflow-wrap:anywhere;word-break:break-all}
+.release-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:18px}
+.release-actions .release-link{margin-left:2px}
+
+/* 配套工具 */
+.companions{margin-top:36px;padding:22px 24px;border:1px solid var(--line);border-radius:18px;background:rgba(10,14,25,.55)}
+.companions h3{margin:0;font-size:18px;font-weight:680}
+.companions > p{margin:8px 0 0;color:var(--txt-2);font-size:14.5px}
+.comp-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.comp-grid article{padding:16px 16px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(14,19,33,.5)}
+.comp-grid h4{margin:0;font-size:15.5px;font-weight:670}
+.comp-grid p{margin:8px 0 0;color:var(--txt-2);font-size:13.8px}
+
+/* 版本 FAQ 强调 */
+.faq .q.version-q button{color:#e9edff}
+
+@media (max-width:820px){
+  .release-shell{grid-template-columns:minmax(0,1fr)}
+  .release-versions{flex-direction:row;flex-wrap:wrap;gap:22px 32px;border-right:0;border-bottom:1px solid var(--line);padding:20px 18px}
+  .release-copy{padding:20px 18px 18px}
+  .comp-grid{grid-template-columns:1fr}
+  .hero h1{max-width:none}
+}
+@media (max-width:480px){
+  .asset-sha code{font-size:11px}
+  .companions{padding:16px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .js-animating .rv{opacity:1;transform:none;transition:none}
+}
+
 </style>
 </head>
 <body>
@@ -821,12 +915,13 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <a href="#solutions">适用场景</a>
       <a href="#scenarios">场景示例</a>
       <a href="#tech">技术架构</a>
+      <a href="#release">下载</a>
       <a href="#about">适用边界</a>
     </nav>
     <div class="nav-act">
-      <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
+      <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe" data-download="public-1.2.1">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
-        获取桌面版
+        下载 1.2.1
       </a>
       <button class="burger" id="burger" aria-label="打开菜单" aria-expanded="false"><span></span><span></span><span></span></button>
     </div>
@@ -841,8 +936,9 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <a href="#solutions">适用场景</a>
   <a href="#scenarios">场景示例</a>
   <a href="#tech">技术架构</a>
+  <a href="#release">下载</a>
   <a href="#about">适用边界</a>
-  <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">获取桌面版</a>
+  <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe" data-download="public-1.2.1">下载 1.2.1</a>
 </div>
 
 <!-- ============ HERO ============ -->
@@ -854,7 +950,11 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
   <div class="wrap">
     <div class="hero-grid">
       <div>
-        <span class="chip rv"><span class="dot"></span>v1.1.3 · Windows x64 · 本机解析 · AI 可选</span>
+        <div class="hero-kicker rv">
+          <span class="chip"><span class="dot"></span>公开可下载 <span class="ver-em">v1.2.1</span></span>
+          <span class="chip chip-muted">产品版本 1.4.1 尚未作为 Release 发布</span>
+          <span class="chip">Windows x64 · 本机解析 · AI 可选</span>
+        </div>
         <h1 class="rv" style="--d:80ms">
           <span class="line">把本机微信数据</span>
           <span class="line grad-txt">变成可检索的工作台</span>
@@ -862,12 +962,13 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <p class="lead rv" style="--d:160ms">
           Super Time 面向 <b>Windows 10/11 x64 上的微信 4.x</b>，读取你拥有合法访问权的本机数据目录，
           提供会话与媒体回看、混合检索、<span class="typed" id="typed">可检索、可追溯、可引用</span> 的问答、
-          知识库、微信原生 OCR、洞察和消息触发任务。AI 与外部投递均为可选配置，不登录微信，也不需要账号密码。
+          知识库、微信原生 OCR、洞察和消息触发任务。仓库中另有配套的 Win32 发送端 SuperLanguage，以及 Win32 授权签发台；两者都不随公开安装包分发。
+          AI 与外部投递均为可选配置，不登录微信，也不需要账号密码。
         </p>
         <div class="hero-cta rv" style="--d:240ms">
-          <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
+          <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe" data-download="public-1.2.1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
-            获取桌面版
+            下载公开版 1.2.1
           </a>
           <a class="btn btn-ghost" href="#about">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>
@@ -875,8 +976,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           </a>
         </div>
         <div class="hero-facts rv" style="--d:320ms">
-          <span class="chip"><b>234</b> 个 Remote 方法</span>
-          <span class="chip"><b>8</b> 个消息触发通道</span>
+          <span class="chip">微信 4.x 工作台</span>
+          <span class="chip">本机检索与分析</span>
           <span class="chip">Windows 10/11 x64</span>
           <span class="chip">无需微信账号密码</span>
         </div>
@@ -936,9 +1037,9 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 <div class="band">
   <div class="wrap">
     <div class="stats">
-      <div class="stat rv"><b data-count="234">0</b><span>Remote 方法</span><em>API SURFACE</em></div>
-      <div class="stat rv" style="--d:90ms"><b data-count="8">0</b><span>消息触发通道</span><em>WEBHOOK + RPA</em></div>
-      <div class="stat rv" style="--d:180ms"><b>本机存储</b><span>解析 / 索引 / 派生数据</span><em>ON DEVICE</em></div>
+      <div class="stat rv"><b>微信 4.x</b><span>Windows 桌面工作台</span><em>WECHAT 4.X</em></div>
+      <div class="stat rv" style="--d:90ms"><b>本机优先</b><span>解析 / 索引 / 检索</span><em>ON DEVICE</em></div>
+      <div class="stat rv" style="--d:180ms"><b>消息触发</b><span>Webhook 与 RPA 通道</span><em>OPT-IN DELIVERY</em></div>
       <div class="stat rv" style="--d:270ms"><b>AI 可选</b><span>模型与外部投递</span><em>OPT-IN</em></div>
     </div>
   </div>
@@ -948,24 +1049,43 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
 <section class="release-band" id="release" aria-labelledby="releaseTitle">
   <div class="wrap">
     <div class="release-card rv">
-      <div class="release-meta">
-        <span class="release-ver">v1.1.3</span>
-        <time datetime="2026-11-05">2026.11.05</time>
-      </div>
-      <div class="release-copy">
-        <h2 id="releaseTitle">v1.1.3 · Windows x64 桌面版</h2>
-        <p>当前版本提供 234 个 Remote 方法、8 个消息触发通道，并整合会话与媒体回看、带引用问答、知识库、微信原生 OCR 与消息列表。安装包与逐版本说明见 GitHub Release。</p>
-        <div class="release-points">
-          <span><b>Windows x64</b> 桌面安装包</span>
-          <span><b>234</b> 个 Remote 方法</span>
-          <span><b>8</b> 个触发通道</span>
-          <span><b>AI</b> 可选配置</span>
+      <div class="release-shell">
+        <div class="release-versions">
+          <div class="ver-block public">
+            <span class="ver-label">公开可下载版本</span>
+            <span class="release-ver">v1.2.1</span>
+            <time datetime="2026-11-16">发布于 2026.11.16</time>
+          </div>
+          <div class="ver-block product">
+            <span class="ver-label">本机产品版本</span>
+            <span class="product-ver">1.4.1</span>
+            <span class="ver-note">已在本机仓库中，尚未出现在公开 Releases</span>
+          </div>
+        </div>
+        <div class="release-copy">
+          <h2 id="releaseTitle">公开最新桌面安装包 · Super Time 1.2.1</h2>
+          <p>当前可从 GitHub Releases 下载的最新安装包是 <b>Super-Time-Setup-1.2.1.exe</b>（Windows 10/11 x64）。本机仓库中的产品版本为 <b>1.4.1</b>，但尚未作为公开 Release 发布，因此下载按钮指向已发布的 1.2.1，而不是未发布的 1.4.1。历史版本仍可在 Releases 页获取。</p>
+          <div class="release-asset">
+            <div class="asset-name" id="setupFileName">Super-Time-Setup-1.2.1.exe</div>
+            <div class="asset-meta">Windows 10/11 x64 · 约 187.5 MiB（196,556,509 字节）</div>
+            <div class="asset-sha">
+              <span class="sha-label">SHA256</span>
+              <code id="setupSha">3be2415a7d6778768044c8f86e21eb66b3999ee791e4fa1f64176f2164109d7e</code>
+            </div>
+          </div>
+          <div class="release-actions">
+            <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe" data-download="public-1.2.1">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+              下载 1.2.1 安装包
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.2.1">查看 1.2.1 发布说明</a>
+            <a class="release-link" href="https://github.com/RASH-xiaowang/super_time/releases">
+              所有历史版本
+              <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+            </a>
+          </div>
         </div>
       </div>
-      <a class="release-link" href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.1.3">
-        查看发布说明
-        <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-      </a>
     </div>
   </div>
 </section>
@@ -1024,8 +1144,8 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
         <div class="num">06</div>
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h9M4 12h6M4 18h5"/><path d="m15 5 4 4-4 4"/><path d="m15 11 4 4-4 4"/></svg></div>
         <h3>新消息进入可追溯的任务链</h3>
-        <p>任务中心只检查创建或启用之后的新消息，命中后写入触发记录并投递到 8 个触发通道（含 Webhook）；消息列表保留回复与投递状态。可选 AI 回复默认关闭，需要另行部署 Feather 兼容发送端。</p>
-        <div class="tags"><i>8 个触发通道</i><i>消息列表</i><i>Feather 可选</i></div>
+        <p>任务中心只检查创建或启用之后的新消息，命中后写入触发记录并投递到外部通道（含 Webhook 与 RPA）；消息列表保留回复与投递状态。可选 AI 回复默认关闭，需要另行部署兼容发送端。仓库中提供 Win32 配套执行端 SuperLanguage，不随公开安装包分发。</p>
+        <div class="tags"><i>Webhook / RPA</i><i>消息列表</i><i>SuperLanguage 可选</i></div>
       </div>
     </div>
   </div>
@@ -1177,7 +1297,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
             <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>触发条件</b>：指定会话、群成员与关键词；群聊可选仅匹配 @我，不回扫历史消息</span></li>
             <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>8 个触发通道</b>：Webhook、八爪鱼开放 API / MCP、影刀、UiPath、阿里云、来也、实在；其中四个厂商通道标记为实验性</span></li>
             <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>消息列表</b>：保存任务问候、手动与入站记录、附件和投递状态；失败可按规则重投，触发原文与图片引用留在本机台账</span></li>
-            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>可选 AI 回复</b>：默认关闭、仅单聊，依赖额外部署的 Feather 兼容发送端；生成正文先写入消息列表，再由你配置的下游投递</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>可选 AI 回复</b>：默认关闭、仅单聊，依赖额外部署的兼容发送端（仓库中提供 Win32 配套执行端 SuperLanguage）；生成正文先写入消息列表，再由你配置的下游投递</span></li>
           </ul>
         </div>
         <div class="visual">
@@ -1185,7 +1305,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           <div class="flowmap">
             <div class="row"><span class="node hot">新消息</span><span class="arw">→</span><span class="node">对象 / @我</span><span class="arw">→</span><span class="node">关键词命中</span><span class="arw">→</span><span class="node v">触发记录</span></div>
             <div class="row"><span class="arw">↓ 隐私闸 · 显式参数映射 · 消息列表台账</span></div>
-            <div class="row"><span class="node hot">Webhook / RPA</span><span class="arw">或</span><span class="node">消息列表</span><span class="arw">→</span><span class="node v">Feather 可选</span></div>
+            <div class="row"><span class="node hot">Webhook / RPA</span><span class="arw">或</span><span class="node">消息列表</span><span class="arw">→</span><span class="node v">SuperLanguage 可选</span></div>
           </div>
           <div class="vrow" style="margin-top:12px">
             <div class="vcell"><span class="av">新</span><span class="tx"><b>仅新消息</b><span>创建 / 启用之后开始监听，不回扫历史</span></span></div>
@@ -1438,7 +1558,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           <div class="it"><b>DATA ACCESS</b><p>只处理你有合法访问权的数据。应用不登录微信、不需要账号密码；自动获取密钥通常要求微信正在运行，也可以手动填写。</p></div>
           <div class="it"><b>NETWORK</b><p>本机解析不代表全程离线。AI、模型下载、更新检查、远程媒体、任务投递等都有出网点；应用没有全局出网开关，彻底断网需依赖系统防火墙或断开网络。</p></div>
           <div class="it"><b>FIRST RUN</b><p>首次使用需要完成引导、隐私同意、许可证与微信数据目录配置。AI 模型与向量索引不是首次启动时自动完成的，需要你按需配置。</p></div>
-          <div class="it"><b>THIRD PARTY</b><p>Feather 发送端不在安装包内；RPA 厂商需要对应账号、凭据和权益。阿里云、来也、实在与八爪鱼 MCP 仍标记为实验性接入。</p></div>
+          <div class="it"><b>THIRD PARTY</b><p>兼容发送端不在公开安装包内。仓库中的 Win32 配套执行端 SuperLanguage 与 Win32 授权签发台需单独部署；RPA 厂商需要对应账号、凭据和权益。文档中的 Feather 接入说明仍然保留。阿里云、来也、实在与八爪鱼 MCP 仍标记为实验性接入。</p></div>
         </div>
       </div>
 
@@ -1450,7 +1570,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           </div>
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-            <div><b>外部通道要自行准备</b><p>模型、Webhook、RPA 凭据与 Feather 发送端由使用者配置，可用性取决于其服务与网络。</p></div>
+            <div><b>外部通道要自行准备</b><p>模型、Webhook、RPA 凭据与兼容发送端（含仓库中的 SuperLanguage）由使用者配置，可用性取决于其服务与网络。</p></div>
           </div>
           <div class="val">
             <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div>
@@ -1461,6 +1581,21 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
             <div><b>非腾讯官方产品</b><p>Super Time 与腾讯无关联，未获其授权或背书；请遵守当地法律、微信用户协议与数据授权要求。</p></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div class="companions rv" id="companions">
+      <h3>仓库中的配套工具</h3>
+      <p>下列工具位于同一仓库的 <code>apps/</code> 目录，<b>不随公开安装包 Super-Time-Setup-1.2.1.exe 分发</b>。</p>
+      <div class="comp-grid">
+        <article>
+          <h4>SuperLanguage</h4>
+          <p>Win32 发送与自动化执行端，作为主应用的配套发送通道使用；需要单独编译、部署与配置，不在 1.2.1 桌面安装包内。</p>
+        </article>
+        <article>
+          <h4>授权签发台</h4>
+          <p>面向签发侧的 Win32 桌面工具，用于许可证签发；不是最终用户安装包的一部分，也不应把私钥放进仓库或安装目录。</p>
+        </article>
       </div>
     </div>
   </div>
@@ -1474,6 +1609,10 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       <h2>你可能想问</h2>
     </div>
     <div class="faq">
+      <div class="q version-q rv">
+        <button type="button">为什么下载的是 1.2.1，页面又写着产品版本 1.4.1？</button>
+        <div class="ans"><p>两者不是同一个发布通道。本机仓库中的产品版本是 1.4.1，但到本页更新时，GitHub 上最新的公开 Release 仍是 2026 年 11 月 16 日发布的 Super Time 1.2.1，安装包为 Super-Time-Setup-1.2.1.exe。下载按钮、校验和与发布说明都指向这一已发布版本，而不会把未发布的 1.4.1 写成“立即下载”。1.4.1 公开发布后，再以当时的 GitHub Release 为准。</p></div>
+      </div>
       <div class="q rv">
         <button type="button">我的聊天数据会被上传到云端吗？</button>
         <div class="ans"><p>Super Time 没有接收你数据的中转服务器；本机导入的数据、全文索引与派生库存储在本机。但应用不是全程离线：使用 AI 问答、向量索引、文件摘要或 AI 图片解析时，内容会发给你配置的模型端点；模型下载、更新检查、远程媒体、Webhook 与 RPA 投递也各有出网点。应用没有全局出网开关，逐条清单见隐私声明；要彻底断网，请使用系统防火墙或直接断开网络。</p></div>
@@ -1512,11 +1651,11 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
     <div class="cta-band rv">
       <div class="glow"></div>
       <h2>先确认前提，<span class="grad-txt">再开始检索你的数据</span></h2>
-      <p>适用于 Windows 10/11 x64。首次启动需完成引导、隐私同意、许可证与微信数据目录配置；AI、语义索引与外部投递均为可选。</p>
+      <p>适用于 Windows 10/11 x64。当前公开可下载版本为 1.2.1。首次启动需完成引导、隐私同意、许可证与微信数据目录配置；AI、语义索引与外部投递均为可选。</p>
       <div class="hero-cta">
-        <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/latest">
+        <a class="btn btn-primary" href="https://github.com/RASH-xiaowang/super_time/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe" data-download="public-1.2.1">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
-          获取 Windows 桌面版
+          下载公开版 1.2.1
         </a>
         <a class="btn btn-ghost" href="#about">查看安装前提</a>
       </div>
@@ -1539,7 +1678,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
           </span>
           <span class="brand-txt"><b>Super<em>Time</em></b><i>WECHAT DATA</i></span>
         </a>
-        <p>面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：会话检索、带引用问答、知识库、原生 OCR、洞察与消息触发。AI 与外部投递为可选配置。</p>
+        <p>面向 Windows 10/11 x64 与微信 4.x 的本机数据工作台：会话检索、带引用问答、知识库、原生 OCR、洞察与消息触发。公开可下载版本为 1.2.1。AI 与外部投递为可选配置。</p>
       </div>
       <div>
         <h5>产品</h5>
@@ -1558,18 +1697,18 @@ footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:4
       </div>
       <div>
         <h5>项目</h5>
-        <a href="https://github.com/RASH-xiaowang/super_time/releases/latest">最新版本</a>
+        <a href="https://github.com/RASH-xiaowang/super_time/releases/tag/v1.2.1">公开最新 Release 1.2.1</a>
         <a href="https://github.com/RASH-xiaowang/super_time">GitHub 仓库</a>
         <a href="https://github.com/RASH-xiaowang/super_time/issues">问题反馈</a>
         <a href="#about">适用边界</a>
       </div>
     </div>
     <p class="disc">
-      免责声明：Super Time 为本地数据管理工具，仅可用于处理使用者本人拥有合法访问权的数据。请在使用前确认你已获得相应授权，并遵守所在地法律法规与相关服务条款。Super Time 与腾讯无关联，未获其授权或背书。页面中的功能数量来自当前代码与文档，场景说明不构成效果保证。
+      免责声明：Super Time 为本地数据管理工具，仅可用于处理使用者本人拥有合法访问权的数据。请在使用前确认你已获得相应授权，并遵守所在地法律法规与相关服务条款。Super Time 与腾讯无关联，未获其授权或背书。页面中的能力说明以仓库文档与本机源码为准，场景示例使用演示数据，不构成效果保证。公开可下载版本以 GitHub Releases 的实际最新 Release 为准，当前为 1.2.1；本机产品版本 1.4.1 尚未作为公开 Release 发布。
     </p>
     <div class="fbot">
       <span>© 2026 Super Time. All rights reserved.</span>
-      <span class="mono">v1.1.3 · Windows x64 · Electron Desktop</span>
+      <span class="mono">公开版 v1.2.1 · 产品 v1.4.1 · Windows x64 · Electron Desktop</span>
     </div>
   </div>
 </footer>

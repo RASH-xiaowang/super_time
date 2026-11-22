@@ -1,3 +1,4 @@
+import type { AgentControl, AgentDeskSnapshot } from './agent-desk-types.ts'
 /**
  * `api.ts` 的「远程面与骨架：快照/结果类型、WechatRemote 接口、remote 注入与 unwrap、目录选择与面板截图」部分（M21 拆分）。
  *
@@ -294,6 +295,15 @@ export interface ExportProgressSnapshot {
 
 /** Remote face injected by ui-pages apply (ctx.remote.wechatData). */
 export interface WechatRemote {
+  /** Agent methods are desktop IPC only, including fullAccess HTTP sessions. */
+  getAgentDesk(): Promise<RemoteResult<AgentDeskSnapshot>>
+  saveAgentControl(options: { killed?: boolean; shadow?: boolean; quietStart?: string; quietEnd?: string; cooldownMs?: number; hourCap?: number; dayCap?: number; proactiveHourCap?: number; handoff?: boolean }): Promise<RemoteResult<AgentControl>>
+  writeAgentMemory(options: { scope: 'user' | 'conversation'; scopeKey: string; kind: 'semantic' | 'episode' | 'profile' | 'relation' | 'promise'; text: string }): Promise<RemoteResult<{ ok: boolean; op: string; error?: string }>>
+  deleteAgentMemory(options: { id: number }): Promise<RemoteResult<{ ok: boolean }>>
+  addAgentPromise(options: { text: string; dueAt: number }): Promise<RemoteResult<{ ok: boolean }>>
+  setAgentProposalStatus(options: { id: number; status: 'accepted' | 'dismissed' }): Promise<RemoteResult<{ ok: boolean }>>
+  sendAgentDraft(options: { id: number }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
+  sendAgentProposal(options: { id: number; target: string }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
   getSessions(options?: {
     keyword?: string
     limit?: number

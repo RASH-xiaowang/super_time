@@ -5,7 +5,7 @@
  *   cd "." && \
  *   NODE_PATH="node_modules" \
  *   node \
- *   "D:/super-time-wechat/website/tests/smoke.js"
+ *   "apps/website/tests/smoke.js"
  * 退出码 0 = 全绿；明细见 tests/smoke.log
  *
  * 设计说明：本机没有任何浏览器内核（无 Chrome/Edge/Playwright 缓存），jsdom 也无布局引擎，
@@ -277,16 +277,25 @@ function runDomPass(cfg) {
     assert($$('a[href="#contact"]').length === 0, '页面不再包含 #contact 链接');
     assert(!!$('footer a[href$="/docs/PRIVACY.md"]'), '页脚保留隐私声明入口');
     assert(!!$('footer a[href$="/docs/DEPLOYMENT.md"]'), '页脚保留部署文档入口');
-    assert(/v1\.1\.3/.test($('#release').textContent), '最新版本区块标注 v1.1.3');
-    assert(!!$('#release a[href$="/releases/tag/v1.1.3"]'), '最新版本直达 v1.1.3 Release');
+    assert(/v1\.2\.1/.test($('#release').textContent), '公开可下载版本区块标注 v1.2.1');
+    assert(!!$('#release a[href$="/releases/tag/v1.2.1"]'), '发布说明直达 v1.2.1 Release');
+    assert(!!$('#release a[href$="/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe"]'), '下载按钮指向 1.2.1 安装包');
+    assert($('#setupSha') && /3be2415a7d6778768044c8f86e21eb66b3999ee791e4fa1f64176f2164109d7e/i.test($('#setupSha').textContent), '展示 1.2.1 安装包 SHA256');
+    assert(/1\.4\.1/.test($('#release').textContent), '同时标明本机产品版本 1.4.1');
+    assert(!/立即下载\s*1\.4\.1/.test($('#release').textContent), '不把未发布的 1.4.1 写成立即下载');
+    assert(!$('#release a[href$="/releases/latest"]'), '下载区不把 latest 当作未核对的版本入口');
+    const downloadHrefs = $$('a[data-download="public-1.2.1"]').map(a => a.getAttribute('href'));
+    assert(downloadHrefs.length >= 4, '主下载按钮不少于 4 处');
+    assert(downloadHrefs.every(h => /\/releases\/download\/v1\.2\.1\/Super-Time-Setup-1\.2\.1\.exe$/.test(h)), '主下载按钮均指向 1.2.1 安装包');
+    assert(!/立即下载\s*1\.4\.1/.test(HTML) && !/Super-Time-Setup-1\.4\.1/.test(HTML), '全页不出现未发布的 1.4.1 安装包下载文案');
     assert(!!$('meta[property="og:title"]'), '包含 Open Graph 标题');
     const dvO = (HTML.match(/<div[ >]/g) || []).length, dvC = (HTML.match(/<\/div>/g) || []).length;
     assert(dvO === dvC, 'div 标签配平（' + dvO + ' / ' + dvC + '）');
 
     out.push('-- A2. 导航（折叠 + 抽屉） --');
     const navLinks = $$('#navLinks a');
-    assert(navLinks.length === 7, '桌面导航 7 个链接');
-    assert($$('#drawer a').length === navLinks.length + 1, '抽屉 = 7 个链接 + 1 个 CTA');
+    assert(navLinks.length === 8, '桌面导航 8 个链接（含下载锚点）');
+    assert($$('#drawer a').length === navLinks.length + 1, '抽屉 = 8 个链接 + 1 个 CTA');
     const dead = $$('a[href^="#"]').map(a => a.getAttribute('href'))
       .filter(h => h.length > 1 && !D.getElementById(h.slice(1)));
     assert(dead.length === 0, '页内锚点无死链（' + JSON.stringify(dead) + '）');
@@ -308,7 +317,7 @@ function runDomPass(cfg) {
 
     out.push('-- A4. 数字滚动 --');
     const counters = $$('[data-count]');
-    assert(counters.length === 4, '4 个计数元素');
+    assert(counters.length === 2, '2 个计数元素（控制台示意中的示例数据）');
     assert(counters.every(el => el.textContent !== '0'), '全部计数已滚动');
 
     out.push('-- A5. 核心功能分页 --');
@@ -325,11 +334,11 @@ function runDomPass(cfg) {
     click(tabP5);
     assert(tabP5.classList.contains('on') && $('#p5').classList.contains('on'), '消息列表分页可切换');
     assert($$('#p5 .vcell').length === 3, '任务分页展示 3 条边界说明');
-    assert($('#p5').textContent.indexOf('Feather') !== -1, '任务分页说明 Feather 为可选项');
+    assert($('#p5').textContent.indexOf('SuperLanguage') !== -1, '任务分页说明 SuperLanguage 为可选项');
 
     out.push('-- A6. FAQ 手风琴 --');
     const qs = $$('.q');
-    assert(qs.length === 7, '7 条 FAQ');
+    assert(qs.length === 8, '8 条 FAQ（含公开版本与产品版本说明）');
     click(qs[0].querySelector('button'));
     assert(qs[0].classList.contains('on') && qs[0].querySelector('.ans').style.maxHeight, '第 1 条展开并设了 maxHeight');
     click(qs[1].querySelector('button'));

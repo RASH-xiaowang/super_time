@@ -104,7 +104,7 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 | `npm run docs:api` / `npm run docs:api:check` | 生成 / 校验 Remote 接口参考（见 [`docs/API.md`](docs/API.md)） |
 | `npm run check:deps-provenance` | `file:` 本地依赖的来源表（`src/backend/deps/PROVENANCE.json`）一致性 |
 | `npm run font:check` / `npm run font:check:packaged` | 字体合规门禁：源码/官网/工具与打包产物中的专有字体、远程字体和未登记字体资产 |
-| `npm run license-studio` | 许可签发 GUI（`tools/license-studio`，Electron 窗口） |
+| `npm run license-studio` | 许可签发 GUI（`apps/license-studio`，Win32 原生窗口） |
 | `npm run ui:accept` | 人工验收脚本（需要真实数据与许可证，手动运行） |
 | `npm run theme:live-audit -- --all-tabs` | 真机主题审计**全部 37 个页签**（默认 17 个可见页签） |
 
@@ -174,9 +174,11 @@ src/license/             授权：指纹、签名校验、许可证解析
 wechat/                  随包只读资产：语音引擎与预置模型（`wechat/whisper/`）、配置模板（`*.example.json`）
 build/                   应用图标（`icon.ico` 供安装包使用）
 vendor-keys/             许可证**公钥**（私钥不在仓库里；本目录已 gitignore）
-tools/                   Remote 审计、许可签发 GUI、视觉审计（见 tools/README.md）
+tools/                   Remote 审计、许可签发启动器、视觉审计（见 tools/README.md）
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本、CI 分档表（ci-tiers.mjs）、变异登记表
-website/                 官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
+apps/superlanguage/      微信发送与自动化执行端（Win32；令牌、队列、日志等运行数据不入库）
+apps/website/            官网单文件（不参与打包；由 .github/workflows/pages.yml 发布）
+apps/license-studio/     许可签发 GUI（Win32 原生应用，复用根目录 src/license；由 npm run license-studio 或 tools/LicenseStudio.cmd 启动）
 docs/                    十八份当前有效的文档 + 归档目录（见下方索引）
 .github/workflows/       CI（ci.yml）、夜间（nightly.yml）、发版（release.yml）、官网（pages.yml）
 ```
@@ -225,7 +227,7 @@ docs/                    十八份当前有效的文档 + 归档目录（见下�
 | [`wechat/whisper/README.md`](wechat/whisper/README.md) | 语音转写引擎与模型的目录约定 |
 | [`tools/README.md`](tools/README.md) | 工具目录：根级审计脚本、子目录职责、产物落点与维护规则 |
 | [`tools/visual-audit/README.md`](tools/visual-audit/README.md) | 视觉审计脚本的前置条件与用法 |
-| [`website/tests/smoke.js`](website/tests/smoke.js) | 官网冒烟脚本（jsdom + 自写 CSS 解释器校验布局） |
+| [`apps/website/tests/smoke.js`](apps/website/tests/smoke.js) | 官网冒烟脚本（jsdom + 自写 CSS 解释器校验布局） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |
 
 **已删文档的取回**：代码注释、台账与 `CLEANUP.md` 里还会提到一批已经不在仓库中的文档（如 `CODE-AUDIT-2026-09-26`、

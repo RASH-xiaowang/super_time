@@ -17,7 +17,7 @@
  * asar 里确实带了该带的、没带不该带的）。真正的可构建性最终由 `npm run pack` / `dist` 证明。
  *
  * 刻意**不**守的：
- *   · `main.js:1211` 与 `tools/license-studio/main.js:277` 的 `process.platform !== 'darwin'`
+ *   · `main.js:1211` 的 `process.platform !== 'darwin'`
  *     —— Electron 模板残留，win32 进程里不可达，删不删都不改变对外声明；
  *   · README 的因果解释文字（见上）。
  *
@@ -177,7 +177,7 @@ describe('M18：平台声明与可构建目标一致', () => {
      * （koffi-win32-x64、wx_silk.exe、whisper bin 都只有 win32 一份），
      * 而不是「任何 workflow 都必须用 windows runner」。
      *
-     * 反例（真实存在）：Pages 部署只是把 `website/` 这个静态目录原样上传 ——
+     * 反例（真实存在）：Pages 部署只是把 `apps/website/` 这个静态目录原样上传 ——
      * 没有 setup-node、不装依赖、不构建，碰不到任何一个原生二进制。
      * 让它跑 windows runner 纯属浪费（ubuntu runner 更快、额度更宽），
      * 而把规则写成「所有 workflow 一律 windows」只会把这类无关任务也钉死。
